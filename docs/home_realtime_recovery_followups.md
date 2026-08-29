@@ -2,14 +2,16 @@
 
 ## 현재 적용 범위
 
-2026-08-21 기준으로 다음 복구 안전장치를 먼저 적용한다.
+2026-08-26 기준으로 다음 복구 안전장치를 적용한다.
 
-1. `HomeworkStore` 재연결 시 실제 서버 스냅샷을 다시 읽는다.
+1. `HomeworkStore` 재연결 시 기존 cursor로 놓친 변경분을 보충한다.
 2. 단순 재구독은 homework poll cursor를 현재 시각으로 초기화하지 않는다.
 3. 활성 assignment 조회 실패 시 마지막 성공 캐시를 유지한다.
 4. 학생별 assignment 조회에 generation guard를 적용해 늦은 과거 응답을 버린다.
-5. 앱 복귀와 Windows 창 포커스 시 `HomeRealtimeSyncCoordinator`가 출석·과제
-   스냅샷을 함께 갱신한다. 동시 호출은 합치고 완료 후 15초 동안 중복 실행을 막는다.
+5. 앱 복귀와 Windows 창 포커스 시 `HomeRealtimeSyncCoordinator`가 오늘 출석
+   범위와 현재 등원 학생의 과제만 갱신한다.
+6. 동시 호출은 하나로 합치고, Realtime이 정상일 때 Windows 포커스 갱신은
+   최대 2분에 한 번만 실행한다.
 
 이 단계에서는 주기적 폴링 확대, 출석 UI 상태 구조 변경, M5 RPC 변경을 하지 않는다.
 운영 중 네트워크 단절 후 복구 상태를 먼저 확인한 뒤 아래 항목을 순서대로 검토한다.

@@ -839,6 +839,15 @@ test('solution block index prompt asks for badges and continuation', () => {
   assert.match(prompt, /page_start/);
 });
 
+// 왼쪽 단 맨 아래에서 시작해 오른쪽 단 맨 위로 이어지는 정답(2-1 답지 10쪽
+// "12 …농도" 09번)의 상자를 두 단에 걸쳐 주면, 앱이 그 정답을 지면 맨 위로
+// 올려 세워 자기 소단원 머리보다 앞서게 되고 통째로 버려진다.
+test('answer layout asks for the numbered fragment when an answer wraps columns', () => {
+  const prompt = buildAnswerLayoutPrompt({ rawPage: 10 });
+  assert.match(prompt, /\[A9\]/);
+  assert.match(prompt, /번호가 있는 조각만/);
+});
+
 test('answer layout reads headers and every green answer without matching', () => {
   const prompt = buildAnswerLayoutPrompt({ rawPage: 3 });
   assert.match(prompt, /빠른 정답 PDF/);

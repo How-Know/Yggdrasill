@@ -268,12 +268,11 @@ class HomeworkGroup {
 
   /// 학습앱 홈 카드 `시도 N`과 동일.
   /// 대기(1)·확인(4)은 끝난 검사 횟수, 수행(2)·제출(3)은 다음 차수(+1).
+  /// 생성 직후 대기는 0이고, 그때는 배지를 숨긴다.
   int get performanceAttemptIndex {
     final checks = checkCount < 0 ? 0 : checkCount;
-    if (phase == 2 || phase == 3) {
-      return checks + 1 < 1 ? 1 : checks + 1;
-    }
-    return checks < 1 ? 1 : checks;
+    if (phase == 2 || phase == 3) return checks + 1;
+    return checks;
   }
 
   bool get running => phase == 2 && runStart != null;

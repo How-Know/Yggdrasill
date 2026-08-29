@@ -57,6 +57,7 @@ import '../widgets/textbook_report_review_dialog.dart';
 import '../utils/homework_page_text.dart';
 import '../utils/textbook_problem_source_order.dart';
 import 'class_content/homework_created_date.dart';
+import 'class_content/homework_performance_attempt.dart';
 import 'class_content/grading_mode_page.dart';
 
 const double _homeworkDraftExtensionWidth = 280;
@@ -1049,6 +1050,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                             studentId: studentId,
                                             hw: gradingChildren.first,
                                             targetKeys: pendingKeys,
+                                            gradingGroupId: group?.id,
                                             openNext: openNext,
                                           );
                                         }
@@ -1066,6 +1068,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                           studentId: studentId,
                                           hw: answerSeed,
                                           targetKeys: pendingKeys,
+                                          gradingGroupId: group?.id,
                                           openNext: openNext,
                                         );
                                       },
@@ -1111,6 +1114,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                             studentId: studentId,
                                             hw: gradingChildren.first,
                                             targetKeys: pendingKeys,
+                                            gradingGroupId: group?.id,
                                             openNext: openNext,
                                           );
                                         }
@@ -4053,7 +4057,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             .toList(growable: false);
         for (final itemId in selectedItemIds) {
           if (planItemIds.contains(itemId)) continue;
-          HomeworkStore.instance.markItemsAsHomework(
+          await HomeworkStore.instance.markItemsAsHomework(
             studentId,
             <String>[itemId],
             dueDate: selection.dueDateByItemId[itemId] ?? selection.dueDate,
@@ -5660,6 +5664,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     required HomeworkItem hw,
     required List<({String studentId, String itemId})> keys,
     required RightSheetPreloadedSessionPayload payload,
+    String? gradingGroupId,
     AsyncUiAction? onNext,
   }) async {
     final seenItemIds = <String>{};
@@ -5806,6 +5811,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             studentId: studentId,
             keys: keys,
             targetItem: targetItem,
+            gradingGroupId: gradingGroupId,
             action: action,
             states: decoded,
             gradingPages: payload.gradingPages,
@@ -5859,6 +5865,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     required String studentId,
     required HomeworkItem hw,
     List<({String studentId, String itemId})>? targetKeys,
+    String? gradingGroupId,
     AsyncUiAction? openNext,
   }) async {
     final keys = (targetKeys == null || targetKeys.isEmpty)
@@ -5903,6 +5910,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           hw: hw,
           keys: keys,
           payload: preloadedPayload,
+          gradingGroupId: gradingGroupId,
           onNext: onNext,
         );
         if (opened) return;
@@ -6100,6 +6108,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                 studentId: studentId,
                 keys: keys,
                 targetItem: targetItem,
+                gradingGroupId: gradingGroupId,
                 action: action,
                 states: decoded,
                 gradingPages: payload.gradingPages,
@@ -6320,6 +6329,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               studentId: studentId,
               keys: keys,
               targetItem: targetItem,
+              gradingGroupId: gradingGroupId,
               action: action,
               states: decoded,
               gradingPages: textbookProblemPayload.gradingPages,
@@ -6784,6 +6794,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     required String studentId,
     required List<HomeworkBatchConfirmKey> keys,
     required HomeworkItem targetItem,
+    String? gradingGroupId,
     required String action,
     required Map<String, HomeworkAnswerCellState> states,
     required List<HomeworkAnswerGradingPage> gradingPages,
@@ -6798,34 +6809,96 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       targetItem.id.trim(),
       ...keys.map((key) => key.itemId.trim()),
     }.where((itemId) => itemId.isNotEmpty).toList(growable: false);
-    final groupIds = itemIds
-        .map(HomeworkStore.instance.groupIdOfItem)
+    final groupIdByItem = <String, String?>{
+      for (final itemId in itemIds)
+        itemId: HomeworkStore.instance.groupIdOfItem(itemId),
+    };
+    final groupIds = groupIdByItem.values
         .whereType<String>()
         .map((value) => value.trim())
         .where((value) => value.isNotEmpty)
         .toSet();
-    if (itemIds.isEmpty || groupIds.length != 1) return false;
-    final payload = await _gradingResultService.buildDeferredReturnPayload(
-      studentId: studentId,
-      groupId: groupIds.single,
-      homeworkItemIds: itemIds,
-      homeworkItem: targetItem,
-      action: action,
-      progress: _structuredHomeworkProgress(
+    final contextGroupId = (gradingGroupId ?? '').trim();
+    final resolvedGroupId = contextGroupId.isNotEmpty
+        ? contextGroupId
+        : (groupIds.length == 1 ? groupIds.single : '');
+    final assignmentCode = (targetItem.assignmentCode ?? '').trim();
+    debugPrint(
+      '[GRADING_DRAFT][start] assignment=$assignmentCode '
+      'target=${targetItem.id} action=$action itemIds=$itemIds '
+      'contextGroup=$contextGroupId groupIdByItem=$groupIdByItem '
+      'pages=${gradingPages.length} '
+      'states=${states.length}',
+    );
+    if (itemIds.isEmpty) {
+      debugPrint(
+        '[GRADING_DRAFT][reject:empty_items] assignment=$assignmentCode',
+      );
+      return false;
+    }
+    if (resolvedGroupId.isEmpty) {
+      debugPrint(
+        '[GRADING_DRAFT][reject:group_mismatch] assignment=$assignmentCode '
+        'contextGroup=$contextGroupId groupIdByItem=$groupIdByItem '
+        'resolvedGroups=$groupIds',
+      );
+      return false;
+    }
+    if (contextGroupId.isNotEmpty &&
+        (groupIds.length != 1 || !groupIds.contains(contextGroupId))) {
+      debugPrint(
+        '[GRADING_DRAFT][group_mapping_stale] assignment=$assignmentCode '
+        'usingContextGroup=$contextGroupId groupIdByItem=$groupIdByItem',
+      );
+    }
+    late final Map<String, dynamic>? payload;
+    try {
+      payload = await _gradingResultService.buildDeferredReturnPayload(
+        studentId: studentId,
+        groupId: resolvedGroupId,
+        homeworkItemIds: itemIds,
+        homeworkItem: targetItem,
+        action: action,
+        progress: _structuredHomeworkProgress(
+          states: states,
+          gradingPages: gradingPages,
+        ),
         states: states,
         gradingPages: gradingPages,
-      ),
-      states: states,
-      gradingPages: gradingPages,
-      scoreByQuestionKey: scoreByQuestionKey,
-      sourceSnapshotAt: sourceSnapshotAt,
-      groupHomeworkTitleSnapshot: groupHomeworkTitle,
-      baselineAttemptId: baselineAttemptId,
-      baselineStates: baselineStates,
-      correctionStates: correctionStates,
+        scoreByQuestionKey: scoreByQuestionKey,
+        sourceSnapshotAt: sourceSnapshotAt,
+        groupHomeworkTitleSnapshot: groupHomeworkTitle,
+        baselineAttemptId: baselineAttemptId,
+        baselineStates: baselineStates,
+        correctionStates: correctionStates,
+      );
+    } catch (error, stackTrace) {
+      debugPrint(
+        '[GRADING_DRAFT][error:payload] assignment=$assignmentCode '
+        'group=$resolvedGroupId error=$error\n$stackTrace',
+      );
+      rethrow;
+    }
+    if (payload == null) {
+      debugPrint(
+        '[GRADING_DRAFT][reject:null_payload] assignment=$assignmentCode '
+        'group=$resolvedGroupId action=$action itemIds=$itemIds',
+      );
+      return false;
+    }
+    try {
+      await _batchConfirmService.enqueueStructuredDraft(payload);
+    } catch (error, stackTrace) {
+      debugPrint(
+        '[GRADING_DRAFT][error:outbox] assignment=$assignmentCode '
+        'group=$resolvedGroupId error=$error\n$stackTrace',
+      );
+      rethrow;
+    }
+    debugPrint(
+      '[GRADING_DRAFT][saved] assignment=$assignmentCode '
+      'group=$resolvedGroupId itemIds=$itemIds',
     );
-    if (payload == null) return false;
-    await _batchConfirmService.enqueueStructuredDraft(payload);
     return true;
   }
 
@@ -18669,8 +18742,8 @@ Widget _buildHomeworkChipVisual(
 
   // 숙제 배정 회차가 아니라 수행 사이클 기준.
   // 확인(checkCount)마다 끝난 시도가 쌓이고, 대기/확인은 그 차수를 유지,
-  // 수행·제출에 들어갈 때 다음 차수(+1).
-  final int displayRepeatIndex = _homeworkPerformanceAttemptIndex(
+  // 수행·제출에 들어갈 때 다음 차수(+1). 생성 직후 대기는 0.
+  final int displayRepeatIndex = homeworkPerformanceAttemptIndex(
     checkCount: hw.checkCount,
     phase: hw.phase,
   );
@@ -19419,17 +19492,6 @@ Widget _buildHomeworkChipVisual(
   }
 
   return SizedBox(width: fixedWidth, child: chipInner);
-}
-
-/// 수행 기준 차수: 첫 시도 1차, 확인 후 재수행부터 2차.
-/// 대기(1)·확인(4)은 끝난 시도 수를 유지하고, 수행(2)·제출(3)에서 +1.
-int _homeworkPerformanceAttemptIndex({
-  required int checkCount,
-  required int phase,
-}) {
-  final checks = checkCount < 0 ? 0 : checkCount;
-  if (phase == 2 || phase == 3) return math.max(1, checks + 1);
-  return math.max(1, checks);
 }
 
 /// 홈 과제 카드용 진행(빈 인디케이터 색)+수행(상세 폰트 색) 겹침 바.

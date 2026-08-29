@@ -269,6 +269,19 @@ class HomeworkAssignmentStore {
     _bump();
   }
 
+  /// 홈 복구 시 현재 등원 학생 캐시만 무효화하고 UI rebuild는 한 번만 발생시킨다.
+  void invalidateActiveAssignmentsForStudents(Iterable<String> studentIds) {
+    final ids =
+        studentIds.map((id) => id.trim()).where((id) => id.isNotEmpty).toSet();
+    if (ids.isEmpty) return;
+    for (final id in ids) {
+      _activeAssignmentsLoadCompletedForStudent.remove(id);
+      _activeAssignmentLoadGenerationByStudent[id] =
+          (_activeAssignmentLoadGenerationByStudent[id] ?? 0) + 1;
+    }
+    _bump();
+  }
+
   void clearActiveAssignmentsCache() {
     for (final id in _activeAssignmentLoadGenerationByStudent.keys.toList()) {
       _activeAssignmentLoadGenerationByStudent[id] =
@@ -625,12 +638,6 @@ class HomeworkAssignmentStore {
         msg.contains('live_release_id') ||
         msg.contains('release_export_job_id') ||
         msg.contains('live_release_locked_at');
-  }
-
-  bool _isMissingLearningTrackSnapshotColumnError(Object error) {
-    final msg = error.toString().toLowerCase();
-    if (!msg.contains('column')) return false;
-    return msg.contains('learning_track_code_snapshot');
   }
 
   Map<String, dynamic>? _extractJoinedMap(dynamic raw) {
@@ -1421,7 +1428,10 @@ class HomeworkAssignmentStore {
         .eq('academy_id', academyId)
         .eq('student_id', normalizedStudentId)
         .inFilter('homework_item_id', itemIds)
-        .inFilter('status', const ['assigned', 'in_progress']);
+        .inFilter(
+          'status',
+          const ['assigned', 'in_progress', 'carried_to_class'],
+        );
     _activeAssignmentsCacheByStudent.remove(normalizedStudentId);
     _activeAssignmentsLoadCompletedForStudent.remove(normalizedStudentId);
     _bump();
@@ -2220,40 +2230,15 @@ class HomeworkAssignmentStore {
         }
       }
 
-      if (carriedOverIds.isNotEmpty) {
-        await supa
-            .from('homework_assignments')
-            .update({'status': 'carried_over'}).inFilter('id', carriedOverIds);
-      }
-
-      try {
-        await supa.from('homework_assignments').insert(rows);
-      } catch (e) {
-        final missingGroupColumns = _isMissingAssignmentGroupColumnsError(e);
-        final missingLiveReleaseColumns = _isMissingLiveReleaseColumnsError(e);
-        final missingLearningTrackSnapshotColumn =
-            _isMissingLearningTrackSnapshotColumnError(e);
-        if (!missingGroupColumns &&
-            !missingLiveReleaseColumns &&
-            !missingLearningTrackSnapshotColumn) rethrow;
-        final fallbackRows = rows.map((row) {
-          final copy = Map<String, dynamic>.from(row);
-          if (missingGroupColumns) {
-            copy.remove('group_id');
-            copy.remove('group_title_snapshot');
-          }
-          if (missingLiveReleaseColumns) {
-            copy.remove('live_release_id');
-            copy.remove('release_export_job_id');
-            copy.remove('live_release_locked_at');
-          }
-          if (missingLearningTrackSnapshotColumn) {
-            copy.remove('learning_track_code_snapshot');
-          }
-          return copy;
-        }).toList(growable: false);
-        await supa.from('homework_assignments').insert(fallbackRows);
-      }
+      await supa.rpc(
+        'homework_replace_assignments_v1',
+        params: {
+          'p_academy_id': academyId,
+          'p_student_id': studentId,
+          'p_carried_over_ids': carriedOverIds.toSet().toList(growable: false),
+          'p_rows': rows,
+        },
+      );
       // 미리 해온 진행률을 정식 검사 기록으로 소비한다.
       for (final seed in seededChecks) {
         try {
@@ -2294,6 +2279,7 @@ class HomeworkAssignmentStore {
     } catch (e, st) {
       // ignore: avoid_print
       print('[HW_ASSIGN][record][ERROR] $e\n$st');
+      rethrow;
     }
   }
 

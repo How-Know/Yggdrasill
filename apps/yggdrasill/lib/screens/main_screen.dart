@@ -4609,7 +4609,7 @@ class _MainScreenState extends State<MainScreen>
                         .toList(growable: false);
                     for (final itemId in selectedItemIds) {
                       if (planItemIds.contains(itemId)) continue;
-                      HomeworkStore.instance.markItemsAsHomework(
+                      await HomeworkStore.instance.markItemsAsHomework(
                         t.student.id,
                         <String>[itemId],
                         dueDate: selection.dueDateByItemId[itemId] ??

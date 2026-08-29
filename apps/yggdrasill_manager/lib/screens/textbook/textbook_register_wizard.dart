@@ -428,7 +428,7 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
           images.add(await renderPdfPageToPng(
             document: doc,
             pageNumber: page,
-            longEdgePx: 1600,
+            longEdgePx: kTocRenderLongEdgePx,
           ));
           if (!mounted) return;
           setState(() => _tocStatus = '목차 페이지 렌더링 중... ($page / $end)');
@@ -445,11 +445,18 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
           document: doc,
           tocPageOffset: range.pageOffset,
         );
+        final failureDetail = applied != null
+            ? ''
+            : await describeTocAutofillFailure(
+                result,
+                pageImages: images,
+                startPage: start,
+              );
         if (!mounted) return;
         setState(() {
           _tocParsing = false;
           _tocStatus = applied == null
-              ? '실패: 목차에서 단원을 찾지 못했습니다.'
+              ? '실패: 목차에서 단원을 찾지 못했습니다.$failureDetail'
               : '목차 인식 완료 · 대단원 ${applied.$1}개 / 중단원 ${applied.$2}개 · '
                   '페이지 자동 입력됨(보정 ${range.pageOffset >= 0 ? '+' : ''}'
                   '${range.pageOffset}) — 시작/끝 페이지를 검토하세요'

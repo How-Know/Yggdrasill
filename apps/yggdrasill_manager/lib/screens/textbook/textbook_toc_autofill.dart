@@ -8,10 +8,58 @@
 //      끝 = 다음 항목 시작 − 1)까지 끝낸 중립 트리로 변환. 호출 측은 이
 //      트리를 각자의 편집 모델로만 옮기면 된다.
 
+import 'dart:io';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
 
 import '../../services/textbook_vlm_test_service.dart';
+
+/// 목차 지면을 판독에 보낼 때의 렌더 해상도(긴 변 픽셀).
+///
+/// 600dpi 스캔 교재는 원본이 4900×6832 쯤이라 여기까지 줄이는 배율이 그대로
+/// 화질을 좌우한다. 1600px 로 줄이면 수력충전 2-1 처럼 3단으로 촘촘한 차례는
+/// 점선과 쪽 숫자가 뭉개져 판독이 단원을 하나도 못 찾는다(같은 지면으로
+/// 확인: 1600px → 대단원 0개, 2400px → 6개 전부). 2400px 은 두 쪽을 보내도
+/// 3MB 정도라 왕복에 무리가 없다.
+const int kTocRenderLongEdgePx = 2400;
+
+/// 목차 인식이 빈손으로 끝난 까닭을 상태줄에 덧붙일 문구로 만든다.
+///
+/// "단원을 찾지 못했습니다" 는 두 가지가 겹친다 — 판독이 아무것도 못 읽은
+/// 경우와, 읽었지만 [buildTocAutofillTree] 에서 전부 걸러진 경우. 손볼 곳이
+/// 달라서 판독이 돌려준 개수를 함께 보여 준다. 판독이 비었다면 애초에 보낸
+/// 지면이 차례가 아니었을 수 있으니, 보낸 PNG 를 그대로 떠서 경로를 알린다.
+Future<String> describeTocAutofillFailure(
+  TextbookTocParseResult toc, {
+  required List<Uint8List> pageImages,
+  required int startPage,
+}) async {
+  var midCount = 0;
+  for (final big in toc.bigUnits) {
+    midCount += big.midUnits.length;
+  }
+  final counts = ' (판독 대단원 ${toc.bigUnits.length}개 / 중단원 $midCount개'
+      '${toc.notes.isEmpty ? '' : ' · ${toc.notes}'})';
+  if (toc.bigUnits.isNotEmpty) return counts;
+  try {
+    final dir = Directory(p.join(
+      Directory.systemTemp.path,
+      'ygg_toc_debug',
+      DateTime.now().millisecondsSinceEpoch.toString(),
+    ))
+      ..createSync(recursive: true);
+    for (var i = 0; i < pageImages.length; i += 1) {
+      File(p.join(dir.path, 'p${startPage + i}.png'))
+          .writeAsBytesSync(pageImages[i]);
+    }
+    return '$counts · 보낸 지면: ${dir.path}';
+  } catch (_) {
+    return counts;
+  }
+}
 
 /// 개념원리 목차/트리에서 단원명이 아니라 문제 카테고리 라벨인 항목들.
 /// VLM 이 이런 라벨을 단원으로 잘못 올려보내면 트리에서 걸러낸다.

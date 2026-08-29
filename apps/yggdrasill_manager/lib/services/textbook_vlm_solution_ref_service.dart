@@ -176,6 +176,23 @@ class TextbookVlmSolutionRefService {
     required List<TextbookSolutionRefUpload> refs,
   }) async {
     if (refs.isEmpty) return 0;
+    // 게이트웨이는 한 번에 300건까지 받는다(413 solref_batch_too_large). 실력
+    // 향상 테스트처럼 소단원 하나에 문항이 454개 붙는 자리가 있어 나눠 보낸다.
+    var upserted = 0;
+    for (var i = 0; i < refs.length; i += kAnswerBatchMaxRows) {
+      final end = (i + kAnswerBatchMaxRows).clamp(0, refs.length);
+      upserted += await _postSolutionRefBatch(
+        academyId: academyId,
+        refs: refs.sublist(i, end),
+      );
+    }
+    return upserted;
+  }
+
+  Future<int> _postSolutionRefBatch({
+    required String academyId,
+    required List<TextbookSolutionRefUpload> refs,
+  }) async {
     final body = <String, dynamic>{
       'academy_id': academyId,
       'solution_refs': refs.map((r) => r.toJson()).toList(),

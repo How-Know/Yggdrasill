@@ -2458,7 +2458,10 @@ class HomeworkStore {
         key: 'homework_items:$targetAcademyId',
         onResync: () async {
           try {
-            await loadAll(forceRefresh: true);
+            // 재연결 직후 전체 학원 스냅샷을 읽으면 Windows UI가 장시간
+            // 멈출 수 있다. 유지한 cursor로 놓친 변경만 먼저 보충하고,
+            // 홈 coordinator가 현재 등원 학생을 좁혀 다시 읽는다.
+            await _pollRecentHomeworkUpdates(targetAcademyId);
           } catch (_) {}
         },
         onStatus: (status, error) {
@@ -2577,7 +2580,11 @@ class HomeworkStore {
     }
   }
 
-  Future<void> _upsertItem(String studentId, HomeworkItem it) async {
+  Future<void> _upsertItem(
+    String studentId,
+    HomeworkItem it, {
+    bool syncMappings = false,
+  }) async {
     try {
       final String academyId =
           (await TenantService.instance.getActiveAcademyId()) ??
@@ -2666,16 +2673,18 @@ class HomeworkStore {
             row['learning_track_code'] as String?,
           );
         }
-        await _syncUnitMappings(
-          academyId: academyId,
-          studentId: studentId,
-          item: it,
-        );
-        await _syncPageMappings(
-          academyId: academyId,
-          studentId: studentId,
-          item: it,
-        );
+        if (syncMappings) {
+          await _syncUnitMappings(
+            academyId: academyId,
+            studentId: studentId,
+            item: it,
+          );
+          await _syncPageMappings(
+            academyId: academyId,
+            studentId: studentId,
+            item: it,
+          );
+        }
         await _ensureGroupForItem(
           academyId: academyId,
           studentId: studentId,
@@ -2724,16 +2733,18 @@ class HomeworkStore {
             row['learning_track_code'] as String?,
           );
         }
-        await _syncUnitMappings(
-          academyId: academyId,
-          studentId: studentId,
-          item: it,
-        );
-        await _syncPageMappings(
-          academyId: academyId,
-          studentId: studentId,
-          item: it,
-        );
+        if (syncMappings) {
+          await _syncUnitMappings(
+            academyId: academyId,
+            studentId: studentId,
+            item: it,
+          );
+          await _syncPageMappings(
+            academyId: academyId,
+            studentId: studentId,
+            item: it,
+          );
+        }
         await _ensureGroupForItem(
           academyId: academyId,
           studentId: studentId,
@@ -2748,35 +2759,35 @@ class HomeworkStore {
       if (_supportsRecommendedMinutesColumns &&
           _isMissingRecommendedMinutesColumnError(e)) {
         _supportsRecommendedMinutesColumns = false;
-        await _upsertItem(studentId, it);
+        await _upsertItem(studentId, it, syncMappings: syncMappings);
         return;
       }
       if (_supportsPbPresetIdColumn && _isMissingPbPresetIdColumnError(e)) {
         _supportsPbPresetIdColumn = false;
-        await _upsertItem(studentId, it);
+        await _upsertItem(studentId, it, syncMappings: syncMappings);
         return;
       }
       if (_supportsAssignmentCodeColumn &&
           _isMissingAssignmentCodeColumnError(e)) {
         _supportsAssignmentCodeColumn = false;
-        await _upsertItem(studentId, it);
+        await _upsertItem(studentId, it, syncMappings: syncMappings);
         return;
       }
       if (_supportsTestOriginFlowIdColumn &&
           _isMissingTestOriginFlowIdColumnError(e)) {
         _supportsTestOriginFlowIdColumn = false;
-        await _upsertItem(studentId, it);
+        await _upsertItem(studentId, it, syncMappings: syncMappings);
         return;
       }
       if (_supportsAssignmentCodeColumn && _isAssignmentCodeConflictError(e)) {
         it.assignmentCode = _issueAssignmentCode(it.learningTrackCode);
-        await _upsertItem(studentId, it);
+        await _upsertItem(studentId, it, syncMappings: syncMappings);
         return;
       }
       if (_supportsLearningTrackColumn &&
           _isMissingLearningTrackColumnError(e)) {
         _supportsLearningTrackColumn = false;
-        await _upsertItem(studentId, it);
+        await _upsertItem(studentId, it, syncMappings: syncMappings);
         return;
       }
       // 존재 확인 직후 다른 요청이 같은 행을 만든 경우도 성공으로 간주한다.
@@ -3045,6 +3056,7 @@ class HomeworkStore {
       );
     } catch (e, st) {
       print('[HW][pageMappings][ERROR] $e\n$st');
+      rethrow;
     }
   }
 
@@ -3054,16 +3066,14 @@ class HomeworkStore {
     required HomeworkItem item,
   }) async {
     final mappings = item.unitMappings ?? const <Map<String, dynamic>>[];
+    final hasExplicitProblemMappings =
+        mappings.any((mapping) => mapping.containsKey('problemCrops'));
+    if (!hasExplicitProblemMappings) return;
     final bookId = (item.bookId ?? '').trim();
     final gradeLabel = (item.gradeLabel ?? '').trim();
     if (bookId.isEmpty || gradeLabel.isEmpty) return;
     final supa = Supabase.instance.client;
     try {
-      await supa.from('homework_item_problems').delete().match({
-        'academy_id': academyId,
-        'homework_item_id': item.id,
-      });
-
       int? asIntOpt(dynamic v) {
         if (v == null) return null;
         if (v is int) return v;
@@ -3299,22 +3309,25 @@ class HomeworkStore {
           });
         }
       }
-      if (rows.isNotEmpty) {
-        try {
-          await supa.from('homework_item_problems').insert(rows);
-        } catch (e) {
-          if (!_isMissingSourceStageColumnError(e)) rethrow;
-          await supa.from('homework_item_problems').insert(
-                rows
-                    .map((row) =>
-                        Map<String, dynamic>.from(row)..remove('source_stage'))
-                    .toList(growable: false),
-              );
-        }
+      final expectedCount = item.count ?? rows.length;
+      if (expectedCount > 0 && rows.length != expectedCount) {
+        throw StateError(
+          'HOMEWORK_PROBLEM_SNAPSHOT_COUNT_MISMATCH: '
+          'item=${item.id} expected=$expectedCount actual=${rows.length}',
+        );
       }
-    } catch (_) {
-      // Optional forward-compatible table. Page/unit mappings remain canonical
-      // until the per-problem tracking schema is deployed everywhere.
+      if (rows.isEmpty) return;
+      await supa.rpc(
+        'homework_replace_item_problem_snapshots',
+        params: {
+          'p_homework_item_id': item.id,
+          'p_rows': rows,
+          'p_expected_count': expectedCount,
+        },
+      );
+    } catch (e, st) {
+      debugPrint('[HW][problemMappings][ERROR] $e\n$st');
+      rethrow;
     }
   }
 
@@ -3440,7 +3453,7 @@ class HomeworkStore {
       _bump();
     }
     if (!deferPersist) {
-      unawaited(_upsertItem(studentId, item));
+      unawaited(_upsertItem(studentId, item, syncMappings: true));
     }
     return item;
   }
@@ -3595,7 +3608,7 @@ class HomeworkStore {
     List<HomeworkItem> items,
   ) async {
     for (final item in items) {
-      await _upsertItem(studentId, item);
+      await _upsertItem(studentId, item, syncMappings: true);
     }
   }
 
@@ -3607,7 +3620,7 @@ class HomeworkStore {
       list[idx] = updated;
       _applyFallbackGroupsForStudent(studentId);
       _bump();
-      unawaited(_upsertItem(studentId, updated));
+      unawaited(_upsertItem(studentId, updated, syncMappings: true));
     }
   }
 
@@ -5093,13 +5106,13 @@ class HomeworkStore {
   }
 
   // 선택된 과제들을 숙제로 표시
-  void markItemsAsHomework(
+  Future<void> markItemsAsHomework(
     String studentId,
     List<String> itemIds, {
     DateTime? dueDate,
     int splitParts = 1,
     bool cloneCompletedItems = false,
-  }) {
+  }) async {
     if (itemIds.isEmpty) return;
     final list = _byStudentId[studentId];
     if (list == null) return;
@@ -5165,23 +5178,21 @@ class HomeworkStore {
         preDoneConsumedIds.add(e.id);
       }
     }
-    unawaited(() async {
-      await _recordAssignmentsWithLiveRelease(
-        studentId: studentId,
-        items: toAssign,
-        dueDate: dueDate,
-        splitParts: splitParts,
-        splitPartsByItem: splitPartsByItem,
-        groupMetaByItemId: groupMetaByItem,
-        initialProgressByItemId:
-            initialProgressByItem.isEmpty ? null : initialProgressByItem,
-        initialIssueByItemId:
-            initialIssueByItem.isEmpty ? null : initialIssueByItem,
-      );
-      if (preDoneConsumedIds.isNotEmpty) {
-        await clearPreDoneProgress(studentId, preDoneConsumedIds);
-      }
-    }());
+    await _recordAssignmentsWithLiveRelease(
+      studentId: studentId,
+      items: toAssign,
+      dueDate: dueDate,
+      splitParts: splitParts,
+      splitPartsByItem: splitPartsByItem,
+      groupMetaByItemId: groupMetaByItem,
+      initialProgressByItemId:
+          initialProgressByItem.isEmpty ? null : initialProgressByItem,
+      initialIssueByItemId:
+          initialIssueByItem.isEmpty ? null : initialIssueByItem,
+    );
+    if (preDoneConsumedIds.isNotEmpty) {
+      await clearPreDoneProgress(studentId, preDoneConsumedIds);
+    }
   }
 
   // 하원 시 선택하지 않은 과제를 즉시 "대기(진행중)"로 복귀시키고
@@ -6502,7 +6513,50 @@ class HomeworkStore {
     revision.value++;
   }
 
-  Future<void> _reloadStudent(String studentId) async {
+  bool get isRealtimeHealthy => _rtHealthy;
+
+  /// 홈 복구용: 현재 등원 중인 학생들의 과제만 제한된 동시성으로 갱신한다.
+  Future<void> reloadStudentsForHome(
+    Iterable<String> studentIds, {
+    int maxConcurrent = 4,
+  }) async {
+    final ids = studentIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (ids.isEmpty) return;
+
+    final loading = _loadAllInFlight;
+    if (loading != null) {
+      await loading;
+      // 진행 중이던 전체 스냅샷이 성공했다면 같은 학생을 즉시 다시 읽지 않는다.
+      if (_loaded) return;
+    }
+
+    final academyId = (await TenantService.instance.getActiveAcademyId()) ??
+        await TenantService.instance.ensureActiveAcademy();
+    _subscribeRealtime(academyId);
+    _startRealtimeFallbackPoll(academyId);
+
+    final concurrency = maxConcurrent.clamp(1, 8);
+    for (var offset = 0; offset < ids.length; offset += concurrency) {
+      final end = math.min(offset + concurrency, ids.length);
+      await Future.wait<void>(
+        ids.sublist(offset, end).map(
+              (studentId) => _reloadStudent(
+                studentId,
+                reconcileServerState: false,
+              ),
+            ),
+      );
+    }
+  }
+
+  Future<void> _reloadStudent(
+    String studentId, {
+    bool reconcileServerState = true,
+  }) async {
     final reloadGeneration = (_reloadGenerationByStudentId[studentId] ?? 0) + 1;
     _reloadGenerationByStudentId[studentId] = reloadGeneration;
     try {
@@ -6600,28 +6654,30 @@ class HomeworkStore {
         studentId: studentId,
         bump: false,
       );
-      await _unifyGroupAssignmentCodes(
-        academyId: academyId,
-        studentId: studentId,
-      );
-      final reconciledGroups = await _reconcileDuplicateAssignmentCodeGroups(
-        academyId: academyId,
-        studentId: studentId,
-      );
-      if (reconciledGroups) {
-        await _reloadGroups(
+      if (reconcileServerState) {
+        await _unifyGroupAssignmentCodes(
           academyId: academyId,
           studentId: studentId,
-          bump: false,
+        );
+        final reconciledGroups = await _reconcileDuplicateAssignmentCodeGroups(
+          academyId: academyId,
+          studentId: studentId,
+        );
+        if (reconciledGroups) {
+          await _reloadGroups(
+            academyId: academyId,
+            studentId: studentId,
+            bump: false,
+          );
+        }
+        _syncRecoveredAssignmentCodesToServer(
+          studentId: studentId,
+          recoveredCodesByItemId: recoveredCodes,
+        );
+        _syncRecoveredRecommendedMinutesToServer(
+          recoveredByItemId: recoveredRecommended,
         );
       }
-      _syncRecoveredAssignmentCodesToServer(
-        studentId: studentId,
-        recoveredCodesByItemId: recoveredCodes,
-      );
-      _syncRecoveredRecommendedMinutesToServer(
-        recoveredByItemId: recoveredRecommended,
-      );
       _consumeMarkedAutoCompleteForWaitingItems(studentId);
       _bump();
     } catch (_) {}

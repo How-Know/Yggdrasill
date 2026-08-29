@@ -132,16 +132,28 @@ for (const block of [...byNumber.keys()].sort((a, b) => a - b)) {
   );
 }
 
+// textbookStageBlockForHeader 와 같은 규칙. 단원 마무리 평가도 이름만 보지
+// 않고 본문 쪽 배지를 맞춘다 — 이름만 보면 앞 중단원의 마무리 머리가 이번
+// 마무리 블록을 가로챈다.
 const blockForHeader = (header) => {
+  const start = Number(header.page_start) || 0;
+  const end = header.page_end >= start ? Number(header.page_end) : start;
+  const overlaps = (block) =>
+    start > 0 &&
+    lowPage.has(block) &&
+    start <= highPage.get(block) &&
+    end >= lowPage.get(block);
   if (String(header.title || '').replace(/\s/g, '').includes('단원마무리')) {
-    for (const [block, corner] of cornerOf) if (corner) return block;
-  }
-  if (!(header.page_start > 0)) return -1;
-  const end = header.page_end >= header.page_start ? header.page_end : header.page_start;
-  for (const block of lowPage.keys()) {
-    if (header.page_start <= highPage.get(block) && end >= lowPage.get(block)) {
-      return block;
+    for (const [block, corner] of cornerOf) {
+      if (corner && overlaps(block)) return block;
     }
+    if (start <= 0) {
+      for (const [block, corner] of cornerOf) if (corner) return block;
+    }
+    return -1;
+  }
+  for (const block of lowPage.keys()) {
+    if (overlaps(block)) return block;
   }
   return -1;
 };

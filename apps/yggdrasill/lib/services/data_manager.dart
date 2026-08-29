@@ -6597,6 +6597,8 @@ class DataManager {
   Future<void> forceMigration() => AttendanceService.instance.forceMigration();
   Future<void> loadAttendanceRecords() =>
       AttendanceService.instance.loadAttendanceRecords();
+  Future<void> refreshAttendanceRecordsForDate(DateTime dateLocal) =>
+      AttendanceService.instance.refreshAttendanceRecordsForDate(dateLocal);
   Future<void> _subscribeAttendanceRealtime() =>
       AttendanceService.instance.subscribeAttendanceRealtime();
   Future<void> addAttendanceRecord(AttendanceRecord record) =>

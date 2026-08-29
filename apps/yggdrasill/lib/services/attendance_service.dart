@@ -230,6 +230,7 @@ class AttendanceService {
     DateTime? toExclusive,
     int pastDays = 365 * 2,
     int futureDays = 365,
+    bool replaceRangeOnly = false,
   }) async {
     try {
       final academyId = await TenantService.instance.getActiveAcademyId() ??
@@ -253,9 +254,12 @@ class AttendanceService {
           DateTime(toLocal.year, toLocal.month, toLocal.day).toUtc();
 
       if (!fromUtc.isBefore(toUtc)) {
-        // 잘못된 범위면 안전하게 비움
-        _attendanceRecords = [];
-        attendanceRecordsNotifier.value = const [];
+        // 전체 로드의 기존 동작은 유지하되, 부분 갱신은 잘못된 범위가 기존
+        // 캐시를 지우지 않게 한다.
+        if (!replaceRangeOnly) {
+          _attendanceRecords = [];
+          attendanceRecordsNotifier.value = const [];
+        }
         return;
       }
 
@@ -355,12 +359,35 @@ class AttendanceService {
           version: (m['version'] is num) ? (m['version'] as num).toInt() : 1,
         ));
       }
-      _attendanceRecords = parsed
-        ..sort((a, b) => b.classDateTime.compareTo(a.classDateTime));
+      if (replaceRangeOnly) {
+        final retained = _attendanceRecords.where((record) {
+          final timestamp = record.classDateTime;
+          return timestamp.isBefore(fromLocal) || !timestamp.isBefore(toLocal);
+        });
+        final byId = <String, AttendanceRecord>{};
+        final withoutId = <AttendanceRecord>[];
+        for (final record in <AttendanceRecord>[...retained, ...parsed]) {
+          final id = (record.id ?? '').trim();
+          if (id.isEmpty) {
+            withoutId.add(record);
+          } else {
+            byId[id] = record;
+          }
+        }
+        _attendanceRecords = <AttendanceRecord>[
+          ...byId.values,
+          ...withoutId,
+        ]..sort((a, b) => b.classDateTime.compareTo(a.classDateTime));
+      } else {
+        _attendanceRecords = parsed
+          ..sort((a, b) => b.classDateTime.compareTo(a.classDateTime));
+      }
 
       attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
       print(
-        '[SUPA] 출석 기록 로드: ${_attendanceRecords.length}개 (rangeUtc=${fromUtc.toIso8601String()}..${toUtc.toIso8601String()})',
+        '[SUPA] 출석 기록 로드: fetched=${parsed.length} cached=${_attendanceRecords.length} '
+        'rangeOnly=$replaceRangeOnly '
+        '(rangeUtc=${fromUtc.toIso8601String()}..${toUtc.toIso8601String()})',
       );
     } catch (e, st) {
       print('[SUPA][ERROR] 출석 기록 로드 실패: $e\n$st');
@@ -373,6 +400,18 @@ class AttendanceService {
       // 522/524 같은 일시적 게이트웨이 장애가 기존 출석 화면까지 비우지 않게
       // 마지막으로 성공한 메모리 데이터를 유지한다.
     }
+  }
+
+  /// 홈 등원 목록 복구용: 선택 날짜의 서버 스냅샷만 읽고 전체 출석 캐시의
+  /// 해당 날짜 구간만 교체한다.
+  Future<void> refreshAttendanceRecordsForDate(DateTime dateLocal) {
+    final local = dateLocal.toLocal();
+    final start = DateTime(local.year, local.month, local.day);
+    return loadAttendanceRecords(
+      fromInclusive: start,
+      toExclusive: start.add(const Duration(days: 1)),
+      replaceRangeOnly: true,
+    );
   }
 
   /// 원본 회차(lesson_occurrences)를 서버에서 로드한다.

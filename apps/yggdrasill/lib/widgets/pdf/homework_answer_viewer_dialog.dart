@@ -439,6 +439,7 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
 
   @override
   void dispose() {
+    _focusStabilizeSeq++;
     _singleTapTimer?.cancel();
     _singleTapTimer = null;
     _focusHighlightTimer?.cancel();
@@ -887,6 +888,7 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
         _pageCount <= 0) {
       return false;
     }
+    final requestId = widget.focusRequestId;
     final page = widget.focusPageNumber.clamp(1, _pageCount).toInt();
     final rect = _pageRectForNumber(page);
     if (rect == null) return false;
@@ -923,6 +925,9 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
       ),
       duration: const Duration(milliseconds: 180),
     );
+    if (!mounted || widget.focusRequestId != requestId) {
+      return false;
+    }
     if (hasFocusRect) {
       final highlight = Rect.fromLTRB(
         rect.left + rect.width * (focusRect[1].clamp(0, 1000) / 1000.0),

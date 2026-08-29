@@ -232,7 +232,7 @@ class KioskNoticePrintService {
           final planItemIds = selection.planHomeworkItemIds.toSet();
           for (final itemId in selection.itemIds) {
             if (planItemIds.contains(itemId)) continue;
-            HomeworkStore.instance.markItemsAsHomework(
+            await HomeworkStore.instance.markItemsAsHomework(
               studentId,
               <String>[itemId],
               dueDate: selection.dueDateByItemId[itemId] ?? selection.dueDate,

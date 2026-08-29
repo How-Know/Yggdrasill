@@ -276,8 +276,7 @@ class _TextbookUnitAuthoringDialogState
   bool _isSuryeokSkillTestFocus(_SubFocus focus) {
     bool matches(String name) {
       final compact = name.replaceAll(RegExp(r'\s+'), '');
-      return compact.contains('실력향상테스트') ||
-          compact.contains('학교시험대비');
+      return compact.contains('실력향상테스트') || compact.contains('학교시험대비');
     }
 
     final row = _wonriRowFor(focus);
@@ -1296,7 +1295,7 @@ class _TextbookUnitAuthoringDialogState
         images.add(await renderPdfPageToPng(
           document: doc,
           pageNumber: page,
-          longEdgePx: 1600,
+          longEdgePx: kTocRenderLongEdgePx,
         ));
         if (!mounted) return;
         setState(() => _tocStatus = '목차 페이지 렌더링 중... ($page / $end)');
@@ -1313,11 +1312,18 @@ class _TextbookUnitAuthoringDialogState
         document: doc,
         tocPageOffset: range.pageOffset,
       );
+      final failureDetail = applied != null
+          ? ''
+          : await describeTocAutofillFailure(
+              result,
+              pageImages: images,
+              startPage: start,
+            );
       if (!mounted) return;
       setState(() {
         _tocParsing = false;
         _tocStatus = applied == null
-            ? '실패: 목차에서 단원을 찾지 못했습니다.'
+            ? '실패: 목차에서 단원을 찾지 못했습니다.$failureDetail'
             : '목차 인식 완료 · 대단원 ${applied.$1}개 / 중단원 ${applied.$2}개 · '
                 '페이지 자동 입력됨(보정 ${range.pageOffset >= 0 ? '+' : ''}'
                 '${range.pageOffset}) — 검토 후 "단원 구조 저장"을 누르세요'
@@ -3973,8 +3979,13 @@ class _TextbookUnitAuthoringDialogState
         bigName: big.nameCtrl.text.trim(),
         midName: mid.nameCtrl.text.trim(),
         initialCrops: allSeeds,
-        batchScopes:
-            scopes.length > 1 ? scopes : const <TextbookAuthoringStageScope>[],
+        // 스코프가 하나여도 그대로 넘긴다. 예전에는 하나면 빈 목록을 넘겼고,
+        // 그러면 정답·해설 다이얼로그가 대단원/중단원/sub_key 만으로 스코프를
+        // 새로 지어 쓰는데 거기에는 **소단원 순번이 없다**. 그래서 문항추출 런을
+        // sub_index=0 으로 찾아 "런 없음" 으로 남았다(수력충전 2-1 단원 마무리
+        // 평가는 sub_index=6 에 이미 다 끝난 런이 있었다). 소단원 행 하나만
+        // 골라 다시 돌릴 때가 정확히 그 경우다.
+        batchScopes: scopes,
         answerStartPage: scopes.first.answerStartPage,
         answerEndPage: scopes.first.answerEndPage,
         solutionStartPage: scopes.first.solutionStartPage,

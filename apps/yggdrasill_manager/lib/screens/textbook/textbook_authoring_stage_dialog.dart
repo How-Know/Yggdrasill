@@ -228,6 +228,16 @@ class _TextbookAuthoringStageDialogState
   static const int _kVlmLongEdgePx = 1500;
   static const int _kAnswerImageLongEdgePx = 3000;
 
+  /// 답지·해설지 지면 구조를 읽을 때만 쓰는 긴 변 픽셀.
+  ///
+  /// 수력충전 3-1 빠른 정답 1쪽에는 소단원 여덟 개, 정답 190개가 두 단에 들어
+  /// 찬다. 이 지면에서 모델이 왼쪽 단을 통째로 건너뛰는 일이 잦은데, 그건
+  /// 해상도 문제가 아니라 어느 이미지에서 걸리느냐의 문제라 게이트웨이가 단을
+  /// 잘라 다시 묻는 쪽으로 막았다(answer_layout_columns.js). 다만 다시 물을 때
+  /// 반쪽만 보내므로 1500px 이면 초록색 잔글씨가 750px 폭에 뭉개진다. 2400px
+  /// 이라야 반쪽도 850px 폭으로 남아 읽힌다.
+  static const int _kLayoutReadLongEdgePx = 2400;
+
   final _pdfService = TextbookPdfService();
   bool _startingPbRuns = false;
   final _answerService = TextbookVlmAnswerService();
@@ -250,6 +260,7 @@ class _TextbookAuthoringStageDialogState
   String? _answerLocalPath;
   final _answerViewerController = PdfViewerController();
   final Map<int, Uint8List> _answerPagePngCache = <int, Uint8List>{};
+  final Map<int, Uint8List> _answerLayoutPagePngCache = <int, Uint8List>{};
   final Map<int, Uint8List> _answerImagePagePngCache = <int, Uint8List>{};
 
   bool _runningAnswerVlm = false;
@@ -271,6 +282,7 @@ class _TextbookAuthoringStageDialogState
   String? _solutionLocalPath;
   final _solutionViewerController = PdfViewerController();
   final Map<int, Uint8List> _solutionPagePngCache = <int, Uint8List>{};
+  final Map<int, Uint8List> _solutionLayoutPagePngCache = <int, Uint8List>{};
 
   bool _runningSolRefVlm = false;
   double _solRefProgress = 0;
@@ -299,6 +311,9 @@ class _TextbookAuthoringStageDialogState
       <String, List<String>>{};
   final Map<String, String> _pbRunErrorByKey = <String, String>{};
   String _pbRunLoadError = '';
+
+  /// 본문 추출을 시작하지 못한 이유. 비어 있으면 막힌 것이 없다는 뜻이다.
+  String _pbRunBlockReason = '';
 
   bool get _canMinimizeAfterStageSave {
     if (widget.onMinimize == null ||
@@ -562,6 +577,7 @@ class _TextbookAuthoringStageDialogState
         _answerDocument = doc;
         _answerLocalPath = file.path;
         _answerPagePngCache.clear();
+        _answerLayoutPagePngCache.clear();
         _answerImagePagePngCache.clear();
         _loadingAnswerPdf = false;
       });
@@ -621,6 +637,7 @@ class _TextbookAuthoringStageDialogState
         _solutionDocument = doc;
         _solutionLocalPath = file.path;
         _solutionPagePngCache.clear();
+        _solutionLayoutPagePngCache.clear();
         _loadingSolutionPdf = false;
       });
       return doc;
@@ -783,7 +800,10 @@ class _TextbookAuthoringStageDialogState
     );
     final pending = <int>{
       for (var i = 0; i < targets.length; i += 1)
-        if (_answersByCropId[targets[i].crop.id]?.answerText.trim().isNotEmpty !=
+        if (_answersByCropId[targets[i].crop.id]
+                ?.answerText
+                .trim()
+                .isNotEmpty !=
             true)
           i,
     };
@@ -1211,6 +1231,21 @@ class _TextbookAuthoringStageDialogState
     return png;
   }
 
+  Future<Uint8List?> _answerLayoutPagePng(int page) async {
+    final doc = await _ensureAnswerPdf();
+    if (doc == null) return null;
+    if (page < 1 || page > doc.pages.length) return null;
+    final cached = _answerLayoutPagePngCache[page];
+    if (cached != null) return cached;
+    final png = await renderPdfPageToPng(
+      document: doc,
+      pageNumber: page,
+      longEdgePx: _kLayoutReadLongEdgePx,
+    );
+    _answerLayoutPagePngCache[page] = png;
+    return png;
+  }
+
   Future<Uint8List?> _answerImagePagePng(int page) async {
     final doc = await _ensureAnswerPdf();
     if (doc == null) return null;
@@ -1278,23 +1313,15 @@ class _TextbookAuthoringStageDialogState
       ].join(' ')}',
     );
 
-    int blockForHeader(TextbookVlmAnswerLayoutEntry header) {
-      if (header.title.replaceAll(' ', '').contains('단원마무리')) {
-        for (final entry in cornerOf.entries) {
-          if (entry.value.isNotEmpty) return entry.key;
-        }
-      }
-      if (header.pageStart <= 0) return -1;
-      final end =
-          header.pageEnd >= header.pageStart ? header.pageEnd : header.pageStart;
-      for (final block in lowPage.keys) {
-        if (header.pageStart <= highPage[block]! &&
-            end >= lowPage[block]!) {
-          return block;
-        }
-      }
-      return -1;
-    }
+    int blockForHeader(TextbookVlmAnswerLayoutEntry header) =>
+        textbookStageBlockForHeader(
+          title: header.title,
+          pageStart: header.pageStart,
+          pageEnd: header.pageEnd,
+          lowPage: lowPage,
+          highPage: highPage,
+          cornerOf: cornerOf,
+        );
 
     var currentBlock = -1;
     for (var page = startPage; page <= endPage; page += 1) {
@@ -1305,7 +1332,7 @@ class _TextbookAuthoringStageDialogState
       });
       final Uint8List png;
       try {
-        final rendered = await _answerPagePng(page);
+        final rendered = await _answerLayoutPagePng(page);
         if (rendered == null) {
           pageErrors.add('p$page: 답지 페이지 렌더 결과 없음');
           currentBlock = -1;
@@ -1539,6 +1566,21 @@ class _TextbookAuthoringStageDialogState
     return png;
   }
 
+  Future<Uint8List?> _solutionLayoutPagePng(int page) async {
+    final doc = await _ensureSolutionPdf();
+    if (doc == null) return null;
+    if (page < 1 || page > doc.pages.length) return null;
+    final cached = _solutionLayoutPagePngCache[page];
+    if (cached != null) return cached;
+    final png = await renderPdfPageToPng(
+      document: doc,
+      pageNumber: page,
+      longEdgePx: _kLayoutReadLongEdgePx,
+    );
+    _solutionLayoutPagePngCache[page] = png;
+    return png;
+  }
+
   /// 해설 좌표를 **지면 구조로** 붙인다 (모델에게 매칭을 시키지 않는다).
   ///
   /// 소단원마다 문항 수와 차례는 이미 크롭에 저장돼 있고, 해설에는 소단원
@@ -1566,7 +1608,9 @@ class _TextbookAuthoringStageDialogState
     final byNumber = <int, Map<String, int>>{};
     String numberKey(String raw) {
       final digits = raw.replaceAll(RegExp(r'\D'), '');
-      return digits.isEmpty ? raw.trim() : digits.replaceFirst(RegExp(r'^0+'), '');
+      return digits.isEmpty
+          ? raw.trim()
+          : digits.replaceFirst(RegExp(r'^0+'), '');
     }
 
     for (var i = 0; i < targets.length; i += 1) {
@@ -1586,22 +1630,15 @@ class _TextbookAuthoringStageDialogState
           .putIfAbsent(numberKey(targets[i].expected.number), () => i);
     }
 
-    int blockForHeader(TextbookVlmSolutionPageEntry head) {
-      // 단원 마무리 평가는 배지 대신 이름이 고정이라 이름으로도 가려진다.
-      if (head.title.replaceAll(' ', '').contains('단원마무리')) {
-        for (final entry in cornerOf.entries) {
-          if (entry.value.isNotEmpty) return entry.key;
-        }
-      }
-      if (head.pageStart <= 0) return -1;
-      final end = head.pageEnd >= head.pageStart ? head.pageEnd : head.pageStart;
-      for (final block in lowPage.keys) {
-        if (head.pageStart <= highPage[block]! && end >= lowPage[block]!) {
-          return block;
-        }
-      }
-      return -1;
-    }
+    int blockForHeader(TextbookVlmSolutionPageEntry head) =>
+        textbookStageBlockForHeader(
+          title: head.title,
+          pageStart: head.pageStart,
+          pageEnd: head.pageEnd,
+          lowPage: lowPage,
+          highPage: highPage,
+          cornerOf: cornerOf,
+        );
 
     var current = -1;
     for (var page = startPage; page <= endPage; page += 1) {
@@ -1612,7 +1649,7 @@ class _TextbookAuthoringStageDialogState
       });
       final Uint8List png;
       try {
-        final rendered = await _solutionPagePng(page);
+        final rendered = await _solutionLayoutPagePng(page);
         if (rendered == null) {
           pageErrors.add('p$page: 해설 페이지 렌더 결과 없음');
           continue;
@@ -2318,9 +2355,10 @@ class _TextbookAuthoringStageDialogState
   Widget _buildHeader() {
     final bigPart = (widget.bigName ?? '').isEmpty ? '대단원' : widget.bigName!;
     final midPart = (widget.midName ?? '').isEmpty ? '중단원' : widget.midName!;
-    final scopeTitle = widget.batchScopes.isEmpty
-        ? '$bigPart / $midPart (${widget.subKey})'
-        : '선택 ${widget.batchScopes.length}개 소단원';
+    // 스코프가 하나일 때는 목록으로 받았더라도 단원 이름을 그대로 보여 준다.
+    final scopeTitle = widget.batchScopes.length > 1
+        ? '선택 ${widget.batchScopes.length}개 소단원'
+        : '$bigPart / $midPart (${widget.subKey})';
     final minimizeAction =
         _canMinimizeAfterStageSave ? widget.onMinimize : null;
     return Container(
@@ -3304,7 +3342,11 @@ class _TextbookAuthoringStageDialogState
         .join('');
     final docText = docs > 0 ? ' · 문서 $docs개' : '';
     final errorText = failed.isNotEmpty ? ' · 오류: $failed' : '';
-    return '$base$docText$errorText';
+    // 정답·해설이 덜 찼으면 본문 추출을 일부러 시작하지 않는다. 그 이유는
+    // 잠깐 뜨는 알림으로만 알렸어서, 남아 있는 "런 없음 20" 만 보고 본문
+    // 추출이 고장 난 것처럼 읽혔다. 막힌 이유를 상태줄에 함께 남긴다.
+    final blocked = _pbRunBlockReason.isNotEmpty ? ' · $_pbRunBlockReason' : '';
+    return '$base$docText$errorText$blocked';
   }
 
   /// 낮을수록 "덜 끝난" 상태. 한 카테고리에 소단원별 런이 여러 개면 가장 덜
@@ -3588,14 +3630,14 @@ class _TextbookAuthoringStageDialogState
       if (!mounted) return;
       if (coverage.answers < coverage.total ||
           coverage.solutions < coverage.total) {
-        _toast(
-          '본문 문제 추출을 시작하지 않았습니다: '
-          '정답 ${coverage.answers}/${coverage.total} · '
-          '해설 ${coverage.solutions}/${coverage.total}',
-          error: true,
-        );
+        final reason = '정답·해설이 덜 차서 본문 추출을 시작하지 않았습니다 · '
+            '정답 ${coverage.answers}/${coverage.total} · '
+            '해설 ${coverage.solutions}/${coverage.total}';
+        setState(() => _pbRunBlockReason = reason);
+        _toast(reason, error: true);
         return;
       }
+      setState(() => _pbRunBlockReason = '');
       setState(() => _startingPbRuns = true);
       try {
         await widget.onStartProblemExtraction!();
@@ -3645,6 +3687,54 @@ class _TextbookAuthoringStageDialogState
 /// 블록은 답지에서 번호가 01부터 다시 시작하는 묶음(소단원 하나 또는 단원
 /// 마무리 평가)이다. 목록은 책 차례대로 오므로, 코너가 바뀌거나 번호가
 /// 앞으로 되돌아가는 지점이 곧 블록 경계다.
+/// 답지·해설 지면의 소단원 머리 하나를 블록 번호에 붙인다.
+///
+/// 머리에는 "▶p.150~152" 처럼 본문 쪽 배지가 인쇄돼 있고, 블록마다 크롭의
+/// 본문 쪽 범위를 알고 있으므로 겹치는 블록을 고르면 된다.
+///
+/// "단원 마무리 평가" 는 이름이 고정이라 코너 값으로도 가려지지만, **이름만
+/// 보고 첫 코너 블록을 집으면 안 된다.** 훑는 범위 안에 앞 중단원의 마무리
+/// 지면이 함께 들어오면 그 머리가 이번 마무리 블록을 가로채, 24문항이 통째로
+/// 남의 단원 답으로 채워진다(2-1 답지 8쪽 "[01~09] ▶p.134~137" → 본문
+/// p.150~152 블록). 더 나쁜 것은 그렇게 블록이 미리 채워지면 남은 문항이 0이
+/// 되어 정작 이번 마무리가 실린 뒤쪽 지면은 훑지도 않고 끝난다는 점이다.
+///
+/// 쪽 배지를 못 읽은 머리(`pageStart <= 0`)만 예전처럼 첫 마무리 블록으로
+/// 되짚고, 그 밖에는 겹치는 블록이 없으면 -1 을 돌려 건너뛴다.
+int textbookStageBlockForHeader({
+  required String title,
+  required int pageStart,
+  required int pageEnd,
+  required Map<int, int> lowPage,
+  required Map<int, int> highPage,
+  required Map<int, String> cornerOf,
+}) {
+  final end = pageEnd >= pageStart ? pageEnd : pageStart;
+  bool overlaps(int block) {
+    final low = lowPage[block];
+    final high = highPage[block];
+    if (low == null || high == null || pageStart <= 0) return false;
+    return pageStart <= high && end >= low;
+  }
+
+  if (title.replaceAll(' ', '').contains('단원마무리')) {
+    for (final block in cornerOf.keys) {
+      if ((cornerOf[block] ?? '').isEmpty) continue;
+      if (overlaps(block)) return block;
+    }
+    if (pageStart <= 0) {
+      for (final entry in cornerOf.entries) {
+        if (entry.value.isNotEmpty) return entry.key;
+      }
+    }
+    return -1;
+  }
+  for (final block in lowPage.keys) {
+    if (overlaps(block)) return block;
+  }
+  return -1;
+}
+
 List<int> _stageBlockIndexes(
   List<_AnswerTarget> targets, {
   bool carryUnitReviewContinuation = false,
@@ -3674,8 +3764,7 @@ List<int> _stageBlockIndexes(
     // 수력충전 단원 마무리 평가가 다음 본문 지면까지 이어지는데 그 지면이
     // 일반 A 슬롯으로 잘못 저장된 기존 데이터가 있다. 번호가 32 → 33처럼
     // 계속 증가하면 코너 값이 B → A로 바뀌어도 같은 마무리 블록이다.
-    final continuesUnitReview =
-        carryUnitReviewContinuation &&
+    final continuesUnitReview = carryUnitReviewContinuation &&
         lastCorner.isNotEmpty &&
         corner.isEmpty &&
         value > lastValue;

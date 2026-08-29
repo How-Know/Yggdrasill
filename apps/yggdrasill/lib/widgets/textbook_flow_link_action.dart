@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/student_flow.dart';
 import '../models/textbook_drag_payload.dart';
 import '../services/data_manager.dart';
+import 'app_snackbar.dart';
 import 'dialog_tokens.dart';
 import 'flow_setup_dialog.dart';
 
@@ -16,15 +17,11 @@ Future<void> linkDraggedTextbookToStudentFlow({
   final String gradeLabel = payload.gradeLabel.trim();
 
   if (bookId.isEmpty) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('교재 정보가 올바르지 않아 연결할 수 없습니다.')),
-    );
+    showAppSnackBar(context, '교재 정보가 올바르지 않아 연결할 수 없습니다.');
     return;
   }
   if (gradeLabel.isEmpty) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('교재의 과정(학년) 정보가 없어 연결할 수 없습니다.')),
-    );
+    showAppSnackBar(context, '교재의 과정(학년) 정보가 없어 연결할 수 없습니다.');
     return;
   }
 
@@ -32,9 +29,7 @@ Future<void> linkDraggedTextbookToStudentFlow({
     final enabledFlows = await ensureEnabledFlowsForHomework(context, studentId);
     if (!context.mounted) return;
     if (enabledFlows.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('플로우가 설정되지 않아 교재를 연결할 수 없습니다.')),
-      );
+      showAppSnackBar(context, '플로우가 설정되지 않아 교재를 연결할 수 없습니다.');
       return;
     }
 
@@ -64,9 +59,7 @@ Future<void> linkDraggedTextbookToStudentFlow({
 
     final droppedKey = '$bookId|$gradeLabel';
     if (!seen.add(droppedKey)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('이미 연결된 교재입니다.')),
-      );
+      showAppSnackBar(context, '이미 연결된 교재입니다.');
       return;
     }
 
@@ -78,18 +71,13 @@ Future<void> linkDraggedTextbookToStudentFlow({
 
     await DataManager.instance.saveFlowTextbookLinks(selectedFlow.id, merged);
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          '${bookName.isEmpty ? '선택한 교재' : bookName}를 ${selectedFlow.name} 플로우에 연결했습니다.',
-        ),
-      ),
+    showAppSnackBar(
+      context,
+      '${bookName.isEmpty ? '선택한 교재' : bookName}를 ${selectedFlow.name} 플로우에 연결했습니다.',
     );
   } catch (e) {
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('교재 연결 중 오류가 발생했습니다: $e')),
-    );
+    showAppSnackBar(context, '교재 연결 중 오류가 발생했습니다: $e');
   }
 }
 

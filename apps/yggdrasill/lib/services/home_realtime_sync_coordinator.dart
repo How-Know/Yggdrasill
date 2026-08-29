@@ -6,7 +6,7 @@ import 'data_manager.dart';
 import 'homework_assignment_store.dart';
 import 'homework_store.dart';
 
-/// 홈의 출석·과제 데이터를 앱 복귀/Windows 포커스 시 서버 상태로 수렴시킨다.
+/// 홈의 오늘 출석과 현재 등원 학생 과제만 서버 상태로 수렴시킨다.
 ///
 /// 여러 lifecycle 신호가 연달아 와도 한 작업으로 합치고, 잦은 창 전환이 전체
 /// 스냅샷 요청 폭주로 이어지지 않도록 짧은 성공 후 cooldown을 둔다.
@@ -17,6 +17,7 @@ class HomeRealtimeSyncCoordinator {
       HomeRealtimeSyncCoordinator._();
 
   static const Duration _minInterval = Duration(seconds: 15);
+  static const Duration _healthyWindowFocusInterval = Duration(minutes: 2);
 
   Future<void>? _inFlight;
   DateTime? _lastCompletedAt;
@@ -33,6 +34,13 @@ class HomeRealtimeSyncCoordinator {
 
     final now = DateTime.now();
     final last = _lastCompletedAt;
+    if (!force &&
+        reason == 'window_focus' &&
+        HomeworkStore.instance.isRealtimeHealthy &&
+        last != null &&
+        now.difference(last) < _healthyWindowFocusInterval) {
+      return;
+    }
     if (!force && last != null && now.difference(last) < _minInterval) {
       return;
     }
@@ -52,15 +60,32 @@ class HomeRealtimeSyncCoordinator {
   Future<void> _run(String reason) async {
     final stopwatch = Stopwatch()..start();
     debugPrint('[HOME_SYNC] start reason=$reason');
-    await Future.wait<void>([
-      DataManager.instance.loadAttendanceRecords(),
-      HomeworkStore.instance.loadAll(forceRefresh: true),
-    ]);
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    await DataManager.instance.refreshAttendanceRecordsForDate(today);
+
+    final attendedStudentIds = DataManager.instance.attendanceRecords
+        .where((record) {
+          final classDate = record.classDateTime;
+          final isToday = classDate.year == today.year &&
+              classDate.month == today.month &&
+              classDate.day == today.day;
+          return isToday &&
+              (record.isPresent || record.arrivalTime != null) &&
+              record.departureTime == null;
+        })
+        .map((record) => record.studentId.trim())
+        .where((studentId) => studentId.isNotEmpty)
+        .toSet();
+
+    await HomeworkStore.instance.reloadStudentsForHome(attendedStudentIds);
     // 활성 assignment는 학생별 UI가 revision을 보고 다시 읽는다. 기존 성공
     // 캐시는 새 응답이 올 때까지 유지되어 네트워크 지연 중 카드가 사라지지 않는다.
-    HomeworkAssignmentStore.instance.invalidateActiveAssignments();
+    HomeworkAssignmentStore.instance
+        .invalidateActiveAssignmentsForStudents(attendedStudentIds);
     debugPrint(
-      '[HOME_SYNC] done reason=$reason elapsedMs=${stopwatch.elapsedMilliseconds}',
+      '[HOME_SYNC] done reason=$reason attended=${attendedStudentIds.length} '
+      'elapsedMs=${stopwatch.elapsedMilliseconds}',
     );
   }
 }

@@ -1,40 +1,50 @@
-import 'dotenv/config';
-import http from 'node:http';
-import fs from 'node:fs';
-import path from 'node:path';
-import os from 'node:os';
-import { createHash, randomUUID } from 'node:crypto';
-import { execFile as execFileCb } from 'node:child_process';
-import { promisify } from 'node:util';
-import { URL, fileURLToPath } from 'node:url';
-import { createClient } from '@supabase/supabase-js';
-import sharp from 'sharp';
+import "dotenv/config";
+import http from "node:http";
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { createHash, randomUUID } from "node:crypto";
+import { execFile as execFileCb } from "node:child_process";
+import { promisify } from "node:util";
+import { URL, fileURLToPath } from "node:url";
+import { createClient } from "@supabase/supabase-js";
+import sharp from "sharp";
 import {
   renderPdfWithXeLatex,
   renderAnswerWithXeLatex,
-} from './problem_bank/render_engine/xelatex/renderer.js';
-import { createMathSvgRenderer } from './problem_bank/render_engine/math/mathjax_svg_renderer.js';
-import { generateObjectiveDraftForQuestion } from './problem_bank_extract_worker.js';
+} from "./problem_bank/render_engine/xelatex/renderer.js";
+import { createMathSvgRenderer } from "./problem_bank/render_engine/math/mathjax_svg_renderer.js";
+import { generateObjectiveDraftForQuestion } from "./problem_bank_extract_worker.js";
 
 const __api_dirname = path.dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = path.resolve(__api_dirname, '..', '..');
+const REPO_ROOT = path.resolve(__api_dirname, "..", "..");
 
 function resolveBatchPreviewFont() {
   const kopubPath = path.resolve(
-    REPO_ROOT, 'apps', 'yggdrasill', 'assets', 'fonts', 'kopub',
-    'KoPubWorldBatangProLight.otf',
+    REPO_ROOT,
+    "apps",
+    "yggdrasill",
+    "assets",
+    "fonts",
+    "kopub",
+    "KoPubWorldBatangProLight.otf",
   );
   if (fs.existsSync(kopubPath)) {
-    return { family: 'KoPubWorldBatangPro', path: kopubPath };
+    return { family: "KoPubWorldBatangPro", path: kopubPath };
   }
   const hcrPath = path.resolve(
-    REPO_ROOT, 'apps', 'yggdrasill', 'assets', 'fonts', 'hancom',
-    'HCRBatang.ttf',
+    REPO_ROOT,
+    "apps",
+    "yggdrasill",
+    "assets",
+    "fonts",
+    "hancom",
+    "HCRBatang.ttf",
   );
   if (fs.existsSync(hcrPath)) {
-    return { family: 'HCRBatang', path: hcrPath };
+    return { family: "HCRBatang", path: hcrPath };
   }
-  return { family: 'Malgun Gothic', path: '' };
+  return { family: "Malgun Gothic", path: "" };
 }
 
 const execFileAsync = promisify(execFileCb);
@@ -43,7 +53,7 @@ import {
   getStoredPreviewUrls,
   buildPreviewHtmlBatch,
   buildDocumentHtmlForPreview,
-} from './problem_bank_preview_service.js';
+} from "./problem_bank_preview_service.js";
 import {
   createUploadUrl as storageCreateUploadUrl,
   createDownloadUrl as storageCreateDownloadUrl,
@@ -56,7 +66,7 @@ import {
   DEFAULT_TEXTBOOK_BUCKET,
   DEFAULT_TEXTBOOK_CROPS_BUCKET,
   DEFAULT_TEXTBOOK_DRIVER,
-} from './storage/driver.js';
+} from "./storage/driver.js";
 import {
   detectItemGeometryOnPage,
   detectProblemsOnPage,
@@ -75,50 +85,53 @@ import {
   shouldTreatWonriPageAsConcept,
   suryeokMarksNeedRepair,
   suryeokRangeHeadersMayBeMissing,
-} from './textbook/vlm_detect_client.js';
+} from "./textbook/vlm_detect_client.js";
 import {
   extractAnswersOnPage,
   normalizeAnswerResult,
-} from './textbook/vlm_answer_client.js';
+} from "./textbook/vlm_answer_client.js";
 import {
   extractAnswerLayoutOnPage,
   normalizeAnswerLayoutResult,
-} from './textbook/vlm_answer_layout_client.js';
+} from "./textbook/vlm_answer_layout_client.js";
+import {
+  answerLayoutMissingHalf,
+  mergeAnswerLayoutHalf,
+  remapAnswerLayoutHalf,
+} from "./textbook/answer_layout_columns.js";
 import {
   detectSolutionRefsOnPage,
   normalizeSolutionRefsResult,
-} from './textbook/vlm_solution_refs_client.js';
+} from "./textbook/vlm_solution_refs_client.js";
 import {
   detectSolutionBlocksOnPage,
   normalizeSolutionBlocksResult,
-} from './textbook/vlm_solution_blocks_client.js';
-import { logVlmUsage } from './textbook/vlm_usage_log.js';
-import { normalizeProblemNumberKey } from './textbook/problem_number_key.js';
+} from "./textbook/vlm_solution_blocks_client.js";
+import { logVlmUsage } from "./textbook/vlm_usage_log.js";
+import { normalizeProblemNumberKey } from "./textbook/problem_number_key.js";
 import {
   parseTocPages,
   normalizeTocResult,
-} from './textbook/vlm_toc_client.js';
+} from "./textbook/vlm_toc_client.js";
 import {
   classifyRpmSectionPages,
   normalizeRpmSectionResult,
-} from './textbook/vlm_rpm_section_client.js';
+} from "./textbook/vlm_rpm_section_client.js";
 import {
   extractBodySolutionsOnPage,
   normalizeBodySolutionsResult,
-} from './textbook/vlm_body_solution_client.js';
-import {
-  assessHandwritingSample,
-} from './textbook/handwriting_review_client.js';
+} from "./textbook/vlm_body_solution_client.js";
+import { assessHandwritingSample } from "./textbook/handwriting_review_client.js";
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const API_PORT = Number.parseInt(process.env.PB_API_PORT || '8787', 10);
-const API_HOST = process.env.PB_API_HOST || '0.0.0.0';
-const API_KEY = (process.env.PB_API_KEY || '').trim();
+const API_PORT = Number.parseInt(process.env.PB_API_PORT || "8787", 10);
+const API_HOST = process.env.PB_API_HOST || "0.0.0.0";
+const API_KEY = (process.env.PB_API_KEY || "").trim();
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   console.error(
-    '[pb-api] Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in env',
+    "[pb-api] Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in env",
   );
   process.exit(1);
 }
@@ -131,21 +144,23 @@ const answerMathRenderer = createMathSvgRenderer();
 function sendJson(res, statusCode, body) {
   const payload = JSON.stringify(body);
   res.writeHead(statusCode, {
-    'Content-Type': 'application/json; charset=utf-8',
-    'Content-Length': Buffer.byteLength(payload),
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type,x-api-key',
+    "Content-Type": "application/json; charset=utf-8",
+    "Content-Length": Buffer.byteLength(payload),
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type,x-api-key",
   });
   res.end(payload);
 }
 
 function notFound(res) {
-  sendJson(res, 404, { ok: false, error: 'not_found' });
+  sendJson(res, 404, { ok: false, error: "not_found" });
 }
 
 function compact(value, max = 240) {
-  const s = String(value ?? '').replace(/\s+/g, ' ').trim();
+  const s = String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
   if (s.length <= max) return s;
   return `${s.slice(0, max)}...`;
 }
@@ -155,18 +170,18 @@ async function readJson(req) {
   for await (const chunk of req) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
-  const raw = Buffer.concat(chunks).toString('utf8').trim();
+  const raw = Buffer.concat(chunks).toString("utf8").trim();
   if (!raw) return {};
   try {
     return JSON.parse(raw);
   } catch {
-    throw new Error('invalid_json');
+    throw new Error("invalid_json");
   }
 }
 
 function requireApiKey(req) {
   if (!API_KEY) return true;
-  const incoming = String(req.headers['x-api-key'] || '').trim();
+  const incoming = String(req.headers["x-api-key"] || "").trim();
   return incoming === API_KEY;
 }
 
@@ -178,113 +193,127 @@ function normalizeLimit(raw, fallback = 30, max = 100) {
 
 function normalizeBool(raw, fallback = false) {
   if (raw == null) return fallback;
-  if (typeof raw === 'boolean') return raw;
+  if (typeof raw === "boolean") return raw;
   const s = String(raw).trim().toLowerCase();
-  if (['1', 'true', 'yes', 'y'].includes(s)) return true;
-  if (['0', 'false', 'no', 'n'].includes(s)) return false;
+  if (["1", "true", "yes", "y"].includes(s)) return true;
+  if (["0", "false", "no", "n"].includes(s)) return false;
   return fallback;
 }
 
 function normalizeWhitespace(value) {
-  return String(value || '').replace(/\s+/g, ' ').trim();
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-function normalizePresetDisplayName(raw, fallback = '') {
+function normalizePresetDisplayName(raw, fallback = "") {
   const normalized = normalizeWhitespace(raw);
   const safeFallback = normalizeWhitespace(fallback);
   const value = normalized || safeFallback;
-  if (!value) return '';
+  if (!value) return "";
   return value.slice(0, 120);
 }
 
-function normalizePresetKind(raw, fallback = 'settings') {
-  const value = String(raw || fallback || 'settings').trim().toLowerCase();
-  if (value === 'assignment' || value === 'generated_assignment' || value === 'homework') {
-    return 'assignment';
+function normalizePresetKind(raw, fallback = "settings") {
+  const value = String(raw || fallback || "settings")
+    .trim()
+    .toLowerCase();
+  if (
+    value === "assignment" ||
+    value === "generated_assignment" ||
+    value === "homework"
+  ) {
+    return "assignment";
   }
-  return 'settings';
+  return "settings";
 }
 
 function normalizeTemplateProfile(raw) {
-  const s = String(raw || '').trim().toLowerCase();
+  const s = String(raw || "")
+    .trim()
+    .toLowerCase();
   if (
-    s === 'csat' ||
-    s === 'mock' ||
-    s === 'naesin' ||
-    s === 'assignment' ||
-    s === 'homework' ||
-    s === 'review_compact'
+    s === "csat" ||
+    s === "mock" ||
+    s === "naesin" ||
+    s === "assignment" ||
+    s === "homework" ||
+    s === "review_compact"
   ) {
-    return s === 'homework' ? 'assignment' : s;
+    return s === "homework" ? "assignment" : s;
   }
-  return 'naesin';
+  return "naesin";
 }
 
 function templateProfileForPbExportsColumn(profile) {
   const normalized = normalizeTemplateProfile(profile);
   // DB check constraint currently allows only naesin/csat/mock.
-  return normalized === 'assignment' || normalized === 'review_compact'
-    ? 'naesin'
+  return normalized === "assignment" || normalized === "review_compact"
+    ? "naesin"
     : normalized;
 }
 
 const CURRICULUM_CODES = new Set([
-  'legacy_1to6',
-  'k7_1997',
-  'k7_2007',
-  'rev_2009',
-  'rev_2015',
-  'rev_2022',
+  "legacy_1to6",
+  "k7_1997",
+  "k7_2007",
+  "rev_2009",
+  "rev_2015",
+  "rev_2022",
 ]);
 
 const SOURCE_TYPE_CODES = new Set([
-  'market_book',
-  'lecture_book',
-  'ebs_book',
-  'school_past',
-  'mock_past',
-  'original_item',
+  "market_book",
+  "lecture_book",
+  "ebs_book",
+  "school_past",
+  "mock_past",
+  "original_item",
 ]);
 
-function normalizeCurriculumCode(raw, fallback = '') {
-  const code = String(raw || '').trim();
+function normalizeCurriculumCode(raw, fallback = "") {
+  const code = String(raw || "").trim();
   if (CURRICULUM_CODES.has(code)) return code;
   return fallback;
 }
 
-function normalizeSourceTypeCode(raw, fallback = '') {
-  const code = String(raw || '').trim();
+function normalizeSourceTypeCode(raw, fallback = "") {
+  const code = String(raw || "").trim();
   if (SOURCE_TYPE_CODES.has(code)) return code;
   return fallback;
 }
 
 function normalizeSemesterLabel(raw) {
-  const value = String(raw || '').trim();
-  if (value === '1학기' || value === '2학기') return value;
-  return '';
+  const value = String(raw || "").trim();
+  if (value === "1학기" || value === "2학기") return value;
+  return "";
 }
 
 function normalizeExamTermLabel(raw) {
-  const value = String(raw || '').trim();
-  if (value === '중간' || value === '기말') return value;
-  return '';
+  const value = String(raw || "").trim();
+  if (value === "중간" || value === "기말") return value;
+  return "";
 }
 
 function normalizePaper(raw) {
-  const v = String(raw || '').trim().toUpperCase();
-  if (v === 'A4' || v === 'B4' || v === '8\uC808') return v;
-  if (v === '8K' || v === '8JEOL') return '8\uC808';
-  return 'A4';
+  const v = String(raw || "")
+    .trim()
+    .toUpperCase();
+  if (v === "A4" || v === "B4" || v === "8\uC808") return v;
+  if (v === "8K" || v === "8JEOL") return "8\uC808";
+  return "A4";
 }
 
 function normalizeMathEngine(raw) {
-  const v = String(raw || '').trim().toLowerCase();
-  if (v === 'mathjax-svg') return 'mathjax-svg';
-  return 'xelatex-v2';
+  const v = String(raw || "")
+    .trim()
+    .toLowerCase();
+  if (v === "mathjax-svg") return "mathjax-svg";
+  return "xelatex-v2";
 }
 
 function normalizeNumeric(raw, fallback, min, max) {
-  const n = Number.parseFloat(String(raw ?? ''));
+  const n = Number.parseFloat(String(raw ?? ""));
   if (!Number.isFinite(n)) return fallback;
   return Math.min(max, Math.max(min, n));
 }
@@ -294,7 +323,7 @@ function normalizeUuidListOrdered(raw) {
   const seen = new Set();
   const out = [];
   for (const item of raw) {
-    const id = String(item || '').trim();
+    const id = String(item || "").trim();
     if (!isUuid(id) || seen.has(id)) continue;
     seen.add(id);
     out.push(id);
@@ -303,7 +332,7 @@ function normalizeUuidListOrdered(raw) {
 }
 
 function normalizeJsonObject(raw, fallback = {}) {
-  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
     return raw;
   }
   return fallback;
@@ -315,7 +344,8 @@ function normalizeJsonArray(raw, fallback = []) {
 }
 
 function chunkArray(input, chunkSize = 200) {
-  const safeChunk = Number.isFinite(chunkSize) && chunkSize > 0 ? chunkSize : 200;
+  const safeChunk =
+    Number.isFinite(chunkSize) && chunkSize > 0 ? chunkSize : 200;
   if (!Array.isArray(input) || input.length === 0) return [];
   const out = [];
   for (let i = 0; i < input.length; i += safeChunk) {
@@ -325,39 +355,49 @@ function chunkArray(input, chunkSize = 200) {
 }
 
 function normalizeLayoutColumns(raw) {
-  const v = String(raw ?? '').trim();
-  if (v === '2' || v === '2\uB2E8' || v.toLowerCase() === 'two') return 2;
+  const v = String(raw ?? "").trim();
+  if (v === "2" || v === "2\uB2E8" || v.toLowerCase() === "two") return 2;
   return 1;
 }
 
 function normalizeLayoutMode(raw) {
-  const v = String(raw ?? '').trim().toLowerCase();
-  if (v === 'custom_columns' || v === 'custom-columns' || v === 'custom') {
-    return 'custom_columns';
+  const v = String(raw ?? "")
+    .trim()
+    .toLowerCase();
+  if (v === "custom_columns" || v === "custom-columns" || v === "custom") {
+    return "custom_columns";
   }
-  return 'legacy';
+  return "legacy";
 }
 
 function normalizeMaxQuestionsPerPage(raw, columns) {
   const defaults = columns === 2 ? 8 : 4;
-  const parsed = Number.parseInt(String(raw ?? ''), 10);
+  const parsed = Number.parseInt(String(raw ?? ""), 10);
   if (!Number.isFinite(parsed) || parsed <= 0) return defaults;
   const allowed = columns === 2 ? [1, 2, 4, 6, 8] : [1, 2, 3, 4];
   if (allowed.includes(parsed)) return parsed;
   return defaults;
 }
 
-function normalizeColumnQuestionCounts(raw, layoutColumns, maxQuestionsPerPage) {
+function normalizeColumnQuestionCounts(
+  raw,
+  layoutColumns,
+  maxQuestionsPerPage,
+) {
   if (!Array.isArray(raw)) return [];
   const targetColumns = Math.max(1, Number(layoutColumns || 1));
   const counts = raw
     .slice(0, targetColumns)
-    .map((one) => Number.parseInt(String(one ?? ''), 10))
+    .map((one) => Number.parseInt(String(one ?? ""), 10))
     .filter((one) => Number.isFinite(one) && one > 0);
   if (counts.length !== targetColumns) return [];
   const total = counts.reduce((sum, one) => sum + one, 0);
   if (total <= 0) return [];
-  if (Number.isFinite(maxQuestionsPerPage) && maxQuestionsPerPage > 0 && total !== maxQuestionsPerPage) {
+  if (
+    Number.isFinite(maxQuestionsPerPage) &&
+    maxQuestionsPerPage > 0 &&
+    total !== maxQuestionsPerPage
+  ) {
     return [];
   }
   return counts;
@@ -368,17 +408,17 @@ function normalizePageColumnQuestionCounts(raw, layoutColumns) {
   if (Number(layoutColumns || 1) !== 2) return [];
   const out = [];
   for (const one of raw) {
-    if (!one || typeof one !== 'object') continue;
+    if (!one || typeof one !== "object") continue;
     const pageIndexRaw = Number.parseInt(
-      String(one.pageIndex ?? one.page ?? one.pageNo ?? one.pageNumber ?? ''),
+      String(one.pageIndex ?? one.page ?? one.pageNo ?? one.pageNumber ?? ""),
       10,
     );
     const leftRaw = Number.parseInt(
-      String(one.left ?? one.leftCount ?? one.col1 ?? one.l ?? ''),
+      String(one.left ?? one.leftCount ?? one.col1 ?? one.l ?? ""),
       10,
     );
     const rightRaw = Number.parseInt(
-      String(one.right ?? one.rightCount ?? one.col2 ?? one.r ?? ''),
+      String(one.right ?? one.rightCount ?? one.col2 ?? one.r ?? ""),
       10,
     );
     if (!Number.isFinite(leftRaw) || !Number.isFinite(rightRaw)) continue;
@@ -404,7 +444,7 @@ function normalizeTitlePageIndices(raw) {
   const out = new Set([1]);
   if (Array.isArray(raw)) {
     for (const one of raw) {
-      const page = Number.parseInt(String(one ?? ''), 10);
+      const page = Number.parseInt(String(one ?? ""), 10);
       if (!Number.isFinite(page) || page < 1) continue;
       out.add(page);
     }
@@ -412,38 +452,47 @@ function normalizeTitlePageIndices(raw) {
   return [...out].sort((a, b) => a - b);
 }
 
-function normalizeTitlePageHeaders(raw, titlePageIndices, fallbackTitle = '수학 영역') {
+function normalizeTitlePageHeaders(
+  raw,
+  titlePageIndices,
+  fallbackTitle = "수학 영역",
+) {
   const titlePages = normalizeTitlePageIndices(titlePageIndices);
   const titlePageSet = new Set(titlePages);
   const out = new Map();
   if (Array.isArray(raw)) {
     for (const one of raw) {
-      if (!one || typeof one !== 'object') continue;
+      if (!one || typeof one !== "object") continue;
       const page = Number.parseInt(
-        String(one.page ?? one.pageIndex ?? one.pageNo ?? one.pageNumber ?? ''),
+        String(one.page ?? one.pageIndex ?? one.pageNo ?? one.pageNumber ?? ""),
         10,
       );
       if (!Number.isFinite(page) || page < 1) continue;
       if (!titlePageSet.has(page)) continue;
-      const title = String(one.title ?? one.subjectTitleText ?? '')
-        .replace(/\s+/g, ' ')
+      const title = String(one.title ?? one.subjectTitleText ?? "")
+        .replace(/\s+/g, " ")
         .trim();
-      const subtitle = String(one.subtitle ?? one.subTitle ?? one.sub ?? '')
-        .replace(/\s+/g, ' ')
+      const subtitle = String(one.subtitle ?? one.subTitle ?? one.sub ?? "")
+        .replace(/\s+/g, " ")
         .trim();
       if (!title && !subtitle) continue;
       out.set(page, { page, title, subtitle });
     }
   }
-  const defaultTitle = String(fallbackTitle || '수학 영역').replace(/\s+/g, ' ').trim() || '수학 영역';
+  const defaultTitle =
+    String(fallbackTitle || "수학 영역")
+      .replace(/\s+/g, " ")
+      .trim() || "수학 영역";
   const pageOneTitle = out.get(1)?.title || defaultTitle;
   for (const page of titlePages) {
     const prev = out.get(page);
-    const title = String(prev?.title || '').trim() || pageOneTitle;
+    const title = String(prev?.title || "").trim() || pageOneTitle;
     out.set(page, {
       page,
       title,
-      subtitle: String(prev?.subtitle || '').replace(/\s+/g, ' ').trim(),
+      subtitle: String(prev?.subtitle || "")
+        .replace(/\s+/g, " ")
+        .trim(),
     });
   }
   return [...out.values()].sort((a, b) => a.page - b.page);
@@ -453,9 +502,9 @@ function normalizeCoverPageItems(rawItems, fallbackItems = []) {
   const src = Array.isArray(rawItems) ? rawItems : [];
   const out = [];
   for (const one of src) {
-    if (!one || typeof one !== 'object') continue;
-    const name = normalizeWhitespace(one.name || one.label || '');
-    const pages = normalizeWhitespace(one.pages || one.pageRange || '');
+    if (!one || typeof one !== "object") continue;
+    const name = normalizeWhitespace(one.name || one.label || "");
+    const pages = normalizeWhitespace(one.pages || one.pageRange || "");
     if (!name && !pages) continue;
     out.push({ name, pages });
     if (out.length >= 24) break;
@@ -463,25 +512,29 @@ function normalizeCoverPageItems(rawItems, fallbackItems = []) {
   if (out.length > 0) return out;
   return (Array.isArray(fallbackItems) ? fallbackItems : [])
     .map((one) => ({
-      name: normalizeWhitespace(one?.name || one?.label || ''),
-      pages: normalizeWhitespace(one?.pages || one?.pageRange || ''),
+      name: normalizeWhitespace(one?.name || one?.label || ""),
+      pages: normalizeWhitespace(one?.pages || one?.pageRange || ""),
     }))
     .filter((one) => one.name || one.pages)
     .slice(0, 24);
 }
 
 function normalizeCoverPageTexts(raw, defaults = {}) {
-  const src = raw && typeof raw === 'object' ? raw : {};
-  const seed = defaults && typeof defaults === 'object' ? defaults : {};
-  const defaultElectiveItemsSrc = Array.isArray(seed.electiveItems) ? seed.electiveItems : [];
+  const src = raw && typeof raw === "object" ? raw : {};
+  const seed = defaults && typeof defaults === "object" ? defaults : {};
+  const defaultElectiveItemsSrc = Array.isArray(seed.electiveItems)
+    ? seed.electiveItems
+    : [];
   const defaultElectiveItems = [0, 1, 2].map((index) => {
-    const item = defaultElectiveItemsSrc[index] && typeof defaultElectiveItemsSrc[index] === 'object'
-      ? defaultElectiveItemsSrc[index]
-      : {};
+    const item =
+      defaultElectiveItemsSrc[index] &&
+      typeof defaultElectiveItemsSrc[index] === "object"
+        ? defaultElectiveItemsSrc[index]
+        : {};
     const fallbackName =
-      index === 0 ? '확률과 통계' : (index === 1 ? '미적분' : '기하');
+      index === 0 ? "확률과 통계" : index === 1 ? "미적분" : "기하";
     const fallbackPages =
-      index === 0 ? '9~12쪽' : (index === 1 ? '13~16쪽' : '17~20쪽');
+      index === 0 ? "9~12쪽" : index === 1 ? "13~16쪽" : "17~20쪽";
     return {
       name: normalizeWhitespace(item.name || fallbackName) || fallbackName,
       pages: normalizeWhitespace(item.pages || fallbackPages) || fallbackPages,
@@ -490,27 +543,44 @@ function normalizeCoverPageTexts(raw, defaults = {}) {
   const defaultCommonItems = Array.isArray(seed.commonItems)
     ? normalizeCoverPageItems(seed.commonItems, [])
     : [];
-  const topTitle = normalizeWhitespace(
-    src.topTitle || seed.topTitle || '2026학년도 대학수학능력시험 문제지',
-  ) || '2026학년도 대학수학능력시험 문제지';
-  const subjectTitle = normalizeWhitespace(
-    src.subjectTitle || seed.subjectTitle || '수학 영역',
-  ) || '수학 영역';
-  const handwritingPhrase = normalizeWhitespace(
-    src.handwritingPhrase || seed.handwritingPhrase || '이 많은 별빛이 내린 언덕 위에',
-  ) || '이 많은 별빛이 내린 언덕 위에';
+  const topTitle =
+    normalizeWhitespace(
+      src.topTitle || seed.topTitle || "2026학년도 대학수학능력시험 문제지",
+    ) || "2026학년도 대학수학능력시험 문제지";
+  const subjectTitle =
+    normalizeWhitespace(src.subjectTitle || seed.subjectTitle || "수학 영역") ||
+    "수학 영역";
+  const handwritingPhrase =
+    normalizeWhitespace(
+      src.handwritingPhrase ||
+        seed.handwritingPhrase ||
+        "이 많은 별빛이 내린 언덕 위에",
+    ) || "이 많은 별빛이 내린 언덕 위에";
   const fallbackGroups = [
     {
-      label: normalizeWhitespace(src.commonLabel || seed.commonLabel || '공통과목') || '공통과목',
-      pageRange: normalizeWhitespace(
-        src.commonPageRange || src.commonPages || seed.commonPageRange || '1~12쪽',
-      ) || '1~12쪽',
+      label:
+        normalizeWhitespace(
+          src.commonLabel || seed.commonLabel || "공통과목",
+        ) || "공통과목",
+      pageRange:
+        normalizeWhitespace(
+          src.commonPageRange ||
+            src.commonPages ||
+            seed.commonPageRange ||
+            "1~12쪽",
+        ) || "1~12쪽",
       items: normalizeCoverPageItems(src.commonItems, defaultCommonItems),
     },
     {
-      label: normalizeWhitespace(src.electiveLabel || seed.electiveLabel || '선택과목') || '선택과목',
+      label:
+        normalizeWhitespace(
+          src.electiveLabel || seed.electiveLabel || "선택과목",
+        ) || "선택과목",
       pageRange: normalizeWhitespace(
-        src.electivePageRange || src.electivePages || seed.electivePageRange || '',
+        src.electivePageRange ||
+          src.electivePages ||
+          seed.electivePageRange ||
+          "",
       ),
       items: normalizeCoverPageItems(src.electiveItems, defaultElectiveItems),
     },
@@ -520,14 +590,15 @@ function normalizeCoverPageTexts(raw, defaults = {}) {
   if (hasExplicitGroups) {
     const rawGroups = Array.isArray(src.subjectGroups) ? src.subjectGroups : [];
     subjectGroups = rawGroups
-      .filter((group) => group && typeof group === 'object')
+      .filter((group) => group && typeof group === "object")
       .map((group, index) => {
-        const fallbackLabel = normalizeWhitespace(
-          fallbackGroups[index]?.label || `대분류 ${index + 1}`,
-        ) || `대분류 ${index + 1}`;
+        const fallbackLabel =
+          normalizeWhitespace(
+            fallbackGroups[index]?.label || `대분류 ${index + 1}`,
+          ) || `대분류 ${index + 1}`;
         return {
-          label: normalizeWhitespace(group.label || '') || fallbackLabel,
-          pageRange: normalizeWhitespace(group.pageRange || group.pages || ''),
+          label: normalizeWhitespace(group.label || "") || fallbackLabel,
+          pageRange: normalizeWhitespace(group.pageRange || group.pages || ""),
           items: normalizeCoverPageItems(group.items, []),
         };
       })
@@ -537,15 +608,25 @@ function normalizeCoverPageTexts(raw, defaults = {}) {
   }
   const commonGroup = subjectGroups[0] || fallbackGroups[0];
   const electiveGroup = subjectGroups[1] || fallbackGroups[1];
-  const commonLabel = commonGroup.label || '공통과목';
-  const commonPageRange = commonGroup.pageRange || '1~12쪽';
-  const commonItems = normalizeCoverPageItems(commonGroup.items, defaultCommonItems);
-  const electiveLabel = electiveGroup.label || '선택과목';
-  const electivePageRange = normalizeWhitespace(electiveGroup.pageRange || '');
-  const electiveItems = normalizeCoverPageItems(electiveGroup.items, defaultElectiveItems);
-  const organization = normalizeWhitespace(
-    src.organization || src.organizationName || seed.organization || '한국교육과정평가원',
-  ) || '한국교육과정평가원';
+  const commonLabel = commonGroup.label || "공통과목";
+  const commonPageRange = commonGroup.pageRange || "1~12쪽";
+  const commonItems = normalizeCoverPageItems(
+    commonGroup.items,
+    defaultCommonItems,
+  );
+  const electiveLabel = electiveGroup.label || "선택과목";
+  const electivePageRange = normalizeWhitespace(electiveGroup.pageRange || "");
+  const electiveItems = normalizeCoverPageItems(
+    electiveGroup.items,
+    defaultElectiveItems,
+  );
+  const organization =
+    normalizeWhitespace(
+      src.organization ||
+        src.organizationName ||
+        seed.organization ||
+        "한국교육과정평가원",
+    ) || "한국교육과정평가원";
   return {
     topTitle,
     subjectTitle,
@@ -562,12 +643,14 @@ function normalizeCoverPageTexts(raw, defaults = {}) {
 }
 
 function normalizeAnchorPage(raw) {
-  const v = String(raw || '').trim().toLowerCase();
-  if (!v || v === 'first' || v === '1') return 'first';
-  if (v === 'all' || v === 'every') return 'all';
+  const v = String(raw || "")
+    .trim()
+    .toLowerCase();
+  if (!v || v === "first" || v === "1") return "first";
+  if (v === "all" || v === "every") return "all";
   const n = Number.parseInt(v, 10);
   if (Number.isFinite(n) && n >= 1) return n;
-  return 'first';
+  return "first";
 }
 
 function normalizeColumnLabelAnchors(raw, layoutColumns) {
@@ -575,24 +658,36 @@ function normalizeColumnLabelAnchors(raw, layoutColumns) {
   const maxColumns = Math.max(1, Number(layoutColumns || 1));
   const out = [];
   for (const one of raw) {
-    if (!one || typeof one !== 'object') continue;
-    const columnIndex = Number.parseInt(String(one.columnIndex ?? ''), 10);
-    if (!Number.isFinite(columnIndex) || columnIndex < 0 || columnIndex >= maxColumns) continue;
-    const parsedRowIndex = Number.parseInt(String(one.rowIndex ?? ''), 10);
-    const rowIndex = Number.isFinite(parsedRowIndex) && parsedRowIndex >= 0
-      ? parsedRowIndex
-      : 0;
-    const label = String(one.label || one.text || '').replace(/\s+/g, ' ').trim();
-    const sourceRaw = String(one.source || '').trim().toLowerCase();
+    if (!one || typeof one !== "object") continue;
+    const columnIndex = Number.parseInt(String(one.columnIndex ?? ""), 10);
+    if (
+      !Number.isFinite(columnIndex) ||
+      columnIndex < 0 ||
+      columnIndex >= maxColumns
+    )
+      continue;
+    const parsedRowIndex = Number.parseInt(String(one.rowIndex ?? ""), 10);
+    const rowIndex =
+      Number.isFinite(parsedRowIndex) && parsedRowIndex >= 0
+        ? parsedRowIndex
+        : 0;
+    const label = String(one.label || one.text || "")
+      .replace(/\s+/g, " ")
+      .trim();
+    const sourceRaw = String(one.source || "")
+      .trim()
+      .toLowerCase();
     // 'suppressed' 마커는 사용자가 × 로 제거한 slot. label 은 비어있지만 entry 가 있어야
     //   다음 렌더링에서 auto 재생성을 차단할 수 있다.
-    const isSuppressed = sourceRaw === 'suppressed';
+    const isSuppressed = sourceRaw === "suppressed";
     if (!label && !isSuppressed) continue;
-    const topPt = Number.parseFloat(String(one.topPt ?? ''));
-    const paddingTopPt = Number.parseFloat(String(one.paddingTopPt ?? ''));
+    const topPt = Number.parseFloat(String(one.topPt ?? ""));
+    const paddingTopPt = Number.parseFloat(String(one.paddingTopPt ?? ""));
     const source = isSuppressed
-      ? 'suppressed'
-      : (sourceRaw === 'auto' ? 'auto' : 'manual');
+      ? "suppressed"
+      : sourceRaw === "auto"
+        ? "auto"
+        : "manual";
     out.push({
       columnIndex,
       rowIndex,
@@ -607,39 +702,48 @@ function normalizeColumnLabelAnchors(raw, layoutColumns) {
 }
 
 function normalizeAlignPolicy(raw) {
-  const src = raw && typeof raw === 'object' ? raw : {};
-  const pairRaw = String(src.pairAlignment || src.pairMode || '').trim().toLowerCase();
+  const src = raw && typeof raw === "object" ? raw : {};
+  const pairRaw = String(src.pairAlignment || src.pairMode || "")
+    .trim()
+    .toLowerCase();
   return {
-    pairAlignment: pairRaw === 'none' ? 'none' : 'row',
+    pairAlignment: pairRaw === "none" ? "none" : "row",
     skipAnchorRows: src.skipAnchorRows !== false,
   };
 }
 
 function normalizeQuestionMode(raw) {
-  const v = String(raw || '').trim().toLowerCase();
-  if (v === 'objective' || v === '\uAC1D\uAD00\uC2DD' || v === 'mcq') return 'objective';
-  if (v === 'subjective' || v === '\uC8FC\uAD00\uC2DD') return 'subjective';
-  if (v === 'essay' || v === '\uC11C\uC220\uD615') return 'essay';
-  return 'original';
+  const v = String(raw || "")
+    .trim()
+    .toLowerCase();
+  if (v === "objective" || v === "\uAC1D\uAD00\uC2DD" || v === "mcq")
+    return "objective";
+  if (v === "subjective" || v === "\uC8FC\uAD00\uC2DD") return "subjective";
+  if (v === "essay" || v === "\uC11C\uC220\uD615") return "essay";
+  return "original";
 }
 
-function normalizeQuestionNumberPlacement(raw, fallback = 'inline') {
-  const v = String(raw || '').trim().toLowerCase();
-  if (v === 'above' || v === 'top' || v === 'block') return 'above';
-  return fallback === 'above' ? 'above' : 'inline';
+function normalizeQuestionNumberPlacement(raw, fallback = "inline") {
+  const v = String(raw || "")
+    .trim()
+    .toLowerCase();
+  if (v === "above" || v === "top" || v === "block") return "above";
+  return fallback === "above" ? "above" : "inline";
 }
 
-function normalizeQuestionNumberFormat(raw, fallback = 'source') {
-  const v = String(raw || '').trim().toLowerCase();
-  if (v === 'two_digit' || v === 'two-digit' || v === '2digit' || v === '02') {
-    return 'two_digit';
+function normalizeQuestionNumberFormat(raw, fallback = "source") {
+  const v = String(raw || "")
+    .trim()
+    .toLowerCase();
+  if (v === "two_digit" || v === "two-digit" || v === "2digit" || v === "02") {
+    return "two_digit";
   }
-  return fallback === 'two_digit' ? 'two_digit' : 'source';
+  return fallback === "two_digit" ? "two_digit" : "source";
 }
 
-function normalizeQuestionModeMap(raw, selectedIds, fallbackMode = 'original') {
+function normalizeQuestionModeMap(raw, selectedIds, fallbackMode = "original") {
   const out = {};
-  const src = raw && typeof raw === 'object' ? raw : {};
+  const src = raw && typeof raw === "object" ? raw : {};
   for (const id of selectedIds) {
     const mode = normalizeQuestionMode(src[id] || fallbackMode);
     out[id] = mode;
@@ -649,13 +753,12 @@ function normalizeQuestionModeMap(raw, selectedIds, fallbackMode = 'original') {
 
 function normalizeQuestionScoreMap(raw, selectedIds, fallbackScores = {}) {
   const out = {};
-  const src = raw && typeof raw === 'object' ? raw : {};
-  const fallback = fallbackScores && typeof fallbackScores === 'object'
-    ? fallbackScores
-    : {};
+  const src = raw && typeof raw === "object" ? raw : {};
+  const fallback =
+    fallbackScores && typeof fallbackScores === "object" ? fallbackScores : {};
   for (const id of selectedIds) {
     const candidate = src[id] ?? fallback[id];
-    const parsed = Number.parseFloat(String(candidate ?? ''));
+    const parsed = Number.parseFloat(String(candidate ?? ""));
     if (!Number.isFinite(parsed) || parsed < 0) continue;
     out[id] = Math.min(999, parsed);
   }
@@ -663,24 +766,26 @@ function normalizeQuestionScoreMap(raw, selectedIds, fallbackScores = {}) {
 }
 
 function questionScoreFromMeta(metaRaw) {
-  const meta = metaRaw && typeof metaRaw === 'object' ? metaRaw : {};
+  const meta = metaRaw && typeof metaRaw === "object" ? metaRaw : {};
   if (Array.isArray(meta.score_parts)) {
     const total = meta.score_parts.reduce((sum, item) => {
-      const value = item && typeof item === 'object' ? item.value : null;
-      const parsed = Number.parseFloat(String(value ?? ''));
+      const value = item && typeof item === "object" ? item.value : null;
+      const parsed = Number.parseFloat(String(value ?? ""));
       return Number.isFinite(parsed) && parsed > 0 ? sum + parsed : sum;
     }, 0);
     if (total > 0) return total;
   }
-  const parsed = Number.parseFloat(String(meta.score_point ?? meta.scorePoint ?? ''));
+  const parsed = Number.parseFloat(
+    String(meta.score_point ?? meta.scorePoint ?? ""),
+  );
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 function questionScoreMapFromRows(questionRows, selectedQuestionUidsOrdered) {
   const byKey = new Map();
   for (const row of Array.isArray(questionRows) ? questionRows : []) {
-    const uid = String(row?.question_uid || '').trim();
-    const id = String(row?.id || '').trim();
+    const uid = String(row?.question_uid || "").trim();
+    const id = String(row?.id || "").trim();
     if (uid) byKey.set(uid, row);
     if (id) byKey.set(id, row);
   }
@@ -709,9 +814,10 @@ function normalizeSelectedQuestionIdsOrdered(raw, fallbackSelectedIds) {
 }
 
 function normalizeLayoutTuning(rawLayoutTuning, options = {}) {
-  const src = rawLayoutTuning && typeof rawLayoutTuning === 'object'
-    ? rawLayoutTuning
-    : {};
+  const src =
+    rawLayoutTuning && typeof rawLayoutTuning === "object"
+      ? rawLayoutTuning
+      : {};
   return {
     pageMargin: normalizeNumeric(
       src.pageMargin ?? options.pageMargin,
@@ -719,12 +825,7 @@ function normalizeLayoutTuning(rawLayoutTuning, options = {}) {
       20,
       96,
     ),
-    columnGap: normalizeNumeric(
-      src.columnGap ?? options.columnGap,
-      18,
-      0,
-      72,
-    ),
+    columnGap: normalizeNumeric(src.columnGap ?? options.columnGap, 18, 0, 72),
     questionGap: normalizeNumeric(
       src.questionGap ?? options.questionGap,
       12,
@@ -737,12 +838,7 @@ function normalizeLayoutTuning(rawLayoutTuning, options = {}) {
       10,
       80,
     ),
-    numberGap: normalizeNumeric(
-      src.numberGap ?? options.numberGap,
-      6,
-      0,
-      30,
-    ),
+    numberGap: normalizeNumeric(src.numberGap ?? options.numberGap, 6, 0, 30),
     hangingIndent: normalizeNumeric(
       src.hangingIndent ?? options.hangingIndent,
       22,
@@ -765,9 +861,10 @@ function normalizeLayoutTuning(rawLayoutTuning, options = {}) {
 }
 
 function normalizeFigureQuality(rawFigureQuality, options = {}) {
-  const src = rawFigureQuality && typeof rawFigureQuality === 'object'
-    ? rawFigureQuality
-    : {};
+  const src =
+    rawFigureQuality && typeof rawFigureQuality === "object"
+      ? rawFigureQuality
+      : {};
   const targetDpi = Math.round(
     normalizeNumeric(src.targetDpi ?? options.targetDpi, 450, 300, 1200),
   );
@@ -777,59 +874,63 @@ function normalizeFigureQuality(rawFigureQuality, options = {}) {
   return { targetDpi, minDpi };
 }
 
-const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v103_subq_wrap_27';
+const EXPORT_RENDER_CONFIG_VERSION = "pb_render_v103_subq_wrap_27";
 // V2 (xelatex-v2) 엔진 전용 캐시 네임스페이스. V1 의 캐시/렌더 결과와 절대로 충돌하지
 //   않도록 완전히 별도의 키를 사용한다. 새 매크로(\YggV2InlineMath, 한글 시각 중심 정렬,
 //   수식 줄 strut 대칭, 박스 안팎 통일)가 들어 있는 xelatex_v2/ 파이프라인 결과물의
 //   캐시 키 prefix 로 쓰인다.
-const EXPORT_RENDER_CONFIG_VERSION_V2 = 'pb_render_v4_slotmeasure_01';
-const DEFAULT_TITLE_PAGE_TOP_TEXT = '2026학년도 대학수학능력시험 문제지';
-const DEFAULT_TITLE_PAGE_GOAL_TEXT = '다시 풀기';
+const EXPORT_RENDER_CONFIG_VERSION_V2 = "pb_render_v4_slotmeasure_01";
+const DEFAULT_TITLE_PAGE_TOP_TEXT = "2026학년도 대학수학능력시험 문제지";
+const DEFAULT_TITLE_PAGE_GOAL_TEXT = "다시 풀기";
 
 const QUESTION_COPY_SELECT_COLUMNS = [
-  'id',
-  'academy_id',
-  'document_id',
-  'source_page',
-  'source_order',
-  'question_number',
-  'question_type',
-  'stem',
-  'choices',
-  'figure_refs',
-  'equations',
-  'source_anchors',
-  'confidence',
-  'flags',
-  'is_checked',
-  'reviewed_by',
-  'reviewed_at',
-  'reviewer_notes',
-  'meta',
-  'curriculum_code',
-  'source_type_code',
-  'school_level',
-  'grade_key',
-  'course_key',
-  'course_label',
-  'grade_label',
-  'exam_year',
-  'semester_label',
-  'exam_term_label',
-  'school_name',
-  'publisher_name',
-  'material_name',
-  'classification_detail',
-  'allow_objective',
-  'allow_subjective',
-  'objective_choices',
-  'objective_answer_key',
-  'subjective_answer',
-  'objective_generated',
-].join(',');
+  "id",
+  "academy_id",
+  "document_id",
+  "source_page",
+  "source_order",
+  "question_number",
+  "question_type",
+  "stem",
+  "choices",
+  "figure_refs",
+  "equations",
+  "source_anchors",
+  "confidence",
+  "flags",
+  "is_checked",
+  "reviewed_by",
+  "reviewed_at",
+  "reviewer_notes",
+  "meta",
+  "curriculum_code",
+  "source_type_code",
+  "school_level",
+  "grade_key",
+  "course_key",
+  "course_label",
+  "grade_label",
+  "exam_year",
+  "semester_label",
+  "exam_term_label",
+  "school_name",
+  "publisher_name",
+  "material_name",
+  "classification_detail",
+  "allow_objective",
+  "allow_subjective",
+  "objective_choices",
+  "objective_answer_key",
+  "subjective_answer",
+  "objective_generated",
+].join(",");
 
-function normalizeExportRenderConfig(options, selectedQuestionUids, defaults = {}) {
-  const src = options && typeof options === 'object' ? options : {};
+function normalizeExportRenderConfig(
+  options,
+  selectedQuestionUids,
+  defaults = {},
+) {
+  const src = options && typeof options === "object" ? options : {};
   const layoutColumns = normalizeLayoutColumns(
     src.layoutColumns ||
       src.layout_columns ||
@@ -844,10 +945,12 @@ function normalizeExportRenderConfig(options, selectedQuestionUids, defaults = {
       src.perPage ||
       src.questionsPerPage ||
       defaults.maxQuestionsPerPage ||
-      '',
+      "",
     layoutColumns,
   );
-  const layoutMode = normalizeLayoutMode(src.layoutMode || defaults.layoutMode || 'legacy');
+  const layoutMode = normalizeLayoutMode(
+    src.layoutMode || defaults.layoutMode || "legacy",
+  );
   const columnQuestionCounts = normalizeColumnQuestionCounts(
     src.columnQuestionCounts,
     layoutColumns,
@@ -887,23 +990,33 @@ function normalizeExportRenderConfig(options, selectedQuestionUids, defaults = {
     defaults.questionScoreByQuestionUid || defaults.questionScoreByQuestionId,
   );
   const subjectTitleText =
-    String(src.subjectTitleText || defaults.subjectTitleText || '\uC218\uD559 \uC601\uC5ED')
-      .replace(/\s+/g, ' ')
-      .trim() || '\uC218\uD559 \uC601\uC5ED';
-  const titlePageTopText = String(
-    src.titlePageTopText || defaults.titlePageTopText || DEFAULT_TITLE_PAGE_TOP_TEXT,
-  )
-    .replace(/\s+/g, ' ')
-    .trim() || DEFAULT_TITLE_PAGE_TOP_TEXT;
-  const titlePageGoalText = String(
-    src.titlePageGoalText || defaults.titlePageGoalText || DEFAULT_TITLE_PAGE_GOAL_TEXT,
-  )
-    .replace(/\s+/g, ' ')
-    .trim() || DEFAULT_TITLE_PAGE_GOAL_TEXT;
+    String(
+      src.subjectTitleText ||
+        defaults.subjectTitleText ||
+        "\uC218\uD559 \uC601\uC5ED",
+    )
+      .replace(/\s+/g, " ")
+      .trim() || "\uC218\uD559 \uC601\uC5ED";
+  const titlePageTopText =
+    String(
+      src.titlePageTopText ||
+        defaults.titlePageTopText ||
+        DEFAULT_TITLE_PAGE_TOP_TEXT,
+    )
+      .replace(/\s+/g, " ")
+      .trim() || DEFAULT_TITLE_PAGE_TOP_TEXT;
+  const titlePageGoalText =
+    String(
+      src.titlePageGoalText ||
+        defaults.titlePageGoalText ||
+        DEFAULT_TITLE_PAGE_GOAL_TEXT,
+    )
+      .replace(/\s+/g, " ")
+      .trim() || DEFAULT_TITLE_PAGE_GOAL_TEXT;
   const timeLimitText = String(
-    src.timeLimitText || src.examTimeLimitText || defaults.timeLimitText || '',
+    src.timeLimitText || src.examTimeLimitText || defaults.timeLimitText || "",
   )
-    .replace(/\s+/g, ' ')
+    .replace(/\s+/g, " ")
     .trim();
   const includeAcademyLogo = normalizeBool(
     src.includeAcademyLogo ?? src.showAcademyLogo,
@@ -935,28 +1048,40 @@ function normalizeExportRenderConfig(options, selectedQuestionUids, defaults = {
   //   columnLabelAnchors 에 들어있는 항목만 그대로 사용한다.
   //   (최초 미리보기 생성 경로에서는 이 플래그가 없으므로 기존 auto-gen 동작 유지)
   const disableAutoLabels = normalizeBool(
-    src.disableAutoLabels ?? src.suppressAutoLabels ?? src.disableAutoColumnLabels,
+    src.disableAutoLabels ??
+      src.suppressAutoLabels ??
+      src.disableAutoColumnLabels,
     normalizeBool(defaults.disableAutoLabels, false),
   );
-  const profileHint = normalizeTemplateProfile(src.templateProfile || defaults.templateProfile);
+  const profileHint = normalizeTemplateProfile(
+    src.templateProfile || defaults.templateProfile,
+  );
   const questionNumberPlacement = normalizeQuestionNumberPlacement(
     src.questionNumberPlacement ?? src.question_number_placement,
-    defaults.questionNumberPlacement || (profileHint === 'assignment' ? 'above' : 'inline'),
+    defaults.questionNumberPlacement ||
+      (profileHint === "assignment" ? "above" : "inline"),
   );
   const questionNumberFormat = normalizeQuestionNumberFormat(
     src.questionNumberFormat ?? src.question_number_format,
-    defaults.questionNumberFormat || (profileHint === 'assignment' ? 'two_digit' : 'source'),
+    defaults.questionNumberFormat ||
+      (profileHint === "assignment" ? "two_digit" : "source"),
   );
   const renumberQuestions = normalizeBool(
     src.renumberQuestions ?? src.renumber_questions,
-    normalizeBool(defaults.renumberQuestions ?? defaults.renumber_questions, false),
+    normalizeBool(
+      defaults.renumberQuestions ?? defaults.renumber_questions,
+      false,
+    ),
   );
   // mathEngine 을 미리 결정해 V2 (xelatex-v2) 엔진이 선택되면 렌더 캐시 namespace 자체를
   //   별도(EXPORT_RENDER_CONFIG_VERSION_V2)로 분리한다. V1 결과물이 절대로 V2 캐시에
   //   섞이지 않도록 한다.
-  const mathEngineRaw = String(src.mathEngine || '').trim().toLowerCase();
-  const mathEngineNormalized = mathEngineRaw === 'mathjax-svg' ? 'mathjax-svg' : 'xelatex-v2';
-  const isV2Engine = mathEngineNormalized === 'xelatex-v2';
+  const mathEngineRaw = String(src.mathEngine || "")
+    .trim()
+    .toLowerCase();
+  const mathEngineNormalized =
+    mathEngineRaw === "mathjax-svg" ? "mathjax-svg" : "xelatex-v2";
+  const isV2Engine = mathEngineNormalized === "xelatex-v2";
   return {
     // Force server-side renderer to latest stable path even if older app build
     // sends a stale renderConfigVersion.
@@ -990,13 +1115,13 @@ function normalizeExportRenderConfig(options, selectedQuestionUids, defaults = {
     includeQuestionScore,
     questionScoreByQuestionUid,
     font:
-      src.font && typeof src.font === 'object'
+      src.font && typeof src.font === "object"
         ? {
-            family: String(src.font.family || '').trim(),
+            family: String(src.font.family || "").trim(),
             size: normalizeNumeric(src.font.size, 11.3, 8, 28),
           }
         : {
-            family: '',
+            family: "",
             size: 11.3,
           },
     selectedQuestionUidsOrdered,
@@ -1015,7 +1140,7 @@ function canonicalizeJson(value) {
   if (Array.isArray(value)) {
     return value.map((item) => canonicalizeJson(item));
   }
-  if (value && typeof value === 'object') {
+  if (value && typeof value === "object") {
     const out = {};
     for (const key of Object.keys(value).sort()) {
       out[key] = canonicalizeJson(value[key]);
@@ -1027,62 +1152,62 @@ function canonicalizeJson(value) {
 
 function computeRenderHash(renderPayload) {
   const canonical = JSON.stringify(canonicalizeJson(renderPayload));
-  return createHash('sha256').update(canonical).digest('hex');
+  return createHash("sha256").update(canonical).digest("hex");
 }
 
 function isUuid(v) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-    String(v || '').trim(),
+    String(v || "").trim(),
   );
 }
 
 function buildDerivedSourceFilename(sourceFilename) {
-  const raw = String(sourceFilename || '').trim();
+  const raw = String(sourceFilename || "").trim();
   if (!raw) return `saved_settings_${Date.now()}.hwpx`;
-  const dotIndex = raw.lastIndexOf('.');
+  const dotIndex = raw.lastIndexOf(".");
   const hasExt = dotIndex > 0 && dotIndex < raw.length - 1;
   const base = hasExt ? raw.slice(0, dotIndex) : raw;
-  const ext = hasExt ? raw.slice(dotIndex) : '.hwpx';
+  const ext = hasExt ? raw.slice(dotIndex) : ".hwpx";
   return `${base}_세팅저장${ext}`;
 }
 
 async function ensureDocumentBelongs(academyId, documentId) {
   const { data, error } = await supa
-    .from('pb_documents')
+    .from("pb_documents")
     .select(
       [
-        'id',
-        'academy_id',
-        'status',
-        'source_filename',
-        'source_storage_bucket',
-        'source_storage_path',
-        'source_sha256',
-        'source_size_bytes',
-        'source_pdf_storage_bucket',
-        'source_pdf_storage_path',
-        'source_pdf_filename',
-        'source_pdf_sha256',
-        'source_pdf_size_bytes',
-        'meta',
-        'curriculum_code',
-        'source_type_code',
-        'school_level',
-        'grade_key',
-        'course_key',
-        'course_label',
-        'grade_label',
-        'exam_year',
-        'semester_label',
-        'exam_term_label',
-        'school_name',
-        'publisher_name',
-        'material_name',
-        'classification_detail',
-      ].join(','),
+        "id",
+        "academy_id",
+        "status",
+        "source_filename",
+        "source_storage_bucket",
+        "source_storage_path",
+        "source_sha256",
+        "source_size_bytes",
+        "source_pdf_storage_bucket",
+        "source_pdf_storage_path",
+        "source_pdf_filename",
+        "source_pdf_sha256",
+        "source_pdf_size_bytes",
+        "meta",
+        "curriculum_code",
+        "source_type_code",
+        "school_level",
+        "grade_key",
+        "course_key",
+        "course_label",
+        "grade_label",
+        "exam_year",
+        "semester_label",
+        "exam_term_label",
+        "school_name",
+        "publisher_name",
+        "material_name",
+        "classification_detail",
+      ].join(","),
     )
-    .eq('id', documentId)
-    .eq('academy_id', academyId)
+    .eq("id", documentId)
+    .eq("academy_id", academyId)
     .maybeSingle();
   if (error) {
     throw new Error(`document_lookup_failed:${error.message}`);
@@ -1092,17 +1217,17 @@ async function ensureDocumentBelongs(academyId, documentId) {
 
 function parseJsonObjectSafely(raw) {
   if (!raw) return {};
-  if (typeof raw === 'string') {
+  if (typeof raw === "string") {
     try {
       const parsed = JSON.parse(raw);
-      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
         ? parsed
         : {};
     } catch (_) {
       return {};
     }
   }
-  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw;
   return {};
 }
 
@@ -1228,28 +1353,30 @@ function buildExportOptions({
 
 async function insertExportJobWithFallback(payload) {
   let { data: job, error } = await supa
-    .from('pb_exports')
+    .from("pb_exports")
     .insert(payload)
-    .select('*')
+    .select("*")
     .maybeSingle();
-  if (error && /render_hash|preview_only/i.test(String(error.message || ''))) {
+  if (error && /render_hash|preview_only/i.test(String(error.message || ""))) {
     const fallbackPayload = { ...payload };
     delete fallbackPayload.render_hash;
     delete fallbackPayload.preview_only;
     ({ data: job, error } = await supa
-      .from('pb_exports')
+      .from("pb_exports")
       .insert(fallbackPayload)
-      .select('*')
+      .select("*")
       .maybeSingle());
   }
   if (error || !job) {
-    throw new Error(`export_job_insert_failed:${error?.message || 'unknown'}`);
+    throw new Error(`export_job_insert_failed:${error?.message || "unknown"}`);
   }
   return job;
 }
 
 async function loadExistingPreviewJobsByRenderHashes(academyId, renderHashes) {
-  const uniqueHashes = [...new Set(renderHashes.filter((h) => String(h || '').trim()))];
+  const uniqueHashes = [
+    ...new Set(renderHashes.filter((h) => String(h || "").trim())),
+  ];
   const out = new Map();
   if (!uniqueHashes.length) return out;
 
@@ -1257,23 +1384,25 @@ async function loadExistingPreviewJobsByRenderHashes(academyId, renderHashes) {
     let rows = null;
     {
       const { data, error } = await supa
-        .from('pb_exports')
-        .select('*')
-        .eq('academy_id', academyId)
-        .eq('preview_only', true)
-        .in('render_hash', hashChunk)
-        .order('created_at', { ascending: false })
+        .from("pb_exports")
+        .select("*")
+        .eq("academy_id", academyId)
+        .eq("preview_only", true)
+        .in("render_hash", hashChunk)
+        .order("created_at", { ascending: false })
         .limit(Math.max(200, hashChunk.length * 4));
-      if (error && /preview_only/i.test(String(error.message || ''))) {
+      if (error && /preview_only/i.test(String(error.message || ""))) {
         const fallback = await supa
-          .from('pb_exports')
-          .select('*')
-          .eq('academy_id', academyId)
-          .in('render_hash', hashChunk)
-          .order('created_at', { ascending: false })
+          .from("pb_exports")
+          .select("*")
+          .eq("academy_id", academyId)
+          .in("render_hash", hashChunk)
+          .order("created_at", { ascending: false })
           .limit(Math.max(200, hashChunk.length * 4));
         if (fallback.error) {
-          throw new Error(`preview_jobs_lookup_failed:${fallback.error.message}`);
+          throw new Error(
+            `preview_jobs_lookup_failed:${fallback.error.message}`,
+          );
         }
         rows = fallback.data || [];
       } else if (error) {
@@ -1284,7 +1413,7 @@ async function loadExistingPreviewJobsByRenderHashes(academyId, renderHashes) {
     }
 
     for (const row of rows) {
-      const hash = String(row?.render_hash || '').trim();
+      const hash = String(row?.render_hash || "").trim();
       if (!hash || out.has(hash)) continue;
       out.set(hash, row);
     }
@@ -1292,27 +1421,34 @@ async function loadExistingPreviewJobsByRenderHashes(academyId, renderHashes) {
   return out;
 }
 
-async function createSignedStorageUrl(bucket, objectPath, expiresInSeconds = 60 * 30) {
-  const safeBucket = String(bucket || '').trim();
-  const safePath = String(objectPath || '').trim();
-  if (!safeBucket || !safePath) return '';
+async function createSignedStorageUrl(
+  bucket,
+  objectPath,
+  expiresInSeconds = 60 * 30,
+) {
+  const safeBucket = String(bucket || "").trim();
+  const safePath = String(objectPath || "").trim();
+  if (!safeBucket || !safePath) return "";
   try {
     const { data, error } = await supa.storage
       .from(safeBucket)
       .createSignedUrl(safePath, expiresInSeconds);
-    if (error) return '';
-    return String(data?.signedUrl || '');
+    if (error) return "";
+    return String(data?.signedUrl || "");
   } catch (_) {
-    return '';
+    return "";
   }
 }
 
 async function handleStorageSignedUrl(body, res) {
-  const bucket = String(body?.bucket || '').trim();
-  const objectPath = String(body?.path || body?.object_path || '').trim();
-  const ttl = Number.parseInt(String(body?.expires_in_seconds ?? body?.ttl_seconds ?? 3600), 10);
+  const bucket = String(body?.bucket || "").trim();
+  const objectPath = String(body?.path || body?.object_path || "").trim();
+  const ttl = Number.parseInt(
+    String(body?.expires_in_seconds ?? body?.ttl_seconds ?? 3600),
+    10,
+  );
   if (!bucket || !objectPath) {
-    sendJson(res, 400, { ok: false, error: 'missing_bucket_or_path' });
+    sendJson(res, 400, { ok: false, error: "missing_bucket_or_path" });
     return;
   }
   const signedUrl = await createSignedStorageUrl(
@@ -1321,7 +1457,7 @@ async function handleStorageSignedUrl(body, res) {
     Number.isFinite(ttl) && ttl > 0 ? ttl : 3600,
   );
   if (!signedUrl) {
-    sendJson(res, 404, { ok: false, error: 'signed_url_unavailable' });
+    sendJson(res, 404, { ok: false, error: "signed_url_unavailable" });
     return;
   }
   sendJson(res, 200, {
@@ -1336,18 +1472,20 @@ function extractPreviewThumbnailMeta(summaryRaw) {
   const summary = parseJsonObjectSafely(summaryRaw);
   const fromObject = parseJsonObjectSafely(summary.previewThumbnail);
   const bucket = String(
-    fromObject.bucket || summary.previewThumbnailBucket || '',
+    fromObject.bucket || summary.previewThumbnailBucket || "",
   ).trim();
   const path = String(
-    fromObject.path || summary.previewThumbnailPath || '',
+    fromObject.path || summary.previewThumbnailPath || "",
   ).trim();
   const url = String(
-    fromObject.url || summary.previewThumbnailUrl || '',
+    fromObject.url || summary.previewThumbnailUrl || "",
   ).trim();
   const width = Number(fromObject.width || summary.previewThumbnailWidth || 0);
-  const height = Number(fromObject.height || summary.previewThumbnailHeight || 0);
+  const height = Number(
+    fromObject.height || summary.previewThumbnailHeight || 0,
+  );
   const error = String(
-    fromObject.error || summary.previewThumbnailError || '',
+    fromObject.error || summary.previewThumbnailError || "",
   ).trim();
   return {
     bucket,
@@ -1360,17 +1498,24 @@ function extractPreviewThumbnailMeta(summaryRaw) {
 }
 
 async function buildPdfArtifactFromJob(job) {
-  const safeJob = job && typeof job === 'object' ? job : {};
-  const status = String(safeJob.status || 'queued').trim().toLowerCase();
-  const jobId = String(safeJob.id || '').trim();
+  const safeJob = job && typeof job === "object" ? job : {};
+  const status = String(safeJob.status || "queued")
+    .trim()
+    .toLowerCase();
+  const jobId = String(safeJob.id || "").trim();
   const summary = parseJsonObjectSafely(safeJob.result_summary);
   const options = parseJsonObjectSafely(safeJob.options);
-  const previewOnly = safeJob.preview_only === true || options.previewOnly === true;
+  const previewOnly =
+    safeJob.preview_only === true || options.previewOnly === true;
 
-  let pdfUrl = String(safeJob.output_url || '').trim();
-  const pdfBucket = String(safeJob.output_storage_bucket || '').trim();
-  const pdfPath = String(safeJob.output_storage_path || '').trim();
-  const refreshedPdfUrl = await createSignedStorageUrl(pdfBucket, pdfPath, 60 * 30);
+  let pdfUrl = String(safeJob.output_url || "").trim();
+  const pdfBucket = String(safeJob.output_storage_bucket || "").trim();
+  const pdfPath = String(safeJob.output_storage_path || "").trim();
+  const refreshedPdfUrl = await createSignedStorageUrl(
+    pdfBucket,
+    pdfPath,
+    60 * 30,
+  );
   if (refreshedPdfUrl) pdfUrl = refreshedPdfUrl;
 
   const thumb = extractPreviewThumbnailMeta(summary);
@@ -1383,14 +1528,14 @@ async function buildPdfArtifactFromJob(job) {
   if (refreshedThumbUrl) thumbnailUrl = refreshedThumbUrl;
 
   const errorMessage = String(
-    safeJob.error_message || summary.error || thumb.error || '',
+    safeJob.error_message || summary.error || thumb.error || "",
   ).trim();
   const effectiveStatus =
-    status === 'completed' &&
-    !String(thumbnailUrl || '').trim() &&
+    status === "completed" &&
+    !String(thumbnailUrl || "").trim() &&
     errorMessage.length > 0
-      ? 'failed'
-      : (status || 'queued');
+      ? "failed"
+      : status || "queued";
   return {
     jobId,
     status: effectiveStatus,
@@ -1406,56 +1551,59 @@ async function buildPdfArtifactFromJob(job) {
 }
 
 async function createExtractJob(body, res) {
-  const academyId = String(body.academyId || '').trim();
-  const documentId = String(body.documentId || '').trim();
-  const createdBy = String(body.createdBy || '').trim();
+  const academyId = String(body.academyId || "").trim();
+  const documentId = String(body.documentId || "").trim();
+  const createdBy = String(body.createdBy || "").trim();
   const rawTargetQuestionIds = Array.isArray(body.targetQuestionIds)
-    ? body.targetQuestionIds.map((v) => String(v || '').trim()).filter(Boolean)
+    ? body.targetQuestionIds.map((v) => String(v || "").trim()).filter(Boolean)
     : [];
-  const invalidTargetQuestionIds = rawTargetQuestionIds.filter((v) => !isUuid(v));
+  const invalidTargetQuestionIds = rawTargetQuestionIds.filter(
+    (v) => !isUuid(v),
+  );
   const safeTargetQuestionIds = Array.from(
     new Set(rawTargetQuestionIds.filter((v) => isUuid(v))),
   );
   if (!isUuid(academyId) || !isUuid(documentId)) {
     sendJson(res, 400, {
       ok: false,
-      error: 'academyId/documentId must be uuid',
+      error: "academyId/documentId must be uuid",
     });
     return;
   }
   if (invalidTargetQuestionIds.length > 0) {
     sendJson(res, 400, {
       ok: false,
-      error: 'targetQuestionIds must be uuid[]',
+      error: "targetQuestionIds must be uuid[]",
     });
     return;
   }
   const doc = await ensureDocumentBelongs(academyId, documentId);
   if (!doc) {
-    sendJson(res, 404, { ok: false, error: 'document_not_found' });
+    sendJson(res, 404, { ok: false, error: "document_not_found" });
     return;
   }
   const textbookPdfOnly =
     body?.textbookPdfOnly === true ||
     body?.textbook_pdf_only === true ||
-    String(doc?.meta?.extract_mode || '').trim() === 'textbook_pdf_only' ||
-    String(doc?.meta?.textbook_scope?.mode || '').trim() === 'textbook_pdf_only';
-  if (!textbookPdfOnly && !String(doc.source_storage_path || '').trim()) {
-    sendJson(res, 400, { ok: false, error: 'hwpx_source_required' });
+    String(doc?.meta?.extract_mode || "").trim() === "textbook_pdf_only" ||
+    String(doc?.meta?.textbook_scope?.mode || "").trim() ===
+      "textbook_pdf_only";
+  if (!textbookPdfOnly && !String(doc.source_storage_path || "").trim()) {
+    sendJson(res, 400, { ok: false, error: "hwpx_source_required" });
     return;
   }
-  if (!String(doc.source_pdf_storage_path || '').trim()) {
-    sendJson(res, 400, { ok: false, error: 'pdf_source_required' });
+  if (!String(doc.source_pdf_storage_path || "").trim()) {
+    sendJson(res, 400, { ok: false, error: "pdf_source_required" });
     return;
   }
   let targetQuestionIds = [];
   if (safeTargetQuestionIds.length > 0) {
     const { data: targets, error: targetErr } = await supa
-      .from('pb_questions')
-      .select('id')
-      .eq('academy_id', academyId)
-      .eq('document_id', documentId)
-      .in('id', safeTargetQuestionIds);
+      .from("pb_questions")
+      .select("id")
+      .eq("academy_id", academyId)
+      .eq("document_id", documentId)
+      .in("id", safeTargetQuestionIds);
     if (targetErr) {
       sendJson(res, 500, {
         ok: false,
@@ -1463,130 +1611,143 @@ async function createExtractJob(body, res) {
       });
       return;
     }
-    const matched = new Set((targets || []).map((row) => String(row.id || '').trim()));
+    const matched = new Set(
+      (targets || []).map((row) => String(row.id || "").trim()),
+    );
     targetQuestionIds = safeTargetQuestionIds.filter((id) => matched.has(id));
     if (targetQuestionIds.length === 0) {
-      sendJson(res, 404, { ok: false, error: 'target_questions_not_found' });
+      sendJson(res, 404, { ok: false, error: "target_questions_not_found" });
       return;
     }
   }
-  const initialSummary = targetQuestionIds.length > 0
-    ? {
-        partialReextract: true,
-        targetQuestionCount: targetQuestionIds.length,
-        targetQuestionIds,
-      }
-    : {};
+  const initialSummary =
+    targetQuestionIds.length > 0
+      ? {
+          partialReextract: true,
+          targetQuestionCount: targetQuestionIds.length,
+          targetQuestionIds,
+        }
+      : {};
 
   const { data: job, error: insertErr } = await supa
-    .from('pb_extract_jobs')
+    .from("pb_extract_jobs")
     .insert({
       academy_id: academyId,
       document_id: documentId,
       created_by: isUuid(createdBy) ? createdBy : null,
-      status: 'queued',
+      status: "queued",
       retry_count: 0,
       max_retries: 3,
-      worker_name: '',
-      source_version: targetQuestionIds.length > 0 ? 'api_v1_partial' : 'api_v1',
+      worker_name: "",
+      source_version:
+        targetQuestionIds.length > 0 ? "api_v1_partial" : "api_v1",
       result_summary: initialSummary,
-      error_code: '',
-      error_message: '',
+      error_code: "",
+      error_message: "",
       started_at: null,
       finished_at: null,
     })
-    .select('*')
+    .select("*")
     .maybeSingle();
   if (insertErr || !job) {
     sendJson(res, 500, {
       ok: false,
-      error: `extract_job_insert_failed:${insertErr?.message || 'unknown'}`,
+      error: `extract_job_insert_failed:${insertErr?.message || "unknown"}`,
     });
     return;
   }
 
   await supa
-    .from('pb_documents')
+    .from("pb_documents")
     .update({
-      status: 'extract_queued',
+      status: "extract_queued",
       updated_at: new Date().toISOString(),
     })
-    .eq('id', documentId);
+    .eq("id", documentId);
 
   sendJson(res, 201, { ok: true, job });
 }
 
 async function listExtractJobs(url, res) {
-  const academyId = String(url.searchParams.get('academyId') || '').trim();
+  const academyId = String(url.searchParams.get("academyId") || "").trim();
   if (!isUuid(academyId)) {
-    sendJson(res, 400, { ok: false, error: 'academyId must be uuid' });
+    sendJson(res, 400, { ok: false, error: "academyId must be uuid" });
     return;
   }
-  const status = String(url.searchParams.get('status') || '').trim();
-  const documentId = String(url.searchParams.get('documentId') || '').trim();
-  const limit = normalizeLimit(url.searchParams.get('limit'), 30, 120);
+  const status = String(url.searchParams.get("status") || "").trim();
+  const documentId = String(url.searchParams.get("documentId") || "").trim();
+  const limit = normalizeLimit(url.searchParams.get("limit"), 30, 120);
 
   let q = supa
-    .from('pb_extract_jobs')
-    .select('*')
-    .eq('academy_id', academyId)
-    .order('created_at', { ascending: false })
+    .from("pb_extract_jobs")
+    .select("*")
+    .eq("academy_id", academyId)
+    .order("created_at", { ascending: false })
     .limit(limit);
-  if (status) q = q.eq('status', status);
-  if (documentId) q = q.eq('document_id', documentId);
+  if (status) q = q.eq("status", status);
+  if (documentId) q = q.eq("document_id", documentId);
 
   const { data, error } = await q;
   if (error) {
-    sendJson(res, 500, { ok: false, error: `extract_job_list_failed:${error.message}` });
+    sendJson(res, 500, {
+      ok: false,
+      error: `extract_job_list_failed:${error.message}`,
+    });
     return;
   }
   sendJson(res, 200, { ok: true, jobs: data || [] });
 }
 
 async function getExtractJob(jobId, url, res) {
-  const academyId = String(url.searchParams.get('academyId') || '').trim();
+  const academyId = String(url.searchParams.get("academyId") || "").trim();
   if (!isUuid(jobId) || !isUuid(academyId)) {
-    sendJson(res, 400, { ok: false, error: 'jobId/academyId must be uuid' });
+    sendJson(res, 400, { ok: false, error: "jobId/academyId must be uuid" });
     return;
   }
   const { data, error } = await supa
-    .from('pb_extract_jobs')
-    .select('*')
-    .eq('id', jobId)
-    .eq('academy_id', academyId)
+    .from("pb_extract_jobs")
+    .select("*")
+    .eq("id", jobId)
+    .eq("academy_id", academyId)
     .maybeSingle();
   if (error) {
-    sendJson(res, 500, { ok: false, error: `extract_job_get_failed:${error.message}` });
+    sendJson(res, 500, {
+      ok: false,
+      error: `extract_job_get_failed:${error.message}`,
+    });
     return;
   }
   if (!data) {
-    sendJson(res, 404, { ok: false, error: 'extract_job_not_found' });
+    sendJson(res, 404, { ok: false, error: "extract_job_not_found" });
     return;
   }
   sendJson(res, 200, { ok: true, job: data });
 }
 
 async function retryExtractJob(jobId, body, res) {
-  const academyId = String(body.academyId || '').trim();
+  const academyId = String(body.academyId || "").trim();
   if (!isUuid(jobId) || !isUuid(academyId)) {
-    sendJson(res, 400, { ok: false, error: 'jobId/academyId must be uuid' });
+    sendJson(res, 400, { ok: false, error: "jobId/academyId must be uuid" });
     return;
   }
   const { data: oldJob, error: oldErr } = await supa
-    .from('pb_extract_jobs')
-    .select('*')
-    .eq('id', jobId)
-    .eq('academy_id', academyId)
+    .from("pb_extract_jobs")
+    .select("*")
+    .eq("id", jobId)
+    .eq("academy_id", academyId)
     .maybeSingle();
   if (oldErr) {
-    sendJson(res, 500, { ok: false, error: `extract_job_lookup_failed:${oldErr.message}` });
+    sendJson(res, 500, {
+      ok: false,
+      error: `extract_job_lookup_failed:${oldErr.message}`,
+    });
     return;
   }
   if (!oldJob) {
-    sendJson(res, 404, { ok: false, error: 'extract_job_not_found' });
+    sendJson(res, 404, { ok: false, error: "extract_job_not_found" });
     return;
   }
-  if (oldJob.status === 'extracting') {
+  if (oldJob.status === "extracting") {
     // 워커가 정상 동작 중이면 진짜로 진행 중일 가능성이 높지만, 비정상 종료된
     // 경우 'extracting' 락이 영구히 남아 UI 가 무한 로딩 상태가 된다. 마지막
     // 업데이트가 충분히 오래됐으면(=stale) 사용자의 재시도 요청을 받아 다시
@@ -1594,7 +1755,7 @@ async function retryExtractJob(jobId, body, res) {
     // 짧게 낮추려면 PB_EXTRACT_STALE_MS 환경변수를 양쪽에 공유.
     const staleMs = Math.max(
       60_000,
-      Number.parseInt(process.env.PB_EXTRACT_STALE_MS || '300000', 10),
+      Number.parseInt(process.env.PB_EXTRACT_STALE_MS || "300000", 10),
     );
     const lastTouchIso = oldJob.updated_at || oldJob.started_at || null;
     const ageMs = lastTouchIso
@@ -1603,7 +1764,7 @@ async function retryExtractJob(jobId, body, res) {
     if (ageMs < staleMs) {
       sendJson(res, 409, {
         ok: false,
-        error: 'extract_job_in_progress',
+        error: "extract_job_in_progress",
         ageMs,
         staleThresholdMs: staleMs,
       });
@@ -1612,63 +1773,64 @@ async function retryExtractJob(jobId, body, res) {
     // stale → 진행 허용. 아래의 queued 전환 update 가 락을 해제한다.
   }
   const oldSummary =
-    oldJob && typeof oldJob.result_summary === 'object' && oldJob.result_summary
+    oldJob && typeof oldJob.result_summary === "object" && oldJob.result_summary
       ? oldJob.result_summary
       : {};
   const preservedTargetIds = Array.isArray(oldSummary.targetQuestionIds)
     ? Array.from(
         new Set(
           oldSummary.targetQuestionIds
-            .map((v) => String(v || '').trim())
+            .map((v) => String(v || "").trim())
             .filter((v) => isUuid(v)),
         ),
       )
     : [];
-  const retrySummary = preservedTargetIds.length > 0
-    ? {
-        partialReextract: true,
-        targetQuestionCount: preservedTargetIds.length,
-        targetQuestionIds: preservedTargetIds,
-      }
-    : {};
+  const retrySummary =
+    preservedTargetIds.length > 0
+      ? {
+          partialReextract: true,
+          targetQuestionCount: preservedTargetIds.length,
+          targetQuestionIds: preservedTargetIds,
+        }
+      : {};
   const { data: updated, error: updErr } = await supa
-    .from('pb_extract_jobs')
+    .from("pb_extract_jobs")
     .update({
-      status: 'queued',
-      error_code: '',
-      error_message: '',
+      status: "queued",
+      error_code: "",
+      error_message: "",
       result_summary: retrySummary,
       started_at: null,
       finished_at: null,
       updated_at: new Date().toISOString(),
     })
-    .eq('id', jobId)
-    .select('*')
+    .eq("id", jobId)
+    .select("*")
     .maybeSingle();
   if (updErr || !updated) {
     sendJson(res, 500, {
       ok: false,
-      error: `extract_job_retry_failed:${updErr?.message || 'unknown'}`,
+      error: `extract_job_retry_failed:${updErr?.message || "unknown"}`,
     });
     return;
   }
   await supa
-    .from('pb_documents')
+    .from("pb_documents")
     .update({
-      status: 'extract_queued',
+      status: "extract_queued",
       updated_at: new Date().toISOString(),
     })
-    .eq('id', updated.document_id);
+    .eq("id", updated.document_id);
   sendJson(res, 200, { ok: true, job: updated });
 }
 
 async function ensureQuestionBelongs(academyId, documentId, questionId) {
   const { data, error } = await supa
-    .from('pb_questions')
-    .select('id,academy_id,document_id,figure_refs,meta')
-    .eq('id', questionId)
-    .eq('academy_id', academyId)
-    .eq('document_id', documentId)
+    .from("pb_questions")
+    .select("id,academy_id,document_id,figure_refs,meta")
+    .eq("id", questionId)
+    .eq("academy_id", academyId)
+    .eq("document_id", documentId)
     .maybeSingle();
   if (error) {
     throw new Error(`question_lookup_failed:${error.message}`);
@@ -1677,45 +1839,51 @@ async function ensureQuestionBelongs(academyId, documentId, questionId) {
 }
 
 async function createFigureJob(body, res) {
-  const academyId = String(body.academyId || '').trim();
-  const documentId = String(body.documentId || '').trim();
-  const questionId = String(body.questionId || '').trim();
-  const createdBy = String(body.createdBy || '').trim();
+  const academyId = String(body.academyId || "").trim();
+  const documentId = String(body.documentId || "").trim();
+  const questionId = String(body.questionId || "").trim();
+  const createdBy = String(body.createdBy || "").trim();
   const forceRegenerate = normalizeBool(body.forceRegenerate, false);
-  const provider = String(body.provider || 'gemini').trim() || 'gemini';
-  const modelName = String(body.modelName || '').trim();
+  const provider = String(body.provider || "gemini").trim() || "gemini";
+  const modelName = String(body.modelName || "").trim();
   if (!isUuid(academyId) || !isUuid(documentId) || !isUuid(questionId)) {
     sendJson(res, 400, {
       ok: false,
-      error: 'academyId/documentId/questionId must be uuid',
+      error: "academyId/documentId/questionId must be uuid",
     });
     return;
   }
   const doc = await ensureDocumentBelongs(academyId, documentId);
   if (!doc) {
-    sendJson(res, 404, { ok: false, error: 'document_not_found' });
+    sendJson(res, 404, { ok: false, error: "document_not_found" });
     return;
   }
-  const question = await ensureQuestionBelongs(academyId, documentId, questionId);
+  const question = await ensureQuestionBelongs(
+    academyId,
+    documentId,
+    questionId,
+  );
   if (!question) {
-    sendJson(res, 404, { ok: false, error: 'question_not_found' });
+    sendJson(res, 404, { ok: false, error: "question_not_found" });
     return;
   }
-  const figureRefs = Array.isArray(question.figure_refs) ? question.figure_refs : [];
+  const figureRefs = Array.isArray(question.figure_refs)
+    ? question.figure_refs
+    : [];
   if (figureRefs.length === 0) {
-    sendJson(res, 409, { ok: false, error: 'question_has_no_figure_refs' });
+    sendJson(res, 409, { ok: false, error: "question_has_no_figure_refs" });
     return;
   }
 
   if (!forceRegenerate) {
     const { data: existing } = await supa
-      .from('pb_figure_jobs')
-      .select('*')
-      .eq('academy_id', academyId)
-      .eq('document_id', documentId)
-      .eq('question_id', questionId)
-      .in('status', ['queued', 'rendering'])
-      .order('created_at', { ascending: false })
+      .from("pb_figure_jobs")
+      .select("*")
+      .eq("academy_id", academyId)
+      .eq("document_id", documentId)
+      .eq("question_id", questionId)
+      .in("status", ["queued", "rendering"])
+      .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
     if (existing) {
@@ -1725,35 +1893,37 @@ async function createFigureJob(body, res) {
   }
 
   const { data: job, error: insertErr } = await supa
-    .from('pb_figure_jobs')
+    .from("pb_figure_jobs")
     .insert({
       academy_id: academyId,
       document_id: documentId,
       question_id: questionId,
       created_by: isUuid(createdBy) ? createdBy : null,
-      status: 'queued',
+      status: "queued",
       provider,
       model_name: modelName,
       options: {
-        ...(typeof body.options === 'object' && body.options ? body.options : {}),
+        ...(typeof body.options === "object" && body.options
+          ? body.options
+          : {}),
         ...(forceRegenerate ? { forceRegenerate: true } : {}),
       },
-      prompt_text: String(body.promptText || '').trim(),
-      worker_name: '',
+      prompt_text: String(body.promptText || "").trim(),
+      worker_name: "",
       result_summary: {},
-      output_storage_bucket: 'problem-previews',
-      output_storage_path: '',
-      error_code: '',
-      error_message: '',
+      output_storage_bucket: "problem-previews",
+      output_storage_path: "",
+      error_code: "",
+      error_message: "",
       started_at: null,
       finished_at: null,
     })
-    .select('*')
+    .select("*")
     .maybeSingle();
   if (insertErr || !job) {
     sendJson(res, 500, {
       ok: false,
-      error: `figure_job_insert_failed:${insertErr?.message || 'unknown'}`,
+      error: `figure_job_insert_failed:${insertErr?.message || "unknown"}`,
     });
     return;
   }
@@ -1761,50 +1931,56 @@ async function createFigureJob(body, res) {
 }
 
 async function listFigureJobs(url, res) {
-  const academyId = String(url.searchParams.get('academyId') || '').trim();
+  const academyId = String(url.searchParams.get("academyId") || "").trim();
   if (!isUuid(academyId)) {
-    sendJson(res, 400, { ok: false, error: 'academyId must be uuid' });
+    sendJson(res, 400, { ok: false, error: "academyId must be uuid" });
     return;
   }
-  const documentId = String(url.searchParams.get('documentId') || '').trim();
-  const questionId = String(url.searchParams.get('questionId') || '').trim();
-  const status = String(url.searchParams.get('status') || '').trim();
-  const limit = normalizeLimit(url.searchParams.get('limit'), 30, 120);
+  const documentId = String(url.searchParams.get("documentId") || "").trim();
+  const questionId = String(url.searchParams.get("questionId") || "").trim();
+  const status = String(url.searchParams.get("status") || "").trim();
+  const limit = normalizeLimit(url.searchParams.get("limit"), 30, 120);
   let q = supa
-    .from('pb_figure_jobs')
-    .select('*')
-    .eq('academy_id', academyId)
-    .order('created_at', { ascending: false })
+    .from("pb_figure_jobs")
+    .select("*")
+    .eq("academy_id", academyId)
+    .order("created_at", { ascending: false })
     .limit(limit);
-  if (documentId) q = q.eq('document_id', documentId);
-  if (questionId) q = q.eq('question_id', questionId);
-  if (status) q = q.eq('status', status);
+  if (documentId) q = q.eq("document_id", documentId);
+  if (questionId) q = q.eq("question_id", questionId);
+  if (status) q = q.eq("status", status);
   const { data, error } = await q;
   if (error) {
-    sendJson(res, 500, { ok: false, error: `figure_job_list_failed:${error.message}` });
+    sendJson(res, 500, {
+      ok: false,
+      error: `figure_job_list_failed:${error.message}`,
+    });
     return;
   }
   sendJson(res, 200, { ok: true, jobs: data || [] });
 }
 
 async function getFigureJob(jobId, url, res) {
-  const academyId = String(url.searchParams.get('academyId') || '').trim();
+  const academyId = String(url.searchParams.get("academyId") || "").trim();
   if (!isUuid(jobId) || !isUuid(academyId)) {
-    sendJson(res, 400, { ok: false, error: 'jobId/academyId must be uuid' });
+    sendJson(res, 400, { ok: false, error: "jobId/academyId must be uuid" });
     return;
   }
   const { data, error } = await supa
-    .from('pb_figure_jobs')
-    .select('*')
-    .eq('id', jobId)
-    .eq('academy_id', academyId)
+    .from("pb_figure_jobs")
+    .select("*")
+    .eq("id", jobId)
+    .eq("academy_id", academyId)
     .maybeSingle();
   if (error) {
-    sendJson(res, 500, { ok: false, error: `figure_job_get_failed:${error.message}` });
+    sendJson(res, 500, {
+      ok: false,
+      error: `figure_job_get_failed:${error.message}`,
+    });
     return;
   }
   if (!data) {
-    sendJson(res, 404, { ok: false, error: 'figure_job_not_found' });
+    sendJson(res, 404, { ok: false, error: "figure_job_not_found" });
     return;
   }
   sendJson(res, 200, { ok: true, job: data });
@@ -1819,25 +1995,25 @@ async function getFigureJob(jobId, url, res) {
 //   errorMessageContains?: string — 실패 메시지 substring 일치 건만 재큐
 //     (빈 값이면 모든 failed 재큐). e.g. "bmp_to_png_failed"
 async function requeueFailedFigureJobs(body, res) {
-  const academyId = String(body.academyId || '').trim();
-  const documentId = String(body.documentId || '').trim();
-  const pattern = String(body.errorMessageContains || '').trim();
+  const academyId = String(body.academyId || "").trim();
+  const documentId = String(body.documentId || "").trim();
+  const pattern = String(body.errorMessageContains || "").trim();
   if (!isUuid(academyId) || !isUuid(documentId)) {
     sendJson(res, 400, {
       ok: false,
-      error: 'academyId/documentId must be uuid',
+      error: "academyId/documentId must be uuid",
     });
     return;
   }
-  const selectFields = 'id,error_code,error_message';
+  const selectFields = "id,error_code,error_message";
   let q = supa
-    .from('pb_figure_jobs')
+    .from("pb_figure_jobs")
     .select(selectFields)
-    .eq('academy_id', academyId)
-    .eq('document_id', documentId)
-    .eq('status', 'failed');
+    .eq("academy_id", academyId)
+    .eq("document_id", documentId)
+    .eq("status", "failed");
   if (pattern) {
-    q = q.ilike('error_message', `%${pattern}%`);
+    q = q.ilike("error_message", `%${pattern}%`);
   }
   const { data: rows, error: listErr } = await q.limit(500);
   if (listErr) {
@@ -1854,20 +2030,20 @@ async function requeueFailedFigureJobs(body, res) {
   }
   const nowIso = new Date().toISOString();
   const { data: updatedRows, error: updErr } = await supa
-    .from('pb_figure_jobs')
+    .from("pb_figure_jobs")
     .update({
-      status: 'queued',
-      error_code: '',
-      error_message: '',
+      status: "queued",
+      error_code: "",
+      error_message: "",
       result_summary: {},
-      output_storage_path: '',
+      output_storage_path: "",
       started_at: null,
       finished_at: null,
       updated_at: nowIso,
     })
-    .in('id', targetIds)
-    .eq('status', 'failed')
-    .select('id');
+    .in("id", targetIds)
+    .eq("status", "failed")
+    .select("id");
   if (updErr) {
     sendJson(res, 500, {
       ok: false,
@@ -1883,48 +2059,51 @@ async function requeueFailedFigureJobs(body, res) {
 }
 
 async function retryFigureJob(jobId, body, res) {
-  const academyId = String(body.academyId || '').trim();
+  const academyId = String(body.academyId || "").trim();
   if (!isUuid(jobId) || !isUuid(academyId)) {
-    sendJson(res, 400, { ok: false, error: 'jobId/academyId must be uuid' });
+    sendJson(res, 400, { ok: false, error: "jobId/academyId must be uuid" });
     return;
   }
   const { data: oldJob, error: oldErr } = await supa
-    .from('pb_figure_jobs')
-    .select('*')
-    .eq('id', jobId)
-    .eq('academy_id', academyId)
+    .from("pb_figure_jobs")
+    .select("*")
+    .eq("id", jobId)
+    .eq("academy_id", academyId)
     .maybeSingle();
   if (oldErr) {
-    sendJson(res, 500, { ok: false, error: `figure_job_lookup_failed:${oldErr.message}` });
+    sendJson(res, 500, {
+      ok: false,
+      error: `figure_job_lookup_failed:${oldErr.message}`,
+    });
     return;
   }
   if (!oldJob) {
-    sendJson(res, 404, { ok: false, error: 'figure_job_not_found' });
+    sendJson(res, 404, { ok: false, error: "figure_job_not_found" });
     return;
   }
-  if (oldJob.status === 'rendering') {
-    sendJson(res, 409, { ok: false, error: 'figure_job_in_progress' });
+  if (oldJob.status === "rendering") {
+    sendJson(res, 409, { ok: false, error: "figure_job_in_progress" });
     return;
   }
   const { data: updated, error: updErr } = await supa
-    .from('pb_figure_jobs')
+    .from("pb_figure_jobs")
     .update({
-      status: 'queued',
-      error_code: '',
-      error_message: '',
+      status: "queued",
+      error_code: "",
+      error_message: "",
       result_summary: {},
-      output_storage_path: '',
+      output_storage_path: "",
       started_at: null,
       finished_at: null,
       updated_at: new Date().toISOString(),
     })
-    .eq('id', jobId)
-    .select('*')
+    .eq("id", jobId)
+    .select("*")
     .maybeSingle();
   if (updErr || !updated) {
     sendJson(res, 500, {
       ok: false,
-      error: `figure_job_retry_failed:${updErr?.message || 'unknown'}`,
+      error: `figure_job_retry_failed:${updErr?.message || "unknown"}`,
     });
     return;
   }
@@ -1932,19 +2111,19 @@ async function retryFigureJob(jobId, body, res) {
 }
 
 async function createExportJob(body, res) {
-  const academyId = String(body.academyId || '').trim();
-  const documentId = String(body.documentId || '').trim();
-  const requestedBy = String(body.requestedBy || '').trim();
+  const academyId = String(body.academyId || "").trim();
+  const documentId = String(body.documentId || "").trim();
+  const requestedBy = String(body.requestedBy || "").trim();
   if (!isUuid(academyId) || !isUuid(documentId)) {
     sendJson(res, 400, {
       ok: false,
-      error: 'academyId/documentId must be uuid',
+      error: "academyId/documentId must be uuid",
     });
     return;
   }
   const doc = await ensureDocumentBelongs(academyId, documentId);
   if (!doc) {
-    sendJson(res, 404, { ok: false, error: 'document_not_found' });
+    sendJson(res, 404, { ok: false, error: "document_not_found" });
     return;
   }
 
@@ -1959,10 +2138,10 @@ async function createExportJob(body, res) {
   let sourceDocumentIds = [];
   if (selectedDeliveryUnitIdsRaw.length > 0) {
     const { data: unitRows, error: unitErr } = await supa
-      .from('pb_delivery_units')
-      .select('id,source_document_id,question_id')
-      .eq('academy_id', academyId)
-      .in('id', selectedDeliveryUnitIdsRaw);
+      .from("pb_delivery_units")
+      .select("id,source_document_id,question_id")
+      .eq("academy_id", academyId)
+      .in("id", selectedDeliveryUnitIdsRaw);
     if (unitErr) {
       sendJson(res, 500, {
         ok: false,
@@ -1970,20 +2149,31 @@ async function createExportJob(body, res) {
       });
       return;
     }
-    const unitById = new Map((unitRows || []).map((row) => [String(row.id || ''), row]));
-    const orderedUnits = selectedDeliveryUnitIdsRaw.map((id) => unitById.get(id)).filter(Boolean);
-    selectedQuestionIds = Array.from(new Set(
-      orderedUnits.map((row) => String(row?.question_id || '').trim()).filter((id) => isUuid(id)),
-    ));
+    const unitById = new Map(
+      (unitRows || []).map((row) => [String(row.id || ""), row]),
+    );
+    const orderedUnits = selectedDeliveryUnitIdsRaw
+      .map((id) => unitById.get(id))
+      .filter(Boolean);
+    selectedQuestionIds = Array.from(
+      new Set(
+        orderedUnits
+          .map((row) => String(row?.question_id || "").trim())
+          .filter((id) => isUuid(id)),
+      ),
+    );
     if (selectedQuestionIds.length === 0) {
-      sendJson(res, 400, { ok: false, error: 'selected_delivery_units_invalid' });
+      sendJson(res, 400, {
+        ok: false,
+        error: "selected_delivery_units_invalid",
+      });
       return;
     }
     const { data: selectedRows, error: selectedErr } = await supa
-      .from('pb_questions')
-      .select('id,document_id,question_uid')
-      .eq('academy_id', academyId)
-      .in('id', selectedQuestionIds);
+      .from("pb_questions")
+      .select("id,document_id,question_uid")
+      .eq("academy_id", academyId)
+      .in("id", selectedQuestionIds);
     if (selectedErr) {
       sendJson(res, 500, {
         ok: false,
@@ -1991,23 +2181,25 @@ async function createExportJob(body, res) {
       });
       return;
     }
-    const rowById = new Map((selectedRows || []).map((row) => [String(row.id || ''), row]));
+    const rowById = new Map(
+      (selectedRows || []).map((row) => [String(row.id || ""), row]),
+    );
     selectedQuestionUids = selectedQuestionIds
-      .map((id) => String(rowById.get(id)?.question_uid || '').trim())
+      .map((id) => String(rowById.get(id)?.question_uid || "").trim())
       .filter((uid) => isUuid(uid));
     const seenDocIds = new Set();
     for (const unit of orderedUnits) {
-      const docId = String(unit?.source_document_id || '').trim();
+      const docId = String(unit?.source_document_id || "").trim();
       if (!isUuid(docId) || seenDocIds.has(docId)) continue;
       seenDocIds.add(docId);
       sourceDocumentIds.push(docId);
     }
   } else if (selectedQuestionUidsRaw.length > 0) {
     const { data: selectedRows, error: selectedErr } = await supa
-      .from('pb_questions')
-      .select('id,document_id,question_uid')
-      .eq('academy_id', academyId)
-      .in('question_uid', selectedQuestionUidsRaw);
+      .from("pb_questions")
+      .select("id,document_id,question_uid")
+      .eq("academy_id", academyId)
+      .in("question_uid", selectedQuestionUidsRaw);
     if (selectedErr) {
       sendJson(res, 500, {
         ok: false,
@@ -2016,23 +2208,25 @@ async function createExportJob(body, res) {
       return;
     }
     const rowByUid = new Map(
-      (selectedRows || []).map((row) => [String(row.question_uid || ''), row]),
+      (selectedRows || []).map((row) => [String(row.question_uid || ""), row]),
     );
-    selectedQuestionUids = selectedQuestionUidsRaw.filter((uid) => rowByUid.has(uid));
+    selectedQuestionUids = selectedQuestionUidsRaw.filter((uid) =>
+      rowByUid.has(uid),
+    );
     selectedQuestionIds = selectedQuestionUids
-      .map((uid) => String(rowByUid.get(uid)?.id || '').trim())
+      .map((uid) => String(rowByUid.get(uid)?.id || "").trim())
       .filter((id) => isUuid(id));
     if (selectedQuestionUids.length === 0 || selectedQuestionIds.length === 0) {
       sendJson(res, 400, {
         ok: false,
-        error: 'selected_question_uids_invalid',
+        error: "selected_question_uids_invalid",
       });
       return;
     }
     const seenDocIds = new Set();
     for (const uid of selectedQuestionUids) {
       const row = rowByUid.get(uid);
-      const docId = String(row?.document_id || '').trim();
+      const docId = String(row?.document_id || "").trim();
       if (!isUuid(docId) || seenDocIds.has(docId)) continue;
       seenDocIds.add(docId);
       sourceDocumentIds.push(docId);
@@ -2042,11 +2236,10 @@ async function createExportJob(body, res) {
     sourceDocumentIds = [documentId, ...sourceDocumentIds];
   }
   const rawOptions =
-    typeof body.options === 'object' && body.options
-      ? { ...body.options }
-      : {};
+    typeof body.options === "object" && body.options ? { ...body.options } : {};
   const templateProfile = normalizeTemplateProfile(body.templateProfile);
-  const storageTemplateProfile = templateProfileForPbExportsColumn(templateProfile);
+  const storageTemplateProfile =
+    templateProfileForPbExportsColumn(templateProfile);
   const paperSize = normalizePaper(body.paperSize);
   const includeAnswerSheet = normalizeBool(body.includeAnswerSheet, true);
   const includeExplanation = normalizeBool(body.includeExplanation, false);
@@ -2054,19 +2247,24 @@ async function createExportJob(body, res) {
     body.previewOnly,
     normalizeBool(rawOptions.previewOnly, false),
   );
-  const renderConfig = normalizeExportRenderConfig(rawOptions, selectedQuestionUids, {
-    questionMode: rawOptions.questionMode || rawOptions.question_mode || rawOptions.mode,
-    layoutColumns:
-      rawOptions.layoutColumns ||
-      rawOptions.layout_columns ||
-      rawOptions.columnCount ||
-      rawOptions.columns,
-    maxQuestionsPerPage:
-      rawOptions.maxQuestionsPerPage ||
-      rawOptions.max_questions_per_page ||
-      rawOptions.perPage ||
-      rawOptions.questionsPerPage,
-  });
+  const renderConfig = normalizeExportRenderConfig(
+    rawOptions,
+    selectedQuestionUids,
+    {
+      questionMode:
+        rawOptions.questionMode || rawOptions.question_mode || rawOptions.mode,
+      layoutColumns:
+        rawOptions.layoutColumns ||
+        rawOptions.layout_columns ||
+        rawOptions.columnCount ||
+        rawOptions.columns,
+      maxQuestionsPerPage:
+        rawOptions.maxQuestionsPerPage ||
+        rawOptions.max_questions_per_page ||
+        rawOptions.perPage ||
+        rawOptions.questionsPerPage,
+    },
+  );
 
   const renderHashPayload = {
     renderConfigVersion: renderConfig.renderConfigVersion,
@@ -2151,7 +2349,7 @@ async function createExportJob(body, res) {
     academy_id: academyId,
     document_id: documentId,
     requested_by: isUuid(requestedBy) ? requestedBy : null,
-    status: 'queued',
+    status: "queued",
     template_profile: storageTemplateProfile,
     paper_size: paperSize,
     include_answer_sheet: includeAnswerSheet,
@@ -2160,36 +2358,36 @@ async function createExportJob(body, res) {
     render_hash: renderHash,
     preview_only: previewOnly,
     options,
-    output_storage_bucket: 'problem-exports',
-    output_storage_path: '',
-    output_url: '',
+    output_storage_bucket: "problem-exports",
+    output_storage_path: "",
+    output_url: "",
     page_count: 0,
-    worker_name: '',
-    error_code: '',
-    error_message: '',
+    worker_name: "",
+    error_code: "",
+    error_message: "",
     started_at: null,
     finished_at: null,
   };
 
   let { data: job, error } = await supa
-    .from('pb_exports')
+    .from("pb_exports")
     .insert(payload)
-    .select('*')
+    .select("*")
     .maybeSingle();
-  if (error && /render_hash|preview_only/i.test(String(error.message || ''))) {
+  if (error && /render_hash|preview_only/i.test(String(error.message || ""))) {
     const fallbackPayload = { ...payload };
     delete fallbackPayload.render_hash;
     delete fallbackPayload.preview_only;
     ({ data: job, error } = await supa
-      .from('pb_exports')
+      .from("pb_exports")
       .insert(fallbackPayload)
-      .select('*')
+      .select("*")
       .maybeSingle());
   }
   if (error || !job) {
     sendJson(res, 500, {
       ok: false,
-      error: `export_job_insert_failed:${error?.message || 'unknown'}`,
+      error: `export_job_insert_failed:${error?.message || "unknown"}`,
     });
     return;
   }
@@ -2197,41 +2395,46 @@ async function createExportJob(body, res) {
 }
 
 async function listExportJobs(url, res) {
-  const academyId = String(url.searchParams.get('academyId') || '').trim();
+  const academyId = String(url.searchParams.get("academyId") || "").trim();
   if (!isUuid(academyId)) {
-    sendJson(res, 400, { ok: false, error: 'academyId must be uuid' });
+    sendJson(res, 400, { ok: false, error: "academyId must be uuid" });
     return;
   }
-  const status = String(url.searchParams.get('status') || '').trim();
-  const documentId = String(url.searchParams.get('documentId') || '').trim();
-  const renderHash = String(url.searchParams.get('renderHash') || '').trim();
-  const previewOnlyRaw = String(url.searchParams.get('previewOnly') || '').trim();
+  const status = String(url.searchParams.get("status") || "").trim();
+  const documentId = String(url.searchParams.get("documentId") || "").trim();
+  const renderHash = String(url.searchParams.get("renderHash") || "").trim();
+  const previewOnlyRaw = String(
+    url.searchParams.get("previewOnly") || "",
+  ).trim();
   const previewOnlyFilter =
     previewOnlyRaw.length > 0 ? normalizeBool(previewOnlyRaw, false) : null;
-  const limit = normalizeLimit(url.searchParams.get('limit'), 30, 120);
+  const limit = normalizeLimit(url.searchParams.get("limit"), 30, 120);
   let data = null;
   {
     let q = supa
-      .from('pb_exports')
-      .select('*')
-      .eq('academy_id', academyId)
-      .order('created_at', { ascending: false })
+      .from("pb_exports")
+      .select("*")
+      .eq("academy_id", academyId)
+      .order("created_at", { ascending: false })
       .limit(limit);
-    if (status) q = q.eq('status', status);
-    if (documentId) q = q.eq('document_id', documentId);
-    if (renderHash) q = q.eq('render_hash', renderHash);
-    if (previewOnlyFilter != null) q = q.eq('preview_only', previewOnlyFilter);
+    if (status) q = q.eq("status", status);
+    if (documentId) q = q.eq("document_id", documentId);
+    if (renderHash) q = q.eq("render_hash", renderHash);
+    if (previewOnlyFilter != null) q = q.eq("preview_only", previewOnlyFilter);
 
     const result = await q;
-    if (result.error && /render_hash|preview_only/i.test(String(result.error.message || ''))) {
+    if (
+      result.error &&
+      /render_hash|preview_only/i.test(String(result.error.message || ""))
+    ) {
       let fallback = supa
-        .from('pb_exports')
-        .select('*')
-        .eq('academy_id', academyId)
-        .order('created_at', { ascending: false })
+        .from("pb_exports")
+        .select("*")
+        .eq("academy_id", academyId)
+        .order("created_at", { ascending: false })
         .limit(limit);
-      if (status) fallback = fallback.eq('status', status);
-      if (documentId) fallback = fallback.eq('document_id', documentId);
+      if (status) fallback = fallback.eq("status", status);
+      if (documentId) fallback = fallback.eq("document_id", documentId);
       const fallbackResult = await fallback;
       if (fallbackResult.error) {
         sendJson(res, 500, {
@@ -2242,7 +2445,10 @@ async function listExportJobs(url, res) {
       }
       data = fallbackResult.data || [];
     } else if (result.error) {
-      sendJson(res, 500, { ok: false, error: `export_job_list_failed:${result.error.message}` });
+      sendJson(res, 500, {
+        ok: false,
+        error: `export_job_list_failed:${result.error.message}`,
+      });
       return;
     } else {
       data = result.data || [];
@@ -2251,7 +2457,9 @@ async function listExportJobs(url, res) {
   let jobs = data || [];
   if (renderHash) {
     jobs = jobs.filter((job) => {
-      const rowHash = String(job?.render_hash || job?.options?.renderHash || '').trim();
+      const rowHash = String(
+        job?.render_hash || job?.options?.renderHash || "",
+      ).trim();
       return rowHash === renderHash;
     });
   }
@@ -2266,72 +2474,78 @@ async function listExportJobs(url, res) {
 }
 
 async function getExportJob(jobId, url, res) {
-  const academyId = String(url.searchParams.get('academyId') || '').trim();
+  const academyId = String(url.searchParams.get("academyId") || "").trim();
   if (!isUuid(jobId) || !isUuid(academyId)) {
-    sendJson(res, 400, { ok: false, error: 'jobId/academyId must be uuid' });
+    sendJson(res, 400, { ok: false, error: "jobId/academyId must be uuid" });
     return;
   }
   const { data, error } = await supa
-    .from('pb_exports')
-    .select('*')
-    .eq('id', jobId)
-    .eq('academy_id', academyId)
+    .from("pb_exports")
+    .select("*")
+    .eq("id", jobId)
+    .eq("academy_id", academyId)
     .maybeSingle();
   if (error) {
-    sendJson(res, 500, { ok: false, error: `export_job_get_failed:${error.message}` });
+    sendJson(res, 500, {
+      ok: false,
+      error: `export_job_get_failed:${error.message}`,
+    });
     return;
   }
   if (!data) {
-    sendJson(res, 404, { ok: false, error: 'export_job_not_found' });
+    sendJson(res, 404, { ok: false, error: "export_job_not_found" });
     return;
   }
   sendJson(res, 200, { ok: true, job: data });
 }
 
 async function retryExportJob(jobId, body, res) {
-  const academyId = String(body.academyId || '').trim();
+  const academyId = String(body.academyId || "").trim();
   if (!isUuid(jobId) || !isUuid(academyId)) {
-    sendJson(res, 400, { ok: false, error: 'jobId/academyId must be uuid' });
+    sendJson(res, 400, { ok: false, error: "jobId/academyId must be uuid" });
     return;
   }
   const { data: oldJob, error: oldErr } = await supa
-    .from('pb_exports')
-    .select('*')
-    .eq('id', jobId)
-    .eq('academy_id', academyId)
+    .from("pb_exports")
+    .select("*")
+    .eq("id", jobId)
+    .eq("academy_id", academyId)
     .maybeSingle();
   if (oldErr) {
-    sendJson(res, 500, { ok: false, error: `export_job_lookup_failed:${oldErr.message}` });
+    sendJson(res, 500, {
+      ok: false,
+      error: `export_job_lookup_failed:${oldErr.message}`,
+    });
     return;
   }
   if (!oldJob) {
-    sendJson(res, 404, { ok: false, error: 'export_job_not_found' });
+    sendJson(res, 404, { ok: false, error: "export_job_not_found" });
     return;
   }
-  if (oldJob.status === 'rendering') {
-    sendJson(res, 409, { ok: false, error: 'export_job_in_progress' });
+  if (oldJob.status === "rendering") {
+    sendJson(res, 409, { ok: false, error: "export_job_in_progress" });
     return;
   }
   const { data: updated, error: updErr } = await supa
-    .from('pb_exports')
+    .from("pb_exports")
     .update({
-      status: 'queued',
-      error_code: '',
-      error_message: '',
-      output_storage_path: '',
-      output_url: '',
+      status: "queued",
+      error_code: "",
+      error_message: "",
+      output_storage_path: "",
+      output_url: "",
       page_count: 0,
       started_at: null,
       finished_at: null,
       updated_at: new Date().toISOString(),
     })
-    .eq('id', jobId)
-    .select('*')
+    .eq("id", jobId)
+    .select("*")
     .maybeSingle();
   if (updErr || !updated) {
     sendJson(res, 500, {
       ok: false,
-      error: `export_job_retry_failed:${updErr?.message || 'unknown'}`,
+      error: `export_job_retry_failed:${updErr?.message || "unknown"}`,
     });
     return;
   }
@@ -2339,16 +2553,16 @@ async function retryExportJob(jobId, body, res) {
 }
 
 async function cleanupExportArtifact(jobId, body, res) {
-  const academyId = String(body.academyId || '').trim();
+  const academyId = String(body.academyId || "").trim();
   if (!isUuid(jobId) || !isUuid(academyId)) {
-    sendJson(res, 400, { ok: false, error: 'jobId/academyId must be uuid' });
+    sendJson(res, 400, { ok: false, error: "jobId/academyId must be uuid" });
     return;
   }
   const { data: job, error: lookupErr } = await supa
-    .from('pb_exports')
-    .select('id,output_storage_bucket,output_storage_path,result_summary')
-    .eq('id', jobId)
-    .eq('academy_id', academyId)
+    .from("pb_exports")
+    .select("id,output_storage_bucket,output_storage_path,result_summary")
+    .eq("id", jobId)
+    .eq("academy_id", academyId)
     .maybeSingle();
   if (lookupErr) {
     sendJson(res, 500, {
@@ -2358,12 +2572,12 @@ async function cleanupExportArtifact(jobId, body, res) {
     return;
   }
   if (!job) {
-    sendJson(res, 404, { ok: false, error: 'export_job_not_found' });
+    sendJson(res, 404, { ok: false, error: "export_job_not_found" });
     return;
   }
 
-  const bucket = String(job.output_storage_bucket || '').trim();
-  const path = String(job.output_storage_path || '').trim();
+  const bucket = String(job.output_storage_bucket || "").trim();
+  const path = String(job.output_storage_path || "").trim();
   if (bucket && path) {
     try {
       await supa.storage.from(bucket).remove([path]);
@@ -2374,27 +2588,27 @@ async function cleanupExportArtifact(jobId, body, res) {
 
   const nowIso = new Date().toISOString();
   const { data: updated, error: updErr } = await supa
-    .from('pb_exports')
+    .from("pb_exports")
     .update({
-      output_storage_bucket: '',
-      output_storage_path: '',
-      output_url: '',
+      output_storage_bucket: "",
+      output_storage_path: "",
+      output_url: "",
       updated_at: nowIso,
       result_summary: {
-        ...(job.result_summary && typeof job.result_summary === 'object'
+        ...(job.result_summary && typeof job.result_summary === "object"
           ? job.result_summary
           : {}),
         local_saved_at: nowIso,
       },
     })
-    .eq('id', jobId)
-    .eq('academy_id', academyId)
-    .select('*')
+    .eq("id", jobId)
+    .eq("academy_id", academyId)
+    .select("*")
     .maybeSingle();
   if (updErr || !updated) {
     sendJson(res, 500, {
       ok: false,
-      error: `export_cleanup_failed:${updErr?.message || 'unknown'}`,
+      error: `export_cleanup_failed:${updErr?.message || "unknown"}`,
     });
     return;
   }
@@ -2402,67 +2616,83 @@ async function cleanupExportArtifact(jobId, body, res) {
 }
 
 function normalizeSignedUrlTtlSeconds(raw, fallbackSeconds = 60 * 15) {
-  const parsed = Number.parseInt(String(raw ?? ''), 10);
+  const parsed = Number.parseInt(String(raw ?? ""), 10);
   if (!Number.isFinite(parsed) || parsed <= 0) return fallbackSeconds;
   return Math.max(60, Math.min(60 * 60 * 24 * 7, parsed));
 }
 
 async function regenerateExportSignedUrl(exportJobId, url, res) {
-  const academyId = String(url.searchParams.get('academyId') || '').trim();
+  const academyId = String(url.searchParams.get("academyId") || "").trim();
   if (!isUuid(academyId) || !isUuid(exportJobId)) {
-    sendJson(res, 400, { ok: false, error: 'academyId/exportJobId must be uuid' });
+    sendJson(res, 400, {
+      ok: false,
+      error: "academyId/exportJobId must be uuid",
+    });
     return;
   }
-  const ttlSeconds = normalizeSignedUrlTtlSeconds(url.searchParams.get('ttlSeconds'));
+  const ttlSeconds = normalizeSignedUrlTtlSeconds(
+    url.searchParams.get("ttlSeconds"),
+  );
   const { data: job, error: jobErr } = await supa
-    .from('pb_exports')
-    .select('*')
-    .eq('id', exportJobId)
-    .eq('academy_id', academyId)
+    .from("pb_exports")
+    .select("*")
+    .eq("id", exportJobId)
+    .eq("academy_id", academyId)
     .maybeSingle();
   if (jobErr) {
-    sendJson(res, 500, { ok: false, error: `export_job_lookup_failed:${jobErr.message}` });
+    sendJson(res, 500, {
+      ok: false,
+      error: `export_job_lookup_failed:${jobErr.message}`,
+    });
     return;
   }
   if (!job) {
-    sendJson(res, 404, { ok: false, error: 'export_job_not_found' });
+    sendJson(res, 404, { ok: false, error: "export_job_not_found" });
     return;
   }
-  if (String(job.status || '').trim() !== 'completed') {
-    sendJson(res, 409, { ok: false, error: 'export_job_not_completed' });
+  if (String(job.status || "").trim() !== "completed") {
+    sendJson(res, 409, { ok: false, error: "export_job_not_completed" });
     return;
   }
-  const bucket = String(job.output_storage_bucket || 'problem-exports').trim() || 'problem-exports';
-  const path = String(job.output_storage_path || '').trim();
+  const bucket =
+    String(job.output_storage_bucket || "problem-exports").trim() ||
+    "problem-exports";
+  const path = String(job.output_storage_path || "").trim();
   if (!path) {
-    sendJson(res, 409, { ok: false, error: 'export_output_path_empty' });
+    sendJson(res, 409, { ok: false, error: "export_output_path_empty" });
     return;
   }
   const { data: signed, error: signErr } = await supa.storage
     .from(bucket)
     .createSignedUrl(path, ttlSeconds);
   if (signErr) {
-    sendJson(res, 500, { ok: false, error: `export_signed_url_failed:${signErr.message}` });
+    sendJson(res, 500, {
+      ok: false,
+      error: `export_signed_url_failed:${signErr.message}`,
+    });
     return;
   }
-  const signedUrl = String(signed?.signedUrl || '').trim();
+  const signedUrl = String(signed?.signedUrl || "").trim();
   if (!signedUrl) {
-    sendJson(res, 500, { ok: false, error: 'export_signed_url_empty' });
+    sendJson(res, 500, { ok: false, error: "export_signed_url_empty" });
     return;
   }
 
   const nowIso = new Date().toISOString();
   const summary = normalizeJsonObject(job.result_summary, {});
   const issuedCountRaw = Number.parseInt(
-    String(summary.signed_url_issued_count ?? summary.signedUrlIssuedCount ?? '0'),
+    String(
+      summary.signed_url_issued_count ?? summary.signedUrlIssuedCount ?? "0",
+    ),
     10,
   );
-  const issuedCount = Number.isFinite(issuedCountRaw) && issuedCountRaw > 0
-    ? issuedCountRaw + 1
-    : 1;
+  const issuedCount =
+    Number.isFinite(issuedCountRaw) && issuedCountRaw > 0
+      ? issuedCountRaw + 1
+      : 1;
   try {
     await supa
-      .from('pb_exports')
+      .from("pb_exports")
       .update({
         updated_at: nowIso,
         result_summary: {
@@ -2471,8 +2701,8 @@ async function regenerateExportSignedUrl(exportJobId, url, res) {
           signed_url_last_issued_at: nowIso,
         },
       })
-      .eq('id', exportJobId)
-      .eq('academy_id', academyId);
+      .eq("id", exportJobId)
+      .eq("academy_id", academyId);
   } catch (_) {
     // audit update best-effort
   }
@@ -2490,32 +2720,35 @@ async function regenerateExportSignedUrl(exportJobId, url, res) {
 function isSavedSettingsDocumentMeta(rawMeta) {
   const meta = normalizeJsonObject(rawMeta, {});
   const saved = meta.saved_settings || meta.savedSettings;
-  return saved && typeof saved === 'object';
+  return saved && typeof saved === "object";
 }
 
 async function cleanupLegacySavedSettings(body, res) {
-  const academyId = String(body?.academyId || '').trim();
+  const academyId = String(body?.academyId || "").trim();
   if (!isUuid(academyId)) {
-    sendJson(res, 400, { ok: false, error: 'academyId must be uuid' });
+    sendJson(res, 400, { ok: false, error: "academyId must be uuid" });
     return;
   }
   const dryRun = normalizeBool(body?.dryRun, true);
   const limit = normalizeLimit(body?.limit, 300, 5000);
   const { data: rows, error: listErr } = await supa
-    .from('pb_documents')
-    .select('id,source_filename,created_at,meta')
-    .eq('academy_id', academyId)
-    .order('created_at', { ascending: false })
+    .from("pb_documents")
+    .select("id,source_filename,created_at,meta")
+    .eq("academy_id", academyId)
+    .order("created_at", { ascending: false })
     .limit(limit);
   if (listErr) {
-    sendJson(res, 500, { ok: false, error: `legacy_documents_list_failed:${listErr.message}` });
+    sendJson(res, 500, {
+      ok: false,
+      error: `legacy_documents_list_failed:${listErr.message}`,
+    });
     return;
   }
   const legacyDocs = (rows || [])
     .filter((row) => isSavedSettingsDocumentMeta(row?.meta))
     .map((row) => ({
-      id: String(row?.id || '').trim(),
-      sourceFilename: String(row?.source_filename || '').trim(),
+      id: String(row?.id || "").trim(),
+      sourceFilename: String(row?.source_filename || "").trim(),
       createdAt: row?.created_at || null,
     }))
     .filter((row) => isUuid(row.id));
@@ -2550,21 +2783,23 @@ async function cleanupLegacySavedSettings(body, res) {
   let deletedPresetCount = 0;
   for (const idChunk of chunkArray(legacyIds, 200)) {
     const { data: deletedPresets } = await supa
-      .from('pb_export_presets')
+      .from("pb_export_presets")
       .delete()
-      .eq('academy_id', academyId)
-      .in('document_id', idChunk)
-      .select('id');
-    deletedPresetCount += Number(Array.isArray(deletedPresets) ? deletedPresets.length : 0);
+      .eq("academy_id", academyId)
+      .in("document_id", idChunk)
+      .select("id");
+    deletedPresetCount += Number(
+      Array.isArray(deletedPresets) ? deletedPresets.length : 0,
+    );
   }
   let deletedDocumentCount = 0;
   for (const idChunk of chunkArray(legacyIds, 150)) {
     const { data: deletedDocs, error: delErr } = await supa
-      .from('pb_documents')
+      .from("pb_documents")
       .delete()
-      .eq('academy_id', academyId)
-      .in('id', idChunk)
-      .select('id');
+      .eq("academy_id", academyId)
+      .in("id", idChunk)
+      .select("id");
     if (delErr) {
       sendJson(res, 500, {
         ok: false,
@@ -2572,7 +2807,9 @@ async function cleanupLegacySavedSettings(body, res) {
       });
       return;
     }
-    deletedDocumentCount += Number(Array.isArray(deletedDocs) ? deletedDocs.length : 0);
+    deletedDocumentCount += Number(
+      Array.isArray(deletedDocs) ? deletedDocs.length : 0,
+    );
   }
 
   sendJson(res, 200, {
@@ -2587,12 +2824,12 @@ async function cleanupLegacySavedSettings(body, res) {
 }
 
 async function saveSettingsAsDocument(body, res) {
-  const academyId = String(body.academyId || '').trim();
-  const sourceDocumentId = String(body.sourceDocumentId || '').trim();
-  const createdBy = String(body.createdBy || '').trim();
+  const academyId = String(body.academyId || "").trim();
+  const sourceDocumentId = String(body.sourceDocumentId || "").trim();
+  const createdBy = String(body.createdBy || "").trim();
   const rawDisplayName = body.displayName;
   // 선택적 presetId — 전달되면 기존 preset 행을 update 하고, 없으면 새로 insert 한다.
-  const presetIdToUpdate = String(body.presetId || '').trim();
+  const presetIdToUpdate = String(body.presetId || "").trim();
   const rawRenderConfig = normalizeJsonObject(body.renderConfig, {});
   const selectedQuestionUidsOrderedInput = normalizeUuidListOrdered(
     body.selectedQuestionUidsOrdered || body.selectedQuestionUids,
@@ -2603,24 +2840,25 @@ async function saveSettingsAsDocument(body, res) {
   if (!isUuid(academyId) || !isUuid(sourceDocumentId)) {
     sendJson(res, 400, {
       ok: false,
-      error: 'academyId/sourceDocumentId must be uuid',
+      error: "academyId/sourceDocumentId must be uuid",
     });
     return;
   }
   if (
-    selectedQuestionUidsOrderedInput.length === 0
-    && selectedQuestionIdsOrderedInput.length === 0
+    selectedQuestionUidsOrderedInput.length === 0 &&
+    selectedQuestionIdsOrderedInput.length === 0
   ) {
     sendJson(res, 400, {
       ok: false,
-      error: 'selectedQuestionUidsOrdered or selectedQuestionIdsOrdered must be uuid[]',
+      error:
+        "selectedQuestionUidsOrdered or selectedQuestionIdsOrdered must be uuid[]",
     });
     return;
   }
 
   const sourceDoc = await ensureDocumentBelongs(academyId, sourceDocumentId);
   if (!sourceDoc) {
-    sendJson(res, 404, { ok: false, error: 'source_document_not_found' });
+    sendJson(res, 404, { ok: false, error: "source_document_not_found" });
     return;
   }
 
@@ -2628,12 +2866,15 @@ async function saveSettingsAsDocument(body, res) {
     const sourceQuestionRowsByUid = new Map();
     const sourceQuestionRowsById = new Map();
     if (selectedQuestionUidsOrderedInput.length > 0) {
-      for (const uidChunk of chunkArray(selectedQuestionUidsOrderedInput, 200)) {
+      for (const uidChunk of chunkArray(
+        selectedQuestionUidsOrderedInput,
+        200,
+      )) {
         const { data: rows, error: rowErr } = await supa
-          .from('pb_questions')
-          .select('id,question_uid,document_id,meta')
-          .eq('academy_id', academyId)
-          .in('question_uid', uidChunk);
+          .from("pb_questions")
+          .select("id,question_uid,document_id,meta")
+          .eq("academy_id", academyId)
+          .in("question_uid", uidChunk);
         if (rowErr) {
           sendJson(res, 500, {
             ok: false,
@@ -2642,7 +2883,7 @@ async function saveSettingsAsDocument(body, res) {
           return;
         }
         for (const row of rows || []) {
-          const uid = String(row?.question_uid || '').trim();
+          const uid = String(row?.question_uid || "").trim();
           if (!isUuid(uid)) continue;
           sourceQuestionRowsByUid.set(uid, row);
         }
@@ -2650,10 +2891,10 @@ async function saveSettingsAsDocument(body, res) {
     } else {
       for (const idChunk of chunkArray(selectedQuestionIdsOrderedInput, 200)) {
         const { data: rows, error: rowErr } = await supa
-          .from('pb_questions')
-          .select('id,question_uid,document_id,meta')
-          .eq('academy_id', academyId)
-          .in('id', idChunk);
+          .from("pb_questions")
+          .select("id,question_uid,document_id,meta")
+          .eq("academy_id", academyId)
+          .in("id", idChunk);
         if (rowErr) {
           sendJson(res, 500, {
             ok: false,
@@ -2662,7 +2903,7 @@ async function saveSettingsAsDocument(body, res) {
           return;
         }
         for (const row of rows || []) {
-          const id = String(row?.id || '').trim();
+          const id = String(row?.id || "").trim();
           if (!isUuid(id)) continue;
           sourceQuestionRowsById.set(id, row);
         }
@@ -2694,7 +2935,7 @@ async function saveSettingsAsDocument(body, res) {
     if (missingQuestionUids.length > 0) {
       sendJson(res, 404, {
         ok: false,
-        error: 'selected_question_uids_not_found',
+        error: "selected_question_uids_not_found",
         missingQuestionUids: missingQuestionUids,
       });
       return;
@@ -2702,7 +2943,7 @@ async function saveSettingsAsDocument(body, res) {
     if (missingQuestionIds.length > 0) {
       sendJson(res, 404, {
         ok: false,
-        error: 'selected_question_ids_not_found',
+        error: "selected_question_ids_not_found",
         missingQuestionIds: missingQuestionIds,
       });
       return;
@@ -2710,25 +2951,25 @@ async function saveSettingsAsDocument(body, res) {
     if (orderedSourceRows.length === 0) {
       sendJson(res, 400, {
         ok: false,
-        error: 'selected_questions_empty_after_validation',
+        error: "selected_questions_empty_after_validation",
       });
       return;
     }
 
     const selectedQuestionIdsOrdered = orderedSourceRows
-      .map((row) => String(row?.id || '').trim())
+      .map((row) => String(row?.id || "").trim())
       .filter((id) => isUuid(id));
     const selectedQuestionUidsOrdered = orderedSourceRows
       .map((row) => {
-        const uid = String(row?.question_uid || '').trim();
+        const uid = String(row?.question_uid || "").trim();
         if (isUuid(uid)) return uid;
-        return String(row?.id || '').trim();
+        return String(row?.id || "").trim();
       })
       .filter((uid) => isUuid(uid));
     const sourceQuestionDocIds = Array.from(
       new Set(
         orderedSourceRows
-          .map((row) => String(row?.document_id || '').trim())
+          .map((row) => String(row?.document_id || "").trim())
           .filter((id) => isUuid(id)),
       ),
     );
@@ -2736,7 +2977,7 @@ async function saveSettingsAsDocument(body, res) {
       body.templateProfile || rawRenderConfig.templateProfile,
     );
     const paperSize = normalizePaper(
-      body.paperSize || rawRenderConfig.paperSize || 'A4',
+      body.paperSize || rawRenderConfig.paperSize || "A4",
     );
     const includeAnswerSheet = normalizeBool(
       body.includeAnswerSheet ?? rawRenderConfig.includeAnswerSheet,
@@ -2751,7 +2992,7 @@ async function saveSettingsAsDocument(body, res) {
       false,
     );
     const fallbackQuestionMode = normalizeQuestionMode(
-      body.questionMode || rawRenderConfig.questionMode || 'original',
+      body.questionMode || rawRenderConfig.questionMode || "original",
     );
     const sourceQuestionModeByQuestionUid = normalizeQuestionModeMap(
       body.questionModeByQuestionUid || body.questionModeByQuestionId,
@@ -2759,10 +3000,10 @@ async function saveSettingsAsDocument(body, res) {
       fallbackQuestionMode,
     );
     const requestedQuestionScoreByQuestionUid =
-      body.questionScoreByQuestionUid
-        || body.questionScoreByQuestionId
-        || rawRenderConfig.questionScoreByQuestionUid
-        || rawRenderConfig.questionScoreByQuestionId;
+      body.questionScoreByQuestionUid ||
+      body.questionScoreByQuestionId ||
+      rawRenderConfig.questionScoreByQuestionUid ||
+      rawRenderConfig.questionScoreByQuestionId;
     const currentQuestionScoreByQuestionUid = questionScoreMapFromRows(
       orderedSourceRows,
       selectedQuestionUidsOrdered,
@@ -2786,19 +3027,30 @@ async function saveSettingsAsDocument(body, res) {
       {
         questionMode: fallbackQuestionMode,
         subjectTitleText:
-          String(rawRenderConfig.subjectTitleText || '').trim() || '수학 영역',
+          String(rawRenderConfig.subjectTitleText || "").trim() || "수학 영역",
         titlePageTopText:
-          String(rawRenderConfig.titlePageTopText || '').replace(/\s+/g, ' ').trim()
-            || DEFAULT_TITLE_PAGE_TOP_TEXT,
+          String(rawRenderConfig.titlePageTopText || "")
+            .replace(/\s+/g, " ")
+            .trim() || DEFAULT_TITLE_PAGE_TOP_TEXT,
         titlePageGoalText:
-          String(rawRenderConfig.titlePageGoalText || '').replace(/\s+/g, ' ').trim()
-            || DEFAULT_TITLE_PAGE_GOAL_TEXT,
-        timeLimitText:
-          String(rawRenderConfig.timeLimitText || rawRenderConfig.examTimeLimitText || '')
-            .replace(/\s+/g, ' ')
-            .trim(),
-        includeAcademyLogo: normalizeBool(rawRenderConfig.includeAcademyLogo, false),
-        includeCoverPage: normalizeBool(rawRenderConfig.includeCoverPage, false),
+          String(rawRenderConfig.titlePageGoalText || "")
+            .replace(/\s+/g, " ")
+            .trim() || DEFAULT_TITLE_PAGE_GOAL_TEXT,
+        timeLimitText: String(
+          rawRenderConfig.timeLimitText ||
+            rawRenderConfig.examTimeLimitText ||
+            "",
+        )
+          .replace(/\s+/g, " ")
+          .trim(),
+        includeAcademyLogo: normalizeBool(
+          rawRenderConfig.includeAcademyLogo,
+          false,
+        ),
+        includeCoverPage: normalizeBool(
+          rawRenderConfig.includeCoverPage,
+          false,
+        ),
         coverPageTexts: normalizeJsonObject(rawRenderConfig.coverPageTexts, {}),
         includeQuestionScore,
         questionScoreByQuestionUid: sourceQuestionScoreByQuestionUid,
@@ -2822,53 +3074,58 @@ async function saveSettingsAsDocument(body, res) {
     };
     const presetKind = normalizePresetKind(
       body.presetKind || body.preset_kind || rawRenderConfig.presetKind,
-      'settings',
+      "settings",
     );
     renderConfig.presetKind = presetKind;
-    if (presetKind === 'assignment') {
-      renderConfig.assignmentLibraryKind = 'generated_assignment';
+    if (presetKind === "assignment") {
+      renderConfig.assignmentLibraryKind = "generated_assignment";
       const assignmentStringKeys = [
-        'assignmentBookLabel',
-        'assignmentBookName',
-        'assignmentBookId',
-        'assignmentBookGradeLabel',
-        'assignmentGradeLabel',
-        'assignmentCourseLabel',
-        'assignmentSchoolName',
-        'assignmentFlowName',
-        'assignmentFlowId',
-        'flowName',
-        'preferredFlowName',
-        'assignmentFlow',
+        "assignmentBookLabel",
+        "assignmentBookName",
+        "assignmentBookId",
+        "assignmentBookGradeLabel",
+        "assignmentGradeLabel",
+        "assignmentCourseLabel",
+        "assignmentSchoolName",
+        "assignmentFlowName",
+        "assignmentFlowId",
+        "flowName",
+        "preferredFlowName",
+        "assignmentFlow",
       ];
       for (const key of assignmentStringKeys) {
-        const value = String(rawRenderConfig[key] || '').replace(/\s+/g, ' ').trim();
+        const value = String(rawRenderConfig[key] || "")
+          .replace(/\s+/g, " ")
+          .trim();
         if (value) renderConfig[key] = value;
       }
       const assignmentQuestionCount = Number.parseInt(
-        String(rawRenderConfig.assignmentQuestionCount || ''),
+        String(rawRenderConfig.assignmentQuestionCount || ""),
         10,
       );
-      if (Number.isFinite(assignmentQuestionCount) && assignmentQuestionCount > 0) {
+      if (
+        Number.isFinite(assignmentQuestionCount) &&
+        assignmentQuestionCount > 0
+      ) {
         renderConfig.assignmentQuestionCount = assignmentQuestionCount;
       }
     }
     const presetDisplayName = normalizePresetDisplayName(
       rawDisplayName,
-      String(sourceDoc.source_filename || '').trim() || '문제은행 프리셋',
+      String(sourceDoc.source_filename || "").trim() || "문제은행 프리셋",
     );
 
     let preset;
     let presetErr;
-    let responseMode = 'reference_preset';
+    let responseMode = "reference_preset";
     let responseStatus = 201;
     if (isUuid(presetIdToUpdate)) {
       // 기존 preset 업데이트 흐름 — academy_id 일치 여부 확인 후 덮어쓴다.
       const { data: existingPreset, error: existingErr } = await supa
-        .from('pb_export_presets')
-        .select('id')
-        .eq('academy_id', academyId)
-        .eq('id', presetIdToUpdate)
+        .from("pb_export_presets")
+        .select("id")
+        .eq("academy_id", academyId)
+        .eq("id", presetIdToUpdate)
         .maybeSingle();
       if (existingErr) {
         sendJson(res, 500, {
@@ -2878,11 +3135,11 @@ async function saveSettingsAsDocument(body, res) {
         return;
       }
       if (!existingPreset) {
-        sendJson(res, 404, { ok: false, error: 'preset_not_found' });
+        sendJson(res, 404, { ok: false, error: "preset_not_found" });
         return;
       }
       const updateResult = await supa
-        .from('pb_export_presets')
+        .from("pb_export_presets")
         .update({
           source_document_id: sourceDocumentId,
           source_document_ids: sourceQuestionDocIds,
@@ -2895,17 +3152,17 @@ async function saveSettingsAsDocument(body, res) {
           display_name: presetDisplayName,
           updated_at: new Date().toISOString(),
         })
-        .eq('academy_id', academyId)
-        .eq('id', presetIdToUpdate)
-        .select('*')
+        .eq("academy_id", academyId)
+        .eq("id", presetIdToUpdate)
+        .select("*")
         .maybeSingle();
       preset = updateResult.data;
       presetErr = updateResult.error;
-      responseMode = 'reference_preset_update';
+      responseMode = "reference_preset_update";
       responseStatus = 200;
     } else {
       const insertResult = await supa
-        .from('pb_export_presets')
+        .from("pb_export_presets")
         .insert({
           academy_id: academyId,
           source_document_id: sourceDocumentId,
@@ -2920,14 +3177,14 @@ async function saveSettingsAsDocument(body, res) {
           display_name: presetDisplayName,
           created_by: isUuid(createdBy) ? createdBy : null,
         })
-        .select('*')
+        .select("*")
         .maybeSingle();
       preset = insertResult.data;
       presetErr = insertResult.error;
     }
     if (presetErr || !preset) {
       throw new Error(
-        `save_settings_preset_save_failed:${presetErr?.message || 'unknown'}`,
+        `save_settings_preset_save_failed:${presetErr?.message || "unknown"}`,
       );
     }
 
@@ -2950,86 +3207,95 @@ async function saveSettingsAsDocument(body, res) {
 }
 
 async function getDocumentExportPreset(documentId, url, res) {
-  const academyId = String(url.searchParams.get('academyId') || '').trim();
+  const academyId = String(url.searchParams.get("academyId") || "").trim();
   if (!isUuid(documentId) || !isUuid(academyId)) {
-    sendJson(res, 400, { ok: false, error: 'documentId/academyId must be uuid' });
+    sendJson(res, 400, {
+      ok: false,
+      error: "documentId/academyId must be uuid",
+    });
     return;
   }
   const doc = await ensureDocumentBelongs(academyId, documentId);
   if (!doc) {
-    sendJson(res, 404, { ok: false, error: 'document_not_found' });
+    sendJson(res, 404, { ok: false, error: "document_not_found" });
     return;
   }
   const { data, error } = await supa
-    .from('pb_export_presets')
-    .select('*')
-    .eq('academy_id', academyId)
-    .eq('preset_kind', 'settings')
+    .from("pb_export_presets")
+    .select("*")
+    .eq("academy_id", academyId)
+    .eq("preset_kind", "settings")
     .or(
       [
         `source_document_id.eq.${documentId}`,
         `source_document_ids.cs.{${documentId}}`,
-      ].join(','),
+      ].join(","),
     )
-    .order('created_at', { ascending: false })
+    .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
   if (error) {
-    sendJson(res, 500, { ok: false, error: `export_preset_get_failed:${error.message}` });
+    sendJson(res, 500, {
+      ok: false,
+      error: `export_preset_get_failed:${error.message}`,
+    });
     return;
   }
   sendJson(res, 200, { ok: true, preset: data || null });
 }
 
 async function listExportPresets(url, res) {
-  const academyId = String(url.searchParams.get('academyId') || '').trim();
+  const academyId = String(url.searchParams.get("academyId") || "").trim();
   if (!isUuid(academyId)) {
-    sendJson(res, 400, { ok: false, error: 'academyId must be uuid' });
+    sendJson(res, 400, { ok: false, error: "academyId must be uuid" });
     return;
   }
-  const limit = normalizeLimit(url.searchParams.get('limit'), 100, 500);
+  const limit = normalizeLimit(url.searchParams.get("limit"), 100, 500);
   const presetKind = normalizePresetKind(
-    url.searchParams.get('presetKind') || url.searchParams.get('kind'),
-    'settings',
+    url.searchParams.get("presetKind") || url.searchParams.get("kind"),
+    "settings",
   );
   const offsetRaw = Number.parseInt(
-    String(url.searchParams.get('offset') || '0'),
+    String(url.searchParams.get("offset") || "0"),
     10,
   );
   const offset = Number.isFinite(offsetRaw) && offsetRaw > 0 ? offsetRaw : 0;
 
   let query = supa
-    .from('pb_export_presets')
+    .from("pb_export_presets")
     .select(
       [
-        'id',
-        'academy_id',
-        'source_document_id',
-        'source_document_ids',
-        'document_id',
-        'preset_kind',
-        'display_name',
-        'render_config',
-        'selected_question_uids',
-        'selected_question_ids',
-        'question_mode_by_question_uid',
-        'question_mode_by_question_id',
-        'assignment_library_order',
-        'created_at',
-        'updated_at',
-      ].join(','),
+        "id",
+        "academy_id",
+        "source_document_id",
+        "source_document_ids",
+        "document_id",
+        "preset_kind",
+        "display_name",
+        "render_config",
+        "selected_question_uids",
+        "selected_question_ids",
+        "question_mode_by_question_uid",
+        "question_mode_by_question_id",
+        "assignment_library_order",
+        "created_at",
+        "updated_at",
+      ].join(","),
     )
-    .eq('academy_id', academyId)
-    .eq('preset_kind', presetKind)
-    .order('assignment_library_order', {
+    .eq("academy_id", academyId)
+    .eq("preset_kind", presetKind)
+    .order("assignment_library_order", {
       ascending: true,
       nullsFirst: false,
     })
-    .order('created_at', { ascending: false })
+    .order("created_at", { ascending: false })
     .range(offset, offset + limit - 1);
   const { data: rows, error } = await query;
   if (error) {
-    sendJson(res, 500, { ok: false, error: `export_presets_list_failed:${error.message}` });
+    sendJson(res, 500, {
+      ok: false,
+      error: `export_presets_list_failed:${error.message}`,
+    });
     return;
   }
 
@@ -3037,11 +3303,11 @@ async function listExportPresets(url, res) {
     new Set(
       (rows || [])
         .flatMap((row) => [
-          String(row?.source_document_id || '').trim(),
+          String(row?.source_document_id || "").trim(),
           ...(Array.isArray(row?.source_document_ids)
-            ? row.source_document_ids.map((one) => String(one || '').trim())
+            ? row.source_document_ids.map((one) => String(one || "").trim())
             : []),
-          String(row?.document_id || '').trim(),
+          String(row?.document_id || "").trim(),
         ])
         .filter((id) => isUuid(id)),
     ),
@@ -3049,10 +3315,10 @@ async function listExportPresets(url, res) {
   const documentNameMap = new Map();
   for (const chunk of chunkArray(documentIds, 250)) {
     const { data: docs, error: docErr } = await supa
-      .from('pb_documents')
-      .select('id,source_filename')
-      .eq('academy_id', academyId)
-      .in('id', chunk);
+      .from("pb_documents")
+      .select("id,source_filename")
+      .eq("academy_id", academyId)
+      .in("id", chunk);
     if (docErr) {
       sendJson(res, 500, {
         ok: false,
@@ -3061,20 +3327,20 @@ async function listExportPresets(url, res) {
       return;
     }
     for (const doc of docs || []) {
-      const id = String(doc?.id || '').trim();
+      const id = String(doc?.id || "").trim();
       if (!isUuid(id)) continue;
-      documentNameMap.set(id, String(doc?.source_filename || '').trim());
+      documentNameMap.set(id, String(doc?.source_filename || "").trim());
     }
   }
 
   const presets = (rows || []).map((row) => {
-    const sourceDocumentId = String(row?.source_document_id || '').trim();
+    const sourceDocumentId = String(row?.source_document_id || "").trim();
     const sourceDocumentIds = Array.isArray(row?.source_document_ids)
       ? row.source_document_ids
-        .map((one) => String(one || '').trim())
-        .filter((id) => isUuid(id))
+          .map((one) => String(one || "").trim())
+          .filter((id) => isUuid(id))
       : [];
-    const documentId = String(row?.document_id || '').trim();
+    const documentId = String(row?.document_id || "").trim();
     const renderConfig = normalizeJsonObject(row?.render_config, {});
     const selectedQuestionUids = Array.isArray(row?.selected_question_uids)
       ? row.selected_question_uids
@@ -3082,36 +3348,38 @@ async function listExportPresets(url, res) {
     const selectedQuestionIds = Array.isArray(row?.selected_question_ids)
       ? row.selected_question_ids
       : [];
-    const fallbackName = documentNameMap.get(sourceDocumentId)
-      || documentNameMap.get(sourceDocumentIds[0])
-      || documentNameMap.get(documentId)
-      || `세팅저장 ${String(row?.created_at || '').slice(0, 10)}`;
+    const fallbackName =
+      documentNameMap.get(sourceDocumentId) ||
+      documentNameMap.get(sourceDocumentIds[0]) ||
+      documentNameMap.get(documentId) ||
+      `세팅저장 ${String(row?.created_at || "").slice(0, 10)}`;
     const questionModeByQuestionUid = normalizeJsonObject(
       row?.question_mode_by_question_uid || row?.question_mode_by_question_id,
       {},
     );
     return {
-      id: String(row?.id || '').trim(),
-      academyId: String(row?.academy_id || '').trim(),
+      id: String(row?.id || "").trim(),
+      academyId: String(row?.academy_id || "").trim(),
       sourceDocumentId,
       sourceDocumentIds,
       documentId,
-      presetKind: normalizePresetKind(row?.preset_kind, 'settings'),
-      preset_kind: normalizePresetKind(row?.preset_kind, 'settings'),
+      presetKind: normalizePresetKind(row?.preset_kind, "settings"),
+      preset_kind: normalizePresetKind(row?.preset_kind, "settings"),
       displayName: normalizePresetDisplayName(row?.display_name, fallbackName),
       sourceDocumentName:
-        documentNameMap.get(sourceDocumentId)
-        || documentNameMap.get(sourceDocumentIds[0])
-        || '',
-      documentName: documentNameMap.get(documentId) || '',
+        documentNameMap.get(sourceDocumentId) ||
+        documentNameMap.get(sourceDocumentIds[0]) ||
+        "",
+      documentName: documentNameMap.get(documentId) || "",
       selectedQuestionUids,
       selectedQuestionIds: selectedQuestionUids,
-      selectedQuestionCount: selectedQuestionUids.length || selectedQuestionIds.length,
+      selectedQuestionCount:
+        selectedQuestionUids.length || selectedQuestionIds.length,
       renderConfig,
       questionModeByQuestionUid,
       questionModeByQuestionId: questionModeByQuestionUid,
-      templateProfile: String(renderConfig.templateProfile || '').trim(),
-      paperSize: String(renderConfig.paperSize || '').trim(),
+      templateProfile: String(renderConfig.templateProfile || "").trim(),
+      paperSize: String(renderConfig.paperSize || "").trim(),
       includeAnswerSheet: renderConfig.includeAnswerSheet === true,
       includeExplanation: renderConfig.includeExplanation === true,
       includeQuestionScore: renderConfig.includeQuestionScore === true,
@@ -3135,26 +3403,26 @@ async function listExportPresets(url, res) {
 }
 
 async function renameExportPreset(presetId, body, res) {
-  const academyId = String(body?.academyId || '').trim();
+  const academyId = String(body?.academyId || "").trim();
   const displayName = normalizePresetDisplayName(body?.displayName);
   if (!isUuid(academyId) || !isUuid(presetId)) {
-    sendJson(res, 400, { ok: false, error: 'academyId/presetId must be uuid' });
+    sendJson(res, 400, { ok: false, error: "academyId/presetId must be uuid" });
     return;
   }
   if (!displayName) {
-    sendJson(res, 400, { ok: false, error: 'displayName required' });
+    sendJson(res, 400, { ok: false, error: "displayName required" });
     return;
   }
 
   const { data: preset, error: presetErr } = await supa
-    .from('pb_export_presets')
+    .from("pb_export_presets")
     .update({
       display_name: displayName,
       updated_at: new Date().toISOString(),
     })
-    .eq('id', presetId)
-    .eq('academy_id', academyId)
-    .select('*')
+    .eq("id", presetId)
+    .eq("academy_id", academyId)
+    .select("*")
     .maybeSingle();
   if (presetErr) {
     sendJson(res, 500, {
@@ -3164,7 +3432,7 @@ async function renameExportPreset(presetId, body, res) {
     return;
   }
   if (!preset) {
-    sendJson(res, 404, { ok: false, error: 'export_preset_not_found' });
+    sendJson(res, 404, { ok: false, error: "export_preset_not_found" });
     return;
   }
 
@@ -3172,26 +3440,31 @@ async function renameExportPreset(presetId, body, res) {
 }
 
 async function updateExportPresetOrder(body, res) {
-  const academyId = String(body?.academyId || '').trim();
-  const presetKind = normalizePresetKind(body?.presetKind || body?.kind, 'assignment');
+  const academyId = String(body?.academyId || "").trim();
+  const presetKind = normalizePresetKind(
+    body?.presetKind || body?.kind,
+    "assignment",
+  );
   const orderedPresetIds = Array.isArray(body?.orderedPresetIds)
-    ? body.orderedPresetIds.map((one) => String(one || '').trim()).filter((id) => isUuid(id))
+    ? body.orderedPresetIds
+        .map((one) => String(one || "").trim())
+        .filter((id) => isUuid(id))
     : [];
   if (!isUuid(academyId)) {
-    sendJson(res, 400, { ok: false, error: 'academyId must be uuid' });
+    sendJson(res, 400, { ok: false, error: "academyId must be uuid" });
     return;
   }
   if (orderedPresetIds.length === 0) {
-    sendJson(res, 400, { ok: false, error: 'orderedPresetIds required' });
+    sendJson(res, 400, { ok: false, error: "orderedPresetIds required" });
     return;
   }
 
   const { data: rows, error: lookupErr } = await supa
-    .from('pb_export_presets')
-    .select('id,render_config')
-    .eq('academy_id', academyId)
-    .eq('preset_kind', presetKind)
-    .in('id', orderedPresetIds);
+    .from("pb_export_presets")
+    .select("id,render_config")
+    .eq("academy_id", academyId)
+    .eq("preset_kind", presetKind)
+    .in("id", orderedPresetIds);
   if (lookupErr) {
     sendJson(res, 500, {
       ok: false,
@@ -3203,21 +3476,21 @@ async function updateExportPresetOrder(body, res) {
   const orderById = new Map(orderedPresetIds.map((id, index) => [id, index]));
   const now = new Date().toISOString();
   for (const row of rows || []) {
-    const id = String(row?.id || '').trim();
+    const id = String(row?.id || "").trim();
     const order = orderById.get(id);
     if (!isUuid(id) || !Number.isFinite(order)) continue;
     const renderConfig = normalizeJsonObject(row?.render_config, {});
     renderConfig.assignmentLibraryOrder = order;
     const { error: updateErr } = await supa
-      .from('pb_export_presets')
+      .from("pb_export_presets")
       .update({
         assignment_library_order: order,
         render_config: renderConfig,
         updated_at: now,
       })
-      .eq('academy_id', academyId)
-      .eq('preset_kind', presetKind)
-      .eq('id', id);
+      .eq("academy_id", academyId)
+      .eq("preset_kind", presetKind)
+      .eq("id", id);
     if (updateErr) {
       sendJson(res, 500, {
         ok: false,
@@ -3231,17 +3504,17 @@ async function updateExportPresetOrder(body, res) {
 }
 
 async function deleteExportPreset(presetId, body, res) {
-  const academyId = String(body?.academyId || '').trim();
+  const academyId = String(body?.academyId || "").trim();
   if (!isUuid(academyId) || !isUuid(presetId)) {
-    sendJson(res, 400, { ok: false, error: 'academyId/presetId must be uuid' });
+    sendJson(res, 400, { ok: false, error: "academyId/presetId must be uuid" });
     return;
   }
   const { data, error } = await supa
-    .from('pb_export_presets')
+    .from("pb_export_presets")
     .delete()
-    .eq('academy_id', academyId)
-    .eq('id', presetId)
-    .select('id')
+    .eq("academy_id", academyId)
+    .eq("id", presetId)
+    .select("id")
     .limit(1);
   if (error) {
     sendJson(res, 500, {
@@ -3251,45 +3524,48 @@ async function deleteExportPreset(presetId, body, res) {
     return;
   }
   if (!Array.isArray(data) || data.length === 0) {
-    sendJson(res, 404, { ok: false, error: 'export_preset_not_found' });
+    sendJson(res, 404, { ok: false, error: "export_preset_not_found" });
     return;
   }
   sendJson(res, 200, { ok: true, deletedPresetId: presetId });
 }
 
 async function documentSummary(url, res) {
-  const academyId = String(url.searchParams.get('academyId') || '').trim();
-  const documentId = String(url.searchParams.get('documentId') || '').trim();
+  const academyId = String(url.searchParams.get("academyId") || "").trim();
+  const documentId = String(url.searchParams.get("documentId") || "").trim();
   if (!isUuid(academyId) || !isUuid(documentId)) {
-    sendJson(res, 400, { ok: false, error: 'academyId/documentId must be uuid' });
+    sendJson(res, 400, {
+      ok: false,
+      error: "academyId/documentId must be uuid",
+    });
     return;
   }
   const doc = await ensureDocumentBelongs(academyId, documentId);
   if (!doc) {
-    sendJson(res, 404, { ok: false, error: 'document_not_found' });
+    sendJson(res, 404, { ok: false, error: "document_not_found" });
     return;
   }
   const { data: latestExtractJob } = await supa
-    .from('pb_extract_jobs')
-    .select('*')
-    .eq('academy_id', academyId)
-    .eq('document_id', documentId)
-    .order('created_at', { ascending: false })
+    .from("pb_extract_jobs")
+    .select("*")
+    .eq("academy_id", academyId)
+    .eq("document_id", documentId)
+    .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
   const { data: latestExportJob } = await supa
-    .from('pb_exports')
-    .select('*')
-    .eq('academy_id', academyId)
-    .eq('document_id', documentId)
-    .order('created_at', { ascending: false })
+    .from("pb_exports")
+    .select("*")
+    .eq("academy_id", academyId)
+    .eq("document_id", documentId)
+    .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
   const { count: questionCount } = await supa
-    .from('pb_questions')
-    .select('id', { count: 'exact', head: true })
-    .eq('academy_id', academyId)
-    .eq('document_id', documentId);
+    .from("pb_questions")
+    .select("id", { count: "exact", head: true })
+    .eq("academy_id", academyId)
+    .eq("document_id", documentId);
 
   sendJson(res, 200, {
     ok: true,
@@ -3310,19 +3586,19 @@ async function documentSummary(url, res) {
 // ---------------------------------------------------------------------------
 async function generateObjectiveForQuestion(questionId, body, res) {
   if (!isUuid(questionId)) {
-    sendJson(res, 400, { ok: false, error: 'questionId must be uuid' });
+    sendJson(res, 400, { ok: false, error: "questionId must be uuid" });
     return;
   }
   const force = body?.force === true;
 
   const { data: row, error: fetchError } = await supa
-    .from('pb_questions')
+    .from("pb_questions")
     .select(
-      'id,academy_id,document_id,question_number,question_type,stem,' +
-        'allow_objective,allow_subjective,objective_choices,objective_answer_key,' +
-        'objective_generated,subjective_answer,flags,source_type_code,meta',
+      "id,academy_id,document_id,question_number,question_type,stem," +
+        "allow_objective,allow_subjective,objective_choices,objective_answer_key," +
+        "objective_generated,subjective_answer,flags,source_type_code,meta",
     )
-    .eq('id', questionId)
+    .eq("id", questionId)
     .maybeSingle();
 
   if (fetchError) {
@@ -3333,24 +3609,23 @@ async function generateObjectiveForQuestion(questionId, body, res) {
     return;
   }
   if (!row) {
-    sendJson(res, 404, { ok: false, error: 'question_not_found' });
+    sendJson(res, 404, { ok: false, error: "question_not_found" });
     return;
   }
 
   const existingChoices = Array.isArray(row.objective_choices)
     ? row.objective_choices
     : [];
-  const existingAnswerKey = String(row.objective_answer_key || '').trim();
+  const existingAnswerKey = String(row.objective_answer_key || "").trim();
   const hasUsableChoices =
-    existingChoices.filter((c) =>
-      String(c?.text || '').trim().length > 0,
-    ).length >= 2 && existingAnswerKey.length > 0;
+    existingChoices.filter((c) => String(c?.text || "").trim().length > 0)
+      .length >= 2 && existingAnswerKey.length > 0;
 
   if (!force && hasUsableChoices) {
     sendJson(res, 200, {
       ok: true,
       skipped: true,
-      reason: 'choices_already_exist',
+      reason: "choices_already_exist",
       objective_choices: existingChoices,
       objective_answer_key: existingAnswerKey,
       objective_generated: row.objective_generated === true,
@@ -3360,14 +3635,14 @@ async function generateObjectiveForQuestion(questionId, body, res) {
   }
 
   const examProfileHint =
-    row.source_type_code === 'susi_sunsi' ? 'susi_sunsi' : 'naesin';
+    row.source_type_code === "susi_sunsi" ? "susi_sunsi" : "naesin";
 
   let draft;
   try {
     draft = await generateObjectiveDraftForQuestion({
-      questionNumber: row.question_number || '1',
-      stem: row.stem || '',
-      subjectiveAnswer: row.subjective_answer || '',
+      questionNumber: row.question_number || "1",
+      stem: row.stem || "",
+      subjectiveAnswer: row.subjective_answer || "",
       examProfileHint,
     });
   } catch (err) {
@@ -3378,16 +3653,24 @@ async function generateObjectiveForQuestion(questionId, body, res) {
     return;
   }
 
-  if (!draft || !Array.isArray(draft.choices) || draft.choices.length < 5 || !draft.answerKey) {
+  if (
+    !draft ||
+    !Array.isArray(draft.choices) ||
+    draft.choices.length < 5 ||
+    !draft.answerKey
+  ) {
     // 생성 실패 — DB 는 건드리지 않는다. 매니저 UI 가 스낵바로 알림.
     const flags = Array.from(
-      new Set([...(Array.isArray(row.flags) ? row.flags : []), 'objective_generation_failed']),
+      new Set([
+        ...(Array.isArray(row.flags) ? row.flags : []),
+        "objective_generation_failed",
+      ]),
     );
     sendJson(res, 200, {
       ok: true,
       skipped: false,
       success: false,
-      error: draft?.error || 'insufficient_choices',
+      error: draft?.error || "insufficient_choices",
       flags,
     });
     return;
@@ -3395,14 +3678,18 @@ async function generateObjectiveForQuestion(questionId, body, res) {
 
   const generated = draft.generated === true || draft.usedFallback === true;
   const prevFlags = Array.isArray(row.flags) ? row.flags : [];
-  const flagSet = new Set(prevFlags.filter(
-    (f) => f !== 'objective_generation_failed' && f !== 'objective_generation_error',
-  ));
-  if (draft.usedFallback) flagSet.add('objective_generated_fallback');
-  if (draft.error) flagSet.add('objective_generation_warning');
+  const flagSet = new Set(
+    prevFlags.filter(
+      (f) =>
+        f !== "objective_generation_failed" &&
+        f !== "objective_generation_error",
+    ),
+  );
+  if (draft.usedFallback) flagSet.add("objective_generated_fallback");
+  if (draft.error) flagSet.add("objective_generation_warning");
   const newFlags = Array.from(flagSet);
 
-  const prevMeta = row.meta && typeof row.meta === 'object' ? row.meta : {};
+  const prevMeta = row.meta && typeof row.meta === "object" ? row.meta : {};
   const newMeta = {
     ...prevMeta,
     allow_objective: true,
@@ -3411,7 +3698,7 @@ async function generateObjectiveForQuestion(questionId, body, res) {
   };
 
   const { data: updated, error: updateError } = await supa
-    .from('pb_questions')
+    .from("pb_questions")
     .update({
       allow_objective: true,
       objective_choices: draft.choices,
@@ -3420,9 +3707,9 @@ async function generateObjectiveForQuestion(questionId, body, res) {
       flags: newFlags,
       meta: newMeta,
     })
-    .eq('id', questionId)
+    .eq("id", questionId)
     .select(
-      'id,allow_objective,objective_choices,objective_answer_key,objective_generated,flags,meta',
+      "id,allow_objective,objective_choices,objective_answer_key,objective_generated,flags,meta",
     )
     .single();
 
@@ -3448,42 +3735,45 @@ async function generateObjectiveForQuestion(questionId, body, res) {
 }
 
 async function listQuestions(url, res) {
-  const academyId = String(url.searchParams.get('academyId') || '').trim();
+  const academyId = String(url.searchParams.get("academyId") || "").trim();
   if (!isUuid(academyId)) {
-    sendJson(res, 400, { ok: false, error: 'academyId must be uuid' });
+    sendJson(res, 400, { ok: false, error: "academyId must be uuid" });
     return;
   }
 
-  const documentId = String(url.searchParams.get('documentId') || '').trim();
+  const documentId = String(url.searchParams.get("documentId") || "").trim();
   const curriculumCode = normalizeCurriculumCode(
-    url.searchParams.get('curriculumCode'),
+    url.searchParams.get("curriculumCode"),
   );
   const sourceTypeCode = normalizeSourceTypeCode(
-    url.searchParams.get('sourceTypeCode'),
+    url.searchParams.get("sourceTypeCode"),
   );
-  const gradeLabel = String(url.searchParams.get('gradeLabel') || '').trim();
-  const schoolName = String(url.searchParams.get('schoolName') || '').trim();
-  const questionType = String(url.searchParams.get('questionType') || '').trim();
-  const examYearRaw = String(url.searchParams.get('examYear') || '').trim();
+  const gradeLabel = String(url.searchParams.get("gradeLabel") || "").trim();
+  const schoolName = String(url.searchParams.get("schoolName") || "").trim();
+  const questionType = String(
+    url.searchParams.get("questionType") || "",
+  ).trim();
+  const examYearRaw = String(url.searchParams.get("examYear") || "").trim();
   const examYear = Number.parseInt(examYearRaw, 10);
-  const limit = normalizeLimit(url.searchParams.get('limit'), 80, 400);
+  const limit = normalizeLimit(url.searchParams.get("limit"), 80, 400);
   const offsetRaw = Number.parseInt(
-    String(url.searchParams.get('offset') || '0'),
+    String(url.searchParams.get("offset") || "0"),
     10,
   );
   const offset = Number.isFinite(offsetRaw) && offsetRaw > 0 ? offsetRaw : 0;
 
-  let q = supa.from('pb_questions').select('*').eq('academy_id', academyId);
-  if (documentId) q = q.eq('document_id', documentId);
-  if (curriculumCode) q = q.eq('curriculum_code', curriculumCode);
-  if (sourceTypeCode) q = q.eq('source_type_code', sourceTypeCode);
-  if (gradeLabel) q = q.ilike('grade_label', `%${gradeLabel}%`);
-  if (schoolName) q = q.ilike('school_name', `%${schoolName}%`);
-  if (questionType) q = q.eq('question_type', questionType);
-  if (Number.isFinite(examYear) && examYear > 0) q = q.eq('exam_year', examYear);
+  let q = supa.from("pb_questions").select("*").eq("academy_id", academyId);
+  if (documentId) q = q.eq("document_id", documentId);
+  if (curriculumCode) q = q.eq("curriculum_code", curriculumCode);
+  if (sourceTypeCode) q = q.eq("source_type_code", sourceTypeCode);
+  if (gradeLabel) q = q.ilike("grade_label", `%${gradeLabel}%`);
+  if (schoolName) q = q.ilike("school_name", `%${schoolName}%`);
+  if (questionType) q = q.eq("question_type", questionType);
+  if (Number.isFinite(examYear) && examYear > 0)
+    q = q.eq("exam_year", examYear);
 
   q = q
-    .order('created_at', { ascending: false })
+    .order("created_at", { ascending: false })
     .range(offset, offset + limit - 1);
 
   const { data, error } = await q;
@@ -3497,21 +3787,28 @@ async function listQuestions(url, res) {
 
   let questions = data || [];
   const includeDeliveryUnits =
-    String(url.searchParams.get('include_delivery_units') || '').trim() === '1' ||
-    String(url.searchParams.get('includeDeliveryUnits') || '').trim() === '1';
+    String(url.searchParams.get("include_delivery_units") || "").trim() ===
+      "1" ||
+    String(url.searchParams.get("includeDeliveryUnits") || "").trim() === "1";
   if (includeDeliveryUnits && questions.length > 0) {
     try {
       let unitQ = supa
-        .from('pb_delivery_units')
-        .select('id,source_document_id,set_id,question_id,delivery_key,delivery_type,title,selectable,item_refs,render_policy,source_meta')
-        .eq('academy_id', academyId);
-      if (documentId) unitQ = unitQ.eq('source_document_id', documentId);
-      else unitQ = unitQ.in('question_id', questions.map((qRow) => qRow.id).filter(Boolean));
+        .from("pb_delivery_units")
+        .select(
+          "id,source_document_id,set_id,question_id,delivery_key,delivery_type,title,selectable,item_refs,render_policy,source_meta",
+        )
+        .eq("academy_id", academyId);
+      if (documentId) unitQ = unitQ.eq("source_document_id", documentId);
+      else
+        unitQ = unitQ.in(
+          "question_id",
+          questions.map((qRow) => qRow.id).filter(Boolean),
+        );
       const { data: units, error: unitErr } = await unitQ;
       if (!unitErr && Array.isArray(units) && units.length > 0) {
         const byQuestion = new Map();
         for (const unit of units) {
-          const qid = String(unit?.question_id || '').trim();
+          const qid = String(unit?.question_id || "").trim();
           if (!qid) continue;
           const bucket = byQuestion.get(qid) || [];
           bucket.push(unit);
@@ -3519,7 +3816,7 @@ async function listQuestions(url, res) {
         }
         questions = questions.map((qRow) => ({
           ...qRow,
-          delivery_units: byQuestion.get(String(qRow.id || '').trim()) || [],
+          delivery_units: byQuestion.get(String(qRow.id || "").trim()) || [],
         }));
       }
     } catch (_) {
@@ -3536,31 +3833,41 @@ async function listQuestions(url, res) {
 
 async function previewQuestions(res, req) {
   let body;
-  try { body = await readJson(req); } catch (_) {
-    sendJson(res, 400, { ok: false, error: 'invalid_json' });
+  try {
+    body = await readJson(req);
+  } catch (_) {
+    sendJson(res, 400, { ok: false, error: "invalid_json" });
     return;
   }
 
-  const academyId = String(body?.academyId || '').trim();
-  const questionIds = Array.isArray(body?.questionIds) ? body.questionIds.map(String) : [];
+  const academyId = String(body?.academyId || "").trim();
+  const questionIds = Array.isArray(body?.questionIds)
+    ? body.questionIds.map(String)
+    : [];
   const layout = body?.layout || {};
   const renderConfig = body?.renderConfig || {};
   const force = body?.force === true;
-  const mathEngine = body?.mathEngine || 'xelatex';
+  const mathEngine = body?.mathEngine || "xelatex";
 
   if (!academyId || questionIds.length === 0) {
-    sendJson(res, 400, { ok: false, error: 'academyId and questionIds[] required' });
+    sendJson(res, 400, {
+      ok: false,
+      error: "academyId and questionIds[] required",
+    });
     return;
   }
 
   const { data: rows, error: fetchErr } = await supa
-    .from('pb_questions')
-    .select('*')
-    .eq('academy_id', academyId)
-    .in('id', questionIds);
+    .from("pb_questions")
+    .select("*")
+    .eq("academy_id", academyId)
+    .in("id", questionIds);
 
   if (fetchErr) {
-    sendJson(res, 500, { ok: false, error: `fetch_failed:${fetchErr.message}` });
+    sendJson(res, 500, {
+      ok: false,
+      error: `fetch_failed:${fetchErr.message}`,
+    });
     return;
   }
 
@@ -3576,62 +3883,81 @@ async function previewQuestions(res, req) {
     });
     sendJson(res, 200, { ok: true, previews });
   } catch (err) {
-    sendJson(res, 500, { ok: false, error: `preview_failed:${compact(err?.message || err)}` });
+    sendJson(res, 500, {
+      ok: false,
+      error: `preview_failed:${compact(err?.message || err)}`,
+    });
   }
 }
 
 async function previewHtml(res, req) {
   let body;
-  try { body = await readJson(req); } catch (_) {
-    sendJson(res, 400, { ok: false, error: 'invalid_json' });
+  try {
+    body = await readJson(req);
+  } catch (_) {
+    sendJson(res, 400, { ok: false, error: "invalid_json" });
     return;
   }
 
-  const academyId = String(body?.academyId || '').trim();
-  const questionIds = Array.isArray(body?.questionIds) ? body.questionIds.map(String) : [];
+  const academyId = String(body?.academyId || "").trim();
+  const questionIds = Array.isArray(body?.questionIds)
+    ? body.questionIds.map(String)
+    : [];
   const layout = body?.layout || {};
-  const mode = String(body?.mode || 'single');
+  const mode = String(body?.mode || "single");
 
-  if (mode === 'document') {
+  if (mode === "document") {
     try {
       const { data: rows, error: fetchErr } = await supa
-        .from('pb_questions')
-        .select('*')
-        .eq('academy_id', academyId)
-        .in('id', questionIds);
+        .from("pb_questions")
+        .select("*")
+        .eq("academy_id", academyId)
+        .in("id", questionIds);
       if (fetchErr) {
-        sendJson(res, 500, { ok: false, error: `fetch_failed:${fetchErr.message}` });
+        sendJson(res, 500, {
+          ok: false,
+          error: `fetch_failed:${fetchErr.message}`,
+        });
         return;
       }
       const html = await buildDocumentHtmlForPreview({
         questions: rows || [],
         renderConfig: body?.renderConfig || {},
-        profile: body?.profile || 'naesin',
-        paper: body?.paper || 'B4',
+        profile: body?.profile || "naesin",
+        paper: body?.paper || "B4",
         baseLayout: body?.baseLayout || {},
         maxQuestionsPerPage: body?.maxQuestionsPerPage || 4,
         supabaseClient: supa,
       });
       sendJson(res, 200, { ok: true, html });
     } catch (err) {
-      sendJson(res, 500, { ok: false, error: `html_failed:${compact(err?.message || err)}` });
+      sendJson(res, 500, {
+        ok: false,
+        error: `html_failed:${compact(err?.message || err)}`,
+      });
     }
     return;
   }
 
   if (!academyId || questionIds.length === 0) {
-    sendJson(res, 400, { ok: false, error: 'academyId and questionIds[] required' });
+    sendJson(res, 400, {
+      ok: false,
+      error: "academyId and questionIds[] required",
+    });
     return;
   }
 
   const { data: rows, error: fetchErr } = await supa
-    .from('pb_questions')
-    .select('*')
-    .eq('academy_id', academyId)
-    .in('id', questionIds);
+    .from("pb_questions")
+    .select("*")
+    .eq("academy_id", academyId)
+    .in("id", questionIds);
 
   if (fetchErr) {
-    sendJson(res, 500, { ok: false, error: `fetch_failed:${fetchErr.message}` });
+    sendJson(res, 500, {
+      ok: false,
+      error: `fetch_failed:${fetchErr.message}`,
+    });
     return;
   }
 
@@ -3643,33 +3969,46 @@ async function previewHtml(res, req) {
     });
     sendJson(res, 200, { ok: true, questions: results });
   } catch (err) {
-    sendJson(res, 500, { ok: false, error: `html_failed:${compact(err?.message || err)}` });
+    sendJson(res, 500, {
+      ok: false,
+      error: `html_failed:${compact(err?.message || err)}`,
+    });
   }
 }
 
 async function previewUrls(res, req) {
   let body;
-  try { body = await readJson(req); } catch (_) {
-    sendJson(res, 400, { ok: false, error: 'invalid_json' });
+  try {
+    body = await readJson(req);
+  } catch (_) {
+    sendJson(res, 400, { ok: false, error: "invalid_json" });
     return;
   }
 
-  const academyId = String(body?.academyId || '').trim();
-  const questionIds = Array.isArray(body?.questionIds) ? body.questionIds.map(String) : [];
+  const academyId = String(body?.academyId || "").trim();
+  const questionIds = Array.isArray(body?.questionIds)
+    ? body.questionIds.map(String)
+    : [];
 
   if (!academyId || questionIds.length === 0) {
-    sendJson(res, 400, { ok: false, error: 'academyId and questionIds[] required' });
+    sendJson(res, 400, {
+      ok: false,
+      error: "academyId and questionIds[] required",
+    });
     return;
   }
 
   const { data: rows, error: fetchErr } = await supa
-    .from('pb_questions')
-    .select('id,stem,choices,equations,figure_refs,meta')
-    .eq('academy_id', academyId)
-    .in('id', questionIds);
+    .from("pb_questions")
+    .select("id,stem,choices,equations,figure_refs,meta")
+    .eq("academy_id", academyId)
+    .in("id", questionIds);
 
   if (fetchErr) {
-    sendJson(res, 500, { ok: false, error: `fetch_failed:${fetchErr.message}` });
+    sendJson(res, 500, {
+      ok: false,
+      error: `fetch_failed:${fetchErr.message}`,
+    });
     return;
   }
 
@@ -3678,24 +4017,29 @@ async function previewUrls(res, req) {
       questions: rows || [],
       academyId,
       supabaseClient: supa,
-      mathEngine: body?.mathEngine || 'xelatex',
+      mathEngine: body?.mathEngine || "xelatex",
       renderConfig: body?.renderConfig || {},
     });
     sendJson(res, 200, { ok: true, previews });
   } catch (err) {
-    sendJson(res, 500, { ok: false, error: `urls_failed:${compact(err?.message || err)}` });
+    sendJson(res, 500, {
+      ok: false,
+      error: `urls_failed:${compact(err?.message || err)}`,
+    });
   }
 }
 
 function inferQuestionModeFromRow(row) {
-  const rawType = String(row?.question_type || row?.questionType || '')
-    .replace(/\s+/g, '')
+  const rawType = String(row?.question_type || row?.questionType || "")
+    .replace(/\s+/g, "")
     .toLowerCase();
-  if (rawType.includes('서술') || rawType.includes('essay')) return 'essay';
-  if (rawType.includes('객관') || rawType.includes('objective')) return 'objective';
-  if (rawType.includes('주관') || rawType.includes('subjective')) return 'subjective';
+  if (rawType.includes("서술") || rawType.includes("essay")) return "essay";
+  if (rawType.includes("객관") || rawType.includes("objective"))
+    return "objective";
+  if (rawType.includes("주관") || rawType.includes("subjective"))
+    return "subjective";
   const choices = Array.isArray(row?.choices) ? row.choices : [];
-  return choices.length >= 2 ? 'objective' : 'subjective';
+  return choices.length >= 2 ? "objective" : "subjective";
 }
 
 async function previewPdfArtifacts(res, req) {
@@ -3703,61 +4047,66 @@ async function previewPdfArtifacts(res, req) {
   try {
     body = await readJson(req);
   } catch (_) {
-    sendJson(res, 400, { ok: false, error: 'invalid_json' });
+    sendJson(res, 400, { ok: false, error: "invalid_json" });
     return;
   }
 
-  const academyId = String(body?.academyId || '').trim();
+  const academyId = String(body?.academyId || "").trim();
   const rawQuestionIds = Array.isArray(body?.questionIds)
-    ? body.questionIds.map((v) => String(v || '').trim())
+    ? body.questionIds.map((v) => String(v || "").trim())
     : [];
   const invalidQuestionIds = rawQuestionIds.filter((id) => !isUuid(id));
   const questionIds = normalizeUuidListOrdered(rawQuestionIds);
-  const requestedDocumentId = String(body?.documentId || '').trim();
+  const requestedDocumentId = String(body?.documentId || "").trim();
   const createJobs = body?.createJobs !== false;
 
   if (!isUuid(academyId) || questionIds.length === 0) {
     sendJson(res, 400, {
       ok: false,
-      error: 'academyId must be uuid and questionIds[] must be non-empty',
+      error: "academyId must be uuid and questionIds[] must be non-empty",
     });
     return;
   }
   if (invalidQuestionIds.length > 0) {
-    sendJson(res, 400, { ok: false, error: 'questionIds must be uuid[]' });
+    sendJson(res, 400, { ok: false, error: "questionIds must be uuid[]" });
     return;
   }
   if (requestedDocumentId && !isUuid(requestedDocumentId)) {
-    sendJson(res, 400, { ok: false, error: 'documentId must be uuid' });
+    sendJson(res, 400, { ok: false, error: "documentId must be uuid" });
     return;
   }
   if (requestedDocumentId) {
     const doc = await ensureDocumentBelongs(academyId, requestedDocumentId);
     if (!doc) {
-      sendJson(res, 404, { ok: false, error: 'document_not_found' });
+      sendJson(res, 404, { ok: false, error: "document_not_found" });
       return;
     }
   }
 
   const { data: questionRowsById, error: fetchErr } = await supa
-    .from('pb_questions')
-    .select('id,question_uid,document_id,question_type,choices')
-    .eq('academy_id', academyId)
-    .in('id', questionIds);
+    .from("pb_questions")
+    .select("id,question_uid,document_id,question_type,choices")
+    .eq("academy_id", academyId)
+    .in("id", questionIds);
   if (fetchErr) {
-    sendJson(res, 500, { ok: false, error: `fetch_failed:${fetchErr.message}` });
+    sendJson(res, 500, {
+      ok: false,
+      error: `fetch_failed:${fetchErr.message}`,
+    });
     return;
   }
 
   let questionRows = questionRowsById || [];
-  const foundById = new Set(questionRows.map((r) => String(r?.id || '').trim()));
+  const foundById = new Set(
+    questionRows.map((r) => String(r?.id || "").trim()),
+  );
   const missingByIdIds = questionIds.filter((id) => !foundById.has(id));
   if (missingByIdIds.length > 0) {
     const { data: byUidRows } = await supa
-      .from('pb_questions')
-      .select('id,question_uid,document_id,question_type,choices')
-      .eq('academy_id', academyId)
-      .in('question_uid', missingByIdIds);
+      .from("pb_questions")
+      .select("id,question_uid,document_id,question_type,choices")
+      .eq("academy_id", academyId)
+      .in("question_uid", missingByIdIds);
     if (byUidRows && byUidRows.length > 0) {
       questionRows = [...questionRows, ...byUidRows];
     }
@@ -3765,8 +4114,8 @@ async function previewPdfArtifacts(res, req) {
 
   const rowById = new Map();
   for (const row of questionRows) {
-    const id = String(row?.id || '').trim();
-    const uid = String(row?.question_uid || '').trim();
+    const id = String(row?.id || "").trim();
+    const uid = String(row?.question_uid || "").trim();
     if (id) rowById.set(id, row);
     if (uid && uid !== id) rowById.set(uid, row);
   }
@@ -3778,9 +4127,13 @@ async function previewPdfArtifacts(res, req) {
   const templateProfile = normalizeTemplateProfile(
     body?.templateProfile || body?.profile || baseOptions.templateProfile,
   );
-  const storageTemplateProfile = templateProfileForPbExportsColumn(templateProfile);
+  const storageTemplateProfile =
+    templateProfileForPbExportsColumn(templateProfile);
   const paperSize = normalizePaper(
-    body?.paperSize || body?.paper || baseOptions.paperSize || baseOptions.paper,
+    body?.paperSize ||
+      body?.paper ||
+      baseOptions.paperSize ||
+      baseOptions.paper,
   );
   const includeAnswerSheet = normalizeBool(
     body?.includeAnswerSheet ?? baseOptions.includeAnswerSheet,
@@ -3791,7 +4144,7 @@ async function previewPdfArtifacts(res, req) {
     false,
   );
   const forcedMathEngine = normalizeMathEngine(
-    body?.mathEngine || baseOptions.mathEngine || 'xelatex',
+    body?.mathEngine || baseOptions.mathEngine || "xelatex",
   );
 
   const descriptors = [];
@@ -3801,36 +4154,36 @@ async function previewPdfArtifacts(res, req) {
     if (!row) {
       immediateArtifacts.push({
         questionId,
-        questionUid: '',
-        status: 'failed',
-        jobId: '',
+        questionUid: "",
+        status: "failed",
+        jobId: "",
         previewOnly: true,
-        pdfUrl: '',
-        thumbnailUrl: '',
-        thumbnailBucket: '',
-        thumbnailPath: '',
+        pdfUrl: "",
+        thumbnailUrl: "",
+        thumbnailBucket: "",
+        thumbnailPath: "",
         thumbnailWidth: 0,
         thumbnailHeight: 0,
-        error: 'question_not_found',
+        error: "question_not_found",
       });
       continue;
     }
-    const questionUid = String(row?.question_uid || row?.id || '').trim();
-    const questionDocumentId = String(row?.document_id || '').trim();
+    const questionUid = String(row?.question_uid || row?.id || "").trim();
+    const questionDocumentId = String(row?.document_id || "").trim();
     if (!questionUid || !questionDocumentId) {
       immediateArtifacts.push({
         questionId,
         questionUid,
-        status: 'failed',
-        jobId: '',
+        status: "failed",
+        jobId: "",
         previewOnly: true,
-        pdfUrl: '',
-        thumbnailUrl: '',
-        thumbnailBucket: '',
-        thumbnailPath: '',
+        pdfUrl: "",
+        thumbnailUrl: "",
+        thumbnailBucket: "",
+        thumbnailPath: "",
         thumbnailWidth: 0,
         thumbnailHeight: 0,
-        error: 'invalid_question_row',
+        error: "invalid_question_row",
       });
       continue;
     }
@@ -3838,16 +4191,16 @@ async function previewPdfArtifacts(res, req) {
       immediateArtifacts.push({
         questionId,
         questionUid,
-        status: 'failed',
-        jobId: '',
+        status: "failed",
+        jobId: "",
         previewOnly: true,
-        pdfUrl: '',
-        thumbnailUrl: '',
-        thumbnailBucket: '',
-        thumbnailPath: '',
+        pdfUrl: "",
+        thumbnailUrl: "",
+        thumbnailBucket: "",
+        thumbnailPath: "",
         thumbnailWidth: 0,
         thumbnailHeight: 0,
-        error: 'question_document_mismatch',
+        error: "question_document_mismatch",
       });
       continue;
     }
@@ -3857,12 +4210,13 @@ async function previewPdfArtifacts(res, req) {
     const sourceDocumentIds = [questionDocumentId];
     const optionsForRender = {
       ...baseOptions,
-      questionMode: baseOptions.questionMode || baseOptions.question_mode || inferredMode,
+      questionMode:
+        baseOptions.questionMode || baseOptions.question_mode || inferredMode,
       layoutColumns:
         baseOptions.layoutColumns ||
         baseOptions.layout_columns ||
         baseOptions.columns ||
-        (templateProfile === 'mock' || templateProfile === 'csat' ? 2 : 1),
+        (templateProfile === "mock" || templateProfile === "csat" ? 2 : 1),
       maxQuestionsPerPage:
         baseOptions.maxQuestionsPerPage ||
         baseOptions.max_questions_per_page ||
@@ -3877,11 +4231,15 @@ async function previewPdfArtifacts(res, req) {
       includeExplanation,
       mathEngine: forcedMathEngine,
     };
-    const renderConfig = normalizeExportRenderConfig(optionsForRender, selectedQuestionUids, {
-      questionMode: optionsForRender.questionMode,
-      layoutColumns: optionsForRender.layoutColumns,
-      maxQuestionsPerPage: optionsForRender.maxQuestionsPerPage,
-    });
+    const renderConfig = normalizeExportRenderConfig(
+      optionsForRender,
+      selectedQuestionUids,
+      {
+        questionMode: optionsForRender.questionMode,
+        layoutColumns: optionsForRender.layoutColumns,
+        maxQuestionsPerPage: optionsForRender.maxQuestionsPerPage,
+      },
+    );
     if (!renderConfig.mathEngine) {
       renderConfig.mathEngine = forcedMathEngine;
     }
@@ -3914,7 +4272,7 @@ async function previewPdfArtifacts(res, req) {
         academy_id: academyId,
         document_id: questionDocumentId,
         requested_by: null,
-        status: 'queued',
+        status: "queued",
         template_profile: storageTemplateProfile,
         paper_size: paperSize,
         include_answer_sheet: includeAnswerSheet,
@@ -3923,13 +4281,13 @@ async function previewPdfArtifacts(res, req) {
         render_hash: renderHash,
         preview_only: true,
         options,
-        output_storage_bucket: 'problem-exports',
-        output_storage_path: '',
-        output_url: '',
+        output_storage_bucket: "problem-exports",
+        output_storage_path: "",
+        output_url: "",
         page_count: 0,
-        worker_name: '',
-        error_code: '',
-        error_message: '',
+        worker_name: "",
+        error_code: "",
+        error_message: "",
         started_at: null,
         finished_at: null,
       },
@@ -3943,18 +4301,20 @@ async function previewPdfArtifacts(res, req) {
   const artifacts = [...immediateArtifacts];
   for (const one of descriptors) {
     let job = existingByHash.get(one.renderHash) || null;
-    const status = String(job?.status || '').trim().toLowerCase();
+    const status = String(job?.status || "")
+      .trim()
+      .toLowerCase();
     const existingThumb = extractPreviewThumbnailMeta(job?.result_summary);
     const completedThumbBroken =
-      status === 'completed'
-      && !existingThumb.path
-      && !existingThumb.url
-      && String(existingThumb.error || '').trim().length > 0;
+      status === "completed" &&
+      !existingThumb.path &&
+      !existingThumb.url &&
+      String(existingThumb.error || "").trim().length > 0;
     const shouldCreateNew =
       !job ||
-      status === 'failed' ||
-      status === 'cancelled' ||
-      status === 'error' ||
+      status === "failed" ||
+      status === "cancelled" ||
+      status === "error" ||
       completedThumbBroken;
     if (shouldCreateNew && createJobs) {
       try {
@@ -3963,13 +4323,13 @@ async function previewPdfArtifacts(res, req) {
         artifacts.push({
           questionId: one.questionId,
           questionUid: one.questionUid,
-          status: 'failed',
-          jobId: '',
+          status: "failed",
+          jobId: "",
           previewOnly: true,
-          pdfUrl: '',
-          thumbnailUrl: '',
-          thumbnailBucket: '',
-          thumbnailPath: '',
+          pdfUrl: "",
+          thumbnailUrl: "",
+          thumbnailBucket: "",
+          thumbnailPath: "",
           thumbnailWidth: 0,
           thumbnailHeight: 0,
           error: compact(err?.message || err),
@@ -3981,16 +4341,16 @@ async function previewPdfArtifacts(res, req) {
       artifacts.push({
         questionId: one.questionId,
         questionUid: one.questionUid,
-        status: 'queued',
-        jobId: '',
+        status: "queued",
+        jobId: "",
         previewOnly: true,
-        pdfUrl: '',
-        thumbnailUrl: '',
-        thumbnailBucket: '',
-        thumbnailPath: '',
+        pdfUrl: "",
+        thumbnailUrl: "",
+        thumbnailBucket: "",
+        thumbnailPath: "",
         thumbnailWidth: 0,
         thumbnailHeight: 0,
-        error: createJobs ? 'job_unavailable' : '',
+        error: createJobs ? "job_unavailable" : "",
       });
       continue;
     }
@@ -4004,8 +4364,12 @@ async function previewPdfArtifacts(res, req) {
   }
 
   const hasPending = artifacts.some((one) => {
-    const status = String(one?.status || '').trim().toLowerCase();
-    return status === 'queued' || status === 'running' || status === 'processing';
+    const status = String(one?.status || "")
+      .trim()
+      .toLowerCase();
+    return (
+      status === "queued" || status === "running" || status === "processing"
+    );
   });
   sendJson(res, 200, {
     ok: true,
@@ -4014,43 +4378,54 @@ async function previewPdfArtifacts(res, req) {
   });
 }
 
-const BATCH_THUMB_BUCKET = process.env.PB_PREVIEW_THUMB_BUCKET || 'problem-previews';
+const BATCH_THUMB_BUCKET =
+  process.env.PB_PREVIEW_THUMB_BUCKET || "problem-previews";
 const BATCH_THUMB_WIDTH_PX = 820;
 const BATCH_THUMB_EXPIRES_SEC = 60 * 60 * 24 * 7;
-const ANSWER_RENDER_BUCKET = process.env.PB_ANSWER_RENDER_BUCKET || 'problem-previews';
+const ANSWER_RENDER_BUCKET =
+  process.env.PB_ANSWER_RENDER_BUCKET || "problem-previews";
 const ANSWER_RENDER_EXPIRES_SEC = 60 * 60 * 24 * 7;
-const ANSWER_RENDER_STYLE_VERSION = 'answer-xelatex-v6-rightsheet-bold-hires';
+const ANSWER_RENDER_STYLE_VERSION = "answer-xelatex-v6-rightsheet-bold-hires";
 const ANSWER_RENDER_PIXEL_RATIO = 8;
 // 답지가 코너·소단원 블록으로 쪼개져 번호가 블록마다 1번부터 다시 시작하는
 // 시리즈. 기대 항목마다 코너·본문 페이지 배지를 함께 보내 대조한다.
-const ANSWER_BADGE_SERIES = new Set(['gaeyu', 'suryeok']);
+const ANSWER_BADGE_SERIES = new Set(["gaeyu", "suryeok"]);
 const TEXTBOOK_ANSWER_RENDER_BUCKET =
-  process.env.TEXTBOOK_ANSWER_RENDER_BUCKET || 'textbook-answer-renders';
-const TEXTBOOK_ANSWER_RENDER_STYLE_VERSION = 'textbook-answer-xelatex-v2-hires';
-const TEXTBOOK_ANSWER_RENDER_ENGINE = 'xelatex';
+  process.env.TEXTBOOK_ANSWER_RENDER_BUCKET || "textbook-answer-renders";
+const TEXTBOOK_ANSWER_RENDER_STYLE_VERSION = "textbook-answer-xelatex-v2-hires";
+const TEXTBOOK_ANSWER_RENDER_ENGINE = "xelatex";
 const TEXTBOOK_ANSWER_RENDER_FONT_SIZE = 17;
-const TEXTBOOK_ANSWER_RENDER_TEXT_COLOR = 'EAF2F7';
+const TEXTBOOK_ANSWER_RENDER_TEXT_COLOR = "EAF2F7";
 const TEXTBOOK_ANSWER_RENDER_PIXEL_RATIO = 6;
 const UNIFIED_ANSWER_RENDER_BUCKET =
-  process.env.UNIFIED_ANSWER_RENDER_BUCKET || 'answer-renders';
+  process.env.UNIFIED_ANSWER_RENDER_BUCKET || "answer-renders";
 const UNIFIED_ANSWER_RENDER_STYLE_VERSION =
-  process.env.UNIFIED_ANSWER_RENDER_STYLE_VERSION || 'answer-xelatex-v10-rightsheet-asset-driven';
-const UNIFIED_ANSWER_RENDER_ENGINE = 'xelatex';
+  process.env.UNIFIED_ANSWER_RENDER_STYLE_VERSION ||
+  "answer-xelatex-v10-rightsheet-asset-driven";
+const UNIFIED_ANSWER_RENDER_ENGINE = "xelatex";
 const UNIFIED_ANSWER_RENDER_FONT_SIZE =
-  Number.parseFloat(process.env.UNIFIED_ANSWER_RENDER_FONT_SIZE || '15') || 15;
+  Number.parseFloat(process.env.UNIFIED_ANSWER_RENDER_FONT_SIZE || "15") || 15;
 const UNIFIED_ANSWER_RENDER_MAX_WIDTH_CM = Math.max(
   4,
-  Math.min(18, Number.parseFloat(process.env.UNIFIED_ANSWER_RENDER_MAX_WIDTH_CM || '6.25') || 6.25),
+  Math.min(
+    18,
+    Number.parseFloat(
+      process.env.UNIFIED_ANSWER_RENDER_MAX_WIDTH_CM || "6.25",
+    ) || 6.25,
+  ),
 );
-const UNIFIED_ANSWER_RENDER_TEXT_COLOR =
-  normalizeAnswerRenderColor(process.env.UNIFIED_ANSWER_RENDER_TEXT_COLOR || 'EAF2F7');
-const UNIFIED_ANSWER_RENDER_BACKGROUND_COLOR =
-  normalizeAnswerRenderColor(process.env.UNIFIED_ANSWER_RENDER_BACKGROUND_COLOR || '151C21');
+const UNIFIED_ANSWER_RENDER_TEXT_COLOR = normalizeAnswerRenderColor(
+  process.env.UNIFIED_ANSWER_RENDER_TEXT_COLOR || "EAF2F7",
+);
+const UNIFIED_ANSWER_RENDER_BACKGROUND_COLOR = normalizeAnswerRenderColor(
+  process.env.UNIFIED_ANSWER_RENDER_BACKGROUND_COLOR || "151C21",
+);
 const UNIFIED_ANSWER_RENDER_PIXEL_RATIO = Math.max(
   1,
   Math.min(
     10,
-    Number.parseFloat(process.env.UNIFIED_ANSWER_RENDER_PIXEL_RATIO || '1') || 1,
+    Number.parseFloat(process.env.UNIFIED_ANSWER_RENDER_PIXEL_RATIO || "1") ||
+      1,
   ),
 );
 const UNIFIED_ANSWER_RENDER_TRANSPARENT_OPTIONS = {
@@ -4067,7 +4442,8 @@ const UNIFIED_ANSWER_RENDER_TRANSPARENT_OPTIONS = {
 //     TeX 박스(=페이지) 기준으로 잘라 한 줄짜리 정답 높이를 통일한다.
 //   * 세트형 정답은 파트별 이미지를 추가로 렌더한다 (answer_kind 'subjective#(1)').
 //   * 행 높이는 줄 단위 사다리로 양자화해 내려준다.
-const UNIFIED_ANSWER_RENDER_STYLE_VERSION_V11 = 'answer-xelatex-v11-uniform-line';
+const UNIFIED_ANSWER_RENDER_STYLE_VERSION_V11 =
+  "answer-xelatex-v11-uniform-line";
 const UNIFIED_ANSWER_RENDER_SUPPORTED_STYLE_VERSIONS = [
   UNIFIED_ANSWER_RENDER_STYLE_VERSION,
   UNIFIED_ANSWER_RENDER_STYLE_VERSION_V11,
@@ -4076,13 +4452,13 @@ const UNIFIED_ANSWER_RENDER_SUPPORTED_STYLE_VERSIONS = [
 // UNIFIED_ANSWER_RENDER_STYLE_VERSION(v10)과 분리해 둔다. 이 값을 v10 으로
 // 두면 신규·수정 문항이 계속 구버전으로만 구워져 앱이 폴백을 반복한다.
 const UNIFIED_ANSWER_RENDER_GENERATION_STYLE_VERSION =
-  process.env.UNIFIED_ANSWER_RENDER_GENERATION_STYLE_VERSION
-  || UNIFIED_ANSWER_RENDER_STYLE_VERSION_V11;
+  process.env.UNIFIED_ANSWER_RENDER_GENERATION_STYLE_VERSION ||
+  UNIFIED_ANSWER_RENDER_STYLE_VERSION_V11;
 const UNIFIED_ANSWER_RENDER_V11_TRANSPARENT_OPTIONS = {
   // 세로는 스트럿이 만든 고정 높이를 유지하고, 가로만 잉크 기준으로 크롭한다.
   // (가로를 페이지 전체로 두면 클라이언트에서 컨테이너에 맞춰 축소되어
   //  세트형 파트/일반형 간 글자 크기가 달라 보이는 문제가 있었음)
-  cropToInk: 'horizontal',
+  cropToInk: "horizontal",
   paddingPx: 3,
   topPaddingPx: 0,
   bottomPaddingPx: 0,
@@ -4097,18 +4473,27 @@ const UNIFIED_ANSWER_RENDER_V11_TRANSPARENT_OPTIONS = {
 // base: 분수 한 줄까지 같은 행 높이로 통일 → 35.
 // step: 줄이 하나 늘 때 증가분 → 30.
 const UNIFIED_ANSWER_RENDER_V11_ROW_BASE_DP =
-  Number.parseFloat(process.env.UNIFIED_ANSWER_RENDER_V11_ROW_BASE_DP || '35') || 35;
+  Number.parseFloat(
+    process.env.UNIFIED_ANSWER_RENDER_V11_ROW_BASE_DP || "35",
+  ) || 35;
 const UNIFIED_ANSWER_RENDER_V11_ROW_STEP_DP =
-  Number.parseFloat(process.env.UNIFIED_ANSWER_RENDER_V11_ROW_STEP_DP || '30') || 30;
+  Number.parseFloat(
+    process.env.UNIFIED_ANSWER_RENDER_V11_ROW_STEP_DP || "30",
+  ) || 30;
 // 개념원리 '확인 체크'류는 (1)~(10)까지 있어 상한 12 (SQL/Edge 파서와 동일).
 const UNIFIED_ANSWER_RENDER_MAX_SET_PARTS = 12;
 const ANSWER_RENDER_CONCURRENCY = Math.max(
   1,
-  Math.min(4, Number.parseInt(process.env.PB_ANSWER_RENDER_CONCURRENCY || '2', 10) || 2),
+  Math.min(
+    4,
+    Number.parseInt(process.env.PB_ANSWER_RENDER_CONCURRENCY || "2", 10) || 2,
+  ),
 );
 
-function normalizeAnswerRenderColor(raw, fallback = 'EAF2F7') {
-  const cleaned = String(raw || fallback).replace(/[^0-9A-Fa-f]/g, '').slice(0, 6);
+function normalizeAnswerRenderColor(raw, fallback = "EAF2F7") {
+  const cleaned = String(raw || fallback)
+    .replace(/[^0-9A-Fa-f]/g, "")
+    .slice(0, 6);
   return cleaned.length === 6 ? cleaned.toUpperCase() : fallback;
 }
 
@@ -4119,66 +4504,76 @@ function normalizeAnswerRenderFontSize(raw) {
 }
 
 function normalizeAnswerRenderEngine(raw) {
-  const value = String(raw || '').trim().toLowerCase();
-  if (value === 'mathjax' || value === 'svg') return 'mathjax';
-  return 'xelatex';
+  const value = String(raw || "")
+    .trim()
+    .toLowerCase();
+  if (value === "mathjax" || value === "svg") return "mathjax";
+  return "xelatex";
 }
 
 function svgNumberAttr(svg, name) {
-  const match = String(svg || '').match(new RegExp(`${name}="([\\d.]+)(em|px)?"`, 'i'));
+  const match = String(svg || "").match(
+    new RegExp(`${name}="([\\d.]+)(em|px)?"`, "i"),
+  );
   if (!match) return null;
   const value = Number.parseFloat(match[1]);
   if (!Number.isFinite(value) || value <= 0) return null;
-  return { value, unit: match[2] || '' };
+  return { value, unit: match[2] || "" };
 }
 
 async function renderAnswerWithMathJax({
   answer,
   deviceScaleFactor = 3,
   fontSizePt = 19,
-  textColor = 'EAF2F7',
+  textColor = "EAF2F7",
 }) {
-  const rendered = answerMathRenderer.renderInline(answer || '-', {
+  const rendered = answerMathRenderer.renderInline(answer || "-", {
     displayFractions: false,
   });
   if (!rendered?.ok || !rendered.svg) {
-    throw new Error('mathjax render failed');
+    throw new Error("mathjax render failed");
   }
   const pixelRatio = Number(deviceScaleFactor || 3);
   const fontPx = Math.max(1, Number(fontSizePt || 19) * (96 / 72));
-  const widthAttr = svgNumberAttr(rendered.svg, 'width');
-  const heightAttr = svgNumberAttr(rendered.svg, 'height');
+  const widthAttr = svgNumberAttr(rendered.svg, "width");
+  const heightAttr = svgNumberAttr(rendered.svg, "height");
   const viewBoxMatch = rendered.svg.match(/viewBox="([^"]+)"/i);
   const viewBoxParts = viewBoxMatch
-    ? viewBoxMatch[1].trim().split(/\s+/).map((v) => Number.parseFloat(v))
+    ? viewBoxMatch[1]
+        .trim()
+        .split(/\s+/)
+        .map((v) => Number.parseFloat(v))
     : [];
-  const viewBoxWidth = Number.isFinite(viewBoxParts[2]) && viewBoxParts[2] > 0
-    ? viewBoxParts[2]
-    : 1000;
-  const viewBoxHeight = Number.isFinite(viewBoxParts[3]) && viewBoxParts[3] > 0
-    ? viewBoxParts[3]
-    : 1000;
-  const widthCssPx = widthAttr?.unit === 'px'
-    ? widthAttr.value
-    : ((widthAttr?.value || (viewBoxWidth / 1000)) * fontPx);
-  const heightCssPx = heightAttr?.unit === 'px'
-    ? heightAttr.value
-    : ((heightAttr?.value || (viewBoxHeight / 1000)) * fontPx);
+  const viewBoxWidth =
+    Number.isFinite(viewBoxParts[2]) && viewBoxParts[2] > 0
+      ? viewBoxParts[2]
+      : 1000;
+  const viewBoxHeight =
+    Number.isFinite(viewBoxParts[3]) && viewBoxParts[3] > 0
+      ? viewBoxParts[3]
+      : 1000;
+  const widthCssPx =
+    widthAttr?.unit === "px"
+      ? widthAttr.value
+      : (widthAttr?.value || viewBoxWidth / 1000) * fontPx;
+  const heightCssPx =
+    heightAttr?.unit === "px"
+      ? heightAttr.value
+      : (heightAttr?.value || viewBoxHeight / 1000) * fontPx;
   const width = Math.max(1, Math.ceil(widthCssPx * pixelRatio));
   const height = Math.max(1, Math.ceil(heightCssPx * pixelRatio));
   const color = normalizeAnswerRenderColor(textColor);
   let svg = rendered.svg
     .replace(/currentColor/g, `#${color}`)
-    .replace(
-      /<svg\b[^>]*>/i,
-      (tag) => tag
-        .replace(/\swidth="[^"]*"/i, '')
-        .replace(/\sheight="[^"]*"/i, '')
-        .replace(/\sstyle="[^"]*"/i, '')
+    .replace(/<svg\b[^>]*>/i, (tag) =>
+      tag
+        .replace(/\swidth="[^"]*"/i, "")
+        .replace(/\sheight="[^"]*"/i, "")
+        .replace(/\sstyle="[^"]*"/i, "")
         .replace(/>$/, ` width="${width}" height="${height}">`),
     );
   if (!/xmlns=/.test(svg.slice(0, 200))) {
-    svg = svg.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
+    svg = svg.replace("<svg", '<svg xmlns="http://www.w3.org/2000/svg"');
   }
   const pngBuffer = await sharp(Buffer.from(svg)).png().toBuffer();
   return {
@@ -4211,26 +4606,29 @@ async function createAnswerRenderSignedUrl(storagePath) {
   const { data } = await supa.storage
     .from(ANSWER_RENDER_BUCKET)
     .createSignedUrl(storagePath, ANSWER_RENDER_EXPIRES_SEC);
-  return String(data?.signedUrl || '').trim();
+  return String(data?.signedUrl || "").trim();
 }
 
 function normalizeTextbookAnswerForRender(answerRow) {
-  const kind = String(answerRow?.answer_kind || '').trim().toLowerCase();
-  if (kind === 'image') return '';
-  if (kind === 'objective' || kind === 'choice' || kind === 'multiple_choice') return '';
+  const kind = String(answerRow?.answer_kind || "")
+    .trim()
+    .toLowerCase();
+  if (kind === "image") return "";
+  if (kind === "objective" || kind === "choice" || kind === "multiple_choice")
+    return "";
   const latex2d = normalizeAnswerValueForTexRender(answerRow?.answer_latex_2d);
-  if (kind === 'subjective' && latex2d) return latex2d;
+  if (kind === "subjective" && latex2d) return latex2d;
   const text = normalizeAnswerValueForTexRender(answerRow?.answer_text);
   if (text) return text;
   return latex2d;
 }
 
 function normalizeAnswerValueForTexRender(input) {
-  let out = String(input ?? '');
+  let out = String(input ?? "");
   for (let i = 0; i < 4; i += 1) {
     const next = out
-      .replace(/\\textstyle\b/g, '')
-      .replace(/\\displaystyle\b/g, '')
+      .replace(/\\textstyle\b/g, "")
+      .replace(/\\displaystyle\b/g, "")
       .replace(
         /\\(?:dfrac|tfrac|frac)\s*\{([^{}]+)\}\s*\{([^{}]+)\}/g,
         (_, a, b) => `\\frac{${String(a).trim()}}{${String(b).trim()}}`,
@@ -4239,72 +4637,88 @@ function normalizeAnswerValueForTexRender(input) {
     out = next;
   }
   return out
-    .replace(/\r\n/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .replace(/[ \t]+/g, ' ')
+    .replace(/\r\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]+/g, " ")
     .trim();
 }
 
 function normalizeUnifiedAnswerKind(raw) {
-  const kind = String(raw || '').trim().toLowerCase();
-  if (kind === 'essay' || kind.includes('서술')) return 'essay';
-  if (kind === 'subjective' || kind.includes('주관')) return 'subjective';
-  if (kind === 'objective' || kind === 'choice' || kind === 'multiple_choice' || kind.includes('객관')) {
-    return 'objective';
+  const kind = String(raw || "")
+    .trim()
+    .toLowerCase();
+  if (kind === "essay" || kind.includes("서술")) return "essay";
+  if (kind === "subjective" || kind.includes("주관")) return "subjective";
+  if (
+    kind === "objective" ||
+    kind === "choice" ||
+    kind === "multiple_choice" ||
+    kind.includes("객관")
+  ) {
+    return "objective";
   }
-  if (kind === 'image') return 'image';
-  return 'unknown';
+  if (kind === "image") return "image";
+  return "unknown";
 }
 
 function normalizePbAnswerForUnifiedRender(questionRow) {
   const answerKind = normalizeUnifiedAnswerKind(questionRow?.question_type);
-  if (answerKind === 'image') return '';
+  if (answerKind === "image") return "";
   const allowObjective = questionRow?.allow_objective !== false;
   const allowSubjective = questionRow?.allow_subjective !== false;
   const objective = normalizeAnswerValueForTexRender(
-    questionRow?.objective_answer_key || questionRow?.meta?.objective_answer_key,
+    questionRow?.objective_answer_key ||
+      questionRow?.meta?.objective_answer_key,
   );
   if (allowObjective && !allowSubjective) return objective;
-  const subjective = normalizeAnswerValueForTexRender(questionRow?.subjective_answer);
+  const subjective = normalizeAnswerValueForTexRender(
+    questionRow?.subjective_answer,
+  );
   if (subjective) return subjective;
-  if (answerKind === 'objective') return objective;
-  return '';
+  if (answerKind === "objective") return objective;
+  return "";
 }
 
 function answerTokenToChoiceIndex(token) {
-  const trimmed = String(token || '').trim();
+  const trimmed = String(token || "").trim();
   if (!trimmed) return null;
   const circled = new Map([
-    ['①', 0],
-    ['②', 1],
-    ['③', 2],
-    ['④', 3],
-    ['⑤', 4],
-    ['⑥', 5],
-    ['⑦', 6],
-    ['⑧', 7],
-    ['⑨', 8],
-    ['⑩', 9],
+    ["①", 0],
+    ["②", 1],
+    ["③", 2],
+    ["④", 3],
+    ["⑤", 4],
+    ["⑥", 5],
+    ["⑦", 6],
+    ["⑧", 7],
+    ["⑨", 8],
+    ["⑩", 9],
   ]);
   if (circled.has(trimmed)) return circled.get(trimmed);
-  const numeric = Number.parseInt(trimmed.replace(/[^0-9]/g, ''), 10);
+  const numeric = Number.parseInt(trimmed.replace(/[^0-9]/g, ""), 10);
   return Number.isFinite(numeric) && numeric > 0 ? numeric - 1 : null;
 }
 
 function normalizeChoiceLine(raw) {
-  return normalizeAnswerValueForTexRender(raw).replace(/\s+/g, ' ').trim();
+  return normalizeAnswerValueForTexRender(raw).replace(/\s+/g, " ").trim();
 }
 
 function pbSubjectiveAnswerFromObjectiveChoiceText(questionRow) {
-  const answer = normalizeAnswerValueForTexRender(questionRow?.objective_answer_key);
-  if (!answer) return '';
-  const choices = Array.isArray(questionRow?.objective_choices) && questionRow.objective_choices.length > 0
-    ? questionRow.objective_choices
-    : (Array.isArray(questionRow?.choices) ? questionRow.choices : []);
+  const answer = normalizeAnswerValueForTexRender(
+    questionRow?.objective_answer_key,
+  );
+  if (!answer) return "";
+  const choices =
+    Array.isArray(questionRow?.objective_choices) &&
+    questionRow.objective_choices.length > 0
+      ? questionRow.objective_choices
+      : Array.isArray(questionRow?.choices)
+        ? questionRow.choices
+        : [];
   if (choices.length === 0) return answer;
   const tokens = answer
     .split(/[,\s/]+/)
-    .map((v) => String(v || '').trim())
+    .map((v) => String(v || "").trim())
     .filter(Boolean);
   if (tokens.length === 0) return answer;
   const converted = tokens.map((token) => {
@@ -4312,18 +4726,20 @@ function pbSubjectiveAnswerFromObjectiveChoiceText(questionRow) {
     if (idx != null && idx >= 0 && idx < choices.length) {
       const choice = choices[idx];
       const text = normalizeChoiceLine(
-        typeof choice === 'string' ? choice : (choice?.text || choice?.label || ''),
+        typeof choice === "string"
+          ? choice
+          : choice?.text || choice?.label || "",
       );
       if (text) return text;
     }
     return token;
   });
-  return normalizeAnswerValueForTexRender(converted.join(', '));
+  return normalizeAnswerValueForTexRender(converted.join(", "));
 }
 
 function pbAnswerTextForUnifiedRenderKind(questionRow, answerKindRaw) {
   const answerKind = normalizeUnifiedAnswerKind(answerKindRaw);
-  if (answerKind === 'objective' || answerKind === 'image') return '';
+  if (answerKind === "objective" || answerKind === "image") return "";
   const subjective = normalizePbAnswerForUnifiedRender(questionRow);
   if (subjective) return subjective;
   return pbSubjectiveAnswerFromObjectiveChoiceText(questionRow);
@@ -4334,11 +4750,22 @@ function pbAnswerTextForUnifiedRenderKind(questionRow, answerKindRaw) {
 // (첫 마커로 모드 결정), 마커는 시작 또는 공백 뒤,
 // 파트 내용이 비면 그 후보는 이전 파트의 내용으로 취급. 애매하면 null.
 const SET_PART_KOREAN_KEYS = [
-  '가', '나', '다', '라', '마', '바', '사', '아', '자', '차', '카', '타',
+  "가",
+  "나",
+  "다",
+  "라",
+  "마",
+  "바",
+  "사",
+  "아",
+  "자",
+  "차",
+  "카",
+  "타",
 ];
 
 function splitSetAnswerPartsForRender(raw) {
-  const text = String(raw || '').trim();
+  const text = String(raw || "").trim();
   if (!text) return null;
   const numRe = /^[(（]\s*(\d{1,2})\s*[)）]/;
   const korRe = /^[(（]\s*([가-힣])\s*[)）]/;
@@ -4365,9 +4792,11 @@ function splitSetAnswerPartsForRender(raw) {
       }
     } else if (korean) {
       const mk = head.match(korRe);
-      if (mk
-          && expected <= SET_PART_KOREAN_KEYS.length
-          && mk[1] === SET_PART_KOREAN_KEYS[expected - 1]) {
+      if (
+        mk &&
+        expected <= SET_PART_KOREAN_KEYS.length &&
+        mk[1] === SET_PART_KOREAN_KEYS[expected - 1]
+      ) {
         markerLen = mk[0].length;
       }
     } else {
@@ -4377,10 +4806,10 @@ function splitSetAnswerPartsForRender(raw) {
       }
     }
     if (markerLen > 0) {
-      const prevCh = i === 0 ? ' ' : text[i - 1];
+      const prevCh = i === 0 ? " " : text[i - 1];
       if (/\s/.test(prevCh)) {
         if (expected === 1) {
-          if (text.slice(0, i).trim() === '') {
+          if (text.slice(0, i).trim() === "") {
             contentStart = i + markerLen;
             expected = 2;
             i += markerLen;
@@ -4388,7 +4817,7 @@ function splitSetAnswerPartsForRender(raw) {
           }
         } else {
           const partText = text.slice(contentStart, i).trim();
-          if (partText !== '') {
+          if (partText !== "") {
             parts.push({ key: keyOf(expected - 1), text: partText });
             contentStart = i + markerLen;
             expected += 1;
@@ -4409,7 +4838,7 @@ function splitSetAnswerPartsForRender(raw) {
 }
 
 function normalizeUnifiedAnswerRenderStyleVersion(raw) {
-  const style = String(raw || '').trim();
+  const style = String(raw || "").trim();
   return UNIFIED_ANSWER_RENDER_SUPPORTED_STYLE_VERSIONS.includes(style)
     ? style
     : UNIFIED_ANSWER_RENDER_STYLE_VERSION;
@@ -4421,47 +4850,51 @@ function unifiedAnswerRenderDescriptor({
   answerKind,
   answerText,
   styleVersion = UNIFIED_ANSWER_RENDER_GENERATION_STYLE_VERSION,
-  partKey = '',
+  partKey = "",
 }) {
-  const safeSourceKind = String(sourceKind || '').trim();
-  const safeSourceId = String(sourceId || '').trim();
+  const safeSourceKind = String(sourceKind || "").trim();
+  const safeSourceId = String(sourceId || "").trim();
   const safeAnswerKind = normalizeUnifiedAnswerKind(answerKind);
   const safeAnswerText = normalizeAnswerValueForTexRender(answerText);
   const safeStyle = normalizeUnifiedAnswerRenderStyleVersion(styleVersion);
-  const safePartKey = String(partKey || '').trim();
-  if (!['textbook_crop', 'pb_question'].includes(safeSourceKind)) return null;
+  const safePartKey = String(partKey || "").trim();
+  if (!["textbook_crop", "pb_question"].includes(safeSourceKind)) return null;
   if (!isUuid(safeSourceId) || !safeAnswerText) return null;
   const isV11 = safeStyle === UNIFIED_ANSWER_RENDER_STYLE_VERSION_V11;
-  const sourceHash = createHash('sha256')
-    .update(JSON.stringify({
-      source_kind: safeSourceKind,
-      source_id: safeSourceId,
-      answer_kind: safeAnswerKind,
-      answer: safeAnswerText,
-      engine: UNIFIED_ANSWER_RENDER_ENGINE,
-      style_version: safeStyle,
-      font_size_pt: UNIFIED_ANSWER_RENDER_FONT_SIZE,
-      max_width_cm: UNIFIED_ANSWER_RENDER_MAX_WIDTH_CM,
-      text_color: UNIFIED_ANSWER_RENDER_TEXT_COLOR,
-      background_color: UNIFIED_ANSWER_RENDER_BACKGROUND_COLOR,
-      pixel_ratio: UNIFIED_ANSWER_RENDER_PIXEL_RATIO,
-      // v11 은 배경 없는 알파 글리프 PNG 로 굽고 앱에서 테마 색을 입힌다
-      // (라이트=검정, 다크=흰색). v10 해시는 그대로 유지된다.
-      transparent: isV11,
-      transparent_options: isV11
-        ? UNIFIED_ANSWER_RENDER_V11_TRANSPARENT_OPTIONS
-        : UNIFIED_ANSWER_RENDER_TRANSPARENT_OPTIONS,
-      // v10 해시 불변 유지: v11에서만 추가 필드를 포함한다.
-      // uniform_line 은 v11 템플릿 리비전 — 템플릿(보더/지수분수 강등 등)이
-      // 바뀌면 값을 올려 기존 v11 자산을 재렌더시킨다.
-      ...(isV11 ? { part_key: safePartKey, uniform_line: 2 } : {}),
-    }))
-    .digest('hex');
+  const sourceHash = createHash("sha256")
+    .update(
+      JSON.stringify({
+        source_kind: safeSourceKind,
+        source_id: safeSourceId,
+        answer_kind: safeAnswerKind,
+        answer: safeAnswerText,
+        engine: UNIFIED_ANSWER_RENDER_ENGINE,
+        style_version: safeStyle,
+        font_size_pt: UNIFIED_ANSWER_RENDER_FONT_SIZE,
+        max_width_cm: UNIFIED_ANSWER_RENDER_MAX_WIDTH_CM,
+        text_color: UNIFIED_ANSWER_RENDER_TEXT_COLOR,
+        background_color: UNIFIED_ANSWER_RENDER_BACKGROUND_COLOR,
+        pixel_ratio: UNIFIED_ANSWER_RENDER_PIXEL_RATIO,
+        // v11 은 배경 없는 알파 글리프 PNG 로 굽고 앱에서 테마 색을 입힌다
+        // (라이트=검정, 다크=흰색). v10 해시는 그대로 유지된다.
+        transparent: isV11,
+        transparent_options: isV11
+          ? UNIFIED_ANSWER_RENDER_V11_TRANSPARENT_OPTIONS
+          : UNIFIED_ANSWER_RENDER_TRANSPARENT_OPTIONS,
+        // v10 해시 불변 유지: v11에서만 추가 필드를 포함한다.
+        // uniform_line 은 v11 템플릿 리비전 — 템플릿(보더/지수분수 강등 등)이
+        // 바뀌면 값을 올려 기존 v11 자산을 재렌더시킨다.
+        ...(isV11 ? { part_key: safePartKey, uniform_line: 2 } : {}),
+      }),
+    )
+    .digest("hex");
   return {
     sourceKind: safeSourceKind,
     sourceId: safeSourceId,
     // 파트 렌더는 answer_kind 에 '#(n)' 을 붙여 기존 유니크 키를 재사용한다.
-    answerKind: safePartKey ? `${safeAnswerKind}#${safePartKey}` : safeAnswerKind,
+    answerKind: safePartKey
+      ? `${safeAnswerKind}#${safePartKey}`
+      : safeAnswerKind,
     answerText: safeAnswerText,
     styleVersion: safeStyle,
     sourceHash,
@@ -4477,22 +4910,26 @@ function unifiedAnswerPartDescriptors({
   answerText,
   styleVersion,
 }) {
-  if (normalizeUnifiedAnswerRenderStyleVersion(styleVersion)
-      !== UNIFIED_ANSWER_RENDER_STYLE_VERSION_V11) {
+  if (
+    normalizeUnifiedAnswerRenderStyleVersion(styleVersion) !==
+    UNIFIED_ANSWER_RENDER_STYLE_VERSION_V11
+  ) {
     return [];
   }
-  if (normalizeUnifiedAnswerKind(answerKind) !== 'subjective') return [];
+  if (normalizeUnifiedAnswerKind(answerKind) !== "subjective") return [];
   const parts = splitSetAnswerPartsForRender(answerText);
   if (!parts) return [];
   return parts
-    .map((part) => unifiedAnswerRenderDescriptor({
-      sourceKind,
-      sourceId,
-      answerKind,
-      answerText: part.text,
-      styleVersion,
-      partKey: part.key,
-    }))
+    .map((part) =>
+      unifiedAnswerRenderDescriptor({
+        sourceKind,
+        sourceId,
+        answerKind,
+        answerText: part.text,
+        styleVersion,
+        partKey: part.key,
+      }),
+    )
     .filter(Boolean);
 }
 
@@ -4500,11 +4937,11 @@ function textbookAnswerUnifiedDescriptor(
   answerRow,
   { styleVersion = UNIFIED_ANSWER_RENDER_GENERATION_STYLE_VERSION } = {},
 ) {
-  const cropId = String(answerRow?.crop_id || '').trim();
+  const cropId = String(answerRow?.crop_id || "").trim();
   const answerText = normalizeTextbookAnswerForRender(answerRow);
   if (!isUuid(cropId) || !answerText) return null;
   return unifiedAnswerRenderDescriptor({
-    sourceKind: 'textbook_crop',
+    sourceKind: "textbook_crop",
     sourceId: cropId,
     answerKind: answerRow?.answer_kind,
     answerText,
@@ -4512,14 +4949,17 @@ function textbookAnswerUnifiedDescriptor(
   });
 }
 
-function textbookAnswerUnifiedDescriptorsWithParts(answerRow, { styleVersion } = {}) {
+function textbookAnswerUnifiedDescriptorsWithParts(
+  answerRow,
+  { styleVersion } = {},
+) {
   const main = textbookAnswerUnifiedDescriptor(answerRow, { styleVersion });
   if (!main) return [];
   return [
     main,
     ...unifiedAnswerPartDescriptors({
-      sourceKind: 'textbook_crop',
-      sourceId: String(answerRow?.crop_id || '').trim(),
+      sourceKind: "textbook_crop",
+      sourceId: String(answerRow?.crop_id || "").trim(),
       answerKind: answerRow?.answer_kind,
       answerText: normalizeTextbookAnswerForRender(answerRow),
       styleVersion,
@@ -4531,13 +4971,16 @@ function pbAnswerUnifiedDescriptors(
   questionRow,
   { styleVersion = UNIFIED_ANSWER_RENDER_GENERATION_STYLE_VERSION } = {},
 ) {
-  const sourceId = String(questionRow?.id || '').trim();
+  const sourceId = String(questionRow?.id || "").trim();
   if (!isUuid(sourceId)) return [];
   const out = [];
-  for (const answerKind of ['subjective', 'essay']) {
-    const answerText = pbAnswerTextForUnifiedRenderKind(questionRow, answerKind);
+  for (const answerKind of ["subjective", "essay"]) {
+    const answerText = pbAnswerTextForUnifiedRenderKind(
+      questionRow,
+      answerKind,
+    );
     const descriptor = unifiedAnswerRenderDescriptor({
-      sourceKind: 'pb_question',
+      sourceKind: "pb_question",
       sourceId,
       answerKind,
       answerText,
@@ -4545,13 +4988,15 @@ function pbAnswerUnifiedDescriptors(
     });
     if (descriptor) {
       out.push(descriptor);
-      out.push(...unifiedAnswerPartDescriptors({
-        sourceKind: 'pb_question',
-        sourceId,
-        answerKind,
-        answerText,
-        styleVersion,
-      }));
+      out.push(
+        ...unifiedAnswerPartDescriptors({
+          sourceKind: "pb_question",
+          sourceId,
+          answerKind,
+          answerText,
+          styleVersion,
+        }),
+      );
     }
   }
   return out;
@@ -4561,21 +5006,21 @@ async function createUnifiedAnswerRenderSignedUrl(storagePath) {
   const { data } = await supa.storage
     .from(UNIFIED_ANSWER_RENDER_BUCKET)
     .createSignedUrl(storagePath, ANSWER_RENDER_EXPIRES_SEC);
-  return String(data?.signedUrl || '').trim();
+  return String(data?.signedUrl || "").trim();
 }
 
 async function createAnswerRenderAssetSignedUrl(bucket, storagePath) {
   const safeBucket = String(bucket || UNIFIED_ANSWER_RENDER_BUCKET).trim();
-  const safePath = String(storagePath || '').trim();
-  if (!safeBucket || !safePath) return '';
+  const safePath = String(storagePath || "").trim();
+  if (!safeBucket || !safePath) return "";
   const { data } = await supa.storage
     .from(safeBucket)
     .createSignedUrl(safePath, ANSWER_RENDER_EXPIRES_SEC);
-  return String(data?.signedUrl || '').trim();
+  return String(data?.signedUrl || "").trim();
 }
 
 function answerRenderAssetSignKey(bucket, storagePath) {
-  return `${String(bucket || UNIFIED_ANSWER_RENDER_BUCKET).trim()}\n${String(storagePath || '').trim()}`;
+  return `${String(bucket || UNIFIED_ANSWER_RENDER_BUCKET).trim()}\n${String(storagePath || "").trim()}`;
 }
 
 /// Signs every asset in one request per bucket. Signing one-by-one costs a
@@ -4583,8 +5028,10 @@ function answerRenderAssetSignKey(bucket, storagePath) {
 async function createAnswerRenderAssetSignedUrls(rows) {
   const pathsByBucket = new Map();
   for (const row of Array.isArray(rows) ? rows : []) {
-    const bucket = String(row?.storage_bucket || UNIFIED_ANSWER_RENDER_BUCKET).trim();
-    const storagePath = String(row?.storage_path || '').trim();
+    const bucket = String(
+      row?.storage_bucket || UNIFIED_ANSWER_RENDER_BUCKET,
+    ).trim();
+    const storagePath = String(row?.storage_path || "").trim();
     if (!bucket || !storagePath) continue;
     if (!pathsByBucket.has(bucket)) pathsByBucket.set(bucket, new Set());
     pathsByBucket.get(bucket).add(storagePath);
@@ -4599,20 +5046,31 @@ async function createAnswerRenderAssetSignedUrls(rows) {
           .createSignedUrls(paths, ANSWER_RENDER_EXPIRES_SEC);
         if (error) throw error;
         for (const entry of Array.isArray(data) ? data : []) {
-          const signedUrl = String(entry?.signedUrl || entry?.signedURL || '').trim();
-          const entryPath = String(entry?.path || '').trim();
+          const signedUrl = String(
+            entry?.signedUrl || entry?.signedURL || "",
+          ).trim();
+          const entryPath = String(entry?.path || "").trim();
           if (!signedUrl || !entryPath) continue;
-          urlBySignKey.set(answerRenderAssetSignKey(bucket, entryPath), signedUrl);
+          urlBySignKey.set(
+            answerRenderAssetSignKey(bucket, entryPath),
+            signedUrl,
+          );
         }
       } catch (err) {
         console.warn(
-          '[answer-render] batch sign failed, falling back to per-path:',
+          "[answer-render] batch sign failed, falling back to per-path:",
           err?.message || err,
         );
         for (const storagePath of paths) {
-          const url = await createAnswerRenderAssetSignedUrl(bucket, storagePath);
+          const url = await createAnswerRenderAssetSignedUrl(
+            bucket,
+            storagePath,
+          );
           if (url) {
-            urlBySignKey.set(answerRenderAssetSignKey(bucket, storagePath), url);
+            urlBySignKey.set(
+              answerRenderAssetSignKey(bucket, storagePath),
+              url,
+            );
           }
         }
       }
@@ -4624,12 +5082,17 @@ async function createAnswerRenderAssetSignedUrls(rows) {
 function computeRightSheetAnswerDisplayMetrics(row) {
   const widthPx = Math.max(0, Number(row?.width_px || row?.width || 0));
   const heightPx = Math.max(0, Number(row?.height_px || row?.height || 0));
-  const pixelRatio = Math.max(1, Number(row?.pixel_ratio || row?.pixelRatio || 1));
+  const pixelRatio = Math.max(
+    1,
+    Number(row?.pixel_ratio || row?.pixelRatio || 1),
+  );
   const naturalWidth = widthPx > 0 ? widthPx / pixelRatio : 48;
   const naturalHeight = heightPx > 0 ? heightPx / pixelRatio : 38;
   const displayHeight = naturalHeight;
   const displayWidth = naturalWidth;
-  const styleVersion = String(row?.style_version || row?.styleVersion || '').trim();
+  const styleVersion = String(
+    row?.style_version || row?.styleVersion || "",
+  ).trim();
   if (styleVersion === UNIFIED_ANSWER_RENDER_STYLE_VERSION_V11) {
     // 줄 수 사다리로 행 높이를 양자화한다. 스트럿보다 큰 콘텐츠(분수 등)는
     // 위로 올림해 절대 잘리지 않게 한다.
@@ -4645,7 +5108,7 @@ function computeRightSheetAnswerDisplayMetrics(row) {
       display_width_dp: Number(displayWidth.toFixed(2)),
       display_height_dp: Number(displayHeight.toFixed(2)),
       row_height_dp: Number(Math.max(46, snapped + 18).toFixed(2)),
-      layout_profile: 'rightsheet_xelatex_uniform_line_v11',
+      layout_profile: "rightsheet_xelatex_uniform_line_v11",
     };
   }
   const rowHeight = Math.max(46, displayHeight + 18);
@@ -4653,54 +5116,69 @@ function computeRightSheetAnswerDisplayMetrics(row) {
     display_width_dp: Number(displayWidth.toFixed(2)),
     display_height_dp: Number(displayHeight.toFixed(2)),
     row_height_dp: Number(rowHeight.toFixed(2)),
-    layout_profile: 'rightsheet_xelatex_asset_driven',
+    layout_profile: "rightsheet_xelatex_asset_driven",
   };
 }
 
 async function handleUnifiedAnswerRenderAssetsResolve(body, res) {
-  const academyId = String(body?.academy_id || body?.academyId || '').trim();
-  const sourceKind = String(body?.source_kind || body?.sourceKind || '').trim();
-  const sourceIds = (Array.isArray(body?.source_ids)
-    ? body.source_ids
-    : Array.isArray(body?.sourceIds)
-      ? body.sourceIds
-      : [])
-    .map((id) => String(id || '').trim())
+  const academyId = String(body?.academy_id || body?.academyId || "").trim();
+  const sourceKind = String(body?.source_kind || body?.sourceKind || "").trim();
+  const sourceIds = (
+    Array.isArray(body?.source_ids)
+      ? body.source_ids
+      : Array.isArray(body?.sourceIds)
+        ? body.sourceIds
+        : []
+  )
+    .map((id) => String(id || "").trim())
     .filter((id) => isUuid(id));
-  const styleVersions = (Array.isArray(body?.style_versions)
-    ? body.style_versions
-    : Array.isArray(body?.styleVersions)
-      ? body.styleVersions
-      : [])
-    .map((style) => String(style || '').trim())
-    .filter((style) => UNIFIED_ANSWER_RENDER_SUPPORTED_STYLE_VERSIONS.includes(style));
+  const styleVersions = (
+    Array.isArray(body?.style_versions)
+      ? body.style_versions
+      : Array.isArray(body?.styleVersions)
+        ? body.styleVersions
+        : []
+  )
+    .map((style) => String(style || "").trim())
+    .filter((style) =>
+      UNIFIED_ANSWER_RENDER_SUPPORTED_STYLE_VERSIONS.includes(style),
+    );
   // 요청한 스타일(허용 목록 내)을 우선순위대로 존중한다. 지정이 없으면 최신
   // 스타일을 우선하고 아직 재렌더 전인 자산은 구버전으로 폴백한다.
-  const orderedStyles = styleVersions.length > 0
-    ? [...new Set(styleVersions)]
-    : [...new Set([
-      UNIFIED_ANSWER_RENDER_GENERATION_STYLE_VERSION,
-      UNIFIED_ANSWER_RENDER_STYLE_VERSION,
-    ])];
+  const orderedStyles =
+    styleVersions.length > 0
+      ? [...new Set(styleVersions)]
+      : [
+          ...new Set([
+            UNIFIED_ANSWER_RENDER_GENERATION_STYLE_VERSION,
+            UNIFIED_ANSWER_RENDER_STYLE_VERSION,
+          ]),
+        ];
   const requestedAnswerKind = normalizeUnifiedAnswerKind(
-    body?.answer_kind || body?.answerKind || 'subjective',
+    body?.answer_kind || body?.answerKind || "subjective",
   );
   const wantsV11 = orderedStyles[0] === UNIFIED_ANSWER_RENDER_STYLE_VERSION_V11;
 
   if (!isUuid(academyId)) {
-    sendJson(res, 400, { ok: false, error: 'academy_id(uuid) required' });
+    sendJson(res, 400, { ok: false, error: "academy_id(uuid) required" });
     return;
   }
-  if (!['textbook_crop', 'pb_question'].includes(sourceKind)) {
-    sendJson(res, 400, { ok: false, error: 'source_kind must be textbook_crop or pb_question' });
+  if (!["textbook_crop", "pb_question"].includes(sourceKind)) {
+    sendJson(res, 400, {
+      ok: false,
+      error: "source_kind must be textbook_crop or pb_question",
+    });
     return;
   }
   if (sourceIds.length === 0) {
     sendJson(res, 200, { ok: true, renders: [] });
     return;
   }
-  if (!['subjective', 'essay', 'unknown'].includes(requestedAnswerKind)) {
-    sendJson(res, 400, { ok: false, error: 'answer_kind must be subjective, essay, or unknown' });
+  if (!["subjective", "essay", "unknown"].includes(requestedAnswerKind)) {
+    sendJson(res, 400, {
+      ok: false,
+      error: "answer_kind must be subjective, essay, or unknown",
+    });
     return;
   }
 
@@ -4713,35 +5191,42 @@ async function handleUnifiedAnswerRenderAssetsResolve(body, res) {
     ),
   ];
   const { data, error } = await supa
-    .from('answer_render_assets')
+    .from("answer_render_assets")
     .select(
-      'source_id, answer_kind, engine, storage_bucket, storage_path, width_px, height_px, '
-      + 'pixel_ratio, style_version, render_error, transparent',
+      "source_id, answer_kind, engine, storage_bucket, storage_path, width_px, height_px, " +
+        "pixel_ratio, style_version, render_error, transparent",
     )
-    .eq('academy_id', academyId)
-    .eq('source_kind', sourceKind)
-    .in('answer_kind', answerKindCandidates)
-    .eq('engine', UNIFIED_ANSWER_RENDER_ENGINE)
-    .eq('render_error', '')
-    .in('source_id', sourceIds)
-    .in('style_version', orderedStyles);
+    .eq("academy_id", academyId)
+    .eq("source_kind", sourceKind)
+    .in("answer_kind", answerKindCandidates)
+    .eq("engine", UNIFIED_ANSWER_RENDER_ENGINE)
+    .eq("render_error", "")
+    .in("source_id", sourceIds)
+    .in("style_version", orderedStyles);
   if (error) {
-    sendJson(res, 500, { ok: false, error: `answer_render_assets_resolve_failed: ${error.message || error}` });
+    sendJson(res, 500, {
+      ok: false,
+      error: `answer_render_assets_resolve_failed: ${error.message || error}`,
+    });
     return;
   }
 
-  const styleRank = new Map(orderedStyles.map((style, index) => [style, index]));
+  const styleRank = new Map(
+    orderedStyles.map((style, index) => [style, index]),
+  );
   // 키 = `${sourceId}\n${answerKind}` — 파트 행은 별도 엔트리로 유지된다.
   const bestByEntryKey = new Map();
   for (const row of Array.isArray(data) ? data : []) {
-    const sourceId = String(row?.source_id || '').trim();
-    const style = String(row?.style_version || '').trim();
-    const answerKind = String(row?.answer_kind || '').trim();
+    const sourceId = String(row?.source_id || "").trim();
+    const style = String(row?.style_version || "").trim();
+    const answerKind = String(row?.answer_kind || "").trim();
     if (!sourceId || !style || !answerKind) continue;
     const entryKey = `${sourceId}\n${answerKind}`;
     const previous = bestByEntryKey.get(entryKey);
     const rank = styleRank.get(style) ?? 999;
-    const previousRank = previous ? (styleRank.get(previous.style_version) ?? 999) : 999;
+    const previousRank = previous
+      ? (styleRank.get(previous.style_version) ?? 999)
+      : 999;
     if (!previous || rank < previousRank) bestByEntryKey.set(entryKey, row);
   }
 
@@ -4751,7 +5236,7 @@ async function handleUnifiedAnswerRenderAssetsResolve(body, res) {
   for (const sourceId of sourceIds) {
     const mainRow = bestByEntryKey.get(`${sourceId}\n${requestedAnswerKind}`);
     if (wantsV11) {
-      const mainStyle = String(mainRow?.style_version || '').trim();
+      const mainStyle = String(mainRow?.style_version || "").trim();
       if (mainStyle !== UNIFIED_ANSWER_RENDER_STYLE_VERSION_V11) {
         v11MissingSourceIds.push(sourceId);
       }
@@ -4766,30 +5251,31 @@ async function handleUnifiedAnswerRenderAssetsResolve(body, res) {
     emitTargets.map((target) => target.row),
   );
   for (const { sourceId, answerKind, row } of emitTargets) {
-    const url = signedUrlBySignKey.get(
-      answerRenderAssetSignKey(row.storage_bucket, row.storage_path),
-    ) || '';
+    const url =
+      signedUrlBySignKey.get(
+        answerRenderAssetSignKey(row.storage_bucket, row.storage_path),
+      ) || "";
     if (!url) continue;
-    const partKey = answerKind.includes('#')
-      ? answerKind.slice(answerKind.indexOf('#') + 1)
-      : '';
+    const partKey = answerKind.includes("#")
+      ? answerKind.slice(answerKind.indexOf("#") + 1)
+      : "";
     const displayMetrics = computeRightSheetAnswerDisplayMetrics(row);
     renders.push({
       key: partKey ? `${sourceId}#${partKey}` : sourceId,
       source_id: sourceId,
-      answer_kind: String(row.answer_kind || '').trim(),
+      answer_kind: String(row.answer_kind || "").trim(),
       part_key: partKey,
       url,
       width: Number(row.width_px || 0),
       height: Number(row.height_px || 0),
       pixelRatio: Number(row.pixel_ratio || UNIFIED_ANSWER_RENDER_PIXEL_RATIO),
-      styleVersion: String(row.style_version || '').trim(),
-      engine: String(row.engine || '').trim(),
+      styleVersion: String(row.style_version || "").trim(),
+      engine: String(row.engine || "").trim(),
       // 알파 글리프 PNG 여부 — true 면 앱이 테마 색으로 틴트해 그린다.
       transparent: row.transparent === true,
       ...displayMetrics,
       cached: true,
-      error: '',
+      error: "",
     });
   }
 
@@ -4824,9 +5310,13 @@ const unifiedAnswerV11InflightKeys = new Set();
 const UNIFIED_ANSWER_V11_BACKFILL_COOLDOWN_MS = 10 * 60 * 1000;
 const unifiedAnswerV11BackfillCheckedAt = new Map();
 
-function scheduleUnifiedAnswerRenderV11Backfill({ academyId, sourceKind, sourceIds }) {
+function scheduleUnifiedAnswerRenderV11Backfill({
+  academyId,
+  sourceKind,
+  sourceIds,
+}) {
   const ids = [...new Set(sourceIds)].sort();
-  const inflightKey = `${academyId}\n${sourceKind}\n${ids.join(',')}`;
+  const inflightKey = `${academyId}\n${sourceKind}\n${ids.join(",")}`;
   if (unifiedAnswerV11InflightKeys.has(inflightKey)) return;
   const now = Date.now();
   const checkedAt = unifiedAnswerV11BackfillCheckedAt.get(inflightKey) || 0;
@@ -4843,21 +5333,22 @@ function scheduleUnifiedAnswerRenderV11Backfill({ academyId, sourceKind, sourceI
   (async () => {
     try {
       const styleVersion = UNIFIED_ANSWER_RENDER_STYLE_VERSION_V11;
-      const descriptorPage = sourceKind === 'textbook_crop'
-        ? await fetchUnifiedTextbookAnswerDescriptors({
-          academyId,
-          limit: ids.length,
-          offset: 0,
-          sourceIds: ids,
-          styleVersion,
-        })
-        : await fetchUnifiedPbAnswerDescriptors({
-          academyId,
-          limit: ids.length,
-          offset: 0,
-          sourceIds: ids,
-          styleVersion,
-        });
+      const descriptorPage =
+        sourceKind === "textbook_crop"
+          ? await fetchUnifiedTextbookAnswerDescriptors({
+              academyId,
+              limit: ids.length,
+              offset: 0,
+              sourceIds: ids,
+              styleVersion,
+            })
+          : await fetchUnifiedPbAnswerDescriptors({
+              academyId,
+              limit: ids.length,
+              offset: 0,
+              sourceIds: ids,
+              styleVersion,
+            });
       const targets = await filterUnifiedDescriptorsNeedingRender({
         academyId,
         descriptors: descriptorPage.descriptors || [],
@@ -4867,24 +5358,25 @@ function scheduleUnifiedAnswerRenderV11Backfill({ academyId, sourceKind, sourceI
         descriptors: targets,
       });
       console.log(
-        '[answer-render-v11] background backfill done:',
+        "[answer-render-v11] background backfill done:",
         JSON.stringify({ sourceKind, requested: ids.length, ...result }),
       );
     } catch (err) {
-      console.warn('[answer-render-v11] background backfill failed:', err?.message || err);
+      console.warn(
+        "[answer-render-v11] background backfill failed:",
+        err?.message || err,
+      );
     } finally {
       unifiedAnswerV11InflightKeys.delete(inflightKey);
     }
   })();
 }
 
-async function upsertUnifiedAnswerRenderAsset({
-  academyId,
-  descriptor,
-  font,
-}) {
+async function upsertUnifiedAnswerRenderAsset({ academyId, descriptor, font }) {
   if (!isUuid(academyId) || !descriptor) return { ok: false, skipped: true };
-  const styleVersion = normalizeUnifiedAnswerRenderStyleVersion(descriptor.styleVersion);
+  const styleVersion = normalizeUnifiedAnswerRenderStyleVersion(
+    descriptor.styleVersion,
+  );
   const isV11 = styleVersion === UNIFIED_ANSWER_RENDER_STYLE_VERSION_V11;
   const baseRow = {
     academy_id: academyId,
@@ -4908,7 +5400,7 @@ async function upsertUnifiedAnswerRenderAsset({
       deviceScaleFactor: UNIFIED_ANSWER_RENDER_PIXEL_RATIO,
       fontFamily: font.family,
       fontBold: `${font.family} Bold`,
-      fontRegularPath: font.path || '',
+      fontRegularPath: font.path || "",
       fontSizePt: UNIFIED_ANSWER_RENDER_FONT_SIZE,
       maxWidthCm: UNIFIED_ANSWER_RENDER_MAX_WIDTH_CM,
       textColor: UNIFIED_ANSWER_RENDER_TEXT_COLOR,
@@ -4923,24 +5415,26 @@ async function upsertUnifiedAnswerRenderAsset({
       driver: DEFAULT_TEXTBOOK_DRIVER,
       bucket: UNIFIED_ANSWER_RENDER_BUCKET,
       key: descriptor.storagePath,
-      contentType: 'image/png',
+      contentType: "image/png",
       bytes: rendered.pngBuffer,
     });
     if (!uploaded.ok) {
-      throw new Error(uploaded.error || 'unified_render_asset_upload_failed');
+      throw new Error(uploaded.error || "unified_render_asset_upload_failed");
     }
-    const { error } = await supa
-      .from('answer_render_assets')
-      .upsert({
+    const { error } = await supa.from("answer_render_assets").upsert(
+      {
         ...baseRow,
         width_px: rendered.width || 0,
         height_px: rendered.height || 0,
         pixel_ratio: rendered.pixelRatio || UNIFIED_ANSWER_RENDER_PIXEL_RATIO,
-        render_error: '',
+        render_error: "",
         rendered_at: new Date().toISOString(),
-      }, {
-        onConflict: 'academy_id,source_kind,source_id,answer_kind,engine,style_version',
-      });
+      },
+      {
+        onConflict:
+          "academy_id,source_kind,source_id,answer_kind,engine,style_version",
+      },
+    );
     if (error) throw error;
     return {
       ok: true,
@@ -4950,17 +5444,19 @@ async function upsertUnifiedAnswerRenderAsset({
     };
   } catch (err) {
     try {
-      await supa
-        .from('answer_render_assets')
-        .upsert({
+      await supa.from("answer_render_assets").upsert(
+        {
           ...baseRow,
           width_px: 0,
           height_px: 0,
           render_error: compact(err?.message || err, 500),
           rendered_at: new Date().toISOString(),
-        }, {
-          onConflict: 'academy_id,source_kind,source_id,answer_kind,engine,style_version',
-        });
+        },
+        {
+          onConflict:
+            "academy_id,source_kind,source_id,answer_kind,engine,style_version",
+        },
+      );
     } catch (_) {
       // Migration may not be deployed yet; keep save/backfill resilient.
     }
@@ -4977,7 +5473,9 @@ async function renderUnifiedAnswerAssetsForDescriptors({
   academyId,
   descriptors,
 }) {
-  const targets = (Array.isArray(descriptors) ? descriptors : []).filter(Boolean);
+  const targets = (Array.isArray(descriptors) ? descriptors : []).filter(
+    Boolean,
+  );
   if (!isUuid(academyId) || targets.length === 0) {
     return { attempted: 0, rendered: 0, failed: 0, errors: [] };
   }
@@ -4987,29 +5485,31 @@ async function renderUnifiedAnswerAssetsForDescriptors({
   let failed = 0;
   const errors = [];
   const workerCount = Math.min(ANSWER_RENDER_CONCURRENCY, targets.length);
-  await Promise.all(Array.from({ length: workerCount }, async () => {
-    while (cursor < targets.length) {
-      const descriptor = targets[cursor];
-      cursor += 1;
-      const result = await upsertUnifiedAnswerRenderAsset({
-        academyId,
-        descriptor,
-        font,
-      });
-      if (result.ok) {
-        rendered += 1;
-      } else if (!result.skipped) {
-        failed += 1;
-        if (errors.length < 8) {
-          errors.push({
-            source_kind: result.sourceKind,
-            source_id: result.sourceId,
-            error: result.error,
-          });
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (cursor < targets.length) {
+        const descriptor = targets[cursor];
+        cursor += 1;
+        const result = await upsertUnifiedAnswerRenderAsset({
+          academyId,
+          descriptor,
+          font,
+        });
+        if (result.ok) {
+          rendered += 1;
+        } else if (!result.skipped) {
+          failed += 1;
+          if (errors.length < 8) {
+            errors.push({
+              source_kind: result.sourceKind,
+              source_id: result.sourceId,
+              error: result.error,
+            });
+          }
         }
       }
-    }
-  }));
+    }),
+  );
   return { attempted: targets.length, rendered, failed, errors };
 }
 
@@ -5018,38 +5518,51 @@ async function filterUnifiedDescriptorsNeedingRender({
   descriptors,
   force = false,
 }) {
-  const candidates = (Array.isArray(descriptors) ? descriptors : []).filter(Boolean);
+  const candidates = (Array.isArray(descriptors) ? descriptors : []).filter(
+    Boolean,
+  );
   if (force || !isUuid(academyId) || candidates.length === 0) return candidates;
   const out = [];
-  for (const sourceKind of ['textbook_crop', 'pb_question']) {
+  for (const sourceKind of ["textbook_crop", "pb_question"]) {
     for (const styleVersion of UNIFIED_ANSWER_RENDER_SUPPORTED_STYLE_VERSIONS) {
-      const group = candidates.filter((item) => item.sourceKind === sourceKind
-        && normalizeUnifiedAnswerRenderStyleVersion(item.styleVersion) === styleVersion);
+      const group = candidates.filter(
+        (item) =>
+          item.sourceKind === sourceKind &&
+          normalizeUnifiedAnswerRenderStyleVersion(item.styleVersion) ===
+            styleVersion,
+      );
       if (group.length === 0) continue;
       const { data, error } = await supa
-        .from('answer_render_assets')
-        .select('source_id, answer_kind, source_hash, render_error')
-        .eq('academy_id', academyId)
-        .eq('source_kind', sourceKind)
-        .eq('engine', UNIFIED_ANSWER_RENDER_ENGINE)
-        .eq('style_version', styleVersion)
-        .in('source_id', [...new Set(group.map((item) => item.sourceId))]);
+        .from("answer_render_assets")
+        .select("source_id, answer_kind, source_hash, render_error")
+        .eq("academy_id", academyId)
+        .eq("source_kind", sourceKind)
+        .eq("engine", UNIFIED_ANSWER_RENDER_ENGINE)
+        .eq("style_version", styleVersion)
+        .in("source_id", [...new Set(group.map((item) => item.sourceId))]);
       if (error) {
         out.push(...group);
         continue;
       }
       const existingBySourceId = new Map();
       for (const asset of Array.isArray(data) ? data : []) {
-        const sourceId = String(asset?.source_id || '').trim();
+        const sourceId = String(asset?.source_id || "").trim();
         // 파트 렌더('subjective#(1)')는 answer_kind 를 그대로 키로 사용한다.
-        const answerKind = String(asset?.answer_kind || '').trim();
-        if (sourceId) existingBySourceId.set(`${sourceId}\n${answerKind}`, asset);
+        const answerKind = String(asset?.answer_kind || "").trim();
+        if (sourceId)
+          existingBySourceId.set(`${sourceId}\n${answerKind}`, asset);
       }
       for (const item of group) {
-        const asset = existingBySourceId.get(`${item.sourceId}\n${item.answerKind}`);
-        const storedHash = String(asset?.source_hash || '').trim();
-        const renderError = String(asset?.render_error || '').trim();
-        if (!asset || storedHash !== item.sourceHash || renderError.length > 0) {
+        const asset = existingBySourceId.get(
+          `${item.sourceId}\n${item.answerKind}`,
+        );
+        const storedHash = String(asset?.source_hash || "").trim();
+        const renderError = String(asset?.render_error || "").trim();
+        if (
+          !asset ||
+          storedHash !== item.sourceHash ||
+          renderError.length > 0
+        ) {
           out.push(item);
         }
       }
@@ -5059,28 +5572,29 @@ async function filterUnifiedDescriptorsNeedingRender({
 }
 
 function textbookAnswerRenderSourceHash(answerRow, answerText) {
-  return createHash('sha256')
-    .update(JSON.stringify({
-      crop_id: String(answerRow?.crop_id || '').trim(),
-      answer_kind: String(answerRow?.answer_kind || '').trim().toLowerCase(),
-      answer: answerText,
-      engine: TEXTBOOK_ANSWER_RENDER_ENGINE,
-      style_version: TEXTBOOK_ANSWER_RENDER_STYLE_VERSION,
-      font_size_pt: TEXTBOOK_ANSWER_RENDER_FONT_SIZE,
-      text_color: TEXTBOOK_ANSWER_RENDER_TEXT_COLOR,
-      pixel_ratio: TEXTBOOK_ANSWER_RENDER_PIXEL_RATIO,
-      transparent: true,
-    }))
-    .digest('hex');
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        crop_id: String(answerRow?.crop_id || "").trim(),
+        answer_kind: String(answerRow?.answer_kind || "")
+          .trim()
+          .toLowerCase(),
+        answer: answerText,
+        engine: TEXTBOOK_ANSWER_RENDER_ENGINE,
+        style_version: TEXTBOOK_ANSWER_RENDER_STYLE_VERSION,
+        font_size_pt: TEXTBOOK_ANSWER_RENDER_FONT_SIZE,
+        text_color: TEXTBOOK_ANSWER_RENDER_TEXT_COLOR,
+        pixel_ratio: TEXTBOOK_ANSWER_RENDER_PIXEL_RATIO,
+        transparent: true,
+      }),
+    )
+    .digest("hex");
 }
 
-async function upsertTextbookAnswerRenderAsset({
-  academyId,
-  answerRow,
-  font,
-}) {
-  const cropId = String(answerRow?.crop_id || '').trim();
-  if (!isUuid(academyId) || !isUuid(cropId)) return { ok: false, skipped: true };
+async function upsertTextbookAnswerRenderAsset({ academyId, answerRow, font }) {
+  const cropId = String(answerRow?.crop_id || "").trim();
+  if (!isUuid(academyId) || !isUuid(cropId))
+    return { ok: false, skipped: true };
   const answerText = normalizeTextbookAnswerForRender(answerRow);
   if (!answerText) return { ok: false, skipped: true };
 
@@ -5107,7 +5621,7 @@ async function upsertTextbookAnswerRenderAsset({
       deviceScaleFactor: TEXTBOOK_ANSWER_RENDER_PIXEL_RATIO,
       fontFamily: font.family,
       fontBold: `${font.family} Bold`,
-      fontRegularPath: font.path || '',
+      fontRegularPath: font.path || "",
       fontSizePt: TEXTBOOK_ANSWER_RENDER_FONT_SIZE,
       textColor: TEXTBOOK_ANSWER_RENDER_TEXT_COLOR,
     });
@@ -5115,38 +5629,40 @@ async function upsertTextbookAnswerRenderAsset({
       driver: DEFAULT_TEXTBOOK_DRIVER,
       bucket: TEXTBOOK_ANSWER_RENDER_BUCKET,
       key: storagePath,
-      contentType: 'image/png',
+      contentType: "image/png",
       bytes: rendered.pngBuffer,
     });
     if (!uploaded.ok) {
-      throw new Error(uploaded.error || 'render_asset_upload_failed');
+      throw new Error(uploaded.error || "render_asset_upload_failed");
     }
-    const { error } = await supa
-      .from('textbook_answer_render_assets')
-      .upsert({
+    const { error } = await supa.from("textbook_answer_render_assets").upsert(
+      {
         ...baseRow,
         width_px: rendered.width || 0,
         height_px: rendered.height || 0,
-        render_error: '',
+        render_error: "",
         rendered_at: new Date().toISOString(),
-      }, {
-        onConflict: 'academy_id,crop_id,engine,style_version',
-      });
+      },
+      {
+        onConflict: "academy_id,crop_id,engine,style_version",
+      },
+    );
     if (error) throw error;
     return { ok: true, cropId, cached: false };
   } catch (err) {
     try {
-      await supa
-        .from('textbook_answer_render_assets')
-        .upsert({
+      await supa.from("textbook_answer_render_assets").upsert(
+        {
           ...baseRow,
           width_px: 0,
           height_px: 0,
           render_error: compact(err?.message || err, 500),
           rendered_at: new Date().toISOString(),
-        }, {
-          onConflict: 'academy_id,crop_id,engine,style_version',
-        });
+        },
+        {
+          onConflict: "academy_id,crop_id,engine,style_version",
+        },
+      );
     } catch (_) {
       // Migration may not be deployed yet; never fail answer save.
     }
@@ -5154,10 +5670,7 @@ async function upsertTextbookAnswerRenderAsset({
   }
 }
 
-async function renderTextbookAnswerAssetsForRows({
-  academyId,
-  answerRows,
-}) {
+async function renderTextbookAnswerAssetsForRows({ academyId, answerRows }) {
   const rows = Array.isArray(answerRows) ? answerRows : [];
   const targets = rows.filter((row) => normalizeTextbookAnswerForRender(row));
   if (!isUuid(academyId) || targets.length === 0) {
@@ -5169,22 +5682,24 @@ async function renderTextbookAnswerAssetsForRows({
   let failed = 0;
   const errors = [];
   const workerCount = Math.min(ANSWER_RENDER_CONCURRENCY, targets.length);
-  await Promise.all(Array.from({ length: workerCount }, async () => {
-    while (cursor < targets.length) {
-      const row = targets[cursor];
-      cursor += 1;
-      const result = await upsertTextbookAnswerRenderAsset({
-        academyId,
-        answerRow: row,
-        font,
-      });
-      if (result.ok) rendered += 1;
-      else if (!result.skipped) {
-        failed += 1;
-        if (errors.length < 5) errors.push(result.error || 'render_failed');
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (cursor < targets.length) {
+        const row = targets[cursor];
+        cursor += 1;
+        const result = await upsertTextbookAnswerRenderAsset({
+          academyId,
+          answerRow: row,
+          font,
+        });
+        if (result.ok) rendered += 1;
+        else if (!result.skipped) {
+          failed += 1;
+          if (errors.length < 5) errors.push(result.error || "render_failed");
+        }
       }
-    }
-  }));
+    }),
+  );
   return { attempted: targets.length, rendered, failed, errors };
 }
 
@@ -5215,7 +5730,7 @@ async function filterTextbookAnswerRowsNeedingRender({
   const candidates = (Array.isArray(answerRows) ? answerRows : [])
     .map((row) => {
       const answerText = normalizeTextbookAnswerForRender(row);
-      const cropId = String(row?.crop_id || '').trim();
+      const cropId = String(row?.crop_id || "").trim();
       if (!answerText || !isUuid(cropId)) return null;
       return {
         row,
@@ -5227,56 +5742,75 @@ async function filterTextbookAnswerRowsNeedingRender({
   if (!isUuid(academyId) || candidates.length === 0) return [];
 
   const { data, error } = await supa
-    .from('textbook_answer_render_assets')
-    .select('crop_id, source_hash, render_error')
-    .eq('academy_id', academyId)
-    .eq('engine', TEXTBOOK_ANSWER_RENDER_ENGINE)
-    .eq('style_version', TEXTBOOK_ANSWER_RENDER_STYLE_VERSION)
-    .in('crop_id', candidates.map((item) => item.cropId));
+    .from("textbook_answer_render_assets")
+    .select("crop_id, source_hash, render_error")
+    .eq("academy_id", academyId)
+    .eq("engine", TEXTBOOK_ANSWER_RENDER_ENGINE)
+    .eq("style_version", TEXTBOOK_ANSWER_RENDER_STYLE_VERSION)
+    .in(
+      "crop_id",
+      candidates.map((item) => item.cropId),
+    );
   if (error) return candidates.map((item) => item.row);
 
   const existingByCropId = new Map();
   for (const asset of Array.isArray(data) ? data : []) {
-    const cropId = String(asset?.crop_id || '').trim();
+    const cropId = String(asset?.crop_id || "").trim();
     if (cropId) existingByCropId.set(cropId, asset);
   }
   return candidates
     .filter((item) => {
       const asset = existingByCropId.get(item.cropId);
       if (!asset) return true;
-      const storedHash = String(asset?.source_hash || '').trim();
-      const renderError = String(asset?.render_error || '').trim();
+      const storedHash = String(asset?.source_hash || "").trim();
+      const renderError = String(asset?.render_error || "").trim();
       return storedHash !== item.sourceHash || renderError.length > 0;
     })
     .map((item) => item.row);
 }
 
 async function previewAnswerRenders(res, req) {
-  console.log('[pb-api] POST /pb/preview/answer-renders');
+  console.log("[pb-api] POST /pb/preview/answer-renders");
   let body;
-  try { body = await readJson(req); } catch (_) {
-    sendJson(res, 400, { ok: false, error: 'invalid_json' }); return;
+  try {
+    body = await readJson(req);
+  } catch (_) {
+    sendJson(res, 400, { ok: false, error: "invalid_json" });
+    return;
   }
 
-  const academyId = String(body?.academyId || '').trim();
+  const academyId = String(body?.academyId || "").trim();
   const rawItems = Array.isArray(body?.items) ? body.items : [];
   if (!isUuid(academyId) || rawItems.length === 0) {
-    sendJson(res, 400, { ok: false, error: 'academyId(uuid) and items[] required' });
+    sendJson(res, 400, {
+      ok: false,
+      error: "academyId(uuid) and items[] required",
+    });
     return;
   }
 
   const style = normalizeJsonObject(body?.style, {});
-  const textColor = normalizeAnswerRenderColor(style.textColor || style.color || 'EAF2F7');
+  const textColor = normalizeAnswerRenderColor(
+    style.textColor || style.color || "EAF2F7",
+  );
   const backgroundColor = normalizeAnswerRenderColor(
-    style.backgroundColor || style.background || UNIFIED_ANSWER_RENDER_BACKGROUND_COLOR,
+    style.backgroundColor ||
+      style.background ||
+      UNIFIED_ANSWER_RENDER_BACKGROUND_COLOR,
     UNIFIED_ANSWER_RENDER_BACKGROUND_COLOR,
   );
-  const fontSize = normalizeAnswerRenderFontSize(style.fontSize || style.fontSizePt || 19);
+  const fontSize = normalizeAnswerRenderFontSize(
+    style.fontSize || style.fontSizePt || 19,
+  );
   const transparent = style.transparent !== false;
   const engine = normalizeAnswerRenderEngine(body?.engine || style.engine);
   const font = resolveBatchPreviewFont();
-  const fontFamily = String(style.fontFamily || font.family || 'Malgun Gothic').trim();
-  const fontRegularPath = String(style.fontFamily ? '' : font.path || '').trim();
+  const fontFamily = String(
+    style.fontFamily || font.family || "Malgun Gothic",
+  ).trim();
+  const fontRegularPath = String(
+    style.fontFamily ? "" : font.path || "",
+  ).trim();
   const fontBold = String(style.fontBold || `${fontFamily} Bold`).trim();
   const limit = Math.min(rawItems.length, 120);
   const descriptors = [];
@@ -5284,23 +5818,25 @@ async function previewAnswerRenders(res, req) {
 
   for (let i = 0; i < limit; i += 1) {
     const rawItem = rawItems[i];
-    const key = String(rawItem?.key ?? '').trim();
-    const answer = String(rawItem?.answer ?? '').trim();
+    const key = String(rawItem?.key ?? "").trim();
+    const answer = String(rawItem?.answer ?? "").trim();
     if (!key) continue;
 
-    const renderHash = createHash('sha256')
-      .update(JSON.stringify({
-        version: ANSWER_RENDER_STYLE_VERSION,
-        engine,
-        answer,
-        textColor,
-        backgroundColor,
-        fontSize,
-        transparent,
-        fontFamily,
-        fontRegularPath,
-      }))
-      .digest('hex');
+    const renderHash = createHash("sha256")
+      .update(
+        JSON.stringify({
+          version: ANSWER_RENDER_STYLE_VERSION,
+          engine,
+          answer,
+          textColor,
+          backgroundColor,
+          fontSize,
+          transparent,
+          fontFamily,
+          fontRegularPath,
+        }),
+      )
+      .digest("hex");
     const storagePath = `${academyId}/answer-renders/${renderHash}.png`;
     const descriptor = { key, answer, renderHash, storagePath };
     descriptors.push(descriptor);
@@ -5309,35 +5845,40 @@ async function previewAnswerRenders(res, req) {
 
   const renderOne = async (descriptor) => {
     try {
-      const cachedMeta = await loadAnswerRenderStorageMeta(descriptor.storagePath);
+      const cachedMeta = await loadAnswerRenderStorageMeta(
+        descriptor.storagePath,
+      );
       if (cachedMeta) {
         const url = await createAnswerRenderSignedUrl(descriptor.storagePath);
         return {
           url,
           width: cachedMeta.width || 0,
           height: cachedMeta.height || 0,
-        pixelRatio: ANSWER_RENDER_PIXEL_RATIO,
+          pixelRatio: ANSWER_RENDER_PIXEL_RATIO,
           cached: true,
           storagePath: descriptor.storagePath,
         };
       }
 
       let rendered;
-      if (engine === 'mathjax') {
+      if (engine === "mathjax") {
         try {
           rendered = await renderAnswerWithMathJax({
-            answer: descriptor.answer || '-',
+            answer: descriptor.answer || "-",
             deviceScaleFactor: ANSWER_RENDER_PIXEL_RATIO,
             fontSizePt: fontSize,
             textColor,
           });
         } catch (err) {
-          console.warn('[answer-renders] mathjax failed, fallback to xelatex:', err?.message || err);
+          console.warn(
+            "[answer-renders] mathjax failed, fallback to xelatex:",
+            err?.message || err,
+          );
         }
       }
       if (!rendered) {
         rendered = await renderAnswerWithXeLatex({
-          answer: descriptor.answer || '-',
+          answer: descriptor.answer || "-",
           viewportWidth: 640,
           deviceScaleFactor: ANSWER_RENDER_PIXEL_RATIO,
           fontFamily,
@@ -5353,7 +5894,7 @@ async function previewAnswerRenders(res, req) {
       const { error: upErr } = await supa.storage
         .from(ANSWER_RENDER_BUCKET)
         .upload(descriptor.storagePath, rendered.pngBuffer, {
-          contentType: 'image/png',
+          contentType: "image/png",
           upsert: true,
         });
       if (upErr) throw upErr;
@@ -5368,7 +5909,7 @@ async function previewAnswerRenders(res, req) {
       };
     } catch (err) {
       return {
-        url: '',
+        url: "",
         width: 0,
         height: 0,
         cached: false,
@@ -5380,23 +5921,28 @@ async function previewAnswerRenders(res, req) {
   const byHashResult = new Map();
   const uniqueDescriptors = Array.from(renderByHash.values());
   let cursor = 0;
-  const workerCount = Math.min(ANSWER_RENDER_CONCURRENCY, uniqueDescriptors.length);
-  await Promise.all(Array.from({ length: workerCount }, async () => {
-    while (cursor < uniqueDescriptors.length) {
-      const descriptor = uniqueDescriptors[cursor];
-      cursor += 1;
-      byHashResult.set(descriptor.renderHash, await renderOne(descriptor));
-    }
-  }));
+  const workerCount = Math.min(
+    ANSWER_RENDER_CONCURRENCY,
+    uniqueDescriptors.length,
+  );
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (cursor < uniqueDescriptors.length) {
+        const descriptor = uniqueDescriptors[cursor];
+        cursor += 1;
+        byHashResult.set(descriptor.renderHash, await renderOne(descriptor));
+      }
+    }),
+  );
 
   const renders = descriptors.map((descriptor) => ({
     key: descriptor.key,
     ...(byHashResult.get(descriptor.renderHash) || {
-      url: '',
+      url: "",
       width: 0,
       height: 0,
       cached: false,
-      error: 'render_unavailable',
+      error: "render_unavailable",
     }),
   }));
 
@@ -5404,45 +5950,57 @@ async function previewAnswerRenders(res, req) {
 }
 
 async function batchRenderThumbnails(res, req) {
-  console.log('[pb-api] POST /pb/preview/batch-render');
+  console.log("[pb-api] POST /pb/preview/batch-render");
   let body;
-  try { body = await readJson(req); } catch (_) {
-    sendJson(res, 400, { ok: false, error: 'invalid_json' }); return;
+  try {
+    body = await readJson(req);
+  } catch (_) {
+    sendJson(res, 400, { ok: false, error: "invalid_json" });
+    return;
   }
 
-  const academyId = String(body?.academyId || '').trim();
+  const academyId = String(body?.academyId || "").trim();
   const rawQuestionIds = Array.isArray(body?.questionIds)
-    ? body.questionIds.map((v) => String(v || '').trim())
+    ? body.questionIds.map((v) => String(v || "").trim())
     : [];
   const questionIds = normalizeUuidListOrdered(rawQuestionIds);
-  const requestedDocumentId = String(body?.documentId || '').trim();
+  const requestedDocumentId = String(body?.documentId || "").trim();
 
   if (!isUuid(academyId) || questionIds.length === 0) {
-    sendJson(res, 400, { ok: false, error: 'academyId(uuid) and questionIds(uuid[]) required' });
+    sendJson(res, 400, {
+      ok: false,
+      error: "academyId(uuid) and questionIds(uuid[]) required",
+    });
     return;
   }
 
   const { data: questionRowsById } = await supa
-    .from('pb_questions')
-    .select('id,question_uid,document_id,question_type,stem,choices,allow_objective,allow_subjective,objective_choices,objective_answer_key,subjective_answer,objective_generated,figure_refs,equations,confidence,flags,reviewer_notes,source_page,source_order,meta,question_number')
-    .eq('academy_id', academyId)
-    .in('id', questionIds);
+    .from("pb_questions")
+    .select(
+      "id,question_uid,document_id,question_type,stem,choices,allow_objective,allow_subjective,objective_choices,objective_answer_key,subjective_answer,objective_generated,figure_refs,equations,confidence,flags,reviewer_notes,source_page,source_order,meta,question_number",
+    )
+    .eq("academy_id", academyId)
+    .in("id", questionIds);
   let questionRows = questionRowsById || [];
-  const foundById = new Set(questionRows.map((r) => String(r?.id || '').trim()));
+  const foundById = new Set(
+    questionRows.map((r) => String(r?.id || "").trim()),
+  );
   const missingByIdIds = questionIds.filter((id) => !foundById.has(id));
   if (missingByIdIds.length > 0) {
     const { data: byUidRows } = await supa
-      .from('pb_questions')
-      .select('id,question_uid,document_id,question_type,stem,choices,allow_objective,allow_subjective,objective_choices,objective_answer_key,subjective_answer,objective_generated,figure_refs,equations,confidence,flags,reviewer_notes,source_page,source_order,meta,question_number')
-      .eq('academy_id', academyId)
-      .in('question_uid', missingByIdIds);
+      .from("pb_questions")
+      .select(
+        "id,question_uid,document_id,question_type,stem,choices,allow_objective,allow_subjective,objective_choices,objective_answer_key,subjective_answer,objective_generated,figure_refs,equations,confidence,flags,reviewer_notes,source_page,source_order,meta,question_number",
+      )
+      .eq("academy_id", academyId)
+      .in("question_uid", missingByIdIds);
     if (byUidRows?.length) questionRows = [...questionRows, ...byUidRows];
   }
 
   const rowById = new Map();
   for (const row of questionRows) {
-    const id = String(row?.id || '').trim();
-    const uid = String(row?.question_uid || '').trim();
+    const id = String(row?.id || "").trim();
+    const uid = String(row?.question_uid || "").trim();
     if (id) rowById.set(id, row);
     if (uid && uid !== id) rowById.set(uid, row);
   }
@@ -5457,22 +6015,29 @@ async function batchRenderThumbnails(res, req) {
       unresolvedQuestionIds.push(qid);
       continue;
     }
-    const uid = String(row?.question_uid || row?.id || '').trim();
-    const clientMode = clientModeMap[qid] || clientModeMap[uid] || '';
-    const mode = (clientMode === 'subjective' || clientMode === 'essay')
-      ? clientMode
-      : inferQuestionModeFromRow(row);
+    const uid = String(row?.question_uid || row?.id || "").trim();
+    const clientMode = clientModeMap[qid] || clientModeMap[uid] || "";
+    const mode =
+      clientMode === "subjective" || clientMode === "essay"
+        ? clientMode
+        : inferQuestionModeFromRow(row);
     orderedQuestions.push({ ...row, mode, questionMode: mode });
     qidOrder.push(qid);
   }
-  if (unresolvedQuestionIds.length > 0 || qidOrder.length !== questionIds.length) {
-    console.warn('[pb-api] batch-thumb unresolved questions', JSON.stringify({
-      requested: questionIds.length,
-      found: qidOrder.length,
-      unresolved: unresolvedQuestionIds.slice(0, 20),
-      unresolvedCount: unresolvedQuestionIds.length,
-      documentId: requestedDocumentId,
-    }));
+  if (
+    unresolvedQuestionIds.length > 0 ||
+    qidOrder.length !== questionIds.length
+  ) {
+    console.warn(
+      "[pb-api] batch-thumb unresolved questions",
+      JSON.stringify({
+        requested: questionIds.length,
+        found: qidOrder.length,
+        unresolved: unresolvedQuestionIds.slice(0, 20),
+        unresolvedCount: unresolvedQuestionIds.length,
+        documentId: requestedDocumentId,
+      }),
+    );
   }
 
   if (orderedQuestions.length === 0) {
@@ -5483,8 +6048,8 @@ async function batchRenderThumbnails(res, req) {
   // 문항카드 썸네일은 "시험지 양식" 미리보기가 아니라 단일 문항 식별용 이미지다.
   // 클라이언트의 과제형/모의고사형 설정이 섞이면 새로고침 시 2단 시험지 레이아웃이
   // 썸네일 캐시에 덮어써질 수 있으므로 batch thumbnail 렌더는 고정 단문항 프로필을 쓴다.
-  const templateProfile = 'naesin';
-  const paperSize = 'A4';
+  const templateProfile = "naesin";
+  const paperSize = "A4";
 
   const PREVIEW_PAGE_WIDTH_MM = 115;
   const PREVIEW_PAGE_HEIGHT_MM = 800;
@@ -5497,7 +6062,7 @@ async function batchRenderThumbnails(res, req) {
       renderConfig: {
         hidePreviewHeader: true,
         hideQuestionNumber: true,
-        mathEngine: 'xelatex',
+        mathEngine: "xelatex",
         disableIndependentSetGrouping: true,
         previewIndependentSetCommonStem: true,
         includeCoverPage: false,
@@ -5514,14 +6079,14 @@ async function batchRenderThumbnails(res, req) {
       modeByQuestionId: Object.fromEntries(
         orderedQuestions.map((q) => [String(q.question_uid || q.id), q.mode]),
       ),
-      questionMode: 'objective',
+      questionMode: "objective",
       layoutColumns: 1,
       maxQuestionsPerPage: 1,
       renderConfigVersion: EXPORT_RENDER_CONFIG_VERSION,
       fontFamilyRequested: batchFont.family,
       fontFamilyResolved: batchFont.family,
       fontRegularPath: batchFont.path,
-      fontBoldPath: '',
+      fontBoldPath: "",
       fontSize: 11,
       supabaseClient: supa,
     });
@@ -5531,19 +6096,23 @@ async function batchRenderThumbnails(res, req) {
 
     const tmpDir = path.join(os.tmpdir(), `pb-batch-${randomUUID()}`);
     fs.mkdirSync(tmpDir, { recursive: true });
-    const tmpPdf = path.join(tmpDir, 'doc.pdf');
+    const tmpPdf = path.join(tmpDir, "doc.pdf");
     fs.writeFileSync(tmpPdf, pdfBytes);
 
     try {
-      const dpi = Math.max(150, Math.round((BATCH_THUMB_WIDTH_PX / PREVIEW_PAGE_WIDTH_MM) * 25.4));
-      const pngBase = path.join(tmpDir, 'page');
+      const dpi = Math.max(
+        150,
+        Math.round((BATCH_THUMB_WIDTH_PX / PREVIEW_PAGE_WIDTH_MM) * 25.4),
+      );
+      const pngBase = path.join(tmpDir, "page");
       await execFileAsync(
-        'pdftoppm',
-        ['-png', '-r', String(dpi), tmpPdf, pngBase],
+        "pdftoppm",
+        ["-png", "-r", String(dpi), tmpPdf, pngBase],
         { timeout: 120_000, windowsHide: true },
       );
 
-      const allFiles = fs.readdirSync(tmpDir)
+      const allFiles = fs
+        .readdirSync(tmpDir)
         .filter((f) => /^page-\d+\.png$/.test(f))
         .sort();
       let pngFiles = allFiles.map((f) => path.join(tmpDir, f));
@@ -5559,8 +6128,8 @@ async function batchRenderThumbnails(res, req) {
       if (pngFiles.length !== qidOrder.length) {
         const missTail =
           pngFiles.length < qidOrder.length
-            ? qidOrder.slice(pngFiles.length).join(',')
-            : '(extra-pages)';
+            ? qidOrder.slice(pngFiles.length).join(",")
+            : "(extra-pages)";
         console.warn(
           `[pb-api] batch-thumb page/question mismatch: pages=${pngFiles.length} ` +
             `questions=${qidOrder.length} missingOrExtra=${missTail}`,
@@ -5582,13 +6151,18 @@ async function batchRenderThumbnails(res, req) {
             let contentBottom = origH;
             try {
               const trimResult = await sharp(raw)
-                .trim({ background: { r: 255, g: 255, b: 255, alpha: 1 }, threshold: 10 })
+                .trim({
+                  background: { r: 255, g: 255, b: 255, alpha: 1 },
+                  threshold: 10,
+                })
                 .toBuffer({ resolveWithObject: true });
               const tTop = Number(trimResult.info.trimOffsetTop) || 0;
               const tH = Number(trimResult.info.height) || origH;
               const padding = Math.max(100, Math.round(origH * 0.03));
               contentBottom = Math.min(origH, tTop + tH + padding);
-            } catch (_) { /* keep full height */ }
+            } catch (_) {
+              /* keep full height */
+            }
 
             const minH = Math.max(80, Math.round(origH * 0.05));
             const cropH = Math.max(minH, contentBottom);
@@ -5598,17 +6172,22 @@ async function batchRenderThumbnails(res, req) {
               .png({ compressionLevel: 9 })
               .toBuffer();
 
-            const storagePath =
-              `${academyId}/batch-preview/${EXPORT_RENDER_CONFIG_VERSION}/card/${qid}.png`;
+            const storagePath = `${academyId}/batch-preview/${EXPORT_RENDER_CONFIG_VERSION}/card/${qid}.png`;
             const { error: upErr } = await supa.storage
               .from(BATCH_THUMB_BUCKET)
-              .upload(storagePath, cropped, { contentType: 'image/png', upsert: true });
+              .upload(storagePath, cropped, {
+                contentType: "image/png",
+                upsert: true,
+              });
             if (upErr) {
-              console.warn('[pb-api] batch-thumb upload failed', JSON.stringify({
-                questionId: qid,
-                storagePath,
-                message: upErr.message,
-              }));
+              console.warn(
+                "[pb-api] batch-thumb upload failed",
+                JSON.stringify({
+                  questionId: qid,
+                  storagePath,
+                  message: upErr.message,
+                }),
+              );
               thumbnails[qid] = { error: upErr.message };
               return;
             }
@@ -5616,13 +6195,16 @@ async function batchRenderThumbnails(res, req) {
               .from(BATCH_THUMB_BUCKET)
               .createSignedUrl(storagePath, BATCH_THUMB_EXPIRES_SEC);
             if (!signedData?.signedUrl) {
-              console.warn('[pb-api] batch-thumb signed url missing', JSON.stringify({
-                questionId: qid,
-                storagePath,
-              }));
+              console.warn(
+                "[pb-api] batch-thumb signed url missing",
+                JSON.stringify({
+                  questionId: qid,
+                  storagePath,
+                }),
+              );
             }
             thumbnails[qid] = {
-              url: signedData?.signedUrl || '',
+              url: signedData?.signedUrl || "",
               width: BATCH_THUMB_WIDTH_PX,
               storagePath,
             };
@@ -5631,75 +6213,101 @@ async function batchRenderThumbnails(res, req) {
       }
 
       await Promise.all(uploadPromises);
-      const thumbnailCount = Object.values(thumbnails)
-        .filter((v) => v && typeof v === 'object' && String(v.url || '').trim())
-        .length;
+      const thumbnailCount = Object.values(thumbnails).filter(
+        (v) => v && typeof v === "object" && String(v.url || "").trim(),
+      ).length;
       if (thumbnailCount !== qidOrder.length) {
-        console.warn('[pb-api] batch-thumb incomplete response', JSON.stringify({
-          requested: questionIds.length,
-          found: qidOrder.length,
-          thumbnails: thumbnailCount,
-          missingAfterRender: qidOrder.filter((id) => !thumbnails[id]?.url).slice(0, 20),
-        }));
+        console.warn(
+          "[pb-api] batch-thumb incomplete response",
+          JSON.stringify({
+            requested: questionIds.length,
+            found: qidOrder.length,
+            thumbnails: thumbnailCount,
+            missingAfterRender: qidOrder
+              .filter((id) => !thumbnails[id]?.url)
+              .slice(0, 20),
+          }),
+        );
       }
-      sendJson(res, 200, { ok: true, thumbnails, pageCount, questionCount: qidOrder.length });
+      sendJson(res, 200, {
+        ok: true,
+        thumbnails,
+        pageCount,
+        questionCount: qidOrder.length,
+      });
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   } catch (err) {
-    sendJson(res, 500, { ok: false, error: `render_failed: ${compact(err?.message || err)}` });
+    sendJson(res, 500, {
+      ok: false,
+      error: `render_failed: ${compact(err?.message || err)}`,
+    });
   }
 }
 
 async function renderCustomPreviewThumbnail(res, req) {
-  console.log('[pb-api] POST /pb/preview/custom-thumbnail');
+  console.log("[pb-api] POST /pb/preview/custom-thumbnail");
   let body;
-  try { body = await readJson(req); } catch (_) {
-    sendJson(res, 400, { ok: false, error: 'invalid_json' }); return;
-  }
-
-  const academyId = String(body?.academyId || '').trim();
-  const rawQuestion = body?.question && typeof body.question === 'object'
-    ? body.question
-    : null;
-  if (!isUuid(academyId) || !rawQuestion) {
-    sendJson(res, 400, { ok: false, error: 'academyId(uuid) and question required' });
+  try {
+    body = await readJson(req);
+  } catch (_) {
+    sendJson(res, 400, { ok: false, error: "invalid_json" });
     return;
   }
 
-  const qid = String(rawQuestion.id || rawQuestion.question_uid || randomUUID()).trim();
+  const academyId = String(body?.academyId || "").trim();
+  const rawQuestion =
+    body?.question && typeof body.question === "object" ? body.question : null;
+  if (!isUuid(academyId) || !rawQuestion) {
+    sendJson(res, 400, {
+      ok: false,
+      error: "academyId(uuid) and question required",
+    });
+    return;
+  }
+
+  const qid = String(
+    rawQuestion.id || rawQuestion.question_uid || randomUUID(),
+  ).trim();
   const question = {
     id: qid,
     question_uid: String(rawQuestion.question_uid || qid).trim(),
     academy_id: academyId,
-    document_id: String(rawQuestion.document_id || '').trim(),
-    question_type: String(rawQuestion.question_type || '주관식').trim() || '주관식',
-    stem: String(rawQuestion.stem || '').trim(),
+    document_id: String(rawQuestion.document_id || "").trim(),
+    question_type:
+      String(rawQuestion.question_type || "주관식").trim() || "주관식",
+    stem: String(rawQuestion.stem || "").trim(),
     choices: Array.isArray(rawQuestion.choices) ? rawQuestion.choices : [],
     allow_objective: rawQuestion.allow_objective === true,
     allow_subjective: rawQuestion.allow_subjective !== false,
     objective_choices: Array.isArray(rawQuestion.objective_choices)
       ? rawQuestion.objective_choices
       : [],
-    objective_answer_key: String(rawQuestion.objective_answer_key || ''),
-    subjective_answer: String(rawQuestion.subjective_answer || ''),
+    objective_answer_key: String(rawQuestion.objective_answer_key || ""),
+    subjective_answer: String(rawQuestion.subjective_answer || ""),
     objective_generated: rawQuestion.objective_generated === true,
-    figure_refs: Array.isArray(rawQuestion.figure_refs) ? rawQuestion.figure_refs : [],
-    equations: Array.isArray(rawQuestion.equations) ? rawQuestion.equations : [],
+    figure_refs: Array.isArray(rawQuestion.figure_refs)
+      ? rawQuestion.figure_refs
+      : [],
+    equations: Array.isArray(rawQuestion.equations)
+      ? rawQuestion.equations
+      : [],
     confidence: Number(rawQuestion.confidence || 0.9),
     flags: Array.isArray(rawQuestion.flags) ? rawQuestion.flags : [],
-    reviewer_notes: '',
+    reviewer_notes: "",
     source_page: Number(rawQuestion.source_page || 1),
     source_order: Number(rawQuestion.source_order || 1),
-    meta: rawQuestion.meta && typeof rawQuestion.meta === 'object'
-      ? rawQuestion.meta
-      : {},
-    question_number: String(rawQuestion.question_number || '').trim(),
-    mode: 'subjective',
-    questionMode: 'subjective',
+    meta:
+      rawQuestion.meta && typeof rawQuestion.meta === "object"
+        ? rawQuestion.meta
+        : {},
+    question_number: String(rawQuestion.question_number || "").trim(),
+    mode: "subjective",
+    questionMode: "subjective",
   };
   if (!question.stem) {
-    sendJson(res, 400, { ok: false, error: 'question.stem required' });
+    sendJson(res, 400, { ok: false, error: "question.stem required" });
     return;
   }
 
@@ -5714,7 +6322,7 @@ async function renderCustomPreviewThumbnail(res, req) {
       renderConfig: {
         hidePreviewHeader: true,
         hideQuestionNumber: true,
-        mathEngine: 'xelatex',
+        mathEngine: "xelatex",
         disableIndependentSetGrouping: true,
         includeCoverPage: false,
         includeAcademyLogo: false,
@@ -5725,38 +6333,44 @@ async function renderCustomPreviewThumbnail(res, req) {
         maxQuestionsPerPage: 1,
         geometryOverride: previewGeometry,
       },
-      profile: 'naesin',
-      paper: 'A4',
-      modeByQuestionId: { [question.question_uid]: 'subjective' },
-      questionMode: 'subjective',
+      profile: "naesin",
+      paper: "A4",
+      modeByQuestionId: { [question.question_uid]: "subjective" },
+      questionMode: "subjective",
       layoutColumns: 1,
       maxQuestionsPerPage: 1,
       renderConfigVersion: EXPORT_RENDER_CONFIG_VERSION,
       fontFamilyRequested: batchFont.family,
       fontFamilyResolved: batchFont.family,
       fontRegularPath: batchFont.path,
-      fontBoldPath: '',
+      fontBoldPath: "",
       fontSize: 11,
       supabaseClient: supa,
     });
 
     const tmpDir = path.join(os.tmpdir(), `pb-custom-thumb-${randomUUID()}`);
     fs.mkdirSync(tmpDir, { recursive: true });
-    const tmpPdf = path.join(tmpDir, 'doc.pdf');
+    const tmpPdf = path.join(tmpDir, "doc.pdf");
     fs.writeFileSync(tmpPdf, rendered.bytes);
     try {
-      const dpi = Math.max(150, Math.round((BATCH_THUMB_WIDTH_PX / PREVIEW_PAGE_WIDTH_MM) * 25.4));
-      const pngBase = path.join(tmpDir, 'page');
+      const dpi = Math.max(
+        150,
+        Math.round((BATCH_THUMB_WIDTH_PX / PREVIEW_PAGE_WIDTH_MM) * 25.4),
+      );
+      const pngBase = path.join(tmpDir, "page");
       await execFileAsync(
-        'pdftoppm',
-        ['-png', '-r', String(dpi), tmpPdf, pngBase],
+        "pdftoppm",
+        ["-png", "-r", String(dpi), tmpPdf, pngBase],
         { timeout: 120_000, windowsHide: true },
       );
       const singlePath = fs.existsSync(`${pngBase}-1.png`)
         ? `${pngBase}-1.png`
         : `${pngBase}.png`;
       if (!fs.existsSync(singlePath)) {
-        sendJson(res, 500, { ok: false, error: 'render_failed: thumbnail_not_found' });
+        sendJson(res, 500, {
+          ok: false,
+          error: "render_failed: thumbnail_not_found",
+        });
         return;
       }
       const raw = fs.readFileSync(singlePath);
@@ -5766,30 +6380,43 @@ async function renderCustomPreviewThumbnail(res, req) {
       let contentBottom = origH;
       try {
         const trimResult = await sharp(raw)
-          .trim({ background: { r: 255, g: 255, b: 255, alpha: 1 }, threshold: 10 })
+          .trim({
+            background: { r: 255, g: 255, b: 255, alpha: 1 },
+            threshold: 10,
+          })
           .toBuffer({ resolveWithObject: true });
         const tTop = Number(trimResult.info.trimOffsetTop) || 0;
         const tH = Number(trimResult.info.height) || origH;
         const padding = Math.max(100, Math.round(origH * 0.03));
         contentBottom = Math.min(origH, tTop + tH + padding);
-      } catch (_) { /* keep full height */ }
-      const cropH = Math.max(Math.max(80, Math.round(origH * 0.05)), contentBottom);
+      } catch (_) {
+        /* keep full height */
+      }
+      const cropH = Math.max(
+        Math.max(80, Math.round(origH * 0.05)),
+        contentBottom,
+      );
       const cropped = await sharp(raw)
         .extract({ left: 0, top: 0, width: origW, height: cropH })
         .resize({ width: BATCH_THUMB_WIDTH_PX })
         .png({ compressionLevel: 9 })
         .toBuffer();
-      const sourceHash = createHash('sha256')
+      const sourceHash = createHash("sha256")
         .update(JSON.stringify({ academyId, question }))
-        .digest('hex')
+        .digest("hex")
         .slice(0, 20);
-      const storagePath =
-        `${academyId}/batch-preview/${EXPORT_RENDER_CONFIG_VERSION}/custom/${qid}_${sourceHash}.png`;
+      const storagePath = `${academyId}/batch-preview/${EXPORT_RENDER_CONFIG_VERSION}/custom/${qid}_${sourceHash}.png`;
       const { error: upErr } = await supa.storage
         .from(BATCH_THUMB_BUCKET)
-        .upload(storagePath, cropped, { contentType: 'image/png', upsert: true });
+        .upload(storagePath, cropped, {
+          contentType: "image/png",
+          upsert: true,
+        });
       if (upErr) {
-        sendJson(res, 500, { ok: false, error: `upload_failed:${upErr.message}` });
+        sendJson(res, 500, {
+          ok: false,
+          error: `upload_failed:${upErr.message}`,
+        });
         return;
       }
       const { data: signedData } = await supa.storage
@@ -5798,7 +6425,7 @@ async function renderCustomPreviewThumbnail(res, req) {
       sendJson(res, 200, {
         ok: true,
         thumbnail: {
-          url: signedData?.signedUrl || '',
+          url: signedData?.signedUrl || "",
           width: BATCH_THUMB_WIDTH_PX,
           storagePath,
         },
@@ -5808,7 +6435,10 @@ async function renderCustomPreviewThumbnail(res, req) {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   } catch (err) {
-    sendJson(res, 500, { ok: false, error: `render_failed: ${compact(err?.message || err)}` });
+    sendJson(res, 500, {
+      ok: false,
+      error: `render_failed: ${compact(err?.message || err)}`,
+    });
   }
 }
 
@@ -5825,7 +6455,7 @@ async function renderCustomPreviewThumbnail(res, req) {
 // - Replace the bare `requireApiKey` gate with per-user JWT validation so we
 //   can scope uploads/downloads to the caller's academy memberships.
 
-const VALID_TEXTBOOK_KINDS = new Set(['body', 'ans', 'sol']);
+const VALID_TEXTBOOK_KINDS = new Set(["body", "ans", "sol"]);
 const UPLOAD_URL_TTL_SEC = 60 * 30;
 const DOWNLOAD_URL_TTL_SEC = 60 * 60;
 
@@ -5835,56 +6465,65 @@ const DOWNLOAD_URL_TTL_SEC = 60 * 60;
 // poppler's `pdfseparate` (verbatim object copy → identical resolution) and
 // cache the tiny per-page PDF in Storage so later opens skip the big original
 // entirely.
-const TEXTBOOK_PAGE_CACHE_PREFIX = 'textbook-pages';
+const TEXTBOOK_PAGE_CACHE_PREFIX = "textbook-pages";
 // Persistent-ish disk cache of original PDFs so we download each big source at
 // most once (per server lifetime) to split future pages from it.
 const TEXTBOOK_SRC_CACHE_DIR =
   process.env.TEXTBOOK_PDF_CACHE_DIR ||
-  path.join(os.tmpdir(), 'ygg-textbook-src');
+  path.join(os.tmpdir(), "ygg-textbook-src");
 // De-dupe concurrent downloads of the same big original.
 const _textbookSrcDownloads = new Map();
 
 function parseGradeComposite(raw) {
-  const s = String(raw || '').trim();
-  if (!s) return { gradeLabel: '', kind: '' };
-  const idx = s.indexOf('#');
-  if (idx < 0) return { gradeLabel: s, kind: '' };
+  const s = String(raw || "").trim();
+  if (!s) return { gradeLabel: "", kind: "" };
+  const idx = s.indexOf("#");
+  if (idx < 0) return { gradeLabel: s, kind: "" };
   return {
     gradeLabel: s.slice(0, idx).trim(),
-    kind: s.slice(idx + 1).trim().toLowerCase(),
+    kind: s
+      .slice(idx + 1)
+      .trim()
+      .toLowerCase(),
   };
 }
 
 function buildGradeComposite(gradeLabel, kind) {
-  return `${String(gradeLabel || '').trim()}#${String(kind || '').trim().toLowerCase()}`;
+  return `${String(gradeLabel || "").trim()}#${String(kind || "")
+    .trim()
+    .toLowerCase()}`;
 }
 
 function inferTextbookCourse(rawLabel) {
-  const label = String(rawLabel || '')
+  const label = String(rawLabel || "")
     .trim()
-    .replace(/\s+/g, '')
-    .replace(/중등|고등|과정|학년/g, '');
+    .replace(/\s+/g, "")
+    .replace(/중등|고등|과정|학년/g, "");
   const rows = [
-    ['M1', 'M1-1', '1-1'],
-    ['M1', 'M1-2', '1-2'],
-    ['M2', 'M2-1', '2-1'],
-    ['M2', 'M2-2', '2-2'],
-    ['M3', 'M3-1', '3-1'],
-    ['M3', 'M3-2', '3-2'],
-    ['H1', 'H1-c1', '공통수학1'],
-    ['H1', 'H1-c2', '공통수학2'],
-    ['H2', 'H-algebra', '대수'],
-    ['H2', 'H-calc1', '미적분1'],
-    ['H2', 'H-probstats', '확률과통계'],
-    ['H2', 'H-calc2', '미적분2'],
-    ['H2', 'H-geometry', '기하'],
+    ["M1", "M1-1", "1-1"],
+    ["M1", "M1-2", "1-2"],
+    ["M2", "M2-1", "2-1"],
+    ["M2", "M2-2", "2-2"],
+    ["M3", "M3-1", "3-1"],
+    ["M3", "M3-2", "3-2"],
+    ["H1", "H1-c1", "공통수학1"],
+    ["H1", "H1-c2", "공통수학2"],
+    ["H2", "H-algebra", "대수"],
+    ["H2", "H-calc1", "미적분1"],
+    ["H2", "H-probstats", "확률과통계"],
+    ["H2", "H-calc2", "미적분2"],
+    ["H2", "H-geometry", "기하"],
   ];
   for (const [gradeKey, courseKey, courseLabel] of rows) {
-    if (label === courseLabel.replace(/\s+/g, '')) {
+    if (label === courseLabel.replace(/\s+/g, "")) {
       return { gradeKey, courseKey, courseLabel };
     }
   }
-  return { gradeKey: '', courseKey: '', courseLabel: String(rawLabel || '').trim() };
+  return {
+    gradeKey: "",
+    courseKey: "",
+    courseLabel: String(rawLabel || "").trim(),
+  };
 }
 
 async function resolveTextbookLink({
@@ -5899,64 +6538,73 @@ async function resolveTextbookLink({
   // the grade composite stored in the row (e.g. `공통수학1#sol`) can differ
   // from the courseKey segment used in the storage path (e.g. `H1-c1`), which
   // breaks the tuple lookup for high-school books.
-  const skey = String(storageKey || '').trim();
+  const skey = String(storageKey || "").trim();
   if (skey) {
     const { data, error } = await supa
-      .from('resource_file_links')
+      .from("resource_file_links")
       .select(
-        'id, academy_id, file_id, grade, url, storage_driver, storage_bucket, storage_key, migration_status, file_size_bytes, content_hash, uploaded_at',
+        "id, academy_id, file_id, grade, url, storage_driver, storage_bucket, storage_key, migration_status, file_size_bytes, content_hash, uploaded_at",
       )
-      .eq('storage_key', skey)
+      .eq("storage_key", skey)
       .maybeSingle();
-    if (error) return { ok: false, error: `link_lookup_failed: ${error.message}` };
+    if (error)
+      return { ok: false, error: `link_lookup_failed: ${error.message}` };
     if (data) return { ok: true, row: data };
     // fall through to other identifiers when storage_key did not match
   }
-  if (linkId != null && String(linkId).trim() !== '') {
+  if (linkId != null && String(linkId).trim() !== "") {
     const { data, error } = await supa
-      .from('resource_file_links')
+      .from("resource_file_links")
       .select(
-        'id, academy_id, file_id, grade, url, storage_driver, storage_bucket, storage_key, migration_status, file_size_bytes, content_hash, uploaded_at',
+        "id, academy_id, file_id, grade, url, storage_driver, storage_bucket, storage_key, migration_status, file_size_bytes, content_hash, uploaded_at",
       )
-      .eq('id', Number(linkId))
+      .eq("id", Number(linkId))
       .maybeSingle();
-    if (error) return { ok: false, error: `link_lookup_failed: ${error.message}` };
-    if (!data) return { ok: false, error: 'link_not_found' };
+    if (error)
+      return { ok: false, error: `link_lookup_failed: ${error.message}` };
+    if (!data) return { ok: false, error: "link_not_found" };
     return { ok: true, row: data };
   }
   if (!academyId || !fileId || !gradeLabel || !kind) {
-    return { ok: false, error: 'missing_identifiers' };
+    return { ok: false, error: "missing_identifiers" };
   }
   const composite = buildGradeComposite(gradeLabel, kind);
   const { data, error } = await supa
-    .from('resource_file_links')
+    .from("resource_file_links")
     .select(
-      'id, academy_id, file_id, grade, url, storage_driver, storage_bucket, storage_key, migration_status, file_size_bytes, content_hash, uploaded_at',
+      "id, academy_id, file_id, grade, url, storage_driver, storage_bucket, storage_key, migration_status, file_size_bytes, content_hash, uploaded_at",
     )
-    .eq('academy_id', academyId)
-    .eq('file_id', fileId)
-    .eq('grade', composite)
+    .eq("academy_id", academyId)
+    .eq("file_id", fileId)
+    .eq("grade", composite)
     .maybeSingle();
-  if (error) return { ok: false, error: `link_lookup_failed: ${error.message}` };
+  if (error)
+    return { ok: false, error: `link_lookup_failed: ${error.message}` };
   return { ok: true, row: data || null, composite };
 }
 
 async function handleTextbookUploadUrl(body, res) {
-  const academyId = String(body?.academy_id || '').trim();
-  const fileId = String(body?.file_id || '').trim();
-  const gradeLabel = String(body?.grade_label || '').trim();
+  const academyId = String(body?.academy_id || "").trim();
+  const fileId = String(body?.file_id || "").trim();
+  const gradeLabel = String(body?.grade_label || "").trim();
   const inferredCourse = inferTextbookCourse(gradeLabel);
-  const gradeKey = String(body?.grade_key || inferredCourse.gradeKey || '').trim();
-  const courseKey = String(body?.course_key || inferredCourse.courseKey || '').trim();
+  const gradeKey = String(
+    body?.grade_key || inferredCourse.gradeKey || "",
+  ).trim();
+  const courseKey = String(
+    body?.course_key || inferredCourse.courseKey || "",
+  ).trim();
   const courseLabel = String(
     body?.course_label || inferredCourse.courseLabel || gradeLabel,
   ).trim();
-  const kind = String(body?.kind || '').trim().toLowerCase();
+  const kind = String(body?.kind || "")
+    .trim()
+    .toLowerCase();
   if (!academyId || !fileId || !gradeLabel || !kind) {
     sendJson(res, 400, {
       ok: false,
-      error: 'missing_required_fields',
-      required: ['academy_id', 'file_id', 'grade_label', 'kind'],
+      error: "missing_required_fields",
+      required: ["academy_id", "file_id", "grade_label", "kind"],
     });
     return;
   }
@@ -5994,7 +6642,7 @@ async function handleTextbookUploadUrl(body, res) {
     ok: true,
     upload: {
       url: signed.url,
-      method: signed.method || 'PUT',
+      method: signed.method || "PUT",
       headers: signed.headers || {},
       token: signed.token || null,
     },
@@ -6010,24 +6658,31 @@ async function handleTextbookUploadUrl(body, res) {
 
 async function handleTextbookFinalize(body, res) {
   const linkId = body?.link_id;
-  const academyId = String(body?.academy_id || '').trim();
-  const fileId = String(body?.file_id || '').trim();
-  const gradeLabel = String(body?.grade_label || '').trim();
-  const kind = String(body?.kind || '').trim().toLowerCase();
+  const academyId = String(body?.academy_id || "").trim();
+  const fileId = String(body?.file_id || "").trim();
+  const gradeLabel = String(body?.grade_label || "").trim();
+  const kind = String(body?.kind || "")
+    .trim()
+    .toLowerCase();
   const storageDriver = String(
     body?.storage_driver || DEFAULT_TEXTBOOK_DRIVER,
   ).trim();
   const storageBucket = String(
     body?.storage_bucket || DEFAULT_TEXTBOOK_BUCKET,
   ).trim();
-  const storageKey = String(body?.storage_key || '').trim();
+  const storageKey = String(body?.storage_key || "").trim();
   const fileSizeBytesRaw = body?.file_size_bytes;
-  const contentHash = String(body?.content_hash || '').trim() || null;
-  const rawDropboxUrl = body?.legacy_url != null ? String(body.legacy_url) : null;
-  const desiredStatus = String(body?.migration_status || 'dual').trim();
+  const contentHash = String(body?.content_hash || "").trim() || null;
+  const rawDropboxUrl =
+    body?.legacy_url != null ? String(body.legacy_url) : null;
+  const desiredStatus = String(body?.migration_status || "dual").trim();
   const inferredCourse = inferTextbookCourse(gradeLabel);
-  const gradeKey = String(body?.grade_key || inferredCourse.gradeKey || '').trim();
-  const courseKey = String(body?.course_key || inferredCourse.courseKey || '').trim();
+  const gradeKey = String(
+    body?.grade_key || inferredCourse.gradeKey || "",
+  ).trim();
+  const courseKey = String(
+    body?.course_key || inferredCourse.courseKey || "",
+  ).trim();
   const courseLabel = String(
     body?.course_label || inferredCourse.courseLabel || gradeLabel,
   ).trim();
@@ -6035,11 +6690,11 @@ async function handleTextbookFinalize(body, res) {
   if (!storageKey) {
     sendJson(res, 400, {
       ok: false,
-      error: 'missing_storage_key',
+      error: "missing_storage_key",
     });
     return;
   }
-  if (!['legacy', 'dual', 'migrated'].includes(desiredStatus)) {
+  if (!["legacy", "dual", "migrated"].includes(desiredStatus)) {
     sendJson(res, 400, {
       ok: false,
       error: `invalid_migration_status: ${desiredStatus}`,
@@ -6093,13 +6748,16 @@ async function handleTextbookFinalize(body, res) {
   let updatedRow = null;
   if (resolved.row) {
     const { data, error } = await supa
-      .from('resource_file_links')
+      .from("resource_file_links")
       .update(payload)
-      .eq('id', resolved.row.id)
+      .eq("id", resolved.row.id)
       .select()
       .maybeSingle();
     if (error) {
-      sendJson(res, 500, { ok: false, error: `db_update_failed: ${error.message}` });
+      sendJson(res, 500, {
+        ok: false,
+        error: `db_update_failed: ${error.message}`,
+      });
       return;
     }
     updatedRow = data;
@@ -6107,7 +6765,7 @@ async function handleTextbookFinalize(body, res) {
     if (!academyId || !fileId || !gradeLabel || !kind) {
       sendJson(res, 400, {
         ok: false,
-        error: 'missing_identifiers_for_insert',
+        error: "missing_identifiers_for_insert",
       });
       return;
     }
@@ -6115,16 +6773,19 @@ async function handleTextbookFinalize(body, res) {
       academy_id: academyId,
       file_id: fileId,
       grade: buildGradeComposite(gradeLabel, kind),
-      url: rawDropboxUrl || '',
+      url: rawDropboxUrl || "",
       ...payload,
     };
     const { data, error } = await supa
-      .from('resource_file_links')
+      .from("resource_file_links")
       .insert(insertPayload)
       .select()
       .maybeSingle();
     if (error) {
-      sendJson(res, 500, { ok: false, error: `db_insert_failed: ${error.message}` });
+      sendJson(res, 500, {
+        ok: false,
+        error: `db_insert_failed: ${error.message}`,
+      });
       return;
     }
     updatedRow = data;
@@ -6138,12 +6799,12 @@ async function handleTextbookFinalize(body, res) {
 
 async function handleTextbookStatusPatch(body, res) {
   const linkId = body?.link_id;
-  const desiredStatus = String(body?.migration_status || '').trim();
-  if (linkId == null || String(linkId).trim() === '') {
-    sendJson(res, 400, { ok: false, error: 'missing_link_id' });
+  const desiredStatus = String(body?.migration_status || "").trim();
+  if (linkId == null || String(linkId).trim() === "") {
+    sendJson(res, 400, { ok: false, error: "missing_link_id" });
     return;
   }
-  if (!['legacy', 'dual', 'migrated'].includes(desiredStatus)) {
+  if (!["legacy", "dual", "migrated"].includes(desiredStatus)) {
     sendJson(res, 400, {
       ok: false,
       error: `invalid_migration_status: ${desiredStatus}`,
@@ -6151,29 +6812,32 @@ async function handleTextbookStatusPatch(body, res) {
     return;
   }
   const { data, error } = await supa
-    .from('resource_file_links')
+    .from("resource_file_links")
     .update({ migration_status: desiredStatus })
-    .eq('id', Number(linkId))
+    .eq("id", Number(linkId))
     .select()
     .maybeSingle();
   if (error) {
-    sendJson(res, 500, { ok: false, error: `db_update_failed: ${error.message}` });
+    sendJson(res, 500, {
+      ok: false,
+      error: `db_update_failed: ${error.message}`,
+    });
     return;
   }
   if (!data) {
-    sendJson(res, 404, { ok: false, error: 'link_not_found' });
+    sendJson(res, 404, { ok: false, error: "link_not_found" });
     return;
   }
   sendJson(res, 200, { ok: true, link: data });
 }
 
 async function handleTextbookDownloadUrl(url, res) {
-  const linkIdRaw = url.searchParams.get('link_id');
-  const academyId = (url.searchParams.get('academy_id') || '').trim();
-  const fileId = (url.searchParams.get('file_id') || '').trim();
-  const gradeLabel = (url.searchParams.get('grade_label') || '').trim();
-  const kind = (url.searchParams.get('kind') || '').trim().toLowerCase();
-  const storageKey = (url.searchParams.get('storage_key') || '').trim();
+  const linkIdRaw = url.searchParams.get("link_id");
+  const academyId = (url.searchParams.get("academy_id") || "").trim();
+  const fileId = (url.searchParams.get("file_id") || "").trim();
+  const gradeLabel = (url.searchParams.get("grade_label") || "").trim();
+  const kind = (url.searchParams.get("kind") || "").trim().toLowerCase();
+  const storageKey = (url.searchParams.get("storage_key") || "").trim();
 
   const resolved = await resolveTextbookLink({
     linkId: linkIdRaw,
@@ -6189,31 +6853,31 @@ async function handleTextbookDownloadUrl(url, res) {
   }
   const row = resolved.row;
   if (!row) {
-    sendJson(res, 404, { ok: false, error: 'link_not_found' });
+    sendJson(res, 404, { ok: false, error: "link_not_found" });
     return;
   }
-  const status = String(row.migration_status || 'legacy');
+  const status = String(row.migration_status || "legacy");
   const hasStorage =
     !!row.storage_key && !!row.storage_bucket && !!row.storage_driver;
 
   // legacy rows always resolve to Dropbox URL.
-  if (status === 'legacy' || !hasStorage) {
-    const legacyUrl = String(row.url || '').trim();
+  if (status === "legacy" || !hasStorage) {
+    const legacyUrl = String(row.url || "").trim();
     if (!legacyUrl) {
-      sendJson(res, 404, { ok: false, error: 'no_url_available' });
+      sendJson(res, 404, { ok: false, error: "no_url_available" });
       return;
     }
     if (/^academies\/.+\.pdf(?:\?.*)?$/i.test(legacyUrl)) {
       const signedLegacyStorage = await storageCreateDownloadUrl({
         driver: DEFAULT_TEXTBOOK_DRIVER,
         bucket: DEFAULT_TEXTBOOK_BUCKET,
-        key: legacyUrl.split('?')[0],
+        key: legacyUrl.split("?")[0],
         expiresIn: DOWNLOAD_URL_TTL_SEC,
       });
       if (signedLegacyStorage.ok) {
         sendJson(res, 200, {
           ok: true,
-          kind: 'storage',
+          kind: "storage",
           url: signedLegacyStorage.url,
           expires_in: signedLegacyStorage.expires_in,
           migration_status: status,
@@ -6226,7 +6890,7 @@ async function handleTextbookDownloadUrl(url, res) {
     }
     sendJson(res, 200, {
       ok: true,
-      kind: 'legacy',
+      kind: "legacy",
       url: legacyUrl,
       migration_status: status,
       link_id: row.id,
@@ -6244,7 +6908,7 @@ async function handleTextbookDownloadUrl(url, res) {
   if (signed.ok) {
     sendJson(res, 200, {
       ok: true,
-      kind: 'storage',
+      kind: "storage",
       url: signed.url,
       expires_in: signed.expires_in,
       migration_status: status,
@@ -6254,12 +6918,12 @@ async function handleTextbookDownloadUrl(url, res) {
     });
     return;
   }
-  if (status === 'dual') {
-    const legacyUrl = String(row.url || '').trim();
+  if (status === "dual") {
+    const legacyUrl = String(row.url || "").trim();
     if (legacyUrl) {
       sendJson(res, 200, {
         ok: true,
-        kind: 'legacy',
+        kind: "legacy",
         url: legacyUrl,
         migration_status: status,
         link_id: row.id,
@@ -6275,8 +6939,8 @@ async function handleTextbookDownloadUrl(url, res) {
 }
 
 function textbookContentHashShort(row) {
-  const raw = String(row?.content_hash || '').replace(/[^a-z0-9]/gi, '');
-  return raw.slice(0, 16) || 'nohash';
+  const raw = String(row?.content_hash || "").replace(/[^a-z0-9]/gi, "");
+  return raw.slice(0, 16) || "nohash";
 }
 
 // Downloads the big source PDF to a local disk cache exactly once and returns
@@ -6324,21 +6988,23 @@ async function ensureTextbookOriginalCached(row) {
 // PDF bytes; caller is responsible for cleaning up `tmpDir`.
 async function extractTextbookPagePdf(srcPath, page) {
   const tmpDir = await fs.promises.mkdtemp(
-    path.join(os.tmpdir(), 'ygg-pgsep-'),
+    path.join(os.tmpdir(), "ygg-pgsep-"),
   );
   // pdfseparate substitutes %d with the actual page number it writes.
-  const outPattern = path.join(tmpDir, 'p-%d.pdf');
+  const outPattern = path.join(tmpDir, "p-%d.pdf");
   try {
     await execFileAsync(
-      'pdfseparate',
-      ['-f', String(page), '-l', String(page), srcPath, outPattern],
+      "pdfseparate",
+      ["-f", String(page), "-l", String(page), srcPath, outPattern],
       { maxBuffer: 64 * 1024 * 1024, windowsHide: true },
     );
     const outFile = path.join(tmpDir, `p-${page}.pdf`);
     const bytes = await fs.promises.readFile(outFile);
     return { bytes, tmpDir };
   } catch (e) {
-    await fs.promises.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    await fs.promises
+      .rm(tmpDir, { recursive: true, force: true })
+      .catch(() => {});
     throw e;
   }
 }
@@ -6348,19 +7014,23 @@ async function extractTextbookPagePdf(srcPath, page) {
 // extracted from the large solution PDF. Lazily splits + caches in Storage on
 // first access; later opens are served straight from Storage.
 async function handleTextbookPagePdf(url, res) {
-  const linkIdRaw = (url.searchParams.get('link_id') || '').trim();
-  const academyId = (url.searchParams.get('academy_id') || '').trim();
-  const fileId = (url.searchParams.get('file_id') || '').trim();
-  const gradeLabel = (url.searchParams.get('grade_label') || '').trim();
-  const kind = (url.searchParams.get('kind') || '').trim().toLowerCase();
-  const storageKey = (url.searchParams.get('storage_key') || '').trim();
-  const page = Number((url.searchParams.get('page') || '').trim());
-  if (!linkIdRaw && !storageKey && !(academyId && fileId && gradeLabel && kind)) {
-    sendJson(res, 400, { ok: false, error: 'missing_identifiers' });
+  const linkIdRaw = (url.searchParams.get("link_id") || "").trim();
+  const academyId = (url.searchParams.get("academy_id") || "").trim();
+  const fileId = (url.searchParams.get("file_id") || "").trim();
+  const gradeLabel = (url.searchParams.get("grade_label") || "").trim();
+  const kind = (url.searchParams.get("kind") || "").trim().toLowerCase();
+  const storageKey = (url.searchParams.get("storage_key") || "").trim();
+  const page = Number((url.searchParams.get("page") || "").trim());
+  if (
+    !linkIdRaw &&
+    !storageKey &&
+    !(academyId && fileId && gradeLabel && kind)
+  ) {
+    sendJson(res, 400, { ok: false, error: "missing_identifiers" });
     return;
   }
   if (!Number.isInteger(page) || page < 1) {
-    sendJson(res, 400, { ok: false, error: 'invalid_page' });
+    sendJson(res, 400, { ok: false, error: "invalid_page" });
     return;
   }
   const resolved = await resolveTextbookLink({
@@ -6372,16 +7042,19 @@ async function handleTextbookPagePdf(url, res) {
     storageKey,
   });
   if (!resolved.ok || !resolved.row) {
-    sendJson(res, 404, { ok: false, error: resolved.error || 'link_not_found' });
+    sendJson(res, 404, {
+      ok: false,
+      error: resolved.error || "link_not_found",
+    });
     return;
   }
   const row = resolved.row;
-  const status = String(row.migration_status || 'legacy');
+  const status = String(row.migration_status || "legacy");
   const hasStorage =
     !!row.storage_key && !!row.storage_bucket && !!row.storage_driver;
-  if (status === 'legacy' || !hasStorage) {
+  if (status === "legacy" || !hasStorage) {
     // Caller should fall back to the full download-url flow.
-    sendJson(res, 409, { ok: false, error: 'page_split_unsupported_legacy' });
+    sendJson(res, 409, { ok: false, error: "page_split_unsupported_legacy" });
     return;
   }
   const bucket = DEFAULT_TEXTBOOK_BUCKET;
@@ -6420,10 +7093,10 @@ async function handleTextbookPagePdf(url, res) {
         driver: DEFAULT_TEXTBOOK_DRIVER,
         bucket,
         key: pageKey,
-        contentType: 'application/pdf',
+        contentType: "application/pdf",
         bytes: extracted.bytes,
       });
-      if (!up.ok) throw new Error(up.error || 'page_upload_failed');
+      if (!up.ok) throw new Error(up.error || "page_upload_failed");
     } catch (e) {
       await fs.promises
         .rm(extracted.tmpDir, { recursive: true, force: true })
@@ -6446,7 +7119,10 @@ async function handleTextbookPagePdf(url, res) {
     expiresIn: DOWNLOAD_URL_TTL_SEC,
   });
   if (!signed.ok) {
-    sendJson(res, 500, { ok: false, error: `page_url_failed: ${signed.error}` });
+    sendJson(res, 500, {
+      ok: false,
+      error: `page_url_failed: ${signed.error}`,
+    });
     return;
   }
   sendJson(res, 200, {
@@ -6470,18 +7146,23 @@ async function handleTextbookPagePdf(url, res) {
 // gate at the top of `handler`. Before we expose this beyond internal manager
 // testing, add per-user JWT validation + academy membership check here.
 
-const TEXTBOOK_VLM_MODEL =
-  (process.env.TEXTBOOK_VLM_MODEL || process.env.PB_VLM_MODEL || 'gemini-3.1-pro-preview').trim();
+const TEXTBOOK_VLM_MODEL = (
+  process.env.TEXTBOOK_VLM_MODEL ||
+  process.env.PB_VLM_MODEL ||
+  "gemini-3.1-pro-preview"
+).trim();
 const TEXTBOOK_VLM_TIMEOUT_MS = Number.parseInt(
-  process.env.TEXTBOOK_VLM_TIMEOUT_MS || '120000',
+  process.env.TEXTBOOK_VLM_TIMEOUT_MS || "120000",
   10,
 );
 // TEXTBOOK_VLM_DUMP_DIR 를 지정하면 문항 탐지 요청의 입력 이미지와 모델 원본
 // 응답을 그 폴더에 남긴다. 좌표가 틀어졌을 때 앱이 보낸 이미지 그대로를 다시
 // 돌려 보기 위한 진단용이며, 값이 없으면 아무 일도 하지 않는다.
 const TEXTBOOK_VLM_DUMP_DIR = (() => {
-  const raw = (process.env.TEXTBOOK_VLM_DUMP_DIR || '').trim();
-  return ['', '0', 'off', 'false', 'none'].includes(raw.toLowerCase()) ? '' : raw;
+  const raw = (process.env.TEXTBOOK_VLM_DUMP_DIR || "").trim();
+  return ["", "0", "off", "false", "none"].includes(raw.toLowerCase())
+    ? ""
+    : raw;
 })();
 
 function dumpTextbookDetectInput({
@@ -6494,68 +7175,87 @@ function dumpTextbookDetectInput({
   if (!TEXTBOOK_VLM_DUMP_DIR) return;
   try {
     fs.mkdirSync(TEXTBOOK_VLM_DUMP_DIR, { recursive: true });
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const safeGrade = String(gradeLabel || 'grade').replace(/[^\w-]+/g, '_');
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const safeGrade = String(gradeLabel || "grade").replace(/[^\w-]+/g, "_");
     const base = path.join(
       TEXTBOOK_VLM_DUMP_DIR,
       `detect_${safeGrade}_p${rawPage}_${stamp}`,
     );
-    fs.writeFileSync(`${base}.png`, Buffer.from(imageBase64, 'base64'));
+    fs.writeFileSync(`${base}.png`, Buffer.from(imageBase64, "base64"));
     fs.writeFileSync(
       `${base}.json`,
-      JSON.stringify(
-        { raw: result?.parsedJson ?? null, normalized },
-        null,
-        2,
-      ),
+      JSON.stringify({ raw: result?.parsedJson ?? null, normalized }, null, 2),
     );
   } catch (err) {
     console.warn(
-      '[textbook-vlm-detect] dump_failed',
+      "[textbook-vlm-detect] dump_failed",
       compact(err?.message || err),
     );
   }
 }
+
+// PNG 머리(IHDR)에서 가로·세로 픽셀을 읽는다. 앱이 지면을 얼마나 크게 렌더해
+// 보냈는지는 판독 성패를 가르는데, 로그에 남는 게 없으면 "앱이 새 해상도로
+// 보내는 중인지" 를 추측만 하게 된다.
+function pngPixelSize(imageBase64) {
+  try {
+    const head = Buffer.from(String(imageBase64).slice(0, 64), "base64");
+    if (head.length < 24 || head.toString("ascii", 12, 16) !== "IHDR") {
+      return "";
+    }
+    return `${head.readUInt32BE(16)}x${head.readUInt32BE(20)}`;
+  } catch {
+    return "";
+  }
+}
+
 // 정답지/해설지는 한 페이지에 수십~수백 개 번호가 밀집해 일반 문항 탐지보다
-// 응답 생성 시간이 길다. 120초×3회 대신 180초×2회로 총 대기 상한은 유지하면서
-// 정상 응답이 완료될 시간을 확보한다.
+// 응답 생성 시간이 길다. 수력충전 3-1 빠른 정답 1쪽(소단원 8개·정답 190개)은
+// 2400px 판독에 150초 넘게 걸려, 180초 상한에서는 정상 응답이 코앞에서 끊긴다.
 const TEXTBOOK_ANSWER_VLM_TIMEOUT_MS = Number.parseInt(
-  process.env.TEXTBOOK_ANSWER_VLM_TIMEOUT_MS || '180000',
+  process.env.TEXTBOOK_ANSWER_VLM_TIMEOUT_MS || "300000",
   10,
 );
 const TEXTBOOK_ANSWER_VLM_MAX_RETRIES = Number.parseInt(
-  process.env.TEXTBOOK_ANSWER_VLM_MAX_RETRIES || '2',
+  process.env.TEXTBOOK_ANSWER_VLM_MAX_RETRIES || "2",
   10,
 );
-const TEXTBOOK_VLM_VALID_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp']);
+const TEXTBOOK_VLM_VALID_MIMES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+]);
 
 function isTextbookVlmQuotaError(input) {
-  const text = String(input || '').toLowerCase();
+  const text = String(input || "").toLowerCase();
   return (
-    text.includes('resource_exhausted') &&
-    (text.includes('generate_requests_per_model_per_day') ||
-      text.includes('please retry in'))
+    text.includes("resource_exhausted") &&
+    (text.includes("generate_requests_per_model_per_day") ||
+      text.includes("please retry in"))
   );
 }
 
 async function handleTextbookVlmDetectProblems(body, res) {
-  const apiKey =
-    (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
+  const apiKey = (
+    process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_API_KEY ||
+    ""
+  ).trim();
   if (!apiKey) {
     sendJson(res, 500, {
       ok: false,
-      error: 'gemini_api_key_missing',
-      hint: 'Set GEMINI_API_KEY or GOOGLE_API_KEY in the gateway env.',
+      error: "gemini_api_key_missing",
+      hint: "Set GEMINI_API_KEY or GOOGLE_API_KEY in the gateway env.",
     });
     return;
   }
 
-  const imageBase64 = String(body?.image_base64 || '').trim();
+  const imageBase64 = String(body?.image_base64 || "").trim();
   if (!imageBase64) {
-    sendJson(res, 400, { ok: false, error: 'missing_image_base64' });
+    sendJson(res, 400, { ok: false, error: "missing_image_base64" });
     return;
   }
-  const mimeType = String(body?.mime_type || 'image/png').trim();
+  const mimeType = String(body?.mime_type || "image/png").trim();
   if (!TEXTBOOK_VLM_VALID_MIMES.has(mimeType)) {
     sendJson(res, 400, {
       ok: false,
@@ -6565,55 +7265,56 @@ async function handleTextbookVlmDetectProblems(body, res) {
     return;
   }
 
-  const rawPage = Number.parseInt(String(body?.raw_page ?? ''), 10);
+  const rawPage = Number.parseInt(String(body?.raw_page ?? ""), 10);
   if (!Number.isFinite(rawPage) || rawPage <= 0) {
-    sendJson(res, 400, { ok: false, error: 'invalid_raw_page' });
+    sendJson(res, 400, { ok: false, error: "invalid_raw_page" });
     return;
   }
 
-  const academyId = String(body?.academy_id || '').trim();
-  const bookId = String(body?.book_id || '').trim();
-  const gradeLabel = String(body?.grade_label || '').trim();
+  const academyId = String(body?.academy_id || "").trim();
+  const bookId = String(body?.book_id || "").trim();
+  const gradeLabel = String(body?.grade_label || "").trim();
   const requestedExpectedStartNumber = normalizeTextbookExpectedStartNumber(
     body?.expected_start_number ?? body?.expectedStartNumber,
   );
-  const rawSectionHint = String(body?.section_hint || '').trim();
+  const rawSectionHint = String(body?.section_hint || "").trim();
   const sectionHint = [
-    'basic_drill',
-    'type_practice',
-    'mastery',
+    "basic_drill",
+    "type_practice",
+    "mastery",
     // 개념원리 전용 섹션 (sub_key A~E 슬롯 대응).
-    'concept_drill',
-    'type_example',
-    'check',
-    'exercise',
-    'special_lecture',
+    "concept_drill",
+    "type_example",
+    "check",
+    "exercise",
+    "special_lecture",
     // 개념+유형 전용 섹션 (sub_key A~F 슬롯 대응).
-    'concept_check',
-    'essential_problem',
-    'step_drill',
-    'unit_drill',
-    'descriptive',
-    'extra_practice',
+    "concept_check",
+    "essential_problem",
+    "step_drill",
+    "unit_drill",
+    "descriptive",
+    "extra_practice",
     // 수력충전 전용 섹션 (sub_key A/B 슬롯 대응).
-    'type_problem',
-    'unit_review',
-    'skill_test',
+    "type_problem",
+    "unit_review",
+    "skill_test",
   ].includes(rawSectionHint)
     ? rawSectionHint
-    : '';
+    : "";
   // 교재 시리즈 (ssen | rpm | wonri | gaeyu | suryeok).
   // 미지정/미지원 값이면 프롬프트 빌더가 쎈으로 fallback.
-  const series = String(body?.series || '').trim().toLowerCase();
+  const series = String(body?.series || "")
+    .trim()
+    .toLowerCase();
   // 쎈 A의 4자리 번호는 지면에서 충분히 선명하다. 첫 문제 지면에 이전 단원의
   // 다음 번호 힌트를 함께 주면 실제 문항을 모두 읽고도 concept_page로 판정하는
   // 회귀가 재현됐다(공통수학2 p185: 힌트 없음 24개, 힌트 있음 0개).
   // RPM A의 교대 지면 보조에는 계속 사용하되 쎈에서는 서버가 무시한다.
   const expectedStartNumber =
-    series === 'ssen' ? '' : requestedExpectedStartNumber;
+    series === "ssen" ? "" : requestedExpectedStartNumber;
   const contentGroupRequired =
-    sectionHint === 'type_practice' &&
-    (series === 'ssen' || series === 'rpm');
+    sectionHint === "type_practice" && (series === "ssen" || series === "rpm");
 
   // Textbook authoring VLM uses operator-entered PDF raw pages directly.
   // page_offset is a learning-app display concern and must not shift VLM ranges.
@@ -6641,7 +7342,7 @@ async function handleTextbookVlmDetectProblems(body, res) {
     const initialMessage = compact(err?.message || err);
     if (isTextbookVlmQuotaError(initialMessage)) {
       console.warn(
-        '[textbook-vlm-detect] quota_exceeded',
+        "[textbook-vlm-detect] quota_exceeded",
         JSON.stringify({
           rawPage,
           displayPage,
@@ -6653,7 +7354,7 @@ async function handleTextbookVlmDetectProblems(body, res) {
       );
       sendJson(res, 429, {
         ok: false,
-        error: 'vlm_daily_quota_exceeded',
+        error: "vlm_daily_quota_exceeded",
         message: initialMessage,
       });
       return;
@@ -6679,7 +7380,7 @@ async function handleTextbookVlmDetectProblems(body, res) {
     } catch (fallbackErr) {
       const fallbackMessage = compact(fallbackErr?.message || fallbackErr);
       console.warn(
-        '[textbook-vlm-detect] failed',
+        "[textbook-vlm-detect] failed",
         JSON.stringify({
           rawPage,
           displayPage,
@@ -6693,7 +7394,7 @@ async function handleTextbookVlmDetectProblems(body, res) {
       if (isTextbookVlmQuotaError(fallbackMessage)) {
         sendJson(res, 429, {
           ok: false,
-          error: 'vlm_daily_quota_exceeded',
+          error: "vlm_daily_quota_exceeded",
           message: fallbackMessage,
           first_message: initialMessage,
         });
@@ -6701,7 +7402,7 @@ async function handleTextbookVlmDetectProblems(body, res) {
       }
       sendJson(res, 502, {
         ok: false,
-        error: 'vlm_detect_failed',
+        error: "vlm_detect_failed",
         message: initialMessage,
         fallback_message: fallbackMessage,
       });
@@ -6730,8 +7431,8 @@ async function handleTextbookVlmDetectProblems(body, res) {
       0,
   );
   if (
-    series === 'ssen' &&
-    sectionHint === 'basic_drill' &&
+    series === "ssen" &&
+    sectionHint === "basic_drill" &&
     normalized.items.length === 0 &&
     (primaryRawItems.length > 0 || primaryOutputTokens >= 500)
   ) {
@@ -6747,13 +7448,13 @@ async function handleTextbookVlmDetectProblems(body, res) {
         timeoutMs: TEXTBOOK_VLM_TIMEOUT_MS,
       });
       const rescuedNormalized = normalizeDetectResult(rescued.parsedJson, {
-        sectionHint: 'basic_drill',
-        series: 'ssen',
+        sectionHint: "basic_drill",
+        series: "ssen",
         displayPage,
         rawPage,
       });
       console.warn(
-        '[textbook-vlm-detect] ssen_basic_rescue',
+        "[textbook-vlm-detect] ssen_basic_rescue",
         JSON.stringify({
           rawPage,
           primaryRawItems: primaryRawItems.length,
@@ -6768,7 +7469,7 @@ async function handleTextbookVlmDetectProblems(body, res) {
       }
     } catch (err) {
       console.warn(
-        '[textbook-vlm-detect] ssen_basic_rescue_failed',
+        "[textbook-vlm-detect] ssen_basic_rescue_failed",
         JSON.stringify({ rawPage, message: compact(err?.message || err) }),
       );
     }
@@ -6777,7 +7478,7 @@ async function handleTextbookVlmDetectProblems(body, res) {
   // (2) 단원 마무리의 작고 복수인 특수 배지를 누락하는 경우가 있다.
   // 의심스러운 유형 지면과 모든 마무리 지면은 번호·배지만 묻는 짧은 2차
   // 판독으로 보완한다. 문항 본문/분류를 다시 추측시키지는 않는다.
-  if (series === 'suryeok' && suryeokMarksNeedRepair(normalized, sectionHint)) {
+  if (series === "suryeok" && suryeokMarksNeedRepair(normalized, sectionHint)) {
     try {
       const marks = await detectSuryeokMarksOnPage({
         imageBase64,
@@ -6800,7 +7501,7 @@ async function handleTextbookVlmDetectProblems(body, res) {
       }
     } catch (err) {
       console.warn(
-        '[textbook-vlm-detect] suryeok_mark_repair_failed',
+        "[textbook-vlm-detect] suryeok_mark_repair_failed",
         JSON.stringify({
           rawPage,
           bookId,
@@ -6813,7 +7514,7 @@ async function handleTextbookVlmDetectProblems(body, res) {
   // 여러 문항이 함께 쓰는 범위 지문("[14-17] …")을 1차 판독이 통째로 흘리는
   // 일이 있다(1-2 p137 좌단). 그러면 그 아래 문항들이 공통 지문 없이 저장되어
   // 무슨 문제인지 알 수 없게 되므로, 자리가 비어 보이면 범위 지문만 되묻는다.
-  if (series === 'suryeok' && suryeokRangeHeadersMayBeMissing(normalized)) {
+  if (series === "suryeok" && suryeokRangeHeadersMayBeMissing(normalized)) {
     try {
       const ranges = await detectSuryeokRangeHeadersOnPage({
         imageBase64,
@@ -6830,7 +7531,7 @@ async function handleTextbookVlmDetectProblems(body, res) {
       }
     } catch (err) {
       console.warn(
-        '[textbook-vlm-detect] suryeok_range_header_repair_failed',
+        "[textbook-vlm-detect] suryeok_range_header_repair_failed",
         JSON.stringify({
           rawPage,
           bookId,
@@ -6842,12 +7543,18 @@ async function handleTextbookVlmDetectProblems(body, res) {
   }
   // 좌표가 틀어졌을 때 "앱이 보낸 이미지"와 "모델 원본 응답"을 그대로 떠 놓는다.
   // 로컬에서 같은 이미지를 다시 돌려 봐야 렌더 차이인지 모델 흔들림인지 갈린다.
-  dumpTextbookDetectInput({ imageBase64, rawPage, gradeLabel, result, normalized });
+  dumpTextbookDetectInput({
+    imageBase64,
+    rawPage,
+    gradeLabel,
+    result,
+    normalized,
+  });
   // 문항 번호는 다 찾았는데 좌표를 빼먹은 응답이 드물게 온다. 크롭할 영역이
   // 없으면 클라이언트가 그 지면을 실패로 처리하고 재판독해도 같은 결과가
   // 반복되므로(예: 쓱쓱 서술형 152쪽), 좌표만 다시 물어 채운다.
   if (
-    normalized.page_kind !== 'concept_page' &&
+    normalized.page_kind !== "concept_page" &&
     normalized.items.length > 0 &&
     normalized.items.some(
       (item) =>
@@ -6878,7 +7585,7 @@ async function handleTextbookVlmDetectProblems(body, res) {
       // 보정에 실패해도 1차 결과는 그대로 돌려준다. 좌표가 없는 문항은
       // 클라이언트가 재시도/실패로 처리한다.
       console.warn(
-        '[textbook-vlm-detect] item_geometry_repair_failed',
+        "[textbook-vlm-detect] item_geometry_repair_failed",
         JSON.stringify({
           rawPage,
           bookId,
@@ -6892,8 +7599,8 @@ async function handleTextbookVlmDetectProblems(body, res) {
   // 않고 같은 크기 상자를 복사해 내놓는다. 그러면 지면 전체가 한 줄씩 밀려
   // 크롭이 어긋나므로, 그런 낌새가 보이면 좌표만 다시 물어 갈아 끼운다.
   if (
-    series === 'suryeok' &&
-    normalized.page_kind !== 'concept_page' &&
+    series === "suryeok" &&
+    normalized.page_kind !== "concept_page" &&
     numberBboxesLookTemplated(normalized.items)
   ) {
     try {
@@ -6916,13 +7623,13 @@ async function handleTextbookVlmDetectProblems(body, res) {
         if (replaced > 0) repairSuryeokItemRegions(normalized, series);
       } else {
         console.warn(
-          '[textbook-vlm-detect] templated_geometry_retry_gave_up',
+          "[textbook-vlm-detect] templated_geometry_retry_gave_up",
           JSON.stringify({ rawPage, bookId, gradeLabel }),
         );
       }
     } catch (err) {
       console.warn(
-        '[textbook-vlm-detect] templated_geometry_retry_failed',
+        "[textbook-vlm-detect] templated_geometry_retry_failed",
         JSON.stringify({
           rawPage,
           bookId,
@@ -6935,7 +7642,7 @@ async function handleTextbookVlmDetectProblems(body, res) {
   // 개념원리: 문항이 감지된 페이지는 전용 2차 판독으로 페이지 종류를 확정한다.
   //   concept("개념원리 이해" 개념 페이지)이면 참조 라벨("필수 04" 등) 오인
   //   문항을 전부 버리고, 익히기/필수유형/기타 문제 페이지는 문항을 보존한다.
-  if (series === 'wonri' && normalized.items.length > 0) {
+  if (series === "wonri" && normalized.items.length > 0) {
     let classResult;
     try {
       classResult = await classifyWonriPage({
@@ -6951,58 +7658,58 @@ async function handleTextbookVlmDetectProblems(body, res) {
     } catch (err) {
       const message = compact(err?.message || err);
       console.warn(
-        '[textbook-vlm-detect] wonri_page_class_failed',
+        "[textbook-vlm-detect] wonri_page_class_failed",
         JSON.stringify({ rawPage, bookId, gradeLabel, message }),
       );
       sendJson(res, isTextbookVlmQuotaError(message) ? 429 : 502, {
         ok: false,
         error: isTextbookVlmQuotaError(message)
-          ? 'vlm_daily_quota_exceeded'
-          : 'vlm_wonri_page_class_failed',
+          ? "vlm_daily_quota_exceeded"
+          : "vlm_wonri_page_class_failed",
         message,
       });
       return;
     }
-    const pageClass = String(
-      classResult?.parsedJson?.page_class || '',
-    ).trim().toLowerCase();
+    const pageClass = String(classResult?.parsedJson?.page_class || "")
+      .trim()
+      .toLowerCase();
     const visibleHeader = String(
-      classResult?.parsedJson?.visible_header || '',
+      classResult?.parsedJson?.visible_header || "",
     ).trim();
     const treatAsConcept = shouldTreatWonriPageAsConcept(
       pageClass,
       visibleHeader,
     );
     const classNote =
-      `wonri_page_class=${pageClass || 'unknown'}` +
-      (treatAsConcept && pageClass !== 'concept'
-        ? '; wonri_concept_header=확인하기'
-        : '');
+      `wonri_page_class=${pageClass || "unknown"}` +
+      (treatAsConcept && pageClass !== "concept"
+        ? "; wonri_concept_header=확인하기"
+        : "");
     normalized.notes = normalized.notes
       ? `${normalized.notes}; ${classNote}`
       : classNote;
     if (treatAsConcept) {
-      normalized.page_kind = 'concept_page';
+      normalized.page_kind = "concept_page";
       normalized.items = [];
       normalized.concept_drill_header_visible = false;
-    } else if (pageClass === 'concept_drill') {
+    } else if (pageClass === "concept_drill") {
       normalized.concept_drill_header_visible = true;
-      if (normalized.page_kind === 'concept_page') {
-        normalized.page_kind = 'problem_page';
+      if (normalized.page_kind === "concept_page") {
+        normalized.page_kind = "problem_page";
       }
-    } else if (pageClass === 'type_example' || pageClass === 'other') {
+    } else if (pageClass === "type_example" || pageClass === "other") {
       // 필수유형/연습문제 페이지에는 "개념원리 익히기" 헤더가 없다. 문항을
       // 보존하고 개념 페이지로 오분류된 page_kind만 바로잡는다.
-      if (normalized.page_kind === 'concept_page') {
-        normalized.page_kind = 'problem_page';
+      if (normalized.page_kind === "concept_page") {
+        normalized.page_kind = "problem_page";
       }
     }
   }
   let rpmSetHeaderCount = 0;
   let rpmComplexRegionCount = 0;
   if (
-    series === 'rpm' &&
-    sectionHint === 'basic_drill' &&
+    series === "rpm" &&
+    sectionHint === "basic_drill" &&
     normalized.items.length > 0
   ) {
     let setHeaderResult;
@@ -7020,35 +7727,35 @@ async function handleTextbookVlmDetectProblems(body, res) {
     } catch (err) {
       const message = compact(err?.message || err);
       console.warn(
-        '[textbook-vlm-detect] rpm_set_header_failed',
+        "[textbook-vlm-detect] rpm_set_header_failed",
         JSON.stringify({ rawPage, bookId, gradeLabel, message }),
       );
       sendJson(res, isTextbookVlmQuotaError(message) ? 429 : 502, {
         ok: false,
         error: isTextbookVlmQuotaError(message)
-          ? 'vlm_daily_quota_exceeded'
-          : 'vlm_rpm_set_header_failed',
+          ? "vlm_daily_quota_exceeded"
+          : "vlm_rpm_set_header_failed",
         message,
       });
       return;
     }
     const setHeaderNormalized = normalizeDetectResult(
       setHeaderResult.parsedJson,
-      { sectionHint: 'basic_drill', series: 'rpm' },
+      { sectionHint: "basic_drill", series: "rpm" },
     );
     const existing = new Set(
       normalized.items
         .filter((item) => item?.is_set_header === true)
         .map((item) =>
-          String(item?.number || '')
-            .replace(/[\[\]【】()\s]/g, '')
-            .replace(/[\u2013\u2014\u301c-]/g, '~'),
+          String(item?.number || "")
+            .replace(/[\[\]【】()\s]/g, "")
+            .replace(/[\u2013\u2014\u301c-]/g, "~"),
         ),
     );
     const numberKey = (value) =>
-      String(value || '')
+      String(value || "")
         .trim()
-        .replace(/^0+(?=\d)/, '');
+        .replace(/^0+(?=\d)/, "");
     const existingProblemByNumber = new Map(
       normalized.items
         .filter((item) => item?.is_set_header !== true)
@@ -7066,16 +7773,17 @@ async function handleTextbookVlmDetectProblems(body, res) {
         );
         if (
           existingProblem &&
-          regionArea(item?.item_region) > regionArea(existingProblem.item_region)
+          regionArea(item?.item_region) >
+            regionArea(existingProblem.item_region)
         ) {
           existingProblem.item_region = item.item_region;
           rpmComplexRegionCount += 1;
         }
         continue;
       }
-      const key = String(item?.number || '')
-        .replace(/[\[\]【】()\s]/g, '')
-        .replace(/[\u2013\u2014\u301c-]/g, '~');
+      const key = String(item?.number || "")
+        .replace(/[\[\]【】()\s]/g, "")
+        .replace(/[\u2013\u2014\u301c-]/g, "~");
       if (!key || existing.has(key)) continue;
       existing.add(key);
       normalized.items.push(item);
@@ -7091,13 +7799,13 @@ async function handleTextbookVlmDetectProblems(body, res) {
       const suffix = [
         rpmSetHeaderCount > 0
           ? `rpm_set_headers_merged=${rpmSetHeaderCount}`
-          : '',
+          : "",
         rpmComplexRegionCount > 0
           ? `rpm_complex_regions_merged=${rpmComplexRegionCount}`
-          : '',
+          : "",
       ]
         .filter(Boolean)
-        .join('; ');
+        .join("; ");
       normalized.notes = normalized.notes
         ? `${normalized.notes}; ${suffix}`
         : suffix;
@@ -7105,11 +7813,11 @@ async function handleTextbookVlmDetectProblems(body, res) {
   }
   const hasContentGroup = normalized.items.some(
     (item) =>
-      item?.content_group_kind === 'type' &&
-      (String(item?.content_group_label || '').trim() ||
-        String(item?.content_group_title || '').trim()),
+      item?.content_group_kind === "type" &&
+      (String(item?.content_group_label || "").trim() ||
+        String(item?.content_group_title || "").trim()),
   );
-  logVlmUsage('detect', result.usageMetadata, {
+  logVlmUsage("detect", result.usageMetadata, {
     page: rawPage,
     items: normalized.items.length,
     elapsed: `${result.elapsedMs}ms`,
@@ -7137,29 +7845,32 @@ async function handleTextbookVlmDetectProblems(body, res) {
     model: TEXTBOOK_VLM_MODEL,
     elapsed_ms: result.elapsedMs,
     usage: result.usageMetadata || null,
-    finish_reason: result.finishReason || '',
+    finish_reason: result.finishReason || "",
   });
 }
 
 // 목차(차례) 페이지 이미지들에서 단원 트리를 추출한다.
 // body: { images: [{ image_base64, mime_type? }], series? }
 async function handleTextbookVlmParseToc(body, res) {
-  const apiKey =
-    (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
+  const apiKey = (
+    process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_API_KEY ||
+    ""
+  ).trim();
   if (!apiKey) {
     sendJson(res, 500, {
       ok: false,
-      error: 'gemini_api_key_missing',
-      hint: 'Set GEMINI_API_KEY or GOOGLE_API_KEY in the gateway env.',
+      error: "gemini_api_key_missing",
+      hint: "Set GEMINI_API_KEY or GOOGLE_API_KEY in the gateway env.",
     });
     return;
   }
   const rawImages = Array.isArray(body?.images) ? body.images : [];
   const images = [];
   for (const raw of rawImages) {
-    const b64 = String(raw?.image_base64 || '').trim();
+    const b64 = String(raw?.image_base64 || "").trim();
     if (!b64) continue;
-    const mime = String(raw?.mime_type || 'image/png').trim();
+    const mime = String(raw?.mime_type || "image/png").trim();
     if (!TEXTBOOK_VLM_VALID_MIMES.has(mime)) {
       sendJson(res, 400, {
         ok: false,
@@ -7171,14 +7882,16 @@ async function handleTextbookVlmParseToc(body, res) {
     images.push({ imageBase64: b64, mimeType: mime });
   }
   if (images.length === 0) {
-    sendJson(res, 400, { ok: false, error: 'missing_images' });
+    sendJson(res, 400, { ok: false, error: "missing_images" });
     return;
   }
   if (images.length > 12) {
-    sendJson(res, 413, { ok: false, error: 'too_many_toc_pages', limit: 12 });
+    sendJson(res, 413, { ok: false, error: "too_many_toc_pages", limit: 12 });
     return;
   }
-  const series = String(body?.series || '').trim().toLowerCase();
+  const series = String(body?.series || "")
+    .trim()
+    .toLowerCase();
 
   let result;
   try {
@@ -7194,12 +7907,12 @@ async function handleTextbookVlmParseToc(body, res) {
     if (isTextbookVlmQuotaError(message)) {
       sendJson(res, 429, {
         ok: false,
-        error: 'vlm_daily_quota_exceeded',
+        error: "vlm_daily_quota_exceeded",
         message,
       });
       return;
     }
-    sendJson(res, 502, { ok: false, error: 'vlm_toc_failed', message });
+    sendJson(res, 502, { ok: false, error: "vlm_toc_failed", message });
     return;
   }
 
@@ -7212,47 +7925,52 @@ async function handleTextbookVlmParseToc(body, res) {
     model: TEXTBOOK_VLM_MODEL,
     elapsed_ms: result.elapsedMs,
     usage: result.usageMetadata || null,
-    finish_reason: result.finishReason || '',
+    finish_reason: result.finishReason || "",
   });
 }
 
 // 쎈/RPM 중단원 본문 이미지 묶음에서 A/B/C 파트 경계를 경량 분류한다.
 // body: { images: [{ image_base64, mime_type?, raw_page }], series? }
 async function handleTextbookVlmClassifyRpmSections(body, res) {
-  const apiKey =
-    (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
+  const apiKey = (
+    process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_API_KEY ||
+    ""
+  ).trim();
   if (!apiKey) {
-    sendJson(res, 500, { ok: false, error: 'gemini_api_key_missing' });
+    sendJson(res, 500, { ok: false, error: "gemini_api_key_missing" });
     return;
   }
   const rawImages = Array.isArray(body?.images) ? body.images : [];
   if (rawImages.length === 0) {
-    sendJson(res, 400, { ok: false, error: 'missing_images' });
+    sendJson(res, 400, { ok: false, error: "missing_images" });
     return;
   }
-  const seriesRaw = String(body?.series || 'rpm').trim().toLowerCase();
-  const series = seriesRaw === 'ssen' || seriesRaw === 'rpm' ? seriesRaw : '';
+  const seriesRaw = String(body?.series || "rpm")
+    .trim()
+    .toLowerCase();
+  const series = seriesRaw === "ssen" || seriesRaw === "rpm" ? seriesRaw : "";
   if (!series) {
     sendJson(res, 400, {
       ok: false,
       error: `invalid_problem_book_series: ${seriesRaw}`,
-      allowed: ['ssen', 'rpm'],
+      allowed: ["ssen", "rpm"],
     });
     return;
   }
   if (rawImages.length > 24) {
     sendJson(res, 413, {
       ok: false,
-      error: 'too_many_rpm_section_pages',
+      error: "too_many_rpm_section_pages",
       limit: 24,
     });
     return;
   }
   const images = [];
   for (const raw of rawImages) {
-    const imageBase64 = String(raw?.image_base64 || '').trim();
-    const mimeType = String(raw?.mime_type || 'image/png').trim();
-    const rawPage = Number.parseInt(String(raw?.raw_page ?? ''), 10);
+    const imageBase64 = String(raw?.image_base64 || "").trim();
+    const mimeType = String(raw?.mime_type || "image/png").trim();
+    const rawPage = Number.parseInt(String(raw?.raw_page ?? ""), 10);
     if (!imageBase64) continue;
     if (!TEXTBOOK_VLM_VALID_MIMES.has(mimeType)) {
       sendJson(res, 400, {
@@ -7263,13 +7981,13 @@ async function handleTextbookVlmClassifyRpmSections(body, res) {
       return;
     }
     if (!Number.isFinite(rawPage) || rawPage <= 0) {
-      sendJson(res, 400, { ok: false, error: 'invalid_raw_page' });
+      sendJson(res, 400, { ok: false, error: "invalid_raw_page" });
       return;
     }
     images.push({ imageBase64, mimeType, rawPage });
   }
   if (images.length === 0) {
-    sendJson(res, 400, { ok: false, error: 'missing_images' });
+    sendJson(res, 400, { ok: false, error: "missing_images" });
     return;
   }
 
@@ -7287,14 +8005,14 @@ async function handleTextbookVlmClassifyRpmSections(body, res) {
     if (isTextbookVlmQuotaError(message)) {
       sendJson(res, 429, {
         ok: false,
-        error: 'vlm_daily_quota_exceeded',
+        error: "vlm_daily_quota_exceeded",
         message,
       });
       return;
     }
     sendJson(res, 502, {
       ok: false,
-      error: 'vlm_rpm_section_failed',
+      error: "vlm_rpm_section_failed",
       message,
     });
     return;
@@ -7311,29 +8029,32 @@ async function handleTextbookVlmClassifyRpmSections(body, res) {
     model: TEXTBOOK_VLM_MODEL,
     elapsed_ms: result.elapsedMs,
     usage: result.usageMetadata || null,
-    finish_reason: result.finishReason || '',
+    finish_reason: result.finishReason || "",
   });
 }
 
 // 개념원리 필수유형: 본문 페이지에서 "풀이" 좌표 + 굵은 정답을 추출한다.
 // body: { image_base64, mime_type?, raw_page, expected_numbers? }
 async function handleTextbookVlmExtractBodySolutions(body, res) {
-  const apiKey =
-    (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
+  const apiKey = (
+    process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_API_KEY ||
+    ""
+  ).trim();
   if (!apiKey) {
     sendJson(res, 500, {
       ok: false,
-      error: 'gemini_api_key_missing',
-      hint: 'Set GEMINI_API_KEY or GOOGLE_API_KEY in the gateway env.',
+      error: "gemini_api_key_missing",
+      hint: "Set GEMINI_API_KEY or GOOGLE_API_KEY in the gateway env.",
     });
     return;
   }
-  const imageBase64 = String(body?.image_base64 || '').trim();
+  const imageBase64 = String(body?.image_base64 || "").trim();
   if (!imageBase64) {
-    sendJson(res, 400, { ok: false, error: 'missing_image_base64' });
+    sendJson(res, 400, { ok: false, error: "missing_image_base64" });
     return;
   }
-  const mimeType = String(body?.mime_type || 'image/png').trim();
+  const mimeType = String(body?.mime_type || "image/png").trim();
   if (!TEXTBOOK_VLM_VALID_MIMES.has(mimeType)) {
     sendJson(res, 400, {
       ok: false,
@@ -7342,13 +8063,13 @@ async function handleTextbookVlmExtractBodySolutions(body, res) {
     });
     return;
   }
-  const rawPage = Number.parseInt(String(body?.raw_page ?? ''), 10);
+  const rawPage = Number.parseInt(String(body?.raw_page ?? ""), 10);
   if (!Number.isFinite(rawPage) || rawPage <= 0) {
-    sendJson(res, 400, { ok: false, error: 'invalid_raw_page' });
+    sendJson(res, 400, { ok: false, error: "invalid_raw_page" });
     return;
   }
   const expectedNumbers = Array.isArray(body?.expected_numbers)
-    ? body.expected_numbers.map((n) => String(n || '').trim()).filter(Boolean)
+    ? body.expected_numbers.map((n) => String(n || "").trim()).filter(Boolean)
     : [];
 
   let result;
@@ -7361,7 +8082,9 @@ async function handleTextbookVlmExtractBodySolutions(body, res) {
       expectedNumbers,
       // 개념원리 필수유형·특강과 개념+유형 쓱쓱 예제는 지면 구성이 달라
       // 프롬프트를 시리즈별로 분기한다.
-      series: String(body?.series || 'wonri').trim().toLowerCase(),
+      series: String(body?.series || "wonri")
+        .trim()
+        .toLowerCase(),
       model: TEXTBOOK_VLM_MODEL,
       apiKey,
       timeoutMs: TEXTBOOK_VLM_TIMEOUT_MS,
@@ -7371,14 +8094,14 @@ async function handleTextbookVlmExtractBodySolutions(body, res) {
     if (isTextbookVlmQuotaError(message)) {
       sendJson(res, 429, {
         ok: false,
-        error: 'vlm_daily_quota_exceeded',
+        error: "vlm_daily_quota_exceeded",
         message,
       });
       return;
     }
     sendJson(res, 502, {
       ok: false,
-      error: 'vlm_body_solutions_failed',
+      error: "vlm_body_solutions_failed",
       message,
     });
     return;
@@ -7394,18 +8117,18 @@ async function handleTextbookVlmExtractBodySolutions(body, res) {
     model: TEXTBOOK_VLM_MODEL,
     elapsed_ms: result.elapsedMs,
     usage: result.usageMetadata || null,
-    finish_reason: result.finishReason || '',
+    finish_reason: result.finishReason || "",
   });
 }
 
 function normalizeTextbookExpectedStartNumber(input) {
-  const raw = String(input || '').trim();
-  if (!raw) return '';
+  const raw = String(input || "").trim();
+  if (!raw) return "";
   const match = raw.match(/\d+/);
-  if (!match) return '';
+  if (!match) return "";
   const value = Number.parseInt(match[0], 10);
-  if (!Number.isFinite(value) || value <= 0 || value > 9999) return '';
-  return String(value).padStart(4, '0');
+  if (!Number.isFinite(value) || value <= 0 || value > 9999) return "";
+  return String(value).padStart(4, "0");
 }
 
 // ---------------------------------------------------------------------------
@@ -7441,18 +8164,11 @@ const MAX_CROP_BYTES = 25 * 1024 * 1024; // matches the bucket limit
 //   A~C  쎈/RPM 3단계
 //   A~E  개념원리 (익히기·필수유형·확인체크·연습문제·특강)
 //   A~F  개념+유형 (개념확인·필수문제·쏙쏙·탄탄·쓱쓱·한 번 더 연습)
-const TEXTBOOK_CROP_SUB_KEYS = Object.freeze([
-  'A',
-  'B',
-  'C',
-  'D',
-  'E',
-  'F',
-]);
+const TEXTBOOK_CROP_SUB_KEYS = Object.freeze(["A", "B", "C", "D", "E", "F"]);
 
 function parseIntArray(input, expectedLen) {
   if (!Array.isArray(input)) return null;
-  if (typeof expectedLen === 'number' && input.length !== expectedLen) {
+  if (typeof expectedLen === "number" && input.length !== expectedLen) {
     return null;
   }
   const out = [];
@@ -7465,17 +8181,18 @@ function parseIntArray(input, expectedLen) {
 }
 
 async function handleTextbookCropsBatchUpsert(body, res) {
-  const academyId = String(body?.academy_id || '').trim();
-  const bookId = String(body?.book_id || '').trim();
-  const gradeLabel = String(body?.grade_label || '').trim();
-  const bigOrder = Number.parseInt(String(body?.big_order ?? ''), 10);
-  const midOrder = Number.parseInt(String(body?.mid_order ?? ''), 10);
-  const subKeyRaw = String(body?.sub_key || '').trim().toUpperCase();
+  const academyId = String(body?.academy_id || "").trim();
+  const bookId = String(body?.book_id || "").trim();
+  const gradeLabel = String(body?.grade_label || "").trim();
+  const bigOrder = Number.parseInt(String(body?.big_order ?? ""), 10);
+  const midOrder = Number.parseInt(String(body?.mid_order ?? ""), 10);
+  const subKeyRaw = String(body?.sub_key || "")
+    .trim()
+    .toUpperCase();
   // 개념원리 필수유형(B) 소단원 순번. 그 외 카테고리/시리즈는 0.
-  const subIndexParsed = Number.parseInt(String(body?.sub_index ?? ''), 10);
-  const subIndex = Number.isFinite(subIndexParsed) && subIndexParsed > 0
-    ? subIndexParsed
-    : 0;
+  const subIndexParsed = Number.parseInt(String(body?.sub_index ?? ""), 10);
+  const subIndex =
+    Number.isFinite(subIndexParsed) && subIndexParsed > 0 ? subIndexParsed : 0;
   const bigName = body?.big_name != null ? String(body.big_name) : null;
   const midName = body?.mid_name != null ? String(body.mid_name) : null;
   const crops = Array.isArray(body?.crops) ? body.crops : [];
@@ -7491,13 +8208,13 @@ async function handleTextbookCropsBatchUpsert(body, res) {
   if (!academyId || !bookId || !gradeLabel) {
     sendJson(res, 400, {
       ok: false,
-      error: 'missing_required_fields',
-      required: ['academy_id', 'book_id', 'grade_label'],
+      error: "missing_required_fields",
+      required: ["academy_id", "book_id", "grade_label"],
     });
     return;
   }
   if (!Number.isFinite(bigOrder) || !Number.isFinite(midOrder)) {
-    sendJson(res, 400, { ok: false, error: 'invalid_unit_order' });
+    sendJson(res, 400, { ok: false, error: "invalid_unit_order" });
     return;
   }
   if (!TEXTBOOK_CROP_SUB_KEYS.includes(subKeyRaw)) {
@@ -7505,13 +8222,13 @@ async function handleTextbookCropsBatchUpsert(body, res) {
     return;
   }
   if (crops.length === 0) {
-    sendJson(res, 400, { ok: false, error: 'empty_crops' });
+    sendJson(res, 400, { ok: false, error: "empty_crops" });
     return;
   }
   if (crops.length > MAX_CROP_BATCH) {
     sendJson(res, 413, {
       ok: false,
-      error: 'crop_batch_too_large',
+      error: "crop_batch_too_large",
       limit: MAX_CROP_BATCH,
       got: crops.length,
     });
@@ -7523,13 +8240,13 @@ async function handleTextbookCropsBatchUpsert(body, res) {
   const rows = [];
   for (let i = 0; i < crops.length; i += 1) {
     const c = crops[i] || {};
-    const rawPage = Number.parseInt(String(c.raw_page ?? ''), 10);
-    const problemNumber = String(c.problem_number || '').trim();
+    const rawPage = Number.parseInt(String(c.raw_page ?? ""), 10);
+    const problemNumber = String(c.problem_number || "").trim();
     if (!Number.isFinite(rawPage) || rawPage <= 0 || !problemNumber) {
       sendJson(res, 400, {
         ok: false,
         error: `invalid_crop_row_at_${i}`,
-        hint: 'raw_page (>0) and problem_number are required',
+        hint: "raw_page (>0) and problem_number are required",
       });
       return;
     }
@@ -7553,14 +8270,15 @@ async function handleTextbookCropsBatchUpsert(body, res) {
       return;
     }
 
-    const pngBase64 = typeof c.png_base64 === 'string' ? c.png_base64 : '';
-    const preUploadedKey = typeof c.storage_key === 'string' ? c.storage_key.trim() : '';
+    const pngBase64 = typeof c.png_base64 === "string" ? c.png_base64 : "";
+    const preUploadedKey =
+      typeof c.storage_key === "string" ? c.storage_key.trim() : "";
 
     let fileSizeBytes = null;
     if (pngBase64) {
       let bytes;
       try {
-        bytes = Buffer.from(pngBase64, 'base64');
+        bytes = Buffer.from(pngBase64, "base64");
       } catch (e) {
         sendJson(res, 400, {
           ok: false,
@@ -7588,7 +8306,7 @@ async function handleTextbookCropsBatchUpsert(body, res) {
         driver: DEFAULT_TEXTBOOK_DRIVER,
         bucket,
         key: storageKey,
-        contentType: 'image/png',
+        contentType: "image/png",
         bytes,
       });
       if (!uploaded.ok) {
@@ -7613,7 +8331,7 @@ async function handleTextbookCropsBatchUpsert(body, res) {
       sendJson(res, 400, {
         ok: false,
         error: `missing_png_and_key_at_${i}`,
-        hint: 'Provide either png_base64, storage_key, or set regions_only=true.',
+        hint: "Provide either png_base64, storage_key, or set regions_only=true.",
       });
       return;
     }
@@ -7622,24 +8340,27 @@ async function handleTextbookCropsBatchUpsert(body, res) {
     const itemRegion1k = parseIntArray(c.item_region_1k, 4);
     const cropRectPx = parseIntArray(c.crop_rect_px, 4);
 
-    const displayPage = Number.parseInt(String(c.display_page ?? ''), 10);
-    const setFrom = Number.parseInt(String(c.set_from ?? ''), 10);
-    const setTo = Number.parseInt(String(c.set_to ?? ''), 10);
-    const columnIndex = Number.parseInt(String(c.column_index ?? ''), 10);
-    const contentGroupKindRaw = String(c.content_group_kind || '').trim();
-    const contentGroupKind = ['basic_subtopic', 'type', 'none'].includes(
+    const displayPage = Number.parseInt(String(c.display_page ?? ""), 10);
+    const setFrom = Number.parseInt(String(c.set_from ?? ""), 10);
+    const setTo = Number.parseInt(String(c.set_to ?? ""), 10);
+    const columnIndex = Number.parseInt(String(c.column_index ?? ""), 10);
+    const contentGroupKindRaw = String(c.content_group_kind || "").trim();
+    const contentGroupKind = ["basic_subtopic", "type", "none"].includes(
       contentGroupKindRaw,
     )
       ? contentGroupKindRaw
-      : 'none';
+      : "none";
     const contentGroupOrder = Number.parseInt(
-      String(c.content_group_order ?? ''),
+      String(c.content_group_order ?? ""),
       10,
     );
-    const paddingPx = Number.parseInt(String(c.padding_px ?? ''), 10);
-    const cropLongEdgePx = Number.parseInt(String(c.crop_long_edge_px ?? ''), 10);
-    const widthPx = Number.parseInt(String(c.width_px ?? ''), 10);
-    const heightPx = Number.parseInt(String(c.height_px ?? ''), 10);
+    const paddingPx = Number.parseInt(String(c.padding_px ?? ""), 10);
+    const cropLongEdgePx = Number.parseInt(
+      String(c.crop_long_edge_px ?? ""),
+      10,
+    );
+    const widthPx = Number.parseInt(String(c.width_px ?? ""), 10);
+    const heightPx = Number.parseInt(String(c.height_px ?? ""), 10);
     const deskewAngle = Number(c.deskew_angle_deg);
 
     rows.push({
@@ -7656,10 +8377,10 @@ async function handleTextbookCropsBatchUpsert(body, res) {
       display_page: Number.isFinite(displayPage) ? displayPage : null,
       section: c.section != null ? String(c.section) : null,
       problem_number: problemNumber,
-      label: c.label != null ? String(c.label) : '',
+      label: c.label != null ? String(c.label) : "",
       // 개념서 문항이름(개념원리 익히기 / 필수유형 / 확인 체크 / STEP1 등).
       // 난이도(label)와 별개 컬럼. 다른 시리즈는 빈 문자열.
-      item_name: c.item_name != null ? String(c.item_name) : '',
+      item_name: c.item_name != null ? String(c.item_name) : "",
       // 개념+유형 탄탄 단원 다지기의 "중요" 표시. 난이도와 별개로 함께 둔다.
       is_important: Boolean(c.is_important),
       is_set_header: Boolean(c.is_set_header),
@@ -7667,13 +8388,13 @@ async function handleTextbookCropsBatchUpsert(body, res) {
       set_to: Number.isFinite(setTo) ? setTo : null,
       content_group_kind: contentGroupKind,
       content_group_label:
-        contentGroupKind === 'none'
-          ? ''
-          : String(c.content_group_label || '').trim(),
+        contentGroupKind === "none"
+          ? ""
+          : String(c.content_group_label || "").trim(),
       content_group_title:
-        contentGroupKind === 'none'
-          ? ''
-          : String(c.content_group_title || '').trim(),
+        contentGroupKind === "none"
+          ? ""
+          : String(c.content_group_title || "").trim(),
       content_group_order: Number.isFinite(contentGroupOrder)
         ? contentGroupOrder
         : null,
@@ -7688,7 +8409,9 @@ async function handleTextbookCropsBatchUpsert(body, res) {
       height_px: Number.isFinite(heightPx) ? heightPx : null,
       crop_rect_px: cropRectPx,
       padding_px: Number.isFinite(paddingPx) ? paddingPx : null,
-      crop_long_edge_px: Number.isFinite(cropLongEdgePx) ? cropLongEdgePx : null,
+      crop_long_edge_px: Number.isFinite(cropLongEdgePx)
+        ? cropLongEdgePx
+        : null,
       deskew_angle_deg: Number.isFinite(deskewAngle) ? deskewAngle : null,
       updated_at: new Date().toISOString(),
     });
@@ -7709,11 +8432,11 @@ async function handleTextbookCropsBatchUpsert(body, res) {
     if (dup.size > 0) {
       sendJson(res, 400, {
         ok: false,
-        error: 'duplicate_problem_numbers_in_batch',
+        error: "duplicate_problem_numbers_in_batch",
         duplicates: [...dup],
         hint:
-          '같은 번호의 문항이 한 범위(sub_key/sub_index)에 두 번 담겼습니다. '
-          + '특강 예제 오인식 등 크롭 결과를 확인하세요.',
+          "같은 번호의 문항이 한 범위(sub_key/sub_index)에 두 번 담겼습니다. " +
+          "특강 예제 오인식 등 크롭 결과를 확인하세요.",
         uploaded_keys: uploadedKeys,
       });
       return;
@@ -7721,15 +8444,17 @@ async function handleTextbookCropsBatchUpsert(body, res) {
   }
 
   const { data, error } = await supa
-    .from('textbook_problem_crops')
+    .from("textbook_problem_crops")
     .upsert(rows, {
       onConflict:
-        'academy_id,book_id,grade_label,big_order,mid_order,sub_key,sub_index,problem_number',
+        "academy_id,book_id,grade_label,big_order,mid_order,sub_key,sub_index,problem_number",
     })
     // sub_key/raw_page/display_page/section 은 개념원리(wonri) 단일 패스가
     // 카테고리(sub_key)별 후속 작업(필수유형 본문 정답·풀이 추출, Stage 시드)
     // 에서 행을 다시 분류하는 데 필요하다.
-    .select('id, storage_key, problem_number, sub_key, sub_index, raw_page, display_page, section');
+    .select(
+      "id, storage_key, problem_number, sub_key, sub_index, raw_page, display_page, section",
+    );
   if (error) {
     sendJson(res, 500, {
       ok: false,
@@ -7748,26 +8473,27 @@ async function handleTextbookCropsBatchUpsert(body, res) {
 }
 
 async function handleTextbookCropsSyncScope(body, res) {
-  const academyId = String(body?.academy_id || '').trim();
-  const bookId = String(body?.book_id || '').trim();
-  const gradeLabel = String(body?.grade_label || '').trim();
-  const bigOrder = Number.parseInt(String(body?.big_order ?? ''), 10);
-  const midOrder = Number.parseInt(String(body?.mid_order ?? ''), 10);
-  const subKey = String(body?.sub_key || '').trim().toUpperCase();
-  const subIndexParsed = Number.parseInt(String(body?.sub_index ?? ''), 10);
-  const subIndex = Number.isFinite(subIndexParsed) && subIndexParsed > 0
-    ? subIndexParsed
-    : 0;
-  const rawPages = [...new Set(
-    (Array.isArray(body?.raw_pages) ? body.raw_pages : [])
-      .map((value) => Number.parseInt(String(value), 10))
-      .filter((value) => Number.isFinite(value) && value > 0),
-  )];
+  const academyId = String(body?.academy_id || "").trim();
+  const bookId = String(body?.book_id || "").trim();
+  const gradeLabel = String(body?.grade_label || "").trim();
+  const bigOrder = Number.parseInt(String(body?.big_order ?? ""), 10);
+  const midOrder = Number.parseInt(String(body?.mid_order ?? ""), 10);
+  const subKey = String(body?.sub_key || "")
+    .trim()
+    .toUpperCase();
+  const subIndexParsed = Number.parseInt(String(body?.sub_index ?? ""), 10);
+  const subIndex =
+    Number.isFinite(subIndexParsed) && subIndexParsed > 0 ? subIndexParsed : 0;
+  const rawPages = [
+    ...new Set(
+      (Array.isArray(body?.raw_pages) ? body.raw_pages : [])
+        .map((value) => Number.parseInt(String(value), 10))
+        .filter((value) => Number.isFinite(value) && value > 0),
+    ),
+  ];
   const keepNumbers = new Set(
-    (Array.isArray(body?.keep_problem_numbers)
-      ? body.keep_problem_numbers
-      : [])
-      .map((value) => String(value || '').trim())
+    (Array.isArray(body?.keep_problem_numbers) ? body.keep_problem_numbers : [])
+      .map((value) => String(value || "").trim())
       .filter(Boolean),
   );
   if (
@@ -7780,21 +8506,21 @@ async function handleTextbookCropsSyncScope(body, res) {
     rawPages.length === 0 ||
     rawPages.length > 120
   ) {
-    sendJson(res, 400, { ok: false, error: 'invalid_crop_sync_scope' });
+    sendJson(res, 400, { ok: false, error: "invalid_crop_sync_scope" });
     return;
   }
 
   const { data: existing, error: fetchError } = await supa
-    .from('textbook_problem_crops')
-    .select('id,problem_number,pb_question_uid')
-    .eq('academy_id', academyId)
-    .eq('book_id', bookId)
-    .eq('grade_label', gradeLabel)
-    .eq('big_order', bigOrder)
-    .eq('mid_order', midOrder)
-    .eq('sub_key', subKey)
-    .eq('sub_index', subIndex)
-    .in('raw_page', rawPages);
+    .from("textbook_problem_crops")
+    .select("id,problem_number,pb_question_uid")
+    .eq("academy_id", academyId)
+    .eq("book_id", bookId)
+    .eq("grade_label", gradeLabel)
+    .eq("big_order", bigOrder)
+    .eq("mid_order", midOrder)
+    .eq("sub_key", subKey)
+    .eq("sub_index", subIndex)
+    .in("raw_page", rawPages);
   if (fetchError) {
     sendJson(res, 500, {
       ok: false,
@@ -7803,23 +8529,26 @@ async function handleTextbookCropsSyncScope(body, res) {
     return;
   }
   const stale = (existing || []).filter(
-    (row) => !keepNumbers.has(String(row?.problem_number || '').trim()),
+    (row) => !keepNumbers.has(String(row?.problem_number || "").trim()),
   );
   const deletable = stale.filter(
-    (row) => !String(row?.pb_question_uid || '').trim(),
+    (row) => !String(row?.pb_question_uid || "").trim(),
   );
   // 문제은행 문항까지 만들어진 crop 은 지우지 않는다. 어떤 번호가 남았는지
   // 알려줘야 사람이 문제은행에서 정리할 수 있다.
   const protectedNumbers = stale
-    .filter((row) => String(row?.pb_question_uid || '').trim())
-    .map((row) => String(row?.problem_number || '').trim())
+    .filter((row) => String(row?.pb_question_uid || "").trim())
+    .map((row) => String(row?.problem_number || "").trim())
     .filter(Boolean);
   if (deletable.length > 0) {
     const { error: deleteError } = await supa
-      .from('textbook_problem_crops')
+      .from("textbook_problem_crops")
       .delete()
-      .eq('academy_id', academyId)
-      .in('id', deletable.map((row) => row.id));
+      .eq("academy_id", academyId)
+      .in(
+        "id",
+        deletable.map((row) => row.id),
+      );
     if (deleteError) {
       sendJson(res, 500, {
         ok: false,
@@ -7852,17 +8581,17 @@ function parseTextbookExpectedEntries(input) {
   return raw
     .map((v, position) => {
       if (v == null) return null;
-      if (typeof v === 'string') {
-        return { number: v.trim(), corner: '', page: 0, position };
+      if (typeof v === "string") {
+        return { number: v.trim(), corner: "", page: 0, position };
       }
-      if (typeof v !== 'object') return null;
+      if (typeof v !== "object") return null;
       const page = Number.parseInt(
-        String(v.page ?? v.display_page ?? v.body_page ?? ''),
+        String(v.page ?? v.display_page ?? v.body_page ?? ""),
         10,
       );
       return {
-        number: String(v.problem_number || v.number || '').trim(),
-        corner: String(v.corner || v.item_name || '').trim(),
+        number: String(v.problem_number || v.number || "").trim(),
+        corner: String(v.corner || v.item_name || "").trim(),
         page: Number.isFinite(page) && page > 0 ? page : 0,
         position,
       };
@@ -7876,29 +8605,32 @@ function parseTextbookExpectedEntries(input) {
 function parseTextbookSkipBadges(input) {
   const raw = Array.isArray(input) ? input : [];
   return raw
-    .map((v) => String(v ?? '').trim())
+    .map((v) => String(v ?? "").trim())
     .filter((v) => v.length > 0 && v.length <= 40)
     .slice(0, 40);
 }
 
 async function handleTextbookVlmExtractAnswers(body, res) {
-  const apiKey =
-    (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
+  const apiKey = (
+    process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_API_KEY ||
+    ""
+  ).trim();
   if (!apiKey) {
     sendJson(res, 500, {
       ok: false,
-      error: 'gemini_api_key_missing',
-      hint: 'Set GEMINI_API_KEY or GOOGLE_API_KEY in the gateway env.',
+      error: "gemini_api_key_missing",
+      hint: "Set GEMINI_API_KEY or GOOGLE_API_KEY in the gateway env.",
     });
     return;
   }
 
-  const imageBase64 = String(body?.image_base64 || '').trim();
+  const imageBase64 = String(body?.image_base64 || "").trim();
   if (!imageBase64) {
-    sendJson(res, 400, { ok: false, error: 'missing_image_base64' });
+    sendJson(res, 400, { ok: false, error: "missing_image_base64" });
     return;
   }
-  const mimeType = String(body?.mime_type || 'image/png').trim();
+  const mimeType = String(body?.mime_type || "image/png").trim();
   if (!TEXTBOOK_VLM_VALID_MIMES.has(mimeType)) {
     sendJson(res, 400, {
       ok: false,
@@ -7908,15 +8640,15 @@ async function handleTextbookVlmExtractAnswers(body, res) {
     return;
   }
 
-  const rawPage = Number.parseInt(String(body?.raw_page ?? ''), 10);
+  const rawPage = Number.parseInt(String(body?.raw_page ?? ""), 10);
   if (!Number.isFinite(rawPage) || rawPage <= 0) {
-    sendJson(res, 400, { ok: false, error: 'invalid_raw_page' });
+    sendJson(res, 400, { ok: false, error: "invalid_raw_page" });
     return;
   }
 
-  const academyId = String(body?.academy_id || '').trim();
-  const bookId = String(body?.book_id || '').trim();
-  const gradeLabel = String(body?.grade_label || '').trim();
+  const academyId = String(body?.academy_id || "").trim();
+  const bookId = String(body?.book_id || "").trim();
+  const gradeLabel = String(body?.grade_label || "").trim();
 
   const expectedEntries = parseTextbookExpectedEntries(body?.expected_numbers);
   const expectedNumbers = expectedEntries.map((e) => e.number);
@@ -7937,7 +8669,9 @@ async function handleTextbookVlmExtractAnswers(body, res) {
       expectedNumbers,
       expectedEntries,
       skipBadges,
-      series: String(body?.series || '').trim().toLowerCase(),
+      series: String(body?.series || "")
+        .trim()
+        .toLowerCase(),
       model: TEXTBOOK_VLM_MODEL,
       apiKey,
       timeoutMs: TEXTBOOK_ANSWER_VLM_TIMEOUT_MS,
@@ -7946,7 +8680,7 @@ async function handleTextbookVlmExtractAnswers(body, res) {
   } catch (err) {
     sendJson(res, 502, {
       ok: false,
-      error: 'vlm_answer_failed',
+      error: "vlm_answer_failed",
       message: compact(err?.message || err),
     });
     return;
@@ -7956,7 +8690,7 @@ async function handleTextbookVlmExtractAnswers(body, res) {
     expectedNumbers,
     expectedEntries,
   });
-  logVlmUsage('answers', result.usageMetadata, {
+  logVlmUsage("answers", result.usageMetadata, {
     page: rawPage,
     expected: expectedEntries.length,
     items: normalized.items.length,
@@ -7965,26 +8699,29 @@ async function handleTextbookVlmExtractAnswers(body, res) {
   // 개념+유형·수력충전은 코너·배지 삼중 대조라 한 건이라도 비면 원인 추적이
   // 필요하다.
   if (
-    ANSWER_BADGE_SERIES.has(String(body?.series || '').trim().toLowerCase()) &&
+    ANSWER_BADGE_SERIES.has(
+      String(body?.series || "")
+        .trim()
+        .toLowerCase(),
+    ) &&
     normalized.items.length < expectedEntries.length
   ) {
     const want = expectedEntries
-      .map((e) => `${e.number}@${e.corner || '-'}/P.${e.page || '-'}`)
-      .join(' ');
-    const got = (Array.isArray(result.parsedJson?.items)
-      ? result.parsedJson.items
-      : []
+      .map((e) => `${e.number}@${e.corner || "-"}/P.${e.page || "-"}`)
+      .join(" ");
+    const got = (
+      Array.isArray(result.parsedJson?.items) ? result.parsedJson.items : []
     )
       .map(
         (it) =>
-          `${it?.problem_number}@${it?.source_corner || '-'}/P.${
-            it?.source_page || '-'
+          `${it?.problem_number}@${it?.source_corner || "-"}/P.${
+            it?.source_page || "-"
           }`,
       )
-      .join(' ');
+      .join(" ");
     console.log(
       `[answers-gap] page=${rawPage} want=[${want}] raw=[${got}] ` +
-        `notes="${String(result.parsedJson?.notes || '').slice(0, 300)}"`,
+        `notes="${String(result.parsedJson?.notes || "").slice(0, 300)}"`,
     );
   }
   sendJson(res, 200, {
@@ -7998,32 +8735,35 @@ async function handleTextbookVlmExtractAnswers(body, res) {
     model: TEXTBOOK_VLM_MODEL,
     elapsed_ms: result.elapsedMs,
     usage: result.usageMetadata || null,
-    finish_reason: result.finishReason || '',
+    finish_reason: result.finishReason || "",
   });
 }
 
 // 수력충전 빠른 정답 지면을 소단원 머리 + 번호/정답 순서로 읽는다.
 // 모델은 OCR만 하고 실제 본문 크롭과의 대응은 소단원별 기대 문항을 가진 앱이 한다.
 async function handleTextbookVlmExtractAnswerLayout(body, res) {
-  const apiKey =
-    (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
+  const apiKey = (
+    process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_API_KEY ||
+    ""
+  ).trim();
   if (!apiKey) {
-    sendJson(res, 500, { ok: false, error: 'gemini_api_key_missing' });
+    sendJson(res, 500, { ok: false, error: "gemini_api_key_missing" });
     return;
   }
-  const imageBase64 = String(body?.image_base64 || '').trim();
+  const imageBase64 = String(body?.image_base64 || "").trim();
   if (!imageBase64) {
-    sendJson(res, 400, { ok: false, error: 'missing_image_base64' });
+    sendJson(res, 400, { ok: false, error: "missing_image_base64" });
     return;
   }
-  const mimeType = String(body?.mime_type || 'image/png').trim();
+  const mimeType = String(body?.mime_type || "image/png").trim();
   if (!TEXTBOOK_VLM_VALID_MIMES.has(mimeType)) {
     sendJson(res, 400, { ok: false, error: `invalid_mime_type: ${mimeType}` });
     return;
   }
-  const rawPage = Number.parseInt(String(body?.raw_page ?? ''), 10);
+  const rawPage = Number.parseInt(String(body?.raw_page ?? ""), 10);
   if (!Number.isFinite(rawPage) || rawPage <= 0) {
-    sendJson(res, 400, { ok: false, error: 'invalid_raw_page' });
+    sendJson(res, 400, { ok: false, error: "invalid_raw_page" });
     return;
   }
 
@@ -8041,16 +8781,57 @@ async function handleTextbookVlmExtractAnswerLayout(body, res) {
   } catch (err) {
     sendJson(res, 502, {
       ok: false,
-      error: 'vlm_answer_layout_failed',
+      error: "vlm_answer_layout_failed",
       message: compact(err?.message || err),
     });
     return;
   }
 
   const normalized = normalizeAnswerLayoutResult(result.parsedJson);
-  logVlmUsage('answer_layout', result.usageMetadata, {
+  logVlmUsage("answer_layout", result.usageMetadata, {
     page: rawPage,
+    px: pngPixelSize(imageBase64),
     entries: normalized.entries.length,
+    finish: result.finishReason || "",
+  });
+  // 한 단만 읽고 왔으면 나머지 단을 잘라 다시 물어본다. 그냥 두면 그 단에
+  // 실린 소단원은 머리조차 못 만나 정답이 통째로 빈 채로 넘어간다.
+  const missingHalf = answerLayoutMissingHalf(normalized.entries);
+  if (missingHalf) {
+    try {
+      const repaired = await readAnswerLayoutHalf({
+        imageBase64,
+        rawPage,
+        half: missingHalf,
+        apiKey,
+      });
+      const merged = mergeAnswerLayoutHalf(
+        normalized.entries,
+        remapAnswerLayoutHalf(repaired?.entries ?? [], missingHalf),
+        missingHalf,
+      );
+      console.log(
+        `[answer-layout] page=${rawPage} ${missingHalf} 단 재판독: ` +
+          `${normalized.entries.length} → ${merged.length}`,
+      );
+      normalized.entries = merged;
+      // 왼쪽 단을 되찾았다면 지면은 그 단의 머리에서 시작한 것이다.
+      if (missingHalf === "left" && repaired) {
+        normalized.leading_continuation = repaired.leading_continuation;
+      }
+    } catch (err) {
+      console.warn(
+        `[answer-layout] page=${rawPage} ${missingHalf} 단 재판독 실패:`,
+        compact(err?.message || err),
+      );
+    }
+  }
+  dumpTextbookDetectInput({
+    imageBase64,
+    rawPage,
+    gradeLabel: "answer_layout",
+    result,
+    normalized,
   });
   sendJson(res, 200, {
     ok: true,
@@ -8058,28 +8839,73 @@ async function handleTextbookVlmExtractAnswerLayout(body, res) {
     leading_continuation: normalized.leading_continuation,
     entries: normalized.entries,
     model: TEXTBOOK_VLM_MODEL,
-    finish_reason: result.finishReason || '',
+    finish_reason: result.finishReason || "",
   });
 }
 
+// 지면을 반으로 잘라 그 단만 다시 읽는다. 요소 수가 절반이라 응답도 빠르고,
+// 애초에 한 단밖에 없으니 모델이 단을 건너뛸 수가 없다.
+async function readAnswerLayoutHalf({ imageBase64, rawPage, half, apiKey }) {
+  const buf = Buffer.from(imageBase64, "base64");
+  const meta = await sharp(buf).metadata();
+  const splitPx = Math.round((meta.width || 0) / 2);
+  if (!splitPx) return null;
+  const cropped = await sharp(buf)
+    .extract({
+      left: half === "left" ? 0 : splitPx,
+      top: 0,
+      width: half === "left" ? splitPx : meta.width - splitPx,
+      height: meta.height,
+    })
+    .png()
+    .toBuffer();
+  // 원래 한 단만 쓰는 지면이면 나머지 반쪽은 백지다. 물어봐야 1분만 버린다.
+  const stats = await sharp(cropped).stats();
+  const mean =
+    stats.channels.reduce((sum, ch) => sum + ch.mean, 0) /
+    Math.max(1, stats.channels.length);
+  if (mean > 250) return null;
+  const result = await extractAnswerLayoutOnPage({
+    imageBase64: cropped.toString("base64"),
+    mimeType: "image/png",
+    rawPage,
+    model: TEXTBOOK_VLM_MODEL,
+    apiKey,
+    timeoutMs: TEXTBOOK_ANSWER_VLM_TIMEOUT_MS,
+    maxRetries: TEXTBOOK_ANSWER_VLM_MAX_RETRIES,
+  });
+  const normalized = normalizeAnswerLayoutResult(result.parsedJson);
+  logVlmUsage("answer_layout_half", result.usageMetadata, {
+    page: rawPage,
+    half,
+    px: `${half === "left" ? splitPx : meta.width - splitPx}x${meta.height}`,
+    entries: normalized.entries.length,
+    finish: result.finishReason || "",
+  });
+  return normalized;
+}
+
 async function handleTextbookVlmDetectSolutionRefs(body, res) {
-  const apiKey =
-    (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
+  const apiKey = (
+    process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_API_KEY ||
+    ""
+  ).trim();
   if (!apiKey) {
     sendJson(res, 500, {
       ok: false,
-      error: 'gemini_api_key_missing',
-      hint: 'Set GEMINI_API_KEY or GOOGLE_API_KEY in the gateway env.',
+      error: "gemini_api_key_missing",
+      hint: "Set GEMINI_API_KEY or GOOGLE_API_KEY in the gateway env.",
     });
     return;
   }
 
-  const imageBase64 = String(body?.image_base64 || '').trim();
+  const imageBase64 = String(body?.image_base64 || "").trim();
   if (!imageBase64) {
-    sendJson(res, 400, { ok: false, error: 'missing_image_base64' });
+    sendJson(res, 400, { ok: false, error: "missing_image_base64" });
     return;
   }
-  const mimeType = String(body?.mime_type || 'image/png').trim();
+  const mimeType = String(body?.mime_type || "image/png").trim();
   if (!TEXTBOOK_VLM_VALID_MIMES.has(mimeType)) {
     sendJson(res, 400, {
       ok: false,
@@ -8089,15 +8915,15 @@ async function handleTextbookVlmDetectSolutionRefs(body, res) {
     return;
   }
 
-  const rawPage = Number.parseInt(String(body?.raw_page ?? ''), 10);
+  const rawPage = Number.parseInt(String(body?.raw_page ?? ""), 10);
   if (!Number.isFinite(rawPage) || rawPage <= 0) {
-    sendJson(res, 400, { ok: false, error: 'invalid_raw_page' });
+    sendJson(res, 400, { ok: false, error: "invalid_raw_page" });
     return;
   }
 
-  const academyId = String(body?.academy_id || '').trim();
-  const bookId = String(body?.book_id || '').trim();
-  const gradeLabel = String(body?.grade_label || '').trim();
+  const academyId = String(body?.academy_id || "").trim();
+  const bookId = String(body?.book_id || "").trim();
+  const gradeLabel = String(body?.grade_label || "").trim();
 
   // 답지와 같은 이유로 개념+유형은 코너·본문 페이지까지 들고 간다.
   const expectedEntries = parseTextbookExpectedEntries(body?.expected_numbers);
@@ -8119,7 +8945,9 @@ async function handleTextbookVlmDetectSolutionRefs(body, res) {
       expectedNumbers,
       expectedEntries,
       skipBadges,
-      series: String(body?.series || '').trim().toLowerCase(),
+      series: String(body?.series || "")
+        .trim()
+        .toLowerCase(),
       model: TEXTBOOK_VLM_MODEL,
       apiKey,
       timeoutMs: TEXTBOOK_ANSWER_VLM_TIMEOUT_MS,
@@ -8128,7 +8956,7 @@ async function handleTextbookVlmDetectSolutionRefs(body, res) {
   } catch (err) {
     sendJson(res, 502, {
       ok: false,
-      error: 'vlm_solref_failed',
+      error: "vlm_solref_failed",
       message: compact(err?.message || err),
     });
     return;
@@ -8138,7 +8966,7 @@ async function handleTextbookVlmDetectSolutionRefs(body, res) {
     expectedNumbers,
     expectedEntries,
   });
-  logVlmUsage('solution_refs', result.usageMetadata, {
+  logVlmUsage("solution_refs", result.usageMetadata, {
     page: rawPage,
     expected: expectedEntries.length,
     items: normalized.items.length,
@@ -8155,7 +8983,7 @@ async function handleTextbookVlmDetectSolutionRefs(body, res) {
     model: TEXTBOOK_VLM_MODEL,
     elapsed_ms: result.elapsedMs,
     usage: result.usageMetadata || null,
-    finish_reason: result.finishReason || '',
+    finish_reason: result.finishReason || "",
   });
 }
 
@@ -8165,25 +8993,28 @@ async function handleTextbookVlmDetectSolutionRefs(body, res) {
 // 그 지면에 실제로 있는 다른 소단원 풀이를 번호만 맞춰 돌려준다. 지면마다
 // 블록 목록을 먼저 확정해 두면 어느 블록을 어느 지면에서 물을지 정해진다.
 async function handleTextbookVlmDetectSolutionBlocks(body, res) {
-  const apiKey =
-    (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
+  const apiKey = (
+    process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_API_KEY ||
+    ""
+  ).trim();
   if (!apiKey) {
-    sendJson(res, 500, { ok: false, error: 'gemini_api_key_missing' });
+    sendJson(res, 500, { ok: false, error: "gemini_api_key_missing" });
     return;
   }
-  const imageBase64 = String(body?.image_base64 || '').trim();
+  const imageBase64 = String(body?.image_base64 || "").trim();
   if (!imageBase64) {
-    sendJson(res, 400, { ok: false, error: 'missing_image_base64' });
+    sendJson(res, 400, { ok: false, error: "missing_image_base64" });
     return;
   }
-  const mimeType = String(body?.mime_type || 'image/png').trim();
+  const mimeType = String(body?.mime_type || "image/png").trim();
   if (!TEXTBOOK_VLM_VALID_MIMES.has(mimeType)) {
     sendJson(res, 400, { ok: false, error: `invalid_mime_type: ${mimeType}` });
     return;
   }
-  const rawPage = Number.parseInt(String(body?.raw_page ?? ''), 10);
+  const rawPage = Number.parseInt(String(body?.raw_page ?? ""), 10);
   if (!Number.isFinite(rawPage) || rawPage <= 0) {
-    sendJson(res, 400, { ok: false, error: 'invalid_raw_page' });
+    sendJson(res, 400, { ok: false, error: "invalid_raw_page" });
     return;
   }
 
@@ -8201,7 +9032,7 @@ async function handleTextbookVlmDetectSolutionBlocks(body, res) {
   } catch (err) {
     sendJson(res, 502, {
       ok: false,
-      error: 'vlm_solblocks_failed',
+      error: "vlm_solblocks_failed",
       message: compact(err?.message || err),
     });
     return;
@@ -8235,8 +9066,9 @@ async function handleTextbookVlmDetectSolutionBlocks(body, res) {
       );
     }
   }
-  logVlmUsage('solution_blocks', result.usageMetadata, {
+  logVlmUsage("solution_blocks", result.usageMetadata, {
     page: rawPage,
+    px: pngPixelSize(imageBase64),
     blocks: normalized.blocks.length,
     numbers: normalized.numbers.length,
   });
@@ -8277,16 +9109,17 @@ async function handleTextbookVlmDetectSolutionBlocks(body, res) {
 
 const MAX_ANSWER_BATCH = 300;
 const MAX_ANSWER_IMAGE_BYTES = 10 * 1024 * 1024;
-const TEXTBOOK_ANSWER_IMAGE_BUCKET = 'textbook-answer-images';
-const TEXTBOOK_ANSWER_IMAGE_MARKER_RE = /(?:\[\s*image\s*\]|\(\s*image\s*\)|\[그림\])/i;
+const TEXTBOOK_ANSWER_IMAGE_BUCKET = "textbook-answer-images";
+const TEXTBOOK_ANSWER_IMAGE_MARKER_RE =
+  /(?:\[\s*image\s*\]|\(\s*image\s*\)|\[그림\])/i;
 
 function normalizeTextbookAnswerValue(input) {
-  let out = String(input ?? '');
+  let out = String(input ?? "");
   for (let i = 0; i < 6; i += 1) {
     const next = out
-      .replace(/\\(?:text|mathrm)\s*\{([^{}]*)\}/g, '$1')
-      .replace(/\\textstyle\b/g, '')
-      .replace(/\\displaystyle\b/g, '');
+      .replace(/\\(?:text|mathrm)\s*\{([^{}]*)\}/g, "$1")
+      .replace(/\\textstyle\b/g, "")
+      .replace(/\\displaystyle\b/g, "");
     if (next === out) break;
     out = next;
   }
@@ -8312,9 +9145,9 @@ function normalizeTextbookAnswerValue(input) {
     out = next;
   }
   return out
-    .replace(/\(\s*image\s*\)/gi, '[image]')
-    .replace(/\[\s*image\s*\]/gi, '[image]')
-    .replace(/\s+/g, ' ')
+    .replace(/\(\s*image\s*\)/gi, "[image]")
+    .replace(/\[\s*image\s*\]/gi, "[image]")
+    .replace(/\s+/g, " ")
     .trim();
 }
 
@@ -8324,14 +9157,16 @@ function textbookProblemNumberKey(value) {
 }
 
 function parseTextbookAnswerPartsFromText(value) {
-  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  const text = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
   if (!text) return [];
   const matches = [...text.matchAll(/\((\d{1,2})\)\s*/g)];
   if (matches.length < 2) return [];
   const parts = [];
   for (let i = 0; i < matches.length; i += 1) {
     const match = matches[i];
-    const sub = String(match[1] || '').trim();
+    const sub = String(match[1] || "").trim();
     const start = match.index + match[0].length;
     const end = i + 1 < matches.length ? matches[i + 1].index : text.length;
     const partValue = text.slice(start, end).trim();
@@ -8343,32 +9178,35 @@ function parseTextbookAnswerPartsFromText(value) {
 }
 
 function buildPbAnswerPatchFromSidecar(question, answer) {
-  const kindRaw = String(answer?.answer_kind || '').trim().toLowerCase();
+  const kindRaw = String(answer?.answer_kind || "")
+    .trim()
+    .toLowerCase();
   const rawText = normalizeTextbookAnswerValue(answer?.answer_text);
   const rawLatex = normalizeTextbookAnswerValue(answer?.answer_latex_2d);
   const text = rawText || rawLatex;
   const kind =
-    kindRaw === 'image' || TEXTBOOK_ANSWER_IMAGE_MARKER_RE.test(`${rawText} ${rawLatex}`)
-      ? 'image'
+    kindRaw === "image" ||
+    TEXTBOOK_ANSWER_IMAGE_MARKER_RE.test(`${rawText} ${rawLatex}`)
+      ? "image"
       : kindRaw;
   const meta =
-    question?.meta && typeof question.meta === 'object'
+    question?.meta && typeof question.meta === "object"
       ? { ...question.meta }
       : {};
   const choices = Array.isArray(question?.objective_choices)
     ? question.objective_choices
     : [];
   const canUseObjective =
-    kind === 'objective' &&
-    String(question?.question_type || '').includes('객관식') &&
+    kind === "objective" &&
+    String(question?.question_type || "").includes("객관식") &&
     choices.length > 0;
 
-  let objectiveAnswerKey = canUseObjective ? text : '';
-  let subjectiveAnswer = canUseObjective ? '' : text;
+  let objectiveAnswerKey = canUseObjective ? text : "";
+  let subjectiveAnswer = canUseObjective ? "" : text;
   let answerAsset = null;
 
-  if (kind === 'image') {
-    const marker = '[[PB_ANSWER_FIG_1]]';
+  if (kind === "image") {
+    const marker = "[[PB_ANSWER_FIG_1]]";
     const withMarker = text
       ? text
           .replace(/\[\s*image\s*\]/gi, marker)
@@ -8379,19 +9217,21 @@ function buildPbAnswerPatchFromSidecar(question, answer) {
     subjectiveAnswer = withMarker.includes(marker)
       ? withMarker
       : `${withMarker} ${marker}`.trim();
-    objectiveAnswerKey = '';
-    const imagePath = String(answer?.answer_image_path || '').trim();
+    objectiveAnswerKey = "";
+    const imagePath = String(answer?.answer_image_path || "").trim();
     if (imagePath) {
       answerAsset = {
         figure_index: 1,
         bucket:
-          String(answer?.answer_image_bucket || '').trim() ||
+          String(answer?.answer_image_bucket || "").trim() ||
           TEXTBOOK_ANSWER_IMAGE_BUCKET,
         path: imagePath,
-        mime_type: 'image/png',
+        mime_type: "image/png",
         approved: true,
-        source: String(answer?.answer_source || '').trim() || 'textbook_answer_vlm',
-        created_at: String(answer?.updated_at || '').trim() || new Date().toISOString(),
+        source:
+          String(answer?.answer_source || "").trim() || "textbook_answer_vlm",
+        created_at:
+          String(answer?.updated_at || "").trim() || new Date().toISOString(),
         ...(answer?.answer_image_width_px
           ? { width_px: answer.answer_image_width_px }
           : {}),
@@ -8408,44 +9248,44 @@ function buildPbAnswerPatchFromSidecar(question, answer) {
     }
   }
 
-  meta.answer_key = subjectiveAnswer || objectiveAnswerKey || '';
+  meta.answer_key = subjectiveAnswer || objectiveAnswerKey || "";
   meta.objective_answer_key = objectiveAnswerKey;
   meta.subjective_answer = subjectiveAnswer;
   meta.allow_objective = canUseObjective;
   meta.allow_subjective = true;
-  meta.answer_source = String(answer?.answer_source || '').trim() || 'vlm';
+  meta.answer_source = String(answer?.answer_source || "").trim() || "vlm";
   const parsedAnswerParts = parseTextbookAnswerPartsFromText(subjectiveAnswer);
   if (parsedAnswerParts.length > 0) {
     meta.answer_parts = parsedAnswerParts;
-  } else if (kind === 'image') {
+  } else if (kind === "image") {
     delete meta.answer_parts;
   }
   if (answerAsset) {
     meta.answer_figure_assets = [answerAsset];
     meta.answer_figure_layout =
-      meta.answer_figure_layout && typeof meta.answer_figure_layout === 'object'
+      meta.answer_figure_layout && typeof meta.answer_figure_layout === "object"
         ? meta.answer_figure_layout
         : {
             version: 1,
-            verticalAlign: 'top',
+            verticalAlign: "top",
             items: [
               {
-                assetKey: 'idx:1',
+                assetKey: "idx:1",
                 widthEm: 10,
-                verticalAlign: 'top',
+                verticalAlign: "top",
                 topOffsetEm: 0.55,
               },
             ],
           };
   }
   meta.vlm = {
-    ...(meta.vlm && typeof meta.vlm === 'object' ? meta.vlm : {}),
+    ...(meta.vlm && typeof meta.vlm === "object" ? meta.vlm : {}),
     answer_sidecar: {
       kind,
       source: meta.answer_source,
       raw_page: answer?.raw_page ?? null,
       display_page: answer?.display_page ?? null,
-      updated_at: String(answer?.updated_at || '').trim(),
+      updated_at: String(answer?.updated_at || "").trim(),
       has_image_asset: !!answerAsset,
     },
   };
@@ -8470,58 +9310,66 @@ async function syncTextbookAnswersToProblemBankScope({
   // 문서와의 연결이 끊긴 경우가 많아(개념원리 문서의 1/3), 런만 믿으면 그
   // 문서들의 문항은 영구히 정답이 비어 있게 된다.
   const { data: runs, error: runErr } = await supa
-    .from('textbook_pb_extract_runs')
-    .select('pb_document_id,status')
-    .eq('academy_id', academyId)
-    .eq('book_id', bookId)
-    .eq('grade_label', gradeLabel)
-    .eq('big_order', scope.big_order)
-    .eq('mid_order', scope.mid_order)
-    .eq('sub_key', scope.sub_key)
-    .eq('sub_index', scopeSubIndex);
-  if (runErr) throw new Error(`sync_pb_run_fetch_failed: ${runErr.message || runErr}`);
+    .from("textbook_pb_extract_runs")
+    .select("pb_document_id,status")
+    .eq("academy_id", academyId)
+    .eq("book_id", bookId)
+    .eq("grade_label", gradeLabel)
+    .eq("big_order", scope.big_order)
+    .eq("mid_order", scope.mid_order)
+    .eq("sub_key", scope.sub_key)
+    .eq("sub_index", scopeSubIndex);
+  if (runErr)
+    throw new Error(`sync_pb_run_fetch_failed: ${runErr.message || runErr}`);
   const runRows = Array.isArray(runs) ? runs : [];
   const documentIds = [
     ...new Set(
       runRows
-        .map((row) => String(row?.pb_document_id || '').trim())
+        .map((row) => String(row?.pb_document_id || "").trim())
         .filter(Boolean),
     ),
   ];
 
   const { data: crops, error: cropErr } = await supa
-    .from('textbook_problem_crops')
-    .select('id,problem_number,is_set_header')
-    .eq('academy_id', academyId)
-    .eq('book_id', bookId)
-    .eq('grade_label', gradeLabel)
-    .eq('big_order', scope.big_order)
-    .eq('mid_order', scope.mid_order)
-    .eq('sub_key', scope.sub_key)
-    .eq('sub_index', scopeSubIndex);
-  if (cropErr) throw new Error(`sync_pb_crops_fetch_failed: ${cropErr.message || cropErr}`);
+    .from("textbook_problem_crops")
+    .select("id,problem_number,is_set_header")
+    .eq("academy_id", academyId)
+    .eq("book_id", bookId)
+    .eq("grade_label", gradeLabel)
+    .eq("big_order", scope.big_order)
+    .eq("mid_order", scope.mid_order)
+    .eq("sub_key", scope.sub_key)
+    .eq("sub_index", scopeSubIndex);
+  if (cropErr)
+    throw new Error(
+      `sync_pb_crops_fetch_failed: ${cropErr.message || cropErr}`,
+    );
   const cropRows = Array.isArray(crops) ? crops : [];
   const cropIds = cropRows
-    .map((crop) => String(crop?.id || '').trim())
+    .map((crop) => String(crop?.id || "").trim())
     .filter(Boolean);
-  if (cropIds.length === 0) return { updated: 0, skipped: 'missing_crops' };
+  if (cropIds.length === 0) return { updated: 0, skipped: "missing_crops" };
 
   const { data: answers, error: answerErr } = await supa
-    .from('textbook_problem_answers')
+    .from("textbook_problem_answers")
     .select(
-      'crop_id,answer_kind,answer_text,answer_latex_2d,answer_source,' +
-        'answer_image_bucket,answer_image_path,answer_image_width_px,' +
-        'answer_image_height_px,answer_image_size_bytes,answer_image_content_hash,' +
-        'raw_page,display_page,updated_at',
+      "crop_id,answer_kind,answer_text,answer_latex_2d,answer_source," +
+        "answer_image_bucket,answer_image_path,answer_image_width_px," +
+        "answer_image_height_px,answer_image_size_bytes,answer_image_content_hash," +
+        "raw_page,display_page,updated_at",
     )
-    .in('crop_id', cropIds);
-  if (answerErr) throw new Error(`sync_pb_answers_fetch_failed: ${answerErr.message || answerErr}`);
+    .in("crop_id", cropIds);
+  if (answerErr)
+    throw new Error(
+      `sync_pb_answers_fetch_failed: ${answerErr.message || answerErr}`,
+    );
   const answerByCropId = new Map();
   for (const answer of answers || []) {
-    const cropId = String(answer?.crop_id || '').trim();
+    const cropId = String(answer?.crop_id || "").trim();
     if (cropId) answerByCropId.set(cropId, answer);
   }
-  if (answerByCropId.size === 0) return { updated: 0, skipped: 'missing_answers' };
+  if (answerByCropId.size === 0)
+    return { updated: 0, skipped: "missing_answers" };
 
   // crop → 문항 정규 링크로 정확히 짝지운다. 문항 번호로 맞추면 번호가
   // 소단원마다 01부터 새로 시작하는 카테고리(필수유형·특강)에서 다른 소단원의
@@ -8530,14 +9378,17 @@ async function syncTextbookAnswersToProblemBankScope({
   const linkedCropIds = new Set();
   for (const cropChunk of chunkArray(cropIds, 100)) {
     const { data: links, error: linkErr } = await supa
-      .from('textbook_crop_question_links')
-      .select('crop_id,pb_question_id')
-      .eq('academy_id', academyId)
-      .in('crop_id', cropChunk);
-    if (linkErr) throw new Error(`sync_pb_links_fetch_failed: ${linkErr.message || linkErr}`);
+      .from("textbook_crop_question_links")
+      .select("crop_id,pb_question_id")
+      .eq("academy_id", academyId)
+      .in("crop_id", cropChunk);
+    if (linkErr)
+      throw new Error(
+        `sync_pb_links_fetch_failed: ${linkErr.message || linkErr}`,
+      );
     for (const link of links || []) {
-      const cropId = String(link?.crop_id || '').trim();
-      const questionId = String(link?.pb_question_id || '').trim();
+      const cropId = String(link?.crop_id || "").trim();
+      const questionId = String(link?.pb_question_id || "").trim();
       const answer = answerByCropId.get(cropId);
       if (!cropId || !questionId || !answer) continue;
       answerByQuestionId.set(questionId, answer);
@@ -8549,7 +9400,7 @@ async function syncTextbookAnswersToProblemBankScope({
   const answerByNumber = new Map();
   for (const crop of cropRows) {
     if (crop?.is_set_header === true) continue;
-    const cropId = String(crop?.id || '').trim();
+    const cropId = String(crop?.id || "").trim();
     if (linkedCropIds.has(cropId)) continue;
     const key = textbookProblemNumberKey(crop?.problem_number);
     const answer = answerByCropId.get(cropId);
@@ -8559,41 +9410,45 @@ async function syncTextbookAnswersToProblemBankScope({
   const questionRows = [];
   for (const idChunk of chunkArray([...answerByQuestionId.keys()], 100)) {
     const { data, error: linkedErr } = await supa
-      .from('pb_questions')
+      .from("pb_questions")
       .select(
-        'id,question_number,question_type,objective_choices,objective_answer_key,' +
-          'subjective_answer,allow_objective,allow_subjective,meta',
+        "id,question_number,question_type,objective_choices,objective_answer_key," +
+          "subjective_answer,allow_objective,allow_subjective,meta",
       )
-      .eq('academy_id', academyId)
-      .in('id', idChunk);
+      .eq("academy_id", academyId)
+      .in("id", idChunk);
     if (linkedErr) {
-      throw new Error(`sync_pb_questions_fetch_failed: ${linkedErr.message || linkedErr}`);
+      throw new Error(
+        `sync_pb_questions_fetch_failed: ${linkedErr.message || linkedErr}`,
+      );
     }
     questionRows.push(...(data || []));
   }
   if (answerByNumber.size > 0 && documentIds.length > 0) {
     const { data, error: questionErr } = await supa
-      .from('pb_questions')
+      .from("pb_questions")
       .select(
-        'id,question_number,question_type,objective_choices,objective_answer_key,' +
-          'subjective_answer,allow_objective,allow_subjective,meta',
+        "id,question_number,question_type,objective_choices,objective_answer_key," +
+          "subjective_answer,allow_objective,allow_subjective,meta",
       )
-      .eq('academy_id', academyId)
-      .in('document_id', documentIds);
+      .eq("academy_id", academyId)
+      .in("document_id", documentIds);
     if (questionErr) {
-      throw new Error(`sync_pb_questions_fetch_failed: ${questionErr.message || questionErr}`);
+      throw new Error(
+        `sync_pb_questions_fetch_failed: ${questionErr.message || questionErr}`,
+      );
     }
     questionRows.push(...(data || []));
   }
   if (questionRows.length === 0) {
-    return { updated: 0, skipped: 'missing_pb_questions', documentIds };
+    return { updated: 0, skipped: "missing_pb_questions", documentIds };
   }
 
   let updated = 0;
   const updatedQuestionIds = [];
   const seenQuestionIds = new Set();
   for (const question of questionRows) {
-    const questionId = String(question?.id || '').trim();
+    const questionId = String(question?.id || "").trim();
     if (!questionId || seenQuestionIds.has(questionId)) continue;
     const numberKey = textbookProblemNumberKey(question?.question_number);
     const answer =
@@ -8603,11 +9458,13 @@ async function syncTextbookAnswersToProblemBankScope({
     seenQuestionIds.add(questionId);
     const patch = buildPbAnswerPatchFromSidecar(question, answer);
     const { error: updateErr } = await supa
-      .from('pb_questions')
+      .from("pb_questions")
       .update(patch)
-      .eq('id', questionId);
+      .eq("id", questionId);
     if (updateErr) {
-      throw new Error(`sync_pb_question_update_failed: ${updateErr.message || updateErr}`);
+      throw new Error(
+        `sync_pb_question_update_failed: ${updateErr.message || updateErr}`,
+      );
     }
     updated += 1;
     updatedQuestionIds.push(questionId);
@@ -8627,20 +9484,24 @@ async function syncTextbookAnswersToProblemBankScope({
 /// 아직 대기 중인 소단원이 '완료' 뒤에 숨지 않게 하는 것이 목적이다.
 function leastFinishedTextbookRunStatus(rows) {
   const rank = (status) => {
-    switch (String(status || '').trim().toLowerCase()) {
-      case '':
+    switch (
+      String(status || "")
+        .trim()
+        .toLowerCase()
+    ) {
+      case "":
         return 0;
-      case 'queued':
+      case "queued":
         return 1;
-      case 'extracting':
+      case "extracting":
         return 2;
-      case 'failed':
+      case "failed":
         return 3;
-      case 'cancelled':
+      case "cancelled":
         return 4;
-      case 'review_required':
+      case "review_required":
         return 5;
-      case 'completed':
+      case "completed":
         return 6;
       default:
         return 0;
@@ -8648,27 +9509,27 @@ function leastFinishedTextbookRunStatus(rows) {
   };
   let best = null;
   for (const row of Array.isArray(rows) ? rows : []) {
-    const status = String(row?.status || '').trim();
+    const status = String(row?.status || "").trim();
     if (best === null || rank(status) < rank(best)) best = status;
   }
-  return best ?? '';
+  return best ?? "";
 }
 
 async function handleTextbookAnswersBatchUpsert(body, res) {
-  const academyId = String(body?.academy_id || '').trim();
+  const academyId = String(body?.academy_id || "").trim();
   if (!academyId) {
-    sendJson(res, 400, { ok: false, error: 'missing_academy_id' });
+    sendJson(res, 400, { ok: false, error: "missing_academy_id" });
     return;
   }
   const list = Array.isArray(body?.answers) ? body.answers : [];
   if (list.length === 0) {
-    sendJson(res, 400, { ok: false, error: 'empty_answers' });
+    sendJson(res, 400, { ok: false, error: "empty_answers" });
     return;
   }
   if (list.length > MAX_ANSWER_BATCH) {
     sendJson(res, 413, {
       ok: false,
-      error: 'answer_batch_too_large',
+      error: "answer_batch_too_large",
       limit: MAX_ANSWER_BATCH,
       got: list.length,
     });
@@ -8678,7 +9539,7 @@ async function handleTextbookAnswersBatchUpsert(body, res) {
   const rows = [];
   for (let i = 0; i < list.length; i += 1) {
     const a = list[i] || {};
-    const cropId = String(a.crop_id || '').trim();
+    const cropId = String(a.crop_id || "").trim();
     if (!cropId) {
       sendJson(res, 400, {
         ok: false,
@@ -8686,51 +9547,67 @@ async function handleTextbookAnswersBatchUpsert(body, res) {
       });
       return;
     }
-    let kindRaw = String(a.answer_kind || '').trim().toLowerCase();
+    let kindRaw = String(a.answer_kind || "")
+      .trim()
+      .toLowerCase();
     const normalizedAnswerText = normalizeTextbookAnswerValue(a.answer_text);
-    const normalizedAnswerLatex2d = normalizeTextbookAnswerValue(a.answer_latex_2d);
+    const normalizedAnswerLatex2d = normalizeTextbookAnswerValue(
+      a.answer_latex_2d,
+    );
     if (
-      kindRaw !== 'objective' &&
-      TEXTBOOK_ANSWER_IMAGE_MARKER_RE.test(`${normalizedAnswerText} ${normalizedAnswerLatex2d}`)
+      kindRaw !== "objective" &&
+      TEXTBOOK_ANSWER_IMAGE_MARKER_RE.test(
+        `${normalizedAnswerText} ${normalizedAnswerLatex2d}`,
+      )
     ) {
-      kindRaw = 'image';
+      kindRaw = "image";
     }
-    if (!['objective', 'subjective', 'image'].includes(kindRaw)) {
+    if (!["objective", "subjective", "image"].includes(kindRaw)) {
       sendJson(res, 400, {
         ok: false,
         error: `invalid_answer_kind_at_${i}: ${kindRaw}`,
       });
       return;
     }
-    const sourceRaw = String(a.answer_source || 'vlm').trim().toLowerCase();
-    if (!['vlm', 'manual'].includes(sourceRaw)) {
+    const sourceRaw = String(a.answer_source || "vlm")
+      .trim()
+      .toLowerCase();
+    if (!["vlm", "manual"].includes(sourceRaw)) {
       sendJson(res, 400, {
         ok: false,
         error: `invalid_answer_source_at_${i}: ${sourceRaw}`,
       });
       return;
     }
-    const rawPage = Number.parseInt(String(a.raw_page ?? ''), 10);
-    const displayPage = Number.parseInt(String(a.display_page ?? ''), 10);
+    const rawPage = Number.parseInt(String(a.raw_page ?? ""), 10);
+    const displayPage = Number.parseInt(String(a.display_page ?? ""), 10);
     const bbox1k = parseIntArray(a.bbox_1k, 4);
     const imageRegion1k = parseIntArray(a.answer_image_region_1k, 4);
-    const imageWidthPx = Number.parseInt(String(a.answer_image_width_px ?? ''), 10);
-    const imageHeightPx = Number.parseInt(String(a.answer_image_height_px ?? ''), 10);
-    let imageBucket = '';
-    let imagePath = '';
+    const imageWidthPx = Number.parseInt(
+      String(a.answer_image_width_px ?? ""),
+      10,
+    );
+    const imageHeightPx = Number.parseInt(
+      String(a.answer_image_height_px ?? ""),
+      10,
+    );
+    let imageBucket = "";
+    let imagePath = "";
     let imageSizeBytes = null;
-    let imageHash = '';
-    if (kindRaw === 'image') {
+    let imageHash = "";
+    if (kindRaw === "image") {
       const imageBase64 =
-        typeof a.answer_image_png_base64 === 'string'
+        typeof a.answer_image_png_base64 === "string"
           ? a.answer_image_png_base64
-          : '';
+          : "";
       const preUploadedPath =
-        typeof a.answer_image_path === 'string' ? a.answer_image_path.trim() : '';
+        typeof a.answer_image_path === "string"
+          ? a.answer_image_path.trim()
+          : "";
       if (imageBase64) {
         let bytes;
         try {
-          bytes = Buffer.from(imageBase64, 'base64');
+          bytes = Buffer.from(imageBase64, "base64");
         } catch (e) {
           sendJson(res, 400, {
             ok: false,
@@ -8739,7 +9616,10 @@ async function handleTextbookAnswersBatchUpsert(body, res) {
           return;
         }
         if (!bytes || bytes.length === 0) {
-          sendJson(res, 400, { ok: false, error: `empty_answer_image_at_${i}` });
+          sendJson(res, 400, {
+            ok: false,
+            error: `empty_answer_image_at_${i}`,
+          });
           return;
         }
         if (bytes.length > MAX_ANSWER_IMAGE_BYTES) {
@@ -8751,13 +9631,13 @@ async function handleTextbookAnswersBatchUpsert(body, res) {
           });
           return;
         }
-        imageHash = createHash('sha256').update(bytes).digest('hex');
+        imageHash = createHash("sha256").update(bytes).digest("hex");
         imagePath = `academies/${academyId}/answers/${cropId}.png`;
         const uploaded = await storageUploadBytes({
           driver: DEFAULT_TEXTBOOK_DRIVER,
           bucket: TEXTBOOK_ANSWER_IMAGE_BUCKET,
           key: imagePath,
-          contentType: 'image/png',
+          contentType: "image/png",
           bytes,
         });
         if (!uploaded.ok) {
@@ -8772,7 +9652,7 @@ async function handleTextbookAnswersBatchUpsert(body, res) {
         imageSizeBytes = bytes.length;
       } else if (preUploadedPath) {
         imageBucket =
-          typeof a.answer_image_bucket === 'string'
+          typeof a.answer_image_bucket === "string"
             ? a.answer_image_bucket.trim()
             : TEXTBOOK_ANSWER_IMAGE_BUCKET;
         imagePath = preUploadedPath;
@@ -8794,7 +9674,9 @@ async function handleTextbookAnswersBatchUpsert(body, res) {
       answer_image_bucket: imageBucket,
       answer_image_path: imagePath,
       answer_image_region_1k: imageRegion1k,
-      answer_image_width_px: Number.isFinite(imageWidthPx) ? imageWidthPx : null,
+      answer_image_width_px: Number.isFinite(imageWidthPx)
+        ? imageWidthPx
+        : null,
       answer_image_height_px: Number.isFinite(imageHeightPx)
         ? imageHeightPx
         : null,
@@ -8802,16 +9684,16 @@ async function handleTextbookAnswersBatchUpsert(body, res) {
       answer_image_content_hash: imageHash,
       note: a.note != null ? String(a.note) : null,
     };
-    if (sourceRaw === 'manual') {
+    if (sourceRaw === "manual") {
       row.edited_at = nowIso;
     }
     rows.push(row);
   }
 
   const { data, error } = await supa
-    .from('textbook_problem_answers')
-    .upsert(rows, { onConflict: 'crop_id' })
-    .select('crop_id, answer_kind, answer_source');
+    .from("textbook_problem_answers")
+    .upsert(rows, { onConflict: "crop_id" })
+    .select("crop_id, answer_kind, answer_source");
   if (error) {
     sendJson(res, 500, {
       ok: false,
@@ -8839,32 +9721,35 @@ async function handleTextbookAnswersBatchUpsert(body, res) {
 }
 
 async function handleTextbookAnswerRenderAssetsBackfill(body, res) {
-  const academyId = String(body?.academy_id || body?.academyId || '').trim();
+  const academyId = String(body?.academy_id || body?.academyId || "").trim();
   if (!isUuid(academyId)) {
-    sendJson(res, 400, { ok: false, error: 'academy_id(uuid) required' });
+    sendJson(res, 400, { ok: false, error: "academy_id(uuid) required" });
     return;
   }
   const rawCropIds = Array.isArray(body?.crop_ids)
-    ? body.crop_ids.map((v) => String(v || '').trim()).filter(isUuid)
+    ? body.crop_ids.map((v) => String(v || "").trim()).filter(isUuid)
     : [];
   const limit = Math.max(
     1,
-    Math.min(200, Number.parseInt(String(body?.limit || '80'), 10) || 80),
+    Math.min(200, Number.parseInt(String(body?.limit || "80"), 10) || 80),
   );
-  const offset = Math.max(0, Number.parseInt(String(body?.offset || '0'), 10) || 0);
+  const offset = Math.max(
+    0,
+    Number.parseInt(String(body?.offset || "0"), 10) || 0,
+  );
 
   let query = supa
-    .from('textbook_problem_answers')
+    .from("textbook_problem_answers")
     .select(
-      'crop_id, academy_id, answer_kind, answer_text, answer_latex_2d, '
-      + 'answer_source, raw_page, display_page, answer_image_path, updated_at',
+      "crop_id, academy_id, answer_kind, answer_text, answer_latex_2d, " +
+        "answer_source, raw_page, display_page, answer_image_path, updated_at",
     )
-    .eq('academy_id', academyId)
-    .neq('answer_kind', 'image')
-    .order('updated_at', { ascending: true })
+    .eq("academy_id", academyId)
+    .neq("answer_kind", "image")
+    .order("updated_at", { ascending: true })
     .range(offset, offset + limit - 1);
   if (rawCropIds.length > 0) {
-    query = query.in('crop_id', rawCropIds);
+    query = query.in("crop_id", rawCropIds);
   }
   const { data, error } = await query;
   if (error) {
@@ -8901,28 +9786,31 @@ async function fetchUnifiedTextbookAnswerDescriptors({
   styleVersion = UNIFIED_ANSWER_RENDER_GENERATION_STYLE_VERSION,
 }) {
   let query = supa
-    .from('textbook_problem_answers')
+    .from("textbook_problem_answers")
     .select(
-      'crop_id, academy_id, answer_kind, answer_text, answer_latex_2d, '
-      + 'answer_source, raw_page, display_page, answer_image_path, updated_at',
+      "crop_id, academy_id, answer_kind, answer_text, answer_latex_2d, " +
+        "answer_source, raw_page, display_page, answer_image_path, updated_at",
     )
-    .eq('academy_id', academyId)
-    .neq('answer_kind', 'image');
+    .eq("academy_id", academyId)
+    .neq("answer_kind", "image");
   if (Array.isArray(sourceIds) && sourceIds.length > 0) {
-    query = query.in('crop_id', sourceIds);
+    query = query.in("crop_id", sourceIds);
   } else {
     query = query
-      .order('updated_at', { ascending: true })
+      .order("updated_at", { ascending: true })
       .range(offset, offset + limit - 1);
   }
   const { data, error } = await query;
-  if (error) throw new Error(`textbook_answer_fetch_failed: ${error.message || error}`);
+  if (error)
+    throw new Error(`textbook_answer_fetch_failed: ${error.message || error}`);
   const rawRows = Array.isArray(data) ? data : [];
   return {
     rawFetched: rawRows.length,
     hasMore: sourceIds.length === 0 && rawRows.length >= limit,
     descriptors: rawRows
-      .flatMap((row) => textbookAnswerUnifiedDescriptorsWithParts(row, { styleVersion }))
+      .flatMap((row) =>
+        textbookAnswerUnifiedDescriptorsWithParts(row, { styleVersion }),
+      )
       .filter(Boolean),
   };
 }
@@ -8935,22 +9823,23 @@ async function fetchUnifiedPbAnswerDescriptors({
   styleVersion = UNIFIED_ANSWER_RENDER_GENERATION_STYLE_VERSION,
 }) {
   let query = supa
-    .from('pb_questions')
+    .from("pb_questions")
     .select(
-      'id, question_uid, question_type, choices, objective_choices, '
-      + 'objective_answer_key, subjective_answer, updated_at, created_at',
+      "id, question_uid, question_type, choices, objective_choices, " +
+        "objective_answer_key, subjective_answer, updated_at, created_at",
     )
-    .eq('academy_id', academyId);
+    .eq("academy_id", academyId);
   if (Array.isArray(sourceIds) && sourceIds.length > 0) {
-    query = query.in('id', sourceIds);
+    query = query.in("id", sourceIds);
   } else {
     query = query
-      .order('updated_at', { ascending: true, nullsFirst: false })
-      .order('created_at', { ascending: true })
+      .order("updated_at", { ascending: true, nullsFirst: false })
+      .order("created_at", { ascending: true })
       .range(offset, offset + limit - 1);
   }
   const { data, error } = await query;
-  if (error) throw new Error(`pb_question_fetch_failed: ${error.message || error}`);
+  if (error)
+    throw new Error(`pb_question_fetch_failed: ${error.message || error}`);
   const rawRows = Array.isArray(data) ? data : [];
   return {
     rawFetched: rawRows.length,
@@ -8962,39 +9851,50 @@ async function fetchUnifiedPbAnswerDescriptors({
 }
 
 async function handleUnifiedAnswerRenderAssetsBackfill(body, res) {
-  const academyId = String(body?.academy_id || body?.academyId || '').trim();
+  const academyId = String(body?.academy_id || body?.academyId || "").trim();
   if (!isUuid(academyId)) {
-    sendJson(res, 400, { ok: false, error: 'academy_id(uuid) required' });
+    sendJson(res, 400, { ok: false, error: "academy_id(uuid) required" });
     return;
   }
-  const sourceKindRaw = String(body?.source_kind || body?.sourceKind || 'all')
+  const sourceKindRaw = String(body?.source_kind || body?.sourceKind || "all")
     .trim()
     .toLowerCase();
-  const sourceKinds = sourceKindRaw === 'all' || sourceKindRaw === ''
-    ? ['textbook_crop', 'pb_question']
-    : [sourceKindRaw];
-  const invalid = sourceKinds.find((kind) => !['textbook_crop', 'pb_question'].includes(kind));
+  const sourceKinds =
+    sourceKindRaw === "all" || sourceKindRaw === ""
+      ? ["textbook_crop", "pb_question"]
+      : [sourceKindRaw];
+  const invalid = sourceKinds.find(
+    (kind) => !["textbook_crop", "pb_question"].includes(kind),
+  );
   if (invalid) {
-    sendJson(res, 400, { ok: false, error: 'source_kind must be textbook_crop, pb_question, or all' });
+    sendJson(res, 400, {
+      ok: false,
+      error: "source_kind must be textbook_crop, pb_question, or all",
+    });
     return;
   }
   const limit = Math.max(
     1,
-    Math.min(200, Number.parseInt(String(body?.limit || '80'), 10) || 80),
+    Math.min(200, Number.parseInt(String(body?.limit || "80"), 10) || 80),
   );
-  const offset = Math.max(0, Number.parseInt(String(body?.offset || '0'), 10) || 0);
+  const offset = Math.max(
+    0,
+    Number.parseInt(String(body?.offset || "0"), 10) || 0,
+  );
   const force = body?.force === true;
   const styleVersion = normalizeUnifiedAnswerRenderStyleVersion(
-    body?.style_version
-    || body?.styleVersion
-    || UNIFIED_ANSWER_RENDER_GENERATION_STYLE_VERSION,
+    body?.style_version ||
+      body?.styleVersion ||
+      UNIFIED_ANSWER_RENDER_GENERATION_STYLE_VERSION,
   );
-  const requestedSourceIds = (Array.isArray(body?.source_ids)
-    ? body.source_ids
-    : Array.isArray(body?.sourceIds)
-      ? body.sourceIds
-      : [])
-    .map((id) => String(id || '').trim())
+  const requestedSourceIds = (
+    Array.isArray(body?.source_ids)
+      ? body.source_ids
+      : Array.isArray(body?.sourceIds)
+        ? body.sourceIds
+        : []
+  )
+    .map((id) => String(id || "").trim())
     .filter((id) => isUuid(id));
 
   const bySourceKind = {};
@@ -9009,21 +9909,22 @@ async function handleUnifiedAnswerRenderAssetsBackfill(body, res) {
 
   try {
     for (const sourceKind of sourceKinds) {
-      const descriptorPage = sourceKind === 'textbook_crop'
-        ? await fetchUnifiedTextbookAnswerDescriptors({
-          academyId,
-          limit,
-          offset,
-          sourceIds: requestedSourceIds,
-          styleVersion,
-        })
-        : await fetchUnifiedPbAnswerDescriptors({
-          academyId,
-          limit,
-          offset,
-          sourceIds: requestedSourceIds,
-          styleVersion,
-        });
+      const descriptorPage =
+        sourceKind === "textbook_crop"
+          ? await fetchUnifiedTextbookAnswerDescriptors({
+              academyId,
+              limit,
+              offset,
+              sourceIds: requestedSourceIds,
+              styleVersion,
+            })
+          : await fetchUnifiedPbAnswerDescriptors({
+              academyId,
+              limit,
+              offset,
+              sourceIds: requestedSourceIds,
+              styleVersion,
+            });
       const descriptors = descriptorPage.descriptors || [];
       rawFetched += descriptorPage.rawFetched || 0;
       hasMore = hasMore || descriptorPage.hasMore === true;
@@ -9082,12 +9983,12 @@ async function handleUnifiedAnswerRenderAssetsBackfill(body, res) {
 }
 
 async function handleTextbookAnswersSyncProblemBank(body, res) {
-  const academyId = String(body?.academy_id || '').trim();
-  const bookId = String(body?.book_id || '').trim();
-  const gradeLabel = String(body?.grade_label || '').trim();
+  const academyId = String(body?.academy_id || "").trim();
+  const bookId = String(body?.book_id || "").trim();
+  const gradeLabel = String(body?.grade_label || "").trim();
   const scope = parseStageScope(body);
   if (!academyId || !bookId || !gradeLabel || !scope) {
-    sendJson(res, 400, { ok: false, error: 'missing_scope_identity' });
+    sendJson(res, 400, { ok: false, error: "missing_scope_identity" });
     return;
   }
 
@@ -9126,11 +10027,11 @@ async function handleTextbookAnswersSyncProblemBank(body, res) {
     sendJson(res, 200, {
       ok: true,
       scope,
-      pb_document_id: result.documentId || '',
-      status: result.status || '',
+      pb_document_id: result.documentId || "",
+      status: result.status || "",
       updated_questions: result.updated || 0,
       render_assets: renderAssets,
-      skipped: result.skipped || '',
+      skipped: result.skipped || "",
     });
   } catch (err) {
     sendJson(res, 500, {
@@ -9161,20 +10062,20 @@ async function handleTextbookAnswersSyncProblemBank(body, res) {
 const MAX_SOLREF_BATCH = 300;
 
 async function handleTextbookSolutionRefsBatchUpsert(body, res) {
-  const academyId = String(body?.academy_id || '').trim();
+  const academyId = String(body?.academy_id || "").trim();
   if (!academyId) {
-    sendJson(res, 400, { ok: false, error: 'missing_academy_id' });
+    sendJson(res, 400, { ok: false, error: "missing_academy_id" });
     return;
   }
   const list = Array.isArray(body?.solution_refs) ? body.solution_refs : [];
   if (list.length === 0) {
-    sendJson(res, 400, { ok: false, error: 'empty_solution_refs' });
+    sendJson(res, 400, { ok: false, error: "empty_solution_refs" });
     return;
   }
   if (list.length > MAX_SOLREF_BATCH) {
     sendJson(res, 413, {
       ok: false,
-      error: 'solref_batch_too_large',
+      error: "solref_batch_too_large",
       limit: MAX_SOLREF_BATCH,
       got: list.length,
     });
@@ -9184,12 +10085,12 @@ async function handleTextbookSolutionRefsBatchUpsert(body, res) {
   const rows = [];
   for (let i = 0; i < list.length; i += 1) {
     const r = list[i] || {};
-    const cropId = String(r.crop_id || '').trim();
+    const cropId = String(r.crop_id || "").trim();
     if (!cropId) {
       sendJson(res, 400, { ok: false, error: `missing_crop_id_at_${i}` });
       return;
     }
-    const rawPage = Number.parseInt(String(r.raw_page ?? ''), 10);
+    const rawPage = Number.parseInt(String(r.raw_page ?? ""), 10);
     if (!Number.isFinite(rawPage) || rawPage <= 0) {
       sendJson(res, 400, {
         ok: false,
@@ -9197,7 +10098,7 @@ async function handleTextbookSolutionRefsBatchUpsert(body, res) {
       });
       return;
     }
-    const displayPage = Number.parseInt(String(r.display_page ?? ''), 10);
+    const displayPage = Number.parseInt(String(r.display_page ?? ""), 10);
     const numberRegion = parseIntArray(r.number_region_1k, 4);
     if (!numberRegion) {
       sendJson(res, 400, {
@@ -9210,10 +10111,12 @@ async function handleTextbookSolutionRefsBatchUpsert(body, res) {
 
     // 좌표가 가리키는 PDF 종류. 기본 'sol'(해설 PDF). 개념원리 필수유형처럼
     // 풀이가 본문에 인쇄된 경우 'body'.
-    const sourceKindRaw = String(r.source_kind || '').trim().toLowerCase();
-    const sourceKind = ['sol', 'body'].includes(sourceKindRaw)
+    const sourceKindRaw = String(r.source_kind || "")
+      .trim()
+      .toLowerCase();
+    const sourceKind = ["sol", "body"].includes(sourceKindRaw)
       ? sourceKindRaw
-      : 'sol';
+      : "sol";
 
     rows.push({
       crop_id: cropId,
@@ -9223,14 +10126,14 @@ async function handleTextbookSolutionRefsBatchUpsert(body, res) {
       number_region_1k: numberRegion,
       content_region_1k: contentRegion,
       source_kind: sourceKind,
-      edited_at: r.source === 'manual' ? new Date().toISOString() : null,
+      edited_at: r.source === "manual" ? new Date().toISOString() : null,
     });
   }
 
   const { data, error } = await supa
-    .from('textbook_problem_solution_refs')
-    .upsert(rows, { onConflict: 'crop_id' })
-    .select('crop_id, raw_page');
+    .from("textbook_problem_solution_refs")
+    .upsert(rows, { onConflict: "crop_id" })
+    .select("crop_id, raw_page");
   if (error) {
     sendJson(res, 500, {
       ok: false,
@@ -9247,30 +10150,36 @@ async function handleTextbookSolutionRefsBatchUpsert(body, res) {
 }
 
 function parseStageScope(raw) {
-  const bigOrder = Number.parseInt(String(raw?.big_order ?? raw?.bigOrder ?? ''), 10);
-  const midOrder = Number.parseInt(String(raw?.mid_order ?? raw?.midOrder ?? ''), 10);
-  const subKey = String(raw?.sub_key ?? raw?.subKey ?? '').trim();
+  const bigOrder = Number.parseInt(
+    String(raw?.big_order ?? raw?.bigOrder ?? ""),
+    10,
+  );
+  const midOrder = Number.parseInt(
+    String(raw?.mid_order ?? raw?.midOrder ?? ""),
+    10,
+  );
+  const subKey = String(raw?.sub_key ?? raw?.subKey ?? "").trim();
   if (!Number.isFinite(bigOrder) || bigOrder < 0) return null;
   if (!Number.isFinite(midOrder) || midOrder < 0) return null;
   if (!subKey) return null;
   // 개념원리 필수유형(B) 소단원 순번. 미지정/음수는 0 (그 외 카테고리·시리즈).
   const subIndexParsed = Number.parseInt(
-    String(raw?.sub_index ?? raw?.subIndex ?? ''),
+    String(raw?.sub_index ?? raw?.subIndex ?? ""),
     10,
   );
   const subIndex =
     Number.isFinite(subIndexParsed) && subIndexParsed > 0 ? subIndexParsed : 0;
-  const scopeKind = String(raw?.scope_kind ?? raw?.scopeKind ?? '').trim();
+  const scopeKind = String(raw?.scope_kind ?? raw?.scopeKind ?? "").trim();
   const bodyStartParsed = Number.parseInt(
-    String(raw?.body_start_page ?? raw?.bodyStartPage ?? ''),
+    String(raw?.body_start_page ?? raw?.bodyStartPage ?? ""),
     10,
   );
   const bodyEndParsed = Number.parseInt(
-    String(raw?.body_end_page ?? raw?.bodyEndPage ?? ''),
+    String(raw?.body_end_page ?? raw?.bodyEndPage ?? ""),
     10,
   );
   const isWonriSubUnit =
-    scopeKind === 'wonri_sub_unit' &&
+    scopeKind === "wonri_sub_unit" &&
     Number.isFinite(bodyStartParsed) &&
     bodyStartParsed > 0 &&
     Number.isFinite(bodyEndParsed) &&
@@ -9282,67 +10191,172 @@ function parseStageScope(raw) {
     sub_index: subIndex,
     ...(isWonriSubUnit
       ? {
-          scope_kind: 'wonri_sub_unit',
+          scope_kind: "wonri_sub_unit",
           body_start_page: bodyStartParsed,
           body_end_page: bodyEndParsed,
-          unit_row_index: Number.parseInt(
-            String(raw?.unit_row_index ?? raw?.unitRowIndex ?? '0'),
-            10,
-          ) || 0,
+          unit_row_index:
+            Number.parseInt(
+              String(raw?.unit_row_index ?? raw?.unitRowIndex ?? "0"),
+              10,
+            ) || 0,
         }
       : {}),
   };
 }
 
-async function fetchTextbookStageStatusRows({ academyId, bookId, gradeLabel, scopes }) {
-  const statuses = [];
-  for (const scope of scopes) {
-    let cropQuery = supa
-      .from('textbook_problem_crops')
-      .select('id,is_set_header')
-      .eq('academy_id', academyId)
-      .eq('book_id', bookId)
-      .eq('grade_label', gradeLabel)
-      .eq('big_order', scope.big_order)
-      .eq('mid_order', scope.mid_order);
-    if (scope.scope_kind === 'wonri_sub_unit') {
+// Supabase 로 가는 소켓은 이따금 끊긴다. 그때 supabase-js 는 상태 코드 없이
+// `TypeError: fetch failed` 만 돌려주므로, 읽기는 짧게 두 번 더 되짚는다.
+async function supaSelectWithRetry(run, label) {
+  let last = null;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const result = await run();
+      const message = String(result?.error?.message || "");
+      if (
+        !result?.error ||
+        !/fetch failed|socket|ECONN|ETIMEDOUT/i.test(message)
+      ) {
+        return result;
+      }
+      last = result;
+    } catch (err) {
+      last = { data: null, error: { message: String(err?.message || err) } };
+    }
+    if (attempt < 3) {
+      console.log(
+        `[${label}] 재시도 ${attempt}: ${last?.error?.message || ""}`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 400 * attempt));
+    }
+  }
+  return last ?? { data: null, error: { message: "unknown" } };
+}
+
+// 소단원 하나마다 크롭·정답·해설을 따로 물으면 왕복이 소단원 수의 세 배로
+// 늘어난다. 수력충전 2-1 은 소단원이 81개라 한 번 열 때마다 243번을 줄줄이
+// 던지고, 그러다 소켓 하나가 끊기면 `TypeError: fetch failed` 로 전체가
+// 무너져 이미 다 뽑아 둔 단원까지 "0/3 완료" 로 보인다. 그래서 책 단위로 한
+// 번에 받아 와 메모리에서 나눈다.
+async function fetchStageStatusCropRows({ academyId, bookId, gradeLabel }) {
+  const rows = [];
+  const pageSize = 1000;
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await supaSelectWithRetry(
+      () =>
+        supa
+          .from("textbook_problem_crops")
+          .select("id,big_order,mid_order,sub_key,raw_page,is_set_header")
+          .eq("academy_id", academyId)
+          .eq("book_id", bookId)
+          .eq("grade_label", gradeLabel)
+          .order("id")
+          .range(from, from + pageSize - 1),
+      "stage_status_crops_failed",
+    );
+    if (error)
+      throw new Error(`stage_status_crops_failed: ${error.message || error}`);
+    const chunk = Array.isArray(data) ? data : [];
+    rows.push(...chunk);
+    if (chunk.length < pageSize) break;
+  }
+  return rows;
+}
+
+async function fetchStageStatusSidecarIds(cropIds) {
+  const answers = new Set();
+  const solutions = new Set();
+  for (let i = 0; i < cropIds.length; i += 200) {
+    const chunk = cropIds.slice(i, i + 200);
+    const { data: answerRows, error: answerErr } = await supaSelectWithRetry(
+      () =>
+        supa
+          .from("textbook_problem_answers")
+          .select("crop_id")
+          .in("crop_id", chunk),
+      "stage_status_answers_failed",
+    );
+    if (answerErr) {
+      throw new Error(
+        `stage_status_answers_failed: ${answerErr.message || answerErr}`,
+      );
+    }
+    for (const row of answerRows ?? [])
+      answers.add(String(row?.crop_id || "").trim());
+    const { data: solutionRows, error: solutionErr } =
+      await supaSelectWithRetry(
+        () =>
+          supa
+            .from("textbook_problem_solution_refs")
+            .select("crop_id")
+            .in("crop_id", chunk),
+        "stage_status_solution_refs_failed",
+      );
+    if (solutionErr) {
+      throw new Error(
+        `stage_status_solution_refs_failed: ${solutionErr.message || solutionErr}`,
+      );
+    }
+    for (const row of solutionRows ?? [])
+      solutions.add(String(row?.crop_id || "").trim());
+  }
+  return { answers, solutions };
+}
+
+function stageStatusCropsForScope(cropRows, scope) {
+  return cropRows.filter((row) => {
+    if (Number(row?.big_order) !== Number(scope.big_order)) return false;
+    if (Number(row?.mid_order) !== Number(scope.mid_order)) return false;
+    if (scope.scope_kind === "wonri_sub_unit") {
       // 개념원리는 목차 소단원 페이지 범위가 실제 작업 단위다. 범위 안의
       // 익히기/필수유형/확인체크/연습문제/특강(A~E)을 모두 합쳐 상태를
       // 계산한다. 존재하지 않는 고정 카테고리가 미완료로 잡히는 일을 막는다.
-      cropQuery = cropQuery
-        .gte('raw_page', scope.body_start_page)
-        .lte('raw_page', scope.body_end_page);
-    } else {
-      cropQuery = cropQuery.eq('sub_key', scope.sub_key);
+      const page = Number(row?.raw_page);
+      if (!Number.isFinite(page)) return false;
+      return page >= scope.body_start_page && page <= scope.body_end_page;
     }
-    const { data: crops, error: cropErr } = await cropQuery;
-    if (cropErr) throw new Error(`stage_status_crops_failed: ${cropErr.message || cropErr}`);
-    const cropRows = Array.isArray(crops) ? crops : [];
-    const cropIds = cropRows.map((r) => String(r?.id || '').trim()).filter(Boolean);
+    return String(row?.sub_key || "") === String(scope.sub_key);
+  });
+}
+
+async function fetchTextbookStageStatusRows({
+  academyId,
+  bookId,
+  gradeLabel,
+  scopes,
+}) {
+  const cropRowsAll = await fetchStageStatusCropRows({
+    academyId,
+    bookId,
+    gradeLabel,
+  });
+  const perScope = scopes.map((scope) =>
+    stageStatusCropsForScope(cropRowsAll, scope),
+  );
+  const needed = new Set();
+  for (const rows of perScope) {
+    for (const row of rows) {
+      if (row?.is_set_header === true) continue;
+      const id = String(row?.id || "").trim();
+      if (id) needed.add(id);
+    }
+  }
+  const { answers, solutions } = await fetchStageStatusSidecarIds([...needed]);
+
+  const statuses = [];
+  for (let i = 0; i < scopes.length; i += 1) {
+    const scope = scopes[i];
+    const cropRows = perScope[i];
+    const cropIds = cropRows
+      .map((r) => String(r?.id || "").trim())
+      .filter(Boolean);
     const answerTargetIds = cropRows
       .filter((r) => r?.is_set_header !== true)
-      .map((r) => String(r?.id || '').trim())
+      .map((r) => String(r?.id || "").trim())
       .filter(Boolean);
-
-    let answerDone = 0;
-    let solutionDone = 0;
-    if (answerTargetIds.length > 0) {
-      const { count: answerCount, error: answerErr } = await supa
-        .from('textbook_problem_answers')
-        .select('crop_id', { count: 'exact', head: true })
-        .in('crop_id', answerTargetIds);
-      if (answerErr) throw new Error(`stage_status_answers_failed: ${answerErr.message || answerErr}`);
-      answerDone = answerCount || 0;
-
-      const { count: solutionCount, error: solutionErr } = await supa
-        .from('textbook_problem_solution_refs')
-        .select('crop_id', { count: 'exact', head: true })
-        .in('crop_id', answerTargetIds);
-      if (solutionErr) {
-        throw new Error(`stage_status_solution_refs_failed: ${solutionErr.message || solutionErr}`);
-      }
-      solutionDone = solutionCount || 0;
-    }
+    const answerDone = answerTargetIds.filter((id) => answers.has(id)).length;
+    const solutionDone = answerTargetIds.filter((id) =>
+      solutions.has(id),
+    ).length;
 
     statuses.push({
       scope,
@@ -9352,8 +10366,12 @@ async function fetchTextbookStageStatusRows({ academyId, bookId, gradeLabel, sco
       solution: { done: solutionDone, total: answerTargetIds.length },
       completed_stages:
         (cropRows.length > 0 ? 1 : 0) +
-        (answerTargetIds.length > 0 && answerDone >= answerTargetIds.length ? 1 : 0) +
-        (answerTargetIds.length > 0 && solutionDone >= answerTargetIds.length ? 1 : 0),
+        (answerTargetIds.length > 0 && answerDone >= answerTargetIds.length
+          ? 1
+          : 0) +
+        (answerTargetIds.length > 0 && solutionDone >= answerTargetIds.length
+          ? 1
+          : 0),
       total_stages: 3,
     });
   }
@@ -9361,13 +10379,13 @@ async function fetchTextbookStageStatusRows({ academyId, bookId, gradeLabel, sco
 }
 
 async function handleTextbookStageStatus(body, res) {
-  const academyId = String(body?.academy_id || '').trim();
-  const bookId = String(body?.book_id || '').trim();
-  const gradeLabel = String(body?.grade_label || '').trim();
+  const academyId = String(body?.academy_id || "").trim();
+  const bookId = String(body?.book_id || "").trim();
+  const gradeLabel = String(body?.grade_label || "").trim();
   const rawScopes = Array.isArray(body?.scopes) ? body.scopes : [];
   const scopes = rawScopes.map(parseStageScope).filter(Boolean);
   if (!academyId || !bookId || !gradeLabel) {
-    sendJson(res, 400, { ok: false, error: 'missing_scope_identity' });
+    sendJson(res, 400, { ok: false, error: "missing_scope_identity" });
     return;
   }
   if (scopes.length === 0) {
@@ -9388,7 +10406,9 @@ async function handleTextbookStageStatus(body, res) {
 }
 
 async function removeStoragePaths(bucket, paths, warnings, label) {
-  const unique = Array.from(new Set((paths || []).map((p) => String(p || '').trim()).filter(Boolean)));
+  const unique = Array.from(
+    new Set((paths || []).map((p) => String(p || "").trim()).filter(Boolean)),
+  );
   if (!bucket || unique.length === 0) return 0;
   let removed = 0;
   for (let i = 0; i < unique.length; i += 200) {
@@ -9422,29 +10442,31 @@ async function deleteTextbookPdfOnlyDocumentsForScope({
     },
   };
   const { data: docs, error: docErr } = await supa
-    .from('pb_documents')
-    .select('id')
-    .eq('academy_id', academyId)
-    .contains('meta', contains);
+    .from("pb_documents")
+    .select("id")
+    .eq("academy_id", academyId)
+    .contains("meta", contains);
   if (docErr) {
     warnings.push(`pb_documents_lookup: ${docErr.message || docErr}`);
     return 0;
   }
-  const ids = (docs || []).map((d) => String(d?.id || '').trim()).filter(Boolean);
+  const ids = (docs || [])
+    .map((d) => String(d?.id || "").trim())
+    .filter(Boolean);
   return deleteTextbookDocumentsByIds({ academyId, ids, warnings });
 }
 
 async function deleteTextbookDocumentsByIds({ academyId, ids, warnings }) {
   const documentIds = Array.from(
-    new Set((ids || []).map((id) => String(id || '').trim()).filter(isUuid)),
+    new Set((ids || []).map((id) => String(id || "").trim()).filter(isUuid)),
   );
   if (documentIds.length === 0) return 0;
   const { data: deleted, error: delErr } = await supa
-    .from('pb_documents')
+    .from("pb_documents")
     .delete()
-    .eq('academy_id', academyId)
-    .in('id', documentIds)
-    .select('id');
+    .eq("academy_id", academyId)
+    .in("id", documentIds)
+    .select("id");
   if (!delErr) {
     return Array.isArray(deleted) ? deleted.length : documentIds.length;
   }
@@ -9456,24 +10478,28 @@ async function deleteTextbookDocumentsByIds({ academyId, ids, warnings }) {
   for (const documentId of documentIds) {
     // eslint-disable-next-line no-await-in-loop
     const { data: questions, error: qLookupErr } = await supa
-      .from('pb_questions')
-      .select('id')
-      .eq('document_id', documentId);
+      .from("pb_questions")
+      .select("id")
+      .eq("document_id", documentId);
     if (qLookupErr) {
-      warnings.push(`pb_questions_lookup:${documentId}: ${qLookupErr.message || qLookupErr}`);
+      warnings.push(
+        `pb_questions_lookup:${documentId}: ${qLookupErr.message || qLookupErr}`,
+      );
       continue;
     }
     let questionDeleteFailed = false;
     for (const question of questions || []) {
-      const questionId = String(question?.id || '').trim();
+      const questionId = String(question?.id || "").trim();
       if (!questionId) continue;
       // eslint-disable-next-line no-await-in-loop
       const { error: qDeleteErr } = await supa
-        .from('pb_questions')
+        .from("pb_questions")
         .delete()
-        .eq('id', questionId);
+        .eq("id", questionId);
       if (qDeleteErr) {
-        warnings.push(`pb_question_delete:${questionId}: ${qDeleteErr.message || qDeleteErr}`);
+        warnings.push(
+          `pb_question_delete:${questionId}: ${qDeleteErr.message || qDeleteErr}`,
+        );
         questionDeleteFailed = true;
         break;
       }
@@ -9481,13 +10507,15 @@ async function deleteTextbookDocumentsByIds({ academyId, ids, warnings }) {
     if (questionDeleteFailed) continue;
     // eslint-disable-next-line no-await-in-loop
     const { data: oneDeleted, error: oneDeleteErr } = await supa
-      .from('pb_documents')
+      .from("pb_documents")
       .delete()
-      .eq('academy_id', academyId)
-      .eq('id', documentId)
-      .select('id');
+      .eq("academy_id", academyId)
+      .eq("id", documentId)
+      .select("id");
     if (oneDeleteErr) {
-      warnings.push(`pb_document_delete:${documentId}: ${oneDeleteErr.message || oneDeleteErr}`);
+      warnings.push(
+        `pb_document_delete:${documentId}: ${oneDeleteErr.message || oneDeleteErr}`,
+      );
       continue;
     }
     removed += Array.isArray(oneDeleted) ? oneDeleted.length : 1;
@@ -9503,10 +10531,10 @@ async function deleteTextbookDocumentsForPageRange({
   warnings,
 }) {
   const { data: docs, error: docErr } = await supa
-    .from('pb_documents')
-    .select('id,meta')
-    .eq('academy_id', academyId)
-    .contains('meta', {
+    .from("pb_documents")
+    .select("id,meta")
+    .eq("academy_id", academyId)
+    .contains("meta", {
       textbook_scope: {
         book_id: bookId,
         grade_label: gradeLabel,
@@ -9525,25 +10553,31 @@ async function deleteTextbookDocumentsForPageRange({
       const textbookScope = doc?.meta?.textbook_scope || {};
       const docFrom = Number(textbookScope.raw_page_from);
       const docTo = Number(textbookScope.raw_page_to);
-      return Number.isFinite(docFrom) && Number.isFinite(docTo) &&
-        docFrom <= to && docTo >= from;
+      return (
+        Number.isFinite(docFrom) &&
+        Number.isFinite(docTo) &&
+        docFrom <= to &&
+        docTo >= from
+      );
     })
-    .map((doc) => String(doc?.id || '').trim())
+    .map((doc) => String(doc?.id || "").trim())
     .filter(Boolean);
   return deleteTextbookDocumentsByIds({ academyId, ids, warnings });
 }
 
 async function handleTextbookStageDelete(body, res) {
-  const academyId = String(body?.academy_id || '').trim();
-  const bookId = String(body?.book_id || '').trim();
-  const gradeLabel = String(body?.grade_label || '').trim();
+  const academyId = String(body?.academy_id || "").trim();
+  const bookId = String(body?.book_id || "").trim();
+  const gradeLabel = String(body?.grade_label || "").trim();
   const scope = parseStageScope(body);
-  const stage = String(body?.stage || '').trim().toLowerCase();
+  const stage = String(body?.stage || "")
+    .trim()
+    .toLowerCase();
   if (!academyId || !bookId || !gradeLabel || !scope) {
-    sendJson(res, 400, { ok: false, error: 'missing_scope_identity' });
+    sendJson(res, 400, { ok: false, error: "missing_scope_identity" });
     return;
   }
-  if (!['body', 'answer', 'solution'].includes(stage)) {
+  if (!["body", "answer", "solution"].includes(stage)) {
     sendJson(res, 400, { ok: false, error: `invalid_stage: ${stage}` });
     return;
   }
@@ -9560,37 +10594,45 @@ async function handleTextbookStageDelete(body, res) {
   const warnings = [];
   try {
     const isPageRangeScope =
-      scope.scope_kind === 'wonri_sub_unit' &&
+      scope.scope_kind === "wonri_sub_unit" &&
       Number.isFinite(scope.body_start_page) &&
       Number.isFinite(scope.body_end_page);
     let cropQuery = supa
-      .from('textbook_problem_crops')
-      .select('id,storage_bucket,storage_key,big_order,mid_order,sub_key')
-      .eq('academy_id', academyId)
-      .eq('book_id', bookId)
-      .eq('grade_label', gradeLabel)
-      .eq('big_order', scope.big_order)
-      .eq('mid_order', scope.mid_order);
+      .from("textbook_problem_crops")
+      .select("id,storage_bucket,storage_key,big_order,mid_order,sub_key")
+      .eq("academy_id", academyId)
+      .eq("book_id", bookId)
+      .eq("grade_label", gradeLabel)
+      .eq("big_order", scope.big_order)
+      .eq("mid_order", scope.mid_order);
     if (isPageRangeScope) {
       cropQuery = cropQuery
-        .gte('raw_page', scope.body_start_page)
-        .lte('raw_page', scope.body_end_page);
+        .gte("raw_page", scope.body_start_page)
+        .lte("raw_page", scope.body_end_page);
     } else {
       cropQuery = cropQuery
-        .eq('sub_key', scope.sub_key)
-        .eq('sub_index', scope.sub_index);
+        .eq("sub_key", scope.sub_key)
+        .eq("sub_index", scope.sub_index);
     }
     const { data: crops, error: cropErr } = await cropQuery;
-    if (cropErr) throw new Error(`stage_delete_crops_lookup_failed: ${cropErr.message || cropErr}`);
+    if (cropErr)
+      throw new Error(
+        `stage_delete_crops_lookup_failed: ${cropErr.message || cropErr}`,
+      );
     const cropRows = Array.isArray(crops) ? crops : [];
     const affectedSubKeys = Array.from(
-      new Set(cropRows.map((r) => String(r?.sub_key || '').trim()).filter(Boolean)),
+      new Set(
+        cropRows.map((r) => String(r?.sub_key || "").trim()).filter(Boolean),
+      ),
     );
-    const expectedSubKey = String(scope.sub_key || '').trim();
-    if (!isPageRangeScope && affectedSubKeys.some((k) => k !== expectedSubKey)) {
+    const expectedSubKey = String(scope.sub_key || "").trim();
+    if (
+      !isPageRangeScope &&
+      affectedSubKeys.some((k) => k !== expectedSubKey)
+    ) {
       sendJson(res, 409, {
         ok: false,
-        error: 'stage_delete_scope_mismatch',
+        error: "stage_delete_scope_mismatch",
         requested_scope: scope,
         affected_sub_keys: affectedSubKeys,
         removed,
@@ -9598,7 +10640,9 @@ async function handleTextbookStageDelete(body, res) {
       });
       return;
     }
-    const cropIds = cropRows.map((r) => String(r?.id || '').trim()).filter(Boolean);
+    const cropIds = cropRows
+      .map((r) => String(r?.id || "").trim())
+      .filter(Boolean);
     if (cropIds.length === 0 && !isPageRangeScope) {
       sendJson(res, 200, {
         ok: true,
@@ -9611,15 +10655,15 @@ async function handleTextbookStageDelete(body, res) {
       return;
     }
 
-    if (cropIds.length > 0 && (stage === 'body' || stage === 'answer')) {
+    if (cropIds.length > 0 && (stage === "body" || stage === "answer")) {
       const { data: answers } = await supa
-        .from('textbook_problem_answers')
-        .select('answer_image_bucket,answer_image_path')
-        .in('crop_id', cropIds);
+        .from("textbook_problem_answers")
+        .select("answer_image_bucket,answer_image_path")
+        .in("crop_id", cropIds);
       const byBucket = new Map();
       for (const answer of answers || []) {
-        const bucket = String(answer?.answer_image_bucket || '').trim();
-        const imagePath = String(answer?.answer_image_path || '').trim();
+        const bucket = String(answer?.answer_image_bucket || "").trim();
+        const imagePath = String(answer?.answer_image_path || "").trim();
         if (!bucket || !imagePath) continue;
         if (!byBucket.has(bucket)) byBucket.set(bucket, []);
         byBucket.get(bucket).push(imagePath);
@@ -9630,46 +10674,59 @@ async function handleTextbookStageDelete(body, res) {
           bucket,
           paths,
           warnings,
-          'textbook-answer-images',
+          "textbook-answer-images",
         );
       }
     }
 
     if (
       cropIds.length > 0 &&
-      (stage === 'body' || stage === 'answer' || stage === 'solution')
+      (stage === "body" || stage === "answer" || stage === "solution")
     ) {
       const { data: deletedRefs, error: refErr } = await supa
-        .from('textbook_problem_solution_refs')
+        .from("textbook_problem_solution_refs")
         .delete()
-        .in('crop_id', cropIds)
-        .select('crop_id');
-      if (refErr) throw new Error(`solution_refs_delete_failed: ${refErr.message || refErr}`);
-      removed.solution_refs = Array.isArray(deletedRefs) ? deletedRefs.length : 0;
+        .in("crop_id", cropIds)
+        .select("crop_id");
+      if (refErr)
+        throw new Error(
+          `solution_refs_delete_failed: ${refErr.message || refErr}`,
+        );
+      removed.solution_refs = Array.isArray(deletedRefs)
+        ? deletedRefs.length
+        : 0;
     }
 
-    if (cropIds.length > 0 && (stage === 'body' || stage === 'answer')) {
+    if (cropIds.length > 0 && (stage === "body" || stage === "answer")) {
       const { data: deletedAnswers, error: ansErr } = await supa
-        .from('textbook_problem_answers')
+        .from("textbook_problem_answers")
         .delete()
-        .in('crop_id', cropIds)
-        .select('crop_id');
-      if (ansErr) throw new Error(`answers_delete_failed: ${ansErr.message || ansErr}`);
-      removed.answers = Array.isArray(deletedAnswers) ? deletedAnswers.length : 0;
+        .in("crop_id", cropIds)
+        .select("crop_id");
+      if (ansErr)
+        throw new Error(`answers_delete_failed: ${ansErr.message || ansErr}`);
+      removed.answers = Array.isArray(deletedAnswers)
+        ? deletedAnswers.length
+        : 0;
     }
 
-    if (stage === 'body') {
+    if (stage === "body") {
       const cropPathsByBucket = new Map();
       for (const crop of cropRows) {
-        const bucket = String(crop?.storage_bucket || '').trim();
-        const key = String(crop?.storage_key || '').trim();
+        const bucket = String(crop?.storage_bucket || "").trim();
+        const key = String(crop?.storage_key || "").trim();
         if (!bucket || !key) continue;
         if (!cropPathsByBucket.has(bucket)) cropPathsByBucket.set(bucket, []);
         cropPathsByBucket.get(bucket).push(key);
       }
       for (const [bucket, paths] of cropPathsByBucket.entries()) {
         // eslint-disable-next-line no-await-in-loop
-        removed.crop_images += await removeStoragePaths(bucket, paths, warnings, 'textbook-crops');
+        removed.crop_images += await removeStoragePaths(
+          bucket,
+          paths,
+          warnings,
+          "textbook-crops",
+        );
       }
       removed.pb_documents = isPageRangeScope
         ? await deleteTextbookDocumentsForPageRange({
@@ -9687,33 +10744,41 @@ async function handleTextbookStageDelete(body, res) {
             warnings,
           });
       let runDeleteQuery = supa
-        .from('textbook_pb_extract_runs')
+        .from("textbook_pb_extract_runs")
         .delete()
-        .eq('academy_id', academyId)
-        .eq('book_id', bookId)
-        .eq('grade_label', gradeLabel)
-        .eq('big_order', scope.big_order)
-        .eq('mid_order', scope.mid_order);
+        .eq("academy_id", academyId)
+        .eq("book_id", bookId)
+        .eq("grade_label", gradeLabel)
+        .eq("big_order", scope.big_order)
+        .eq("mid_order", scope.mid_order);
       if (isPageRangeScope) {
         runDeleteQuery = runDeleteQuery
-          .lte('raw_page_from', scope.body_end_page)
-          .gte('raw_page_to', scope.body_start_page);
+          .lte("raw_page_from", scope.body_end_page)
+          .gte("raw_page_to", scope.body_start_page);
       } else {
         runDeleteQuery = runDeleteQuery
-          .eq('sub_key', scope.sub_key)
-          .eq('sub_index', scope.sub_index);
+          .eq("sub_key", scope.sub_key)
+          .eq("sub_index", scope.sub_index);
       }
       const { data: deletedRuns, error: runDelErr } =
-        await runDeleteQuery.select('id');
-      if (runDelErr) warnings.push(`textbook_pb_extract_runs_delete: ${runDelErr.message || runDelErr}`);
-      removed.pb_extract_runs = Array.isArray(deletedRuns) ? deletedRuns.length : 0;
+        await runDeleteQuery.select("id");
+      if (runDelErr)
+        warnings.push(
+          `textbook_pb_extract_runs_delete: ${runDelErr.message || runDelErr}`,
+        );
+      removed.pb_extract_runs = Array.isArray(deletedRuns)
+        ? deletedRuns.length
+        : 0;
       if (cropIds.length > 0) {
         const { data: deletedCrops, error: cropDelErr } = await supa
-          .from('textbook_problem_crops')
+          .from("textbook_problem_crops")
           .delete()
-          .in('id', cropIds)
-          .select('id');
-        if (cropDelErr) throw new Error(`crops_delete_failed: ${cropDelErr.message || cropDelErr}`);
+          .in("id", cropIds)
+          .select("id");
+        if (cropDelErr)
+          throw new Error(
+            `crops_delete_failed: ${cropDelErr.message || cropDelErr}`,
+          );
         removed.crops = Array.isArray(deletedCrops) ? deletedCrops.length : 0;
       }
     }
@@ -9748,13 +10813,13 @@ async function handleTextbookStageDelete(body, res) {
  *   3) Return counts for the UI to display.
  */
 async function handleTextbookBookDelete(body, res) {
-  const academyId = String(body?.academy_id || '').trim();
-  const bookId = String(body?.book_id || '').trim();
+  const academyId = String(body?.academy_id || "").trim();
+  const bookId = String(body?.book_id || "").trim();
   if (!academyId || !bookId) {
     sendJson(res, 400, {
       ok: false,
-      error: 'missing_required_fields',
-      required: ['academy_id', 'book_id'],
+      error: "missing_required_fields",
+      required: ["academy_id", "book_id"],
     });
     return;
   }
@@ -9797,7 +10862,7 @@ async function handleTextbookBookDelete(body, res) {
   {
     const r = await storageRemoveByNamePrefix({
       driver,
-      bucket: 'resource-covers',
+      bucket: "resource-covers",
       folder: `${academyId}/resource-covers`,
       nameStartsWith: `${bookId}_`,
     });
@@ -9810,13 +10875,13 @@ async function handleTextbookBookDelete(body, res) {
 
   // (4) Delete the DB row (cascade).
   const { error: delErr } = await supa
-    .from('resource_files')
+    .from("resource_files")
     .delete()
     .match({ id: bookId, academy_id: academyId });
   if (delErr) {
     sendJson(res, 500, {
       ok: false,
-      error: 'resource_files_delete_failed',
+      error: "resource_files_delete_failed",
       detail: delErr.message || String(delErr),
       removed,
       warnings,
@@ -9835,23 +10900,26 @@ async function handleTextbookBookDelete(body, res) {
 // 매니저앱 필기 탭의 「AI 판단」 — 학생 필기 렌더 이미지를 Gemini 에 보내
 // 인식 실패 원인 분류(verdict) + 원인 설명(cause) + 개선 방향(improvement)을 받는다.
 async function handleHandwritingReview(body, res) {
-  const apiKey =
-    (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
+  const apiKey = (
+    process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_API_KEY ||
+    ""
+  ).trim();
   if (!apiKey) {
     sendJson(res, 500, {
       ok: false,
-      error: 'gemini_api_key_missing',
-      hint: 'Set GEMINI_API_KEY or GOOGLE_API_KEY in the gateway env.',
+      error: "gemini_api_key_missing",
+      hint: "Set GEMINI_API_KEY or GOOGLE_API_KEY in the gateway env.",
     });
     return;
   }
 
-  const imageBase64 = String(body?.image_base64 || '').trim();
+  const imageBase64 = String(body?.image_base64 || "").trim();
   if (!imageBase64) {
-    sendJson(res, 400, { ok: false, error: 'missing_image_base64' });
+    sendJson(res, 400, { ok: false, error: "missing_image_base64" });
     return;
   }
-  const mimeType = String(body?.mime_type || 'image/png').trim();
+  const mimeType = String(body?.mime_type || "image/png").trim();
   if (!TEXTBOOK_VLM_VALID_MIMES.has(mimeType)) {
     sendJson(res, 400, {
       ok: false,
@@ -9862,19 +10930,21 @@ async function handleHandwritingReview(body, res) {
   }
 
   const recognizedCandidates = Array.isArray(body?.recognized_candidates)
-    ? body.recognized_candidates.map((c) => String(c ?? '').trim()).filter(Boolean)
+    ? body.recognized_candidates
+        .map((c) => String(c ?? "").trim())
+        .filter(Boolean)
     : [];
 
   try {
     const { assessment, model } = await assessHandwritingSample({
       imageBase64,
       mimeType,
-      recognizedText: String(body?.recognized_text || '').trim(),
+      recognizedText: String(body?.recognized_text || "").trim(),
       recognizedCandidates,
-      expectedAnswer: String(body?.expected_answer || '').trim(),
-      expectedAnswerKind: String(body?.expected_answer_kind || '').trim(),
-      submittedAnswer: String(body?.submitted_answer || '').trim(),
-      note: String(body?.note || '').trim(),
+      expectedAnswer: String(body?.expected_answer || "").trim(),
+      expectedAnswerKind: String(body?.expected_answer_kind || "").trim(),
+      submittedAnswer: String(body?.submitted_answer || "").trim(),
+      note: String(body?.note || "").trim(),
       model: TEXTBOOK_VLM_MODEL,
       apiKey,
       timeoutMs: TEXTBOOK_VLM_TIMEOUT_MS,
@@ -9888,39 +10958,42 @@ async function handleHandwritingReview(body, res) {
     if (isTextbookVlmQuotaError(message)) {
       sendJson(res, 429, {
         ok: false,
-        error: 'vlm_daily_quota_exceeded',
+        error: "vlm_daily_quota_exceeded",
         message,
       });
       return;
     }
-    console.warn('[handwriting-review] failed', message);
+    console.warn("[handwriting-review] failed", message);
     sendJson(res, 502, {
       ok: false,
-      error: 'handwriting_review_failed',
+      error: "handwriting_review_failed",
       message,
     });
   }
 }
 
-const ACCESS_LOG_ENABLED = String(process.env.PB_API_ACCESS_LOG || '') === '1';
+const ACCESS_LOG_ENABLED = String(process.env.PB_API_ACCESS_LOG || "") === "1";
 
 async function handler(req, res) {
-  if (req.method === 'OPTIONS') {
+  if (req.method === "OPTIONS") {
     sendJson(res, 200, { ok: true });
     return;
   }
 
   if (!requireApiKey(req)) {
-    sendJson(res, 401, { ok: false, error: 'invalid_api_key' });
+    sendJson(res, 401, { ok: false, error: "invalid_api_key" });
     return;
   }
 
-  const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
-  const method = req.method || 'GET';
+  const url = new URL(
+    req.url || "/",
+    `http://${req.headers.host || "localhost"}`,
+  );
+  const method = req.method || "GET";
 
-  if (ACCESS_LOG_ENABLED && url.pathname !== '/health') {
+  if (ACCESS_LOG_ENABLED && url.pathname !== "/health") {
     const startedAt = Date.now();
-    res.once('finish', () => {
+    res.once("finish", () => {
       console.log(
         `[pb-api][access] ${method} ${url.pathname}${url.search} -> ${res.statusCode} (${Date.now() - startedAt}ms)`,
       );
@@ -9928,183 +11001,213 @@ async function handler(req, res) {
   }
 
   try {
-    if (method === 'GET' && url.pathname === '/health') {
-      sendJson(res, 200, { ok: true, service: 'problem_bank_api' });
+    if (method === "GET" && url.pathname === "/health") {
+      sendJson(res, 200, { ok: true, service: "problem_bank_api" });
       return;
     }
 
-    if (method === 'POST' && url.pathname === '/pb/jobs/extract') {
+    if (method === "POST" && url.pathname === "/pb/jobs/extract") {
       const body = await readJson(req);
       await createExtractJob(body, res);
       return;
     }
-    if (method === 'GET' && url.pathname === '/pb/jobs/extract') {
+    if (method === "GET" && url.pathname === "/pb/jobs/extract") {
       await listExtractJobs(url, res);
       return;
     }
-    if (method === 'POST' && /^\/pb\/jobs\/extract\/[^/]+\/retry$/.test(url.pathname)) {
-      const jobId = url.pathname.split('/')[4];
+    if (
+      method === "POST" &&
+      /^\/pb\/jobs\/extract\/[^/]+\/retry$/.test(url.pathname)
+    ) {
+      const jobId = url.pathname.split("/")[4];
       const body = await readJson(req);
       await retryExtractJob(jobId, body, res);
       return;
     }
-    if (method === 'GET' && /^\/pb\/jobs\/extract\/[^/]+$/.test(url.pathname)) {
-      const jobId = url.pathname.split('/')[4];
+    if (method === "GET" && /^\/pb\/jobs\/extract\/[^/]+$/.test(url.pathname)) {
+      const jobId = url.pathname.split("/")[4];
       await getExtractJob(jobId, url, res);
       return;
     }
 
-    if (method === 'POST' && url.pathname === '/pb/jobs/figure') {
+    if (method === "POST" && url.pathname === "/pb/jobs/figure") {
       const body = await readJson(req);
       await createFigureJob(body, res);
       return;
     }
-    if (method === 'GET' && url.pathname === '/pb/jobs/figure') {
+    if (method === "GET" && url.pathname === "/pb/jobs/figure") {
       await listFigureJobs(url, res);
       return;
     }
-    if (method === 'POST' && url.pathname === '/pb/jobs/figure/requeue-failed') {
+    if (
+      method === "POST" &&
+      url.pathname === "/pb/jobs/figure/requeue-failed"
+    ) {
       const body = await readJson(req);
       await requeueFailedFigureJobs(body, res);
       return;
     }
-    if (method === 'POST' && /^\/pb\/jobs\/figure\/[^/]+\/retry$/.test(url.pathname)) {
-      const jobId = url.pathname.split('/')[4];
+    if (
+      method === "POST" &&
+      /^\/pb\/jobs\/figure\/[^/]+\/retry$/.test(url.pathname)
+    ) {
+      const jobId = url.pathname.split("/")[4];
       const body = await readJson(req);
       await retryFigureJob(jobId, body, res);
       return;
     }
-    if (method === 'GET' && /^\/pb\/jobs\/figure\/[^/]+$/.test(url.pathname)) {
-      const jobId = url.pathname.split('/')[4];
+    if (method === "GET" && /^\/pb\/jobs\/figure\/[^/]+$/.test(url.pathname)) {
+      const jobId = url.pathname.split("/")[4];
       await getFigureJob(jobId, url, res);
       return;
     }
 
-    if (method === 'POST' && url.pathname === '/pb/jobs/export') {
+    if (method === "POST" && url.pathname === "/pb/jobs/export") {
       const body = await readJson(req);
       await createExportJob(body, res);
       return;
     }
-    if (method === 'GET' && url.pathname === '/pb/jobs/export') {
+    if (method === "GET" && url.pathname === "/pb/jobs/export") {
       await listExportJobs(url, res);
       return;
     }
-    if (method === 'POST' && /^\/pb\/jobs\/export\/[^/]+\/retry$/.test(url.pathname)) {
-      const jobId = url.pathname.split('/')[4];
+    if (
+      method === "POST" &&
+      /^\/pb\/jobs\/export\/[^/]+\/retry$/.test(url.pathname)
+    ) {
+      const jobId = url.pathname.split("/")[4];
       const body = await readJson(req);
       await retryExportJob(jobId, body, res);
       return;
     }
-    if (method === 'POST' && /^\/pb\/jobs\/export\/[^/]+\/cleanup$/.test(url.pathname)) {
-      const jobId = url.pathname.split('/')[4];
+    if (
+      method === "POST" &&
+      /^\/pb\/jobs\/export\/[^/]+\/cleanup$/.test(url.pathname)
+    ) {
+      const jobId = url.pathname.split("/")[4];
       const body = await readJson(req);
       await cleanupExportArtifact(jobId, body, res);
       return;
     }
-    if (method === 'GET' && /^\/pb\/jobs\/export\/[^/]+$/.test(url.pathname)) {
-      const jobId = url.pathname.split('/')[4];
+    if (method === "GET" && /^\/pb\/jobs\/export\/[^/]+$/.test(url.pathname)) {
+      const jobId = url.pathname.split("/")[4];
       await getExportJob(jobId, url, res);
       return;
     }
-    if (method === 'GET' && /^\/pb\/jobs\/export\/[^/]+\/signed-url$/.test(url.pathname)) {
-      const jobId = url.pathname.split('/')[4];
+    if (
+      method === "GET" &&
+      /^\/pb\/jobs\/export\/[^/]+\/signed-url$/.test(url.pathname)
+    ) {
+      const jobId = url.pathname.split("/")[4];
       await regenerateExportSignedUrl(jobId, url, res);
       return;
     }
 
-    if (method === 'POST' && url.pathname === '/pb/documents/save-settings') {
+    if (method === "POST" && url.pathname === "/pb/documents/save-settings") {
       const body = await readJson(req);
       await saveSettingsAsDocument(body, res);
       return;
     }
-    if (method === 'GET' && /^\/pb\/documents\/[^/]+\/export-preset$/.test(url.pathname)) {
-      const documentId = url.pathname.split('/')[3];
+    if (
+      method === "GET" &&
+      /^\/pb\/documents\/[^/]+\/export-preset$/.test(url.pathname)
+    ) {
+      const documentId = url.pathname.split("/")[3];
       await getDocumentExportPreset(documentId, url, res);
       return;
     }
-    if (method === 'GET' && url.pathname === '/pb/export-presets') {
+    if (method === "GET" && url.pathname === "/pb/export-presets") {
       await listExportPresets(url, res);
       return;
     }
-    if (method === 'POST' && url.pathname === '/pb/export-presets/order') {
+    if (method === "POST" && url.pathname === "/pb/export-presets/order") {
       const body = await readJson(req);
       await updateExportPresetOrder(body, res);
       return;
     }
-    if (method === 'POST' && /^\/pb\/export-presets\/[^/]+\/rename$/.test(url.pathname)) {
-      const presetId = url.pathname.split('/')[3];
+    if (
+      method === "POST" &&
+      /^\/pb\/export-presets\/[^/]+\/rename$/.test(url.pathname)
+    ) {
+      const presetId = url.pathname.split("/")[3];
       const body = await readJson(req);
       await renameExportPreset(presetId, body, res);
       return;
     }
-    if (method === 'POST' && /^\/pb\/export-presets\/[^/]+\/delete$/.test(url.pathname)) {
-      const presetId = url.pathname.split('/')[3];
+    if (
+      method === "POST" &&
+      /^\/pb\/export-presets\/[^/]+\/delete$/.test(url.pathname)
+    ) {
+      const presetId = url.pathname.split("/")[3];
       const body = await readJson(req);
       await deleteExportPreset(presetId, body, res);
       return;
     }
-    if (method === 'POST' && url.pathname === '/pb/admin/cleanup-legacy-saved-settings') {
+    if (
+      method === "POST" &&
+      url.pathname === "/pb/admin/cleanup-legacy-saved-settings"
+    ) {
       const body = await readJson(req);
       await cleanupLegacySavedSettings(body, res);
       return;
     }
 
-    if (method === 'GET' && url.pathname === '/pb/documents/summary') {
+    if (method === "GET" && url.pathname === "/pb/documents/summary") {
       await documentSummary(url, res);
       return;
     }
 
-    if (method === 'GET' && url.pathname === '/pb/questions') {
+    if (method === "GET" && url.pathname === "/pb/questions") {
       await listQuestions(url, res);
       return;
     }
 
     if (
-      method === 'POST' &&
+      method === "POST" &&
       /^\/pb\/questions\/[^/]+\/generate-objective$/.test(url.pathname)
     ) {
-      const questionId = url.pathname.split('/')[3];
+      const questionId = url.pathname.split("/")[3];
       const body = await readJson(req);
       await generateObjectiveForQuestion(questionId, body, res);
       return;
     }
 
-    if (method === 'POST' && url.pathname === '/pb/preview/questions') {
+    if (method === "POST" && url.pathname === "/pb/preview/questions") {
       await previewQuestions(res, req);
       return;
     }
 
-    if (method === 'POST' && url.pathname === '/pb/preview/html') {
+    if (method === "POST" && url.pathname === "/pb/preview/html") {
       await previewHtml(res, req);
       return;
     }
 
-    if (method === 'POST' && url.pathname === '/pb/preview/urls') {
+    if (method === "POST" && url.pathname === "/pb/preview/urls") {
       await previewUrls(res, req);
       return;
     }
 
-    if (method === 'POST' && url.pathname === '/pb/preview/pdf-artifacts') {
+    if (method === "POST" && url.pathname === "/pb/preview/pdf-artifacts") {
       await previewPdfArtifacts(res, req);
       return;
     }
 
-    if (method === 'POST' && url.pathname === '/pb/preview/answer-renders') {
+    if (method === "POST" && url.pathname === "/pb/preview/answer-renders") {
       await previewAnswerRenders(res, req);
       return;
     }
 
-    if (method === 'POST' && url.pathname === '/pb/preview/batch-render') {
+    if (method === "POST" && url.pathname === "/pb/preview/batch-render") {
       await batchRenderThumbnails(res, req);
       return;
     }
 
-    if (method === 'POST' && url.pathname === '/pb/preview/custom-thumbnail') {
+    if (method === "POST" && url.pathname === "/pb/preview/custom-thumbnail") {
       await renderCustomPreviewThumbnail(res, req);
       return;
     }
 
-    if (method === 'POST' && url.pathname === '/storage/signed-url') {
+    if (method === "POST" && url.pathname === "/storage/signed-url") {
       const body = await readJson(req);
       await handleStorageSignedUrl(body, res);
       return;
@@ -10117,39 +11220,39 @@ async function handler(req, res) {
     // context so it can reject requests that target an academy the caller
     // does not belong to. Insertion point for the auth middleware is right
     // before each `await handleTextbookXxx(...)` call below.
-    if (method === 'POST' && url.pathname === '/textbook/pdf/upload-url') {
+    if (method === "POST" && url.pathname === "/textbook/pdf/upload-url") {
       const body = await readJson(req);
       await handleTextbookUploadUrl(body, res);
       return;
     }
-    if (method === 'POST' && url.pathname === '/textbook/pdf/finalize') {
+    if (method === "POST" && url.pathname === "/textbook/pdf/finalize") {
       const body = await readJson(req);
       await handleTextbookFinalize(body, res);
       return;
     }
-    if (method === 'POST' && url.pathname === '/textbook/pdf/status') {
+    if (method === "POST" && url.pathname === "/textbook/pdf/status") {
       const body = await readJson(req);
       await handleTextbookStatusPatch(body, res);
       return;
     }
-    if (method === 'GET' && url.pathname === '/textbook/pdf/download-url') {
+    if (method === "GET" && url.pathname === "/textbook/pdf/download-url") {
       await handleTextbookDownloadUrl(url, res);
       return;
     }
-    if (method === 'GET' && url.pathname === '/textbook/pdf/page') {
+    if (method === "GET" && url.pathname === "/textbook/pdf/page") {
       await handleTextbookPagePdf(url, res);
       return;
     }
 
     // Textbook VLM (test-only) — page-level problem number detection.
-    if (method === 'POST' && url.pathname === '/textbook/vlm/detect-problems') {
+    if (method === "POST" && url.pathname === "/textbook/vlm/detect-problems") {
       const body = await readJson(req);
       await handleTextbookVlmDetectProblems(body, res);
       return;
     }
 
     // Textbook VLM — 목차(차례) 페이지에서 단원 트리 추출.
-    if (method === 'POST' && url.pathname === '/textbook/vlm/parse-toc') {
+    if (method === "POST" && url.pathname === "/textbook/vlm/parse-toc") {
       const body = await readJson(req);
       await handleTextbookVlmParseToc(body, res);
       return;
@@ -10157,8 +11260,8 @@ async function handler(req, res) {
 
     // Textbook VLM — 쎈/RPM 중단원 본문의 A/B/C 파트 경계 분류.
     if (
-      method === 'POST' &&
-      url.pathname === '/textbook/vlm/classify-problem-book-sections'
+      method === "POST" &&
+      url.pathname === "/textbook/vlm/classify-problem-book-sections"
     ) {
       const body = await readJson(req);
       await handleTextbookVlmClassifyRpmSections(body, res);
@@ -10167,8 +11270,8 @@ async function handler(req, res) {
 
     // 구 RPM 전용 경로 호환.
     if (
-      method === 'POST' &&
-      url.pathname === '/textbook/vlm/classify-rpm-sections'
+      method === "POST" &&
+      url.pathname === "/textbook/vlm/classify-rpm-sections"
     ) {
       const body = await readJson(req);
       await handleTextbookVlmClassifyRpmSections(body, res);
@@ -10177,8 +11280,8 @@ async function handler(req, res) {
 
     // Textbook VLM — 개념원리 필수유형: 본문 페이지 "풀이" 좌표 + 정답 추출.
     if (
-      method === 'POST' &&
-      url.pathname === '/textbook/vlm/extract-body-solutions'
+      method === "POST" &&
+      url.pathname === "/textbook/vlm/extract-body-solutions"
     ) {
       const body = await readJson(req);
       await handleTextbookVlmExtractBodySolutions(body, res);
@@ -10187,19 +11290,19 @@ async function handler(req, res) {
 
     // Textbook crop batch upsert — writes PNG to Storage + row to
     // textbook_problem_crops. Used by the manager app's unit authoring dialog.
-    if (method === 'POST' && url.pathname === '/textbook/crops/batch-upsert') {
+    if (method === "POST" && url.pathname === "/textbook/crops/batch-upsert") {
       const body = await readJson(req);
       await handleTextbookCropsBatchUpsert(body, res);
       return;
     }
-    if (method === 'POST' && url.pathname === '/textbook/crops/sync-scope') {
+    if (method === "POST" && url.pathname === "/textbook/crops/sync-scope") {
       const body = await readJson(req);
       await handleTextbookCropsSyncScope(body, res);
       return;
     }
 
     // VLM answer-key extraction — Stage 2.
-    if (method === 'POST' && url.pathname === '/textbook/vlm/extract-answers') {
+    if (method === "POST" && url.pathname === "/textbook/vlm/extract-answers") {
       const body = await readJson(req);
       await handleTextbookVlmExtractAnswers(body, res);
       return;
@@ -10207,8 +11310,8 @@ async function handler(req, res) {
 
     // 수력충전 빠른 정답 지면 구조 — Stage 2 결정적 매칭.
     if (
-      method === 'POST' &&
-      url.pathname === '/textbook/vlm/extract-answer-layout'
+      method === "POST" &&
+      url.pathname === "/textbook/vlm/extract-answer-layout"
     ) {
       const body = await readJson(req);
       await handleTextbookVlmExtractAnswerLayout(body, res);
@@ -10217,8 +11320,8 @@ async function handler(req, res) {
 
     // VLM solution-reference detection — Stage 3.
     if (
-      method === 'POST' &&
-      url.pathname === '/textbook/vlm/detect-solution-refs'
+      method === "POST" &&
+      url.pathname === "/textbook/vlm/detect-solution-refs"
     ) {
       const body = await readJson(req);
       await handleTextbookVlmDetectSolutionRefs(body, res);
@@ -10227,8 +11330,8 @@ async function handler(req, res) {
 
     // 해설 지면의 소단원 블록 머리 목록 — Stage 3 준비.
     if (
-      method === 'POST' &&
-      url.pathname === '/textbook/vlm/detect-solution-blocks'
+      method === "POST" &&
+      url.pathname === "/textbook/vlm/detect-solution-blocks"
     ) {
       const body = await readJson(req);
       await handleTextbookVlmDetectSolutionBlocks(body, res);
@@ -10237,8 +11340,8 @@ async function handler(req, res) {
 
     // Stage 2 sidecar upsert.
     if (
-      method === 'POST' &&
-      url.pathname === '/textbook/answers/batch-upsert'
+      method === "POST" &&
+      url.pathname === "/textbook/answers/batch-upsert"
     ) {
       const body = await readJson(req);
       await handleTextbookAnswersBatchUpsert(body, res);
@@ -10246,8 +11349,8 @@ async function handler(req, res) {
     }
 
     if (
-      method === 'POST' &&
-      url.pathname === '/textbook/answers/render-assets/backfill'
+      method === "POST" &&
+      url.pathname === "/textbook/answers/render-assets/backfill"
     ) {
       const body = await readJson(req);
       await handleTextbookAnswerRenderAssetsBackfill(body, res);
@@ -10255,8 +11358,8 @@ async function handler(req, res) {
     }
 
     if (
-      method === 'POST' &&
-      url.pathname === '/answers/render-assets/backfill'
+      method === "POST" &&
+      url.pathname === "/answers/render-assets/backfill"
     ) {
       const body = await readJson(req);
       await handleUnifiedAnswerRenderAssetsBackfill(body, res);
@@ -10264,15 +11367,15 @@ async function handler(req, res) {
     }
 
     if (
-      method === 'POST' &&
-      url.pathname === '/answers/render-assets/resolve'
+      method === "POST" &&
+      url.pathname === "/answers/render-assets/resolve"
     ) {
       const body = await readJson(req);
       await handleUnifiedAnswerRenderAssetsResolve(body, res);
       return;
     }
 
-    if (method === 'POST' && url.pathname === '/textbook/answers/sync-pb') {
+    if (method === "POST" && url.pathname === "/textbook/answers/sync-pb") {
       const body = await readJson(req);
       await handleTextbookAnswersSyncProblemBank(body, res);
       return;
@@ -10280,8 +11383,8 @@ async function handler(req, res) {
 
     // Stage 3 sidecar upsert.
     if (
-      method === 'POST' &&
-      url.pathname === '/textbook/solution-refs/batch-upsert'
+      method === "POST" &&
+      url.pathname === "/textbook/solution-refs/batch-upsert"
     ) {
       const body = await readJson(req);
       await handleTextbookSolutionRefsBatchUpsert(body, res);
@@ -10289,19 +11392,19 @@ async function handler(req, res) {
     }
 
     // 매니저 필기 탭: 학생 필기 렌더 이미지 AI 판단.
-    if (method === 'POST' && url.pathname === '/handwriting/review') {
+    if (method === "POST" && url.pathname === "/handwriting/review") {
       const body = await readJson(req);
       await handleHandwritingReview(body, res);
       return;
     }
 
     // Textbook authoring Stage 1/2/3 status and hard-delete operations.
-    if (method === 'POST' && url.pathname === '/textbook/stage/status') {
+    if (method === "POST" && url.pathname === "/textbook/stage/status") {
       const body = await readJson(req);
       await handleTextbookStageStatus(body, res);
       return;
     }
-    if (method === 'POST' && url.pathname === '/textbook/stage/delete') {
+    if (method === "POST" && url.pathname === "/textbook/stage/delete") {
       const body = await readJson(req);
       await handleTextbookStageDelete(body, res);
       return;
@@ -10309,7 +11412,7 @@ async function handler(req, res) {
 
     // Delete an entire textbook — sweeps Storage (textbooks, textbook-crops,
     // resource-covers) and deletes the `resource_files` row (cascade).
-    if (method === 'POST' && url.pathname === '/textbook/book/delete') {
+    if (method === "POST" && url.pathname === "/textbook/book/delete") {
       const body = await readJson(req);
       await handleTextbookBookDelete(body, res);
       return;
@@ -10319,7 +11422,7 @@ async function handler(req, res) {
   } catch (err) {
     sendJson(res, 500, {
       ok: false,
-      error: 'internal_error',
+      error: "internal_error",
       message: compact(err?.message || err),
     });
   }
@@ -10331,7 +11434,7 @@ const server = http.createServer((req, res) => {
 
 server.listen(API_PORT, API_HOST, () => {
   console.log(
-    '[pb-api] listening',
+    "[pb-api] listening",
     JSON.stringify({
       host: API_HOST,
       port: API_PORT,
@@ -10339,5 +11442,3 @@ server.listen(API_PORT, API_HOST, () => {
     }),
   );
 });
-
-

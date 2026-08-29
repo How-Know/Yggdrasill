@@ -377,14 +377,24 @@ class TextbookVlmAnswerService {
     required List<TextbookAnswerUpload> answers,
   }) async {
     if (answers.isEmpty) return 0;
-    final body = <String, dynamic>{
-      'academy_id': academyId,
-      'answers': answers.map((a) => a.toJson()).toList(),
-    };
+    var upserted = 0;
+    for (final chunk in textbookAnswerUploadChunks(answers)) {
+      upserted += await _postAnswerBatch(academyId: academyId, answers: chunk);
+    }
+    return upserted;
+  }
+
+  Future<int> _postAnswerBatch({
+    required String academyId,
+    required List<Map<String, dynamic>> answers,
+  }) async {
     final res = await _http.post(
       _uri('/textbook/answers/batch-upsert'),
       headers: _headers(),
-      body: jsonEncode(body),
+      body: jsonEncode(<String, dynamic>{
+        'academy_id': academyId,
+        'answers': answers,
+      }),
     );
     final json = _decode(res.body);
     if (res.statusCode < 200 || res.statusCode >= 300 || json['ok'] != true) {
@@ -501,6 +511,43 @@ class TextbookVlmAnswerLayoutEntry {
   }
 }
 
+/// 게이트웨이가 한 번에 받는 정답 건수. 넘기면 413 answer_batch_too_large 다.
+const int kAnswerBatchMaxRows = 200;
+
+/// 한 번에 보내는 본문 바이트 한도. 그림 정답은 PNG 를 base64 로 실어 보내
+/// 한 건이 수 MB 가 되므로, 건수만 세면 몸집이 터진다.
+const int kAnswerBatchMaxBytes = 6 * 1024 * 1024;
+
+/// 정답 묶음을 게이트웨이가 삼킬 수 있는 크기로 자른다.
+///
+/// 실력 향상 테스트처럼 소단원 하나에 문항이 454개 붙는 자리가 있어, 통째로
+/// 보내면 413 answer_batch_too_large 로 거부되고 "완료" 단추가 아무 반응도
+/// 없는 것처럼 보인다. 건수와 바이트를 함께 보고, 한 건이 홀로 한도를 넘어도
+/// 버리지 않고 그 건만 담은 묶음으로 내보낸다.
+List<List<Map<String, dynamic>>> textbookAnswerUploadChunks(
+  List<TextbookAnswerUpload> answers,
+) {
+  final chunks = <List<Map<String, dynamic>>>[];
+  var current = <Map<String, dynamic>>[];
+  var currentBytes = 0;
+  for (final answer in answers) {
+    final row = answer.toJson();
+    final bytes = utf8.encode(jsonEncode(row)).length;
+    final tooMany = current.length >= kAnswerBatchMaxRows;
+    final tooBig =
+        current.isNotEmpty && currentBytes + bytes > kAnswerBatchMaxBytes;
+    if (tooMany || tooBig) {
+      chunks.add(current);
+      current = <Map<String, dynamic>>[];
+      currentBytes = 0;
+    }
+    current.add(row);
+    currentBytes += bytes;
+  }
+  if (current.isNotEmpty) chunks.add(current);
+  return chunks;
+}
+
 /// 답지 판독 결과를 지면 읽기 순서로 다시 세운다.
 ///
 /// 순서는 왼쪽 단 위→아래, 그다음 오른쪽 단 위→아래다. 모델은 대개 그렇게
@@ -509,6 +556,14 @@ class TextbookVlmAnswerLayoutEntry {
 /// 그 단이 통째로 빈다(1-2 답지 10쪽 "05 도수분포표" 06~45번 40개).
 ///
 /// 좌표가 하나라도 없으면 순서를 건드리지 않고 모델이 준 대로 쓴다.
+///
+/// 한 정답이 왼쪽 단 맨 아래에서 시작해 오른쪽 단 맨 위로 이어질 때가 있다.
+/// 그러면 모델은 두 조각을 아우른 지면만 한 상자를 준다 — 위끝은 오른쪽 단
+/// 머리, 왼끝은 왼쪽 단(2-1 답지 10쪽 "12 연립방정식의 활용 – 농도" 09번은
+/// [66,93,921,783]). 그 상자를 그대로 믿으면 왼쪽 단 맨 위로 올라가 자기
+/// 소단원 머리보다 앞서게 되고, 블록이 정해지기 전이라 통째로 버려진다.
+/// 두 단을 함께 덮은 상자는 자리를 못 믿으니 바로 앞 요소의 자리를 물려받아
+/// 모델이 적어 준 자리에 그대로 머무르게 한다.
 List<TextbookVlmAnswerLayoutEntry> textbookAnswerLayoutReadingOrder(
   List<TextbookVlmAnswerLayoutEntry> entries,
 ) {
@@ -521,11 +576,23 @@ List<TextbookVlmAnswerLayoutEntry> textbookAnswerLayoutReadingOrder(
   // 왼쪽 단 것으로 보아 그 위치의 흐름을 그대로 따른다.
   int columnOf(TextbookVlmAnswerLayoutEntry entry) =>
       entry.bbox![1] >= 500 ? 2 : 1;
+  bool spansBothColumns(TextbookVlmAnswerLayoutEntry entry) =>
+      entry.bbox![1] < 500 && entry.bbox![3] >= 500;
+  final keys = List<(int, int)>.filled(entries.length, (1, 0));
+  var last = (1, 0);
+  for (var i = 0; i < entries.length; i += 1) {
+    if (i > 0 && spansBothColumns(entries[i])) {
+      keys[i] = last;
+      continue;
+    }
+    last = (columnOf(entries[i]), entries[i].bbox![0]);
+    keys[i] = last;
+  }
   final order = <int>[for (var i = 0; i < entries.length; i += 1) i];
   order.sort((a, b) {
-    final byColumn = columnOf(entries[a]).compareTo(columnOf(entries[b]));
+    final byColumn = keys[a].$1.compareTo(keys[b].$1);
     if (byColumn != 0) return byColumn;
-    final byTop = entries[a].bbox![0].compareTo(entries[b].bbox![0]);
+    final byTop = keys[a].$2.compareTo(keys[b].$2);
     return byTop != 0 ? byTop : a.compareTo(b);
   });
   return <TextbookVlmAnswerLayoutEntry>[for (final i in order) entries[i]];

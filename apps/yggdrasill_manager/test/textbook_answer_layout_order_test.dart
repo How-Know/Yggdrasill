@@ -71,6 +71,33 @@ void main() {
     );
   });
 
+  test('단을 넘어 이어진 정답은 모델이 적어 준 자리에 머문다', () {
+    // 2-1 답지 10쪽. "12 …농도" 09번 정답이 왼쪽 단 맨 아래에서 시작해
+    // 오른쪽 단 맨 위로 이어져, 모델이 두 조각을 아우른 지면만 한 상자를 준다.
+    final reordered = textbookAnswerLayoutReadingOrder(
+      <TextbookVlmAnswerLayoutEntry>[
+        header('11 연립방정식의 활용 - 거리', <int>[68, 101, 84, 483]),
+        answer('24', <int>[601, 93, 613, 273]),
+        header('12 연립방정식의 활용 - 농도', <int>[649, 101, 665, 484]),
+        answer('08', <int>[846, 93, 858, 306]),
+        answer('09', <int>[66, 93, 921, 783]),
+        answer('10', <int>[86, 532, 98, 642]),
+        header('단원 마무리 평가 [10~12]', <int>[144, 542, 160, 913]),
+        answer('01', <int>[172, 542, 184, 606]),
+      ],
+    );
+    expect(namesOf(reordered), <String>[
+      '머리:11 연립방정식의 활용 - 거리',
+      '24',
+      '머리:12 연립방정식의 활용 - 농도',
+      '08',
+      '09',
+      '10',
+      '머리:단원 마무리 평가 [10~12]',
+      '01',
+    ]);
+  });
+
   test('좌표가 없는 요소가 있으면 모델이 준 순서를 건드리지 않는다', () {
     final entries = <TextbookVlmAnswerLayoutEntry>[
       answer('06', <int>[67, 519, 78, 660]),

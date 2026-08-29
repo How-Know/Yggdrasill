@@ -1003,6 +1003,27 @@ class _GradingModePageState extends State<GradingModePage> {
       separatorBuilder: (_, __) => SizedBox(width: cardLayout.spacing),
       itemBuilder: (context, index) {
         final stack = stacks[index];
+        AsyncUiAction? buildOpenNext(int currentIndex) {
+          final nextIndex = currentIndex + 1;
+          if (nextIndex >= stack.entries.length) return null;
+          final nextEntry = stack.entries[nextIndex];
+          final nextOnCardTap = nextEntry.section == _GradingSection.submitted
+              ? widget.onSubmittedCardTap
+              : widget.onHomeworkCardTap;
+          if (nextOnCardTap == null ||
+              (nextEntry.section == _GradingSection.submitted &&
+                  !nextEntry.hasSubmittedChild)) {
+            return null;
+          }
+          return () => nextOnCardTap(
+                nextEntry.studentId,
+                nextEntry.group,
+                nextEntry.summary,
+                nextEntry.children,
+                openNext: buildOpenNext(nextIndex),
+              );
+        }
+
         return SizedBox(
           key: ValueKey(
             stack.entries.isEmpty
@@ -1026,25 +1047,7 @@ class _GradingModePageState extends State<GradingModePage> {
                 final onCardTap = entry.section == _GradingSection.submitted
                     ? widget.onSubmittedCardTap
                     : widget.onHomeworkCardTap;
-                final nextEntry = stackIndex + 1 < stack.entries.length
-                    ? stack.entries[stackIndex + 1]
-                    : null;
-                final nextOnCardTap =
-                    nextEntry?.section == _GradingSection.submitted
-                        ? widget.onSubmittedCardTap
-                        : widget.onHomeworkCardTap;
-                final canOpenNext = nextEntry != null &&
-                    nextOnCardTap != null &&
-                    (nextEntry.section != _GradingSection.submitted ||
-                        nextEntry.hasSubmittedChild);
-                final AsyncUiAction? openNext = canOpenNext
-                    ? () => nextOnCardTap(
-                          nextEntry.studentId,
-                          nextEntry.group,
-                          nextEntry.summary,
-                          nextEntry.children,
-                        )
-                    : null;
+                final openNext = buildOpenNext(stackIndex);
                 return SizedBox(
                   width: cardLayout.width,
                   height: cardLayout.height,
@@ -1454,7 +1457,6 @@ class _GradingModePageState extends State<GradingModePage> {
                 (assignment) => GradingHomeworkSchedule(
                   assignedAt: assignment.assignedAt,
                   dueForCheckAt: assignment.dueForCheckAt,
-                  originalDueDate: assignment.originalDueDate,
                   dueDate: assignment.dueDate,
                 ),
               ),
@@ -1536,7 +1538,6 @@ class _GradingModePageState extends State<GradingModePage> {
               (assignment) => GradingHomeworkSchedule(
                 assignedAt: assignment.assignedAt,
                 dueForCheckAt: assignment.dueForCheckAt,
-                originalDueDate: assignment.originalDueDate,
                 dueDate: assignment.dueDate,
               ),
             ),

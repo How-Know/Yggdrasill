@@ -5,6 +5,7 @@ import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
 import 'package:pdfrx/pdfrx.dart';
 
 import '../../services/problem_bank_service.dart';
@@ -19,6 +20,7 @@ import 'review/problem_bank_review_mode.dart';
 import 'review/problem_bank_review_panes.dart';
 import 'widgets/figure_compare_dialog.dart';
 import 'widgets/figure_horizontal_groups_editor.dart';
+import 'widgets/exam_batch_upload_dialog.dart';
 import 'widgets/problem_bank_classification_filter_panel.dart';
 import 'widgets/problem_bank_export_preset_dialog.dart';
 import 'widgets/problem_bank_mode_tab_bar.dart';
@@ -181,9 +183,23 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
 
   List<ProblemBankDocument> _documents = <ProblemBankDocument>[];
   List<ProblemBankDocument> _allTextbookDocuments = <ProblemBankDocument>[];
+  List<ProblemBankDocument> _allExamDocuments = <ProblemBankDocument>[];
   ProblemBankDocument? _activeDocument;
   int? _requestedTextbookPage;
+
+  /// 업로드 탭 워크스페이스. null 이면 현재 문서를 따르고, true 면 내신,
+  /// false 면 시중교재. 헤더 클릭으로만 덮어쓴다.
+  bool? _workspaceExamPaperOverride;
+  ProblemBankDocument? _parkedTextbookDocument;
+  int? _parkedTextbookPage;
+  ProblemBankDocument? _parkedExamPaperDocument;
   final Set<String> _expandedTextbookSwitchGroups = <String>{};
+  final Set<String> _expandedExamSchools = <String>{};
+  final Set<String> _expandedExamYears = <String>{};
+  bool _isExamBatchRunning = false;
+  bool _cancelExamBatchRequested = false;
+  int _examBatchCompleted = 0;
+  int _examBatchTotal = 0;
   ProblemBankExtractJob? _activeExtractJob;
   List<ProblemBankQuestion> _questions = <ProblemBankQuestion>[];
   Map<String, ProblemBankQuestionTimedTestStats> _timedTestStatsByQuestionUid =
@@ -374,6 +390,24 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       _selectedSourceTypeCode == 'market_book' ||
       _selectedSourceTypeCode == 'lecture_book' ||
       _selectedSourceTypeCode == 'ebs_book';
+
+  bool _isTextbookPdfDocument(ProblemBankDocument? document) =>
+      problemBankReviewModeOf(document) == ProblemBankReviewMode.textbookPdf;
+
+  /// 업로드 탭이 내신 기출 검수(HWPX+PDF)인지. 헤더 클릭이 문서 종류보다 우선한다.
+  bool get _showingExamPaperWorkspace {
+    if (_workspaceExamPaperOverride != null) {
+      return _workspaceExamPaperOverride!;
+    }
+    return !_isTextbookPdfDocument(_activeDocument);
+  }
+
+  ProblemBankDocument? _firstExamPaperDocument() {
+    for (final document in _documents) {
+      if (!_isTextbookPdfDocument(document)) return document;
+    }
+    return _parkedExamPaperDocument;
+  }
 
   String _labelOfSourceTypeCode(String code) => _sourceTypeLabels[code] ?? code;
 
@@ -2046,6 +2080,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       final docs = await _service.listRecentDocuments(academyId: academyId);
       final textbookDocs =
           await _service.listAllTextbookDocuments(academyId: academyId);
+      final examDocs =
+          await _service.listAllSchoolPastDocuments(academyId: academyId);
       if (!mounted) return;
       setState(() {
         _academyId = academyId;
@@ -2053,16 +2089,18 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         _academyMissing = false;
         _documents = docs;
         _allTextbookDocuments = textbookDocs;
-        _activeDocument = docs.isNotEmpty ? docs.first : null;
-        _statusText = docs.isEmpty ? '업로드할 HWPX를 선택하세요.' : '문서를 선택해 주세요.';
+        _allExamDocuments = examDocs;
+        // 화면 진입과 동시에 최신 문서를 열면 교재/내신 모드가 문서 로드 중 서로
+        // 덮어쓰는 일이 있다. 목록만 준비하고 사용자가 고를 때 컨텍스트를 연다.
+        _activeDocument = null;
+        _workspaceExamPaperOverride = true;
+        _statusText = '검수할 문서를 선택하거나 내신 기출을 업로드하세요.';
       });
       _appendPipelineLog(
         'init',
-        '최근 문서 ${docs.length}건 · 전체 교재 문서 ${textbookDocs.length}건 로드',
+        '최근 문서 ${docs.length}건 · 전체 교재 ${textbookDocs.length}건 · '
+            '전체 내신 ${examDocs.length}건 로드',
       );
-      if (_activeDocument != null) {
-        await _loadDocumentContext(_activeDocument!.id);
-      }
     } on ProblemBankSchemaMissingException catch (e) {
       _appendPipelineLog('init', e.message, error: true);
       if (!mounted) return;
@@ -2103,21 +2141,25 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       final docs = await _service.listRecentDocuments(academyId: academyId);
       final textbookDocs =
           await _service.listAllTextbookDocuments(academyId: academyId);
+      final examDocs =
+          await _service.listAllSchoolPastDocuments(academyId: academyId);
       if (!mounted) return;
       setState(() {
         _documents = docs;
         _allTextbookDocuments = textbookDocs;
-        if (_activeDocument == null && docs.isNotEmpty) {
-          _activeDocument = docs.first;
-        } else if (_activeDocument != null &&
+        _allExamDocuments = examDocs;
+        if (_activeDocument != null &&
             !docs.any((d) => d.id == _activeDocument!.id) &&
             !textbookDocs.any((d) => d.id == _activeDocument!.id)) {
-          _activeDocument = docs.isEmpty ? null : docs.first;
+          _activeDocument = null;
+          _activeExtractJob = null;
+          _questions = <ProblemBankQuestion>[];
         }
       });
       _appendPipelineLog(
         'doc',
-        '최근 문서 ${docs.length}건 · 전체 교재 문서 ${textbookDocs.length}건 갱신',
+        '최근 문서 ${docs.length}건 · 전체 교재 ${textbookDocs.length}건 · '
+            '전체 내신 ${examDocs.length}건 갱신',
       );
       if (_topTabController.index == 1) {
         unawaited(_runClassificationSearch());
@@ -2310,6 +2352,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           _showUnuploadedOnly = false;
         }
         _activeDocument = summary.document;
+        _workspaceExamPaperOverride = !textbookReview;
         _requestedTextbookPage = resolvedTextbookPage;
         _activeExtractJob = summary.latestExtractJob;
         _questions = questions;
@@ -2720,6 +2763,184 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     } catch (_) {
       return _readBytesFromPath(item.path);
     }
+  }
+
+  Future<void> _openExamBatchUploadDialog() async {
+    if (_isExamBatchRunning) {
+      _showSnack('내신 기출 일괄 작업이 이미 진행 중입니다.');
+      return;
+    }
+    final pairs = await showExamBatchUploadDialog(context);
+    if (pairs == null || pairs.isEmpty || !mounted) return;
+    unawaited(_runExamBatch(pairs));
+  }
+
+  /// HWPX 업로드 → PDF 연결 → 추출 완료 대기를 한 문서씩 반복한다.
+  ///
+  /// 잡을 한꺼번에 큐에 쌓지 않고 직전 잡이 terminal 상태가 된 뒤 다음 문서를
+  /// 등록하므로, 사용자가 요청한 "같은 과정 10번 직렬 실행"을 보장한다.
+  Future<void> _runExamBatch(List<ExamBatchUploadPair> pairs) async {
+    final academyId = _academyId;
+    if (academyId == null || academyId.isEmpty) {
+      _showSnack('academy_id를 찾을 수 없습니다.', error: true);
+      return;
+    }
+    setState(() {
+      _isExamBatchRunning = true;
+      _cancelExamBatchRequested = false;
+      _examBatchCompleted = 0;
+      _examBatchTotal = pairs.length;
+      _statusText = '내신 기출 ${pairs.length}개 순차 작업을 시작합니다.';
+    });
+    var succeeded = 0;
+    var failed = 0;
+    _appendPipelineLog('batch', '순차 작업 시작: ${pairs.length}개 문서');
+
+    for (var index = 0; index < pairs.length; index++) {
+      if (_cancelExamBatchRequested || !mounted) break;
+      final pair = pairs[index];
+      final position = '${index + 1}/${pairs.length}';
+      try {
+        setState(() {
+          _statusText = '[$position] ${pair.baseName} · HWPX 읽는 중...';
+        });
+        final hwpxBytes = await _readBytesFromPath(pair.hwpxPath);
+        if (hwpxBytes == null || hwpxBytes.isEmpty) {
+          throw Exception('HWPX 파일을 읽지 못했습니다.');
+        }
+        _appendPipelineLog('batch', '[$position] HWPX 업로드: ${pair.baseName}');
+        final uploaded = await _service.uploadDocument(
+          academyId: academyId,
+          bytes: hwpxBytes,
+          originalName: p.basename(pair.hwpxPath),
+          curriculumCode: 'rev_2022',
+          sourceTypeCode: 'school_past',
+          courseLabel: '',
+          gradeLabel: '',
+          examYear: null,
+          semesterLabel: '',
+          examTermLabel: '',
+          schoolName: '',
+          publisherName: '',
+          materialName: '',
+          classificationDetail: const <String, dynamic>{},
+        );
+
+        if (_cancelExamBatchRequested || !mounted) break;
+        setState(() {
+          _statusText = '[$position] ${pair.baseName} · PDF 읽는 중...';
+        });
+        final pdfBytes = await _readBytesFromPath(pair.pdfPath);
+        if (pdfBytes == null || pdfBytes.isEmpty) {
+          throw Exception('PDF 파일을 읽지 못했습니다.');
+        }
+        _appendPipelineLog('batch', '[$position] PDF 업로드: ${pair.baseName}');
+        await _service.uploadPdfForDocument(
+          academyId: academyId,
+          documentId: uploaded.id,
+          bytes: pdfBytes,
+          originalName: p.basename(pair.pdfPath),
+        );
+
+        if (_cancelExamBatchRequested || !mounted) break;
+        setState(() {
+          _statusText = '[$position] ${pair.baseName} · 추출 대기열 등록 중...';
+        });
+        final job = await _service.createExtractJob(
+          academyId: academyId,
+          documentId: uploaded.id,
+        );
+        _appendPipelineLog(
+          'batch',
+          '[$position] 추출 시작: ${pair.baseName} (${job.id})',
+        );
+        final terminal = await _waitForBatchExtract(
+          academyId: academyId,
+          documentId: uploaded.id,
+          jobId: job.id,
+          position: position,
+          label: pair.baseName,
+        );
+        if (terminal == null) break;
+        if (terminal.status == 'failed' || terminal.status == 'cancelled') {
+          failed += 1;
+          _appendPipelineLog(
+            'batch',
+            '[$position] 추출 실패: ${pair.baseName} · '
+                '${terminal.errorMessage.isEmpty ? terminal.status : terminal.errorMessage}',
+            error: true,
+          );
+        } else {
+          succeeded += 1;
+          _appendPipelineLog(
+            'batch',
+            '[$position] 추출 완료: ${pair.baseName} (${terminal.status})',
+          );
+        }
+      } catch (e) {
+        failed += 1;
+        _appendPipelineLog(
+          'batch',
+          '[$position] 작업 실패: ${pair.baseName} · $e',
+          error: true,
+        );
+      } finally {
+        if (mounted) {
+          setState(() => _examBatchCompleted = index + 1);
+        }
+      }
+    }
+
+    await _refreshDocuments();
+    if (!mounted) return;
+    final cancelled = _cancelExamBatchRequested;
+    setState(() {
+      _isExamBatchRunning = false;
+      _cancelExamBatchRequested = false;
+      _statusText = cancelled
+          ? '내신 기출 순차 작업을 중단했습니다. 완료 $succeeded개 · 실패 $failed개'
+          : '내신 기출 순차 작업 완료 · 성공 $succeeded개 · 실패 $failed개';
+    });
+    _appendPipelineLog(
+      'batch',
+      cancelled
+          ? '순차 작업 중단: 성공 $succeeded개 · 실패 $failed개'
+          : '순차 작업 종료: 성공 $succeeded개 · 실패 $failed개',
+      error: failed > 0,
+    );
+    _showSnack(_statusText, error: failed > 0);
+  }
+
+  Future<ProblemBankExtractJob?> _waitForBatchExtract({
+    required String academyId,
+    required String documentId,
+    required String jobId,
+    required String position,
+    required String label,
+  }) async {
+    final startedAt = DateTime.now();
+    while (!_cancelExamBatchRequested && mounted) {
+      final summary = await _service.loadDocumentSummary(
+        academyId: academyId,
+        documentId: documentId,
+      );
+      final latest = summary?.latestExtractJob;
+      if (latest != null && latest.id == jobId && latest.isTerminal) {
+        return latest;
+      }
+      final elapsed = DateTime.now().difference(startedAt);
+      if (elapsed > const Duration(hours: 1)) {
+        throw Exception('추출 완료 대기 시간이 1시간을 넘었습니다.');
+      }
+      if (mounted) {
+        setState(() {
+          _statusText = '[$position] $label · 추출 ${latest?.status ?? 'queued'} '
+              '(${_formatElapsed(elapsed)})';
+        });
+      }
+      await Future<void>.delayed(const Duration(seconds: 5));
+    }
+    return null;
   }
 
   // 현재 문서에서 status='failed' 로 굳은 figure_jobs 를 일괄 queued 로 되돌린다.
@@ -5164,10 +5385,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     );
   }
 
-  Widget _buildDocumentSelector() {
+  Widget _buildDocumentSelector({bool examPapersOnly = false}) {
     final selectedId = _activeDocument?.id;
+    final sourceDocuments = examPapersOnly
+        ? _documents.where((document) => !_isTextbookPdfDocument(document))
+        : _documents;
     final documentsById = <String, ProblemBankDocument>{
-      for (final document in _documents) document.id: document,
+      for (final document in sourceDocuments) document.id: document,
     };
     final dropdownDocuments = documentsById.values.toList(growable: false);
     final selectedValue =
@@ -5183,7 +5407,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         ),
         const SizedBox(height: 6),
         Container(
-          height: 40,
+          // DropdownButton의 기본 탭 높이는 48px이다. 40px로 누르면 내부
+          // IndexedStack이 10px 넘쳐 최신 문서 아래에 overflow가 표시된다.
+          height: 50,
           padding: const EdgeInsets.symmetric(horizontal: 10),
           decoration: BoxDecoration(
             color: _field,
@@ -5452,7 +5678,10 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     );
   }
 
-  Widget _buildUploadPanel() {
+  // 기존 단일 문서 업로드 UI는 일괄 다이얼로그로 교체했다. 하위 드롭존 빌더는
+  // 이전 작업본을 긴급 복구할 때 재사용할 수 있도록 당분간 보존한다.
+  // ignore: unused_element
+  Widget _buildUploadPanel({bool showTitle = true}) {
     final busyText = _isResetting
         ? '이전 작업 초기화 중...'
         : _isUploading
@@ -5481,12 +5710,14 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _buildSectionTitle(
-            '1) HWPX · PDF 업로드',
-            subtitle: 'HWPX 와 PDF 를 모두 업로드한 뒤 아래 추출 버튼을 눌러주세요.',
-          ),
-          const SizedBox(height: 12),
-          _buildDocumentSelector(),
+          if (showTitle) ...[
+            _buildSectionTitle(
+              '1) HWPX · PDF 업로드',
+              subtitle: 'HWPX 와 PDF 를 모두 업로드한 뒤 아래 추출 버튼을 눌러주세요.',
+            ),
+            const SizedBox(height: 12),
+          ],
+          _buildDocumentSelector(examPapersOnly: true),
           const SizedBox(height: 12),
           _buildHwpxUploadZone(
               commonBlockers: commonBlockers, hasHwpx: hasHwpx),
@@ -14529,8 +14760,10 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   }
 
   Widget _buildQuestionGridWrap() {
-    final mode = problemBankReviewModeOf(_activeDocument);
-    if (mode == ProblemBankReviewMode.textbookPdf) {
+    final showTextbookPages = !_showingExamPaperWorkspace &&
+        problemBankReviewModeOf(_activeDocument) ==
+            ProblemBankReviewMode.textbookPdf;
+    if (showTextbookPages) {
       final active = _activeDocument!;
       return TextbookPageReviewPane(
         key: ValueKey<String>(
@@ -16111,9 +16344,440 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     );
   }
 
+  List<ProblemBankDocument> _examPaperDocuments() {
+    final documents = _allExamDocuments
+        .where((document) =>
+            document.sourceTypeCode.trim() == 'school_past' &&
+            !_isTextbookPdfDocument(document))
+        .toList(growable: false);
+    documents.sort((a, b) {
+      final aAt = a.updatedAt ?? a.createdAt;
+      final bAt = b.updatedAt ?? b.createdAt;
+      final aSchool = _examSchoolLabel(a);
+      final bSchool = _examSchoolLabel(b);
+      if (aSchool == '학교 미지정' && bSchool != '학교 미지정') return 1;
+      if (bSchool == '학교 미지정' && aSchool != '학교 미지정') return -1;
+      final bySchool = aSchool.compareTo(bSchool);
+      if (bySchool != 0) return bySchool;
+      final aYear = a.examYear;
+      final bYear = b.examYear;
+      if (aYear == null && bYear != null) return 1;
+      if (bYear == null && aYear != null) return -1;
+      final byYear = bYear?.compareTo(aYear!) ?? 0;
+      if (byYear != 0) return byYear;
+      final byGrade = pbManagerDocumentGradeSortRank(
+        a.gradeLabel,
+        a.courseLabel,
+      ).compareTo(
+        pbManagerDocumentGradeSortRank(b.gradeLabel, b.courseLabel),
+      );
+      if (byGrade != 0) return byGrade;
+      final byFilename = a.sourceFilename.compareTo(b.sourceFilename);
+      if (byFilename != 0) return byFilename;
+      final aUpdated = aAt ?? DateTime(1970);
+      final bUpdated = bAt ?? DateTime(1970);
+      final byUpdated = bUpdated.compareTo(aUpdated);
+      if (byUpdated != 0) return byUpdated;
+      return a.id.compareTo(b.id);
+    });
+    return documents;
+  }
+
+  String _examSchoolLabel(ProblemBankDocument document) {
+    final value = document.schoolName.trim();
+    return value.isEmpty ? '학교 미지정' : value;
+  }
+
+  String _examYearLabel(ProblemBankDocument document) =>
+      document.examYear == null ? '연도 미지정' : '${document.examYear}년';
+
+  String _examGradeLabel(ProblemBankDocument document) {
+    var value = document.gradeLabel.trim();
+    if (value.isEmpty) {
+      value = switch (document.gradeKey.trim()) {
+        'M1' || 'H1' => '1학년',
+        'M2' || 'H2' => '2학년',
+        'M3' || 'H3' => '3학년',
+        _ => document.gradeKey.trim(),
+      };
+    }
+    if (value.isEmpty || value.endsWith('학년')) return value;
+    final middleHigh = RegExp(r'^(?:중|고)(\d+)$').firstMatch(value);
+    if (middleHigh != null) return '${middleHigh.group(1)}학년';
+    return '$value학년';
+  }
+
+  String _examSemesterLabel(ProblemBankDocument document) {
+    final value = document.semesterLabel.trim();
+    if (value == '1학기' || value == '2학기') return value;
+    final courseKey = document.courseKey.trim();
+    if (courseKey.endsWith('-1') || courseKey.endsWith('-c1')) return '1학기';
+    if (courseKey.endsWith('-2') || courseKey.endsWith('-c2')) return '2학기';
+    return '';
+  }
+
+  String _examTermLabel(ProblemBankDocument document) {
+    final value = document.examTermLabel.trim();
+    if (value == '중간' || value == '기말') return value;
+    if (value.contains('중간')) return '중간';
+    if (value.contains('기말')) return '기말';
+    return '';
+  }
+
+  String _examTreeDocumentLabel(ProblemBankDocument document) {
+    final parts = <String>[
+      if (_examGradeLabel(document).isNotEmpty) _examGradeLabel(document),
+      if (_examSemesterLabel(document).isNotEmpty) _examSemesterLabel(document),
+      if (_examTermLabel(document).isNotEmpty) _examTermLabel(document),
+    ];
+    final head = parts.join(' ');
+    final subject = document.courseLabel.trim();
+    if (head.isNotEmpty && subject.isNotEmpty) return '$head ($subject)';
+    if (head.isNotEmpty) return head;
+    if (subject.isNotEmpty) return subject;
+    return document.sourceFilename.trim().isEmpty
+        ? '(문서)'
+        : document.sourceFilename.trim();
+  }
+
+  Future<void> _openExamPaperDocument(ProblemBankDocument document) async {
+    if (_dirtyQuestionIds.isNotEmpty || _dirtyDocumentMeta) {
+      _showSnack('현재 문항 수정사항을 저장한 뒤 문서를 전환해주세요.', error: true);
+      return;
+    }
+    _parkedExamPaperDocument = document;
+    await _loadDocumentContext(document.id);
+  }
+
+  Widget _buildExamPaperQuickSwitchPanel() {
+    final documents = _examPaperDocuments();
+    final grouped = <String, Map<String, List<ProblemBankDocument>>>{};
+    for (final document in documents) {
+      final school = _examSchoolLabel(document);
+      final year = _examYearLabel(document);
+      grouped.putIfAbsent(
+        school,
+        () => <String, List<ProblemBankDocument>>{},
+      );
+      grouped[school]!.putIfAbsent(year, () => <ProblemBankDocument>[]);
+      grouped[school]![year]!.add(document);
+    }
+    final schools = grouped.keys.toList()
+      ..sort((a, b) {
+        if (a == '학교 미지정') return 1;
+        if (b == '학교 미지정') return -1;
+        return a.compareTo(b);
+      });
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _panel,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.history_rounded, color: _accent, size: 18),
+              const SizedBox(width: 7),
+              const Expanded(
+                child: Text(
+                  '최신 문서',
+                  style: TextStyle(
+                    color: _text,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              Text(
+                '${documents.length}개',
+                style: const TextStyle(color: _textSub, fontSize: 11),
+              ),
+            ],
+          ),
+          const SizedBox(height: 9),
+          _buildDocumentSelector(examPapersOnly: true),
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 10),
+            child: Divider(height: 1, color: _border),
+          ),
+          const Text(
+            '내신 기출 · 학교 → 연도 → 문서',
+            style: TextStyle(
+              color: _textSub,
+              fontSize: 11.5,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 7),
+          if (schools.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8),
+              child: Text(
+                '추출된 내신 기출 문서가 없습니다.',
+                style: TextStyle(color: _textSub, fontSize: 12),
+              ),
+            )
+          else
+            for (final school in schools)
+              _buildExamSchoolNode(school, grouped[school]!),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildExamSchoolNode(
+    String school,
+    Map<String, List<ProblemBankDocument>> byYear,
+  ) {
+    final expanded = _expandedExamSchools.contains(school);
+    final years = byYear.keys.toList()
+      ..sort((a, b) {
+        if (a == '연도 미지정') return 1;
+        if (b == '연도 미지정') return -1;
+        final ai = int.tryParse(a.replaceAll(RegExp(r'[^0-9]'), ''));
+        final bi = int.tryParse(b.replaceAll(RegExp(r'[^0-9]'), ''));
+        if (ai != null && bi != null) return bi.compareTo(ai);
+        return b.compareTo(a);
+      });
+    return Column(
+      children: [
+        InkWell(
+          borderRadius: BorderRadius.circular(7),
+          onTap: () => setState(() {
+            if (expanded) {
+              _expandedExamSchools.remove(school);
+            } else {
+              _expandedExamSchools.add(school);
+            }
+          }),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 7),
+            child: Row(
+              children: [
+                Icon(
+                  expanded ? Icons.expand_more : Icons.chevron_right,
+                  color: _textSub,
+                  size: 18,
+                ),
+                const SizedBox(width: 5),
+                Expanded(
+                  child: Text(
+                    school,
+                    style: const TextStyle(
+                      color: _text,
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                Text(
+                  '${byYear.values.fold<int>(0, (sum, items) => sum + items.length)}',
+                  style: const TextStyle(color: _textSub, fontSize: 10.5),
+                ),
+              ],
+            ),
+          ),
+        ),
+        if (expanded)
+          Padding(
+            padding: const EdgeInsets.only(left: 15),
+            child: Column(
+              children: [
+                for (final year in years)
+                  _buildExamYearNode(school, year, byYear[year]!),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildExamYearNode(
+    String school,
+    String year,
+    List<ProblemBankDocument> documents,
+  ) {
+    final nodeKey = '$school|$year';
+    final expanded = _expandedExamYears.contains(nodeKey);
+    return Column(
+      children: [
+        InkWell(
+          borderRadius: BorderRadius.circular(7),
+          onTap: () => setState(() {
+            if (expanded) {
+              _expandedExamYears.remove(nodeKey);
+            } else {
+              _expandedExamYears.add(nodeKey);
+            }
+          }),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 6),
+            child: Row(
+              children: [
+                Icon(
+                  expanded ? Icons.folder_open_outlined : Icons.folder_outlined,
+                  color: _textSub,
+                  size: 16,
+                ),
+                const SizedBox(width: 7),
+                Expanded(
+                  child: Text(
+                    year,
+                    style: const TextStyle(
+                      color: _textSub,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                Text(
+                  '${documents.length}',
+                  style: const TextStyle(color: _textSub, fontSize: 10),
+                ),
+              ],
+            ),
+          ),
+        ),
+        if (expanded)
+          Padding(
+            padding: const EdgeInsets.only(left: 17),
+            child: Column(
+              children: [
+                for (final document in documents)
+                  _buildExamDocumentRow(document),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildExamDocumentRow(
+    ProblemBankDocument document, {
+    bool compact = false,
+  }) {
+    final selected = _activeDocument?.id == document.id;
+    return InkWell(
+      borderRadius: BorderRadius.circular(7),
+      onTap: () => unawaited(_openExamPaperDocument(document)),
+      child: Container(
+        width: double.infinity,
+        margin: const EdgeInsets.only(bottom: 4),
+        padding: EdgeInsets.symmetric(
+          horizontal: 8,
+          vertical: compact ? 7 : 6,
+        ),
+        decoration: BoxDecoration(
+          color: selected ? _accent.withValues(alpha: 0.16) : _field,
+          borderRadius: BorderRadius.circular(7),
+          border: Border.all(color: selected ? _accent : _border),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              Icons.description_outlined,
+              color: selected ? _accent : _textSub,
+              size: 15,
+            ),
+            const SizedBox(width: 7),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    compact
+                        ? document.sourceFilename
+                        : _examTreeDocumentLabel(document),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: selected ? _text : _textSub,
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  if (compact)
+                    Text(
+                      [
+                        _examSchoolLabel(document),
+                        _examYearLabel(document),
+                        _examTreeDocumentLabel(document),
+                      ].join(' · '),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: _textSub, fontSize: 10),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStandaloneExecutionLog() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _panel,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  '실행 로그',
+                  style: TextStyle(
+                    color: _text,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              if (_isExamBatchRunning)
+                TextButton(
+                  onPressed: () =>
+                      setState(() => _cancelExamBatchRequested = true),
+                  child: const Text('현재 문서 후 중단'),
+                ),
+            ],
+          ),
+          if (_isExamBatchRunning) ...[
+            const SizedBox(height: 7),
+            LinearProgressIndicator(
+              value: _examBatchTotal == 0
+                  ? null
+                  : _examBatchCompleted / _examBatchTotal,
+              color: _accent,
+              backgroundColor: _field,
+            ),
+            const SizedBox(height: 5),
+            Text(
+              '순차 작업 $_examBatchCompleted/$_examBatchTotal · $_statusText',
+              style: const TextStyle(color: _textSub, fontSize: 10.5),
+            ),
+          ],
+          const SizedBox(height: 8),
+          _buildLogPanel(),
+        ],
+      ),
+    );
+  }
+
   Widget _buildUploadTabBody() {
-    final textbookReview = problemBankReviewModeOf(_activeDocument) ==
-        ProblemBankReviewMode.textbookPdf;
+    final examPaper = _showingExamPaperWorkspace;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -16123,43 +16787,15 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (textbookReview)
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: _panel,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: _border),
-                    ),
-                    child: const Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '시중교재 페이지 검수',
-                          style: TextStyle(
-                            color: _text,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                        SizedBox(height: 8),
-                        Text(
-                          'PDF 추출 문항을 페이지별로 검수합니다. 미검수 문항이 있어도 문서 확정이 가능합니다.',
-                          style: TextStyle(
-                            color: _textSub,
-                            fontSize: 12,
-                            height: 1.45,
-                          ),
-                        ),
-                      ],
-                    ),
-                  )
+                _buildReviewWorkspaceHeader(examPaper: examPaper),
+                const SizedBox(height: 12),
+                if (examPaper)
+                  _buildExamPaperQuickSwitchPanel()
                 else
-                  _buildUploadPanel(),
-                if (textbookReview) ...[
-                  const SizedBox(height: 12),
                   _buildTextbookQuickSwitchPanel(),
+                if (examPaper) ...[
+                  const SizedBox(height: 12),
+                  _buildStandaloneExecutionLog(),
                 ],
                 const SizedBox(height: 12),
                 _buildDocumentClassificationPanel(),
@@ -16173,6 +16809,133 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         ),
       ],
     );
+  }
+
+  Widget _buildReviewWorkspaceHeader({required bool examPaper}) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => unawaited(_toggleReviewWorkspace()),
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: _panel,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: _border),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      examPaper ? '내신 기출 검수' : '시중교재 페이지 검수',
+                      style: const TextStyle(
+                        color: _text,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                  if (examPaper) ...[
+                    FilledButton.icon(
+                      onPressed: _isExamBatchRunning
+                          ? null
+                          : () => unawaited(_openExamBatchUploadDialog()),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: _accent,
+                        visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 8,
+                        ),
+                      ),
+                      icon: const Icon(Icons.upload_file_outlined, size: 16),
+                      label: const Text('업로드'),
+                    ),
+                    const SizedBox(width: 9),
+                  ],
+                  const Icon(
+                    Icons.swap_horiz_rounded,
+                    color: _accent,
+                    size: 20,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                examPaper
+                    ? '학교·연도별 내신 기출을 검수합니다. 헤더를 클릭하면 시중교재 검수로 전환합니다.'
+                    : 'PDF 추출 문항을 페이지별로 검수합니다. 클릭하면 내신 기출 검수로 전환합니다.',
+                style: const TextStyle(
+                  color: _textSub,
+                  fontSize: 12,
+                  height: 1.45,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _toggleReviewWorkspace() async {
+    final goingExam = !_showingExamPaperWorkspace;
+    if (goingExam) {
+      if (_isTextbookPdfDocument(_activeDocument)) {
+        _parkedTextbookDocument = _activeDocument;
+        _parkedTextbookPage = _requestedTextbookPage;
+      }
+      setState(() {
+        _workspaceExamPaperOverride = true;
+      });
+      final examDoc = _firstExamPaperDocument();
+      if (examDoc != null) {
+        await _loadDocumentContext(examDoc.id);
+      } else {
+        _clearActiveDocumentForExamWorkspace();
+      }
+      return;
+    }
+    if (_activeDocument != null && !_isTextbookPdfDocument(_activeDocument)) {
+      _parkedExamPaperDocument = _activeDocument;
+    }
+    setState(() {
+      _workspaceExamPaperOverride = false;
+    });
+    final textbook = _parkedTextbookDocument ??
+        (_allTextbookDocuments.isEmpty ? null : _allTextbookDocuments.first);
+    if (textbook != null) {
+      await _loadDocumentContext(
+        textbook.id,
+        textbookPage: _parkedTextbookPage,
+      );
+    }
+  }
+
+  void _clearActiveDocumentForExamWorkspace() {
+    if (!mounted) return;
+    setState(() {
+      _activeDocument = null;
+      _activeExtractJob = null;
+      _questions = <ProblemBankQuestion>[];
+      _dirtyQuestionIds.clear();
+      _needsPublish = false;
+      _resetSourceMetaForm();
+      _questionPreviewUrls.clear();
+      _figurePreviewUrls.clear();
+      _figurePreviewPaths.clear();
+      _figurePreviewUrlsByPath.clear();
+      _figureGenerating.clear();
+      _scoreDrafts.clear();
+      _hasExtracted = false;
+      _requestedTextbookPage = null;
+      _statusText = '업로드할 HWPX를 선택하세요.';
+    });
   }
 
   Widget _buildClassificationTabBody() {

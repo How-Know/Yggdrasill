@@ -1406,6 +1406,39 @@ class ProblemBankService {
     return documents;
   }
 
+  /// 검수 트리에 표시할 내신 기출 문서를 최근 문서 상한과 무관하게 모두 읽는다.
+  ///
+  /// [listRecentDocuments]는 상단 "최신 문서" 드롭다운용이라 200건으로 제한된다.
+  /// 시중교재 추출 문서가 많으면 오래된 내신 기출이 그 200건 밖으로 밀리므로,
+  /// 학교 → 연도 트리는 별도 페이지네이션 결과를 사용한다.
+  Future<List<ProblemBankDocument>> listAllSchoolPastDocuments({
+    required String academyId,
+  }) async {
+    const pageSize = 1000;
+    var offset = 0;
+    final documents = <ProblemBankDocument>[];
+    while (true) {
+      final rows = await _client
+          .from('pb_documents')
+          .select('*')
+          .eq('academy_id', academyId)
+          .eq('source_type_code', 'school_past')
+          .order('created_at', ascending: false)
+          .range(offset, offset + pageSize - 1);
+      final rawRows = rows as List<dynamic>;
+      documents.addAll(
+        rawRows.map(
+          (row) => ProblemBankDocument.fromMap(
+            Map<String, dynamic>.from(row as Map<dynamic, dynamic>),
+          ),
+        ),
+      );
+      if (rawRows.length < pageSize) break;
+      offset += pageSize;
+    }
+    return documents;
+  }
+
   /// 문서별 실제 저장 문항 수를 배치로 집계한다.
   ///
   /// PostgREST 응답 기본 상한(1000행)을 넘는 교재도 정확히 세기 위해

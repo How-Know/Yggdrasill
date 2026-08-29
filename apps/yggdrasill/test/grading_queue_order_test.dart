@@ -95,7 +95,37 @@ void main() {
       );
     });
 
-    test('검사일이 없으면 이전 배정만 노출한다', () {
+    test('검사일이 과거면 숨긴다', () {
+      expect(
+        shouldShowUnsubmittedHomeworkInGradingMode(
+          schedules: [
+            GradingHomeworkSchedule(
+              assignedAt: DateTime(2026, 8, 22, 18),
+              dueDate: DateTime(2026, 8, 22, 18),
+            ),
+          ],
+          now: now,
+        ),
+        isFalse,
+      );
+    });
+
+    test('수정된 현재 검사일이 오늘이면 최초 검사일과 무관하게 노출한다', () {
+      expect(
+        shouldShowUnsubmittedHomeworkInGradingMode(
+          schedules: [
+            GradingHomeworkSchedule(
+              assignedAt: DateTime(2026, 8, 22, 18),
+              dueDate: DateTime(2026, 8, 23, 13),
+            ),
+          ],
+          now: now,
+        ),
+        isTrue,
+      );
+    });
+
+    test('검사일이 없으면 오래된 배정도 노출하지 않는다', () {
       expect(
         shouldShowUnsubmittedHomeworkInGradingMode(
           schedules: [
@@ -105,7 +135,7 @@ void main() {
           ],
           now: now,
         ),
-        isTrue,
+        isFalse,
       );
     });
 
