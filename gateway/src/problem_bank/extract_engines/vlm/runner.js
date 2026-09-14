@@ -407,62 +407,67 @@ function normalizeIndependentSetPayloadQuestions(
     return rows;
   }
   const isBasicDrill = textbookSubKey(textbookScope) === 'A';
-  if (!isBasicDrill || rows.length < 1) return rows;
+  if (rows.length < 1) return rows;
 
-  const candidates = rows.map((row) => {
-    const split = splitRepeatedIndependentCommonStem(row?.stem);
-    return { row, split };
-  });
+  // 공통발문 반복 감지는 A단계 전용 휴리스틱이다. 반면 교재 크롭에서 명시적으로
+  // 검출된 범위 헤더(예: 0120~0121)는 단계와 무관한 구조 정보이므로 B/C에서도
+  // 아래 범위 보정을 반드시 거쳐야 한다.
+  if (isBasicDrill) {
+    const candidates = rows.map((row) => {
+      const split = splitRepeatedIndependentCommonStem(row?.stem);
+      return { row, split };
+    });
 
-  let i = 0;
-  while (i < candidates.length) {
-    const split = candidates[i].split;
-    if (!split) {
-      i += 1;
-      continue;
-    }
-    let j = i + 1;
-    while (
-      j < candidates.length &&
-      candidates[j].split &&
-      independentCommonStemCompareKey(candidates[j].split.commonStem) ===
-        independentCommonStemCompareKey(split.commonStem)
-    ) {
-      j += 1;
-    }
-    const groupSize = j - i;
-    if (groupSize >= 2) {
-      const scopeKey = [
-        textbookScope?.book_id || textbookScope?.bookId || '',
-        textbookScope?.grade_label || textbookScope?.gradeLabel || '',
-        textbookScope?.big_order ?? textbookScope?.bigOrder ?? '',
-        textbookScope?.mid_order ?? textbookScope?.midOrder ?? '',
-        textbookScope?.sub_key || textbookScope?.subKey || '',
-      ].join(':');
-      const setKey = `independent:${stableShortHash(`${scopeKey}:${split.commonStem}:${i}`)}`;
-      for (let k = i; k < j; k += 1) {
-        const { row, split: oneSplit } = candidates[k];
-        const prevMeta = row.meta && typeof row.meta === 'object' ? row.meta : {};
-        row.stem = oneSplit.itemStem;
-        row.meta = {
-          ...prevMeta,
-          is_set_question: true,
-          set_model: {
-            ...(prevMeta.set_model && typeof prevMeta.set_model === 'object'
-              ? prevMeta.set_model
-              : {}),
-            version: 1,
-            set_type: 'independent_set',
-            set_key: setKey,
-            common_stem: split.commonStem,
-            item_label: String(row.question_number || '').trim(),
-            item_order: k - i + 1,
-            delivery_policy: 'independent_items_with_common_stem',
-          },
-        };
+    let i = 0;
+    while (i < candidates.length) {
+      const split = candidates[i].split;
+      if (!split) {
+        i += 1;
+        continue;
       }
+      let j = i + 1;
+      while (
+        j < candidates.length &&
+        candidates[j].split &&
+        independentCommonStemCompareKey(candidates[j].split.commonStem) ===
+          independentCommonStemCompareKey(split.commonStem)
+      ) {
+        j += 1;
+      }
+      const groupSize = j - i;
+      if (groupSize >= 2) {
+        const scopeKey = [
+          textbookScope?.book_id || textbookScope?.bookId || '',
+          textbookScope?.grade_label || textbookScope?.gradeLabel || '',
+          textbookScope?.big_order ?? textbookScope?.bigOrder ?? '',
+          textbookScope?.mid_order ?? textbookScope?.midOrder ?? '',
+          textbookScope?.sub_key || textbookScope?.subKey || '',
+        ].join(':');
+        const setKey = `independent:${stableShortHash(`${scopeKey}:${split.commonStem}:${i}`)}`;
+        for (let k = i; k < j; k += 1) {
+          const { row, split: oneSplit } = candidates[k];
+          const prevMeta = row.meta && typeof row.meta === 'object' ? row.meta : {};
+          row.stem = oneSplit.itemStem;
+          row.meta = {
+            ...prevMeta,
+            is_set_question: true,
+            set_model: {
+              ...(prevMeta.set_model && typeof prevMeta.set_model === 'object'
+                ? prevMeta.set_model
+                : {}),
+              version: 1,
+              set_type: 'independent_set',
+              set_key: setKey,
+              common_stem: split.commonStem,
+              item_label: String(row.question_number || '').trim(),
+              item_order: k - i + 1,
+              delivery_policy: 'independent_items_with_common_stem',
+            },
+          };
+        }
+      }
+      i = j;
     }
-    i = j;
   }
 
   const rangeByQuestionKey = new Map();
@@ -487,6 +492,7 @@ function normalizeIndependentSetPayloadQuestions(
   if (rangeByQuestionKey.size > 0) {
     const commonBySetKey = new Map();
     const commonByHeaderSetKey = new Map();
+    const renderModeByHeaderSetKey = new Map();
     for (const row of rows) {
       const setModel = row?.meta?.set_model && typeof row.meta.set_model === 'object'
         ? row.meta.set_model
@@ -502,6 +508,14 @@ function normalizeIndependentSetPayloadQuestions(
       const range = rangeByQuestionKey.get(problemNumberKey(row?.question_number));
       if (range && common && !commonByHeaderSetKey.has(range.setKey)) {
         commonByHeaderSetKey.set(range.setKey, common);
+      }
+      const renderMode = compact(row?.meta?.set_render_mode).toLowerCase();
+      if (
+        range &&
+        (renderMode === 'split' || renderMode === 'join' || renderMode === 'auto') &&
+        !renderModeByHeaderSetKey.has(range.setKey)
+      ) {
+        renderModeByHeaderSetKey.set(range.setKey, renderMode);
       }
     }
     for (const row of rows) {
@@ -524,9 +538,11 @@ function normalizeIndependentSetPayloadQuestions(
         ...(Array.isArray(row.flags) ? row.flags : []),
         ...(!commonStem ? ['independent_set_common_stem_missing'] : []),
       ]));
+      const sharedRenderMode = renderModeByHeaderSetKey.get(range.setKey) || '';
       row.flags = nextFlags;
       row.meta = {
         ...prevMeta,
+        ...(sharedRenderMode ? { set_render_mode: sharedRenderMode } : {}),
         is_set_question: true,
         set_model: {
           ...prevSet,
@@ -1699,6 +1715,7 @@ function toPayloadQuestion({
     confidence,
     flags,
     is_checked: false,
+    is_published: existingRow?.is_published !== false,
     reviewed_by: null,
     reviewed_at: null,
     reviewer_notes: '',
@@ -1908,7 +1925,7 @@ export async function runVlmExtraction({
   // 첫 추출 케이스에서는 rows=[] 라 단순히 새 문항을 insert 하게 된다.
   const { data: existingRows, error: existingErr } = await supa
     .from('pb_questions')
-    .select('id,question_number,question_uid,meta,question_type')
+    .select('id,question_number,question_uid,meta,question_type,is_published')
     .eq('academy_id', job.academy_id)
     .eq('document_id', job.document_id);
   if (existingErr) {

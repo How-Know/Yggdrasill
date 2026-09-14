@@ -2,7 +2,29 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../../services/problem_bank_service.dart';
+import '../naesin_link_school_name.dart';
 import '../problem_bank_models.dart';
+
+ProblemBankExportPreset? latestExportPresetForDocument(
+  Iterable<ProblemBankExportPreset> presets,
+  String documentId,
+) {
+  ProblemBankExportPreset? latest;
+  for (final preset in presets) {
+    final linked = preset.sourceDocumentId == documentId ||
+        preset.documentId == documentId ||
+        preset.sourceDocumentIds.contains(documentId);
+    if (!linked) continue;
+    final candidateAt = preset.updatedAt ?? preset.createdAt;
+    final latestAt = latest?.updatedAt ?? latest?.createdAt;
+    if (latest == null ||
+        (candidateAt != null &&
+            (latestAt == null || candidateAt.isAfter(latestAt)))) {
+      latest = preset;
+    }
+  }
+  return latest;
+}
 
 const List<String> _naesinExamTerms = <String>['중간고사', '기말고사'];
 const List<int> _naesinLinkYears = <int>[
@@ -65,15 +87,30 @@ Future<void> showProblemBankExportPresetDialog({
   required ProblemBankService service,
   required String academyId,
   required void Function(String message, {bool error}) showSnack,
+  Future<void> Function(
+    ProblemBankDocument document,
+    ProblemBankExportPreset? latestPreset,
+  )? onOpenDocumentPreset,
 }) async {
   List<ProblemBankExportPreset> presets;
+  List<ProblemBankDocument> naesinDocuments;
+  Map<String, int> questionCounts;
   try {
     presets = await service.listExportPresets(
       academyId: academyId,
       limit: 300,
     );
+    naesinDocuments = (await service.listAllSchoolPastDocuments(
+      academyId: academyId,
+    ))
+        .where((document) => document.status.trim().toLowerCase() == 'ready')
+        .toList(growable: false);
+    questionCounts = await service.countQuestionsByDocumentIds(
+      academyId: academyId,
+      documentIds: naesinDocuments.map((document) => document.id),
+    );
   } catch (e) {
-    showSnack('프리셋 목록 조회 실패: $e', error: true);
+    showSnack('프리셋/내신 문서 목록 조회 실패: $e', error: true);
     return;
   }
   if (!context.mounted) return;
@@ -88,6 +125,9 @@ Future<void> showProblemBankExportPresetDialog({
           : 2;
 
   var workingPresets = presets;
+  var workingDocuments = naesinDocuments;
+  var workingQuestionCounts = questionCounts;
+  var showNaesinDocuments = false;
   var isWorking = false;
 
   await showDialog<void>(
@@ -100,7 +140,22 @@ Future<void> showProblemBankExportPresetDialog({
             academyId: academyId,
             limit: 300,
           );
-          setModalState(() => workingPresets = refreshed);
+          final refreshedDocuments =
+              (await service.listAllSchoolPastDocuments(academyId: academyId))
+                  .where(
+                    (document) =>
+                        document.status.trim().toLowerCase() == 'ready',
+                  )
+                  .toList(growable: false);
+          final refreshedCounts = await service.countQuestionsByDocumentIds(
+            academyId: academyId,
+            documentIds: refreshedDocuments.map((document) => document.id),
+          );
+          setModalState(() {
+            workingPresets = refreshed;
+            workingDocuments = refreshedDocuments;
+            workingQuestionCounts = refreshedCounts;
+          });
         } catch (e) {
           showSnack('프리셋 새로고침 실패: $e', error: true);
         } finally {
@@ -306,22 +361,50 @@ Future<void> showProblemBankExportPresetDialog({
         final now = DateTime.now();
         final currentLinkKey = preset.naesinLinkKey.trim();
         final existing = _parseNaesinLinkKey(currentLinkKey);
-        var selectedCurriculumCode =
-            _normalizeNaesinCurriculumCode(preset.naesinCurriculumCode);
-        var selectedGradeKey = existing?.gradeKey ?? 'M1';
-        var selectedCourseKey = existing?.courseKey ?? 'M1-1';
+        final sourceDocument = _sourceDocumentForPreset(
+          preset,
+          workingDocuments,
+        );
+        final sourceGradeKey = sourceDocument == null
+            ? ''
+            : _naesinGradeKeyFromDocument(sourceDocument);
+        final sourceCourseKey = sourceDocument == null
+            ? ''
+            : _naesinCourseKeyFromDocument(
+                sourceDocument,
+                sourceGradeKey,
+              );
+        var selectedCurriculumCode = _normalizeNaesinCurriculumCode(
+          existing != null
+              ? preset.naesinCurriculumCode
+              : (sourceDocument?.curriculumCode ??
+                  preset.naesinCurriculumCode),
+        );
+        var selectedGradeKey = existing?.gradeKey ??
+            (sourceGradeKey.isNotEmpty ? sourceGradeKey : 'M1');
+        var selectedCourseKey = existing?.courseKey ??
+            (sourceCourseKey.isNotEmpty ? sourceCourseKey : 'M1-1');
         selectedCourseKey = _reconcileNaesinCourseKeyForCurriculum(
           gradeKey: selectedGradeKey,
           curriculumCode: selectedCurriculumCode,
           currentCourseKey: selectedCourseKey,
         );
-        var selectedExamTerm =
-            existing?.examTerm ?? _defaultNaesinExamTermByDate(now);
+        var selectedExamTerm = existing?.examTerm ??
+            _normalizeNaesinExamTerm(sourceDocument?.examTermLabel) ??
+            _defaultNaesinExamTermByDate(now);
         if (!_naesinExamTerms.contains(selectedExamTerm)) {
           selectedExamTerm = _naesinExamTerms.first;
         }
-        var selectedSchool = existing?.school ?? '학교 미지정';
-        var selectedYear = existing?.year ?? _defaultNaesinYearByDate(now);
+        var selectedSchool = _canonicalSchoolForGrade(
+          existing?.school ??
+              (sourceDocument?.schoolName.trim().isNotEmpty == true
+                  ? sourceDocument!.schoolName.trim()
+                  : ''),
+          selectedGradeKey,
+        );
+        var selectedYear = existing?.year ??
+            sourceDocument?.examYear ??
+            _defaultNaesinYearByDate(now);
         var selectedCellLabel = _normalizeCellLabel(
           existing?.cellLabel ?? preset.naesinCellLabel,
         );
@@ -410,14 +493,38 @@ Future<void> showProblemBankExportPresetDialog({
                         mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          const Text(
-                            '프리셋과 연결할 내신 셀을 선택하세요.',
-                            style: TextStyle(
+                          Text(
+                            sourceDocument == null
+                                ? '프리셋과 연결할 내신 셀을 선택하세요.'
+                                : '원본 문서에 저장된 정보를 불러왔습니다. 내용을 확인하고 필요한 항목만 수정하세요.',
+                            style: const TextStyle(
                               color: Color(0xFF9FB3B3),
                               fontSize: 12.2,
                               fontWeight: FontWeight.w600,
                             ),
                           ),
+                          if (sourceDocument != null) ...[
+                            const SizedBox(height: 10),
+                            Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF0D1518),
+                                borderRadius: BorderRadius.circular(9),
+                                border: Border.all(
+                                  color: const Color(0xFF223131),
+                                ),
+                              ),
+                              child: Text(
+                                _naesinSourceDocumentSummary(sourceDocument),
+                                style: const TextStyle(
+                                  color: Color(0xFFAFC2D6),
+                                  fontSize: 11.7,
+                                  fontWeight: FontWeight.w700,
+                                  height: 1.4,
+                                ),
+                              ),
+                            ),
+                          ],
                           const SizedBox(height: 12),
                           DropdownButtonFormField<String>(
                             key: ValueKey(
@@ -485,6 +592,12 @@ Future<void> showProblemBankExportPresetDialog({
                                         curriculumCode: selectedCurriculumCode,
                                         currentCourseKey: selectedCourseKey,
                                       );
+                                      final nextSchools =
+                                          _schoolsForGradeKey(value);
+                                      if (!nextSchools
+                                          .contains(selectedSchool)) {
+                                        selectedSchool = nextSchools.first;
+                                      }
                                     });
                                   },
                                 ),
@@ -649,7 +762,10 @@ Future<void> showProblemBankExportPresetDialog({
                               gradeKey: selectedGradeKey,
                               courseKey: selectedCourseKey,
                               examTerm: selectedExamTerm,
-                              school: selectedSchool,
+                              school: _canonicalSchoolForGrade(
+                                selectedSchool,
+                                selectedGradeKey,
+                              ),
                               year: selectedYear,
                               cellLabel: cellLabel,
                             ),
@@ -661,7 +777,7 @@ Future<void> showProblemBankExportPresetDialog({
                         backgroundColor: const Color(0xFF2E7366),
                         foregroundColor: const Color(0xFFEAF2F2),
                       ),
-                      child: const Text('저장'),
+                      child: const Text('확인 및 연결'),
                     ),
                   ],
                 );
@@ -714,6 +830,29 @@ Future<void> showProblemBankExportPresetDialog({
         return _naesinLinkSummaryLabel(preset.naesinLinkKey);
       }
 
+      ProblemBankExportPreset? latestPresetForDocument(String documentId) {
+        return latestExportPresetForDocument(workingPresets, documentId);
+      }
+
+      Future<void> openDocument(
+        ProblemBankDocument document,
+        StateSetter setModalState,
+      ) async {
+        final callback = onOpenDocumentPreset;
+        if (callback == null || isWorking) return;
+        setModalState(() => isWorking = true);
+        try {
+          await callback(document, latestPresetForDocument(document.id));
+          await reloadPresets(setModalState);
+        } catch (e) {
+          showSnack('프리셋 편집기 열기 실패: $e', error: true);
+        } finally {
+          if (dialogContext.mounted) {
+            setModalState(() => isWorking = false);
+          }
+        }
+      }
+
       return StatefulBuilder(
         builder: (context, setModalState) {
           return Dialog(
@@ -732,8 +871,8 @@ Future<void> showProblemBankExportPresetDialog({
                   children: [
                     Row(
                       children: [
-                        const Text(
-                          '저장된 프리셋',
+                        Text(
+                          showNaesinDocuments ? '내신 추출본' : '저장된 프리셋',
                           style: TextStyle(
                             color: Color(0xFFEAF2F2),
                             fontSize: 18,
@@ -742,7 +881,7 @@ Future<void> showProblemBankExportPresetDialog({
                         ),
                         const SizedBox(width: 8),
                         Text(
-                          '${workingPresets.length}개',
+                          '${showNaesinDocuments ? workingDocuments.length : workingPresets.length}개',
                           style: const TextStyle(
                             color: Color(0xFF9FB3B3),
                             fontSize: 13,
@@ -795,10 +934,12 @@ Future<void> showProblemBankExportPresetDialog({
                       ],
                     ),
                     const SizedBox(height: 4),
-                    const Padding(
+                    Padding(
                       padding: EdgeInsets.only(right: 8),
                       child: Text(
-                        '학습앱 문제은행에서 저장한 양식·문항 프리셋을 관리합니다.',
+                        showNaesinDocuments
+                            ? '업로드가 완료된 내신 문서를 선택해 프리셋을 만들거나 최신 프리셋을 편집합니다.'
+                            : '학습앱 문제은행에서 저장한 양식·문항 프리셋을 관리합니다.',
                         style: TextStyle(
                           color: Color(0xFF9FB3B3),
                           fontSize: 12,
@@ -807,12 +948,40 @@ Future<void> showProblemBankExportPresetDialog({
                       ),
                     ),
                     const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        ChoiceChip(
+                          label: const Text('저장된 프리셋'),
+                          selected: !showNaesinDocuments,
+                          onSelected: isWorking
+                              ? null
+                              : (_) => setModalState(
+                                    () => showNaesinDocuments = false,
+                                  ),
+                        ),
+                        const SizedBox(width: 8),
+                        ChoiceChip(
+                          label: const Text('내신 추출본'),
+                          selected: showNaesinDocuments,
+                          onSelected: isWorking
+                              ? null
+                              : (_) => setModalState(
+                                    () => showNaesinDocuments = true,
+                                  ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
                     Expanded(
-                      child: workingPresets.isEmpty
-                          ? const Center(
+                      child: (showNaesinDocuments
+                              ? workingDocuments.isEmpty
+                              : workingPresets.isEmpty)
+                          ? Center(
                               child: Text(
-                                '저장된 프리셋이 없습니다.',
-                                style: TextStyle(
+                                showNaesinDocuments
+                                    ? '업로드 완료된 내신 추출본이 없습니다.'
+                                    : '저장된 프리셋이 없습니다.',
+                                style: const TextStyle(
                                   color: Color(0xFF9FB3B3),
                                   fontWeight: FontWeight.w700,
                                 ),
@@ -825,7 +994,9 @@ Future<void> showProblemBankExportPresetDialog({
                                   top: 2,
                                   bottom: 6,
                                 ),
-                                itemCount: workingPresets.length,
+                                itemCount: showNaesinDocuments
+                                    ? workingDocuments.length
+                                    : workingPresets.length,
                                 gridDelegate:
                                     SliverGridDelegateWithFixedCrossAxisCount(
                                   crossAxisCount: gridColumns,
@@ -834,6 +1005,24 @@ Future<void> showProblemBankExportPresetDialog({
                                   mainAxisExtent: 132,
                                 ),
                                 itemBuilder: (context, index) {
+                                  if (showNaesinDocuments) {
+                                    final document = workingDocuments[index];
+                                    final latest =
+                                        latestPresetForDocument(document.id);
+                                    return _NaesinDocumentCard(
+                                      document: document,
+                                      questionCount:
+                                          workingQuestionCounts[document.id] ??
+                                              0,
+                                      latestPreset: latest,
+                                      disabled:
+                                          isWorking || onOpenDocumentPreset == null,
+                                      onTap: () => openDocument(
+                                        document,
+                                        setModalState,
+                                      ),
+                                    );
+                                  }
                                   final preset = workingPresets[index];
                                   return _ExportPresetCard(
                                     preset: preset,
@@ -862,6 +1051,115 @@ Future<void> showProblemBankExportPresetDialog({
       );
     },
   );
+}
+
+class _NaesinDocumentCard extends StatelessWidget {
+  const _NaesinDocumentCard({
+    required this.document,
+    required this.questionCount,
+    required this.latestPreset,
+    required this.disabled,
+    required this.onTap,
+  });
+
+  final ProblemBankDocument document;
+  final int questionCount;
+  final ProblemBankExportPreset? latestPreset;
+  final bool disabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final title = document.sourceFilename.trim().isNotEmpty
+        ? document.sourceFilename.trim()
+        : document.materialName.trim();
+    final meta = <String>[
+      if (document.schoolName.trim().isNotEmpty) document.schoolName.trim(),
+      if (document.examYear != null) '${document.examYear}년',
+      if (document.gradeLabel.trim().isNotEmpty) document.gradeLabel.trim(),
+      if (document.semesterLabel.trim().isNotEmpty)
+        document.semesterLabel.trim(),
+      if (document.examTermLabel.trim().isNotEmpty)
+        document.examTermLabel.trim(),
+      '$questionCount문항',
+    ].join(' · ');
+    final hasPreset = latestPreset != null;
+    return Opacity(
+      opacity: disabled ? 0.55 : 1,
+      child: Material(
+        color: const Color(0xFF0F171B),
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: disabled ? null : onTap,
+          child: Ink(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: hasPreset
+                    ? const Color(0xFF3E8A7A)
+                    : const Color(0xFF223131),
+              ),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Tooltip(
+                          message: title,
+                          child: Text(
+                            title,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Color(0xFFEAF2F2),
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const Icon(
+                        Icons.chevron_right,
+                        color: Color(0xFF9FB3B3),
+                        size: 20,
+                      ),
+                    ],
+                  ),
+                  const Spacer(),
+                  Text(
+                    meta,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Color(0xFF9FB3B3),
+                      fontSize: 11.3,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 5),
+                  Text(
+                    hasPreset ? '프리셋 있음 · 최신 프리셋 편집' : '프리셋 없음 · 새로 만들기',
+                    style: TextStyle(
+                      color: hasPreset
+                          ? const Color(0xFF74C7B6)
+                          : const Color(0xFFAFC2D6),
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _ExportPresetCard extends StatelessWidget {
@@ -998,6 +1296,71 @@ class _ExportPresetCard extends StatelessWidget {
       ),
     );
   }
+}
+
+ProblemBankDocument? _sourceDocumentForPreset(
+  ProblemBankExportPreset preset,
+  Iterable<ProblemBankDocument> documents,
+) {
+  final candidateIds = <String>{
+    preset.sourceDocumentId.trim(),
+    ...preset.sourceDocumentIds.map((id) => id.trim()),
+    preset.documentId.trim(),
+  }..remove('');
+  for (final document in documents) {
+    if (candidateIds.contains(document.id.trim())) return document;
+  }
+  return null;
+}
+
+String _naesinGradeKeyFromDocument(ProblemBankDocument document) {
+  final direct = document.gradeKey.trim().toUpperCase();
+  if (RegExp(r'^[MH][1-3]$').hasMatch(direct)) return direct;
+  final grade =
+      RegExp(r'[1-3]').firstMatch(document.gradeLabel)?.group(0) ?? '';
+  if (grade.isEmpty) return '';
+  final schoolLevel = document.schoolLevel.trim().toLowerCase();
+  final isHigh = schoolLevel == 'high' ||
+      document.schoolName.contains('고') ||
+      document.courseKey.toUpperCase().startsWith('H');
+  return '${isHigh ? 'H' : 'M'}$grade';
+}
+
+String _naesinCourseKeyFromDocument(
+  ProblemBankDocument document,
+  String gradeKey,
+) {
+  final direct = document.courseKey.trim();
+  if (direct.isNotEmpty) return direct;
+  if (gradeKey.startsWith('M')) {
+    final semester = document.semesterLabel.contains('2') ? '2' : '1';
+    return '$gradeKey-$semester';
+  }
+  if (gradeKey == 'H1') {
+    return document.semesterLabel.contains('2') ? 'H1-c2' : 'H1-c1';
+  }
+  return '';
+}
+
+String? _normalizeNaesinExamTerm(String? raw) {
+  final value = (raw ?? '').replaceAll(RegExp(r'\s+'), '').trim();
+  if (value.contains('중간')) return '중간고사';
+  if (value.contains('기말')) return '기말고사';
+  return null;
+}
+
+String _naesinSourceDocumentSummary(ProblemBankDocument document) {
+  return <String>[
+    '원본: ${document.sourceFilename.trim().isEmpty ? document.materialName : document.sourceFilename}',
+    if (document.schoolName.trim().isNotEmpty) document.schoolName.trim(),
+    if (document.examYear != null) '${document.examYear}년',
+    if (document.gradeLabel.trim().isNotEmpty) document.gradeLabel.trim(),
+    if (document.courseLabel.trim().isNotEmpty) document.courseLabel.trim(),
+    if (document.semesterLabel.trim().isNotEmpty)
+      document.semesterLabel.trim(),
+    if (document.examTermLabel.trim().isNotEmpty)
+      document.examTermLabel.trim(),
+  ].join(' · ');
 }
 
 int _defaultNaesinYearByDate(DateTime now) {
@@ -1162,6 +1525,14 @@ List<String> _schoolsForGradeKey(String gradeKey) {
   return _naesinMiddleSchools;
 }
 
+String _canonicalSchoolForGrade(String raw, String gradeKey) {
+  final canonical = canonicalNaesinSchoolName(
+    raw,
+    canonicalSchools: _schoolsForGradeKey(gradeKey),
+  );
+  return canonical.isEmpty ? raw.trim() : canonical;
+}
+
 String _courseDisplayLabel(String courseKey) {
   for (final curriculumCode in const <String>['rev_2022', 'rev_2015']) {
     for (final grade in _naesinGradeOptions()) {
@@ -1199,7 +1570,7 @@ String _buildNaesinLinkKey({
     gradeKey.trim(),
     courseKey.trim(),
     examTerm.trim(),
-    school.trim(),
+    _canonicalSchoolForGrade(school, gradeKey),
     '$year',
     _normalizeCellLabel(cellLabel),
   ].join('|');
@@ -1210,11 +1581,12 @@ _NaesinLinkSelection? _parseNaesinLinkKey(String raw) {
   if (parts.length < 5) return null;
   final year = int.tryParse(parts[4].trim());
   if (year == null) return null;
+  final gradeKey = parts[0].trim();
   return _NaesinLinkSelection(
-    gradeKey: parts[0].trim(),
+    gradeKey: gradeKey,
     courseKey: parts[1].trim(),
     examTerm: parts[2].trim(),
-    school: parts[3].trim(),
+    school: _canonicalSchoolForGrade(parts[3].trim(), gradeKey),
     year: year,
     cellLabel: parts.length >= 6 ? _normalizeCellLabel(parts[5]) : '',
   );

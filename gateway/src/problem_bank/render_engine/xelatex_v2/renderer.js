@@ -13,7 +13,14 @@ import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import sharp from 'sharp';
 import { checkXeLatexInstallation, getXeLatexBinary } from './check_installation.js';
-import { buildTexSource, buildDocumentTexSource, buildAnswerTexSource } from './template.js';
+import {
+  buildTexSource,
+  buildDocumentTexSource,
+  buildAnswerTexSource,
+  buildVisualQuestionList,
+  effectiveStemSizePtFor,
+  planAdditionalDependentSetSplits,
+} from './template.js';
 
 /**
  * data:<mime>;base64,<...> 형태의 로고 이미지를 workDir 내 파일로 저장하고 경로를 돌려준다.
@@ -83,7 +90,48 @@ async function normalizeFigureAssetForXeLatex(bytes) {
   }
 }
 
-const XELATEX_TIMEOUT_MS = 30_000;
+// V2 loads a larger TeX preamble than V1. Tall manager-thumbnail documents
+// (115mm × 800mm) can exceed 30 seconds on a cold font/package cache even when
+// compilation is healthy, so align this with the API's 120-second PDF timeout.
+const XELATEX_TIMEOUT_MS = 120_000;
+const FIGURE_DOWNLOAD_CONCURRENCY = 4;
+const FIGURE_DOWNLOAD_ATTEMPTS = 3;
+let activeFigureDownloads = 0;
+const pendingFigureDownloads = [];
+
+async function withFigureDownloadSlot(action) {
+  if (activeFigureDownloads >= FIGURE_DOWNLOAD_CONCURRENCY) {
+    await new Promise((resolve) => pendingFigureDownloads.push(resolve));
+  }
+  activeFigureDownloads += 1;
+  try {
+    return await action();
+  } finally {
+    activeFigureDownloads -= 1;
+    pendingFigureDownloads.shift()?.();
+  }
+}
+
+async function downloadFigureAsset(supabaseClient, bucket, storagePath) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= FIGURE_DOWNLOAD_ATTEMPTS; attempt += 1) {
+    try {
+      const result = await withFigureDownloadSlot(() =>
+        supabaseClient.storage.from(bucket).download(storagePath));
+      if (!result?.error && result?.data) return result.data;
+      lastError = result?.error || new Error('empty storage response');
+    } catch (err) {
+      lastError = err;
+    }
+    if (attempt < FIGURE_DOWNLOAD_ATTEMPTS) {
+      await new Promise((resolve) => setTimeout(resolve, 150 * attempt));
+    }
+  }
+  throw new Error(
+    `figure download failed after ${FIGURE_DOWNLOAD_ATTEMPTS} attempts: ` +
+    `${bucket}/${storagePath} (${lastError?.message || lastError || 'unknown error'})`,
+  );
+}
 
 async function waitForFile(filePath, timeoutMs = 3000) {
   const started = Date.now();
@@ -295,10 +343,11 @@ export async function hydrateFiguresForXeLatex(questions, supabaseClient, workDi
         const storagePath = String(asset?.path || '').trim();
         if (!bucket || !storagePath) continue;
         try {
-          const { data, error } = await supabaseClient.storage
-            .from(bucket)
-            .download(storagePath);
-          if (error || !data) continue;
+          const data = await downloadFigureAsset(
+            supabaseClient,
+            bucket,
+            storagePath,
+          );
           const downloadedBytes = Buffer.from(await data.arrayBuffer());
           const normalizedFigure = await normalizeFigureAssetForXeLatex(downloadedBytes);
           const ext = normalizedFigure.ext
@@ -328,8 +377,15 @@ export async function hydrateFiguresForXeLatex(questions, supabaseClient, workDi
             heightPx: Number(normalizedFigure.height || asset?.height_px || asset?.height || 0) || null,
           });
           appliedCount += 1;
-        } catch (_) {
-          /* skip failed downloads */
+        } catch (err) {
+          const message =
+            `[xelatex] ${set.prefix} hydration failed ` +
+            `q=${q.id || q.question_uid || 'unknown'}: ${err?.message || err}`;
+          if (set.prefix === 'answer-fig') {
+            console.warn(message);
+            continue;
+          }
+          throw new Error(message);
         }
       }
     }
@@ -670,6 +726,10 @@ export async function renderAnswerWithXeLatex({
   transparent = true,
   transparentOptions = {},
   uniformLineBox = false,
+  answerFigureAssets = [],
+  answerFigureLayout = null,
+  answerFigureLocalPaths = [],
+  supabaseClient = null,
 }) {
   await ensureInstalled();
 
@@ -680,6 +740,29 @@ export async function renderAnswerWithXeLatex({
   const pdfPath = path.join(workDir, 'answer.pdf');
 
   try {
+    let localPaths = Array.isArray(answerFigureLocalPaths)
+      ? answerFigureLocalPaths.filter((p) => String(p || '').trim())
+      : [];
+    if (
+      localPaths.length === 0
+      && supabaseClient
+      && Array.isArray(answerFigureAssets)
+      && answerFigureAssets.length > 0
+    ) {
+      const hydrateQuestion = {
+        id: 'answer-fig',
+        meta: {
+          answer_figure_assets: answerFigureAssets,
+          ...(answerFigureLayout && typeof answerFigureLayout === 'object'
+            ? { answer_figure_layout: answerFigureLayout }
+            : {}),
+        },
+      };
+      await hydrateFiguresForXeLatex([hydrateQuestion], supabaseClient, workDir);
+      localPaths = Array.isArray(hydrateQuestion.answer_figure_local_paths)
+        ? hydrateQuestion.answer_figure_local_paths
+        : [];
+    }
     const texSource = buildAnswerTexSource(answer, {
       fontFamily,
       fontBold,
@@ -691,6 +774,8 @@ export async function renderAnswerWithXeLatex({
       textColor: '000000',
       backgroundColor: 'FFFFFF',
       uniformLineBox,
+      answerFigureLocalPaths: localPaths,
+      answerFigureLayout,
     });
     fs.writeFileSync(texPath, texSource, 'utf-8');
     await runXeLatex(texPath, workDir);
@@ -916,33 +1001,76 @@ export async function renderPdfWithXeLatex({
     const clientColumnCounts = renderConfig?.pageColumnQuestionCounts;
     const hasClientColumnCounts =
       Array.isArray(clientColumnCounts) && clientColumnCounts.length > 0;
+    const isReviewPdf =
+      renderConfig?.reviewPdf === true || renderConfig?.review_pdf === true;
     const shouldMeasureSlots =
       !slotMeasureDisabled &&
       (isMockProfile || renderConfig?.singleQuestionContentPage === true) &&
       cols >= 2 &&
       !hasClientColumnCounts &&
-      renderConfig?.reviewPdf !== true &&
-      renderConfig?.review_pdf !== true;
+      !isReviewPdf;
+    // 종속형 세트 분할은 슬롯 자동배치와 별개다. 학습앱 서버 PDF 미리보기는
+    //   내신형(multicols) 이거나, 새로고침이 pageColumnQuestionCounts 를 실어 보내
+    //   shouldMeasureSlots 가 꺼지는 경우가 많다. 그 경우에도 한 단을 넘는
+    //   종속형은 [소문항N] 경계에서 잘라야 한다.
+    const shouldSplitDependentSets =
+      !slotMeasureDisabled &&
+      cols >= 2 &&
+      !isReviewPdf &&
+      renderConfig?.singleQuestionContentPage !== true;
     let slotMeasure = null;
 
-    if (shouldMeasureSlots) {
+    if (shouldMeasureSlots || shouldSplitDependentSets) {
       try {
-        const measureTexPath = path.join(workDir, 'measure.tex');
-        const measureTex = buildTex({ slotHeightMeasure: true });
-        fs.writeFileSync(measureTexPath, measureTex, 'utf-8');
-        await runXeLatex(measureTexPath, workDir);
-        const parsed = parseSlotMeasureFile(path.join(workDir, 'measure.hgt'));
+        // 종속형 세트가 한 단을 넘으면 [소문항N] 경계에서 잘라야 하는데, 어디서 자를지는
+        //   조각 높이를 재봐야 알 수 있다. "측정 → 넘치는 조각의 마지막 소문항을 분리 →
+        //   재측정" 을 더 이상 분할점이 늘지 않을 때까지 반복한다. 분할이 필요 없는
+        //   일반 문서는 첫 패스에서 바로 빠져나가므로 추가 비용이 없다.
+        const dependentSetSplitPlan = {};
+        const MAX_MEASURE_PASSES = 4;
+        let parsed = null;
+        for (let pass = 0; pass < MAX_MEASURE_PASSES; pass += 1) {
+          const jobName = pass === 0 ? 'measure' : `measure-${pass}`;
+          const measureTexPath = path.join(workDir, `${jobName}.tex`);
+          const measureTex = buildTex({
+            slotHeightMeasure: true,
+            dependentSetSplitPlan,
+          });
+          fs.writeFileSync(measureTexPath, measureTex, 'utf-8');
+          await runXeLatex(measureTexPath, workDir);
+          parsed = parseSlotMeasureFile(path.join(workDir, `${jobName}.hgt`));
+          if (!parsed || parsed.heightsPt.length === 0) break;
+          if (!shouldSplitDependentSets) break;
+          const visualQList = buildVisualQuestionList(questions || [], {
+            profile: baseBuildOptions.profile,
+            reviewPdf: baseBuildOptions.reviewPdf,
+            disableIndependentSetGrouping: baseBuildOptions.disableIndependentSetGrouping,
+            previewIndependentSetCommonStem: baseBuildOptions.previewIndependentSetCommonStem,
+            dependentSetSplitPlan,
+            stemSizePt: effectiveStemSizePtFor(
+              baseBuildOptions.profile,
+              baseBuildOptions.fontSize,
+            ),
+          });
+          if (!planAdditionalDependentSetSplits(visualQList, parsed, dependentSetSplitPlan)) break;
+          console.log('[pb-xelatex-doc] dependent set split planned', dependentSetSplitPlan);
+        }
+
         if (parsed && parsed.heightsPt.length > 0) {
           slotMeasure = parsed;
-          const rawRatio = Number(renderConfig?.slotFillRatio);
-          baseBuildOptions.measuredSlotPlan = {
-            ...parsed,
-            fillRatio: Number.isFinite(rawRatio) && rawRatio > 0 ? rawRatio : 0.7,
-          };
+          baseBuildOptions.dependentSetSplitPlan = dependentSetSplitPlan;
+          if (shouldMeasureSlots) {
+            const rawRatio = Number(renderConfig?.slotFillRatio);
+            baseBuildOptions.measuredSlotPlan = {
+              ...parsed,
+              fillRatio: Number.isFinite(rawRatio) && rawRatio > 0 ? rawRatio : 0.7,
+            };
+          }
           console.log('[pb-xelatex-doc] slot measure ok', {
             questions: parsed.heightsPt.filter((h) => Number.isFinite(h)).length,
             normalColumnHeightPt: parsed.normalColumnHeightPt,
             titleColumnHeightPt: parsed.titleColumnHeightPt,
+            split: dependentSetSplitPlan,
           });
         } else {
           console.warn('[pb-xelatex-doc] slot measure produced no heights, using heuristic');

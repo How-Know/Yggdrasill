@@ -574,7 +574,29 @@ String _completionEstimateLabel(StudentTextbook book, double completion) {
   return '예상 ${months.toStringAsFixed(1)}개월 · $comparison';
 }
 
-/// 메타 아래 펼침 — 4지표 + 예상 개월수 + A/B/C.
+/// 단계별 진행률을 따로 보여 줄 단계형 문제집의 슬롯 글자.
+///
+/// 쎈은 A/B/C 세 단계이고, 고쟁이는 STEP 셋에 창의융합(D)이 더 붙는다. 워크북
+/// TEST(E·F)는 교재에 따라 없기도 해서, 실제로 문항이 잡힌 슬롯만 덧붙인다.
+List<String> _stageProgressLetters(StudentTextbook book) {
+  switch (book.series) {
+    case 'ssen':
+      return const ['A', 'B', 'C'];
+    case 'gojaengi':
+      return <String>[
+        'A',
+        'B',
+        'C',
+        'D',
+        for (final slot in const ['E', 'F'])
+          if ((book.stageProgress[slot]?.total ?? 0) > 0) slot,
+      ];
+    default:
+      return const <String>[];
+  }
+}
+
+/// 메타 아래 펼침 — 4지표 + 예상 개월수 + 단계별 진행률.
 class _BookDetailSheet extends StatelessWidget {
   const _BookDetailSheet({
     required this.book,
@@ -593,6 +615,7 @@ class _BookDetailSheet extends StatelessWidget {
         book.accuracyPercent == null ? '-' : '${book.accuracyPercent}%';
     final revision =
         book.revisionPercent == null ? '-' : '${book.revisionPercent}%';
+    final stageLetters = _stageProgressLetters(book);
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(4, 8, 4, 0),
@@ -630,9 +653,9 @@ class _BookDetailSheet extends StatelessWidget {
               fontSize: 13.5,
             ),
           ),
-          if (book.series == 'ssen') ...[
+          if (stageLetters.isNotEmpty) ...[
             const SizedBox(height: 10),
-            for (final stage in const ['A', 'B', 'C']) ...[
+            for (final stage in stageLetters) ...[
               _SheetProgressRow(
                 label: stage,
                 advance: () {
@@ -642,7 +665,7 @@ class _BookDetailSheet extends StatelessWidget {
                 }(),
                 completion: book.stageProgress[stage]?.progress ?? 0,
               ),
-              if (stage != 'C') const SizedBox(height: 6),
+              if (stage != stageLetters.last) const SizedBox(height: 6),
             ],
           ],
         ],

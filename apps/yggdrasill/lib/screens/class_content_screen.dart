@@ -38,7 +38,12 @@ import '../services/tag_store.dart';
 import 'learning/tag_preset_dialog.dart';
 import 'learning/homework_edit_dialog.dart';
 import 'learning/models/problem_bank_export_models.dart'
-    show kLearningQuestionModeObjective, previewAnswerForMode;
+    show
+        effectiveQuestionModeOf,
+        kLearningQuestionModeObjective,
+        kLearningQuestionModeOriginal,
+        previewAnswerForMode;
+import 'resources/exam_preset_support.dart' show naesinLinkKeyOfPreset;
 import 'design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import '../widgets/dialog_tokens.dart';
 import '../widgets/app_snackbar.dart';
@@ -1290,13 +1295,25 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     final failed = _homePrintQueue
         .where((item) => item.status == _HomePrintQueueStatus.failed)
         .length;
+    final cancelled = _homePrintQueue
+        .where((item) => item.status == _HomePrintQueueStatus.cancelled)
+        .length;
     final allDone = _homePrintQueue.isNotEmpty && queued == 0 && printing == 0;
     final visibleQueueItems = _homePrintQueue.take(3).toList(growable: false);
     final hiddenQueueItemCount =
         _homePrintQueue.length - visibleQueueItems.length;
     final statusText = allDone
-        ? (failed > 0 ? '완료 $completed · 실패 $failed' : '모두 완료 $completed')
-        : '대기 $queued · 인쇄 중 $printing · 완료 $completed';
+        ? [
+            if (completed > 0) '완료 $completed',
+            if (failed > 0) '실패 $failed',
+            if (cancelled > 0) '취소 $cancelled',
+          ].join(' · ')
+        : [
+            '대기 $queued',
+            '인쇄 중 $printing',
+            '완료 $completed',
+            if (cancelled > 0) '취소 $cancelled',
+          ].join(' · ');
 
     return Positioned(
       left: 24,
@@ -1331,7 +1348,11 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               Row(
                 children: [
                   Icon(
-                    allDone ? Icons.check_circle_rounded : Icons.print_rounded,
+                    allDone && failed == 0 && cancelled == 0
+                        ? Icons.check_circle_rounded
+                        : allDone
+                            ? Icons.info_outline_rounded
+                            : Icons.print_rounded,
                     size: 18,
                     color: allDone
                         ? const Color(0xFF8BCDAF)
@@ -1340,7 +1361,11 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                   const SizedBox(width: 7),
                   Expanded(
                     child: Text(
-                      allDone ? '인쇄 작업 완료' : '인쇄 대기열',
+                      allDone
+                          ? (failed == 0 && cancelled == 0
+                              ? '인쇄 작업 완료'
+                              : '인쇄 작업 종료')
+                          : '인쇄 대기열',
                       style: const TextStyle(
                         color: _homePrintPickText,
                         fontSize: 14,
@@ -1427,6 +1452,32 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                             ],
                           ),
                         ),
+                        if (item.canCancel) ...[
+                          const SizedBox(width: 8),
+                          InkWell(
+                            onTap: () => _cancelHomePrintQueueItem(item),
+                            borderRadius: BorderRadius.circular(999),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withValues(alpha: 0.22),
+                                borderRadius: BorderRadius.circular(999),
+                                border: Border.all(color: _homePrintPickBorder),
+                              ),
+                              child: const Text(
+                                '취소',
+                                style: TextStyle(
+                                  color: Color(0xFFE6A0A0),
+                                  fontSize: 11.2,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -4464,6 +4515,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       }
     }
     final modeByUid = preset.questionModeByQuestionUid;
+    final forceOriginalMode = naesinLinkKeyOfPreset(preset).isNotEmpty;
     String answerRenderKindForMode(String mode) {
       final normalized = mode.trim().toLowerCase();
       if (normalized == 'essay' || normalized.contains('서술')) return 'essay';
@@ -4474,7 +4526,12 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     for (final uid in selectedUids) {
       final question = questionByKey[uid];
       if (question == null) continue;
-      final answerMode = (modeByUid[uid] ?? '').trim().toLowerCase();
+      final answerMode = effectiveQuestionModeOf(
+        question,
+        questionModeByQuestionUid: modeByUid,
+        fallbackMode: kLearningQuestionModeOriginal,
+        forceOriginalMode: forceOriginalMode,
+      );
       if (answerMode == kLearningQuestionModeObjective) continue;
       sourceIdsByRenderKind
           .putIfAbsent(answerRenderKindForMode(answerMode), () => <String>{})
@@ -4545,7 +4602,12 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       final originalQuestionIndex = rawIndex != null && rawIndex > 0
           ? rawIndex
           : (question.sourceOrder > 0 ? question.sourceOrder : fallbackIndex);
-      final answerMode = (modeByUid[uid] ?? '').trim().toLowerCase();
+      final answerMode = effectiveQuestionModeOf(
+        question,
+        questionModeByQuestionUid: modeByUid,
+        fallbackMode: kLearningQuestionModeOriginal,
+        forceOriginalMode: forceOriginalMode,
+      );
       final answer = previewAnswerForMode(question, answerMode).trim();
       final answerRenderKind = answerRenderKindForMode(answerMode);
       final answerRender =
@@ -7318,6 +7380,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         return '완료';
       case _HomePrintQueueStatus.failed:
         return '실패';
+      case _HomePrintQueueStatus.cancelled:
+        return '취소';
     }
   }
 
@@ -7331,7 +7395,22 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         return const Color(0xFF8BCDAF);
       case _HomePrintQueueStatus.failed:
         return const Color(0xFFE6A0A0);
+      case _HomePrintQueueStatus.cancelled:
+        return _homePrintPickTextSub;
     }
+  }
+
+  void _cancelHomePrintQueueItem(_HomePrintQueueItem item) {
+    if (!mounted || !item.canCancel) return;
+    setState(() {
+      item.cancelRequested = true;
+      if (item.status == _HomePrintQueueStatus.queued) {
+        item.status = _HomePrintQueueStatus.cancelled;
+        item.message = '사용자가 취소함';
+      } else {
+        item.message = '취소 요청 중...';
+      }
+    });
   }
 
   void _enqueueHomePrintQueueItem(_HomePrintQueueItem item) {
@@ -7362,15 +7441,26 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           await _runHomePrintQueueItem(item);
           if (!mounted) return;
           setState(() {
-            item.status = _HomePrintQueueStatus.completed;
-            item.message = '완료';
+            if (item.cancelRequested) {
+              item.status = _HomePrintQueueStatus.cancelled;
+              item.message = '사용자가 취소함';
+            } else {
+              item.status = _HomePrintQueueStatus.completed;
+              item.message = '완료';
+            }
           });
         } catch (e) {
           if (!mounted) return;
           setState(() {
-            item.status = _HomePrintQueueStatus.failed;
-            item.error = _messageFromPrintError(e);
-            item.message = '실패';
+            if (e is _HomePrintCancelledException || item.cancelRequested) {
+              item.status = _HomePrintQueueStatus.cancelled;
+              item.error = null;
+              item.message = '사용자가 취소함';
+            } else {
+              item.status = _HomePrintQueueStatus.failed;
+              item.error = _messageFromPrintError(e);
+              item.message = '실패';
+            }
           });
         }
       }
@@ -7389,6 +7479,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
 
     progressText.addListener(syncProgress);
     try {
+      bool isCancelled() => item.cancelRequested;
+      _throwIfHomePrintCancelled(isCancelled);
       if (item.group != null && item.summary != null) {
         final request = await _buildHomeworkGroupPrintRequest(
           studentId: item.studentId,
@@ -7396,6 +7488,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           summary: item.summary!,
           children: item.children,
         );
+        _throwIfHomePrintCancelled(isCancelled);
         if ((request.warning ?? '').isNotEmpty && mounted) {
           _showHomeworkChipSnackBar(context, request.warning!);
         }
@@ -7412,6 +7505,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           assignmentByItemId: request.assignmentByItemId,
           preResolvedSourceByItemId: request.sourceByItemId,
           progressText: progressText,
+          isCancelled: isCancelled,
         );
         if ((result.error ?? '').isNotEmpty) throw StateError(result.error!);
         return;
@@ -7426,6 +7520,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         studentId: item.studentId,
         hw: latest,
         progressText: progressText,
+        isCancelled: isCancelled,
       );
       if ((result.error ?? '').isNotEmpty) throw StateError(result.error!);
     } finally {
@@ -15187,6 +15282,20 @@ enum _HomePrintQueueStatus {
   printing,
   completed,
   failed,
+  cancelled,
+}
+
+class _HomePrintCancelledException implements Exception {
+  const _HomePrintCancelledException();
+
+  @override
+  String toString() => '인쇄 작업이 취소되었습니다.';
+}
+
+void _throwIfHomePrintCancelled(bool Function()? isCancelled) {
+  if (isCancelled?.call() == true) {
+    throw const _HomePrintCancelledException();
+  }
 }
 
 class _HomePrintQueueItem {
@@ -15200,6 +15309,7 @@ class _HomePrintQueueItem {
   _HomePrintQueueStatus status;
   String message;
   String? error;
+  bool cancelRequested;
 
   _HomePrintQueueItem({
     required this.id,
@@ -15211,11 +15321,19 @@ class _HomePrintQueueItem {
     this.children = const <HomeworkItem>[],
   })  : status = _HomePrintQueueStatus.queued,
         message = '대기 중',
-        error = null;
+        error = null,
+        cancelRequested = false;
 
   bool get isTerminal =>
       status == _HomePrintQueueStatus.completed ||
-      status == _HomePrintQueueStatus.failed;
+      status == _HomePrintQueueStatus.failed ||
+      status == _HomePrintQueueStatus.cancelled;
+
+  bool get canCancel =>
+      !cancelRequested &&
+      (status == _HomePrintQueueStatus.queued ||
+          (status == _HomePrintQueueStatus.printing &&
+              message != '프린터로 전송 중입니다...'));
 }
 
 class _HomeworkPrintOverlayMeta {
@@ -16769,15 +16887,18 @@ Future<LearningProblemExportJob?> _waitPbExportCompleted({
   LearningProblemBankService? problemBankService,
   ValueNotifier<String>? progressText,
   int maxAttempts = 240,
+  bool Function()? isCancelled,
 }) async {
   final pbService = problemBankService ?? LearningProblemBankService();
   var current = initialJob;
   for (var attempt = 0; attempt < maxAttempts; attempt += 1) {
+    _throwIfHomePrintCancelled(isCancelled);
     if (current.isTerminal) return current;
     if (progressText != null) {
       progressText.value = '문제은행 PDF 생성 중입니다...';
     }
     await Future<void>.delayed(const Duration(seconds: 2));
+    _throwIfHomePrintCancelled(isCancelled);
     LearningProblemExportJob? latest;
     try {
       latest = await pbService.getExportJob(
@@ -16794,18 +16915,60 @@ Future<LearningProblemExportJob?> _waitPbExportCompleted({
   return current;
 }
 
+bool _sameOrderedQuestionUidsForPrint(
+  List<String> left,
+  List<String> right,
+) {
+  if (left.length != right.length) return false;
+  for (var i = 0; i < left.length; i += 1) {
+    if (left[i].trim() != right[i].trim()) return false;
+  }
+  return true;
+}
+
+bool _isCompatiblePbExportForPrint({
+  required LearningProblemExportJob job,
+  required String documentId,
+  required String templateProfile,
+  required String paperSize,
+  required bool includeAnswerSheet,
+  required bool includeExplanation,
+  required List<String> selectedQuestionUids,
+  required bool followsOriginalQuestionTypes,
+}) {
+  final expectedTemplate = templateProfile.trim() == 'assignment'
+      ? 'naesin'
+      : templateProfile.trim();
+  final jobFollowsOriginalQuestionTypes =
+      job.options['naesinOriginalModePolicyVersion'] == 1;
+  return !job.previewOnly &&
+      (!followsOriginalQuestionTypes || jobFollowsOriginalQuestionTypes) &&
+      job.documentId.trim() == documentId.trim() &&
+      job.templateProfile.trim() == expectedTemplate &&
+      job.paperSize.trim().toUpperCase() == paperSize.trim().toUpperCase() &&
+      job.includeAnswerSheet == includeAnswerSheet &&
+      job.includeExplanation == includeExplanation &&
+      _sameOrderedQuestionUidsForPrint(
+        job.selectedQuestionUids,
+        selectedQuestionUids,
+      );
+}
+
 Future<LearningProblemExportJob?> _ensurePbExportJob({
   required HomeworkItem hw,
   HomeworkAssignmentDetail? assignment,
   String academyId = '',
   LearningProblemBankService? problemBankService,
   ValueNotifier<String>? progressText,
+  bool Function()? isCancelled,
 }) async {
+  _throwIfHomePrintCancelled(isCancelled);
   final pbService = problemBankService ?? LearningProblemBankService();
   final safeAcademyId = academyId.trim().isNotEmpty
       ? academyId.trim()
       : await _resolveAcademyIdForPrint();
   if (safeAcademyId.isEmpty) return null;
+  _throwIfHomePrintCancelled(isCancelled);
 
   String presetId = (hw.pbPresetId ?? '').trim();
   final liveReleaseId = (assignment?.liveReleaseId ?? '').trim();
@@ -16833,6 +16996,7 @@ Future<LearningProblemExportJob?> _ensurePbExportJob({
     academyId: safeAcademyId,
     presetId: presetId,
   );
+  _throwIfHomePrintCancelled(isCancelled);
   if (preset == null) return null;
 
   final documentId = preset.sourceDocumentId.trim().isNotEmpty
@@ -16854,11 +17018,18 @@ Future<LearningProblemExportJob?> _ensurePbExportJob({
     renderConfig['includeExplanation'],
     fallback: false,
   );
-  final renderHash = '${renderConfig['renderHash'] ?? ''}'.trim();
+  final followsOriginalQuestionTypes = naesinLinkKeyOfPreset(preset).isNotEmpty;
+  final hasCurrentOriginalModePolicy =
+      renderConfig['naesinOriginalModePolicyVersion'] == 1;
+  final renderHash =
+      followsOriginalQuestionTypes && !hasCurrentOriginalModePolicy
+          ? ''
+          : '${renderConfig['renderHash'] ?? ''}'.trim();
   final options = <String, dynamic>{
     ...renderConfig,
     'includeAnswerSheet': includeAnswerSheet,
     'includeExplanation': includeExplanation,
+    if (followsOriginalQuestionTypes) 'naesinOriginalModePolicyVersion': 1,
     if (renderHash.isNotEmpty) 'renderHash': renderHash,
     'previewOnly': false,
   };
@@ -16877,6 +17048,56 @@ Future<LearningProblemExportJob?> _ensurePbExportJob({
     } catch (_) {}
   }
 
+  // 예전 프리셋처럼 renderHash가 저장되어 있지 않아도 동일한 문서·문항·
+  // 렌더 설정의 완료/진행 중 작업을 찾아 중복 생성을 피한다.
+  try {
+    final recentJobs = await pbService.listExportJobs(
+      academyId: safeAcademyId,
+      documentId: documentId,
+      previewOnly: false,
+      limit: 20,
+    );
+    _throwIfHomePrintCancelled(isCancelled);
+    final compatibleJobs = recentJobs
+        .where(
+          (job) => _isCompatiblePbExportForPrint(
+            job: job,
+            documentId: documentId,
+            templateProfile: templateProfile,
+            paperSize: paperSize,
+            includeAnswerSheet: includeAnswerSheet,
+            includeExplanation: includeExplanation,
+            selectedQuestionUids: selectedQuestionUids,
+            followsOriginalQuestionTypes: followsOriginalQuestionTypes,
+          ),
+        )
+        .toList(growable: false);
+    for (final job in compatibleJobs) {
+      if (job.status.trim() == 'completed' &&
+          (job.outputUrl.trim().isNotEmpty ||
+              job.outputStoragePath.trim().isNotEmpty)) {
+        progressText?.value = '기존 문제은행 PDF를 재사용합니다...';
+        return job;
+      }
+    }
+    for (final job in compatibleJobs) {
+      if (!job.isTerminal) {
+        progressText?.value = '진행 중인 문제은행 PDF 생성을 기다립니다...';
+        return _waitPbExportCompleted(
+          academyId: safeAcademyId,
+          initialJob: job,
+          problemBankService: pbService,
+          progressText: progressText,
+          maxAttempts: 60,
+          isCancelled: isCancelled,
+        );
+      }
+    }
+  } catch (e) {
+    if (e is _HomePrintCancelledException) rethrow;
+  }
+
+  _throwIfHomePrintCancelled(isCancelled);
   progressText?.value = '문제은행 인쇄 PDF 생성을 요청하는 중입니다...';
   final queuedJob = await pbService.createExportJob(
     academyId: safeAcademyId,
@@ -16890,12 +17111,14 @@ Future<LearningProblemExportJob?> _ensurePbExportJob({
     previewOnly: false,
     options: options,
   );
+  _throwIfHomePrintCancelled(isCancelled);
   final completedJob = await _waitPbExportCompleted(
     academyId: safeAcademyId,
     initialJob: queuedJob,
     problemBankService: pbService,
     progressText: progressText,
-    maxAttempts: 24,
+    maxAttempts: 60,
+    isCancelled: isCancelled,
   );
   if (completedJob == null) return null;
 
@@ -16926,12 +17149,15 @@ Future<_ResolvedHomeworkPrintSource?> _resolvePbPrintSource(
   String academyId = '',
   bool ensureExportJob = false,
   ValueNotifier<String>? progressText,
+  bool Function()? isCancelled,
 }) async {
+  _throwIfHomePrintCancelled(isCancelled);
   final pbService = problemBankService ?? LearningProblemBankService();
   final safeAcademyId = academyId.trim().isNotEmpty
       ? academyId.trim()
       : await _resolveAcademyIdForPrint();
   if (safeAcademyId.isEmpty) return null;
+  _throwIfHomePrintCancelled(isCancelled);
 
   String preferredPaperSize = '';
   String pbPresetId = (hw.pbPresetId ?? '').trim();
@@ -17066,15 +17292,31 @@ Future<_ResolvedHomeworkPrintSource?> _resolvePbPrintSource(
 
   if (!ensureExportJob) return null;
 
+  _throwIfHomePrintCancelled(isCancelled);
   final createdOrLatestJob = await _ensurePbExportJob(
     hw: hw,
     assignment: assignment,
     academyId: safeAcademyId,
     problemBankService: pbService,
     progressText: progressText,
+    isCancelled: isCancelled,
   );
+  _throwIfHomePrintCancelled(isCancelled);
   if (createdOrLatestJob == null) return null;
-  if (createdOrLatestJob.status.trim() != 'completed') return null;
+  if (createdOrLatestJob.status.trim() != 'completed') {
+    final status = createdOrLatestJob.status.trim();
+    final detail = createdOrLatestJob.errorMessage.trim().isNotEmpty
+        ? createdOrLatestJob.errorMessage.trim()
+        : createdOrLatestJob.errorCode.trim();
+    if (status == 'failed' || status == 'cancelled') {
+      throw StateError(
+        detail.isEmpty
+            ? '문제은행 PDF 생성이 $status 상태로 종료되었습니다.'
+            : '문제은행 PDF 생성 실패: $detail',
+      );
+    }
+    throw StateError('문제은행 PDF 생성 대기 시간이 120초를 초과했습니다. (현재 상태: $status)');
+  }
   final exportJobId = createdOrLatestJob.id.trim();
   if (exportJobId.isEmpty) return null;
   if (preferredPaperSize.isEmpty && pbPresetId.isNotEmpty) {
@@ -17792,10 +18034,13 @@ Future<_PreparedHomeworkPrintTarget> _prepareHomeworkPrintTarget({
   Map<String, _ResolvedHomeworkPrintSource> preResolvedSourceByItemId =
       const <String, _ResolvedHomeworkPrintSource>{},
   ValueNotifier<String>? progressText,
+  bool Function()? isCancelled,
 }) async {
+  _throwIfHomePrintCancelled(isCancelled);
   final resolvedAssignments = assignmentByItemId.isNotEmpty
       ? assignmentByItemId
       : await _loadActiveAssignmentByItemIdForPrint(studentId);
+  _throwIfHomePrintCancelled(isCancelled);
   final assignment = resolvedAssignments[hw.id.trim()];
   final isPbTarget = _isPbPrintTarget(hw: hw, assignment: assignment);
   final preResolved = preResolvedSourceByItemId[hw.id];
@@ -17821,6 +18066,7 @@ Future<_PreparedHomeworkPrintTarget> _prepareHomeworkPrintTarget({
             assignment: assignment,
             ensureExportJob: true,
             progressText: progressText,
+            isCancelled: isCancelled,
           ) ??
           const _ResolvedHomeworkPrintSource(
             pathRaw: '',
@@ -17828,6 +18074,7 @@ Future<_PreparedHomeworkPrintTarget> _prepareHomeworkPrintTarget({
             isProblemBank: true,
           );
     }
+    _throwIfHomePrintCancelled(isCancelled);
     if (pbSource.isEmpty) {
       throw StateError('문제은행 인쇄 PDF를 준비하지 못했습니다.');
     }
@@ -17837,6 +18084,7 @@ Future<_PreparedHomeworkPrintTarget> _prepareHomeworkPrintTarget({
       cacheKey: 'hw_print_${hw.id}',
       errorsOut: materializeErrors,
     );
+    _throwIfHomePrintCancelled(isCancelled);
     resolvedSource = pbSource;
   } else {
     resolvedSource = (preResolved != null && !preResolved.isProblemBank)
@@ -17854,6 +18102,7 @@ Future<_PreparedHomeworkPrintTarget> _prepareHomeworkPrintTarget({
       cacheKey: 'hw_print_${hw.id}',
       errorsOut: materializeErrors,
     );
+    _throwIfHomePrintCancelled(isCancelled);
   }
 
   if (bodyPath == null || bodyPath.isEmpty) {
@@ -17876,7 +18125,9 @@ Future<_HomeworkPrintRunResult> _runResolvedHomeworkPrint({
   required _HomeworkPrintConfirmResult confirmResult,
   List<HomeworkItem> selectableGroupChildren = const <HomeworkItem>[],
   ValueNotifier<String>? progressText,
+  bool Function()? isCancelled,
 }) async {
+  _throwIfHomePrintCancelled(isCancelled);
   if (selectableGroupChildren.isNotEmpty &&
       confirmResult.selectedChildIds.isEmpty) {
     return const _HomeworkPrintRunResult(
@@ -17896,6 +18147,7 @@ Future<_HomeworkPrintRunResult> _runResolvedHomeworkPrint({
     fallbackHomework: hw,
     selectedHomeworks: selectedHomeworks,
   );
+  _throwIfHomePrintCancelled(isCancelled);
 
   final isPdf = printablePath.toLowerCase().endsWith('.pdf');
   final selectedRange = confirmResult.pageRange;
@@ -17926,6 +18178,7 @@ Future<_HomeworkPrintRunResult> _runResolvedHomeworkPrint({
       overlayMeta: overlayMeta,
       preferredPaperSize: effectivePaperSize,
     );
+    _throwIfHomePrintCancelled(isCancelled);
     if (out == null || out.isEmpty) {
       return _HomeworkPrintRunResult(
         printJobSentToSpooler: false,
@@ -17943,6 +18196,7 @@ Future<_HomeworkPrintRunResult> _runResolvedHomeworkPrint({
     );
   }
 
+  _throwIfHomePrintCancelled(isCancelled);
   progressText?.value = '프린터로 전송 중입니다...';
   final skipRawTcpForTextbookHomework = !resolvedSource.isProblemBank &&
       PrintRoutingService.kTextbookHomeworkPrintPreferDriverSpooler;
@@ -17978,6 +18232,7 @@ Future<_HomeworkPrintRunResult> _runHomeworkPrintWithDefaultSettings({
   Map<String, _ResolvedHomeworkPrintSource> preResolvedSourceByItemId =
       const <String, _ResolvedHomeworkPrintSource>{},
   ValueNotifier<String>? progressText,
+  bool Function()? isCancelled,
 }) async {
   final prepared = await _prepareHomeworkPrintTarget(
     studentId: studentId,
@@ -17985,7 +18240,9 @@ Future<_HomeworkPrintRunResult> _runHomeworkPrintWithDefaultSettings({
     assignmentByItemId: assignmentByItemId,
     preResolvedSourceByItemId: preResolvedSourceByItemId,
     progressText: progressText,
+    isCancelled: isCancelled,
   );
+  _throwIfHomePrintCancelled(isCancelled);
   final resolvedAssignments = assignmentByItemId.isNotEmpty
       ? assignmentByItemId
       : await _loadActiveAssignmentByItemIdForPrint(studentId);
@@ -18015,6 +18272,7 @@ Future<_HomeworkPrintRunResult> _runHomeworkPrintWithDefaultSettings({
     confirmResult: confirmResult,
     selectableGroupChildren: selectableGroupChildren,
     progressText: progressText,
+    isCancelled: isCancelled,
   );
 }
 

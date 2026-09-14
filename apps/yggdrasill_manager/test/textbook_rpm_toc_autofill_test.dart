@@ -50,6 +50,7 @@ void main() {
 
     final report = await autofillProblemBookPartRanges(
       <TocAutofillBigUnit>[big],
+      series: 'rpm',
       classify: (rawPages) async => <TextbookRpmSectionPage>[
         for (final page in rawPages)
           TextbookRpmSectionPage(
@@ -57,8 +58,7 @@ void main() {
             section: page < 15
                 ? 'basic_drill'
                 : (page < 18 ? 'type_practice' : 'mastery'),
-            typePracticeHeaderVisible: page == 15,
-            masteryHeaderVisible: page == 18,
+            headerVisible: page == 15 || page == 18,
           ),
       ],
     );

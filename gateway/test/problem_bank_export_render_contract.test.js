@@ -2,10 +2,23 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  applyPublishedQuestionFilter,
   applyQuestionModesForExport,
   buildRenderConfigFromJob,
   computeRenderHash,
 } from '../src/problem_bank_export_worker.js';
+
+test('export queries only published questions', () => {
+  const calls = [];
+  const query = {
+    eq(column, value) {
+      calls.push([column, value]);
+      return this;
+    },
+  };
+  assert.equal(applyPublishedQuestionFilter(query), query);
+  assert.deepEqual(calls, [['is_published', true]]);
+});
 
 function makeQuestion(overrides = {}) {
   return {
@@ -45,6 +58,7 @@ test('render config: legacy key alias and ordered ids', () => {
       questionModeByQuestionId: {
         'q-1': 'objective',
       },
+      naesinLinkKey: 'naesin|school|2026',
       targetDpi: 500,
       pageMargin: 52,
     },
@@ -56,6 +70,7 @@ test('render config: legacy key alias and ordered ids', () => {
   assert.deepEqual(config.selectedQuestionIdsOrdered, ['q-3', 'q-1', 'q-2']);
   assert.equal(config.figureQuality.targetDpi, 500);
   assert.equal(config.layoutTuning.pageMargin, 52);
+  assert.equal(config.naesinLinkKey, 'naesin|school|2026');
   assert.equal(config.questionModeByQuestionId['q-1'], 'objective');
   assert.equal(config.questionModeByQuestionId['q-2'], 'subjective');
 });
@@ -105,4 +120,48 @@ test('question mode map: per-question override is applied', () => {
   assert.equal(applied.questions[0].choices.length >= 2, true);
   assert.equal(applied.questions[1].question_type, '\uC8FC\uAD00\uC2DD');
   assert.equal(applied.questions[1].choices.length, 0);
+});
+
+test('original subjective stays subjective when AI objective choices exist', () => {
+  const question = makeQuestion({
+    question_type: '\uC8FC\uAD00\uC2DD',
+    choices: [],
+    objective_choices: [
+      { label: '\u2460', text: '\uC624\uB2F5' },
+      { label: '\u2461', text: '\uC815\uB2F5' },
+    ],
+    objective_answer_key: '\u2461',
+    subjective_answer: '42',
+  });
+  const applied = applyQuestionModesForExport(
+    [question],
+    { 'q-1': 'objective' },
+    'original',
+    { forceOriginalMode: true },
+  );
+  assert.equal(applied.modeByQuestionUid['q-1'], 'subjective');
+  assert.equal(applied.questions[0].question_type, '\uC8FC\uAD00\uC2DD');
+  assert.equal(applied.questions[0].choices.length, 0);
+  assert.equal(applied.questions[0].export_answer, '42');
+});
+
+test('regular assignment keeps explicit objective selection', () => {
+  const question = makeQuestion({
+    question_type: '\uC8FC\uAD00\uC2DD',
+    choices: [],
+    objective_choices: [
+      { label: '\u2460', text: '\uC624\uB2F5' },
+      { label: '\u2461', text: '\uC815\uB2F5' },
+    ],
+    objective_answer_key: '\u2461',
+    subjective_answer: '42',
+  });
+  const applied = applyQuestionModesForExport(
+    [question],
+    { 'q-1': 'objective' },
+    'original',
+  );
+  assert.equal(applied.modeByQuestionUid['q-1'], 'objective');
+  assert.equal(applied.questions[0].question_type, '\uAC1D\uAD00\uC2DD');
+  assert.equal(applied.questions[0].export_answer, '\u2461');
 });

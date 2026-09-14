@@ -138,6 +138,7 @@ async function resolveQuestion(
       .from('pb_questions')
       .select(fields)
       .eq('academy_id', academyId)
+      .eq('is_published', true)
       .eq('id', canonicalLink.pb_question_id)
       .maybeSingle();
     if (error) {
@@ -151,6 +152,7 @@ async function resolveQuestion(
       .from('pb_questions')
       .select(fields)
       .eq('academy_id', academyId)
+      .eq('is_published', true)
       .eq('question_uid', crop.pb_question_uid)
       .maybeSingle();
     if (data) return data as Record<string, unknown>;
@@ -159,6 +161,7 @@ async function resolveQuestion(
     .from('pb_questions')
     .select(fields)
     .eq('academy_id', academyId)
+    .eq('is_published', true)
     .contains('meta', { textbook_crop_page: { crop_id: crop.id } })
     .order('updated_at', { ascending: false })
     .limit(1);

@@ -4696,6 +4696,7 @@ function buildQuestionWritePayload({
     confidence: question.confidence,
     flags: question.flags,
     is_checked: question.is_checked,
+    is_published: question.is_published !== false,
     reviewed_by: question.reviewed_by,
     reviewed_at: question.reviewed_at,
     reviewer_notes: question.reviewer_notes,
@@ -5397,7 +5398,7 @@ async function processOneJob(job) {
     .select(
       'id,question_number,question_uid,source_order,' +
         'allow_objective,allow_subjective,objective_choices,' +
-        'objective_answer_key,objective_generated,meta',
+        'objective_answer_key,objective_generated,is_published,meta',
     )
     .eq('academy_id', job.academy_id)
     .eq('document_id', job.document_id)
@@ -5409,13 +5410,19 @@ async function processOneJob(job) {
     (existingRows || []).map((row) => [String(row.id || '').trim(), row]),
   );
   const existingQuestionUidQueueByNumber = new Map();
+  const existingPublishedQueueByNumber = new Map();
   for (const row of existingRows || []) {
     const questionNumber = normalizeWhitespace(row?.question_number || '');
     const questionUid = normalizeWhitespace(row?.question_uid || '');
-    if (!questionNumber || !questionUid) continue;
-    const queue = existingQuestionUidQueueByNumber.get(questionNumber) || [];
-    queue.push(questionUid);
-    existingQuestionUidQueueByNumber.set(questionNumber, queue);
+    if (!questionNumber) continue;
+    if (questionUid) {
+      const queue = existingQuestionUidQueueByNumber.get(questionNumber) || [];
+      queue.push(questionUid);
+      existingQuestionUidQueueByNumber.set(questionNumber, queue);
+    }
+    const publishedQueue = existingPublishedQueueByNumber.get(questionNumber) || [];
+    publishedQueue.push(row?.is_published !== false);
+    existingPublishedQueueByNumber.set(questionNumber, publishedQueue);
   }
   const consumeQuestionUidByQuestionNumber = (rawQuestionNumber) => {
     const key = normalizeWhitespace(rawQuestionNumber || '');
@@ -5429,6 +5436,19 @@ async function processOneJob(job) {
       existingQuestionUidQueueByNumber.set(key, queue);
     }
     return uid;
+  };
+  const consumePublishedByQuestionNumber = (rawQuestionNumber) => {
+    const key = normalizeWhitespace(rawQuestionNumber || '');
+    if (!key) return true;
+    const queue = existingPublishedQueueByNumber.get(key);
+    if (!Array.isArray(queue) || queue.length === 0) return true;
+    const published = queue.shift() !== false;
+    if (queue.length === 0) {
+      existingPublishedQueueByNumber.delete(key);
+    } else {
+      existingPublishedQueueByNumber.set(key, queue);
+    }
+    return published;
   };
 
   if (partialReextract) {
@@ -5483,6 +5503,7 @@ async function processOneJob(job) {
           parsed.meta.allow_subjective = false;
         }
       }
+      parsed.is_published = current.is_published !== false;
 
       updateRows.push({
         id: targetId,
@@ -5531,16 +5552,18 @@ async function processOneJob(job) {
     const insertedIds = [];
     const chunkSize = 300;
     for (let i = 0; i < questions.length; i += chunkSize) {
-      const chunk = questions.slice(i, i + chunkSize).map((q) =>
-        buildQuestionWritePayload({
+      const chunk = questions.slice(i, i + chunkSize).map((q) => {
+        const questionUid = consumeQuestionUidByQuestionNumber(q.question_number);
+        q.is_published = consumePublishedByQuestionNumber(q.question_number);
+        return buildQuestionWritePayload({
           question: q,
           classification,
           academyId: job.academy_id,
           documentId: job.document_id,
           extractJobId: job.id,
-          questionUid: consumeQuestionUidByQuestionNumber(q.question_number),
-        }),
-      );
+          questionUid,
+        });
+      });
       const { data: inserted, error: insertErr } = await supa
         .from('pb_questions')
         .insert(chunk)
@@ -5579,16 +5602,18 @@ async function processOneJob(job) {
     if (questions.length > 0) {
       const chunkSize = 300;
       for (let i = 0; i < questions.length; i += chunkSize) {
-        const chunk = questions.slice(i, i + chunkSize).map((q) =>
-          buildQuestionWritePayload({
+        const chunk = questions.slice(i, i + chunkSize).map((q) => {
+          const questionUid = consumeQuestionUidByQuestionNumber(q.question_number);
+          q.is_published = consumePublishedByQuestionNumber(q.question_number);
+          return buildQuestionWritePayload({
             question: q,
             classification,
             academyId: job.academy_id,
             documentId: job.document_id,
             extractJobId: job.id,
-            questionUid: consumeQuestionUidByQuestionNumber(q.question_number),
-          }),
-        );
+            questionUid,
+          });
+        });
         const { error: insertErr } = await supa.from('pb_questions').insert(chunk);
         if (insertErr) {
           throw new Error(`question_insert_failed:${insertErr.message}`);
@@ -6164,6 +6189,7 @@ export {
   injectSubQuestionMarkers,
   buildHwpxFigureMapByQuestionNumber as _buildHwpxFigureMapByQuestionNumber,
   applyHwpxFigureOverlayToVlmPayload as _applyHwpxFigureOverlayToVlmPayload,
+  buildQuestionWritePayload as _buildQuestionWritePayload,
   isMissingRelationError as _isMissingRelationError,
   reconcileTextbookCropQuestionLinks as _reconcileTextbookCropQuestionLinks,
 };

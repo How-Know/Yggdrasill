@@ -69,6 +69,9 @@ class TextbookPageReviewPane extends StatefulWidget {
     this.totalPageCount,
     this.initialPage,
     this.onPageRequested,
+    this.dirtyQuestionIds = const <String>{},
+    this.isPageUploadBusy = false,
+    this.onPageUpload,
     super.key,
   });
 
@@ -84,6 +87,9 @@ class TextbookPageReviewPane extends StatefulWidget {
   final int? totalPageCount;
   final int? initialPage;
   final ValueChanged<int>? onPageRequested;
+  final Set<String> dirtyQuestionIds;
+  final bool isPageUploadBusy;
+  final Future<void> Function(int page)? onPageUpload;
 
   @override
   State<TextbookPageReviewPane> createState() => _TextbookPageReviewPaneState();
@@ -119,6 +125,32 @@ class _TextbookPageReviewPaneState extends State<TextbookPageReviewPane> {
     }.toList()
       ..sort();
     return candidates;
+  }
+
+  List<int> get _reviewablePages {
+    final pages = textbookPagesOf(widget.questions);
+    return pages
+        .where(
+          (page) => textbookQuestionsOnPage(widget.questions, page).isNotEmpty,
+        )
+        .toList(growable: false);
+  }
+
+  bool _isPageComplete(int page) {
+    final questions = textbookQuestionsOnPage(widget.questions, page);
+    return questions.isNotEmpty &&
+        questions.every((question) => question.isChecked) &&
+        questions.every(
+          (question) => !widget.dirtyQuestionIds.contains(question.id),
+        );
+  }
+
+  bool _isPageInProgress(int page) {
+    final questions = textbookQuestionsOnPage(widget.questions, page);
+    return questions.any(
+      (question) =>
+          question.isChecked || widget.dirtyQuestionIds.contains(question.id),
+    );
   }
 
   int? get _effectivePage {
@@ -216,9 +248,87 @@ class _TextbookPageReviewPaneState extends State<TextbookPageReviewPane> {
     }
     final pageQuestions = textbookQuestionsOnPage(widget.questions, page);
     final pageIndex = _pages.indexOf(page);
+    final reviewablePages = _reviewablePages;
+    final completedPages = reviewablePages.where(_isPageComplete).length;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (reviewablePages.isNotEmpty) ...[
+          Container(
+            key: const ValueKey('textbook-page-review-progress'),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+            decoration: BoxDecoration(
+              color: widget.panelColor,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: widget.borderColor),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '교재 검수 진행',
+                        style: TextStyle(
+                          color: widget.textColor,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      '$completedPages / ${reviewablePages.length} 페이지 완료',
+                      key:
+                          const ValueKey('textbook-page-review-progress-label'),
+                      style: TextStyle(
+                        color: widget.textSubColor,
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 7),
+                Row(
+                  children: [
+                    for (var i = 0; i < reviewablePages.length; i += 1) ...[
+                      if (i > 0) const SizedBox(width: 2),
+                      Expanded(
+                        child: Tooltip(
+                          message: '${reviewablePages[i]}쪽 · '
+                              '${_isPageComplete(reviewablePages[i]) ? '완료' : _isPageInProgress(reviewablePages[i]) ? '진행 중' : '대기'}',
+                          child: Container(
+                            key: ValueKey(
+                              'textbook-page-progress-${reviewablePages[i]}',
+                            ),
+                            height: 8,
+                            decoration: BoxDecoration(
+                              color: _isPageComplete(reviewablePages[i])
+                                  ? widget.accentColor
+                                  : _isPageInProgress(reviewablePages[i])
+                                      ? const Color(0xFFE3B341)
+                                      : widget.fieldColor,
+                              borderRadius: BorderRadius.circular(3),
+                              border: Border.all(
+                                color: _isPageComplete(reviewablePages[i])
+                                    ? widget.accentColor
+                                    : _isPageInProgress(reviewablePages[i])
+                                        ? const Color(0xFFE3B341)
+                                        : widget.borderColor,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+        ],
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
           decoration: BoxDecoration(
@@ -299,11 +409,35 @@ class _TextbookPageReviewPaneState extends State<TextbookPageReviewPane> {
                 ),
               ),
               Text(
-                '페이지 검수 · 학습앱 노출 확정은 문서 단위',
+                '페이지 검수 상태와 문항 공개 여부는 별도로 관리됩니다.',
                 style: TextStyle(
                   color: widget.textSubColor,
                   fontSize: 10.5,
                 ),
+              ),
+              FilledButton.icon(
+                key: const ValueKey('textbook-page-upload'),
+                onPressed: pageQuestions.isEmpty ||
+                        widget.isPageUploadBusy ||
+                        widget.onPageUpload == null
+                    ? null
+                    : () => widget.onPageUpload!(page),
+                style: FilledButton.styleFrom(
+                  backgroundColor: widget.accentColor,
+                  foregroundColor: Colors.white,
+                  visualDensity: VisualDensity.compact,
+                ),
+                icon: widget.isPageUploadBusy
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 1.8,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.cloud_upload_outlined, size: 16),
+                label: const Text('현재 페이지 검수 완료'),
               ),
             ],
           ),

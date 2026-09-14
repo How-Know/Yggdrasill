@@ -236,6 +236,40 @@ class NaesinExamContext {
     return (gradeKey: gradeKey, courseKey: courseKey);
   }
 
+  /// 문서/원본의 `황금중학교` 같은 풀네임을 학습앱 셀 키(`황금중`)로 맞춘다.
+  static String canonicalSchoolName(
+    String raw, {
+    String gradeKey = '',
+  }) {
+    final compact = raw.replaceAll(RegExp(r'\s+'), '').trim();
+    if (compact.isEmpty) return '';
+    final schools = gradeKey.trim().isEmpty
+        ? <String>[...middleSchools, ...highSchools]
+        : schoolsForGradeKey(gradeKey);
+    for (final school in schools) {
+      if (compact == school) return school;
+    }
+    final rewritten = _rewriteSchoolSuffix(compact);
+    for (final school in schools) {
+      if (rewritten == school) return school;
+    }
+    String? best;
+    for (final school in schools) {
+      if (compact.startsWith(school) || rewritten.startsWith(school)) {
+        if (best == null || school.length > best.length) best = school;
+      }
+    }
+    return best ?? (schools.contains(rewritten) ? rewritten : compact);
+  }
+
+  static String _rewriteSchoolSuffix(String compact) {
+    return compact
+        .replaceFirst(RegExp(r'여자중학교$'), '여중')
+        .replaceFirst(RegExp(r'여자고등학교$'), '여고')
+        .replaceFirst(RegExp(r'중학교$'), '중')
+        .replaceFirst(RegExp(r'고등학교$'), '고');
+  }
+
   static String buildNaesinLinkKey({
     required String gradeKey,
     required String courseKey,
@@ -245,7 +279,10 @@ class NaesinExamContext {
     String cellLabel = '',
   }) {
     final normalizedCellLabel = normalizeCellLabel(cellLabel);
-    final base = '$gradeKey|$courseKey|$examTerm|$school|$year';
+    final canonicalSchool = canonicalSchoolName(school, gradeKey: gradeKey);
+    final safeSchool =
+        canonicalSchool.isEmpty ? school.trim() : canonicalSchool;
+    final base = '$gradeKey|$courseKey|$examTerm|$safeSchool|$year';
     return normalizedCellLabel.isEmpty ? base : '$base|$normalizedCellLabel';
   }
 
@@ -267,11 +304,12 @@ class NaesinExamContext {
     if (g.isEmpty || c.isEmpty || t.isEmpty || s.isEmpty || y == null) {
       return null;
     }
+    final canonicalSchool = canonicalSchoolName(s, gradeKey: g);
     return NaesinLinkSelection(
       gradeKey: g,
       courseKey: c,
       examTerm: t,
-      school: s,
+      school: canonicalSchool.isEmpty ? s : canonicalSchool,
       year: y,
       cellLabel: cellLabel,
     );

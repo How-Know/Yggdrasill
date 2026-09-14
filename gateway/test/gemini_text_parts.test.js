@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { joinGeminiTextParts } from '../src/problem_bank/extract_engines/vlm/client.js';
+import {
+  joinGeminiTextParts,
+  recoverMangledLatexControls,
+} from '../src/problem_bank/extract_engines/vlm/client.js';
+import { recoverMangledLatexNewlineCommands } from '../src/problem_bank/render_engine/utils/text.js';
 
 test('조각 경계가 JSON 문자열 안에 떨어져도 깨지지 않는다', () => {
   // Gemini 가 응답을 여러 part 로 쪼갤 때 경계는 아무 곳에나 생긴다.
@@ -33,4 +37,16 @@ test('앞뒤 공백은 다듬고, 빈 입력은 빈 문자열이다', () => {
 test('text 가 없는 조각은 건너뛴다', () => {
   const parts = [{ inlineData: { data: 'x' } }, { text: '{"a":' }, {}, { text: '1}' }];
   assert.equal(joinGeminiTextParts(parts), '{"a":1}');
+});
+
+test('\\notin의 JSON newline escape를 추출·렌더 경로에서 복구한다', () => {
+  const mangled = `\\sqrt{2}\notin R`;
+  const expected = String.raw`\sqrt{2}\notin R`;
+  assert.equal(recoverMangledLatexControls(mangled), expected);
+  assert.equal(recoverMangledLatexNewlineCommands(mangled), expected);
+  // 정상 문장 줄바꿈은 보존한다.
+  assert.equal(
+    recoverMangledLatexNewlineCommands('첫째 줄\n둘째 줄'),
+    '첫째 줄\n둘째 줄',
+  );
 });

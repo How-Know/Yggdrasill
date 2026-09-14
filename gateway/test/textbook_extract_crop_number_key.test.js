@@ -220,6 +220,71 @@ test('개념+유형의 번호 없는 소문항 묶음은 종속형 세트로 고
   );
 });
 
+test('B단계도 크롭 범위 헤더로 개별 독립 세트를 하나로 병합한다', () => {
+  const shared = [
+    '아래 삼각비의 표를 보고 다음에 답하시오.',
+    '[문단]',
+    '[표시작]',
+    '\\begin{tabular}{|c|c|}',
+    '\\hline',
+    '각도 & 사인 \\\\',
+    '\\hline',
+    '\\end{tabular}',
+    '[표끝]',
+  ].join('\n');
+  const items = [
+    { number: '0120', stem: '\\cos 15^{\\circ}의 값을 구하시오.' },
+    { number: '0121', stem: '\\sin x=0.2588일 때 x를 구하시오.' },
+  ];
+  const rows = items.map((item, index) => ({
+    question_number: item.number,
+    stem: item.stem,
+    meta: {
+      ...(index === 0 ? { set_render_mode: 'join' } : {}),
+      is_set_question: true,
+      set_model: {
+        version: 1,
+        set_type: 'independent_set',
+        set_key: item.number,
+        common_stem: `${shared}\n[문단]\n${item.stem}`,
+      },
+    },
+  }));
+
+  normalizeIndependentSetPayloadQuestions(
+    rows,
+    {
+      series: 'ssen',
+      book_id: 'ssen-3-2',
+      grade_label: '3-2',
+      big_order: 0,
+      mid_order: 0,
+      sub_key: 'B',
+    },
+    [{
+      from: 120,
+      to: 121,
+      headerNumber: '0120~0121',
+      rawPage: 26,
+      displayPage: 26,
+    }],
+  );
+
+  const normalizedShared = shared.replace('[문단]\n', '');
+  assert.equal(rows[0].meta.set_model.set_key, rows[1].meta.set_model.set_key);
+  assert.match(rows[0].meta.set_model.set_key, /^textbook:/);
+  assert.equal(rows[0].meta.set_model.common_stem, normalizedShared);
+  assert.equal(rows[1].meta.set_model.common_stem, normalizedShared);
+  assert.equal(rows[0].meta.set_model.item_order, 1);
+  assert.equal(rows[1].meta.set_model.item_order, 2);
+  assert.equal(rows[0].meta.set_model.header_number, '0120~0121');
+  assert.equal(rows[1].meta.set_model.header_number, '0120~0121');
+  assert.equal(rows[0].meta.set_render_mode, 'join');
+  assert.equal(rows[1].meta.set_render_mode, 'join');
+  assert.equal(rows[0].stem, items[0].stem);
+  assert.equal(rows[1].stem, items[1].stem);
+});
+
 test('키 정규화 규칙', () => {
   assert.equal(normalizeProblemNumberKey('0012'), '12');
   assert.equal(normalizeProblemNumberKey('개념확인8'), '개념확인8');

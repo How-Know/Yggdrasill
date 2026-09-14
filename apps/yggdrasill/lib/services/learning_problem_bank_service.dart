@@ -907,8 +907,8 @@ class LearningProblemDocumentExportPreset {
             map['assignmentLibraryOrder'] ??
             renderConfig['assignmentLibraryOrder'],
       ),
-      createdAt: _dateTimeOrNull(map['created_at']),
-      updatedAt: _dateTimeOrNull(map['updated_at']),
+      createdAt: _dateTimeOrNull(map['created_at'] ?? map['createdAt']),
+      updatedAt: _dateTimeOrNull(map['updated_at'] ?? map['updatedAt']),
     );
   }
 }
@@ -1163,11 +1163,11 @@ class LearningProblemBankService {
     var query = _client
         .from('pb_documents')
         .select(
-          'id,school_name,publisher_name,material_name,school_level,grade_key,course_key,course_label,grade_label,source_type_code,curriculum_code,meta,source_filename,updated_at,exam_year,semester_label,exam_term_label',
+          'id,school_name,publisher_name,material_name,school_level,grade_key,course_key,course_label,grade_label,source_type_code,curriculum_code,meta,source_filename,updated_at,exam_year,semester_label,exam_term_label,pb_questions!inner()',
         )
         .eq('academy_id', academyId)
         .inFilter('source_type_code', dbCodes)
-        .eq('status', 'ready');
+        .eq('pb_questions.is_published', true);
     query = _applyCurriculumCodeFilter(query, curriculumCodes);
     final rows = await query.limit(limit);
 
@@ -1266,11 +1266,11 @@ class LearningProblemBankService {
     var readyDocQuery = _client
         .from('pb_documents')
         .select(
-          'id,source_filename,school_name,school_level,grade_key,course_key,course_label,grade_label,curriculum_code,source_type_code,meta',
+          'id,source_filename,school_name,school_level,grade_key,course_key,course_label,grade_label,curriculum_code,source_type_code,meta,pb_questions!inner()',
         )
         .eq('academy_id', academyId)
         .inFilter('source_type_code', dbSourceCodes)
-        .eq('status', 'ready');
+        .eq('pb_questions.is_published', true);
     readyDocQuery = _applyCurriculumCodeFilter(readyDocQuery, curriculumCodes);
     final readyDocRows = await readyDocQuery.limit(4000);
 
@@ -1361,6 +1361,7 @@ class LearningProblemBankService {
             ].join(','),
           )
           .eq('academy_id', academyId)
+          .eq('is_published', true)
           .inFilter('source_type_code', dbSourceCodes)
           .inFilter('document_id', docChunk);
       q = _applyCurriculumCodeFilter(q, curriculumCodes);
@@ -1613,6 +1614,7 @@ class LearningProblemBankService {
               .from('pb_questions')
               .select(selectFields)
               .eq('academy_id', safeAcademyId)
+              .eq('is_published', true)
               .inFilter(field, chunk);
         } catch (_) {
           continue;
@@ -1719,6 +1721,7 @@ class LearningProblemBankService {
             'id,question_uid,document_id,question_number,source_page,source_order,meta',
           )
           .eq('academy_id', safeAcademyId)
+          .eq('is_published', true)
           .inFilter('document_id', chunk)
           .order('source_order');
       for (final raw in _listOrEmpty(rows)) {
@@ -1762,9 +1765,9 @@ class LearningProblemBankService {
     final sourceCodes = pbSourceTypeCodesForLearningUi('private_material');
     final rows = await _client
         .from('pb_documents')
-        .select('id,grade_label,meta')
+        .select('id,grade_label,meta,pb_questions!inner()')
         .eq('academy_id', safeAcademyId)
-        .eq('status', 'ready')
+        .eq('pb_questions.is_published', true)
         .inFilter('source_type_code', sourceCodes);
     final documentIds = <String>[];
     for (final raw in _listOrEmpty(rows)) {
@@ -2207,8 +2210,10 @@ class LearningProblemBankService {
       nextRenderConfig.remove('naesinLinkKey');
       nextRenderConfig.remove('naesinCellLabel');
       nextRenderConfig.remove('naesinCurriculumCode');
+      nextRenderConfig.remove('naesinOriginalModePolicyVersion');
     } else {
       nextRenderConfig['naesinLinkKey'] = safeLinkKey;
+      nextRenderConfig['naesinOriginalModePolicyVersion'] = 1;
       final safeCurriculumCode = (naesinCurriculumCode ?? 'rev_2022').trim();
       nextRenderConfig['naesinCurriculumCode'] =
           safeCurriculumCode == 'rev_2015' ? 'rev_2015' : 'rev_2022';
@@ -3335,8 +3340,9 @@ class LearningProblemBankService {
       final bucket = entry.key;
       final paths = entry.value.toList(growable: false);
       try {
-        final signed =
-            await _client.storage.from(bucket).createSignedUrls(paths, ttlSeconds);
+        final signed = await _client.storage
+            .from(bucket)
+            .createSignedUrls(paths, ttlSeconds);
         for (final item in signed) {
           final path = item.path.trim();
           final url = item.signedUrl.trim();

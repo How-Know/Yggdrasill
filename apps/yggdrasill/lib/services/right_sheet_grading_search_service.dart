@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 
 import '../app_overlays.dart';
 import '../screens/learning/models/problem_bank_export_models.dart';
+import '../screens/resources/exam_preset_support.dart'
+    show naesinLinkKeyOfPreset;
 import '../widgets/pdf/homework_answer_viewer_dialog.dart';
 import 'data_manager.dart';
 import 'homework_batch_confirm_service.dart';
@@ -662,6 +664,7 @@ class RightSheetGradingSearchService {
       }
     }
     final modeByUid = preset.questionModeByQuestionUid;
+    final forceOriginalMode = naesinLinkKeyOfPreset(preset).isNotEmpty;
     String answerRenderKindForMode(String mode) {
       final normalized = mode.trim().toLowerCase();
       if (normalized == 'essay' || normalized.contains('서술')) return 'essay';
@@ -672,7 +675,12 @@ class RightSheetGradingSearchService {
     for (final uid in selectedUids) {
       final question = questionByKey[uid];
       if (question == null) continue;
-      final answerMode = (modeByUid[uid] ?? '').trim().toLowerCase();
+      final answerMode = effectiveQuestionModeOf(
+        question,
+        questionModeByQuestionUid: modeByUid,
+        fallbackMode: kLearningQuestionModeOriginal,
+        forceOriginalMode: forceOriginalMode,
+      );
       if (answerMode == kLearningQuestionModeObjective) continue;
       sourceIdsByRenderKind
           .putIfAbsent(answerRenderKindForMode(answerMode), () => <String>{})
@@ -738,7 +746,12 @@ class RightSheetGradingSearchService {
       final originalQuestionIndex = rawIndex != null && rawIndex > 0
           ? rawIndex
           : (question.sourceOrder > 0 ? question.sourceOrder : fallbackIndex);
-      final answerMode = (modeByUid[uid] ?? '').trim().toLowerCase();
+      final answerMode = effectiveQuestionModeOf(
+        question,
+        questionModeByQuestionUid: modeByUid,
+        fallbackMode: kLearningQuestionModeOriginal,
+        forceOriginalMode: forceOriginalMode,
+      );
       final answer = previewAnswerForMode(question, answerMode).trim();
       final answerRenderKind = answerRenderKindForMode(answerMode);
       final answerRender =

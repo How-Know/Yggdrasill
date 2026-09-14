@@ -699,18 +699,21 @@ bool allowEssayOf(LearningProblemQuestion question) {
 }
 
 String originalQuestionModeOf(LearningProblemQuestion question) {
-  if (question.allowObjective && !question.allowSubjective) {
-    return kLearningQuestionModeObjective;
-  }
-  if (!question.allowObjective && question.allowSubjective) {
-    return kLearningQuestionModeSubjective;
-  }
+  // 원본 유형은 AI 객관식 생성 여부나 현재 출제 허용값과 별개다.
+  // question_type을 먼저 보존해야 원본 주관식에 objective_choices가 추가되어도
+  // "원본" 출제가 객관식으로 뒤집히지 않는다.
   final type = question.questionType.trim();
   if (type.contains('\uC11C\uC220')) return kLearningQuestionModeEssay;
   if (type.contains('\uAC1D\uAD00\uC2DD')) {
     return kLearningQuestionModeObjective;
   }
   if (type.contains('\uC8FC\uAD00\uC2DD')) {
+    return kLearningQuestionModeSubjective;
+  }
+  if (question.allowObjective && !question.allowSubjective) {
+    return kLearningQuestionModeObjective;
+  }
+  if (!question.allowObjective && question.allowSubjective) {
     return kLearningQuestionModeSubjective;
   }
   if (question.effectiveChoices.length >= 2) {
@@ -765,7 +768,11 @@ String effectiveQuestionModeOf(
   LearningProblemQuestion question, {
   required Map<String, String> questionModeByQuestionUid,
   required String fallbackMode,
+  bool forceOriginalMode = false,
 }) {
+  if (forceOriginalMode) {
+    return originalQuestionModeOf(question);
+  }
   final stableKey = question.stableQuestionKey;
   return normalizeQuestionModeSelection(
     question,
@@ -961,8 +968,7 @@ LearningProblemQuestion questionForLayoutPreviewMode(
 }
 
 bool looksObjectiveInOriginalMode(LearningProblemQuestion question) {
-  return question.effectiveChoices.length >= 2 ||
-      question.questionType.contains('\uAC1D\uAD00\uC2DD');
+  return originalQuestionModeOf(question) == kLearningQuestionModeObjective;
 }
 
 String previewAnswerForMode(

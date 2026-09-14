@@ -435,6 +435,7 @@ class TextbookExplorerService {
         .toSet()
         .toList(growable: false);
     final answerKindByUid = <String, TbAnswerKind>{};
+    Set<String>? availableQuestionUids;
     if (uids.isNotEmpty) {
       try {
         final academyId = await TenantService.instance.getActiveAcademyId();
@@ -443,6 +444,9 @@ class TextbookExplorerService {
             academyId: academyId,
             questionUids: uids,
           );
+          availableQuestionUids = <String>{
+            for (final q in questions) q.stableQuestionKey,
+          };
           for (final q in questions) {
             answerKindByUid[q.stableQuestionKey] = _answerKindFor(q);
           }
@@ -452,13 +456,18 @@ class TextbookExplorerService {
       }
     }
 
-    final resolvedItems = linkedItems
-        .map(
-          (e) => e.hasUid && answerKindByUid.containsKey(e.questionUid)
-              ? e.copyWith(answerKind: answerKindByUid[e.questionUid])
-              : e,
-        )
-        .toList(growable: false);
+    final resolvedItems = linkedItems.map(
+      (e) {
+        if (e.hasUid &&
+            availableQuestionUids != null &&
+            !availableQuestionUids.contains(e.questionUid)) {
+          return e.copyWith(questionUid: '');
+        }
+        return e.hasUid && answerKindByUid.containsKey(e.questionUid)
+            ? e.copyWith(answerKind: answerKindByUid[e.questionUid])
+            : e;
+      },
+    ).toList(growable: false);
 
     final data = _assembleData(
       payload: payload,

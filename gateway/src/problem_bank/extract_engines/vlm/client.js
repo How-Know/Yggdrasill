@@ -42,6 +42,14 @@ export function recoverMangledLatexControls(value) {
     s = s.replace(/\x0b/g, '\\v');
     // 조건부 복원: TAB 은 "뒤에 알파벳" 인 경우에만 LaTeX 명령으로 간주
     s = s.replace(/\x09(?=[A-Za-z])/g, '\\t');
+    // JSON.parse 는 유효 escape 인 "\n"을 실제 LF로 바꾼다. 그래서 모델이
+    // `\notin`을 백슬래시 하나로 보내면 `LF + otin`이 되어, 렌더러에는
+    // "otin"이 다음 줄에 남는다. 알려진 n-계열 명령은 공백/문장부호 앞에서도
+    // 복원한다. 일반 문장 줄바꿈은 이 접미사로 시작하지 않으므로 유지된다.
+    s = s.replace(
+      /\x0a(?=(?:abla|atural|e(?:q|g)?|i|otin|u)(?![A-Za-z]))/g,
+      '\\n',
+    );
     // 조건부 복원: CR / LF 는 "뒤에 LaTeX 명령 이름 + special char" 패턴일 때만.
     //   terminator 는 LaTeX 명령 뒤에 자주 오는 문자들 전부 커버해야 한다:
     //     \    다음 명령 시작  (\right\} \not\in)

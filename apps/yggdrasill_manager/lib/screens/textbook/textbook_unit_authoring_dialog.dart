@@ -219,6 +219,16 @@ class _TextbookUnitAuthoringDialogState
     'A': 'type_problem',
     'B': 'unit_review',
   };
+  // 고쟁이 슬롯 → 탐지 섹션. 게이트웨이 GOJAENGI_SECTION_BY_SUB_KEY 와 짝이다.
+  static const Map<String, String> _kGojaengiSectionBySubKey = {
+    'A': 'core_type', // STEP1 핵심 유형
+    'B': 'advanced_type', // STEP2 심화 유형
+    'C': 'top_type', // STEP3 최고난도 유형
+    'D': 'creative_type', // 창의융합 유형
+    'E': 'mid_unit_test', // 워크북 중단원 TEST
+    'F': 'big_unit_test', // 워크북 대단원 TEST
+  };
+
   static const Map<String, String> _kSuryeokCategoryShortNames = {
     'type_problem': '유형 문제',
     'concept_check': '개념 체크',
@@ -1077,6 +1087,15 @@ class _TextbookUnitAuthoringDialogState
     });
   }
 
+  /// 유형 머리말이 유형이 바뀔 때만 인쇄돼, 머리말 없는 이어지는 문항이 직전
+  /// 유형을 승계해야 하는 슬롯인지. 쎈/RPM 은 B(유형 뽀개기)뿐이고, 고쟁이는
+  /// A(핵심·발전 배지)와 B(유형 배지) 둘 다다. 고쟁이 D(창의융합)는 문항마다
+  /// 배지가 따로 붙으므로 승계하면 안 된다.
+  bool _carriesTypeGroup(String subKey) {
+    if (_seriesKey == 'gojaengi') return subKey == 'A' || subKey == 'B';
+    return subKey == 'B';
+  }
+
   _ResolvedContentGroup _rawContentGroupForItem(
     TextbookVlmItem item,
     String subKey,
@@ -1112,7 +1131,7 @@ class _TextbookUnitAuthoringDialogState
     // 유형 머리말은 유형이 바뀔 때만 인쇄되므로, 지면이 넘어가도 직전 유형이
     // 이어진다. 개념 체크는 유형에 딸리지 않으므로 승계 대상이 아니다.
     final carrySeries = _seriesKey == 'suryeok';
-    if (!carrySeries && focus.subKey != 'B') {
+    if (!carrySeries && !_carriesTypeGroup(focus.subKey)) {
       return const _ResolvedContentGroup.none();
     }
     _ResolvedContentGroup? lastGroup;
@@ -1141,7 +1160,9 @@ class _TextbookUnitAuthoringDialogState
   }
 
   String? _requiredTypeGroupError(_SubFocus focus, _SubRunState state) {
-    if (focus.subKey != 'B' || (_seriesKey != 'ssen' && _seriesKey != 'rpm')) {
+    const seriesWithTypeHeaders = {'ssen', 'rpm', 'gojaengi'};
+    if (!seriesWithTypeHeaders.contains(_seriesKey) ||
+        !_carriesTypeGroup(focus.subKey)) {
       return null;
     }
     final items = state.pageResults
@@ -1150,11 +1171,16 @@ class _TextbookUnitAuthoringDialogState
         .toList(growable: false);
     if (items.isEmpty) return null;
     final hasType = items.any((item) {
-      final group =
-          _rawContentGroupForItem(item, focus.subKey, 'type_practice');
+      final group = _rawContentGroupForItem(
+        item,
+        focus.subKey,
+        _sectionForSubKey(focus.subKey),
+      );
       return group.kind == 'type';
     });
-    return hasType ? null : 'B단계 유형명을 하나도 추출하지 못했습니다. 유형명 포함 재분석이 필요합니다.';
+    return hasType
+        ? null
+        : '${focus.subKey}단계 유형명을 하나도 추출하지 못했습니다. 유형명 포함 재분석이 필요합니다.';
   }
 
   String _sectionForSubKey(String subKey) {
@@ -1177,6 +1203,10 @@ class _TextbookUnitAuthoringDialogState
     // 게이트웨이 SURYEOK_SECTION_BY_SUB_KEY 와 동일하게 유지.
     if (_seriesKey == 'suryeok') {
       return _kSuryeokCategoryBySubKey[subKey] ?? 'unknown';
+    }
+    // 게이트웨이 GOJAENGI_SECTION_BY_SUB_KEY 와 동일하게 유지.
+    if (_seriesKey == 'gojaengi') {
+      return _kGojaengiSectionBySubKey[subKey] ?? 'unknown';
     }
     switch (subKey) {
       case 'A':
@@ -1339,6 +1369,53 @@ class _TextbookUnitAuthoringDialogState
     }
   }
 
+  /// 고쟁이 워크북 지면을 훑어 E(중단원 TEST)·F(대단원 TEST) 쪽 범위를 채운다.
+  ///
+  /// 목차에는 워크북 두 묶음의 시작 쪽만 인쇄돼 있어서 대단원·중단원별 범위는
+  /// 지면 머리말을 읽어야 나온다. 상태줄에 덧붙일 문구를 돌려준다.
+  Future<String> _autofillWorkbookRanges(
+    List<TocAutofillBigUnit> tree, {
+    required TextbookTocParseResult toc,
+    required PdfDocument document,
+    required int tocPageOffset,
+  }) async {
+    final printedStart = toc.workbookMidTestPage ?? toc.workbookBigTestPage;
+    if (_seriesKey != 'gojaengi' || printedStart == null) return '';
+    final startRaw = printedStart + tocPageOffset;
+    if (startRaw < 1 || startRaw > document.pages.length) {
+      return ' · 워크북 시작 쪽($printedStart)이 PDF 범위를 벗어나 건너뜀';
+    }
+    final report = await autofillGojaengiWorkbookRanges(
+      tree,
+      workbookStartPage: startRaw,
+      workbookEndPage: document.pages.length,
+      classify: (rawPages) async {
+        final images = <TextbookRpmSectionImage>[];
+        for (final rawPage in rawPages) {
+          images.add(TextbookRpmSectionImage(
+            rawPage: rawPage,
+            bytes: await renderPdfPageToPng(
+              document: document,
+              pageNumber: rawPage,
+              longEdgePx: 1100,
+            ),
+          ));
+        }
+        final result = await _vlmService.classifyGojaengiWorkbookPages(
+          images: images,
+        );
+        return result.pages;
+      },
+      onProgress: (message) {
+        if (mounted) setState(() => _tocStatus = message);
+      },
+    );
+    if (report.isEmpty) return ' · 워크북 묶음 머리말을 하나도 못 읽었습니다';
+    return ' · 워크북 중단원 TEST ${report.midTestCount}개 / '
+        '대단원 TEST ${report.bigTestCount}개 쪽 자동 입력'
+        '${report.unmatched.isEmpty ? '' : ' · 짝 못 찾음: ${report.unmatched.join(', ')}'}';
+  }
+
   /// VLM 목차 결과를 단원 트리에 반영한다. (대단원 수, 중단원 수) 를 반환.
   ///
   /// 이름 정리와 페이지 자동 채움은 [buildTocAutofillTree] (공용 로직) 가
@@ -1361,9 +1438,11 @@ class _TextbookUnitAuthoringDialogState
     );
     if (tree.isEmpty) return null;
     var partStatus = '';
-    if (_seriesKey == 'ssen' || _seriesKey == 'rpm') {
+    final partSeries = kProblemBookSectionParts.containsKey(_seriesKey);
+    if (partSeries) {
       final report = await autofillProblemBookPartRanges(
         tree,
+        series: _seriesKey,
         classify: (rawPages) async {
           final images = <TextbookRpmSectionImage>[];
           for (final rawPage in rawPages) {
@@ -1386,13 +1465,22 @@ class _TextbookUnitAuthoringDialogState
           if (mounted) setState(() => _tocStatus = message);
         },
       );
+      final seriesName = _currentSeries().displayName;
+      final slotLabel =
+          kProblemBookSectionParts[_seriesKey]!.map((p) => p[0]).join('/');
       if (report.incompleteMids.isNotEmpty) {
-        partStatus = ' · ${_seriesKey == 'ssen' ? '쎈' : 'RPM'} 경계 미확인: '
+        partStatus = ' · $seriesName 경계 미확인: '
             '${report.incompleteMids.join(', ')}';
       } else {
-        partStatus = ' · ${_seriesKey == 'ssen' ? '쎈' : 'RPM'} '
-            'A/B/C ${report.completedMids}개 중단원 자동 분리';
+        partStatus = ' · $seriesName '
+            '$slotLabel ${report.completedMids}개 중단원 자동 분리';
       }
+      partStatus += await _autofillWorkbookRanges(
+        tree,
+        toc: toc,
+        document: document,
+        tocPageOffset: tocPageOffset,
+      );
     }
     final newBigs = <_BigUnitEdit>[];
     for (final big in tree) {
@@ -1411,7 +1499,7 @@ class _TextbookUnitAuthoringDialogState
           }
           _recalcSubUnitSlotPages(midEdit);
         }
-        if (_seriesKey == 'ssen' || _seriesKey == 'rpm') {
+        if (partSeries) {
           for (final slot in midEdit.subs) {
             final range = mid.rpmPartRanges[slot.preset.key];
             if (range == null) continue;
@@ -1475,6 +1563,19 @@ class _TextbookUnitAuthoringDialogState
       });
     } catch (_) {
       // 정규화 트리 동기화 실패가 오서링 흐름을 막지는 않는다.
+    }
+  }
+
+  /// 중단원 이름에 맞는 슬롯 구성으로 맞춘다. 고쟁이는 "대단원 TEST" 행만
+  /// F 슬롯을, 나머지 중단원은 A~E 를 갖는다. 이름을 고쳐 쓰면 슬롯이 따라
+  /// 바뀌어야 하므로 이름 입력 때마다 다시 맞춘다.
+  void _syncTrailingMidSlots() {
+    final series = _currentSeries();
+    if (series.trailingMidSlotKeys.isEmpty) return;
+    for (final big in _bigUnits) {
+      for (final mid in big.middles) {
+        mid.applyPreset(series);
+      }
     }
   }
 
@@ -2193,6 +2294,10 @@ class _TextbookUnitAuthoringDialogState
       );
     } else if (_seriesKey == 'suryeok') {
       guarded = _guardSuryeokNumberRewind(state.pageResults);
+    } else if (_seriesKey == 'gojaengi') {
+      // 고쟁이는 세 자리 연속 번호라 쎈 A의 4자리 basic_drill 가드를 타면
+      // 본문 문항이 통째로 개념 지면으로 비워진다.
+      return;
     } else {
       // basic_drill(4자리 번호) 가드는 쎈/RPM A 파트 전용.
       if (focus.subKey != 'A') return;
@@ -2227,6 +2332,12 @@ class _TextbookUnitAuthoringDialogState
   ///
   /// 같은 지면 안에서는 비교하지 않는다. 2단 조판이라 모델이 좌·우 단을 섞어
   /// 내보내는 일이 있는데, 그때 멀쩡한 문항이 역행으로 보여 지워지기 때문이다.
+  ///
+  /// 그 지면의 세트 지문("[07-09] …")이 감싸는 번호도 건드리지 않는다. 지문이
+  /// 그 자리에 인쇄돼 있다는 것은 그 번호가 이 지면의 진짜 문항이라는 뜻이라,
+  /// 앞 지면 최댓값보다 작아도 역행이 아니다. 공통수학1 p31 개념 박스의 공식
+  /// 번호 7~12 가 문항으로 잘못 들어와 최댓값을 12 로 밀어 올리자, p32 의 진짜
+  /// 문항 07~12 가 통째로 지워지고 세트 지문 두 줄만 남았다.
   List<_PageAnalysisRow> _guardSuryeokNumberRewind(
     List<_PageAnalysisRow> rows,
   ) {
@@ -2237,6 +2348,17 @@ class _TextbookUnitAuthoringDialogState
       final raw = item.number.trim();
       if (!RegExp(r'^\d{1,3}$').hasMatch(raw)) return null;
       return int.tryParse(raw);
+    }
+
+    bool coveredBySetHeader(_PageAnalysisRow row, int number) {
+      for (final item in row.items) {
+        if (!item.isSetHeader) continue;
+        final from = item.setFrom;
+        final to = item.setTo;
+        if (from == null || to == null) continue;
+        if (number >= from && number <= to) return true;
+      }
+      return false;
     }
 
     final order = rows.where((r) => r.ok).toList()
@@ -2251,7 +2373,7 @@ class _TextbookUnitAuthoringDialogState
         if (item.isSetHeader) continue;
         final number = printedNumber(item);
         if (number == null) continue;
-        if (number <= maxBeforePage) {
+        if (number <= maxBeforePage && !coveredBySetHeader(row, number)) {
           (droppedByPage[row.rawPage] ??= <int>{}).add(i);
           continue;
         }
@@ -3063,10 +3185,11 @@ class _TextbookUnitAuthoringDialogState
         if (region == null || region.length != 4) continue;
         final rawGroup =
             _rawContentGroupForItem(vlm, focus.subKey, row.section);
-        final group = focus.subKey == 'B' && rawGroup.kind == 'none'
+        final carries = _carriesTypeGroup(focus.subKey);
+        final group = carries && rawGroup.kind == 'none'
             ? (lastBGroup ?? rawGroup)
             : rawGroup;
-        if (focus.subKey == 'B' && rawGroup.kind == 'type') {
+        if (carries && rawGroup.kind == 'type') {
           lastBGroup = rawGroup;
         }
         items.add(TextbookCropUploadItem(
@@ -4123,6 +4246,9 @@ class _TextbookUnitAuthoringDialogState
 
   int? _nextStageStartPageAfter(_SubFocus focus, {required bool answer}) {
     var passed = false;
+    int? currentStart;
+    final currentPageFamily =
+        textbookStagePageFamily(_seriesKey, focus.subKey);
     for (var b = 0; b < _bigUnits.length; b += 1) {
       final big = _bigUnits[b];
       for (var m = 0; m < big.middles.length; m += 1) {
@@ -4131,15 +4257,34 @@ class _TextbookUnitAuthoringDialogState
           final isCurrent = b == focus.bigIndex &&
               m == focus.midIndex &&
               sub.preset.key == focus.subKey;
-          if (isCurrent) {
-            passed = true;
-            continue;
-          }
-          if (!passed) continue;
           final page = _positiveInt(
             answer ? sub.answerStartCtrl.text : sub.solutionStartCtrl.text,
           );
-          if (page != null) return page;
+          if (isCurrent) {
+            passed = true;
+            currentStart = page;
+            continue;
+          }
+          if (!passed) continue;
+          if (page == null) continue;
+          // 고쟁이는 본교재 해설(A~D)과 워크북 해설(E/F)이 PDF 안에서
+          // 서로 멀리 떨어진 별도 묶음이다. D 다음에 트리상 E가 온다는 이유로
+          // E 시작 쪽(실사례 140)을 D의 끝으로 쓰면 D가 45~140을 통째로
+          // 훑으면서 다른 중단원 풀이를 자기 것으로 집어 온다.
+          //
+          // 같은 출처 묶음 안의 다음 시작 쪽만 끝 경계 후보로 사용한다.
+          if (currentPageFamily.isNotEmpty &&
+              textbookStagePageFamily(_seriesKey, sub.preset.key) !=
+                  currentPageFamily) {
+            continue;
+          }
+          // 답지 안의 차례가 단원트리 차례와 어긋나는 교재가 있다. 고쟁이는
+          // 워크북 빠른 정답이 본문 빠른 정답 **뒤에** 몰려 있어서, 중단원 1의
+          // 워크북 슬롯 다음에 오는 중단원 2의 본문 슬롯이 더 앞쪽 지면을
+          // 가리킨다. 그걸 끝 경계로 삼으면 범위가 한 지면으로 접혀 그 묶음의
+          // 정답을 하나도 못 찾는다. 뒤로 가는 후보는 건너뛰고 계속 찾는다.
+          if (currentStart != null && page <= currentStart) continue;
+          return page;
         }
       }
     }
@@ -4179,10 +4324,11 @@ class _TextbookUnitAuthoringDialogState
         if (id == null) continue;
         final rawGroup =
             _rawContentGroupForItem(item, focus.subKey, row.section);
-        final group = focus.subKey == 'B' && rawGroup.kind == 'none'
+        final carries = _carriesTypeGroup(focus.subKey);
+        final group = carries && rawGroup.kind == 'none'
             ? (lastBGroup ?? rawGroup)
             : rawGroup;
-        if (focus.subKey == 'B' && rawGroup.kind == 'type') {
+        if (carries && rawGroup.kind == 'type') {
           lastBGroup = rawGroup;
         }
         seeds.add(TextbookAuthoringStageCropSeed(
@@ -4197,6 +4343,7 @@ class _TextbookUnitAuthoringDialogState
           contentGroupTitle: group.title,
           contentGroupOrder: group.order,
           scopeLabel: seedScopeLabel,
+          scopeKey: textbookStageScopeKey(scope),
         ));
       }
     }
@@ -4258,6 +4405,12 @@ class _TextbookUnitAuthoringDialogState
           isSetHeader: item.isSetHeader,
           scopeLabel:
               '$midName/${_conceptCategoryShortNames[category] ?? category}',
+          scopeKey: textbookStageScopeKey(TextbookAuthoringStageScope(
+            bigOrder: focus.bigIndex,
+            midOrder: focus.midIndex,
+            subKey: subKey,
+            unitRowIndex: _wonriRowIndex(focus),
+          )),
         ));
       }
     }
@@ -4721,7 +4874,13 @@ class _TextbookUnitAuthoringDialogState
               ),
               const SizedBox(width: 6),
               Expanded(
-                child: _textInput(mid.nameCtrl, hint: '중단원 이름'),
+                child: _textInput(
+                  mid.nameCtrl,
+                  hint: '중단원 이름',
+                  // 고쟁이는 "대단원 TEST" 로 이름을 고쳐 쓰면 그 행이 F 슬롯만
+                  // 갖는 대단원 끝 행으로 바뀐다.
+                  onChanged: _syncTrailingMidSlots,
+                ),
               ),
               IconButton(
                 tooltip: '중단원 삭제',
@@ -7131,7 +7290,7 @@ class _MidUnitEdit {
     String? midName,
   }) {
     if (midName != null) nameCtrl.text = midName;
-    for (final preset in series.subPreset) {
+    for (final preset in series.slotsForMid(nameCtrl.text)) {
       subs.add(_SubSectionEdit(preset: preset));
     }
   }
@@ -7145,12 +7304,15 @@ class _MidUnitEdit {
 
   /// 시리즈 변경 시 A~D 슬롯을 새 프리셋으로 재구성한다.
   /// 같은 키의 슬롯에 이미 입력된 페이지 텍스트는 유지한다.
+  ///
+  /// 슬롯 구성은 중단원 이름을 본다 — 고쟁이 "대단원 TEST" 행은 F 슬롯만,
+  /// 나머지 중단원은 F 를 뺀 A~E 를 갖는다.
   void applyPreset(TextbookSeriesCatalogEntry series) {
     final keyed = <String, _SubSectionEdit>{
       for (final s in subs) s.preset.key: s,
     };
     final rebuilt = <_SubSectionEdit>[];
-    for (final preset in series.subPreset) {
+    for (final preset in series.slotsForMid(nameCtrl.text)) {
       final existing = keyed.remove(preset.key);
       if (existing == null) {
         rebuilt.add(_SubSectionEdit(preset: preset));

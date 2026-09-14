@@ -375,6 +375,7 @@ class ProblemBankQuestion {
     required this.confidence,
     required this.flags,
     required this.isChecked,
+    this.isPublished = true,
     required this.reviewerNotes,
     required this.allowObjective,
     required this.allowSubjective,
@@ -418,6 +419,7 @@ class ProblemBankQuestion {
   final double confidence;
   final List<String> flags;
   final bool isChecked;
+  final bool isPublished;
   final String reviewerNotes;
   final bool allowObjective;
   final bool allowSubjective;
@@ -536,6 +538,7 @@ class ProblemBankQuestion {
     List<String>? figureRefs,
     List<ProblemBankEquation>? equations,
     bool? isChecked,
+    bool? isPublished,
     String? reviewerNotes,
     List<String>? flags,
     String? curriculumCode,
@@ -572,6 +575,7 @@ class ProblemBankQuestion {
       confidence: confidence,
       flags: flags ?? this.flags,
       isChecked: isChecked ?? this.isChecked,
+      isPublished: isPublished ?? this.isPublished,
       reviewerNotes: reviewerNotes ?? this.reviewerNotes,
       allowObjective: allowObjective ?? this.allowObjective,
       allowSubjective: allowSubjective ?? this.allowSubjective,
@@ -670,6 +674,7 @@ class ProblemBankQuestion {
       flags:
           _listOrEmpty(map['flags']).map((e) => '$e').toList(growable: false),
       isChecked: map['is_checked'] == true,
+      isPublished: map['is_published'] != false,
       reviewerNotes: '${map['reviewer_notes'] ?? ''}',
       allowObjective: map.containsKey('allow_objective')
           ? map['allow_objective'] != false
@@ -785,6 +790,7 @@ class ProblemBankExportJob {
     required this.errorCode,
     required this.errorMessage,
     required this.options,
+    required this.resultSummary,
     required this.createdAt,
     required this.updatedAt,
     this.startedAt,
@@ -805,6 +811,7 @@ class ProblemBankExportJob {
   final String errorCode;
   final String errorMessage;
   final Map<String, dynamic> options;
+  final Map<String, dynamic> resultSummary;
   final DateTime createdAt;
   final DateTime updatedAt;
   final DateTime? startedAt;
@@ -830,6 +837,7 @@ class ProblemBankExportJob {
       errorCode: '${map['error_code'] ?? ''}',
       errorMessage: '${map['error_message'] ?? ''}',
       options: _mapOrEmpty(map['options']),
+      resultSummary: _mapOrEmpty(map['result_summary'] ?? map['resultSummary']),
       createdAt: _dateTimeOrNull(map['created_at']) ?? DateTime.now(),
       updatedAt: _dateTimeOrNull(map['updated_at']) ?? DateTime.now(),
       startedAt: _dateTimeOrNull(map['started_at']),
@@ -968,6 +976,33 @@ bool _looksLikeObjectiveKeyAnswer(String value) {
     return _objectiveAnswerTokens(normalized).isNotEmpty;
   }
   return RegExp(r'^(?:10|[1-9])\s*번$').hasMatch(normalized);
+}
+
+/// 주관식 허용 문항을 DB에 쓸 주관식 정답.
+/// 칸이 비었거나 ①만 있으면 객관식 보기 텍스트로 채운다.
+String persistableSubjectiveAnswerOf(ProblemBankQuestion question) {
+  if (!question.allowSubjective) return '';
+  final direct = question.subjectiveAnswer.trim();
+  if (direct.isNotEmpty && !_looksLikeObjectiveKeyAnswer(direct)) {
+    return direct;
+  }
+  final choices = question.objectiveChoices.isNotEmpty
+      ? question.objectiveChoices
+      : question.choices;
+  return _objectiveAnswerToSubjective(question.objectiveAnswerKey, choices);
+}
+
+/// 검수 완료/문서 확정 때 주관식 정답을 컬럼에 한 번 더 써야 하는지.
+/// 메타에 이미 보기 텍스트가 있으면 재저장하지 않는다.
+bool shouldPersistDerivedSubjectiveAnswer(ProblemBankQuestion question) {
+  if (!question.allowSubjective) return false;
+  final persistable = persistableSubjectiveAnswerOf(question);
+  if (persistable.isEmpty) return false;
+  final storedMeta = '${question.meta['subjective_answer'] ?? ''}'.trim();
+  if (storedMeta.isEmpty || _looksLikeObjectiveKeyAnswer(storedMeta)) {
+    return true;
+  }
+  return storedMeta != persistable;
 }
 
 int? _answerTokenToChoiceIndex(String token) {
@@ -1560,7 +1595,12 @@ class ProblemBankExportPreset {
     required this.renderConfig,
     required this.selectedQuestionUids,
     required this.selectedQuestionCount,
+    this.sourceDocumentId = '',
+    this.sourceDocumentIds = const <String>[],
+    this.documentId = '',
+    this.sourceDocumentName = '',
     this.createdAt,
+    this.updatedAt,
   });
 
   final String id;
@@ -1571,7 +1611,12 @@ class ProblemBankExportPreset {
   final Map<String, dynamic> renderConfig;
   final List<String> selectedQuestionUids;
   final int selectedQuestionCount;
+  final String sourceDocumentId;
+  final List<String> sourceDocumentIds;
+  final String documentId;
+  final String sourceDocumentName;
   final DateTime? createdAt;
+  final DateTime? updatedAt;
 
   String get templateProfile =>
       '${renderConfig['templateProfile'] ?? ''}'.trim();
@@ -1617,6 +1662,14 @@ class ProblemBankExportPreset {
             : (selectedQuestionUids.isNotEmpty
                 ? selectedQuestionUids.length
                 : int.tryParse('$countRaw') ?? 0));
+    final sourceDocumentIdsRaw =
+        map['source_document_ids'] ?? map['sourceDocumentIds'];
+    final sourceDocumentIds = sourceDocumentIdsRaw is List
+        ? sourceDocumentIdsRaw
+            .map((e) => '$e'.trim())
+            .where((e) => e.isNotEmpty)
+            .toList(growable: false)
+        : const <String>[];
 
     return ProblemBankExportPreset(
       id: '${map['id'] ?? ''}'.trim(),
@@ -1628,7 +1681,16 @@ class ProblemBankExportPreset {
       renderConfig: renderConfig,
       selectedQuestionUids: selectedQuestionUids,
       selectedQuestionCount: selectedQuestionCount,
+      sourceDocumentId:
+          '${map['source_document_id'] ?? map['sourceDocumentId'] ?? ''}'
+              .trim(),
+      sourceDocumentIds: sourceDocumentIds,
+      documentId: '${map['document_id'] ?? map['documentId'] ?? ''}'.trim(),
+      sourceDocumentName:
+          '${map['source_document_name'] ?? map['sourceDocumentName'] ?? ''}'
+              .trim(),
       createdAt: _dateTimeOrNull(map['created_at'] ?? map['createdAt']),
+      updatedAt: _dateTimeOrNull(map['updated_at'] ?? map['updatedAt']),
     );
   }
 }

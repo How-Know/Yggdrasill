@@ -203,6 +203,152 @@ function buildSuryeokExpectedTable(expectedEntries, skipBadges) {
   ];
 }
 
+// 고쟁이 답지 전용 규칙.
+//
+// 이 교재의 빠른 정답은 "본교재" 지면들과 "WORKBOOK" 지면들로 나뉘고, 두 묶음의
+// 번호 체계가 다르다 — 본교재는 책 전체를 관통하는 세 자리("054"), 워크북은
+// TEST 묶음마다 01 부터 다시 시작하는 두 자리다.
+//
+// 체계가 달라 섞어도 안전할 것 같지만, 번호키는 앞자리 0 을 떼기 때문에 본교재
+// "005" 와 워크북 "05" 가 같은 키 "5" 로 뭉개진다. 추출은 중단원 단위라 한 중단원
+// 의 A~E 가 한 요청에 함께 실리고, 그러면 앞 24개가 통째로 겹친다. 실제로 2-2
+// 중단원 1 은 기대 77개 중 29개만 채워졌다(겹치지 않는 본문 025~053 뿐).
+//
+// 그래서 본교재·워크북 **양쪽 모두** 쪽 배지로 묶음을 먼저 특정하게 한다.
+// 답지에는 묶음마다 "본교재 007~009쪽" / "워크북 166~169쪽" 이 인쇄돼 있어서
+// 쪽 범위만으로 두 체계가 완전히 갈린다.
+function buildGojaengiExpectedTable(expectedEntries, skipBadges) {
+  const rows = (Array.isArray(expectedEntries) ? expectedEntries : []).filter(
+    (e) => e && String(e.number || '').trim(),
+  );
+  if (!rows.length) return [];
+  const skip = (Array.isArray(skipBadges) ? skipBadges : [])
+    .map((v) => String(v ?? '').trim())
+    .filter(Boolean);
+  return [
+    '',
+    '=== 기대 문항 상세표 (이 표가 번호 목록보다 우선한다) ===',
+    '각 줄은 "돌려줄 problem_number | 찾을 묶음 | 묶음 이름 | 그 묶음 배지의 쪽"',
+    '이다. "본교재" 는 본교재 지면의 Step 묶음, "중단원 TEST"·"대단원 TEST" 는',
+    'WORKBOOK 지면의 묶음이다. 반드시 이 쪽수를 범위에 담은 배지가 붙은',
+    '묶음에서만 읽어라.',
+    ...rows.map((e) => {
+      const corner = e.corner ? `묶음="${e.corner}"` : '묶음=미상';
+      const title = e.title ? `이름="${e.title}"` : '이름=미상';
+      const page = e.page ? `배지=${e.page}쪽` : '배지=미상';
+      return `- problem_number="${e.number}" | ${corner} | ${title} | ${page}`;
+    }),
+    ...buildGojaengiBlockSummaryLines(rows),
+    ...(skip.length
+      ? [
+          '',
+          '=== 건너뛸 묶음 (이미 확인했고 우리가 찾는 묶음이 아니다) ===',
+          ...skip.map((badge) => `- ${badge}`),
+          '직전 시도에서 네가 이 묶음을 골랐고, 쪽 배지가 위 상세표와 달라서',
+          '전부 버려졌다. 이 배지가 붙은 묶음은 쳐다보지 말고, 상세표의 쪽을',
+          '범위에 담은 다른 묶음을 찾아라. 대개 바로 옆이나 위 단에 있다.',
+        ]
+      : []),
+  ];
+}
+
+// 찾아야 하는 묶음을 "이름 · 문항 수 · 쪽 배지 범위" 로 한 줄에 요약한다.
+//
+// 실지면(2-2 답지 6쪽) 은 "중단원 TEST" 보라 배지 묶음이 **일곱 개** 나란히
+// 서 있고, 서로 붙어 있는 워크북 쪽 배지(174~177 / 178~181 / 182~185) 는
+// 작아서 모델이 옆 묶음을 집는다. 실제로 178~181 을 찾으라고 했는데 182~185
+// 묶음의 24개를 올려 전부 버려졌다. 반면 묶음 이름("여러 가지 사각형") 은
+// 크게 인쇄되고, 문항 수(25개 vs 24개) 는 자기 검산에 쓸 수 있다.
+function buildGojaengiBlockSummaryLines(rows) {
+  const groups = new Map();
+  for (const row of rows) {
+    const corner = String(row.corner || '').trim();
+    const title = String(row.title || '').trim();
+    if (!corner && !title) continue;
+    const key = `${corner}|${title}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = { corner, title, count: 0, pages: [] };
+      groups.set(key, group);
+    }
+    group.count += 1;
+    if (row.page) group.pages.push(row.page);
+  }
+  if (groups.size === 0) return [];
+  const lines = [];
+  for (const group of groups.values()) {
+    const from = group.pages.length ? Math.min(...group.pages) : 0;
+    const to = group.pages.length ? Math.max(...group.pages) : 0;
+    const span = from ? `쪽 배지 ${from}~${to}` : '쪽 배지 미상';
+    const name = group.title ? `"${group.title}"` : '이름 미상';
+    lines.push(
+      `- ${group.corner || '묶음 미상'} ${name} · ${span} · 문항 ${group.count}개`,
+    );
+  }
+  return [
+    '',
+    '=== 이 요청에서 찾아야 하는 묶음 ===',
+    ...lines,
+    '묶음을 고를 때 이름을 먼저 맞춰라. 이름은 배지 숫자보다 크게 인쇄돼 있어',
+    '잘못 읽을 일이 없다. 고른 묶음의 문항 수가 위 개수와 다르면 **옆 묶음을',
+    '본 것이다** — 다시 세어 이름이 일치하는 묶음으로 옮겨라.',
+  ];
+}
+
+function buildGojaengiAnswerRules() {
+  return [
+    '',
+    '=== 고쟁이 답지 읽는 법 (매우 중요) ===',
+    '[W0] 지면 머리의 큰 띠가 이 지면의 종류다.',
+    '   - "빠른 정답 **본교재**" → 본교재 지면. 대단원·소단원별로 "Step 1",',
+    '     "Step 2", "Step 3", "창의융합" 묶음이 있고 묶음 오른쪽 위에',
+    '     **본교재 쪽 배지**("본교재 007~009쪽")가 인쇄된다. 번호는 책 전체를',
+    '     관통하는 세 자리다("054").',
+    '   - "빠른 정답 **WORKBOOK**" → 워크북 지면. 묶음 머리에 보라 배지',
+    '     "중단원 TEST" 또는 초록 배지 "대단원 TEST" 가 붙고, 그 아래 줄에',
+    '     소단원 번호·이름("○1 이등변삼각형과 직각삼각형")과 오른쪽에',
+    '     **워크북 쪽 배지**("워크북 166~169쪽")가 인쇄된다. 번호는 묶음마다',
+    '     01 부터 다시 시작하는 두 자리다.',
+    '[W1] 상세표에는 두 종류가 섞여 들어온다. 묶음이 "본교재" 인 줄은 본교재',
+    '   지면에만, "중단원 TEST"·"대단원 TEST" 인 줄은 WORKBOOK 지면에만 있다.',
+    '   이 지면 종류와 다른 줄은 여기서 찾지 말고 그냥 빠뜨려라([R2]).',
+    '[W2] **번호만 보고 답을 고르면 반드시 틀린다.** 워크북은 한 지면에 "01" 이',
+    '   일곱 개까지 있고, 본교재 "005" 와 워크북 "05" 는 눈으로도 헷갈린다.',
+    '   묶음을 고르는 유일한 단서는 쪽 배지다. 상세표의 쪽수가 그 묶음 배지의',
+    '   **범위 안에 들면** 그 묶음이다 — "워크북 182~185쪽" 묶음은 상세표가',
+    '   182·183·184·185 중 어느 쪽이어도 모두 이 묶음이고, "본교재 007~009쪽"',
+    '   묶음은 7·8·9 중 어느 쪽이어도 모두 이 묶음이다.',
+    '   지면 위에서부터 세지 말고, 반드시 배지 숫자를 읽어 골라라. 첫 묶음의',
+    '   답을 올리면 다른 소단원의 정답이 조용히 들어앉는다.',
+    '[W2-1] 워크북 묶음은 보라/초록 배지 아래 줄에 **소단원 번호와 이름**이',
+    '   크게 인쇄된다("○4 여러 가지 사각형"). 상세표의 이름과 이 이름을 먼저',
+    '   맞추고, 그다음 쪽 배지로 확인하라. 한 지면에 "중단원 TEST" 묶음이',
+    '   일곱 개까지 서고 쪽 배지(174~177 / 178~181 / 182~185)는 서로 붙어',
+    '   있어서, 배지만 보면 옆 묶음을 집는다.',
+    '[W3] 상세표의 묶음이 "중단원 TEST" 인 문항은 보라 배지 묶음에서만,',
+    '   "대단원 TEST" 인 문항은 초록 배지 묶음에서만 읽어라. 한 지면에 보라',
+    '   배지 묶음이 여러 개 있으면 이것만으로는 못 가른다 — [W2]·[W2-1] 로',
+    '   골라라.',
+    '[W4] problem_number 는 **기대 번호 문자열 그대로** 돌려줘라("01" 이면 "01",',
+    '   "005" 면 "005"). 답지에 "1" 로 보여도 앞자리 0 을 살려 기대 번호 형식에',
+    '   맞춘다. 이 규칙은 [R3] 의 "원문 그대로" 보다 우선한다.',
+    '[W5] 문항 번호 오른쪽의 작은 "본문 002" 배지는 이 문항이 본떠 온 본문 문항을',
+    '   가리키는 표시다. 문항 번호가 아니고 정답도 아니다. 무시하라.',
+    '[W6] item 마다 실제로 읽은 묶음을 source_* 에 적어라.',
+    '   - source_corner = "본교재" / "중단원 TEST" / "대단원 TEST"',
+    '   - source_page / source_page_end = 그 묶음 쪽 배지의 시작·끝 쪽',
+    '     ("본교재 007~009쪽" 이면 7 과 9, "워크북 166~169쪽" 이면 166 과 169).',
+    '   - 검산용이다. 상세표와 어긋나면 서버가 그 item 을 버리므로,',
+    '     **맞추려고 지어내지 말고 눈에 보이는 대로** 적어라.',
+    '[W7] 상세표의 줄마다 item 을 하나씩 만든다. 묶음의 첫 문항만 뽑고 끝내지',
+    '   마라. 한 묶음에 20~30개가 이어진다.',
+    '[W8] 묶음의 "01" 은 그 묶음 머리(소단원 번호·이름 + 쪽 배지) **바로 아래**',
+    '   줄의 맨 왼쪽 값이다. 묶음들이 위아래로 맞붙어 있어서, 머리 위쪽에 있는',
+    '   **직전 묶음의 마지막 줄**을 01 로 읽는 사고가 잦다. 01 을 적기 전에',
+    '   그 값이 머리보다 아래에 있는지 한 번 더 확인하라.',
+  ];
+}
+
 export function buildExtractAnswersPrompt({
   rawPage,
   displayPage,
@@ -214,8 +360,15 @@ export function buildExtractAnswersPrompt({
   const seriesKey = String(series || '').trim().toLowerCase();
   const isConceptPlus = seriesKey === 'gaeyu';
   const isSuryeok = seriesKey === 'suryeok';
+  // 고쟁이는 본문·워크북 양쪽에 배지를 실어 보낸다. 옛 요청(본문 배지 없음)도
+  // 그대로 받아 주려고 배지가 실려 온 요청에서만 출처 대조로 넘어간다.
+  const isGojaengiBadged =
+    seriesKey === 'gojaengi' &&
+    (Array.isArray(expectedEntries) ? expectedEntries : []).some(
+      (e) => e && (String(e.corner || '').trim() || e.page),
+    );
   // 답지 블록이 번호를 재사용하는 교재는 출처(source_*)를 함께 받아 검산한다.
-  const needsSourceBadge = isConceptPlus || isSuryeok;
+  const needsSourceBadge = isConceptPlus || isSuryeok || isGojaengiBadged;
   const pageLine =
     displayPage != null && Number.isFinite(displayPage)
       ? `이 이미지는 답지(정답지) PDF 의 ${displayPage}페이지이다. 이 값은 PDF raw page ${rawPage}와 동일한 입력 페이지 기준이다.`
@@ -253,6 +406,10 @@ export function buildExtractAnswersPrompt({
         ? buildSuryeokExpectedTable(expectedEntries, skipBadges)
         : []),
     ...(isSuryeok ? buildSuryeokAnswerRules() : []),
+    ...(isGojaengiBadged
+      ? buildGojaengiExpectedTable(expectedEntries, skipBadges)
+      : []),
+    ...(isGojaengiBadged ? buildGojaengiAnswerRules() : []),
     '',
     '=== 출력 스키마 ===',
     '{',

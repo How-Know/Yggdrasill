@@ -7,6 +7,37 @@ import 'package:mneme_flutter/services/learning_problem_bank_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 void main() {
+  test('UID 직접 조회에서도 비공개 문항을 제외한다', () async {
+    Uri? requestedUri;
+    final mockHttp = MockClient((request) async {
+      requestedUri = request.url;
+      return http.Response(
+        '[]',
+        200,
+        headers: {'content-type': 'application/json'},
+        request: request,
+      );
+    });
+    final client = SupabaseClient(
+      'https://supabase.test',
+      'test-anon-key',
+      httpClient: mockHttp,
+    );
+    final service = LearningProblemBankService(
+      client: client,
+      httpClient: mockHttp,
+    );
+
+    final questions = await service.loadQuestionsByQuestionUids(
+      academyId: '20000000-0000-0000-0000-000000000002',
+      questionUids: const ['40000000-0000-0000-0000-000000000004'],
+    );
+
+    expect(questions, isEmpty);
+    expect(requestedUri?.queryParameters['is_published'], 'eq.true');
+    client.dispose();
+  });
+
   test('Gateway 작업 생성 실패 시 Supabase export 큐로 폴백한다', () async {
     var gatewayRequested = false;
     var supabaseInserted = false;

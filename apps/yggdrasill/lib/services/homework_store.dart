@@ -1880,7 +1880,8 @@ class HomeworkStore {
   HomeworkRecentTemplate templateFromGeneratedAssignmentPreset(
     LearningProblemDocumentExportPreset preset,
   ) {
-    final createdAt = preset.updatedAt ?? preset.createdAt ?? DateTime.now();
+    final createdAt =
+        (preset.createdAt ?? preset.updatedAt)?.toLocal() ?? DateTime.now();
     final title = preset.displayName.trim().isEmpty
         ? '(제목 없음)'
         : preset.displayName.trim();

@@ -375,6 +375,7 @@ class TableScaleValue {
     this.columnScales,
     this.rowScales,
     this.widthMax = false,
+    this.autoWrap = false,
   });
 
   final double widthScale;
@@ -384,6 +385,9 @@ class TableScaleValue {
 
   /// 표 폭을 슬롯 본문 폭(\linewidth) 전체로 사용. true 이면 widthScale 은 무시된다.
   final bool widthMax;
+
+  /// 열 너비는 유지하고 긴 셀을 자동 줄바꿈. 행 높이는 내용에 맞춰 늘어난다.
+  final bool autoWrap;
 
   /// struct 표의 컬럼별 상대 가중치(0.3 ~ 2.5). null 이면 전부 균등(기본).
   /// 합이 1 일 필요는 없고, 렌더러가 합으로 정규화해 컬럼 폭 비율로 쓴다.
@@ -402,6 +406,7 @@ class TableScaleValue {
     List<double>? columnScales,
     List<double>? rowScales,
     bool? widthMax,
+    bool? autoWrap,
     bool clearColumnScales = false,
     bool clearRowScales = false,
   }) =>
@@ -414,6 +419,7 @@ class TableScaleValue {
             clearColumnScales ? null : (columnScales ?? this.columnScales),
         rowScales: clearRowScales ? null : (rowScales ?? this.rowScales),
         widthMax: widthMax ?? this.widthMax,
+        autoWrap: autoWrap ?? this.autoWrap,
       );
 
   Map<String, dynamic> toJson() => {
@@ -425,6 +431,7 @@ class TableScaleValue {
           'columnScales': columnScales,
         if (rowScales != null && rowScales!.isNotEmpty) 'rowScales': rowScales,
         if (widthMax) 'widthMax': true,
+        if (autoWrap) 'autoWrap': true,
       };
 
   static TableScaleValue fromJson(dynamic raw) {
@@ -462,11 +469,13 @@ class TableScaleValue {
       columnScales: parsedCs,
       rowScales: parsedRs,
       widthMax: raw['widthMax'] == true,
+      autoWrap: raw['autoWrap'] == true,
     );
   }
 
   bool get isDefault =>
       !widthMax &&
+      !autoWrap &&
       (widthScale - 1.0).abs() < 1e-3 &&
       (heightScale - 1.0).abs() < 1e-3 &&
       fontSizeDeltaPt.abs() < 1e-3 &&

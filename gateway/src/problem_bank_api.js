@@ -12,7 +12,7 @@ import sharp from "sharp";
 import {
   renderPdfWithXeLatex,
   renderAnswerWithXeLatex,
-} from "./problem_bank/render_engine/xelatex/renderer.js";
+} from "./problem_bank/render_engine/xelatex_v2/renderer.js";
 import { createMathSvgRenderer } from "./problem_bank/render_engine/math/mathjax_svg_renderer.js";
 import { generateObjectiveDraftForQuestion } from "./problem_bank_extract_worker.js";
 
@@ -84,6 +84,7 @@ import {
   repairSuryeokItemRegions,
   shouldTreatWonriPageAsConcept,
   suryeokMarksNeedRepair,
+  suryeokNumbersLookInterpolated,
   suryeokRangeHeadersMayBeMissing,
 } from "./textbook/vlm_detect_client.js";
 import {
@@ -103,6 +104,7 @@ import {
   detectSolutionRefsOnPage,
   normalizeSolutionRefsResult,
 } from "./textbook/vlm_solution_refs_client.js";
+import { wrongBadgeLabels } from "./textbook/vlm_corner_guard.js";
 import {
   detectSolutionBlocksOnPage,
   normalizeSolutionBlocksResult,
@@ -115,6 +117,7 @@ import {
 } from "./textbook/vlm_toc_client.js";
 import {
   classifyRpmSectionPages,
+  normalizeGojaengiWorkbookResult,
   normalizeRpmSectionResult,
 } from "./textbook/vlm_rpm_section_client.js";
 import {
@@ -879,7 +882,7 @@ const EXPORT_RENDER_CONFIG_VERSION = "pb_render_v103_subq_wrap_27";
 //   않도록 완전히 별도의 키를 사용한다. 새 매크로(\YggV2InlineMath, 한글 시각 중심 정렬,
 //   수식 줄 strut 대칭, 박스 안팎 통일)가 들어 있는 xelatex_v2/ 파이프라인 결과물의
 //   캐시 키 prefix 로 쓰인다.
-const EXPORT_RENDER_CONFIG_VERSION_V2 = "pb_render_v4_slotmeasure_01";
+const EXPORT_RENDER_CONFIG_VERSION_V2 = "pb_render_v4_colontext_10";
 const DEFAULT_TITLE_PAGE_TOP_TEXT = "2026학년도 대학수학능력시험 문제지";
 const DEFAULT_TITLE_PAGE_GOAL_TEXT = "다시 풀기";
 
@@ -899,6 +902,7 @@ const QUESTION_COPY_SELECT_COLUMNS = [
   "confidence",
   "flags",
   "is_checked",
+  "is_published",
   "reviewed_by",
   "reviewed_at",
   "reviewer_notes",
@@ -1082,6 +1086,13 @@ function normalizeExportRenderConfig(
   const mathEngineNormalized =
     mathEngineRaw === "mathjax-svg" ? "mathjax-svg" : "xelatex-v2";
   const isV2Engine = mathEngineNormalized === "xelatex-v2";
+  const naesinLinkKey = String(
+    src.naesinLinkKey ||
+      src.naesin_link_key ||
+      defaults.naesinLinkKey ||
+      defaults.naesin_link_key ||
+      "",
+  ).trim();
   return {
     // Force server-side renderer to latest stable path even if older app build
     // sends a stale renderConfigVersion.
@@ -1133,6 +1144,7 @@ function normalizeExportRenderConfig(
     hideDocumentHeader: hidePreviewHeader,
     mathEngine: mathEngineNormalized || undefined,
     disableAutoLabels,
+    ...(naesinLinkKey ? { naesinLinkKey } : {}),
   };
 }
 
@@ -2173,6 +2185,7 @@ async function createExportJob(body, res) {
       .from("pb_questions")
       .select("id,document_id,question_uid")
       .eq("academy_id", academyId)
+      .eq("is_published", true)
       .in("id", selectedQuestionIds);
     if (selectedErr) {
       sendJson(res, 500, {
@@ -2199,6 +2212,7 @@ async function createExportJob(body, res) {
       .from("pb_questions")
       .select("id,document_id,question_uid")
       .eq("academy_id", academyId)
+      .eq("is_published", true)
       .in("question_uid", selectedQuestionUidsRaw);
     if (selectedErr) {
       sendJson(res, 500, {
@@ -2301,6 +2315,9 @@ async function createExportJob(body, res) {
     questionModeByQuestionUid: renderConfig.questionModeByQuestionUid,
     questionModeByQuestionId: renderConfig.questionModeByQuestionUid,
     mathEngine: renderConfig.mathEngine,
+    ...(renderConfig.naesinLinkKey
+      ? { naesinOriginalModePolicyVersion: 1 }
+      : {}),
   };
   const renderHash = computeRenderHash(renderHashPayload);
 
@@ -2341,6 +2358,9 @@ async function createExportJob(body, res) {
     questionModeByQuestionUid: renderConfig.questionModeByQuestionUid,
     questionModeByQuestionId: renderConfig.questionModeByQuestionUid,
     mathEngine: renderConfig.mathEngine,
+    ...(renderConfig.naesinLinkKey
+      ? { naesinOriginalModePolicyVersion: 1 }
+      : {}),
     renderHash,
     previewOnly,
   };
@@ -2874,6 +2894,7 @@ async function saveSettingsAsDocument(body, res) {
           .from("pb_questions")
           .select("id,question_uid,document_id,meta")
           .eq("academy_id", academyId)
+          .eq("is_published", true)
           .in("question_uid", uidChunk);
         if (rowErr) {
           sendJson(res, 500, {
@@ -2894,6 +2915,7 @@ async function saveSettingsAsDocument(body, res) {
           .from("pb_questions")
           .select("id,question_uid,document_id,meta")
           .eq("academy_id", academyId)
+          .eq("is_published", true)
           .in("id", idChunk);
         if (rowErr) {
           sendJson(res, 500, {
@@ -4389,7 +4411,7 @@ const ANSWER_RENDER_STYLE_VERSION = "answer-xelatex-v6-rightsheet-bold-hires";
 const ANSWER_RENDER_PIXEL_RATIO = 8;
 // 답지가 코너·소단원 블록으로 쪼개져 번호가 블록마다 1번부터 다시 시작하는
 // 시리즈. 기대 항목마다 코너·본문 페이지 배지를 함께 보내 대조한다.
-const ANSWER_BADGE_SERIES = new Set(["gaeyu", "suryeok"]);
+const ANSWER_BADGE_SERIES = new Set(["gaeyu", "suryeok", "gojaengi"]);
 const TEXTBOOK_ANSWER_RENDER_BUCKET =
   process.env.TEXTBOOK_ANSWER_RENDER_BUCKET || "textbook-answer-renders";
 const TEXTBOOK_ANSWER_RENDER_STYLE_VERSION = "textbook-answer-xelatex-v2-hires";
@@ -4637,6 +4659,7 @@ function normalizeAnswerValueForTexRender(input) {
     out = next;
   }
   return out
+    .replace(/\\(angle|triangle)(?=[A-Z])/g, "\\$1 ")
     .replace(/\r\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .replace(/[ \t]+/g, " ")
@@ -4844,6 +4867,37 @@ function normalizeUnifiedAnswerRenderStyleVersion(raw) {
     : UNIFIED_ANSWER_RENDER_STYLE_VERSION;
 }
 
+function pbAnswerFigureFingerprint(questionRow) {
+  const meta =
+    questionRow?.meta && typeof questionRow.meta === "object"
+      ? questionRow.meta
+      : {};
+  const assets = Array.isArray(meta.answer_figure_assets)
+    ? meta.answer_figure_assets
+    : [];
+  const normalized = assets
+    .map((asset) => ({
+      index: Number.parseInt(String(asset?.figure_index ?? ""), 10) || 0,
+      bucket: String(asset?.bucket || "").trim(),
+      path: String(asset?.path || "").trim(),
+      hash: String(asset?.content_hash || "").trim(),
+    }))
+    .filter((asset) => asset.path)
+    .sort((a, b) => a.index - b.index || a.path.localeCompare(b.path));
+  return normalized.length > 0 ? normalized : null;
+}
+
+function pbAnswerFigureLayout(questionRow) {
+  const meta =
+    questionRow?.meta && typeof questionRow.meta === "object"
+      ? questionRow.meta
+      : {};
+  return meta.answer_figure_layout &&
+    typeof meta.answer_figure_layout === "object"
+    ? meta.answer_figure_layout
+    : null;
+}
+
 function unifiedAnswerRenderDescriptor({
   sourceKind,
   sourceId,
@@ -4851,6 +4905,9 @@ function unifiedAnswerRenderDescriptor({
   answerText,
   styleVersion = UNIFIED_ANSWER_RENDER_GENERATION_STYLE_VERSION,
   partKey = "",
+  answerFigureAssets = null,
+  answerFigureLayout = null,
+  answerFigureFingerprint = null,
 }) {
   const safeSourceKind = String(sourceKind || "").trim();
   const safeSourceId = String(sourceId || "").trim();
@@ -4885,6 +4942,9 @@ function unifiedAnswerRenderDescriptor({
         // uniform_line 은 v11 템플릿 리비전 — 템플릿(보더/지수분수 강등 등)이
         // 바뀌면 값을 올려 기존 v11 자산을 재렌더시킨다.
         ...(isV11 ? { part_key: safePartKey, uniform_line: 2 } : {}),
+        ...(answerFigureFingerprint
+          ? { answer_figures: answerFigureFingerprint }
+          : {}),
       }),
     )
     .digest("hex");
@@ -4899,6 +4959,13 @@ function unifiedAnswerRenderDescriptor({
     styleVersion: safeStyle,
     sourceHash,
     storagePath: `academies/${safeSourceKind}/${safeSourceId}/${safeStyle}/${sourceHash}.png`,
+    answerFigureAssets: Array.isArray(answerFigureAssets)
+      ? answerFigureAssets
+      : [],
+    answerFigureLayout:
+      answerFigureLayout && typeof answerFigureLayout === "object"
+        ? answerFigureLayout
+        : null,
   };
 }
 
@@ -4919,18 +4986,26 @@ function unifiedAnswerPartDescriptors({
   if (normalizeUnifiedAnswerKind(answerKind) !== "subjective") return [];
   const parts = splitSetAnswerPartsForRender(answerText);
   if (!parts) return [];
-  return parts
-    .map((part) =>
-      unifiedAnswerRenderDescriptor({
-        sourceKind,
-        sourceId,
-        answerKind,
-        answerText: part.text,
-        styleVersion,
-        partKey: part.key,
-      }),
-    )
-    .filter(Boolean);
+  return (
+    parts
+      // answer_render_assets_answer_kind_chk currently permits numeric part
+      // suffixes only (for example, subjective#(1)). Korean markers such as
+      // #(가) must not be queued here: every failed upsert otherwise gets
+      // rendered first and makes a save request wait for work that cannot be
+      // persisted. The unsplit main answer asset is still generated.
+      .filter((part) => /^\(\d{1,2}\)$/.test(part.key))
+      .map((part) =>
+        unifiedAnswerRenderDescriptor({
+          sourceKind,
+          sourceId,
+          answerKind,
+          answerText: part.text,
+          styleVersion,
+          partKey: part.key,
+        }),
+      )
+      .filter(Boolean)
+  );
 }
 
 function textbookAnswerUnifiedDescriptor(
@@ -4969,12 +5044,31 @@ function textbookAnswerUnifiedDescriptorsWithParts(
 
 function pbAnswerUnifiedDescriptors(
   questionRow,
-  { styleVersion = UNIFIED_ANSWER_RENDER_GENERATION_STYLE_VERSION } = {},
+  {
+    styleVersion = UNIFIED_ANSWER_RENDER_GENERATION_STYLE_VERSION,
+    answerKinds = ["subjective", "essay"],
+  } = {},
 ) {
   const sourceId = String(questionRow?.id || "").trim();
   if (!isUuid(sourceId)) return [];
+  const meta =
+    questionRow?.meta && typeof questionRow.meta === "object"
+      ? questionRow.meta
+      : {};
+  const answerFigureAssets = Array.isArray(meta.answer_figure_assets)
+    ? meta.answer_figure_assets
+    : [];
+  const answerFigureLayout = pbAnswerFigureLayout(questionRow);
+  const answerFigureFingerprint = pbAnswerFigureFingerprint(questionRow);
   const out = [];
-  for (const answerKind of ["subjective", "essay"]) {
+  const normalizedAnswerKinds = [
+    ...new Set(
+      (Array.isArray(answerKinds) ? answerKinds : [])
+        .map((kind) => normalizeUnifiedAnswerKind(kind))
+        .filter((kind) => kind === "subjective" || kind === "essay"),
+    ),
+  ];
+  for (const answerKind of normalizedAnswerKinds) {
     const answerText = pbAnswerTextForUnifiedRenderKind(
       questionRow,
       answerKind,
@@ -4985,6 +5079,9 @@ function pbAnswerUnifiedDescriptors(
       answerKind,
       answerText,
       styleVersion,
+      answerFigureAssets,
+      answerFigureLayout,
+      answerFigureFingerprint,
     });
     if (descriptor) {
       out.push(descriptor);
@@ -5288,6 +5385,7 @@ async function handleUnifiedAnswerRenderAssetsResolve(body, res) {
       academyId,
       sourceKind,
       sourceIds,
+      answerKind: requestedAnswerKind,
     });
   }
 
@@ -5309,18 +5407,23 @@ const unifiedAnswerV11InflightKeys = new Set();
 // 이 가드가 없으면 열람할 때마다 빈 백필이 실행된다.
 const UNIFIED_ANSWER_V11_BACKFILL_COOLDOWN_MS = 10 * 60 * 1000;
 const unifiedAnswerV11BackfillCheckedAt = new Map();
+// 여러 소단원 저장이 연속으로 들어와도 XeLaTeX 배치를 동시에 띄우지 않는다.
+// 저장 응답과는 분리하되 서버 자원은 한 배치씩 순차 사용한다.
+let unifiedAnswerV11BackfillQueue = Promise.resolve();
 
 function scheduleUnifiedAnswerRenderV11Backfill({
   academyId,
   sourceKind,
   sourceIds,
+  answerKind = "",
 }) {
   const ids = [...new Set(sourceIds)].sort();
+  if (ids.length === 0) return false;
   const inflightKey = `${academyId}\n${sourceKind}\n${ids.join(",")}`;
-  if (unifiedAnswerV11InflightKeys.has(inflightKey)) return;
+  if (unifiedAnswerV11InflightKeys.has(inflightKey)) return false;
   const now = Date.now();
   const checkedAt = unifiedAnswerV11BackfillCheckedAt.get(inflightKey) || 0;
-  if (now - checkedAt < UNIFIED_ANSWER_V11_BACKFILL_COOLDOWN_MS) return;
+  if (now - checkedAt < UNIFIED_ANSWER_V11_BACKFILL_COOLDOWN_MS) return false;
   unifiedAnswerV11BackfillCheckedAt.set(inflightKey, now);
   if (unifiedAnswerV11BackfillCheckedAt.size > 500) {
     for (const [key, at] of unifiedAnswerV11BackfillCheckedAt) {
@@ -5330,8 +5433,8 @@ function scheduleUnifiedAnswerRenderV11Backfill({
     }
   }
   unifiedAnswerV11InflightKeys.add(inflightKey);
-  (async () => {
-    try {
+  unifiedAnswerV11BackfillQueue = unifiedAnswerV11BackfillQueue
+    .then(async () => {
       const styleVersion = UNIFIED_ANSWER_RENDER_STYLE_VERSION_V11;
       const descriptorPage =
         sourceKind === "textbook_crop"
@@ -5348,6 +5451,7 @@ function scheduleUnifiedAnswerRenderV11Backfill({
               offset: 0,
               sourceIds: ids,
               styleVersion,
+              answerKinds: answerKind ? [answerKind] : undefined,
             });
       const targets = await filterUnifiedDescriptorsNeedingRender({
         academyId,
@@ -5361,15 +5465,17 @@ function scheduleUnifiedAnswerRenderV11Backfill({
         "[answer-render-v11] background backfill done:",
         JSON.stringify({ sourceKind, requested: ids.length, ...result }),
       );
-    } catch (err) {
+    })
+    .catch((err) => {
       console.warn(
         "[answer-render-v11] background backfill failed:",
         err?.message || err,
       );
-    } finally {
+    })
+    .finally(() => {
       unifiedAnswerV11InflightKeys.delete(inflightKey);
-    }
-  })();
+    });
+  return true;
 }
 
 async function upsertUnifiedAnswerRenderAsset({ academyId, descriptor, font }) {
@@ -5410,6 +5516,9 @@ async function upsertUnifiedAnswerRenderAsset({ academyId, descriptor, font }) {
         ? UNIFIED_ANSWER_RENDER_V11_TRANSPARENT_OPTIONS
         : UNIFIED_ANSWER_RENDER_TRANSPARENT_OPTIONS,
       uniformLineBox: isV11,
+      answerFigureAssets: descriptor.answerFigureAssets,
+      answerFigureLayout: descriptor.answerFigureLayout,
+      supabaseClient: supa,
     });
     const uploaded = await storageUploadBytes({
       driver: DEFAULT_TEXTBOOK_DRIVER,
@@ -6082,7 +6191,7 @@ async function batchRenderThumbnails(res, req) {
       questionMode: "objective",
       layoutColumns: 1,
       maxQuestionsPerPage: 1,
-      renderConfigVersion: EXPORT_RENDER_CONFIG_VERSION,
+      renderConfigVersion: EXPORT_RENDER_CONFIG_VERSION_V2,
       fontFamilyRequested: batchFont.family,
       fontFamilyResolved: batchFont.family,
       fontRegularPath: batchFont.path,
@@ -6172,7 +6281,7 @@ async function batchRenderThumbnails(res, req) {
               .png({ compressionLevel: 9 })
               .toBuffer();
 
-            const storagePath = `${academyId}/batch-preview/${EXPORT_RENDER_CONFIG_VERSION}/card/${qid}.png`;
+            const storagePath = `${academyId}/batch-preview/${EXPORT_RENDER_CONFIG_VERSION_V2}/card/${qid}.png`;
             const { error: upErr } = await supa.storage
               .from(BATCH_THUMB_BUCKET)
               .upload(storagePath, cropped, {
@@ -6339,7 +6448,7 @@ async function renderCustomPreviewThumbnail(res, req) {
       questionMode: "subjective",
       layoutColumns: 1,
       maxQuestionsPerPage: 1,
-      renderConfigVersion: EXPORT_RENDER_CONFIG_VERSION,
+      renderConfigVersion: EXPORT_RENDER_CONFIG_VERSION_V2,
       fontFamilyRequested: batchFont.family,
       fontFamilyResolved: batchFont.family,
       fontRegularPath: batchFont.path,
@@ -6405,7 +6514,7 @@ async function renderCustomPreviewThumbnail(res, req) {
         .update(JSON.stringify({ academyId, question }))
         .digest("hex")
         .slice(0, 20);
-      const storagePath = `${academyId}/batch-preview/${EXPORT_RENDER_CONFIG_VERSION}/custom/${qid}_${sourceHash}.png`;
+      const storagePath = `${academyId}/batch-preview/${EXPORT_RENDER_CONFIG_VERSION_V2}/custom/${qid}_${sourceHash}.png`;
       const { error: upErr } = await supa.storage
         .from(BATCH_THUMB_BUCKET)
         .upload(storagePath, cropped, {
@@ -7299,10 +7408,17 @@ async function handleTextbookVlmDetectProblems(body, res) {
     "type_problem",
     "unit_review",
     "skill_test",
+    // 고쟁이 전용 섹션 (sub_key A~F 슬롯 대응).
+    "core_type",
+    "advanced_type",
+    "top_type",
+    "creative_type",
+    "mid_unit_test",
+    "big_unit_test",
   ].includes(rawSectionHint)
     ? rawSectionHint
     : "";
-  // 교재 시리즈 (ssen | rpm | wonri | gaeyu | suryeok).
+  // 교재 시리즈 (ssen | rpm | wonri | gaeyu | suryeok | gojaengi).
   // 미지정/미지원 값이면 프롬프트 빌더가 쎈으로 fallback.
   const series = String(body?.series || "")
     .trim()
@@ -7479,6 +7595,9 @@ async function handleTextbookVlmDetectProblems(body, res) {
   // 의심스러운 유형 지면과 모든 마무리 지면은 번호·배지만 묻는 짧은 2차
   // 판독으로 보완한다. 문항 본문/분류를 다시 추측시키지는 않는다.
   if (series === "suryeok" && suryeokMarksNeedRepair(normalized, sectionHint)) {
+    // (3) 한 줄짜리 문항이 길게 이어지면 좌표를 읽지 않고 등간격으로 채워
+    // 넣는다. 그때는 2차 판독의 좌표로 기존 번호까지 갈아 끼운다.
+    const interpolated = suryeokNumbersLookInterpolated(normalized);
     try {
       const marks = await detectSuryeokMarksOnPage({
         imageBase64,
@@ -7495,9 +7614,16 @@ async function handleTextbookVlmDetectProblems(body, res) {
         normalized,
         marks.parsedJson,
         sectionHint,
+        { fixCoordinates: interpolated },
       );
-      if (merged.added > 0 || merged.breaks > 0) {
+      if (merged.added > 0 || merged.breaks > 0 || merged.moved > 0) {
         repairSuryeokItemRegions(normalized, series);
+      }
+      if (interpolated) {
+        console.log(
+          `[textbook-vlm-detect] p${rawPage} 번호 등간격 의심 → 재판독 ` +
+            `추가=${merged.added} 좌표교정=${merged.moved}`,
+        );
       }
     } catch (err) {
       console.warn(
@@ -7921,6 +8047,8 @@ async function handleTextbookVlmParseToc(body, res) {
     ok: true,
     big_units: normalized.big_units,
     appendix_boundary_page: normalized.appendix_boundary_page,
+    workbook_mid_test_page: normalized.workbook_mid_test_page,
+    workbook_big_test_page: normalized.workbook_big_test_page,
     notes: normalized.notes,
     model: TEXTBOOK_VLM_MODEL,
     elapsed_ms: result.elapsedMs,
@@ -7949,12 +8077,13 @@ async function handleTextbookVlmClassifyRpmSections(body, res) {
   const seriesRaw = String(body?.series || "rpm")
     .trim()
     .toLowerCase();
-  const series = seriesRaw === "ssen" || seriesRaw === "rpm" ? seriesRaw : "";
+  const allowedSeries = ["ssen", "rpm", "gojaengi"];
+  const series = allowedSeries.includes(seriesRaw) ? seriesRaw : "";
   if (!series) {
     sendJson(res, 400, {
       ok: false,
       error: `invalid_problem_book_series: ${seriesRaw}`,
-      allowed: ["ssen", "rpm"],
+      allowed: allowedSeries,
     });
     return;
   }
@@ -7963,6 +8092,19 @@ async function handleTextbookVlmClassifyRpmSections(body, res) {
       ok: false,
       error: "too_many_rpm_section_pages",
       limit: 24,
+    });
+    return;
+  }
+  // 고쟁이 워크북은 본문과 달리 묶음들이 교재 맨 뒤에 몰려 있어서, 단계 경계가
+  // 아니라 지면 머리말의 "중단원/대단원 TEST" 배지와 단원 이름을 읽어야 한다.
+  const scopeRaw = String(body?.scope || "body")
+    .trim()
+    .toLowerCase();
+  const workbookScope = scopeRaw === "workbook";
+  if (workbookScope && series !== "gojaengi") {
+    sendJson(res, 400, {
+      ok: false,
+      error: `workbook_scope_unsupported_for_series: ${series}`,
     });
     return;
   }
@@ -7996,6 +8138,7 @@ async function handleTextbookVlmClassifyRpmSections(body, res) {
     result = await classifyRpmSectionPages({
       images,
       series,
+      scope: workbookScope ? "workbook" : "body",
       model: TEXTBOOK_VLM_MODEL,
       apiKey,
       timeoutMs: TEXTBOOK_VLM_TIMEOUT_MS,
@@ -8018,10 +8161,16 @@ async function handleTextbookVlmClassifyRpmSections(body, res) {
     return;
   }
 
-  const normalized = normalizeRpmSectionResult(
-    result.parsedJson,
-    images.map((image) => image.rawPage),
-  );
+  const normalized = workbookScope
+    ? normalizeGojaengiWorkbookResult(
+        result.parsedJson,
+        images.map((image) => image.rawPage),
+      )
+    : normalizeRpmSectionResult(
+        result.parsedJson,
+        images.map((image) => image.rawPage),
+        series,
+      );
   sendJson(res, 200, {
     ok: true,
     pages: normalized.pages,
@@ -8592,6 +8741,12 @@ function parseTextbookExpectedEntries(input) {
       return {
         number: String(v.problem_number || v.number || "").trim(),
         corner: String(v.corner || v.item_name || "").trim(),
+        // 답지 묶음 머리에 인쇄된 이름("여러 가지 사각형"). 한 지면에 같은
+        // 코너 배지의 묶음이 여러 개 서면 쪽 배지보다 이 이름이 훨씬 크고
+        // 읽기 쉬워서, 모델이 옆 묶음을 집는 사고를 막아 준다.
+        title: String(v.title || v.block_title || "")
+          .trim()
+          .slice(0, 60),
         page: Number.isFinite(page) && page > 0 ? page : 0,
         position,
       };
@@ -8653,43 +8808,64 @@ async function handleTextbookVlmExtractAnswers(body, res) {
   const expectedEntries = parseTextbookExpectedEntries(body?.expected_numbers);
   const expectedNumbers = expectedEntries.map((e) => e.number);
   const skipBadges = parseTextbookSkipBadges(body?.skip_badges);
+  const series = String(body?.series || "")
+    .trim()
+    .toLowerCase();
 
   const displayPage = rawPage;
   const pageOffset = 0;
   const offsetFound = false;
 
+  // 고쟁이 워크북 답지는 한 지면에 "중단원 TEST" 묶음이 일곱 개까지 서고 쪽
+  // 배지(174~177 / 178~181 / 182~185)가 서로 붙어 있다. 실지면 2-2 답지 6쪽에서
+  // 모델은 절반쯤 옆 묶음을 골랐고(178~181 을 찾다가 182~185 의 24개를 올림),
+  // 출처 대조가 그 24개를 전부 버려 0건이 되었다. 프롬프트로 이름·문항 수를
+  // 알려줘도 흔들리므로, 모델이 스스로 밝힌 잘못된 배지를 건너뛸 목록에 넣고
+  // 같은 지면을 다시 묻는다. 지어낸 좌표를 저장하는 길은 열지 않는다.
+  const retryBadges = [];
   let result;
-  try {
-    result = await extractAnswersOnPage({
-      imageBase64,
-      mimeType,
-      rawPage,
-      displayPage,
-      pageOffset,
+  let normalized;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      result = await extractAnswersOnPage({
+        imageBase64,
+        mimeType,
+        rawPage,
+        displayPage,
+        pageOffset,
+        expectedNumbers,
+        expectedEntries,
+        skipBadges: [...skipBadges, ...retryBadges],
+        series,
+        model: TEXTBOOK_VLM_MODEL,
+        apiKey,
+        timeoutMs: TEXTBOOK_ANSWER_VLM_TIMEOUT_MS,
+        maxRetries: TEXTBOOK_ANSWER_VLM_MAX_RETRIES,
+      });
+    } catch (err) {
+      sendJson(res, 502, {
+        ok: false,
+        error: "vlm_answer_failed",
+        message: compact(err?.message || err),
+      });
+      return;
+    }
+    normalized = normalizeAnswerResult(result.parsedJson, {
       expectedNumbers,
       expectedEntries,
-      skipBadges,
-      series: String(body?.series || "")
-        .trim()
-        .toLowerCase(),
-      model: TEXTBOOK_VLM_MODEL,
-      apiKey,
-      timeoutMs: TEXTBOOK_ANSWER_VLM_TIMEOUT_MS,
-      maxRetries: TEXTBOOK_ANSWER_VLM_MAX_RETRIES,
     });
-  } catch (err) {
-    sendJson(res, 502, {
-      ok: false,
-      error: "vlm_answer_failed",
-      message: compact(err?.message || err),
-    });
-    return;
+    if (normalized.items.length > 0) break;
+    const wrong = wrongBadgeLabels(result.parsedJson, expectedEntries);
+    if (series !== "gojaengi" || wrong.length === 0) break;
+    // 같은 배지를 또 골라도 한 번 더 물어본다. 건너뛸 목록은 그대로 두고
+    // 다시 굴리는 것만으로 제 묶음으로 넘어가는 경우가 있다.
+    for (const label of wrong) {
+      if (!retryBadges.includes(label)) retryBadges.push(label);
+    }
+    console.log(
+      `[answers-retry] page=${rawPage} skip=[${retryBadges.join(" ")}]`,
+    );
   }
-
-  const normalized = normalizeAnswerResult(result.parsedJson, {
-    expectedNumbers,
-    expectedEntries,
-  });
   logVlmUsage("answers", result.usageMetadata, {
     page: rawPage,
     expected: expectedEntries.length,
@@ -8699,11 +8875,7 @@ async function handleTextbookVlmExtractAnswers(body, res) {
   // 개념+유형·수력충전은 코너·배지 삼중 대조라 한 건이라도 비면 원인 추적이
   // 필요하다.
   if (
-    ANSWER_BADGE_SERIES.has(
-      String(body?.series || "")
-        .trim()
-        .toLowerCase(),
-    ) &&
+    ANSWER_BADGE_SERIES.has(series) &&
     normalized.items.length < expectedEntries.length
   ) {
     const want = expectedEntries
@@ -8929,6 +9101,9 @@ async function handleTextbookVlmDetectSolutionRefs(body, res) {
   const expectedEntries = parseTextbookExpectedEntries(body?.expected_numbers);
   const expectedNumbers = expectedEntries.map((e) => e.number);
   const skipBadges = parseTextbookSkipBadges(body?.skip_badges);
+  const series = String(body?.series || "")
+    .trim()
+    .toLowerCase();
 
   const displayPage = rawPage;
   const pageOffset = 0;
@@ -8945,9 +9120,7 @@ async function handleTextbookVlmDetectSolutionRefs(body, res) {
       expectedNumbers,
       expectedEntries,
       skipBadges,
-      series: String(body?.series || "")
-        .trim()
-        .toLowerCase(),
+      series,
       model: TEXTBOOK_VLM_MODEL,
       apiKey,
       timeoutMs: TEXTBOOK_ANSWER_VLM_TIMEOUT_MS,
@@ -8965,6 +9138,11 @@ async function handleTextbookVlmDetectSolutionRefs(body, res) {
   const normalized = normalizeSolutionRefsResult(result.parsedJson, {
     expectedNumbers,
     expectedEntries,
+    series,
+    // 배지 없는 이어지는 지면에서 모델이 꼬리말 쪽번호를 출처로 적는 것을
+    // 걸러내려면, 지금 물어본 지면 번호를 알려 줘야 한다.
+    rawPage,
+    displayPage,
   });
   logVlmUsage("solution_refs", result.usageMetadata, {
     page: rawPage,
@@ -8972,6 +9150,30 @@ async function handleTextbookVlmDetectSolutionRefs(body, res) {
     items: normalized.items.length,
     elapsed: `${result.elapsedMs}ms`,
   });
+  // 답지와 같은 이유로, 한 건이라도 비면 어느 번호가 어느 배지에서 새는지
+  // 남겨야 추적이 된다. 해설은 재훑기가 여러 번 도니 더 필요하다.
+  if (
+    ANSWER_BADGE_SERIES.has(series) &&
+    normalized.items.length < expectedEntries.length
+  ) {
+    const want = expectedEntries
+      .map((e) => `${e.number}@${e.corner || "-"}/P.${e.page || "-"}`)
+      .join(" ");
+    const got = (
+      Array.isArray(result.parsedJson?.items) ? result.parsedJson.items : []
+    )
+      .map(
+        (it) =>
+          `${it?.problem_number}@${it?.source_corner || "-"}/P.${
+            it?.source_page || "-"
+          }`,
+      )
+      .join(" ");
+    console.log(
+      `[solrefs-gap] page=${rawPage} want=[${want}] raw=[${got}] ` +
+        `notes="${String(result.parsedJson?.notes || "").slice(0, 300)}"`,
+    );
+  }
   sendJson(res, 200, {
     ok: true,
     raw_page: rawPage,
@@ -9072,6 +9274,19 @@ async function handleTextbookVlmDetectSolutionBlocks(body, res) {
     blocks: normalized.blocks.length,
     numbers: normalized.numbers.length,
   });
+  // 앱이 좌표를 붙이는 근거는 이 "차례"뿐이다. 번호가 튕길 때 이유를 지면에서
+  // 바로 읽을 수 있게, 머리와 번호를 읽은 순서대로 한 줄로 남긴다.
+  console.log(
+    `[solution-blocks] p${rawPage} 이어짐=${normalized.leading_continuation} ` +
+      `머리=${normalized.blocks.length} 번호=${normalized.numbers.length} 차례: ` +
+      normalized.sequence
+        .map((one) =>
+          one.kind === "header"
+            ? `[머리 ${compact(one.title).slice(0, 24)} p.${one.page_start}~${one.page_end}]`
+            : `${one.text}${one.column ? "(단" + one.column + ")" : ""}`,
+        )
+        .join(" "),
+  );
   sendJson(res, 200, {
     ok: true,
     raw_page: rawPage,
@@ -9145,6 +9360,7 @@ function normalizeTextbookAnswerValue(input) {
     out = next;
   }
   return out
+    .replace(/\\(angle|triangle)(?=[A-Z])/g, "\\$1 ")
     .replace(/\(\s*image\s*\)/gi, "[image]")
     .replace(/\[\s*image\s*\]/gi, "[image]")
     .replace(/\s+/g, " ")
@@ -9198,11 +9414,15 @@ function buildPbAnswerPatchFromSidecar(question, answer) {
     : [];
   const canUseObjective =
     kind === "objective" &&
-    String(question?.question_type || "").includes("객관식") &&
     choices.length > 0;
 
   let objectiveAnswerKey = canUseObjective ? text : "";
-  let subjectiveAnswer = canUseObjective ? "" : text;
+  let subjectiveAnswer = canUseObjective
+    ? pbSubjectiveAnswerFromObjectiveChoiceText({
+        ...question,
+        objective_answer_key: objectiveAnswerKey,
+      })
+    : text;
   let answerAsset = null;
 
   if (kind === "image") {
@@ -9257,7 +9477,7 @@ function buildPbAnswerPatchFromSidecar(question, answer) {
   const parsedAnswerParts = parseTextbookAnswerPartsFromText(subjectiveAnswer);
   if (parsedAnswerParts.length > 0) {
     meta.answer_parts = parsedAnswerParts;
-  } else if (kind === "image") {
+  } else {
     delete meta.answer_parts;
   }
   if (answerAsset) {
@@ -9702,22 +9922,51 @@ async function handleTextbookAnswersBatchUpsert(body, res) {
     return;
   }
 
-  const renderAssets = await renderTextbookAnswerAssetsForRows({
-    academyId,
-    answerRows: rows,
-  });
-  const unifiedRenderAssets = await renderUnifiedTextbookAnswerAssetsForRows({
-    academyId,
-    answerRows: rows,
-  });
+  queueTextbookAnswerRender({ academyId, answerRows: rows });
 
   sendJson(res, 200, {
     ok: true,
     upserted: Array.isArray(data) ? data.length : 0,
-    render_assets: renderAssets,
-    unified_render_assets: unifiedRenderAssets,
+    render_assets: { queued: rows.length },
+    unified_render_assets: { queued: rows.length },
     rows: data || [],
   });
+}
+
+// 정답 그림 렌더를 응답 밖에서 한 묶음씩 돌린다.
+//
+// 예전에는 batch-upsert 가 렌더를 끝까지 기다린 뒤에야 응답했다. 200건을
+// LaTeX 로 굽는 데 몇 분이 걸려 저장 단추가 계속 돌기만 했고, 그동안 다음
+// 묶음이 나가지 못해 정답이 반만 저장된 채로 본문 추출이 "런없음" 에서
+// 멈췄다. 렌더가 늦어도 학습 앱은 backfill 이 채워 주므로 응답을 붙잡을
+// 이유가 없다. 다만 LaTeX 를 여러 묶음이 한꺼번에 돌리면 CPU 를 물어뜯으니
+// 한 줄로 세워 차례로 굽는다.
+let textbookAnswerRenderChain = Promise.resolve();
+
+function queueTextbookAnswerRender({ academyId, answerRows }) {
+  const rows = Array.isArray(answerRows) ? answerRows : [];
+  if (!isUuid(academyId) || rows.length === 0) return;
+  textbookAnswerRenderChain = textbookAnswerRenderChain
+    .then(async () => {
+      const basic = await renderTextbookAnswerAssetsForRows({
+        academyId,
+        answerRows: rows,
+      });
+      const unified = await renderUnifiedTextbookAnswerAssetsForRows({
+        academyId,
+        answerRows: rows,
+      });
+      console.log(
+        `[answer-render] background done: ${JSON.stringify({
+          rows: rows.length,
+          basic,
+          unified,
+        })}`,
+      );
+    })
+    .catch((e) => {
+      console.error(`[answer-render] background failed: ${e?.message || e}`);
+    });
 }
 
 async function handleTextbookAnswerRenderAssetsBackfill(body, res) {
@@ -9821,12 +10070,13 @@ async function fetchUnifiedPbAnswerDescriptors({
   offset,
   sourceIds = [],
   styleVersion = UNIFIED_ANSWER_RENDER_GENERATION_STYLE_VERSION,
+  answerKinds,
 }) {
   let query = supa
     .from("pb_questions")
     .select(
       "id, question_uid, question_type, choices, objective_choices, " +
-        "objective_answer_key, subjective_answer, updated_at, created_at",
+        "objective_answer_key, subjective_answer, updated_at, created_at, meta",
     )
     .eq("academy_id", academyId);
   if (Array.isArray(sourceIds) && sourceIds.length > 0) {
@@ -9845,7 +10095,9 @@ async function fetchUnifiedPbAnswerDescriptors({
     rawFetched: rawRows.length,
     hasMore: sourceIds.length === 0 && rawRows.length >= limit,
     descriptors: rawRows
-      .flatMap((row) => pbAnswerUnifiedDescriptors(row, { styleVersion }))
+      .flatMap((row) =>
+        pbAnswerUnifiedDescriptors(row, { styleVersion, answerKinds }),
+      )
       .filter(Boolean),
   };
 }
@@ -9887,6 +10139,22 @@ async function handleUnifiedAnswerRenderAssetsBackfill(body, res) {
       body?.styleVersion ||
       UNIFIED_ANSWER_RENDER_GENERATION_STYLE_VERSION,
   );
+  const requestedAnswerKindRaw = String(
+    body?.answer_kind || body?.answerKind || "",
+  ).trim();
+  const requestedAnswerKind = requestedAnswerKindRaw
+    ? normalizeUnifiedAnswerKind(requestedAnswerKindRaw)
+    : "";
+  if (
+    requestedAnswerKind &&
+    !["subjective", "essay"].includes(requestedAnswerKind)
+  ) {
+    sendJson(res, 400, {
+      ok: false,
+      error: "answer_kind must be subjective or essay",
+    });
+    return;
+  }
   const requestedSourceIds = (
     Array.isArray(body?.source_ids)
       ? body.source_ids
@@ -9924,6 +10192,9 @@ async function handleUnifiedAnswerRenderAssetsBackfill(body, res) {
               offset,
               sourceIds: requestedSourceIds,
               styleVersion,
+              answerKinds: requestedAnswerKind
+                ? [requestedAnswerKind]
+                : undefined,
             });
       const descriptors = descriptorPage.descriptors || [];
       rawFetched += descriptorPage.rawFetched || 0;
@@ -9965,6 +10236,7 @@ async function handleUnifiedAnswerRenderAssetsBackfill(body, res) {
     ok: true,
     style_version: styleVersion,
     source_kind: sourceKindRaw,
+    answer_kind: requestedAnswerKind || "all",
     limit,
     offset,
     raw_fetched: rawFetched,
@@ -9999,38 +10271,29 @@ async function handleTextbookAnswersSyncProblemBank(body, res) {
       gradeLabel,
       scope,
     });
-    let renderAssets = { attempted: 0, rendered: 0, failed: 0, errors: [] };
     const updatedQuestionIds = Array.isArray(result.updatedQuestionIds)
       ? result.updatedQuestionIds
       : [];
-    if (updatedQuestionIds.length > 0) {
-      const descriptorPage = await fetchUnifiedPbAnswerDescriptors({
+    // 최종 저장의 본 작업은 여기까지다. 정답 PNG 생성은 문항 수와 TeX 난이도에
+    // 따라 수 분 걸릴 수 있으므로 HTTP 응답을 막지 않고 백그라운드에서 보완한다.
+    // 렌더 실패 역시 정답 텍스트 동기화 성공을 저장 실패로 바꾸면 안 된다.
+    const renderScheduled =
+      updatedQuestionIds.length > 0 &&
+      scheduleUnifiedAnswerRenderV11Backfill({
         academyId,
-        limit: updatedQuestionIds.length,
-        offset: 0,
+        sourceKind: "pb_question",
         sourceIds: updatedQuestionIds,
       });
-      const descriptors = descriptorPage.descriptors || [];
-      const targets = await filterUnifiedDescriptorsNeedingRender({
-        academyId,
-        descriptors,
-      });
-      renderAssets = await renderUnifiedAnswerAssetsForDescriptors({
-        academyId,
-        descriptors: targets,
-      });
-      renderAssets = {
-        ...renderAssets,
-        skipped_existing: descriptors.length - targets.length,
-      };
-    }
     sendJson(res, 200, {
       ok: true,
       scope,
       pb_document_id: result.documentId || "",
       status: result.status || "",
       updated_questions: result.updated || 0,
-      render_assets: renderAssets,
+      render_assets: {
+        scheduled: renderScheduled === true,
+        requested: updatedQuestionIds.length,
+      },
       skipped: result.skipped || "",
     });
   } catch (err) {
@@ -10090,8 +10353,15 @@ async function handleTextbookSolutionRefsBatchUpsert(body, res) {
       sendJson(res, 400, { ok: false, error: `missing_crop_id_at_${i}` });
       return;
     }
+    const sourceKindRaw = String(r.source_kind || "")
+      .trim()
+      .toLowerCase();
+    const sourceKind = ["sol", "body", "none"].includes(sourceKindRaw)
+      ? sourceKindRaw
+      : "sol";
+    const noSolution = sourceKind === "none";
     const rawPage = Number.parseInt(String(r.raw_page ?? ""), 10);
-    if (!Number.isFinite(rawPage) || rawPage <= 0) {
+    if (!noSolution && (!Number.isFinite(rawPage) || rawPage <= 0)) {
       sendJson(res, 400, {
         ok: false,
         error: `invalid_raw_page_at_${i}: ${r.raw_page}`,
@@ -10100,7 +10370,7 @@ async function handleTextbookSolutionRefsBatchUpsert(body, res) {
     }
     const displayPage = Number.parseInt(String(r.display_page ?? ""), 10);
     const numberRegion = parseIntArray(r.number_region_1k, 4);
-    if (!numberRegion) {
+    if (!noSolution && !numberRegion) {
       sendJson(res, 400, {
         ok: false,
         error: `invalid_number_region_1k_at_${i}`,
@@ -10109,22 +10379,19 @@ async function handleTextbookSolutionRefsBatchUpsert(body, res) {
     }
     const contentRegion = parseIntArray(r.content_region_1k, 4);
 
-    // 좌표가 가리키는 PDF 종류. 기본 'sol'(해설 PDF). 개념원리 필수유형처럼
-    // 풀이가 본문에 인쇄된 경우 'body'.
-    const sourceKindRaw = String(r.source_kind || "")
-      .trim()
-      .toLowerCase();
-    const sourceKind = ["sol", "body"].includes(sourceKindRaw)
-      ? sourceKindRaw
-      : "sol";
-
     rows.push({
       crop_id: cropId,
       academy_id: academyId,
-      raw_page: rawPage,
-      display_page: Number.isFinite(displayPage) ? displayPage : null,
-      number_region_1k: numberRegion,
-      content_region_1k: contentRegion,
+      // 기존 스키마의 NOT NULL을 유지하면서 source_kind로 센티널임을 명시한다.
+      // 소비자는 'none'을 먼저 확인하고 이 좌표를 절대 사용하지 않는다.
+      raw_page: noSolution ? 0 : rawPage,
+      display_page: noSolution
+        ? null
+        : Number.isFinite(displayPage)
+          ? displayPage
+          : null,
+      number_region_1k: noSolution ? [0, 0, 0, 0] : numberRegion,
+      content_region_1k: noSolution ? null : contentRegion,
       source_kind: sourceKind,
       edited_at: r.source === "manual" ? new Date().toISOString() : null,
     });

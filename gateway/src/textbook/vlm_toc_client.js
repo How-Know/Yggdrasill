@@ -1,4 +1,4 @@
-﻿// 교재 목차('차례') 페이지들에서 대/중/소단원 트리를 추출하는 Gemini Vision 클라이언트.
+// 교재 목차('차례') 페이지들에서 대/중/소단원 트리를 추출하는 Gemini Vision 클라이언트.
 //
 // 입력: 목차 페이지들을 래스터한 PNG 배열 (여러 페이지를 한 호출에 담아
 //       책 전체 목차를 한 번에 읽는다 — 페이지를 나눠 부르면 단원 순서/중첩이 깨진다)
@@ -180,6 +180,39 @@ export function buildParseTocPrompt({ pageCount, series = '' }) {
           '본문 안의 문제 라벨은 단원이 아니다 — 어느 레벨에도 절대 넣지 마라.',
         ]
       : [];
+  const gojaengiLines =
+    seriesKey === 'gojaengi'
+      ? [
+          '',
+          '=== 고쟁이 교재 목차 규칙 (매우 중요) ===',
+          '이 교재(고쟁이)의 목차는 2단계다. 중등용과 고등용의 조판이 다르니 둘 다 읽어라.',
+          '  - 대단원: 큰 제목("삼각형의 성질", "다항식") → big_units[].name.',
+          '    · 중등용은 제목 왼쪽에 막대그래프 모양 아이콘이 있고 로마숫자 글자가',
+          '      따로 인쇄되지 않는다. 아이콘은 무시하고 제목만 담아라.',
+          '    · 고등용은 네모 배지 안에 로마숫자("I", "II")가 인쇄된다. 로마숫자는',
+          '      버리고 제목만 담아라.',
+          '    · 대단원 줄에는 페이지가 없다.',
+          '  - 중단원: 번호 + 이름 + 점선 + 시작 페이지가 한 줄에 인쇄된다.',
+          '    "○1 이등변삼각형과 직각삼각형 ——— 006" (중등, 세 자리 0 채움)',
+          '    "01 · 다항식의 연산 ......... 7" (고등)',
+          '    번호는 버리고 이름을 mid_units[].name, 줄 오른쪽 페이지 숫자를',
+          '    mid_units[].page 에 담아라. 0 채움은 벗겨 정수로 적어라(006 → 6).',
+          '  - 중단원 번호는 중등용이 책 전체에서 1~10 으로 이어지고, 고등용은',
+          '    대단원마다 01 로 되돌아간다. 어느 쪽이든 번호는 버리지만, 번호가',
+          '    이어지는지 확인하면 빠뜨린 줄을 스스로 찾을 수 있다.',
+          '고쟁이의 "Step 1 핵심 유형", "Step 2 심화 유형", "Step 3 최고난도 유형",',
+          '"창의융합 유형" 은 중단원마다 반복되는 문제 단계이지 소단원이 아니다.',
+          'sub_units 는 반드시 [] 로 둔다.',
+          '목차 맨 아래 "WORKBOOK" 묶음의 두 줄은 단원트리에 넣지 마라. 대신',
+          '  "중단원 TEST ——— 166" → workbook_mid_test_page = 166',
+          '  "대단원 TEST ——— 206" → workbook_big_test_page = 206',
+          '으로 담아라. 이 두 쪽은 본문 마지막 중단원의 종료 경계이기도 하므로',
+          '앞선 쪽(중단원 TEST 쪽)을 appendix_boundary_page 에도 함께 담아라.',
+          '고등용에는 워크북이 없다. 목차에 이 묶음이 보이지 않으면 두 값을 null 로',
+          '두고, appendix_boundary_page 는 "빠른 정답" 쪽이 보이면 그것을 담아라.',
+          '"빠른 정답", "정답과 풀이" 같은 부속물은 트리에 넣지 마라.',
+        ]
+      : [];
   return [
     '당신은 한국 중·고등 수학 교재의 **목차(차례) 페이지**를 읽고 단원 트리를 추출하는 비전 AI 입니다.',
     '반드시 아래 JSON 스키마만 출력하세요. 설명·마크다운·주석·코드펜스 모두 금지.',
@@ -191,6 +224,7 @@ export function buildParseTocPrompt({ pageCount, series = '' }) {
     ...wonriLines,
     ...gaeyuLines,
     ...suryeokLines,
+    ...gojaengiLines,
     '',
     '=== 출력 스키마 ===',
     '{',
@@ -213,6 +247,8 @@ export function buildParseTocPrompt({ pageCount, series = '' }) {
     '    }',
     '  ],',
     '  "appendix_boundary_page": <RPM의 트리 제외 부록 시작 페이지 또는 null>,',
+    '  "workbook_mid_test_page": <고쟁이 워크북 "중단원 TEST" 시작 페이지 또는 null>,',
+    '  "workbook_big_test_page": <고쟁이 워크북 "대단원 TEST" 시작 페이지 또는 null>,',
     '  "notes": "<특이사항 간단히, 없으면 빈 문자열>"',
     '}',
     '',
@@ -334,17 +370,24 @@ export async function parseTocPages({
 }
 
 export function normalizeTocResult(parsedJson) {
-  const out = { big_units: [], appendix_boundary_page: null, notes: '' };
+  const out = {
+    big_units: [],
+    appendix_boundary_page: null,
+    // 고쟁이 워크북 두 묶음의 시작 쪽. 목차에 한 번만 인쇄되고 대단원·중단원
+    // 별 범위는 워크북 지면을 훑어야 나오므로, 여기서는 경계만 실어 보낸다.
+    workbook_mid_test_page: null,
+    workbook_big_test_page: null,
+    notes: '',
+  };
   if (!parsedJson || typeof parsedJson !== 'object') return out;
   out.notes = String(parsedJson.notes || '').trim();
-  const appendixBoundaryPage = Number.parseInt(
-    String(parsedJson.appendix_boundary_page ?? ''),
-    10,
-  );
-  out.appendix_boundary_page =
-    Number.isFinite(appendixBoundaryPage) && appendixBoundaryPage > 0
-      ? appendixBoundaryPage
-      : null;
+  const positiveInt = (raw) => {
+    const value = Number.parseInt(String(raw ?? ''), 10);
+    return Number.isFinite(value) && value > 0 ? value : null;
+  };
+  out.appendix_boundary_page = positiveInt(parsedJson.appendix_boundary_page);
+  out.workbook_mid_test_page = positiveInt(parsedJson.workbook_mid_test_page);
+  out.workbook_big_test_page = positiveInt(parsedJson.workbook_big_test_page);
   const bigs = Array.isArray(parsedJson.big_units) ? parsedJson.big_units : [];
   for (const rawBig of bigs) {
     if (!rawBig || typeof rawBig !== 'object') continue;

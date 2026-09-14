@@ -59,7 +59,7 @@ const RENDER_CONFIG_VERSION = 'pb_render_v103_subq_wrap_27';
 // V2 (xelatex-v2) 엔진 전용 캐시 네임스페이스 (xelatex_v2/ 파이프라인용).
 //   problem_bank_api.js 의 EXPORT_RENDER_CONFIG_VERSION_V2 와 반드시 동일해야
 //   동일 입력 → 동일 캐시 키가 산출된다.
-const RENDER_CONFIG_VERSION_V2 = 'pb_render_v4_slotmeasure_01';
+const RENDER_CONFIG_VERSION_V2 = 'pb_render_v4_colontext_10';
 const SINGLE_QUESTION_RENDERER_VERSION =
   `${RENDER_CONFIG_VERSION_V2}:student-single-v4`;
 const PREVIEW_THUMB_BUCKET = process.env.PB_PREVIEW_THUMB_BUCKET || 'problem-previews';
@@ -2534,6 +2534,9 @@ function buildRenderConfigFromJob(job) {
     ? 'xelatex'
     : (requestedMathEngine === 'mathjax-svg' ? 'mathjax-svg' : 'xelatex-v2');
   const isV2Engine = mathEngineFinal === 'xelatex-v2';
+  const naesinLinkKey = String(
+    options.naesinLinkKey || options.naesin_link_key || '',
+  ).trim();
   return {
     // Always normalize to current renderer version on worker side.
     renderConfigVersion: isV2Engine ? RENDER_CONFIG_VERSION_V2 : RENDER_CONFIG_VERSION,
@@ -2578,6 +2581,7 @@ function buildRenderConfigFromJob(job) {
     mathEngine: mathEngineFinal,
     reviewPdf: normalizeBool(options.reviewPdf ?? options.review_pdf, false),
     disableAutoLabels,
+    ...(naesinLinkKey ? { naesinLinkKey } : {}),
     singleQuestionContentPage: normalizeBool(
       options.singleQuestionContentPage,
       false,
@@ -2749,12 +2753,12 @@ function looksObjectiveInOriginal(question, originalChoices = null) {
 function originalQuestionModeOf(question, originalChoices = null) {
   const allowObjective = question.allow_objective !== false;
   const allowSubjective = question.allow_subjective !== false;
-  if (allowObjective && !allowSubjective) return 'objective';
-  if (!allowObjective && allowSubjective) return 'subjective';
   const type = String(question.question_type || '').trim();
   if (/\uC11C\uC220/.test(type)) return 'essay';
   if (/\uAC1D\uAD00\uC2DD/.test(type)) return 'objective';
   if (/\uC8FC\uAD00\uC2DD/.test(type)) return 'subjective';
+  if (allowObjective && !allowSubjective) return 'objective';
+  if (!allowObjective && allowSubjective) return 'subjective';
   return looksObjectiveInOriginal(question, originalChoices) ? 'objective' : 'subjective';
 }
 
@@ -2860,8 +2864,8 @@ function applyQuestionModeForQuestion(question, selectedMode, fallbackMode = 'or
     };
   }
   const originalChoices = normalizeChoiceRows(question.choices);
-  const originalLooksObjective = looksObjectiveInOriginal(question, originalChoices);
-  const resolvedMode = originalLooksObjective ? 'objective' : 'subjective';
+  const resolvedMode = originalQuestionModeOf(question, originalChoices);
+  const originalLooksObjective = resolvedMode === 'objective';
   return {
     mode: resolvedMode,
     question: {
@@ -2871,20 +2875,34 @@ function applyQuestionModeForQuestion(question, selectedMode, fallbackMode = 'or
       choices: originalLooksObjective ? originalChoices : [],
       export_answer: originalLooksObjective ? objectiveAnswer : subjectiveAnswer,
       export_mode: resolvedMode,
-      question_type: originalLooksObjective ? '\uAC1D\uAD00\uC2DD' : '\uC8FC\uAD00\uC2DD',
+      question_type:
+        resolvedMode === 'essay'
+          ? '\uC11C\uC220\uD615'
+          : (originalLooksObjective ? '\uAC1D\uAD00\uC2DD' : '\uC8FC\uAD00\uC2DD'),
     },
   };
 }
 
-function applyQuestionModesForExport(questions, questionModeByQuestionUid, fallbackMode) {
+function applyQuestionModesForExport(
+  questions,
+  questionModeByQuestionUid,
+  fallbackMode,
+  { forceOriginalMode = false } = {},
+) {
   const modeMap = {};
   const normalized = [];
   for (const q of questions || []) {
     const mapKey = String(q.question_uid || q.id || '').trim();
     const legacyIdKey = String(q.id || '').trim();
-    const selectedMode = questionModeByQuestionUid?.[mapKey]
-      || questionModeByQuestionUid?.[legacyIdKey];
-    const applied = applyQuestionModeForQuestion(q, selectedMode, fallbackMode);
+    const selectedMode = forceOriginalMode
+      ? 'original'
+      : (questionModeByQuestionUid?.[mapKey]
+        || questionModeByQuestionUid?.[legacyIdKey]);
+    const applied = applyQuestionModeForQuestion(
+      q,
+      selectedMode,
+      forceOriginalMode ? 'original' : fallbackMode,
+    );
     if (mapKey) modeMap[mapKey] = applied.mode;
     normalized.push(applied.question);
   }
@@ -3942,13 +3960,14 @@ async function fetchQuestionsForJob(job, renderConfig) {
       'id,question_uid,document_id,question_number,question_type,stem,choices,allow_objective,allow_subjective,objective_choices,objective_answer_key,subjective_answer,objective_generated,figure_refs,equations,confidence,flags,reviewer_notes,source_page,source_order,meta',
     )
     .eq('academy_id', academyId);
+  query = applyPublishedQuestionFilter(query);
 
   if (deliveryQuestionIds.length > 0) {
     query = query.in('id', deliveryQuestionIds);
   } else if (selectedUidSet.size > 0) {
     query = query.in('question_uid', Array.from(selectedUidSet));
   } else {
-    query = query.eq('document_id', documentId).eq('is_checked', true);
+    query = query.eq('document_id', documentId);
   }
 
   let { data, error } = await query
@@ -3959,12 +3978,13 @@ async function fetchQuestionsForJob(job, renderConfig) {
   }
 
   if ((!data || data.length === 0) && selectedUidSet.size > 0) {
-    const idFallbackQuery = supa
+    let idFallbackQuery = supa
       .from('pb_questions')
       .select(
         'id,question_uid,document_id,question_number,question_type,stem,choices,allow_objective,allow_subjective,objective_choices,objective_answer_key,subjective_answer,objective_generated,figure_refs,equations,confidence,flags,reviewer_notes,source_page,source_order,meta',
       )
-      .eq('academy_id', academyId)
+      .eq('academy_id', academyId);
+    idFallbackQuery = applyPublishedQuestionFilter(idFallbackQuery)
       .in('id', Array.from(selectedUidSet))
       .order('source_page', { ascending: true })
       .order('source_order', { ascending: true });
@@ -4075,6 +4095,10 @@ async function fetchQuestionsForJob(job, renderConfig) {
   return { rows, missingQuestionUids };
 }
 
+function applyPublishedQuestionFilter(query) {
+  return query.eq('is_published', true);
+}
+
 async function renderPdf(job, questions, renderConfig) {
   const profile = normalizeProfile(
     renderConfig?.templateProfile || job.template_profile,
@@ -4102,10 +4126,14 @@ async function renderPdf(job, questions, renderConfig) {
   layout.choiceSize = Math.max(8, configuredFontSize - 0.6);
 
   const fallbackQuestionMode = normalizeQuestionMode(renderConfig?.questionMode);
+  const followsOriginalQuestionTypes = String(
+    renderConfig?.naesinLinkKey || renderConfig?.naesin_link_key || '',
+  ).trim().length > 0;
   const modeApplied = applyQuestionModesForExport(
     questions,
     renderConfig?.questionModeByQuestionUid || renderConfig?.questionModeByQuestionId || {},
     fallbackQuestionMode,
+    { forceOriginalMode: followsOriginalQuestionTypes },
   );
   const exportQuestions = renumberQuestionsForRender(
     modeApplied.questions,
@@ -4967,6 +4995,7 @@ export {
   normalizeFigureQuality,
   applyQuestionModeForQuestion,
   applyQuestionModesForExport,
+  applyPublishedQuestionFilter,
   processOneJob,
   normalizeQuestionModeSelection,
   normalizeQuestionMode,

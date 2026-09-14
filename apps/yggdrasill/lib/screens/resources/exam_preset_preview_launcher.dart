@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../services/learning_problem_bank_service.dart';
+import '../../services/problem_bank_export_preview_print_adapter.dart';
 import '../../widgets/app_snackbar.dart';
 import '../learning/models/problem_bank_export_models.dart';
 import '../learning/widgets/problem_bank_export_server_preview_dialog.dart';
@@ -126,7 +127,13 @@ class _PresetPreviewSession {
     mathEngine = ExamPresetPreviewLauncher._normalizeMathEngine(
       preset.renderConfig['mathEngine'],
     );
+    final followsOriginalQuestionTypes =
+        naesinLinkKeyOfPreset(preset).isNotEmpty;
     for (final question in questions) {
+      if (followsOriginalQuestionTypes) {
+        modes[question.id] = originalQuestionModeOf(question);
+        continue;
+      }
       final rawMode =
           preset.questionModeByQuestionUid[question.stableQuestionKey] ??
               preset.questionModeByQuestionUid[question.id];
@@ -179,6 +186,7 @@ class _PresetPreviewSession {
     };
     if (link.isNotEmpty) {
       config[kExamPresetNaesinLinkConfigKey] = link;
+      config['naesinOriginalModePolicyVersion'] = 1;
     }
     config['mathEngine'] = mathEngine;
     config['disableAutoLabels'] = true;
@@ -267,6 +275,10 @@ class _PresetPreviewSession {
       context,
       pdfUrl: completed.outputUrl.trim(),
       titleText: '서버 PDF 미리보기 (${questions.length}문항)',
+      onPrintRequested: (filePath) => printProblemBankExportPreviewFile(
+        filePath,
+        preferredPaperSize: settings.paperLabel,
+      ),
       initialSubjectTitle:
           '${initialPrimary('subjectTitleText') ?? '수학 영역'}'.trim().isEmpty
               ? '수학 영역'

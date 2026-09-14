@@ -7,6 +7,8 @@
 // 이 모듈은 "VLM 의 raw question" → "pb_questions 에 insert/upsert 가능한 row update payload"
 // 로 변환하는 단계까지만 책임진다. 실제 DB 쓰기는 호출 측(runner.js) 이 담당한다.
 
+import { normalizeArcNotation } from '../../render_engine/utils/text.js';
+
 // VLM 은 수식을 MathJax 스타일 \(...\) / \[...\] 로 내보낸다. 하지만 현재 렌더러
 // (template.js:smartTexLine) 는 "한국어가 아닌 연속 구간" 을 자동으로 $...$ 로 감싸주므로
 // delimiter 가 남아 있으면 이중 감싸기로 렌더 실패한다. 따라서 "구분자만 제거,
@@ -232,6 +234,42 @@ function normalizeVlmStructuralLineBreaks(input) {
   return protectedTables.restore(protectedLatexRows.restore(s));
 }
 
+export function normalizeDisplayMathLineMarkers(input) {
+  if (typeof input !== 'string' || !input.includes('[수식제시]')) return input;
+  const lines = input.split('\n');
+  const normalized = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = String(lines[i] || '');
+    if (!/^\s*\[수식제시\]\s*$/.test(line)) {
+      normalized.push(line);
+      continue;
+    }
+
+    const nextLine = i + 1 < lines.length ? String(lines[i + 1] || '') : '';
+    const nextContent = nextLine.trim();
+    const nextIsStructuralMarker = /^\[[^\]]+\]\s*$/.test(nextContent);
+    if (nextContent && !nextIsStructuralMarker) {
+      // [수식제시]는 오직 한 줄 범위 마커다. VLM이 마커 뒤에 LF를 잘못 넣은
+      // 경우에도 DB에는 반드시 "[수식제시]<같은 줄 내용>" 형태로 저장한다.
+      normalized.push(`[수식제시]${nextLine.trimStart()}`);
+      i += 1;
+    }
+    // 뒤에 즉시 적용할 내용이 없으면 범위가 불명확한 고아 마커이므로 저장하지 않는다.
+  }
+  return normalized.join('\n');
+}
+
+export function normalizeMathLabelColonNotation(input) {
+  if (typeof input !== 'string' || !input.includes(':')) return input;
+  // 수식 안의 명명 콜론(`l: 2x-y=0`, `f_1: x=...`)을 표준 LaTeX \colon 으로
+  // 정규화한다. 리터럴 `:`가 사라져 대화문 판별과 충돌하지 않으며, 실제 글리프와
+  // 간격은 각 렌더러의 \colon 호환 계층에서 일관되게 제어한다.
+  return input.replace(
+    /(^|[\s,(])([a-z](?:_\{?[A-Za-z0-9]+\}?)?(?:['′]+)?)\s*:\s*(?=[^,\n]{0,80}=)/g,
+    '$1$2\\colon ',
+  );
+}
+
 function normalizeCompactFractionCommands(input) {
   let out = String(input || '');
   for (let i = 0; i < 4; i += 1) {
@@ -281,38 +319,44 @@ function normalizeEmptyBracketSpacing(input) {
     .replace(/\[\s*\]/g, '[[공백:2]]');
 }
 
+function normalizeVlmLatexText(input) {
+  return normalizeEmptyBracketSpacing(
+    normalizeMathLabelColonNotation(
+      normalizeDisplayMathLineMarkers(
+        normalizeVlmStructuralLineBreaks(
+          normalizeArcNotation(normalizeMathDelimiters(input)),
+        ),
+      ),
+    ),
+  );
+}
+
 export function normalizeVlmQuestion(vlmQ) {
   if (!vlmQ || typeof vlmQ !== 'object') return vlmQ;
   const out = { ...vlmQ };
-  out.stem = normalizeEmptyBracketSpacing(
-    normalizeVlmStructuralLineBreaks(normalizeMathDelimiters(out.stem)),
-  );
+  out.stem = normalizeVlmLatexText(out.stem);
   if (Array.isArray(out.choices)) {
     out.choices = out.choices.map((c) => ({
       ...c,
-      text: normalizeEmptyBracketSpacing(
-        normalizeVlmStructuralLineBreaks(normalizeMathDelimiters(c?.text)),
-      ),
+      text: normalizeVlmLatexText(c?.text),
     }));
   }
   if (Array.isArray(out.sub_questions)) {
     out.sub_questions = out.sub_questions.map((sq) => ({
       ...sq,
-      text: normalizeEmptyBracketSpacing(
-        normalizeVlmStructuralLineBreaks(normalizeMathDelimiters(sq?.text)),
-      ),
+      text: normalizeVlmLatexText(sq?.text),
     }));
   }
   if (out.answer && typeof out.answer === 'object') {
     const a = { ...out.answer };
     if (typeof a.subjective === 'string')
-      a.subjective = normalizeAnswerSurfaceText(a.subjective);
+      a.subjective = normalizeArcNotation(normalizeAnswerSurfaceText(a.subjective));
     if (typeof a.objective_key === 'string')
-      a.objective_key = normalizeMathDelimiters(a.objective_key);
+      a.objective_key = normalizeArcNotation(normalizeMathDelimiters(a.objective_key));
     if (Array.isArray(a.parts)) {
       a.parts = a.parts.map((p) => ({
         ...p,
-        value: normalizeEmptyBracketSpacing(normalizeMathDelimiters(p?.value)),
+        value: normalizeVlmLatexText(p?.value),
       }));
     }
     out.answer = a;
@@ -408,8 +452,8 @@ function extractBlankChoiceLabelsFromTabular(block) {
     .map(stripLatexTextWrapper)
     .filter(Boolean);
   return (cells.length >= 4 ? cells.slice(1) : cells)
-    .slice(0, 3)
-    .map((label, idx) => label || ['(가)', '(나)', '(다)'][idx]);
+    .slice(0, 4)
+    .map((label, idx) => label || ['(가)', '(나)', '(다)', '(라)'][idx]);
 }
 
 function looksLikeBlankChoiceTabular(block, choices) {
@@ -424,35 +468,70 @@ function looksLikeBlankChoiceTabular(block, choices) {
   return expectedLabels.every((label) => source.includes(label));
 }
 
-function normalizeBlankChoiceTableStem(stem, choices) {
+function inferBlankChoiceLabelsFromStem(stem) {
   const source = String(stem || '');
-  if (!source.includes('[표시작]') || !Array.isArray(choices) || choices.length !== 5) {
+  const markers = ['(가)', '(나)', '(다)', '(라)'];
+  const found = [];
+  for (const marker of markers) {
+    if (!source.includes(marker)) break;
+    found.push(marker);
+  }
+  return found;
+}
+
+function commaSeparatedChoiceColumnCount(choices) {
+  if (!Array.isArray(choices) || choices.length !== 5) return 0;
+  const counts = choices.map((choice) => {
+    const text = String(choice?.text || '').trim();
+    if (!text) return 0;
+    return text.split(/\s*,\s*/).map((v) => v.trim()).filter(Boolean).length;
+  });
+  if (counts.some((n) => n < 2)) return 0;
+  const first = counts[0];
+  if (first < 2 || first > 4) return 0;
+  return counts.every((n) => n === first) ? first : 0;
+}
+
+export function normalizeBlankChoiceTableStem(stem, choices) {
+  const source = String(stem || '');
+  if (!Array.isArray(choices) || choices.length !== 5) {
     return { stem: source, isBlankChoice: false, labels: [] };
   }
 
-  let isBlankChoice = false;
-  let labels = [];
-  const tableBlockRe =
-    /(\[표시작\]\s*\\begin\{tabular\}\{[^}]*\}[\s\S]*?\\end\{tabular\}\s*\[표끝\])(\s*\[문단\]\s*\[그림\])?/g;
-  const nextStem = source.replace(
-    tableBlockRe,
-    (match, tableBlock, figureTail, offset) => {
-      if (!looksLikeBlankChoiceTabular(tableBlock, choices)) return match;
-      isBlankChoice = true;
-      if (labels.length === 0) {
-        labels = extractBlankChoiceLabelsFromTabular(tableBlock);
-      }
-      const before = source.slice(0, offset);
-      const hasFigureBefore = /\[그림\]|\[\[PB_FIG_[^\]]+\]\]/.test(before);
-      return figureTail && !hasFigureBefore ? figureTail : '';
-    },
-  );
+  if (source.includes('[표시작]')) {
+    let isBlankChoice = false;
+    let labels = [];
+    const tableBlockRe =
+      /(\[표시작\]\s*\\begin\{tabular\}\{[^}]*\}[\s\S]*?\\end\{tabular\}\s*\[표끝\])(\s*\[문단\]\s*\[그림\])?/g;
+    const nextStem = source.replace(
+      tableBlockRe,
+      (match, tableBlock, figureTail, offset) => {
+        if (!looksLikeBlankChoiceTabular(tableBlock, choices)) return match;
+        isBlankChoice = true;
+        if (labels.length === 0) {
+          labels = extractBlankChoiceLabelsFromTabular(tableBlock);
+        }
+        const before = source.slice(0, offset);
+        const hasFigureBefore = /\[그림\]|\[\[PB_FIG_[^\]]+\]\]/.test(before);
+        return figureTail && !hasFigureBefore ? figureTail : '';
+      },
+    );
+    if (isBlankChoice) {
+      return {
+        stem: nextStem.replace(/\n{3,}/g, '\n\n').trim(),
+        isBlankChoice: true,
+        labels,
+      };
+    }
+  }
 
-  return {
-    stem: nextStem.replace(/\n{3,}/g, '\n\n').trim(),
-    isBlankChoice,
-    labels,
-  };
+  const inferred = inferBlankChoiceLabelsFromStem(source);
+  const commaCols = commaSeparatedChoiceColumnCount(choices);
+  if (commaCols >= 2 && inferred.length === commaCols) {
+    return { stem: source, isBlankChoice: true, labels: inferred };
+  }
+
+  return { stem: source, isBlankChoice: false, labels: [] };
 }
 
 function countFigureMarkers(text) {

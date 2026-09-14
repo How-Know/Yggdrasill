@@ -10,6 +10,7 @@ import '../../app_overlays.dart';
 import '../../models/student_flow.dart';
 import '../../services/data_manager.dart';
 import '../../services/learning_problem_bank_service.dart';
+import '../../services/problem_bank_export_preview_print_adapter.dart';
 import '../../services/tenant_service.dart';
 import '../../services/textbook_concept_units.dart';
 import '../../utils/naesin_exam_context.dart';
@@ -2225,16 +2226,17 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         final presetMathEngine = normalizeMathEngineValue(
           preset.renderConfig['mathEngine'],
         );
+        final followsOriginalQuestionTypes =
+            '${preset.renderConfig[_kNaesinLinkConfigKey] ?? preset.naesinLinkKey}'
+                .trim()
+                .isNotEmpty;
         final presetModeMap = <String, String>{};
         for (final question in selected) {
-          final rawMode =
-              preset.questionModeByQuestionUid[question.stableQuestionKey] ??
-                  preset.questionModeByQuestionUid[question.id];
-          if (rawMode == null || rawMode.trim().isEmpty) continue;
-          presetModeMap[question.id] = normalizeQuestionModeSelection(
+          presetModeMap[question.id] = effectiveQuestionModeOf(
             question,
-            rawMode,
+            questionModeByQuestionUid: preset.questionModeByQuestionUid,
             fallbackMode: kLearningQuestionModeOriginal,
+            forceOriginalMode: followsOriginalQuestionTypes,
           );
         }
         if (mounted) {
@@ -2395,6 +2397,10 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         context,
         pdfUrl: previewPdfUrl,
         titleText: '서버 PDF 미리보기 (${selected.length}문항)',
+        onPrintRequested: (filePath) => printProblemBankExportPreviewFile(
+          filePath,
+          preferredPaperSize: _exportSettings.paperLabel,
+        ),
         initialSubjectTitle:
             initialSubjectTitle.isEmpty ? '수학 영역' : initialSubjectTitle,
         initialTitlePageTopText: initialTitlePageTopText.isEmpty
@@ -2679,6 +2685,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                   .trim();
           if (preservedNaesinLinkKey.isNotEmpty) {
             renderConfig[_kNaesinLinkConfigKey] = preservedNaesinLinkKey;
+            renderConfig['naesinOriginalModePolicyVersion'] = 1;
           }
           final sourceDocumentId = selected.first.documentId.trim();
           if (sourceDocumentId.isEmpty) {
@@ -3557,16 +3564,18 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           final presetMathEngine = normalizeMathEngineValue(
             effectivePreset.renderConfig['mathEngine'],
           );
+          final followsOriginalQuestionTypes =
+              '${effectivePreset.renderConfig[_kNaesinLinkConfigKey] ?? effectivePreset.naesinLinkKey}'
+                  .trim()
+                  .isNotEmpty;
           final modeMap = <String, String>{};
           for (final question in ordered) {
-            final rawMode = effectivePreset
-                    .questionModeByQuestionUid[question.stableQuestionKey] ??
-                effectivePreset.questionModeByQuestionUid[question.id];
-            if (rawMode == null || rawMode.trim().isEmpty) continue;
-            modeMap[question.id] = normalizeQuestionModeSelection(
+            modeMap[question.id] = effectiveQuestionModeOf(
               question,
-              rawMode,
+              questionModeByQuestionUid:
+                  effectivePreset.questionModeByQuestionUid,
               fallbackMode: kLearningQuestionModeOriginal,
+              forceOriginalMode: followsOriginalQuestionTypes,
             );
           }
           if (!mounted) return;
@@ -3771,8 +3780,14 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           if (!_kNaesinLinkExamTerms.contains(selectedExamTerm)) {
             selectedExamTerm = _kNaesinLinkExamTerms.first;
           }
-          final fallbackSchool = _fallbackNaesinSchoolFromSelectedDocument();
-          var selectedSchool = existing?.school ?? fallbackSchool;
+          final fallbackSchool = NaesinExamContext.canonicalSchoolName(
+            _fallbackNaesinSchoolFromSelectedDocument(),
+            gradeKey: selectedGradeKey,
+          );
+          var selectedSchool = NaesinExamContext.canonicalSchoolName(
+            existing?.school ?? fallbackSchool,
+            gradeKey: selectedGradeKey,
+          );
           var selectedCellLabel = existing?.cellLabel ?? preset.naesinCellLabel;
           selectedCellLabel = NaesinExamContext.normalizeCellLabel(
             selectedCellLabel,

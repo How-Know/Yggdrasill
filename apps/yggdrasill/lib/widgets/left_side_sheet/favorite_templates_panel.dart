@@ -9,11 +9,13 @@ import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../models/student_flow.dart';
+import '../../screens/class_content/homework_created_date.dart';
 import '../../screens/learning/models/problem_bank_export_models.dart';
 import '../../screens/learning/widgets/problem_bank_export_server_preview_dialog.dart';
 import '../../services/data_manager.dart';
 import '../../services/homework_store.dart';
 import '../../services/learning_problem_bank_service.dart';
+import '../../services/problem_bank_export_preview_print_adapter.dart';
 import '../../services/tenant_service.dart';
 import '../app_snackbar.dart';
 import '../dialog_tokens.dart';
@@ -508,6 +510,8 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
     );
     final titleFontSize = (template.isGroup ? 20.0 : 16.0) * sheetScale;
     final titleToMetaGap = (template.isGroup ? 7.5 : 5.0) * sheetScale;
+    final createdDateLabel =
+        homeworkCreatedDateLabel(template.createdAt.toLocal());
     final previewParts = template.parts.take(3).toList(growable: false);
     final moreCount = template.parts.length - previewParts.length;
     return Container(
@@ -528,32 +532,49 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Material(
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: onTitleTap,
-              borderRadius: BorderRadius.circular(6),
-              child: Padding(
-                padding: EdgeInsets.symmetric(
-                  horizontal: onTitleTap == null ? 0 : 2 * sheetScale,
-                  vertical: onTitleTap == null ? 0 : 1 * sheetScale,
-                ),
-                child: Text(
-                  title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: kDlgText,
-                    fontSize: titleFontSize,
-                    fontWeight: FontWeight.w600,
-                    decoration: onTitleTap == null
-                        ? TextDecoration.none
-                        : TextDecoration.underline,
-                    decorationColor: const Color(0xFF617777),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: onTitleTap,
+                    borderRadius: BorderRadius.circular(6),
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: onTitleTap == null ? 0 : 2 * sheetScale,
+                        vertical: onTitleTap == null ? 0 : 1 * sheetScale,
+                      ),
+                      child: Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: kDlgText,
+                          fontSize: titleFontSize,
+                          fontWeight: FontWeight.w600,
+                          decoration: onTitleTap == null
+                              ? TextDecoration.none
+                              : TextDecoration.underline,
+                          decorationColor: const Color(0xFF617777),
+                        ),
+                      ),
+                    ),
                   ),
                 ),
               ),
-            ),
+              SizedBox(width: 8 * sheetScale),
+              Text(
+                createdDateLabel,
+                maxLines: 1,
+                style: TextStyle(
+                  color: const Color(0xFF8FA3A3),
+                  fontSize: 13.0 * sheetScale,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
           ),
           SizedBox(height: titleToMetaGap),
           Text(
@@ -1179,6 +1200,10 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
         context,
         pdfUrl: completed.outputUrl.trim(),
         titleText: '과제보기 (${selectedUids.length}문항)',
+        onPrintRequested: (filePath) => printProblemBankExportPreviewFile(
+          filePath,
+          preferredPaperSize: settings.paperLabel,
+        ),
         initialSubjectTitle: subjectTitle.isEmpty ? '수학 영역' : subjectTitle,
         initialTitlePageTopText: titlePageTopText.isEmpty
             ? kLearningDefaultTitlePageTopText

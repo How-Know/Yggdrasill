@@ -144,6 +144,30 @@ const Set<String> kSuryeokCategoryLabels = <String>{
   '개념찾아보기',
 };
 
+/// 고쟁이 목차/트리에서 단원명이 아니라 단계·코너 라벨인 항목들.
+///
+/// 목차 맨 아래 "WORKBOOK" 두 줄은 단원트리에 넣지 않고 워크북 시작 쪽으로만
+/// 담는다. 판독이 이를 중단원으로 올려 보내면 여기서 걸러진다.
+const Set<String> kGojaengiCategoryLabels = <String>{
+  'Step 1 핵심 유형',
+  'Step 2 심화 유형',
+  'Step 3 최고난도 유형',
+  '핵심 유형',
+  '심화 유형',
+  '최고난도 유형',
+  '창의융합 유형',
+  '창의융합',
+  'STEP1',
+  'STEP2',
+  'STEP3',
+  'WORKBOOK',
+  '워크북',
+  '중단원 TEST',
+  '중단원TEST',
+  '대단원 TEST',
+  '대단원TEST',
+};
+
 /// 수력충전 중단원 끝의 마무리 행인지.
 ///
 /// 목차에는 "• 단원 마무리 평가" 한 줄로 인쇄된다. 앞의 글머리표나 "평가" 누락
@@ -169,6 +193,7 @@ class TocAutofillSeriesRules {
     required this.isUnitEndName,
     this.mergeUnitEndRows = false,
     this.specialExerciseRowName,
+    this.trailingMidRowName = '',
   });
 
   /// 단원명으로 잘못 올라온 문제 카테고리 라벨 — 트리에서 걸러낸다.
@@ -189,9 +214,24 @@ class TocAutofillSeriesRules {
   /// 돌려준다. 마무리 지면이지만 대단원마다 따로 있어서 [unitEndRowName] 으로
   /// 이름을 덮으면 서로 구분되지 않는다.
   final String? Function(String name)? specialExerciseRowName;
+
+  /// 대단원마다 끝에 세울 전용 중단원 행의 이름. 빈 문자열이면 없다.
+  ///
+  /// 고쟁이 워크북 "대단원 TEST" 는 대단원 하나를 통틀어 다뤄서 어느 중단원에도
+  /// 매달 자리가 없다. 목차에는 이 묶음의 시작 쪽만 한 번 인쇄되고 대단원별
+  /// 범위는 워크북 지면 머리말을 훑어야 나오므로, 행만 세우고 쪽은 비워 둔다.
+  final String trailingMidRowName;
 }
 
 TocAutofillSeriesRules tocAutofillRulesFor(String seriesKey) {
+  if (seriesKey.trim().toLowerCase() == 'gojaengi') {
+    return TocAutofillSeriesRules(
+      categoryLabels: kGojaengiCategoryLabels,
+      unitEndRowName: '',
+      isUnitEndName: (_) => false,
+      trailingMidRowName: '대단원 TEST',
+    );
+  }
   if (seriesKey.trim().toLowerCase() == 'suryeok') {
     return TocAutofillSeriesRules(
       categoryLabels: kSuryeokCategoryLabels,
@@ -433,6 +473,18 @@ List<TocAutofillBigUnit> buildTocAutofillTree(
     final endRaw = nextPrinted - 1 + tocPageOffset;
     if (endRaw >= startRaw) mid.endPage = endRaw;
   }
+
+  // 고쟁이 워크북 "대단원 TEST" 전용 중단원 행. 본문 쪽 채움을 모두 끝낸 뒤에
+  // 세운다 — 쪽이 비어 있는 행을 미리 끼우면 본문 중단원의 "다음 시작 쪽"
+  // 사슬에 끼어들 여지가 생긴다. 이 행의 쪽 범위는 워크북 지면 머리말을 훑는
+  // [autofillGojaengiWorkbookRanges] 가 채운다.
+  if (rules.trailingMidRowName.isNotEmpty) {
+    for (final big in bigs) {
+      if (big.midUnits.isEmpty) continue;
+      if (big.midUnits.any((m) => m.name == rules.trailingMidRowName)) continue;
+      big.midUnits.add(TocAutofillMidUnit(name: rules.trailingMidRowName));
+    }
+  }
   return bigs;
 }
 
@@ -451,23 +503,57 @@ class ProblemBookPartAutofillReport {
   final List<String> incompleteMids;
 }
 
-/// 쎈/RPM 중단원 본문을 경량 분류해 A/B/C 페이지 입력 범위를 채운다.
+/// 시리즈별 파트 순서. 첫 파트는 중단원 시작 지면부터 머리말 없이 열리고,
+/// 나머지는 지면 상단 머리말이 보이는 첫 지면에서 시작한다.
+/// 게이트웨이 `vlm_rpm_section_client.js` 의 SECTION_SERIES_CONFIG 와 같은
+/// 집합이어야 한다 — 한쪽만 바뀌면 경계를 못 찾아 전부 미완료로 떨어진다.
+const Map<String, List<List<String>>> kProblemBookSectionParts =
+    <String, List<List<String>>>{
+  // [슬롯 키, section 코드]
+  'ssen': <List<String>>[
+    <String>['A', 'basic_drill'],
+    <String>['B', 'type_practice'],
+    <String>['C', 'mastery'],
+  ],
+  'rpm': <List<String>>[
+    <String>['A', 'basic_drill'],
+    <String>['B', 'type_practice'],
+    <String>['C', 'mastery'],
+  ],
+  'gojaengi': <List<String>>[
+    <String>['A', 'core_type'],
+    <String>['B', 'advanced_type'],
+    <String>['C', 'top_type'],
+    <String>['D', 'creative_type'],
+  ],
+};
+
+/// 쎈/RPM/고쟁이 중단원 본문을 경량 분류해 파트별 페이지 입력 범위를 채운다.
 ///
-/// A에는 개념 설명과 A 문제가 함께 포함될 수 있으므로 중단원 시작부터 B 헤더
-/// 직전까지를 통째로 둔다. 실제 분석 시 문항 없는 개념 페이지는 통과한다.
+/// 첫 파트에는 개념 설명 페이지가 함께 포함될 수 있으므로 중단원 시작부터 둘째
+/// 파트 머리말 직전까지를 통째로 둔다. 실제 분석 시 문항 없는 개념 페이지는
+/// 통과한다.
 Future<ProblemBookPartAutofillReport> autofillProblemBookPartRanges(
   List<TocAutofillBigUnit> tree, {
   required ProblemBookSectionClassifier classify,
+  String series = 'rpm',
   void Function(String message)? onProgress,
   int batchSize = 12,
 }) async {
+  final parts = kProblemBookSectionParts[series.trim().toLowerCase()] ??
+      kProblemBookSectionParts['rpm']!;
   final mids = <TocAutofillMidUnit>[
     for (final big in tree) ...big.midUnits,
   ];
+  final trailingRowName =
+      tocAutofillRulesFor(series).trailingMidRowName;
   var completed = 0;
   final incomplete = <String>[];
   for (var midIndex = 0; midIndex < mids.length; midIndex += 1) {
     final mid = mids[midIndex];
+    // 대단원 끝 전용 행(고쟁이 "대단원 TEST")은 본문 단계가 없다. 쪽 범위는
+    // 워크북 훑기가 채우므로 여기서 미완료로 세면 안 된다.
+    if (trailingRowName.isNotEmpty && mid.name == trailingRowName) continue;
     final start = mid.startPage;
     final end = mid.endPage;
     if (start == null || end == null || end < start) {
@@ -475,7 +561,7 @@ Future<ProblemBookPartAutofillReport> autofillProblemBookPartRanges(
       continue;
     }
     onProgress?.call(
-      'RPM 파트 경계 분석 중... (${midIndex + 1}/${mids.length}) ${mid.name}',
+      '파트 경계 분석 중... (${midIndex + 1}/${mids.length}) ${mid.name}',
     );
     final classified = <TextbookRpmSectionPage>[];
     final allPages = <int>[for (var page = start; page <= end; page += 1) page];
@@ -486,55 +572,242 @@ Future<ProblemBookPartAutofillReport> autofillProblemBookPartRanges(
     }
     classified.sort((a, b) => a.rawPage.compareTo(b.rawPage));
 
-    // 정확한 상단 헤더 플래그를 우선하고, 모델이 헤더 글자를 놓쳤을 때만
-    // 단조로운 A→B→C section 판정을 보조 신호로 사용한다.
-    int? bStart;
-    int? cStart;
-    for (final page in classified) {
-      if (page.typePracticeHeaderVisible && bStart == null) {
-        bStart = page.rawPage;
-      }
-      if (page.masteryHeaderVisible && cStart == null) {
-        cStart = page.rawPage;
-      }
-    }
-    if (bStart == null) {
+    // 정확한 상단 머리말 플래그를 우선하고, 모델이 머리말 글자를 놓쳤을 때만
+    // 단조로운 section 판정을 보조 신호로 사용한다.
+    int? boundaryFor(String sectionCode) {
       for (final page in classified) {
-        if (page.section == 'type_practice') {
-          bStart = page.rawPage;
-          break;
-        }
+        if (page.section == sectionCode && page.headerVisible) return page.rawPage;
       }
-    }
-    if (cStart == null) {
       for (final page in classified) {
-        if (page.section == 'mastery') {
-          cStart = page.rawPage;
-          break;
-        }
+        if (page.section == sectionCode) return page.rawPage;
       }
+      return null;
     }
 
-    if (bStart == null ||
-        cStart == null ||
-        bStart <= start ||
-        cStart <= bStart ||
-        cStart > end) {
-      incomplete.add('${mid.name}(B/C 헤더 확인 실패)');
+    // 첫 파트는 중단원 시작에서 열리고, 나머지는 자기 머리말에서 시작한다.
+    final starts = <int>[start];
+    final missing = <String>[];
+    for (final part in parts.skip(1)) {
+      final boundary = boundaryFor(part[1]);
+      if (boundary == null) {
+        missing.add(part[0]);
+        continue;
+      }
+      starts.add(boundary);
+    }
+    // 경계가 하나라도 빠지거나 순서가 어긋나면 사람이 확인해야 한다.
+    var monotonic = starts.length == parts.length && starts.last <= end;
+    for (var i = 1; monotonic && i < starts.length; i += 1) {
+      if (starts[i] <= starts[i - 1]) monotonic = false;
+    }
+    if (!monotonic) {
+      final label = missing.isEmpty ? parts.skip(1).map((p) => p[0]).join('/') : missing.join('/');
+      incomplete.add('${mid.name}($label 머리말 확인 실패)');
       continue;
     }
-    mid.rpmPartRanges
-      ..clear()
-      ..addAll(<String, TocAutofillPageRange>{
-        'A': TocAutofillPageRange(startPage: start, endPage: bStart - 1),
-        'B': TocAutofillPageRange(startPage: bStart, endPage: cStart - 1),
-        'C': TocAutofillPageRange(startPage: cStart, endPage: end),
-      });
+
+    mid.rpmPartRanges..clear();
+    for (var i = 0; i < parts.length; i += 1) {
+      mid.rpmPartRanges[parts[i][0]] = TocAutofillPageRange(
+        startPage: starts[i],
+        endPage: i + 1 < parts.length ? starts[i + 1] - 1 : end,
+      );
+    }
     completed += 1;
   }
   return ProblemBookPartAutofillReport(
     completedMids: completed,
     incompleteMids: incomplete,
+  );
+}
+
+// ─────────── 고쟁이 워크북 쪽 범위 자동 채움 ───────────
+
+typedef GojaengiWorkbookClassifier
+    = Future<List<TextbookGojaengiWorkbookPage>> Function(List<int> rawPages);
+
+class GojaengiWorkbookAutofillReport {
+  const GojaengiWorkbookAutofillReport({
+    required this.midTestCount,
+    required this.bigTestCount,
+    required this.unmatched,
+  });
+
+  /// 쪽 범위를 채운 중단원 TEST(E) 묶음 수.
+  final int midTestCount;
+
+  /// 쪽 범위를 채운 대단원 TEST(F) 묶음 수.
+  final int bigTestCount;
+
+  /// 머리말은 읽었지만 단원트리에서 짝을 못 찾은 묶음들.
+  final List<String> unmatched;
+
+  bool get isEmpty => midTestCount == 0 && bigTestCount == 0;
+}
+
+String _compactUnitName(String raw) =>
+    stripTocUnitNumbering(raw).replaceAll(RegExp(r'\s+'), '');
+
+/// 고쟁이 워크북 지면을 훑어 E(중단원 TEST)·F(대단원 TEST) 쪽 범위를 채운다.
+///
+/// 목차에는 워크북 두 묶음의 **시작 쪽 하나씩**만 인쇄돼 있어서, 어느 중단원의
+/// TEST 가 몇 쪽부터 몇 쪽까지인지는 목차만으로 알 수 없다. 대신 워크북 지면은
+/// 지면마다 머리에 배지와 단원 이름을 반복 인쇄하므로, 그 머리말을 읽어 같은
+/// 묶음이 이어지는 구간을 묶으면 범위가 그대로 나온다.
+///
+/// [workbookStartPage]~[workbookEndPage] 는 PDF raw 쪽 범위다.
+Future<GojaengiWorkbookAutofillReport> autofillGojaengiWorkbookRanges(
+  List<TocAutofillBigUnit> tree, {
+  required GojaengiWorkbookClassifier classify,
+  required int workbookStartPage,
+  required int workbookEndPage,
+  void Function(String message)? onProgress,
+  int batchSize = 12,
+}) async {
+  if (workbookEndPage < workbookStartPage) {
+    return const GojaengiWorkbookAutofillReport(
+      midTestCount: 0,
+      bigTestCount: 0,
+      unmatched: <String>[],
+    );
+  }
+  final allPages = <int>[
+    for (var page = workbookStartPage; page <= workbookEndPage; page += 1) page,
+  ];
+  final safeBatchSize = batchSize.clamp(1, 24);
+  final classified = <TextbookGojaengiWorkbookPage>[];
+  for (var offset = 0; offset < allPages.length; offset += safeBatchSize) {
+    final hi = (offset + safeBatchSize).clamp(0, allPages.length);
+    onProgress?.call(
+      '워크북 묶음 분석 중... (${offset + 1}~$hi/${allPages.length}쪽)',
+    );
+    classified.addAll(await classify(allPages.sublist(offset, hi)));
+  }
+  classified.sort((a, b) => a.rawPage.compareTo(b.rawPage));
+
+  // 워크북은 지면마다 머리말을 다시 인쇄하므로 머리말 없는 지면은 원래 없다.
+  // 판독이 놓친 지면만 앞 묶음으로 이어 준다. 다만 **마지막 머리말 뒤쪽**은
+  // 이어 주지 않는다 — 워크북이 교재 맨 뒤라 그 뒤로 오는 백지·부록까지
+  // 마지막 대단원 TEST 범위로 빨려 들어간다.
+  var lastHeaderPage = 0;
+  for (final page in classified) {
+    if (page.hasHeader) lastHeaderPage = page.rawPage;
+  }
+  final blocks = <({String corner, String name, int? number, int start, int end})>[];
+  for (final page in classified) {
+    if (page.rawPage > lastHeaderPage) break;
+    if (page.hasHeader) {
+      final name = _compactUnitName(page.unitName);
+      final last = blocks.isEmpty ? null : blocks.last;
+      if (last != null &&
+          last.corner == page.corner &&
+          last.name == name &&
+          page.rawPage == last.end + 1) {
+        blocks[blocks.length - 1] = (
+          corner: last.corner,
+          name: last.name,
+          number: last.number ?? page.unitNumber,
+          start: last.start,
+          end: page.rawPage,
+        );
+        continue;
+      }
+      blocks.add((
+        corner: page.corner,
+        name: name,
+        number: page.unitNumber,
+        start: page.rawPage,
+        end: page.rawPage,
+      ));
+      continue;
+    }
+    if (blocks.isEmpty) continue;
+    final last = blocks.last;
+    if (page.rawPage != last.end + 1) continue;
+    blocks[blocks.length - 1] = (
+      corner: last.corner,
+      name: last.name,
+      number: last.number,
+      start: last.start,
+      end: page.rawPage,
+    );
+  }
+
+  final trailingRowName = tocAutofillRulesFor('gojaengi').trailingMidRowName;
+  final realMids = <TocAutofillMidUnit>[
+    for (final big in tree)
+      for (final mid in big.midUnits)
+        if (mid.name != trailingRowName) mid,
+  ];
+  final unmatched = <String>[];
+  var midTestCount = 0;
+  var bigTestCount = 0;
+
+  for (final block in blocks) {
+    final range = TocAutofillPageRange(
+      startPage: block.start,
+      endPage: block.end,
+    );
+    if (block.corner == 'mid_unit_test') {
+      // 이름이 첫 단서다. 중등 고쟁이는 소단원 번호가 책 전체에서 1~10 으로
+      // 이어지므로, 이름이 어긋날 때만 번호를 차례로 써서 되짚는다.
+      TocAutofillMidUnit? target;
+      for (final mid in realMids) {
+        if (block.name.isNotEmpty && _compactUnitName(mid.name) == block.name) {
+          target = mid;
+          break;
+        }
+      }
+      if (target == null && block.number != null) {
+        final index = block.number! - 1;
+        if (index >= 0 && index < realMids.length) target = realMids[index];
+      }
+      if (target == null) {
+        unmatched.add('중단원 TEST ${block.name}(${block.start}~${block.end}쪽)');
+        continue;
+      }
+      target.rpmPartRanges['E'] = range;
+      midTestCount += 1;
+      continue;
+    }
+    if (block.corner != 'big_unit_test') continue;
+    TocAutofillBigUnit? bigTarget;
+    for (final big in tree) {
+      if (_compactUnitName(big.name) == block.name) {
+        bigTarget = big;
+        break;
+      }
+    }
+    if (bigTarget == null && block.number != null) {
+      final index = block.number! - 1;
+      if (index >= 0 && index < tree.length) bigTarget = tree[index];
+    }
+    if (bigTarget == null) {
+      unmatched.add('대단원 TEST ${block.name}(${block.start}~${block.end}쪽)');
+      continue;
+    }
+    TocAutofillMidUnit? trailing;
+    for (final mid in bigTarget.midUnits) {
+      if (mid.name == trailingRowName) {
+        trailing = mid;
+        break;
+      }
+    }
+    if (trailing == null) {
+      trailing = TocAutofillMidUnit(name: trailingRowName);
+      bigTarget.midUnits.add(trailing);
+    }
+    trailing
+      ..startPage = block.start
+      ..endPage = block.end;
+    trailing.rpmPartRanges['F'] = range;
+    bigTestCount += 1;
+  }
+
+  return GojaengiWorkbookAutofillReport(
+    midTestCount: midTestCount,
+    bigTestCount: bigTestCount,
+    unmatched: unmatched,
   );
 }
 

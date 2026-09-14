@@ -177,6 +177,17 @@ export function normalizeWhitespace(value) {
   return String(value ?? '').replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * JSON에서 `\notin`의 `\n`이 실제 LF로 해석된 기존 데이터를 복구한다.
+ * 예: "\\sqrt{2}\notin R" (LF + "otin") → "\\sqrt{2}\\notin R".
+ */
+export function recoverMangledLatexNewlineCommands(value) {
+  return String(value ?? '').replace(
+    /\x0a(?=(?:abla|atural|e(?:q|g)?|i|otin|u)(?![A-Za-z]))/g,
+    '\\n',
+  );
+}
+
 export function stripStructuralMarkers(value) {
   return String(value || '')
     .replace(STRUCTURAL_MARKER_REGEX, ' ')
@@ -503,9 +514,59 @@ export function expandCasesEnvironmentToDisplayArray(value, options = {}) {
   return out;
 }
 
+// 호 표기의 내부 표준형은 \overset{\frown}{AB} 이다.
+// VLM/MathJax가 흔히 내보내는 별칭은 엔진마다 지원 범위가 달라 저장·렌더 경로에서
+// 그대로 소비하면 XeLaTeX의 undefined control sequence가 될 수 있다.
+export function normalizeArcNotation(value) {
+  const source = String(value || '');
+  if (!/\\(?:overarc|overparen|wideparen)\s*\{/.test(source)) return source;
+
+  let out = '';
+  let cursor = 0;
+  const commandRe = /\\(?:overarc|overparen|wideparen)\s*\{/g;
+  while (true) {
+    commandRe.lastIndex = cursor;
+    const match = commandRe.exec(source);
+    if (!match) {
+      out += source.slice(cursor);
+      break;
+    }
+
+    const openIndex = match.index + match[0].lastIndexOf('{');
+    let depth = 1;
+    let closeIndex = -1;
+    for (let i = openIndex + 1; i < source.length; i += 1) {
+      if (source[i] === '\\') {
+        i += 1;
+        continue;
+      }
+      if (source[i] === '{') depth += 1;
+      else if (source[i] === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          closeIndex = i;
+          break;
+        }
+      }
+    }
+
+    out += source.slice(cursor, match.index);
+    if (closeIndex < 0) {
+      out += source.slice(match.index);
+      break;
+    }
+
+    const argument = source.slice(openIndex + 1, closeIndex);
+    out += `\\overset{\\frown}{${argument}}`;
+    cursor = closeIndex + 1;
+  }
+  return out;
+}
+
 export function normalizeMathLatex(value) {
   let out = String(value || '').trim();
   if (!out) return '';
+  out = normalizeArcNotation(out);
   out = out
     .replace(/^\$\$/, '')
     .replace(/\$\$$/, '')

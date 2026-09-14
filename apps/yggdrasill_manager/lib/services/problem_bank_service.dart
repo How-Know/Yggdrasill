@@ -1422,16 +1422,20 @@ class ProblemBankService {
           .from('pb_documents')
           .select('*')
           .eq('academy_id', academyId)
-          .eq('source_type_code', 'school_past')
           .order('created_at', ascending: false)
           .range(offset, offset + pageSize - 1);
       final rawRows = rows as List<dynamic>;
       documents.addAll(
-        rawRows.map(
-          (row) => ProblemBankDocument.fromMap(
-            Map<String, dynamic>.from(row as Map<dynamic, dynamic>),
-          ),
-        ),
+        rawRows
+            .map(
+              (row) => ProblemBankDocument.fromMap(
+                Map<String, dynamic>.from(row as Map<dynamic, dynamic>),
+              ),
+            )
+            .where(
+              (document) =>
+                  document.sourceTypeCode.trim().toLowerCase() == 'school_past',
+            ),
       );
       if (rawRows.length < pageSize) break;
       offset += pageSize;
@@ -2260,6 +2264,56 @@ class ProblemBankService {
     return ProblemBankExportJob.fromMap(_mapFromDynamic(json['job']));
   }
 
+  Future<ProblemBankExportJob> createExportJob({
+    required String academyId,
+    required String documentId,
+    required String templateProfile,
+    required String paperSize,
+    required bool includeAnswerSheet,
+    required bool includeExplanation,
+    required List<String> selectedQuestionUids,
+    String renderHash = '',
+    bool previewOnly = false,
+    Map<String, dynamic> options = const <String, dynamic>{},
+  }) async {
+    if (!hasGateway) {
+      throw StateError('게이트웨이 URL 이 설정되어 있지 않습니다.');
+    }
+    final selectedUids = selectedQuestionUids
+        .map((uid) => uid.trim())
+        .where((uid) => uid.isNotEmpty)
+        .toList(growable: false);
+    if (selectedUids.isEmpty) {
+      throw ArgumentError('selectedQuestionUids must not be empty');
+    }
+    final payloadOptions = <String, dynamic>{
+      ...options,
+      'selectedQuestionUids': selectedUids,
+      'selectedQuestionIds': selectedUids,
+      if (!options.containsKey('selectedQuestionUidsOrdered'))
+        'selectedQuestionUidsOrdered': selectedUids,
+      if (!options.containsKey('selectedQuestionIdsOrdered'))
+        'selectedQuestionIdsOrdered': selectedUids,
+    };
+    final json = await _gatewayPost(
+      '/pb/jobs/export',
+      body: <String, dynamic>{
+        'academyId': academyId,
+        'documentId': documentId,
+        'requestedBy': _client.auth.currentUser?.id,
+        'templateProfile': templateProfile,
+        'paperSize': paperSize,
+        'includeAnswerSheet': includeAnswerSheet,
+        'includeExplanation': includeExplanation,
+        'selectedQuestionUids': selectedUids,
+        'renderHash': renderHash.trim(),
+        'previewOnly': previewOnly,
+        'options': payloadOptions,
+      },
+    );
+    return ProblemBankExportJob.fromMap(_mapFromDynamic(json['job']));
+  }
+
   Future<ProblemBankExportJob> getExportJob({
     required String academyId,
     required String jobId,
@@ -2947,6 +3001,7 @@ class ProblemBankService {
   Future<void> updateQuestionReview({
     required String questionId,
     required bool isChecked,
+    bool? isPublished,
     String? reviewerNotes,
     String? questionType,
     String? stem,
@@ -3056,6 +3111,7 @@ class ProblemBankService {
     }
     final payload = <String, dynamic>{
       'is_checked': isChecked,
+      if (isPublished != null) 'is_published': isPublished,
       'reviewed_by': _client.auth.currentUser?.id,
       'reviewed_at': DateTime.now().toUtc().toIso8601String(),
       if (reviewerNotes != null) 'reviewer_notes': reviewerNotes,
@@ -3264,6 +3320,49 @@ class ProblemBankService {
     await _client.from('pb_questions').update(update).eq('id', questionId);
   }
 
+  Future<void> updateIndependentSetCommonStem({
+    required String academyId,
+    required String documentId,
+    required String setKey,
+    required String commonStem,
+  }) async {
+    final setRows = await _client
+        .from('pb_question_sets')
+        .select('id')
+        .eq('academy_id', academyId)
+        .eq('source_document_id', documentId)
+        .eq('set_key', setKey);
+    final setIds = setRows
+        .whereType<Map>()
+        .map((row) => '${row['id'] ?? ''}'.trim())
+        .where((id) => id.isNotEmpty)
+        .toList(growable: false);
+    if (setIds.isEmpty) return;
+
+    await _client
+        .from('pb_question_sets')
+        .update({'common_stem': commonStem})
+        .eq('academy_id', academyId)
+        .inFilter('id', setIds);
+
+    final deliveryRows = await _client
+        .from('pb_delivery_units')
+        .select('id,source_meta')
+        .eq('academy_id', academyId)
+        .inFilter('set_id', setIds);
+    for (final raw in deliveryRows.whereType<Map>()) {
+      final id = '${raw['id'] ?? ''}'.trim();
+      if (id.isEmpty) continue;
+      final sourceMeta = raw['source_meta'] is Map
+          ? Map<String, dynamic>.from(raw['source_meta'] as Map)
+          : <String, dynamic>{};
+      sourceMeta['common_stem'] = commonStem;
+      await _client
+          .from('pb_delivery_units')
+          .update({'source_meta': sourceMeta}).eq('id', id);
+    }
+  }
+
   Future<void> bulkSetChecked({
     required String academyId,
     required String documentId,
@@ -3278,6 +3377,37 @@ class ProblemBankService {
         })
         .eq('academy_id', academyId)
         .eq('document_id', documentId);
+  }
+
+  Future<void> updateQuestionPublished({
+    required String questionId,
+    required bool isPublished,
+  }) async {
+    await _client
+        .from('pb_questions')
+        .update({'is_published': isPublished}).eq('id', questionId);
+  }
+
+  Future<void> bulkSetCheckedByIds({
+    required String academyId,
+    required List<String> questionIds,
+    required bool isChecked,
+  }) async {
+    final ids = questionIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (ids.isEmpty) return;
+    await _client
+        .from('pb_questions')
+        .update({
+          'is_checked': isChecked,
+          'reviewed_by': _client.auth.currentUser?.id,
+          'reviewed_at': DateTime.now().toUtc().toIso8601String(),
+        })
+        .eq('academy_id', academyId)
+        .inFilter('id', ids);
   }
 
   Future<ProblemBankDocumentSummary?> loadDocumentSummary({
@@ -3974,6 +4104,155 @@ class ProblemBankService {
             ))
         .where((e) => e.id.isNotEmpty)
         .toList(growable: false);
+  }
+
+  Future<ProblemBankExportPreset?> getExportPresetById({
+    required String academyId,
+    required String presetId,
+  }) async {
+    final safeAcademyId = academyId.trim();
+    final safePresetId = presetId.trim();
+    if (safeAcademyId.isEmpty || safePresetId.isEmpty) return null;
+    if (hasGateway) {
+      try {
+        final json = await _gatewayGet(
+          '/pb/export-presets/$safePresetId',
+          query: <String, String>{'academyId': safeAcademyId},
+        );
+        final presetMap = json['preset'];
+        if (presetMap is Map) {
+          return ProblemBankExportPreset.fromMap(
+            Map<String, dynamic>.from(presetMap),
+          );
+        }
+      } catch (_) {
+        // Direct database fallback below.
+      }
+    }
+    final row = await _client
+        .from('pb_export_presets')
+        .select('*')
+        .eq('academy_id', safeAcademyId)
+        .eq('id', safePresetId)
+        .maybeSingle();
+    if (row == null) return null;
+    return ProblemBankExportPreset.fromMap(Map<String, dynamic>.from(row));
+  }
+
+  Future<List<ProblemBankQuestion>> loadQuestionsByQuestionUids({
+    required String academyId,
+    required Iterable<String> questionUids,
+  }) async {
+    final requested = questionUids
+        .map((uid) => uid.trim())
+        .where((uid) => uid.isNotEmpty)
+        .toList(growable: false);
+    if (academyId.trim().isEmpty || requested.isEmpty) {
+      return const <ProblemBankQuestion>[];
+    }
+    final byUid = <String, ProblemBankQuestion>{};
+    final byId = <String, ProblemBankQuestion>{};
+    const chunkSize = 250;
+    for (var offset = 0; offset < requested.length; offset += chunkSize) {
+      final end = math.min(offset + chunkSize, requested.length);
+      final chunk = requested.sublist(offset, end);
+      for (final field in const <String>['question_uid', 'id']) {
+        try {
+          final rows = await _client
+              .from('pb_questions')
+              .select('*')
+              .eq('academy_id', academyId)
+              .inFilter(field, chunk);
+          for (final raw in rows as List<dynamic>) {
+            final question = ProblemBankQuestion.fromMap(
+              Map<String, dynamic>.from(raw as Map),
+            );
+            if (question.questionUid.trim().isNotEmpty) {
+              byUid.putIfAbsent(question.questionUid.trim(), () => question);
+            }
+            if (question.id.trim().isNotEmpty) {
+              byId.putIfAbsent(question.id.trim(), () => question);
+            }
+          }
+        } catch (_) {
+          // Some deployments only support one of the two identifier fields.
+        }
+      }
+    }
+    return requested
+        .map((uid) => byUid[uid] ?? byId[uid])
+        .whereType<ProblemBankQuestion>()
+        .toList(growable: false);
+  }
+
+  Future<ProblemBankExportPreset?> saveExportSettingsAsPreset({
+    required String academyId,
+    required String sourceDocumentId,
+    required List<String> selectedQuestionUidsOrdered,
+    required Map<String, String> questionModeByQuestionUid,
+    required Map<String, dynamic> renderConfig,
+    required String templateProfile,
+    required String paperSize,
+    required bool includeAnswerSheet,
+    required bool includeExplanation,
+    String displayName = '',
+    String presetId = '',
+  }) async {
+    if (!hasGateway) {
+      throw Exception('세팅 저장은 gateway 연결이 필요합니다.');
+    }
+    final selectedUids = selectedQuestionUidsOrdered
+        .map((uid) => uid.trim())
+        .where((uid) => uid.isNotEmpty)
+        .toList(growable: false);
+    if (selectedUids.isEmpty) throw Exception('저장할 문항이 비어 있습니다.');
+    final json = await _gatewayPost(
+      '/pb/documents/save-settings',
+      body: <String, dynamic>{
+        'academyId': academyId,
+        'sourceDocumentId': sourceDocumentId,
+        'createdBy': _client.auth.currentUser?.id,
+        'selectedQuestionUidsOrdered': selectedUids,
+        'questionModeByQuestionUid': questionModeByQuestionUid,
+        'renderConfig': renderConfig,
+        'templateProfile': templateProfile.trim(),
+        'paperSize': paperSize.trim(),
+        'includeAnswerSheet': includeAnswerSheet,
+        'includeExplanation': includeExplanation,
+        'displayName': displayName.trim(),
+        'presetKind': 'settings',
+        if (presetId.trim().isNotEmpty) 'presetId': presetId.trim(),
+      },
+    );
+    final presetMap = json['preset'];
+    if (presetMap is! Map) return null;
+    return ProblemBankExportPreset.fromMap(
+      Map<String, dynamic>.from(presetMap),
+    );
+  }
+
+  Future<ProblemBankExportPreset?> overwriteExportPresetRenderConfig({
+    required String academyId,
+    required String presetId,
+    required Map<String, dynamic> renderConfig,
+  }) async {
+    final safeAcademyId = academyId.trim();
+    final safePresetId = presetId.trim();
+    if (safeAcademyId.isEmpty || safePresetId.isEmpty) return null;
+    final updated = await _client
+        .from('pb_export_presets')
+        .update(<String, dynamic>{
+          'render_config': Map<String, dynamic>.from(renderConfig),
+          'updated_at': DateTime.now().toIso8601String(),
+        })
+        .eq('academy_id', safeAcademyId)
+        .eq('id', safePresetId)
+        .select('*')
+        .maybeSingle();
+    if (updated == null) return null;
+    return ProblemBankExportPreset.fromMap(
+      Map<String, dynamic>.from(updated),
+    );
   }
 
   Future<ProblemBankExportPreset?> renameExportPreset({

@@ -48,6 +48,8 @@ class TextbookSeriesCatalogEntry {
     this.hasSubUnitRows = false,
     this.unitEndRowName = '연습문제',
     this.unitEndSlotKeys = const <String>{},
+    this.trailingMidRowName = '',
+    this.trailingMidSlotKeys = const <String>{},
     this.supportsProblemExtraction = true,
   });
 
@@ -69,6 +71,32 @@ class TextbookSeriesCatalogEntry {
   /// 마무리 행의 페이지 범위에서 유도되는 슬롯 키. 나머지 슬롯은 일반 소단원
   /// 행 전체 범위를 쓴다.
   final Set<String> unitEndSlotKeys;
+
+  /// 대단원 끝에 덧붙는 전용 중단원 행의 이름. 빈 문자열이면 없다.
+  ///
+  /// 고쟁이 워크북 "대단원 TEST" 처럼 대단원 하나를 통틀어 다루는 코너용이다.
+  /// 어느 중단원에도 매달 자리가 없어서 대단원마다 이 이름의 중단원 행을 하나
+  /// 만들고, 그 행은 [trailingMidSlotKeys] 슬롯만 갖는다.
+  final String trailingMidRowName;
+
+  /// [trailingMidRowName] 행이 갖는 슬롯 키. 나머지 중단원은 이 키들을 뺀
+  /// [subPreset] 을 쓴다.
+  final Set<String> trailingMidSlotKeys;
+
+  /// 이 중단원 이름이 대단원 끝 전용 행인지.
+  bool isTrailingMidRow(String midName) =>
+      trailingMidRowName.isNotEmpty &&
+      midName.trim() == trailingMidRowName;
+
+  /// 이 중단원이 실제로 가져야 할 슬롯 목록.
+  List<TextbookSubSectionPreset> slotsForMid(String midName) {
+    if (trailingMidSlotKeys.isEmpty) return subPreset;
+    final trailing = isTrailingMidRow(midName);
+    return <TextbookSubSectionPreset>[
+      for (final preset in subPreset)
+        if (trailingMidSlotKeys.contains(preset.key) == trailing) preset,
+    ];
+  }
 
   /// 문항 추출(VLM 분석 → 크롭 저장)까지 지원하는지. false 면 목차·단원 구조
   /// 입력까지만 열어 두고 분석 실행을 막는다.
@@ -206,7 +234,53 @@ const List<TextbookSeriesCatalogEntry> kTextbookSeriesCatalog =
       TextbookSubSectionPreset(key: 'B', displayName: '단원 마무리 평가'),
     ],
   ),
+  // 고쟁이 문제집. 쎈처럼 대-중단원 아래에 고정 슬롯을 두는데, 단계가 셋이
+  // 아니라 넷이고 워크북이 따로 붙어 여섯 칸을 쓴다.
+  //   - 중단원 = 목차의 소단원("02 삼각형의 외심과 내심"). 중등은 번호가 책
+  //     전체에서 1~10 으로 이어지고, 고등은 대단원마다 01 로 되돌아간다.
+  //   - 중단원 첫 지면은 개념 정리, STEP2 앞 한두 지면은 대표 문항 + 스키마
+  //     해설이다. 둘 다 문항이 없는 개념 지면으로만 기록한다.
+  //   - 문항 번호는 본문 전체를 관통하는 세 자리 연속 번호다(054 → 634).
+  //     워크북은 묶음마다 01 부터 다시 시작한다.
+  //   - 별표(*)가 붙은 문항이 그 단계 안에서 더 어렵다 → label "상".
+  //   - 대단원 TEST 는 대단원 하나를 통틀어 다루므로 어느 중단원에도 매달 자리가
+  //     없다. 대단원마다 끝에 "대단원 TEST" 중단원 행을 하나 만들고 그 행은
+  //     F 슬롯만 갖는다.
+  TextbookSeriesCatalogEntry(
+    key: 'gojaengi',
+    displayName: '고쟁이',
+    defaultTextbookType: '문제집',
+    trailingMidRowName: '대단원 TEST',
+    trailingMidSlotKeys: <String>{'F'},
+    notes:
+        '한 중단원은 A(STEP1 핵심 유형) / B(STEP2 심화 유형) / C(STEP3 최고난도 유형) / '
+        '창의융합 유형 / 중단원 TEST로 고정됩니다. 단계별 쪽 범위는 지면의 '
+        'Step 머리말을 읽어 자동으로 나눕니다. 워크북의 대단원 TEST는 대단원 끝에 '
+        '"대단원 TEST" 중단원 행을 하나 만들어 담습니다.',
+    subPreset: <TextbookSubSectionPreset>[
+      TextbookSubSectionPreset(key: 'A', displayName: 'A STEP1 핵심 유형'),
+      TextbookSubSectionPreset(key: 'B', displayName: 'B STEP2 심화 유형'),
+      TextbookSubSectionPreset(key: 'C', displayName: 'C STEP3 최고난도 유형'),
+      // D·E 는 책에 인쇄된 단계 글자가 없는 코너라 슬롯 글자를 붙이지 않는다.
+      TextbookSubSectionPreset(key: 'D', displayName: '창의융합 유형'),
+      TextbookSubSectionPreset(key: 'E', displayName: '중단원 TEST'),
+      TextbookSubSectionPreset(key: 'F', displayName: '대단원 TEST'),
+    ],
+  ),
 ];
+
+// 고쟁이 문항 번호 규칙.
+//
+//   A~D 본문   책 전체를 관통하는 세 자리 연속 번호("054" … "634"). 단계가
+//              바뀌어도 이어지고 중단원이 바뀌어도 이어진다. 번호 하나로
+//              정답·해설이 유일하게 짚이므로 접두어를 붙이지 않는다.
+//   E 중단원 TEST  묶음마다 01 부터. 본문 번호와 겹치므로 슬롯으로 갈라 둔다.
+//   F 대단원 TEST  묶음마다 01 부터.
+//
+// 정답 파일(빠른 정답)은 중단원 아래 "Step 1 · 본교재 037~039쪽" 처럼 단계별
+// 본문 쪽 배지를 달고 번호를 나열하고, 워크북은 "워크북 166~169쪽" 배지를 쓴다.
+// 해설 파일은 본문 유형 머리말("핵심 05 …")과 문항별 답 배지를 함께 싣는데
+// 본문 쪽 배지가 없으므로, 본문은 세 자리 번호로만 매칭한다.
 
 // 수력충전 문항 번호 규칙.
 //

@@ -69,7 +69,7 @@ class LatexTextRenderer extends StatelessWidget {
     final children = <Widget>[];
     for (final part in parts) {
       if (part.isDisplayMath) {
-        final formula = part.content.trim();
+        final formula = _normalizeColonCommand(part.content.trim());
         if (formula.isEmpty) {
           continue;
         }
@@ -134,7 +134,7 @@ class LatexTextRenderer extends StatelessWidget {
       }
 
       final fullMatch = match.group(0) ?? '';
-      final formula = (match.group(1) ?? '').trim();
+      final formula = _normalizeColonCommand((match.group(1) ?? '').trim());
       if (formula.isEmpty) {
         spans.add(TextSpan(text: fullMatch));
       } else {
@@ -256,7 +256,7 @@ class LatexTextRenderer extends StatelessWidget {
 
   String _normalizeFormulaForRetry(String raw) {
     if (raw.isEmpty) return raw;
-    var out = _normalizeUnicodeScript(raw)
+    var out = _normalizeUnicodeScript(_normalizeColonCommand(raw))
         .replaceAll('×', r'\times ')
         .replaceAll('÷', r'\div ')
         .replaceAll('·', r'\cdot ')
@@ -281,6 +281,12 @@ class LatexTextRenderer extends StatelessWidget {
         .replaceAll('⅞', r'\frac{7}{8}');
     out = _dropUnmatchedCurlyBraces(out);
     return out.replaceAll(RegExp(r'\s+'), ' ').trim();
+  }
+
+  String _normalizeColonCommand(String raw) {
+    return raw
+        .replaceAll(r'\YggLabelColon', r'\colon')
+        .replaceAll(r'\colon', r'\mathord{\text{:}}\,');
   }
 
   String _plainFallbackText(String raw) {

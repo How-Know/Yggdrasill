@@ -1248,7 +1248,8 @@ class ResourceService {
           final refRows = await supa
               .from('textbook_problem_solution_refs')
               .select(
-                'crop_id, raw_page, display_page, number_region_1k, content_region_1k',
+                'crop_id, raw_page, display_page, number_region_1k, '
+                'content_region_1k, source_kind',
               )
               .eq('academy_id', academyId)
               .inFilter('crop_id', ids);
@@ -1257,6 +1258,14 @@ class ResourceService {
             final cropId = '${ref['crop_id'] ?? ''}'.trim();
             final crop = byCropId[cropId];
             if (crop == null) continue;
+            final sourceKind =
+                '${ref['source_kind'] ?? ''}'.trim().toLowerCase();
+            if (sourceKind == 'none') {
+              crop['solution_unavailable'] = true;
+              // raw_page=0 / [0,0,0,0] 은 DB NOT NULL을 만족시키는 센티널이다.
+              // 학생 화면에는 절대 PDF 좌표로 노출하지 않는다.
+              continue;
+            }
             crop.addAll({
               'solution_raw_page': ref['raw_page'],
               'solution_display_page': ref['display_page'],

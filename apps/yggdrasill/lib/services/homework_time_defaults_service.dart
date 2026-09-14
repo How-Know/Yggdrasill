@@ -77,7 +77,21 @@ class HomeworkTimeDefaultsService {
     add('rpm', 'high', 'A', 30);
     add('rpm', 'high', 'B', 120);
     add('rpm', 'high', 'C', 120);
-    add('rpm', 'high', '실력 UP', 360);
+    // 고쟁이. 쎈보다 한 단계 위 난도라 같은 알파벳끼리 견주면 조금씩 더 걸린다.
+    // D 창의융합은 지문과 표가 길어 최고난도(C)와 비슷하게 잡는다. 워크북
+    // TEST(E·F)는 그 중단원/대단원을 훑는 시험이라 B 언저리로 둔다.
+    add('gojaengi', 'middle', 'A', 30);
+    add('gojaengi', 'middle', 'B', 120);
+    add('gojaengi', 'middle', 'C', 300);
+    add('gojaengi', 'middle', 'D', 300);
+    add('gojaengi', 'middle', 'E', 90);
+    add('gojaengi', 'middle', 'F', 90);
+    add('gojaengi', 'high', 'A', 40);
+    add('gojaengi', 'high', 'B', 150);
+    add('gojaengi', 'high', 'C', 360);
+    add('gojaengi', 'high', 'D', 360);
+    add('gojaengi', 'high', 'E', 120);
+    add('gojaengi', 'high', 'F', 120);
     return out;
   }
 
@@ -242,6 +256,23 @@ class HomeworkTimeDefaultsService {
     // 현재 초기값에서 별도 단가를 둔 특수 구간은 RPM의 실력 UP뿐이다.
     // 대표 문제/서술형은 사용자가 지정한 해당 A/B/C 단계 단가를 그대로 쓴다.
     if (series == 'rpm' && special == '실력 UP') return '실력 UP';
+    // 고쟁이는 단계가 넷이고 워크북 TEST 둘이 더 붙어 A~F 를 모두 쓴다.
+    if (series == 'gojaengi') {
+      final normalizedSubKey = subKey.trim().toUpperCase();
+      if (const {'A', 'B', 'C', 'D', 'E', 'F'}.contains(normalizedSubKey)) {
+        return normalizedSubKey;
+      }
+      const bySection = {
+        'core_type': 'A',
+        'advanced_type': 'B',
+        'top_type': 'C',
+        'creative_type': 'D',
+        'mid_unit_test': 'E',
+        'big_unit_test': 'F',
+      };
+      final sectionKey = bySection[section.trim().toLowerCase()];
+      if (sectionKey != null) return sectionKey;
+    }
     if (series == 'ssen' || series == 'rpm') {
       final normalizedSubKey = subKey.trim().toUpperCase();
       if (const {'A', 'B', 'C'}.contains(normalizedSubKey)) {

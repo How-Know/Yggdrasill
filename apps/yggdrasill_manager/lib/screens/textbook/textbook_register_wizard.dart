@@ -340,6 +340,17 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
     });
   }
 
+  /// 중단원 이름에 맞는 슬롯 구성으로 맞춘다. 고쟁이는 "대단원 TEST" 행만
+  /// F 슬롯을, 나머지 중단원은 A~E 를 갖는다.
+  void _syncTrailingMidSlots() {
+    if (_series.trailingMidSlotKeys.isEmpty) return;
+    for (final big in _bigUnits) {
+      for (final mid in big.middles) {
+        mid.applyPreset(_series);
+      }
+    }
+  }
+
   Future<void> _pickCover() async {
     final result = await FilePicker.platform.pickFiles(
       dialogTitle: '교재 표지 이미지 선택',
@@ -475,6 +486,53 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
     }
   }
 
+  /// 고쟁이 워크북 지면을 훑어 E(중단원 TEST)·F(대단원 TEST) 쪽 범위를 채운다.
+  ///
+  /// 목차에는 워크북 두 묶음의 시작 쪽만 인쇄돼 있어서 대단원·중단원별 범위는
+  /// 지면 머리말을 읽어야 나온다. 상태줄에 덧붙일 문구를 돌려준다.
+  Future<String> _autofillWorkbookRanges(
+    List<TocAutofillBigUnit> tree, {
+    required TextbookTocParseResult toc,
+    required PdfDocument document,
+    required int tocPageOffset,
+  }) async {
+    final printedStart = toc.workbookMidTestPage ?? toc.workbookBigTestPage;
+    if (_seriesKey != 'gojaengi' || printedStart == null) return '';
+    final startRaw = printedStart + tocPageOffset;
+    if (startRaw < 1 || startRaw > document.pages.length) {
+      return ' · 워크북 시작 쪽($printedStart)이 PDF 범위를 벗어나 건너뜀';
+    }
+    final report = await autofillGojaengiWorkbookRanges(
+      tree,
+      workbookStartPage: startRaw,
+      workbookEndPage: document.pages.length,
+      classify: (rawPages) async {
+        final images = <TextbookRpmSectionImage>[];
+        for (final rawPage in rawPages) {
+          images.add(TextbookRpmSectionImage(
+            rawPage: rawPage,
+            bytes: await renderPdfPageToPng(
+              document: document,
+              pageNumber: rawPage,
+              longEdgePx: 1100,
+            ),
+          ));
+        }
+        final result = await _vlmService.classifyGojaengiWorkbookPages(
+          images: images,
+        );
+        return result.pages;
+      },
+      onProgress: (message) {
+        if (mounted) setState(() => _tocStatus = message);
+      },
+    );
+    if (report.isEmpty) return ' · 워크북 묶음 머리말을 하나도 못 읽었습니다';
+    return ' · 워크북 중단원 TEST ${report.midTestCount}개 / '
+        '대단원 TEST ${report.bigTestCount}개 쪽 자동 입력'
+        '${report.unmatched.isEmpty ? '' : ' · 짝 못 찾음: ${report.unmatched.join(', ')}'}';
+  }
+
   /// VLM 목차 결과를 Step 3 트리에 반영한다. (대단원 수, 중단원 수) 를 반환.
   ///
   /// 이름 정리(번호 제거, 카테고리 라벨 필터)와 페이지 자동 채움은
@@ -494,9 +552,11 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
     );
     if (tree.isEmpty) return null;
     var partStatus = '';
-    if (_seriesKey == 'ssen' || _seriesKey == 'rpm') {
+    final partSeries = kProblemBookSectionParts.containsKey(_seriesKey);
+    if (partSeries) {
       final report = await autofillProblemBookPartRanges(
         tree,
+        series: _seriesKey,
         classify: (rawPages) async {
           final images = <TextbookRpmSectionImage>[];
           for (final rawPage in rawPages) {
@@ -519,20 +579,28 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
           if (mounted) setState(() => _tocStatus = message);
         },
       );
+      final slotLabel =
+          kProblemBookSectionParts[_seriesKey]!.map((p) => p[0]).join('/');
       if (report.incompleteMids.isNotEmpty) {
-        partStatus = ' · ${_seriesKey == 'ssen' ? '쎈' : 'RPM'} 경계 미확인: '
+        partStatus = ' · ${_series.displayName} 경계 미확인: '
             '${report.incompleteMids.join(', ')}';
       } else {
-        partStatus = ' · ${_seriesKey == 'ssen' ? '쎈' : 'RPM'} '
-            'A/B/C ${report.completedMids}개 중단원 자동 분리';
+        partStatus = ' · ${_series.displayName} '
+            '$slotLabel ${report.completedMids}개 중단원 자동 분리';
       }
+      partStatus += await _autofillWorkbookRanges(
+        tree,
+        toc: toc,
+        document: document,
+        tocPageOffset: tocPageOffset,
+      );
     }
     final newBigs = <_BigUnitEdit>[];
     for (final big in tree) {
       final bigEdit = _BigUnitEdit();
       bigEdit.nameCtrl.text = big.name;
       for (final mid in big.midUnits) {
-        final midEdit = _MidUnitEdit(series: _series)..nameCtrl.text = mid.name;
+        final midEdit = _MidUnitEdit(series: _series, midName: mid.name);
         if (_seriesHasSubUnitRows) {
           for (final sub in mid.subUnits) {
             final row =
@@ -545,7 +613,7 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
             midEdit.subUnits.add(_SubUnitEdit());
           }
         }
-        if (_seriesKey == 'ssen' || _seriesKey == 'rpm') {
+        if (partSeries) {
           for (final sub in midEdit.subs) {
             final range = mid.rpmPartRanges[sub.preset.key];
             if (range == null) continue;
@@ -1352,7 +1420,13 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
               ),
               const SizedBox(width: 8),
               Expanded(
-                child: _buildTextField(mid.nameCtrl, hint: '중단원 이름'),
+                child: _buildTextField(
+                  mid.nameCtrl,
+                  hint: '중단원 이름',
+                  // 고쟁이는 "대단원 TEST" 로 이름을 고쳐 쓰면 그 행이 F 슬롯만
+                  // 갖는 대단원 끝 행으로 바뀐다.
+                  onChanged: _syncTrailingMidSlots,
+                ),
               ),
               const SizedBox(width: 6),
               IconButton(
@@ -2025,6 +2099,7 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
     TextInputType? keyboardType,
     List<TextInputFormatter>? inputFormatters,
     int maxLines = 1,
+    VoidCallback? onChanged,
   }) {
     return TextField(
       controller: controller,
@@ -2032,7 +2107,9 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
       inputFormatters: inputFormatters,
       maxLines: maxLines,
       style: const TextStyle(color: Colors.white, fontSize: 13),
-      onChanged: (_) => setState(() {}),
+      onChanged: (_) => setState(() {
+        onChanged?.call();
+      }),
       decoration: InputDecoration(
         hintText: hint,
         hintStyle: const TextStyle(color: Color(0xFF6A6A6A), fontSize: 12),
@@ -2137,7 +2214,11 @@ class _BigUnitEdit {
 }
 
 class _MidUnitEdit {
-  _MidUnitEdit({required TextbookSeriesCatalogEntry series}) {
+  _MidUnitEdit({
+    required TextbookSeriesCatalogEntry series,
+    String midName = '',
+  }) {
+    nameCtrl.text = midName;
     applyPreset(series);
   }
 
@@ -2148,13 +2229,15 @@ class _MidUnitEdit {
   /// 받고, A~D 슬롯 페이지는 여기서 자동 유도된다.
   final List<_SubUnitEdit> subUnits = <_SubUnitEdit>[];
 
+  /// 슬롯 구성은 중단원 이름을 본다 — 고쟁이 "대단원 TEST" 행은 F 슬롯만,
+  /// 나머지 중단원은 F 를 뺀 A~E 를 갖는다.
   void applyPreset(TextbookSeriesCatalogEntry series) {
     // Preserve whatever numbers the user already typed when switching series.
     final keyed = <String, _SubSectionEdit>{
       for (final s in subs) s.preset.key: s,
     };
     final rebuilt = <_SubSectionEdit>[];
-    for (final preset in series.subPreset) {
+    for (final preset in series.slotsForMid(nameCtrl.text)) {
       final existing = keyed.remove(preset.key);
       if (existing != null) {
         rebuilt.add(existing.withPreset(preset));

@@ -1505,12 +1505,12 @@ class HomeworkQuickAddProxyDialogState
     try {
       final results = await Future.wait<Object?>([
         DataManager.instance.loadTextbookMetadataPayload(
-          bookId: linked.bookId,
-          gradeLabel: linked.gradeLabel,
+        bookId: linked.bookId,
+        gradeLabel: linked.gradeLabel,
         ),
         DataManager.instance.loadTextbookProblemRegions(
-          bookId: linked.bookId,
-          gradeLabel: linked.gradeLabel,
+        bookId: linked.bookId,
+        gradeLabel: linked.gradeLabel,
         ),
       ]);
       if (!mounted || _selectedLinkedBook?.key != linked.key) return;
@@ -1627,7 +1627,7 @@ class HomeworkQuickAddProxyDialogState
       bookId: linked.bookId,
       gradeLabel: linked.gradeLabel,
     );
-    if (mounted) {
+      if (mounted) {
       setState(() {
         _linkedBookSeriesKey = seriesKey.isEmpty ? null : seriesKey;
       });
@@ -2166,32 +2166,32 @@ class HomeworkQuickAddProxyDialogState
           );
           for (final s in displaySubUnitsForMid(m)) {
             final smallOrder = s.order;
-            final Map<int, int> pageCounts = <int, int>{};
+              final Map<int, int> pageCounts = <int, int>{};
             final countsRaw = s.raw['page_counts'];
-            if (countsRaw is Map) {
-              countsRaw.forEach((k, v) {
-                final rawPage = _toInt(k);
-                final c = _toInt(v);
-                if (rawPage == null || c == null) return;
-                pageCounts[rawPage] = (pageCounts[rawPage] ?? 0) + c;
-              });
-            }
-            mid.smalls.add(
-              _SmallUnitSelectionNode(
+              if (countsRaw is Map) {
+                countsRaw.forEach((k, v) {
+                  final rawPage = _toInt(k);
+                  final c = _toInt(v);
+                  if (rawPage == null || c == null) return;
+                  pageCounts[rawPage] = (pageCounts[rawPage] ?? 0) + c;
+                });
+              }
+              mid.smalls.add(
+                _SmallUnitSelectionNode(
                 name: s.name,
-                orderIndex: smallOrder,
+                  orderIndex: smallOrder,
                 subKey: s.subKey.isNotEmpty
                     ? s.subKey
                     : _fallbackSubKey('', smallOrder),
                 startPage: s.startPage,
                 endPage: s.endPage,
-                pageCounts: pageCounts,
-                locked: false,
-                draftBlocked: false,
-                finishedAt: null,
-                completedCount: 0,
-              ),
-            );
+                  pageCounts: pageCounts,
+                  locked: false,
+                  draftBlocked: false,
+                  finishedAt: null,
+                  completedCount: 0,
+                ),
+              );
           }
           big.middles.add(mid);
         }
@@ -2747,9 +2747,22 @@ class HomeworkQuickAddProxyDialogState
         compact.contains('gaeyu');
   }
 
-  /// 쎈·RPM 공통: A/B/C 문제집 (하위과제=유형명, 그룹=중단원+단계).
+  /// 고쟁이: 쎈과 같은 단계형 문제집이지만 단계가 넷(A~D)이고 워크북 TEST
+  /// 둘(E·F)이 더 붙는다.
+  bool _isGojaengiLinkedBook(_LinkedTextbook? book) {
+    if (book == null) return false;
+    final series = (_linkedBookSeriesKey ?? '').trim().toLowerCase();
+    if (series == 'gojaengi') return true;
+    final compact =
+        book.bookName.trim().replaceAll(RegExp(r'\s+'), '').toLowerCase();
+    return compact.contains('고쟁이') || compact.contains('gojaengi');
+  }
+
+  /// 쎈·RPM·고쟁이 공통: 단계형 문제집 (하위과제=유형명, 그룹=중단원+단계).
   bool _isSsenLikeLinkedBook(_LinkedTextbook? book) =>
-      _isSsenLinkedBook(book) || _isRpmLinkedBook(book);
+      _isSsenLinkedBook(book) ||
+      _isRpmLinkedBook(book) ||
+      _isGojaengiLinkedBook(book);
 
   /// 수력충전: 미이관 교재. 그룹과제명만 중단원명으로 둔다.
   bool _isSuryeokLinkedBook(_LinkedTextbook? book) {
@@ -2765,6 +2778,7 @@ class HomeworkQuickAddProxyDialogState
     if (series.isNotEmpty) return series;
     if (_isSsenLinkedBook(book)) return 'ssen';
     if (_isRpmLinkedBook(book)) return 'rpm';
+    if (_isGojaengiLinkedBook(book)) return 'gojaengi';
     if (_isGaeyuLinkedBook(book)) return 'gaeyu';
     if (_isWonriLinkedBook(book)) return 'wonri';
     if (_isSuryeokLinkedBook(book)) return 'suryeok';
@@ -2831,10 +2845,11 @@ class HomeworkQuickAddProxyDialogState
   String? _ssenStageLetter(String? raw) {
     final text = (raw ?? '').trim().toUpperCase();
     if (text.isEmpty) return null;
-    if (text == 'A' || text == 'B' || text == 'C') return text;
-    final match = RegExp(r'([ABC])\s*단계').firstMatch(text);
+    // 고쟁이는 D(창의융합)와 워크북 TEST(E·F)까지 쓴다.
+    if (RegExp(r'^[A-F]$').hasMatch(text)) return text;
+    final match = RegExp(r'([A-F])\s*단계').firstMatch(text);
     if (match != null) return match.group(1);
-    final head = RegExp(r'^([ABC])\b').firstMatch(text);
+    final head = RegExp(r'^([A-F])\b').firstMatch(text);
     return head?.group(1);
   }
 
@@ -3093,7 +3108,7 @@ class HomeworkQuickAddProxyDialogState
       for (final entry in questionPagesBySmallKey.entries) {
         if (entry.value.isEmpty) continue;
         if (entry.value.every(pages.contains)) {
-          touched.add(entry.key);
+            touched.add(entry.key);
         }
       }
 
@@ -3190,9 +3205,9 @@ class HomeworkQuickAddProxyDialogState
           if (!smallPages.contains(p)) continue;
           bump(assigned, key, p);
           if (isCompleted) bump(completed, key, p);
+          }
         }
       }
-    }
     return (assigned: assigned, completed: completed);
   }
 
@@ -4753,10 +4768,10 @@ class HomeworkQuickAddProxyDialogState
       }
     } else {
       title = smallName.isNotEmpty
-          ? smallName
-          : (groupLabels.length == 1
-              ? groupLabels.first
-              : '유형별 문항 ${regions.length}개');
+        ? smallName
+        : (groupLabels.length == 1
+            ? groupLabels.first
+            : '유형별 문항 ${regions.length}개');
     }
     final pathTypeLabel = rpmSectionTitle ??
         (isSsenLike && typeTitle.isNotEmpty ? typeTitle : '');
@@ -5724,17 +5739,17 @@ class HomeworkQuickAddProxyDialogState
                           ),
                         ],
                       ),
-                      const SizedBox(height: 10),
-                      TextField(
+                        const SizedBox(height: 10),
+                        TextField(
                         controller: recommendedController,
-                        keyboardType: TextInputType.number,
-                        inputFormatters: [
-                          FilteringTextInputFormatter.digitsOnly,
-                        ],
-                        style: const TextStyle(
-                          color: kDlgText,
-                          fontWeight: FontWeight.w600,
-                        ),
+                          keyboardType: TextInputType.number,
+                          inputFormatters: [
+                            FilteringTextInputFormatter.digitsOnly,
+                          ],
+                          style: const TextStyle(
+                            color: kDlgText,
+                            fontWeight: FontWeight.w600,
+                          ),
                         decoration: _inputDecoration(
                           '권장시간(분)',
                           hint: source.recommendedMinutesAuto != null
@@ -6017,7 +6032,7 @@ class HomeworkQuickAddProxyDialogState
                       ),
                     )
                   : ReorderableDragStartListener(
-                      index: index,
+                index: index,
                       child: Icon(
                         Icons.drag_indicator,
                         color: UtilityGlassDialogTokens.iconColor.withValues(
@@ -6027,13 +6042,13 @@ class HomeworkQuickAddProxyDialogState
                       ),
                     ),
               title: LatexTextRenderer(
-                title,
-                style: const TextStyle(
+                            title,
+                            style: const TextStyle(
                   color: UtilityGlassDialogTokens.iconColor,
-                  fontWeight: FontWeight.w700,
+                              fontWeight: FontWeight.w700,
                   fontSize: 16,
-                ),
-                softWrap: true,
+                            ),
+                            softWrap: true,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -6048,9 +6063,9 @@ class HomeworkQuickAddProxyDialogState
                       alpha: 0.55,
                     ),
                     fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
               ),
               children: [
                 Align(
@@ -6058,55 +6073,55 @@ class HomeworkQuickAddProxyDialogState
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      if (memo.isNotEmpty) ...[
-                        LatexTextRenderer(
-                          '메모: $memo',
+                    if (memo.isNotEmpty) ...[
+                      LatexTextRenderer(
+                        '메모: $memo',
                           style: TextStyle(
                             color: UtilityGlassDialogTokens.iconColor
                                 .withValues(alpha: 0.6),
                             fontSize: 16,
                             height: 1.35,
-                          ),
-                          softWrap: true,
-                          maxLines: 4,
-                          overflow: TextOverflow.ellipsis,
                         ),
+                        softWrap: true,
+                        maxLines: 4,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                         const SizedBox(height: 6),
-                      ],
-                      if (content.isNotEmpty) ...[
-                        LatexTextRenderer(
-                          content,
+                    ],
+                    if (content.isNotEmpty) ...[
+                      LatexTextRenderer(
+                        content,
                           style: TextStyle(
                             color: UtilityGlassDialogTokens.iconColor
                                 .withValues(alpha: 0.6),
                             fontSize: 16,
                             height: 1.35,
-                          ),
-                          softWrap: true,
-                          maxLines: 6,
-                          overflow: TextOverflow.ellipsis,
                         ),
+                        softWrap: true,
+                          maxLines: 6,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                         const SizedBox(height: 10),
                       ],
                       Row(
                         mainAxisAlignment: MainAxisAlignment.end,
                         children: [
                           if (!_autoSubtaskMode)
-                            IconButton(
-                              tooltip: '편집',
+              IconButton(
+                tooltip: '편집',
                               visualDensity: VisualDensity.compact,
-                              onPressed: () => _editDraftGroupItem(index),
+                onPressed: () => _editDraftGroupItem(index),
                               icon: Icon(
                                 Icons.edit_outlined,
                                 color: UtilityGlassDialogTokens.iconColor
                                     .withValues(alpha: 0.7),
                                 size: 20,
                               ),
-                            ),
-                          IconButton(
+              ),
+              IconButton(
                             tooltip: _autoSubtaskMode ? '선택 해제' : '삭제',
                             visualDensity: VisualDensity.compact,
-                            onPressed: () {
+                onPressed: () {
                               if (_autoSubtaskMode) {
                                 setState(() {
                                   _deselectUnitsForDraftItem(item);
@@ -6115,26 +6130,26 @@ class HomeworkQuickAddProxyDialogState
                                 _refreshRangeAutoDraft();
                                 return;
                               }
-                              setState(() {
-                                _draftGroupItems.removeAt(index);
+                  setState(() {
+                    _draftGroupItems.removeAt(index);
                                 if (_draftGroupItems.isEmpty) {
                                   _showGroupPanel = false;
                                 }
-                                _applyDraftBlockedStateToUnits(
-                                  _units,
-                                  usedPages: _draftUsedPages(),
-                                );
-                              });
-                              _refreshRangeAutoDraft();
+                    _applyDraftBlockedStateToUnits(
+                      _units,
+                      usedPages: _draftUsedPages(),
+                    );
+                  });
+                  _refreshRangeAutoDraft();
                               _syncGroupTitleFromDrafts();
-                            },
-                            icon: const Icon(
-                              Icons.delete_outline_rounded,
-                              color: Color(0xFFE57373),
+                },
+                icon: const Icon(
+                  Icons.delete_outline_rounded,
+                  color: Color(0xFFE57373),
                               size: 20,
-                            ),
-                          ),
-                        ],
+                ),
+              ),
+            ],
                       ),
                     ],
                   ),
@@ -6209,8 +6224,8 @@ class HomeworkQuickAddProxyDialogState
     Widget infoCell(String label, String value) {
       return Expanded(
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
             Text(
               label,
               style: TextStyle(
@@ -6275,7 +6290,7 @@ class HomeworkQuickAddProxyDialogState
                 materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
               const SizedBox(width: 4),
-              Expanded(
+        Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -6400,43 +6415,43 @@ class HomeworkQuickAddProxyDialogState
         _groupTitle.text.trim().isEmpty ? '그룹 과제' : _groupTitle.text.trim();
     final showStageDropdown = _selectedLinkedBook?.isMigrated == true;
     final groupTitleField = _isChildAddMode
-        ? Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(
-              horizontal: 10,
-              vertical: 13,
-            ),
-            decoration: BoxDecoration(
-              color: kDlgPanelBg,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: kDlgBorder),
-            ),
-            child: Text(
-              '대상 그룹: $groupTitle',
-              style: const TextStyle(
-                color: kDlgText,
-                fontSize: 13.2,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          )
-        : TextField(
-            controller: _groupTitle,
-            style: const TextStyle(
-              color: kDlgText,
-              fontWeight: FontWeight.w700,
-            ),
-            decoration: _inputDecoration(
-              '그룹 제목',
-              hint: '예: 3월 1주차 과제',
-            ),
-          );
+              ? Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 13,
+                  ),
+                  decoration: BoxDecoration(
+                    color: kDlgPanelBg,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: kDlgBorder),
+                  ),
+                  child: Text(
+                    '대상 그룹: $groupTitle',
+                    style: const TextStyle(
+                      color: kDlgText,
+                      fontSize: 13.2,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                )
+              : TextField(
+                  controller: _groupTitle,
+                  style: const TextStyle(
+                    color: kDlgText,
+                    fontWeight: FontWeight.w700,
+                  ),
+                  decoration: _inputDecoration(
+                    '그룹 제목',
+                    hint: '예: 3월 1주차 과제',
+                  ),
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
             Expanded(child: _buildHomeworkTypeDropdown()),
             if (showStageDropdown) ...[
               const SizedBox(width: 10),
@@ -6695,7 +6710,7 @@ class HomeworkQuickAddProxyDialogState
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Row(
-        children: [
+      children: [
           if (canGoBack) ...[
             Material(
               color: Colors.transparent,
@@ -6729,8 +6744,8 @@ class HomeworkQuickAddProxyDialogState
                   title,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: kDlgText,
+            style: const TextStyle(
+              color: kDlgText,
                     fontSize: 16,
                     fontWeight: FontWeight.w800,
                   ),
@@ -6744,8 +6759,8 @@ class HomeworkQuickAddProxyDialogState
                     style: const TextStyle(
                       color: kDlgTextSub,
                       fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                    ),
+              fontWeight: FontWeight.w600,
+            ),
                   ),
                 ],
               ],
@@ -6786,9 +6801,9 @@ class HomeworkQuickAddProxyDialogState
                 ),
                 fontSize: 16,
                 fontWeight: FontWeight.w700,
-              ),
-            ),
-          ],
+          ),
+        ),
+      ],
         ),
       ),
     );
@@ -6808,9 +6823,28 @@ class HomeworkQuickAddProxyDialogState
       return Align(
         alignment: Alignment.centerRight,
         child: SizedBox(
+            height: actionHeight,
+            child: OutlinedButton(
+            onPressed: () => _showDialogSnackBar('추가할 내신 셀을 클릭하면 하위 과제로 담깁니다.'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: kDlgText,
+                side: const BorderSide(color: kDlgBorder),
+                minimumSize: const Size(0, actionHeight),
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+              ),
+              child: const Text('+ 하위 과제 추가'),
+            ),
+          ),
+      );
+    }
+    return Align(
+      alignment: Alignment.centerRight,
+      child: SizedBox(
           height: actionHeight,
           child: OutlinedButton(
-            onPressed: () => _showDialogSnackBar('추가할 내신 셀을 클릭하면 하위 과제로 담깁니다.'),
+            onPressed: (_useCustomSource || _selectedLinkedBookKey != null)
+                ? _addDraftGroupItemFromInput
+                : null,
             style: OutlinedButton.styleFrom(
               foregroundColor: kDlgText,
               side: const BorderSide(color: kDlgBorder),
@@ -6820,25 +6854,6 @@ class HomeworkQuickAddProxyDialogState
             child: const Text('+ 하위 과제 추가'),
           ),
         ),
-      );
-    }
-    return Align(
-      alignment: Alignment.centerRight,
-      child: SizedBox(
-        height: actionHeight,
-        child: OutlinedButton(
-          onPressed: (_useCustomSource || _selectedLinkedBookKey != null)
-              ? _addDraftGroupItemFromInput
-              : null,
-          style: OutlinedButton.styleFrom(
-            foregroundColor: kDlgText,
-            side: const BorderSide(color: kDlgBorder),
-            minimumSize: const Size(0, actionHeight),
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-          ),
-          child: const Text('+ 하위 과제 추가'),
-        ),
-      ),
     );
   }
 
@@ -8134,8 +8149,8 @@ class HomeworkQuickAddProxyDialogState
     if (autoSubtasks.length > 1) {
       final fallbackGroupTitle = () {
         if (_groupTitleManuallyEdited) {
-          final staged = _groupTitle.text.trim();
-          if (staged.isNotEmpty) return staged;
+        final staged = _groupTitle.text.trim();
+        if (staged.isNotEmpty) return staged;
         }
         final resolved = _resolveGroupTitleFromDraftItems(autoSubtasks);
         if (resolved.trim().isNotEmpty) return resolved;
@@ -9157,11 +9172,11 @@ class HomeworkQuickAddProxyDialogState
             const Expanded(
               child: Text(
                 '교재 선택',
-                style: TextStyle(
-                  color: kDlgTextSub,
-                  fontSize: 12.5,
-                  fontWeight: FontWeight.w700,
-                ),
+          style: TextStyle(
+            color: kDlgTextSub,
+            fontSize: 12.5,
+            fontWeight: FontWeight.w700,
+          ),
               ),
             ),
             OutlinedButton.icon(
@@ -9519,12 +9534,12 @@ class HomeworkQuickAddProxyDialogState
       // 내신 패널은 기존 여백/구획이 레이아웃의 일부라 그대로 유지한다.
       child: showNaesinPanel
           ? Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: kDlgPanelBg,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: kDlgBorder),
-              ),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: kDlgPanelBg,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: kDlgBorder),
+        ),
               child: rangeContent,
             )
           : rangeContent,
@@ -9545,7 +9560,7 @@ class HomeworkQuickAddProxyDialogState
       final header = Padding(
         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
         child: Row(
-          children: [
+        children: [
             Expanded(
               child: Material(
                 color: Colors.transparent,
@@ -9606,9 +9621,9 @@ class HomeworkQuickAddProxyDialogState
       final showEmbeddedList = hasBookSelection || _useCustomSource;
       final addChildButton = secondaryActions();
       final panelChild = pinChildActions
-          ? Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
+            ? Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
                 header,
                 if (showDetailEditors && expanded) ...[
                   SizedBox(height: hasMigratedBookSelection ? 12 : 10),
@@ -9625,16 +9640,16 @@ class HomeworkQuickAddProxyDialogState
                       ),
                     )
                   else
-                    Expanded(
-                      child: Scrollbar(
+                  Expanded(
+                    child: Scrollbar(
+                      controller: _inputPanelScrollController,
+                      thumbVisibility: false,
+                      child: SingleChildScrollView(
                         controller: _inputPanelScrollController,
-                        thumbVisibility: false,
-                        child: SingleChildScrollView(
-                          controller: _inputPanelScrollController,
                           child: detailBody,
-                        ),
                       ),
                     ),
+                  ),
                 ],
                 if (addChildButton != null) ...[
                   SizedBox(height: hasMigratedBookSelection ? 14 : 12),
@@ -9691,13 +9706,13 @@ class HomeworkQuickAddProxyDialogState
             const SizedBox(height: 16),
           ] else ...[
             _buildFlowBookPicker(),
-            const SizedBox(height: 12),
-            const Divider(height: 1, thickness: 1, color: kDlgBorder),
-            const SizedBox(height: 12),
+          const SizedBox(height: 12),
+          const Divider(height: 1, thickness: 1, color: kDlgBorder),
+          const SizedBox(height: 12),
             _buildFlowSelectorButtons(enabled: !hasBookSelection),
-            const SizedBox(height: 18),
-            const Divider(height: 1, thickness: 1, color: kDlgBorder),
-            const SizedBox(height: 18),
+          const SizedBox(height: 18),
+          const Divider(height: 1, thickness: 1, color: kDlgBorder),
+          const SizedBox(height: 18),
           ],
           _buildGroupSettingsRow(),
         ],
@@ -9840,7 +9855,7 @@ class HomeworkQuickAddProxyDialogState
         children: [
           if (widget.requirePlanDestination) ...[
             destinationChip(label: '오늘', value: 'in_class'),
-            const SizedBox(width: 8),
+          const SizedBox(width: 8),
             destinationChip(label: '숙제', value: 'homework'),
             const SizedBox(width: 8),
             destinationChip(label: '다음', value: 'next_session'),
@@ -9996,12 +10011,12 @@ class HomeworkQuickAddProxyDialogState
         child: Padding(
           padding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
           child: AnimatedContainer(
-            duration: const Duration(milliseconds: 130),
-            curve: Curves.easeOutQuad,
-            width: targetDialogWidth,
-            constraints: BoxConstraints(maxHeight: targetDialogHeight),
-            child: dialogContent(),
-          ),
+        duration: const Duration(milliseconds: 130),
+        curve: Curves.easeOutQuad,
+        width: targetDialogWidth,
+        constraints: BoxConstraints(maxHeight: targetDialogHeight),
+        child: dialogContent(),
+      ),
         ),
       ),
     );

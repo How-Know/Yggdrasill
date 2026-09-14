@@ -23,6 +23,7 @@ import 'widgets/figure_horizontal_groups_editor.dart';
 import 'widgets/exam_batch_upload_dialog.dart';
 import 'widgets/problem_bank_classification_filter_panel.dart';
 import 'widgets/problem_bank_export_preset_dialog.dart';
+import 'widgets/problem_bank_document_preset_preview_launcher.dart';
 import 'widgets/problem_bank_mode_tab_bar.dart';
 import 'widgets/problem_bank_question_card.dart';
 import 'widgets/problem_bank_synced_list_dialog.dart';
@@ -170,7 +171,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   bool _isResetting = false;
   bool _isRequeuingFigures = false;
   bool _hasExtracted = false;
-  bool _showUnuploadedOnly = false;
+  bool _showPrivateOnly = false;
   bool _isCreatingReviewPdf = false;
   bool _schemaMissing = false;
   bool _academyMissing = false;
@@ -266,8 +267,10 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   int get _checkedCount => _questions.where((q) => q.isChecked).length;
   int get _lowConfidenceCount => _questions.where(_isLowConfidence).length;
 
-  List<ProblemBankQuestion> get _visibleQuestions => _showUnuploadedOnly
-      ? _questions.where(_isUnuploadedQuestion).toList(growable: false)
+  List<ProblemBankQuestion> get _visibleQuestions => _showPrivateOnly
+      ? _questions
+          .where((question) => !question.isPublished)
+          .toList(growable: false)
       : _questions;
 
   Duration? get _extractQueuedElapsed {
@@ -282,11 +285,6 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
 
   bool get _documentDbReady =>
       (_activeDocument?.status ?? '').trim().toLowerCase() == 'ready';
-
-  bool _isUnuploadedQuestion(ProblemBankQuestion q) {
-    if (!_documentDbReady) return true;
-    return _needsPublish || _dirtyQuestionIds.contains(q.id);
-  }
 
   bool get _progressIndeterminate {
     final extractStatus = _activeExtractJob?.status ?? '';
@@ -1609,7 +1607,10 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     unawaited(_prefetchQuestionPreviewUrls(targets));
   }
 
-  Future<String?> _saveAndRefreshPreview(ProblemBankQuestion q) async {
+  Future<String?> _saveAndRefreshPreview(
+    ProblemBankQuestion q, {
+    bool refreshPreview = true,
+  }) async {
     final academyId = _academyId;
     if (academyId == null || academyId.isEmpty) return null;
     final qId = q.id.trim();
@@ -1666,21 +1667,22 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         normalizedMeta.remove('subjective_answer');
         normalizedMeta.remove('answer_parts');
       }
-      final normalizedSubjectiveAnswer =
-          '${normalizedMeta['subjective_answer'] ?? ''}'.trim();
+      final persistableSubjective = persistableSubjectiveAnswerOf(
+        q.copyWith(meta: normalizedMeta),
+      );
+      if (q.allowSubjective && persistableSubjective.isNotEmpty) {
+        normalizedMeta['subjective_answer'] = persistableSubjective;
+      }
       final saveSubjectiveAnswer = !q.allowSubjective
           ? ''
-          : (q.subjectiveAnswer.trim().isEmpty
-              ? (normalizedSubjectiveAnswer.isEmpty
-                  ? null
-                  : normalizedSubjectiveAnswer)
-              : q.subjectiveAnswer.trim());
+          : (persistableSubjective.isEmpty ? null : persistableSubjective);
       _syncFigureMetaWithStem(stem: q.stem, meta: normalizedMeta);
       final saveFigureRefs = _figureRefsForSave(q);
 
       await _service.updateQuestionReview(
         questionId: qId,
         isChecked: q.isChecked,
+        isPublished: q.isPublished,
         reviewerNotes: q.reviewerNotes,
         questionType: q.questionType,
         stem: q.stem,
@@ -1696,8 +1698,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         meta: normalizedMeta,
       );
       if (!mounted) return null;
-      await _prefetchQuestionPreviewUrls(<ProblemBankQuestion>[q]);
-      final newUrl = (_questionPreviewUrls[qId] ?? '').trim();
+      if (refreshPreview) {
+        await _prefetchQuestionPreviewUrls(<ProblemBankQuestion>[q]);
+      }
+      final newUrl =
+          refreshPreview ? (_questionPreviewUrls[qId] ?? '').trim() : '';
       if (!mounted) return null;
       setState(() {
         _dirtyQuestionIds.remove(qId);
@@ -1706,13 +1711,17 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                 ? item.copyWith(
                     meta: normalizedMeta,
                     figureRefs: saveFigureRefs ?? item.figureRefs,
+                    subjectiveAnswer:
+                        saveSubjectiveAnswer ?? item.subjectiveAnswer,
                   )
                 : item)
             .toList(growable: false);
-        if (newUrl.isNotEmpty) {
-          _questionPreviewUrls[qId] = newUrl;
-        } else {
-          _questionPreviewUrls.remove(qId);
+        if (refreshPreview) {
+          if (newUrl.isNotEmpty) {
+            _questionPreviewUrls[qId] = newUrl;
+          } else {
+            _questionPreviewUrls.remove(qId);
+          }
         }
       });
       unawaited(
@@ -2024,7 +2033,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     return updatedMeta;
   }
 
-  Future<void> _deleteFigureAsset(
+  Future<ProblemBankQuestion?> _deleteFigureAsset(
     ProblemBankQuestion q,
     Map<String, dynamic> asset,
     int orderHint,
@@ -2047,26 +2056,50 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         ],
       ),
     );
-    if (ok != true || !mounted) return;
+    if (ok != true || !mounted) return null;
 
     final targetPath = '${asset['path'] ?? ''}'.trim();
     final updatedMeta = _removeFigureAssetFromMeta(q, asset, orderHint);
+    final remainingAssets = updatedMeta['figure_assets'];
+    final remainingCount = remainingAssets is List ? remainingAssets.length : 0;
+    final updatedQuestion = q.copyWith(
+      meta: updatedMeta,
+      figureRefs: List<String>.filled(remainingCount, '[그림]'),
+    );
     try {
-      await _service.updateQuestionMeta(questionId: q.id, meta: updatedMeta);
-      if (!mounted) return;
+      await _service.updateQuestionMeta(
+        questionId: q.id,
+        meta: updatedMeta,
+        figureRefs: updatedQuestion.figureRefs,
+      );
+      if (!mounted) return null;
       setState(() {
         _questions = _questions
-            .map((item) =>
-                item.id == q.id ? item.copyWith(meta: updatedMeta) : item)
+            .map((item) => item.id == q.id ? updatedQuestion : item)
             .toList(growable: false);
         if (targetPath.isNotEmpty) {
           _figurePreviewUrlsByPath[q.id]?.remove(targetPath);
         }
+        final latestPath =
+            '${_latestFigureAssetOf(updatedQuestion)?['path'] ?? ''}'.trim();
+        if (latestPath.isEmpty) {
+          _figurePreviewUrls.remove(q.id);
+          _figurePreviewPaths.remove(q.id);
+        } else {
+          final latestUrl =
+              _figurePreviewUrlsByPath[q.id]?[latestPath]?.trim() ?? '';
+          if (latestUrl.isNotEmpty) {
+            _figurePreviewUrls[q.id] = latestUrl;
+            _figurePreviewPaths[q.id] = latestPath;
+          }
+        }
       });
       _showSnack('${q.questionNumber}번 그림 $orderHint을 삭제했습니다.');
+      return updatedQuestion;
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted) return null;
       _showSnack('그림 삭제 실패: $e', error: true);
+      return null;
     }
   }
 
@@ -2150,7 +2183,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         _allExamDocuments = examDocs;
         if (_activeDocument != null &&
             !docs.any((d) => d.id == _activeDocument!.id) &&
-            !textbookDocs.any((d) => d.id == _activeDocument!.id)) {
+            !textbookDocs.any((d) => d.id == _activeDocument!.id) &&
+            !examDocs.any((d) => d.id == _activeDocument!.id)) {
           _activeDocument = null;
           _activeExtractJob = null;
           _questions = <ProblemBankQuestion>[];
@@ -2258,7 +2292,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         _isHwpxDropHover = false;
         _isPdfDropHover = false;
         _isExtracting = false;
-        _showUnuploadedOnly = false;
+        _showPrivateOnly = false;
         _needsPublish = false;
         _queuedLongWaitWarned = false;
         _lastExtractStatus = null;
@@ -2287,6 +2321,14 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     int? textbookPage,
     bool preferFirstTextbookQuestion = false,
   }) async {
+    if (_activeDocument != null &&
+        (_dirtyQuestionIds.isNotEmpty || _dirtyDocumentMeta)) {
+      _showSnack(
+        '저장 대기 중인 수정사항이 있습니다. 문서 확정 또는 문항 저장 후 다시 열어주세요.',
+        error: true,
+      );
+      return;
+    }
     final loadVersion = ++_documentLoadVersion;
     final academyId = _academyId;
     if (academyId == null || academyId.isEmpty) return;
@@ -2349,7 +2391,12 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           ];
           _expandedTextbookSwitchGroups
               .add(_textbookSwitchGroupLabel(summary.document));
-          _showUnuploadedOnly = false;
+          _showPrivateOnly = false;
+        } else {
+          _allExamDocuments = <ProblemBankDocument>[
+            summary.document,
+            ..._allExamDocuments.where((doc) => doc.id != summary.document.id),
+          ];
         }
         _activeDocument = summary.document;
         _workspaceExamPaperOverride = !textbookReview;
@@ -3701,32 +3748,55 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     final doc = _activeDocument;
     if (academyId == null || doc == null) return;
     try {
-      final questions = await _service.listQuestions(
+      final serverQuestions = await _service.listQuestions(
         academyId: academyId,
         documentId: doc.id,
       );
       if (!mounted || _activeDocument?.id != doc.id) return;
+      final dirtyIds = Set<String>.from(_dirtyQuestionIds);
+      final localById = <String, ProblemBankQuestion>{
+        for (final question in _questions) question.id: question,
+      };
+      final serverIds = serverQuestions.map((question) => question.id).toSet();
+      final questions = <ProblemBankQuestion>[
+        for (final serverQuestion in serverQuestions)
+          if (dirtyIds.contains(serverQuestion.id))
+            localById[serverQuestion.id] ?? serverQuestion
+          else
+            serverQuestion,
+        // 자동 재조회 도중 서버 응답에서 일시적으로 빠진 dirty 문항도 버리지 않는다.
+        for (final dirtyId in dirtyIds)
+          if (!serverIds.contains(dirtyId) && localById[dirtyId] != null)
+            localById[dirtyId]!,
+      ];
+      final effectiveIds = questions.map((question) => question.id).toSet();
+      final cleanQuestions = questions
+          .where((question) => !dirtyIds.contains(question.id))
+          .toList(growable: false);
       setState(() {
         _questions = questions;
         _timedTestStatsRequestVersion += 1;
         _timedTestStatsByQuestionUid =
             <String, ProblemBankQuestionTimedTestStats>{};
-        _dirtyQuestionIds.clear();
+        _dirtyQuestionIds.retainAll(effectiveIds);
         _reextractingQuestionIds.clear();
-        _questionPreviewUrls.clear();
-        final ids = questions.map((q) => q.id).toSet();
-        _scoreDrafts.removeWhere((id, _) => !ids.contains(id));
+        _questionPreviewUrls.removeWhere((id, _) => !dirtyIds.contains(id));
+        _scoreDrafts.removeWhere((id, _) => !effectiveIds.contains(id));
         _hasExtracted = questions.isNotEmpty;
         final currentDocStatus = _activeDocument?.status.trim() ?? '';
         _needsPublish = questions.isNotEmpty && currentDocStatus != 'ready';
         _isExtracting = false;
       });
-      _appendPipelineLog('review', '문항 목록 갱신: ${questions.length}건');
+      _appendPipelineLog(
+        'review',
+        '문항 목록 갱신: ${questions.length}건'
+            '${dirtyIds.isNotEmpty ? ' · 로컬 수정 ${dirtyIds.length}건 보존' : ''}',
+      );
       unawaited(
         _loadTimedTestStats(questions, documentContextId: doc.id),
       );
-      unawaited(_prefetchQuestionPreviewUrls(questions));
-      unawaited(_prefetchFigurePreviewUrls(questions));
+      unawaited(_prefetchQuestionPreviewUrls(cleanQuestions));
+      unawaited(_prefetchFigurePreviewUrls(cleanQuestions));
       unawaited(_syncFigurePollingForActiveDocument());
     } catch (e) {
       _appendPipelineLog('review', '문항 갱신 실패: $e', error: true);
@@ -3734,16 +3804,24 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     }
   }
 
+  List<String> _questionIdsNeedingSave(Iterable<ProblemBankQuestion> questions) {
+    final ids = <String>[];
+    final seen = <String>{};
+    for (final question in questions) {
+      final id = question.id.trim();
+      if (id.isEmpty || !seen.add(id)) continue;
+      if (_dirtyQuestionIds.contains(id) ||
+          shouldPersistDerivedSubjectiveAnswer(question)) {
+        ids.add(id);
+      }
+    }
+    return ids;
+  }
+
   Future<void> _publishDocument() async {
     if (_isSavingQuestionChanges || _isDeletingCurrentQuestions) return;
-    if (_dirtyQuestionIds.isNotEmpty) {
-      _showSnack(
-        '수정 중인 ${_dirtyQuestionIds.length}개 문항을 카드의 저장 버튼으로 먼저 저장해주세요.',
-        error: true,
-      );
-      return;
-    }
-    if (_dirtyQuestionIds.isEmpty && !_dirtyDocumentMeta && !_needsPublish) {
+    final pendingQuestionIds = _questionIdsNeedingSave(_questions);
+    if (pendingQuestionIds.isEmpty && !_dirtyDocumentMeta && !_needsPublish) {
       _showSnack('확정할 변경사항이 없습니다.');
       return;
     }
@@ -3768,6 +3846,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       return;
     }
     final unreviewedCount = _questions.where((q) => !q.isChecked).length;
+    final pendingQuestionCount = pendingQuestionIds.length;
     if ((_activeDocument?.status ?? '').trim().toLowerCase() != 'ready') {
       final confirmed = await showDialog<bool>(
             context: context,
@@ -3775,8 +3854,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               backgroundColor: _panel,
               title: const Text('문서 확정', style: TextStyle(color: _text)),
               content: Text(
-                '이 문서를 학습 앱에 노출합니다.\n'
-                '미검수 문항 $unreviewedCount개도 함께 노출되며, 문항별 검수 상태는 그대로 유지됩니다.',
+                '이 문서의 분류와 편집 상태를 확정합니다.\n'
+                '${pendingQuestionCount > 0 ? '저장 대기 중인 문항 $pendingQuestionCount개의 수정사항을 먼저 저장합니다.\n' : ''}'
+                '문항 공개 여부와 검수 상태는 그대로 유지됩니다. (미검수 $unreviewedCount개)',
                 style: const TextStyle(color: _textSub, height: 1.45),
               ),
               actions: [
@@ -3823,6 +3903,40 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       _isSavingQuestionChanges = true;
     });
     try {
+      // 카드의 점수/출제 허용 형식 등은 입력 즉시 로컬 draft 로 반영되고,
+      // 개별 저장 버튼을 누를 때까지 _dirtyQuestionIds 에 남는다.
+      // "문서 확정"은 사용자가 기대하는 최종 저장 동작이므로, 문서 status 를
+      // ready 로 바꾸기 전에 모든 dirty 문항을 순차 저장한다. 하나라도 실패하면
+      // 확정을 중단해 일부 수정값이 조용히 원복된 것처럼 보이지 않게 한다.
+      final dirtyIdsToSave = pendingQuestionIds;
+      for (var i = 0; i < dirtyIdsToSave.length; i += 1) {
+        final questionId = dirtyIdsToSave[i];
+        final current =
+            _questions.where((item) => item.id == questionId).firstOrNull;
+        if (current == null) {
+          throw Exception('저장할 문항을 찾지 못했습니다. (id: $questionId)');
+        }
+        if (!mounted) return;
+        setState(() {
+          _savingQuestionIds.add(questionId);
+          _statusText = '문항 수정사항 저장 중... (${i + 1}/${dirtyIdsToSave.length})';
+        });
+        try {
+          await _saveAndRefreshPreview(current);
+        } finally {
+          if (mounted) {
+            setState(() => _savingQuestionIds.remove(questionId));
+          }
+        }
+        if (_dirtyQuestionIds.contains(questionId) ||
+            shouldPersistDerivedSubjectiveAnswer(
+              _questions.where((item) => item.id == questionId).firstOrNull ??
+                  current,
+            )) {
+          throw Exception('${current.questionNumber}번 문항 저장에 실패했습니다.');
+        }
+      }
+
       if (doc != null) {
         // 추출 단계는 draft 이므로 분류 정보를 DB 에 저장하지 않는다.
         // 따라서 '업로드(확정)' 버튼 시점에는 사용자가 상단에 입력한 분류를
@@ -3881,8 +3995,12 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         _scoreDrafts.clear();
       });
       _showSnack(
-        '문서를 확정했습니다. (학습 앱 반영 · 미검수 ${_questions.where((q) => !q.isChecked).length}문항)',
+        '문서를 확정했습니다. '
+        '${dirtyIdsToSave.isNotEmpty ? '(수정 ${dirtyIdsToSave.length}문항 저장 · ' : '('}'
+        '미검수 ${_questions.where((q) => !q.isChecked).length}문항)',
       );
+      await _refreshDocuments();
+      if (!mounted) return;
       if (doc != null) {
         await _loadDocumentContext(doc.id);
       } else {
@@ -3904,7 +4022,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     final doc = _activeDocument;
     if (doc == null) return;
     if (doc.status.trim().toLowerCase() != 'ready') {
-      _showSnack('이미 업로드 대기 상태입니다.');
+      _showSnack('이미 작업 상태입니다.');
       return;
     }
     final confirmed = await showDialog<bool>(
@@ -3916,8 +4034,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               style: TextStyle(color: _text, fontWeight: FontWeight.w800),
             ),
             content: Text(
-              '"${doc.sourceFilename}" 문서를 학습 앱/문제 섞기 대상에서 제외할까요?\n'
-              '문항 데이터는 유지되고, 다시 `업로드`하면 사용준비됨으로 되돌릴 수 있습니다.',
+              '"${doc.sourceFilename}" 문서를 다시 작업 상태로 전환할까요?\n'
+              '문항 데이터와 문항별 공개 상태는 유지됩니다.',
               style: const TextStyle(color: _textSub, height: 1.45),
             ),
             actions: [
@@ -3954,7 +4072,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         _needsPublish = true;
         _dirtyDocumentMeta = false;
       });
-      _showSnack('문서를 비활성화했습니다. 다시 사용하려면 `업로드`를 누르세요.');
+      _showSnack('문서를 작업 상태로 전환했습니다.');
+      await _refreshDocuments();
+      if (!mounted) return;
       await _loadDocumentContext(doc.id);
     } catch (e) {
       _showSnack('문서 비활성화 실패: $e', error: true);
@@ -4063,9 +4183,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         ),
       );
       if (!mounted) return;
-      setState(() {
-        _dirtyQuestionIds.removeAll(_questions.map((q) => q.id));
-      });
+      // bulkSetChecked 는 검수 상태만 저장한다. 배점/본문 등 이미 로컬에 있던
+      // 수정사항은 저장하지 않으므로 dirty 상태를 유지해야 문서 확정 시 함께
+      // 저장된다. 여기서 dirty 를 지우면 _scoreDrafts 에만 있던 배점이 유실된다.
       _showSnack(checked ? '모든 문항을 검수 완료로 표시했습니다.' : '모든 문항의 검수를 취소했습니다.');
     } catch (e) {
       if (!mounted) return;
@@ -4092,7 +4212,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         isChecked: value,
       );
       if (!mounted) return;
-      setState(() => _dirtyQuestionIds.remove(q.id));
+      // 이 호출은 is_checked 만 저장한다. 배점 등 기존의 저장 대기 수정사항은
+      // 그대로 남겨 문서 확정 또는 문항 저장에서 처리한다.
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -4101,6 +4222,38 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
             .toList(growable: false);
       });
       _showSnack('검수 상태 저장 실패: $e', error: true);
+    } finally {
+      if (mounted) setState(() => _savingQuestionIds.remove(q.id));
+    }
+  }
+
+  Future<void> _togglePublished(ProblemBankQuestion q, bool value) async {
+    if (!mounted || _savingQuestionIds.contains(q.id)) return;
+    final previous = q;
+    final updated = q.copyWith(isPublished: value);
+    setState(() {
+      _questions = _questions
+          .map((item) => item.id == q.id ? updated : item)
+          .toList(growable: false);
+      _savingQuestionIds.add(q.id);
+    });
+    try {
+      await _service.updateQuestionPublished(
+        questionId: q.id,
+        isPublished: value,
+      );
+      if (!mounted) return;
+      _showSnack(value
+          ? '${q.questionNumber}번 문항을 공개했습니다.'
+          : '${q.questionNumber}번 문항을 비공개했습니다.');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _questions = _questions
+            .map((item) => item.id == q.id ? previous : item)
+            .toList(growable: false);
+      });
+      _showSnack('공개 상태 저장 실패: $e', error: true);
     } finally {
       if (mounted) setState(() => _savingQuestionIds.remove(q.id));
     }
@@ -4593,7 +4746,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           if (e.id != q.id) return e;
           return e.copyWith(objectiveGenerated: false);
         }).toList(growable: false);
-        _dirtyQuestionIds.remove(q.id);
+        // 객관식 보기만 별도로 저장했으므로, 그 전에 입력한 배점/본문 등의
+        // 저장 대기 상태는 제거하지 않는다.
       });
       await _prefetchQuestionPreviewUrls(
         _questions.where((e) => e.id == q.id).toList(),
@@ -4769,6 +4923,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     String selectedType =
         question.questionType.isEmpty ? '미분류' : question.questionType;
     bool checked = question.isChecked;
+    bool published = question.isPublished;
     bool allowObjective = question.allowObjective;
     bool allowSubjective = question.allowSubjective;
     bool allowEssay = _allowEssayOf(question);
@@ -5167,21 +5322,44 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                   const SizedBox(height: 8),
                   StatefulBuilder(
                     builder: (context, setInnerState) {
-                      return CheckboxListTile(
-                        value: checked,
-                        dense: true,
-                        activeColor: _accent,
-                        contentPadding: EdgeInsets.zero,
-                        title: const Text(
-                          '검수 완료(선택)',
-                          style: TextStyle(color: _textSub, fontSize: 12),
-                        ),
-                        controlAffinity: ListTileControlAffinity.leading,
-                        onChanged: (v) {
-                          setInnerState(() {
-                            checked = v ?? false;
-                          });
-                        },
+                      return Row(
+                        children: [
+                          Expanded(
+                            child: CheckboxListTile(
+                              value: checked,
+                              dense: true,
+                              activeColor: _accent,
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text(
+                                '검수 완료',
+                                style: TextStyle(color: _textSub, fontSize: 12),
+                              ),
+                              controlAffinity: ListTileControlAffinity.leading,
+                              onChanged: (v) {
+                                setInnerState(() {
+                                  checked = v ?? false;
+                                });
+                              },
+                            ),
+                          ),
+                          Expanded(
+                            child: SwitchListTile(
+                              value: published,
+                              dense: true,
+                              activeThumbColor: _accent,
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text(
+                                '학습 앱 공개',
+                                style: TextStyle(color: _textSub, fontSize: 12),
+                              ),
+                              onChanged: (value) {
+                                setInnerState(() {
+                                  published = value;
+                                });
+                              },
+                            ),
+                          ),
+                        ],
                       );
                     },
                   ),
@@ -5260,6 +5438,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                   }
                   final updatedQ = question.copyWith(
                     isChecked: checked,
+                    isPublished: published,
                     reviewerNotes: noteCtrl.text.trim(),
                     questionType: selectedType,
                     stem: stemCtrl.text.trim(),
@@ -8334,6 +8513,88 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     );
   }
 
+  Widget _buildManualFigureDeletePanel({
+    required ProblemBankQuestion q,
+    required Future<void> Function(
+      Map<String, dynamic> asset,
+      int orderHint,
+    ) onDelete,
+  }) {
+    final assets = _orderedFigureAssetsOf(q);
+    if (assets.isEmpty) return const SizedBox.shrink();
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 8, 8),
+      decoration: BoxDecoration(
+        color: _field,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.photo_library_outlined, color: _textSub, size: 15),
+              SizedBox(width: 6),
+              Text(
+                '본문 그림 관리',
+                style: TextStyle(
+                  color: _text,
+                  fontSize: 12.6,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          for (var i = 0; i < assets.length; i += 1)
+            Container(
+              margin: const EdgeInsets.only(top: 4),
+              padding: const EdgeInsets.only(left: 9),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1F1F23),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: _border),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '그림 ${i + 1}',
+                      style: const TextStyle(
+                        color: _text,
+                        fontSize: 11.8,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  Tooltip(
+                    message: '그림 ${i + 1} 삭제',
+                    child: IconButton(
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () => unawaited(onDelete(assets[i], i + 1)),
+                      icon: const Icon(
+                        Icons.delete_outline_rounded,
+                        color: _danger,
+                        size: 18,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(1, 7, 4, 1),
+            child: Text(
+              '삭제하면 즉시 저장되고 문항 미리보기가 갱신됩니다.',
+              style: TextStyle(color: _textSub, fontSize: 10.7, height: 1.3),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   static final RegExp _figureMarkerRegex =
       RegExp(r'\[\[PB_FIG_[^\]]+\]\]|\[(?:그림|도형|도표|표)\]', caseSensitive: false);
 
@@ -10624,6 +10885,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         return StatefulBuilder(
           builder: (dialogContext, setLocalState) {
             final baseQ = dialogQ;
+            final dialogFigureAssets = _orderedFigureAssetsOf(baseQ);
             final draftMeta = Map<String, dynamic>.from(
               (hasFigures || hasTables)
                   ? _buildDraftMeta(
@@ -10819,6 +11081,28 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               }();
             }
 
+            Future<void> deleteDialogFigure(
+              Map<String, dynamic> asset,
+              int orderHint,
+            ) async {
+              final updated = await _deleteFigureAsset(
+                dialogQ,
+                asset,
+                orderHint,
+              );
+              if (updated == null || !dialogContext.mounted) return;
+              setLocalState(() {
+                dialogQ = updated;
+                refreshing = true;
+              });
+              final url = await _saveAndRefreshPreview(updated);
+              if (!dialogContext.mounted) return;
+              setLocalState(() {
+                serverPreviewUrl = url;
+                refreshing = false;
+              });
+            }
+
             // 좌측 본문(미리보기/정답/그림 썸네일). 자체 스크롤을 갖는다.
             final leftScroll = SingleChildScrollView(
               padding: const EdgeInsets.only(right: 6),
@@ -10952,14 +11236,21 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                           isImageChoice)
                         const SizedBox(height: 12),
                     ],
-                    if (hasFigures)
+                    if (dialogFigureAssets.isNotEmpty) ...[
+                      _buildManualFigureDeletePanel(
+                        q: dialogQ,
+                        onDelete: deleteDialogFigure,
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    if (dialogFigureAssets.isNotEmpty && figureData != null)
                       _buildFigureEditSection(
                         draftMap: draftMap!,
                         positionMap: positionMap!,
                         offsetXMap: offsetXMap!,
                         selectedPairKeys: selectedPairKeys!,
                         selectedGroups: selectedGroups,
-                        figureData: figureData!,
+                        figureData: figureData,
                         setLocalState: setLocalState,
                         onSettingChanged: applyAndRefresh,
                         sizeOnlyKeys: figureSizeOnlyKeys,
@@ -11244,8 +11535,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
 
   List<ProblemBankQuestion> _applyCommonStemDraftToGroup(
     ProblemBankQuestion source,
-    Map<String, dynamic> draftMeta,
-  ) {
+    Map<String, dynamic> draftMeta, {
+    String? commonStem,
+  }) {
     final group = _commonStemGroupQuestions(source);
     if (group.isEmpty) return const <ProblemBankQuestion>[];
     final groupIds = group.map((item) => item.id).toSet();
@@ -11282,6 +11574,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               Map<String, dynamic>.from(commonTableLayout);
         } else {
           setModel.remove('common_table_layout');
+        }
+        if (commonStem != null) {
+          setModel['common_stem'] = commonStem.trim();
         }
         meta['set_model'] = setModel;
         final next = item.copyWith(meta: meta);
@@ -11616,6 +11911,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     };
     var refreshing = false;
     String? commonServerPreviewUrl = '';
+    final commonStemController = TextEditingController(text: commonQ.stem);
 
     Future<void> refreshCommonServerPreview(
       ProblemBankQuestion previewQuestion,
@@ -11687,6 +11983,48 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                   });
                 }
               }();
+            }
+
+            Future<void> saveCommonStem() async {
+              final nextStem = commonStemController.text.trim();
+              if (nextStem.isEmpty) {
+                _showSnack('공통발문 본문을 입력해주세요.', error: true);
+                return;
+              }
+              setLocalState(() => refreshing = true);
+              try {
+                final updatedGroup = _applyCommonStemDraftToGroup(
+                  sourceQ,
+                  draftMeta,
+                  commonStem: nextStem,
+                );
+                for (final item in updatedGroup) {
+                  await _saveAndRefreshPreview(item, refreshPreview: false);
+                }
+                final setKey = _commonStemGroupKeyOf(sourceQ)
+                    .replaceFirst(RegExp(r'^key:'), '');
+                if (setKey.isNotEmpty) {
+                  await _service.updateIndependentSetCommonStem(
+                    academyId: sourceQ.academyId,
+                    documentId: sourceQ.documentId,
+                    setKey: setKey,
+                    commonStem: nextStem,
+                  );
+                }
+                sourceQ = updatedGroup.firstWhere(
+                  (item) => item.id == sourceQ.id,
+                  orElse: () => updatedGroup.first,
+                );
+                commonQ = _commonStemPreviewQuestion(sourceQ);
+                await refreshCommonServerPreview(commonQ, null);
+                _showSnack('공통발문 본문을 묶인 문항 전체에 저장했습니다.');
+              } catch (e) {
+                _showSnack('공통발문 본문 저장 실패: $e', error: true);
+              } finally {
+                if (dialogContext.mounted) {
+                  setLocalState(() => refreshing = false);
+                }
+              }
             }
 
             final leftScroll = SingleChildScrollView(
@@ -11848,6 +12186,57 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                         ],
                       ),
                       const SizedBox(height: 6),
+                      Container(
+                        padding: const EdgeInsets.fromLTRB(10, 8, 10, 9),
+                        decoration: BoxDecoration(
+                          color: _field,
+                          borderRadius: BorderRadius.circular(9),
+                          border: Border.all(color: _border),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            const Text(
+                              '공통발문 본문',
+                              style: TextStyle(
+                                color: _text,
+                                fontSize: 12.4,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            TextField(
+                              controller: commonStemController,
+                              minLines: 3,
+                              maxLines: 8,
+                              style: const TextStyle(
+                                color: _text,
+                                fontSize: 12,
+                                height: 1.35,
+                              ),
+                              decoration: const InputDecoration(
+                                isDense: true,
+                                filled: true,
+                                fillColor: Color(0xFF17171A),
+                                border: OutlineInputBorder(),
+                                hintText: '공통발문과 표·그림 마커를 입력하세요.',
+                              ),
+                            ),
+                            const SizedBox(height: 7),
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: FilledButton.icon(
+                                onPressed: refreshing
+                                    ? null
+                                    : () => unawaited(saveCommonStem()),
+                                icon: const Icon(Icons.save_outlined, size: 16),
+                                label: const Text('본문 저장'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 8),
                       Flexible(
                         child: sidebarScroll == null
                             ? leftScroll
@@ -11868,6 +12257,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         );
       },
     );
+    commonStemController.dispose();
   }
 
   /// 확대 미리보기 다이얼로그용 "그림선지형 배치" 인라인 편집 섹션.
@@ -12557,6 +12947,38 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                                   drafts[t.key] ?? const TableScaleValue();
                               setLocalState(() {
                                 drafts[t.key] = cur.copyWith(widthMax: v);
+                              });
+                              onSettingChanged();
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                    Row(
+                      children: [
+                        const Expanded(
+                          child: Text(
+                            '셀 자동 줄바꿈 (행 높이 자동)',
+                            style: TextStyle(
+                              color: _text,
+                              fontSize: 11.6,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        SizedBox(
+                          height: 24,
+                          child: Switch(
+                            value: (drafts[t.key] ?? const TableScaleValue())
+                                .autoWrap,
+                            activeThumbColor: _accent,
+                            materialTapTargetSize:
+                                MaterialTapTargetSize.shrinkWrap,
+                            onChanged: (v) {
+                              final cur =
+                                  drafts[t.key] ?? const TableScaleValue();
+                              setLocalState(() {
+                                drafts[t.key] = cur.copyWith(autoWrap: v);
                               });
                               onSettingChanged();
                             },
@@ -14157,11 +14579,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     final textbookSection = _textbookSectionLabelOf(q);
     final canUsePartialReextractSource = (doc?.hasPdfSource ?? false) &&
         ((doc?.hasHwpxSource ?? false) || (doc?.isTextbookPdfOnly ?? false));
-    final docStatus = (_activeDocument?.status ?? '').trim().toLowerCase();
-    final isPublished = docStatus == 'ready';
     final publishBadgeColor =
-        isPublished ? const Color(0xFF41B883) : const Color(0xFFE3B341);
-    final publishBadgeText = isPublished ? '사용준비됨' : '미업로드';
+        q.isPublished ? const Color(0xFF41B883) : const Color(0xFFE3B341);
+    final publishBadgeText = q.isPublished ? '공개' : '비공개';
     final canReextractThisQuestion = !isReextractingThisQuestion &&
         canUsePartialReextractSource &&
         !_isResetting &&
@@ -14250,19 +14670,31 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                 ),
               ),
               const SizedBox(width: 6),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                decoration: BoxDecoration(
-                  color: publishBadgeColor.withValues(alpha: 0.14),
+              Tooltip(
+                message: q.isPublished ? '학습 앱에서 숨기려면 클릭' : '학습 앱에 공개하려면 클릭',
+                child: InkWell(
+                  onTap: isSavingThisQuestion
+                      ? null
+                      : () => unawaited(
+                            _togglePublished(q, !q.isPublished),
+                          ),
                   borderRadius: BorderRadius.circular(999),
-                  border: Border.all(color: publishBadgeColor),
-                ),
-                child: Text(
-                  publishBadgeText,
-                  style: TextStyle(
-                    color: publishBadgeColor,
-                    fontSize: 10.5,
-                    fontWeight: FontWeight.w800,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: publishBadgeColor.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: publishBadgeColor),
+                    ),
+                    child: Text(
+                      publishBadgeText,
+                      style: TextStyle(
+                        color: publishBadgeColor,
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -14645,9 +15077,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                       minimumSize: const Size(0, 30),
                       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
-                    icon: const Icon(Icons.auto_stories_outlined, size: 15),
+                    icon: const Icon(Icons.edit_note_outlined, size: 15),
                     label: const Text(
-                      '공통',
+                      '공통 편집',
                       style: TextStyle(
                         fontSize: 11.4,
                         fontWeight: FontWeight.w800,
@@ -14780,6 +15212,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         availablePages: _textbookPagesForBook(active),
         initialPage: _requestedTextbookPage,
         onPageRequested: (page) => unawaited(_openTextbookPage(page)),
+        dirtyQuestionIds: _dirtyQuestionIds,
+        isPageUploadBusy: _isSavingQuestionChanges,
+        onPageUpload: _uploadTextbookPage,
       );
     }
     return ExamPaperReviewPane(
@@ -15030,17 +15465,17 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                     ? null
                     : () {
                         setState(() {
-                          _showUnuploadedOnly = !_showUnuploadedOnly;
+                          _showPrivateOnly = !_showPrivateOnly;
                         });
                       },
                 style: OutlinedButton.styleFrom(
-                  foregroundColor: _showUnuploadedOnly ? _accent : _textSub,
+                  foregroundColor: _showPrivateOnly ? _accent : _textSub,
                   side: BorderSide(
-                    color: _showUnuploadedOnly ? _accent : _border,
+                    color: _showPrivateOnly ? _accent : _border,
                   ),
                 ),
                 child: Text(
-                  _showUnuploadedOnly ? '전체 보기' : '미업로드만',
+                  _showPrivateOnly ? '전체 보기' : '비공개만',
                 ),
               ),
             ],
@@ -15404,6 +15839,17 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       service: _service,
       academyId: academyId,
       showSnack: _showSnack,
+      onOpenDocumentPreset: (document, latestPreset) async {
+        await ProblemBankDocumentPresetPreviewLauncher(
+          service: _service,
+          showSnack: _showSnack,
+        ).open(
+          context: context,
+          academyId: academyId,
+          document: document,
+          preset: latestPreset,
+        );
+      },
     );
   }
 
@@ -16190,6 +16636,114 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     unawaited(_prefetchFigurePreviewUrls(pageQuestions));
   }
 
+  Future<void> _uploadTextbookPage(int page) async {
+    if (_isSavingQuestionChanges || _isDeletingCurrentQuestions) return;
+    final academyId = _academyId;
+    if (academyId == null || academyId.isEmpty) {
+      _showSnack('아카데미 정보를 불러오지 못했습니다.', error: true);
+      return;
+    }
+    final pageQuestions = textbookQuestionsOnPage(_questions, page);
+    if (pageQuestions.isEmpty) {
+      _showSnack('$page쪽에는 검수할 문항이 없습니다.', error: true);
+      return;
+    }
+
+    final dirtyIds = _questionIdsNeedingSave(pageQuestions);
+    setState(() => _isSavingQuestionChanges = true);
+    try {
+      const saveConcurrency = 4;
+      for (var offset = 0;
+          offset < dirtyIds.length;
+          offset += saveConcurrency) {
+        final end = math.min(offset + saveConcurrency, dirtyIds.length);
+        final chunkIds = dirtyIds.sublist(offset, end);
+        if (!mounted) return;
+        setState(() {
+          _savingQuestionIds.addAll(chunkIds);
+          _statusText = '$page쪽 수정사항 저장 중... ($end/${dirtyIds.length})';
+        });
+        try {
+          await Future.wait(
+            chunkIds.map((questionId) async {
+              final current =
+                  _questions.where((item) => item.id == questionId).firstOrNull;
+              if (current == null) {
+                throw Exception('저장할 문항을 찾지 못했습니다. (id: $questionId)');
+              }
+              await _saveAndRefreshPreview(current, refreshPreview: false);
+            }),
+          );
+        } finally {
+          if (mounted) {
+            setState(() => _savingQuestionIds.removeAll(chunkIds));
+          }
+        }
+        if (!mounted) return;
+        final failedIds = chunkIds.where((id) {
+          if (_dirtyQuestionIds.contains(id)) return true;
+          final current =
+              _questions.where((item) => item.id == id).firstOrNull;
+          return current != null &&
+              shouldPersistDerivedSubjectiveAnswer(current);
+        }).toList(growable: false);
+        if (failedIds.isNotEmpty) {
+          throw Exception('수정 문항 ${failedIds.length}개의 저장에 실패했습니다.');
+        }
+      }
+
+      final unchecked = textbookQuestionsOnPage(_questions, page)
+          .where((question) => !question.isChecked)
+          .toList(growable: false);
+      final uncheckedIds =
+          unchecked.map((question) => question.id).toList(growable: false);
+      if (uncheckedIds.isNotEmpty) {
+        setState(() {
+          _savingQuestionIds.addAll(uncheckedIds);
+          _statusText = '$page쪽 검수 완료 처리 중...';
+        });
+        try {
+          await _service.bulkSetCheckedByIds(
+            academyId: academyId,
+            questionIds: uncheckedIds,
+            isChecked: true,
+          );
+          if (!mounted) return;
+          final pageIds = pageQuestions.map((question) => question.id).toSet();
+          setState(() {
+            _questions = _questions
+                .map((item) => pageIds.contains(item.id)
+                    ? item.copyWith(isChecked: true)
+                    : item)
+                .toList(growable: false);
+            _dirtyQuestionIds.removeAll(pageIds);
+          });
+        } finally {
+          if (mounted) {
+            setState(() => _savingQuestionIds.removeAll(uncheckedIds));
+          }
+        }
+      }
+
+      if (!mounted) return;
+      setState(() => _statusText = '$page쪽 검수 완료');
+      final refreshedPageQuestions = textbookQuestionsOnPage(_questions, page);
+      unawaited(_prefetchQuestionPreviewUrls(refreshedPageQuestions));
+      _showSnack(
+        '$page쪽 검수를 완료했습니다. '
+        '(수정 ${dirtyIds.length}문항 · 검수 ${pageQuestions.length}문항)',
+      );
+    } catch (e) {
+      if (mounted) {
+        _showSnack('$page쪽 검수 저장 실패: $e', error: true);
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isSavingQuestionChanges = false);
+      }
+    }
+  }
+
   Widget _buildTextbookQuickSwitchPanel() {
     final documents = _textbookQuickSwitchDocuments();
     final activeKey =
@@ -16466,6 +17020,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       ..sort((a, b) {
         if (a == '학교 미지정') return 1;
         if (b == '학교 미지정') return -1;
+        final levelOrder = _examSchoolLevelRank(grouped[a]!)
+            .compareTo(_examSchoolLevelRank(grouped[b]!));
+        if (levelOrder != 0) return levelOrder;
         return a.compareTo(b);
       });
 
@@ -16486,7 +17043,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               const SizedBox(width: 7),
               const Expanded(
                 child: Text(
-                  '최신 문서',
+                  '전체 내신 문서',
                   style: TextStyle(
                     color: _text,
                     fontSize: 14,
@@ -16529,6 +17086,16 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         ],
       ),
     );
+  }
+
+  int _examSchoolLevelRank(
+    Map<String, List<ProblemBankDocument>> byYear,
+  ) {
+    final documents = byYear.values.expand((items) => items);
+    if (documents.isEmpty) return 2;
+    return documents
+        .map(problemBankSchoolLevelSortRank)
+        .reduce((current, next) => current < next ? current : next);
   }
 
   Widget _buildExamSchoolNode(
@@ -16663,6 +17230,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     bool compact = false,
   }) {
     final selected = _activeDocument?.id == document.id;
+    final uploaded = document.status.trim().toLowerCase() == 'ready';
+    final uploadColor =
+        uploaded ? const Color(0xFF41B883) : const Color(0xFFE3B341);
     return InkWell(
       borderRadius: BorderRadius.circular(7),
       onTap: () => unawaited(_openExamPaperDocument(document)),
@@ -16714,6 +17284,28 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                       style: const TextStyle(color: _textSub, fontSize: 10),
                     ),
                 ],
+              ),
+            ),
+            const SizedBox(width: 7),
+            Tooltip(
+              message: _labelOfDocumentStatus(document.status),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                decoration: BoxDecoration(
+                  color: uploadColor.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(
+                    color: uploadColor.withValues(alpha: 0.55),
+                  ),
+                ),
+                child: Text(
+                  uploaded ? '확정' : '작업중',
+                  style: TextStyle(
+                    color: uploadColor,
+                    fontSize: 9.5,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
               ),
             ),
           ],

@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 /// 답지에서 문항 하나를 특정하기 위해 VLM 에 넘기는 한 줄.
@@ -11,6 +11,7 @@ class TextbookExpectedAnswer {
   const TextbookExpectedAnswer({
     required this.number,
     this.corner = '',
+    this.blockTitle = '',
     this.bodyPage,
   });
 
@@ -20,12 +21,20 @@ class TextbookExpectedAnswer {
   /// 답지에 인쇄된 코너 이름 (예: "STEP1 쏙쏙 개념 익히기").
   final String corner;
 
+  /// 답지 묶음 머리에 인쇄된 이름 (예: "여러 가지 사각형").
+  ///
+  /// 고쟁이 워크북 답지는 한 지면에 "중단원 TEST" 보라 배지 묶음이 일곱 개까지
+  /// 서고, 쪽 배지(174~177 / 178~181 / 182~185)가 서로 붙어 있어 모델이 옆
+  /// 묶음을 집는다. 소단원 이름은 크게 인쇄되므로 코너·쪽보다 튼튼한 단서다.
+  final String blockTitle;
+
   /// 답지 박스 오른쪽 위의 본문 페이지 배지 (예: P.109 → 109).
   final int? bodyPage;
 
   Map<String, dynamic> toJson() => <String, dynamic>{
         'problem_number': number,
         if (corner.trim().isNotEmpty) 'corner': corner.trim(),
+        if (blockTitle.trim().isNotEmpty) 'title': blockTitle.trim(),
         if (bodyPage != null && bodyPage! > 0) 'page': bodyPage,
       };
 }
@@ -121,13 +130,46 @@ const Map<String, String> _kSuryeokAnswerCorners = <String, String>{
   'unit_review': '단원 마무리 평가',
 };
 
+/// 고쟁이 크롭의 section → 답지·해설에 인쇄된 묶음 배지 이름.
+///
+/// 본문(A~D)은 번호가 책 전체를 관통하는 세 자리("054")고 워크북(E·F)은 묶음마다
+/// 01 부터 다시 시작한다. 서로 다른 체계라 섞여도 안전할 것 같지만 **번호키는
+/// 앞자리 0 을 떼기 때문에** 본문 "005" 와 워크북 "05" 가 같은 키 "5" 로 뭉개진다.
+/// 한 중단원의 A~E 를 한 번에 물으면 앞 24개가 통째로 겹쳐, 출처를 못 가린
+/// 항목이 전부 버려졌다(2-2 중단원 1: 기대 77개 중 29개만 채워지고 48개가 빔 —
+/// 정확히 본문 025~053 만 살아남은 수치다).
+///
+/// 그래서 본문에도 배지를 실어 보낸다. 답지·해설에는 본문 묶음마다
+/// "본교재 007~009쪽", 워크북 묶음마다 "워크북 166~169쪽" 이 인쇄돼 있어서
+/// 쪽 범위만으로도 두 체계가 완전히 갈린다.
+const Map<String, String> _kGojaengiCorners = <String, String>{
+  'mid_unit_test': '중단원 TEST',
+  'big_unit_test': '대단원 TEST',
+};
+
+/// 고쟁이 본문(A~D) 크롭의 배지 이름. 답지·해설 지면 머리의 "본교재" 띠다.
+const String _kGojaengiBodyCorner = '본교재';
+
+/// 고쟁이 본문 단계 section. 이 넷만 "본교재" 배지를 받는다.
+///
+/// section 이 'unknown' 인 크롭까지 본교재로 몰면 워크북 문항이 본교재 묶음에서
+/// 찾히기를 기다리다 조용히 빈 채로 남는다. 모르는 값은 배지를 비워 예전처럼
+/// 번호로만 짚게 둔다.
+const Set<String> _kGojaengiBodySections = <String>{
+  'core_type',
+  'advanced_type',
+  'top_type',
+  'creative_type',
+};
+
 /// 답지 블록을 코너·본문 페이지로 가려야 하는 시리즈인지.
 ///
 /// 번호가 블록마다 1번(01번)부터 다시 시작해 한 지면에 같은 번호가 여러 번
-/// 나오는 교재들이다.
+/// 나오는 교재들이다. 고쟁이는 본문·워크북의 번호 체계가 달라도 번호키가
+/// 앞자리 0 을 떼면서 겹치므로 여기 포함한다([_kGojaengiCorners] 주석 참고).
 bool textbookAnswerNeedsCorner(String seriesKey) {
   final key = seriesKey.trim().toLowerCase();
-  return key == 'gaeyu' || key == 'suryeok';
+  return key == 'gaeyu' || key == 'suryeok' || key == 'gojaengi';
 }
 
 /// 번호가 블록마다 1번부터 다시 시작하는 코너. 앱은 이 코너의 크롭에만
@@ -164,12 +206,46 @@ TextbookExpectedAnswer textbookExpectedAnswerFor({
   required String seriesKey,
   required String problemNumber,
   String section = '',
+  String subKey = '',
   int? displayPage,
+  String midName = '',
+  String bigName = '',
 }) {
   if (!textbookAnswerNeedsCorner(seriesKey)) {
     return TextbookExpectedAnswer(number: problemNumber);
   }
   final bodyPage = displayPage != null && displayPage > 0 ? displayPage : null;
+  if (seriesKey.trim().toLowerCase() == 'gojaengi') {
+    // 본문이든 워크북이든 배지를 실어 보낸다. 한쪽만 비우면 그 항목이 상대편
+    // 번호와 같은 키로 겹쳤을 때 어느 쪽인지 가릴 근거가 사라진다
+    // ([_kGojaengiCorners] 주석 참고).
+    // 예전 크롭과 일부 워크북 크롭은 section 이 unknown/빈 값이다. 하지만
+    // 저자가 고른 슬롯(A~F)은 scopeKey에 항상 남으므로 이것이 더 강한 근거다.
+    // 특히 E의 출처가 비면 앞 중단원 TEST의 같은 번호가 현재 문항에 붙는다.
+    const sectionBySubKey = <String, String>{
+      'A': 'core_type',
+      'B': 'advanced_type',
+      'C': 'top_type',
+      'D': 'creative_type',
+      'E': 'mid_unit_test',
+      'F': 'big_unit_test',
+    };
+    final scopedSection = sectionBySubKey[subKey.trim().toUpperCase()];
+    final trimmed = scopedSection ?? section.trim();
+    return TextbookExpectedAnswer(
+      number: problemNumber,
+      corner: _kGojaengiCorners[trimmed] ??
+          (_kGojaengiBodySections.contains(trimmed)
+              ? _kGojaengiBodyCorner
+              : ''),
+      // 워크북 묶음 머리에 인쇄된 이름. 중단원 TEST 는 소단원 이름,
+      // 대단원 TEST 는 대단원 이름이 붙는다.
+      blockTitle: trimmed == 'mid_unit_test'
+          ? midName.trim()
+          : (trimmed == 'big_unit_test' ? bigName.trim() : ''),
+      bodyPage: bodyPage,
+    );
+  }
   if (seriesKey.trim().toLowerCase() == 'suryeok') {
     // 수력충전은 번호에 접두어를 붙이지 않는다. 블록은 본문 페이지로 가른다.
     return TextbookExpectedAnswer(
@@ -377,9 +453,42 @@ class TextbookVlmAnswerService {
     required List<TextbookAnswerUpload> answers,
   }) async {
     if (answers.isEmpty) return 0;
+    final chunks = textbookAnswerUploadChunks(answers);
     var upserted = 0;
-    for (final chunk in textbookAnswerUploadChunks(answers)) {
-      upserted += await _postAnswerBatch(academyId: academyId, answers: chunk);
+    final failures = <String>[];
+    for (var i = 0; i < chunks.length; i += 1) {
+      final chunk = chunks[i];
+      final megabytes = utf8.encode(jsonEncode(chunk)).length / 1024 / 1024;
+      Object? lastError;
+      for (var attempt = 1; attempt <= 3; attempt += 1) {
+        try {
+          upserted +=
+              await _postAnswerBatch(academyId: academyId, answers: chunk);
+          lastError = null;
+          break;
+        } catch (e) {
+          lastError = e;
+          if (attempt < 3) {
+            await Future<void>.delayed(Duration(seconds: 2 * attempt));
+          }
+        }
+      }
+      debugPrint(
+        '[정답저장] ${i + 1}/${chunks.length} 건수=${chunk.length} '
+        '${megabytes.toStringAsFixed(1)}MB '
+        '${lastError == null ? '저장됨' : '실패 $lastError'}',
+      );
+      // 한 묶음이 끝내 막혀도 남은 묶음은 보낸다. 320건을 200건씩 나눠 보내다
+      // 두 번째에서 걸리면 나머지가 통째로 버려지고, 다시 돌려도 같은 자리에서
+      // 또 멈춘다(3-1 중단원3: 앞 200건만 저장돼 본문 추출이 막혔다).
+      if (lastError != null) {
+        failures.add('${i + 1}번째 묶음 ${chunk.length}건: $lastError');
+      }
+    }
+    if (failures.isNotEmpty) {
+      throw Exception(
+        '정답 $upserted개 저장 · 묶음 ${failures.length}개 실패 — ${failures.first}',
+      );
     }
     return upserted;
   }
@@ -416,6 +525,7 @@ class TextbookVlmAnswerService {
     required int bigOrder,
     required int midOrder,
     required String subKey,
+    int subIndex = 0,
   }) async {
     final body = <String, dynamic>{
       'academy_id': academyId,
@@ -424,6 +534,7 @@ class TextbookVlmAnswerService {
       'big_order': bigOrder,
       'mid_order': midOrder,
       'sub_key': subKey,
+      'sub_index': subIndex,
     };
     final res = await _http.post(
       _uri('/textbook/answers/sync-pb'),

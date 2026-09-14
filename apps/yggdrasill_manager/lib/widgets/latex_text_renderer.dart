@@ -62,7 +62,7 @@ class LatexTextRenderer extends StatelessWidget {
     final children = <Widget>[];
     for (final part in parts) {
       if (part.isDisplayMath) {
-        final formula = part.content.trim();
+        final formula = _normalizeFormulaForRender(part.content.trim());
         if (formula.isEmpty) {
           continue;
         }
@@ -209,7 +209,12 @@ class LatexTextRenderer extends StatelessWidget {
   }
 
   String _normalizeFormulaForRender(String raw) {
-    final input = _normalizeElasticDelimitersForFlutter(raw.trim());
+    final input = _normalizeElasticDelimitersForFlutter(
+      raw
+          .trim()
+          .replaceAll(r'\YggLabelColon', r'\colon')
+          .replaceAll(r'\colon', r'\mathord{\text{:}}\,'),
+    );
     if (input.isEmpty) return input;
     final match = RegExp(
       r'^\(?\s*(\\(?:dfrac|tfrac|frac)\s*\{\s*(?:\\(?:text|mathrm)\s*\{[^{}]+\}|[^{}]+)\s*\}\s*\{\s*(?:\\(?:text|mathrm)\s*\{[^{}]+\}|[^{}]+)\s*\})\s*\)?$',

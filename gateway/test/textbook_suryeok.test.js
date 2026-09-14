@@ -10,6 +10,7 @@ import {
   overwriteItemGeometry,
   repairSuryeokItemRegions,
   suryeokMarksNeedRepair,
+  suryeokNumbersLookInterpolated,
   suryeokRangeHeadersMayBeMissing,
 } from '../src/textbook/vlm_detect_client.js';
 import {
@@ -649,6 +650,192 @@ test('suryeok suspects a dropped range header from the empty column head', () =>
   assert.equal(suryeokRangeHeadersMayBeMissing(complete), false);
 });
 
+// 3-1 p71 좌단: 유형 04 머리말(아래끝 105) 바로 밑에 "[12-27] 다음 식을
+// 전개하여라." 가 한 줄로 있다. 자리를 거의 안 쓰는 탓에 첫 번호 12 가 145 로
+// 바짝 붙어, 빈자리를 재는 규칙만으로는 이 누락을 못 잡는다. 지면에서 새로
+// 시작하는 유형 아래 첫 요소가 세트 지문이 아니면 되물어야 한다.
+test('suryeok suspects a one-line range header tucked under a type heading', () => {
+  const typeHeaders = [
+    { label: '유형 04', title: '곱셈 공식 - 차의 제곱', bbox: [85, 58, 105, 380] },
+  ];
+  const dropped = {
+    type_headers: typeHeaders,
+    items: [
+      { number: '12', category: 'type_problem', column: 1, bbox: [145, 64, 161, 91] },
+      { number: '13', category: 'type_problem', column: 1, bbox: [278, 64, 294, 91] },
+      { number: '20', category: 'type_problem', column: 2, bbox: [66, 510, 82, 537] },
+    ],
+  };
+  assert.equal(suryeokRangeHeadersMayBeMissing(dropped), true);
+
+  const complete = {
+    type_headers: typeHeaders,
+    items: [
+      {
+        number: '12~27',
+        category: 'type_problem',
+        column: 1,
+        is_set_header: true,
+        bbox: [111, 69, 125, 129],
+      },
+      ...dropped.items,
+    ],
+  };
+  assert.equal(suryeokRangeHeadersMayBeMissing(complete), false);
+});
+
+// 공통수학1 p22 우단. 실제 번호는 165 246 327 407 488 573 664 750 인데,
+// 1차 판독은 78 등간격(166 244 322 400 478 556 634)으로 채워 넣어 25 번이
+// 30 위로 밀렸다. 번호 높이가 26 이라 박스가 번호를 벗어난다.
+test('suryeok flags evenly interpolated number coordinates', () => {
+  const evenly = {
+    items: [
+      { number: '19~25', column: 2, is_set_header: true, bbox: [130, 535, 143, 603] },
+      { number: '19', column: 2, bbox: [166, 535, 192, 563] },
+      { number: '20', column: 2, bbox: [244, 535, 270, 563] },
+      { number: '21', column: 2, bbox: [322, 535, 348, 563] },
+      { number: '22', column: 2, bbox: [400, 535, 426, 563] },
+      { number: '23', column: 2, bbox: [478, 535, 504, 563] },
+      { number: '24', column: 2, bbox: [556, 535, 582, 563] },
+      { number: '25', column: 2, bbox: [634, 535, 660, 563] },
+    ],
+  };
+  assert.equal(suryeokNumbersLookInterpolated(evenly), true);
+  assert.equal(suryeokMarksNeedRepair(evenly, 'type_problem'), true);
+
+  // 실제로 읽은 좌표는 분수 문항에서 간격이 벌어진다. 되묻지 않는다.
+  const measured = {
+    items: [
+      { number: '19~25', column: 2, is_set_header: true, bbox: [131, 535, 145, 606] },
+      { number: '19', column: 2, bbox: [165, 535, 191, 563] },
+      { number: '20', column: 2, bbox: [246, 535, 272, 563] },
+      { number: '21', column: 2, bbox: [327, 535, 353, 563] },
+      { number: '22', column: 2, bbox: [407, 535, 433, 563] },
+      { number: '23', column: 2, bbox: [488, 535, 514, 563] },
+      { number: '24', column: 2, bbox: [573, 535, 599, 563] },
+      { number: '25', column: 2, bbox: [664, 535, 690, 563] },
+    ],
+  };
+  assert.equal(suryeokNumbersLookInterpolated(measured), false);
+  assert.equal(suryeokMarksNeedRepair(measured, 'type_problem'), false);
+
+  // 세 칸만 나란해도 되묻지 않는다. 한 줄짜리 문항 몇 개는 정말 등간격이다.
+  assert.equal(
+    suryeokNumbersLookInterpolated({
+      items: [
+        { number: '12', column: 1, bbox: [277, 91, 303, 119] },
+        { number: '13', column: 1, bbox: [355, 91, 381, 119] },
+        { number: '14', column: 1, bbox: [433, 91, 459, 119] },
+        { number: '15', column: 1, bbox: [511, 91, 537, 119] },
+      ],
+    }),
+    false,
+  );
+});
+
+test('suryeok mark repair moves drifted number boxes onto the printed number', () => {
+  const result = {
+    section: 'type_problem',
+    items: [
+      { number: '24', column: 2, is_set_header: false, bbox: [556, 535, 582, 563] },
+      { number: '25', column: 2, is_set_header: false, bbox: [634, 535, 660, 563] },
+      { number: '26', column: 2, is_set_header: false, bbox: [748, 535, 774, 563] },
+    ],
+  };
+  const marks = {
+    items: [
+      { number: '24', bbox: [571, 535, 588, 564] },
+      { number: '25', bbox: [662, 535, 679, 564] },
+      { number: '26', bbox: [748, 535, 765, 564] },
+      // 엉뚱한 자리를 짚어 온 응답에 끌려가지 않는다(어긋난 폭 60 초과).
+      { number: '23', bbox: [900, 535, 917, 564] },
+    ],
+  };
+  const merged = mergeSuryeokMarks(result, marks, 'type_problem', {
+    fixCoordinates: true,
+  });
+  assert.equal(merged.moved, 2);
+  assert.deepEqual(result.items.find((i) => i.number === '24').bbox, [571, 535, 588, 564]);
+  assert.deepEqual(result.items.find((i) => i.number === '25').bbox, [662, 535, 679, 564]);
+  // 이미 맞는 26 번은 그대로 둔다(어긋난 폭 3 미만).
+  assert.deepEqual(result.items.find((i) => i.number === '26').bbox, [748, 535, 774, 563]);
+
+  // 기본값으로는 좌표를 건드리지 않는다.
+  const untouched = {
+    section: 'type_problem',
+    items: [{ number: '24', column: 2, is_set_header: false, bbox: [556, 535, 582, 563] }],
+  };
+  assert.equal(mergeSuryeokMarks(untouched, marks, 'type_problem').moved, 0);
+  assert.deepEqual(untouched.items[0].bbox, [556, 535, 582, 563]);
+});
+
+test('suryeok prompt rules out single digit formula numbers in concept boxes', () => {
+  const prompt = buildDetectProblemsPrompt({
+    rawPage: 31,
+    series: 'suryeok',
+    sectionHint: 'type_problem',
+  });
+  assert.match(prompt, /진한 남색 둥근 사각형 한 자리 번호/);
+  assert.match(prompt, /공식 번호/);
+});
+
+test('suryeok suspects a range header dropped from a continuation page column', () => {
+  // 3-1 p179. 유형 머리말이 없는 이어지는 지면이고 "[34-41]" 은 좌단 맨 위
+  // 한 줄로 끝난다. 그래서 흘려도 34 번이 지면 위에서 58 밖에 안 내려와
+  // 빈자리 기준(120)에 못 미치고, 머리말이 없어 머리말 규칙도 돌지 않는다.
+  const rightColumn = [
+    {
+      number: '42~47',
+      category: 'type_problem',
+      column: 2,
+      is_set_header: true,
+      set_range: { from: 42, to: 47 },
+      bbox: [138, 509, 151, 580],
+    },
+    { number: '42', category: 'type_problem', column: 2, bbox: [209, 509, 227, 538] },
+    { number: '43', category: 'type_problem', column: 2, bbox: [351, 509, 369, 538] },
+  ];
+  const dropped = {
+    type_headers: [],
+    items: [
+      { number: '34', category: 'type_problem', column: 1, bbox: [118, 62, 136, 91] },
+      { number: '35', category: 'type_problem', column: 1, bbox: [225, 62, 243, 91] },
+      { number: '41', category: 'type_problem', column: 1, bbox: [868, 62, 886, 91] },
+      ...rightColumn,
+    ],
+  };
+  assert.equal(suryeokRangeHeadersMayBeMissing(dropped), true);
+
+  const complete = {
+    type_headers: [],
+    items: [
+      {
+        number: '34~41',
+        category: 'type_problem',
+        column: 1,
+        is_set_header: true,
+        set_range: { from: 34, to: 41 },
+        bbox: [67, 62, 80, 133],
+      },
+      ...dropped.items,
+    ],
+  };
+  assert.equal(suryeokRangeHeadersMayBeMissing(complete), false);
+
+  // 대괄호 범위로 짜이지 않은 지면(세트 지문이 하나도 없다)은 건드리지 않는다.
+  assert.equal(
+    suryeokRangeHeadersMayBeMissing({
+      type_headers: [],
+      items: [
+        { number: '01', category: 'unit_review', column: 1, bbox: [80, 62, 96, 91] },
+        { number: '02', category: 'unit_review', column: 1, bbox: [180, 62, 196, 91] },
+        { number: '03', category: 'unit_review', column: 2, bbox: [80, 509, 96, 538] },
+      ],
+    }),
+    false,
+  );
+});
+
 test('suryeok range header repair fills the header and inherits its type', () => {
   const out = normalizeDetectResult(
     {
@@ -839,6 +1026,17 @@ test('solution block index prompt asks for badges and continuation', () => {
   assert.match(prompt, /page_start/);
 });
 
+// "단원 마무리 평가 [16~22]" 의 대괄호는 이 평가가 다루는 소단원 번호 범위지
+// 쪽수가 아니다. 쪽수는 오른쪽 "▶문제편 p.55~59" 배지에만 있다. 대괄호를
+// 쪽수로 읽으면 겹치는 블록이 없어 그 머리가 통째로 버려지고, 뒤따르는 풀이
+// 38개가 하나도 붙지 않는다(공통수학1 중단원2 해설 40쪽).
+test('solution block index prompt separates the sub-unit range from the page badge', () => {
+  const prompt = buildSolutionBlockIndexPrompt({ rawPage: 40 });
+  assert.match(prompt, /단원 마무리 평가 \[16~22\]/);
+  assert.match(prompt, /소단원[\s\S]{0,20}번호 범위/);
+  assert.match(prompt, /문제편 p\.55~59/);
+});
+
 // 왼쪽 단 맨 아래에서 시작해 오른쪽 단 맨 위로 이어지는 정답(2-1 답지 10쪽
 // "12 …농도" 09번)의 상자를 두 단에 걸쳐 주면, 앱이 그 정답을 지면 맨 위로
 // 올려 세워 자기 소단원 머리보다 앞서게 되고 통째로 버려진다.
@@ -1008,6 +1206,57 @@ test('solution block index keeps badge page ranges and flags empty pages', () =>
   });
   assert.equal(empty.leading_continuation, true);
   assert.equal(empty.blocks.length, 0);
+});
+
+// 3-1 해설 p81 은 왼쪽 단 03~14, 오른쪽 단 16~24, 그리고 오른쪽 단 아래에
+// 다음 소단원 머리(x=499~896)와 그 01 을 싣는다. 머리의 왼쪽 끝이 중앙선을
+// 1 만큼 걸치는데, 왼쪽 끝만 보고 단을 정하면 머리가 왼쪽 단 14 와 15 사이로
+// 끼어든다. 그러면 15 부터 오른쪽 단 전체가 다음 소단원 것이 되어, 앞 소단원
+// 열 문항이 해설을 잃고 다음 소단원 아홉 문항은 엉뚱한 좌표를 받는다.
+test('a section header straddling the column split stays in the right column', () => {
+  const numbers = [];
+  // 왼쪽 단 03~15 (y 71 → 849)
+  const leftYs = [71, 124, 177, 230, 286, 344, 397, 450, 506, 562, 662, 776, 849];
+  leftYs.forEach((y, i) => {
+    numbers.push({
+      text: String(i + 3).padStart(2, '0'),
+      number_region: [y, 98, y + 15, 127],
+    });
+  });
+  // 오른쪽 단 16~24
+  const rightYs = [71, 161, 254, 337, 412, 487, 579, 672, 745];
+  rightYs.forEach((y, i) => {
+    numbers.push({
+      text: String(i + 16).padStart(2, '0'),
+      number_region: [y, 543, y + 15, 572],
+    });
+  });
+  // 머리 아래 첫 풀이
+  numbers.push({ text: '01', number_region: [900, 543, 915, 572] });
+
+  const out = normalizeSolutionBlocksResult({
+    leading_continuation: true,
+    blocks: [
+      {
+        title: '06 제곱근을 이용한 이차방정식의 풀이',
+        page_start: 126,
+        page_end: 127,
+        header_region: [827, 499, 872, 896],
+      },
+    ],
+    numbers,
+  });
+
+  const order = out.sequence.map((one) =>
+    one.kind === 'header' ? '머리' : one.text,
+  );
+  // 머리는 오른쪽 단 끝, 곧 01 바로 앞에 놓여야 한다.
+  assert.deepEqual(order.slice(0, 13), [
+    '03', '04', '05', '06', '07', '08', '09', '10', '11', '12', '13', '14', '15',
+  ]);
+  assert.deepEqual(order.slice(13), [
+    '16', '17', '18', '19', '20', '21', '22', '23', '24', '머리', '01',
+  ]);
 });
 
 test('unit review corner is recognized by the badge guard', () => {

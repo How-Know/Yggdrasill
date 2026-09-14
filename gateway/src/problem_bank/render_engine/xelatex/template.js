@@ -123,6 +123,10 @@ function sanitizeLatexControlChars(value) {
     s = s.replace(/\x08/g, '\\b');
     s = s.replace(/\x0b/g, '\\v');
     s = s.replace(/\x09(?=[A-Za-z])/g, '\\t');
+    s = s.replace(
+      /\x0a(?=(?:abla|atural|e(?:q|g)?|i|otin|u)(?![A-Za-z]))/g,
+      '\\n',
+    );
     // terminator 는 LaTeX 명령 뒤에 자주 오는 문자들 전부 커버: \ {} () [] ^ _
     // 과거 실수: ")" terminator 를 빠뜨려 "\right)" 가 "ight)" 로 깨져 재발한 적 있음.
     s = s.replace(/\x0d(?=[a-z][a-zA-Z]*[\\{}()\[\]^_])/g, '\\r');
@@ -174,7 +178,7 @@ function normalizeLiteralJsonNewlineText(input) {
     /^eq(?![A-Za-z])/,
     /^eg(?![A-Za-z])/,
     /^i(?![A-Za-z])/,
-    /^ot(?![A-Za-z])/,
+    /^ot(?:in)?(?![A-Za-z])/,
     /^u(?![A-Za-z])/,
     /^ew(?:command|length|page|line|theorem)\b/,
     /^oindent\b/,
@@ -214,8 +218,8 @@ function autoWrapTabularCells(rawTexBlock) {
     const patchedRows = rows.map((row) => {
       // tabular 맨 끝의 공백/개행 row 는 그대로.
       if (!row.trim()) return row;
-      // \hline 같은 단독 행은 그대로.
-      if (/^\s*\\hline\s*$/.test(row)) return row;
+      // \hline / \cline 같은 tabular 행 규칙은 셀 내용으로 감싸지 않는다.
+      if (/^\s*(?:(?:\\hline|\\cline\s*\{\s*\d+\s*-\s*\d+\s*\})\s*)+$/.test(row)) return row;
       const cells = splitTabularRowCells(row);
       const patchedCells = cells.map((cellRaw) => {
         // 셀 앞뒤 공백/개행은 보존.
@@ -223,34 +227,38 @@ function autoWrapTabularCells(rawTexBlock) {
         const trailing = cellRaw.match(/\s*$/)[0];
         let inner = cellRaw.slice(leading.length, cellRaw.length - trailing.length);
 
-        // 행 처음 셀 앞에 \hline 이 붙어 있을 수 있음 → 분리 보존.
-        const hlineMatch = inner.match(/^((?:\\hline\s*)+)([\s\S]*)$/);
-        let hlinePrefix = '';
-        if (hlineMatch) {
-          hlinePrefix = hlineMatch[1];
-          inner = hlineMatch[2];
+        // 행 처음 셀 앞에 \hline / \cline 이 붙어 있을 수 있음 → 분리 보존.
+        // 특히 `\\ ... \\cline{2-3}\n & ...` 형태의 \cline 을 수식 셀로
+        // 감싸면 alignment 전용 \omit 이 parbox 안에 들어가 XeLaTeX가 실패한다.
+        const ruleMatch = inner.match(
+          /^((?:(?:\\hline|\\cline\s*\{\s*\d+\s*-\s*\d+\s*\})\s*)+)([\s\S]*)$/,
+        );
+        let rulePrefix = '';
+        if (ruleMatch) {
+          rulePrefix = ruleMatch[1];
+          inner = ruleMatch[2];
         }
 
-        if (!inner.trim()) return leading + hlinePrefix + inner + trailing;
+        if (!inner.trim()) return leading + rulePrefix + inner + trailing;
         // \multicolumn must remain a top-level tabular command. Wrapping it in
         // $...$ or \text{...} turns the underlying \omit into invalid TeX.
         if (/^\s*\\multicolumn\s*\{/.test(inner)) {
-          return leading + hlinePrefix + inner + trailing;
+          return leading + rulePrefix + inner + trailing;
         }
 
         // 이미 $...$ 혹은 \text{...} 로 감싸진 셀: 그대로.
-        if (/^\s*\$[\s\S]*\$\s*$/.test(inner)) return leading + hlinePrefix + inner + trailing;
-        if (/^\s*\\text\{[\s\S]*\}\s*$/.test(inner)) return leading + hlinePrefix + inner + trailing;
+        if (/^\s*\$[\s\S]*\$\s*$/.test(inner)) return leading + rulePrefix + inner + trailing;
+        if (/^\s*\\text\{[\s\S]*\}\s*$/.test(inner)) return leading + rulePrefix + inner + trailing;
 
         const hasLatexCmd = /\\[a-zA-Z]+/.test(inner);
         // 한글 음절(가-힣)뿐 아니라 호환 자모(ㄱ,ㄴ,...)·옛한글 자모 영역까지 포함해
         //   "(ㄱ)~(ㅂ)" 같은 셀이 수식 모드($...$)로 감싸져 글리프가 사라지는 것을 막는다.
         const hasHangul = /[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F가-힣]/.test(inner);
         // 한글이 섞여 있으면 LaTeX 명령이 같이 있어도 텍스트 모드로 처리해야 한글이 보인다.
-        if (hasHangul) return leading + hlinePrefix + `\\text{${inner.trim()}}` + trailing;
-        if (hasLatexCmd) return leading + hlinePrefix + `$${inner.trim()}$` + trailing;
+        if (hasHangul) return leading + rulePrefix + `\\text{${inner.trim()}}` + trailing;
+        if (hasLatexCmd) return leading + rulePrefix + `$${inner.trim()}$` + trailing;
         // 나머지(숫자/영문 알파벳/+,- 등 단순 기호) 도 수식 모드로 감싼다 → 서체 일관성.
-        return leading + hlinePrefix + `$${inner.trim()}$` + trailing;
+        return leading + rulePrefix + `$${inner.trim()}$` + trailing;
       });
       return patchedCells.join('&');
     });
@@ -511,7 +519,15 @@ function splitMathAtTopLevelCommaSpace(math) {
         i += 5;
         continue;
       }
-      // 기타 백슬래시 매크로는 건너뜀 (e.g. \frac, \times) — 그 안의 `, ` 도 현재 depth 그대로 유지.
+      // 백슬래시만 건너뛰면 `\, ` 의 쉼표가 목록 구분자로 오인되어
+      // `$A_k \$` 처럼 닫는 $ 가 이스케이프되고 문서 컴파일이 실패한다.
+      const next = math[i + 1];
+      if (next && /[A-Za-z]/.test(next)) {
+        i += 1;
+        while (i + 1 < math.length && /[A-Za-z]/.test(math[i + 1])) i += 1;
+      } else if (next) {
+        i += 1;
+      }
       continue;
     }
     if (ch === '{' || ch === '(' || ch === '[') depth += 1;
@@ -762,10 +778,18 @@ function normalizeMathSegment(mathContent) {
   out = out.replace(/\bBOX\b/g, '\\mtemptybox{}');
   out = out.replace(/(?<![\\A-Za-z])box\s*\{\s*(?:~~)?\s*\}/gi, '\\mtemptybox{}');
   // □ABFE / □CDEF 처럼 도형 이름 앞의 사각형 기호는 빈칸이 아니라 \square 로 유지.
-  out = out.replace(/[□▢◻](?=\s*[A-Z]{2,})/g, '\\square ');
+  // 도형 이름은 \text{ABCD} 처럼 서체 매크로로 감싸져 들어오는 경우가 대부분이다.
+  out = out.replace(/[□▢◻](?=\s*(?:[A-Z]{2,}|\\(?:text|mathrm|mathit|mathsf|mbox|rm)\s*\{\s*[A-Z]))/g, '\\square ');
   out = out.replace(/[□▢◻]/g, '\\mtemptybox{}');
-  // \square ABCD 처럼 도형 이름 앞에 붙은 사각형 기호는 빈칸이 아니라 일반 도형 기호다.
-  out = out.replace(/\\square(?!\s*[A-Za-z가-힣])(?![a-zA-Z])/g, '\\mtemptybox{}');
+  // \square ABCD / \square \text{ABCD} 처럼 도형 이름 앞에 붙은 사각형 기호는
+  // 빈칸이 아니라 "사각형 ABCD" 를 뜻하는 도형 기호이므로 정사각형으로 렌더한다.
+  // 이 단계에서는 \text{ABCD} 가 이미 protectLatexTextBlocks 의 센티널로 치환돼 있으므로
+  // 센티널도 도형 이름으로 인정해야 한다.
+  out = out.replace(
+    /\\square(?![a-zA-Z])\s*(?=[A-Za-z가-힣]|\u0000LATEXTEXT|\\(?:text|mathrm|mathit|mathsf|mbox|rm)\s*\{)/g,
+    '\\mtshapesquare{}',
+  );
+  out = out.replace(/\\square(?![a-zA-Z])/g, '\\mtemptybox{}');
   // ◆ x^2 같은 마름모 라벨 뒤 일반 공백은 math mode 에서 사라진다.
   // 라벨 기호 뒤의 추출 공백은 수식 공백 명령으로 고정해 보이게 유지한다.
   out = out.replace(/([◆◇⬦⬥⋄])\s+/g, '\\text{$1}\\;');
@@ -887,7 +911,7 @@ function normalizeBlankBoxNotation(input) {
     //   protectLatexBoxBlocks 보호 이전)에서 먼저 분리해 두어야 box{} 가 정상적으로
     //   보호·\boxed 변환된다. (normalizeMathSegment 에서 분리하면 이미 분할되어 늦음.)
     .replace(/\\(times|div|cdot|pm|mp|ast|star|circ|bullet)box\s*\{/g, '\\$1 box{')
-    .replace(/[□▢◻](?=\s*[A-Z]{2,})/g, '\\square ')
+    .replace(/[□▢◻](?=\s*(?:[A-Z]{2,}|\\(?:text|mathrm|mathit|mathsf|mbox|rm)\s*\{\s*[A-Z]))/g, '\\square ')
     .replace(/\[(?:BOX|box|blank|빈칸|네모)\]/g, 'box{~~}')
     .replace(/\bBOX\b/g, 'box{~~}')
     .replace(/\bbox\s*\{\s*(?:~~)?\s*\}/gi, 'box{~~}')
@@ -1131,7 +1155,7 @@ function normalizeLiteralEscapedNewlines(input) {
     /^eq(?![A-Za-z])/,         // \neq
     /^eg(?![A-Za-z])/,         // \neg
     /^i(?![A-Za-z])/,          // \ni
-    /^ot(?![A-Za-z])/,         // \not
+    /^ot(?:in)?(?![A-Za-z])/,  // \not, \notin
     /^u(?![A-Za-z])/,          // \nu
     /^ew(?:command|length|page|line|theorem)\b/,
     /^oindent\b/,
@@ -2572,7 +2596,7 @@ function parseTableLines(lines) {
 // raw tabular block (\begin{tabular}{...} ... \end{tabular}) 을
 // struct 와 같은 rows 구조(List<List<string[]>>) 로 해체한다.
 // - 셀 자동 감싸기(autoWrapTabularCells) 는 호출 전에 이미 수행됐다고 가정.
-// - `\\\\` 로 행 구분, `&` 로 셀 구분(중괄호 깊이 추적), `\hline` 은 무시.
+// - `\\\\` 로 행 구분, `&` 로 셀 구분(중괄호 깊이 추적), 행 규칙은 무시.
 // - 반환: rows[][cells][lines] 형태로 parseTableLines 결과와 호환.
 function parseRawTabularToRows(rawTexBlock) {
   const match = String(rawTexBlock).match(/\\begin\{tabular\}\{[^}]*\}([\s\S]*?)\\end\{tabular\}/);
@@ -2585,15 +2609,18 @@ function parseRawTabularToRows(rawTexBlock) {
     // 라인 끝에 공백/개행만 있는 빈 row 는 스킵.
     const trimmed = rowSrc.trim();
     if (!trimmed) continue;
-    // \hline 만 있는 row 도 스킵 (구분자만을 가진 행).
-    if (/^\s*(?:\\hline\s*)+$/.test(trimmed)) continue;
+    // \hline / \cline 만 있는 row 도 스킵 (구분자만을 가진 행).
+    if (/^\s*(?:(?:\\hline|\\cline\s*\{\s*\d+\s*-\s*\d+\s*\})\s*)+$/.test(trimmed)) continue;
     // 셀 분리.
     const cells = splitTabularRowCells(rowSrc);
-    // 각 셀 앞의 \hline 제거(뒤따르는 실제 내용만 취함).
+    // 각 셀 앞의 행 규칙 제거(뒤따르는 실제 내용만 취함).
+    // renderTableLatex가 모든 행 경계를 자체 \hline으로 다시 구성한다.
     const cleanedCells = cells.map((raw) => {
       let s = raw;
-      // 선행 \hline 들을 모두 제거.
-      s = s.replace(/^\s*(?:\\hline\s*)+/, '');
+      s = s.replace(
+        /^\s*(?:(?:\\hline|\\cline\s*\{\s*\d+\s*-\s*\d+\s*\})\s*)+/,
+        '',
+      );
       return [s.trim()];
     });
     rows.push(cleanedCells);
@@ -2622,6 +2649,22 @@ function tableWidthFraction(rows, tableScale = null, { forceWidthFrac = null } =
   }
   const baseWidthFrac = maxCols <= 3 ? 0.5 : maxCols <= 5 ? 0.7 : 0.9;
   return Math.max(0.05, Math.min(1.0, baseWidthFrac * widthScale));
+}
+
+function parseMulticolumnCell(cellLines) {
+  if (!Array.isArray(cellLines) || cellLines.length !== 1) return null;
+  const raw = String(cellLines[0] || '').trim();
+  const match = raw.match(
+    /^\\multicolumn\s*\{\s*(\d+)\s*\}\s*\{([^{}]*)\}\s*\{([\s\S]*)\}$/,
+  );
+  if (!match) return null;
+  const span = Number.parseInt(match[1], 10);
+  if (!Number.isFinite(span) || span <= 0) return null;
+  return {
+    span,
+    spec: match[2],
+    body: match[3],
+  };
 }
 
 function renderTableLatex(
@@ -2696,8 +2739,23 @@ function renderTableLatex(
       return `${singleRawCell} \\\\`;
     }
     const cells = [];
-    for (let i = 0; i < maxCols; i++) {
-      const cellLines = row[i] || [''];
+    let sourceCellIndex = 0;
+    let columnIndex = 0;
+    while (columnIndex < maxCols) {
+      const hasSourceCell = sourceCellIndex < row.length;
+      const cellLines = hasSourceCell ? (row[sourceCellIndex] || ['']) : [''];
+      const multicolumn = parseMulticolumnCell(cellLines);
+      if (multicolumn) {
+        // \multicolumn expands to \omit and therefore must remain directly
+        // inside tabular. Measuring or wrapping it causes "Misplaced \omit".
+        const span = Math.min(multicolumn.span, maxCols - columnIndex);
+        cells.push(
+          `\\multicolumn{${span}}{${multicolumn.spec}}{${multicolumn.body}}`,
+        );
+        sourceCellIndex += 1;
+        columnIndex += span;
+        continue;
+      }
       // raw tabular 해체 경로에서는 셀이 이미 $...$ / \text{...} 로 감싸져 있을 수 있다.
       // struct 경로에서는 평문 셀이므로 smartTexLine 을 적용. 두 경로 모두 안전하도록
       // "이미 수식 구분자로 감싸진 셀은 smartTexLine 을 건너뛴다" 로직이 필요하지만
@@ -2719,11 +2777,13 @@ function renderTableLatex(
       //   - \centering : paragraph-level 가로 중앙 (content 가 길어 줄바꿈 돼도 중앙)
       //   - vphantom 사용 X : baseline 에 붙은 phantom 이 시각적 하향 쏠림 유발.
       if (renderedCellLines.length > 0) {
-        cellMeasureByCol[i].push(...renderedCellLines);
+        cellMeasureByCol[columnIndex].push(...renderedCellLines);
       }
       cells.push(
-        `\\parbox[c][${cellHeightEm}em][c]{${colWidthVar(i)}}{\\vspace*{\\fill}\\centering ${content}\\par\\vspace*{\\fill}}`,
+        `\\parbox[c][${cellHeightEm}em][c]{${colWidthVar(columnIndex)}}{\\vspace*{\\fill}\\centering ${content}\\par\\vspace*{\\fill}}`,
       );
+      if (hasSourceCell) sourceCellIndex += 1;
+      columnIndex += 1;
     }
     return cells.join(' & ') + ' \\\\';
   });
@@ -3608,6 +3668,9 @@ function buildPreamble({
   // (한글 글리프 실제 높이가 약 1.0~1.05em 수준이라 0.9em 이면 작아 보임)
   // \ensuremath + \vcenter 로 수식축(math axis) 에 중앙이 오도록 → 인접 글자와 시각적 정렬.
   lines.push('\\newcommand{\\mtemptybox}{\\ensuremath{\\mathord{\\mkern2mu\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[1.575em][c]{\\rule{0pt}{1.05em}}}}\\mkern2mu}}}');
+  // \mtshapesquare : "사각형 ABCD" 의 도형 기호(□ABCD). 값을 채우는 빈칸(\mtemptybox)
+  // 과 반드시 구분되어야 하므로 3:2 가 아닌 정사각형이며, 대문자 높이에 맞춘 크기다.
+  lines.push('\\newcommand{\\mtshapesquare}{\\ensuremath{\\mathord{\\mkern1mu\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[0.88em][c]{\\rule{0pt}{0.88em}}}}\\mkern1mu}}}');
   // 지수 전용 빈칸: 정사각형이며 일반 빈칸보다 작다.
   lines.push('\\newcommand{\\mtexponentemptybox}{\\vcenter{\\hbox{\\scriptsize\\setlength{\\fboxsep}{0pt}\\framebox[0.72em][c]{\\rule{0pt}{0.72em}}}}}');
   lines.push('\\newcommand{\\mtsqrtpad}[1]{\\sqrt{\\vphantom{\\raisebox{0.10em}{$\\displaystyle #1$}}\\smash{\\lower0.16em\\hbox{$\\displaystyle #1$}}}\\mkern2mu}');
@@ -5923,6 +5986,7 @@ export function buildTexSource(question, options = {}) {
     '\\newcount\\YggChoiceLayout',
     ...measuredWrapMacroLines(),
     '\\newcommand{\\mtemptybox}{\\ensuremath{\\mathord{\\mkern2mu\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[1.575em][c]{\\rule{0pt}{1.05em}}}}\\mkern2mu}}}',
+    '\\newcommand{\\mtshapesquare}{\\ensuremath{\\mathord{\\mkern1mu\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[0.88em][c]{\\rule{0pt}{0.88em}}}}\\mkern1mu}}}',
     '\\newcommand{\\mtexponentemptybox}{\\vcenter{\\hbox{\\scriptsize\\setlength{\\fboxsep}{0pt}\\framebox[0.72em][c]{\\rule{0pt}{0.72em}}}}}',
     '\\newcommand{\\mtsqrtpad}[1]{\\sqrt{\\vphantom{\\raisebox{0.10em}{$\\displaystyle #1$}}\\smash{\\lower0.16em\\hbox{$\\displaystyle #1$}}}\\mkern2mu}',
     ...visualCenterMacroLines(),
@@ -6084,6 +6148,7 @@ export function buildAnswerTexSource(answer, options = {}) {
     '\\newsavebox{\\YggChoiceMeasureBox}',
     '\\newcount\\YggChoiceLayout',
     '\\newcommand{\\mtemptybox}{\\ensuremath{\\mathord{\\mkern2mu\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[1.575em][c]{\\rule{0pt}{1.05em}}}}\\mkern2mu}}}',
+    '\\newcommand{\\mtshapesquare}{\\ensuremath{\\mathord{\\mkern1mu\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[0.88em][c]{\\rule{0pt}{0.88em}}}}\\mkern1mu}}}',
     '\\newcommand{\\mtexponentemptybox}{\\vcenter{\\hbox{\\scriptsize\\setlength{\\fboxsep}{0pt}\\framebox[0.72em][c]{\\rule{0pt}{0.72em}}}}}',
     '\\newcommand{\\mtsqrtpad}[1]{\\sqrt{\\vphantom{\\raisebox{0.10em}{$\\displaystyle #1$}}\\smash{\\lower0.16em\\hbox{$\\displaystyle #1$}}}\\mkern2mu}',
     ...visualCenterMacroLines(),

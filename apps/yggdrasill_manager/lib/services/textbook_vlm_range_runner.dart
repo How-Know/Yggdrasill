@@ -136,6 +136,12 @@ Future<PageAnalysisOutcome> analyzeSinglePageWithRetry({
         'type_example',
         'check',
         'exercise',
+        'core_type',
+        'advanced_type',
+        'top_type',
+        'creative_type',
+        'mid_unit_test',
+        'big_unit_test',
       }.contains(result.section);
       if (result.pageKind != 'concept_page' && isProblemSection && !hasItems) {
         throw StateError(

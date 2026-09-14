@@ -175,6 +175,64 @@ class TextbookAuthoringStageScope {
   final int? solutionEndPage;
 }
 
+/// 스코프(대단원·중단원·sub_key·소단원 행) 를 가리키는 키. 크롭 행에 실어
+/// 두면 소단원마다 다른 정답·해설 쪽 범위를 문항 단위로 되짚을 수 있다.
+String textbookStageScopeKey(TextbookAuthoringStageScope scope) =>
+    '${scope.bigOrder}:${scope.midOrder}:${scope.subKey}:'
+    '${scope.unitRowIndex ?? 0}';
+
+/// 해설 PDF에서 실제로 이어지는 지면 묶음.
+///
+/// 고쟁이 본교재(A~D), 중단원 TEST(E), 대단원 TEST(F)는 단원 트리에서는
+/// 이웃하지만 PDF 안에서는 서로 떨어져 있다. 서로의 시작 쪽을 끝 경계로
+/// 사용하면 그 사이 다른 단원 풀이까지 전부 훑게 된다.
+String textbookStagePageFamily(String seriesKey, String subKey) {
+  if (seriesKey.trim().toLowerCase() != 'gojaengi') return '';
+  final key = subKey.trim().toUpperCase();
+  if (<String>{'A', 'B', 'C', 'D'}.contains(key)) return 'body';
+  if (key == 'E') return 'mid_test';
+  if (key == 'F') return 'big_test';
+  return '';
+}
+
+/// 소단원 하나의 해설 쪽 경계. `end` 가 null 이면 뒤로 열린 범위다.
+typedef TextbookStageScopeBound = ({int start, int? end});
+
+/// 해설 지면 하나에서 물어볼 문항 순번만 남긴다.
+///
+/// 훑기 범위는 스코프 전체의 합집합이라 첫 소단원의 시작 쪽부터 열린다. 고쟁이
+/// 중단원 TEST 처럼 해설이 교재 맨 뒤 워크북 지면에 몰린 소단원은 그 사이 본교재
+/// 지면을 다 지나쳐야 하는데, 워크북 두 자리 번호가 본교재 세 자리 번호와 번호키를
+/// 공유하므로(005 ↔ 05) 앞 지면 풀이가 중단원 TEST 문항에 붙어 버린다. 운영자가
+/// 적어 넣은 소단원별 시작 쪽을 그 소단원 문항에만 적용해 앞 지면은 묻지 않는다.
+///
+/// 스코프를 못 짚는 문항(경계를 안 넘겨준 옛 경로) 은 예전처럼 전 구간에서 찾는다.
+List<int> textbookStageOrderForPage({
+  required List<int> order,
+  required String Function(int position) scopeKeyOf,
+  required Map<String, TextbookStageScopeBound> bounds,
+  required int page,
+  int leadingPageAllowance = 1,
+}) {
+  if (bounds.isEmpty) return order;
+  final out = <int>[];
+  for (final position in order) {
+    final key = scopeKeyOf(position);
+    final bound = key.isEmpty ? null : bounds[key];
+    if (bound == null) {
+      out.add(position);
+      continue;
+    }
+    // 일부 시리즈는 첫 문항 풀이가 머리말 직전 쪽 끝에 걸친다. 다만 고쟁이는
+    // 운영자가 입력한 워크북 시작 쪽보다 앞을 읽으면 다른 중단원 풀이가
+    // 섞이므로 호출부에서 여유를 0으로 둔다.
+    if (page < bound.start - leadingPageAllowance) continue;
+    if (bound.end != null && page > bound.end! + 1) continue;
+    out.add(position);
+  }
+  return out;
+}
+
 /// Minimal crop row passed from Stage 1 immediately after a successful
 /// regions-only upload. The Stage 2/3 dialog still tries to reload richer rows
 /// from Supabase, but this seed prevents a race/RLS/cache issue from showing an
@@ -192,6 +250,7 @@ class TextbookAuthoringStageCropSeed {
     this.contentGroupTitle = '',
     this.contentGroupOrder,
     this.scopeLabel = '',
+    this.scopeKey = '',
   });
 
   final String id;
@@ -205,6 +264,10 @@ class TextbookAuthoringStageCropSeed {
   final String contentGroupTitle;
   final int? contentGroupOrder;
   final String scopeLabel;
+
+  /// `textbookStageScopeKey` 값. 해설 훑기에서 이 문항의 소단원 쪽 범위를
+  /// 되짚는 데 쓴다.
+  final String scopeKey;
 }
 
 class _TextbookAuthoringStageDialogState
@@ -237,6 +300,10 @@ class _TextbookAuthoringStageDialogState
   /// 반쪽만 보내므로 1500px 이면 초록색 잔글씨가 750px 폭에 뭉개진다. 2400px
   /// 이라야 반쪽도 850px 폭으로 남아 읽힌다.
   static const int _kLayoutReadLongEdgePx = 2400;
+
+  /// 한 건씩 다시 묻는 재확인 패스를 켜는 상한. 남은 문항이 이보다 많으면
+  /// 배치 판독 자체가 어긋난 것이므로, 호출만 늘리지 않고 누락으로 보고한다.
+  static const int _kSolRefSingleRetryMax = 8;
 
   final _pdfService = TextbookPdfService();
   bool _startingPbRuns = false;
@@ -459,6 +526,7 @@ class _TextbookAuthoringStageDialogState
         out.add(<String, dynamic>{
           ...row,
           'scope_label': _scopeLabel(scope),
+          'scope_key': _scopeKey(scope),
         });
       }
     }
@@ -760,15 +828,7 @@ class _TextbookAuthoringStageDialogState
     final targets = <_AnswerTarget>[
       for (final c in answerCrops)
         if (c.problemNumber.isNotEmpty)
-          _AnswerTarget(
-            crop: c,
-            expected: textbookExpectedAnswerFor(
-              seriesKey: widget.seriesKey,
-              problemNumber: c.problemNumber,
-              section: c.section,
-              displayPage: c.displayPage,
-            ),
-          ),
+          _AnswerTarget(crop: c, expected: _expectedAnswerFor(c)),
     ];
     if (targets.isEmpty) {
       setState(() {
@@ -1003,13 +1063,64 @@ class _TextbookAuthoringStageDialogState
     }
   }
 
+  /// 손에 든 crop_id 를 지금 DB 에 살아 있는 id 로 옮기는 표.
+  ///
+  /// 크롭을 다시 뜨면 행이 지워지고 새 id 로 다시 들어간다. 그 전에 열어 둔
+  /// 다이얼로그는 죽은 id 를 그대로 들고 있어, 정답을 저장하면 묶음 하나가
+  /// 통째로 foreign key 위반으로 튕긴다(3-1 중단원3: 129쪽 뒤 120건이
+  /// 이렇게 날아가고 본문 추출이 "런없음" 으로 멈췄다). 죽은 id 는 같은
+  /// (본문 쪽 · 구역 · 번호) 의 현재 크롭으로 갈아 끼운다.
+  ///
+  /// 대조에 실패하면 빈 표를 돌려준다. 그때는 예전처럼 가진 id 로 그냥 보낸다
+  /// — 대조가 안 된다고 저장까지 막을 이유는 없다.
+  Future<Map<String, String>> _liveCropIdRemap() async {
+    final List<Map<String, dynamic>> rows;
+    try {
+      rows = await _loadCropRowsForScopes();
+    } catch (e) {
+      debugPrint('[정답저장] 크롭 대조 건너뜀 · $e');
+      return const <String, String>{};
+    }
+    if (rows.isEmpty) return const <String, String>{};
+    final remap = <String, String>{};
+    final byIdentity = <String, String>{};
+    for (final r in rows) {
+      final id = '${r['id'] ?? ''}'.trim();
+      if (id.isEmpty) continue;
+      remap[id] = id;
+      final key = '${r['raw_page'] ?? ''}|${r['section'] ?? ''}|'
+          '${'${r['problem_number'] ?? ''}'.trim()}';
+      byIdentity.putIfAbsent(key, () => id);
+    }
+    for (final c in _crops) {
+      if (remap.containsKey(c.id)) continue;
+      final live =
+          byIdentity['${c.rawPage ?? ''}|${c.section}|${c.problemNumber}'];
+      if (live != null) remap[c.id] = live;
+    }
+    return remap;
+  }
+
   Future<bool> _saveAnswers() async {
     if (_savingAnswers) return false;
+    final remap = await _liveCropIdRemap();
+    var moved = 0;
+    var dropped = 0;
     final uploads = <TextbookAnswerUpload>[];
     for (final entry in _answersByCropId.values) {
       if (entry.answerText.trim().isEmpty) continue;
+      var cropId = entry.cropId;
+      if (remap.isNotEmpty) {
+        final live = remap[cropId];
+        if (live == null) {
+          dropped += 1;
+          continue;
+        }
+        if (live != cropId) moved += 1;
+        cropId = live;
+      }
       uploads.add(TextbookAnswerUpload(
-        cropId: entry.cropId,
+        cropId: cropId,
         answerKind: entry.kind,
         answerText: entry.answerText,
         answerLatex2d: entry.answerLatex2d,
@@ -1021,6 +1132,9 @@ class _TextbookAuthoringStageDialogState
         answerImageWidthPx: entry.answerImageWidthPx,
         answerImageHeightPx: entry.answerImageHeightPx,
       ));
+    }
+    if (moved > 0 || dropped > 0) {
+      debugPrint('[정답저장] 크롭 대조 · 갈아끼움=$moved 버림=$dropped');
     }
     if (uploads.isEmpty) {
       _toast('저장할 정답이 없습니다', error: true);
@@ -1035,8 +1149,13 @@ class _TextbookAuthoringStageDialogState
       for (final d in _answersByCropId.values) {
         d.dirty = false;
       }
+      // 죽은 id 를 갈아 끼워 저장했으면 손에 든 목록도 새로 읽어 온다.
+      // 그대로 두면 해설 좌표·재저장이 다시 죽은 id 로 나간다.
+      if (moved > 0) await _loadCrops();
       if (!mounted) return true;
-      _toast('$count개 정답 저장 완료');
+      _toast(dropped > 0
+          ? '$count개 정답 저장 완료 · 사라진 크롭 $dropped개는 건너뜀'
+          : '$count개 정답 저장 완료');
       widget.onStageChanged?.call();
       setState(() {});
       return true;
@@ -1640,6 +1759,10 @@ class _TextbookAuthoringStageDialogState
           cornerOf: cornerOf,
         );
 
+    // 지면마다 "들어설 때 읽던 블록"을 적어 둔다. 판독이 한 번 흔들려 문항이
+    // 튕겼을 때 그 지면만 같은 자리에서 다시 읽기 위한 것이다.
+    final enterBlock = <int, int>{};
+    final shakyPages = <int>[];
     var current = -1;
     for (var page = startPage; page <= endPage; page += 1) {
       if (!mounted) return;
@@ -1647,80 +1770,143 @@ class _TextbookAuthoringStageDialogState
         _solRefStatus =
             '해설 $page / $endPage 지면 읽는 중… · 저장 $savedCount개 · 남은 ${pending.length}개';
       });
-      final Uint8List png;
-      try {
-        final rendered = await _solutionLayoutPagePng(page);
-        if (rendered == null) {
-          pageErrors.add('p$page: 해설 페이지 렌더 결과 없음');
-          continue;
-        }
-        png = rendered;
-      } catch (e) {
-        pageErrors.add('p$page: 렌더 실패 $e');
-        continue;
-      }
-      TextbookVlmSolutionBlockPage res;
-      try {
-        res = await _solRefService.detectBlocksOnPage(
-          imageBytes: png,
-          rawPage: page,
-        );
-      } catch (e) {
-        debugPrint('[stage3] layout read failed page=$page err=$e');
-        pageErrors.add('p$page: 지면 읽기 실패 $e');
+      enterBlock[page] = current;
+      final read = await _readSolutionLayoutPage(
+        page: page,
+        enterBlock: current,
+        targets: targets,
+        byNumber: byNumber,
+        blockForHeader: blockForHeader,
+        numberKey: numberKey,
+        pending: pending,
+        hits: hits,
+        pageErrors: pageErrors,
+      );
+      if (read == null) {
         // 이 지면을 못 읽었으면 이어지던 소단원도 끊어진 것으로 본다.
         current = -1;
         continue;
       }
-      // 첫머리에 머리가 없으면 앞 지면에서 이어진다. 머리로 시작하면 거기서부터.
-      if (!res.leadingContinuation) current = -1;
-      var matchedHere = 0;
-      var skipped = 0;
-      for (final entry in res.sequence) {
-        if (entry.isHeader) {
-          current = blockForHeader(entry);
-          continue;
-        }
-        final region = entry.numberRegion1k;
-        if (current < 0 || region == null) {
-          skipped += 1;
-          continue;
-        }
-        // 정답과 마찬가지로 "05~09 답 해설 참조" 처럼 여러 문항의 풀이가 한
-        // 덩어리로 묶인 지면이 있다. 범위에 드는 문항 모두 그 자리를 가리킨다.
-        final positions = _layoutPositionsForNumber(
-          byNumber: byNumber[current],
-          printedNumber: entry.text,
-          pending: pending,
-          keyOf: numberKey,
-        );
-        if (positions.isEmpty) {
-          skipped += 1;
-          continue;
-        }
-        for (final position in positions) {
-          pending.remove(position);
-          hits[position] = _SolutionRefWithPage(
-            item: TextbookVlmSolutionRefItem(
-              problemNumber: targets[position].expected.number,
-              numberRegion1k: region,
-              contentRegion1k: entry.contentRegion1k,
-            ),
-            rawPage: page,
-            displayPage: page,
-          );
-          matchedHere += 1;
-        }
-      }
-      debugPrint(
-        '[stage3] p$page 번호=${res.sequence.where((e) => !e.isHeader).length} '
-        '매칭=$matchedHere 건너뜀=$skipped 현재블록=$current 남은=${pending.length}',
-      );
+      current = read.current;
+      if (read.skipped > 0) shakyPages.add(page);
       if (!mounted) return;
       setState(() {
         _solRefProgress = (page - startPage + 1) / (endPage - startPage + 1);
       });
     }
+
+    // 모델은 같은 지면도 회차마다 다르게 읽는다. 이 훑기는 지면마다 한 번뿐이라
+    // 한 지면이 흔들리면 그 문항들은 그대로 빈칸으로 끝난다(3-1 해설 p82:
+    // 오른쪽 단이 통째로 어긋나 9건 누락). 튕긴 지면만, 그때 읽던 블록에서
+    // 다시 읽어 빈칸을 채운다. 이미 붙은 문항은 pending 에 없으니 그대로다.
+    for (final page in shakyPages) {
+      if (pending.isEmpty) return;
+      if (!mounted) return;
+      setState(() {
+        _solRefStatus =
+            '해설 p$page 다시 읽는 중… · 저장 $savedCount개 · 남은 ${pending.length}개';
+      });
+      final before = pending.length;
+      await _readSolutionLayoutPage(
+        page: page,
+        enterBlock: enterBlock[page] ?? -1,
+        targets: targets,
+        byNumber: byNumber,
+        blockForHeader: blockForHeader,
+        numberKey: numberKey,
+        pending: pending,
+        hits: hits,
+        pageErrors: pageErrors,
+      );
+      debugPrint(
+        '[stage3] 재시도 p$page 채움=${before - pending.length} 남은=${pending.length}',
+      );
+    }
+  }
+
+  /// 해설 지면 한 장을 읽어 아직 비어 있는 문항에 좌표를 붙인다.
+  ///
+  /// 돌려주는 `current` 는 이 지면을 지난 뒤 "지금 읽는 블록"이다. 지면을 아예
+  /// 못 읽었으면 null 을 돌려주고, 부르는 쪽이 이어지던 블록을 끊는다.
+  Future<({int current, int matched, int skipped})?> _readSolutionLayoutPage({
+    required int page,
+    required int enterBlock,
+    required List<_AnswerTarget> targets,
+    required Map<int, Map<String, int>> byNumber,
+    required int Function(TextbookVlmSolutionPageEntry entry) blockForHeader,
+    required String Function(String raw) numberKey,
+    required Set<int> pending,
+    required Map<int, _SolutionRefWithPage> hits,
+    required List<String> pageErrors,
+  }) async {
+    final Uint8List png;
+    try {
+      final rendered = await _solutionLayoutPagePng(page);
+      if (rendered == null) {
+        pageErrors.add('p$page: 해설 페이지 렌더 결과 없음');
+        return null;
+      }
+      png = rendered;
+    } catch (e) {
+      pageErrors.add('p$page: 렌더 실패 $e');
+      return null;
+    }
+    TextbookVlmSolutionBlockPage res;
+    try {
+      res = await _solRefService.detectBlocksOnPage(
+        imageBytes: png,
+        rawPage: page,
+      );
+    } catch (e) {
+      debugPrint('[stage3] layout read failed page=$page err=$e');
+      pageErrors.add('p$page: 지면 읽기 실패 $e');
+      return null;
+    }
+    // 첫머리에 머리가 없으면 앞 지면에서 이어진다. 머리로 시작하면 거기서부터.
+    var current = res.leadingContinuation ? enterBlock : -1;
+    var matched = 0;
+    var skipped = 0;
+    for (final entry in res.sequence) {
+      if (entry.isHeader) {
+        current = blockForHeader(entry);
+        continue;
+      }
+      final region = entry.numberRegion1k;
+      if (current < 0 || region == null) {
+        skipped += 1;
+        continue;
+      }
+      // 정답과 마찬가지로 "05~09 답 해설 참조" 처럼 여러 문항의 풀이가 한
+      // 덩어리로 묶인 지면이 있다. 범위에 드는 문항 모두 그 자리를 가리킨다.
+      final positions = _layoutPositionsForNumber(
+        byNumber: byNumber[current],
+        printedNumber: entry.text,
+        pending: pending,
+        keyOf: numberKey,
+      );
+      if (positions.isEmpty) {
+        skipped += 1;
+        continue;
+      }
+      for (final position in positions) {
+        pending.remove(position);
+        hits[position] = _SolutionRefWithPage(
+          item: TextbookVlmSolutionRefItem(
+            problemNumber: targets[position].expected.number,
+            numberRegion1k: region,
+            contentRegion1k: entry.contentRegion1k,
+          ),
+          rawPage: page,
+          displayPage: page,
+        );
+        matched += 1;
+      }
+    }
+    debugPrint(
+      '[stage3] p$page 번호=${res.sequence.where((e) => !e.isHeader).length} '
+      '매칭=$matched 건너뜀=$skipped 현재블록=$current 남은=${pending.length}',
+    );
+    return (current: current, matched: matched, skipped: skipped);
   }
 
   Future<TextbookVlmSolutionRefPageResult> _detectSolutionRefsOnPage({
@@ -1741,6 +1927,72 @@ class _TextbookAuthoringStageDialogState
       skipBadges: skipBadges,
       seriesKey: widget.seriesKey.trim().toLowerCase(),
     );
+  }
+
+  /// 끝까지 안 잡힌 문항을 지면마다 한 건씩 다시 묻는다.
+  ///
+  /// 한 건만 담긴 목록은 모델이 옆 묶음의 같은 번호를 집을 여지가 없고, 배치
+  /// 호출과 요청이 달라져 같은 지면에서도 새 판독이 나온다.
+  Future<void> _retrySolutionRefsSingly({
+    required List<_AnswerTarget> targets,
+    required Set<int> pending,
+    required Map<int, _SolutionRefWithPage> hits,
+    required int startPage,
+    required int endPage,
+    required Map<String, TextbookStageScopeBound> bounds,
+  }) async {
+    for (var page = startPage; page <= endPage; page += 1) {
+      if (pending.isEmpty) return;
+      if (!mounted) return;
+      final order = _solutionOrderForPage(
+        order: pending.toList()..sort(),
+        targets: targets,
+        bounds: bounds,
+        page: page,
+      );
+      if (order.isEmpty) continue;
+      final Uint8List png;
+      try {
+        final rendered = await _solutionPagePng(page);
+        if (rendered == null) continue;
+        png = rendered;
+      } catch (e) {
+        debugPrint('[stage3-one] render failed page=$page err=$e');
+        continue;
+      }
+      for (final position in order) {
+        if (!pending.contains(position)) continue;
+        final expected = targets[position].expected;
+        try {
+          final res = await _detectSolutionRefsOnPage(
+            imageBytes: png,
+            page: page,
+            expectedNumbers: <String>[expected.number],
+            expectedDetails: <TextbookExpectedAnswer>[expected],
+          );
+          // 목록이 한 건이므로 expected_index 없이 번호만 맞으면 그 문항이다.
+          for (final it in res.items) {
+            if (textbookAnswerNumberKey(it.problemNumber) !=
+                textbookAnswerNumberKey(expected.number)) {
+              continue;
+            }
+            if (!pending.remove(position)) break;
+            hits[position] = _SolutionRefWithPage(
+              item: it,
+              rawPage: res.rawPage,
+              displayPage: res.displayPage,
+            );
+            break;
+          }
+        } catch (e) {
+          debugPrint('[stage3-one] vlm failed page=$page err=$e');
+        }
+      }
+      if (!mounted) return;
+      setState(() {
+        _solRefStatus = '해설 재확인 $page / $endPage 페이지… · 남은 ${pending.length}개';
+      });
+    }
   }
 
   Future<void> _runSolutionRefVlm() async {
@@ -1771,25 +2023,25 @@ class _TextbookAuthoringStageDialogState
       _solRefStatus = '해설 PDF 분석 중…';
     });
 
+    final windowedBatch = widget.seriesKey == 'suryeok';
     final solRefCrops = _crops.where((c) => !c.isSetHeader).toList();
     final savedCount =
         solRefCrops.where((c) => _solRefsByCropId.containsKey(c.id)).length;
-    final targetCrops =
-        solRefCrops.where((c) => !_solRefsByCropId.containsKey(c.id)).toList();
+    // 지면 구조로 좌표를 붙이는 길(수력충전)은 소단원 경계 **전체**가 있어야
+    // 머리를 제 소단원에 붙일 수 있다. 빈 문항만 목록에 담으면 남은 열 개로
+    // 경계를 다시 세우게 되어, 머리가 어느 소단원에도 걸리지 않고 재실행이
+    // 통째로 헛돈다. 목록은 다 담고, 채울 대상만 아래에서 좁힌다.
+    final targetCrops = windowedBatch
+        ? solRefCrops
+        : solRefCrops
+            .where((c) => !_solRefsByCropId.containsKey(c.id))
+            .toList();
     // 정답 단계와 같은 이유로 순서 배열을 쓴다. 해설 지면도 코너 블록으로
     // 나뉘고 번호가 겹친다.
     final targets = <_AnswerTarget>[
       for (final c in targetCrops)
         if (c.problemNumber.isNotEmpty)
-          _AnswerTarget(
-            crop: c,
-            expected: textbookExpectedAnswerFor(
-              seriesKey: widget.seriesKey,
-              problemNumber: c.problemNumber,
-              section: c.section,
-              displayPage: c.displayPage,
-            ),
-          ),
+          _AnswerTarget(crop: c, expected: _expectedAnswerFor(c)),
     ];
     if (targets.isEmpty) {
       setState(() {
@@ -1804,7 +2056,6 @@ class _TextbookAuthoringStageDialogState
       targets,
       carryUnitReviewContinuation: widget.seriesKey == 'suryeok',
     );
-    final windowedBatch = widget.seriesKey == 'suryeok';
     final needsCorner = textbookAnswerNeedsCorner(widget.seriesKey);
     final totalPages = doc.pages.length;
     final pageRange =
@@ -1812,12 +2063,25 @@ class _TextbookAuthoringStageDialogState
     final startPage = pageRange.start;
     final endPage = pageRange.end;
     final scanTotal = endPage - startPage + 1;
+    final pending = <int>{
+      for (var i = 0; i < targets.length; i += 1)
+        if (!_solRefsByCropId.containsKey(targets[i].crop.id)) i,
+    };
     debugPrint(
       '[stage3] start scopes=${_activeScopes.map((s) => s.subKey).join("/")} '
-      'target=${targets.length} saved=$savedCount '
-      'solutionPages=$startPage..$endPage/$totalPages',
+      'target=${targets.length} 채울곳=${pending.length} saved=$savedCount '
+      'solutionPages=$startPage..$endPage/$totalPages '
+      '소단원별=${_activeScopes.map((s) => '${s.subKey}:'
+          '${s.solutionStartPage ?? '-'}..'
+          '${s.solutionEndPage ?? '-'}').join(' ')}',
     );
-    final pending = <int>{for (var i = 0; i < targets.length; i += 1) i};
+    if (pending.isEmpty) {
+      setState(() {
+        _runningSolRefVlm = false;
+        _solRefStatus = '해설 VLM 생략 · 저장된 해설 좌표 $savedCount개';
+      });
+      return;
+    }
     final hits = <int, _SolutionRefWithPage>{};
     final pageErrors = <String>[];
 
@@ -1836,10 +2100,43 @@ class _TextbookAuthoringStageDialogState
           pageErrors: pageErrors,
         );
       }
+      if (widget.seriesKey == 'gojaengi') {
+        // 고쟁이 WORKBOOK은 같은 번호가 중단원마다 01부터 반복되고, 경계
+        // 지면에는 왼쪽/위쪽의 직전 단원 풀이와 오른쪽/아래쪽의 다음 단원
+        // 머리말이 함께 있다. 번호+배지 VLM은 새 머리말 배지를 지면 전체에
+        // 적용해 직전 단원의 20~22를 현재 단원에 붙였다.
+        //
+        // 블록 판독은 header_region과 번호 좌표를 읽기 순서대로 반환하므로,
+        // E/F 범위만 이 경로로 먼저 처리한다. 범위 첫 지면에서 머리말보다
+        // 앞선 번호는 current=-1이라 버리고, 머리말 뒤부터 현재 블록에 붙는다.
+        for (final scope in _activeScopes) {
+          final family =
+              textbookStagePageFamily(widget.seriesKey, scope.subKey);
+          if (family != 'mid_test' && family != 'big_test') continue;
+          final scopeStart = scope.solutionStartPage;
+          if (scopeStart == null || scopeStart <= 0) continue;
+          final scopeEnd = math.min(
+            scope.solutionEndPage ?? endPage,
+            endPage,
+          );
+          if (scopeEnd < scopeStart) continue;
+          await _assignSolutionRefsByLayout(
+            targets: targets,
+            blockIndexes: blockIndexes,
+            pending: pending,
+            hits: hits,
+            startPage: scopeStart,
+            endPage: scopeEnd,
+            savedCount: savedCount,
+            pageErrors: pageErrors,
+          );
+        }
+      }
       // 그 밖의 시리즈는 예전대로 남은 문항을 지면마다 함께 물어본다.
       final skipBlocks = <int>{};
       final passLimit = windowedBatch ? 0 : 1;
       const sweepLimit = 1;
+      final scopeBounds = _solutionScopeBounds;
       for (var pass = 0; pass < passLimit; pass += 1) {
         if (pending.isEmpty) break;
         final pendingAtPassStart = pending.length;
@@ -1848,6 +2145,16 @@ class _TextbookAuthoringStageDialogState
         for (var page = startPage; page <= endPage; page += 1) {
           if (pending.isEmpty) break;
           if (!mounted) return;
+          // 남은 문항이 전부 이 지면 밖 소단원이면 렌더도 하지 않고 넘긴다.
+          // 중단원 TEST 만 남았을 때 앞쪽 본교재 지면 수십 장을 헛돌던 자리다.
+          if (_solutionOrderForPage(
+            order: pending.toList(),
+            targets: targets,
+            bounds: scopeBounds,
+            page: page,
+          ).isEmpty) {
+            continue;
+          }
           setState(() {
             _solRefStatus =
                 '해설 $page / $endPage 페이지 분석… · 저장 $savedCount개 · 남은 ${pending.length}개';
@@ -1867,12 +2174,17 @@ class _TextbookAuthoringStageDialogState
           }
           for (var sweep = 0; sweep < sweepLimit; sweep += 1) {
             if (pending.isEmpty) break;
-            final order = _stageBlockWindow(
+            final order = _solutionOrderForPage(
+              order: _stageBlockWindow(
+                targets: targets,
+                blockIndexes: blockIndexes,
+                pending: pending,
+                windowed: windowedBatch,
+                skipBlocks: skipBlocks,
+              ),
               targets: targets,
-              blockIndexes: blockIndexes,
-              pending: pending,
-              windowed: windowedBatch,
-              skipBlocks: skipBlocks,
+              bounds: scopeBounds,
+              page: page,
             );
             if (order.isEmpty) continue;
             final windowBlock = windowedBatch ? blockIndexes[order.first] : -1;
@@ -2019,11 +2331,32 @@ class _TextbookAuthoringStageDialogState
         if (pending.length == pendingAtPassStart && stuck.isEmpty) break;
       }
 
+      // 마지막 몇 문항만 남았으면 지면마다 **한 건씩** 다시 묻는다.
+      //
+      // 지면 하나를 한 번만 묻는 구조라, 모델이 그 한 번에 놓친 문항은 다시
+      // 실행해도 같은 이미지·같은 목록이 올라가 같은 답이 돌아온다. 실제로
+      // 중단원 TEST 끝 문항 두세 개가 재실행 두 번을 똑같이 헛돌았다. 목록을
+      // 한 건으로 좁히면 요청이 달라져 모델이 그 지면을 새로 읽는다.
+      if (pending.isNotEmpty &&
+          pending.length <= _kSolRefSingleRetryMax &&
+          needsCorner) {
+        await _retrySolutionRefsSingly(
+          targets: targets,
+          pending: pending,
+          hits: hits,
+          startPage: startPage,
+          endPage: endPage,
+          bounds: scopeBounds,
+        );
+      }
+
       if (hits.isEmpty) {
-        final message = pageErrors.isEmpty
-            ? '해설 $startPage~$endPage 페이지에서 대상 문항 좌표를 찾지 못했습니다.'
-            : pageErrors.take(3).join(' / ');
-        throw Exception(message);
+        // 정상적으로 전 범위를 훑었지만 실제 해설이 없는 문항도 있다. 기술
+        // 오류가 없었다면 실패로 닫지 말고 미검출 칩을 보여 관리자가
+        // '해설 없음'을 명시적으로 확정할 수 있게 한다.
+        if (pageErrors.isNotEmpty) {
+          throw Exception(pageErrors.take(3).join(' / '));
+        }
       }
 
       final missing = <String>[
@@ -2250,10 +2583,23 @@ class _TextbookAuthoringStageDialogState
 
   Future<bool> _saveSolutionRefs() async {
     if (_savingSolRefs) return false;
+    final remap = await _liveCropIdRemap();
+    var moved = 0;
+    var dropped = 0;
     final uploads = <TextbookSolutionRefUpload>[];
     for (final d in _solRefsByCropId.values) {
+      var cropId = d.cropId;
+      if (remap.isNotEmpty) {
+        final live = remap[cropId];
+        if (live == null) {
+          dropped += 1;
+          continue;
+        }
+        if (live != cropId) moved += 1;
+        cropId = live;
+      }
       uploads.add(TextbookSolutionRefUpload(
-        cropId: d.cropId,
+        cropId: cropId,
         rawPage: d.rawPage,
         displayPage: d.displayPage,
         numberRegion1k: d.numberRegion1k,
@@ -2261,6 +2607,9 @@ class _TextbookAuthoringStageDialogState
         source: d.source,
         sourceKind: d.sourceKind,
       ));
+    }
+    if (moved > 0 || dropped > 0) {
+      debugPrint('[해설저장] 크롭 대조 · 갈아끼움=$moved 버림=$dropped');
     }
     if (uploads.isEmpty) {
       _toast('저장할 해설 좌표가 없습니다', error: true);
@@ -2275,8 +2624,11 @@ class _TextbookAuthoringStageDialogState
       for (final d in _solRefsByCropId.values) {
         d.dirty = false;
       }
+      if (moved > 0) await _loadCrops();
       if (!mounted) return true;
-      _toast('$count개 해설 좌표 저장 완료');
+      _toast(dropped > 0
+          ? '$count개 해설 좌표 저장 완료 · 사라진 크롭 $dropped개는 건너뜀'
+          : '$count개 해설 좌표 저장 완료');
       widget.onStageChanged?.call();
       setState(() {});
       return true;
@@ -2284,6 +2636,92 @@ class _TextbookAuthoringStageDialogState
       if (!mounted) return false;
       _toast('저장 실패: $e', error: true);
       return false;
+    } finally {
+      if (mounted) setState(() => _savingSolRefs = false);
+    }
+  }
+
+  _StageCrop? _missingSolutionCrop(String label) {
+    for (final crop in _crops) {
+      if (crop.isSetHeader || _solRefsByCropId.containsKey(crop.id)) continue;
+      final target = _AnswerTarget(
+        crop: crop,
+        expected: _expectedAnswerFor(crop),
+      );
+      if (target.missingLabel == label) return crop;
+    }
+    return null;
+  }
+
+  Future<void> _confirmNoSolution(String label) async {
+    if (_savingSolRefs || _runningSolRefVlm) return;
+    final crop = _missingSolutionCrop(label);
+    if (crop == null) {
+      _toast('$label 문항을 찾을 수 없습니다', error: true);
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: _kCard,
+        title: const Text(
+          '해설 없음으로 처리할까요?',
+          style: TextStyle(color: _kText),
+        ),
+        content: Text(
+          '${crop.problemNumber}번 문항은 출판사에서 별도 해설을 제공하지 않는 '
+          '문항으로 저장됩니다.\n\n문항과 정답은 유지되며, 이후 해설 재추출 '
+          '대상에서 제외됩니다.',
+          style: const TextStyle(color: _kTextSub),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            style: FilledButton.styleFrom(backgroundColor: _kWarn),
+            child: const Text('해설 없음으로 처리'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _savingSolRefs = true);
+    try {
+      await _solRefService.batchUpsertSolutionRefs(
+        academyId: widget.academyId,
+        refs: <TextbookSolutionRefUpload>[
+          TextbookSolutionRefUpload(
+            cropId: crop.id,
+            rawPage: 0,
+            numberRegion1k: const <int>[0, 0, 0, 0],
+            source: 'manual',
+            sourceKind: 'none',
+          ),
+        ],
+      );
+      if (!mounted) return;
+      setState(() {
+        _solRefsByCropId[crop.id] = _SolRefDraft(
+          cropId: crop.id,
+          problemNumber: crop.problemNumber,
+          rawPage: 0,
+          numberRegion1k: const <int>[0, 0, 0, 0],
+          source: 'manual',
+          sourceKind: 'none',
+        );
+        _solRefMissing.remove(label);
+        _solRefStatus =
+            '해설 없음 확정 · ${crop.problemNumber}번 · 남은 누락 ${_solRefMissing.length}개';
+      });
+      widget.onStageChanged?.call();
+      _toast('${crop.problemNumber}번을 해설 없음으로 저장했습니다');
+    } catch (e) {
+      if (!mounted) return;
+      _toast('해설 없음 저장 실패: $e', error: true);
     } finally {
       if (mounted) setState(() => _savingSolRefs = false);
     }
@@ -3121,9 +3559,52 @@ class _TextbookAuthoringStageDialogState
                   border: Border.all(color: _kWarn.withValues(alpha: 0.6)),
                   borderRadius: BorderRadius.circular(6),
                 ),
-                child: Text(
-                  '해설 PDF에서 찾지 못한 번호: ${_solRefMissing.join(', ')}',
-                  style: const TextStyle(color: _kWarn, fontSize: 11),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '해설 PDF에서 찾지 못한 번호',
+                      style: TextStyle(
+                        color: _kWarn,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      '출판사에서 해설을 제공하지 않는 문항이면 ×를 누르세요.',
+                      style: TextStyle(color: _kTextSub, fontSize: 10),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: [
+                        for (final label in _solRefMissing)
+                          InputChip(
+                            label: Text(label),
+                            labelStyle: const TextStyle(
+                              color: _kWarn,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                            ),
+                            backgroundColor: _kWarn.withValues(alpha: 0.08),
+                            side: BorderSide(
+                              color: _kWarn.withValues(alpha: 0.55),
+                            ),
+                            deleteIcon: const Icon(Icons.close, size: 15),
+                            deleteIconColor: _kWarn,
+                            tooltip: '해설 없음으로 처리',
+                            onDeleted: (_savingSolRefs || _runningSolRefVlm)
+                                ? null
+                                : () => unawaited(
+                                      _confirmNoSolution(label),
+                                    ),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                      ],
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -3146,7 +3627,9 @@ class _TextbookAuthoringStageDialogState
 
   Widget _buildSolutionRow(_StageCrop crop) {
     final d = _solRefsByCropId[crop.id];
-    final hasCoord = d != null;
+    final noSolution = d?.isNoSolution == true;
+    final hasCoord = d != null && !noSolution;
+    final resolved = d != null;
     final dirty = d?.dirty == true;
     return InkWell(
       onTap: hasCoord
@@ -3161,7 +3644,7 @@ class _TextbookAuthoringStageDialogState
           border: Border.all(
             color: dirty
                 ? _kAccent.withValues(alpha: 0.8)
-                : (hasCoord ? _kBorder : _kWarn.withValues(alpha: 0.5)),
+                : (resolved ? _kBorder : _kWarn.withValues(alpha: 0.5)),
           ),
           borderRadius: BorderRadius.circular(6),
         ),
@@ -3179,23 +3662,48 @@ class _TextbookAuthoringStageDialogState
               ),
             ),
             Expanded(
-              child: hasCoord
-                  ? Text(
-                      '해설 p.${d.displayPage ?? d.rawPage}  ·  raw ${d.rawPage}',
-                      style: const TextStyle(
-                        color: _kTextSub,
-                        fontSize: 11,
-                      ),
+              child: noSolution
+                  ? const Text(
+                      '별도 해설 없음 · 정답만 제공',
+                      style: TextStyle(color: _kTextSub, fontSize: 11),
                     )
-                  : const Text(
-                      '좌표 없음',
-                      style: TextStyle(color: _kWarn, fontSize: 11),
-                    ),
+                  : hasCoord
+                      ? Text(
+                          '해설 p.${d.displayPage ?? d.rawPage}  ·  raw ${d.rawPage}',
+                          style: const TextStyle(
+                            color: _kTextSub,
+                            fontSize: 11,
+                          ),
+                        )
+                      : const Text(
+                          '좌표 없음',
+                          style: TextStyle(color: _kWarn, fontSize: 11),
+                        ),
             ),
+            if (noSolution) const _SourceChip(text: '해설 없음', color: _kWarn),
             if (hasCoord && d.source == 'vlm')
               const _SourceChip(text: 'VLM', color: _kInfo),
             if (hasCoord && d.source == 'manual')
               const _SourceChip(text: '수정됨', color: _kAccent),
+            // 엉뚱한 자리를 가리키는 좌표를 지워 다음 실행의 대상으로 되돌린다.
+            // 이미 채워진 문항은 재실행에서 제외되므로, 지울 길이 없으면 잘못된
+            // 좌표가 그대로 굳는다. 저장 전이라 DB 는 다음 저장에서 덮인다.
+            if (resolved)
+              IconButton(
+                onPressed: () {
+                  setState(() {
+                    _solRefsByCropId.remove(crop.id);
+                    if (!_solRefMissing.contains(crop.problemNumber)) {
+                      _solRefMissing.add(crop.problemNumber);
+                    }
+                  });
+                },
+                icon: const Icon(Icons.refresh, size: 15, color: _kTextSub),
+                tooltip: '좌표 지우고 다시 찾기 대상으로',
+                visualDensity: VisualDensity.compact,
+                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                padding: EdgeInsets.zero,
+              ),
           ],
         ),
       ),
@@ -3275,7 +3783,61 @@ class _TextbookAuthoringStageDialogState
             ];
 
   String _scopeKey(TextbookAuthoringStageScope scope) =>
-      '${scope.bigOrder}:${scope.midOrder}:${scope.subKey}:${scope.unitRowIndex ?? 0}';
+      textbookStageScopeKey(scope);
+
+  /// 크롭 한 건을 기대 문항으로 바꾼다.
+  ///
+  /// 고쟁이 워크북 답지는 "중단원 TEST" 보라 배지 묶음이 한 지면에 일곱 개까지
+  /// 서고 쪽 배지가 서로 붙어 있어서, 배지만으로는 모델이 옆 묶음을 집는다
+  /// (178~181 을 찾다가 182~185 묶음의 24개를 올려 전부 버려졌다). 묶음 머리에
+  /// 크게 인쇄된 소단원·대단원 이름을 함께 실어 보내 그 사고를 막는다.
+  TextbookExpectedAnswer _expectedAnswerFor(_StageCrop crop) {
+    TextbookAuthoringStageScope? scope;
+    if (crop.scopeKey.isNotEmpty) {
+      for (final candidate in _activeScopes) {
+        if (_scopeKey(candidate) == crop.scopeKey) {
+          scope = candidate;
+          break;
+        }
+      }
+    }
+    return textbookExpectedAnswerFor(
+      seriesKey: widget.seriesKey,
+      problemNumber: crop.problemNumber,
+      section: crop.section,
+      subKey: scope?.subKey ?? widget.subKey,
+      displayPage: crop.displayPage,
+      midName: scope?.midName ?? widget.midName ?? '',
+      bigName: scope?.bigName ?? widget.bigName ?? '',
+    );
+  }
+
+  /// 소단원별 해설 쪽 경계. `textbookStageOrderForPage` 참고.
+  Map<String, TextbookStageScopeBound> get _solutionScopeBounds {
+    final out = <String, TextbookStageScopeBound>{};
+    for (final scope in _activeScopes) {
+      final start = scope.solutionStartPage;
+      if (start == null || start <= 0) continue;
+      final rawEnd = scope.solutionEndPage;
+      final end = rawEnd != null && rawEnd >= start ? rawEnd : null;
+      out[_scopeKey(scope)] = (start: start, end: end);
+    }
+    return out;
+  }
+
+  List<int> _solutionOrderForPage({
+    required List<int> order,
+    required List<_AnswerTarget> targets,
+    required Map<String, TextbookStageScopeBound> bounds,
+    required int page,
+  }) =>
+      textbookStageOrderForPage(
+        order: order,
+        scopeKeyOf: (position) => targets[position].crop.scopeKey,
+        bounds: bounds,
+        page: page,
+        leadingPageAllowance: widget.seriesKey == 'gojaengi' ? 0 : 1,
+      );
 
   ({int start, int end}) _pageRangeFromScopes({
     required bool answer,
@@ -3445,6 +4007,7 @@ class _TextbookAuthoringStageDialogState
         bigOrder: scope.bigOrder,
         midOrder: scope.midOrder,
         subKey: scope.subKey,
+        subIndex: scope.unitRowIndex ?? 0,
       );
     }
     return updated;
@@ -3897,6 +4460,7 @@ class _StageCrop {
     this.contentGroupTitle = '',
     this.contentGroupOrder,
     this.scopeLabel = '',
+    this.scopeKey = '',
   });
 
   final String id;
@@ -3910,6 +4474,7 @@ class _StageCrop {
   final String contentGroupTitle;
   final int? contentGroupOrder;
   final String scopeLabel;
+  final String scopeKey;
 
   String get contentGroupDisplay {
     final normalizedSection = section.trim().toLowerCase();
@@ -3946,6 +4511,7 @@ class _StageCrop {
       contentGroupTitle: '${r['content_group_title'] ?? ''}'.trim(),
       contentGroupOrder: asIntN(r['content_group_order']),
       scopeLabel: '${r['scope_label'] ?? ''}'.trim(),
+      scopeKey: '${r['scope_key'] ?? ''}'.trim(),
     );
   }
 
@@ -3962,6 +4528,7 @@ class _StageCrop {
       contentGroupTitle: seed.contentGroupTitle,
       contentGroupOrder: seed.contentGroupOrder,
       scopeLabel: seed.scopeLabel,
+      scopeKey: seed.scopeKey,
     );
   }
 }
@@ -4435,9 +5002,12 @@ class _SolRefDraft {
   List<int>? contentRegion1k;
   String source;
 
-  /// 'sol' = 해설 PDF 좌표(기본), 'body' = 본문 PDF 좌표(개념원리 필수유형).
+  /// 'sol' = 해설 PDF 좌표(기본), 'body' = 본문 PDF 좌표,
+  /// 'none' = 출판사에서 해설을 제공하지 않음.
   String sourceKind;
   bool dirty;
+
+  bool get isNoSolution => sourceKind == 'none';
 
   factory _SolRefDraft.fromRow(Map<String, dynamic> r) {
     int? asIntN(dynamic v) {
@@ -4477,7 +5047,11 @@ class _SolRefDraft {
       displayPage: asIntN(r['display_page']),
       numberRegion1k: parseBboxReq(r['number_region_1k']),
       contentRegion1k: parseBbox(r['content_region_1k']),
-      sourceKind: sourceKindRaw == 'body' ? 'body' : 'sol',
+      sourceKind: switch (sourceKindRaw) {
+        'body' => 'body',
+        'none' => 'none',
+        _ => 'sol',
+      },
     );
   }
 }

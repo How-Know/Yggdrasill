@@ -1,4 +1,4 @@
-﻿// 교재 페이지 이미지를 Gemini Vision 에 보내 "문항번호 bbox" 를 받아오는 클라이언트.
+// 교재 페이지 이미지를 Gemini Vision 에 보내 "문항번호 bbox" 를 받아오는 클라이언트.
 //
 // 기존 `extract_engines/vlm/client.js` 는 PDF inline_data 전용이고 프롬프트도
 // 문제은행 전용이라 재사용하지 않고 별도 모듈로 분리했다.
@@ -14,8 +14,10 @@ import {
   buildSuryeokRangeHeaderPrompt,
   buildWonriPageClassPrompt,
   GAEYU_ITEM_CATEGORIES,
+  GOJAENGI_SECTION_BY_SUB_KEY,
   SURYEOK_ITEM_CATEGORIES,
   VLM_DETECT_LABELS,
+  isGojaengiWorkbookHint,
   isSuryeokReviewHint,
   WONRI_ITEM_CATEGORIES,
 } from './vlm_detect_prompt.js';
@@ -27,6 +29,15 @@ import {
 const TRANSIENT_STATUSES = new Set([429, 499, 500, 502, 503, 504]);
 const DEFAULT_MAX_RETRIES = 3;
 const ALLOWED_LABELS = new Set(VLM_DETECT_LABELS);
+const GOJAENGI_SECTIONS = new Set(Object.values(GOJAENGI_SECTION_BY_SUB_KEY));
+const VERTICAL_LAYOUT_SECTIONS = new Set([
+  'type_practice',
+  'mastery',
+  'type_example',
+  'check',
+  'exercise',
+  ...GOJAENGI_SECTIONS,
+]);
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -230,20 +241,29 @@ export function detectSuryeokRangeHeadersOnPage(options) {
 /// 무슨 문제인지 알 수 없게 된다. 헛짚어도 짧은 보충 판독 한 번이 전부다.
 const SURYEOK_RANGE_HEADER_GAP = 120;
 
+function suryeokColumnOf(item) {
+  return item?.column === 1 || item?.column === 2
+    ? item.column
+    : inferColumn(item.bbox);
+}
+
+function suryeokItemsByColumn(items) {
+  const columns = new Map();
+  for (const item of items) {
+    if (!Array.isArray(item?.bbox)) continue;
+    const key = suryeokColumnOf(item);
+    if (!columns.has(key)) columns.set(key, []);
+    columns.get(key).push(item);
+  }
+  return columns;
+}
+
 export function suryeokRangeHeadersMayBeMissing(result) {
   const items = Array.isArray(result?.items) ? result.items : [];
   if (items.length === 0) return false;
   const headers = Array.isArray(result.type_headers) ? result.type_headers : [];
-  const columns = new Map();
-  for (const item of items) {
-    if (!Array.isArray(item?.bbox)) continue;
-    const key =
-      item.column === 1 || item.column === 2 ? item.column : inferColumn(item.bbox);
-    if (!columns.has(key)) columns.set(key, []);
-    columns.get(key).push(item);
-  }
-  for (const list of columns.entries()) {
-    const [column, entries] = list;
+  const columns = suryeokItemsByColumn(items);
+  for (const [column, entries] of columns.entries()) {
     if (entries.some((item) => item.is_set_header === true)) continue;
     const first = entries.reduce((acc, item) =>
       acc == null || item.bbox[0] < acc.bbox[0] ? item : acc,
@@ -260,6 +280,65 @@ export function suryeokRangeHeadersMayBeMissing(result) {
       .sort((a, b) => b - a)[0];
     const top = headerBottom != null ? headerBottom : 60;
     if (first.bbox[0] - top >= SURYEOK_RANGE_HEADER_GAP) return true;
+  }
+  // 범위 지문이 늘 자리를 많이 차지하는 건 아니다. 3-1 p71 "[12-27] 다음 식을
+  // 전개하여라." 처럼 유형 머리말 바로 밑 한 줄로 끝나면 빈자리가 거의 없어
+  // 위 규칙에 걸리지 않는다. 그래서 이 지면에서 새로 시작하는 유형마다,
+  // 머리말 아래 첫 요소가 세트 지문인지를 따로 본다. 아니면 되물어 본다.
+  const headerSuspect = headers.some((header) => {
+    if (!Array.isArray(header.bbox)) return false;
+    const column = inferColumn(header.bbox);
+    const below = (columns.get(column) ?? []).filter(
+      (item) => item.bbox[0] >= header.bbox[2],
+    );
+    if (below.length === 0) return false;
+    const first = below.reduce((acc, item) =>
+      acc == null || item.bbox[0] < acc.bbox[0] ? item : acc,
+    );
+    return first.is_set_header !== true;
+  });
+  if (headerSuspect) return true;
+  return suryeokUncoveredItemsSuspectHeader(columns);
+}
+
+/// 세트 지문이 딸린 지면인데 어느 단의 문항들이 어떤 범위에도 안 들어가면
+/// 그 단의 지문을 흘린 것으로 본다.
+///
+/// 앞의 두 규칙은 "빈자리" 와 "유형 머리말" 을 본다. 3-1 p179 처럼 유형
+/// 머리말이 없는 이어지는 지면에서 "[34-41]" 이 맨 위 한 줄로 끝나면 두
+/// 규칙 모두 헛돈다 — 지문을 흘려도 뒤따르는 34 번이 지면 위에서 58 밖에
+/// 안 내려와 빈자리 기준(120)에 못 미치고, 머리말이 없어 두 번째 규칙도
+/// 돌지 않는다. 그래서 34~41 이 공통 지문 없이 저장됐다.
+///
+/// 이 지면에 세트 지문이 하나라도 있으면 그 구간은 대괄호 범위로 짜인
+/// 자리다. 그런 지면에서 어떤 범위에도 안 속한 문항이 여럿 모여 있으면
+/// 그 단의 지문이 빠진 것이다. 지문이 원래 없는 지면은 세트 지문이 하나도
+/// 없으니 이 규칙이 돌지 않는다.
+function suryeokUncoveredItemsSuspectHeader(columns) {
+  const all = [...columns.values()].flat();
+  if (!all.some((item) => item.is_set_header === true)) return false;
+  for (const entries of columns.values()) {
+    const ranges = entries
+      .filter((item) => item.is_set_header === true)
+      // set_range 가 비어 오는 응답도 있으니 번호 문자열("34~41")에서 읽는다.
+      .map(
+        (item) =>
+          item.set_range ??
+          parseBasicDrillRange(formatSuryeokNumber(item?.number), true),
+      )
+      .filter((range) => range && range.from != null && range.to != null);
+    let uncovered = 0;
+    for (const item of entries) {
+      if (item.is_set_header === true) continue;
+      const number = Number.parseInt(String(item?.number ?? '').trim(), 10);
+      if (!Number.isFinite(number)) continue;
+      const covered = ranges.some(
+        (range) => number >= range.from && number <= range.to,
+      );
+      if (!covered) uncovered += 1;
+    }
+    // 한 건은 번호 오독일 수 있다. 여럿이 몰려 있으면 지문이 빠진 것이다.
+    if (uncovered >= 2) return true;
   }
   return false;
 }
@@ -524,6 +603,8 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     ...GAEYU_ITEM_CATEGORIES,
     // 수력충전 전용 섹션 (sub_key A/B 슬롯 대응).
     ...SURYEOK_ITEM_CATEGORIES,
+    // 고쟁이 전용 섹션 (sub_key A~F 슬롯 대응).
+    ...Object.values(GOJAENGI_SECTION_BY_SUB_KEY),
   ];
   const section = String(parsedJson.section || '').trim();
   out.section = [...knownSections, 'unknown'].includes(section)
@@ -559,12 +640,20 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     (series === 'ssen' || series === 'rpm') &&
     out.section === 'basic_drill' &&
     hasStrongBasicDrillNumberEvidence(rawItems);
+  const recoverGojaengiItems =
+    series === 'gojaengi' &&
+    hasStrongGojaengiNumberEvidence(rawItems, {
+      workbook:
+        isGojaengiWorkbookHint(sectionHint) ||
+        isGojaengiWorkbookHint(out.section),
+    });
   // 개념원리 일반 소단원의 개념→문항 경계 판정용. 모델이 정확한
   // "개념원리 익히기" 인쇄 문구를 확인했다고 명시한 경우에만 true.
   out.concept_drill_header_visible =
     parsedJson.concept_drill_header_visible === true;
   if (
     !recoverBasicDrillItems &&
+    !recoverGojaengiItems &&
     (out.page_kind === 'concept_page' ||
       /\bconcept_page\b/i.test(out.notes))
   ) {
@@ -579,9 +668,19 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     const suffix = 'concept_page_overridden_by_valid_basic_numbers';
     out.notes = out.notes ? `${out.notes}; ${suffix}` : suffix;
   }
+  if (recoverGojaengiItems && out.page_kind === 'concept_page') {
+    out.page_kind = 'problem_page';
+    const suffix = 'concept_page_overridden_by_valid_gojaengi_numbers';
+    out.notes = out.notes ? `${out.notes}; ${suffix}` : suffix;
+  }
 
   const isGaeyu = series === 'gaeyu';
   const isSuryeok = series === 'suryeok';
+  const isGojaengi = series === 'gojaengi';
+  const gojaengiWorkbook =
+    isGojaengi &&
+    (isGojaengiWorkbookHint(sectionHint) ||
+      isGojaengiWorkbookHint(out.section));
   // 수력충전 크롭 경계용. 유형 머리말은 문항이 아니지만, 앞 문항의 크롭이
   // 머리말을 삼키지 않으려면 위치를 알아야 한다.
   if (isSuryeok && Array.isArray(parsedJson.type_headers)) {
@@ -633,11 +732,13 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
         })
       : isSuryeok
         ? formatSuryeokNumber(printedNumber)
-        : printedNumber;
+        : isGojaengi
+          ? formatGojaengiNumber(printedNumber, gojaengiWorkbook)
+          : printedNumber;
     if (!number) continue;
     const inferredSetRange = parseBasicDrillRange(
       number,
-      series === 'rpm' || isSuryeok,
+      series === 'rpm' || isSuryeok || isGojaengi,
     );
     // 개념+유형은 대표 번호 하나 아래 (1), (2)가 붙는 구조다. 이 소문항에는
     // 독립 번호가 없으므로 Stage 1 범위 헤더로 저장하면 대표 문항까지 추출
@@ -697,9 +798,11 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
       : isSuryeok
         ? ['type_problem']
         : ['type_example', 'special_lecture'];
-    const groupDisallowed = category
-      ? !groupAllowedCategories.includes(category)
-      : ['mastery', 'concept_drill', 'check', 'exercise'].includes(out.section);
+    const groupDisallowed = isGojaengi
+      ? !['core_type', 'advanced_type', 'creative_type'].includes(out.section)
+      : category
+        ? !groupAllowedCategories.includes(category)
+        : ['mastery', 'concept_drill', 'check', 'exercise'].includes(out.section);
     const group = groupDisallowed
       ? { kind: 'none', label: '', title: '', order: null }
       : normalizeContentGroup(raw.content_group);
@@ -822,6 +925,55 @@ export function formatSuryeokNumber(printedNumber) {
   const range = raw.match(/^(\d+)\s*[~\-\u2013\u2014\u301c]\s*(\d+)$/);
   if (range) return `${pad(range[1])}~${pad(range[2])}`;
   return raw;
+}
+
+// 고쟁이 본문 번호는 세 자리("054", "259"), 워크북은 두 자리("01")다.
+// 모델이 앞자리 0 을 빼거나 쎈처럼 네 자리로 늘려 보내도 인쇄 형태로 되돌린다.
+function formatGojaengiNumber(printedNumber, workbook = false) {
+  const raw = String(printedNumber ?? '').trim();
+  if (!raw) return '';
+  const width = workbook ? 2 : 3;
+  const pad = (value) => {
+    const n = Number.parseInt(String(value).replace(/^0+(?=\d)/, ''), 10);
+    if (!Number.isFinite(n) || n <= 0) return String(value);
+    return String(n).padStart(width, '0');
+  };
+  if (/^\d+$/.test(raw)) return pad(raw);
+  const range = raw.match(/^(\d+)\s*[~\-\u2013\u2014\u301c]\s*(\d+)$/);
+  if (range) return `${pad(range[1])}~${pad(range[2])}`;
+  return raw;
+}
+
+function hasStrongGojaengiNumberEvidence(items, { workbook = false } = {}) {
+  const values = [];
+  for (const item of items || []) {
+    if (item?.is_set_header === true) continue;
+    const number = String(item?.number || '').trim();
+    const range = parseBasicDrillRange(number, true);
+    if (range) {
+      values.push(range.from, range.to);
+      continue;
+    }
+    if (!/^\d{2,4}$/.test(number)) continue;
+    const value = Number.parseInt(number, 10);
+    if (!Number.isFinite(value) || value <= 0) continue;
+    if (workbook) {
+      if (value > 99) continue;
+    } else if (value > 999) {
+      continue;
+    }
+    // 본문의 유형 배지("03")·쪽번호 한 개를 문항 증거로 쓰지 않는다.
+    if (!workbook && number.length < 3 && value < 100) continue;
+    values.push(value);
+  }
+  const unique = [...new Set(values)].sort((a, b) => a - b);
+  if (unique.length < 2) return false;
+  return unique.some(
+    (value, index) =>
+      index > 0 &&
+      value - unique[index - 1] >= 1 &&
+      value - unique[index - 1] <= 3,
+  );
 }
 
 // 수력충전 문항 번호로 인정할 표기인지. 지면에는 두 자리 숫자("01")만 인쇄되고
@@ -1223,6 +1375,15 @@ function normalizeDifficultyLabel(input) {
   if (/^예제\d*$/.test(compact)) return '예제';
   if (/^유제\d*$/.test(compact)) return '유제';
   if (/^(서술형)?연습(해보자)?\d*$/.test(compact)) return '서술형 연습';
+  // 고쟁이 별표(*) 조합. 아래 "서술형 포함이면 서술형" 규칙보다 먼저 걸러야
+  // "서술형+상" 의 별표가 통째로 버려지지 않는다.
+  if (/^(별표|\*|상)\+?스키마$|^스키마\+?(별표|\*|상)$/.test(compact)) {
+    return '상+스키마';
+  }
+  if (/^서술형\+?(별표|\*|상)$|^(별표|\*|상)\+?서술형$/.test(compact)) {
+    return '서술형+상';
+  }
+  if (compact === '스키마' || compact === '스키마schema') return '스키마';
   if (compact.includes('서술형') || compact.includes('논술')) return '서술형';
   if (compact === '대표문제') return '대표 문제';
   // 수력충전 단원 마무리 평가 배지. ALLOWED_LABELS 는 띄어쓰기가 있는 표기라
@@ -1576,9 +1737,7 @@ function backfillMissingItemRegions(result) {
   if (result.items.every((item) => Array.isArray(item.item_region))) return;
   const canUseVerticalFallback =
     result.page_kind !== 'concept_page' &&
-    (['type_practice', 'mastery', 'type_example', 'check', 'exercise'].includes(
-      result.section,
-    ) ||
+    (VERTICAL_LAYOUT_SECTIONS.has(result.section) ||
       // 개념원리 단일 패스: 페이지 section 과 무관하게 문항 category 로 판단.
       result.items.some((item) => Boolean(item.category)));
   if (!canUseVerticalFallback) return;
@@ -1624,9 +1783,7 @@ function backfillMissingBboxes(result) {
   if (!result || !Array.isArray(result.items) || result.items.length === 0) return;
   const canUseFallback =
     result.page_kind !== 'concept_page' &&
-    (['type_practice', 'mastery', 'type_example', 'check', 'exercise'].includes(
-      result.section,
-    ) ||
+    (VERTICAL_LAYOUT_SECTIONS.has(result.section) ||
       result.items.some((item) => Boolean(item.category)));
   if (!canUseFallback) return;
 
@@ -1737,6 +1894,17 @@ export function suryeokMarksNeedRepair(result, sectionHint = '') {
   if (!result || !Array.isArray(result.items)) return false;
   if (isSuryeokReviewHint(sectionHint) || result.section === 'unit_review') return true;
   if (sectionHint !== 'type_problem') return false;
+  const columns = suryeokNumberYsByColumn(result);
+  for (const ys of columns.values()) {
+    if (ys[0] > 650) return true;
+    for (let i = 1; i < ys.length; i += 1) {
+      if (ys[i] - ys[i - 1] > 300) return true;
+    }
+  }
+  return suryeokNumbersLookInterpolated(result);
+}
+
+function suryeokNumberYsByColumn(result) {
   const columns = new Map();
   for (const item of result.items) {
     if (item?.is_set_header === true || !Array.isArray(item?.bbox)) continue;
@@ -1747,19 +1915,67 @@ export function suryeokMarksNeedRepair(result, sectionHint = '') {
     if (!columns.has(column)) columns.set(column, []);
     columns.get(column).push(item.bbox[0]);
   }
-  for (const ys of columns.values()) {
-    ys.sort((a, b) => a - b);
-    if (ys[0] > 650) return true;
-    for (let i = 1; i < ys.length; i += 1) {
-      if (ys[i] - ys[i - 1] > 300) return true;
+  for (const ys of columns.values()) ys.sort((a, b) => a - b);
+  return columns;
+}
+
+/// 번호 좌표를 실제로 읽지 않고 등간격으로 채워 넣은 응답을 잡아낸다.
+///
+/// 한 단에 한 줄짜리 문항이 길게 이어지면 모델이 첫 번호와 마지막 번호만
+/// 보고 사이를 균등하게 나눠 적는다. 실제 지면은 분수처럼 키가 큰 문항에서
+/// 간격이 벌어지므로, 등간격 좌표는 아래로 갈수록 위로 밀린다. 공통수학1
+/// p22 우단이 그랬다 — 간격이 78 로 딱 붙어 나와 25 번 번호 박스가 실제보다
+/// 30(번호 높이의 1.2 배) 위에 찍혔고, 크롭도 같이 밀렸다.
+///
+/// 간격이 **한 눈금도 다르지 않게** 네 칸 넘게 이어질 때만 본다. 실제로 읽은
+/// 좌표는 글자 높이와 조판 여백이 조금씩 달라 81·81·80·81 처럼 흔들린다.
+/// 균등 분배로 만든 좌표만 딱 같은 값이 줄줄이 나온다. 놓쳐도 그때는 어긋난
+/// 폭이 몇 눈금뿐이라 크롭이 크게 틀어지지 않는다.
+const SURYEOK_EVEN_GAP_RUN = 4;
+
+export function suryeokNumbersLookInterpolated(result) {
+  if (!result || !Array.isArray(result.items)) return false;
+  for (const ys of suryeokNumberYsByColumn(result).values()) {
+    if (ys.length < SURYEOK_EVEN_GAP_RUN + 1) continue;
+    const gaps = [];
+    for (let i = 1; i < ys.length; i += 1) gaps.push(ys[i] - ys[i - 1]);
+    let run = 1;
+    for (let i = 1; i < gaps.length; i += 1) {
+      run = gaps[i] === gaps[i - 1] ? run + 1 : 1;
+      if (run >= SURYEOK_EVEN_GAP_RUN) return true;
     }
   }
   return false;
 }
 
-export function mergeSuryeokMarks(result, parsedJson, sectionHint = '') {
+/// 번호만 묻는 2차 판독의 좌표를 기존 문항에 옮겨 심는다.
+///
+/// 2차 판독은 번호 한 가지만 보므로 좌표가 훨씬 정확하다(공통수학1 p22 우단:
+/// 1차는 24·25 번이 8~9 밀렸는데 2차는 2 안쪽). 다만 엉뚱한 자리를 짚어 온
+/// 응답에 문항을 끌려가게 두면 크롭이 통째로 어긋나므로, 같은 단이고 어긋난
+/// 폭이 번호 높이 두 배 안쪽일 때만 갈아 끼운다.
+const SURYEOK_MARK_SHIFT_MIN = 3;
+const SURYEOK_MARK_SHIFT_MAX = 60;
+
+function suryeokAdoptMarkBbox(item, bbox) {
+  if (!Array.isArray(item?.bbox)) return false;
+  if (inferColumn(bbox) !== inferColumn(item.bbox)) return false;
+  const shift = Math.abs(bbox[0] - item.bbox[0]);
+  if (shift < SURYEOK_MARK_SHIFT_MIN || shift > SURYEOK_MARK_SHIFT_MAX) {
+    return false;
+  }
+  item.bbox = bbox;
+  return true;
+}
+
+export function mergeSuryeokMarks(
+  result,
+  parsedJson,
+  sectionHint = '',
+  { fixCoordinates = false } = {},
+) {
   if (!result || !Array.isArray(result.items)) {
-    return { added: 0, labels: 0, breaks: 0 };
+    return { added: 0, labels: 0, breaks: 0, moved: 0 };
   }
   const rawItems = Array.isArray(parsedJson?.items) ? parsedJson.items : [];
   const byNumber = new Map(
@@ -1774,6 +1990,7 @@ export function mergeSuryeokMarks(result, parsedJson, sectionHint = '') {
   let added = 0;
   let labels = 0;
   let breaks = 0;
+  let moved = 0;
   for (const raw of rawItems) {
     const number = formatSuryeokNumber(raw?.number);
     const bbox = parseBbox4(raw?.bbox);
@@ -1785,6 +2002,7 @@ export function mergeSuryeokMarks(result, parsedJson, sectionHint = '') {
         existing.label = label;
         labels += 1;
       }
+      if (fixCoordinates && suryeokAdoptMarkBbox(existing, bbox)) moved += 1;
       continue;
     }
     const column = inferColumn(bbox);
@@ -1840,7 +2058,7 @@ export function mergeSuryeokMarks(result, parsedJson, sectionHint = '') {
       breaks += 1;
     }
   }
-  if (added > 0 || breaks > 0) {
+  if (added > 0 || breaks > 0 || moved > 0) {
     result.items.sort((a, b) => {
       const aBox = Array.isArray(a?.bbox) ? a.bbox : [1000, 1000];
       const bBox = Array.isArray(b?.bbox) ? b.bbox : [1000, 1000];
@@ -1848,18 +2066,21 @@ export function mergeSuryeokMarks(result, parsedJson, sectionHint = '') {
       const bCol = b.column === 1 || b.column === 2 ? b.column : inferColumn(bBox);
       return aCol - bCol || aBox[0] - bBox[0];
     });
+    // 좌표가 바뀌었으면 앞서 그린 크롭 영역은 무효다. 표시를 지워
+    // repairSuryeokItemRegions 가 번호 줄부터 다시 그리게 한다.
     for (const item of result.items) {
       if (item && item.__suryeokRegionRepaired) {
         delete item.__suryeokRegionRepaired;
       }
     }
   }
-  if (added > 0 || labels > 0 || breaks > 0) {
+  if (added > 0 || labels > 0 || breaks > 0 || moved > 0) {
     const suffix =
-      `suryeok_marks_repaired=items:${added},labels:${labels},breaks:${breaks}`;
+      `suryeok_marks_repaired=items:${added},labels:${labels},` +
+      `breaks:${breaks},moved:${moved}`;
     result.notes = result.notes ? `${result.notes}; ${suffix}` : suffix;
   }
-  return { added, labels, breaks };
+  return { added, labels, breaks, moved };
 }
 
 export function repairSuryeokItemRegions(result, series) {

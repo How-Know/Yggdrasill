@@ -9,6 +9,9 @@
 // 거기 것은 "문항 본문 구조화 추출용", 여기는 "문항 번호 위치 탐지 전용" 이다.
 // 섞지 말 것.
 //
+// 고쟁이는 단계가 넷이고 번호 체계도 달라 프롬프트를
+// `vlm_detect_prompt_gojaengi.js` 로 따로 뺐다.
+//
 // 사용자 규약 (2026-04 기준):
 //   - 페이지 스캔 레이아웃은 대부분 **2단 구조** 이다.
 //   - 한 단원은 세 파트로 구성된다 (시리즈별 이름은 SERIES_CONFIGS 참고):
@@ -99,8 +102,14 @@ export const VLM_DETECT_LABELS = Object.freeze([
     ...WONRI_LABELS,
     ...GAEYU_LABELS,
     ...SURYEOK_LABELS,
+    ...GOJAENGI_LABELS,
   ]),
 ]);
+
+import {
+  GOJAENGI_LABELS,
+  buildGojaengiDetectPrompt,
+} from './vlm_detect_prompt_gojaengi.js';
 
 export function buildRpmSetHeaderPrompt({ rawPage, displayPage }) {
   return [
@@ -359,6 +368,19 @@ const SERIES_CONFIGS = Object.freeze({
     labelRules: [],
     partCExtra: [],
   },
+  // 고쟁이(문제집). 쎈과 달리 단계가 넷이고 번호가 세 자리 연속이라 전용
+  // 빌더로 분기한다.
+  gojaengi: {
+    key: 'gojaengi',
+    bookName: '고쟁이',
+    partA: 'STEP1 핵심 유형',
+    partB: 'STEP2 심화 유형',
+    partC: 'STEP3 최고난도 유형',
+    partD: '창의융합 유형',
+    labels: GOJAENGI_LABELS,
+    labelRules: [],
+    partCExtra: [],
+  },
 });
 
 export function resolveDetectSeriesConfig(series) {
@@ -385,6 +407,13 @@ export const VLM_DETECT_SECTIONS = Object.freeze([
   // 수력충전 전용 섹션. sub_key A/B 슬롯과 1:1 대응한다.
   'type_problem', // A 유형 문제 (개념 체크 포함)
   'unit_review', // B 단원 마무리 평가
+  // 고쟁이 전용 섹션. sub_key A~F 슬롯과 1:1 대응한다.
+  'core_type', // A STEP1 핵심 유형
+  'advanced_type', // B STEP2 심화 유형 (서술형 포함)
+  'top_type', // C STEP3 최고난도 유형
+  'creative_type', // D 창의융합 유형
+  'mid_unit_test', // E 워크북 중단원 TEST
+  'big_unit_test', // F 워크북 대단원 TEST
   'unknown',
 ]);
 
@@ -421,6 +450,12 @@ export const SURYEOK_SECTION_BY_SUB_KEY = Object.freeze({
   B: 'unit_review',
 });
 
+export {
+  GOJAENGI_LABELS,
+  GOJAENGI_SECTION_BY_SUB_KEY,
+  isGojaengiWorkbookHint,
+} from './vlm_detect_prompt_gojaengi.js';
+
 export const VLM_DETECT_PAGE_KINDS = Object.freeze([
   'problem_page',
   'concept_page',
@@ -447,6 +482,9 @@ export function buildDetectProblemsPrompt({
   }
   if (cfg.key === 'suryeok') {
     return buildSuryeokDetectPrompt({ displayPage, rawPage, sectionHint });
+  }
+  if (cfg.key === 'gojaengi') {
+    return buildGojaengiDetectPrompt({ displayPage, rawPage, sectionHint });
   }
   const pageLine =
     displayPage != null && Number.isFinite(displayPage)
@@ -1017,8 +1055,15 @@ function buildSuryeokDetectPrompt({ displayPage, rawPage, sectionHint = '' }) {
     '[S2] 개념 정리 박스 안의 숫자는 문항이 아니다. 판별 기준은 위치다.',
     '     - 하늘색/청록색 **둥근 테두리 박스 안**이면 개념이다. 박스 안의',
     '       "(1)", "(2)", "①~⑥", 표 안의 숫자, 굵은 소제목 번호 전부 제외한다.',
+    '     - 개념 박스 안에서 공식마다 붙는 **진한 남색 둥근 사각형 한 자리 번호**',
+    '       ("7", "8", "9" …)도 공식 번호다. 문항이 아니다. 이 번호는 소단원',
+    '       번호를 이어받아 두 자리 문항 번호와 겹쳐 보이므로 특히 조심하라.',
+    '       개념 박스 위쪽에 두 자리 소단원 제목("12 곱셈 공식의 변형(2)")이',
+    '       있고 그 아래 청록 테두리 안에 한 자리 번호들이 줄지어 있으면 전부',
+    '       공식 번호다. 이것을 문항으로 담으면 다음 지면의 진짜 같은 번호',
+    '       문항들이 번호 역행으로 오해받아 통째로 지워진다.',
     '     - 문항 번호는 박스 **바깥**, 본문 왼쪽 여백에 초록(본문)/파랑(마무리)',
-    '       굵은 두 자리로 인쇄된다.',
+    '       굵은 두 자리로 인쇄된다. 언제나 앞자리 0 이 붙은 두 자리다("07").',
     '     - 소단원 제목 줄의 두 자리 번호("01 거듭제곱과 지수법칙")는 소단원',
     '       번호다. 문항이 아니다. 오른쪽 위 "I -1 지수" 머리말도 마찬가지다.',
     '[S3] "유형 01", "유형 02" 배지는 문항이 아니라 그 아래 문항들을 묶는',
@@ -1436,3 +1481,4 @@ function buildGaeyuDetectPrompt({ displayPage, rawPage }) {
   ];
   return lines.join('\n');
 }
+

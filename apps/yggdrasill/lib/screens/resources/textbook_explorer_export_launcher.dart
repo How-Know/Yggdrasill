@@ -6,6 +6,7 @@ import 'package:open_filex/open_filex.dart';
 
 import '../../models/student_flow.dart';
 import '../../services/learning_problem_bank_service.dart';
+import '../../services/problem_bank_export_preview_print_adapter.dart';
 import '../../widgets/app_snackbar.dart';
 import '../learning/models/problem_bank_export_models.dart';
 import '../learning/widgets/problem_bank_export_server_preview_dialog.dart';
@@ -434,6 +435,10 @@ class _TbExExportPreviewSession {
       context,
       pdfUrl: completed.outputUrl.trim(),
       titleText: '서버 PDF 미리보기 (${questions.length}문항)',
+      onPrintRequested: (filePath) => printProblemBankExportPreviewFile(
+        filePath,
+        preferredPaperSize: settings.paperLabel,
+      ),
       initialSubjectTitle:
           '${initialPrimary('subjectTitleText') ?? initialFallback('subjectTitleText') ?? '수학 영역'}'
                   .trim()

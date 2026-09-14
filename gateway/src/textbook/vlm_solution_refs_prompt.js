@@ -130,6 +130,101 @@ function buildSuryeokSolutionRefRules(expectedEntries, skipBadges) {
   ];
 }
 
+// 고쟁이 해설 전용 규칙.
+//
+// 해설도 답지와 같이 "본교재" 묶음과 "WORKBOOK" 묶음으로 나뉘고, 번호 체계가
+// 다르다 — 본교재는 세 자리("054"), 워크북은 묶음마다 01 부터 다시 시작하는 두
+// 자리다. 번호키가 앞자리 0 을 떼므로 본교재 "005" 와 워크북 "05" 는 키가 겹친다.
+// 추출은 중단원 단위라 두 체계가 한 요청에 함께 실리니, 양쪽 모두 쪽 배지로
+// 묶음을 먼저 특정해야 남의 풀이를 집어오지 않는다.
+function buildGojaengiSolutionRefRules(expectedEntries) {
+  const rows = (Array.isArray(expectedEntries) ? expectedEntries : []).filter(
+    (e) => e && String(e.number || '').trim(),
+  );
+  return [
+    '',
+    '=== 고쟁이 해설 읽는 법 (매우 중요) ===',
+    '[W0] 지면 위쪽 띠가 이 지면의 종류다. "WORKBOOK" 띠가 있으면 워크북',
+    '   해설이고, 없으면 본교재 해설이다. 본교재 해설은 묶음 머리에',
+    '   "Step 1"·"Step 2"·"Step 3"·"창의융합" 과 **본교재 쪽 배지**',
+    '   ("본교재 007~009쪽")가 인쇄되고 번호는 세 자리다("054").',
+    '[W1] 워크북 해설은 묶음이 시작되는 지면에 보라 배지 "중단원 TEST" 또는',
+    '   초록 배지 "대단원 TEST" 와 소단원 이름, 그리고 오른쪽에 **워크북 쪽',
+    '   배지**("워크북 182~185쪽")가 인쇄된다. 이어지는 지면에는 위쪽',
+    '   "WORKBOOK" 띠만 있고 배지가 없다.',
+    '[W2] 묶음을 고르는 유일한 단서는 쪽 배지다. 상세표의 쪽수가 그 배지의',
+    '   **범위 안에 들면** 그 묶음이다 — "워크북 182~185쪽" 묶음은 상세표가',
+    '   182·183·184·185 중 어느 쪽이어도 모두 이 묶음이고, "본교재 007~009쪽"',
+    '   묶음은 7·8·9 중 어느 쪽이어도 모두 이 묶음이다. 기대 번호를 못 찾았으면',
+    '   옆 묶음의 같은 번호를 대신 집어오지 말고 item 을 만들지 마라.',
+    '   상세표에 묶음이 "본교재" 인 줄과 "중단원/대단원 TEST" 인 줄이 섞여',
+    '   들어온다. 이 지면 종류와 다른 줄은 여기서 찾지 말고 빠뜨려라.',
+    '[W3] 본교재·워크북 두 묶음 모두, 묶음 머리 바로 아래에 테두리 있는 상자가 오고',
+    '   그 안에 **그 묶음의 정답만 모아 둔 요약**이 격자로 나열된다',
+    '   (본교재: "Step 3 … 본교재 031~034쪽" 아래 "106 10  107 15°  108 150° …",',
+    '   워크북: 연분홍 상자에 "01 ①,⑤  02 55  03 8 : 1 …").',
+    '   이 상자는 풀이가 아니다. 여기서는 절대 number_region 을 잡지 마라.',
+    '[W3-1] 요약 상자와 실제 풀이는 이렇게 구별한다.',
+    '   · 요약 상자: 한 줄에 번호가 2개 이상 나란히 놓이고, 번호 옆에 답만 붙어 있고',
+    '     아래로 이어지는 풀이 문장이 없다. 테두리 안에 갇혀 있다.',
+    '   · 실제 풀이: 굵은 번호가 단(칼럼) 왼쪽 맨 앞에 **혼자** 오고, 같은 줄 오른쪽',
+    '     끝에 회색 원 "답" 배지가 떨어져 붙고, 그 아래로 풀이 여러 줄이 이어진다.',
+    '   같은 지면에서 한 번호가 상자와 풀이 양쪽에 보이면 **풀이 쪽** 좌표를 잡아라.',
+    '[W3-2] 기대 번호가 이 지면의 요약 상자에만 있고 실제 풀이가 없다면, 그 문항의',
+    '   풀이는 **뒤쪽 다른 지면**에 있다. 상자 좌표로 때우지 말고 item 을 만들지 마라.',
+    '   한 단계(Step) 의 요약 상자는 그 단계 번호 전체를 담으므로, 상자만 보고',
+    '   기대 번호를 다 채우려 들면 전부 틀린 좌표가 된다.',
+    '[W3-4] 고쟁이는 content_region 을 반드시 채워라([R2] 의 "null 로 둬도 된다" 는',
+    '   여기서는 적용하지 않는다). 실제 풀이는 번호 아래로 여러 줄이 이어지므로',
+    '   채울 수 있다. 풀이 영역을 못 그릴 자리라면 그것은 풀이가 아니라 요약',
+    '   상자이므로 item 자체를 만들지 마라.',
+    '[W3-3] 기대 번호가 **하나뿐이어도** [W3-2] 는 그대로다. 목록이 짧다는 것은',
+    '   그 번호를 이 지면에서 반드시 찾아야 한다는 뜻이 아니다. 요약 상자에만',
+    '   보이면 items 를 빈 배열로 두고 notes 에만 적어라. 상자 좌표를 돌려주면',
+    '   그 문항의 해설은 영구히 엉뚱한 자리를 가리킨다.',
+    '[W4] number_region 은 인쇄된 굵은 번호만 감싼다("01", "054"). 오른쪽의',
+    '   회색 원 "답" 배지와 정답은 넣지 마라. content_region 은 그 번호부터 다음',
+    '   번호 직전까지의 풀이 영역이다.',
+    '[W5] problem_number 는 기대 번호 문자열 그대로 돌려줘라("01" 이면 "01",',
+    '   "005" 면 "005"). 이 규칙은 [R1] 의 "원문 그대로" 보다 우선한다.',
+    '[W6] source_corner 는 "본교재" / "중단원 TEST" / "대단원 TEST",',
+    '   source_page / source_page_end 는 그 묶음 쪽 배지의 시작·끝 쪽이다',
+    '   ("워크북 182~185쪽" → 182 / 185, "본교재 007~009쪽" → 7 / 9).',
+    '   배지가 안 보이는 이어지는 지면이면 직전 묶음의 값을 그대로 적어라.',
+    '[W6-2] 이 지면에 쪽 배지가 아예 안 보이면 source_page 를 비워라(null). 지면',
+    '   맨 아래 꼬리말이나 옆 러닝헤드에 찍힌 **해설집 쪽번호**("중단원 TEST 163",',
+    '   "본교재 105")를 배지로 적으면 안 된다. 그 번호는 본교재·워크북 쪽 번호와',
+    '   체계가 달라서, 적어 보내면 찾아 놓은 문항이 전부 버려진다. 배지를 모를 때는',
+    '   비워 두는 것이 맞고, 그래도 번호로 짝을 짓는다.',
+    '[W6-3] source_corner 에 유형 이름("유형 05 자연수의 개수")이나 단원 이름을',
+    '   적지 마라. "본교재" / "중단원 TEST" / "대단원 TEST" 세 값만 쓴다.',
+    '[W6-1] 한 지면에 직전 묶음의 풀이와 새 묶음 머리말이 함께 있을 수 있다.',
+    '   새 머리말의 쪽 배지를 지면 전체에 적용하지 마라. 읽기 순서상 새 머리말보다',
+    '   앞선 내용은 직전 묶음이다. 예: 왼쪽 단은 직전 묶음이고 오른쪽 단에서 새',
+    '   머리말이 시작하거나, 지면 위쪽 20~24 풀이 뒤 아래쪽에서 새 머리말이 시작한다.',
+    '   특히 상세표의 기대 쪽이 새 배지 바로 전 범위라면 그 앞 영역에서 기대 번호를',
+    '   반드시 찾아 직전 범위의 source_page를 적어라.',
+    '[W7] 고쟁이 해설집은 모든 문항에 풀이가 있다. 답만 적힌 자리는 [W3] 요약',
+    '   상자뿐이므로, "풀이가 없는 문항" 을 이유로 item 을 만들지 마라.',
+    ...(rows.length
+      ? [
+          '',
+          '=== 기대 문항 상세표 (이 표가 번호 목록보다 우선한다) ===',
+          '각 줄은 "돌려줄 problem_number | 찾을 묶음 | 묶음 이름 |',
+          '그 묶음 배지의 쪽" 이다. 워크북 묶음은 배지 아래 줄에 소단원 번호와',
+          '이름이 크게 인쇄되니("○4 여러 가지 사각형") 이름을 먼저 맞추고',
+          '쪽 배지로 확인하라. 한 지면에 같은 배지의 묶음이 여러 개 선다.',
+          ...rows.map((e) => {
+            const corner = e.corner ? `묶음="${e.corner}"` : '묶음=미상';
+            const title = e.title ? `이름="${e.title}"` : '이름=미상';
+            const page = e.page ? `배지=${e.page}쪽` : '배지=미상';
+            return `- problem_number="${e.number}" | ${corner} | ${title} | ${page}`;
+          }),
+        ]
+      : []),
+  ];
+}
+
 export function buildDetectSolutionRefsPrompt({
   rawPage,
   displayPage,
@@ -141,7 +236,15 @@ export function buildDetectSolutionRefsPrompt({
   const seriesKey = String(series || '').trim().toLowerCase();
   const isConceptPlus = seriesKey === 'gaeyu';
   const isSuryeok = seriesKey === 'suryeok';
-  const needsSourceBadge = isConceptPlus || isSuryeok;
+  // 고쟁이는 본문·워크북 양쪽에 배지를 실어 보낸다. 옛 요청(본문 배지 없음)도
+  // 그대로 받아 주려고 배지가 실려 온 요청에서만 출처 대조로 넘어간다.
+  const isGojaengiBadged =
+    seriesKey === 'gojaengi' &&
+    (Array.isArray(expectedEntries) ? expectedEntries : []).some(
+      (e) => e && (String(e.corner || '').trim() || e.page),
+    );
+  const needsSourceBadge =
+    isConceptPlus || isSuryeok || isGojaengiBadged;
   const pageLine =
     displayPage != null && Number.isFinite(displayPage)
       ? `이 이미지는 해설 PDF 의 ${displayPage}페이지이다. 이 값은 PDF raw page ${rawPage}와 동일한 입력 페이지 기준이다.`
@@ -176,6 +279,9 @@ export function buildDetectSolutionRefsPrompt({
     ...(isConceptPlus ? buildConceptPlusSolutionRefRules(expectedEntries) : []),
     ...(isSuryeok
         ? buildSuryeokSolutionRefRules(expectedEntries, skipBadges)
+        : []),
+    ...(isGojaengiBadged
+        ? buildGojaengiSolutionRefRules(expectedEntries)
         : []),
     '',
     '=== 출력 스키마 ===',

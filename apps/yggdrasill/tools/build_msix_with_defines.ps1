@@ -37,12 +37,16 @@ Write-Host "[INFO] Build dart-define: PB_GATEWAY_URL=$pbGatewayUrl" -ForegroundC
 # Ensure flutter deps
 flutter pub get | Out-Host
 
-# Pre-build Windows with same defines
+$releaseDir = Join-Path (Get-Location) 'build/windows/x64/runner/Release'
+# Pre-build Windows with same defines.
+# Remove stale Release output first so debug-only files from older builds are not zipped.
+if(Test-Path $releaseDir){
+  Remove-Item $releaseDir -Recurse -Force
+}
 flutter build windows @buildArgs | Out-Host
 if($LASTEXITCODE -ne 0){ throw "flutter build windows failed (exit=$LASTEXITCODE)" }
 
 # Also put env.local.json next to exe so runtime can find it
-$releaseDir = Join-Path (Get-Location) 'build/windows/x64/runner/Release'
 Copy-Item $envPath (Join-Path $releaseDir 'env.local.json') -Force
 
 # Portable 배포 안정성 체크: VC++ 런타임 DLL이 번들에 존재해야 ARM/x64 신규 PC에서 실행 가능

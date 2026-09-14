@@ -200,6 +200,42 @@ class TextbookVlmTestService {
       headers: _headers(),
       body: jsonEncode(body),
     );
+    return TextbookRpmSectionParseResult.fromMap(_decodeSectionJson(res));
+  }
+
+  /// 고쟁이 워크북 지면 묶음을 분류한다.
+  ///
+  /// 본문과 달리 워크북은 교재 맨 뒤에 묶음들이 몰려 있고, 지면마다 머리에
+  /// "중단원 TEST"(소단원 이름) / "대단원 TEST"(대단원 이름) 배지가 반복
+  /// 인쇄된다. 목차에는 워크북 시작 쪽 하나만 있어서, 이 훑기 없이는 E·F
+  /// 슬롯의 쪽 범위를 채울 방법이 없다. 한 호출은 최대 24페이지다.
+  Future<TextbookGojaengiWorkbookParseResult> classifyGojaengiWorkbookPages({
+    required List<TextbookRpmSectionImage> images,
+    String mimeType = 'image/png',
+  }) async {
+    final body = <String, dynamic>{
+      'images': [
+        for (final image in images)
+          <String, dynamic>{
+            'image_base64': base64Encode(image.bytes),
+            'mime_type': mimeType,
+            'raw_page': image.rawPage,
+          },
+      ],
+      'series': 'gojaengi',
+      'scope': 'workbook',
+    };
+    final res = await _http.post(
+      _uri('/textbook/vlm/classify-problem-book-sections'),
+      headers: _headers(),
+      body: jsonEncode(body),
+    );
+    return TextbookGojaengiWorkbookParseResult.fromMap(
+      _decodeSectionJson(res),
+    );
+  }
+
+  Map<String, dynamic> _decodeSectionJson(http.Response res) {
     Map<String, dynamic> json;
     try {
       final decoded = jsonDecode(res.body);
@@ -218,7 +254,7 @@ class TextbookVlmTestService {
       final summary = detail.isEmpty ? res.body : detail.join(' / ');
       throw Exception('vlm_rpm_section_failed(${res.statusCode}): $summary');
     }
-    return TextbookRpmSectionParseResult.fromMap(json);
+    return json;
   }
 }
 
@@ -228,11 +264,20 @@ class TextbookTocParseResult {
     required this.bigUnits,
     required this.notes,
     this.appendixBoundaryPage,
+    this.workbookMidTestPage,
+    this.workbookBigTestPage,
   });
 
   final List<TextbookTocBigUnit> bigUnits;
   final String notes;
   final int? appendixBoundaryPage;
+
+  /// 고쟁이 목차 맨 아래 "WORKBOOK" 묶음의 시작 쪽 (인쇄 쪽, 보정 전).
+  ///
+  /// 목차에는 두 묶음의 시작 쪽만 한 번씩 인쇄되고 대단원·중단원별 범위는
+  /// 없다. 그 범위는 워크북 지면 머리말을 훑어야 나온다.
+  final int? workbookMidTestPage;
+  final int? workbookBigTestPage;
 
   factory TextbookTocParseResult.fromMap(Map<String, dynamic> map) {
     final bigs = <TextbookTocBigUnit>[];
@@ -270,6 +315,10 @@ class TextbookTocParseResult {
       notes: '${map['notes'] ?? ''}'.trim(),
       appendixBoundaryPage:
           int.tryParse('${map['appendix_boundary_page'] ?? ''}'),
+      workbookMidTestPage:
+          int.tryParse('${map['workbook_mid_test_page'] ?? ''}'),
+      workbookBigTestPage:
+          int.tryParse('${map['workbook_big_test_page'] ?? ''}'),
     );
   }
 }
@@ -321,14 +370,20 @@ class TextbookRpmSectionPage {
   const TextbookRpmSectionPage({
     required this.rawPage,
     required this.section,
-    required this.typePracticeHeaderVisible,
-    required this.masteryHeaderVisible,
+    required this.headerVisible,
   });
 
   final int rawPage;
   final String section;
-  final bool typePracticeHeaderVisible;
-  final bool masteryHeaderVisible;
+
+  /// 이 지면 상단에 [section] 파트의 머리말이 인쇄돼 있는지.
+  /// 머리말은 파트가 시작되는 첫 지면에만 인쇄되므로 파트 경계 신호가 된다.
+  final bool headerVisible;
+
+  bool get typePracticeHeaderVisible =>
+      section == 'type_practice' && headerVisible;
+
+  bool get masteryHeaderVisible => section == 'mastery' && headerVisible;
 }
 
 class TextbookRpmSectionParseResult {
@@ -346,15 +401,77 @@ class TextbookRpmSectionParseResult {
       if (raw is! Map) continue;
       final rawPage = int.tryParse('${raw['raw_page'] ?? ''}');
       if (rawPage == null || rawPage <= 0) continue;
+      final section = '${raw['section'] ?? 'unknown'}'.trim();
       pages.add(TextbookRpmSectionPage(
         rawPage: rawPage,
-        section: '${raw['section'] ?? 'unknown'}'.trim(),
-        typePracticeHeaderVisible: raw['type_practice_header_visible'] == true,
-        masteryHeaderVisible: raw['mastery_header_visible'] == true,
+        section: section,
+        // 옛 응답(파트별 전용 플래그)도 그대로 받아 준다.
+        headerVisible: raw['header_visible'] == true ||
+            (section == 'type_practice' &&
+                raw['type_practice_header_visible'] == true) ||
+            (section == 'mastery' && raw['mastery_header_visible'] == true),
       ));
     }
     pages.sort((a, b) => a.rawPage.compareTo(b.rawPage));
     return TextbookRpmSectionParseResult(
+      pages: pages,
+      notes: '${map['notes'] ?? ''}'.trim(),
+    );
+  }
+}
+
+/// 고쟁이 워크북 지면 한 장의 묶음 머리말.
+class TextbookGojaengiWorkbookPage {
+  const TextbookGojaengiWorkbookPage({
+    required this.rawPage,
+    required this.corner,
+    required this.unitNumber,
+    required this.unitName,
+  });
+
+  final int rawPage;
+
+  /// 'mid_unit_test' | 'big_unit_test' | 'unknown'.
+  /// 머리말 배지가 안 보이는 이어지는 지면은 'unknown' 이고, 앞 지면에서
+  /// 이어 준다.
+  final String corner;
+
+  /// 머리말의 단원 번호. 중단원 TEST 는 소단원 번호, 대단원 TEST 는 대단원
+  /// 번호다. 이름 대조가 실패했을 때의 예비 단서로 쓴다.
+  final int? unitNumber;
+
+  /// 머리말의 단원 이름 (번호 제외).
+  final String unitName;
+
+  bool get hasHeader => corner != 'unknown' && unitName.isNotEmpty;
+}
+
+class TextbookGojaengiWorkbookParseResult {
+  const TextbookGojaengiWorkbookParseResult({
+    required this.pages,
+    required this.notes,
+  });
+
+  final List<TextbookGojaengiWorkbookPage> pages;
+  final String notes;
+
+  factory TextbookGojaengiWorkbookParseResult.fromMap(
+    Map<String, dynamic> map,
+  ) {
+    final pages = <TextbookGojaengiWorkbookPage>[];
+    for (final raw in (map['pages'] as List?) ?? const []) {
+      if (raw is! Map) continue;
+      final rawPage = int.tryParse('${raw['raw_page'] ?? ''}');
+      if (rawPage == null || rawPage <= 0) continue;
+      pages.add(TextbookGojaengiWorkbookPage(
+        rawPage: rawPage,
+        corner: '${raw['corner'] ?? 'unknown'}'.trim(),
+        unitNumber: int.tryParse('${raw['unit_number'] ?? ''}'),
+        unitName: '${raw['unit_name'] ?? ''}'.trim(),
+      ));
+    }
+    pages.sort((a, b) => a.rawPage.compareTo(b.rawPage));
+    return TextbookGojaengiWorkbookParseResult(
       pages: pages,
       notes: '${map['notes'] ?? ''}'.trim(),
     );

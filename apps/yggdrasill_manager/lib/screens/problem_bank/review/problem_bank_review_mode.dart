@@ -2,6 +2,21 @@ import '../problem_bank_models.dart';
 
 enum ProblemBankReviewMode { examPaper, textbookPdf }
 
+int problemBankSchoolLevelSortRank(ProblemBankDocument document) {
+  final level = document.schoolLevel.trim().toLowerCase();
+  if (level == 'middle' || level == 'middle_school') return 0;
+  if (level == 'high' || level == 'high_school') return 1;
+
+  final gradeKey = document.gradeKey.trim().toUpperCase();
+  if (gradeKey.startsWith('M')) return 0;
+  if (gradeKey.startsWith('H')) return 1;
+
+  final school = document.schoolName.replaceAll(' ', '');
+  if (school.contains('중학교') || school.contains('중등')) return 0;
+  if (school.contains('고등학교') || school.contains('고교')) return 1;
+  return 2;
+}
+
 ProblemBankReviewMode problemBankReviewModeOf(ProblemBankDocument? document) {
   if (document == null) return ProblemBankReviewMode.examPaper;
   final sourceType = document.sourceTypeCode.trim().toLowerCase();

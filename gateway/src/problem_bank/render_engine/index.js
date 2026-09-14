@@ -4,7 +4,10 @@ import { buildDocumentHtml } from './html/build_document_html.js';
 import { buildPreviewHtml } from './html/build_preview_html.js';
 import { renderHtmlToPdfBuffer, renderHtmlToImageBuffer } from './chrome/render_pdf.js';
 import { createMathSvgRenderer } from './math/mathjax_svg_renderer.js';
-import { normalizeWhitespace } from './utils/text.js';
+import {
+  normalizeWhitespace,
+  recoverMangledLatexNewlineCommands,
+} from './utils/text.js';
 import { renderQuestionWithXeLatex, renderPdfWithXeLatex } from './xelatex/renderer.js';
 import {
   renderQuestionWithXeLatex as renderQuestionWithXeLatexV2,
@@ -378,7 +381,7 @@ function sanitizeChoiceRows(rows) {
     ? rows
       .map((one) => ({
         label: normalizeWhitespace(one?.label || ''),
-        text: String(one?.text || ''),
+        text: recoverMangledLatexNewlineCommands(one?.text || ''),
       }))
       .filter((one) => one.label || one.text)
     : [];
@@ -387,7 +390,7 @@ function sanitizeChoiceRows(rows) {
 function normalizeQuestionForHtml(question) {
   return {
     ...question,
-    stem: String(question?.stem || ''),
+    stem: recoverMangledLatexNewlineCommands(question?.stem || ''),
     choices: sanitizeChoiceRows(question?.choices),
     equations: Array.isArray(question?.equations) ? question.equations : [],
     figure_refs: Array.isArray(question?.figure_refs) ? question.figure_refs : [],

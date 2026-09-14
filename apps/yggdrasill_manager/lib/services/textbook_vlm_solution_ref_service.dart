@@ -476,7 +476,7 @@ class TextbookSolutionRefUpload {
   final String source;
 
   /// 좌표가 가리키는 PDF 종류. 'sol' = 해설 PDF(기본),
-  /// 'body' = 본문 PDF (개념원리 필수유형처럼 풀이가 본문에 인쇄된 경우).
+  /// 'body' = 본문 PDF, 'none' = 출판사에서 해설을 제공하지 않음.
   final String sourceKind;
 
   Map<String, dynamic> toJson() => <String, dynamic>{

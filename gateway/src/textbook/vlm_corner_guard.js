@@ -34,10 +34,20 @@ const CORNER_KEYWORDS = [
   // 수력충전. 소단원 블록에는 코너 이름이 없고 본문 페이지 배지만 있어서
   // 코너로 갈리는 것은 단원 마무리 평가 하나뿐이다.
   ['unit_review', ['단원마무리', '마무리평가']],
+  // 고쟁이. 본문(A~D)은 세 자리 번호("054"), 워크북(E·F)은 묶음마다 01 부터
+  // 다시 시작하는 두 자리다. 체계가 달라도 번호키는 앞자리 0 을 떼므로 본문
+  // "005" 와 워크북 "05" 가 키 "5" 로 겹친다. 그래서 본문도 "본교재" 배지로
+  // 갈라야 한다 — 한쪽만 코너를 두면 겹친 항목이 통째로 버려진다.
+  ['body_book', ['본교재']],
+  ['mid_unit_test', ['중단원TEST']],
+  ['big_unit_test', ['대단원TEST']],
 ];
 
 export function canonicalCorner(input) {
-  const compact = String(input || '').replace(/[\s·+]/g, '');
+  // 라틴 문자 배지("중단원 TEST")의 대소문자 흔들림을 흡수한다. 한글은 영향 없다.
+  const compact = String(input || '')
+      .replace(/[\s·+]/g, '')
+      .toUpperCase();
   if (!compact) return '';
   for (const [id, keywords] of CORNER_KEYWORDS) {
     for (const keyword of keywords) {
@@ -109,6 +119,47 @@ export function reportedBadge(raw) {
     lo: Math.min(from, to),
     hi: Math.max(from, to),
   };
+}
+
+/// 모델이 스스로 밝힌 출처 배지 중 기대 묶음과 **아예 겹치지 않는** 것들을
+/// "건너뛸 묶음" 라벨로 만든다.
+///
+/// 고쟁이 워크북 답지는 한 지면에 "중단원 TEST" 묶음이 일곱 개까지 서고 쪽
+/// 배지(174~177 / 178~181 / 182~185)가 서로 붙어 있다. 실지면 2-2 답지 6쪽에서
+/// 모델은 절반쯤 옆 묶음을 골랐고(178~181 을 찾다가 182~185 의 24개를 올림),
+/// 출처 대조가 그것을 전부 버려 0건이 되었다. 이 라벨을 되먹여 같은 지면을
+/// 다시 물으면 모델이 그 묶음을 비켜 간다.
+///
+/// 기대 쪽을 하나라도 덮는 배지는 고르지 않는다. 묶음은 제대로 읽고 쪽만 한 칸
+/// 잘못 옮긴 경우까지 건너뛰게 하면 정답을 영원히 못 찾는다.
+export function wrongBadgeLabels(parsedJson, expectedEntries) {
+  const items = Array.isArray(parsedJson?.items) ? parsedJson.items : [];
+  if (items.length === 0) return [];
+  const expectedPages = new Set(
+    (Array.isArray(expectedEntries) ? expectedEntries : [])
+      .map((entry) => parsePage(entry?.page))
+      .filter((page) => page > 0),
+  );
+  if (expectedPages.size === 0) return [];
+  const labels = new Set();
+  for (const item of items) {
+    const badge = reportedBadge(item);
+    if (!badge.lo) continue;
+    let overlaps = false;
+    for (let page = badge.lo; page <= badge.hi; page += 1) {
+      if (expectedPages.has(page)) {
+        overlaps = true;
+        break;
+      }
+    }
+    if (overlaps) continue;
+    const printed = String(item?.source_corner ?? item?.sourceCorner ?? '')
+      .trim();
+    const span =
+      badge.hi > badge.lo ? `${badge.lo}~${badge.hi}쪽` : `${badge.lo}쪽`;
+    labels.add(printed ? `${printed} ${span}` : span);
+  }
+  return Array.from(labels).slice(0, 6);
 }
 
 /// 후보가 모델이 밝힌 박스와 모순되지 않는지.

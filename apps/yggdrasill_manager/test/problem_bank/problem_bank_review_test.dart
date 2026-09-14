@@ -13,6 +13,9 @@ ProblemBankDocument _document({
   int? displayPageTo,
   int? rawPageFrom,
   int? rawPageTo,
+  String schoolLevel = '',
+  String schoolName = '',
+  String gradeKey = '',
 }) {
   return ProblemBankDocument.fromMap(<String, dynamic>{
     'id': 'document-1',
@@ -24,6 +27,9 @@ ProblemBankDocument _document({
     'source_pdf_storage_path': 'source.pdf',
     'status': 'draft_ready',
     'source_type_code': sourceType,
+    'school_level': schoolLevel,
+    'school_name': schoolName,
+    'grade_key': gradeKey,
     'meta': <String, dynamic>{
       if (textbookPdfOnly) 'extract_mode': 'textbook_pdf_only',
       if (displayPageFrom != null || displayPageTo != null)
@@ -74,6 +80,51 @@ ProblemBankQuestion _question({
 }
 
 void main() {
+  test('문항 공개 상태는 기본 공개이며 명시적 비공개를 보존한다', () {
+    final published = _question(id: 'published', sourcePage: 1);
+    final private = ProblemBankQuestion.fromMap(<String, dynamic>{
+      'id': 'private',
+      'question_uid': 'uid-private',
+      'is_published': false,
+    });
+
+    expect(published.isPublished, isTrue);
+    expect(private.isPublished, isFalse);
+    expect(private.copyWith(isPublished: true).isPublished, isTrue);
+  });
+
+  group('내신 검수 학교 트리 정렬', () {
+    test('중학교가 고등학교보다 먼저 온다', () {
+      final middle = _document(
+        schoolLevel: 'middle',
+        schoolName: '한빛중학교',
+      );
+      final high = _document(
+        schoolLevel: 'high',
+        schoolName: '한빛고등학교',
+      );
+      expect(
+        problemBankSchoolLevelSortRank(middle),
+        lessThan(problemBankSchoolLevelSortRank(high)),
+      );
+    });
+
+    test('학교급 누락 시 gradeKey와 학교명으로 판별한다', () {
+      expect(
+        problemBankSchoolLevelSortRank(
+          _document(schoolName: '가람중학교'),
+        ),
+        0,
+      );
+      expect(
+        problemBankSchoolLevelSortRank(
+          _document(schoolName: '가람학교', gradeKey: 'H2'),
+        ),
+        1,
+      );
+    });
+  });
+
   group('ProblemBankQuestionTimedTestStats', () {
     test('RPC 학생 수를 typed 모델로 파싱한다', () {
       final stats = ProblemBankQuestionTimedTestStats.fromMap(
@@ -246,6 +297,62 @@ void main() {
     await tester.testTextInput.receiveAction(TextInputAction.go);
     await tester.pump();
     expect(find.text('해당 페이지에 추출 문항이 없습니다.'), findsOneWidget);
+  });
+
+  testWidgets('교재 페이지 진행 상태와 현재 페이지 검수 완료를 표시한다', (tester) async {
+    int? uploadedPage;
+    const accent = Color(0xFF2EA043);
+    const field = Color(0xFF15171C);
+    const inProgress = Color(0xFFE3B341);
+    final questions = <ProblemBankQuestion>[
+      _question(id: 'a', sourcePage: 1, displayPage: 12, checked: true),
+      _question(id: 'b', sourcePage: 2, displayPage: 13, checked: true),
+      _question(id: 'c', sourcePage: 3, displayPage: 13),
+      _question(id: 'd', sourcePage: 4, displayPage: 14),
+      _question(id: 'e', sourcePage: 5, displayPage: 15),
+    ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 760,
+            height: 700,
+            child: TextbookPageReviewPane(
+              questions: questions,
+              initialPage: 12,
+              dirtyQuestionIds: const <String>{'d'},
+              onPageUpload: (page) async => uploadedPage = page,
+              questionBuilder: (_, question) => Text(question.stem),
+              panelColor: const Color(0xFF10171A),
+              fieldColor: field,
+              borderColor: const Color(0xFF223131),
+              textColor: Colors.white,
+              textSubColor: Colors.grey,
+              accentColor: accent,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('1 / 4 페이지 완료'), findsOneWidget);
+    expect(find.text('현재 페이지 검수 완료'), findsOneWidget);
+    Color progressColor(int page) {
+      final container = tester.widget<Container>(
+        find.byKey(ValueKey('textbook-page-progress-$page')),
+      );
+      return (container.decoration! as BoxDecoration).color!;
+    }
+
+    expect(progressColor(12), accent);
+    expect(progressColor(13), inProgress);
+    expect(progressColor(14), inProgress);
+    expect(progressColor(15), field);
+
+    await tester.tap(find.byKey(const ValueKey('textbook-page-upload')));
+    await tester.pump();
+    expect(uploadedPage, 12);
   });
 
   testWidgets('교재 페이지에서도 기존 카드 너비의 다열 Wrap을 사용한다', (tester) async {
