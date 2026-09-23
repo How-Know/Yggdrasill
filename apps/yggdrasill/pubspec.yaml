@@ -32,6 +32,8 @@ dependencies:
     sdk: flutter
   yggdrasill_pb_export_ui:
     path: ../../packages/yggdrasill_pb_export_ui
+  yggdrasill_m5_ota:
+    path: ../../packages/yggdrasill_m5_ota
   file_selector: ^1.0.1
   flutter_localizations:
     sdk: flutter
