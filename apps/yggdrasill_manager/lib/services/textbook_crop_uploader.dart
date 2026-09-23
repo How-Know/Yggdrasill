@@ -49,6 +49,7 @@ class TextbookCropUploadItem {
     this.columnIndex,
     this.bbox1k,
     this.itemRegion1k,
+    this.companionRegions = const <Map<String, dynamic>>[],
     this.pngBytes,
     this.cropRectPx,
     this.paddingPx,
@@ -82,6 +83,7 @@ class TextbookCropUploadItem {
   final int? columnIndex;
   final List<int>? bbox1k; // [ymin, xmin, ymax, xmax] on 0..1000
   final List<int>? itemRegion1k;
+  final List<Map<String, dynamic>> companionRegions;
 
   /// Crop image bytes. `null` when the caller is in `regions_only` mode.
   final Uint8List? pngBytes;
@@ -354,6 +356,8 @@ class TextbookCropUploader {
       if (item.columnIndex != null) 'column_index': item.columnIndex,
       if (item.bbox1k != null) 'bbox_1k': item.bbox1k,
       if (item.itemRegion1k != null) 'item_region_1k': item.itemRegion1k,
+      if (item.companionRegions.isNotEmpty)
+        'companion_regions': item.companionRegions,
       if (item.cropRectPx != null) 'crop_rect_px': item.cropRectPx,
       if (item.paddingPx != null) 'padding_px': item.paddingPx,
       if (item.cropLongEdgePx != null) 'crop_long_edge_px': item.cropLongEdgePx,

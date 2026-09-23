@@ -163,6 +163,26 @@ String mergeHomeworkItemPageRanges(
   return compressHomeworkPageNumbers(pages);
 }
 
+/// 홈 메뉴 그룹 과제 카드와 같은 페이지 요약.
+///
+/// 자식마다 표시 페이지를 압축한 뒤 합집합을 다시 연속 구간으로 압축한다.
+/// 예: `1-5` + `6-10` → `1-10`, `1-5` + `8-10` → `1-5,8-10`.
+String homeworkGroupPageSummary(
+  Iterable<({String? page, List<Map<String, dynamic>>? unitMappings})> items,
+) {
+  final pages = <String>[];
+  for (final item in items) {
+    final page = homeworkItemPageRangeText(
+      page: item.page,
+      unitMappings: item.unitMappings,
+    );
+    if (page.isNotEmpty) pages.add(page);
+  }
+  if (pages.isEmpty) return '';
+  final merged = mergeHomeworkPageRawStrings(pages);
+  return merged.isEmpty ? pages.join(', ') : merged;
+}
+
 /// 과제 문항수.
 ///
 /// `homework_items.count`가 비어 있어도 `unitMappings.pageCounts` /

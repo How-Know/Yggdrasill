@@ -46,6 +46,7 @@ class TextbookStageBatchService {
     required int bigOrder,
     required int midOrder,
     required String subKey,
+    required int subIndex,
     String seriesKey = '',
     void Function(String status)? onStatus,
   }) async {
@@ -56,6 +57,7 @@ class TextbookStageBatchService {
       bigOrder: bigOrder,
       midOrder: midOrder,
       subKey: subKey,
+      subIndex: subIndex,
     );
     if (crops.isEmpty) {
       return const TextbookStageBatchResult(
@@ -64,6 +66,104 @@ class TextbookStageBatchService {
         answerMissing: <String>[],
         solutionMissing: <String>[],
       );
+    }
+
+    if (seriesKey.trim().toLowerCase() == 'wonri_middle') {
+      final bodyCrops = crops
+          .where((crop) => textbookWonriMiddleUsesBodySolution(
+                section: crop.section,
+                problemNumber: crop.problemNumber,
+                itemName: crop.itemName,
+              ))
+          .toList(growable: false);
+      final solutionCrops = crops
+          .where((crop) => !textbookWonriMiddleUsesBodySolution(
+                section: crop.section,
+                problemNumber: crop.problemNumber,
+                itemName: crop.itemName,
+              ))
+          .toList(growable: false);
+      PdfDocument? bodyDoc;
+      PdfDocument? solutionDoc;
+      try {
+        if (bodyCrops.isNotEmpty) {
+          onStatus?.call('본문 PDF 준비 중...');
+          bodyDoc = await _downloadPdf(
+            academyId: academyId,
+            bookId: bookId,
+            gradeLabel: gradeLabel,
+            kind: 'body',
+            tempPrefix: 'batch_wonri_middle_body',
+          );
+        }
+        if (solutionCrops.isNotEmpty) {
+          onStatus?.call('해설 PDF 준비 중...');
+          solutionDoc = await _downloadPdf(
+            academyId: academyId,
+            bookId: bookId,
+            gradeLabel: gradeLabel,
+            kind: 'sol',
+            tempPrefix: 'batch_wonri_middle_solution',
+          );
+        }
+        final bodyResult = bodyDoc == null
+            ? const TextbookStageBatchResult(
+                answerSaved: 0,
+                solutionRefSaved: 0,
+                answerMissing: <String>[],
+                solutionMissing: <String>[],
+              )
+            : await _runWonriMiddleBody(
+                doc: bodyDoc,
+                academyId: academyId,
+                crops: bodyCrops,
+                onStatus: onStatus,
+              );
+        final quickAnswerResult = solutionDoc == null
+            ? const TextbookStageBatchResult(
+                answerSaved: 0,
+                solutionRefSaved: 0,
+                answerMissing: <String>[],
+                solutionMissing: <String>[],
+              )
+            : await _runWonriMiddleCombined(
+                doc: solutionDoc,
+                academyId: academyId,
+                crops: solutionCrops,
+                answers: true,
+                onStatus: onStatus,
+              );
+        final detailedSolutionResult = solutionDoc == null
+            ? const TextbookStageBatchResult(
+                answerSaved: 0,
+                solutionRefSaved: 0,
+                answerMissing: <String>[],
+                solutionMissing: <String>[],
+              )
+            : await _runWonriMiddleCombined(
+                doc: solutionDoc,
+                academyId: academyId,
+                crops: solutionCrops,
+                answers: false,
+                onStatus: onStatus,
+              );
+        return TextbookStageBatchResult(
+          answerSaved: bodyResult.answerSaved + quickAnswerResult.answerSaved,
+          solutionRefSaved: bodyResult.solutionRefSaved +
+              detailedSolutionResult.solutionRefSaved,
+          answerMissing: <String>[
+            ...bodyResult.answerMissing,
+            ...quickAnswerResult.answerMissing,
+          ],
+          solutionMissing: <String>[
+            ...bodyResult.solutionMissing,
+            ...detailedSolutionResult.solutionMissing,
+          ],
+        );
+      } finally {
+        bodyDoc?.dispose();
+        solutionDoc?.dispose();
+      }
     }
 
     onStatus?.call('정답 PDF 준비 중...');
@@ -121,16 +221,21 @@ class TextbookStageBatchService {
     required int bigOrder,
     required int midOrder,
     required String subKey,
+    required int subIndex,
   }) async {
     final rows = await _supa
         .from('textbook_problem_crops')
-        .select('id, problem_number, is_set_header, section, display_page')
+        .select(
+          'id, problem_number, is_set_header, section, raw_page, '
+          'display_page, item_name',
+        )
         .eq('academy_id', academyId)
         .eq('book_id', bookId)
         .eq('grade_label', gradeLabel)
         .eq('big_order', bigOrder)
         .eq('mid_order', midOrder)
         .eq('sub_key', subKey)
+        .eq('sub_index', subIndex)
         .order('raw_page')
         .order('problem_number');
     return (rows as List)
@@ -394,6 +499,302 @@ class TextbookStageBatchService {
     return _SavedWithMissing(saved: saved, missing: missing);
   }
 
+  Future<TextbookStageBatchResult> _runWonriMiddleBody({
+    required PdfDocument doc,
+    required String academyId,
+    required List<_BatchCrop> crops,
+    void Function(String status)? onStatus,
+  }) async {
+    final targets = crops
+        .where((crop) =>
+            !crop.isSetHeader &&
+            crop.id.isNotEmpty &&
+            crop.problemNumber.isNotEmpty &&
+            crop.rawPage != null)
+        .toList(growable: false);
+    final byPage = <int, List<_BatchCrop>>{};
+    for (final crop in targets) {
+      byPage.putIfAbsent(crop.rawPage!, () => <_BatchCrop>[]).add(crop);
+    }
+
+    final answerUploads = <TextbookAnswerUpload>[];
+    final refUploads = <TextbookSolutionRefUpload>[];
+    final answerMissingIds = <String>{for (final crop in crops) crop.id};
+    final solutionMissingIds = <String>{for (final crop in crops) crop.id};
+    final pages = byPage.keys.toList()..sort();
+    for (var index = 0; index < pages.length; index += 1) {
+      final page = pages[index];
+      final pageCrops = byPage[page]!;
+      onStatus?.call(
+        '중등 개념원리 본문 예제 VLM ${index + 1} / ${pages.length}페이지...',
+      );
+      Uint8List png;
+      try {
+        png = await renderPdfPageToPng(
+          document: doc,
+          pageNumber: page,
+          longEdgePx: _vlmLongEdgePx,
+        );
+      } catch (_) {
+        continue;
+      }
+      TextbookVlmBodySolutionPageResult result;
+      try {
+        result = await _solutionRefService.extractBodySolutionsOnPage(
+          imageBytes: png,
+          rawPage: page,
+          expectedNumbers: <String>[
+            for (final crop in pageCrops) crop.problemNumber,
+          ],
+          seriesKey: 'wonri_middle',
+        );
+      } catch (_) {
+        continue;
+      }
+      final items = <String, TextbookVlmBodySolutionItem>{
+        for (final item in result.items)
+          textbookWonriMiddlePrintedNumberKey(item.problemNumber): item,
+      };
+      for (final crop in pageCrops) {
+        final item =
+            items[textbookWonriMiddlePrintedNumberKey(crop.problemNumber)];
+        if (item == null) continue;
+        final role = textbookWonriMiddleItemRole(
+          section: crop.section,
+          problemNumber: crop.problemNumber,
+          itemName: crop.itemName,
+        );
+        if (item.answerText.isNotEmpty || item.answerLatex2d.isNotEmpty) {
+          answerUploads.add(TextbookAnswerUpload(
+            cropId: crop.id,
+            answerKind: item.answerKind,
+            answerText: item.answerText,
+            answerLatex2d: item.answerLatex2d.isEmpty
+                ? item.answerText
+                : item.answerLatex2d,
+            answerSource: 'vlm',
+            rawPage: page,
+            displayPage: crop.displayPage,
+            solutionMetadata: <String, dynamic>{
+              'solution_kind': 'full',
+              'item_role': role,
+            },
+          ));
+          answerMissingIds.remove(crop.id);
+        }
+        if (item.contentRegion1k != null) {
+          refUploads.add(TextbookSolutionRefUpload(
+            cropId: crop.id,
+            rawPage: page,
+            displayPage: crop.displayPage,
+            numberRegion1k: item.numberRegion1k,
+            contentRegion1k: item.contentRegion1k,
+            source: 'vlm',
+            sourceKind: 'body',
+          ));
+          solutionMissingIds.remove(crop.id);
+        }
+      }
+    }
+    final answerSaved = await _answerService.batchUpsertAnswers(
+      academyId: academyId,
+      answers: answerUploads,
+    );
+    final solutionRefSaved = await _solutionRefService.batchUpsertSolutionRefs(
+      academyId: academyId,
+      refs: refUploads,
+    );
+    String missingLabel(_BatchCrop crop) =>
+        '${crop.section} ${crop.problemNumber}'.trim();
+    return TextbookStageBatchResult(
+      answerSaved: answerSaved,
+      solutionRefSaved: solutionRefSaved,
+      answerMissing: <String>[
+        for (final crop in crops)
+          if (answerMissingIds.contains(crop.id)) missingLabel(crop),
+      ],
+      solutionMissing: <String>[
+        for (final crop in crops)
+          if (solutionMissingIds.contains(crop.id)) missingLabel(crop),
+      ],
+    );
+  }
+
+  Future<TextbookStageBatchResult> _runWonriMiddleCombined({
+    required PdfDocument doc,
+    required String academyId,
+    required List<_BatchCrop> crops,
+    required bool answers,
+    void Function(String status)? onStatus,
+  }) async {
+    final targets = crops
+        .where((crop) =>
+            !crop.isSetHeader &&
+            crop.id.isNotEmpty &&
+            crop.problemNumber.isNotEmpty)
+        .toList(growable: false);
+    if (targets.isEmpty) {
+      return const TextbookStageBatchResult(
+        answerSaved: 0,
+        solutionRefSaved: 0,
+        answerMissing: <String>[],
+        solutionMissing: <String>[],
+      );
+    }
+
+    final pending = <int>{for (var i = 0; i < targets.length; i += 1) i};
+    final hits = <int, _WonriMiddleCombinedHit>{};
+    final totalPages = doc.pages.length;
+    for (var page = 1; page <= totalPages && pending.isNotEmpty; page += 1) {
+      onStatus?.call(
+        '중등 개념원리 ${answers ? '빠른 정답' : '상세 해설'} VLM '
+        '$page / $totalPages 페이지... '
+        '남은 ${pending.length}개',
+      );
+      Uint8List png;
+      try {
+        png = await renderPdfPageToPng(
+          document: doc,
+          pageNumber: page,
+          longEdgePx: _vlmLongEdgePx,
+        );
+      } catch (_) {
+        continue;
+      }
+      // 코너를 섞거나 번호를 뒤섞어 물으면 모델이 해설 박스를 특정하지 못하고
+      // items=[]로 물러난다. 코너별로 번호 오름차순으로만 묻는다.
+      final batches = textbookWonriMiddleRequestBatches(
+        order: pending.toList()..sort(),
+        sectionOf: (position) => targets[position].section,
+        scopeKeyOf: (_) => '',
+        numberOf: (position) => targets[position].problemNumber,
+      );
+      for (final batch in batches) {
+        final order = batch.where(pending.contains).toList(growable: false);
+        if (order.isEmpty) continue;
+        try {
+          final result =
+              await _solutionRefService.extractWonriMiddleSolutionsOnPage(
+            imageBytes: png,
+            rawPage: page,
+            mode: answers ? 'answers' : 'solution_refs',
+            expectedEntries: <TextbookWonriMiddleSolutionExpected>[
+              for (final position in order)
+                TextbookWonriMiddleSolutionExpected(
+                  problemNumber: targets[position].problemNumber,
+                  category: targets[position].section,
+                  itemRole: textbookWonriMiddleItemRole(
+                    section: targets[position].section,
+                    problemNumber: targets[position].problemNumber,
+                    itemName: targets[position].itemName,
+                  ),
+                  bodyPage: targets[position].displayPage,
+                ),
+            ],
+          );
+          for (final item in result.items) {
+            int? position;
+            final numberKey =
+                textbookWonriMiddlePrintedNumberKey(item.problemNumber);
+            if (item.expectedIndex >= 0 && item.expectedIndex < order.length) {
+              final indexed = order[item.expectedIndex];
+              final crop = targets[indexed];
+              if (textbookWonriMiddlePrintedNumberKey(crop.problemNumber) ==
+                      numberKey &&
+                  (item.category.isEmpty || crop.section == item.category)) {
+                position = indexed;
+              }
+            }
+            if (position == null) {
+              final candidates = order.where((candidate) {
+                final crop = targets[candidate];
+                return textbookWonriMiddlePrintedNumberKey(
+                          crop.problemNumber,
+                        ) ==
+                        numberKey &&
+                    (item.category.isEmpty || crop.section == item.category);
+              }).toList();
+              if (candidates.length == 1) position = candidates.single;
+            }
+            if (position == null || !pending.remove(position)) continue;
+            hits[position] = _WonriMiddleCombinedHit(
+              item: item,
+              rawPage: result.rawPage,
+            );
+          }
+        } catch (_) {
+          continue;
+        }
+      }
+    }
+
+    final answerUploads = <TextbookAnswerUpload>[];
+    final refUploads = <TextbookSolutionRefUpload>[];
+    final missing = <String>[];
+    for (var position = 0; position < targets.length; position += 1) {
+      final target = targets[position];
+      final hit = hits[position];
+      if (hit == null) {
+        missing.add('${target.section} ${target.problemNumber}'.trim());
+        continue;
+      }
+      final item = hit.item;
+      if (answers && item.answerText.isEmpty && item.answerLatex2d.isEmpty) {
+        missing.add('${target.section} ${target.problemNumber}'.trim());
+        continue;
+      }
+      if (answers &&
+          (item.answerText.isNotEmpty || item.answerLatex2d.isNotEmpty)) {
+        answerUploads.add(TextbookAnswerUpload(
+          cropId: target.id,
+          answerKind: item.answerKind,
+          answerText: item.answerText,
+          answerLatex2d:
+              item.answerLatex2d.isEmpty ? item.answerText : item.answerLatex2d,
+          answerSource: 'vlm',
+          rawPage: hit.rawPage,
+          displayPage: hit.rawPage,
+          bbox1k: item.answerRegion1k ?? item.numberRegion1k,
+          rubricSteps: item.rubricSteps,
+          solutionMetadata: <String, dynamic>{
+            'solution_kind': item.solutionKind,
+            'item_role': textbookWonriMiddleItemRole(
+              section: target.section,
+              problemNumber: target.problemNumber,
+              itemName: target.itemName,
+            ),
+            if (item.totalPoints != null) 'total_points': item.totalPoints,
+          },
+        ));
+      }
+      if (!answers) {
+        refUploads.add(TextbookSolutionRefUpload(
+          cropId: target.id,
+          rawPage: hit.rawPage,
+          displayPage: hit.rawPage,
+          numberRegion1k: item.numberRegion1k,
+          contentRegion1k: item.contentRegion1k,
+          source: 'vlm',
+          sourceKind: 'sol',
+        ));
+      }
+    }
+    final answerSaved = await _answerService.batchUpsertAnswers(
+      academyId: academyId,
+      answers: answerUploads,
+    );
+    final solutionRefSaved = await _solutionRefService.batchUpsertSolutionRefs(
+      academyId: academyId,
+      refs: refUploads,
+    );
+    return TextbookStageBatchResult(
+      answerSaved: answerSaved,
+      solutionRefSaved: solutionRefSaved,
+      answerMissing: answers ? missing : const <String>[],
+      solutionMissing: answers ? const <String>[] : missing,
+    );
+  }
+
   _ImageAnswerCrop? _cropAnswerImage(Uint8List pagePng, List<int> bbox1k) {
     final decoded = img.decodeImage(pagePng);
     if (decoded == null || bbox1k.length != 4) return null;
@@ -619,23 +1020,30 @@ class _BatchCrop {
     required this.problemNumber,
     required this.isSetHeader,
     this.section = '',
+    this.rawPage,
     this.displayPage,
+    this.itemName = '',
   });
 
   final String id;
   final String problemNumber;
   final bool isSetHeader;
   final String section;
+  final int? rawPage;
   final int? displayPage;
+  final String itemName;
 
   factory _BatchCrop.fromRow(Map<dynamic, dynamic> row) {
+    final rawPage = int.tryParse('${row['raw_page'] ?? ''}');
     final page = int.tryParse('${row['display_page'] ?? ''}');
     return _BatchCrop(
       id: '${row['id'] ?? ''}'.trim(),
       problemNumber: '${row['problem_number'] ?? ''}'.trim(),
       isSetHeader: row['is_set_header'] == true,
       section: '${row['section'] ?? ''}'.trim(),
+      rawPage: rawPage != null && rawPage > 0 ? rawPage : null,
       displayPage: page != null && page > 0 ? page : null,
+      itemName: '${row['item_name'] ?? ''}'.trim(),
     );
   }
 }
@@ -682,6 +1090,16 @@ class _SolutionRefWithPage {
   final TextbookVlmSolutionRefItem item;
   final int rawPage;
   final int displayPage;
+}
+
+class _WonriMiddleCombinedHit {
+  const _WonriMiddleCombinedHit({
+    required this.item,
+    required this.rawPage,
+  });
+
+  final TextbookVlmWonriMiddleSolutionItem item;
+  final int rawPage;
 }
 
 class _ImageAnswerCrop {

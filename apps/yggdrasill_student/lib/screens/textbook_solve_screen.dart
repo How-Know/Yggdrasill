@@ -3323,7 +3323,8 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
   }
 
   /// 개념원리만 문항분류(필수유형 등)를 난이도/유형코드와 같은 회색 글씨로 표시.
-  bool get _showCategoryLabel => widget.book.series == 'wonri';
+  bool get _showCategoryLabel =>
+      widget.book.series == 'wonri' || widget.book.series == 'wonri_middle';
 
   /// 같은 문항을 다시 푸는 중이면 몇 번째인지 알려 준다.
   /// 처음 푸는 문항(1회차)은 굳이 표시하지 않는다.

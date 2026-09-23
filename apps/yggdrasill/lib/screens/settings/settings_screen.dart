@@ -14,6 +14,7 @@ import '../../widgets/teacher_registration_dialog.dart';
 import 'package:animations/animations.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:yggdrasill_m5_ota/m5_ota_service.dart';
 import '../../services/update_service.dart';
 import '../../services/print_routing_service.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -220,6 +221,7 @@ class _SettingsScreenState extends State<SettingsScreen>
   bool _isOwner = false; // 원장 여부 캐시
   bool _isSuperAdmin = false; // 플랫폼 관리자 여부
   bool _printerSettingsLoading = false;
+  bool _m5OtaBusy = false;
   String _generalPrinterValue = _kSystemDefaultPrinterValue;
   String _todoPrinterValue = _kSystemDefaultPrinterValue;
   List<String> _installedPrinters = const <String>[];
@@ -815,6 +817,56 @@ class _SettingsScreenState extends State<SettingsScreen>
             height: FabTabBarTokens.previewAcademySectionListSpacing,
           ),
           _buildGeneralPrinterSection(style),
+          const SizedBox(
+            height: FabTabBarTokens.previewAcademySectionListSpacing,
+          ),
+          _buildGeneralDeviceSection(style),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _scheduleConnectedM5Update() async {
+    if (_m5OtaBusy) return;
+    setState(() => _m5OtaBusy = true);
+    try {
+      final result = await M5OtaService.scheduleProductionDevices();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '${result.summaryLabel}에 ${result.version} 업데이트를 예약했습니다. 각 기기 전원을 다시 켜면 적용됩니다.',
+          ),
+          backgroundColor: _kSignatureGreen,
+        ),
+      );
+    } on M5OtaException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message)),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('M5 업데이트를 예약하지 못했습니다: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _m5OtaBusy = false);
+    }
+  }
+
+  Widget _buildGeneralDeviceSection(PreviewAcademyPanelStyle style) {
+    return PreviewAcademyLabeledCardSection(
+      style: style,
+      title: '주변 기기',
+      card: PreviewAcademyGroupedFieldsCard(
+        style: style,
+        rows: [
+          PreviewAcademyInfoRow(
+            label: 'M5 일괄 업데이트',
+            value: _m5OtaBusy ? '예약 중...' : '2호기~15호기',
+            onTap: _m5OtaBusy ? null : _scheduleConnectedM5Update,
+          ),
         ],
       ),
     );
@@ -1304,36 +1356,24 @@ class _SettingsScreenState extends State<SettingsScreen>
                 day.koreanName,
                 style: FabTabBarTokens.previewRowLabelStyle(previewStyle),
               ),
+              if (isActive) ...[
+                const SizedBox(width: 4),
+                Icon(
+                  isExpanded
+                      ? Icons.keyboard_arrow_down
+                      : Icons.chevron_right,
+                  size: FabTabBarTokens.previewAcademyChevronSize,
+                  color: previewStyle.chevron,
+                ),
+              ],
               const SizedBox(width: 12),
               Expanded(
                 child: Align(
                   alignment: Alignment.centerRight,
                   child: isActive
-                      ? Row(
-                          mainAxisAlignment: MainAxisAlignment.end,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Flexible(
-                              fit: FlexFit.loose,
-                              child: IntrinsicWidth(
-                                child: Align(
-                                  alignment: Alignment.centerRight,
-                                  child: _buildPreviewOperatingHoursPills(
-                                    previewStyle,
-                                    day,
-                                  ),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 4),
-                            Icon(
-                              isExpanded
-                                  ? Icons.keyboard_arrow_down
-                                  : Icons.chevron_right,
-                              size: FabTabBarTokens.previewAcademyChevronSize,
-                              color: previewStyle.chevron,
-                            ),
-                          ],
+                      ? _buildPreviewOperatingHoursPills(
+                          previewStyle,
+                          day,
                         )
                       : const SizedBox.shrink(),
                 ),
@@ -3615,41 +3655,27 @@ class _SettingsScreenState extends State<SettingsScreen>
       color: context.yggSurfaceBase,
       child: ScrollConfiguration(
         behavior: const _AcademyBouncyScrollBehavior(),
-        child: ScrollbarTheme(
-          data: ScrollbarThemeData(
-            thumbColor: WidgetStateProperty.all(
-              Colors.white.withValues(alpha: 0.72),
-            ),
-            radius: const Radius.circular(999),
-            thickness: WidgetStateProperty.all(5),
-            trackVisibility: WidgetStateProperty.all(false),
-          ),
-          child: NotificationListener<ScrollNotification>(
-            onNotification: _handleAcademyScrollNotification,
-            child: Scrollbar(
+        child: NotificationListener<ScrollNotification>(
+          onNotification: _handleAcademyScrollNotification,
+          child: Transform.translate(
+            offset: Offset(0, _academyBounceOffset),
+            child: SingleChildScrollView(
               controller: _academyScrollController,
-              thumbVisibility: true,
-              child: Transform.translate(
-                offset: Offset(0, _academyBounceOffset),
-                child: SingleChildScrollView(
-                  controller: _academyScrollController,
-                  padding: EdgeInsets.only(
-                    bottom: FabTabBarTokens.fabStyleScreenTabBarBottomPadding,
+              padding: EdgeInsets.only(
+                bottom: FabTabBarTokens.fabStyleScreenTabBarBottomPadding,
+              ),
+              physics: const BouncingScrollPhysics(
+                parent: AlwaysScrollableScrollPhysics(),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Align(
+                    alignment: Alignment.topCenter,
+                    child: _buildAcademySettings(),
                   ),
-                  physics: const BouncingScrollPhysics(
-                    parent: AlwaysScrollableScrollPhysics(),
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Align(
-                        alignment: Alignment.topCenter,
-                        child: _buildAcademySettings(),
-                      ),
-                    ],
-                  ),
-                ),
+                ],
               ),
             ),
           ),
@@ -3662,26 +3688,22 @@ class _SettingsScreenState extends State<SettingsScreen>
     return Container(
       color: context.yggSurfaceBase,
       child: ScrollConfiguration(
-        behavior: const ScrollBehavior(),
-        child: Scrollbar(
+        behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
+        child: SingleChildScrollView(
           controller: _teacherScrollController,
-          thumbVisibility: true,
-          child: SingleChildScrollView(
-            controller: _teacherScrollController,
-            padding: EdgeInsets.only(
-              bottom: FabTabBarTokens.fabStyleScreenTabBarBottomPadding,
-            ),
-            physics: const AlwaysScrollableScrollPhysics(),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Align(
-                  alignment: Alignment.topCenter,
-                  child: _buildTeacherSettings(),
-                ),
-              ],
-            ),
+          padding: EdgeInsets.only(
+            bottom: FabTabBarTokens.fabStyleScreenTabBarBottomPadding,
+          ),
+          physics: const AlwaysScrollableScrollPhysics(),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Align(
+                alignment: Alignment.topCenter,
+                child: _buildTeacherSettings(),
+              ),
+            ],
           ),
         ),
       ),
@@ -3692,26 +3714,22 @@ class _SettingsScreenState extends State<SettingsScreen>
     return Container(
       color: context.yggSurfaceBase,
       child: ScrollConfiguration(
-        behavior: const ScrollBehavior(),
-        child: Scrollbar(
+        behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
+        child: SingleChildScrollView(
           controller: _generalScrollController,
-          thumbVisibility: true,
-          child: SingleChildScrollView(
-            controller: _generalScrollController,
-            padding: EdgeInsets.only(
-              bottom: FabTabBarTokens.fabStyleScreenTabBarBottomPadding,
-            ),
-            physics: const AlwaysScrollableScrollPhysics(),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Align(
-                  alignment: Alignment.topCenter,
-                  child: _buildGeneralSettings(),
-                ),
-              ],
-            ),
+          padding: EdgeInsets.only(
+            bottom: FabTabBarTokens.fabStyleScreenTabBarBottomPadding,
+          ),
+          physics: const AlwaysScrollableScrollPhysics(),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Align(
+                alignment: Alignment.topCenter,
+                child: _buildGeneralSettings(),
+              ),
+            ],
           ),
         ),
       ),

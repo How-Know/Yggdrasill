@@ -235,6 +235,36 @@ class TextbookVlmTestService {
     );
   }
 
+  /// 중등 개념원리의 2단계 목차를 실제 소단원 행으로 보완한다.
+  ///
+  /// 목차에는 대단원/중단원만 인쇄되므로 중단원 본문을 훑어 정확히 보이는
+  /// 소단원 머리말과 중단원 마무리 시작 지면을 찾는다.
+  Future<TextbookWonriMiddleStructureResult> classifyWonriMiddleStructurePages({
+    required List<TextbookRpmSectionImage> images,
+    String mimeType = 'image/png',
+  }) async {
+    final body = <String, dynamic>{
+      'images': [
+        for (final image in images)
+          <String, dynamic>{
+            'image_base64': base64Encode(image.bytes),
+            'mime_type': mimeType,
+            'raw_page': image.rawPage,
+          },
+      ],
+      'series': 'wonri_middle',
+      'scope': 'structure',
+    };
+    final res = await _http.post(
+      _uri('/textbook/vlm/classify-problem-book-sections'),
+      headers: _headers(),
+      body: jsonEncode(body),
+    );
+    return TextbookWonriMiddleStructureResult.fromMap(
+      _decodeSectionJson(res),
+    );
+  }
+
   Map<String, dynamic> _decodeSectionJson(http.Response res) {
     Map<String, dynamic> json;
     try {
@@ -255,6 +285,65 @@ class TextbookVlmTestService {
       throw Exception('vlm_rpm_section_failed(${res.statusCode}): $summary');
     }
     return json;
+  }
+}
+
+class TextbookWonriMiddleStructurePage {
+  const TextbookWonriMiddleStructurePage({
+    required this.rawPage,
+    required this.subUnitHeaderVisible,
+    required this.subUnitName,
+    required this.unitEndKind,
+    required this.calculationHeaderVisible,
+  });
+
+  final int rawPage;
+  final bool subUnitHeaderVisible;
+  final String subUnitName;
+  final String unitEndKind;
+  final bool calculationHeaderVisible;
+
+  factory TextbookWonriMiddleStructurePage.fromMap(
+    Map<String, dynamic> map,
+  ) {
+    final raw = map['raw_page'];
+    final rawPage = raw is num ? raw.toInt() : int.tryParse('$raw') ?? 0;
+    return TextbookWonriMiddleStructurePage(
+      rawPage: rawPage,
+      subUnitHeaderVisible: map['sub_unit_header_visible'] == true,
+      subUnitName: '${map['sub_unit_name'] ?? ''}'.trim(),
+      unitEndKind:
+          const {'review', 'descriptive'}.contains(map['unit_end_kind'])
+              ? '${map['unit_end_kind']}'
+              : 'none',
+      calculationHeaderVisible: map['calculation_header_visible'] == true,
+    );
+  }
+}
+
+class TextbookWonriMiddleStructureResult {
+  const TextbookWonriMiddleStructureResult({
+    required this.pages,
+    required this.notes,
+  });
+
+  final List<TextbookWonriMiddleStructurePage> pages;
+  final String notes;
+
+  factory TextbookWonriMiddleStructureResult.fromMap(
+    Map<String, dynamic> map,
+  ) {
+    final rawPages = (map['pages'] as List?) ?? const <dynamic>[];
+    return TextbookWonriMiddleStructureResult(
+      pages: <TextbookWonriMiddleStructurePage>[
+        for (final raw in rawPages)
+          if (raw is Map)
+            TextbookWonriMiddleStructurePage.fromMap(
+              raw.map((key, dynamic value) => MapEntry('$key', value)),
+            ),
+      ],
+      notes: '${map['notes'] ?? ''}'.trim(),
+    );
   }
 }
 
@@ -623,6 +712,8 @@ class TextbookVlmItem {
     required this.bbox,
     required this.itemRegion,
     this.category = '',
+    this.itemRole = '',
+    this.companionRegions = const <Map<String, dynamic>>[],
     this.isImportant = false,
   });
 
@@ -635,6 +726,12 @@ class TextbookVlmItem {
   /// step_drill / unit_drill / descriptive / extra_practice 를 쓰고,
   /// 각각 sub_key 슬롯과 1:1 대응한다. 문제집(쎈·RPM)에서는 빈 문자열.
   final String category;
+
+  /// 중등 개념원리 대표예제/확인/서술형 예시 역할.
+  final String itemRole;
+
+  /// 문제 본문과 분리해 보존하는 KEY POINT/힌트/참고 영역.
+  final List<Map<String, dynamic>> companionRegions;
 
   /// 개념+유형 탄탄 단원 다지기의 노란 별(중요) 표시. 난이도와 별개 값이다.
   final bool isImportant;
@@ -658,11 +755,17 @@ class TextbookVlmItem {
   /// not return one or rejected it.
   final List<int>? itemRegion;
 
-  /// 카테고리만 바꾼 사본. 지면 판독 뒤 규칙으로 코너를 되돌릴 때 쓴다.
-  TextbookVlmItem withCategory(String category) => TextbookVlmItem(
+  /// 카테고리·라벨을 바꾼 사본. 연속 지면의 코너/STEP을 복구할 때 쓴다.
+  TextbookVlmItem withClassification({
+    String? category,
+    String? label,
+  }) =>
+      TextbookVlmItem(
         number: number,
-        label: label,
-        category: category,
+        label: label ?? this.label,
+        category: category ?? this.category,
+        itemRole: itemRole,
+        companionRegions: companionRegions,
         isImportant: isImportant,
         isSetHeader: isSetHeader,
         setFrom: setFrom,
@@ -675,6 +778,10 @@ class TextbookVlmItem {
         bbox: bbox,
         itemRegion: itemRegion,
       );
+
+  /// 카테고리만 바꾸는 기존 호출용 축약형.
+  TextbookVlmItem withCategory(String category) =>
+      withClassification(category: category);
 
   factory TextbookVlmItem.fromMap(Map<String, dynamic> map) {
     int? asIntN(dynamic v) {
@@ -726,6 +833,13 @@ class TextbookVlmItem {
       'check',
       'exercise',
       'special_lecture',
+      // 중등 개념원리
+      'middle_concept_check',
+      'middle_core_problem',
+      'middle_exam_problem',
+      'middle_unit_review',
+      'middle_descriptive',
+      'middle_calculation',
       // 개념+유형
       'concept_check',
       'essential_problem',
@@ -738,11 +852,40 @@ class TextbookVlmItem {
       'unit_review',
     };
     final categoryRaw = '${map['category'] ?? ''}'.trim();
+    final itemRoleRaw = '${map['item_role'] ?? ''}'.trim();
+    final companionRegions = <Map<String, dynamic>>[];
+    final rawCompanions = map['companion_regions'];
+    if (rawCompanions is List) {
+      for (final raw in rawCompanions) {
+        if (raw is! Map) continue;
+        final row = raw.map((key, dynamic value) => MapEntry('$key', value));
+        final kind = '${row['kind'] ?? ''}'.trim();
+        final bbox = parseBbox(row['bbox']);
+        if (!const {'key_point', 'hint', 'reference'}.contains(kind) ||
+            bbox == null) {
+          continue;
+        }
+        companionRegions.add(<String, dynamic>{
+          'kind': kind,
+          'bbox': bbox,
+          'text': '${row['text'] ?? ''}'.trim(),
+        });
+      }
+    }
 
     return TextbookVlmItem(
       number: number,
       label: '${map['label'] ?? ''}',
       category: allowedCategories.contains(categoryRaw) ? categoryRaw : '',
+      itemRole: const {
+        'standard',
+        'representative',
+        'follow_up',
+        'descriptive_example',
+      }.contains(itemRoleRaw)
+          ? itemRoleRaw
+          : '',
+      companionRegions: companionRegions,
       isImportant: map['is_important'] == true,
       isSetHeader: map['is_set_header'] == true || inferredRange != null,
       setFrom: from,
@@ -770,6 +913,8 @@ class TextbookVlmItem {
       number: number,
       label: label,
       category: category,
+      itemRole: itemRole,
+      companionRegions: companionRegions,
       isSetHeader: isSetHeader,
       setFrom: setFrom,
       setTo: setTo,
@@ -781,6 +926,81 @@ class TextbookVlmItem {
       bbox: bbox ?? this.bbox,
       itemRegion: itemRegion ?? this.itemRegion,
     );
+  }
+}
+
+/// 중등 개념원리의 고정 `중단원 마무리하기` 행(D/E)에서 지면 간 문맥을
+/// 이어 준다.
+///
+/// STEP 머리말은 첫 지면에만 인쇄될 수 있다. 뒤 지면을 한 장씩 판독하면
+/// 머리말 없는 STEP 1 연속 지면이 C(이런 문제가 시험에 나온다)로 되돌아가는
+/// 경우가 있으므로, 마무리 행 안에서는 D → E 순서를 단조롭게 유지한다.
+/// 선택형 F(계산력 강화하기)는 독립 코너라 순서 상태를 바꾸지 않고 보존한다.
+class TextbookWonriMiddleUnitEndGuard {
+  static const String unitReview = 'middle_unit_review';
+  static const String descriptive = 'middle_descriptive';
+  static const String calculation = 'middle_calculation';
+
+  String _phase = unitReview;
+  String _lastStepLabel = '';
+
+  TextbookVlmItem normalize(
+    TextbookVlmItem item, {
+    required String pageSection,
+  }) {
+    var category = item.category.trim();
+    if (category.isEmpty) category = pageSection.trim();
+
+    if (category == descriptive) {
+      _phase = descriptive;
+    } else if (category == calculation) {
+      // F는 D/E 사이에 끼어도 이후 코너의 기준을 바꾸지 않는다.
+    } else if (_phase == descriptive ||
+        category != unitReview && category != descriptive) {
+      category = _phase;
+    }
+
+    var label = item.label.trim();
+    if (category == unitReview) {
+      final normalizedStep = _normalizeStepLabel(label);
+      if (normalizedStep.isNotEmpty) {
+        _lastStepLabel = normalizedStep;
+        label = normalizedStep;
+      } else if (_lastStepLabel.isNotEmpty) {
+        label = _lastStepLabel;
+      }
+    }
+
+    if (category == item.category && label == item.label) return item;
+    return item.withClassification(category: category, label: label);
+  }
+
+  String sectionForPage(
+    String original,
+    Iterable<TextbookVlmItem> items,
+  ) {
+    final counts = <String, int>{};
+    for (final item in items) {
+      final category = item.category.trim();
+      if (category != unitReview &&
+          category != descriptive &&
+          category != calculation) {
+        continue;
+      }
+      counts[category] = (counts[category] ?? 0) + 1;
+    }
+    if (counts.isEmpty) return original;
+    return counts.entries.reduce((a, b) => b.value > a.value ? b : a).key;
+  }
+
+  static String _normalizeStepLabel(String value) {
+    final compact = value.replaceAll(' ', '').toUpperCase();
+    return switch (compact) {
+      'STEP1' => 'STEP1',
+      'STEP2' => 'STEP2',
+      'STEP3' => 'STEP3',
+      _ => '',
+    };
   }
 }
 

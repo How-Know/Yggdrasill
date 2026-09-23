@@ -111,6 +111,26 @@ export function buildParseTocPrompt({ pageCount, series = '' }) {
           '문제 카테고리 라벨은 단원이 아니다 — 어느 레벨에도 절대 넣지 마라.',
         ]
       : [];
+  const wonriMiddleLines =
+    seriesKey === 'wonri_middle'
+      ? [
+          '',
+          '=== 중등 개념원리 목차 규칙 (매우 중요) ===',
+          '이 교재(중등 개념원리)의 인쇄 목차는 2단계다:',
+          '  - 대단원: "Ⅰ 소인수분해"처럼 큰 로마숫자와 제목으로 표기된다.',
+          '    로마숫자는 버리고 이름만 big_units[].name에 담아라.',
+          '  - 중단원: 원 안의 숫자와 함께 "① 소인수분해 ........ 10"처럼',
+          '    번호, 이름, 시작 페이지가 한 줄에 표기된다.',
+          '    원형 번호는 버리고 이름을 mid_units[].name, 줄 오른쪽 숫자를',
+          '    mid_units[].page에 담아라.',
+          '이 목차에는 소단원 이름이나 시작 페이지가 인쇄돼 있지 않다.',
+          '소단원을 추측해서 만들지 말고 모든 mid_units[].sub_units는 반드시 []로 둔다.',
+          '"개념원리 이해", "개념원리 확인하기", "핵심문제 익히기",',
+          '"이런 문제가 시험에 나온다", "계산력 강화하기", "중단원 마무리하기",',
+          '"서술형 대비 문제", "STEP", "KEY POINT"는 본문의 학습영역이며 단원이 아니다.',
+          '목차의 각 중단원 줄 오른쪽 시작 페이지를 빠짐없이 읽어라.',
+        ]
+      : [];
   const gaeyuLines =
     seriesKey === 'gaeyu'
       ? [
@@ -222,6 +242,7 @@ export function buildParseTocPrompt({ pageCount, series = '' }) {
     ...ssenLines,
     ...rpmLines,
     ...wonriLines,
+    ...wonriMiddleLines,
     ...gaeyuLines,
     ...suryeokLines,
     ...gojaengiLines,

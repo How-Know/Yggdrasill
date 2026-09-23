@@ -5610,26 +5610,50 @@ class AttendanceService {
     }
   }
 
+  /// 등원했고 하원이 없으며, 수업일+2일 00:00 캡이 지난 출석.
+  bool isMissingDeparturePastCap(AttendanceRecord rec, [DateTime? now]) {
+    if (rec.arrivalTime == null || rec.departureTime != null) return false;
+    return !(now ?? DateTime.now()).isBefore(rec.openSessionCapAt);
+  }
+
+  /// 종료 확인창에 보여줄 미하원 대상. 서버 출석을 다시 읽은 뒤 걸러 낸다.
+  Future<List<AttendanceRecord>> listMissingDeparturesPastCap() async {
+    await loadAttendanceRecords();
+    final now = DateTime.now();
+    final targets = _attendanceRecords
+        .where((rec) => isMissingDeparturePastCap(rec, now))
+        .toList(growable: false);
+    targets.sort((a, b) {
+      final byTime = a.classDateTime.compareTo(b.classDateTime);
+      if (byTime != 0) return byTime;
+      return a.studentId.compareTo(b.studentId);
+    });
+    return targets;
+  }
+
+  /// 선택한 미하원만 캡 시각으로 닫는다.
+  Future<int> closeMissingDepartures(
+    Iterable<AttendanceRecord> records,
+  ) async {
+    var updated = 0;
+    for (final rec in records) {
+      if (!isMissingDeparturePastCap(rec)) continue;
+      await updateAttendanceRecord(
+        rec.copyWith(
+          isPresent: true,
+          departureTime: rec.openSessionCapAt,
+        ),
+      );
+      updated++;
+    }
+    print('[ATT] 캡 지난 미하원 처리: $updated건');
+    return updated;
+  }
+
   Future<void> fixMissingDeparturesForYesterdayKst() async {
     try {
-      // 종료 직전 최신 상태를 기준으로 보정하기 위해 서버 데이터를 다시 로드한다.
-      await loadAttendanceRecords();
-      final now = DateTime.now();
-      int updated = 0;
-      for (final rec in _attendanceRecords) {
-        if (rec.arrivalTime == null || rec.departureTime != null) continue;
-        // 등원일 다음날 밤 12시(등원일+2일 00:00)가 지난 미하원만 닫는다.
-        // 자정을 넘긴 당일 수업은 건드리지 않는다.
-        if (now.isBefore(rec.openSessionCapAt)) continue;
-        await updateAttendanceRecord(
-          rec.copyWith(
-            isPresent: true,
-            departureTime: rec.openSessionCapAt,
-          ),
-        );
-        updated++;
-      }
-      print('[ATT] 캡 지난 미하원 자동 처리: $updated건');
+      final targets = await listMissingDeparturesPastCap();
+      await closeMissingDepartures(targets);
     } catch (e, st) {
       print('[ATT][ERROR] 미하원 자동 처리 실패: $e\n$st');
     }

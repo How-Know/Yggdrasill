@@ -181,6 +181,26 @@ String textbookStageScopeKey(TextbookAuthoringStageScope scope) =>
     '${scope.bigOrder}:${scope.midOrder}:${scope.subKey}:'
     '${scope.unitRowIndex ?? 0}';
 
+/// 시리즈·슬롯별 실제 crop `sub_index`.
+///
+/// 단원 행 순번을 쓰는 슬롯만 [unitRowIndex]를 사용하고, 중단원 전체에서
+/// 번호가 이어지는 슬롯은 0을 사용한다.
+int textbookStageCropSubIndexForScope(
+  String seriesKey,
+  TextbookAuthoringStageScope scope,
+) {
+  final series = seriesKey.trim().toLowerCase();
+  final subKey = scope.subKey.trim().toUpperCase();
+  final indexedKeys = switch (series) {
+    'wonri_middle' => const <String>{'A', 'B', 'C', 'D', 'E', 'F'},
+    'wonri' => const <String>{'B', 'E'},
+    'gaeyu' => const <String>{'B', 'C', 'F'},
+    'suryeok' => const <String>{'A', 'B'},
+    _ => const <String>{},
+  };
+  return indexedKeys.contains(subKey) ? (scope.unitRowIndex ?? 0) : 0;
+}
+
 /// 해설 PDF에서 실제로 이어지는 지면 묶음.
 ///
 /// 고쟁이 본교재(A~D), 중단원 TEST(E), 대단원 TEST(F)는 단원 트리에서는
@@ -249,6 +269,7 @@ class TextbookAuthoringStageCropSeed {
     this.contentGroupLabel = '',
     this.contentGroupTitle = '',
     this.contentGroupOrder,
+    this.itemName = '',
     this.scopeLabel = '',
     this.scopeKey = '',
   });
@@ -263,6 +284,7 @@ class TextbookAuthoringStageCropSeed {
   final String contentGroupLabel;
   final String contentGroupTitle;
   final int? contentGroupOrder;
+  final String itemName;
   final String scopeLabel;
 
   /// `textbookStageScopeKey` 값. 해설 훑기에서 이 문항의 소단원 쪽 범위를
@@ -348,6 +370,8 @@ class _TextbookAuthoringStageDialogState
   PdfDocument? _solutionDocument;
   String? _solutionLocalPath;
   final _solutionViewerController = PdfViewerController();
+  final _bodySolutionViewerController = PdfViewerController();
+  String _solutionViewerSourceKind = 'sol';
   final Map<int, Uint8List> _solutionPagePngCache = <int, Uint8List>{};
   final Map<int, Uint8List> _solutionLayoutPagePngCache = <int, Uint8List>{};
 
@@ -362,6 +386,8 @@ class _TextbookAuthoringStageDialogState
   String? _bodyPdfError;
   Future<PdfDocument?>? _bodyPdfLoad;
   PdfDocument? _bodyDocument;
+  String? _bodyLocalPath;
+  bool _loadingBodyPdf = false;
   final Map<int, Uint8List> _bodyPagePngCache = <int, Uint8List>{};
 
   /// 개념원리(wonri)의 B(필수유형)·E(특강) 슬롯 여부. 이 경우 정답과 풀이가
@@ -370,6 +396,9 @@ class _TextbookAuthoringStageDialogState
   bool get _isWonriEssential =>
       widget.seriesKey.trim().toLowerCase() == 'wonri' &&
       const {'B', 'E'}.contains(widget.subKey.trim().toUpperCase());
+
+  bool get _isWonriMiddle =>
+      widget.seriesKey.trim().toLowerCase() == 'wonri_middle';
 
   bool _savingSolRefs = false;
   bool _loadingPbRuns = false;
@@ -407,7 +436,11 @@ class _TextbookAuthoringStageDialogState
       }
     });
     unawaited(_loadCrops());
-    unawaited(_ensureAnswerPdf());
+    if (_isWonriMiddle) {
+      unawaited(_ensureSolutionPdf());
+    } else {
+      unawaited(_ensureAnswerPdf());
+    }
     unawaited(_refreshPbRunStatuses());
   }
 
@@ -481,7 +514,8 @@ class _TextbookAuthoringStageDialogState
   Future<List<Map<String, dynamic>>> _loadCropRowsForScopes() async {
     const select = 'id, problem_number, raw_page, display_page, section, '
         'is_set_header, content_group_kind, content_group_label, '
-        'content_group_title, content_group_order, bbox_1k, item_region_1k';
+        'content_group_title, content_group_order, item_name, '
+        'bbox_1k, item_region_1k';
     final scopes = widget.batchScopes.isNotEmpty
         ? widget.batchScopes
         : <TextbookAuthoringStageScope>[
@@ -508,9 +542,13 @@ class _TextbookAuthoringStageDialogState
           .eq('grade_label', widget.gradeLabel)
           .eq('big_order', scope.bigOrder)
           .eq('mid_order', scope.midOrder)
-          .eq('sub_key', scope.subKey);
-      // 개념원리 A/C/D는 sub_index=0을 중단원 전체가 공유하므로 실제
-      // 소단원의 본문 표시 페이지 범위로 크롭을 분리한다.
+          .eq('sub_key', scope.subKey)
+          .eq(
+            'sub_index',
+            textbookStageCropSubIndexForScope(widget.seriesKey, scope),
+          );
+      // sub_index=0을 중단원 전체가 공유하는 슬롯도 실제 소단원의 본문
+      // 표시 페이지 범위로 한 번 더 분리한다.
       if (scope.bodyStartPage != null && scope.bodyStartPage! > 0) {
         query = query.gte('display_page', scope.bodyStartPage!);
       }
@@ -548,7 +586,7 @@ class _TextbookAuthoringStageDialogState
         .select('crop_id, answer_kind, answer_text, answer_latex_2d, '
             'answer_source, raw_page, display_page, bbox_1k, '
             'answer_image_bucket, answer_image_path, answer_image_region_1k, '
-            'note')
+            'rubric_steps, solution_metadata, note')
         .inFilter('crop_id', ids);
     final list = (rows as List).cast<Map<String, dynamic>>();
     _answersByCropId.clear();
@@ -729,7 +767,10 @@ class _TextbookAuthoringStageDialogState
   }
 
   Future<PdfDocument?> _loadBodyPdf() async {
-    setState(() => _bodyPdfError = null);
+    setState(() {
+      _loadingBodyPdf = true;
+      _bodyPdfError = null;
+    });
     try {
       final target = await _pdfService.requestDownloadUrl(
         academyId: widget.academyId,
@@ -758,12 +799,17 @@ class _TextbookAuthoringStageDialogState
       }
       setState(() {
         _bodyDocument = doc;
+        _bodyLocalPath = file.path;
+        _loadingBodyPdf = false;
         _bodyPagePngCache.clear();
       });
       return doc;
     } catch (e) {
       if (!mounted) return null;
-      setState(() => _bodyPdfError = '$e');
+      setState(() {
+        _loadingBodyPdf = false;
+        _bodyPdfError = '$e';
+      });
       return null;
     } finally {
       _bodyPdfLoad = null;
@@ -789,6 +835,10 @@ class _TextbookAuthoringStageDialogState
 
   Future<void> _runAnswerVlm() async {
     if (_runningAnswerVlm) return;
+    if (_isWonriMiddle) {
+      await _runWonriMiddleStageVlm(answers: true);
+      return;
+    }
     if (_isWonriEssential) {
       await _runBodySolutionVlm();
       return;
@@ -1131,6 +1181,8 @@ class _TextbookAuthoringStageDialogState
         answerImageRegion1k: entry.answerImageRegion1k,
         answerImageWidthPx: entry.answerImageWidthPx,
         answerImageHeightPx: entry.answerImageHeightPx,
+        rubricSteps: entry.rubricSteps,
+        solutionMetadata: entry.solutionMetadata,
       ));
     }
     if (moved > 0 || dropped > 0) {
@@ -1997,6 +2049,10 @@ class _TextbookAuthoringStageDialogState
 
   Future<void> _runSolutionRefVlm() async {
     if (_runningSolRefVlm) return;
+    if (_isWonriMiddle) {
+      await _runWonriMiddleStageVlm(answers: false);
+      return;
+    }
     if (_isWonriEssential) {
       await _runBodySolutionVlm();
       return;
@@ -2391,6 +2447,456 @@ class _TextbookAuthoringStageDialogState
       setState(() {
         _runningSolRefVlm = false;
         _solRefStatus = 'VLM 실패: $e';
+      });
+    }
+  }
+
+  /// 중등 개념원리 전용 — 정답 단계와 상세 해설 단계를 독립 실행한다.
+  ///
+  /// 핵심문제 대표 예제·서술형 예시는 본문에 풀이와 답이 있고,
+  /// 핵심문제 확인·서술형 유제 및 나머지 코너는 해설 PDF에 있다.
+  Future<void> _runWonriMiddleStageVlm({required bool answers}) async {
+    if (_runningAnswerVlm || _runningSolRefVlm) return;
+    final candidates = _crops.where((crop) => !crop.isSetHeader).toList();
+    final targets = candidates.where((crop) {
+      final answer = _answersByCropId[crop.id];
+      final hasAnswer = answer?.answerText.trim().isNotEmpty == true;
+      final hasSolution = _solRefsByCropId.containsKey(crop.id);
+      if (!answers) return !hasSolution;
+      if (!hasAnswer) return true;
+      final usesBody = textbookWonriMiddleUsesBodySolution(
+        section: crop.section,
+        problemNumber: crop.problemNumber,
+        itemName: crop.itemName,
+      );
+      // 통합 추출 구버전은 상세 풀이에서 정답과 bbox를 저장했다
+      // (solution_kind=full). 해설 PDF 문항은 빠른 정답 박스 좌표
+      // (answer_only)로 한 번 덮어써야 새 분리 구조로 교정된다.
+      return !usesBody &&
+          '${answer?.solutionMetadata['solution_kind'] ?? ''}' != 'answer_only';
+    }).toList();
+    final savedCount = candidates.length - targets.length;
+    if (targets.isEmpty) {
+      setState(() {
+        if (answers) {
+          _answerStatus = '정답 추출 생략 · 저장된 정답 $savedCount개';
+        } else {
+          _solRefStatus = '해설 추출 생략 · 저장된 해설 $savedCount개';
+        }
+      });
+      return;
+    }
+
+    final bodyTargets = targets
+        .where((crop) => textbookWonriMiddleUsesBodySolution(
+              section: crop.section,
+              problemNumber: crop.problemNumber,
+              itemName: crop.itemName,
+            ))
+        .toList(growable: false);
+    final solutionTargets = targets
+        .where((crop) => !textbookWonriMiddleUsesBodySolution(
+              section: crop.section,
+              problemNumber: crop.problemNumber,
+              itemName: crop.itemName,
+            ))
+        .toList(growable: false);
+
+    PdfDocument? bodyDoc;
+    PdfDocument? solutionDoc;
+    if (bodyTargets.isNotEmpty) {
+      setState(() {
+        if (answers) {
+          _answerStatus = '본문 PDF 준비 중…';
+        } else {
+          _solRefStatus = '본문 PDF 준비 중…';
+        }
+      });
+      bodyDoc = await _ensureBodyPdf();
+      if (bodyDoc == null) {
+        _toast(
+          '본문 PDF 로드 실패'
+          '${_bodyPdfError == null ? '' : ': $_bodyPdfError'}',
+          error: true,
+        );
+        return;
+      }
+    }
+    if (solutionTargets.isNotEmpty) {
+      setState(() {
+        if (answers) {
+          _answerStatus = '빠른 정답 박스 준비 중…';
+        } else {
+          _solRefStatus = '상세 해설 PDF 준비 중…';
+        }
+      });
+      solutionDoc = await _ensureSolutionPdf();
+      if (solutionDoc == null) {
+        _toast(
+          '해설 PDF 로드 실패'
+          '${_solutionPdfError == null ? '' : ': $_solutionPdfError'}',
+          error: true,
+        );
+        return;
+      }
+    }
+
+    final pending = <int>{
+      for (var i = 0; i < solutionTargets.length; i += 1) i,
+    };
+    var newAnswers = 0;
+    var newSolutions = 0;
+    final pageErrors = <String>[];
+    setState(() {
+      if (answers) {
+        _runningAnswerVlm = true;
+        _answerProgress = 0;
+        _answerStatus = '빠른 정답 박스·본문 정답 추출 중…';
+      } else {
+        _runningSolRefVlm = true;
+        _solRefProgress = 0;
+        _solRefStatus = '상세 해설 번호·풀이 영역 추출 중…';
+      }
+    });
+
+    try {
+      if (bodyTargets.isNotEmpty && bodyDoc != null) {
+        final byPage = <int, List<_StageCrop>>{};
+        for (final crop in bodyTargets) {
+          final page = crop.rawPage;
+          if (page == null || page <= 0) continue;
+          byPage.putIfAbsent(page, () => <_StageCrop>[]).add(crop);
+        }
+        final pages = byPage.keys.toList()..sort();
+        for (var i = 0; i < pages.length; i += 1) {
+          final page = pages[i];
+          if (!mounted) return;
+          final pageCrops = byPage[page]!;
+          setState(() {
+            final status = '본문 p$page 예제 풀이 분석 중… (${i + 1}/${pages.length})';
+            if (answers) {
+              _answerStatus = status;
+            } else {
+              _solRefStatus = status;
+            }
+          });
+          Uint8List? png;
+          try {
+            png = await _bodyPagePng(page);
+          } catch (e) {
+            pageErrors.add('본문 p$page 렌더 실패: $e');
+          }
+          if (png == null) continue;
+          TextbookVlmBodySolutionPageResult result;
+          try {
+            result = await _solRefService.extractBodySolutionsOnPage(
+              imageBytes: png,
+              rawPage: page,
+              expectedNumbers: <String>[
+                for (final crop in pageCrops) crop.problemNumber,
+              ],
+              seriesKey: 'wonri_middle',
+            );
+          } catch (e) {
+            pageErrors.add('본문 p$page VLM 실패: $e');
+            continue;
+          }
+          final itemByKey = <String, TextbookVlmBodySolutionItem>{
+            for (final item in result.items)
+              textbookWonriMiddlePrintedNumberKey(item.problemNumber): item,
+          };
+          if (!mounted) return;
+          setState(() {
+            for (final crop in pageCrops) {
+              final item = itemByKey[
+                  textbookWonriMiddlePrintedNumberKey(crop.problemNumber)];
+              if (item == null) continue;
+              final hasAnswer =
+                  _answersByCropId[crop.id]?.answerText.trim().isNotEmpty ==
+                      true;
+              final oldSolutionKind =
+                  '${_answersByCropId[crop.id]?.solutionMetadata['solution_kind'] ?? ''}';
+              if (answers &&
+                  (!hasAnswer || oldSolutionKind != 'answer_only') &&
+                  (item.answerText.isNotEmpty ||
+                      item.answerLatex2d.isNotEmpty)) {
+                _answersByCropId[crop.id] = _AnswerDraft(
+                  cropId: crop.id,
+                  problemNumber: crop.problemNumber,
+                  kind: item.answerKind,
+                  answerText: item.answerText,
+                  answerLatex2d: item.answerLatex2d.isEmpty
+                      ? item.answerText
+                      : item.answerLatex2d,
+                  source: 'vlm',
+                  rawPage: page,
+                  solutionMetadata: <String, dynamic>{
+                    'solution_kind': 'full',
+                    'item_role': textbookWonriMiddleItemRole(
+                      section: crop.section,
+                      problemNumber: crop.problemNumber,
+                      itemName: crop.itemName,
+                    ),
+                  },
+                  dirty: true,
+                );
+                newAnswers += 1;
+              }
+              if (!answers &&
+                  !_solRefsByCropId.containsKey(crop.id) &&
+                  item.contentRegion1k != null) {
+                _solRefsByCropId[crop.id] = _SolRefDraft(
+                  cropId: crop.id,
+                  problemNumber: crop.problemNumber,
+                  rawPage: page,
+                  displayPage: crop.displayPage,
+                  numberRegion1k: item.numberRegion1k,
+                  contentRegion1k: item.contentRegion1k,
+                  source: 'vlm',
+                  sourceKind: 'body',
+                  dirty: true,
+                );
+                newSolutions += 1;
+              }
+            }
+          });
+        }
+      }
+
+      if (solutionTargets.isNotEmpty && solutionDoc != null) {
+        final pageRange = _pageRangeFromScopes(
+          answer: false,
+          pageCount: solutionDoc.pages.length,
+        );
+        // 다음 소단원의 빠른 정답 박스와 직전 소단원의 상세 풀이가 같은 경계
+        // 지면에 함께 놓인다. 해설 단계만 한 쪽 더 읽어 연속 풀이를 보존한다.
+        final scanEnd = textbookWonriMiddleScanEnd(
+          answers: answers,
+          scopeEnd: pageRange.end,
+          pageCount: solutionDoc.pages.length,
+        );
+        final scanTotal = scanEnd - pageRange.start + 1;
+        final scopeBounds = _solutionScopeBounds;
+        for (var page = pageRange.start;
+            page <= scanEnd && pending.isNotEmpty;
+            page += 1) {
+          if (!mounted) return;
+          setState(() {
+            final status = answers
+                ? '빠른 정답 p$page 분석 중… · 저장 $savedCount개 · 남은 ${pending.length}개'
+                : '상세 해설 p$page 분석 중… · 저장 $savedCount개 · 남은 ${pending.length}개';
+            if (answers) {
+              _answerStatus = status;
+            } else {
+              _solRefStatus = status;
+            }
+          });
+          Uint8List? png;
+          try {
+            png = await _solutionPagePng(page);
+          } catch (e) {
+            pageErrors.add('해설 p$page 렌더 실패: $e');
+          }
+          if (png == null) continue;
+
+          // 해설 박스는 소단원마다 하나씩, 번호는 1부터 오름차순으로 인쇄된다.
+          // 두 소단원의 확인 1~6이 한 요청에 겹쳐 들어가거나 번호가 뒤섞이면
+          // 모델이 박스를 특정하지 못하고 items=[]로 물러난다.
+          final pagePositions = textbookStageOrderForPage(
+            order: pending.toList()..sort(),
+            scopeKeyOf: (position) => solutionTargets[position].scopeKey,
+            bounds: scopeBounds,
+            page: page,
+            leadingPageAllowance: 0,
+          );
+          final batches = textbookWonriMiddleRequestBatches(
+            order: pagePositions,
+            sectionOf: (position) => solutionTargets[position].section,
+            scopeKeyOf: (position) => solutionTargets[position].scopeKey,
+            numberOf: (position) => solutionTargets[position].problemNumber,
+          );
+          for (final batch in batches) {
+            final order = batch.where(pending.contains).toList(growable: false);
+            if (order.isEmpty) continue;
+            TextbookVlmWonriMiddleSolutionPageResult result;
+            try {
+              result = await _solRefService.extractWonriMiddleSolutionsOnPage(
+                imageBytes: png,
+                rawPage: page,
+                mode: answers ? 'answers' : 'solution_refs',
+                expectedEntries: <TextbookWonriMiddleSolutionExpected>[
+                  for (final position in order)
+                    TextbookWonriMiddleSolutionExpected(
+                      problemNumber: solutionTargets[position].problemNumber,
+                      category: solutionTargets[position].section,
+                      title: solutionTargets[position].scopeLabel,
+                      itemRole: textbookWonriMiddleItemRole(
+                        section: solutionTargets[position].section,
+                        problemNumber: solutionTargets[position].problemNumber,
+                        itemName: solutionTargets[position].itemName,
+                      ),
+                      bodyPage: solutionTargets[position].displayPage,
+                    ),
+                ],
+              );
+              debugPrint(
+                '[wonri-middle-stage] mode=${answers ? 'answers' : 'solution_refs'} '
+                'page=$page section=${solutionTargets[order.first].section} '
+                'expected=${order.length} items=${result.items.length} '
+                '${result.notes}',
+              );
+            } catch (e) {
+              pageErrors.add(
+                '해설 p$page ${solutionTargets[order.first].section} VLM 실패: $e',
+              );
+              continue;
+            }
+
+            if (!mounted) return;
+            setState(() {
+              for (final item in result.items) {
+                int? targetIndex;
+                final numberKey =
+                    textbookWonriMiddlePrintedNumberKey(item.problemNumber);
+                if (item.expectedIndex >= 0 &&
+                    item.expectedIndex < order.length) {
+                  final indexed = order[item.expectedIndex];
+                  final crop = solutionTargets[indexed];
+                  if (textbookWonriMiddlePrintedNumberKey(crop.problemNumber) ==
+                          numberKey &&
+                      (item.category.isEmpty ||
+                          item.category == crop.section)) {
+                    targetIndex = indexed;
+                  }
+                }
+                if (targetIndex == null) {
+                  final matched = order.where((index) {
+                    final crop = solutionTargets[index];
+                    return textbookWonriMiddlePrintedNumberKey(
+                              crop.problemNumber,
+                            ) ==
+                            numberKey &&
+                        (item.category.isEmpty ||
+                            item.category == crop.section);
+                  }).toList();
+                  if (matched.length == 1) targetIndex = matched.single;
+                }
+                if (targetIndex == null || !pending.remove(targetIndex)) {
+                  continue;
+                }
+                final crop = solutionTargets[targetIndex];
+                final hasAnswer =
+                    _answersByCropId[crop.id]?.answerText.trim().isNotEmpty ==
+                        true;
+                final oldSolutionKind =
+                    '${_answersByCropId[crop.id]?.solutionMetadata['solution_kind'] ?? ''}';
+                if (answers &&
+                    (!hasAnswer || oldSolutionKind != 'answer_only') &&
+                    (item.answerText.isNotEmpty ||
+                        item.answerLatex2d.isNotEmpty)) {
+                  _answersByCropId[crop.id] = _AnswerDraft(
+                    cropId: crop.id,
+                    problemNumber: crop.problemNumber,
+                    kind: item.answerKind,
+                    answerText: item.answerText,
+                    answerLatex2d: item.answerLatex2d.isEmpty
+                        ? item.answerText
+                        : item.answerLatex2d,
+                    source: 'vlm',
+                    rawPage: result.rawPage,
+                    bbox1k: item.answerRegion1k ?? item.numberRegion1k,
+                    rubricSteps: item.rubricSteps,
+                    solutionMetadata: <String, dynamic>{
+                      'solution_kind': item.solutionKind,
+                      'item_role': textbookWonriMiddleItemRole(
+                        section: crop.section,
+                        problemNumber: crop.problemNumber,
+                        itemName: crop.itemName,
+                      ),
+                      if (item.totalPoints != null)
+                        'total_points': item.totalPoints,
+                    },
+                    dirty: true,
+                  );
+                  newAnswers += 1;
+                }
+                if (!answers && !_solRefsByCropId.containsKey(crop.id)) {
+                  _solRefsByCropId[crop.id] = _SolRefDraft(
+                    cropId: crop.id,
+                    problemNumber: crop.problemNumber,
+                    rawPage: result.rawPage,
+                    displayPage: result.rawPage,
+                    numberRegion1k: item.numberRegion1k,
+                    contentRegion1k: item.contentRegion1k,
+                    source: 'vlm',
+                    sourceKind: 'sol',
+                    dirty: true,
+                  );
+                  newSolutions += 1;
+                }
+              }
+              final progress = (page - pageRange.start + 1) / scanTotal;
+              if (answers) {
+                _answerProgress = progress;
+              } else {
+                _solRefProgress = progress;
+              }
+            });
+          }
+        }
+      }
+
+      bool hasCurrentAnswer(_StageCrop crop) {
+        final draft = _answersByCropId[crop.id];
+        if (draft?.answerText.trim().isNotEmpty != true) return false;
+        if (textbookWonriMiddleUsesBodySolution(
+          section: crop.section,
+          problemNumber: crop.problemNumber,
+          itemName: crop.itemName,
+        )) {
+          return true;
+        }
+        return '${draft?.solutionMetadata['solution_kind'] ?? ''}' ==
+            'answer_only';
+      }
+
+      final missing = <String>[
+        for (final crop in targets)
+          if (answers
+              ? !hasCurrentAnswer(crop)
+              : !_solRefsByCropId.containsKey(crop.id))
+            '${crop.scopeLabel} ${crop.problemNumber}'.trim(),
+      ];
+      if (!mounted) return;
+      setState(() {
+        final errors =
+            pageErrors.isEmpty ? '' : ' · ${pageErrors.take(2).join(' / ')}';
+        if (answers) {
+          _answerMissing
+            ..clear()
+            ..addAll(missing);
+          _runningAnswerVlm = false;
+          _answerStatus = '정답 추출 완료 · 신규 $newAnswers개 · 저장 $savedCount개'
+              '${missing.isEmpty ? '' : ' · 누락 ${missing.length}개'}$errors';
+        } else {
+          _solRefMissing
+            ..clear()
+            ..addAll(missing);
+          _runningSolRefVlm = false;
+          _solRefStatus = '상세 해설 추출 완료 · 신규 $newSolutions개 · 저장 $savedCount개'
+              '${missing.isEmpty ? '' : ' · 누락 ${missing.length}개'}$errors';
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        if (answers) {
+          _runningAnswerVlm = false;
+          _answerStatus = '정답 추출 실패: $e';
+        } else {
+          _runningSolRefVlm = false;
+          _solRefStatus = '상세 해설 추출 실패: $e';
+        }
       });
     }
   }
@@ -2874,6 +3380,7 @@ class _TextbookAuthoringStageDialogState
   }
 
   Widget _buildAnswerViewer() {
+    if (_isWonriMiddle) return _buildWonriMiddleAnswerViewer();
     if (_loadingAnswerPdf) {
       return const Center(
         child: CircularProgressIndicator(color: _kAccent),
@@ -2925,6 +3432,55 @@ class _TextbookAuthoringStageDialogState
     );
   }
 
+  Widget _buildWonriMiddleAnswerViewer() {
+    if (_loadingSolutionPdf) {
+      return const Center(
+        child: CircularProgressIndicator(color: _kAccent),
+      );
+    }
+    if (_solutionPdfError != null) {
+      return Center(
+        child: Text(
+          '해설 PDF 로드 실패\n$_solutionPdfError',
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: _kDanger, fontSize: 12),
+        ),
+      );
+    }
+    if (_solutionLocalPath == null) {
+      return Center(
+        child: FilledButton.icon(
+          onPressed: () => _ensureSolutionPdf(),
+          icon: const Icon(Icons.picture_as_pdf, size: 16),
+          label: const Text('해설 PDF 불러오기'),
+          style: FilledButton.styleFrom(backgroundColor: _kAccent),
+        ),
+      );
+    }
+    return Container(
+      color: _kCard,
+      child: PdfViewer.file(
+        _solutionLocalPath!,
+        controller: _answerViewerController,
+        params: PdfViewerParams(
+          margin: 16,
+          backgroundColor: _kCard,
+          layoutPages: _layoutTwoPageSpread,
+          viewerOverlayBuilder: (context, size, handleLinkTap) => [
+            PdfViewerScrollThumb(
+              controller: _answerViewerController,
+              orientation: ScrollbarOrientation.right,
+            ),
+            PdfViewerScrollThumb(
+              controller: _answerViewerController,
+              orientation: ScrollbarOrientation.bottom,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildAnswerRightPane() {
     return Container(
       color: _kPanel,
@@ -2947,7 +3503,11 @@ class _TextbookAuthoringStageDialogState
                           ),
                         )
                       : const Icon(Icons.auto_awesome, size: 14),
-                  label: Text(_isWonriEssential ? '본문 정답·풀이 추출' : '정답 VLM 실행'),
+                  label: Text(_isWonriMiddle
+                      ? '빠른 정답·본문 정답 추출'
+                      : _isWonriEssential
+                          ? '본문 정답·풀이 추출'
+                          : '정답 VLM 실행'),
                   style: FilledButton.styleFrom(backgroundColor: _kAccent),
                 ),
                 const SizedBox(width: 8),
@@ -3349,29 +3909,36 @@ class _TextbookAuthoringStageDialogState
   }
 
   Widget _buildSolutionViewer() {
-    if (_loadingSolutionPdf) {
+    final showBody = _solutionViewerSourceKind == 'body';
+    final loading = showBody ? _loadingBodyPdf : _loadingSolutionPdf;
+    final error = showBody ? _bodyPdfError : _solutionPdfError;
+    final localPath = showBody ? _bodyLocalPath : _solutionLocalPath;
+    final controller =
+        showBody ? _bodySolutionViewerController : _solutionViewerController;
+    final sourceLabel = showBody ? '본문' : '해설';
+    if (loading) {
       return const Center(
         child: CircularProgressIndicator(color: _kAccent),
       );
     }
-    if (_solutionPdfError != null) {
+    if (error != null) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Text(
-            '해설 PDF 로드 실패\n$_solutionPdfError',
+            '$sourceLabel PDF 로드 실패\n$error',
             textAlign: TextAlign.center,
             style: const TextStyle(color: _kDanger, fontSize: 12),
           ),
         ),
       );
     }
-    if (_solutionLocalPath == null) {
+    if (localPath == null) {
       return Center(
         child: FilledButton.icon(
-          onPressed: () => _ensureSolutionPdf(),
+          onPressed: () => showBody ? _ensureBodyPdf() : _ensureSolutionPdf(),
           icon: const Icon(Icons.picture_as_pdf, size: 16),
-          label: const Text('해설 PDF 불러오기'),
+          label: Text('$sourceLabel PDF 불러오기'),
           style: FilledButton.styleFrom(backgroundColor: _kAccent),
         ),
       );
@@ -3379,19 +3946,20 @@ class _TextbookAuthoringStageDialogState
     return Container(
       color: _kCard,
       child: PdfViewer.file(
-        _solutionLocalPath!,
-        controller: _solutionViewerController,
+        localPath,
+        key: ValueKey('stage3-$sourceLabel-$localPath'),
+        controller: controller,
         params: PdfViewerParams(
           margin: 16,
           backgroundColor: _kCard,
           layoutPages: _layoutTwoPageSpread,
           viewerOverlayBuilder: (context, size, handleLinkTap) => [
             PdfViewerScrollThumb(
-              controller: _solutionViewerController,
+              controller: controller,
               orientation: ScrollbarOrientation.right,
             ),
             PdfViewerScrollThumb(
-              controller: _solutionViewerController,
+              controller: controller,
               orientation: ScrollbarOrientation.bottom,
             ),
           ],
@@ -3399,6 +3967,7 @@ class _TextbookAuthoringStageDialogState
               _buildSolutionOverlays(
             pageNumber: page.pageNumber,
             pageRect: pageRect,
+            sourceKind: showBody ? 'body' : 'sol',
           ),
         ),
       ),
@@ -3408,9 +3977,11 @@ class _TextbookAuthoringStageDialogState
   List<Widget> _buildSolutionOverlays({
     required int pageNumber,
     required Rect pageRect,
+    required String sourceKind,
   }) {
     final widgets = <Widget>[];
     for (final d in _solRefsByCropId.values) {
+      if (d.sourceKind != sourceKind) continue;
       if (d.rawPage != pageNumber) continue;
       final region = d.numberRegion1k;
       if (region.length != 4) continue;
@@ -3475,7 +4046,11 @@ class _TextbookAuthoringStageDialogState
                           ),
                         )
                       : const Icon(Icons.location_searching, size: 14),
-                  label: Text(_isWonriEssential ? '본문 정답·풀이 추출' : '해설 VLM 실행'),
+                  label: Text(_isWonriMiddle
+                      ? '상세 해설 번호·풀이 추출'
+                      : _isWonriEssential
+                          ? '본문 정답·풀이 추출'
+                          : '해설 VLM 실행'),
                   style: FilledButton.styleFrom(backgroundColor: _kAccent),
                 ),
                 const SizedBox(width: 8),
@@ -3632,11 +4207,7 @@ class _TextbookAuthoringStageDialogState
     final resolved = d != null;
     final dirty = d?.dirty == true;
     return InkWell(
-      onTap: hasCoord
-          ? () {
-              _solutionViewerController.goToPage(pageNumber: d.rawPage);
-            }
-          : null,
+      onTap: hasCoord ? () => unawaited(_showSolutionRef(d)) : null,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         decoration: BoxDecoration(
@@ -3669,7 +4240,8 @@ class _TextbookAuthoringStageDialogState
                     )
                   : hasCoord
                       ? Text(
-                          '해설 p.${d.displayPage ?? d.rawPage}  ·  raw ${d.rawPage}',
+                          '${d.sourceKind == 'body' ? '본문' : '해설'} '
+                          'p.${d.displayPage ?? d.rawPage}  ·  raw ${d.rawPage}',
                           style: const TextStyle(
                             color: _kTextSub,
                             fontSize: 11,
@@ -3681,6 +4253,10 @@ class _TextbookAuthoringStageDialogState
                         ),
             ),
             if (noSolution) const _SourceChip(text: '해설 없음', color: _kWarn),
+            if (hasCoord && d.sourceKind == 'body')
+              const _SourceChip(text: '본문', color: _kAccent),
+            if (hasCoord && d.sourceKind == 'sol')
+              const _SourceChip(text: '해설', color: _kInfo),
             if (hasCoord && d.source == 'vlm')
               const _SourceChip(text: 'VLM', color: _kInfo),
             if (hasCoord && d.source == 'manual')
@@ -3708,6 +4284,26 @@ class _TextbookAuthoringStageDialogState
         ),
       ),
     );
+  }
+
+  Future<void> _showSolutionRef(_SolRefDraft draft) async {
+    final sourceKind = draft.sourceKind == 'body' ? 'body' : 'sol';
+    final document = sourceKind == 'body'
+        ? await _ensureBodyPdf()
+        : await _ensureSolutionPdf();
+    if (!mounted || document == null) return;
+    setState(() => _solutionViewerSourceKind = sourceKind);
+    final controller = sourceKind == 'body'
+        ? _bodySolutionViewerController
+        : _solutionViewerController;
+    // PDF 경로 전환 직후에는 controller가 아직 새 viewer에 attach되지 않는다.
+    // 다음 프레임들을 짧게 기다리고 준비된 controller에만 이동 명령을 보낸다.
+    for (var attempt = 0; attempt < 20 && mounted; attempt += 1) {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      if (!controller.isReady) continue;
+      await controller.goToPage(pageNumber: draft.rawPage);
+      return;
+    }
   }
 
   // --------------------------------------------------------------- helpers
@@ -4459,6 +5055,7 @@ class _StageCrop {
     this.contentGroupLabel = '',
     this.contentGroupTitle = '',
     this.contentGroupOrder,
+    this.itemName = '',
     this.scopeLabel = '',
     this.scopeKey = '',
   });
@@ -4473,6 +5070,7 @@ class _StageCrop {
   final String contentGroupLabel;
   final String contentGroupTitle;
   final int? contentGroupOrder;
+  final String itemName;
   final String scopeLabel;
   final String scopeKey;
 
@@ -4510,6 +5108,7 @@ class _StageCrop {
       contentGroupLabel: '${r['content_group_label'] ?? ''}'.trim(),
       contentGroupTitle: '${r['content_group_title'] ?? ''}'.trim(),
       contentGroupOrder: asIntN(r['content_group_order']),
+      itemName: '${r['item_name'] ?? ''}'.trim(),
       scopeLabel: '${r['scope_label'] ?? ''}'.trim(),
       scopeKey: '${r['scope_key'] ?? ''}'.trim(),
     );
@@ -4527,6 +5126,7 @@ class _StageCrop {
       contentGroupLabel: seed.contentGroupLabel,
       contentGroupTitle: seed.contentGroupTitle,
       contentGroupOrder: seed.contentGroupOrder,
+      itemName: seed.itemName,
       scopeLabel: seed.scopeLabel,
       scopeKey: seed.scopeKey,
     );
@@ -4548,6 +5148,8 @@ class _AnswerDraft {
     this.answerImageWidthPx,
     this.answerImageHeightPx,
     this.answerImagePath,
+    this.rubricSteps = const <Map<String, dynamic>>[],
+    this.solutionMetadata = const <String, dynamic>{},
     this.dirty = false,
   });
 
@@ -4565,6 +5167,8 @@ class _AnswerDraft {
   int? answerImageHeightPx;
   String? answerImagePath;
   String? answerImageUrl;
+  List<Map<String, dynamic>> rubricSteps;
+  Map<String, dynamic> solutionMetadata;
   bool dirty;
 
   factory _AnswerDraft.fromRow(Map<String, dynamic> r) {
@@ -4597,6 +5201,15 @@ class _AnswerDraft {
       bbox1k: parseBbox(r['bbox_1k']),
       answerImageRegion1k: parseBbox(r['answer_image_region_1k']),
       answerImagePath: '${r['answer_image_path'] ?? ''}',
+      rubricSteps: <Map<String, dynamic>>[
+        for (final raw in (r['rubric_steps'] as List?) ?? const <dynamic>[])
+          if (raw is Map)
+            raw.map((key, dynamic value) => MapEntry('$key', value)),
+      ],
+      solutionMetadata: r['solution_metadata'] is Map
+          ? (r['solution_metadata'] as Map)
+              .map((key, dynamic value) => MapEntry('$key', value))
+          : const <String, dynamic>{},
     );
   }
 }

@@ -36,7 +36,11 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
   void initState() {
     super.initState();
     _timelineScrollController.addListener(_handleScroll);
-    unawaited(HomeworkStore.instance.loadAll());
+    unawaited(
+      HomeworkStore.instance.ensureStudentHomeworkLoaded(
+        widget.studentWithInfo.student.id,
+      ),
+    );
     unawaited(TagStore.instance.loadAllFromDb());
   }
 

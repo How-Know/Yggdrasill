@@ -9,6 +9,8 @@
 #include <LittleFS.h>
 #include <Preferences.h>
 #include "ui_port.h"
+#include "ota_update.h"
+#include "version.h"
 #include "screensaver.h"
 #if LV_USE_TINY_TTF
 #include "extra/libs/tiny_ttf/lv_tiny_ttf.h"
@@ -49,6 +51,7 @@ String homeworksTopic;
 String updateTopic;
 String studentInfoTopic;
 String unboundTopic;
+static String noticeTopic;
 static String deviceAckTopic;
 static uint32_t nextMqttReconnectMs = 0;
 // 전용 로컬 브로커만 사용한다. 공용 브로커 폴백은 게이트웨이가 접속하지 않은
@@ -300,6 +303,8 @@ static void fw_request_list_today() {
   Serial.println("[MQTT] Requested list_today");
 }
 
+static bool g_ota_boot = false;
+
 static void update_boot_status_ui(bool force = false) {
   if (g_first_ui_data_ready) {
     ui_port_hide_boot_status();
@@ -315,7 +320,10 @@ static void update_boot_status_ui(bool force = false) {
 
   String status;
   int progress;
-  if (!wifiOk) {
+  if (g_ota_boot) {
+    status = u8"업데이트 중입니다";
+    progress = wifiOk ? 30 : 12;
+  } else if (!wifiOk) {
     status = u8"WiFi 연결 중...";
     progress = 20;
   } else if (!mqttOk) {
@@ -541,6 +549,8 @@ void onMqttConnect(bool sessionPresent) {
   mqtt.subscribe(homeworksTopic.c_str(), 1);
   studentInfoTopic = String("academies/") + academyId + "/devices/" + deviceId + "/student_info";
   mqtt.subscribe(studentInfoTopic.c_str(), 1);
+  noticeTopic = String("academies/") + academyId + "/devices/" + deviceId + "/notice";
+  mqtt.subscribe(noticeTopic.c_str(), 1);
   unboundTopic = String("academies/") + academyId + "/devices/" + deviceId + "/unbound";
   mqtt.subscribe(unboundTopic.c_str(), 1);
   updateTopic = String("academies/") + academyId + "/devices/" + deviceId + "/update";
@@ -548,6 +558,18 @@ void onMqttConnect(bool sessionPresent) {
   deviceAckTopic = String("academies/") + academyId + "/devices/" + deviceId + "/ack";
   mqtt.subscribe(deviceAckTopic.c_str(), 1);
   Serial.printf("MQTT connected & subscribed (sessionPresent=%d)\n", sessionPresent ? 1 : 0);
+  {
+    Preferences prefs;
+    prefs.begin("m5cfg", false);
+    const bool otaUnbind = prefs.getBool("ota_unbind", false);
+    if (otaUnbind) prefs.putBool("ota_unbind", false);
+    prefs.end();
+    if (otaUnbind) {
+      Serial.println("[OTA] finish unbind after update restart");
+      fw_publish_unbind();
+      ui_port_force_unbind();
+    }
+  }
   publish_last_homeworks_sync_status("mqtt_reconnect");
 
   // [WIFI-DIAG] WiFi 연결 진단을 원격 수집(최초 1회). 무선 상태에서만 재현되는
@@ -827,17 +849,39 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
     hw_acc.remove(0);
   }
   if (t == updateTopic) {
-    String body; body.reserve(len + 1);
-    for (size_t i = 0; i < len; ++i) body += (char)payload[i];
-    // settings 화면에서 표시할 수 있도록 유지 (필요 시 별도 라벨 연결)
-    Serial.print("UPDATE resp: "); Serial.println(body);
+    if (!ota_schedule_from_payload(reinterpret_cast<const uint8_t*>(payload), len)) {
+      String body; body.reserve(len + 1);
+      for (size_t i = 0; i < len; ++i) body += (char)payload[i];
+      Serial.print("UPDATE resp: "); Serial.println(body);
+    }
   }
-  if (t == studentInfoTopic) {
-    g_last_mqtt_rx_student_info_ms = nowMs;
-    // Defer parse + UI render to loop() (LVGL thread).
+  if (t == noticeTopic) {
     String body;
     append_mqtt_payload(body, payload, len);
-    g_student_info_payload.publish(body);
+    DynamicJsonDocument doc(192);
+    if (!deserializeJson(doc, body) && doc.containsKey("text")) {
+      const char* text = doc["text"] | "";
+      if (text[0]) ui_port_queue_notice(text);
+    }
+  }
+  if (t == studentInfoTopic) {
+    static String info_acc;
+    static size_t info_received = 0;
+    if (index == 0) {
+      info_acc.remove(0);
+      info_acc.reserve(total ? total : (len + 512));
+      info_received = 0;
+    }
+    append_mqtt_payload(info_acc, payload, len);
+    info_received += len;
+    g_last_mqtt_rx_student_info_ms = nowMs;
+    if (total && info_received < total) return;
+    Serial.printf("[AVATAR][rx] len=%u total=%u heap=%u\n",
+                  (unsigned)info_acc.length(),
+                  (unsigned)total,
+                  (unsigned)ESP.getFreeHeap());
+    g_student_info_payload.publish(info_acc);
+    info_acc.remove(0);
   }
   if (t == unboundTopic) {
     Serial.println("[MQTT] unbound received – returning to student list");
@@ -922,6 +966,16 @@ void fw_publish_unbind() {
   Serial.println("[UNBIND] local binding cleared after publish");
 }
 
+void fw_prepare_update_restart(void) {
+  Preferences prefs;
+  prefs.begin("m5cfg", false);
+  prefs.putBool("ota_unbind", true);
+  prefs.end();
+  Serial.println("[OTA] unbind before update restart");
+  fw_publish_unbind();
+  delay(400);
+}
+
 // 바인딩을 당일까지만 유지: 날짜가 바뀌면 자동으로 서버 unbind + 등원 리스트 복귀.
 // 서버에 unbind를 확실히 전달하기 위해 MQTT 연결 상태에서만 정리한다.
 static void handle_bind_day_expiry(uint32_t nowTick) {
@@ -957,6 +1011,20 @@ void fw_publish_student_info(const char* studentIdArg) {
   DynamicJsonDocument doc(128);
   doc["action"] = "student_info";
   doc["student_id"] = studentIdArg;
+  String payload; serializeJson(doc, payload);
+  String topic = String("academies/") + academyId + "/devices/" + deviceId + "/command";
+  mqtt.publish(topic.c_str(), 1, false, payload.c_str());
+}
+
+void fw_publish_set_avatar(const char* kind, const char* emoji, int style, const char* url) {
+  if (!kind || !*kind || studentId.length() == 0) return;
+  DynamicJsonDocument doc(512);
+  doc["action"] = "set_avatar";
+  doc["student_id"] = studentId;
+  doc["kind"] = kind;
+  if (emoji && emoji[0]) doc["emoji"] = emoji;
+  doc["style"] = style;
+  if (url && url[0]) doc["url"] = url;
   String payload; serializeJson(doc, payload);
   String topic = String("academies/") + academyId + "/devices/" + deviceId + "/command";
   mqtt.publish(topic.c_str(), 1, false, payload.c_str());
@@ -1048,8 +1116,8 @@ bool fw_publish_group_transition(const char* groupId, int from_phase) {
   return true;
 }
 
-void fw_publish_pause_all() {
-  if (!studentId.length()) return;
+bool fw_publish_pause_all() {
+  if (!studentId.length()) return false;
   DynamicJsonDocument doc(192);
   doc["action"] = "pause_all";
   doc["academy_id"] = academyId;
@@ -1059,7 +1127,7 @@ void fw_publish_pause_all() {
   doc["at"] = "";
   String payload; serializeJson(doc, payload);
   String topic = String("academies/") + academyId + "/students/" + studentId + "/homework/ALL/command";
-  mqtt.publish(topic.c_str(), 1, false, payload.c_str());
+  return mqtt.publish(topic.c_str(), 1, false, payload.c_str()) != 0;
 }
 
 void fw_publish_raise_question() {
@@ -1157,6 +1225,8 @@ void setup() {
   auto cfg = M5.config(); M5.begin(cfg);
   M5.Display.setTextSize(2);
   Serial.begin(115200);
+  Serial.printf("[FW] version=%s\n", FIRMWARE_VERSION);
+  g_ota_boot = ota_has_pending_update();
 
   if (g_loop_stage_magic == LOOP_STAGE_MAGIC) {
     Serial.printf("[WDT] previous run: last loop stage=%lu ui stage=%lu reset_reason=%d\n",
@@ -1205,7 +1275,21 @@ void setup() {
 
   initLvgl();
   ui_port_show_boot_status();
-  ui_port_update_boot_status(u8"WiFi 연결 준비 중...", 10);
+  if (!g_ota_boot) {
+    char ver_line[40];
+    snprintf(ver_line, sizeof(ver_line), "버전 %s", FIRMWARE_VERSION);
+    ui_port_update_boot_status(ver_line, 5);
+    uint32_t shown = millis();
+    uint32_t tick_mark = shown;
+    while (millis() - shown < 3000) {
+      uint32_t now = millis();
+      lv_tick_inc(now - tick_mark);
+      tick_mark = now;
+      lv_timer_handler();
+      delay(20);
+    }
+  }
+  ui_port_update_boot_status(g_ota_boot ? u8"업데이트 중입니다" : u8"WiFi 연결 준비 중...", 10);
   lv_timer_handler();
   // 영문 기본 폰트 사용 (한글 비표시 깨짐 방지). 한글 폰트는 추후 내장 폰트로 교체 예정
   M5.Display.setFont(&fonts::Font0);
@@ -1227,7 +1311,7 @@ void setup() {
   int targetRssi = 0;
   {
     Serial.println("WiFi scanning...");
-    ui_port_update_boot_status(u8"WiFi 검색 중...", 15);
+    ui_port_update_boot_status(g_ota_boot ? u8"업데이트 중입니다" : u8"WiFi 검색 중...", 15);
     lv_timer_handler();
     int n = WiFi.scanNetworks();
     g_wifi_diag += "scan_nets=" + String(n) + "\n";
@@ -1292,6 +1376,11 @@ void setup() {
     WiFi.scanDelete();
   }
   g_wifi_connected_ms = millis();
+  if (WiFi.status() == WL_CONNECTED) {
+    fw_watchdog_pause();
+    if (!ota_apply_pending_update()) g_ota_boot = false;
+    fw_watchdog_resume();
+  }
   if (WiFi.status() == WL_CONNECTED) {
     g_wifi_diag += "final connected=1 rssi=" + String((int)WiFi.RSSI()) + " total_ms=" + String((unsigned long)(g_wifi_connected_ms - g_wifi_connect_start_ms)) + "\n";
   } else {
@@ -1484,16 +1573,26 @@ void loop() {
     String* taken = g_student_info_payload.take();
     String json_copy;
     if (taken) { json_copy = *taken; delete taken; }
+    bool refresh_avatar = false;
     if (json_copy.length() > 0) {
-      DynamicJsonDocument doc(json_copy.length() + 1024);
+      const size_t cap = json_copy.length() * 2 + 4096;
+      DynamicJsonDocument doc(cap);
       DeserializationError err = deserializeJson(doc, json_copy.c_str(), json_copy.length());
-      if (!err && doc.containsKey("info")) {
+      if (err) {
+        Serial.printf("[AVATAR][parse] %s len=%u cap=%u heap=%u\n",
+                      err.c_str(),
+                      (unsigned)json_copy.length(),
+                      (unsigned)cap,
+                      (unsigned)ESP.getFreeHeap());
+      } else if (doc.containsKey("info")) {
         JsonObject info = doc["info"].as<JsonObject>();
         ui_port_update_student_info(info);
         g_first_ui_data_ready = true;
         g_restored_binding_guard_active = false;
+        refresh_avatar = true;
       }
     }
+    if (refresh_avatar) ui_port_refresh_welcome_avatar();
   }
 
   if (g_force_unbind_pending) {
@@ -1528,6 +1627,8 @@ void loop() {
 
   LOOP_STAGE(9);
   lv_timer_handler();
+  ui_port_poll_ota_notice();
+  ui_port_poll_notices();
   // 첫 데이터(학생 리스트/학생 정보/과제) 수신 전에는 절전 진입을 막아
   // "연결 중" 상태가 빈 화면/꺼진 화면처럼 보이지 않게 한다.
   // PIN 입력 중에는 세이버 전환이 LVGL 입력 전환과 겹치지 않게 유지한다.
@@ -1539,20 +1640,41 @@ void loop() {
   screensaver_check_shake();
   
   LOOP_STAGE(11);
-  // PMIC vibration: 6초 주기, 0.5초 펄스
+  // 확인 알람: 6초마다 0.2초. 시험 종료 알람: 15초 동안 4초마다 짧은 진동 2번.
   static uint32_t lastVibMs = 0;
   static bool vibrationActive = false;
-  const bool vibrationRequested = g_should_vibrate_phase4 || g_should_vibrate_test_end;
-  if (vibrationRequested && !vibrationActive && nowTick - lastVibMs >= 6000) {
-    Serial.println("[VIB] setVibration: pulse start");
-    screensaver_dismiss();
-    M5.Power.setVibration(ALERT_VIBRATION_STRENGTH);
-    lastVibMs = nowTick;
-    vibrationActive = true;
-  }
-  if (vibrationActive && (!vibrationRequested || nowTick - lastVibMs >= 500)) {
-    M5.Power.setVibration(0);
-    vibrationActive = false;
+  static uint32_t testVibAnchor = 0;
+  static bool testVibArmed = false;
+  if (g_should_vibrate_test_end) {
+    if (!testVibArmed) {
+      testVibAnchor = nowTick;
+      testVibArmed = true;
+      screensaver_dismiss();
+    }
+    uint32_t elapsed = nowTick - testVibAnchor;
+    if (elapsed >= 15000) {
+      if (vibrationActive) M5.Power.setVibration(0);
+      vibrationActive = false;
+    } else {
+      uint32_t inCycle = elapsed % 4000;
+      bool on = (inCycle < 200) || (inCycle >= 400 && inCycle < 600);
+      if (on && !vibrationActive) screensaver_dismiss();
+      M5.Power.setVibration(on ? ALERT_VIBRATION_STRENGTH : 0);
+      vibrationActive = on;
+    }
+  } else {
+    testVibArmed = false;
+    if (g_should_vibrate_phase4 && !vibrationActive && nowTick - lastVibMs >= 6000) {
+      Serial.println("[VIB] setVibration: pulse start");
+      screensaver_dismiss();
+      M5.Power.setVibration(ALERT_VIBRATION_STRENGTH);
+      lastVibMs = nowTick;
+      vibrationActive = true;
+    }
+    if (vibrationActive && (!g_should_vibrate_phase4 || nowTick - lastVibMs >= 200)) {
+      M5.Power.setVibration(0);
+      vibrationActive = false;
+    }
   }
   // Physical buttons disabled (no longer needed with touch UI)
 

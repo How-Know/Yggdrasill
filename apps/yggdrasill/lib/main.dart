@@ -33,6 +33,7 @@ import 'services/tag_store.dart';
 import 'tools/backfill_runner.dart';
 import 'package:path_provider/path_provider.dart';
 import 'services/runtime_flags.dart';
+import 'widgets/close_departure_dialog.dart';
 import 'widgets/dialog_tokens.dart';
 import 'services/app_config.dart';
 import 'services/update_service.dart';
@@ -371,7 +372,13 @@ Future<void> _preloadExamDataFor(
 }
 
 Future<void> _preloadExamDialogData() async {
-  await DataManager.instance.preloadAllExamData();
+  // 다이얼로그를 열 때 서버의 현재 시즌을 다시 확인한다. 앱 시작 중
+  // 일시적인 네트워크 오류로 만들어진 빈 캐시를 세션 내내 재사용하지 않는다.
+  final loaded =
+      await DataManager.instance.preloadAllExamData(forceRefresh: true);
+  if (!loaded) {
+    throw StateError('현재 시즌 시험 일정을 서버에서 불러오지 못했습니다.');
+  }
   // 학년 필터 불러와 대상 SG 라벨 산출 후 프리로드
   final prefs = await SharedPreferences.getInstance();
   final List<String> filter =
@@ -903,8 +910,6 @@ class _MyAppState extends State<MyApp>
       MethodChannel('yggdrasill/window_chrome');
 
   bool _windowCloseInProgress = false;
-  OverlayEntry? _closingOverlayEntry;
-
   bool get _isDesktop =>
       Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
@@ -998,77 +1003,39 @@ class _MyAppState extends State<MyApp>
     );
   }
 
-  void _showClosingOverlay() {
-    if (_closingOverlayEntry != null) return;
-    final overlay = rootNavigatorKey.currentState?.overlay;
-    if (overlay == null) return;
-    _closingOverlayEntry = OverlayEntry(
-      builder: (_) => Material(
-        color: Colors.transparent,
-        child: Stack(
-          children: [
-            ModalBarrier(
-              dismissible: false,
-              color: Colors.black.withOpacity(0.55),
-            ),
-            Center(
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 22, vertical: 16),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1F1F1F),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.white24),
-                ),
-                child: const Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2.2),
-                    ),
-                    SizedBox(width: 12),
-                    Text(
-                      '하원처리중입니다...',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-    overlay.insert(_closingOverlayEntry!);
-  }
-
-  void _hideClosingOverlay() {
-    _closingOverlayEntry?.remove();
-    _closingOverlayEntry = null;
+  Future<void> _finishWindowClose() async {
+    try {
+      await windowManager.setPreventClose(false);
+    } catch (_) {}
+    await windowManager.close();
   }
 
   @override
   void onWindowClose() async {
     if (!_isDesktop || _windowCloseInProgress) return;
     _windowCloseInProgress = true;
-    _showClosingOverlay();
-    await Future<void>.delayed(const Duration(milliseconds: 16));
     try {
-      await DataManager.instance.fixMissingDeparturesForYesterdayKst();
+      final targets = await DataManager.instance.listMissingDeparturesPastCap();
+      if (targets.isEmpty) {
+        await _finishWindowClose();
+        return;
+      }
+      final dialogContext = rootNavigatorKey.currentContext;
+      if (dialogContext == null || !dialogContext.mounted) {
+        await _finishWindowClose();
+        return;
+      }
+      final selected = await showCloseDepartureDialog(
+        context: dialogContext,
+        records: targets,
+      );
+      if (selected == null) {
+        _windowCloseInProgress = false;
+        return;
+      }
+      await _finishWindowClose();
     } catch (_) {
-      // 종료 전 정리 실패 시에도 종료는 진행
-    } finally {
-      _hideClosingOverlay();
-      try {
-        await windowManager.setPreventClose(false);
-      } catch (_) {}
-      await windowManager.close();
+      await _finishWindowClose();
     }
   }
 
@@ -1077,7 +1044,6 @@ class _MyAppState extends State<MyApp>
     AppThemeController.mode.removeListener(_onThemeModeChanged);
     WidgetsBinding.instance.removeObserver(this);
     UpdateService.stopAvailableUpdateNoticeAutoRefresh();
-    _hideClosingOverlay();
     if (_isDesktop) {
       try {
         windowManager.removeListener(this);
@@ -3443,7 +3409,12 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
     } catch (_) {}
     try {
       await _preloadExamDialogData();
-    } catch (_) {}
+    } catch (e, st) {
+      _dlog('[EXAM_DIALOG][initial_load_error] $e\n$st');
+      rootScaffoldMessengerKey.currentState?.showSnackBar(
+        SnackBar(content: Text('$e')),
+      );
+    }
     if (mounted) {
       setState(() => _preloadReady = true);
     }
@@ -5402,8 +5373,16 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                           final gradeNum =
                               int.tryParse(gradeText.replaceAll('학년', '')) ?? 0;
                           final level = widget.level ?? EducationLevel.middle;
-                          await DataManager.instance.saveExamDays(
-                              schoolName, level, gradeNum, list.toSet());
+                          try {
+                            await DataManager.instance.saveExamDays(
+                                schoolName, level, gradeNum, list.toSet());
+                          } catch (e, st) {
+                            _dlog('[EXAM_DIALOG][save_days_error] $e\n$st');
+                            rootScaffoldMessengerKey.currentState?.showSnackBar(
+                              SnackBar(content: Text('시험 기간 저장에 실패했습니다: $e')),
+                            );
+                            return;
+                          }
                         }
                         notifyExamScheduleChanged();
                       }

@@ -11,6 +11,7 @@ import 'learning_problem_bank_service.dart';
 import 'season_roadmap_service.dart';
 import 'attendance_service.dart';
 import 'realtime_reconciler.dart';
+import 'homework_snapshot_cache.dart';
 
 enum HomeworkStatus { inProgress, completed, homework }
 
@@ -310,8 +311,16 @@ class HomeworkRecentTemplate {
 }
 
 class HomeworkStore {
-  HomeworkStore._internal();
+  HomeworkStore._internal() {
+    TenantService.instance.addActiveAcademyChangedListener(
+      (academyId) => resetForSession(nextAcademyId: academyId),
+    );
+  }
   static final HomeworkStore instance = HomeworkStore._internal();
+  static const bool startupFullLoadFallback = bool.fromEnvironment(
+    'HOMEWORK_STARTUP_FULL_LOAD_FALLBACK',
+    defaultValue: false,
+  );
   static const String _homeworkItemSelectWithSplit =
       'id,student_id,title,body,color,flow_id,type,page,count,memo,content,book_id,grade_label,source_unit_level,source_unit_path,default_split_parts,order_index,check_count,status,phase,accumulated_ms,cycle_base_accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version';
   static const String _homeworkItemSelectLegacy =
@@ -351,8 +360,12 @@ class HomeworkStore {
   // 완료 예정 카드를 더블클릭한 직후 서버 왕복 동안 UI에서 즉시 숨긴다.
   final Set<String> _optimisticallyCompletingItemIds = <String>{};
   final Map<String, int> _reloadGenerationByStudentId = <String, int>{};
+  final Map<String, Future<void>> _studentLoadInFlight =
+      <String, Future<void>>{};
+  final Set<String> _loadedStudentIds = <String>{};
   final LearningProblemBankService _problemBankService =
       LearningProblemBankService();
+  final HomeworkSnapshotCache _snapshotCache = HomeworkSnapshotCache();
   final math.Random _assignmentCodeRandom = math.Random();
   final Set<String> _assignmentCodeSyncInFlightItemIds = <String>{};
   bool _supportsAssignmentCodeGroupReconcileRpc = true;
@@ -362,8 +375,14 @@ class HomeworkStore {
   bool _supportsTestOriginFlowIdColumn = true;
   bool _supportsPreDoneColumns = true;
   bool _supportsRecommendedMinutesColumns = true;
-  // 간단 영속화 캐시 (앱 시작 시 한번 로드, 변경 시 저장)
+  // 세션 메모리 + cold-start용 마지막 성공 디스크 스냅샷.
   bool _loaded = false;
+  bool _fullServerSnapshotLoaded = false;
+  int _sessionGeneration = 0;
+  String? _loadedAcademyId;
+  String? _snapshotRestoreAttemptedAcademyId;
+  Timer? _snapshotPersistDebounce;
+  Timer? _fullReconcileTimer;
   Future<void>? _loadAllInFlight;
   bool _loadAllInFlightIsForceRefresh = false;
   RealtimeChannel? _rt;
@@ -380,6 +399,136 @@ class HomeworkStore {
   int _rtPollGeneration = 0;
   static const Duration _rtHealthyPollInterval = Duration(seconds: 15);
   static const Duration _rtDegradedPollInterval = Duration(milliseconds: 1200);
+
+  bool isStudentHomeworkLoaded(String studentId) =>
+      _loadedStudentIds.contains(studentId.trim());
+
+  bool get hasFullServerSnapshot => _fullServerSnapshotLoaded;
+
+  Future<void> resetForSession({String? nextAcademyId}) async {
+    _sessionGeneration++;
+    final previousChannel = _rt;
+    _rt = null;
+    _rtAcademyId = null;
+    _rtHealthy = false;
+    _rtFallbackPollTimer?.cancel();
+    _rtFallbackPollTimer = null;
+    _snapshotPersistDebounce?.cancel();
+    _snapshotPersistDebounce = null;
+    _fullReconcileTimer?.cancel();
+    _fullReconcileTimer = null;
+    for (final timer in _rtReloadDebounce.values) {
+      timer.cancel();
+    }
+    _rtReloadDebounce.clear();
+    _rtReloadInFlightStudentIds.clear();
+    _rtReloadSuppressedStudentIds.clear();
+    _rtReloadPendingStudentIds.clear();
+    _rtPollCursorUtc = null;
+    _rtPollAcademyId = null;
+    _rtPollInFlight = false;
+    _rtPollGeneration++;
+    _byStudentId.clear();
+    _groupsByStudentId.clear();
+    _groupItemsByGroupId.clear();
+    _groupIdByItemId.clear();
+    _loadedStudentIds.clear();
+    _reloadGenerationByStudentId.clear();
+    _studentLoadInFlight.clear();
+    _optimisticallyCompletingItemIds.clear();
+    _autoCompleteOnNextWaiting.clear();
+    _loaded = false;
+    _fullServerSnapshotLoaded = false;
+    final next = (nextAcademyId ?? '').trim();
+    _loadedAcademyId = next.isEmpty ? null : next;
+    _snapshotRestoreAttemptedAcademyId = null;
+    if (previousChannel != null) {
+      try {
+        await previousChannel.unsubscribe();
+      } catch (_) {}
+    }
+    _bump();
+  }
+
+  Future<void> _ensureAcademyBoundary(String academyId) async {
+    final target = academyId.trim();
+    if (target.isEmpty || _loadedAcademyId == target) return;
+    await resetForSession(nextAcademyId: target);
+  }
+
+  /// Restores the last successful state for first paint without blocking on
+  /// an academy-wide network request.
+  Future<void> restoreSnapshotAndStartRealtime() async {
+    final academyId = (await TenantService.instance.getActiveAcademyId()) ??
+        await TenantService.instance.ensureActiveAcademy();
+    await _ensureAcademyBoundary(academyId);
+    final generation = _sessionGeneration;
+    if (_snapshotRestoreAttemptedAcademyId != academyId) {
+      _snapshotRestoreAttemptedAcademyId = academyId;
+      final stopwatch = Stopwatch()..start();
+      final snapshot = await _snapshotCache.read(academyId);
+      if (generation != _sessionGeneration || _loadedAcademyId != academyId) {
+        return;
+      }
+      if (snapshot != null && !_loaded) {
+        _restoreSnapshot(snapshot);
+        _loaded = true;
+        _bump();
+      }
+      debugPrint(
+        '[HW][snapshot][restore] academy=$academyId '
+        'hit=${snapshot != null} students=${_byStudentId.length} '
+        'elapsedMs=${stopwatch.elapsedMilliseconds}',
+      );
+    }
+    _subscribeRealtime(academyId);
+    _startRealtimeFallbackPoll(academyId);
+    _scheduleFullReconcile(academyId);
+  }
+
+  Future<void> ensureStudentHomeworkLoaded(
+    String studentId, {
+    bool forceRefresh = false,
+    bool persistSnapshot = true,
+  }) async {
+    final id = studentId.trim();
+    if (id.isEmpty) return;
+    if (!forceRefresh && _loadedStudentIds.contains(id)) return;
+    final running = _studentLoadInFlight[id];
+    if (running != null) {
+      await running;
+      return;
+    }
+    final future = _reloadStudent(
+      id,
+      reconcileServerState: false,
+      persistSnapshot: persistSnapshot,
+    );
+    _studentLoadInFlight[id] = future;
+    try {
+      await future;
+    } finally {
+      if (identical(_studentLoadInFlight[id], future)) {
+        _studentLoadInFlight.remove(id);
+      }
+    }
+  }
+
+  Future<void> ensureFullSnapshotLoaded() => loadAll();
+
+  void _scheduleFullReconcile(String academyId) {
+    _fullReconcileTimer?.cancel();
+    _fullReconcileTimer = Timer(const Duration(minutes: 15), () async {
+      if (_loadedAcademyId != academyId) return;
+      await loadAll(forceRefresh: true);
+      if (_loadedAcademyId == academyId) {
+        _fullReconcileTimer = Timer(
+          const Duration(hours: 6),
+          () => _scheduleFullReconcile(academyId),
+        );
+      }
+    });
+  }
 
   static final RegExp _uuidTextPattern = RegExp(
     r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
@@ -1467,6 +1616,7 @@ class HomeworkStore {
     required String academyId,
     String? studentId,
     bool bump = true,
+    int? expectedSessionGeneration,
   }) async {
     final sid = studentId?.trim() ?? '';
     final targetStudent = sid.isEmpty ? null : sid;
@@ -1560,6 +1710,11 @@ class HomeworkStore {
         });
       } catch (e) {
         if (!_isMissingGroupRuntimeTableError(e)) rethrow;
+      }
+      if ((expectedSessionGeneration != null &&
+              expectedSessionGeneration != _sessionGeneration) ||
+          _loadedAcademyId != academyId) {
+        return;
       }
       final runtimeByGroupId = <String, Map<String, dynamic>>{};
       for (final row in runtimeRows) {
@@ -1919,6 +2074,10 @@ class HomeworkStore {
       if (preset.selectedQuestionCount > 0) '${preset.selectedQuestionCount}문항',
     ];
     final body = metaParts.isEmpty ? title : metaParts.join(' · ');
+    final content = <String>[
+      if (courseLabel.isNotEmpty) '과정: $courseLabel',
+      if (body.isNotEmpty) body,
+    ].join('\n');
     final part = HomeworkRecentTemplatePart(
       sourceItemId: 'pb-preset:${preset.id}',
       learningTrackCode: 'PB',
@@ -1935,7 +2094,7 @@ class HomeworkStore {
       timeLimitMinutes: _timeLimitMinutesFromPreset(preset),
       pbPresetId: preset.id,
       memo: preset.titlePageTopText,
-      content: body,
+      content: content,
       bookId: _uuidOrNull(bookId),
       gradeLabel: bookGradeLabel.isNotEmpty
           ? bookGradeLabel
@@ -1965,10 +2124,191 @@ class HomeworkStore {
     return b.isAfter(a) ? b : a;
   }
 
+  String? _snapshotDate(DateTime? value) => value?.toUtc().toIso8601String();
+
+  Map<String, dynamic> _snapshotItem(
+    String studentId,
+    HomeworkItem item,
+  ) =>
+      <String, dynamic>{
+        'id': item.id,
+        'student_id': studentId,
+        'assignment_code': item.assignmentCode,
+        'learning_track_code': item.learningTrackCode,
+        'title': item.title,
+        'body': item.body,
+        'color': item.color.toARGB32(),
+        'flow_id': item.flowId,
+        'test_origin_flow_id': item.testOriginFlowId,
+        'type': item.type,
+        'page': item.page,
+        'count': item.count,
+        'time_limit_minutes': item.timeLimitMinutes,
+        'recommended_minutes': item.recommendedMinutes,
+        'recommended_minutes_auto': item.recommendedMinutesAuto,
+        'pb_preset_id': item.pbPresetId,
+        'memo': item.memo,
+        'content': item.content,
+        'book_id': item.bookId,
+        'grade_label': item.gradeLabel,
+        'source_unit_level': item.sourceUnitLevel,
+        'source_unit_path': item.sourceUnitPath,
+        'unit_mappings': item.unitMappings,
+        'default_split_parts': item.defaultSplitParts,
+        'order_index': item.orderIndex,
+        'check_count': item.checkCount,
+        'status': item.status.index,
+        'phase': item.phase,
+        'accumulated_ms': item.accumulatedMs,
+        'cycle_base_accumulated_ms': item.cycleBaseAccumulatedMs,
+        'run_start': _snapshotDate(item.runStart),
+        'completed_at': _snapshotDate(item.completedAt),
+        'first_started_at': _snapshotDate(item.firstStartedAt),
+        'submitted_at': _snapshotDate(item.submittedAt),
+        'confirmed_at': _snapshotDate(item.confirmedAt),
+        'waiting_at': _snapshotDate(item.waitingAt),
+        'pre_done_progress': item.preDoneProgress,
+        'pre_done_at': _snapshotDate(item.preDoneAt),
+        'pre_done_issue_type': item.preDoneIssueType,
+        'pre_done_issue_note': item.preDoneIssueNote,
+        'created_at': _snapshotDate(item.createdAt),
+        'updated_at': _snapshotDate(item.updatedAt),
+        'version': item.version,
+      };
+
+  Map<String, dynamic> _snapshotGroup(HomeworkGroup group) => <String, dynamic>{
+        'id': group.id,
+        'student_id': group.studentId,
+        'title': group.title,
+        'flow_id': group.flowId,
+        'learning_track_code': group.learningTrackCode,
+        'order_index': group.orderIndex,
+        'status': group.status,
+        'source_homework_item_id': group.sourceHomeworkItemId,
+        'cycle_started_at': _snapshotDate(group.cycleStartedAt),
+        'runtime_phase': group.runtimePhase,
+        'runtime_accumulated_ms': group.runtimeAccumulatedMs,
+        'runtime_run_start': _snapshotDate(group.runtimeRunStart),
+        'runtime_first_started_at': _snapshotDate(group.runtimeFirstStartedAt),
+        'runtime_check_count': group.runtimeCheckCount,
+        'runtime_updated_at': _snapshotDate(group.runtimeUpdatedAt),
+        'created_at': _snapshotDate(group.createdAt),
+        'updated_at': _snapshotDate(group.updatedAt),
+        'version': group.version,
+      };
+
+  Map<String, dynamic> _snapshotGroupItem(HomeworkGroupItem item) =>
+      <String, dynamic>{
+        'id': item.id,
+        'group_id': item.groupId,
+        'student_id': item.studentId,
+        'homework_item_id': item.homeworkItemId,
+        'item_order_index': item.itemOrderIndex,
+        'created_at': _snapshotDate(item.createdAt),
+        'updated_at': _snapshotDate(item.updatedAt),
+        'version': item.version,
+      };
+
+  Map<String, dynamic> _buildSnapshot() => <String, dynamic>{
+        'items': <Map<String, dynamic>>[
+          for (final entry in _byStudentId.entries)
+            for (final item in entry.value) _snapshotItem(entry.key, item),
+        ],
+        'groups': <Map<String, dynamic>>[
+          for (final groups in _groupsByStudentId.values)
+            for (final group in groups) _snapshotGroup(group),
+        ],
+        'groupItems': <Map<String, dynamic>>[
+          for (final links in _groupItemsByGroupId.values)
+            for (final link in links) _snapshotGroupItem(link),
+        ],
+      };
+
+  void _restoreSnapshot(Map<String, dynamic> snapshot) {
+    _byStudentId.clear();
+    _groupsByStudentId.clear();
+    _groupItemsByGroupId.clear();
+    _groupIdByItemId.clear();
+    _loadedStudentIds.clear();
+    for (final raw in (snapshot['items'] as List<dynamic>)) {
+      if (raw is! Map) continue;
+      final row = Map<String, dynamic>.from(raw);
+      final studentId = '${row['student_id'] ?? ''}'.trim();
+      if (studentId.isEmpty) continue;
+      final item = _parseHomeworkItemRow(row);
+      final mappings = row['unit_mappings'];
+      if (mappings is List) {
+        item.unitMappings = mappings
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList(growable: false);
+      }
+      _byStudentId.putIfAbsent(studentId, () => <HomeworkItem>[]).add(item);
+    }
+    for (final list in _byStudentId.values) {
+      _sortStudentList(list);
+    }
+    for (final raw in (snapshot['groups'] as List<dynamic>)) {
+      if (raw is! Map) continue;
+      final row = Map<String, dynamic>.from(raw);
+      final group = _parseHomeworkGroupRow(row);
+      if (group.studentId.isEmpty) continue;
+      group.runtimePhase = _parseInt(row['runtime_phase']).clamp(0, 4);
+      group.runtimeAccumulatedMs = _parseInt(row['runtime_accumulated_ms']);
+      group.runtimeRunStart = _parseTsOpt(row['runtime_run_start']);
+      group.runtimeFirstStartedAt =
+          _parseTsOpt(row['runtime_first_started_at']);
+      group.runtimeCheckCount = _parseInt(row['runtime_check_count']);
+      group.runtimeUpdatedAt = _parseTsOpt(row['runtime_updated_at']);
+      _groupsByStudentId
+          .putIfAbsent(group.studentId, () => <HomeworkGroup>[])
+          .add(group);
+    }
+    for (final groups in _groupsByStudentId.values) {
+      groups.sort(_compareGroupByOrder);
+    }
+    for (final raw in (snapshot['groupItems'] as List<dynamic>)) {
+      if (raw is! Map) continue;
+      final link = _parseHomeworkGroupItemRow(
+        Map<String, dynamic>.from(raw),
+      );
+      if (link.groupId.isEmpty || link.homeworkItemId.isEmpty) continue;
+      _groupItemsByGroupId
+          .putIfAbsent(link.groupId, () => <HomeworkGroupItem>[])
+          .add(link);
+      _groupIdByItemId[link.homeworkItemId] = link.groupId;
+    }
+    for (final links in _groupItemsByGroupId.values) {
+      links.sort(_compareGroupItemByOrder);
+    }
+  }
+
+  Future<void> _persistSnapshotNow(String academyId) async {
+    if (academyId.trim().isEmpty || _loadedAcademyId != academyId) return;
+    final stopwatch = Stopwatch()..start();
+    try {
+      await _snapshotCache.write(academyId, _buildSnapshot());
+      debugPrint(
+        '[HW][snapshot][write] academy=$academyId '
+        'students=${_byStudentId.length} elapsedMs=${stopwatch.elapsedMilliseconds}',
+      );
+    } catch (e, st) {
+      debugPrint('[HW][snapshot][write][ERROR] $e\n$st');
+    }
+  }
+
+  void _scheduleSnapshotPersist(String academyId) {
+    _snapshotPersistDebounce?.cancel();
+    _snapshotPersistDebounce = Timer(
+      const Duration(milliseconds: 500),
+      () => unawaited(_persistSnapshotNow(academyId)),
+    );
+  }
+
   Future<List<HomeworkRecentTemplate>> loadRecentTemplates({
     int limit = 60,
   }) async {
-    await loadAll();
+    await ensureFullSnapshotLoaded();
 
     final templates = <HomeworkRecentTemplate>[];
     final groupedItemIds = <String>{};
@@ -2052,21 +2392,31 @@ class HomeworkStore {
       }
       return;
     }
+    late final String academyId;
+    try {
+      academyId = (await TenantService.instance.getActiveAcademyId()) ??
+          await TenantService.instance.ensureActiveAcademy();
+      await _ensureAcademyBoundary(academyId);
+    } catch (e, st) {
+      debugPrint('[HW][loadAll][tenant][ERROR] $e\n$st');
+      return;
+    }
+    final sessionGeneration = _sessionGeneration;
     final completer = Completer<void>();
     final loadFuture = completer.future;
     _loadAllInFlight = loadFuture;
     _loadAllInFlightIsForceRefresh = forceRefresh;
-    final previousItems = forceRefresh && _loaded
+    final previousItems = _loaded
         ? _byStudentId.map(
             (key, value) => MapEntry(key, List<HomeworkItem>.from(value)),
           )
         : null;
-    final previousGroups = forceRefresh && _loaded
+    final previousGroups = _loaded
         ? _groupsByStudentId.map(
             (key, value) => MapEntry(key, List<HomeworkGroup>.from(value)),
           )
         : null;
-    final previousGroupItems = forceRefresh && _loaded
+    final previousGroupItems = _loaded
         ? _groupItemsByGroupId.map(
             (key, value) => MapEntry(
               key,
@@ -2074,27 +2424,30 @@ class HomeworkStore {
             ),
           )
         : null;
-    final previousGroupIdByItem = forceRefresh && _loaded
-        ? Map<String, String>.from(_groupIdByItemId)
-        : null;
+    final previousGroupIdByItem =
+        _loaded ? Map<String, String>.from(_groupIdByItemId) : null;
+    final previousLoadedStudentIds =
+        _loaded ? Set<String>.from(_loadedStudentIds) : null;
     try {
-      if (_loaded && !forceRefresh) {
-        try {
-          final String academyId =
-              (await TenantService.instance.getActiveAcademyId()) ??
-                  await TenantService.instance.ensureActiveAcademy();
-          _subscribeRealtime(academyId);
-          _startRealtimeFallbackPoll(academyId);
-        } catch (_) {}
+      if (_fullServerSnapshotLoaded && !forceRefresh) {
+        _subscribeRealtime(academyId);
+        _startRealtimeFallbackPoll(academyId);
         return;
       }
-      final String academyId =
-          (await TenantService.instance.getActiveAcademyId()) ??
-              await TenantService.instance.ensureActiveAcademy();
+      final stopwatch = Stopwatch()..start();
       final supa = Supabase.instance.client;
+      final fetchWatch = Stopwatch()..start();
       final data = await _fetchHomeworkRows(
         supa: supa,
         academyId: academyId,
+      );
+      if (sessionGeneration != _sessionGeneration ||
+          _loadedAcademyId != academyId) {
+        return;
+      }
+      debugPrint(
+        '[HW][loadAll][items] rows=${data.length} '
+        'elapsedMs=${fetchWatch.elapsedMilliseconds}',
       );
       _byStudentId.clear();
       for (final r in data) {
@@ -2106,8 +2459,12 @@ class HomeworkStore {
       for (final entry in _byStudentId.values) {
         _sortStudentList(entry);
       }
+      _loadedStudentIds
+        ..clear()
+        ..addAll(_byStudentId.keys);
       final allItems =
           _byStudentId.values.expand((e) => e).toList(growable: false);
+      final hydrateWatch = Stopwatch()..start();
       await _hydratePageMappingsFromServer(
         academyId: academyId,
         items: allItems,
@@ -2116,23 +2473,54 @@ class HomeworkStore {
         academyId: academyId,
         items: allItems,
       );
-      await _reloadGroups(academyId: academyId, bump: false);
+      if (sessionGeneration != _sessionGeneration ||
+          _loadedAcademyId != academyId) {
+        return;
+      }
+      debugPrint(
+        '[HW][loadAll][hydrate] items=${allItems.length} '
+        'elapsedMs=${hydrateWatch.elapsedMilliseconds}',
+      );
+      final groupsWatch = Stopwatch()..start();
+      await _reloadGroups(
+        academyId: academyId,
+        bump: false,
+        expectedSessionGeneration: sessionGeneration,
+      );
+      if (sessionGeneration != _sessionGeneration ||
+          _loadedAcademyId != academyId) {
+        return;
+      }
+      debugPrint(
+        '[HW][loadAll][groups] elapsedMs=${groupsWatch.elapsedMilliseconds}',
+      );
       // 시작 시 1회 수행하는 정합성 보정은 서버 쓰기를 포함할 수 있으므로,
       // 포커스/재연결 스냅샷에서는 반복하지 않는다.
       if (!forceRefresh) {
+        final reconcileWatch = Stopwatch()..start();
         for (final sid in _byStudentId.keys.toList(growable: false)) {
           await _unifyGroupAssignmentCodes(
             academyId: academyId,
             studentId: sid,
           );
         }
+        debugPrint(
+          '[HW][loadAll][reconcile] students=${_byStudentId.length} '
+          'elapsedMs=${reconcileWatch.elapsedMilliseconds}',
+        );
       }
       _loaded = true;
+      _fullServerSnapshotLoaded = true;
       _bump();
       _subscribeRealtime(academyId);
       // 방금 성공한 전체 스냅샷이 단절 구간의 추가·수정·삭제를 모두 포함한다.
       // 이때만 poll cursor를 현재 시각 근처로 옮겨도 안전하다.
       _startRealtimeFallbackPoll(academyId, resetCursor: true);
+      await _persistSnapshotNow(academyId);
+      debugPrint(
+        '[HW][loadAll][done] students=${_byStudentId.length} '
+        'items=${allItems.length} elapsedMs=${stopwatch.elapsedMilliseconds}',
+      );
     } catch (e, st) {
       // 전체 refresh 도중 후속 hydration/group 조회가 실패해도 마지막 성공
       // 스냅샷을 잃지 않는다.
@@ -2152,6 +2540,9 @@ class HomeworkStore {
         _groupIdByItemId
           ..clear()
           ..addAll(previousGroupIdByItem);
+        _loadedStudentIds
+          ..clear()
+          ..addAll(previousLoadedStudentIds ?? const <String>{});
       }
       // ignore: avoid_print
       print('[HW][loadAll][ERROR] $e\n$st');
@@ -6532,35 +6923,51 @@ class HomeworkStore {
     if (loading != null) {
       await loading;
       // 진행 중이던 전체 스냅샷이 성공했다면 같은 학생을 즉시 다시 읽지 않는다.
-      if (_loaded) return;
+      if (_fullServerSnapshotLoaded) return;
     }
 
     final academyId = (await TenantService.instance.getActiveAcademyId()) ??
         await TenantService.instance.ensureActiveAcademy();
+    await _ensureAcademyBoundary(academyId);
     _subscribeRealtime(academyId);
     _startRealtimeFallbackPoll(academyId);
 
     final concurrency = maxConcurrent.clamp(1, 8);
-    for (var offset = 0; offset < ids.length; offset += concurrency) {
-      final end = math.min(offset + concurrency, ids.length);
-      await Future.wait<void>(
-        ids.sublist(offset, end).map(
-              (studentId) => _reloadStudent(
-                studentId,
-                reconcileServerState: false,
+    try {
+      for (var offset = 0; offset < ids.length; offset += concurrency) {
+        final end = math.min(offset + concurrency, ids.length);
+        await Future.wait<void>(
+          ids.sublist(offset, end).map(
+                (studentId) => ensureStudentHomeworkLoaded(
+                  studentId,
+                  forceRefresh: true,
+                  persistSnapshot: false,
+                ),
               ),
-            ),
-      );
+        );
+      }
+    } finally {
+      // 학생별 완료 시마다 전체 스냅샷을 직렬화하지 않고, 홈 갱신 배치가
+      // 끝난 뒤 마지막 상태를 한 번만 저장한다.
+      _scheduleSnapshotPersist(academyId);
     }
   }
 
   Future<void> _reloadStudent(
     String studentId, {
     bool reconcileServerState = true,
+    bool persistSnapshot = true,
   }) async {
-    final reloadGeneration = (_reloadGenerationByStudentId[studentId] ?? 0) + 1;
-    _reloadGenerationByStudentId[studentId] = reloadGeneration;
+    final stopwatch = Stopwatch()..start();
+    late int reloadGeneration;
     try {
+      final String academyId =
+          (await TenantService.instance.getActiveAcademyId()) ??
+              await TenantService.instance.ensureActiveAcademy();
+      await _ensureAcademyBoundary(academyId);
+      final sessionGeneration = _sessionGeneration;
+      reloadGeneration = (_reloadGenerationByStudentId[studentId] ?? 0) + 1;
+      _reloadGenerationByStudentId[studentId] = reloadGeneration;
       final oldCodes = <String, String>{};
       final oldMappings = <String, List<Map<String, dynamic>>>{};
       final oldRecommended = <String, ({int? minutes, int? minutesAuto})>{};
@@ -6581,10 +6988,6 @@ class HomeworkStore {
           );
         }
       }
-
-      final String academyId =
-          (await TenantService.instance.getActiveAcademyId()) ??
-              await TenantService.instance.ensureActiveAcademy();
       final data = await _fetchHomeworkRows(
         supa: Supabase.instance.client,
         academyId: academyId,
@@ -6650,10 +7053,15 @@ class HomeworkStore {
         academyId: academyId,
         items: list,
       );
+      if (sessionGeneration != _sessionGeneration ||
+          _reloadGenerationByStudentId[studentId] != reloadGeneration) {
+        return;
+      }
       await _reloadGroups(
         academyId: academyId,
         studentId: studentId,
         bump: false,
+        expectedSessionGeneration: sessionGeneration,
       );
       if (reconcileServerState) {
         await _unifyGroupAssignmentCodes(
@@ -6669,6 +7077,7 @@ class HomeworkStore {
             academyId: academyId,
             studentId: studentId,
             bump: false,
+            expectedSessionGeneration: sessionGeneration,
           );
         }
         _syncRecoveredAssignmentCodesToServer(
@@ -6680,8 +7089,19 @@ class HomeworkStore {
         );
       }
       _consumeMarkedAutoCompleteForWaitingItems(studentId);
+      _loadedStudentIds.add(studentId);
+      _loaded = true;
       _bump();
-    } catch (_) {}
+      if (persistSnapshot) {
+        _scheduleSnapshotPersist(academyId);
+      }
+      debugPrint(
+        '[HW][reloadStudent] student=$studentId items=${list.length} '
+        'elapsedMs=${stopwatch.elapsedMilliseconds}',
+      );
+    } catch (e, st) {
+      debugPrint('[HW][reloadStudent][ERROR] student=$studentId $e\n$st');
+    }
   }
 
   void _syncRecoveredRecommendedMinutesToServer({

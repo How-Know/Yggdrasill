@@ -39,19 +39,27 @@ class ExamModeService {
     speed.value = spd.clamp(1.0, 30.0);
     effect.value = prefs.getString(_kEffectKey) ?? 'glow';
 
-    // 모드 ON/OFF 자동 복원
+    // 스위치로 켠 값은 만료된 until보다 우선한다. 사용자가 끈 뒤에는
+    // DB 시험일로 다시 켜지 않는다.
+    final savedOn = prefs.getBool(_kOnKey) ?? false;
     final userOff = prefs.getBool(_kUserOffKey) ?? false;
+    if (savedOn) {
+      isOn.value = true;
+      return;
+    }
+    if (userOff) {
+      isOn.value = false;
+      return;
+    }
     final untilIso = prefs.getString(_kUntilKey);
-    if (!userOff && untilIso != null && untilIso.isNotEmpty) {
+    if (untilIso != null && untilIso.isNotEmpty) {
       try {
         final until = DateTime.parse(untilIso);
-        isOn.value = DateTime.now().isBefore(until) || DateTime.now().isAtSameMomentAs(until);
-      } catch (_) {
-        isOn.value = prefs.getBool(_kOnKey) ?? false;
-      }
-    } else {
-      isOn.value = prefs.getBool(_kOnKey) ?? false;
+        isOn.value = !DateTime.now().isAfter(until);
+        return;
+      } catch (_) {}
     }
+    isOn.value = false;
   }
 
   // until이 저장되어 있지 않거나 과거라면 DB를 조회하여 자동 복원
@@ -94,6 +102,7 @@ class ExamModeService {
     isOn.value = value;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kOnKey, value);
+    await prefs.setBool(_kUserOffKey, !value);
   }
 
   Future<void> setUserOff(bool off) async {

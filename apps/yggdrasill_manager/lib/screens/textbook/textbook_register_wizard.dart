@@ -552,6 +552,34 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
     );
     if (tree.isEmpty) return null;
     var partStatus = '';
+    if (_seriesKey == 'wonri_middle') {
+      final report = await autofillWonriMiddleSubUnitRanges(
+        tree,
+        classify: (rawPages) async {
+          final images = <TextbookRpmSectionImage>[];
+          for (final rawPage in rawPages) {
+            images.add(TextbookRpmSectionImage(
+              rawPage: rawPage,
+              bytes: await renderPdfPageToPng(
+                document: document,
+                pageNumber: rawPage,
+                longEdgePx: 1100,
+              ),
+            ));
+          }
+          final result = await _vlmService.classifyWonriMiddleStructurePages(
+            images: images,
+          );
+          return result.pages;
+        },
+        onProgress: (message) {
+          if (mounted) setState(() => _tocStatus = message);
+        },
+      );
+      partStatus = ' · 본문 소단원 ${report.subUnitCount}개 자동 보완'
+          '${report.calculationPageCount > 0 ? ' · 계산력 강화 ${report.calculationPageCount}지면 확인' : ''}'
+          '${report.incompleteMids.isEmpty ? '' : ' · 소단원 머리말 미확인: ${report.incompleteMids.join(', ')}'}';
+    }
     final partSeries = kProblemBookSectionParts.containsKey(_seriesKey);
     if (partSeries) {
       final report = await autofillProblemBookPartRanges(
@@ -793,7 +821,8 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
         bodyLegacyUrl: _bodyLegacyCtrl.text.trim().isEmpty
             ? null
             : _bodyLegacyCtrl.text.trim(),
-        answerLegacyUrl: _answerLegacyCtrl.text.trim().isEmpty
+        answerLegacyUrl: _seriesKey == 'wonri_middle' ||
+                _answerLegacyCtrl.text.trim().isEmpty
             ? null
             : _answerLegacyCtrl.text.trim(),
         solutionLegacyUrl: _solutionLegacyCtrl.text.trim().isEmpty
@@ -813,17 +842,19 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
         courseLabel: _selectedCourse?.label,
         legacyUrl: registerInput.bodyLegacyUrl,
       );
-      await _uploadPdfIfPicked(
-        filePath: _answerPdfPath,
-        kind: 'ans',
-        academyId: result.academyId,
-        fileId: result.bookId,
-        gradeLabel: result.gradeLabel,
-        gradeKey: _selectedCourse?.gradeKey,
-        courseKey: _selectedCourse?.courseKey,
-        courseLabel: _selectedCourse?.label,
-        legacyUrl: registerInput.answerLegacyUrl,
-      );
+      if (_seriesKey != 'wonri_middle') {
+        await _uploadPdfIfPicked(
+          filePath: _answerPdfPath,
+          kind: 'ans',
+          academyId: result.academyId,
+          fileId: result.bookId,
+          gradeLabel: result.gradeLabel,
+          gradeKey: _selectedCourse?.gradeKey,
+          courseKey: _selectedCourse?.courseKey,
+          courseLabel: _selectedCourse?.label,
+          legacyUrl: registerInput.answerLegacyUrl,
+        );
+      }
       await _uploadPdfIfPicked(
         filePath: _solutionPdfPath,
         kind: 'sol',
@@ -1195,17 +1226,29 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
             hint: '본문 legacy URL (옵션, 예: Dropbox 링크)',
           ),
           const SizedBox(height: 20),
-          _buildPdfPicker(
-            label: '정답 PDF',
-            pickedPath: _answerPdfPath,
-            onPick: () => _pickPdf(kind: 'ans'),
-            onClear: () => setState(() => _answerPdfPath = null),
-          ),
-          const SizedBox(height: 10),
-          _buildTextField(
-            _answerLegacyCtrl,
-            hint: '정답 legacy URL (옵션)',
-          ),
+          if (_seriesKey == 'wonri_middle')
+            const Text(
+              '중등 개념원리는 별도 빠른 정답 PDF를 사용하지 않습니다. '
+              '아래 해설 PDF에서 정답과 풀이를 함께 추출합니다.',
+              style: TextStyle(
+                color: Color(0xFF7CC67C),
+                fontSize: 12,
+                height: 1.4,
+              ),
+            )
+          else ...[
+            _buildPdfPicker(
+              label: '정답 PDF',
+              pickedPath: _answerPdfPath,
+              onPick: () => _pickPdf(kind: 'ans'),
+              onClear: () => setState(() => _answerPdfPath = null),
+            ),
+            const SizedBox(height: 10),
+            _buildTextField(
+              _answerLegacyCtrl,
+              hint: '정답 legacy URL (옵션)',
+            ),
+          ],
           const SizedBox(height: 20),
           _buildPdfPicker(
             label: '해설 PDF',

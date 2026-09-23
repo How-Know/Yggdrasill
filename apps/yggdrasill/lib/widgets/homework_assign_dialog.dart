@@ -14,6 +14,7 @@ import '../models/student_time_block.dart';
 import '../services/data_manager.dart';
 import '../services/homework_assignment_store.dart';
 import '../services/homework_store.dart';
+import '../services/homework_time_defaults_service.dart';
 import '../services/next_class_start_resolver.dart';
 import '../services/print_routing_service.dart';
 import '../services/resource_service.dart';
@@ -1309,6 +1310,35 @@ String _formatDurationKorean(int ms) {
   return '${d.inMinutes}분';
 }
 
+int _groupEstimatedMinutes(Iterable<HomeworkItem> items) {
+  var raw = 0;
+  var counted = 0;
+  for (final item in items) {
+    final confirmed = item.recommendedMinutes ?? 0;
+    final minutes =
+        confirmed > 0 ? confirmed : (item.recommendedMinutesAuto ?? 0);
+    if (minutes <= 0) continue;
+    raw += minutes;
+    counted += 1;
+  }
+  if (counted == 0) return 0;
+  return math.max(
+    0,
+    raw -
+        math.max(0, counted - 1) *
+            HomeworkTimeDefaultsService.initialAlphaMinutes,
+  );
+}
+
+String _formatEstimatedDurationLabel(int minutes) {
+  if (minutes <= 0) return '';
+  final hours = minutes ~/ 60;
+  final remain = minutes % 60;
+  if (hours <= 0) return '예상시간 ${remain}분';
+  if (remain == 0) return '예상시간 ${hours}시간';
+  return '예상시간 ${hours}시간 $remain분';
+}
+
 String _formatDate(DateTime dt) {
   String two(int v) => v.toString().padLeft(2, '0');
   return '${dt.year}.${two(dt.month)}.${two(dt.day)}';
@@ -1711,7 +1741,7 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
     final children = HomeworkStore.instance
         .itemsInGroup(studentId, group.id, includeCompleted: true);
     if (children.isEmpty) continue;
-    final groupPages = <String>[];
+    final includedItems = <HomeworkItem>[];
     int groupCount = 0;
     int dueCount = 0;
     int previousProgress = 0;
@@ -1796,13 +1826,17 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
       if (itemCurrent > currentProgress) {
         currentProgress = itemCurrent;
       }
-      final page = (hw.page ?? '').trim();
-      if (page.isNotEmpty) groupPages.add(page);
+      includedItems.add(hw);
       final count = hw.count;
       if (count != null && count > 0) groupCount += count;
       firstBookAndCourse ??= _formatBookAndCourseFromHomework(hw);
     }
     if (dueCount <= 0 && !groupHasPreDone && !groupHasTodayCheckItem) continue;
+    final pageSummary = homeworkGroupPageSummary(
+      includedItems.map(
+        (hw) => (page: hw.page, unitMappings: hw.unitMappings),
+      ),
+    );
     final title = group.title.trim().isNotEmpty
         ? group.title.trim()
         : children.first.title.trim();
@@ -1813,7 +1847,7 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
         previousProgress: previousProgress,
         todayProgress: math.max(0, currentProgress - previousProgress),
         bookAndCourse: firstBookAndCourse ?? '교재 미기재',
-        page: groupPages.isEmpty ? '-' : groupPages.join(', '),
+        page: pageSummary.isEmpty ? '-' : pageSummary,
         count: groupCount > 0 ? groupCount.toString() : '-',
         assignedAt: earliestAssigned,
         dueDate: groupDueDate,
@@ -1844,7 +1878,13 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
         (hw?.title.trim().isNotEmpty ?? false) ? hw!.title.trim() : '과제';
     final bookAndCourse =
         hw == null ? '교재 미기재' : _formatBookAndCourseFromHomework(hw);
-    final page = (hw?.page ?? '').trim();
+    final page = hw == null
+        ? ''
+        : homeworkGroupPageSummary(
+            <({String? page, List<Map<String, dynamic>>? unitMappings})>[
+              (page: hw.page, unitMappings: hw.unitMappings),
+            ],
+          );
     final hwCount = hw?.count;
     final count = (hwCount != null && hwCount > 0) ? hwCount.toString() : '-';
     final window = _progressWindowForChecks(checks, classDateTime);
@@ -2304,7 +2344,7 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
         earliestAssigned = assignedAt;
       }
     }
-    final mergedPages = mergeHomeworkItemPageRanges(
+    final mergedPages = homeworkGroupPageSummary(
       children.map(
         (hw) => (page: hw.page, unitMappings: hw.unitMappings),
       ),
@@ -2320,6 +2360,8 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
       _formatCountText(countText),
     ].join(' · ');
     final memoText = memos.join(', ');
+    final estimateLabel =
+        _formatEstimatedDurationLabel(_groupEstimatedMinutes(children));
     todoEntries.add(
       _TodoListEntry(
         primary: '□ $bookText',
@@ -2327,6 +2369,7 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
         tertiary: details,
         bookTitle: bookText,
         rightPrimary: assignedDateText.isEmpty ? null : assignedDateText,
+        rightSecondary: estimateLabel.isEmpty ? null : estimateLabel,
         rightTertiary: memoText.isEmpty ? null : memoText,
       ),
     );
@@ -2592,6 +2635,8 @@ Future<String> _buildHomeworkTodoPdf({
   final doc = sf.PdfDocument();
   doc.pageSettings.orientation = sf.PdfPageOrientation.portrait;
   doc.pageSettings.margins.all = 18;
+  // 상단만 10 축소. 본문 높이가 10 늘어 접는 선(숙제 리스트)은 5만 내려간다.
+  doc.pageSettings.margins.top = 8;
   final page = doc.pages.add();
   final size = page.getClientSize();
   final graphics = page.graphics;
@@ -2997,7 +3042,8 @@ Future<String> _buildHomeworkTodoPdf({
         final todayPct = cr.todayProgress ?? 0;
         final previousPct = cr.previousProgress ?? 0;
         // 2번째 줄: 페이지(좌) | 문항수 · +퍼센트(우)
-        final line2Left = _formatPageText(cr.page);
+        // 홈 그룹 카드와 같이 p.130-132 형식. 왼쪽이 오른쪽 문구를 덮지 않게 칸을 나눈다.
+        final line2Left = _formatPageTextCompact(cr.page);
         final missedLabel = switch (cr.outcome) {
           'left_behind' => '숙제 안 함 (두고 옴) · 0%',
           'not_done' => '숙제 안 함 · 0%',
@@ -3018,19 +3064,37 @@ Future<String> _buildHomeworkTodoPdf({
         graphics.drawString(titleText, csLine1Font,
             brush: textBrush,
             bounds: Rect.fromLTWH(summaryX, csY, summaryW, 13));
+        final line2RightW = line2Right.isEmpty
+            ? 0.0
+            : math.min(
+                csLine2Font.measureString(line2Right).width + 2,
+                summaryW * 0.46,
+              );
+        final line2LeftW = line2RightW > 0
+            ? math.max(0.0, summaryW - line2RightW - 6)
+            : summaryW;
+        final line3RightW = math.min(
+          csLine2Font.measureString(line3Right).width + 2,
+          summaryW * 0.4,
+        );
+        final line3LeftW = math.max(0.0, summaryW - line3RightW - 6);
         graphics.drawString(line2Left, csLine2Font,
             brush: subBrush,
-            bounds: Rect.fromLTWH(summaryX, csY + 14, summaryW, 13));
-        graphics.drawString(line2Right, csLine2Font,
-            brush: subBrush,
-            bounds: Rect.fromLTWH(summaryX, csY + 14, summaryW, 13),
-            format: rightAlign);
+            bounds: Rect.fromLTWH(summaryX, csY + 14, line2LeftW, 13));
+        if (line2RightW > 0) {
+          graphics.drawString(line2Right, csLine2Font,
+              brush: subBrush,
+              bounds: Rect.fromLTWH(
+                  summaryX + line2LeftW + 6, csY + 14, line2RightW, 13),
+              format: rightAlign);
+        }
         graphics.drawString(line3Left, csLine2Font,
             brush: subBrush,
-            bounds: Rect.fromLTWH(summaryX, csY + 27, summaryW, 13));
+            bounds: Rect.fromLTWH(summaryX, csY + 27, line3LeftW, 13));
         graphics.drawString(line3Right, csLine2Font,
             brush: subBrush,
-            bounds: Rect.fromLTWH(summaryX, csY + 27, summaryW, 13),
+            bounds: Rect.fromLTWH(
+                summaryX + line3LeftW + 6, csY + 27, line3RightW, 13),
             format: rightAlign);
         drawPage1ProgressBar(
           x: summaryX,
@@ -3131,12 +3195,30 @@ Future<String> _buildHomeworkTodoPdf({
           format: sf.PdfStringFormat(alignment: sf.PdfTextAlignment.right));
     }
 
-    // 2줄: 그룹 과제 제목 (검사내역과 동일 +14)
+    // 2줄: 그룹 과제 제목 (좌) + 예상 수행시간 (우)
     final secondary = (entry.secondary ?? '').trim();
+    final rightSecondary = (entry.rightSecondary ?? '').trim();
+    final rightSecondaryW = rightSecondary.isEmpty
+        ? 0.0
+        : math.min(
+            subFont.measureString(rightSecondary).width + 2,
+            textW * 0.55,
+          );
+    final line2LeftW = rightSecondaryW > 0
+        ? math.max(0.0, textW - rightSecondaryW - 6)
+        : textW;
     if (secondary.isNotEmpty) {
       graphics.drawString(secondary, subFont,
           brush: subBrush,
-          bounds: Rect.fromLTWH(textX, itemTop + todoLine2Y, textW, 13));
+          bounds: Rect.fromLTWH(
+              textX, itemTop + todoLine2Y, line2LeftW, 13));
+    }
+    if (rightSecondaryW > 0) {
+      graphics.drawString(rightSecondary, subFont,
+          brush: subBrush,
+          bounds: Rect.fromLTWH(textX + line2LeftW + 6, itemTop + todoLine2Y,
+              rightSecondaryW, 13),
+          format: sf.PdfStringFormat(alignment: sf.PdfTextAlignment.right));
     }
 
     // 3줄: 페이지 · 문항수 (좌) + 메모 (우) (검사내역과 동일 +27)
@@ -3207,8 +3289,6 @@ Future<String> _buildHomeworkTodoPdf({
   final p2ColWidth = (contentWidth2 - p2ColGap) / 2;
   final p2LeftX = left;
   final p2RightX = left + p2ColWidth + p2ColGap;
-  const p2TitleH = 16.0;
-  const p2RowGap = 5.0;
   final p2RowsLimit = bottom2 - 10;
 
   void drawProgressBar({
@@ -3242,28 +3322,31 @@ Future<String> _buildHomeworkTodoPdf({
     }
   }
 
-  g2.drawString('오늘 완료한 과제', valueFont,
+  g2.drawString('오늘 완료한 과제', sectionFont,
       brush: textBrush,
-      bounds: Rect.fromLTWH(p2LeftX, p2Top, p2ColWidth, p2TitleH));
-  g2.drawString('수업', valueFont,
+      bounds: Rect.fromLTWH(p2LeftX, p2Top, p2ColWidth, 18));
+  g2.drawString('수업', sectionFont,
       brush: textBrush,
-      bounds: Rect.fromLTWH(p2RightX, p2Top, p2ColWidth, p2TitleH));
-  g2.drawLine(weakLinePen, Offset(p2LeftX, p2Top + p2TitleH),
-      Offset(p2LeftX + p2ColWidth, p2Top + p2TitleH));
-  g2.drawLine(weakLinePen, Offset(p2RightX, p2Top + p2TitleH),
-      Offset(p2RightX + p2ColWidth, p2Top + p2TitleH));
+      bounds: Rect.fromLTWH(p2RightX, p2Top, p2ColWidth, 18));
+  g2.drawLine(weakLinePen, Offset(p2LeftX, p2Top + 18),
+      Offset(p2LeftX + p2ColWidth, p2Top + 18));
+  g2.drawLine(weakLinePen, Offset(p2RightX, p2Top + 18),
+      Offset(p2RightX + p2ColWidth, p2Top + 18));
   g2.drawLine(weakLinePen, Offset(p2RightX - (p2ColGap / 2), p2Top),
       Offset(p2RightX - (p2ColGap / 2), p2RowsLimit));
 
-  double p2LeftY = p2Top + p2TitleH + 4;
-  const completedRowH = 43.0;
+  // 숙제 리스트와 동일: 1줄 0 / 2줄 +14 / 3줄 +27, 카드 간격 8.
+  const cardLine2Y = 14.0;
+  const cardLine3Y = 27.0;
+  const cardGap = 8.0;
+  double p2LeftY = p2Top + 24;
   if (payload.completedSummaries.isEmpty) {
-    g2.drawString('완료 과제 없음', bodyFont,
+    g2.drawString('완료 과제 없음', subFont,
         brush: subBrush,
-        bounds: Rect.fromLTWH(p2LeftX + 2, p2LeftY + 4, p2ColWidth - 4, 14));
+        bounds: Rect.fromLTWH(p2LeftX + 2, p2LeftY, p2ColWidth - 4, 14));
   } else {
     for (final cs in payload.completedSummaries) {
-      if (p2LeftY + completedRowH > p2RowsLimit) break;
+      if (p2LeftY + 50 > p2RowsLimit) break;
       final bookText =
           cs.bookAndCourse.trim().isEmpty ? '-' : cs.bookAndCourse.trim();
       final groupText =
@@ -3276,81 +3359,78 @@ Future<String> _buildHomeworkTodoPdf({
         '오늘 +${cs.progressPct.toStringAsFixed(0)}%',
         '전체 ${cs.totalProgressPct.toStringAsFixed(0)}%',
       ].join(' · ');
+      final cardX = p2LeftX + 2;
+      final cardW = p2ColWidth - 4;
       g2.drawString(bookText, bodyBoldFont,
           brush: textBrush,
-          bounds: Rect.fromLTWH(p2LeftX + 2, p2LeftY, p2ColWidth - 4, 14));
-      g2.drawString(groupText, bodyFont,
-          brush: textBrush,
-          bounds: Rect.fromLTWH(p2LeftX + 2, p2LeftY + 12, p2ColWidth - 4, 14));
+          bounds: Rect.fromLTWH(cardX, p2LeftY, cardW, 14));
+      g2.drawString(groupText, subFont,
+          brush: subBrush,
+          bounds: Rect.fromLTWH(cardX, p2LeftY + cardLine2Y, cardW, 13));
       g2.drawString(infoText, subFont,
           brush: subBrush,
-          bounds: Rect.fromLTWH(p2LeftX + 2, p2LeftY + 24, p2ColWidth - 4, 13));
+          bounds: Rect.fromLTWH(cardX, p2LeftY + cardLine3Y, cardW, 13));
       drawProgressBar(
         g: g2,
-        x: p2LeftX + 2,
-        y: p2LeftY + 38,
-        w: p2ColWidth - 4,
+        x: cardX,
+        y: p2LeftY + 42,
+        w: cardW,
         previousPct: cs.previousProgressPct,
         todayPct: cs.progressPct,
       );
-      g2.drawLine(weakLinePen, Offset(p2LeftX, p2LeftY + completedRowH + 3),
-          Offset(p2LeftX + p2ColWidth, p2LeftY + completedRowH + 3));
-      p2LeftY += completedRowH + p2RowGap + 3;
+      p2LeftY += 50 + cardGap;
     }
   }
 
-  double p2RightY = p2Top + p2TitleH + 4;
+  double p2RightY = p2Top + 24;
   if (payload.classWorkEntries.isEmpty) {
-    g2.drawString('• 오늘 수행 기록 없음', bodyFont,
+    g2.drawString('• 오늘 수행 기록 없음', subFont,
         brush: subBrush,
-        bounds: Rect.fromLTWH(p2RightX + 2, p2RightY + 4, p2ColWidth - 4, 14));
+        bounds: Rect.fromLTWH(p2RightX + 2, p2RightY, p2ColWidth - 4, 14));
   } else {
     for (final line in payload.classWorkEntries) {
-      if (p2RightY + 16 > p2RowsLimit) break;
+      if (p2RightY + 14 > p2RowsLimit) break;
       final bookText =
           line.bookAndCourse.trim().isEmpty ? '' : line.bookAndCourse.trim();
       final groupTitle = line.title.trim().isEmpty ? '' : line.title.trim();
       final timeText =
           line.studyMs > 0 ? _formatDurationKorean(line.studyMs) : '';
-      const rightTimeReserveW = 58.0;
-      final leftBaseX = p2RightX + 2;
-      final leftTextMaxW = math.max(0.0, p2ColWidth - rightTimeReserveW - 8);
-      var groupStartX = leftBaseX;
+      final cardX = p2RightX + 2;
+      final cardW = p2ColWidth - 4;
+      final timeW = timeText.isEmpty
+          ? 0.0
+          : math.min(bodyFont.measureString(timeText).width + 2, cardW * 0.4);
+      final line1LeftW =
+          timeW > 0 ? math.max(0.0, cardW - timeW - 6) : cardW;
+      final itemTop = p2RightY;
       if (bookText.isNotEmpty) {
-        final measuredBookW =
-            math.min(bodyBoldFont.measureString(bookText).width, leftTextMaxW);
         g2.drawString(bookText, bodyBoldFont,
             brush: textBrush,
-            bounds: Rect.fromLTWH(leftBaseX, p2RightY, leftTextMaxW, 14));
-        groupStartX = leftBaseX + measuredBookW + 5;
+            bounds: Rect.fromLTWH(cardX, itemTop, line1LeftW, 14));
       }
-      if (groupTitle.isNotEmpty) {
-        final remainingW =
-            math.max(0.0, leftTextMaxW - (groupStartX - leftBaseX));
-        if (remainingW > 4) {
-          g2.drawString(groupTitle, bodyFont,
-              brush: textBrush,
-              bounds: Rect.fromLTWH(groupStartX, p2RightY, remainingW, 14));
-        }
-      }
-      if (timeText.isNotEmpty) {
-        g2.drawString(timeText, bodyFont,
+      if (timeW > 0) {
+        g2.drawString(timeText, subFont,
             brush: subBrush,
-            bounds: Rect.fromLTWH(p2RightX + 2, p2RightY, p2ColWidth - 4, 14),
+            bounds: Rect.fromLTWH(cardX + line1LeftW + 6, itemTop, timeW, 14),
             format: sf.PdfStringFormat(alignment: sf.PdfTextAlignment.right));
       }
-      p2RightY += 16;
+      if (groupTitle.isNotEmpty) {
+        g2.drawString(groupTitle, subFont,
+            brush: subBrush,
+            bounds: Rect.fromLTWH(cardX, itemTop + cardLine2Y, cardW, 13));
+      }
+      var lineY = itemTop + cardLine3Y;
       for (final sub in line.subEntries) {
-        if (p2RightY + 13 > p2RowsLimit) break;
-        final subText = '  ${sub.title} · p.${sub.page} · ${sub.count}문항';
+        if (lineY + 13 > p2RowsLimit) break;
+        final subText = '${sub.title} · p.${sub.page} · ${sub.count}문항';
         g2.drawString(subText, subFont,
             brush: subBrush,
-            bounds: Rect.fromLTWH(p2RightX + 8, p2RightY, p2ColWidth - 14, 13));
-        p2RightY += 13;
+            bounds: Rect.fromLTWH(cardX, lineY, cardW, 13));
+        lineY += 13;
       }
-      g2.drawLine(weakLinePen, Offset(p2RightX, p2RightY + 2),
-          Offset(p2RightX + p2ColWidth, p2RightY + 2));
-      p2RightY += 6;
+      final contentBottomY =
+          line.subEntries.isEmpty ? itemTop + 40 : lineY;
+      p2RightY = contentBottomY + cardGap;
     }
   }
 

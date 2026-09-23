@@ -1,5 +1,9 @@
+import 'dart:async';
+
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+typedef ActiveAcademyChanged = FutureOr<void> Function(String academyId);
 
 class TenantService {
   TenantService._();
@@ -7,6 +11,15 @@ class TenantService {
 
   static const _prefsKey = 'active_academy_id';
   static String _scopedPrefsKey(String uid) => 'active_academy_id_$uid';
+  final Set<ActiveAcademyChanged> _academyChangedListeners = {};
+
+  void addActiveAcademyChangedListener(ActiveAcademyChanged listener) {
+    _academyChangedListeners.add(listener);
+  }
+
+  void removeActiveAcademyChangedListener(ActiveAcademyChanged listener) {
+    _academyChangedListeners.remove(listener);
+  }
 
   Future<String?> getActiveAcademyId() async {
     try {
@@ -39,7 +52,14 @@ class TenantService {
     final prefs = await SharedPreferences.getInstance();
     final uid = Supabase.instance.client.auth.currentUser?.id;
     if (uid != null && uid.isNotEmpty) {
-      await prefs.setString(_scopedPrefsKey(uid), academyId);
+      final key = _scopedPrefsKey(uid);
+      final previous = prefs.getString(key);
+      await prefs.setString(key, academyId);
+      if (previous != academyId) {
+        for (final listener in _academyChangedListeners.toList()) {
+          await listener(academyId);
+        }
+      }
     }
   }
 
@@ -157,23 +177,26 @@ class TenantService {
             .eq('user_id', uid)
             .limit(1);
         if (rows.isNotEmpty) {
-          final role = (rows.first['platform_role'] as String?)?.toLowerCase().trim();
+          final role =
+              (rows.first['platform_role'] as String?)?.toLowerCase().trim();
           if (role == 'superadmin') return true;
         }
       } catch (_) {
         // Table may not exist yet; ignore and fallback.
       }
-      final allow = const String.fromEnvironment('SUPERADMIN_EMAILS', defaultValue: '');
+      final allow =
+          const String.fromEnvironment('SUPERADMIN_EMAILS', defaultValue: '');
       if (allow.trim().isEmpty) return false;
       final currentEmail = client.auth.currentUser?.email?.toLowerCase().trim();
       if (currentEmail == null || currentEmail.isEmpty) return false;
-      final set = allow.split(',').map((s) => s.toLowerCase().trim()).where((s) => s.isNotEmpty).toSet();
+      final set = allow
+          .split(',')
+          .map((s) => s.toLowerCase().trim())
+          .where((s) => s.isNotEmpty)
+          .toSet();
       return set.contains(currentEmail);
     } catch (_) {
       return false;
     }
   }
 }
-
-
-

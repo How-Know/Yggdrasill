@@ -271,6 +271,13 @@ class TrialOverlayLabel {
   const TrialOverlayLabel({required this.noteId, required this.text});
 }
 
+/// 정원 70% 미만으로 표시하는 최대 인원. 정원 10이면 6.
+int timetableUnderCapacitySteps(int capacity) {
+  if (capacity <= 0) return 0;
+  final steps = (capacity * 0.7).ceil() - 1;
+  return steps < 0 ? 0 : steps;
+}
+
 class TimetableCapacityIndicator extends StatelessWidget {
   const TimetableCapacityIndicator({
     super.key,
@@ -288,26 +295,41 @@ class TimetableCapacityIndicator extends StatelessWidget {
     );
     final isOutline =
         color == Colors.transparent || (color != null && color!.a == 0);
-    final fill = isOutline ? Colors.transparent : (color ?? Colors.green);
-    // 투명(여유) 알약 숫자는 시간표 상단 "N월" 위젯과 동일 색.
-    final textColor =
-        isOutline ? Colors.grey.shade300 : const Color(0xFF0B1112);
+    if (isOutline) {
+      final steps = timetableUnderCapacitySteps(
+        DataManager.instance.academySettings.defaultCapacity,
+      );
+      final filled = steps <= 0 ? 0 : count.clamp(0, steps);
+      return SizedBox(
+        height: 22,
+        width: double.infinity,
+        child: CustomPaint(
+          painter: _CapacityStackPainter(
+            steps: steps,
+            filled: filled,
+            color: panelStyle.divider,
+          ),
+        ),
+      );
+    }
 
+    final fill = color ?? Colors.green;
+    final numberColor = fill == panelStyle.groupedCardBackground
+        ? panelStyle.title
+        : const Color(0xFF0B1112);
     return Container(
       height: 22,
       padding: const EdgeInsets.only(left: 8, right: 10),
       decoration: BoxDecoration(
         color: fill,
         borderRadius: BorderRadius.circular(11),
-        border:
-            isOutline ? Border.all(color: panelStyle.divider, width: 1) : null,
       ),
       child: Align(
         alignment: Alignment.centerLeft,
         child: Text(
           '$count',
           style: TextStyle(
-            color: textColor,
+            color: numberColor,
             fontSize: 12.5,
             fontWeight: FontWeight.w800,
             height: 1.0,
@@ -317,6 +339,49 @@ class TimetableCapacityIndicator extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+class _CapacityStackPainter extends CustomPainter {
+  const _CapacityStackPainter({
+    required this.steps,
+    required this.filled,
+    required this.color,
+  });
+
+  final int steps;
+  final int filled;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final radius = Radius.circular(size.height / 2);
+    final pill = RRect.fromRectAndRadius(Offset.zero & size, radius);
+    final bandCount = filled < steps ? filled : steps;
+    if (steps > 0 && bandCount > 0 && size.height > 0 && size.width > 0) {
+      canvas.save();
+      canvas.clipRRect(pill);
+      final fillHeight = size.height * bandCount / steps;
+      canvas.drawRect(
+        Rect.fromLTWH(0, size.height - fillHeight, size.width, fillHeight),
+        Paint()..color = color,
+      );
+      canvas.restore();
+    }
+    canvas.drawRRect(
+      pill,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1
+        ..color = color,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _CapacityStackPainter oldDelegate) {
+    return oldDelegate.steps != steps ||
+        oldDelegate.filled != filled ||
+        oldDelegate.color != color;
   }
 }
 

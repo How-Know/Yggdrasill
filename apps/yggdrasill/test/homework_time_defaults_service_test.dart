@@ -100,5 +100,29 @@ void main() {
         '연습문제',
       );
     });
+
+    test('중등 개념원리는 A~F section을 독립 단가 키로 사용한다', () {
+      const sections = <String>[
+        'middle_concept_check',
+        'middle_core_problem',
+        'middle_exam_problem',
+        'middle_unit_review',
+        'middle_descriptive',
+        'middle_calculation',
+      ];
+      for (final section in sections) {
+        expect(
+          HomeworkTimeDefaultsService.categoryKeyFor(
+            seriesKey: 'wonri_middle',
+            label: '',
+            section: section,
+            isWonri: true,
+            subKey: '',
+          ),
+          section,
+          reason: section,
+        );
+      }
+    });
   });
 }

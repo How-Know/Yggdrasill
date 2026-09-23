@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { createClient } from '@supabase/supabase-js';
 import { readFileSync, existsSync } from 'fs';
 import Ajv from 'ajv';
+import sharp from 'sharp';
 import {
   createM5HomeworksEnvelope,
   sanitizeGroupsForDevicePayload as sanitizeM5GroupsForDevicePayload
@@ -454,6 +455,290 @@ async function listM5GroupsWithHomework(academy_id, student_id) {
   return { data: [...active, ...homework], error: null };
 }
 
+async function loadM5WelcomeStats(academy_id, student_id) {
+  const kst = new Date(Date.now() + 9 * 60 * 60 * 1000);
+  const day = kst.toISOString().slice(0, 10);
+  const start = `${day}T00:00:00+09:00`;
+  const end = `${day}T23:59:59+09:00`;
+  const empty = { goal_count: 0, homework_due_count: 0, plan_minutes: 0, progress_percent: 0 };
+  try {
+    const { data: openRows, error: attErr } = await supa
+      .from('attendance_records')
+      .select('id, arrival_time, homework_plan_snapshot_minutes, homework_plan_snapshot_groups, homework_plan_snapshot_item_ids, homework_plan_snapshot_at, homework_draft_saved_at')
+      .eq('academy_id', academy_id)
+      .eq('student_id', student_id)
+      .is('departure_time', null)
+      .order('arrival_time', { ascending: false, nullsFirst: false })
+      .limit(8);
+    if (attErr) console.error('[gateway] welcome attendance error', attErr);
+    const savedRows = (openRows || []).filter((row) => {
+      const groups = row.homework_plan_snapshot_groups;
+      return row.homework_plan_snapshot_at || row.homework_draft_saved_at
+        || (Array.isArray(groups) && groups.length > 0);
+    });
+    savedRows.sort((a, b) => {
+      const at = new Date(a.homework_plan_snapshot_at || a.homework_draft_saved_at || 0).getTime();
+      const bt = new Date(b.homework_plan_snapshot_at || b.homework_draft_saved_at || 0).getTime();
+      return bt - at;
+    });
+    const attendance = savedRows[0] || (openRows && openRows[0]) || null;
+    let goal = 0;
+    let doneMinutes = 0;
+    const snapshotGroups = attendance && attendance.homework_plan_snapshot_groups;
+    const snapshotItems = attendance && attendance.homework_plan_snapshot_item_ids;
+    const snapshotItemIds = [];
+    if (Array.isArray(snapshotGroups)) {
+      for (const group of snapshotGroups) {
+        const ids = group?.item_ids || group?.itemIds || [];
+        if (Array.isArray(ids)) snapshotItemIds.push(...ids);
+      }
+    }
+    if (snapshotItemIds.length === 0 && Array.isArray(snapshotItems)) {
+      snapshotItemIds.push(...snapshotItems);
+    }
+    if (Array.isArray(snapshotGroups) && snapshotGroups.length > 0) {
+      goal = snapshotGroups.length;
+    } else if (snapshotItemIds.length > 0) {
+      goal = snapshotItemIds.length;
+    } else if (attendance && attendance.id) {
+      const { data: plans, error: planErr } = await supa
+        .from('homework_session_plan_items')
+        .select('group_id, destination, resolution, recommended_minutes_snapshot')
+        .eq('academy_id', academy_id)
+        .eq('source_attendance_id', attendance.id)
+        .neq('resolution', 'cancelled');
+      if (planErr) console.error('[gateway] welcome plan items error', planErr);
+      const groups = new Set();
+      for (const row of plans || []) {
+        if (row.destination === 'in_class' || row.destination === 'next_session') {
+          if (row.group_id) groups.add(row.group_id);
+          else groups.add(`item:${groups.size}`);
+        }
+        if (row.resolution === 'completed') {
+          doneMinutes += Number(row.recommended_minutes_snapshot || 0);
+        }
+      }
+      goal = groups.size;
+    }
+    if (snapshotItemIds.length > 0) {
+      const { data: itemRows, error: itemErr } = await supa
+        .from('homework_items')
+        .select('id, recommended_minutes, recommended_minutes_auto, completed_at, status, phase')
+        .eq('academy_id', academy_id)
+        .eq('student_id', student_id)
+        .in('id', snapshotItemIds);
+      if (itemErr) console.error('[gateway] welcome completed items error', itemErr);
+      const isDone = (item) => {
+        const phase = Number(item?.phase ?? 1);
+        const status = Number(item?.status ?? 0);
+        return !!item?.completed_at || status === 1 || phase === 0;
+      };
+      const groupRecommended = (rows) => {
+        const positive = [];
+        for (const item of rows) {
+          const minutes = Number(item.recommended_minutes) || Number(item.recommended_minutes_auto) || 0;
+          if (minutes > 0) positive.push(minutes);
+        }
+        const raw = positive.reduce((sum, minutes) => sum + minutes, 0);
+        return Math.max(0, raw - Math.max(positive.length - 1, 0) * 10);
+      };
+      const byId = new Map((itemRows || []).map((item) => [item.id, item]));
+      if (Array.isArray(snapshotGroups) && snapshotGroups.length > 0) {
+        let grouped = 0;
+        for (const group of snapshotGroups) {
+          const ids = group?.item_ids || group?.itemIds || [];
+          const doneRows = (Array.isArray(ids) ? ids : [])
+            .map((id) => byId.get(id))
+            .filter((item) => item && isDone(item));
+          grouped += groupRecommended(doneRows);
+        }
+        doneMinutes = grouped;
+      } else {
+        doneMinutes = groupRecommended((itemRows || []).filter(isDone));
+      }
+    }
+    const { count, error: dueErr } = await supa
+      .from('homework_assignments')
+      .select('id', { count: 'exact', head: true })
+      .eq('academy_id', academy_id)
+      .eq('student_id', student_id)
+      .gte('due_for_check_at', start)
+      .lte('due_for_check_at', end);
+    if (dueErr) console.error('[gateway] welcome homework due error', dueErr);
+    const homeworkDue = count || 0;
+    let homeworkCount = homeworkDue;
+    if (homeworkCount === 0 && attendance && attendance.id) {
+      const { data: hwPlans, error: hwErr } = await supa
+        .from('homework_session_plan_items')
+        .select('group_id')
+        .eq('academy_id', academy_id)
+        .eq('source_attendance_id', attendance.id)
+        .eq('destination', 'homework')
+        .neq('resolution', 'cancelled');
+      if (hwErr) console.error('[gateway] welcome homework plan error', hwErr);
+      homeworkCount = new Set((hwPlans || []).map((row) => row.group_id || row)).size;
+    }
+    const planMinutes = Number(attendance && attendance.homework_plan_snapshot_minutes) || 0;
+    const percent = planMinutes > 0
+      ? Math.max(0, Math.min(100, Math.round((doneMinutes * 100) / planMinutes)))
+      : 0;
+    // 아이패드 student_today_plan_progress: 남은 시간 = 스냅샷 계획분 - (계획분 - 현재 잔여 권장분).
+    // 잔여는 그룹별 m5_group_teacher_remaining_minutes (권장분 × (1 - 채점 완료율)).
+    let remainingMinutes = planMinutes > 0
+      ? Math.max(0, planMinutes - Math.min(planMinutes, doneMinutes))
+      : 0;
+    if (Array.isArray(snapshotGroups) && snapshotGroups.length > 0 && planMinutes > 0) {
+      let currentRemaining = 0;
+      let rpcOk = true;
+      let usedGroup = false;
+      for (const group of snapshotGroups) {
+        const ids = [...new Set((group?.item_ids || group?.itemIds || []).filter(Boolean))];
+        if (ids.length === 0) continue;
+        usedGroup = true;
+        const { data, error } = await supa.rpc('m5_group_teacher_remaining_minutes', {
+          p_academy_id: academy_id,
+          p_student_id: student_id,
+          p_item_ids: ids
+        });
+        if (error) {
+          console.error('[gateway] welcome remaining minutes error', error);
+          rpcOk = false;
+          break;
+        }
+        currentRemaining += Number(data) || 0;
+      }
+      if (rpcOk && usedGroup) {
+        const gradedCompleted = Math.max(0, Math.min(planMinutes, planMinutes - currentRemaining));
+        const completed = Math.max(gradedCompleted, Math.min(planMinutes, doneMinutes));
+        remainingMinutes = planMinutes - completed;
+      }
+    }
+    const stats = {
+      goal_count: goal,
+      homework_due_count: homeworkCount,
+      plan_minutes: planMinutes,
+      remaining_minutes: remainingMinutes,
+      progress_percent: percent
+    };
+    console.log('[gateway][welcome] stats', { student_id, ...stats, hasSnapshot: Array.isArray(snapshotGroups) });
+    return stats;
+  } catch (e) {
+    console.error('[gateway] welcome stats error', e);
+    return empty;
+  }
+}
+
+const lastPlanNoticeAt = new Map();
+
+async function loadM5AvatarRgb565Base64(url) {
+  const raw = (url || '').toString();
+  if (!raw.startsWith('https://')) return null;
+  const render = raw.includes('/storage/v1/object/public/')
+    ? raw.replace('/storage/v1/object/public/', '/storage/v1/render/image/public/')
+    : raw;
+  const joiner = render.includes('?') ? '&' : '?';
+  const fetchUrl = `${render}${joiner}width=96&height=96&resize=cover&quality=70`;
+  try {
+    const res = await fetch(fetchUrl, { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return null;
+    const source = Buffer.from(await res.arrayBuffer());
+    // JPEG 디코더/바이트 순서 차이를 없애기 위해 LVGL native RGB565로 완전히 변환한다.
+    const { data, info: imageInfo } = await sharp(source)
+      .resize(48, 48, { fit: 'cover' })
+      .removeAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    if (imageInfo.width !== 48 || imageInfo.height !== 48 || imageInfo.channels < 3) return null;
+    const rgb565 = Buffer.allocUnsafe(48 * 48 * 2);
+    for (let src = 0, dst = 0; dst < rgb565.length; src += imageInfo.channels, dst += 2) {
+      const value =
+        ((data[src] & 0xf8) << 8) |
+        ((data[src + 1] & 0xfc) << 3) |
+        (data[src + 2] >> 3);
+      rgb565[dst] = value & 0xff;
+      rgb565[dst + 1] = value >> 8;
+    }
+    return rgb565.toString('base64');
+  } catch (e) {
+    console.error('[gateway] avatar rgb565 fetch error', e?.message ?? e);
+    return null;
+  }
+}
+
+async function publishStudentInfoToDevice(academy_id, device_id, student_id) {
+  const { data, error } = await supa.rpc('m5_get_student_info', { p_academy_id: academy_id, p_student_id: student_id });
+  if (error) { console.error('[gateway] student_info error', error); return; }
+  const info = data && data[0] ? { ...data[0] } : null;
+  if (info) {
+    const kst = new Date(Date.now() + 9 * 60 * 60 * 1000);
+    const day = kst.toISOString().slice(0, 10);
+    const { data: rows, error: attErr } = await supa
+      .from('attendance_records')
+      .select('arrival_time')
+      .eq('academy_id', academy_id)
+      .eq('student_id', student_id)
+      .gte('arrival_time', `${day}T00:00:00+09:00`)
+      .lte('arrival_time', `${day}T23:59:59+09:00`)
+      .order('arrival_time', { ascending: false })
+      .limit(1);
+    if (attErr) console.error('[gateway] student arrival lookup error', attErr);
+    else if (rows && rows[0] && rows[0].arrival_time) info.arrival_time = rows[0].arrival_time;
+    const { data: avatarRow, error: avatarErr } = await supa
+      .from('students')
+      .select('avatar_kind, avatar_url, avatar_emoji, avatar_monogram_style')
+      .eq('academy_id', academy_id)
+      .eq('id', student_id)
+      .maybeSingle();
+    if (avatarErr) console.error('[gateway] student avatar lookup error', avatarErr);
+    else if (avatarRow) {
+      info.avatar_kind = avatarRow.avatar_kind || 'monogram';
+      info.avatar_url = avatarRow.avatar_url || '';
+      info.avatar_emoji = avatarRow.avatar_emoji || '';
+      info.avatar_monogram_style = Number(avatarRow.avatar_monogram_style) || 0;
+    }
+    const stats = await loadM5WelcomeStats(academy_id, student_id);
+    Object.assign(info, stats);
+    let avatarRgb565Bytes = 0;
+    if (info.avatar_kind === 'photo' && info.avatar_url) {
+      const b64 = await loadM5AvatarRgb565Base64(info.avatar_url);
+      if (b64) {
+        info.avatar_rgb565_b64 = b64;
+        avatarRgb565Bytes = Math.floor((b64.length * 3) / 4);
+      }
+    }
+    console.log('[gateway][avatar]', {
+      student_id,
+      kind: info.avatar_kind || '',
+      hasUrl: !!info.avatar_url,
+      rgb565Bytes: avatarRgb565Bytes
+    });
+  }
+  publish(`academies/${academy_id}/devices/${device_id}/student_info`, JSON.stringify({ info }), { qos: 1, retain: false });
+}
+
+async function publishPlanSavedToBoundDevices(academy_id, student_id, { notify = true } = {}) {
+  const { data: binds, error } = await supa
+    .from('m5_device_bindings')
+    .select('device_id')
+    .eq('academy_id', academy_id)
+    .eq('student_id', student_id)
+    .eq('active', true);
+  if (error || !binds || binds.length === 0) return;
+  for (const row of binds) {
+    const device_id = row.device_id;
+    if (!device_id) continue;
+    await publishStudentInfoToDevice(academy_id, device_id, student_id);
+    if (notify) {
+      publish(
+        `academies/${academy_id}/devices/${device_id}/notice`,
+        JSON.stringify({ text: '오늘 목표 저장됨' }),
+        { qos: 1, retain: false }
+      );
+    }
+  }
+  await publishHomeworksToBoundDevices(academy_id, student_id, 'plan_saved');
+}
+
 async function publishHomeworksToBoundDevicesImpl(academy_id, student_id, source = 'unknown') {
   const { data: binds, error: bErr } = await supa
     .from('m5_device_bindings')
@@ -849,6 +1134,30 @@ async function syncPauseAllRuntimeState(academy_id, student_id) {
     }
   }
 
+  const nowIso = new Date().toISOString();
+  const { error: itemErr } = await supa
+    .from('homework_items')
+    .update({ phase: 1, run_start: null, waiting_at: nowIso, updated_at: nowIso })
+    .eq('academy_id', academy_id)
+    .eq('student_id', student_id)
+    .is('completed_at', null)
+    .eq('phase', 2);
+  if (itemErr) {
+    console.error('[gateway] pause_all item phase sync error', { academy_id, student_id, error: itemErr });
+    return itemErr;
+  }
+
+  const { error: rtErr } = await supa
+    .from('homework_group_runtime')
+    .update({ phase: 1, run_start: null, updated_at: nowIso })
+    .eq('academy_id', academy_id)
+    .eq('student_id', student_id)
+    .eq('phase', 2);
+  if (rtErr) {
+    console.error('[gateway] pause_all runtime force error', { academy_id, student_id, error: rtErr });
+    return rtErr;
+  }
+
   return null;
 }
 
@@ -1229,9 +1538,45 @@ client.on('message', async (topic, payload) => {
       }
       if (action === 'student_info') {
         const student_id = msg.student_id;
-        const { data, error } = await supa.rpc('m5_get_student_info', { p_academy_id: academy_id, p_student_id: student_id });
-        if (error) { console.error('[gateway] student_info error', error); return; }
-        publish(`academies/${academy_id}/devices/${device_id}/student_info`, JSON.stringify({ info: data && data[0] ? data[0] : null }), { qos: 1, retain: false });
+        await publishStudentInfoToDevice(academy_id, device_id, student_id);
+        return;
+      }
+      if (action === 'set_avatar') {
+        const student_id = (msg.student_id || '').toString().trim();
+        const kind = (msg.kind || '').toString().trim();
+        const { data: bind, error: bindErr } = await supa
+          .from('m5_device_bindings')
+          .select('student_id')
+          .eq('academy_id', academy_id)
+          .eq('device_id', device_id)
+          .eq('active', true)
+          .maybeSingle();
+        if (bindErr || !bind || bind.student_id !== student_id) {
+          console.error('[gateway] set_avatar refused', { device_id, student_id, bindErr });
+          return;
+        }
+        if (!['photo', 'emoji', 'monogram'].includes(kind)) return;
+        const patch = { avatar_kind: kind };
+        if (kind === 'emoji') {
+          patch.avatar_emoji = (msg.emoji || '').toString().trim() || null;
+          patch.avatar_monogram_style = null;
+        } else if (kind === 'monogram') {
+          const style = Number(msg.style);
+          patch.avatar_monogram_style = Number.isFinite(style) && style >= 0 ? Math.floor(style) : 0;
+          patch.avatar_emoji = null;
+        } else {
+          const url = (msg.url || '').toString().trim();
+          if (url.startsWith('https://')) patch.avatar_url = url;
+          patch.avatar_emoji = null;
+          patch.avatar_monogram_style = null;
+        }
+        const { error: avatarWriteErr } = await supa
+          .from('students')
+          .update(patch)
+          .eq('academy_id', academy_id)
+          .eq('id', student_id);
+        if (avatarWriteErr) console.error('[gateway] set_avatar error', avatarWriteErr);
+        else await publishStudentInfoToDevice(academy_id, device_id, student_id);
         return;
       }
       if (action === 'raise_question') {
@@ -1366,6 +1711,12 @@ try {
           const academy_id = rec.academy_id;
           const student_id = rec.student_id;
           await queueHomeworksToBoundDevices(academy_id, student_id, 'homework_items');
+          const next = payload?.new ?? {};
+          const prev = payload?.old ?? {};
+          const isDone = (row) => !!row?.completed_at || Number(row?.status ?? 0) === 1 || Number(row?.phase ?? 1) === 0;
+          if (academy_id && student_id && isDone(next) && !isDone(prev)) {
+            await publishPlanSavedToBoundDevices(academy_id, student_id, { notify: false });
+          }
         } catch (e) {
           console.error('[gateway] realtime homework_items handler error', e);
         }
@@ -1561,6 +1912,21 @@ try {
         try {
           const rec = payload?.new ?? {};
           const old = payload?.old ?? {};
+          const savedAt = rec.homework_draft_saved_at || rec.homework_plan_snapshot_at || null;
+          const hasSnapshot = rec.homework_plan_snapshot_minutes != null
+            || rec.homework_plan_snapshot_groups != null;
+          if (rec.academy_id && rec.student_id && !savedAt && !hasSnapshot) {
+            console.log('[gateway] attendance update has no plan fields', { keys: Object.keys(rec) });
+          }
+          if (rec.academy_id && rec.student_id && (savedAt || hasSnapshot)) {
+            const age = savedAt ? Date.now() - new Date(savedAt).getTime() : Number.POSITIVE_INFINITY;
+            const key = `${rec.academy_id}::${rec.student_id}`;
+            const prev = lastPlanNoticeAt.get(key);
+            const freshSave = !!(savedAt && prev !== savedAt && age >= -5000 && age < 20000);
+            if (savedAt) lastPlanNoticeAt.set(key, savedAt);
+            console.log('[gateway] plan refresh', { student_id: rec.student_id, freshSave, hasSnapshot });
+            await publishPlanSavedToBoundDevices(rec.academy_id, rec.student_id, { notify: freshSave });
+          }
           // departure_time 이 새로 설정된 경우만(하원 처리)
           if (rec.academy_id && rec.departure_time && !old.departure_time) {
             console.log('[gateway] attendance departure → list resync', { student_id: rec.student_id });

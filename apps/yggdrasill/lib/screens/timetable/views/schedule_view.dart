@@ -1,5 +1,6 @@
-import 'package:flutter/material.dart';
+import 'dart:async';
 import 'dart:math' as math;
+import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 import '../../../services/schedule_store.dart';
 import '../../../services/summary_service.dart';
@@ -40,13 +41,10 @@ class _ScheduleViewState extends State<ScheduleView> {
   DateTime? _previewEnd;
   String _todoFilter = 'all'; // all | incomplete | complete
   final Set<int> _loadedHolidayYears = <int>{};
-  bool _isExamPeriodMode = false; // 시험기간 모드 스위치 상태
-
   @override
   void initState() {
     super.initState();
     _ensureHolidaysForYear(DateTime.now().year);
-    _isExamPeriodMode = ExamModeService.instance.isOn.value;
   }
 
   Future<void> _ensureHolidaysForYear(int year) async {
@@ -267,19 +265,26 @@ class _ScheduleViewState extends State<ScheduleView> {
                                       ),
                                       Tooltip(
                                         message: '시험기간 모드',
-                                        child: Switch(
-                                          value: _isExamPeriodMode,
-                                          onChanged: (val) {
-                                            setState(
-                                                () => _isExamPeriodMode = val);
-                                            ExamModeService
-                                                .instance.isOn.value = val;
+                                        child: ValueListenableBuilder<bool>(
+                                          valueListenable:
+                                              ExamModeService.instance.isOn,
+                                          builder: (context, isOn, _) {
+                                            return Switch(
+                                              value: isOn,
+                                              onChanged: (val) {
+                                                unawaited(
+                                                  ExamModeService.instance
+                                                      .setOn(val),
+                                                );
+                                              },
+                                              activeColor: kDlgAccent,
+                                              inactiveThumbColor: kDlgTextSub,
+                                              inactiveTrackColor: kDlgBorder,
+                                              materialTapTargetSize:
+                                                  MaterialTapTargetSize
+                                                      .shrinkWrap,
+                                            );
                                           },
-                                          activeColor: kDlgAccent,
-                                          inactiveThumbColor: kDlgTextSub,
-                                          inactiveTrackColor: kDlgBorder,
-                                          materialTapTargetSize:
-                                              MaterialTapTargetSize.shrinkWrap,
                                         ),
                                       ),
                                     ],

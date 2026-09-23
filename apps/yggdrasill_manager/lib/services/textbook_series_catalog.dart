@@ -85,8 +85,7 @@ class TextbookSeriesCatalogEntry {
 
   /// 이 중단원 이름이 대단원 끝 전용 행인지.
   bool isTrailingMidRow(String midName) =>
-      trailingMidRowName.isNotEmpty &&
-      midName.trim() == trailingMidRowName;
+      trailingMidRowName.isNotEmpty && midName.trim() == trailingMidRowName;
 
   /// 이 중단원이 실제로 가져야 할 슬롯 목록.
   List<TextbookSubSectionPreset> slotsForMid(String midName) {
@@ -112,8 +111,7 @@ const List<TextbookSeriesCatalogEntry> kTextbookSeriesCatalog =
     key: 'ssen',
     displayName: '쎈',
     defaultTextbookType: '문제집',
-    notes:
-        '한 중단원은 A(기본다잡기) / B(유형뽀개기) / C(만점도전하기)로 고정됩니다. '
+    notes: '한 중단원은 A(기본다잡기) / B(유형뽀개기) / C(만점도전하기)로 고정됩니다. '
         'C 후반부에는 서술형 섹션이 포함될 수 있습니다.',
     subPreset: <TextbookSubSectionPreset>[
       TextbookSubSectionPreset(key: 'A', displayName: 'A 기본다잡기'),
@@ -128,8 +126,7 @@ const List<TextbookSeriesCatalogEntry> kTextbookSeriesCatalog =
     key: 'rpm',
     displayName: 'RPM',
     defaultTextbookType: '문제집',
-    notes:
-        '한 중단원은 A(교과서문제 정복하기) / B(유형 익히기) / C(시험에 꼭 나오는 문제)로 고정됩니다. '
+    notes: '한 중단원은 A(교과서문제 정복하기) / B(유형 익히기) / C(시험에 꼭 나오는 문제)로 고정됩니다. '
         'C 마지막에는 서술형 주관식 / 실력 UP 섹션이 포함될 수 있습니다.',
     subPreset: <TextbookSubSectionPreset>[
       TextbookSubSectionPreset(key: 'A', displayName: 'A 교과서문제 정복하기'),
@@ -154,8 +151,7 @@ const List<TextbookSeriesCatalogEntry> kTextbookSeriesCatalog =
     hasSubUnitRows: true,
     unitEndRowName: '연습문제',
     unitEndSlotKeys: <String>{'D'},
-    notes:
-        '개념원리는 대단원 - 중단원 - 소단원 구조로 입력합니다 (번호 제외). '
+    notes: '개념원리는 대단원 - 중단원 - 소단원 구조로 입력합니다 (번호 제외). '
         '페이지는 소단원별로만 입력하며, 개념원리 익히기 / 필수유형 / 확인 체크 / 연습문제 '
         '분류는 VLM이 해당 페이지 안에서 자동으로 나눕니다.',
     subPreset: <TextbookSubSectionPreset>[
@@ -167,6 +163,33 @@ const List<TextbookSeriesCatalogEntry> kTextbookSeriesCatalog =
       // 필수유형과 같은 지면 구성이지만 번호가 01부터 새로 시작해 B와 분리
       // 저장한다. 슬롯으로 넣으면 특강이 없는 중단원까지 미완료로 집계되므로
       // 여기(payload)에는 두지 않는다.
+    ],
+  ),
+  // 중등 개념원리. 고등판과 이름만 같고 지면·번호·해설 구조가 다르므로
+  // 반드시 별도 series key 로 보존한다.
+  //
+  // 인쇄 목차에는 대단원/중단원과 중단원 시작 쪽만 나오며, 실제 소단원은
+  // 본문 머리말을 훑어 보완한다. 일반 소단원은 A~C, 중단원 말미 행은 D/E를
+  // 사용한다. "계산력 강화하기"(F)는 일부 소단원에만 불규칙하게 나타나므로
+  // payload 고정 슬롯으로 만들지 않고 탐지된 크롭에서만 동적으로 노출한다.
+  TextbookSeriesCatalogEntry(
+    key: 'wonri_middle',
+    displayName: '개념원리 중등',
+    defaultTextbookType: '개념서',
+    hasSubUnitRows: true,
+    unitEndRowName: '중단원 마무리하기',
+    unitEndSlotKeys: <String>{'D', 'E'},
+    notes: '중등 개념원리는 목차의 대단원/중단원을 먼저 읽고 본문 머리말에서 '
+        '소단원을 보완합니다. 확인하기 / 핵심문제 / 시험문제 / 중단원 마무리 / '
+        '서술형은 VLM이 자동 분류하며, 계산력 강화하기는 실제 등장한 소단원에만 '
+        '선택 영역으로 저장합니다. 정답은 별도 빠른 정답 PDF 없이 해설 PDF에서 '
+        '풀이 좌표와 함께 추출합니다.',
+    subPreset: <TextbookSubSectionPreset>[
+      TextbookSubSectionPreset(key: 'A', displayName: '개념원리 확인하기'),
+      TextbookSubSectionPreset(key: 'B', displayName: '핵심문제 익히기'),
+      TextbookSubSectionPreset(key: 'C', displayName: '이런 문제가 시험에 나온다'),
+      TextbookSubSectionPreset(key: 'D', displayName: '중단원 마무리하기'),
+      TextbookSubSectionPreset(key: 'E', displayName: '서술형 대비 문제'),
     ],
   ),
   // 개념+유형(개념플러스유형) 개념서. 개념원리와 같은 대-중-소 3계층이지만
@@ -188,8 +211,7 @@ const List<TextbookSeriesCatalogEntry> kTextbookSeriesCatalog =
     unitEndRowName: '단원 다지기',
     unitEndSlotKeys: <String>{'D', 'E'},
     supportsProblemExtraction: true,
-    notes:
-        '개념+유형은 대단원 - 중단원 - 소단원 구조로 입력합니다 (번호 제외). '
+    notes: '개념+유형은 대단원 - 중단원 - 소단원 구조로 입력합니다 (번호 제외). '
         '페이지는 소단원별로만 입력하며, 개념확인 / 필수 문제 / 쏙쏙 개념 익히기 '
         '분류는 VLM이 해당 페이지 안에서 자동으로 나눕니다. 중단원 끝의 '
         '단원 다지기 / 서술형 완성하기 / 개념 리뷰 / 마인드맵은 "단원 다지기" '
@@ -224,8 +246,7 @@ const List<TextbookSeriesCatalogEntry> kTextbookSeriesCatalog =
     hasSubUnitRows: true,
     unitEndRowName: '단원 마무리 평가',
     unitEndSlotKeys: <String>{'B'},
-    notes:
-        '수력충전은 대단원 - 중단원 - 소단원 구조로 입력합니다 (번호 제외). '
+    notes: '수력충전은 대단원 - 중단원 - 소단원 구조로 입력합니다 (번호 제외). '
         '페이지는 소단원별로만 입력하며, 중단원 끝의 "단원 마무리 평가"도 소단원 '
         '한 행으로 넣습니다. 유형명과 개념 체크는 VLM이 지면 안에서 자동으로 '
         '가려냅니다.',
@@ -252,8 +273,7 @@ const List<TextbookSeriesCatalogEntry> kTextbookSeriesCatalog =
     defaultTextbookType: '문제집',
     trailingMidRowName: '대단원 TEST',
     trailingMidSlotKeys: <String>{'F'},
-    notes:
-        '한 중단원은 A(STEP1 핵심 유형) / B(STEP2 심화 유형) / C(STEP3 최고난도 유형) / '
+    notes: '한 중단원은 A(STEP1 핵심 유형) / B(STEP2 심화 유형) / C(STEP3 최고난도 유형) / '
         '창의융합 유형 / 중단원 TEST로 고정됩니다. 단계별 쪽 범위는 지면의 '
         'Step 머리말을 읽어 자동으로 나눕니다. 워크북의 대단원 TEST는 대단원 끝에 '
         '"대단원 TEST" 중단원 행을 하나 만들어 담습니다.',

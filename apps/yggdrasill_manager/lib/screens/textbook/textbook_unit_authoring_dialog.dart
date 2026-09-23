@@ -164,6 +164,44 @@ class _TextbookUnitAuthoringDialogState
   ///  `_startPdfOnlyExtractForFocus` 참고.)
   static const Set<String> _kWonriPerSubUnitKeys = {'B', 'E'};
 
+  // ── 중등 개념원리(wonri_middle) 단일 패스 ────────────────────────────
+  static const Map<String, String> _kWonriMiddleSubKeyByCategory = {
+    'middle_concept_check': 'A',
+    'middle_core_problem': 'B',
+    'middle_exam_problem': 'C',
+    'middle_unit_review': 'D',
+    'middle_descriptive': 'E',
+    'middle_calculation': 'F',
+  };
+  static const Map<String, String> _kWonriMiddleCategoryBySubKey = {
+    'A': 'middle_concept_check',
+    'B': 'middle_core_problem',
+    'C': 'middle_exam_problem',
+    'D': 'middle_unit_review',
+    'E': 'middle_descriptive',
+    'F': 'middle_calculation',
+  };
+  static const Map<String, String> _kWonriMiddleCategoryShortNames = {
+    'middle_concept_check': '확인하기',
+    'middle_core_problem': '핵심문제',
+    'middle_exam_problem': '시험문제',
+    'middle_unit_review': '중단원 마무리',
+    'middle_descriptive': '서술형 대비',
+    'middle_calculation': '계산력 강화',
+  };
+
+  /// 통합 해설 매칭 키를 `소단원 행 + category + 번호`로 유지한다.
+  /// D/E도 중단원 말미의 전용 행 순번을 사용해 crop/run/정답 동기화 키가
+  /// 서로 달라지는 일을 막는다.
+  static const Set<String> _kWonriMiddlePerSubUnitKeys = {
+    'A',
+    'B',
+    'C',
+    'D',
+    'E',
+    'F',
+  };
+
   // ── 개념+유형(gaeyu) 단일 패스 ────────────────────────────────────────
   //
   // 구조는 개념원리와 같지만 코너가 여섯 개이고, 번호 리셋 단위가 코너마다
@@ -239,21 +277,25 @@ class _TextbookUnitAuthoringDialogState
   static const Set<String> _kSuryeokPerSubUnitKeys = {'A', 'B'};
 
   Map<String, String> get _conceptSubKeyByCategory => switch (_seriesKey) {
+        'wonri_middle' => _kWonriMiddleSubKeyByCategory,
         'gaeyu' => _kGaeyuSubKeyByCategory,
         'suryeok' => _kSuryeokSubKeyByCategory,
         _ => _kWonriSubKeyByCategory,
       };
   Map<String, String> get _conceptCategoryBySubKey => switch (_seriesKey) {
+        'wonri_middle' => _kWonriMiddleCategoryBySubKey,
         'gaeyu' => _kGaeyuCategoryBySubKey,
         'suryeok' => _kSuryeokCategoryBySubKey,
         _ => _kWonriCategoryBySubKey,
       };
   Map<String, String> get _conceptCategoryShortNames => switch (_seriesKey) {
+        'wonri_middle' => _kWonriMiddleCategoryShortNames,
         'gaeyu' => _kGaeyuCategoryShortNames,
         'suryeok' => _kSuryeokCategoryShortNames,
         _ => _kWonriCategoryShortNames,
       };
   Set<String> get _conceptPerSubUnitKeys => switch (_seriesKey) {
+        'wonri_middle' => _kWonriMiddlePerSubUnitKeys,
         'gaeyu' => _kGaeyuPerSubUnitKeys,
         'suryeok' => _kSuryeokPerSubUnitKeys,
         _ => _kWonriPerSubUnitKeys,
@@ -365,6 +407,11 @@ class _TextbookUnitAuthoringDialogState
     if (_conceptSubKeyByCategory.containsKey(item.category)) {
       return item.category;
     }
+    if (_seriesKey == 'wonri_middle') {
+      return _kWonriMiddleSubKeyByCategory.containsKey(pageSection)
+          ? pageSection
+          : '';
+    }
     if (_seriesKey == 'gaeyu') {
       final label = item.label.trim();
       // "연습" 은 구버전 크롭 복원용. 현재 저장 라벨은 "서술형 연습" 이다.
@@ -404,7 +451,14 @@ class _TextbookUnitAuthoringDialogState
   /// 개념서 "문항이름" — 쎈의 난이도 자리를 대체하는 사람이 읽는 라벨.
   /// 카테고리(익히기/필수유형/확인 체크)는 그대로, 연습문제는 구간 라벨
   /// (STEP1/STEP2/실력 UP/수능·평가원·교육청 기출)을 쓰고 없으면 "연습문제".
-  String _wonriItemName(String category, String rawLabel) {
+  String _wonriItemName(
+    String category,
+    String rawLabel, {
+    String itemRole = '',
+  }) {
+    if (_seriesKey == 'wonri_middle') {
+      return _wonriMiddleItemName(category, rawLabel, itemRole);
+    }
     if (_seriesKey == 'gaeyu') return _gaeyuItemName(category, rawLabel);
     if (_seriesKey == 'suryeok') {
       // 유형 문제의 이름은 코너가 아니라 지면의 유형명이고, 그것은
@@ -451,6 +505,41 @@ class _TextbookUnitAuthoringDialogState
           default:
             return '연습문제';
         }
+      default:
+        return '';
+    }
+  }
+
+  String _wonriMiddleItemName(
+    String category,
+    String rawLabel,
+    String itemRole,
+  ) {
+    switch (category) {
+      case 'middle_concept_check':
+        return '개념원리 확인하기';
+      case 'middle_core_problem':
+        if (itemRole == 'representative') return '핵심문제 대표 예제';
+        if (itemRole == 'follow_up') return '핵심문제 확인';
+        return '핵심문제 익히기';
+      case 'middle_exam_problem':
+        return '이런 문제가 시험에 나온다';
+      case 'middle_unit_review':
+        switch (rawLabel.replaceAll(' ', '').toUpperCase()) {
+          case 'STEP1':
+            return 'STEP 1 기본';
+          case 'STEP2':
+            return 'STEP 2 발전';
+          case 'STEP3':
+            return 'STEP 3 실력 UP';
+          default:
+            return '중단원 마무리하기';
+        }
+      case 'middle_descriptive':
+        if (itemRole == 'descriptive_example') return '서술형 예시 문항';
+        return '서술형 대비 문제';
+      case 'middle_calculation':
+        return '계산력 강화하기';
       default:
         return '';
     }
@@ -893,7 +982,8 @@ class _TextbookUnitAuthoringDialogState
           .select('id, raw_page, display_page, section, problem_number, label, '
               'item_name, is_set_header, set_from, set_to, content_group_kind, '
               'content_group_label, content_group_title, content_group_order, '
-              'column_index, bbox_1k, item_region_1k, big_order, mid_order, '
+              'column_index, bbox_1k, item_region_1k, companion_regions, '
+              'big_order, mid_order, '
               'sub_key')
           .eq('academy_id', widget.academyId)
           .eq('book_id', widget.bookId)
@@ -1059,7 +1149,7 @@ class _TextbookUnitAuthoringDialogState
       'number': _printedNumberFromSavedCrop(row, subKey),
       // 개념원리는 난이도(label)가 비어 있고 문항이름(item_name)에 값이 있다.
       // 복원 시 문항이름을 라벨 자리에 실어 뱃지/재저장이 그대로 동작하게 한다.
-      'label': _seriesKey == 'wonri'
+      'label': const {'wonri', 'wonri_middle'}.contains(_seriesKey)
           ? ('${row['item_name'] ?? ''}'.trim().isNotEmpty
               ? row['item_name']
               : row['label'])
@@ -1069,6 +1159,13 @@ class _TextbookUnitAuthoringDialogState
         'category': _conceptSubKeyByCategory.containsKey(section)
             ? section
             : (_conceptCategoryBySubKey[subKey.toUpperCase()] ?? ''),
+      if ('${row['item_name'] ?? ''}'.contains('서술형 예시'))
+        'item_role': 'descriptive_example'
+      else if ('${row['item_name'] ?? ''}'.contains('대표 예제'))
+        'item_role': 'representative'
+      else if ('${row['item_name'] ?? ''}'.contains('핵심문제 확인'))
+        'item_role': 'follow_up',
+      'companion_regions': row['companion_regions'],
       'is_set_header': row['is_set_header'],
       'set_range': <String, dynamic>{
         'from': row['set_from'],
@@ -1184,6 +1281,9 @@ class _TextbookUnitAuthoringDialogState
   }
 
   String _sectionForSubKey(String subKey) {
+    if (_seriesKey == 'wonri_middle') {
+      return _kWonriMiddleCategoryBySubKey[subKey] ?? 'unknown';
+    }
     // 개념원리는 슬롯 의미가 문제집(쎈/RPM)과 다르다.
     // 게이트웨이 vlm_detect_prompt.js 의 WONRI_SECTION_BY_SUB_KEY 와 동일하게 유지.
     if (_seriesKey == 'wonri') {
@@ -1438,6 +1538,34 @@ class _TextbookUnitAuthoringDialogState
     );
     if (tree.isEmpty) return null;
     var partStatus = '';
+    if (_seriesKey == 'wonri_middle') {
+      final report = await autofillWonriMiddleSubUnitRanges(
+        tree,
+        classify: (rawPages) async {
+          final images = <TextbookRpmSectionImage>[];
+          for (final rawPage in rawPages) {
+            images.add(TextbookRpmSectionImage(
+              rawPage: rawPage,
+              bytes: await renderPdfPageToPng(
+                document: document,
+                pageNumber: rawPage,
+                longEdgePx: 1100,
+              ),
+            ));
+          }
+          final result = await _vlmService.classifyWonriMiddleStructurePages(
+            images: images,
+          );
+          return result.pages;
+        },
+        onProgress: (message) {
+          if (mounted) setState(() => _tocStatus = message);
+        },
+      );
+      partStatus = ' · 본문 소단원 ${report.subUnitCount}개 자동 보완'
+          '${report.calculationPageCount > 0 ? ' · 계산력 강화 ${report.calculationPageCount}지면 확인' : ''}'
+          '${report.incompleteMids.isEmpty ? '' : ' · 소단원 머리말 미확인: ${report.incompleteMids.join(', ')}'}';
+    }
     final partSeries = kProblemBookSectionParts.containsKey(_seriesKey);
     if (partSeries) {
       final report = await autofillProblemBookPartRanges(
@@ -2280,6 +2408,13 @@ class _TextbookUnitAuthoringDialogState
       final row = _wonriRowFor(focus);
       if (row == null || row.isExercise) return;
       guarded = _guardWonriRowsBeforeConceptDrillHeader(state.pageResults);
+    } else if (_seriesKey == 'wonri_middle') {
+      // 중단원 마무리 행은 D(STEP 1~3) 뒤에 E(서술형)가 오는 고정 구조다.
+      // STEP 머리말이 반복되지 않는 연속 지면을 단독 판독하면 C로 돌아가는
+      // 경우가 있으므로 행 경계와 앞 지면의 STEP을 함께 사용해 되돌린다.
+      final row = _wonriRowFor(focus);
+      if (row == null || !row.isExercise) return;
+      guarded = _guardWonriMiddleUnitEndRows(state.pageResults);
     } else if (_seriesKey == 'gaeyu') {
       // 순서가 중요하다. 개념 번호 오인식을 먼저 걷어내야 번호 역행 가드가
       // 가짜 번호를 기준선으로 삼아 다음 지면의 진짜 문항을 지우지 않는다.
@@ -2322,6 +2457,48 @@ class _TextbookUnitAuthoringDialogState
       );
       return index < 0 || index >= row.items.length;
     });
+  }
+
+  List<_PageAnalysisRow> _guardWonriMiddleUnitEndRows(
+    List<_PageAnalysisRow> rows,
+  ) {
+    final guard = TextbookWonriMiddleUnitEndGuard();
+    final guardedByPage = <int, _PageAnalysisRow>{};
+    final successful = rows.where((row) => row.ok).toList()
+      ..sort((a, b) => a.rawPage.compareTo(b.rawPage));
+
+    for (final row in successful) {
+      var changed = 0;
+      final items = <TextbookVlmItem>[];
+      for (final item in row.items) {
+        final normalized = guard.normalize(
+          item,
+          pageSection: row.section,
+        );
+        if (!identical(normalized, item)) changed += 1;
+        items.add(normalized);
+      }
+      final section = guard.sectionForPage(row.section, items);
+      if (section != row.section) changed += 1;
+      guardedByPage[row.rawPage] = changed == 0
+          ? row
+          : _PageAnalysisRow.success(
+              rawPage: row.rawPage,
+              displayPage: row.displayPage,
+              section: section,
+              pageKind: row.pageKind,
+              conceptDrillHeaderVisible: row.conceptDrillHeaderVisible,
+              notes: _appendGuardNote(
+                row.notes,
+                'wonri_middle_unit_end_continuation_fixed=$changed',
+              ),
+              items: items,
+            );
+    }
+
+    return <_PageAnalysisRow>[
+      for (final row in rows) guardedByPage[row.rawPage] ?? row,
+    ];
   }
 
   /// 수력충전 소단원의 번호 역행 문항을 걷어낸다.
@@ -3347,6 +3524,9 @@ class _TextbookUnitAuthoringDialogState
     final groupCategories = switch (_seriesKey) {
       'gaeyu' => const {'essential_problem'},
       'suryeok' => const {'type_problem'},
+      // 핵심문제 익히기 대표 예제 위 색 띠의 유형명. 본문 크롭에서 뺀 대신
+      // 여기에 담아 두고, 뒤따르는 확인 문항도 같은 유형을 승계한다.
+      'wonri_middle' => const {'middle_core_problem'},
       _ => const {'type_example'},
     };
     for (final row in pageRows) {
@@ -3368,6 +3548,20 @@ class _TextbookUnitAuthoringDialogState
               rawGroup.kind == 'type' ? rawGroup : (lastTypeGroup ?? rawGroup);
           if (rawGroup.kind == 'type') lastTypeGroup = rawGroup;
         }
+        final detectedNumber = _conceptProblemNumber(
+          numberPrefixes,
+          subKey,
+          row.rawPage,
+          i,
+          vlm.number,
+        );
+        final storedNumber = _seriesKey == 'wonri_middle'
+            ? textbookWonriMiddleStoredProblemNumber(
+                section: category,
+                problemNumber: detectedNumber,
+                itemRole: vlm.itemRole,
+              )
+            : detectedNumber;
         // 필수유형(B)은 소단원마다 번호(01,02...)가 새로 시작한다. 소단원별
         // 분리는 저장 시 sub_index(= 소단원 순번)로 처리하므로, 번호 자체는
         // 인쇄된 값을 그대로 쓴다. (익히기/확인체크/연습문제는 중단원 내 연속.)
@@ -3377,13 +3571,7 @@ class _TextbookUnitAuthoringDialogState
               rawPage: row.rawPage,
               displayPage: row.displayPage,
               section: category,
-              problemNumber: _conceptProblemNumber(
-                numberPrefixes,
-                subKey,
-                row.rawPage,
-                i,
-                vlm.number,
-              ),
+              problemNumber: storedNumber,
               // 개념원리는 난이도가 없어 label 을 비운다. 개념+유형은 탄탄의
               // 난이도(상/중/하)와 쓱쓱의 갈래(예제/유제/연습)를 label 에 담고,
               // 코너 이름은 두 시리즈 모두 전용 컬럼(itemName)에 저장한다.
@@ -3392,9 +3580,17 @@ class _TextbookUnitAuthoringDialogState
               label: switch (_seriesKey) {
                 'gaeyu' => _gaeyuLabelForCategory(category, vlm.label),
                 'suryeok' => category == 'unit_review' ? vlm.label.trim() : '',
+                'wonri_middle' => category == 'middle_exam_problem' &&
+                        vlm.label.trim().toUpperCase() == 'UP'
+                    ? 'UP'
+                    : '',
                 _ => '',
               },
-              itemName: _wonriItemName(category, vlm.label),
+              itemName: _wonriItemName(
+                category,
+                vlm.label,
+                itemRole: vlm.itemRole,
+              ),
               isImportant: _seriesKey == 'gaeyu'
                   ? category == 'unit_drill' && vlm.isImportant
                   : vlm.isImportant,
@@ -3408,6 +3604,7 @@ class _TextbookUnitAuthoringDialogState
               columnIndex: vlm.column,
               bbox1k: _effectiveNumberBbox(vlm, region),
               itemRegion1k: region,
+              companionRegions: vlm.companionRegions,
             ));
       }
     }
@@ -4247,8 +4444,7 @@ class _TextbookUnitAuthoringDialogState
   int? _nextStageStartPageAfter(_SubFocus focus, {required bool answer}) {
     var passed = false;
     int? currentStart;
-    final currentPageFamily =
-        textbookStagePageFamily(_seriesKey, focus.subKey);
+    final currentPageFamily = textbookStagePageFamily(_seriesKey, focus.subKey);
     for (var b = 0; b < _bigUnits.length; b += 1) {
       final big = _bigUnits[b];
       for (var m = 0; m < big.middles.length; m += 1) {
@@ -4383,13 +4579,20 @@ class _TextbookUnitAuthoringDialogState
         final category = _wonriCategoryOfItem(item, row.section);
         if (category.isEmpty) continue;
         final subKey = _conceptSubKeyByCategory[category]!;
-        final number = _conceptProblemNumber(
+        final detectedNumber = _conceptProblemNumber(
           numberPrefixes,
           subKey,
           row.rawPage,
           i,
           item.number,
         );
+        final number = _seriesKey == 'wonri_middle'
+            ? textbookWonriMiddleStoredProblemNumber(
+                section: category,
+                problemNumber: detectedNumber,
+                itemRole: item.itemRole,
+              )
+            : detectedNumber;
         // 본문 "풀이" 단락이 딸린 문항(개념원리 필수유형·특강, 개념+유형 쓱쓱
         // 예제)은 본문 체인이 정답·풀이를 처리하므로 답지 PDF 기반
         // Stage 2/3 시드에서 제외한다.
@@ -4403,6 +4606,11 @@ class _TextbookUnitAuthoringDialogState
           displayPage: row.displayPage,
           section: category,
           isSetHeader: item.isSetHeader,
+          itemName: _wonriItemName(
+            category,
+            item.label,
+            itemRole: item.itemRole,
+          ),
           scopeLabel:
               '$midName/${_conceptCategoryShortNames[category] ?? category}',
           scopeKey: textbookStageScopeKey(TextbookAuthoringStageScope(
@@ -5160,20 +5368,23 @@ class _TextbookUnitAuthoringDialogState
             Row(
               children: [
                 const SizedBox(width: 38),
-                Expanded(
-                  child: _textInput(
-                    row.answerStartCtrl,
-                    hint: '정답 시작',
-                    dense: true,
-                    keyboardType: TextInputType.number,
-                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                if (_seriesKey != 'wonri_middle') ...[
+                  Expanded(
+                    child: _textInput(
+                      row.answerStartCtrl,
+                      hint: '정답 시작',
+                      dense: true,
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    ),
                   ),
-                ),
-                const SizedBox(width: 4),
+                  const SizedBox(width: 4),
+                ],
                 Expanded(
                   child: _textInput(
                     row.solutionStartCtrl,
-                    hint: '해설 시작',
+                    hint:
+                        _seriesKey == 'wonri_middle' ? '해설(정답 포함) 시작' : '해설 시작',
                     dense: true,
                     keyboardType: TextInputType.number,
                     inputFormatters: [FilteringTextInputFormatter.digitsOnly],
@@ -5198,7 +5409,7 @@ class _TextbookUnitAuthoringDialogState
     // 다이얼로그를 닫지 않은 세션에서는 한 번 더 기존 방식으로 보완한다.
     var found = false;
     var bd = 0, bt = 0, ad = 0, at = 0, sd = 0, st = 0;
-    for (final k in const ['A', 'B', 'C', 'D', 'E']) {
+    for (final k in _conceptCategoryBySubKey.keys) {
       final s = _stageStatusBySub[_stateKeyFor(_SubFocus(
         bigIndex: focus.bigIndex,
         midIndex: focus.midIndex,
@@ -6183,8 +6394,12 @@ class _TextbookUnitAuthoringDialogState
         groupTitleOverride:
             effectiveGroup.kind == 'type' ? effectiveGroup.title : null,
         // 개념서는 난이도가 없으므로 뱃지에 문항이름을 표시한다.
-        labelOverride: _seriesKey == 'wonri'
-            ? _wonriItemName(_wonriCategoryOfItem(item, ''), item.label)
+        labelOverride: const {'wonri', 'wonri_middle'}.contains(_seriesKey)
+            ? _wonriItemName(
+                _wonriCategoryOfItem(item, ''),
+                item.label,
+                itemRole: item.itemRole,
+              )
             : null,
       ));
     }

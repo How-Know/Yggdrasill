@@ -338,8 +338,8 @@ class TextbookExplorerService {
     final payload = payloadRow?['payload'];
     final payloadMap =
         payload is Map ? _asMap(payload) : const <String, dynamic>{};
-    final isWonri =
-        '${payloadMap['series'] ?? ''}'.trim().toLowerCase() == 'wonri';
+    final seriesKey = '${payloadMap['series'] ?? ''}'.trim().toLowerCase();
+    final isWonri = seriesKey == 'wonri' || seriesKey == 'wonri_middle';
 
     final items = <TbExItem>[];
     var order = 0;
@@ -859,7 +859,6 @@ class TextbookExplorerService {
   }
 
   bool _isSpecialLectureItem(TbExItem item) {
-    if (item.subKey.trim().toUpperCase() == 'E') return true;
     final blob = [
       item.section,
       item.typeGroupKind,

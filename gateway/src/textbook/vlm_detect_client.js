@@ -12,6 +12,7 @@ import {
   buildSsenBasicDrillRescuePrompt,
   buildSuryeokMarkRepairPrompt,
   buildSuryeokRangeHeaderPrompt,
+  buildWonriMiddleStepHeaderPrompt,
   buildWonriPageClassPrompt,
   GAEYU_ITEM_CATEGORIES,
   GOJAENGI_SECTION_BY_SUB_KEY,
@@ -20,6 +21,7 @@ import {
   isGojaengiWorkbookHint,
   isSuryeokReviewHint,
   WONRI_ITEM_CATEGORIES,
+  WONRI_MIDDLE_ITEM_CATEGORIES,
 } from './vlm_detect_prompt.js';
 import {
   joinGeminiTextParts,
@@ -36,6 +38,7 @@ const VERTICAL_LAYOUT_SECTIONS = new Set([
   'type_example',
   'check',
   'exercise',
+  ...WONRI_MIDDLE_ITEM_CATEGORIES,
   ...GOJAENGI_SECTIONS,
 ]);
 
@@ -562,6 +565,84 @@ export function classifyWonriPage(options) {
   });
 }
 
+export function detectWonriMiddleStepHeadersOnPage(options) {
+  return detectProblemsOnPage({
+    ...options,
+    series: 'wonri_middle',
+    includeContentGroups: false,
+    promptOverride: buildWonriMiddleStepHeaderPrompt({
+      rawPage: options?.rawPage,
+      displayPage: options?.displayPage,
+    }),
+  });
+}
+
+function wonriMiddleStepLabel(value) {
+  const compact = String(value || '')
+    .replace(/\s+/g, '')
+    .toUpperCase();
+  const match = compact.match(/STEP([123])/);
+  return match ? `STEP${match[1]}` : '';
+}
+
+/// 별도 판독에서 찾은 STEP 머리말을 같은 단의 아래 문항에 적용한다.
+///
+/// p25처럼 왼쪽 단은 STEP2 연속, 오른쪽 단은 STEP3 시작인 지면에서는
+/// 페이지 전체 다수결이나 직전 STEP 승계가 아니라 머리말의 x/y 좌표가
+/// 유일하게 안전한 경계다.
+export function mergeWonriMiddleStepHeaders(result, parsedJson) {
+  if (!result || !Array.isArray(result.items)) return 0;
+  const headers = [];
+  for (const raw of Array.isArray(parsedJson?.step_headers)
+    ? parsedJson.step_headers
+    : []) {
+    const label = wonriMiddleStepLabel(
+      raw?.label ?? raw?.text ?? raw?.step,
+    );
+    const bbox = parseBbox4(raw?.bbox ?? raw?.region);
+    if (!label || !bbox) continue;
+    headers.push({
+      label,
+      bbox,
+      column: bbox[3] - bbox[1] >= 650 ? null : inferColumn(bbox),
+    });
+  }
+  if (headers.length === 0) return 0;
+
+  let changed = 0;
+  for (const item of result.items) {
+    if (
+      item?.category !== 'middle_unit_review' ||
+      !Array.isArray(item?.bbox) ||
+      item.bbox.length !== 4
+    ) {
+      continue;
+    }
+    const column =
+      item.column === 1 || item.column === 2
+        ? item.column
+        : inferColumn(item.bbox);
+    const candidates = headers
+      .filter(
+        (header) =>
+          (header.column == null || header.column === column) &&
+          header.bbox[0] <= item.bbox[0] + 8,
+      )
+      .sort((a, b) => b.bbox[0] - a.bbox[0]);
+    if (candidates.length === 0) continue;
+    const label = candidates[0].label;
+    if (wonriMiddleStepLabel(item.label) === label) continue;
+    item.label = label;
+    changed += 1;
+  }
+  if (changed > 0) {
+    const suffix = `wonri_middle_step_headers_applied=${changed}`;
+    result.notes = result.notes ? `${result.notes}; ${suffix}` : suffix;
+  }
+  result.step_headers = headers;
+  return changed;
+}
+
 export function shouldTreatWonriPageAsConcept(pageClass, visibleHeader) {
   const normalizedClass = String(pageClass || '').trim().toLowerCase();
   if (normalizedClass === 'concept') return true;
@@ -599,6 +680,8 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     'check',
     'exercise',
     'special_lecture',
+    // 중등 개념원리 전용 섹션.
+    ...WONRI_MIDDLE_ITEM_CATEGORIES,
     // 개념+유형 전용 섹션 (sub_key A~F 슬롯 대응).
     ...GAEYU_ITEM_CATEGORIES,
     // 수력충전 전용 섹션 (sub_key A/B 슬롯 대응).
@@ -647,6 +730,9 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
         isGojaengiWorkbookHint(sectionHint) ||
         isGojaengiWorkbookHint(out.section),
     });
+  const recoverWonriMiddleItems =
+    series === 'wonri_middle' &&
+    hasStrongWonriMiddleNumberEvidence(rawItems, out.section);
   // 개념원리 일반 소단원의 개념→문항 경계 판정용. 모델이 정확한
   // "개념원리 익히기" 인쇄 문구를 확인했다고 명시한 경우에만 true.
   out.concept_drill_header_visible =
@@ -654,6 +740,7 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
   if (
     !recoverBasicDrillItems &&
     !recoverGojaengiItems &&
+    !recoverWonriMiddleItems &&
     (out.page_kind === 'concept_page' ||
       /\bconcept_page\b/i.test(out.notes))
   ) {
@@ -673,10 +760,20 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     const suffix = 'concept_page_overridden_by_valid_gojaengi_numbers';
     out.notes = out.notes ? `${out.notes}; ${suffix}` : suffix;
   }
+  if (
+    recoverWonriMiddleItems &&
+    (out.page_kind === 'concept_page' ||
+      /\bconcept_page\b/i.test(out.notes))
+  ) {
+    out.page_kind = 'problem_page';
+    const suffix = 'concept_page_overridden_by_valid_wonri_middle_items';
+    out.notes = out.notes ? `${out.notes}; ${suffix}` : suffix;
+  }
 
   const isGaeyu = series === 'gaeyu';
   const isSuryeok = series === 'suryeok';
   const isGojaengi = series === 'gojaengi';
+  const isWonriMiddle = series === 'wonri_middle';
   const gojaengiWorkbook =
     isGojaengi &&
     (isGojaengiWorkbookHint(sectionHint) ||
@@ -723,7 +820,7 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     ) {
       gaeyuConceptCheckFixed += 1;
     }
-    const number = isGaeyu
+    let number = isGaeyu
       ? formatGaeyuNumber({
           category: gaeyuCategory,
           label,
@@ -776,7 +873,17 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
       ? gaeyuCategory
       : isSuryeok
         ? resolveSuryeokCategory(raw, out.section)
+        : isWonriMiddle
+          ? normalizeWonriMiddleCategory(raw, out.section)
         : normalizeWonriCategory(raw, label, series);
+    const itemRole = isWonriMiddle ? normalizeWonriMiddleItemRole(raw) : '';
+    if (isWonriMiddle) {
+      number = formatWonriMiddleProblemNumber({
+        number,
+        category,
+        itemRole,
+      });
+    }
     // 특강 예제는 배지에 "특강 01" 처럼 2자리 번호가 인쇄된다. 특강 개념
     // 페이지의 사각 박스 개념 번호(1, 2 같은 한 자리 수)를 모델이 특강
     // 예제로 오인하면 존재하지 않는 문항이 저장되므로 여기서 걸러낸다.
@@ -797,6 +904,8 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
       ? ['essential_problem']
       : isSuryeok
         ? ['type_problem']
+        : isWonriMiddle
+          ? ['middle_core_problem']
         : ['type_example', 'special_lecture'];
     const groupDisallowed = isGojaengi
       ? !['core_type', 'advanced_type', 'creative_type'].includes(out.section)
@@ -810,8 +919,17 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
       number,
       // 수력충전에 난이도는 없다. 계산 조심 / 생각 더하기 / 조건 확인 배지는
       // 단원 마무리 평가에만 인쇄되므로 다른 코너의 라벨은 지어낸 것이다.
-      label: isSuryeok && category !== 'unit_review' ? '' : label,
+      label:
+        isSuryeok && category !== 'unit_review'
+          ? ''
+          : isWonriMiddle
+            ? normalizeWonriMiddleLabel(category, label)
+            : label,
       category,
+      item_role: itemRole,
+      companion_regions: isWonriMiddle
+        ? normalizeCompanionRegions(raw.companion_regions)
+        : [],
       // 개념+유형 탄탄 단원 다지기의 노란 별(중요) 표시. 난이도(label)와 별개다.
       is_important: isGaeyu && raw.is_important === true,
       is_set_header: isSet,
@@ -855,6 +973,8 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     }
   }
   backfillWonriCategories(out, series);
+  backfillWonriMiddleCategories(out, series);
+  repairWonriMiddleFollowUpPages(out, series);
   backfillGaeyuCategories(out, series);
   validateSuryeokItemNumbers(out, series);
   backfillSuryeokCategories(out, series);
@@ -906,6 +1026,130 @@ function normalizeWonriCategory(raw, label, series) {
     return 'exercise';
   }
   return '';
+}
+
+function normalizeWonriMiddleCategory(raw, pageSection) {
+  // STEP 표기가 보이는 문항은 반드시 중단원 마무리다. 연속 지면에서 코너
+  // 제목이 반복되지 않으면 모델이 category/section만 C로 되돌리는 경우가
+  // 있어, 지면에 실제로 보이는 STEP 표기를 더 강한 근거로 사용한다.
+  const compactLabel = String(raw?.label ?? '')
+    .replace(/\s+/g, '')
+    .toUpperCase();
+  if (/^STEP[123]$/.test(compactLabel)) return 'middle_unit_review';
+  const value = String(raw?.category ?? '').trim();
+  if (WONRI_MIDDLE_ITEM_CATEGORIES.includes(value)) return value;
+  const section = String(pageSection || '').trim();
+  if (WONRI_MIDDLE_ITEM_CATEGORIES.includes(section)) return section;
+  return '';
+}
+
+// "확인 N"은 핵심문제 익히기 대표 예제에만 딸린다. 개념원리 확인하기에는
+// 01~09 평번호만 인쇄된다. 그런데 대표 예제 지면이 앞 코너와 이어 보이면
+// 모델이 지면 전체를 middle_concept_check로 되돌리곤 하고, 그러면 같은
+// 소단원 A 슬롯에 05/06 번호가 두 번 담겨 업로드가 통째로 실패한다.
+// 지면에 실제로 인쇄된 "확인 N"을 더 강한 근거로 삼아 되돌린다.
+function repairWonriMiddleFollowUpPages(result, series) {
+  if (series !== 'wonri_middle') return;
+  if (!Array.isArray(result.items) || result.items.length === 0) return;
+
+  const followUpNumbers = new Set();
+  let moved = 0;
+  for (const item of result.items) {
+    if (!/^확인\s*\d+$/u.test(String(item.number || '').trim())) continue;
+    const digits = String(item.number).match(/\d+/u)?.[0];
+    if (digits) followUpNumbers.add(String(Number.parseInt(digits, 10)));
+    if (item.category !== 'middle_core_problem') {
+      item.category = 'middle_core_problem';
+      moved += 1;
+    }
+    item.item_role = 'follow_up';
+  }
+  if (followUpNumbers.size === 0) return;
+
+  // 같은 지면에서 "확인 N"과 짝을 이루는 평번호 N은 그 확인의 대표 예제다.
+  for (const item of result.items) {
+    if (item.category === 'middle_core_problem') continue;
+    const number = String(item.number || '').trim();
+    if (!/^\d+$/u.test(number)) continue;
+    if (!followUpNumbers.has(String(Number.parseInt(number, 10)))) continue;
+    item.category = 'middle_core_problem';
+    item.item_role = 'representative';
+    moved += 1;
+  }
+  if (moved === 0) return;
+
+  if (result.items.every((item) => item.category === 'middle_core_problem')) {
+    result.section = 'middle_core_problem';
+  }
+  const suffix = `wonri_middle_follow_up_page_repaired=${moved}`;
+  result.notes = result.notes ? `${result.notes}; ${suffix}` : suffix;
+}
+
+function normalizeWonriMiddleItemRole(raw) {
+  const value = String(raw?.item_role || '').trim();
+  if (
+    ['standard', 'representative', 'follow_up', 'descriptive_example'].includes(
+      value,
+    )
+  ) {
+    return value;
+  }
+  const number = String(raw?.number || '').replace(/\s+/g, '');
+  if (/^확인\d+$/u.test(number)) return 'follow_up';
+  if (/^(?:예시|예제)\d*$/u.test(number)) return 'descriptive_example';
+  return 'standard';
+}
+
+function formatWonriMiddleProblemNumber({ number, category, itemRole }) {
+  const value = String(number || '').trim();
+  const digitMatch = value.match(/\d+/u);
+  if (!digitMatch) return value;
+  const numeric = String(Number.parseInt(digitMatch[0], 10));
+
+  // 대표 예제와 확인 문항은 지면에서 같은 숫자를 공유할 수 있다. 모델이
+  // 확인 배지를 item_role로는 읽고 number에는 숫자만 반환해도 저장 키가
+  // 충돌하지 않도록 인쇄 의미를 번호에 복원한다.
+  if (category === 'middle_core_problem' && itemRole === 'follow_up') {
+    return /^확인\s*\d+$/u.test(value) ? value : `확인 ${numeric}`;
+  }
+  if (category === 'middle_descriptive') {
+    if (itemRole === 'descriptive_example') {
+      return /^(?:예시|예제)\s*\d*$/u.test(value) ? value : `예제 ${numeric}`;
+    }
+    if (itemRole === 'follow_up') {
+      return /^유제\s*\d+$/u.test(value) ? value : `유제 ${numeric}`;
+    }
+  }
+  return value;
+}
+
+function normalizeWonriMiddleLabel(category, label) {
+  if (category === 'middle_exam_problem' && label === 'UP') return 'UP';
+  if (
+    category === 'middle_unit_review' &&
+    ['STEP1', 'STEP2', 'STEP3'].includes(label)
+  ) {
+    return label;
+  }
+  return '';
+}
+
+function normalizeCompanionRegions(rawRegions) {
+  if (!Array.isArray(rawRegions)) return [];
+  const out = [];
+  for (const raw of rawRegions) {
+    if (!raw || typeof raw !== 'object') continue;
+    const kind = String(raw.kind || '').trim();
+    if (!['key_point', 'hint', 'reference'].includes(kind)) continue;
+    const bbox = parseBbox4(raw.bbox ?? raw.region);
+    if (!bbox) continue;
+    out.push({
+      kind,
+      bbox,
+      text: String(raw.text || '').trim().slice(0, 1000),
+    });
+  }
+  return out;
 }
 
 // 수력충전 문항 번호를 인쇄된 두 자리 표기로 맞춘다.
@@ -974,6 +1218,41 @@ function hasStrongGojaengiNumberEvidence(items, { workbook = false } = {}) {
       value - unique[index - 1] >= 1 &&
       value - unique[index - 1] <= 3,
   );
+}
+
+// 중등 개념원리 모델이 실제 문항 좌표를 모두 반환하고 page_kind만
+// concept_page로 잘못 쓰는 경우를 복구한다. 개념 블록의 큰 1·2·3은
+// 한 자리 숫자라서 강한 근거로 인정하지 않는다.
+function hasStrongWonriMiddleNumberEvidence(items, pageSection = '') {
+  const categories = new Set(WONRI_MIDDLE_ITEM_CATEGORIES);
+  return (items || []).some((item) => {
+    if (!item || typeof item !== 'object') return false;
+    const category = String(item.category || '').trim();
+    if (!categories.has(category) && !categories.has(pageSection)) return false;
+    if (
+      !parseBbox4(item.bbox ?? item.bounding_box ?? item.number_bbox) ||
+      !parseBbox4(
+        item.item_region ??
+          item.itemRegion ??
+          item.region ??
+          item.content_region ??
+          item.content_bbox,
+        { nested: 'union' },
+      )
+    ) {
+      return false;
+    }
+    const number = String(item.number || '')
+      .replace(/\s+/g, '')
+      .trim();
+    const digitMatch = number.match(/\d+/);
+    const role = String(item.item_role || '').trim();
+    return (
+      (digitMatch?.[0]?.length || 0) >= 2 ||
+      /^[^\d]+\d+$/.test(number) ||
+      ['representative', 'follow_up', 'descriptive_example'].includes(role)
+    );
+  });
 }
 
 // 수력충전 문항 번호로 인정할 표기인지. 지면에는 두 자리 숫자("01")만 인쇄되고
@@ -1097,6 +1376,28 @@ function backfillWonriCategories(result, series) {
     item.category = fallback;
   }
   const suffix = `wonri_category_backfilled=${missing.length}`;
+  result.notes = result.notes ? `${result.notes}; ${suffix}` : suffix;
+}
+
+function backfillWonriMiddleCategories(result, series) {
+  if (series !== 'wonri_middle') return;
+  if (!Array.isArray(result.items) || result.items.length === 0) return;
+  const missing = result.items.filter((item) => !item.category);
+  if (missing.length === 0) return;
+  const counts = new Map();
+  for (const item of result.items) {
+    if (!item.category) continue;
+    counts.set(item.category, (counts.get(item.category) || 0) + 1);
+  }
+  let fallback = '';
+  if (counts.size > 0) {
+    fallback = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  } else if (WONRI_MIDDLE_ITEM_CATEGORIES.includes(result.section)) {
+    fallback = result.section;
+  }
+  if (!fallback) return;
+  for (const item of missing) item.category = fallback;
+  const suffix = `wonri_middle_category_backfilled=${missing.length}`;
   result.notes = result.notes ? `${result.notes}; ${suffix}` : suffix;
 }
 
@@ -1407,6 +1708,8 @@ function normalizeDifficultyLabel(input) {
   // 개념원리 연습문제 하단 기출 구간 라벨. "수능 기출"/"수능기출" 등 표기 변형 흡수.
   if (/^수능기출$/.test(compact)) return '수능기출';
   if (/^평가원기출$/.test(compact)) return '평가원기출';
+  // 중등 개념원리 "이런 문제가 시험에 나온다"의 개별 심화 배지.
+  if (/^up$/i.test(compact)) return 'UP';
   // RPM/개념원리: "실력 UP" 구간 라벨. 모델이 "실력UP"/"실력 up" 으로 내보내도 "실력" 으로 정규화.
   if (/^실력(up)?$/i.test(compact)) return '실력';
   // 개념원리 연습문제: STEP 1 / step1 등 표기 변형을 STEP1/STEP2 로 정규화.
@@ -1494,7 +1797,10 @@ function validateBasicDrillItems(result, series = '') {
   const allowIndependentSetGeometry =
     series === 'rpm' || hasStrongBasicDrillPageEvidence(result.items);
   for (const item of result.items) {
-    if (isValidBasicDrillItem(item, allowIndependentSetGeometry)) {
+    if (
+      !isBasicSubtopicHeaderMasqueradingAsItem(item) &&
+      isValidBasicDrillItem(item, allowIndependentSetGeometry)
+    ) {
       kept.push(item);
     } else {
       dropped += 1;
@@ -1510,6 +1816,19 @@ function validateBasicDrillItems(result, series = '') {
     const suffix = 'concept_page:auto_no_valid_basic_number';
     result.notes = result.notes ? `${result.notes}; ${suffix}` : suffix;
   }
+}
+
+// RPM A의 "03-3 원의 접선의 길이" 같은 소주제 머리말은 문항번호가 아니다.
+// 모델이 머리말을 content_group으로 정확히 읽고도 같은 "03-3"을 짧은 세트
+// 범위로 중복 반환하는 경우가 있다. 실제 세트 번호(예: 0255~0256)는 현재
+// 소주제 라벨과 다르므로 이 일치 조건으로 안전하게 구분할 수 있다.
+function isBasicSubtopicHeaderMasqueradingAsItem(item) {
+  if (item?.is_set_header !== true) return false;
+  const group = item?.content_group;
+  if (!group || group.kind !== 'basic_subtopic') return false;
+  const number = String(item?.number || '').replace(/\s+/g, '').trim();
+  const label = String(group.label || '').replace(/\s+/g, '').trim();
+  return number !== '' && number === label;
 }
 
 // 쎈/RPM B·C 파트의 "유형 NN" 배지 숫자가 문항으로 새어 들어오는 것을 막는다.
@@ -1684,7 +2003,10 @@ function parseBasicDrillRange(number, allowShort = false) {
   if (!match) return null;
   const from = Number(match[1]);
   const to = Number(match[2]);
-  if (!Number.isFinite(from) || !Number.isFinite(to) || from > to) return null;
+  // 세트 범위는 반드시 서로 다른 번호가 오름차순으로 이어져야 한다.
+  // RPM A 소주제 머리말 "03-3 원의 접선의 길이"는 짧은 하이픈 범위를
+  // 허용하는 경로에서 3~3으로 해석될 수 있으므로 동률도 거부한다.
+  if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to) return null;
   return { from, to };
 }
 

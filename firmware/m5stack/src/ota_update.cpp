@@ -1,9 +1,12 @@
 #include "ota_update.h"
 #include "version.h"
+#include "ui_port.h"
 #include <HTTPClient.h>
 #include <Update.h>
 #include <ArduinoJson.h>
 #include <WiFi.h>
+#include <Preferences.h>
+#include <cstring>
 
 bool checkForUpdate(String& outLatestVersion, String& outDownloadUrl) {
   if (WiFi.status() != WL_CONNECTED) {
@@ -146,12 +149,22 @@ bool performOtaUpdate(const String& downloadUrl, OtaProgressCallback progressCal
       if (c > 0) {
         Update.write(buff, c);
         written += c;
-        
+
         int percent = (written * 100) / contentLength;
-        if (percent != lastPercent && percent % 5 == 0) {
-          Serial.printf("[OTA] Progress: %d%%\n", percent);
-          if (progressCallback) progressCallback(percent, "Downloading...");
+        uint32_t nowMs = millis();
+        static uint32_t lastTickMs = 0;
+        static uint32_t lastPumpMs = 0;
+        if (lastTickMs == 0) lastTickMs = nowMs;
+        lv_tick_inc(nowMs - lastTickMs);
+        lastTickMs = nowMs;
+        if (percent != lastPercent || nowMs - lastPumpMs >= 80) {
+          if (progressCallback && percent != lastPercent) {
+            progressCallback(percent, "Downloading...");
+          } else {
+            lv_timer_handler();
+          }
           lastPercent = percent;
+          lastPumpMs = nowMs;
         }
       }
     }
@@ -185,7 +198,84 @@ bool performOtaUpdate(const String& downloadUrl, OtaProgressCallback progressCal
   if (progressCallback) progressCallback(100, "Success! Rebooting...");
   
   delay(1000);
+  fw_prepare_update_restart();
   ESP.restart();
   return true;
+}
+
+static void ota_clear_pending(void) {
+  Preferences prefs;
+  prefs.begin("m5cfg", false);
+  prefs.remove("ota_pending");
+  prefs.remove("ota_url");
+  prefs.remove("ota_ver");
+  prefs.end();
+}
+
+bool ota_schedule_from_payload(const uint8_t* payload, size_t len) {
+  if (payload == nullptr || len == 0 || len > 480) return false;
+  char buf[481];
+  memcpy(buf, payload, len);
+  buf[len] = 0;
+
+  DynamicJsonDocument doc(512);
+  if (deserializeJson(doc, buf)) return false;
+  const char* action = doc["action"] | "";
+  if (strcmp(action, "schedule") != 0) return false;
+  const char* url = doc["url"] | "";
+  const char* version = doc["version"] | "";
+  if (strncmp(url, "http://", 7) != 0) return false;
+
+  Preferences prefs;
+  prefs.begin("m5cfg", false);
+  prefs.putString("ota_url", url);
+  prefs.putString("ota_ver", version);
+  prefs.putBool("ota_pending", true);
+  prefs.end();
+  ui_port_notify_ota_scheduled();
+  Serial.printf("[OTA] scheduled version=%s url=%s\n", version, url);
+  return true;
+}
+
+bool ota_has_pending_update(void) {
+  Preferences prefs;
+  prefs.begin("m5cfg", true);
+  const bool pending = prefs.getBool("ota_pending", false);
+  String url = prefs.getString("ota_url", "");
+  prefs.end();
+  return pending && url.length() > 0;
+}
+
+bool ota_apply_pending_update(void) {
+  Preferences prefs;
+  prefs.begin("m5cfg", true);
+  const bool pending = prefs.getBool("ota_pending", false);
+  String url = prefs.getString("ota_url", "");
+  String version = prefs.getString("ota_ver", "");
+  prefs.end();
+  if (!pending || url.length() == 0) return false;
+
+  // 실패한 주소로 부팅마다 반복하지 않는다. 다시 받으려면 학습앱에서 다시 예약한다.
+  ota_clear_pending();
+
+  Serial.printf("[OTA] applying on boot version=%s url=%s current=%s\n",
+                version.c_str(), url.c_str(), FIRMWARE_VERSION);
+  ui_port_update_boot_status(u8"업데이트 중입니다", 8);
+  lv_timer_handler();
+
+  const bool ok = performOtaUpdate(url, [](int percent, const char* status) {
+    (void)status;
+    int shown = percent;
+    if (shown < 8) shown = 8;
+    if (shown > 100) shown = 100;
+    ui_port_update_boot_status(u8"업데이트 중입니다", shown);
+    lv_timer_handler();
+  });
+  if (!ok) {
+    Serial.println("[OTA] boot apply failed; continue normal boot");
+    ui_port_update_boot_status(u8"펌웨어 업데이트 실패", 40);
+    lv_timer_handler();
+  }
+  return ok;
 }
 

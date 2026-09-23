@@ -11604,6 +11604,39 @@ String _extractHomeworkCourseName(HomeworkItem hw) {
   return match?.group(1)?.trim() ?? '';
 }
 
+bool _isGeneratedAssignmentHomework(HomeworkItem hw) {
+  return (hw.sourceUnitLevel ?? '').trim() == 'problem_bank_assignment';
+}
+
+String _generatedAssignmentCourseLabel(HomeworkItem hw) {
+  final explicit = _extractHomeworkCourseName(hw);
+  if (explicit.isNotEmpty) return explicit;
+
+  final book = (hw.sourceUnitPath ?? '').trim();
+  final parts = (hw.content ?? '')
+      .split(RegExp(r'\s*·\s*|\n'))
+      .map((part) => part.trim())
+      .where((part) => part.isNotEmpty)
+      .where((part) => !part.startsWith('교재:') && !part.startsWith('과정:'))
+      .where((part) => !part.startsWith('p.'))
+      .where((part) => !RegExp(r'^\d+문항$').hasMatch(part))
+      .where((part) => book.isEmpty || part != book)
+      .toList(growable: false);
+  if (parts.isEmpty) return '';
+  if (parts.length >= 2) return parts.last;
+
+  final only = parts.first;
+  final looksLikeGrade =
+      RegExp(r'^(중|고)\s*\d').hasMatch(only) || only.contains('학년');
+  return looksLikeGrade ? '' : only;
+}
+
+String _generatedAssignmentPrintLine(HomeworkItem hw) {
+  final course = _generatedAssignmentCourseLabel(hw);
+  if (course.isEmpty) return '프린트';
+  return '프린트 · $course';
+}
+
 String _homeworkBookCourseLabel(HomeworkItem hw) {
   final bookName = _extractHomeworkBookName(hw);
   final courseName = _extractHomeworkCourseName(hw);
@@ -14040,6 +14073,9 @@ List<Widget> _buildReservedHomeworkChipsForStudent(
     }
 
     String textbookAndCourseLabel(HomeworkItem hw) {
+      if (_isGeneratedAssignmentHomework(hw)) {
+        return _generatedAssignmentPrintLine(hw);
+      }
       final bookName = extractBookName(hw);
       final courseName = extractCourseName(hw);
       if (bookName.isEmpty && courseName.isEmpty) return '-';
@@ -14523,7 +14559,6 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
     DateTime? latestWaiting;
     final earliestCreated =
         earliestHomeworkCreatedAt(children.map((child) => child.createdAt));
-    final pages = <String>[];
     for (final child in children) {
       if (runningChild == null &&
           (child.runStart != null || child.phase == 2)) {
@@ -14556,11 +14591,6 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
       }
       final childCount = child.count;
       if (childCount != null && childCount > 0) totalCount += childCount;
-      final p = homeworkItemPageRangeText(
-        page: child.page,
-        unitMappings: child.unitMappings,
-      );
-      if (p.isNotEmpty) pages.add(p);
       final updated = child.updatedAt;
       if (updated != null &&
           (latestUpdated == null || updated.isAfter(latestUpdated))) {
@@ -14595,13 +14625,11 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
                 !latestUpdated.isAfter(runtimeUpdatedAt)));
     final int phase =
         hasFreshRuntimeSnapshot ? runtimePhase : childDerivedPhase;
-    final pageSummary = () {
-      if (pages.isEmpty) return '';
-      // 그룹 과제 페이지는 자식 페이지의 합집합을 연속 구간으로 압축해 표시한다.
-      // 예: 1-5(1단원) + 6-10(2단원) -> "1-10", 1-5 + 8-10 -> "1-5,8-10"
-      final merged = mergeHomeworkPageRawStrings(pages);
-      return merged.isEmpty ? pages.join(', ') : merged;
-    }();
+    final pageSummary = homeworkGroupPageSummary(
+      children.map(
+        (child) => (page: child.page, unitMappings: child.unitMappings),
+      ),
+    );
     final normalizedChildTypes = <String>{
       for (final child in children)
         if ((child.type ?? '').trim().isNotEmpty) (child.type ?? '').trim(),
@@ -18962,9 +18990,11 @@ Widget _buildHomeworkChipVisual(
       : rawTitleText;
   final String bookName = extractBookName();
   final String courseName = extractCourseName();
-  final String line2Left = (bookName == '-' || bookName.isEmpty)
-      ? (courseName.isEmpty ? '-' : courseName)
-      : (courseName.isEmpty ? bookName : '$bookName · $courseName');
+  final String line2Left = _isGeneratedAssignmentHomework(hw)
+      ? _generatedAssignmentPrintLine(hw)
+      : ((bookName == '-' || bookName.isEmpty)
+          ? (courseName.isEmpty ? '-' : courseName)
+          : (courseName.isEmpty ? bookName : '$bookName · $courseName'));
   final int? countValue = hw.count;
   int resolveSplitCount(int total, int parts, int round) {
     if (parts <= 1) return total;
@@ -19050,10 +19080,12 @@ Widget _buildHomeworkChipVisual(
       ? testLimitMinutes * 60000
       : null;
   final bool hasConfirmedCycleHistory = isTestCard && hw.confirmedAt != null;
+  final bool pastTestLimit =
+      testLimitMs != null && progressMsForDisplay >= testLimitMs;
   final bool showRunningExtraTime = testLimitMs != null &&
       visualPhase == 2 &&
       !isReservation &&
-      hasConfirmedCycleHistory;
+      (hasConfirmedCycleHistory || pastTestLimit);
   final bool showRunningRemaining = testLimitMs != null &&
       visualPhase == 2 &&
       !isReservation &&
@@ -19083,10 +19115,9 @@ Widget _buildHomeworkChipVisual(
     if (visualPhase == 2 && remainingMs > 0) {
       _testTimedOutHomeworkKeys.remove(timeoutBadgeKey);
     }
-    // 제한시간 만료 시 '자동 제출'은 M5 기기가 담당한다(시험 종료 알람 → 확인 시 제출).
-    // 학습앱(플러터)은 서버/M5 상태를 따라가기만 하고 여기서 제출하지 않는다.
-    // 시간 초과 표시(배지)는 그대로 유지한다.
-    if (shouldAutoSubmitForTimeout) {
+    // 제한시간이 끝나도 자동 제출하지 않는다. 수행(phase 2)인 동안은
+    // 추가 시간으로 보여주고, 제출은 M5의 제출 버튼이나 선생님 조작을 따른다.
+    if (shouldAutoSubmitForTimeout && visualPhase != 2) {
       _testTimedOutHomeworkKeys.add(timeoutBadgeKey);
     }
   }
@@ -20873,8 +20904,41 @@ class _SlideableHomeworkChip extends StatefulWidget {
 }
 
 class _SlideableHomeworkChipState extends State<_SlideableHomeworkChip> {
+  static const Duration _doubleClickWindow = Duration(milliseconds: 450);
+
   double _offset = 0.0;
   bool _dragging = false;
+  Timer? _singleClickTimer;
+
+  void _cancelPendingSingleClick() {
+    _singleClickTimer?.cancel();
+    _singleClickTimer = null;
+  }
+
+  void _handlePrimaryClick() {
+    final onDoubleTap = widget.onDoubleTap;
+    if (onDoubleTap == null) {
+      widget.onTap();
+      return;
+    }
+
+    if (_singleClickTimer?.isActive ?? false) {
+      _cancelPendingSingleClick();
+      onDoubleTap();
+      return;
+    }
+
+    _singleClickTimer = Timer(_doubleClickWindow, () {
+      _singleClickTimer = null;
+      if (mounted) widget.onTap();
+    });
+  }
+
+  @override
+  void dispose() {
+    _cancelPendingSingleClick();
+    super.dispose();
+  }
 
   void _updateOffset(double delta) {
     final next = (_offset + delta).clamp(-widget.maxSlide, widget.maxSlide);
@@ -21026,10 +21090,12 @@ class _SlideableHomeworkChipState extends State<_SlideableHomeworkChip> {
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
         child: GestureDetector(
-          onTap: widget.onTap,
+          // Flutter 기본 더블탭 창(300ms) 대신 Windows에서 여유 있는 창을
+          // 직접 적용한다. 첫 클릭은 창이 끝난 뒤 단일 클릭으로 확정한다.
+          onTap: _handlePrimaryClick,
           onLongPress: widget.onLongPress,
           onSecondaryTap: widget.onSecondaryTap,
-          onDoubleTap: widget.onDoubleTap,
+          onHorizontalDragStart: (_) => _cancelPendingSingleClick(),
           onHorizontalDragUpdate: (details) {
             final delta = details.delta.dx;
             if (delta > 0) {

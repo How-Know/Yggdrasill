@@ -13,6 +13,7 @@ import {
   buildSsenBasicDrillRescuePrompt,
   buildWonriPageClassPrompt,
 } from '../src/textbook/vlm_detect_prompt.js';
+import { buildDetectSolutionRefsPrompt } from '../src/textbook/vlm_solution_refs_prompt.js';
 
 test('RPM A prompt describes alternating concept and problem pages', () => {
   const prompt = buildDetectProblemsPrompt({
@@ -25,6 +26,24 @@ test('RPM A prompt describes alternating concept and problem pages', () => {
   assert.match(prompt, /개념 설명 1페이지 → 교과서문제 정복하기 문제 1페이지/);
   assert.match(prompt, /개념 페이지만 두 페이지 연속으로 나오지 않는다/);
   assert.match(prompt, /세로형·독립형 세트/);
+});
+
+test('RPM solution refs hide pending numbers and scan printed numbers blindly', () => {
+  const prompt = buildDetectSolutionRefsPrompt({
+    rawPage: 73,
+    displayPage: 73,
+    expectedNumbers: ['0597', '0598', '0599', '0600'],
+    expectedEntries: [
+      { number: '0597' },
+      { number: '0598' },
+      { number: '0599' },
+      { number: '0600' },
+    ],
+    series: 'rpm',
+  });
+  assert.match(prompt, /실제로 인쇄된/);
+  assert.match(prompt, /추측하거나 만들어 채우지 마라/);
+  assert.doesNotMatch(prompt, /0597|0598|0599|0600/);
 });
 
 test('ssen A rescue prompt forces visible four-digit items to problem page', () => {
@@ -327,6 +346,70 @@ test('normalizeDetectResult preserves independent RPM A-set headers and members'
   const ssenResult = normalizeDetectResult(payload, { series: 'ssen' });
   assert.deepEqual(ssenResult.items, []);
   assert.match(ssenResult.notes, /basic_drill_candidate_filtered=4/);
+});
+
+test('RPM A drops subtopic headers mistaken for set ranges', () => {
+  const result = normalizeDetectResult(
+    {
+      section: 'basic_drill',
+      page_kind: 'problem_page',
+      page_layout: 'two_column',
+      items: [
+        {
+          number: '03-3',
+          label: '',
+          is_set_header: true,
+          set_range: { from: 3, to: 3 },
+          content_group: {
+            kind: 'basic_subtopic',
+            label: '03-3',
+            title: '원의 접선의 길이',
+            order: 3,
+          },
+          column: 1,
+          bbox: [90, 55, 115, 125],
+          item_region: [90, 130, 145, 460],
+        },
+        {
+          number: '03-4',
+          label: '',
+          is_set_header: true,
+          set_range: { from: 3, to: 4 },
+          content_group: {
+            kind: 'basic_subtopic',
+            label: '03-4',
+            title: '삼각형의 내접원',
+            order: 4,
+          },
+          column: 1,
+          bbox: [150, 55, 175, 125],
+          item_region: [150, 130, 205, 460],
+        },
+        {
+          number: '0168',
+          label: '',
+          is_set_header: false,
+          content_group: {
+            kind: 'basic_subtopic',
+            label: '03-3',
+            title: '원의 접선의 길이',
+            order: 3,
+          },
+          column: 1,
+          bbox: [160, 55, 185, 125],
+          item_region: [155, 135, 215, 460],
+        },
+      ],
+      notes: '',
+    },
+    { series: 'rpm', sectionHint: 'basic_drill' },
+  );
+
+  assert.deepEqual(
+    result.items.map((item) => item.number),
+    ['0168'],
+  );
+  assert.match(result.notes, /basic_drill_candidate_filtered=2/);
 });
 
 test('ssen A keeps flexible item geometry when sequential page evidence is strong', () => {

@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:yggdrasill_m5_ota/m5_ota_service.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -20,6 +21,7 @@ class _ManagementScreenState extends State<ManagementScreen> {
   static const _kPrefKeyBaseUrl = 'survey_base_url';
   final _surveyBaseUrlController = TextEditingController();
   bool _isLoadingSurveyBaseUrl = false;
+  bool _m5TestOtaBusy = false;
   String? _surveyMsg;
   String? _docsMsg;
 
@@ -71,6 +73,78 @@ class _ManagementScreenState extends State<ManagementScreen> {
       if (!mounted) return;
       setState(() => _surveyMsg = '저장 실패: $e');
     }
+  }
+
+  Future<void> _scheduleTestM5Update() async {
+    if (_m5TestOtaBusy) return;
+    setState(() => _m5TestOtaBusy = true);
+    try {
+      final result = await M5OtaService.scheduleTestDevice();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '${result.summaryLabel}에 ${result.version} 업데이트를 예약했습니다. 전원을 다시 켜면 적용됩니다.',
+          ),
+        ),
+      );
+    } on M5OtaException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('1호기 업데이트를 예약하지 못했습니다: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _m5TestOtaBusy = false);
+    }
+  }
+
+  Widget _buildM5TestDeviceCard() {
+    return Container(
+      padding: const EdgeInsets.all(28),
+      decoration: BoxDecoration(
+        color: const Color(0xFF18181A),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFF2A2A2A)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            '주변 기기',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 20,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            '1호기는 테스트용입니다. 실사용 2호기부터 15호기는 학습앱에서 일괄 업데이트합니다.',
+            style: TextStyle(color: Color(0xFFB3B3B3), fontSize: 13),
+          ),
+          const SizedBox(height: 16),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: ElevatedButton(
+              onPressed: _m5TestOtaBusy ? null : _scheduleTestM5Update,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF1976D2),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              child: Text(
+                _m5TestOtaBusy ? '예약 중...' : '1호기 업데이트',
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _openExternal(String url) async {
@@ -261,6 +335,8 @@ class _ManagementScreenState extends State<ManagementScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
+                      _buildM5TestDeviceCard(),
+                      const SizedBox(height: 16),
                       // 성향조사 웹 설정
                       Container(
                         padding: const EdgeInsets.all(28),

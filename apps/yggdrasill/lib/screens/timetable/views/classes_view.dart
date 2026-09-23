@@ -1346,7 +1346,9 @@ class _ClassesViewState extends State<ClassesView>
                       DataManager.instance.academySettings.defaultCapacity) {
                     return const Color(0xFFF2B45B);
                   }
-                  return const Color(0xFF212A31);
+                  return FabTabBarTokens.previewAcademyPanelStyleFor(
+                    Theme.of(context).brightness,
+                  ).groupedCardBackground;
                 }
 
                 Widget buildGridCell(int dayIdx, int blockIdx) {

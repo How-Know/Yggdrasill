@@ -241,6 +241,18 @@ class HomeworkTimeDefaultsService {
       final normalizedSection = section.trim().toLowerCase();
       if (categories.contains(normalizedSection)) return normalizedSection;
     }
+    if (series == 'wonri_middle') {
+      const categories = {
+        'middle_concept_check',
+        'middle_core_problem',
+        'middle_exam_problem',
+        'middle_unit_review',
+        'middle_descriptive',
+        'middle_calculation',
+      };
+      final normalizedSection = section.trim().toLowerCase();
+      if (categories.contains(normalizedSection)) return normalizedSection;
+    }
     if (isWonri || series == 'wonri') {
       final compactLabel = label.replaceAll(RegExp(r'\s+'), '').toUpperCase();
       if (section.trim() == 'exercise' &&

@@ -2068,7 +2068,7 @@ class LearningProblemBankService {
   Future<List<LearningProblemDocumentExportPreset>>
       listGeneratedAssignmentPresets({
     required String academyId,
-    int limit = 120,
+    int limit = 500,
     int offset = 0,
   }) {
     return listExportPresets(

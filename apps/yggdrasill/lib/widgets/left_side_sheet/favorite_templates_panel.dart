@@ -40,6 +40,7 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
   String _gradeFilter = '';
   _TemplateLibraryMode _mode = _TemplateLibraryMode.assignments;
   List<HomeworkRecentTemplate> _templates = const [];
+  bool _favoritesLoaded = false;
   List<HomeworkRecentTemplate> _assignmentTemplates = const [];
   Map<String, LearningProblemDocumentExportPreset> _assignmentPresetById =
       const <String, LearningProblemDocumentExportPreset>{};
@@ -76,8 +77,11 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
       setState(() => _loading = true);
     }
     try {
-      final templates =
-          await HomeworkStore.instance.loadRecentTemplates(limit: 120);
+      final shouldLoadFavorites =
+          _mode == _TemplateLibraryMode.favorites || _favoritesLoaded;
+      final templates = shouldLoadFavorites
+          ? await HomeworkStore.instance.loadRecentTemplates(limit: 120)
+          : _templates;
       List<LearningProblemDocumentExportPreset> assignmentPresets =
           const <LearningProblemDocumentExportPreset>[];
       final academyId = await TenantService.instance.getActiveAcademyId();
@@ -86,7 +90,7 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
           assignmentPresets =
               await _problemBankService.listGeneratedAssignmentPresets(
             academyId: academyId.trim(),
-            limit: 120,
+            limit: 500,
           );
         } catch (_) {
           assignmentPresets = const <LearningProblemDocumentExportPreset>[];
@@ -128,6 +132,7 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
       if (!mounted) return;
       setState(() {
         _templates = templates;
+        if (shouldLoadFavorites) _favoritesLoaded = true;
         _assignmentTemplates = assignmentTemplates;
         _assignmentPresetById = <String, LearningProblemDocumentExportPreset>{
           for (final preset in assignmentPresets) preset.id: preset,
@@ -425,6 +430,19 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
         _gradeFilter = '';
       }
     });
+    if (mode == _TemplateLibraryMode.favorites && !_favoritesLoaded) {
+      if (_loading) {
+        Timer(const Duration(milliseconds: 250), () {
+          if (mounted &&
+              _mode == _TemplateLibraryMode.favorites &&
+              !_favoritesLoaded) {
+            unawaited(_refreshTemplates());
+          }
+        });
+      } else {
+        unawaited(_refreshTemplates());
+      }
+    }
   }
 
   Widget _buildFilterChip({
@@ -490,12 +508,10 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
     final bookText = _templateBookLabel(template);
     final gradeText = grade.isEmpty ? '학년 미지정' : grade;
     final preferredFlowName = template.primaryPreferredFlowName.trim();
-    final kindLabel = template.isGroup
-        ? '그룹 과제 · 하위 ${template.partCount}개'
-        : '단일 과제';
-    final flowLabel = preferredFlowName.isNotEmpty
-        ? '$preferredFlowName 플로우'
-        : '플로우 미지정';
+    final kindLabel =
+        template.isGroup ? '그룹 과제 · 하위 ${template.partCount}개' : '단일 과제';
+    final flowLabel =
+        preferredFlowName.isNotEmpty ? '$preferredFlowName 플로우' : '플로우 미지정';
     final subtitleMetaStyle = TextStyle(
       color: const Color(0xFF8FA3A3),
       fontSize: 14.5 * sheetScale,
@@ -505,7 +521,8 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
       color: const Color(0xFF9FE3C6),
       fontSize: 14.5 * sheetScale,
       fontWeight: FontWeight.w800,
-      decoration: onFlowTap == null ? TextDecoration.none : TextDecoration.underline,
+      decoration:
+          onFlowTap == null ? TextDecoration.none : TextDecoration.underline,
       decorationColor: const Color(0xFF617777),
     );
     final titleFontSize = (template.isGroup ? 20.0 : 16.0) * sheetScale;
@@ -1562,8 +1579,8 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
   ) async {
     final presetId = preset.id.trim();
     if (presetId.isEmpty) return;
-    final normalized =
-        StudentFlow.normalizeName(flowName.replaceAll(RegExp(r'\s+'), ' ').trim());
+    final normalized = StudentFlow.normalizeName(
+        flowName.replaceAll(RegExp(r'\s+'), ' ').trim());
     final current = StudentFlow.normalizeName(
       '${preset.renderConfig['assignmentFlowName'] ?? preset.renderConfig['preferredFlowName'] ?? preset.renderConfig['assignmentFlow'] ?? ''}'
           .replaceAll(RegExp(r'\s+'), ' ')
@@ -1900,8 +1917,7 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
                           ? null
                           : () {
                               setState(() {
-                                _assignmentOrderMode =
-                                    !_assignmentOrderMode;
+                                _assignmentOrderMode = !_assignmentOrderMode;
                               });
                             },
                       icon: Icon(
@@ -2076,7 +2092,8 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
                     itemBuilder: (context, index) {
                       final template = filteredTemplates[index];
                       return Padding(
-                        key: ValueKey('assignment-order-${template.templateId}'),
+                        key:
+                            ValueKey('assignment-order-${template.templateId}'),
                         padding: EdgeInsets.only(
                           bottom: index == filteredTemplates.length - 1
                               ? 0

@@ -290,7 +290,11 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
     PointService.instance.revision.addListener(_onHomeworkSignalsChanged);
     DataManager.instance.attendanceRecordsNotifier
         .addListener(_onHomeworkSignalsChanged);
-    unawaited(HomeworkStore.instance.loadAll());
+    unawaited(
+      HomeworkStore.instance.ensureStudentHomeworkLoaded(
+        widget.studentWithInfo.student.id,
+      ),
+    );
     unawaited(_load());
   }
 
@@ -1782,7 +1786,11 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
     super.initState();
     _timelineScrollController.addListener(_handleScroll);
     unawaited(TagStore.instance.loadAllFromDb());
-    unawaited(HomeworkStore.instance.loadAll());
+    unawaited(
+      HomeworkStore.instance.ensureStudentHomeworkLoaded(
+        widget.studentWithInfo.student.id,
+      ),
+    );
     unawaited(
       StudentBehaviorAssignmentStore.instance
           .loadForStudent(widget.studentWithInfo.student.id),

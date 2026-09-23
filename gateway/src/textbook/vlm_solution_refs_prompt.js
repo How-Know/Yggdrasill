@@ -236,6 +236,12 @@ export function buildDetectSolutionRefsPrompt({
   const seriesKey = String(series || '').trim().toLowerCase();
   const isConceptPlus = seriesKey === 'gaeyu';
   const isSuryeok = seriesKey === 'suryeok';
+  // RPM 해설 문항번호는 책 전체에서 고유하고 오름차순이다. 남은 기대 번호를
+  // 보여 주면 모델이 실제 지면 번호를 읽는 대신 목록의 끝번호까지 현재 지면에
+  // 있다고 맞춰 쓰는 일이 있었다(기하 해설 73쪽의 581~592를 597~600으로
+  // 반환). RPM은 기대 목록을 숨기고 실제로 인쇄된 번호를 모두 읽은 뒤, 서버의
+  // 정규화 단계에서 기대 번호와 교집합만 취한다.
+  const blindPrintedNumberScan = seriesKey === 'rpm';
   // 고쟁이는 본문·워크북 양쪽에 배지를 실어 보낸다. 옛 요청(본문 배지 없음)도
   // 그대로 받아 주려고 배지가 실려 온 요청에서만 출처 대조로 넘어간다.
   const isGojaengiBadged =
@@ -255,7 +261,7 @@ export function buildDetectSolutionRefsPrompt({
         .map((n) => String(n || '').trim())
         .filter((n) => n.length > 0)
     : [];
-  const expectedBlock = expected.length
+  const expectedBlock = expected.length && !blindPrintedNumberScan
     ? [
         '=== 기대 문항번호 ===',
         '이 해설 PDF 에서는 아래 번호들의 해설 위치를 찾고 싶다. ',
@@ -266,7 +272,13 @@ export function buildDetectSolutionRefsPrompt({
       ]
     : [
         '=== 기대 문항번호 ===',
-        '이 페이지에 보이는 모든 해설 문항번호를 items 로 수집하라.',
+        ...(blindPrintedNumberScan
+          ? [
+              'RPM은 후보 번호를 제공하지 않는다. 이 페이지에 실제로 인쇄된',
+              '해설 문항번호를 눈으로 읽어 모두 items 로 수집하라.',
+              '보이지 않는 다음 번호를 순서상 추측하거나 만들어 채우지 마라.',
+            ]
+          : ['이 페이지에 보이는 모든 해설 문항번호를 items 로 수집하라.']),
       ];
 
   return [

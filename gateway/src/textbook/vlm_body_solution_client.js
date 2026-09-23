@@ -24,7 +24,15 @@ export function buildBodySolutionsPrompt({
   expectedNumbers,
   series = 'wonri',
 }) {
-  if (String(series || '').trim().toLowerCase() === 'gaeyu') {
+  const seriesKey = String(series || '').trim().toLowerCase();
+  if (seriesKey === 'wonri_middle') {
+    return buildWonriMiddleBodySolutionsPrompt({
+      rawPage,
+      displayPage,
+      expectedNumbers,
+    });
+  }
+  if (seriesKey === 'gaeyu') {
     return buildConceptPlusBodySolutionsPrompt({
       rawPage,
       displayPage,
@@ -94,6 +102,59 @@ export function buildBodySolutionsPrompt({
     '[B6] 없는 번호/정답을 추측해서 만들지 마라. 보이는 것만 담는다.',
     '',
     '지금 첨부된 이미지를 분석해 위 스키마로만 출력하라.',
+  ].join('\n');
+}
+
+// 중등 개념원리에서 본문 풀이가 있는 두 갈래만 읽는다.
+// - 핵심문제 익히기의 대표 예제(01, 02, ...)
+// - 서술형 대비의 예시 문항(예제 1, 예제 2, ...)
+// 확인·유제는 같은 지면에 있어도 학생용 문제이므로 해설 PDF에서 처리한다.
+function buildWonriMiddleBodySolutionsPrompt({
+  rawPage,
+  displayPage,
+  expectedNumbers,
+}) {
+  const pageLine =
+    displayPage != null && Number.isFinite(displayPage)
+      ? `이 이미지는 중등 개념원리 본문 PDF의 ${displayPage}페이지다(PDF raw page ${rawPage}).`
+      : `이 이미지는 중등 개념원리 본문 PDF의 한 페이지(PDF raw page ${rawPage})다.`;
+  const expected = Array.isArray(expectedNumbers)
+    ? expectedNumbers.map((number) => String(number || '').trim()).filter(Boolean)
+    : [];
+  return [
+    '당신은 한국 중등 수학 개념서 "개념원리" 본문에서 이미 풀이와 답이',
+    '인쇄된 예제만 추출하는 비전 AI다. 반드시 JSON만 출력하라.',
+    pageLine,
+    '',
+    '=== 추출 대상 ===',
+    '- "핵심문제 익히기"의 대표 예제 번호 01, 02, ...와 바로 아래 풀이·답',
+    '- "서술형 대비 문제"의 예제 1, 예제 2, ...와 예시 풀이·답',
+    '- 기대 번호: ' + (expected.length > 0 ? expected.join(', ') : '(페이지에 보이는 대상 전부)'),
+    '',
+    '=== 절대 제외 ===',
+    '- "확인 1", "확인 2", ... 문항은 해설 PDF에서 처리하므로 제외',
+    '- "유제 1", "유제 2", ... 문항도 해설 PDF에서 처리하므로 제외',
+    '- 풀이와 답이 비어 있는 학생 풀이 칸은 제외',
+    '',
+    '=== 출력 스키마 ===',
+    '{',
+    '  "items": [',
+    '    {',
+    '      "problem_number": "<기대 번호와 같은 표기. 예: 01 또는 예제 1>",',
+    '      "answer_kind": "objective" | "subjective",',
+    '      "answer_text": "<최종 답만. 수식은 LaTeX>",',
+    '      "answer_latex_2d": "<2D 렌더용 LaTeX 또는 빈 문자열>",',
+    '      "number_region": [<ymin>, <xmin>, <ymax>, <xmax>],',
+    '      "content_region": [<ymin>, <xmin>, <ymax>, <xmax>]',
+    '    }',
+    '  ],',
+    '  "notes": "<특이사항, 없으면 빈 문자열>"',
+    '}',
+    '',
+    '[M1] content_region은 대표 예제/서술형 예제의 풀이 시작부터 최종 답까지다.',
+    '[M2] 문제 본문, 이웃 확인·유제, 다음 예제는 포함하지 마라.',
+    '[M3] 기대 번호에 없는 확인·유제를 순서상 추측해 만들지 마라.',
+    '[M4] 좌표는 [ymin,xmin,ymax,xmax], 0..1000 기준이다.',
   ].join('\n');
 }
 

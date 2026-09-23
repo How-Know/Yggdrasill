@@ -79,10 +79,9 @@ class HomeRealtimeSyncCoordinator {
         .toSet();
 
     await HomeworkStore.instance.reloadStudentsForHome(attendedStudentIds);
-    // 활성 assignment는 학생별 UI가 revision을 보고 다시 읽는다. 기존 성공
-    // 캐시는 새 응답이 올 때까지 유지되어 네트워크 지연 중 카드가 사라지지 않는다.
-    HomeworkAssignmentStore.instance
-        .invalidateActiveAssignmentsForStudents(attendedStudentIds);
+    // 학생별 N+1 대신 한 요청으로 활성 assignment 캐시를 갱신한다.
+    await HomeworkAssignmentStore.instance
+        .loadActiveAssignmentsForStudents(attendedStudentIds);
     debugPrint(
       '[HOME_SYNC] done reason=$reason attended=${attendedStudentIds.length} '
       'elapsedMs=${stopwatch.elapsedMilliseconds}',

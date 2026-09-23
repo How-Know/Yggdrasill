@@ -12,6 +12,8 @@ dependencies:
     sdk: flutter
   yggdrasill_pb_export_ui:
     path: ../../packages/yggdrasill_pb_export_ui
+  yggdrasill_m5_ota:
+    path: ../../packages/yggdrasill_m5_ota
   
   # Supabase
   supabase_flutter: ^2.6.0

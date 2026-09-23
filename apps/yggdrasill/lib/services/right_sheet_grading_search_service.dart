@@ -40,6 +40,7 @@ class RightSheetGradingSearchService {
   Future<List<RightSheetGradingSearchResult>> search(String query) async {
     final rawQuery = query.trim();
     if (rawQuery.isEmpty) return const <RightSheetGradingSearchResult>[];
+    await HomeworkStore.instance.ensureFullSnapshotLoaded();
     final normalizedQuery = _normalizeAssignmentSearchToken(rawQuery);
     final lowerQuery = rawQuery.toLowerCase();
     final ranked = <({
@@ -122,6 +123,7 @@ class RightSheetGradingSearchService {
     if (token.length < 2) {
       return const <RightSheetGradingSearchResult>[];
     }
+    await HomeworkStore.instance.ensureFullSnapshotLoaded();
     final lowerQuery = query.trim().toLowerCase();
 
     final candidates =

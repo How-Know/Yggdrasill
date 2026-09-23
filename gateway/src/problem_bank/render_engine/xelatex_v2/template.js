@@ -7658,7 +7658,7 @@ function renderMockSlotColumnBody(
  *   - colHeightMacro : 컬럼 전체 높이 LaTeX 매크로 (예: '\\mockLeftSlotHeight*n' 아닌 'mockColumnHeight' 자체).
  *   - gapExpr        : 슬롯 간 간격 합 표현식 (예: `(n-1)\\mockSlotGap`).
  */
-function computePerSlotHeightExprs(slotCount, colHeightMacro, gapExpr) {
+function computePerSlotHeightExprs(slotCount, colHeightMacro, gapExpr, overflowGuard = null) {
   const n = Math.max(1, Number(slotCount || 1));
   if (n === 1) {
     return [`\\dimexpr${colHeightMacro}-${gapExpr}\\relax`];
@@ -7666,13 +7666,56 @@ function computePerSlotHeightExprs(slotCount, colHeightMacro, gapExpr) {
   const lowerStart = Math.floor(n / 2);
   const ratios = Array.from({ length: n }, (_, i) => (i >= lowerStart ? 1.1 : 1.0));
   // 정수 스케일: 0.1 단위를 정수화(×10) → 분모 10*sum, 분자 ratio*10.
-  const numerators = ratios.map((r) => Math.round(r * 10));
+  const defaultNumerators = ratios.map((r) => Math.round(r * 10));
+  const redistributed = redistributeSlotNumeratorsForOverflow(
+    defaultNumerators,
+    overflowGuard,
+  );
+  const numerators = redistributed ? redistributed.numerators : defaultNumerators;
   const sumNumerator = numerators.reduce((a, b) => a + b, 0);
   // 각 slot 높이 = (\colHeight - gaps) × numerator / sumNumerator.
   // LaTeX 의 \dimexpr 는 "dimen * int / int" 순서 연산을 지원한다.
   return numerators.map((num) => (
     `\\dimexpr(${colHeightMacro}-${gapExpr})*${num}/${sumNumerator}\\relax`
   ));
+}
+
+/**
+ * 슬롯 높이 고정 배분(10:11)이 실제 문항 높이를 못 담을 때 배분을 다시 계산한다.
+ *
+ * minipage[t][H][t] 는 내용이 넘쳐도 잘라내지 않으므로, 측정 높이가 슬롯 높이를
+ * 넘으면 초과분이 그대로 아래 문항 위로 흘러 겹친다. 자동 배치(측정 기반) 경로는
+ * fillRatio 로 애초에 이런 조합을 만들지 않지만, 클라이언트가 단별 문항 수를
+ * 명시한 고정 배치 경로에는 이 가드가 없다.
+ *
+ * 컬럼 전체에는 들어가는 경우에 한해 슬롯 높이를 측정 높이 비례로 다시 나눈다.
+ *   - 기본 배분으로 아무도 넘치지 않으면 null (기존 결과 그대로 보존).
+ *   - 컬럼 전체로도 못 담으면 null (어떤 배분으로도 겹침을 막을 수 없음).
+ */
+function redistributeSlotNumeratorsForOverflow(defaultNumerators, guard) {
+  const n = defaultNumerators.length;
+  const heights = Array.isArray(guard?.measuredHeightsPt)
+    ? guard.measuredHeightsPt.map((h) => Number(h))
+    : null;
+  const columnHeightPt = Number(guard?.columnHeightPt);
+  if (!heights || heights.length !== n) return null;
+  if (!Number.isFinite(columnHeightPt) || columnHeightPt <= 0) return null;
+  if (!heights.every((h) => Number.isFinite(h) && h > 0)) return null;
+
+  const slotGapPt = Number.isFinite(Number(guard?.slotGapPt)) ? Number(guard.slotGapPt) : 8;
+  const usable = columnHeightPt - (n - 1) * slotGapPt;
+  if (!(usable > 0)) return null;
+
+  const defaultSum = defaultNumerators.reduce((a, b) => a + b, 0);
+  const overflows = heights.some((h, i) => h > usable * (defaultNumerators[i] / defaultSum));
+  if (!overflows) return null;
+
+  const totalHeight = heights.reduce((a, b) => a + b, 0);
+  // 최소 여유 2pt/슬롯도 못 남기면 재배분해봐야 겹침이 남는다 → 기본 배분 유지.
+  if (totalHeight + 2 * n > usable) return null;
+
+  const numerators = heights.map((h) => Math.max(1, Math.round((h * 1000) / totalHeight)));
+  return { numerators };
 }
 
 /**
@@ -7754,6 +7797,9 @@ function renderMockGridPageLatex(
     pairAnchorMeasure = false,
     pairAnchorOffsets = null,
     pairAnchor2Pass = false,
+    // 측정 패스로 추정한 이 페이지의 컬럼 높이(pt). 있으면 슬롯 높이 고정 배분이
+    //   실제 문항 높이를 못 담는 경우에만 배분을 다시 계산한다(겹침 방지).
+    columnHeightPt = null,
   },
 ) {
   const safeLeftSlots = Math.max(1, Number(leftSlots || 1));
@@ -7907,8 +7953,26 @@ function renderMockGridPageLatex(
   // 사용자 요청: 슬롯 ≥2 개이면 "아래쪽 절반" 슬롯 높이를 10% 더 크게 (1개면 차등 없음).
   //   - 좌/우 컬럼 각각 독립적으로 계산 (좌/우 슬롯 수가 다를 수 있음).
   //   - 전체 합은 (mockColumnHeight - gaps) 로 유지 → 페이지 전체 높이 불변.
-  const leftPerSlotHeights = computePerSlotHeightExprs(safeLeftSlots, '\\mockColumnHeight', leftGapExpr);
-  const rightPerSlotHeights = computePerSlotHeightExprs(safeRightSlots, '\\mockColumnHeight', rightGapExpr);
+  //   - 측정 높이가 있으면 "고정 배분으로는 넘치는 컬럼" 에 한해 비례 배분으로 교체.
+  const slotOverflowGuard = (slotCount, columnQuestions) => {
+    if (!Number.isFinite(Number(columnHeightPt)) || Number(columnHeightPt) <= 0) return null;
+    if (columnQuestions.length !== slotCount) return null;
+    const measuredHeightsPt = columnQuestions.map((q) => Number(q?.__measuredHeightPt));
+    if (!measuredHeightsPt.every((h) => Number.isFinite(h) && h > 0)) return null;
+    return { measuredHeightsPt, columnHeightPt: Number(columnHeightPt), slotGapPt: 8 };
+  };
+  const leftPerSlotHeights = computePerSlotHeightExprs(
+    safeLeftSlots,
+    '\\mockColumnHeight',
+    leftGapExpr,
+    slotOverflowGuard(safeLeftSlots, leftQuestions),
+  );
+  const rightPerSlotHeights = computePerSlotHeightExprs(
+    safeRightSlots,
+    '\\mockColumnHeight',
+    rightGapExpr,
+    slotOverflowGuard(safeRightSlots, rightQuestions),
+  );
   const buildColumnsBlock = (heightMacro, leftHeightMacro, rightHeightMacro) => [
     // row-pair strut 매크로 선언 (페이지 내에서 반드시 컬럼 minipage 전에 실행되어야 함).
     pairProbePrelude.join('\n'),
@@ -8732,6 +8796,10 @@ export function buildDocumentTexSource(questions, options = {}) {
     // 측정 패스 결과. { heightsPt: number[], normalColumnHeightPt, titleColumnHeightPt, fillRatio }
     //   있으면 mock/assignment 그리드 배치를 휴리스틱 대신 측정 높이 기반으로 결정한다.
     measuredSlotPlan = null,
+    // 측정 패스 결과 원본. measuredSlotPlan 과 달리 "배치 결정" 에는 쓰지 않고,
+    //   고정 배치(클라이언트 명시 배치) 에서 슬롯 높이가 문항을 못 담을 때
+    //   슬롯 높이를 다시 나누는 겹침 가드 용도로만 쓴다.
+    measuredQuestionHeights = null,
     // 종속형 세트를 [소문항N] 경계에서 자를 지점. { questionKey: [소문항번호, ...] }
     //   renderer 의 측정 패스가 "한 단을 넘는 세트" 를 발견하면 채워서 내려준다.
     dependentSetSplitPlan = null,
@@ -8903,6 +8971,31 @@ export function buildDocumentTexSource(questions, options = {}) {
     const overrides = parsePageColumnOverrides(pageColumnQuestionCounts);
     const hasOverrides = Object.keys(overrides).length > 0;
 
+    // 슬롯 높이 겹침 가드용 측정 높이. 배치 경로(자동/고정)와 무관하게 붙여둔다.
+    const guardHeights = Array.isArray(measuredQuestionHeights?.heightsPt)
+      && measuredQuestionHeights.heightsPt.length === visualQList.length
+      ? measuredQuestionHeights.heightsPt
+      : null;
+    if (guardHeights) {
+      visualQList.forEach((item, i) => {
+        if (!item || typeof item !== 'object') return;
+        const h = Number(guardHeights[i]);
+        if (Number.isFinite(h) && h > 0) item.__measuredHeightPt = h;
+      });
+    }
+    const guardNormalH = Number(measuredQuestionHeights?.normalColumnHeightPt);
+    const guardTitleH = Number(measuredQuestionHeights?.titleColumnHeightPt);
+    // renderMockGridPageLatex 가 실제로 쓰는 컬럼 높이의 근사치.
+    //   (chunkQuestionsByMeasuredHeights 의 columnHeightPtForPage 와 동일 계산식)
+    const guardColumnHeightPtForPage = (pageNo, titleHeader) => {
+      if (!guardHeights || !Number.isFinite(guardNormalH) || guardNormalH <= 0) return null;
+      if (titleHeader) {
+        return (Number.isFinite(guardTitleH) && guardTitleH > 0 ? guardTitleH : guardNormalH) - 8;
+      }
+      if (pageNo === 1) return guardNormalH - 6;
+      return guardNormalH;
+    };
+
     // 측정 기반 배치 사용 가능 여부.
     //   - 클라이언트 명시 배치(overrides)가 있으면 그것이 항상 우선.
     //   - 측정 높이 배열 길이가 visualQList 와 일치해야 함 (측정/최종 패스 동일 입력 보장).
@@ -8921,14 +9014,25 @@ export function buildDocumentTexSource(questions, options = {}) {
     let assignmentPageColumnCounts = null;
     if (hasOverrides) {
       pages = [];
+      const appliedCounts = [];
       let cursor = 0;
       let pageNo = 0;
       while (cursor < visualQList.length) {
         const ov = overrides[pageNo];
         const perPage = ov ? (ov.left + ov.right) : qPerPage;
         pages.push(visualQList.slice(cursor, cursor + perPage));
+        appliedCounts.push(ov ? { left: ov.left, right: ov.right } : { left: leftSlots, right: rightSlots });
         cursor += perPage;
         pageNo += 1;
+      }
+      // 고정 배치도 "실제로 적용된 배치" 를 그대로 되돌려준다.
+      //   빈 배열을 돌려주면 클라이언트가 배치를 잃어버리고 기본 균등 배치로
+      //   되돌아가, 자동 배치 결과가 새로고침 한 번에 날아간다.
+      if (effectiveLayoutMeta) {
+        effectiveLayoutMeta.slotPlacement = {
+          source: 'client',
+          pageColumnCounts: appliedCounts,
+        };
       }
     } else if (canUseMeasuredPlan) {
       const measuredTitleH = Number(measuredSlotPlan?.titleColumnHeightPt);
@@ -9219,6 +9323,7 @@ export function buildDocumentTexSource(questions, options = {}) {
           pairAnchorMeasure,
           pairAnchorOffsets,
           pairAnchor2Pass,
+          columnHeightPt: guardColumnHeightPtForPage(pageNo, titleHeader),
         }),
       );
       parts.push('\n');

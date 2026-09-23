@@ -61,6 +61,10 @@ const WONRI_LABELS = Object.freeze([
   '교육청기출',
 ]);
 
+// 중등 개념원리 "이런 문제가 시험에 나온다" 문항 옆 심화 난이도 배지.
+// 중단원 마무리의 "실력 UP"(STEP3)과는 다른, 개별 문항 라벨이다.
+const WONRI_MIDDLE_LABELS = Object.freeze(['UP']);
+
 // 개념+유형 라벨 집합.
 //   상/중/하        — 탄탄 단원 다지기 문항 번호 위의 원 세 개 중 칠해진 개수.
 //   예제/유제/연습  — 쓱쓱 서술형 완성하기의 세 갈래. 번호가 각각 1부터 시작해서
@@ -100,6 +104,7 @@ export const VLM_DETECT_LABELS = Object.freeze([
     ...SSEN_LABELS,
     ...RPM_LABELS,
     ...WONRI_LABELS,
+    ...WONRI_MIDDLE_LABELS,
     ...GAEYU_LABELS,
     ...SURYEOK_LABELS,
     ...GOJAENGI_LABELS,
@@ -345,6 +350,17 @@ const SERIES_CONFIGS = Object.freeze({
     labelRules: [],
     partCExtra: [],
   },
+  wonri_middle: {
+    key: 'wonri_middle',
+    bookName: '개념원리 중등',
+    partA: '개념원리 확인하기',
+    partB: '핵심문제 익히기',
+    partC: '이런 문제가 시험에 나온다',
+    partD: '중단원 마무리하기',
+    labels: [],
+    labelRules: [],
+    partCExtra: [],
+  },
   // 개념+유형(개념서). 개념원리와 같은 이유로 전용 빌더로 분기한다.
   gaeyu: {
     key: 'gaeyu',
@@ -397,6 +413,13 @@ export const VLM_DETECT_SECTIONS = Object.freeze([
   'type_example', // B 필수유형
   'check', // C 확인 체크
   'exercise', // D 연습문제 (STEP1/STEP2/실력 UP)
+  // 중등 개념원리 전용 섹션. A~F 슬롯과 1:1 대응한다.
+  'middle_concept_check', // A 개념원리 확인하기
+  'middle_core_problem', // B 핵심문제 익히기
+  'middle_exam_problem', // C 이런 문제가 시험에 나온다
+  'middle_unit_review', // D 중단원 마무리하기
+  'middle_descriptive', // E 서술형 대비 문제
+  'middle_calculation', // F 계산력 강화하기 (선택)
   // 개념+유형 전용 섹션. sub_key A~F 슬롯과 1:1 대응한다.
   'concept_check', // A 개념확인
   'essential_problem', // B 필수 문제 (따름 문제 포함)
@@ -432,6 +455,15 @@ export const WONRI_SECTION_BY_SUB_KEY = Object.freeze({
   B: 'type_example',
   C: 'check',
   D: 'exercise',
+});
+
+export const WONRI_MIDDLE_SECTION_BY_SUB_KEY = Object.freeze({
+  A: 'middle_concept_check',
+  B: 'middle_core_problem',
+  C: 'middle_exam_problem',
+  D: 'middle_unit_review',
+  E: 'middle_descriptive',
+  F: 'middle_calculation',
 });
 
 // 개념+유형 슬롯(sub_key) → 탐지 섹션 매핑.
@@ -476,6 +508,9 @@ export function buildDetectProblemsPrompt({
     // 개념원리는 단일 패스: sectionHint 없이 페이지의 모든 카테고리 문항을
     // 한 번에 감지하고 문항마다 category 를 붙인다.
     return buildWonriDetectPrompt({ displayPage, rawPage });
+  }
+  if (cfg.key === 'wonri_middle') {
+    return buildWonriMiddleDetectPrompt({ displayPage, rawPage });
   }
   if (cfg.key === 'gaeyu') {
     return buildGaeyuDetectPrompt({ displayPage, rawPage });
@@ -621,6 +656,8 @@ export function buildDetectProblemsPrompt({
       ? [
           '[D3-RPM] RPM A의 독립형 세트문항을 절대 누락하지 마라.',
           '     - "0012~0014"뿐 아니라 "12~14"처럼 1~4자리 범위로 보이는 표기도 세트 헤더다.',
+          '     - "03-3 원의 접선의 길이", "03-4 삼각형의 내접원"처럼 "NN-N 제목" 형태는 소주제 머리말이다. 세트 헤더나 문항으로 넣지 말고 content_group에만 기록하라.',
+          '     - 세트 범위는 시작 번호가 끝 번호보다 반드시 작아야 한다.',
           '     - 세트 헤더의 item_region은 범위 문구와 공통 지문 전체를 감싼다.',
           '     - 세트 아래에 개별 4자리 문항번호가 인쇄돼 있으면 세트 헤더와 별개로 각 문항을 모두 items에 추가하고 각각 본문을 크롭한다.',
           '[D3-RPM-보기] RPM A 문항은 짧은 한 줄형만 있는 것이 아니다.',
@@ -886,6 +923,167 @@ function buildWonriDetectPrompt({ displayPage, rawPage }) {
     '지금 첨부된 이미지를 분석해 위 스키마로만 출력하라.',
   ];
   return lines.join('\n');
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 중등 개념원리(wonri_middle) 전용 단일 패스.
+//
+// 고등판과 달리 "개념원리 이해"의 숫자는 개념 블록 번호이며 문항이 아니다.
+// 계산력 강화하기는 일부 소단원에만 등장하고 자체 번호가 다시 시작하므로 F로
+// 분리한다. 서술형의 예시 문항도 실제 배정 가능한 크롭으로 보존한다.
+// ─────────────────────────────────────────────────────────────────────────
+
+export const WONRI_MIDDLE_ITEM_CATEGORIES = Object.freeze([
+  'middle_concept_check',
+  'middle_core_problem',
+  'middle_exam_problem',
+  'middle_unit_review',
+  'middle_descriptive',
+  'middle_calculation',
+]);
+
+export function buildWonriMiddleDetectPrompt({ displayPage, rawPage }) {
+  const pageLine =
+    displayPage != null && Number.isFinite(displayPage)
+      ? `이 이미지는 교재(중등 개념원리) 본문의 ${displayPage}페이지이다. PDF raw page는 ${rawPage}다.`
+      : `이 이미지는 교재(중등 개념원리) 본문의 한 페이지(PDF raw page ${rawPage})다.`;
+  return [
+    '당신은 한국 중등 수학 개념서 "개념원리"에서 실제로 학생에게 배정할 수 있는',
+    '문항 번호와 본문 영역을 찾는 비전 AI다.',
+    '반드시 아래 JSON 스키마만 출력하라. 설명·마크다운·코드펜스는 금지한다.',
+    '',
+    pageLine,
+    '',
+    '=== 지면 구조와 category ===',
+    '[M0] "개념원리 이해"는 개념 설명 영역이다. 그 안의 큰 1, 2, 3과',
+    '     예시 식 번호는 개념 블록 번호이지 문항번호가 아니다. items에 넣지 마라.',
+    '[M1] "개념원리 확인하기" 아래 실제 01, 02, 03 문항',
+    '     → category="middle_concept_check". 이 코너에는 평번호만 인쇄된다.',
+    '[M2] "핵심문제 익히기" 아래 대표 예제와 이어지는 확인1·확인2',
+    '     → category="middle_core_problem". 대표 예제와 확인 문항을 각각 독립',
+    '       item으로 만든다. item_role은 representative 또는 follow_up이다.',
+    '     "확인 N" 배지는 오직 이 코너에만 있다. 코너 제목이 안 보여도 지면에',
+    '     "확인 N"이 하나라도 있으면 그 지면은 핵심문제 익히기이며, 같은 지면의',
+    '     평번호 N(대표 예제)까지 middle_core_problem으로 둔다. 이 지면을',
+    '     middle_concept_check로 되돌리지 마라.',
+    '     number는 대표 예제면 인쇄된 평번호("05"), 확인이면 "확인 5"로 적는다.',
+    '     대표 예제 번호 오른쪽 색 띠에 그 문항의 유형명이 한 줄로 인쇄된다',
+    '     (예: "어떤 수보다 A만큼 큰 수 또는 작은 수"). 이것은 문제 본문이 아니라',
+    '     유형 제목이다. content_group에 kind="type", label="핵심문제 <번호>",',
+    '     title="<유형명 한 줄 그대로>"로 담고 item_region에는 절대 넣지 마라.',
+    '     같은 띠 오른쪽의 "더 다양한 문제는 RPM ...쪽" 안내 문구도 본문이 아니다.',
+    '     확인 문항은 바로 위 대표 예제와 같은 유형이므로 같은 content_group을 쓴다.',
+    '[M3] "이런 문제가 시험에 나온다" 아래 문항',
+    '     → category="middle_exam_problem". 문항 번호 옆에 독립된 "UP" 배지가',
+    '       인쇄돼 있으면 label="UP", 없으면 label="". "UP"은 문항번호나',
+    '       별도 문항이 아니며 해당 문항의 난이도 라벨이다.',
+    '[M4] "중단원 마무리하기"의 STEP 1 기본 / STEP 2 발전 / STEP 3 실력 UP',
+    '     → category="middle_unit_review". STEP이 바뀌어도 문항번호는 이어질 수',
+    '       있으므로 번호를 다시 시작시키거나 추측하지 마라. STEP 표기는 label에',
+    '       "STEP1" | "STEP2" | "STEP3"으로 적는다.',
+    '     중단원 마무리가 여러 쪽에 걸치면 제목/STEP 머리말은 첫 쪽에만 보일 수',
+    '     있다. 머리말 없는 다음 쪽도 같은 번호열·같은 조판이 이어지면',
+    '     middle_unit_review로 유지하고 직전 STEP label을 이어받는다.',
+    '     정확한 "이런 문제가 시험에 나온다" 제목이 현재 지면에 보이지 않는데',
+    '     단지 2단 문제 지면이라는 이유로 middle_exam_problem을 붙이지 마라.',
+    '[M5] "서술형 대비 문제"의 실제 문제와 풀이 예시용 문제',
+    '     → category="middle_descriptive". 학생이 풀 수 있는 문제 본문이면 예시도',
+    '       독립 item으로 저장하고 item_role="descriptive_example"로 구분한다.',
+    '[M6] 불규칙하게 나타나는 "계산력 강화하기" 아래 실제 번호 문항',
+    '     → category="middle_calculation". 앞뒤 코너의 번호와 별개이며 이 제목이',
+    '       실제로 보이거나 같은 계산력 묶음이 명백히 이어질 때만 적용한다.',
+    '',
+    '=== 출력 스키마 ===',
+    '{',
+    '  "section": "middle_concept_check" | "middle_core_problem" | "middle_exam_problem" | "middle_unit_review" | "middle_descriptive" | "middle_calculation" | "unknown",',
+    '  "page_kind": "problem_page" | "concept_page" | "mixed" | "unknown",',
+    '  "page_layout": "two_column" | "one_column" | "unknown",',
+    '  "items": [',
+    '    {',
+    '      "number": "<인쇄 문항번호 원문. 확인1/예시1처럼 글자가 붙으면 함께>",',
+    '      "category": "<위 middle_* category>",',
+    '      "item_role": "standard" | "representative" | "follow_up" | "descriptive_example",',
+    '      "label": "<STEP1|STEP2|STEP3|UP 또는 빈 문자열>",',
+    '      "is_set_header": false,',
+    '      "set_range": null,',
+    '      "content_group": {"kind":"type"|"none","label":"<핵심문제 06 등>","title":"<유형명 한 줄>","order":<정수>|null},',
+    '      "column": 1 | 2 | null,',
+    '      "bbox": [<ymin>, <xmin>, <ymax>, <xmax>],',
+    '      "item_region": [<ymin>, <xmin>, <ymax>, <xmax>],',
+    '      "companion_regions": [',
+    '        {',
+    '          "kind": "key_point" | "hint" | "reference",',
+    '          "bbox": [<ymin>, <xmin>, <ymax>, <xmax>],',
+    '          "text": "<해당 보조 상자의 짧은 인쇄 문구>"',
+    '        }',
+    '      ]',
+    '    }',
+    '  ],',
+    '  "notes": "<특이사항, 없으면 빈 문자열>"',
+    '}',
+    '',
+    '=== 필수 규칙 ===',
+    '[D1] 페이지에 실제로 인쇄된 문항만 수집한다. 소단원 번호, 개념 번호,',
+    '     페이지 번호, STEP 번호, KEY POINT 안의 숫자를 문항으로 만들지 마라.',
+    '[D2] (1), (2), (3)은 한 문항 안의 하위문항이다. 별도 item으로 쪼개지 말고',
+    '     상위 문항의 item_region에 모두 포함한다.',
+    '[D3] 대표 예제 뒤 확인1·확인2는 같은 유형이지만 별개의 배정 문항이다.',
+    '     각각 번호 bbox와 본문 영역을 따로 반환한다.',
+    '[D4] bbox는 문항번호/확인 배지만 감싸는 최소 박스다.',
+    '[D5] item_region은 문항번호를 제외한 문제 본문·보기·그림·표·선택지·하위문항',
+    '     전체를 타이트하게 감싼다. 풀이·정답·다음 문항·학습영역 제목은 제외한다.',
+    '     대표 예제의 item_region 위 경계는 유형명 띠 **아래**, 실제 발문',
+    '     ("다음을 구하시오." 등)이 시작하는 줄이다. 띠를 덮으면 안 된다.',
+    '[D6] KEY POINT, 힌트, 참고 설명은 item_region에 섞지 않는다. 특정 문항에',
+    '     시각적으로 붙어 있을 때만 companion_regions에 종류·좌표·문구를 담는다.',
+    '     연결 근거가 없으면 버리고 임의로 가장 가까운 문항에 붙이지 마라.',
+    '[D7] 좌표는 이미지 좌상단 (0,0), 우하단 (1000,1000)의',
+    '     [ymin, xmin, ymax, xmax] 순서다.',
+    '[D8] 동일 번호가 category가 다르면 둘 다 유지한다. 같은 category 안의',
+    '     중복만 더 신뢰도 높은 하나로 합친다.',
+    '[D9] 문항이 하나도 없고 개념 설명만 있으면 page_kind="concept_page", items=[].',
+    '[D10] 없는 번호·카테고리·영역을 앞뒤 순서로 추측하지 마라.',
+    '',
+    '지금 첨부된 이미지를 분석해 JSON만 출력하라.',
+  ].join('\n');
+}
+
+/// 중등 개념원리 중단원 마무리 지면의 STEP 머리말만 다시 읽는다.
+///
+/// 한 지면의 왼쪽 단은 STEP 2 연속이고 오른쪽 단에서 STEP 3가 새로 시작하는
+/// 전환 지면이 있다. 문항별 프롬프트가 오른쪽의 작은 머리말을 놓치면 연속성
+/// 보정이 STEP 2를 끝까지 물려주므로, 머리말 좌표를 별도로 받아 문항에 적용한다.
+export function buildWonriMiddleStepHeaderPrompt({ displayPage, rawPage }) {
+  const pageLine =
+    displayPage != null && Number.isFinite(displayPage)
+      ? `이 이미지는 중등 개념원리 본문의 ${displayPage}페이지(PDF raw ${rawPage})다.`
+      : `이 이미지는 중등 개념원리 본문의 PDF raw page ${rawPage}다.`;
+  return [
+    '중등 개념원리 "중단원 마무리하기" 지면에서 실제로 보이는 STEP 머리말만 찾는다.',
+    '반드시 JSON만 출력하고 문항 번호·본문·정답은 수집하지 마라.',
+    pageLine,
+    '',
+    '찾을 머리말:',
+    '- STEP 1 기본 → label="STEP1"',
+    '- STEP 2 발전 → label="STEP2"',
+    '- STEP 3 실력 UP → label="STEP3"',
+    '',
+    '한 페이지의 왼쪽 단은 이전 STEP이 이어지고 오른쪽 단에서 다음 STEP이 새로',
+    '시작할 수 있다. 특히 "실력"과 "UP"이 두 줄로 보이거나 STEP 숫자가 장식',
+    '안에 있어도 STEP3 머리말 하나로 반드시 수집한다.',
+    '현재 이미지에 실제 머리말이 없으면 추측하지 말고 step_headers=[]로 둔다.',
+    '',
+    '출력 스키마:',
+    '{',
+    '  "step_headers": [',
+    '    {',
+    '      "label": "STEP1" | "STEP2" | "STEP3",',
+    '      "bbox": [<ymin>, <xmin>, <ymax>, <xmax>]',
+    '    }',
+    '  ]',
+    '}',
+    '좌표는 이미지 좌상단 (0,0), 우하단 (1000,1000) 기준이다.',
+  ].join('\n');
 }
 
 // ─────────────────────────────────────────────────────────────────────────

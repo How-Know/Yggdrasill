@@ -103,4 +103,27 @@ void main() {
     expect(textbookStagePageFamily('gojaengi', 'F'), 'big_test');
     expect(textbookStagePageFamily('ssen', 'E'), isEmpty);
   });
+
+  test('중등 개념원리 해설은 뒤 코너 시작 쪽 전에는 묻지 않는다', () {
+    const wonriBounds = <String, TextbookStageScopeBound>{
+      '0:0:A:0': (start: 2, end: 2),
+      '0:0:D:2': (start: 5, end: 8),
+    };
+    const keys = <int, String>{
+      0: '0:0:A:0',
+      1: '0:0:D:2',
+    };
+    List<int> on(int page) => textbookStageOrderForPage(
+          order: const [0, 1],
+          scopeKeyOf: (position) => keys[position] ?? '',
+          bounds: wonriBounds,
+          page: page,
+          leadingPageAllowance: 0,
+        );
+
+    expect(on(2), [0]);
+    expect(on(3), [0]); // 첫 소단원 상세 풀이의 한 쪽 연속 허용
+    expect(on(4), isEmpty);
+    expect(on(5), [1]);
+  });
 }

@@ -171,6 +171,39 @@ class TextbookVlmSolutionRefService {
     return TextbookVlmBodySolutionPageResult.fromMap(json);
   }
 
+  /// 중등 개념원리 해설 PDF 한 지면에서 정답·풀이·서술형 채점 구조를
+  /// 한 번에 추출한다.
+  Future<TextbookVlmWonriMiddleSolutionPageResult>
+      extractWonriMiddleSolutionsOnPage({
+    required Uint8List imageBytes,
+    required int rawPage,
+    required List<TextbookWonriMiddleSolutionExpected> expectedEntries,
+    String mode = 'combined',
+    String mimeType = 'image/png',
+  }) async {
+    final body = <String, dynamic>{
+      'image_base64': base64Encode(imageBytes),
+      'mime_type': mimeType,
+      'raw_page': rawPage,
+      'mode': mode,
+      'expected_entries':
+          expectedEntries.map((entry) => entry.toJson()).toList(),
+    };
+    final res = await _http.post(
+      _uri('/textbook/vlm/extract-wonri-middle-solutions'),
+      headers: _headers(),
+      body: jsonEncode(body),
+    );
+    final json = _decode(res.body);
+    if (res.statusCode < 200 || res.statusCode >= 300 || json['ok'] != true) {
+      throw Exception(
+        'vlm_extract_wonri_middle_solutions_failed(${res.statusCode}): '
+        '${json['error'] ?? json['message'] ?? res.body}',
+      );
+    }
+    return TextbookVlmWonriMiddleSolutionPageResult.fromMap(json);
+  }
+
   Future<int> batchUpsertSolutionRefs({
     required String academyId,
     required List<TextbookSolutionRefUpload> refs,
@@ -578,6 +611,147 @@ class TextbookVlmBodySolutionPageResult {
     return TextbookVlmBodySolutionPageResult(
       rawPage: asInt(map['raw_page']),
       items: parsed,
+      notes: '${map['notes'] ?? ''}',
+      elapsedMs: asInt(map['elapsed_ms']),
+      model: '${map['model'] ?? ''}',
+    );
+  }
+}
+
+class TextbookWonriMiddleSolutionExpected {
+  const TextbookWonriMiddleSolutionExpected({
+    required this.problemNumber,
+    required this.category,
+    this.title = '',
+    this.itemRole = 'standard',
+    this.bodyPage,
+  });
+
+  final String problemNumber;
+  final String category;
+  final String title;
+  final String itemRole;
+  final int? bodyPage;
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'problem_number': problemNumber,
+        'category': category,
+        if (title.trim().isNotEmpty) 'title': title.trim(),
+        if (itemRole.trim().isNotEmpty) 'item_role': itemRole.trim(),
+        if (bodyPage != null && bodyPage! > 0) 'page': bodyPage,
+      };
+}
+
+class TextbookVlmWonriMiddleSolutionItem {
+  const TextbookVlmWonriMiddleSolutionItem({
+    required this.problemNumber,
+    required this.category,
+    required this.expectedIndex,
+    required this.itemRole,
+    required this.answerKind,
+    required this.answerText,
+    required this.answerLatex2d,
+    required this.solutionKind,
+    required this.numberRegion1k,
+    required this.contentRegion1k,
+    required this.rubricSteps,
+    this.answerRegion1k,
+    this.totalPoints,
+  });
+
+  final String problemNumber;
+  final String category;
+  final int expectedIndex;
+  final String itemRole;
+  final String answerKind;
+  final String answerText;
+  final String answerLatex2d;
+  final String solutionKind;
+  final List<int> numberRegion1k;
+  final List<int> contentRegion1k;
+  final List<int>? answerRegion1k;
+  final List<Map<String, dynamic>> rubricSteps;
+  final num? totalPoints;
+
+  factory TextbookVlmWonriMiddleSolutionItem.fromMap(
+    Map<String, dynamic> map,
+  ) {
+    int asInt(dynamic value, [int fallback = 0]) {
+      if (value is num) return value.toInt();
+      return int.tryParse('$value') ?? fallback;
+    }
+
+    List<int>? bbox(dynamic raw) {
+      if (raw is! List || raw.length != 4) return null;
+      final values = <int>[];
+      for (final value in raw) {
+        final parsed = value is num ? value.toInt() : int.tryParse('$value');
+        if (parsed == null) return null;
+        values.add(parsed);
+      }
+      return values;
+    }
+
+    final rawSteps = (map['rubric_steps'] as List?) ?? const <dynamic>[];
+    return TextbookVlmWonriMiddleSolutionItem(
+      problemNumber: '${map['problem_number'] ?? ''}'.trim(),
+      category: '${map['category'] ?? ''}'.trim(),
+      expectedIndex: asInt(map['expected_index'], -1),
+      itemRole: '${map['item_role'] ?? 'standard'}'.trim(),
+      answerKind:
+          '${map['answer_kind']}' == 'objective' ? 'objective' : 'subjective',
+      answerText: '${map['answer_text'] ?? ''}'.trim(),
+      answerLatex2d: '${map['answer_latex_2d'] ?? ''}'.trim(),
+      solutionKind:
+          '${map['solution_kind']}' == 'answer_only' ? 'answer_only' : 'full',
+      answerRegion1k: bbox(map['answer_region']),
+      numberRegion1k: bbox(map['number_region']) ?? const <int>[0, 0, 0, 0],
+      contentRegion1k: bbox(map['content_region']) ?? const <int>[0, 0, 0, 0],
+      rubricSteps: <Map<String, dynamic>>[
+        for (final raw in rawSteps)
+          if (raw is Map)
+            raw.map((key, dynamic value) => MapEntry('$key', value)),
+      ],
+      totalPoints: map['total_points'] is num
+          ? map['total_points'] as num
+          : num.tryParse('${map['total_points'] ?? ''}'),
+    );
+  }
+}
+
+class TextbookVlmWonriMiddleSolutionPageResult {
+  const TextbookVlmWonriMiddleSolutionPageResult({
+    required this.rawPage,
+    required this.items,
+    required this.notes,
+    required this.elapsedMs,
+    required this.model,
+  });
+
+  final int rawPage;
+  final List<TextbookVlmWonriMiddleSolutionItem> items;
+  final String notes;
+  final int elapsedMs;
+  final String model;
+
+  factory TextbookVlmWonriMiddleSolutionPageResult.fromMap(
+    Map<String, dynamic> map,
+  ) {
+    int asInt(dynamic value) {
+      if (value is num) return value.toInt();
+      return int.tryParse('$value') ?? 0;
+    }
+
+    final rawItems = (map['items'] as List?) ?? const <dynamic>[];
+    return TextbookVlmWonriMiddleSolutionPageResult(
+      rawPage: asInt(map['raw_page']),
+      items: <TextbookVlmWonriMiddleSolutionItem>[
+        for (final raw in rawItems)
+          if (raw is Map)
+            TextbookVlmWonriMiddleSolutionItem.fromMap(
+              raw.map((key, dynamic value) => MapEntry('$key', value)),
+            ),
+      ],
       notes: '${map['notes'] ?? ''}',
       elapsedMs: asInt(map['elapsed_ms']),
       model: '${map['model'] ?? ''}',

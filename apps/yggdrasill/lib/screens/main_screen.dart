@@ -970,7 +970,8 @@ class _MainScreenState extends State<MainScreen>
         effectiveSetId = r.setId!;
         directSetId++;
       } else {
-        final resolved = _resolveSetIdFromTime(r.studentId, dt);
+        final resolved = _resolveOverrideSetIdFromTime(r.studentId, dt) ??
+            _resolveSetIdFromTime(r.studentId, dt);
         if (resolved != null && resolved.isNotEmpty) {
           effectiveSetId = resolved;
           resolvedSetId++;
@@ -1088,6 +1089,38 @@ class _MainScreenState extends State<MainScreen>
     // 같은 시간대에 여러 세그먼트가 있더라도, 가장 최근 시작(start_date가 가장 큰) 블록을 우선한다.
     candidates.sort((a, b) => a.startDate.compareTo(b.startDate));
     return candidates.last.setId;
+  }
+
+  String? _resolveOverrideSetIdFromTime(
+    String studentId,
+    DateTime classDateTime,
+  ) {
+    bool sameMinute(DateTime a, DateTime b) =>
+        a.year == b.year &&
+        a.month == b.month &&
+        a.day == b.day &&
+        a.hour == b.hour &&
+        a.minute == b.minute;
+
+    final candidates = DataManager.instance.sessionOverrides
+        .where(
+          (override) =>
+              override.studentId == studentId &&
+              override.overrideType == OverrideType.add &&
+              override.status != OverrideStatus.canceled &&
+              override.replacementClassDateTime != null &&
+              sameMinute(
+                override.replacementClassDateTime!.toLocal(),
+                classDateTime.toLocal(),
+              ),
+        )
+        .toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    if (candidates.isEmpty) return null;
+
+    final override = candidates.first;
+    final explicitSetId = (override.setId ?? '').trim();
+    return explicitSetId.isNotEmpty ? explicitSetId : override.id;
   }
 
   void _markSideSheetDirty() {
@@ -1242,23 +1275,31 @@ class _MainScreenState extends State<MainScreen>
   }) {
     final store = HomeworkAssignmentStore.instance;
     final rev = store.revision.value;
-    final seen = <String>{};
-    void schedule(_AttendanceTarget t) {
+    final studentIds = <String>{};
+    void collect(_AttendanceTarget t) {
       final id = t.student.id.trim();
-      if (id.isEmpty || seen.contains(id)) return;
-      seen.add(id);
-      _homeworkChipAssignRevisionByStudent[id] = rev;
-      _activeAssignmentsFutureByStudent[id] = store.loadActiveAssignments(id);
+      if (id.isNotEmpty) studentIds.add(id);
     }
 
     for (final t in waiting) {
-      schedule(t);
+      collect(t);
     }
     for (final t in attended) {
-      schedule(t);
+      collect(t);
     }
     for (final t in leaved) {
-      schedule(t);
+      collect(t);
+    }
+    if (studentIds.isEmpty) return;
+    final bulkFuture = store.loadActiveAssignmentsForStudents(
+      studentIds,
+      notify: false,
+    );
+    for (final id in studentIds) {
+      _homeworkChipAssignRevisionByStudent[id] = rev;
+      _activeAssignmentsFutureByStudent[id] = bulkFuture.then(
+        (byStudent) => byStudent[id] ?? const <HomeworkAssignmentDetail>[],
+      );
     }
   }
 
@@ -1959,8 +2000,6 @@ class _MainScreenState extends State<MainScreen>
     WidgetsBinding.instance.addObserver(this);
     HardwareKeyboard.instance.addHandler(_handleDebugSpaceSnackBarKey);
     setAttendanceAnchorDate(_sideSheetAnchorDate);
-    // 과제 데이터 DB에서 1회 로드
-    HomeworkStore.instance.loadAll();
     rightSheetGradingSearchRunAction = _gradingSearchRunAction;
     rightSheetGradingSearchSuggestAction = _gradingSearchSuggestAction;
     rightSheetGradingSearchOpenAction = _gradingSearchOpenAction;
@@ -2124,6 +2163,15 @@ class _MainScreenState extends State<MainScreen>
 
   Future<void> _initializeData() async {
     await DataManager.instance.initialize();
+
+    await HomeworkStore.instance.restoreSnapshotAndStartRealtime();
+    await HomeRealtimeSyncCoordinator.instance.resync(
+      reason: 'cold_start',
+      force: true,
+    );
+    if (HomeworkStore.startupFullLoadFallback) {
+      unawaited(HomeworkStore.instance.loadAll());
+    }
 
     // 강제 마이그레이션 실행
     await DataManager.instance.forceMigration();

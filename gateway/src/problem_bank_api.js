@@ -74,7 +74,9 @@ import {
   detectSsenBasicDrillOnPage,
   detectSuryeokMarksOnPage,
   detectSuryeokRangeHeadersOnPage,
+  detectWonriMiddleStepHeadersOnPage,
   classifyWonriPage,
+  mergeWonriMiddleStepHeaders,
   mergeSuryeokMarks,
   mergeSuryeokRangeHeaders,
   mergeItemGeometry,
@@ -119,11 +121,17 @@ import {
   classifyRpmSectionPages,
   normalizeGojaengiWorkbookResult,
   normalizeRpmSectionResult,
+  normalizeWonriMiddleStructureResult,
 } from "./textbook/vlm_rpm_section_client.js";
 import {
   extractBodySolutionsOnPage,
   normalizeBodySolutionsResult,
 } from "./textbook/vlm_body_solution_client.js";
+import {
+  extractWonriMiddleSolutionsOnPage,
+  normalizeWonriMiddleSolutionResult,
+  filterWonriMiddleItemsByBox,
+} from "./textbook/vlm_wonri_middle_solution_client.js";
 import { assessHandwritingSample } from "./textbook/handwriting_review_client.js";
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -882,7 +890,7 @@ const EXPORT_RENDER_CONFIG_VERSION = "pb_render_v103_subq_wrap_27";
 //   않도록 완전히 별도의 키를 사용한다. 새 매크로(\YggV2InlineMath, 한글 시각 중심 정렬,
 //   수식 줄 strut 대칭, 박스 안팎 통일)가 들어 있는 xelatex_v2/ 파이프라인 결과물의
 //   캐시 키 prefix 로 쓰인다.
-const EXPORT_RENDER_CONFIG_VERSION_V2 = "pb_render_v4_colontext_10";
+const EXPORT_RENDER_CONFIG_VERSION_V2 = "pb_render_v4_colontext_11";
 const DEFAULT_TITLE_PAGE_TOP_TEXT = "2026학년도 대학수학능력시험 문제지";
 const DEFAULT_TITLE_PAGE_GOAL_TEXT = "다시 풀기";
 
@@ -7397,6 +7405,13 @@ async function handleTextbookVlmDetectProblems(body, res) {
     "check",
     "exercise",
     "special_lecture",
+    // 중등 개념원리 전용 섹션 (sub_key A~F 슬롯 대응).
+    "middle_concept_check",
+    "middle_core_problem",
+    "middle_exam_problem",
+    "middle_unit_review",
+    "middle_descriptive",
+    "middle_calculation",
     // 개념+유형 전용 섹션 (sub_key A~F 슬롯 대응).
     "concept_check",
     "essential_problem",
@@ -7418,7 +7433,7 @@ async function handleTextbookVlmDetectProblems(body, res) {
   ].includes(rawSectionHint)
     ? rawSectionHint
     : "";
-  // 교재 시리즈 (ssen | rpm | wonri | gaeyu | suryeok | gojaengi).
+  // 교재 시리즈 (ssen | rpm | wonri | wonri_middle | gaeyu | suryeok | gojaengi).
   // 미지정/미지원 값이면 프롬프트 빌더가 쎈으로 fallback.
   const series = String(body?.series || "")
     .trim()
@@ -7658,6 +7673,49 @@ async function handleTextbookVlmDetectProblems(body, res) {
     } catch (err) {
       console.warn(
         "[textbook-vlm-detect] suryeok_range_header_repair_failed",
+        JSON.stringify({
+          rawPage,
+          bookId,
+          gradeLabel,
+          message: compact(err?.message || err),
+        }),
+      );
+    }
+  }
+  // 중등 개념원리 마무리 전환 지면은 한쪽 단에서 STEP2가 이어지고 다른
+  // 단에서 STEP3가 시작될 수 있다. 문항별 판독만으로는 작은 "실력 UP"
+  // 머리말을 놓쳐 직전 STEP이 페이지 끝까지 승계되므로, 실제 머리말 좌표를
+  // 짧은 2차 판독으로 확인해 같은 단의 아래 문항에 덮어쓴다.
+  if (
+    series === "wonri_middle" &&
+    normalized.items.some(
+      (item) => item?.category === "middle_unit_review",
+    )
+  ) {
+    try {
+      const stepHeaders = await detectWonriMiddleStepHeadersOnPage({
+        imageBase64,
+        mimeType,
+        rawPage,
+        displayPage,
+        pageOffset,
+        model: TEXTBOOK_VLM_MODEL,
+        apiKey,
+        timeoutMs: TEXTBOOK_VLM_TIMEOUT_MS,
+      });
+      const changed = mergeWonriMiddleStepHeaders(
+        normalized,
+        stepHeaders.parsedJson,
+      );
+      logVlmUsage("wonri_middle_step_headers", stepHeaders.usageMetadata, {
+        page: rawPage,
+        changed,
+        elapsed: `${stepHeaders.elapsedMs}ms`,
+      });
+    } catch (err) {
+      // 머리말 보충 판독 실패가 본 문항 좌표까지 버리게 하지는 않는다.
+      console.warn(
+        "[textbook-vlm-detect] wonri_middle_step_header_failed",
         JSON.stringify({
           rawPage,
           bookId,
@@ -8077,7 +8135,7 @@ async function handleTextbookVlmClassifyRpmSections(body, res) {
   const seriesRaw = String(body?.series || "rpm")
     .trim()
     .toLowerCase();
-  const allowedSeries = ["ssen", "rpm", "gojaengi"];
+  const allowedSeries = ["ssen", "rpm", "gojaengi", "wonri_middle"];
   const series = allowedSeries.includes(seriesRaw) ? seriesRaw : "";
   if (!series) {
     sendJson(res, 400, {
@@ -8101,10 +8159,22 @@ async function handleTextbookVlmClassifyRpmSections(body, res) {
     .trim()
     .toLowerCase();
   const workbookScope = scopeRaw === "workbook";
+  const middleStructureScope =
+    scopeRaw === "structure" && series === "wonri_middle";
   if (workbookScope && series !== "gojaengi") {
     sendJson(res, 400, {
       ok: false,
       error: `workbook_scope_unsupported_for_series: ${series}`,
+    });
+    return;
+  }
+  if (
+    series === "wonri_middle" &&
+    !middleStructureScope
+  ) {
+    sendJson(res, 400, {
+      ok: false,
+      error: "wonri_middle_requires_structure_scope",
     });
     return;
   }
@@ -8138,7 +8208,11 @@ async function handleTextbookVlmClassifyRpmSections(body, res) {
     result = await classifyRpmSectionPages({
       images,
       series,
-      scope: workbookScope ? "workbook" : "body",
+      scope: workbookScope
+        ? "workbook"
+        : middleStructureScope
+          ? "wonri_middle_structure"
+          : "body",
       model: TEXTBOOK_VLM_MODEL,
       apiKey,
       timeoutMs: TEXTBOOK_VLM_TIMEOUT_MS,
@@ -8166,6 +8240,11 @@ async function handleTextbookVlmClassifyRpmSections(body, res) {
         result.parsedJson,
         images.map((image) => image.rawPage),
       )
+    : middleStructureScope
+      ? normalizeWonriMiddleStructureResult(
+          result.parsedJson,
+          images.map((image) => image.rawPage),
+        )
     : normalizeRpmSectionResult(
         result.parsedJson,
         images.map((image) => image.rawPage),
@@ -8263,6 +8342,123 @@ async function handleTextbookVlmExtractBodySolutions(body, res) {
     display_page: rawPage,
     items: normalized.items,
     notes: normalized.notes,
+    model: TEXTBOOK_VLM_MODEL,
+    elapsed_ms: result.elapsedMs,
+    usage: result.usageMetadata || null,
+    finish_reason: result.finishReason || "",
+  });
+}
+
+// 중등 개념원리: 같은 해설 PDF 안의 빠른 정답 박스와 상세 해설을
+// mode 로 분리해 판독한다.
+async function handleTextbookVlmExtractWonriMiddleSolutions(body, res) {
+  const apiKey = (
+    process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_API_KEY ||
+    ""
+  ).trim();
+  if (!apiKey) {
+    sendJson(res, 500, { ok: false, error: "gemini_api_key_missing" });
+    return;
+  }
+  const imageBase64 = String(body?.image_base64 || "").trim();
+  if (!imageBase64) {
+    sendJson(res, 400, { ok: false, error: "missing_image_base64" });
+    return;
+  }
+  const mimeType = String(body?.mime_type || "image/png").trim();
+  if (!TEXTBOOK_VLM_VALID_MIMES.has(mimeType)) {
+    sendJson(res, 400, {
+      ok: false,
+      error: `invalid_mime_type: ${mimeType}`,
+      allowed: Array.from(TEXTBOOK_VLM_VALID_MIMES),
+    });
+    return;
+  }
+  const rawPage = Number.parseInt(String(body?.raw_page ?? ""), 10);
+  if (!Number.isFinite(rawPage) || rawPage <= 0) {
+    sendJson(res, 400, { ok: false, error: "invalid_raw_page" });
+    return;
+  }
+  const requestedMode = String(body?.mode || "combined")
+    .trim()
+    .toLowerCase();
+  const mode = ["answers", "solution_refs", "combined"].includes(
+    requestedMode,
+  )
+    ? requestedMode
+    : "";
+  if (!mode) {
+    sendJson(res, 400, { ok: false, error: "invalid_wonri_middle_mode" });
+    return;
+  }
+  const expectedEntries = Array.isArray(body?.expected_entries)
+    ? body.expected_entries
+        .slice(0, 400)
+        .map((entry) => ({
+          problem_number: String(
+            entry?.problem_number ?? entry?.number ?? "",
+          ).trim(),
+          category: String(entry?.category ?? entry?.corner ?? "").trim(),
+          item_role: String(entry?.item_role ?? "").trim(),
+          title: String(entry?.title ?? "").trim(),
+          page: Number.parseInt(String(entry?.page ?? ""), 10),
+        }))
+        .filter((entry) => entry.problem_number)
+    : [];
+
+  let result;
+  try {
+    result = await extractWonriMiddleSolutionsOnPage({
+      imageBase64,
+      mimeType,
+      rawPage,
+      displayPage: rawPage,
+      expectedEntries,
+      mode,
+      model: TEXTBOOK_VLM_MODEL,
+      apiKey,
+      timeoutMs: TEXTBOOK_VLM_TIMEOUT_MS,
+    });
+  } catch (err) {
+    const message = compact(err?.message || err);
+    if (isTextbookVlmQuotaError(message)) {
+      sendJson(res, 429, {
+        ok: false,
+        error: "vlm_daily_quota_exceeded",
+        message,
+      });
+      return;
+    }
+    sendJson(res, 502, {
+      ok: false,
+      error: "vlm_wonri_middle_solution_failed",
+      message,
+    });
+    return;
+  }
+
+  const normalized = normalizeWonriMiddleSolutionResult(result.parsedJson);
+  // 같은 코너 박스가 소단원마다 같은 번호로 반복된다. 모델이 남의 박스를
+  // 읽어 온 응답은 여기서 버린다.
+  const guarded = filterWonriMiddleItemsByBox({
+    items: normalized.items,
+    box: normalized.box,
+    expectedEntries,
+  });
+  if (guarded.dropped > 0) {
+    console.warn(
+      `[textbook-vlm] wonri_middle ${mode} page=${rawPage} dropped=${guarded.dropped} ${guarded.reason}`,
+    );
+  }
+  sendJson(res, 200, {
+    ok: true,
+    raw_page: rawPage,
+    display_page: rawPage,
+    mode,
+    items: guarded.items,
+    box: normalized.box,
+    notes: [normalized.notes, guarded.reason].filter(Boolean).join(' · '),
     model: TEXTBOOK_VLM_MODEL,
     elapsed_ms: result.elapsedMs,
     usage: result.usageMetadata || null,
@@ -8383,6 +8579,12 @@ async function handleTextbookCropsBatchUpsert(body, res) {
     });
     return;
   }
+  const includesCompanionRegions = crops.some(
+    (crop) =>
+      crop &&
+      typeof crop === "object" &&
+      Object.prototype.hasOwnProperty.call(crop, "companion_regions"),
+  );
 
   const bucket = DEFAULT_TEXTBOOK_CROPS_BUCKET;
   const uploadedKeys = [];
@@ -8511,6 +8713,24 @@ async function handleTextbookCropsBatchUpsert(body, res) {
     const widthPx = Number.parseInt(String(c.width_px ?? ""), 10);
     const heightPx = Number.parseInt(String(c.height_px ?? ""), 10);
     const deskewAngle = Number(c.deskew_angle_deg);
+    const companionRegions = [];
+    for (const rawCompanion of Array.isArray(c.companion_regions)
+      ? c.companion_regions.slice(0, 12)
+      : []) {
+      if (!rawCompanion || typeof rawCompanion !== "object") continue;
+      const kind = String(rawCompanion.kind || "").trim();
+      if (!["key_point", "hint", "reference"].includes(kind)) continue;
+      const companionBbox = parseIntArray(
+        rawCompanion.bbox ?? rawCompanion.bbox_1k,
+        4,
+      );
+      if (!companionBbox) continue;
+      companionRegions.push({
+        kind,
+        bbox: companionBbox,
+        text: String(rawCompanion.text || "").trim().slice(0, 1000),
+      });
+    }
 
     rows.push({
       academy_id: academyId,
@@ -8519,6 +8739,9 @@ async function handleTextbookCropsBatchUpsert(body, res) {
       big_order: bigOrder,
       mid_order: midOrder,
       sub_key: subKeyRaw,
+      // 정규화 단원 트리/학생 화면의 카테고리 라벨은 category_code를
+      // 사용한다. 신규 업로드도 과거 일괄 backfill에 의존하지 않게 한다.
+      category_code: subKeyRaw,
       sub_index: subIndex,
       big_name: bigName,
       mid_name: midName,
@@ -8550,6 +8773,9 @@ async function handleTextbookCropsBatchUpsert(body, res) {
       column_index: Number.isFinite(columnIndex) ? columnIndex : null,
       bbox_1k: bbox1k,
       item_region_1k: itemRegion1k,
+      ...(includesCompanionRegions
+        ? { companion_regions: companionRegions }
+        : {}),
       storage_bucket: bucket,
       storage_key: storageKey,
       file_size_bytes: fileSizeBytes,
@@ -9755,6 +9981,17 @@ async function handleTextbookAnswersBatchUpsert(body, res) {
     });
     return;
   }
+  // 기존 시리즈 요청에는 새 컬럼을 전혀 보내지 않아, 앱/게이트웨이가
+  // 마이그레이션보다 먼저 배포돼도 종전 정답 저장은 계속 동작하게 한다.
+  // 한 배치에서 한 행이라도 구조화 필드를 쓰면 모든 행에 기본값을 실어
+  // PostgREST bulk-upsert의 행별 컬럼 집합도 동일하게 유지한다.
+  const includesStructuredSolutionFields = list.some(
+    (answer) =>
+      answer &&
+      typeof answer === "object" &&
+      (Object.prototype.hasOwnProperty.call(answer, "rubric_steps") ||
+        Object.prototype.hasOwnProperty.call(answer, "solution_metadata")),
+  );
 
   const rows = [];
   for (let i = 0; i < list.length; i += 1) {
@@ -9811,6 +10048,44 @@ async function handleTextbookAnswersBatchUpsert(body, res) {
       String(a.answer_image_height_px ?? ""),
       10,
     );
+    const rubricSteps = [];
+    for (const [stepIndex, rawStep] of (
+      Array.isArray(a.rubric_steps) ? a.rubric_steps.slice(0, 30) : []
+    ).entries()) {
+      if (!rawStep || typeof rawStep !== "object") continue;
+      const step = Number.parseInt(String(rawStep.step ?? ""), 10);
+      const points =
+        rawStep.points == null || String(rawStep.points).trim() === ""
+          ? null
+          : Number(rawStep.points);
+      rubricSteps.push({
+        step: Number.isFinite(step) && step > 0 ? step : stepIndex + 1,
+        label: String(rawStep.label || "").trim().slice(0, 300),
+        text: String(rawStep.text || "").trim().slice(0, 4000),
+        points: Number.isFinite(points) ? points : null,
+      });
+    }
+    const solutionMetadata =
+      a.solution_metadata &&
+      typeof a.solution_metadata === "object" &&
+      !Array.isArray(a.solution_metadata)
+        ? {
+            solution_kind:
+              String(a.solution_metadata.solution_kind || "") === "answer_only"
+                ? "answer_only"
+                : "full",
+            item_role: String(a.solution_metadata.item_role || "")
+              .trim()
+              .slice(0, 100),
+            total_points:
+              a.solution_metadata.total_points == null ||
+              String(a.solution_metadata.total_points).trim() === ""
+                ? null
+                : Number.isFinite(Number(a.solution_metadata.total_points))
+                  ? Number(a.solution_metadata.total_points)
+                  : null,
+          }
+        : {};
     let imageBucket = "";
     let imagePath = "";
     let imageSizeBytes = null;
@@ -9903,6 +10178,12 @@ async function handleTextbookAnswersBatchUpsert(body, res) {
       answer_image_size_bytes: imageSizeBytes,
       answer_image_content_hash: imageHash,
       note: a.note != null ? String(a.note) : null,
+      ...(includesStructuredSolutionFields
+        ? {
+            rubric_steps: rubricSteps,
+            solution_metadata: solutionMetadata,
+          }
+        : {}),
     };
     if (sourceRaw === "manual") {
       row.edited_at = nowIso;
@@ -11552,6 +11833,16 @@ async function handler(req, res) {
     ) {
       const body = await readJson(req);
       await handleTextbookVlmExtractBodySolutions(body, res);
+      return;
+    }
+
+    // 중등 개념원리 — 해설 PDF에서 정답·풀이·서술형 채점 구조 통합 추출.
+    if (
+      method === "POST" &&
+      url.pathname === "/textbook/vlm/extract-wonri-middle-solutions"
+    ) {
+      const body = await readJson(req);
+      await handleTextbookVlmExtractWonriMiddleSolutions(body, res);
       return;
     }
 

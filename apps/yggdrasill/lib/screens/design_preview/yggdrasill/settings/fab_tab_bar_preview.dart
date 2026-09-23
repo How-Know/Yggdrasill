@@ -697,6 +697,45 @@ class PreviewAcademyTimePill extends StatelessWidget {
     return '$period $hour:$minute';
   }
 
+  static const TextStyle _labelStyle = TextStyle(
+    fontFamily: FabTabBarTokens.previewAcademyValueFontFamily,
+    fontSize: FabTabBarTokens.previewAcademyTimePillFontSize,
+    fontWeight: FabTabBarTokens.previewAcademyValueFontWeight,
+    height: 1.0,
+  );
+
+  /// 2자리 시(10–12) 중 가장 넓은 표기. 1자리 시는 이 너비에 가운데 정렬한다.
+  static final Map<double, double> _widestTwoDigitLabelWidth = {};
+
+  static double _textWidth(String value, TextScaler textScaler) {
+    final painter = TextPainter(
+      text: TextSpan(text: value, style: _labelStyle),
+      textDirection: TextDirection.ltr,
+      textScaler: textScaler,
+      maxLines: 1,
+    )..layout();
+    return painter.width;
+  }
+
+  static double _widestTwoDigitLabelWidthFor(TextScaler textScaler) {
+    final key = textScaler.scale(FabTabBarTokens.previewAcademyTimePillFontSize);
+    final cached = _widestTwoDigitLabelWidth[key];
+    if (cached != null) return cached;
+    var widest = 0.0;
+    for (final period in const ['오전', '오후']) {
+      for (final hour in const [10, 11, 12]) {
+        for (var minute = 0; minute < 60; minute++) {
+          final label =
+              '$period $hour:${minute.toString().padLeft(2, '0')}';
+          final width = _textWidth(label, textScaler);
+          if (width > widest) widest = width;
+        }
+      }
+    }
+    _widestTwoDigitLabelWidth[key] = widest;
+    return widest;
+  }
+
   static const BorderRadius _pillRadius =
       BorderRadius.all(Radius.circular(999));
 
@@ -709,6 +748,13 @@ class PreviewAcademyTimePill extends StatelessWidget {
         ? Colors.transparent
         : FabTabBarTokens.fabHighlightPillFill(brightness);
     final textColor = isPlaceholder ? style.hint : palette.labelSelected;
+    final textScaler = MediaQuery.textScalerOf(context);
+    final contentWidth = math.max(
+      _widestTwoDigitLabelWidthFor(textScaler),
+      _textWidth(text, textScaler),
+    );
+    final pillWidth = contentWidth.ceilToDouble() +
+        FabTabBarTokens.previewAcademyTimePillPaddingHorizontal * 2;
 
     final pillBody = Padding(
       padding: const EdgeInsets.symmetric(
@@ -721,18 +767,13 @@ class PreviewAcademyTimePill extends StatelessWidget {
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           textAlign: TextAlign.center,
-          style: TextStyle(
-            fontFamily: FabTabBarTokens.previewAcademyValueFontFamily,
-            fontSize: FabTabBarTokens.previewAcademyTimePillFontSize,
-            fontWeight: FabTabBarTokens.previewAcademyValueFontWeight,
-            color: textColor,
-            height: 1.0,
-          ),
+          style: _labelStyle.copyWith(color: textColor),
         ),
       ),
     );
 
     final pill = SizedBox(
+      width: pillWidth,
       height: FabTabBarTokens.previewAcademyTimePillHeight,
       child: DecoratedBox(
         decoration: BoxDecoration(

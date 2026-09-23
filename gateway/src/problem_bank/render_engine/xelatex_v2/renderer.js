@@ -1059,6 +1059,9 @@ export async function renderPdfWithXeLatex({
         if (parsed && parsed.heightsPt.length > 0) {
           slotMeasure = parsed;
           baseBuildOptions.dependentSetSplitPlan = dependentSetSplitPlan;
+          // 고정 배치(클라이언트 명시 배치) 에서도 슬롯 높이 겹침 가드를 걸 수 있도록
+          //   측정 높이 자체는 항상 내려준다. 배치 결정에는 쓰이지 않는다.
+          baseBuildOptions.measuredQuestionHeights = parsed;
           if (shouldMeasureSlots) {
             const rawRatio = Number(renderConfig?.slotFillRatio);
             baseBuildOptions.measuredSlotPlan = {

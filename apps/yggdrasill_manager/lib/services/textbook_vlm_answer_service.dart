@@ -120,6 +120,15 @@ const Map<String, String> _kConceptPlusAnswerCorners = <String, String>{
   'extra_practice': '한번 더 연습',
 };
 
+const Map<String, String> _kWonriMiddleAnswerCorners = <String, String>{
+  'middle_concept_check': '개념원리 확인하기',
+  'middle_core_problem': '핵심문제 익히기',
+  'middle_exam_problem': '이런 문제가 시험에 나온다',
+  'middle_unit_review': '중단원 마무리하기',
+  'middle_descriptive': '서술형 대비 문제',
+  'middle_calculation': '계산력 강화하기',
+};
+
 /// 수력충전 크롭의 section → 답지 블록 이름.
 ///
 /// 소단원 블록에는 코너 이름 대신 소단원 이름이 찍혀 있어 크롭 정보만으로는
@@ -169,7 +178,10 @@ const Set<String> _kGojaengiBodySections = <String>{
 /// 앞자리 0 을 떼면서 겹치므로 여기 포함한다([_kGojaengiCorners] 주석 참고).
 bool textbookAnswerNeedsCorner(String seriesKey) {
   final key = seriesKey.trim().toLowerCase();
-  return key == 'gaeyu' || key == 'suryeok' || key == 'gojaengi';
+  return key == 'gaeyu' ||
+      key == 'suryeok' ||
+      key == 'gojaengi' ||
+      key == 'wonri_middle';
 }
 
 /// 번호가 블록마다 1번부터 다시 시작하는 코너. 앱은 이 코너의 크롭에만
@@ -254,6 +266,14 @@ TextbookExpectedAnswer textbookExpectedAnswerFor({
       bodyPage: bodyPage,
     );
   }
+  if (seriesKey.trim().toLowerCase() == 'wonri_middle') {
+    return TextbookExpectedAnswer(
+      number: problemNumber,
+      corner: _kWonriMiddleAnswerCorners[section.trim()] ?? '',
+      blockTitle: midName.trim(),
+      bodyPage: bodyPage,
+    );
+  }
   return TextbookExpectedAnswer(
     number: _conceptPlusPrintedNumber(
       number: problemNumber,
@@ -290,6 +310,143 @@ String textbookAnswerNumberKey(String raw) {
     );
   }
   return numbers.first;
+}
+
+/// 중등 개념원리 문항의 실제 풀이 출처를 가르는 역할값.
+///
+/// B의 대표 예제와 E의 서술형 예시는 본문에 풀이·답이 있고, B의 확인 및
+/// E의 유제는 해설 PDF에 숫자만(1, 2, ...) 인쇄된다.
+String textbookWonriMiddleItemRole({
+  required String section,
+  required String problemNumber,
+  String itemName = '',
+}) {
+  final normalizedSection = section.trim().toLowerCase();
+  final number = problemNumber.replaceAll(RegExp(r'\s+'), '');
+  final name = itemName.replaceAll(RegExp(r'\s+'), '');
+  if (normalizedSection == 'middle_core_problem') {
+    if (name.contains('확인') || number.startsWith('확인')) {
+      return 'follow_up';
+    }
+    return 'representative';
+  }
+  if (normalizedSection == 'middle_descriptive') {
+    if (name.contains('예시') || number.startsWith('예제')) {
+      return 'descriptive_example';
+    }
+    if (name.contains('대비') || number.startsWith('유제')) {
+      return 'follow_up';
+    }
+  }
+  return 'standard';
+}
+
+/// 저장 키에는 대표 예제/확인, 서술형 예제/유제의 같은 인쇄 숫자가 충돌하지
+/// 않도록 역할 접두어를 보존한다. VLM이 역할은 맞게 읽고 number만 "01"로
+/// 반환한 경우도 여기서 "확인 1"처럼 복원한다.
+String textbookWonriMiddleStoredProblemNumber({
+  required String section,
+  required String problemNumber,
+  String itemRole = '',
+}) {
+  final value = problemNumber.trim();
+  final match = RegExp(r'\d+').firstMatch(value);
+  if (match == null) return value;
+  final parsed = int.tryParse(match.group(0) ?? '');
+  if (parsed == null) return value;
+  final number = '$parsed';
+  final normalizedSection = section.trim().toLowerCase();
+  final normalizedRole = itemRole.trim().toLowerCase();
+
+  if (normalizedSection == 'middle_core_problem' &&
+      normalizedRole == 'follow_up') {
+    return RegExp(r'^확인\s*\d+$').hasMatch(value) ? value : '확인 $number';
+  }
+  if (normalizedSection == 'middle_descriptive') {
+    if (normalizedRole == 'descriptive_example') {
+      return RegExp(r'^(?:예시|예제)\s*\d*$').hasMatch(value)
+          ? value
+          : '예제 $number';
+    }
+    if (normalizedRole == 'follow_up') {
+      return RegExp(r'^유제\s*\d+$').hasMatch(value) ? value : '유제 $number';
+    }
+  }
+  return value;
+}
+
+bool textbookWonriMiddleUsesBodySolution({
+  required String section,
+  required String problemNumber,
+  String itemName = '',
+}) {
+  final role = textbookWonriMiddleItemRole(
+    section: section,
+    problemNumber: problemNumber,
+    itemName: itemName,
+  );
+  return role == 'representative' || role == 'descriptive_example';
+}
+
+/// 해설에는 "확인 3", "유제 3"이 모두 단순히 "3"으로 인쇄된다.
+/// 화면/DB의 구분 접두어와 해설 인쇄번호를 같은 키로 맞춘다.
+String textbookWonriMiddlePrintedNumberKey(String raw) {
+  final match = RegExp(r'\d+').firstMatch(raw);
+  if (match == null) return raw.replaceAll(RegExp(r'\s+'), '').trim();
+  final value = int.tryParse(match.group(0) ?? '');
+  return value == null ? '' : '$value';
+}
+
+/// 중등 개념원리 해설 한 지면에 보낼 판독 요청을 묶는다.
+///
+/// 해설은 소단원마다 코너 박스가 하나씩, 그 안의 번호가 1부터 오름차순으로만
+/// 인쇄된다. 한 요청에 두 소단원의 같은 인쇄번호(확인 1~6이 두 벌)가 섞이거나
+/// 번호가 뒤섞여 들어가면 모델이 어느 박스를 봐야 할지 정하지 못하고 items를
+/// 통째로 비운다. 코너와 소단원이 같은 문항만 번호 오름차순으로 모은다.
+List<List<int>> textbookWonriMiddleRequestBatches({
+  required List<int> order,
+  required String Function(int position) sectionOf,
+  required String Function(int position) scopeKeyOf,
+  required String Function(int position) numberOf,
+  int maxPerBatch = 16,
+}) {
+  final groups = <String, List<int>>{};
+  for (final position in order) {
+    groups
+        .putIfAbsent(
+          '${sectionOf(position)}|${scopeKeyOf(position)}',
+          () => <int>[],
+        )
+        .add(position);
+  }
+  int rank(int position) {
+    final digits = RegExp(r'\d+').firstMatch(numberOf(position))?.group(0);
+    return digits == null ? 1 << 30 : int.parse(digits);
+  }
+
+  final out = <List<int>>[];
+  for (final group in groups.values) {
+    group.sort((a, b) {
+      final byNumber = rank(a).compareTo(rank(b));
+      return byNumber != 0 ? byNumber : a.compareTo(b);
+    });
+    for (var offset = 0; offset < group.length; offset += maxPerBatch) {
+      out.add(group.skip(offset).take(maxPerBatch).toList(growable: false));
+    }
+  }
+  return out;
+}
+
+/// 상세 해설은 다음 소단원의 빠른 정답 박스가 시작되는 지면 위쪽까지
+/// 이어질 수 있다. 정답 단계는 입력 범위 안에서 끝내고, 해설 단계만 경계
+/// 지면 한 쪽을 더 허용한다.
+int textbookWonriMiddleScanEnd({
+  required bool answers,
+  required int scopeEnd,
+  required int pageCount,
+}) {
+  if (answers) return scopeEnd.clamp(1, pageCount);
+  return (scopeEnd + 1).clamp(1, pageCount);
 }
 
 /// 답지에 "05~09" 처럼 범위로 인쇄된 머리표를 양 끝 번호로 읽는다.
@@ -1034,6 +1191,8 @@ class TextbookAnswerUpload {
     this.answerImageWidthPx,
     this.answerImageHeightPx,
     this.note,
+    this.rubricSteps = const <Map<String, dynamic>>[],
+    this.solutionMetadata = const <String, dynamic>{},
   });
 
   final String cropId;
@@ -1049,6 +1208,8 @@ class TextbookAnswerUpload {
   final int? answerImageWidthPx;
   final int? answerImageHeightPx;
   final String? note;
+  final List<Map<String, dynamic>> rubricSteps;
+  final Map<String, dynamic> solutionMetadata;
 
   Map<String, dynamic> toJson() => <String, dynamic>{
         'crop_id': cropId,
@@ -1068,5 +1229,7 @@ class TextbookAnswerUpload {
         if (answerImageHeightPx != null)
           'answer_image_height_px': answerImageHeightPx,
         if (note != null) 'note': note,
+        if (rubricSteps.isNotEmpty) 'rubric_steps': rubricSteps,
+        if (solutionMetadata.isNotEmpty) 'solution_metadata': solutionMetadata,
       };
 }

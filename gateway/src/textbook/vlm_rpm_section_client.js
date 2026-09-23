@@ -345,6 +345,51 @@ export function buildSsenSectionPrompt(rawPages) {
   return buildProblemBookSectionPrompt(rawPages, 'ssen');
 }
 
+export function buildWonriMiddleStructurePrompt(rawPages) {
+  const pageList = rawPages.map((page, index) => `${index}:${page}`).join(', ');
+  return [
+    '당신은 한국 중등 수학 개념서 "개념원리"의 본문 페이지에서 소단원 경계를',
+    '찾는 비전 AI다. 문항 번호나 좌표는 추출하지 말고 지면 머리말만 읽어라.',
+    '반드시 JSON만 출력하고 설명·마크다운·코드펜스는 금지한다.',
+    '',
+    `첨부 이미지 순서(image_index: PDF raw page)는 다음과 같다: ${pageList}`,
+    '',
+    '=== 판독 대상 ===',
+    '[S1] 소단원 시작 지면에는 큰 소단원 번호와 제목이 인쇄된다.',
+    '     예: "01 소인수분해", "02 소인수분해를 이용하여 약수 구하기".',
+    '     정확한 소단원 머리말이 실제로 보이는 지면만',
+    '     sub_unit_header_visible=true 로 하고, 번호를 뺀 제목만',
+    '     sub_unit_name 에 적어라.',
+    '[S2] "개념원리 이해", "개념원리 확인하기", "핵심문제 익히기",',
+    '     "이런 문제가 시험에 나온다", "계산력 강화하기", "KEY POINT",',
+    '     "힌트", "참고"는 학습영역/보조 라벨이지 소단원 이름이 아니다.',
+    '[S3] 중단원 말미의 "중단원 마무리하기"가 처음 보이면',
+    '     unit_end_kind="review", "서술형 대비 문제"가 처음 보이면',
+    '     unit_end_kind="descriptive" 로 적는다. 둘 다 일반 소단원이 아니다.',
+    '[S4] "계산력 강화하기"가 실제로 보이면 calculation_header_visible=true.',
+    '     일부 소단원에만 나오므로 앞뒤 페이지 문맥으로 만들어내지 마라.',
+    '[S5] 이어지는 지면에 소단원 제목이 반복되지 않으면 헤더 플래그를 false로',
+    '     두고 이름도 빈 문자열로 둔다. 이전 이미지의 이름을 복사하지 마라.',
+    '',
+    '=== 출력 스키마 ===',
+    '{',
+    '  "pages": [',
+    '    {',
+    '      "image_index": <0부터 시작하는 첨부 이미지 순번>,',
+    '      "raw_page": <위 목록의 PDF raw page>,',
+    '      "sub_unit_header_visible": <bool>,',
+    '      "sub_unit_name": "<번호를 뺀 소단원명. 헤더가 없으면 빈 문자열>",',
+    '      "unit_end_kind": "review" | "descriptive" | "none",',
+    '      "calculation_header_visible": <bool>',
+    '    }',
+    '  ],',
+    '  "notes": "<판독 불가/누락 이미지가 있으면 간단히, 없으면 빈 문자열>"',
+    '}',
+    '',
+    '모든 첨부 이미지에 대해 pages 항목을 정확히 하나씩 image_index 순서대로 반환하라.',
+  ].join('\n');
+}
+
 export async function classifyRpmSectionPages({
   images, // [{ imageBase64, mimeType?, rawPage }]
   series = 'rpm',
@@ -381,7 +426,9 @@ export async function classifyRpmSectionPages({
             text:
               scope === 'workbook'
                 ? buildGojaengiWorkbookPrompt(rawPages)
-                : buildProblemBookSectionPrompt(rawPages, series),
+                : scope === 'wonri_middle_structure'
+                  ? buildWonriMiddleStructurePrompt(rawPages)
+                  : buildProblemBookSectionPrompt(rawPages, series),
           },
         ],
       },
@@ -504,6 +551,56 @@ export function normalizeRpmSectionResult(parsedJson, rawPages, series = 'rpm') 
   return {
     pages: inputPages.map(
       (page, imageIndex) => byIndex.get(imageIndex) || blank(page, imageIndex),
+    ),
+    notes: String(parsedJson?.notes || '').trim(),
+  };
+}
+
+export function normalizeWonriMiddleStructureResult(parsedJson, rawPages) {
+  const inputPages = Array.isArray(rawPages) ? rawPages : [];
+  const rows = Array.isArray(parsedJson?.pages) ? parsedJson.pages : [];
+  const byIndex = new Map();
+  const allowedEndKinds = new Set(['review', 'descriptive', 'none']);
+  for (const raw of rows) {
+    if (!raw || typeof raw !== 'object') continue;
+    const imageIndex = Number.parseInt(String(raw.image_index ?? ''), 10);
+    if (
+      !Number.isFinite(imageIndex) ||
+      imageIndex < 0 ||
+      imageIndex >= inputPages.length
+    ) {
+      continue;
+    }
+    const headerVisible = raw.sub_unit_header_visible === true;
+    const name = headerVisible
+      ? String(raw.sub_unit_name || '')
+          .replace(
+            /^\s*(?:[OoＯｏ]?\d+|\d+(?:\s*-\s*\d+)?)\s*[.)·-]?\s*/,
+            '',
+          )
+          .trim()
+      : '';
+    const endKindRaw = String(raw.unit_end_kind || '').trim();
+    byIndex.set(imageIndex, {
+      image_index: imageIndex,
+      raw_page: inputPages[imageIndex],
+      sub_unit_header_visible: headerVisible && name !== '',
+      sub_unit_name: name,
+      unit_end_kind: allowedEndKinds.has(endKindRaw) ? endKindRaw : 'none',
+      calculation_header_visible: raw.calculation_header_visible === true,
+    });
+  }
+  return {
+    pages: inputPages.map(
+      (page, imageIndex) =>
+        byIndex.get(imageIndex) || {
+          image_index: imageIndex,
+          raw_page: page,
+          sub_unit_header_visible: false,
+          sub_unit_name: '',
+          unit_end_kind: 'none',
+          calculation_header_visible: false,
+        },
     ),
     notes: String(parsedJson?.notes || '').trim(),
   };

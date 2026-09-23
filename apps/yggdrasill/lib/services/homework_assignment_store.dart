@@ -196,7 +196,11 @@ class HomeworkStructuredGradingRollbackResult {
 }
 
 class HomeworkAssignmentStore {
-  HomeworkAssignmentStore._internal();
+  HomeworkAssignmentStore._internal() {
+    TenantService.instance.addActiveAcademyChangedListener(
+      (_) => resetForSession(),
+    );
+  }
   static final HomeworkAssignmentStore instance =
       HomeworkAssignmentStore._internal();
   final LearningProblemBankService _problemBankService =
@@ -290,6 +294,24 @@ class HomeworkAssignmentStore {
     _activeAssignmentsCacheByStudent.clear();
     _pendingReservedHomeworkItemIdsByStudent.clear();
     _activeAssignmentsLoadCompletedForStudent.clear();
+  }
+
+  Future<void> resetForSession() async {
+    final assignmentsChannel = _rtAssignments;
+    final checksChannel = _rtChecks;
+    _rtAssignments = null;
+    _rtChecks = null;
+    _rtAcademyId = null;
+    clearActiveAssignmentsCache();
+    _activeAssignmentLoadInFlightByStudent.clear();
+    _activeAssignmentInFlightGenerationByStudent.clear();
+    try {
+      await assignmentsChannel?.unsubscribe();
+    } catch (_) {}
+    try {
+      await checksChannel?.unsubscribe();
+    } catch (_) {}
+    _bump();
   }
 
   Set<String> peekPendingReservedHomeworkItemIds(String studentId) {
@@ -480,6 +502,9 @@ class HomeworkAssignmentStore {
     }
     try {
       if (_rtAcademyId != academyId) {
+        if (_rtAcademyId != null) {
+          clearActiveAssignmentsCache();
+        }
         _rtAssignments?.unsubscribe();
         _rtChecks?.unsubscribe();
         _rtAssignments = null;
@@ -689,6 +714,86 @@ class HomeworkAssignmentStore {
       }
     }
     return out;
+  }
+
+  Future<List<HomeworkAssignmentDetail>> _activeDetailsFromRows({
+    required String academyId,
+    required List<Map<String, dynamic>> rows,
+  }) async {
+    DateTime? parseTs(dynamic value) {
+      if (value == null) return null;
+      final text = value as String?;
+      if (text == null || text.isEmpty) return null;
+      return DateTime.tryParse(text)?.toLocal();
+    }
+
+    int parseInt(dynamic value) {
+      if (value == null) return 0;
+      if (value is int) return value;
+      if (value is num) return value.toInt();
+      if (value is String) return int.tryParse(value) ?? 0;
+      return 0;
+    }
+
+    final liveReleaseExportJobIds = <String>{};
+    for (final row in rows) {
+      final exportJobId = _resolveLiveReleaseExportJobId(row);
+      if (exportJobId.isNotEmpty) {
+        liveReleaseExportJobIds.add(exportJobId);
+      }
+    }
+    final signedUrlByExportJobId = await _loadLiveReleaseSignedUrlByExportJobId(
+      academyId: academyId,
+      exportJobIds: liveReleaseExportJobIds,
+    );
+
+    return rows.map((row) {
+      final hw = row['homework_items'] as Map<String, dynamic>?;
+      final groupId = _asTrimmed(row['group_id']);
+      final groupTitleSnapshot = _asTrimmed(row['group_title_snapshot']);
+      final splitParts = _normalizeSplitParts(row['split_parts']);
+      final liveReleaseId = _asTrimmed(row['live_release_id']);
+      final releaseExportJobId = _asTrimmed(row['release_export_job_id']);
+      final resolvedExportJobId = _resolveLiveReleaseExportJobId(row);
+      final signedUrl = signedUrlByExportJobId[resolvedExportJobId];
+      return HomeworkAssignmentDetail(
+        id: (row['id'] as String?) ?? '',
+        homeworkItemId: (row['homework_item_id'] as String?) ?? '',
+        groupId: groupId.isEmpty ? null : groupId,
+        groupTitleSnapshot:
+            groupTitleSnapshot.isEmpty ? null : groupTitleSnapshot,
+        assignedAt: parseTs(row['assigned_at']) ?? DateTime.now(),
+        dueDate: parseTs(row['due_at']) ?? parseTs(row['due_date']),
+        orderIndex: parseInt(row['order_index']),
+        status: (row['status'] as String?) ?? 'assigned',
+        originalDueDate: parseTs(row['original_due_at']),
+        dueForCheckAt: parseTs(row['due_for_check_at']),
+        absenceCarryover: row['absence_carryover'] == true,
+        deferCount: parseInt(row['defer_count']),
+        note: (row['note'] as String?)?.trim(),
+        progress: parseInt(row['progress']),
+        issueType: row['issue_type'] as String?,
+        issueNote: row['issue_note'] as String?,
+        title: (hw?['title'] as String?) ?? '',
+        type: (hw?['type'] as String?)?.trim(),
+        page: (hw?['page'] as String?)?.trim(),
+        count: hw?['count'] is num
+            ? (hw?['count'] as num).toInt()
+            : int.tryParse('${hw?['count'] ?? ''}'),
+        content: (hw?['content'] as String?)?.trim(),
+        flowId: hw?['flow_id'] as String?,
+        repeatIndex: _normalizeRepeatIndex(row['repeat_index']),
+        splitParts: splitParts,
+        splitRound: _normalizeSplitRound(row['split_round'], splitParts),
+        liveReleaseId: liveReleaseId.isEmpty ? null : liveReleaseId,
+        releaseExportJobId:
+            releaseExportJobId.isEmpty ? null : releaseExportJobId,
+        liveReleaseLockedAt: parseTs(row['live_release_locked_at']),
+        liveReleaseSignedUrl: signedUrl == null || signedUrl.trim().isEmpty
+            ? null
+            : signedUrl.trim(),
+      );
+    }).toList(growable: false);
   }
 
   Future<Map<String, HomeworkAssignmentGroupMeta>> _loadGroupMetaByItemIds({
@@ -1214,6 +1319,127 @@ class HomeworkAssignmentStore {
     }
   }
 
+  /// Loads active assignments for multiple students with one PostgREST query.
+  /// Results populate the same per-student SWR cache used by
+  /// [loadActiveAssignments].
+  Future<Map<String, List<HomeworkAssignmentDetail>>>
+      loadActiveAssignmentsForStudents(
+    Iterable<String> studentIds, {
+    bool notify = true,
+  }) async {
+    final ids = studentIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (ids.isEmpty) return const {};
+    final stopwatch = Stopwatch()..start();
+    final generations = <String, int>{
+      for (final id in ids)
+        id: _activeAssignmentLoadGenerationByStudent.putIfAbsent(id, () => 0),
+    };
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
+      _ensureRealtimeForAcademy(academyId);
+
+      Future<List<dynamic>> runSelect(String selectClause) async {
+        final rows = await Supabase.instance.client
+            .from('homework_assignments')
+            .select(selectClause)
+            .eq('academy_id', academyId)
+            .inFilter('student_id', ids)
+            .inFilter(
+              'status',
+              const ['assigned', 'in_progress', 'carried_to_class'],
+            )
+            .order('due_date', ascending: true)
+            .order('order_index', ascending: true)
+            .order('assigned_at', ascending: false);
+        return rows as List<dynamic>;
+      }
+
+      const withGroupAndLiveRelease =
+          'id,student_id,homework_item_id,group_id,group_title_snapshot,assigned_at,due_date,due_at,original_due_at,due_for_check_at,absence_carryover,defer_count,order_index,status,note,progress,issue_type,issue_note,repeat_index,split_parts,split_round,live_release_id,release_export_job_id,live_release_locked_at,pb_live_releases(active_export_job_id,frozen_export_job_id),homework_items(id,title,type,page,count,content,flow_id)';
+      const withGroupLegacyLiveRelease =
+          'id,student_id,homework_item_id,group_id,group_title_snapshot,assigned_at,due_date,due_at,original_due_at,due_for_check_at,absence_carryover,defer_count,order_index,status,note,progress,issue_type,issue_note,repeat_index,split_parts,split_round,homework_items(id,title,type,page,count,content,flow_id)';
+      const legacyWithLiveRelease =
+          'id,student_id,homework_item_id,assigned_at,due_date,due_at,original_due_at,due_for_check_at,absence_carryover,defer_count,order_index,status,note,progress,issue_type,issue_note,repeat_index,split_parts,split_round,live_release_id,release_export_job_id,live_release_locked_at,pb_live_releases(active_export_job_id,frozen_export_job_id),homework_items(id,title,type,page,count,content,flow_id)';
+      const legacy =
+          'id,student_id,homework_item_id,assigned_at,due_date,due_at,original_due_at,due_for_check_at,absence_carryover,defer_count,order_index,status,note,progress,issue_type,issue_note,repeat_index,split_parts,split_round,homework_items(id,title,type,page,count,content,flow_id)';
+
+      late final List<dynamic> rawRows;
+      try {
+        rawRows = await runSelect(withGroupAndLiveRelease);
+      } catch (e) {
+        if (_isMissingAssignmentGroupColumnsError(e)) {
+          try {
+            rawRows = await runSelect(legacyWithLiveRelease);
+          } catch (legacyError) {
+            if (_isMissingLiveReleaseColumnsError(legacyError)) {
+              rawRows = await runSelect(legacy);
+            } else {
+              rethrow;
+            }
+          }
+        } else if (_isMissingLiveReleaseColumnsError(e)) {
+          rawRows = await runSelect(withGroupLegacyLiveRelease);
+        } else {
+          rethrow;
+        }
+      }
+
+      final rows = rawRows.cast<Map<String, dynamic>>();
+      final details = await _activeDetailsFromRows(
+        academyId: academyId,
+        rows: rows,
+      );
+      final byStudent = <String, List<HomeworkAssignmentDetail>>{
+        for (final id in ids) id: <HomeworkAssignmentDetail>[],
+      };
+      for (var index = 0; index < rows.length; index++) {
+        final studentId = _asTrimmed(rows[index]['student_id']);
+        if (studentId.isEmpty) continue;
+        byStudent[studentId]?.add(details[index]);
+      }
+
+      final result = <String, List<HomeworkAssignmentDetail>>{};
+      for (final id in ids) {
+        if (_activeAssignmentLoadGenerationByStudent[id] != generations[id]) {
+          result[id] = List<HomeworkAssignmentDetail>.from(
+            _activeAssignmentsCacheByStudent[id] ??
+                const <HomeworkAssignmentDetail>[],
+          );
+          continue;
+        }
+        final merged =
+            _mergeServerActiveWithOptimisticReservations(id, byStudent[id]!);
+        _prunePendingReservedAfterLoad(id, merged);
+        final cached = List<HomeworkAssignmentDetail>.unmodifiable(merged);
+        _activeAssignmentsCacheByStudent[id] = cached;
+        _activeAssignmentsLoadCompletedForStudent.add(id);
+        result[id] = List<HomeworkAssignmentDetail>.from(cached);
+      }
+      if (notify) _bump();
+      debugPrint(
+        '[HW_ASSIGN][loadActiveBulk] students=${ids.length} '
+        'rows=${rows.length} elapsedMs=${stopwatch.elapsedMilliseconds}',
+      );
+      return result;
+    } catch (e, st) {
+      debugPrint(
+        '[HW_ASSIGN][loadActiveBulk][ERROR] students=${ids.length} $e\n$st',
+      );
+      return <String, List<HomeworkAssignmentDetail>>{
+        for (final id in ids)
+          id: List<HomeworkAssignmentDetail>.from(
+            _activeAssignmentsCacheByStudent[id] ??
+                const <HomeworkAssignmentDetail>[],
+          ),
+      };
+    }
+  }
+
   Future<List<HomeworkAssignmentDetail>> _loadActiveAssignmentsForGeneration({
     required String studentId,
     required String key,
@@ -1269,85 +1495,11 @@ class HomeworkAssignmentStore {
           rethrow;
         }
       }
-      final List<HomeworkAssignmentDetail> list = [];
-      DateTime? parseTs(dynamic v) {
-        if (v == null) return null;
-        final s = v as String?;
-        if (s == null || s.isEmpty) return null;
-        return DateTime.tryParse(s)?.toLocal();
-      }
-
-      int parseInt(dynamic v) {
-        if (v == null) return 0;
-        if (v is int) return v;
-        if (v is num) return v.toInt();
-        if (v is String) return int.tryParse(v) ?? 0;
-        return 0;
-      }
-
       final typedRows = rows.cast<Map<String, dynamic>>();
-      final liveReleaseExportJobIds = <String>{};
-      for (final row in typedRows) {
-        final exportJobId = _resolveLiveReleaseExportJobId(row);
-        if (exportJobId.isNotEmpty) {
-          liveReleaseExportJobIds.add(exportJobId);
-        }
-      }
-      final signedUrlByExportJobId =
-          await _loadLiveReleaseSignedUrlByExportJobId(
+      final list = await _activeDetailsFromRows(
         academyId: academyId,
-        exportJobIds: liveReleaseExportJobIds,
+        rows: typedRows,
       );
-
-      for (final r in typedRows) {
-        final hw = r['homework_items'] as Map<String, dynamic>?;
-        final groupId = _asTrimmed(r['group_id']);
-        final groupTitleSnapshot = _asTrimmed(r['group_title_snapshot']);
-        final splitParts = _normalizeSplitParts(r['split_parts']);
-        final liveReleaseId = _asTrimmed(r['live_release_id']);
-        final releaseExportJobId = _asTrimmed(r['release_export_job_id']);
-        final resolvedExportJobId = _resolveLiveReleaseExportJobId(r);
-        final signedUrl = signedUrlByExportJobId[resolvedExportJobId];
-        list.add(
-          HomeworkAssignmentDetail(
-            id: (r['id'] as String?) ?? '',
-            homeworkItemId: (r['homework_item_id'] as String?) ?? '',
-            groupId: groupId.isEmpty ? null : groupId,
-            groupTitleSnapshot:
-                groupTitleSnapshot.isEmpty ? null : groupTitleSnapshot,
-            assignedAt: parseTs(r['assigned_at']) ?? DateTime.now(),
-            dueDate: parseTs(r['due_at']) ?? parseTs(r['due_date']),
-            orderIndex: parseInt(r['order_index']),
-            status: (r['status'] as String?) ?? 'assigned',
-            originalDueDate: parseTs(r['original_due_at']),
-            dueForCheckAt: parseTs(r['due_for_check_at']),
-            absenceCarryover: r['absence_carryover'] == true,
-            deferCount: parseInt(r['defer_count']),
-            note: (r['note'] as String?)?.trim(),
-            progress: parseInt(r['progress']),
-            issueType: r['issue_type'] as String?,
-            issueNote: r['issue_note'] as String?,
-            title: (hw?['title'] as String?) ?? '',
-            type: (hw?['type'] as String?)?.trim(),
-            page: (hw?['page'] as String?)?.trim(),
-            count: hw?['count'] is num
-                ? (hw?['count'] as num).toInt()
-                : int.tryParse('${hw?['count'] ?? ''}'),
-            content: (hw?['content'] as String?)?.trim(),
-            flowId: hw?['flow_id'] as String?,
-            repeatIndex: _normalizeRepeatIndex(r['repeat_index']),
-            splitParts: splitParts,
-            splitRound: _normalizeSplitRound(r['split_round'], splitParts),
-            liveReleaseId: liveReleaseId.isEmpty ? null : liveReleaseId,
-            releaseExportJobId:
-                releaseExportJobId.isEmpty ? null : releaseExportJobId,
-            liveReleaseLockedAt: parseTs(r['live_release_locked_at']),
-            liveReleaseSignedUrl: signedUrl == null || signedUrl.trim().isEmpty
-                ? null
-                : signedUrl.trim(),
-          ),
-        );
-      }
       // 먼저 시작한 느린 요청이 최신 요청보다 늦게 끝나 캐시를 되돌리지 않게 한다.
       if (_activeAssignmentLoadGenerationByStudent[key] != generation) {
         return List<HomeworkAssignmentDetail>.from(

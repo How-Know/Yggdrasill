@@ -2274,9 +2274,15 @@ class _ProblemBankExportServerPreviewDialogState
         );
         _syncCoverPageTextControllers(refreshed.coverPageTexts);
         if (_isTwoColumnLayout) {
-          _pageOverrides = _parsePageOverrides(
+          // 서버가 배치를 돌려주지 않으면(고정 배치라 자동 배치를 안 돌린 경우 등)
+          // 현재 배치를 그대로 유지한다. 빈 값으로 덮으면 첫 자동 배치 결과가
+          // 기본 균등 배치로 되돌아가 버린다.
+          final refreshedOverrides = _parsePageOverrides(
             refreshed.pageColumnQuestionCounts,
           );
+          if (refreshedOverrides.isNotEmpty) {
+            _pageOverrides = refreshedOverrides;
+          }
           _computedPageColumnCounts = _recomputePageColumnCounts();
           _columnLabelAnchorMap = _parseColumnLabelAnchors(
             refreshed.columnLabelAnchors,

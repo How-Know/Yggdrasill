@@ -40,6 +40,8 @@ import 'answer_key_service.dart';
 import 'season_roadmap_service.dart';
 import 'attendance_service.dart';
 import 'homework_score_service.dart';
+import 'homework_store.dart';
+import 'homework_assignment_store.dart';
 import 'point_service.dart';
 import 'realtime_reconciler.dart';
 import 'package:supabase_flutter/supabase_flutter.dart'
@@ -940,7 +942,7 @@ class DataManager {
 
   /// `preloadAllExamData`가 현재 활성 시즌에 대해 벌크로 채운 뒤 설정됨. `loadExamFor` 메모리 히트에 사용.
   int? _examBulkHydratedSeasonId;
-  Future<void>? _preloadAllExamDataInFlight;
+  Future<bool>? _preloadAllExamDataInFlight;
 
   String _sgKey(String school, EducationLevel level, int grade) =>
       '${level.index}|$school|$grade';
@@ -998,7 +1000,11 @@ class DataManager {
     return {'schedules': schedules, 'ranges': ranges, 'days': days};
   }
 
-  void _materializeEmptyExamKeysForStudents() {
+  void _materializeEmptyExamKeysForStudents({
+    required Map<String, Map<DateTime, List<String>>> titlesBySg,
+    required Map<String, Map<DateTime, String>> rangesBySg,
+    required Map<String, Set<DateTime>> daysBySg,
+  }) {
     final seen = <String>{};
     for (final sw in _studentsWithInfo) {
       final st = sw.student;
@@ -1009,13 +1015,18 @@ class DataManager {
       final key = _sgKey(school, level, grade);
       if (seen.contains(key)) continue;
       seen.add(key);
-      _examTitlesBySg.putIfAbsent(key, () => {});
-      _examRangesBySg.putIfAbsent(key, () => {});
-      _examDaysBySg.putIfAbsent(key, () => {});
+      titlesBySg.putIfAbsent(key, () => {});
+      rangesBySg.putIfAbsent(key, () => {});
+      daysBySg.putIfAbsent(key, () => {});
     }
   }
 
-  Future<void> _fillExamMapsFromSqlite(int seasonId) async {
+  Future<void> _fillExamMapsFromSqlite(
+    int seasonId, {
+    required Map<String, Map<DateTime, List<String>>> titlesBySg,
+    required Map<String, Map<DateTime, String>> rangesBySg,
+    required Map<String, Set<DateTime>> daysBySg,
+  }) async {
     final schedules =
         await AcademyDbService.instance.loadAllExamSchedulesForSeason(seasonId);
     for (final r in schedules) {
@@ -1032,7 +1043,7 @@ class DataManager {
         list = [];
       }
       final key = _sgKey(school, level, grade);
-      final map = _examTitlesBySg.putIfAbsent(key, () => {});
+      final map = titlesBySg.putIfAbsent(key, () => {});
       map[DateTime(d.year, d.month, d.day)] =
           list.map((e) => e.toString()).toList();
     }
@@ -1047,7 +1058,7 @@ class DataManager {
       if (school.isEmpty || iso.isEmpty) continue;
       final d = DateTime.parse(iso);
       final key = _sgKey(school, level, grade);
-      final map = _examRangesBySg.putIfAbsent(key, () => {});
+      final map = rangesBySg.putIfAbsent(key, () => {});
       map[DateTime(d.year, d.month, d.day)] = text;
     }
     final days =
@@ -1060,12 +1071,17 @@ class DataManager {
       if (school.isEmpty || iso.isEmpty) continue;
       final d = DateTime.parse(iso);
       final key = _sgKey(school, level, grade);
-      final set = _examDaysBySg.putIfAbsent(key, () => {});
+      final set = daysBySg.putIfAbsent(key, () => {});
       set.add(DateTime(d.year, d.month, d.day));
     }
   }
 
-  Future<void> _mergeExamMapsFromSupabaseBulk(int seasonId) async {
+  Future<void> _mergeExamMapsFromSupabaseBulk(
+    int seasonId, {
+    required Map<String, Map<DateTime, List<String>>> titlesBySg,
+    required Map<String, Map<DateTime, String>> rangesBySg,
+    required Map<String, Set<DateTime>> daysBySg,
+  }) async {
     final academyId = await TenantService.instance.getActiveAcademyId() ??
         await TenantService.instance.ensureActiveAcademy();
     final supa = Supabase.instance.client;
@@ -1110,7 +1126,7 @@ class DataManager {
         list = [];
       }
       final key = _sgKey(school, level, grade);
-      final map = _examTitlesBySg.putIfAbsent(key, () => {});
+      final map = titlesBySg.putIfAbsent(key, () => {});
       map[DateTime(d.year, d.month, d.day)] =
           list.map((e) => e.toString()).toList();
     }
@@ -1132,7 +1148,7 @@ class DataManager {
       final d = DateTime.parse(iso);
       final text = (r['range_text'] as String?) ?? '';
       final key = _sgKey(school, level, grade);
-      final map = _examRangesBySg.putIfAbsent(key, () => {});
+      final map = rangesBySg.putIfAbsent(key, () => {});
       map[DateTime(d.year, d.month, d.day)] = text;
     }
     final days = fetched[2] as List;
@@ -1152,7 +1168,7 @@ class DataManager {
       final level = EducationLevel.values[levelIdx];
       final d = DateTime.parse(iso);
       final key = _sgKey(school, level, grade);
-      final set = _examDaysBySg.putIfAbsent(key, () => {});
+      final set = daysBySg.putIfAbsent(key, () => {});
       set.add(DateTime(d.year, d.month, d.day));
     }
   }
@@ -4320,6 +4336,8 @@ class DataManager {
           await reloadAllData();
         } else if (state.event == AuthChangeEvent.signedOut) {
           // 세션 종료 시 민감 데이터 비움
+          await HomeworkStore.instance.resetForSession();
+          await HomeworkAssignmentStore.instance.resetForSession();
           _studentsWithInfo = [];
           _studentTimeBlocks = [];
           studentsNotifier.value = List.unmodifiable(_studentsWithInfo);
@@ -7596,6 +7614,12 @@ class DataManager {
         snapshotId: snapshotId,
         batchSessionId: batchSessionId,
       );
+  Future<List<AttendanceRecord>> listMissingDeparturesPastCap() =>
+      AttendanceService.instance.listMissingDeparturesPastCap();
+
+  Future<int> closeMissingDepartures(Iterable<AttendanceRecord> records) =>
+      AttendanceService.instance.closeMissingDepartures(records);
+
   Future<void> fixMissingDeparturesForYesterdayKst() =>
       AttendanceService.instance.fixMissingDeparturesForYesterdayKst();
 
@@ -8240,6 +8264,14 @@ class DataManager {
           .deleteAnswerKeyBookPdf(bookId: bookId, gradeKey: gradeKey);
 
   // ===== EXAM (persisted) =====
+  bool get _shouldWriteExamServer =>
+      RuntimeFlags.serverOnly ||
+      TagPresetService.preferSupabaseRead ||
+      TagPresetService.dualWrite;
+
+  bool get _examServerIsAuthoritative =>
+      RuntimeFlags.serverOnly || TagPresetService.preferSupabaseRead;
+
   Future<void> saveExamFor(String school, EducationLevel level, int grade,
       Map<DateTime, List<String>> titles, Map<DateTime, String> ranges) async {
     final sid = activeExamSeasonId;
@@ -8259,18 +8291,9 @@ class DataManager {
               e.value,
       },
     );
-    final key = _sgKey(school, level, grade);
-    _examTitlesBySg[key] = {
-      for (final e in titles.entries)
-        DateTime(e.key.year, e.key.month, e.key.day): e.value,
-    };
-    _examRangesBySg[key] = {
-      for (final e in ranges.entries)
-        DateTime(e.key.year, e.key.month, e.key.day): e.value,
-    };
-
-    // Supabase dual-write: exam_schedules + exam_ranges
-    if (TagPresetService.dualWrite) {
+    // Supabase write: 서버 우선/서버 전용 모드에서는 dualWrite 플래그와
+    // 무관하게 서버 저장이 필수다.
+    if (_shouldWriteExamServer) {
       try {
         final academyId = await TenantService.instance.getActiveAcademyId() ??
             await TenantService.instance.ensureActiveAcademy();
@@ -8323,8 +8346,22 @@ class DataManager {
               .toList();
           await supa.from('exam_ranges').insert(rows2);
         }
-      } catch (_) {}
+      } catch (e, st) {
+        // ignore: avoid_print
+        print('[saveExamFor][supa] $e\n$st');
+        if (_examServerIsAuthoritative) rethrow;
+      }
     }
+    // authoritative 서버 저장이 성공한 뒤에만 메모리 캐시를 확정한다.
+    final key = _sgKey(school, level, grade);
+    _examTitlesBySg[key] = {
+      for (final e in titles.entries)
+        DateTime(e.key.year, e.key.month, e.key.day): e.value,
+    };
+    _examRangesBySg[key] = {
+      for (final e in ranges.entries)
+        DateTime(e.key.year, e.key.month, e.key.day): e.value,
+    };
   }
 
   Future<Map<String, dynamic>> loadExamFor(
@@ -8334,7 +8371,7 @@ class DataManager {
         _examTitlesBySg.containsKey(cacheKey)) {
       return _examResFromCachedKey(cacheKey);
     }
-    if (TagPresetService.preferSupabaseRead) {
+    if (RuntimeFlags.serverOnly || TagPresetService.preferSupabaseRead) {
       try {
         final academyId = await TenantService.instance.getActiveAcademyId() ??
             await TenantService.instance.ensureActiveAcademy();
@@ -8418,8 +8455,13 @@ class DataManager {
         _examRangesBySg[key2] = rangesMap;
         _examDaysBySg[key2] = daysSet;
         return res;
-      } catch (_) {
-        // fallback below
+      } catch (e, st) {
+        // 서버가 authoritative인 실행에서는 빈 메모리 SQLite를 정상
+        // 데이터처럼 반환하지 않는다.
+        // ignore: avoid_print
+        print('[loadExamFor][supa] $e\n$st');
+        if (RuntimeFlags.serverOnly) rethrow;
+        // local fallback below
       }
     }
     final res = await AcademyDbService.instance.loadExamDataForSchoolGrade(
@@ -8801,12 +8843,8 @@ class DataManager {
       seasonId: sid,
       daysIso: list,
     );
-    final key = _sgKey(school, level, grade);
-    _examDaysBySg[key] =
-        days.map((d) => DateTime(d.year, d.month, d.day)).toSet();
-
-    // Supabase dual-write
-    if (TagPresetService.dualWrite) {
+    // Supabase write: 서버 우선/서버 전용 모드에서는 필수.
+    if (_shouldWriteExamServer) {
       try {
         final academyId = await TenantService.instance.getActiveAcademyId() ??
             await TenantService.instance.ensureActiveAcademy();
@@ -8832,8 +8870,16 @@ class DataManager {
               .toList();
           await supa.from('exam_days').insert(rows);
         }
-      } catch (_) {}
+      } catch (e, st) {
+        // ignore: avoid_print
+        print('[saveExamDays][supa] $e\n$st');
+        if (_examServerIsAuthoritative) rethrow;
+      }
     }
+    // authoritative 서버 저장이 성공한 뒤에만 메모리 캐시를 확정한다.
+    final key = _sgKey(school, level, grade);
+    _examDaysBySg[key] =
+        days.map((d) => DateTime(d.year, d.month, d.day)).toSet();
   }
 
   // exam_days(DB) 기반으로 저장된 날짜 집합 조회용 공개 getter
@@ -8851,16 +8897,20 @@ class DataManager {
     return set.map((d) => DateTime(d.year, d.month, d.day)).toSet();
   }
 
-  Future<void> preloadAllExamData() async {
-    if (_examBulkHydratedSeasonId == activeExamSeasonId) return;
+  Future<bool> preloadAllExamData({bool forceRefresh = false}) async {
+    if (!forceRefresh && _examBulkHydratedSeasonId == activeExamSeasonId) {
+      return true;
+    }
     while (_preloadAllExamDataInFlight != null) {
       await _preloadAllExamDataInFlight;
-      if (_examBulkHydratedSeasonId == activeExamSeasonId) return;
+      if (!forceRefresh && _examBulkHydratedSeasonId == activeExamSeasonId) {
+        return true;
+      }
     }
     final run = _preloadAllExamDataImpl();
     _preloadAllExamDataInFlight = run;
     try {
-      await run;
+      return await run;
     } finally {
       if (identical(_preloadAllExamDataInFlight, run)) {
         _preloadAllExamDataInFlight = null;
@@ -8868,29 +8918,66 @@ class DataManager {
     }
   }
 
-  Future<void> _preloadAllExamDataImpl() async {
+  Future<bool> _preloadAllExamDataImpl() async {
+    final nextTitles = <String, Map<DateTime, List<String>>>{};
+    final nextRanges = <String, Map<DateTime, String>>{};
+    final nextDays = <String, Set<DateTime>>{};
+    final sid = activeExamSeasonId;
+
     try {
-      _examTitlesBySg.clear();
-      _examRangesBySg.clear();
-      _examDaysBySg.clear();
-      _examBulkHydratedSeasonId = null;
-      final sid = activeExamSeasonId;
-      if (TagPresetService.preferSupabaseRead) {
+      if (RuntimeFlags.serverOnly || TagPresetService.preferSupabaseRead) {
         try {
-          await _mergeExamMapsFromSupabaseBulk(sid);
+          await _mergeExamMapsFromSupabaseBulk(
+            sid,
+            titlesBySg: nextTitles,
+            rangesBySg: nextRanges,
+            daysBySg: nextDays,
+          );
         } catch (e, st) {
           // ignore: avoid_print
           print('[preloadAllExamData][supa bulk] $e\n$st');
-          await _fillExamMapsFromSqlite(sid);
+          if (RuntimeFlags.serverOnly) rethrow;
+          nextTitles.clear();
+          nextRanges.clear();
+          nextDays.clear();
+          await _fillExamMapsFromSqlite(
+            sid,
+            titlesBySg: nextTitles,
+            rangesBySg: nextRanges,
+            daysBySg: nextDays,
+          );
         }
       } else {
-        await _fillExamMapsFromSqlite(sid);
+        await _fillExamMapsFromSqlite(
+          sid,
+          titlesBySg: nextTitles,
+          rangesBySg: nextRanges,
+          daysBySg: nextDays,
+        );
       }
-      _materializeEmptyExamKeysForStudents();
-      _examBulkHydratedSeasonId = activeExamSeasonId;
+      _materializeEmptyExamKeysForStudents(
+        titlesBySg: nextTitles,
+        rangesBySg: nextRanges,
+        daysBySg: nextDays,
+      );
+      _examTitlesBySg
+        ..clear()
+        ..addAll(nextTitles);
+      _examRangesBySg
+        ..clear()
+        ..addAll(nextRanges);
+      _examDaysBySg
+        ..clear()
+        ..addAll(nextDays);
+      // 로드 도중 활성 시즌이 바뀌면 이 결과를 현재 시즌 캐시로
+      // 오인하지 않도록 시작 시점의 시즌을 기록한다.
+      _examBulkHydratedSeasonId = sid;
+      return sid == activeExamSeasonId;
     } catch (e, st) {
       // ignore: avoid_print
       print('[preloadAllExamData] $e\n$st');
+      // 별도 맵에 적재했으므로 기존 정상 캐시는 그대로 유지된다.
+      return false;
     }
   }
 }

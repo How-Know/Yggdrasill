@@ -1587,6 +1587,13 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.1.0"
+  yggdrasill_m5_ota:
+    dependency: "direct main"
+    description:
+      path: "../../packages/yggdrasill_m5_ota"
+      relative: true
+    source: path
+    version: "0.0.0"
   yggdrasill_pb_export_ui:
     dependency: "direct main"
     description:
