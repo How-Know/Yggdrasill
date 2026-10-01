@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "command": "node .cursor/hooks/deny-secrets.mjs",
+        "matcher": "Read|Grep|Glob|Write|Delete",
+        "failClosed": true,
+        "timeout": 10
+      }
+    ],
+    "beforeReadFile": [
+      {
+        "command": "node .cursor/hooks/deny-secrets.mjs",
+        "failClosed": true,
+        "timeout": 10
+      }
+    ]
+  }
+}

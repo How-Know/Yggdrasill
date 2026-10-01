@@ -28,11 +28,9 @@ import 'components/self_study_registration_view.dart';
 import '../../models/self_study_time_block.dart';
 import 'package:collection/collection.dart'; // Added for firstWhereOrNull
 import 'dart:async';
-import 'dart:convert';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
+import '../../services/ai_summary.dart';
 import '../../services/schedule_store.dart';
 import '../../services/timetable_excel_export_service.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
@@ -1979,53 +1977,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
   }
 
   Future<String> _summarize(String text) async {
-    // 1) 설정(SharedPreferences) 우선
-    final prefs = await SharedPreferences.getInstance();
-    final persisted = prefs.getString('openai_api_key') ?? '';
-    // 2) 빌드타임 define 보조
-    final defined =
-        const String.fromEnvironment('OPENAI_API_KEY', defaultValue: '');
-    final apiKey = persisted.isNotEmpty ? persisted : defined;
-    if (apiKey.isEmpty) {
-      // 오프라인/키 미설정 시, 간단 요약 대체
-      return _toSingleSentence(text, maxChars: 60);
-    }
-    final uri = Uri.parse('https://api.openai.com/v1/chat/completions');
-    final body = jsonEncode({
-      'model': 'gpt-4o-mini',
-      'messages': [
-        {
-          'role': 'system',
-          'content':
-              '너는 텍스트를 한 문장으로 간결하게 요약하는 비서다. 한국어로 한 문장만 출력하고, 줄바꿈 없이 60자 이내로 핵심만 담아라.'
-        },
-        {
-          'role': 'user',
-          'content':
-              '다음 텍스트를 한 문장(최대 60자)으로 간결하게 요약해줘. 불필요한 수식어/군더더기 금지:\n$text'
-        }
-      ],
-      'temperature': 0.2,
-      'max_tokens': 80,
-    });
-    final res = await http.post(
-      uri,
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer $apiKey',
-      },
-      body: body,
-    );
-    if (res.statusCode != 200) {
-      throw Exception('GPT 요약 실패(${res.statusCode})');
-    }
-    final json = jsonDecode(res.body) as Map<String, dynamic>;
-    final choices = json['choices'] as List<dynamic>?;
-    final content = choices != null && choices.isNotEmpty
-        ? (choices.first['message']?['content'] as String? ?? '')
-        : '';
-    if (content.isEmpty) return _toSingleSentence(text, maxChars: 60);
-    return _toSingleSentence(content, maxChars: 60);
+    // AI 요약은 서버(ai_memo_assist)가 한다. 꺼져 있거나 실패하면 앞 문장으로 줄인다.
+    final summary =
+        await AiSummaryService.summarizeSentence(text, maxChars: 60);
+    return _toSingleSentence(summary ?? text, maxChars: 60);
   }
 
   String _toSingleSentence(String raw, {int maxChars = 60}) {

@@ -382,6 +382,49 @@ Edge Function `student_textbook_grade` 에 `homework_group_id` 를 함께 보내
 5. 새 테스트 유형이 필요하면 먼저 `DAILY30` 의 `blueprint` 로 흡수할 수 없는지 본다.
 6. 광범위한 변경 전에는 사용자에게 2~3개 선택지를 제시한다. 방향은 바뀔 수 있다.
 
+---
+
+## 11. 쌓이는 기록: 퇴원 삭제와 장기 보관
+
+학습 기록은 한 학원 기준으로 월 수만 행씩 늘어난다(2026-09: `learning_attempts`
+월 5.2만, `homework_test_grading_attempt_items` 월 7.4만). 오래 다닌 학생일수록
+기록이 많고, 퇴원 시 한 번에 지우면 요청 시간 제한(8초)을 넘는다.
+
+### 퇴원은 두 단계다 (2026-09-29)
+
+1. **`withdraw_student`** — 아카이브를 만들고 `students.withdrawn_at` 을 찍는다.
+   `students` RLS 가 퇴원 학생을 숨기므로 모든 스태프 화면에서 즉시 사라진다.
+   화면을 움직이는 행(시간표, 보강, 오늘 이후 예정 출석, M5 연결, 학생앱 로그인)은
+   이때 바로 지운다.
+2. **정리(purge)** — `_purge_withdrawn_student_step` 이 말단 테이블부터 학생 기준으로
+   500행씩 지우고, 마지막에 `students` 행을 지운다. 앱이 퇴원 직후 한 번 돌리고
+   (`purge_withdrawn_student`), 남은 분량은 cron `purge-withdrawn-students` 가 매분
+   마무리한다. 결과는 예전 한 번 삭제와 같다(`homework_items` 는 `student_id` 만 null).
+
+정의: `supabase/migrations/20260929100100_student_withdraw_and_purge.sql`
+
+### 새 테이블을 만들 때 지킬 것
+
+나중에 기록 테이블을 기간별로 나눠 저장(월 단위 파티션)할 수 있게 미리 지키는 규칙이다.
+**파티션은 아직 하지 않는다.** `learning_attempts` 가 수백만 행이 되거나 학생별 조회가
+느려질 때 `learning_attempts`, `learning_exposures`,
+`homework_test_grading_attempt_items` 부터 검토한다.
+
+1. **학생 기준 기록 테이블은 `student_id`(not null, `on delete cascade`),
+   `academy_id`, 기록 시각(not null)을 둔다.** 삭제는 학생 기준, 파티션은 시각 기준이다.
+2. **기록 행을 id 하나로 가리키는 FK 를 새로 만들지 않는다.** 파티션 테이블의 기본키는
+   (id, 시각)이 되므로 id 단독 FK 를 걸 수 없다. 필요하면 FK 없이 id 만 저장한다.
+   기존 예외: `learning_attempts.exposure_id`, `learning_attempts.round_id`,
+   `learning_exposures.round_id`, `learning_*.session_id`. 파티션할 때 같이 정리한다.
+3. **FK 컬럼마다 그 컬럼으로 시작하는 index 를 만든다.** 선택 컬럼이면
+   `where col is not null` 부분 index 로 충분하다. `academy_id` 로 시작하는 복합
+   index 나 다른 조건의 부분 index 로는 삭제 시 역참조를 못 찾아 테이블 전체를 훑는다
+   (2026-09 실측: `learning_attempts.exposure_id` 하나로 학생 1명 삭제에 39초).
+4. **학생 기준으로 큰 테이블을 추가하면 퇴원 정리 목록에 넣는다.**
+   `_purge_withdrawn_student_step` 의 `v_tables` 에 말단부터 순서를 맞춰 추가한다.
+5. **쓰기는 서버 함수로만 한다(§6).** 저장 구조를 바꿔도 앱을 고치지 않게 하기 위해서다.
+6. **화면은 원시 기록을 훑지 않는다(§7).** 통계 화면이 생기면 요약 테이블을 먼저 만든다.
+
 ## 결정 로그
 
 - **2026-07-25** — 초안 설계 확정 및 서버 반영. 노출/시도 분리, 신뢰도 파생 모델,
@@ -393,3 +436,5 @@ Edge Function `student_textbook_grade` 에 `homework_group_id` 를 함께 보내
   조회/통과 RPC, `learning_log_homework_attempt`, 학생앱 과제 스코프 풀이 진입.
   통과 경로를 선생님 검사와 학생앱 전원 정답 두 가지로 제한. 자가표시는 통과로
   인정하되 세션을 분리해 통계에서 걸러지게 함.
+- **2026-09-29** — 퇴원을 두 단계(퇴원 표시 → 나눠 삭제 + cron)로 분리하고, 학생 삭제
+  경로의 FK index 를 보강. 월 단위 파티션은 보류하고 §11 의 새 테이블 규칙만 확정.

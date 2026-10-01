@@ -197,7 +197,7 @@ class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 168),
         child: DecoratedBox(
-          decoration: BoxDecoration(
+      decoration: BoxDecoration(
             color: highlight,
             borderRadius: BorderRadius.circular(999),
             border: FabTabBarTokens.groupedCardBorderFor(brightness),
@@ -237,7 +237,7 @@ class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
               ],
             ),
           ),
-        ),
+          ),
       ),
     );
   }
@@ -469,7 +469,7 @@ class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
                   InkWell(
                     onTap: () => _toggleSharedTreeNode(node),
                     borderRadius: BorderRadius.circular(6),
-                    child: Padding(
+        child: Padding(
                       padding: const EdgeInsets.all(2),
                       child: Icon(
                         isExpanded ? Icons.expand_more : Icons.chevron_right,
@@ -496,7 +496,7 @@ class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
                 ),
                 const SizedBox(width: 4),
                 Expanded(
-                  child: Text(
+          child: Text(
                     small.title,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
@@ -518,11 +518,11 @@ class _ProblemBankSchoolSheetState extends State<ProblemBankSchoolSheet> {
                 ),
               ],
             ),
+            ),
           ),
         ),
-      ),
-    );
-  }
+      );
+    }
 
   Widget _buildPrivatePageTreeRow(
     BuildContext context,

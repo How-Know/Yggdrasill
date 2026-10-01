@@ -1,71 +1,71 @@
-import 'dart:convert';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import '../models/memo.dart';
 
+/// 메모 요약·일정/연락처/이름 추출.
+/// AI 호출은 Edge Function `ai_memo_assist`가 한다(OpenAI 키는 서버 비밀값).
+/// 꺼져 있거나 실패하면 정규식 처리로 돌아간다.
 class AiSummaryService {
-  // platform_config에서 API 키 가져오기
-  static Future<String> _getApiKey() async {
+  static const String _functionName = 'ai_memo_assist';
+  static bool? _serverConfigured;
+
+  static Future<bool> _isEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool('ai_summary_enabled') ?? false;
+  }
+
+  static Future<String?> _invoke(String task, String text,
+      {int? maxChars}) async {
     try {
-      final res = await Supabase.instance.client
-          .from('platform_config')
-          .select('config_value')
-          .eq('config_key', 'openai_api_key')
-          .maybeSingle();
-      return (res?['config_value'] as String?) ?? '';
+      final res = await Supabase.instance.client.functions.invoke(
+        _functionName,
+        body: {
+          'task': task,
+          'text': text,
+          if (maxChars != null) 'max_chars': maxChars,
+        },
+      ).timeout(const Duration(seconds: 20));
+      final data = res.data;
+      if (data is Map && data['ok'] == true) {
+        final value = data['value'];
+        if (value is String && value.trim().isNotEmpty) return value.trim();
+      }
     } catch (e) {
-      print('[AI] API 키 로드 실패: $e');
-      return '';
+      print('[AI] $task 실패: $e');
+    }
+    return null;
+  }
+
+  /// 서버에 OpenAI 키가 설정돼 있는지(설정 화면의 AI 토글 활성화용).
+  static Future<bool> isServerConfigured({bool refresh = false}) async {
+    final cached = _serverConfigured;
+    if (!refresh && cached != null) return cached;
+    try {
+      final res = await Supabase.instance.client.functions
+          .invoke(_functionName, body: {'task': 'status'}).timeout(
+              const Duration(seconds: 10));
+      final data = res.data;
+      final configured = data is Map && data['configured'] == true;
+      _serverConfigured = configured;
+      return configured;
+    } catch (e) {
+      print('[AI] 서버 상태 확인 실패: $e');
+      return false;
     }
   }
 
   static Future<String> summarize(String text, {int maxChars = 60}) async {
-    // AI 기능 활성화 확인
-    final prefs = await SharedPreferences.getInstance();
-    final isEnabled = prefs.getBool('ai_summary_enabled') ?? false;
-    if (!isEnabled) {
+    if (!await _isEnabled()) {
       return toSingleSentence(text, maxChars: maxChars);
     }
-    
-    final apiKey = await _getApiKey();
-    if (apiKey.isEmpty) {
-      return toSingleSentence(text, maxChars: maxChars);
-    }
-    final uri = Uri.parse('https://api.openai.com/v1/chat/completions');
-      final body = jsonEncode({
-      'model': 'gpt-4o-mini',
-      'messages': [
-        {
-          'role': 'system',
-          'content': '너는 텍스트를 한 줄 키워드로 요약하는 비서다. 한국어로 명사/명사구 중심의 한 줄만 출력하라. 문장부호(.,!?)와 불필요한 조사/수식어를 제거하고, 줄바꿈 없이 ${maxChars}자 이내로 핵심 키워드만 제공하라.'
-        },
-        {
-          'role': 'user',
-          'content': '다음 텍스트에서 핵심 키워드를 한 줄(최대 ${maxChars}자)로 요약해줘. 문장은 금지, 쉼표 없이 간결한 명사구로:\n$text'
-        }
-      ],
-      'temperature': 0.2,
-      'max_tokens': 80,
-    });
-    final res = await http.post(
-      uri,
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer $apiKey',
-      },
-      body: body,
-    );
-    if (res.statusCode != 200) {
-      return toSingleSentence(text, maxChars: maxChars);
-    }
-    final json = jsonDecode(res.body) as Map<String, dynamic>;
-    final choices = json['choices'] as List<dynamic>?;
-    final content = choices != null && choices.isNotEmpty
-        ? (choices.first['message']?['content'] as String? ?? '')
-        : '';
-    if (content.isEmpty) return toSingleSentence(text, maxChars: maxChars);
-    return toSingleSentence(content, maxChars: maxChars);
+    final out = await _invoke('summarize', text, maxChars: maxChars);
+    return toSingleSentence(out ?? text, maxChars: maxChars);
+  }
+
+  /// 한 문장 요약(시간표 메모용). 실패하면 null을 돌려 호출부가 직접 줄인다.
+  static Future<String?> summarizeSentence(String text,
+      {int maxChars = 60}) async {
+    if (!await _isEnabled()) return null;
+    return _invoke('summarize_sentence', text, maxChars: maxChars);
   }
 
   // ✅ 메모 자동 카테고리 분류(특히 GPT 기반)는 요청에 따라 제거됨.
@@ -136,53 +136,16 @@ class AiSummaryService {
       return DateTime(base0.year, base0.month, base0.day, h0, mi0);
     }
 
-    // 1) GPT 시도 (상대일이 아닌 경우에만)
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final isEnabled = prefs.getBool('ai_summary_enabled') ?? false;
-      if (!isEnabled) {
-        return null;
-      }
-      
-      final apiKey = await _getApiKey();
-      if (apiKey.isNotEmpty) {
-        final uri = Uri.parse('https://api.openai.com/v1/chat/completions');
-        final body = jsonEncode({
-          'model': 'gpt-4o-mini',
-          'messages': [
-            {
-              'role': 'system',
-              'content': '사용자 문장에서 일정 날짜/시간을 찾아 한국시간 기준 ISO 8601(yyyy-MM-ddTHH:mm) 문자열로만 출력. 없으면 null만 출력.'
-            },
-            {
-              'role': 'user',
-              'content': sanitized
-            }
-          ],
-          'temperature': 0.0,
-          'max_tokens': 20,
-        });
-        final res = await http.post(
-          uri,
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer $apiKey',
-          },
-          body: body,
-        );
-        if (res.statusCode == 200) {
-          final json = jsonDecode(res.body) as Map<String, dynamic>;
-          final choices = json['choices'] as List<dynamic>?;
-          final content = choices != null && choices.isNotEmpty
-              ? (choices.first['message']?['content'] as String? ?? '')
-              : '';
-          final out = content.trim();
-          if (out.toLowerCase() != 'null' && out.isNotEmpty) {
-            try { return DateTime.parse(out); } catch (_) {}
-          }
-        }
-      }
-    } catch (_) {}
+    // 1) AI 시도 (상대일이 아닌 경우에만)
+    if (!await _isEnabled()) {
+      return null;
+    }
+    final aiOut = await _invoke('extract_datetime', sanitized);
+    if (aiOut != null) {
+      try {
+        return DateTime.parse(aiOut);
+      } catch (_) {}
+    }
 
     // 2) 정규식 폴백: yyyy-MM-dd HH:mm 또는 M월 d일 등
     // 공통: 오전/오후 감지
@@ -255,64 +218,23 @@ class AiSummaryService {
     return null;
   }
 
-  // 한국 휴대전화 추출: 우선 GPT, 실패 시 정규식
+  // 한국 휴대전화 추출: 우선 AI, 실패 시 정규식
   static Future<String?> extractPhone(String text) async {
-    // 1) GPT 시도: 010-1234-5678 포맷으로만, 없으면 null
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final isEnabled = prefs.getBool('ai_summary_enabled') ?? false;
-      if (!isEnabled) {
-        // GPT 비활성화 시 정규식으로 직접 처리
-        final phoneRegex = RegExp(r'01[0-9]-?\d{3,4}-?\d{4}');
-        final match = phoneRegex.firstMatch(text);
-        if (match != null) {
-          final phone = match.group(0) ?? '';
-          return phone.replaceAll(RegExp(r'[^0-9]'), '').replaceAllMapped(RegExp(r'^(01[0-9])(\d{3,4})(\d{4})$'), (m) => '${m[1]}-${m[2]}-${m[3]}');
-        }
-        return null;
+    if (!await _isEnabled()) {
+      // AI 비활성화 시 정규식으로 직접 처리
+      final phoneRegex = RegExp(r'01[0-9]-?\d{3,4}-?\d{4}');
+      final match = phoneRegex.firstMatch(text);
+      if (match != null) {
+        final phone = match.group(0) ?? '';
+        return phone.replaceAll(RegExp(r'[^0-9]'), '').replaceAllMapped(RegExp(r'^(01[0-9])(\d{3,4})(\d{4})$'), (m) => '${m[1]}-${m[2]}-${m[3]}');
       }
-      
-      final apiKey = await _getApiKey();
-      if (apiKey.isNotEmpty) {
-        final uri = Uri.parse('https://api.openai.com/v1/chat/completions');
-        final body = jsonEncode({
-          'model': 'gpt-4o-mini',
-          'messages': [
-            {
-              'role': 'system',
-              'content': '사용자 문장에서 한국 휴대전화 하나를 010-1234-5678 형식으로만 출력. 없으면 null.'
-            },
-            {
-              'role': 'user',
-              'content': text
-            }
-          ],
-          'temperature': 0.0,
-          'max_tokens': 10,
-        });
-        final res = await http.post(
-          uri,
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer $apiKey',
-          },
-          body: body,
-        );
-        if (res.statusCode == 200) {
-          final json = jsonDecode(res.body) as Map<String, dynamic>;
-          final choices = json['choices'] as List<dynamic>?;
-          final content = choices != null && choices.isNotEmpty
-              ? (choices.first['message']?['content'] as String? ?? '')
-              : '';
-          final out = content.trim();
-          if (out.toLowerCase() != 'null' && out.isNotEmpty) {
-            return _normalizePhone(out);
-          }
-        }
-      }
-    } catch (_) {}
+      return null;
+    }
 
-    // 2) 정규식 폴백
+    final aiOut = await _invoke('extract_phone', text);
+    if (aiOut != null) return aiOut;
+
+    // 정규식 폴백
     final re = RegExp(r"(01[016789])[- .]?(\d{3,4})[- .]?(\d{4})");
     final m = re.firstMatch(text);
     if (m != null) {
@@ -321,69 +243,17 @@ class AiSummaryService {
     return null;
   }
 
-  static String _normalizePhone(String raw) {
-    final digits = raw.replaceAll(RegExp(r'[^0-9]'), '');
-    if (digits.length == 11 && digits.startsWith('01')) {
-      return digits.substring(0,3) + '-' + digits.substring(3,7) + '-' + digits.substring(7);
-    }
-    if (digits.length == 10 && digits.startsWith('01')) {
-      return digits.substring(0,3) + '-' + digits.substring(3,6) + '-' + digits.substring(6);
-    }
-    // fallback: keep raw
-    return raw;
-  }
-
-  // 한국인 이름(2~4자 한글) 추출: GPT 우선, 정규식 보조
+  // 한국인 이름(2~4자 한글) 추출: AI 우선, 정규식 보조
   static Future<String?> extractKoreanName(String text) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final isEnabled = prefs.getBool('ai_summary_enabled') ?? false;
-      if (!isEnabled) {
-        // GPT 비활성화 시 정규식으로 직접 처리
-        final nameRegex = RegExp(r'[가-힣]{2,4}(?:\s+[가-힣]{2,4})?');
-        final match = nameRegex.firstMatch(text);
-        return match?.group(0);
-      }
-      
-      final apiKey = await _getApiKey();
-      if (apiKey.isNotEmpty) {
-        final uri = Uri.parse('https://api.openai.com/v1/chat/completions');
-        final body = jsonEncode({
-          'model': 'gpt-4o-mini',
-          'messages': [
-            {
-              'role': 'system',
-              'content': '사용자 문장에서 한국인의 고유명사 이름(한글 2~4자)만 출력. 없으면 null. 호칭(학생, 님, 보호자 등) 제외.'
-            },
-            {
-              'role': 'user',
-              'content': text
-            }
-          ],
-          'temperature': 0.0,
-          'max_tokens': 6,
-        });
-        final res = await http.post(
-          uri,
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer $apiKey',
-          },
-          body: body,
-        );
-        if (res.statusCode == 200) {
-          final json = jsonDecode(res.body) as Map<String, dynamic>;
-          final choices = json['choices'] as List<dynamic>?;
-          final content = choices != null && choices.isNotEmpty
-              ? (choices.first['message']?['content'] as String? ?? '')
-              : '';
-          final out = content.trim();
-          if (out.toLowerCase() != 'null' && RegExp(r'^[가-힣]{2,4}$').hasMatch(out)) {
-            return out;
-          }
-        }
-      }
-    } catch (_) {}
+    if (!await _isEnabled()) {
+      // AI 비활성화 시 정규식으로 직접 처리
+      final nameRegex = RegExp(r'[가-힣]{2,4}(?:\s+[가-힣]{2,4})?');
+      final match = nameRegex.firstMatch(text);
+      return match?.group(0);
+    }
+
+    final aiOut = await _invoke('extract_name', text);
+    if (aiOut != null) return aiOut;
 
     // 정규식 폴백
     final keyword = RegExp("(?:이름|성함|학생|자녀|아이|원생|보호자|학부모|부모)\\s*[:：]?[\\s\"“”']*([가-힣]{2,4})");
@@ -398,5 +268,3 @@ class AiSummaryService {
     return null;
   }
 }
-
-

@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<title>설정 아이콘 후보</title>
+<style>
+  body { margin: 0; background: #101114; color: #f4f5f5; font-family: Pretendard, "Segoe UI", sans-serif; }
+  h1 { font-size: 18px; font-weight: 700; margin: 28px 28px 6px; }
+  p { margin: 0 28px 22px; color: #9aa0a0; font-size: 13px; }
+  .row { display: flex; gap: 18px; padding: 0 28px 32px; }
+  .card { width: 150px; }
+  .name { font-size: 13px; font-weight: 700; margin-bottom: 4px; }
+  .note { font-size: 12px; color: #9aa0a0; min-height: 32px; margin-bottom: 12px; }
+  .states { display: flex; gap: 10px; }
+  .slot { width: 68px; height: 72px; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .label { font-size: 11px; color: #9aa0a0; }
+  .pill { width: 68px; height: 39px; border-radius: 999px; display: grid; place-items: center; }
+  .pill.on { background: rgba(56,56,56,0.72); }
+  svg { width: 28px; height: 28px; }
+  .off svg { stroke: #9aa0a0; stroke-width: 1.7; }
+  .on svg { stroke: #ffffff; stroke-width: 2.15; }
+</style>
+</head>
+<body>
+  <h1>설정 아이콘 후보</h1>
+  <p>왼쪽은 평소, 오른쪽은 홈·학생 메뉴처럼 선택 알약 위에서 밝아진 상태입니다.</p>
+  <div class="row" id="row"></div>
+  <script>
+    const icons = [
+      ["Settings02", "둥근 톱니. 지금 설정 아이콘과 가장 가깝습니다.",
+        '<path d="m9.395 19.371.585 1.315a2.212 2.212 0 0 0 4.044 0l.584-1.315a2.426 2.426 0 0 1 2.47-1.423l1.43.152a2.212 2.212 0 0 0 2.023-3.502l-.847-1.164a2.428 2.428 0 0 1-.46-1.434c0-.513.163-1.014.464-1.429l.847-1.163a2.211 2.211 0 0 0-2.022-3.502l-1.43.152a2.433 2.433 0 0 1-1.47-.312 2.426 2.426 0 0 1-1-1.117l-.589-1.315a2.212 2.212 0 0 0-4.044 0L9.395 4.63c-.207.468-.557.86-1 1.117-.445.256-.96.365-1.47.312l-1.434-.152a2.212 2.212 0 0 0-2.023 3.502l.847 1.163a2.43 2.43 0 0 1 0 2.858l-.847 1.163a2.21 2.21 0 0 0 .786 3.273c.382.195.811.274 1.237.23l1.43-.153a2.434 2.434 0 0 1 2.474 1.43Z"/><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/>'],
+      ["Settings04", "가로 슬라이더 두 개. 선이 적고 가장 단순합니다.",
+        '<path d="M3 8h12m0 0a3 3 0 1 0 6 0 3 3 0 0 0-6 0Zm-6 8h12M9 16a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/>'],
+      ["Settings03", "슬라이더에 큰 원 손잡이. 04보다 표정이 큽니다.",
+        '<path d="M15.05 9H5.5a2.5 2.5 0 0 1 0-5h9.55m-6.1 16h9.55a2.5 2.5 0 0 0 0-5H8.95M3 17.5a3.5 3.5 0 1 0 7 0 3.5 3.5 0 0 0-7 0Zm18-11a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0Z"/>'],
+      ["Sliders01", "세로 막대 세 개. 홈·학생처럼 형태가 단순합니다.",
+        '<path d="M5 21v-7m0-4V3m7 18v-9m0-4V3m7 18v-5m0-4V3M2 14h6m1-6h6m1 8h6"/>'],
+      ["Settings01", "톱니 이빨이 많은 기어. 지금 아이콘보다 복잡합니다.",
+        '<path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M18.727 14.727a1.5 1.5 0 0 0 .3 1.655l.055.054a1.816 1.816 0 0 1 0 2.573 1.818 1.818 0 0 1-2.573 0l-.055-.055a1.5 1.5 0 0 0-1.654-.3 1.5 1.5 0 0 0-.91 1.373v.155a1.818 1.818 0 1 1-3.636 0V20.1a1.5 1.5 0 0 0-.981-1.373 1.5 1.5 0 0 0-1.655.3l-.054.055a1.818 1.818 0 0 1-3.106-1.287 1.818 1.818 0 0 1 .533-1.286l.054-.055a1.5 1.5 0 0 0 .3-1.654 1.5 1.5 0 0 0-1.372-.91h-.155a1.818 1.818 0 1 1 0-3.636H3.9a1.5 1.5 0 0 0 1.373-.981 1.5 1.5 0 0 0-.3-1.655l-.055-.054A1.818 1.818 0 1 1 7.491 4.99l.054.054a1.5 1.5 0 0 0 1.655.3h.073a1.5 1.5 0 0 0 .909-1.372v-.155a1.818 1.818 0 0 1 3.636 0V3.9a1.499 1.499 0 0 0 .91 1.373 1.5 1.5 0 0 0 1.654-.3l.054-.055a1.817 1.817 0 0 1 2.573 0 1.819 1.819 0 0 1 0 2.573l-.055.054a1.5 1.5 0 0 0-.3 1.655v.073a1.5 1.5 0 0 0 1.373.909h.155a1.818 1.818 0 0 1 0 3.636H20.1a1.499 1.499 0 0 0-1.373.91Z"/>']
+    ];
+    const svg = (body, cls) => `<div class="pill ${cls}"><svg viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round">${body}</svg></div>`;
+    document.getElementById("row").innerHTML = icons.map(([name, note, body]) => `
+      <div class="card">
+        <div class="name">${name}</div>
+        <div class="note">${note}</div>
+        <div class="states">
+          <div class="slot"><div class="label">평소</div>${svg(body, "off")}</div>
+          <div class="slot"><div class="label">선택</div>${svg(body, "on")}</div>
+        </div>
+      </div>`).join("");
+  </script>
+</body>
+</html>

@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:collection/collection.dart';
 import 'package:provider/provider.dart';
@@ -339,6 +341,188 @@ class TimetableCapacityIndicator extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// 70% 미만 연속 구간. 인원이 달라도 한 선으로 잇고, 굵기로 인원을 나타낸다.
+class UnderCapacityRibbon extends StatelessWidget {
+  const UnderCapacityRibbon({
+    super.key,
+    required this.counts,
+    required this.steps,
+    required this.color,
+    required this.numberColor,
+    this.hoveredIndex,
+  });
+
+  final List<int> counts;
+  final int steps;
+  final Color color;
+  final Color numberColor;
+  final int? hoveredIndex;
+
+  @override
+  Widget build(BuildContext context) {
+    final hover = hoveredIndex;
+    final showNumber =
+        hover != null && hover >= 0 && hover < counts.length;
+    return SizedBox(
+      height: 22,
+      width: double.infinity,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: CustomPaint(
+              painter: _UnderCapacityRibbonPainter(
+                counts: counts,
+                steps: steps,
+                color: color,
+              ),
+            ),
+          ),
+          if (showNumber)
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final cellWidth = constraints.maxWidth / counts.length;
+                return Stack(
+                  children: [
+                    Positioned(
+                      left: hover * cellWidth,
+                      width: cellWidth,
+                      top: 0,
+                      height: 22,
+                      child: Center(
+                        child: Text(
+                          '${counts[hover]}',
+                          style: TextStyle(
+                            color: numberColor,
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w800,
+                            height: 1.0,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _UnderCapacityRibbonPainter extends CustomPainter {
+  const _UnderCapacityRibbonPainter({
+    required this.counts,
+    required this.steps,
+    required this.color,
+  });
+
+  final List<int> counts;
+  final int steps;
+  final Color color;
+
+  double _smooth(double t) =>
+      t * t * t * (t * (t * 6 - 15) + 10);
+
+  double _thicknessFor(int count, double maxThickness) {
+    if (steps <= 0) return maxThickness;
+    final ratio = (count / steps).clamp(0.0, 1.0);
+    return (ratio * maxThickness).clamp(2.0, maxThickness);
+  }
+
+  double _thicknessAt(double x, double width, double maxThickness) {
+    final n = counts.length;
+    if (n <= 0 || width <= 0) return 2;
+    final cellW = width / n;
+    var index = (x / cellW).floor();
+    if (index < 0) index = 0;
+    if (index >= n) index = n - 1;
+    final blend = cellW * 0.6;
+    final half = blend / 2;
+    final leftEdge = index * cellW;
+    final rightEdge = (index + 1) * cellW;
+    if (index > 0 && x < leftEdge + half) {
+      final t = ((x - (leftEdge - half)) / blend).clamp(0.0, 1.0);
+      final from = _thicknessFor(counts[index - 1], maxThickness);
+      final to = _thicknessFor(counts[index], maxThickness);
+      return from + (to - from) * _smooth(t);
+    }
+    if (index < n - 1 && x > rightEdge - half) {
+      final t = ((x - (rightEdge - half)) / blend).clamp(0.0, 1.0);
+      final from = _thicknessFor(counts[index], maxThickness);
+      final to = _thicknessFor(counts[index + 1], maxThickness);
+      return from + (to - from) * _smooth(t);
+    }
+    return _thicknessFor(counts[index], maxThickness);
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (counts.isEmpty || size.width <= 0 || size.height <= 0) return;
+    final maxThickness = size.height;
+    final midY = size.height / 2;
+    final startThickness = _thicknessAt(0, size.width, maxThickness);
+    final endThickness =
+        _thicknessAt(size.width, size.width, maxThickness);
+    final startRadius = startThickness / 2;
+    final endRadius = endThickness / 2;
+    final capSum = startRadius + endRadius;
+    final capScale =
+        capSum > size.width && capSum > 0 ? size.width / capSum : 1.0;
+    final x0 = startRadius * capScale;
+    final x1 = size.width - endRadius * capScale;
+    canvas.save();
+    canvas.clipRect(Offset.zero & size);
+    final sampleCount = math.max(48, (size.width / 2).ceil());
+    final top = <Offset>[];
+    final bottom = <Offset>[];
+    for (var i = 0; i <= sampleCount; i++) {
+      final x = x0 + (x1 - x0) * i / sampleCount;
+      final thickness = _thicknessAt(x, size.width, maxThickness);
+      top.add(Offset(x, midY - thickness / 2));
+      bottom.add(Offset(x, midY + thickness / 2));
+    }
+    final path = Path()..moveTo(top.first.dx, top.first.dy);
+    for (final point in top.skip(1)) {
+      path.lineTo(point.dx, point.dy);
+    }
+    path.arcToPoint(
+      bottom.last,
+      radius: Radius.circular(math.max(0.5, (bottom.last.dy - top.last.dy) / 2)),
+      clockwise: true,
+    );
+    for (final point in bottom.reversed.skip(1)) {
+      path.lineTo(point.dx, point.dy);
+    }
+    path.arcToPoint(
+      top.first,
+      radius: Radius.circular(
+        math.max(0.5, (bottom.first.dy - top.first.dy) / 2),
+      ),
+      clockwise: true,
+    );
+    path.close();
+    canvas.drawPath(path, Paint()..color = color);
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _UnderCapacityRibbonPainter oldDelegate) {
+    return oldDelegate.color != color ||
+        oldDelegate.steps != steps ||
+        oldDelegate.counts.length != counts.length ||
+        !_sameCounts(oldDelegate.counts, counts);
+  }
+
+  bool _sameCounts(List<int> a, List<int> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
   }
 }
 

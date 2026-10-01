@@ -1613,61 +1613,128 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
     final bool isPaid = record.paidDate != null;
     final DateTime initialDate = switch (mode) {
       _PaymentDatePickerMode.dueDate => record.dueDate,
-      _PaymentDatePickerMode.paidDate =>
-        record.paidDate ?? DateTime.now(),
+      _PaymentDatePickerMode.paidDate => record.paidDate ?? DateTime.now(),
+    };
+    final bool canDeleteRecord = switch (mode) {
+      _PaymentDatePickerMode.dueDate => true,
+      _PaymentDatePickerMode.paidDate => isPaid,
+    };
+    final String title = switch (mode) {
+      _PaymentDatePickerMode.dueDate => '수강일자 수정',
+      _PaymentDatePickerMode.paidDate => '납부일 수정',
     };
 
-    final DateTime? picked = await showDatePicker(
+    final result = await showDialog<_PaymentDateEditResult>(
       context: context,
-      initialDate: initialDate,
-      firstDate: DateTime(record.dueDate.year - 1, 1, 1),
-      lastDate: DateTime(record.dueDate.year + 2, 12, 31),
-      builder: (context, child) {
-        return Theme(
-          data: ThemeData.dark().copyWith(
-            colorScheme: const ColorScheme.dark(
-              primary: Color(0xFF1B6B63),
-              onPrimary: Colors.white,
-              surface: Color(0xFF151C21),
-              onSurface: Colors.white,
-            ),
-            dialogBackgroundColor: const Color(0xFF151C21),
+      builder: (dialogContext) {
+        var selected = initialDate;
+        return AlertDialog(
+          backgroundColor: dialogContext.yggSurfaceBase,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: Color(0xFF223131)),
           ),
-          child: child!,
+          title: Text(
+            title,
+            style: const TextStyle(
+              color: Color(0xFFEAF2F2),
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          content: SizedBox(
+            width: 360,
+            height: 360,
+            child: CalendarDatePicker(
+              initialDate: initialDate,
+              firstDate: DateTime(record.dueDate.year - 1, 1, 1),
+              lastDate: DateTime(record.dueDate.year + 2, 12, 31),
+              onDateChanged: (date) => selected = date,
+            ),
+          ),
+          actions: [
+            if (canDeleteRecord)
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(
+                  const _PaymentDateEditResult.deleted(),
+                ),
+                child: const Text(
+                  '기록 삭제',
+                  style: TextStyle(
+                    color: Colors.redAccent,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('취소', style: TextStyle(color: Colors.white70)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF1B6B63),
+              ),
+              onPressed: () => Navigator.of(dialogContext).pop(
+                _PaymentDateEditResult.picked(selected),
+              ),
+              child: const Text('저장'),
+            ),
+          ],
         );
       },
     );
-    if (picked == null) return;
+    if (result == null || !mounted) return;
 
     try {
-      switch (mode) {
-        case _PaymentDatePickerMode.dueDate:
-          await DataManager.instance.postponeDueDate(
-            record.studentId,
-            record.cycle,
-            picked,
-            'manual_due_edit',
-          );
-        case _PaymentDatePickerMode.paidDate:
-          if (isPaid) {
-            await DataManager.instance.updatePaidDate(
+      if (result.deleted) {
+        switch (mode) {
+          case _PaymentDatePickerMode.dueDate:
+            await DataManager.instance.waivePaymentCycle(
+              record.studentId,
+              record.cycle,
+              dueDate: record.dueDate,
+            );
+          case _PaymentDatePickerMode.paidDate:
+            await DataManager.instance.clearPaidDate(
+              record.studentId,
+              record.cycle,
+            );
+        }
+      } else if (result.picked != null) {
+        final picked = result.picked!;
+        switch (mode) {
+          case _PaymentDatePickerMode.dueDate:
+            await DataManager.instance.postponeDueDate(
               record.studentId,
               record.cycle,
               picked,
+              'manual_due_edit',
             );
-          } else {
-            await DataManager.instance.recordPayment(
-              record.studentId,
-              record.cycle,
-              picked,
-            );
-          }
+          case _PaymentDatePickerMode.paidDate:
+            if (isPaid) {
+              await DataManager.instance.updatePaidDate(
+                record.studentId,
+                record.cycle,
+                picked,
+              );
+            } else {
+              await DataManager.instance.recordPayment(
+                record.studentId,
+                record.cycle,
+                picked,
+              );
+            }
+        }
       }
       if (mounted) setState(() {});
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('저장에 실패했습니다: $e')),
+        SnackBar(
+          content: Text(
+            result.deleted ? '삭제에 실패했습니다: $e' : '저장에 실패했습니다: $e',
+          ),
+        ),
       );
     }
   }
@@ -1709,6 +1776,17 @@ class _PaymentHistoryListEntry {
 }
 
 enum _PaymentDatePickerMode { dueDate, paidDate }
+
+class _PaymentDateEditResult {
+  final DateTime? picked;
+  final bool deleted;
+
+  const _PaymentDateEditResult.picked(this.picked) : deleted = false;
+
+  const _PaymentDateEditResult.deleted()
+      : picked = null,
+        deleted = true;
+}
 
 class _MonthlyDotInfo {
   final Color color;

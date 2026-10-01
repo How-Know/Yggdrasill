@@ -21,7 +21,8 @@ class FabTabBarTokens {
   static const double fabBarBottomInset = 24;
 
   /// [CustomNavigationRail] 하단 [AccountButton] 반지름.
-  static const double navRailAccountButtonRadius = 20;
+  /// 지름이 네비 아이콘 캔버스(35.2)와 맞는다.
+  static const double navRailAccountButtonRadius = 17.6;
 
   /// [AccountButton] 중심을 [FabStyleTabBar] 중심과 맞추는 하단 inset.
   static double navRailAccountButtonBottomInset({

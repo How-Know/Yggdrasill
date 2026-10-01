@@ -1271,6 +1271,8 @@ class ResourceService {
               'solution_display_page': ref['display_page'],
               'solution_number_region_1k': ref['number_region_1k'],
               'solution_content_region_1k': ref['content_region_1k'],
+              // 'body'면 좌표가 본문 PDF 기준이다(개념원리 핵심문제·예제 풀이).
+              'solution_source_kind': sourceKind,
             });
           }
         }

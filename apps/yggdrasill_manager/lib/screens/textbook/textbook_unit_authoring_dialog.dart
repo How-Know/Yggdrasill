@@ -2413,8 +2413,10 @@ class _TextbookUnitAuthoringDialogState
       // STEP 머리말이 반복되지 않는 연속 지면을 단독 판독하면 C로 돌아가는
       // 경우가 있으므로 행 경계와 앞 지면의 STEP을 함께 사용해 되돌린다.
       final row = _wonriRowFor(focus);
-      if (row == null || !row.isExercise) return;
-      guarded = _guardWonriMiddleUnitEndRows(state.pageResults);
+      if (row == null) return;
+      guarded = row.isExercise
+          ? _guardWonriMiddleUnitEndRows(state.pageResults)
+          : _guardWonriMiddleSubUnitCorners(state.pageResults);
     } else if (_seriesKey == 'gaeyu') {
       // 순서가 중요하다. 개념 번호 오인식을 먼저 걷어내야 번호 역행 가드가
       // 가짜 번호를 기준선으로 삼아 다음 지면의 진짜 문항을 지우지 않는다.
@@ -2496,6 +2498,46 @@ class _TextbookUnitAuthoringDialogState
             );
     }
 
+    return <_PageAnalysisRow>[
+      for (final row in rows) guardedByPage[row.rawPage] ?? row,
+    ];
+  }
+
+  List<_PageAnalysisRow> _guardWonriMiddleSubUnitCorners(
+    List<_PageAnalysisRow> rows,
+  ) {
+    final successful = rows.where((row) => row.ok).toList()
+      ..sort((a, b) => a.rawPage.compareTo(b.rawPage));
+    final repaired = repairWonriMiddleSubUnitCorners(
+      [for (final row in successful) row.items],
+      pageSections: [for (final row in successful) row.section],
+    );
+    final guardedByPage = <int, _PageAnalysisRow>{};
+    for (var i = 0; i < successful.length; i += 1) {
+      final row = successful[i];
+      final items = repaired[i];
+      if (identical(items, row.items)) continue;
+      final counts = <String, int>{};
+      for (final item in items) {
+        counts[item.category] = (counts[item.category] ?? 0) + 1;
+      }
+      final moved = [
+        for (var j = 0; j < items.length; j += 1)
+          if (!identical(items[j], row.items[j])) j,
+      ].length;
+      guardedByPage[row.rawPage] = _PageAnalysisRow.success(
+        rawPage: row.rawPage,
+        displayPage: row.displayPage,
+        section: counts.entries.reduce((a, b) => b.value > a.value ? b : a).key,
+        pageKind: row.pageKind,
+        conceptDrillHeaderVisible: row.conceptDrillHeaderVisible,
+        notes: _appendGuardNote(
+          row.notes,
+          'wonri_middle_sub_unit_corner_fixed=$moved',
+        ),
+        items: items,
+      );
+    }
     return <_PageAnalysisRow>[
       for (final row in rows) guardedByPage[row.rawPage] ?? row,
     ];
@@ -3610,6 +3652,16 @@ class _TextbookUnitAuthoringDialogState
     }
     final totalItems =
         itemsBySubKey.values.fold<int>(0, (sum, list) => sum + list.length);
+    // 서버는 한 슬롯에 같은 번호가 두 번 오면 배치를 통째로 거절하고 JSON만
+    // 돌려준다. 어느 코너·지면인지 보이도록 올리기 전에 먼저 막는다.
+    final duplicateError = _duplicateCropNumbersError(itemsBySubKey);
+    if (duplicateError != null) {
+      setState(() {
+        state.error = duplicateError;
+        state.phase = '영역 저장 실패';
+      });
+      return;
+    }
 
     setState(() {
       state.uploading = true;
@@ -3761,6 +3813,34 @@ class _TextbookUnitAuthoringDialogState
         if (!saved) state.phase = '영역 저장 실패';
       });
     }
+  }
+
+  String? _duplicateCropNumbersError(
+    Map<String, List<TextbookCropUploadItem>> itemsBySubKey,
+  ) {
+    final parts = <String>[];
+    final subKeys = itemsBySubKey.keys.toList()..sort();
+    for (final subKey in subKeys) {
+      final pagesByNumber = <String, List<int>>{};
+      for (final item in itemsBySubKey[subKey]!) {
+        pagesByNumber
+            .putIfAbsent(item.problemNumber, () => <int>[])
+            .add(item.displayPage ?? item.rawPage);
+      }
+      final duplicates =
+          pagesByNumber.entries.where((e) => e.value.length > 1).toList();
+      if (duplicates.isEmpty) continue;
+      final pages = <int>{for (final e in duplicates) ...e.value}.toList()
+        ..sort();
+      final name =
+          _conceptCategoryShortNames[_conceptCategoryBySubKey[subKey]] ??
+              subKey;
+      parts.add('$name ${duplicates.map((e) => e.key).join('·')}번 '
+          '(${pages.join('·')}쪽)');
+    }
+    if (parts.isEmpty) return null;
+    return '같은 번호가 두 번 잡혔습니다: ${parts.join(', ')}. '
+        '코너를 잘못 읽은 지면입니다. 이 소단원을 다시 분석하세요.';
   }
 
   /// 개념원리 필수유형(B) 자동 체이닝 — 영역 저장 직후 본문 PDF의 "풀이"

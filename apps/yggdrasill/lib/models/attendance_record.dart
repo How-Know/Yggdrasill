@@ -1,6 +1,9 @@
 import 'package:uuid/uuid.dart';
 
 class AttendanceRecord {
+  /// [copyWith]에서 희망 하원 시각·사유를 그대로 둘 때 쓰는 센티넬.
+  static const Object unset = Object();
+
   final String? id;
   final String studentId;
   final String? occurrenceId; // lesson_occurrences FK (원본 회차 고정 참조)
@@ -10,6 +13,10 @@ class AttendanceRecord {
   final bool isPresent; // 출석 여부
   final DateTime? arrivalTime; // 등원 시간 (슬라이드시트와 연동)
   final DateTime? departureTime; // 하원 시간 (슬라이드시트와 연동)
+  /// 학생이 고른 희망 하원 시각. 실제 하원([departureTime])과 별개.
+  final DateTime? plannedDepartureAt;
+  /// [plannedDepartureAt]이 수업 종료보다 이를 때 남긴 사유.
+  final String? earlyLeaveReason;
   final String? notes; // 비고 (지각, 조퇴 등)
   final String? sessionTypeId; // 수업 타입
   final String? setId; // student_time_block set_id
@@ -45,6 +52,8 @@ class AttendanceRecord {
     required this.isPresent,
     this.arrivalTime,
     this.departureTime,
+    this.plannedDepartureAt,
+    this.earlyLeaveReason,
     this.notes,
     this.sessionTypeId,
     this.setId,
@@ -124,6 +133,15 @@ class AttendanceRecord {
       departureTime: map['departure_time'] != null
           ? DateTime.parse(map['departure_time'] as String)
           : null,
+      plannedDepartureAt: map['planned_departure_at'] != null
+          ? DateTime.parse(map['planned_departure_at'] as String)
+          : null,
+      earlyLeaveReason: () {
+        final raw = map['early_leave_reason'];
+        if (raw == null) return null;
+        final text = raw.toString().trim();
+        return text.isEmpty ? null : text;
+      }(),
       notes: map['notes'] as String?,
       sessionTypeId: map['session_type_id'] as String?,
       setId: map['set_id'] as String?,
@@ -175,6 +193,8 @@ class AttendanceRecord {
     bool? isPresent,
     DateTime? arrivalTime,
     DateTime? departureTime,
+    Object? plannedDepartureAt = unset,
+    Object? earlyLeaveReason = unset,
     String? notes,
     String? sessionTypeId,
     String? setId,
@@ -197,6 +217,12 @@ class AttendanceRecord {
       isPresent: isPresent ?? this.isPresent,
       arrivalTime: arrivalTime ?? this.arrivalTime,
       departureTime: departureTime ?? this.departureTime,
+      plannedDepartureAt: identical(plannedDepartureAt, unset)
+          ? this.plannedDepartureAt
+          : plannedDepartureAt as DateTime?,
+      earlyLeaveReason: identical(earlyLeaveReason, unset)
+          ? this.earlyLeaveReason
+          : earlyLeaveReason as String?,
       notes: notes ?? this.notes,
       sessionTypeId: sessionTypeId ?? this.sessionTypeId,
       setId: setId ?? this.setId,

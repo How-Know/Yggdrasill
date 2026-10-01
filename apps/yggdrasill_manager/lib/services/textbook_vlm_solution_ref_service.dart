@@ -180,12 +180,14 @@ class TextbookVlmSolutionRefService {
     required List<TextbookWonriMiddleSolutionExpected> expectedEntries,
     String mode = 'combined',
     String mimeType = 'image/png',
+    bool allowContinuation = true,
   }) async {
     final body = <String, dynamic>{
       'image_base64': base64Encode(imageBytes),
       'mime_type': mimeType,
       'raw_page': rawPage,
       'mode': mode,
+      if (!allowContinuation) 'allow_continuation': false,
       'expected_entries':
           expectedEntries.map((entry) => entry.toJson()).toList(),
     };
@@ -719,6 +721,8 @@ class TextbookVlmWonriMiddleSolutionItem {
   }
 }
 
+typedef TextbookWonriMiddleSolutionBox = ({String title, int? from, int? to});
+
 class TextbookVlmWonriMiddleSolutionPageResult {
   const TextbookVlmWonriMiddleSolutionPageResult({
     required this.rawPage,
@@ -726,6 +730,7 @@ class TextbookVlmWonriMiddleSolutionPageResult {
     required this.notes,
     required this.elapsedMs,
     required this.model,
+    this.boxes = const <TextbookWonriMiddleSolutionBox>[],
   });
 
   final int rawPage;
@@ -733,6 +738,9 @@ class TextbookVlmWonriMiddleSolutionPageResult {
   final String notes;
   final int elapsedMs;
   final String model;
+
+  /// 이 지면에서 보인 코너 박스들. 배지를 못 읽으면 본문쪽이 null 이다.
+  final List<TextbookWonriMiddleSolutionBox> boxes;
 
   factory TextbookVlmWonriMiddleSolutionPageResult.fromMap(
     Map<String, dynamic> map,
@@ -743,8 +751,22 @@ class TextbookVlmWonriMiddleSolutionPageResult {
     }
 
     final rawItems = (map['items'] as List?) ?? const <dynamic>[];
+    final rawBoxes = (map['boxes'] as List?) ?? const <dynamic>[];
     return TextbookVlmWonriMiddleSolutionPageResult(
       rawPage: asInt(map['raw_page']),
+      boxes: <TextbookWonriMiddleSolutionBox>[
+        for (final raw in rawBoxes)
+          if (raw is Map)
+            (
+              title: '${raw['title'] ?? ''}'.trim(),
+              from: raw['body_page_from'] is num
+                  ? (raw['body_page_from'] as num).toInt()
+                  : null,
+              to: raw['body_page_to'] is num
+                  ? (raw['body_page_to'] as num).toInt()
+                  : null,
+            ),
+      ],
       items: <TextbookVlmWonriMiddleSolutionItem>[
         for (final raw in rawItems)
           if (raw is Map)

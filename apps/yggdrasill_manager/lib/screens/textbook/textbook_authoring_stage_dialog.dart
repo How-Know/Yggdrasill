@@ -2677,6 +2677,7 @@ class _TextbookAuthoringStageDialogState
         );
         final scanTotal = scanEnd - pageRange.start + 1;
         final scopeBounds = _solutionScopeBounds;
+        final boxesByPage = <int, List<TextbookWonriMiddleSolutionBox>>{};
         for (var page = pageRange.start;
             page <= scanEnd && pending.isNotEmpty;
             page += 1) {
@@ -2714,16 +2715,47 @@ class _TextbookAuthoringStageDialogState
             sectionOf: (position) => solutionTargets[position].section,
             scopeKeyOf: (position) => solutionTargets[position].scopeKey,
             numberOf: (position) => solutionTargets[position].problemNumber,
+            settled: [
+              for (var i = 0; i < solutionTargets.length; i += 1)
+                if (!pending.contains(i)) i,
+            ],
           );
-          for (final batch in batches) {
+          final queue = <(List<int>, bool)>[
+            for (final batch in batches) (batch, false),
+          ];
+          while (queue.isNotEmpty) {
+            final (batch, isGapRetry) = queue.removeAt(0);
             final order = batch.where(pending.contains).toList(growable: false);
             if (order.isEmpty) continue;
+            final first = solutionTargets[order.first];
+            final started = Iterable<int>.generate(solutionTargets.length).any(
+              (i) =>
+                  !pending.contains(i) &&
+                  solutionTargets[i].section == first.section &&
+                  solutionTargets[i].scopeKey == first.scopeKey,
+            );
             TextbookVlmWonriMiddleSolutionPageResult result;
             try {
               result = await _solRefService.extractWonriMiddleSolutionsOnPage(
                 imageBytes: png,
                 rawPage: page,
                 mode: answers ? 'answers' : 'solution_refs',
+                allowContinuation: textbookWonriMiddleMayContinue(
+                  started: started,
+                  section: first.section,
+                  previousPageBoxes: boxesByPage[page - 1] ??
+                      const <TextbookWonriMiddleSolutionBox>[],
+                  bodyPages: [
+                    for (final position in order)
+                      solutionTargets[position].displayPage,
+                  ],
+                  siblingBodyPages: [
+                    for (final crop in solutionTargets)
+                      if (crop.section == first.section &&
+                          crop.scopeKey != first.scopeKey)
+                        crop.displayPage,
+                  ],
+                ),
                 expectedEntries: <TextbookWonriMiddleSolutionExpected>[
                   for (final position in order)
                     TextbookWonriMiddleSolutionExpected(
@@ -2739,8 +2771,12 @@ class _TextbookAuthoringStageDialogState
                     ),
                 ],
               );
+              boxesByPage
+                  .putIfAbsent(page, () => <TextbookWonriMiddleSolutionBox>[])
+                  .addAll(result.boxes);
               debugPrint(
                 '[wonri-middle-stage] mode=${answers ? 'answers' : 'solution_refs'} '
+                '${isGapRetry ? 'gap-retry ' : ''}'
                 'page=$page section=${solutionTargets[order.first].section} '
                 'expected=${order.length} items=${result.items.length} '
                 '${result.notes}',
@@ -2781,7 +2817,16 @@ class _TextbookAuthoringStageDialogState
                   }).toList();
                   if (matched.length == 1) targetIndex = matched.single;
                 }
-                if (targetIndex == null || !pending.remove(targetIndex)) {
+                if (targetIndex == null ||
+                    _wonriSolutionSpotTaken(
+                      cropId: solutionTargets[targetIndex].id,
+                      page: result.rawPage,
+                      answers: answers,
+                      region: answers
+                          ? item.answerRegion1k ?? item.numberRegion1k
+                          : item.numberRegion1k,
+                    ) ||
+                    !pending.remove(targetIndex)) {
                   continue;
                 }
                 final crop = solutionTargets[targetIndex];
@@ -2842,6 +2887,15 @@ class _TextbookAuthoringStageDialogState
                 _solRefProgress = progress;
               }
             });
+            if (!isGapRetry) {
+              final gaps = textbookWonriMiddlePageGaps(
+                asked: order,
+                stillPending: pending,
+                numberOf: (position) =>
+                    solutionTargets[position].problemNumber,
+              );
+              if (gaps.isNotEmpty) queue.insert(0, (gaps, true));
+            }
           }
         }
       }
@@ -2899,6 +2953,32 @@ class _TextbookAuthoringStageDialogState
         }
       });
     }
+  }
+
+  /// 해설 지면의 이 번호 자리를 이미 다른 문항이 차지했는지.
+  ///
+  /// 소단원 둘의 시험문제 01~05를 같은 지면에서 차례로 물으면, 모델이 앞
+  /// 소단원 박스의 배지를 비워 보고하고 뒤 소단원 요청에도 같은 01~05를
+  /// 돌려준다. 먼저 붙은 문항이 그 자리의 주인이다.
+  bool _wonriSolutionSpotTaken({
+    required String cropId,
+    required int page,
+    required bool answers,
+    required List<int>? region,
+  }) {
+    if (region == null) return false;
+    if (answers) {
+      return _answersByCropId.values.any((draft) =>
+          draft.cropId != cropId &&
+          draft.rawPage == page &&
+          '${draft.solutionMetadata['solution_kind'] ?? ''}' == 'answer_only' &&
+          textbookRegionsOverlap(draft.bbox1k, region));
+    }
+    return _solRefsByCropId.values.any((draft) =>
+        draft.cropId != cropId &&
+        draft.sourceKind == 'sol' &&
+        draft.rawPage == page &&
+        textbookRegionsOverlap(draft.numberRegion1k, region));
   }
 
   /// 개념원리 필수유형(wonri B) 전용 — 본문 PDF의 각 문항 페이지에서 "풀이"

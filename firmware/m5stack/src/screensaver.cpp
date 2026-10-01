@@ -22,6 +22,9 @@ static uint32_t g_last_activity_log_ms = 0;
 static bool g_display_sleeping = false;
 static uint32_t g_display_sleep_delay_ms = 30000; // 30초
 static uint32_t g_saver_entered_ms = 0;
+// 얼굴 화면보호기는 30분에 한 번만. 그 사이 유휴는 얼굴 없이 바로 화면을 끈다.
+static uint32_t g_last_face_ms = 0;
+static const uint32_t kFaceIntervalMs = 30UL * 60UL * 1000UL;
 
 static screensaver_wake_cb_t g_wake_cb = NULL;
 static volatile bool g_touch_pressed = false;
@@ -700,31 +703,43 @@ void screensaver_attach_activity(lv_obj_t* root) {
     g_last_activity_ms = lv_tick_get();
 }
 
+static void enter_display_sleep(void) {
+    Serial.println("[SCREENSAVER] Display sleep");
+    M5.Display.sleep();
+    g_display_sleeping = true;
+    if (g_blink_timer) { lv_timer_pause(g_blink_timer); }
+    if (g_blink_once_timer) { lv_timer_pause(g_blink_once_timer); }
+}
+
 void screensaver_poll(void) {
     uint32_t now = lv_tick_get();
 
-    if (!g_saver_scr && g_touch_pressed) {
+    if (g_display_sleeping && g_touch_pressed) {
+        screensaver_dismiss();
+        return;
+    }
+
+    if (!g_saver_scr && !g_display_sleeping && g_touch_pressed) {
         g_last_activity_ms = now;
     }
 
-    if (!g_saver_scr && now - g_last_activity_ms > g_timeout_ms) {
-        Serial.printf("[SCREENSAVER] Timeout reached. now=%lu, last=%lu, delta=%lu, threshold=%lu\n", 
-                      now, g_last_activity_ms, now - g_last_activity_ms, g_timeout_ms);
-        show_screensaver();
-        g_saver_entered_ms = now;
-        g_display_sleeping = false;
+    if (!g_saver_scr && !g_display_sleeping && now - g_last_activity_ms > g_timeout_ms) {
+        bool face_allowed = (g_last_face_ms == 0) || ((now - g_last_face_ms) >= kFaceIntervalMs);
+        Serial.printf("[SCREENSAVER] Timeout reached. now=%lu, last=%lu, delta=%lu, threshold=%lu face=%d\n",
+                      now, g_last_activity_ms, now - g_last_activity_ms, g_timeout_ms, face_allowed ? 1 : 0);
+        if (face_allowed) {
+            show_screensaver();
+            g_last_face_ms = now;
+            g_saver_entered_ms = now;
+            g_display_sleeping = false;
+        } else {
+            enter_display_sleep();
+        }
     }
     
-    // Display sleep after screensaver timeout
+    // 얼굴을 보여 준 뒤에는 잠시 뒤 화면을 끈다.
     if (g_saver_scr && !g_display_sleeping && (now - g_saver_entered_ms > g_display_sleep_delay_ms)) {
-        Serial.println("[SCREENSAVER] Display sleep");
-        
-        M5.Display.sleep();
-        g_display_sleeping = true;
-        
-        // Stop timers to save power
-        if (g_blink_timer) { lv_timer_pause(g_blink_timer); }
-        if (g_blink_once_timer) { lv_timer_pause(g_blink_once_timer); }
+        enter_display_sleep();
     }
 }
 

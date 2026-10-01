@@ -54,6 +54,7 @@ void fw_prepare_update_restart(void);
 void fw_clear_local_binding_state(void);
 void fw_publish_student_info(const char* studentId);
 void fw_publish_set_avatar(const char* kind, const char* emoji, int style, const char* url);
+void fw_publish_set_planned_departure(int hour, int minute);
 void fw_publish_homework_action(const char* action, const char* itemId);
 bool fw_publish_group_transition(const char* groupId, int from_phase = 0);
 bool fw_publish_pause_all();

@@ -97,7 +97,7 @@ for (const page of pages) {
   for (const item of result?.items ?? []) {
     const group = item.content_group || {};
     console.log(
-      `  ${JSON.stringify(item.number)} cat=${item.category} label=${JSON.stringify(item.label)} ` +
+      `  ${JSON.stringify(item.number)} cat=${item.category} role=${item.item_role || '-'} label=${JSON.stringify(item.label)} ` +
         `set=${item.is_set_header === true ? JSON.stringify(item.set_range) : '-'} ` +
         `col=${item.column ?? '-'} group=${group.kind || 'none'}/${JSON.stringify(group.label || '')}/${JSON.stringify(group.title || '')} ` +
         `bbox=${JSON.stringify(item.bbox)} region=${JSON.stringify(item.item_region)} ` +

@@ -1568,13 +1568,6 @@ class _PlannedDepartureDialogState extends State<_PlannedDepartureDialog> {
   void _save() {
     final planned = _plannedAtToday();
     final reason = _reasonCtrl.text.trim();
-    if (_isEarlierThanClassEnd(planned) && reason.isEmpty) {
-      TopGlassSnackBar.show(
-        context,
-        message: '수업 종료보다 일찍 가면 하원 사유를 적어 주세요.',
-      );
-      return;
-    }
     Navigator.of(context).pop(
       _PlannedDepartureResult.save(
         plannedAt: planned,
@@ -1767,7 +1760,7 @@ class _PlannedDepartureDialogState extends State<_PlannedDepartureDialog> {
                                         cursorColor: text,
                                         cursorWidth: 1.5,
                                         decoration: InputDecoration(
-                                          hintText: '필수',
+                                          hintText: '선택',
                                           hintStyle: valueStyle.copyWith(
                                             color: sub,
                                           ),

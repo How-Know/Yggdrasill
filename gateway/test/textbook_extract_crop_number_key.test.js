@@ -5,6 +5,7 @@ import {
   alignUniquePrefixedQuestionNumbers,
   expectedQuestionNumbersForInput,
   fetchTextbookCropPages,
+  mergeRecoveredExpectedQuestions,
   normalizeIndependentSetPayloadQuestions,
   selectExpectedQuestions,
 } from '../src/problem_bank/extract_engines/vlm/runner.js';
@@ -84,6 +85,44 @@ test('같은 접두어 기대 번호가 여러 개면 번호 없는 배지를 �
   ]);
 
   assert.equal(rows, original);
+});
+
+test('대표 예제만 읽은 결과에 누락 확인 문항 재요청 결과를 합친다', () => {
+  const rows = mergeRecoveredExpectedQuestions(
+    [
+      { question_number: '01', stem_latex: '대표 예제 1' },
+      { question_number: '02', stem_latex: '대표 예제 2' },
+      { question_number: '03', stem_latex: '대표 예제 3' },
+      { question_number: '04', stem_latex: '대표 예제 4' },
+    ],
+    [
+      { question_number: '확인1', stem_latex: '확인 문제 1' },
+      { question_number: '확인2', stem_latex: '확인 문제 2' },
+    ],
+    ['확인1', '확인2'],
+  );
+
+  assert.deepEqual(
+    rows.map((row) => row.question_number),
+    ['01', '02', '03', '04', '확인1', '확인2'],
+  );
+});
+
+test('누락 재요청이 단순 번호를 반환해도 기대 순서로 확인 번호를 복원한다', () => {
+  const rows = mergeRecoveredExpectedQuestions(
+    [{ question_number: '01', stem_latex: '대표 예제 1' }],
+    [
+      { question_number: '1', stem_latex: '확인 문제 1' },
+      { question_number: '2', stem_latex: '확인 문제 2' },
+    ],
+    ['확인1', '확인2'],
+  );
+
+  assert.deepEqual(
+    rows.map((row) => row.question_number),
+    ['01', '확인1', '확인2'],
+  );
+  assert.equal(rows[1].original_question_number, '1');
 });
 
 test('따름 문제는 대표 문항 키에 덮이지 않는다', async () => {

@@ -41,6 +41,11 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
         widget.studentWithInfo.student.id,
       ),
     );
+    unawaited(
+      HomeworkStore.instance.loadCompletedHistory(
+        studentId: widget.studentWithInfo.student.id,
+      ),
+    );
     unawaited(TagStore.instance.loadAllFromDb());
   }
 
@@ -317,7 +322,7 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
               child: ValueListenableBuilder<int>(
                 valueListenable: HomeworkStore.instance.revision,
                 builder: (context, _, __) {
-                  final list = HomeworkStore.instance.items(sid);
+                  final list = HomeworkStore.instance.itemsWithHistory(sid);
                   _ensureHomeworkTicker(sid, list);
                   if (list.isEmpty) {
                     return const Center(

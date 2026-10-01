@@ -286,7 +286,6 @@ class BackfillRunner {
           'payment_type': local['payment_type'],
           // 'logo': local['logo'], // bytea 전송 호환 이슈 시 제외 유지
           'session_cycle': local['session_cycle'],
-          'openai_api_key': local['openai_api_key'],
           'active_exam_season_id': local['active_exam_season_id'] ?? 1,
         }..removeWhere((k, v) => v == null);
         await supa

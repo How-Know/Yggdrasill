@@ -218,6 +218,10 @@ final ValueNotifier<bool> homeBatchConfirmFabVisible =
 /// 홈(수업 내용)에서 현재 선택된 일괄 확인 대상 수.
 final ValueNotifier<int> homeBatchConfirmPendingCount = ValueNotifier<int>(0);
 
+/// 채점 초안을 로컬에 저장하는 중인 과제 수. 이 동안 반환 대상에 넣지 않는다.
+final ValueNotifier<int> homeBatchConfirmDraftSavingCount =
+    ValueNotifier<int>(0);
+
 /// 홈(수업 내용) 일괄 확인 실행 액션.
 AsyncUiAction? homeBatchConfirmAction;
 

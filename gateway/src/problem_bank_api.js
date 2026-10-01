@@ -8422,6 +8422,9 @@ async function handleTextbookVlmExtractWonriMiddleSolutions(body, res) {
     });
   } catch (err) {
     const message = compact(err?.message || err);
+    console.warn(
+      `[textbook-vlm] wonri_middle ${mode} page=${rawPage} expected=${expectedEntries.length} failed: ${message.slice(0, 200)}`,
+    );
     if (isTextbookVlmQuotaError(message)) {
       sendJson(res, 429, {
         ok: false,
@@ -8444,13 +8447,29 @@ async function handleTextbookVlmExtractWonriMiddleSolutions(body, res) {
   const guarded = filterWonriMiddleItemsByBox({
     items: normalized.items,
     box: normalized.box,
+    boxes: normalized.boxes,
     expectedEntries,
+    // 박스 없는 지면 맨 위 풀이는 번호만으로 코너를 가를 수 없다. 앞 지면에서
+    // 시작도 안 한 코너가 01~04를 가져가지 않도록 관리자 앱이 막을 수 있다.
+    allowContinuation:
+      mode !== "answers" && body?.allow_continuation !== false,
   });
   if (guarded.dropped > 0) {
     console.warn(
       `[textbook-vlm] wonri_middle ${mode} page=${rawPage} dropped=${guarded.dropped} ${guarded.reason}`,
     );
   }
+  const expectedLabel = expectedEntries.length
+    ? `${expectedEntries[0].category}:${expectedEntries[0].problem_number}~${expectedEntries[expectedEntries.length - 1].problem_number}`
+    : "-";
+  const boxLabel = (normalized.boxes || [])
+    .map((one) => `${one.title}:${one.body_page_from ?? "?"}-${one.body_page_to ?? "?"}`)
+    .join(",");
+  console.log(
+    `[textbook-vlm] wonri_middle ${mode} page=${rawPage} expected=${expectedEntries.length}(${expectedLabel}) ` +
+      `continuation=${body?.allow_continuation !== false} items=${guarded.items.length} ` +
+      `numbers=${guarded.items.map((item) => item.problem_number).join(",")} boxes=[${boxLabel}]`,
+  );
   sendJson(res, 200, {
     ok: true,
     raw_page: rawPage,
@@ -8458,6 +8477,7 @@ async function handleTextbookVlmExtractWonriMiddleSolutions(body, res) {
     mode,
     items: guarded.items,
     box: normalized.box,
+    boxes: normalized.boxes,
     notes: [normalized.notes, guarded.reason].filter(Boolean).join(' · '),
     model: TEXTBOOK_VLM_MODEL,
     elapsed_ms: result.elapsedMs,

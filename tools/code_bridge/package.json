@@ -1,0 +1,17 @@
+{
+  "name": "ygg-code-bridge",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Think 코드 조사 요청을 받아 Cursor 에이전트(읽기 전용)로 조사하는 운영자 PC 작업자",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node --no-warnings src/worker.mjs",
+    "test": "node --test \"test/*.test.mjs\""
+  },
+  "dependencies": {
+    "@cursor/sdk": "1.0.32"
+  }
+}

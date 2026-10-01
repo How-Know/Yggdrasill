@@ -15,6 +15,8 @@ class HomeworkBatchConfirmService {
       HomeworkBatchConfirmService._();
 
   final Map<HomeworkBatchConfirmKey, bool> _pending = {};
+  final Map<HomeworkBatchConfirmKey, int> _savingDraftCounts =
+      <HomeworkBatchConfirmKey, int>{};
 
   Map<HomeworkBatchConfirmKey, bool> get pending => _pending;
 
@@ -34,6 +36,39 @@ class HomeworkBatchConfirmService {
     if (homeBatchConfirmPendingCount.value != count) {
       homeBatchConfirmPendingCount.value = count;
     }
+    final savingCount = _savingDraftCounts.length;
+    if (homeBatchConfirmDraftSavingCount.value != savingCount) {
+      homeBatchConfirmDraftSavingCount.value = savingCount;
+    }
+  }
+
+  void beginStructuredDraftSave(Iterable<HomeworkBatchConfirmKey> keys) {
+    for (final key in keys) {
+      _savingDraftCounts[key] = (_savingDraftCounts[key] ?? 0) + 1;
+      _pending.remove(key);
+    }
+    syncPendingCount();
+  }
+
+  void endStructuredDraftSave(Iterable<HomeworkBatchConfirmKey> keys) {
+    for (final key in keys) {
+      final next = (_savingDraftCounts[key] ?? 1) - 1;
+      if (next <= 0) {
+        _savingDraftCounts.remove(key);
+      } else {
+        _savingDraftCounts[key] = next;
+      }
+    }
+    syncPendingCount();
+  }
+
+  Map<HomeworkBatchConfirmKey, bool> _withoutSavingDrafts(
+    Map<HomeworkBatchConfirmKey, bool> pending,
+  ) {
+    return <HomeworkBatchConfirmKey, bool>{
+      for (final entry in pending.entries)
+        if ((_savingDraftCounts[entry.key] ?? 0) <= 0) entry.key: entry.value,
+    };
   }
 
   void clearPending() {
@@ -75,7 +110,9 @@ class HomeworkBatchConfirmService {
       syncPendingCount();
       return;
     }
-    final pending = Map<HomeworkBatchConfirmKey, bool>.from(_pending);
+    final pending = _withoutSavingDrafts(
+      Map<HomeworkBatchConfirmKey, bool>.from(_pending),
+    );
     final structuredResult =
         await HomeworkGradingReturnOutboxService.instance.processForKeys(
       pending.keys,
@@ -123,17 +160,18 @@ class HomeworkBatchConfirmService {
     required BuildContext context,
     required Map<HomeworkBatchConfirmKey, bool> pending,
   }) async {
-    if (pending.isEmpty) return;
+    final readyPending = _withoutSavingDrafts(pending);
+    if (readyPending.isEmpty) return;
     await restoreStructuredDrafts();
     final structuredResult =
         await HomeworkGradingReturnOutboxService.instance.processForKeys(
-      pending.keys,
+      readyPending.keys,
     );
     for (final key in structuredResult.succeededKeys) {
       _pending.remove(key);
     }
     final legacyPending = <HomeworkBatchConfirmKey, bool>{
-      for (final entry in pending.entries)
+      for (final entry in readyPending.entries)
         if (!structuredResult.succeededKeys.contains(entry.key) &&
             !structuredResult.failedKeys.contains(entry.key))
           entry.key: entry.value,

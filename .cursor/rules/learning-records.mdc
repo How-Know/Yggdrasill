@@ -50,6 +50,12 @@ monthly exams, free practice, paper range timings) still has no writer.
 11. Keep auto-graded and student-self-marked attempts in **separate sessions**.
     Reliability is computed per session, so mixing them drags the auto-graded
     records down and inflates the self-marked ones.
+12. Student-scoped record tables stay partition-ready (§11 of the doc): not-null
+    `student_id` with `on delete cascade`, `academy_id`, a not-null record
+    timestamp, no new FK that references a record row by `id` alone, and an index
+    led by every FK column. Add large student-scoped tables to the withdrawal
+    purge list in `_purge_withdrawn_student_step`. Never delete a student with a
+    single `delete from students`; use `withdraw_student`.
 
 ## Before adding a new test type
 

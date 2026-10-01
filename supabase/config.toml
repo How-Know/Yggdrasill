@@ -9,4 +9,7 @@ verify_jwt = false
 [functions.watch_push_send]
 verify_jwt = false
 
+[functions.ai_code_bridge]
+verify_jwt = false
+
 

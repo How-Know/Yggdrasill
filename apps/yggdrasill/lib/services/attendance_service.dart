@@ -19,6 +19,21 @@ import 'point_service.dart';
 import 'tenant_service.dart';
 import 'realtime_reconciler.dart';
 
+DateTime? _attendanceOptionalTime(dynamic value) {
+  if (value == null) return null;
+  if (value is DateTime) return value.toLocal();
+  if (value is String && value.isNotEmpty) {
+    return DateTime.tryParse(value)?.toLocal();
+  }
+  return null;
+}
+
+String? _attendanceOptionalText(dynamic value) {
+  if (value == null) return null;
+  final text = value.toString().trim();
+  return text.isEmpty ? null : text;
+}
+
 // 하루/세트 단위로 블록을 집계하기 위한 구조체 (가장 빠른 시작/가장 늦은 종료)
 class _PlannedDailyAgg {
   _PlannedDailyAgg({
@@ -264,7 +279,7 @@ class AttendanceService {
       }
 
       const selectCols =
-          'id,student_id,occurrence_id,class_date_time,class_end_time,class_name,is_present,arrival_time,departure_time,notes,session_type_id,set_id,cycle,session_order,is_planned,snapshot_id,batch_session_id,created_at,updated_at,version';
+          'id,student_id,occurrence_id,class_date_time,class_end_time,class_name,is_present,arrival_time,departure_time,planned_departure_at,early_leave_reason,notes,session_type_id,set_id,cycle,session_order,is_planned,snapshot_id,batch_session_id,created_at,updated_at,version';
 
       // ✅ 범위 내 페이지네이션 로드
       // - Range header로 0..999, 1000..1999 ... 형태로 계속 가져온다.
@@ -344,6 +359,8 @@ class AttendanceService {
           isPresent: isPresent,
           arrivalTime: parseTsOpt('arrival_time'),
           departureTime: parseTsOpt('departure_time'),
+          plannedDepartureAt: _attendanceOptionalTime(m['planned_departure_at']),
+          earlyLeaveReason: _attendanceOptionalText(m['early_leave_reason']),
           notes: m['notes'] as String?,
           sessionTypeId: m['session_type_id'] as String?,
           setId: m['set_id'] as String?,
@@ -384,6 +401,7 @@ class AttendanceService {
       }
 
       attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
+      unawaited(_hydrateOpenPlannedDepartures(academyId));
       print(
         '[SUPA] 출석 기록 로드: fetched=${parsed.length} cached=${_attendanceRecords.length} '
         'rangeOnly=$replaceRangeOnly '
@@ -1517,6 +1535,76 @@ class AttendanceService {
     return _resolveCycleByDueDate(studentId, classDateLocal);
   }
 
+  /// 희망 하원이 등원 카드가 보는 행과 다른 행에 있어도, 열린 회차에 붙여 바로 보이게 한다.
+  Future<void> _hydrateOpenPlannedDepartures(String academyId) async {
+    try {
+      final since = DateTime.now().toUtc().subtract(const Duration(days: 3));
+      final raw = await Supabase.instance.client
+          .from('attendance_records')
+          .select(
+            'id,student_id,planned_departure_at,early_leave_reason,departure_time,updated_at',
+          )
+          .eq('academy_id', academyId)
+          .not('planned_departure_at', 'is', null)
+          .gte('updated_at', since.toIso8601String());
+      final rows = (raw is List) ? raw : const <dynamic>[];
+      final byStudent = <String, ({DateTime at, String? reason, DateTime updated})>{};
+      for (final row0 in rows) {
+        final row = Map<String, dynamic>.from(row0 as Map);
+        if (row['departure_time'] != null) continue;
+        final at = _attendanceOptionalTime(row['planned_departure_at']);
+        final studentId = row['student_id']?.toString();
+        if (at == null || studentId == null || studentId.isEmpty) continue;
+        final updated = _attendanceOptionalTime(row['updated_at']) ?? at;
+        final prev = byStudent[studentId];
+        if (prev != null && !updated.isAfter(prev.updated)) continue;
+        byStudent[studentId] = (
+          at: at,
+          reason: _attendanceOptionalText(row['early_leave_reason']),
+          updated: updated,
+        );
+      }
+      if (byStudent.isEmpty) {
+        print('[SUPA][ATT] 희망 하원 없음 (최근 3일)');
+        return;
+      }
+      var changed = false;
+      for (var i = 0; i < _attendanceRecords.length; i++) {
+        final rec = _attendanceRecords[i];
+        final plan = byStudent[rec.studentId];
+        if (plan == null || rec.departureTime != null) continue;
+        if (!rec.isLiveOpenSession()) continue;
+        if (rec.plannedDepartureAt == plan.at &&
+            rec.earlyLeaveReason == plan.reason) {
+          continue;
+        }
+        _attendanceRecords[i] = rec.copyWith(
+          plannedDepartureAt: plan.at,
+          earlyLeaveReason: plan.reason,
+        );
+        changed = true;
+      }
+      if (changed) {
+        attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
+        print('[SUPA][ATT] 희망 하원 반영: ${byStudent.length}명');
+      } else {
+        print('[SUPA][ATT] 희망 하원 조회 ${byStudent.length}명, 등원 카드에 붙일 변경 없음');
+      }
+    } catch (e) {
+      print('[SUPA][ATT] 희망 하원 반영 실패: $e');
+    }
+  }
+
+  /// M5에서 희망 하원만 바꾼 직후, 그 두 컬럼을 다시 읽어 홈 카드에 반영한다.
+  Future<void> _pullPlannedDeparture(String id) async {
+    if (id.isEmpty) return;
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId();
+      if (academyId == null || academyId.isEmpty) return;
+      await _hydrateOpenPlannedDepartures(academyId);
+    } catch (_) {}
+  }
+
   Future<void> subscribeAttendanceRealtime() async {
     try {
       _attendanceRealtimeChannel?.unsubscribe();
@@ -1557,6 +1645,10 @@ class AttendanceService {
                 departureTime: (m['departure_time'] != null)
                     ? DateTime.parse(m['departure_time'] as String).toLocal()
                     : null,
+                plannedDepartureAt:
+                    _attendanceOptionalTime(m['planned_departure_at']),
+                earlyLeaveReason:
+                    _attendanceOptionalText(m['early_leave_reason']),
                 notes: m['notes'] as String?,
                 sessionTypeId: m['session_type_id'] as String?,
                 setId: m['set_id'] as String?,
@@ -1591,10 +1683,12 @@ class AttendanceService {
               value: academyId),
           callback: (payload) {
             final m = payload.newRecord;
-            if (m == null) return;
+            final id = m['id']?.toString();
+            if (id == null || id.isEmpty) return;
+            // 학생앱(M5)의 희망 하원은 이 행만 바꾸고, 실시간 페이로드에
+            // 새 컬럼이 빠지는 경우가 있어 저장값을 바로 다시 읽는다.
+            unawaited(_pullPlannedDeparture(id));
             try {
-              final id = m['id'] as String?;
-              if (id == null) return;
               final idx = _attendanceRecords.indexWhere((r) => r.id == id);
               if (idx == -1) return;
               final updated = _attendanceRecords[idx].copyWith(
@@ -1616,6 +1710,12 @@ class AttendanceService {
                     ? DateTime.parse(m['departure_time'] as String).toLocal()
                     : null,
                 notes: m['notes'] as String?,
+                plannedDepartureAt: m.containsKey('planned_departure_at')
+                    ? _attendanceOptionalTime(m['planned_departure_at'])
+                    : AttendanceRecord.unset,
+                earlyLeaveReason: m.containsKey('early_leave_reason')
+                    ? _attendanceOptionalText(m['early_leave_reason'])
+                    : AttendanceRecord.unset,
                 sessionTypeId: m['session_type_id'] as String? ??
                     _attendanceRecords[idx].sessionTypeId,
                 setId: m['set_id'] as String? ?? _attendanceRecords[idx].setId,
@@ -1733,7 +1833,7 @@ class AttendanceService {
       if (e.code != '23505') rethrow;
 
       const selectCols =
-          'id,student_id,occurrence_id,class_date_time,class_end_time,class_name,is_present,arrival_time,departure_time,notes,session_type_id,set_id,cycle,session_order,is_planned,snapshot_id,batch_session_id,created_at,updated_at,version';
+          'id,student_id,occurrence_id,class_date_time,class_end_time,class_name,is_present,arrival_time,departure_time,planned_departure_at,early_leave_reason,notes,session_type_id,set_id,cycle,session_order,is_planned,snapshot_id,batch_session_id,created_at,updated_at,version';
       final existing = await supa
           .from('attendance_records')
           .select(selectCols)
@@ -1767,6 +1867,10 @@ class AttendanceService {
         isPresent: existingPresent,
         arrivalTime: parseTsOpt('arrival_time'),
         departureTime: parseTsOpt('departure_time'),
+        plannedDepartureAt:
+            _attendanceOptionalTime(existing['planned_departure_at']),
+        earlyLeaveReason:
+            _attendanceOptionalText(existing['early_leave_reason']),
         notes: existing['notes'] as String?,
         sessionTypeId: existing['session_type_id'] as String?,
         setId: existing['set_id'] as String?,
@@ -4237,7 +4341,7 @@ class AttendanceService {
         final academyId = await TenantService.instance.getActiveAcademyId() ??
             await TenantService.instance.ensureActiveAcademy();
         const selectCols =
-            'id,student_id,occurrence_id,class_date_time,class_end_time,class_name,is_present,arrival_time,departure_time,notes,session_type_id,set_id,cycle,session_order,is_planned,snapshot_id,batch_session_id,created_at,updated_at,version';
+            'id,student_id,occurrence_id,class_date_time,class_end_time,class_name,is_present,arrival_time,departure_time,planned_departure_at,early_leave_reason,notes,session_type_id,set_id,cycle,session_order,is_planned,snapshot_id,batch_session_id,created_at,updated_at,version';
         final classDtUtc = _utcMinute(classDateTime);
         final row = await Supabase.instance.client
             .from('attendance_records')
@@ -4270,6 +4374,8 @@ class AttendanceService {
             isPresent: isPresent0,
             arrivalTime: parseTsOpt('arrival_time'),
             departureTime: parseTsOpt('departure_time'),
+            plannedDepartureAt: _attendanceOptionalTime(m['planned_departure_at']),
+            earlyLeaveReason: _attendanceOptionalText(m['early_leave_reason']),
             notes: m['notes'] as String?,
             sessionTypeId: m['session_type_id'] as String?,
             setId: m['set_id'] as String?,

@@ -95,13 +95,21 @@ class M5OtaService {
   }
 
   static String _repoRoot() {
-    var dir = Directory.current;
-    for (var i = 0; i < 6; i++) {
-      final marker = Directory(p.join(dir.path, 'firmware', 'm5stack'));
-      if (marker.existsSync()) return dir.path;
-      final parent = dir.parent;
-      if (parent.path == dir.path) break;
-      dir = parent;
+    final starts = <String>{
+      Directory.current.path,
+      p.dirname(Platform.resolvedExecutable),
+    };
+    for (final start in starts) {
+      var dir = Directory(start);
+      // Windows 디버그 실행 파일은 build/windows/x64/runner/Debug 에 있다.
+      // 앱 폴더보다 두 단계 위인 저장소 루트까지 올라가야 한다.
+      for (var i = 0; i < 12; i++) {
+        final marker = Directory(p.join(dir.path, 'firmware', 'm5stack'));
+        if (marker.existsSync()) return dir.path;
+        final parent = dir.parent;
+        if (parent.path == dir.path) break;
+        dir = parent;
+      }
     }
     throw M5OtaException('프로젝트 폴더를 찾지 못했습니다.');
   }
@@ -189,7 +197,8 @@ class M5OtaService {
         throw M5OtaException('MQTT 브로커에 연결하지 못했습니다.');
       }
       for (final topic in topics) {
-        socket.add(_mqttPacket(0x30, _publishBody(topic, payload)));
+        // retain=1. 꺼져 있던 기기는 다음 MQTT 접속 때 이 예약을 받는다.
+        socket.add(_mqttPacket(0x31, _publishBody(topic, payload)));
       }
       await socket.flush();
     } on TimeoutException {

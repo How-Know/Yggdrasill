@@ -759,21 +759,23 @@ class TextbookVlmItem {
   TextbookVlmItem withClassification({
     String? category,
     String? label,
+    String? itemRole,
+    bool clearContentGroup = false,
   }) =>
       TextbookVlmItem(
         number: number,
         label: label ?? this.label,
         category: category ?? this.category,
-        itemRole: itemRole,
+        itemRole: itemRole ?? this.itemRole,
         companionRegions: companionRegions,
         isImportant: isImportant,
         isSetHeader: isSetHeader,
         setFrom: setFrom,
         setTo: setTo,
-        contentGroupKind: contentGroupKind,
-        contentGroupLabel: contentGroupLabel,
-        contentGroupTitle: contentGroupTitle,
-        contentGroupOrder: contentGroupOrder,
+        contentGroupKind: clearContentGroup ? 'none' : contentGroupKind,
+        contentGroupLabel: clearContentGroup ? '' : contentGroupLabel,
+        contentGroupTitle: clearContentGroup ? '' : contentGroupTitle,
+        contentGroupOrder: clearContentGroup ? null : contentGroupOrder,
         column: column,
         bbox: bbox,
         itemRegion: itemRegion,
@@ -1002,6 +1004,117 @@ class TextbookWonriMiddleUnitEndGuard {
       _ => '',
     };
   }
+}
+
+/// 중등 개념원리 소단원 행에서 코너를 잘못 읽은 지면을 코너 순서로 되돌린다.
+///
+/// 소단원 행은 A(개념원리 확인하기) → B(핵심문제 익히기) → C(이런 문제가
+/// 시험에 나온다) 순서로 인쇄되고, 코너마다 번호가 01부터 새로 시작한다.
+/// 지면을 한 장씩 판독하므로 모델이 확인하기 지면 전체를 핵심문제로 보내는
+/// 일이 있다. 그러면 B 슬롯에 01~04가 두 번 담겨 행 저장이 통째로 실패한다.
+///
+/// "확인 N"이 인쇄된 지면들이 B 구간이다. 그 앞 지면은 A, 뒤 지면은 C만 올 수
+/// 있다. 다만 대표 예제가 지면 끝에 걸쳐 확인 문항이 다음 지면으로 넘어가는
+/// 정상 배치도 있으므로, 평번호가 다른 지면과 실제로 겹칠 때만 옮긴다.
+/// 옮길 코너에 같은 번호가 이미 있으면 근거가 모순이라 그대로 둔다.
+List<List<TextbookVlmItem>> repairWonriMiddleSubUnitCorners(
+  List<List<TextbookVlmItem>> pages, {
+  required List<String> pageSections,
+}) {
+  const concept = 'middle_concept_check';
+  const core = 'middle_core_problem';
+  const exam = 'middle_exam_problem';
+
+  String categoryOf(int page, TextbookVlmItem item) {
+    final value = item.category.trim();
+    if (value.isNotEmpty) return value;
+    return page < pageSections.length ? pageSections[page].trim() : '';
+  }
+
+  bool isFollowUp(TextbookVlmItem item) =>
+      item.itemRole.trim() == 'follow_up' ||
+      RegExp(r'^확인\s*\d+$').hasMatch(item.number.trim());
+
+  int? plainNumber(TextbookVlmItem item) {
+    if (isFollowUp(item)) return null;
+    final raw = item.number.trim();
+    if (!RegExp(r'^\d{1,3}$').hasMatch(raw)) return null;
+    return int.parse(raw);
+  }
+
+  int? firstCore;
+  int? lastCore;
+  for (var p = 0; p < pages.length; p += 1) {
+    final hasFollowUp = pages[p].any(
+      (item) => categoryOf(p, item) == core && isFollowUp(item),
+    );
+    if (!hasFollowUp) continue;
+    firstCore ??= p;
+    lastCore = p;
+  }
+  if (firstCore == null || lastCore == null) return pages;
+
+  final pagesByNumber = <String, Map<int, Set<int>>>{};
+  for (var p = 0; p < pages.length; p += 1) {
+    for (final item in pages[p]) {
+      final number = plainNumber(item);
+      if (number == null) continue;
+      pagesByNumber
+          .putIfAbsent(categoryOf(p, item), () => <int, Set<int>>{})
+          .putIfAbsent(number, () => <int>{})
+          .add(p);
+    }
+  }
+
+  String? targetFor(int page, String category) {
+    if (page < firstCore!) {
+      return category == core || category == exam ? concept : null;
+    }
+    if (page > lastCore!) {
+      return category == core || category == concept ? exam : null;
+    }
+    return null;
+  }
+
+  final out = List<List<TextbookVlmItem>>.of(pages);
+  for (var p = 0; p < out.length; p += 1) {
+    for (final category in const [core, concept, exam]) {
+      final target = targetFor(p, category);
+      if (target == null) continue;
+      final numbers = out[p]
+          .where((item) => categoryOf(p, item) == category)
+          .map(plainNumber)
+          .whereType<int>()
+          .toSet();
+      if (numbers.isEmpty) continue;
+      final collides = numbers.any(
+        (n) => (pagesByNumber[category]?[n]?.length ?? 0) > 1,
+      );
+      if (!collides) continue;
+      final clashesInTarget = numbers.any(
+        (n) => pagesByNumber[target]?[n]?.isNotEmpty ?? false,
+      );
+      if (clashesInTarget) continue;
+      out[p] = [
+        for (final item in out[p])
+          categoryOf(p, item) == category
+              ? item.withClassification(
+                  category: target,
+                  itemRole: 'standard',
+                  clearContentGroup: true,
+                )
+              : item,
+      ];
+      for (final n in numbers) {
+        pagesByNumber[category]?[n]?.remove(p);
+        pagesByNumber
+            .putIfAbsent(target, () => <int, Set<int>>{})
+            .putIfAbsent(n, () => <int>{})
+            .add(p);
+      }
+    }
+  }
+  return out;
 }
 
 class _ItemRegionSynthesis {

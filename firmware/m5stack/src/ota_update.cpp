@@ -203,6 +203,28 @@ bool performOtaUpdate(const String& downloadUrl, OtaProgressCallback progressCal
   return true;
 }
 
+static int ota_version_part(const char*& p) {
+  int value = 0;
+  while (*p >= '0' && *p <= '9') {
+    value = value * 10 + (*p - '0');
+    ++p;
+  }
+  if (*p == '.') ++p;
+  return value;
+}
+
+// 예약 버전이 현재 펌웨어보다 새로울 때만 양수.
+static int ota_compare_version(const char* incoming, const char* current) {
+  const char* a = incoming ? incoming : "";
+  const char* b = current ? current : "";
+  for (int i = 0; i < 4; ++i) {
+    int av = ota_version_part(a);
+    int bv = ota_version_part(b);
+    if (av != bv) return av > bv ? 1 : -1;
+  }
+  return 0;
+}
+
 static void ota_clear_pending(void) {
   Preferences prefs;
   prefs.begin("m5cfg", false);
@@ -225,6 +247,10 @@ bool ota_schedule_from_payload(const uint8_t* payload, size_t len) {
   const char* url = doc["url"] | "";
   const char* version = doc["version"] | "";
   if (strncmp(url, "http://", 7) != 0) return false;
+  if (ota_compare_version(version, FIRMWARE_VERSION) <= 0) {
+    Serial.printf("[OTA] ignore schedule version=%s current=%s\n", version, FIRMWARE_VERSION);
+    return false;
+  }
 
   Preferences prefs;
   prefs.begin("m5cfg", false);

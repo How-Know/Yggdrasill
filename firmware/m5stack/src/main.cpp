@@ -1030,6 +1030,19 @@ void fw_publish_set_avatar(const char* kind, const char* emoji, int style, const
   mqtt.publish(topic.c_str(), 1, false, payload.c_str());
 }
 
+void fw_publish_set_planned_departure(int hour, int minute) {
+  if (studentId.length() == 0) return;
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return;
+  DynamicJsonDocument doc(192);
+  doc["action"] = "set_planned_departure";
+  doc["student_id"] = studentId;
+  doc["hour"] = hour;
+  doc["minute"] = minute;
+  String payload; serializeJson(doc, payload);
+  String topic = String("academies/") + academyId + "/devices/" + deviceId + "/command";
+  mqtt.publish(topic.c_str(), 1, false, payload.c_str());
+}
+
 void fw_publish_list_homeworks(const char* studentIdArg) {
   if (!studentIdArg || !*studentIdArg) return;
   DynamicJsonDocument doc(128);

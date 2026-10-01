@@ -103,10 +103,16 @@ class AppNavigationBar extends StatelessWidget {
                   onTap: () => onDestinationSelected(6),
                 ),
                 _NavigationItem(
-                  icon: Icons.settings_outlined,
-                  label: '설정',
+                  icon: Icons.forum_outlined,
+                  label: 'Think',
                   isSelected: selectedIndex == 7,
                   onTap: () => onDestinationSelected(7),
+                ),
+                _NavigationItem(
+                  icon: Icons.settings_outlined,
+                  label: '설정',
+                  isSelected: selectedIndex == 8,
+                  onTap: () => onDestinationSelected(8),
                 ),
               ],
             ),

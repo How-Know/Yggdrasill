@@ -147,6 +147,14 @@ class StudentArchiveService {
       throw Exception('payload.students가 비어있습니다.');
     }
     studentRow['academy_id'] = academyId;
+    // 퇴원 직후라 서버 정리가 남아 있으면 그 행은 숨겨진 채 남아 있어 upsert가 막힌다.
+    final purged = await DataManager.instance.purgeWithdrawnStudent(
+      academyId: academyId,
+      studentId: meta.studentId,
+    );
+    if (!purged) {
+      throw Exception('퇴원 기록 정리가 아직 진행 중입니다. 1~2분 후 다시 시도해주세요.');
+    }
     await supa.from('students').upsert(studentRow, onConflict: 'id');
 
     final basicInfoRow = asMap(payload['student_basic_info']);

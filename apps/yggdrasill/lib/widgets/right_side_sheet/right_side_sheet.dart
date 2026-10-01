@@ -6760,11 +6760,16 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       return current.sessionId == session.sessionId;
     }
 
+    // 캐시는 세션 해설 PDF 기준이다. 본문에 풀이가 있는 문항처럼 문항별
+    // 해설 출처가 다르면 캐시를 읽지도 덮어쓰지도 않는다.
+    final solutionIsSessionSource =
+        solutionRaw == session.solutionPathRaw.trim();
     try {
       final preloadedAnswer =
           await _usablePreloadedPdfPath(preloaded?.answerPath ?? '');
-      final preloadedSolution =
-          await _usablePreloadedPdfPath(preloaded?.solutionPath ?? '');
+      final preloadedSolution = solutionIsSessionSource
+          ? await _usablePreloadedPdfPath(preloaded?.solutionPath ?? '')
+          : '';
       if (!stillCurrent()) return;
 
       // For solution jumps to a specific page, fetch a tiny single-page PDF
@@ -6864,14 +6869,19 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         overlayEntries: overlayEntries,
         isLoading: false,
       );
-      RightSheetAnswerPreloadService.instance.putPdfLinks(
-        cacheKey: cacheKey,
-        answerPath: answerPath,
-        solutionPath: solutionPath,
-      );
+      if (solutionIsSessionSource || !baseIsSolution) {
+        RightSheetAnswerPreloadService.instance.putPdfLinks(
+          cacheKey: cacheKey,
+          answerPath: answerPath,
+          solutionPath: solutionIsSessionSource
+              ? solutionPath
+              : (preloaded?.solutionPath ?? ''),
+        );
+      }
 
       // 답지가 뜬 뒤, 캐시에 없는 해설만 백그라운드로 데워 둔다(UI 블로킹 없음).
-      if (!needsSolutionNow &&
+      if (solutionIsSessionSource &&
+          !needsSolutionNow &&
           solutionPath.isEmpty &&
           solutionRaw.isNotEmpty &&
           preloadedSolution.isEmpty) {

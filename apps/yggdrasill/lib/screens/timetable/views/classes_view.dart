@@ -154,6 +154,7 @@ class _ClassesViewState extends State<ClassesView>
   // 기존: final ScrollController _scrollController = ScrollController();
   // 변경: widget.scrollController 사용
   String? _hoveredCellKey;
+  String? _capacityHoverKey;
   bool _hasScrolledToCurrentTime = false;
   int _lastOverlayTapMs = 0; // 오버레이(희망/시범) 라벨 탭 후 셀 탭 로직이 같이 타지 않도록 가드
   late final VoidCallback _inquiryDemandListener;
@@ -1424,21 +1425,25 @@ class _ClassesViewState extends State<ClassesView>
 
                   return SizedBox(
                     width: timeColumnWidth,
-                    child: MouseRegion(
+                      child: MouseRegion(
                       onEnter: (_) {
-                        if (widget.isRegistrationMode) {
-                          setState(() {
+                        setState(() {
+                          _capacityHoverKey = cellKey;
+                          if (widget.isRegistrationMode) {
                             _hoveredCellKey = cellKey;
-                          });
-                        }
+                          }
+                        });
                       },
                       onExit: (_) {
-                        if (widget.isRegistrationMode) {
-                          setState(() {
-                            if (_hoveredCellKey == cellKey)
-                              _hoveredCellKey = null;
-                          });
-                        }
+                        setState(() {
+                          if (_capacityHoverKey == cellKey) {
+                            _capacityHoverKey = null;
+                          }
+                          if (widget.isRegistrationMode &&
+                              _hoveredCellKey == cellKey) {
+                            _hoveredCellKey = null;
+                          }
+                        });
                       },
                       child: GestureDetector(
                         onTap: () async {
@@ -1539,6 +1544,22 @@ class _ClassesViewState extends State<ClassesView>
 
                 Widget buildDayGridRow(int dayIdx) {
                   final indicators = <Widget>[];
+                  final capacity = DataManager
+                      .instance.academySettings.defaultCapacity;
+                  final underSteps = timetableUnderCapacitySteps(capacity);
+                  final ribbonStyle =
+                      FabTabBarTokens.previewAcademyPanelStyleFor(
+                    Theme.of(context).brightness,
+                  );
+                  int? hoveredBlock;
+                  final hoverKey = _capacityHoverKey;
+                  if (hoverKey != null) {
+                    final parts = hoverKey.split('-');
+                    if (parts.length == 2 &&
+                        int.tryParse(parts[0]) == dayIdx) {
+                      hoveredBlock = int.tryParse(parts[1]);
+                    }
+                  }
                   var blockIdx = 0;
                   while (blockIdx < timeBlocks.length) {
                     final info = capacitySlotInfo(dayIdx, blockIdx);
@@ -1547,7 +1568,46 @@ class _ClassesViewState extends State<ClassesView>
                       continue;
                     }
 
+                    final under = info.count < capacity * 0.7;
                     final start = blockIdx;
+                    if (under) {
+                      final counts = <int>[info.count];
+                      blockIdx += 1;
+                      while (blockIdx < timeBlocks.length) {
+                        final next = capacitySlotInfo(dayIdx, blockIdx);
+                        if (next.isBreak ||
+                            next.count <= 0 ||
+                            next.count >= capacity * 0.7) {
+                          break;
+                        }
+                        counts.add(next.count);
+                        blockIdx += 1;
+                      }
+                      final hoveredIndex = hoveredBlock != null &&
+                              hoveredBlock >= start &&
+                              hoveredBlock < start + counts.length
+                          ? hoveredBlock - start
+                          : null;
+                      indicators.add(
+                        Positioned(
+                          top: 0,
+                          left: start * timeColumnWidth,
+                          width: counts.length * timeColumnWidth,
+                          height: 22,
+                          child: IgnorePointer(
+                            child: UnderCapacityRibbon(
+                              counts: counts,
+                              steps: underSteps,
+                              color: ribbonStyle.divider,
+                              numberColor: ribbonStyle.title,
+                              hoveredIndex: hoveredIndex,
+                            ),
+                          ),
+                        ),
+                      );
+                      continue;
+                    }
+
                     final count = info.count;
                     blockIdx += 1;
                     while (blockIdx < timeBlocks.length) {

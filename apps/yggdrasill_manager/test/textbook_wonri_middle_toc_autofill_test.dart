@@ -177,6 +177,102 @@ void main() {
     expect(descriptiveContinuation.category, 'middle_descriptive');
   });
 
+  group('소단원 행 코너 복구', () {
+    const concept = 'middle_concept_check';
+    const core = 'middle_core_problem';
+    const exam = 'middle_exam_problem';
+
+    TextbookVlmItem item(String number, String category, [String role = '']) =>
+        TextbookVlmItem(
+          number: number,
+          label: '',
+          category: category,
+          itemRole: role,
+          isSetHeader: false,
+          setFrom: null,
+          setTo: null,
+          contentGroupKind: category == core ? 'type' : 'none',
+          contentGroupLabel: category == core ? '핵심문제 01' : '',
+          contentGroupTitle: category == core ? '유형' : '',
+          contentGroupOrder: null,
+          column: 1,
+          bbox: const <int>[10, 10, 20, 20],
+          itemRegion: const <int>[20, 10, 80, 400],
+        );
+
+    List<String> sections(List<List<TextbookVlmItem>> pages) =>
+        [for (final page in pages) page.first.category];
+
+    test('핵심문제로 읽힌 확인하기 지면을 A로 되돌린다 (2-2 평행사변형 64쪽)', () {
+      final pages = <List<TextbookVlmItem>>[
+        [
+          for (final n in ['01', '02', '03', '04'])
+            item(n, core, 'representative')
+        ],
+        [item('01', core, 'representative'), item('확인 1', core, 'follow_up')],
+        [item('02', core, 'representative'), item('확인 2', core, 'follow_up')],
+        [item('01', exam), item('02', exam)],
+      ];
+      final out = repairWonriMiddleSubUnitCorners(
+        pages,
+        pageSections: sections(pages),
+      );
+
+      expect(out[0].map((i) => i.category).toSet(), <String>{concept});
+      expect(out[0].map((i) => i.itemRole).toSet(), <String>{'standard'});
+      expect(out[0].first.contentGroupKind, 'none');
+      expect(identical(out[1], pages[1]), isTrue);
+      expect(identical(out[3], pages[3]), isTrue);
+    });
+
+    test('B 뒤에서 A로 읽힌 시험문제 지면은 C로 보낸다', () {
+      final pages = <List<TextbookVlmItem>>[
+        [item('01', concept), item('02', concept)],
+        [item('01', core, 'representative'), item('확인 1', core, 'follow_up')],
+        [item('01', concept), item('02', concept), item('03', concept)],
+      ];
+      final out = repairWonriMiddleSubUnitCorners(
+        pages,
+        pageSections: sections(pages),
+      );
+
+      expect(identical(out[0], pages[0]), isTrue);
+      expect(out[2].map((i) => i.category).toSet(), <String>{exam});
+    });
+
+    test('확인 문항이 다음 지면으로 넘어간 대표 예제는 건드리지 않는다', () {
+      final pages = <List<TextbookVlmItem>>[
+        [
+          item('01', concept),
+          item('02', concept),
+          item('01', core, 'representative')
+        ],
+        [item('확인 1', core, 'follow_up'), item('02', core, 'representative')],
+      ];
+      final out = repairWonriMiddleSubUnitCorners(
+        pages,
+        pageSections: sections(pages),
+      );
+
+      expect(identical(out[0], pages[0]), isTrue);
+      expect(identical(out[1], pages[1]), isTrue);
+    });
+
+    test('옮길 코너에 같은 번호가 이미 있으면 그대로 둔다', () {
+      final pages = <List<TextbookVlmItem>>[
+        [item('01', concept)],
+        [item('01', core, 'representative')],
+        [item('01', core, 'representative'), item('확인 1', core, 'follow_up')],
+      ];
+      final out = repairWonriMiddleSubUnitCorners(
+        pages,
+        pageSections: sections(pages),
+      );
+
+      expect(identical(out[1], pages[1]), isTrue);
+    });
+  });
+
   test('해설 기대 키에 코너·중단원·본문 쪽을 함께 보존한다', () {
     final expected = textbookExpectedAnswerFor(
       seriesKey: 'wonri_middle',
@@ -329,5 +425,131 @@ void main() {
     expect(batches.length, 2);
     expect(batches.first, <int>[for (var i = 0; i < 16; i += 1) i]);
     expect(batches.last, <int>[for (var i = 16; i < 24; i += 1) i]);
+  });
+
+  test('같은 코너에서 뒤 번호가 잡혔으면 앞 누락분은 다음 지면에 묻지 않는다', () {
+    // 2-1 중단원 마무리: 02~04를 놓친 채 05~11을 찾으면 31쪽 첫 풀이 12가
+    // 목록 넷째로 밀려 이어진 풀이 전체가 버려졌다.
+    final pending = <int>{1, 2, 3, for (var i = 11; i < 24; i += 1) i};
+    final batches = textbookWonriMiddleRequestBatches(
+      order: pending.toList()..sort(),
+      sectionOf: (_) => 'middle_unit_review',
+      scopeKeyOf: (_) => '1:1:D:2',
+      numberOf: (position) => '${position + 1}'.padLeft(2, '0'),
+      settled: <int>[
+        for (var i = 0; i < 24; i += 1)
+          if (!pending.contains(i)) i,
+      ],
+    );
+    expect(batches, <List<int>>[
+      <int>[for (var i = 11; i < 24; i += 1) i],
+    ]);
+
+    // 소단원 키가 없으면 다음 소단원의 01을 가를 수 없으므로 그대로 둔다.
+    final unscoped = textbookWonriMiddleRequestBatches(
+      order: <int>[0, 1],
+      sectionOf: (_) => 'middle_unit_review',
+      scopeKeyOf: (_) => '',
+      numberOf: (position) => '0${position + 1}',
+      settled: const <int>[2],
+    );
+    expect(unscoped, <List<int>>[
+      <int>[0, 1],
+    ]);
+  });
+
+  test('시작도 안 한 코너는 박스 없는 지면의 이어진 풀이를 가져가지 않는다', () {
+    // 2-1 해설 24쪽: 23쪽 계산력(본문 64쪽) 박스에서 이어진 01~04를
+    // 아직 박스가 안 나온 시험문제(본문 65쪽)가 차지했다. 모델은 23쪽
+    // 계산력 배지를 70쪽으로 잘못 읽었다.
+    const page23Boxes = <({String title, int? from, int? to})>[
+      (title: '핵심문제 익히기', from: 62, to: 63),
+      (title: '계산력 강화하기', from: 70, to: 70),
+    ];
+    expect(
+      textbookWonriMiddleMayContinue(
+        started: false,
+        section: 'middle_exam_problem',
+        previousPageBoxes: page23Boxes,
+        bodyPages: const <int?>[65, 65],
+      ),
+      isFalse,
+    );
+    expect(
+      textbookWonriMiddleMayContinue(
+        started: false,
+        section: 'middle_calculation',
+        previousPageBoxes: page23Boxes,
+        bodyPages: const <int?>[64],
+        siblingBodyPages: const <int?>[72],
+      ),
+      isTrue,
+    );
+    // 25쪽 첫 소단원 시험문제 박스(본문 65쪽)는 둘째 소단원 시험문제(73쪽)의
+    // 박스가 아니다.
+    expect(
+      textbookWonriMiddleMayContinue(
+        started: false,
+        section: 'middle_exam_problem',
+        previousPageBoxes: const <({String title, int? from, int? to})>[
+          (title: '이런 문제가 시험에 나온다', from: 65, to: 65),
+        ],
+        bodyPages: const <int?>[73],
+        siblingBodyPages: const <int?>[65],
+      ),
+      isFalse,
+    );
+    // 앞 지면에서 이미 문항을 찾은 코너는 박스 없이도 이어진다(중단원 마무리 12~).
+    expect(
+      textbookWonriMiddleMayContinue(
+        started: true,
+        section: 'middle_unit_review',
+        previousPageBoxes: const <({String title, int? from, int? to})>[],
+        bodyPages: const <int?>[75, 76],
+      ),
+      isTrue,
+    );
+  });
+
+  test('한 지면에서 앞뒤 번호 사이만 빠진 문항을 다시 묻는다', () {
+    // 2-1 해설 34쪽 핵심문제 박스: 확인 1~6 중 둘째 줄 첫 칸 확인 5만 빠졌다.
+    const numbers = <String>['확인 1', '확인 2', '확인 3', '확인 4', '확인 5', '확인 6'];
+    expect(
+      textbookWonriMiddlePageGaps(
+        asked: const <int>[0, 1, 2, 3, 4, 5],
+        stillPending: <int>{4},
+        numberOf: (position) => numbers[position],
+      ),
+      <int>[4],
+    );
+    // 뒤쪽이 다음 지면으로 넘어간 것은 사이 누락이 아니다.
+    expect(
+      textbookWonriMiddlePageGaps(
+        asked: const <int>[0, 1, 2, 3, 4, 5],
+        stillPending: <int>{4, 5},
+        numberOf: (position) => numbers[position],
+      ),
+      isEmpty,
+    );
+  });
+
+  test('해설 지면의 같은 번호 자리는 한 문항만 차지한다', () {
+    // 1-2 해설 20쪽 시험문제 01: 둘째·셋째 소단원 요청이 같은 자리를 돌려준다.
+    expect(
+      textbookRegionsOverlap(
+        const <int>[588, 88, 603, 110],
+        const <int>[589, 88, 604, 111],
+      ),
+      isTrue,
+    );
+    // 같은 단의 바로 아래 번호(02)는 다른 자리다.
+    expect(
+      textbookRegionsOverlap(
+        const <int>[588, 88, 603, 110],
+        const <int>[730, 88, 745, 110],
+      ),
+      isFalse,
+    );
+    expect(textbookRegionsOverlap(null, const <int>[0, 0, 10, 10]), isFalse);
   });
 }

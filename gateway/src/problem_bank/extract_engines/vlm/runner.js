@@ -708,6 +708,39 @@ function alignQuestionNumbersByExpectedOrder(questions, expectedNumbers) {
   }));
 }
 
+function mergeRecoveredExpectedQuestions(
+  primaryQuestions,
+  recoveryQuestions,
+  expectedNumbers,
+) {
+  const primary = Array.isArray(primaryQuestions) ? primaryQuestions : [];
+  const expected = Array.isArray(expectedNumbers)
+    ? expectedNumbers.map((number) => compact(number)).filter(Boolean)
+    : [];
+  let recovery = alignUniquePrefixedQuestionNumbers(
+    Array.isArray(recoveryQuestions) ? recoveryQuestions : [],
+    expected,
+  );
+  let missing = missingExpectedQuestionNumbers(recovery, expected);
+  if (missing.length > 0) {
+    const aligned = alignQuestionNumbersByExpectedOrder(recovery, expected);
+    if (aligned) {
+      recovery = aligned;
+      missing = [];
+    }
+  }
+  if (missing.length > 0) return null;
+
+  const recoveredKeys = new Set(expectedQuestionKeys(expected));
+  return [
+    ...primary.filter(
+      (question) =>
+        !recoveredKeys.has(problemNumberKey(question?.question_number)),
+    ),
+    ...selectExpectedQuestions(recovery, expected),
+  ];
+}
+
 function isDailyQuotaExceededMessage(input) {
   const text = String(input || '').toLowerCase();
   return (
@@ -1089,6 +1122,63 @@ async function callGeminiChunkWithRetry({
               count: chunkQuestions.length,
               expectedHead: (input.expectedQuestionNumbers || []).slice(0, 8),
               originalHead: originalNumbers.slice(0, 8),
+            });
+          }
+        }
+      }
+      if (missingExpected.length > 0) {
+        // 개념원리 핵심문제는 같은 지면에 대표 예제 01·02와 확인1·확인2가
+        // 함께 있다. 전체 목록 재시도는 모델이 대표 예제만 반복해서 읽는
+        // 경향이 있으므로, 빠진 접두어 문항만 별도 요청해 결과를 합친다.
+        // 이 복구는 일반 재시도 전에 한 번만 수행한다.
+        const recoveryExpected = [...missingExpected];
+        if (typeof log === 'function') {
+          log('vlm_chunk_missing_only_recovery_start', {
+            chunkIndex: input.chunkIndex,
+            totalChunks: input.totalChunks,
+            pageRange: input.pageRange,
+            missingExpected: recoveryExpected,
+          });
+        }
+        const recovery = await callGeminiWithPdf({
+          pdfBuffer: input.buffer,
+          model,
+          apiKey,
+          timeoutMs,
+          textbookScope: input.textbookScope,
+          expectedQuestionNumbers: recoveryExpected,
+          expectedIndependentSetRanges: input.expectedIndependentSetRanges,
+        });
+        const recoveredQuestions = mergeRecoveredExpectedQuestions(
+          chunkQuestions,
+          recovery?.parsedJson?.questions,
+          recoveryExpected,
+        );
+        if (recoveredQuestions) {
+          result.parsedJson.questions = recoveredQuestions;
+          chunkQuestions = recoveredQuestions;
+          missingExpected = missingExpectedQuestionNumbers(
+            chunkQuestions,
+            input.expectedQuestionNumbers,
+          );
+          result.usageMetadata = mergeUsageMetadata([
+            result.usageMetadata,
+            recovery?.usageMetadata,
+          ]);
+          result.elapsedMs =
+            Number(result.elapsedMs || 0) + Number(recovery?.elapsedMs || 0);
+          result.finishReason = [result.finishReason, recovery?.finishReason]
+            .map((value) => compact(value))
+            .filter(Boolean)
+            .join(',');
+          if (typeof log === 'function') {
+            log('vlm_chunk_missing_only_recovery_done', {
+              chunkIndex: input.chunkIndex,
+              totalChunks: input.totalChunks,
+              pageRange: input.pageRange,
+              recoveredCount:
+                recoveryExpected.length - missingExpected.length,
+              remainingMissing: missingExpected,
             });
           }
         }
@@ -2088,6 +2178,7 @@ export async function runVlmExtraction({
 
 export {
   alignUniquePrefixedQuestionNumbers,
+  mergeRecoveredExpectedQuestions,
   expectedQuestionNumbersForInput,
   fetchTextbookAnswerSidecars,
   fetchTextbookCropPages,

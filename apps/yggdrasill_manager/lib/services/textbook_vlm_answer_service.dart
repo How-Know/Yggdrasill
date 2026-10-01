@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -388,6 +389,29 @@ bool textbookWonriMiddleUsesBodySolution({
   return role == 'representative' || role == 'descriptive_example';
 }
 
+/// 두 0..1000 좌표 `[ymin,xmin,ymax,xmax]`가 같은 인쇄 자리를 가리키는지.
+///
+/// 소단원마다 같은 코너가 01부터 다시 인쇄되므로, 모델이 다른 소단원의
+/// 풀이 번호를 그대로 돌려주면 번호만으로는 가려지지 않는다. 한 지면의
+/// 같은 번호 자리는 문항 하나에만 붙을 수 있다.
+bool textbookRegionsOverlap(
+  List<int>? a,
+  List<int>? b, {
+  double minIoU = 0.5,
+}) {
+  if (a == null || b == null || a.length < 4 || b.length < 4) return false;
+  final top = math.max(a[0], b[0]);
+  final left = math.max(a[1], b[1]);
+  final bottom = math.min(a[2], b[2]);
+  final right = math.min(a[3], b[3]);
+  if (bottom <= top || right <= left) return false;
+  final inter = (bottom - top) * (right - left);
+  final areaA = (a[2] - a[0]) * (a[3] - a[1]);
+  final areaB = (b[2] - b[0]) * (b[3] - b[1]);
+  final union = areaA + areaB - inter;
+  return union > 0 && inter / union >= minIoU;
+}
+
 /// 해설에는 "확인 3", "유제 3"이 모두 단순히 "3"으로 인쇄된다.
 /// 화면/DB의 구분 접두어와 해설 인쇄번호를 같은 키로 맞춘다.
 String textbookWonriMiddlePrintedNumberKey(String raw) {
@@ -403,29 +427,48 @@ String textbookWonriMiddlePrintedNumberKey(String raw) {
 /// 인쇄된다. 한 요청에 두 소단원의 같은 인쇄번호(확인 1~6이 두 벌)가 섞이거나
 /// 번호가 뒤섞여 들어가면 모델이 어느 박스를 봐야 할지 정하지 못하고 items를
 /// 통째로 비운다. 코너와 소단원이 같은 문항만 번호 오름차순으로 모은다.
+///
+/// [settled]는 앞 지면에서 이미 풀이를 찾은 문항이다. 풀이는 번호순으로만
+/// 인쇄되므로 같은 코너에서 더 뒤 번호가 잡혔다면 그 앞의 누락분은 이후
+/// 지면에 나올 수 없다. 이런 누락분이 목록 앞에 남아 있으면 박스 없이
+/// 이어지는 다음 지면 풀이가 순서 검사에 걸려 통째로 버려지므로 뺀다.
+/// 소단원 키가 없으면 소단원마다 01부터 다시 인쇄되는 번호를 가를 수 없어
+/// 적용하지 않는다.
 List<List<int>> textbookWonriMiddleRequestBatches({
   required List<int> order,
   required String Function(int position) sectionOf,
   required String Function(int position) scopeKeyOf,
   required String Function(int position) numberOf,
+  Iterable<int> settled = const <int>[],
   int maxPerBatch = 16,
 }) {
+  String groupKey(int position) =>
+      '${sectionOf(position)}|${scopeKeyOf(position)}';
   final groups = <String, List<int>>{};
   for (final position in order) {
-    groups
-        .putIfAbsent(
-          '${sectionOf(position)}|${scopeKeyOf(position)}',
-          () => <int>[],
-        )
-        .add(position);
+    groups.putIfAbsent(groupKey(position), () => <int>[]).add(position);
   }
   int rank(int position) {
     final digits = RegExp(r'\d+').firstMatch(numberOf(position))?.group(0);
     return digits == null ? 1 << 30 : int.parse(digits);
   }
 
+  final reached = <String, int>{};
+  for (final position in settled) {
+    if (scopeKeyOf(position).isEmpty) continue;
+    final value = rank(position);
+    if (value == 1 << 30) continue;
+    final key = groupKey(position);
+    if (value > (reached[key] ?? -1)) reached[key] = value;
+  }
+
   final out = <List<int>>[];
-  for (final group in groups.values) {
+  for (final entry in groups.entries) {
+    final floor = reached[entry.key];
+    final group = floor == null
+        ? entry.value
+        : entry.value.where((position) => rank(position) > floor).toList();
+    if (group.isEmpty) continue;
     group.sort((a, b) {
       final byNumber = rank(a).compareTo(rank(b));
       return byNumber != 0 ? byNumber : a.compareTo(b);
@@ -435,6 +478,72 @@ List<List<int>> textbookWonriMiddleRequestBatches({
     }
   }
   return out;
+}
+
+/// 한 지면 요청에서 앞뒤 번호는 찾았는데 사이 번호만 빠진 문항.
+///
+/// 빠른 정답 박스·풀이는 번호순으로 한곳에 인쇄되므로 사이 번호는 같은
+/// 지면에 있다. 모델이 줄바꿈된 칸 하나를 건너뛰는 일이 잦아(2-1 해설
+/// 34쪽 핵심문제 박스 둘째 줄 첫 칸 "5 ⑤") 그 문항만 같은 지면에 다시
+/// 묻는다. 뒤 지면에서는 더 뒤 번호가 이미 잡혀 다시 묻지 않는다.
+List<int> textbookWonriMiddlePageGaps({
+  required List<int> asked,
+  required Set<int> stillPending,
+  required String Function(int position) numberOf,
+}) {
+  int? rank(int position) {
+    final digits = RegExp(r'\d+').firstMatch(numberOf(position))?.group(0);
+    return digits == null ? null : int.parse(digits);
+  }
+
+  final found = [
+    for (final position in asked)
+      if (!stillPending.contains(position)) rank(position),
+  ].whereType<int>().toList();
+  if (found.length < 2) return const <int>[];
+  final low = found.reduce(math.min);
+  final high = found.reduce(math.max);
+  return [
+    for (final position in asked)
+      if (stillPending.contains(position) &&
+          (rank(position) ?? -1) > low &&
+          (rank(position) ?? -1) < high)
+        position,
+  ];
+}
+
+/// 박스 없는 해설 지면 맨 위 풀이를 이 코너의 이어진 풀이로 받아도 되는지.
+///
+/// 맨 위 풀이는 번호만 보이므로, 아직 박스도 나오지 않은 다른 코너의
+/// 01~04가 앞 코너의 연속 풀이 자리를 가져간다(2-1 해설 24쪽 계산력 풀이를
+/// 시험문제가 차지해 뒤 코너까지 연쇄로 밀림). 앞 지면에서 이미 문항이
+/// 잡혔거나 앞 지면에 이 코너 박스가 보였을 때만 이어질 수 있다.
+/// 모델이 박스 배지 쪽수를 잘못 읽기도 해서(23쪽 계산력 64쪽 → 70쪽)
+/// 박스 제목이 코너명과 같아도 이 코너 박스로 본다. 단 그 박스 쪽수가 같은
+/// 코너의 다른 소단원([siblingBodyPages])을 가리키면 그 소단원 박스다.
+bool textbookWonriMiddleMayContinue({
+  required bool started,
+  required String section,
+  required List<({String title, int? from, int? to})> previousPageBoxes,
+  required Iterable<int?> bodyPages,
+  Iterable<int?> siblingBodyPages = const <int?>[],
+}) {
+  if (started) return true;
+  String squash(String raw) => raw.replaceAll(RegExp(r'\s+'), '');
+  bool covers(int? from, int? to, Iterable<int?> pages) =>
+      from != null &&
+      to != null &&
+      pages.any((page) => page != null && page >= from && page <= to);
+  final corner = squash(_kWonriMiddleAnswerCorners[section] ?? '');
+  for (final box in previousPageBoxes) {
+    if (covers(box.from, box.to, bodyPages)) return true;
+    if (corner.isNotEmpty &&
+        squash(box.title) == corner &&
+        !covers(box.from, box.to, siblingBodyPages)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /// 상세 해설은 다음 소단원의 빠른 정답 박스가 시작되는 지면 위쪽까지

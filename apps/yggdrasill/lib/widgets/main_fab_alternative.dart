@@ -1,12 +1,18 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'memo_dialogs.dart';
 import 'payment_management_dialog.dart';
 import 'makeup_quick_dialog.dart';
 import '../app_overlays.dart';
+import 'dialog_tokens.dart';
 import '../services/exam_mode.dart';
 import '../screens/design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
+
+/// Icons8 iOS Outlined "U Turn to Right" (id 106518).
+const String _homeReturnUTurnSvg =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50"><path d="M 38.990234 -0.009765625 A 1.0001 1.0001 0 0 0 38.292969 1.7070312 L 46.585938 10 L 17 10 A 1.0001 1.0001 0 0 0 16.886719 10.005859 C 7.5933822 10.068143 0 17.692783 0 27 C 0 36.309847 7.597607 43.936119 16.894531 43.994141 A 1.0001 1.0001 0 0 0 17 44 L 32 44 L 33 44 L 50 44 L 50 42 L 33 42 L 32 42 L 17 42 C 8.7454545 42 2 35.254545 2 27 C 2 18.745455 8.7454545 12 17 12 L 46.585938 12 L 38.292969 20.292969 A 1.0001 1.0001 0 1 0 39.707031 21.707031 L 49.707031 11.707031 A 1.0001 1.0001 0 0 0 49.707031 10.292969 L 39.707031 0.29296875 A 1.0001 1.0001 0 0 0 38.990234 -0.009765625 z"/></svg>';
 
 /// 홈 하단 **확인** FAB·M5 **질문 칩**이 같은 레이아웃 경로(`GestureDetector` → 고정 `SizedBox` → `Container`)를 쓰도록 통일.
 /// Scaffold FAB 슬롯과 본문 하단은 배치만 다를 뿐, 픽셀 치수는 동일해야 한다.
@@ -19,6 +25,8 @@ class HomeBottomActionPill extends StatelessWidget {
   final VoidCallback onTap;
   final Widget child;
   final EdgeInsetsGeometry padding;
+  final double width;
+  final bool showShadow;
 
   const HomeBottomActionPill({
     super.key,
@@ -26,6 +34,8 @@ class HomeBottomActionPill extends StatelessWidget {
     required this.onTap,
     required this.child,
     this.padding = EdgeInsets.zero,
+    this.width = pillWidth,
+    this.showShadow = true,
   });
 
   static List<BoxShadow> pillBoxShadow() => [
@@ -43,7 +53,7 @@ class HomeBottomActionPill extends StatelessWidget {
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
       child: SizedBox(
-        width: pillWidth,
+        width: width,
         height: pillHeight,
         child: Container(
           alignment: Alignment.center,
@@ -51,7 +61,7 @@ class HomeBottomActionPill extends StatelessWidget {
           decoration: BoxDecoration(
             color: backgroundColor,
             borderRadius: BorderRadius.circular(pillRadius),
-            boxShadow: pillBoxShadow(),
+            boxShadow: showShadow ? pillBoxShadow() : null,
           ),
           child: child,
         ),
@@ -347,82 +357,111 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
             return ValueListenableBuilder<int>(
               valueListenable: homeBatchConfirmPendingCount,
               builder: (context, pendingConfirmCount, ___) {
-                return ValueListenableBuilder<bool>(
-                  valueListenable: ExamModeService.instance.isOn,
-                  builder: (context, examModeOn, ____) {
+                return ValueListenableBuilder<int>(
+                  valueListenable: homeBatchConfirmDraftSavingCount,
+                  builder: (context, draftSavingCount, ____) {
                     return ValueListenableBuilder<bool>(
-                      valueListenable:
-                          ExamModeService.instance.suppressExamActionCluster,
-                      builder: (context, suppressExamButton, _____) {
+                      valueListenable: ExamModeService.instance.isOn,
+                      builder: (context, examModeOn, ____) {
                         return ValueListenableBuilder<bool>(
-                          valueListenable:
-                              ExamModeService.instance.examScheduleDialogOpen,
-                          builder: (context, examScheduleDialogOpen, ______) {
-                            final shouldShowBatchConfirmFab =
-                                widget.showHomeBatchConfirmFab &&
-                                    showBatchConfirmFab;
-                            final canRunBatchConfirm =
-                                shouldShowBatchConfirmFab &&
-                                    pendingConfirmCount > 0 &&
-                                    homeBatchConfirmAction != null;
-                            final shouldShowExamFab =
-                                examModeOn && !suppressExamButton;
-                            return Row(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                if (shouldShowExamFab) ...[
-                                  _buildExamFabButton(
-                                    enabled: examScheduleAction != null,
-                                    dialogOpen: examScheduleDialogOpen,
-                                  ),
-                                  const SizedBox(width: 12),
-                                ],
-                                Column(
-                                  mainAxisAlignment: MainAxisAlignment.end,
+                          valueListenable: ExamModeService
+                              .instance.suppressExamActionCluster,
+                          builder: (context, suppressExamButton, _____) {
+                            return ValueListenableBuilder<bool>(
+                              valueListenable: ExamModeService
+                                  .instance.examScheduleDialogOpen,
+                              builder:
+                                  (context, examScheduleDialogOpen, ______) {
+                                final shouldShowBatchConfirmFab =
+                                    widget.showHomeBatchConfirmFab &&
+                                        showBatchConfirmFab;
+                                final canRunBatchConfirm =
+                                    shouldShowBatchConfirmFab &&
+                                        pendingConfirmCount > 0 &&
+                                        homeBatchConfirmAction != null;
+                                final shouldShowExamFab =
+                                    examModeOn && !suppressExamButton;
+                                return Row(
+                                  mainAxisSize: MainAxisSize.min,
                                   crossAxisAlignment: CrossAxisAlignment.end,
                                   children: [
-                                    _buildPrimaryFabButton(),
-                                  ],
-                                ),
-                                if (shouldShowBatchConfirmFab) ...[
-                                  const SizedBox(width: 12),
-                                  Opacity(
-                                    opacity: canRunBatchConfirm ? 1.0 : 0.45,
-                                    child: IgnorePointer(
-                                      ignoring: !canRunBatchConfirm,
-                                      child: HomeBottomActionPill(
-                                        backgroundColor: FabTabBarTokens
-                                            .previewConfirmActionColor,
-                                        onTap: () async {
-                                          final action = homeBatchConfirmAction;
-                                          if (action == null) return;
-                                          await action();
-                                        },
-                                        child: Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            const Icon(
-                                              Icons.check_rounded,
-                                              size: 21,
-                                              color: Colors.white,
-                                            ),
-                                            const SizedBox(width: 8),
-                                            Text(
-                                              '반환',
-                                              style: const TextStyle(
-                                                color: Colors.white,
-                                                fontSize: 17,
-                                                fontWeight: FontWeight.w700,
+                                    if (shouldShowExamFab) ...[
+                                      _buildExamFabButton(
+                                        enabled: examScheduleAction != null,
+                                        dialogOpen: examScheduleDialogOpen,
+                                      ),
+                                      const SizedBox(width: 12),
+                                    ],
+                                    Column(
+                                      mainAxisAlignment: MainAxisAlignment.end,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.end,
+                                      children: [
+                                        _buildPrimaryFabButton(),
+                                      ],
+                                    ),
+                                    if (shouldShowBatchConfirmFab) ...[
+                                      const SizedBox(width: 12),
+                                      Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          if (draftSavingCount > 0) ...[
+                                            const YggLoadingIndicator(size: 22),
+                                            const SizedBox(height: 8),
+                                          ],
+                                          Opacity(
+                                            opacity:
+                                                canRunBatchConfirm ? 1.0 : 0.45,
+                                            child: IgnorePointer(
+                                              ignoring: !canRunBatchConfirm,
+                                              child: HomeBottomActionPill(
+                                                width: 128,
+                                                showShadow: false,
+                                                backgroundColor: FabTabBarTokens
+                                                    .previewConfirmActionColor,
+                                                onTap: () async {
+                                                  final action =
+                                                      homeBatchConfirmAction;
+                                                  if (action == null) return;
+                                                  await action();
+                                                },
+                                                child: Row(
+                                                  mainAxisSize:
+                                                      MainAxisSize.min,
+                                                  children: [
+                                                    SvgPicture.string(
+                                                      _homeReturnUTurnSvg,
+                                                      width: 15,
+                                                      height: 15,
+                                                      colorFilter:
+                                                          const ColorFilter.mode(
+                                                        Colors.white,
+                                                        BlendMode.srcIn,
+                                                      ),
+                                                    ),
+                                                    const SizedBox(width: 4),
+                                                    Text(
+                                                      '반환',
+                                                      style: const TextStyle(
+                                                        color: Colors.white,
+                                                        fontFamily: 'Pretendard',
+                                                        fontSize: 24,
+                                                        height: 1.0,
+                                                        fontWeight:
+                                                            FontWeight.w600,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
                                               ),
                                             ),
-                                          ],
-                                        ),
+                                          ),
+                                        ],
                                       ),
-                                    ),
-                                  ),
-                                ],
-                              ],
+                                    ],
+                                  ],
+                                );
+                              },
                             );
                           },
                         );

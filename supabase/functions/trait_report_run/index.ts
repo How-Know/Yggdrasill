@@ -55,21 +55,10 @@ function toQuestionPayload(row: any) {
   };
 }
 
-async function getOpenAiApiKey(admin: any): Promise<string | null> {
+// 키는 Edge Function 비밀값으로만 관리한다(platform_config에 두지 않는다).
+function getOpenAiApiKey(): string | null {
   const env = Deno.env.get('OPENAI_API_KEY');
-  if (env && env.trim()) return env.trim();
-  try {
-    const { data, error } = await admin
-      .from('platform_config')
-      .select('config_value')
-      .eq('config_key', 'openai_api_key')
-      .maybeSingle();
-    if (error) return null;
-    const v = (data?.config_value ?? '').trim();
-    return v || null;
-  } catch {
-    return null;
-  }
+  return env && env.trim() ? env.trim() : null;
 }
 
 function computeQuantMetrics(payloads: any[]) {
@@ -315,7 +304,7 @@ Deno.serve(async (req) => {
     let llm: any = null;
     let llm_error: string | null = null;
     try {
-      const apiKey = await getOpenAiApiKey(admin);
+      const apiKey = getOpenAiApiKey();
       if (apiKey) {
         llm = await runLlmAnalysis({ apiKey, model, promptVersion: prompt_version, payloads });
       } else {

@@ -22,6 +22,7 @@ import {
   buildWonriMiddleDetailedSolutionPrompt,
   buildWonriMiddleQuickAnswerPrompt,
   buildWonriMiddleSolutionPrompt,
+  extractWonriMiddleSolutionsOnPage,
   filterWonriMiddleItemsByBox,
   normalizeWonriMiddleSolutionResult,
 } from '../src/textbook/vlm_wonri_middle_solution_client.js';
@@ -575,11 +576,187 @@ test('wonri_middle keeps quick answers separate from detailed solutions', () => 
   assert.match(solutionPrompt, /빠른 정답 박스의 번호·답은 절대 선택하지 마라/);
   assert.match(solutionPrompt, /코너 제목이 반복되지 않아도/);
   assert.match(solutionPrompt, /answer_text": ""/);
+  assert.match(answerPrompt, /"box": \{/);
   for (const prompt of [answerPrompt, solutionPrompt]) {
-    assert.match(prompt, /"box": \{/);
+    assert.match(prompt, /"boxes": \[/);
+    assert.match(prompt, /"region": \[/);
+    assert.match(prompt, /null로 비우지 마라/);
     assert.match(prompt, /body_page_from/);
     assert.match(prompt, /middle_calculation="계산력 강화하기"/);
   }
+});
+
+test('wonri_middle solution layout rejects another corner continuation', () => {
+  // 해설 80쪽: 맨 위 "07"은 개념원리 확인하기의 연속 풀이이고, 그 아래
+  // 핵심문제 익히기(본문 212~215) 박스 뒤로 확인 1~5 풀이가 이어진다.
+  // 시험문제 01~10을 물으면 모델이 07과 1~5를 그대로 돌려준다.
+  const expectedEntries = Array.from({ length: 10 }, (_, i) => ({
+    problem_number: String(i + 1).padStart(2, '0'),
+    category: 'middle_exam_problem',
+    page: i < 5 ? 216 : 217,
+  }));
+  const boxes = [
+    {
+      title: '핵심문제 익히기',
+      body_page_from: 212,
+      body_page_to: 215,
+      region: [604, 78, 718, 480],
+    },
+  ];
+  const items = [
+    { problem_number: '07', expected_index: 6, number_region: [200, 79, 215, 104] },
+    { problem_number: '1', expected_index: 0, number_region: [735, 79, 750, 91] },
+    { problem_number: '2', expected_index: 1, number_region: [61, 530, 76, 542] },
+  ];
+  const result = filterWonriMiddleItemsByBox({ items, boxes, expectedEntries });
+  assert.deepEqual(result.items, []);
+  assert.equal(result.dropped, 3);
+  assert.match(result.reason, /continuation_not_in_sequence=1/);
+  assert.match(result.reason, /item_out_of_box=2/);
+});
+
+test('wonri_middle solution layout keeps the leading continuation in sequence', () => {
+  // 해설 82쪽: 시험문제 08~10 연속 풀이 뒤에 중단원 마무리하기 박스가 온다.
+  const exam = filterWonriMiddleItemsByBox({
+    items: [
+      { problem_number: '08', expected_index: 0, number_region: [61, 83, 77, 106] },
+      { problem_number: '09', expected_index: 1, number_region: [245, 83, 261, 106] },
+      { problem_number: '10', expected_index: 2, number_region: [359, 83, 375, 106] },
+    ],
+    boxes: [
+      { body_page_from: 218, body_page_to: 221, region: [618, 83, 790, 482] },
+    ],
+    expectedEntries: ['08', '09', '10'].map((problem_number) => ({
+      problem_number,
+      category: 'middle_exam_problem',
+      page: 217,
+    })),
+  });
+  assert.deepEqual(
+    exam.items.map((item) => item.problem_number),
+    ['08', '09', '10'],
+  );
+
+  // 같은 지면을 중단원 마무리하기 01~으로 물으면 맨 위 08~10은 남의 풀이다.
+  const review = filterWonriMiddleItemsByBox({
+    items: [
+      { problem_number: '08', expected_index: 7, number_region: [61, 83, 77, 106] },
+      { problem_number: '01', expected_index: 0, number_region: [805, 83, 822, 105] },
+      { problem_number: '02', expected_index: 1, number_region: [61, 531, 78, 553] },
+    ],
+    boxes: [
+      { body_page_from: 218, body_page_to: 221, region: [618, 83, 790, 482] },
+    ],
+    expectedEntries: Array.from({ length: 12 }, (_, i) => ({
+      problem_number: String(i + 1).padStart(2, '0'),
+      category: 'middle_unit_review',
+      page: 218 + Math.floor(i / 6),
+    })),
+  });
+  assert.deepEqual(
+    review.items.map((item) => item.problem_number),
+    ['01', '02'],
+  );
+});
+
+test('wonri_middle solution layout ignores numbers before the corner own box', () => {
+  // 1-2 해설 14쪽: 시험문제 02~05 연속 풀이 → 중단원 마무리하기(본문 52~55)
+  // 박스 → 01~07. 중단원 01~을 물으면 모델이 위쪽 02~05도 함께 돌려주고,
+  // 02가 기대 목록 두 번째라 번호 연속 규칙만으로는 걸러지지 않았다.
+  const box = { body_page_from: 52, body_page_to: 55, region: [700, 83, 860, 482] };
+  const expectedEntries = Array.from({ length: 25 }, (_, i) => ({
+    problem_number: String(i + 1).padStart(2, '0'),
+    category: 'middle_unit_review',
+    page: 52 + Math.floor(i / 7),
+  }));
+  const item = (number, region) => ({
+    problem_number: number,
+    expected_index: Number(number) - 1,
+    number_region: region,
+  });
+  const review = filterWonriMiddleItemsByBox({
+    items: [
+      item('02', [65, 83, 80, 106]),
+      item('03', [190, 83, 205, 106]),
+      item('04', [330, 83, 345, 106]),
+      item('05', [455, 83, 470, 106]),
+      item('01', [880, 83, 895, 106]),
+      item('02', [65, 531, 80, 554]),
+      item('03', [175, 531, 190, 554]),
+    ],
+    boxes: [box],
+    expectedEntries,
+  });
+  assert.deepEqual(
+    review.items.map((one) => `${one.problem_number}@${one.number_region[1]}`),
+    ['01@83', '02@531', '03@531'],
+  );
+  assert.match(review.reason, /before_own_box=4/);
+
+  // 같은 지면에서 시험문제(본문 51) 02~05는 박스가 없는 연속 풀이로 남는다.
+  const exam = filterWonriMiddleItemsByBox({
+    items: [
+      item('02', [65, 83, 80, 106]),
+      item('03', [190, 83, 205, 106]),
+    ].map((one, index) => ({ ...one, expected_index: index })),
+    boxes: [box],
+    expectedEntries: ['02', '03', '04', '05'].map((problem_number) => ({
+      problem_number,
+      category: 'middle_exam_problem',
+      page: 51,
+    })),
+  });
+  assert.equal(exam.items.length, 2);
+});
+
+test('wonri_middle solution layout treats a badge-less box as a barrier', () => {
+  // 1-2 해설 20쪽: 둘째 소단원 시험문제 박스(본문 71) 뒤에 01~05가 온다.
+  // 셋째 소단원(본문 79)으로 물으면 모델이 배지를 null로 비워 보고한다.
+  // 그 박스를 무시하면 01~05가 "앞 지면에서 이어진 풀이"로 보여 통과했다.
+  const boxes = [
+    { title: '이런 문제가 시험에 나온다', body_page_from: null, body_page_to: null, region: [500, 88, 573, 488] },
+    { title: '개념원리 확인하기', body_page_from: 74, body_page_to: 74, region: [782, 536, 929, 936] },
+  ];
+  const items = ['01', '02'].map((number, index) => ({
+    problem_number: number,
+    expected_index: index,
+    number_region: [588 + index * 140, 88, 603 + index * 140, 110],
+  }));
+  const expectedEntries = ['01', '02', '03', '04', '05'].map((problem_number) => ({
+    problem_number,
+    category: 'middle_exam_problem',
+    page: 79,
+  }));
+  const result = filterWonriMiddleItemsByBox({ items, boxes, expectedEntries });
+  assert.equal(result.items.length, 2);
+  assert.match(result.reason, /unverified_box=2/);
+  assert.doesNotMatch(result.reason, /continuation/);
+
+  const answers = filterWonriMiddleItemsByBox({
+    items: [{ problem_number: '01', expected_index: 0, number_region: [60, 88, 75, 110] }],
+    boxes,
+    expectedEntries,
+    allowContinuation: false,
+  });
+  assert.deepEqual(answers.items, []);
+  assert.match(answers.reason, /outside_answer_box=1/);
+});
+
+test('wonri_middle solution normalizer keeps every box with its region', () => {
+  const out = normalizeWonriMiddleSolutionResult({
+    boxes: [
+      {
+        title: '이런 문제가 시험에 나온다',
+        body_page_from: 216,
+        body_page_to: 217,
+        region: [588, 68, 693, 468],
+      },
+    ],
+    items: [],
+  });
+  assert.equal(out.boxes.length, 1);
+  assert.deepEqual(out.boxes[0].region, [588, 68, 693, 468]);
+  assert.equal(out.box.body_page_from, 216);
 });
 
 test('wonri_middle drops answers read from another subunit box', () => {
@@ -647,6 +824,75 @@ test('wonri_middle box guard drops only the out-of-range item', () => {
     ['01'],
   );
   assert.equal(result.dropped, 1);
+});
+
+// 1-2 해설 49쪽. 모델이 껍데기 없이 문항 배열만 돌려주면 boxes가 없어
+// 박스 판정이 꺼진다. 같은 요청을 한 번 더 해 박스까지 받아 온다.
+test('wonri_middle solution client asks again when boxes are missing', async () => {
+  const item = (number, y) => ({
+    problem_number: number,
+    category: 'middle_exam_problem',
+    expected_index: Number(number) - 5,
+    number_region: [y, 60, y + 16, 84],
+    content_region: [y, 60, y + 100, 461],
+  });
+  const replies = [
+    [item('05', 64), item('06', 203)],
+    {
+      boxes: [
+        {
+          title: '중단원 마무리하기',
+          body_page_from: 158,
+          body_page_to: 161,
+          region: [566, 61, 731, 461],
+        },
+      ],
+      items: [item('05', 64), item('06', 203)],
+    },
+  ];
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  let sentSchema = null;
+  globalThis.fetch = async (_url, init) => {
+    sentSchema = JSON.parse(init.body).generationConfig.responseSchema;
+    const reply = replies[Math.min(calls, replies.length - 1)];
+    calls += 1;
+    return new Response(
+      JSON.stringify({
+        candidates: [
+          {
+            finishReason: 'STOP',
+            content: { parts: [{ text: JSON.stringify(reply) }] },
+          },
+        ],
+      }),
+      { status: 200 },
+    );
+  };
+  try {
+    const result = await extractWonriMiddleSolutionsOnPage({
+      imageBase64: 'AAAA',
+      rawPage: 49,
+      displayPage: 49,
+      expectedEntries: [
+        { problem_number: '05', category: 'middle_exam_problem', page: 157 },
+        { problem_number: '06', category: 'middle_exam_problem', page: 157 },
+      ],
+      mode: 'solution_refs',
+      model: 'test-model',
+      apiKey: 'test-key',
+    });
+    assert.equal(calls, 2);
+    assert.deepEqual(sentSchema.required, ['boxes', 'items']);
+    const normalized = normalizeWonriMiddleSolutionResult(result.parsedJson);
+    assert.equal(normalized.boxes.length, 1);
+    assert.deepEqual(
+      normalized.items.map((one) => one.problem_number),
+      ['05', '06'],
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('high-school wonri prompt remains on its original branch', () => {

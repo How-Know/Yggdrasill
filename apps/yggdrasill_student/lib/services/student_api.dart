@@ -2332,7 +2332,7 @@ class StudentApi {
   Future<void> recordDeparture() => _client.rpc('student_record_departure');
 
   /// 오늘 예정 귀가 시각 설정. [plannedDepartureAt]이 null이면 해제.
-  /// 정규 종료보다 이르면 [reason] 필수(서버 `early_leave_reason_required`).
+  /// 사유는 선택이다. 없으면 null로 저장한다.
   Future<void> setPlannedDeparture({
     DateTime? plannedDepartureAt,
     String? reason,

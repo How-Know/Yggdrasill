@@ -1,0 +1,68 @@
+---
+description: Platform AI (Think, memo assist, code bridge) design contract — keys, memory approval, propose-then-approve tools
+globs: supabase/functions/_shared/ai/**,supabase/functions/ai_think/**,supabase/functions/ai_code_bridge/**,tools/code_bridge/**,.cursor/hooks/**,supabase/functions/ai_memo_assist/**,supabase/functions/trait_report_run/**,apps/yggdrasill_manager/lib/services/think/**,apps/yggdrasill_manager/lib/screens/think/**,apps/yggdrasill/lib/services/ai_summary.dart
+alwaysApply: false
+---
+
+# Platform AI (Think)
+
+Before changing anything AI-related, **read `docs/architecture/ai-think.md`.**
+It records decisions made on 2026-09-28 that the schema alone does not show.
+
+## Non-negotiables
+
+1. The OpenAI key lives only in the Edge Function secret `OPENAI_API_KEY`.
+   Never read it from `platform_config`, never ship it in a Flutter app, never commit it.
+2. Apps never call OpenAI directly. Go through `ai_think`, `ai_memo_assist`, or another
+   Edge Function that uses `_shared/ai/provider.ts`.
+3. AI tools are read tools or propose tools, and go through RLS/RPC checks with the caller's JWT.
+   A propose tool only inserts one `ai_actions` row via `ai_action_propose`; execution happens in
+   `ai_action_apply` when the operator approves the card. Do not add a tool that executes a change,
+   runs SQL, or touches the schema. New kinds of work = new `ai_actions.kind` + preview + apply branch.
+   See `docs/architecture/ai-think-actions.md`.
+4. Only a human action writes `ai_memories`. AI output is a draft until the operator
+   presses approve. Never auto-promote a draft to `active`.
+5. Model names, reasoning effort, token limits, and prices come from `_shared/ai/config.ts`
+   (env overrides). Do not hardcode a model name at a call site.
+6. Every AI call records one `ai_runs` row via `recordAiRun` (it never throws).
+   Keep `feature` names stable; the usage screen groups by them.
+7. Keep the context order in `ai_think/context.ts` stable (instructions, history,
+   work-state note, relevant-memory note, current message). Reordering breaks prompt caching.
+8. Update memories with the optimistic `version` check. An empty update result means
+   someone else saved first; reload instead of overwriting.
+9. Tests use `FakeAiProvider` (`AI_PROVIDER=fake`) and never assert exact AI wording.
+10. Bump the `*_PROMPT_VERSION` constant in `ai_think/prompts.ts` or
+    `ai_memo_assist/tasks.ts` when a prompt changes.
+11. The conversation tree (`ai_tree_nodes`) is not answer context. The only AI read is the
+    `list_tree_folders` tool: folder ids/titles/parents and conversation placement, plus conversation
+    titles via `list_conversations`. Never expose excerpt titles, summaries, or message text.
+    Messages with `context_excluded = true` must stay out of every AI read path
+    (`store.listMessages` is the single place that reads messages for AI).
+12. Keep code diffs out of AI context. Store queries select individual `result` fields
+    (`ai_think/store.ts` `ROUND_COLUMNS`); only the code review sees a clipped diff head.
+
+## Code investigation (Think ↔ Cursor)
+
+Design and current phase: `docs/architecture/ai-code-bridge.md`.
+
+- Investigate runs get read tools only (`read`, `grep`, `glob`, `ls`, mode `plan`).
+  Change runs (`mode = 'change'`) add `edit` and `delete` only, run in an isolated git worktree of a
+  working-tree snapshot, and set `CODE_BRIDGE_WRITE_ROOT` so the hook blocks every path outside it.
+  Never add shell, MCP, PR, commit, or push tools. The real working folder changes only through an
+  approved apply job (`git apply --check` first, backup ref before, revert with `-R`).
+- `CURSOR_API_KEY` and `CODE_BRIDGE_WORKER_TOKEN` live only in the operator PC's environment.
+  The server keeps only `CODE_BRIDGE_WORKER_TOKEN_SHA256`. Never put either in an app, the DB, or git.
+- Request state changes go through the `ai_code_request_*` (app) and `ai_code_bridge_*` (worker,
+  service role) RPCs. The app writes only draft `title` and `request`.
+- `.cursor/hooks/deny-secrets.mjs` must stay fail-closed. Korean Windows can hand it input with
+  quotes eaten after Korean text; it then checks path fields only. Keep its tests in
+  `tools/code_bridge/test/deny_secrets.test.mjs` passing. The `preToolUse` matcher must include
+  `Write|Delete` (that is how the SDK reports edits and deletes).
+- Code review (`ai_code_bridge/code_review.ts`) posts at most one assistant message per request and
+  asks at most one follow-up round (investigate mode, round < max_rounds). It never applies anything.
+
+## Out of scope unless the user asks
+
+Autonomous DB writes, auto-running migrations, arbitrary SQL, Codex integration,
+vector databases, complex model routers, unapproved code edits, commits or PRs by the Cursor agent.
+Multi-agent work is limited to the code bridge above.

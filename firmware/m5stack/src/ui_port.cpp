@@ -88,6 +88,9 @@ static lv_obj_t* s_welcome_avatar = nullptr;
 static lv_obj_t* s_welcome_avatar_img = nullptr;
 static lv_obj_t* s_welcome_avatar_lbl = nullptr;
 static lv_obj_t* s_welcome_arrival = nullptr;
+static lv_obj_t* s_welcome_arrival_delta = nullptr;
+static bool s_arrival_delta_known = false;
+static int s_arrival_delta_minutes = 0;
 static lv_obj_t* s_welcome_counts = nullptr;
 static lv_obj_t* s_welcome_plan = nullptr;
 static lv_obj_t* s_welcome_remain = nullptr;
@@ -99,6 +102,7 @@ static lv_obj_t* s_detail_status_lbl = nullptr;
 static lv_obj_t* s_detail_clock_label = nullptr;
 static lv_obj_t* s_detail_battery_label = nullptr;
 static lv_obj_t* s_detail_battery_img = nullptr;
+static bool s_goal_saved = false;
 static int s_goal_count = -1;
 static int s_homework_due_count = -1;
 static int s_plan_minutes = -1;
@@ -110,6 +114,9 @@ static lv_obj_t* s_depart_lbl = nullptr;
 static int s_depart_hour = -1;
 static int s_depart_minute = 0;
 static uint8_t s_hub_page_idx = 1;
+static lv_obj_t* s_hub_pager = nullptr;
+static lv_obj_t* s_hub_dot_left = nullptr;
+static lv_obj_t* s_hub_dot_right = nullptr;
 static lv_coord_t s_hub_swipe_x = 0;
 static lv_coord_t s_hub_swipe_y = 0;
 static bool s_hub_swipe_tracking = false;
@@ -298,6 +305,7 @@ struct HwGroupData {
   char item_type[24];
   int16_t order_index;
   bool is_homework;   // 하원 시 배정된 take-home 숙제 그룹(읽기 전용, 원에 "숙제" 표시)
+  bool homework_future; // 검사 예정일이 오늘보다 미래
   bool is_test;       // 테스트 플로우 소속 (수행 시 테스트 카운트다운 화면)
   bool is_naesin;     // 내신기출 (1열에 "내신기출" 표기)
   bool pending_complete; // '완료' 예약 (확인 phase=4에서 4칸; 단순 확인은 3칸)
@@ -707,6 +715,7 @@ static void show_test_end_popup(void);
 static void close_test_end_popup(void);
 static void show_confirm_phase_to_waiting_popup(const char* group_id, int group_idx);
 static void show_entry_hub_overlay(uint8_t page_idx = 1);
+static void set_hub_pager_visible(bool visible);
 static void close_student_info_screen(bool show_entry_hub);
 static void show_student_info_screen(void);
 static void show_stopwatch_screen(void);
@@ -2227,6 +2236,7 @@ static void show_stopwatch_screen(void) {
   if (s_hub_topbar && lv_obj_is_valid(s_hub_topbar)) {
     lv_obj_add_flag(s_hub_topbar, LV_OBJ_FLAG_HIDDEN);
   }
+  set_hub_pager_visible(false);
   if (s_stopwatch_screen && lv_obj_is_valid(s_stopwatch_screen)) {
     lv_obj_move_foreground(s_stopwatch_screen);
     return;
@@ -2371,6 +2381,7 @@ static void show_student_info_screen(void) {
   if (s_hub_topbar && lv_obj_is_valid(s_hub_topbar)) {
     lv_obj_add_flag(s_hub_topbar, LV_OBJ_FLAG_HIDDEN);
   }
+  set_hub_pager_visible(false);
   if (s_student_info_screen && lv_obj_is_valid(s_student_info_screen)) {
     lv_obj_move_foreground(s_student_info_screen);
     return;
@@ -2398,6 +2409,7 @@ static void show_student_info_screen(void) {
 }
 
 static void refresh_depart_button(void);
+static void save_depart_time(void);
 static void refresh_welcome_stats(void);
 
 static char s_avatar_kind[16] = "monogram";
@@ -2964,20 +2976,34 @@ static void refresh_welcome_labels(void) {
   if (s_welcome_arrival && lv_obj_is_valid(s_welcome_arrival)) {
     lv_label_set_text(s_welcome_arrival, s_arrival_text.c_str());
   }
-  refresh_depart_button();
+  if (s_welcome_arrival_delta && lv_obj_is_valid(s_welcome_arrival_delta)) {
+    if (!s_arrival_delta_known || !s_welcome_arrival || !lv_obj_is_valid(s_welcome_arrival)) {
+      lv_obj_add_flag(s_welcome_arrival_delta, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      char buf[16];
+      const int minutes = s_arrival_delta_minutes < 0 ? -s_arrival_delta_minutes : s_arrival_delta_minutes;
+      // 일찍 오면 초록 마이너스, 늦으면 빨강 플러스. 정시는 표시하지 않는다.
+      if (s_arrival_delta_minutes == 0) {
+        lv_obj_add_flag(s_welcome_arrival_delta, LV_OBJ_FLAG_HIDDEN);
+      } else {
+      const bool early = s_arrival_delta_minutes > 0;
+      snprintf(buf, sizeof(buf), "(%s%d%s)", early ? "-" : "+", minutes, u8"분");
+      lv_label_set_text(s_welcome_arrival_delta, buf);
+      const uint32_t color = early ? 0x33A373 : 0xFF3B30;
+      lv_obj_set_style_text_color(s_welcome_arrival_delta, lv_color_hex(color), 0);
+      lv_obj_clear_flag(s_welcome_arrival_delta, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_align_to(s_welcome_arrival_delta, s_welcome_arrival, LV_ALIGN_OUT_RIGHT_MID, 4, 0);
+      }
+    }
+  }
   refresh_welcome_stats();
+  refresh_depart_button();
   apply_welcome_avatar();
 }
 
-static void apply_arrival_iso(const char* iso) {
-  int year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;
-  if (!iso || sscanf(iso, "%d-%d-%dT%d:%d:%d", &year, &month, &day, &hour, &minute, &second) != 6) {
-    s_arrival_text = u8"도착 시간 확인 중";
-    refresh_welcome_labels();
-    return;
-  }
+static void apply_clock_offset(const char* iso, int& hour, int& minute) {
   bool has_offset = false;
-  const char* tpos = strchr(iso, 'T');
+  const char* tpos = iso ? strchr(iso, 'T') : nullptr;
   if (tpos) {
     const char* p = tpos;
     while (*p && *p != 'Z' && *p != '+' && !(*p == '-' && (p - tpos) > 8)) p++;
@@ -2997,6 +3023,30 @@ static void apply_arrival_iso(const char* iso) {
     hour += 9;
     if (hour >= 24) hour -= 24;
   }
+}
+
+static void apply_planned_departure_iso(const char* iso) {
+  if (!iso || !iso[0]) {
+    s_depart_hour = -1;
+    save_depart_time();
+    return;
+  }
+  int year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;
+  if (sscanf(iso, "%d-%d-%dT%d:%d:%d", &year, &month, &day, &hour, &minute, &second) != 6) return;
+  apply_clock_offset(iso, hour, minute);
+  s_depart_hour = hour;
+  s_depart_minute = minute;
+  save_depart_time();
+}
+
+static void apply_arrival_iso(const char* iso) {
+  int year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;
+  if (!iso || sscanf(iso, "%d-%d-%dT%d:%d:%d", &year, &month, &day, &hour, &minute, &second) != 6) {
+    s_arrival_text = u8"도착 시간 확인 중";
+    refresh_welcome_labels();
+    return;
+  }
+  apply_clock_offset(iso, hour, minute);
   char buf[32];
   snprintf(buf, sizeof(buf), "%02d:%02d 도착", hour, minute);
   s_arrival_text = buf;
@@ -3014,7 +3064,8 @@ static void refresh_depart_button(void) {
   }
   if (s_depart_btn && lv_obj_is_valid(s_depart_btn)) {
     lv_obj_set_width(s_depart_btn, LV_SIZE_CONTENT);
-    lv_obj_align(s_depart_btn, LV_ALIGN_RIGHT_MID, -15, 0);
+    // 남은 시간 라벨과 같이 화면 오른쪽에서 16px. 너비가 바뀌어도 오른쪽 끝이 유지된다.
+    lv_obj_align(s_depart_btn, LV_ALIGN_TOP_RIGHT, -16, 114);
   }
 }
 
@@ -3188,6 +3239,7 @@ static void show_depart_popup(void) {
     s_depart_hour = s_pick_hour;
     s_depart_minute = s_pick_minute;
     save_depart_time();
+    fw_publish_set_planned_departure(s_depart_hour, s_depart_minute);
     refresh_depart_button();
     close_depart_popup();
   }, LV_EVENT_CLICKED, NULL);
@@ -3232,28 +3284,86 @@ static void format_welcome_minutes(char* buf, size_t sz, const char* prefix, int
 }
 
 static void refresh_welcome_stats(void) {
+  const uint32_t goal_color = s_goal_saved ? 0x33A373 : 0x8A8A8A;
   if (s_welcome_counts && lv_obj_is_valid(s_welcome_counts)) {
     char buf[48];
-    if (s_goal_count < 0) snprintf(buf, sizeof(buf), u8"오늘 목표 -   숙제 -");
-    else snprintf(buf, sizeof(buf), u8"오늘 목표 %d   숙제 %d", s_goal_count, s_homework_due_count < 0 ? 0 : s_homework_due_count);
+    if (!s_goal_saved) snprintf(buf, sizeof(buf), u8"오늘 목표 -   숙제 -");
+    else snprintf(buf, sizeof(buf), u8"오늘 목표 %d   숙제 %d", s_goal_count < 0 ? 0 : s_goal_count, s_homework_due_count < 0 ? 0 : s_homework_due_count);
     lv_label_set_text(s_welcome_counts, buf);
+    lv_obj_set_style_text_color(s_welcome_counts, lv_color_hex(goal_color), 0);
   }
   if (s_welcome_plan && lv_obj_is_valid(s_welcome_plan)) {
     char buf[40];
-    format_welcome_minutes(buf, sizeof(buf), u8"예정", s_plan_minutes);
+    if (!s_goal_saved) snprintf(buf, sizeof(buf), u8"예정 -");
+    else format_welcome_minutes(buf, sizeof(buf), u8"예정", s_plan_minutes);
     lv_label_set_text(s_welcome_plan, buf);
+    lv_obj_set_style_text_color(s_welcome_plan, lv_color_hex(goal_color), 0);
   }
   if (s_welcome_remain && lv_obj_is_valid(s_welcome_remain)) {
     char buf[40];
-    format_welcome_minutes(buf, sizeof(buf), u8"남은", s_remaining_minutes);
+    if (!s_goal_saved) snprintf(buf, sizeof(buf), u8"남은 -");
+    else format_welcome_minutes(buf, sizeof(buf), u8"남은", s_remaining_minutes);
     lv_label_set_text(s_welcome_remain, buf);
+    lv_obj_set_style_text_color(s_welcome_remain, lv_color_hex(goal_color), 0);
   }
   if (s_welcome_bar && lv_obj_is_valid(s_welcome_bar)) {
-    int pct = s_progress_percent;
+    int pct = s_goal_saved ? s_progress_percent : 0;
     if (pct < 0) pct = 0;
     if (pct > 100) pct = 100;
+    lv_obj_set_style_bg_color(s_welcome_bar, lv_color_hex(goal_color), LV_PART_INDICATOR);
     lv_bar_set_value(s_welcome_bar, pct, LV_ANIM_OFF);
   }
+}
+
+static void ensure_hub_pager(void) {
+  if (!s_stage || !lv_obj_is_valid(s_stage)) return;
+  if (s_hub_pager && lv_obj_is_valid(s_hub_pager)) return;
+  s_hub_pager = lv_obj_create(s_stage);
+  lv_obj_set_size(s_hub_pager, 22, 8);
+  // 홈 버튼은 화면 아래까지 닿지만 가운데 30px 틈이 있다. 점은 그 틈에만 둔다.
+  lv_obj_align(s_hub_pager, LV_ALIGN_BOTTOM_MID, 0, -4);
+  lv_obj_set_style_bg_opa(s_hub_pager, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(s_hub_pager, 0, 0);
+  lv_obj_set_style_pad_all(s_hub_pager, 0, 0);
+  lv_obj_clear_flag(s_hub_pager, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_clear_flag(s_hub_pager, LV_OBJ_FLAG_CLICKABLE);
+  auto make_dot = [](lv_coord_t x) {
+    lv_obj_t* dot = lv_obj_create(s_hub_pager);
+    lv_obj_set_size(dot, 6, 6);
+    lv_obj_set_pos(dot, x, 1);
+    lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(dot, 0, 0);
+    lv_obj_set_style_pad_all(dot, 0, 0);
+    lv_obj_clear_flag(dot, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(dot, LV_OBJ_FLAG_CLICKABLE);
+    return dot;
+  };
+  s_hub_dot_left = make_dot(0);
+  s_hub_dot_right = make_dot(16);
+}
+
+static void refresh_hub_pager(void) {
+  if (!s_hub_dot_left || !lv_obj_is_valid(s_hub_dot_left)) return;
+  if (!s_hub_dot_right || !lv_obj_is_valid(s_hub_dot_right)) return;
+  const bool welcome = s_hub_page_idx == 0;
+  lv_obj_set_style_bg_color(s_hub_dot_left, lv_color_hex(welcome ? 0xE6E6E6 : 0x3A3A3A), 0);
+  lv_obj_set_style_bg_opa(s_hub_dot_left, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_color(s_hub_dot_right, lv_color_hex(welcome ? 0x3A3A3A : 0xE6E6E6), 0);
+  lv_obj_set_style_bg_opa(s_hub_dot_right, LV_OPA_COVER, 0);
+}
+
+static void set_hub_pager_visible(bool visible) {
+  if (!visible) {
+    if (s_hub_pager && lv_obj_is_valid(s_hub_pager)) {
+      lv_obj_add_flag(s_hub_pager, LV_OBJ_FLAG_HIDDEN);
+    }
+    return;
+  }
+  ensure_hub_pager();
+  if (!s_hub_pager || !lv_obj_is_valid(s_hub_pager)) return;
+  refresh_hub_pager();
+  lv_obj_clear_flag(s_hub_pager, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_foreground(s_hub_pager);
 }
 
 static void switch_hub_page(uint8_t page_idx, bool animated) {
@@ -3272,6 +3382,11 @@ static void switch_hub_page(uint8_t page_idx, bool animated) {
   }
   sync_topbar_for_page();
   update_study_badge();
+  if (s_hub_pager && lv_obj_is_valid(s_hub_pager) &&
+      !lv_obj_has_flag(s_hub_pager, LV_OBJ_FLAG_HIDDEN)) {
+    refresh_hub_pager();
+    lv_obj_move_foreground(s_hub_pager);
+  }
 }
 
 static void hub_pages_swipe_cb(lv_event_t* e) {
@@ -3495,7 +3610,7 @@ static void show_entry_hub_overlay(uint8_t page_idx) {
     lv_obj_align(s_welcome_hello, LV_ALIGN_TOP_RIGHT, -16, 49);
 
     lv_obj_t* arrival_row = lv_obj_create(s_welcome_page);
-    lv_obj_set_size(arrival_row, 280, 36);
+    lv_obj_set_size(arrival_row, 284, 36);
     lv_obj_align(arrival_row, LV_ALIGN_TOP_LEFT, 20, 112);
     lv_obj_set_style_bg_opa(arrival_row, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(arrival_row, 0, 0);
@@ -3503,14 +3618,17 @@ static void show_entry_hub_overlay(uint8_t page_idx) {
     lv_obj_clear_flag(arrival_row, LV_OBJ_FLAG_SCROLLABLE);
 
     s_welcome_arrival = lv_label_create(arrival_row);
-    lv_obj_set_width(s_welcome_arrival, 128);
     lv_obj_set_style_text_font(s_welcome_arrival, &kakao_kr_16, 0);
     lv_obj_set_style_text_color(s_welcome_arrival, lv_color_hex(0xC8C8C8), 0);
-    lv_label_set_long_mode(s_welcome_arrival, LV_LABEL_LONG_DOT);
+    lv_label_set_long_mode(s_welcome_arrival, LV_LABEL_LONG_CLIP);
     lv_obj_align(s_welcome_arrival, LV_ALIGN_LEFT_MID, 0, 0);
+    s_welcome_arrival_delta = lv_label_create(arrival_row);
+    lv_obj_set_style_text_font(s_welcome_arrival_delta, &kakao_kr_16, 0);
+    lv_obj_set_style_text_color(s_welcome_arrival_delta, lv_color_hex(0x33A373), 0);
+    lv_obj_add_flag(s_welcome_arrival_delta, LV_OBJ_FLAG_HIDDEN);
 
     load_depart_time();
-    s_depart_btn = lv_btn_create(arrival_row);
+    s_depart_btn = lv_btn_create(s_welcome_page);
     lv_obj_set_height(s_depart_btn, 32);
     lv_obj_set_style_radius(s_depart_btn, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(s_depart_btn, lv_color_hex(0x1E1E1E), 0);
@@ -3543,8 +3661,8 @@ static void show_entry_hub_overlay(uint8_t page_idx) {
     lv_obj_set_style_text_font(s_welcome_remain, &kakao_kr_16, 0);
     lv_obj_set_style_text_color(s_welcome_remain, lv_color_hex(0x8A8A8A), 0);
     lv_obj_set_style_text_align(s_welcome_remain, LV_TEXT_ALIGN_RIGHT, 0);
-    // 하원 버튼 오른쪽 끝(행 오른쪽 -15px)과 같은 세로선.
-    lv_obj_align(s_welcome_remain, LV_ALIGN_TOP_RIGHT, -35, 178);
+    // 하원 버튼 오른쪽 끝(화면 304)과 같은 세로선.
+    lv_obj_align(s_welcome_remain, LV_ALIGN_TOP_RIGHT, -16, 178);
 
     s_welcome_bar = lv_bar_create(s_welcome_page);
     lv_obj_set_size(s_welcome_bar, 280, 8);
@@ -3555,31 +3673,6 @@ static void show_entry_hub_overlay(uint8_t page_idx) {
     lv_bar_set_range(s_welcome_bar, 0, 100);
     lv_bar_set_value(s_welcome_bar, 0, LV_ANIM_OFF);
     refresh_welcome_labels();
-
-    static lv_point_t chev_a[] = {{0, 0}, {12, 14}};
-    static lv_point_t chev_b[] = {{12, 14}, {0, 28}};
-    lv_obj_t* chev = lv_obj_create(s_welcome_page);
-    lv_obj_set_size(chev, 20, 32);
-    lv_obj_align(chev, LV_ALIGN_RIGHT_MID, -5, 10);
-    lv_obj_set_style_bg_opa(chev, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(chev, 0, 0);
-    lv_obj_set_style_pad_all(chev, 0, 0);
-    lv_obj_clear_flag(chev, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(chev, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_t* line_a = lv_line_create(chev);
-    lv_line_set_points(line_a, chev_a, 2);
-    lv_obj_set_style_line_width(line_a, 3, 0);
-    lv_obj_set_style_line_color(line_a, lv_color_hex(0xE6E6E6), 0);
-    lv_obj_set_style_line_rounded(line_a, true, 0);
-    lv_obj_t* line_b = lv_line_create(chev);
-    lv_line_set_points(line_b, chev_b, 2);
-    lv_obj_set_style_line_width(line_b, 3, 0);
-    lv_obj_set_style_line_color(line_b, lv_color_hex(0xE6E6E6), 0);
-    lv_obj_set_style_line_rounded(line_b, true, 0);
-    lv_obj_add_event_cb(chev, [](lv_event_t* e) {
-      (void)e;
-      switch_hub_page(1, true);
-    }, LV_EVENT_CLICKED, NULL);
 
     lv_obj_add_event_cb(s_entry_hub, hub_pages_swipe_cb, LV_EVENT_ALL, NULL);
 
@@ -3598,6 +3691,7 @@ static void show_entry_hub_overlay(uint8_t page_idx) {
       if (s_hub_topbar && lv_obj_is_valid(s_hub_topbar)) {
         lv_obj_add_flag(s_hub_topbar, LV_OBJ_FLAG_HIDDEN);
       }
+      set_hub_pager_visible(false);
       if (s_pages && lv_obj_is_valid(s_pages)) lv_obj_clear_flag(s_pages, LV_OBJ_FLAG_HIDDEN);
       if (s_fab && lv_obj_is_valid(s_fab)) lv_obj_clear_flag(s_fab, LV_OBJ_FLAG_HIDDEN);
       if (s_bottom_handle && lv_obj_is_valid(s_bottom_handle)) lv_obj_clear_flag(s_bottom_handle, LV_OBJ_FLAG_HIDDEN);
@@ -3650,6 +3744,7 @@ static void show_entry_hub_overlay(uint8_t page_idx) {
     lv_obj_clear_flag(s_hub_topbar, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_hub_topbar);
   }
+  set_hub_pager_visible(true);
   if (s_pages && lv_obj_is_valid(s_pages)) lv_obj_add_flag(s_pages, LV_OBJ_FLAG_HIDDEN);
   if (s_fab && lv_obj_is_valid(s_fab)) lv_obj_add_flag(s_fab, LV_OBJ_FLAG_HIDDEN);
   if (s_bottom_handle && lv_obj_is_valid(s_bottom_handle)) lv_obj_add_flag(s_bottom_handle, LV_OBJ_FLAG_HIDDEN);
@@ -5266,10 +5361,6 @@ static int hw_phase_indicator_step(int phase, bool pending_complete) {
   return 0;                  // 대기 = 모두 꺼짐
 }
 
-static inline bool hw_is_homework_group(const HwGroupData& g) {
-  return g.is_homework;
-}
-
 // 아이패드 시도 차수: 대기·확인은 끝난 횟수, 수행·제출은 지금 차수(+1).
 static int hw_attempt_index(const HwGroupData& g) {
   const int checks = g.check_count < 0 ? 0 : g.check_count;
@@ -5282,8 +5373,8 @@ static int hw_attempt_index(const HwGroupData& g) {
 static const lv_coord_t HW_RING_D = 46;       // 원 지름 (1~2번째 줄에 걸침)
 static void create_hw_phase_indicator(lv_obj_t* card, const HwGroupData& g, int display_idx, uint32_t srv_color) {
   extern const lv_font_t kakao_kr_16;
-  const bool homework = hw_is_homework_group(g);
-  const int active_step = homework ? 0 : hw_phase_indicator_step(g.phase, g.pending_complete);
+  const bool unchecked_homework = g.is_homework && g.check_count <= 0;
+  const int active_step = unchecked_homework ? 0 : hw_phase_indicator_step(g.phase, g.pending_complete);
   (void)display_idx;
 
   lv_obj_t* arc = lv_arc_create(card);
@@ -5301,7 +5392,6 @@ static void create_hw_phase_indicator(lv_obj_t* card, const HwGroupData& g, int 
   uint32_t arc_color = srv_color;
   if (attempt >= 5) arc_color = 0xFF3B30;
   else if (attempt >= 3) arc_color = 0xFF9F0A;
-  lv_obj_set_style_arc_color(arc, lv_color_hex(arc_color), LV_PART_INDICATOR);
   // 노브 제거 + 내부 배경 투명
   lv_obj_set_style_bg_opa(arc, LV_OPA_TRANSP, LV_PART_KNOB);
   lv_obj_set_style_pad_all(arc, 0, LV_PART_KNOB);
@@ -5314,16 +5404,21 @@ static void create_hw_phase_indicator(lv_obj_t* card, const HwGroupData& g, int 
   } else {
     lv_arc_set_angles(arc, 0, active_step * 90);
   }
+  // 각도를 정한 뒤에 칠해야 채움색이 시도 차수 색으로 남는다.
+  lv_obj_set_style_arc_color(arc, lv_color_hex(arc_color), LV_PART_INDICATOR);
+  lv_obj_set_style_arc_opa(arc, LV_OPA_COVER, LV_PART_INDICATOR);
 
-  (void)homework;
   char center[8] = {0};
   uint32_t center_color = 0xE6E6E6;
-  if (attempt <= 0) {
+  if (unchecked_homework) {
+    snprintf(center, sizeof(center), u8"숙제");
+    center_color = 0x8A8A8A;
+  } else if (attempt <= 0) {
     snprintf(center, sizeof(center), u8"대기");
     center_color = 0x8A8A8A;
   } else {
     snprintf(center, sizeof(center), "%d", attempt);
-    center_color = arc_color == srv_color ? 0xE6E6E6 : arc_color;
+    center_color = arc_color;
   }
   lv_obj_t* cl = lv_label_create(arc);
   lv_obj_set_style_text_font(cl, &kakao_kr_16, 0);
@@ -5334,6 +5429,83 @@ static void create_hw_phase_indicator(lv_obj_t* card, const HwGroupData& g, int 
   lv_obj_center(cl);
 }
 
+static lv_obj_t* s_hw_early_popup = nullptr;
+static int s_hw_early_group_idx = -1;
+
+static void hw_start_group_now(int group_idx) {
+  if (group_idx < 0 || group_idx >= s_group_cnt) return;
+  HwGroupData& g = s_groups[group_idx];
+  if (!fw_publish_group_transition(g.group_id, 1)) return;
+  show_homework_detail_page(group_idx);
+  s_detail_playing = true;
+  s_detail_manual_override_playing = true;
+  s_detail_manual_override_until_ms = millis() + 5000;
+  update_detail_play_button_visual();
+}
+
+static void close_homework_early_popup(void) {
+  if (s_hw_early_popup && lv_obj_is_valid(s_hw_early_popup)) lv_obj_del(s_hw_early_popup);
+  s_hw_early_popup = nullptr;
+  s_hw_early_group_idx = -1;
+}
+
+static void show_homework_early_popup(int group_idx) {
+  extern const lv_font_t kakao_kr_16;
+  if (s_hw_early_popup && lv_obj_is_valid(s_hw_early_popup)) return;
+  s_hw_early_group_idx = group_idx;
+  s_hw_early_popup = lv_obj_create(lv_layer_top());
+  lv_obj_set_size(s_hw_early_popup, 276, 152);
+  lv_obj_center(s_hw_early_popup);
+  lv_obj_set_style_bg_color(s_hw_early_popup, lv_color_hex(0x202020), 0);
+  lv_obj_set_style_bg_opa(s_hw_early_popup, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(s_hw_early_popup, 1, 0);
+  lv_obj_set_style_border_color(s_hw_early_popup, lv_color_hex(0x3A3A3A), 0);
+  lv_obj_set_style_radius(s_hw_early_popup, 14, 0);
+  lv_obj_set_style_pad_all(s_hw_early_popup, 12, 0);
+  lv_obj_clear_flag(s_hw_early_popup, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t* msg = lv_label_create(s_hw_early_popup);
+  lv_obj_set_width(msg, 248);
+  lv_obj_align(msg, LV_ALIGN_TOP_MID, 0, 8);
+  lv_obj_set_style_text_align(msg, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_text_font(msg, &kakao_kr_16, 0);
+  lv_obj_set_style_text_color(msg, lv_color_hex(0xD0D0D0), 0);
+  lv_label_set_long_mode(msg, LV_LABEL_LONG_WRAP);
+  lv_label_set_text(msg, u8"숙제를 미리 하시겠습니까?");
+
+  lv_obj_t* cancel_btn = lv_btn_create(s_hw_early_popup);
+  lv_obj_set_size(cancel_btn, 118, 40);
+  lv_obj_align(cancel_btn, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+  lv_obj_set_style_radius(cancel_btn, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_color(cancel_btn, lv_color_hex(0x323232), 0);
+  lv_obj_set_style_border_width(cancel_btn, 0, 0);
+  style_flat_button(cancel_btn);
+  lv_obj_t* cancel_lbl = lv_label_create(cancel_btn);
+  lv_obj_set_style_text_font(cancel_lbl, &kakao_kr_16, 0);
+  lv_label_set_text(cancel_lbl, u8"취소");
+  lv_obj_center(cancel_lbl);
+  lv_obj_add_event_cb(cancel_btn, [](lv_event_t* e) {
+    (void)e;
+    close_homework_early_popup();
+  }, LV_EVENT_CLICKED, NULL);
+
+  lv_obj_t* go_btn = lv_btn_create(s_hw_early_popup);
+  lv_obj_set_size(go_btn, 118, 40);
+  lv_obj_align(go_btn, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
+  lv_obj_set_style_radius(go_btn, LV_RADIUS_CIRCLE, 0);
+  style_pill_confirm(go_btn);
+  lv_obj_t* go_lbl = lv_label_create(go_btn);
+  lv_obj_set_style_text_font(go_lbl, &kakao_kr_16, 0);
+  lv_label_set_text(go_lbl, u8"진행");
+  lv_obj_center(go_lbl);
+  lv_obj_add_event_cb(go_btn, [](lv_event_t* e) {
+    (void)e;
+    int idx = s_hw_early_group_idx;
+    close_homework_early_popup();
+    hw_start_group_now(idx);
+  }, LV_EVENT_CLICKED, NULL);
+}
+
 // 카드 phase별 실제 동작 (게이팅 통과 후 호출)
 static void hw_perform_card_action(int group_idx) {
   if (group_idx < 0 || group_idx >= s_group_cnt) return;
@@ -5342,13 +5514,10 @@ static void hw_perform_card_action(int group_idx) {
   if (phase == 1) {
     if (hw_should_treat_as_test(g)) {
       show_test_start_confirm_popup(group_idx);
+    } else if (g.is_homework && g.check_count <= 0 && g.homework_future) {
+      show_homework_early_popup(group_idx);
     } else {
-      if (!fw_publish_group_transition(g.group_id, 1)) return;
-      show_homework_detail_page(group_idx);
-      s_detail_playing = true;
-      s_detail_manual_override_playing = true;
-      s_detail_manual_override_until_ms = millis() + 5000;
-      update_detail_play_button_visual();
+      hw_start_group_now(group_idx);
     }
   } else if (phase == 2) {
     if (hw_should_treat_as_test(g)) {
@@ -5777,6 +5946,7 @@ static void parse_groups_from_json(const JsonArray& groups) {
     strncpy(g.page_summary, ps, sizeof(g.page_summary)-1); g.page_summary[sizeof(g.page_summary)-1] = '\0';
     g.order_index = grp.containsKey("order_index") ? (int)grp["order_index"] : (int)s_group_cnt;
     g.is_homework = grp["is_homework"] | false;
+    g.homework_future = grp["homework_future"] | false;
     g.is_test = grp["is_test"] | false;
     g.is_naesin = grp["is_naesin"] | false;
     g.pending_complete = grp["pending_complete"] | false;
@@ -7452,11 +7622,21 @@ void ui_port_update_student_info(const JsonObject& info) {
   store_avatar_jpeg_b64(info["avatar_jpeg_b64"] | "", s_avatar_url);
   s_avatar_style = info.containsKey("avatar_monogram_style")
       ? (int)(info["avatar_monogram_style"] | 0) : 0;
+  s_arrival_delta_known = false;
+  if (info.containsKey("arrival_delta_minutes") && !info["arrival_delta_minutes"].isNull()) {
+    s_arrival_delta_minutes = (int)info["arrival_delta_minutes"];
+    s_arrival_delta_known = true;
+  }
+  if (info.containsKey("planned_departure_at")) {
+    if (info["planned_departure_at"].isNull()) apply_planned_departure_iso(nullptr);
+    else apply_planned_departure_iso(info["planned_departure_at"] | "");
+  }
   if (info.containsKey("arrival_time") && !info["arrival_time"].isNull()) {
     apply_arrival_iso(info["arrival_time"] | "");
   } else {
     refresh_welcome_labels();
   }
+  s_goal_saved = info["goal_saved"] | false;
   if (info.containsKey("goal_count")) s_goal_count = (int)(info["goal_count"] | -1);
   if (info.containsKey("homework_due_count")) s_homework_due_count = (int)(info["homework_due_count"] | -1);
   if (info.containsKey("plan_minutes")) s_plan_minutes = (int)(info["plan_minutes"] | -1);

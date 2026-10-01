@@ -14,6 +14,7 @@ import 'screens/problem_roadmap/problem_roadmap_screen.dart';
 import 'screens/problem_bank/problem_bank_screen.dart';
 import 'screens/trait_survey/trait_survey_screen.dart';
 import 'screens/textbook/textbook_screen.dart';
+import 'screens/think/think_screen.dart';
 import 'screens/management/management_screen.dart';
 import 'widgets/app_navigation_bar.dart';
 import 'widgets/textbook_background_extract_panel.dart';
@@ -198,6 +199,7 @@ class _MainScreenState extends State<MainScreen> {
     ProblemBankScreen(),
     TraitSurveyScreen(),
     TextbookScreen(),
+    ThinkScreen(),
     ManagementScreen(),
   ];
 

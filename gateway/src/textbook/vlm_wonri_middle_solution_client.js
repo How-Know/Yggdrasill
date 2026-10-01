@@ -116,6 +116,14 @@ export function buildWonriMiddleQuickAnswerPrompt({
     '    "body_page_from": <박스 "본문 N~M쪽" 배지의 N>,',
     '    "body_page_to": <배지의 M. "본문 12쪽"처럼 한 쪽이면 N과 같은 값>',
     '  },',
+    '  "boxes": [',
+    '    {',
+    '      "title": "<코너 박스에 인쇄된 코너명 그대로>",',
+    '      "body_page_from": <그 박스 배지의 N>,',
+    '      "body_page_to": <배지의 M>,',
+    '      "region": [<코너 제목부터 빠른 정답 박스 끝까지의 ymin,xmin,ymax,xmax>]',
+    '    }',
+    '  ],',
     '  "items": [',
     '    {',
     '      "problem_number": "<기대 목록 표기 그대로>",',
@@ -140,6 +148,9 @@ export function buildWonriMiddleQuickAnswerPrompt({
     '기대 목록에 맞춰 고치지 마라. 읽은 박스의 숫자를 있는 그대로 적어야',
     '어느 소단원 박스를 봤는지 검증할 수 있다. 박스가 없으면 box=null,',
     'items=[]로 둔다.',
+    'boxes에는 이 지면의 코너 박스를 기대 목록과 상관없이 **모두** 위치와 함께',
+    '적는다. 배지가 인쇄되어 있으면 기대 목록과 달라도 숫자를 반드시 적어라.',
+    '다르다는 이유로 null로 비우지 마라. 배지가 아예 인쇄되지 않았을 때만 null이다.',
     '',
     'answer_region은 답 글자만, number_region은 같은 빠른 정답 줄의 번호만',
     '타이트하게 감싼다. 좌표는 [ymin,xmin,ymax,xmax], 0..1000 기준이다.',
@@ -203,11 +214,14 @@ export function buildWonriMiddleDetailedSolutionPrompt({
     '',
     '=== 출력 스키마 ===',
     '{',
-    '  "box": {',
-    '    "title": "<풀이가 딸린 코너 박스에 인쇄된 코너명 그대로>",',
-    '    "body_page_from": <그 박스 "본문 N~M쪽" 배지의 N>,',
-    '    "body_page_to": <배지의 M. 한 쪽이면 N과 같은 값>',
-    '  },',
+    '  "boxes": [',
+    '    {',
+    '      "title": "<코너 박스에 인쇄된 코너명 그대로>",',
+    '      "body_page_from": <그 박스 "본문 N~M쪽" 배지의 N>,',
+    '      "body_page_to": <배지의 M. 한 쪽이면 N과 같은 값>,',
+    '      "region": [<코너 제목부터 빠른 정답 박스 끝까지의 ymin,xmin,ymax,xmax>]',
+    '    }',
+    '  ],',
     '  "items": [',
     '    {',
     '      "problem_number": "<기대 목록 표기 그대로>",',
@@ -230,9 +244,13 @@ export function buildWonriMiddleDetailedSolutionPrompt({
     '',
     'number_region은 빠른 정답 박스 번호가 아니라 상세 풀이 시작 번호만 감싼다.',
     'content_region은 다음 상세 문항번호 직전까지다. 좌표는 0..1000 기준이다.',
-    'box는 이 풀이들이 속한 코너 박스의 배지를 읽은 그대로 적는다. 기대 목록에',
-    '맞춰 숫자를 고치지 마라. 앞 지면에서 이어진 풀이라 이 지면에 배지가 없으면',
-    'box=null로 둔다.',
+    'boxes에는 이 지면에 보이는 코너 박스(제목+빠른 정답 박스)를 기대 목록과',
+    '상관없이 **모두** 위치와 함께 적는다. 배지 숫자는 읽은 그대로 적고 기대',
+    '목록에 맞춰 고치지 마라. 기대 목록과 다른 소단원 박스라도 배지 숫자를',
+    'null로 비우지 마라. 배지가 아예 인쇄되지 않았을 때만 null이다.',
+    '박스가 하나도 없으면 boxes=[]로 둔다.',
+    '어느 풀이가 어느 박스에 속하는지는 좌표로 따로 판정하므로, 지면 맨 위에서',
+    '박스보다 먼저 나오는 연속 풀이도 번호가 맞으면 그대로 반환한다.',
   ].join('\n');
 }
 
@@ -348,6 +366,79 @@ export function buildWonriMiddleSolutionPrompt({
   ].join('\n');
 }
 
+const REGION_SCHEMA = { type: 'ARRAY', items: { type: 'INTEGER' } };
+const BOX_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    title: { type: 'STRING' },
+    body_page_from: { type: 'INTEGER', nullable: true },
+    body_page_to: { type: 'INTEGER', nullable: true },
+    region: REGION_SCHEMA,
+  },
+  propertyOrdering: ['title', 'body_page_from', 'body_page_to', 'region'],
+};
+
+// 모델이 `{boxes, items}` 껍데기를 빼고 문항 배열만 내는 일이 잦다(1-2 해설
+// 49쪽은 절반꼴). 그러면 박스 판정이 꺼지므로 응답 모양을 스키마로 고정한다.
+export const WONRI_MIDDLE_SOLUTION_RESPONSE_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    box: { ...BOX_SCHEMA, nullable: true },
+    boxes: { type: 'ARRAY', items: BOX_SCHEMA },
+    items: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          problem_number: { type: 'STRING' },
+          category: { type: 'STRING' },
+          expected_index: { type: 'INTEGER' },
+          item_role: { type: 'STRING' },
+          answer_kind: { type: 'STRING' },
+          answer_text: { type: 'STRING' },
+          answer_latex_2d: { type: 'STRING' },
+          solution_kind: { type: 'STRING' },
+          answer_region: { ...REGION_SCHEMA, nullable: true },
+          number_region: REGION_SCHEMA,
+          content_region: REGION_SCHEMA,
+          rubric_steps: {
+            type: 'ARRAY',
+            items: {
+              type: 'OBJECT',
+              properties: {
+                step: { type: 'INTEGER' },
+                label: { type: 'STRING' },
+                text: { type: 'STRING' },
+                points: { type: 'NUMBER', nullable: true },
+              },
+            },
+          },
+          total_points: { type: 'NUMBER', nullable: true },
+        },
+        required: ['problem_number', 'expected_index', 'number_region'],
+        propertyOrdering: [
+          'problem_number',
+          'category',
+          'expected_index',
+          'item_role',
+          'answer_kind',
+          'answer_text',
+          'answer_latex_2d',
+          'solution_kind',
+          'answer_region',
+          'number_region',
+          'content_region',
+          'rubric_steps',
+          'total_points',
+        ],
+      },
+    },
+    notes: { type: 'STRING' },
+  },
+  required: ['boxes', 'items'],
+  propertyOrdering: ['box', 'boxes', 'items', 'notes'],
+};
+
 export async function extractWonriMiddleSolutionsOnPage({
   imageBase64,
   mimeType = 'image/png',
@@ -399,6 +490,9 @@ export async function extractWonriMiddleSolutionsOnPage({
     generationConfig: {
       temperature: 0.1,
       responseMimeType: 'application/json',
+      ...(mode === 'combined'
+        ? {}
+        : { responseSchema: WONRI_MIDDLE_SOLUTION_RESPONSE_SCHEMA }),
       maxOutputTokens: 12288,
       thinkingConfig: { thinkingLevel: 'low' },
     },
@@ -460,6 +554,16 @@ export async function extractWonriMiddleSolutionsOnPage({
         `vlm_wonri_middle_solution_parse_failed: finish=${candidate?.finishReason || '-'} text_head="${modelText.slice(0, 180)}"`,
       );
     }
+    // 껍데기 없이 문항 배열만 온 응답은 boxes가 없어 박스 판정을 건너뛴다.
+    // 남의 코너 번호가 그대로 붙을 수 있으니 한 번 더 묻는다.
+    if (
+      mode !== 'combined' &&
+      !Array.isArray(parsedJson.boxes) &&
+      attempt + 1 < attempts
+    ) {
+      lastErr = new Error('boxes_missing');
+      continue;
+    }
     return {
       parsedJson,
       elapsedMs,
@@ -496,7 +600,21 @@ function normalizeBox(raw) {
 /// 그대로 읽어 남의 정답을 돌려주는 사고가 난다. 모델에게는 "어느 박스를
 /// 읽었는지"만 받아 적게 하고, 그 박스가 기대 문항의 본문쪽을 덮는지는
 /// 여기서 판정한다.
-export function filterWonriMiddleItemsByBox({ items, box, expectedEntries }) {
+export function filterWonriMiddleItemsByBox({
+  items,
+  box,
+  boxes = null,
+  expectedEntries,
+  allowContinuation = true,
+}) {
+  if (Array.isArray(boxes)) {
+    return filterWonriMiddleItemsByLayout({
+      items,
+      boxes,
+      expectedEntries,
+      allowContinuation,
+    });
+  }
   const list = Array.isArray(items) ? items : [];
   const from = box?.body_page_from;
   const to = box?.body_page_to;
@@ -535,24 +653,172 @@ export function filterWonriMiddleItemsByBox({ items, box, expectedEntries }) {
   };
 }
 
+/// 해설은 2단 조판이고 코너 박스(제목+빠른 정답)가 지면 중간에서 시작한다.
+/// 박스 배지가 없는 맨 위 연속 풀이는 직전 코너의 것이라, 번호만 같으면
+/// 다른 코너의 "07"을 우리 07로 받아 버린다. 그래서 풀이마다 읽기 순서상
+/// 바로 앞 박스를 찾아 그 박스의 본문쪽으로 판정하고, 첫 박스보다 앞선
+/// 풀이는 기대 목록 맨 앞에서부터 이어지는 번호만 받는다.
+const CONTINUATION_START_SLACK = 1;
+const CONTINUATION_GAP_SLACK = 1;
+
+function readingOrderKey(region) {
+  const column = (region[1] + region[3]) / 2 >= 500 ? 1 : 0;
+  return column * 1000 + region[0];
+}
+
+function hasBodyRange(box) {
+  return (
+    Number.isFinite(box?.body_page_from) && Number.isFinite(box?.body_page_to)
+  );
+}
+
+function filterWonriMiddleItemsByLayout({
+  items,
+  boxes,
+  expectedEntries,
+  allowContinuation,
+}) {
+  const list = Array.isArray(items) ? items : [];
+  const entries = normalizeExpectedEntries(expectedEntries);
+  // 배지 숫자가 빠진 박스도 위치가 있으면 경계로 둔다. 모델은 기대 목록과
+  // 다른 소단원 박스의 배지를 비워 보고하는데, 그 박스를 건너뛰면 뒤의
+  // 풀이가 "앞 지면에서 이어진 풀이"로 보여 그대로 통과한다. 배지를 못 읽은
+  // 박스 뒤 항목은 여기서 판정할 수 없어 남기고, 같은 자리를 다른 소단원이
+  // 먼저 차지했는지는 관리자 앱이 가린다.
+  const placed = boxes
+    .filter((one) => Array.isArray(one?.region))
+    .map((one) => ({ ...one, key: readingOrderKey(one.region) }))
+    .sort((a, b) => a.key - b.key);
+  const leading = [];
+  const kept = [];
+  let droppedByBox = 0;
+  let keptInUnreadBox = 0;
+  for (const item of list) {
+    const region = item?.number_region || item?.content_region;
+    const key = Array.isArray(region) ? readingOrderKey(region) : -1;
+    let owner = null;
+    for (const one of placed) {
+      if (one.key <= key) owner = one;
+    }
+    const entry = matchExpectedEntry(entries, item);
+    if (!owner) {
+      leading.push({ item, key, entry });
+      continue;
+    }
+    if (!hasBodyRange(owner)) {
+      keptInUnreadBox += 1;
+      kept.push(item);
+      continue;
+    }
+    const page = entry?.bodyPage;
+    const inRange = (value) =>
+      value >= owner.body_page_from && value <= owner.body_page_to;
+    const ok = Number.isFinite(page)
+      ? inRange(page)
+      : !entries.some((one) => Number.isFinite(one.bodyPage)) ||
+        entries.some((one) => inRange(one.bodyPage));
+    if (ok) {
+      kept.push(item);
+    } else {
+      droppedByBox += 1;
+    }
+  }
+
+  // 기대 코너 자신의 박스가 이 지면에 있으면 그 코너 풀이는 박스 뒤에서
+  // 시작한다. 박스 앞 풀이는 번호가 이어져 보여도 직전 코너의 것이다
+  // (시험문제 02~05 연속 풀이 아래에 중단원 마무리하기 박스와 01~가 오는 지면).
+  const ownBoxOnPage = placed.some((one) =>
+    hasBodyRange(one) &&
+    entries.some(
+      (entry) =>
+        Number.isFinite(entry.bodyPage) &&
+        entry.bodyPage >= one.body_page_from &&
+        entry.bodyPage <= one.body_page_to,
+    ),
+  );
+  leading.sort((a, b) => a.key - b.key);
+  let previous = null;
+  let droppedLeading = 0;
+  for (const one of leading) {
+    const index = one.entry?.index;
+    const ok =
+      allowContinuation &&
+      !ownBoxOnPage &&
+      Number.isFinite(index) &&
+      (previous == null
+        ? index <= CONTINUATION_START_SLACK
+        : index > previous && index <= previous + 1 + CONTINUATION_GAP_SLACK);
+    if (!ok) {
+      droppedLeading += 1;
+      continue;
+    }
+    previous = index;
+    kept.push(one.item);
+  }
+
+  const reasons = [];
+  if (droppedByBox > 0) reasons.push(`item_out_of_box=${droppedByBox}`);
+  if (keptInUnreadBox > 0) {
+    reasons.push(`unverified_box=${keptInUnreadBox}`);
+  }
+  if (droppedLeading > 0) {
+    reasons.push(
+      !allowContinuation
+        ? `outside_answer_box=${droppedLeading}`
+        : ownBoxOnPage
+          ? `before_own_box=${droppedLeading}`
+          : `continuation_not_in_sequence=${droppedLeading}`,
+    );
+  }
+  const order = new Map(list.map((item, index) => [item, index]));
+  kept.sort((a, b) => order.get(a) - order.get(b));
+  return {
+    items: kept,
+    dropped: droppedByBox + droppedLeading,
+    reason: reasons.join(' '),
+  };
+}
+
+function numberKey(value) {
+  const digits = /\d+/.exec(String(value || ''))?.[0];
+  return digits ? String(Number.parseInt(digits, 10)) : '';
+}
+
 function matchExpectedEntry(entries, item) {
   const index = Number.parseInt(String(item?.expected_index ?? '-1'), 10);
   if (Number.isFinite(index) && index >= 0 && index < entries.length) {
     return entries[index];
   }
-  const key = String(/\d+/.exec(String(item?.problem_number || ''))?.[0] || '');
+  const key = numberKey(item?.problem_number);
   if (!key) return null;
   const matched = entries.filter(
-    (entry) => String(/\d+/.exec(entry.printedNumber)?.[0] || '') === key,
+    (entry) => numberKey(entry.printedNumber) === key,
   );
   return matched.length === 1 ? matched[0] : null;
 }
 
 export function normalizeWonriMiddleSolutionResult(parsedJson) {
-  const out = { items: [], notes: '', box: null };
+  const out = { items: [], notes: '', box: null, boxes: null };
   if (!parsedJson || typeof parsedJson !== 'object') return out;
   out.notes = String(parsedJson.notes || '').trim();
   out.box = normalizeBox(parsedJson.box);
+  if (Array.isArray(parsedJson.boxes)) {
+    out.boxes = parsedJson.boxes
+      .map((raw) => {
+        const region = parseBbox4(raw?.region);
+        const box =
+          normalizeBox(raw) ||
+          (region
+            ? { title: '', body_page_from: null, body_page_to: null }
+            : null);
+        return box ? { ...box, region } : null;
+      })
+      .filter(Boolean);
+    if (!out.box && out.boxes.length > 0) {
+      const { region: _region, ...first } = out.boxes[0];
+      out.box = first;
+    }
+  }
   for (const raw of Array.isArray(parsedJson.items) ? parsedJson.items : []) {
     if (!raw || typeof raw !== 'object') continue;
     const problemNumber = String(

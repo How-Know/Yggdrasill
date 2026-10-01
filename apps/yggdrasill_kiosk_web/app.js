@@ -175,6 +175,10 @@ function parseStudent(json) {
     timeLabel: time,
     checkedIn: pickBool(json, ['checked_in', 'checkedIn', 'is_checked_in', 'attending']),
     scheduledToday: pickBool(json, ['scheduled_today', 'scheduledToday', 'is_scheduled'], true),
+    avatarKind: pickStr(s, ['avatar_kind', 'avatarKind'], pickStr(json, ['avatar_kind', 'avatarKind'])),
+    avatarUrl: pickStr(s, ['avatar_url', 'avatarUrl'], pickStr(json, ['avatar_url', 'avatarUrl'])),
+    avatarEmoji: pickStr(s, ['avatar_emoji', 'avatarEmoji'], pickStr(json, ['avatar_emoji', 'avatarEmoji'])),
+    avatarMonogramStyle: Number(pick(s, ['avatar_monogram_style', 'avatarMonogramStyle'], pick(json, ['avatar_monogram_style', 'avatarMonogramStyle'], 0))) || 0,
   };
 }
 
@@ -411,6 +415,7 @@ function renderStudents() {
     name.className = 'name';
     name.textContent = student.name;
     card.appendChild(time);
+    card.appendChild(createAvatar(student));
     card.appendChild(name);
     if (student.checkedIn) {
       const st = document.createElement('div');
@@ -427,6 +432,72 @@ function renderStudents() {
     list.appendChild(card);
   }
   scrollToCurrentTime(list);
+}
+
+const AVATAR_GRADIENTS = [
+  ['#F5C542', '#3DCC7A'], ['#7BE0C2', '#5B8DEF'], ['#34C759', '#30D158'],
+  ['#FF8A65', '#FF5252'], ['#AB47BC', '#5C6BC0'], ['#26C6DA', '#42A5F5'],
+  ['#FF8A65', '#FF6B9D'], ['#9B6DFF', '#5B8DEF'], ['#FFD54F', '#FFC107'],
+  ['#4DD0E1', '#26C6DA'], ['#A5D6A7', '#FFB74D'], ['#F8BBD0', '#CE93D8'],
+  ['#1A237E', '#283593'], ['#D4A574', '#C49A6C'], ['#424242', '#616161'],
+  ['#E53935', '#D32F2F'],
+];
+const AVATAR_EMOJI_BG = {
+  '🦉': '#3A3A3C', '🦊': '#E8A87C', '🐼': '#E8E8ED', '🐯': '#FFD54F',
+  '🐸': '#81C784', '🐙': '#CE93D8', '🦄': '#F8BBD0', '🐵': '#BCAAA4',
+};
+const FLUENT_EMOJI = {
+  owl: '🦉', fox: '🦊', panda: '🐼', tiger: '🐯',
+  frog: '🐸', octopus: '🐙', unicorn: '🦄', monkey: '🐵',
+};
+
+function displayEmoji(raw) {
+  const value = (raw || '').trim();
+  if (!value.startsWith('fluent:')) return value;
+  return FLUENT_EMOJI[value.slice('fluent:'.length)] || value;
+}
+
+function avatarLabel(name) {
+  const chars = Array.from((name || '').trim());
+  if (!chars.length) return '?';
+  if (chars.length === 1) return chars[0];
+  return chars[chars.length - 2] + chars[chars.length - 1];
+}
+
+function paintMonogram(el, student) {
+  const idx = Math.max(0, Math.min(AVATAR_GRADIENTS.length - 1, student.avatarMonogramStyle || 0));
+  const colors = AVATAR_GRADIENTS[idx];
+  el.classList.add('monogram');
+  el.style.background = `linear-gradient(135deg, ${colors[0]}, ${colors[1]})`;
+  el.textContent = avatarLabel(student.name);
+}
+
+function createAvatar(student) {
+  const el = document.createElement('div');
+  el.className = 'avatar';
+  const kind = (student.avatarKind || '').toLowerCase();
+  if (kind === 'photo' && student.avatarUrl) {
+    const img = document.createElement('img');
+    img.alt = '';
+    img.src = student.avatarUrl;
+    img.addEventListener('error', () => {
+      img.remove();
+      paintMonogram(el, student);
+    });
+    el.appendChild(img);
+    return el;
+  }
+  if (kind === 'emoji' && student.avatarEmoji) {
+    const emoji = displayEmoji(student.avatarEmoji);
+    if (emoji) {
+      el.classList.add('emoji');
+      el.style.background = AVATAR_EMOJI_BG[emoji] || '#3A3A3C';
+      el.textContent = emoji;
+      return el;
+    }
+  }
+  paintMonogram(el, student);
+  return el;
 }
 
 function timeToMinutes(label) {

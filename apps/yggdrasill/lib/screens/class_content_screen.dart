@@ -46,6 +46,7 @@ import 'learning/models/problem_bank_export_models.dart'
 import 'resources/exam_preset_support.dart' show naesinLinkKeyOfPreset;
 import 'design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import '../widgets/dialog_tokens.dart';
+import '../widgets/student_profile_avatar.dart';
 import '../widgets/app_snackbar.dart';
 import '../theme/ygg_semantic_colors.dart';
 import '../widgets/homework_assign_dialog.dart';
@@ -113,7 +114,7 @@ class ClassContentScreen extends StatefulWidget {
 
   const ClassContentScreen({super.key, this.printController});
 
-  static const double _attendingCardHeight = 120;
+  static const double _attendingCardHeight = 176;
   static const double _attendingCardWidth = 320; // 고정 폭으로 내부 우측 정렬 보장
   static const double _studentColumnWidth = 560 * 2 / 3;
   static const double _studentColumnContentWidth = 520 * 2 / 3;
@@ -1643,8 +1644,10 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     return FutureBuilder<Map<String, HomeworkGradingProgressRate>>(
       future: progressFuture,
       builder: (context, progressSnapshot) {
-        final progressRatesByItem = progressSnapshot.data ??
-            const <String, HomeworkGradingProgressRate>{};
+        final progressRatesByItem = _gradingProgressRatesForStudent(
+          editor.studentId,
+          progressSnapshot,
+        );
         return AnimatedBuilder(
           animation: editor,
           builder: (context, _) {
@@ -1923,6 +1926,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         name: student.name,
         color: student.color,
         arrivalTime: student.record.arrivalTime,
+        attendance: student.record,
         onTap: toggleHomeworkDraftPanel,
         showHorizontalDivider: false,
         width: contentW,
@@ -3170,6 +3174,25 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     String studentId,
   ) async {
     try {
+      final attended = DataManager.instance
+          .getAttendanceRecordsForStudent(studentId)
+          .where((record) => record.isPresent)
+          .toList(growable: false)
+        ..sort((a, b) => b.classDateTime.compareTo(a.classDateTime));
+      DateTime? oldestSession;
+      for (final record in attended.take(30)) {
+        final start =
+            record.classDateTime.subtract(const Duration(minutes: 20));
+        final current = oldestSession;
+        if (current == null || start.isBefore(current)) {
+          oldestSession = start;
+        }
+      }
+      await HomeworkStore.instance.loadCompletedHistory(
+        studentId: studentId,
+        completedFrom: oldestSession,
+        hydrate: true,
+      );
       var activeAssignments = await HomeworkAssignmentStore.instance
           .loadActiveAssignments(studentId);
       var reservedItemIds = activeAssignments
@@ -4661,9 +4684,15 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               answerPathRaw: textbookSourceContext
                       .pdfPathsByQuestionId[question.id.trim()]?['answer'] ??
                   '',
-              solutionPathRaw: textbookSourceContext
-                      .pdfPathsByQuestionId[question.id.trim()]?['solution'] ??
-                  '',
+              solutionPathRaw: _solutionPathForTextbookRow(
+                textbookSourceRow,
+                solutionPathRaw: textbookSourceContext
+                        .pdfPathsByQuestionId[question.id.trim()]?['solution'] ??
+                    '',
+                bodyPathRaw: textbookSourceContext
+                        .pdfPathsByQuestionId[question.id.trim()]?['body'] ??
+                    '',
+              ),
               solutionPageNumber:
                   _intFromDynamic(textbookSourceRow?['solution_raw_page']) ??
                       _intFromDynamic(
@@ -4742,6 +4771,20 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   }
 
   String _trimDynamic(dynamic raw) => '${raw ?? ''}'.trim();
+
+  /// 본문에 풀이가 인쇄된 문항은 해설 좌표도 본문 PDF 기준이다.
+  /// 해설 PDF를 같은 쪽수로 열면 전혀 다른 문항이 나온다.
+  String _solutionPathForTextbookRow(
+    Map<String, dynamic>? row, {
+    required String solutionPathRaw,
+    required String bodyPathRaw,
+  }) {
+    final kind = _trimDynamic(row?['solution_source_kind']).toLowerCase();
+    if (kind == 'body' && bodyPathRaw.trim().isNotEmpty) {
+      return bodyPathRaw.trim();
+    }
+    return solutionPathRaw;
+  }
 
   Map<String, dynamic> _mapFromDynamic(dynamic raw) {
     if (raw is Map<String, dynamic>) return raw;
@@ -4970,6 +5013,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       pdfPathsByBookGrade[key] = <String, String>{
         'answer': answerPath,
         'solution': solutionPath,
+        // 해설 시트가 필요한 쪽만 잘라 받도록 저장소 키 그대로 둔다.
+        'body': links.bodyPathRaw.trim(),
       };
     }
     final pdfPathsByQuestionId = <String, Map<String, String>>{};
@@ -5352,6 +5397,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     // 실제 로컬 변환은 시트 자동 오픈(_openSessionAnswerSheet)에서 한다.
     final answerPathRaw = textbookLinks.answerPathRaw.trim();
     final solutionPathRaw = textbookLinks.solutionPathRaw.trim();
+    final bodyPathRaw = textbookLinks.bodyPathRaw.trim();
 
     final assignedRows = await _loadAssignedTextbookProblemRows(
       textbookItems: textbookItems,
@@ -5493,6 +5539,11 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               answerRect1k: _intListFromDynamic(row['answer_bbox_1k']),
               focusRect1k: _intListFromDynamic(
                 row['item_region_1k'] ?? row['bbox_1k'],
+              ),
+              solutionPathRaw: _solutionPathForTextbookRow(
+                row,
+                solutionPathRaw: '',
+                bodyPathRaw: bodyPathRaw,
               ),
               solutionPageNumber: _intFromDynamic(row['solution_raw_page']) ??
                   _intFromDynamic(row['solution_display_page']),
@@ -5855,50 +5906,46 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         };
         if (shouldPersist) {
           _structuredGradingInFlightKeys.addAll(persistenceKeys);
+          _batchConfirmService.beginStructuredDraftSave(keys);
         }
-        final optimisticSnapshot = shouldPersist
-            ? _markStructuredPendingOptimistically(
-                keys: keys,
-                action: action,
-              )
-            : null;
         var savedGrading = true;
-        if (shouldPersist) {
-          final targetItem = HomeworkStore.instance.getById(
-                studentId,
-                payload.homeworkId,
-              ) ??
-              hw;
-          final saved = await _enqueueStructuredGradingReturn(
-            studentId: studentId,
-            keys: keys,
-            targetItem: targetItem,
-            gradingGroupId: gradingGroupId,
-            action: action,
-            states: decoded,
-            gradingPages: payload.gradingPages,
-            scoreByQuestionKey: payload.scoreByQuestionKey,
-            groupHomeworkTitle: payload.groupHomeworkTitle,
-            baselineAttemptId: baselineSession?.attempt.id ?? '',
-            baselineStates: baselineStates,
-            correctionStates: correctionStates,
-            sourceSnapshotAt: sourceSnapshotAt,
-          );
-          if (!mounted) return;
-          if (!saved) {
-            savedGrading = false;
-            if (optimisticSnapshot != null) {
-              _restoreStructuredPendingSnapshot(
-                keys: keys,
-                snapshot: optimisticSnapshot,
-              );
-            }
-            _showHomeworkChipSnackBar(
-              this.context,
-              '채점 초안을 이 PC에 저장하지 못했습니다.',
+        try {
+          if (shouldPersist) {
+            final targetItem = HomeworkStore.instance.getById(
+                  studentId,
+                  payload.homeworkId,
+                ) ??
+                hw;
+            final saved = await _enqueueStructuredGradingReturn(
+              studentId: studentId,
+              keys: keys,
+              targetItem: targetItem,
+              gradingGroupId: gradingGroupId,
+              action: action,
+              states: decoded,
+              gradingPages: payload.gradingPages,
+              scoreByQuestionKey: payload.scoreByQuestionKey,
+              groupHomeworkTitle: payload.groupHomeworkTitle,
+              baselineAttemptId: baselineSession?.attempt.id ?? '',
+              baselineStates: baselineStates,
+              correctionStates: correctionStates,
+              sourceSnapshotAt: sourceSnapshotAt,
             );
-          } else {
-            _testGradingSavedHomeworkIds.add(payload.homeworkId);
+            if (!saved) {
+              savedGrading = false;
+              if (mounted) {
+                _showHomeworkChipSnackBar(
+                  this.context,
+                  '채점 초안을 이 PC에 저장하지 못했습니다.',
+                );
+              }
+            } else {
+              _testGradingSavedHomeworkIds.add(payload.homeworkId);
+            }
+          }
+        } finally {
+          if (shouldPersist) {
+            _batchConfirmService.endStructuredDraftSave(keys);
           }
         }
         if (shouldPersist) {
@@ -6152,50 +6199,46 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             };
             if (shouldPersist) {
               _structuredGradingInFlightKeys.addAll(persistenceKeys);
+              _batchConfirmService.beginStructuredDraftSave(keys);
             }
-            final optimisticSnapshot = shouldPersist
-                ? _markStructuredPendingOptimistically(
-                    keys: keys,
-                    action: action,
-                  )
-                : null;
             var savedGrading = true;
-            if (shouldPersist) {
-              final targetItem = HomeworkStore.instance.getById(
-                    studentId,
-                    payload.homeworkId,
-                  ) ??
-                  hw;
-              final saved = await _enqueueStructuredGradingReturn(
-                studentId: studentId,
-                keys: keys,
-                targetItem: targetItem,
-                gradingGroupId: gradingGroupId,
-                action: action,
-                states: decoded,
-                gradingPages: payload.gradingPages,
-                scoreByQuestionKey: payload.scoreByQuestionKey,
-                groupHomeworkTitle: groupHomeworkTitle,
-                baselineAttemptId: baselineSession?.attempt.id ?? '',
-                baselineStates: baselineStates,
-                correctionStates: correctionStates,
-                sourceSnapshotAt: sourceSnapshotAt,
-              );
-              if (!mounted) return;
-              if (!saved) {
-                savedGrading = false;
-                if (optimisticSnapshot != null) {
-                  _restoreStructuredPendingSnapshot(
-                    keys: keys,
-                    snapshot: optimisticSnapshot,
-                  );
-                }
-                _showHomeworkChipSnackBar(
-                  this.context,
-                  '채점 초안을 이 PC에 저장하지 못했습니다.',
+            try {
+              if (shouldPersist) {
+                final targetItem = HomeworkStore.instance.getById(
+                      studentId,
+                      payload.homeworkId,
+                    ) ??
+                    hw;
+                final saved = await _enqueueStructuredGradingReturn(
+                  studentId: studentId,
+                  keys: keys,
+                  targetItem: targetItem,
+                  gradingGroupId: gradingGroupId,
+                  action: action,
+                  states: decoded,
+                  gradingPages: payload.gradingPages,
+                  scoreByQuestionKey: payload.scoreByQuestionKey,
+                  groupHomeworkTitle: groupHomeworkTitle,
+                  baselineAttemptId: baselineSession?.attempt.id ?? '',
+                  baselineStates: baselineStates,
+                  correctionStates: correctionStates,
+                  sourceSnapshotAt: sourceSnapshotAt,
                 );
-              } else {
-                _testGradingSavedHomeworkIds.add(payload.homeworkId);
+                if (!saved) {
+                  savedGrading = false;
+                  if (mounted) {
+                    _showHomeworkChipSnackBar(
+                      this.context,
+                      '채점 초안을 이 PC에 저장하지 못했습니다.',
+                    );
+                  }
+                } else {
+                  _testGradingSavedHomeworkIds.add(payload.homeworkId);
+                }
+              }
+            } finally {
+              if (shouldPersist) {
+                _batchConfirmService.endStructuredDraftSave(keys);
               }
             }
             if (shouldPersist) {
@@ -6373,51 +6416,47 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           };
           if (shouldPersist) {
             _structuredGradingInFlightKeys.addAll(persistenceKeys);
+            _batchConfirmService.beginStructuredDraftSave(keys);
           }
-          final optimisticSnapshot = shouldPersist
-              ? _markStructuredPendingOptimistically(
-                  keys: keys,
-                  action: action,
-                )
-              : null;
           var savedGrading = true;
-          if (shouldPersist) {
-            final targetItem = HomeworkStore.instance.getById(
-                  studentId,
-                  textbookProblemPayload.homeworkId,
-                ) ??
-                hw;
-            final saved = await _enqueueStructuredGradingReturn(
-              studentId: studentId,
-              keys: keys,
-              targetItem: targetItem,
-              gradingGroupId: gradingGroupId,
-              action: action,
-              states: decoded,
-              gradingPages: textbookProblemPayload.gradingPages,
-              scoreByQuestionKey: textbookProblemPayload.scoreByQuestionKey,
-              groupHomeworkTitle: groupHomeworkTitle,
-              baselineAttemptId: baselineSession?.attempt.id ?? '',
-              baselineStates: baselineStates,
-              correctionStates: correctionStates,
-              sourceSnapshotAt: sourceSnapshotAt,
-            );
-            if (!mounted) return;
-            if (!saved) {
-              savedGrading = false;
-              if (optimisticSnapshot != null) {
-                _restoreStructuredPendingSnapshot(
-                  keys: keys,
-                  snapshot: optimisticSnapshot,
-                );
-              }
-              _showHomeworkChipSnackBar(
-                this.context,
-                '채점 초안을 이 PC에 저장하지 못했습니다.',
+          try {
+            if (shouldPersist) {
+              final targetItem = HomeworkStore.instance.getById(
+                    studentId,
+                    textbookProblemPayload.homeworkId,
+                  ) ??
+                  hw;
+              final saved = await _enqueueStructuredGradingReturn(
+                studentId: studentId,
+                keys: keys,
+                targetItem: targetItem,
+                gradingGroupId: gradingGroupId,
+                action: action,
+                states: decoded,
+                gradingPages: textbookProblemPayload.gradingPages,
+                scoreByQuestionKey: textbookProblemPayload.scoreByQuestionKey,
+                groupHomeworkTitle: groupHomeworkTitle,
+                baselineAttemptId: baselineSession?.attempt.id ?? '',
+                baselineStates: baselineStates,
+                correctionStates: correctionStates,
+                sourceSnapshotAt: sourceSnapshotAt,
               );
-            } else {
-              _testGradingSavedHomeworkIds
-                  .add(textbookProblemPayload.homeworkId);
+              if (!saved) {
+                savedGrading = false;
+                if (mounted) {
+                  _showHomeworkChipSnackBar(
+                    this.context,
+                    '채점 초안을 이 PC에 저장하지 못했습니다.',
+                  );
+                }
+              } else {
+                _testGradingSavedHomeworkIds
+                    .add(textbookProblemPayload.homeworkId);
+              }
+            }
+          } finally {
+            if (shouldPersist) {
+              _batchConfirmService.endStructuredDraftSave(keys);
             }
           }
           if (shouldPersist) {
@@ -11082,6 +11121,21 @@ final Map<String, Future<Map<String, HomeworkAssignmentCycleMeta>>>
 final Map<String, int> _gradingProgressRevisionByStudent = {};
 final Map<String, Future<Map<String, HomeworkGradingProgressRate>>>
     _gradingProgressFutureByStudent = {};
+final Map<String, Map<String, HomeworkGradingProgressRate>>
+    _gradingProgressCacheByStudent = {};
+
+Map<String, HomeworkGradingProgressRate> _gradingProgressRatesForStudent(
+  String studentId,
+  AsyncSnapshot<Map<String, HomeworkGradingProgressRate>> snapshot,
+) {
+  final incoming = snapshot.data;
+  if (incoming != null) {
+    _gradingProgressCacheByStudent[studentId] = incoming;
+  }
+  return incoming ??
+      _gradingProgressCacheByStudent[studentId] ??
+      const <String, HomeworkGradingProgressRate>{};
+}
 
 Map<String, String> _getFlowNamesForStudent(String studentId) {
   final flows = StudentFlowStore.instance.cached(studentId);
@@ -13386,9 +13440,11 @@ Widget _buildHomeworkChipsReactiveForStudent(
                               Map<String, HomeworkGradingProgressRate>>(
                             future: progressFuture,
                             builder: (context, progressSnapshot) {
-                              final progressRatesByItem = progressSnapshot
-                                      .data ??
-                                  const <String, HomeworkGradingProgressRate>{};
+                              final progressRatesByItem =
+                                  _gradingProgressRatesForStudent(
+                                studentId,
+                                progressSnapshot,
+                              );
                               final chips = _buildHomeworkChipsOnceForStudent(
                                 context,
                                 studentId,
@@ -20497,7 +20553,7 @@ List<_GradingHistoryEntry> _collectGradingHistoryEntries({
   final entries = <_GradingHistoryEntry>[];
   for (final studentId in attendingStudentIds) {
     final studentName = studentNamesById[studentId] ?? '학생';
-    final items = HomeworkStore.instance.items(studentId);
+    final items = HomeworkStore.instance.itemsWithHistory(studentId);
     for (final hw in items) {
       if (!isHistoryCandidate(hw)) continue;
       final eventAt = historyEventAt(hw);
@@ -20597,6 +20653,16 @@ Future<void> _showGradingHistoryDialog({
   }) onCancelGrading,
 }) async {
   final cancellingKeys = <String>{};
+  final since = DateTime.now().subtract(const Duration(days: 7));
+  await Future.wait(
+    attendingStudentIds.map(
+      (studentId) => HomeworkStore.instance.loadCompletedHistory(
+        studentId: studentId,
+        completedFrom: since,
+      ),
+    ),
+  );
+  if (!context.mounted) return;
   await showDialog<void>(
     context: context,
     builder: (dialogContext) {
@@ -21127,12 +21193,12 @@ DateTime? _nextClassDateTimeForStudent(String studentId, {DateTime? after}) {
 }
 
 String _formatNextClassLabel(DateTime? dt) {
-  if (dt == null) return '다음 -';
+  if (dt == null) return '다음 예정 -';
   const days = ['월', '화', '수', '목', '금', '토', '일'];
   final dow = days[dt.weekday - 1];
   final hm =
       '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
-  return '다음 $dow $hm';
+  return '다음 예정 $dow $hm';
 }
 
 class _AttendingButton extends StatelessWidget {
@@ -21140,6 +21206,7 @@ class _AttendingButton extends StatelessWidget {
   final Color color;
   final String studentId;
   final DateTime? arrivalTime;
+  final AttendanceRecord attendance;
   final VoidCallback? onTap;
   final bool showHorizontalDivider;
   final double width;
@@ -21149,6 +21216,7 @@ class _AttendingButton extends StatelessWidget {
     required this.name,
     required this.color,
     required this.arrivalTime,
+    required this.attendance,
     this.onTap,
     this.showHorizontalDivider = false,
     this.width = ClassContentScreen._attendingCardWidth,
@@ -21229,6 +21297,7 @@ class _AttendingButton extends StatelessWidget {
           child: AnimatedBuilder(
             animation: Listenable.merge([
               DataManager.instance.studentsNotifier,
+              DataManager.instance.attendanceRecordsNotifier,
               DataManager.instance.deviceBindingsRevision,
               DataManager.instance.studentAppPresenceRevision,
               DataManager.instance.studentTimeBlocksRevision,
@@ -21248,13 +21317,27 @@ class _AttendingButton extends StatelessWidget {
 
               String school = '';
               String gradeText = '';
-              try {
-                final swi = DataManager.instance.students
-                    .firstWhere((s) => s.student.id == studentId);
-                school = swi.student.school;
-                final g = swi.student.grade;
+              var profileStudent =
+                  DataManager.instance.students
+                      .where((s) => s.student.id == studentId)
+                      .map((s) => s.student)
+                      .firstOrNull;
+              if (profileStudent != null) {
+                school = profileStudent.school;
+                final g = profileStudent.grade;
                 gradeText = g > 0 ? '${g}학년' : '';
-              } catch (_) {}
+              }
+
+              var liveAttendance = attendance;
+              final attendanceId = attendance.id;
+              if (attendanceId != null) {
+                for (final record in DataManager.instance.attendanceRecords) {
+                  if (record.id == attendanceId) {
+                    liveAttendance = record;
+                    break;
+                  }
+                }
+              }
 
               final boundDevice = DataManager.instance.boundDeviceId(studentId);
               final deviceLabel = boundDevice != null
@@ -21276,9 +21359,37 @@ class _AttendingButton extends StatelessWidget {
                 if (school.isNotEmpty) school,
                 if (gradeText.isNotEmpty) gradeText,
               ].join(' · ');
-              final arrivalText = arrivalTime != null
-                  ? _formatShortTime(arrivalTime!)
+              final shownArrival = liveAttendance.arrivalTime ?? arrivalTime;
+              final shownDeparture = liveAttendance.departureTime;
+              var plannedDeparture = liveAttendance.plannedDepartureAt;
+              var leaveReasonText = liveAttendance.earlyLeaveReason;
+              var plannedUpdated = liveAttendance.updatedAt;
+              if (plannedDeparture == null) {
+                for (final record in DataManager.instance.attendanceRecords) {
+                  if (record.studentId != studentId ||
+                      record.departureTime != null ||
+                      record.plannedDepartureAt == null) {
+                    continue;
+                  }
+                  if (plannedDeparture != null &&
+                      !record.updatedAt.isAfter(plannedUpdated)) {
+                    continue;
+                  }
+                  plannedDeparture = record.plannedDepartureAt;
+                  leaveReasonText = record.earlyLeaveReason;
+                  plannedUpdated = record.updatedAt;
+                }
+              }
+              final showPlannedDeparture =
+                  shownDeparture == null && plannedDeparture != null;
+              final departAt = shownDeparture ??
+                  plannedDeparture ??
+                  liveAttendance.classEndTime;
+              final arrivalText = shownArrival != null
+                  ? _formatShortTime(shownArrival)
                   : '--:--';
+              final departText = _formatShortTime(departAt);
+              final leaveReason = (leaveReasonText ?? '').trim();
 
               // 오른쪽 정보 3줄 — 글자 크기 동일
               const rightInfoFontSize = 14.0;
@@ -21382,77 +21493,87 @@ class _AttendingButton extends StatelessWidget {
 
               // 좌우 모두 같은 고정 높이. IntrinsicHeight는 내부 LayoutBuilder와
               // 함께 쓸 수 없으므로 사용하지 않는다.
-              return Center(
-                child: SizedBox(
-                  height: 72,
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      const SizedBox(width: 12),
-                      Expanded(
-                        flex: 3,
-                        child: LayoutBuilder(
-                          builder: (context, leftConstraints) {
-                            final namePainter = TextPainter(
-                              text: TextSpan(text: name, style: nameStyle),
-                              maxLines: 1,
-                              ellipsis: '…',
-                              textDirection: TextDirection.ltr,
-                            )..layout(maxWidth: leftConstraints.maxWidth);
-                            final pillMaxWidth = namePainter.width
-                                .clamp(0.0, leftConstraints.maxWidth)
-                                .toDouble();
-                            return Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  name,
-                                  style: nameStyle,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                // 이름·기기 알약 최소 간격
-                                const SizedBox(height: 10),
-                                const Spacer(),
-                                deviceLine(maxWidth: pillMaxWidth),
-                              ],
-                            );
+              final leaveStyle = showPlannedDeparture
+                  ? arrivalStyle.copyWith(color: kDlgAccent)
+                  : arrivalStyle;
+              Widget attendanceLine = Text.rich(
+                TextSpan(
+                  style: arrivalStyle,
+                  children: [
+                    TextSpan(text: '등원 $arrivalText - '),
+                    TextSpan(text: '하원 $departText', style: leaveStyle),
+                  ],
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.left,
+              );
+              if (showPlannedDeparture && leaveReason.isNotEmpty) {
+                attendanceLine = Tooltip(
+                  message: leaveReason,
+                  waitDuration: const Duration(milliseconds: 250),
+                  child: attendanceLine,
+                );
+              }
+
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        if (profileStudent != null) ...[
+                          StudentProfileAvatar(
+                            student: profileStudent,
+                            radius: 20,
+                          ),
+                          const SizedBox(width: 12),
+                        ],
+                        Expanded(
+                          flex: 3,
+                          child: Text(
+                            name,
+                            style: nameStyle,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          flex: 2,
+                          child: Text(
+                            infoLine.isEmpty ? '-' : infoLine,
+                            style: metaStyle,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.right,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        LayoutBuilder(
+                          builder: (context, constraints) {
+                            return deviceLine(maxWidth: constraints.maxWidth);
                           },
                         ),
-                      ),
-                      const SizedBox(width: 20),
-                      Expanded(
-                        flex: 3,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              infoLine.isEmpty ? '-' : infoLine,
-                              style: metaStyle,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              textAlign: TextAlign.right,
-                            ),
-                            Text(
-                              '등원 $arrivalText',
-                              style: arrivalStyle,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              textAlign: TextAlign.right,
-                            ),
-                            Text(
-                              nextClassLabel,
-                              style: nextClassStyle,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              textAlign: TextAlign.right,
-                            ),
-                          ],
+                        const SizedBox(height: 16),
+                        attendanceLine,
+                        const SizedBox(height: 8),
+                        Text(
+                          nextClassLabel,
+                          style: nextClassStyle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
-                      ),
-                    ],
-                  ),
+                      ],
+                    ),
+                  ],
                 ),
               );
             },

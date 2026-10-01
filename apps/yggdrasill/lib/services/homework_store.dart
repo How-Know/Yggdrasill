@@ -351,6 +351,9 @@ class HomeworkStore {
       'id,group_id,student_id,homework_item_id,item_order_index,created_at,updated_at,version';
 
   final Map<String, List<HomeworkItem>> _byStudentId = {};
+
+  /// 과제 현황·완료 횟수처럼 화면을 열 때 읽는 완료 이력. 홈 작업 집합과 분리한다.
+  final Map<String, List<HomeworkItem>> _historyByStudentId = {};
   final Map<String, List<HomeworkGroup>> _groupsByStudentId = {};
   final Map<String, List<HomeworkGroupItem>> _groupItemsByGroupId = {};
   final Map<String, String> _groupIdByItemId = {};
@@ -429,6 +432,7 @@ class HomeworkStore {
     _rtPollInFlight = false;
     _rtPollGeneration++;
     _byStudentId.clear();
+    _historyByStudentId.clear();
     _groupsByStudentId.clear();
     _groupItemsByGroupId.clear();
     _groupIdByItemId.clear();
@@ -690,6 +694,13 @@ class HomeworkStore {
     required SupabaseClient supa,
     required String academyId,
     String? studentId,
+    bool workingSetOnly = false,
+    bool completedOnly = false,
+    DateTime? completedFrom,
+    DateTime? completedTo,
+    String? bookId,
+    String? gradeLabel,
+    List<String>? itemIds,
   }) async {
     dynamic buildQuery(String selectColumns) {
       dynamic query = supa
@@ -698,6 +709,46 @@ class HomeworkStore {
           .eq('academy_id', academyId);
       if (studentId != null && studentId.trim().isNotEmpty) {
         query = query.eq('student_id', studentId.trim());
+      }
+      final book = (bookId ?? '').trim();
+      if (book.isNotEmpty) {
+        query = query.eq('book_id', book);
+      }
+      final grade = (gradeLabel ?? '').trim();
+      if (grade.isNotEmpty) {
+        query = query.eq('grade_label', grade);
+      }
+      final ids = itemIds
+              ?.map((id) => id.trim())
+              .where((id) => id.isNotEmpty)
+              .toList(growable: false) ??
+          const <String>[];
+      if (ids.isNotEmpty) {
+        query = query.inFilter('id', ids);
+      }
+      if (workingSetOnly) {
+        final now = DateTime.now();
+        final start = DateTime(now.year, now.month, now.day)
+            .toUtc()
+            .toIso8601String();
+        // status 1 = completed. 확인(phase 4)은 완료가 아니므로 포함된다.
+        query = query.or('status.neq.1,completed_at.gte."$start"');
+      } else if (completedOnly ||
+          completedFrom != null ||
+          completedTo != null) {
+        query = query.eq('status', 1);
+        if (completedFrom != null) {
+          query = query.gte(
+            'completed_at',
+            completedFrom.toUtc().toIso8601String(),
+          );
+        }
+        if (completedTo != null) {
+          query = query.lt(
+            'completed_at',
+            completedTo.toUtc().toIso8601String(),
+          );
+        }
       }
       return query
           .order('order_index', ascending: true)
@@ -1864,6 +1915,139 @@ class HomeworkStore {
     return copied;
   }
 
+  /// 작업 집합과, 화면을 열 때 읽어 둔 완료 이력을 합친다.
+  List<HomeworkItem> itemsWithHistory(String studentId) {
+    final live = items(studentId);
+    final history = _historyByStudentId[studentId] ?? const <HomeworkItem>[];
+    if (history.isEmpty) return live;
+    final seen = <String>{for (final item in live) item.id};
+    final merged = List<HomeworkItem>.from(live);
+    for (final item in history) {
+      if (seen.add(item.id)) merged.add(item);
+    }
+    merged.sort(_compareByOrder);
+    return merged;
+  }
+
+  Future<void> loadCompletedHistory({
+    required String studentId,
+    DateTime? completedFrom,
+    DateTime? completedTo,
+    String? bookId,
+    String? gradeLabel,
+    bool hydrate = false,
+  }) async {
+    final id = studentId.trim();
+    if (id.isEmpty) return;
+    try {
+      final academyId = (await TenantService.instance.getActiveAcademyId()) ??
+          await TenantService.instance.ensureActiveAcademy();
+      final rows = await _fetchHomeworkRows(
+        supa: Supabase.instance.client,
+        academyId: academyId,
+        studentId: id,
+        completedOnly: true,
+        completedFrom: completedFrom,
+        completedTo: completedTo,
+        bookId: bookId,
+        gradeLabel: gradeLabel,
+      );
+      final parsed = <HomeworkItem>[
+        for (final row in rows) _parseHomeworkItemRow(row),
+      ];
+      if (hydrate && parsed.isNotEmpty) {
+        await _hydratePageMappingsFromServer(
+          academyId: academyId,
+          items: parsed,
+        );
+        await _hydrateUnitAndProblemMappingsFromServer(
+          academyId: academyId,
+          items: parsed,
+        );
+      }
+      _mergeHistory(id, parsed);
+      _bump();
+    } catch (e, st) {
+      debugPrint('[HW][history][ERROR] student=$id $e\n$st');
+    }
+  }
+
+  Future<void> ensureHistoryItems(
+    String studentId,
+    Iterable<String> itemIds, {
+    bool hydrate = true,
+  }) async {
+    final id = studentId.trim();
+    if (id.isEmpty) return;
+    final missing = <String>[];
+    for (final raw in itemIds) {
+      final itemId = raw.trim();
+      if (itemId.isEmpty) continue;
+      if (getById(id, itemId) != null) continue;
+      missing.add(itemId);
+    }
+    if (missing.isEmpty) return;
+    try {
+      final academyId = (await TenantService.instance.getActiveAcademyId()) ??
+          await TenantService.instance.ensureActiveAcademy();
+      final rows = await _fetchHomeworkRows(
+        supa: Supabase.instance.client,
+        academyId: academyId,
+        studentId: id,
+        itemIds: missing,
+      );
+      final parsed = <HomeworkItem>[
+        for (final row in rows) _parseHomeworkItemRow(row),
+      ];
+      if (hydrate && parsed.isNotEmpty) {
+        await _hydratePageMappingsFromServer(
+          academyId: academyId,
+          items: parsed,
+        );
+        await _hydrateUnitAndProblemMappingsFromServer(
+          academyId: academyId,
+          items: parsed,
+        );
+      }
+      final live = _byStudentId.putIfAbsent(id, () => <HomeworkItem>[]);
+      final history = <HomeworkItem>[];
+      for (final item in parsed) {
+        if (item.status == HomeworkStatus.completed) {
+          history.add(item);
+        } else if (!live.any((existing) => existing.id == item.id)) {
+          live.add(item);
+        }
+      }
+      if (history.isNotEmpty) _mergeHistory(id, history);
+      _bump();
+    } catch (e, st) {
+      debugPrint('[HW][history][items][ERROR] student=$id $e\n$st');
+    }
+  }
+
+  void _mergeHistory(String studentId, List<HomeworkItem> incoming) {
+    final liveIds = <String>{
+      for (final item in _byStudentId[studentId] ?? const <HomeworkItem>[])
+        item.id,
+    };
+    final byId = <String, HomeworkItem>{
+      for (final item in _historyByStudentId[studentId] ?? const <HomeworkItem>[])
+        item.id: item,
+    };
+    for (final item in incoming) {
+      if (liveIds.contains(item.id)) {
+        byId.remove(item.id);
+        continue;
+      }
+      byId[item.id] = item;
+    }
+    if (byId.isEmpty) {
+      _historyByStudentId.remove(studentId);
+    } else {
+      _historyByStudentId[studentId] = byId.values.toList();
+    }
+  }
+
   List<HomeworkGroup> groups(
     String studentId, {
     bool includeArchived = false,
@@ -1899,8 +2083,14 @@ class HomeworkStore {
     bool includeCompleted = false,
   }) {
     final list = _byStudentId[studentId] ?? const <HomeworkItem>[];
-    if (list.isEmpty) return const [];
     final byId = <String, HomeworkItem>{for (final item in list) item.id: item};
+    if (includeCompleted) {
+      for (final item
+          in _historyByStudentId[studentId] ?? const <HomeworkItem>[]) {
+        byId.putIfAbsent(item.id, () => item);
+      }
+    }
+    if (byId.isEmpty) return const [];
     final links = groupLinks(groupId);
     final out = <HomeworkItem>[];
     for (final link in links) {
@@ -2226,6 +2416,7 @@ class HomeworkStore {
 
   void _restoreSnapshot(Map<String, dynamic> snapshot) {
     _byStudentId.clear();
+    _historyByStudentId.clear();
     _groupsByStudentId.clear();
     _groupItemsByGroupId.clear();
     _groupIdByItemId.clear();
@@ -2281,6 +2472,15 @@ class HomeworkStore {
     for (final links in _groupItemsByGroupId.values) {
       links.sort(_compareGroupItemByOrder);
     }
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    for (final list in _byStudentId.values) {
+      list.removeWhere(
+        (item) =>
+            item.status == HomeworkStatus.completed &&
+            (item.completedAt == null || item.completedAt!.isBefore(today)),
+      );
+    }
   }
 
   Future<void> _persistSnapshotNow(String academyId) async {
@@ -2309,6 +2509,21 @@ class HomeworkStore {
     int limit = 60,
   }) async {
     await ensureFullSnapshotLoaded();
+    final missingByStudent = <String, Set<String>>{};
+    for (final entry in _groupsByStudentId.entries) {
+      for (final group in entry.value) {
+        if (group.status == 'archived') continue;
+        for (final link in groupLinks(group.id)) {
+          if (getById(entry.key, link.homeworkItemId) != null) continue;
+          missingByStudent
+              .putIfAbsent(entry.key, () => <String>{})
+              .add(link.homeworkItemId);
+        }
+      }
+    }
+    for (final entry in missingByStudent.entries) {
+      await ensureHistoryItems(entry.key, entry.value);
+    }
 
     final templates = <HomeworkRecentTemplate>[];
     final groupedItemIds = <String>{};
@@ -2440,6 +2655,7 @@ class HomeworkStore {
       final data = await _fetchHomeworkRows(
         supa: supa,
         academyId: academyId,
+        workingSetOnly: true,
       );
       if (sessionGeneration != _sessionGeneration ||
           _loadedAcademyId != academyId) {
@@ -4301,9 +4517,16 @@ class HomeworkStore {
 
   HomeworkItem? getById(String studentId, String id) {
     final list = _byStudentId[studentId];
-    if (list == null) return null;
-    final idx = list.indexWhere((e) => e.id == id);
-    return idx == -1 ? null : list[idx];
+    if (list != null) {
+      final idx = list.indexWhere((e) => e.id == id);
+      if (idx != -1) return list[idx];
+    }
+    final history = _historyByStudentId[studentId];
+    if (history == null) return null;
+    for (final item in history) {
+      if (item.id == id) return item;
+    }
+    return null;
   }
 
   HomeworkItem? runningOf(String studentId) {
@@ -5860,18 +6083,42 @@ class HomeworkStore {
         groupCycleDeltaMs = delta;
       }
     }
+    final undo = _snapshotGroupTransition(studentId);
+    _applyOptimisticGroupTransition(
+      studentId: studentId,
+      groupId: cleanedGroupId,
+      fromPhase: normalizedFromPhase,
+    );
+    var committed = false;
     try {
       final academyId = (await TenantService.instance.getActiveAcademyId()) ??
           await TenantService.instance.ensureActiveAcademy();
-      final raw = await Supabase.instance.client.rpc(
-        'homework_group_bulk_transition',
-        params: {
-          'p_group_id': cleanedGroupId,
-          'p_academy_id': academyId,
-          'p_from_phase': normalizedFromPhase,
-        },
-      );
-      await _reloadStudent(studentId);
+      dynamic raw = 0;
+      try {
+        raw = await Supabase.instance.client.rpc(
+          'homework_group_bulk_transition_delta',
+          params: {
+            'p_group_id': cleanedGroupId,
+            'p_academy_id': academyId,
+            'p_from_phase': normalizedFromPhase,
+          },
+        );
+        final applied = _applyGroupTransitionDelta(studentId, raw);
+        if (!applied) _restoreGroupTransitionSnapshot(undo);
+      } catch (e) {
+        if (!_isMissingTransitionDeltaFunction(e)) rethrow;
+        _restoreGroupTransitionSnapshot(undo);
+        raw = await Supabase.instance.client.rpc(
+          'homework_group_bulk_transition',
+          params: {
+            'p_group_id': cleanedGroupId,
+            'p_academy_id': academyId,
+            'p_from_phase': normalizedFromPhase,
+          },
+        );
+        await _reloadStudent(studentId);
+      }
+      committed = true;
       if (normalizedFromPhase == 4) {
         // 서버가 pending_complete 항목을 바로 완료했으면 메모리 예약·낙관적
         // 숨김도 소진한다. 이후 같은 ID가 다시 대기 전환될 때 오발화하지 않는다.
@@ -5905,19 +6152,268 @@ class HomeworkStore {
           _maybeAutoCompleteOnWaiting(studentId, child);
         }
       }
-      final transitionCount = _parseInt(raw);
+      final transitionCount = raw is Map
+          ? _parseInt(Map<String, dynamic>.from(raw)['transitioned'])
+          : _parseInt(raw);
       if (transitionCount <= 0 && optimisticallyHiddenIds.isNotEmpty) {
         _optimisticallyCompletingItemIds.removeAll(optimisticallyHiddenIds);
         _bump();
       }
       return transitionCount;
     } catch (_) {
+      if (!committed) _restoreGroupTransitionSnapshot(undo);
       if (optimisticallyHiddenIds.isNotEmpty) {
         _optimisticallyCompletingItemIds.removeAll(optimisticallyHiddenIds);
         _bump();
       }
       return 0;
     }
+  }
+
+  bool _isMissingTransitionDeltaFunction(Object error) {
+    final message = error.toString().toLowerCase();
+    return message.contains('homework_group_bulk_transition_delta') &&
+        (message.contains('does not exist') ||
+            message.contains('could not find') ||
+            message.contains('pgrst202') ||
+            message.contains('42883'));
+  }
+
+  _GroupTransitionSnapshot _snapshotGroupTransition(String studentId) {
+    final items = <String, _ItemTransitionSnapshot>{};
+    for (final item in _byStudentId[studentId] ?? const <HomeworkItem>[]) {
+      items[item.id] = _ItemTransitionSnapshot.from(item);
+    }
+    final groups = <String, _GroupTransitionSnapshotFields>{};
+    for (final group in _groupsByStudentId[studentId] ?? const <HomeworkGroup>[]) {
+      groups[group.id] = _GroupTransitionSnapshotFields.from(group);
+    }
+    return _GroupTransitionSnapshot(items: items, groups: groups);
+  }
+
+  void _restoreGroupTransitionSnapshot(_GroupTransitionSnapshot snapshot) {
+    for (final entry in snapshot.items.entries) {
+      final copies = _homeworkCopies(entry.key);
+      if (copies.isEmpty) continue;
+      for (final item in copies) {
+        entry.value.apply(item);
+      }
+    }
+    for (final entry in snapshot.groups.entries) {
+      for (final groups in _groupsByStudentId.values) {
+        for (final group in groups) {
+          if (group.id == entry.key) entry.value.apply(group);
+        }
+      }
+    }
+    _bump();
+  }
+
+  HomeworkItem? _findMutableHomeworkItem(String itemId) {
+    final copies = _homeworkCopies(itemId);
+    if (copies.isEmpty) return null;
+    return copies.first;
+  }
+
+  List<HomeworkItem> _homeworkCopies(String itemId) {
+    final copies = <HomeworkItem>[];
+    for (final list in _byStudentId.values) {
+      for (final item in list) {
+        if (item.id == itemId) copies.add(item);
+      }
+    }
+    for (final list in _historyByStudentId.values) {
+      for (final item in list) {
+        if (item.id == itemId && !copies.contains(item)) copies.add(item);
+      }
+    }
+    return copies;
+  }
+
+  void _applyOptimisticGroupTransition({
+    required String studentId,
+    required String groupId,
+    required int? fromPhase,
+  }) {
+    if (fromPhase != 1 && fromPhase != 2 && fromPhase != 4) return;
+    final now = DateTime.now();
+    final list = _byStudentId[studentId] ?? const <HomeworkItem>[];
+    final inGroup = <String>{
+      for (final link in groupLinks(groupId)) link.homeworkItemId,
+    };
+    if (fromPhase == 1) {
+      final pausedGroupIds = <String>{};
+      for (final item in list) {
+        if (item.status == HomeworkStatus.completed) continue;
+        if (inGroup.contains(item.id) || item.runStart == null) continue;
+        item.accumulatedMs += now.difference(item.runStart!).inMilliseconds;
+        item.runStart = null;
+        item.phase = 1;
+        item.waitingAt = now;
+        final pausedGroupId = _groupIdByItemId[item.id];
+        if (pausedGroupId != null && pausedGroupId.isNotEmpty) {
+          pausedGroupIds.add(pausedGroupId);
+        }
+      }
+      for (final pausedGroupId in pausedGroupIds) {
+        final paused = groupById(studentId, pausedGroupId);
+        if (paused == null || paused.id == groupId) continue;
+        paused.runtimePhase = 1;
+        paused.runtimeRunStart = null;
+        paused.runtimeUpdatedAt = now;
+      }
+      for (final item in list) {
+        if (!inGroup.contains(item.id) || item.phase != 1) continue;
+        if (item.status == HomeworkStatus.completed) continue;
+        item.phase = 2;
+        item.runStart ??= now;
+        item.firstStartedAt ??= now;
+      }
+    } else if (fromPhase == 2) {
+      for (final item in list) {
+        if (!inGroup.contains(item.id) || item.phase != 2) continue;
+        if (item.status == HomeworkStatus.completed) continue;
+        if (item.runStart != null) {
+          item.accumulatedMs += now.difference(item.runStart!).inMilliseconds;
+          item.runStart = null;
+        }
+        item.phase = 3;
+        item.submittedAt = now;
+      }
+    } else {
+      for (final item in list) {
+        if (!inGroup.contains(item.id) || item.phase != 4) continue;
+        if (item.status == HomeworkStatus.completed) continue;
+        if (_autoCompleteOnNextWaiting.contains(item.id)) {
+          item.status = HomeworkStatus.completed;
+          item.phase = 0;
+          item.completedAt ??= now;
+          item.runStart = null;
+          continue;
+        }
+        item.phase = 1;
+        item.runStart = null;
+        item.waitingAt = now;
+      }
+    }
+    final group = groupById(studentId, groupId);
+    if (group != null) {
+      if (fromPhase == 1) {
+        group.cycleStartedAt ??= now;
+        group.runtimePhase = 2;
+        group.runtimeRunStart ??= now;
+      } else if (fromPhase == 2) {
+        group.runtimePhase = 3;
+        group.runtimeRunStart = null;
+      } else {
+        group.cycleStartedAt = null;
+        group.runtimePhase = 1;
+        group.runtimeRunStart = null;
+      }
+      group.runtimeUpdatedAt = now;
+    }
+    final history = _historyByStudentId[studentId];
+    if (history != null) {
+      final liveById = {for (final item in list) item.id: item};
+      for (final copy in history) {
+        final live = liveById[copy.id];
+        if (live == null || identical(live, copy)) continue;
+        copy.status = live.status;
+        copy.phase = live.phase;
+        copy.accumulatedMs = live.accumulatedMs;
+        copy.cycleBaseAccumulatedMs = live.cycleBaseAccumulatedMs;
+        copy.runStart = live.runStart;
+        copy.completedAt = live.completedAt;
+        copy.firstStartedAt = live.firstStartedAt;
+        copy.submittedAt = live.submittedAt;
+        copy.confirmedAt = live.confirmedAt;
+        copy.waitingAt = live.waitingAt;
+        copy.updatedAt = live.updatedAt;
+        copy.version = live.version;
+      }
+    }
+    _bump();
+  }
+
+  bool _applyGroupTransitionDelta(String studentId, dynamic raw) {
+    if (raw is! Map) {
+      _bump();
+      return false;
+    }
+    final payload = Map<String, dynamic>.from(raw);
+    final items = payload['items'];
+    if (items is! List || items.isEmpty) {
+      if (_parseInt(payload['transitioned']) <= 0) return false;
+    }
+    if (items is List) {
+      for (final row in items) {
+        if (row is! Map) continue;
+        final map = Map<String, dynamic>.from(row);
+        final itemId = '${map['id'] ?? ''}'.trim();
+        if (itemId.isEmpty || _findMutableHomeworkItem(itemId) == null) {
+          continue;
+        }
+        final status = HomeworkStatus.values[
+            (_parseInt(map['status'])).clamp(0, HomeworkStatus.values.length - 1)];
+        final phase = (_parseInt(map['phase'], fallback: 1)).clamp(0, 4);
+        final accumulatedMs = _parseInt(map['accumulated_ms']);
+        final cycleBase = _parseInt(map['cycle_base_accumulated_ms']);
+        final runStart = _parseTsOpt(map['run_start']);
+        final completedAt = _parseTsOpt(map['completed_at']);
+        final firstStartedAt = _parseTsOpt(map['first_started_at']);
+        final submittedAt = _parseTsOpt(map['submitted_at']);
+        final confirmedAt = _parseTsOpt(map['confirmed_at']);
+        final waitingAt = _parseTsOpt(map['waiting_at']);
+        final updatedAt = _parseTsOpt(map['updated_at']);
+        final version = _parseInt(map['version']);
+        for (final item in _homeworkCopies(itemId)) {
+          item.status = status;
+          item.phase = phase;
+          item.accumulatedMs = accumulatedMs;
+          item.cycleBaseAccumulatedMs = cycleBase;
+          item.runStart = runStart;
+          item.completedAt = completedAt;
+          item.firstStartedAt = firstStartedAt;
+          item.submittedAt = submittedAt;
+          item.confirmedAt = confirmedAt;
+          item.waitingAt = waitingAt;
+          item.updatedAt = updatedAt;
+          if (version > 0) item.version = version;
+        }
+      }
+    }
+    final groups = payload['groups'];
+    if (groups is List) {
+      for (final row in groups) {
+        if (row is! Map) continue;
+        final map = Map<String, dynamic>.from(row);
+        final group = groupById(studentId, '${map['id'] ?? ''}'.trim());
+        if (group == null) continue;
+        final status = '${map['status'] ?? ''}'.trim();
+        if (status.isNotEmpty) group.status = status;
+        group.cycleStartedAt = _parseTsOpt(map['cycle_started_at']);
+        group.updatedAt = _parseTsOpt(map['updated_at']);
+        group.version = _parseInt(map['version'], fallback: group.version);
+      }
+    }
+    final runtimes = payload['runtimes'];
+    if (runtimes is List) {
+      for (final row in runtimes) {
+        if (row is! Map) continue;
+        final map = Map<String, dynamic>.from(row);
+        final group = groupById(studentId, '${map['group_id'] ?? ''}'.trim());
+        if (group == null) continue;
+        group.runtimePhase =
+            (_parseInt(map['phase'], fallback: 0)).clamp(0, 4);
+        group.runtimeAccumulatedMs = _parseInt(map['accumulated_ms']);
+        group.runtimeRunStart = _parseTsOpt(map['run_start']);
+        group.runtimeFirstStartedAt = _parseTsOpt(map['first_started_at']);
+        group.runtimeCheckCount = _parseInt(map['check_count']);
+        group.runtimeUpdatedAt = _parseTsOpt(map['updated_at']);
+      }
+    }
+    _bump();
+    return true;
   }
 
   Future<bool> moveWaitingItemToGroup({
@@ -6250,6 +6746,10 @@ class HomeworkStore {
       explicitCode: learningTrackCode ?? template?.learningTrackCode,
       courseLabel: resolvedCourseLabel,
       referenceDate: now,
+    );
+    await ensureHistoryItems(
+      studentId,
+      groupLinks(cleanedGroupId).map((link) => link.homeworkItemId),
     );
     if (!_groupAllowsLearningTrack(
       studentId: studentId,
@@ -6992,6 +7492,7 @@ class HomeworkStore {
         supa: Supabase.instance.client,
         academyId: academyId,
         studentId: studentId,
+        workingSetOnly: true,
       );
       final List<HomeworkItem> list = [];
       for (final r in data) {
@@ -7045,6 +7546,9 @@ class HomeworkStore {
       if (_reloadGenerationByStudentId[studentId] != reloadGeneration) return;
       _sortStudentList(list);
       _byStudentId[studentId] = list;
+      _historyByStudentId[studentId]?.removeWhere(
+        (item) => list.any((live) => live.id == item.id),
+      );
       await _hydratePageMappingsFromServer(
         academyId: academyId,
         items: list,
@@ -7726,4 +8230,96 @@ class HomeworkStore {
       return false;
     }
   }
+}
+
+class _ItemTransitionSnapshot {
+  final HomeworkStatus status;
+  final int phase;
+  final int accumulatedMs;
+  final int cycleBaseAccumulatedMs;
+  final DateTime? runStart;
+  final DateTime? completedAt;
+  final DateTime? firstStartedAt;
+  final DateTime? submittedAt;
+  final DateTime? confirmedAt;
+  final DateTime? waitingAt;
+  final DateTime? updatedAt;
+  final int version;
+
+  _ItemTransitionSnapshot.from(HomeworkItem item)
+      : status = item.status,
+        phase = item.phase,
+        accumulatedMs = item.accumulatedMs,
+        cycleBaseAccumulatedMs = item.cycleBaseAccumulatedMs,
+        runStart = item.runStart,
+        completedAt = item.completedAt,
+        firstStartedAt = item.firstStartedAt,
+        submittedAt = item.submittedAt,
+        confirmedAt = item.confirmedAt,
+        waitingAt = item.waitingAt,
+        updatedAt = item.updatedAt,
+        version = item.version;
+
+  void apply(HomeworkItem item) {
+    item.status = status;
+    item.phase = phase;
+    item.accumulatedMs = accumulatedMs;
+    item.cycleBaseAccumulatedMs = cycleBaseAccumulatedMs;
+    item.runStart = runStart;
+    item.completedAt = completedAt;
+    item.firstStartedAt = firstStartedAt;
+    item.submittedAt = submittedAt;
+    item.confirmedAt = confirmedAt;
+    item.waitingAt = waitingAt;
+    item.updatedAt = updatedAt;
+    item.version = version;
+  }
+}
+
+class _GroupTransitionSnapshotFields {
+  final String status;
+  final DateTime? cycleStartedAt;
+  final int runtimePhase;
+  final int runtimeAccumulatedMs;
+  final DateTime? runtimeRunStart;
+  final DateTime? runtimeFirstStartedAt;
+  final int runtimeCheckCount;
+  final DateTime? runtimeUpdatedAt;
+  final DateTime? updatedAt;
+  final int version;
+
+  _GroupTransitionSnapshotFields.from(HomeworkGroup group)
+      : status = group.status,
+        cycleStartedAt = group.cycleStartedAt,
+        runtimePhase = group.runtimePhase,
+        runtimeAccumulatedMs = group.runtimeAccumulatedMs,
+        runtimeRunStart = group.runtimeRunStart,
+        runtimeFirstStartedAt = group.runtimeFirstStartedAt,
+        runtimeCheckCount = group.runtimeCheckCount,
+        runtimeUpdatedAt = group.runtimeUpdatedAt,
+        updatedAt = group.updatedAt,
+        version = group.version;
+
+  void apply(HomeworkGroup group) {
+    group.status = status;
+    group.cycleStartedAt = cycleStartedAt;
+    group.runtimePhase = runtimePhase;
+    group.runtimeAccumulatedMs = runtimeAccumulatedMs;
+    group.runtimeRunStart = runtimeRunStart;
+    group.runtimeFirstStartedAt = runtimeFirstStartedAt;
+    group.runtimeCheckCount = runtimeCheckCount;
+    group.runtimeUpdatedAt = runtimeUpdatedAt;
+    group.updatedAt = updatedAt;
+    group.version = version;
+  }
+}
+
+class _GroupTransitionSnapshot {
+  final Map<String, _ItemTransitionSnapshot> items;
+  final Map<String, _GroupTransitionSnapshotFields> groups;
+
+  const _GroupTransitionSnapshot({
+    required this.items,
+    required this.groups,
+  });
 }

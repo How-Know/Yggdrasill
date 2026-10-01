@@ -1,10 +1,14 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:yggdrasill_m5_ota/m5_ota_service.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import '../../services/think/think_api.dart';
+import '../../services/think/think_models.dart';
 
 class ManagementScreen extends StatefulWidget {
   const ManagementScreen({super.key});
@@ -14,9 +18,10 @@ class ManagementScreen extends StatefulWidget {
 }
 
 class _ManagementScreenState extends State<ManagementScreen> {
-  final _openaiApiKeyController = TextEditingController();
-  bool _isLoadingApiKey = false;
-  bool _isSavingApiKey = false;
+  static const _kSecretCommand = 'supabase secrets set OPENAI_API_KEY=<새 키>';
+  ThinkStatus? _aiStatus;
+  String? _aiStatusError;
+  bool _aiStatusLoading = false;
 
   static const _kPrefKeyBaseUrl = 'survey_base_url';
   final _surveyBaseUrlController = TextEditingController();
@@ -28,13 +33,12 @@ class _ManagementScreenState extends State<ManagementScreen> {
   @override
   void initState() {
     super.initState();
-    _loadOpenAiApiKey();
+    _loadAiStatus();
     _loadSurveyBaseUrl();
   }
 
   @override
   void dispose() {
-    _openaiApiKeyController.dispose();
     _surveyBaseUrlController.dispose();
     super.dispose();
   }
@@ -222,65 +226,62 @@ class _ManagementScreenState extends State<ManagementScreen> {
     );
   }
 
-  Future<void> _loadOpenAiApiKey() async {
-    setState(() => _isLoadingApiKey = true);
+  Future<void> _loadAiStatus() async {
+    setState(() => _aiStatusLoading = true);
     try {
-      // platform_config 테이블에서 openai_api_key 가져오기
-      final res = await Supabase.instance.client
-          .from('platform_config')
-          .select('config_value')
-          .eq('config_key', 'openai_api_key')
-          .maybeSingle();
-      
-      if (res != null && res['config_value'] != null) {
-        _openaiApiKeyController.text = res['config_value'] as String;
-      }
+      final status = await ThinkApi.instance.status();
+      if (!mounted) return;
+      setState(() {
+        _aiStatus = status;
+        _aiStatusError = null;
+      });
     } catch (e) {
-      debugPrint('API 키 로드 실패: $e');
+      if (!mounted) return;
+      setState(() {
+        _aiStatus = null;
+        _aiStatusError = e is ThinkApiException && e.code == 'forbidden'
+            ? '확인하려면 슈퍼관리자 계정으로 로그인해야 합니다.'
+            : '상태를 확인하지 못했습니다: $e';
+      });
     } finally {
-      setState(() => _isLoadingApiKey = false);
+      if (mounted) setState(() => _aiStatusLoading = false);
     }
   }
 
-  Future<void> _saveOpenAiApiKey() async {
-    final apiKey = _openaiApiKeyController.text.trim();
-    if (apiKey.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('API 키를 입력하세요.'),
-          backgroundColor: Color(0xFFD32F2F),
-        ),
+  Widget _buildAiKeyStatusRow() {
+    final Widget icon;
+    final String text;
+    if (_aiStatusLoading) {
+      icon = const SizedBox(
+        width: 16,
+        height: 16,
+        child: CircularProgressIndicator(strokeWidth: 2),
       );
-      return;
+      text = '서버 상태를 확인하는 중…';
+    } else if (_aiStatusError != null) {
+      icon = const Icon(Icons.error_outline, color: Color(0xFFD32F2F), size: 18);
+      text = _aiStatusError!;
+    } else if (_aiStatus?.configured == true) {
+      icon = const Icon(Icons.check_circle_outline, color: Color(0xFF2E7D32), size: 18);
+      text = '서버에 키가 설정되어 있습니다 · 기본 모델 ${_aiStatus!.models['primary'] ?? '-'}';
+    } else {
+      icon = const Icon(Icons.error_outline, color: Color(0xFFD32F2F), size: 18);
+      text = '서버에 키가 없습니다. 아래 명령으로 설정하세요.';
     }
-
-    setState(() => _isSavingApiKey = true);
-    try {
-      // platform_config 테이블에 upsert
-      await Supabase.instance.client.from('platform_config').upsert({
-        'config_key': 'openai_api_key',
-        'config_value': apiKey,
-        'updated_at': DateTime.now().toUtc().toIso8601String(),
-      });
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('API 키가 저장되었습니다.'),
-          backgroundColor: Color(0xFF2E7D32),
+    return Row(
+      children: [
+        icon,
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(text, style: const TextStyle(color: Colors.white, fontSize: 14)),
         ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('저장 실패: $e'),
-          backgroundColor: const Color(0xFFD32F2F),
+        TextButton.icon(
+          onPressed: _aiStatusLoading ? null : _loadAiStatus,
+          icon: const Icon(Icons.refresh, size: 16, color: Color(0xFFB3B3B3)),
+          label: const Text('다시 확인', style: TextStyle(color: Color(0xFFB3B3B3))),
         ),
-      );
-    } finally {
-      setState(() => _isSavingApiKey = false);
-    }
+      ],
+    );
   }
 
   Future<List<Map<String, dynamic>>> _fetchOwnersWithCounts() async {
@@ -787,66 +788,51 @@ class _ManagementScreenState extends State<ManagementScreen> {
                             ),
                             const SizedBox(height: 8),
                             const Text(
-                              '관리자가 설정한 API 키는 서버에 안전하게 저장되며, 모든 앱에서 자동으로 사용됩니다.',
-                              style: TextStyle(color: Color(0xFFB3B3B3), fontSize: 13),
+                              '키는 Supabase Edge Function 비밀값(OPENAI_API_KEY)으로만 둡니다. 앱과 DB에는 저장하지 않으며, '
+                              '학습앱·매니저앱의 AI 기능은 모두 서버 함수(ai_think, ai_memo_assist, trait_report_run)를 거칩니다.',
+                              style: TextStyle(color: Color(0xFFB3B3B3), fontSize: 13, height: 1.5),
                             ),
-                            const SizedBox(height: 20),
-                            if (_isLoadingApiKey)
-                              const Center(child: CircularProgressIndicator())
-                            else
-                              Row(
+                            const SizedBox(height: 16),
+                            _buildAiKeyStatusRow(),
+                            const SizedBox(height: 12),
+                            Container(
+                              padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF2A2A2A),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Row(
                                 children: [
-                                  Expanded(
-                                    child: TextField(
-                                      controller: _openaiApiKeyController,
-                                      enabled: !_isSavingApiKey,
-                                      obscureText: true,
-                                      decoration: InputDecoration(
-                                        hintText: 'sk-proj-...',
-                                        hintStyle: const TextStyle(color: Color(0xFF666666)),
-                                        filled: true,
-                                        fillColor: const Color(0xFF2A2A2A),
-                                        border: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(8),
-                                          borderSide: const BorderSide(color: Color(0xFF2A2A2A)),
-                                        ),
-                                        enabledBorder: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(8),
-                                          borderSide: const BorderSide(color: Color(0xFF2A2A2A)),
-                                        ),
-                                        focusedBorder: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(8),
-                                          borderSide: const BorderSide(color: Color(0xFF1976D2)),
-                                        ),
-                                      ),
-                                      style: const TextStyle(color: Colors.white),
+                                  const Expanded(
+                                    child: SelectableText(
+                                      _kSecretCommand,
+                                      style: TextStyle(color: Colors.white, fontSize: 13, fontFamily: 'monospace'),
                                     ),
                                   ),
-                                  const SizedBox(width: 12),
-                                  ElevatedButton.icon(
-                                    onPressed: _isSavingApiKey ? null : _saveOpenAiApiKey,
-                                    icon: _isSavingApiKey
-                                        ? const SizedBox(
-                                            width: 16,
-                                            height: 16,
-                                            child: CircularProgressIndicator(
-                                              strokeWidth: 2,
-                                              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                                            ),
-                                          )
-                                        : const Icon(Icons.save, size: 18),
-                                    label: const Text('저장'),
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: const Color(0xFF1976D2),
-                                      foregroundColor: Colors.white,
-                                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                    ),
+                                  IconButton(
+                                    tooltip: '명령 복사',
+                                    iconSize: 18,
+                                    color: const Color(0xFFB3B3B3),
+                                    onPressed: () async {
+                                      await Clipboard.setData(const ClipboardData(text: _kSecretCommand));
+                                      if (!context.mounted) return;
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(
+                                          content: Text('명령을 복사했습니다.'),
+                                          backgroundColor: Color(0xFF2E7D32),
+                                        ),
+                                      );
+                                    },
+                                    icon: const Icon(Icons.copy_rounded),
                                   ),
                                 ],
                               ),
+                            ),
+                            const SizedBox(height: 8),
+                            const Text(
+                              '저장소 루트에서 실행합니다. 키를 바꾼 뒤에는 OpenAI 대시보드에서 이전 키를 폐기하세요.',
+                              style: TextStyle(color: Color(0xFF666666), fontSize: 12),
+                            ),
                           ],
                         ),
                       ),

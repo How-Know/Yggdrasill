@@ -2732,6 +2732,50 @@ class DataManager {
     }
   }
 
+  static bool _isMissingRpcFunction(Object e) {
+    if (e is PostgrestException &&
+        (e.code == 'PGRST202' || e.code == '42883')) {
+      return true;
+    }
+    final s = e.toString().toLowerCase();
+    return s.contains('pgrst202') ||
+        s.contains('42883') ||
+        s.contains('could not find the function');
+  }
+
+  /// 퇴원 처리된 학생의 남은 기록을 서버에서 나눠 지운다. 끝나면 true.
+  /// 학생이 이미 없거나 퇴원 상태가 아니면 서버가 바로 true를 돌려준다.
+  Future<bool> purgeWithdrawnStudent({
+    required String academyId,
+    required String studentId,
+    int maxCalls = 40,
+  }) async {
+    final supa = Supabase.instance.client;
+    final sw = Stopwatch()..start();
+    for (int call = 1; call <= maxCalls; call++) {
+      try {
+        final done = await supa.rpc('purge_withdrawn_student', params: {
+          'p_academy_id': academyId,
+          'p_student_id': studentId,
+        });
+        if (done == true) {
+          print(
+              '[DEBUG][purgeWithdrawnStudent] done: studentId=$studentId calls=$call elapsedMs=${sw.elapsedMilliseconds}');
+          return true;
+        }
+      } catch (e) {
+        if (_isMissingRpcFunction(e)) return true;
+        print(
+            '[WARN][purgeWithdrawnStudent] call=$call 실패(서버 cron이 이어서 정리): $e');
+        return false;
+      }
+      await Future.delayed(const Duration(milliseconds: 300));
+    }
+    print(
+        '[WARN][purgeWithdrawnStudent] 호출 한도 도달(서버 cron이 이어서 정리): studentId=$studentId elapsedMs=${sw.elapsedMilliseconds}');
+    return false;
+  }
+
   Future<void> deleteStudent(String id) async {
     print('[DEBUG][deleteStudent] 진입: id=$id');
     if (TagPresetService.preferSupabaseRead) {
@@ -2953,6 +2997,33 @@ class DataManager {
               .eq('id', id)
               .eq('academy_id', academyId);
         });
+      }
+
+      // 퇴원은 두 단계: withdraw_student(아카이브 + 퇴원 표시)로 모든 화면에서 즉시 숨기고,
+      // 학습 기록은 서버가 나눠서 지운다. 남은 분량은 서버 cron이 마무리한다.
+      bool withdrawn = false;
+      try {
+        await timed('withdraw_student RPC(아카이브+퇴원 표시)', () async {
+          final archived = await supa.rpc('withdraw_student', params: {
+            'p_academy_id': academyId,
+            'p_student_id': id,
+          });
+          print(
+              '[DEBUG][deleteStudent][server-only] withdraw_student ok: archiveId=$archived');
+        });
+        withdrawn = true;
+      } catch (e) {
+        if (!_isMissingRpcFunction(e)) rethrow;
+        print(
+            '[WARN][deleteStudent][server-only] withdraw_student 미배포 -> 기존 삭제 경로 사용: $e');
+      }
+      if (withdrawn) {
+        _sessionOverrides.removeWhere((o) => o.studentId == id);
+        sessionOverridesNotifier.value = List.unmodifiable(_sessionOverrides);
+        unawaited(purgeWithdrawnStudent(academyId: academyId, studentId: id));
+        await loadStudents();
+        await loadStudentTimeBlocks();
+        return;
       }
 
       // 0) 퇴원(삭제) 전에 아카이브 스냅샷 생성 (Supabase RPC)
@@ -6578,6 +6649,24 @@ class DataManager {
       await loadPaymentRecords();
     } catch (e, st) {
       print('[ERROR] update_paid_date RPC 실패: $e\n$st');
+      rethrow;
+    }
+  }
+
+  /// 이미 기록된 납부일만 지운다. 회차와 수강일자는 남긴다.
+  Future<void> clearPaidDate(String studentId, int cycle) async {
+    if (!TagPresetService.preferSupabaseRead) return;
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
+      await Supabase.instance.client.rpc('clear_paid_date', params: {
+        'p_student_id': studentId,
+        'p_cycle': cycle,
+        'p_academy_id': academyId,
+      });
+      await loadPaymentRecords();
+    } catch (e, st) {
+      print('[ERROR] clear_paid_date RPC 실패: $e\n$st');
       rethrow;
     }
   }

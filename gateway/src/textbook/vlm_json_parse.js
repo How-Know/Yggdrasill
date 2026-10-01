@@ -18,9 +18,18 @@ export { joinGeminiTextParts };
 // 오면 그 값이 undefined 가 되어 **아무 오류 없이 0건**으로 끝난다. 수력충전
 // 2-1 답지 14쪽이 그렇게 통째로 비었다(finishReason=STOP, 정답 13건 정상 판독).
 // 그래서 파서 단계에서 껍데기를 벗긴다.
+//
+// 껍데기 없이 문항 배열만 오기도 한다(`[{problem_number:"05",..}, ..]`).
+// 이것을 껍데기 여러 겹으로 보고 합치면 네 문항 좌표가 한 문항에 이어 붙어
+// 역시 0건이 된다(개념원리 1-2 해설 49쪽 시험문제 05~08).
+const LIST_KEYS = ['items', 'entries', 'pages'];
+
 export function unwrapTextbookVlmJson(value) {
   if (!Array.isArray(value)) return value;
   const objects = value.filter((v) => v && typeof v === 'object' && !Array.isArray(v));
+  if (objects.length === 0) return value;
+  const isWrapper = (obj) => LIST_KEYS.some((key) => Array.isArray(obj[key]));
+  if (!objects.some(isWrapper)) return { items: objects };
   if (objects.length === 1) return objects[0];
   // `[{items:[..]}, {items:[..]}]` 처럼 여러 겹이면 같은 열을 이어 붙인다.
   const merged = {};

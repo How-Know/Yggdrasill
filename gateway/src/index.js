@@ -451,8 +451,97 @@ async function listM5GroupsWithHomework(academy_id, student_id) {
     }
   } else if (Array.isArray(hw.data)) {
     homework = hw.data.map((g) => ({ ...applyFlags(g), is_homework: true }));
+    homework = await applyHomeworkLivePhase(academy_id, student_id, homework);
   }
   return { data: [...active, ...homework], error: null };
+}
+
+// 숙제 전용 목록 RPC는 phase/run_start를 항상 대기·null로 고정한다.
+// 항목과 runtime의 실제 수행 상태를 덮어써서 M5가 시작을 실패로 보지 않게 한다.
+async function applyHomeworkLivePhase(academy_id, student_id, groups) {
+  const ids = [...new Set(groups.map((group) => group.group_id).filter(Boolean))];
+  if (ids.length === 0) return groups;
+  const kst = new Date(Date.now() + 9 * 60 * 60 * 1000);
+  const todayEnd = `${kst.toISOString().slice(0, 10)}T23:59:59+09:00`;
+  const [itemRes, runtimeRes, dueRes] = await Promise.all([
+    supa
+      .from('homework_group_items')
+      .select('group_id, homework_items!inner(phase, run_start, completed_at, status)')
+      .eq('academy_id', academy_id)
+      .in('group_id', ids),
+    supa
+      .from('homework_group_runtime')
+      .select('group_id, phase, run_start')
+      .eq('academy_id', academy_id)
+      .in('group_id', ids),
+    supa
+      .from('homework_assignments')
+      .select('group_id, due_for_check_at, due_date, status')
+      .eq('academy_id', academy_id)
+      .eq('student_id', student_id)
+      .in('group_id', ids)
+      .in('status', ['assigned', 'carried_to_class'])
+  ]);
+  if (itemRes.error) {
+    console.error('[gateway] homework live phase error', itemRes.error);
+    return groups;
+  }
+  if (runtimeRes.error) {
+    console.error('[gateway] homework runtime phase error', runtimeRes.error);
+  }
+  if (dueRes.error) {
+    console.error('[gateway] homework due date error', dueRes.error);
+  }
+  const todayEndMs = new Date(todayEnd).getTime();
+  const futureByGroup = new Map();
+  for (const row of dueRes.data || []) {
+    const dueMs = new Date(row.due_for_check_at || row.due_date || 0).getTime();
+    if (!Number.isFinite(dueMs) || dueMs <= 0 || !row.group_id) continue;
+    const prev = futureByGroup.get(row.group_id);
+    if (prev == null || dueMs < prev) futureByGroup.set(row.group_id, dueMs);
+  }
+  const byGroup = new Map();
+  for (const row of itemRes.data || []) {
+    const item = row.homework_items;
+    if (!item || item.completed_at || Number(item.status || 0) === 1) continue;
+    const list = byGroup.get(row.group_id) || [];
+    list.push(item);
+    byGroup.set(row.group_id, list);
+  }
+  const runtimeByGroup = new Map((runtimeRes.data || []).map((row) => [row.group_id, row]));
+  return groups.map((group) => {
+    const due = futureByGroup.get(group.group_id);
+    const homeworkFuture = due != null && due > todayEndMs;
+    const items = byGroup.get(group.group_id) || [];
+    if (items.length === 0) return { ...group, homework_future: homeworkFuture };
+    let phase = 1;
+    if (items.some((item) => item.run_start)) phase = 2;
+    else if (items.some((item) => Number(item.phase) === 3)) phase = 3;
+    else if (items.some((item) => Number(item.phase) === 4)) phase = 4;
+    else phase = Math.max(1, ...items.map((item) => Number(item.phase) || 1));
+    let runStart = phase === 2
+      ? (items.find((item) => item.run_start)?.run_start || null)
+      : null;
+    const runtime = runtimeByGroup.get(group.group_id);
+    if (runtime && Number(runtime.phase) === 2 && runtime.run_start) {
+      phase = 2;
+      runStart = runtime.run_start;
+    }
+    const children = Array.isArray(group.children)
+      ? group.children.map((child) => ({
+        ...child,
+        phase,
+        run_start: phase === 2 ? runStart : null
+      }))
+      : group.children;
+    return {
+      ...group,
+      phase,
+      run_start: runStart,
+      children,
+      homework_future: homeworkFuture
+    };
+  });
 }
 
 async function loadM5WelcomeStats(academy_id, student_id) {
@@ -460,7 +549,7 @@ async function loadM5WelcomeStats(academy_id, student_id) {
   const day = kst.toISOString().slice(0, 10);
   const start = `${day}T00:00:00+09:00`;
   const end = `${day}T23:59:59+09:00`;
-  const empty = { goal_count: 0, homework_due_count: 0, plan_minutes: 0, progress_percent: 0 };
+  const empty = { goal_saved: false, goal_count: 0, homework_due_count: 0, plan_minutes: 0, progress_percent: 0 };
   try {
     const { data: openRows, error: attErr } = await supa
       .from('attendance_records')
@@ -557,16 +646,19 @@ async function loadM5WelcomeStats(academy_id, student_id) {
         doneMinutes = groupRecommended((itemRows || []).filter(isDone));
       }
     }
-    const { count, error: dueErr } = await supa
+    const { data: dueRows, error: dueErr } = await supa
       .from('homework_assignments')
-      .select('id', { count: 'exact', head: true })
+      .select('group_id, homework_item_id')
       .eq('academy_id', academy_id)
       .eq('student_id', student_id)
       .gte('due_for_check_at', start)
       .lte('due_for_check_at', end);
     if (dueErr) console.error('[gateway] welcome homework due error', dueErr);
-    const homeworkDue = count || 0;
-    let homeworkCount = homeworkDue;
+    const dueGroups = new Set();
+    for (const row of dueRows || []) {
+      dueGroups.add(row.group_id || `item:${row.homework_item_id || dueGroups.size}`);
+    }
+    let homeworkCount = dueGroups.size;
     if (homeworkCount === 0 && attendance && attendance.id) {
       const { data: hwPlans, error: hwErr } = await supa
         .from('homework_session_plan_items')
@@ -613,7 +705,12 @@ async function loadM5WelcomeStats(academy_id, student_id) {
         remainingMinutes = planMinutes - completed;
       }
     }
+    const goalSaved = !!(attendance && (
+      attendance.homework_plan_snapshot_at
+      || (Array.isArray(snapshotGroups) && snapshotGroups.length > 0)
+    ));
     const stats = {
+      goal_saved: goalSaved,
       goal_count: goal,
       homework_due_count: homeworkCount,
       plan_minutes: planMinutes,
@@ -665,6 +762,23 @@ async function loadM5AvatarRgb565Base64(url) {
   }
 }
 
+async function loadOpenAttendance(academy_id, student_id) {
+  const { data, error } = await supa
+    .from('attendance_records')
+    .select('id, planned_departure_at')
+    .eq('academy_id', academy_id)
+    .eq('student_id', student_id)
+    .not('arrival_time', 'is', null)
+    .is('departure_time', null)
+    .order('arrival_time', { ascending: false })
+    .limit(1);
+  if (error) {
+    console.error('[gateway] open attendance lookup error', error);
+    return null;
+  }
+  return data && data[0] ? data[0] : null;
+}
+
 async function publishStudentInfoToDevice(academy_id, device_id, student_id) {
   const { data, error } = await supa.rpc('m5_get_student_info', { p_academy_id: academy_id, p_student_id: student_id });
   if (error) { console.error('[gateway] student_info error', error); return; }
@@ -674,7 +788,7 @@ async function publishStudentInfoToDevice(academy_id, device_id, student_id) {
     const day = kst.toISOString().slice(0, 10);
     const { data: rows, error: attErr } = await supa
       .from('attendance_records')
-      .select('arrival_time')
+      .select('arrival_time, class_date_time')
       .eq('academy_id', academy_id)
       .eq('student_id', student_id)
       .gte('arrival_time', `${day}T00:00:00+09:00`)
@@ -682,7 +796,16 @@ async function publishStudentInfoToDevice(academy_id, device_id, student_id) {
       .order('arrival_time', { ascending: false })
       .limit(1);
     if (attErr) console.error('[gateway] student arrival lookup error', attErr);
-    else if (rows && rows[0] && rows[0].arrival_time) info.arrival_time = rows[0].arrival_time;
+    else if (rows && rows[0] && rows[0].arrival_time) {
+      info.arrival_time = rows[0].arrival_time;
+      const arrivalMs = new Date(rows[0].arrival_time).getTime();
+      const classMs = rows[0].class_date_time ? new Date(rows[0].class_date_time).getTime() : NaN;
+      if (Number.isFinite(arrivalMs) && Number.isFinite(classMs)) {
+        info.arrival_delta_minutes = Math.round((classMs - arrivalMs) / 60000);
+      }
+    }
+    const openAttendance = await loadOpenAttendance(academy_id, student_id);
+    info.planned_departure_at = openAttendance?.planned_departure_at || null;
     const { data: avatarRow, error: avatarErr } = await supa
       .from('students')
       .select('avatar_kind, avatar_url, avatar_emoji, avatar_monogram_style')
@@ -1577,6 +1700,50 @@ client.on('message', async (topic, payload) => {
           .eq('id', student_id);
         if (avatarWriteErr) console.error('[gateway] set_avatar error', avatarWriteErr);
         else await publishStudentInfoToDevice(academy_id, device_id, student_id);
+        return;
+      }
+      if (action === 'set_planned_departure') {
+        const student_id = (msg.student_id || '').toString().trim();
+        const hour = Number(msg.hour);
+        const minute = Number(msg.minute);
+        const { data: bind, error: bindErr } = await supa
+          .from('m5_device_bindings')
+          .select('student_id')
+          .eq('academy_id', academy_id)
+          .eq('device_id', device_id)
+          .eq('active', true)
+          .maybeSingle();
+        if (bindErr || !bind || bind.student_id !== student_id) {
+          console.error('[gateway] set_planned_departure refused', { device_id, student_id, bindErr });
+          return;
+        }
+        if (!Number.isInteger(hour) || hour < 0 || hour > 23 || !Number.isInteger(minute) || minute < 0 || minute > 59) {
+          console.error('[gateway] set_planned_departure bad time', { hour, minute });
+          return;
+        }
+        const open = await loadOpenAttendance(academy_id, student_id);
+        if (!open) {
+          console.error('[gateway] set_planned_departure no open attendance', { academy_id, student_id });
+          return;
+        }
+        const kst = new Date(Date.now() + 9 * 60 * 60 * 1000);
+        const day = kst.toISOString().slice(0, 10);
+        const at = `${day}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00+09:00`;
+        const { error: writeErr } = await supa
+          .from('attendance_records')
+          .update({
+            planned_departure_at: at,
+            planned_departure_set_at: new Date().toISOString(),
+            planned_departure_set_by: 'student',
+            updated_at: new Date().toISOString()
+          })
+          .eq('academy_id', academy_id)
+          .eq('id', open.id);
+        if (writeErr) console.error('[gateway] set_planned_departure error', writeErr);
+        else {
+          console.log('[gateway] set_planned_departure', { student_id, at });
+          await publishStudentInfoToDevice(academy_id, device_id, student_id);
+        }
         return;
       }
       if (action === 'raise_question') {

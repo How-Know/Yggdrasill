@@ -295,6 +295,11 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
         widget.studentWithInfo.student.id,
       ),
     );
+    unawaited(
+      HomeworkStore.instance.loadCompletedHistory(
+        studentId: widget.studentWithInfo.student.id,
+      ),
+    );
     unawaited(_load());
   }
 
@@ -305,6 +310,9 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
     final nextId = widget.studentWithInfo.student.id.trim();
     if (prevId != nextId) {
       _refreshHomeworkScoreFuture();
+      unawaited(
+        HomeworkStore.instance.loadCompletedHistory(studentId: nextId),
+      );
     }
   }
 
@@ -2674,8 +2682,8 @@ class _FlowHomeworkSidebarState extends State<_FlowHomeworkSidebar> {
                     return ValueListenableBuilder<int>(
                       valueListenable: HomeworkStore.instance.revision,
                       builder: (_, __, ___) {
-                        final allItems =
-                            HomeworkStore.instance.items(widget.studentId);
+                        final allItems = HomeworkStore.instance
+                            .itemsWithHistory(widget.studentId);
                         return Row(
                           mainAxisSize: MainAxisSize.min,
                           crossAxisAlignment: CrossAxisAlignment.start,

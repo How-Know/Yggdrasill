@@ -46,6 +46,32 @@ test('textbook VLM parser joins arrays when the wrapper holds several objects', 
   assert.equal(parsed.notes, '앞');
 });
 
+// 개념원리 1-2 해설 49쪽. 모델이 껍데기 없이 문항 네 개만 배열로 돌려줬고,
+// 껍데기 여러 겹으로 보고 합치자 좌표 16개짜리 가짜 문항 하나가 되어 0건이 됐다.
+test('textbook VLM parser treats a bare record array as items', () => {
+  const parsed = parseTextbookVlmJson(
+    '[{"problem_number":"05","number_region":[64,60,80,84],"rubric_steps":[]},' +
+      '{"problem_number":"06","number_region":[203,60,219,84],"rubric_steps":[]}]',
+  );
+  assert.ok(parsed);
+  assert.deepEqual(
+    parsed.items.map((i) => [i.problem_number, i.number_region]),
+    [
+      ['05', [64, 60, 80, 84]],
+      ['06', [203, 60, 219, 84]],
+    ],
+  );
+});
+
+test('textbook VLM parser treats a single bare record as items', () => {
+  const parsed = parseTextbookVlmJson(
+    '[{"problem_number":"05","number_region":[64,60,80,84]}]',
+  );
+  assert.deepEqual(parsed, {
+    items: [{ problem_number: '05', number_region: [64, 60, 80, 84] }],
+  });
+});
+
 test('textbook VLM parser leaves a plain array alone', () => {
   assert.deepEqual(parseTextbookVlmJson('[1,2,3]'), [1, 2, 3]);
 });
