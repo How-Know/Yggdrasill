@@ -120,7 +120,10 @@
 
 읽기: `search_memories`, `get_memory`, `get_curriculum_outline`, `search_concepts`, `list_concept_categories`,
 `search_behavior_cards`, `list_tree_folders`, `list_conversations`, `list_code_requests`, `get_code_request`.
-제안: `propose_code_request`, `propose_code_change`, `propose_folder`, `propose_delete`.
+제안: `propose_code_request`, `propose_folder`, `propose_delete`.
+조율: `start_code_plan` — 코드 수정은 Think가 바로 고치게 하지 않고 Cursor와 계획을 조율한 뒤 조율본을 운영자에게 승인받는다.
+읽기 전용이라 승인 없이 시작하지만, 시작 전에 대화로 의도를 확인하게 지시한다
+(2026-10-01, `propose_code_change`를 대신함. [`ai-think-actions.md`](ai-think-actions.md) §4.3).
 필수 값이 비면 제안하지 않고 `missing_fields`를 돌려주며, 지시문대로 AI가 사용자에게 되묻는다.
 모두 사용자 JWT로 읽고 쓰므로 RLS·RPC 권한 검사가 그대로 적용된다.
 도구가 실패해도 예외를 던지지 않고 오류 내용을 모델에게 결과로 돌려준다. 결과는 1만 2천 자에서 자른다.

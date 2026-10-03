@@ -89,7 +89,8 @@ class ThinkCodeSection extends StatelessWidget {
 
 /// 제목만 있고 누르면 펼치는 칸. 테두리 없이 쓴다.
 class ThinkCodeExpansion extends StatelessWidget {
-  const ThinkCodeExpansion({super.key, required this.title, required this.children, this.initiallyExpanded = false, this.trailing});
+  const ThinkCodeExpansion(
+      {super.key, required this.title, required this.children, this.initiallyExpanded = false, this.trailing});
 
   final String title;
   final List<Widget> children;
@@ -127,22 +128,34 @@ class ThinkCodeSpecView extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = spec;
     final change = mode == ThinkCodeMode.change;
+    final plan = mode == ThinkCodeMode.plan;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (showGoal) SelectableText(s.goal, style: const TextStyle(color: kThinkText, fontSize: 13, height: 1.5)),
-        if (change && s.instructions.isNotEmpty) ...[thinkCodeLabel('할 일'), thinkCodeBullets(s.instructions)],
-        if (s.questions.isNotEmpty) ...[thinkCodeLabel('확인할 질문'), thinkCodeBullets(s.questions)],
-        thinkCodeLabel(change ? '고칠 범위' : '우선 볼 폴더'),
+        if ((change || plan) && s.instructions.isNotEmpty) ...[
+          thinkCodeLabel(plan ? 'Think의 계획 초안' : '할 일'),
+          thinkCodeBullets(s.instructions),
+        ],
+        if (s.questions.isNotEmpty) ...[
+          thinkCodeLabel(plan ? 'Cursor에게 확인받을 점' : '확인할 질문'),
+          thinkCodeBullets(s.questions),
+        ],
+        thinkCodeLabel(change || plan ? '고칠 범위' : '우선 볼 폴더'),
         s.focusPaths.isEmpty
             ? const Text('저장소 전체', style: TextStyle(color: kThinkHint, fontSize: 13))
             : thinkCodeBullets(s.focusPaths, color: kThinkLink),
         if (s.constraints.isNotEmpty) ...[thinkCodeLabel('지켜야 할 제약'), thinkCodeBullets(s.constraints)],
-        if (s.doNot.isNotEmpty) ...[thinkCodeLabel(change ? '하지 말 것' : '제안하지 말 것'), thinkCodeBullets(s.doNot)],
+        if (s.doNot.isNotEmpty) ...[
+          thinkCodeLabel(change || plan ? '하지 말 것' : '제안하지 말 것'),
+          thinkCodeBullets(s.doNot),
+        ],
         if (s.background.isNotEmpty)
           ThinkCodeExpansion(
             title: '배경',
-            children: [SelectableText(s.background, style: const TextStyle(color: kThinkSub, fontSize: 12, height: 1.5))],
+            children: [
+              SelectableText(s.background, style: const TextStyle(color: kThinkSub, fontSize: 12, height: 1.5))
+            ],
           ),
       ],
     );
@@ -196,7 +209,8 @@ class ThinkCodeResultView extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   if (a.question.isNotEmpty)
-                    Text(a.question, style: const TextStyle(color: kThinkSub, fontSize: 12, fontWeight: FontWeight.w700)),
+                    Text(a.question,
+                        style: const TextStyle(color: kThinkSub, fontSize: 12, fontWeight: FontWeight.w700)),
                   SelectableText(a.answer, style: const TextStyle(color: kThinkText, fontSize: 13, height: 1.5)),
                 ],
               ),
@@ -260,11 +274,43 @@ class ThinkCodeResultView extends StatelessWidget {
               ),
             ),
         ],
+        if (res.issues.isNotEmpty) ...[
+          thinkCodeLabel('계획의 문제점'),
+          for (final i in res.issues)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SelectableText(
+                    i.step.isEmpty ? '· ${i.problem}' : '· [${i.step}] ${i.problem}',
+                    style: const TextStyle(color: kThinkText, fontSize: 13, height: 1.5),
+                  ),
+                  if (i.suggestion.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 12),
+                      child: SelectableText(
+                        '→ ${i.suggestion}',
+                        style: const TextStyle(color: kThinkSub, fontSize: 13, height: 1.5),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+        ],
+        if (res.suggestedSteps.isNotEmpty) ...[
+          thinkCodeLabel('Cursor가 고쳐 쓴 단계'),
+          thinkCodeBullets(res.suggestedSteps),
+        ],
         if (res.checks.isNotEmpty) ...[thinkCodeLabel('적용 뒤 돌려 볼 검사'), thinkCodeBullets(res.checks, mono: true)],
         if (res.risks.isNotEmpty) ...[thinkCodeLabel('위험·주의'), thinkCodeBullets(res.risks)],
         if (res.questionsForThink.isNotEmpty) ...[
           thinkCodeLabel('Think에게 되묻는 질문'),
           thinkCodeBullets(res.questionsForThink, color: kThinkSub),
+        ],
+        if (res.questionsForOwner.isNotEmpty) ...[
+          thinkCodeLabel('운영자에게 묻는 질문'),
+          thinkCodeBullets(res.questionsForOwner, color: kThinkSub),
         ],
       ],
     );
@@ -273,7 +319,8 @@ class ThinkCodeResultView extends StatelessWidget {
 
 /// 한 회차의 결과·원문·실행 정보. 수정 모드면 diff도 함께 보여 준다.
 class ThinkCodeRoundView extends StatelessWidget {
-  const ThinkCodeRoundView({super.key, required this.round, this.numbered = false, this.mode = ThinkCodeMode.investigate});
+  const ThinkCodeRoundView(
+      {super.key, required this.round, this.numbered = false, this.mode = ThinkCodeMode.investigate});
 
   final ThinkCodeRound round;
   final bool numbered;
@@ -283,26 +330,47 @@ class ThinkCodeRoundView extends StatelessWidget {
   Widget build(BuildContext context) {
     final res = round.result;
     final change = mode == ThinkCodeMode.change;
-    final meta = [
-      if (round.model != null) round.model!,
-      '입력 ${formatTokens(round.inputTokens)} · 출력 ${formatTokens(round.outputTokens)} 토큰',
-      if (round.toolCalls.isNotEmpty) '도구 ${round.toolCalls.map((t) => '${t.name} ${t.count}').join(', ')}',
-      '걸린 시간 ${thinkDuration(round.durationMs)}',
-      if (round.repoHead != null)
-        '저장소 ${round.repoBranch ?? '-'}@${round.repoHead!.length > 7 ? round.repoHead!.substring(0, 7) : round.repoHead}'
-            '${(round.repoDirtyFiles ?? 0) > 0 ? ' (커밋 안 된 파일 ${round.repoDirtyFiles}개 포함)' : ''}',
-    ].join(' · ');
-    final label = change ? '수정 결과' : '조사 결과';
+    final started = round.startedAt;
+    final meta = round.status == 'running'
+        ? [
+            '진행 중',
+            if (started != null) '시작 후 ${thinkDuration(DateTime.now().difference(started).inMilliseconds)}',
+            '토큰·도구 수는 끝나면 기록됩니다',
+          ].join(' · ')
+        : [
+            if (round.model != null) round.model!,
+            '입력 ${formatTokens(round.inputTokens)} · 출력 ${formatTokens(round.outputTokens)} 토큰',
+            if (round.toolCalls.isNotEmpty) '도구 ${round.toolCalls.map((t) => '${t.name} ${t.count}').join(', ')}',
+            '걸린 시간 ${thinkDuration(round.durationMs)}',
+            if (round.repoHead != null)
+              '저장소 ${round.repoBranch ?? '-'}@${round.repoHead!.length > 7 ? round.repoHead!.substring(0, 7) : round.repoHead}'
+                  '${(round.repoDirtyFiles ?? 0) > 0 ? ' (커밋 안 된 파일 ${round.repoDirtyFiles}개 포함)' : ''}',
+          ].join(' · ');
+    final plan = mode == ThinkCodeMode.plan;
+    final label = change ? '수정 결과' : (plan ? 'Cursor 검토' : '조사 결과');
     return ThinkCodeSection(
       title: numbered ? '$label (${round.round}회차)' : label,
       trailing: round.status == 'running'
-          ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 1.5, color: kThinkAccent))
+          ? const SizedBox(
+              width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 1.5, color: kThinkAccent))
           : null,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (round.thinkQuestions.isNotEmpty) ...[
+            Text(
+              plan ? 'Think가 보낸 질문·반론' : 'Think의 추가 질문',
+              style: const TextStyle(color: kThinkAccent, fontSize: 12, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 4),
+            thinkCodeBullets(round.thinkQuestions),
+            const SizedBox(height: 8),
+          ],
           if (round.status == 'running' && round.resultText == null)
-            Text(change ? '수정 중입니다…' : '조사 중입니다…', style: const TextStyle(color: kThinkSub, fontSize: 13)),
+            Text(
+              change ? '수정 중입니다…' : (plan ? 'Cursor가 계획을 코드에 비춰 보고 있습니다…' : '조사 중입니다…'),
+              style: const TextStyle(color: kThinkSub, fontSize: 13),
+            ),
           if (round.error != null) ThinkNotice(text: round.error!, color: kThinkError, icon: Icons.error_outline),
           if (res != null) ThinkCodeResultView(result: res, mode: mode),
           if (round.diff != null) ...[
@@ -400,7 +468,8 @@ class _ThinkDiffViewState extends State<ThinkDiffView> {
 
   Widget _file(ThinkDiffFile f) {
     final open = _open.contains(f.path);
-    final shown = f.lines.length > ThinkDiffView.maxLinesPerFile ? f.lines.sublist(0, ThinkDiffView.maxLinesPerFile) : f.lines;
+    final shown =
+        f.lines.length > ThinkDiffView.maxLinesPerFile ? f.lines.sublist(0, ThinkDiffView.maxLinesPerFile) : f.lines;
     return Container(
       margin: const EdgeInsets.only(bottom: 4),
       decoration: BoxDecoration(color: kThinkQuote, borderRadius: BorderRadius.circular(8)),
@@ -444,8 +513,7 @@ class _ThinkDiffViewState extends State<ThinkDiffView> {
                 child: SelectableText.rich(
                   TextSpan(
                     children: [
-                      for (final l in shown)
-                        TextSpan(text: '$l\n', style: TextStyle(color: _lineColor(l))),
+                      for (final l in shown) TextSpan(text: '$l\n', style: TextStyle(color: _lineColor(l))),
                       if (shown.length < f.lines.length)
                         TextSpan(
                           text: '… ${f.lines.length - shown.length}줄 더 있음 (diff 복사로 전체 확인)',
@@ -458,6 +526,196 @@ class _ThinkDiffViewState extends State<ThinkDiffView> {
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// 조율본의 객관식 질문. 질문마다 보기 하나를 고르거나 직접 적는다. 모두 답해야 반영할 수 있다.
+class ThinkPlanDecisionsForm extends StatefulWidget {
+  const ThinkPlanDecisionsForm({
+    super.key,
+    required this.decisions,
+    required this.onSubmit,
+    required this.onReject,
+    this.busy = false,
+  });
+
+  final List<ThinkPlanDecision> decisions;
+
+  /// [{id, option_id}] 또는 [{id, text}].
+  final void Function(List<Map<String, String>> answers) onSubmit;
+  final VoidCallback onReject;
+  final bool busy;
+
+  static const String customOption = '_custom';
+
+  @override
+  State<ThinkPlanDecisionsForm> createState() => _ThinkPlanDecisionsFormState();
+}
+
+class _ThinkPlanDecisionsFormState extends State<ThinkPlanDecisionsForm> {
+  final Map<String, String> _choice = {};
+  final Map<String, TextEditingController> _texts = {};
+
+  @override
+  void dispose() {
+    for (final c in _texts.values) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  TextEditingController _text(String id) => _texts.putIfAbsent(id, TextEditingController.new);
+
+  bool _answered(ThinkPlanDecision d) {
+    final c = _choice[d.id];
+    if (c == null) return false;
+    return c != ThinkPlanDecisionsForm.customOption || _text(d.id).text.trim().isNotEmpty;
+  }
+
+  List<Map<String, String>> _answers() => [
+        for (final d in widget.decisions)
+          _choice[d.id] == ThinkPlanDecisionsForm.customOption
+              ? {'id': d.id, 'text': _text(d.id).text.trim()}
+              : {'id': d.id, 'option_id': _choice[d.id]!},
+      ];
+
+  @override
+  Widget build(BuildContext context) {
+    final done = widget.decisions.where(_answered).length;
+    final total = widget.decisions.length;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          '정해 주셔야 할 것 $total개',
+          style: const TextStyle(color: kThinkText, fontSize: 14, fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          '조율로 풀리지 않아 운영자가 골라야 하는 것들입니다. 추천 보기를 맨 앞에 두었습니다. 보기에 없으면 직접 입력을 고르세요.',
+          style: TextStyle(color: kThinkSub, fontSize: 12, height: 1.5),
+        ),
+        for (var i = 0; i < total; i++) ...[
+          const SizedBox(height: 16),
+          _question(i + 1, widget.decisions[i]),
+        ],
+        const SizedBox(height: 16),
+        const ThinkNotice(
+          icon: Icons.forum_outlined,
+          text: '모두 고르고 반영하면 Cursor가 고른 답을 코드에 비춰 한 번 더 확인하고, Think가 새 조율본을 이 대화에 올립니다'
+              '(하루 요청 1건 사용). 구현은 새 조율본을 승인해야 시작합니다.',
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            ElevatedButton.icon(
+              onPressed: widget.busy || done < total ? null : () => widget.onSubmit(_answers()),
+              style: thinkPrimaryButton(),
+              icon: const Icon(Icons.send, size: 16),
+              label: const Text('답변 반영해 다시 조율'),
+            ),
+            TextButton(
+              onPressed: widget.busy ? null : widget.onReject,
+              child: const Text('거절', style: TextStyle(color: kThinkSub)),
+            ),
+            Text('$done/$total개 답함', style: const TextStyle(color: kThinkHint, fontSize: 12)),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _question(int n, ThinkPlanDecision d) {
+    final custom = _choice[d.id] == ThinkPlanDecisionsForm.customOption;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Text('질문 $n', style: const TextStyle(color: kThinkAccent, fontSize: 12, fontWeight: FontWeight.w700)),
+            if (d.disagreement) ...[const SizedBox(width: 8), const ThinkBadge('의견 갈림', color: kThinkLink)],
+          ],
+        ),
+        const SizedBox(height: 4),
+        SelectableText(d.question,
+            style: const TextStyle(color: kThinkText, fontSize: 13, fontWeight: FontWeight.w700, height: 1.5)),
+        if (d.context.isNotEmpty) ...[
+          const SizedBox(height: 4),
+          SelectableText(d.context, style: const TextStyle(color: kThinkSub, fontSize: 12, height: 1.5)),
+        ],
+        const SizedBox(height: 8),
+        for (final o in d.options) ...[
+          _option(d, o.id, o.label, o.detail, recommended: o.recommended),
+          const SizedBox(height: 8),
+        ],
+        _option(d, ThinkPlanDecisionsForm.customOption, '직접 입력', '보기에 없는 답이나 조건을 적습니다.'),
+        if (custom) ...[
+          const SizedBox(height: 8),
+          TextField(
+            controller: _text(d.id),
+            minLines: 2,
+            maxLines: 5,
+            maxLength: 1000,
+            onChanged: (_) => setState(() {}),
+            style: const TextStyle(color: kThinkText, fontSize: 13),
+            decoration: thinkInputDecoration(hint: '어떻게 할지 적어 주세요'),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _option(ThinkPlanDecision d, String id, String label, String detail, {bool recommended = false}) {
+    final selected = _choice[d.id] == id;
+    return Material(
+      color: selected ? kThinkQuote : Colors.transparent,
+      borderRadius: BorderRadius.circular(8),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: widget.busy ? null : () => setState(() => _choice[d.id] = id),
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: selected ? kThinkAccent : kThinkBorder),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                selected ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+                size: 18,
+                color: selected ? kThinkAccent : kThinkSub,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Wrap(
+                      spacing: 8,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        Text(label,
+                            style: const TextStyle(color: kThinkText, fontSize: 13, fontWeight: FontWeight.w700)),
+                        if (recommended) const ThinkBadge('추천', color: kThinkSuccess),
+                      ],
+                    ),
+                    if (detail.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(detail, style: const TextStyle(color: kThinkSub, fontSize: 12, height: 1.5)),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

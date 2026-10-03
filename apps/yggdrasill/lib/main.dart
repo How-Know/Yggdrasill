@@ -1093,6 +1093,7 @@ class _MyAppState extends State<MyApp>
           return MaterialApp(
             scaffoldMessengerKey: rootScaffoldMessengerKey,
             navigatorKey: rootNavigatorKey,
+            navigatorObservers: [ObscuringPopupRouteObserver()],
             title: 'Yggdrasill',
             themeMode: AppThemeController.mode.value,
             // 로케일 설정 추가

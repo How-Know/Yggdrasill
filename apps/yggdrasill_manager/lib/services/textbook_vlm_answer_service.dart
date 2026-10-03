@@ -434,11 +434,18 @@ String textbookWonriMiddlePrintedNumberKey(String raw) {
 /// 이어지는 다음 지면 풀이가 순서 검사에 걸려 통째로 버려지므로 뺀다.
 /// 소단원 키가 없으면 소단원마다 01부터 다시 인쇄되는 번호를 가를 수 없어
 /// 적용하지 않는다.
+///
+/// 묶음은 해설에 인쇄되는 순서로 묻는다. 앞 지면에서 이미 시작한 코너의
+/// 이어진 풀이가 지면 맨 위에 오고, 새 코너 박스는 본문 쪽 순서로 나온다.
+/// 코너 순서(A~F)대로 물으면 3-1 해설 35쪽처럼 맨 위의 계산력 04·05(본문
+/// 94쪽) 자리를 그 아래 시험문제(본문 95쪽) 04·05가 먼저 가져가고, 밀려난
+/// 계산력이 다음 지면의 다른 코너 자리를 차지하며 연쇄로 어긋난다.
 List<List<int>> textbookWonriMiddleRequestBatches({
   required List<int> order,
   required String Function(int position) sectionOf,
   required String Function(int position) scopeKeyOf,
   required String Function(int position) numberOf,
+  int? Function(int position)? bodyPageOf,
   Iterable<int> settled = const <int>[],
   int maxPerBatch = 16,
 }) {
@@ -462,8 +469,30 @@ List<List<int>> textbookWonriMiddleRequestBatches({
     if (value > (reached[key] ?? -1)) reached[key] = value;
   }
 
+  int firstBodyPage(List<int> positions) {
+    var low = 1 << 30;
+    for (final position in positions) {
+      final page = bodyPageOf?.call(position);
+      if (page != null && page < low) low = page;
+    }
+    return low;
+  }
+
+  final groupOrder = groups.keys.toList();
+  final printOrder = groupOrder.toList()
+    ..sort((a, b) {
+      final byStarted = (reached.containsKey(a) ? 0 : 1)
+          .compareTo(reached.containsKey(b) ? 0 : 1);
+      if (byStarted != 0) return byStarted;
+      final byPage =
+          firstBodyPage(groups[a]!).compareTo(firstBodyPage(groups[b]!));
+      if (byPage != 0) return byPage;
+      return groupOrder.indexOf(a).compareTo(groupOrder.indexOf(b));
+    });
+
   final out = <List<int>>[];
-  for (final entry in groups.entries) {
+  for (final key in printOrder) {
+    final entry = MapEntry(key, groups[key]!);
     final floor = reached[entry.key];
     final group = floor == null
         ? entry.value
@@ -518,6 +547,12 @@ List<int> textbookWonriMiddlePageGaps({
 /// 01~04가 앞 코너의 연속 풀이 자리를 가져간다(2-1 해설 24쪽 계산력 풀이를
 /// 시험문제가 차지해 뒤 코너까지 연쇄로 밀림). 앞 지면에서 이미 문항이
 /// 잡혔거나 앞 지면에 이 코너 박스가 보였을 때만 이어질 수 있다.
+///
+/// 앞 지면에 박스가 있으면 다음 지면으로 넘어가는 건 읽기 순서상 마지막
+/// 박스의 코너뿐이다. 이미 시작한 코너라도 그 뒤에 다른 코너 박스가 나왔으면
+/// 이어지지 않는다(3-1 해설 35쪽에서 계산력 04·05를 놓친 뒤, 36쪽 맨 위
+/// 개념원리 확인하기 04·05를 계산력이 가져가 연쇄로 밀림).
+/// [previousPageBoxes]는 읽기 순서대로 받는다.
 /// 모델이 박스 배지 쪽수를 잘못 읽기도 해서(23쪽 계산력 64쪽 → 70쪽)
 /// 박스 제목이 코너명과 같아도 이 코너 박스로 본다. 단 그 박스 쪽수가 같은
 /// 코너의 다른 소단원([siblingBodyPages])을 가리키면 그 소단원 박스다.
@@ -528,22 +563,18 @@ bool textbookWonriMiddleMayContinue({
   required Iterable<int?> bodyPages,
   Iterable<int?> siblingBodyPages = const <int?>[],
 }) {
-  if (started) return true;
+  if (previousPageBoxes.isEmpty) return started;
   String squash(String raw) => raw.replaceAll(RegExp(r'\s+'), '');
   bool covers(int? from, int? to, Iterable<int?> pages) =>
       from != null &&
       to != null &&
       pages.any((page) => page != null && page >= from && page <= to);
   final corner = squash(_kWonriMiddleAnswerCorners[section] ?? '');
-  for (final box in previousPageBoxes) {
-    if (covers(box.from, box.to, bodyPages)) return true;
-    if (corner.isNotEmpty &&
-        squash(box.title) == corner &&
-        !covers(box.from, box.to, siblingBodyPages)) {
-      return true;
-    }
-  }
-  return false;
+  final tail = previousPageBoxes.last;
+  if (covers(tail.from, tail.to, bodyPages)) return true;
+  return corner.isNotEmpty &&
+      squash(tail.title) == corner &&
+      !covers(tail.from, tail.to, siblingBodyPages);
 }
 
 /// 상세 해설은 다음 소단원의 빠른 정답 박스가 시작되는 지면 위쪽까지

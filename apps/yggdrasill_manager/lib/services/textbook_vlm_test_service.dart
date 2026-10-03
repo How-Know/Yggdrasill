@@ -1016,7 +1016,12 @@ class TextbookWonriMiddleUnitEndGuard {
 /// "확인 N"이 인쇄된 지면들이 B 구간이다. 그 앞 지면은 A, 뒤 지면은 C만 올 수
 /// 있다. 다만 대표 예제가 지면 끝에 걸쳐 확인 문항이 다음 지면으로 넘어가는
 /// 정상 배치도 있으므로, 평번호가 다른 지면과 실제로 겹칠 때만 옮긴다.
-/// 옮길 코너에 같은 번호가 이미 있으면 근거가 모순이라 그대로 둔다.
+/// 코너 번호는 01부터 이어지므로, 비어 있는 코너로는 01이 없는 묶음을 옮기지
+/// 않는다.
+///
+/// B 구간 앞에서 B 번호와 겹치는데 A로도 옮길 수 없는 문항, 그리고 첫 A 지면보다
+/// 앞에 B·C로 읽힌 문항은 지운다. 개념 지면 바로 다음이 A라서, 그 자리의 번호는
+/// 개념 설명 안의 예시 번호다 (2-2 확률 213쪽의 "4", "5").
 List<List<TextbookVlmItem>> repairWonriMiddleSubUnitCorners(
   List<List<TextbookVlmItem>> pages, {
   required List<String> pageSections,
@@ -1052,11 +1057,47 @@ List<List<TextbookVlmItem>> repairWonriMiddleSubUnitCorners(
     firstCore ??= p;
     lastCore = p;
   }
-  if (firstCore == null || lastCore == null) return pages;
+  final out = List<List<TextbookVlmItem>>.of(pages);
+  if (firstCore != null && lastCore != null) {
+    _repairWonriMiddleCornerCollisions(
+      out,
+      firstCore: firstCore,
+      lastCore: lastCore,
+      categoryOf: categoryOf,
+      plainNumber: plainNumber,
+    );
+  }
+
+  final firstConceptPage = [
+    for (var p = 0; p < out.length; p += 1)
+      if (out[p].any((item) => categoryOf(p, item) == concept)) p,
+  ].firstOrNull;
+  if (firstConceptPage != null) {
+    for (var p = 0; p < firstConceptPage; p += 1) {
+      final kept = [
+        for (final item in out[p])
+          if (categoryOf(p, item) != core && categoryOf(p, item) != exam) item,
+      ];
+      if (kept.length != out[p].length) out[p] = kept;
+    }
+  }
+  return out;
+}
+
+void _repairWonriMiddleCornerCollisions(
+  List<List<TextbookVlmItem>> out, {
+  required int firstCore,
+  required int lastCore,
+  required String Function(int page, TextbookVlmItem item) categoryOf,
+  required int? Function(TextbookVlmItem item) plainNumber,
+}) {
+  const concept = 'middle_concept_check';
+  const core = 'middle_core_problem';
+  const exam = 'middle_exam_problem';
 
   final pagesByNumber = <String, Map<int, Set<int>>>{};
-  for (var p = 0; p < pages.length; p += 1) {
-    for (final item in pages[p]) {
+  for (var p = 0; p < out.length; p += 1) {
+    for (final item in out[p]) {
       final number = plainNumber(item);
       if (number == null) continue;
       pagesByNumber
@@ -1067,16 +1108,15 @@ List<List<TextbookVlmItem>> repairWonriMiddleSubUnitCorners(
   }
 
   String? targetFor(int page, String category) {
-    if (page < firstCore!) {
+    if (page < firstCore) {
       return category == core || category == exam ? concept : null;
     }
-    if (page > lastCore!) {
+    if (page > lastCore) {
       return category == core || category == concept ? exam : null;
     }
     return null;
   }
 
-  final out = List<List<TextbookVlmItem>>.of(pages);
   for (var p = 0; p < out.length; p += 1) {
     for (final category in const [core, concept, exam]) {
       final target = targetFor(p, category);
@@ -1091,10 +1131,22 @@ List<List<TextbookVlmItem>> repairWonriMiddleSubUnitCorners(
         (n) => (pagesByNumber[category]?[n]?.length ?? 0) > 1,
       );
       if (!collides) continue;
-      final clashesInTarget = numbers.any(
-        (n) => pagesByNumber[target]?[n]?.isNotEmpty ?? false,
-      );
-      if (clashesInTarget) continue;
+      final targetNumbers = pagesByNumber[target] ?? const <int, Set<int>>{};
+      final clashesInTarget =
+          numbers.any((n) => targetNumbers[n]?.isNotEmpty ?? false);
+      final targetEmpty = targetNumbers.values.every((v) => v.isEmpty);
+      if (clashesInTarget || (targetEmpty && !numbers.contains(1))) {
+        if (category == core && p < firstCore) {
+          out[p] = [
+            for (final item in out[p])
+              if (categoryOf(p, item) != core) item,
+          ];
+          for (final n in numbers) {
+            pagesByNumber[core]?[n]?.remove(p);
+          }
+        }
+        continue;
+      }
       out[p] = [
         for (final item in out[p])
           categoryOf(p, item) == category
@@ -1114,7 +1166,6 @@ List<List<TextbookVlmItem>> repairWonriMiddleSubUnitCorners(
       }
     }
   }
-  return out;
 }
 
 class _ItemRegionSynthesis {

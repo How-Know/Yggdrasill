@@ -15,7 +15,7 @@ const double _kFabIconOnlyPillWidth =
 const double _kCollapsedSearchTrailingGap = 12;
 const double _kMenuSearchGap = 12;
 
-/// 시간 메뉴 하단 액션 FAB — 콘텐츠 영역 가운데 ([ProblemBankBottomFabBar]와 동일).
+/// 시간 메뉴 하단 액션 FAB — 화면 오른쪽 ([FabTabBarTokens.fabBarRightInset]).
 class TimetableActionFabOverlay {
   OverlayEntry? _entry;
   VoidCallback? _onAdd;
@@ -105,33 +105,25 @@ class TimetableActionFabOverlay {
     _entry = null;
   }
 
-  Widget _buildOverlay(BuildContext overlayContext) {
-    final railWidth = NavigationRailTheme.of(overlayContext).minWidth ??
-        FabTabBarTokens.fabBarNavRailDefaultWidth;
-    final sideSheetWidth = leftSideSheetClipWidthNotifier.value;
-
-    // 상단 주/월 네비와 동일: 레일+시트 제외한 콘텐츠 영역에서 가운데 정렬.
+  Widget _buildOverlay(BuildContext _) {
     return Positioned(
-      left: railWidth + sideSheetWidth,
-      right: 0,
+      right: FabTabBarTokens.fabBarRightInset,
       bottom: FabTabBarTokens.fabBarBottomInset,
-      child: Center(
-        child: Material(
-          type: MaterialType.transparency,
-          color: Colors.transparent,
-          child: _TimetableActionFabBar(
-            searchExpanded: _searchExpanded,
-            hasSearchQuery: _hasSearchQuery,
-            controller: _searchController!,
-            focusNode: _searchFocusNode,
-            onAdd: _onAdd ?? () {},
-            onSearchToggle: _onSearchToggle ?? () {},
-            onSearchCancel: _onSearchCancel ?? () {},
-            onRoadmap: _onRoadmap ?? () {},
-            onExport: _onExport ?? () {},
-            onChanged: _onSearchChanged!,
-            onClear: _onSearchClear!,
-          ),
+      child: Material(
+        type: MaterialType.transparency,
+        color: Colors.transparent,
+        child: _TimetableActionFabBar(
+          searchExpanded: _searchExpanded,
+          hasSearchQuery: _hasSearchQuery,
+          controller: _searchController!,
+          focusNode: _searchFocusNode,
+          onAdd: _onAdd ?? () {},
+          onSearchToggle: _onSearchToggle ?? () {},
+          onSearchCancel: _onSearchCancel ?? () {},
+          onRoadmap: _onRoadmap ?? () {},
+          onExport: _onExport ?? () {},
+          onChanged: _onSearchChanged!,
+          onClear: _onSearchClear!,
         ),
       ),
     );

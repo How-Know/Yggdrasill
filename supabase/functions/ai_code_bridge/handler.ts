@@ -81,7 +81,7 @@ async function claim(deps: BridgeDeps, workerId: string, body: Body): Promise<Re
       ? {
           id: req.id,
           job,
-          mode: req.mode === 'change' ? 'change' : 'investigate',
+          mode: req.mode === 'change' || req.mode === 'plan' ? req.mode : 'investigate',
           title: req.title,
           request: req.request,
           round: req.round,
@@ -148,7 +148,7 @@ async function complete(deps: BridgeDeps, workerId: string, body: Body): Promise
     if (deps.background) deps.background(task);
     else await task;
   }
-  return json({ ok: true, status: out.status ?? null });
+  return json({ ok: true, status: out.status ?? null, review: out.review === true });
 }
 
 async function failRound(deps: BridgeDeps, workerId: string, body: Body): Promise<Response> {

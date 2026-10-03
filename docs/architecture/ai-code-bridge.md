@@ -197,7 +197,8 @@ Cursor 실행 id, 모델, 소요 시간, 토큰, 도구별 호출 수, 저장소
 | `CODE_BRIDGE_WORKER_ID` | | 기본 `pc-<컴퓨터 이름>` |
 | `CODE_BRIDGE_REPO` | | 조사할 저장소. 기본은 이 저장소 |
 | `CODE_BRIDGE_URL`, `CODE_BRIDGE_ANON_KEY` | | 함수 주소(기본 운영 프로젝트), 게이트웨이가 요구할 때만 anon 키 |
-| `CODE_BRIDGE_POLL_MS`, `CODE_BRIDGE_ROUND_TIMEOUT_MS` | | 대기열 확인 간격(기본 10초), 한 회차 제한(기본 15분) |
+| `CODE_BRIDGE_POLL_MS`, `CODE_BRIDGE_ROUND_TIMEOUT_MS` | | 대기열 확인 간격(기본 10초), 조사·조율 한 회차 제한(기본 15분) |
+| `CODE_BRIDGE_CHANGE_TIMEOUT_MS` | | 수정 실행 제한(기본 30분, 1~90분) |
 
 - 비밀 파일 차단 훅(`.cursor/hooks.json`, `deny-secrets.mjs`)이 없으면 시작하지 않는다.
 - 10초마다 `claim`을 부른다. 한 번에 한 건만 처리한다. 인증 실패·함수 미설정이면 1분 쉬고 다시 본다.
@@ -215,6 +216,8 @@ Agent.create({
 });
 ```
 
+- 조율(`mode = 'plan'`)도 조사와 같은 읽기 전용 설정이다. 요청문(`buildPlanPrompt`)은 "실무 개발자로서 계획 초안을 코드에 비춰 검토"를 맡긴다.
+- 실행 중 1분마다 "조율/수정/조사 진행 중 · N분 · 도구 M회 · 바뀐 파일 K개 (제한 X분)"을 터미널에 찍는다.
 - 결과를 올리기 전에 키처럼 보이는 문자열(`sk-`, `eyJ`, 긴 16진수 등)을 가린다.
 - 끝나면 `run.wait()` 결과의 토큰 수(`usage`), 도구별 호출 수, 저장소 상태를 함께 올리고 에이전트를 정리(`close`)한다.
   `agent.getUsage()`(달러 비용)는 운영자 계정에서 `feature_unavailable`이라 쓸 수 없다.
@@ -225,10 +228,10 @@ Agent.create({
 
 | 주체 | 할 수 있음 | 할 수 없음 |
 |------|------|------|
-| Cursor 에이전트 (조사) | 저장소 파일 읽기·검색, 변경안 설명 (`mode: "plan"`) | 파일 편집, 셸, 네트워크 도구, MCP, 하위 에이전트, PR, 비밀 파일 읽기 |
+| Cursor 에이전트 (조사·조율) | 저장소 파일 읽기·검색, 변경안 설명, 계획 검토 (`mode: "plan"`) | 파일 편집, 셸, 네트워크 도구, MCP, 하위 에이전트, PR, 비밀 파일 읽기 |
 | Cursor 에이전트 (수정) | 격리 복사본 안에서만 읽기·편집·삭제 (`mode: "agent"`, `read, grep, glob, ls, edit, delete`) | 셸, 복사본 밖 경로(읽기 포함), `.git`·`.cursor/hooks*` 쓰기, 비밀 파일 |
 | 작업자 | 대기열 동작(claim·heartbeat·complete·fail·apply_done), 스냅샷·복사본·diff, 승인된 diff 적용·되돌리기 | 커밋·푸시·스테이징, 다른 대화·기억 읽기, DB 직접 접근 |
-| Think (`ai_think`) | 요청 제안(카드), 결과 자동 검토·2회차 질문·대화 답변(`ai_code_bridge` 안의 `code_review`) | DB 직접 변경, 요청 자동 전송, 적용 자동 실행, 결정 자동 확정 |
+| Think (`ai_think`) | 요청 제안(카드), 읽기 전용 조율 시작(`start_code_plan`, 하루 한도 안), 결과 자동 검토·다음 회차 질문·대화 답변·조율본 제안(`ai_code_bridge` 안의 `code_review`) | DB 직접 변경, 조사·수정 요청 자동 전송, 적용 자동 실행, 결정 자동 확정 |
 | 매니저앱 | 제안 승인·고쳐서 보내기·거절, 취소, 적용·되돌리기 승인, 판단 기록 | — |
 
 수정 모드의 경로 제한: 작업자가 수정 실행 동안만 `CODE_BRIDGE_WRITE_ROOT`를 복사본 경로로 둔다. 훅은 이 값이 있으면
@@ -261,7 +264,8 @@ Agent.create({
 | 시작 실패 (`CursorSdkError`) | `isRetryable`이면 대기열로 되돌린다(같은 회차 최대 3회). 아니면 `failed` |
 | 실행 결과 `status: "error"` | 재시도하지 않는다. 사유를 남기고 `failed` |
 | 형식에 맞지 않는 답 | 원문을 저장하고 `needs_review`. 운영자가 원문을 보고 판단한다 |
-| 한 회차 15분 초과 | 실행을 취소하고 `failed` (`timeout`) |
+| 한 회차 15분 초과 (조사·조율) | 실행을 취소하고 `failed` (`timeout`) |
+| 수정 30분 초과 | 실행을 취소한다. 바뀐 파일이 있으면 그때까지의 diff를 올려 `needs_review`(적용 불가, 확인만), 없으면 `failed` |
 | 앱에서 취소 | 대기 중이면 바로 `cancelled`. 실행 중이면 다음 진행 신호 때 실행을 취소하고 `cancelled` |
 | 작업자를 끔 (Ctrl+C) | 실행을 멈추고 대기열로 되돌린다. 다음에 켜면 처음부터 다시 조사한다 |
 | 작업자가 죽음 | 점유(120초)가 만료되면 다음 가져가기 때 되돌린다. 시도가 3회를 넘으면 `failed`, 취소 요청이 있었으면 `cancelled` |
@@ -290,7 +294,12 @@ Agent.create({
 2. **Think 연결 + 코드 수정** (2026-09-30 구현): 채팅 제안(`propose_code_request`·`propose_code_change`),
    자동 검토 `code_review`(초안·정리를 한 번에 대신한다), 2회 왕복, 대화에 답 붙이기, 수정 모드(격리 복사본·diff·적용·되돌리기).
    작업자 `PROMPT_VERSION = 'code_bridge.v2'`, 검토 `REVIEW_PROMPT_VERSION = 'code-review-2026-09-30'`
-3. **화면 다듬기**: 채택 → 결정 초안 연결
+3. **Think ↔ Cursor 조율** (2026-10-01 구현): 수정은 `start_code_plan`으로 조율(읽기 전용, 최대 3회)을 먼저 하고
+   조율본을 승인받아 구현한다. 회차별 Think 질문 기록, 수정 30분·시간 초과 시 diff 보존, 1분마다 진행 로그.
+   작업자 `code_bridge.v3`, 검토 `code-review-2026-10-01`. 자세한 흐름은 [`ai-think-actions.md`](ai-think-actions.md) §4.3
+   2026-10-02: 남은 쟁점은 조율본의 객관식 질문(`decisions`)으로 묻고, 답하면 `ai_code_plan_revise`로 1회 더 조율한다.
+   검토 `code-review-2026-10-02`. 작업자는 바뀌지 않았다
+4. **화면 다듬기**: 채택 → 결정 초안 연결
 
 별도 브랜치·커밋·PR로 올리는 것은 여전히 범위 밖이다. 적용은 작업 폴더에만 하고 커밋은 사람이 한다.
 

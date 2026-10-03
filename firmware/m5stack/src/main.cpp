@@ -955,10 +955,11 @@ void fw_request_bind(const char* studentIdArg, const char* pin) {
   Serial.printf("[BIND] request bind (await ack) student=%s pin=%s\n", studentIdArg, (pin && *pin) ? "set" : "none");
 }
 
-void fw_publish_unbind() {
-  DynamicJsonDocument doc(128);
+void fw_publish_unbind(bool print_notice) {
+  DynamicJsonDocument doc(160);
   doc["action"] = "unbind";
   doc["student_id"] = studentId;
+  if (print_notice) doc["print_notice"] = true;
   String payload; serializeJson(doc, payload);
   String topic = String("academies/") + academyId + "/devices/" + deviceId + "/command";
   mqtt.publish(topic.c_str(), 1, false, payload.c_str());

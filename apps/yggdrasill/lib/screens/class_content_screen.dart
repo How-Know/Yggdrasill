@@ -6,12 +6,14 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/data_manager.dart';
+import '../services/exam_mode.dart';
 import '../services/tenant_service.dart';
 import '../services/homework_store.dart';
 import '../services/homework_grading_state_codec.dart';
@@ -45,7 +47,9 @@ import 'learning/models/problem_bank_export_models.dart'
         previewAnswerForMode;
 import 'resources/exam_preset_support.dart' show naesinLinkKeyOfPreset;
 import 'design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
+import '../widgets/app_confirm_button.dart';
 import '../widgets/dialog_tokens.dart';
+import '../widgets/home_status_dashboard_icon.dart';
 import '../widgets/student_profile_avatar.dart';
 import '../widgets/app_snackbar.dart';
 import '../theme/ygg_semantic_colors.dart';
@@ -57,6 +61,7 @@ import '../widgets/utility_glass_dialog_shell.dart';
 import '../widgets/pdf/homework_answer_viewer_dialog.dart';
 import '../widgets/latex_text_renderer.dart';
 import '../widgets/fab_style_home_screen_header.dart';
+import '../widgets/solid_capsule_action_bar.dart';
 import '../widgets/attendance_rank_dialog.dart';
 import '../services/student_textbook_report_service.dart';
 import '../widgets/textbook_report_review_dialog.dart';
@@ -162,8 +167,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   Timer? _rightSheetPreloadDebounce;
   String _lastRightSheetPreloadKey = '';
   bool? _memoFloatingHiddenBeforeGrading;
-  final FabStyleScreenTabBarOverlay _homeTabOverlay =
-      FabStyleScreenTabBarOverlay();
   int _openTextbookReportCount = 0;
   Timer? _textbookReportCountTimer;
 
@@ -188,6 +191,11 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     HomeworkStore.instance.revision
         .addListener(_onHomeworkStoreRevisionChanged);
     rightSideSheetPdfPanelSession.addListener(_onPdfPanelSessionChanged);
+    ExamModeService.instance.isOn.addListener(_onHomeFabClusterChanged);
+    ExamModeService.instance.suppressExamActionCluster
+        .addListener(_onHomeFabClusterChanged);
+    homeBatchConfirmFabVisible.addListener(_onHomeFabClusterChanged);
+    obscuringPopupRouteCount.addListener(_onHomeFabClusterChanged);
     _uiAnimController = AnimationController(
         duration: const Duration(milliseconds: 1800), vsync: this)
       ..repeat();
@@ -226,7 +234,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   @override
   void dispose() {
     widget.printController?._detach();
-    _homeTabOverlay.dispose();
+    sharedScreenTabBar.unbindMenu(0);
     homeGradingHistoryAction = null;
     _restoreMemoFloatingAfterGrading();
     final testGradingSessionToClear = rightSideSheetTestGradingSession.value;
@@ -244,6 +252,11 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       _onHomeworkStoreRevisionChanged,
     );
     rightSideSheetPdfPanelSession.removeListener(_onPdfPanelSessionChanged);
+    ExamModeService.instance.isOn.removeListener(_onHomeFabClusterChanged);
+    ExamModeService.instance.suppressExamActionCluster
+        .removeListener(_onHomeFabClusterChanged);
+    homeBatchConfirmFabVisible.removeListener(_onHomeFabClusterChanged);
+    obscuringPopupRouteCount.removeListener(_onHomeFabClusterChanged);
     _uiAnimController.dispose();
     _clockTimer.cancel();
     _textbookReportCountTimer?.cancel();
@@ -312,17 +325,18 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     });
   }
 
+  void _onHomeFabClusterChanged() {
+    if (!mounted) return;
+    _syncHomeTabOverlay();
+  }
+
+  void _onHomeTabSelected(int index) => _setGradingMode(index == 1);
+
   void _syncHomeTabOverlay() {
-    // 왼쪽 정답 PDF 패널이 열려 있으면 공용 FAB 탭바를 숨긴다.
-    if (rightSideSheetPdfPanelSession.value != null) {
-      _homeTabOverlay.dispose();
-      return;
-    }
-    _homeTabOverlay.sync(
-      context,
+    sharedScreenTabBar.bind(
+      menuIndex: 0,
       selectedIndex: _isGradingMode ? 1 : 0,
-      tabs: const ['현황', '채점'],
-      onTabSelected: (index) => _setGradingMode(index == 1),
+      onSelected: _onHomeTabSelected,
     );
   }
 
@@ -847,82 +861,107 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     required int submittedCount,
   }) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-      child: FabStyleHomeScreenHeader(
-        dateTimeText: _isGradingMode
-            ? _formatDateWithWeekdayShort(headerDateTime)
-            : _formatDateWithWeekdayAndTime(headerDateTime),
-        statsText: _isGradingMode ? '제출 $submittedCount' : '등원 $attendingCount',
-        secondaryText:
-            _isGradingMode ? _formatHourMinute(headerDateTime) : null,
-        gradingStats: _isGradingMode,
-        showAnchorDateHint: !isAttendanceAnchorToday(anchorDate),
-        trailing: [
-          if (!_isGradingMode) ...[
-            Tooltip(
-              message: '출석 순위',
-              child: FabStyleActionButton(
-                size: 48,
-                icon: Icons.leaderboard_rounded,
-                onPressed: () => unawaited(showAttendanceRankDialog(context)),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Tooltip(
-              message: 'M5 바인딩 이력',
-              child: FabStyleActionButton(
-                size: 48,
-                icon: Icons.link_rounded,
-                onPressed: () => unawaited(
-                  _showM5BindingHistoryDialog(context: context),
+      padding: const EdgeInsets.fromLTRB(
+        24,
+        FabTabBarTokens.previewAcademyTopInset - 12,
+        24,
+        0,
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              SvgPicture.string(
+                homeStatusDashboardOutlineSvg,
+                width: 48,
+                height: 48,
+                colorFilter: ColorFilter.mode(
+                  FabTabBarTokens.previewAcademyPanelStyleFor(
+                    Theme.of(context).brightness,
+                  ).title,
+                  BlendMode.srcIn,
                 ),
               ),
-            ),
-            const SizedBox(width: 8),
-            Tooltip(
-              message: '문항 신고',
-              child: Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  FabStyleActionButton(
-                    size: 48,
-                    icon: Icons.flag_rounded,
-                    onPressed: () => unawaited(
-                      _openTextbookReportReviewDialog(context),
-                    ),
+              const SizedBox(width: 16),
+              const FabStyleScreenMainTitle(
+                title: '수업 현황',
+                overlay: true,
+              ),
+            ],
+          ),
+          const Spacer(),
+          FabStyleHomeScreenHeader(
+            dateTimeText: _formatDateWithWeekdayShort(headerDateTime),
+            statsText:
+                _isGradingMode ? '제출 $submittedCount' : '등원 $attendingCount',
+            secondaryText:
+                _isGradingMode ? _formatHourMinute(headerDateTime) : null,
+            gradingStats: _isGradingMode,
+            showAnchorDateHint: !isAttendanceAnchorToday(anchorDate),
+          ),
+          if (!_isGradingMode) ...[
+            const SizedBox(width: 12),
+            SolidCapsuleActionBar(
+              children: [
+                SolidCapsuleActionButton(
+                  tooltip: '출석 순위',
+                  icon: Icons.leaderboard_rounded,
+                  onPressed: () =>
+                      unawaited(showAttendanceRankDialog(context)),
+                ),
+                SolidCapsuleActionButton(
+                  tooltip: 'M5 바인딩 이력',
+                  icon: Icons.link_rounded,
+                  onPressed: () => unawaited(
+                    _showM5BindingHistoryDialog(context: context),
                   ),
-                  if (_openTextbookReportCount > 0)
-                    Positioned(
-                      right: -3,
-                      top: -3,
-                      child: IgnorePointer(
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2,
-                          ),
-                          constraints: const BoxConstraints(minWidth: 20),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFE5484D),
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                          alignment: Alignment.center,
-                          child: Text(
-                            _openTextbookReportCount > 99
-                                ? '99+'
-                                : '$_openTextbookReportCount',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w900,
-                              height: 1.2,
+                ),
+                Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    SolidCapsuleActionButton(
+                      tooltip: '문항 신고',
+                      icon: Icons.flag_rounded,
+                      onPressed: () => unawaited(
+                        _openTextbookReportReviewDialog(context),
+                      ),
+                    ),
+                    if (_openTextbookReportCount > 0)
+                      Positioned(
+                        right: -3,
+                        top: -3,
+                        child: IgnorePointer(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            constraints: const BoxConstraints(minWidth: 20),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFE5484D),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            alignment: Alignment.center,
+                            child: Text(
+                              _openTextbookReportCount > 99
+                                  ? '99+'
+                                  : '$_openTextbookReportCount',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w900,
+                                height: 1.2,
+                              ),
                             ),
                           ),
                         ),
                       ),
-                    ),
-                ],
-              ),
+                  ],
+                ),
+              ],
             ),
           ],
         ],
@@ -936,15 +975,12 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   }
 
   double _homeStatusContentTopPadding(BuildContext context) {
-    const headerTopPadding = 8.0;
-    const headerPanelVerticalPadding = 12.0 * 2;
-    const headerBottomGap = 16.0;
-    const headerLineHeight =
-        FabTabBarTokens.previewAcademyMainTitleFontSize * 1.15;
+    const headerTopPadding = FabTabBarTokens.previewAcademyTopInset - 12;
+    const capsuleHeight = 56.0;
+    const headerBottomGap = 12.0;
     return MediaQuery.paddingOf(context).top +
         headerTopPadding +
-        headerPanelVerticalPadding +
-        headerLineHeight +
+        capsuleHeight +
         headerBottomGap;
   }
 
@@ -1010,7 +1046,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                       ),
                                       headerTimeText:
                                           _formatHourMinute(headerDateTime),
-                                      headerSubmittedText: '제출 $submittedCount',
                                       showAnchorDateHint:
                                           !isAttendanceAnchorToday(anchorDate),
                                       pendingConfirms: _pendingConfirms,
@@ -2949,8 +2984,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     final enabledFlows =
         await ensureEnabledFlowsForHomework(context, studentId);
     if (enabledFlows.isEmpty) return;
-    final item = await showDialog<dynamic>(
+    final item = await showSlidingBottomDialog<dynamic>(
       context: context,
+      barrierLabel: '과제 추가',
       builder: (ctx) => HomeworkQuickAddProxyDialog(
         studentId: studentId,
         flows: enabledFlows,
@@ -6815,16 +6851,29 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       return;
     }
     for (final item in activeChildren) {
-      item.status = HomeworkStatus.homework;
+      item.status = result.returnedToClass
+          ? HomeworkStatus.inProgress
+          : HomeworkStatus.homework;
       item.phase = 1;
       item.runStart = null;
     }
     HomeworkStore.instance.bumpRevision();
+    final attendanceId = result.attendanceId;
+    if (attendanceId != null) {
+      HomeworkDepartureDraftService.instance.invalidate(attendanceId);
+    }
+    final reasonLabel =
+        choice == _HomeworkInspectionChoice.leftBehind ? '두고 옴' : '숙제 안 함';
+    if (result.returnedToClass) {
+      _showHomeworkChipSnackBar(
+        context,
+        '$reasonLabel 0% 기록 · 오늘 과제로 전환했습니다.',
+      );
+      return;
+    }
     final nextLabel = result.nextDueAt == null
         ? '다음 수업'
         : _formatDateWithWeekdayAndTime(result.nextDueAt!);
-    final reasonLabel =
-        choice == _HomeworkInspectionChoice.leftBehind ? '두고 옴' : '숙제 안 함';
     _showHomeworkChipSnackBar(
       context,
       '$reasonLabel 0% 기록 · $nextLabel까지 연기했습니다.',
@@ -8152,13 +8201,14 @@ Future<_HomeworkInspectionChoice?> _showHomeworkInspectionChoiceDialog({
                   ),
                   actionCard(
                     label: '숙제 안 함',
-                    description: '0%로 기록하고 그룹 전체를 다음 수업으로 연기합니다.',
+                    description:
+                        '0%로 기록하고 오늘 과제로 전환합니다. 남은 과제는 하원 때 다시 숙제로 나갑니다.',
                     value: _HomeworkInspectionChoice.notDone,
                     icon: Icons.assignment_late_outlined,
                   ),
                   actionCard(
                     label: '두고 옴',
-                    description: '안 함과 동일하게 처리하고 알림장에 사유를 표시합니다.',
+                    description: '0%로 기록하고 다음 수업으로 연기합니다. 알림장에 사유를 표시합니다.',
                     value: _HomeworkInspectionChoice.leftBehind,
                     icon: Icons.inventory_2_outlined,
                   ),
@@ -12779,8 +12829,9 @@ Future<void> _showAddChildHomeworkDialog({
     break;
   }
 
-  final result = await showDialog<dynamic>(
+  final result = await showSlidingBottomDialog<dynamic>(
     context: context,
+    barrierLabel: '과제 추가',
     builder: (ctx) => HomeworkQuickAddProxyDialog(
       studentId: studentId,
       flows: enabledFlows,
@@ -13789,6 +13840,7 @@ String _formatHomeworkDueChipLabel(DateTime dueDate) {
 
 String _homeworkAssignmentHistoryStatusLabel(HomeworkAssignmentBrief brief) {
   if (brief.isSelfExtra) return '추가 검사';
+  if (brief.status.trim() == 'not_done_to_class') return '안 함 → 수업 전환';
   if (brief.absenceCarryover) return '결석 이월';
   switch (brief.status.trim()) {
     case 'carried_over':
@@ -20663,25 +20715,24 @@ Future<void> _showGradingHistoryDialog({
     ),
   );
   if (!context.mounted) return;
-  await showDialog<void>(
+  final mediaHeight = MediaQuery.sizeOf(context).height;
+  await showSlidingBottomDialog<void>(
     context: context,
+    barrierLabel: '이전 채점 과제',
     builder: (dialogContext) {
       return StatefulBuilder(
         builder: (dialogContext, setLocalState) {
-          return AlertDialog(
-            backgroundColor: kDlgBg,
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            title: const Text(
-              '이전 채점 과제',
-              style: TextStyle(
-                color: kDlgText,
-                fontSize: 18,
-                fontWeight: FontWeight.w900,
-              ),
-            ),
-            content: SizedBox(
-              width: 760,
+          return Dialog(
+            backgroundColor: Colors.transparent,
+            elevation: 0,
+            alignment: Alignment.bottomCenter,
+            insetPadding: const EdgeInsets.fromLTRB(24, 0, 24, 18),
+            child: UtilityGlassDialogShell(
+              title: '이전 채점 과제',
+              icon: Icons.rotate_left_rounded,
+              preferredWidth: 760,
+              maxWidth: 760,
+              maxHeight: math.min(mediaHeight * 0.72, 680),
               child: ValueListenableBuilder<int>(
                 valueListenable: HomeworkStore.instance.revision,
                 builder: (context, _, __) {
@@ -20690,140 +20741,131 @@ Future<void> _showGradingHistoryDialog({
                     studentNamesById: studentNamesById,
                   );
                   if (entries.isEmpty) {
-                    return const SizedBox(
-                      height: 180,
-                      child: Center(
-                        child: Text(
-                          '최근 7일 내 채점 이력이 없습니다.',
-                          style: TextStyle(
-                            color: kDlgTextSub,
-                            fontSize: 14,
-                            fontWeight: FontWeight.w700,
-                          ),
+                    return const Center(
+                      child: Text(
+                        '최근 7일 내 채점 이력이 없습니다.',
+                        style: TextStyle(
+                          color: UtilityGlassDialogTokens.iconColor,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          decoration: TextDecoration.none,
                         ),
                       ),
                     );
                   }
-                  final listHeight = math.min(
-                      MediaQuery.of(dialogContext).size.height * 0.62, 620.0);
-                  return SizedBox(
-                    height: listHeight,
-                    child: ListView.separated(
-                      itemCount: entries.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 10),
-                      itemBuilder: (context, index) {
-                        final entry = entries[index];
-                        final key =
-                            '${entry.studentId}|${entry.itemIds.join(',')}';
-                        final isCancelling = cancellingKeys.contains(key);
-                        return Container(
-                          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-                          decoration: BoxDecoration(
-                            color: const Color(0x221D2B2C),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: const Color(0xFF31464C)),
-                          ),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      entry.displayTitle,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                        color: kDlgText,
-                                        fontSize: 15,
-                                        fontWeight: FontWeight.w800,
-                                      ),
+                  return ListView.separated(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+                    itemCount: entries.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                    itemBuilder: (context, index) {
+                      final entry = entries[index];
+                      final key =
+                          '${entry.studentId}|${entry.itemIds.join(',')}';
+                      final isCancelling = cancellingKeys.contains(key);
+                      return Container(
+                        padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.06),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    entry.displayTitle,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: UtilityGlassDialogTokens.iconColor,
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w700,
+                                      decoration: TextDecoration.none,
                                     ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      '${entry.studentName} · ${_formatDateTime(entry.eventAt)}',
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                        color: kDlgTextSub,
-                                        fontSize: 13.5,
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 3),
-                                    Text(
-                                      entry.meta,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                        color: Color(0xFF7F8C8C),
-                                        fontSize: 12.5,
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              OutlinedButton(
-                                onPressed: isCancelling
-                                    ? null
-                                    : () async {
-                                        setLocalState(() {
-                                          cancellingKeys.add(key);
-                                        });
-                                        try {
-                                          await onCancelGrading(
-                                            dialogContext: dialogContext,
-                                            keys: entry.itemIds
-                                                .map(
-                                                  (itemId) => (
-                                                    studentId: entry.studentId,
-                                                    itemId: itemId,
-                                                  ),
-                                                )
-                                                .toList(growable: false),
-                                          );
-                                        } finally {
-                                          if (dialogContext.mounted) {
-                                            setLocalState(() {
-                                              cancellingKeys.remove(key);
-                                            });
-                                          }
-                                        }
-                                      },
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: const Color(0xFFE57373),
-                                  side: const BorderSide(
-                                    color: Color(0xFFE57373),
                                   ),
-                                ),
-                                child: isCancelling
-                                    ? const SizedBox(
-                                        width: 16,
-                                        height: 16,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                        ),
-                                      )
-                                    : const Text('채점 취소'),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    '${entry.studentName} · ${_formatDateTime(entry.eventAt)}',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: Color(0xFFC8C8CC),
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w500,
+                                      decoration: TextDecoration.none,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    entry.meta,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: Color(0xFF9A9AA0),
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w500,
+                                      decoration: TextDecoration.none,
+                                    ),
+                                  ),
+                                ],
                               ),
-                            ],
-                          ),
-                        );
-                      },
-                    ),
+                            ),
+                            const SizedBox(width: 12),
+                            TextButton(
+                              onPressed: isCancelling
+                                  ? null
+                                  : () async {
+                                      setLocalState(() {
+                                        cancellingKeys.add(key);
+                                      });
+                                      try {
+                                        await onCancelGrading(
+                                          dialogContext: dialogContext,
+                                          keys: entry.itemIds
+                                              .map(
+                                                (itemId) => (
+                                                  studentId: entry.studentId,
+                                                  itemId: itemId,
+                                                ),
+                                              )
+                                              .toList(growable: false),
+                                        );
+                                      } finally {
+                                        if (dialogContext.mounted) {
+                                          setLocalState(() {
+                                            cancellingKeys.remove(key);
+                                          });
+                                        }
+                                      }
+                                    },
+                              child: isCancelling
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Color(0xFFE57373),
+                                      ),
+                                    )
+                                  : const Text(
+                                      '채점 취소',
+                                      style: TextStyle(
+                                        color: Color(0xFFE57373),
+                                        fontWeight: FontWeight.w700,
+                                        decoration: TextDecoration.none,
+                                      ),
+                                    ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
                   );
                 },
               ),
             ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(dialogContext).pop(),
-                style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
-                child: const Text('닫기'),
-              ),
-            ],
           );
         },
       );
@@ -21349,11 +21391,10 @@ class _AttendingButton extends StatelessWidget {
                 _nextClassDateTimeForStudent(studentId),
               );
 
-              final nameStyle = TextStyle(
+              final nameStyle =
+                  FabTabBarTokens.previewAcademyMainTitleStyle(panelStyle)
+                      .copyWith(
                 color: isResting ? tertiaryTextColor : primaryTextColor,
-                fontSize: 34,
-                fontWeight: FontWeight.w600,
-                height: 1.0,
               );
               final infoLine = [
                 if (school.isNotEmpty) school,

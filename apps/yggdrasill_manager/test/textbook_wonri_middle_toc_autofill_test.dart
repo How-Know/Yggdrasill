@@ -3,6 +3,7 @@ import 'package:yggdrasill_manager/screens/textbook/textbook_authoring_stage_dia
 import 'package:yggdrasill_manager/screens/textbook/textbook_toc_autofill.dart';
 import 'package:yggdrasill_manager/services/textbook_series_catalog.dart';
 import 'package:yggdrasill_manager/services/textbook_vlm_answer_service.dart';
+import 'package:yggdrasill_manager/services/textbook_vlm_solution_ref_service.dart';
 import 'package:yggdrasill_manager/services/textbook_vlm_test_service.dart';
 
 void main() {
@@ -258,10 +259,45 @@ void main() {
       expect(identical(out[1], pages[1]), isTrue);
     });
 
-    test('옮길 코너에 같은 번호가 이미 있으면 그대로 둔다', () {
+    test('개념 지면에서 핵심문제로 읽힌 번호는 지운다 (2-2 확률 213쪽)', () {
       final pages = <List<TextbookVlmItem>>[
-        [item('01', concept)],
-        [item('01', core, 'representative')],
+        [item('4', core, 'representative'), item('5', core, 'representative')],
+        [
+          for (final n in ['01', '02', '03', '04', '05', '06']) item(n, concept)
+        ],
+        [item('01', core, 'representative'), item('확인 1', core, 'follow_up')],
+        [item('04', core, 'representative'), item('확인 4', core, 'follow_up')],
+        [item('05', core, 'representative'), item('확인 5', core, 'follow_up')],
+      ];
+      final out = repairWonriMiddleSubUnitCorners(
+        pages,
+        pageSections: sections(pages),
+      );
+
+      expect(out[0], isEmpty);
+      for (var p = 1; p < pages.length; p += 1) {
+        expect(identical(out[p], pages[p]), isTrue);
+      }
+    });
+
+    test('확인하기가 없어도 01로 시작하지 않는 앞 지면 핵심문제는 지운다', () {
+      final pages = <List<TextbookVlmItem>>[
+        [item('4', core, 'representative'), item('5', core, 'representative')],
+        [item('04', core, 'representative'), item('확인 4', core, 'follow_up')],
+        [item('05', core, 'representative'), item('확인 5', core, 'follow_up')],
+      ];
+      final out = repairWonriMiddleSubUnitCorners(
+        pages,
+        pageSections: sections(pages),
+      );
+
+      expect(out[0], isEmpty);
+    });
+
+    test('첫 확인하기 지면보다 앞의 핵심문제·시험문제는 겹치지 않아도 지운다', () {
+      final pages = <List<TextbookVlmItem>>[
+        [item('07', exam)],
+        [item('01', concept), item('02', concept)],
         [item('01', core, 'representative'), item('확인 1', core, 'follow_up')],
       ];
       final out = repairWonriMiddleSubUnitCorners(
@@ -269,6 +305,7 @@ void main() {
         pageSections: sections(pages),
       );
 
+      expect(out[0], isEmpty);
       expect(identical(out[1], pages[1]), isTrue);
     });
   });
@@ -458,6 +495,60 @@ void main() {
     ]);
   });
 
+  test('이어진 코너를 먼저, 새 코너는 본문 쪽 순서로 묻는다 (3-1 해설 35쪽)', () {
+    // 0~4 시험문제(본문 95쪽), 5~9 계산력(본문 94쪽, 01~03은 34쪽에서 찾음),
+    // 10~11 다음 소단원 확인하기(본문 97쪽). 코너 순서로는 C가 F보다 앞이다.
+    const sections = <String>[
+      'middle_exam_problem',
+      'middle_exam_problem',
+      'middle_exam_problem',
+      'middle_exam_problem',
+      'middle_exam_problem',
+      'middle_calculation',
+      'middle_calculation',
+      'middle_calculation',
+      'middle_calculation',
+      'middle_calculation',
+      'middle_concept_check',
+      'middle_concept_check',
+    ];
+    const scopes = <String>[
+      '1:1:C:1',
+      '1:1:C:1',
+      '1:1:C:1',
+      '1:1:C:1',
+      '1:1:C:1',
+      '1:1:F:1',
+      '1:1:F:1',
+      '1:1:F:1',
+      '1:1:F:1',
+      '1:1:F:1',
+      '1:1:A:2',
+      '1:1:A:2',
+    ];
+    const bodyPages = <int>[95, 95, 95, 95, 95, 94, 94, 94, 94, 94, 97, 97];
+    String number(int position) => switch (position) {
+          < 5 => '0${position + 1}',
+          < 10 => '0${position - 4}',
+          _ => '0${position - 9}',
+        };
+
+    final batches = textbookWonriMiddleRequestBatches(
+      order: <int>[0, 1, 2, 3, 4, 8, 9, 10, 11],
+      sectionOf: (position) => sections[position],
+      scopeKeyOf: (position) => scopes[position],
+      numberOf: number,
+      bodyPageOf: (position) => bodyPages[position],
+      settled: const <int>[5, 6, 7],
+    );
+
+    expect(batches, <List<int>>[
+      <int>[8, 9],
+      <int>[0, 1, 2, 3, 4],
+      <int>[10, 11],
+    ]);
+  });
+
   test('시작도 안 한 코너는 박스 없는 지면의 이어진 풀이를 가져가지 않는다', () {
     // 2-1 해설 24쪽: 23쪽 계산력(본문 64쪽) 박스에서 이어진 01~04를
     // 아직 박스가 안 나온 시험문제(본문 65쪽)가 차지했다. 모델은 23쪽
@@ -508,6 +599,59 @@ void main() {
         bodyPages: const <int?>[75, 76],
       ),
       isTrue,
+    );
+  });
+
+  test('앞 지면 마지막 박스의 코너만 다음 지면으로 이어진다 (3-1 해설 36쪽)', () {
+    // 35쪽: 계산력(본문 94쪽) 04·05가 맨 위에 이어진 뒤 시험문제·확인하기
+    // 박스가 나온다. 계산력이 시작한 코너여도 36쪽 맨 위는 확인하기 차지다.
+    const page35Boxes = <({String title, int? from, int? to})>[
+      (title: '이런 문제가 시험에 나온다', from: 95, to: 95),
+      (title: '개념원리 확인하기', from: 97, to: 97),
+    ];
+    expect(
+      textbookWonriMiddleMayContinue(
+        started: true,
+        section: 'middle_calculation',
+        previousPageBoxes: page35Boxes,
+        bodyPages: const <int?>[94, 94],
+      ),
+      isFalse,
+    );
+    expect(
+      textbookWonriMiddleMayContinue(
+        started: true,
+        section: 'middle_concept_check',
+        previousPageBoxes: page35Boxes,
+        bodyPages: const <int?>[97, 97, 97],
+      ),
+      isTrue,
+    );
+  });
+
+  test('해설 박스를 2단 읽기 순서로 정렬한다', () {
+    final result = TextbookVlmWonriMiddleSolutionPageResult.fromMap(
+      <String, dynamic>{
+        'raw_page': 35,
+        'boxes': <Map<String, dynamic>>[
+          <String, dynamic>{
+            'title': '개념원리 확인하기',
+            'body_page_from': 97,
+            'body_page_to': 97,
+            'region': <int>[529, 507, 672, 909],
+          },
+          <String, dynamic>{
+            'title': '이런 문제가 시험에 나온다',
+            'body_page_from': 95,
+            'body_page_to': 95,
+            'region': <int>[548, 57, 620, 458],
+          },
+        ],
+      },
+    );
+    expect(
+      result.boxes.map((box) => box.title),
+      <String>['이런 문제가 시험에 나온다', '개념원리 확인하기'],
     );
   });
 

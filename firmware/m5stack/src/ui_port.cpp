@@ -21,6 +21,7 @@ extern const lv_font_t kakao_kr_24;
 
 // External icon declarations
 LV_IMG_DECLARE(home_64dp_E3E3E3_FILL0_wght400_GRAD0_opsz48);
+LV_IMG_DECLARE(icon_back_left);
 LV_IMG_DECLARE(avatar_fluent_owl);
 LV_IMG_DECLARE(avatar_fluent_fox);
 LV_IMG_DECLARE(avatar_fluent_panda);
@@ -544,28 +545,10 @@ static void style_back_button(lv_obj_t* btn) {
   lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
   lv_obj_set_style_bg_color(btn, lv_color_hex(0x1E1E1E), 0);
   lv_obj_set_style_border_width(btn, 0, 0);
-  static lv_point_t chev_a[] = {{9, 3}, {2, 11}};
-  static lv_point_t chev_b[] = {{2, 11}, {9, 19}};
-  lv_obj_t* box = lv_obj_create(btn);
-  lv_obj_set_size(box, 14, 24);
-  lv_obj_center(box);
-  lv_obj_set_style_bg_opa(box, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_border_width(box, 0, 0);
-  lv_obj_set_style_pad_all(box, 0, 0);
-  lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_clear_flag(box, LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_t* line_a = lv_line_create(box);
-  lv_line_set_points(line_a, chev_a, 2);
-  lv_obj_set_style_line_width(line_a, 3, 0);
-  lv_obj_set_style_line_color(line_a, lv_color_hex(0xE6E6E6), 0);
-  lv_obj_set_style_line_rounded(line_a, true, 0);
-  lv_obj_clear_flag(line_a, LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_t* line_b = lv_line_create(box);
-  lv_line_set_points(line_b, chev_b, 2);
-  lv_obj_set_style_line_width(line_b, 3, 0);
-  lv_obj_set_style_line_color(line_b, lv_color_hex(0xE6E6E6), 0);
-  lv_obj_set_style_line_rounded(line_b, true, 0);
-  lv_obj_clear_flag(line_b, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_t* img = lv_img_create(btn);
+  lv_img_set_src(img, &icon_back_left);
+  lv_obj_center(img);
+  lv_obj_clear_flag(img, LV_OBJ_FLAG_CLICKABLE);
 }
 
 static void list_scroll_activity_cb(lv_event_t* e) {
@@ -1993,6 +1976,81 @@ static void show_confirm_phase_to_waiting_popup(const char* group_id, int group_
   screensaver_attach_activity(s_confirm_to_wait_popup);
 }
 
+static void finish_logout(bool print_notice) {
+  lv_obj_t* popup = lv_obj_create(lv_layer_top());
+  lv_obj_set_size(popup, 276, 120);
+  lv_obj_center(popup);
+  lv_obj_set_style_radius(popup, 14, 0);
+  lv_obj_set_style_bg_color(popup, lv_color_hex(0x202020), 0);
+  lv_obj_set_style_bg_opa(popup, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(popup, 1, 0);
+  lv_obj_set_style_border_color(popup, lv_color_hex(0x3A3A3A), 0);
+  lv_obj_set_style_shadow_width(popup, 0, 0);
+  lv_obj_clear_flag(popup, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_t* msg_lbl = lv_label_create(popup);
+  lv_obj_set_style_text_font(msg_lbl, &kakao_kr_16, 0);
+  lv_obj_set_style_text_color(msg_lbl, lv_color_hex(0xE6E6E6), 0);
+  lv_label_set_text(msg_lbl, u8"오늘도 수고했어!");
+  lv_obj_center(msg_lbl);
+  fw_publish_unbind(print_notice);
+  lv_timer_t* restart_timer = lv_timer_create(restart_app_timer_cb, 1800, NULL);
+  lv_timer_set_repeat_count(restart_timer, 1);
+}
+
+static void show_logout_notice_popup(void) {
+  lv_obj_t* popup = lv_obj_create(lv_layer_top());
+  lv_obj_set_size(popup, 276, 168);
+  lv_obj_center(popup);
+  lv_obj_set_style_radius(popup, 14, 0);
+  lv_obj_set_style_bg_color(popup, lv_color_hex(0x202020), 0);
+  lv_obj_set_style_bg_opa(popup, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(popup, 1, 0);
+  lv_obj_set_style_border_color(popup, lv_color_hex(0x3A3A3A), 0);
+  lv_obj_set_style_shadow_width(popup, 0, 0);
+  lv_obj_set_style_pad_all(popup, 12, 0);
+  lv_obj_clear_flag(popup, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t* msg = lv_label_create(popup);
+  lv_obj_set_width(msg, 248);
+  lv_obj_align(msg, LV_ALIGN_TOP_MID, 0, 16);
+  lv_obj_set_style_text_align(msg, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_text_font(msg, &kakao_kr_16, 0);
+  lv_obj_set_style_text_color(msg, lv_color_hex(0xD0D0D0), 0);
+  lv_label_set_long_mode(msg, LV_LABEL_LONG_WRAP);
+  lv_label_set_text(msg, u8"알림장을 인쇄할까요?");
+
+  lv_obj_t* skip_btn = lv_btn_create(popup);
+  lv_obj_set_size(skip_btn, 118, 40);
+  lv_obj_align(skip_btn, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+  lv_obj_set_style_radius(skip_btn, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_color(skip_btn, lv_color_hex(0x323232), 0);
+  lv_obj_set_style_border_width(skip_btn, 0, 0);
+  style_flat_button(skip_btn);
+  lv_obj_t* skip_lbl = lv_label_create(skip_btn);
+  lv_obj_set_style_text_font(skip_lbl, &kakao_kr_16, 0);
+  lv_label_set_text(skip_lbl, u8"인쇄 안 함");
+  lv_obj_center(skip_lbl);
+  lv_obj_add_event_cb(skip_btn, [](lv_event_t* e) {
+    lv_obj_t* box = lv_obj_get_parent(lv_event_get_target(e));
+    if (box && lv_obj_is_valid(box)) lv_obj_del(box);
+    finish_logout(false);
+  }, LV_EVENT_CLICKED, NULL);
+
+  lv_obj_t* print_btn = lv_btn_create(popup);
+  lv_obj_set_size(print_btn, 118, 40);
+  lv_obj_align(print_btn, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
+  style_pill_confirm(print_btn);
+  lv_obj_t* print_lbl = lv_label_create(print_btn);
+  lv_obj_set_style_text_font(print_lbl, &kakao_kr_16, 0);
+  lv_label_set_text(print_lbl, u8"인쇄");
+  lv_obj_center(print_lbl);
+  lv_obj_add_event_cb(print_btn, [](lv_event_t* e) {
+    lv_obj_t* box = lv_obj_get_parent(lv_event_get_target(e));
+    if (box && lv_obj_is_valid(box)) lv_obj_del(box);
+    finish_logout(true);
+  }, LV_EVENT_CLICKED, NULL);
+}
+
 static void close_student_info_screen(bool show_entry_hub) {
   if (s_student_info_screen && lv_obj_is_valid(s_student_info_screen)) {
     lv_obj_del(s_student_info_screen);
@@ -2004,14 +2062,16 @@ static void close_student_info_screen(bool show_entry_hub) {
 static void populate_student_info_container(lv_obj_t* target, bool include_back_header) {
   if (!target || !lv_obj_is_valid(target)) return;
   lv_obj_clean(target);
-  lv_obj_set_style_bg_color(target, lv_color_hex(0x141414), 0);
+  lv_obj_set_style_bg_color(target, lv_color_hex(0x0B1112), 0);
   lv_obj_set_style_bg_opa(target, LV_OPA_COVER, 0);
   lv_obj_set_style_border_width(target, 0, 0);
   lv_obj_set_style_radius(target, 0, 0);
   lv_obj_set_style_pad_all(target, 16, 0);
   lv_obj_set_style_pad_row(target, 8, 0);
   lv_obj_set_scrollbar_mode(target, LV_SCROLLBAR_MODE_OFF);
-  lv_obj_set_scroll_dir(target, LV_DIR_VER);
+  lv_obj_set_style_width(target, 0, LV_PART_SCROLLBAR);
+  lv_obj_set_style_bg_opa(target, LV_OPA_TRANSP, LV_PART_SCROLLBAR);
+  lv_obj_clear_flag(target, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_flex_flow(target, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(target, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
 
@@ -2033,15 +2093,15 @@ static void populate_student_info_container(lv_obj_t* target, bool include_back_
     }, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t* title = lv_label_create(header);
-    if (s_global_font) lv_obj_set_style_text_font(title, s_global_font, 0);
-    lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_pad_left(title, 10, 0);
-    lv_label_set_text(title, u8"학생 정보");
+    lv_obj_set_style_text_font(title, &kakao_kr_16, 0);
+    lv_obj_set_style_text_color(title, lv_color_hex(0xE6E6E6), 0);
+    lv_obj_set_style_pad_left(title, 8, 0);
+    lv_label_set_text(title, u8"정보");
   }
 
   lv_obj_t* name_lbl = lv_label_create(target);
-  if (s_global_font) lv_obj_set_style_text_font(name_lbl, s_global_font, 0);
-  lv_obj_set_style_text_color(name_lbl, lv_color_hex(0xE6E6E6), 0);
+  lv_obj_set_style_text_font(name_lbl, &kakao_kr_24, 0);
+  lv_obj_set_style_text_color(name_lbl, lv_color_hex(0xF2F2F2), 0);
   lv_label_set_text(name_lbl, s_student_name_cache.c_str());
 
   lv_obj_t* spacer = lv_obj_create(target);
@@ -2050,8 +2110,8 @@ static void populate_student_info_container(lv_obj_t* target, bool include_back_
   lv_obj_set_style_border_width(spacer, 0, 0);
 
   lv_obj_t* sg = lv_label_create(target);
-  lv_obj_set_style_text_color(sg, lv_color_hex(0xA0A0A0), 0);
-  if (s_global_font) lv_obj_set_style_text_font(sg, s_global_font, 0);
+  lv_obj_set_style_text_color(sg, lv_color_hex(0x8A8A8A), 0);
+  lv_obj_set_style_text_font(sg, &kakao_kr_16, 0);
   char line2[128];
   if (s_student_school_cache.length() > 0 && s_student_grade_cache >= 0) {
     snprintf(line2, sizeof(line2), u8"%s · %d학년", s_student_school_cache.c_str(), s_student_grade_cache);
@@ -2065,42 +2125,29 @@ static void populate_student_info_container(lv_obj_t* target, bool include_back_
   lv_label_set_text(sg, line2);
 
   lv_obj_t* spacer2 = lv_obj_create(target);
-  lv_obj_set_size(spacer2, 1, 28);
+  lv_obj_set_width(spacer2, lv_pct(100));
+  lv_obj_set_height(spacer2, 0);
+  lv_obj_set_flex_grow(spacer2, 1);
   lv_obj_set_style_bg_opa(spacer2, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(spacer2, 0, 0);
+  lv_obj_set_style_outline_width(spacer2, 0, 0);
+  lv_obj_clear_flag(spacer2, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_clear_flag(spacer2, LV_OBJ_FLAG_CLICKABLE);
 
   lv_obj_t* logout_btn = lv_btn_create(target);
   lv_obj_set_size(logout_btn, 200, 44);
-  lv_obj_set_style_radius(logout_btn, 22, 0);
-  lv_obj_set_style_bg_color(logout_btn, lv_color_hex(0xDC143C), 0);
+  lv_obj_set_style_radius(logout_btn, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_color(logout_btn, lv_color_hex(0x1E1E1E), 0);
   lv_obj_set_style_border_width(logout_btn, 0, 0);
-  lv_obj_set_style_shadow_width(logout_btn, 0, 0);
+  style_flat_button(logout_btn);
   lv_obj_t* logout_lbl = lv_label_create(logout_btn);
-  if (s_global_font) lv_obj_set_style_text_font(logout_lbl, s_global_font, 0);
+  lv_obj_set_style_text_font(logout_lbl, &kakao_kr_16, 0);
+  lv_obj_set_style_text_color(logout_lbl, lv_color_hex(0xE6E6E6), 0);
   lv_label_set_text(logout_lbl, u8"로그아웃");
   lv_obj_center(logout_lbl);
   lv_obj_add_event_cb(logout_btn, [](lv_event_t* e) {
     (void)e;
-
-    lv_obj_t* popup = lv_obj_create(lv_scr_act());
-    lv_obj_set_size(popup, 280, 160);
-    lv_obj_center(popup);
-    lv_obj_set_style_radius(popup, 20, 0);
-    lv_obj_set_style_bg_color(popup, lv_color_hex(0x202020), 0);
-    lv_obj_set_style_border_width(popup, 0, 0);
-    lv_obj_set_style_shadow_width(popup, 20, 0);
-    lv_obj_set_style_shadow_opa(popup, LV_OPA_30, 0);
-    lv_obj_clear_flag(popup, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t* msg_lbl = lv_label_create(popup);
-    if (s_global_font) lv_obj_set_style_text_font(msg_lbl, s_global_font, 0);
-    lv_obj_set_style_text_color(msg_lbl, lv_color_hex(0xFFFFFF), 0);
-    lv_label_set_text(msg_lbl, u8"오늘도 수고했어!");
-    lv_obj_center(msg_lbl);
-
-    fw_publish_unbind();
-    lv_timer_t* restart_timer = lv_timer_create(restart_app_timer_cb, 1800, NULL);
-    lv_timer_set_repeat_count(restart_timer, 1);
+    show_logout_notice_popup();
   }, LV_EVENT_CLICKED, NULL);
 }
 
@@ -7256,7 +7303,10 @@ static void show_homework_detail_page(int group_idx) {
   lv_label_set_long_mode(row1, LV_LABEL_LONG_DOT);
   lv_label_set_text(row1, hw_should_treat_as_test(g) ? u8"테스트" : g.book_name);
   lv_obj_set_style_pad_top(row1, 12, 0);
-  lv_obj_set_style_translate_y(row1, -10, 0);
+  // 뒤로가기(y=40, 36px) 중심과 교재명 중심을 맞춘다. 레이아웃은 그대로라
+  // 시간·버튼 Y는 변하지 않고, 아래 두 줄만 같은 만큼 내려간다.
+  const lv_coord_t title_drop = 6;
+  lv_obj_set_style_translate_y(row1, (lv_coord_t)(-10 + title_drop), 0);
 
   // -- 2열: 그룹 과제명 (가운데) --
   lv_obj_t* row2 = lv_label_create(s_hw_detail_screen);
@@ -7267,6 +7317,7 @@ static void show_homework_detail_page(int group_idx) {
   lv_label_set_long_mode(row2, LV_LABEL_LONG_DOT);
   lv_label_set_text(row2, g.group_title);
   lv_obj_set_style_pad_top(row2, 4, 0);
+  lv_obj_set_style_translate_y(row2, title_drop, 0);
 
   // -- 3열: 페이지 (가운데) --
   if (g.page_summary[0]) {
@@ -7279,6 +7330,7 @@ static void show_homework_detail_page(int group_idx) {
     lv_obj_set_width(row3, 300);
     lv_label_set_text(row3, pg_buf);
     lv_obj_set_style_pad_top(row3, 2, 0);
+    lv_obj_set_style_translate_y(row3, title_drop, 0);
   }
 
   // -- 4열: 현재 진행시간 / 총 진행시간 --

@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:material_symbols_icons/symbols.dart';
 
 import '../services/home_weather_service.dart';
 
@@ -11,7 +10,7 @@ class HomeHeaderWeatherIcon extends StatefulWidget {
 
   const HomeHeaderWeatherIcon({
     super.key,
-    this.iconSize = 34,
+    this.iconSize = 40,
     this.color = Colors.white70,
   });
 
@@ -50,7 +49,7 @@ class _HomeHeaderWeatherIconState extends State<HomeHeaderWeatherIcon> {
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return _buildIcon(
-            icon: Symbols.cloud_sync_rounded,
+            asset: 'assets/weather/cloud_sync.png',
             tooltip: '날씨 정보를 불러오는 중',
             color: widget.color.withValues(alpha: 0.68),
             iconSize: iconSize,
@@ -58,7 +57,7 @@ class _HomeHeaderWeatherIconState extends State<HomeHeaderWeatherIcon> {
         }
         if (snapshot.hasError || !snapshot.hasData) {
           return _buildIcon(
-            icon: Symbols.cloud_off_rounded,
+            asset: 'assets/weather/cloud_off.png',
             tooltip: '날씨 정보를 불러오지 못했습니다.',
             color: widget.color.withValues(alpha: 0.68),
             iconSize: iconSize,
@@ -76,7 +75,7 @@ class _HomeHeaderWeatherIconState extends State<HomeHeaderWeatherIcon> {
             '$weatherLabel'
             '${usedFallback ? ' (기본 위치 폴백)' : ''}';
         return _buildIcon(
-          icon: _iconForWeatherCode(weather.weatherCode, weather.isDay),
+          asset: _assetForWeatherCode(weather.weatherCode, weather.isDay),
           tooltip: tooltipMessage,
           color: widget.color,
           iconSize: iconSize,
@@ -86,7 +85,7 @@ class _HomeHeaderWeatherIconState extends State<HomeHeaderWeatherIcon> {
   }
 
   Widget _buildIcon({
-    required IconData icon,
+    required String asset,
     required String tooltip,
     required Color color,
     required double iconSize,
@@ -94,35 +93,45 @@ class _HomeHeaderWeatherIconState extends State<HomeHeaderWeatherIcon> {
     return Tooltip(
       message: tooltip,
       waitDuration: const Duration(milliseconds: 350),
-      child: Icon(icon, color: color, size: iconSize),
+      child: ColorFiltered(
+        colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
+        child: Image.asset(
+          asset,
+          width: iconSize,
+          height: iconSize,
+          gaplessPlayback: true,
+          filterQuality: FilterQuality.medium,
+        ),
+      ),
     );
   }
 
-  IconData _iconForWeatherCode(int weatherCode, bool isDay) {
+  /// Icons8 iOS 7 애니메이션. 원본은 100px이라 화면에서는 40으로만 줄여 그린다.
+  String _assetForWeatherCode(int weatherCode, bool isDay) {
     if (weatherCode == 0) {
-      return isDay ? Symbols.sunny_rounded : Symbols.clear_night_rounded;
+      return isDay ? 'assets/weather/sun.png' : 'assets/weather/clear_night.png';
     }
     if (weatherCode >= 1 && weatherCode <= 3) {
       return isDay
-          ? Symbols.partly_cloudy_day_rounded
-          : Symbols.partly_cloudy_night_rounded;
+          ? 'assets/weather/partly_cloudy_day.png'
+          : 'assets/weather/partly_cloudy_night.png';
     }
     if (weatherCode == 45 || weatherCode == 48) {
-      return Symbols.foggy_rounded;
+      return 'assets/weather/fog.png';
     }
     if ((weatherCode >= 51 && weatherCode <= 67) ||
         (weatherCode >= 80 && weatherCode <= 82)) {
-      return Symbols.rainy_rounded;
+      return 'assets/weather/rain.png';
     }
     if ((weatherCode >= 71 && weatherCode <= 77) ||
         weatherCode == 85 ||
         weatherCode == 86) {
-      return Symbols.snowing_rounded;
+      return 'assets/weather/snow.png';
     }
     if (weatherCode == 95 || weatherCode == 96 || weatherCode == 99) {
-      return Symbols.thunderstorm_rounded;
+      return 'assets/weather/thunder.png';
     }
-    return Symbols.cloudy_rounded;
+    return 'assets/weather/cloud.png';
   }
 
   String _weatherLabelForCode(int weatherCode) {

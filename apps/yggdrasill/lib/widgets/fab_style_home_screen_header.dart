@@ -46,10 +46,13 @@ class FabStyleHomeScreenHeader extends StatelessWidget {
       fontWeight: FontWeight.w600,
     );
     final isGradingHeader = secondaryText != null;
+    final hasStatusBody = (statsText != null && statsText!.isNotEmpty) ||
+        showAnchorDateHint;
 
     return Row(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
+        if (isGradingHeader || hasStatusBody)
         FabStyleGlassPanel(
           useTopButtonCapsuleBackground: brightness == Brightness.light,
           useFabTabBarBackground: brightness == Brightness.dark,
@@ -66,42 +69,22 @@ class FabStyleHomeScreenHeader extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    HomeHeaderWeatherIcon(
-                      iconSize: 30,
-                      color: style.icon,
-                    ),
-                    const SizedBox(width: 12),
-                    Flexible(
-                      child: Wrap(
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        spacing: 12,
-                        runSpacing: 4,
-                        children: [
-                          Text(
-                            dateTimeText,
-                            style: dateStyle,
-                            textHeightBehavior: const TextHeightBehavior(
-                              applyHeightToFirstAscent: false,
-                              applyHeightToLastDescent: false,
-                            ),
-                          ),
-                          if (statsText != null && statsText!.isNotEmpty)
-                            Text(statsText!, style: statsStyle),
-                          if (showAnchorDateHint)
-                            Text(
-                              '\uC2AC\uB77C\uC774\uB4DC\uC2DC\uD2B8 \uAE30\uC900\uC77C',
-                              style: hintStyle,
-                            ),
-                        ],
+                    if (statsText != null && statsText!.isNotEmpty)
+                      Text(statsText!, style: statsStyle),
+                    if ((statsText != null && statsText!.isNotEmpty) &&
+                        showAnchorDateHint)
+                      const SizedBox(width: 12),
+                    if (showAnchorDateHint)
+                      Text(
+                        '슬라이드시트 기준일',
+                        style: hintStyle,
                       ),
-                    ),
                   ],
                 ),
         ),
-        if (trailing.isNotEmpty) ...[
+        if ((isGradingHeader || hasStatusBody) && trailing.isNotEmpty)
           const SizedBox(width: 8),
-          ...trailing,
-        ],
+        if (trailing.isNotEmpty) ...trailing,
       ],
     );
   }
@@ -172,11 +155,11 @@ class FabStyleHomeScreenHeader extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   SizedBox(
-                    height: titleLineHeight,
+                    height: 40,
                     child: Align(
                       alignment: Alignment.centerLeft,
                       child: HomeHeaderWeatherIcon(
-                        iconSize: 30,
+                        iconSize: 40,
                         color: style.icon,
                       ),
                     ),
@@ -198,7 +181,7 @@ class FabStyleHomeScreenHeader extends StatelessWidget {
                 ],
               ),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 18),
             SizedBox(
               width: dateColumnWidth,
               child: Column(

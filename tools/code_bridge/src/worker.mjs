@@ -1,6 +1,6 @@
 // Think 코드 작업자. 운영자 PC에서 `npm start`로 켠다. Ctrl+C로 끈다.
 // 대기열에서 요청을 하나씩 가져간다.
-//   조사: 작업 폴더에서 Cursor를 읽기 전용(plan)으로 돌린다.
+//   조사·조율: 작업 폴더에서 Cursor를 읽기 전용(plan)으로 돌린다. 조율은 Think의 계획 초안을 코드에 비춰 검토한다.
 //   수정: 작업 폴더 스냅샷의 복사본(worktree)에서 편집·삭제만 허용해 돌리고 diff를 올린다. 작업 폴더는 그대로다.
 //   적용·되돌리기: 운영자가 승인한 diff를 `git apply --check` 통과 시에만 작업 폴더에 반영한다.
 // 설계: docs/architecture/ai-code-bridge.md, docs/architecture/ai-think-actions.md
@@ -21,7 +21,9 @@ import {
   classifyError,
   loadConfig,
   looksSecret,
+  modeLabel,
   parseChangeResult,
+  parsePlanResult,
   parseResult,
   promptFor,
   redact,
@@ -113,6 +115,8 @@ async function processApply(cfg, bridge, job) {
 async function processJob(cfg, bridge, job) {
   if (job.job === 'apply' || job.job === 'revert') return processApply(cfg, bridge, job);
   const change = job.mode === 'change';
+  const label = modeLabel(job.mode);
+  const timeoutMs = change ? cfg.changeTimeoutMs : cfg.roundTimeoutMs;
   const prompt = promptFor(job);
   const tools = new ToolCounter();
   const state = repoState(cfg.repo);
@@ -145,7 +149,19 @@ async function processJob(cfg, bridge, job) {
     }
   };
 
+  let lastProgress = Date.now();
+  const progress = () => {
+    if (Date.now() - lastProgress < cfg.progressLogMs) return;
+    lastProgress = Date.now();
+    const calls = tools.list().reduce((n, t) => n + t.count, 0);
+    const minutes = Math.floor((Date.now() - startedAt) / 60_000);
+    const files = change && work ? git(work.dir, ['status', '--porcelain']) : null;
+    const changed = files == null ? '' : ` · 바뀐 파일 ${files.split('\n').filter(Boolean).length}개`;
+    log(`${label} 진행 중 · ${minutes}분 · 도구 ${calls}회${changed} (제한 ${Math.round(timeoutMs / 60_000)}분)`);
+  };
+
   const beat = async () => {
+    progress();
     try {
       const hb = await bridge.heartbeat(job.id, agent?.agentId, run?.id);
       if (hb.lost) {
@@ -161,12 +177,12 @@ async function processJob(cfg, bridge, job) {
     }
   };
 
-  log(`${change ? '수정' : '조사'} 시작: "${job.title}" (회차 ${job.round}, 시도 ${job.attempts})`);
+  log(`${label} 시작: "${job.title}" (회차 ${job.round}, 시도 ${job.attempts})`);
   const timeout = setTimeout(() => {
     timedOut = true;
-    log('시간 초과로 멈춥니다.');
+    log(`${Math.round(timeoutMs / 60_000)}분이 지나 멈춥니다.`);
     void stopRun();
-  }, cfg.roundTimeoutMs);
+  }, timeoutMs);
 
   try {
     if (change) {
@@ -198,7 +214,16 @@ async function processJob(cfg, bridge, job) {
     } else if (stopping) {
       await bridge.fail(job.id, 'internal', '작업자를 꺼서 대기열로 돌려놓았습니다.', true, round({ model }));
     } else if (timedOut) {
-      await bridge.fail(job.id, 'timeout', `${Math.round(cfg.roundTimeoutMs / 60000)}분 안에 끝나지 않았습니다.`, false, round({ model }));
+      const minutes = Math.round(timeoutMs / 60_000);
+      const partial = change ? changeResult(work, '') : null;
+      if (partial && !partial.error && partial.result.diff_stats.files > 0) {
+        // 고친 데까지는 남겨 운영자가 보게 한다. 형식 확인 필요(needs_review)라 적용 버튼은 나오지 않는다.
+        partial.result.summary = `${minutes}분 안에 끝나지 않아 멈췄습니다. 여기까지 고친 내용입니다(완성되지 않음). ${partial.result.summary}`;
+        const out = await bridge.complete(job.id, round({ model, usage: result.usage ?? null, result: partial.result, parse_ok: false }));
+        log(`시간 초과: 여기까지 고친 diff를 남겼습니다 (${out.status}, 파일 ${partial.result.diff_stats.files}개).`);
+      } else {
+        await bridge.fail(job.id, 'timeout', `${minutes}분 안에 끝나지 않았습니다.`, false, round({ model }));
+      }
     } else if (result.status !== 'finished') {
       const message = result.error?.message ?? `run ${result.status}`;
       await bridge.fail(job.id, 'run_error', message, false, round({ model, usage: result.usage ?? null }));
@@ -220,7 +245,7 @@ async function processJob(cfg, bridge, job) {
       }
     } else {
       const text = redact(result.result ?? '');
-      const parsed = parseResult(text);
+      const parsed = job.mode === 'plan' ? parsePlanResult(text) : parseResult(text);
       const out = await bridge.complete(job.id, round({
         model,
         usage: result.usage ?? null,
@@ -228,7 +253,7 @@ async function processJob(cfg, bridge, job) {
         result: parsed.ok ? redactDeep(parsed.value) : null,
         parse_ok: parsed.ok,
       }));
-      log(`조사 끝: ${out.status}${parsed.ok ? '' : ` (형식 불일치: ${parsed.reason})`}`);
+      log(`${label} 끝: ${out.status}${parsed.ok ? '' : ` (형식 불일치: ${parsed.reason})`}${out.review ? ' · Think가 검토합니다' : ''}`);
     }
   } catch (e) {
     if (lost || (e instanceof BridgeError && e.code === 'not_owner')) {
@@ -236,7 +261,7 @@ async function processJob(cfg, bridge, job) {
       return;
     }
     const c = classifyError(e);
-    log(`조사 실패 (${c.code}${c.retryable ? ', 다시 시도' : ''}): ${c.message}`);
+    log(`${label} 실패 (${c.code}${c.retryable ? ', 다시 시도' : ''}): ${c.message}`);
     try {
       await bridge.fail(job.id, c.code, c.message, c.retryable, round());
     } catch (reportError) {
@@ -266,7 +291,10 @@ async function main() {
   const bridge = createBridgeClient(cfg);
   const info = { version: VERSION, model: cfg.model, node: process.versions.node, sdk: '@cursor/sdk' };
   log(`작업자 ${cfg.workerId} 시작 · 모델 ${cfg.model} · 저장소 ${cfg.repo}`);
-  log('조사: 읽기 전용(plan). 수정: 복사본에서 편집·삭제만(셸 없음). 적용은 운영자 승인 뒤. Ctrl+C로 끕니다.');
+  log(
+    `조사·조율: 읽기 전용(제한 ${Math.round(cfg.roundTimeoutMs / 60_000)}분). ` +
+      `수정: 복사본에서 편집·삭제만, 셸 없음(제한 ${Math.round(cfg.changeTimeoutMs / 60_000)}분). 적용은 운영자 승인 뒤. Ctrl+C로 끕니다.`,
+  );
   try {
     const pruned = pruneRefs(cfg.repo, 30);
     if (pruned > 0) log(`30일 지난 참조 ${pruned}개를 지웠습니다.`);

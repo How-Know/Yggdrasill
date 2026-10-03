@@ -45,7 +45,7 @@ It records decisions made on 2026-09-28 that the schema alone does not show.
 
 Design and current phase: `docs/architecture/ai-code-bridge.md`.
 
-- Investigate runs get read tools only (`read`, `grep`, `glob`, `ls`, mode `plan`).
+- Investigate and plan runs (`mode = 'investigate' | 'plan'`) get read tools only (`read`, `grep`, `glob`, `ls`, SDK mode `plan`).
   Change runs (`mode = 'change'`) add `edit` and `delete` only, run in an isolated git worktree of a
   working-tree snapshot, and set `CODE_BRIDGE_WRITE_ROOT` so the hook blocks every path outside it.
   Never add shell, MCP, PR, commit, or push tools. The real working folder changes only through an
@@ -59,7 +59,16 @@ Design and current phase: `docs/architecture/ai-code-bridge.md`.
   `tools/code_bridge/test/deny_secrets.test.mjs` passing. The `preToolUse` matcher must include
   `Write|Delete` (that is how the SDK reports edits and deletes).
 - Code review (`ai_code_bridge/code_review.ts`) posts at most one assistant message per request and
-  asks at most one follow-up round (investigate mode, round < max_rounds). It never applies anything.
+  asks follow-up rounds only while round < max_rounds (investigate: 2, plan: 3). It never applies anything.
+- Code changes go through coordination: Think calls `start_code_plan`, which starts a read-only plan
+  request without approval (the one exception to propose-then-approve; it still counts against the daily
+  limit and is recorded as an `applied` `code_plan` action). After the last round, the review proposes a
+  `code_change` action (`payload.plan_request_id`) — the 조율본 — that the operator must approve, and the
+  resulting diff still needs a second approval to apply. Do not let plan mode edit files or skip either approval.
+- Unresolved points in a 조율본 are `spec.decisions` (multiple choice, recommended option first). The operator
+  answers them in the card; `ai_code_plan_revise` records the answers as `owner_answers` plus
+  "운영자 결정 — " constraints and re-runs one plan round. Keep those constraints when writing a new 조율본,
+  and never treat a recommended option as the operator's answer.
 
 ## Out of scope unless the user asks
 

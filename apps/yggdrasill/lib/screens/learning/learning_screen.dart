@@ -15,7 +15,6 @@ class LearningScreen extends StatefulWidget {
 
 class _LearningScreenState extends State<LearningScreen> {
   int _selectedTab = 0; // 0: 커리큘럼, 1: 문제은행
-  final FabStyleScreenTabBarOverlay _tabOverlay = FabStyleScreenTabBarOverlay();
 
   @override
   void initState() {
@@ -50,7 +49,7 @@ class _LearningScreenState extends State<LearningScreen> {
   @override
   void dispose() {
     requestedLearningTab.removeListener(_onRequestedLearningTabChanged);
-    _tabOverlay.dispose();
+    sharedScreenTabBar.unbindMenu(3);
     ExamModeService.instance.suppressExamActionCluster.value = false;
     super.dispose();
   }
@@ -70,11 +69,10 @@ class _LearningScreenState extends State<LearningScreen> {
   }
 
   void _syncTabOverlay() {
-    _tabOverlay.sync(
-      context,
+    sharedScreenTabBar.bind(
+      menuIndex: 3,
       selectedIndex: _selectedTab,
-      tabs: const ['커리큘럼', '문제은행'],
-      onTabSelected: _onLearningTabSelected,
+      onSelected: _onLearningTabSelected,
     );
   }
 

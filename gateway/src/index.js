@@ -1632,6 +1632,46 @@ client.on('message', async (topic, payload) => {
         return;
       }
       if (action === 'unbind') {
+        if (msg.print_notice) {
+          const { data: bind, error: bindErr } = await supa
+            .from('m5_device_bindings')
+            .select('student_id')
+            .eq('academy_id', academy_id)
+            .eq('device_id', device_id)
+            .eq('active', true)
+            .maybeSingle();
+          if (bindErr || !bind?.student_id) {
+            console.error('[gateway] notice print binding missing', { device_id, bindErr });
+          } else {
+            const { data: openRows, error: openErr } = await supa
+              .from('attendance_records')
+              .select('id')
+              .eq('academy_id', academy_id)
+              .eq('student_id', bind.student_id)
+              .not('arrival_time', 'is', null)
+              .is('departure_time', null)
+              .order('arrival_time', { ascending: false })
+              .limit(1);
+            const open = openRows && openRows[0];
+            if (openErr || !open) {
+              console.error('[gateway] notice print attendance missing', { student_id: bind.student_id, openErr });
+            } else {
+              const now = new Date().toISOString();
+              const { error: printErr } = await supa
+                .from('attendance_records')
+                .update({
+                  notice_print_requested_at: now,
+                  notice_printed_at: null,
+                  notice_print_error: null,
+                  updated_at: now
+                })
+                .eq('academy_id', academy_id)
+                .eq('id', open.id);
+              if (printErr) console.error('[gateway] notice print request error', printErr);
+              else console.log('[gateway] notice print requested', { student_id: bind.student_id, attendance_id: open.id });
+            }
+          }
+        }
         const { error } = await supa.rpc('m5_unbind_device', { p_academy_id: academy_id, p_device_id: device_id });
         if (error) console.error('[gateway] unbind rpc error', error);
         publish(`academies/${academy_id}/devices/${device_id}/ack`, JSON.stringify({ ok: !error, action: 'unbind', error: error?.message }), { qos: 1, retain: false });

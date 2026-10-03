@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../widgets/home_grading_edit_icon.dart';
+import '../widgets/home_header_weather_icon.dart';
+import '../widgets/home_status_dashboard_icon.dart';
+import 'design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import '../widgets/navigation_rail.dart';
 import '../services/data_manager.dart';
 import '../models/attendance_record.dart';
@@ -47,6 +51,7 @@ import 'timetable/components/student_time_info_dialog.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import 'timetable/views/makeup_view.dart';
 import '../widgets/dialog_tokens.dart';
+import '../widgets/utility_glass_dialog_shell.dart';
 import '../widgets/dark_panel_route.dart';
 import '../widgets/flow_setup_dialog.dart';
 import '../widgets/homework_assign_dialog.dart';
@@ -3367,6 +3372,86 @@ class _MainScreenState extends State<MainScreen>
     await showMakeupManagementDialog(context);
   }
 
+  static const List<FabTabIconPair> _homeTabIcons = [
+    FabTabIconPair(
+      outlineSvg: homeStatusDashboardOutlineSvg,
+      filledSvg: homeStatusDashboardFilledSvg,
+    ),
+    FabTabIconPair(
+      outlineSvg: homeGradingEditOutlineSvg,
+      filledSvg: homeGradingEditFilledSvg,
+      size: 24,
+    ),
+  ];
+
+  List<String> _sharedTabLabels(int menu) {
+    switch (menu) {
+      case 0:
+        return const ['현황', '채점'];
+      case 1:
+        return const ['학생', '성향'];
+      case 2:
+        return const ['수업', '일정'];
+      case 3:
+        return const ['커리큘럼', '문제은행'];
+      case 4:
+        return const ['교재', '시험', '기타'];
+      case 5:
+        return const ['학원', '선생님', '일반'];
+      default:
+        return const [];
+    }
+  }
+
+  bool _sharedTabBarVisible(int menu) {
+    if (menu == 0 &&
+        (rightSideSheetPdfPanelSession.value != null ||
+            obscuringPopupRouteCount.value > 0)) {
+      return false;
+    }
+    if (sharedScreenTabBar.menuIndex == menu &&
+        sharedScreenTabBar.forceHidden) {
+      return false;
+    }
+    return _sharedTabLabels(menu).isNotEmpty;
+  }
+
+  Widget _buildSharedMenuTabBar(BuildContext context) {
+    return ListenableBuilder(
+      listenable: Listenable.merge([
+        sharedScreenTabBar,
+        rightSideSheetPdfPanelSession,
+        obscuringPopupRouteCount,
+        leftSideSheetClipWidthNotifier,
+      ]),
+      builder: (context, _) {
+        final menu = _selectedIndex;
+        if (!_sharedTabBarVisible(menu)) return const SizedBox.shrink();
+        final tabs = _sharedTabLabels(menu);
+        final selected = sharedScreenTabBar.menuIndex == menu
+            ? sharedScreenTabBar.selectedIndex.clamp(0, tabs.length - 1)
+            : 0;
+        final railWidth = NavigationRailTheme.of(context).minWidth ??
+            navRailMinWidth;
+        return Positioned(
+          left: railWidth + leftSideSheetClipWidthNotifier.value,
+          right: 0,
+          bottom: FabTabBarTokens.fabBarBottomInset,
+          child: Center(
+            child: FabStyleTabBar(
+              selectedIndex: selected,
+              tabs: tabs,
+              onTabSelected: (index) {
+                sharedScreenTabBar.onSelected?.call(index);
+              },
+              tabIcons: menu == 0 ? _homeTabIcons : null,
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Widget _buildContent() {
     switch (_selectedIndex) {
       case 0:
@@ -3742,24 +3827,44 @@ class _MainScreenState extends State<MainScreen>
                                                                       CrossAxisAlignment
                                                                           .center,
                                                                   children: [
-                                                                    Padding(
-                                                                      padding:
-                                                                          const EdgeInsets
-                                                                              .only(
-                                                                        left:
-                                                                            _sideSheetDateHeaderLeftInset,
-                                                                      ),
-                                                                      child:
-                                                                          _SideSheetDateHeader(
-                                                                        date:
-                                                                            _sideSheetAnchorDate,
-                                                                        scale:
-                                                                            sideSheetScale,
-                                                                        onDateTap:
-                                                                            _pickSideSheetAnchorDate,
+                                                                    Flexible(
+                                                                      child: Padding(
+                                                                        padding:
+                                                                            const EdgeInsets.only(
+                                                                          left:
+                                                                              _sideSheetDateHeaderLeftInset,
+                                                                        ),
+                                                                        child:
+                                                                            _SideSheetDateHeader(
+                                                                          date:
+                                                                              _sideSheetAnchorDate,
+                                                                          scale:
+                                                                              sideSheetScale,
+                                                                          onDateTap:
+                                                                              _pickSideSheetAnchorDate,
+                                                                        ),
                                                                       ),
                                                                     ),
-                                                                    const Spacer(),
+                                                                    const SizedBox(
+                                                                        width:
+                                                                            12),
+                                                                    _SideSheetClockText(
+                                                                      scale:
+                                                                          sideSheetScale,
+                                                                    ),
+                                                                    const SizedBox(
+                                                                        width:
+                                                                            18),
+                                                                    HomeHeaderWeatherIcon(
+                                                                      iconSize:
+                                                                          40,
+                                                                      color: PreviewAcademyPanelStyle
+                                                                              .forBrightness(
+                                                                            Theme.of(context)
+                                                                                .brightness,
+                                                                          )
+                                                                          .icon,
+                                                                    ),
                                                                   ],
                                                                 ),
                                                               ),
@@ -4270,6 +4375,7 @@ class _MainScreenState extends State<MainScreen>
             ],
           ),
           _buildUtilityToolbarOverlay(context),
+          _buildSharedMenuTabBar(context),
         ],
       ),
       floatingActionButtonLocation:
@@ -5399,6 +5505,25 @@ class _SideSheetDateHeader extends StatelessWidget {
         FabTabBarTokens.previewAcademyMainTitleStyle(panelStyle).copyWith(
       fontSize: FabTabBarTokens.previewAcademyMainTitleFontSize * scale,
     );
+    final parenStyle = dateStyle.copyWith(
+      fontSize: (dateStyle.fontSize ?? 32) * 0.85,
+      height: 1.0,
+    );
+    final week = ['월', '화', '수', '목', '금', '토', '일'];
+    final month = date.month.toString().padLeft(2, '0');
+    final day = date.day.toString().padLeft(2, '0');
+    const textHeightBehavior = TextHeightBehavior(
+      applyHeightToFirstAscent: false,
+      applyHeightToLastDescent: false,
+    );
+    Widget paren(String mark) {
+      return Text(
+        mark,
+        style: parenStyle,
+        textScaler: TextScaler.noScaling,
+        textHeightBehavior: textHeightBehavior,
+      );
+    }
 
     return Tooltip(
       message: '날짜 선택',
@@ -5407,13 +5532,26 @@ class _SideSheetDateHeader extends StatelessWidget {
         child: GestureDetector(
           onTap: onDateTap,
           behavior: HitTestBehavior.opaque,
-          child: Text(
-            _getTodayDateString(date),
-            style: dateStyle,
-            textHeightBehavior: const TextHeightBehavior(
-              applyHeightToFirstAscent: false,
-              applyHeightToLastDescent: false,
+          child: Text.rich(
+            TextSpan(
+              style: dateStyle,
+              children: [
+                TextSpan(text: '$month.$day '),
+                WidgetSpan(
+                  alignment: PlaceholderAlignment.middle,
+                  child: paren('('),
+                ),
+                TextSpan(text: week[date.weekday - 1]),
+                WidgetSpan(
+                  alignment: PlaceholderAlignment.middle,
+                  child: paren(')'),
+                ),
+              ],
             ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textScaler: TextScaler.noScaling,
+            textHeightBehavior: textHeightBehavior,
           ),
         ),
       ),
@@ -5501,15 +5639,61 @@ class _TooltipHoverAreaState extends State<_TooltipHoverArea> {
   }
 }
 
-String _formatTime(DateTime dt) {
-  return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+class _SideSheetClockText extends StatefulWidget {
+  final double scale;
+
+  const _SideSheetClockText({this.scale = 1.0});
+
+  @override
+  State<_SideSheetClockText> createState() => _SideSheetClockTextState();
 }
 
-// 날짜/요일 포맷 함수 추가
-String _getTodayDateString([DateTime? date]) {
-  final now = date ?? DateTime.now();
-  final week = ['월', '화', '수', '목', '금', '토', '일'];
-  return '${now.year}.${now.month.toString().padLeft(2, '0')}.${now.day.toString().padLeft(2, '0')} (${week[now.weekday - 1]})';
+class _SideSheetClockTextState extends State<_SideSheetClockText> {
+  late DateTime _now;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _now = DateTime.now();
+    _timer = Timer.periodic(const Duration(seconds: 10), (_) {
+      if (!mounted) return;
+      setState(() => _now = DateTime.now());
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final brightness = Theme.of(context).brightness;
+    final panelStyle = PreviewAcademyPanelStyle.forBrightness(brightness);
+    final timeStyle =
+        FabTabBarTokens.previewAcademyMainTitleStyle(panelStyle).copyWith(
+      fontSize: FabTabBarTokens.previewAcademyMainTitleFontSize * widget.scale,
+    );
+    final hour = _now.hour.toString().padLeft(2, '0');
+    final minute = _now.minute.toString().padLeft(2, '0');
+    return Text(
+      '$hour시 $minute분',
+      maxLines: 1,
+      softWrap: false,
+      style: timeStyle,
+      textScaler: TextScaler.noScaling,
+      textHeightBehavior: const TextHeightBehavior(
+        applyHeightToFirstAscent: false,
+        applyHeightToLastDescent: false,
+      ),
+    );
+  }
+}
+
+String _formatTime(DateTime dt) {
+  return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
 }
 
 String _getTodayDateShortString([DateTime? date]) {
@@ -5747,8 +5931,9 @@ extension on _MainScreenState {
         target.student.id,
       );
       if (enabledFlows.isEmpty) return;
-      final result = await showDialog<dynamic>(
+      final result = await showSlidingBottomDialog<dynamic>(
         context: context,
+        barrierLabel: '과제 추가',
         builder: (ctx) => HomeworkQuickAddProxyDialog(
           studentId: target.student.id,
           flows: enabledFlows,

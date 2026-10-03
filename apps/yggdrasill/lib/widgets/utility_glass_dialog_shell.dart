@@ -170,6 +170,42 @@ Future<void> showUtilityGlassDialog({
   );
 }
 
+/// [showModalBottomSheet]와 같이 아래에서 올라오고, 닫힐 때 아래로 내려간다.
+///
+/// 과제추가처럼 위젯이 이미 [Dialog]를 그리는 경우에 쓴다.
+Future<T?> showSlidingBottomDialog<T>({
+  required BuildContext context,
+  required WidgetBuilder builder,
+  bool barrierDismissible = true,
+  String barrierLabel = '닫기',
+}) {
+  return showGeneralDialog<T>(
+    context: context,
+    useRootNavigator: true,
+    barrierDismissible: barrierDismissible,
+    barrierLabel: barrierLabel,
+    barrierColor: Colors.black.withValues(alpha: 0.18),
+    transitionDuration: const Duration(milliseconds: 300),
+    pageBuilder: (dialogContext, animation, secondaryAnimation) {
+      return builder(dialogContext);
+    },
+    transitionBuilder: (context, animation, secondaryAnimation, child) {
+      final curve = CurvedAnimation(
+        parent: animation,
+        curve: Curves.easeOutCubic,
+        reverseCurve: Curves.easeInCubic,
+      );
+      return SlideTransition(
+        position: Tween<Offset>(
+          begin: const Offset(0, 1),
+          end: Offset.zero,
+        ).animate(curve),
+        child: child,
+      );
+    },
+  );
+}
+
 /// 파일 바로가기·PDF 편집 도구모음과 동일하게 화면 하단에 붙는 글래스 시트.
 Future<void> showUtilityGlassBottomSheet({
   required BuildContext context,

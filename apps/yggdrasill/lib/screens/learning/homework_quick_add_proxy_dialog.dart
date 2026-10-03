@@ -5181,6 +5181,7 @@ class HomeworkQuickAddProxyDialogState
     final safe =
         _homeworkTypeValues.contains(currentType) ? currentType : fallbackType;
     return DropdownButtonFormField<String>(
+      isExpanded: true,
       value: safe,
       items: [
         for (final t in _homeworkTypeValues)
@@ -5211,6 +5212,7 @@ class HomeworkQuickAddProxyDialogState
         ? _migratedProblemStage
         : _migratedProblemStageValues.first;
     return DropdownButtonFormField<String>(
+      isExpanded: true,
       value: safe,
       items: [
         for (final t in _migratedProblemStageValues)
@@ -9865,21 +9867,31 @@ class HomeworkQuickAddProxyDialogState
           ],
         );
       }
+      final leading = widget.requirePlanDestination
+          ? Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                destinationChip(label: '오늘', value: 'in_class'),
+                const SizedBox(width: 8),
+                destinationChip(label: '숙제', value: 'homework'),
+                const SizedBox(width: 8),
+                destinationChip(label: '다음', value: 'next_session'),
+              ],
+            )
+          : actionChip(
+              label: '취소',
+              onTap: () => Navigator.pop(context, null),
+            );
       return Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          if (widget.requirePlanDestination) ...[
-            destinationChip(label: '오늘', value: 'in_class'),
-          const SizedBox(width: 8),
-            destinationChip(label: '숙제', value: 'homework'),
-            const SizedBox(width: 8),
-            destinationChip(label: '다음', value: 'next_session'),
-          ] else
-            actionChip(
-              label: '취소',
-              onTap: () => Navigator.pop(context, null),
+          Flexible(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: leading,
             ),
-          const Spacer(),
+          ),
+          const SizedBox(width: 8),
           confirmButton(
             label: _isChildAddMode ? '하위 과제 추가' : '과제 내기',
             onTap: _submitting ||
@@ -9970,27 +9982,39 @@ class HomeworkQuickAddProxyDialogState
         );
       }
       if (hasBookSelection) {
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Expanded(
-              flex: 7,
-              child: Column(
-                children: [
-                  rangePanel,
-                  const SizedBox(height: bookRangeBottomSpacer),
-                ],
-              ),
-            ),
-            const SizedBox(width: 24),
-            Expanded(
-              flex: 3,
-              child: rightFormColumn(
-                includeBody: true,
-                includeBottomPadding: true,
-              ),
-            ),
-          ],
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            const gap = 24.0;
+            const rightMinWidth = 360.0;
+            final available = constraints.maxWidth;
+            final rightWidth = available <= gap
+                ? 0.0
+                : math.min(
+                    math.max(rightMinWidth, (available - gap) * 0.3),
+                    available - gap,
+                  );
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  child: Column(
+                    children: [
+                      rangePanel,
+                      const SizedBox(height: bookRangeBottomSpacer),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: gap),
+                SizedBox(
+                  width: rightWidth,
+                  child: rightFormColumn(
+                    includeBody: true,
+                    includeBottomPadding: true,
+                  ),
+                ),
+              ],
+            );
+          },
         );
       }
       return rightFormColumn(

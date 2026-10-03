@@ -751,21 +751,36 @@ class TextbookVlmWonriMiddleSolutionPageResult {
     }
 
     final rawItems = (map['items'] as List?) ?? const <dynamic>[];
-    final rawBoxes = (map['boxes'] as List?) ?? const <dynamic>[];
+    final rawBoxes = [
+      for (final raw in (map['boxes'] as List?) ?? const <dynamic>[])
+        if (raw is Map) raw,
+    ];
+    // 2단 조판이라 왼쪽 단 박스가 오른쪽 단 박스보다 먼저 읽힌다.
+    num? readingOrder(Map<dynamic, dynamic> box) {
+      final region = box['region'];
+      if (region is! List || region.length < 4) return null;
+      final values = region.whereType<num>().toList();
+      if (values.length < 4) return null;
+      final column = (values[1] + values[3]) / 2 >= 500 ? 1 : 0;
+      return column * 1000 + values[0];
+    }
+
+    if (rawBoxes.every((box) => readingOrder(box) != null)) {
+      rawBoxes.sort((a, b) => readingOrder(a)!.compareTo(readingOrder(b)!));
+    }
     return TextbookVlmWonriMiddleSolutionPageResult(
       rawPage: asInt(map['raw_page']),
       boxes: <TextbookWonriMiddleSolutionBox>[
         for (final raw in rawBoxes)
-          if (raw is Map)
-            (
-              title: '${raw['title'] ?? ''}'.trim(),
-              from: raw['body_page_from'] is num
-                  ? (raw['body_page_from'] as num).toInt()
-                  : null,
-              to: raw['body_page_to'] is num
-                  ? (raw['body_page_to'] as num).toInt()
-                  : null,
-            ),
+          (
+            title: '${raw['title'] ?? ''}'.trim(),
+            from: raw['body_page_from'] is num
+                ? (raw['body_page_from'] as num).toInt()
+                : null,
+            to: raw['body_page_to'] is num
+                ? (raw['body_page_to'] as num).toInt()
+                : null,
+          ),
       ],
       items: <TextbookVlmWonriMiddleSolutionItem>[
         for (final raw in rawItems)

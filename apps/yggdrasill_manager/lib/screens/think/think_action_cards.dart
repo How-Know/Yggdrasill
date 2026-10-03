@@ -109,7 +109,8 @@ class _ClosedLine extends StatelessWidget {
           Icon(icon, size: 14, color: kThinkHint),
           const SizedBox(width: 8),
           Expanded(
-            child: Text(text, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: kThinkHint, fontSize: 12)),
+            child: Text(text,
+                maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: kThinkHint, fontSize: 12)),
           ),
         ],
       ),
@@ -167,8 +168,16 @@ class _ThinkActionCardState extends State<ThinkActionCard> with _BusyState {
 
   @override
   Widget build(BuildContext context) {
+    final answered = a.result?['answers'];
+    if (a.superseded && a.result?['revision_request_id'] != null && answered is List) {
+      return _ClosedLine(
+        icon: Icons.question_answer_outlined,
+        text: '조율본 · 고른 답 ${answered.length}개로 다시 조율함${a.title.isEmpty ? '' : ' · ${a.title}'}',
+      );
+    }
     if (a.superseded) {
-      return _ClosedLine(icon: Icons.low_priority, text: '${a.kind.label} 제안 · 새 제안으로 대체됨${a.title.isEmpty ? '' : ' · ${a.title}'}');
+      return _ClosedLine(
+          icon: Icons.low_priority, text: '${a.kind.label} 제안 · 새 제안으로 대체됨${a.title.isEmpty ? '' : ' · ${a.title}'}');
     }
     if (a.status == ThinkActionStatus.rejected) {
       return _ClosedLine(icon: Icons.block, text: '${a.kind.label} 제안 · 거절함${_subject.isEmpty ? '' : ' · $_subject'}');
@@ -197,6 +206,7 @@ class _ThinkActionCardState extends State<ThinkActionCard> with _BusyState {
     final change = a.kind == ThinkActionKind.codeChange;
     final mode = change ? ThinkCodeMode.change : ThinkCodeMode.investigate;
     final spec = ThinkCodeSpec.fromJson(a.payload['spec']);
+    if (change && (a.payload['plan_request_id'] ?? '').toString().isNotEmpty) return _planProposal(spec);
     final basedOn = a.payload['spec'] is Map ? (a.payload['spec'] as Map)['based_on'] : null;
     final basedTitle = basedOn is Map ? (basedOn['title'] ?? '').toString() : '';
     return _CardFrame(
@@ -248,6 +258,124 @@ class _ThinkActionCardState extends State<ThinkActionCard> with _BusyState {
     );
   }
 
+  /// Think와 Cursor가 주고받아 만든 조율본. 승인하면 그대로 수정 요청이 된다.
+  Widget _planProposal(ThinkCodeSpec spec) {
+    final raw =
+        a.payload['spec'] is Map ? Map<String, dynamic>.from(a.payload['spec'] as Map) : const <String, dynamic>{};
+    final plan = raw['based_on_plan'] is Map
+        ? Map<String, dynamic>.from(raw['based_on_plan'] as Map)
+        : const <String, dynamic>{};
+    final rounds = plan['rounds'] is num ? (plan['rounds'] as num).toInt() : 0;
+    final disagreements = [
+      for (final d in raw['disagreements'] is List ? raw['disagreements'] as List : const [])
+        if (d is Map && (d['point'] ?? '').toString().trim().isNotEmpty) Map<String, dynamic>.from(d),
+    ];
+    final ownerQuestions = [
+      for (final q in raw['owner_questions'] is List ? raw['owner_questions'] as List : const [])
+        if (q.toString().trim().isNotEmpty) q.toString().trim(),
+    ];
+    final decisions = ThinkPlanDecision.listFrom(raw['decisions']).where((d) => d.options.isNotEmpty).toList();
+    final answeredBefore = raw['owner_answers'] is List ? (raw['owner_answers'] as List).length : 0;
+    return _CardFrame(
+      icon: Icons.handshake_outlined,
+      label: '조율본',
+      badge: ThinkBadge(decisions.isEmpty ? '승인 대기' : '답변 대기', color: kThinkLink),
+      children: [
+        _title(a.title),
+        _gap(8),
+        Text(
+          [
+            rounds > 0 ? 'Think와 Cursor가 $rounds회 주고받아 맞춘 계획입니다.' : 'Think와 Cursor가 맞춘 계획입니다.',
+            if (answeredBefore > 0) '앞서 고르신 답 $answeredBefore개가 반영되어 있습니다.',
+          ].join(' '),
+          style: const TextStyle(color: kThinkSub, fontSize: 12),
+        ),
+        _gap(8),
+        ThinkCodeSpecView(spec: spec, mode: ThinkCodeMode.change),
+        if (decisions.isNotEmpty) ...[
+          _gap(),
+          ThinkPlanDecisionsForm(
+            decisions: decisions,
+            busy: busy,
+            onSubmit: (answers) => run(
+              () => _think.revisePlan(a, answers),
+              done: '고른 답으로 다시 조율합니다. Cursor가 확인한 뒤 Think가 새 조율본을 올립니다.',
+            ),
+            onReject: () => run(() => _think.rejectAction(a)),
+          ),
+        ] else ...[
+          if (disagreements.isNotEmpty) ...[
+            thinkCodeLabel('끝까지 의견이 갈린 점'),
+            for (final d in disagreements)
+              Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(color: kThinkQuote, borderRadius: BorderRadius.circular(8)),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SelectableText(
+                      d['point'].toString(),
+                      style: const TextStyle(color: kThinkText, fontSize: 13, fontWeight: FontWeight.w700),
+                    ),
+                    if ((d['think'] ?? '').toString().isNotEmpty) ...[
+                      _gap(4),
+                      SelectableText('Think: ${d['think']}',
+                          style: const TextStyle(color: kThinkText, fontSize: 13, height: 1.5)),
+                    ],
+                    if ((d['cursor'] ?? '').toString().isNotEmpty) ...[
+                      _gap(4),
+                      SelectableText('Cursor: ${d['cursor']}',
+                          style: const TextStyle(color: kThinkText, fontSize: 13, height: 1.5)),
+                    ],
+                  ],
+                ),
+              ),
+          ],
+          if (ownerQuestions.isNotEmpty) ...[
+            thinkCodeLabel('정해 주셔야 할 것'),
+            thinkCodeBullets(ownerQuestions),
+          ],
+          _gap(),
+          ThinkNotice(
+            icon: Icons.shield_outlined,
+            text: ownerQuestions.isEmpty && disagreements.isEmpty
+                ? '승인하면 Cursor가 격리 폴더에서 이 계획대로 코드를 고치고 변경(diff)을 돌려줍니다. '
+                    '실제 작업 폴더는 diff를 확인한 뒤 한 번 더 승인해야 바뀝니다.'
+                : '갈린 점이나 정할 것이 있으면 "고쳐서 구현"에서 할 일에 결정을 적어 주세요. '
+                    '승인해도 실제 작업 폴더는 diff를 확인한 뒤 한 번 더 승인해야 바뀝니다.',
+          ),
+          _gap(),
+          _workerLine(_code),
+          _gap(),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              ElevatedButton.icon(
+                onPressed:
+                    busy ? null : () => run(() => _think.applyAction(a), done: '조율본대로 구현을 시작합니다. 진행 상황은 이 카드에 표시됩니다.'),
+                style: thinkPrimaryButton(),
+                icon: const Icon(Icons.check, size: 16),
+                label: const Text('이대로 구현'),
+              ),
+              OutlinedButton.icon(
+                onPressed: busy ? null : () => _editAndSend(spec, ThinkCodeMode.change),
+                style: thinkOutlineButton(),
+                icon: const Icon(Icons.edit_outlined, size: 16),
+                label: const Text('고쳐서 구현'),
+              ),
+              TextButton(
+                onPressed: busy ? null : () => run(() => _think.rejectAction(a)),
+                child: const Text('거절', style: TextStyle(color: kThinkSub)),
+              ),
+            ],
+          ),
+        ],
+      ],
+    );
+  }
+
   Future<void> _editAndSend(ThinkCodeSpec spec, ThinkCodeMode mode) async {
     final edited = await ThinkCodeProposalDialog.show(context, title: a.title, spec: spec, mode: mode);
     if (edited == null || !mounted) return;
@@ -269,9 +397,10 @@ class _ThinkActionCardState extends State<ThinkActionCard> with _BusyState {
     final r = _code.byId(id);
     if (r != null) return ThinkCodeRequestCard(request: r);
     final change = a.kind == ThinkActionKind.codeChange;
+    final plan = a.kind == ThinkActionKind.codePlan;
     return _CardFrame(
-      icon: change ? Icons.build_outlined : Icons.manage_search,
-      label: change ? '코드 수정' : '코드 조사',
+      icon: plan ? Icons.handshake_outlined : (change ? Icons.build_outlined : Icons.manage_search),
+      label: plan ? 'Cursor와 조율' : (change ? '코드 수정' : '코드 조사'),
       children: [
         _title(a.title),
         _gap(8),
@@ -331,9 +460,7 @@ class _ThinkActionCardState extends State<ThinkActionCard> with _BusyState {
         ],
         _gap(),
         Text(
-          isNew
-              ? '왼쪽 트리에 만들 폴더 자리를 흐리게 표시했습니다. 넣기 전에는 폴더도 만들지 않습니다.'
-              : '왼쪽 트리에 제안한 폴더를 강조했습니다. 넣기 전에는 아무것도 바뀌지 않습니다.',
+          isNew ? '왼쪽 트리에 만들 폴더 자리를 흐리게 표시했습니다. 넣기 전에는 폴더도 만들지 않습니다.' : '왼쪽 트리에 제안한 폴더를 강조했습니다. 넣기 전에는 아무것도 바뀌지 않습니다.',
           style: const TextStyle(color: kThinkHint, fontSize: 12, height: 1.5),
         ),
         _gap(),
@@ -342,7 +469,8 @@ class _ThinkActionCardState extends State<ThinkActionCard> with _BusyState {
           runSpacing: 8,
           children: [
             ElevatedButton.icon(
-              onPressed: busy ? null : () => run(() => _think.applyAction(a), done: isNew ? '폴더를 만들고 넣었습니다.' : '폴더에 넣었습니다.'),
+              onPressed:
+                  busy ? null : () => run(() => _think.applyAction(a), done: isNew ? '폴더를 만들고 넣었습니다.' : '폴더에 넣었습니다.'),
               style: thinkPrimaryButton(),
               icon: const Icon(Icons.check, size: 16),
               label: Text(isNew ? '폴더 만들고 넣기' : '여기에 넣기'),
@@ -408,9 +536,7 @@ class _ThinkActionCardState extends State<ThinkActionCard> with _BusyState {
           ),
           _gap(8),
           Text(
-            n('children') > 0
-                ? '안에 있는 ${n('children')}개 항목은 이 폴더가 있던 자리로 올라갑니다. 대화와 발췌는 지워지지 않습니다.'
-                : '빈 폴더입니다.',
+            n('children') > 0 ? '안에 있는 ${n('children')}개 항목은 이 폴더가 있던 자리로 올라갑니다. 대화와 발췌는 지워지지 않습니다.' : '빈 폴더입니다.',
             style: const TextStyle(color: kThinkSub, fontSize: 13, height: 1.5),
           ),
         ];
@@ -509,6 +635,7 @@ class _ThinkCodeRequestCardState extends State<ThinkCodeRequestCard> with _BusyS
   ThinkCodeController get _c => ThinkCodeController.instance;
   ThinkCodeRequest get r => widget.request;
   bool get _change => r.mode == ThinkCodeMode.change;
+  bool get _plan => r.mode == ThinkCodeMode.plan;
 
   ThinkCodeRound? _latest(List<ThinkCodeRound>? rounds) {
     if (rounds == null || rounds.isEmpty) return null;
@@ -525,8 +652,8 @@ class _ThinkCodeRequestCardState extends State<ThinkCodeRequestCard> with _BusyS
     final latest = _latest(rounds);
     final res = latest?.result;
     return _CardFrame(
-      icon: _change ? Icons.build_outlined : Icons.manage_search,
-      label: _change ? '코드 수정' : '코드 조사',
+      icon: _plan ? Icons.handshake_outlined : (_change ? Icons.build_outlined : Icons.manage_search),
+      label: _plan ? 'Cursor와 조율' : (_change ? '코드 수정' : '코드 조사'),
       badge: ThinkBadge(r.statusLabel, color: thinkCodeStatusColor(r.status)),
       trailing: r.round > 0 && !_change
           ? Text('${r.round}/${r.maxRounds}회차', style: const TextStyle(color: kThinkHint, fontSize: 12))
@@ -539,7 +666,10 @@ class _ThinkCodeRequestCardState extends State<ThinkCodeRequestCard> with _BusyS
           if (res != null) ...[
             _gap(),
             ThinkMarkdown(res.summary, fontSize: 13),
-            if (_change && res.checks.isNotEmpty) ...[thinkCodeLabel('적용 뒤 돌려 볼 검사'), thinkCodeBullets(res.checks, mono: true)],
+            if (_change && res.checks.isNotEmpty) ...[
+              thinkCodeLabel('적용 뒤 돌려 볼 검사'),
+              thinkCodeBullets(res.checks, mono: true)
+            ],
           ] else if (latest?.resultText != null && latest!.status != 'running') ...[
             _gap(),
             const Text('결과를 정리하지 못했습니다. 아래 "자세히"에서 원문을 확인하세요.', style: TextStyle(color: kThinkSub, fontSize: 13)),
@@ -550,7 +680,7 @@ class _ThinkCodeRequestCardState extends State<ThinkCodeRequestCard> with _BusyS
           ],
           if (rounds != null && rounds.isNotEmpty || r.status == ThinkCodeStatus.draft)
             ThinkCodeExpansion(
-              title: '자세히 (요청 내용 · 회차별 결과)',
+              title: _plan ? '주고받은 내용 (계획 초안 · 회차별 검토)' : '자세히 (요청 내용 · 회차별 결과)',
               children: [
                 ThinkCodeSection(title: '요청 내용', child: ThinkCodeSpecView(spec: r.spec, mode: r.mode)),
                 for (final round in (rounds ?? const <ThinkCodeRound>[]).reversed) ...[
@@ -597,8 +727,10 @@ class _ThinkCodeRequestCardState extends State<ThinkCodeRequestCard> with _BusyS
         );
       case ThinkCodeStatus.followupQueued:
         notice = ThinkNotice(
-          text: 'Think가 결과를 보고 더 확인할 질문을 보냈습니다. ${r.round + 1}회차 조사를 기다립니다.'
-              '${worker ? '' : ' (작업자 꺼짐)'}',
+          text: (_plan
+                  ? 'Think가 Cursor의 검토를 보고 질문·반론을 보냈습니다. ${r.round + 1}회차 검토를 기다립니다.'
+                  : 'Think가 결과를 보고 더 확인할 질문을 보냈습니다. ${r.round + 1}회차 조사를 기다립니다.') +
+              (worker ? '' : ' (작업자 꺼짐)'),
           icon: Icons.forum_outlined,
         );
       case ThinkCodeStatus.running:
@@ -607,14 +739,24 @@ class _ThinkCodeRequestCardState extends State<ThinkCodeRequestCard> with _BusyS
               ? '취소를 요청했습니다. 작업자가 다음 신호 때 멈춥니다.'
               : _change
                   ? 'Cursor가 격리된 작업 폴더에서 코드를 고치고 있습니다. 마지막 신호 $beat.'
-                  : 'Cursor가 저장소를 읽고 있습니다. 마지막 신호 $beat.',
-          icon: _change ? Icons.build_outlined : Icons.manage_search,
+                  : _plan
+                      ? 'Cursor가 Think의 계획을 코드에 비춰 검토하고 있습니다(읽기만 함). 마지막 신호 $beat.'
+                      : 'Cursor가 저장소를 읽고 있습니다. 마지막 신호 $beat.',
+          icon: _plan ? Icons.handshake_outlined : (_change ? Icons.build_outlined : Icons.manage_search),
           color: kThinkAccent,
         );
       case ThinkCodeStatus.needsReview:
-        notice = const ThinkNotice(text: '답변이 정해진 형식이 아니라 정리하지 못했습니다. 원문을 직접 확인하세요.', icon: Icons.rule, color: kThinkLink);
+        notice = ThinkNotice(
+          text: _change
+              ? '시간 안에 끝나지 않았거나 답변 형식이 달라 정리하지 못했습니다. 그때까지 만든 변경(diff)과 원문은 남겨 두었지만 '
+                  '이 상태로는 적용할 수 없습니다. 이어서 고치려면 Think에게 말해 주세요.'
+              : '답변이 정해진 형식이 아니라 정리하지 못했습니다. 원문을 직접 확인하세요.',
+          icon: Icons.rule,
+          color: kThinkLink,
+        );
       case ThinkCodeStatus.failed:
-        notice = ThinkNotice(text: '실패했습니다. ${r.lastError ?? ''}'.trim(), icon: Icons.error_outline, color: kThinkError);
+        notice =
+            ThinkNotice(text: '실패했습니다. ${r.lastError ?? ''}'.trim(), icon: Icons.error_outline, color: kThinkError);
       case ThinkCodeStatus.cancelled:
         notice = const ThinkNotice(text: '취소했습니다.', icon: Icons.block, color: kThinkHint);
       case ThinkCodeStatus.ready:
@@ -669,10 +811,14 @@ class _ThinkCodeRequestCardState extends State<ThinkCodeRequestCard> with _BusyS
     }
     return [
       if (notice != null) ...[_gap(), notice],
-      if (conflicts.isNotEmpty) ...[thinkCodeLabel('충돌한 파일'), thinkCodeBullets(conflicts, color: kThinkError, mono: true)],
+      if (conflicts.isNotEmpty) ...[
+        thinkCodeLabel('충돌한 파일'),
+        thinkCodeBullets(conflicts, color: kThinkError, mono: true)
+      ],
       if (backup != null) ...[
         _gap(8),
-        SelectableText('직전 상태 백업: $backup', style: const TextStyle(color: kThinkHint, fontSize: 12, fontFamily: 'monospace')),
+        SelectableText('직전 상태 백업: $backup',
+            style: const TextStyle(color: kThinkHint, fontSize: 12, fontFamily: 'monospace')),
       ],
     ];
   }
@@ -680,18 +826,27 @@ class _ThinkCodeRequestCardState extends State<ThinkCodeRequestCard> with _BusyS
   List<Widget> _review() {
     if (r.conversationId == null) return const [];
     final Widget? line = switch (r.reviewStatus) {
-      ThinkReviewStatus.pending => const Row(
+      ThinkReviewStatus.pending => Row(
           children: [
-            SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 1.5, color: kThinkAccent)),
-            SizedBox(width: 8),
-            Text('Think가 결과를 검토하고 있습니다…', style: TextStyle(color: kThinkSub, fontSize: 12)),
+            const SizedBox(
+                width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 1.5, color: kThinkAccent)),
+            const SizedBox(width: 8),
+            Text(
+              _plan ? 'Think가 Cursor의 검토를 읽고 조율하고 있습니다…' : 'Think가 결과를 검토하고 있습니다…',
+              style: const TextStyle(color: kThinkSub, fontSize: 12),
+            ),
           ],
         ),
-      ThinkReviewStatus.done => const Row(
+      ThinkReviewStatus.done => Row(
           children: [
-            Icon(Icons.auto_awesome, size: 14, color: kThinkAccent),
-            SizedBox(width: 8),
-            Expanded(child: Text('Think가 결과를 검토해 이 대화에 답했습니다.', style: TextStyle(color: kThinkSub, fontSize: 12))),
+            const Icon(Icons.auto_awesome, size: 14, color: kThinkAccent),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                _plan ? 'Think가 조율을 마치고 이 대화에 정리했습니다. 조율본이 있으면 아래 카드에서 승인하세요.' : 'Think가 결과를 검토해 이 대화에 답했습니다.',
+                style: const TextStyle(color: kThinkSub, fontSize: 12),
+              ),
+            ),
           ],
         ),
       ThinkReviewStatus.skipped => Text(
@@ -849,7 +1004,8 @@ class _ThinkCodeRequestCardState extends State<ThinkCodeRequestCard> with _BusyS
       builder: (_) => _DecideDialog(initial: r.outcome, note: r.outcomeNote ?? ''),
     );
     if (result == null) return;
-    await run(() => _c.decide(r, result.outcome, result.note.trim().isEmpty ? null : result.note.trim()), done: '판단을 남겼습니다.');
+    await run(() => _c.decide(r, result.outcome, result.note.trim().isEmpty ? null : result.note.trim()),
+        done: '판단을 남겼습니다.');
   }
 }
 
@@ -940,7 +1096,8 @@ class _ThinkCodeProposalDialogState extends State<ThinkCodeProposalDialog> {
     return AlertDialog(
       backgroundColor: kThinkBg,
       shape: thinkDialogShape,
-      title: Text(_change ? '코드 수정 제안 고치기' : '코드 조사 제안 고치기', style: const TextStyle(color: kThinkText, fontWeight: FontWeight.w800)),
+      title: Text(_change ? '코드 수정 제안 고치기' : '코드 조사 제안 고치기',
+          style: const TextStyle(color: kThinkText, fontWeight: FontWeight.w800)),
       content: SizedBox(
         width: 640,
         child: SingleChildScrollView(

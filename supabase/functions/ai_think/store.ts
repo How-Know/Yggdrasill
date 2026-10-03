@@ -475,6 +475,14 @@ export class SupabaseThinkStore implements ThinkStore {
     return normalizeAction(data);
   }
 
+  async startCodePlan(conversationId: string, title: string, spec: Record<string, unknown>): Promise<ActionRow> {
+    const data = check(
+      await this.db.rpc('ai_code_plan_start', { p_conversation_id: conversationId, p_title: title, p_spec: spec }).single(),
+      'ai_code_plan_start',
+    ) as Row;
+    return normalizeAction(data);
+  }
+
   async attachActions(ids: string[], messageId: string): Promise<void> {
     check(await this.db.rpc('ai_action_attach', { p_ids: ids, p_message_id: messageId }), 'ai_action_attach');
   }

@@ -167,8 +167,6 @@ class _TimetableScreenState extends State<TimetableScreen> {
   final TextEditingController _headerSearchController = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
   bool _isSearchExpanded = false;
-  final FabStyleScreenTabBarOverlay _fabTabBarOverlay =
-      FabStyleScreenTabBarOverlay();
   final TimetableActionFabOverlay _actionFabOverlay =
       TimetableActionFabOverlay();
   final TimetableWeekNavOverlay _weekNavOverlay = TimetableWeekNavOverlay();
@@ -780,11 +778,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
   }
 
   void _syncFabOverlays() {
-    _fabTabBarOverlay.sync(
-      context,
+    sharedScreenTabBar.bind(
+      menuIndex: 2,
       selectedIndex: (_viewType == TimetableViewType.classes) ? 0 : 1,
-      tabs: const ['수업', '일정'],
-      onTabSelected: _onTimetableViewTabSelected,
+      onSelected: _onTimetableViewTabSelected,
     );
     _weekNavOverlay.sync(
       context,
@@ -1763,7 +1760,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
   @override
   void dispose() {
     _removeRegisterDropdownMenu(notify: false);
-    _fabTabBarOverlay.dispose();
+    sharedScreenTabBar.unbindMenu(2);
     _weekNavOverlay.dispose();
     _actionFabOverlay.dispose();
     _scheduleSidePanelOpen.dispose();

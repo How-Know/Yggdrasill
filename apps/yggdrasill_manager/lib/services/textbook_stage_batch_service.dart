@@ -668,6 +668,7 @@ class TextbookStageBatchService {
         sectionOf: (position) => targets[position].section,
         scopeKeyOf: (_) => '',
         numberOf: (position) => targets[position].problemNumber,
+        bodyPageOf: (position) => targets[position].displayPage,
       );
       for (final batch in batches) {
         final order = batch.where(pending.contains).toList(growable: false);

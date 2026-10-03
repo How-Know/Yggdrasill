@@ -4,6 +4,9 @@
 enum ThinkActionKind {
   codeRequest('code_request', '코드 조사'),
   codeChange('code_change', '코드 수정'),
+
+  /// Think가 승인 없이 시작한 Cursor 조율(읽기 전용). 처음부터 applied로 남고 카드는 요청 진행을 보여 준다.
+  codePlan('code_plan', 'Cursor와 조율'),
   placeConversation('place_conversation', '대화 분류'),
   deleteCodeRequest('delete_code_request', '코드 요청 삭제'),
   deleteFolder('delete_folder', '폴더 삭제'),
@@ -20,7 +23,7 @@ enum ThinkActionKind {
     return null;
   }
 
-  bool get isCode => this == codeRequest || this == codeChange;
+  bool get isCode => this == codeRequest || this == codeChange || this == codePlan;
   bool get isDelete => this == deleteCodeRequest || this == deleteFolder || this == deleteConversation;
 }
 

@@ -49,8 +49,9 @@ Deno.test('필수 값이 없으면 제안하지 않고 빠진 항목을 돌려�
   assertEquals(body.error, 'missing_fields');
   assertEquals(body.missing, ['goal']);
   assertEquals(store.actions.length, 0);
-  const c = await call('propose_code_change', { ...codeArgs, instructions: [], based_on_request_id: null });
+  const c = await call('start_code_plan', { ...codeArgs, instructions: [], based_on_request_id: null });
   assertEquals(JSON.parse(c.output).missing, ['instructions']);
+  assertEquals(store.plansStarted.length, 0);
 });
 
 Deno.test('코드 조사 제안: 제안 1행만 남기고, 원칙 참조를 함께 넣는다', async () => {
@@ -68,17 +69,34 @@ Deno.test('코드 조사 제안: 제안 1행만 남기고, 원칙 참조를 함�
   assertEquals(JSON.parse(r.output).status, 'proposed');
 });
 
-Deno.test('코드 수정 제안: 근거 요청이 있으면 결론을 붙이고, 없는 요청이면 거절', async () => {
-  const { store, call } = await setup();
-  const args = { ...codeArgs, instructions: ['버튼 색 변경'], based_on_request_id: REQ_ID };
-  const miss = await call('propose_code_change', args);
+Deno.test('조율 시작: 승인 카드 없이 바로 시작하고, 계획 초안·확인할 점·근거 결론을 함께 보낸다', async () => {
+  const { store, conv, call } = await setup();
+  const args = { ...codeArgs, instructions: ['버튼 색 변경'], questions: ['영향 범위'], based_on_request_id: REQ_ID };
+  const miss = await call('start_code_plan', args);
   assertEquals(JSON.parse(miss.output).error, 'based_on_request_not_found');
   store.codeRequests.push(codeRequest());
-  const r = await call('propose_code_change', args);
+  const r = await call('start_code_plan', args);
   assert(r.ok);
-  const spec = store.actions[0].payload.spec as Record<string, unknown>;
+  assertEquals(r.action?.kind, 'code_plan');
+  assertEquals(r.action?.status, 'applied');
+  assertEquals(JSON.parse(r.output).status, 'started');
+  assertEquals(store.plansStarted.length, 1);
+  const { spec, conversationId } = store.plansStarted[0];
+  assertEquals(conversationId, conv.id);
+  assertEquals(spec.instructions, ['버튼 색 변경']);
+  assertEquals(spec.questions, ['영향 범위']);
   assertEquals((spec.based_on as Record<string, unknown>).summary, '가능하다');
-  assertEquals(store.actions[0].kind, 'code_change');
+  assertEquals((spec.memory_refs as unknown[]).length, 1);
+  assertEquals(store.actions.filter((a) => a.status === 'proposed').length, 0);
+});
+
+Deno.test('조율 시작: 하루 한도를 넘으면 시작하지 않고 모델에게 이유를 돌려준다', async () => {
+  const { store, call } = await setup();
+  store.planStartFailure = 'limit';
+  const r = await call('start_code_plan', { ...codeArgs, instructions: ['a'], based_on_request_id: null });
+  assertEquals(r.ok, false);
+  assertEquals(JSON.parse(r.output).error, 'daily_limit');
+  assertEquals(store.actions.length, 0);
 });
 
 Deno.test('분류 제안: 경로를 계산하고, 같은 종류 새 제안은 이전 것을 대체한다', async () => {
@@ -220,7 +238,7 @@ Deno.test('채팅: 정보가 부족하면 도구가 빠진 항목을 모델에�
   const provider = new FakeAiProvider((req) => {
     if (isTitle(req)) return { text: '제목' };
     calls += 1;
-    if (calls === 1) return { functionCalls: [{ name: 'propose_code_change', arguments: { ...codeArgs, instructions: [], based_on_request_id: null } }] };
+    if (calls === 1) return { functionCalls: [{ name: 'start_code_plan', arguments: { ...codeArgs, instructions: [], based_on_request_id: null } }] };
     return { text: '어떤 부분을 바꿀지 알려 주세요.' };
   });
   const events = new EventLog();

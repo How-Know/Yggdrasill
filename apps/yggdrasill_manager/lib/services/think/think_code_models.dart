@@ -55,13 +55,17 @@ enum ThinkCodeStatus {
 
 enum ThinkCodeMode {
   investigate('investigate', '조사'),
-  change('change', '수정');
+  change('change', '수정'),
+
+  /// Think의 계획을 Cursor가 코드에 비춰 검토한다(읽기 전용, 최대 3회). 끝나면 조율본이 승인 카드로 올라온다.
+  plan('plan', '조율');
 
   const ThinkCodeMode(this.db, this.label);
   final String db;
   final String label;
 
-  static ThinkCodeMode parse(String? raw) => raw == 'change' ? change : investigate;
+  static ThinkCodeMode parse(String? raw) =>
+      values.firstWhere((m) => m.db == raw, orElse: () => ThinkCodeMode.investigate);
 }
 
 /// Think가 조사 결과를 읽고 대화에 답을 다는 단계.
@@ -279,6 +283,11 @@ class ThinkCodeRequest {
   String get statusLabel {
     if (status == ThinkCodeStatus.running && cancelRequested) return '취소 중';
     if (status == ThinkCodeStatus.running && mode == ThinkCodeMode.change) return '수정 중';
+    if (status == ThinkCodeStatus.running && mode == ThinkCodeMode.plan) return '조율 중';
+    if (status == ThinkCodeStatus.followupQueued && mode == ThinkCodeMode.plan) return '다음 회차 대기';
+    if (mode == ThinkCodeMode.plan && status == ThinkCodeStatus.ready && reviewStatus == ThinkReviewStatus.pending) {
+      return '조율본 작성 중';
+    }
     return status.label;
   }
 
@@ -352,6 +361,9 @@ class ThinkCodeResult {
     this.questionsForThink = const [],
     this.changes = const [],
     this.checks = const [],
+    this.issues = const [],
+    this.suggestedSteps = const [],
+    this.questionsForOwner = const [],
   });
 
   final String summary;
@@ -365,6 +377,11 @@ class ThinkCodeResult {
   /// 수정 모드: Cursor가 설명한 파일별 변경과 적용 뒤 돌려 볼 검사.
   final List<({String path, String what})> changes;
   final List<String> checks;
+
+  /// 조율 모드: 계획 초안의 문제점, Cursor가 고쳐 쓴 단계, 운영자에게 물을 것.
+  final List<({String step, String problem, String suggestion})> issues;
+  final List<String> suggestedSteps;
+  final List<String> questionsForOwner;
 
   static ThinkCodeResult? fromJson(dynamic raw) {
     if (raw is! Map) return null;
@@ -403,6 +420,13 @@ class ThinkCodeResult {
           if (_str(c['path']).isNotEmpty || _str(c['what']).isNotEmpty) (path: _str(c['path']), what: _str(c['what'])),
       ],
       checks: _strList(j['checks']),
+      issues: [
+        for (final i in _maps(j['issues']))
+          if (_str(i['problem']).isNotEmpty)
+            (step: _str(i['step']), problem: _str(i['problem']), suggestion: _str(i['suggestion'])),
+      ],
+      suggestedSteps: _strList(j['suggested_steps']),
+      questionsForOwner: _strList(j['questions_for_owner']),
     );
   }
 }
@@ -434,7 +458,8 @@ class ThinkDiffStats {
       deletions: _int(j['deletions']),
       list: [
         for (final f in _maps(j['list']))
-          if (_str(f['path']).isNotEmpty) ThinkDiffFileStat(_str(f['path']), _int(f['additions']), _int(f['deletions'])),
+          if (_str(f['path']).isNotEmpty)
+            ThinkDiffFileStat(_str(f['path']), _int(f['additions']), _int(f['deletions'])),
       ],
     );
   }
@@ -495,7 +520,8 @@ List<ThinkDiffFile> parseThinkDiff(String diff) {
   for (var i = 0; i < out.length; i++) {
     final f = out[i];
     if (f.lines.isNotEmpty && f.lines.last.isEmpty) {
-      out[i] = ThinkDiffFile(path: f.path, oldPath: f.oldPath, lines: f.lines.sublist(0, f.lines.length - 1), binary: f.binary);
+      out[i] = ThinkDiffFile(
+          path: f.path, oldPath: f.oldPath, lines: f.lines.sublist(0, f.lines.length - 1), binary: f.binary);
     }
   }
   return out;
@@ -521,10 +547,14 @@ class ThinkCodeRound {
     this.finishedAt,
     this.diff,
     this.diffStats,
+    this.thinkQuestions = const [],
   });
 
   final int round;
   final String status;
+
+  /// 2회차부터: 이 회차를 시작하며 Think가 Cursor에게 보낸 질문·반론.
+  final List<String> thinkQuestions;
   final String? resultText;
   final ThinkCodeResult? result;
 
@@ -545,7 +575,8 @@ class ThinkCodeRound {
   final DateTime? finishedAt;
 
   static const String columns =
-      'round,status,result_text,result,parse_ok,model,duration_ms,usage,tool_calls,repo_state,error,started_at,finished_at';
+      'round,status,result_text,result,parse_ok,model,duration_ms,usage,tool_calls,repo_state,error,started_at,finished_at,'
+      'think_questions';
 
   factory ThinkCodeRound.fromRow(Map<String, dynamic> r) {
     final usage = r['usage'] is Map ? Map<String, dynamic>.from(r['usage'] as Map) : const <String, dynamic>{};
@@ -558,6 +589,7 @@ class ThinkCodeRound {
     return ThinkCodeRound(
       diff: diff.isEmpty ? null : diff,
       diffStats: ThinkDiffStats.fromJson(raw['diff_stats']),
+      thinkQuestions: _strList(r['think_questions']),
       round: _int(r['round']),
       status: _str(r['status']),
       resultText: text.isEmpty ? null : text,
@@ -578,8 +610,59 @@ class ThinkCodeRound {
   }
 }
 
+class ThinkPlanOption {
+  const ThinkPlanOption({required this.id, required this.label, this.detail = '', this.recommended = false});
+  final String id;
+  final String label;
+
+  /// 고르면 무엇이 달라지는지, 장단점, 영향 범위.
+  final String detail;
+  final bool recommended;
+}
+
+/// 조율로 풀리지 않아 운영자가 고를 객관식 질문(조율본 spec.decisions). 추천 보기가 있으면 맨 앞이다.
+class ThinkPlanDecision {
+  const ThinkPlanDecision({
+    required this.id,
+    required this.question,
+    required this.options,
+    this.context = '',
+    this.disagreement = false,
+  });
+
+  final String id;
+  final String question;
+  final String context;
+
+  /// Think와 Cursor 의견이 끝까지 갈린 점. 아니면 운영자만 정할 수 있는 것.
+  final bool disagreement;
+  final List<ThinkPlanOption> options;
+
+  static List<ThinkPlanDecision> listFrom(dynamic raw) => [
+        for (final d in _maps(raw))
+          if (_str(d['id']).isNotEmpty && _str(d['question']).isNotEmpty)
+            ThinkPlanDecision(
+              id: _str(d['id']),
+              question: _str(d['question']),
+              context: _str(d['context']),
+              disagreement: d['kind'] == 'disagreement',
+              options: [
+                for (final o in _maps(d['options']))
+                  if (_str(o['id']).isNotEmpty && _str(o['label']).isNotEmpty)
+                    ThinkPlanOption(
+                      id: _str(o['id']),
+                      label: _str(o['label']),
+                      detail: _str(o['detail']),
+                      recommended: o['recommended'] == true,
+                    ),
+              ],
+            ),
+      ];
+}
+
 class ThinkCodeWorker {
-  const ThinkCodeWorker({required this.workerId, required this.lastSeenAt, this.model, this.version, this.currentRequestId});
+  const ThinkCodeWorker(
+      {required this.workerId, required this.lastSeenAt, this.model, this.version, this.currentRequestId});
 
   final String workerId;
   final DateTime lastSeenAt;

@@ -48,7 +48,7 @@ void fw_publish_bind(const char* studentId);
 void fw_request_bind(const char* studentId, const char* pin);
 // bind ack 성공 시 로컬 바인딩 상태 확정(NVS/LittleFS 저장)
 void fw_commit_bind(const char* studentId);
-void fw_publish_unbind();
+void fw_publish_unbind(bool print_notice = false);
 // 업데이트 재시작 전: 서버 바인딩 해제 후 로컬도 비운다. 전달이 늦으면 다음 접속에서 한 번 더 해제한다.
 void fw_prepare_update_restart(void);
 void fw_clear_local_binding_state(void);

@@ -34,7 +34,13 @@ const _diff = 'diff --git a/lib/a.dart b/lib/a.dart\n'
     'literal 10\n'
     'abcdef\n';
 
-Map<String, dynamic> _action(String id, String kind, {String status = 'proposed', Map<String, dynamic>? payload, Map<String, dynamic>? preview, Map<String, dynamic>? result, String? messageId}) => {
+Map<String, dynamic> _action(String id, String kind,
+        {String status = 'proposed',
+        Map<String, dynamic>? payload,
+        Map<String, dynamic>? preview,
+        Map<String, dynamic>? result,
+        String? messageId}) =>
+    {
       'id': id,
       'conversation_id': 'c1',
       'message_id': messageId,
@@ -47,7 +53,9 @@ Map<String, dynamic> _action(String id, String kind, {String status = 'proposed'
       'created_at': '2026-09-30T01:00:00Z',
     };
 
-Map<String, dynamic> _request(String status, {String mode = 'change', Map<String, dynamic>? applyResult, String? error}) => {
+Map<String, dynamic> _request(String status,
+        {String mode = 'change', Map<String, dynamic>? applyResult, String? error}) =>
+    {
       'id': 'r1',
       'title': '지각 배지 추가',
       'request': {
@@ -108,14 +116,17 @@ void main() {
   group('모델', () {
     test('제안 행: 모르는 종류는 버리고, 종류별 값을 읽는다', () {
       expect(ThinkAction.fromRow(_action('a0', 'drop_table')), isNull);
-      final place = ThinkAction.fromRow(_action('a1', 'place_conversation', payload: {'new_folder_title': '수학', 'new_folder_parent_id': null}))!;
+      final place = ThinkAction.fromRow(
+          _action('a1', 'place_conversation', payload: {'new_folder_title': '수학', 'new_folder_parent_id': null}))!;
       expect(place.pending, isTrue);
       expect(place.newFolderTitle, '수학');
       expect(place.folderId, isNull);
-      final code = ThinkAction.fromRow(_action('a2', 'code_request', status: 'applied', result: {'code_request_id': 'r9'}))!;
+      final code =
+          ThinkAction.fromRow(_action('a2', 'code_request', status: 'applied', result: {'code_request_id': 'r9'}))!;
       expect(code.codeRequestId, 'r9');
       expect(code.kind.isCode, isTrue);
-      final del = ThinkAction.fromRow(_action('a3', 'delete_conversation', status: 'applied', result: {'deleted_id': 'c1', 'deleted_self': true}))!;
+      final del = ThinkAction.fromRow(
+          _action('a3', 'delete_conversation', status: 'applied', result: {'deleted_id': 'c1', 'deleted_self': true}))!;
       expect(del.deletedSelf, isTrue);
       expect(del.kind.isDelete, isTrue);
     });
@@ -143,7 +154,12 @@ void main() {
       expect(ThinkCodeStatus.parse('applied').deletable, isTrue);
       expect(ThinkCodeStatus.parse('reverting').deletable, isFalse);
       final failed = ThinkCodeRequest.fromRow(_request('apply_failed', applyResult: {
-        'apply': {'ok': false, 'error': '충돌', 'conflicts': ['lib/a.dart'], 'backup_ref': 'refs/code-bridge/r1/before-apply'},
+        'apply': {
+          'ok': false,
+          'error': '충돌',
+          'conflicts': ['lib/a.dart'],
+          'backup_ref': 'refs/code-bridge/r1/before-apply'
+        },
       }));
       expect(failed.lastApply!.conflicts, ['lib/a.dart']);
       expect(failed.lastApply!.backupRef, endsWith('before-apply'));
@@ -152,6 +168,68 @@ void main() {
       expect(round.diffStats!.files, 4);
       expect(round.diffStats!.list.last.binary, isTrue);
       expect(round.result!.checks, ['flutter analyze lib/a.dart']);
+    });
+
+    test('조율: 모드·상태 문구, 회차별 Think 질문, 계획 검토 결과', () {
+      expect(ThinkCodeMode.parse('plan'), ThinkCodeMode.plan);
+      expect(ThinkCodeMode.parse('???'), ThinkCodeMode.investigate);
+      final plan =
+          ThinkAction.fromRow(_action('a1', 'code_plan', status: 'applied', result: {'code_request_id': 'r1'}))!;
+      expect(plan.kind, ThinkActionKind.codePlan);
+      expect(plan.kind.isCode, isTrue);
+      expect(ThinkCodeRequest.fromRow(_request('running', mode: 'plan')).statusLabel, '조율 중');
+      expect(ThinkCodeRequest.fromRow(_request('followup_queued', mode: 'plan')).statusLabel, '다음 회차 대기');
+      expect(ThinkCodeRequest.fromRow({..._request('ready', mode: 'plan'), 'review_status': 'pending'}).statusLabel,
+          '조율본 작성 중');
+      final round = ThinkCodeRound.fromRow({
+        'round': 2,
+        'status': 'finished',
+        'think_questions': ['정말 새 테이블이 필요한가', ' '],
+        'result': {
+          'summary': '고치면 가능',
+          'issues': [
+            {'step': '2', 'problem': '이미 있는 컬럼과 겹침', 'suggestion': '기존 컬럼 사용'},
+            {'step': '3'},
+          ],
+          'suggested_steps': ['기존 컬럼에 값 추가'],
+          'questions_for_owner': ['보관 기간은?'],
+        },
+      });
+      expect(round.thinkQuestions, ['정말 새 테이블이 필요한가']);
+      expect(round.result!.issues.single.suggestion, '기존 컬럼 사용');
+      expect(round.result!.suggestedSteps, ['기존 컬럼에 값 추가']);
+      expect(round.result!.questionsForOwner, ['보관 기간은?']);
+    });
+
+    test('조율: 모드·상태 문구, 회차별 Think 질문, 계획 검토 결과', () {
+      expect(ThinkCodeMode.parse('plan'), ThinkCodeMode.plan);
+      expect(ThinkCodeMode.parse('???'), ThinkCodeMode.investigate);
+      final plan =
+          ThinkAction.fromRow(_action('a1', 'code_plan', status: 'applied', result: {'code_request_id': 'r1'}))!;
+      expect(plan.kind, ThinkActionKind.codePlan);
+      expect(plan.kind.isCode, isTrue);
+      expect(ThinkCodeRequest.fromRow(_request('running', mode: 'plan')).statusLabel, '조율 중');
+      expect(ThinkCodeRequest.fromRow(_request('followup_queued', mode: 'plan')).statusLabel, '다음 회차 대기');
+      expect(ThinkCodeRequest.fromRow({..._request('ready', mode: 'plan'), 'review_status': 'pending'}).statusLabel,
+          '조율본 작성 중');
+      final round = ThinkCodeRound.fromRow({
+        'round': 2,
+        'status': 'finished',
+        'think_questions': ['정말 새 테이블이 필요한가', ' '],
+        'result': {
+          'summary': '고치면 가능',
+          'issues': [
+            {'step': '2', 'problem': '이미 있는 컬럼과 겹침', 'suggestion': '기존 컬럼 사용'},
+            {'step': '3'},
+          ],
+          'suggested_steps': ['기존 컬럼에 값 추가'],
+          'questions_for_owner': ['보관 기간은?'],
+        },
+      });
+      expect(round.thinkQuestions, ['정말 새 테이블이 필요한가']);
+      expect(round.result!.issues.single.suggestion, '기존 컬럼 사용');
+      expect(round.result!.suggestedSteps, ['기존 컬럼에 값 추가']);
+      expect(round.result!.questionsForOwner, ['보관 기간은?']);
     });
 
     test('같은 종류의 새 제안은 앞의 대기 제안을 대체한다', () {
@@ -209,7 +287,9 @@ void main() {
     });
 
     testWidgets('대화 삭제 제안: 함께 지워지는 것과 되돌릴 수 없음을 알린다', (tester) async {
-      final a = ThinkAction.fromRow(_action('a1', 'delete_conversation', payload: {'target_id': 'c1'}, preview: {
+      final a = ThinkAction.fromRow(_action('a1', 'delete_conversation', payload: {
+        'target_id': 'c1'
+      }, preview: {
         'title': '옛 대화',
         'messages': 12,
         'excerpts': 2,
@@ -227,7 +307,10 @@ void main() {
     });
 
     testWidgets('거절·대체된 제안은 한 줄로 줄인다', (tester) async {
-      final a = ThinkAction.fromRow({..._action('a1', 'code_request', status: 'rejected', preview: {'title': '조사'}), 'superseded': true})!;
+      final a = ThinkAction.fromRow({
+        ..._action('a1', 'code_request', status: 'rejected', preview: {'title': '조사'}),
+        'superseded': true
+      })!;
       await tester.pumpWidget(_host(ThinkActionCard(action: a)));
       expect(find.textContaining('새 제안으로 대체됨'), findsOneWidget);
       expect(find.text('보내기'), findsNothing);
@@ -262,7 +345,12 @@ void main() {
       final c = ThinkCodeController.instance;
       c.setRoundsForTest('r1', [ThinkCodeRound.fromRow(_changeRound)]);
       final failed = ThinkCodeRequest.fromRow(_request('apply_failed', applyResult: {
-        'apply': {'ok': false, 'error': '검사 실패', 'conflicts': ['lib/a.dart'], 'backup_ref': 'refs/code-bridge/r1/before-apply'},
+        'apply': {
+          'ok': false,
+          'error': '검사 실패',
+          'conflicts': ['lib/a.dart'],
+          'backup_ref': 'refs/code-bridge/r1/before-apply'
+        },
       }));
       c.requests = [failed];
       await tester.pumpWidget(_host(ThinkCodeRequestCard(request: failed)));
@@ -297,6 +385,144 @@ void main() {
       expect(find.text('1/2회차'), findsOneWidget);
       expect(find.text('작업 폴더에 적용'), findsNothing);
     });
+
+    testWidgets('조율본은 갈린 점·정할 것과 구현 승인 버튼을 보여 준다', (tester) async {
+      final a = ThinkAction.fromRow(_action('a1', 'code_change', payload: {
+        'title': '지각 배지 추가',
+        'plan_request_id': 'r0',
+        'spec': {
+          'goal': '출석 카드에 지각 배지',
+          'instructions': ['AttendanceCard에 배지를 그린다'],
+          'based_on_plan': {'id': 'r0', 'title': '지각 배지', 'rounds': 2},
+          'disagreements': [
+            {'point': '배지 색', 'think': '빨강', 'cursor': '기존 경고색'},
+          ],
+          'owner_questions': ['결석도 표시할까요?'],
+        },
+      }))!;
+      await tester.pumpWidget(_host(ThinkActionCard(action: a)));
+      expect(find.text('조율본'), findsOneWidget);
+      expect(find.text('승인 대기'), findsOneWidget);
+      expect(find.textContaining('2회 주고받아'), findsOneWidget);
+      expect(find.text('배지 색'), findsOneWidget);
+      expect(find.text('Cursor: 기존 경고색'), findsOneWidget);
+      expect(find.text('· 결석도 표시할까요?'), findsOneWidget);
+      expect(find.text('이대로 구현'), findsOneWidget);
+      expect(find.text('고쳐서 구현'), findsOneWidget);
+      expect(find.text('보내기'), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('조율본 질문: 추천 표시와 설명, 모두 답해야 반영 버튼이 켜지고 직접 입력은 내용이 있어야 한다', (tester) async {
+      final a = ThinkAction.fromRow(_action('a1', 'code_change', payload: {
+        'title': '지각 배지 추가',
+        'plan_request_id': 'r0',
+        'spec': {
+          'goal': '출석 카드에 지각 배지',
+          'instructions': ['AttendanceCard에 배지를 그린다'],
+          'based_on_plan': {'id': 'r0', 'rounds': 3},
+          'decisions': [
+            {
+              'id': 'q1',
+              'kind': 'disagreement',
+              'question': '배지 색을 무엇으로 할까요?',
+              'context': 'Think는 빨강, Cursor는 기존 경고색',
+              'options': [
+                {'id': 'q1_1', 'label': '기존 경고색', 'detail': '다른 화면과 같은 색이라 통일된다.', 'recommended': true},
+                {'id': 'q1_2', 'label': '빨강', 'detail': '눈에 잘 띄지만 오류처럼 보일 수 있다.', 'recommended': false},
+              ],
+            },
+            {
+              'id': 'q2',
+              'kind': 'owner',
+              'question': '결석도 표시할까요?',
+              'context': '',
+              'options': [
+                {'id': 'q2_1', 'label': '지각만', 'detail': '', 'recommended': true},
+                {'id': 'q2_2', 'label': '결석도', 'detail': '', 'recommended': false},
+              ],
+            },
+          ],
+        },
+      }))!;
+      await tester.pumpWidget(_host(ThinkActionCard(action: a)));
+      expect(find.text('답변 대기'), findsOneWidget);
+      expect(find.text('정해 주셔야 할 것 2개'), findsOneWidget);
+      expect(find.text('의견 갈림'), findsOneWidget);
+      expect(find.text('추천'), findsNWidgets(2));
+      expect(find.text('다른 화면과 같은 색이라 통일된다.'), findsOneWidget);
+      expect(find.text('직접 입력'), findsNWidgets(2));
+      expect(find.text('이대로 구현'), findsNothing, reason: '정할 것이 남아 있으면 바로 구현하지 않는다');
+      expect(find.text('0/2개 답함'), findsOneWidget);
+
+      ElevatedButton submit() => tester.widget<ElevatedButton>(
+          find.ancestor(of: find.text('답변 반영해 다시 조율'), matching: find.byWidgetPredicate((w) => w is ElevatedButton)));
+      expect(submit().onPressed, isNull);
+      Future<void> tapText(Finder f) async {
+        await tester.ensureVisible(f);
+        await tester.pump();
+        await tester.tap(f);
+        await tester.pump();
+      }
+
+      await tapText(find.text('빨강'));
+      await tapText(find.text('직접 입력').last);
+      expect(find.text('2/2개 답함'), findsNothing, reason: '직접 입력은 내용이 있어야 답한 것으로 본다');
+      expect(submit().onPressed, isNull);
+      await tester.ensureVisible(find.byType(TextField));
+      await tester.enterText(find.byType(TextField), '결석은 다음에');
+      await tester.pump();
+      expect(find.text('2/2개 답함'), findsOneWidget);
+      expect(submit().onPressed, isNotNull);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('답을 반영해 대체된 조율본은 한 줄로 줄인다', (tester) async {
+      final a = ThinkAction.fromRow({
+        ..._action('a1', 'code_change', status: 'rejected', payload: {
+          'title': '지각 배지',
+          'plan_request_id': 'r0'
+        }, result: {
+          'answers': [
+            {'id': 'q1'},
+            {'id': 'q2'},
+          ],
+          'revision_request_id': 'r2',
+        }),
+        'superseded': true,
+      })!;
+      await tester.pumpWidget(_host(ThinkActionCard(action: a)));
+      expect(find.textContaining('고른 답 2개로 다시 조율함'), findsOneWidget);
+    });
+
+    testWidgets('조율 진행 카드: 회차와 Think가 보낸 질문을 보여 준다', (tester) async {
+      final c = ThinkCodeController.instance;
+      final r = ThinkCodeRequest.fromRow({..._request('running', mode: 'plan'), 'round': 2, 'max_rounds': 3});
+      c.requests = [r];
+      c.setRoundsForTest('r1', [
+        ThinkCodeRound.fromRow({
+          'round': 1,
+          'status': 'finished',
+          'result': {'summary': '2단계가 겹칩니다'}
+        }),
+        ThinkCodeRound.fromRow({
+          'round': 2,
+          'status': 'running',
+          'think_questions': ['겹치면 어느 쪽을 쓰나']
+        }),
+      ]);
+      await tester.pumpWidget(_host(ThinkCodeRequestCard(request: r)));
+      await tester.pump();
+      expect(find.text('Cursor와 조율'), findsOneWidget);
+      expect(find.text('조율 중'), findsOneWidget);
+      expect(find.text('2/3회차'), findsOneWidget);
+      expect(find.textContaining('계획을 코드에 비춰'), findsOneWidget);
+      await tester.tap(find.text('주고받은 내용 (계획 초안 · 회차별 검토)'));
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(find.text('Think가 보낸 질문·반론'), findsOneWidget);
+      expect(find.text('· 겹치면 어느 쪽을 쓰나'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
   });
 
   testWidgets('트리: 제안 폴더를 강조하고 새 폴더 제안은 흐린 행으로 끼운다', (tester) async {
@@ -318,7 +544,8 @@ void main() {
     expect(find.text('출결'), findsOneWidget);
     expect(find.text('제안'), findsOneWidget);
 
-    c.putActionForTest(ThinkAction.fromRow(_action('p10', 'place_conversation', payload: {'new_folder_title': '지각 관리', 'new_folder_parent_id': 'f1'}))!);
+    c.putActionForTest(ThinkAction.fromRow(
+        _action('p10', 'place_conversation', payload: {'new_folder_title': '지각 관리', 'new_folder_parent_id': 'f1'}))!);
     await tester.pump();
     expect(find.text('지각 관리'), findsOneWidget);
     expect(find.text('새 폴더 제안'), findsOneWidget);

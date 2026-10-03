@@ -112,7 +112,13 @@ class ProblemBankBottomFabBar extends StatelessWidget {
     if (alignStart) {
       return Align(alignment: Alignment.centerLeft, child: bar);
     }
-    return Center(child: bar);
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Padding(
+        padding: const EdgeInsets.only(right: FabTabBarTokens.fabBarRightInset),
+        child: bar,
+      ),
+    );
   }
 }
 

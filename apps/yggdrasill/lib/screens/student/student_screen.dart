@@ -69,8 +69,6 @@ class StudentScreenState extends State<StudentScreen> {
   int _customTabIndex = 0;
   Map<String, Set<String>>? _activeFilter;
 
-  final FabStyleScreenTabBarOverlay _fabTabBarOverlay =
-      FabStyleScreenTabBarOverlay();
   final StudentActionFabOverlay _actionFabOverlay = StudentActionFabOverlay();
 
   // 출석 관리 관련 상태 변수들
@@ -140,7 +138,7 @@ class StudentScreenState extends State<StudentScreen> {
 
   @override
   void dispose() {
-    _fabTabBarOverlay.dispose();
+    sharedScreenTabBar.unbindMenu(1);
     _actionFabOverlay.dispose();
     _searchFocusNode.dispose();
     _searchController.dispose();
@@ -168,11 +166,10 @@ class StudentScreenState extends State<StudentScreen> {
   }
 
   void _syncFabOverlays() {
-    _fabTabBarOverlay.sync(
-      context,
+    sharedScreenTabBar.bind(
+      menuIndex: 1,
       selectedIndex: _customTabIndex,
-      tabs: const ['학생', '성향'],
-      onTabSelected: _onStudentTabSelected,
+      onSelected: _onStudentTabSelected,
     );
     _actionFabOverlay.sync(
       context,

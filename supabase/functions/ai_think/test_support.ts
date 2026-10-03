@@ -156,6 +156,30 @@ export class MemoryThinkStore implements ThinkStore {
     return Promise.resolve(row);
   }
 
+  /** 'limit'이면 하루 한도 초과 오류를 낸다. */
+  planStartFailure: 'limit' | null = null;
+  plansStarted: { conversationId: string; title: string; spec: Record<string, unknown> }[] = [];
+
+  startCodePlan(conversationId: string, title: string, spec: Record<string, unknown>): Promise<ActionRow> {
+    if (this.planStartFailure === 'limit') return Promise.reject(new Error('ai_code_plan_start: code_request_daily_limit'));
+    this.plansStarted.push({ conversationId, title, spec });
+    const row: ActionRow = {
+      id: this.id('act'),
+      conversation_id: conversationId,
+      message_id: null,
+      kind: 'code_plan',
+      status: 'applied',
+      payload: { title, spec },
+      preview: { title, mode: 'plan' },
+      result: { code_request_id: this.id('req') },
+      error: null,
+      superseded: false,
+      created_at: new Date().toISOString(),
+    };
+    this.actions.push(row);
+    return Promise.resolve(row);
+  }
+
   attachActions(ids: string[], messageId: string): Promise<void> {
     this.attached.push({ ids, messageId });
     for (const a of this.actions) if (ids.includes(a.id)) a.message_id = messageId;

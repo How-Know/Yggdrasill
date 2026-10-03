@@ -3,7 +3,7 @@
 Think 채팅 한 화면에서 코드 조사, 코드 수정, 대화 분류, 삭제를 요청하고 결과까지 본다.
 AI는 **제안만** 하고, 실제 변경은 사용자가 채팅 안 카드에서 승인한 뒤에만 일어난다.
 
-**상태: 구현 완료, 시험 통과, 배포 전 (2026-09-30).** 관련: [`ai-think.md`](ai-think.md), [`ai-code-bridge.md`](ai-code-bridge.md)
+**상태: 2026-09-30 배포. Think ↔ Cursor 조율(§4.3)은 2026-10-01 배포. 조율본 질문은 2026-10-02 구현.** 관련: [`ai-think.md`](ai-think.md), [`ai-code-bridge.md`](ai-code-bridge.md)
 
 구현 위치: 마이그레이션 `20260930100000_ai_think_actions.sql`, `ai_think/actions.ts`, `ai_code_bridge/code_review.ts`,
 `tools/code_bridge/src/git_ops.mjs`, 앱 `screens/think/think_action_cards.dart`·`think_code_views.dart`·`think_code_requests_dialog.dart`.
@@ -22,6 +22,26 @@ AI는 **제안만** 하고, 실제 변경은 사용자가 채팅 안 카드에�
 | 삭제 제안 대상 | 코드 조사 요청, 트리 폴더(안의 항목은 위로 올림), 대화 |
 | 진행 | A(채팅 통합)와 B(코드 수정)를 한 번에 구현한 뒤 배포 |
 
+2026-10-01 운영자 결정 (Think ↔ Cursor 조율, §4.3):
+
+| 항목 | 결정 |
+|------|------|
+| 역할 | Think는 방향·아이디어를 내는 개인 비서, Cursor는 코드를 아는 실무자. 둘이 먼저 조율하고 운영자는 조율본을 승인한다 |
+| 조율 시작 | 승인 없이 바로 시작(읽기 전용, 하루 요청 한도 안). Think는 시작 전에 대화로 의도를 확인한다 |
+| 주고받는 횟수 | 최대 3회(Cursor 검토 3번) |
+| 승인 | 조율본 승인(구현 시작)과 diff 적용 승인, 두 번 그대로 |
+| 수정 작업 시간 | 30분. 시간이 넘어도 만든 변경은 버리지 않고 "확인 필요"로 남긴다(적용은 안 됨) |
+
+2026-10-02 운영자 결정 (조율본 질문, §4.3):
+
+| 항목 | 결정 |
+|------|------|
+| 남은 쟁점 | 운영자만 정할 것과 끝까지 갈린 의견을 글이 아니라 객관식 질문(보기 2~4개, 보기마다 자세한 설명, 추천 보기 맨 앞에 "추천")으로 묻는다. 직접 입력 칸도 둔다 |
+| 갈린 의견 | 질문으로 바꾼다(Think 안 / Cursor 안 / 절충안) |
+| 답한 뒤 | Cursor가 고른 답을 코드에 비춰 한 번 더 확인하고 Think가 새 조율본을 올린다(하루 요청 1건 사용) |
+| 일부만 답함 | 모든 질문에 답해야 반영 버튼이 켜진다 |
+| 범위 | 이번에는 조율본에만. 평소 대화에는 쓰지 않는다 |
+
 ---
 
 ## 1. 원칙
@@ -31,7 +51,8 @@ AI는 **제안만** 하고, 실제 변경은 사용자가 채팅 안 카드에�
 2. **실행은 승인 RPC 하나로만 한다.** `ai_action_apply(p_id)`가 슈퍼관리자 확인 → 상태 `proposed` 확인 →
    대상 다시 검증 → 실행 → 결과 기록을 한 트랜잭션으로 한다. 한 제안은 한 번만 실행된다.
 3. **미리보기 없이 실행하지 않는다.** 카드에 무엇이 바뀌는지(폴더 경로, 지워질 메시지·발췌 수, 코드 diff)를 먼저 보인다.
-4. **코드 수정은 두 번 승인한다.** 수정 시작(요청 보내기)과 적용. 적용 전에는 실제 작업 폴더가 바뀌지 않는다.
+4. **코드 수정은 두 번 승인한다.** 수정 시작(조율본 승인 또는 요청 보내기)과 적용. 적용 전에는 실제 작업 폴더가 바뀌지 않는다.
+   유일한 예외는 조율 시작(`code_plan`)이다. 읽기 전용이고 하루 한도 안이라 승인 없이 시작하며, 기록은 `applied` 제안 1행으로 남는다.
 5. **정보가 부족하면 묻는다.** 도구가 필수 값 누락을 오류로 돌려주면 AI가 대화로 되묻고, 다음 턴에 같은 제안을 채워 다시 낸다.
 6. 기존 원칙 유지: 키 위치, 기억은 사람만 확정, 결정은 "결정으로 정리" 경로로만.
 
@@ -42,7 +63,7 @@ AI는 **제안만** 하고, 실제 변경은 사용자가 채팅 안 카드에�
 | 열 | 뜻 |
 |------|------|
 | `id`, `conversation_id` (대화 삭제 시 함께 삭제), `message_id` (제안한 답변, 지워지면 비움) | 어느 대화의 어느 답변이 냈는지 |
-| `kind` | `code_request` / `code_change` / `place_conversation` / `delete_code_request` / `delete_folder` / `delete_conversation` |
+| `kind` | `code_request` / `code_change` / `code_plan` / `place_conversation` / `delete_code_request` / `delete_folder` / `delete_conversation` |
 | `status` | `proposed` → `applied` / `rejected` / `failed` (`place_conversation`은 `applied` → `undone` 가능) |
 | `payload` (jsonb) | 제안 내용. 서버가 검증·정리한 값만 들어간다 |
 | `preview` (jsonb) | 카드에 보일 요약(폴더 경로, 지워질 수 등). 제안 시점에 서버가 계산 |
@@ -59,7 +80,8 @@ AI는 **제안만** 하고, 실제 변경은 사용자가 채팅 안 카드에�
 | kind | 미리보기 | 승인 시 실행 | 되돌리기 |
 |------|------|------|------|
 | `code_request` | 요청 제목·목표·질문·폴더 | `ai_code_requests` 생성 + 보내기(하루 한도 검사) | 취소는 요청 카드에서 |
-| `code_change` | 수정 지시·대상 폴더 | `ai_code_requests`(`mode = 'change'`) 생성 + 보내기 | — (적용은 따로 승인) |
+| `code_change` | 수정 지시·대상 폴더 (조율본이면 회차·갈린 점·정할 것) | `ai_code_requests`(`mode = 'change'`) 생성 + 보내기 | — (적용은 따로 승인) |
+| `code_plan` | 제목·목표 | 승인 없음. `ai_code_plan_start`가 `mode = 'plan'` 요청을 만들어 보내고 `applied`로 남긴다 | 취소는 요청 카드에서 |
 | `place_conversation` | 폴더 경로(새 폴더면 "새 폴더: 경로"), 현재 위치 | 새 폴더면 만들고(`created_via = 'ai'`) 현재 대화를 그 폴더 끝에 놓는다 | 이전 위치로 되돌리고, AI가 만든 빈 폴더는 지운다 |
 | `delete_code_request` | 제목·상태 | 삭제(끝난 요청·초안만) | 없음 |
 | `delete_folder` | 폴더 경로, 안의 항목 수("위로 올라감") | `ai_tree_delete_folder` | 없음 |
@@ -79,7 +101,9 @@ AI는 **제안만** 하고, 실제 변경은 사용자가 채팅 안 카드에�
 제안(행 1개만 남김):
 
 - `propose_code_request(title, goal, questions, focus_paths, constraints, do_not, background)`
-- `propose_code_change(title, goal, instructions, focus_paths, constraints, do_not, based_on_request_id)`
+- `start_code_plan(title, goal, instructions, questions, focus_paths, constraints, do_not, background, based_on_request_id)`:
+  코드 수정이 필요하면 이 도구로 Cursor와 조율을 시작한다(§4.3). 제안이 아니라 바로 시작한다.
+  하루 한도에 걸리면 `daily_limit` 오류를 돌려준다. (2026-10-01에 `propose_code_change`를 대신함)
 - `propose_folder(folder_id | new_folder_title + new_folder_parent_id, reason)`
 - `propose_delete(target_kind, target_id, reason)`
 
@@ -98,7 +122,8 @@ AI는 **제안만** 하고, 실제 변경은 사용자가 채팅 안 카드에�
 ## 4. 코드 조사·수정 흐름
 
 ```
-채팅 → propose_code_request / propose_code_change → [카드: 보내기]
+채팅 → propose_code_request → [카드: 보내기]          (조사)
+채팅 → start_code_plan → 조율(§4.3) → [조율본 카드: 이대로 구현]  (수정)
   → ai_action_apply → ai_code_requests (queued)
   → PC 작업자 (조사: 읽기 전용 / 수정: 분리된 복사본에서 편집)
   → ai_code_bridge complete
@@ -139,9 +164,55 @@ AI는 **제안만** 하고, 실제 변경은 사용자가 채팅 안 카드에�
 
 diff에는 코드가 들어 있고 Supabase DB에 저장된다(조사 결과도 코드 일부를 담는 것과 같은 수준).
 
-### 4.3 요청 상태 추가
+수정 실행은 30분(`CODE_BRIDGE_CHANGE_TIMEOUT_MS`, 1~90분)까지 돌린다. 시간이 넘었을 때 바뀐 파일이 있으면
+그때까지의 diff를 형식 불일치(`parse_ok = false`)로 올려 `needs_review`가 된다. 이 상태는 적용할 수 없고 확인만 한다.
+작업자는 실행 중 1분마다 경과 시간·도구 사용 횟수·바뀐 파일 수를 터미널에 찍는다.
 
-`ai_code_requests.mode`: `investigate`(기본) / `change`.
+### 4.3 Think ↔ Cursor 조율 (`mode = 'plan'`, 2026-10-01)
+
+```
+Think: 대화로 의도 확인 → start_code_plan (승인 없이 시작, code_plan 제안 1행 applied)
+  → 작업자: Cursor가 계획 초안을 코드에 비춰 검토 (읽기 전용, mode plan)
+  → code_review: Think가 검토를 읽고 질문·반론 → 다음 회차 (최대 3회)
+  → 마지막: 대화에 조율 결과 메시지 + 조율본 카드(code_change 제안, payload.plan_request_id)
+  → 운영자: [이대로 구현 / 고쳐서 구현 / 거절]
+  → 수정 요청(change) → diff → [작업 폴더에 적용] (기존 §4.2)
+```
+
+- 마이그레이션 `20261001120000_ai_code_plan.sql`: `mode`에 `plan`, `ai_actions.kind`에 `code_plan`,
+  `ai_code_plan_start`(앱 사용자 JWT, 슈퍼관리자), `ai_code_bridge_propose_plan`(서비스 역할만).
+  `ai_code_bridge_followup`은 질문 목록(`p_questions`)도 받아 `ai_code_requests.followup_questions`에 두고,
+  다음 회차가 시작될 때 트리거가 `ai_code_request_rounds.think_questions`로 옮긴다. 카드는 회차마다 "Think가 보낸 질문·반론"을 보인다.
+- Cursor 검토 결과(JSON): `summary`, `feasibility`, `findings`, `issues[{step, problem, suggestion}]`, `suggested_steps`,
+  `risks`, `questions_for_think`, `questions_for_owner`.
+- Think 조율 출력(JSON, `code_plan_review`): `answer`, `followup_questions`, `plan{title, goal, instructions, focus_paths,
+  constraints, do_not}`, `decisions[{kind: owner|disagreement, question, context, options[{label, detail, recommended}]}]`.
+  마지막 회차에는 질문을 더 하지 않고 조율본을 낸다. (2026-10-01판의 `disagreements`·`owner_questions`는 `decisions`로 바뀌었다.
+  앱은 예전 조율본도 그대로 보여 준다)
+- 서버(`parseDecisions`)가 질문을 정리한다: 최대 5개, 보기 2~4개(모자라면 버림), 추천은 하나만 남겨 맨 앞으로, id는 `q1`·`q1_1` 순서.
+- 조율본 `spec`에는 `based_on_plan{id, title, rounds, summary}`, `decisions`, `owner_answers`가 붙는다.
+  같은 대화의 대기 중 `code_change`는 새 조율본으로 대체된다.
+- 계획 지시(`instructions`)도 질문(`decisions`)도 없으면 조율본 카드를 만들지 않고 결과 메시지만 남긴다.
+
+#### 조율본 질문에 답하기 (2026-10-02, 마이그레이션 `20261002100000_ai_code_plan_revise.sql`)
+
+```
+조율본 카드(decisions 있음): 질문마다 보기 하나 또는 직접 입력 → 모두 답하면 [답변 반영해 다시 조율]
+  → ai_code_plan_revise(action_id, answers)  (앱 사용자 JWT, 슈퍼관리자)
+     - 모든 질문에 답했는지, 보기 id가 맞는지 확인
+     - 답을 spec.owner_answers에 쌓고, constraints에 "운영자 결정 — 질문: 답" 줄을 붙인다
+     - 새 plan 요청(max_rounds 1)을 만들어 보내고(하루 한도), 같은 답변 메시지에 code_plan 행(applied)을 남긴다
+     - 이전 조율본은 rejected·superseded, result에 고른 답과 새 요청 id
+  → Cursor가 고른 답을 코드에 비춰 확인 → Think가 새 조율본(질문이 또 남으면 다시 질문 카드)
+```
+
+- 질문이 남아 있는 동안 조율본 카드는 "이대로 구현"·"고쳐서 구현"을 보이지 않는다. 구현은 질문이 없는 조율본을 승인해야 시작한다.
+- Think는 `owner_answers`와 "운영자 결정 — " 제약을 다시 묻지 않는다. 새 조율본을 만들 때 서버가 "운영자 결정 — " 줄을 지우지 않고 남긴다.
+  수정 실행에도 이 제약이 그대로 들어간다(작업자 변경 없음).
+
+### 4.4 요청 상태 추가
+
+`ai_code_requests.mode`: `investigate`(기본) / `change` / `plan`.
 수정 요청의 추가 상태: `ready`(diff 도착) → `apply_queued` → `applying` → `applied` / `apply_failed`,
 `applied` → `revert_queued` → `reverted` / `revert_failed`. diff는 `ai_code_request_rounds.result.diff`에 있다.
 
@@ -152,6 +223,10 @@ diff에는 코드가 들어 있고 Supabase DB에 저장된다(조사 결과도 
 - **탭**: 대화 · 기억 · 사용량. "코드 조사" 탭은 없앤다.
 - **채팅 카드** (답변 아래, 제안한 메시지에 붙는다)
   - 코드 조사/수정 카드: 제안 → 보내기/고쳐서 보내기/거절 → 대기·조사 중(작업자 상태, 취소) → 결과 요약(가능 여부, 제안, 근거 파일) → 수정이면 diff(파일별 접기) + 적용/거절 → 적용됨/되돌리기
+  - 조율 카드("Cursor와 조율"): 회차(N/3), 진행 문구, "주고받은 내용"에 계획 초안과 회차별 Cursor 검토·Think 질문
+  - 조율본 카드: 계획(할 일·범위·하지 말 것) → 이대로 구현/고쳐서 구현/거절
+  - 조율본 질문(질문이 있을 때 위 버튼 대신): 질문마다 보기 목록(라디오, 추천 배지, 설명)과 직접 입력 → "n/m개 답함" → 답변 반영해 다시 조율/거절.
+    반영된 조율본은 "고른 답 n개로 다시 조율함" 한 줄로 줄인다
   - 분류 카드: "이 대화를 ‘경로’에 넣을까요?" 넣기 / 다른 폴더 / 거절. 넣은 뒤 되돌리기
   - 삭제 카드: 지워질 것 요약 + 빨간 삭제 버튼 → 확인 창 한 번 더. 되돌릴 수 없음을 적는다
   - 적용 확인 창: 파일 목록, `git apply --check` 선검사, 백업 ref, 커밋·스테이징 안 함을 적는다
@@ -168,5 +243,5 @@ diff에는 코드가 들어 있고 Supabase DB에 저장된다(조사 결과도 
 
 ## 6. 하지 않는 것
 
-AI의 자동 실행, 셸 명령, 커밋·푸시·PR, 작업 폴더 외 경로 수정, 여러 요청 동시 처리,
+AI의 자동 실행(읽기 전용 조율 시작만 예외), 셸 명령, 커밋·푸시·PR, 작업 폴더 외 경로 수정, 여러 요청 동시 처리,
 Cursor IDE 채팅창 조작, 삭제 되돌리기(휴지통).

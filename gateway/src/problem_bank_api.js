@@ -131,6 +131,8 @@ import {
   extractWonriMiddleSolutionsOnPage,
   normalizeWonriMiddleSolutionResult,
   filterWonriMiddleItemsByBox,
+  wonriMiddleLeadingRetryRegion,
+  mapWonriMiddleItemsFromCrop,
 } from "./textbook/vlm_wonri_middle_solution_client.js";
 import { assessHandwritingSample } from "./textbook/handwriting_review_client.js";
 
@@ -8444,16 +8446,67 @@ async function handleTextbookVlmExtractWonriMiddleSolutions(body, res) {
   const normalized = normalizeWonriMiddleSolutionResult(result.parsedJson);
   // 같은 코너 박스가 소단원마다 같은 번호로 반복된다. 모델이 남의 박스를
   // 읽어 온 응답은 여기서 버린다.
-  const guarded = filterWonriMiddleItemsByBox({
+  // 박스 없는 지면 맨 위 풀이는 번호만으로 코너를 가를 수 없다. 앞 지면에서
+  // 시작도 안 한 코너가 01~04를 가져가지 않도록 관리자 앱이 막을 수 있다.
+  const allowContinuation =
+    mode !== "answers" && body?.allow_continuation !== false;
+  let guarded = filterWonriMiddleItemsByBox({
     items: normalized.items,
     box: normalized.box,
     boxes: normalized.boxes,
     expectedEntries,
-    // 박스 없는 지면 맨 위 풀이는 번호만으로 코너를 가를 수 없다. 앞 지면에서
-    // 시작도 안 한 코너가 01~04를 가져가지 않도록 관리자 앱이 막을 수 있다.
-    allowContinuation:
-      mode !== "answers" && body?.allow_continuation !== false,
+    allowContinuation,
   });
+  const leadingRegion =
+    allowContinuation && guarded.items.length === 0
+      ? wonriMiddleLeadingRetryRegion({
+          boxes: normalized.boxes,
+          expectedEntries,
+        })
+      : null;
+  if (leadingRegion) {
+    try {
+      const source = sharp(Buffer.from(imageBase64, "base64"));
+      const { width = 0, height = 0 } = await source.metadata();
+      const crop = {
+        left: Math.round((leadingRegion[1] / 1000) * width),
+        top: Math.round((leadingRegion[0] / 1000) * height),
+        width: Math.max(1, Math.round(((leadingRegion[3] - leadingRegion[1]) / 1000) * width)),
+        height: Math.max(1, Math.round(((leadingRegion[2] - leadingRegion[0]) / 1000) * height)),
+      };
+      const cropped = await source.extract(crop).png().toBuffer();
+      const retry = await extractWonriMiddleSolutionsOnPage({
+        imageBase64: cropped.toString("base64"),
+        mimeType: "image/png",
+        rawPage,
+        displayPage: rawPage,
+        expectedEntries,
+        mode,
+        model: TEXTBOOK_VLM_MODEL,
+        apiKey,
+        timeoutMs: TEXTBOOK_VLM_TIMEOUT_MS,
+      });
+      const retryGuarded = filterWonriMiddleItemsByBox({
+        items: mapWonriMiddleItemsFromCrop(
+          normalizeWonriMiddleSolutionResult(retry.parsedJson).items,
+          leadingRegion,
+        ),
+        box: normalized.box,
+        boxes: normalized.boxes,
+        expectedEntries,
+        allowContinuation,
+      });
+      console.log(
+        `[textbook-vlm] wonri_middle ${mode} page=${rawPage} leading_retry region=${leadingRegion.join(",")} ` +
+          `items=${retryGuarded.items.length} numbers=${retryGuarded.items.map((item) => item.problem_number).join(",")}`,
+      );
+      if (retryGuarded.items.length > 0) guarded = retryGuarded;
+    } catch (err) {
+      console.warn(
+        `[textbook-vlm] wonri_middle ${mode} page=${rawPage} leading_retry failed: ${compact(err?.message || err).slice(0, 200)}`,
+      );
+    }
+  }
   if (guarded.dropped > 0) {
     console.warn(
       `[textbook-vlm] wonri_middle ${mode} page=${rawPage} dropped=${guarded.dropped} ${guarded.reason}`,

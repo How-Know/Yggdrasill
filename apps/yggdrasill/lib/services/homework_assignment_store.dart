@@ -178,11 +178,17 @@ class HomeworkAssignmentOutcomeResult {
     required this.groupCheckId,
     required this.processedCount,
     required this.nextDueAt,
+    this.returnedToClass = false,
+    this.attendanceId,
   });
 
   final String groupCheckId;
   final int processedCount;
   final DateTime? nextDueAt;
+
+  /// 숙제 안 함을 연기하지 않고 진행 중 출석의 오늘 과제로 돌렸는지.
+  final bool returnedToClass;
+  final String? attendanceId;
 }
 
 class HomeworkStructuredGradingRollbackResult {
@@ -1694,6 +1700,7 @@ class HomeworkAssignmentStore {
           ? Map<String, dynamic>.from(raw)
           : const <String, dynamic>{};
       final nextDueRaw = '${row['next_due_at'] ?? ''}'.trim();
+      final attendanceRaw = '${row['attendance_id'] ?? ''}'.trim();
       _activeAssignmentsCacheByStudent.remove(sid);
       _activeAssignmentsLoadCompletedForStudent.remove(sid);
       _bump();
@@ -1703,6 +1710,8 @@ class HomeworkAssignmentStore {
         nextDueAt: nextDueRaw.isEmpty
             ? null
             : DateTime.tryParse(nextDueRaw)?.toLocal(),
+        returnedToClass: row['returned_to_class'] == true,
+        attendanceId: attendanceRaw.isEmpty ? null : attendanceRaw,
       );
     } catch (error, stackTrace) {
       debugPrint('[HW_ASSIGN][outcome][ERROR] $error\n$stackTrace');

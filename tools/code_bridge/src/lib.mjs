@@ -3,7 +3,7 @@ import { hostname } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const PROMPT_VERSION = 'code_bridge.v2';
+export const PROMPT_VERSION = 'code_bridge.v3';
 export const READ_ONLY_TOOLS = ['read', 'grep', 'glob', 'ls'];
 /** 수정 모드. 셸은 주지 않는다(빌드·테스트·git 실행 불가). */
 export const CHANGE_TOOLS = ['read', 'grep', 'glob', 'ls', 'edit', 'delete'];
@@ -55,7 +55,14 @@ export function loadConfig(env) {
     pollMs: positiveInt(env.CODE_BRIDGE_POLL_MS, 10_000, 3_000, 300_000),
     heartbeatMs: 30_000,
     roundTimeoutMs: positiveInt(env.CODE_BRIDGE_ROUND_TIMEOUT_MS, 15 * 60_000, 60_000, 60 * 60_000),
+    changeTimeoutMs: positiveInt(env.CODE_BRIDGE_CHANGE_TIMEOUT_MS, 30 * 60_000, 60_000, 90 * 60_000),
+    progressLogMs: 60_000,
   };
+}
+
+/** 터미널에 보일 작업 이름. */
+export function modeLabel(mode) {
+  return mode === 'change' ? '수정' : mode === 'plan' ? '조율' : '조사';
 }
 
 function list(value) {
@@ -136,6 +143,14 @@ export function buildChangePrompt(job) {
         ...objects(base.proposals).map((p) => `- 제안 "${text(p.title)}": ${text(p.change)}`),
       ].join('\n')
     : '(없음)';
+  const plan = r.based_on_plan && typeof r.based_on_plan === 'object' ? r.based_on_plan : null;
+  const disagreements = objects(r.disagreements).map((d) => `- ${text(d.point)} (Think: ${text(d.think)} / Cursor: ${text(d.cursor)})`);
+  const planNote = plan
+    ? `\n이 요청은 Think와 Cursor가 ${plan.rounds ?? '?'}회 조율하고 운영자가 승인한 조율본 "${text(plan.title)}"이다.
+아래 단계를 그대로 따른다. 조율본과 다르게 해야 할 이유를 찾으면 그 부분은 고치지 말고 questions_for_think에 적는다.${
+        disagreements.length ? `\n조율 때 의견이 갈린 점(운영자가 승인 때 확인함):\n${disagreements.join('\n')}` : ''
+      }\n`
+    : '';
   return `너는 Yggdrasill 저장소의 코드 수정 담당이다. 지금 폴더는 운영자 작업 폴더의 복사본이다. 여기서 요청대로 코드를 고친다.
 - 읽기·검색·편집·삭제 도구만 있다. 명령을 실행할 수 없다(빌드·테스트·git 불가).
 - 이 폴더 밖의 파일은 읽거나 쓰지 않는다. 비밀 파일(.env, env.local.json, 키 파일), .git, .cursor/hooks는 건드리지 않는다.
@@ -147,7 +162,7 @@ export function buildChangePrompt(job) {
 ## 요청
 제목: ${text(job.title)}
 목표: ${text(r.goal)}
-
+${planNote}
 바꿀 내용:
 ${bullets(list(r.instructions))}
 
@@ -177,9 +192,69 @@ ${refLines.length ? refLines.join('\n') : '(없음)'}
 }`;
 }
 
+/** 조율: Think가 운영자와 정한 계획 초안을 실무자로서 실제 코드에 비춰 검토한다. 코드는 고치지 않는다. */
+export function buildPlanPrompt(job) {
+  const r = job.request && typeof job.request === 'object' ? job.request : {};
+  const refs = Array.isArray(r.memory_refs) ? r.memory_refs : [];
+  const refLines = refs
+    .map((m) => (m && typeof m === 'object' ? `- [${text(m.kind) || '기억'}] ${text(m.title)} (v${m.version ?? '?'}): ${text(m.content)}` : ''))
+    .filter((s) => s.trim() !== '-');
+  const base = r.based_on && typeof r.based_on === 'object' ? r.based_on : null;
+  return `너는 Yggdrasill 저장소의 실무 개발자다. 기획 담당 Think가 운영자와 대화해 만든 구현 계획 초안을 받았다.
+아직 아무것도 고치지 않는다. 실제 코드를 읽고, 이 계획대로 구현하면 생길 문제를 찾아 Think와 조율한다.
+파일을 만들거나 고치거나 명령을 실행하지 않는다. 비밀 파일(.env, env.local.json, 키 파일)은 읽지 않는다.
+판단 기준은 아래 "관련 결정·원칙"과 저장소 규칙(AGENTS.md, .cursor/rules, docs/architecture, UI면 docs/design-system.md)이다.
+
+## 볼 것
+- 계획이 기존 구조·규칙과 맞는지, 이미 비슷한 구현이 있는지
+- 영향 범위(같이 바뀌어야 할 파일, 마이그레이션, 시험), 빠진 단계
+- 그대로 하면 생길 버그·데이터 위험·보안 문제, 더 단순하거나 안전한 방법
+- 방향이나 우선순위처럼 코드로 정할 수 없는 것은 판단하지 말고 questions_for_owner에 넣는다
+
+## 계획 초안
+제목: ${text(job.title)}
+목표: ${text(r.goal)}
+
+단계:
+${bullets(list(r.instructions))}
+
+Think가 특히 확인받고 싶은 점:
+${bullets(list(r.questions))}
+
+배경 (Think 대화):
+${text(r.background) || '(없음)'}
+${base ? `\n근거가 된 조사 "${text(base.title)}"의 결론: ${text(base.summary) || '(없음)'}\n` : ''}
+관련 폴더나 파일:
+${bullets(list(r.focus_paths))}
+
+제약:
+${bullets(list(r.constraints))}
+
+하지 말 것:
+${bullets(list(r.do_not))}
+
+관련 결정·원칙:
+${refLines.length ? refLines.join('\n') : '(없음)'}
+
+## 답변 형식
+검토를 마치면 답변 끝에 아래 모양의 JSON을 \`\`\`json 코드 블록 하나로 낸다. 설명은 앞에 써도 된다.
+{
+  "summary": "한두 문장 결론 (이대로 가능한지, 무엇을 고쳐야 하는지)",
+  "feasibility": "possible | possible_with_changes | not_recommended | unclear 중 하나",
+  "findings": [{ "point": "코드에서 확인한 사실", "evidence": [{ "path": "저장소 기준 경로", "lines": "10-24" }] }],
+  "issues": [{ "step": "문제가 있는 단계(없으면 전체)", "problem": "그대로 하면 생기는 문제", "suggestion": "바꾸자는 내용" }],
+  "suggested_steps": ["네가 고친 구현 단계"],
+  "risks": ["위험이나 부작용"],
+  "questions_for_think": ["Think에게 되묻는 질문"],
+  "questions_for_owner": ["운영자만 정할 수 있는 것"]
+}
+코드로 확인하지 못한 추측은 findings에 넣지 말고 questions_for_think에 넣는다.`;
+}
+
 /** 작업 종류에 맞는 프롬프트. */
 export function promptFor(job) {
   if (job.mode === 'change') return buildChangePrompt(job);
+  if (job.mode === 'plan') return job.followup_prompt ? `${buildPlanPrompt(job)}\n\n${text(job.followup_prompt)}` : buildPlanPrompt(job);
   return job.followup_prompt ? buildFollowupPrompt(job) : buildPrompt(job);
 }
 
@@ -280,6 +355,24 @@ export function parseResult(raw) {
         .filter((p) => p.title || p.change),
       risks: list(data.risks),
       questions_for_think: list(data.questions_for_think),
+    },
+  };
+}
+
+/** 조율 결과: 조사 결과 칸 + 계획 검토 칸(issues, suggested_steps, questions_for_owner). */
+export function parsePlanResult(raw) {
+  const base = parseResult(raw);
+  if (!base.ok) return base;
+  const data = JSON.parse(lastJsonBlock(raw));
+  return {
+    ok: true,
+    value: {
+      ...base.value,
+      issues: objects(data.issues)
+        .map((i) => ({ step: text(i.step), problem: text(i.problem), suggestion: text(i.suggestion) }))
+        .filter((i) => i.problem || i.suggestion),
+      suggested_steps: list(data.suggested_steps),
+      questions_for_owner: list(data.questions_for_owner),
     },
   };
 }

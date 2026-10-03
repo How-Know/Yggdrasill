@@ -3,8 +3,11 @@ import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
+import '../../../../app_overlays.dart';
 import '../../../../widgets/app_time_picker_dialog.dart';
 import '../../../../widgets/solid_capsule_action_bar.dart';
 
@@ -21,14 +24,24 @@ class FabTabBarTokens {
   static const double fabBarBottomInset = 24;
 
   /// [CustomNavigationRail] 하단 [AccountButton] 반지름.
-  /// 지름이 네비 아이콘 캔버스(35.2)와 맞는다.
-  static const double navRailAccountButtonRadius = 17.6;
+  /// + 버튼 레이아웃은 56이지만 어두운 원이고, 프로필 사진은 가장자리까지
+  /// 밝아서 더 커 보인다. 지름 44에서 둘의 보이는 크기가 맞는다.
+  static const double navRailAccountButtonRadius = 22;
 
   /// [AccountButton] 중심을 [FabStyleTabBar] 중심과 맞추는 하단 inset.
   static double navRailAccountButtonBottomInset({
     double accountButtonRadius = navRailAccountButtonRadius,
   }) =>
       fabBarBottomInset + fabBarHeight / 2 - accountButtonRadius;
+
+  /// 네비게이션 레일에서 + 버튼과 프로필 버튼 사이 간격.
+  static const double navRailPlusGap = 24;
+
+  /// + 버튼 하단. 프로필 원 위에 [navRailPlusGap]만큼 띄운다.
+  static double get navRailPlusBottomInset =>
+      navRailAccountButtonBottomInset() +
+      navRailAccountButtonRadius * 2 +
+      navRailPlusGap;
 
   /// [MainFabAlternative] + 버튼·펼침 pill 공통 오른쪽 여백
   static const double fabBarRightInset = 24;
@@ -51,6 +64,13 @@ class FabTabBarTokens {
 
   /// FAB 스타일 탭바·+ 버튼 라벨 — Preview 학원 탭 [previewAcademyBaseFontSize]와 동일
   static const double fabBarLabelFontSize = previewAcademyBaseFontSize;
+
+  /// 홈 탭바와 같은 공용 탭 라벨. 다른 메뉴 탭바도 이 값을 기본으로 쓴다.
+  static const double fabTabLabelFontSize = 19;
+  static const FontWeight fabTabLabelFontWeight = FontWeight.w400;
+  static const double fabTabLetterSpacing = 1;
+  static const double fabTabInnerPadding = 3;
+  static const double fabTabContentSidePadding = 64;
 
   /// Preview — 학원정보 패널 배경 Dark (스크린샷 기준)
   static const Color previewAcademyInfoPanelDark = Color(0xFF121212);
@@ -3172,14 +3192,40 @@ class PreviewAcademyMenuOption {
 /// 화면 하단 가운데 FAB 스타일 글래스 탭 셀렉터 (Preview 전용).
 ///
 /// [Theme.of(context).brightness]에 따라 Dark/Light 팔레트를 자동 전환한다.
+class FabTabIconPair {
+  final String outlineSvg;
+  final String filledSvg;
+
+  /// 아이콘 상자. 비우면 탭 기본 크기.
+  final double? size;
+
+  const FabTabIconPair({
+    required this.outlineSvg,
+    required this.filledSvg,
+    this.size,
+  });
+}
+
 class FabStyleTabBar extends StatelessWidget {
   final int selectedIndex;
   final List<String> tabs;
   final ValueChanged<int> onTabSelected;
   final double height;
   final double fontSize;
+  final FontWeight fontWeight;
   final double tabWidth;
   final double padding;
+
+  /// 아이콘 왼쪽·문구 오른쪽 여백.
+  final double contentSidePadding;
+  final double letterSpacing;
+  final List<FabTabIconPair?>? tabIcons;
+
+  /// 평소에는 선택 탭 아이콘만 있는 원으로 줄고, 마우스 호버나 터치 때 펼친다.
+  final bool minimizeWhenIdle;
+
+  /// 0이면 요약 원, 1이면 펼친 탭바. [minimizeWhenIdle]이 켜지면 바깥에서 애니메이션한다.
+  final double revealed;
 
   const FabStyleTabBar({
     super.key,
@@ -3187,41 +3233,90 @@ class FabStyleTabBar extends StatelessWidget {
     required this.tabs,
     required this.onTabSelected,
     this.height = FabTabBarTokens.fabBarHeight,
-    this.fontSize = FabTabBarTokens.fabBarLabelFontSize,
+    this.fontSize = FabTabBarTokens.fabTabLabelFontSize,
+    this.fontWeight = FabTabBarTokens.fabTabLabelFontWeight,
     this.tabWidth = 96,
-    this.padding = 6,
+    this.padding = FabTabBarTokens.fabTabInnerPadding,
+    this.contentSidePadding = FabTabBarTokens.fabTabContentSidePadding,
+    this.letterSpacing = FabTabBarTokens.fabTabLetterSpacing,
+    this.tabIcons,
+    this.minimizeWhenIdle = false,
+    this.revealed = 1,
   });
+
+  static const double _tabIconSize = 32;
+  static const double _tabIconGap = 16;
+
+  FabTabIconPair? _iconAt(int index) {
+    final icons = tabIcons;
+    if (icons == null || index < 0 || index >= icons.length) return null;
+    return icons[index];
+  }
 
   @override
   Widget build(BuildContext context) {
+    if (minimizeWhenIdle) {
+      return _IdleMinimizingFabTabBar(
+        selectedIndex: selectedIndex,
+        tabs: tabs,
+        onTabSelected: onTabSelected,
+        height: height,
+        fontSize: fontSize,
+        fontWeight: fontWeight,
+        tabWidth: tabWidth,
+        padding: padding,
+        tabIcons: tabIcons,
+      );
+    }
+    final t = revealed.clamp(-0.08, 1.2);
     final palette = FabTabBarTokens.paletteFor(Theme.of(context).brightness);
     final double radius = height / 2;
     final double innerHeight = (height - padding * 2).clamp(0.0, 9999.0);
     final textStyle = TextStyle(
       fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
-      fontWeight: FontWeight.w600,
+      fontWeight: fontWeight,
       fontSize: fontSize,
+      height: 1.0,
+      letterSpacing: letterSpacing,
+      decoration: TextDecoration.none,
     );
     final textDirection = Directionality.of(context);
-    final slotWidths = tabs.map((label) {
+    final slotWidths = tabs.asMap().entries.map((entry) {
       final painter = TextPainter(
-        text: TextSpan(text: label, style: textStyle),
+        text: TextSpan(text: entry.value, style: textStyle),
         textDirection: textDirection,
         maxLines: 1,
         textScaler: MediaQuery.textScalerOf(context),
       )..layout();
-      return math.max(tabWidth, painter.width + 64);
+      final icon = _iconAt(entry.key);
+      final iconExtra = icon == null
+          ? 0.0
+          : (icon.size ?? _tabIconSize) + _tabIconGap;
+      return math.max(
+        tabWidth,
+        painter.width + contentSidePadding * 2 + iconExtra,
+      );
     }).toList(growable: false);
     final safeSelectedIndex = slotWidths.isEmpty
         ? 0
         : selectedIndex.clamp(0, slotWidths.length - 1).toInt();
-    final selectedLeft = slotWidths
+    final padT = t.clamp(0.0, 1.0);
+    final shownPadding = lerpDouble(0, padding, padT)!;
+    final shownWidths = slotWidths.asMap().entries.map((entry) {
+      final expanded = entry.value;
+      if (entry.key == safeSelectedIndex) {
+        return math.max(0.0, lerpDouble(height, expanded, t)!);
+      }
+      return math.max(0.0, lerpDouble(0.0, expanded, t)!);
+    }).toList(growable: false);
+    final selectedLeft = shownWidths
         .take(safeSelectedIndex)
         .fold<double>(0.0, (sum, width) => sum + width);
-    final selectedWidth =
-        slotWidths.isEmpty ? tabWidth : slotWidths[safeSelectedIndex];
+    final selectedWidth = shownWidths.isEmpty
+        ? tabWidth
+        : shownWidths[safeSelectedIndex];
     final totalWidth =
-        slotWidths.fold<double>(0.0, (sum, width) => sum + width);
+        shownWidths.fold<double>(0.0, (sum, width) => sum + width);
 
     return DecoratedBox(
       decoration: BoxDecoration(
@@ -3241,7 +3336,7 @@ class FabStyleTabBar extends StatelessWidget {
           ),
           child: Container(
             height: height,
-            padding: EdgeInsets.all(padding),
+            padding: EdgeInsets.all(shownPadding),
             decoration: BoxDecoration(
               color: palette.surface,
               borderRadius: BorderRadius.circular(radius),
@@ -3251,7 +3346,9 @@ class FabStyleTabBar extends StatelessWidget {
               child: Stack(
                 children: [
                   AnimatedPositioned(
-                    duration: const Duration(milliseconds: 250),
+                    duration: t > 0.999
+                        ? const Duration(milliseconds: 280)
+                        : Duration.zero,
                     curve: Curves.easeOutCubic,
                     left: selectedLeft,
                     top: 0,
@@ -3260,7 +3357,9 @@ class FabStyleTabBar extends StatelessWidget {
                     child: Container(
                       decoration: BoxDecoration(
                         color: palette.highlight,
-                        borderRadius: BorderRadius.circular(innerHeight / 2),
+                        borderRadius: BorderRadius.circular(
+                          lerpDouble(radius, innerHeight / 2, padT)!,
+                        ),
                       ),
                     ),
                   ),
@@ -3269,20 +3368,76 @@ class FabStyleTabBar extends StatelessWidget {
                       final index = entry.key;
                       final label = entry.value;
                       final isSelected = selectedIndex == index;
-                      return GestureDetector(
-                        onTap: () => onTabSelected(index),
-                        behavior: HitTestBehavior.opaque,
-                        child: SizedBox(
-                          width: slotWidths[index],
-                          child: Center(
-                            child: AnimatedDefaultTextStyle(
-                              duration: const Duration(milliseconds: 200),
-                              style: textStyle.copyWith(
-                                color: isSelected
-                                    ? palette.labelSelected
-                                    : palette.labelUnselected,
+                      final shownWidth = shownWidths[index];
+                      return IgnorePointer(
+                        ignoring: !isSelected && shownWidth < 8,
+                        child: GestureDetector(
+                          onTap: () => onTabSelected(index),
+                          behavior: HitTestBehavior.opaque,
+                          child: SizedBox(
+                            width: shownWidth,
+                            child: ClipRect(
+                              child: Opacity(
+                                opacity: (isSelected ? 1.0 : t).clamp(0.0, 1.0),
+                                child: Center(
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      if (_iconAt(index) case final icon?)
+                                        SvgPicture.string(
+                                          isSelected
+                                              ? icon.filledSvg
+                                              : icon.outlineSvg,
+                                          width: icon.size ?? _tabIconSize,
+                                          height: icon.size ?? _tabIconSize,
+                                          colorFilter: ColorFilter.mode(
+                                            isSelected
+                                                ? palette.labelSelected
+                                                : palette.labelUnselected,
+                                            BlendMode.srcIn,
+                                          ),
+                                        ),
+                                      if (_iconAt(index) != null)
+                                        ClipRect(
+                                          child: Align(
+                                            alignment: Alignment.centerLeft,
+                                            widthFactor: t.clamp(0.0, 1.0),
+                                            child: Opacity(
+                                              opacity: t.clamp(0.0, 1.0),
+                                              child: Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  const SizedBox(
+                                                    width: _tabIconGap,
+                                                  ),
+                                                  Text(
+                                                    label,
+                                                    style: textStyle.copyWith(
+                                                      color: isSelected
+                                                          ? palette
+                                                              .labelSelected
+                                                          : palette
+                                                              .labelUnselected,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          ),
+                                        )
+                                      else
+                                        Text(
+                                          label,
+                                          style: textStyle.copyWith(
+                                            color: isSelected
+                                                ? palette.labelSelected
+                                                : palette.labelUnselected,
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
                               ),
-                              child: Text(label),
                             ),
                           ),
                         ),
@@ -3293,6 +3448,109 @@ class FabStyleTabBar extends StatelessWidget {
               ),
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 홈 탭바. 평소에는 선택 아이콘만 있는 원이고, 호버·터치 때 펼친다.
+class _IdleMinimizingFabTabBar extends StatefulWidget {
+  final int selectedIndex;
+  final List<String> tabs;
+  final ValueChanged<int> onTabSelected;
+  final double height;
+  final double fontSize;
+  final FontWeight fontWeight;
+  final double tabWidth;
+  final double padding;
+  final List<FabTabIconPair?>? tabIcons;
+
+  const _IdleMinimizingFabTabBar({
+    required this.selectedIndex,
+    required this.tabs,
+    required this.onTabSelected,
+    required this.height,
+    required this.fontSize,
+    required this.fontWeight,
+    required this.tabWidth,
+    required this.padding,
+    required this.tabIcons,
+  });
+
+  @override
+  State<_IdleMinimizingFabTabBar> createState() =>
+      _IdleMinimizingFabTabBarState();
+}
+
+class _IdleMinimizingFabTabBarState extends State<_IdleMinimizingFabTabBar> {
+  /// 학생앱 하단 탭 펼침과 같은 길이·약한 바운스.
+  static const Duration _revealDuration = Duration(milliseconds: 280);
+  static const Curve _revealCurve = Cubic(0.22, 1.28, 0.36, 1.0);
+
+  final GlobalKey _boxKey = GlobalKey();
+  bool _open = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.pointerRouter.addGlobalRoute(_onPointer);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.pointerRouter.removeGlobalRoute(_onPointer);
+    super.dispose();
+  }
+
+  void _setOpen(bool open) {
+    if (_open == open) return;
+    setState(() => _open = open);
+  }
+
+  bool _containsGlobal(Offset global) {
+    final box = _boxKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null || !box.attached || !box.hasSize) return false;
+    final local = box.globalToLocal(global);
+    return local.dx >= 0 &&
+        local.dy >= 0 &&
+        local.dx <= box.size.width &&
+        local.dy <= box.size.height;
+  }
+
+  void _onPointer(PointerEvent event) {
+    if (event is! PointerDownEvent || !mounted) return;
+    final inside = _containsGlobal(event.position);
+    _setOpen(inside);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (event) {
+        if (event.kind != PointerDeviceKind.mouse) return;
+        _setOpen(true);
+      },
+      child: KeyedSubtree(
+        key: _boxKey,
+        child: TweenAnimationBuilder<double>(
+          tween: Tween<double>(end: _open ? 1 : 0),
+          duration: _revealDuration,
+          curve: _revealCurve,
+          builder: (context, revealed, _) {
+            return FabStyleTabBar(
+              selectedIndex: widget.selectedIndex,
+              tabs: widget.tabs,
+              onTabSelected: widget.onTabSelected,
+              height: widget.height,
+              fontSize: widget.fontSize,
+              fontWeight: widget.fontWeight,
+              tabWidth: widget.tabWidth,
+              padding: widget.padding,
+              tabIcons: widget.tabIcons,
+              revealed: revealed,
+            );
+          },
         ),
       ),
     );
@@ -3473,12 +3731,16 @@ class FabStyleActionButton extends StatelessWidget {
   final VoidCallback? onPressed;
   final double size;
   final IconData icon;
+  final String? label;
+  final String? iconSvg;
 
   const FabStyleActionButton({
     super.key,
     this.onPressed,
     this.size = FabTabBarTokens.fabBarHeight,
     this.icon = Icons.add,
+    this.label,
+    this.iconSvg,
   });
 
   @override
@@ -3513,11 +3775,36 @@ class FabStyleActionButton extends StatelessWidget {
                   Theme.of(context).brightness,
                 ),
               ),
-              child: Icon(
-                icon,
-                size: FabTabBarTokens.previewAcademyBaseFontSize + 8,
-                color: palette.labelSelected,
-              ),
+              child: iconSvg != null
+                  ? Center(
+                      child: SvgPicture.string(
+                        iconSvg!,
+                        width: 24,
+                        height: 24,
+                        colorFilter: ColorFilter.mode(
+                          palette.labelSelected,
+                          BlendMode.srcIn,
+                        ),
+                      ),
+                    )
+                  : label == null
+                  ? Icon(
+                      icon,
+                      size: FabTabBarTokens.previewAcademyBaseFontSize + 8,
+                      color: palette.labelSelected,
+                    )
+                  : Center(
+                      child: Text(
+                        label!,
+                        style: TextStyle(
+                          fontFamily: 'Pretendard',
+                          fontSize: 16,
+                          height: 1.0,
+                          fontWeight: FontWeight.w600,
+                          color: palette.labelSelected,
+                        ),
+                      ),
+                    ),
             ),
           ),
         ),
@@ -3957,25 +4244,128 @@ class FabStyleFloatingActionButtonLocation
   }
 }
 
+/// 메뉴 화면이 공용 탭바에 자기 선택과 탭 콜백을 넘기는 자리.
+///
+/// 탭바 위젯 자체는 [MainScreen]이 계속 들고 있어서, 메뉴를 바꿔도
+/// 오버레이를 지웠다 다시 넣지 않는다.
+class SharedScreenTabBarModel extends ChangeNotifier {
+  int menuIndex = -1;
+  int selectedIndex = 0;
+  bool forceHidden = false;
+  ValueChanged<int>? onSelected;
+
+  void bind({
+    required int menuIndex,
+    required int selectedIndex,
+    required ValueChanged<int> onSelected,
+    bool forceHidden = false,
+  }) {
+    final visualChanged = this.menuIndex != menuIndex ||
+        this.selectedIndex != selectedIndex ||
+        this.forceHidden != forceHidden;
+    this.menuIndex = menuIndex;
+    this.selectedIndex = selectedIndex;
+    this.onSelected = onSelected;
+    this.forceHidden = forceHidden;
+    if (!visualChanged) return;
+    _notifyAfterBuild();
+  }
+
+  void setSelected(int index) {
+    if (selectedIndex == index && !forceHidden) return;
+    selectedIndex = index;
+    forceHidden = false;
+    notifyListeners();
+  }
+
+  void setHidden(bool hidden) {
+    if (forceHidden == hidden) return;
+    forceHidden = hidden;
+    notifyListeners();
+  }
+
+  void unbindMenu(int menuIndex) {
+    if (this.menuIndex != menuIndex) return;
+    onSelected = null;
+  }
+
+  void _notifyAfterBuild() {
+    final phase = SchedulerBinding.instance.schedulerPhase;
+    if (phase == SchedulerPhase.persistentCallbacks) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        notifyListeners();
+      });
+      return;
+    }
+    notifyListeners();
+  }
+}
+
+final sharedScreenTabBar = SharedScreenTabBarModel();
+
 /// 하단 FAB 스타일 탭바를 루트 오버레이에 고정 (슬라이드시트에 밀리지 않음).
 class FabStyleScreenTabBarOverlay {
   OverlayEntry? _entry;
   int _selectedIndex = 0;
   List<String> _tabs = const [];
   ValueChanged<int>? _onTabSelected;
+  double? _rightInset;
+  double? _fontSize;
+  FontWeight? _fontWeight;
+  double? _padding;
+  double? _contentSidePadding;
+  double? _letterSpacing;
+  List<FabTabIconPair?>? _tabIcons;
+  bool _minimizeWhenIdle = false;
+  bool _centerInContent = true;
+  bool _sideSheetWidthListening = false;
   bool _syncScheduled = false;
   bool _disposed = false;
+
+  void _onLeftSideSheetWidthChanged() {
+    _entry?.markNeedsBuild();
+  }
+
+  void _setSideSheetWidthListener(bool enabled) {
+    if (enabled == _sideSheetWidthListening) return;
+    if (enabled) {
+      leftSideSheetClipWidthNotifier.addListener(_onLeftSideSheetWidthChanged);
+    } else {
+      leftSideSheetClipWidthNotifier
+          .removeListener(_onLeftSideSheetWidthChanged);
+    }
+    _sideSheetWidthListening = enabled;
+  }
 
   void sync(
     BuildContext context, {
     required int selectedIndex,
     required List<String> tabs,
     required ValueChanged<int> onTabSelected,
+    double? rightInset,
+    double? fontSize,
+    FontWeight? fontWeight,
+    double? padding,
+    double? contentSidePadding,
+    double? letterSpacing,
+    List<FabTabIconPair?>? tabIcons,
+    bool minimizeWhenIdle = false,
+    bool centerInContent = true,
   }) {
     _disposed = false;
     _selectedIndex = selectedIndex;
     _tabs = tabs;
     _onTabSelected = onTabSelected;
+    _rightInset = rightInset;
+    _fontSize = fontSize;
+    _fontWeight = fontWeight;
+    _padding = padding;
+    _contentSidePadding = contentSidePadding;
+    _letterSpacing = letterSpacing;
+    _tabIcons = tabIcons;
+    _minimizeWhenIdle = minimizeWhenIdle;
+    _centerInContent = centerInContent;
+    _setSideSheetWidthListener(centerInContent);
 
     if (_syncScheduled) return;
     _syncScheduled = true;
@@ -4002,21 +4392,53 @@ class FabStyleScreenTabBarOverlay {
 
   void dispose() {
     _disposed = true;
+    _setSideSheetWidthListener(false);
     _entry?.remove();
     _entry = null;
   }
 
+  Widget _buildTabBar() {
+    return FabStyleTabBar(
+      selectedIndex: _selectedIndex,
+      tabs: _tabs,
+      onTabSelected: _onTabSelected ?? (_) {},
+      fontSize: _fontSize ?? FabTabBarTokens.fabTabLabelFontSize,
+      fontWeight: _fontWeight ?? FabTabBarTokens.fabTabLabelFontWeight,
+      padding: _padding ?? FabTabBarTokens.fabTabInnerPadding,
+      contentSidePadding:
+          _contentSidePadding ?? FabTabBarTokens.fabTabContentSidePadding,
+      letterSpacing: _letterSpacing ?? FabTabBarTokens.fabTabLetterSpacing,
+      tabIcons: _tabIcons,
+      minimizeWhenIdle: _minimizeWhenIdle,
+    );
+  }
+
   Widget _buildOverlay(BuildContext overlayContext) {
+    if (_centerInContent) {
+      final railWidth = NavigationRailTheme.of(overlayContext).minWidth ??
+          FabTabBarTokens.fabBarNavRailDefaultWidth;
+      final sideSheetWidth = leftSideSheetClipWidthNotifier.value;
+      return Positioned(
+        left: railWidth + sideSheetWidth,
+        right: 0,
+        bottom: FabTabBarTokens.fabBarBottomInset,
+        child: Center(child: _buildTabBar()),
+      );
+    }
+    final rightInset = _rightInset;
+    if (rightInset != null) {
+      return Positioned(
+        right: rightInset,
+        bottom: FabTabBarTokens.fabBarBottomInset,
+        child: _buildTabBar(),
+      );
+    }
     final railWidth = NavigationRailTheme.of(overlayContext).minWidth ??
         FabTabBarTokens.fabBarNavRailDefaultWidth;
     return Positioned(
       left: railWidth + FabTabBarTokens.fabBarLeftInsetFromNavRail,
       bottom: FabTabBarTokens.fabBarBottomInset,
-      child: FabStyleTabBar(
-        selectedIndex: _selectedIndex,
-        tabs: _tabs,
-        onTabSelected: _onTabSelected ?? (_) {},
-      ),
+      child: _buildTabBar(),
     );
   }
 }

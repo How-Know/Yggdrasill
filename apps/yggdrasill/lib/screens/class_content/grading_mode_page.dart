@@ -1,14 +1,15 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
-import 'dart:ui';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 import '../../app_overlays.dart';
 import '../../services/data_manager.dart';
 import '../../services/homework_assignment_store.dart';
+import '../../services/homework_departure_draft_service.dart';
 import '../../services/homework_store.dart';
 import '../../services/right_sheet_answer_preload_service.dart';
 import '../../services/tenant_service.dart';
@@ -17,9 +18,12 @@ import '../../services/textbook_pdf_service.dart';
 import '../../utils/homework_page_text.dart';
 import '../../widgets/app_snackbar.dart';
 import '../../widgets/dialog_tokens.dart';
+import '../../widgets/home_grading_edit_icon.dart';
 import '../../widgets/home_header_weather_icon.dart';
 import '../../widgets/navigation_rail.dart';
 import '../../widgets/resource_textbook_card.dart';
+import '../../widgets/solid_capsule_action_bar.dart';
+import '../../widgets/utility_glass_dialog_shell.dart';
 import '../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import 'grading_queue_order.dart';
 
@@ -47,10 +51,7 @@ const double _kGradingStackedCardGap = 12.0;
 const double _kGradingHomeworkCardMetaFontSize = 22.0;
 const double _kGradingHomeworkCardMetaLineHeightMax = 0.92;
 const double _kGradingHomeworkCardMetaLineHeightMin = 0.72;
-const double _kGradingHomeworkCardCoverNameFontSize =
-    FabTabBarTokens.previewAcademyMainTitleFontSize;
 const double _kGradingHomeworkCardCoverDetailFontSize = 22.0;
-const double _kGradingHomeworkCardCoverNameLineHeight = 1.15;
 const double _kGradingHomeworkCardCoverDetailLineHeight = 1.1;
 const double _kGradingHomeworkCardCoverNameVerticalPad = 10.0;
 
@@ -58,8 +59,25 @@ const double _kGradingHomeworkCardCoverNameVerticalPad = 10.0;
 /// 숙제칩(pad 6*2 + 15*1.1 + border)과 경과시간(22*1.1) 중 큰 쪽에 맞춤.
 const double _kGradingCoverSecondLineSlotHeight = 32.0;
 const double _kGradingAnswerRailHorizontalPadding = 24.0;
-const double _kGradingAnswerRailHeaderGap = 12.0;
-const EdgeInsets _kGradingPagePadding = EdgeInsets.fromLTRB(0, 24, 24, 24);
+const double _kGradingPageTitleIconSize = 32;
+
+/// 수업 현황 헤더와 같은 시작점. SafeArea 아래 `topInset - 12`.
+double _gradingTitleTop(BuildContext context) {
+  return MediaQuery.paddingOf(context).top +
+      (FabTabBarTokens.previewAcademyTopInset - 12);
+}
+
+/// 수업 현황 헤더 줄 높이. 오른쪽 도구 캡슐(세로 패딩 8 + 터치 40)이 56이다.
+const double _kGradingHeaderBandHeight = 56;
+
+/// 제목 줄 아래 간격. 카드·정답 리스트 상단이 왼쪽 시트 버튼 아이콘(84)과 맞는다.
+const double _kGradingPageTitleGap = 16;
+
+double _gradingCardListTop(BuildContext context) {
+  return _gradingTitleTop(context) +
+      _kGradingHeaderBandHeight +
+      _kGradingPageTitleGap;
+}
 const String _kGradingAnswerBookCategory = 'textbook';
 const List<String> _kGradingAnswerGradeOrder = [
   '\uCD081',
@@ -155,7 +173,6 @@ class GradingModePage extends StatefulWidget {
   final void Function(String studentId, String itemId)? onTogglePending;
   final String headerDateText;
   final String headerTimeText;
-  final String headerSubmittedText;
   final bool showAnchorDateHint;
 
   const GradingModePage({
@@ -165,7 +182,6 @@ class GradingModePage extends StatefulWidget {
     required this.arrivalTimesByStudentId,
     required this.headerDateText,
     required this.headerTimeText,
-    required this.headerSubmittedText,
     this.showAnchorDateHint = false,
     this.onSubmittedCardTap,
     this.onHomeworkCardTap,
@@ -187,6 +203,7 @@ class _GradingModePageState extends State<GradingModePage> {
   Map<String, List<HomeworkAssignmentDetail>> _lastActiveAssignmentsByStudent =
       const <String, List<HomeworkAssignmentDetail>>{};
   final Map<String, DateTime> _retainedQueueTimeByEntry = <String, DateTime>{};
+  bool _clearingVisibleHomework = false;
 
   @override
   void initState() {
@@ -241,11 +258,17 @@ class _GradingModePageState extends State<GradingModePage> {
                 return LayoutBuilder(
                   builder: (context, constraints) {
                     final railWidth = _resolveAnswerRailWidth(context);
+                    final titleTop = _gradingTitleTop(context);
                     return Stack(
                       clipBehavior: Clip.none,
                       children: [
                         Padding(
-                          padding: _kGradingPagePadding,
+                          padding: EdgeInsets.fromLTRB(
+                            0,
+                            _gradingCardListTop(context),
+                            24,
+                            24,
+                          ),
                           child: Row(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
@@ -276,25 +299,82 @@ class _GradingModePageState extends State<GradingModePage> {
                           ),
                         ),
                         Positioned(
+                          top: titleTop,
                           left: 0,
-                          top: 0,
-                          bottom: 0,
-                          width: railWidth,
-                          child: Padding(
-                            padding: EdgeInsets.only(
-                              top: MediaQuery.paddingOf(context).top + 8,
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                _buildGradingRailHeader(),
-                                const SizedBox(
-                                  height: _kGradingAnswerRailHeaderGap,
+                          right: 24,
+                          height: _kGradingHeaderBandHeight,
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              SizedBox(
+                                width: railWidth,
+                                child: Padding(
+                                  padding: const EdgeInsets.only(left: 24),
+                                  child: Row(
+                                    children: [
+                                      SvgPicture.string(
+                                        homeGradingEditOutlineSvg,
+                                        width: _kGradingPageTitleIconSize,
+                                        height: _kGradingPageTitleIconSize,
+                                        colorFilter: ColorFilter.mode(
+                                          FabTabBarTokens
+                                              .previewAcademyPanelStyleFor(
+                                            Theme.of(context).brightness,
+                                          ).title,
+                                          BlendMode.srcIn,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 16),
+                                      const FabStyleScreenMainTitle(
+                                        title: '채점',
+                                        overlay: true,
+                                      ),
+                                    ],
+                                  ),
                                 ),
-                                Expanded(child: _buildAnswerBookRail()),
-                              ],
-                            ),
+                              ),
+                              const SizedBox(width: 22),
+                              Expanded(
+                                child: Align(
+                                  alignment: Alignment.centerRight,
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      _buildGradingStatusLine(),
+                                      const SizedBox(width: 12),
+                                      SolidCapsuleActionBar(
+                                        children: [
+                                          SolidCapsuleActionButton(
+                                            tooltip: homeworkEntries.isEmpty
+                                                ? '안 함으로 처리할 숙제가 없습니다'
+                                                : '보이는 숙제 안 함 처리',
+                                            icon: Icons
+                                                .cleaning_services_outlined,
+                                            onPressed: homeworkEntries
+                                                        .isEmpty ||
+                                                    _clearingVisibleHomework
+                                                ? null
+                                                : () => unawaited(
+                                                      _confirmClearVisibleHomework(
+                                                        homeworkEntries,
+                                                      ),
+                                                    ),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
+                        ),
+                        Positioned(
+                          left: 0,
+                          top: _gradingCardListTop(context),
+                          bottom: FabTabBarTokens.fabBarBottomInset,
+                          width: railWidth,
+                          child: _buildAnswerBookRail(),
                         ),
                       ],
                     );
@@ -415,113 +495,183 @@ class _GradingModePageState extends State<GradingModePage> {
     );
   }
 
-  Widget _buildGradingRailHeader() {
+  Widget _buildGradingStatusLine() {
     final brightness = Theme.of(context).brightness;
     final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
     final dateStyle = FabTabBarTokens.previewAcademyMainTitleStyle(panelStyle);
-    final statsStyle =
-        FabTabBarTokens.previewAcademyLabelStyle(panelStyle).copyWith(
-      color: brightness == Brightness.light
-          ? const Color(0xFF1976D2)
-          : const Color(0xFF8FB3FF),
-      fontWeight: FontWeight.w700,
-    );
     const textHeightBehavior = TextHeightBehavior(
       applyHeightToFirstAscent: false,
       applyHeightToLastDescent: false,
     );
-    const titleLineHeight =
-        FabTabBarTokens.previewAcademyMainTitleFontSize * 1.15;
 
     return FabStyleGlassPanel(
       useTopButtonCapsuleBackground: brightness == Brightness.light,
       useFabTabBarBackground: brightness == Brightness.dark,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      child: Column(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Row(
         mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Row(
-            children: [
-              SizedBox(
-                width: 58,
-                height: titleLineHeight,
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: HomeHeaderWeatherIcon(
-                    iconSize: 30,
-                    color: panelStyle.icon,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: SizedBox(
-                  height: titleLineHeight,
-                  child: Align(
-                    alignment: Alignment.centerRight,
-                    child: Text(
-                      widget.headerDateText,
-                      maxLines: 1,
-                      softWrap: false,
-                      overflow: TextOverflow.clip,
-                      textAlign: TextAlign.right,
-                      style: dateStyle,
-                      textHeightBehavior: textHeightBehavior,
-                    ),
-                  ),
-                ),
-              ),
-            ],
+          HomeHeaderWeatherIcon(
+            iconSize: 40,
+            color: panelStyle.icon,
           ),
-          const SizedBox(height: 4),
-          Row(
-            children: [
-              SizedBox(
-                width: 58,
-                height: titleLineHeight,
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    widget.headerSubmittedText,
-                    maxLines: 1,
-                    softWrap: false,
-                    overflow: TextOverflow.clip,
-                    style: statsStyle,
-                    textHeightBehavior: textHeightBehavior,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: SizedBox(
-                  height: titleLineHeight,
-                  child: Align(
-                    alignment: Alignment.centerRight,
-                    child: Text(
-                      widget.headerTimeText,
-                      maxLines: 1,
-                      softWrap: false,
-                      overflow: TextOverflow.clip,
-                      textAlign: TextAlign.right,
-                      style: dateStyle,
-                      textHeightBehavior: textHeightBehavior,
-                    ),
-                  ),
-                ),
-              ),
-            ],
+          const SizedBox(width: 18),
+          Text(
+            widget.headerTimeText,
+            maxLines: 1,
+            softWrap: false,
+            overflow: TextOverflow.clip,
+            style: dateStyle,
+            textHeightBehavior: textHeightBehavior,
+          ),
+          const SizedBox(width: 12),
+          Text(
+            widget.headerDateText,
+            maxLines: 1,
+            softWrap: false,
+            overflow: TextOverflow.clip,
+            style: dateStyle,
+            textHeightBehavior: textHeightBehavior,
           ),
           if (widget.showAnchorDateHint) ...[
-            const SizedBox(height: 4),
+            const SizedBox(width: 12),
             Text(
-              '\uC2AC\uB77C\uC774\uB4DC\uC2DC\uD2B8 \uAE30\uC900\uC77C',
+              '슬라이드시트 기준일',
+              maxLines: 1,
               style: FabTabBarTokens.previewAcademyValueStyle(panelStyle)
                   .copyWith(fontSize: 12, fontWeight: FontWeight.w600),
             ),
           ],
         ],
       ),
+    );
+  }
+
+  Future<void> _confirmClearVisibleHomework(
+    List<_GradingGroupEntry> entries,
+  ) async {
+    if (entries.isEmpty || _clearingVisibleHomework || !mounted) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierColor: Colors.black54,
+      builder: (dialogContext) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          child: UtilityGlassDialogShell(
+            title: '보이는 숙제 안 함',
+            icon: Icons.cleaning_services_outlined,
+            preferredWidth: 460,
+            maxWidth: 460,
+            maxHeight: 280,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(18, 14, 18, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(
+                    child: Text(
+                      '지금 보이는 숙제 ${entries.length}개를 모두 숙제 안 함으로 처리합니다.\n'
+                      '0%로 기록되고 오늘 과제로 전환됩니다.',
+                      style: const TextStyle(
+                        color: kDlgTextSub,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        height: 1.35,
+                      ),
+                    ),
+                  ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextButton(
+                          onPressed: () =>
+                              Navigator.of(dialogContext).pop(false),
+                          style: TextButton.styleFrom(
+                            foregroundColor: kDlgTextSub,
+                          ),
+                          child: const Text('취소'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: FilledButton(
+                          onPressed: () =>
+                              Navigator.of(dialogContext).pop(true),
+                          child: const Text('안 함 처리'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+    if (confirmed != true || !mounted) return;
+    await _markVisibleHomeworkNotDone(entries);
+  }
+
+  Future<void> _markVisibleHomeworkNotDone(
+    List<_GradingGroupEntry> entries,
+  ) async {
+    if (_clearingVisibleHomework) return;
+    setState(() => _clearingVisibleHomework = true);
+    var done = 0;
+    var failed = 0;
+    try {
+      for (final entry in entries) {
+        final activeChildren = entry.children
+            .where((item) => item.status != HomeworkStatus.completed)
+            .toList(growable: false);
+        if (activeChildren.isEmpty) continue;
+        final groupId = (entry.group?.id ??
+                HomeworkStore.instance
+                    .groupIdOfItem(activeChildren.first.id) ??
+                '')
+            .trim();
+        if (groupId.isEmpty) {
+          failed++;
+          continue;
+        }
+        final result =
+            await HomeworkAssignmentStore.instance.recordGroupOutcome(
+          studentId: entry.studentId,
+          groupId: groupId,
+          homeworkItemIds: activeChildren.map((item) => item.id),
+          outcome: HomeworkAssignmentOutcome.notDone,
+        );
+        if (!mounted) return;
+        if (result == null) {
+          failed++;
+          continue;
+        }
+        for (final item in activeChildren) {
+          item.status = result.returnedToClass
+              ? HomeworkStatus.inProgress
+              : HomeworkStatus.homework;
+          item.phase = 1;
+          item.runStart = null;
+        }
+        final attendanceId = result.attendanceId;
+        if (attendanceId != null) {
+          HomeworkDepartureDraftService.instance.invalidate(attendanceId);
+        }
+        done++;
+      }
+      HomeworkStore.instance.bumpRevision();
+    } finally {
+      if (mounted) setState(() => _clearingVisibleHomework = false);
+    }
+    if (!mounted) return;
+    showAppSnackBar(
+      context,
+      failed == 0
+          ? '숙제 $done개를 안 함으로 처리했습니다.'
+          : '숙제 $done개를 처리했고 $failed개는 실패했습니다.',
     );
   }
 
@@ -997,7 +1147,10 @@ class _GradingModePageState extends State<GradingModePage> {
       scrollDirection: Axis.horizontal,
       reverse: true,
       physics: const BouncingScrollPhysics(),
-      clipBehavior: Clip.none,
+      // 왼쪽 끝에서 카드를 잘라 둔다. 캐시를 넓혀 화면 안에 남은 조각이
+      // 빌드에서 빠지며 통째로 사라지지 않게 한다.
+      clipBehavior: Clip.hardEdge,
+      cacheExtent: math.max(cardLayout.width * 2, 800),
       padding: EdgeInsets.zero,
       itemCount: stacks.length,
       separatorBuilder: (_, __) => SizedBox(width: cardLayout.spacing),
@@ -2312,17 +2465,11 @@ class _GradingAnswerBookCardState extends State<_GradingAnswerBookCard> {
                             widget.book.displayName,
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontFamily:
-                                  FabTabBarTokens.previewHeadlineFontFamily,
-                              color: Colors.white,
-                              fontSize: FabTabBarTokens
-                                  .previewAcademyMainTitleFontSize,
-                              fontWeight:
-                                  FabTabBarTokens.previewHeadlineFontWeight,
-                              height: 1.15,
-                              letterSpacing: -0.3,
-                            ),
+                            style: FabTabBarTokens.previewAcademyMainTitleStyle(
+                              FabTabBarTokens.previewAcademyPanelStyleFor(
+                                Theme.of(context).brightness,
+                              ),
+                            ).copyWith(color: Colors.white),
                           ),
                           const SizedBox(height: 10),
                           Text(
@@ -2360,49 +2507,28 @@ class _GradingAnswerGradeBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final brightness = Theme.of(context).brightness;
-    final palette = FabTabBarTokens.paletteFor(brightness);
-    final isDark = brightness == Brightness.dark;
-    final capsuleColor =
-        isDark ? const Color(0xE610171A) : Colors.white.withValues(alpha: 0.92);
-    final borderColor = isDark
-        ? const Color(0xFF355056).withValues(alpha: 0.62)
-        : Colors.black.withValues(alpha: 0.04);
-    return DecoratedBox(
+    const fontSize = 20.0;
+    const verticalPad = (fontSize * 32 / 12 - fontSize) / 2 * 0.7;
+    const badgeHeight = fontSize + verticalPad * 2;
+    return Container(
+      height: badgeHeight,
+      padding: const EdgeInsets.symmetric(horizontal: fontSize * 10 / 12),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(999),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: isDark ? 0.22 : 0.08),
-            blurRadius: 28,
-            offset: const Offset(0, 12),
-          ),
-        ],
+        color: Colors.black.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(badgeHeight / 2),
       ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(999),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-          child: Container(
-            decoration: BoxDecoration(
-              color: capsuleColor,
-              borderRadius: BorderRadius.circular(999),
-              border: Border.all(color: borderColor),
-            ),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-            child: Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
-                fontSize: 20,
-                fontWeight: FabTabBarTokens.previewAcademyLabelFontWeight,
-                height: 1.0,
-                color: palette.labelSelected,
-              ),
-            ),
-          ),
+      alignment: Alignment.center,
+      child: Text(
+        label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        textScaler: TextScaler.noScaling,
+        style: const TextStyle(
+          color: Colors.white70,
+          fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
+          fontSize: fontSize,
+          fontWeight: FontWeight.w600,
+          height: 1.0,
         ),
       ),
     );
@@ -2492,8 +2618,7 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
     final scale =
         (cardHeight / _kGradingBaseCardHeight).clamp(0.5, 1.15).toDouble();
     final cardRadius = FabTabBarTokens.previewAcademyGroupedCardRadius;
-    final coverMetaGap =
-        (resourceTextbookCardCoverMetaGap * scale).clamp(8.0, 14.0).toDouble();
+    final coverMetaGap = (24.0 * scale).clamp(8.0, 24.0).toDouble();
     final contentPadH = (12.0 * scale).clamp(6.0, 12.0).toDouble();
     final line4 = _buildLine4MinutesSinceSubmitted(entry);
     final pageLines = _buildOverlayPageLines(entry);
@@ -2584,13 +2709,8 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
             _kGradingHomeworkCardMetaLineHeightMax,
           )
           .toDouble();
-      final titleStyle =
-          FabTabBarTokens.previewAcademyLabelStyle(panelStyle).copyWith(
-        fontSize: subFontSize,
-        fontWeight: FontWeight.w700,
-        height: lineHeight,
-        letterSpacing: -0.2,
-      );
+      final sourceStyle =
+          FabTabBarTokens.previewAcademyMainTitleStyle(panelStyle);
       final subtitleStyle = TextStyle(
         color: panelStyle.hint,
         fontSize: subFontSize,
@@ -2604,8 +2724,12 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
               ? '$bookStr \u00B7 $courseStr'
               : (bookStr != '-' ? bookStr : courseStr));
       final lineRowHeight = subFontSize * lineHeight;
-      final metaLineGap =
-          math.max(0.0, (metaContentHeight - lineRowHeight * 3) / 2);
+      const sourceRowHeight =
+          FabTabBarTokens.previewAcademyMainTitleFontSize * 1.15;
+      final metaLineGap = math.max(
+        0.0,
+        (metaContentHeight - sourceRowHeight - lineRowHeight * 2) / 2,
+      );
 
       return SizedBox(
         height: metaContentHeight,
@@ -2624,10 +2748,11 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
               Widget metaLineSlot({
                 required String text,
                 required TextStyle style,
+                double? slotHeight,
                 Alignment alignment = Alignment.centerLeft,
               }) {
                 return SizedBox(
-                  height: lineRowHeight,
+                  height: slotHeight ?? lineRowHeight,
                   width: double.infinity,
                   child: Align(
                     alignment: alignment,
@@ -2645,7 +2770,11 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  metaLineSlot(text: line1Text, style: titleStyle),
+                  metaLineSlot(
+                    text: line1Text,
+                    style: sourceStyle,
+                    slotHeight: sourceRowHeight,
+                  ),
                   SizedBox(height: metaLineGap),
                   metaLineSlot(
                     text: titleSplit.line1,
@@ -2699,6 +2828,9 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
       future: coverPathFuture,
       builder: (context, snapshot) {
         final hw = entry.summary;
+        final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(
+          Theme.of(context).brightness,
+        );
         final provider = _coverImageProvider(snapshot.data ?? '');
         final hasImage = provider != null;
         final isProblemBankSource = _gradingEntryIsProblemBankSource(entry);
@@ -2709,9 +2841,7 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
         final useDarkOverlayText = !isProblemBankSource &&
             (isPrintCover ||
                 (!hasImage && fallbackCoverColor.computeLuminance() > 0.6));
-        const overlayNameFontSize = _kGradingHomeworkCardCoverNameFontSize;
         const overlayDetailFontSize = _kGradingHomeworkCardCoverDetailFontSize;
-        const overlayNameLineHeight = _kGradingHomeworkCardCoverNameLineHeight;
         const overlayDetailLineHeight =
             _kGradingHomeworkCardCoverDetailLineHeight;
         final overlayHorizontalPad = (14.0 * scale).clamp(8.0, 14.0).toDouble();
@@ -2804,12 +2934,10 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           textAlign: TextAlign.center,
-                          style: TextStyle(
+                          style: FabTabBarTokens.previewAcademyMainTitleStyle(
+                            panelStyle,
+                          ).copyWith(
                             color: overlayNameColor,
-                            fontSize: overlayNameFontSize,
-                            fontWeight: FontWeight.w900,
-                            height: overlayNameLineHeight,
-                            letterSpacing: 0.3,
                             shadows: overlayNameShadows,
                           ),
                         ),

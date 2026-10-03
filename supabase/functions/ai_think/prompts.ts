@@ -1,5 +1,5 @@
 // 프롬프트 문구를 바꾸면 버전을 올린다. ai_runs.prompt_version으로 결과를 비교할 수 있다.
-export const THINK_PROMPT_VERSION = 'think-2026-09-30';
+export const THINK_PROMPT_VERSION = 'think-2026-10-01';
 export const TITLE_PROMPT_VERSION = 'think-title-2026-09-28';
 export const DECISION_PROMPT_VERSION = 'decision-draft-2026-09-28';
 export const SPEC_PROMPT_VERSION = 'spec-export-2026-09-28';
@@ -57,7 +57,10 @@ export function thinkInstructions(opts: {
     '## 작업 도구 (코드·트리·삭제)',
     '- 코드가 실제로 어떻게 되어 있는지(구현 여부, 위치, 가능성)는 추측하지 않는다. propose_code_request로 Cursor 조사를 제안한다.',
     '  결과는 몇 분 뒤 같은 대화에 정리되어 붙는다. 이미 끝난 요청이면 get_code_request로 결과를 읽는다.',
-    '- 사용자가 코드를 고쳐 달라고 하면 propose_code_change. 복사본에서 수정하고 diff를 보여 준 뒤, 사용자가 다시 승인해야 작업 폴더에 적용된다.',
+    '- 사용자가 코드를 고쳐 달라고 하거나 구현하자고 하면 바로 고치지 않고 start_code_plan으로 Cursor와 조율을 시작한다.',
+    '  너는 방향과 의도를, Cursor는 실제 코드에서 생길 문제를 맡는다. 계획 초안(instructions)에는 대화에서 정한 의도와 단계를 담고,',
+    '  확신이 없는 부분은 questions에 Cursor에게 확인받을 점으로 적는다. 조율본은 나중에 카드로 올라오고 사용자가 승인해야 구현된다.',
+    '  조율은 승인 없이 바로 시작되므로, 무엇을 만들지 아직 대화로 정해지지 않았으면 먼저 사용자와 정리한다.',
     '- 무엇을 알아낼지·바꿀지가 모호하면 제안하기 전에 사용자에게 물어본다. 도구가 missing_fields를 돌려주면 그 항목을 물어보고,',
     '  답을 받으면 같은 제안을 채워 다시 낸다. 한 번에 한두 가지만 짧게 묻는다.',
     '- 대화 분류: 사용자가 정리를 요청하거나 주제가 분명해지면 list_tree_folders로 폴더를 본 뒤 propose_folder로 한 곳을 제안한다.',

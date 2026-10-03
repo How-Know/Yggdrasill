@@ -197,8 +197,6 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
 
   int _customTabIndex = 0;
   TextbookExplorerController? _explorer;
-  final FabStyleScreenTabBarOverlay _fabTabBarOverlay =
-      FabStyleScreenTabBarOverlay();
   final TextbookExplorerFabOverlay _explorerFabOverlay =
       TextbookExplorerFabOverlay();
   final GlobalKey _dropdownButtonKey = GlobalKey();
@@ -2139,15 +2137,19 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
 
   void _syncFabTabBarOverlay() {
     if (_explorer != null) {
-      _fabTabBarOverlay.dispose();
+      sharedScreenTabBar.bind(
+        menuIndex: 4,
+        selectedIndex: _customTabIndex,
+        onSelected: _selectResourcesTab,
+        forceHidden: true,
+      );
       _syncExplorerFabOverlay();
       return;
     }
-    _fabTabBarOverlay.sync(
-      context,
+    sharedScreenTabBar.bind(
+      menuIndex: 4,
       selectedIndex: _customTabIndex,
-      tabs: _resourceTabLabels,
-      onTabSelected: _selectResourcesTab,
+      onSelected: _selectResourcesTab,
     );
     _syncExplorerFabOverlay();
   }
@@ -2242,7 +2244,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     _explorer?.dispose();
     hideGlobalMemoFloatingBanners.value = false;
     hideGlobalMainFab.value = false;
-    _fabTabBarOverlay.dispose();
+    sharedScreenTabBar.unbindMenu(4);
     _explorerFabOverlay.dispose();
     for (final c in _gridScrollCtrls) {
       c.dispose();

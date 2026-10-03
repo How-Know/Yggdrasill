@@ -30,7 +30,7 @@ export class SupabaseReviewStore implements ReviewStore {
     if (!r) return null;
     const rounds = await this.db
       .from('ai_code_request_rounds')
-      .select('round,result,result_text')
+      .select('round,result,result_text,think_questions')
       .eq('request_id', id)
       .eq('status', 'finished')
       .order('round');
@@ -49,6 +49,7 @@ export class SupabaseReviewStore implements ReviewStore {
         round: Number(x.round ?? 0),
         result: x.result == null ? null : obj(x.result),
         result_text: (x.result_text as string | null) ?? null,
+        think_questions: Array.isArray(x.think_questions) ? x.think_questions.filter((q): q is string => typeof q === 'string') : [],
       })),
     };
   }
@@ -65,10 +66,28 @@ export class SupabaseReviewStore implements ReviewStore {
     return this.think.insertMessage(msg);
   }
 
-  async followup(id: string, prompt: string): Promise<boolean> {
-    const { data, error } = await this.db.rpc('ai_code_bridge_followup', { p_request_id: id, p_prompt: prompt });
+  async followup(id: string, prompt: string, questions: string[]): Promise<boolean> {
+    const { data, error } = await this.db.rpc('ai_code_bridge_followup', { p_request_id: id, p_prompt: prompt, p_questions: questions });
     if (error) throw new Error(`ai_code_bridge_followup: ${error.message}`);
     return (data as Row | null)?.ok === true;
+  }
+
+  async proposePlan(
+    requestId: string,
+    messageId: string,
+    title: string,
+    spec: Record<string, unknown>,
+    preview: Record<string, unknown>,
+  ): Promise<string | null> {
+    const { data, error } = await this.db.rpc('ai_code_bridge_propose_plan', {
+      p_request_id: requestId,
+      p_message_id: messageId,
+      p_title: title,
+      p_spec: spec,
+      p_preview: preview,
+    });
+    if (error) throw new Error(`ai_code_bridge_propose_plan: ${error.message}`);
+    return typeof data === 'string' ? data : null;
   }
 
   async reviewDone(id: string, status: 'done' | 'skipped' | 'error', messageId: string | null, err: string | null): Promise<void> {

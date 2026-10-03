@@ -1,5 +1,6 @@
-// Think 작업 도구: 트리·대화·코드 요청 읽기 + 제안(propose_*).
+// Think 작업 도구: 트리·대화·코드 요청 읽기 + 제안(propose_*) + 조율 시작(start_code_plan).
 // 제안 도구는 ai_actions에 "제안" 1행만 남긴다. 실행은 사용자가 카드에서 승인할 때 ai_action_apply가 한다.
+// 조율 시작만 예외로 바로 대기열에 넣는다(읽기 전용, 운영자 결정 2026-10-01). 고치는 일은 조율본 승인 뒤에만 한다.
 // 설계: docs/architecture/ai-think-actions.md
 
 import type { AiFunctionTool } from '../_shared/ai/types.ts';
@@ -9,6 +10,7 @@ import type { ToolRunResult } from './tools.ts';
 export type ActionKind =
   | 'code_request'
   | 'code_change'
+  | 'code_plan'
   | 'place_conversation'
   | 'delete_code_request'
   | 'delete_folder'
@@ -93,6 +95,8 @@ export interface ActionToolSource {
   listCodeRequests(query: string | null, limit: number): Promise<CodeRequestHit[]>;
   getCodeRequest(id: string): Promise<CodeRequestDetail | null>;
   proposeAction(conversationId: string, kind: ActionKind, payload: Record<string, unknown>, preview: Record<string, unknown>): Promise<ActionRow>;
+  /** 조율 요청을 만들어 바로 보낸다. 하루 한도를 넘으면 'code_request_daily_limit'가 든 오류를 던진다. */
+  startCodePlan(conversationId: string, title: string, spec: Record<string, unknown>): Promise<ActionRow>;
 }
 
 export interface WorkState {
@@ -174,21 +178,25 @@ export const ACTION_TOOLS: AiFunctionTool[] = [
     },
   },
   {
-    name: 'propose_code_change',
+    name: 'start_code_plan',
     description:
-      'Cursor에게 코드 수정을 제안한다. 승인하면 작업 폴더의 복사본에서 수정하고 변경 내용(diff)을 보여 준다. 실제 작업 폴더 적용은 사용자가 diff를 보고 따로 승인한다.',
+      '코드를 고치는 일은 바로 고치지 않고 먼저 Cursor(실무 개발자)와 조율한다. 부르면 승인 없이 바로 시작된다(읽기 전용, 하루 한도에 1건). ' +
+      'Cursor가 이 계획 초안을 실제 코드에 비춰 문제·빠진 점·더 나은 방법을 검토하고, 네가 그 결과를 보고 필요하면 다시 묻는다(최대 3회). ' +
+      '끝나면 조율본이 이 대화에 카드로 올라오고, 사용자가 승인해야 그 내용으로 코드 수정이 시작된다.',
     parameters: {
       type: 'object',
       properties: {
-        title: { type: 'string', description: '수정 제목 (40자 이내)' },
-        goal: { type: 'string', description: '수정으로 이루려는 것' },
-        instructions: { type: 'array', items: { type: 'string' }, description: '무엇을 어떻게 바꿀지 단계별로' },
-        focus_paths: strList('고칠 폴더나 파일. 모르면 null.'),
+        title: { type: 'string', description: '작업 제목 (40자 이내)' },
+        goal: { type: 'string', description: '이 작업으로 이루려는 것' },
+        instructions: { type: 'array', items: { type: 'string' }, description: '계획 초안: 무엇을 어떻게 바꿀지 단계별로' },
+        questions: strList('Cursor에게 특히 확인받고 싶은 점(구조, 영향 범위, 대안 등). 없으면 null.'),
+        focus_paths: strList('관련 폴더나 파일. 모르면 null.'),
         constraints: strList('지켜야 할 조건. 없으면 null.'),
         do_not: strList('하지 말 것. 없으면 null.'),
+        background: nullable({ type: 'string', description: '이 대화에서 나온 배경과 의도를 Cursor가 알아야 할 만큼만 요약. 없으면 null.' }),
         based_on_request_id: nullable({ type: 'string', description: '근거가 된 조사 요청 id. 없으면 null.' }),
       },
-      required: ['title', 'goal', 'instructions', 'focus_paths', 'constraints', 'do_not', 'based_on_request_id'],
+      required: ['title', 'goal', 'instructions', 'questions', 'focus_paths', 'constraints', 'do_not', 'background', 'based_on_request_id'],
       additionalProperties: false,
     },
   },
@@ -230,7 +238,7 @@ export const ACTION_TOOL_LABELS: Record<string, string> = {
   list_code_requests: '코드 요청 조회',
   get_code_request: '코드 요청 열람',
   propose_code_request: '코드 조사 제안',
-  propose_code_change: '코드 수정 제안',
+  start_code_plan: 'Cursor와 조율 시작',
   propose_folder: '분류 제안',
   propose_delete: '삭제 제안',
 };
@@ -312,17 +320,17 @@ function placementLabel(p: { placed: boolean; folderId: string | null }, paths: 
   return paths.get(p.folderId) ?? '알 수 없는 폴더';
 }
 
-function codeSpec(args: Record<string, unknown>, ctx: ActionToolContext, change: boolean) {
+function codeSpec(args: Record<string, unknown>, ctx: ActionToolContext, plan: boolean) {
   const spec: Record<string, unknown> = {
     goal: str(args.goal, 2000) ?? '',
     questions: list(args.questions),
     focus_paths: list(args.focus_paths, 12, 200),
     constraints: list(args.constraints),
     do_not: list(args.do_not),
+    background: str(args.background, 6000) ?? '',
     memory_refs: ctx.memoryRefs.slice(0, 8),
   };
-  if (change) spec.instructions = list(args.instructions, 20, 1000);
-  else spec.background = str(args.background, 6000) ?? '';
+  if (plan) spec.instructions = list(args.instructions, 20, 1000);
   return spec;
 }
 
@@ -336,32 +344,48 @@ function latestSummary(d: CodeRequestDetail | null): Record<string, unknown> | n
   return pick;
 }
 
+const PLAN_STARTED_NOTE =
+  'Cursor와 조율을 시작했다(읽기 전용). 아직 코드는 바뀌지 않았다. 조율이 끝나면 조율본이 이 대화에 카드로 올라오고, ' +
+  '사용자가 승인해야 수정이 시작된다. 답변에는 조율을 시작했고 결과는 몇 분 뒤 이 대화에 붙는다고만 짧게 알린다.';
+
 async function proposeCode(name: string, args: Record<string, unknown>, src: ActionToolSource, ctx: ActionToolContext): Promise<ToolRunResult> {
-  const change = name === 'propose_code_change';
+  const plan = name === 'start_code_plan';
   const title = str(args.title, 120);
-  const spec = codeSpec(args, ctx, change);
+  const spec = codeSpec(args, ctx, plan);
   const need: string[] = [];
   if (!title) need.push('title');
   if (!spec.goal) need.push('goal');
-  if (change && (spec.instructions as string[]).length === 0) need.push('instructions');
+  if (plan && (spec.instructions as string[]).length === 0) need.push('instructions');
   if (need.length > 0) return missing(name, need);
 
-  if (change && args.based_on_request_id != null) {
+  if (plan && args.based_on_request_id != null) {
     const baseId = uuid(args.based_on_request_id);
     const base = baseId ? await src.getCodeRequest(baseId) : null;
     if (!base) return bad(name, 'based_on_request_not_found', '근거 요청 없음');
     const summary = latestSummary(base);
     spec.based_on = { id: base.id, title: base.title, summary: summary?.summary ?? null, proposals: summary?.proposals ?? [] };
   }
-  const kind: ActionKind = change ? 'code_change' : 'code_request';
+  if (plan) {
+    let row: ActionRow;
+    try {
+      row = await src.startCodePlan(ctx.conversationId, title!, spec);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      if (message.includes('code_request_daily_limit')) {
+        return bad(name, 'daily_limit', '하루 한도 초과', { next: '오늘 Cursor 요청 한도를 다 썼다고 알리고, 사용량 탭에서 한도를 늘리거나 내일 다시 하자고 안내한다.' });
+      }
+      throw e;
+    }
+    return out(name, { ok: true, code_request_id: row.result?.code_request_id ?? null, status: 'started', note: PLAN_STARTED_NOTE }, `"${title}" 조율 시작`, row);
+  }
   const preview: Record<string, unknown> = {
     title,
     goal: clip(String(spec.goal), 300),
     questions: (spec.questions as string[]).length,
     focus_paths: spec.focus_paths,
-    mode: change ? 'change' : 'investigate',
+    mode: 'investigate',
   };
-  const row = await src.proposeAction(ctx.conversationId, kind, { title, spec }, preview);
+  const row = await src.proposeAction(ctx.conversationId, 'code_request', { title, spec }, preview);
   return out(name, { ok: true, action_id: row.id, status: 'proposed', note: PROPOSED_NOTE }, `"${title}" 제안`, row);
 }
 
@@ -487,7 +511,7 @@ export async function dispatchActionTool(
   if (!ctx) return bad(name, 'no_conversation', '대화 없음');
   switch (name) {
     case 'propose_code_request':
-    case 'propose_code_change':
+    case 'start_code_plan':
       return await proposeCode(name, args, src, ctx);
     case 'propose_folder':
       return await proposeFolder(name, args, src, ctx);
@@ -504,7 +528,8 @@ export async function dispatchActionTool(
 
 const KIND_LABELS: Record<string, string> = {
   code_request: '코드 조사 제안',
-  code_change: '코드 수정 제안',
+  code_change: '코드 수정 제안(조율본)',
+  code_plan: 'Cursor와 조율',
   place_conversation: '분류 제안',
   delete_code_request: '코드 요청 삭제 제안',
   delete_folder: '폴더 삭제 제안',
@@ -522,8 +547,8 @@ const ACTION_STATUS_LABELS: Record<string, string> = {
 export const CODE_STATUS_LABELS: Record<string, string> = {
   draft: '초안',
   queued: '대기 중',
-  running: '조사 중',
-  followup_queued: '2회차 대기',
+  running: '진행 중',
+  followup_queued: '다음 회차 대기',
   ready: '결과 도착',
   needs_review: '결과 도착(형식 확인 필요)',
   failed: '실패',
@@ -547,7 +572,9 @@ function actionLine(a: ActionRow): string {
 }
 
 function codeLine(r: CodeRequestDetail): string {
-  const parts = [`- ${r.mode === 'change' ? '코드 수정' : '코드 조사'} "${clip(r.title, 80)}" (id: ${r.id}): ${CODE_STATUS_LABELS[r.status] ?? r.status}`];
+  const mode = r.mode === 'change' ? '코드 수정' : r.mode === 'plan' ? 'Cursor와 조율' : '코드 조사';
+  const parts = [`- ${mode} "${clip(r.title, 80)}" (id: ${r.id}): ${CODE_STATUS_LABELS[r.status] ?? r.status}`];
+  if (r.mode === 'plan' && r.round > 0) parts.push(`${r.round}/${r.max_rounds}회`);
   const res = r.latest?.result;
   if (res && typeof res.summary === 'string') parts.push(`결론: ${clip(res.summary, 200)}`);
   if (res && r.mode === 'change' && res.diff_stats && typeof res.diff_stats === 'object') {
@@ -563,7 +590,7 @@ function codeLine(r: CodeRequestDetail): string {
 export function workStateNote(state: WorkState): string | null {
   if (state.actions.length === 0 && state.codeRequests.length === 0) return null;
   const lines = ['[이 대화의 작업 상태. 최신이 위. 사용자가 카드에서 승인·거절한 결과이며, 진행 상황을 물으면 이것을 근거로 답한다.]'];
-  const actions = state.actions.filter((a) => !['code_request', 'code_change'].includes(a.kind) || a.status !== 'applied');
+  const actions = state.actions.filter((a) => !['code_request', 'code_change', 'code_plan'].includes(a.kind) || a.status !== 'applied');
   for (const a of actions.slice(0, 10)) lines.push(actionLine(a));
   for (const r of state.codeRequests.slice(0, 8)) lines.push(codeLine(r));
   return lines.join('\n');

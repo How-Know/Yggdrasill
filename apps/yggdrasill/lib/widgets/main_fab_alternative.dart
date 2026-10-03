@@ -6,13 +6,12 @@ import 'memo_dialogs.dart';
 import 'payment_management_dialog.dart';
 import 'makeup_quick_dialog.dart';
 import '../app_overlays.dart';
+import 'app_confirm_button.dart';
+import 'home_grading_history_icon.dart';
+import 'solid_capsule_action_bar.dart';
 import 'dialog_tokens.dart';
 import '../services/exam_mode.dart';
 import '../screens/design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
-
-/// Icons8 iOS Outlined "U Turn to Right" (id 106518).
-const String _homeReturnUTurnSvg =
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50"><path d="M 38.990234 -0.009765625 A 1.0001 1.0001 0 0 0 38.292969 1.7070312 L 46.585938 10 L 17 10 A 1.0001 1.0001 0 0 0 16.886719 10.005859 C 7.5933822 10.068143 0 17.692783 0 27 C 0 36.309847 7.597607 43.936119 16.894531 43.994141 A 1.0001 1.0001 0 0 0 17 44 L 32 44 L 33 44 L 50 44 L 50 42 L 33 42 L 32 42 L 17 42 C 8.7454545 42 2 35.254545 2 27 C 2 18.745455 8.7454545 12 17 12 L 46.585938 12 L 38.292969 20.292969 A 1.0001 1.0001 0 1 0 39.707031 21.707031 L 49.707031 11.707031 A 1.0001 1.0001 0 0 0 49.707031 10.292969 L 39.707031 0.29296875 A 1.0001 1.0001 0 0 0 38.990234 -0.009765625 z"/></svg>';
 
 /// 홈 하단 **확인** FAB·M5 **질문 칩**이 같은 레이아웃 경로(`GestureDetector` → 고정 `SizedBox` → `Container`)를 쓰도록 통일.
 /// Scaffold FAB 슬롯과 본문 하단은 배치만 다를 뿐, 픽셀 치수는 동일해야 한다.
@@ -82,74 +81,16 @@ class MainFabAlternative extends StatefulWidget {
   State<MainFabAlternative> createState() => _MainFabAlternativeState();
 }
 
-class _MainFabAlternativeState extends State<MainFabAlternative>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _fabController;
-  late Animation<double> _rotationAnimation;
-  late Animation<Offset> _slideAnimation1;
-  late Animation<Offset> _slideAnimation2;
-  late Animation<Offset> _slideAnimation3;
-  late Animation<double> _fadeAnimation;
-  late Animation<double> _shapeAnimation; // 직사각형 -> 원형 애니메이션
-
-  bool _isFabExpanded = false;
-  ScaffoldFeatureController<SnackBar, SnackBarClosedReason>?
-      _snackBarController;
-  OverlayEntry? _menuOverlay; // FAB 확장 시 드롭다운 버튼을 오버레이로 표시
-
+class _MainFabAlternativeState extends State<MainFabAlternative> {
   @override
   void initState() {
     super.initState();
     gradingModeActive.addListener(_onGradingModeChanged);
-    _fabController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 250),
-    );
-
-    // 회전 애니메이션 (+ -> X)
-    _rotationAnimation = Tween<double>(begin: 0.0, end: 0.125).animate(
-      CurvedAnimation(parent: _fabController, curve: Curves.easeInOut),
-    );
-
-    // 페이드 애니메이션
-    _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _fabController, curve: Curves.easeOut),
-    );
-
-    // 🎯 직사각형 -> 원형 모양 변화 애니메이션
-    _shapeAnimation = Tween<double>(begin: 16.0, end: 28.0).animate(
-      CurvedAnimation(parent: _fabController, curve: Curves.easeInOut),
-    );
-
-    // 아래에서 위로 슬라이드 애니메이션 (3개 버튼용 - 엇갈린 타이밍)
-    _slideAnimation1 = Tween<Offset>(
-      begin: const Offset(0, 1.2), // 수강 (가장 아래, 첫 번째로 나타남)
-      end: Offset.zero,
-    ).animate(CurvedAnimation(
-      parent: _fabController,
-      curve: const Interval(0.0, 0.8, curve: Curves.easeOutBack), // 부드럽게 튀어나옴
-    ));
-
-    _slideAnimation2 = Tween<Offset>(
-      begin: const Offset(0, 1.2), // 보강 (중간, 두 번째로 나타남)
-      end: Offset.zero,
-    ).animate(CurvedAnimation(
-      parent: _fabController,
-      curve: const Interval(0.1, 0.9, curve: Curves.easeOutBack), // 약간 늦게 시작
-    ));
-
-    _slideAnimation3 = Tween<Offset>(
-      begin: const Offset(0, 1.2), // 상담 (가장 위, 마지막에 나타남)
-      end: Offset.zero,
-    ).animate(CurvedAnimation(
-      parent: _fabController,
-      curve: const Interval(0.2, 1.0, curve: Curves.easeOutBack), // 가장 늦게 시작
-    ));
   }
 
   void _onGradingModeChanged() {
-    if (gradingModeActive.value && _isFabExpanded) {
-      _collapseFabMenu();
+    if (gradingModeActive.value) {
+      collapseNavRailPlusMenu?.call();
     }
     if (mounted) setState(() {});
   }
@@ -157,35 +98,313 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
   @override
   void dispose() {
     gradingModeActive.removeListener(_onGradingModeChanged);
+    super.dispose();
+  }
+
+  double _fabLeftInset(BuildContext context) {
+    final railWidth = NavigationRailTheme.of(context).minWidth ??
+        FabTabBarTokens.fabBarNavRailDefaultWidth;
+    return railWidth + FabTabBarTokens.fabBarLeftInsetFromNavRail;
+  }
+
+  Widget _buildHistoryButton() {
+    final brightness = Theme.of(context).brightness;
+    const hit = 40.0;
+    return Tooltip(
+      message: '이전 채점',
+      child: SolidCapsuleActionBar(
+        padding: const EdgeInsets.all(8),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () {
+            final action = homeGradingHistoryAction;
+            if (action != null) unawaited(action());
+          },
+          child: SizedBox(
+            width: hit,
+            height: hit,
+            child: Center(
+              child: SvgPicture.string(
+                homeGradingHistorySvg,
+                width: 25,
+                height: 25,
+                colorFilter: ColorFilter.mode(
+                  SolidCapsuleActionBarTokens.iconColor(brightness),
+                  BlendMode.srcIn,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<bool>(
+      valueListenable: gradingModeActive,
+      builder: (context, _, __) {
+        return ValueListenableBuilder<bool>(
+          valueListenable: homeBatchConfirmFabVisible,
+          builder: (context, showBatchConfirmFab, __) {
+            return ValueListenableBuilder<int>(
+              valueListenable: homeBatchConfirmPendingCount,
+              builder: (context, pendingConfirmCount, ___) {
+                return ValueListenableBuilder<int>(
+                  valueListenable: homeBatchConfirmDraftSavingCount,
+                  builder: (context, draftSavingCount, ____) {
+                    final shouldShowBatchConfirmFab =
+                        widget.showHomeBatchConfirmFab &&
+                            showBatchConfirmFab;
+                    final canRunBatchConfirm = shouldShowBatchConfirmFab &&
+                        pendingConfirmCount > 0 &&
+                        homeBatchConfirmAction != null;
+                    final screenWidth =
+                        MediaQuery.sizeOf(context).width;
+                                final leftInset = _fabLeftInset(context);
+                                final barWidth = (screenWidth -
+                                        leftInset -
+                                        FabTabBarTokens.fabBarRightInset)
+                                    .clamp(0.0, double.infinity);
+                                return SizedBox(
+                                  width: barWidth,
+                                  child: Row(
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceBetween,
+                                    crossAxisAlignment: CrossAxisAlignment.end,
+                                    children: [
+                                      const SizedBox.shrink(),
+                                      Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.end,
+                                        children: [
+                                          if (gradingModeActive.value) ...[
+                                            _buildHistoryButton(),
+                                            if (shouldShowBatchConfirmFab)
+                                              const SizedBox(width: 12),
+                                          ],
+                                          if (shouldShowBatchConfirmFab)
+                                            Column(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                if (draftSavingCount > 0) ...[
+                                                  const YggLoadingIndicator(
+                                                    size: 22,
+                                                  ),
+                                                  const SizedBox(height: 8),
+                                                ],
+                                                AppConfirmButton(
+                                                  enabled: canRunBatchConfirm,
+                                                  onPressed: () async {
+                                                    final action =
+                                                        homeBatchConfirmAction;
+                                                    if (action == null) return;
+                                                    await action();
+                                                  },
+                                                ),
+                                              ],
+                                            ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                );
+                  },
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
+}
+
+/// 시험일정 버튼 등이 레일 위 + 메뉴를 접을 때 호출한다.
+VoidCallback? collapseNavRailPlusMenu;
+
+bool navRailExamButtonVisible({
+  required bool hidden,
+  required bool examOn,
+  required bool suppressExam,
+}) {
+  return !hidden && examOn && !suppressExam;
+}
+
+/// 시험기간에 네비게이션 레일 + 버튼 위에 뜨는 시험 버튼.
+class NavRailExamButton extends StatelessWidget {
+  const NavRailExamButton({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<bool>(
+      valueListenable: hideGlobalMainFab,
+      builder: (context, hidden, _) {
+        return ValueListenableBuilder<bool>(
+          valueListenable: ExamModeService.instance.isOn,
+          builder: (context, examOn, _) {
+            return ValueListenableBuilder<bool>(
+              valueListenable:
+                  ExamModeService.instance.suppressExamActionCluster,
+              builder: (context, suppressExam, _) {
+                return ValueListenableBuilder<bool>(
+                  valueListenable:
+                      ExamModeService.instance.examScheduleDialogOpen,
+                  builder: (context, dialogOpen, _) {
+                    if (!navRailExamButtonVisible(
+                      hidden: hidden,
+                      examOn: examOn,
+                      suppressExam: suppressExam,
+                    )) {
+                      return const SizedBox.shrink();
+                    }
+                    final enabled = examScheduleAction != null && !dialogOpen;
+                    return Padding(
+                      padding: const EdgeInsets.only(
+                        bottom: FabTabBarTokens.navRailPlusGap,
+                      ),
+                      child: Opacity(
+                        opacity: enabled ? 1 : 0.45,
+                        child: IgnorePointer(
+                          ignoring: !enabled,
+                          child: FabStyleActionButton(
+                            label: '시험',
+                            onPressed: () {
+                              collapseNavRailPlusMenu?.call();
+                              final action = examScheduleAction;
+                              if (action != null) unawaited(action());
+                            },
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+/// 네비게이션 레일 하단, 프로필 버튼 위의 + 버튼.
+class NavRailPlusButton extends StatefulWidget {
+  const NavRailPlusButton({super.key});
+
+  @override
+  State<NavRailPlusButton> createState() => _NavRailPlusButtonState();
+}
+
+class _NavRailPlusButtonState extends State<NavRailPlusButton>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _fabController;
+  late Animation<Offset> _slideAnimation1;
+  late Animation<Offset> _slideAnimation2;
+  late Animation<Offset> _slideAnimation3;
+  late Animation<double> _fadeAnimation;
+
+  bool _isFabExpanded = false;
+  OverlayEntry? _menuOverlay;
+  late final VoidCallback _collapseMenu;
+
+  @override
+  void initState() {
+    super.initState();
+    _collapseMenu = _collapseFabMenu;
+    collapseNavRailPlusMenu = _collapseMenu;
+    gradingModeActive.addListener(_hideIfNeeded);
+    hideGlobalMainFab.addListener(_hideIfNeeded);
+    _fabController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 250),
+    );
+    _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _fabController, curve: Curves.easeOut),
+    );
+    _slideAnimation1 = Tween<Offset>(
+      begin: const Offset(0, 1.2),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(
+      parent: _fabController,
+      curve: const Interval(0.0, 0.8, curve: Curves.easeOutBack),
+    ));
+    _slideAnimation2 = Tween<Offset>(
+      begin: const Offset(0, 1.2),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(
+      parent: _fabController,
+      curve: const Interval(0.1, 0.9, curve: Curves.easeOutBack),
+    ));
+    _slideAnimation3 = Tween<Offset>(
+      begin: const Offset(0, 1.2),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(
+      parent: _fabController,
+      curve: const Interval(0.2, 1.0, curve: Curves.easeOutBack),
+    ));
+  }
+
+  void _hideIfNeeded() {
+    if ((gradingModeActive.value || hideGlobalMainFab.value) &&
+        _isFabExpanded) {
+      _collapseFabMenu();
+    }
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    if (identical(collapseNavRailPlusMenu, _collapseMenu)) {
+      collapseNavRailPlusMenu = null;
+    }
+    gradingModeActive.removeListener(_hideIfNeeded);
+    hideGlobalMainFab.removeListener(_hideIfNeeded);
     _removeMenuOverlay();
     _fabController.dispose();
     super.dispose();
   }
 
-  void _showFloatingSnackBar(BuildContext context, String message) {
-    _snackBarController = ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: const Color(0xFF2A2A2A),
-        behavior: SnackBarBehavior.fixed,
-        duration: const Duration(seconds: 2),
-      ),
-    );
+  double _plusLeft(BuildContext context) {
+    final railWidth = NavigationRailTheme.of(context).minWidth ??
+        FabTabBarTokens.fabBarNavRailDefaultWidth;
+    return (railWidth - FabTabBarTokens.fabBarHeight) / 2;
   }
 
   void _insertMenuOverlay(BuildContext context) {
-    // 삽입되지 않은 OverlayEntry에 remove()를 호출하면 assert가 발생하므로 mounted 체크
     if (_menuOverlay != null && _menuOverlay!.mounted) {
       _menuOverlay!.remove();
     }
     _menuOverlay = OverlayEntry(
       builder: (ctx) {
-        // + 버튼 상단 ↔ 수강 pill 하단 = [fabMenuItemSpacing] (pill 간격과 동일)
-        final double bottomOffset = FabTabBarTokens.fabBarBottomInset +
-            FabTabBarTokens.fabBarHeight +
-            FabTabBarTokens.fabMenuItemSpacing;
-        return Positioned(
-          right: FabTabBarTokens.fabBarRightInset,
+        return ValueListenableBuilder<bool>(
+          valueListenable: ExamModeService.instance.isOn,
+          builder: (_, examOn, __) {
+            return ValueListenableBuilder<bool>(
+              valueListenable:
+                  ExamModeService.instance.suppressExamActionCluster,
+              builder: (_, suppressExam, __) {
+                return ValueListenableBuilder<bool>(
+                  valueListenable: hideGlobalMainFab,
+                  builder: (_, hidden, __) {
+                    final examVisible = navRailExamButtonVisible(
+                      hidden: hidden,
+                      examOn: examOn,
+                      suppressExam: suppressExam,
+                    );
+                    var bottomOffset = FabTabBarTokens.navRailPlusBottomInset +
+                        FabTabBarTokens.fabBarHeight +
+                        FabTabBarTokens.fabMenuItemSpacing;
+                    if (examVisible) {
+                      bottomOffset += FabTabBarTokens.navRailPlusGap +
+                          FabTabBarTokens.fabBarHeight;
+                    }
+                    return Positioned(
+          left: _plusLeft(ctx),
           bottom: bottomOffset,
           child: IgnorePointer(
             ignoring: !_isFabExpanded,
@@ -193,9 +412,8 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
               color: Colors.transparent,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.end,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // 위에서부터: 메모 -> 보강 -> 수강
                   _buildMenuButton(
                     label: '메모',
                     icon: Icons.edit_note,
@@ -211,7 +429,6 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
                     icon: Icons.event_repeat_rounded,
                     slideAnimation: _slideAnimation2,
                     onTap: () {
-                      // ✅ 즉시 드롭다운 닫기(다이얼로그가 열려있는 동안에도 FAB 메뉴가 남지 않게)
                       _collapseFabMenu();
                       showMakeupRegisterDialog(context);
                     },
@@ -222,7 +439,6 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
                     icon: Icons.credit_card,
                     slideAnimation: _slideAnimation1,
                     onTap: () {
-                      // ✅ 수강료 결제 관리 다이얼로그를 열면 드롭다운을 즉시 접는다
                       _collapseFabMenu();
                       showPaymentManagementDialog(context);
                     },
@@ -232,16 +448,16 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
             ),
           ),
         );
+                  },
+                );
+              },
+            );
+          },
+        );
       },
     );
-    // 전용 레이어에 삽입:
-    // - 플로팅 메모 배너보다 위
-    // - 오른쪽 사이드시트(메모 슬라이드)보다 아래
-    //
-    // rootOverlay로 fallback하면 다시 사이드시트 "위"에 뜨므로 fallback 금지.
     final overlay = fabDropdownOverlayKey.currentState;
     if (overlay == null) {
-      // 첫 프레임/리빌드 타이밍에 아직 레이어가 준비되지 않았을 수 있어 다음 프레임에 재시도
       final entry = _menuOverlay!;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted || !_isFabExpanded) return;
@@ -257,7 +473,6 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
   }
 
   void _removeMenuOverlay() {
-    // 삽입되지 않은 OverlayEntry에 remove()를 호출하면 assert가 발생하므로 mounted 체크
     if (_menuOverlay != null && _menuOverlay!.mounted) {
       _menuOverlay!.remove();
     }
@@ -294,192 +509,8 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
     );
   }
 
-  Widget _buildPrimaryFabButton() {
-    if (gradingModeActive.value) {
-      return FabStyleActionButton(
-        icon: Icons.history_rounded,
-        onPressed: () {
-          final action = homeGradingHistoryAction;
-          if (action != null) unawaited(action());
-        },
-      );
-    }
-    return AnimatedBuilder(
-      animation: _fabController,
-      builder: (context, child) {
-        return FabStyleActionButton(
-          icon: _isFabExpanded ? Icons.close : Icons.add,
-          onPressed: () {
-            setState(() {
-              _isFabExpanded = !_isFabExpanded;
-              if (_isFabExpanded) {
-                _fabController.forward();
-                _insertMenuOverlay(context);
-              } else {
-                _fabController.reverse();
-                _removeMenuOverlay();
-              }
-            });
-          },
-        );
-      },
-    );
-  }
-
-  Widget _buildExamFabButton({
-    required bool enabled,
-    required bool dialogOpen,
-  }) {
-    return Opacity(
-      opacity: enabled && !dialogOpen ? 1.0 : 0.45,
-      child: IgnorePointer(
-        ignoring: !enabled || dialogOpen,
-        child: FabStyleActionButton(
-          icon: Icons.event_note_rounded,
-          onPressed: () {
-            _collapseFabMenu();
-            final action = examScheduleAction;
-            if (action != null) unawaited(action());
-          },
-        ),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return ValueListenableBuilder<bool>(
-      valueListenable: gradingModeActive,
-      builder: (context, _, __) {
-        return ValueListenableBuilder<bool>(
-          valueListenable: homeBatchConfirmFabVisible,
-          builder: (context, showBatchConfirmFab, __) {
-            return ValueListenableBuilder<int>(
-              valueListenable: homeBatchConfirmPendingCount,
-              builder: (context, pendingConfirmCount, ___) {
-                return ValueListenableBuilder<int>(
-                  valueListenable: homeBatchConfirmDraftSavingCount,
-                  builder: (context, draftSavingCount, ____) {
-                    return ValueListenableBuilder<bool>(
-                      valueListenable: ExamModeService.instance.isOn,
-                      builder: (context, examModeOn, ____) {
-                        return ValueListenableBuilder<bool>(
-                          valueListenable: ExamModeService
-                              .instance.suppressExamActionCluster,
-                          builder: (context, suppressExamButton, _____) {
-                            return ValueListenableBuilder<bool>(
-                              valueListenable: ExamModeService
-                                  .instance.examScheduleDialogOpen,
-                              builder:
-                                  (context, examScheduleDialogOpen, ______) {
-                                final shouldShowBatchConfirmFab =
-                                    widget.showHomeBatchConfirmFab &&
-                                        showBatchConfirmFab;
-                                final canRunBatchConfirm =
-                                    shouldShowBatchConfirmFab &&
-                                        pendingConfirmCount > 0 &&
-                                        homeBatchConfirmAction != null;
-                                final shouldShowExamFab =
-                                    examModeOn && !suppressExamButton;
-                                return Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  crossAxisAlignment: CrossAxisAlignment.end,
-                                  children: [
-                                    if (shouldShowExamFab) ...[
-                                      _buildExamFabButton(
-                                        enabled: examScheduleAction != null,
-                                        dialogOpen: examScheduleDialogOpen,
-                                      ),
-                                      const SizedBox(width: 12),
-                                    ],
-                                    Column(
-                                      mainAxisAlignment: MainAxisAlignment.end,
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.end,
-                                      children: [
-                                        _buildPrimaryFabButton(),
-                                      ],
-                                    ),
-                                    if (shouldShowBatchConfirmFab) ...[
-                                      const SizedBox(width: 12),
-                                      Column(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          if (draftSavingCount > 0) ...[
-                                            const YggLoadingIndicator(size: 22),
-                                            const SizedBox(height: 8),
-                                          ],
-                                          Opacity(
-                                            opacity:
-                                                canRunBatchConfirm ? 1.0 : 0.45,
-                                            child: IgnorePointer(
-                                              ignoring: !canRunBatchConfirm,
-                                              child: HomeBottomActionPill(
-                                                width: 128,
-                                                showShadow: false,
-                                                backgroundColor: FabTabBarTokens
-                                                    .previewConfirmActionColor,
-                                                onTap: () async {
-                                                  final action =
-                                                      homeBatchConfirmAction;
-                                                  if (action == null) return;
-                                                  await action();
-                                                },
-                                                child: Row(
-                                                  mainAxisSize:
-                                                      MainAxisSize.min,
-                                                  children: [
-                                                    SvgPicture.string(
-                                                      _homeReturnUTurnSvg,
-                                                      width: 15,
-                                                      height: 15,
-                                                      colorFilter:
-                                                          const ColorFilter.mode(
-                                                        Colors.white,
-                                                        BlendMode.srcIn,
-                                                      ),
-                                                    ),
-                                                    const SizedBox(width: 4),
-                                                    Text(
-                                                      '반환',
-                                                      style: const TextStyle(
-                                                        color: Colors.white,
-                                                        fontFamily: 'Pretendard',
-                                                        fontSize: 24,
-                                                        height: 1.0,
-                                                        fontWeight:
-                                                            FontWeight.w600,
-                                                      ),
-                                                    ),
-                                                  ],
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ],
-                                  ],
-                                );
-                              },
-                            );
-                          },
-                        );
-                      },
-                    );
-                  },
-                );
-              },
-            );
-          },
-        );
-      },
-    );
-  }
-
   Future<void> _openMemoAddDialog(BuildContext context) async {
     _collapseFabMenu();
-
     try {
       final result = await showDialog<MemoCreateResult>(
         context: context,
@@ -489,9 +520,15 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
       );
       if (result == null) return;
       await addMemoFromCreateResult(result);
-      if (mounted) {
-        _showFloatingSnackBar(context, '메모가 추가되었습니다.');
-      }
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('메모가 추가되었습니다.'),
+          backgroundColor: Color(0xFF2A2A2A),
+          behavior: SnackBarBehavior.fixed,
+          duration: Duration(seconds: 2),
+        ),
+      );
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -503,5 +540,45 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
         );
       }
     }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<bool>(
+      valueListenable: hideGlobalMainFab,
+      builder: (context, hidden, _) {
+        return ValueListenableBuilder<bool>(
+          valueListenable: gradingModeActive,
+          builder: (context, grading, _) {
+            if (hidden || grading) return const SizedBox.shrink();
+            return Padding(
+              padding: const EdgeInsets.only(
+                bottom: FabTabBarTokens.navRailPlusGap,
+              ),
+              child: AnimatedBuilder(
+                animation: _fabController,
+                builder: (context, child) {
+                  return FabStyleActionButton(
+                    icon: _isFabExpanded ? Icons.close : Icons.add,
+                    onPressed: () {
+                      setState(() {
+                        _isFabExpanded = !_isFabExpanded;
+                        if (_isFabExpanded) {
+                          _fabController.forward();
+                          _insertMenuOverlay(context);
+                        } else {
+                          _fabController.reverse();
+                          _removeMenuOverlay();
+                        }
+                      });
+                    },
+                  );
+                },
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 }

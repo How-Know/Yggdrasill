@@ -103,30 +103,23 @@ class StudentActionFabOverlay {
     _entry = null;
   }
 
-  Widget _buildOverlay(BuildContext overlayContext) {
-    final railWidth = NavigationRailTheme.of(overlayContext).minWidth ??
-        FabTabBarTokens.fabBarNavRailDefaultWidth;
-    final sideSheetWidth = leftSideSheetClipWidthNotifier.value;
-
+  Widget _buildOverlay(BuildContext _) {
     return Positioned(
-      left: railWidth + sideSheetWidth,
-      right: 0,
+      right: FabTabBarTokens.fabBarRightInset,
       bottom: FabTabBarTokens.fabBarBottomInset,
-      child: Center(
-        child: Material(
-          type: MaterialType.transparency,
-          color: Colors.transparent,
-          child: _StudentActionFabBar(
-            searchExpanded: _searchExpanded,
-            hasSearchQuery: _hasSearchQuery,
-            controller: _searchController!,
-            focusNode: _searchFocusNode,
-            onAdd: _onAdd ?? () {},
-            onSearchToggle: _onSearchToggle ?? () {},
-            onSearchCancel: _onSearchCancel ?? () {},
-            onChanged: _onSearchChanged!,
-            onClear: _onSearchClear!,
-          ),
+      child: Material(
+        type: MaterialType.transparency,
+        color: Colors.transparent,
+        child: _StudentActionFabBar(
+          searchExpanded: _searchExpanded,
+          hasSearchQuery: _hasSearchQuery,
+          controller: _searchController!,
+          focusNode: _searchFocusNode,
+          onAdd: _onAdd ?? () {},
+          onSearchToggle: _onSearchToggle ?? () {},
+          onSearchCancel: _onSearchCancel ?? () {},
+          onChanged: _onSearchChanged!,
+          onClear: _onSearchClear!,
         ),
       ),
     );

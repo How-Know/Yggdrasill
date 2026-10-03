@@ -24,9 +24,50 @@ import {
   buildWonriMiddleSolutionPrompt,
   extractWonriMiddleSolutionsOnPage,
   filterWonriMiddleItemsByBox,
+  mapWonriMiddleItemsFromCrop,
   normalizeWonriMiddleSolutionResult,
+  wonriMiddleLeadingRetryRegion,
 } from '../src/textbook/vlm_wonri_middle_solution_client.js';
 import { buildBodySolutionsPrompt } from '../src/textbook/vlm_body_solution_client.js';
+
+test('wonri_middle 이어진 풀이를 왼쪽 단 첫 박스 위만 잘라 다시 묻는다 (3-1 해설 35쪽)', () => {
+  const boxes = [
+    { title: '개념원리 확인하기', body_page_from: 97, body_page_to: 97, region: [529, 507, 672, 909] },
+    { title: '이런 문제가 시험에 나온다', body_page_from: 95, body_page_to: 95, region: [548, 57, 620, 458] },
+  ];
+  const calculation = ['04', '05'].map((number) => ({
+    problem_number: number,
+    category: 'middle_calculation',
+    page: 94,
+  }));
+  const region = wonriMiddleLeadingRetryRegion({ boxes, expectedEntries: calculation });
+  assert.deepEqual(region, [0, 0, 548, 500]);
+
+  const items = mapWonriMiddleItemsFromCrop(
+    [
+      { problem_number: '04', expected_index: 0, number_region: [120, 114, 148, 154], content_region: [120, 114, 453, 912] },
+      { problem_number: '05', expected_index: 1, number_region: [515, 114, 542, 154], content_region: [515, 114, 847, 912] },
+    ],
+    region,
+  );
+  assert.deepEqual(items[0].number_region, [66, 57, 81, 77]);
+  const kept = filterWonriMiddleItemsByBox({
+    items,
+    boxes,
+    expectedEntries: calculation,
+    allowContinuation: true,
+  });
+  assert.deepEqual(kept.items.map((item) => item.problem_number), ['04', '05']);
+
+  // 시험문제는 자기 박스가 이 지면에 있어 이어진 풀이로 다시 묻지 않는다.
+  assert.equal(
+    wonriMiddleLeadingRetryRegion({
+      boxes,
+      expectedEntries: [{ problem_number: '04', category: 'middle_exam_problem', page: 95 }],
+    }),
+    null,
+  );
+});
 
 test('wonri_middle TOC contract preserves four big and nine mid units', () => {
   const prompt = buildParseTocPrompt({

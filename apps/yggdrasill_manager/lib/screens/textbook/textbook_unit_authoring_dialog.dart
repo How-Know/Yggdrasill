@@ -2521,19 +2521,21 @@ class _TextbookUnitAuthoringDialogState
       for (final item in items) {
         counts[item.category] = (counts[item.category] ?? 0) + 1;
       }
-      final moved = [
-        for (var j = 0; j < items.length; j += 1)
-          if (!identical(items[j], row.items[j])) j,
-      ].length;
+      final kept = items.where(row.items.contains).length;
+      final moved = items.length - kept;
+      final dropped = row.items.length - items.length;
       guardedByPage[row.rawPage] = _PageAnalysisRow.success(
         rawPage: row.rawPage,
         displayPage: row.displayPage,
-        section: counts.entries.reduce((a, b) => b.value > a.value ? b : a).key,
-        pageKind: row.pageKind,
+        section: counts.isEmpty
+            ? 'unknown'
+            : counts.entries.reduce((a, b) => b.value > a.value ? b : a).key,
+        pageKind: items.isEmpty ? 'concept_page' : row.pageKind,
         conceptDrillHeaderVisible: row.conceptDrillHeaderVisible,
         notes: _appendGuardNote(
           row.notes,
-          'wonri_middle_sub_unit_corner_fixed=$moved',
+          'wonri_middle_sub_unit_corner_fixed=$moved'
+          ' dropped=$dropped',
         ),
         items: items,
       );

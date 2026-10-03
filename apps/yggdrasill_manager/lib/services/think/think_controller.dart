@@ -387,6 +387,13 @@ class ThinkController extends ChangeNotifier {
 
   Future<void> rejectAction(ThinkAction a) async => _putAction(await _api.rejectAction(a.id));
 
+  /// 조율본 질문에 답하면 서버가 이전 조율본을 닫고 다시 조율을 시작한다.
+  Future<void> revisePlan(ThinkAction a, List<Map<String, String>> answers) async {
+    _putAction(await _api.revisePlan(a.id, answers));
+    await loadActions(a.conversationId);
+    await ThinkCodeController.instance.refresh(quiet: true);
+  }
+
   Future<void> undoAction(ThinkAction a) async {
     final saved = await _api.undoAction(a.id);
     _putAction(saved);
@@ -401,6 +408,7 @@ class ThinkController extends ChangeNotifier {
     switch (a.kind) {
       case ThinkActionKind.codeRequest:
       case ThinkActionKind.codeChange:
+      case ThinkActionKind.codePlan:
       case ThinkActionKind.deleteCodeRequest:
         await code.refresh(quiet: true);
       case ThinkActionKind.placeConversation:
@@ -433,7 +441,10 @@ class ThinkController extends ChangeNotifier {
   Future<void> setTurnExcluded(int index, bool excluded) async {
     final list = messages;
     final turn = thinkTurnIndices(list, index).map((i) => list[i]).toList();
-    final ids = [for (final m in turn) if (m.id != null && m.id!.isNotEmpty) m.id!];
+    final ids = [
+      for (final m in turn)
+        if (m.id != null && m.id!.isNotEmpty) m.id!
+    ];
     if (ids.isEmpty) return;
     await _api.setMessagesExcluded(ids, excluded);
     for (final m in turn) {
@@ -577,8 +588,7 @@ class ThinkController extends ChangeNotifier {
     await _api.removeAttachment(a.path);
   }
 
-  bool get canSend =>
-      !isStreaming && uploadingCount == 0 && composer.text.trim().isNotEmpty && !forbidden;
+  bool get canSend => !isStreaming && uploadingCount == 0 && composer.text.trim().isNotEmpty && !forbidden;
 
   // ------------------------------------------------------------------ 스트리밍
   ThinkChatStream? _stream;
@@ -757,7 +767,10 @@ class ThinkController extends ChangeNotifier {
           case 'action':
             final raw = d['action'];
             final action = raw is Map ? ThinkAction.fromRow(Map<String, dynamic>.from(raw)) : null;
-            if (action != null) _putAction(action);
+            if (action != null) {
+              _putAction(action);
+              if (action.kind == ThinkActionKind.codePlan) unawaited(ThinkCodeController.instance.refresh(quiet: true));
+            }
           case 'title':
             final id = d['conversation_id']?.toString();
             final title = d['title']?.toString();
@@ -767,14 +780,16 @@ class ThinkController extends ChangeNotifier {
           case 'done':
             finished = true;
             assistant.id = d['assistant_message_id']?.toString();
-            assistant.status =
-                d['status'] == 'stopped' ? ThinkMessageStatus.stopped : ThinkMessageStatus.complete;
+            assistant.status = d['status'] == 'stopped' ? ThinkMessageStatus.stopped : ThinkMessageStatus.complete;
             assistant.model = d['model']?.toString();
             assistant.sources = (d['sources'] is List ? d['sources'] as List : const [])
                 .whereType<Map>()
                 .map((s) => ThinkSource.fromJson(Map<String, dynamic>.from(s)))
                 .toList();
-            assistant.toolCalls = [for (final t in assistant.toolCalls) if (!t.running) t];
+            assistant.toolCalls = [
+              for (final t in assistant.toolCalls)
+                if (!t.running) t
+            ];
             final id = conversationId;
             if (id != null) {
               turnInfo[id] = (turnInfo[id] ?? const ThinkTurnInfo()).copyWith(
@@ -791,7 +806,10 @@ class ThinkController extends ChangeNotifier {
             assistant.id = d['assistant_message_id']?.toString();
             assistant.status = ThinkMessageStatus.error;
             assistant.errorText = d['message']?.toString() ?? '답변을 만들지 못했습니다.';
-            assistant.toolCalls = [for (final t in assistant.toolCalls) if (!t.running) t];
+            assistant.toolCalls = [
+              for (final t in assistant.toolCalls)
+                if (!t.running) t
+            ];
             if (conversationId != null) _attachActions(conversationId, d['action_ids'], assistant.id);
             notifyListeners();
         }
@@ -805,7 +823,10 @@ class ThinkController extends ChangeNotifier {
       if (!finished) {
         assistant.status = _stopRequested ? ThinkMessageStatus.stopped : ThinkMessageStatus.error;
         if (!_stopRequested) assistant.errorText ??= '답변이 끝나기 전에 연결이 끊겼습니다.';
-        assistant.toolCalls = [for (final t in assistant.toolCalls) if (!t.running) t];
+        assistant.toolCalls = [
+          for (final t in assistant.toolCalls)
+            if (!t.running) t
+        ];
       }
       stream.cancel();
       _stream = null;
@@ -941,9 +962,7 @@ class ThinkController extends ChangeNotifier {
 
   void _putMemory(ThinkMemory saved) {
     final idx = memories.indexWhere((e) => e.id == saved.id);
-    memories = idx >= 0
-        ? [for (final e in memories) e.id == saved.id ? saved : e]
-        : [saved, ...memories];
+    memories = idx >= 0 ? [for (final e in memories) e.id == saved.id ? saved : e] : [saved, ...memories];
     notifyListeners();
   }
 }

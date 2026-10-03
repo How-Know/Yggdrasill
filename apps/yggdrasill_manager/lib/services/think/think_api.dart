@@ -147,9 +147,8 @@ class ThinkApi {
   Future<void> renameConversation(String id, String title) =>
       _db.from('ai_conversations').update({'title': title.trim()}).eq('id', id);
 
-  Future<void> setConversationArchived(String id, bool archived) => _db
-      .from('ai_conversations')
-      .update({'status': archived ? 'archived' : 'active'}).eq('id', id);
+  Future<void> setConversationArchived(String id, bool archived) =>
+      _db.from('ai_conversations').update({'status': archived ? 'archived' : 'active'}).eq('id', id);
 
   /// 대화와 메시지, 대화에 올린 첨부 파일을 지운다. 호출 기록(ai_runs)은 남는다.
   Future<void> deleteConversation(String id) async {
@@ -297,8 +296,7 @@ class ThinkApi {
     } catch (_) {}
   }
 
-  Future<String> signedAttachmentUrl(String path) =>
-      _db.storage.from(attachmentBucket).createSignedUrl(path, 600);
+  Future<String> signedAttachmentUrl(String path) => _db.storage.from(attachmentBucket).createSignedUrl(path, 600);
 
   // ---------------------------------------------------------------- 채팅(SSE)
   Future<ThinkChatStream> openChat({
@@ -344,10 +342,8 @@ class ThinkApi {
       client.close();
       throw ThinkApiException.fromBody(response.statusCode, body);
     }
-    final events = response.stream
-        .transform(utf8.decoder)
-        .transform(const LineSplitter())
-        .transform(const ThinkSseDecoder());
+    final events =
+        response.stream.transform(utf8.decoder).transform(const LineSplitter()).transform(const ThinkSseDecoder());
     return ThinkChatStream._(client, events);
   }
 
@@ -423,6 +419,9 @@ class ThinkApi {
     'tree_folder_not_found': '폴더가 없어졌습니다. 다른 폴더를 고르세요.',
     'tree_parent_not_folder': '새 폴더를 만들 상위 폴더가 없어졌습니다.',
     'conversation_not_found': '대화가 이미 없습니다.',
+    'plan_answer_missing': '모든 질문에 답해야 반영할 수 있습니다. 직접 입력은 내용을 적어 주세요.',
+    'plan_answer_invalid': '보기가 바뀌었습니다. 새로고침한 뒤 다시 골라 주세요.',
+    'plan_no_decisions': '이 조율본에는 정할 질문이 없습니다.',
   };
 
   static String codeErrorMessage(Object e) {
@@ -520,6 +519,10 @@ class ThinkApi {
       _actionRpc('ai_action_apply', {'p_id': id, 'p_overrides': overrides});
 
   Future<ThinkAction> rejectAction(String id) => _actionRpc('ai_action_reject', {'p_id': id});
+
+  /// 조율본 질문에 답하고 다시 조율한다. [answers]: [{id, option_id} 또는 {id, text}]. 새 code_plan 행이 돌아온다.
+  Future<ThinkAction> revisePlan(String id, List<Map<String, String>> answers) =>
+      _actionRpc('ai_code_plan_revise', {'p_action_id': id, 'p_answers': answers});
 
   /// 대화 분류만 되돌릴 수 있다.
   Future<ThinkAction> undoAction(String id) => _actionRpc('ai_action_undo', {'p_id': id});

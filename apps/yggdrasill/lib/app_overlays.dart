@@ -208,6 +208,38 @@ final ValueNotifier<bool> hideGlobalMainFab = ValueNotifier<bool>(false);
 final ValueNotifier<double> leftSideSheetClipWidthNotifier =
     ValueNotifier<double>(0);
 
+/// 다이얼로그 등 [PopupRoute]가 떠 있는 개수. 홈 탭바를 그 아래로 숨긴다.
+final ValueNotifier<int> obscuringPopupRouteCount = ValueNotifier<int>(0);
+
+class ObscuringPopupRouteObserver extends NavigatorObserver {
+  void _change(Route<dynamic>? route, int delta) {
+    if (route is! PopupRoute) return;
+    final next = obscuringPopupRouteCount.value + delta;
+    obscuringPopupRouteCount.value = next < 0 ? 0 : next;
+  }
+
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    _change(route, 1);
+  }
+
+  @override
+  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    _change(route, -1);
+  }
+
+  @override
+  void didRemove(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    _change(route, -1);
+  }
+
+  @override
+  void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) {
+    _change(oldRoute, -1);
+    _change(newRoute, 1);
+  }
+}
+
 /// 홈(수업 내용) 채점 모드 활성 시 true. FAB 숨김에 사용.
 final ValueNotifier<bool> gradingModeActive = ValueNotifier<bool>(false);
 

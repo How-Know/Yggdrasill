@@ -187,8 +187,6 @@ class _SettingsScreenState extends State<SettingsScreen>
   final Set<DayOfWeek> _previewBreakTimesExpanded = {};
 
   int _customTabIndex = 0;
-  final FabStyleScreenTabBarOverlay _fabTabBarOverlay =
-      FabStyleScreenTabBarOverlay();
   int _prevTabIndex = 0;
 
   // 운영시간 카드 hover 상태 관리
@@ -376,11 +374,10 @@ class _SettingsScreenState extends State<SettingsScreen>
   }
 
   void _syncFabTabBarOverlay() {
-    _fabTabBarOverlay.sync(
-      context,
+    sharedScreenTabBar.bind(
+      menuIndex: 5,
       selectedIndex: _customTabIndex,
-      tabs: const ['학원', '선생님', '일반'],
-      onTabSelected: _selectSettingsTab,
+      onSelected: _selectSettingsTab,
     );
   }
 
@@ -392,17 +389,16 @@ class _SettingsScreenState extends State<SettingsScreen>
           ? SettingType.academy
           : (index == 1 ? SettingType.teachers : SettingType.general);
     });
-    _fabTabBarOverlay.sync(
-      context,
+    sharedScreenTabBar.bind(
+      menuIndex: 5,
       selectedIndex: _customTabIndex,
-      tabs: const ['학원', '선생님', '일반'],
-      onTabSelected: _selectSettingsTab,
+      onSelected: _selectSettingsTab,
     );
   }
 
   @override
   void dispose() {
-    _fabTabBarOverlay.dispose();
+    sharedScreenTabBar.unbindMenu(5);
     _academyBounceController.dispose();
     _academyNameController.dispose();
     _academyAddressController.dispose();

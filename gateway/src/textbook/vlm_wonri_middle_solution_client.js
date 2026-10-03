@@ -203,8 +203,12 @@ export function buildWonriMiddleDetailedSolutionPrompt({
     '- 현재 지면에 제목/빠른 정답 박스가 보이면 그 제목과 다른 category의',
     '  번호를 절대 반환하지 마라. 번호가 같다는 이유로 다른 코너 풀이를',
     '  기대 category로 바꾸는 것은 금지한다.',
-    '- 제목 없는 연속 풀이는 페이지 맨 위에서 첫 새 코너 제목 이전에 이어지는',
-    '  블록에만 허용한다. 지면 중간·아래의 다른 코너 번호를 연속으로 보지 마라.',
+    '- 해설은 2단 조판이다. 읽기 순서는 왼쪽 단 위→아래, 그다음 오른쪽 단',
+    '  위→아래다.',
+    '- 제목 없는 연속 풀이는 읽기 순서상 첫 코너 박스보다 앞에 있는 블록에만',
+    '  허용한다. 왼쪽 단에 코너 박스가 있으면 오른쪽 단 맨 위 풀이는 그 박스',
+    '  코너의 풀이이지 앞 지면에서 이어진 풀이가 아니다. 지면 중간·아래의',
+    '  다른 코너 번호를 연속으로 보지 마라.',
     '- "본문 N~M쪽" 배지가 보이면 기대 목록의 본문쪽이 그 범위에 포함되는',
     '  문항만 매칭한다.',
     '- 한 페이지 아래쪽에서 다음 소단원의 빠른 정답 박스가 시작되면 그 박스는',
@@ -249,8 +253,9 @@ export function buildWonriMiddleDetailedSolutionPrompt({
     '목록에 맞춰 고치지 마라. 기대 목록과 다른 소단원 박스라도 배지 숫자를',
     'null로 비우지 마라. 배지가 아예 인쇄되지 않았을 때만 null이다.',
     '박스가 하나도 없으면 boxes=[]로 둔다.',
-    '어느 풀이가 어느 박스에 속하는지는 좌표로 따로 판정하므로, 지면 맨 위에서',
-    '박스보다 먼저 나오는 연속 풀이도 번호가 맞으면 그대로 반환한다.',
+    '어느 풀이가 어느 박스에 속하는지는 좌표로 따로 판정하므로, 읽기 순서상',
+    '첫 박스보다 먼저 나오는 연속 풀이(대개 왼쪽 단 맨 위)도 번호가 맞으면',
+    '그대로 반환한다.',
   ].join('\n');
 }
 
@@ -777,6 +782,58 @@ function filterWonriMiddleItemsByLayout({
     dropped: droppedByBox + droppedLeading,
     reason: reasons.join(' '),
   };
+}
+
+/// 앞 지면에서 이어진 풀이를 지면 전체로 물으면, 모델이 같은 번호의 오른쪽
+/// 단 맨 위 풀이(왼쪽 단 박스 코너의 것)를 골라 박스 판정에서 버려진다
+/// (3-1 해설 35쪽: 계산력 04·05 대신 시험문제 04·05). 이어진 풀이만 놓이는
+/// 자리, 즉 왼쪽 단의 첫 박스 위쪽만 잘라 다시 물을 영역을 돌려준다.
+/// 기대 코너 자신의 박스가 지면에 있으면 이어진 풀이가 아니므로 null이다.
+const LEADING_REGION_MIN_HEIGHT = 80;
+
+export function wonriMiddleLeadingRetryRegion({ boxes, expectedEntries }) {
+  const placed = (Array.isArray(boxes) ? boxes : [])
+    .filter((one) => Array.isArray(one?.region))
+    .sort((a, b) => readingOrderKey(a.region) - readingOrderKey(b.region));
+  const first = placed[0];
+  if (!first) return null;
+  const entries = normalizeExpectedEntries(expectedEntries);
+  const ownBoxOnPage = placed.some(
+    (one) =>
+      hasBodyRange(one) &&
+      entries.some(
+        (entry) =>
+          Number.isFinite(entry.bodyPage) &&
+          entry.bodyPage >= one.body_page_from &&
+          entry.bodyPage <= one.body_page_to,
+      ),
+  );
+  if (ownBoxOnPage) return null;
+  const [ymin, xmin, , xmax] = first.region;
+  if ((xmin + xmax) / 2 >= 500 || ymin < LEADING_REGION_MIN_HEIGHT) return null;
+  return [0, 0, ymin, 500];
+}
+
+/// 잘라 낸 영역 기준(0..1000) 좌표를 지면 기준 좌표로 되돌린다.
+export function mapWonriMiddleItemsFromCrop(items, crop) {
+  const [top, left, bottom, right] = crop;
+  const height = bottom - top;
+  const width = right - left;
+  const toPage = (region) =>
+    Array.isArray(region)
+      ? [
+          top + (region[0] * height) / 1000,
+          left + (region[1] * width) / 1000,
+          top + (region[2] * height) / 1000,
+          left + (region[3] * width) / 1000,
+        ].map(Math.round)
+      : region;
+  return (Array.isArray(items) ? items : []).map((item) => ({
+    ...item,
+    answer_region: toPage(item.answer_region),
+    number_region: toPage(item.number_region),
+    content_region: toPage(item.content_region),
+  }));
 }
 
 function numberKey(value) {

@@ -2715,6 +2715,7 @@ class _TextbookAuthoringStageDialogState
             sectionOf: (position) => solutionTargets[position].section,
             scopeKeyOf: (position) => solutionTargets[position].scopeKey,
             numberOf: (position) => solutionTargets[position].problemNumber,
+            bodyPageOf: (position) => solutionTargets[position].displayPage,
             settled: [
               for (var i = 0; i < solutionTargets.length; i += 1)
                 if (!pending.contains(i)) i,
@@ -2771,9 +2772,11 @@ class _TextbookAuthoringStageDialogState
                     ),
                 ],
               );
-              boxesByPage
-                  .putIfAbsent(page, () => <TextbookWonriMiddleSolutionBox>[])
-                  .addAll(result.boxes);
+              // 요청마다 같은 지면의 박스를 다시 읽는다. 읽기 순서가 유지되도록
+              // 합치지 않고 가장 많이 읽힌 한 응답을 쓴다.
+              if (result.boxes.length > (boxesByPage[page]?.length ?? 0)) {
+                boxesByPage[page] = result.boxes;
+              }
               debugPrint(
                 '[wonri-middle-stage] mode=${answers ? 'answers' : 'solution_refs'} '
                 '${isGapRetry ? 'gap-retry ' : ''}'
@@ -2891,8 +2894,7 @@ class _TextbookAuthoringStageDialogState
               final gaps = textbookWonriMiddlePageGaps(
                 asked: order,
                 stillPending: pending,
-                numberOf: (position) =>
-                    solutionTargets[position].problemNumber,
+                numberOf: (position) => solutionTargets[position].problemNumber,
               );
               if (gaps.isNotEmpty) queue.insert(0, (gaps, true));
             }

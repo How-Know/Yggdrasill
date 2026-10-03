@@ -9,8 +9,10 @@ import {
   isSecretPath,
   loadConfig,
   looksSecret,
+  modeLabel,
   parseChangeResult,
   parseNumstat,
+  parsePlanResult,
   parseResult,
   promptFor,
   redact,
@@ -118,6 +120,59 @@ test('설정: 키가 없으면 시작하지 않고, 값은 범위 안으로 맞�
   assert.equal(cfg.model, 'composer-2.5');
   assert.match(cfg.workerId, /^pc-/);
   assert.match(cfg.url, /functions\/v1\/ai_code_bridge$/);
+  assert.equal(cfg.roundTimeoutMs, 15 * 60_000);
+  assert.equal(cfg.changeTimeoutMs, 30 * 60_000);
+  assert.equal(loadConfig({ CODE_BRIDGE_WORKER_TOKEN: 't', CURSOR_API_KEY: 'k', CODE_BRIDGE_CHANGE_TIMEOUT_MS: '999999999' }).changeTimeoutMs, 90 * 60_000);
+  assert.deepEqual(['change', 'plan', 'investigate'].map(modeLabel), ['수정', '조율', '조사']);
+});
+
+test('조율 프롬프트: 계획 초안과 확인할 점을 넣고 고치지 않음을 밝힌다. 다음 회차는 Think 질문을 뒤에 붙인다', () => {
+  const planJob = {
+    ...job,
+    mode: 'plan',
+    request: { ...job.request, instructions: ['배지 위젯 추가'], questions: ['영향 범위'], background: '운영자 의도' },
+  };
+  const first = promptFor(planJob);
+  assert.match(first, /실무 개발자/);
+  assert.match(first, /아직 아무것도 고치지 않는다/);
+  assert.match(first, /1\. 배지 위젯 추가/);
+  assert.match(first, /1\. 영향 범위/);
+  assert.match(first, /운영자 의도/);
+  assert.match(first, /questions_for_owner/);
+  assert.match(first, /출결 표시 원칙/);
+  const next = promptFor({ ...planJob, followup_prompt: '## 2회차: Think가 보낸 질문·반론\n1. 정말?' });
+  assert.ok(next.startsWith(first));
+  assert.match(next, /1\. 정말\?$/);
+});
+
+test('조율 결과: 조사 칸에 계획 검토 칸을 더한다', () => {
+  const r = parsePlanResult(
+    '검토했습니다.\n```json\n{"summary":"고쳐야 가능","feasibility":"possible_with_changes",' +
+      '"issues":[{"step":"2","problem":"중복","suggestion":"기존 것 재사용"},{"step":"x"}],' +
+      '"suggested_steps":["a","b"],"questions_for_owner":["범위?"]}\n```',
+  );
+  assert.equal(r.ok, true);
+  assert.equal(r.value.feasibility, 'possible_with_changes');
+  assert.deepEqual(r.value.issues, [{ step: '2', problem: '중복', suggestion: '기존 것 재사용' }]);
+  assert.deepEqual(r.value.suggested_steps, ['a', 'b']);
+  assert.deepEqual(r.value.questions_for_owner, ['범위?']);
+  assert.equal(parsePlanResult('설명만').ok, false);
+});
+
+test('수정 프롬프트: 승인된 조율본이면 그대로 따르라고 하고 이견을 함께 준다', () => {
+  const change = promptFor({
+    ...job,
+    mode: 'change',
+    request: {
+      ...job.request,
+      instructions: ['a'],
+      based_on_plan: { title: '조율본', rounds: 2 },
+      disagreements: [{ point: '보관 기간', think: '전부', cursor: '10개' }],
+    },
+  });
+  assert.match(change, /2회 조율하고 운영자가 승인한 조율본 "조율본"/);
+  assert.match(change, /보관 기간 \(Think: 전부 \/ Cursor: 10개\)/);
+  assert.doesNotMatch(promptFor({ ...job, mode: 'change', request: { ...job.request, instructions: ['a'] } }), /조율본/);
 });
 
 test('작업 종류별 프롬프트: 2회차는 원래 요청 뒤에 추가 질문, 수정은 셸 없음과 복사본을 밝힌다', () => {
