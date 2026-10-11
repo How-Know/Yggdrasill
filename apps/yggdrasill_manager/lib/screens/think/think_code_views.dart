@@ -116,13 +116,87 @@ class ThinkCodeExpansion extends StatelessWidget {
   }
 }
 
+/// 승인 전 카드의 Cursor 작업 강도 선택. Think가 고른 값을 처음에 선택해 두되, 그 판단이 맞다고 단정하지 않는다.
+class ThinkEffortPicker extends StatelessWidget {
+  const ThinkEffortPicker({
+    super.key,
+    required this.selected,
+    required this.thinkChoice,
+    required this.onChanged,
+    this.reason = '',
+    this.enabled = true,
+  });
+
+  final String selected;
+
+  /// Think가 고른 강도. null이면 Think가 고르지 않은 옛 제안이라 기본값을 보여 준다.
+  final String? thinkChoice;
+  final String reason;
+  final ValueChanged<String> onChanged;
+  final bool enabled;
+
+  static const Map<String, IconData> _icons = {
+    'medium': Icons.signal_cellular_alt_1_bar,
+    'high': Icons.signal_cellular_alt_2_bar,
+    'xhigh': Icons.signal_cellular_alt,
+  };
+
+  static const Map<String, String> _hints = {
+    'medium': '작은 수정',
+    'high': '여러 파일 기능·테스트 포함',
+    'xhigh': 'DB·Edge·앱을 함께 바꾸거나 어려운 버그',
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final changed = thinkChoice != null && selected != thinkChoice;
+    final note = thinkChoice == null
+        ? 'Think가 강도를 고르지 않은 제안이라 기본값(${ThinkCodeSpec.defaultEffort})으로 보냅니다.'
+        : [
+            'Think 판단: $thinkChoice${reason.isEmpty ? '' : ' — $reason'}',
+            changed ? '바꾼 강도($selected)로 보냅니다.' : 'Think의 판단이라 틀릴 수 있습니다. 필요하면 바꿔 보내세요.',
+          ].join('\n');
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        thinkCodeLabel('Cursor 작업 강도'),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final e in ThinkCodeSpec.efforts)
+              ThinkToggleChip(
+                label: '${ThinkCodeSpec.effortLabels[e]} · $e',
+                icon: _icons[e]!,
+                selected: selected == e,
+                enabled: enabled,
+                tooltip: _hints[e],
+                onChanged: (_) => onChanged(e),
+              ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        SelectableText(note, style: const TextStyle(color: kThinkSub, fontSize: 12, height: 1.5)),
+      ],
+    );
+  }
+}
+
 /// 요청 내용. 수정 모드는 '할 일'을, 조사 모드는 '확인할 질문'을 보여 준다.
 class ThinkCodeSpecView extends StatelessWidget {
-  const ThinkCodeSpecView({super.key, required this.spec, this.mode = ThinkCodeMode.investigate, this.showGoal = true});
+  const ThinkCodeSpecView(
+      {super.key,
+      required this.spec,
+      this.mode = ThinkCodeMode.investigate,
+      this.showGoal = true,
+      this.showEffort = false});
 
   final ThinkCodeSpec spec;
   final ThinkCodeMode mode;
   final bool showGoal;
+
+  /// 보낸 요청에서 요청한 작업 강도를 보여 준다. 승인 전 카드는 [ThinkEffortPicker]가 대신한다.
+  final bool showEffort;
 
   @override
   Widget build(BuildContext context) {
@@ -133,6 +207,14 @@ class ThinkCodeSpecView extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (showGoal) SelectableText(s.goal, style: const TextStyle(color: kThinkText, fontSize: 13, height: 1.5)),
+        if (s.continueFrom != null) ...[
+          thinkCodeLabel('이어받는 앞 수정'),
+          SelectableText(
+            '${s.continueFrom!.title.isEmpty ? '' : '"${s.continueFrom!.title}" '}(${s.continueFrom!.requestId}) — '
+            '작업 폴더에 아직 없는 그 요청의 마지막 패치를 복사본에 얹고 시작합니다.',
+            style: const TextStyle(color: kThinkSub, fontSize: 12, height: 1.5),
+          ),
+        ],
         if ((change || plan) && s.instructions.isNotEmpty) ...[
           thinkCodeLabel(plan ? 'Think의 계획 초안' : '할 일'),
           thinkCodeBullets(s.instructions),
@@ -149,6 +231,13 @@ class ThinkCodeSpecView extends StatelessWidget {
         if (s.doNot.isNotEmpty) ...[
           thinkCodeLabel(change || plan ? '하지 말 것' : '제안하지 말 것'),
           thinkCodeBullets(s.doNot),
+        ],
+        if (showEffort) ...[
+          thinkCodeLabel('요청한 작업 강도'),
+          SelectableText(
+            '${ThinkCodeSpec.effortLabels[s.effort]} · ${s.effort}${s.effortReason.isEmpty ? '' : ' — Think 판단: ${s.effortReason}'}',
+            style: const TextStyle(color: kThinkText, fontSize: 13, height: 1.5),
+          ),
         ],
         if (s.background.isNotEmpty)
           ThinkCodeExpansion(
@@ -302,7 +391,7 @@ class ThinkCodeResultView extends StatelessWidget {
           thinkCodeLabel('Cursor가 고쳐 쓴 단계'),
           thinkCodeBullets(res.suggestedSteps),
         ],
-        if (res.checks.isNotEmpty) ...[thinkCodeLabel('적용 뒤 돌려 볼 검사'), thinkCodeBullets(res.checks, mono: true)],
+        if (res.checks.isNotEmpty) ...[thinkCodeLabel('사람이 확인할 점'), thinkCodeBullets(res.checks)],
         if (res.risks.isNotEmpty) ...[thinkCodeLabel('위험·주의'), thinkCodeBullets(res.risks)],
         if (res.questionsForThink.isNotEmpty) ...[
           thinkCodeLabel('Think에게 되묻는 질문'),
@@ -338,7 +427,7 @@ class ThinkCodeRoundView extends StatelessWidget {
             '토큰·도구 수는 끝나면 기록됩니다',
           ].join(' · ')
         : [
-            if (round.model != null) round.model!,
+            if (round.model != null) round.effort == null ? round.model! : '${round.model} · 강도 ${round.effort}',
             '입력 ${formatTokens(round.inputTokens)} · 출력 ${formatTokens(round.outputTokens)} 토큰',
             if (round.toolCalls.isNotEmpty) '도구 ${round.toolCalls.map((t) => '${t.name} ${t.count}').join(', ')}',
             '걸린 시간 ${thinkDuration(round.durationMs)}',
@@ -372,7 +461,27 @@ class ThinkCodeRoundView extends StatelessWidget {
               style: const TextStyle(color: kThinkSub, fontSize: 13),
             ),
           if (round.error != null) ThinkNotice(text: round.error!, color: kThinkError, icon: Icons.error_outline),
+          if (round.continued != null) ...[
+            thinkCodeLabel(round.continued!.partial ? ThinkContinued.partialLabel : '이어받은 패치'),
+            SelectableText(round.continued!.summary,
+                style: const TextStyle(color: kThinkSub, fontSize: 12, height: 1.5)),
+            if (round.continued!.partial)
+              const Text(
+                '앞 변경은 검사된 적이 없습니다. 이 회차의 결과와 자동 검사로만 판단합니다.',
+                style: TextStyle(color: kThinkHint, fontSize: 12, height: 1.5),
+              ),
+            if (change && !round.continued!.alreadyPresent)
+              const Text(
+                '아래 diff에는 앞 수정도 들어 있습니다. 작업 폴더에 적용하면 앞 수정도 함께 들어갑니다.',
+                style: TextStyle(color: kThinkHint, fontSize: 12, height: 1.5),
+              ),
+            const SizedBox(height: 4),
+          ],
           if (res != null) ThinkCodeResultView(result: res, mode: mode),
+          if (change && round.verification != null) ...[
+            thinkCodeLabel('자동 검사'),
+            ThinkVerificationView(verification: round.verification!),
+          ],
           if (round.diff != null) ...[
             thinkCodeLabel('변경 (diff)'),
             ThinkDiffView(diff: round.diff!, stats: round.diffStats),
@@ -395,6 +504,113 @@ class ThinkCodeRoundView extends StatelessWidget {
             ),
           const SizedBox(height: 8),
           Text(meta, style: const TextStyle(color: kThinkHint, fontSize: 12, height: 1.5)),
+        ],
+      ),
+    );
+  }
+}
+
+Color thinkCheckColor(ThinkCheckStatus s) => switch (s) {
+      ThinkCheckStatus.passed => kThinkSuccess,
+      ThinkCheckStatus.failed => kThinkError,
+      ThinkCheckStatus.skipped => kThinkHint,
+      ThinkCheckStatus.preexisting => kThinkLink,
+    };
+
+IconData _checkIcon(ThinkCheckStatus s) => switch (s) {
+      ThinkCheckStatus.passed => Icons.check_circle_outline,
+      ThinkCheckStatus.failed => Icons.error_outline,
+      ThinkCheckStatus.skipped => Icons.remove_circle_outline,
+      ThinkCheckStatus.preexisting => Icons.history,
+    };
+
+/// 한 줄 요약. 미실행은 통과로 세지 않는다.
+String thinkVerificationSummary(ThinkVerification v) => v.items.isEmpty
+    ? '검사한 항목 없음'
+    : [
+        '통과 ${v.passed}',
+        if (v.failed > 0) '실패 ${v.failed}',
+        if (v.skipped > 0) '미실행 ${v.skipped}',
+        if (v.preexisting > 0) '원래도 실패 ${v.preexisting}',
+        if (v.stopped) '중간에 멈춤',
+      ].join(' · ');
+
+/// 작업자 자동 검사 결과. 실패·원래도 실패 항목은 눌러서 출력 끝부분을 본다.
+class ThinkVerificationView extends StatelessWidget {
+  const ThinkVerificationView({super.key, required this.verification});
+
+  final ThinkVerification verification;
+
+  @override
+  Widget build(BuildContext context) {
+    final v = verification;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(thinkVerificationSummary(v),
+            style: const TextStyle(color: kThinkText, fontSize: 12, fontWeight: FontWeight.w700)),
+        if (v.note != null) ...[
+          const SizedBox(height: 4),
+          Text(v.note!, style: const TextStyle(color: kThinkSub, fontSize: 12, height: 1.5)),
+        ],
+        const SizedBox(height: 4),
+        for (final i in v.items) _item(context, i),
+      ],
+    );
+  }
+
+  Widget _item(BuildContext context, ThinkCheckItem i) {
+    final color = thinkCheckColor(i.status);
+    final head = Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(_checkIcon(i.status), size: 16, color: color),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text.rich(
+            TextSpan(children: [
+              TextSpan(text: i.label, style: const TextStyle(color: kThinkText)),
+              TextSpan(text: '  ${i.status.label}', style: TextStyle(color: color, fontWeight: FontWeight.w700)),
+              if (i.reason != null) TextSpan(text: ' · ${i.reason}', style: const TextStyle(color: kThinkSub)),
+            ]),
+            style: const TextStyle(fontSize: 12, height: 1.5),
+          ),
+        ),
+        if (i.durationMs > 0)
+          Text(thinkDuration(i.durationMs), style: const TextStyle(color: kThinkHint, fontSize: 12)),
+      ],
+    );
+    final detail = i.output != null || i.command != null;
+    if (!detail) return Padding(padding: const EdgeInsets.symmetric(vertical: 4), child: head);
+    final open = i.status == ThinkCheckStatus.failed;
+    return Theme(
+      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+      child: ExpansionTile(
+        key: PageStorageKey('check-${i.id}'),
+        initiallyExpanded: open,
+        dense: true,
+        visualDensity: VisualDensity.compact,
+        tilePadding: EdgeInsets.zero,
+        childrenPadding: const EdgeInsets.only(left: 24, bottom: 8),
+        expandedCrossAxisAlignment: CrossAxisAlignment.stretch,
+        iconColor: kThinkSub,
+        collapsedIconColor: kThinkSub,
+        title: head,
+        children: [
+          if (i.command != null)
+            SelectableText(i.command!,
+                style: const TextStyle(color: kThinkHint, fontSize: 12, fontFamily: 'monospace', height: 1.5)),
+          if (i.output != null)
+            Container(
+              margin: const EdgeInsets.only(top: 4),
+              padding: const EdgeInsets.all(8),
+              constraints: const BoxConstraints(maxHeight: 240),
+              decoration: BoxDecoration(color: kThinkQuote, borderRadius: BorderRadius.circular(8)),
+              child: SingleChildScrollView(
+                child: SelectableText(i.output!,
+                    style: const TextStyle(color: kThinkSub, fontSize: 12, fontFamily: 'monospace', height: 1.4)),
+              ),
+            ),
         ],
       ),
     );

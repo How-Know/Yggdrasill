@@ -17,6 +17,7 @@ import '../../services/textbook_download_progress_service.dart';
 import '../../services/textbook_pdf_service.dart';
 import '../../utils/homework_page_text.dart';
 import '../../widgets/app_snackbar.dart';
+import '../../widgets/cover_overlay.dart';
 import '../../widgets/dialog_tokens.dart';
 import '../../widgets/home_grading_edit_icon.dart';
 import '../../widgets/home_header_weather_icon.dart';
@@ -53,11 +54,6 @@ const double _kGradingHomeworkCardMetaLineHeightMax = 0.92;
 const double _kGradingHomeworkCardMetaLineHeightMin = 0.72;
 const double _kGradingHomeworkCardCoverDetailFontSize = 22.0;
 const double _kGradingHomeworkCardCoverDetailLineHeight = 1.1;
-const double _kGradingHomeworkCardCoverNameVerticalPad = 10.0;
-
-/// 커버 2번째 줄(경과시간/숙제칩) 고정 높이 — 페이지 줄 Y 정렬용.
-/// 숙제칩(pad 6*2 + 15*1.1 + border)과 경과시간(22*1.1) 중 큰 쪽에 맞춤.
-const double _kGradingCoverSecondLineSlotHeight = 32.0;
 const double _kGradingAnswerRailHorizontalPadding = 24.0;
 const double _kGradingPageTitleIconSize = 32;
 
@@ -1141,108 +1137,136 @@ class _GradingModePageState extends State<GradingModePage> {
     List<_GradingEntryStack> stacks, {
     required _GradingCardLayout cardLayout,
   }) {
-    // reverse:true 로 오른쪽 정렬(카드가 적을 때도 우측에 붙음).
-    // index 0 = 오래된 스택 → 오른쪽, 마지막 = 최신 스택 → 왼쪽.
-    return ListView.separated(
-      scrollDirection: Axis.horizontal,
-      reverse: true,
-      physics: const BouncingScrollPhysics(),
-      // 왼쪽 끝에서 카드를 잘라 둔다. 캐시를 넓혀 화면 안에 남은 조각이
-      // 빌드에서 빠지며 통째로 사라지지 않게 한다.
-      clipBehavior: Clip.hardEdge,
-      cacheExtent: math.max(cardLayout.width * 2, 800),
-      padding: EdgeInsets.zero,
-      itemCount: stacks.length,
-      separatorBuilder: (_, __) => SizedBox(width: cardLayout.spacing),
-      itemBuilder: (context, index) {
-        final stack = stacks[index];
-        AsyncUiAction? buildOpenNext(int currentIndex) {
-          final nextIndex = currentIndex + 1;
-          if (nextIndex >= stack.entries.length) return null;
-          final nextEntry = stack.entries[nextIndex];
-          final nextOnCardTap = nextEntry.section == _GradingSection.submitted
-              ? widget.onSubmittedCardTap
-              : widget.onHomeworkCardTap;
-          if (nextOnCardTap == null ||
-              (nextEntry.section == _GradingSection.submitted &&
-                  !nextEntry.hasSubmittedChild)) {
-            return null;
-          }
-          return () => nextOnCardTap(
-                nextEntry.studentId,
-                nextEntry.group,
-                nextEntry.summary,
-                nextEntry.children,
-                openNext: buildOpenNext(nextIndex),
-              );
-        }
-
+    // 카드가 적을 때도 오른쪽에 붙인다. 가로 ListView는 영역 밖 카드를
+    // 통째로 지워서, 화면 왼쪽 끝에서 잘린 네모 대신 빈칸이 됐다.
+    // 한 줄로 전부 두고, 화면 왼쪽 끝의 클립만 네모를 자르게 한다.
+    // SingleChildScrollView는 제약이 느슨하면 내용 너비로 줄어든다.
+    // 그러면 부모 Align(topLeft)에 붙어 왼쪽 정렬이 되므로, 가로를 꽉 채워
+    // reverse가 오른쪽 끝을 기준으로 왼쪽으로 쌓이게 한다.
+    final columns = <Widget>[];
+    for (var index = stacks.length - 1; index >= 0; index--) {
+      if (columns.isNotEmpty) {
+        columns.add(SizedBox(width: cardLayout.spacing));
+      }
+      columns.add(
+        _buildEntryStackColumn(
+          stacks[index],
+          index: index,
+          cardLayout: cardLayout,
+        ),
+      );
+    }
+    return LayoutBuilder(
+      builder: (context, constraints) {
         return SizedBox(
-          key: ValueKey(
-            stack.entries.isEmpty
-                ? 'grading-stack:$index'
-                : _entryStackKey(stack.entries.first),
-          ),
-          width: cardLayout.width,
+          width: constraints.maxWidth,
           child: ScrollConfiguration(
-            behavior: ScrollConfiguration.of(context).copyWith(
-              scrollbars: false,
-            ),
-            child: ListView.separated(
-              padding: EdgeInsets.zero,
-              physics: const BouncingScrollPhysics(),
+            behavior:
+                ScrollConfiguration.of(context).copyWith(scrollbars: false),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              reverse: true,
               clipBehavior: Clip.none,
-              itemCount: stack.entries.length,
-              separatorBuilder: (_, __) =>
-                  const SizedBox(height: _kGradingStackedCardGap),
-              itemBuilder: (context, stackIndex) {
-                final entry = stack.entries[stackIndex];
-                final onCardTap = entry.section == _GradingSection.submitted
-                    ? widget.onSubmittedCardTap
-                    : widget.onHomeworkCardTap;
-                final openNext = buildOpenNext(stackIndex);
-                return SizedBox(
-                  width: cardLayout.width,
-                  height: cardLayout.height,
-                  child: _SubmittedHomeworkCard(
-                    entry: entry,
-                    cardHeight: cardLayout.height,
-                    metaHeight: cardLayout.metaHeight,
-                    metaDisplayHeight: cardLayout.metaDisplayHeight,
-                    isPendingConfirm: _isEntryPending(entry),
-                    isCompleteCheckbox: _isEntryPendingComplete(entry),
-                    coverPathFuture: (() {
-                      final coverSource = _resolveEntryCoverSource(entry);
-                      return _resolveCoverPath(
-                        bookId: coverSource.bookId,
-                        gradeLabel: coverSource.gradeLabel,
-                        flowId: coverSource.disableFlowFallback
-                            ? ''
-                            : (entry.summary.flowId ?? '').trim(),
-                      );
-                    })(),
-                    onTap: onCardTap == null
-                        ? null
-                        : () async {
-                            if (entry.section == _GradingSection.submitted &&
-                                !entry.hasSubmittedChild) {
-                              return;
-                            }
-                            await onCardTap(
-                              entry.studentId,
-                              entry.group,
-                              entry.summary,
-                              entry.children,
-                              openNext: openNext,
-                            );
-                          },
-                  ),
-                );
-              },
+              physics: const BouncingScrollPhysics(),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: columns,
+              ),
             ),
           ),
         );
       },
+    );
+  }
+
+  Widget _buildEntryStackColumn(
+    _GradingEntryStack stack, {
+    required int index,
+    required _GradingCardLayout cardLayout,
+  }) {
+    AsyncUiAction? buildOpenNext(int currentIndex) {
+      final nextIndex = currentIndex + 1;
+      if (nextIndex >= stack.entries.length) return null;
+      final nextEntry = stack.entries[nextIndex];
+      final nextOnCardTap = nextEntry.section == _GradingSection.submitted
+          ? widget.onSubmittedCardTap
+          : widget.onHomeworkCardTap;
+      if (nextOnCardTap == null ||
+          (nextEntry.section == _GradingSection.submitted &&
+              !nextEntry.hasSubmittedChild)) {
+        return null;
+      }
+      return () => nextOnCardTap(
+            nextEntry.studentId,
+            nextEntry.group,
+            nextEntry.summary,
+            nextEntry.children,
+            openNext: buildOpenNext(nextIndex),
+          );
+    }
+
+    return SizedBox(
+      key: ValueKey(
+        stack.entries.isEmpty
+            ? 'grading-stack:$index'
+            : _entryStackKey(stack.entries.first),
+      ),
+      width: cardLayout.width,
+      child: ScrollConfiguration(
+        behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
+        child: ListView.separated(
+          padding: EdgeInsets.zero,
+          physics: const BouncingScrollPhysics(),
+          clipBehavior: Clip.none,
+          itemCount: stack.entries.length,
+          separatorBuilder: (_, __) =>
+              const SizedBox(height: _kGradingStackedCardGap),
+          itemBuilder: (context, stackIndex) {
+            final entry = stack.entries[stackIndex];
+            final onCardTap = entry.section == _GradingSection.submitted
+                ? widget.onSubmittedCardTap
+                : widget.onHomeworkCardTap;
+            final openNext = buildOpenNext(stackIndex);
+            return SizedBox(
+              width: cardLayout.width,
+              height: cardLayout.height,
+              child: _SubmittedHomeworkCard(
+                entry: entry,
+                cardHeight: cardLayout.height,
+                metaHeight: cardLayout.metaHeight,
+                metaDisplayHeight: cardLayout.metaDisplayHeight,
+                isPendingConfirm: _isEntryPending(entry),
+                isCompleteCheckbox: _isEntryPendingComplete(entry),
+                coverPathFuture: (() {
+                  final coverSource = _resolveEntryCoverSource(entry);
+                  return _resolveCoverPath(
+                    bookId: coverSource.bookId,
+                    gradeLabel: coverSource.gradeLabel,
+                    flowId: coverSource.disableFlowFallback
+                        ? ''
+                        : (entry.summary.flowId ?? '').trim(),
+                  );
+                })(),
+                onTap: onCardTap == null
+                    ? null
+                    : () async {
+                        if (entry.section == _GradingSection.submitted &&
+                            !entry.hasSubmittedChild) {
+                          return;
+                        }
+                        await onCardTap(
+                          entry.studentId,
+                          entry.group,
+                          entry.summary,
+                          entry.children,
+                          openNext: openNext,
+                        );
+                      },
+              ),
+            );
+          },
+        ),
+      ),
     );
   }
 
@@ -2187,7 +2211,12 @@ class _GradingAnswerBookRailState extends State<_GradingAnswerBookRail> {
   Widget _buildRevolvingStack(BoxConstraints constraints) {
     final width = constraints.maxWidth;
     final height = constraints.maxHeight;
-    final cardHeight = math.min(width / 0.72, height * 0.72);
+    // 자료 메뉴 책카드 표지와 같은 A4 비율. 0.72는 레일 높이 안에서
+    // 위아래 책이 보이게 남기는 상한이다.
+    final cardHeight = math.min(
+      width * resourceTextbookCardCoverA4Ratio,
+      height * 0.72,
+    );
     final centerTop = (height - cardHeight) / 2;
     final slotGap = cardHeight * 0.31;
     final visibleSlots = _visibleBookSlots();
@@ -2362,6 +2391,9 @@ class _GradingAnswerBookCardState extends State<_GradingAnswerBookCard> {
     if (!widget.book.hasGrades) return const SizedBox.shrink();
     final grade = _grade;
     final provider = _gradingAnswerCoverImageProvider(grade.coverPath);
+    final overlay = CoverOverlayStyle(onDark: true, hasImage: provider != null);
+    const radius = FabTabBarTokens.previewAcademyGroupedCardRadius;
+    const pad = 16.0;
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       child: Listener(
@@ -2377,7 +2409,7 @@ class _GradingAnswerBookCardState extends State<_GradingAnswerBookCard> {
         },
         child: Material(
           color: Colors.transparent,
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(radius),
           clipBehavior: Clip.antiAlias,
           child: InkWell(
             onTap: () => unawaited(widget.onOpen(widget.book, grade)),
@@ -2391,7 +2423,7 @@ class _GradingAnswerBookCardState extends State<_GradingAnswerBookCard> {
               onHorizontalDragEnd: _handleGradeDragEnd,
               onHorizontalDragCancel: _resetGradeDrag,
               child: AspectRatio(
-                aspectRatio: 0.72,
+                aspectRatio: 1 / resourceTextbookCardCoverA4Ratio,
                 child: Stack(
                   clipBehavior: Clip.none,
                   fit: StackFit.expand,
@@ -2400,7 +2432,7 @@ class _GradingAnswerBookCardState extends State<_GradingAnswerBookCard> {
                       child: IgnorePointer(
                         child: DecoratedBox(
                           decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(14),
+                            borderRadius: BorderRadius.circular(radius),
                             boxShadow: resourceTextbookCoverBoxShadows(),
                           ),
                         ),
@@ -2408,7 +2440,7 @@ class _GradingAnswerBookCardState extends State<_GradingAnswerBookCard> {
                     ),
                     Positioned.fill(
                       child: ClipRRect(
-                        borderRadius: BorderRadius.circular(14),
+                        borderRadius: BorderRadius.circular(radius),
                         child: DecoratedBox(
                           decoration: BoxDecoration(
                             color: const Color(0xFF1D2A2D),
@@ -2431,32 +2463,36 @@ class _GradingAnswerBookCardState extends State<_GradingAnswerBookCard> {
                         ),
                       ),
                     ),
+                    // 아래 띠가 교재명 2줄 + 설명 3줄을 덮도록 일찍 시작.
                     Positioned.fill(
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                            colors: [
-                              Colors.black.withValues(alpha: 0.10),
-                              Colors.black.withValues(alpha: 0.12),
-                              Colors.black.withValues(alpha: 0.72),
-                            ],
-                            stops: const [0.0, 0.46, 1.0],
-                          ),
+                      child: CoverScrim(
+                        style: overlay,
+                        topEnd: 0.30,
+                        bottomStart: 0.42,
+                      ),
+                    ),
+                    Positioned.fill(
+                      child: CoverHairline(style: overlay, radius: radius),
+                    ),
+                    Positioned(
+                      left: pad,
+                      top: pad,
+                      right: pad,
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: CoverPill(
+                          style: overlay,
+                          label: grade.displayLabel,
+                          icon: widget.book.grades.length > 1
+                              ? Icons.swap_horiz_rounded
+                              : null,
                         ),
                       ),
                     ),
                     Positioned(
-                      right: 12,
-                      top: 12,
-                      child:
-                          _GradingAnswerGradeBadge(label: grade.displayLabel),
-                    ),
-                    Positioned(
-                      left: 14,
-                      right: 14,
-                      bottom: 16,
+                      left: pad,
+                      right: pad,
+                      bottom: pad,
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         mainAxisSize: MainAxisSize.min,
@@ -2465,13 +2501,9 @@ class _GradingAnswerBookCardState extends State<_GradingAnswerBookCard> {
                             widget.book.displayName,
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
-                            style: FabTabBarTokens.previewAcademyMainTitleStyle(
-                              FabTabBarTokens.previewAcademyPanelStyleFor(
-                                Theme.of(context).brightness,
-                              ),
-                            ).copyWith(color: Colors.white),
+                            style: overlay.titleStyle(context),
                           ),
-                          const SizedBox(height: 10),
+                          const SizedBox(height: 8),
                           Text(
                             widget.book.displayDescription,
                             maxLines: 3,
@@ -2479,11 +2511,12 @@ class _GradingAnswerBookCardState extends State<_GradingAnswerBookCard> {
                             style: TextStyle(
                               fontFamily:
                                   FabTabBarTokens.previewAcademyLabelFontFamily,
-                              color: Colors.white.withValues(alpha: 0.86),
+                              color: overlay.inkSecondary,
                               fontSize: 20,
                               fontWeight:
                                   FabTabBarTokens.previewAcademyLabelFontWeight,
                               height: 1.18,
+                              shadows: overlay.textShadows,
                             ),
                           ),
                         ],
@@ -2494,41 +2527,6 @@ class _GradingAnswerBookCardState extends State<_GradingAnswerBookCard> {
               ),
             ),
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class _GradingAnswerGradeBadge extends StatelessWidget {
-  final String label;
-
-  const _GradingAnswerGradeBadge({required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    const fontSize = 20.0;
-    const verticalPad = (fontSize * 32 / 12 - fontSize) / 2 * 0.7;
-    const badgeHeight = fontSize + verticalPad * 2;
-    return Container(
-      height: badgeHeight,
-      padding: const EdgeInsets.symmetric(horizontal: fontSize * 10 / 12),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.45),
-        borderRadius: BorderRadius.circular(badgeHeight / 2),
-      ),
-      alignment: Alignment.center,
-      child: Text(
-        label,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        textScaler: TextScaler.noScaling,
-        style: const TextStyle(
-          color: Colors.white70,
-          fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
-          fontSize: fontSize,
-          fontWeight: FontWeight.w600,
-          height: 1.0,
         ),
       ),
     );
@@ -2828,9 +2826,6 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
       future: coverPathFuture,
       builder: (context, snapshot) {
         final hw = entry.summary;
-        final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(
-          Theme.of(context).brightness,
-        );
         final provider = _coverImageProvider(snapshot.data ?? '');
         final hasImage = provider != null;
         final isProblemBankSource = _gradingEntryIsProblemBankSource(entry);
@@ -2841,48 +2836,37 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
         final useDarkOverlayText = !isProblemBankSource &&
             (isPrintCover ||
                 (!hasImage && fallbackCoverColor.computeLuminance() > 0.6));
-        const overlayDetailFontSize = _kGradingHomeworkCardCoverDetailFontSize;
-        const overlayDetailLineHeight =
-            _kGradingHomeworkCardCoverDetailLineHeight;
-        final overlayHorizontalPad = (14.0 * scale).clamp(8.0, 14.0).toDouble();
-        final overlayNameColor = useDarkOverlayText
-            ? Colors.black.withValues(alpha: 0.82)
-            : Colors.white;
-        final overlayBlockGap = (6.0 * scale).clamp(4.0, 7.0).toDouble();
-        final overlayDetailGap =
-            (overlayBlockGap * 0.72).clamp(2.0, 4.5).toDouble();
-        final overlayNameVerticalPad =
-            (_kGradingHomeworkCardCoverNameVerticalPad * scale)
-                .clamp(8.0, 12.0)
-                .toDouble();
-        final overlayTextShadows = useDarkOverlayText
-            ? const <Shadow>[]
-            : <Shadow>[
-                Shadow(
-                  color: Colors.black.withValues(alpha: 0.6),
-                  blurRadius: (4.0 * scale).clamp(2.0, 4.0).toDouble(),
-                  offset: Offset(0, (1.0 * scale).clamp(0.5, 1.0).toDouble()),
-                ),
-              ];
-        final overlayNameShadows = useDarkOverlayText
-            ? const <Shadow>[]
-            : <Shadow>[
-                Shadow(
-                  color: hasImage
-                      ? Colors.black87
-                      : Colors.black.withValues(alpha: 0.26),
-                  blurRadius: (8.0 * scale).clamp(4.0, 8.0).toDouble(),
-                  offset: Offset(0, (2.0 * scale).clamp(1.0, 2.0).toDouble()),
-                ),
-              ];
-        // 페이지·과제번호 공통 (과제번호 스타일 기준).
-        final overlayDetailStyle = TextStyle(
-          color: overlayNameColor,
-          fontSize: overlayDetailFontSize,
-          fontWeight: FontWeight.w700,
-          height: overlayDetailLineHeight,
-          shadows: overlayTextShadows,
+        final overlay = CoverOverlayStyle(
+          onDark: !useDarkOverlayText,
+          hasImage: hasImage,
         );
+        final pad = CoverOverlayStyle.padFor(scale);
+        final gap = CoverOverlayStyle.gapFor(scale);
+        final pageGap = (2.0 * scale).clamp(1.0, 2.0).toDouble();
+        final pageStyle = TextStyle(
+          color: overlay.ink,
+          fontSize: _kGradingHomeworkCardCoverDetailFontSize,
+          fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
+          fontWeight: FontWeight.w700,
+          height: _kGradingHomeworkCardCoverDetailLineHeight,
+          letterSpacing: -0.2,
+          fontFeatures: const [FontFeature.tabularFigures()],
+          shadows: overlay.textShadows,
+        );
+        // 제출: 경과 시간 / 숙제: 숙제 배지 / 그 외: 없음.
+        final Widget? statusPill = line4 != '-'
+            ? CoverPill(
+                style: overlay,
+                icon: Icons.schedule_rounded,
+                label: '$line4 \uC804',
+              )
+            : (entry.section != _GradingSection.submitted
+                ? CoverPill(
+                    style: overlay,
+                    tone: CoverPillTone.accent,
+                    label: '\uC219\uC81C',
+                  )
+                : null);
         return Stack(
           fit: StackFit.expand,
           children: [
@@ -2897,148 +2881,68 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
                       ),
               ),
             ),
+            Positioned.fill(child: CoverScrim(style: overlay)),
             Positioned.fill(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Colors.black.withValues(alpha: hasImage ? 0.05 : 0.0),
-                      Colors.black.withValues(alpha: hasImage ? 0.22 : 0.12),
+              child: CoverHairline(
+                style: overlay,
+                radius: FabTabBarTokens.previewAcademyGroupedCardRadius,
+              ),
+            ),
+            Positioned(
+              left: pad,
+              right: pad,
+              top: pad,
+              child: IgnorePointer(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      entry.studentName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: overlay.titleStyle(context),
+                    ),
+                    if (statusPill != null) ...[
+                      SizedBox(height: gap),
+                      statusPill,
                     ],
-                  ),
+                  ],
                 ),
               ),
             ),
-            IgnorePointer(
-              child: Align(
-                alignment: Alignment.topCenter,
-                child: Padding(
-                  padding: EdgeInsets.fromLTRB(
-                    overlayHorizontalPad,
-                    (12.0 * scale).clamp(8.0, 12.0).toDouble(),
-                    overlayHorizontalPad,
-                    0,
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Padding(
-                        padding: EdgeInsets.symmetric(
-                          vertical: overlayNameVerticalPad,
-                        ),
-                        child: Text(
-                          entry.studentName,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          textAlign: TextAlign.center,
-                          style: FabTabBarTokens.previewAcademyMainTitleStyle(
-                            panelStyle,
-                          ).copyWith(
-                            color: overlayNameColor,
-                            shadows: overlayNameShadows,
-                          ),
-                        ),
+            Positioned(
+              left: pad,
+              right: pad,
+              bottom: pad,
+              child: IgnorePointer(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (int i = 0; i < pageLines.length; i++) ...[
+                      Text(
+                        pageLines[i],
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: pageStyle,
                       ),
-                      // 2번째 줄 높이를 고정해 아래 페이지 줄 Y가 카드마다 같게 유지.
-                      // 제출: 경과 시간 / 숙제: 숙제 칩 / 그 외: 빈 슬롯.
-                      SizedBox(height: overlayBlockGap),
                       SizedBox(
-                        height: _kGradingCoverSecondLineSlotHeight,
-                        child: Center(
-                          child: line4 != '-'
-                              ? Text(
-                                  line4,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  textAlign: TextAlign.center,
-                                  style: overlayDetailStyle,
-                                )
-                              : (entry.section != _GradingSection.submitted
-                                  ? _buildHomeworkTypeChip(
-                                      useDarkOverlayText: useDarkOverlayText,
-                                    )
-                                  : const SizedBox.shrink()),
-                        ),
+                        height: i == pageLines.length - 1 ? gap + 2 : pageGap,
                       ),
-                      if (pageLines.isNotEmpty) ...[
-                        SizedBox(height: overlayBlockGap),
-                        for (int i = 0; i < pageLines.length; i++) ...[
-                          Text(
-                            pageLines[i],
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: TextAlign.left,
-                            style: overlayDetailStyle,
-                          ),
-                          if (i != pageLines.length - 1)
-                            SizedBox(height: overlayDetailGap),
-                        ],
-                      ],
                     ],
-                  ),
-                ),
-              ),
-            ),
-            IgnorePointer(
-              child: Align(
-                alignment: Alignment.bottomRight,
-                child: Padding(
-                  padding: EdgeInsets.fromLTRB(
-                    overlayHorizontalPad,
-                    0,
-                    overlayHorizontalPad,
-                    (8.0 * scale).clamp(4.0, 10.0).toDouble(),
-                  ),
-                  child: Text(
-                    assignmentNumText,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.right,
-                    style: overlayDetailStyle,
-                  ),
+                    CoverPill(
+                      style: overlay,
+                      label: assignmentNumText,
+                      emphasize: true,
+                    ),
+                  ],
                 ),
               ),
             ),
           ],
         );
       },
-    );
-  }
-
-  /// 홈메뉴 숙제칩과 같은 크기·형태 + 커버 위에서 읽히도록 배경 채움.
-  /// 기본 과제 카드에는 배지를 붙이지 않고, 숙제 카드에만 표시한다.
-  Widget _buildHomeworkTypeChip({
-    required bool useDarkOverlayText,
-  }) {
-    final Color borderColor = kDlgAccent;
-    final Color backgroundColor;
-    final Color textColor;
-    if (useDarkOverlayText) {
-      backgroundColor = const Color(0xFFE8F6EF);
-      textColor = kDlgAccent;
-    } else {
-      backgroundColor = const Color(0xFF1A3D2E);
-      textColor = const Color(0xFF9FE3C6);
-    }
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-      decoration: BoxDecoration(
-        color: backgroundColor,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: borderColor, width: 1.05),
-      ),
-      child: Text(
-        '숙제',
-        style: TextStyle(
-          color: textColor,
-          fontSize: 15,
-          fontWeight: FontWeight.w600,
-          height: 1.1,
-        ),
-      ),
     );
   }
 

@@ -48,7 +48,7 @@ enum ThinkCodeStatus {
   bool get decidable => this == ready || this == needsReview;
   bool get deletable => this == draft || finished;
 
-  /// 수정 모드에서 작업 폴더에 적용할 수 있는 상태.
+  /// 수정 모드에서 작업 폴더에 적용할 수 있는 상태(needs_review·parse_ok false는 제외).
   bool get appliable => this == ready || this == applyFailed;
   bool get revertable => this == applied || this == revertFailed;
 }
@@ -134,9 +134,37 @@ class ThinkCodeSpec {
     this.constraints = const [],
     this.doNot = const [],
     this.instructions = const [],
+    this.continueFrom,
+    this.effort = defaultEffort,
+    this.effortReason = '',
   });
 
+  static const List<String> efforts = ['medium', 'high', 'xhigh'];
+  static const String defaultEffort = 'high';
+
+  /// 비었거나 모르는 값은 high. 서버(`_shared/code_effort.ts`)·작업자와 같은 기준이다.
+  static String normalizeEffort(dynamic v) => efforts.contains(v) ? v as String : defaultEffort;
+
+  static const Map<String, String> effortLabels = {'medium': '보통', 'high': '높음', 'xhigh': '최고'};
+
+  /// 제안 승인 때 보낼 덮어쓰기. 서버는 spec을 통째로 바꾸므로 원래 spec에 강도만 바꿔 담는다.
+  static Map<String, dynamic> effortOverrides(Map<String, dynamic> rawSpec, String effort) =>
+      rawSpec['effort'] == effort
+          ? const <String, dynamic>{}
+          : <String, dynamic>{
+              'spec': {...rawSpec, 'effort': normalizeEffort(effort)}
+            };
+
   final String goal;
+
+  /// Cursor 작업 강도(medium·high·xhigh). Think가 고르고 운영자가 승인 전에 바꿀 수 있다.
+  final String effort;
+
+  /// Think가 그 강도를 고른 한 줄 이유. Think의 판단이라 틀릴 수 있다.
+  final String effortReason;
+
+  /// 이어받을 앞 수정 요청. 작업자가 그 최종 패치를 지금 작업 폴더 복사본에 얹고 시작한다.
+  final ({String requestId, String title})? continueFrom;
 
   /// 요청이 나온 Think 대화의 맥락(답변 일부 등). 비어 있어도 된다.
   final String background;
@@ -150,7 +178,10 @@ class ThinkCodeSpec {
 
   factory ThinkCodeSpec.fromJson(dynamic raw) {
     final j = raw is Map ? Map<String, dynamic>.from(raw) : const <String, dynamic>{};
+    final from = j['continue_from'] is Map ? j['continue_from'] as Map : null;
+    final fromId = _str(from?['request_id']);
     return ThinkCodeSpec(
+      continueFrom: fromId.isEmpty ? null : (requestId: fromId, title: _str(from?['title'])),
       goal: _str(j['goal']),
       background: _str(j['background']),
       questions: _strList(j['questions']),
@@ -158,8 +189,23 @@ class ThinkCodeSpec {
       constraints: _strList(j['constraints']),
       doNot: _strList(j['do_not']),
       instructions: _strList(j['instructions']),
+      effort: normalizeEffort(j['effort']),
+      effortReason: _str(j['effort_reason']),
     );
   }
+
+  ThinkCodeSpec withEffort(String value) => ThinkCodeSpec(
+        goal: goal,
+        background: background,
+        questions: questions,
+        focusPaths: focusPaths,
+        constraints: constraints,
+        doNot: doNot,
+        instructions: instructions,
+        continueFrom: continueFrom,
+        effort: normalizeEffort(value),
+        effortReason: effortReason,
+      );
 
   Map<String, dynamic> toJson() => {
         'goal': goal.trim(),
@@ -169,6 +215,10 @@ class ThinkCodeSpec {
         'constraints': constraints,
         'do_not': doNot,
         if (instructions.isNotEmpty) 'instructions': instructions,
+        if (continueFrom != null)
+          'continue_from': {'request_id': continueFrom!.requestId, 'title': continueFrom!.title},
+        'effort': effort,
+        if (effortReason.trim().isNotEmpty) 'effort_reason': effortReason.trim(),
       };
 
   /// 여러 줄 입력을 목록으로. 빈 줄과 앞쪽 글머리("-", "1.")는 뺀다.
@@ -206,7 +256,13 @@ class ThinkCodeRequest {
     this.reviewMessageId,
     this.reviewError,
     this.applyResult = const {},
+    this.fixOfRequestId,
+    this.fixAttempt = 0,
   });
+
+  /// 자동 검사 실패로 Think가 다시 고치게 한 요청이면 앞 요청 id와 몇 번째인지.
+  final String? fixOfRequestId;
+  final int fixAttempt;
 
   final String id;
   final String title;
@@ -250,7 +306,12 @@ class ThinkCodeRequest {
     final worker = _str(r['worker_id']);
     final reviewMessage = _str(r['review_message_id']);
     final reviewError = _str(r['review_error']);
+    final fixOf =
+        r['request'] is Map && (r['request'] as Map)['fix_of'] is Map ? (r['request'] as Map)['fix_of'] as Map : null;
+    final fixOfId = _str(fixOf?['request_id']);
     return ThinkCodeRequest(
+      fixOfRequestId: fixOfId.isEmpty ? null : fixOfId,
+      fixAttempt: _int(fixOf?['attempt']),
       mode: ThinkCodeMode.parse(r['mode']?.toString()),
       reviewStatus: ThinkReviewStatus.parse(r['review_status']?.toString()),
       reviewMessageId: reviewMessage.isEmpty ? null : reviewMessage,
@@ -374,7 +435,7 @@ class ThinkCodeResult {
   final List<String> risks;
   final List<String> questionsForThink;
 
-  /// 수정 모드: Cursor가 설명한 파일별 변경과 적용 뒤 돌려 볼 검사.
+  /// 수정 모드: Cursor가 설명한 파일별 변경과, 자동 검사로 확인되지 않아 사람이 볼 점.
   final List<({String path, String what})> changes;
   final List<String> checks;
 
@@ -478,6 +539,17 @@ class ThinkDiffFile {
 }
 
 /// `git diff --binary` 결과를 파일별로 나눈다. 머리줄(diff --git, index, ---, +++)은 [ThinkDiffFile.lines]에서 뺀다.
+/// diff에 포함된 supabase/migrations SQL 파일 경로(파일명 순).
+List<String> migrationPathsFromDiff(String? diff) {
+  if (diff == null || diff.isEmpty) return const [];
+  final paths = parseThinkDiff(diff)
+      .map((f) => f.path)
+      .where((p) => p.startsWith('supabase/migrations/') && p.endsWith('.sql'))
+      .toList();
+  paths.sort();
+  return paths;
+}
+
 List<ThinkDiffFile> parseThinkDiff(String diff) {
   final out = <ThinkDiffFile>[];
   String? path;
@@ -527,6 +599,142 @@ List<ThinkDiffFile> parseThinkDiff(String diff) {
   return out;
 }
 
+enum ThinkCheckStatus {
+  passed('통과'),
+  failed('실패'),
+  skipped('미실행'),
+  preexisting('원래도 실패');
+
+  const ThinkCheckStatus(this.label);
+  final String label;
+
+  /// 모르는 값은 미실행으로 본다(통과로 세지 않는다).
+  static ThinkCheckStatus parse(String? v) =>
+      ThinkCheckStatus.values.firstWhere((s) => s.name == v, orElse: () => ThinkCheckStatus.skipped);
+}
+
+class ThinkCheckItem {
+  const ThinkCheckItem({
+    required this.id,
+    required this.label,
+    required this.status,
+    this.reason,
+    this.command,
+    this.output,
+    this.durationMs = 0,
+  });
+
+  final String id;
+  final String label;
+  final ThinkCheckStatus status;
+  final String? reason;
+  final String? command;
+  final String? output;
+  final int durationMs;
+}
+
+/// 작업자 자동 검사 결과(result.verification). 운영 DB에는 연결하지 않고 복사본에서 돌린다.
+class ThinkVerification {
+  const ThinkVerification({required this.items, this.note, this.stopped = false});
+
+  final List<ThinkCheckItem> items;
+  final String? note;
+  final bool stopped;
+
+  int count(ThinkCheckStatus s) => items.where((i) => i.status == s).length;
+  int get passed => count(ThinkCheckStatus.passed);
+  int get failed => count(ThinkCheckStatus.failed);
+  int get skipped => count(ThinkCheckStatus.skipped);
+  int get preexisting => count(ThinkCheckStatus.preexisting);
+
+  /// 적용 전에 경고할 것: 실패·미실행·원래도 실패·중간에 멈춤.
+  bool get clean => failed == 0 && skipped == 0 && preexisting == 0 && !stopped;
+
+  static ThinkVerification? fromJson(Object? raw) {
+    if (raw is! Map || raw['items'] is! List) return null;
+    final note = _str(raw['note']);
+    return ThinkVerification(
+      note: note.isEmpty ? null : note,
+      stopped: raw['stopped'] == true,
+      items: [
+        for (final i in _maps(raw['items']))
+          ThinkCheckItem(
+            id: _str(i['id']),
+            label: _str(i['label']).isEmpty ? _str(i['id']) : _str(i['label']),
+            status: ThinkCheckStatus.parse(i['status']?.toString()),
+            reason: _str(i['reason']).isEmpty ? null : _str(i['reason']),
+            command: _str(i['command']).isEmpty ? null : _str(i['command']),
+            output: _str(i['output']).isEmpty ? null : _str(i['output']),
+            durationMs: _int(i['duration_ms']),
+          ),
+      ],
+    );
+  }
+}
+
+/// 작업자가 복사본에 얹고 시작한 앞 수정 요청의 최종 패치(result.continued_from).
+class ThinkContinued {
+  const ThinkContinued({
+    required this.requestId,
+    this.title = '',
+    this.round = 0,
+    this.files = 0,
+    this.additions = 0,
+    this.deletions = 0,
+    this.applied = '',
+    this.partial = false,
+  });
+
+  final String requestId;
+  final String title;
+  final int round;
+  final int files;
+  final int additions;
+  final int deletions;
+
+  /// applied(그대로 얹음) · merged(3-way로 합침) · already_present(이미 작업 폴더에 있음)
+  final String applied;
+
+  /// 앞 요청이 시간 제한으로 멈춰 남긴 미완성·미검사 패치에서 시작했는지(continued_from.partial = 'timeout').
+  final bool partial;
+
+  static const partialLabel = '미완성 패치에서 시작';
+  static const partialNotice =
+      '$partialLabel: 앞 요청은 시간 제한으로 중간에 멈췄고, 그 변경은 검사된 적이 없습니다. '
+      '자동 검사와 확인은 앞 변경까지 포함한 이 요청의 최종 diff 전체를 기준으로 봅니다.';
+
+  bool get alreadyPresent => applied == 'already_present';
+
+  String get appliedLabel => switch (applied) {
+        'applied' => '그대로 얹음',
+        'merged' => '3-way로 합쳐 얹음',
+        'already_present' => '이미 작업 폴더에 있어 얹지 않음',
+        _ => applied,
+      };
+
+  String get summary {
+    final id = requestId.length > 8 ? requestId.substring(0, 8) : requestId;
+    final name = title.isEmpty ? '' : ' "$title"';
+    return '요청 $id$name${round > 0 ? ' $round회차' : ''} ${partial ? '미완성' : '최종'} 패치 · 파일 $files개 +$additions −$deletions · $appliedLabel';
+  }
+
+  static ThinkContinued? fromJson(dynamic raw) {
+    if (raw is! Map) return null;
+    final id = _str(raw['request_id']);
+    if (id.isEmpty) return null;
+    return ThinkContinued(
+      requestId: id,
+      title: _str(raw['title']),
+      round: _int(raw['round']),
+      files: _int(raw['files']),
+      additions: _int(raw['additions']),
+      deletions: _int(raw['deletions']),
+      applied: _str(raw['applied']),
+      partial: raw['partial'] == 'timeout',
+    );
+  }
+}
+
 class ThinkCodeRound {
   const ThinkCodeRound({
     required this.round,
@@ -535,6 +743,7 @@ class ThinkCodeRound {
     this.result,
     this.parseOk = false,
     this.model,
+    this.effort,
     this.durationMs,
     this.inputTokens = 0,
     this.outputTokens = 0,
@@ -548,10 +757,18 @@ class ThinkCodeRound {
     this.diff,
     this.diffStats,
     this.thinkQuestions = const [],
+    this.verification,
+    this.continued,
   });
 
   final int round;
   final String status;
+
+  /// 이어받기 요청이면 복사본에 얹고 시작한 앞 수정 패치.
+  final ThinkContinued? continued;
+
+  /// 수정 모드: 작업자 자동 검사. 없으면 검사 전 작업자 버전이거나 검사하지 못한 것.
+  final ThinkVerification? verification;
 
   /// 2회차부터: 이 회차를 시작하며 Think가 Cursor에게 보낸 질문·반론.
   final List<String> thinkQuestions;
@@ -563,6 +780,9 @@ class ThinkCodeRound {
   final ThinkDiffStats? diffStats;
   final bool parseOk;
   final String? model;
+
+  /// 이 회차에 실제로 쓴 작업 강도. 요청 강도를 모델이 지원하지 않으면 가장 가까운 값이다.
+  final String? effort;
   final int? durationMs;
   final int inputTokens;
   final int outputTokens;
@@ -578,15 +798,25 @@ class ThinkCodeRound {
       'round,status,result_text,result,parse_ok,model,duration_ms,usage,tool_calls,repo_state,error,started_at,finished_at,'
       'think_questions';
 
+  /// 카드 apply 가능: 형식 OK + 비어 있지 않은 diff.
+  bool get patchAppliable => parseOk && diff != null && diff!.trim().isNotEmpty;
+
+  /// diff에 DB 함수 파일이 들어 있다. 작업 폴더 적용은 운영 DB를 바꾸지 않는다.
+  bool get touchesMigrations =>
+      diff != null && RegExp(r'^diff --git a/supabase/migrations/', multiLine: true).hasMatch(diff!);
+
   factory ThinkCodeRound.fromRow(Map<String, dynamic> r) {
     final usage = r['usage'] is Map ? Map<String, dynamic>.from(r['usage'] as Map) : const <String, dynamic>{};
     final repo = r['repo_state'] is Map ? Map<String, dynamic>.from(r['repo_state'] as Map) : const <String, dynamic>{};
     final text = _str(r['result_text']);
     final model = _str(r['model']);
+    final effort = _str(r['effort']);
     final error = _str(r['error']);
     final raw = r['result'] is Map ? Map<String, dynamic>.from(r['result'] as Map) : const <String, dynamic>{};
     final diff = raw['diff'] is String ? raw['diff'] as String : '';
     return ThinkCodeRound(
+      continued: ThinkContinued.fromJson(raw['continued_from']),
+      verification: ThinkVerification.fromJson(raw['verification']),
       diff: diff.isEmpty ? null : diff,
       diffStats: ThinkDiffStats.fromJson(raw['diff_stats']),
       thinkQuestions: _strList(r['think_questions']),
@@ -596,6 +826,7 @@ class ThinkCodeRound {
       result: ThinkCodeResult.fromJson(r['result']),
       parseOk: r['parse_ok'] == true,
       model: model.isEmpty ? null : model,
+      effort: effort.isEmpty ? null : effort,
       durationMs: r['duration_ms'] == null ? null : _int(r['duration_ms']),
       inputTokens: _int(usage['inputTokens']) + _int(usage['cacheReadTokens']),
       outputTokens: _int(usage['outputTokens']),

@@ -300,6 +300,13 @@ function stripFooterEchoBadge(raw, footerPages) {
   return out;
 }
 
+// 본교재 번호는 책 전체에서 이어지는 세 자리라 뒤 묶음에 같은 번호가 다시
+// 나오지 않는다. 그래서 다음 묶음 배지가 개념 쪽 몇 장 건너 뒤에 있어도
+// 받아들인다(1-1 해설 18쪽: 본문 34쪽 122번 풀이에 오른쪽 단 새 묶음
+// "본교재 037~040쪽"을 붙임). 워크북·TEST는 묶음마다 01부터 다시 시작하므로
+// 한 쪽 차이만 허용한다.
+const BODY_BOOK_NEXT_BLOCK_MAX_GAP = 8;
+
 function stripAdjacentBlockBadge(raw, problemNumber, expectedIndex) {
   const key = normalizeProblemNumberKey(problemNumber);
   const candidates = expectedIndex?.byKey?.get(key);
@@ -309,16 +316,17 @@ function stripAdjacentBlockBadge(raw, problemNumber, expectedIndex) {
     String(raw.source_page ?? raw.sourcePage ?? ''),
     10,
   );
-  if (
-    !Number.isFinite(from) ||
-    !candidate.page ||
-    Math.abs(from - candidate.page) !== 1
-  ) {
-    return raw;
-  }
+  if (!Number.isFinite(from) || !candidate.page) return raw;
   const reportedCorner = canonicalCorner(
     raw.source_corner ?? raw.sourceCorner,
   );
+  const gap = from - candidate.page;
+  const bodyBookNextBlock =
+    candidate.corner === 'body_book' &&
+    (!reportedCorner || reportedCorner === 'body_book') &&
+    gap > 1 &&
+    gap <= BODY_BOOK_NEXT_BLOCK_MAX_GAP;
+  if (Math.abs(gap) !== 1 && !bodyBookNextBlock) return raw;
   if (
     reportedCorner &&
     candidate.corner &&
@@ -343,8 +351,13 @@ function stripAdjacentBlockBadge(raw, problemNumber, expectedIndex) {
 // 크기는 폭과 높이를 함께 본다. 실제 풀이는 단(칼럼) 폭을 꽉 채우고(실측 409~480),
 // 요약 상자 칸은 자기 칸만 덮는다(실측 60). 높이만 보면 지면 맨 아래에서 시작해
 // 다음 장으로 넘어가는 풀이(105쪽 542번, 높이 52)가 위태롭게 걸린다.
+//
+// 두 줄짜리 짧은 풀이도 글자 폭에 맞춰 잡히면 폭·높이가 상자 칸만큼 작다
+// (1-2 해설 5쪽 023번: "③ …", "④ …" 두 줄, 높이 55). 상자 칸은 번호 줄
+// 하나뿐이라 풀이 영역이 번호 아래로 내려가지 않는다는 점으로 가른다.
 const SUMMARY_CELL_MAX_WIDTH = 200; // 좌표계 0~1000
 const SUMMARY_CELL_MAX_HEIGHT = 60;
+const SUMMARY_CELL_MAX_TAIL = 20; // 번호 칸 아래로 더 내려간 높이
 
 function dropGojaengiSummaryCells(items) {
   return items.filter((item) => {
@@ -352,8 +365,14 @@ function dropGojaengiSummaryCells(items) {
     if (!Array.isArray(region) || region.length !== 4) return false;
     const height = region[2] - region[0];
     const width = region[3] - region[1];
-    // 둘 다 작을 때만 상자 칸으로 단정한다. 하나라도 크면 풀이로 본다.
-    return !(width < SUMMARY_CELL_MAX_WIDTH && height < SUMMARY_CELL_MAX_HEIGHT);
+    const number = item.number_region;
+    const tail = Array.isArray(number) ? region[2] - number[2] : height;
+    // 모두 작을 때만 상자 칸으로 단정한다. 하나라도 크면 풀이로 본다.
+    return !(
+      width < SUMMARY_CELL_MAX_WIDTH &&
+      height < SUMMARY_CELL_MAX_HEIGHT &&
+      tail < SUMMARY_CELL_MAX_TAIL
+    );
   });
 }
 

@@ -229,10 +229,102 @@
 | `MainFab` / `MainFabAlternative` | `main_fab.dart` 등 | FAB 패턴 |
 | RightSideSheet 계열 | `right_side_sheet/` | 우측 시트·채점·메모 |
 | PDF 다이얼로그 | `pdf/*.dart` | 교재·숙제 뷰어 |
+| `CoverOverlayStyle`, `CoverScrim`, `CoverHairline`, `CoverPill` | `cover_overlay.dart` | 표지 이미지 위에 정보를 올리는 카드 (§5.1) |
+| `TimetableCell`, `TimetableCapacityBand` | `screens/timetable/views/components/timetable_cell.dart` | 시간표 칸·인원 단계 띠·오버레이 칩 (§5.2) |
 
 **금지:** 위와 **동일 역할**의 새 위젯을 임의 생성. 필요 시 기존 위젯 확장 또는 고객 승인.
 
 **아이콘:** `material_symbols_icons` (`Symbols.*`) — Material Icons와 혼용 시 기존 화면 톤 유지.
+
+### 5.1 표지 오버레이 카드 (고객 승인 스타일, 2026-10-08)
+
+교재 표지·출력물·단색 배경 **위에 글자를 직접 올리는** 카드는 모두 이 규칙을 따른다.
+기준 구현: 채점모드 과제카드(`_SubmittedHomeworkCard._buildCoverArea`)와 정답리스트 교재 카드(`_GradingAnswerBookCard`), 둘 다 `grading_mode_page.dart`.
+새 화면에서도 같은 위젯(`cover_overlay.dart`)을 가져다 쓰고, 색·알파값을 화면에서 새로 고르지 않는다.
+
+**핵심 원칙**
+
+1. **표지는 가리지 않는다.** 전체를 덮는 어두운 막 대신 위·아래 **띠만** 어둡게 한다(`CoverScrim`). 표지 중앙은 원본 그대로 보인다.
+2. **정보는 위·아래 두 묶음.** 위쪽은 카드를 **고르는 기준**(학생 이름, 상태 배지, 학년), 아래쪽은 카드의 **내용**(페이지·과제번호, 교재명·설명). 가운데 영역에는 글자를 두지 않는다.
+3. **한 줄 정렬.** 모든 정보는 같은 여백 안에서 **왼쪽 정렬**한다. 가운데 정렬·오른쪽 끝 단독 배치를 섞지 않는다.
+4. **짧은 값은 배지로.** 경과시간·종류·번호·학년처럼 짧은 값은 글자만 띄우지 말고 `CoverPill`에 넣는다. 배지가 대비를 보장하므로 어떤 표지에서도 읽힌다.
+5. **글자 그림자는 은은하게.** 흰 글자에만 `blur 10, 검정 42%(이미지) / 18%(단색)`. 진한 외곽 그림자 금지.
+6. **밝은 표지는 반전.** 출력물·밝은 단색 표지는 흰 띠 + 검은 글자(`#111418`) + 흰 배지로 자동 전환(`CoverOverlayStyle.onDark = false`).
+
+**수치**
+
+| 항목 | 값 |
+|------|-----|
+| 카드 반경 | `FabTabBarTokens.previewAcademyGroupedCardRadius` (28) — 자료메뉴 교재 카드와 동일 |
+| 가장자리 여백 | `16` (카드 축소 시 `CoverOverlayStyle.padFor(scale)`, 최소 10) |
+| 묶음 안 간격 | `8` (`gapFor(scale)`, 최소 5), 같은 종류 여러 줄 사이 `2` |
+| 위 띠 | 0 → 40% 지점에서 투명, 시작 알파 이미지 0.66 / 단색 0.30 / 밝은 표지(흰색) 0.88 |
+| 아래 띠 | 56% 지점부터, 끝 알파 이미지 0.78 / 단색 0.36 / 밝은 표지(흰색) 0.92. 아래 글이 많으면 `bottomStart`를 앞당긴다(정답카드 0.42) |
+| 안쪽 테두리 | 1px, 흰색 10% (밝은 표지 검정 8%), 카드와 같은 반경 |
+| 제목 | `previewAcademyMainTitleStyle` 32 w700, 자간 -0.4 (`titleStyle(context)`) |
+| 본문 줄(페이지 등) | Pretendard 22 w700, 자간 -0.2, 숫자 고정폭 |
+| 설명 문단 | Pretendard 20 w400, 흰색 82% (`inkSecondary`) |
+| 배지 | 높이 32 캡슐, 좌우 12(아이콘 있으면 왼쪽 10), Pretendard 17 w600, 아이콘 17 + 간격 6 |
+| 배지 neutral | 검정 46% + 흰 테두리 16% (밝은 표지: 흰색 86% + 검정 테두리 8%) |
+| 배지 accent | `#0F2A20` 88% + `kDlgAccent` 테두리 60%, 글자 `#9FE3C6`, 앞에 7px 점 (밝은 표지: `#E8F6EF` + 글자 `kDlgAccent`) |
+| 식별 코드 배지 | `emphasize: true` → w700, 자간 0.8 |
+
+**하지 말 것**
+
+- 배지에 블러(`BackdropFilter`)를 쓰지 않는다. 카드가 여러 장 겹치는 목록에서 스크롤이 버벅인다.
+- 표지 전체를 30% 이상 덮는 단색 막을 깔지 않는다(확인 대기·여는 중 같은 **상태 표시용 막은 예외**).
+- 배지 종류를 늘릴 때 새 색을 만들지 말고 `CoverPillTone`(neutral / accent)에 먼저 맞춰 본다. 꼭 필요하면 tone을 추가하고 이 표를 갱신한다.
+
+**사용 예**
+
+```dart
+final overlay = CoverOverlayStyle(onDark: !useDarkText, hasImage: hasImage);
+Stack(fit: StackFit.expand, children: [
+  coverImage,
+  Positioned.fill(child: CoverScrim(style: overlay)),
+  Positioned.fill(child: CoverHairline(style: overlay, radius: 28)),
+  Positioned(left: 16, right: 16, top: 16, child: /* 제목 + CoverPill */),
+  Positioned(left: 16, right: 16, bottom: 16, child: /* 본문 줄 + CoverPill */),
+]);
+```
+
+### 5.2 시간표 인원 표시 — 단계 띠 (고객 승인 스타일, 2026-10-08)
+
+시간 메뉴 시간표(`classes_view.dart` + `components/timetable_cell.dart`)의 시간대별 인원은 **3단계 띠**로 보여 준다.
+비교 시안: Preview 허브의 `timetable_capacity_preview_screen.dart`(현재 히트맵 / ① 70% 통일 / ② 선 제거 / ③ 추천 중 ③ 채택).
+1명 단위로 밝기를 바꾸던 히트맵은 칸마다 색이 달라 눈이 어지러워서 폐기했다.
+
+**색 규칙 (세 가지뿐)**
+
+| 의미 | 색 |
+|------|-----|
+| 인원 양 | 회색조 2단계만: 여유(정원 70% 미만) ink 6%, 혼잡(70~99%) ink 15% (다크: 흰색, 라이트: 검정) |
+| 지금·오늘·선택 | `kDlgAccent` 초록 |
+| 정원 도달 | 앰버 `#F2B45B` — 정원에 닿았을 때만 |
+
+**수치**
+
+| 항목 | 값 |
+|------|-----|
+| 단계 | `timetableCapacityLevel(인원, 정원)` — 0 비어 있음 / 1 여유 / 2 혼잡 / 3 정원. 정원은 `academySettings.defaultCapacity` |
+| 띠 | 같은 단계가 이어지는 칸을 `TimetableCapacityBand` 하나로 묶는다. 위·아래 여백 `kTimetableBandInset`(6), 양 끝 3, 반경 10. 요일 행 Stack에서 칸 **뒤**에 그린다 |
+| 정원 띠 | 앰버 16% 바탕 + 앰버 55% 테두리 1px |
+| 세로선 | 정시(:00) 칸 왼쪽에만, `divider` 60%. 30분 칸 선은 없다 |
+| 인원 숫자 | 왼쪽 12, 위 13, Pretendard 13 w700, 숫자 고정폭. 띠 시작 칸은 `panelStyle.title`(정원 띠는 앰버), 띠 안에서 인원이 바뀐 칸·마우스가 올라간 칸은 `hint`, 나머지는 숨김 |
+| 시간 축 | 칸 숫자와 같은 왼쪽 12에 정렬. 정시 15 w700, 30분 13 w500, 모두 `hint`(지금은 초록), Pretendard 숫자 고정폭 |
+| 요일 | Pretendard 17 w700 (`요일` 머리글은 13 w600 `hint`) |
+| 호버 열 | 같은 시간 열 전체에 ink 3% |
+| 휴식 | 사선(간격 10, ink 6%) + `휴식` 13 w600 `hint` |
+| 선택·등록 대기 | `kDlgAccent` 12%, 드래그 중 파랑 18% (기존 동작 유지) |
+| 보강·추가·시범·문의 칩 | 같은 모양 하나: 높이 27 캡슐, ink 6% 바탕 + ink 10% 테두리, 아이콘 14(`hint`) + 간격 6 + 글자 12.5 w600. 완료는 투명도 45%. 종류는 **아이콘으로만** 구분(보강 `replay`, 추가 `add`, 시범 `auto_awesome`, 문의 `help_outline`) |
+
+**하지 말 것**
+
+- 인원 구간마다 색을 바꾸지 않는다(초록·노랑·빨강 단계 금지). 양은 밝기, 경고는 앰버 하나.
+- 인원 1명마다 밝기를 바꾸지 않는다. 회색은 여유·혼잡 2단계만 쓴다.
+- 30분 칸마다 세로선을 다시 긋지 않는다. 띠가 끊겨 보인다.
+- 칩 종류별로 바탕색을 다르게 주지 않는다. 구분은 아이콘이 맡는다.
+- 칸 위에 별도 막대·리본·배지를 겹쳐 인원을 다시 표시하지 않는다.
 
 ---
 
@@ -384,6 +476,20 @@ Preview 루트에서 **학습앱 Preview** 또는 **매니저앱 Preview**를 �
 | 2026-09-30 | Think "코드 조사" 탭 제거, 채팅 안 카드(최대 760px, 반경 12)로 통합: 코드 조사·수정 제안, 코드 요청 진행·결과·diff(파일별 접기), 대화 분류 제안, 삭제 확인(빨간 테두리). 처리된 제안은 한 줄로 접음. 트리에 제안 폴더 강조(초록 테두리 + "제안")와 새 폴더 흐린 행, 맥락 패널에 "코드 작업" 칸, "전체 코드 요청" 창. 기존 Think 팔레트만 사용 | — (Preview 생략, 사용자 확인 필요) |
 | 2026-10-01 | Think 채팅 카드에 "Cursor와 조율"(악수 아이콘, 회차 N/3, 회차별 "Think가 보낸 질문·반론")과 "조율본" 승인 카드(갈린 점은 인용 배경 상자에 Think/Cursor 두 줄, "정해 주셔야 할 것", 이대로 구현·고쳐서 구현·거절) 추가. 기존 카드 틀·Think 팔레트만 사용 | — (Preview 생략, 사용자 확인 필요) |
 | 2026-10-02 | 조율본 카드에 객관식 질문 칸 추가: "질문 n" 머리, 보기 행(반경 8, 테두리 `kThinkBorder`/선택 시 `kThinkAccent`, 선택 배경 `kThinkQuote`, 라디오 아이콘 18, "추천" 배지 `kThinkSuccess`, 설명 12px), 직접 입력 칸(`thinkInputDecoration`), "n/m개 답함". 기존 Think 팔레트·간격(4/8/12/16)만 사용 | — (Preview 생략, 사용자 확인 필요) |
+| 2026-10-05 | 코드 수정 카드: 끝나지 못한 수정(확인 필요·실패·취소)에 "같은 내용으로 다시 수정" 보조 버튼(`thinkOutlineButton`, `Icons.replay`)과 확인 창 추가 | — (Preview 생략, 사용자 확인 필요) |
+| 2026-10-07 | 코드 수정 카드: "자동 검사" 칸(요약 한 줄 12px 굵게, 항목 줄 아이콘 16 + 이름·상태·이유, 상태색 통과 `kThinkSuccess`·실패 `kThinkError`·미실행 `kThinkHint`·원래도 실패 `kThinkLink`, 실패 항목은 펼침, 출력 상자 `kThinkQuote` 반경 8·최대 높이 240), 준비됨 안내를 검사 결과별 색으로, 적용 확인 창 맨 위 경고와 실패 시 빨간 "그래도 적용", 재수정 카드 머리 "검사 실패로 다시 고침 n회째". diff 영역 "검증 보고" 버튼 제거. 기존 Think 팔레트·간격만 사용 | — (Preview 생략, 사용자 확인 필요) |
+| 2026-10-07 | 학습앱 하원 다이얼로그를 숙제 선택 창에서 요약 창으로 교체(`departure_summary_dialog.dart`): `UtilityGlassDialogShell`(반경 28) 안에 요약 한 줄, "숙제로 나감"·"다음 수업으로"(흐리게) 그룹 카드(`cardBg`/`cardBorder`), 검사일 칩, 알림장 칸(인쇄 스위치·미리보기·행동 체크/± 카운터), 하단 취소(Outlined)·하원(Filled `kDlgAccent`, Stadium 44). `YggDialogColors`·간격 4/8/10/12/16/24만 사용 | — (Preview 생략, 사용자 확인 필요) |
+| 2026-10-08 | Think 채팅: 코드 블록(회색 상자 `kThinkField` 반경 8, 안쪽 12)을 가로 스크롤 대신 상자 폭을 채우고 긴 줄을 접게 바꿈(상자 안 어디서 끌어도 선택·복사). 입력창 안내에 "이미지는 Ctrl+V", 파일 없이 놓인 드롭은 오류 스낵바로 안내. 코드 카드에 "이어받는 앞 수정"·"이어받은 패치" 줄(12px `kThinkSub`, 안내 `kThinkHint`). 기존 Think 팔레트·간격만 사용 | — (Preview 생략, 사용자 확인 필요) |
+| 2026-10-08 | 표지 오버레이 카드 규칙(§5.1)과 공용 위젯 `cover_overlay.dart` 추가. 채점모드 과제카드: 위·아래 띠 스크림, 이름 왼쪽 정렬, 경과시간(`n분 전`)·숙제·과제번호를 32px 캡슐 배지로, 페이지·과제번호를 아래쪽으로. 정답리스트 교재 카드: 반경 14→28, 같은 스크림·테두리, 학년 배지를 왼쪽 위 캡슐로(학년 여러 개면 전환 아이콘) | 사용자(Preview 생략 요청) |
+| 2026-10-08 | 시간표 인원 표시를 히트맵으로 교체(§5.2): 칸 밝기 = 인원 ÷ 정원, 정원 도달만 앰버, 인원 숫자는 왼쪽 위(변화 시만 밝게), 호버 열 표시, 휴식 사선. 기존 막대·리본 표시 제거. 보강·추가·시범·문의 칩을 아이콘 + 중립 캡슐 하나로 통일 | 사용자(Preview B안 선택) |
+| 2026-10-08 | 히트맵이 어지러워 단계 띠로 교체(§5.2): 회색 2단계(여유·혼잡) + 정원 앰버, 같은 단계는 둥근 띠 하나로, 세로선은 정시만, 숫자는 띠 시작(밝게)·띠 안 변화(흐리게)만. 시간 축을 칸 숫자 선에 왼쪽 정렬(정시 15 w700 / 30분 13 w500), 요일 17 w700, 모두 Pretendard | 사용자(Preview ③ 선택) |
+| 2026-10-09 | Think 대화 나누기: 나누기 카드(다섯 칸 요약, 빈 칸은 `kThinkHint` "없음", 나눠서 이어가기·고쳐서 나누기·여기서 계속하기, 막힌 이유 문구, 만료·거절은 한 줄), 고치기 창(제목·폴더·요약 다섯 칸), 나눈 대화 위쪽 안내(`kThinkQuote` 반경 8, `Icons.call_split`, 요약 접기·최대 높이 280, "원본 대화로 가기"), 복사한 메시지 위 "원본 대화에서 복사한 메시지" 줄, 맥락 패널 "대화 나누기" 칸(기능 상태·제안 받기 토글·"연결·기능 상태 보기" 버튼), 상태 창 "기능 상태"(사용 가능 `kThinkSuccess` / 준비 필요 `kThinkLink` / 확인 불가 `kThinkError`). 기존 Think 팔레트·간격만 사용 | — (Preview 생략, 사용자 확인 필요) |
+| 2026-10-10 | Think 커서 문의: Cursor가 보낸 질문 위에 `Icons.smart_toy_outlined` 14 + 배지 "커서가 물음 / 작업자 커서가 물음"(`kThinkLink`), 답변 아래 판정 상자(`kThinkBg` 반경 8, 테두리 60% — "기존 결정 근거" `kThinkSuccess` + 근거 기억 제목 / "사장님 확인 필요" `kThinkAccent` + 확인 질문, 13px `kThinkSub`), 트리의 커서 대화 행은 같은 아이콘 `kThinkLink`와 툴팁. 사용량 기능 이름 "커서 문의 답변". 기존 Think 팔레트·간격만 사용 | — (Preview 생략, 사용자 확인 필요) |
+| 2026-10-11 | 학생 메뉴 페이지 타이틀: 홈 '수업 현황'과 같이 제목은 학생·성향이 같은 줄(아이콘 40, 간격 20, 색 `title`). 학생은 Member, 성향은 Puzzle(제목 채움 2790). 성향 탭은 우측 캡슐이 없어도 줄 높이 58을 유지해 제목 Y를 학생 탭과 같게 함. 하단 탭은 홈과 같이 32px, 평소 선·선택 시 채움(학생 21997/22115, 성향 1775/2790) | 사용자(Preview 생략, 바로 적용 요청) |
+| 2026-10-10 | 홈 수업 현황 머리: 등원 수 옆에 공부중·휴식중·제출을 같은 줄에 추가. 라벨 15 `hint` w500, 숫자 18 `title` w700 Pretendard, 사이 구분선은 `hint` 28%. 항목마다 새 색 없음. 공부중·휴식중은 등원 카드와 같은 기준(미완료 과제 수행 여부), 제출은 채점 대기 과제 수 | 사용자(Preview 생략, 바로 적용 요청) |
+| 2026-10-10 | Think 코드 제안·조율본 카드에 "Cursor 작업 강도" 선택(`ThinkEffortPicker`): 기존 `ThinkToggleChip` 3개(보통·medium / 높음·high / 최고·xhigh, 아이콘 `signal_cellular_alt_1_bar`·`_2_bar`·`signal_cellular_alt`, 툴팁에 기준), 아래 12px `kThinkSub`로 Think 판단 이유와 "틀릴 수 있음"/"바꾼 강도로 보냄" 안내. 보낸 요청의 요청 내용에 "요청한 작업 강도", 회차 정보에 "모델 · 강도 X". 기존 Think 팔레트·간격만 사용 | — (Preview 생략, 사용자 확인 필요) |
+| 2026-10-10 | Think 코드 카드: 시간 제한으로 멈춘 패치를 이어받은 요청은 제목 아래 기존 `ThinkNotice`(`kThinkAccent`, `warning_amber_outlined`)로 "미완성 패치에서 시작: … 검사된 적이 없습니다" 경고, 회차 칸 제목 "미완성 패치에서 시작"과 12px `kThinkHint` 안내. 요청 내용 문구 "최종 패치" → "마지막 패치". 기존 Think 팔레트·간격만 사용 | — (Preview 생략, 사용자 확인 필요) |
+| 2026-10-11 | Think 역할: CustomPainter 아바타 4종(총괄 별 `kThinkAccent`·교육 책 `kThinkSuccess`·제품 카드 `kThinkLink`·개발 꺾쇠 괄호 `kThinkBlue`, 답하는 중 고리 맥동, 모션 감소면 고정 고리), 대화 위 역할 머리("Think(역할)" 14 w700, 역할 칩 Stadium·선택 시 역할색 16% 배경, 720px 미만은 아바타+툴팁, 부서 역할이면 `ThinkToggleChip` "다른 부서 참조", 잠김·새 대화 안내 12px `kThinkHint`), 답변 머리 "이 답변에 쓴 자료 보기"(`library_books_outlined`)와 맥락 패널 자료 칸(실제 전달 자료 배지 기억/문서, "앞부분만", 스냅샷 없으면 "기록 없음", 연결 자료와 연결·해제·검색 창), 기억 범위 선택(`ThinkToggleChip` 공통/부서 3개, 레거시는 레거시 기억에만, 역할 제안은 "적용" 버튼). "생각하는 중…" → "응답 준비 중…", "마지막 답변" 기술 정보 접기. Preview `ThinkRolesPreviewScreen`(매니저 Preview 허브 "Think 역할"). 기존 Think 팔레트·간격만 사용 | — (Preview 추가, 사용자 확인 필요) |
 
 ---
 

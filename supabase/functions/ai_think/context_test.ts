@@ -1,6 +1,6 @@
 import { assert, assertEquals } from 'jsr:@std/assert@1';
 import { CONTEXT_LIMITS, buildThinkContext } from './context.ts';
-import { MemoryThinkStore } from './test_support.ts';
+import { MemoryThinkStore, memory } from './test_support.ts';
 
 Deno.test('지난 대화는 글자 수 예산 안에서 최신 메시지부터 남긴다', async () => {
   const store = new MemoryThinkStore();
@@ -49,6 +49,16 @@ Deno.test('답변에서 제외한 문답은 대화 기록에 넣지 않는다', 
   assertEquals(ctx.historyUsed, 2);
   const texts = ctx.input.flatMap((i) => (i.kind === 'message' ? i.parts : [])).map((p) => (p.type === 'text' ? p.text : ''));
   assert(!texts.some((t) => t.includes('뺄')));
+});
+
+Deno.test('관련 기억 검색에는 draft가 들어가지 않는다', async () => {
+  const store = new MemoryThinkStore();
+  store.memories.push(
+    memory({ id: 'r-active', kind: 'note', title: '맥락키', content: '맥락키 본문', status: 'active' }),
+    memory({ id: 'r-draft', kind: 'note', title: '맥락키', content: '맥락키 draft', status: 'draft' }),
+  );
+  const ctx = await buildThinkContext(store, { conversationId: null, userMessage: '맥락키 질문', attachments: [] });
+  assertEquals(ctx.relevantIds, ['r-active']);
 });
 
 Deno.test('서명 URL을 만들 수 없는 첨부는 이름으로 알린다', async () => {

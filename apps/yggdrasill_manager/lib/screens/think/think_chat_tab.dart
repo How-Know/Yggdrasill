@@ -5,6 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../services/think/think_clipboard_files.dart';
 import '../../services/think/think_code_controller.dart';
 import '../../services/think/think_code_models.dart';
 import '../../services/think/think_controller.dart';
@@ -13,7 +14,12 @@ import 'think_action_cards.dart';
 import 'think_code_request_dialog.dart';
 import 'think_code_requests_dialog.dart';
 import 'think_decision_dialog.dart';
+import 'think_materials_panel.dart';
+import 'think_memory_feedback_dialog.dart';
 import 'think_message_tile.dart';
+import 'think_role_bar.dart';
+import 'think_split_views.dart';
+import 'think_status_dialog.dart';
 import 'think_style.dart';
 import 'think_tree_dialogs.dart';
 import 'think_tree_panel.dart';
@@ -37,9 +43,14 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
   bool _stickToBottom = true;
   bool _dragging = false;
   bool _showContext = true;
+  bool _contextVisible = false;
+  bool _showTechnical = true;
   String? _lastSelected;
   int _lastCount = -1;
   int _lastReveal = 0;
+  // 대화에 들어오면 목록이 만들어지는 동안 높이가 계속 늘어나므로,
+  // 한 번의 점프로는 맨 위에 남는다. 늘어남이 멈출 때까지 바닥을 따라간다.
+  int _pinToBottom = 0;
   final Map<String, GlobalKey> _messageKeys = {};
 
   ThinkController get _c => ThinkController.instance;
@@ -67,11 +78,26 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
     _lastSelected = _c.selectedId;
     _lastCount = _c.messages.length;
     if (!(selectedChanged || countChanged || (_c.streamingHere && _stickToBottom))) return;
-    if (selectedChanged || countChanged) _stickToBottom = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_scroll.hasClients) return;
-      _scroll.jumpTo(_scroll.position.maxScrollExtent);
-    });
+    if (selectedChanged || countChanged) {
+      _stickToBottom = true;
+      _pinToBottom = 12;
+    }
+    if (_pinToBottom > 0 || _c.streamingHere) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _pinBottomStep());
+    }
+  }
+
+  void _pinBottomStep() {
+    if (!mounted || !_stickToBottom || !_scroll.hasClients) return;
+    final pos = _scroll.position;
+    final gap = pos.maxScrollExtent - pos.pixels;
+    if (gap > 1) _scroll.jumpTo(pos.maxScrollExtent);
+    if (_pinToBottom <= 0) return;
+    _pinToBottom -= 1;
+    // 목록이 아직 만들어지는 중이면 높이가 늘어난다. 바닥이 안정될 때까지 다시 맞춘다.
+    if (gap > 1 || _pinToBottom > 4) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _pinBottomStep());
+    }
   }
 
   void _followReveal() {
@@ -121,6 +147,13 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
     if (saved && mounted) showThinkSnack(context, '트리에 발췌를 남겼습니다.');
   }
 
+  Future<void> _document(int index) async {
+    final id = _c.selectedId;
+    if (id == null) return;
+    final saved = await ThinkDocumentDialog.create(context, conversationId: id, messages: _c.messages, index: index);
+    if (saved && mounted) showThinkSnack(context, '폴더에 종합 문서를 저장했습니다.');
+  }
+
   Future<void> _codeRequest(int index) async {
     final saved = await ThinkCodeRequestDialog.fromTurn(
       context,
@@ -134,6 +167,25 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
       saved.status == ThinkCodeStatus.draft
           ? '초안으로 저장했습니다. 답변 아래 카드에서 보낼 수 있습니다.'
           : '코드 조사 요청을 보냈습니다. 진행 상황은 답변 아래 카드에 표시됩니다.',
+    );
+  }
+
+  Future<void> _memoryFeedback(int index) async {
+    final convId = _c.selectedId;
+    if (convId == null) return;
+    final messages = _c.messages;
+    final m = messages[index];
+    final assistantId = m.id;
+    if (assistantId == null || assistantId.isEmpty) return;
+    final userIds = [
+      for (final ti in thinkTurnIndices(messages, index))
+        if (messages[ti].isUser) messages[ti].id,
+    ].whereType<String>().where((id) => id.isNotEmpty).toList();
+    await ThinkMemoryFeedbackDialog.show(
+      context,
+      conversationId: convId,
+      assistantMessageId: assistantId,
+      userMessageIds: userIds,
     );
   }
 
@@ -151,6 +203,28 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
   Future<void> _addPaths(Iterable<String> paths) async {
     final problems = await _c.addFiles(paths);
     if (problems.isNotEmpty && mounted) showThinkSnack(context, problems.join('\n'), error: true);
+  }
+
+  void _dropped(DropDoneDetails detail) {
+    setState(() => _dragging = false);
+    final paths = detail.files.map((f) => f.path).where((p) => p.isNotEmpty).toList();
+    if (paths.isEmpty) {
+      showThinkSnack(context, thinkDropNoFilesMessage, error: true);
+      return;
+    }
+    _addPaths(paths);
+  }
+
+  /// Ctrl+V: 클립보드에 글자가 없을 때만 이미지·복사한 파일을 첨부한다(글자는 입력창이 그대로 붙여 넣는다).
+  Future<void> _pasteFiles() async {
+    if (_c.forbidden || await Clipboard.hasStrings()) return;
+    final clip = await ThinkClipboardFiles.read();
+    if (clip.paths.isEmpty) return;
+    try {
+      await _addPaths(clip.paths);
+    } finally {
+      await clip.dispose();
+    }
   }
 
   Future<void> _send() async {
@@ -180,6 +254,7 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
         return LayoutBuilder(
           builder: (context, constraints) {
             final wide = constraints.maxWidth >= 1180;
+            _contextVisible = wide && _showContext;
             // 좁은 화면에서는 트리를 접어 대화 영역을 먼저 확보한다.
             final treeOpen = _c.treePanelOpen ?? constraints.maxWidth >= 960;
             return Row(
@@ -240,13 +315,14 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
   Widget _chatPanel() {
     final conv = _c.selected;
     final cost = conv == null ? null : _c.costs[conv.id];
+    final detail = _c.selectedDetail;
+    final originId = detail?.splitFromConversationId;
     return DropTarget(
+      // 기억·사용량 탭에 있을 때(IndexedStack에 남아 있음)는 받지 않는다.
+      enable: _c.tab == ThinkController.tabChat && !_c.forbidden,
       onDragEntered: (_) => setState(() => _dragging = true),
       onDragExited: (_) => setState(() => _dragging = false),
-      onDragDone: (detail) {
-        setState(() => _dragging = false);
-        _addPaths(detail.files.map((f) => f.path));
-      },
+      onDragDone: _dropped,
       child: ThinkPanel(
         child: Stack(
           children: [
@@ -294,6 +370,17 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
                   ),
                 ),
                 const Divider(color: kThinkBorder, height: 1),
+                if (_c.rolesReady)
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(24, 12, 24, 0),
+                    child: ThinkRoleBar(),
+                  ),
+                if (detail != null && detail.isSplit)
+                  ThinkSplitBanner(
+                    detail: detail,
+                    justSplit: _c.justSplitConversationId == detail.id,
+                    onOpenOriginal: originId == null ? null : () => _c.openConversation(originId),
+                  ),
                 Expanded(child: _messageList()),
                 if (_c.notice != null)
                   Padding(
@@ -327,7 +414,7 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
                     ),
                     alignment: Alignment.center,
                     child: const Text(
-                      '여기에 놓으면 첨부됩니다 (이미지·PDF, 최대 6개)',
+                      '여기에 놓으면 첨부됩니다 (이미지·PDF 파일, 최대 6개)',
                       style: TextStyle(color: kThinkText, fontSize: 16, fontWeight: FontWeight.w700),
                     ),
                   ),
@@ -367,19 +454,29 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
               final id = m.id;
               final hasId = id != null && id.isNotEmpty;
               final turnActions = canAct && hasId && !m.isUser && m.status != ThinkMessageStatus.streaming;
+              final snap = hasId && !m.isUser ? _c.messageSnapshots[id] : null;
+              final canShowMaterials = _c.rolesReady && !m.isUser && hasId && m.status != ThinkMessageStatus.streaming;
               final tile = ThinkMessageTile(
                 key: hasId ? _messageKeys.putIfAbsent(id, GlobalKey.new) : null,
                 message: m,
+                roleSnapshot: snap,
+                roleRecordMissing: _c.roleRecordMissing(m),
+                materialsSelected: hasId && _c.selectedAssistantMessageId == id,
                 highlighted: hasId && _c.highlightedMessageIds.contains(id),
+                onSelect: canShowMaterials ? () => _showMaterials(id) : null,
                 onToggleExcluded: turnActions ? () => _toggleExcluded(i) : null,
                 onExcerpt: turnActions ? () => _excerpt(i) : null,
+                onDocument: turnActions ? () => _document(i) : null,
                 onCodeRequest: turnActions ? () => _codeRequest(i) : null,
+                onMemoryFeedback: turnActions ? () => _memoryFeedback(i) : null,
               );
               final below = [...?cards[hasId ? id : null], if (i == messages.length - 1) ...?cards['']];
-              if (below.isEmpty) return tile;
+              final source = m.sourceMessageId;
+              if (below.isEmpty && source == null) return tile;
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  if (source != null) ...[_copiedLabel(m, source), const SizedBox(height: 8)],
                   tile,
                   for (final c in below) ...[const SizedBox(height: 12), c],
                 ],
@@ -394,13 +491,19 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
   /// 답변 아래에 붙일 작업 카드. 키 ''는 아직 답변에 붙지 않은 것(스트리밍 중 제안 등)으로 맨 아래에 둔다.
   /// AI 제안으로 만든 코드 요청은 제안 카드가 그리고, 직접 만든 요청(조사 버튼)은 출처 답변 아래에 따로 그린다.
   Map<String, List<Widget>> _cardsByMessage(List<ThinkMessage> messages) {
-    final ids = {for (final m in messages) if ((m.id ?? '').isNotEmpty) m.id!};
+    final ids = {
+      for (final m in messages)
+        if ((m.id ?? '').isNotEmpty) m.id!
+    };
     final out = <String, List<Widget>>{};
     void put(String? messageId, Widget w) =>
         out.putIfAbsent(messageId != null && ids.contains(messageId) ? messageId : '', () => []).add(w);
 
     final actions = _c.actions;
-    final linked = {for (final a in actions) if (a.codeRequestId != null) a.codeRequestId!};
+    final linked = {
+      for (final a in actions)
+        if (a.codeRequestId != null) a.codeRequestId!
+    };
     for (final a in actions) {
       put(a.messageId, ThinkActionCard(key: ValueKey('action-${a.id}'), action: a));
     }
@@ -414,6 +517,33 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
       }
     }
     return out;
+  }
+
+  /// 나눌 때 원본에서 복사한 메시지. 원본의 작업 카드는 따라오지 않고, 원본 메시지로 가는 길만 남긴다.
+  Widget _copiedLabel(ThinkMessage m, String sourceId) {
+    final originId = _c.selectedDetail?.splitFromConversationId;
+    return Align(
+      alignment: m.isUser ? Alignment.centerRight : Alignment.centerLeft,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.content_copy_outlined, size: 14, color: kThinkHint),
+          const SizedBox(width: 8),
+          const Text('원본 대화에서 복사한 메시지', style: TextStyle(color: kThinkHint, fontSize: 12)),
+          if (originId != null) ...[
+            const SizedBox(width: 8),
+            InkWell(
+              onTap: () => _c.revealMessages(originId, [sourceId]),
+              borderRadius: BorderRadius.circular(8),
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 4),
+                child: Text('원본에서 보기', style: TextStyle(color: kThinkLink, fontSize: 12)),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
   }
 
   Widget _emptyState() {
@@ -511,8 +641,11 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
           Focus(
             onKeyEvent: (node, event) {
               if (event is! KeyDownEvent) return KeyEventResult.ignored;
-              if (event.logicalKey != LogicalKeyboardKey.enter &&
-                  event.logicalKey != LogicalKeyboardKey.numpadEnter) {
+              if (isThinkPasteKey(event.logicalKey, HardwareKeyboard.instance)) {
+                _pasteFiles();
+                return KeyEventResult.ignored;
+              }
+              if (event.logicalKey != LogicalKeyboardKey.enter && event.logicalKey != LogicalKeyboardKey.numpadEnter) {
                 return KeyEventResult.ignored;
               }
               if (HardwareKeyboard.instance.isShiftPressed) return KeyEventResult.ignored;
@@ -529,7 +662,7 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
               maxLines: 8,
               keyboardType: TextInputType.multiline,
               style: const TextStyle(color: kThinkText, fontSize: 14, height: 1.5),
-              decoration: thinkInputDecoration(hint: '메시지 입력 (Enter 보내기 · Shift+Enter 줄바꿈 · 파일은 끌어다 놓기)'),
+              decoration: thinkInputDecoration(hint: '메시지 입력 (Enter 보내기 · Shift+Enter 줄바꿈 · 파일은 끌어다 놓기 · 이미지는 Ctrl+V)'),
             ),
           ),
           const SizedBox(height: 8),
@@ -547,9 +680,7 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
                 icon: Icons.travel_explore,
                 selected: _c.webSearch && webSearchAllowed,
                 enabled: webSearchAllowed,
-                tooltip: webSearchAllowed
-                    ? '필요하면 웹을 검색하고 출처를 붙입니다. 검색 1회당 비용이 추가됩니다.'
-                    : '사용량 탭에서 웹 검색이 꺼져 있습니다.',
+                tooltip: webSearchAllowed ? '필요하면 웹을 검색하고 출처를 붙입니다. 검색 1회당 비용이 추가됩니다.' : '사용량 탭에서 웹 검색이 꺼져 있습니다.',
                 onChanged: _c.setWebSearch,
               ),
               const SizedBox(width: 8),
@@ -591,18 +722,50 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
     );
   }
 
+  /// 답변의 '자료' 버튼. 맥락 패널이 보이면 패널에, 좁은 화면이면 창으로 보여 준다.
+  void _showMaterials(String messageId) {
+    _c.selectAssistantMessage(messageId);
+    if (_contextVisible) return;
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: kThinkBg,
+        shape: thinkDialogShape,
+        content: SizedBox(
+          width: 480,
+          child: SingleChildScrollView(
+            child: ListenableBuilder(listenable: _c, builder: (context, _) => const ThinkMaterialsPanel()),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('닫기', style: TextStyle(color: kThinkSub))),
+        ],
+      ),
+    );
+  }
+
   // ------------------------------------------------------------ 맥락 패널
   Widget _contextPanel() {
     final info = _c.selectedTurnInfo;
     final ctx = info?.context;
     final usage = info?.usage;
-    final relevantIds = (ctx?['relevant'] is List ? ctx!['relevant'] as List : const []).map((e) => e.toString()).toList();
+    final relevantIds =
+        (ctx?['relevant'] is List ? ctx!['relevant'] as List : const []).map((e) => e.toString()).toList();
     int n(dynamic v) => v is num ? v.toInt() : 0;
     final excluded = _c.selectedId == null ? 0 : _c.messages.where((m) => m.contextExcluded).length;
     return ThinkPanel(
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          if (_c.rolesReady) ...[
+            const ThinkMaterialsPanel(),
+            const SizedBox(height: 16),
+            const Divider(color: kThinkBorder, height: 1),
+            const SizedBox(height: 16),
+          ] else if (_c.status != null) ...[
+            ThinkFeatureStatusView(feature: _c.status!.thinkRoles, label: '역할·자료 범위', reason: thinkRolesFeatureReason),
+            const SizedBox(height: 16),
+          ],
           const Text('이번 답변에 쓴 맥락', style: TextStyle(color: kThinkText, fontSize: 14, fontWeight: FontWeight.w800)),
           const SizedBox(height: 8),
           if (ctx == null)
@@ -620,9 +783,11 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
                   ? '${n(ctx['history_used'])}개 (오래된 ${n(ctx['history_dropped'])}개 생략)'
                   : '${n(ctx['history_used'])}개',
             ),
+            if (ctx['split_summary'] == true) _kv('나눠 온 요약', '참고 자료로 넣음'),
             if (relevantIds.isNotEmpty) ...[
               const SizedBox(height: 12),
-              const Text('질문과 관련해 찾은 기억', style: TextStyle(color: kThinkSub, fontSize: 12, fontWeight: FontWeight.w700)),
+              const Text('질문과 관련해 찾은 기억',
+                  style: TextStyle(color: kThinkSub, fontSize: 12, fontWeight: FontWeight.w700)),
               const SizedBox(height: 4),
               for (final id in relevantIds) _memoryLink(id),
             ],
@@ -639,24 +804,103 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
           const SizedBox(height: 16),
           const Divider(color: kThinkBorder, height: 1),
           const SizedBox(height: 16),
+          _splitSection(),
+          const SizedBox(height: 16),
+          const Divider(color: kThinkBorder, height: 1),
+          const SizedBox(height: 16),
           ListenableBuilder(listenable: ThinkCodeController.instance, builder: (context, _) => _codeWork()),
           const SizedBox(height: 16),
           const Divider(color: kThinkBorder, height: 1),
           const SizedBox(height: 16),
-          const Text('마지막 답변', style: TextStyle(color: kThinkText, fontSize: 14, fontWeight: FontWeight.w800)),
+          Semantics(
+            button: true,
+            expanded: _showTechnical,
+            child: InkWell(
+              onTap: () => setState(() => _showTechnical = !_showTechnical),
+              borderRadius: BorderRadius.circular(8),
+              child: Row(
+                children: [
+                  const Expanded(
+                    child: Text('마지막 답변 (모델·토큰·비용)',
+                        style: TextStyle(color: kThinkText, fontSize: 14, fontWeight: FontWeight.w800)),
+                  ),
+                  Icon(_showTechnical ? Icons.expand_less : Icons.expand_more, size: 18, color: kThinkSub),
+                ],
+              ),
+            ),
+          ),
           const SizedBox(height: 8),
-          if (usage == null)
+          if (!_showTechnical)
+            const SizedBox.shrink()
+          else if (usage == null)
             const Text('아직 없습니다.', style: TextStyle(color: kThinkHint, fontSize: 12))
           else ...[
             if (info?.model != null) _kv('모델', info!.model!),
-            _kv('입력 토큰', '${formatTokens(n(usage['input_tokens']))} (캐시 ${formatTokens(n(usage['cached_input_tokens']))})'),
-            _kv('출력 토큰', '${formatTokens(n(usage['output_tokens']))} (추론 ${formatTokens(n(usage['reasoning_tokens']))})'),
+            _kv('입력 토큰',
+                '${formatTokens(n(usage['input_tokens']))} (캐시 ${formatTokens(n(usage['cached_input_tokens']))})'),
+            _kv('출력 토큰',
+                '${formatTokens(n(usage['output_tokens']))} (추론 ${formatTokens(n(usage['reasoning_tokens']))})'),
             if ((info?.webSearchCalls ?? 0) > 0) _kv('웹 검색', '${info!.webSearchCalls}회'),
             _kv('비용', formatUsd(info?.costUsd)),
           ],
         ],
       ),
     );
+  }
+
+  Widget _splitSection() {
+    final status = _c.status;
+    final detail = _c.selectedDetail;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text('대화 나누기', style: TextStyle(color: kThinkText, fontSize: 14, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 8),
+        if (status == null)
+          const Text('기능 상태를 아직 받지 못했습니다.', style: TextStyle(color: kThinkHint, fontSize: 12))
+        else
+          ThinkFeatureStatusView(feature: status.conversationSplit),
+        if (detail != null && detail.splitColumns && status?.conversationSplit.ready == true) ...[
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: ThinkToggleChip(
+              label: '이 대화에서 나누기 제안 받기',
+              icon: Icons.call_split,
+              selected: detail.autoSplitSuggestions,
+              onChanged: (v) => _setSplitSuggestions(detail.id, v),
+            ),
+          ),
+          if (!detail.autoSplitSuggestions) ...[
+            const SizedBox(height: 4),
+            const Text(
+              '거절해서 꺼져 있습니다. 다시 켜거나, 직접 나누자고 하면 제안합니다.',
+              style: TextStyle(color: kThinkHint, fontSize: 12, height: 1.5),
+            ),
+          ],
+        ],
+        const SizedBox(height: 8),
+        const Text(
+          '주제가 바뀐 것 같으면 Think가 새 대화로 나누자고 카드로 묻습니다. AI의 판단이라 놓치거나 잘못 물을 수 있습니다.',
+          style: TextStyle(color: kThinkHint, fontSize: 12, height: 1.5),
+        ),
+        const SizedBox(height: 8),
+        OutlinedButton.icon(
+          onPressed: () => showThinkStatusDialog(context),
+          style: thinkOutlineButton(),
+          icon: const Icon(Icons.link, size: 16),
+          label: const Text('연결·기능 상태 보기'),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _setSplitSuggestions(String conversationId, bool enabled) async {
+    try {
+      await _c.setSplitSuggestions(conversationId, enabled);
+    } catch (e) {
+      if (mounted) showThinkSnack(context, '바꾸지 못했습니다: $e', error: true);
+    }
   }
 
   Widget _codeWork() {

@@ -1281,7 +1281,7 @@ class _ClassesViewState extends State<ClassesView>
                   '일'
                 ];
 
-                ({int count, bool isBreak}) capacitySlotInfo(
+                ({int count, bool isBreak}) computeCapacitySlotInfo(
                   int dayIdx,
                   int blockIdx,
                 ) {
@@ -1337,19 +1337,25 @@ class _ClassesViewState extends State<ClassesView>
                   return (count: count, isBreak: isBreak);
                 }
 
-                Color capacityColorFor(int count) {
-                  if (count <
-                      DataManager.instance.academySettings.defaultCapacity *
-                          0.7) {
-                    return Colors.transparent;
-                  }
-                  if (count >=
-                      DataManager.instance.academySettings.defaultCapacity) {
-                    return const Color(0xFFF2B45B);
-                  }
-                  return FabTabBarTokens.previewAcademyPanelStyleFor(
-                    Theme.of(context).brightness,
-                  ).groupedCardBackground;
+                final capacitySlotMemo = <int, ({int count, bool isBreak})>{};
+                ({int count, bool isBreak}) capacitySlotInfo(
+                  int dayIdx,
+                  int blockIdx,
+                ) =>
+                    capacitySlotMemo.putIfAbsent(
+                      dayIdx * 1000 + blockIdx,
+                      () => computeCapacitySlotInfo(dayIdx, blockIdx),
+                    );
+
+                final int? hoveredBlockIdx = int.tryParse(
+                  _capacityHoverKey?.split('-').last ?? '',
+                );
+                final int capacity =
+                    DataManager.instance.academySettings.defaultCapacity;
+                int capacityLevel(int dayIdx, int blockIdx) {
+                  final info = capacitySlotInfo(dayIdx, blockIdx);
+                  if (info.isBreak) return 0;
+                  return timetableCapacityLevel(info.count, capacity);
                 }
 
                 Widget buildGridCell(int dayIdx, int blockIdx) {
@@ -1414,9 +1420,15 @@ class _ClassesViewState extends State<ClassesView>
                       .map((s) => TrialOverlayLabel(
                           noteId: s.sourceNoteId, text: s.title))
                       .toList();
-                  final Color countColor = activeStudentCount > 0
-                      ? capacityColorFor(activeStudentCount)
-                      : const Color(0xFF223131);
+                  final prevInfo = blockIdx > 0
+                      ? capacitySlotInfo(dayIdx, blockIdx - 1)
+                      : null;
+                  final countChanged = prevInfo == null ||
+                      prevInfo.isBreak ||
+                      prevInfo.count != activeStudentCount;
+                  final capacityBandStart = blockIdx == 0 ||
+                      capacityLevel(dayIdx, blockIdx - 1) !=
+                          capacityLevel(dayIdx, blockIdx);
                   if (isDragHighlight && _kRegistrationPerfDebug) {
                     // ignore: avoid_print
                     print(
@@ -1518,9 +1530,13 @@ class _ClassesViewState extends State<ClassesView>
                               : isSelectedCell,
                           isPendingHighlight: isPendingHighlight,
                           onTap: null,
-                          countColor: countColor,
                           activeStudentCount: activeStudentCount,
-                          showCapacityIndicator: false,
+                          countChanged: countChanged,
+                          capacityBandStart: capacityBandStart,
+                          isHourStart:
+                              timeBlocks[blockIdx].startTime.minute == 0,
+                          isHoverColumn: hoveredBlockIdx == blockIdx,
+                          isHovered: _capacityHoverKey == cellKey,
                           cellStudentWithInfos: cellStudentWithInfos,
                           groups: groups,
                           cellWidth: timeColumnWidth,
@@ -1543,104 +1559,38 @@ class _ClassesViewState extends State<ClassesView>
                 }
 
                 Widget buildDayGridRow(int dayIdx) {
-                  final indicators = <Widget>[];
-                  final capacity = DataManager
-                      .instance.academySettings.defaultCapacity;
-                  final underSteps = timetableUnderCapacitySteps(capacity);
-                  final ribbonStyle =
-                      FabTabBarTokens.previewAcademyPanelStyleFor(
-                    Theme.of(context).brightness,
-                  );
-                  int? hoveredBlock;
-                  final hoverKey = _capacityHoverKey;
-                  if (hoverKey != null) {
-                    final parts = hoverKey.split('-');
-                    if (parts.length == 2 &&
-                        int.tryParse(parts[0]) == dayIdx) {
-                      hoveredBlock = int.tryParse(parts[1]);
+                  final bands = <Widget>[];
+                  var start = 0;
+                  while (start < timeBlocks.length) {
+                    final level = capacityLevel(dayIdx, start);
+                    var end = start;
+                    while (end + 1 < timeBlocks.length &&
+                        capacityLevel(dayIdx, end + 1) == level) {
+                      end++;
                     }
-                  }
-                  var blockIdx = 0;
-                  while (blockIdx < timeBlocks.length) {
-                    final info = capacitySlotInfo(dayIdx, blockIdx);
-                    if (info.isBreak || info.count <= 0) {
-                      blockIdx += 1;
-                      continue;
-                    }
-
-                    final under = info.count < capacity * 0.7;
-                    final start = blockIdx;
-                    if (under) {
-                      final counts = <int>[info.count];
-                      blockIdx += 1;
-                      while (blockIdx < timeBlocks.length) {
-                        final next = capacitySlotInfo(dayIdx, blockIdx);
-                        if (next.isBreak ||
-                            next.count <= 0 ||
-                            next.count >= capacity * 0.7) {
-                          break;
-                        }
-                        counts.add(next.count);
-                        blockIdx += 1;
-                      }
-                      final hoveredIndex = hoveredBlock != null &&
-                              hoveredBlock >= start &&
-                              hoveredBlock < start + counts.length
-                          ? hoveredBlock - start
-                          : null;
-                      indicators.add(
-                        Positioned(
-                          top: 0,
-                          left: start * timeColumnWidth,
-                          width: counts.length * timeColumnWidth,
-                          height: 22,
-                          child: IgnorePointer(
-                            child: UnderCapacityRibbon(
-                              counts: counts,
-                              steps: underSteps,
-                              color: ribbonStyle.divider,
-                              numberColor: ribbonStyle.title,
-                              hoveredIndex: hoveredIndex,
-                            ),
-                          ),
-                        ),
-                      );
-                      continue;
-                    }
-
-                    final count = info.count;
-                    blockIdx += 1;
-                    while (blockIdx < timeBlocks.length) {
-                      final next = capacitySlotInfo(dayIdx, blockIdx);
-                      if (next.isBreak || next.count != count) break;
-                      blockIdx += 1;
-                    }
-                    final span = blockIdx - start;
-                    indicators.add(
-                      Positioned(
-                        top: 0,
-                        left: start * timeColumnWidth + 1,
-                        width: span * timeColumnWidth - 2,
+                    if (level > 0) {
+                      bands.add(Positioned(
+                        left: start * timeColumnWidth + 3,
+                        width: (end - start + 1) * timeColumnWidth - 6,
+                        top: kTimetableBandInset,
+                        bottom: kTimetableBandInset,
                         child: IgnorePointer(
-                          child: TimetableCapacityIndicator(
-                            count: count,
-                            color: capacityColorFor(count),
-                          ),
+                          child: TimetableCapacityBand(level: level),
                         ),
-                      ),
-                    );
+                      ));
+                    }
+                    start = end + 1;
                   }
-
                   return Stack(
                     fit: StackFit.expand,
                     children: [
+                      ...bands,
                       Row(
                         children: List.generate(
                           timeBlocks.length,
                           (blockIdx) => buildGridCell(dayIdx, blockIdx),
                         ),
                       ),
-                      ...indicators,
                     ],
                   );
                 }
@@ -1800,8 +1750,10 @@ class _ClassesViewState extends State<ClassesView>
                                     '요일',
                                     style: TextStyle(
                                       color: axisMuted,
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w700,
+                                      fontSize: 13,
+                                      fontFamily: FabTabBarTokens
+                                          .previewAcademyLabelFontFamily,
+                                      fontWeight: FontWeight.w600,
                                     ),
                                   ),
                                 ),
@@ -1827,19 +1779,37 @@ class _ClassesViewState extends State<ClassesView>
                                         (blockIdx) {
                                           final isNow =
                                               blockIdx == currentTimeBlockIdx;
+                                          final isHour = timeBlocks[blockIdx]
+                                                  .startTime
+                                                  .minute ==
+                                              0;
+                                          // 칸 안 인원 숫자(왼쪽 12)와 같은 선에 맞춘다.
                                           return SizedBox(
                                             width: timeColumnWidth,
-                                            child: Center(
-                                              child: Text(
-                                                timeBlocks[blockIdx].timeString,
-                                                style: TextStyle(
-                                                  color: isNow
-                                                      ? const Color(0xFF33A373)
-                                                      : axisMuted,
-                                                  fontSize: 13,
-                                                  fontWeight: isNow
-                                                      ? FontWeight.w700
-                                                      : FontWeight.w500,
+                                            child: Padding(
+                                              padding: const EdgeInsets.only(
+                                                  left: 12),
+                                              child: Align(
+                                                alignment: Alignment.centerLeft,
+                                                child: Text(
+                                                  timeBlocks[blockIdx]
+                                                      .timeString,
+                                                  style: TextStyle(
+                                                    color: isNow
+                                                        ? const Color(
+                                                            0xFF33A373)
+                                                        : axisMuted,
+                                                    fontSize: isHour ? 15 : 13,
+                                                    fontFamily: FabTabBarTokens
+                                                        .previewAcademyLabelFontFamily,
+                                                    fontWeight: isNow || isHour
+                                                        ? FontWeight.w700
+                                                        : FontWeight.w500,
+                                                    fontFeatures: const [
+                                                      FontFeature
+                                                          .tabularFigures(),
+                                                    ],
+                                                  ),
                                                 ),
                                               ),
                                             ),
@@ -1926,7 +1896,10 @@ class _ClassesViewState extends State<ClassesView>
                                                           weekLabels[dayIdx],
                                                           style: TextStyle(
                                                             color: labelColor,
-                                                            fontSize: 15,
+                                                            fontSize: 17,
+                                                            fontFamily:
+                                                                FabTabBarTokens
+                                                                    .previewAcademyLabelFontFamily,
                                                             fontWeight:
                                                                 FontWeight.w700,
                                                           ),

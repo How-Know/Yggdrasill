@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import '../../models/session_override.dart';
 import '../../models/attendance_record.dart';
 import '../../models/student.dart';
@@ -25,6 +26,8 @@ import '../../widgets/solid_capsule_action_bar.dart';
 import '../../widgets/shared_dropdown_dialog.dart';
 import '../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import '../timetable/components/timetable_top_bar.dart';
+import '../../widgets/student_member_icon.dart';
+import '../../widgets/tendency_puzzle_icon.dart';
 import 'components/tendency_webview.dart';
 import 'components/student_registration_status_dialog.dart';
 import 'components/student_action_fab_overlay.dart';
@@ -47,6 +50,51 @@ void _dlog(String message) {
     print(message);
     return true;
   }());
+}
+
+/// 학생 메뉴 페이지 타이틀. 학생·성향이 같은 크기와 간격을 쓴다.
+class _StudentMenuPageTitle extends StatelessWidget {
+  const _StudentMenuPageTitle({
+    required this.svg,
+    required this.title,
+    required this.color,
+  });
+
+  static const double iconSize = 40;
+  static const double iconGap = 20;
+
+  /// 학생 탭 우측 캡슐과 같은 줄 높이.
+  /// 버튼 40 + 세로 패딩 8×2 + 테두리 1×2.
+  /// 성향 탭은 캡슐이 없어도 이 높이에 제목을 맞춰 세로 위치를 유지한다.
+  static const double headerRowHeight = 58;
+
+  final String svg;
+  final String title;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = FabTabBarTokens.previewAcademyPanelStyleFor(
+      Theme.of(context).brightness,
+    );
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        SvgPicture.string(
+          svg,
+          width: iconSize,
+          height: iconSize,
+          colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
+        ),
+        const SizedBox(width: iconGap),
+        Text(
+          title,
+          style: FabTabBarTokens.previewAcademyMainTitleStyle(style),
+        ),
+      ],
+    );
+  }
 }
 
 class StudentScreen extends StatefulWidget {
@@ -513,13 +561,21 @@ class StudentScreenState extends State<StudentScreen> {
               0,
             ),
             child: TimetableTopBar(
-              leading: Text(
-                '학생',
-                style: FabTabBarTokens.previewAcademyMainTitleStyle(panelStyle),
+              leading: Align(
+                alignment: Alignment.centerLeft,
+                child: _StudentMenuPageTitle(
+                  svg: _customTabIndex == 0
+                      ? studentMemberIconSvg
+                      : tendencyPuzzleIconSvg,
+                  title: _customTabIndex == 0 ? '학생' : '성향',
+                  color: panelStyle.title,
+                ),
               ),
               actionRow: _customTabIndex == 0
                   ? _buildHeaderActionRow()
-                  : const SizedBox.shrink(),
+                  : const SizedBox(
+                      height: _StudentMenuPageTitle.headerRowHeight,
+                    ),
             ),
           ),
           const SizedBox(height: 12),

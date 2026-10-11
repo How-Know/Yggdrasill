@@ -5,9 +5,12 @@ import '../../services/think/think_api.dart';
 import '../../services/think/think_code_controller.dart';
 import '../../services/think/think_code_models.dart';
 import '../../services/think/think_controller.dart';
+import '../../services/think/think_models.dart';
 import 'think_code_request_dialog.dart';
 import 'think_code_views.dart';
 import 'think_markdown.dart';
+import 'think_split_views.dart';
+import 'think_status_dialog.dart';
 import 'think_style.dart';
 import 'think_tree_dialogs.dart';
 
@@ -125,26 +128,74 @@ Widget _title(String text) => SelectableText(
 
 Widget _gap([double h = 12]) => SizedBox(height: h);
 
-Widget _workerLine(ThinkCodeController c) {
-  final online = c.onlineWorker;
-  final last = c.lastWorker;
-  final String text;
-  if (online != null) {
-    text = '작업자 켜짐 · ${online.workerId}${online.currentRequestId != null ? ' · 작업 중' : ''}';
-  } else {
-    text = last == null ? '작업자가 아직 연결된 적이 없습니다' : '작업자 꺼짐 · 마지막 신호 ${formatRelative(last.lastSeenAt)}';
+Widget _workerLine(ThinkCodeController c) => Tooltip(
+      message: '이 PC에서 tools/code_bridge 폴더의 npm start로 켭니다. 켜기 전에 보낸 요청은 대기열에서 기다립니다.',
+      child: thinkCodeWorkerLine(c),
+    );
+
+/// 코드 수정 diff에 migrations가 있을 때 운영 DB 반영은 읽기 전용 안내만 한다(적용·push 없음).
+class ThinkDbProductionReflectionPanel extends StatelessWidget {
+  const ThinkDbProductionReflectionPanel({super.key, required this.round});
+
+  final ThinkCodeRound round;
+
+  @override
+  Widget build(BuildContext context) {
+    final paths = migrationPathsFromDiff(round.diff);
+    final v = round.verification;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: kThinkBg,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: kThinkLink.withValues(alpha: 0.5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text('운영 DB 반영 제안 (읽기 전용)',
+              style: TextStyle(color: kThinkText, fontSize: 13, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 8),
+          const Text(
+            '작업 폴더에 파일만 놓인 상태입니다. 운영 DB에 실제로 적용됐는지·백업·대상 프로젝트·권한 영향은 '
+            '이 화면만으로 확인되지 않습니다. db push나 배포는 운영자가 별도로 승인·실행합니다.',
+            style: TextStyle(color: kThinkSub, fontSize: 12, height: 1.5),
+          ),
+          const SizedBox(height: 8),
+          _roLine('대상 Supabase 프로젝트', '앱에 설정된 프로젝트가 맞는지 운영자가 확인 필요'),
+          _roLine('백업·복구', '미확인 — 반영 전 백업 여부를 운영자가 확인'),
+          if (paths.isEmpty)
+            _roLine('마이그레이션 파일', 'diff에서 경로를 찾지 못함 (부분 확인)')
+          else ...[
+            _roLine('적용 순서(파일명)', paths.join('\n')),
+            _roLine('삭제·권한 영향', 'SQL 내용·운영 데이터 영향은 diff와 검토로 확인 (자동 판정 없음)'),
+          ],
+          if (v != null) ...[
+            const SizedBox(height: 8),
+            Text('자동 검사 요약: ${thinkVerificationSummary(v)} (위·아래 카드의 항목별 통과/실패/미실행 참고)',
+                style: const TextStyle(color: kThinkText, fontSize: 12, height: 1.4)),
+          ] else
+            const Padding(
+              padding: EdgeInsets.only(top: 8),
+              child: Text('자동 검사: 기록 없음 (미실행)', style: TextStyle(color: kThinkHint, fontSize: 12)),
+            ),
+        ],
+      ),
+    );
   }
-  return Tooltip(
-    message: '이 PC에서 tools/code_bridge 폴더의 npm start로 켭니다. 켜기 전에 보낸 요청은 대기열에서 기다립니다.',
-    child: Row(
-      children: [
-        Icon(Icons.circle, size: 8, color: online != null ? kThinkSuccess : kThinkHint),
-        const SizedBox(width: 8),
-        Expanded(child: Text(text, style: const TextStyle(color: kThinkSub, fontSize: 12))),
-        Text('오늘 ${c.submittedToday}/${c.dailyLimit}건', style: const TextStyle(color: kThinkHint, fontSize: 12)),
-      ],
-    ),
-  );
+
+  Widget _roLine(String label, String value) => Padding(
+        padding: const EdgeInsets.only(top: 4),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(width: 140, child: Text(label, style: const TextStyle(color: kThinkSub, fontSize: 12))),
+            Expanded(
+              child: SelectableText(value, style: const TextStyle(color: kThinkText, fontSize: 12, height: 1.4)),
+            ),
+          ],
+        ),
+      );
 }
 
 // =====================================================================================
@@ -164,6 +215,9 @@ class _ThinkActionCardState extends State<ThinkActionCard> with _BusyState {
   ThinkController get _think => ThinkController.instance;
   ThinkCodeController get _code => ThinkCodeController.instance;
 
+  /// 운영자가 카드에서 고른 작업 강도. null이면 Think가 고른 값.
+  String? _effort;
+
   ThinkAction get a => widget.action;
 
   @override
@@ -179,6 +233,7 @@ class _ThinkActionCardState extends State<ThinkActionCard> with _BusyState {
       return _ClosedLine(
           icon: Icons.low_priority, text: '${a.kind.label} 제안 · 새 제안으로 대체됨${a.title.isEmpty ? '' : ' · ${a.title}'}');
     }
+    if (a.kind == ThinkActionKind.splitConversation && a.status != ThinkActionStatus.failed) return _split();
     if (a.status == ThinkActionStatus.rejected) {
       return _ClosedLine(icon: Icons.block, text: '${a.kind.label} 제안 · 거절함${_subject.isEmpty ? '' : ' · $_subject'}');
     }
@@ -221,6 +276,7 @@ class _ThinkActionCardState extends State<ThinkActionCard> with _BusyState {
           thinkCodeLabel('근거로 삼은 조사'),
           Text(basedTitle, style: const TextStyle(color: kThinkLink, fontSize: 13)),
         ],
+        _effortPicker(spec),
         _gap(),
         ThinkNotice(
           icon: change ? Icons.shield_outlined : Icons.manage_search,
@@ -237,7 +293,7 @@ class _ThinkActionCardState extends State<ThinkActionCard> with _BusyState {
           runSpacing: 8,
           children: [
             ElevatedButton.icon(
-              onPressed: busy ? null : () => run(() => _think.applyAction(a), done: '보냈습니다. 진행 상황은 이 카드에 표시됩니다.'),
+              onPressed: busy ? null : () => _approve(spec, '보냈습니다. 진행 상황은 이 카드에 표시됩니다.'),
               style: thinkPrimaryButton(),
               icon: const Icon(Icons.send, size: 16),
               label: const Text('보내기'),
@@ -336,6 +392,7 @@ class _ThinkActionCardState extends State<ThinkActionCard> with _BusyState {
             thinkCodeLabel('정해 주셔야 할 것'),
             thinkCodeBullets(ownerQuestions),
           ],
+          _effortPicker(spec),
           _gap(),
           ThinkNotice(
             icon: Icons.shield_outlined,
@@ -353,8 +410,7 @@ class _ThinkActionCardState extends State<ThinkActionCard> with _BusyState {
             runSpacing: 8,
             children: [
               ElevatedButton.icon(
-                onPressed:
-                    busy ? null : () => run(() => _think.applyAction(a), done: '조율본대로 구현을 시작합니다. 진행 상황은 이 카드에 표시됩니다.'),
+                onPressed: busy ? null : () => _approve(spec, '조율본대로 구현을 시작합니다. 진행 상황은 이 카드에 표시됩니다.'),
                 style: thinkPrimaryButton(),
                 icon: const Icon(Icons.check, size: 16),
                 label: const Text('이대로 구현'),
@@ -376,8 +432,32 @@ class _ThinkActionCardState extends State<ThinkActionCard> with _BusyState {
     );
   }
 
+  Map<String, dynamic> get _rawSpec =>
+      a.payload['spec'] is Map ? Map<String, dynamic>.from(a.payload['spec'] as Map) : <String, dynamic>{};
+
+  String? get _thinkEffort {
+    final v = _rawSpec['effort'];
+    return ThinkCodeSpec.efforts.contains(v) ? v as String : null;
+  }
+
+  String _effortOf(ThinkCodeSpec spec) => _effort ?? spec.effort;
+
+  Widget _effortPicker(ThinkCodeSpec spec) => ThinkEffortPicker(
+        selected: _effortOf(spec),
+        thinkChoice: _thinkEffort,
+        reason: spec.effortReason,
+        enabled: !busy,
+        onChanged: (e) => setState(() => _effort = e),
+      );
+
+  /// 그대로 승인. 강도만 바꿨으면 원래 spec에 강도만 바꿔 보낸다.
+  Future<void> _approve(ThinkCodeSpec spec, String done) => run(
+      () => _think.applyAction(a, overrides: ThinkCodeSpec.effortOverrides(_rawSpec, _effortOf(spec))),
+      done: done);
+
   Future<void> _editAndSend(ThinkCodeSpec spec, ThinkCodeMode mode) async {
-    final edited = await ThinkCodeProposalDialog.show(context, title: a.title, spec: spec, mode: mode);
+    final edited =
+        await ThinkCodeProposalDialog.show(context, title: a.title, spec: spec.withEffort(_effortOf(spec)), mode: mode);
     if (edited == null || !mounted) return;
     // 기억 참조(memory_refs)·근거(based_on)처럼 화면에 없는 칸은 원래 제안 그대로 둔다.
     final raw = a.payload['spec'] is Map ? Map<String, dynamic>.from(a.payload['spec'] as Map) : <String, dynamic>{};
@@ -505,6 +585,159 @@ class _ThinkActionCardState extends State<ThinkActionCard> with _BusyState {
     await run(() => _think.applyAction(a, overrides: {'folder_id': picked}), done: '폴더에 넣었습니다.');
   }
 
+  // ------------------------------------------------------------ 대화 나누기
+  Widget _split() {
+    final title = a.title;
+    if (a.status == ThinkActionStatus.rejected) {
+      return _ClosedLine(icon: Icons.block, text: '대화 나누기 제안 · 여기서 계속하기로 함${title.isEmpty ? '' : ' · $title'}');
+    }
+    if (a.status == ThinkActionStatus.expired) {
+      return _ClosedLine(
+        icon: Icons.timer_off_outlined,
+        text: '대화 나누기 제안 · 대화가 이어져 이 제안은 만료됐습니다${title.isEmpty ? '' : ' · $title'}',
+      );
+    }
+    if (a.status == ThinkActionStatus.applied) return _splitApplied();
+    final blocked = _splitBlockedReason();
+    final folderId = a.folderId;
+    return _CardFrame(
+      icon: Icons.call_split,
+      label: '대화 나누기 제안',
+      badge: const ThinkBadge('승인 대기', color: kThinkLink),
+      children: [
+        _title(title),
+        if (a.splitReason.isNotEmpty) ...[
+          _gap(8),
+          SelectableText(a.splitReason, style: const TextStyle(color: kThinkSub, fontSize: 13, height: 1.5)),
+        ],
+        if (a.splitStartPreview.isNotEmpty) ...[
+          thinkCodeLabel('여기부터 나눕니다'),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(color: kThinkQuote, borderRadius: BorderRadius.circular(8)),
+            child: SelectableText(
+              a.splitStartPreview,
+              style: const TextStyle(color: kThinkText, fontSize: 13, height: 1.5),
+            ),
+          ),
+        ],
+        thinkCodeLabel('들어갈 폴더'),
+        Row(
+          children: [
+            Icon(folderId == null ? Icons.inbox_outlined : Icons.folder_outlined, size: 16, color: kThinkSub),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                thinkSplitFolderLabel(_think.tree, folderId, fallbackPath: a.splitFolderPath),
+                style: const TextStyle(color: kThinkText, fontSize: 13),
+              ),
+            ),
+          ],
+        ),
+        ThinkSplitSummaryView(summary: a.splitSummary),
+        _gap(),
+        const ThinkNotice(
+          icon: Icons.content_copy_outlined,
+          text: '나누면 이번 질문과 답변만 새 대화에 복사하고 새 대화로 넘어갑니다. 이 대화는 그대로 남습니다. '
+              '요약은 새 대화에서 참고 자료로만 쓰고 기억으로 저장하지 않습니다.',
+        ),
+        if (blocked != null) ...[
+          _gap(8),
+          Text(blocked, style: const TextStyle(color: kThinkLink, fontSize: 12, fontWeight: FontWeight.w700)),
+        ],
+        _gap(),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            ElevatedButton.icon(
+              onPressed: busy || blocked != null ? null : () => run(() => _think.applySplit(a)),
+              style: thinkPrimaryButton(),
+              icon: const Icon(Icons.call_split, size: 16),
+              label: const Text('나눠서 이어가기'),
+            ),
+            OutlinedButton.icon(
+              onPressed: busy || blocked != null ? null : _editAndSplit,
+              style: thinkOutlineButton(),
+              icon: const Icon(Icons.edit_outlined, size: 16),
+              label: const Text('고쳐서 나누기'),
+            ),
+            TextButton(
+              onPressed: busy ? null : () => run(() => _think.rejectAction(a)),
+              child: const Text('여기서 계속하기', style: TextStyle(color: kThinkSub)),
+            ),
+          ],
+        ),
+        _gap(8),
+        const Text(
+          '"여기서 계속하기"를 고르면 이 대화에서는 Think가 다시 나누자고 하지 않습니다. 직접 나누자고 하면 다시 제안합니다.',
+          style: TextStyle(color: kThinkHint, fontSize: 12, height: 1.5),
+        ),
+      ],
+    );
+  }
+
+  /// 승인을 막는 이유. 서버도 같은 조건(답변 저장·완료, 새 질문 없음)을 다시 확인한다.
+  String? _splitBlockedReason() {
+    final streaming = _think.isStreaming && _think.streamingConversationId == a.conversationId;
+    if (streaming || a.messageId == null) return '답변 완료 후 나눌 수 있습니다.';
+    final answer =
+        _think.selectedId == a.conversationId ? _think.messages.where((m) => m.id == a.messageId).firstOrNull : null;
+    if (answer != null && answer.status != ThinkMessageStatus.complete) {
+      return '답변이 끝까지 저장되지 않아(중단·오류) 나눌 수 없습니다. 다시 질문한 뒤 나눠 주세요.';
+    }
+    return null;
+  }
+
+  Future<void> _editAndSplit() async {
+    final edited = await ThinkSplitEditDialog.show(
+      context,
+      title: a.title,
+      folderId: a.folderId,
+      summary: a.splitSummary,
+      tree: _think.tree,
+    );
+    if (edited == null || !mounted) return;
+    await run(() => _think.applySplit(a, overrides: edited.toOverrides()));
+  }
+
+  Widget _splitApplied() {
+    final newId = a.splitConversationId;
+    final title = (a.result?['title'] ?? a.title).toString();
+    final left = a.splitNotCopied;
+    String part(String key, String label) => (left[key] ?? 0) > 0 ? '$label ${left[key]}개' : '';
+    final remained = [
+      part('actions', '작업 카드'),
+      part('code_requests', '코드 요청'),
+      part('tree_nodes', '트리 발췌·문서'),
+      part('other_messages', '복사하지 않은 메시지'),
+    ].where((s) => s.isNotEmpty).toList();
+    return _CardFrame(
+      icon: Icons.call_split,
+      label: '대화 나누기',
+      badge: const ThinkBadge('나눔', color: kThinkSuccess),
+      trailing: newId == null
+          ? null
+          : TextButton.icon(
+              onPressed: () => _think.openConversation(newId),
+              icon: const Icon(Icons.open_in_new, size: 16, color: kThinkLink),
+              label: const Text('새 대화로 가기', style: TextStyle(color: kThinkLink)),
+            ),
+      children: [
+        Text(
+          '"$title" 새 대화로 나눴습니다. 이 대화는 그대로 남아 있습니다.',
+          style: const TextStyle(color: kThinkText, fontSize: 13, height: 1.5),
+        ),
+        _gap(8),
+        Text(
+          '새 대화에는 이번 질문과 답변만 복사했습니다.'
+          '${remained.isEmpty ? '' : ' 이 대화에만 남은 것: ${remained.join(', ')}.'}',
+          style: const TextStyle(color: kThinkSub, fontSize: 12, height: 1.5),
+        ),
+      ],
+    );
+  }
+
   // ------------------------------------------------------------ 삭제
   Widget _delete() {
     final p = a.preview;
@@ -545,7 +778,8 @@ class _ThinkActionCardState extends State<ThinkActionCard> with _BusyState {
           _title((p['title'] ?? '').toString()),
           _gap(8),
           Text(
-            '메시지 ${n('messages')}개와 발췌 ${n('excerpts')}개가 함께 지워집니다.'
+            '메시지 ${n('messages')}개, 발췌 ${n('excerpts')}개'
+            '${n('documents') > 0 ? ', 종합 문서 ${n('documents')}개' : ''}가 함께 지워집니다.'
             '${n('code_requests') > 0 ? ' 코드 요청 ${n('code_requests')}개는 남고 대화 연결만 끊깁니다.' : ''}',
             style: const TextStyle(color: kThinkSub, fontSize: 13, height: 1.5),
           ),
@@ -651,28 +885,46 @@ class _ThinkCodeRequestCardState extends State<ThinkCodeRequestCard> with _BusyS
     final rounds = _c.roundsOf(r.id);
     final latest = _latest(rounds);
     final res = latest?.result;
+    final fix = _change ? _c.fixFor(r.id) : null;
+    final superseded = fix != null && !_fixEnded.contains(fix.status);
+    final fromPartial = rounds?.any((x) => x.continued?.partial == true) ?? false;
     return _CardFrame(
       icon: _plan ? Icons.handshake_outlined : (_change ? Icons.build_outlined : Icons.manage_search),
       label: _plan ? 'Cursor와 조율' : (_change ? '코드 수정' : '코드 조사'),
       badge: ThinkBadge(r.statusLabel, color: thinkCodeStatusColor(r.status)),
       trailing: r.round > 0 && !_change
           ? Text('${r.round}/${r.maxRounds}회차', style: const TextStyle(color: kThinkHint, fontSize: 12))
-          : null,
+          : _change && r.fixAttempt > 0
+              ? Text('검사 실패로 다시 고침 ${r.fixAttempt}회째', style: const TextStyle(color: kThinkHint, fontSize: 12))
+              : null,
       children: [
         _title(r.title),
-        ..._progress(),
+        if (fromPartial) ...[
+          _gap(8),
+          const ThinkNotice(
+              text: ThinkContinued.partialNotice, color: kThinkAccent, icon: Icons.warning_amber_outlined),
+        ],
+        ..._progress(latest, superseded ? fix : null),
         ..._review(),
         if (widget.inChat) ...[
           if (res != null) ...[
             _gap(),
             ThinkMarkdown(res.summary, fontSize: 13),
             if (_change && res.checks.isNotEmpty) ...[
-              thinkCodeLabel('적용 뒤 돌려 볼 검사'),
-              thinkCodeBullets(res.checks, mono: true)
+              thinkCodeLabel('사람이 확인할 점'),
+              thinkCodeBullets(res.checks),
             ],
           ] else if (latest?.resultText != null && latest!.status != 'running') ...[
             _gap(),
             const Text('결과를 정리하지 못했습니다. 아래 "자세히"에서 원문을 확인하세요.', style: TextStyle(color: kThinkSub, fontSize: 13)),
+          ],
+          if (_change && latest?.verification != null) ...[
+            thinkCodeLabel('자동 검사'),
+            ThinkVerificationView(verification: latest!.verification!),
+          ],
+          if (_change && latest?.touchesMigrations == true) ...[
+            _gap(),
+            ThinkDbProductionReflectionPanel(round: latest!),
           ],
           if (_change && latest?.diff != null) ...[
             thinkCodeLabel('변경 (적용 전 확인)'),
@@ -682,7 +934,8 @@ class _ThinkCodeRequestCardState extends State<ThinkCodeRequestCard> with _BusyS
             ThinkCodeExpansion(
               title: _plan ? '주고받은 내용 (계획 초안 · 회차별 검토)' : '자세히 (요청 내용 · 회차별 결과)',
               children: [
-                ThinkCodeSection(title: '요청 내용', child: ThinkCodeSpecView(spec: r.spec, mode: r.mode)),
+                ThinkCodeSection(
+                    title: '요청 내용', child: ThinkCodeSpecView(spec: r.spec, mode: r.mode, showEffort: true)),
                 for (final round in (rounds ?? const <ThinkCodeRound>[]).reversed) ...[
                   _gap(),
                   ThinkCodeRoundView(round: round, numbered: rounds!.length > 1, mode: r.mode),
@@ -691,7 +944,8 @@ class _ThinkCodeRequestCardState extends State<ThinkCodeRequestCard> with _BusyS
             ),
         ] else ...[
           _gap(),
-          ThinkCodeSection(title: '요청 내용', child: ThinkCodeSpecView(spec: r.spec, mode: r.mode)),
+          ThinkCodeSection(
+              title: '요청 내용', child: ThinkCodeSpecView(spec: r.spec, mode: r.mode, showEffort: true)),
           if (rounds == null && _c.roundsLoading(r.id))
             const Padding(
               padding: EdgeInsets.all(24),
@@ -703,12 +957,56 @@ class _ThinkCodeRequestCardState extends State<ThinkCodeRequestCard> with _BusyS
           ],
         ],
         _gap(),
-        _buttons(latest),
+        _buttons(latest, superseded),
       ],
     );
   }
 
-  List<Widget> _progress() {
+  /// 다시 고치는 요청이 이렇게 끝나면 앞 요청의 변경을 다시 쓸 수 있다.
+  static const _fixEnded = {ThinkCodeStatus.failed, ThinkCodeStatus.cancelled, ThinkCodeStatus.needsReview};
+
+  ThinkNotice _readyNotice(ThinkCodeRound? latest, ThinkCodeRequest? fix) {
+    final v = latest?.verification;
+    final db = latest?.touchesMigrations == true ? ' DB 함수 파일은 적용해도 운영 DB에 반영되지 않습니다. 반영은 따로 승인합니다.' : '';
+    if (fix != null) {
+      return ThinkNotice(
+        text: '자동 검사에 실패해 Think가 Cursor에게 다시 고치게 했습니다(${fix.fixAttempt}회째). 이 카드 대신 새 카드의 결과를 보세요.',
+        icon: Icons.replay,
+        color: kThinkLink,
+      );
+    }
+    if (v == null || v.items.isEmpty) {
+      return ThinkNotice(
+        text: '변경을 만들었지만 ${v == null ? '자동 검사 기록이 없습니다' : '자동 검사한 항목이 없습니다'}'
+            '${v?.note != null ? ' (${v!.note})' : ''}. '
+            '적용 전에 Think의 검토를 확인하세요. 적용 전에는 작업 폴더가 바뀌지 않습니다.$db',
+        icon: Icons.help_outline,
+        color: kThinkLink,
+      );
+    }
+    if (v.failed > 0) {
+      return ThinkNotice(
+        text: '자동 검사 ${v.failed}개가 실패했습니다. 이대로 적용하지 않는 것이 좋습니다. 이어서 고칠지 Think에게 말해 주세요.$db',
+        icon: Icons.error_outline,
+        color: kThinkError,
+      );
+    }
+    if (!v.clean) {
+      return ThinkNotice(
+        text: '변경을 만들었습니다. 자동 검사: ${thinkVerificationSummary(v)}. '
+            '미실행·원래도 실패 항목은 이번 변경이 확인되지 않은 부분입니다.$db',
+        icon: Icons.rule,
+        color: kThinkLink,
+      );
+    }
+    return ThinkNotice(
+      text: '변경을 만들고 자동 검사 ${v.passed}개를 모두 통과했습니다. 확인한 뒤 작업 폴더에 적용하세요. 적용 전에는 작업 폴더가 바뀌지 않습니다.$db',
+      icon: Icons.fact_check_outlined,
+      color: kThinkSuccess,
+    );
+  }
+
+  List<Widget> _progress(ThinkCodeRound? latest, ThinkCodeRequest? fix) {
     final worker = _c.onlineWorker != null;
     final beat = formatRelative(r.heartbeatAt ?? r.startedAt);
     final apply = r.lastApply;
@@ -738,7 +1036,7 @@ class _ThinkCodeRequestCardState extends State<ThinkCodeRequestCard> with _BusyS
           text: r.cancelRequested
               ? '취소를 요청했습니다. 작업자가 다음 신호 때 멈춥니다.'
               : _change
-                  ? 'Cursor가 격리된 작업 폴더에서 코드를 고치고 있습니다. 마지막 신호 $beat.'
+                  ? 'Cursor가 격리된 작업 폴더에서 코드를 고치고 있습니다. 다 고치면 작업자가 자동 검사까지 돌립니다. 마지막 신호 $beat.'
                   : _plan
                       ? 'Cursor가 Think의 계획을 코드에 비춰 검토하고 있습니다(읽기만 함). 마지막 신호 $beat.'
                       : 'Cursor가 저장소를 읽고 있습니다. 마지막 신호 $beat.',
@@ -760,13 +1058,7 @@ class _ThinkCodeRequestCardState extends State<ThinkCodeRequestCard> with _BusyS
       case ThinkCodeStatus.cancelled:
         notice = const ThinkNotice(text: '취소했습니다.', icon: Icons.block, color: kThinkHint);
       case ThinkCodeStatus.ready:
-        if (_change) {
-          notice = const ThinkNotice(
-            text: '변경을 만들었습니다. 아래 diff를 확인하고 적용하세요. 적용 전에는 작업 폴더가 바뀌지 않습니다.',
-            icon: Icons.fact_check_outlined,
-            color: kThinkSuccess,
-          );
-        }
+        if (_change) notice = _readyNotice(latest, fix);
       case ThinkCodeStatus.applyQueued:
         notice = ThinkNotice(
           text: '적용 대기 중입니다. 작업자가 먼저 git apply --check로 충돌을 확인합니다.${worker ? '' : ' (작업자 꺼짐)'}',
@@ -843,7 +1135,9 @@ class _ThinkCodeRequestCardState extends State<ThinkCodeRequestCard> with _BusyS
             const SizedBox(width: 8),
             Expanded(
               child: Text(
-                _plan ? 'Think가 조율을 마치고 이 대화에 정리했습니다. 조율본이 있으면 아래 카드에서 승인하세요.' : 'Think가 결과를 검토해 이 대화에 답했습니다.',
+                _plan
+                    ? 'Think가 조율을 마치고 이 대화에 정리했습니다. 정해 주실 것이 없으면 바로 수정을 맡기고, 있으면 아래 카드에서 묻습니다.'
+                    : 'Think가 결과를 검토해 이 대화에 답했습니다.',
                 style: const TextStyle(color: kThinkSub, fontSize: 12),
               ),
             ),
@@ -862,9 +1156,8 @@ class _ThinkCodeRequestCardState extends State<ThinkCodeRequestCard> with _BusyS
     return line == null ? const [] : [_gap(8), line];
   }
 
-  Widget _buttons(ThinkCodeRound? latest) {
+  Widget _buttons(ThinkCodeRound? latest, bool superseded) {
     final think = ThinkController.instance;
-    final hasDiff = latest?.diff != null;
     return Wrap(
       spacing: 8,
       runSpacing: 8,
@@ -883,9 +1176,9 @@ class _ThinkCodeRequestCardState extends State<ThinkCodeRequestCard> with _BusyS
             label: const Text('편집'),
           ),
         ],
-        if (_change && r.status.appliable && hasDiff)
+        if (_change && !superseded && r.status.appliable && latest != null && latest.patchAppliable)
           ElevatedButton.icon(
-            onPressed: busy ? null : () => _confirmApply(latest!),
+            onPressed: busy ? null : () => _confirmApply(latest),
             style: thinkPrimaryButton(),
             icon: const Icon(Icons.download_done, size: 16),
             label: Text(r.status == ThinkCodeStatus.applyFailed ? '다시 적용' : '작업 폴더에 적용'),
@@ -896,6 +1189,13 @@ class _ThinkCodeRequestCardState extends State<ThinkCodeRequestCard> with _BusyS
             style: thinkOutlineButton(),
             icon: const Icon(Icons.undo, size: 16),
             label: Text(r.status == ThinkCodeStatus.revertFailed ? '다시 되돌리기' : '되돌리기'),
+          ),
+        if (_change && _retryable.contains(r.status))
+          OutlinedButton.icon(
+            onPressed: busy ? null : _confirmRetry,
+            style: thinkOutlineButton(),
+            icon: const Icon(Icons.replay, size: 16),
+            label: const Text('같은 내용으로 다시 수정'),
           ),
         if (r.cancellable)
           OutlinedButton.icon(
@@ -947,15 +1247,27 @@ class _ThinkCodeRequestCardState extends State<ThinkCodeRequestCard> with _BusyS
     final stats = round.diffStats;
     final names = files.take(20).map((f) => '· ${f.path}').join('\n');
     final more = files.length > 20 ? '\n· 외 ${files.length - 20}개' : '';
+    final v = round.verification;
+    final warnings = [
+      if (v == null || v.items.isEmpty) '· ${v == null ? '자동 검사 기록이 없습니다' : '자동 검사한 항목이 없습니다'}. 이 변경은 검사로 확인되지 않았습니다.',
+      if (v != null && v.failed > 0) '· 자동 검사 ${v.failed}개가 실패했습니다. 이대로 적용하면 앱이나 서버가 깨질 수 있습니다.',
+      if (v != null && v.skipped > 0) '· 미실행 검사 ${v.skipped}개는 확인되지 않았습니다(통과가 아닙니다).',
+      if (v != null && v.preexisting > 0) '· 원래도 실패하던 검사 ${v.preexisting}개는 이번 변경을 확인하지 못했습니다.',
+      if (v != null && v.stopped) '· 자동 검사가 중간에 멈췄습니다.',
+      if (round.touchesMigrations) '· DB 함수 파일(supabase/migrations)은 파일만 놓이고 운영 DB에는 반영되지 않습니다. 반영은 따로 승인합니다.',
+    ];
+    final failed = v != null && v.failed > 0;
     final ok = await confirmThink(
       context,
-      title: '작업 폴더에 적용할까요?',
-      message: '파일 ${stats?.files ?? files.length}개 (+${stats?.additions ?? 0} -${stats?.deletions ?? 0})를 '
+      title: failed ? '검사에 실패한 변경입니다. 그래도 적용할까요?' : '작업 폴더에 적용할까요?',
+      message: '${warnings.isEmpty ? '' : '${warnings.join('\n')}\n\n'}'
+          '파일 ${stats?.files ?? files.length}개 (+${stats?.additions ?? 0} -${stats?.deletions ?? 0})를 '
           '이 PC의 저장소 작업 폴더에 적용합니다.\n\n$names$more\n\n'
           '· 작업자가 먼저 git apply --check로 확인하고, 통과할 때만 적용합니다.\n'
           '· 적용 직전 상태를 백업(git ref)해 두고, 이 카드의 되돌리기로 되돌릴 수 있습니다.\n'
           '· 커밋이나 스테이징은 하지 않습니다.',
-      confirmLabel: '적용',
+      confirmLabel: failed ? '그래도 적용' : '적용',
+      destructive: failed,
     );
     if (ok) await run(() => _c.applyChange(r), done: '적용을 맡겼습니다. 결과는 이 카드에 표시됩니다.');
   }
@@ -969,6 +1281,20 @@ class _ThinkCodeRequestCardState extends State<ThinkCodeRequestCard> with _BusyS
       confirmLabel: '되돌리기',
     );
     if (ok) await run(() => _c.revertChange(r), done: '되돌리기를 맡겼습니다.');
+  }
+
+  static const _retryable = {ThinkCodeStatus.needsReview, ThinkCodeStatus.failed, ThinkCodeStatus.cancelled};
+
+  Future<void> _confirmRetry() async {
+    final ok = await confirmThink(
+      context,
+      title: '같은 내용으로 다시 수정할까요?',
+      message: '이 요청과 같은 지시로 새 수정 요청을 보냅니다. 하루 요청 1건을 씁니다.\n\n'
+          '· 새 복사본에서 처음부터 다시 고칩니다. 이 카드의 diff는 그대로 남습니다.\n'
+          '· 결과는 새 카드로 올라오고, 적용은 그 카드에서 승인합니다.',
+      confirmLabel: '다시 수정',
+    );
+    if (ok) await run(() => _c.retryChange(r), done: '다시 보냈습니다. 작업자가 켜져 있으면 곧 시작합니다.');
   }
 
   Future<void> _confirmCancel() async {
@@ -1074,6 +1400,8 @@ class _ThinkCodeProposalDialogState extends State<ThinkCodeProposalDialog> {
         focusPaths: ThinkCodeSpec.lines(_paths.text),
         constraints: ThinkCodeSpec.lines(_constraints.text),
         doNot: ThinkCodeSpec.lines(_doNot.text),
+        effort: widget.spec.effort,
+        effortReason: widget.spec.effortReason,
       ),
     ));
   }

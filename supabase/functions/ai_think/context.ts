@@ -1,17 +1,40 @@
 // Think 대화의 컨텍스트 조립. AI에 들어가는 내용은 여기서만 정한다.
 //   지시문: 역할 + 교육철학(identity) + 원칙(principle) + 최근 결정 요약
-//   입력:   지난 대화(글자 수 예산 안에서 최신순) → 이 대화의 작업 상태 → 관련 기억 메모 → 이번 질문(+첨부)
+//   입력:   (나눠 온 대화면 요약) → 지난 대화(글자 수 예산 안에서 최신순) → 이 대화의 작업 상태 → 실행 환경 기능 상태
+//           → 관련 기억 메모 → 이번 질문(+첨부)
 
 import { extractSearchTerms } from '../_shared/ai/search_terms.ts';
 import type { AiContentPart, AiInputItem } from '../_shared/ai/types.ts';
 import type { MemoryRef } from './actions.ts';
-import { clip, kstDate, relevantMemoriesNote, thinkInstructions, type MemoryBlock } from './prompts.ts';
+import {
+  type ConversationAccessState,
+  type DeliveredMaterial,
+  type MemorySearchScope,
+  promptCacheKeyParts,
+  scopeMemories,
+  searchScopeFor,
+  selectLeadMemories,
+} from './access_context.ts';
+import {
+  clip,
+  kstDate,
+  linkedDocumentsNote,
+  relayQuestionLabel,
+  relevantMemoriesNote,
+  splitSummaryNote,
+  thinkInstructions,
+  type MemoryBlock,
+  type SplitSummary,
+  type ThinkRoleId,
+} from './prompts.ts';
 
 export interface MemoryRow extends MemoryBlock {
   status: string;
   tags?: string[] | null;
   sort_order?: number | null;
   version?: number | null;
+  memory_scope?: string;
+  scope_department?: string | null;
 }
 
 export interface MemoryDetail extends MemoryRow {
@@ -35,13 +58,25 @@ export interface MessageRow {
   status: string;
   attachments: AttachmentRef[];
   created_at: string;
+  /** 커서가 보낸 질문이면 cursor_ide / cursor_worker. 운영자 메시지는 비어 있다. */
+  asked_by?: string | null;
+}
+
+export interface LinkedDocumentBody {
+  id: string;
+  title: string;
+  body: string;
+  /** 글자 예산 때문에 앞부분만 넣었을 때. */
+  truncated?: boolean;
 }
 
 export interface ThinkContextStore {
   listActiveMemories(kinds: string[]): Promise<MemoryRow[]>;
-  searchMemories(terms: string[], limit: number): Promise<MemoryRow[]>;
+  /** scope는 DB 검색 단계의 범위. 생략하면 legacy(철학·공통·레거시만). */
+  searchMemories(terms: string[], limit: number, scope?: MemorySearchScope): Promise<MemoryRow[]>;
   listMessages(conversationId: string, limit: number): Promise<MessageRow[]>;
   signAttachment(path: string, expiresInSec: number): Promise<string | null>;
+  listLinkedDocumentBodies?(conversationId: string, allowedNodeIds: Set<string>): Promise<LinkedDocumentBody[]>;
 }
 
 export const CONTEXT_LIMITS = {
@@ -51,6 +86,10 @@ export const CONTEXT_LIMITS = {
   decisionChars: 400,
   relevantCount: 6,
   relevantChars: 1200,
+  documentBodyChars: 12000,
+  documentBodyTotalChars: 24000,
+  leadDecisionCount: 12,
+  leadPrincipleCount: 30,
   historyMessages: 40,
   historyChars: 60000,
   messageChars: 8000,
@@ -65,7 +104,32 @@ export interface BuildContextInput {
   scope?: { type: string; id?: string | null } | null;
   /** 이 대화의 제안·코드 요청 상태 요약. 앞쪽이 그대로라 프롬프트 캐시가 유지된다. */
   workNote?: string | null;
+  /** 서버가 이번 요청에서 계산한 기능 상태(featureStatusNote). */
+  featureNote?: string | null;
+  /** 나눠 온 대화의 요약. 사용자 메시지 자리에 참고 자료로 넣는다. */
+  splitSummary?: SplitSummary | null;
+  access?: ConversationAccessState | null;
+  thinkRole?: ThinkRoleId;
   now?: Date;
+}
+
+function textList(v: unknown): string[] {
+  return Array.isArray(v) ? v.map((x) => (typeof x === 'string' ? x.trim() : '')).filter(Boolean) : [];
+}
+
+/** ai_conversations.split_summary(jsonb). 목적이 비었으면 요약이 없는 것으로 본다. */
+export function normalizeSplitSummary(raw: unknown): SplitSummary | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  const text = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+  const summary = {
+    purpose: text(r.purpose),
+    background: text(r.background),
+    decided: textList(r.decided),
+    open: textList(r.open),
+    next: textList(r.next),
+  };
+  return summary.purpose ? summary : null;
 }
 
 export interface BuiltContext {
@@ -79,6 +143,10 @@ export interface BuiltContext {
   historyDropped: number;
   /** 코드 요청에 함께 보낼 원칙·결정(최대 8개). */
   memoryRefs: MemoryRef[];
+  /** 모델 입력·도구 응답으로 실제 전달된 자료(스냅샷용). */
+  deliveredMaterials: DeliveredMaterial[];
+  linkedDocumentIds: string[];
+  cacheKeySuffix: string | null;
 }
 
 export function isImageMime(mime: string): boolean {
@@ -112,24 +180,62 @@ function byUpdatedDesc(a: MemoryRow, b: MemoryRow): number {
 
 export async function buildThinkContext(store: ThinkContextStore, input: BuildContextInput): Promise<BuiltContext> {
   const L = CONTEXT_LIMITS;
-  const [memories, history] = await Promise.all([
-    store.listActiveMemories(['identity', 'principle', 'decision']),
+  const access = input.access ?? null;
+  const rolesReady = access?.rolesFeatureReady === true;
+  const thinkRole = input.thinkRole ?? access?.thinkRoleId ?? 'lead';
+
+  const [rawMemories, history] = await Promise.all([
+    store.listActiveMemories(['identity', 'principle', 'decision', 'note']),
     input.conversationId ? store.listMessages(input.conversationId, L.historyMessages) : Promise.resolve([]),
   ]);
+  const memories = scopeMemories(rawMemories, access);
 
-  const identity = memories.filter((m) => m.kind === 'identity');
-  const principles = memories.filter((m) => m.kind === 'principle');
-  const decisions = memories.filter((m) => m.kind === 'decision').sort(byUpdatedDesc).slice(0, L.decisionCount);
+  let identity = memories.filter((m) => m.kind === 'identity');
+  let principles = memories.filter((m) => m.kind === 'principle');
+  let decisions = memories.filter((m) => m.kind === 'decision').sort(byUpdatedDesc);
+  if (thinkRole === 'lead' && rolesReady) {
+    const picked = selectLeadMemories(memories, { maxDecisions: L.leadDecisionCount, maxPrinciples: L.leadPrincipleCount });
+    identity = picked.filter((m) => m.kind === 'identity');
+    principles = picked.filter((m) => m.kind === 'principle');
+    decisions = picked.filter((m) => m.kind === 'decision');
+  }
+  decisions = decisions.slice(0, L.decisionCount);
 
-  const fullyIncluded = new Set([...identity, ...principles].map((m) => m.id));
+  const fullyIncluded = new Set([...identity, ...principles, ...decisions].map((m) => m.id));
   const terms = extractSearchTerms(input.userMessage);
   let relevant: MemoryRow[] = [];
   if (terms.length > 0) {
     try {
-      const hits = await store.searchMemories(terms, L.relevantCount + fullyIncluded.size);
-      relevant = hits.filter((m) => !fullyIncluded.has(m.id)).slice(0, L.relevantCount);
+      const hits = await store.searchMemories(terms, L.relevantCount + fullyIncluded.size, searchScopeFor(access));
+      relevant = scopeMemories(hits, access).filter((m) => !fullyIncluded.has(m.id)).slice(0, L.relevantCount);
     } catch {
       relevant = [];
+    }
+  }
+
+  const deliveredMaterials: DeliveredMaterial[] = [];
+  for (const m of [...identity, ...principles, ...decisions, ...relevant]) {
+    deliveredMaterials.push({ kind: 'memory', id: m.id, title: m.title, delivered: true });
+  }
+
+  let linkedDocs: LinkedDocumentBody[] = [];
+  if (input.conversationId && access && store.listLinkedDocumentBodies && access.linkedDocumentNodeIds.size > 0) {
+    const fetched = await store.listLinkedDocumentBodies(input.conversationId, access.linkedDocumentNodeIds);
+    let remaining = L.documentBodyTotalChars;
+    for (const d of fetched) {
+      if (!access.linkedDocumentNodeIds.has(d.id)) continue;
+      const take = Math.min(d.body.length, L.documentBodyChars, remaining);
+      if (take <= 0) break;
+      remaining -= take;
+      linkedDocs.push({ ...d, body: d.body.slice(0, take), truncated: take < d.body.length });
+      deliveredMaterials.push({
+        kind: 'document',
+        id: d.id,
+        title: d.title,
+        delivered: true,
+        excerpt_chars: take,
+        ...(take < d.body.length ? { truncated: true } : {}),
+      });
     }
   }
 
@@ -140,6 +246,8 @@ export async function buildThinkContext(store: ThinkContextStore, input: BuildCo
     scope: input.scope,
     today: kstDate(input.now),
     limits: L,
+    thinkRole,
+    rolesFeatureReady: rolesReady,
   });
 
   // 지난 대화: 최신부터 글자 수 예산이 찰 때까지
@@ -163,6 +271,9 @@ export async function buildThinkContext(store: ThinkContextStore, input: BuildCo
   }
 
   const items: AiInputItem[] = [];
+  if (input.splitSummary) {
+    items.push({ kind: 'message', role: 'user', parts: [{ type: 'text', text: splitSummaryNote(input.splitSummary) }] });
+  }
   for (const m of picked) {
     const text = clip(m.content, L.messageChars);
     if (m.role === 'assistant') {
@@ -170,7 +281,7 @@ export async function buildThinkContext(store: ThinkContextStore, input: BuildCo
       continue;
     }
     const parts: AiContentPart[] = [];
-    if (text) parts.push({ type: 'text', text });
+    if (text) parts.push({ type: 'text', text: m.asked_by ? `${relayQuestionLabel(m.asked_by)}\n${text}` : text });
     if (m.attachments.length > 0) {
       if (replayIds.has(m.id)) {
         const { parts: files, failed } = await attachmentParts(store, m.attachments);
@@ -184,6 +295,13 @@ export async function buildThinkContext(store: ThinkContextStore, input: BuildCo
   }
 
   if (input.workNote) items.push({ kind: 'context', text: input.workNote });
+  if (input.featureNote) items.push({ kind: 'context', text: input.featureNote });
+  if (linkedDocs.length > 0) {
+    items.push({
+      kind: 'context',
+      text: linkedDocumentsNote(linkedDocs),
+    });
+  }
   if (relevant.length > 0) items.push({ kind: 'context', text: relevantMemoriesNote(relevant, L.relevantChars) });
 
   const current: AiContentPart[] = [];
@@ -212,5 +330,8 @@ export async function buildThinkContext(store: ThinkContextStore, input: BuildCo
       version: m.version ?? null,
       content: clip(m.content, 300),
     })),
+    deliveredMaterials,
+    linkedDocumentIds: linkedDocs.map((d) => d.id),
+    cacheKeySuffix: await promptCacheKeyParts(access, linkedDocs.map((d) => d.id)),
   };
 }

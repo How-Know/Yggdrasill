@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../services/think/think_api.dart';
 import '../../services/think/think_controller.dart';
 import '../../services/think/think_models.dart';
+import 'think_memory_scope_picker.dart';
 import 'think_style.dart';
 
 /// 대화를 결정 초안으로 정리한다. AI는 초안만 만들고, 저장 여부와 상태는 사람이 정한다.
@@ -36,6 +37,8 @@ class _ThinkDecisionDialogState extends State<ThinkDecisionDialog> {
   String? _error;
   ThinkDecisionDraft? _draft;
   String? _replacesId;
+  ThinkMemoryScope _scope = ThinkMemoryScope.common;
+  ThinkDepartmentId? _department;
 
   ThinkController get _c => ThinkController.instance;
 
@@ -98,6 +101,8 @@ class _ThinkDecisionDialogState extends State<ThinkDecisionDialog> {
         tags: _tags.text.split(RegExp(r'[,，]')),
         sourceConversationId: widget.conversationId,
         supersedesId: _replacesId,
+        memoryScope: _scope,
+        scopeDepartment: _department,
       );
       final saved = await _c.saveMemory(draft);
       if (!mounted) return;
@@ -215,6 +220,21 @@ class _ThinkDecisionDialogState extends State<ThinkDecisionDialog> {
           _field(_alternatives, '검토한 대안 (한 줄에 하나)', lines: 3),
           const SizedBox(height: 12),
           _field(_tags, '태그 (쉼표로 구분)'),
+          if (_c.rolesReady) ...[
+            const SizedBox(height: 12),
+            ThinkMemoryScopePicker(
+              scope: _scope,
+              department: _department,
+              enabled: !_saving,
+              suggestedRole: _c.selectedId == widget.conversationId && _c.conversationRole != ThinkRoleId.lead
+                  ? _c.conversationRole
+                  : null,
+              onChanged: (s, d) => setState(() {
+                _scope = s;
+                _department = d;
+              }),
+            ),
+          ],
           if (activeDecisions.isNotEmpty) ...[
             const SizedBox(height: 12),
             DropdownButtonFormField<String?>(

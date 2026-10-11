@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>연습장</title>
+<style>
+  @font-face { font-family: 'PD'; font-weight: 400; src: url('file:///C:/Users/harry/Yggdrasill/apps/yggdrasill/assets/fonts/pretendard/Pretendard-Regular.otf'); }
+  @font-face { font-family: 'PD'; font-weight: 600; src: url('file:///C:/Users/harry/Yggdrasill/apps/yggdrasill/assets/fonts/pretendard/Pretendard-SemiBold.otf'); }
+  @font-face { font-family: 'PD'; font-weight: 700; src: url('file:///C:/Users/harry/Yggdrasill/apps/yggdrasill/assets/fonts/pretendard/Pretendard-Bold.otf'); }
+
+  @page { size: A4; margin: 0; }
+  html, body { margin: 0; background: #fff; }
+  body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .page { width: 210mm; height: 297mm; overflow: hidden; break-after: page; }
+  .page:last-child { break-after: auto; }
+  svg { display: block; width: 210mm; height: 297mm; }
+  svg text { font-family: 'PD', 'Malgun Gothic', sans-serif; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+  // 단위는 모두 mm. 1pt = 0.3528mm.
+  const W = 210, H = 297, M = 6;
+  const PT = 0.3528;
+  const FOOT = 6.2;
+  const C = {
+    ink: '#1d1d1f',
+    frame: '#3a3a3c',
+    divider: '#a1a1a6',
+    rule: '#cfcfd4',
+    tick: '#b8b8bd',
+    label: '#8e8e93',
+    field: '#aeaeb2',
+  };
+  const x0 = M, x1 = W - M, mid = W / 2;
+  const frameBottom = H - M - FOOT;
+
+  const cv = document.createElement('canvas').getContext('2d');
+  /// 글자 폭(mm). size 는 pt, spacing 은 글자당 추가 간격(mm).
+  const measure = (s, size, weight = 400, spacing = 0) => {
+    cv.font = `${weight} 100px PD`;
+    return cv.measureText(s).width / 100 * size * PT + spacing * s.length;
+  };
+
+  const el = (tag, attrs, text) => {
+    const a = Object.entries(attrs).map(([k, v]) => `${k}="${v}"`).join(' ');
+    return text == null ? `<${tag} ${a}/>` : `<${tag} ${a}>${text}</${tag}>`;
+  };
+  const line = (xa, ya, xb, yb, stroke, w) =>
+    el('line', { x1: xa, y1: ya, x2: xb, y2: yb, stroke, 'stroke-width': w * PT, 'stroke-linecap': 'butt' });
+  const text = (x, y, s, size, fill, opt = {}) =>
+    el('text', {
+      x, y, 'font-size': size * PT, fill,
+      'font-weight': opt.weight || 400,
+      'letter-spacing': opt.spacing || 0,
+      'text-anchor': opt.anchor || 'start',
+    }, s);
+
+  function frame(top) {
+    return el('rect', {
+      x: x0, y: top, width: x1 - x0, height: frameBottom - top, rx: 2.2,
+      fill: 'none', stroke: C.frame, 'stroke-width': 0.7 * PT,
+    });
+  }
+
+  /// 프레임 바깥 여백에 놓는 작은 맞춤 눈금: 세로 가운데와 단 구분선 위아래.
+  function registerTicks(top) {
+    const ym = (top + frameBottom) / 2;
+    return [
+      line(x0 - 2.4, ym, x0 - 0.9, ym, C.tick, 0.45),
+      line(x1 + 0.9, ym, x1 + 2.4, ym, C.tick, 0.45),
+      line(mid, top - 2.2, mid, top - 0.8, C.tick, 0.45),
+      line(mid, frameBottom + 0.8, mid, frameBottom + 2.0, C.tick, 0.45),
+    ].join('');
+  }
+
+  function ruled(top, rows) {
+    const h = (frameBottom - top) / rows;
+    let s = '';
+    for (let i = 1; i < rows; i++) {
+      const y = top + h * i;
+      s += line(x0, y, x1, y, C.rule, 0.4);
+    }
+    s += line(mid, top, mid, frameBottom, C.divider, 0.45);
+    return s;
+  }
+
+  /// 무지 페이지: 줄 대신 줄 위치마다 가장자리와 단 구분선 양옆에 짧은 눈금만 둔다.
+  function blankMarks(top, rows) {
+    const h = (frameBottom - top) / rows;
+    const len = 1.5;
+    let s = '';
+    for (let i = 1; i < rows; i++) {
+      const y = top + h * i;
+      s += line(x0, y, x0 + len, y, C.tick, 0.4);
+      s += line(x1 - len, y, x1, y, C.tick, 0.4);
+      s += line(mid - len, y, mid, y, C.tick, 0.4);
+      s += line(mid, y, mid + len, y, C.tick, 0.4);
+    }
+    s += line(mid, top, mid, frameBottom, C.divider, 0.45);
+    return s;
+  }
+
+  function logo() {
+    const base = H - M - 1.25;
+    const word = '정현 수학';
+    const size = 7.4;
+    const em = size * PT;
+    const wordW = measure(word, size, 600, em * 0.06) - em * 0.06;
+    const markS = 3.1;
+    const markX = x1 - wordW - 1.6 - markS;
+    const markY = base - markS + 0.35;
+    return [
+      el('rect', { x: markX, y: markY, width: markS, height: markS, rx: 0.55,
+        fill: 'none', stroke: C.ink, 'stroke-width': 0.55 * PT }),
+      el('circle', { cx: markX + 0.78, cy: markY + 0.78, r: 0.24, fill: C.ink }),
+      text(markX + markS / 2 + 0.12, base - 0.42, 'J', 6.2, C.ink, { weight: 700, anchor: 'middle' }),
+      text(x1, base, word, size, C.ink, { weight: 600, spacing: em * 0.06, anchor: 'end' }),
+    ].join('');
+  }
+
+  /// 아래 여백 왼쪽: No. 와 날짜 칸.
+  function footFields() {
+    const base = H - M - 1.25;
+    const size = 6.8;
+    let s = '';
+    let x = x0 + 0.2;
+    const field = (label, w) => {
+      const spacing = size * PT * 0.04;
+      s += text(x, base, label, size, C.label, { spacing });
+      const lx = x + measure(label, size, 400, spacing) + 1.2;
+      s += line(lx, base + 0.7, lx + w, base + 0.7, C.field, 0.4);
+      x = lx + w + 5;
+    };
+    field('No.', 14);
+    field('날짜', 24);
+    return s;
+  }
+
+  /// 서술형 머리: 왼쪽 제목, 오른쪽 밑줄 칸(교재·날짜·이름).
+  function essayHeader(top) {
+    const base = top - 4.6;
+    let s = text(x0 - 0.3, base + 0.2, '서술형', 19, C.ink, { weight: 700, spacing: -0.4 });
+    const size = 7.6;
+    const fields = [['교재', 40], ['날짜', 24], ['이름', 26]];
+    let x = x1;
+    for (let i = fields.length - 1; i >= 0; i--) {
+      const [label, w] = fields[i];
+      const lineStart = x - w;
+      s += line(lineStart, base + 0.9, x, base + 0.9, C.field, 0.45);
+      s += text(lineStart - 1.8, base, label, size, C.label, { anchor: 'end', spacing: size * PT * 0.04 });
+      x = lineStart - 1.8 - measure(label, size, 400, size * PT * 0.04) - 6.5;
+    }
+    return s;
+  }
+
+  function page(body) {
+    return `<div class="page"><svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">${body}</svg></div>`;
+  }
+
+  const top1 = M;
+  const essayTop = M + 15;
+  Promise.all(['400', '600', '700'].map((w) => document.fonts.load(`${w} 10px PD`, '정현수학서술형교재날짜이름No.J')))
+    .then(() => {
+      document.getElementById('root').innerHTML = [
+        page(ruled(top1, 22) + frame(top1) + registerTicks(top1) + footFields() + logo()),
+        page(blankMarks(top1, 22) + frame(top1) + registerTicks(top1) + footFields() + logo()),
+        page(essayHeader(essayTop) + ruled(essayTop, 20) + frame(essayTop) + registerTicks(essayTop) + logo()),
+      ].join('');
+    });
+</script>
+</body>
+</html>

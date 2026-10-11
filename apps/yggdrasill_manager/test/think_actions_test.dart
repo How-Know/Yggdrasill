@@ -97,6 +97,39 @@ final _changeRound = {
   },
 };
 
+const _passedOnly = [
+  {'id': 'flutter-analyze:yggdrasill', 'label': 'yggdrasill 정적 검사', 'status': 'passed', 'duration_ms': 4000},
+  {'id': 'node-test:code_bridge', 'label': '작업자 시험', 'status': 'passed', 'duration_ms': 2000},
+];
+
+const _withFailure = [
+  {'id': 'flutter-analyze:yggdrasill', 'label': 'yggdrasill 정적 검사', 'status': 'passed'},
+  {
+    'id': 'flutter-test:yggdrasill',
+    'label': 'yggdrasill 시험',
+    'status': 'failed',
+    'command': 'flutter test --no-pub',
+    'output': '1 test failed',
+  },
+];
+
+const _migrationDiff = 'diff --git a/supabase/migrations/20261008000000_ai_x.sql '
+    'b/supabase/migrations/20261008000000_ai_x.sql\n'
+    'new file mode 100644\n'
+    '--- /dev/null\n'
+    '+++ b/supabase/migrations/20261008000000_ai_x.sql\n'
+    '@@ -0,0 +1 @@\n'
+    '+select 1;\n';
+
+Map<String, dynamic> _verifiedRound(List<Map<String, Object>> items, {bool migration = false}) => {
+      ..._changeRound,
+      'result': {
+        ...(_changeRound['result'] as Map<String, dynamic>),
+        if (migration) 'diff': '$_diff$_migrationDiff',
+        'verification': {'version': 1, 'stopped': false, 'items': items},
+      },
+    };
+
 Widget _host(Widget child, {double width = 900}) => MaterialApp(
       home: Scaffold(
         body: Align(
@@ -168,6 +201,34 @@ void main() {
       expect(round.diffStats!.files, 4);
       expect(round.diffStats!.list.last.binary, isTrue);
       expect(round.result!.checks, ['flutter analyze lib/a.dart']);
+      expect(round.verification, isNull);
+      expect(round.touchesMigrations, isFalse);
+    });
+
+    test('자동 검사: 모르는 상태는 미실행, 실패·미실행·멈춤이 있으면 깨끗하지 않다', () {
+      final v = ThinkVerification.fromJson({
+        'stopped': false,
+        'items': [
+          {'id': 'a', 'status': 'passed'},
+          {'id': 'b', 'label': '시험', 'status': 'weird'},
+          {'id': 'c', 'status': 'preexisting', 'duration_ms': 1200},
+        ],
+      })!;
+      expect(v.items[0].label, 'a');
+      expect(v.items[1].status, ThinkCheckStatus.skipped);
+      expect([v.passed, v.failed, v.skipped, v.preexisting], [1, 0, 1, 1]);
+      expect(v.clean, isFalse);
+      expect(
+          ThinkVerification.fromJson({
+            'items': [
+              {'id': 'a', 'status': 'passed'}
+            ]
+          })!
+              .clean,
+          isTrue);
+      expect(ThinkVerification.fromJson({'stopped': true, 'items': const []})!.clean, isFalse);
+      expect(ThinkVerification.fromJson({'note': '꺼짐'}), isNull);
+      expect(ThinkCodeRound.fromRow(_verifiedRound(_withFailure, migration: true)).touchesMigrations, isTrue);
     });
 
     test('조율: 모드·상태 문구, 회차별 Think 질문, 계획 검토 결과', () {
@@ -293,13 +354,15 @@ void main() {
         'title': '옛 대화',
         'messages': 12,
         'excerpts': 2,
+        'documents': 1,
         'code_requests': 1,
         'is_current': true,
         'reason': '사용자 요청',
       }))!;
       await tester.pumpWidget(_host(ThinkActionCard(action: a)));
       expect(find.text('대화 삭제 제안'), findsOneWidget);
-      expect(find.textContaining('메시지 12개와 발췌 2개'), findsOneWidget);
+      expect(find.textContaining('발췌 2개'), findsOneWidget);
+      expect(find.textContaining('종합 문서 1개'), findsOneWidget);
       expect(find.textContaining('코드 요청 1개는 남고'), findsOneWidget);
       expect(find.textContaining('지금 보고 있는 이 대화'), findsOneWidget);
       expect(find.text('삭제는 되돌릴 수 없습니다.'), findsOneWidget);
@@ -330,15 +393,116 @@ void main() {
       expect(find.text('lib/a.dart'), findsOneWidget);
       expect(find.text('old name.dart → new name.dart'), findsOneWidget);
       expect(find.text('바이너리'), findsOneWidget);
-      expect(find.text('flutter analyze lib/a.dart'), findsOneWidget);
+      expect(find.text('사람이 확인할 점'), findsOneWidget);
+      expect(find.text('· flutter analyze lib/a.dart'), findsOneWidget);
+      expect(find.text('검증 보고'), findsNothing);
+      expect(find.textContaining('자동 검사 기록이 없습니다'), findsOneWidget);
       expect(tester.takeException(), isNull);
 
       await tester.tap(find.text('작업 폴더에 적용'));
       await tester.pumpAndSettle();
       expect(find.text('작업 폴더에 적용할까요?'), findsOneWidget);
       expect(find.textContaining('git apply --check'), findsOneWidget);
+      expect(find.textContaining('이 변경은 검사로 확인되지 않았습니다'), findsOneWidget);
       await tester.tap(find.text('취소'));
       await tester.pumpAndSettle();
+    });
+
+    testWidgets('자동 검사: 모두 통과면 초록 안내, 미실행은 통과로 세지 않는다', (tester) async {
+      final c = ThinkCodeController.instance;
+      final r = ThinkCodeRequest.fromRow(_request('ready'));
+      c.requests = [r];
+      c.setRoundsForTest('r1', [ThinkCodeRound.fromRow(_verifiedRound(_passedOnly))]);
+      await tester.pumpWidget(_host(ThinkCodeRequestCard(request: r)));
+      await tester.pump();
+      expect(find.textContaining('자동 검사 2개를 모두 통과했습니다'), findsOneWidget);
+      expect(find.text('자동 검사'), findsOneWidget);
+      expect(find.text('통과 2'), findsOneWidget);
+
+      c.setRoundsForTest('r1', [
+        ThinkCodeRound.fromRow(_verifiedRound([
+          ..._passedOnly,
+          {'id': 'deno-check', 'label': 'Edge Function 타입 검사', 'status': 'skipped', 'reason': 'deno를 찾지 못함'},
+        ]))
+      ]);
+      await tester.pumpWidget(_host(ThinkCodeRequestCard(key: const ValueKey('s'), request: r)));
+      await tester.pump();
+      expect(find.textContaining('모두 통과'), findsNothing);
+      expect(find.textContaining('통과 2 · 미실행 1'), findsWidgets);
+      expect(find.textContaining('deno를 찾지 못함'), findsOneWidget);
+      await tester.ensureVisible(find.text('작업 폴더에 적용'));
+      await tester.tap(find.text('작업 폴더에 적용'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('미실행 검사 1개는 확인되지 않았습니다'), findsOneWidget);
+      expect(find.text('적용'), findsOneWidget);
+      await tester.tap(find.text('취소'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('자동 검사 실패: 출력을 펼쳐 보이고 적용 확인 창이 경고한다', (tester) async {
+      final c = ThinkCodeController.instance;
+      final r = ThinkCodeRequest.fromRow(_request('ready'));
+      c.requests = [r];
+      c.setRoundsForTest('r1', [ThinkCodeRound.fromRow(_verifiedRound(_withFailure, migration: true))]);
+      await tester.pumpWidget(_host(ThinkCodeRequestCard(request: r)));
+      await tester.pump();
+      expect(find.textContaining('자동 검사 1개가 실패했습니다'), findsOneWidget);
+      expect(find.textContaining('운영 DB에 반영되지 않습니다'), findsOneWidget);
+      expect(find.text('1 test failed'), findsOneWidget);
+      await tester.ensureVisible(find.text('작업 폴더에 적용'));
+      await tester.tap(find.text('작업 폴더에 적용'));
+      await tester.pumpAndSettle();
+      expect(find.text('검사에 실패한 변경입니다. 그래도 적용할까요?'), findsOneWidget);
+      expect(find.textContaining('파일만 놓이고 운영 DB에는 반영되지 않습니다'), findsOneWidget);
+      expect(find.text('그래도 적용'), findsOneWidget);
+      await tester.tap(find.text('취소'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('다시 고치는 요청이 있으면 앞 카드는 적용 대신 새 카드를 가리킨다', (tester) async {
+      final c = ThinkCodeController.instance;
+      final r = ThinkCodeRequest.fromRow(_request('ready'));
+      final fix = ThinkCodeRequest.fromRow({
+        ..._request('running'),
+        'id': 'r2',
+        'request': {
+          'goal': '출석 카드에 지각 배지',
+          'instructions': ['AttendanceCard에 배지를 그린다'],
+          'fix_of': {'request_id': 'r1', 'root_id': 'r1', 'attempt': 1, 'max': 2, 'failed': []},
+        },
+      });
+      expect(fix.fixOfRequestId, 'r1');
+      expect(fix.fixAttempt, 1);
+      c.requests = [r, fix];
+      expect(c.fixFor('r1')?.id, 'r2');
+      c.setRoundsForTest('r1', [ThinkCodeRound.fromRow(_verifiedRound(_withFailure))]);
+      c.setRoundsForTest('r2', const []);
+      await tester.pumpWidget(_host(ThinkCodeRequestCard(request: r)));
+      await tester.pump();
+      expect(find.textContaining('다시 고치게 했습니다(1회째)'), findsOneWidget);
+      expect(find.text('작업 폴더에 적용'), findsNothing);
+
+      await tester.pumpWidget(_host(ThinkCodeRequestCard(key: const ValueKey('f'), request: fix)));
+      await tester.pump();
+      expect(find.text('검사 실패로 다시 고침 1회째'), findsOneWidget);
+
+      c.requests = [
+        r,
+        ThinkCodeRequest.fromRow({
+          ..._request('failed'),
+          'id': 'r2',
+          'request': {
+            'goal': 'x',
+            'fix_of': {'request_id': 'r1', 'attempt': 1},
+          },
+        }),
+      ];
+      await tester.pumpWidget(_host(ThinkCodeRequestCard(key: const ValueKey('e'), request: r)));
+      await tester.pump();
+      expect(find.text('작업 폴더에 적용'), findsOneWidget, reason: '다시 고치기가 실패하면 앞 변경을 다시 쓸 수 있다');
+      expect(tester.takeException(), isNull);
     });
 
     testWidgets('적용 실패는 충돌 파일과 백업을, 적용됨은 되돌리기를 보여 준다', (tester) async {
@@ -372,6 +536,31 @@ void main() {
       expect(find.textContaining('파일 4개'), findsWidgets);
       expect(find.text('되돌리기'), findsOneWidget);
       expect(find.text('작업 폴더에 적용'), findsNothing);
+      expect(find.text('같은 내용으로 다시 수정'), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('끝나지 못한 수정은 같은 내용으로 다시 보낼 수 있다(확인 창)', (tester) async {
+      final c = ThinkCodeController.instance;
+      c.setRoundsForTest('r1', [ThinkCodeRound.fromRow(_changeRound)]);
+      final timedOut = ThinkCodeRequest.fromRow(_request('needs_review'));
+      c.requests = [timedOut];
+      await tester.pumpWidget(_host(ThinkCodeRequestCard(request: timedOut)));
+      await tester.pump();
+      expect(find.text('작업 폴더에 적용'), findsNothing);
+      expect(find.text('같은 내용으로 다시 수정'), findsOneWidget);
+      await tester.ensureVisible(find.text('같은 내용으로 다시 수정'));
+      await tester.tap(find.text('같은 내용으로 다시 수정'));
+      await tester.pumpAndSettle();
+      expect(find.text('같은 내용으로 다시 수정할까요?'), findsOneWidget);
+      expect(find.textContaining('하루 요청 1건'), findsOneWidget);
+      await tester.tap(find.text('취소'));
+      await tester.pumpAndSettle();
+
+      final investigate = ThinkCodeRequest.fromRow(_request('failed', mode: 'investigate'));
+      await tester.pumpWidget(_host(ThinkCodeRequestCard(key: const ValueKey('i'), request: investigate)));
+      await tester.pump();
+      expect(find.text('같은 내용으로 다시 수정'), findsNothing);
       expect(tester.takeException(), isNull);
     });
 
@@ -550,6 +739,15 @@ void main() {
     expect(find.text('지각 관리'), findsOneWidget);
     expect(find.text('새 폴더 제안'), findsOneWidget);
     expect(find.text('제안'), findsNothing, reason: '앞 제안은 대체되었다');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('운영 DB 반영 패널은 migration 경로와 미확인 항목을 읽기 전용으로 표시한다', (tester) async {
+    final round = ThinkCodeRound.fromRow(_verifiedRound(_passedOnly, migration: true));
+    await tester.pumpWidget(_host(ThinkDbProductionReflectionPanel(round: round)));
+    expect(find.textContaining('운영 DB 반영 제안'), findsOneWidget);
+    expect(find.textContaining('미확인'), findsWidgets);
+    expect(find.textContaining('20261008000000_ai_x.sql'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

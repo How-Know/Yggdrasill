@@ -4,16 +4,19 @@
 //   POST { action: 'complete', worker_id, request_id, round }  → 대화에서 온 요청이면 Think 자동 검토(백그라운드)
 //   POST { action: 'fail', worker_id, request_id, code, error, retryable, round? }
 //   POST { action: 'apply_done', worker_id, request_id, ok, result }
-// DB는 ai_code_bridge_* RPC(service role 전용)로만 바꾼다.
+//   POST { action: 'ask_think', worker_id, request_id, question }  → 조사·조율 중 Think에게 묻기(회차당 3번, ai_think/relay.ts)
+// DB는 ai_code_bridge_* RPC(service role 전용)로만 바꾼다. 묻기는 ai_relay_* RPC와 Think 대화 저장 경로를 쓴다.
 // 설계: docs/architecture/ai-code-bridge.md, docs/architecture/ai-think-actions.md
 
 import { safetyIdentifier } from '../_shared/ai/auth.ts';
 import { getBudgetStatus } from '../_shared/ai/budget.ts';
+import { thinkWallClockMs } from '../_shared/ai/config.ts';
 import { createAiProvider } from '../_shared/ai/provider.ts';
 import { recordAiRun } from '../_shared/ai/usage.ts';
 import { sha256Hex } from '../_shared/hash.ts';
 import { createAdminClient } from '../_shared/supabase.ts';
-import type { SupabaseLike } from '../ai_think/store.ts';
+import { RELAY_DEFAULT_DAILY_LIMIT, runRelayAsk } from '../ai_think/relay.ts';
+import { SupabaseThinkStore, type SupabaseLike } from '../ai_think/store.ts';
 import { runCodeReview } from './code_review.ts';
 import { handleBridge } from './handler.ts';
 import { SupabaseReviewStore } from './review_store.ts';
@@ -43,6 +46,28 @@ Deno.serve((req) => {
       ),
     background: (task) => {
       if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime?.waitUntil) EdgeRuntime.waitUntil(task);
+    },
+    ask: async ({ workerId, requestId, question }) => {
+      const wallClockMs = thinkWallClockMs();
+      const limit = Number.parseInt(Deno.env.get('THINK_RELAY_DAILY_LIMIT') ?? '', 10);
+      return runRelayAsk(
+        {
+          provider: createAiProvider({ timeoutMs: wallClockMs + 5000 }),
+          store: new SupabaseThinkStore(admin as unknown as SupabaseLike),
+          recordRun: (rec) => recordAiRun(admin, rec),
+          budget: () => getBudgetStatus(admin),
+          safetyId: await safetyIdentifier('cursor_worker'),
+        },
+        {
+          asker: 'cursor_worker',
+          question,
+          conversationId: null,
+          workerId,
+          requestId,
+          dailyLimit: Number.isFinite(limit) && limit > 0 ? Math.min(limit, 1000) : RELAY_DEFAULT_DAILY_LIMIT,
+          wallClockMs,
+        },
+      );
     },
   });
 });

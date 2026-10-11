@@ -1,9 +1,12 @@
 // Think 작업 도구: 트리·대화·코드 요청 읽기 + 제안(propose_*) + 조율 시작(start_code_plan).
 // 제안 도구는 ai_actions에 "제안" 1행만 남긴다. 실행은 사용자가 카드에서 승인할 때 ai_action_apply가 한다.
-// 조율 시작만 예외로 바로 대기열에 넣는다(읽기 전용, 운영자 결정 2026-10-01). 고치는 일은 조율본 승인 뒤에만 한다.
+// 조율 시작만 예외로 바로 대기열에 넣는다(읽기 전용, 운영자 결정 2026-10-01).
+// 조율 뒤 수정·자동 검사·재수정은 결과 검토(ai_code_bridge/code_review.ts)가 이어 간다(운영자 결정 2026-10-06).
+// 대화 나누기(propose_conversation_split)는 메시지 범위를 모델에게 받지 않는다. 이번 턴의 사용자 메시지 id는 서버가 넣는다(§7).
 // 설계: docs/architecture/ai-think-actions.md
 
 import type { AiFunctionTool } from '../_shared/ai/types.ts';
+import { EFFORT_TOOL_PROPERTIES, effortReason, normalizeEffort } from '../_shared/code_effort.ts';
 import { clip } from './prompts.ts';
 import type { ToolRunResult } from './tools.ts';
 
@@ -14,7 +17,8 @@ export type ActionKind =
   | 'place_conversation'
   | 'delete_code_request'
   | 'delete_folder'
-  | 'delete_conversation';
+  | 'delete_conversation'
+  | 'split_conversation';
 
 export interface ActionRow {
   id: string;
@@ -54,6 +58,7 @@ export interface ConversationStats {
   title: string;
   messages: number;
   excerpts: number;
+  documents: number;
   code_requests: number;
 }
 
@@ -97,6 +102,14 @@ export interface ActionToolSource {
   proposeAction(conversationId: string, kind: ActionKind, payload: Record<string, unknown>, preview: Record<string, unknown>): Promise<ActionRow>;
   /** 조율 요청을 만들어 바로 보낸다. 하루 한도를 넘으면 'code_request_daily_limit'가 든 오류를 던진다. */
   startCodePlan(conversationId: string, title: string, spec: Record<string, unknown>): Promise<ActionRow>;
+  /** 나누기 제안. 범위는 DB가 startMessageId(이번 턴의 사용자 메시지)로 정한다. 거절된 대화면 'split_suppressed' 오류. */
+  proposeSplit(
+    conversationId: string,
+    startMessageId: string,
+    payload: Record<string, unknown>,
+    preview: Record<string, unknown>,
+    userRequested: boolean,
+  ): Promise<ActionRow>;
 }
 
 export interface WorkState {
@@ -104,10 +117,24 @@ export interface WorkState {
   codeRequests: CodeRequestDetail[];
 }
 
+/** 이번 턴에 나누기 도구를 쓸 수 있을 때만 채운다(기능 준비됨, 앞 대화 있음, 거절로 꺼지지 않았거나 사용자가 직접 요청). */
+export interface SplitToolContext {
+  userMessageId: string;
+  userRequested: boolean;
+  proposed: boolean;
+}
+
 export interface ActionToolContext {
   conversationId: string;
   memoryRefs: MemoryRef[];
+  split?: SplitToolContext;
+  /** get_memory·search_memories 범위 판정 */
+  access?: import('./access_context.ts').ConversationAccessState;
+  /** 도구로 AI에 전달된 자료 id 기록(스냅샷용) */
+  recordDelivered?: (ref: import('./access_context.ts').DeliveredMaterial) => void;
 }
+
+export const SPLIT_TOOL_NAME = 'propose_conversation_split';
 
 export const DELETABLE_CODE_STATUSES = [
   'draft', 'ready', 'needs_review', 'failed', 'cancelled', 'applied', 'apply_failed', 'reverted', 'revert_failed',
@@ -172,8 +199,9 @@ export const ACTION_TOOLS: AiFunctionTool[] = [
         constraints: strList('지켜야 할 조건. 없으면 null.'),
         do_not: strList('하지 말 것. 없으면 null.'),
         background: nullable({ type: 'string', description: '이 대화에서 나온 배경을 Cursor가 알아야 할 만큼만 요약. 없으면 null.' }),
+        ...EFFORT_TOOL_PROPERTIES,
       },
-      required: ['title', 'goal', 'questions', 'focus_paths', 'constraints', 'do_not', 'background'],
+      required: ['title', 'goal', 'questions', 'focus_paths', 'constraints', 'do_not', 'background', 'effort', 'effort_reason'],
       additionalProperties: false,
     },
   },
@@ -182,7 +210,8 @@ export const ACTION_TOOLS: AiFunctionTool[] = [
     description:
       '코드를 고치는 일은 바로 고치지 않고 먼저 Cursor(실무 개발자)와 조율한다. 부르면 승인 없이 바로 시작된다(읽기 전용, 하루 한도에 1건). ' +
       'Cursor가 이 계획 초안을 실제 코드에 비춰 문제·빠진 점·더 나은 방법을 검토하고, 네가 그 결과를 보고 필요하면 다시 묻는다(최대 3회). ' +
-      '끝나면 조율본이 이 대화에 카드로 올라오고, 사용자가 승인해야 그 내용으로 코드 수정이 시작된다.',
+      '끝나면 사용자에게 물을 것이 없을 때 조율본대로 바로 수정이 시작되고(하루 한도 1건 더), 자동 검사 결과까지 이 대화에 붙는다. ' +
+      '물을 것이 있으면 조율본 카드에 객관식 질문이 올라온다. 작업 폴더 적용은 사용자가 따로 승인한다.',
     parameters: {
       type: 'object',
       properties: {
@@ -195,8 +224,29 @@ export const ACTION_TOOLS: AiFunctionTool[] = [
         do_not: strList('하지 말 것. 없으면 null.'),
         background: nullable({ type: 'string', description: '이 대화에서 나온 배경과 의도를 Cursor가 알아야 할 만큼만 요약. 없으면 null.' }),
         based_on_request_id: nullable({ type: 'string', description: '근거가 된 조사 요청 id. 없으면 null.' }),
+        continue_from_request_id: nullable({
+          type: 'string',
+          description:
+            '작업 폴더에 아직 적용되지 않은 앞 코드 수정의 결과를 이어받아 고칠 때, 그 코드 수정 요청 id(전체 uuid). ' +
+            '검사 실패로 다시 고친 요청이 있으면 마지막 것을 준다. 작업자가 그 요청의 최종 패치를 지금 작업 폴더 복사본에 얹어 시작한다. ' +
+            '시간 제한으로 멈춘 수정이면 그 미완성 패치(검사 안 됨)에서 시작한다. 없으면 null.',
+        }),
+        ...EFFORT_TOOL_PROPERTIES,
       },
-      required: ['title', 'goal', 'instructions', 'questions', 'focus_paths', 'constraints', 'do_not', 'background', 'based_on_request_id'],
+      required: [
+        'title',
+        'goal',
+        'instructions',
+        'questions',
+        'focus_paths',
+        'constraints',
+        'do_not',
+        'background',
+        'based_on_request_id',
+        'continue_from_request_id',
+        'effort',
+        'effort_reason',
+      ],
       additionalProperties: false,
     },
   },
@@ -230,6 +280,42 @@ export const ACTION_TOOLS: AiFunctionTool[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: SPLIT_TOOL_NAME,
+    description:
+      '이번 질문이 지금 대화와 독립된 새 주제일 때, 새 대화로 나눠 이어가자고 제안한다. 승인되면 이번 질문과 네 답변이 새 대화로 복사되고 원본 대화는 그대로 남는다. ' +
+      '사용자가 카드에서 "나눠서 이어가기"를 눌러야 실행된다. 메시지 범위는 서버가 정한다. 질문에는 이 대화에서 끝까지 답한다.',
+    parameters: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: '새 대화 제목 (한국어 명사구, 30자 이내)' },
+        reason: { type: 'string', description: '왜 새 주제로 보는지 한 문장' },
+        folder_id: nullable({
+          type: 'string',
+          description: '새 대화를 둘 기존 폴더 id(list_tree_folders). 모르거나 맞는 폴더가 없으면 null(미분류). 새 폴더는 만들지 않는다.',
+        }),
+        summary: {
+          type: 'object',
+          description: '새 대화 맨 위에 보이고 새 대화의 참고 맥락이 되는 요약. 사실만 짧게 쓴다.',
+          properties: {
+            purpose: { type: 'string', description: '새 대화의 목적 한두 문장' },
+            background: { type: 'string', description: '앞 대화에서 이어받을 배경. 없으면 빈 문자열' },
+            decided: {
+              type: 'array',
+              items: { type: 'string' },
+              description: '사용자가 확정한 사항만. 네가 제안했지만 사용자가 받아들이지 않은 것은 넣지 않는다. 없으면 빈 배열',
+            },
+            open: { type: 'array', items: { type: 'string' }, description: '아직 정하지 않은 것(네 제안 포함). 없으면 빈 배열' },
+            next: { type: 'array', items: { type: 'string' }, description: '새 대화에서 다음에 할 일. 없으면 빈 배열' },
+          },
+          required: ['purpose', 'background', 'decided', 'open', 'next'],
+          additionalProperties: false,
+        },
+      },
+      required: ['title', 'reason', 'folder_id', 'summary'],
+      additionalProperties: false,
+    },
+  },
 ];
 
 export const ACTION_TOOL_LABELS: Record<string, string> = {
@@ -241,6 +327,7 @@ export const ACTION_TOOL_LABELS: Record<string, string> = {
   start_code_plan: 'Cursor와 조율 시작',
   propose_folder: '분류 제안',
   propose_delete: '삭제 제안',
+  [SPLIT_TOOL_NAME]: '대화 나누기 제안',
 };
 
 export const ACTION_TOOL_NAMES = new Set(ACTION_TOOLS.map((t) => t.name));
@@ -329,6 +416,8 @@ function codeSpec(args: Record<string, unknown>, ctx: ActionToolContext, plan: b
     do_not: list(args.do_not),
     background: str(args.background, 6000) ?? '',
     memory_refs: ctx.memoryRefs.slice(0, 8),
+    effort: normalizeEffort(args.effort),
+    effort_reason: effortReason(args.effort_reason),
   };
   if (plan) spec.instructions = list(args.instructions, 20, 1000);
   return spec;
@@ -345,8 +434,9 @@ function latestSummary(d: CodeRequestDetail | null): Record<string, unknown> | n
 }
 
 const PLAN_STARTED_NOTE =
-  'Cursor와 조율을 시작했다(읽기 전용). 아직 코드는 바뀌지 않았다. 조율이 끝나면 조율본이 이 대화에 카드로 올라오고, ' +
-  '사용자가 승인해야 수정이 시작된다. 답변에는 조율을 시작했고 결과는 몇 분 뒤 이 대화에 붙는다고만 짧게 알린다.';
+  'Cursor와 조율을 시작했다(읽기 전용). 아직 코드는 바뀌지 않았다. 조율이 끝나면 물을 것이 없을 때 조율본대로 바로 수정과 자동 검사가 이어지고, ' +
+  '물을 것이 있으면 조율본 카드에 질문이 올라온다. 작업 폴더 적용은 사용자가 따로 승인한다. ' +
+  '답변에는 조율을 시작했고 결과는 몇 분 뒤 이 대화에 붙는다고만 짧게 알린다.';
 
 async function proposeCode(name: string, args: Record<string, unknown>, src: ActionToolSource, ctx: ActionToolContext): Promise<ToolRunResult> {
   const plan = name === 'start_code_plan';
@@ -364,6 +454,15 @@ async function proposeCode(name: string, args: Record<string, unknown>, src: Act
     if (!base) return bad(name, 'based_on_request_not_found', '근거 요청 없음');
     const summary = latestSummary(base);
     spec.based_on = { id: base.id, title: base.title, summary: summary?.summary ?? null, proposals: summary?.proposals ?? [] };
+  }
+  if (plan && args.continue_from_request_id != null) {
+    const prevId = uuid(args.continue_from_request_id);
+    const prev = prevId ? await src.getCodeRequest(prevId) : null;
+    if (!prev) {
+      return bad(name, 'continue_from_not_found', '이어받을 요청 없음', { next: '작업 상태 메모의 전체 id(uuid)로 다시 준다. 앞 8자리만으로는 찾지 못한다.' });
+    }
+    if (prev.mode !== 'change') return bad(name, 'continue_from_not_change', '코드 수정 요청이 아님', { mode: prev.mode });
+    spec.continue_from = { request_id: prev.id, title: prev.title };
   }
   if (plan) {
     let row: ActionRow;
@@ -384,6 +483,7 @@ async function proposeCode(name: string, args: Record<string, unknown>, src: Act
     questions: (spec.questions as string[]).length,
     focus_paths: spec.focus_paths,
     mode: 'investigate',
+    effort: spec.effort,
   };
   const row = await src.proposeAction(ctx.conversationId, 'code_request', { title, spec }, preview);
   return out(name, { ok: true, action_id: row.id, status: 'proposed', note: PROPOSED_NOTE }, `"${title}" 제안`, row);
@@ -447,12 +547,87 @@ async function proposeDelete(name: string, args: Record<string, unknown>, src: A
     const s = await src.conversationStats(targetId);
     if (!s) return bad(name, 'not_found', '대화 없음');
     actionKind = 'delete_conversation';
-    preview = { title: s.title, messages: s.messages, excerpts: s.excerpts, code_requests: s.code_requests, is_current: targetId === ctx.conversationId, reason };
+    preview = {
+      title: s.title,
+      messages: s.messages,
+      excerpts: s.excerpts,
+      documents: s.documents,
+      code_requests: s.code_requests,
+      is_current: targetId === ctx.conversationId,
+      reason,
+    };
   } else {
     return missing(name, ['target_kind']);
   }
   const row = await src.proposeAction(ctx.conversationId, actionKind, { target_id: targetId }, preview);
   return out(name, { ok: true, action_id: row.id, status: 'proposed', note: PROPOSED_NOTE }, String(preview.title ?? preview.path ?? ''), row);
+}
+
+const SPLIT_PROPOSED_NOTE =
+  '나누기 제안 카드가 사용자에게 보였다. 아직 새 대화는 만들어지지 않았다. 사용자가 "나눠서 이어가기"를 눌러야 만들어지고 원본 대화는 그대로 남는다. ' +
+  '질문에는 이 대화에서 끝까지 답하고, 답변 끝에 새 대화로 나누자고 제안했다고 한 줄로 알린다.';
+
+const SPLIT_ERRORS: [code: string, summary: string, next: string][] = [
+  ['split_suppressed', '자동 제안 꺼짐', '사용자가 이 대화에서 나누기 제안을 거절했다. 다시 제안하지 않고 답변만 한다.'],
+  ['split_expired', '범위 만료', '대화가 이어져 이번 문답으로 나눌 수 없다. 제안하지 않고 답변만 한다.'],
+  ['split_nothing_before', '앞 대화 없음', '이 대화의 첫 문답이라 나눌 필요가 없다. 답변만 한다.'],
+  ['split_range_invalid', '범위 확인 실패', '제안하지 않고 답변만 한다.'],
+  ['tree_folder_not_found', '폴더 없음', 'list_tree_folders로 id를 다시 확인하거나 folder_id를 null(미분류)로 준다.'],
+];
+
+async function proposeSplit(name: string, args: Record<string, unknown>, src: ActionToolSource, ctx: ActionToolContext): Promise<ToolRunResult> {
+  const split = ctx.split;
+  if (!split) {
+    return bad(name, 'split_unavailable', '지금은 나눌 수 없음', { next: '실행 환경 기능 상태 메모를 따른다. 제안하지 않고 답변만 한다.' });
+  }
+  if (split.proposed) return bad(name, 'split_already_proposed', '이미 제안함', { next: '한 답변에 나누기 제안은 하나만 한다.' });
+  const title = str(args.title, 120);
+  const raw = args.summary && typeof args.summary === 'object' && !Array.isArray(args.summary) ? (args.summary as Record<string, unknown>) : {};
+  const summary = {
+    purpose: str(raw.purpose, 2000) ?? '',
+    background: str(raw.background, 4000) ?? '',
+    decided: list(raw.decided),
+    open: list(raw.open),
+    next: list(raw.next),
+  };
+  const need: string[] = [];
+  if (!title) need.push('title');
+  if (!summary.purpose) need.push('summary.purpose');
+  if (need.length > 0) {
+    return bad(name, 'missing_fields', `정보 부족: ${need.join(', ')}`, {
+      missing: need,
+      next: '채워서 다시 제안하거나, 새 주제인지 확신이 없으면 제안하지 않는다.',
+    });
+  }
+
+  let folderId: string | null = null;
+  let folderPath: string | null = null;
+  if (args.folder_id != null) {
+    folderId = uuid(args.folder_id);
+    const paths = folderPaths((await src.listTreeFolders()).folders);
+    if (!folderId || !paths.has(folderId)) {
+      return bad(name, 'folder_not_found', '폴더 없음', { next: 'list_tree_folders로 id를 다시 확인하거나, 맞는 폴더가 없으면 folder_id를 null(미분류)로 준다.' });
+    }
+    folderPath = paths.get(folderId)!;
+  }
+  const reason = str(args.reason, 500) ?? '';
+  let row: ActionRow;
+  try {
+    row = await src.proposeSplit(
+      ctx.conversationId,
+      split.userMessageId,
+      { title, reason, summary, folder_id: folderId },
+      { folder_path: folderPath, reason },
+      split.userRequested,
+    );
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    const known = SPLIT_ERRORS.find(([code]) => message.includes(code));
+    if (known) return bad(name, known[0], known[1], { next: known[2] });
+    throw e;
+  }
+  split.proposed = true;
+  return out(name, { ok: true, action_id: row.id, status: 'proposed', note: SPLIT_PROPOSED_NOTE }, `"${title}"`, row);
 }
 
 export async function dispatchActionTool(
@@ -517,6 +692,8 @@ export async function dispatchActionTool(
       return await proposeFolder(name, args, src, ctx);
     case 'propose_delete':
       return await proposeDelete(name, args, src, ctx);
+    case SPLIT_TOOL_NAME:
+      return await proposeSplit(name, args, src, ctx);
     default:
       return bad(name, 'unknown_tool', '알 수 없는 도구');
   }
@@ -534,6 +711,7 @@ const KIND_LABELS: Record<string, string> = {
   delete_code_request: '코드 요청 삭제 제안',
   delete_folder: '폴더 삭제 제안',
   delete_conversation: '대화 삭제 제안',
+  split_conversation: '대화 나누기 제안',
 };
 
 const ACTION_STATUS_LABELS: Record<string, string> = {
@@ -542,6 +720,7 @@ const ACTION_STATUS_LABELS: Record<string, string> = {
   rejected: '사용자가 거절함',
   failed: '실행 실패',
   undone: '사용자가 되돌림',
+  expired: '대화가 이어져 만료됨',
 };
 
 export const CODE_STATUS_LABELS: Record<string, string> = {
@@ -567,8 +746,20 @@ function actionLine(a: ActionRow): string {
   const p = a.preview ?? {};
   const what = String(p.path ?? p.title ?? '');
   const label = a.superseded ? '새 제안으로 대체됨' : ACTION_STATUS_LABELS[a.status] ?? a.status;
-  const extra = a.status === 'failed' && a.error ? ` (${clip(a.error, 120)})` : '';
+  let extra = a.status === 'failed' && a.error ? ` (${clip(a.error, 120)})` : '';
+  if (a.kind === 'split_conversation' && a.status === 'applied') extra = ' (새 대화로 나눔. 이 대화는 그대로 남아 있다)';
   return `- ${KIND_LABELS[a.kind] ?? a.kind}${what ? ` "${clip(what, 80)}"` : ''}: ${label}${extra}`;
+}
+
+/** 수정 결과의 자동 검사 요약. 미실행은 통과로 세지 않는다. */
+export function verificationLine(v: unknown): string {
+  const items = v && typeof v === 'object' && Array.isArray((v as Record<string, unknown>).items)
+    ? ((v as Record<string, unknown>).items as unknown[])
+    : null;
+  if (!items) return '자동 검사: 기록 없음';
+  const n = (s: string) => items.filter((i) => i && typeof i === 'object' && (i as Record<string, unknown>).status === s).length;
+  const known = n('passed') + n('failed') + n('preexisting');
+  return `자동 검사: 통과 ${n('passed')} · 실패 ${n('failed')} · 미실행 ${items.length - known} · 원래도 실패 ${n('preexisting')}`;
 }
 
 function codeLine(r: CodeRequestDetail): string {
@@ -577,10 +768,22 @@ function codeLine(r: CodeRequestDetail): string {
   if (r.mode === 'plan' && r.round > 0) parts.push(`${r.round}/${r.max_rounds}회`);
   const res = r.latest?.result;
   if (res && typeof res.summary === 'string') parts.push(`결론: ${clip(res.summary, 200)}`);
+  const stopped = res?.partial === 'timeout' ||
+    (typeof res?.summary === 'string' && res.summary.startsWith('30분 안에 끝나지 않아 멈췄습니다'));
+  if (r.mode === 'change' && r.status === 'needs_review' && stopped) {
+    parts.push('시간 제한으로 멈춘 미완성 패치(검사 안 됨, 이어받기만 가능)');
+  }
   if (res && r.mode === 'change' && res.diff_stats && typeof res.diff_stats === 'object') {
     const s = res.diff_stats as Record<string, unknown>;
     parts.push(`변경: 파일 ${s.files ?? '?'}개 +${s.additions ?? '?'} -${s.deletions ?? '?'}`);
+    parts.push(verificationLine(res.verification));
   }
+  const fix = r.request && typeof r.request.fix_of === 'object' && r.request.fix_of ? (r.request.fix_of as Record<string, unknown>) : null;
+  if (r.mode === 'change' && fix) parts.push(`검사 실패로 다시 고친 ${fix.attempt ?? '?'}번째 요청(앞 요청 id: ${fix.request_id ?? '?'})`);
+  const from = r.request && typeof r.request.continue_from === 'object' && r.request.continue_from
+    ? (r.request.continue_from as Record<string, unknown>)
+    : null;
+  if (from) parts.push(`앞 수정 ${from.request_id ?? '?'}의 최종 패치를 이어받음`);
   if (r.last_error && ['failed', 'apply_failed', 'revert_failed'].includes(r.status)) parts.push(`오류: ${clip(r.last_error, 150)}`);
   if (r.review_status === 'done') parts.push('검토 답변이 대화에 붙음');
   return parts.join(' / ');

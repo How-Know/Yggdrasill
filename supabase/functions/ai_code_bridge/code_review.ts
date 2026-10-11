@@ -1,18 +1,25 @@
 // 코드 조사·조율·수정 결과가 도착하면 Think가 검토해 같은 대화에 답을 붙인다.
-// 조사·조율 모드는 결과로 풀리지 않는 점이 있으면 다음 회차 질문을 보낸다(max_rounds까지).
-// 조율 모드는 끝나면 조율본을 수정 제안(code_change)으로 올린다. 실행은 운영자 승인 뒤에만 한다.
+// Think는 운영자 아래에서 Cursor 작업을 이끈다(운영자 결정 2026-10-06). 운영자는 작업 폴더 적용과 운영 DB 반영만 승인한다.
+// - 조사·조율: 결과로 풀리지 않는 점이 있으면 다음 회차 질문을 보낸다(max_rounds까지).
+// - 조율이 끝나면: 운영자에게 물을 것이 없으면 조율본대로 바로 수정을 맡기고, 있으면 조율본 카드에 질문을 올린다.
+// - 수정이 끝나면: 작업자 자동 검사 결과를 보고, 이번 수정 때문에 실패한 검사가 있으면 최대 2회 다시 고치게 한다.
 // 작업자 응답과 별개로 백그라운드(waitUntil)에서 돈다. 실패해도 요청 상태는 그대로이고 review_status만 남긴다.
-// 설계: docs/architecture/ai-think-actions.md §4.1, §4.3
+// 설계: docs/architecture/ai-think-actions.md §4.1, §4.3, §4.6
 
 import { denoEnv, estimateCostUsd, maxOutputTokensFor, modelFor, reasoningFor, type EnvReader } from '../_shared/ai/config.ts';
 import { emptyUsage, finalText, type AiProvider, type AiResult } from '../_shared/ai/types.ts';
 import type { AiRunRecord } from '../_shared/ai/usage.ts';
+import { type ConversationAccessState, scopedMemoriesForConversation } from '../ai_think/access_context.ts';
 import type { NewMessage } from '../ai_think/chat.ts';
 import type { MemoryRow, MessageRow } from '../ai_think/context.ts';
 import { transcript } from '../ai_think/drafts.ts';
 import { clip } from '../ai_think/prompts.ts';
+import { EFFORT_TOOL_PROPERTIES, effortReason, normalizeEffort, type CodeEffort } from '../_shared/code_effort.ts';
 
-export const REVIEW_PROMPT_VERSION = 'code-review-2026-10-02';
+// code-review-2026-10-10: 조율본에 수정 작업 강도(effort) 선택.
+export const REVIEW_PROMPT_VERSION = 'code-review-2026-10-10';
+/** 자동 검사 실패 뒤 Think가 Cursor에게 다시 고치게 하는 최대 횟수(운영자 결정 2026-10-06). */
+export const MAX_FIX_ATTEMPTS = 2;
 
 /** 월 한도 상태. 읽지 못하면 null(제한 없음으로 본다). */
 export type BudgetGate = () => Promise<{ exceeded: boolean; mode: string } | null>;
@@ -48,11 +55,35 @@ export interface ReviewStore {
   loadRequest(id: string): Promise<ReviewRequest | null>;
   listMessages(conversationId: string, limit: number): Promise<MessageRow[]>;
   listActiveMemories(kinds: string[]): Promise<MemoryRow[]>;
+  /** 요청이 나온 대화의 역할·자료 범위. 없으면 공통 기억만 쓴다. */
+  loadConversationAccess?(conversationId: string, rolesFeatureReady: boolean): Promise<ConversationAccessState>;
   insertMessage(msg: NewMessage): Promise<string>;
   followup(id: string, prompt: string, questions: string[]): Promise<boolean>;
-  /** 조율본을 수정 제안으로 올린다. 만든 제안 id. */
+  /** 조율본을 승인 대기 수정 제안으로 올린다(운영자에게 물을 것이 있을 때, 또는 바로 보내지 못했을 때). 만든 제안 id. */
   proposePlan(requestId: string, messageId: string, title: string, spec: Record<string, unknown>, preview: Record<string, unknown>): Promise<string | null>;
+  /** 조율본대로 바로 수정 요청을 보낸다(ai_code_bridge_start_change). */
+  startChange(planRequestId: string, messageId: string, title: string, spec: Record<string, unknown>): Promise<StartResult>;
+  /** 자동 검사 실패 → 앞 수정 위에서 다시 고치는 요청을 보낸다(ai_code_bridge_fix). */
+  fixChange(requestId: string, messageId: string, spec: Record<string, unknown>): Promise<StartResult>;
   reviewDone(id: string, status: 'done' | 'skipped' | 'error', messageId: string | null, error: string | null): Promise<void>;
+}
+
+export type StartResult = { ok: true; codeRequestId: string } | { ok: false; error: string };
+
+export interface VerificationItem {
+  id: string;
+  label: string;
+  status: 'passed' | 'failed' | 'skipped' | 'preexisting';
+  reason: string | null;
+  command: string | null;
+  output: string | null;
+}
+
+export interface Verification {
+  summary: { passed: number; failed: number; skipped: number; preexisting: number };
+  items: VerificationItem[];
+  note: string | null;
+  stopped: boolean;
 }
 
 export interface ReviewDeps {
@@ -78,6 +109,9 @@ export interface PlanDraft {
   focus_paths: string[];
   constraints: string[];
   do_not: string[];
+  /** null이면 조율 요청의 강도를 이어 쓴다. */
+  effort: CodeEffort | null;
+  effort_reason: string | null;
 }
 
 export interface PlanOption {
@@ -136,8 +170,9 @@ export const PLAN_REVIEW_SCHEMA: Record<string, unknown> = {
         focus_paths: strArray('고칠 폴더나 파일'),
         constraints: strArray('지켜야 할 조건'),
         do_not: strArray('하지 말 것'),
+        ...EFFORT_TOOL_PROPERTIES,
       },
-      required: ['title', 'goal', 'instructions', 'focus_paths', 'constraints', 'do_not'],
+      required: ['title', 'goal', 'instructions', 'focus_paths', 'constraints', 'do_not', 'effort', 'effort_reason'],
       additionalProperties: false,
     },
     decisions: {
@@ -180,20 +215,60 @@ export const PLAN_REVIEW_SCHEMA: Record<string, unknown> = {
   additionalProperties: false,
 };
 
-export function reviewInstructions(memories: MemoryRow[], canFollowup: boolean): string {
+/** 수정 결과 검토에 쓰는 상황: 자동 검사 결과와 재수정 여부. */
+export interface ChangeContext {
+  verification: Verification | null;
+  /** 이 요청이 몇 번째 재수정인지(처음 수정은 0). */
+  attempt: number;
+  /** 이번 수정 때문에 실패한 검사. */
+  failed: VerificationItem[];
+  /** 검토 뒤 Cursor에게 다시 고치게 보낸다. */
+  willFix: boolean;
+}
+
+function changeLines(c: ChangeContext): string[] {
   const lines = [
-    '너는 Yggdrasill 운영자의 생각 파트너 Think다. 운영자가 대화에서 보낸 코드 요청에 대해 Cursor(코딩 에이전트)의 결과가 도착했다.',
-    '결과를 검토해 같은 대화에 붙일 답변을 쓴다.',
+    '## 수정 결과 보고 (운영자는 코드를 읽지 않는다)',
+    '- 너는 운영자 아래에서 Cursor 작업을 이끄는 책임자다. 운영자가 diff를 읽지 않아도 판단할 수 있게 쉬운 말로 쓴다.',
+    '- 맨 앞 한 줄은 결론이다. 예: "적용해도 됩니다", "아직 적용하지 마세요 — 이유", "검사에 실패해 Cursor에게 다시 고치게 했습니다".',
+    '- 자동 검사 결과를 숫자 그대로 옮긴다(통과·실패·미실행·원래도 실패). 미실행은 통과가 아니다. 무엇이 왜 미실행인지 쓴다.',
+    '- "원래도 실패"는 바꾸기 전에도 실패하던 검사다. 이번 수정 탓이 아니라고 쓰되 숨기지 않는다.',
+    '- 자동 검사가 보지 않는 것(화면 모습, 운영 DB, AI 영역 밖 DB 함수 파일)은 확인 안 됐다고 쓴다.',
+    '- 위험이 없고 실패가 없으면 적용을 권할 수 있다. 미실행이 있으면 그 위험을 함께 쓰고 판단은 운영자에게 맡긴다.',
+    '- DB 함수 파일(supabase/migrations)이 바뀌었으면: 작업 폴더 적용은 운영 DB를 바꾸지 않고, 운영 DB 반영은 따로 승인받아 올린다고 알린다.',
+    '  데이터를 지우거나 되돌릴 수 없는 변경(delete, drop, on delete cascade, 트리거)은 따로 짚는다.',
+  ];
+  if (!c.verification) {
+    lines.push('- 이번 결과에는 자동 검사 기록이 없다(검사 전 작업자 버전이거나 중간에 멈춤). "검사 안 됨"으로 보고하고 적용을 권하지 않는다.');
+  } else if (c.willFix) {
+    lines.push(
+      `- 이번 수정 때문에 실패한 검사가 있어 검토 뒤 Cursor에게 다시 고치게 보낸다(${c.attempt + 1}/${MAX_FIX_ATTEMPTS}회째). ` +
+        '무엇이 실패했는지 한두 줄로 쓰고, 적용은 다시 고친 결과를 기다리라고 쓴다.',
+    );
+  } else if (c.failed.length > 0) {
+    lines.push(
+      `- 다시 고치기를 ${MAX_FIX_ATTEMPTS}번 다 썼거나 보낼 수 없어 실패가 남았다. 무엇이 남았는지와 운영자가 고를 길` +
+        '(적용하지 않고 두기, 범위를 줄여 다시 요청, 같은 내용으로 다시 수정)을 쉬운 말로 쓴다. 적용을 권하지 않는다.',
+    );
+  }
+  if (c.attempt > 0) lines.push(`- 이 결과는 ${c.attempt}번째 재수정이다. 앞 실패가 풀렸는지 먼저 쓴다.`);
+  return lines;
+}
+
+export function reviewInstructions(memories: MemoryRow[], canFollowup: boolean, change: ChangeContext | null = null): string {
+  const lines = [
+    '너는 Yggdrasill 운영자의 생각 파트너 Think다. 운영자가 최종 결정권자이고, 너는 그 아래에서 Cursor(코딩 에이전트) 작업을 이끈다.',
+    '운영자가 대화에서 맡긴 코드 작업에 대해 Cursor의 결과가 도착했다. 결과를 검토해 같은 대화에 붙일 답변을 쓴다.',
     '',
     '## 답변(answer)',
-    '- 한국어 마크다운. 결론을 먼저, 근거 파일 경로를 함께 쓴다. 필요 이상으로 길게 쓰지 않는다.',
+    '- 한국어 마크다운. 결론을 먼저 쓴다. 필요 이상으로 길게 쓰지 않는다.',
     '- Cursor 결과에 근거가 없는 내용은 추측하지 않는다. 확인 안 된 것은 확인 안 됐다고 쓴다.',
     '- 수정 결과(diff)면 무엇이 바뀌었는지, 요청과 맞는지, 요청 밖 파일·대량 삭제·설정 변경 같은 위험이 있는지 짚는다.',
-    '  요청이 승인된 조율본(based_on_plan)이면 조율본의 단계·하지 말 것과 diff가 맞는지 하나씩 확인한다.',
-    '  작업 폴더 적용은 운영자가 요청 카드에서 diff를 보고 정한다고 안내한다.',
-    '- 다음 할 일을 제안할 수 있다(예: 이 제안대로 수정을 요청할지). 실행했다고 말하지 않는다.',
+    '  요청이 조율본(based_on_plan)이면 조율본의 단계·하지 말 것과 diff가 맞는지 하나씩 확인한다.',
+    '- 다음 할 일을 제안할 수 있다. 하지 않은 일을 했다고 말하지 않는다.',
     '- 운영자에게 물어야 할 것이 있으면 answer 끝에 질문으로 쓴다.',
     '',
+    ...(change ? [...changeLines(change), ''] : []),
     '## 원칙 충돌(conflicts)',
     '- 아래 교육철학·원칙·결정과 부딪히는 결과나 제안이 있으면 한 줄씩. 없으면 빈 배열.',
     '',
@@ -219,11 +294,13 @@ function memoryLines(memories: MemoryRow[]): string[] {
   ];
 }
 
-/** 조율 모드: Think는 기획, Cursor는 실무 검토. 둘의 결과를 맞춰 운영자가 승인할 조율본을 만든다. */
+/** 조율 모드: Think는 기획, Cursor는 실무 검토. 둘의 결과를 맞춰 조율본을 만든다. 물을 것이 없으면 바로 수정을 맡긴다. */
 export function planInstructions(memories: MemoryRow[], canFollowup: boolean): string {
   return [
-    '너는 Yggdrasill 운영자의 생각 파트너 Think다. 운영자와 대화해 정한 구현 계획 초안을 Cursor(실무 개발자)에게 보냈고,',
-    'Cursor가 실제 코드를 읽고 검토한 결과가 도착했다. 둘의 의견을 맞춰 운영자가 승인할 조율본을 만든다.',
+    '너는 Yggdrasill 운영자의 생각 파트너 Think다. 운영자가 최종 결정권자이고, 너는 그 아래에서 Cursor 작업을 이끈다.',
+    '운영자와 대화해 정한 구현 계획 초안을 Cursor(실무 개발자)에게 보냈고, Cursor가 실제 코드를 읽고 검토한 결과가 도착했다.',
+    '둘의 의견을 맞춰 조율본을 만든다. 조율을 끝낼 때 운영자에게 물을 것(decisions)이 없으면 조율본대로 Cursor가 바로 고치기 시작한다.',
+    '고친 결과는 작업자가 자동 검사하고, 작업 폴더 적용과 운영 DB 반영은 운영자가 따로 승인한다.',
     '',
     '## 역할',
     '- 코드에 관한 사실(구조, 영향 범위, 기존 구현, 기술적 위험)은 Cursor의 근거를 따른다. 근거 없이 뒤집지 않는다.',
@@ -239,11 +316,15 @@ export function planInstructions(memories: MemoryRow[], canFollowup: boolean): s
     '',
     '## 조율본(plan)',
     '- Cursor가 그대로 따라 구현할 수 있게 단계(instructions)를 구체적으로 쓴다. 파일 경로를 알면 함께 쓴다.',
+    '- 바꾼 동작을 확인할 시험을 단계에 넣는다(앱 test/, Edge Function *_test.ts, AI 영역 DB 함수는 tools/db_test/test). 자동 검사가 그 시험을 돌린다.',
     '- Cursor가 짚은 문제를 반영해 단계·범위·하지 말 것을 고친다. 하지 않는 것이 낫다고 합의했으면 instructions를 빈 배열로 둔다.',
     '- 질문(decisions)에 걸린 부분은 지금까지의 초안대로 두고, 나머지 단계는 빠짐없이 채운다. 운영자가 답하면 다시 조율한다.',
+    '- 수정 작업 강도(effort)를 조율한 범위에 맞게 다시 고르고 이유를 한 줄 쓴다. medium: 파일 한두 개·문구·스타일,',
+    '  high: 여러 파일 기능 추가·테스트 포함, xhigh: DB·Edge·앱을 함께 바꾸거나 원인을 찾기 어려운 버그. 애매하면 high.',
     '',
     '## 운영자에게 묻기(decisions)',
     `- 조율로 풀리지 않아 운영자가 골라야 하는 것만 객관식으로 묻는다(최대 ${MAX_DECISIONS}개). 합의됐거나 코드가 답을 정해 주는 것은 묻지 않는다.`,
+    '- 묻지 않으면 바로 수정이 시작된다. 방향·범위·데이터를 지우는 일처럼 운영자 뜻을 모르는 것이 남았으면 반드시 묻는다.',
     '- 운영자는 코드를 보지 않고 고른다. question은 쉬운 한 문장, context는 왜 지금 정해야 하는지를 쓴다.',
     '- 보기는 2~4개. 서로 겹치지 않고 실제로 고를 만한 것만. 추천하는 보기를 맨 앞에 두고 그 하나만 recommended를 true로 한다.',
     '- detail은 보기마다 2~4문장: 고르면 무엇이 달라지는지, 장점과 단점, 영향 범위(파일·화면·데이터), 나중에 바꾸기 쉬운지.',
@@ -251,8 +332,9 @@ export function planInstructions(memories: MemoryRow[], canFollowup: boolean): s
     '- 운영자가 직접 답을 적을 수도 있으니 "기타" 보기는 만들지 않는다.',
     '',
     '## 답변(answer)',
-    '- 한국어 마크다운. 운영자가 승인 여부를 판단할 수 있게 짧게: 원래 계획에서 무엇이 바뀌었고 왜인지, 남은 위험.',
+    '- 한국어 마크다운. 운영자가 코드를 읽지 않아도 알 수 있게 짧고 쉬운 말로: 원래 계획에서 무엇이 바뀌었고 왜인지, 남은 위험.',
     '- 정할 것은 카드에 객관식으로 따로 보이니 답변에서는 무엇을 골라야 하는지 한 줄로만 알린다.',
+    '- 정할 것이 없으면 수정을 바로 시작한다는 안내는 서버가 붙인다. 답변에 시작했다고 따로 쓰지 않는다.',
     '- 조율을 끝낼 때만 쓴다. 다시 묻는 회차에는 한두 문장으로 무엇을 더 확인하는지 쓴다.',
     '- 조율본은 카드로 따로 보이니 단계를 답변에 다시 늘어놓지 않는다. 구현했다고 말하지 않는다.',
     '',
@@ -286,10 +368,119 @@ export function reviewInput(req: ReviewRequest, history: string): string {
   const last = req.rounds.at(-1);
   if (last?.result_text) lines.push('', '[마지막 회차 원문 앞부분]', clip(last.result_text, 4000));
   const diff = last?.result?.diff;
-  if (req.mode === 'change' && typeof diff === 'string') lines.push('', '[diff 앞부분]', clip(diff, 12000));
+  const continued = continuedText(last?.result ?? null, req.mode === 'change');
+  if (continued) lines.push('', '[이어받은 앞 수정 패치]', continued);
+  if (req.mode === 'change') {
+    lines.push('', '[작업자 자동 검사 결과]', verificationText(verificationOf(last?.result ?? null)));
+    if (typeof diff === 'string') lines.push('', '[diff 앞부분]', clip(diff, 12000));
+  }
   if (history) lines.push('', '[이 요청이 나온 대화 (최근)]', history);
   return lines.join('\n');
 }
+
+const CONTINUE_MODES: Record<string, string> = {
+  applied: '그대로 얹음',
+  merged: '3-way로 합쳐 얹음',
+  already_present: '이미 작업 폴더에 들어 있어 얹지 않음',
+};
+
+/** 작업자가 올린 result.continued_from. 없으면 빈 문자열. */
+export function continuedText(result: Record<string, unknown> | null, change: boolean): string {
+  const c = result?.continued_from;
+  if (!isObj(c)) return '';
+  const mode = str(c.applied, 40);
+  const note = !change
+    ? ' Cursor는 이 패치를 얹은 복사본을 읽고 검토했다.'
+    : mode === 'already_present'
+    ? ''
+    : ' 이 패치는 이번 결과(diff)에 함께 들어 있어, 작업 폴더에 적용하면 앞 수정도 같이 들어간다.';
+  const partial = c.partial === 'timeout'
+    ? ' 앞 패치는 시간 제한으로 중간에 멈춘 미완성·미검사 패치였다. 출발점일 뿐 검증된 변경이 아니므로, 앞 변경까지 포함한 최종 diff 전체와 검사 결과로 판단한다.'
+    : '';
+  return `요청 ${str(c.request_id, 64)} "${str(c.title, 200)}" ${c.round ?? '?'}회차 ${c.partial === 'timeout' ? '미완성' : '최종'} 패치 · 파일 ${c.files ?? '?'}개 ` +
+    `+${c.additions ?? '?'} -${c.deletions ?? '?'} · ${CONTINUE_MODES[mode] ?? mode}.${note}${partial}`;
+}
+
+const STATUS_LABELS: Record<VerificationItem['status'], string> = {
+  passed: '통과',
+  failed: '실패',
+  skipped: '미실행',
+  preexisting: '원래도 실패',
+};
+
+/** 작업자가 올린 result.verification. 모양이 다르면 null(검사 기록 없음). */
+export function verificationOf(result: Record<string, unknown> | null): Verification | null {
+  const v = result?.verification;
+  if (!isObj(v) || !Array.isArray(v.items)) return null;
+  const items: VerificationItem[] = v.items.filter(isObj).map((i) => ({
+    id: str(i.id, 200),
+    label: str(i.label, 300) || str(i.id, 200),
+    status: (['passed', 'failed', 'skipped', 'preexisting'] as const).find((s) => s === i.status) ?? 'skipped',
+    reason: str(i.reason, 1000) || null,
+    command: str(i.command, 1000) || null,
+    output: typeof i.output === 'string' ? i.output : null,
+  }));
+  const summary = { passed: 0, failed: 0, skipped: 0, preexisting: 0 };
+  for (const i of items) summary[i.status] += 1;
+  return { summary, items, note: str(v.note, 500) || null, stopped: v.stopped === true };
+}
+
+export function verificationText(v: Verification | null): string {
+  if (!v) return '(검사 기록 없음)';
+  const s = v.summary;
+  const head = v.items.length === 0
+    ? `검사한 항목 없음${v.note ? ` — ${v.note}` : ''}`
+    : `통과 ${s.passed} · 실패 ${s.failed} · 미실행 ${s.skipped} · 원래도 실패 ${s.preexisting}${v.stopped ? ' (중간에 멈춤)' : ''}`;
+  const rows = v.items.map((i) => {
+    const why = i.reason ? ` — ${i.reason}` : '';
+    const out = i.status === 'failed' || i.status === 'preexisting' ? `\n${clip(i.output ?? '', 1500)}` : '';
+    return `- [${STATUS_LABELS[i.status]}] ${i.label}${why}${out}`;
+  });
+  return [head, ...rows].join('\n');
+}
+
+function fixAttempt(req: ReviewRequest): number {
+  const fix = isObj(req.request?.fix_of) ? req.request.fix_of : null;
+  const n = Number(fix?.attempt ?? 0);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+
+export function changeContext(req: ReviewRequest): ChangeContext {
+  const verification = verificationOf(req.rounds.at(-1)?.result ?? null);
+  const failed = verification?.items.filter((i) => i.status === 'failed') ?? [];
+  const attempt = fixAttempt(req);
+  const willFix = failed.length > 0 && attempt < MAX_FIX_ATTEMPTS && ['ready', 'needs_review'].includes(req.status);
+  return { verification, attempt, failed, willFix };
+}
+
+/** 재수정 요청 내용: 원래 요청 + 실패한 검사. 요청 칸 한도(50KB) 안에 들도록 출력을 줄인다. */
+export function fixSpec(req: ReviewRequest, failed: VerificationItem[]): Record<string, unknown> {
+  const { fix_of: prev, ...original } = req.request ?? {};
+  const prevFix = isObj(prev) ? prev : null;
+  const build = (max: number) => ({
+    ...original,
+    fix_of: {
+      request_id: req.id,
+      root_id: str(prevFix?.root_id, 100) || req.id,
+      attempt: fixAttempt(req) + 1,
+      max: MAX_FIX_ATTEMPTS,
+      failed: failed.slice(0, 8).map((f) => ({ label: f.label, command: f.command, output: clip(f.output ?? '', max) })),
+    },
+  });
+  for (const max of [4000, 2000, 800, 200]) {
+    const spec = build(max);
+    if (new TextEncoder().encode(JSON.stringify(spec)).length <= 45_000) return spec;
+  }
+  return build(0);
+}
+
+const FIX_ERRORS: Record<string, string> = {
+  code_request_daily_limit: '오늘 코드 요청 한도를 다 써서',
+  already_fixing: '이미 다시 고치는 요청이 있어',
+  fix_limit: `다시 고치기를 ${MAX_FIX_ATTEMPTS}번 다 써서`,
+  no_diff: '앞 수정의 diff를 찾지 못해',
+  not_fixable: '요청 상태가 바뀌어',
+};
 
 function strArr(v: unknown, max: number): string[] {
   return Array.isArray(v) ? v.map((x) => (typeof x === 'string' ? x.trim() : '')).filter(Boolean).slice(0, max) : [];
@@ -325,6 +516,8 @@ export function parsePlanReview(text: string): PlanReviewOutput | null {
     focus_paths: strArr(p.focus_paths, 12),
     constraints: strArr(p.constraints, 12),
     do_not: strArr(p.do_not, 12),
+    effort: typeof p.effort === 'string' ? normalizeEffort(p.effort) : null,
+    effort_reason: effortReason(p.effort_reason),
   };
   return { ...base, plan, decisions: parseDecisions(o.decisions) };
 }
@@ -409,6 +602,9 @@ export function planSpec(req: ReviewRequest, out: PlanReviewOutput): Record<stri
     based_on_plan: { id: req.id, title: req.title, rounds: req.round, summary: clip(out.answer, 1500) },
     owner_answers: Array.isArray(original.owner_answers) ? original.owner_answers : [],
     decisions: out.decisions,
+    effort: out.plan.effort ?? normalizeEffort(original.effort),
+    effort_reason: out.plan.effort ? out.plan.effort_reason : effortReason(original.effort_reason),
+    ...(original.continue_from && typeof original.continue_from === 'object' ? { continue_from: original.continue_from } : {}),
   };
 }
 
@@ -430,11 +626,13 @@ export async function runCodeReview(deps: ReviewDeps, requestId: string): Promis
   }
 
   const plan = req.mode === 'plan';
+  const change = req.mode === 'change' ? changeContext(req) : null;
   const canFollowup = (req.mode === 'investigate' || plan) && req.round < req.max_rounds;
-  const [memories, messages] = await Promise.all([
+  const [rawMemories, messages] = await Promise.all([
     deps.store.listActiveMemories(['identity', 'principle', 'decision']),
     deps.store.listMessages(req.conversation_id, 30),
   ]);
+  const memories = await scopedMemoriesForConversation(deps.store, req.conversation_id, rawMemories);
   const model = modelFor('primary', env);
   const started = now();
   let result: AiResult | null = null;
@@ -442,7 +640,7 @@ export async function runCodeReview(deps: ReviewDeps, requestId: string): Promis
   try {
     result = await deps.provider.complete({
       model,
-      instructions: plan ? planInstructions(memories, canFollowup) : reviewInstructions(memories, canFollowup),
+      instructions: plan ? planInstructions(memories, canFollowup) : reviewInstructions(memories, canFollowup, change),
       input: [{ kind: 'message', role: 'user', parts: [{ type: 'text', text: reviewInput(req, transcript(messages, 20000)) }] }],
       jsonSchema: plan ? { name: 'code_plan_review', schema: PLAN_REVIEW_SCHEMA } : { name: 'code_review', schema: REVIEW_SCHEMA },
       reasoningEffort: reasoningFor('primary', env),
@@ -477,10 +675,17 @@ export async function runCodeReview(deps: ReviewDeps, requestId: string): Promis
   }
 
   const planOut = plan ? (parsed as PlanReviewOutput) : null;
+  const autoStart = !!planOut && planOut.decisions.length === 0 && planOut.plan.instructions.length > 0;
+  const content = planOut ? planMessage(planOut) : reviewMessage(parsed);
+  const note = autoStart
+    ? '**조율본대로 Cursor에게 수정을 맡겼습니다.** 고친 뒤 자동 검사까지 끝나면 결과를 알려 드립니다. 작업 폴더 적용은 그때 정하시면 됩니다.'
+    : change?.willFix
+    ? `**검사에 실패해 Cursor에게 다시 고치게 했습니다 (${change.attempt + 1}/${MAX_FIX_ATTEMPTS}회째).** 다시 고친 결과가 오면 알려 드립니다.`
+    : null;
   const messageId = await deps.store.insertMessage({
     conversation_id: req.conversation_id,
     role: 'assistant',
-    content: planOut ? planMessage(planOut) : reviewMessage(parsed),
+    content: note ? `${content}\n\n${note}` : content,
     status: 'complete',
     tool_calls: [
       planOut
@@ -490,12 +695,37 @@ export async function runCodeReview(deps: ReviewDeps, requestId: string): Promis
     model: result?.model || model,
     run_id: runId,
   });
+  const notice = (text: string) =>
+    deps.store.insertMessage({ conversation_id: req.conversation_id!, role: 'assistant', content: text, status: 'complete', run_id: null });
+
   if (planOut && (planOut.plan.instructions.length > 0 || planOut.decisions.length > 0)) {
-    await deps.store.proposePlan(req.id, messageId, planOut.plan.title || req.title, planSpec(req, planOut), {
-      goal: clip(planOut.plan.goal || String(req.request?.goal ?? ''), 300),
-      rounds: req.round,
-      decisions: planOut.decisions.length,
-    });
+    const title = planOut.plan.title || req.title;
+    const spec = planSpec(req, planOut);
+    const started = autoStart ? await deps.store.startChange(req.id, messageId, title, spec) : null;
+    if (!started?.ok) {
+      await deps.store.proposePlan(req.id, messageId, title, spec, {
+        goal: clip(planOut.plan.goal || String(req.request?.goal ?? ''), 300),
+        rounds: req.round,
+        decisions: planOut.decisions.length,
+        effort: spec.effort,
+      });
+      if (started && started.error !== 'already_started') {
+        await notice(
+          started.error === 'code_request_daily_limit'
+            ? '오늘 코드 요청 한도를 다 써서 수정을 바로 시작하지 못했습니다. 아래 조율본 카드에서 나중에 보내 주세요.'
+            : '수정을 바로 시작하지 못했습니다. 아래 조율본 카드에서 보내 주세요.',
+        );
+      }
+    }
+  }
+  if (change?.willFix) {
+    const fixed = await deps.store.fixChange(req.id, messageId, fixSpec(req, change.failed));
+    if (!fixed.ok && fixed.error !== 'already_fixing') {
+      await notice(
+        `${FIX_ERRORS[fixed.error] ?? '알 수 없는 이유로'} 다시 고치게 하지 못했습니다. 이 결과는 적용하지 않는 것이 좋습니다. ` +
+          '필요하면 카드의 "같은 내용으로 다시 수정"을 눌러 주세요.',
+      );
+    }
   }
   await done('done', messageId, null);
   return 'done';

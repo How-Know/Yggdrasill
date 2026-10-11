@@ -11,6 +11,7 @@ class FabStyleHomeScreenHeader extends StatelessWidget {
     super.key,
     required this.dateTimeText,
     this.statsText,
+    this.stats = const <HomeHeaderStat>[],
     this.secondaryText,
     this.gradingStats = false,
     this.showAnchorDateHint = false,
@@ -19,6 +20,9 @@ class FabStyleHomeScreenHeader extends StatelessWidget {
 
   final String dateTimeText;
   final String? statsText;
+
+  /// 등원 머리의 한 줄 요약. 비어 있으면 [statsText]를 쓴다.
+  final List<HomeHeaderStat> stats;
   final String? secondaryText;
   final bool gradingStats;
   final bool showAnchorDateHint;
@@ -46,7 +50,8 @@ class FabStyleHomeScreenHeader extends StatelessWidget {
       fontWeight: FontWeight.w600,
     );
     final isGradingHeader = secondaryText != null;
-    final hasStatusBody = (statsText != null && statsText!.isNotEmpty) ||
+    final hasStatusBody = stats.isNotEmpty ||
+        (statsText != null && statsText!.isNotEmpty) ||
         showAnchorDateHint;
 
     return Row(
@@ -69,9 +74,12 @@ class FabStyleHomeScreenHeader extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    if (statsText != null && statsText!.isNotEmpty)
+                    if (stats.isNotEmpty)
+                      _HomeHeaderStatStrip(stats: stats, style: style)
+                    else if (statsText != null && statsText!.isNotEmpty)
                       Text(statsText!, style: statsStyle),
-                    if ((statsText != null && statsText!.isNotEmpty) &&
+                    if ((stats.isNotEmpty ||
+                            (statsText != null && statsText!.isNotEmpty)) &&
                         showAnchorDateHint)
                       const SizedBox(width: 12),
                     if (showAnchorDateHint)
@@ -232,5 +240,96 @@ class FabStyleHomeScreenHeader extends StatelessWidget {
         ],
       ],
     );
+  }
+}
+
+/// 수업 현황 머리의 숫자 하나. 라벨과 숫자는 패널 색만 쓰고 항목마다 색을 바꾸지 않는다.
+class HomeHeaderStat {
+  const HomeHeaderStat({
+    required this.label,
+    required this.value,
+    this.tooltip,
+  });
+
+  final String label;
+  final int value;
+  final String? tooltip;
+}
+
+class _HomeHeaderStatStrip extends StatelessWidget {
+  const _HomeHeaderStatStrip({
+    required this.stats,
+    required this.style,
+  });
+
+  final List<HomeHeaderStat> stats;
+  final PreviewAcademyPanelStyle style;
+
+  @override
+  Widget build(BuildContext context) {
+    final labelStyle = TextStyle(
+      fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
+      fontSize: 15,
+      fontWeight: FontWeight.w500,
+      height: 1.0,
+      color: style.hint,
+    );
+    final valueStyle = TextStyle(
+      fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
+      fontSize: 18,
+      fontWeight: FontWeight.w700,
+      height: 1.0,
+      color: style.title,
+      fontFeatures: const [FontFeature.tabularFigures()],
+    );
+    final tick = style.hint.withValues(alpha: 0.28);
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        for (var i = 0; i < stats.length; i++) ...[
+          if (i > 0) ...[
+            const SizedBox(width: 18),
+            Container(width: 1, height: 14, color: tick),
+            const SizedBox(width: 18),
+          ],
+          _HomeHeaderStatItem(
+            stat: stats[i],
+            labelStyle: labelStyle,
+            valueStyle: valueStyle,
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _HomeHeaderStatItem extends StatelessWidget {
+  const _HomeHeaderStatItem({
+    required this.stat,
+    required this.labelStyle,
+    required this.valueStyle,
+  });
+
+  final HomeHeaderStat stat;
+  final TextStyle labelStyle;
+  final TextStyle valueStyle;
+
+  @override
+  Widget build(BuildContext context) {
+    final row = Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.baseline,
+      textBaseline: TextBaseline.alphabetic,
+      children: [
+        Text(stat.label, style: labelStyle),
+        const SizedBox(width: 6),
+        Text('${stat.value}', style: valueStyle),
+      ],
+    );
+    final tip = stat.tooltip;
+    if (tip == null || tip.isEmpty) return row;
+    return Tooltip(message: tip, child: row);
   }
 }

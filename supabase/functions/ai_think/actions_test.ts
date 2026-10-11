@@ -3,6 +3,7 @@ import { FakeAiProvider } from '../_shared/ai/fake.ts';
 import type { AiRequest } from '../_shared/ai/types.ts';
 import { folderPaths, workStateNote, type CodeRequestDetail } from './actions.ts';
 import { runThinkChat, type ChatInput } from './chat.ts';
+import { MK_DOC_BODY, MK_SRC_MSG } from './document_markers.ts';
 import { titleInstructions } from './prompts.ts';
 import { EventLog, MemoryThinkStore, RunLog, memory, testEnv } from './test_support.ts';
 import { runThinkTool } from './tools.ts';
@@ -69,6 +70,18 @@ Deno.test('코드 조사 제안: 제안 1행만 남기고, 원칙 참조를 함�
   assertEquals(JSON.parse(r.output).status, 'proposed');
 });
 
+Deno.test('작업 강도: 고른 값과 이유를 명세에 담고, 비었거나 모르는 값은 high', async () => {
+  const { store, call } = await setup();
+  await call('propose_code_request', { ...codeArgs, effort: 'xhigh', effort_reason: `  ${'DB·Edge·앱을 함께 바꾼다'.repeat(20)}  ` });
+  await call('propose_code_request', { ...codeArgs, effort: 'max', effort_reason: ' ' });
+  await call('propose_code_request', codeArgs);
+  const specs = store.actions.map((a) => a.payload.spec as Record<string, unknown>);
+  assertEquals(specs.map((s) => s.effort), ['xhigh', 'high', 'high']);
+  assertEquals((specs[0].effort_reason as string).length, 200);
+  assertEquals(specs[1].effort_reason, null);
+  assertEquals(store.actions[0].preview.effort, 'xhigh');
+});
+
 Deno.test('조율 시작: 승인 카드 없이 바로 시작하고, 계획 초안·확인할 점·근거 결론을 함께 보낸다', async () => {
   const { store, conv, call } = await setup();
   const args = { ...codeArgs, instructions: ['버튼 색 변경'], questions: ['영향 범위'], based_on_request_id: REQ_ID };
@@ -88,6 +101,27 @@ Deno.test('조율 시작: 승인 카드 없이 바로 시작하고, 계획 초�
   assertEquals((spec.based_on as Record<string, unknown>).summary, '가능하다');
   assertEquals((spec.memory_refs as unknown[]).length, 1);
   assertEquals(store.actions.filter((a) => a.status === 'proposed').length, 0);
+});
+
+Deno.test('조율 시작: 이어받을 앞 수정은 있는 수정 요청만 지정하고, 작업 상태 메모에 이어받기를 알린다', async () => {
+  const { store, call } = await setup();
+  const args = (id: unknown) => ({ ...codeArgs, instructions: ['기억 충돌 감지'], based_on_request_id: null, continue_from_request_id: id });
+  const notFound = JSON.parse((await call('start_code_plan', args(REQ_ID))).output);
+  assertEquals(notFound.error, 'continue_from_not_found');
+  assertEquals(JSON.parse((await call('start_code_plan', args('76982ca1'))).output).error, 'continue_from_not_found');
+  store.codeRequests.push(codeRequest());
+  assertEquals(JSON.parse((await call('start_code_plan', args(REQ_ID))).output).error, 'continue_from_not_change');
+  assertEquals(store.plansStarted.length, 0);
+
+  store.codeRequests[0] = codeRequest({ mode: 'change', title: '개인화 기억' });
+  const r = await call('start_code_plan', args(REQ_ID));
+  assert(r.ok);
+  assertEquals(store.plansStarted[0].spec.continue_from, { request_id: REQ_ID, title: '개인화 기억' });
+  await call('start_code_plan', args(null));
+  assertEquals(store.plansStarted[1].spec.continue_from, undefined);
+
+  const note = workStateNote({ actions: [], codeRequests: [codeRequest({ mode: 'plan', request: { goal: 'g', continue_from: { request_id: REQ_ID } } })] });
+  assert(note!.includes(`앞 수정 ${REQ_ID}의 최종 패치를 이어받음`));
 });
 
 Deno.test('조율 시작: 하루 한도를 넘으면 시작하지 않고 모델에게 이유를 돌려준다', async () => {
@@ -129,6 +163,23 @@ Deno.test('이미 그 폴더에 있으면 분류 제안을 하지 않는다', as
   assertEquals(body.current_conversation.location, '수학 > 함수');
   assertEquals(body.folders.find((f: { id: string }) => f.id === F_FUNC).items, 2);
   assert(!list.output.includes('excerpt'), '발췌 노드 정보는 항목 수로만 보인다');
+  store.treeItems.push({ parent_id: F_FUNC, kind: 'document', conversation_id: 'doc-conv' });
+  const list2 = await call('list_tree_folders', {});
+  const body2 = JSON.parse(list2.output);
+  assertEquals(body2.folders.find((f: { id: string }) => f.id === F_FUNC).items, 3);
+  assert(!list2.output.includes('본문'), '종합 문서 본문은 트리 도구에 노출하지 않는다');
+  store.messages.push({
+    id: 'leak-msg',
+    conversation_id: conv.id,
+    role: 'user',
+    content: MK_SRC_MSG,
+    status: 'complete',
+    attachments: [],
+    created_at: '',
+  });
+  const list3 = await call('list_tree_folders', {});
+  assert(!list3.output.includes(MK_DOC_BODY));
+  assert(!list3.output.includes(MK_SRC_MSG), '출처 메시지 원문은 list_tree_folders에 넣지 않는다');
 });
 
 Deno.test('삭제 제안: 진행 중 요청은 막고, 폴더·대화는 지워질 내용을 미리보기에 담는다', async () => {
@@ -146,10 +197,11 @@ Deno.test('삭제 제안: 진행 중 요청은 막고, 폴더·대화는 지워�
   store.conversations.push({ id: old, title: '지울 대화', status: 'active', scope_type: 'general', scope_id: null });
   await store.insertMessage({ conversation_id: old, role: 'user', content: 'q', status: 'complete' });
   store.treeItems.push({ parent_id: null, kind: 'excerpt', conversation_id: old });
+  store.treeItems.push({ parent_id: null, kind: 'document', conversation_id: old });
   const c = await call('propose_delete', { target_kind: 'conversation', target_id: old, reason: '' });
   assert(c.ok);
   const p = store.actions.at(-1)!.preview;
-  assertEquals([p.title, p.messages, p.excerpts, p.is_current], ['지울 대화', 1, 1, false]);
+  assertEquals([p.title, p.messages, p.excerpts, p.documents, p.is_current], ['지울 대화', 1, 1, 1, false]);
   assertEquals(store.actions.at(-1)!.conversation_id, conv.id, '제안은 지금 대화에 남는다');
 
   const badId = await call('propose_delete', { target_kind: 'conversation', target_id: conv.id, reason: '' });
@@ -169,6 +221,45 @@ Deno.test('작업 상태 메모: 작업이 없으면 없고, 있으면 상태와
   assert(note.includes('거절'));
   assert(note.includes('가능하다'));
   assert(note.includes(REQ_ID));
+});
+
+Deno.test('작업 상태 메모: 수정 요청은 자동 검사 결과와 재수정 회차를 담는다', () => {
+  const base = codeRequest();
+  const note = workStateNote({
+    actions: [],
+    codeRequests: [{
+      ...base,
+      mode: 'change',
+      status: 'ready',
+      request: { goal: 'g', fix_of: { request_id: 'prev', attempt: 1 } },
+      latest: {
+        round: 1,
+        status: 'finished',
+        result_text: null,
+        result: {
+          summary: '고침',
+          diff_stats: { files: 2, additions: 3, deletions: 1 },
+          verification: { items: [{ status: 'passed' }, { status: 'failed' }, { status: 'skipped' }, { status: 'preexisting' }] },
+        },
+      },
+    }],
+  })!;
+  assert(note.includes('자동 검사: 통과 1 · 실패 1 · 미실행 1 · 원래도 실패 1'));
+  assert(note.includes('다시 고친 1번째'));
+  const old = workStateNote({
+    actions: [],
+    codeRequests: [{ ...base, mode: 'change', latest: { round: 1, status: 'finished', result_text: null, result: { summary: 's', diff_stats: { files: 1 } } } }],
+  })!;
+  assert(old.includes('자동 검사: 기록 없음'));
+
+  const stoppedResult = (result: Record<string, unknown>) =>
+    workStateNote({
+      actions: [],
+      codeRequests: [{ ...base, mode: 'change', status: 'needs_review', latest: { round: 1, status: 'finished', result_text: null, result } }],
+    })!;
+  assert(stoppedResult({ summary: '60분 안에 끝나지 않아 멈췄습니다.', partial: 'timeout' }).includes('미완성 패치'));
+  assert(stoppedResult({ summary: '30분 안에 끝나지 않아 멈췄습니다. 여기까지' }).includes('미완성 패치'), '표시 없는 예전 행');
+  assert(!stoppedResult({ summary: '형식 오류' }).includes('미완성 패치'));
 });
 
 Deno.test('폴더 경로는 순환이 있어도 끝난다', () => {

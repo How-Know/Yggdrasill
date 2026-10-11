@@ -116,6 +116,8 @@ class _ThinkCodeRequestDialogState extends State<ThinkCodeRequestDialog> {
         focusPaths: ThinkCodeSpec.lines(_paths.text),
         constraints: ThinkCodeSpec.lines(_constraints.text),
         doNot: ThinkCodeSpec.lines(_doNot.text),
+        effort: widget.draft?.spec.effort ?? ThinkCodeSpec.defaultEffort,
+        effortReason: widget.draft?.spec.effortReason ?? '',
       );
 
   Future<void> _save({required bool submit}) async {

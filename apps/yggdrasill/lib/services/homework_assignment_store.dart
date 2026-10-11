@@ -128,6 +128,8 @@ class HomeworkAssignmentCycleMeta {
   final int repeatIndex;
   final int splitParts;
   final int splitRound;
+  final String status;
+  final DateTime? dueDate;
 
   const HomeworkAssignmentCycleMeta({
     required this.assignmentId,
@@ -135,6 +137,8 @@ class HomeworkAssignmentCycleMeta {
     required this.repeatIndex,
     required this.splitParts,
     required this.splitRound,
+    this.status = '',
+    this.dueDate,
   });
 }
 
@@ -1257,6 +1261,12 @@ class HomeworkAssignmentStore {
     }
   }
 
+  DateTime? _parseAssignmentDue(dynamic raw) {
+    final text = (raw as String?)?.trim() ?? '';
+    if (text.isEmpty) return null;
+    return DateTime.tryParse(text)?.toLocal();
+  }
+
   Future<Map<String, HomeworkAssignmentCycleMeta>> loadLatestCycleMetaByItem(
     String studentId, {
     bool excludeReservation = false,
@@ -1269,7 +1279,7 @@ class HomeworkAssignmentStore {
       final rows = await supa
           .from('homework_assignments')
           .select(
-            'id,homework_item_id,repeat_index,split_parts,split_round,note,assigned_at,created_at',
+            'id,homework_item_id,repeat_index,split_parts,split_round,note,status,due_at,due_date,assigned_at,created_at',
           )
           .eq('academy_id', academyId)
           .eq('student_id', studentId)
@@ -1288,6 +1298,9 @@ class HomeworkAssignmentStore {
           repeatIndex: _normalizeRepeatIndex(r['repeat_index']),
           splitParts: splitParts,
           splitRound: _normalizeSplitRound(r['split_round'], splitParts),
+          status: (r['status'] as String?)?.trim() ?? '',
+          dueDate: _parseAssignmentDue(r['due_at']) ??
+              _parseAssignmentDue(r['due_date']),
         );
       }
       return out;
@@ -2299,8 +2312,13 @@ class HomeworkAssignmentStore {
         final int requestedSplitParts =
             (splitPartsByItem?[item.id] ?? splitParts).clamp(1, 4).toInt();
         final cycleKey = buildCycleKeyForItem(item);
-        final last = latestByCycleKey[cycleKey] ?? latestByItem[item.id];
-        final String? lastId = last?['id'] as String?;
+        // 서버는 같은 과제의 배정만 이전 배정으로 받는다. 같은 쪽의 형제
+        // 하위 과제와 키가 겹치므로 교재·범위 키는 자기 이력이 없을 때만 쓴다.
+        final ownLast = latestByItem[item.id];
+        final last = ownLast ?? latestByCycleKey[cycleKey];
+        final bool lastIsOwn = last != null &&
+            _asTrimmed(last['homework_item_id']) == item.id.trim();
+        final String? lastId = lastIsOwn ? last['id'] as String? : null;
         final String? lastStatus = last?['status'] as String?;
         int repeatIndex = 1;
         int nextSplitParts = requestedSplitParts;

@@ -1,6 +1,8 @@
 // Think 채팅의 작업 제안(ai_actions). AI는 제안만 남기고, 실행은 사람이 승인할 때 서버 RPC가 한다.
 // 설계: docs/architecture/ai-think-actions.md
 
+import 'think_models.dart';
+
 enum ThinkActionKind {
   codeRequest('code_request', '코드 조사'),
   codeChange('code_change', '코드 수정'),
@@ -10,7 +12,10 @@ enum ThinkActionKind {
   placeConversation('place_conversation', '대화 분류'),
   deleteCodeRequest('delete_code_request', '코드 요청 삭제'),
   deleteFolder('delete_folder', '폴더 삭제'),
-  deleteConversation('delete_conversation', '대화 삭제');
+  deleteConversation('delete_conversation', '대화 삭제'),
+
+  /// 승인하면 이번 질문과 답변만 새 대화에 복사하고 새 대화로 넘어간다. 원본은 그대로 둔다.
+  splitConversation('split_conversation', '대화 나누기');
 
   const ThinkActionKind(this.db, this.label);
   final String db;
@@ -32,7 +37,10 @@ enum ThinkActionStatus {
   applied('applied', '실행함'),
   rejected('rejected', '거절함'),
   failed('failed', '실패'),
-  undone('undone', '되돌림');
+  undone('undone', '되돌림'),
+
+  /// 제안 뒤 대화가 이어져(새 질문) 승인할 수 없다. 대화 나누기 제안만 쓴다.
+  expired('expired', '만료됨');
 
   const ThinkActionStatus(this.db, this.label);
   final String db;
@@ -162,4 +170,30 @@ class ThinkAction {
   }
 
   bool get deletedSelf => result?['deleted_self'] == true;
+
+  // ---- 대화 나누기
+  ThinkSplitSummary get splitSummary => ThinkSplitSummary.fromJson(payload['summary']);
+
+  String get splitReason => _str(payload['reason'] ?? preview['reason']);
+
+  /// 나누기 시작 메시지(이번 질문)의 앞부분. 서버가 제안 때 저장한 메시지에서 만든다.
+  String get splitStartPreview => _str(preview['start_preview']);
+
+  /// 제안 때 폴더 경로. 폴더가 없어졌을 때 보여 준다.
+  String get splitFolderPath => _str(preview['folder_path']);
+
+  /// 승인으로 만든 새 대화.
+  String? get splitConversationId {
+    final id = _str(result?['conversation_id']);
+    return id.isEmpty ? null : id;
+  }
+
+  /// 새 대화에 복사하지 않고 원본에만 남은 것의 수(actions, code_requests, tree_nodes, other_messages).
+  Map<String, int> get splitNotCopied {
+    final raw = _map(result?['not_copied']);
+    return {
+      for (final e in raw.entries)
+        if (e.value is num) e.key: (e.value as num).toInt(),
+    };
+  }
 }

@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/widgets.dart';
 
+import '../auth_service.dart';
 import 'think_action_models.dart';
 import 'think_api.dart';
 import 'think_code_controller.dart';
@@ -54,6 +55,7 @@ class ThinkController extends ChangeNotifier {
     _started = true;
     ThinkCodeController.instance.addListener(_onCodeRequestsChanged);
     await Future.wait([refreshStatus(), refreshConversations(), refreshMemories(), refreshTree()]);
+    unawaited(refreshDocumentProbe());
   }
 
   // ------------------------------------------------------------------ 탭 이동
@@ -89,6 +91,11 @@ class ThinkController extends ChangeNotifier {
   ThinkStatus? status;
   ThinkApiException? statusError;
   bool statusLoading = false;
+  ThinkDocumentProbe? documentProbe;
+  Object? documentProbeError;
+  bool documentProbeLoading = false;
+
+  String? get supabaseProjectRef => ThinkApi.supabaseProjectRef(AuthService.supabaseUrl);
 
   bool get forbidden => statusError?.code == 'forbidden';
 
@@ -96,8 +103,11 @@ class ThinkController extends ChangeNotifier {
     statusLoading = true;
     notifyListeners();
     try {
+      final wasReady = rolesReady;
       status = await _api.status();
       statusError = null;
+      final id = selectedId;
+      if (!wasReady && rolesReady && id != null) _loadRoleExtras(id);
     } on ThinkApiException catch (e) {
       statusError = e;
     } catch (e) {
@@ -106,6 +116,31 @@ class ThinkController extends ChangeNotifier {
       statusLoading = false;
       notifyListeners();
     }
+  }
+
+  Future<void> refreshDocumentProbe() async {
+    if (forbidden) return;
+    documentProbeLoading = true;
+    notifyListeners();
+    try {
+      documentProbe = await _api.probeDocumentCapabilities(conversationIdForCreate: selectedId);
+      documentProbeError = null;
+    } catch (e) {
+      documentProbe = null;
+      documentProbeError = e;
+    } finally {
+      documentProbeLoading = false;
+      notifyListeners();
+    }
+  }
+
+  /// Edge status·문서 probe·코드 작업자 목록을 함께 갱신한다.
+  Future<void> refreshConnectionDetails() async {
+    await Future.wait([
+      refreshStatus(),
+      refreshDocumentProbe(),
+      ThinkCodeController.instance.refresh(quiet: true),
+    ]);
   }
 
   // ------------------------------------------------------------------ 대화 목록
@@ -167,6 +202,7 @@ class ThinkController extends ChangeNotifier {
     treeNodes = treeNodes.where((n) => n.conversationId != id).toList();
     _messages.remove(id);
     _actions.remove(id);
+    details.remove(id);
     turnInfo.remove(id);
     costs.remove(id);
     if (selectedId == id) selectedId = null;
@@ -311,6 +347,35 @@ class ThinkController extends ChangeNotifier {
     });
   }
 
+  Future<String> createDocument({
+    required String conversationId,
+    required String? parentId,
+    required String title,
+    required String body,
+    required List<String> messageIds,
+  }) async {
+    late String id;
+    await _mutateTree(() async {
+      id = await _api.createDocument(
+        conversationId: conversationId,
+        parentId: parentId,
+        title: title,
+        body: body,
+        messageIds: messageIds,
+      );
+      if (parentId != null) collapsedFolders.remove(parentId);
+    });
+    return id;
+  }
+
+  Future<ThinkDocumentDetail> loadDocument(String nodeId) => _api.getDocument(nodeId);
+
+  Future<void> updateDocument(ThinkDocumentDetail doc, {required String title, required String body}) async {
+    await _mutateTree(() async {
+      await _api.updateDocument(nodeId: doc.id, expectedVersion: doc.version, title: title, body: body);
+    });
+  }
+
   // ------------------------------------------------------------------ 작업 제안
   // AI는 도구로 제안(ai_actions)만 남긴다. 실행은 여기서 사람이 승인할 때 서버 RPC가 한다.
   final Map<String, List<ThinkAction>> _actions = {};
@@ -347,6 +412,11 @@ class ThinkController extends ChangeNotifier {
 
   @visibleForTesting
   void putActionForTest(ThinkAction a) => _putAction(a);
+
+  @visibleForTesting
+  void setMessagesForTest(String conversationId, List<ThinkMessage> messages) {
+    _messages[conversationId] = messages;
+  }
 
   void _putAction(ThinkAction a) {
     final list = [...(_actions[a.conversationId] ?? const <ThinkAction>[])];
@@ -385,7 +455,11 @@ class ThinkController extends ChangeNotifier {
     return saved;
   }
 
-  Future<void> rejectAction(ThinkAction a) async => _putAction(await _api.rejectAction(a.id));
+  Future<void> rejectAction(ThinkAction a) async {
+    _putAction(await _api.rejectAction(a.id));
+    // 나누기 제안을 거절하면 서버가 이 대화의 나누기 제안을 끈다.
+    if (a.kind == ThinkActionKind.splitConversation) _setSplitSuggestionsLocal(a.conversationId, false);
+  }
 
   /// 조율본 질문에 답하면 서버가 이전 조율본을 닫고 다시 조율을 시작한다.
   Future<void> revisePlan(ThinkAction a, List<Map<String, String>> answers) async {
@@ -415,8 +489,246 @@ class ThinkController extends ChangeNotifier {
       case ThinkActionKind.deleteFolder:
       case ThinkActionKind.deleteConversation:
         await refreshTree();
+      case ThinkActionKind.splitConversation:
+        await Future.wait([refreshTree(), _refreshConversationsQuietly()]);
     }
   }
+
+  // ------------------------------------------------------------------ 역할·자료 스냅샷
+  ThinkRoleId conversationRole = ThinkRoleId.lead;
+  List<ThinkDepartmentId> extraRefDepartments = [];
+  List<String> linkedMemoryIds = [];
+  List<String> linkedDocumentNodeIds = [];
+  final Map<String, ThinkMessageContextSnapshot> messageSnapshots = {};
+  String? selectedAssistantMessageId;
+
+  /// 역할을 저장하는 중(칩을 잠근다).
+  bool roleSaving = false;
+  final Set<String> _snapshotsLoaded = {};
+
+  /// 서버(Edge·DB)와 이 앱이 모두 역할 기능을 지원할 때만 역할·범위 UI를 켠다.
+  bool get rolesReady => status?.thinkRoles.ready == true;
+
+  /// 역할을 바꿀 수 없는 이유. null이면 바꿀 수 있다.
+  String? get roleLockReason {
+    if (!rolesReady) return '역할 기능 준비가 필요합니다.';
+    if (isStreaming) return '답변이 끝난 뒤 바꿀 수 있습니다.';
+    if (roleSaving) return '저장 중입니다.';
+    return null;
+  }
+
+  ThinkMessageContextSnapshot? get selectedMessageSnapshot {
+    final id = selectedAssistantMessageId;
+    if (id == null) return null;
+    return messageSnapshots[id];
+  }
+
+  /// 이 답변의 스냅샷을 확인했는데 없다(역할 기능 전 답변). 확인 전이면 false.
+  bool roleRecordMissing(ThinkMessage m) {
+    final id = m.id;
+    final conv = selectedId;
+    if (!rolesReady || id == null || id.isEmpty || conv == null || m.isUser) return false;
+    if (m.status == ThinkMessageStatus.streaming || !_snapshotsLoaded.contains(conv)) return false;
+    return !messageSnapshots.containsKey(id);
+  }
+
+  /// 새 대화면 첫 메시지와 함께 서버가 저장한다. 실패하면 저장된 값으로 되돌리고 이유를 돌려준다.
+  Future<String?> setConversationRole(ThinkRoleId role) =>
+      _saveRole(role, role == ThinkRoleId.lead ? const [] : extraRefDepartments.where((d) => d != role.department).toList());
+
+  Future<String?> toggleExtraRefDepartment(ThinkDepartmentId dept) {
+    final next = [...extraRefDepartments];
+    next.contains(dept) ? next.remove(dept) : next.add(dept);
+    return _saveRole(conversationRole, next);
+  }
+
+  Future<String?> _saveRole(ThinkRoleId role, List<ThinkDepartmentId> refs) async {
+    final lock = roleLockReason;
+    if (lock != null) return lock;
+    final id = selectedId;
+    final prevRole = conversationRole;
+    final prevRefs = extraRefDepartments;
+    conversationRole = role;
+    extraRefDepartments = refs;
+    if (id == null) {
+      notifyListeners();
+      return null;
+    }
+    roleSaving = true;
+    notifyListeners();
+    try {
+      await _api.setConversationThinkRole(conversationId: id, role: role, extraRefs: refs);
+      return null;
+    } catch (e) {
+      if (selectedId == id) {
+        conversationRole = prevRole;
+        extraRefDepartments = prevRefs;
+      }
+      unawaited(_loadRoleSettings(id));
+      return '역할을 저장하지 못했습니다: ${_errText(e)}';
+    } finally {
+      roleSaving = false;
+      notifyListeners();
+    }
+  }
+
+  Future<String?> linkMemoryToConversation(String memoryId) =>
+      _changeLink((id) => _api.linkConversationMemory(id, memoryId), '기억을 연결하지 못했습니다');
+
+  Future<String?> unlinkMemoryFromConversation(String memoryId) =>
+      _changeLink((id) => _api.unlinkConversationMemory(id, memoryId), '연결을 끊지 못했습니다');
+
+  Future<String?> linkDocumentToConversation(String documentNodeId) =>
+      _changeLink((id) => _api.linkConversationDocument(id, documentNodeId), '문서를 연결하지 못했습니다');
+
+  Future<String?> unlinkDocumentFromConversation(String documentNodeId) =>
+      _changeLink((id) => _api.unlinkConversationDocument(id, documentNodeId), '연결을 끊지 못했습니다');
+
+  Future<String?> _changeLink(Future<void> Function(String conversationId) run, String failText) async {
+    final id = selectedId;
+    if (id == null) return '대화를 시작한 뒤 연결할 수 있습니다.';
+    final lock = roleLockReason;
+    if (lock != null) return lock;
+    try {
+      await run(id);
+      return null;
+    } catch (e) {
+      return '$failText: ${_errText(e)}';
+    } finally {
+      await _loadConversationLinks(id);
+    }
+  }
+
+  static String _errText(Object e) {
+    if (e is ThinkApiException) return e.message;
+    final s = e.toString();
+    for (final code in ['memory_not_linkable', 'document_not_found', 'conversation_not_found', 'forbidden']) {
+      if (s.contains(code)) {
+        return switch (code) {
+          'memory_not_linkable' => '승인된 기억만 연결할 수 있습니다.',
+          'document_not_found' => '문서를 찾을 수 없습니다.',
+          'conversation_not_found' => '대화를 찾을 수 없습니다.',
+          _ => '권한이 없습니다.',
+        };
+      }
+    }
+    return s;
+  }
+
+  Future<void> _loadConversationLinks(String id) async {
+    if (!rolesReady) {
+      linkedMemoryIds = [];
+      linkedDocumentNodeIds = [];
+      return;
+    }
+    try {
+      final results = await Future.wait([
+        _api.listConversationMemoryLinks(id),
+        _api.listConversationDocumentLinks(id),
+      ]);
+      if (selectedId != id) return;
+      linkedMemoryIds = results[0];
+      linkedDocumentNodeIds = results[1];
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  void selectAssistantMessage(String? messageId) {
+    selectedAssistantMessageId = messageId;
+    notifyListeners();
+  }
+
+  Future<void> _loadRoleSettings(String id) async {
+    if (!rolesReady) return;
+    try {
+      final s = await _api.getConversationRoleSettings(id);
+      if (s == null || selectedId != id) return;
+      conversationRole = s.thinkRoleId;
+      extraRefDepartments = [...s.extraRefDepartments];
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  Future<void> _refreshSnapshots(String convId) async {
+    if (!rolesReady) return;
+    final msgs = _messages[convId] ?? [];
+    final ids = msgs.where((m) => !m.isUser && (m.id ?? '').isNotEmpty).map((m) => m.id!).toList();
+    try {
+      if (ids.isNotEmpty) messageSnapshots.addAll(await _api.listMessageSnapshots(ids));
+      _snapshotsLoaded.add(convId);
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  /// 대화를 고르거나 상태를 다시 읽은 뒤: 저장된 역할·연결·답변 스냅샷을 읽는다.
+  void _loadRoleExtras(String id) {
+    unawaited(_loadRoleSettings(id));
+    unawaited(_loadConversationLinks(id));
+    unawaited(_refreshSnapshots(id));
+  }
+
+  void _resetRoleState() {
+    conversationRole = ThinkRoleId.lead;
+    extraRefDepartments = [];
+    linkedMemoryIds = [];
+    linkedDocumentNodeIds = [];
+    selectedAssistantMessageId = null;
+  }
+
+  // ------------------------------------------------------------------ 대화 나누기
+  final Map<String, ThinkConversationDetail> details = {};
+
+  /// 방금 나누기를 승인해 넘어온 새 대화. 그 대화 위쪽 안내를 펼쳐 보여 준다.
+  String? justSplitConversationId;
+
+  ThinkConversationDetail? get selectedDetail => selectedId == null ? null : details[selectedId];
+
+  Future<void> loadDetail(String id) async {
+    try {
+      final d = await _api.getConversationDetail(id);
+      if (d == null) return;
+      details[id] = d;
+      notifyListeners();
+    } catch (_) {
+      // 나누기 정보는 다음에 대화를 열 때 다시 읽는다.
+    }
+  }
+
+  /// 승인하면 서버가 한 트랜잭션으로 새 대화를 만들고 이번 질문·답변을 복사한다. 그 뒤 새 대화로 넘어간다.
+  Future<ThinkAction> applySplit(ThinkAction a, {Map<String, dynamic> overrides = const {}}) async {
+    final saved = await applyAction(a, overrides: overrides);
+    final id = saved.splitConversationId;
+    if (id != null) {
+      justSplitConversationId = id;
+      await openConversation(id);
+    }
+    return saved;
+  }
+
+  Future<void> setSplitSuggestions(String conversationId, bool enabled) async {
+    await _api.setSplitSuggestions(conversationId, enabled);
+    _setSplitSuggestionsLocal(conversationId, enabled);
+  }
+
+  void _setSplitSuggestionsLocal(String conversationId, bool enabled) {
+    final d = details[conversationId];
+    if (d == null || d.autoSplitSuggestions == enabled) return;
+    details[conversationId] = d.copyWith(autoSplitSuggestions: enabled);
+    notifyListeners();
+  }
+
+  /// 새 질문이 저장되면 서버(메시지 저장 트리거)가 앞의 나누기 제안을 만료시킨다. 화면도 같이 맞춘다.
+  void _expirePendingSplits(String conversationId) {
+    final list = _actions[conversationId];
+    if (list == null || !list.any((a) => a.pending && a.kind == ThinkActionKind.splitConversation)) return;
+    _actions[conversationId] = [
+      for (final a in list)
+        a.pending && a.kind == ThinkActionKind.splitConversation ? a.copyWith(status: ThinkActionStatus.expired) : a,
+    ];
+  }
+
+  @visibleForTesting
+  void expirePendingSplitsForTest(String conversationId) => _expirePendingSplits(conversationId);
 
   /// Think가 코드 결과를 검토해 답을 남기면(review_message_id) 열린 대화를 다시 읽는다.
   final Set<String> _reviewReloads = {};
@@ -491,23 +803,31 @@ class ThinkController extends ChangeNotifier {
 
   void startNew() {
     selectedId = null;
+    justSplitConversationId = null;
+    _resetRoleState();
     if (!(isStreaming && _streamingDraft && streamingConversationId == null)) _draft = [];
     messagesError = null;
     notifyListeners();
   }
 
   Future<void> select(String id) async {
+    if (selectedId != id) _resetRoleState();
     selectedId = id;
+    if (justSplitConversationId != id) justSplitConversationId = null;
     messagesError = null;
     notifyListeners();
     unawaited(refreshCost(id));
     unawaited(loadActions(id));
+    unawaited(loadDetail(id));
+    unawaited(_loadRoleSettings(id));
+    unawaited(_loadConversationLinks(id));
     if (isStreaming && streamingConversationId == id) return;
     messagesLoading = !_messages.containsKey(id);
     notifyListeners();
     try {
       final loaded = await _api.listMessages(id);
       if (!(isStreaming && streamingConversationId == id)) _messages[id] = loaded;
+      if (selectedId == id) unawaited(_refreshSnapshots(id));
     } catch (e) {
       if (selectedId == id) messagesError = '메시지를 불러오지 못했습니다: $e';
     } finally {
@@ -528,7 +848,7 @@ class ThinkController extends ChangeNotifier {
   final List<ThinkAttachment> pendingAttachments = [];
   int uploadingCount = 0;
   bool deep = false;
-  bool webSearch = false;
+  bool webSearch = true;
   String? sendError;
 
   void setDeep(bool v) {
@@ -662,7 +982,9 @@ class ThinkController extends ChangeNotifier {
         message: text,
         attachments: attachments,
         deep: deep,
-        webSearch: webSearch,
+        webSearch: webSearch && (status?.webSearchEnabled ?? true),
+        newConversationRole: convId == null && rolesReady ? conversationRole : null,
+        newConversationRefs: convId == null && rolesReady ? extraRefDepartments : const [],
       );
     } catch (e) {
       list
@@ -705,6 +1027,7 @@ class ThinkController extends ChangeNotifier {
             notice = switch (d['code']) {
               'budget_warning' => '이번 달 사용 한도를 넘었습니다(경고 모드). 사용량 탭을 확인하세요.',
               'web_search_disabled' => '웹 검색이 꺼져 있어 검색 없이 답합니다. 사용량 탭에서 켤 수 있습니다.',
+              'role_not_applied' => '고른 역할을 저장하지 못해 총괄로 답합니다.',
               _ => d['message']?.toString(),
             };
             notifyListeners();
@@ -715,6 +1038,19 @@ class ThinkController extends ChangeNotifier {
             user.id = d['user_message_id']?.toString();
             final ctx = d['context'] is Map ? Map<String, dynamic>.from(d['context'] as Map) : null;
             turnInfo[id] = ThinkTurnInfo(context: ctx, model: d['model']?.toString());
+            _expirePendingSplits(id);
+            final features = parseThinkFeatures(d['features']);
+            if (features.isNotEmpty) status = status?.withFeatures(features);
+            if (d['split_suggestions'] is bool) _setSplitSuggestionsLocal(id, d['split_suggestions'] as bool);
+            final role = d['think_role'] is Map ? Map<String, dynamic>.from(d['think_role'] as Map) : null;
+            if (role != null && (selectedId == id || (selectedId == null && _streamingDraft))) {
+              final saved = ThinkConversationRoleSettings.fromRow({
+                'think_role_id': role['id'],
+                'extra_ref_departments': role['extra_ref_departments'],
+              });
+              conversationRole = saved.thinkRoleId;
+              extraRefDepartments = [...saved.extraRefDepartments];
+            }
             if (_streamingDraft) {
               _messages[id] = list;
               streamingConversationId = id;
@@ -799,6 +1135,8 @@ class ThinkController extends ChangeNotifier {
                 webSearchCalls: (d['web_search_calls'] as num?)?.toInt() ?? 0,
               );
               _attachActions(id, d['action_ids'], assistant.id);
+              unawaited(_refreshSnapshots(id));
+              if (assistant.id != null && selectedId == id) selectedAssistantMessageId = assistant.id;
             }
             notifyListeners();
           case 'error':
@@ -904,9 +1242,12 @@ class ThinkController extends ChangeNotifier {
 
   /// 확정(active)된 기억이 다른 기억을 대체하면(supersedes_id) 대체된 쪽을 '대체됨'으로 바꾼다.
   Future<ThinkMemory> saveMemory(ThinkMemoryDraft draft, {ThinkMemory? existing}) async {
+    final withScope = rolesReady;
+    final scopeError = withScope ? draft.scopeError : null;
+    if (scopeError != null) throw ThinkApiException('scope_department_required', scopeError);
     final saved = existing == null
-        ? await _api.createMemory(draft)
-        : await _api.updateMemory(existing.id, existing.version, draft.toRow());
+        ? await _api.createMemory(draft, withScope: withScope)
+        : await _api.updateMemory(existing.id, existing.version, draft.toRow(withScope: withScope));
     _putMemory(saved);
     await _supersedeFor(saved);
     return saved;

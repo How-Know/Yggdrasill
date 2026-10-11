@@ -75,11 +75,13 @@ class _ThinkTreePanelState extends State<ThinkTreePanel> {
         await _run(() => _c.setArchived(conv.id, !conv.archived));
       case 'delete':
         final excerpts = _c.tree.excerptsOf(conv.id).length;
+        final documents = _c.tree.documentsOf(conv.id).length;
         final ok = await confirmThink(
           context,
           title: '대화 삭제',
           message: '"${conv.title}" 대화와 첨부 파일을 지웁니다. 되돌릴 수 없습니다.\n'
               '${excerpts > 0 ? '이 대화에서 만든 발췌 $excerpts개도 함께 지워집니다.\n' : ''}'
+              '${documents > 0 ? '이 대화에서 만든 종합 문서 $documents개도 함께 지워집니다.\n' : ''}'
               '이 대화에서 확정한 결정은 기억에 그대로 남습니다.',
           confirmLabel: '삭제',
           destructive: true,
@@ -101,11 +103,32 @@ class _ThinkTreePanelState extends State<ThinkTreePanel> {
         final ok = await confirmThink(
           context,
           title: '폴더 삭제',
-          message: '"${node.title}" 폴더를 지웁니다.\n안에 있는 대화·발췌·하위 폴더는 지우지 않고 한 단계 위로 옮깁니다.',
+          message: '"${node.title}" 폴더를 지웁니다.\n안에 있는 대화·발췌·종합 문서·하위 폴더는 지우지 않고 한 단계 위로 옮깁니다.',
           confirmLabel: '삭제',
           destructive: true,
         );
         if (ok) await _run(() => _c.deleteFolder(node));
+    }
+  }
+
+  Future<void> _documentAction(ThinkTreeNode node, String action) async {
+    switch (action) {
+      case 'open':
+        await ThinkDocumentDialog.open(context, node.id);
+      case 'sources':
+        await _c.revealMessages(node.conversationId!, node.sourceMessageIds);
+      case 'move':
+        await _moveWithPicker(ThinkDragItem.node(node));
+      case 'delete':
+        final ok = await confirmThink(
+          context,
+          title: '종합 문서 삭제',
+          message: '"${node.title}" 종합 문서를 지웁니다. 원본 메시지는 대화에 그대로 남습니다.\n'
+              '출처 메시지가 나중에 지워지면 문서는 자동으로 삭제됩니다.',
+          confirmLabel: '삭제',
+          destructive: true,
+        );
+        if (ok) await _run(() => _c.removeNode(node));
     }
   }
 
@@ -160,12 +183,21 @@ class _ThinkTreePanelState extends State<ThinkTreePanel> {
         _item('delete', '삭제', danger: true),
       ];
 
+  List<PopupMenuEntry<String>> _documentMenu() => [
+        _item('open', '열기'),
+        _item('sources', '출처 원문 보기'),
+        _item('move', '폴더로 이동'),
+        _item('delete', '삭제', danger: true),
+      ];
+
   // ------------------------------------------------------------ 행
   Widget _conversationRow(ThinkConversation conv, {ThinkTreeNode? node, int depth = 0, bool draggable = true, String? trailing}) {
     return _TreeRow(
       key: ValueKey('conv-${conv.id}'),
       depth: depth,
-      icon: Icons.chat_bubble_outline,
+      icon: conv.fromCursor ? Icons.smart_toy_outlined : Icons.chat_bubble_outline,
+      iconColor: conv.fromCursor ? kThinkLink : kThinkHint,
+      tooltip: conv.fromCursor ? 'Cursor가 Think에게 물으며 시작한 대화입니다. 이어서 직접 말해도 됩니다.' : null,
       title: conv.title,
       trailing: trailing ?? formatRelative(conv.sortTime),
       selected: conv.id == _c.selectedId,
@@ -240,7 +272,34 @@ class _ThinkTreePanelState extends State<ThinkTreePanel> {
           resolve: draggable ? (item, pos) => tree.planDrop(item, n, pos) : null,
           onDrop: _drop,
         );
+      case ThinkTreeKind.document:
+        final source = tree.conversationsById[n.conversationId];
+        return _TreeRow(
+          key: ValueKey('node-${n.id}'),
+          depth: row.depth,
+          icon: Icons.description_outlined,
+          iconColor: kThinkLink,
+          title: n.title,
+          trailing: trailing,
+          tooltip: [
+            if (n.body != null && n.body!.isNotEmpty) _preview(n.body!, 120),
+            '종합 문서 · 출처: ${source?.title ?? '대화'} · ${n.sourceMessageIds.length}개',
+          ].join('\n'),
+          onTap: () => ThinkDocumentDialog.open(context, n.id),
+          menuItems: _documentMenu,
+          onMenu: (a) => _documentAction(n, a),
+          dragItem: draggable ? ThinkDragItem.node(n) : null,
+          dragLabel: n.title,
+          onDragChanged: _setDragging,
+          resolve: draggable ? (item, pos) => tree.planDrop(item, n, pos) : null,
+          onDrop: _drop,
+        );
     }
+  }
+
+  String _preview(String text, int max) {
+    final line = text.trim().replaceAll(RegExp(r'\s+'), ' ');
+    return line.length <= max ? line : '${line.substring(0, max)}…';
   }
 
   void _setDragging(bool v) {
@@ -329,8 +388,11 @@ class _ThinkTreePanelState extends State<ThinkTreePanel> {
     final excerpts = tree.byId.values
         .where((n) => n.kind == ThinkTreeKind.excerpt && (hit(n.title) || hit(n.summary)))
         .toList();
+    final documents = tree.byId.values
+        .where((n) => n.kind == ThinkTreeKind.document && (hit(n.title) || hit(n.body)))
+        .toList();
     final convs = _c.conversations.where((c) => hit(c.title)).toList();
-    if (folders.isEmpty && excerpts.isEmpty && convs.isEmpty) {
+    if (folders.isEmpty && excerpts.isEmpty && documents.isEmpty && convs.isEmpty) {
       return const [
         Padding(
           padding: EdgeInsets.all(16),
@@ -350,6 +412,7 @@ class _ThinkTreePanelState extends State<ThinkTreePanel> {
           trailing: tree.conversationNodes[c.id] == null ? '정리 안 됨' : where(tree.conversationNodes[c.id]!.parentId),
         ),
       for (final e in excerpts) _nodeRow(flat(e), draggable: false, trailing: where(e.parentId)),
+      for (final d in documents) _nodeRow(flat(d), draggable: false, trailing: where(d.parentId)),
     ];
   }
 

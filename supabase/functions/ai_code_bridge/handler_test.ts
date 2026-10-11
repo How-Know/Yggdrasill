@@ -169,6 +169,19 @@ Deno.test('회차 결과 검증: 너무 긴 원문과 잘못된 도구 기록은
   assert(okRound.ok);
   assertEquals(okRound.value.parse_ok, false);
   assertEquals(okRound.value.tool_calls, []);
+  assertEquals(okRound.value.effort, null);
+});
+
+Deno.test('회차 결과의 실제 작업 강도: 아는 값만 기록하고 나머지는 비운다', () => {
+  const effortOf = (effort: unknown) => {
+    const r = parseRound({ effort });
+    assert(r.ok);
+    return r.value.effort;
+  };
+  assertEquals(effortOf('low'), 'low');
+  assertEquals(effortOf('xhigh'), 'xhigh');
+  assertEquals(effortOf('max'), null);
+  assertEquals(effortOf(3), null);
 });
 
 Deno.test('적용 작업을 가져가면 diff와 기준 커밋을 주고, 2회차 질문은 주지 않는다', async () => {
@@ -196,6 +209,88 @@ Deno.test('조사 작업에는 diff를 싣지 않는다', async () => {
   assertEquals(body.request.mode, 'investigate');
   assertEquals(body.request.followup_prompt, '추가 질문');
   assertEquals(body.request.diff, null);
+});
+
+Deno.test('재수정 작업을 가져가면 앞 수정의 diff와 기준 커밋을 fix로 싣는다', async () => {
+  const PREV = '99999999-2222-3333-4444-555555555555';
+  const base = 'a'.repeat(40);
+  const h = await harness((fn) =>
+    fn === 'ai_code_bridge_fix_source'
+      ? ok({ diff: 'diff --git a/x b/x\n', base_commit: base })
+      : ok({
+        job: 'run',
+        request: { id: REQ_ID, title: 't', mode: 'change', request: { goal: 'g', fix_of: { request_id: PREV, attempt: 1 } }, round: 0, max_rounds: 1, attempts: 0 },
+        round: null,
+      })
+  );
+  const body = await (await handleBridge(post({ action: 'claim', worker_id: 'w1' }), h.deps)).json();
+  assertEquals(h.calls[1], { fn: 'ai_code_bridge_fix_source', args: { p_request_id: PREV } });
+  assertEquals(body.request.fix, { diff: 'diff --git a/x b/x\n', base_commit: base });
+  assertEquals(body.request.diff, null);
+
+  const plain = await harness(() => ok({ job: 'run', request: { id: REQ_ID, title: 't', mode: 'change', request: { goal: 'g' }, round: 0, max_rounds: 1, attempts: 0 } }));
+  const b2 = await (await handleBridge(post({ action: 'claim', worker_id: 'w1' }), plain.deps)).json();
+  assertEquals(b2.request.fix, null);
+  assertEquals(plain.calls.length, 1, '재수정이 아니면 앞 수정을 찾지 않는다');
+
+  const missing = await harness((fn) =>
+    fn === 'ai_code_bridge_fix_source'
+      ? ok(null)
+      : ok({ job: 'run', request: { id: REQ_ID, title: 't', mode: 'change', request: { fix_of: { request_id: PREV } }, round: 0, max_rounds: 1, attempts: 0 } })
+  );
+  assertEquals((await (await handleBridge(post({ action: 'claim', worker_id: 'w1' }), missing.deps)).json()).request.fix, null);
+});
+
+Deno.test('이어받기 요청을 가져가면 앞 수정의 최종 패치를 base_patch로 싣고, 못 주면 이유만 싣는다', async () => {
+  const PREV = '99999999-2222-3333-4444-555555555555';
+  const base = 'a'.repeat(40);
+  const diff = 'diff --git a/x b/x\n+BODY_MARKER\n';
+  const job = (spec: Record<string, unknown>, mode = 'change') =>
+    ok({ job: 'run', request: { id: REQ_ID, title: 't', mode, request: spec, round: 0, max_rounds: 1, attempts: 0 }, round: null });
+  const claimWith = async (source: RpcResult | null, spec: Record<string, unknown>, mode = 'change') => {
+    const h = await harness((fn) => (fn === 'ai_code_bridge_patch_source' && source ? source : job(spec, mode)));
+    const res = await handleBridge(post({ action: 'claim', worker_id: 'w1' }), h.deps);
+    return { h, text: await res.text() };
+  };
+  const from = { goal: 'g', continue_from: { request_id: PREV, title: '앞 수정' } };
+  const final = { ok: true, request_id: PREV, title: '앞 수정', status: 'ready', round: 2, diff, diff_stats: { files: 1, additions: 1, deletions: 0 }, base_commit: base };
+
+  for (const mode of ['change', 'plan', 'investigate']) {
+    const { h, text } = await claimWith(ok(final), from, mode);
+    assertEquals(h.calls[1], { fn: 'ai_code_bridge_patch_source', args: { p_request_id: PREV } });
+    assertEquals(JSON.parse(text).request.base_patch, final);
+    assertEquals(JSON.parse(text).request.fix, null);
+  }
+  const stopped = await claimWith(ok({ ...final, status: 'needs_review', partial: 'timeout' }), from);
+  assertEquals(JSON.parse(stopped.text).request.base_patch, { ...final, status: 'needs_review', partial: 'timeout' }, '미완성 표시를 넘긴다');
+  const odd = await claimWith(ok({ ...final, partial: 'whatever' }), from);
+  assertEquals(JSON.parse(odd.text).request.base_patch, final, '모르는 표시는 넘기지 않는다');
+
+  const superseded = await claimWith(ok({ ok: false, error: 'superseded', superseded_by: REQ_ID, superseded_status: 'ready', diff }), from);
+  assertEquals(JSON.parse(superseded.text).request.base_patch, {
+    ok: false,
+    error: 'superseded',
+    request_id: PREV,
+    superseded_by: REQ_ID,
+    superseded_status: 'ready',
+  });
+  assert(!superseded.text.includes('BODY_MARKER'), '실패 응답에 패치 본문 없음');
+
+  const broken = await claimWith({ data: null, error: { message: 'boom' } }, from);
+  assertEquals(JSON.parse(broken.text).request.base_patch, { ok: false, error: 'patch_source_failed', request_id: PREV });
+
+  const bad = await claimWith(null, { continue_from: { request_id: 'abc' } });
+  assertEquals(JSON.parse(bad.text).request.base_patch, { ok: false, error: 'continue_from_invalid' });
+  assertEquals(bad.h.calls.length, 1);
+  const self = await claimWith(null, { continue_from: { request_id: REQ_ID } });
+  assertEquals(JSON.parse(self.text).request.base_patch, { ok: false, error: 'continue_from_self' });
+
+  const fix = await claimWith(ok(final), { ...from, fix_of: { request_id: PREV, attempt: 1 } });
+  assertEquals(JSON.parse(fix.text).request.base_patch, null, '재수정은 fix가 앞 diff를 담는다');
+  assert(!fix.h.calls.some((c) => c.fn === 'ai_code_bridge_patch_source'));
+  const plain = await claimWith(ok(final), { goal: 'g' });
+  assertEquals(JSON.parse(plain.text).request.base_patch, null);
+  assertEquals(plain.h.calls.length, 1);
 });
 
 Deno.test('적용 결과 보고', async () => {
@@ -248,4 +343,42 @@ Deno.test('POST가 아니면 405', async () => {
   const h = await harness(() => ok({}));
   const res = await handleBridge(new Request('http://localhost/ai_code_bridge', { method: 'GET' }), h.deps);
   assertEquals(res.status, 405);
+});
+
+Deno.test('ask_think: 묻기 연결이 없으면 503, 요청 id가 틀리면 400, 맞으면 작업자·요청을 넘기고 결과를 그대로 돌려준다', async () => {
+  const h = await harness(() => ok({}));
+  assertEquals((await handleBridge(post({ action: 'ask_think', worker_id: 'w1', request_id: REQ_ID, question: '?' }), h.deps)).status, 503);
+
+  const asked: { workerId: string; requestId: string; question: string }[] = [];
+  h.deps.ask = (input) => {
+    asked.push(input);
+    return Promise.resolve(
+      input.question === 'limit'
+        ? { ok: false, status: 429, error: 'relay_run_limit', message: '다 썼습니다' }
+        : {
+          ok: true,
+          ask_id: 'ask-1',
+          conversation_id: 'conv-1',
+          verdict: 'needs_owner',
+          answer: '운영자 확인이 필요합니다.',
+          basis: [],
+          owner_questions: ['범위'],
+          downgraded: null,
+        },
+    );
+  };
+  const bad = await handleBridge(post({ action: 'ask_think', worker_id: 'w1', request_id: 'nope', question: 'q' }), h.deps);
+  assertEquals(bad.status, 400);
+  assertEquals(asked.length, 0);
+
+  const res = await handleBridge(post({ action: 'ask_think', worker_id: 'w1', request_id: REQ_ID, question: '범위는?' }), h.deps);
+  assertEquals(res.status, 200);
+  const body = await res.json();
+  assertEquals(body.verdict, 'needs_owner');
+  assertEquals(asked[0], { workerId: 'w1', requestId: REQ_ID, question: '범위는?' });
+
+  const limited = await handleBridge(post({ action: 'ask_think', worker_id: 'w1', request_id: REQ_ID, question: 'limit' }), h.deps);
+  assertEquals(limited.status, 429);
+  assertEquals((await limited.json()).error, 'relay_run_limit');
+  assertEquals(h.calls.length, 0, '묻기는 ai_code_bridge_* RPC를 부르지 않는다');
 });

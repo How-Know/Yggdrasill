@@ -41,6 +41,15 @@ class ThinkCodeController extends ChangeNotifier {
     return null;
   }
 
+  /// 자동 검사 실패로 이 요청을 이어 고치는 요청. 여럿이면 가장 최근 것.
+  ThinkCodeRequest? fixFor(String id) {
+    ThinkCodeRequest? found;
+    for (final r in requests) {
+      if (r.fixOfRequestId == id && (found == null || r.createdAt.isAfter(found.createdAt))) found = r;
+    }
+    return found;
+  }
+
   List<ThinkCodeRound>? roundsOf(String id) => _rounds[id];
 
   @visibleForTesting
@@ -63,8 +72,7 @@ class ThinkCodeController extends ChangeNotifier {
       requests.where((r) => r.conversationId == conversationId).toList();
 
   /// 결과를 기다리거나 Think가 결과를 검토하는 중이면 빨리 읽는다.
-  bool get _hasActive =>
-      requests.any((r) => r.status.inProgress || r.reviewStatus == ThinkReviewStatus.pending);
+  bool get _hasActive => requests.any((r) => r.status.inProgress || r.reviewStatus == ThinkReviewStatus.pending);
 
   /// 카드가 그려질 때 회차 결과가 없으면 읽는다. build 중에 불러도 되도록 알림은 프레임 뒤로 미룬다.
   void ensureRounds(String id) {
@@ -181,6 +189,9 @@ class ThinkCodeController extends ChangeNotifier {
   Future<void> applyChange(ThinkCodeRequest r) async => _put(await _api.applyCodeChange(r.id));
 
   Future<void> revertChange(ThinkCodeRequest r) async => _put(await _api.revertCodeChange(r.id));
+
+  /// 끝나지 못한 수정 요청을 같은 내용으로 새로 보낸다. 이전 요청은 그대로 남는다.
+  Future<void> retryChange(ThinkCodeRequest r) async => _put(await _api.retryCodeChange(r.id));
 
   Future<void> decide(ThinkCodeRequest r, ThinkCodeOutcome? outcome, String? note) async =>
       _put(await _api.decideCodeRequest(r.id, outcome, note));

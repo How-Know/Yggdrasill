@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import '../widgets/home_grading_edit_icon.dart';
 import '../widgets/home_header_weather_icon.dart';
 import '../widgets/home_status_dashboard_icon.dart';
+import '../widgets/student_member_icon.dart';
+import '../widgets/tendency_puzzle_icon.dart';
 import 'design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import '../widgets/navigation_rail.dart';
 import '../services/data_manager.dart';
@@ -36,8 +38,6 @@ import '../models/education_level.dart';
 import 'package:collection/collection.dart';
 import '../services/homework_store.dart';
 import '../services/homework_assignment_store.dart';
-import '../services/homework_departure_draft_service.dart';
-import '../services/homework_session_plan_service.dart';
 import '../services/consult_trial_lesson_service.dart';
 import '../services/student_flow_store.dart';
 import '../services/student_behavior_assignment_store.dart';
@@ -54,6 +54,7 @@ import '../widgets/dialog_tokens.dart';
 import '../widgets/utility_glass_dialog_shell.dart';
 import '../widgets/dark_panel_route.dart';
 import '../widgets/flow_setup_dialog.dart';
+import '../widgets/departure_summary_dialog.dart';
 import '../widgets/homework_assign_dialog.dart';
 import '../widgets/left_side_sheet/favorite_templates_panel.dart';
 import '../widgets/right_side_sheet/file_shortcut_tab.dart';
@@ -3372,7 +3373,7 @@ class _MainScreenState extends State<MainScreen>
     await showMakeupManagementDialog(context);
   }
 
-  static const List<FabTabIconPair> _homeTabIcons = [
+  static const List<FabTabIconPair?> _homeTabIcons = [
     FabTabIconPair(
       outlineSvg: homeStatusDashboardOutlineSvg,
       filledSvg: homeStatusDashboardFilledSvg,
@@ -3381,6 +3382,17 @@ class _MainScreenState extends State<MainScreen>
       outlineSvg: homeGradingEditOutlineSvg,
       filledSvg: homeGradingEditFilledSvg,
       size: 24,
+    ),
+  ];
+
+  static const List<FabTabIconPair?> _studentTabIcons = [
+    FabTabIconPair(
+      outlineSvg: studentMemberOutlineSvg,
+      filledSvg: studentMemberIconSvg,
+    ),
+    FabTabIconPair(
+      outlineSvg: tendencyPuzzleOutlineSvg,
+      filledSvg: tendencyPuzzleIconSvg,
     ),
   ];
 
@@ -3444,7 +3456,11 @@ class _MainScreenState extends State<MainScreen>
               onTabSelected: (index) {
                 sharedScreenTabBar.onSelected?.call(index);
               },
-              tabIcons: menu == 0 ? _homeTabIcons : null,
+              tabIcons: switch (menu) {
+                0 => _homeTabIcons,
+                1 => _studentTabIcons,
+                _ => null,
+              },
             ),
           ),
         );
@@ -3544,6 +3560,8 @@ class _MainScreenState extends State<MainScreen>
     // 안전 가드: 네비게이션 레일은 0~4까지만 허용하므로 표시 인덱스를 보정
     final int _railSelectedIndex =
         (_selectedIndex >= 0 && _selectedIndex <= 5) ? _selectedIndex : 0;
+    final railWidth =
+        NavigationRailTheme.of(context).minWidth ?? navRailMinWidth;
     void selectDestination(int index) => _applyNavIndex(index);
 
     return Scaffold(
@@ -3552,16 +3570,32 @@ class _MainScreenState extends State<MainScreen>
         children: [
           Row(
             children: [
-              CustomNavigationRail(
-                selectedIndex: _railSelectedIndex,
-                onDestinationSelected: selectDestination,
-                rotationAnimation: _rotationAnimation,
-                onMenuPressed: _toggleSideSheet,
-              ),
+              SizedBox(width: railWidth),
               Expanded(
                 child: ClipRect(
                   child: Stack(
                     children: [
+                      // 채점 카드는 Clip.none으로 왼쪽으로 넘친다. 시트를 나중에
+                      // 그려 카드가 시트 아래로 지나가게 한다.
+                      AnimatedBuilder(
+                        animation: _sideSheetAnimation,
+                        child: _buildContent(),
+                        builder: (context, child) {
+                          final screenWidth = MediaQuery.sizeOf(context).width;
+                          final maxWidth =
+                              _resolveSideSheetMaxWidth(screenWidth);
+                          final offset = (maxWidth * _sideSheetAnimation.value)
+                              .clamp(0.0, maxWidth);
+                          // Transform.translate는 전체 폭을 유지한 채 밀어서
+                          // 오른쪽이 ClipRect에 잘리고 가로 스크롤이 끝까지
+                          // 가지 못했다. 시트 폭만큼 왼쪽만 비워 남는 영역에
+                          // 레이아웃하면 스크롤 viewport가 보이는 폭과 일치한다.
+                          return Padding(
+                            padding: EdgeInsets.only(left: offset),
+                            child: child,
+                          );
+                        },
+                      ),
                       AnimatedBuilder(
                         animation: _sideSheetAnimation,
                         builder: (context, child) {
@@ -4349,30 +4383,24 @@ class _MainScreenState extends State<MainScreen>
                           );
                         },
                       ),
-                      AnimatedBuilder(
-                        animation: _sideSheetAnimation,
-                        child: _buildContent(),
-                        builder: (context, child) {
-                          final screenWidth = MediaQuery.sizeOf(context).width;
-                          final maxWidth =
-                              _resolveSideSheetMaxWidth(screenWidth);
-                          final offset = (maxWidth * _sideSheetAnimation.value)
-                              .clamp(0.0, maxWidth);
-                          // Transform.translate는 전체 폭을 유지한 채 밀어서
-                          // 오른쪽이 ClipRect에 잘리고 가로 스크롤이 끝까지
-                          // 가지 못했다. 시트 폭만큼 왼쪽만 비워 남는 영역에
-                          // 레이아웃하면 스크롤 viewport가 보이는 폭과 일치한다.
-                          return Padding(
-                            padding: EdgeInsets.only(left: offset),
-                            child: child,
-                          );
-                        },
-                      ),
                     ],
                   ),
                 ),
               ),
             ],
+          ),
+          // 넘친 채점 카드보다 위에 둔다. 레일 칸은 Row의 SizedBox가 유지한다.
+          Positioned(
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: railWidth,
+            child: CustomNavigationRail(
+              selectedIndex: _railSelectedIndex,
+              onDestinationSelected: selectDestination,
+              rotationAnimation: _rotationAnimation,
+              onMenuPressed: _toggleSideSheet,
+            ),
           ),
           _buildUtilityToolbarOverlay(context),
           _buildSharedMenuTabBar(context),
@@ -4684,54 +4712,28 @@ class _MainScreenState extends State<MainScreen>
               key: ValueKey('attended_swipe_${t.setId}'),
               dragAxisExtent: dragAxisExtent,
               onConfirmDismiss: () async {
-                final now = DateTime.now();
                 final existingAttendance =
                     DataManager.instance.getAttendanceRecord(
                   t.student.id,
                   t.classDateTime,
                 );
-                HomeworkDepartureDraft? departureDraft;
                 final attendanceId = (existingAttendance?.id ?? '').trim();
-                if (attendanceId.isNotEmpty) {
-                  try {
-                    departureDraft =
-                        await HomeworkDepartureDraftService.instance.load(
-                      attendanceId,
-                      force: true,
-                    );
-                  } catch (_) {
-                    departureDraft = null;
-                  }
-                }
-                if (!context.mounted) return false;
-                final hasHomeworkItems =
-                    HomeworkStore.instance.items(t.student.id).isNotEmpty;
-                final HomeworkAssignSelection? selection = hasHomeworkItems
-                    ? await showHomeworkAssignDialog(
-                        context,
-                        t.student.id,
-                        anchorTime: t.classDateTime,
-                        initialSelectedGroupIds: departureDraft?.isSaved == true
-                            ? departureDraft!.groupIds
-                            : null,
-                        initialSelectedItemIds:
-                            departureDraft?.hasPlanClassification == true
-                                ? departureDraft!.planHomeworkItemIds
-                                : null,
-                        excludedItemIds:
-                            departureDraft?.autoManagedPlanItemIds ??
-                                const <String>{},
-                        additionalHomeworkIds:
-                            departureDraft?.autoRolloverToHomeworkItemIds ??
-                                const <String>{},
-                        initialDueDateByGroupId: departureDraft?.isSaved == true
-                            ? departureDraft!.dueDateByGroupId
-                            : const <String, DateTime>{},
-                      )
-                    : const HomeworkAssignSelection(itemIds: [], dueDate: null);
-                if (selection == null) {
+                final summary = await showDepartureSummaryDialog(
+                  context: context,
+                  studentId: t.student.id,
+                  studentName: t.student.name,
+                  attendanceId: attendanceId,
+                  classDateTime: t.classDateTime,
+                  arrivalTime:
+                      existingAttendance?.arrivalTime ?? _attendTimes[t.setId],
+                  classEndTime: t.classDateTime.add(t.duration),
+                  className: t.classInfo?.name,
+                  setId: t.setId,
+                );
+                if (summary == null) {
                   return false;
                 }
+                final now = DateTime.now();
                 setState(() {
                   _leavedSetIds.add(t.setId);
                   _leaveTimes[t.setId] = now;
@@ -4754,53 +4756,23 @@ class _MainScreenState extends State<MainScreen>
                     sessionTypeId: t.classInfo?.id,
                   );
                   // 오늘→숙제 전환은 departure_time 트리거가 처리한다.
-                  if (selection.itemIds.isNotEmpty) {
-                    final planItemIds = selection.planHomeworkItemIds.toSet();
-                    final selectedItemIds = selection.itemIds
-                        .map((e) => e.trim())
-                        .where((e) => e.isNotEmpty)
-                        .toSet()
-                        .toList(growable: false);
-                    for (final itemId in selectedItemIds) {
-                      if (planItemIds.contains(itemId)) continue;
-                      await HomeworkStore.instance.markItemsAsHomework(
-                        t.student.id,
-                        <String>[itemId],
-                        dueDate: selection.dueDateByItemId[itemId] ??
-                            selection.dueDate,
-                        cloneCompletedItems: true,
-                      );
-                    }
-                  }
-                  if (attendanceId.isNotEmpty &&
-                      selection.planHomeworkItemIds.isNotEmpty) {
-                    await HomeworkSessionPlanService.instance
-                        .confirmDepartureHomework(
-                      attendanceId: attendanceId,
-                      homeworkItemIds: selection.planHomeworkItemIds,
-                    );
-                  }
-                  final selectedIds = selection.itemIds
-                      .map((e) => e.trim())
-                      .where((e) => e.isNotEmpty)
-                      .toSet();
-                  final selectableIds = selection.selectableItemIds
-                      .map((e) => e.trim())
-                      .where((e) => e.isNotEmpty)
-                      .toSet();
-                  final unselectedIds = selectableIds
-                      .where((id) => !selectedIds.contains(id))
-                      .toList(growable: false);
-                  if (unselectedIds.isNotEmpty) {
-                    HomeworkStore.instance.restoreItemsToWaiting(
-                      t.student.id,
-                      unselectedIds,
-                    );
-                  }
+                  final savedAttendanceId = (DataManager.instance
+                              .getAttendanceRecord(
+                                t.student.id,
+                                classDateTime,
+                              )
+                              ?.id ??
+                          attendanceId)
+                      .trim();
+                  await applyDepartureSummaryAfterSave(
+                    studentId: t.student.id,
+                    attendanceId: savedAttendanceId,
+                    result: summary,
+                  );
                   HomeworkStore.instance.convertAllTestCardsToPrintForDeparture(
                     t.student.id,
                   );
-                  if (selection.printTodoOnConfirm) {
+                  if (summary.printNotice) {
                     try {
                       await printHomeworkTodoSheet(
                         studentId: t.student.id,
@@ -4808,15 +4780,12 @@ class _MainScreenState extends State<MainScreen>
                         classDateTime: classDateTime,
                         arrivalTime: arrival2,
                         departureTime: now,
-                        selectedHomeworkIds: selection.itemIds,
-                        additionalHomeworkIds:
-                            (departureDraft?.autoRolloverToHomeworkItemIds ??
-                                    const <String>{})
-                                .toList(growable: false),
-                        selectedBehaviorIds: selection.selectedBehaviorIds,
+                        selectedHomeworkIds: summary.homeworkItemIds,
+                        additionalHomeworkIds: summary.rolloverItemIds,
+                        selectedBehaviorIds: summary.selectedBehaviorIds,
                         irregularBehaviorCounts:
-                            selection.irregularBehaviorCounts,
-                        dueDate: selection.dueDate,
+                            summary.irregularBehaviorCounts,
+                        dueDate: summary.dueDate,
                         className: t.classInfo?.name,
                         classEndTime: classDateTime.add(t.duration),
                         setId: t.setId,

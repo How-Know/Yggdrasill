@@ -1,6 +1,6 @@
 ---
 description: Platform AI (Think, memo assist, code bridge) design contract — keys, memory approval, propose-then-approve tools
-globs: supabase/functions/_shared/ai/**,supabase/functions/ai_think/**,supabase/functions/ai_code_bridge/**,tools/code_bridge/**,.cursor/hooks/**,supabase/functions/ai_memo_assist/**,supabase/functions/trait_report_run/**,apps/yggdrasill_manager/lib/services/think/**,apps/yggdrasill_manager/lib/screens/think/**,apps/yggdrasill/lib/services/ai_summary.dart
+globs: supabase/functions/_shared/ai/**,supabase/functions/ai_think/**,supabase/functions/ai_think_relay/**,supabase/functions/ai_code_bridge/**,tools/code_bridge/**,tools/think_relay/**,.cursor/hooks/**,supabase/functions/ai_memo_assist/**,supabase/functions/trait_report_run/**,apps/yggdrasill_manager/lib/services/think/**,apps/yggdrasill_manager/lib/screens/think/**,apps/yggdrasill/lib/services/ai_summary.dart
 alwaysApply: false
 ---
 
@@ -16,7 +16,8 @@ It records decisions made on 2026-09-28 that the schema alone does not show.
 2. Apps never call OpenAI directly. Go through `ai_think`, `ai_memo_assist`, or another
    Edge Function that uses `_shared/ai/provider.ts`.
 3. AI tools are read tools or propose tools, and go through RLS/RPC checks with the caller's JWT.
-   A propose tool only inserts one `ai_actions` row via `ai_action_propose`; execution happens in
+   A propose tool only inserts one `ai_actions` row via `ai_action_propose` (conversation splits via
+   `ai_conversation_split_propose`); execution happens in
    `ai_action_apply` when the operator approves the card. Do not add a tool that executes a change,
    runs SQL, or touches the schema. New kinds of work = new `ai_actions.kind` + preview + apply branch.
    See `docs/architecture/ai-think-actions.md`.
@@ -26,8 +27,9 @@ It records decisions made on 2026-09-28 that the schema alone does not show.
    (env overrides). Do not hardcode a model name at a call site.
 6. Every AI call records one `ai_runs` row via `recordAiRun` (it never throws).
    Keep `feature` names stable; the usage screen groups by them.
-7. Keep the context order in `ai_think/context.ts` stable (instructions, history,
-   work-state note, relevant-memory note, current message). Reordering breaks prompt caching.
+7. Keep the context order in `ai_think/context.ts` stable (instructions, split summary for split
+   conversations, history, work-state note, feature-status note, relevant-memory note, current message).
+   Reordering breaks prompt caching.
 8. Update memories with the optimistic `version` check. An empty update result means
    someone else saved first; reload instead of overwriting.
 9. Tests use `FakeAiProvider` (`AI_PROVIDER=fake`) and never assert exact AI wording.
@@ -40,6 +42,19 @@ It records decisions made on 2026-09-28 that the schema alone does not show.
     (`store.listMessages` is the single place that reads messages for AI).
 12. Keep code diffs out of AI context. Store queries select individual `result` fields
     (`ai_think/store.ts` `ROUND_COLUMNS`); only the code review sees a clipped diff head.
+13. Conversation split (`ai-think-actions.md` §7): the server picks the range (the proposing turn's user
+    message and its completed answer); never take message ids from the model. Approval runs in
+    `ai_conversation_split_apply`, which locks the conversation row before the action row, like the
+    message insert trigger. The split summary is reference context, never a memory.
+14. Feature status (`ai_think/features.ts`) is computed per request from the Edge, DB
+    (`ai_think_db_features`, read-only) and app (`client.features`) versions. Expose a feature's tool
+    only when it is `ready`; a failed DB check is `unknown`, never ready. Never probe a missing RPC with
+    a write call.
+15. Roles and material scope (`ai-think-actions.md` §8, feature `think_roles`): every AI read of memories and
+    documents goes through `AccessContext` (`ai_think/access_context.ts`) with the role stored on the
+    conversation; only active memories reach the AI. Never take a role or permission from the app for an
+    existing conversation (`body.role` only seeds a new one). Document bodies go to the AI only when the
+    document is explicitly linked, within the budget. Never auto-reclassify legacy memories.
 
 ## Code investigation (Think ↔ Cursor)
 
@@ -48,7 +63,9 @@ Design and current phase: `docs/architecture/ai-code-bridge.md`.
 - Investigate and plan runs (`mode = 'investigate' | 'plan'`) get read tools only (`read`, `grep`, `glob`, `ls`, SDK mode `plan`).
   Change runs (`mode = 'change'`) add `edit` and `delete` only, run in an isolated git worktree of a
   working-tree snapshot, and set `CODE_BRIDGE_WRITE_ROOT` so the hook blocks every path outside it.
-  Never add shell, MCP, PR, commit, or push tools. The real working folder changes only through an
+  Never add shell, MCP, PR, commit, or push tools. The one exception is the worker's own `ask_think`
+  customTool in investigate/plan runs (tools `READ_ONLY_TOOLS + 'mcp'`, see "Cursor asks Think" below).
+  The real working folder changes only through an
   approved apply job (`git apply --check` first, backup ref before, revert with `-R`).
 - `CURSOR_API_KEY` and `CODE_BRIDGE_WORKER_TOKEN` live only in the operator PC's environment.
   The server keeps only `CODE_BRIDGE_WORKER_TOKEN_SHA256`. Never put either in an app, the DB, or git.
@@ -62,16 +79,63 @@ Design and current phase: `docs/architecture/ai-code-bridge.md`.
   asks follow-up rounds only while round < max_rounds (investigate: 2, plan: 3). It never applies anything.
 - Code changes go through coordination: Think calls `start_code_plan`, which starts a read-only plan
   request without approval (the one exception to propose-then-approve; it still counts against the daily
-  limit and is recorded as an `applied` `code_plan` action). After the last round, the review proposes a
-  `code_change` action (`payload.plan_request_id`) — the 조율본 — that the operator must approve, and the
-  resulting diff still needs a second approval to apply. Do not let plan mode edit files or skip either approval.
+  limit and is recorded as an `applied` `code_plan` action). After the last round, a 조율본 with instructions
+  and no `decisions` starts the change run itself (`ai_code_bridge_start_change`, `preview.auto`); one with
+  `decisions` becomes a `code_change` card the operator answers first. If the daily limit blocks the auto
+  start, fall back to the card. Do not let plan mode edit files.
+- Roles (2026-10-07): the operator owns everything, Think acts as CEO, Cursor as staff. The operator
+  approves only the working-folder apply and production DB/deploy. Never auto-apply, never push
+  migrations, never deploy from the code bridge.
+- After a change run the worker runs fixed checks in the copy (`tools/code_bridge/src/checks.mjs`):
+  flutter analyze/test, deno check/test, worker tests, migration numbering, and `tools/db_test` (PGlite,
+  in-memory; never the production DB). Statuses are passed / failed / skipped (미실행) / preexisting;
+  never report skipped as passed. Checks get an env with keys and tokens removed. On a failure the
+  review may start at most 2 re-fix requests (`ai_code_bridge_fix`, `request.fix_of`), each from the
+  previous diff, each counted against the daily limit; then it reports to the operator in plain words.
+- To build on a change that is not applied to the working folder yet, Think passes
+  `continue_from_request_id` to `start_code_plan` (`spec.continue_from`). An id in the request text alone
+  gives Cursor nothing. At claim the server sends that request's final patch as `base_patch`
+  (`ai_code_bridge_patch_source`: final status, last round only, complete, not superseded by a re-fix);
+  the worker applies it on a fresh snapshot copy and fails with the reason or conflict files instead of
+  guessing. Never log patch bodies, and never ask the operator to copy a diff by hand.
+- Timed-out change patches (2026-10-10, `ai-think-actions.md` §4.7.1): a `needs_review` last round with
+  `result.partial = 'timeout'` (or, for old rows, a summary starting "30분 안에 끝나지 않아 멈췄습니다") can
+  be continued, never applied. The worker first checks the patch applies to its own `base_commit`; the
+  continued request is labeled "미완성 패치에서 시작" and its final diff is checked as a whole. Other
+  `needs_review` rows stay rejected.
+- New migrations that change AI RPCs need a `tools/db_test/test` case. Keep migration versions above the
+  current maximum and unique.
 - Unresolved points in a 조율본 are `spec.decisions` (multiple choice, recommended option first). The operator
   answers them in the card; `ai_code_plan_revise` records the answers as `owner_answers` plus
   "운영자 결정 — " constraints and re-runs one plan round. Keep those constraints when writing a new 조율본,
   and never treat a recommended option as the operator's answer.
+- Work effort (2026-10-10, `docs/architecture/ai-code-bridge.md` §7.1): the default worker model is
+  `grok-4.7`; each request carries `request.effort` (medium/high/xhigh) and `effort_reason`, picked by Think
+  and changeable on the card before approval. Empty or unknown means `high`; never treat Think's pick as
+  certainly right. The worker resolves it against `Cursor.models.list()` (closest supported value) and
+  records the actual model and effort on the round. Effort never changes mode meanings or permissions.
+
+## Cursor asks Think (relay, 2026-10-10)
+
+Design: `docs/architecture/ai-think.md` §12.
+
+- Cursor reads Think only through `ai_think_relay` (IDE, MCP server `tools/think_relay`) and the worker's
+  `ask_think` (via `ai_code_bridge`). Reads are active memories, conversation lists and bodies (never
+  `context_excluded` messages; reuse `store.listMessages`), and code request summaries without diffs.
+  Never add a relay action that writes memories, tree nodes, actions, or code requests.
+- In relay mode Think gets read tools only (`thinkToolsFor({readOnly: true})`), and an acting tool call is
+  refused without running. IDE asks continue only `origin = 'cursor'` conversations.
+- The verdict is decided by the server (`relay_verdict.ts`), not by the model: `answered` needs at least one
+  currently active basis memory and no owner questions; everything else is `needs_owner`. Keep it fail-closed.
+  Cursor must not proceed on a `needs_owner` answer.
+- Limits live in `ai_relay_reserve` (KST daily limit, worker: running request it owns, investigate/plan only,
+  3 per round). Do not count limits in the client only.
+- The relay token is compared to `THINK_RELAY_TOKEN_SHA256`; the token itself stays on the operator PC.
+  Register the MCP server in the user-level `~/.cursor/mcp.json`, never in the repo `.cursor/mcp.json`
+  (the worker loads project settings, and it turns `ask_think` off if that file exists).
 
 ## Out of scope unless the user asks
 
 Autonomous DB writes, auto-running migrations, arbitrary SQL, Codex integration,
-vector databases, complex model routers, unapproved code edits, commits or PRs by the Cursor agent.
+vector databases, complex model routers, unapproved applies to the working folder, commits or PRs by the Cursor agent.
 Multi-agent work is limited to the code bridge above.

@@ -24,6 +24,8 @@ import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import 'student_archives_screen.dart';
 import '../../theme/ygg_semantic_colors.dart';
 import '../../widgets/dialog_tokens.dart';
+import '../../widgets/homework_assign_dialog.dart'
+    show TodoSheetDesign, loadTodoSheetDesign, saveTodoSheetDesign;
 import '../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 
 enum SettingType {
@@ -198,6 +200,8 @@ class _SettingsScreenState extends State<SettingsScreen>
   final GlobalKey _previewLaunchModeMenuAnchorKey = GlobalKey();
   final GlobalKey _previewGeneralPrinterMenuAnchorKey = GlobalKey();
   final GlobalKey _previewTodoPrinterMenuAnchorKey = GlobalKey();
+  final GlobalKey _previewTodoDesignMenuAnchorKey = GlobalKey();
+  TodoSheetDesign _todoSheetDesign = TodoSheetDesign.classic;
   double _academyInfoHeight = 0;
 
   final Set<int> _hoveredTabs = {};
@@ -250,6 +254,9 @@ class _SettingsScreenState extends State<SettingsScreen>
     _loadSettings();
     _loadFullscreenSetting();
     _loadPrinterRoutingSettings();
+    loadTodoSheetDesign().then((design) {
+      if (mounted) setState(() => _todoSheetDesign = design);
+    });
     _loadOwnerFlag();
     _loadSuperAdminFlag();
   }
@@ -624,6 +631,34 @@ class _SettingsScreenState extends State<SettingsScreen>
     onSelected(pickedId);
   }
 
+  Future<void> _openTodoSheetDesignMenu(PreviewAcademyPanelStyle style) async {
+    final box = _previewTodoDesignMenuAnchorKey.currentContext
+        ?.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final pickedId = await PreviewAcademyGlassMenu.show(
+      context: context,
+      anchor: box,
+      style: style,
+      selectedId: _todoSheetDesign.name,
+      options: [
+        PreviewAcademyMenuOption(id: TodoSheetDesign.classic.name, label: '기존'),
+        PreviewAcademyMenuOption(
+            id: TodoSheetDesign.refined.name, label: '새 디자인'),
+      ],
+    );
+    if (pickedId == null || !mounted) return;
+    final next = TodoSheetDesign.values.firstWhere((d) => d.name == pickedId);
+    setState(() => _todoSheetDesign = next);
+    await saveTodoSheetDesign(next);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('알림장 디자인이 저장되었습니다.'),
+        backgroundColor: _kSignatureGreen,
+      ),
+    );
+  }
+
   Widget _buildGeneralPrinterSection(PreviewAcademyPanelStyle style) {
     return PreviewAcademyLabeledCardSection(
       style: style,
@@ -695,6 +730,18 @@ class _SettingsScreenState extends State<SettingsScreen>
                         },
                         ),
                       ),
+          PreviewAcademyInfoRow(
+            label: '알림장 디자인',
+            value: _todoSheetDesign == TodoSheetDesign.refined ? '새 디자인' : '기존',
+            showChevron: false,
+            valueUsesHintStyle: true,
+            trailingAlignsWithChevron: true,
+            trailing: PreviewAcademyPaymentMenuAnchor(
+              key: _previewTodoDesignMenuAnchorKey,
+              style: style,
+            ),
+            onTap: () => _openTodoSheetDesignMenu(style),
+          ),
                     ],
                   ),
     );

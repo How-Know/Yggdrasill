@@ -548,21 +548,27 @@ test('고쟁이 해설 정규화는 풀이 영역 없는 요약 상자 칸을 �
         number_region: [881, 512, 894, 557],
         content_region: [881, 512, 933, 921],
       },
+      // 두 줄짜리 짧은 풀이를 글자 폭에 맞춰 잡은 경우(1-2 해설 5쪽 023번).
+      {
+        problem_number: '23',
+        number_region: [126, 48, 141, 92],
+        content_region: [126, 48, 181, 220],
+      },
     ],
   };
   const out = normalizeSolutionRefsResult(parsed, {
-    expectedNumbers: ['19', '20', '21', '22'],
+    expectedNumbers: ['19', '20', '21', '22', '23'],
     series: 'gojaengi',
   });
   assert.deepEqual(
     out.items.map((i) => i.problem_number),
-    ['20', '19'],
+    ['20', '19', '23'],
   );
   // 다른 시리즈는 [R2] 대로 content_region 을 비워도 되므로 건드리지 않는다.
   const untouched = normalizeSolutionRefsResult(parsed, {
-    expectedNumbers: ['19', '20', '21', '22'],
+    expectedNumbers: ['19', '20', '21', '22', '23'],
   });
-  assert.equal(untouched.items.length, 4);
+  assert.equal(untouched.items.length, 5);
 });
 
 // 배지는 묶음 첫 지면에만 인쇄된다. 이어지는 지면에서 모델은 꼬리말의 해설
@@ -656,6 +662,43 @@ test('고쟁이 해설은 다음 묶음 배지가 한 쪽 일찍 붙은 마지�
     },
   );
   assert.deepEqual(out.items.map((i) => i.expected_index), [0]);
+});
+
+test('고쟁이 해설은 개념 쪽을 건너뛴 다음 본교재 묶음 배지가 붙은 이어진 풀이를 살린다', () => {
+  // 1-1 해설 18쪽: 왼쪽 단의 122번(본문 34쪽)은 17쪽 묶음에서 이어졌고,
+  // 오른쪽 단에 새 묶음 "본교재 037~040쪽"이 시작한다.
+  const item = (corner, number) => ({
+    problem_number: number,
+    number_region: [440, 60, 460, 140],
+    content_region: [440, 60, 790, 470],
+    source_corner: corner,
+    source_page: 37,
+    source_page_end: 40,
+  });
+  const out = normalizeSolutionRefsResult(
+    { items: [item('본교재', '122')] },
+    {
+      expectedNumbers: ['122'],
+      expectedEntries: [{ number: '122', corner: '본교재', page: 34 }],
+      series: 'gojaengi',
+      rawPage: 18,
+      displayPage: 18,
+    },
+  );
+  assert.deepEqual(out.items.map((i) => i.expected_index), [0]);
+
+  // 워크북은 묶음마다 01부터 다시 시작해 세 쪽 뒤 묶음의 같은 번호일 수 있다.
+  const workbook = normalizeSolutionRefsResult(
+    { items: [item('워크북', '05')] },
+    {
+      expectedNumbers: ['05'],
+      expectedEntries: [{ number: '05', corner: '워크북', page: 34 }],
+      series: 'gojaengi',
+      rawPage: 18,
+      displayPage: 18,
+    },
+  );
+  assert.equal(workbook.items.length, 0);
 });
 
 test('고쟁이 해설은 세 쪽 떨어진 앞 단원의 같은 번호를 받아들이지 않는다', () => {

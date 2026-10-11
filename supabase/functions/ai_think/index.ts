@@ -1,8 +1,11 @@
 // ai_think: 매니저앱 Think 화면 전용 (슈퍼관리자만).
-//   POST { action: 'status' }
-//   POST { action: 'chat', conversation_id?, message, attachments?, options?: { deep?, web_search? } }  → text/event-stream
+//   POST { action: 'status', client?: { features } }
+//   POST { action: 'chat', conversation_id?, message, attachments?, options?: { deep?, web_search? }, role?: { think_role_id, extra_ref_departments }, client?: { features } }  → text/event-stream
+//   role은 새 대화(conversation_id 없음)에서만 쓴다. 이어지는 대화는 DB에 저장된 역할을 쓴다.
+//   client.features: 앱이 지원하는 기능 버전(예: { conversation_split: 1 }). 기능 상태는 요청마다 features.ts로 계산한다.
 //   POST { action: 'decision_draft', conversation_id }
 //   POST { action: 'spec_export', memory_id }
+//   POST { action: 'memory_feedback_draft', ... } → { draft, run_id, update_baseline?{memory_id,version} }
 // 설계: docs/architecture/ai.md
 
 import { corsHeaders } from '../_shared/cors.ts';
@@ -12,8 +15,10 @@ import { aiProviderName, modelFor, thinkWallClockMs } from '../_shared/ai/config
 import { createAiProvider, isAiConfigured } from '../_shared/ai/provider.ts';
 import { sseComment, sseEvent } from '../_shared/ai/sse.ts';
 import { recordAiRun } from '../_shared/ai/usage.ts';
+import { normalizeThinkRole, parseDepartmentList } from './access_context.ts';
 import { runThinkChat } from './chat.ts';
-import { createDecisionDraft, createSpecExport } from './drafts.ts';
+import { createDecisionDraft, createMemoryFeedbackDraft, createSpecExport } from './drafts.ts';
+import { computeFeatures, parseClientFeatures, type DbFeatureCheck, type ThinkFeatures } from './features.ts';
 import { THINK_PROMPT_VERSION } from './prompts.ts';
 import { SupabaseThinkStore, type SupabaseLike } from './store.ts';
 import { MAX_MESSAGE_CHARS, parseAttachments, uuidOrNull } from './validate.ts';
@@ -26,8 +31,15 @@ function runInBackground(task: Promise<unknown>) {
   if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime?.waitUntil) EdgeRuntime.waitUntil(task);
 }
 
-async function handleStatus(auth: AuthContext): Promise<Response> {
+// 슈퍼관리자 확인(Deno.serve)을 통과한 요청만 여기 온다.
+async function thinkFeatures(store: SupabaseThinkStore, body: Body): Promise<{ features: ThinkFeatures; db: DbFeatureCheck }> {
+  const db = await store.dbFeatures();
+  return { features: computeFeatures(db, parseClientFeatures(body.client), true), db };
+}
+
+async function handleStatus(auth: AuthContext, body: Body): Promise<Response> {
   const budget = await getBudgetStatus(auth.admin).catch(() => null);
+  const { features, db } = await thinkFeatures(new SupabaseThinkStore(auth.userClient as unknown as SupabaseLike), body);
   return jsonResponse({
     ok: true,
     configured: isAiConfigured(),
@@ -38,6 +50,8 @@ async function handleStatus(auth: AuthContext): Promise<Response> {
       ? { limit_usd: budget.limitUsd, mode: budget.mode, spent_usd: budget.spentUsd, exceeded: budget.exceeded }
       : null,
     prompt_version: THINK_PROMPT_VERSION,
+    features,
+    features_db_error: db.ok || db.missing ? null : db.error.slice(0, 300),
   });
 }
 
@@ -50,6 +64,13 @@ async function handleChat(req: Request, auth: AuthContext, body: Body): Promise<
   const conversationId = body.conversation_id == null ? null : uuidOrNull(body.conversation_id);
   if (body.conversation_id != null && !conversationId) return errorResponse(400, 'conversation_id_invalid');
   const options = (body.options && typeof body.options === 'object' ? body.options : {}) as Body;
+  const roleBody = (body.role && typeof body.role === 'object' ? body.role : null) as Body | null;
+  const newConversationRole = !conversationId && roleBody
+    ? {
+      thinkRoleId: normalizeThinkRole(roleBody.think_role_id),
+      extraRefDepartments: parseDepartmentList(roleBody.extra_ref_departments),
+    }
+    : null;
 
   const wallClockMs = thinkWallClockMs();
   const provider = createAiProvider({ timeoutMs: wallClockMs + 5000 });
@@ -67,6 +88,7 @@ async function handleChat(req: Request, auth: AuthContext, body: Body): Promise<
   const signal = AbortSignal.any([clientAbort.signal, req.signal, AbortSignal.timeout(wallClockMs)]);
   const safetyId = await safetyIdentifier(auth.userId);
   const store = new SupabaseThinkStore(auth.userClient as unknown as SupabaseLike);
+  const { features } = await thinkFeatures(store, body);
 
   let closed = false;
   const stream = new ReadableStream<Uint8Array>({
@@ -99,6 +121,8 @@ async function handleChat(req: Request, auth: AuthContext, body: Body): Promise<
           signal,
           startedAt,
           wallClockMs,
+          features,
+          newConversationRole,
         },
         {
           provider,
@@ -160,6 +184,58 @@ async function handleDecisionDraft(auth: AuthContext, body: Body): Promise<Respo
   return jsonResponse({ ok: true, draft: out.value, run_id: out.runId });
 }
 
+function uuidList(v: unknown, max = 20): string[] {
+  if (!Array.isArray(v)) return [];
+  const out: string[] = [];
+  for (const item of v) {
+    const id = uuidOrNull(item);
+    if (id) out.push(id);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+async function handleMemoryFeedbackDraft(auth: AuthContext, body: Body): Promise<Response> {
+  const conversationId = uuidOrNull(body.conversation_id);
+  const assistantMessageId = uuidOrNull(body.assistant_message_id);
+  if (!conversationId || !assistantMessageId) return errorResponse(400, 'invalid_request', '대화와 답변 id가 필요합니다.');
+  const feedback = typeof body.feedback === 'string' ? body.feedback.trim() : '';
+  if (!feedback) return errorResponse(400, 'feedback_required', '피드백을 입력하세요.');
+  const provider = createAiProvider({ timeoutMs: 120000 });
+  if (!provider) return errorResponse(503, 'ai_not_configured', 'OPENAI_API_KEY 비밀값이 설정되지 않았습니다.');
+  const budget = await getBudgetStatus(auth.admin).catch(() => null);
+  if (budget?.exceeded && budget.mode === 'block') return errorResponse(429, 'budget_exceeded', '이번 달 AI 한도를 넘었습니다.');
+
+  const out = await createMemoryFeedbackDraft(
+    {
+      provider,
+      store: new SupabaseThinkStore(auth.userClient as unknown as SupabaseLike),
+      recordRun: (rec) => recordAiRun(auth.admin, rec),
+    },
+    {
+      conversationId,
+      assistantMessageId,
+      userMessageIds: uuidList(body.user_message_ids),
+      feedback,
+      updateMemoryId: uuidOrNull(body.update_memory_id),
+      userId: auth.userId,
+      safetyId: await safetyIdentifier(auth.userId),
+    },
+  );
+  if (!out.ok) {
+    const status = out.error === 'conversation_not_found' || out.error === 'message_not_found' || out.error === 'memory_not_found'
+      ? 404
+      : 422;
+    return errorResponse(status, out.error, out.message);
+  }
+  return jsonResponse({
+    ok: true,
+    draft: out.value,
+    run_id: out.runId,
+    update_baseline: out.update_baseline,
+  });
+}
+
 async function handleSpecExport(auth: AuthContext, body: Body): Promise<Response> {
   const memoryId = uuidOrNull(body.memory_id);
   if (!memoryId) return errorResponse(400, 'memory_id_invalid');
@@ -199,11 +275,13 @@ Deno.serve(async (req) => {
   try {
     switch (String(body.action ?? '')) {
       case 'status':
-        return await handleStatus(auth);
+        return await handleStatus(auth, body);
       case 'chat':
         return await handleChat(req, auth, body);
       case 'decision_draft':
         return await handleDecisionDraft(auth, body);
+      case 'memory_feedback_draft':
+        return await handleMemoryFeedbackDraft(auth, body);
       case 'spec_export':
         return await handleSpecExport(auth, body);
       default:

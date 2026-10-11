@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'yggdrasill_manager/settings/management_settings_preview_screen.dart';
+import 'yggdrasill_manager/think/think_roles_preview_screen.dart';
 
 /// kDebugMode 전용 Preview 목록 (매니저앱).
 class DesignPreviewHubScreen extends StatelessWidget {
@@ -49,6 +50,29 @@ class DesignPreviewHubScreen extends StatelessWidget {
                 Navigator.of(context).push(
                   MaterialPageRoute<void>(
                     builder: (_) => const ManagementSettingsPreviewScreen(),
+                  ),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 8),
+          Card(
+            color: _card,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: const BorderSide(color: _border),
+            ),
+            child: ListTile(
+              title: const Text('Think 역할', style: TextStyle(color: _text)),
+              subtitle: const Text(
+                '역할 머리 / 아바타 4종 / 답변 자료 패널 / 기억 범위 (목업)',
+                style: TextStyle(color: _sub),
+              ),
+              trailing: const Icon(Icons.chevron_right, color: _sub),
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const ThinkRolesPreviewScreen(),
                   ),
                 );
               },

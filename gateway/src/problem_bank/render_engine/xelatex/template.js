@@ -268,11 +268,21 @@ function autoWrapTabularCells(rawTexBlock) {
 
 function splitTabularRowCells(row) {
   // '&' 로 분리하되 중괄호 깊이를 추적해 \text{a & b} 같은 내부 & 는 분리하지 않는다.
+  // \{ \} 는 리터럴 중괄호라 깊이에 넣지 않는다. 넣으면 그 행의 열 구분자가
+  // 칸 내용으로 남아 \settowidth 안에서 "Misplaced alignment tab character &" 가 난다.
   const cells = [];
   let depth = 0;
   let buf = '';
   for (let i = 0; i < row.length; i += 1) {
     const ch = row[i];
+    if (ch === '\\') {
+      const next = row[i + 1];
+      if (next === '\\' || next === '{' || next === '}') {
+        buf += ch + next;
+        i += 1;
+        continue;
+      }
+    }
     if (ch === '{') depth += 1;
     else if (ch === '}') depth = Math.max(0, depth - 1);
     if (ch === '&' && depth === 0) {

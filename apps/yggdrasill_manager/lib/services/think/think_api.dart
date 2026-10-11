@@ -116,6 +116,9 @@ class ThinkApi {
   };
   static const int maxAttachmentBytes = 20 * 1024 * 1024;
 
+  /// 이 앱이 처리할 수 있는 기능과 버전. 서버가 Edge·DB 버전과 함께 보고 기능 상태를 정한다(권한은 서버가 따로 확인).
+  static const Map<String, int> clientFeatures = {'conversation_split': 1, 'think_roles': 1};
+
   SupabaseClient get _db => Supabase.instance.client;
 
   Future<Map<String, dynamic>> _invoke(Map<String, dynamic> body) async {
@@ -130,17 +133,107 @@ class ThinkApi {
   }
 
   // ---------------------------------------------------------------- 상태
-  Future<ThinkStatus> status() async => ThinkStatus.fromJson(await _invoke({'action': 'status'}));
+  Future<ThinkStatus> status() async => ThinkStatus.fromJson(await _invoke({
+        'action': 'status',
+        'client': {'features': clientFeatures},
+      }));
+
+  /// Supabase URL에서 프로젝트 식별(비밀값·전체 URL 없음).
+  static String? supabaseProjectRef(String url) {
+    final u = Uri.tryParse(url.trim());
+    if (u == null || u.host.isEmpty) return null;
+    final host = u.host.toLowerCase();
+    if (host.endsWith('.supabase.co')) {
+      final ref = host.split('.').first;
+      return ref.isEmpty ? null : ref;
+    }
+    return host;
+  }
+
+  static ThinkProbeOutcome _classifyProbeError(Object e) {
+    final raw = e is PostgrestException ? '${e.message} ${e.code ?? ''} ${e.details ?? ''}' : e.toString();
+    final lower = raw.toLowerCase();
+    if (lower.contains('permission') ||
+        lower.contains('42501') ||
+        lower.contains('forbidden') ||
+        lower.contains('row-level security')) {
+      return ThinkProbeOutcome.permissionDenied;
+    }
+    if (lower.contains('does not exist') ||
+        lower.contains('42703') ||
+        lower.contains('42883') ||
+        lower.contains('could not find') ||
+        lower.contains('ai_tree_get_document') && lower.contains('function')) {
+      return ThinkProbeOutcome.missing;
+    }
+    if (lower.contains('document_not_found') || lower.contains('tree_node_not_found')) {
+      return ThinkProbeOutcome.confirmed;
+    }
+    if (lower.contains('document_needs_messages') || lower.contains('excerpt_needs_messages')) {
+      return ThinkProbeOutcome.confirmed;
+    }
+    return ThinkProbeOutcome.unknown;
+  }
+
+  /// 데이터 생성·수정 없이 종합 문서 관련 스키마·RPC 존재만 probe한다.
+  Future<ThinkDocumentProbe> probeDocumentCapabilities({String? conversationIdForCreate}) async {
+    final detail = <String, String>{};
+    var bodyColumn = ThinkProbeOutcome.unknown;
+    try {
+      await _db.from('ai_tree_nodes').select('body').limit(0);
+      bodyColumn = ThinkProbeOutcome.confirmed;
+    } catch (e) {
+      bodyColumn = _classifyProbeError(e);
+      detail['body'] = e is PostgrestException ? e.message : e.toString();
+    }
+
+    var getRpc = ThinkProbeOutcome.notRun;
+    try {
+      await _db.rpc('ai_tree_get_document', params: {'p_node_id': '00000000-0000-0000-0000-000000000001'});
+      getRpc = ThinkProbeOutcome.confirmed;
+    } catch (e) {
+      getRpc = _classifyProbeError(e);
+      detail['get_document'] = e is PostgrestException ? e.message : e.toString();
+    }
+
+    var createRpc = ThinkProbeOutcome.notRun;
+    if (conversationIdForCreate != null && conversationIdForCreate.isNotEmpty) {
+      try {
+        await _db.rpc('ai_tree_create_document', params: {
+          'p_conversation_id': conversationIdForCreate,
+          'p_parent_id': null,
+          'p_title': 'probe',
+          'p_body': '',
+          'p_message_ids': <String>[],
+        });
+        createRpc = ThinkProbeOutcome.partial;
+        detail['create'] = '빈 출처 없이 성공 — 생성 경로는 추가 확인 필요';
+      } catch (e) {
+        createRpc = _classifyProbeError(e);
+        detail['create'] = e is PostgrestException ? e.message : e.toString();
+      }
+    }
+    return ThinkDocumentProbe(bodyColumn: bodyColumn, getDocumentRpc: getRpc, createRpc: createRpc, detail: detail);
+  }
 
   // ---------------------------------------------------------------- 대화
+  /// origin 열은 커서 문의 마이그레이션 뒤에만 있다. 없으면 빼고 다시 읽어 모두 운영자 대화로 본다.
   Future<List<ThinkConversation>> listConversations({bool archived = false}) async {
-    final rows = await _db
+    Future<List<Map<String, dynamic>>> load(String columns) => _db
         .from('ai_conversations')
-        .select('id,title,status,message_count,last_message_at,created_at')
+        .select(columns)
         .eq('status', archived ? 'archived' : 'active')
         .order('last_message_at', ascending: false, nullsFirst: false)
         .order('created_at', ascending: false)
         .limit(300);
+    const base = 'id,title,status,message_count,last_message_at,created_at';
+    List<Map<String, dynamic>> rows;
+    try {
+      rows = await load('$base,origin');
+    } on PostgrestException catch (e) {
+      if (e.code != '42703' && !e.message.contains('origin')) rethrow;
+      rows = await load(base);
+    }
     return rows.map(ThinkConversation.fromRow).toList();
   }
 
@@ -150,31 +243,153 @@ class ThinkApi {
   Future<void> setConversationArchived(String id, bool archived) =>
       _db.from('ai_conversations').update({'status': archived ? 'archived' : 'active'}).eq('id', id);
 
-  /// 대화와 메시지, 대화에 올린 첨부 파일을 지운다. 호출 기록(ai_runs)은 남는다.
+  /// 대화와 메시지, 대화에 올린 첨부 파일을 지운다. 나눈 대화처럼 다른 대화가 같은 파일을 가리키면 파일은 남긴다.
+  /// 호출 기록(ai_runs)은 남는다.
   Future<void> deleteConversation(String id) async {
     final rows = await _db.from('ai_messages').select('attachments').eq('conversation_id', id);
-    final paths = <String>[
+    final paths = <String>{
       for (final r in rows)
         for (final a in (r['attachments'] is List ? r['attachments'] as List : const []))
           if (a is Map && a['path'] is String) a['path'] as String,
-    ];
-    if (paths.isNotEmpty) {
+    };
+    final removable = paths.isEmpty ? const <String>[] : await _attachmentsOnlyIn(id, paths);
+    if (removable.isNotEmpty) {
       try {
-        await _db.storage.from(attachmentBucket).remove(paths);
+        await _db.storage.from(attachmentBucket).remove(removable);
       } catch (_) {}
     }
     await _db.from('ai_conversations').delete().eq('id', id);
   }
 
+  /// [paths] 중 다른 대화가 가리키지 않는 파일. 확인하지 못하면 하나도 지우지 않는다(깨진 첨부보다 남은 파일이 낫다).
+  Future<List<String>> _attachmentsOnlyIn(String conversationId, Set<String> paths) async {
+    try {
+      final res = await _db.rpc('ai_attachment_paths_in_use', params: {
+        'p_paths': paths.toList(),
+        'p_except_conversation_id': conversationId,
+      });
+      final inUse = {for (final p in (res is List ? res : const [])) p.toString()};
+      return paths.where((p) => !inUse.contains(p)).toList();
+    } on PostgrestException catch (e) {
+      // 나누기 마이그레이션 전에는 복사한 메시지가 있을 수 없다.
+      if (_isMissingFunction(e)) return paths.toList();
+      return const [];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  static bool _isMissingFunction(PostgrestException e) =>
+      e.code == 'PGRST202' || e.code == '42883' || e.message.contains('Could not find the function');
+
+  /// 열 이름을 고정하지 않는다. 나누기 마이그레이션 전 DB에는 source_message_id가 없다.
   Future<List<ThinkMessage>> listMessages(String conversationId) async {
     final rows = await _db
         .from('ai_messages')
-        .select('id,role,content,status,attachments,sources,tool_calls,commentary,model,created_at,context_excluded')
+        .select()
         .eq('conversation_id', conversationId)
         .order('created_at', ascending: true)
         .limit(1000);
     return rows.map(ThinkMessage.fromRow).toList();
   }
+
+  /// 나누기 출처·요약·제안 설정. 열 이름을 고정하지 않아 마이그레이션 전 DB에서는 기본값으로 읽힌다.
+  Future<ThinkConversationDetail?> getConversationDetail(String id) async {
+    final row = await _db.from('ai_conversations').select().eq('id', id).maybeSingle();
+    return row == null ? null : ThinkConversationDetail.fromRow(row);
+  }
+
+  Future<ThinkConversationRoleSettings?> getConversationRoleSettings(String id) async {
+    final row = await _db.from('ai_conversations').select().eq('id', id).maybeSingle();
+    return row == null ? null : ThinkConversationRoleSettings.fromRow(row);
+  }
+
+  Future<void> setConversationThinkRole({
+    required String conversationId,
+    required ThinkRoleId role,
+    required List<ThinkDepartmentId> extraRefs,
+    String? roleProfileVersion,
+  }) async {
+    await _db.rpc('ai_conversation_set_think_role', params: {
+      'p_conversation_id': conversationId,
+      'p_think_role_id': role.db,
+      'p_extra_ref_departments': extraRefs.map((e) => e.db).toList(),
+      'p_role_profile_version': roleProfileVersion ?? kThinkRoleProfileVersion,
+    });
+  }
+
+  Future<List<String>> listConversationMemoryLinks(String conversationId) async {
+    try {
+      final rows = await _db
+          .from('ai_conversation_memory_links')
+          .select('memory_id')
+          .eq('conversation_id', conversationId);
+      return rows.map((r) => r['memory_id']?.toString() ?? '').where((id) => id.isNotEmpty).toList();
+    } on PostgrestException catch (e) {
+      if (_isMissingFunction(e) || e.message.contains('ai_conversation_memory_links')) return [];
+      rethrow;
+    }
+  }
+
+  Future<List<String>> listConversationDocumentLinks(String conversationId) async {
+    try {
+      final rows = await _db
+          .from('ai_conversation_document_links')
+          .select('document_node_id')
+          .eq('conversation_id', conversationId);
+      return rows.map((r) => r['document_node_id']?.toString() ?? '').where((id) => id.isNotEmpty).toList();
+    } on PostgrestException catch (e) {
+      if (_isMissingFunction(e) || e.message.contains('ai_conversation_document_links')) return [];
+      rethrow;
+    }
+  }
+
+  Future<void> linkConversationMemory(String conversationId, String memoryId) async {
+    await _db.rpc('ai_conversation_memory_link', params: {
+      'p_conversation_id': conversationId,
+      'p_memory_id': memoryId,
+    });
+  }
+
+  Future<void> unlinkConversationMemory(String conversationId, String memoryId) async {
+    await _db.rpc('ai_conversation_memory_unlink', params: {
+      'p_conversation_id': conversationId,
+      'p_memory_id': memoryId,
+    });
+  }
+
+  Future<void> linkConversationDocument(String conversationId, String documentNodeId) async {
+    await _db.rpc('ai_conversation_document_link', params: {
+      'p_conversation_id': conversationId,
+      'p_document_node_id': documentNodeId,
+    });
+  }
+
+  Future<void> unlinkConversationDocument(String conversationId, String documentNodeId) async {
+    await _db.rpc('ai_conversation_document_unlink', params: {
+      'p_conversation_id': conversationId,
+      'p_document_node_id': documentNodeId,
+    });
+  }
+
+  Future<Map<String, ThinkMessageContextSnapshot>> listMessageSnapshots(Iterable<String> messageIds) async {
+    final ids = messageIds.where((id) => id.isNotEmpty).toList();
+    if (ids.isEmpty) return {};
+    try {
+      final rows = await _db.from('ai_message_context_snapshots').select().inFilter('message_id', ids);
+      return {
+        for (final r in rows)
+          (r['message_id']?.toString() ?? ''): ThinkMessageContextSnapshot.fromRow(Map<String, dynamic>.from(r)),
+      };
+    } on PostgrestException catch (e) {
+      if (_isMissingFunction(e) || e.message.contains('ai_message_context_snapshots')) return {};
+      rethrow;
+    }
+  }
+
+  /// 거절로 꺼진 나누기 제안을 다시 켜거나 끈다. 서버는 꺼진 대화에서 Think에 나누기 도구를 주지 않는다.
+  Future<void> setSplitSuggestions(String id, bool enabled) =>
+      _db.from('ai_conversations').update({'auto_split_suggestions': enabled}).eq('id', id);
 
   Future<void> setMessagesExcluded(List<String> ids, bool excluded) async {
     if (ids.isEmpty) return;
@@ -190,6 +405,9 @@ class ThinkApi {
     'tree_node_not_found': '항목이 없어졌습니다. 새로고침한 뒤 다시 해 주세요.',
     'tree_source_invalid': '발췌에는 같은 대화의 메시지만 넣을 수 있습니다.',
     'excerpt_needs_messages': '발췌할 메시지를 하나 이상 고르세요.',
+    'document_needs_messages': '종합 문서에 넣을 메시지를 하나 이상 고르세요.',
+    'document_not_found': '종합 문서가 없어졌습니다. 새로고침한 뒤 다시 해 주세요.',
+    'document_version_conflict': '다른 곳에서 먼저 수정되었습니다. 새로 불러온 뒤 다시 저장하세요.',
     'ai_tree_nodes_shape': '이름을 입력하세요.',
     'uq_ai_tree_nodes_conversation': '이미 트리에 있는 대화입니다. 새로고침한 뒤 다시 해 주세요.',
   };
@@ -206,8 +424,8 @@ class ThinkApi {
     final rows = await _db
         .from('ai_tree_nodes')
         .select(
-          'id,parent_id,kind,title,summary,sort_order,conversation_id,created_via,version,created_at,updated_at,'
-          'ai_tree_node_sources(message_id)',
+          'id,parent_id,kind,title,summary,body,sort_order,conversation_id,created_via,version,created_at,updated_at,'
+          'ai_tree_node_sources(message_id,sort_order)',
         )
         .order('sort_order', ascending: true)
         .limit(5000);
@@ -252,6 +470,48 @@ class ThinkApi {
         'p_summary': summary,
         'p_message_ids': messageIds,
       });
+
+  Future<String> createDocument({
+    required String conversationId,
+    required String? parentId,
+    required String title,
+    required String body,
+    required List<String> messageIds,
+  }) async {
+    final id = await _db.rpc('ai_tree_create_document', params: {
+      'p_conversation_id': conversationId,
+      'p_parent_id': parentId,
+      'p_title': title.trim(),
+      'p_body': body.trim(),
+      'p_message_ids': messageIds,
+    });
+    return id?.toString() ?? '';
+  }
+
+  Future<ThinkDocumentDetail> getDocument(String nodeId) async {
+    final rows = await _db.rpc('ai_tree_get_document', params: {'p_node_id': nodeId});
+    if (rows is List && rows.isNotEmpty && rows.first is Map) {
+      return ThinkDocumentDetail.fromRow(Map<String, dynamic>.from(rows.first as Map));
+    }
+    if (rows is Map) return ThinkDocumentDetail.fromRow(Map<String, dynamic>.from(rows));
+    throw ThinkApiException('invalid_response', '종합 문서를 불러오지 못했습니다.');
+  }
+
+  Future<ThinkTreeNode> updateDocument({
+    required String nodeId,
+    required int expectedVersion,
+    required String title,
+    required String body,
+  }) async {
+    final row = await _db.rpc('ai_tree_update_document', params: {
+      'p_node_id': nodeId,
+      'p_title': title.trim(),
+      'p_body': body.trim(),
+      'p_expected_version': expectedVersion,
+    });
+    if (row is Map) return ThinkTreeNode.fromRow(Map<String, dynamic>.from(row));
+    throw ThinkApiException('invalid_response', '종합 문서를 저장하지 못했습니다.');
+  }
 
   Future<double?> conversationCost(String conversationId) async {
     final rows = await _db.from('ai_runs').select('cost_usd').eq('conversation_id', conversationId);
@@ -305,6 +565,8 @@ class ThinkApi {
     required List<ThinkAttachment> attachments,
     required bool deep,
     required bool webSearch,
+    ThinkRoleId? newConversationRole,
+    List<ThinkDepartmentId> newConversationRefs = const [],
   }) async {
     var session = _db.auth.currentSession;
     if (session == null) throw ThinkApiException('unauthorized', '로그인이 필요합니다.');
@@ -328,6 +590,12 @@ class ThinkApi {
         'message': message,
         'attachments': attachments.map((a) => a.toJson()).toList(),
         'options': {'deep': deep, 'web_search': webSearch},
+        if (conversationId == null && newConversationRole != null)
+          'role': {
+            'think_role_id': newConversationRole.db,
+            'extra_ref_departments': newConversationRefs.map((d) => d.db).toList(),
+          },
+        'client': {'features': clientFeatures},
       });
 
     final http.StreamedResponse response;
@@ -348,6 +616,35 @@ class ThinkApi {
   }
 
   // ---------------------------------------------------------------- 결정 초안 / 스펙
+  Future<ThinkMemoryFeedbackDraftResult> memoryFeedbackDraft({
+    required String conversationId,
+    required String assistantMessageId,
+    required List<String> userMessageIds,
+    required String feedback,
+    String? updateMemoryId,
+  }) async {
+    final res = await _invoke({
+      'action': 'memory_feedback_draft',
+      'conversation_id': conversationId,
+      'assistant_message_id': assistantMessageId,
+      'user_message_ids': userMessageIds,
+      'feedback': feedback.trim(),
+      if (updateMemoryId != null && updateMemoryId.isNotEmpty) 'update_memory_id': updateMemoryId,
+    });
+    final draft = res['draft'];
+    if (draft is! Map) throw ThinkApiException('invalid_response', '초안 형식이 올바르지 않습니다.');
+    final baselineRaw = res['update_baseline'];
+    ThinkMemoryFeedbackUpdateBaseline? baseline;
+    if (baselineRaw is Map) {
+      final parsed = ThinkMemoryFeedbackUpdateBaseline.fromJson(Map<String, dynamic>.from(baselineRaw));
+      if (parsed.isValid) baseline = parsed;
+    }
+    return ThinkMemoryFeedbackDraftResult(
+      draft: ThinkMemoryFeedbackDraft.fromJson(Map<String, dynamic>.from(draft)),
+      updateBaseline: baseline,
+    );
+  }
+
   Future<ThinkDecisionDraft> decisionDraft(String conversationId) async {
     final res = await _invoke({'action': 'decision_draft', 'conversation_id': conversationId});
     final draft = res['draft'];
@@ -375,8 +672,8 @@ class ThinkApi {
     return rows.map(ThinkMemory.fromRow).toList();
   }
 
-  Future<ThinkMemory> createMemory(ThinkMemoryDraft draft) async {
-    final row = await _db.from('ai_memories').insert(draft.toRow()).select().single();
+  Future<ThinkMemory> createMemory(ThinkMemoryDraft draft, {bool withScope = false}) async {
+    final row = await _db.from('ai_memories').insert(draft.toRow(withScope: withScope)).select().single();
     return ThinkMemory.fromRow(row);
   }
 
@@ -407,10 +704,14 @@ class ThinkApi {
     'code_request_not_cancellable': '이미 끝난 요청이라 취소할 수 없습니다.',
     'code_request_not_decidable': '결과가 도착한 요청에만 판단을 남길 수 있습니다.',
     'code_request_not_found': '요청이 없어졌습니다. 새로고침하세요.',
+    'code_retry_not_allowed': '끝나지 못한 수정 요청만 다시 보낼 수 있습니다. 새로고침하세요.',
     'ai_code_requests_title_check': '제목을 1~200자로 입력하세요.',
     'ai_code_requests_request_check': '요청 내용이 너무 깁니다. 배경이나 질문을 줄이세요.',
     'code_request_title_required': '제목을 입력하세요.',
     'code_request_not_appliable': '적용할 수 있는 상태가 아닙니다. 새로고침하세요.',
+    'code_request_parse_not_ok': '형식 확인이 끝나지 않았거나 확인 필요 상태입니다. diff만 보고 적용할 수 없습니다.',
+    'code_request_diff_missing': '저장된 diff가 없습니다. 패치 전문을 확인한 뒤 재생성·재검증하세요.',
+    'code_request_no_round': '완료 회차가 없습니다. 새로고침하세요.',
     'code_request_not_revertable': '되돌릴 수 있는 상태가 아닙니다. 새로고침하세요.',
     'code_request_not_deletable': '진행 중인 요청은 지울 수 없습니다. 먼저 취소하세요.',
     'action_not_pending': '이미 처리된 제안입니다. 새로고침하세요.',
@@ -422,6 +723,13 @@ class ThinkApi {
     'plan_answer_missing': '모든 질문에 답해야 반영할 수 있습니다. 직접 입력은 내용을 적어 주세요.',
     'plan_answer_invalid': '보기가 바뀌었습니다. 새로고침한 뒤 다시 골라 주세요.',
     'plan_no_decisions': '이 조율본에는 정할 질문이 없습니다.',
+    'split_expired': '대화가 이어져 이 제안은 만료됐습니다.',
+    'split_answer_pending': '답변 완료 후 나눌 수 있습니다.',
+    'split_answer_incomplete': '답변이 끝까지 저장되지 않아(중단·오류) 나눌 수 없습니다.',
+    'split_range_invalid': '나눌 메시지를 원본 대화에서 찾지 못했습니다. 새로고침하세요.',
+    'split_title_required': '새 대화 제목을 입력하세요.',
+    'split_summary_required': '요약의 "목적"을 입력하세요.',
+    'action_kind_not_appliable': '승인해서 실행하는 제안이 아닙니다.',
   };
 
   static String codeErrorMessage(Object e) {
@@ -495,6 +803,8 @@ class ThinkApi {
 
   Future<ThinkCodeRequest> revertCodeChange(String id) => _codeRpc('ai_code_request_revert', {'p_id': id});
 
+  Future<ThinkCodeRequest> retryCodeChange(String id) => _codeRpc('ai_code_change_retry', {'p_request_id': id});
+
   // ---------------------------------------------------------------- 작업 제안 (AI 제안 → 사람 승인)
   Future<List<ThinkAction>> listActions(String conversationId) async {
     final rows = await _db
@@ -514,7 +824,8 @@ class ThinkApi {
     return action;
   }
 
-  /// 승인. [overrides]: 코드 제안은 {title, spec}, 대화 분류는 {folder_id}.
+  /// 승인. [overrides]: 코드 제안은 {title, spec}, 대화 분류는 {folder_id},
+  /// 대화 나누기는 {title, summary, folder_id(null이면 미분류)}.
   Future<ThinkAction> applyAction(String id, {Map<String, dynamic> overrides = const {}}) =>
       _actionRpc('ai_action_apply', {'p_id': id, 'p_overrides': overrides});
 
@@ -528,11 +839,15 @@ class ThinkApi {
   Future<ThinkAction> undoAction(String id) => _actionRpc('ai_action_undo', {'p_id': id});
 
   Future<List<ThinkCodeRound>> listCodeRounds(String requestId) async {
-    final rows = await _db
-        .from('ai_code_request_rounds')
-        .select(ThinkCodeRound.columns)
-        .eq('request_id', requestId)
-        .order('round', ascending: true);
+    Future<List<Map<String, dynamic>>> load(String columns) =>
+        _db.from('ai_code_request_rounds').select(columns).eq('request_id', requestId).order('round', ascending: true);
+    List<Map<String, dynamic>> rows;
+    try {
+      rows = await load('${ThinkCodeRound.columns},effort');
+    } on PostgrestException catch (e) {
+      if (e.code != '42703' && !e.message.contains('effort')) rethrow;
+      rows = await load(ThinkCodeRound.columns);
+    }
     return rows.map(ThinkCodeRound.fromRow).toList();
   }
 

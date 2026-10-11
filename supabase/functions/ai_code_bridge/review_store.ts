@@ -1,15 +1,23 @@
 // ReviewStore의 Supabase 구현. 작업자 요청 뒤 서버에서 service role로 돈다.
 // 대화 기록은 ai_think와 같은 조회(SupabaseThinkStore)를 써서 '답변에서 제외'한 문답을 뺀다.
 
+import type { ConversationAccessState } from '../ai_think/access_context.ts';
 import type { NewMessage } from '../ai_think/chat.ts';
 import type { MemoryRow, MessageRow } from '../ai_think/context.ts';
 import { SupabaseThinkStore, type SupabaseLike } from '../ai_think/store.ts';
-import type { ReviewRequest, ReviewStore } from './code_review.ts';
+import type { ReviewRequest, ReviewStore, StartResult } from './code_review.ts';
 
 type Row = Record<string, unknown>;
 
 function obj(v: unknown): Record<string, unknown> {
   return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+}
+
+function startResult(data: unknown): StartResult {
+  const o = obj(data);
+  return o.ok === true && typeof o.code_request_id === 'string'
+    ? { ok: true, codeRequestId: o.code_request_id }
+    : { ok: false, error: typeof o.error === 'string' ? o.error : 'unknown' };
 }
 
 export class SupabaseReviewStore implements ReviewStore {
@@ -62,6 +70,10 @@ export class SupabaseReviewStore implements ReviewStore {
     return this.think.listActiveMemories(kinds);
   }
 
+  loadConversationAccess(conversationId: string, rolesFeatureReady: boolean): Promise<ConversationAccessState> {
+    return this.think.loadConversationAccess(conversationId, rolesFeatureReady);
+  }
+
   insertMessage(msg: NewMessage): Promise<string> {
     return this.think.insertMessage(msg);
   }
@@ -88,6 +100,23 @@ export class SupabaseReviewStore implements ReviewStore {
     });
     if (error) throw new Error(`ai_code_bridge_propose_plan: ${error.message}`);
     return typeof data === 'string' ? data : null;
+  }
+
+  async startChange(planRequestId: string, messageId: string, title: string, spec: Record<string, unknown>): Promise<StartResult> {
+    const { data, error } = await this.db.rpc('ai_code_bridge_start_change', {
+      p_plan_request_id: planRequestId,
+      p_message_id: messageId,
+      p_title: title,
+      p_spec: spec,
+    });
+    if (error) throw new Error(`ai_code_bridge_start_change: ${error.message}`);
+    return startResult(data);
+  }
+
+  async fixChange(requestId: string, messageId: string, spec: Record<string, unknown>): Promise<StartResult> {
+    const { data, error } = await this.db.rpc('ai_code_bridge_fix', { p_request_id: requestId, p_message_id: messageId, p_spec: spec });
+    if (error) throw new Error(`ai_code_bridge_fix: ${error.message}`);
+    return startResult(data);
   }
 
   async reviewDone(id: string, status: 'done' | 'skipped' | 'error', messageId: string | null, err: string | null): Promise<void> {

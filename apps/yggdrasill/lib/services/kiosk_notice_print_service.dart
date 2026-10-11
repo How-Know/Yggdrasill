@@ -5,11 +5,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
 
-import '../widgets/homework_assign_dialog.dart'
-    show buildDefaultHomeworkAssignSelection, printHomeworkTodoSheet;
+import '../widgets/departure_summary_dialog.dart'
+    show applyDepartureSummaryAfterSave, buildAutoDepartureSummary;
+import '../widgets/homework_assign_dialog.dart' show printHomeworkTodoSheet;
 import 'data_manager.dart';
 import 'homework_departure_draft_service.dart';
-import 'homework_session_plan_service.dart';
 import 'homework_store.dart';
 import 'print_routing_service.dart';
 import 'realtime_reconciler.dart';
@@ -203,56 +203,26 @@ class KioskNoticePrintService {
       final className = m['class_name'] as String?;
       final setId = m['set_id'] as String?;
 
-      var departureDraft = HomeworkDepartureDraft.fromRow(m);
       HomeworkDepartureDraftService.instance.cacheFromAttendanceRow(m);
-      departureDraft = await HomeworkDepartureDraftService.instance.load(
-            attendanceId,
-            force: true,
-          ) ??
-          departureDraft;
+      await HomeworkStore.instance.reloadStudentHomework(studentId);
 
-      // 저장된 초안이 있으면 정확히 그 그룹만, 없으면 기존처럼 전체 그룹을 선택한다.
-      final selection = await buildDefaultHomeworkAssignSelection(
-        studentId,
-        anchorTime: classDateTime,
-        initialSelectedGroupIds:
-            departureDraft.isSaved ? departureDraft.groupIds : null,
-        initialSelectedItemIds: departureDraft.hasPlanClassification
-            ? departureDraft.planHomeworkItemIds
-            : null,
-        excludedItemIds: departureDraft.autoManagedPlanItemIds,
-        initialDueDateByGroupId: departureDraft.isSaved
-            ? departureDraft.dueDateByGroupId
-            : const <String, DateTime>{},
+      // 숙제는 고르지 않는다. 수업 계획의 오늘·숙제만 싣고 다음은 뺀다.
+      // M5 는 하원 전에, 스탠바이미는 하원 뒤에 요청하므로 둘 다 같은 결과가 나와야 한다.
+      // 오늘→숙제 전환은 departure_time 트리거가 처리한다.
+      final summary = await buildAutoDepartureSummary(
+        studentId: studentId,
+        attendanceId: attendanceId,
+        classDateTime: classDateTime,
+        arrivalTime: arrivalTime,
       );
-
-      // 오늘→숙제 전환은 departure_time 트리거가 이미 처리한다.
-      if (selection != null) {
-        if (selection.itemIds.isNotEmpty) {
-          final planItemIds = selection.planHomeworkItemIds.toSet();
-          for (final itemId in selection.itemIds) {
-            if (planItemIds.contains(itemId)) continue;
-            await HomeworkStore.instance.markItemsAsHomework(
-              studentId,
-              <String>[itemId],
-              dueDate: selection.dueDateByItemId[itemId] ?? selection.dueDate,
-              cloneCompletedItems: true,
-            );
-          }
-        }
-        final selectedIds = selection.itemIds.toSet();
-        final unselected = selection.selectableItemIds
-            .where((id) => !selectedIds.contains(id))
-            .toList(growable: false);
-        if (unselected.isNotEmpty) {
-          HomeworkStore.instance.restoreItemsToWaiting(studentId, unselected);
-        }
-        if (selection.planHomeworkItemIds.isNotEmpty) {
-          await HomeworkSessionPlanService.instance.confirmDepartureHomework(
-            attendanceId: attendanceId,
-            homeworkItemIds: selection.planHomeworkItemIds,
-          );
-        }
+      try {
+        await applyDepartureSummaryAfterSave(
+          studentId: studentId,
+          attendanceId: attendanceId,
+          result: summary,
+        );
+      } catch (e, st) {
+        debugPrint('[KIOSK_PRINT][CONFIRM_ERROR] id=$attendanceId $e\n$st');
       }
       HomeworkStore.instance.convertAllTestCardsToPrintForDeparture(studentId);
 
@@ -262,14 +232,11 @@ class KioskNoticePrintService {
         classDateTime: classDateTime,
         arrivalTime: arrivalTime,
         departureTime: departureTime,
-        selectedHomeworkIds: selection?.itemIds ?? const <String>[],
-        additionalHomeworkIds:
-            departureDraft.autoRolloverToHomeworkItemIds.toList(
-          growable: false,
-        ),
-        selectedBehaviorIds: selection?.selectedBehaviorIds,
-        irregularBehaviorCounts: selection?.irregularBehaviorCounts,
-        dueDate: selection?.dueDate,
+        selectedHomeworkIds: summary.homeworkItemIds,
+        additionalHomeworkIds: summary.rolloverItemIds,
+        selectedBehaviorIds: summary.selectedBehaviorIds,
+        irregularBehaviorCounts: summary.irregularBehaviorCounts,
+        dueDate: summary.dueDate,
         className: className,
         classEndTime: classEndTime,
         setId: setId,

@@ -7,11 +7,13 @@ import {
   ACTION_TOOLS,
   ACTION_TOOL_LABELS,
   ACTION_TOOL_NAMES,
+  SPLIT_TOOL_NAME,
   dispatchActionTool,
   type ActionRow,
   type ActionToolContext,
   type ActionToolSource,
 } from './actions.ts';
+import { canProvideMemoryToAi, legacyVisible, type MemorySearchScope, scopeMemories, searchScopeFor } from './access_context.ts';
 import type { MemoryDetail, MemoryRow } from './context.ts';
 
 export interface CurriculumOutlineQuery {
@@ -51,7 +53,7 @@ export interface BehaviorCard {
 }
 
 export interface ThinkToolSource extends ActionToolSource {
-  searchMemories(terms: string[], limit: number): Promise<MemoryRow[]>;
+  searchMemories(terms: string[], limit: number, scope?: MemorySearchScope): Promise<MemoryRow[]>;
   getMemory(id: string): Promise<MemoryDetail | null>;
   curriculumOutline(q: CurriculumOutlineQuery): Promise<CurriculumNode[]>;
   searchConcepts(query: string, limit: number): Promise<ConceptHit[]>;
@@ -142,6 +144,18 @@ export const THINK_TOOLS: AiFunctionTool[] = [
   ...ACTION_TOOLS,
 ];
 
+/** 제안을 남기거나 작업을 시작하는 도구. 커서 질문(readOnly)에는 하나도 주지 않는다. */
+export const ACTING_TOOL_NAMES = new Set(['propose_code_request', 'start_code_plan', 'propose_folder', 'propose_delete', SPLIT_TOOL_NAME]);
+
+/**
+ * 이번 요청에 노출할 도구. 나누기 도구는 서버가 쓸 수 있다고 판단한 요청에만 넣는다.
+ * readOnly(커서 질문)면 조회 도구만 준다. Think와 Cursor가 서로 일을 시키며 맴돌지 않게 한다.
+ */
+export function thinkToolsFor(opts: { split: boolean; readOnly?: boolean }): AiFunctionTool[] {
+  if (opts.readOnly) return THINK_TOOLS.filter((t) => !ACTING_TOOL_NAMES.has(t.name));
+  return opts.split ? THINK_TOOLS : THINK_TOOLS.filter((t) => t.name !== SPLIT_TOOL_NAME);
+}
+
 export const TOOL_LABELS: Record<string, string> = {
   ...ACTION_TOOL_LABELS,
   search_memories: '기억 검색',
@@ -210,9 +224,11 @@ async function dispatch(
         ? args.kinds.filter((k): k is string => typeof k === 'string' && ['identity', 'principle', 'decision', 'note'].includes(k))
         : [];
       const terms = extractSearchTerms(query);
-      const hits = (await src.searchMemories(terms.length > 0 ? terms : [query], 20))
-        .filter((m) => kinds.length === 0 || kinds.includes(m.kind))
-        .slice(0, 10);
+      const found = await src.searchMemories(terms.length > 0 ? terms : [query], 20, searchScopeFor(ctx?.access));
+      const hits = scopeMemories(found, ctx?.access).filter((m) => kinds.length === 0 || kinds.includes(m.kind)).slice(0, 10);
+      for (const m of hits) {
+        ctx?.recordDelivered?.({ kind: 'memory', id: m.id, title: m.title, delivered: true });
+      }
       return {
         name,
         ok: true,
@@ -226,7 +242,11 @@ async function dispatch(
       const id = str(args.id, 64);
       if (!id || !UUID_RE.test(id)) return fail(name, 'invalid_id', 'id 형식 오류');
       const m = await src.getMemory(id);
-      if (!m) return fail(name, 'not_found', '찾을 수 없음');
+      if (!m || m.status !== 'active') return fail(name, 'not_found', '찾을 수 없음');
+      // 범위 밖 기억은 있는지조차 알리지 않는다(없는 id와 같은 답).
+      const visible = ctx?.access ? canProvideMemoryToAi(m, ctx.access) : legacyVisible(m);
+      if (!visible) return fail(name, 'not_found', '찾을 수 없음');
+      ctx?.recordDelivered?.({ kind: 'memory', id: m.id, title: m.title, delivered: true });
       return { name, ok: true, output: toOutput(m), summary: m.title };
     }
     case 'get_curriculum_outline': {

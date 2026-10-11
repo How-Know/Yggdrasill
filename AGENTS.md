@@ -14,6 +14,8 @@ owner are in Korean.
 | `supabase/functions` | Edge Functions (Deno). Shared AI code is in `_shared/ai` |
 | `docs/architecture` | Design decisions per area. Read the relevant one before changing that area |
 | `docs/specs` | Decision specs exported from Think. Treat them as the implementation brief |
+| `tools/code_bridge` | Operator-PC worker that runs Think's code requests with the Cursor SDK |
+| `tools/think_relay` | MCP server (user-level Cursor config) to read Think memories/conversations and ask Think |
 
 ## Before you change things
 
@@ -24,6 +26,9 @@ owner are in Korean.
 - Implementing a spec from `docs/specs`: follow its scope and "do not" list. If the spec has open
   questions, ask the owner before coding. If the implementation must differ from the decision,
   stop and ask; the decision is changed in Think first, not in code.
+- If the Think MCP tools (`think_search_memories`, `ask_think`, ...) are available, look up existing decisions
+  there before choosing a direction. An `ask_think` answer marked `needs_owner` (사장님 확인 필요) is not a
+  basis: pass its questions to the owner instead of proceeding.
 
 ## Checks
 

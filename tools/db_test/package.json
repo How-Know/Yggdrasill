@@ -1,0 +1,12 @@
+{
+  "name": "ygg-db-test",
+  "private": true,
+  "type": "module",
+  "description": "AI 영역 DB 함수 파일을 일회용 시험 DB(PGlite)에서 검사한다. 운영 DB에는 연결하지 않는다.",
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "0.5.8"
+  }
+}

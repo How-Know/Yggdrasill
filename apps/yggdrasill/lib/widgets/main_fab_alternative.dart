@@ -234,7 +234,7 @@ bool navRailExamButtonVisible({
   return !hidden && examOn && !suppressExam;
 }
 
-/// 시험기간에 네비게이션 레일 + 버튼 위에 뜨는 시험 버튼.
+/// 시험기간에 네비게이션 레일 + 버튼 아래에 뜨는 시험 버튼.
 class NavRailExamButton extends StatelessWidget {
   const NavRailExamButton({super.key});
 

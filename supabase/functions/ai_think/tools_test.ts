@@ -4,11 +4,16 @@ import { parseAttachments } from './validate.ts';
 import { MemoryThinkStore, memory } from './test_support.ts';
 
 Deno.test('도구 스키마는 strict 규칙(모든 필드 required, 추가 필드 금지)을 지킨다', () => {
-  for (const tool of THINK_TOOLS) {
-    const p = tool.parameters as { properties: Record<string, unknown>; required: string[]; additionalProperties: boolean };
-    assertEquals(p.additionalProperties, false, tool.name);
-    assertEquals([...p.required].sort(), Object.keys(p.properties).sort(), tool.name);
-  }
+  type ObjectSchema = { properties: Record<string, unknown>; required: string[]; additionalProperties: boolean };
+  const checkObject = (p: ObjectSchema, where: string) => {
+    assertEquals(p.additionalProperties, false, where);
+    assertEquals([...p.required].sort(), Object.keys(p.properties).sort(), where);
+    for (const [key, value] of Object.entries(p.properties)) {
+      const child = value as Partial<ObjectSchema>;
+      if (child && child.properties) checkObject(child as ObjectSchema, `${where}.${key}`);
+    }
+  };
+  for (const tool of THINK_TOOLS) checkObject(tool.parameters as ObjectSchema, tool.name);
 });
 
 Deno.test('잘못된 인자와 알 수 없는 도구는 예외 없이 오류 결과를 돌려준다', async () => {
@@ -30,6 +35,24 @@ Deno.test('기억 검색은 종류로 거를 수 있다', async () => {
   const r = await runThinkTool('search_memories', JSON.stringify({ query: '반복', kinds: ['decision'] }), store);
   assert(r.ok);
   assertEquals(JSON.parse(r.output).map((x: { id: string }) => x.id), ['a']);
+});
+
+Deno.test('기억 검색·열람은 active만 노출한다', async () => {
+  const activeId = '11111111-1111-4111-8111-111111111111';
+  const draftId = '22222222-2222-4222-8222-222222222222';
+  const store = new MemoryThinkStore();
+  store.memories.push(
+    memory({ id: activeId, kind: 'note', title: '노출키', content: '노출키 active', status: 'active' }),
+    memory({ id: draftId, kind: 'note', title: '노출키', content: '노출키 draft', status: 'draft' }),
+  );
+  const search = await runThinkTool('search_memories', JSON.stringify({ query: '노출키', kinds: null }), store);
+  assert(search.ok);
+  assertEquals(JSON.parse(search.output).map((x: { id: string }) => x.id), [activeId]);
+  const getDraft = await runThinkTool('get_memory', JSON.stringify({ id: draftId }), store);
+  assertEquals(getDraft.ok, false);
+  assertEquals(JSON.parse(getDraft.output).error, 'not_found');
+  const getActive = await runThinkTool('get_memory', JSON.stringify({ id: activeId }), store);
+  assert(getActive.ok);
 });
 
 Deno.test('느린 조회는 시간 제한으로 끊는다', async () => {

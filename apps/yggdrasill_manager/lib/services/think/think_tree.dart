@@ -152,6 +152,11 @@ class ThinkTree {
           if (n.kind == ThinkTreeKind.excerpt && n.conversationId == conversationId) n,
       ];
 
+  List<ThinkTreeNode> documentsOf(String conversationId) => [
+        for (final n in byId.values)
+          if (n.kind == ThinkTreeKind.document && n.conversationId == conversationId) n,
+      ];
+
   ThinkTreeNode? _dragged(ThinkDragItem item) =>
       item.node ?? (item.conversationId == null ? null : conversationNodes[item.conversationId]);
 

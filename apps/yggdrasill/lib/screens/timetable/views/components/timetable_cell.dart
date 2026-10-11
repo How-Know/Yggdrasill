@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import 'package:collection/collection.dart';
 import 'package:provider/provider.dart';
@@ -273,300 +271,71 @@ class TrialOverlayLabel {
   const TrialOverlayLabel({required this.noteId, required this.text});
 }
 
-/// 정원 70% 미만으로 표시하는 최대 인원. 정원 10이면 6.
-int timetableUnderCapacitySteps(int capacity) {
-  if (capacity <= 0) return 0;
-  final steps = (capacity * 0.7).ceil() - 1;
-  return steps < 0 ? 0 : steps;
+/// 정원 도달 띠·숫자. 시간표에서 앰버는 이 의미로만 쓴다.
+const Color _kCapacityFullColor = Color(0xFFF2B45B);
+
+/// 인원 띠의 위·아래 여백. 칸 안 숫자·칩 위치도 이 값에 맞춘다.
+const double kTimetableBandInset = 6;
+
+/// 인원 단계: 0 비어 있음 / 1 여유(정원 70% 미만) / 2 혼잡(70~99%) / 3 정원 도달.
+/// 정원이 0이면 인원이 있어도 여유로 본다.
+int timetableCapacityLevel(int count, int capacity) {
+  if (count <= 0) return 0;
+  if (capacity <= 0) return 1;
+  if (count >= capacity) return 3;
+  if (count >= capacity * 0.7) return 2;
+  return 1;
 }
 
-class TimetableCapacityIndicator extends StatelessWidget {
-  const TimetableCapacityIndicator({
-    super.key,
-    required this.count,
-    this.color,
-  });
+/// 같은 인원 단계가 이어지는 칸들을 하나로 묶은 둥근 띠.
+class TimetableCapacityBand extends StatelessWidget {
+  const TimetableCapacityBand({super.key, required this.level});
 
-  final int count;
-  final Color? color;
+  final int level;
 
   @override
   Widget build(BuildContext context) {
-    final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(
-      Theme.of(context).brightness,
-    );
-    final isOutline =
-        color == Colors.transparent || (color != null && color!.a == 0);
-    if (isOutline) {
-      final steps = timetableUnderCapacitySteps(
-        DataManager.instance.academySettings.defaultCapacity,
-      );
-      final filled = steps <= 0 ? 0 : count.clamp(0, steps);
-      return SizedBox(
-        height: 22,
-        width: double.infinity,
-        child: CustomPaint(
-          painter: _CapacityStackPainter(
-            steps: steps,
-            filled: filled,
-            color: panelStyle.divider,
-          ),
-        ),
-      );
-    }
-
-    final fill = color ?? Colors.green;
-    final numberColor = fill == panelStyle.groupedCardBackground
-        ? panelStyle.title
-        : const Color(0xFF0B1112);
-    return Container(
-      height: 22,
-      padding: const EdgeInsets.only(left: 8, right: 10),
+    final ink = Theme.of(context).brightness == Brightness.dark
+        ? Colors.white
+        : Colors.black;
+    final isFull = level >= 3;
+    return DecoratedBox(
       decoration: BoxDecoration(
-        color: fill,
-        borderRadius: BorderRadius.circular(11),
-      ),
-      child: Align(
-        alignment: Alignment.centerLeft,
-        child: Text(
-          '$count',
-          style: TextStyle(
-            color: numberColor,
-            fontSize: 12.5,
-            fontWeight: FontWeight.w800,
-            height: 1.0,
-          ),
-          maxLines: 1,
-          overflow: TextOverflow.visible,
-        ),
+        color: isFull
+            ? _kCapacityFullColor.withValues(alpha: 0.16)
+            : ink.withValues(alpha: level == 2 ? 0.15 : 0.06),
+        borderRadius: BorderRadius.circular(10),
+        border: isFull
+            ? Border.all(color: _kCapacityFullColor.withValues(alpha: 0.55))
+            : null,
       ),
     );
   }
 }
 
-/// 70% 미만 연속 구간. 인원이 달라도 한 선으로 잇고, 굵기로 인원을 나타낸다.
-class UnderCapacityRibbon extends StatelessWidget {
-  const UnderCapacityRibbon({
-    super.key,
-    required this.counts,
-    required this.steps,
-    required this.color,
-    required this.numberColor,
-    this.hoveredIndex,
-  });
+/// 휴식 칸: 진한 블록 대신 옅은 사선.
+class _BreakHatchPainter extends CustomPainter {
+  const _BreakHatchPainter({required this.color});
 
-  final List<int> counts;
-  final int steps;
   final Color color;
-  final Color numberColor;
-  final int? hoveredIndex;
-
-  @override
-  Widget build(BuildContext context) {
-    final hover = hoveredIndex;
-    final showNumber =
-        hover != null && hover >= 0 && hover < counts.length;
-    return SizedBox(
-      height: 22,
-      width: double.infinity,
-      child: Stack(
-        children: [
-          Positioned.fill(
-            child: CustomPaint(
-              painter: _UnderCapacityRibbonPainter(
-                counts: counts,
-                steps: steps,
-                color: color,
-              ),
-            ),
-          ),
-          if (showNumber)
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final cellWidth = constraints.maxWidth / counts.length;
-                return Stack(
-                  children: [
-                    Positioned(
-                      left: hover * cellWidth,
-                      width: cellWidth,
-                      top: 0,
-                      height: 22,
-                      child: Center(
-                        child: Text(
-                          '${counts[hover]}',
-                          style: TextStyle(
-                            color: numberColor,
-                            fontSize: 12.5,
-                            fontWeight: FontWeight.w800,
-                            height: 1.0,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                );
-              },
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-class _UnderCapacityRibbonPainter extends CustomPainter {
-  const _UnderCapacityRibbonPainter({
-    required this.counts,
-    required this.steps,
-    required this.color,
-  });
-
-  final List<int> counts;
-  final int steps;
-  final Color color;
-
-  double _smooth(double t) =>
-      t * t * t * (t * (t * 6 - 15) + 10);
-
-  double _thicknessFor(int count, double maxThickness) {
-    if (steps <= 0) return maxThickness;
-    final ratio = (count / steps).clamp(0.0, 1.0);
-    return (ratio * maxThickness).clamp(2.0, maxThickness);
-  }
-
-  double _thicknessAt(double x, double width, double maxThickness) {
-    final n = counts.length;
-    if (n <= 0 || width <= 0) return 2;
-    final cellW = width / n;
-    var index = (x / cellW).floor();
-    if (index < 0) index = 0;
-    if (index >= n) index = n - 1;
-    final blend = cellW * 0.6;
-    final half = blend / 2;
-    final leftEdge = index * cellW;
-    final rightEdge = (index + 1) * cellW;
-    if (index > 0 && x < leftEdge + half) {
-      final t = ((x - (leftEdge - half)) / blend).clamp(0.0, 1.0);
-      final from = _thicknessFor(counts[index - 1], maxThickness);
-      final to = _thicknessFor(counts[index], maxThickness);
-      return from + (to - from) * _smooth(t);
-    }
-    if (index < n - 1 && x > rightEdge - half) {
-      final t = ((x - (rightEdge - half)) / blend).clamp(0.0, 1.0);
-      final from = _thicknessFor(counts[index], maxThickness);
-      final to = _thicknessFor(counts[index + 1], maxThickness);
-      return from + (to - from) * _smooth(t);
-    }
-    return _thicknessFor(counts[index], maxThickness);
-  }
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (counts.isEmpty || size.width <= 0 || size.height <= 0) return;
-    final maxThickness = size.height;
-    final midY = size.height / 2;
-    final startThickness = _thicknessAt(0, size.width, maxThickness);
-    final endThickness =
-        _thicknessAt(size.width, size.width, maxThickness);
-    final startRadius = startThickness / 2;
-    final endRadius = endThickness / 2;
-    final capSum = startRadius + endRadius;
-    final capScale =
-        capSum > size.width && capSum > 0 ? size.width / capSum : 1.0;
-    final x0 = startRadius * capScale;
-    final x1 = size.width - endRadius * capScale;
     canvas.save();
     canvas.clipRect(Offset.zero & size);
-    final sampleCount = math.max(48, (size.width / 2).ceil());
-    final top = <Offset>[];
-    final bottom = <Offset>[];
-    for (var i = 0; i <= sampleCount; i++) {
-      final x = x0 + (x1 - x0) * i / sampleCount;
-      final thickness = _thicknessAt(x, size.width, maxThickness);
-      top.add(Offset(x, midY - thickness / 2));
-      bottom.add(Offset(x, midY + thickness / 2));
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 1;
+    const step = 10.0;
+    for (double x = -size.height; x < size.width; x += step) {
+      canvas.drawLine(Offset(x, size.height), Offset(x + size.height, 0), paint);
     }
-    final path = Path()..moveTo(top.first.dx, top.first.dy);
-    for (final point in top.skip(1)) {
-      path.lineTo(point.dx, point.dy);
-    }
-    path.arcToPoint(
-      bottom.last,
-      radius: Radius.circular(math.max(0.5, (bottom.last.dy - top.last.dy) / 2)),
-      clockwise: true,
-    );
-    for (final point in bottom.reversed.skip(1)) {
-      path.lineTo(point.dx, point.dy);
-    }
-    path.arcToPoint(
-      top.first,
-      radius: Radius.circular(
-        math.max(0.5, (bottom.first.dy - top.first.dy) / 2),
-      ),
-      clockwise: true,
-    );
-    path.close();
-    canvas.drawPath(path, Paint()..color = color);
     canvas.restore();
   }
 
   @override
-  bool shouldRepaint(covariant _UnderCapacityRibbonPainter oldDelegate) {
-    return oldDelegate.color != color ||
-        oldDelegate.steps != steps ||
-        oldDelegate.counts.length != counts.length ||
-        !_sameCounts(oldDelegate.counts, counts);
-  }
-
-  bool _sameCounts(List<int> a, List<int> b) {
-    if (a.length != b.length) return false;
-    for (var i = 0; i < a.length; i++) {
-      if (a[i] != b[i]) return false;
-    }
-    return true;
-  }
-}
-
-class _CapacityStackPainter extends CustomPainter {
-  const _CapacityStackPainter({
-    required this.steps,
-    required this.filled,
-    required this.color,
-  });
-
-  final int steps;
-  final int filled;
-  final Color color;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final radius = Radius.circular(size.height / 2);
-    final pill = RRect.fromRectAndRadius(Offset.zero & size, radius);
-    final bandCount = filled < steps ? filled : steps;
-    if (steps > 0 && bandCount > 0 && size.height > 0 && size.width > 0) {
-      canvas.save();
-      canvas.clipRRect(pill);
-      final fillHeight = size.height * bandCount / steps;
-      canvas.drawRect(
-        Rect.fromLTWH(0, size.height - fillHeight, size.width, fillHeight),
-        Paint()..color = color,
-      );
-      canvas.restore();
-    }
-    canvas.drawRRect(
-      pill,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1
-        ..color = color,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant _CapacityStackPainter oldDelegate) {
-    return oldDelegate.steps != steps ||
-        oldDelegate.filled != filled ||
-        oldDelegate.color != color;
-  }
+  bool shouldRepaint(covariant _BreakHatchPainter oldDelegate) =>
+      oldDelegate.color != color;
 }
 
 class TimetableCell extends StatelessWidget {
@@ -588,9 +357,22 @@ class TimetableCell extends StatelessWidget {
   final VoidCallback? onTap;
   final VoidCallback? onDragStart;
   final VoidCallback? onDragEnd;
-  final Color? countColor;
   final int activeStudentCount;
-  final bool showCapacityIndicator;
+
+  /// 직전 칸과 인원이 다르면 true — 띠 안에서 바뀐 인원을 흐리게 표시한다.
+  final bool countChanged;
+
+  /// 인원 띠(여유·혼잡·정원 단계)가 이 칸에서 시작하면 true — 숫자를 밝게 표시한다.
+  final bool capacityBandStart;
+
+  /// 정시(:00) 칸이면 true — 정시에만 세로선을 긋는다.
+  final bool isHourStart;
+
+  /// 마우스가 올라간 시간 열(모든 요일 공통)이면 true.
+  final bool isHoverColumn;
+
+  /// 이 칸 자체에 마우스가 올라가 있으면 true — 숨은 인원 숫자를 흐리게 보여 준다.
+  final bool isHovered;
   final List<StudentWithInfo> cellStudentWithInfos;
   final List<GroupInfo> groups;
   final double cellWidth;
@@ -619,9 +401,12 @@ class TimetableCell extends StatelessWidget {
     this.onTap,
     this.onDragStart,
     this.onDragEnd,
-    this.countColor,
     this.activeStudentCount = 0,
-    this.showCapacityIndicator = true,
+    this.countChanged = true,
+    this.capacityBandStart = true,
+    this.isHourStart = false,
+    this.isHoverColumn = false,
+    this.isHovered = false,
     this.cellStudentWithInfos = const [],
     this.groups = const [],
     this.cellWidth = 0,
@@ -655,9 +440,9 @@ class TimetableCell extends StatelessWidget {
       startTime.hour,
       startTime.minute,
     );
-    final double overlayChipWidth = (cellWidth > 0 ? cellWidth - 8 : 140.0) < 96
+    final double overlayChipWidth = (cellWidth > 0 ? cellWidth - 16 : 132.0) < 96
         ? 96
-        : (cellWidth > 0 ? cellWidth - 8 : 140.0);
+        : (cellWidth > 0 ? cellWidth - 16 : 132.0);
 
     return DragTarget<Map<String, dynamic>>(
       onWillAccept: (data) {
@@ -1306,57 +1091,97 @@ class TimetableCell extends StatelessWidget {
         }
       },
       builder: (context, candidateData, rejectedData) {
+        final brightness = Theme.of(context).brightness;
+        final panelStyle =
+            FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
+        final ink =
+            brightness == Brightness.dark ? Colors.white : Colors.black;
+        final capacity = DataManager.instance.academySettings.defaultCapacity;
+        final bool hasCount = !isBreakTime && activeStudentCount > 0;
+        final bool isFull =
+            hasCount && capacity > 0 && activeStudentCount >= capacity;
+        // 인원 띠는 요일 행에서 칸 뒤에 그린다. 칸은 숫자만: 띠 시작은 밝게,
+        // 띠 안에서 인원이 바뀐 곳·마우스가 올라간 칸은 흐리게.
+        final Color? countColor = !hasCount
+            ? null
+            : capacityBandStart
+                ? (isFull ? _kCapacityFullColor : panelStyle.title)
+                : (countChanged || isHovered)
+                    ? panelStyle.hint
+                    : null;
+        final bool showLeftDivider = blockIdx == 0 || isHourStart;
+        final bool showSelected = isSelected && !isBreakTime;
+        final Color highlight = isBreakTime
+            ? Colors.transparent
+            : isDragHighlight
+                ? const Color(0xFF1976D2).withValues(alpha: 0.18)
+                : (showSelected || isPendingHighlight)
+                    // 등록모드 pending 하이라이트는 일반 셀 선택 하이라이트와 동일 색상/강도 사용
+                    ? kDlgAccent.withValues(alpha: 0.12)
+                    : Colors.transparent;
         return GestureDetector(
           onTap: onTap,
           child: Stack(
             children: [
-              // 배경 및 선택/드래그 하이라이트
-              Builder(builder: (context) {
-                final brightness = Theme.of(context).brightness;
-                final panelStyle =
-                    FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
-                final bool showSelected = isSelected && !isBreakTime;
-                final Color backgroundColor = isBreakTime
-                    ? (brightness == Brightness.light
-                        ? const Color(0xFFE8E8E8)
-                        : const Color(0xFF1F1F1F))
-                    : isDragHighlight
-                        ? const Color(0xFF1976D2).withOpacity(0.18)
-                        : showSelected
-                            ? const Color(0xFF33A373).withOpacity(0.12)
-                            : isPendingHighlight
-                                // 등록모드 pending 하이라이트는 일반 셀 선택 하이라이트와 동일 색상/강도 사용
-                                ? const Color(0xFF33A373).withOpacity(0.12)
-                                : Colors.transparent;
-                final Border border = Border(
-                  left: BorderSide(color: panelStyle.divider),
-                );
-                return Container(
-                  decoration: BoxDecoration(
-                    color: backgroundColor,
-                    border: border,
+              // 배경: 정시 세로선 → 호버 열 → 휴식 사선 → 선택/드래그 하이라이트
+              Container(
+                decoration: BoxDecoration(
+                  border: Border(
+                    left: showLeftDivider
+                        ? BorderSide(
+                            color: blockIdx == 0
+                                ? panelStyle.divider
+                                : panelStyle.divider.withValues(
+                                    alpha: panelStyle.divider.a * 0.6),
+                          )
+                        : BorderSide.none,
                   ),
-                );
-              }),
+                ),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    if (isHoverColumn)
+                      ColoredBox(color: ink.withValues(alpha: 0.03)),
+                    if (isBreakTime)
+                      CustomPaint(
+                        painter: _BreakHatchPainter(
+                          color: ink.withValues(alpha: 0.06),
+                        ),
+                      ),
+                    if (highlight != Colors.transparent)
+                      ColoredBox(color: highlight),
+                  ],
+                ),
+              ),
               if (isBreakTime)
                 Center(
                   child: Text(
                     '휴식',
                     style: TextStyle(
-                      color: Colors.grey.shade400,
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
+                      color: panelStyle.hint,
+                      fontSize: 13,
+                      fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
                 ),
-              if (showCapacityIndicator && activeStudentCount > 0)
+              if (countColor != null)
                 Positioned(
-                  top: 0,
-                  left: 1,
-                  right: 1,
-                  child: TimetableCapacityIndicator(
-                    count: activeStudentCount,
-                    color: countColor,
+                  top: kTimetableBandInset + 7,
+                  left: 12,
+                  child: IgnorePointer(
+                    child: Text(
+                      '$activeStudentCount',
+                      style: TextStyle(
+                        color: countColor,
+                        fontSize: 13,
+                        fontFamily:
+                            FabTabBarTokens.previewAcademyLabelFontFamily,
+                        fontWeight: FontWeight.w700,
+                        height: 1.0,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
                   ),
                 ),
               if (isExpanded && students.isNotEmpty)
@@ -1382,9 +1207,9 @@ class TimetableCell extends StatelessWidget {
                   trialOverlays.isNotEmpty ||
                   inquiryOverlays.isNotEmpty)
                 Positioned(
-                  left: 4,
-                  top: activeStudentCount > 0 ? 32 : 4,
-                  right: 4,
+                  left: 8,
+                  top: activeStudentCount > 0 ? 32 : kTimetableBandInset + 4,
+                  right: 8,
                   child: Wrap(
                     spacing: 4,
                     runSpacing: 4,
@@ -1392,42 +1217,15 @@ class TimetableCell extends StatelessWidget {
                       ...makeupOverlays.map((item) {
                         final bool isReplace =
                             item.type == OverrideType.replace;
-                        final Color bg = item.isCompleted
-                            ? const Color(0xFF212A31).withOpacity(0.6)
-                            : (isReplace
-                                ? const Color(0xFF1976D2)
-                                    .withOpacity(0.18) // 파란 형광펜
-                                : const Color(0xFF4CAF50)
-                                    .withOpacity(0.18)); // 초록 형광펜 (추가수업)
-                        final Widget chip = Container(
+                        final Widget chip = _overlayChip(
                           width: overlayChipWidth,
-                          constraints: const BoxConstraints(
-                            minHeight: 27,
-                          ),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 4,
-                          ),
-                          decoration: BoxDecoration(
-                            color: bg,
-                            borderRadius: BorderRadius.circular(0),
-                          ),
-                          child: Center(
-                            child: Text(
-                              item.text,
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                color: item.isCompleted
-                                    ? Colors.white70
-                                    : const Color(0xFFEAF2F2),
-                                fontSize: 12.5,
-                                fontWeight: FontWeight.w600,
-                                height: 1.1,
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
+                          icon: isReplace
+                              ? Icons.replay_rounded
+                              : Icons.add_rounded,
+                          text: item.text,
+                          panelStyle: panelStyle,
+                          ink: ink,
+                          completed: item.isCompleted,
                         );
                         // 완료된(출석 기록 완료) 항목은 이동 불가
                         if (item.isCompleted) return chip;
@@ -1460,38 +1258,14 @@ class TimetableCell extends StatelessWidget {
                         );
                       }),
                       ...trialOverlays.map((item) {
-                        // 추가수업(add)과 동일한 노출/색상으로 표시
-                        final Color bg =
-                            const Color(0xFF4CAF50).withValues(alpha: 0.18);
                         final bool canTap = (onInquiryOverlayTap != null) &&
                             item.noteId.trim().isNotEmpty;
-                        final Widget chip = Container(
+                        final Widget chip = _overlayChip(
                           width: overlayChipWidth,
-                          constraints: const BoxConstraints(
-                            minHeight: 27,
-                          ),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 4,
-                          ),
-                          decoration: BoxDecoration(
-                            color: bg,
-                            borderRadius: BorderRadius.circular(0),
-                          ),
-                          child: Center(
-                            child: Text(
-                              item.text,
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(
-                                color: Color(0xFFEAF2F2),
-                                fontSize: 12.5,
-                                fontWeight: FontWeight.w600,
-                                height: 1.1,
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
+                          icon: Icons.auto_awesome_rounded,
+                          text: item.text,
+                          panelStyle: panelStyle,
+                          ink: ink,
                         );
                         if (!canTap) return chip;
                         return GestureDetector(
@@ -1501,39 +1275,14 @@ class TimetableCell extends StatelessWidget {
                         );
                       }),
                       ...inquiryOverlays.map((item) {
-                        // 희망수업(문의): #F2B45B
-                        // 색이 잘 보이도록 투명도 낮춤(=더 불투명하게)
-                        final Color bg =
-                            const Color(0xFFF2B45B).withValues(alpha: 0.38);
                         final bool canTap = (onInquiryOverlayTap != null) &&
                             item.noteId.trim().isNotEmpty;
-                        final Widget chip = Container(
+                        final Widget chip = _overlayChip(
                           width: overlayChipWidth,
-                          constraints: const BoxConstraints(
-                            minHeight: 27,
-                          ),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 4,
-                          ),
-                          decoration: BoxDecoration(
-                            color: bg,
-                            borderRadius: BorderRadius.circular(0),
-                          ),
-                          child: Center(
-                            child: Text(
-                              item.text,
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(
-                                color: Color(0xFFEAF2F2),
-                                fontSize: 12.5,
-                                fontWeight: FontWeight.w700,
-                                height: 1.1,
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
+                          icon: Icons.help_outline_rounded,
+                          text: item.text,
+                          panelStyle: panelStyle,
+                          ink: ink,
                         );
                         final Widget tappable = canTap
                             ? GestureDetector(
@@ -1583,6 +1332,61 @@ class TimetableCell extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+
+  /// 보강·추가수업·체험·문의 칩. 색 바탕 대신 같은 중립 캡슐에 앞 아이콘으로 구분한다.
+  /// 바깥 폭은 [width] 전체를 잡아 길게 눌러 끌기 영역을 기존과 같게 유지한다.
+  Widget _overlayChip({
+    required double width,
+    required IconData icon,
+    required String text,
+    required PreviewAcademyPanelStyle panelStyle,
+    required Color ink,
+    bool completed = false,
+  }) {
+    return SizedBox(
+      width: width,
+      child: ColoredBox(
+        color: Colors.transparent,
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: Opacity(
+            opacity: completed ? 0.45 : 1.0,
+            child: Container(
+              height: 27,
+              padding: const EdgeInsets.fromLTRB(8, 0, 10, 0),
+              decoration: BoxDecoration(
+                color: ink.withValues(alpha: 0.06),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: ink.withValues(alpha: 0.10)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(icon, size: 14, color: panelStyle.hint),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Text(
+                      text,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: panelStyle.title,
+                        fontSize: 12.5,
+                        fontFamily:
+                            FabTabBarTokens.previewAcademyLabelFontFamily,
+                        fontWeight: FontWeight.w600,
+                        height: 1.0,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

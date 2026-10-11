@@ -69,6 +69,29 @@ class _MathBuilder extends MarkdownElementBuilder {
   }
 }
 
+/// 코드 블록(회색 상자). flutter_markdown 기본은 가로 스크롤 상자라, 글자 밖(여백·짧은 줄 오른쪽)에서
+/// 끌기 시작하면 바깥 [SelectionArea]가 상자 안을 고르지 못한다. 상자 폭을 채우고 긴 줄은 접는다.
+class _CodeBlockBuilder extends MarkdownElementBuilder {
+  _CodeBlockBuilder(this.style, this.padding);
+
+  final TextStyle style;
+  final EdgeInsets padding;
+
+  @override
+  Widget? visitElementAfterWithContext(
+    BuildContext context,
+    md.Element element,
+    TextStyle? preferredStyle,
+    TextStyle? parentStyle,
+  ) {
+    final code = element.textContent.replaceFirst(RegExp(r'\n$'), '');
+    return SizedBox(
+      width: double.infinity,
+      child: Padding(padding: padding, child: Text(code, style: style)),
+    );
+  }
+}
+
 MarkdownStyleSheet thinkMarkdownStyle(BuildContext context, {double fontSize = 14}) {
   final theme = Theme.of(context);
   final text = theme.textTheme;
@@ -106,12 +129,16 @@ class ThinkMarkdown extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final style = thinkMarkdownStyle(context, fontSize: fontSize);
+    final code = TextStyle(color: kThinkText, fontFamily: 'monospace', fontSize: fontSize - 1, height: 1.5);
     return MarkdownBody(
       data: data,
       styleSheet: style,
       extensionSet: md.ExtensionSet.gitHubFlavored,
       inlineSyntaxes: [_DollarMathSyntax(), _BackslashMathSyntax()],
-      builders: {'math': _MathBuilder(style.p ?? const TextStyle(color: kThinkText))},
+      builders: {
+        'math': _MathBuilder(style.p ?? const TextStyle(color: kThinkText)),
+        'pre': _CodeBlockBuilder(code, style.codeblockPadding ?? const EdgeInsets.all(12)),
+      },
       onTapLink: (text, href, title) => openThinkLink(context, href),
     );
   }

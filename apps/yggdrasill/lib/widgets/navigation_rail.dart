@@ -295,8 +295,8 @@ class CustomNavigationRail extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const NavRailExamButton(),
                 const NavRailPlusButton(),
+                const NavRailExamButton(),
                 AccountButton(
                   padding: EdgeInsets.only(
                     bottom: FabTabBarTokens.navRailAccountButtonBottomInset(

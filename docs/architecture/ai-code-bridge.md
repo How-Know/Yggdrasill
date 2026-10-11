@@ -148,7 +148,7 @@ Think 검토와 정리는 `ai_code_bridge`가 작업자 결과를 받은 직후 
 | `cancel_requested` | 실행 중에 앱에서 취소를 눌렀는지 |
 
 `ai_code_request_rounds` — 회차별 기록: 보낸 요청문, 답 원문(가림 처리), 정리된 결과, 형식 일치 여부,
-Cursor 실행 id, 모델, 소요 시간, 토큰, 도구별 호출 수, 저장소 상태(브랜치·HEAD·커밋 안 된 파일 수), 오류.
+Cursor 실행 id, 모델, 실제 작업 강도(`effort`, 2026-10-10), 소요 시간, 토큰, 도구별 호출 수, 저장소 상태(브랜치·HEAD·커밋 안 된 파일 수), 오류.
 
 `ai_code_workers` — 작업자별 마지막 신호, 버전, 모델, 처리 중인 요청. 앱의 "작업자 켜짐/꺼짐" 표시에 쓴다.
 
@@ -183,6 +183,8 @@ Cursor 실행 id, 모델, 소요 시간, 토큰, 도구별 호출 수, 저장소
 ## 7. 작업자
 
 위치: `tools/code_bridge/` (Node 22.13 이상. 운영자 PC는 22.20). 처음 한 번 `npm install`.
+자동 검사(2026-10-07)를 쓰려면 `tools/db_test`에서도 한 번 `npm install`(PGlite). Deno는 `tools/code_bridge`의 `npm install`로
+함께 깔린다(`deno` 패키지). Flutter는 PATH에서 찾는다.
 
 켜기: PowerShell에서 `cd tools/code_bridge` → `npm start`. 끄기: Ctrl+C 한 번이면 진행 중인 조사를 멈추고
 대기열로 돌려놓은 뒤 끝난다. 두 번 누르면 바로 끝난다. 시험: `npm test`.
@@ -193,12 +195,17 @@ Cursor 실행 id, 모델, 소요 시간, 토큰, 도구별 호출 수, 저장소
 |------|------|------|
 | `CURSOR_API_KEY` | 예 | 운영자 개인 Cursor API 키 |
 | `CODE_BRIDGE_WORKER_TOKEN` | 예 | 작업자 토큰. 서버에는 해시만 있다 |
-| `CODE_BRIDGE_MODEL` | | Cursor 모델 id. 기본 `composer-2.5` |
+| `CODE_BRIDGE_MODEL` | | Cursor 모델 id. 기본 `grok-4.7`(2026-10-10, 그 전은 `composer-2.5`). 작업 강도는 요청마다 정한다(§7.1) |
 | `CODE_BRIDGE_WORKER_ID` | | 기본 `pc-<컴퓨터 이름>` |
 | `CODE_BRIDGE_REPO` | | 조사할 저장소. 기본은 이 저장소 |
 | `CODE_BRIDGE_URL`, `CODE_BRIDGE_ANON_KEY` | | 함수 주소(기본 운영 프로젝트), 게이트웨이가 요구할 때만 anon 키 |
 | `CODE_BRIDGE_POLL_MS`, `CODE_BRIDGE_ROUND_TIMEOUT_MS` | | 대기열 확인 간격(기본 10초), 조사·조율 한 회차 제한(기본 15분) |
 | `CODE_BRIDGE_CHANGE_TIMEOUT_MS` | | 수정 실행 제한(기본 30분, 1~90분) |
+| `CODE_BRIDGE_FINISH_GRACE_MS` | | Cursor가 답을 끝낸 뒤 실행이 닫히기를 기다리는 시간(기본 1분, 5초~10분) |
+| `CODE_BRIDGE_CHECKS` | | `off`면 수정 뒤 자동 검사를 하지 않는다(카드에 "검사한 항목 없음"과 이유) |
+| `CODE_BRIDGE_CHECKS_TIMEOUT_MS` | | 자동 검사 전체 제한(기본 25분, 1~90분). 검사 1개는 10분 |
+| `CODE_BRIDGE_DENO`, `CODE_BRIDGE_FLUTTER` | | deno·flutter 실행 파일 경로. 없으면 작업자 `node_modules`의 deno, PATH의 flutter |
+| `CODE_BRIDGE_ASK_THINK` | | `off`면 조사·조율에서 Think에게 묻지 않는다(기본 켬) |
 
 - 비밀 파일 차단 훅(`.cursor/hooks.json`, `deny-secrets.mjs`)이 없으면 시작하지 않는다.
 - 10초마다 `claim`을 부른다. 한 번에 한 건만 처리한다. 인증 실패·함수 미설정이면 1분 쉬고 다시 본다.
@@ -209,7 +216,7 @@ Cursor 실행 id, 모델, 소요 시간, 토큰, 도구별 호출 수, 저장소
 ```typescript
 Agent.create({
   apiKey: cfg.apiKey,
-  model: { id: cfg.model },       // 코드에 박지 않는다. 환경 변수 CODE_BRIDGE_MODEL
+  model: chosen.selection,        // { id: CODE_BRIDGE_MODEL, params: [...] }. 강도 선택은 §7.1
   mode: "plan",
   tools: ["read", "grep", "glob", "ls"],
   local: { cwd: cfg.repo, settingSources: ["project"] },
@@ -221,6 +228,46 @@ Agent.create({
 - 결과를 올리기 전에 키처럼 보이는 문자열(`sk-`, `eyJ`, 긴 16진수 등)을 가린다.
 - 끝나면 `run.wait()` 결과의 토큰 수(`usage`), 도구별 호출 수, 저장소 상태를 함께 올리고 에이전트를 정리(`close`)한다.
   `agent.getUsage()`(달러 비용)는 운영자 계정에서 `feature_unavailable`이라 쓸 수 없다.
+- 수정 실행은 diff를 모은 뒤 같은 복사본에서 자동 검사(`src/checks.mjs`)를 돌리고 `result.verification`에 함께 올린다.
+  검사 목록·상태·기준 복사본 비교는 [`ai-think-actions.md`](ai-think-actions.md) §4.5. 검사는 정해진 명령만 돌리고
+  (Cursor 에이전트에게 셸을 주는 것이 아니다), 키·토큰 환경 변수는 빼고 넘긴다. AI가 쓴 시험 코드가 이 PC에서 실행된다는 점은 남는다.
+- 재수정 요청(`request.fix_of`)이면 claim 응답의 `fix{diff, base_commit}`로 앞 diff를 얹은 복사본에서 시작한다(§4.6).
+  얹지 못하면 실패로 올린다.
+- 이어받기 요청(`request.continue_from`)이면 claim 응답의 `base_patch`(앞 수정의 최종 패치, 서버 RPC `ai_code_bridge_patch_source`)를
+  지금 작업 폴더 스냅샷 복사본에 얹고 시작한다. 조사·조율도 이 복사본에서 읽는다. 통계가 맞지 않거나 충돌하면 얹지 않고 이유와 함께 실패로 올린다
+  ([`ai-think-actions.md`](ai-think-actions.md) §4.7). 로그에는 요청 id·회차·파일 수만 찍는다. `PROMPT_VERSION = 'code_bridge.v7'`.
+- 수정이 시간 제한(`CODE_BRIDGE_CHANGE_TIMEOUT_MS`, 기본 30분)에 걸리면 고친 데까지를 확인 필요로 올리고 `result.partial = 'timeout'`을 남긴다.
+  이 미완성 패치는 적용할 수 없고 이어받기만 된다. 이어받을 때는 패치가 자기 기준 커밋에 그대로 적용되는지 먼저 보고,
+  요청문에 "검사된 적 없는 출발점"이라고 적는다([`ai-think-actions.md`](ai-think-actions.md) §4.7.1).
+  제한을 바꾼 환경 변수는 작업자를 다시 켜야 적용된다.
+- **Think에게 묻기(2026-10-10):** 조사·조율 실행에는 작업자 customTool `ask_think`를 준다(도구 목록 `read, grep, glob, ls, mcp`).
+  작업자가 `ai_code_bridge`의 `ask_think`(작업자 토큰, `request_id`, `question`)를 불러 Think 답과 판정을 받는다.
+  회차당 3번(작업자와 서버 `ai_relay_reserve`가 함께 센다), 질문 4천 자 이하, 키처럼 보이는 질문은 보내지 않는다.
+  판정이 `needs_owner`(사장님 확인 필요)면 그 답을 근거로 쓰지 않고 확인 질문을 `questions_for_owner`(조율) /
+  `questions_for_think`(조사)에 옮기라고 요청문에 적는다. `'mcp'`는 저장소 `.cursor/mcp.json`의 서버도 켜므로
+  그 파일이 있으면 묻기를 끈다. 수정 실행에는 주지 않는다. 설계: [`ai-think.md`](ai-think.md) §12.
+
+### 7.1 작업 강도 (2026-10-10, 결정 `255670bc`, 마이그레이션 `20261010110000_ai_code_effort.sql`)
+
+기본 모델은 Grok 4.7이고, 요청마다 작업 강도(`medium`·`high`·`xhigh`)를 정한다.
+
+- **Think가 고른다.** `propose_code_request`·`start_code_plan`의 `effort`·`effort_reason`(한 줄, 200자 이하).
+  기준: 작은 수정 `medium`, 여러 파일 기능·테스트 포함 `high`, DB·Edge·앱을 함께 바꾸거나 어려운 버그 `xhigh`.
+  애매하면 `high`. `xhigh` 횟수 제한은 없다. 조율이 끝나 조율본을 만들 때 Think가 수정에 맞게 다시 고른다
+  (조율본 `plan.effort`, 없으면 조율 요청의 강도를 잇는다). 판단 기준은 `_shared/code_effort.ts`.
+- **운영자가 바꿀 수 있다.** 조사 제안·조율본 카드에 강도 칩과 Think 판단 이유를 보여 주고, 승인 전에 바꾸면
+  원래 spec에 강도만 바꿔 `ai_action_apply`의 `p_overrides.spec`으로 보낸다. 카드는 Think 판단이 틀릴 수 있다고 적는다.
+- **저장:** 요청 강도는 `ai_code_requests.request.effort`·`effort_reason`(jsonb 안, 새 열 없음). 그래서 승인·재수정·이어받기 등
+  요청을 복사하는 RPC는 그대로 잇는다. 실제 쓴 모델·강도는 회차 `ai_code_request_rounds.model`·`effort`
+  (`low`·`medium`·`high`·`xhigh` 또는 null)에 `complete`·`fail`이 남긴다.
+- **하위 호환:** 강도가 없거나 모르는 값이면 `high`. 강도를 모르는 옛 작업자는 그냥 기본 조합으로 돌고 회차 강도는 null이다.
+  앱은 `effort` 열이 없으면(마이그레이션 전) 그 열 없이 회차를 읽는다.
+- **작업자 선택(`resolveModelSelection`):** 시작할 때 `Cursor.models.list()`(1시간 캐시)에서 모델을 id·별칭으로 찾고,
+  강도 옵션(`reasoning_effort`, 옛 모델은 `effort`) 중 요청 강도를, 없으면 가장 가까운 값(같은 거리면 높은 쪽)을 고른다.
+  나머지 옵션은 Cursor 기본 조합을 따르고(grok-4.7은 `context 500k`, `fast true`), 목록에 실제로 있는 조합만 쓴다.
+  강도 옵션이 없는 모델(`composer-2.5` 등)이나 목록을 못 받으면 `{ id }`만 넘기고 회차 강도를 null로 남긴다.
+  실행 결과의 `result.model.params`가 있으면 그 값을 실제 강도로 기록한다. 시작 로그에 "모델 · 강도"를 찍는다.
+- 모드의 뜻과 권한, Cursor 키 위치(작업자 환경 변수)는 바뀌지 않는다.
 
 ---
 
@@ -228,10 +275,10 @@ Agent.create({
 
 | 주체 | 할 수 있음 | 할 수 없음 |
 |------|------|------|
-| Cursor 에이전트 (조사·조율) | 저장소 파일 읽기·검색, 변경안 설명, 계획 검토 (`mode: "plan"`) | 파일 편집, 셸, 네트워크 도구, MCP, 하위 에이전트, PR, 비밀 파일 읽기 |
+| Cursor 에이전트 (조사·조율) | 저장소 파일 읽기·검색, 변경안 설명, 계획 검토 (`mode: "plan"`), 작업자 도구 `ask_think`로 Think에게 묻기(회차당 3번) | 파일 편집, 셸, 네트워크 도구, 그 밖의 MCP, 하위 에이전트, PR, 비밀 파일 읽기 |
 | Cursor 에이전트 (수정) | 격리 복사본 안에서만 읽기·편집·삭제 (`mode: "agent"`, `read, grep, glob, ls, edit, delete`) | 셸, 복사본 밖 경로(읽기 포함), `.git`·`.cursor/hooks*` 쓰기, 비밀 파일 |
-| 작업자 | 대기열 동작(claim·heartbeat·complete·fail·apply_done), 스냅샷·복사본·diff, 승인된 diff 적용·되돌리기 | 커밋·푸시·스테이징, 다른 대화·기억 읽기, DB 직접 접근 |
-| Think (`ai_think`) | 요청 제안(카드), 읽기 전용 조율 시작(`start_code_plan`, 하루 한도 안), 결과 자동 검토·다음 회차 질문·대화 답변·조율본 제안(`ai_code_bridge` 안의 `code_review`) | DB 직접 변경, 조사·수정 요청 자동 전송, 적용 자동 실행, 결정 자동 확정 |
+| 작업자 | 대기열 동작(claim·heartbeat·complete·fail·apply_done), 스냅샷·복사본·diff, 복사본 자동 검사(정해진 명령, 메모리 시험 DB), 승인된 diff 적용·되돌리기 | 커밋·푸시·스테이징, 다른 대화·기억 읽기, DB 직접 접근, 운영 DB 마이그레이션 |
+| Think (`ai_think`) | 요청 제안(카드), 읽기 전용 조율 시작(`start_code_plan`, 하루 한도 안), 결과 자동 검토·다음 회차 질문·대화 답변·조율본 제안(`ai_code_bridge` 안의 `code_review`), 질문 없는 조율본의 수정 시작·검사 실패 재수정 최대 2회(2026-10-07, 하루 한도 안) | DB 직접 변경, 적용 자동 실행, 운영 DB 반영·배포, 결정 자동 확정 |
 | 매니저앱 | 제안 승인·고쳐서 보내기·거절, 취소, 적용·되돌리기 승인, 판단 기록 | — |
 
 수정 모드의 경로 제한: 작업자가 수정 실행 동안만 `CODE_BRIDGE_WRITE_ROOT`를 복사본 경로로 둔다. 훅은 이 값이 있으면
@@ -266,6 +313,7 @@ Agent.create({
 | 형식에 맞지 않는 답 | 원문을 저장하고 `needs_review`. 운영자가 원문을 보고 판단한다 |
 | 한 회차 15분 초과 (조사·조율) | 실행을 취소하고 `failed` (`timeout`) |
 | 수정 30분 초과 | 실행을 취소한다. 바뀐 파일이 있으면 그때까지의 diff를 올려 `needs_review`(적용 불가, 확인만), 없으면 `failed` |
+| 답은 끝났는데 실행이 안 닫힘 | 턴 종료(`usage` 이벤트) 뒤 1분 안에 실행이 끝나지 않으면 취소하고, 마지막 도구 호출 뒤에 받은 답과 복사본 diff로 정상 완료 처리한다. 2026-10-05 수정 실행이 9.6분에 답을 끝내고도 닫히지 않아 30분 제한에 걸린 일이 있어 추가했다 |
 | 앱에서 취소 | 대기 중이면 바로 `cancelled`. 실행 중이면 다음 진행 신호 때 실행을 취소하고 `cancelled` |
 | 작업자를 끔 (Ctrl+C) | 실행을 멈추고 대기열로 되돌린다. 다음에 켜면 처음부터 다시 조사한다 |
 | 작업자가 죽음 | 점유(120초)가 만료되면 다음 가져가기 때 되돌린다. 시도가 3회를 넘으면 `failed`, 취소 요청이 있었으면 `cancelled` |
@@ -299,13 +347,16 @@ Agent.create({
    작업자 `code_bridge.v3`, 검토 `code-review-2026-10-01`. 자세한 흐름은 [`ai-think-actions.md`](ai-think-actions.md) §4.3
    2026-10-02: 남은 쟁점은 조율본의 객관식 질문(`decisions`)으로 묻고, 답하면 `ai_code_plan_revise`로 1회 더 조율한다.
    검토 `code-review-2026-10-02`. 작업자는 바뀌지 않았다
+   2026-10-07: 운영자 → Think(CEO) → Cursor 구조. 자동 검사, 질문 없는 조율본 자동 시작, 검사 실패 재수정 최대 2회.
+   작업자 `code_bridge.v4`, 검토 `code-review-2026-10-07`. [`ai-think-actions.md`](ai-think-actions.md) §4.5·§4.6
+   2026-10-10: 기본 모델 Grok 4.7, 요청별 작업 강도(§7.1). 검토 `code-review-2026-10-10`, Think `think-2026-10-10b`
 4. **화면 다듬기**: 채택 → 결정 초안 연결
 
 별도 브랜치·커밋·PR로 올리는 것은 여전히 범위 밖이다. 적용은 작업 폴더에만 하고 커밋은 사람이 한다.
 
 ### 11.1 0단계 결과 (2026-09-29)
 
-`@cursor/sdk` 1.0.32, Node 22.20, Windows. 실제 저장소가 아닌 임시 폴더의 가짜 저장소에 미끼 비밀 파일을 두고 시험했다.
+`@cursor/sdk` 1.0.32(2026-10-05부터 1.0.35), Node 22.20, Windows. 실제 저장소가 아닌 임시 폴더의 가짜 저장소에 미끼 비밀 파일을 두고 시험했다.
 모델은 `composer-2.5`. 키로 쓸 수 있는 모델은 43개였다(`Cursor.models.list()`).
 
 | 시험 | 결과 |
@@ -323,16 +374,20 @@ Agent.create({
 
 ## 12. 하지 않는 것
 
-승인 없는 코드 수정·적용, 커밋·PR 자동 생성, 셸 명령, 클라우드 에이전트, IDE 채팅창 조작, 비공식 API,
+승인 없는 적용, 운영 DB 반영, 커밋·PR 자동 생성, Cursor 에이전트의 셸 명령, 클라우드 에이전트, IDE 채팅창 조작, 비공식 API,
 작업자에게 service role 키 주기, Cursor 결과로 결정·기억 자동 확정, 요청 사이 맥락 넘기기.
 
 ## 13. 코드 위치
 
 | 무엇 | 어디 |
 |------|------|
-| 테이블·RPC | `supabase/migrations/20260929160000_ai_code_bridge.sql`, `20260930100000_ai_think_actions.sql`(수정 모드·적용·검토·제안) |
+| 테이블·RPC | `supabase/migrations/20260929160000_ai_code_bridge.sql`, `20260930100000_ai_think_actions.sql`(수정 모드·적용·검토·제안), `20261007090000_ai_code_request_apply_patch_guard.sql`(적용 형식 검사), `20261007100000_ai_code_ceo_flow.sql`(자동 시작·재수정), `20261008180000_ai_code_patch_source.sql`(이어받기 패치), `20261010150000_ai_code_partial_continue.sql`(미완성 패치 이어받기) |
+| 이어받기 재현 시험 | `tools/code_bridge/test/continue.test.mjs`(저장됐지만 작업 폴더에 없는 패치 → 복사본, 충돌·잘림·본문 비노출) |
+| DB 시험 | `tools/db_test/` (PGlite로 AI 마이그레이션 전체를 메모리 DB에 올려 RPC·권한 시험. `openAiTestDb()`, `node --test`) |
+| 자동 검사 | `tools/code_bridge/src/checks.mjs`, 시험 `test/checks.test.mjs` |
 | 작업자용 함수 | `supabase/functions/ai_code_bridge/` (`handler.ts`, `validate.ts`, `code_review.ts`, `review_store.ts`, 시험 `handler_test.ts`, `code_review_test.ts`) |
 | 작업자 | `tools/code_bridge/` (`src/worker.mjs`, `src/lib.mjs`, `src/git_ops.mjs`, `src/bridge_client.mjs`, 시험 `test/`) |
+| Think에게 묻기 | 작업자 `src/lib.mjs`(`createAskThinkTool`, `askThinkSection`), 서버 `ai_think/relay.ts`, `relay_verdict.ts`, 시험 `test/ask_think.test.mjs`. IDE 쪽은 `tools/think_relay/`, `supabase/functions/ai_think_relay/` ([`ai-think.md`](ai-think.md) §12) |
 | 비밀 파일·경로 차단 훅 | `.cursor/hooks.json`, `.cursor/hooks/deny-secrets.mjs` |
 | 매니저앱 | `services/think/think_code_models.dart`, `think_code_controller.dart`, `think_action_models.dart`, `think_api.dart`의 코드·제안 부분, `screens/think/think_action_cards.dart`(채팅 카드), `think_code_views.dart`(결과·diff), `think_code_requests_dialog.dart`(전체 요청 창), `think_code_request_dialog.dart`, 시험 `test/think_code_test.dart`, `test/think_actions_test.dart` |
 

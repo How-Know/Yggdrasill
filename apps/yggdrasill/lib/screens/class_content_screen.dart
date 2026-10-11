@@ -48,6 +48,7 @@ import 'learning/models/problem_bank_export_models.dart'
 import 'resources/exam_preset_support.dart' show naesinLinkKeyOfPreset;
 import 'design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import '../widgets/app_confirm_button.dart';
+import '../widgets/departure_summary_dialog.dart';
 import '../widgets/dialog_tokens.dart';
 import '../widgets/home_status_dashboard_icon.dart';
 import '../widgets/student_profile_avatar.dart';
@@ -65,6 +66,7 @@ import '../widgets/solid_capsule_action_bar.dart';
 import '../widgets/attendance_rank_dialog.dart';
 import '../services/student_textbook_report_service.dart';
 import '../widgets/textbook_report_review_dialog.dart';
+import '../utils/homework_card_label.dart';
 import '../utils/homework_page_text.dart';
 import '../utils/textbook_problem_source_order.dart';
 import 'class_content/homework_created_date.dart';
@@ -444,10 +446,13 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     );
   }
 
+  /// [warmLocalPdfs]가 false면 정답·해설 PDF 로컬 다운로드를 기다리지 않는다.
+  /// 시트를 바로 여는 경로에서는 시트가 열린 뒤 PDF를 직접 받는다.
   Future<RightSideSheetTestGradingSession?> _buildRightSheetPreloadSession({
     required String studentId,
     required HomeworkItem hw,
     List<({String studentId, String itemId})>? targetKeys,
+    bool warmLocalPdfs = true,
   }) async {
     final keys = targetKeys == null || targetKeys.isEmpty
         ? <({String studentId, String itemId})>[
@@ -469,10 +474,12 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           studentId: studentId,
           hw: hw,
         );
-        final resolvedLinks = await _resolveRightSheetAnswerViewerLinks(
-          studentId: studentId,
-          hw: hw,
-        );
+        final resolvedLinks = warmLocalPdfs
+            ? await _resolveRightSheetAnswerViewerLinks(
+                studentId: studentId,
+                hw: hw,
+              )
+            : const <String, String>{};
         final cacheKey = payload.answerViewerCacheKey.trim().isNotEmpty
             ? payload.answerViewerCacheKey.trim()
             : (rawLinks['cacheKey'] ?? '').trim();
@@ -556,26 +563,28 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     final solutionPath = textbookPayload.solutionPathRaw.trim();
     // 백그라운드 프리로드에서는 로컬 resolve까지 끝내 두고,
     // 세션 payload에는 raw path를 유지해 시트 오픈과 cacheKey를 맞춘다.
-    final textbookLinks = await _resolveHomeworkPdfLinks(
-      hw,
-      allowFlowFallback: true,
-    );
-    final resolvedPaths = await Future.wait<String>([
-      _resolveTextbookPdfPathForRightSheet(
-        textbookLinks: textbookLinks,
-        kind: 'ans',
-      ),
-      _resolveTextbookPdfPathForRightSheet(
-        textbookLinks: textbookLinks,
-        kind: 'sol',
-      ),
-    ]);
-    if (cacheKey.isNotEmpty && resolvedPaths[0].trim().isNotEmpty) {
-      RightSheetAnswerPreloadService.instance.putPdfLinks(
-        cacheKey: cacheKey,
-        answerPath: resolvedPaths[0],
-        solutionPath: resolvedPaths[1],
+    if (warmLocalPdfs) {
+      final textbookLinks = await _resolveHomeworkPdfLinks(
+        hw,
+        allowFlowFallback: true,
       );
+      final resolvedPaths = await Future.wait<String>([
+        _resolveTextbookPdfPathForRightSheet(
+          textbookLinks: textbookLinks,
+          kind: 'ans',
+        ),
+        _resolveTextbookPdfPathForRightSheet(
+          textbookLinks: textbookLinks,
+          kind: 'sol',
+        ),
+      ]);
+      if (cacheKey.isNotEmpty && resolvedPaths[0].trim().isNotEmpty) {
+        RightSheetAnswerPreloadService.instance.putPdfLinks(
+          cacheKey: cacheKey,
+          answerPath: resolvedPaths[0],
+          solutionPath: resolvedPaths[1],
+        );
+      }
     }
     final overlayMaps = overlayEntries
         .map(
@@ -858,6 +867,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     required DateTime headerDateTime,
     required DateTime anchorDate,
     required int attendingCount,
+    required int studyingCount,
+    required int restingCount,
     required int submittedCount,
   }) {
     return Padding(
@@ -885,7 +896,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                   BlendMode.srcIn,
                 ),
               ),
-              const SizedBox(width: 16),
+              const SizedBox(width: 20),
               const FabStyleScreenMainTitle(
                 title: '수업 현황',
                 overlay: true,
@@ -895,11 +906,28 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           const Spacer(),
           FabStyleHomeScreenHeader(
             dateTimeText: _formatDateWithWeekdayShort(headerDateTime),
-            statsText:
-                _isGradingMode ? '제출 $submittedCount' : '등원 $attendingCount',
-            secondaryText:
-                _isGradingMode ? _formatHourMinute(headerDateTime) : null,
-            gradingStats: _isGradingMode,
+            stats: [
+              HomeHeaderStat(
+                label: '등원',
+                value: attendingCount,
+                tooltip: '지금 등원 중이고 아직 하원하지 않은 학생',
+              ),
+              HomeHeaderStat(
+                label: '공부중',
+                value: studyingCount,
+                tooltip: '과제를 수행 중인 학생',
+              ),
+              HomeHeaderStat(
+                label: '휴식중',
+                value: restingCount,
+                tooltip: '과제는 있지만 지금은 수행하지 않는 학생',
+              ),
+              HomeHeaderStat(
+                label: '제출',
+                value: submittedCount,
+                tooltip: '제출되어 채점 대기인 과제',
+              ),
+            ],
             showAnchorDateHint: !isAttendanceAnchorToday(anchorDate),
           ),
           if (!_isGradingMode) ...[
@@ -1027,9 +1055,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                     return ValueListenableBuilder<int>(
                       valueListenable: HomeworkStore.instance.revision,
                       builder: (context, homeworkRevision, _) {
-                        final submittedCount = _isGradingMode
-                            ? _countSubmittedHomeworkItems(list)
-                            : 0;
+                        final activity = _countAttendingActivity(list);
                         return Stack(
                           fit: StackFit.expand,
                           children: [
@@ -1232,7 +1258,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                     headerDateTime: headerDateTime,
                                     anchorDate: anchorDate,
                                     attendingCount: list.length,
-                                    submittedCount: submittedCount,
+                                    studyingCount: activity.studying,
+                                    restingCount: activity.resting,
+                                    submittedCount: activity.submitted,
                                   ),
                                 ),
                               ),
@@ -2264,17 +2292,35 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     return _computeAttendingStudentsStatic(anchorDate);
   }
 
-  int _countSubmittedHomeworkItems(List<_AttendingStudent> attendingStudents) {
-    int submittedItemCount = 0;
+  /// 등원 카드와 같은 기준.
+  /// 공부중: 미완료 과제 중 수행(phase 2)이거나 시작 시각이 있는 학생.
+  /// 휴식중: 미완료 과제는 있지만 수행 중이 아닌 학생. 과제가 없으면 둘 다 아님.
+  /// 제출: 그 학생들의 채점 대기(phase 3) 과제 수.
+  ({int studying, int resting, int submitted}) _countAttendingActivity(
+    List<_AttendingStudent> attendingStudents,
+  ) {
+    var studying = 0;
+    var resting = 0;
+    var submitted = 0;
+    final store = HomeworkStore.instance;
     for (final student in attendingStudents) {
-      submittedItemCount += HomeworkStore.instance
+      final items = store
           .items(student.id)
-          .where(
-            (hw) => hw.status != HomeworkStatus.completed && hw.phase == 3,
-          )
-          .length;
+          .where((hw) => hw.status != HomeworkStatus.completed)
+          .toList(growable: false);
+      if (items.isEmpty) continue;
+      final running = store.runningOf(student.id) != null ||
+          items.any((hw) => hw.phase == 2 || hw.runStart != null);
+      if (running) {
+        studying++;
+      } else {
+        resting++;
+      }
+      for (final hw in items) {
+        if (hw.phase == 3) submitted++;
+      }
     }
-    return submittedItemCount;
+    return (studying: studying, resting: resting, submitted: submitted);
   }
 
   List<_AttendingStudent> _computeAttendingStudentsStatic(DateTime anchorDate) {
@@ -4096,50 +4142,26 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     BuildContext context,
     _AttendingStudent student,
   ) async {
-    final now = DateTime.now();
     final studentId = student.id;
-    HomeworkDepartureDraft? departureDraft;
     final attendanceId = (student.record.id ?? '').trim();
-    if (attendanceId.isNotEmpty) {
-      try {
-        departureDraft = await HomeworkDepartureDraftService.instance.load(
-          attendanceId,
-          force: true,
-        );
-      } catch (_) {
-        departureDraft = null;
-      }
-    }
-    if (!context.mounted) return;
-    final hasHomeworkItems = HomeworkStore.instance.items(studentId).isNotEmpty;
-    final HomeworkAssignSelection? selection = hasHomeworkItems
-        ? await showHomeworkAssignDialog(
-            context,
-            studentId,
-            anchorTime: student.record.classDateTime,
-            initialSelectedGroupIds: departureDraft?.isSaved == true
-                ? departureDraft!.groupIds
-                : null,
-            initialSelectedItemIds:
-                departureDraft?.hasPlanClassification == true
-                    ? departureDraft!.planHomeworkItemIds
-                    : null,
-            excludedItemIds:
-                departureDraft?.autoManagedPlanItemIds ?? const <String>{},
-            additionalHomeworkIds:
-                departureDraft?.autoRolloverToHomeworkItemIds ??
-                    const <String>{},
-            initialDueDateByGroupId: departureDraft?.isSaved == true
-                ? departureDraft!.dueDateByGroupId
-                : const <String, DateTime>{},
-          )
-        : const HomeworkAssignSelection(itemIds: [], dueDate: null);
-    if (selection == null) return;
+    final record = DataManager.instance
+            .getAttendanceRecord(studentId, student.record.classDateTime) ??
+        student.record;
+    final summary = await showDepartureSummaryDialog(
+      context: context,
+      studentId: studentId,
+      studentName: student.name,
+      attendanceId: attendanceId,
+      classDateTime: record.classDateTime,
+      arrivalTime: record.arrivalTime,
+      classEndTime: record.classEndTime,
+      className: record.className,
+      setId: record.setId,
+    );
+    if (summary == null) return;
 
+    final now = DateTime.now();
     try {
-      final record = DataManager.instance
-              .getAttendanceRecord(studentId, student.record.classDateTime) ??
-          student.record;
       final arrival = record.arrivalTime ?? now;
       await DataManager.instance.saveOrUpdateAttendance(
         studentId: studentId,
@@ -4158,48 +4180,22 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         batchSessionId: record.batchSessionId,
       );
       // 오늘→숙제 전환은 departure_time 트리거가 처리한다.
-      if (selection.itemIds.isNotEmpty) {
-        final planItemIds = selection.planHomeworkItemIds.toSet();
-        final selectedItemIds = selection.itemIds
-            .map((e) => e.trim())
-            .where((e) => e.isNotEmpty)
-            .toSet()
-            .toList(growable: false);
-        for (final itemId in selectedItemIds) {
-          if (planItemIds.contains(itemId)) continue;
-          await HomeworkStore.instance.markItemsAsHomework(
-            studentId,
-            <String>[itemId],
-            dueDate: selection.dueDateByItemId[itemId] ?? selection.dueDate,
-            cloneCompletedItems: true,
+      try {
+        await applyDepartureSummaryAfterSave(
+          studentId: studentId,
+          attendanceId: attendanceId,
+          result: summary,
+        );
+      } catch (e) {
+        if (context.mounted) {
+          _showHomeworkChipSnackBar(
+            context,
+            '하원은 처리했지만 숙제 확정에 실패했어요: $e',
           );
         }
       }
-      if (attendanceId.isNotEmpty && selection.planHomeworkItemIds.isNotEmpty) {
-        await HomeworkSessionPlanService.instance.confirmDepartureHomework(
-          attendanceId: attendanceId,
-          homeworkItemIds: selection.planHomeworkItemIds,
-        );
-      }
-      final selectedIds = selection.itemIds
-          .map((e) => e.trim())
-          .where((e) => e.isNotEmpty)
-          .toSet();
-      final selectableIds = selection.selectableItemIds
-          .map((e) => e.trim())
-          .where((e) => e.isNotEmpty)
-          .toSet();
-      final unselectedIds = selectableIds
-          .where((id) => !selectedIds.contains(id))
-          .toList(growable: false);
-      if (unselectedIds.isNotEmpty) {
-        HomeworkStore.instance.restoreItemsToWaiting(
-          studentId,
-          unselectedIds,
-        );
-      }
       HomeworkStore.instance.convertAllTestCardsToPrintForDeparture(studentId);
-      if (selection.printTodoOnConfirm) {
+      if (summary.printNotice) {
         try {
           await printHomeworkTodoSheet(
             studentId: studentId,
@@ -4207,14 +4203,11 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             classDateTime: record.classDateTime,
             arrivalTime: arrival,
             departureTime: now,
-            selectedHomeworkIds: selection.itemIds,
-            additionalHomeworkIds:
-                (departureDraft?.autoRolloverToHomeworkItemIds ??
-                        const <String>{})
-                    .toList(growable: false),
-            selectedBehaviorIds: selection.selectedBehaviorIds,
-            irregularBehaviorCounts: selection.irregularBehaviorCounts,
-            dueDate: selection.dueDate,
+            selectedHomeworkIds: summary.homeworkItemIds,
+            additionalHomeworkIds: summary.rolloverItemIds,
+            selectedBehaviorIds: summary.selectedBehaviorIds,
+            irregularBehaviorCounts: summary.irregularBehaviorCounts,
+            dueDate: summary.dueDate,
             className: record.className,
             classEndTime: record.classEndTime,
             setId: record.setId,
@@ -6906,6 +6899,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       studentId: studentId,
       hw: answerSeed,
       targetKeys: keys,
+      warmLocalPdfs: false,
     );
     if (structuredSession == null || !context.mounted) return false;
 
@@ -9977,6 +9971,10 @@ class _HomeworkDraftEditorController extends ChangeNotifier {
         anchorTime: anchorTime,
       );
       defaultDueDate = defaultSelection?.dueDate;
+      try {
+        await HomeworkSessionPlanService.instance
+            .seedTodayDefaults(attendanceId: attendanceId);
+      } catch (_) {}
       final draft = await HomeworkDepartureDraftService.instance.load(
         attendanceId,
         force: true,
@@ -11675,79 +11673,15 @@ Widget _buildHomeworkOverviewCard(
   );
 }
 
-String _stripHomeworkUnitPrefix(String raw) {
-  return raw.replaceFirst(RegExp(r'^\s*\d+\.\d+\.\(\d+\)\s+'), '').trim();
-}
+String _extractHomeworkBookName(HomeworkItem hw) => homeworkCardBookName(hw);
 
-String _extractHomeworkBookName(HomeworkItem hw) {
-  final contentRaw = (hw.content ?? '').trim();
-  final match = RegExp(r'(?:^|\n)\s*교재:\s*([^\n]+)').firstMatch(contentRaw);
-  final fromContent = match?.group(1)?.trim() ?? '';
-  if (fromContent.isNotEmpty) return fromContent;
+bool _isGeneratedAssignmentHomework(HomeworkItem hw) =>
+    isProblemBankAssignmentHomework(hw);
 
-  final hasLinkedTextbook = (hw.bookId ?? '').trim().isNotEmpty &&
-      (hw.gradeLabel ?? '').trim().isNotEmpty;
-  if (hasLinkedTextbook) {
-    final stripped = _stripHomeworkUnitPrefix(hw.title.trim());
-    if (stripped.isNotEmpty) {
-      final idx = stripped.indexOf('·');
-      if (idx == -1) return stripped;
-      final candidate = stripped.substring(0, idx).trim();
-      if (candidate.isNotEmpty) return candidate;
-    }
-  }
+String _generatedAssignmentPrintLine(HomeworkItem hw) =>
+    problemBankAssignmentPrintLine(hw);
 
-  final typeLabel = (hw.type ?? '').trim();
-  if (typeLabel.isNotEmpty) return typeLabel;
-  return '-';
-}
-
-String _extractHomeworkCourseName(HomeworkItem hw) {
-  final contentRaw = (hw.content ?? '').trim();
-  final match = RegExp(r'(?:^|\n)\s*과정:\s*([^\n]+)').firstMatch(contentRaw);
-  return match?.group(1)?.trim() ?? '';
-}
-
-bool _isGeneratedAssignmentHomework(HomeworkItem hw) {
-  return (hw.sourceUnitLevel ?? '').trim() == 'problem_bank_assignment';
-}
-
-String _generatedAssignmentCourseLabel(HomeworkItem hw) {
-  final explicit = _extractHomeworkCourseName(hw);
-  if (explicit.isNotEmpty) return explicit;
-
-  final book = (hw.sourceUnitPath ?? '').trim();
-  final parts = (hw.content ?? '')
-      .split(RegExp(r'\s*·\s*|\n'))
-      .map((part) => part.trim())
-      .where((part) => part.isNotEmpty)
-      .where((part) => !part.startsWith('교재:') && !part.startsWith('과정:'))
-      .where((part) => !part.startsWith('p.'))
-      .where((part) => !RegExp(r'^\d+문항$').hasMatch(part))
-      .where((part) => book.isEmpty || part != book)
-      .toList(growable: false);
-  if (parts.isEmpty) return '';
-  if (parts.length >= 2) return parts.last;
-
-  final only = parts.first;
-  final looksLikeGrade =
-      RegExp(r'^(중|고)\s*\d').hasMatch(only) || only.contains('학년');
-  return looksLikeGrade ? '' : only;
-}
-
-String _generatedAssignmentPrintLine(HomeworkItem hw) {
-  final course = _generatedAssignmentCourseLabel(hw);
-  if (course.isEmpty) return '프린트';
-  return '프린트 · $course';
-}
-
-String _homeworkBookCourseLabel(HomeworkItem hw) {
-  final bookName = _extractHomeworkBookName(hw);
-  final courseName = _extractHomeworkCourseName(hw);
-  return (bookName == '-' || bookName.isEmpty)
-      ? (courseName.isEmpty ? '-' : courseName)
-      : (courseName.isEmpty ? bookName : '$bookName · $courseName');
-}
+String _homeworkBookCourseLabel(HomeworkItem hw) => homeworkBookCourseLabel(hw);
 
 List<_HomeworkOverviewCompletedGroupEntry>
     _collectRecentCompletedHomeworkGroups(
@@ -14844,6 +14778,17 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
     // 동안에도, 숙제로 확정된 항목은 숙제 칩을 유지한다.
     final bool markedAsHomework =
         children.any((e) => e.status == HomeworkStatus.homework);
+    // 하원 직후 숙제 할당이 carried_over로 남아도 검사일은 카드에 보인다.
+    // 활성 할당이 있는 항목은 그 날짜를 그대로 쓴다.
+    if (dueDate == null && markedAsHomework) {
+      for (final child in children) {
+        if (child.status != HomeworkStatus.homework) continue;
+        if (assignmentDueByItemId.containsKey(child.id)) continue;
+        final meta = assignmentCycleMetaByItem[child.id];
+        if (meta == null || meta.status != 'carried_over') continue;
+        dueDate = _mergeHomeworkDueDate(dueDate, meta.dueDate);
+      }
+    }
     final dueLabel = assignmentCheckLabelByGroupId[group.id] ??
         (dueDate == null ? null : _formatHomeworkDueChipLabel(dueDate));
     final progressRate =
@@ -19054,39 +18999,6 @@ Widget _buildHomeworkChipVisual(
   final String displayFlowName = flowName.isNotEmpty ? flowName : '플로우 미지정';
   final String page = (hw.page ?? '').trim();
 
-  String stripUnitPrefix(String raw) {
-    return raw.replaceFirst(RegExp(r'^\s*\d+\.\d+\.\(\d+\)\s+'), '').trim();
-  }
-
-  String extractBookName() {
-    final contentRaw = (hw.content ?? '').trim();
-    final match = RegExp(r'(?:^|\n)\s*교재:\s*([^\n]+)').firstMatch(contentRaw);
-    final fromContent = match?.group(1)?.trim() ?? '';
-    if (fromContent.isNotEmpty) return fromContent;
-
-    final hasLinkedTextbook = (hw.bookId ?? '').trim().isNotEmpty &&
-        (hw.gradeLabel ?? '').trim().isNotEmpty;
-    if (hasLinkedTextbook) {
-      final stripped = stripUnitPrefix((hw.title).trim());
-      if (stripped.isNotEmpty) {
-        final idx = stripped.indexOf('·');
-        if (idx == -1) return stripped;
-        final candidate = stripped.substring(0, idx).trim();
-        if (candidate.isNotEmpty) return candidate;
-      }
-    }
-
-    final typeLabel = (hw.type ?? '').trim();
-    if (typeLabel.isNotEmpty) return typeLabel;
-    return '-';
-  }
-
-  String extractCourseName() {
-    final contentRaw = (hw.content ?? '').trim();
-    final match = RegExp(r'(?:^|\n)\s*과정:\s*([^\n]+)').firstMatch(contentRaw);
-    return match?.group(1)?.trim() ?? '';
-  }
-
   final int homeworkCount = assignmentCount < 0 ? 0 : assignmentCount;
   final int splitParts =
       (cycleMeta?.splitParts ?? hw.defaultSplitParts).clamp(1, 4);
@@ -19096,13 +19008,7 @@ Widget _buildHomeworkChipVisual(
   final String titleText = showAdditionalPrefix && rawTitleText.isNotEmpty
       ? '+ $rawTitleText'
       : rawTitleText;
-  final String bookName = extractBookName();
-  final String courseName = extractCourseName();
-  final String line2Left = _isGeneratedAssignmentHomework(hw)
-      ? _generatedAssignmentPrintLine(hw)
-      : ((bookName == '-' || bookName.isEmpty)
-          ? (courseName.isEmpty ? '-' : courseName)
-          : (courseName.isEmpty ? bookName : '$bookName · $courseName'));
+  final String line2Left = homeworkCardFirstLine(hw);
   final int? countValue = hw.count;
   int resolveSplitCount(int total, int parts, int round) {
     if (parts <= 1) return total;
@@ -21229,6 +21135,14 @@ class _SlideableHomeworkChipState extends State<_SlideableHomeworkChip> {
   }
 }
 
+/// Icons8 Enter. 등원 시각 앞.
+const String _kHomeArrivalEnterSvg =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50"><path fill="#000" stroke="#000" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" d="M 13 0 C 11.355541 0 10 1.3544268 10 3 L 10 22 L 12 22 L 12 3 C 12 2.4355732 12.436459 2 13 2 L 47 2 C 47.563541 2 48 2.4355732 48 3 L 48 47 C 48 47.562937 47.562937 48 47 48 L 13 48 C 12.437063 48 12 47.562937 12 47 L 12 28 L 10 28 L 10 47 C 10 48.645063 11.354937 50 13 50 L 47 50 C 48.645063 50 50 48.645063 50 47 L 50 3 C 50 1.3544268 48.644459 0 47 0 L 13 0 z M 22.042969 13.099609 A 1.0001 1.0001 0 0 0 21.347656 14.816406 L 30.529297 24 L 1 24 A 1.0001 1.0001 0 1 0 1 26 L 30.529297 26 L 21.345703 35.183594 A 1.0001 1.0001 0 1 0 22.759766 36.597656 L 34.357422 25 L 22.761719 13.402344 A 1.0001 1.0001 0 0 0 22.042969 13.099609 z"/></svg>';
+
+/// Icons8 Advance (iOS 11). 다음 예정 줄 앞. iOS 7보다 폭이 좁다.
+const String _kHomeNextClassAdvanceSvg =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 30"><path d="M 21.990234 7.9902344 A 1.0001 1.0001 0 0 0 21.292969 9.7070312 L 25.585938 14 L 14 14 A 1.0001 1.0001 0 1 0 14 16 L 25.585938 16 L 21.292969 20.292969 A 1.0001 1.0001 0 1 0 22.707031 21.707031 L 28.619141 15.794922 A 1.0001 1.0001 0 0 0 28.617188 14.203125 L 22.707031 8.2929688 A 1.0001 1.0001 0 0 0 21.990234 7.9902344 z M 2 14 A 1 1 0 0 0 1 15 A 1 1 0 0 0 2 16 A 1 1 0 0 0 3 15 A 1 1 0 0 0 2 14 z M 6 14 A 1 1 0 0 0 5 15 A 1 1 0 0 0 6 16 A 1 1 0 0 0 7 15 A 1 1 0 0 0 6 14 z M 10 14 A 1 1 0 0 0 9 15 A 1 1 0 0 0 10 16 A 1 1 0 0 0 11 15 A 1 1 0 0 0 10 14 z"/></svg>';
+
 /// 홈 등원 카드용 — 지금 이후 가장 가까운 수업 시각.
 DateTime? _nextClassDateTimeForStudent(String studentId, {DateTime? after}) {
   return NextClassStartResolver.next(studentId, after: after);
@@ -21396,10 +21310,6 @@ class _AttendingButton extends StatelessWidget {
                       .copyWith(
                 color: isResting ? tertiaryTextColor : primaryTextColor,
               );
-              final infoLine = [
-                if (school.isNotEmpty) school,
-                if (gradeText.isNotEmpty) gradeText,
-              ].join(' · ');
               final shownArrival = liveAttendance.arrivalTime ?? arrivalTime;
               final shownDeparture = liveAttendance.departureTime;
               var plannedDeparture = liveAttendance.plannedDepartureAt;
@@ -21432,25 +21342,17 @@ class _AttendingButton extends StatelessWidget {
               final departText = _formatShortTime(departAt);
               final leaveReason = (leaveReasonText ?? '').trim();
 
-              // 오른쪽 정보 3줄 — 글자 크기 동일
-              const rightInfoFontSize = 14.0;
-              final metaStyle = TextStyle(
+              // 크기·줄높이는 과제카드 2번째 줄 이후와 같음. 굵기는 Regular. 색은 기존 값.
+              final infoStyle = _HomeworkCardTheme.of(context).secondaryRowStyle;
+              final schoolStyle = infoStyle.copyWith(
                 color: secondaryTextColor,
-                fontSize: rightInfoFontSize,
-                height: 1.2,
-                fontWeight: FontWeight.w600,
+                fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
+                fontWeight: FontWeight.w400,
               );
-              final arrivalStyle = TextStyle(
+              final timeStyle = infoStyle.copyWith(
                 color: tertiaryTextColor,
-                fontSize: rightInfoFontSize,
-                height: 1.2,
-                fontWeight: FontWeight.w600,
-              );
-              final nextClassStyle = TextStyle(
-                color: tertiaryTextColor,
-                fontSize: rightInfoFontSize,
-                height: 1.2,
-                fontWeight: FontWeight.w600,
+                fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
+                fontWeight: FontWeight.w400,
               );
 
               Widget _pill({
@@ -21535,19 +21437,51 @@ class _AttendingButton extends StatelessWidget {
               // 좌우 모두 같은 고정 높이. IntrinsicHeight는 내부 LayoutBuilder와
               // 함께 쓸 수 없으므로 사용하지 않는다.
               final leaveStyle = showPlannedDeparture
-                  ? arrivalStyle.copyWith(color: kDlgAccent)
-                  : arrivalStyle;
-              Widget attendanceLine = Text.rich(
-                TextSpan(
-                  style: arrivalStyle,
-                  children: [
-                    TextSpan(text: '등원 $arrivalText - '),
-                    TextSpan(text: '하원 $departText', style: leaveStyle),
-                  ],
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.left,
+                  ? timeStyle.copyWith(color: kDlgAccent)
+                  : timeStyle;
+              Widget lineIcon(
+                String svg, {
+                required double width,
+                required double height,
+                BoxFit fit = BoxFit.contain,
+              }) {
+                return SvgPicture.string(
+                  svg,
+                  width: width,
+                  height: height,
+                  fit: fit,
+                  colorFilter: ColorFilter.mode(
+                    tertiaryTextColor,
+                    BlendMode.srcIn,
+                  ),
+                );
+              }
+
+              const timeIconWidth = 16.0;
+
+              Widget attendanceLine = Row(
+                children: [
+                  lineIcon(
+                    _kHomeArrivalEnterSvg,
+                    width: timeIconWidth,
+                    height: timeIconWidth,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text.rich(
+                      TextSpan(
+                        style: timeStyle,
+                        children: [
+                          TextSpan(text: '등원 $arrivalText - '),
+                          TextSpan(text: '하원 $departText', style: leaveStyle),
+                        ],
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.left,
+                    ),
+                  ),
+                ],
               );
               if (showPlannedDeparture && leaveReason.isNotEmpty) {
                 attendanceLine = Tooltip(
@@ -21558,7 +21492,9 @@ class _AttendingButton extends StatelessWidget {
               }
 
               return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 16),
+                // 위 16 + 11.5. 이름 줄 중심을 네비 홈 아이콘 중심(127.5)에 맞춘다.
+                // 아래는 카드 높이 176 안에서 넘치지 않게 같은 만큼 줄인다.
+                padding: const EdgeInsets.fromLTRB(0, 27.5, 0, 12.5),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -21584,17 +21520,39 @@ class _AttendingButton extends StatelessWidget {
                         const SizedBox(width: 12),
                         Expanded(
                           flex: 2,
-                          child: Text(
-                            infoLine.isEmpty ? '-' : infoLine,
-                            style: metaStyle,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: TextAlign.right,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              if (school.isEmpty && gradeText.isEmpty)
+                                Text(
+                                  '-',
+                                  style: schoolStyle,
+                                  textAlign: TextAlign.right,
+                                )
+                              else ...[
+                                if (school.isNotEmpty)
+                                  Text(
+                                    school,
+                                    style: schoolStyle,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    textAlign: TextAlign.right,
+                                  ),
+                                if (gradeText.isNotEmpty)
+                                  Text(
+                                    gradeText,
+                                    style: schoolStyle,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    textAlign: TextAlign.right,
+                                  ),
+                              ],
+                            ],
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 14),
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -21603,14 +21561,26 @@ class _AttendingButton extends StatelessWidget {
                             return deviceLine(maxWidth: constraints.maxWidth);
                           },
                         ),
-                        const SizedBox(height: 16),
+                        const SizedBox(height: 14),
                         attendanceLine,
                         const SizedBox(height: 8),
-                        Text(
-                          nextClassLabel,
-                          style: nextClassStyle,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+                        Row(
+                          children: [
+                            lineIcon(
+                              _kHomeNextClassAdvanceSvg,
+                              width: timeIconWidth,
+                              height: timeIconWidth,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                nextClassLabel,
+                                style: timeStyle,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
                         ),
                       ],
                     ),

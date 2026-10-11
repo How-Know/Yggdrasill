@@ -54,6 +54,8 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 apps/yggdrasill/dist/Yggdrasill_portable_*.zip
+tools/exam_desk/build/
+tools/exam_desk/dist/
 
 # Gateway local diagnostics and extraction dumps
 gateway/.tmp_*

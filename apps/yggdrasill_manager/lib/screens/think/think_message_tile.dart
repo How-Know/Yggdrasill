@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../../services/think/think_api.dart';
 import '../../services/think/think_models.dart';
+import 'think_avatars.dart';
 import 'think_markdown.dart';
 import 'think_style.dart';
 
@@ -10,13 +11,31 @@ class ThinkMessageTile extends StatelessWidget {
   const ThinkMessageTile({
     super.key,
     required this.message,
+    this.roleSnapshot,
+    this.roleRecordMissing = false,
+    this.materialsSelected = false,
+    this.onSelect,
     this.highlighted = false,
     this.onToggleExcluded,
     this.onExcerpt,
+    this.onDocument,
     this.onCodeRequest,
+    this.onMemoryFeedback,
   });
 
   final ThinkMessage message;
+
+  /// 이 답변을 만들 때의 역할·전달 자료. 없으면 머리에 역할을 쓰지 않는다.
+  final ThinkMessageContextSnapshot? roleSnapshot;
+
+  /// 스냅샷을 확인했는데 없다(역할 기능 전 답변). '기록 없음'으로 표시한다.
+  final bool roleRecordMissing;
+
+  /// 맥락 패널이 이 답변의 자료를 보여 주는 중.
+  final bool materialsSelected;
+
+  /// 답변의 '자료' 버튼. null이면 숨긴다.
+  final VoidCallback? onSelect;
 
   /// 트리의 발췌에서 '원문 보기'로 왔을 때 잠깐 강조한다.
   final bool highlighted;
@@ -24,7 +43,9 @@ class ThinkMessageTile extends StatelessWidget {
   /// 답변 머리에만 붙는 문답 단위 동작. null이면 버튼을 숨긴다.
   final VoidCallback? onToggleExcluded;
   final VoidCallback? onExcerpt;
+  final VoidCallback? onDocument;
   final VoidCallback? onCodeRequest;
+  final VoidCallback? onMemoryFeedback;
 
   @override
   Widget build(BuildContext context) {
@@ -32,9 +53,15 @@ class ThinkMessageTile extends StatelessWidget {
         ? _UserBubble(message: message)
         : _AssistantBlock(
             message: message,
+            roleSnapshot: roleSnapshot,
+            roleRecordMissing: roleRecordMissing,
+            materialsSelected: materialsSelected,
+            onSelect: onSelect,
             onToggleExcluded: onToggleExcluded,
             onExcerpt: onExcerpt,
+            onDocument: onDocument,
             onCodeRequest: onCodeRequest,
+            onMemoryFeedback: onMemoryFeedback,
           );
     return Stack(
       clipBehavior: Clip.none,
@@ -75,6 +102,31 @@ class _UserBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final askedBy = message.askedByLabel;
+    final bubble = _bubble();
+    if (askedBy == null) return bubble;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Tooltip(
+          message: '운영자가 아니라 Cursor가 Think에게 보낸 질문입니다.',
+          waitDuration: const Duration(milliseconds: 400),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.smart_toy_outlined, size: 14, color: kThinkLink),
+              const SizedBox(width: 4),
+              ThinkBadge(askedBy, color: kThinkLink),
+            ],
+          ),
+        ),
+        const SizedBox(height: 4),
+        bubble,
+      ],
+    );
+  }
+
+  Widget _bubble() {
     return Align(
       alignment: Alignment.centerRight,
       child: ConstrainedBox(
@@ -174,25 +226,50 @@ class ThinkAttachmentChip extends StatelessWidget {
 }
 
 class _AssistantBlock extends StatelessWidget {
-  const _AssistantBlock({required this.message, this.onToggleExcluded, this.onExcerpt, this.onCodeRequest});
+  const _AssistantBlock({
+    required this.message,
+    this.roleSnapshot,
+    this.roleRecordMissing = false,
+    this.materialsSelected = false,
+    this.onSelect,
+    this.onToggleExcluded,
+    this.onExcerpt,
+    this.onDocument,
+    this.onCodeRequest,
+    this.onMemoryFeedback,
+  });
 
   final ThinkMessage message;
+  final ThinkMessageContextSnapshot? roleSnapshot;
+  final bool roleRecordMissing;
+  final bool materialsSelected;
+  final VoidCallback? onSelect;
   final VoidCallback? onToggleExcluded;
   final VoidCallback? onExcerpt;
+  final VoidCallback? onDocument;
   final VoidCallback? onCodeRequest;
+  final VoidCallback? onMemoryFeedback;
 
   @override
   Widget build(BuildContext context) {
     final streaming = message.status == ThinkMessageStatus.streaming;
     final running = message.toolCalls.where((t) => t.running).toList();
+    final role = roleSnapshot?.thinkRoleId;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           children: [
-            const Icon(Icons.auto_awesome, size: 16, color: kThinkAccent),
+            if (role != null) ThinkRoleAvatar(role: role, size: 22) else const Icon(Icons.auto_awesome, size: 16, color: kThinkAccent),
             const SizedBox(width: 8),
-            const Text('Think', style: TextStyle(color: kThinkText, fontSize: 13, fontWeight: FontWeight.w700)),
+            Text(role != null ? 'Think(${role.label})' : 'Think', style: const TextStyle(color: kThinkText, fontSize: 13, fontWeight: FontWeight.w700)),
+            if (roleRecordMissing) ...[
+              const SizedBox(width: 8),
+              const Tooltip(
+                message: '역할 기능 전 답변이라 어떤 역할로 어떤 자료를 썼는지 기록이 없습니다.',
+                child: ThinkBadge('기록 없음'),
+              ),
+            ],
             if (message.model != null && message.model!.isNotEmpty) ...[
               const SizedBox(width: 8),
               Text(message.model!, style: const TextStyle(color: kThinkHint, fontSize: 12)),
@@ -213,6 +290,18 @@ class _AssistantBlock extends StatelessWidget {
               ),
             ],
             const Spacer(),
+            if (onSelect != null)
+              Semantics(
+                selected: materialsSelected,
+                child: IconButton(
+                  tooltip: '이 답변에 쓴 자료 보기',
+                  visualDensity: VisualDensity.compact,
+                  iconSize: 16,
+                  color: materialsSelected ? kThinkAccent : kThinkSub,
+                  icon: const Icon(Icons.library_books_outlined),
+                  onPressed: onSelect,
+                ),
+              ),
             if (onToggleExcluded != null)
               IconButton(
                 tooltip: message.contextExcluded
@@ -233,6 +322,15 @@ class _AssistantBlock extends StatelessWidget {
                 icon: const Icon(Icons.account_tree_outlined),
                 onPressed: onExcerpt,
               ),
+            if (onDocument != null)
+              IconButton(
+                tooltip: '선택한 출처로 종합 문서를 폴더에 저장',
+                visualDensity: VisualDensity.compact,
+                iconSize: 16,
+                color: kThinkSub,
+                icon: const Icon(Icons.description_outlined),
+                onPressed: onDocument,
+              ),
             if (onCodeRequest != null)
               IconButton(
                 tooltip: '코드 조사 요청 (Cursor가 저장소를 읽고 조사·제안만 돌려줌)',
@@ -241,6 +339,15 @@ class _AssistantBlock extends StatelessWidget {
                 color: kThinkSub,
                 icon: const Icon(Icons.manage_search),
                 onPressed: onCodeRequest,
+              ),
+            if (onMemoryFeedback != null)
+              IconButton(
+                tooltip: '피드백으로 기억 초안 요청 (승인 전에는 AI 맥락에 넣지 않음)',
+                visualDensity: VisualDensity.compact,
+                iconSize: 16,
+                color: kThinkSub,
+                icon: const Icon(Icons.rate_review_outlined),
+                onPressed: onMemoryFeedback,
               ),
             if (!streaming && message.content.trim().isNotEmpty)
               IconButton(
@@ -266,6 +373,10 @@ class _AssistantBlock extends StatelessWidget {
           const SizedBox(height: 12),
         ],
         if (message.content.trim().isNotEmpty) ThinkMarkdown(message.content),
+        if (message.relay != null) ...[
+          const SizedBox(height: 12),
+          _RelayVerdictBox(verdict: message.relay!),
+        ],
         if (streaming) ...[
           const SizedBox(height: 8),
           Row(
@@ -279,7 +390,7 @@ class _AssistantBlock extends StatelessWidget {
               Text(
                 running.isNotEmpty
                     ? '${running.last.label} 중…'
-                    : (message.content.isEmpty ? '생각하는 중…' : '작성 중…'),
+                    : (message.content.isEmpty ? '응답 준비 중…' : '작성 중…'),
                 style: const TextStyle(color: kThinkSub, fontSize: 12),
               ),
             ],
@@ -294,6 +405,57 @@ class _AssistantBlock extends StatelessWidget {
           _Sources(sources: message.sources),
         ],
       ],
+    );
+  }
+}
+
+/// 커서 문의 답변의 판정. 커서는 '사장님 확인 필요' 답을 근거로 진행하지 않는다.
+class _RelayVerdictBox extends StatelessWidget {
+  const _RelayVerdictBox({required this.verdict});
+
+  final ThinkRelayVerdict verdict;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = verdict.answered ? kThinkSuccess : kThinkAccent;
+    final items = verdict.answered ? verdict.basis : verdict.ownerQuestions;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: kThinkBg,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha: 0.6)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(verdict.answered ? Icons.verified_outlined : Icons.help_outline, size: 16, color: color),
+              const SizedBox(width: 8),
+              Text(
+                verdict.answered ? '기존 결정 근거' : '사장님 확인 필요',
+                style: TextStyle(color: color, fontSize: 13, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  verdict.answered ? '승인된 기억을 근거로 답했습니다.' : 'Cursor는 이 답을 근거로 진행하지 않습니다.',
+                  style: const TextStyle(color: kThinkHint, fontSize: 12),
+                ),
+              ),
+            ],
+          ),
+          if (items.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            for (final item in items)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text('· $item', style: const TextStyle(color: kThinkSub, fontSize: 13, height: 1.4)),
+              ),
+          ],
+        ],
+      ),
     );
   }
 }

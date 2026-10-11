@@ -35,6 +35,10 @@ When editing UI, layout, colors, typography, spacing, or visual components in
 - Colors: `dialog_tokens.dart` (`kDlg*`), existing `_rs*` / Theme constants.
 - Widgets: `YggDialogSectionHeader`, `YggDialogFilterChip`, `PillTabSelector`,
   `CustomTabBar`, `CustomNavigationRail`, `DarkPanelRoute`, `showAppSnackBar`.
+- Text or badges on top of a cover image (textbook, printout, solid cover):
+  follow §5.1 and use `widgets/cover_overlay.dart` (`CoverScrim`,
+  `CoverHairline`, `CoverPill`, `CoverOverlayStyle`). Do not hand-pick new
+  scrim alphas or badge colors per screen.
 
 ## After changes
 

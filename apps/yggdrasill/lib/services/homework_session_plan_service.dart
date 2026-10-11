@@ -255,6 +255,18 @@ class HomeworkSessionPlanService {
     revision.value++;
   }
 
+  /// 계획이 없는 대기 과제를 이 출석의 '오늘'(하원 시 숙제)로 저장한다.
+  Future<void> seedTodayDefaults({required String attendanceId}) async {
+    final key = attendanceId.trim();
+    if (key.isEmpty) return;
+    await Supabase.instance.client.rpc(
+      'homework_session_plan_seed_today_defaults',
+      params: <String, dynamic>{'p_attendance_id': key},
+    );
+    _cacheByAttendanceId.remove(key);
+    revision.value++;
+  }
+
   Future<void> finalizeDeparture({required String attendanceId}) async {
     final key = attendanceId.trim();
     if (key.isEmpty) return;

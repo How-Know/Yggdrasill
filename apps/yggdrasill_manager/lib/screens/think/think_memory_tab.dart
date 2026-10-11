@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../services/think/think_api.dart';
 import '../../services/think/think_controller.dart';
 import '../../services/think/think_models.dart';
+import 'think_memory_scope_picker.dart';
 import 'think_spec_export_dialog.dart';
 import 'think_style.dart';
 
@@ -215,6 +216,10 @@ class _ThinkMemoryTabState extends State<ThinkMemoryTab> {
                       const SizedBox(width: 4),
                       ThinkBadge(m.status.label, color: m.status == ThinkMemoryStatus.draft ? kThinkBlue : kThinkHint),
                     ],
+                    if (_c.rolesReady && m.memoryScope == ThinkMemoryScope.department) ...[
+                      const SizedBox(width: 4),
+                      ThinkBadge(m.scopeLabel, color: kThinkLink),
+                    ],
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
@@ -296,6 +301,8 @@ class _MemoryEditorState extends State<_MemoryEditor> {
   final _sortOrder = TextEditingController();
   late ThinkMemoryKind _kind;
   late ThinkMemoryStatus _status;
+  ThinkMemoryScope _memoryScope = ThinkMemoryScope.common;
+  ThinkDepartmentId? _scopeDepartment;
   int _loadedVersion = 0;
   bool _dirty = false;
   bool _saving = false;
@@ -348,6 +355,8 @@ class _MemoryEditorState extends State<_MemoryEditor> {
     _filling = false;
     _kind = d.kind;
     _status = d.status;
+    _memoryScope = d.memoryScope;
+    _scopeDepartment = d.scopeDepartment;
     _loadedVersion = m?.version ?? 0;
     _dirty = false;
   }
@@ -364,6 +373,8 @@ class _MemoryEditorState extends State<_MemoryEditor> {
         sortOrder: int.tryParse(_sortOrder.text.trim()) ?? 0,
         sourceConversationId: widget.memory?.sourceConversationId,
         supersedesId: widget.memory?.supersedesId,
+        memoryScope: _memoryScope,
+        scopeDepartment: _memoryScope == ThinkMemoryScope.department ? _scopeDepartment : null,
       );
 
   Future<void> _run(Future<ThinkMemory?> Function() action, String done) async {
@@ -569,6 +580,20 @@ class _MemoryEditorState extends State<_MemoryEditor> {
                   ],
                 ],
               ),
+              if (_c.rolesReady) ...[
+                const SizedBox(height: 12),
+                ThinkMemoryScopePicker(
+                  scope: _memoryScope,
+                  department: _scopeDepartment,
+                  showLegacy: widget.memory?.memoryScope == ThinkMemoryScope.legacyUnscoped,
+                  enabled: !_saving,
+                  onChanged: (scope, dept) => setState(() {
+                    _memoryScope = scope;
+                    _scopeDepartment = dept;
+                    _dirty = true;
+                  }),
+                ),
+              ],
               const SizedBox(height: 12),
               Text(
                 switch (_kind) {

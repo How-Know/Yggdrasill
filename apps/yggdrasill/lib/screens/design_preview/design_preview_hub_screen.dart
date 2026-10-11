@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../widgets/dialog_tokens.dart';
 import 'yggdrasill/settings/settings_baseline_preview_screen.dart';
 import 'yggdrasill/settings/settings_preview_screen.dart';
+import 'yggdrasill/timetable/timetable_capacity_preview_screen.dart';
 
 /// 완전 분리 Preview 앱에서 표시하는 학습앱 Preview 목록.
 class DesignPreviewHubScreen extends StatelessWidget {
@@ -43,6 +44,17 @@ class DesignPreviewHubScreen extends StatelessWidget {
               Navigator.of(context).push(
                 MaterialPageRoute<void>(
                   builder: (_) => const SettingsPreviewScreen(),
+                ),
+              );
+            },
+          ),
+          _PreviewTile(
+            title: '시간표 - 인원 표시 시안',
+            subtitle: '히트맵 정리: 현재 / ① 70% 통일 / ② 선 제거 / ③ 추천 (mock)',
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => const TimetableCapacityPreviewScreen(),
                 ),
               );
             },

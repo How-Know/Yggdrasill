@@ -1,0 +1,14 @@
+{
+  "name": "think-relay",
+  "version": "1.0.0",
+  "private": true,
+  "description": "운영자 PC의 Cursor 작업창이 Think 기억·대화를 읽고 Think에게 묻는 MCP 서버(stdio)",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test": "node --test \"test/*.test.mjs\""
+  }
+}

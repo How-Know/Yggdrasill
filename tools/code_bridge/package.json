@@ -9,9 +9,11 @@
   },
   "scripts": {
     "start": "node --no-warnings src/worker.mjs",
+    "verify-patch": "node --no-warnings src/patch_verify.mjs",
     "test": "node --test \"test/*.test.mjs\""
   },
   "dependencies": {
-    "@cursor/sdk": "1.0.32"
+    "@cursor/sdk": "1.0.35",
+    "deno": "2.9.6"
   }
 }

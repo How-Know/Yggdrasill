@@ -13,10 +13,22 @@ import {
   type AiUsage,
 } from '../_shared/ai/types.ts';
 import type { AiRunRecord } from '../_shared/ai/usage.ts';
-import { workStateNote, type WorkState } from './actions.ts';
-import { buildThinkContext, type AttachmentRef, type ThinkContextStore } from './context.ts';
-import { THINK_PROMPT_VERSION, TITLE_PROMPT_VERSION, clip, titleInstructions } from './prompts.ts';
-import { THINK_TOOLS, TOOL_LABELS, runThinkTool, type ThinkToolSource } from './tools.ts';
+import { workStateNote, type ActionToolContext, type WorkState } from './actions.ts';
+import { buildThinkContext, normalizeSplitSummary, type AttachmentRef, type ThinkContextStore } from './context.ts';
+import type { DeliveredMaterial, DepartmentId } from './access_context.ts';
+import { featureReady, isSplitRequest, type ThinkFeatures } from './features.ts';
+import {
+  ROLE_PROFILE_VERSION,
+  THINK_PROMPT_VERSION,
+  TITLE_PROMPT_VERSION,
+  clip,
+  featureStatusNote,
+  relayInstructions,
+  titleInstructions,
+  type ThinkRoleId,
+} from './prompts.ts';
+import { resolveRelayVerdict, splitRelayBlock, type RelayAsker, type RelayVerdict } from './relay_verdict.ts';
+import { ACTING_TOOL_NAMES, TOOL_LABELS, runThinkTool, thinkToolsFor, type ThinkToolSource } from './tools.ts';
 
 export interface ConversationRow {
   id: string;
@@ -24,6 +36,15 @@ export interface ConversationRow {
   status: string;
   scope_type: string;
   scope_id: string | null;
+  /** 'cursor'면 커서가 시작한 대화. 마이그레이션 전 DB에는 열이 없어 비어 있다. */
+  origin?: string;
+  /** false면 사용자가 나누기 제안을 거절한 대화. 마이그레이션 전 DB에는 열이 없어 비어 있다. */
+  auto_split_suggestions?: boolean;
+  split_summary?: Record<string, unknown> | null;
+  split_from_conversation_id?: string | null;
+  think_role_id?: import('./prompts.ts').ThinkRoleId;
+  role_profile_version?: string | null;
+  extra_ref_departments?: import('./access_context.ts').DepartmentId[];
 }
 
 export interface NewMessage {
@@ -37,15 +58,33 @@ export interface NewMessage {
   commentary?: string | null;
   model?: string | null;
   run_id?: string | null;
+  /** 커서가 보낸 질문(user)일 때만 채운다. 비어 있으면 열을 보내지 않는다(마이그레이션 전 DB 호환). */
+  asked_by?: RelayAsker | null;
+  /** 커서 질문에 대한 답(assistant)의 판정. */
+  relay?: RelayVerdict | null;
 }
 
 export interface ThinkPersistence {
   getConversation(id: string): Promise<ConversationRow | null>;
-  createConversation(title: string): Promise<ConversationRow>;
+  createConversation(title: string, origin?: 'cursor'): Promise<ConversationRow>;
   updateConversationTitle(id: string, title: string): Promise<void>;
   insertMessage(msg: NewMessage): Promise<string>;
   getWorkState(conversationId: string): Promise<WorkState>;
   attachActions(ids: string[], messageId: string): Promise<void>;
+  loadConversationAccess?(conversationId: string, rolesFeatureReady: boolean): Promise<import('./access_context.ts').ConversationAccessState>;
+  setConversationRole?(conversationId: string, role: ThinkRoleId, extraRefs: DepartmentId[], profileVersion: string): Promise<void>;
+  listLinkedDocumentBodies?(
+    conversationId: string,
+    allowedNodeIds: Set<string>,
+  ): Promise<import('./context.ts').LinkedDocumentBody[]>;
+  saveMessageContextSnapshot?(input: {
+    messageId: string;
+    runId: string | null;
+    thinkRoleId: string;
+    roleProfileVersion: string | null;
+    access: import('./access_context.ts').ConversationAccessState;
+    materials: import('./access_context.ts').DeliveredMaterial[];
+  }): Promise<void>;
 }
 
 export type ThinkStore = ThinkContextStore & ThinkToolSource & ThinkPersistence;
@@ -69,6 +108,7 @@ export interface ChatDeps {
 }
 
 export interface ChatInput {
+  /** 커서 질문(relay)은 사람이 아니라서 빈 문자열이다. 기록에는 null로 남긴다. */
   userId: string;
   safetyId: string;
   conversationId: string | null;
@@ -79,6 +119,18 @@ export interface ChatInput {
   signal: AbortSignal;
   startedAt: number;
   wallClockMs: number;
+  /** 서버가 이번 요청에서 계산한 기능 상태. 없으면 상태 메모를 넣지 않고 기능 도구도 노출하지 않는다. */
+  features?: ThinkFeatures | null;
+  /**
+   * 커서가 보낸 질문(ai_think_relay, ai_code_bridge ask_think). 조회 도구만 주고, 커서가 시작한 대화에만 잇고,
+   * 답 끝의 판정 블록을 떼어 서버가 다시 판정한다. title이 있으면 새 대화 제목으로 쓰고 제목을 만들지 않는다.
+   */
+  relay?: { asker: RelayAsker; title?: string | null } | null;
+  /**
+   * 새 대화를 만들 때 사용자가 고른 역할·참조 부서. 역할 기능이 준비됐을 때만 대화에 저장하고(ai_conversation_set_think_role),
+   * 이어지는 대화에서는 무시한다(저장된 대화 값을 쓴다).
+   */
+  newConversationRole?: { thinkRoleId: ThinkRoleId; extraRefDepartments: DepartmentId[] } | null;
 }
 
 export interface ChatOutcome {
@@ -88,6 +140,10 @@ export interface ChatOutcome {
   runId: string | null;
   status: 'complete' | 'error' | 'stopped';
   errorCode?: string;
+  errorMessage?: string | null;
+  /** 저장한 답 본문(판정 블록을 뗀 것). */
+  content?: string;
+  relay?: RelayVerdict | null;
 }
 
 export const MAX_TOOL_ROUNDS = 6;
@@ -155,7 +211,7 @@ async function generateTitle(deps: ChatDeps, input: ChatInput, conversationId: s
     costUsd: result ? estimateCostUsd(result.model || model, result.usage, 0, env) : null,
     latencyMs: (deps.now ?? Date.now)() - started,
     conversationId,
-    createdBy: input.userId,
+    createdBy: input.userId || null,
   });
 }
 
@@ -167,6 +223,8 @@ export async function runThinkChat(input: ChatInput, deps: ChatDeps): Promise<Ch
   const emit = deps.emit;
 
   // 1) 대화 준비
+  const relay = input.relay ?? null;
+  const relayTitle = relay?.title ? clip(relay.title, 40) : null;
   let conversation: ConversationRow | null = null;
   let isNew = false;
   if (input.conversationId) {
@@ -175,13 +233,54 @@ export async function runThinkChat(input: ChatInput, deps: ChatDeps): Promise<Ch
       emit('error', { code: 'conversation_not_found', message: '대화를 찾을 수 없습니다.' });
       return { conversationId: null, userMessageId: null, assistantMessageId: null, runId: null, status: 'error', errorCode: 'conversation_not_found' };
     }
+    if (relay && conversation.origin !== 'cursor') {
+      emit('error', { code: 'relay_conversation_not_cursor', message: '커서는 커서가 시작한 대화에만 이어 물을 수 있습니다.' });
+      return {
+        conversationId: null,
+        userMessageId: null,
+        assistantMessageId: null,
+        runId: null,
+        status: 'error',
+        errorCode: 'relay_conversation_not_cursor',
+      };
+    }
   } else {
-    conversation = await deps.store.createConversation(fallbackTitle(input.message));
+    conversation = relay
+      ? await deps.store.createConversation(relayTitle ?? fallbackTitle(input.message), 'cursor')
+      : await deps.store.createConversation(fallbackTitle(input.message));
     isNew = true;
   }
   const conversationId = conversation.id;
 
+  // 나누기 도구는 기능이 준비됐고, 앞 대화가 있고, 이 대화에서 거절되지 않았거나 사용자가 직접 요청했을 때만 노출한다.
+  // 커서 질문에는 노출하지 않는다.
+  const features = input.features ?? null;
+  const splitSuppressed = conversation.auto_split_suggestions === false;
+  const userAskedSplit = isSplitRequest(input.message);
+  const splitAllowed = !relay && featureReady(features, 'conversation_split') && !isNew && (!splitSuppressed || userAskedSplit);
+  const rolesReady = featureReady(features, 'think_roles');
+
+  // 새 대화에 고른 역할은 첫 답변 전에 저장한다. 저장하지 못하면 총괄로 답하고 그렇게 알린다.
+  const wanted = isNew && !relay && rolesReady ? input.newConversationRole ?? null : null;
+  if (wanted && (wanted.thinkRoleId !== 'lead' || wanted.extraRefDepartments.length > 0) && deps.store.setConversationRole) {
+    try {
+      await deps.store.setConversationRole(conversationId, wanted.thinkRoleId, wanted.extraRefDepartments, ROLE_PROFILE_VERSION);
+    } catch (e) {
+      console.error('[ai_think] set role failed:', e instanceof Error ? e.message : String(e));
+      emit('notice', { code: 'role_not_applied' });
+    }
+  }
+
   // 2) 컨텍스트는 이번 메시지를 저장하기 전에 만든다(지난 대화에 이번 질문이 중복되지 않도록).
+  //    역할·참조 부서·자료 링크는 요청마다 DB에서 다시 읽는다(앱이 보낸 값이 아니라 저장된 값).
+  const splitSummary = normalizeSplitSummary(conversation.split_summary);
+  const access = deps.store.loadConversationAccess
+    ? await deps.store.loadConversationAccess(conversationId, rolesReady)
+    : null;
+  const deliveredMap = new Map<string, DeliveredMaterial>();
+  const recordDelivered = (ref: DeliveredMaterial) => {
+    deliveredMap.set(`${ref.kind}:${ref.id}`, ref);
+  };
   let workNote: string | null = null;
   if (!isNew) {
     try {
@@ -196,8 +295,21 @@ export async function runThinkChat(input: ChatInput, deps: ChatDeps): Promise<Ch
     attachments: input.attachments,
     scope: { type: conversation.scope_type, id: conversation.scope_id },
     workNote,
+    featureNote: features && !relay
+      ? featureStatusNote({
+        splitState: features.conversation_split.state,
+        rolesState: features.think_roles?.state,
+        isNew,
+        suppressed: splitSuppressed,
+        userAsked: userAskedSplit,
+      })
+      : null,
+    splitSummary,
+    access,
+    thinkRole: access?.thinkRoleId ?? conversation.think_role_id ?? 'lead',
   });
-  const toolCtx = { conversationId, memoryRefs: ctx.memoryRefs };
+  const instructions = relay ? `${ctx.instructions}\n\n${relayInstructions(relay.asker)}` : ctx.instructions;
+  for (const m of ctx.deliveredMaterials) recordDelivered(m);
   const actionIds: string[] = [];
 
   const userMessageId = await deps.store.insertMessage({
@@ -206,13 +318,33 @@ export async function runThinkChat(input: ChatInput, deps: ChatDeps): Promise<Ch
     content: input.message,
     status: 'complete',
     attachments: input.attachments,
+    ...(relay ? { asked_by: relay.asker } : {}),
   });
+  const toolCtx: ActionToolContext = {
+    conversationId,
+    memoryRefs: ctx.memoryRefs,
+    split: splitAllowed ? { userMessageId, userRequested: userAskedSplit, proposed: false } : undefined,
+    access: access ?? undefined,
+    recordDelivered,
+  };
+  const cacheKey = ctx.cacheKeySuffix ? `think:${conversationId}:${ctx.cacheKeySuffix}` : `think:${conversationId}`;
+  const tools = thinkToolsFor({ split: splitAllowed, readOnly: relay !== null });
   emit('conversation', {
     conversation_id: conversationId,
     user_message_id: userMessageId,
     title: conversation.title,
     created: isNew,
     model,
+    features,
+    relay: relay ? { asker: relay.asker } : null,
+    think_role: access?.rolesFeatureReady
+      ? {
+        id: access.thinkRoleId,
+        extra_ref_departments: access.extraRefDepartments,
+        profile_version: ROLE_PROFILE_VERSION,
+      }
+      : null,
+    split_suggestions: !splitSuppressed,
     context: {
       identity: ctx.identityIds.length,
       principles: ctx.principleIds.length,
@@ -220,10 +352,11 @@ export async function runThinkChat(input: ChatInput, deps: ChatDeps): Promise<Ch
       relevant: ctx.relevantIds,
       history_used: ctx.historyUsed,
       history_dropped: ctx.historyDropped,
+      split_summary: splitSummary !== null,
     },
   });
 
-  const titleTask = isNew ? generateTitle(deps, input, conversationId) : Promise.resolve();
+  const titleTask = isNew && !relayTitle ? generateTitle(deps, input, conversationId) : Promise.resolve();
 
   // 3) 모델 호출과 도구 반복
   let usage: AiUsage = emptyUsage();
@@ -253,14 +386,14 @@ export async function runThinkChat(input: ChatInput, deps: ChatDeps): Promise<Ch
       const stream = deps.provider.stream(
         {
           model,
-          instructions: ctx.instructions,
+          instructions,
           input: turnInput,
-          tools: THINK_TOOLS,
+          tools,
           webSearch: input.webSearch ? { contextSize: 'medium' } : undefined,
           toolChoice: forceFinal ? 'none' : 'auto',
           reasoningEffort: reasoningFor(tier, env),
           maxOutputTokens: maxOutputTokensFor(tier, env),
-          cacheKey: `think:${conversationId}`,
+          cacheKey: rolesReady ? cacheKey : `think:${conversationId}`,
           safetyId: input.safetyId,
         },
         input.signal,
@@ -332,7 +465,9 @@ export async function runThinkChat(input: ChatInput, deps: ChatDeps): Promise<Ch
       turnInput = [...turnInput, result.replay];
       for (const fc of result.functionCalls) {
         toolCallCount += 1;
-        const r = await runThinkTool(fc.name, fc.arguments, deps.store, 8000, toolCtx);
+        const r = relay && ACTING_TOOL_NAMES.has(fc.name)
+          ? { name: fc.name, ok: false, output: JSON.stringify({ error: 'not_available_for_cursor_questions' }), summary: '커서 질문에서는 쓸 수 없음' }
+          : await runThinkTool(fc.name, fc.arguments, deps.store, 8000, toolCtx);
         const label = TOOL_LABELS[fc.name] ?? fc.name;
         traces.push({ name: fc.name, label, detail: r.summary, ok: r.ok });
         emit('tool', { call_id: fc.callId, name: fc.name, label, status: 'done', ok: r.ok, detail: r.summary });
@@ -361,18 +496,26 @@ export async function runThinkChat(input: ChatInput, deps: ChatDeps): Promise<Ch
   }
 
   // 4) 저장·기록
-  const content = finalParts.join('\n\n').trim();
+  let content = finalParts.join('\n\n').trim();
+  let relayVerdict: RelayVerdict | null = null;
+  if (relay) {
+    const split = splitRelayBlock(content);
+    content = split.text;
+    if (status === 'complete') relayVerdict = await resolveRelayVerdict(split, relay.asker, (id) => deps.store.getMemory(id));
+  }
   if (status === 'complete' && !content) {
     status = 'error';
     errorCode = 'empty_answer';
     errorMessage = '모델이 빈 답변을 돌려주었습니다.';
+    relayVerdict = null;
   }
 
   const runId = await deps.recordRun({
-    feature: 'think_chat',
+    feature: relay ? 'think_relay' : 'think_chat',
     provider: deps.provider.name,
     model: resolvedModel,
     promptVersion: THINK_PROMPT_VERSION,
+    roleProfileVersion: rolesReady ? ROLE_PROFILE_VERSION : null,
     status: status === 'complete' ? 'ok' : status === 'stopped' ? 'stopped' : 'error',
     error: errorMessage,
     usage,
@@ -381,7 +524,8 @@ export async function runThinkChat(input: ChatInput, deps: ChatDeps): Promise<Ch
     costUsd: costKnown ? cost : null,
     latencyMs: now() - input.startedAt,
     conversationId,
-    createdBy: input.userId,
+    createdBy: input.userId || null,
+    features: features ? { ...features, split_tool: splitAllowed } : null,
   });
 
   let assistantMessageId: string | null = null;
@@ -397,9 +541,25 @@ export async function runThinkChat(input: ChatInput, deps: ChatDeps): Promise<Ch
         commentary: commentary.length > 0 ? commentary.join('\n\n') : null,
         model: resolvedModel,
         run_id: runId,
+        ...(relayVerdict ? { relay: relayVerdict } : {}),
       });
     } catch (e) {
       console.error('[ai_think] assistant message insert failed:', e instanceof Error ? e.message : String(e));
+    }
+  }
+  // 답변별 스냅샷은 역할 기능이 준비된 DB에만 남긴다. 없으면 앱은 '기록 없음'으로 표시한다.
+  if (assistantMessageId && access?.rolesFeatureReady && deps.store.saveMessageContextSnapshot) {
+    try {
+      await deps.store.saveMessageContextSnapshot({
+        messageId: assistantMessageId,
+        runId,
+        thinkRoleId: access.thinkRoleId,
+        roleProfileVersion: ROLE_PROFILE_VERSION,
+        access,
+        materials: [...deliveredMap.values()].filter((m) => m.delivered),
+      });
+    } catch (e) {
+      console.error('[ai_think] context snapshot failed:', e instanceof Error ? e.message : String(e));
     }
   }
   // 붙이지 못한 제안도 대화에는 남아 화면 끝에 카드로 보인다.
@@ -428,6 +588,7 @@ export async function runThinkChat(input: ChatInput, deps: ChatDeps): Promise<Ch
       cost_usd: costKnown ? cost : null,
       sources: dedupeSources(sources),
       action_ids: actionIds,
+      relay: relayVerdict,
     });
   } else {
     emit('error', {
@@ -439,5 +600,5 @@ export async function runThinkChat(input: ChatInput, deps: ChatDeps): Promise<Ch
     });
   }
 
-  return { conversationId, userMessageId, assistantMessageId, runId, status, errorCode };
+  return { conversationId, userMessageId, assistantMessageId, runId, status, errorCode, errorMessage, content, relay: relayVerdict };
 }

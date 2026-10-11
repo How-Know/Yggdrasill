@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import {
   ConfigError,
   ToolCounter,
+  TurnTracker,
   buildPrompt,
   classifyError,
   isProtectedPath,
@@ -111,17 +112,40 @@ test('도구 호출은 call_id 기준으로 한 번만 센다', () => {
   assert.deepEqual(c.list(), [{ name: 'read', count: 2 }, { name: 'grep', count: 1 }]);
 });
 
+test('턴 종료: usage 뒤에 다른 이벤트가 없을 때만 끝난 것으로 보고, 마지막 도구 뒤의 답만 모은다', () => {
+  const say = (text) => ({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] } });
+  const t = new TurnTracker();
+  t.add(say('먼저 살펴보겠습니다.'));
+  t.add({ type: 'tool_call', call_id: '1', name: 'read' });
+  t.add({ type: 'thinking', text: '...' });
+  t.add(say('수정했습니다.\n```json\n{"summary":'));
+  t.add(say('"끝"}\n```'));
+  assert.equal(t.ended, false);
+  t.add({ type: 'usage', usage: { outputTokens: 10 } });
+  assert.equal(t.ended, true);
+  assert.equal(t.text, '수정했습니다.\n```json\n{"summary":"끝"}\n```');
+  assert.equal(parseChangeResult(t.text).value.summary, '끝');
+  t.add({ type: 'tool_call', call_id: '2', name: 'grep' });
+  assert.equal(t.ended, false);
+  assert.equal(t.text, '');
+  t.add(null);
+  t.add({ type: 'assistant', message: { content: 'not-array' } });
+  assert.equal(t.text, '');
+});
+
 test('설정: 키가 없으면 시작하지 않고, 값은 범위 안으로 맞춘다', () => {
   assert.throws(() => loadConfig({ CURSOR_API_KEY: 'k' }), ConfigError);
   assert.throws(() => loadConfig({ CODE_BRIDGE_WORKER_TOKEN: 't' }), ConfigError);
   assert.throws(() => loadConfig({ CODE_BRIDGE_WORKER_TOKEN: 't', CURSOR_API_KEY: 'k', CODE_BRIDGE_WORKER_ID: 'bad id' }), ConfigError);
   const cfg = loadConfig({ CODE_BRIDGE_WORKER_TOKEN: 't', CURSOR_API_KEY: 'k', CODE_BRIDGE_POLL_MS: '10' });
   assert.equal(cfg.pollMs, 3000);
-  assert.equal(cfg.model, 'composer-2.5');
+  assert.equal(cfg.model, 'grok-4.7');
   assert.match(cfg.workerId, /^pc-/);
   assert.match(cfg.url, /functions\/v1\/ai_code_bridge$/);
   assert.equal(cfg.roundTimeoutMs, 15 * 60_000);
   assert.equal(cfg.changeTimeoutMs, 30 * 60_000);
+  assert.equal(cfg.finishGraceMs, 60_000);
+  assert.equal(loadConfig({ CODE_BRIDGE_WORKER_TOKEN: 't', CURSOR_API_KEY: 'k', CODE_BRIDGE_FINISH_GRACE_MS: '1' }).finishGraceMs, 5_000);
   assert.equal(loadConfig({ CODE_BRIDGE_WORKER_TOKEN: 't', CURSOR_API_KEY: 'k', CODE_BRIDGE_CHANGE_TIMEOUT_MS: '999999999' }).changeTimeoutMs, 90 * 60_000);
   assert.deepEqual(['change', 'plan', 'investigate'].map(modeLabel), ['수정', '조율', '조사']);
 });
@@ -170,9 +194,33 @@ test('수정 프롬프트: 승인된 조율본이면 그대로 따르라고 하�
       disagreements: [{ point: '보관 기간', think: '전부', cursor: '10개' }],
     },
   });
-  assert.match(change, /2회 조율하고 운영자가 승인한 조율본 "조율본"/);
+  assert.match(change, /2회 조율해 확정한 조율본 "조율본"/);
   assert.match(change, /보관 기간 \(Think: 전부 \/ Cursor: 10개\)/);
+  assert.match(change, /자동 검사/);
+  assert.match(change, /tools\/db_test\/test/);
+  assert.doesNotMatch(change, /재수정/);
   assert.doesNotMatch(promptFor({ ...job, mode: 'change', request: { ...job.request, instructions: ['a'] } }), /조율본/);
+});
+
+test('재수정 프롬프트: 앞 수정이 들어 있다고 알리고 실패한 검사 출력을 붙인다', () => {
+  const fix = promptFor({
+    ...job,
+    mode: 'change',
+    request: {
+      ...job.request,
+      instructions: ['a'],
+      fix_of: {
+        request_id: 'x',
+        attempt: 2,
+        max: 2,
+        failed: [{ label: 'manager 시험 (flutter test)', command: 'flutter test --no-pub', output: 'Expected: 3\n  Actual: 2' }],
+      },
+    },
+  });
+  assert.match(fix, /이번은 재수정이다 \(2\/2회째\)/);
+  assert.match(fix, /앞 수정이 이미 들어 있다/);
+  assert.match(fix, /### manager 시험 \(flutter test\)\n명령: flutter test --no-pub\n```\nExpected: 3\n {2}Actual: 2\n```/);
+  assert.match(fix, /시험을 지우거나 약하게 만들지 않는다/);
 });
 
 test('작업 종류별 프롬프트: 2회차는 원래 요청 뒤에 추가 질문, 수정은 셸 없음과 복사본을 밝힌다', () => {

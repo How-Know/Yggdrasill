@@ -1,4 +1,5 @@
 import type { AiUsage } from '../_shared/ai/types.ts';
+import { ROUND_EFFORTS } from '../_shared/code_effort.ts';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const WORKER_ID_RE = /^[A-Za-z0-9._-]{1,64}$/;
@@ -32,6 +33,8 @@ export interface RoundPayload {
   cursor_run_id: string | null;
   cursor_agent_id: string | null;
   model: string | null;
+  /** 실제로 쓴 강도. 모델에 강도 옵션이 없거나 옛 작업자면 null. */
+  effort: string | null;
   duration_ms: number | null;
   usage: RoundUsage | null;
   tool_calls: { name: string; count: number }[];
@@ -133,6 +136,7 @@ export function parseRound(raw: unknown): Parsed<RoundPayload> {
       cursor_run_id: shortString(r.cursor_run_id, 200),
       cursor_agent_id: shortString(r.cursor_agent_id, 200),
       model: shortString(r.model, 100),
+      effort: typeof r.effort === 'string' && (ROUND_EFFORTS as readonly string[]).includes(r.effort) ? r.effort : null,
       duration_ms: count(r.duration_ms, 3_600_000),
       usage: parseUsage(r.usage),
       tool_calls: toolCalls,

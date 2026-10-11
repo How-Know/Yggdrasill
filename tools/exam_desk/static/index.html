@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>내신 기출</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <header class="top">
+    <div class="wrap">
+      <div class="title-row">
+        <div>
+          <div class="title-line">
+            <span class="bar" aria-hidden="true"></span>
+            <h1>내신 기출</h1>
+          </div>
+          <p class="sub" id="status-line">두 폴더를 읽고 있습니다</p>
+        </div>
+        <button type="button" class="chip" id="refresh">다시 읽기</button>
+      </div>
+      <div class="tabs" role="tablist" data-index="0">
+        <span class="indicator" aria-hidden="true"></span>
+        <button type="button" role="tab" id="tab-search" aria-selected="true" aria-controls="panel-search">검색</button>
+        <button type="button" role="tab" id="tab-import" aria-selected="false" aria-controls="panel-import">가져오기</button>
+        <button type="button" role="tab" id="tab-missing" aria-selected="false" aria-controls="panel-missing">빠진 시험</button>
+      </div>
+    </div>
+  </header>
+  <main class="wrap">
+    <section id="panel-search" role="tabpanel" aria-labelledby="tab-search">
+      <label class="sr" for="search-input">검색</label>
+      <input id="search-input" class="field" type="search" placeholder="학교, 학년, 과목, 연도" autocomplete="off">
+      <div class="chips" id="search-levels" role="group" aria-label="과정">
+        <button type="button" class="chip selected" data-level="all" aria-pressed="true">전체</button>
+        <button type="button" class="chip" data-level="고등" aria-pressed="false">고등</button>
+        <button type="button" class="chip" data-level="중등" aria-pressed="false">중등</button>
+      </div>
+      <p class="count" id="search-count"></p>
+      <div id="search-list"></div>
+    </section>
+    <section id="panel-import" role="tabpanel" aria-labelledby="tab-import" hidden>
+      <label class="drop" id="drop">
+        <input id="file-input" type="file" accept=".hml,.HML" multiple>
+        <strong>시험지를 여기에 놓기</strong>
+        <span>예전 이름 그대로 놓으면 새 이름 규칙으로 바꿔 폴더에 넣습니다. 밖에 있는 원본은 그대로 둡니다.</span>
+      </label>
+      <div id="import-list"></div>
+    </section>
+    <section id="panel-missing" role="tabpanel" aria-labelledby="tab-missing" hidden>
+      <p class="lead">있어야 할 것 같은데 없는 시험입니다. 원래 없는 시험이면 ×를 누르세요. 빼 둔 항목은 다음에 열어도 보이지 않습니다.</p>
+      <label class="sr" for="missing-input">빠진 시험 좁히기</label>
+      <input id="missing-input" class="field" type="search" placeholder="학교, 과목, 연도" autocomplete="off">
+      <div class="chips" id="missing-levels" role="group" aria-label="과정">
+        <button type="button" class="chip selected" data-level="all" aria-pressed="true">전체</button>
+        <button type="button" class="chip" data-level="고등" aria-pressed="false">고등</button>
+        <button type="button" class="chip" data-level="중등" aria-pressed="false">중등</button>
+      </div>
+      <p class="count" id="missing-count"></p>
+      <div id="missing-list"></div>
+      <details class="hidden-box" id="hidden-box" hidden>
+        <summary id="hidden-summary">숨긴 시험</summary>
+        <div id="hidden-list"></div>
+      </details>
+    </section>
+  </main>
+  <div id="toast" class="toast" hidden></div>
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,227 @@
+part of '../homework_assign_dialog.dart';
+
+/// 알림장 디자인 비교용. 실제 데이터 없이 모든 칸이 채워진 견본을 그린다.
+@visibleForTesting
+Future<List<int>> renderTodoSheetSample(TodoSheetDesign design) {
+  final payload = _todoSheetSamplePayload();
+  return design == TodoSheetDesign.refined
+      ? _renderTodoSheetRefined(payload)
+      : _renderTodoSheetClassic(payload);
+}
+
+_TodoSheetPayload _todoSheetSamplePayload() {
+  final day = DateTime(2026, 10, 7, 17, 0);
+  DateTime at(int h, int m) => DateTime(day.year, day.month, day.day, h, m);
+  const min = 60000;
+  return _TodoSheetPayload(
+    academyName: '정현수학교습소',
+    academyLogo: null,
+    studentName: '김서연',
+    classDateTime: day,
+    dueDate: DateTime(2026, 10, 9),
+    arrivalTime: at(17, 3),
+    departureTime: at(19, 12),
+    className: '고1 정규반',
+    classTimeText: _formatClassTimeRange(day, at(19, 0)),
+    learningTimeText: _formatDurationKorean(112 * min),
+    learningMs: 112 * min,
+    specialNotes: const ['3분 지각 (등원 17:03)'],
+    lessonRecord: const LessonRecordSummary(
+      attendanceId: 'sample',
+      isLive: false,
+      problemRecordCoverage: 'full',
+      homeworkTotal: 3,
+      homeworkCompleted: 2,
+      assignmentTotal: 4,
+      assignmentCompleted: 3,
+      assignmentBasis: 'session_plan',
+      solvedProblemCount: 46,
+      firstTryCorrectCount: 35,
+      correctionRequiredCount: 11,
+      correctionSuccessCount: 9,
+      passedProblemCount: 44,
+      avgTriesToPass: 1.3,
+      flows: [
+        LessonRecordFlowProgress(
+          flowId: 'f1',
+          flowName: '개념',
+          completed: false,
+          classItemCount: 2,
+          completedItemCount: 1,
+          bookName: '개념원리',
+          gradeLabel: '공통수학1',
+          textbookTotalProblems: 520,
+          textbookCompletedBefore: 214,
+          textbookCompletedProblems: 246,
+        ),
+        LessonRecordFlowProgress(
+          flowId: 'f2',
+          flowName: '유형',
+          completed: false,
+          classItemCount: 2,
+          completedItemCount: 2,
+          bookName: '쎈',
+          gradeLabel: '공통수학1',
+          textbookTotalProblems: 1180,
+          textbookCompletedBefore: 402,
+          textbookCompletedProblems: 416,
+        ),
+        LessonRecordFlowProgress(
+          flowId: 'f3',
+          flowName: '심화',
+          completed: true,
+          classItemCount: 1,
+          completedItemCount: 1,
+        ),
+      ],
+    ),
+    classWorkEntries: const [
+      _ClassWorkEntry(
+        title: '다항식의 연산',
+        bookAndCourse: '개념원리 · 공통수학1',
+        page: '24-31',
+        count: '32',
+        assignedAt: null,
+        studyMs: 46 * min,
+        totalCheckCount: 2,
+        passed: true,
+        totalAccumulatedMs: 71 * min,
+        subEntries: [
+          _SubWorkEntry(title: '개념 확인', page: '24-27', count: '14'),
+          _SubWorkEntry(title: '필수 예제', page: '28-31', count: '18'),
+        ],
+      ),
+      _ClassWorkEntry(
+        title: '항등식과 나머지정리',
+        bookAndCourse: '쎈 · 공통수학1',
+        page: '40-45',
+        count: '28',
+        assignedAt: null,
+        studyMs: 38 * min,
+        totalCheckCount: 1,
+        totalAccumulatedMs: 38 * min,
+        subEntries: [
+          _SubWorkEntry(title: 'A단계', page: '40-42', count: '16'),
+        ],
+      ),
+      _ClassWorkEntry(
+        title: '오답 다시 풀기',
+        bookAndCourse: '오답노트',
+        page: '-',
+        count: '9',
+        assignedAt: null,
+        studyMs: 28 * min,
+      ),
+    ],
+    completedSummaries: const [
+      _CompletedSummaryEntry(
+        groupTitle: '다항식의 연산',
+        bookAndCourse: '개념원리 · 공통수학1',
+        totalMs: 71 * min,
+        assignmentCount: 2,
+        checkCount: 2,
+        progressPct: 35,
+        previousProgressPct: 65,
+        totalProgressPct: 100,
+      ),
+      _CompletedSummaryEntry(
+        groupTitle: '복소수의 정의',
+        bookAndCourse: '쎈 · 공통수학1',
+        totalMs: 52 * min,
+        assignmentCount: 1,
+        checkCount: 3,
+        progressPct: 20,
+        previousProgressPct: 80,
+        totalProgressPct: 100,
+      ),
+    ],
+    completedEntries: const [],
+    todoEntries: const [
+      _TodoListEntry(
+        primary: '□ 개념원리 · 공통수학1',
+        bookTitle: '개념원리 · 공통수학1',
+        secondary: '항등식과 나머지정리',
+        tertiary: 'p.46-53 · 26문항',
+        rightPrimary: '10.07',
+        rightSecondary: '예상시간 40분',
+        rightTertiary: '예제는 풀이까지',
+      ),
+      _TodoListEntry(
+        primary: '□ 쎈 · 공통수학1',
+        bookTitle: '쎈 · 공통수학1',
+        secondary: '나머지정리 B단계',
+        tertiary: 'p.43-45 · 18문항',
+        rightPrimary: '10.07',
+        rightSecondary: '예상시간 35분',
+      ),
+      _TodoListEntry(
+        primary: '□ 블랙라벨 · 공통수학1',
+        bookTitle: '블랙라벨 · 공통수학1',
+        secondary: '다항식의 연산 심화',
+        tertiary: 'p.12-15 · 8문항',
+        rightPrimary: '10.05',
+        rightSecondary: '예상시간 30분',
+        rightTertiary: '3번은 다음 시간에',
+      ),
+      _TodoListEntry(
+        primary: '□ 오답노트',
+        bookTitle: '오답노트',
+        secondary: '이번 주 오답 정리',
+        tertiary: '9문항',
+        rightPrimary: '10.07',
+        rightSecondary: '예상시간 20분',
+      ),
+    ],
+    behaviorEntries: const [
+      _TodoListEntry(
+        primary: '□ 단어장 외우기 · lv.2',
+        secondary: '  10.08 · 하루 30개',
+      ),
+      _TodoListEntry(
+        primary: '□ 풀이 과정 정리 · lv.1',
+        secondary: '  10.08 · 틀린 문제만',
+      ),
+      _TodoListEntry(primary: '□ 수업 전 복습 · lv.3', secondary: '  10.09'),
+    ],
+    behaviorFeedback: '',
+    checkRates: [
+      _CheckRateEntry(
+        title: '인수분해',
+        progress: 100,
+        previousProgress: 60,
+        todayProgress: 40,
+        bookAndCourse: '개념원리 · 공통수학1',
+        page: '32-39',
+        count: '24',
+        assignedAt: DateTime(2026, 10, 3),
+        dueDate: DateTime(2026, 10, 7),
+        checkedAt: day,
+      ),
+      _CheckRateEntry(
+        title: '복소수의 정의',
+        progress: 80,
+        previousProgress: 30,
+        todayProgress: 50,
+        bookAndCourse: '쎈 · 공통수학1',
+        page: '20-24',
+        count: '30',
+        assignedAt: DateTime(2026, 10, 3),
+        dueDate: DateTime(2026, 10, 7),
+        checkedAt: day,
+      ),
+      _CheckRateEntry(
+        title: '다항식의 연산 심화',
+        progress: 20,
+        previousProgress: 20,
+        todayProgress: 0,
+        bookAndCourse: '블랙라벨 · 공통수학1',
+        page: '8-11',
+        count: '10',
+        assignedAt: DateTime(2026, 10, 5),
+        dueDate: DateTime(2026, 10, 7),
+        checkedAt: day,
+        outcome: 'not_done',
+      ),
+    ],
+  );
+}

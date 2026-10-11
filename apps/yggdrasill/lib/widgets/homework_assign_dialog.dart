@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -7,22 +8,27 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'package:open_filex/open_filex.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
+import 'pdf/todo_sheet_math.dart';
 import '../models/attendance_record.dart';
 import '../models/student_time_block.dart';
 import '../services/data_manager.dart';
 import '../services/homework_assignment_store.dart';
 import '../services/homework_store.dart';
 import '../services/homework_time_defaults_service.dart';
+import '../services/lesson_record_service.dart';
 import '../services/next_class_start_resolver.dart';
 import '../services/print_routing_service.dart';
 import '../services/resource_service.dart';
 import '../services/student_behavior_assignment_store.dart';
 import '../services/tag_store.dart';
 import '../services/tenant_service.dart';
+import '../utils/homework_card_label.dart';
 import '../utils/homework_page_text.dart';
-import '../widgets/dialog_tokens.dart';
+part 'pdf/todo_sheet_refined.dart';
+part 'pdf/todo_sheet_sample.dart';
 
 class HomeworkAssignSelection {
   final List<String> itemIds;
@@ -43,12 +49,6 @@ class HomeworkAssignSelection {
     this.dueDateByItemId = const <String, DateTime>{},
     this.planHomeworkItemIds = const <String>[],
   });
-}
-
-class _SessionOption {
-  final DateTime dateTime;
-  final String label;
-  const _SessionOption(this.dateTime, this.label);
 }
 
 class _TodoListEntry {
@@ -122,6 +122,15 @@ class _ClassWorkEntry {
   final DateTime? assignedAt;
   final int studyMs;
   final int todayCheckCount;
+
+  /// 학습앱 카드의 '검사 N회'와 같은 누적 검사 횟수.
+  final int totalCheckCount;
+
+  /// 그룹의 모든 하위과제가 완료됨.
+  final bool passed;
+
+  /// 하위과제 누적 수행시간 합(학습앱 완료 카드의 '총 …'와 같은 기준).
+  final int totalAccumulatedMs;
   final List<_SubWorkEntry> subEntries;
   const _ClassWorkEntry({
     required this.title,
@@ -131,8 +140,37 @@ class _ClassWorkEntry {
     required this.assignedAt,
     required this.studyMs,
     this.todayCheckCount = 0,
+    this.totalCheckCount = 0,
+    this.passed = false,
+    this.totalAccumulatedMs = 0,
     this.subEntries = const <_SubWorkEntry>[],
   });
+}
+
+({int checks, bool passed, int totalMs}) _groupCheckPassTotals({
+  required HomeworkGroup? group,
+  required List<HomeworkItem> children,
+  required DateTime departureTime,
+}) {
+  final now = DateTime.now();
+  final cap = departureTime.isAfter(now) ? now : departureTime;
+  int maxChildChecks = 0;
+  int totalMs = 0;
+  for (final child in children) {
+    if (child.checkCount > maxChildChecks) maxChildChecks = child.checkCount;
+    final runStart = child.runStart;
+    final runningMs = runStart != null && cap.isAfter(runStart)
+        ? cap.difference(runStart).inMilliseconds
+        : 0;
+    totalMs += math.max(0, child.accumulatedMs + runningMs);
+  }
+  final runtimeChecks = group?.runtimeCheckCount ?? 0;
+  return (
+    checks: runtimeChecks > 0 ? runtimeChecks : maxChildChecks,
+    passed: children.isNotEmpty &&
+        children.every((c) => c.status == HomeworkStatus.completed),
+    totalMs: totalMs,
+  );
 }
 
 class _CompletedSummaryEntry {
@@ -177,6 +215,8 @@ class _TodoSheetPayload {
   final List<_TodoListEntry> todoEntries;
   final List<_TodoListEntry> behaviorEntries;
   final String behaviorFeedback;
+  final LessonRecordSummary? lessonRecord;
+  final List<String> specialNotes;
 
   const _TodoSheetPayload({
     required this.academyName,
@@ -197,7 +237,28 @@ class _TodoSheetPayload {
     required this.todoEntries,
     required this.behaviorEntries,
     required this.behaviorFeedback,
+    this.lessonRecord,
+    this.specialNotes = const <String>[],
   });
+}
+
+List<String> _buildSpecialNotes({
+  required String studentId,
+  required DateTime classDateTime,
+  DateTime? arrivalTime,
+}) {
+  final notes = <String>[];
+  final arrival = arrivalTime?.toLocal();
+  if (arrival != null) {
+    final threshold =
+        DataManager.instance.getStudentPaymentInfo(studentId)?.latenessThreshold ??
+            10;
+    if (arrival.isAfter(classDateTime.add(Duration(minutes: threshold)))) {
+      final lateMinutes = arrival.difference(classDateTime).inMinutes;
+      notes.add('$lateMinutes분 지각 (등원 ${_formatTime(arrival)})');
+    }
+  }
+  return notes;
 }
 
 class _HomeworkPhaseEvent {
@@ -355,753 +416,6 @@ Future<HomeworkAssignSelection?> buildDefaultHomeworkAssignSelection(
   );
 }
 
-Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
-  BuildContext context,
-  String studentId, {
-  DateTime? anchorTime,
-  Set<String>? initialSelectedGroupIds,
-  Set<String>? initialSelectedItemIds,
-  Set<String> excludedItemIds = const <String>{},
-  Set<String> additionalHomeworkIds = const <String>{},
-  Map<String, DateTime> initialDueDateByGroupId = const <String, DateTime>{},
-}) async {
-  final allItems = HomeworkStore.instance.items(studentId);
-  if (allItems.isEmpty) return null;
-  final activeAssignments =
-      await HomeworkAssignmentStore.instance.loadActiveAssignments(studentId);
-  final hiddenAssignedItemIds = activeAssignments
-      .map((a) => a.homeworkItemId.trim())
-      .where((id) => id.isNotEmpty)
-      .toSet();
-  // Build group-based selectable entries
-  final allGroups = HomeworkStore.instance.groups(studentId);
-  final groupEntries = <({HomeworkGroup group, List<HomeworkItem> children})>[];
-  final allGroupChildIds = <String>{};
-  for (final group in allGroups) {
-    final children = HomeworkStore.instance
-        .itemsInGroup(studentId, group.id, includeCompleted: true)
-        .where((e) => e.status != HomeworkStatus.completed)
-        .where((e) => !hiddenAssignedItemIds.contains(e.id))
-        .where((e) => !excludedItemIds.contains(e.id))
-        .toList();
-    if (children.isEmpty) continue;
-    groupEntries.add((group: group, children: children));
-    for (final c in children) {
-      allGroupChildIds.add(c.id);
-    }
-  }
-
-  final behaviorAssignments = await StudentBehaviorAssignmentStore.instance
-      .loadForStudent(studentId, force: true);
-  behaviorAssignments.sort((a, b) => a.orderIndex.compareTo(b.orderIndex));
-  String two(int v) => v.toString().padLeft(2, '0');
-  const week = ['월', '화', '수', '목', '금', '토', '일'];
-  String formatSessionLabel(DateTime dt, {int? order}) {
-    final orderText = order != null ? ' · ${order}회차' : '';
-    return '${two(dt.month)}.${two(dt.day)} (${week[dt.weekday - 1]}) ${two(dt.hour)}:${two(dt.minute)}$orderText';
-  }
-
-  final anchor = anchorTime ?? DateTime.now();
-  final Set<int> seenKeys = <int>{};
-  int keyOf(DateTime dt) =>
-      DateTime(dt.year, dt.month, dt.day, dt.hour, dt.minute)
-          .millisecondsSinceEpoch;
-
-  final List<_SessionOption> options = [];
-  void addOption(DateTime dt, {int? order}) {
-    if (!dt.isAfter(anchor)) return;
-    final key = keyOf(dt);
-    if (seenKeys.contains(key)) return;
-    seenKeys.add(key);
-    options.add(_SessionOption(dt, formatSessionLabel(dt, order: order)));
-  }
-
-  final records = DataManager.instance.attendanceRecords
-      .where((r) => r.studentId == studentId)
-      .toList()
-    ..sort((a, b) => a.classDateTime.compareTo(b.classDateTime));
-  for (final r in records) {
-    addOption(r.classDateTime, order: r.sessionOrder);
-  }
-
-  // Fallback: 같은 날짜(오늘) 블록을 직접 후보에 추가
-  final day = DateTime(anchor.year, anchor.month, anchor.day);
-  final dayIdx = day.weekday - 1;
-  bool isActiveOn(StudentTimeBlock b, DateTime date) {
-    final target = DateTime(date.year, date.month, date.day);
-    final start =
-        DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
-    final end = b.endDate != null
-        ? DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day)
-        : null;
-    return !start.isAfter(target) && (end == null || !end.isBefore(target));
-  }
-
-  final blocks = DataManager.instance.studentTimeBlocks
-      .where((b) =>
-          b.studentId == studentId &&
-          b.dayIndex == dayIdx &&
-          isActiveOn(b, day))
-      .toList();
-  final Map<String, List<StudentTimeBlock>> blocksBySessionKey =
-      <String, List<StudentTimeBlock>>{};
-  for (final b in blocks) {
-    final setId = (b.setId ?? '').trim();
-    final key = setId.isNotEmpty ? 'set:$setId' : 'single:${b.id}';
-    blocksBySessionKey.putIfAbsent(key, () => <StudentTimeBlock>[]).add(b);
-  }
-  final groupedStarts = <DateTime>[];
-  final groupedOrderByMinuteKey = <int, int?>{};
-  for (final group in blocksBySessionKey.values) {
-    group.sort((a, b) {
-      if (a.startHour != b.startHour) return a.startHour - b.startHour;
-      return a.startMinute - b.startMinute;
-    });
-    final first = group.first;
-    final dt = DateTime(
-      day.year,
-      day.month,
-      day.day,
-      first.startHour,
-      first.startMinute,
-    );
-    groupedStarts.add(dt);
-    groupedOrderByMinuteKey[keyOf(dt)] = first.number ?? first.weeklyOrder;
-  }
-  groupedStarts.sort((a, b) => a.compareTo(b));
-  for (int i = 0; i < groupedStarts.length; i++) {
-    final dt = groupedStarts[i];
-    final order = groupedOrderByMinuteKey[keyOf(dt)];
-    addOption(dt, order: order ?? (i + 1));
-  }
-
-  options
-    ..clear()
-    ..addAll(
-      NextClassStartResolver.upcoming(
-        studentId,
-        after: anchor,
-      ).map((dateTime) => _SessionOption(
-            dateTime,
-            formatSessionLabel(dateTime),
-          )),
-    );
-  options.sort((a, b) => a.dateTime.compareTo(b.dateTime));
-  final nextSessions = options.length > 12 ? options.sublist(0, 12) : options;
-  DateTime? selectedDueDate =
-      nextSessions.isNotEmpty ? nextSessions.first.dateTime : null;
-  bool dueDateChanged = false;
-  final Map<String, bool> selectedGroups = {
-    for (final entry in groupEntries)
-      entry.group.id: initialSelectedItemIds != null
-          ? entry.children.every(
-              (child) => initialSelectedItemIds.contains(child.id),
-            )
-          : initialSelectedGroupIds == null ||
-              initialSelectedGroupIds.contains(entry.group.id),
-  };
-  final Map<String, bool> selected = {
-    for (final entry in groupEntries)
-      for (final c in entry.children)
-        c.id: initialSelectedItemIds != null
-            ? initialSelectedItemIds.contains(c.id)
-            : initialSelectedGroupIds == null ||
-                initialSelectedGroupIds.contains(entry.group.id),
-  };
-  final Map<String, bool> selectedBehaviors = {
-    for (final b in behaviorAssignments) b.id: !b.isIrregular,
-  };
-  final Map<String, int> irregularBehaviorCounts = {
-    for (final b in behaviorAssignments.where((e) => e.isIrregular)) b.id: 1,
-  };
-  bool printTodoOnConfirm = false;
-  bool previewing = false;
-  return showDialog<HomeworkAssignSelection>(
-    context: context,
-    builder: (ctx) {
-      return StatefulBuilder(
-        builder: (ctx, setState) {
-          final visibleGroups = groupEntries;
-          final media = MediaQuery.of(ctx);
-          final homeworkListMaxHeight = math.max(
-            180.0,
-            math.min(430.0, media.size.height * 0.42),
-          );
-          final behaviorListMaxHeight = math.max(
-            160.0,
-            math.min(360.0, media.size.height * 0.34),
-          );
-          final dialogContentMaxHeight = math.max(
-            420.0,
-            math.min(media.size.height * 0.78, 920.0),
-          );
-          return AlertDialog(
-            backgroundColor: kDlgBg,
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            title: const Text('숙제 선택',
-                style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900)),
-            content: SizedBox(
-              width: 520,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(maxHeight: dialogContentMaxHeight),
-                child: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const YggDialogSectionHeader(
-                        icon: Icons.event,
-                        title: '검사 날짜',
-                      ),
-                      if (nextSessions.isEmpty)
-                        const Text(
-                          '예정 수업이 없습니다. 검사 날짜는 미정으로 처리됩니다.',
-                          style: TextStyle(color: kDlgTextSub),
-                        )
-                      else
-                        DropdownButtonFormField<DateTime?>(
-                          value: selectedDueDate,
-                          items: [
-                            for (final opt in nextSessions)
-                              DropdownMenuItem<DateTime?>(
-                                value: opt.dateTime,
-                                child: Text(
-                                  opt.label,
-                                  style: const TextStyle(
-                                    color: kDlgText,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ),
-                          ],
-                          onChanged: (v) {
-                            setState(() {
-                              selectedDueDate = v;
-                              dueDateChanged = true;
-                            });
-                          },
-                          dropdownColor: kDlgBg,
-                          decoration: InputDecoration(
-                            filled: true,
-                            fillColor: kDlgFieldBg,
-                            enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(10),
-                              borderSide: const BorderSide(color: kDlgBorder),
-                            ),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(10),
-                              borderSide: const BorderSide(
-                                color: kDlgAccent,
-                                width: 1.4,
-                              ),
-                            ),
-                            contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 10),
-                          ),
-                          iconEnabledColor: kDlgTextSub,
-                        ),
-                      const SizedBox(height: 16),
-                      const YggDialogSectionHeader(
-                          icon: Icons.assignment_turned_in, title: '등록된 과제'),
-                      if (visibleGroups.isEmpty)
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 10),
-                          decoration: BoxDecoration(
-                              color: kDlgPanelBg,
-                              borderRadius: BorderRadius.circular(10),
-                              border: Border.all(color: kDlgBorder)),
-                          child: const Text('표시할 과제가 없습니다.',
-                              style:
-                                  TextStyle(color: kDlgTextSub, fontSize: 13)),
-                        )
-                      else
-                        ConstrainedBox(
-                          constraints:
-                              BoxConstraints(maxHeight: homeworkListMaxHeight),
-                          child: ListView.separated(
-                            shrinkWrap: true,
-                            itemCount: visibleGroups.length,
-                            separatorBuilder: (_, __) =>
-                                const SizedBox(height: 10),
-                            itemBuilder: (ctx, idx) {
-                              final entry = visibleGroups[idx];
-                              final group = entry.group;
-                              final children = entry.children;
-                              final bool groupSelected =
-                                  selectedGroups[group.id] ?? false;
-                              final int totalCount = children.fold<int>(
-                                  0, (sum, item) => sum + (item.count ?? 0));
-                              final mergedPages = mergeHomeworkItemPageRanges(
-                                children.map(
-                                  (item) => (
-                                    page: item.page,
-                                    unitMappings: item.unitMappings,
-                                  ),
-                                ),
-                              );
-                              final String groupTitle =
-                                  group.title.trim().isNotEmpty
-                                      ? group.title.trim()
-                                      : children.first.title.trim();
-                              final String meta = [
-                                if (children.length > 1)
-                                  '하위 ${children.length}개',
-                                if (mergedPages.isNotEmpty) 'p.$mergedPages',
-                                if (totalCount > 0) '$totalCount문항',
-                              ].join(' · ');
-                              return Container(
-                                padding:
-                                    const EdgeInsets.symmetric(horizontal: 8),
-                                decoration: BoxDecoration(
-                                    color: kDlgPanelBg,
-                                    borderRadius: BorderRadius.circular(10),
-                                    border: Border.all(color: kDlgBorder)),
-                                child: CheckboxListTile(
-                                  value: groupSelected,
-                                  onChanged: (v) {
-                                    setState(() {
-                                      selectedGroups[group.id] = v ?? false;
-                                      for (final c in children) {
-                                        selected[c.id] = v ?? false;
-                                      }
-                                    });
-                                  },
-                                  dense: true,
-                                  contentPadding: EdgeInsets.zero,
-                                  controlAffinity:
-                                      ListTileControlAffinity.leading,
-                                  activeColor: kDlgAccent,
-                                  checkColor: Colors.white,
-                                  title: Text(groupTitle,
-                                      style: const TextStyle(
-                                          color: kDlgText,
-                                          fontWeight: FontWeight.w700,
-                                          fontSize: 14)),
-                                  subtitle: meta.isEmpty
-                                      ? null
-                                      : Text(meta,
-                                          style: const TextStyle(
-                                              color: kDlgTextSub,
-                                              fontSize: 12)),
-                                ),
-                              );
-                            },
-                          ),
-                        ),
-                      const SizedBox(height: 16),
-                      const YggDialogSectionHeader(
-                        icon: Icons.self_improvement_rounded,
-                        title: '행동 리스트',
-                      ),
-                      if (behaviorAssignments.isEmpty)
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 10,
-                          ),
-                          decoration: BoxDecoration(
-                            color: kDlgPanelBg,
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(color: kDlgBorder),
-                          ),
-                          child: const Text(
-                            '학생에게 부여된 행동이 없습니다.',
-                            style: TextStyle(color: kDlgTextSub, fontSize: 13),
-                          ),
-                        )
-                      else
-                        ConstrainedBox(
-                          constraints:
-                              BoxConstraints(maxHeight: behaviorListMaxHeight),
-                          child: ListView.separated(
-                            shrinkWrap: true,
-                            itemCount: behaviorAssignments.length,
-                            separatorBuilder: (_, __) =>
-                                const SizedBox(height: 10),
-                            itemBuilder: (ctx, idx) {
-                              final behavior = behaviorAssignments[idx];
-                              final bool selectedNow =
-                                  selectedBehaviors[behavior.id] ?? false;
-                              final int level =
-                                  behavior.safeSelectedLevelIndex + 1;
-                              final String levelText =
-                                  behavior.selectedLevelText.trim();
-                              final int count =
-                                  irregularBehaviorCounts[behavior.id] ?? 1;
-                              return Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 8,
-                                  vertical: 8,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: kDlgPanelBg,
-                                  borderRadius: BorderRadius.circular(10),
-                                  border: Border.all(color: kDlgBorder),
-                                ),
-                                child: Row(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Checkbox(
-                                      value: selectedNow,
-                                      onChanged: (v) {
-                                        setState(() {
-                                          selectedBehaviors[behavior.id] =
-                                              v ?? false;
-                                        });
-                                      },
-                                      activeColor: kDlgAccent,
-                                      checkColor: Colors.white,
-                                    ),
-                                    Expanded(
-                                      child: Padding(
-                                        padding: const EdgeInsets.only(top: 4),
-                                        child: Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            Row(
-                                              children: [
-                                                Expanded(
-                                                  child: Row(
-                                                    children: [
-                                                      Flexible(
-                                                        child: Text(
-                                                          behavior.name,
-                                                          style:
-                                                              const TextStyle(
-                                                            color: kDlgText,
-                                                            fontWeight:
-                                                                FontWeight.w700,
-                                                            fontSize: 14,
-                                                          ),
-                                                          maxLines: 1,
-                                                          overflow: TextOverflow
-                                                              .ellipsis,
-                                                        ),
-                                                      ),
-                                                      if (behavior
-                                                          .isIrregular) ...[
-                                                        const SizedBox(
-                                                            width: 8),
-                                                        const Text(
-                                                          '비정기',
-                                                          style: TextStyle(
-                                                            color: Color(
-                                                                0xFFF2B56B),
-                                                            fontSize: 12,
-                                                            fontWeight:
-                                                                FontWeight.w700,
-                                                          ),
-                                                        ),
-                                                      ],
-                                                    ],
-                                                  ),
-                                                ),
-                                                if (!behavior.isIrregular)
-                                                  Text(
-                                                    '${behavior.repeatDays}일 주기',
-                                                    style: const TextStyle(
-                                                      color: kDlgTextSub,
-                                                      fontSize: 12,
-                                                      fontWeight:
-                                                          FontWeight.w700,
-                                                    ),
-                                                  ),
-                                              ],
-                                            ),
-                                            const SizedBox(height: 4),
-                                            Text(
-                                              'lv.$level${levelText.isEmpty ? '' : ' · $levelText'}',
-                                              style: const TextStyle(
-                                                color: kDlgTextSub,
-                                                fontSize: 12,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    ),
-                                    if (behavior.isIrregular) ...[
-                                      const SizedBox(width: 8),
-                                      Column(
-                                        mainAxisSize: MainAxisSize.min,
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.center,
-                                        children: [
-                                          IconButton(
-                                            onPressed: selectedNow && count < 20
-                                                ? () {
-                                                    setState(() {
-                                                      irregularBehaviorCounts[
-                                                              behavior.id] =
-                                                          count + 1;
-                                                    });
-                                                  }
-                                                : null,
-                                            icon: const Icon(
-                                              Icons.keyboard_arrow_up_rounded,
-                                              size: 18,
-                                            ),
-                                            color: kDlgTextSub,
-                                            padding: EdgeInsets.zero,
-                                            constraints: const BoxConstraints(
-                                                minWidth: 24, minHeight: 24),
-                                            visualDensity:
-                                                VisualDensity.compact,
-                                          ),
-                                          Text(
-                                            '${count}회',
-                                            style: TextStyle(
-                                              color: selectedNow
-                                                  ? kDlgText
-                                                  : kDlgTextSub,
-                                              fontWeight: FontWeight.w700,
-                                              fontSize: 12,
-                                            ),
-                                          ),
-                                          IconButton(
-                                            onPressed: selectedNow && count > 1
-                                                ? () {
-                                                    setState(() {
-                                                      irregularBehaviorCounts[
-                                                              behavior.id] =
-                                                          count - 1;
-                                                    });
-                                                  }
-                                                : null,
-                                            icon: const Icon(
-                                              Icons.keyboard_arrow_down_rounded,
-                                              size: 18,
-                                            ),
-                                            color: kDlgTextSub,
-                                            padding: EdgeInsets.zero,
-                                            constraints: const BoxConstraints(
-                                                minWidth: 24, minHeight: 24),
-                                            visualDensity:
-                                                VisualDensity.compact,
-                                          ),
-                                        ],
-                                      ),
-                                    ],
-                                  ],
-                                ),
-                              );
-                            },
-                          ),
-                        ),
-                      const SizedBox(height: 16),
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          Expanded(
-                            child: CheckboxListTile(
-                              value: printTodoOnConfirm,
-                              onChanged: (v) {
-                                setState(() {
-                                  printTodoOnConfirm = v ?? false;
-                                });
-                              },
-                              dense: true,
-                              contentPadding: EdgeInsets.zero,
-                              controlAffinity: ListTileControlAffinity.leading,
-                              activeColor: kDlgAccent,
-                              checkColor: Colors.white,
-                              title: const Text(
-                                '알림장 인쇄',
-                                style: TextStyle(
-                                  color: kDlgText,
-                                  fontWeight: FontWeight.w700,
-                                  fontSize: 14,
-                                ),
-                              ),
-                              subtitle: const Text(
-                                '확인 시 학습 리포트 + 숙제/행동 리스트를 바로 인쇄합니다.',
-                                style: TextStyle(
-                                  color: kDlgTextSub,
-                                  fontSize: 12,
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          SizedBox(
-                            width: 128,
-                            height: 45,
-                            child: OutlinedButton.icon(
-                              onPressed: previewing
-                                  ? null
-                                  : () async {
-                                      setState(() {
-                                        previewing = true;
-                                      });
-                                      try {
-                                        final ids = selected.entries
-                                            .where((e) => e.value)
-                                            .map((e) => e.key)
-                                            .toList();
-                                        final selectedBehaviorIds =
-                                            selectedBehaviors.entries
-                                                .where((e) => e.value)
-                                                .map((e) => e.key)
-                                                .toList();
-                                        final irregularCounts = <String, int>{};
-                                        for (final behavior
-                                            in behaviorAssignments) {
-                                          if (!behavior.isIrregular) continue;
-                                          if (!(selectedBehaviors[
-                                                  behavior.id] ??
-                                              false)) {
-                                            continue;
-                                          }
-                                          irregularCounts[behavior.id] =
-                                              (irregularBehaviorCounts[
-                                                          behavior.id] ??
-                                                      1)
-                                                  .clamp(1, 20)
-                                                  .toInt();
-                                        }
-                                        final baseDate = anchorTime ??
-                                            selectedDueDate ??
-                                            DateTime.now();
-                                        DateTime? arrival;
-                                        DateTime? classEnd;
-                                        String? className;
-                                        String? setId;
-                                        for (final rec in DataManager
-                                            .instance.attendanceRecords) {
-                                          if (rec.studentId != studentId)
-                                            continue;
-                                          if (!_isSameDay(
-                                              rec.classDateTime, baseDate))
-                                            continue;
-                                          arrival = rec.arrivalTime;
-                                          classEnd = rec.classEndTime;
-                                          className = rec.className;
-                                          setId = rec.setId;
-                                          break;
-                                        }
-                                        await previewHomeworkTodoSheet(
-                                          studentId: studentId,
-                                          studentName:
-                                              _resolveStudentName(studentId),
-                                          classDateTime: baseDate,
-                                          arrivalTime: arrival,
-                                          departureTime: DateTime.now(),
-                                          selectedHomeworkIds: ids,
-                                          additionalHomeworkIds:
-                                              additionalHomeworkIds.toList(
-                                            growable: false,
-                                          ),
-                                          selectedBehaviorIds:
-                                              selectedBehaviorIds,
-                                          irregularBehaviorCounts:
-                                              irregularCounts,
-                                          dueDate: selectedDueDate,
-                                          className: className,
-                                          classEndTime: classEnd,
-                                          setId: setId,
-                                        );
-                                      } finally {
-                                        if (ctx.mounted) {
-                                          setState(() {
-                                            previewing = false;
-                                          });
-                                        }
-                                      }
-                                    },
-                              icon: Icon(
-                                previewing
-                                    ? Icons.hourglass_bottom_rounded
-                                    : Icons.preview_outlined,
-                                size: 16,
-                              ),
-                              label: Text(previewing ? '준비중' : '미리보기'),
-                              style: OutlinedButton.styleFrom(
-                                foregroundColor: kDlgTextSub,
-                                side: const BorderSide(color: kDlgBorder),
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 10,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(ctx).pop(null),
-                style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
-                child: const Text('취소'),
-              ),
-              FilledButton(
-                onPressed: () {
-                  final ids = selected.entries
-                      .where((e) => e.value)
-                      .map((e) => e.key)
-                      .toList();
-                  final selectedBehaviorIds = selectedBehaviors.entries
-                      .where((e) => e.value)
-                      .map((e) => e.key)
-                      .toList();
-                  final irregularCounts = <String, int>{};
-                  for (final behavior in behaviorAssignments) {
-                    if (!behavior.isIrregular) continue;
-                    if (!(selectedBehaviors[behavior.id] ?? false)) continue;
-                    irregularCounts[behavior.id] =
-                        (irregularBehaviorCounts[behavior.id] ?? 1)
-                            .clamp(1, 20)
-                            .toInt();
-                  }
-                  Navigator.of(ctx).pop(HomeworkAssignSelection(
-                    itemIds: ids,
-                    dueDate: selectedDueDate,
-                    dueDateByItemId: <String, DateTime>{
-                      for (final entry in groupEntries)
-                        for (final child in entry.children)
-                          if (ids.contains(child.id) &&
-                              (dueDateChanged
-                                      ? selectedDueDate
-                                      : (initialDueDateByGroupId[
-                                              entry.group.id] ??
-                                          selectedDueDate)) !=
-                                  null)
-                            child.id: (dueDateChanged
-                                ? selectedDueDate!
-                                : (initialDueDateByGroupId[entry.group.id] ??
-                                    selectedDueDate!)),
-                    },
-                    selectableItemIds: allGroupChildIds.toList(),
-                    planHomeworkItemIds: initialSelectedItemIds == null
-                        ? const <String>[]
-                        : ids
-                            .where(initialSelectedItemIds.contains)
-                            .toList(growable: false),
-                    printTodoOnConfirm: printTodoOnConfirm,
-                    selectedBehaviorIds: selectedBehaviorIds,
-                    irregularBehaviorCounts: irregularCounts,
-                  ));
-                },
-                style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
-                child: const Text('확인'),
-              ),
-            ],
-          );
-        },
-      );
-    },
-  );
-}
-
 Future<void> printHomeworkTodoSheet({
   required String studentId,
   required String studentName,
@@ -1135,6 +449,38 @@ Future<void> printHomeworkTodoSheet({
   final outPath = await _buildHomeworkTodoPdf(payload: payload);
   await _openPrintDialogForPath(outPath);
   _scheduleTempDelete(outPath);
+  _refreshLessonRecordAfterPrint(
+    studentId: studentId,
+    classDateTime: classDateTime,
+  );
+}
+
+AttendanceRecord? _findTodoSheetAttendanceRecord({
+  required String studentId,
+  required DateTime classDateTime,
+}) {
+  AttendanceRecord? matched;
+  for (final rec in DataManager.instance.attendanceRecords) {
+    if (rec.studentId != studentId) continue;
+    if (!_isSameDay(rec.classDateTime, classDateTime)) continue;
+    matched = rec;
+    if (rec.classDateTime == classDateTime) break;
+  }
+  return matched;
+}
+
+/// 하원 뒤 알림장을 다시 뽑으면 그 사이 채점·검사가 반영되도록 요약을 다시 계산한다.
+void _refreshLessonRecordAfterPrint({
+  required String studentId,
+  required DateTime classDateTime,
+}) {
+  final record = _findTodoSheetAttendanceRecord(
+    studentId: studentId,
+    classDateTime: classDateTime,
+  );
+  final attendanceId = (record?.id ?? '').trim();
+  if (attendanceId.isEmpty || record?.departureTime == null) return;
+  unawaited(LessonRecordService.instance.refresh(attendanceId));
 }
 
 Future<void> previewHomeworkTodoSheet({
@@ -1172,19 +518,27 @@ Future<void> previewHomeworkTodoSheet({
   _scheduleTempDelete(outPath);
 }
 
-String _resolveStudentName(String studentId) {
-  try {
-    final row = DataManager.instance.students.firstWhere(
-      (s) => s.student.id == studentId,
-    );
-    final name = row.student.name.trim();
-    if (name.isNotEmpty) return name;
-  } catch (_) {}
-  return '학생';
-}
-
 bool _isSameDay(DateTime a, DateTime b) =>
     a.year == b.year && a.month == b.month && a.day == b.day;
+
+/// [day]의 검사 중 그 숙제 배정의 첫 검사가 있는지 (서버 _lesson_record_compute 와 같은 기준).
+bool _hasFirstAssignmentCheckOn(
+  List<HomeworkAssignmentCheck> checks,
+  DateTime day,
+) {
+  for (final c in checks) {
+    if (!_isSameDay(c.checkedAt, day)) continue;
+    final assignmentId = (c.assignmentId ?? '').trim();
+    if (assignmentId.isEmpty) return true;
+    final checkedBefore = checks.any(
+      (p) =>
+          (p.assignmentId ?? '').trim() == assignmentId &&
+          p.checkedAt.isBefore(c.checkedAt),
+    );
+    if (!checkedBefore) return true;
+  }
+  return false;
+}
 
 String _extractBookNameFromHomework(HomeworkItem hw) {
   final contentRaw = (hw.content ?? '').trim();
@@ -1349,12 +703,6 @@ String _formatMonthDay(DateTime dt) {
   return '${two(dt.month)}.${two(dt.day)}';
 }
 
-String _formatPageText(String rawPage) {
-  final page = rawPage.trim();
-  if (page.isEmpty || page == '-') return '-';
-  return 'p. $page';
-}
-
 String _formatPageTextCompact(String rawPage) {
   final page = rawPage.trim();
   if (page.isEmpty || page == '-') return '-';
@@ -1393,7 +741,7 @@ String _formatWeekdayKorean(DateTime dt) {
 
 String _formatClassTimeRange(DateTime start, DateTime? end) {
   final endText = _formatTime(end ?? start.add(const Duration(hours: 2)));
-  return '${_formatWeekdayKorean(start)}요일 ${_formatTime(start)} - $endText';
+  return '(${_formatWeekdayKorean(start)} ${_formatTime(start)} - $endText)';
 }
 
 String _behaviorDegreeLabel(int count) {
@@ -1505,18 +853,34 @@ int _estimateLearningMsForItemToday({
   return totalMs.clamp(0, 1000 * 60 * 60 * 24).toInt();
 }
 
-Future<Map<String, int>> _computeTodayLearningMsByItemFromPhaseEvents({
+String _learningGroupKeyOf(HomeworkItem hw) {
+  final groupId = (HomeworkStore.instance.groupIdOfItem(hw.id) ?? '').trim();
+  return groupId.isNotEmpty ? groupId : hw.id.trim();
+}
+
+/// 그룹(그룹이 없으면 과제) 단위 오늘 수행시간.
+///
+/// 회차 = 하위과제 중 하나라도 수행(phase 2)에 들어간 시점부터 모두 수행을
+/// 벗어날 때까지. 다른 그룹이 수행을 시작하면 서버가 나머지를 이벤트 없이
+/// 멈추므로 그 시점에 닫는다. 등원~하원 밖은 잘라내고, 그룹 누적 총 시간을
+/// 넘지 않는다.
+Future<Map<String, int>> _computeTodayLearningMsByGroupFromPhaseEvents({
+  required String studentId,
   required DateTime classDateTime,
   required DateTime departureTime,
+  DateTime? arrivalTime,
   required List<HomeworkItem> allItems,
 }) async {
   if (allItems.isEmpty) return const <String, int>{};
-  final itemIds = allItems
-      .map((e) => e.id.trim())
-      .where((e) => e.isNotEmpty)
-      .toSet()
-      .toList();
+  final itemById = <String, HomeworkItem>{
+    for (final hw in allItems)
+      if (hw.id.trim().isNotEmpty) hw.id.trim(): hw,
+  };
+  final itemIds = itemById.keys.toList();
   if (itemIds.isEmpty) return const <String, int>{};
+  final groupKeyByItem = <String, String>{
+    for (final hw in itemById.values) hw.id.trim(): _learningGroupKeyOf(hw),
+  };
 
   final dayStart =
       DateTime(classDateTime.year, classDateTime.month, classDateTime.day);
@@ -1532,7 +896,39 @@ Future<Map<String, int>> _computeTodayLearningMsByItemFromPhaseEvents({
   final now = DateTime.now();
   var capEnd = departureTime.isAfter(now) ? now : departureTime;
   if (capEnd.isAfter(dayEnd)) capEnd = dayEnd;
-  if (!capEnd.isAfter(dayStart)) return const <String, int>{};
+  var windowStart = dayStart;
+  if (arrivalTime != null && arrivalTime.isAfter(windowStart)) {
+    windowStart = arrivalTime;
+  }
+  if (!capEnd.isAfter(windowStart)) return const <String, int>{};
+
+  int groupTotalCapMs(String key) {
+    final group = HomeworkStore.instance.groupById(studentId, key);
+    final children = group == null
+        ? <HomeworkItem>[if (itemById[key] != null) itemById[key]!]
+        : HomeworkStore.instance
+            .itemsInGroup(studentId, group.id, includeCompleted: true);
+    int total = 0;
+    for (final child in children) {
+      final runStart = child.runStart;
+      final runningMs = runStart != null && now.isAfter(runStart)
+          ? now.difference(runStart).inMilliseconds
+          : 0;
+      total += math.max(0, child.accumulatedMs + runningMs);
+    }
+    return total;
+  }
+
+  Map<String, int> finalize(Map<String, int> raw) {
+    final out = <String, int>{};
+    for (final e in raw.entries) {
+      if (e.value <= 0) continue;
+      final cap = groupTotalCapMs(e.key);
+      final ms = cap > 0 ? math.min(e.value, cap) : e.value;
+      out[e.key] = ms.clamp(0, 1000 * 60 * 60 * 24).toInt();
+    }
+    return out;
+  }
 
   List<List<String>> chunksOf(List<String> source, int size) {
     final out = <List<String>>[];
@@ -1553,6 +949,7 @@ Future<Map<String, int>> _computeTodayLearningMsByItemFromPhaseEvents({
           .select('item_id, phase, at')
           .eq('academy_id', academyId)
           .inFilter('item_id', chunk)
+          .gte('at', dayStart.toUtc().toIso8601String())
           .lte('at', capEnd.toUtc().toIso8601String())
           .order('at', ascending: true);
       for (final row in (raw as List<dynamic>).cast<Map<String, dynamic>>()) {
@@ -1572,102 +969,66 @@ Future<Map<String, int>> _computeTodayLearningMsByItemFromPhaseEvents({
       return a.phase.compareTo(b.phase);
     });
 
-    final msByItem = <String, int>{};
-    String? runningItemId;
-    DateTime? runningStart;
+    final msByGroup = <String, int>{};
+    final runningChildrenByGroup = <String, Set<String>>{};
+    final cycleStartByGroup = <String, DateTime>{};
 
-    void accumulateInterval(String id, DateTime start, DateTime end) {
-      var from = start;
-      var to = end;
-      if (to.isAfter(capEnd)) to = capEnd;
-      if (from.isBefore(dayStart)) from = dayStart;
+    void closeCycle(String key, DateTime end) {
+      final start = cycleStartByGroup.remove(key);
+      runningChildrenByGroup.remove(key);
+      if (start == null) return;
+      var from = start.isBefore(windowStart) ? windowStart : start;
+      var to = end.isAfter(capEnd) ? capEnd : end;
       if (!to.isAfter(from)) return;
-      final delta = to.difference(from).inMilliseconds;
-      if (delta <= 0) return;
-      msByItem[id] = (msByItem[id] ?? 0) + delta;
+      msByGroup[key] = (msByGroup[key] ?? 0) + to.difference(from).inMilliseconds;
     }
 
     for (final ev in events) {
+      final key = groupKeyByItem[ev.itemId];
+      if (key == null) continue;
       if (ev.phase == 2) {
-        final activeId = runningItemId;
-        final activeStart = runningStart;
-        if (activeId != null && activeStart != null) {
-          accumulateInterval(activeId, activeStart, ev.at);
+        for (final other in cycleStartByGroup.keys.toList()) {
+          if (other != key) closeCycle(other, ev.at);
         }
-        runningItemId = ev.itemId;
-        runningStart = ev.at;
+        runningChildrenByGroup.putIfAbsent(key, () => <String>{}).add(ev.itemId);
+        cycleStartByGroup.putIfAbsent(key, () => ev.at);
         continue;
       }
-      final activeId = runningItemId;
-      final activeStart = runningStart;
-      if (activeId != null && activeId == ev.itemId && activeStart != null) {
-        accumulateInterval(activeId, activeStart, ev.at);
-        runningItemId = null;
-        runningStart = null;
-      }
+      final running = runningChildrenByGroup[key];
+      if (running == null) continue;
+      running.remove(ev.itemId);
+      if (running.isEmpty) closeCycle(key, ev.at);
     }
-    final activeId = runningItemId;
-    final activeStart = runningStart;
-    if (activeId != null && activeStart != null) {
-      accumulateInterval(activeId, activeStart, capEnd);
+    for (final key in cycleStartByGroup.keys.toList()) {
+      closeCycle(key, capEnd);
     }
 
-    // 이벤트 누락/레거시 대비: 현재 runStart만 최소 보정
-    for (final hw in allItems) {
+    // 수행 시작 이벤트가 누락된 채 지금 수행 중인 그룹만 최소 보정한다.
+    for (final hw in itemById.values) {
       final runStart = hw.runStart;
-      if (runStart == null) continue;
-      if (runStart.isAfter(capEnd)) continue;
-      final id = hw.id.trim();
-      if (id.isEmpty || msByItem.containsKey(id)) continue;
-      final from = runStart.isBefore(dayStart) ? dayStart : runStart;
+      if (runStart == null || runStart.isAfter(capEnd)) continue;
+      final key = groupKeyByItem[hw.id.trim()]!;
+      if (msByGroup.containsKey(key)) continue;
+      final from = runStart.isBefore(windowStart) ? windowStart : runStart;
       if (!capEnd.isAfter(from)) continue;
-      msByItem[id] = capEnd.difference(from).inMilliseconds;
+      msByGroup[key] = capEnd.difference(from).inMilliseconds;
     }
 
-    return {
-      for (final e in msByItem.entries)
-        e.key: e.value.clamp(0, 1000 * 60 * 60 * 24).toInt(),
-    };
+    return finalize(msByGroup);
   } catch (_) {
-    // 이벤트 조회 실패 시 기존 방식으로 폴백
     final fallback = <String, int>{};
-    for (final hw in allItems) {
+    for (final hw in itemById.values) {
       final ms = _estimateLearningMsForItemToday(
         hw: hw,
         classDateTime: classDateTime,
         departureTime: departureTime,
       );
-      if (ms > 0) fallback[hw.id.trim()] = ms;
+      if (ms <= 0) continue;
+      final key = groupKeyByItem[hw.id.trim()]!;
+      if (ms > (fallback[key] ?? 0)) fallback[key] = ms;
     }
-    return fallback;
+    return finalize(fallback);
   }
-}
-
-int _sumTodayLearningMsByGroupPolicy({
-  required String studentId,
-  required Map<String, int> itemMsById,
-}) {
-  int total = 0;
-  final coveredItemIds = <String>{};
-  final groups = HomeworkStore.instance.groups(studentId);
-  for (final group in groups) {
-    final children = HomeworkStore.instance
-        .itemsInGroup(studentId, group.id, includeCompleted: true);
-    if (children.isEmpty) continue;
-    int groupMs = 0;
-    for (final hw in children) {
-      coveredItemIds.add(hw.id);
-      final ms = (itemMsById[hw.id] ?? 0).clamp(0, 1000 * 60 * 60 * 24).toInt();
-      if (ms > groupMs) groupMs = ms;
-    }
-    if (groupMs > 0) total += groupMs;
-  }
-  for (final hw in HomeworkStore.instance.items(studentId)) {
-    if (coveredItemIds.contains(hw.id)) continue;
-    final ms = (itemMsById[hw.id] ?? 0).clamp(0, 1000 * 60 * 60 * 24).toInt();
-    if (ms > 0) total += ms;
-  }
-  return total.clamp(0, 1000 * 60 * 60 * 24).toInt();
 }
 
 int _computeClassWindowMs({
@@ -1736,7 +1097,12 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
   final allHomeworkItems = HomeworkStore.instance.items(studentId);
   final checkRates = <_CheckRateEntry>[];
   final coveredDueItemIds = <String>{};
-  final groupsForCheckRates = HomeworkStore.instance.groups(studentId);
+  // 오늘 완료되어 보관된 그룹도 포함한다. 보관 그룹을 빼면
+  // 숙제 검사 목록이 하위과제마다 한 줄로 갈라진다.
+  final groupsForCheckRates = HomeworkStore.instance.groups(
+    studentId,
+    includeArchived: true,
+  );
   for (final group in groupsForCheckRates) {
     final children = HomeworkStore.instance
         .itemsInGroup(studentId, group.id, includeCompleted: true);
@@ -1767,9 +1133,14 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
       final checks = checksByItem[hw.id] ?? const <HomeworkAssignmentCheck>[];
       final hasTodayCheck =
           checks.any((c) => _isSameDay(c.checkedAt, classDateTime));
-      // 포함 조건: ①오늘 정규 검사예정 ②오늘 검사한 기록 존재
+      final hasFirstCheckToday =
+          _hasFirstAssignmentCheckOn(checks, classDateTime);
+      // 포함 조건: ①오늘 정규 검사예정 ②오늘 검사가 그 배정의 첫 검사
       // (지난 시간 결석분 / 오늘 완료되어 마감정보가 사라진 과제) ③미리 해온(추가검사) 기록.
-      if (dueAssignments.isEmpty && !hasTodayCheck && preDone <= 0) continue;
+      // 이미 검사한 배정을 오늘 다시 채점한 과제는 숙제가 아니다.
+      if (dueAssignments.isEmpty && !hasFirstCheckToday && preDone <= 0) {
+        continue;
+      }
       final window = _progressWindowForChecks(checks, classDateTime);
       HomeworkAssignmentBrief? repAssign;
       int itemPrevious;
@@ -1786,8 +1157,8 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
         itemCurrent = hasTodayCheck
             ? math.max(window.current, latestDue.progress)
             : itemPrevious;
-      } else if (hasTodayCheck) {
-        // 오늘 검사는 했지만 오늘 마감이 아닌 과제: 정규 숙제로 본다(분모 포함).
+      } else if (hasFirstCheckToday) {
+        // 오늘 첫 검사를 했지만 오늘 마감이 아닌 과제: 정규 숙제로 본다(분모 포함).
         groupHasTodayCheckItem = true;
         itemIsRegular = true;
         repAssign = latestAssignmentByItem[hw.id];
@@ -1800,6 +1171,13 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
         repAssign = latestAssignmentByItem[hw.id];
         itemPrevious = window.previous;
         itemCurrent = math.max(window.current, preDone);
+      }
+      // 확인 검사 없이 오늘 완료 처리된 과제는 100%로 본다
+      // (서버 _lesson_record_compute 의 숙제 완료 기준과 같다).
+      if (!hasTodayCheck &&
+          hw.completedAt != null &&
+          _isSameDay(hw.completedAt!, classDateTime)) {
+        itemCurrent = math.max(itemCurrent, 100);
       }
       if (itemIsRegular) groupHasRegularDue = true;
       // 내준 날짜/마감 날짜: 가장 이른 내준 시점의 대표 assignment 기준.
@@ -1868,8 +1246,11 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
     final checks = checksByItem[entry.key] ?? const <HomeworkAssignmentCheck>[];
     final hasTodayCheck =
         checks.any((c) => _isSameDay(c.checkedAt, classDateTime));
-    // 오늘 마감이거나, 오늘 검사한 기록이 있으면 포함.
-    if (dueAssignments.isEmpty && !hasTodayCheck) continue;
+    // 오늘 마감이거나, 오늘 검사가 그 배정의 첫 검사면 포함.
+    if (dueAssignments.isEmpty &&
+        !_hasFirstAssignmentCheckOn(checks, classDateTime)) {
+      continue;
+    }
     final HomeworkAssignmentBrief? repAssign = dueAssignments.isNotEmpty
         ? dueAssignments.last
         : latestAssignmentByItem[entry.key];
@@ -1893,9 +1274,14 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
     final previousProgress = hasTodayCheck
         ? window.previous
         : math.max(window.previous, latestDueProgress);
+    final completedTodayWithoutCheck = !hasTodayCheck &&
+        hw?.completedAt != null &&
+        _isSameDay(hw!.completedAt!, classDateTime);
     final currentProgress = hasTodayCheck
         ? math.max(window.current, latestDueProgress)
-        : previousProgress;
+        : completedTodayWithoutCheck
+            ? math.max(previousProgress, 100)
+            : previousProgress;
     DateTime? checkedAt;
     String? checkOutcome;
     String? checkReason;
@@ -1944,10 +1330,17 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
     );
   }
 
-  final todayLearningMsByItem =
-      await _computeTodayLearningMsByItemFromPhaseEvents(
+  final matchedRecord = _findTodoSheetAttendanceRecord(
+    studentId: studentId,
+    classDateTime: classDateTime,
+  );
+  final resolvedArrival = arrivalTime ?? matchedRecord?.arrivalTime;
+  final todayLearningMsByGroup =
+      await _computeTodayLearningMsByGroupFromPhaseEvents(
+    studentId: studentId,
     classDateTime: classDateTime,
     departureTime: departureTime,
+    arrivalTime: resolvedArrival,
     allItems: allHomeworkItems,
   );
 
@@ -1958,7 +1351,7 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
     final children = HomeworkStore.instance
         .itemsInGroup(studentId, group.id, includeCompleted: true);
     if (children.isEmpty) continue;
-    int groupStudyMs = 0;
+    final int groupStudyMs = todayLearningMsByGroup[group.id] ?? 0;
     int groupCheckCount = 0;
     int groupTotalCount = 0;
     bool hasActivity = false;
@@ -1966,10 +1359,7 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
     String? firstBookAndCourse;
     for (final hw in children) {
       coveredDonutItemIds.add(hw.id);
-      final studyMs = todayLearningMsByItem[hw.id] ?? 0;
-      if (studyMs > groupStudyMs) groupStudyMs = studyMs;
-      if (_hasTodayHomeworkActivity(hw, classDateTime) || studyMs > 0)
-        hasActivity = true;
+      if (_hasTodayHomeworkActivity(hw, classDateTime)) hasActivity = true;
       final todayChecks = (checksByItem[hw.id] ?? [])
           .where((c) => _isSameDay(c.checkedAt, classDateTime))
           .length;
@@ -2001,6 +1391,11 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
           (hw.count != null && hw.count! > 0) ? hw.count.toString() : '-';
       subs.add(_SubWorkEntry(title: t, page: pg.isEmpty ? '-' : pg, count: ct));
     }
+    final totals = _groupCheckPassTotals(
+      group: group,
+      children: children,
+      departureTime: departureTime,
+    );
     classWorkEntries.add(
       _ClassWorkEntry(
         title: groupTitle,
@@ -2010,6 +1405,9 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
         assignedAt: earliestAssigned,
         studyMs: groupStudyMs,
         todayCheckCount: groupCheckCount,
+        totalCheckCount: totals.checks,
+        passed: totals.passed,
+        totalAccumulatedMs: totals.totalMs,
         subEntries: subs,
       ),
     );
@@ -2023,27 +1421,20 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
           e.completedAt != null &&
           _isSameDay(e.completedAt!, classDateTime) &&
           !coveredDonutItemIds.contains(e.id) &&
-          (todayLearningMsByItem[e.id] ?? 0) > 0)
+          (todayLearningMsByGroup[_learningGroupKeyOf(e)] ?? 0) > 0)
       .toList(growable: false);
   if (donutLeftoverCompleted.isNotEmpty) {
-    final allGroupsForLeftover = HomeworkStore.instance.groups(studentId);
     final leftoverByGroupKey = <String, List<HomeworkItem>>{};
     for (final hw in donutLeftoverCompleted) {
-      String? matchedGroupId;
-      for (final g in allGroupsForLeftover) {
-        final ch = HomeworkStore.instance
-            .itemsInGroup(studentId, g.id, includeCompleted: true);
-        if (ch.any((c) => c.id == hw.id)) {
-          matchedGroupId = g.id;
-          break;
-        }
-      }
-      final key = matchedGroupId ?? hw.id;
+      // 오늘 모두 끝나 보관(archived)된 그룹도 그룹 단위로 묶는다.
+      final matchedGroupId =
+          (HomeworkStore.instance.groupIdOfItem(hw.id) ?? '').trim();
+      final key = matchedGroupId.isNotEmpty ? matchedGroupId : hw.id;
       leftoverByGroupKey.putIfAbsent(key, () => <HomeworkItem>[]).add(hw);
     }
     for (final entry in leftoverByGroupKey.entries) {
       final items = entry.value;
-      int groupStudyMs = 0;
+      final int groupStudyMs = todayLearningMsByGroup[entry.key] ?? 0;
       int groupCheckCount = 0;
       int groupTotalCount = 0;
       DateTime? earliestAssigned;
@@ -2051,8 +1442,6 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
       String? firstBookAndCourse;
       final subs = <_SubWorkEntry>[];
       for (final hw in items) {
-        final studyMs = todayLearningMsByItem[hw.id] ?? 0;
-        if (studyMs > groupStudyMs) groupStudyMs = studyMs;
         groupCheckCount += (checksByItem[hw.id] ?? const [])
             .where((c) => _isSameDay(c.checkedAt, classDateTime))
             .length;
@@ -2077,6 +1466,15 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
       final groupTitle = groupObj != null && groupObj.title.trim().isNotEmpty
           ? groupObj.title.trim()
           : items.first.title.trim();
+      final groupChildren = groupObj == null
+          ? items
+          : HomeworkStore.instance
+              .itemsInGroup(studentId, groupObj.id, includeCompleted: true);
+      final totals = _groupCheckPassTotals(
+        group: groupObj,
+        children: groupChildren.isEmpty ? items : groupChildren,
+        departureTime: departureTime,
+      );
       classWorkEntries.add(
         _ClassWorkEntry(
           title: groupTitle,
@@ -2086,6 +1484,9 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
           assignedAt: earliestAssigned,
           studyMs: groupStudyMs,
           todayCheckCount: groupCheckCount,
+          totalCheckCount: totals.checks,
+          passed: totals.passed,
+          totalAccumulatedMs: totals.totalMs,
           subEntries: subs,
         ),
       );
@@ -2174,14 +1575,8 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
           ? groupObj.title.trim()
           : first.title.trim();
       final bookCourse = _formatBookAndCourseFromHomework(representative);
-      final totalMs = items.fold<int>(
-        0,
-        (s, e) =>
-            s +
-            (todayLearningMsByItem[e.id.trim()] ?? 0)
-                .clamp(0, 1000 * 60 * 60 * 24)
-                .toInt(),
-      );
+      final totalMs = <String>{for (final e in items) _learningGroupKeyOf(e)}
+          .fold<int>(0, (s, key) => s + (todayLearningMsByGroup[key] ?? 0));
       final assignmentRoundIndexes = <int>{};
       final assignmentIdsFallback = <String>{};
       for (final item in items) {
@@ -2326,12 +1721,18 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
       final fromItem = children.first.title.trim();
       return fromItem.isEmpty ? '(제목 없음)' : fromItem;
     })();
-    String? bookAndCourse;
+    // 학습앱 그룹 카드는 진행 중인 첫 하위과제로 1행을 만든다.
+    final cardSource = (group == null
+            ? null
+            : HomeworkStore.instance
+                .itemsInGroup(studentId, group.id)
+                .firstOrNull) ??
+        children.first;
+    final bookAndCourse = homeworkCardFirstLine(cardSource);
     int totalCount = 0;
     final memos = <String>[];
     DateTime? earliestAssigned;
     for (final hw in children) {
-      bookAndCourse ??= _formatBookAndCourseFromHomework(hw);
       totalCount += homeworkItemProblemCount(
         count: hw.count,
         unitMappings: hw.unitMappings,
@@ -2349,9 +1750,8 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
         (hw) => (page: hw.page, unitMappings: hw.unitMappings),
       ),
     );
-    final bookText = (bookAndCourse ?? '').trim().isEmpty
-        ? '교재 미기재'
-        : bookAndCourse!.trim();
+    final bookText =
+        bookAndCourse.trim().isEmpty ? '-' : bookAndCourse.trim();
     final assignedAt = earliestAssigned ?? classDateTime;
     final assignedDateText = _formatMonthDay(assignedAt);
     final countText = totalCount > 0 ? totalCount.toString() : '-';
@@ -2385,18 +1785,11 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
     todoEntries.add(const _TodoListEntry(primary: '• 숙제 없음'));
   }
 
-  final rawLearningMs = _sumTodayLearningMsByGroupPolicy(
-    studentId: studentId,
-    itemMsById: todayLearningMsByItem,
-  );
+  final rawLearningMs = todayLearningMsByGroup.values
+      .fold<int>(0, (s, ms) => s + ms)
+      .clamp(0, 1000 * 60 * 60 * 24)
+      .toInt();
 
-  AttendanceRecord? matchedRecord;
-  for (final rec in DataManager.instance.attendanceRecords) {
-    if (rec.studentId != studentId) continue;
-    if (!_isSameDay(rec.classDateTime, classDateTime)) continue;
-    matchedRecord = rec;
-    if (rec.classDateTime == classDateTime) break;
-  }
   final resolvedClassName = (() {
     String normalize(String raw) {
       final v = raw.trim();
@@ -2414,11 +1807,14 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
     return '정규 수업';
   })();
   final resolvedClassEnd = classEndTime ?? matchedRecord?.classEndTime;
-  final resolvedArrival = arrivalTime ?? matchedRecord?.arrivalTime;
   final explicitSetId = (setId ?? '').trim();
   final resolvedSetId = explicitSetId.isNotEmpty
       ? explicitSetId
       : (matchedRecord?.setId ?? '').trim();
+  final lessonAttendanceId = (matchedRecord?.id ?? '').trim();
+  final lessonRecord = lessonAttendanceId.isEmpty
+      ? null
+      : await LessonRecordService.instance.fetchLive(lessonAttendanceId);
   final classWindowMs = _computeClassWindowMs(
     classDateTime: classDateTime,
     departureTime: departureTime,
@@ -2467,6 +1863,12 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
       studentId: studentId,
       classDateTime: classDateTime,
       setId: resolvedSetId,
+    ),
+    lessonRecord: lessonRecord,
+    specialNotes: _buildSpecialNotes(
+      studentId: studentId,
+      classDateTime: classDateTime,
+      arrivalTime: resolvedArrival,
     ),
   );
 }
@@ -2632,11 +2034,25 @@ Future<sf.PdfBitmap?> _loadTodoEmojiBitmap(String assetPath) async {
 Future<String> _buildHomeworkTodoPdf({
   required _TodoSheetPayload payload,
 }) async {
+  final design = await loadTodoSheetDesign();
+  final bytes = design == TodoSheetDesign.refined
+      ? await _renderTodoSheetRefined(payload)
+      : await _renderTodoSheetClassic(payload);
+  final dir = await getTemporaryDirectory();
+  final outPath = p.join(
+    dir.path,
+    'homework_todo_${DateTime.now().millisecondsSinceEpoch}.pdf',
+  );
+  await File(outPath).writeAsBytes(bytes, flush: true);
+  return outPath;
+}
+
+Future<List<int>> _renderTodoSheetClassic(_TodoSheetPayload payload) async {
   final doc = sf.PdfDocument();
   doc.pageSettings.orientation = sf.PdfPageOrientation.portrait;
   doc.pageSettings.margins.all = 18;
-  // 상단만 10 축소. 본문 높이가 10 늘어 접는 선(숙제 리스트)은 5만 내려간다.
-  doc.pageSettings.margins.top = 8;
+  // 상단 여백 0. 본문 높이가 8 늘어 접는 선은 4 내려가므로 숙제 리스트에서 되돌린다.
+  doc.pageSettings.margins.top = 0;
   final page = doc.pages.add();
   final size = page.getClientSize();
   final graphics = page.graphics;
@@ -2649,13 +2065,76 @@ Future<String> _buildHomeworkTodoPdf({
   final valueFont = await _loadTodoPdfFont(11.2, bold: true);
   final textBrush = sf.PdfSolidBrush(sf.PdfColor(28, 28, 28));
   final subBrush = sf.PdfSolidBrush(sf.PdfColor(95, 95, 95));
+  const textColor = Color(0xFF1C1C1C);
+  const subColor = Color(0xFF5F5F5F);
+
+  /// 수식이 있으면 학습 화면과 같은 조판으로, 없으면 PDF 글꼴로 그린다.
+  Future<void> drawLine(
+    sf.PdfGraphics g,
+    String text,
+    sf.PdfFont font, {
+    required double fontSize,
+    required bool bold,
+    required sf.PdfBrush brush,
+    required Color color,
+    required Rect bounds,
+    sf.PdfStringFormat? format,
+  }) async {
+    final normalized = normalizeTodoSheetMath(text);
+    if (!todoSheetMathNeedsPaint(normalized)) {
+      g.drawString(text, font, brush: brush, bounds: bounds, format: format);
+      return;
+    }
+    final shot = await rasterizeTodoSheetMath(
+      text: normalized,
+      fontSize: fontSize,
+      bold: bold,
+      color: color,
+      maxWidth: bounds.width,
+    );
+    if (shot == null) {
+      g.drawString(text, font, brush: brush, bounds: bounds, format: format);
+      return;
+    }
+    // 분수는 글자보다 키가 커서 줄 칸을 조금 넘는다. 위아래 줄 간 여백까지만 허용하고,
+    // 그보다 크면 줄 전체를 비율대로 줄인다.
+    final maxH = bounds.height + 3;
+    final scale = math.min(
+      1.0,
+      math.min(maxH / shot.height, bounds.width / shot.width),
+    );
+    final w = shot.width * scale;
+    final h = shot.height * scale;
+    final top = bounds.top + (bounds.height - h) / 2;
+    final alignRight = format?.alignment == sf.PdfTextAlignment.right;
+    final x = alignRight ? bounds.right - w : bounds.left;
+    g.drawImage(sf.PdfBitmap(shot.bytes), Rect.fromLTWH(x, top, w, h));
+  }
   final linePen = sf.PdfPen(sf.PdfColor(178, 178, 178), width: 1.05);
   final weakLinePen = sf.PdfPen(sf.PdfColor(222, 222, 222), width: 0.6);
+  const overflowLineH = 14.0;
+  final overflowBrush = sf.PdfSolidBrush(sf.PdfColor(150, 150, 150));
+  void drawOverflow(
+    sf.PdfGraphics g,
+    double x,
+    double y,
+    double w,
+    int count,
+  ) {
+    g.drawString(
+      '외 $count개',
+      subFont,
+      brush: overflowBrush,
+      bounds: Rect.fromLTWH(x, y, w, overflowLineH),
+    );
+  }
 
   final left = 10.0;
   final right = size.width - 10;
   final contentWidth = right - left;
-  final top = 6.0;
+  // 1페이지 학원명 글자 상단을 용지 끝에 붙인다. 2페이지는 기존 본문 여백을 유지한다.
+  final top = -5.0;
+  final page2Top = 6.0;
   final bottom = size.height - 6;
 
   void drawLabelValue({
@@ -2724,10 +2203,17 @@ Future<String> _buildHomeworkTodoPdf({
   );
 
   graphics.drawString(
-    '일자 ${_formatDate(payload.classDateTime)}',
+    _formatDate(payload.classDateTime),
     labelFont,
     brush: subBrush,
     bounds: Rect.fromLTWH(right - 130, top + 8, 130, 14),
+    format: sf.PdfStringFormat(alignment: sf.PdfTextAlignment.right),
+  );
+  graphics.drawString(
+    payload.classTimeText,
+    labelFont,
+    brush: subBrush,
+    bounds: Rect.fromLTWH(right - 160, top + 23, 160, 14),
     format: sf.PdfStringFormat(alignment: sf.PdfTextAlignment.right),
   );
 
@@ -2756,24 +2242,12 @@ Future<String> _buildHomeworkTodoPdf({
     bounds: Rect.fromLTWH(rightInfoX, infoY1, rightInfoW, 16),
   );
   final classNameX = rightInfoX + classLabelW + 4;
-  final classNameMaxW = rightInfoW * 0.30;
   graphics.drawString(
     payload.className,
     valueFont,
     brush: textBrush,
-    bounds: Rect.fromLTWH(classNameX, infoY1 - 1, classNameMaxW, 18),
-  );
-  final classTimeX = left + metricW * 2 + metricGap * 2;
-  graphics.drawString(
-    payload.classTimeText,
-    bodyFont,
-    brush: textBrush,
     bounds: Rect.fromLTWH(
-      classTimeX,
-      infoY1 + 1,
-      rightInfoX + rightInfoW - classTimeX,
-      16,
-    ),
+        classNameX, infoY1 - 1, rightInfoX + rightInfoW - classNameX, 18),
   );
 
   drawLabelValue(
@@ -2809,66 +2283,43 @@ Future<String> _buildHomeworkTodoPdf({
   final stayMs = (arrMs > 0 && depMs > arrMs) ? depMs - arrMs : 0;
   final breakMs = math.max(0, stayMs - totalLearningMs);
   final donutCx = left + 80;
-  final donutCy = contentTop + 120;
-  final donutR = 60.0;
-  final donutInnerR = 34.0;
-  final donutRightX = donutCx + donutR;
-  // 기존 간격(약 40px) 대비 20% 축소 -> 약 32px
-  const legendGapFromDonut = 32.0;
-  final legendX = donutRightX + legendGapFromDonut;
-  final legendTopY = contentTop + 40;
-  const legendW = 166.0;
-  final summaryDividerX = legendX + legendW + 8;
-  final summaryX = summaryDividerX + 10;
+  // 타이틀(약 18) 바로 아래. 도넛·범례를 조금 줄여 학습 기록 칸은 그대로 둔다.
+  const donutR = 72.0;
+  const donutInnerR = 42.0;
+  // '오늘 푼 문제' 제목과 같은 높이에서 도넛·수업 요약 목록이 시작한다.
+  final recordTop = contentTop + 30;
+  final donutTop = recordTop;
+  final donutCy = donutTop + donutR;
+  const legendGapFromDonut = 20.0;
+  final legendX = donutCx + donutR + legendGapFromDonut;
+  final legendTopY = recordTop;
+  const legendW = 157.0;
+  // 범례 끝과 학습 기록 글자 사이 27 = 이전 18의 1.5배.
+  const columnGap = 27.0;
+  final legendEnd = legendX + legendW;
+  final summaryX = legendEnd + columnGap;
+  final summaryDividerX = legendEnd + 12;
   final summaryW = math.max(0.0, right - summaryX - 2);
   final visibleCheckRateCount =
       payload.checkRates.where((e) => e.progress != null).length;
 
   // ── Page 1: 수업 요약 (Class Summary) + 숙제 검사 내역 ──
+  final panelTitleFont = await _loadTodoPdfFont(11.4, bold: true);
   graphics.drawString(
     '수업 요약',
-    sectionFont,
-    brush: subBrush,
+    panelTitleFont,
+    brush: textBrush,
     bounds: Rect.fromLTWH(left, contentTop, summaryDividerX - left - 8, 18),
   );
   if (summaryW > 48) {
-    final checkTitleFont = await _loadTodoPdfFont(11.4, bold: true);
-    graphics.drawString('숙제 검사 내역 $visibleCheckRateCount개', checkTitleFont,
+    graphics.drawString('학습 기록', panelTitleFont,
         brush: textBrush,
         bounds: Rect.fromLTWH(summaryX, contentTop, summaryW, 18));
   }
 
-  void drawPage1ProgressBar({
-    required double x,
-    required double y,
-    required double w,
-    required int previousPct,
-    required int todayPct,
-  }) {
-    const h = 4.6;
-    final prev = previousPct.clamp(0, 100).toDouble();
-    final today = todayPct.clamp(0, math.max(0, 100 - previousPct)).toDouble();
-    graphics.drawRectangle(
-      pen: weakLinePen,
-      brush: sf.PdfSolidBrush(sf.PdfColor(238, 238, 238)),
-      bounds: Rect.fromLTWH(x, y, w, h),
-    );
-    if (prev > 0) {
-      graphics.drawRectangle(
-        brush: sf.PdfSolidBrush(sf.PdfColor(185, 185, 185)),
-        bounds: Rect.fromLTWH(x, y, w * prev / 100, h),
-      );
-    }
-    if (today > 0) {
-      final prevW = w * prev / 100;
-      graphics.drawRectangle(
-        brush: sf.PdfSolidBrush(sf.PdfColor(76, 175, 80)),
-        bounds: Rect.fromLTWH(x + prevW, y, w * today / 100, h),
-      );
-    }
-  }
-
-  if (donutEntries.isEmpty && totalLearningMs <= 0) {
+  final hasDonut = !(donutEntries.isEmpty && totalLearningMs <= 0);
+  double legendBottomY = contentTop;
+  if (!hasDonut) {
     graphics.drawString(
       '• 오늘 수행 기록 없음',
       bodyFont,
@@ -2886,14 +2337,26 @@ Future<String> _buildHomeworkTodoPdf({
       sf.PdfColor(121, 85, 72),
       sf.PdfColor(63, 81, 181),
     ];
-    final slices = <({String label, int ms, int checks, sf.PdfColor color})>[];
+    final slices = <({
+      String label,
+      int ms,
+      String? checkText,
+      String? totalText,
+      sf.PdfColor color
+    })>[];
     for (int i = 0; i < donutEntries.length; i++) {
       final e = donutEntries[i];
       if (e.studyMs <= 0) continue;
+      final checks = e.totalCheckCount;
+      final checkText = checks <= 0
+          ? (e.passed ? '검사 없이 통과' : '검사 전')
+          : (e.passed ? '$checks회 검사 후 통과' : '$checks회 검사 · 진행 중');
+      final totalMin = (e.totalAccumulatedMs / 60000).round();
       slices.add((
         label: e.title,
         ms: e.studyMs,
-        checks: e.todayCheckCount,
+        checkText: checkText,
+        totalText: totalMin > 0 ? '총 시간 $totalMin분' : null,
         color: palette[i % palette.length]
       ));
     }
@@ -2901,7 +2364,8 @@ Future<String> _buildHomeworkTodoPdf({
       slices.add((
         label: '휴식',
         ms: breakMs,
-        checks: 0,
+        checkText: null,
+        totalText: null,
         color: sf.PdfColor(200, 200, 200)
       ));
     }
@@ -2926,43 +2390,137 @@ Future<String> _buildHomeworkTodoPdf({
       );
       final totalMin = (totalLearningMs / 60000).round();
       final centerText = '$totalMin분';
-      final centerFont = await _loadTodoPdfFont(13, bold: true);
+      final centerFont = await _loadTodoPdfFont(16, bold: true);
       final centerW = centerFont.measureString(centerText).width;
       graphics.drawString(
         centerText,
         centerFont,
         brush: textBrush,
-        bounds:
-            Rect.fromLTWH(donutCx - centerW / 2, donutCy - 8, centerW + 4, 18),
+        bounds: Rect.fromLTWH(
+            donutCx - centerW / 2, donutCy - 11, centerW + 4, 22),
       );
     }
     final legendFont = await _loadTodoPdfFont(9.4);
     final legendBoldFont = await _loadTodoPdfFont(9.4, bold: true);
+    final legendSubFont = await _loadTodoPdfFont(8.2);
+    final legendSubSmallFont = await _loadTodoPdfFont(7.4);
+    final legendRight =
+        sf.PdfStringFormat(alignment: sf.PdfTextAlignment.right);
     double ly = legendTopY;
-    for (final slice in slices) {
-      if (ly > foldY - 28) break;
+    // 1줄 색점 오른쪽이 그룹 과제명 시작. 2줄의 좌우 끝도 그 칸과 같다.
+    const legendSwatch = 8.0;
+    const legendNameGap = 6.0;
+    const legendGutter = 2.0;
+    const legendTimeW = 44.0;
+    final legendNameX = legendX + legendSwatch + legendNameGap;
+    final legendRowRight = legendX + legendW - legendGutter;
+    final legendRowW = math.max(0.0, legendRowRight - legendNameX);
+    final legendNameW =
+        math.max(0.0, legendRowW - legendTimeW - legendGutter);
+    for (int i = 0; i < slices.length; i++) {
+      final slice = slices[i];
+      final rowH =
+          (slice.checkText != null || slice.totalText != null) ? 34.0 : 24.0;
+      final remaining = slices.length - i;
+      if (ly + rowH + (remaining > 1 ? overflowLineH : 0) > foldY) {
+        drawOverflow(graphics, legendNameX, ly, legendRowW, remaining);
+        ly += overflowLineH;
+        break;
+      }
       graphics.drawRectangle(
         brush: sf.PdfSolidBrush(slice.color),
-        bounds: Rect.fromLTWH(legendX, ly + 2, 8, 8),
+        bounds: Rect.fromLTWH(legendX, ly + 2, legendSwatch, legendSwatch),
       );
       final mins = (slice.ms / 60000).round();
       final labelText = slice.label;
       final timeText = '$mins분';
-      final labelW = math.max(0.0, legendW - 62);
-      graphics.drawString(labelText, legendBoldFont,
-          brush: textBrush,
-          bounds: Rect.fromLTWH(legendX + 14, ly, labelW, 14));
+      await drawLine(
+        graphics,
+        labelText,
+        legendBoldFont,
+        fontSize: 9.4,
+        bold: true,
+        brush: textBrush,
+        color: textColor,
+        bounds: Rect.fromLTWH(legendNameX, ly, legendNameW, 14),
+      );
       graphics.drawString(timeText, legendFont,
           brush: subBrush,
-          bounds: Rect.fromLTWH(legendX + 14 + labelW + 2, ly, 44, 14),
+          bounds: Rect.fromLTWH(
+              legendNameX + legendNameW + legendGutter, ly, legendTimeW, 14),
           format: sf.PdfStringFormat(alignment: sf.PdfTextAlignment.right));
-      if (slice.checks > 0) {
-        graphics.drawString('${slice.checks}회 검사', legendFont,
-            brush: subBrush,
-            bounds: Rect.fromLTWH(legendX + 14, ly + 12, legendW - 14, 13));
-        ly += 24;
+      final checkText = slice.checkText;
+      final totalText = slice.totalText;
+      if (checkText != null || totalText != null) {
+        double widthOf(sf.PdfFont font, String? text) =>
+            text == null ? 0.0 : font.measureString(text).width + 2;
+        final fits = widthOf(legendSubFont, checkText) +
+                widthOf(legendSubFont, totalText) +
+                legendGutter <=
+            legendRowW;
+        final line2Font = fits ? legendSubFont : legendSubSmallFont;
+        final totalW =
+            math.min(widthOf(line2Font, totalText), legendRowW * 0.55);
+        final checkW =
+            math.max(0.0, legendRowW - totalW - legendGutter);
+        if (checkText != null) {
+          graphics.drawString(checkText, line2Font,
+              brush: subBrush,
+              bounds: Rect.fromLTWH(legendNameX, ly + 14, checkW, 12));
+        }
+        if (totalText != null) {
+          graphics.drawString(totalText, line2Font,
+              brush: subBrush,
+              bounds: Rect.fromLTWH(
+                  legendNameX + checkW + legendGutter, ly + 14, totalW, 12),
+              format: legendRight);
+        }
+        ly += 34;
       } else {
-        ly += 20;
+        ly += 24;
+      }
+    }
+    legendBottomY = ly;
+  }
+
+  {
+    // 도넛 옆 목록은 두 줄 항목 6개까지 특이 사항 위에 둔다.
+    // 4개 이하면 도넛 아래 기존 자리, 5·6개면 목록 바로 아래까지 내린다.
+    const legendRowPitch = 34.0;
+    final notesUnderDonut = donutCy + donutR + 22;
+    final notesBelowList = legendBottomY + 14;
+    final notesClearOfSix = legendTopY + legendRowPitch * 6 + 14;
+    final notesTop = hasDonut
+        ? math.max(
+            notesUnderDonut,
+            math.min(notesBelowList, notesClearOfSix),
+          )
+        : contentTop + 56;
+    final notesW = legendBottomY <= notesTop - 6
+        ? summaryDividerX - left - 8
+        : legendX - left - 10;
+    final notesLimitY = foldY - 8;
+    final notesTitleFont = await _loadTodoPdfFont(9.4, bold: true);
+    final notesFont = await _loadTodoPdfFont(9.0);
+    graphics.drawLine(weakLinePen, Offset(left, notesTop - 8),
+        Offset(left + notesW, notesTop - 8));
+    graphics.drawString('특이 사항', notesTitleFont,
+        brush: textBrush, bounds: Rect.fromLTWH(left, notesTop, notesW, 14));
+    double ny = notesTop + 18;
+    if (payload.specialNotes.isEmpty) {
+      graphics.drawString('특이 사항이 없습니다.', notesFont,
+          brush: subBrush, bounds: Rect.fromLTWH(left, ny, notesW, 14));
+    } else {
+      for (int i = 0; i < payload.specialNotes.length; i++) {
+        final note = payload.specialNotes[i];
+        final remaining = payload.specialNotes.length - i;
+        if (ny + 15 + (remaining > 1 ? overflowLineH : 0) > notesLimitY) {
+          drawOverflow(graphics, left, ny, notesW, remaining);
+          break;
+        }
+        graphics.drawString('• $note', notesFont,
+            brush: textBrush, bounds: Rect.fromLTWH(left, ny, notesW, 14));
+        ny += 15;
       }
     }
   }
@@ -2970,153 +2528,262 @@ Future<String> _buildHomeworkTodoPdf({
   if (summaryW > 48) {
     graphics.drawLine(weakLinePen, Offset(summaryDividerX, contentTop),
         Offset(summaryDividerX, foldY - 8));
-    final csLine1Font = await _loadTodoPdfFont(9.2, bold: true);
-    final csLine2Font = await _loadTodoPdfFont(9.0);
-    double csY = contentTop + 27;
+    final rightAlign = sf.PdfStringFormat(alignment: sf.PdfTextAlignment.right);
+    const heroSize = 26.0;
+    const bigSize = 17.0;
+    const unitSize = 9.4;
+    const emptySize = 10.4;
+    final recLabelFont = await _loadTodoPdfFont(8.8);
+    final recHeroFont = await _loadTodoPdfFont(heroSize, bold: true);
+    final recBigFont = await _loadTodoPdfFont(bigSize, bold: true);
+    final recUnitFont = await _loadTodoPdfFont(unitSize);
+    final recEmptyFont = await _loadTodoPdfFont(emptySize);
+    final recNameFont = await _loadTodoPdfFont(9.2, bold: true);
+    final recSubFont = await _loadTodoPdfFont(8.6);
+    final recNoteFont = await _loadTodoPdfFont(7.4);
+    final faintBrush = sf.PdfSolidBrush(sf.PdfColor(150, 150, 150));
+    final accentBrush = sf.PdfSolidBrush(sf.PdfColor(33, 150, 243));
+    final trackBrush = sf.PdfSolidBrush(sf.PdfColor(236, 236, 236));
+    final progressGrayBrush = sf.PdfSolidBrush(sf.PdfColor(185, 185, 185));
+    final recLimitY = foldY - 10;
+    // 맑은 고딕: 글자 상단에서 기준선까지 = 글자 크기 × 1.06.
+    // 크기가 다른 숫자와 단위를 같은 기준선에 놓을 때 쓴다.
+    const ascentRatio = 1.06;
+    double ry = recordTop;
 
-    final hasCheckData = payload.checkRates.any((e) => e.progress != null);
-    if (hasCheckData) {
-      // 분자: 오늘 추가된 % 합(정규 오늘검사예정 + 자의 추가분 모두 포함)
-      // 분모: 정규 오늘검사예정 과제의 "내준 시점 기준 남은 %"만 합산
-      //       (자의 추가분은 분모에서 제외 -> 100% 초과 가능)
-      int sumTodayPct = 0;
-      int sumRemainingPct = 0;
-      for (final cr in payload.checkRates) {
-        if (cr.progress == null) continue;
-        sumTodayPct += (cr.todayProgress ?? 0);
-        if (!cr.isExtra) {
-          sumRemainingPct += math.max(0, 100 - (cr.previousProgress ?? 0));
-        }
+    // 값: big 이 null 이면 small 만 흐리게(없음/기록 없음).
+    ({String? big, String small}) countValue(int? n) =>
+        n == null ? (big: null, small: '기록 없음') : (big: '$n', small: '문항');
+    ({String? big, String small}) fractionValue(int done, int total,
+            {String suffix = ''}) =>
+        total > 0
+            ? (big: '$done', small: '/ $total$suffix')
+            : (big: null, small: '없음');
+
+    void drawMetric({
+      required double x,
+      required double y,
+      required double w,
+      required String label,
+      required ({String? big, String small}) value,
+      required sf.PdfFont bigFont,
+      required double bigFontSize,
+    }) {
+      graphics.drawString(label, recLabelFont,
+          brush: subBrush, bounds: Rect.fromLTWH(x, y, w, 12));
+      final valueY = y + 14;
+      final big = value.big;
+      if (big == null) {
+        final emptyY = valueY + (bigFontSize - emptySize) * ascentRatio;
+        graphics.drawString(value.small, recEmptyFont,
+            brush: faintBrush, bounds: Rect.fromLTWH(x, emptyY, w, 14));
+        return;
       }
-      final int ratioPct = sumRemainingPct > 0
-          ? ((sumTodayPct * 100) / sumRemainingPct).round()
-          : (sumTodayPct > 0 ? 101 : 0);
-      final mood = _todoCheckMoodFor(ratioPct);
-      const double emSize = 24.0;
-      const double moodGap = 8.0;
-      // 타이틀 하단(contentTop+18)과 이모지 사이 여백을, 이모지와 리스트
-      // 사이 간격(13)과 동일하게 맞춘다.
-      const double moodVGap = 13.0;
-      final double emY = contentTop + 18 + moodVGap;
-      final moodFont = await _loadTodoPdfFont(10.8, bold: true);
-      final moodText = '${mood.label}  $ratioPct%';
-      final moodTextW = moodFont.measureString(moodText).width;
-      final blockW = emSize + moodGap + moodTextW;
-      final blockX = summaryX + math.max(0.0, (summaryW - blockW) / 2);
-      final emojiBmp = await _loadTodoEmojiBitmap(mood.asset);
-      if (emojiBmp != null) {
-        graphics.drawImage(
-            emojiBmp, Rect.fromLTWH(blockX, emY, emSize, emSize));
-        if (mood.fire) {
-          final flameBmp = await _loadTodoEmojiBitmap('assets/emoji/flame.png');
-          if (flameBmp != null) {
-            graphics.drawImage(
-                flameBmp, Rect.fromLTWH(blockX + emSize - 11, emY - 7, 15, 15));
-          }
-        }
-      }
-      final textX = blockX + emSize + moodGap;
-      graphics.drawString(moodText, moodFont,
+      final bigW = math.min(bigFont.measureString(big).width + 1, w);
+      graphics.drawString(big, bigFont,
           brush: textBrush,
-          bounds: Rect.fromLTWH(textX, emY + 5, moodTextW + 4, 18));
-      csY = emY + emSize + moodVGap;
-    }
-
-    if (!hasCheckData) {
-      graphics.drawString('검사 내역 없음', csLine2Font,
-          brush: subBrush,
-          bounds: Rect.fromLTWH(summaryX, csY + 2, summaryW, 13));
-    } else {
-      final rightAlign =
-          sf.PdfStringFormat(alignment: sf.PdfTextAlignment.right);
-      for (final cr in payload.checkRates) {
-        if (csY + 52 > foldY - 10) break;
-        final bookText = cr.bookAndCourse.trim();
-        final groupText = cr.title.trim();
-        final titleText = (() {
-          if (bookText.isEmpty && groupText.isEmpty) return '(제목 없음)';
-          if (bookText.isEmpty) return groupText;
-          if (groupText.isEmpty) return bookText;
-          return '$bookText · $groupText';
-        })();
-        final todayPct = cr.todayProgress ?? 0;
-        final previousPct = cr.previousProgress ?? 0;
-        // 2번째 줄: 페이지(좌) | 문항수 · +퍼센트(우)
-        // 홈 그룹 카드와 같이 p.130-132 형식. 왼쪽이 오른쪽 문구를 덮지 않게 칸을 나눈다.
-        final line2Left = _formatPageTextCompact(cr.page);
-        final missedLabel = switch (cr.outcome) {
-          'left_behind' => '숙제 안 함 (두고 옴) · 0%',
-          'not_done' => '숙제 안 함 · 0%',
-          _ => null,
-        };
-        final line2Right = missedLabel ??
-            [
-              if (_formatCountText(cr.count) != '-') _formatCountText(cr.count),
-              '+$todayPct%',
-            ].join(' · ');
-        // 3번째 줄: 내준 날짜 · 마감 날짜(좌) | 검사일(우)
-        final line3Left = [
-          '내준 ${cr.assignedAt != null ? _formatMonthDay(cr.assignedAt!) : '-'}',
-          '마감 ${cr.dueDate != null ? _formatMonthDay(cr.dueDate!) : '-'}',
-        ].join(' · ');
-        final line3Right =
-            '검사 ${cr.checkedAt != null ? _formatMonthDay(cr.checkedAt!) : '-'}';
-        graphics.drawString(titleText, csLine1Font,
-            brush: textBrush,
-            bounds: Rect.fromLTWH(summaryX, csY, summaryW, 13));
-        final line2RightW = line2Right.isEmpty
-            ? 0.0
-            : math.min(
-                csLine2Font.measureString(line2Right).width + 2,
-                summaryW * 0.46,
-              );
-        final line2LeftW = line2RightW > 0
-            ? math.max(0.0, summaryW - line2RightW - 6)
-            : summaryW;
-        final line3RightW = math.min(
-          csLine2Font.measureString(line3Right).width + 2,
-          summaryW * 0.4,
-        );
-        final line3LeftW = math.max(0.0, summaryW - line3RightW - 6);
-        graphics.drawString(line2Left, csLine2Font,
-            brush: subBrush,
-            bounds: Rect.fromLTWH(summaryX, csY + 14, line2LeftW, 13));
-        if (line2RightW > 0) {
-          graphics.drawString(line2Right, csLine2Font,
-              brush: subBrush,
-              bounds: Rect.fromLTWH(
-                  summaryX + line2LeftW + 6, csY + 14, line2RightW, 13),
-              format: rightAlign);
-        }
-        graphics.drawString(line3Left, csLine2Font,
-            brush: subBrush,
-            bounds: Rect.fromLTWH(summaryX, csY + 27, line3LeftW, 13));
-        graphics.drawString(line3Right, csLine2Font,
+          bounds: Rect.fromLTWH(x, valueY, bigW + 2, bigFontSize * 1.4));
+      final unitX = x + bigW + 3;
+      if (unitX < x + w) {
+        graphics.drawString(value.small, recUnitFont,
             brush: subBrush,
             bounds: Rect.fromLTWH(
-                summaryX + line3LeftW + 6, csY + 27, line3RightW, 13),
-            format: rightAlign);
-        drawPage1ProgressBar(
-          x: summaryX,
-          y: csY + 42,
-          w: summaryW,
-          previousPct: previousPct,
-          todayPct: todayPct,
+                unitX,
+                valueY + (bigFontSize - unitSize) * ascentRatio,
+                x + w - unitX,
+                13));
+      }
+    }
+
+    final rec = payload.lessonRecord;
+    if (rec == null) {
+      graphics.drawString('학습 기록 없음', recEmptyFont,
+          brush: faintBrush,
+          bounds: Rect.fromLTWH(summaryX, ry, summaryW, 14));
+    } else {
+      final corrTotal = rec.correctionRequiredCount;
+      final corrDone = math.min(rec.correctionSuccessCount ?? 0, corrTotal ?? 0);
+      final solved = rec.solvedProblemCount;
+      final firstTry = rec.firstTryCorrectCount;
+      final avgTries = rec.avgTriesToPass;
+
+      const cellGap = 12.0;
+      final cellW = (summaryW - cellGap) / 2;
+      final heroCells = <(String, ({String? big, String small}))>[
+        ('오늘 푼 문제', countValue(solved)),
+        (
+          '평균 시도',
+          solved == null
+              ? (big: null, small: '기록 없음')
+              : avgTries == null
+                  ? (big: null, small: '없음')
+                  : (big: avgTries.toStringAsFixed(1), small: '회'),
+        ),
+      ];
+      for (int i = 0; i < heroCells.length; i++) {
+        drawMetric(
+          x: summaryX + i * (cellW + cellGap),
+          y: ry,
+          w: cellW,
+          label: heroCells[i].$1,
+          value: heroCells[i].$2,
+          bigFont: recHeroFont,
+          bigFontSize: heroSize,
         );
-        graphics.drawLine(weakLinePen, Offset(summaryX, csY + 50),
-            Offset(summaryX + summaryW, csY + 50));
-        csY += 55;
+      }
+      ry += 72;
+
+      final cells = <(String, ({String? big, String small}))>[
+        (
+          '정답률',
+          solved == null || firstTry == null
+              ? (big: null, small: '기록 없음')
+              : solved <= 0
+                  ? (big: null, small: '없음')
+                  : (
+                      big: '${(math.min(firstTry, solved) * 100 / solved).round()}',
+                      small: '%',
+                    ),
+        ),
+        (
+          '수정',
+          corrTotal == null
+              ? (big: null, small: '기록 없음')
+              : fractionValue(corrDone, corrTotal, suffix: ' 성공'),
+        ),
+        ('숙제', fractionValue(rec.homeworkCompleted, rec.homeworkTotal)),
+        ('과제', fractionValue(rec.assignmentCompleted, rec.assignmentTotal)),
+      ];
+      // 줄 사이 빈칸만 1.5배. 행 간격 42 중 약 32는 글자 높이라,
+      // 42를 그대로 1.5배 하면 빈칸(약 10)이 약 3배가 된다.
+      const metricRowPitch = 47.0;
+      for (int i = 0; i < cells.length; i++) {
+        final col = i % 2;
+        final row = i ~/ 2;
+        drawMetric(
+          x: summaryX + col * (cellW + cellGap),
+          y: ry + row * metricRowPitch,
+          w: cellW,
+          label: cells[i].$1,
+          value: cells[i].$2,
+          bigFont: recBigFont,
+          bigFontSize: bigSize,
+        );
+      }
+      // 정답률 → 숙제 와 같은 행 간격. 그 사이의 구분선은 두지 않는다.
+      ry += metricRowPitch * 2;
+      graphics.drawString('학습 Flow', recLabelFont,
+          brush: subBrush, bounds: Rect.fromLTWH(summaryX, ry, summaryW, 12));
+      ry += 15;
+      if (rec.problemRecordCoverage == 'partial') {
+        graphics.drawString('* 문항 기록이 없는 교재는 문항 수에서 빠짐', recNoteFont,
+            brush: faintBrush,
+            bounds: Rect.fromLTWH(summaryX, ry, summaryW, 11));
+        ry += 12;
+      }
+      if (rec.flows.isEmpty) {
+        graphics.drawString('오늘 과제에 연결된 Flow 없음', recSubFont,
+            brush: faintBrush,
+            bounds: Rect.fromLTWH(summaryX, ry, summaryW, 13));
+      } else {
+        // 같은 Flow·교재명이 과정만 다르게 여러 줄이면 과정을 붙여 구분한다.
+        final nameCounts = <String, int>{};
+        for (final f in rec.flows) {
+          final key = '${f.flowName}|${f.bookName ?? ''}';
+          nameCounts[key] = (nameCounts[key] ?? 0) + 1;
+        }
+        String flowLabel(LessonRecordFlowProgress f) {
+          final flowName = f.flowName.trim().isEmpty ? 'Flow' : f.flowName.trim();
+          final book = (f.bookName ?? '').trim();
+          if (book.isEmpty) return flowName;
+          final grade = (f.gradeLabel ?? '').trim();
+          final dup = (nameCounts['${f.flowName}|${f.bookName ?? ''}'] ?? 0) > 1;
+          return dup && grade.isNotEmpty
+              ? '$flowName - $book ($grade)'
+              : '$flowName - $book';
+        }
+
+        for (int i = 0; i < rec.flows.length; i++) {
+          final flow = rec.flows[i];
+          final pct = flow.progressPercent;
+          final rowH = pct != null ? 24.0 : 18.0;
+          final remaining = rec.flows.length - i;
+          if (ry + rowH + (remaining > 1 ? 14 : 0) > recLimitY) {
+            graphics.drawString('외 $remaining개', recSubFont,
+                brush: faintBrush,
+                bounds: Rect.fromLTWH(summaryX, ry, summaryW, 13));
+            break;
+          }
+          final stateText = flow.completed ? '완료' : '진행 중';
+          final stateW = math.min(
+            recSubFont.measureString(stateText).width + 2,
+            summaryW * 0.4,
+          );
+          final nameW = math.max(0.0, summaryW - stateW - 6);
+          graphics.drawString(flowLabel(flow), recNameFont,
+              brush: textBrush,
+              bounds: Rect.fromLTWH(summaryX, ry, nameW, 14));
+          graphics.drawString(stateText, recSubFont,
+              brush: flow.completed ? textBrush : subBrush,
+              bounds: Rect.fromLTWH(summaryX + nameW + 6, ry + 1, stateW, 13),
+              format: rightAlign);
+          if (pct != null) {
+            // 회색 = 등원 전까지 진도, 파랑 = 오늘 늘어난 만큼.
+            const pctAreaW = 58.0;
+            final barW = math.max(0.0, summaryW - pctAreaW - 6);
+            final barY = ry + 16;
+            const barH = 3.2;
+            final beforePct = (flow.beforePercent ?? pct).clamp(0.0, 100.0);
+            final todayPct =
+                (flow.todayPercent ?? 0).clamp(0.0, 100.0 - beforePct);
+            graphics.drawRectangle(
+                brush: trackBrush,
+                bounds: Rect.fromLTWH(summaryX, barY, barW, barH));
+            final beforeW = barW * beforePct / 100;
+            if (beforeW > 0) {
+              graphics.drawRectangle(
+                  brush: progressGrayBrush,
+                  bounds: Rect.fromLTWH(summaryX, barY, beforeW, barH));
+            }
+            final todayW = barW * todayPct / 100;
+            if (todayW > 0) {
+              graphics.drawRectangle(
+                  brush: accentBrush,
+                  bounds:
+                      Rect.fromLTWH(summaryX + beforeW, barY, todayW, barH));
+            }
+            final pctX = summaryX + barW + 6;
+            final totalText = flow.todayPercent == null
+                ? '${pct.round()}%'
+                : '/${pct.round()}%';
+            final totalTextW = math.min(
+                recSubFont.measureString(totalText).width + 1, pctAreaW);
+            graphics.drawString(totalText, recSubFont,
+                brush: subBrush,
+                bounds: Rect.fromLTWH(pctX + pctAreaW - totalTextW, barY - 5,
+                    totalTextW, 13),
+                format: rightAlign);
+            if (flow.todayPercent != null) {
+              graphics.drawString('+${todayPct.round()}%', recSubFont,
+                  brush: accentBrush,
+                  bounds: Rect.fromLTWH(
+                      pctX, barY - 5, pctAreaW - totalTextW, 13),
+                  format: rightAlign);
+            }
+          }
+          ry += rowH;
+        }
       }
     }
   }
 
   // ── Page 1 bottom half: 숙제 리스트 + 행동 리스트 ──
-  final todoTop = foldY + 26;
-  final colGap = 10.0;
-  final colWidth = (contentWidth - colGap) / 2;
+  // foldY는 상단 여백 0으로 4pt 내려간다. 숙제 리스트 용지상 Y는 이전과 같다.
+  final todoTop = foldY + 30;
+  // 수업 요약과 학습 기록 사이와 같은 칸 간격.
+  final colWidth = (contentWidth - columnGap) / 2;
   final leftColX = left;
-  final rightColX = left + colWidth + colGap;
-
+  final rightColX = left + colWidth + columnGap;
   graphics.drawString(
     '숙제 리스트',
     sectionFont,
@@ -3136,25 +2803,29 @@ Future<String> _buildHomeworkTodoPdf({
     brush: textBrush,
     bounds: Rect.fromLTWH(rightColX, todoTop, colWidth, 18),
   );
-  graphics.drawLine(weakLinePen, Offset(leftColX, todoTop + 18),
-      Offset(leftColX + colWidth, todoTop + 18));
-  graphics.drawLine(weakLinePen, Offset(rightColX, todoTop + 18),
-      Offset(rightColX + colWidth, todoTop + 18));
-  graphics.drawLine(weakLinePen, Offset(rightColX - (colGap / 2), todoTop),
-      Offset(rightColX - (colGap / 2), contentBottom));
+  graphics.drawLine(weakLinePen, Offset(rightColX - (columnGap / 2), todoTop),
+      Offset(rightColX - (columnGap / 2), contentBottom));
 
-  // 숙제 검사 내역과 동일한 줄간격: 1줄=0, 2줄=+14, 3줄=+27, 항목 높이≈40(+여백).
-  // 체크박스(□)만 왼쪽, 1·2·3줄 본문 시작 X는 동일 세로선으로 맞춘다.
-  double leftY = todoTop + 24;
-  const todoLine1H = 14.0;
-  const todoLine2Y = 14.0;
-  const todoLine3Y = 27.0;
-  const todoItemBodyH = 40.0;
-  const todoItemGap = 8.0;
-  for (final entry in payload.todoEntries) {
+  // 줄 사이 빈칸 4를 3.2로(20% 축소). 칸 전체 18을 줄이면 글자(14)가 겹친다.
+  // 카드 사이 빈칸 4는 4.8로(20% 확대). 제목 아래 30은 수업 요약과 같다.
+  const flowTextH = 14.0;
+  const flowLineStep = 17.2;
+  const flowCardGap = 4.8;
+  const flowInlineGap = 6.0;
+  const sectionBodyGap = 30.0;
+  double leftY = todoTop + sectionBodyGap;
+  final todoEntries = payload.todoEntries;
+  for (int i = 0; i < todoEntries.length; i++) {
+    final entry = todoEntries[i];
+    const cardH = flowLineStep * 2 + flowTextH + flowCardGap;
+    final remaining = todoEntries.length - i;
+    if (leftY + cardH + (remaining > 1 ? overflowLineH : 0) > contentBottom - 8) {
+      drawOverflow(graphics, leftColX, leftY, colWidth, remaining);
+      break;
+    }
     final prim = entry.primary;
-    final bx = leftColX + 2;
-    final bw = colWidth - 4;
+    final bx = leftColX;
+    final bw = colWidth;
     final hasCheckbox = prim.startsWith('□');
     final prefix = hasCheckbox ? '□ ' : '';
     final prefixW =
@@ -3166,7 +2837,7 @@ Future<String> _buildHomeworkTodoPdf({
     final rightPrimaryW =
         rightPrimary.isEmpty ? 0.0 : math.min(62.0, textW * 0.28);
     final line1TextW =
-        rightPrimaryW > 0 ? math.max(0.0, textW - rightPrimaryW - 6) : textW;
+        rightPrimaryW > 0 ? math.max(0.0, textW - rightPrimaryW - flowInlineGap) : textW;
     final bookTitle = (entry.bookTitle ?? '').trim();
     final itemTop = leftY;
 
@@ -3174,28 +2845,42 @@ Future<String> _buildHomeworkTodoPdf({
     if (hasCheckbox) {
       graphics.drawString(prefix, bodyFont,
           brush: textBrush,
-          bounds: Rect.fromLTWH(bx, itemTop, math.min(prefixW + 2, bw), todoLine1H));
+          bounds: Rect.fromLTWH(bx, itemTop, math.min(prefixW + 2, bw), flowTextH));
     }
     if (bookTitle.isNotEmpty) {
-      graphics.drawString(bookTitle, bodyBoldFont,
-          brush: textBrush,
-          bounds: Rect.fromLTWH(textX, itemTop, line1TextW, todoLine1H));
+      await drawLine(
+        graphics,
+        bookTitle,
+        bodyBoldFont,
+        fontSize: 10.2,
+        bold: true,
+        brush: textBrush,
+        color: textColor,
+        bounds: Rect.fromLTWH(textX, itemTop, line1TextW, flowTextH),
+      );
     } else {
       final fallback =
           hasCheckbox ? prim.replaceFirst(RegExp(r'^□\s*'), '') : prim;
-      graphics.drawString(fallback, bodyFont,
-          brush: textBrush,
-          bounds: Rect.fromLTWH(textX, itemTop, line1TextW, todoLine1H));
+      await drawLine(
+        graphics,
+        fallback,
+        bodyFont,
+        fontSize: 10.2,
+        bold: false,
+        brush: textBrush,
+        color: textColor,
+        bounds: Rect.fromLTWH(textX, itemTop, line1TextW, flowTextH),
+      );
     }
     if (rightPrimaryW > 0) {
       graphics.drawString(rightPrimary, subFont,
           brush: subBrush,
           bounds: Rect.fromLTWH(
-              textX + line1TextW + 6, itemTop, rightPrimaryW, todoLine1H),
+              textX + line1TextW + flowInlineGap, itemTop, rightPrimaryW, flowTextH),
           format: sf.PdfStringFormat(alignment: sf.PdfTextAlignment.right));
     }
 
-    // 2줄: 그룹 과제 제목 (좌) + 예상 수행시간 (우)
+    // 2줄: 그룹 과제 제목 (좌) + 예상 수행시간 (우). 시작 x는 1줄 교재명과 같다.
     final secondary = (entry.secondary ?? '').trim();
     final rightSecondary = (entry.rightSecondary ?? '').trim();
     final rightSecondaryW = rightSecondary.isEmpty
@@ -3205,70 +2890,83 @@ Future<String> _buildHomeworkTodoPdf({
             textW * 0.55,
           );
     final line2LeftW = rightSecondaryW > 0
-        ? math.max(0.0, textW - rightSecondaryW - 6)
+        ? math.max(0.0, textW - rightSecondaryW - flowInlineGap)
         : textW;
     if (secondary.isNotEmpty) {
-      graphics.drawString(secondary, subFont,
-          brush: subBrush,
-          bounds: Rect.fromLTWH(
-              textX, itemTop + todoLine2Y, line2LeftW, 13));
+      await drawLine(
+        graphics,
+        secondary,
+        subFont,
+        fontSize: 9.2,
+        bold: false,
+        brush: subBrush,
+        color: subColor,
+        bounds: Rect.fromLTWH(textX, itemTop + flowLineStep, line2LeftW, flowTextH),
+      );
     }
     if (rightSecondaryW > 0) {
       graphics.drawString(rightSecondary, subFont,
           brush: subBrush,
-          bounds: Rect.fromLTWH(textX + line2LeftW + 6, itemTop + todoLine2Y,
-              rightSecondaryW, 13),
+          bounds: Rect.fromLTWH(textX + line2LeftW + flowInlineGap,
+              itemTop + flowLineStep, rightSecondaryW, flowTextH),
           format: sf.PdfStringFormat(alignment: sf.PdfTextAlignment.right));
     }
 
-    // 3줄: 페이지 · 문항수 (좌) + 메모 (우) (검사내역과 동일 +27)
+    // 3줄: 페이지 · 문항수 (좌) + 메모 (우)
     final tertiary = (entry.tertiary ?? '').trim();
     final rightTertiary = (entry.rightTertiary ?? '').trim();
     if (tertiary.isNotEmpty || rightTertiary.isNotEmpty) {
       final rightTertiaryW =
           rightTertiary.isEmpty ? 0.0 : math.min(112.0, textW * 0.46);
       final line3LeftW = rightTertiaryW > 0
-          ? math.max(0.0, textW - rightTertiaryW - 6)
+          ? math.max(0.0, textW - rightTertiaryW - flowInlineGap)
           : textW;
       if (tertiary.isNotEmpty) {
         graphics.drawString(tertiary, subFont,
             brush: subBrush,
-            bounds:
-                Rect.fromLTWH(textX, itemTop + todoLine3Y, line3LeftW, 13));
+            bounds: Rect.fromLTWH(
+                textX, itemTop + flowLineStep * 2, line3LeftW, flowTextH));
       }
       if (rightTertiaryW > 0) {
         graphics.drawString(rightTertiary, subFont,
             brush: subBrush,
-            bounds: Rect.fromLTWH(textX + line3LeftW + 6,
-                itemTop + todoLine3Y, rightTertiaryW, 13),
+            bounds: Rect.fromLTWH(textX + line3LeftW + flowInlineGap,
+                itemTop + flowLineStep * 2, rightTertiaryW, flowTextH),
             format: sf.PdfStringFormat(alignment: sf.PdfTextAlignment.right));
       }
     }
 
-    leftY = itemTop + todoItemBodyH + todoItemGap;
-    if (leftY > contentBottom - 8) break;
+    leftY = itemTop + flowLineStep * 2 + flowTextH + flowCardGap;
   }
 
-  double rightY = todoTop + 24;
+  double rightY = todoTop + sectionBodyGap;
   final behaviorEntries = payload.behaviorEntries;
   if (behaviorEntries.isEmpty) {
     graphics.drawString('• 행동 없음', bodyFont,
         brush: subBrush,
-        bounds: Rect.fromLTWH(rightColX + 2, rightY, colWidth - 4, 14));
+        bounds: Rect.fromLTWH(rightColX, rightY, colWidth, flowTextH));
   } else {
-    for (final entry in behaviorEntries) {
+    for (int i = 0; i < behaviorEntries.length; i++) {
+      final entry = behaviorEntries[i];
+      final hasSecond =
+          entry.secondary != null && entry.secondary!.trim().isNotEmpty;
+      final rowH = (hasSecond ? flowLineStep : 0) + flowTextH + flowCardGap;
+      final remaining = behaviorEntries.length - i;
+      if (rightY + rowH + (remaining > 1 ? overflowLineH : 0) >
+          contentBottom - 8) {
+        drawOverflow(graphics, rightColX, rightY, colWidth, remaining);
+        break;
+      }
       graphics.drawString(entry.primary, bodyFont,
           brush: textBrush,
-          bounds: Rect.fromLTWH(rightColX + 2, rightY, colWidth - 4, 14));
-      rightY += 14;
-      if (entry.secondary != null && entry.secondary!.trim().isNotEmpty) {
+          bounds: Rect.fromLTWH(rightColX, rightY, colWidth, flowTextH));
+      if (hasSecond) {
         graphics.drawString(entry.secondary!, subFont,
             brush: subBrush,
-            bounds: Rect.fromLTWH(rightColX + 2, rightY, colWidth - 4, 13));
-        rightY += 13;
+            bounds: Rect.fromLTWH(
+                rightColX, rightY + flowLineStep, colWidth, flowTextH));
       }
-      rightY += 8;
-      if (rightY > contentBottom - 8) break;
+      rightY += rowH;
     }
   }
 
@@ -3281,15 +2979,18 @@ Future<String> _buildHomeworkTodoPdf({
   final bottom2 = size2.height - 6;
 
   g2.drawString('학습 내역', sectionFont,
-      brush: subBrush, bounds: Rect.fromLTWH(left, top + 6, contentWidth2, 18));
-  g2.drawLine(linePen, Offset(left, top + 26), Offset(right2, top + 26));
+      brush: subBrush,
+      bounds: Rect.fromLTWH(left, page2Top + 6, contentWidth2, 18));
 
-  final p2Top = top + 36;
-  const p2ColGap = 12.0;
-  final p2ColWidth = (contentWidth2 - p2ColGap) / 2;
+  final p2Top = page2Top + 36;
+  final p2ColWidth = (contentWidth2 - columnGap) / 2;
   final p2LeftX = left;
-  final p2RightX = left + p2ColWidth + p2ColGap;
-  final p2RowsLimit = bottom2 - 10;
+  final p2RightX = left + p2ColWidth + columnGap;
+  // 4분할: 위 두 칸(완료 과제 · 수업)은 접는 선 위, 아래 왼쪽은 숙제 검사 내역.
+  final foldY2 = size2.height / 2;
+  final p2RowsLimit = foldY2 - 10;
+  final p2BottomTop = foldY2 + 30;
+  final p2BottomLimit = bottom2 - 10;
 
   void drawProgressBar({
     required sf.PdfGraphics g,
@@ -3328,25 +3029,24 @@ Future<String> _buildHomeworkTodoPdf({
   g2.drawString('수업', sectionFont,
       brush: textBrush,
       bounds: Rect.fromLTWH(p2RightX, p2Top, p2ColWidth, 18));
-  g2.drawLine(weakLinePen, Offset(p2LeftX, p2Top + 18),
-      Offset(p2LeftX + p2ColWidth, p2Top + 18));
-  g2.drawLine(weakLinePen, Offset(p2RightX, p2Top + 18),
-      Offset(p2RightX + p2ColWidth, p2Top + 18));
-  g2.drawLine(weakLinePen, Offset(p2RightX - (p2ColGap / 2), p2Top),
-      Offset(p2RightX - (p2ColGap / 2), p2RowsLimit));
+  g2.drawLine(weakLinePen, Offset(p2RightX - (columnGap / 2), p2Top),
+      Offset(p2RightX - (columnGap / 2), p2RowsLimit));
 
-  // 숙제 리스트와 동일: 1줄 0 / 2줄 +14 / 3줄 +27, 카드 간격 8.
-  const cardLine2Y = 14.0;
-  const cardLine3Y = 27.0;
-  const cardGap = 8.0;
-  double p2LeftY = p2Top + 24;
+  double p2LeftY = p2Top + sectionBodyGap;
   if (payload.completedSummaries.isEmpty) {
     g2.drawString('완료 과제 없음', subFont,
         brush: subBrush,
-        bounds: Rect.fromLTWH(p2LeftX + 2, p2LeftY, p2ColWidth - 4, 14));
+        bounds: Rect.fromLTWH(p2LeftX, p2LeftY, p2ColWidth, flowTextH));
   } else {
-    for (final cs in payload.completedSummaries) {
-      if (p2LeftY + 50 > p2RowsLimit) break;
+    final completed = payload.completedSummaries;
+    const cardH = flowLineStep * 2 + flowTextH + 7 + flowCardGap;
+    for (int i = 0; i < completed.length; i++) {
+      final cs = completed[i];
+      final remaining = completed.length - i;
+      if (p2LeftY + cardH + (remaining > 1 ? overflowLineH : 0) > p2RowsLimit) {
+        drawOverflow(g2, p2LeftX, p2LeftY, p2ColWidth, remaining);
+        break;
+      }
       final bookText =
           cs.bookAndCourse.trim().isEmpty ? '-' : cs.bookAndCourse.trim();
       final groupText =
@@ -3359,90 +3059,294 @@ Future<String> _buildHomeworkTodoPdf({
         '오늘 +${cs.progressPct.toStringAsFixed(0)}%',
         '전체 ${cs.totalProgressPct.toStringAsFixed(0)}%',
       ].join(' · ');
-      final cardX = p2LeftX + 2;
-      final cardW = p2ColWidth - 4;
-      g2.drawString(bookText, bodyBoldFont,
-          brush: textBrush,
-          bounds: Rect.fromLTWH(cardX, p2LeftY, cardW, 14));
-      g2.drawString(groupText, subFont,
-          brush: subBrush,
-          bounds: Rect.fromLTWH(cardX, p2LeftY + cardLine2Y, cardW, 13));
+      final cardX = p2LeftX;
+      final cardW = p2ColWidth;
+      await drawLine(
+        g2,
+        bookText,
+        bodyBoldFont,
+        fontSize: 10.2,
+        bold: true,
+        brush: textBrush,
+        color: textColor,
+        bounds: Rect.fromLTWH(cardX, p2LeftY, cardW, flowTextH),
+      );
+      await drawLine(
+        g2,
+        groupText,
+        subFont,
+        fontSize: 9.2,
+        bold: false,
+        brush: subBrush,
+        color: subColor,
+        bounds: Rect.fromLTWH(cardX, p2LeftY + flowLineStep, cardW, flowTextH),
+      );
       g2.drawString(infoText, subFont,
           brush: subBrush,
-          bounds: Rect.fromLTWH(cardX, p2LeftY + cardLine3Y, cardW, 13));
+          bounds: Rect.fromLTWH(
+              cardX, p2LeftY + flowLineStep * 2, cardW, flowTextH));
+      final barY = p2LeftY + flowLineStep * 2 + flowTextH + 2;
       drawProgressBar(
         g: g2,
         x: cardX,
-        y: p2LeftY + 42,
+        y: barY,
         w: cardW,
         previousPct: cs.previousProgressPct,
         todayPct: cs.progressPct,
       );
-      p2LeftY += 50 + cardGap;
+      p2LeftY = barY + 5 + flowCardGap;
     }
   }
 
-  double p2RightY = p2Top + 24;
+  double p2RightY = p2Top + sectionBodyGap;
   if (payload.classWorkEntries.isEmpty) {
     g2.drawString('• 오늘 수행 기록 없음', subFont,
         brush: subBrush,
-        bounds: Rect.fromLTWH(p2RightX + 2, p2RightY, p2ColWidth - 4, 14));
+        bounds: Rect.fromLTWH(p2RightX, p2RightY, p2ColWidth, flowTextH));
   } else {
-    for (final line in payload.classWorkEntries) {
-      if (p2RightY + 14 > p2RowsLimit) break;
+    final classLines = payload.classWorkEntries;
+    for (int i = 0; i < classLines.length; i++) {
+      final line = classLines[i];
+      final groupTitle = line.title.trim().isEmpty ? '' : line.title.trim();
+      final subCount = line.subEntries.length;
+      final lastOffset = subCount == 0
+          ? (groupTitle.isNotEmpty ? flowLineStep : 0.0)
+          : flowLineStep * (1 + subCount);
+      final cardH = lastOffset + flowTextH + flowCardGap;
+      final remaining = classLines.length - i;
+      if (p2RightY + cardH + (remaining > 1 ? overflowLineH : 0) > p2RowsLimit) {
+        drawOverflow(g2, p2RightX, p2RightY, p2ColWidth, remaining);
+        break;
+      }
       final bookText =
           line.bookAndCourse.trim().isEmpty ? '' : line.bookAndCourse.trim();
-      final groupTitle = line.title.trim().isEmpty ? '' : line.title.trim();
       final timeText =
           line.studyMs > 0 ? _formatDurationKorean(line.studyMs) : '';
-      final cardX = p2RightX + 2;
-      final cardW = p2ColWidth - 4;
+      final cardX = p2RightX;
+      final cardW = p2ColWidth;
       final timeW = timeText.isEmpty
           ? 0.0
           : math.min(bodyFont.measureString(timeText).width + 2, cardW * 0.4);
       final line1LeftW =
-          timeW > 0 ? math.max(0.0, cardW - timeW - 6) : cardW;
+          timeW > 0 ? math.max(0.0, cardW - timeW - flowInlineGap) : cardW;
       final itemTop = p2RightY;
       if (bookText.isNotEmpty) {
-        g2.drawString(bookText, bodyBoldFont,
-            brush: textBrush,
-            bounds: Rect.fromLTWH(cardX, itemTop, line1LeftW, 14));
+        await drawLine(
+          g2,
+          bookText,
+          bodyBoldFont,
+          fontSize: 10.2,
+          bold: true,
+          brush: textBrush,
+          color: textColor,
+          bounds: Rect.fromLTWH(cardX, itemTop, line1LeftW, flowTextH),
+        );
       }
       if (timeW > 0) {
         g2.drawString(timeText, subFont,
             brush: subBrush,
-            bounds: Rect.fromLTWH(cardX + line1LeftW + 6, itemTop, timeW, 14),
+            bounds: Rect.fromLTWH(
+                cardX + line1LeftW + flowInlineGap, itemTop, timeW, flowTextH),
             format: sf.PdfStringFormat(alignment: sf.PdfTextAlignment.right));
       }
       if (groupTitle.isNotEmpty) {
-        g2.drawString(groupTitle, subFont,
-            brush: subBrush,
-            bounds: Rect.fromLTWH(cardX, itemTop + cardLine2Y, cardW, 13));
+        await drawLine(
+          g2,
+          groupTitle,
+          subFont,
+          fontSize: 9.2,
+          bold: false,
+          brush: subBrush,
+          color: subColor,
+          bounds: Rect.fromLTWH(
+              cardX, itemTop + flowLineStep, cardW, flowTextH),
+        );
       }
-      var lineY = itemTop + cardLine3Y;
+      var lineY = itemTop + flowLineStep * 2;
       for (final sub in line.subEntries) {
-        if (lineY + 13 > p2RowsLimit) break;
+        if (lineY + flowTextH > p2RowsLimit) break;
         final subText = '${sub.title} · p.${sub.page} · ${sub.count}문항';
-        g2.drawString(subText, subFont,
-            brush: subBrush,
-            bounds: Rect.fromLTWH(cardX, lineY, cardW, 13));
-        lineY += 13;
+        await drawLine(
+          g2,
+          subText,
+          subFont,
+          fontSize: 9.2,
+          bold: false,
+          brush: subBrush,
+          color: subColor,
+          bounds: Rect.fromLTWH(cardX, lineY, cardW, flowTextH),
+        );
+        lineY += flowLineStep;
       }
-      final contentBottomY =
-          line.subEntries.isEmpty ? itemTop + 40 : lineY;
-      p2RightY = contentBottomY + cardGap;
+      final lastLine = line.subEntries.isEmpty
+          ? itemTop + (groupTitle.isNotEmpty ? flowLineStep : 0)
+          : lineY - flowLineStep;
+      p2RightY = lastLine + flowTextH + flowCardGap;
+    }
+  }
+
+  // ── Page 2 bottom-left: 숙제 검사 내역 ──
+  final csX = p2LeftX;
+  final csW = p2ColWidth;
+  final csLine1Font = await _loadTodoPdfFont(9.2, bold: true);
+  final csLine2Font = await _loadTodoPdfFont(9.0);
+  g2.drawString('숙제 검사 내역 $visibleCheckRateCount개', sectionFont,
+      brush: textBrush,
+      bounds: Rect.fromLTWH(p2LeftX, p2BottomTop, p2ColWidth, 18));
+  double csY = p2BottomTop + sectionBodyGap;
+
+  final hasCheckData = payload.checkRates.any((e) => e.progress != null);
+  if (hasCheckData) {
+    // 분자: 오늘 추가된 % 합(정규 오늘검사예정 + 자의 추가분 모두 포함)
+    // 분모: 정규 오늘검사예정 과제의 "내준 시점 기준 남은 %"만 합산
+    //       (자의 추가분은 분모에서 제외 -> 100% 초과 가능)
+    int sumTodayPct = 0;
+    int sumRemainingPct = 0;
+    for (final cr in payload.checkRates) {
+      if (cr.progress == null) continue;
+      sumTodayPct += (cr.todayProgress ?? 0);
+      if (!cr.isExtra) {
+        sumRemainingPct += math.max(0, 100 - (cr.previousProgress ?? 0));
+      }
+    }
+    final int ratioPct = sumRemainingPct > 0
+        ? ((sumTodayPct * 100) / sumRemainingPct).round()
+        : (sumTodayPct > 0 ? 101 : 0);
+    final mood = _todoCheckMoodFor(ratioPct);
+    const double emSize = 24.0;
+    const double moodGap = 8.0;
+    // 타이틀 하단과 이모지 사이 여백을, 이모지와 리스트 사이 간격(13)과 동일하게 맞춘다.
+    const double moodVGap = 13.0;
+    final double emY = p2BottomTop + sectionBodyGap;
+    final moodFont = await _loadTodoPdfFont(10.8, bold: true);
+    final moodText = '${mood.label}  $ratioPct%';
+    final moodTextW = moodFont.measureString(moodText).width;
+    final blockW = emSize + moodGap + moodTextW;
+    final blockX = csX + math.max(0.0, (csW - blockW) / 2);
+    final emojiBmp = await _loadTodoEmojiBitmap(mood.asset);
+    if (emojiBmp != null) {
+      g2.drawImage(emojiBmp, Rect.fromLTWH(blockX, emY, emSize, emSize));
+      if (mood.fire) {
+        final flameBmp = await _loadTodoEmojiBitmap('assets/emoji/flame.png');
+        if (flameBmp != null) {
+          g2.drawImage(
+              flameBmp, Rect.fromLTWH(blockX + emSize - 11, emY - 7, 15, 15));
+        }
+      }
+    }
+    final moodTextX = blockX + emSize + moodGap;
+    g2.drawString(moodText, moodFont,
+        brush: textBrush,
+        bounds: Rect.fromLTWH(moodTextX, emY + 5, moodTextW + 4, 18));
+    csY = emY + emSize + moodVGap;
+  }
+
+  if (!hasCheckData) {
+    g2.drawString('검사 내역 없음', subFont,
+        brush: subBrush, bounds: Rect.fromLTWH(csX, csY, csW, 14));
+  } else {
+    final rightAlign = sf.PdfStringFormat(alignment: sf.PdfTextAlignment.right);
+    final checkRows = payload.checkRates;
+    const cardH = flowLineStep * 2 + flowTextH + 7 + flowCardGap;
+    for (int i = 0; i < checkRows.length; i++) {
+      final cr = checkRows[i];
+      final remaining = checkRows.length - i;
+      if (csY + cardH + (remaining > 1 ? overflowLineH : 0) > p2BottomLimit) {
+        drawOverflow(g2, csX, csY, csW, remaining);
+        break;
+      }
+      final bookText = cr.bookAndCourse.trim();
+      final groupText = cr.title.trim();
+      final titleText = (() {
+        if (bookText.isEmpty && groupText.isEmpty) return '(제목 없음)';
+        if (bookText.isEmpty) return groupText;
+        if (groupText.isEmpty) return bookText;
+        return '$bookText · $groupText';
+      })();
+      final todayPct = cr.todayProgress ?? 0;
+      final previousPct = cr.previousProgress ?? 0;
+      // 2번째 줄: 페이지(좌) | 문항수 · +퍼센트(우)
+      // 홈 그룹 카드와 같이 p.130-132 형식. 왼쪽이 오른쪽 문구를 덮지 않게 칸을 나눈다.
+      final line2Left = _formatPageTextCompact(cr.page);
+      final missedLabel = switch (cr.outcome) {
+        'left_behind' => '숙제 안 함 (두고 옴) · 0%',
+        'not_done' => '숙제 안 함 · 0%',
+        _ => null,
+      };
+      final line2Right = missedLabel ??
+          [
+            if (_formatCountText(cr.count) != '-') _formatCountText(cr.count),
+            '+$todayPct%',
+          ].join(' · ');
+      // 3번째 줄: 내준 날짜 · 마감 날짜(좌) | 검사일(우)
+      final line3Left = [
+        '내준 ${cr.assignedAt != null ? _formatMonthDay(cr.assignedAt!) : '-'}',
+        '마감 ${cr.dueDate != null ? _formatMonthDay(cr.dueDate!) : '-'}',
+      ].join(' · ');
+      final line3Right =
+          '검사 ${cr.checkedAt != null ? _formatMonthDay(cr.checkedAt!) : '-'}';
+      await drawLine(
+        g2,
+        titleText,
+        csLine1Font,
+        fontSize: 9.2,
+        bold: true,
+        brush: textBrush,
+        color: textColor,
+        bounds: Rect.fromLTWH(csX, csY, csW, flowTextH),
+      );
+      final line2RightW = line2Right.isEmpty
+          ? 0.0
+          : math.min(
+              csLine2Font.measureString(line2Right).width + 2,
+              csW * 0.46,
+            );
+      final line2LeftW = line2RightW > 0
+          ? math.max(0.0, csW - line2RightW - flowInlineGap)
+          : csW;
+      final line3RightW = math.min(
+        csLine2Font.measureString(line3Right).width + 2,
+        csW * 0.4,
+      );
+      final line3LeftW = math.max(0.0, csW - line3RightW - flowInlineGap);
+      g2.drawString(line2Left, csLine2Font,
+          brush: subBrush,
+          bounds: Rect.fromLTWH(csX, csY + flowLineStep, line2LeftW, flowTextH));
+      if (line2RightW > 0) {
+        g2.drawString(line2Right, csLine2Font,
+            brush: subBrush,
+            bounds: Rect.fromLTWH(csX + line2LeftW + flowInlineGap,
+                csY + flowLineStep, line2RightW, flowTextH),
+            format: rightAlign);
+      }
+      g2.drawString(line3Left, csLine2Font,
+          brush: subBrush,
+          bounds: Rect.fromLTWH(
+              csX, csY + flowLineStep * 2, line3LeftW, flowTextH));
+      g2.drawString(line3Right, csLine2Font,
+          brush: subBrush,
+          bounds: Rect.fromLTWH(csX + line3LeftW + flowInlineGap,
+              csY + flowLineStep * 2, line3RightW, flowTextH),
+          format: rightAlign);
+      final barY = csY + flowLineStep * 2 + flowTextH + 2;
+      drawProgressBar(
+        g: g2,
+        x: csX,
+        y: barY,
+        w: csW,
+        previousPct: previousPct.toDouble(),
+        todayPct: todayPct.toDouble(),
+      );
+      final rowAdvance = barY - csY + 5 + flowCardGap;
+      g2.drawLine(weakLinePen, Offset(csX, csY + rowAdvance - 3),
+          Offset(csX + csW, csY + rowAdvance - 3));
+      csY += rowAdvance;
     }
   }
 
   final bytes = await doc.save();
   doc.dispose();
-  final dir = await getTemporaryDirectory();
-  final outPath = p.join(
-    dir.path,
-    'homework_todo_${DateTime.now().millisecondsSinceEpoch}.pdf',
-  );
-  await File(outPath).writeAsBytes(bytes, flush: true);
-  return outPath;
+  return bytes;
 }
 
 void _scheduleTempDelete(String path) {

@@ -139,7 +139,7 @@ class _ThinkUsageTabState extends State<ThinkUsageTab> {
         codeRequestDailyLimit: codeLimit,
       );
       await _c.refreshStatus();
-      if (!_webSearch) _c.setWebSearch(false);
+      _c.setWebSearch(_webSearch);
       if (mounted) showThinkSnack(context, '설정을 저장했습니다.');
     } catch (e) {
       if (mounted) showThinkSnack(context, '설정을 저장하지 못했습니다: $e', error: true);

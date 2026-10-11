@@ -60,6 +60,54 @@ test(`${rendererName}: mixed raw-tabular row keeps multicolumn at alignment leve
   );
 });
 
+test(`${rendererName}: escaped braces in a raw table cell stay inside the cell`, () => {
+  const stem = String.raw`국어 점수 차이다.
+[문단]
+[표시작]
+\begin{tabular}{|c|c|c|c|c|c|}
+\hline
+\text{학생} & A & B & C & D & E \\
+\hline
+\text{\{(각 학생의 국어 점수)[문단]-(은우의 국어 점수)\}(점)} & -8 & 5 & 1 & -7 & 4 \\
+\hline
+\end{tabular}
+[표끝]`;
+
+  const tex = buildDocumentTexSource(
+    [{
+      id: 'q-escaped-brace-table',
+      question_uid: 'q-escaped-brace-table',
+      question_number: '0620',
+      stem,
+      equations: [],
+      objective_choices: [],
+      allow_objective: false,
+      allow_subjective: true,
+      export_mode: 'subjective',
+      meta: {},
+    }],
+    {
+      profile: 'naesin',
+      paper: 'A4',
+      columns: 1,
+      maxQuestionsPerPage: 1,
+      hidePreviewHeader: true,
+      hideQuestionNumber: true,
+    },
+  );
+
+  assert.doesNotMatch(
+    tex,
+    /\\settowidth\{\\YggCellNat\}\{[^%\n]*&/,
+    'a literal \\{ must not swallow the column separator into the measured cell',
+  );
+  assert.match(tex, /각 학생의 국어 점수/);
+  assert.match(tex, /은우의 국어 점수/);
+  assert.match(tex, /\\displaystyle -8/);
+  assert.match(tex, /\\displaystyle 4/);
+  assert.doesNotMatch(tex, /\\multirow/);
+});
+
 test(`${rendererName}: cline header rule is not converted into cell content`, () => {
   const stem = String.raw`단계별 합격자 수를 나타낸 표이다.
 [표시작]

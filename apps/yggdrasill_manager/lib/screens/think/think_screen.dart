@@ -4,6 +4,7 @@ import '../../services/think/think_code_controller.dart';
 import '../../services/think/think_controller.dart';
 import 'think_chat_tab.dart';
 import 'think_memory_tab.dart';
+import 'think_status_dialog.dart';
 import 'think_style.dart';
 import 'think_usage_tab.dart';
 
@@ -124,13 +125,14 @@ class _ThinkScreenState extends State<ThinkScreen> {
         '기본 ${status.models['primary'] ?? '-'} · 깊게 ${status.models['deep'] ?? '-'} · 빠른 작업 ${status.models['fast'] ?? '-'}',
         if (status.budgetLimitUsd != null)
           '이번 달 ${formatUsd(status.spentUsd)} / 한도 ${formatUsd(status.budgetLimitUsd, digits: 2)}${status.budgetExceeded ? ' (초과)' : ''}',
-        '눌러서 다시 확인',
+        if (status.promptVersion.isNotEmpty) 'prompt ${status.promptVersion}',
+        '눌러서 연결 상태 자세히',
       ].join('\n');
     }
     return Tooltip(
       message: tip,
       child: InkWell(
-        onTap: _c.statusLoading ? null : _c.refreshStatus,
+        onTap: _c.forbidden ? null : () => showThinkStatusDialog(context),
         borderRadius: BorderRadius.circular(8),
         child: Padding(padding: const EdgeInsets.all(4), child: badge),
       ),
