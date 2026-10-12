@@ -926,6 +926,8 @@ class ThinkStatus {
 
   ThinkFeatureStatus get thinkRoles => features['think_roles'] ?? ThinkFeatureStatus.edgeMissing;
 
+  ThinkFeatureStatus get memoryProposals => features['memory_proposals'] ?? ThinkFeatureStatus.edgeMissing;
+
   ThinkStatus withFeatures(Map<String, ThinkFeatureStatus> next) => ThinkStatus(
         configured: configured,
         provider: provider,

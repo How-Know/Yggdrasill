@@ -424,8 +424,8 @@ class ThinkController extends ChangeNotifier {
     if (i >= 0) {
       list[i] = a;
     } else {
-      // 서버와 같이, 같은 종류의 대기 중 제안은 새 제안으로 대체된다.
-      if (a.pending) {
+      // 서버와 같이, 같은 종류의 대기 중 제안은 새 제안으로 대체된다. 기억 카드는 서로 대체하지 않는다.
+      if (a.pending && !a.kind.isMemory) {
         for (var j = 0; j < list.length; j++) {
           final o = list[j];
           if (o.pending && o.kind == a.kind) list[j] = o.copyWith(status: ThinkActionStatus.rejected, superseded: true);
@@ -491,8 +491,20 @@ class ThinkController extends ChangeNotifier {
         await refreshTree();
       case ThinkActionKind.splitConversation:
         await Future.wait([refreshTree(), _refreshConversationsQuietly()]);
+      case ThinkActionKind.saveMemory:
+        await refreshMemories();
+      case ThinkActionKind.memoryCardChange:
+        // 대상 카드(수정·닫힘)와 대체로 생긴 새 카드는 서버가 바꿨다. 대상이 다른 대화에 있을 수 있다.
+        final target = a.memoryTargetConversationId;
+        await Future.wait([
+          loadActions(a.conversationId),
+          if (target != null && target != a.conversationId) loadActions(target),
+        ]);
     }
   }
+
+  /// 서버(Edge·DB)와 이 앱이 모두 기억 저장 제안을 지원하는지. 상태 창 표시에만 쓴다(카드는 서버가 만든 것만 보인다).
+  bool get memoryProposalsReady => status?.memoryProposals.ready == true;
 
   // ------------------------------------------------------------------ 역할·자료 스냅샷
   ThinkRoleId conversationRole = ThinkRoleId.lead;

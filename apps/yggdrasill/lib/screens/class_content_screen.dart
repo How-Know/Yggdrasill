@@ -192,6 +192,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     });
     HomeworkStore.instance.revision
         .addListener(_onHomeworkStoreRevisionChanged);
+    homeBatchConfirmPendingCount.addListener(_onBatchConfirmStateChanged);
     rightSideSheetPdfPanelSession.addListener(_onPdfPanelSessionChanged);
     ExamModeService.instance.isOn.addListener(_onHomeFabClusterChanged);
     ExamModeService.instance.suppressExamActionCluster
@@ -253,6 +254,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     HomeworkStore.instance.revision.removeListener(
       _onHomeworkStoreRevisionChanged,
     );
+    homeBatchConfirmPendingCount.removeListener(_onBatchConfirmStateChanged);
     rightSideSheetPdfPanelSession.removeListener(_onPdfPanelSessionChanged);
     ExamModeService.instance.isOn.removeListener(_onHomeFabClusterChanged);
     ExamModeService.instance.suppressExamActionCluster
@@ -381,6 +383,10 @@ class _ClassContentScreenState extends State<ClassContentScreen>
 
   void _onHomeworkStoreRevisionChanged() {
     _scheduleRightSheetAnswerPreload();
+  }
+
+  void _onBatchConfirmStateChanged() {
+    if (mounted) setState(() {});
   }
 
   void _scheduleRightSheetAnswerPreload() {
@@ -937,8 +943,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                 SolidCapsuleActionButton(
                   tooltip: '출석 순위',
                   icon: Icons.leaderboard_rounded,
-                  onPressed: () =>
-                      unawaited(showAttendanceRankDialog(context)),
+                  onPressed: () => unawaited(showAttendanceRankDialog(context)),
                 ),
                 SolidCapsuleActionButton(
                   tooltip: 'M5 바인딩 이력',
@@ -1075,6 +1080,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                       showAnchorDateHint:
                                           !isAttendanceAnchorToday(anchorDate),
                                       pendingConfirms: _pendingConfirms,
+                                      savingConfirms:
+                                          _structuredGradingInFlightKeys,
                                       onSubmittedCardTap:
                                           (studentId, group, summary, children,
                                               {openNext}) async {
@@ -4716,7 +4723,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               solutionPathRaw: _solutionPathForTextbookRow(
                 textbookSourceRow,
                 solutionPathRaw: textbookSourceContext
-                        .pdfPathsByQuestionId[question.id.trim()]?['solution'] ??
+                            .pdfPathsByQuestionId[question.id.trim()]
+                        ?['solution'] ??
                     '',
                 bodyPathRaw: textbookSourceContext
                         .pdfPathsByQuestionId[question.id.trim()]?['body'] ??
@@ -5934,7 +5942,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           (studentId: studentId, itemId: payload.homeworkId),
         };
         if (shouldPersist) {
-          _structuredGradingInFlightKeys.addAll(persistenceKeys);
+          setState(
+            () => _structuredGradingInFlightKeys.addAll(persistenceKeys),
+          );
           _batchConfirmService.beginStructuredDraftSave(keys);
         }
         var savedGrading = true;
@@ -5975,10 +5985,14 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         } finally {
           if (shouldPersist) {
             _batchConfirmService.endStructuredDraftSave(keys);
+            if (mounted) {
+              setState(
+                () => _structuredGradingInFlightKeys.removeAll(
+                  persistenceKeys,
+                ),
+              );
+            }
           }
-        }
-        if (shouldPersist) {
-          _structuredGradingInFlightKeys.removeAll(persistenceKeys);
         }
         if (!mounted || !savedGrading) return;
         _markPendingConfirms(
@@ -6227,7 +6241,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               (studentId: studentId, itemId: payload.homeworkId),
             };
             if (shouldPersist) {
-              _structuredGradingInFlightKeys.addAll(persistenceKeys);
+              setState(
+                () => _structuredGradingInFlightKeys.addAll(persistenceKeys),
+              );
               _batchConfirmService.beginStructuredDraftSave(keys);
             }
             var savedGrading = true;
@@ -6268,10 +6284,14 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             } finally {
               if (shouldPersist) {
                 _batchConfirmService.endStructuredDraftSave(keys);
+                if (mounted) {
+                  setState(
+                    () => _structuredGradingInFlightKeys.removeAll(
+                      persistenceKeys,
+                    ),
+                  );
+                }
               }
-            }
-            if (shouldPersist) {
-              _structuredGradingInFlightKeys.removeAll(persistenceKeys);
             }
             if (!mounted || !savedGrading) return;
             _markPendingConfirms(
@@ -6444,7 +6464,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             ),
           };
           if (shouldPersist) {
-            _structuredGradingInFlightKeys.addAll(persistenceKeys);
+            setState(
+              () => _structuredGradingInFlightKeys.addAll(persistenceKeys),
+            );
             _batchConfirmService.beginStructuredDraftSave(keys);
           }
           var savedGrading = true;
@@ -6486,10 +6508,14 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           } finally {
             if (shouldPersist) {
               _batchConfirmService.endStructuredDraftSave(keys);
+              if (mounted) {
+                setState(
+                  () => _structuredGradingInFlightKeys.removeAll(
+                    persistenceKeys,
+                  ),
+                );
+              }
             }
-          }
-          if (shouldPersist) {
-            _structuredGradingInFlightKeys.removeAll(persistenceKeys);
           }
           if (!mounted || !savedGrading) return;
           _markPendingConfirms(
@@ -21273,11 +21299,10 @@ class _AttendingButton extends StatelessWidget {
 
               String school = '';
               String gradeText = '';
-              var profileStudent =
-                  DataManager.instance.students
-                      .where((s) => s.student.id == studentId)
-                      .map((s) => s.student)
-                      .firstOrNull;
+              var profileStudent = DataManager.instance.students
+                  .where((s) => s.student.id == studentId)
+                  .map((s) => s.student)
+                  .firstOrNull;
               if (profileStudent != null) {
                 school = profileStudent.school;
                 final g = profileStudent.grade;
@@ -21343,7 +21368,8 @@ class _AttendingButton extends StatelessWidget {
               final leaveReason = (leaveReasonText ?? '').trim();
 
               // 크기·줄높이는 과제카드 2번째 줄 이후와 같음. 굵기는 Regular. 색은 기존 값.
-              final infoStyle = _HomeworkCardTheme.of(context).secondaryRowStyle;
+              final infoStyle =
+                  _HomeworkCardTheme.of(context).secondaryRowStyle;
               final schoolStyle = infoStyle.copyWith(
                 color: secondaryTextColor,
                 fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,

@@ -9,6 +9,8 @@ import '../../services/think/think_models.dart';
 import 'think_code_request_dialog.dart';
 import 'think_code_views.dart';
 import 'think_markdown.dart';
+import 'think_memory_proposal_views.dart';
+import 'think_memory_scope_picker.dart';
 import 'think_split_views.dart';
 import 'think_status_dialog.dart';
 import 'think_style.dart';
@@ -234,6 +236,8 @@ class _ThinkActionCardState extends State<ThinkActionCard> with _BusyState {
           icon: Icons.low_priority, text: '${a.kind.label} 제안 · 새 제안으로 대체됨${a.title.isEmpty ? '' : ' · ${a.title}'}');
     }
     if (a.kind == ThinkActionKind.splitConversation && a.status != ThinkActionStatus.failed) return _split();
+    if (a.kind == ThinkActionKind.saveMemory && a.status != ThinkActionStatus.failed) return _saveMemory();
+    if (a.kind == ThinkActionKind.memoryCardChange && a.status != ThinkActionStatus.failed) return _memoryChange();
     if (a.status == ThinkActionStatus.rejected) {
       return _ClosedLine(icon: Icons.block, text: '${a.kind.label} 제안 · 거절함${_subject.isEmpty ? '' : ' · $_subject'}');
     }
@@ -255,6 +259,202 @@ class _ThinkActionCardState extends State<ThinkActionCard> with _BusyState {
   }
 
   String get _subject => (a.preview['title'] ?? a.preview['path'] ?? '').toString();
+
+  // ------------------------------------------------------------ 기억 저장 제안
+  /// 카드에서 고른 범위. null이면 Think가 제안한 범위 그대로.
+  ThinkMemoryScope? _memScope;
+  ThinkDepartmentId? _memDept;
+
+  ThinkMemoryProposal get _memoryWithScope {
+    final m = a.memoryProposal;
+    final scope = _memScope;
+    if (scope == null) return m;
+    final dept = scope == ThinkMemoryScope.department;
+    return m.copyWith(
+      memoryScope: dept ? 'department' : 'common',
+      scopeDepartment: dept ? _memDept?.db : null,
+      clearDepartment: !dept,
+    );
+  }
+
+  Future<void> _approveMemory(ThinkMemoryProposal? edited) => run(
+        () => _think.applyAction(a, overrides: edited == null ? const {} : {'memory': edited.toJson()}),
+        done: '기억으로 저장했습니다. 다음 대화부터 Think가 참고합니다.',
+      );
+
+  Future<void> _editMemory() async {
+    final edited = await ThinkMemoryEditDialog.show(context, memory: _memoryWithScope, showScope: _think.rolesReady);
+    if (edited == null || !mounted) return;
+    await _approveMemory(edited);
+  }
+
+  Widget _saveMemory() {
+    final m = a.memoryProposal;
+    final title = m.title.isEmpty ? a.title : m.title;
+    if (a.status == ThinkActionStatus.applied) {
+      return _ClosedLine(
+        icon: Icons.bookmark_added_outlined,
+        text: '기억 저장 · ${a.memoryEdited ? '고쳐서 ' : ''}확정 기억으로 저장함 · $title',
+      );
+    }
+    if (a.status == ThinkActionStatus.rejected) {
+      return _ClosedLine(
+        icon: Icons.block,
+        text: '기억 저장 제안 · ${a.memoryWithdrawn ? '삭제 제안 승인으로 닫힘' : '거절함'} · $title',
+      );
+    }
+    final scope = _memScope ?? (m.memoryScope == 'department' ? ThinkMemoryScope.department : ThinkMemoryScope.common);
+    final dept = _memScope == null ? ThinkDepartmentId.parse(m.scopeDepartment) : _memDept;
+    final scopeMissing = scope == ThinkMemoryScope.department && dept == null;
+    return _CardFrame(
+      icon: Icons.bookmark_add_outlined,
+      label: '기억 저장 제안',
+      badge: ThinkBadge(a.memoryRevised ? '고쳐진 카드 · 승인 대기' : '승인 대기', color: kThinkLink),
+      children: [
+        ThinkMemoryProposalView(memory: m, showScope: !_think.rolesReady),
+        if (a.memoryReason.isNotEmpty) ...[
+          thinkCodeLabel('Think가 지금 제안한 이유'),
+          SelectableText(a.memoryReason, style: const TextStyle(color: kThinkText, fontSize: 13, height: 1.5)),
+        ],
+        if (a.supersedesTitle.isNotEmpty) ...[
+          _gap(),
+          ThinkNotice(
+            icon: Icons.swap_horiz,
+            text: '확정된 기억 "${a.supersedesTitle}"을(를) 대체합니다. 승인하면 앞 기억은 "대체됨"으로 바뀌고 Think가 더 쓰지 않습니다.',
+          ),
+        ],
+        if (_think.rolesReady) ...[
+          _gap(),
+          ThinkMemoryScopePicker(
+            scope: scope,
+            department: dept,
+            enabled: !busy,
+            onChanged: (s, d) => setState(() {
+              _memScope = s;
+              _memDept = d;
+            }),
+          ),
+          if (_memScope == null)
+            const Padding(
+              padding: EdgeInsets.only(top: 4),
+              child: Text('Think가 제안한 범위입니다. 바꾸려면 다른 범위를 고르세요.', style: TextStyle(color: kThinkHint, fontSize: 12)),
+            ),
+        ],
+        _gap(),
+        const ThinkNotice(
+          icon: Icons.verified_outlined,
+          text: '승인하면 바로 확정 기억으로 저장되고 다음 대화부터 Think가 참고합니다. 거절하면 아무것도 저장하지 않습니다.',
+        ),
+        _gap(),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            ElevatedButton.icon(
+              onPressed: busy || scopeMissing ? null : () => _approveMemory(_memScope == null ? null : _memoryWithScope),
+              style: thinkPrimaryButton(),
+              icon: const Icon(Icons.check, size: 16),
+              label: const Text('승인하고 저장'),
+            ),
+            OutlinedButton.icon(
+              onPressed: busy ? null : _editMemory,
+              style: thinkOutlineButton(),
+              icon: const Icon(Icons.edit_outlined, size: 16),
+              label: const Text('고쳐서 승인'),
+            ),
+            TextButton(
+              onPressed: busy ? null : () => run(() => _think.rejectAction(a)),
+              child: const Text('거절', style: TextStyle(color: kThinkSub)),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Future<void> _approveMemoryChange(ThinkMemoryProposal? edited) => run(
+        () => _think.applyAction(a, overrides: edited == null ? const {} : {'memory': edited.toJson()}),
+        done: switch (a.memoryCardOp) {
+          'withdraw' => '대기 중이던 기억 저장 카드를 닫았습니다.',
+          'replace' => '앞 카드를 닫고 새 기억 저장 카드를 올렸습니다. 새 카드에서 승인해야 저장됩니다.',
+          _ => '기억 저장 카드를 고쳤습니다. 카드에서 승인해야 저장됩니다.',
+        },
+      );
+
+  Widget _memoryChange() {
+    final op = a.memoryCardOp;
+    final opLabel = kThinkMemoryCardOps[op] ?? op;
+    final target = a.memoryTargetTitle.isEmpty ? '(제목 없음)' : a.memoryTargetTitle;
+    if (a.status == ThinkActionStatus.applied) {
+      return _ClosedLine(icon: Icons.edit_note, text: '기억 카드 변경 · $opLabel 승인함 · $target');
+    }
+    if (a.status == ThinkActionStatus.rejected) {
+      return _ClosedLine(icon: Icons.block, text: '기억 카드 변경 제안 · 거절함 · $opLabel · $target');
+    }
+    final withdraw = op == 'withdraw';
+    final m = a.memoryProposal;
+    return _CardFrame(
+      icon: Icons.edit_note,
+      label: '기억 카드 변경 제안',
+      badge: ThinkBadge('$opLabel · 승인 대기', color: kThinkLink),
+      children: [
+        Text('대상: 대기 중인 기억 저장 카드 "$target"', style: const TextStyle(color: kThinkSub, fontSize: 12)),
+        if (!withdraw && !m.isEmpty) ...[
+          _gap(8),
+          thinkCodeLabel(op == 'replace' ? '새 카드 내용' : '고칠 내용'),
+          ThinkMemoryProposalView(memory: m),
+        ],
+        if (a.memoryReason.isNotEmpty) ...[
+          thinkCodeLabel('Think가 제안한 이유'),
+          SelectableText(a.memoryReason, style: const TextStyle(color: kThinkText, fontSize: 13, height: 1.5)),
+        ],
+        _gap(),
+        ThinkNotice(
+          icon: Icons.info_outline,
+          text: switch (op) {
+            'withdraw' => '승인하면 대기 중인 카드를 닫습니다. 이미 저장된 기억은 바뀌지 않습니다.',
+            'replace' => '승인하면 대상 카드를 닫고 이 내용으로 새 기억 저장 카드를 올립니다. 저장은 새 카드에서 다시 승인해야 합니다.',
+            _ => '승인하면 대상 카드의 내용이 이렇게 바뀝니다. 저장은 그 카드에서 다시 승인해야 합니다.',
+          },
+        ),
+        _gap(),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            ElevatedButton.icon(
+              onPressed: busy ? null : () => _approveMemoryChange(null),
+              style: thinkPrimaryButton(),
+              icon: const Icon(Icons.check, size: 16),
+              label: Text('$opLabel 승인'),
+            ),
+            if (!withdraw)
+              OutlinedButton.icon(
+                onPressed: busy
+                    ? null
+                    : () async {
+                        final edited = await ThinkMemoryEditDialog.show(
+                          context,
+                          memory: m,
+                          showScope: _think.rolesReady,
+                          confirmLabel: '고친 내용으로 $opLabel',
+                        );
+                        if (edited == null || !mounted) return;
+                        await _approveMemoryChange(edited);
+                      },
+                style: thinkOutlineButton(),
+                icon: const Icon(Icons.edit_outlined, size: 16),
+                label: const Text('고쳐서 승인'),
+              ),
+            TextButton(
+              onPressed: busy ? null : () => run(() => _think.rejectAction(a)),
+              child: const Text('거절', style: TextStyle(color: kThinkSub)),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
 
   // ------------------------------------------------------------ 코드
   Widget _codeProposal() {

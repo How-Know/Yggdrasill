@@ -259,6 +259,7 @@ export async function runThinkChat(input: ChatInput, deps: ChatDeps): Promise<Ch
   const userAskedSplit = isSplitRequest(input.message);
   const splitAllowed = !relay && featureReady(features, 'conversation_split') && !isNew && (!splitSuppressed || userAskedSplit);
   const rolesReady = featureReady(features, 'think_roles');
+  const memoryAllowed = !relay && featureReady(features, 'memory_proposals');
 
   // 새 대화에 고른 역할은 첫 답변 전에 저장한다. 저장하지 못하면 총괄로 답하고 그렇게 알린다.
   const wanted = isNew && !relay && rolesReady ? input.newConversationRole ?? null : null;
@@ -299,6 +300,7 @@ export async function runThinkChat(input: ChatInput, deps: ChatDeps): Promise<Ch
       ? featureStatusNote({
         splitState: features.conversation_split.state,
         rolesState: features.think_roles?.state,
+        memoryState: features.memory_proposals?.state,
         isNew,
         suppressed: splitSuppressed,
         userAsked: userAskedSplit,
@@ -307,6 +309,7 @@ export async function runThinkChat(input: ChatInput, deps: ChatDeps): Promise<Ch
     splitSummary,
     access,
     thinkRole: access?.thinkRoleId ?? conversation.think_role_id ?? 'lead',
+    memoryProposalsReady: memoryAllowed,
   });
   const instructions = relay ? `${ctx.instructions}\n\n${relayInstructions(relay.asker)}` : ctx.instructions;
   for (const m of ctx.deliveredMaterials) recordDelivered(m);
@@ -324,11 +327,12 @@ export async function runThinkChat(input: ChatInput, deps: ChatDeps): Promise<Ch
     conversationId,
     memoryRefs: ctx.memoryRefs,
     split: splitAllowed ? { userMessageId, userRequested: userAskedSplit, proposed: false } : undefined,
+    memory: memoryAllowed ? { proposed: false } : undefined,
     access: access ?? undefined,
     recordDelivered,
   };
   const cacheKey = ctx.cacheKeySuffix ? `think:${conversationId}:${ctx.cacheKeySuffix}` : `think:${conversationId}`;
-  const tools = thinkToolsFor({ split: splitAllowed, readOnly: relay !== null });
+  const tools = thinkToolsFor({ split: splitAllowed, memory: memoryAllowed, readOnly: relay !== null });
   emit('conversation', {
     conversation_id: conversationId,
     user_message_id: userMessageId,

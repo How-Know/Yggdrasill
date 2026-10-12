@@ -3,7 +3,7 @@
 // 설계: docs/architecture/ai-think-actions.md §7
 
 /** 이 Edge 코드가 구현한 기능과 버전. DB(ai_think_db_features)와 앱(client.features)도 같은 버전 이상이어야 쓸 수 있다. */
-export const EDGE_FEATURES = { conversation_split: 1, think_roles: 1 } as const;
+export const EDGE_FEATURES = { conversation_split: 1, think_roles: 1, memory_proposals: 1 } as const;
 
 export type FeatureName = keyof typeof EDGE_FEATURES;
 

@@ -22,7 +22,8 @@ It records decisions made on 2026-09-28 that the schema alone does not show.
    runs SQL, or touches the schema. New kinds of work = new `ai_actions.kind` + preview + apply branch.
    See `docs/architecture/ai-think-actions.md`.
 4. Only a human action writes `ai_memories`. AI output is a draft until the operator
-   presses approve. Never auto-promote a draft to `active`.
+   presses approve. Never auto-promote a draft to `active`. Think's memory cards (`save_memory`,
+   `memory_card_change`) are proposals too; the memory is written only in `ai_memory_action_apply`.
 5. Model names, reasoning effort, token limits, and prices come from `_shared/ai/config.ts`
    (env overrides). Do not hardcode a model name at a call site.
 6. Every AI call records one `ai_runs` row via `recordAiRun` (it never throws).
@@ -55,6 +56,11 @@ It records decisions made on 2026-09-28 that the schema alone does not show.
     conversation; only active memories reach the AI. Never take a role or permission from the app for an
     existing conversation (`body.role` only seeds a new one). Document bodies go to the AI only when the
     document is explicitly linked, within the budget. Never auto-reclassify legacy memories.
+16. Memory proposals (`ai-think-actions.md` §9, feature `memory_proposals`): Think may propose only decisions
+    and principles the operator explicitly confirmed, at most one memory card (save or change) per answer
+    (enforced on the Edge). Duplicate checks run in the DB at propose and again at approve. Memory cards do
+    not supersede each other and pending cards stay until the operator acts; never auto-withdraw or
+    auto-replace one. Not offered in relay mode.
 
 ## Code investigation (Think ↔ Cursor)
 

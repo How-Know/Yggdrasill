@@ -7,6 +7,7 @@ import {
   ACTION_TOOLS,
   ACTION_TOOL_LABELS,
   ACTION_TOOL_NAMES,
+  MEMORY_TOOL_NAMES,
   SPLIT_TOOL_NAME,
   dispatchActionTool,
   type ActionRow,
@@ -145,15 +146,24 @@ export const THINK_TOOLS: AiFunctionTool[] = [
 ];
 
 /** 제안을 남기거나 작업을 시작하는 도구. 커서 질문(readOnly)에는 하나도 주지 않는다. */
-export const ACTING_TOOL_NAMES = new Set(['propose_code_request', 'start_code_plan', 'propose_folder', 'propose_delete', SPLIT_TOOL_NAME]);
+export const ACTING_TOOL_NAMES = new Set([
+  'propose_code_request',
+  'start_code_plan',
+  'propose_folder',
+  'propose_delete',
+  SPLIT_TOOL_NAME,
+  ...MEMORY_TOOL_NAMES,
+]);
 
 /**
- * 이번 요청에 노출할 도구. 나누기 도구는 서버가 쓸 수 있다고 판단한 요청에만 넣는다.
+ * 이번 요청에 노출할 도구. 나누기·기억 제안 도구는 서버가 쓸 수 있다고 판단한 요청에만 넣는다.
  * readOnly(커서 질문)면 조회 도구만 준다. Think와 Cursor가 서로 일을 시키며 맴돌지 않게 한다.
  */
-export function thinkToolsFor(opts: { split: boolean; readOnly?: boolean }): AiFunctionTool[] {
+export function thinkToolsFor(opts: { split: boolean; memory?: boolean; readOnly?: boolean }): AiFunctionTool[] {
   if (opts.readOnly) return THINK_TOOLS.filter((t) => !ACTING_TOOL_NAMES.has(t.name));
-  return opts.split ? THINK_TOOLS : THINK_TOOLS.filter((t) => t.name !== SPLIT_TOOL_NAME);
+  return THINK_TOOLS.filter((t) =>
+    (opts.split || t.name !== SPLIT_TOOL_NAME) && (opts.memory === true || !MEMORY_TOOL_NAMES.has(t.name))
+  );
 }
 
 export const TOOL_LABELS: Record<string, string> = {

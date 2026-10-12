@@ -15,7 +15,14 @@ enum ThinkActionKind {
   deleteConversation('delete_conversation', '대화 삭제'),
 
   /// 승인하면 이번 질문과 답변만 새 대화에 복사하고 새 대화로 넘어간다. 원본은 그대로 둔다.
-  splitConversation('split_conversation', '대화 나누기');
+  splitConversation('split_conversation', '대화 나누기'),
+
+  /// Think가 확정된 결론·원칙을 기억으로 남기자고 낸 카드. 승인하면 바로 확정 기억(active)이 된다.
+  /// 기억 카드는 서로 대체하지 않고, 사용자가 처리할 때까지 대기한다.
+  saveMemory('save_memory', '기억 저장'),
+
+  /// 대기 중인 기억 저장 카드를 수정·대체·삭제하자는 카드. 승인 전에는 대상 카드가 그대로다.
+  memoryCardChange('memory_card_change', '기억 카드 변경');
 
   const ThinkActionKind(this.db, this.label);
   final String db;
@@ -30,6 +37,7 @@ enum ThinkActionKind {
 
   bool get isCode => this == codeRequest || this == codeChange || this == codePlan;
   bool get isDelete => this == deleteCodeRequest || this == deleteFolder || this == deleteConversation;
+  bool get isMemory => this == saveMemory || this == memoryCardChange;
 }
 
 enum ThinkActionStatus {
@@ -188,6 +196,48 @@ class ThinkAction {
     return id.isEmpty ? null : id;
   }
 
+  // ---- 기억 저장 제안·기억 카드 변경
+  /// 제안된 기억 내용. 변경 카드의 삭제(withdraw)면 비어 있다.
+  ThinkMemoryProposal get memoryProposal => ThinkMemoryProposal.fromJson(payload['memory']);
+
+  /// Think가 왜 지금 저장(변경)을 제안하는지.
+  String get memoryReason => _str(payload['reason'] ?? preview['reason']);
+
+  /// 대체하려는 확정 기억의 제목. 서버가 제안 때 확인한 값이다.
+  String get supersedesTitle => _str(preview['supersedes_title']);
+
+  /// 승인으로 만든 확정 기억.
+  String? get savedMemoryId {
+    final id = _str(result?['memory_id']);
+    return id.isEmpty ? null : id;
+  }
+
+  bool get memoryEdited => result?['edited'] == true;
+
+  /// 변경 카드 승인으로 고쳐진 대기 카드.
+  bool get memoryRevised => preview['revised'] == true;
+
+  /// 삭제 제안 승인으로 닫혔다.
+  bool get memoryWithdrawn => _str(result?['withdrawn_by_action_id']).isNotEmpty;
+
+  /// 대체 제안 승인으로 닫히고 새 카드가 생겼다.
+  bool get memoryReplaced => _str(result?['replaced_by_action_id']).isNotEmpty;
+
+  /// revise / replace / withdraw
+  String get memoryCardOp => _str(payload['op'] ?? preview['op']);
+
+  String? get memoryTargetActionId {
+    final id = _str(payload['target_action_id']);
+    return id.isEmpty ? null : id;
+  }
+
+  String get memoryTargetTitle => _str(preview['target_title']);
+
+  String? get memoryTargetConversationId {
+    final id = _str(preview['target_conversation_id']);
+    return id.isEmpty ? null : id;
+  }
+
   /// 새 대화에 복사하지 않고 원본에만 남은 것의 수(actions, code_requests, tree_nodes, other_messages).
   Map<String, int> get splitNotCopied {
     final raw = _map(result?['not_copied']);
@@ -196,4 +246,96 @@ class ThinkAction {
         if (e.value is num) e.key: (e.value as num).toInt(),
     };
   }
+}
+
+/// 기억 저장 카드의 내용. 승인할 때 고친 값은 [toJson]으로 overrides.memory에 실어 보낸다(서버가 다시 검사한다).
+class ThinkMemoryProposal {
+  const ThinkMemoryProposal({
+    this.kind = 'decision',
+    this.title = '',
+    this.content = '',
+    this.decisionContext = '',
+    this.decisionReason = '',
+    this.alternatives = const [],
+    this.tags = const [],
+    this.memoryScope = 'common',
+    this.scopeDepartment,
+    this.supersedesId,
+  });
+
+  /// decision / principle
+  final String kind;
+  final String title;
+  final String content;
+  final String decisionContext;
+  final String decisionReason;
+  final List<String> alternatives;
+  final List<String> tags;
+
+  /// common / department
+  final String memoryScope;
+  final String? scopeDepartment;
+  final String? supersedesId;
+
+  bool get isEmpty => title.isEmpty && content.isEmpty;
+  bool get isDecision => kind == 'decision';
+  String get kindLabel => isDecision ? '결정' : '원칙';
+
+  static List<String> _list(dynamic v) =>
+      v is List ? v.map((e) => _str(e)).where((e) => e.isNotEmpty).toList() : const [];
+
+  factory ThinkMemoryProposal.fromJson(dynamic raw) {
+    final m = _map(raw);
+    final dept = _str(m['scope_department']);
+    final sup = _str(m['supersedes_id']);
+    return ThinkMemoryProposal(
+      kind: _str(m['kind']) == 'principle' ? 'principle' : 'decision',
+      title: _str(m['title']),
+      content: _str(m['content']),
+      decisionContext: _str(m['decision_context']),
+      decisionReason: _str(m['decision_reason']),
+      alternatives: _list(m['alternatives']),
+      tags: _list(m['tags']),
+      memoryScope: _str(m['memory_scope']) == 'department' ? 'department' : 'common',
+      scopeDepartment: dept.isEmpty ? null : dept,
+      supersedesId: sup.isEmpty ? null : sup,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'kind': kind,
+        'title': title,
+        'content': content,
+        'decision_context': isDecision ? decisionContext : null,
+        'decision_reason': isDecision ? decisionReason : null,
+        'alternatives': isDecision ? alternatives : const <String>[],
+        'tags': tags,
+        'memory_scope': memoryScope,
+        'scope_department': memoryScope == 'department' ? scopeDepartment : null,
+        'supersedes_id': supersedesId,
+      };
+
+  ThinkMemoryProposal copyWith({
+    String? kind,
+    String? title,
+    String? content,
+    String? decisionContext,
+    String? decisionReason,
+    List<String>? alternatives,
+    String? memoryScope,
+    String? scopeDepartment,
+    bool clearDepartment = false,
+  }) =>
+      ThinkMemoryProposal(
+        kind: kind ?? this.kind,
+        title: title ?? this.title,
+        content: content ?? this.content,
+        decisionContext: decisionContext ?? this.decisionContext,
+        decisionReason: decisionReason ?? this.decisionReason,
+        alternatives: alternatives ?? this.alternatives,
+        tags: tags,
+        memoryScope: memoryScope ?? this.memoryScope,
+        scopeDepartment: clearDepartment ? null : (scopeDepartment ?? this.scopeDepartment),
+        supersedesId: supersedesId,
+      );
 }

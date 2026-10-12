@@ -18,7 +18,9 @@ export type ActionKind =
   | 'delete_code_request'
   | 'delete_folder'
   | 'delete_conversation'
-  | 'split_conversation';
+  | 'split_conversation'
+  | 'save_memory'
+  | 'memory_card_change';
 
 export interface ActionRow {
   id: string;
@@ -124,10 +126,16 @@ export interface SplitToolContext {
   proposed: boolean;
 }
 
+/** 기억 저장 제안을 쓸 수 있을 때만 채운다(기능 준비됨, 커서 질문 아님). 한 답변에 기억 카드는 하나만. */
+export interface MemoryToolContext {
+  proposed: boolean;
+}
+
 export interface ActionToolContext {
   conversationId: string;
   memoryRefs: MemoryRef[];
   split?: SplitToolContext;
+  memory?: MemoryToolContext;
   /** get_memory·search_memories 범위 판정 */
   access?: import('./access_context.ts').ConversationAccessState;
   /** 도구로 AI에 전달된 자료 id 기록(스냅샷용) */
@@ -135,6 +143,9 @@ export interface ActionToolContext {
 }
 
 export const SPLIT_TOOL_NAME = 'propose_conversation_split';
+export const MEMORY_TOOL_NAME = 'propose_memory';
+export const MEMORY_CHANGE_TOOL_NAME = 'propose_memory_card_change';
+export const MEMORY_TOOL_NAMES = new Set([MEMORY_TOOL_NAME, MEMORY_CHANGE_TOOL_NAME]);
 
 export const DELETABLE_CODE_STATUSES = [
   'draft', 'ready', 'needs_review', 'failed', 'cancelled', 'applied', 'apply_failed', 'reverted', 'revert_failed',
@@ -143,6 +154,28 @@ export const DELETABLE_CODE_STATUSES = [
 const nullable = (schema: Record<string, unknown>) => ({ ...schema, type: [schema.type, 'null'] });
 const strList = (description: string) => nullable({ type: 'array', items: { type: 'string' }, description });
 const noArgs = { type: 'object', properties: {}, required: [], additionalProperties: false };
+
+const MEMORY_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  description: '저장할 기억. 범위(memory_scope·scope_department)는 네 제안값이고 사용자가 카드에서 확인·수정한다.',
+  properties: {
+    kind: { type: 'string', enum: ['decision', 'principle'], description: 'decision: 한 번 정한 결정, principle: 계속 지킬 원칙' },
+    title: { type: 'string', description: '제목 (40자 안팎의 명사구)' },
+    content: { type: 'string', description: '확정된 내용만. 네 제안이나 아직 정하지 않은 것은 넣지 않는다' },
+    decision_context: nullable({ type: 'string', description: '결정이면 왜 이 문제를 다뤘는지. 원칙이면 null' }),
+    decision_reason: nullable({ type: 'string', description: '결정이면 이렇게 정한 이유. 원칙이면 null' }),
+    alternatives: strList('결정이면 검토한 대안(한 줄에 하나). 없거나 원칙이면 null'),
+    tags: strList('태그. 없으면 null'),
+    memory_scope: { type: 'string', enum: ['common', 'department'], description: '모든 부서에 해당하면 common' },
+    scope_department: nullable({ type: 'string', enum: ['education', 'product', 'engineering'], description: 'department일 때 부서. common이면 null' }),
+    supersedes_id: nullable({ type: 'string', description: '바뀐 내용으로 대체할 기존 확정 기억 id. 새 기억이면 null' }),
+  },
+  required: [
+    'kind', 'title', 'content', 'decision_context', 'decision_reason', 'alternatives', 'tags', 'memory_scope',
+    'scope_department', 'supersedes_id',
+  ],
+  additionalProperties: false,
+};
 
 export const ACTION_TOOLS: AiFunctionTool[] = [
   {
@@ -316,6 +349,38 @@ export const ACTION_TOOLS: AiFunctionTool[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: MEMORY_TOOL_NAME,
+    description:
+      '사용자가 이 대화에서 명시적으로 확정한 결론·원칙을 기억으로 저장하자고 카드로 제안한다. 사용자가 카드에서 승인해야 저장된다. ' +
+      '먼저 search_memories로 같은 기억이 있는지 본다. 같으면 제안하지 않고, 바뀐 것이면 supersedes_id로 대체를 제안한다. 한 답변에 하나만.',
+    parameters: {
+      type: 'object',
+      properties: {
+        memory: MEMORY_SCHEMA,
+        reason: { type: 'string', description: '지금 저장할 만하다고 본 근거: 사용자가 무엇을 언제 확정했는지 한 문장' },
+      },
+      required: ['memory', 'reason'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: MEMORY_CHANGE_TOOL_NAME,
+    description:
+      '대기 중인 기억 저장 카드를 고치거나(revise) 새 카드로 바꾸거나(replace) 없애자고(withdraw) 카드로 제안한다. 사용자가 승인해야 처리된다. ' +
+      '같은 취지의 대기 카드가 있다고 propose_memory가 알려 줬을 때, 그 카드가 지금 대화와 맞지 않으면 쓴다.',
+    parameters: {
+      type: 'object',
+      properties: {
+        target_action_id: { type: 'string', description: '대기 중인 기억 저장 카드 id (propose_memory가 돌려준 pending_action_id)' },
+        op: { type: 'string', enum: ['revise', 'replace', 'withdraw'] },
+        memory: { ...MEMORY_SCHEMA, type: ['object', 'null'], description: '고치거나 바꿀 내용. withdraw면 null.' },
+        reason: { type: 'string', description: '왜 바꾸거나 없애야 하는지 한 문장' },
+      },
+      required: ['target_action_id', 'op', 'memory', 'reason'],
+      additionalProperties: false,
+    },
+  },
 ];
 
 export const ACTION_TOOL_LABELS: Record<string, string> = {
@@ -328,6 +393,8 @@ export const ACTION_TOOL_LABELS: Record<string, string> = {
   propose_folder: '분류 제안',
   propose_delete: '삭제 제안',
   [SPLIT_TOOL_NAME]: '대화 나누기 제안',
+  [MEMORY_TOOL_NAME]: '기억 저장 제안',
+  [MEMORY_CHANGE_TOOL_NAME]: '기억 카드 변경 제안',
 };
 
 export const ACTION_TOOL_NAMES = new Set(ACTION_TOOLS.map((t) => t.name));
@@ -630,6 +697,125 @@ async function proposeSplit(name: string, args: Record<string, unknown>, src: Ac
   return out(name, { ok: true, action_id: row.id, status: 'proposed', note: SPLIT_PROPOSED_NOTE }, `"${title}"`, row);
 }
 
+const MEMORY_PROPOSED_NOTE =
+  '기억 저장 카드가 사용자에게 보였다. 아직 저장되지 않았다. 사용자가 카드에서 승인해야 저장된다. ' +
+  '답변 끝에 무엇을 기억으로 남기자고 제안했는지 한 줄로 알리고, 저장됐다고 말하지 않는다.';
+
+/** 모델이 준 기억 내용을 정리한다. 최종 검사·중복 확인은 DB(ai_memory_proposal_clean·guard)가 한다. */
+function memoryPayload(raw: unknown): { memory: Record<string, unknown>; missing: string[] } {
+  const m = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  const kind = m.kind === 'decision' || m.kind === 'principle' ? m.kind : null;
+  const decision = kind === 'decision';
+  const scope = m.memory_scope === 'department' ? 'department' : 'common';
+  const dept = typeof m.scope_department === 'string' && ['education', 'product', 'engineering'].includes(m.scope_department)
+    ? m.scope_department
+    : null;
+  const memory = {
+    kind,
+    title: str(m.title, 200),
+    content: str(m.content, 8000),
+    decision_context: decision ? str(m.decision_context, 4000) : null,
+    decision_reason: decision ? str(m.decision_reason, 4000) : null,
+    alternatives: decision ? list(m.alternatives) : [],
+    tags: list(m.tags, 12, 60),
+    memory_scope: scope,
+    scope_department: scope === 'department' ? dept : null,
+    supersedes_id: m.supersedes_id == null ? null : uuid(m.supersedes_id) ?? String(m.supersedes_id).slice(0, 64),
+  };
+  const need: string[] = [];
+  if (!kind) need.push('memory.kind');
+  if (!memory.title) need.push('memory.title');
+  if (!memory.content) need.push('memory.content');
+  if (scope === 'department' && !dept) need.push('memory.scope_department');
+  return { memory, missing: need };
+}
+
+const MEMORY_ERRORS: [code: string, summary: string, next: string][] = [
+  [
+    'memory_duplicate_active',
+    '같은 기억이 이미 있음',
+    '같은 제목의 확정 기억(memory_id)이 있다. 내용도 같으면 제안하지 않고 이미 기억에 있다고 알린다. ' +
+    '바뀐 내용이면 get_memory로 확인한 뒤 supersedes_id에 그 id를 넣어 대체를 제안한다.',
+  ],
+  [
+    'memory_proposal_pending',
+    '같은 취지의 카드가 대기 중',
+    '같은 취지의 기억 저장 카드(pending_action_id)가 이미 대기 중이다. 새로 제안하지 않는다. 사용자에게 그 카드가 있다고 알리고, ' +
+    '내용을 고치거나 새 카드로 바꾸거나 없애야 하면 propose_memory_card_change로 제안한다. 그대로면 그 카드를 승인해 달라고만 한다.',
+  ],
+  ['memory_card_change_pending', '변경 카드가 이미 대기 중', '그 카드에 대한 변경 제안(pending_action_id)이 이미 대기 중이다. 다시 제안하지 않는다.'],
+  ['memory_card_not_pending', '대기 중인 카드가 아님', '이미 처리됐거나 없는 카드다. 작업 상태 메모를 다시 보고, 필요하면 새로 제안한다.'],
+  ['memory_supersede_not_active', '대체할 기억이 확정 상태가 아님', 'search_memories로 지금 확정된 기억 id를 다시 찾아 준다. 없으면 supersedes_id를 null로 둔다.'],
+  ['scope_department_required', '부서 없음', '부서 범위면 scope_department를 준다. 모든 부서에 해당하면 common으로 둔다.'],
+  ['memory_kind_invalid', '종류 오류', 'kind는 decision 또는 principle이다.'],
+  ['memory_scope_invalid', '범위 오류', 'memory_scope는 common 또는 department다.'],
+];
+
+const UUID_IN_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+function memoryError(name: string, e: unknown): ToolRunResult {
+  const message = e instanceof Error ? e.message : String(e);
+  const known = MEMORY_ERRORS.find(([code]) => message.includes(code));
+  if (!known) throw e;
+  const id = message.slice(message.indexOf(known[0])).match(UUID_IN_RE)?.[0] ?? null;
+  const extra: Record<string, unknown> = { next: known[2] };
+  if (id && known[0] === 'memory_duplicate_active') extra.memory_id = id;
+  else if (id) extra.pending_action_id = id;
+  return bad(name, known[0], known[1], extra);
+}
+
+async function proposeMemory(name: string, args: Record<string, unknown>, src: ActionToolSource, ctx: ActionToolContext): Promise<ToolRunResult> {
+  const mem = ctx.memory;
+  if (!mem) return bad(name, 'memory_unavailable', '지금은 제안할 수 없음', { next: '실행 환경 기능 상태 메모를 따른다. 제안하지 않는다.' });
+  if (mem.proposed) return bad(name, 'memory_already_proposed', '이미 제안함', { next: '한 답변에 기억 카드는 하나만 낸다.' });
+  const { memory, missing: need } = memoryPayload(args.memory);
+  if (need.length > 0) return missing(name, need);
+  const reason = str(args.reason, 500);
+  let row: ActionRow;
+  try {
+    row = await src.proposeAction(ctx.conversationId, 'save_memory', { memory, reason }, {});
+  } catch (e) {
+    return memoryError(name, e);
+  }
+  mem.proposed = true;
+  return out(name, { ok: true, action_id: row.id, status: 'proposed', note: MEMORY_PROPOSED_NOTE }, `"${memory.title}"`, row);
+}
+
+const MEMORY_CHANGE_NOTE =
+  '기억 카드 변경 제안이 사용자에게 보였다. 사용자가 승인해야 대기 카드가 바뀐다. 아직 바뀌지 않았다고 알고, 바뀌었다고 말하지 않는다.';
+
+async function proposeMemoryChange(
+  name: string,
+  args: Record<string, unknown>,
+  src: ActionToolSource,
+  ctx: ActionToolContext,
+): Promise<ToolRunResult> {
+  const mem = ctx.memory;
+  if (!mem) return bad(name, 'memory_unavailable', '지금은 제안할 수 없음', { next: '실행 환경 기능 상태 메모를 따른다. 제안하지 않는다.' });
+  if (mem.proposed) return bad(name, 'memory_already_proposed', '이미 제안함', { next: '한 답변에 기억 카드는 하나만 낸다.' });
+  const target = uuid(args.target_action_id);
+  const op = args.op === 'revise' || args.op === 'replace' || args.op === 'withdraw' ? args.op : null;
+  const need: string[] = [];
+  if (!target) need.push('target_action_id');
+  if (!op) need.push('op');
+  let memory: Record<string, unknown> | null = null;
+  if (op && op !== 'withdraw') {
+    const parsed = memoryPayload(args.memory);
+    memory = parsed.memory;
+    need.push(...parsed.missing);
+  }
+  if (need.length > 0) return missing(name, need);
+  const reason = str(args.reason, 500);
+  let row: ActionRow;
+  try {
+    row = await src.proposeAction(ctx.conversationId, 'memory_card_change', { target_action_id: target, op, memory, reason }, {});
+  } catch (e) {
+    return memoryError(name, e);
+  }
+  mem.proposed = true;
+  return out(name, { ok: true, action_id: row.id, status: 'proposed', note: MEMORY_CHANGE_NOTE }, `${op} "${row.preview?.target_title ?? ''}"`, row);
+}
+
 export async function dispatchActionTool(
   name: string,
   args: Record<string, unknown>,
@@ -694,6 +880,10 @@ export async function dispatchActionTool(
       return await proposeDelete(name, args, src, ctx);
     case SPLIT_TOOL_NAME:
       return await proposeSplit(name, args, src, ctx);
+    case MEMORY_TOOL_NAME:
+      return await proposeMemory(name, args, src, ctx);
+    case MEMORY_CHANGE_TOOL_NAME:
+      return await proposeMemoryChange(name, args, src, ctx);
     default:
       return bad(name, 'unknown_tool', '알 수 없는 도구');
   }
@@ -712,7 +902,11 @@ const KIND_LABELS: Record<string, string> = {
   delete_folder: '폴더 삭제 제안',
   delete_conversation: '대화 삭제 제안',
   split_conversation: '대화 나누기 제안',
+  save_memory: '기억 저장 제안',
+  memory_card_change: '기억 카드 변경 제안',
 };
+
+const MEMORY_CHANGE_OPS: Record<string, string> = { revise: '수정', replace: '새 카드로 대체', withdraw: '삭제' };
 
 const ACTION_STATUS_LABELS: Record<string, string> = {
   proposed: '사용자 확인 대기',
@@ -748,6 +942,14 @@ function actionLine(a: ActionRow): string {
   const label = a.superseded ? '새 제안으로 대체됨' : ACTION_STATUS_LABELS[a.status] ?? a.status;
   let extra = a.status === 'failed' && a.error ? ` (${clip(a.error, 120)})` : '';
   if (a.kind === 'split_conversation' && a.status === 'applied') extra = ' (새 대화로 나눔. 이 대화는 그대로 남아 있다)';
+  if (a.kind === 'save_memory') {
+    if (a.status === 'proposed') extra = ` (카드 id: ${a.id})`;
+    else if (a.status === 'applied') extra = ' (확정 기억으로 저장됨)';
+    else if (a.result?.withdrawn_by_action_id) extra = ' (삭제 제안 승인으로 닫힘)';
+  }
+  if (a.kind === 'memory_card_change') {
+    extra = ` (${MEMORY_CHANGE_OPS[String(p.op)] ?? String(p.op)}, 대상 "${clip(String(p.target_title ?? ''), 60)}")`;
+  }
   return `- ${KIND_LABELS[a.kind] ?? a.kind}${what ? ` "${clip(what, 80)}"` : ''}: ${label}${extra}`;
 }
 

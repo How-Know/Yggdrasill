@@ -113,12 +113,38 @@ class HomeworkBatchConfirmService {
     final pending = _withoutSavingDrafts(
       Map<HomeworkBatchConfirmKey, bool>.from(_pending),
     );
-    final structuredResult =
-        await HomeworkGradingReturnOutboxService.instance.processForKeys(
-      pending.keys,
-    );
-    for (final key in structuredResult.succeededKeys) {
+    if (pending.isEmpty) {
+      syncPendingCount();
+      return;
+    }
+
+    // 버튼을 누른 즉시 체크를 화면에서 치운다. 실패한 항목만 아래에서 복원한다.
+    for (final key in pending.keys) {
       _pending.remove(key);
+    }
+    syncPendingCount();
+
+    late final HomeworkGradingReturnProcessResult structuredResult;
+    try {
+      structuredResult =
+          await HomeworkGradingReturnOutboxService.instance.processForKeys(
+        pending.keys,
+      );
+    } catch (error, stackTrace) {
+      debugPrint('[HW][batch_confirm:outbox][ERROR] $error\n$stackTrace');
+      _pending.addAll(pending);
+      syncPendingCount();
+      if (context.mounted) {
+        showAppSnackBar(
+          context,
+          '채점 반환을 시작하지 못했습니다. 기록은 보관되어 다시 시도할 수 있어요.',
+        );
+      }
+      return;
+    }
+    for (final key in structuredResult.failedKeys) {
+      final value = pending[key];
+      if (value != null) _pending[key] = value;
     }
     final legacyPending = <HomeworkBatchConfirmKey, bool>{
       for (final entry in pending.entries)
@@ -126,18 +152,23 @@ class HomeworkBatchConfirmService {
             !structuredResult.failedKeys.contains(entry.key))
           entry.key: entry.value,
     };
+    var legacySucceededCount = 0;
     if (legacyPending.isNotEmpty) {
       if (!context.mounted) {
+        _pending.addAll(legacyPending);
         syncPendingCount();
         return;
       }
-      for (final key in legacyPending.keys) {
-        _pending.remove(key);
+      try {
+        await _processBatchConfirmInBackground(
+          context: context,
+          pending: legacyPending,
+        );
+        legacySucceededCount = legacyPending.length;
+      } catch (error, stackTrace) {
+        debugPrint('[HW][batch_confirm][ERROR] $error\n$stackTrace');
+        _pending.addAll(legacyPending);
       }
-      await _processBatchConfirmInBackground(
-        context: context,
-        pending: legacyPending,
-      );
     }
     syncPendingCount();
     if (structuredResult.succeededKeys.isNotEmpty) {
@@ -148,11 +179,20 @@ class HomeworkBatchConfirmService {
         studentIds.map(HomeworkStore.instance.reloadStudentHomework),
       );
     }
-    if (structuredResult.failedKeys.isNotEmpty && context.mounted) {
-      showAppSnackBar(
-        context,
-        '일부 채점 반환에 실패했습니다. 기록은 이 PC에 보관되어 다시 시도할 수 있어요.',
-      );
+    if (context.mounted) {
+      final succeededCount =
+          structuredResult.succeededKeys.length + legacySucceededCount;
+      final failedCount = pending.length - succeededCount;
+      if (failedCount > 0) {
+        showAppSnackBar(
+          context,
+          succeededCount > 0
+              ? '$succeededCount건을 처리했고, $failedCount건은 실패해 다시 시도할 수 있어요.'
+              : '채점 반환에 실패했습니다. 기록은 이 PC에 보관되어 다시 시도할 수 있어요.',
+        );
+      } else {
+        showAppSnackBar(context, '$succeededCount건의 채점을 완료했습니다.');
+      }
     }
   }
 
@@ -197,6 +237,8 @@ class HomeworkBatchConfirmService {
         context,
         '채점 반환에 실패했습니다. 기록은 이 PC에 보관되어 다시 시도할 수 있어요.',
       );
+    } else if (context.mounted && readyPending.isNotEmpty) {
+      showAppSnackBar(context, '${readyPending.length}건의 채점을 완료했습니다.');
     }
   }
 
@@ -294,9 +336,6 @@ class HomeworkBatchConfirmService {
         [key.itemId],
       );
     }
-
-    if (!context.mounted) return;
-    showAppSnackBar(context, '${pending.length}건의 과제를 일괄 처리했어요.');
   }
 
   Future<bool> _hasActiveAssignmentForItem(

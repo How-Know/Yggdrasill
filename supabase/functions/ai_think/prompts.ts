@@ -5,7 +5,8 @@
 // think-2026-10-10b: 코드 요청 작업 강도(effort) 지침.
 // think-2026-10-10c: 시간 초과 미완성 패치 이어받기, 조사 작업자의 운영 DB 읽기 불가, 큰 수정의 단계 분할 검토.
 // think-2026-10-10d: 역할별 관점·자료 범위(교육철학·승인 규칙은 그대로 우선), 연결한 종합 문서 본문.
-export const THINK_PROMPT_VERSION = 'think-2026-10-10d';
+// think-2026-10-11: 기억 저장 제안 카드(확정된 결론만, 답변당 1장, 대기 카드 중복은 변경 카드로).
+export const THINK_PROMPT_VERSION = 'think-2026-10-11';
 /** 역할 프로필 문구만 바뀔 때. ai_runs.role_profile_version과 대화.role_profile_version에 기록한다. */
 export const ROLE_PROFILE_VERSION = 'think-role-2026-10-10';
 
@@ -71,6 +72,21 @@ export function kstDate(now = new Date()): string {
   return new Date(now.getTime() + 9 * 3600 * 1000).toISOString().slice(0, 10);
 }
 
+const MEMORY_PROPOSAL_RULES = [
+  '## 기억 저장 제안',
+  '- 사용자가 대화에서 분명히 확정한 결론(decision)이나 앞으로 지킬 원칙(principle)만 propose_memory로 저장을 제안한다.',
+  '  네가 제안만 했거나, 사용자가 고민 중이거나, 답하지 않은 것은 확정이 아니다. 확신이 없으면 제안하지 않는다.',
+  '- 제안 전에 search_memories로 같은 내용의 기억이 있는지 본다. 이미 같은 기억이 있으면 제안하지 않는다.',
+  '  기존 기억의 내용이 바뀌었으면 supersedes_id에 그 기억 id를 넣어 대체를 제안한다.',
+  '- 한 답변에 기억 카드(저장·변경)는 하나만 낸다. 답변은 끝까지 하고, 카드를 냈으면 무엇을 제안했는지 한 줄로 알린다.',
+  '- reason에는 왜 지금 저장을 제안하는지(어느 발언에서 확정됐는지)를 쓴다.',
+  '- memory_scope·scope_department는 네 제안일 뿐이다. 사용자가 카드에서 확인하거나 고친다.',
+  '- 저장되기 전에는 저장했다고 말하지 않는다. 사용자가 카드에서 승인해야 확정 기억이 된다. 거절된 내용은 다시 제안하지 않는다.',
+  '- 도구가 memory_proposal_pending(같은 취지의 대기 카드)을 돌려주면 새 카드를 내지 않는다. 사용자에게 중복을 알리고,',
+  '  필요하면 propose_memory_card_change로 그 대기 카드를 수정(revise)·새 카드로 대체(replace)·삭제(withdraw)하자고 제안한다.',
+  '  대기 카드의 id는 "이 대화의 작업 상태" 메모나 도구 결과의 pending_action_id에서 찾는다. 아무것도 자동으로 바뀌지 않는다.',
+];
+
 export function thinkInstructions(opts: {
   identity: MemoryBlock[];
   principles: MemoryBlock[];
@@ -80,7 +96,11 @@ export function thinkInstructions(opts: {
   limits: { identityChars: number; principleChars: number; decisionChars: number };
   thinkRole?: ThinkRoleId;
   rolesFeatureReady?: boolean;
+  memoryProposalsReady?: boolean;
 }): string {
+  const memoryRule = opts.memoryProposalsReady
+    ? '  승인 전에는 실행했다고 말하지 않는다. 기억은 아래 "기억 저장 제안" 규칙으로만 제안하고, 저장은 사용자가 카드에서 승인할 때 된다.'
+    : '  승인 전에는 실행했다고 말하지 않는다. 결정·원칙·기억은 제안 도구로 만들지 않는다.';
   const lines: string[] = [];
   lines.push(
     '너는 Yggdrasill 학습 플랫폼 운영자의 생각 파트너다. 교육 설계와 제품 방향을 함께 정리한다.',
@@ -91,7 +111,7 @@ export function thinkInstructions(opts: {
     '- 이미 내린 결정과 다른 방향을 제안할 때는 어떤 결정을 바꾸자는 것인지 밝힌다.',
     '- 모르는 것은 추측하지 않는다. 플랫폼 데이터가 필요하면 조회 도구를 쓰고, 그래도 부족하면 무엇이 더 필요한지 묻는다.',
     '- 너는 데이터를 직접 바꿀 수 없다. 바꿀 일은 propose_* 도구로 제안하고, 사용자가 카드에서 승인해야 실행된다.',
-    '  승인 전에는 실행했다고 말하지 않는다. 결정·원칙·기억은 제안 도구로 만들지 않는다.',
+    memoryRule,
     '- 대화에서 결정할 거리가 정리되면 사용자에게 "결정 초안 만들기"로 기록하자고 제안할 수 있다.',
     '',
     '## 작업 도구 (코드·트리·삭제)',
@@ -145,6 +165,10 @@ export function thinkInstructions(opts: {
     `- 오늘 날짜: ${opts.today} (한국 시간)`,
   );
 
+  if (opts.memoryProposalsReady) {
+    lines.push('', ...MEMORY_PROPOSAL_RULES);
+  }
+
   if (opts.rolesFeatureReady && opts.thinkRole) {
     lines.push('', roleProfileSection(opts.thinkRole));
   }
@@ -196,6 +220,7 @@ const FEATURE_STATE_LABELS: Record<string, string> = {
 export function featureStatusNote(opts: {
   splitState: string;
   rolesState?: string;
+  memoryState?: string;
   isNew: boolean;
   suppressed: boolean;
   userAsked: boolean;
@@ -206,6 +231,9 @@ export function featureStatusNote(opts: {
   ];
   if (opts.rolesState) {
     lines.push(`- 역할·자료 범위(think_roles): ${FEATURE_STATE_LABELS[opts.rolesState] ?? FEATURE_STATE_LABELS.unknown}`);
+  }
+  if (opts.memoryState) {
+    lines.push(`- 기억 저장 제안(propose_memory): ${FEATURE_STATE_LABELS[opts.memoryState] ?? FEATURE_STATE_LABELS.unknown}`);
   }
   if (opts.splitState === 'ready') {
     if (opts.isNew) {

@@ -68,6 +68,7 @@ class _AppConfirmButtonBody extends StatefulWidget {
 
 class _AppConfirmButtonBodyState extends State<_AppConfirmButtonBody> {
   bool _hovering = false;
+  bool _pressed = false;
 
   @override
   Widget build(BuildContext context) {
@@ -75,61 +76,74 @@ class _AppConfirmButtonBodyState extends State<_AppConfirmButtonBody> {
     final color = _hovering && canTap
         ? Color.lerp(widget.backgroundColor, Colors.white, 0.16)!
         : widget.backgroundColor;
-    return Opacity(
-      opacity: canTap ? 1 : 0.45,
-      child: IgnorePointer(
-        ignoring: !canTap,
-        child: MouseRegion(
-          onEnter: (_) => setState(() => _hovering = true),
-          onExit: (_) => setState(() => _hovering = false),
-          cursor: canTap
-              ? SystemMouseCursors.click
-              : SystemMouseCursors.basic,
-          child: GestureDetector(
-          onTap: canTap ? widget.onPressed : null,
-          behavior: HitTestBehavior.opaque,
-          child: SizedBox(
-            width: widget.buttonWidth,
-            height: AppConfirmButton.height,
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 160),
-              curve: Curves.easeOutCubic,
-              alignment: Alignment.center,
-              padding: const EdgeInsets.only(right: 6),
-              decoration: BoxDecoration(
-                color: color,
-                borderRadius:
-                    BorderRadius.circular(AppConfirmButton.height / 2),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  SvgPicture.string(
-                    widget.iconSvg,
-                    width: 24,
-                    height: 24,
-                    colorFilter: const ColorFilter.mode(
-                      Colors.white,
-                      BlendMode.srcIn,
-                    ),
+    return AnimatedScale(
+      scale: _pressed && canTap ? 0.96 : 1,
+      duration: Duration(milliseconds: _pressed ? 70 : 140),
+      curve: _pressed ? Curves.easeOutCubic : Curves.easeOutBack,
+      child: Opacity(
+        opacity: canTap ? 1 : 0.45,
+        child: IgnorePointer(
+          ignoring: !canTap,
+          child: MouseRegion(
+            onEnter: (_) => setState(() => _hovering = true),
+            onExit: (_) {
+              setState(() {
+                _hovering = false;
+                _pressed = false;
+              });
+            },
+            cursor:
+                canTap ? SystemMouseCursors.click : SystemMouseCursors.basic,
+            child: GestureDetector(
+              onTapDown: canTap ? (_) => setState(() => _pressed = true) : null,
+              onTapUp: canTap ? (_) => setState(() => _pressed = false) : null,
+              onTapCancel:
+                  canTap ? () => setState(() => _pressed = false) : null,
+              onTap: canTap ? widget.onPressed : null,
+              behavior: HitTestBehavior.opaque,
+              child: SizedBox(
+                width: widget.buttonWidth,
+                height: AppConfirmButton.height,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 160),
+                  curve: Curves.easeOutCubic,
+                  alignment: Alignment.center,
+                  padding: const EdgeInsets.only(right: 6),
+                  decoration: BoxDecoration(
+                    color: color,
+                    borderRadius:
+                        BorderRadius.circular(AppConfirmButton.height / 2),
                   ),
-                  const SizedBox(width: 16),
-                  Text(
-                    widget.label,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontFamily: 'Pretendard',
-                      fontSize: 20,
-                      height: 1.0,
-                      letterSpacing: 1,
-                      fontWeight: FontWeight.w400,
-                    ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SvgPicture.string(
+                        widget.iconSvg,
+                        width: 24,
+                        height: 24,
+                        colorFilter: const ColorFilter.mode(
+                          Colors.white,
+                          BlendMode.srcIn,
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Text(
+                        widget.label,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontFamily: 'Pretendard',
+                          fontSize: 20,
+                          height: 1.0,
+                          letterSpacing: 1,
+                          fontWeight: FontWeight.w400,
+                        ),
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
             ),
           ),
-        ),
         ),
       ),
     );

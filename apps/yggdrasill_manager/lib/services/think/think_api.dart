@@ -117,7 +117,7 @@ class ThinkApi {
   static const int maxAttachmentBytes = 20 * 1024 * 1024;
 
   /// 이 앱이 처리할 수 있는 기능과 버전. 서버가 Edge·DB 버전과 함께 보고 기능 상태를 정한다(권한은 서버가 따로 확인).
-  static const Map<String, int> clientFeatures = {'conversation_split': 1, 'think_roles': 1};
+  static const Map<String, int> clientFeatures = {'conversation_split': 1, 'think_roles': 1, 'memory_proposals': 1};
 
   SupabaseClient get _db => Supabase.instance.client;
 

@@ -4,6 +4,7 @@ import '../../services/think/think_api.dart';
 import '../../services/think/think_code_controller.dart';
 import '../../services/think/think_controller.dart';
 import '../../services/think/think_models.dart';
+import 'think_memory_proposal_views.dart';
 import 'think_split_views.dart';
 import 'think_style.dart';
 
@@ -95,6 +96,13 @@ class _ThinkStatusDialogState extends State<_ThinkStatusDialog> {
                         feature: status.thinkRoles,
                         label: '역할·자료 범위',
                         reason: thinkRolesFeatureReason,
+                        detailed: true,
+                      ),
+                      const SizedBox(height: 12),
+                      ThinkFeatureStatusView(
+                        feature: status.memoryProposals,
+                        label: '기억 저장 제안',
+                        reason: thinkMemoryProposalsFeatureReason,
                         detailed: true,
                       ),
                     ]),

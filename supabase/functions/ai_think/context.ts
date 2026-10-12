@@ -110,6 +110,8 @@ export interface BuildContextInput {
   splitSummary?: SplitSummary | null;
   access?: ConversationAccessState | null;
   thinkRole?: ThinkRoleId;
+  /** 기억 저장 제안 도구를 이번 요청에 노출하는지. 지침의 기억 관련 문장이 달라진다. */
+  memoryProposalsReady?: boolean;
   now?: Date;
 }
 
@@ -248,6 +250,7 @@ export async function buildThinkContext(store: ThinkContextStore, input: BuildCo
     limits: L,
     thinkRole,
     rolesFeatureReady: rolesReady,
+    memoryProposalsReady: input.memoryProposalsReady === true,
   });
 
   // 지난 대화: 최신부터 글자 수 예산이 찰 때까지

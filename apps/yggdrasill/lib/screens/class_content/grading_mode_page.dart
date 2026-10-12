@@ -74,6 +74,7 @@ double _gradingCardListTop(BuildContext context) {
       _kGradingHeaderBandHeight +
       _kGradingPageTitleGap;
 }
+
 const String _kGradingAnswerBookCategory = 'textbook';
 const List<String> _kGradingAnswerGradeOrder = [
   '\uCD081',
@@ -166,6 +167,7 @@ class GradingModePage extends StatefulWidget {
   final GradingGroupTapCallback? onSubmittedCardTap;
   final GradingGroupTapCallback? onHomeworkCardTap;
   final Map<({String studentId, String itemId}), bool> pendingConfirms;
+  final Set<({String studentId, String itemId})> savingConfirms;
   final void Function(String studentId, String itemId)? onTogglePending;
   final String headerDateText;
   final String headerTimeText;
@@ -182,6 +184,7 @@ class GradingModePage extends StatefulWidget {
     this.onSubmittedCardTap,
     this.onHomeworkCardTap,
     this.pendingConfirms = const <({String studentId, String itemId}), bool>{},
+    this.savingConfirms = const <({String studentId, String itemId})>{},
     this.onTogglePending,
   });
 
@@ -346,15 +349,15 @@ class _GradingModePageState extends State<GradingModePage> {
                                                 : '보이는 숙제 안 함 처리',
                                             icon: Icons
                                                 .cleaning_services_outlined,
-                                            onPressed: homeworkEntries
-                                                        .isEmpty ||
-                                                    _clearingVisibleHomework
-                                                ? null
-                                                : () => unawaited(
-                                                      _confirmClearVisibleHomework(
-                                                        homeworkEntries,
-                                                      ),
-                                                    ),
+                                            onPressed:
+                                                homeworkEntries.isEmpty ||
+                                                        _clearingVisibleHomework
+                                                    ? null
+                                                    : () => unawaited(
+                                                          _confirmClearVisibleHomework(
+                                                            homeworkEntries,
+                                                          ),
+                                                        ),
                                           ),
                                         ],
                                       ),
@@ -625,8 +628,7 @@ class _GradingModePageState extends State<GradingModePage> {
             .toList(growable: false);
         if (activeChildren.isEmpty) continue;
         final groupId = (entry.group?.id ??
-                HomeworkStore.instance
-                    .groupIdOfItem(activeChildren.first.id) ??
+                HomeworkStore.instance.groupIdOfItem(activeChildren.first.id) ??
                 '')
             .trim();
         if (groupId.isEmpty) {
@@ -1237,6 +1239,7 @@ class _GradingModePageState extends State<GradingModePage> {
                 metaDisplayHeight: cardLayout.metaDisplayHeight,
                 isPendingConfirm: _isEntryPending(entry),
                 isCompleteCheckbox: _isEntryPendingComplete(entry),
+                isSavingConfirm: _isEntrySaving(entry),
                 coverPathFuture: (() {
                   final coverSource = _resolveEntryCoverSource(entry);
                   return _resolveCoverPath(
@@ -1589,6 +1592,14 @@ class _GradingModePageState extends State<GradingModePage> {
     final keys = _entryPendingKeys(entry);
     if (keys.isEmpty) return false;
     return keys.any((key) => widget.pendingConfirms[key] == true);
+  }
+
+  bool _isEntrySaving(_GradingGroupEntry entry) {
+    return entry.children.any(
+      (child) => widget.savingConfirms.contains(
+        (studentId: entry.studentId, itemId: child.id),
+      ),
+    );
   }
 
   List<_GradingGroupEntry> _buildEntriesForStudent({
@@ -2562,6 +2573,7 @@ class _SubmittedHomeworkCard extends StatefulWidget {
   final Future<void> Function()? onTap;
   final bool isPendingConfirm;
   final bool isCompleteCheckbox;
+  final bool isSavingConfirm;
 
   const _SubmittedHomeworkCard({
     required this.entry,
@@ -2572,6 +2584,7 @@ class _SubmittedHomeworkCard extends StatefulWidget {
     this.onTap,
     this.isPendingConfirm = false,
     this.isCompleteCheckbox = false,
+    this.isSavingConfirm = false,
   });
 
   @override
@@ -2589,10 +2602,11 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
   Future<void> Function()? get onTap => widget.onTap;
   bool get isPendingConfirm => widget.isPendingConfirm;
   bool get isCompleteCheckbox => widget.isCompleteCheckbox;
+  bool get isSavingConfirm => widget.isSavingConfirm;
 
   Future<void> _handleTap() async {
     final action = onTap;
-    if (action == null || _opening) return;
+    if (action == null || _opening || isSavingConfirm) return;
     setState(() => _opening = true);
     try {
       await action();
@@ -2652,7 +2666,7 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
               ),
             ),
           ),
-          if (isPendingConfirm)
+          if (isPendingConfirm || isSavingConfirm)
             Positioned.fill(
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(cardRadius),
@@ -2660,15 +2674,19 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
                   child: Container(
                     color: const Color(0xCC0B1112),
                     child: Center(
-                      child: Icon(
-                        isCompleteCheckbox
-                            ? Icons.check_circle
-                            : Icons.check_circle_outline,
-                        color: isCompleteCheckbox
-                            ? const Color(0xFF4CAF50)
-                            : const Color(0xFF1B6B63),
-                        size: (67.0 * scale).clamp(38.0, 67.0),
-                      ),
+                      child: isSavingConfirm
+                          ? YggLoadingIndicator(
+                              size: (42.0 * scale).clamp(28.0, 42.0),
+                            )
+                          : Icon(
+                              isCompleteCheckbox
+                                  ? Icons.check_circle
+                                  : Icons.check_circle_outline,
+                              color: isCompleteCheckbox
+                                  ? const Color(0xFF4CAF50)
+                                  : const Color(0xFF1B6B63),
+                              size: (67.0 * scale).clamp(38.0, 67.0),
+                            ),
                     ),
                   ),
                 ),
@@ -2807,10 +2825,13 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
 
     if (onTap == null) return card;
     return MouseRegion(
-      cursor: _opening ? SystemMouseCursors.basic : SystemMouseCursors.click,
+      cursor: _opening || isSavingConfirm
+          ? SystemMouseCursors.basic
+          : SystemMouseCursors.click,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: _opening ? null : () => unawaited(_handleTap()),
+        onTap:
+            _opening || isSavingConfirm ? null : () => unawaited(_handleTap()),
         child: card,
       ),
     );

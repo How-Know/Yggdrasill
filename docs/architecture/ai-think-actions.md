@@ -66,7 +66,8 @@ AI는 **제안만** 하고, 실제 변경은 사용자가 채팅 안 카드에�
    질문 없는 조율본이면 자동(§4.6)이고, 질문이 있으면 운영자가 답해야 시작한다. 조율 시작(`code_plan`)·자동 수정 시작·
    자동 재수정은 승인 없이 하루 한도 안에서 하며, 기록은 `applied` 제안 1행으로 남는다. 운영 DB 반영·배포는 앱에 없다(따로 승인).
 5. **정보가 부족하면 묻는다.** 도구가 필수 값 누락을 오류로 돌려주면 AI가 대화로 되묻고, 다음 턴에 같은 제안을 채워 다시 낸다.
-6. 기존 원칙 유지: 키 위치, 기억은 사람만 확정, 결정은 "결정으로 정리" 경로로만.
+6. 기존 원칙 유지: 키 위치, 기억은 사람만 확정. 결정·원칙은 "결정으로 정리"·피드백 경로와, 2026-10-11부터 Think의
+   기억 저장 카드(§9, 사용자가 승인해야 저장)로 남긴다.
 
 ---
 
@@ -75,7 +76,7 @@ AI는 **제안만** 하고, 실제 변경은 사용자가 채팅 안 카드에�
 | 열 | 뜻 |
 |------|------|
 | `id`, `conversation_id` (대화 삭제 시 함께 삭제), `message_id` (제안한 답변, 지워지면 비움) | 어느 대화의 어느 답변이 냈는지 |
-| `kind` | `code_request` / `code_change` / `code_plan` / `place_conversation` / `delete_code_request` / `delete_folder` / `delete_conversation` / `split_conversation` |
+| `kind` | `code_request` / `code_change` / `code_plan` / `place_conversation` / `delete_code_request` / `delete_folder` / `delete_conversation` / `split_conversation` / `save_memory` / `memory_card_change` |
 | `status` | `proposed` → `applied` / `rejected` / `failed` (`place_conversation`은 `applied` → `undone` 가능, `split_conversation`은 대화가 이어지면 `expired`) |
 | `payload` (jsonb) | 제안 내용. 서버가 검증·정리한 값만 들어간다 |
 | `preview` (jsonb) | 카드에 보일 요약(폴더 경로, 지워질 수 등). 제안 시점에 서버가 계산 |
@@ -86,6 +87,7 @@ AI는 **제안만** 하고, 실제 변경은 사용자가 채팅 안 카드에�
 - 앱용 RPC: `ai_action_apply(p_id, p_overrides)`, `ai_action_reject(p_id)`, `ai_action_undo(p_id)`.
   `p_overrides`는 사용자가 카드에서 고친 값(다른 폴더 선택, 요청 문구 수정)만 받는다.
 - 같은 대화에 같은 종류의 `proposed`가 새로 오면 이전 것은 `rejected`(대체됨)로 바꾼다. 카드는 최신 것만 버튼을 보인다.
+  기억 카드(`save_memory`·`memory_card_change`)는 예외로, 서로 대체하지 않고 사용자가 처리할 때까지 대기한다(§9).
 
 ### 종류별 실행
 
@@ -99,6 +101,8 @@ AI는 **제안만** 하고, 실제 변경은 사용자가 채팅 안 카드에�
 | `delete_folder` | 폴더 경로, 안의 항목 수("위로 올라감") | `ai_tree_delete_folder` | 없음 |
 | `delete_conversation` | 제목, 메시지 수, 발췌 수, 연결된 조사 요청 수 | 대화 삭제(메시지·배치·발췌 함께) | 없음 |
 | `split_conversation` | 새 대화 제목, 이유, 시작 메시지 앞부분, 폴더 경로(없으면 미분류), 다섯 칸 요약 | 새 대화 + 이번 문답 2개 복사 + 요약·폴더 배치(§7) | 없음(원본은 그대로) |
+| `save_memory` | 종류·제목·내용·배경·이유·대안, 제안 이유, 범위 제안, 대체할 기억 제목 | 확정 기억(`active`) 저장, 대체 대상은 `superseded`(§9) | 없음(기억 탭에서 고친다) |
+| `memory_card_change` | 수정·대체·삭제, 대상 카드 제목, 새 내용 | 대기 카드 수정 / 닫고 새 카드 / 닫기(§9) | 없음 |
 
 ---
 
@@ -381,6 +385,7 @@ AI의 자동 실행(조율 시작, 질문 없는 조율본의 수정 시작, 검
 운영 DB 반영·배포, Cursor 에이전트의 셸 명령(검사는 작업자가 정해진 명령만 돌린다), 커밋·푸시·PR, 작업 폴더 외 경로 수정,
 여러 요청 동시 처리, Cursor IDE 채팅창 조작, 삭제 되돌리기(휴지통).
 대화 나누기에서는 임의 범위·여러 턴 복사, 나누면서 폴더 만들기, 나누기 되돌리기, 요약의 기억 자동 저장을 하지 않는다.
+기억 저장 제안에서는 승인 없는 저장, 대기 카드의 자동 삭제·대체, 한 답변에 카드 여러 장, 메모(note)·교육철학(identity) 제안을 하지 않는다.
 
 ---
 
@@ -438,7 +443,7 @@ ai_think: 이번 사용자 메시지 저장 → 모델이 답하면서 propose_c
   사용자 메시지나 기억으로 바꿀 수 없다.
 - 결과는 `status` 응답 `features`·`features_db_error`, SSE `conversation` 이벤트 `features`·`split_suggestions`, `ai_runs.features`(그 호출의
   계산 결과)에 남는다. `ai_runs.features` 열이 없는 DB에서는 그 값을 빼고 다시 기록한다.
-- 앱은 `ThinkApi.clientFeatures`(`{conversation_split: 1, think_roles: 1}`)를 보낸다. 상태 창 "기능 상태"와 맥락 패널 "대화 나누기"에 사용 가능/준비 필요/확인 불가와
+- 앱은 `ThinkApi.clientFeatures`(`{conversation_split: 1, think_roles: 1, memory_proposals: 1}`)를 보낸다. 상태 창 "기능 상태"와 맥락 패널 "대화 나누기"에 사용 가능/준비 필요/확인 불가와
   이유를 보인다. 기능 상태를 보내지 않는 이전 Edge면 "확인 불가 · Edge 배포 필요"로 보인다.
 
 배포 순서가 어긋났을 때:
@@ -472,3 +477,40 @@ ai_think: 이번 사용자 메시지 저장 → 모델이 답하면서 propose_c
 - 앱(매니저 Think): 대화 위 역할 머리(아바타 4종·역할 칩·다른 부서 참조, 720px 미만은 아바타만), 답변별 "이 답변에 쓴 자료 보기"와
   맥락 패널 자료 칸(선택한 답변의 실제 전달 자료, 스냅샷이 없으면 "기록 없음", 연결 기억·문서 추가/해제), 기억 편집·피드백·결정 저장의
   범위 선택(역할은 제안만, "적용"을 눌러야 바뀜). 답하는 중에는 역할·연결을 바꿀 수 없다. 모션 감소 설정이면 아바타 고리가 고정된다.
+
+## 9. 기억 저장 제안 (2026-10-11, 마이그레이션 `20261011100000_ai_think_memory_proposals.sql`)
+
+결정 기억 "Think의 자발적 기억 저장 제안 허용"(`5ede3fa1`)을 구현한다. Think가 대화에서 사용자가 분명히 확정한 결론(decision)·원칙
+(principle)을 카드로 제안하고, 사용자가 승인해야 확정 기억이 된다. "결정으로 정리"·피드백 경로는 그대로다.
+
+```
+ai_think: 모델이 propose_memory({memory, reason}) → ai_action_propose('save_memory')   (사용자 JWT)
+  - ai_memory_proposal_clean: kind decision|principle, 제목·내용 필수, 범위 common|department(+부서), 길이 제한,
+    supersedes_id는 지금 active인 기억만(memory_supersede_not_active)
+  - ai_memory_proposal_guard: 같은 제목(공백 제거·소문자)의 active 기억 → memory_duplicate_active:<기억 id>
+    (대체 대상은 제외), 같은 제목이거나 같은 기억을 대체하려는 대기 카드 → memory_proposal_pending:<카드 id>
+  - 기억 카드는 서로 대체하지 않는다. 기억은 만들지 않는다
+모델이 propose_memory_card_change({target_action_id, op: revise|replace|withdraw, memory, reason})
+  → 대상은 대기 중인 save_memory만(memory_card_not_pending), 대상당 대기 변경 카드 하나(memory_card_change_pending:<id>)
+사용자: 승인하고 저장 / 고쳐서 승인(내용·종류·범위) / 거절
+  → ai_action_apply → ai_memory_action_apply(p_id, {memory})
+     save_memory: 다시 clean·guard → ai_memories(active, source_conversation_id, 범위) 저장, 대체 대상은 superseded
+                  result {memory_id, superseded_id, edited}
+     memory_card_change: 대상 카드 잠금 →
+       withdraw: 대상 rejected(result.withdrawn_by_action_id)
+       revise:   대상 payload.memory·preview 갱신(revised: true), 대상은 계속 대기
+       replace:  대상 rejected·superseded(result.replaced_by_action_id) + 새 대기 save_memory, result.new_action_id
+```
+
+- **답변당 1장**: 저장·변경 카드를 합쳐 한 답변에 하나만 낸다. Edge(`MemoryToolContext.proposed`)가 막는다. DB 오류로 실패한
+  제안은 세지 않으므로, 대기 중복을 만나면 같은 답변에서 변경 카드를 낼 수 있다.
+- **중복**: 중복 판정은 정규화한 제목 기준이다. 내용이 같은데 제목이 다르면 서버가 잡지 못하므로, 지침에서 제안 전에 `search_memories`를
+  하게 한다. 승인 때도 guard를 다시 돌려 그 사이 생긴 중복을 막는다.
+- **대기 카드**: 기한 없이 남는다. Think는 "이 대화의 작업 상태" 메모에서 대기 카드 id를 보고, 중복이면 사용자에게 알리고 변경 카드를
+  낸다. 자동으로 지우거나 바꾸지 않는다. 다른 대화의 대기 카드는 도구 오류의 `pending_action_id`로 알게 된다.
+- **범위**: `memory_scope`·`scope_department`는 Think의 제안이다. 역할 기능(`think_roles`)이 준비됐으면 카드에서 범위 선택이 보이고,
+  바꾸면 `overrides.memory`로 보낸다. 준비되지 않았으면 "범위 제안"을 글로만 보인다.
+- **노출 조건**: 기능 `memory_proposals`(Edge·DB·앱 모두 1)가 `ready`이고 커서 문의(relay)가 아닐 때만 두 도구를 주고 지침에
+  "기억 저장 제안" 절을 넣는다. 준비되지 않으면 예전 문장("결정·원칙·기억은 제안 도구로 만들지 않는다")을 그대로 쓴다.
+- **앱**: 카드(`think_memory_proposal_views.dart`, `ThinkActionCard`), 승인 뒤 기억 목록 새로고침, 변경 카드 승인 뒤 대상 대화의 카드
+  다시 읽기, 상태 창 "기억 저장 제안" 줄.

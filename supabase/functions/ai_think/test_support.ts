@@ -155,9 +155,18 @@ export class MemoryThinkStore implements ThinkStore {
     return Promise.resolve(this.codeRequests.find((r) => r.id === id) ?? null);
   }
 
+  /** 다음 proposeAction이 이 메시지로 실패한다(DB 오류 흉내). 한 번 쓰면 지운다. */
+  proposeFailure: string | null = null;
+
   proposeAction(conversationId: string, kind: ActionKind, payload: Record<string, unknown>, preview: Record<string, unknown>): Promise<ActionRow> {
+    if (this.proposeFailure) {
+      const message = this.proposeFailure;
+      this.proposeFailure = null;
+      return Promise.reject(new Error(`ai_action_propose: ${message}`));
+    }
+    const memoryCard = kind === 'save_memory' || kind === 'memory_card_change';
     for (const a of this.actions) {
-      if (a.conversation_id === conversationId && a.kind === kind && a.status === 'proposed') {
+      if (!memoryCard && a.conversation_id === conversationId && a.kind === kind && a.status === 'proposed') {
         a.status = 'rejected';
         a.superseded = true;
       }

@@ -82,6 +82,8 @@ class MainFabAlternative extends StatefulWidget {
 }
 
 class _MainFabAlternativeState extends State<MainFabAlternative> {
+  bool _batchConfirmBusy = false;
+
   @override
   void initState() {
     super.initState();
@@ -155,62 +157,71 @@ class _MainFabAlternativeState extends State<MainFabAlternative> {
                   valueListenable: homeBatchConfirmDraftSavingCount,
                   builder: (context, draftSavingCount, ____) {
                     final shouldShowBatchConfirmFab =
-                        widget.showHomeBatchConfirmFab &&
-                            showBatchConfirmFab;
+                        widget.showHomeBatchConfirmFab && showBatchConfirmFab;
                     final canRunBatchConfirm = shouldShowBatchConfirmFab &&
                         pendingConfirmCount > 0 &&
+                        draftSavingCount == 0 &&
+                        !_batchConfirmBusy &&
                         homeBatchConfirmAction != null;
-                    final screenWidth =
-                        MediaQuery.sizeOf(context).width;
-                                final leftInset = _fabLeftInset(context);
-                                final barWidth = (screenWidth -
-                                        leftInset -
-                                        FabTabBarTokens.fabBarRightInset)
-                                    .clamp(0.0, double.infinity);
-                                return SizedBox(
-                                  width: barWidth,
-                                  child: Row(
-                                    mainAxisAlignment:
-                                        MainAxisAlignment.spaceBetween,
-                                    crossAxisAlignment: CrossAxisAlignment.end,
-                                    children: [
-                                      const SizedBox.shrink(),
-                                      Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.end,
-                                        children: [
-                                          if (gradingModeActive.value) ...[
-                                            _buildHistoryButton(),
-                                            if (shouldShowBatchConfirmFab)
-                                              const SizedBox(width: 12),
-                                          ],
-                                          if (shouldShowBatchConfirmFab)
-                                            Column(
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: [
-                                                if (draftSavingCount > 0) ...[
-                                                  const YggLoadingIndicator(
-                                                    size: 22,
-                                                  ),
-                                                  const SizedBox(height: 8),
-                                                ],
-                                                AppConfirmButton(
-                                                  enabled: canRunBatchConfirm,
-                                                  onPressed: () async {
-                                                    final action =
-                                                        homeBatchConfirmAction;
-                                                    if (action == null) return;
-                                                    await action();
-                                                  },
-                                                ),
-                                              ],
-                                            ),
-                                        ],
+                    final screenWidth = MediaQuery.sizeOf(context).width;
+                    final leftInset = _fabLeftInset(context);
+                    final barWidth = (screenWidth -
+                            leftInset -
+                            FabTabBarTokens.fabBarRightInset)
+                        .clamp(0.0, double.infinity);
+                    return SizedBox(
+                      width: barWidth,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          const SizedBox.shrink(),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              if (gradingModeActive.value) ...[
+                                _buildHistoryButton(),
+                                if (shouldShowBatchConfirmFab)
+                                  const SizedBox(width: 12),
+                              ],
+                              if (shouldShowBatchConfirmFab)
+                                Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    if (draftSavingCount > 0) ...[
+                                      const YggLoadingIndicator(
+                                        size: 22,
                                       ),
+                                      const SizedBox(height: 8),
                                     ],
-                                  ),
-                                );
+                                    AppConfirmButton(
+                                      enabled: canRunBatchConfirm,
+                                      label: _batchConfirmBusy ? '처리 중' : '완료',
+                                      onPressed: () async {
+                                        final action = homeBatchConfirmAction;
+                                        if (action == null) return;
+                                        setState(() {
+                                          _batchConfirmBusy = true;
+                                        });
+                                        try {
+                                          await action();
+                                        } finally {
+                                          if (mounted) {
+                                            setState(() {
+                                              _batchConfirmBusy = false;
+                                            });
+                                          }
+                                        }
+                                      },
+                                    ),
+                                  ],
+                                ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    );
                   },
                 );
               },
@@ -220,7 +231,6 @@ class _MainFabAlternativeState extends State<MainFabAlternative> {
       },
     );
   }
-
 }
 
 /// 시험일정 버튼 등이 레일 위 + 메뉴를 접을 때 호출한다.
@@ -404,50 +414,52 @@ class _NavRailPlusButtonState extends State<NavRailPlusButton>
                           FabTabBarTokens.fabBarHeight;
                     }
                     return Positioned(
-          left: _plusLeft(ctx),
-          bottom: bottomOffset,
-          child: IgnorePointer(
-            ignoring: !_isFabExpanded,
-            child: Material(
-              color: Colors.transparent,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildMenuButton(
-                    label: '메모',
-                    icon: Icons.edit_note,
-                    slideAnimation: _slideAnimation3,
-                    useFullIconSize: true,
-                    onTap: () {
-                      _openMemoAddDialog(context);
-                    },
-                  ),
-                  const SizedBox(height: FabTabBarTokens.fabMenuItemSpacing),
-                  _buildMenuButton(
-                    label: '보강',
-                    icon: Icons.event_repeat_rounded,
-                    slideAnimation: _slideAnimation2,
-                    onTap: () {
-                      _collapseFabMenu();
-                      showMakeupRegisterDialog(context);
-                    },
-                  ),
-                  const SizedBox(height: FabTabBarTokens.fabMenuItemSpacing),
-                  _buildMenuButton(
-                    label: '수강',
-                    icon: Icons.credit_card,
-                    slideAnimation: _slideAnimation1,
-                    onTap: () {
-                      _collapseFabMenu();
-                      showPaymentManagementDialog(context);
-                    },
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
+                      left: _plusLeft(ctx),
+                      bottom: bottomOffset,
+                      child: IgnorePointer(
+                        ignoring: !_isFabExpanded,
+                        child: Material(
+                          color: Colors.transparent,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _buildMenuButton(
+                                label: '메모',
+                                icon: Icons.edit_note,
+                                slideAnimation: _slideAnimation3,
+                                useFullIconSize: true,
+                                onTap: () {
+                                  _openMemoAddDialog(context);
+                                },
+                              ),
+                              const SizedBox(
+                                  height: FabTabBarTokens.fabMenuItemSpacing),
+                              _buildMenuButton(
+                                label: '보강',
+                                icon: Icons.event_repeat_rounded,
+                                slideAnimation: _slideAnimation2,
+                                onTap: () {
+                                  _collapseFabMenu();
+                                  showMakeupRegisterDialog(context);
+                                },
+                              ),
+                              const SizedBox(
+                                  height: FabTabBarTokens.fabMenuItemSpacing),
+                              _buildMenuButton(
+                                label: '수강',
+                                icon: Icons.credit_card,
+                                slideAnimation: _slideAnimation1,
+                                onTap: () {
+                                  _collapseFabMenu();
+                                  showPaymentManagementDialog(context);
+                                },
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
                   },
                 );
               },
