@@ -6,7 +6,9 @@ import 'package:pdfrx/pdfrx.dart';
 
 import '../../app_overlays.dart';
 import '../../screens/design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
+import '../app_dialog_action_button.dart';
 import '../dialog_tokens.dart';
+import '../../utils/homework_page_text.dart';
 import '../latex_text_renderer.dart';
 import '../solid_capsule_action_bar.dart';
 
@@ -983,22 +985,33 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
     final trimmed = raw.trim();
     if (trimmed.isEmpty) return '-';
     if (trimmed == '-') return trimmed;
-    if (trimmed.contains(r'$$') || trimmed.contains(r'\(')) {
+    var normalized = trimmed;
+    final wrappedInline =
+        normalized.startsWith(r'\(') && normalized.endsWith(r'\)');
+    final wrappedDisplay =
+        normalized.startsWith(r'$$') && normalized.endsWith(r'$$');
+    if (wrappedInline && normalized.length > 4) {
+      normalized = normalized.substring(2, normalized.length - 2).trim();
+    } else if (wrappedDisplay && normalized.length > 4) {
+      normalized = normalized.substring(2, normalized.length - 2).trim();
+    } else if (normalized.contains(r'\(') || normalized.contains(r'$$')) {
       return trimmed;
     }
-    var normalized = trimmed.replaceAll('\n', r' \\ ');
+    normalized = normalized.replaceAll('\n', r' \\ ');
+    normalized = normalized.replaceAllMapped(
+      RegExp(r'\\(?:dfrac|tfrac|frac)\s*(?=\{)'),
+      (_) => r'\dfrac',
+    );
     normalized = normalized.replaceAllMapped(
       RegExp(r'(?<!\\)(\d+)\s*/\s*(\d+)'),
-      (match) =>
-          r'\frac{' +
-          (match.group(1) ?? '') +
-          '}{' +
-          (match.group(2) ?? '') +
-          '}',
+      (match) => '\\dfrac{${match.group(1) ?? ''}}{${match.group(2) ?? ''}}',
     );
     final looksMath = normalized.contains(r'\') ||
         RegExp(r'[\^\_\=\+\-\*\/]').hasMatch(normalized);
     if (!looksMath) return trimmed;
+    if (!normalized.contains(r'\displaystyle')) {
+      normalized = '\\displaystyle $normalized';
+    }
     return '\$\$$normalized\$\$';
   }
 
@@ -1538,7 +1551,9 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
                         ),
                         const SizedBox(width: 12),
                         Container(
-                          constraints: const BoxConstraints(minHeight: 51),
+                          constraints: const BoxConstraints(
+                            minHeight: AppDialogActionMetrics.height,
+                          ),
                           alignment: Alignment.center,
                           padding: const EdgeInsets.symmetric(horizontal: 18),
                           decoration: BoxDecoration(
@@ -1577,7 +1592,7 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
                               : Icons.menu_book_rounded,
                           enabled: !_openingSolution,
                           onTap: () => unawaited(_openSolution()),
-                          fixedWidth: 112,
+                          fixedWidth: AppDialogActionMetrics.width,
                         ),
                       if (widget.enableConfirm) const SizedBox(width: 12),
                       if (widget.enableConfirm)
@@ -1592,6 +1607,7 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
                               HomeworkAnswerViewerAction.complete,
                             );
                           },
+                          fixedWidth: AppDialogActionMetrics.width,
                         ),
                       if (widget.enableConfirm) const SizedBox(width: 12),
                       if (widget.enableConfirm)
@@ -1607,6 +1623,7 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
                             );
                           },
                           filled: true,
+                          fixedWidth: AppDialogActionMetrics.width,
                         ),
                     ],
                   ),
@@ -1618,11 +1635,24 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
     );
   }
 
+  String _overlayQuestionCountLabel(List<HomeworkAnswerOverlayEntry> entries) {
+    var total = 0;
+    for (final entry in entries) {
+      final match = RegExp(r'(\d+)').firstMatch(entry.count);
+      total += int.tryParse(match?.group(1) ?? '') ?? 0;
+    }
+    if (total <= 0) return '-';
+    return '$total문항';
+  }
+
   Widget _buildChildOverlayPanel(BuildContext context) {
     final entries = widget.overlayEntries;
     if (entries.isEmpty) return const SizedBox.shrink();
     final brightness = Theme.of(context).brightness;
-    final maxWidth = math.min(MediaQuery.of(context).size.width * 0.29, 380.0);
+    final maxWidth = math.min(
+      MediaQuery.of(context).size.width * 0.29 * 1.1,
+      380.0 * 1.1,
+    );
     final summary = entries.first;
     final titleColor = SolidCapsuleActionBarTokens.iconColor(brightness);
     final metaColor = brightness == Brightness.dark
@@ -1646,22 +1676,23 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
       return trimmed.isEmpty ? fallback : trimmed;
     }
 
-    final materialTitle = normalize(
-      summary.materialTitle,
-      fallback: widget.title,
-    );
     final courseTitle = normalize(
       summary.courseTitle,
       fallback: summary.title,
     );
-    final summaryPage = normalize(
-      summary.summaryPage,
-      fallback: summary.page,
+    final groupName = courseTitle == '-'
+        ? normalize(widget.title, fallback: '그룹 과제')
+        : courseTitle;
+    final mergedPages = mergeHomeworkPageRawStrings(
+      entries.map((entry) => entry.page),
     );
-    final summaryCount = normalize(
-      summary.summaryCount,
-      fallback: summary.count.trim().isEmpty ? summary.memo : summary.count,
-    );
+    final summaryPage = mergedPages.isNotEmpty
+        ? 'p.$mergedPages'
+        : normalize(summary.summaryPage, fallback: summary.page);
+    final explicitCount = summary.summaryCount.trim();
+    final summaryCount = explicitCount.isEmpty
+        ? _overlayQuestionCountLabel(entries)
+        : explicitCount;
 
     Widget summaryRow(String left, String right, TextStyle style) {
       return Row(
@@ -1731,10 +1762,11 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
                         Row(
                           children: [
                             Expanded(
-                              child: summaryRow(
-                                materialTitle,
-                                courseTitle,
-                                titleStyle,
+                              child: Text(
+                                groupName,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: titleStyle,
                               ),
                             ),
                             const SizedBox(width: 8),
@@ -1747,8 +1779,10 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
                             ),
                           ],
                         ),
-                        const SizedBox(height: 6),
-                        summaryRow(summaryPage, summaryCount, metaStyle),
+                        if (_overlayCollapsed) ...[
+                          const SizedBox(height: 6),
+                          summaryRow(summaryPage, summaryCount, metaStyle),
+                        ],
                         if (!_overlayCollapsed) ...[
                           const SizedBox(height: 10),
                           Container(
@@ -1942,7 +1976,7 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
         borderColor = const Color(0xFFA84A4A);
         backgroundColor = const Color(0xFF3A2323);
         textColor = const Color(0xFFFFB3B3);
-        text = '빈칸';
+        text = '못품';
         break;
       case HomeworkAnswerCellState.notPerformed:
         borderColor = const Color(0xFF596565);
@@ -2036,8 +2070,8 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
           customBorder: const CircleBorder(),
           onTap: enabled ? () => onTap() : null,
           child: SizedBox(
-            width: 51,
-            height: 51,
+            width: AppDialogActionMetrics.height,
+            height: AppDialogActionMetrics.height,
             child: Center(
               child: Icon(
                 icon,
@@ -2068,7 +2102,7 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
           customBorder: const StadiumBorder(),
           onTap: enabled ? () => onTap() : null,
           child: SizedBox(
-            height: 51,
+            height: AppDialogActionMetrics.height,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 18),
               child: Row(
@@ -2100,7 +2134,11 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
           ),
         ));
     if (fixedWidth == null) return button;
-    return SizedBox(width: fixedWidth, height: 51, child: button);
+    return SizedBox(
+      width: fixedWidth,
+      height: AppDialogActionMetrics.height,
+      child: button,
+    );
   }
 }
 

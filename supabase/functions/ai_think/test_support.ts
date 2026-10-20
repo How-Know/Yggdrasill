@@ -4,7 +4,7 @@ import type { AiRunRecord } from '../_shared/ai/usage.ts';
 import type { ConversationRow, NewMessage, ThinkStore } from './chat.ts';
 import type { ConversationAccessState, DeliveredMaterial, DepartmentId } from './access_context.ts';
 import type { ThinkRoleId } from './prompts.ts';
-import type { LinkedDocumentBody, MemoryDetail, MemoryRow, MessageRow } from './context.ts';
+import type { AttachmentRef, LinkedDocumentBody, MemoryDetail, MemoryRow, MessageRow } from './context.ts';
 import type {
   ActionKind,
   ActionRow,
@@ -17,7 +17,18 @@ import type {
   WorkState,
 } from './actions.ts';
 import type { BehaviorCard, ConceptCategory, ConceptHit, CurriculumNode, CurriculumOutlineQuery } from './tools.ts';
+import type {
+  ConceptAppearanceRecord,
+  ConceptLinkedCriterion,
+  ConceptRecord,
+  ConceptReferenceRead,
+  ConceptSourceRecord,
+  ConceptStatementRecord,
+} from './concept_reference.ts';
+import type { CriterionLinkedConcept, CriterionRecord, CriterionReferenceRead } from './criterion_reference.ts';
+import type { ConceptDraftReferenceRead } from './concept_draft_reference.ts';
 import type { RelayConversationHit, RelayReservation, RelayReserveInput } from './store.ts';
+import type { CriteriaInput, DepartmentCriteria, OrganizeMessageRow, ProgressSummaryInput } from './organize.ts';
 
 export function memory(partial: Partial<MemoryRow> & { id: string; kind: string; title: string }): MemoryRow {
   return {
@@ -44,12 +55,13 @@ export type TestMemoryRow = MemoryRow & {
 export class MemoryThinkStore implements ThinkStore {
   memories: TestMemoryRow[] = [];
   conversations: ConversationRow[] = [];
-  messages: (MessageRow & { conversation_id: string; excluded?: boolean; extra?: NewMessage })[] = [];
+  messages: (MessageRow & { conversation_id: string; excluded?: boolean; important?: boolean; extra?: NewMessage })[] = [];
   signFails = new Set<string>();
   searchCalls: string[][] = [];
   folders: TreeFolderRow[] = [];
   treeItems: TreeItemRow[] = [];
   codeRequests: CodeRequestDetail[] = [];
+  codeDiffs: Record<string, string> = {};
   actions: ActionRow[] = [];
   attached: { ids: string[]; messageId: string }[] = [];
   linkedDocumentBodies: LinkedDocumentBody[] = [];
@@ -89,6 +101,21 @@ export class MemoryThinkStore implements ThinkStore {
     return Promise.resolve(this.signFails.has(path) ? null : `https://signed.example/${path}`);
   }
 
+  readCalls: string[] = [];
+  answerFiles: { path: string; name: string; mime: string; bytes: Uint8Array }[] = [];
+
+  readAttachment(path: string): Promise<Uint8Array> {
+    this.readCalls.push(path);
+    if (this.signFails.has(path)) return Promise.reject(new Error('not found'));
+    return Promise.resolve(new TextEncoder().encode(`bytes:${path}`));
+  }
+
+  saveAnswerFile(userId: string, name: string, mime: string, bytes: Uint8Array): Promise<AttachmentRef> {
+    const path = `${userId}/out/${this.answerFiles.length + 1}-${name}`;
+    this.answerFiles.push({ path, name, mime, bytes });
+    return Promise.resolve({ path, name, mime, size: bytes.byteLength });
+  }
+
   getMemory(id: string): Promise<MemoryDetail | null> {
     const m = this.memories.find((x) => x.id === id);
     if (!m) return Promise.resolve(null);
@@ -117,12 +144,96 @@ export class MemoryThinkStore implements ThinkStore {
     return Promise.resolve([{ id: 'cat1', name: '수와 연산', depth: 0, description: null, child_count: 2 }]);
   }
 
+  concepts = new Map<string, ConceptRecord>();
+  conceptPaths = new Map<string, { categoryPath: string[]; pathComplete: boolean }>();
+  conceptReadFails = new Set<string>();
+  conceptReads: string[] = [];
+
+  /** 개념별 이은 기준·출처. 값이 null이면 그 목록을 읽지 못한 것으로 돌려준다. */
+  conceptLinkedCriteria = new Map<string, ConceptLinkedCriterion[] | null>();
+  conceptSources = new Map<string, ConceptSourceRecord[] | null>();
+  /** 개념별 공통 내용·서술, 등장 위치. 값이 null이면 읽지 못한 것으로 돌려준다. */
+  conceptStatements = new Map<string, ConceptStatementRecord[] | null>();
+  conceptAppearances = new Map<string, ConceptAppearanceRecord[] | null>();
+
+  getConceptReference(conceptId: string): Promise<ConceptReferenceRead> {
+    this.conceptReads.push(conceptId);
+    if (this.conceptReadFails.has(conceptId)) return Promise.reject(new Error('concepts: connection reset'));
+    const concept = this.concepts.get(conceptId) ?? null;
+    if (!concept) return Promise.resolve({ concept: null, categoryPath: [], pathComplete: false });
+    const path = this.conceptPaths.get(conceptId) ?? { categoryPath: ['수와 연산', '소인수분해'], pathComplete: true };
+    const linked = this.conceptLinkedCriteria.has(conceptId) ? this.conceptLinkedCriteria.get(conceptId)! : [];
+    const sources = this.conceptSources.has(conceptId) ? this.conceptSources.get(conceptId)! : [];
+    const statements = this.conceptStatements.has(conceptId) ? this.conceptStatements.get(conceptId)! : [];
+    const appearances = this.conceptAppearances.has(conceptId) ? this.conceptAppearances.get(conceptId)! : [];
+    return Promise.resolve({
+      concept: { ...concept },
+      ...path,
+      linkedCriteria: linked ? linked.map((c) => ({ ...c })) : null,
+      sources: sources ? sources.map((x) => ({ ...x, unit_path: [...x.unit_path] })) : null,
+      statements: statements ? statements.map((x) => structuredClone(x)) : null,
+      appearances: appearances ? appearances.map((x) => ({ ...x, unit_path: [...x.unit_path] })) : null,
+    });
+  }
+
+  /** 개념 탭 정리 기준(concept_criteria). 부서 기준(criteria)과 다르다. */
+  conceptCriteria = new Map<string, CriterionRecord>();
+  criterionLinkedConcepts = new Map<string, CriterionLinkedConcept[] | null>();
+  criterionReadFails = new Set<string>();
+  criterionReads: string[] = [];
+
+  getCriterionReference(criterionId: string): Promise<CriterionReferenceRead> {
+    this.criterionReads.push(criterionId);
+    if (this.criterionReadFails.has(criterionId)) return Promise.reject(new Error('concept_criteria: connection reset'));
+    const criterion = this.conceptCriteria.get(criterionId) ?? null;
+    if (!criterion) return Promise.resolve({ criterion: null });
+    const linked = this.criterionLinkedConcepts.has(criterionId) ? this.criterionLinkedConcepts.get(criterionId)! : [];
+    return Promise.resolve({ criterion: { ...criterion }, linkedConcepts: linked ? linked.map((c) => ({ ...c })) : null });
+  }
+
+  /** 개념 초안 검토 창의 초안. 값을 바꾸면 다음 질문이 바뀐 저장본을 읽는다. */
+  conceptDrafts = new Map<string, ConceptDraftReferenceRead>();
+  conceptDraftReads: string[] = [];
+  conceptDraftReadFails = new Set<string>();
+  /** 제안 RPC가 낼 오류(예: 'concept_draft_change_unknown_item'). */
+  conceptDraftProposeError: string | null = null;
+  conceptDraftProposals: { conversationId: string; kind: ActionKind; payload: Record<string, unknown> }[] = [];
+
+  getConceptDraftReference(draftId: string): Promise<ConceptDraftReferenceRead> {
+    this.conceptDraftReads.push(draftId);
+    if (this.conceptDraftReadFails.has(draftId)) return Promise.reject(new Error('concept_drafts: connection reset'));
+    const got = this.conceptDrafts.get(draftId);
+    return Promise.resolve(got ? structuredClone(got) : { draft: null });
+  }
+
+  proposeConceptDraftAction(conversationId: string, kind: ActionKind, payload: Record<string, unknown>): Promise<ActionRow> {
+    if (this.conceptDraftProposeError) return Promise.reject(new Error(`concept_draft_action_propose: ${this.conceptDraftProposeError}`));
+    this.conceptDraftProposals.push({ conversationId, kind, payload: structuredClone(payload) });
+    const row: ActionRow = {
+      id: this.id('act'),
+      conversation_id: conversationId,
+      message_id: null,
+      kind,
+      status: 'proposed',
+      payload,
+      preview: { title: kind, reason: payload.reason },
+      result: null,
+      error: null,
+      superseded: false,
+      created_at: new Date().toISOString(),
+    };
+    this.actions.push(row);
+    return Promise.resolve(row);
+  }
+
   searchBehaviorCards(_query: string | null, _limit: number): Promise<BehaviorCard[]> {
     return Promise.resolve([]);
   }
 
-  listTreeFolders(): Promise<{ folders: TreeFolderRow[]; items: TreeItemRow[] }> {
-    return Promise.resolve({ folders: this.folders, items: this.treeItems });
+  listTreeFolders(opts?: { department?: boolean }): Promise<{ folders: TreeFolderRow[]; items: TreeItemRow[] }> {
+    this.folderListCalls.push(opts ?? {});
+    const folders = opts?.department ? this.folders : this.folders.map(({ department: _d, ...f }) => f);
+    return Promise.resolve({ folders, items: this.treeItems });
   }
 
   listConversations(query: string | null, limit: number): Promise<ConversationHit[]> {
@@ -149,6 +260,10 @@ export class MemoryThinkStore implements ThinkStore {
 
   listCodeRequests(query: string | null, limit: number): Promise<CodeRequestHit[]> {
     return Promise.resolve(this.codeRequests.filter((r) => !query || r.title.includes(query)).slice(0, limit));
+  }
+
+  getCodeRequestDiff(id: string): Promise<string | null> {
+    return Promise.resolve(this.codeDiffs[id] ?? null);
   }
 
   getCodeRequest(id: string): Promise<CodeRequestDetail | null> {
@@ -256,6 +371,147 @@ export class MemoryThinkStore implements ThinkStore {
     };
     this.actions.push(row);
     return Promise.resolve(row);
+  }
+
+  /** 설정하면 다음 넘기기 제안이 이 코드로 실패한다(예: 'handover_same_department'). */
+  handoverFailure: string | null = null;
+  folderListCalls: { department?: boolean }[] = [];
+
+  proposeHandover(conversationId: string, toDepartment: string, reason: string): Promise<ActionRow> {
+    if (this.handoverFailure) return Promise.reject(new Error(`ai_department_handover_propose: ${this.handoverFailure}`));
+    const from = this.accessByConversation.get(conversationId)?.thinkRoleId ?? 'lead';
+    for (const a of this.actions) {
+      if (a.conversation_id === conversationId && a.kind === 'handover_department' && a.status === 'proposed') {
+        a.status = 'rejected';
+        a.superseded = true;
+      }
+    }
+    const row: ActionRow = {
+      id: this.id('act'),
+      conversation_id: conversationId,
+      message_id: null,
+      kind: 'handover_department',
+      status: 'proposed',
+      payload: { to_department: toDepartment, reason },
+      preview: { title: this.conversations.find((c) => c.id === conversationId)?.title ?? '', from_department: from, to_department: toDepartment, reason },
+      result: null,
+      error: null,
+      superseded: false,
+      created_at: new Date().toISOString(),
+    };
+    this.actions.push(row);
+    return Promise.resolve(row);
+  }
+
+  // --- 자동 정리 제안 ---
+  /** null이면 설정 읽기가 실패한다. */
+  autoOrganize: boolean | null = true;
+  criteria = new Map<string, DepartmentCriteria>();
+  /** 설정하면 다음 정리 제안이 이 코드로 실패한다(예: 'organize_rejected_before'). */
+  organizeFailure: string | null = null;
+  organizeCalls: { kind: ActionKind; conversationId: string; args: Record<string, unknown> }[] = [];
+
+  listOrganizeMessages(conversationId: string, limit: number): Promise<OrganizeMessageRow[]> {
+    const rows = this.messages.filter((m) => m.conversation_id === conversationId && !m.excluded).slice(-limit);
+    return Promise.resolve(
+      rows.map((m) => ({ id: m.id, role: m.role, content: m.content, created_at: m.created_at, marked_important: m.important === true })),
+    );
+  }
+
+  private organizeAction(
+    kind: ActionKind,
+    conversationId: string,
+    args: Record<string, unknown>,
+    preview: Record<string, unknown>,
+    supersedeWhen: (a: ActionRow) => boolean,
+  ): Promise<ActionRow> {
+    this.organizeCalls.push({ kind, conversationId, args });
+    if (this.organizeFailure) {
+      const code = this.organizeFailure;
+      this.organizeFailure = null;
+      return Promise.reject(new Error(`organize: ${code}`));
+    }
+    for (const a of this.actions) {
+      if (a.conversation_id === conversationId && a.kind === kind && a.status === 'proposed' && supersedeWhen(a)) {
+        a.status = 'rejected';
+        a.superseded = true;
+      }
+    }
+    const row: ActionRow = {
+      id: this.id('act'),
+      conversation_id: conversationId,
+      message_id: null,
+      kind,
+      status: 'proposed',
+      payload: args,
+      preview,
+      result: null,
+      error: null,
+      superseded: false,
+      created_at: new Date().toISOString(),
+    };
+    this.actions.push(row);
+    return Promise.resolve(row);
+  }
+
+  proposeExclusion(conversationId: string, messageIds: string[], reason: string, impact: string, userRequested: boolean): Promise<ActionRow> {
+    return this.organizeAction(
+      'exclude_context',
+      conversationId,
+      { message_ids: messageIds, reason, impact, user_requested: userRequested },
+      { title: `메시지 ${messageIds.length}개`, count: messageIds.length, reason, impact },
+      () => true,
+    );
+  }
+
+  proposeImportance(conversationId: string, messageIds: string[], reason: string, userRequested: boolean): Promise<ActionRow> {
+    return this.organizeAction(
+      'mark_important',
+      conversationId,
+      { message_ids: messageIds, reason, user_requested: userRequested },
+      { title: `메시지 ${messageIds.length}개`, count: messageIds.length, reason },
+      () => true,
+    );
+  }
+
+  proposeProgressSummary(conversationId: string, summary: ProgressSummaryInput, reason: string, throughMessageId: string): Promise<ActionRow> {
+    return this.organizeAction(
+      'progress_summary',
+      conversationId,
+      { summary, reason, through_message_id: throughMessageId },
+      { title: summary.purpose.slice(0, 80), summary, reason },
+      () => true,
+    );
+  }
+
+  proposeCriteriaChange(conversationId: string, department: string, criteria: CriteriaInput, reason: string): Promise<ActionRow> {
+    return this.organizeAction(
+      'department_criteria_change',
+      conversationId,
+      { department, criteria, reason },
+      { title: `${department} 부서 기준`, department, reason },
+      (a) => a.payload.department === department,
+    );
+  }
+
+  getAutoOrganizeEnabled(): Promise<boolean> {
+    return this.autoOrganize === null ? Promise.reject(new Error('settings unavailable')) : Promise.resolve(this.autoOrganize);
+  }
+
+  getDepartmentCriteria(department: string): Promise<DepartmentCriteria | null> {
+    return Promise.resolve(
+      this.criteria.get(department) ?? { department, questions: [], risks: [], priority_memory_ids: [], version: 0 },
+    );
+  }
+
+  countPendingOrganize(conversationId: string): Promise<number> {
+    const kinds = new Set([
+      'place_conversation', 'split_conversation', 'save_memory', 'memory_card_change', 'handover_department',
+      'exclude_context', 'mark_important', 'progress_summary', 'department_criteria_change',
+    ]);
+    return Promise.resolve(
+      this.actions.filter((a) => a.conversation_id === conversationId && a.status === 'proposed' && !a.superseded && kinds.has(a.kind)).length,
+    );
   }
 
   attachActions(ids: string[], messageId: string): Promise<void> {

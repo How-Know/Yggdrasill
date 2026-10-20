@@ -20,6 +20,7 @@ import '../services/homework_grading_state_codec.dart';
 import '../services/homework_departure_draft_service.dart';
 import '../services/homework_session_plan_service.dart';
 import '../services/homework_batch_confirm_service.dart';
+import '../services/homework_grading_lock_service.dart';
 import '../services/homework_test_grading_result_service.dart';
 import '../services/homework_time_defaults_service.dart';
 import '../services/student_flow_store.dart';
@@ -171,6 +172,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   bool? _memoFloatingHiddenBeforeGrading;
   int _openTextbookReportCount = 0;
   Timer? _textbookReportCountTimer;
+  bool _homeworkOverviewDialogOpen = false;
 
   Map<({String studentId, String itemId}), bool> get _pendingConfirms =>
       _batchConfirmService.pending;
@@ -241,6 +243,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     homeGradingHistoryAction = null;
     _restoreMemoFloatingAfterGrading();
     final testGradingSessionToClear = rightSideSheetTestGradingSession.value;
+    if (testGradingSessionToClear?.onClosed != null) {
+      unawaited(testGradingSessionToClear!.onClosed!());
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       homeBatchConfirmFabVisible.value = false;
       if (identical(
@@ -2030,7 +2035,15 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               };
               final liveReady =
                   snapshotReady || liveDraft?.hasGoalSnapshot == true;
-              return _buildHomeworkChipsReactiveForStudent(
+              return ValueListenableBuilder<Set<HomeworkGradingLockKey>>(
+                valueListenable:
+                    HomeworkGradingLockService.instance.releasingKeys,
+                builder: (context, _, __) {
+                  return ValueListenableBuilder<Set<HomeworkBatchConfirmKey>>(
+                    valueListenable:
+                        HomeworkBatchConfirmService.instance.confirmingKeys,
+                    builder: (context, _, __) {
+                      return _buildHomeworkChipsReactiveForStudent(
                 student.id,
                 tick,
                 homeworkDraftEditor: draftActive ? draftEditor : null,
@@ -2038,6 +2051,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                 goalSnapshotItemIds: liveIds,
                 hasGoalSnapshot: liveReady,
                 pendingConfirms: _pendingConfirms,
+                savingConfirms: _structuredGradingInFlightKeys,
                 onPhase3Tap: _handleSubmittedChipTapForPending,
                 onHomeworkCheckTap: ({
                   required context,
@@ -2102,6 +2116,10 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                         ..add(id);
                     }
                   });
+                },
+                      );
+                    },
+                  );
                 },
               );
             },
@@ -2888,9 +2906,10 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           splitPartsByItem: splitMap,
         );
         if (!ok) {
-          for (final hw in createdItems.reversed) {
-            HomeworkStore.instance.remove(studentId, hw.id);
-          }
+          HomeworkStore.instance.removeMany(
+            studentId,
+            createdItems.map((hw) => hw.id),
+          );
           HomeworkAssignmentStore.instance
               .revertOptimisticReservedAssignmentsForItems(
             studentId,
@@ -3224,9 +3243,10 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             },
           );
           if (!ok) {
-            for (final hw in createdItems.reversed) {
-              HomeworkStore.instance.remove(studentId, hw.id);
-            }
+            HomeworkStore.instance.removeMany(
+              studentId,
+              createdItems.map((hw) => hw.id),
+            );
             HomeworkAssignmentStore.instance
                 .revertOptimisticReservedAssignmentsForItems(
               studentId,
@@ -3262,6 +3282,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     BuildContext context,
     String studentId,
   ) async {
+    if (_homeworkOverviewDialogOpen) return;
+    _homeworkOverviewDialogOpen = true;
     try {
       final attended = DataManager.instance
           .getAttendanceRecordsForStudent(studentId)
@@ -3277,13 +3299,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           oldestSession = start;
         }
       }
-      await HomeworkStore.instance.loadCompletedHistory(
-        studentId: studentId,
-        completedFrom: oldestSession,
-        hydrate: true,
-      );
-      var activeAssignments = await HomeworkAssignmentStore.instance
-          .loadActiveAssignments(studentId);
+      var activeAssignments = <HomeworkAssignmentDetail>[];
       var reservedItemIds = activeAssignments
           .where(_isReservationAssignment)
           .map((assignment) => assignment.homeworkItemId.trim())
@@ -3292,17 +3308,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       var visibleAssignments = activeAssignments
           .where((assignment) => !_isReservationAssignment(assignment))
           .toList(growable: false);
-      var checksByItem = await HomeworkAssignmentStore.instance
-          .loadChecksForStudent(studentId);
-      var assignmentsByItem = await HomeworkAssignmentStore.instance
-          .loadAssignmentsForStudent(studentId);
-      await StudentFlowStore.instance.loadForStudent(studentId);
-      if (!context.mounted) return;
-
-      final flowNameById = <String, String>{
-        for (final f in StudentFlowStore.instance.cached(studentId))
-          f.id: f.name,
-      };
+      var checksByItem = <String, List<HomeworkAssignmentCheck>>{};
+      var assignmentsByItem = <String, List<HomeworkAssignmentBrief>>{};
+      var flowNameById = <String, String>{};
       String homeworkOverviewFlowLabel(String itemId) {
         final hw = HomeworkStore.instance.getById(studentId, itemId);
         final fid = (hw?.flowId ?? '').trim();
@@ -3584,7 +3592,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         return entries;
       }
 
-      var entries = buildOverviewEntries();
       final allClassRecords = DataManager.instance
           .getAttendanceRecordsForStudent(studentId)
           .where((record) => record.isPresent)
@@ -3634,514 +3641,587 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       final expandedCompletedGroupIds = <String>{};
       final expandedHomeworkOverviewItemIds = <String>{};
       String selectedSessionFilterId = sessionFilterOptions.first.id;
+      final loadRevision = ValueNotifier<int>(0);
+      var dialogAlive = true;
+      var loading = true;
+      Object? loadError;
+      var entries = <_HomeworkOverviewEntry>[];
 
-      await showDialog<void>(
+      Set<String> relevantItemIds() {
+        final ids = <String>{
+          for (final assignment in activeAssignments)
+            if (assignment.homeworkItemId.trim().isNotEmpty)
+              assignment.homeworkItemId.trim(),
+        };
+        for (final item in HomeworkStore.instance.itemsWithHistory(studentId)) {
+          final eventAt = item.completedAt ??
+              item.confirmedAt ??
+              item.updatedAt ??
+              item.createdAt;
+          if (oldestSession != null &&
+              eventAt != null &&
+              eventAt.isBefore(oldestSession)) {
+            continue;
+          }
+          ids.add(item.id);
+        }
+        return ids;
+      }
+
+      Future<void> reloadOverview({
+        required bool loadHistory,
+        required bool showLoading,
+      }) async {
+        if (showLoading && dialogAlive) {
+          loading = true;
+          loadError = null;
+          loadRevision.value++;
+        }
+        try {
+          final historyFuture = loadHistory
+              ? HomeworkStore.instance.loadCompletedHistory(
+                  studentId: studentId,
+                  completedFrom: oldestSession,
+                  hydrate: true,
+                )
+              : Future<void>.value();
+          final activeFuture = HomeworkAssignmentStore.instance
+              .loadActiveAssignmentsForOverview(studentId);
+          final flowFuture =
+              StudentFlowStore.instance.loadForStudent(studentId);
+          await Future.wait<dynamic>([
+            historyFuture,
+            activeFuture,
+            flowFuture,
+          ]);
+          activeAssignments = await activeFuture;
+          reservedItemIds = activeAssignments
+              .where(_isReservationAssignment)
+              .map((assignment) => assignment.homeworkItemId.trim())
+              .where((itemId) => itemId.isNotEmpty)
+              .toSet();
+          visibleAssignments = activeAssignments
+              .where((assignment) => !_isReservationAssignment(assignment))
+              .toList(growable: false);
+          flowNameById = {
+            for (final flow in StudentFlowStore.instance.cached(studentId))
+              flow.id: flow.name,
+          };
+
+          final itemIds = relevantItemIds();
+          final checksFuture =
+              HomeworkAssignmentStore.instance.loadChecksForStudent(
+            studentId,
+            homeworkItemIds: itemIds,
+            checkedFrom: oldestSession,
+          );
+          final assignmentsFuture =
+              HomeworkAssignmentStore.instance.loadAssignmentsForStudent(
+            studentId,
+            homeworkItemIds: itemIds,
+          );
+          final historyRows = await Future.wait<dynamic>([
+            checksFuture,
+            assignmentsFuture,
+          ]);
+          checksByItem =
+              historyRows[0] as Map<String, List<HomeworkAssignmentCheck>>;
+          assignmentsByItem =
+              historyRows[1] as Map<String, List<HomeworkAssignmentBrief>>;
+          entries = buildOverviewEntries();
+          loadError = null;
+        } catch (error) {
+          loadError = error;
+        } finally {
+          loading = false;
+          if (dialogAlive) loadRevision.value++;
+        }
+      }
+
+      unawaited(
+        reloadOverview(
+          loadHistory: true,
+          showLoading: false,
+        ),
+      );
+      await showUtilityGlassDialog(
         context: context,
-        barrierColor: Colors.black54,
-        builder: (ctx) {
-          final media = MediaQuery.of(ctx).size;
-          final dialogWidth = math.min(media.width - 48, 1080.0);
-          final dialogHeight = math.min(media.height - 48, 760.0);
-          return Dialog(
-            backgroundColor: Colors.transparent,
-            elevation: 0,
-            insetPadding: const EdgeInsets.all(24),
-            child: UtilityGlassDialogShell(
-              title: '$studentName 과제 현황',
-              icon: Icons.assignment_rounded,
-              preferredWidth: dialogWidth,
-              maxWidth: dialogWidth,
-              maxHeight: dialogHeight,
-              child: StatefulBuilder(
-                builder: (dialogContext, setDialogState) {
-                  final selectedFilter = sessionFilterOptions.firstWhere(
-                    (opt) => opt.id == selectedSessionFilterId,
-                    orElse: () => sessionFilterOptions.first,
+        title: '$studentName 과제 현황',
+        icon: Icons.assignment_rounded,
+        preferredWidth: math.min(
+          MediaQuery.sizeOf(context).width - 48,
+          1080,
+        ),
+        maxWidth: math.min(
+          MediaQuery.sizeOf(context).width - 48,
+          1080,
+        ),
+        maxHeight: math.min(
+          MediaQuery.sizeOf(context).height - 48,
+          760,
+        ),
+        child: ValueListenableBuilder<int>(
+          valueListenable: loadRevision,
+          builder: (loadContext, _, __) {
+            final dlg = YggDialogColors.of(loadContext);
+            if (loading) {
+              return _buildHomeworkOverviewLoadingState(dlg);
+            }
+            if (loadError != null) {
+              return _buildHomeworkOverviewErrorState(
+                dlg,
+                onRetry: () => unawaited(
+                  reloadOverview(
+                    loadHistory: true,
+                    showLoading: true,
+                  ),
+                ),
+              );
+            }
+            return StatefulBuilder(
+              builder: (dialogContext, setDialogState) {
+                final selectedFilter = sessionFilterOptions.firstWhere(
+                  (opt) => opt.id == selectedSessionFilterId,
+                  orElse: () => sessionFilterOptions.first,
+                );
+                final completedGroupEntries =
+                    _collectRecentCompletedHomeworkGroups(
+                  studentId,
+                  assignmentsByItem: assignmentsByItem,
+                  checksByItem: checksByItem,
+                  targetDay: selectedFilter.targetDay,
+                  windowStart: selectedFilter.from,
+                  windowEnd: selectedFilter.to,
+                  limit: 16,
+                );
+                Future<void> refreshOverview() async {
+                  await reloadOverview(
+                    loadHistory: false,
+                    showLoading: false,
                   );
-                  final completedGroupEntries =
-                      _collectRecentCompletedHomeworkGroups(
-                    studentId,
-                    assignmentsByItem: assignmentsByItem,
-                    checksByItem: checksByItem,
-                    targetDay: selectedFilter.targetDay,
-                    windowStart: selectedFilter.from,
-                    windowEnd: selectedFilter.to,
-                    limit: 16,
-                  );
-                  Future<void> refreshOverview() async {
-                    final reloadedActive = await HomeworkAssignmentStore
-                        .instance
-                        .loadActiveAssignments(studentId);
-                    activeAssignments = reloadedActive;
-                    reservedItemIds = reloadedActive
-                        .where(_isReservationAssignment)
-                        .map((assignment) => assignment.homeworkItemId.trim())
-                        .where((itemId) => itemId.isNotEmpty)
-                        .toSet();
-                    visibleAssignments = reloadedActive
-                        .where((assignment) =>
-                            !_isReservationAssignment(assignment))
-                        .toList(growable: false);
-                    checksByItem = await HomeworkAssignmentStore.instance
-                        .loadChecksForStudent(studentId);
-                    assignmentsByItem = await HomeworkAssignmentStore.instance
-                        .loadAssignmentsForStudent(studentId);
-                    final rebuilt = buildOverviewEntries();
-                    if (!dialogContext.mounted) return;
-                    setDialogState(() {
-                      entries = rebuilt;
-                    });
-                  }
+                }
 
-                  Future<bool> confirmDeleteActiveOverviewEntry(
-                    _HomeworkOverviewEntry entry,
-                  ) async {
-                    if (!entry.isActive || entry.itemIds.isEmpty) return false;
-                    final confirmed = await showDialog<bool>(
-                      context: dialogContext,
-                      barrierColor: Colors.black54,
-                      builder: (ctx) => Dialog(
-                        backgroundColor: Colors.transparent,
-                        elevation: 0,
-                        child: UtilityGlassDialogShell(
-                          title: '활성 숙제 삭제',
-                          icon: Icons.delete_outline_rounded,
-                          preferredWidth: 420,
-                          maxWidth: 420,
-                          maxHeight: 260,
-                          child: Padding(
-                            padding: const EdgeInsets.fromLTRB(18, 14, 18, 16),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    entry.childCount > 1
-                                        ? '‘${entry.title}’ 활성 숙제 ${entry.childCount}개를 현황 목록에서 제거할까요?'
-                                        : '‘${entry.title}’ 활성 숙제를 현황 목록에서 제거할까요?',
-                                    style: const TextStyle(
-                                      color: kDlgTextSub,
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w600,
-                                      height: 1.35,
-                                    ),
-                                  ),
-                                ),
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: TextButton(
-                                        onPressed: () =>
-                                            Navigator.of(ctx).pop(false),
-                                        style: TextButton.styleFrom(
-                                          foregroundColor: kDlgTextSub,
-                                        ),
-                                        child: const Text('취소'),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: FilledButton(
-                                        onPressed: () =>
-                                            Navigator.of(ctx).pop(true),
-                                        style: FilledButton.styleFrom(
-                                          backgroundColor:
-                                              const Color(0xFFE57373),
-                                        ),
-                                        child: const Text('삭제'),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    );
-                    if (confirmed != true || !dialogContext.mounted)
-                      return false;
-                    await HomeworkAssignmentStore.instance
-                        .clearActiveAssignmentsForItems(
-                      studentId,
-                      entry.itemIds,
-                      fromStatuses: const [
-                        'assigned',
-                        'in_progress',
-                        'carried_to_class',
-                      ],
-                    );
-                    return dialogContext.mounted;
-                  }
-
-                  Future<void> onAddExtraCheck() async {
-                    // 후보는 홈 메뉴 과제 리스트와 동일하게 HomeworkStore의 그룹/미완료
-                    // item을 기준으로 만든다(assignment 행이 아직 없는 과제도 포함).
-                    final hiddenItemIds = <String>{...reservedItemIds};
-                    hiddenItemIds.addAll(
-                      HomeworkAssignmentStore.instance
-                          .peekPendingReservedHomeworkItemIds(studentId),
-                    );
-                    final dueByItem = <String, DateTime>{};
-                    final assignedTodayItems = <String>{};
-                    for (final a in activeAssignments) {
-                      if (_isReservationAssignment(a)) continue;
-                      final iid = a.homeworkItemId.trim();
-                      if (iid.isEmpty) continue;
-                      if (a.dueDate != null) {
-                        final d = _dateOnly(a.dueDate!);
-                        final prev = dueByItem[iid];
-                        if (prev == null || d.isBefore(prev)) {
-                          dueByItem[iid] = d;
-                        }
-                      }
-                      if (_dateOnly(a.assignedAt) == today) {
-                        assignedTodayItems.add(iid);
-                      }
-                    }
-                    final candidateGroups = <_ExtraCheckGroupCandidate>[];
-                    for (final group
-                        in HomeworkStore.instance.groups(studentId)) {
-                      final children = HomeworkStore.instance
-                          .itemsInGroup(studentId, group.id)
-                          .where((e) => e.status != HomeworkStatus.completed)
-                          .where((e) => !hiddenItemIds.contains(e.id))
-                          .toList(growable: false);
-                      if (children.isEmpty) continue;
-                      DateTime? groupDue;
-                      bool anyAssignedToday = false;
-                      int progress = 0;
-                      for (final c in children) {
-                        final d = dueByItem[c.id];
-                        if (d != null &&
-                            (groupDue == null || d.isBefore(groupDue))) {
-                          groupDue = d;
-                        }
-                        if (assignedTodayItems.contains(c.id)) {
-                          anyAssignedToday = true;
-                        }
-                        final checks = checksByItem[c.id] ??
-                            const <HomeworkAssignmentCheck>[];
-                        for (final ck in checks) {
-                          if (ck.progress > progress) progress = ck.progress;
-                        }
-                      }
-                      final dueToday = groupDue != null && groupDue == today;
-                      // 이전에 내줘서 오늘이 정규 검사예정인 그룹만 제외하고,
-                      // 오늘 추가된 그룹은 미리 검사 대상으로 포함한다.
-                      if (dueToday && !anyAssignedToday) continue;
-                      final title = group.title.trim().isNotEmpty
-                          ? group.title.trim()
-                          : children.first.title.trim();
-                      candidateGroups.add(
-                        _ExtraCheckGroupCandidate(
-                          group: group,
-                          summary: children.first,
-                          children: children,
-                          title: title.isEmpty ? '그룹 과제' : title,
-                          flowLabel:
-                              homeworkOverviewFlowLabel(children.first.id),
-                          bookAndCourse:
-                              _homeworkBookCourseLabel(children.first),
-                          dueDate: groupDue,
-                          progress: progress,
-                        ),
-                      );
-                    }
-                    final recorded = await _showExtraHomeworkCheckPicker(
-                      context: dialogContext,
-                      studentId: studentId,
-                      candidateGroups: candidateGroups,
-                    );
-                    if (recorded) await refreshOverview();
-                  }
-
-                  return Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-                          decoration: BoxDecoration(
-                            color: kDlgPanelBg,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: kDlgBorder),
-                          ),
-                          child: Row(
-                            children: [
-                              const Icon(
-                                Icons.filter_alt_rounded,
-                                size: 16,
-                                color: kDlgTextSub,
-                              ),
-                              const SizedBox(width: 8),
-                              const Text(
-                                '수업기록 필터',
-                                style: TextStyle(
-                                  color: kDlgTextSub,
-                                  fontSize: 12.5,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: DropdownButtonHideUnderline(
-                                  child: DropdownButton<String>(
-                                    isExpanded: true,
-                                    value: selectedSessionFilterId,
-                                    dropdownColor: kDlgPanelBg,
-                                    style: const TextStyle(
-                                      color: kDlgText,
-                                      fontSize: 13.5,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                    items: sessionFilterOptions
-                                        .map(
-                                          (opt) => DropdownMenuItem<String>(
-                                            value: opt.id,
-                                            child: Text(
-                                              opt.label,
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                          ),
-                                        )
-                                        .toList(growable: false),
-                                    onChanged: (value) {
-                                      if (value == null) return;
-                                      setDialogState(() {
-                                        selectedSessionFilterId = value;
-                                        expandedCompletedGroupIds.clear();
-                                        expandedHomeworkOverviewItemIds.clear();
-                                      });
-                                    },
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        Expanded(
-                          child: Row(
+                Future<bool> confirmDeleteActiveOverviewEntry(
+                  _HomeworkOverviewEntry entry,
+                ) async {
+                  if (!entry.isActive || entry.itemIds.isEmpty) return false;
+                  final confirmed = await showDialog<bool>(
+                    context: dialogContext,
+                    barrierColor: Colors.black54,
+                    builder: (ctx) => Dialog(
+                      backgroundColor: Colors.transparent,
+                      elevation: 0,
+                      child: UtilityGlassDialogShell(
+                        title: '활성 숙제 삭제',
+                        icon: Icons.delete_outline_rounded,
+                        preferredWidth: 420,
+                        maxWidth: 420,
+                        maxHeight: 260,
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(18, 14, 18, 16),
+                          child: Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
                               Expanded(
-                                child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.stretch,
-                                  children: [
-                                    const YggDialogSectionHeader(
-                                      icon: Icons.task_alt_rounded,
-                                      title: '완료 그룹과제',
-                                    ),
-                                    Expanded(
-                                      child: Container(
-                                        decoration: BoxDecoration(
-                                          color: kDlgPanelBg,
-                                          borderRadius:
-                                              BorderRadius.circular(12),
-                                          border: Border.all(color: kDlgBorder),
-                                        ),
-                                        clipBehavior: Clip.antiAlias,
-                                        child: completedGroupEntries.isEmpty
-                                            ? const Center(
-                                                child: Padding(
-                                                  padding: EdgeInsets.all(16),
-                                                  child: Text(
-                                                    '선택한 수업에서 완료한 그룹과제가 없습니다.',
-                                                    textAlign: TextAlign.center,
-                                                    style: TextStyle(
-                                                      color: kDlgTextSub,
-                                                      fontSize: 13.5,
-                                                      fontWeight:
-                                                          FontWeight.w600,
-                                                    ),
-                                                  ),
-                                                ),
-                                              )
-                                            : ListView.separated(
-                                                padding:
-                                                    const EdgeInsets.all(10),
-                                                itemCount: completedGroupEntries
-                                                    .length,
-                                                separatorBuilder: (_, __) =>
-                                                    const SizedBox(height: 8),
-                                                itemBuilder: (context, index) {
-                                                  final entry =
-                                                      completedGroupEntries[
-                                                          index];
-                                                  final isExpanded =
-                                                      expandedCompletedGroupIds
-                                                          .contains(
-                                                              entry.groupId);
-                                                  return _buildCompletedGroupOverviewCard(
-                                                    entry,
-                                                    isExpanded: isExpanded,
-                                                    onTap: () {
-                                                      setDialogState(() {
-                                                        if (isExpanded) {
-                                                          expandedCompletedGroupIds
-                                                              .remove(entry
-                                                                  .groupId);
-                                                        } else {
-                                                          expandedCompletedGroupIds
-                                                              .add(entry
-                                                                  .groupId);
-                                                        }
-                                                      });
-                                                    },
-                                                  );
-                                                },
-                                              ),
-                                      ),
-                                    ),
-                                  ],
+                                child: Text(
+                                  entry.childCount > 1
+                                      ? '‘${entry.title}’ 활성 숙제 ${entry.childCount}개를 현황 목록에서 제거할까요?'
+                                      : '‘${entry.title}’ 활성 숙제를 현황 목록에서 제거할까요?',
+                                  style: const TextStyle(
+                                    color: kDlgTextSub,
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                    height: 1.35,
+                                  ),
                                 ),
                               ),
-                              const SizedBox(width: 12),
-                              const VerticalDivider(
-                                width: 1,
-                                thickness: 1,
-                                color: UtilityGlassDialogTokens.dividerColor,
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.stretch,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        const Expanded(
-                                          child: YggDialogSectionHeader(
-                                            icon: Icons.playlist_play_rounded,
-                                            title: '활성/오늘 검사 현황',
-                                          ),
-                                        ),
-                                        IconButton(
-                                          onPressed: onAddExtraCheck,
-                                          icon: const Icon(Icons.add_rounded),
-                                          iconSize: 20,
-                                          color: kDlgAccent,
-                                          tooltip: '추가로 해온 숙제 검사',
-                                          visualDensity: VisualDensity.compact,
-                                          splashRadius: 20,
-                                          padding: EdgeInsets.zero,
-                                          constraints: const BoxConstraints(
-                                            minWidth: 32,
-                                            minHeight: 32,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    Expanded(
-                                      child: Container(
-                                        decoration: BoxDecoration(
-                                          color: kDlgPanelBg,
-                                          borderRadius:
-                                              BorderRadius.circular(12),
-                                          border: Border.all(color: kDlgBorder),
-                                        ),
-                                        clipBehavior: Clip.antiAlias,
-                                        child: entries.isEmpty
-                                            ? const Center(
-                                                child: Padding(
-                                                  padding: EdgeInsets.all(16),
-                                                  child: Text(
-                                                    '활성 숙제와 오늘 검사 항목이 없습니다.',
-                                                    textAlign: TextAlign.center,
-                                                    style: TextStyle(
-                                                      color: kDlgTextSub,
-                                                      fontSize: 13.5,
-                                                      fontWeight:
-                                                          FontWeight.w600,
-                                                    ),
-                                                  ),
-                                                ),
-                                              )
-                                            : ListView.separated(
-                                                padding:
-                                                    const EdgeInsets.all(10),
-                                                itemCount: entries.length,
-                                                separatorBuilder: (_, __) =>
-                                                    const SizedBox(height: 8),
-                                                itemBuilder: (context, index) {
-                                                  final e = entries[index];
-                                                  final isOvEx =
-                                                      expandedHomeworkOverviewItemIds
-                                                          .contains(e.entryKey);
-                                                  void toggleExpand() {
-                                                    setDialogState(() {
-                                                      if (isOvEx) {
-                                                        expandedHomeworkOverviewItemIds
-                                                            .remove(e.entryKey);
-                                                      } else {
-                                                        expandedHomeworkOverviewItemIds
-                                                            .add(e.entryKey);
-                                                      }
-                                                    });
-                                                  }
-
-                                                  final card =
-                                                      _buildHomeworkOverviewCard(
-                                                    e,
-                                                    isExpanded: isOvEx,
-                                                    onTap: toggleExpand,
-                                                  );
-                                                  if (!e.isActive) return card;
-                                                  final deleteSnack = e
-                                                              .childCount >
-                                                          1
-                                                      ? '활성 숙제 ${e.childCount}개를 목록에서 제거했어요.'
-                                                      : '활성 숙제를 목록에서 제거했어요.';
-                                                  return _OverviewSwipeToDelete(
-                                                    key: ValueKey(
-                                                      'overview_slide_${e.entryKey}',
-                                                    ),
-                                                    onDeleteConfirmed:
-                                                        () async {
-                                                      final ok =
-                                                          await confirmDeleteActiveOverviewEntry(
-                                                        e,
-                                                      );
-                                                      if (!ok) return false;
-                                                      await refreshOverview();
-                                                      if (!dialogContext
-                                                          .mounted) {
-                                                        return true;
-                                                      }
-                                                      _showHomeworkChipSnackBar(
-                                                        dialogContext,
-                                                        deleteSnack,
-                                                      );
-                                                      return true;
-                                                    },
-                                                    child: card,
-                                                  );
-                                                },
-                                              ),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: TextButton(
+                                      onPressed: () =>
+                                          Navigator.of(ctx).pop(false),
+                                      style: TextButton.styleFrom(
+                                        foregroundColor: kDlgTextSub,
                                       ),
+                                      child: const Text('취소'),
                                     ),
-                                  ],
-                                ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: FilledButton(
+                                      onPressed: () =>
+                                          Navigator.of(ctx).pop(true),
+                                      style: FilledButton.styleFrom(
+                                        backgroundColor:
+                                            const Color(0xFFE57373),
+                                      ),
+                                      child: const Text('삭제'),
+                                    ),
+                                  ),
+                                ],
                               ),
                             ],
                           ),
                         ),
-                      ],
+                      ),
                     ),
                   );
-                },
-              ),
-            ),
-          );
-        },
+                  if (confirmed != true || !dialogContext.mounted) return false;
+                  await HomeworkAssignmentStore.instance
+                      .clearActiveAssignmentsForItems(
+                    studentId,
+                    entry.itemIds,
+                    fromStatuses: const [
+                      'assigned',
+                      'in_progress',
+                      'carried_to_class',
+                    ],
+                  );
+                  return dialogContext.mounted;
+                }
+
+                Future<void> onAddExtraCheck() async {
+                  // 후보는 홈 메뉴 과제 리스트와 동일하게 HomeworkStore의 그룹/미완료
+                  // item을 기준으로 만든다(assignment 행이 아직 없는 과제도 포함).
+                  final hiddenItemIds = <String>{...reservedItemIds};
+                  hiddenItemIds.addAll(
+                    HomeworkAssignmentStore.instance
+                        .peekPendingReservedHomeworkItemIds(studentId),
+                  );
+                  final dueByItem = <String, DateTime>{};
+                  final assignedTodayItems = <String>{};
+                  for (final a in activeAssignments) {
+                    if (_isReservationAssignment(a)) continue;
+                    final iid = a.homeworkItemId.trim();
+                    if (iid.isEmpty) continue;
+                    if (a.dueDate != null) {
+                      final d = _dateOnly(a.dueDate!);
+                      final prev = dueByItem[iid];
+                      if (prev == null || d.isBefore(prev)) {
+                        dueByItem[iid] = d;
+                      }
+                    }
+                    if (_dateOnly(a.assignedAt) == today) {
+                      assignedTodayItems.add(iid);
+                    }
+                  }
+                  final candidateGroups = <_ExtraCheckGroupCandidate>[];
+                  for (final group
+                      in HomeworkStore.instance.groups(studentId)) {
+                    final children = HomeworkStore.instance
+                        .itemsInGroup(studentId, group.id)
+                        .where((e) => e.status != HomeworkStatus.completed)
+                        .where((e) => !hiddenItemIds.contains(e.id))
+                        .toList(growable: false);
+                    if (children.isEmpty) continue;
+                    DateTime? groupDue;
+                    bool anyAssignedToday = false;
+                    int progress = 0;
+                    for (final c in children) {
+                      final d = dueByItem[c.id];
+                      if (d != null &&
+                          (groupDue == null || d.isBefore(groupDue))) {
+                        groupDue = d;
+                      }
+                      if (assignedTodayItems.contains(c.id)) {
+                        anyAssignedToday = true;
+                      }
+                      final checks = checksByItem[c.id] ??
+                          const <HomeworkAssignmentCheck>[];
+                      for (final ck in checks) {
+                        if (ck.progress > progress) progress = ck.progress;
+                      }
+                    }
+                    final dueToday = groupDue != null && groupDue == today;
+                    // 이전에 내줘서 오늘이 정규 검사예정인 그룹만 제외하고,
+                    // 오늘 추가된 그룹은 미리 검사 대상으로 포함한다.
+                    if (dueToday && !anyAssignedToday) continue;
+                    final title = group.title.trim().isNotEmpty
+                        ? group.title.trim()
+                        : children.first.title.trim();
+                    candidateGroups.add(
+                      _ExtraCheckGroupCandidate(
+                        group: group,
+                        summary: children.first,
+                        children: children,
+                        title: title.isEmpty ? '그룹 과제' : title,
+                        flowLabel: homeworkOverviewFlowLabel(children.first.id),
+                        bookAndCourse: _homeworkBookCourseLabel(children.first),
+                        dueDate: groupDue,
+                        progress: progress,
+                      ),
+                    );
+                  }
+                  final recorded = await _showExtraHomeworkCheckPicker(
+                    context: dialogContext,
+                    studentId: studentId,
+                    candidateGroups: candidateGroups,
+                  );
+                  if (recorded) await refreshOverview();
+                }
+
+                return Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                        decoration: BoxDecoration(
+                          color: dlg.fieldBg,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: dlg.border),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.filter_alt_rounded,
+                              size: 16,
+                              color: dlg.textSub,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              '수업기록 필터',
+                              style: TextStyle(
+                                color: dlg.textSub,
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: DropdownButtonHideUnderline(
+                                child: DropdownButton<String>(
+                                  isExpanded: true,
+                                  value: selectedSessionFilterId,
+                                  dropdownColor: dlg.fieldBg,
+                                  style: TextStyle(
+                                    color: dlg.text,
+                                    fontSize: 13.5,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                  items: sessionFilterOptions
+                                      .map(
+                                        (opt) => DropdownMenuItem<String>(
+                                          value: opt.id,
+                                          child: Text(
+                                            opt.label,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                      )
+                                      .toList(growable: false),
+                                  onChanged: (value) {
+                                    if (value == null) return;
+                                    setDialogState(() {
+                                      selectedSessionFilterId = value;
+                                      expandedCompletedGroupIds.clear();
+                                      expandedHomeworkOverviewItemIds.clear();
+                                    });
+                                  },
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Expanded(
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  const YggDialogSectionHeader(
+                                    icon: Icons.task_alt_rounded,
+                                    title: '완료 그룹과제',
+                                  ),
+                                  Expanded(
+                                    child: completedGroupEntries.isEmpty
+                                        ? Center(
+                                            child: Padding(
+                                              padding: const EdgeInsets.all(16),
+                                              child: Text(
+                                                '선택한 수업에서 완료한 그룹과제가 없습니다.',
+                                                textAlign: TextAlign.center,
+                                                style: TextStyle(
+                                                  color: dlg.textSub,
+                                                  fontSize: 13.5,
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                              ),
+                                            ),
+                                          )
+                                        : ListView.separated(
+                                            padding: const EdgeInsets.all(2),
+                                            itemCount:
+                                                completedGroupEntries.length,
+                                            separatorBuilder: (_, __) =>
+                                                const SizedBox(height: 8),
+                                            itemBuilder: (context, index) {
+                                              final entry =
+                                                  completedGroupEntries[index];
+                                              final isExpanded =
+                                                  expandedCompletedGroupIds
+                                                      .contains(entry.groupId);
+                                              return _buildCompletedGroupOverviewCard(
+                                                context,
+                                                entry,
+                                                isExpanded: isExpanded,
+                                                onTap: () {
+                                                  setDialogState(() {
+                                                    if (isExpanded) {
+                                                      expandedCompletedGroupIds
+                                                          .remove(
+                                                              entry.groupId);
+                                                    } else {
+                                                      expandedCompletedGroupIds
+                                                          .add(entry.groupId);
+                                                    }
+                                                  });
+                                                },
+                                              );
+                                            },
+                                          ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            VerticalDivider(
+                              width: 1,
+                              thickness: 1,
+                              color: dlg.divider,
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  Row(
+                                    children: [
+                                      const Expanded(
+                                        child: YggDialogSectionHeader(
+                                          icon: Icons.playlist_play_rounded,
+                                          title: '활성/오늘 검사 현황',
+                                        ),
+                                      ),
+                                      IconButton(
+                                        onPressed: onAddExtraCheck,
+                                        icon: const Icon(Icons.add_rounded),
+                                        iconSize: 20,
+                                        color: kDlgAccent,
+                                        tooltip: '추가로 해온 숙제 검사',
+                                        visualDensity: VisualDensity.compact,
+                                        splashRadius: 20,
+                                        padding: EdgeInsets.zero,
+                                        constraints: const BoxConstraints(
+                                          minWidth: 32,
+                                          minHeight: 32,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  Expanded(
+                                    child: entries.isEmpty
+                                        ? Center(
+                                            child: Padding(
+                                              padding: const EdgeInsets.all(16),
+                                              child: Text(
+                                                '활성 숙제와 오늘 검사 항목이 없습니다.',
+                                                textAlign: TextAlign.center,
+                                                style: TextStyle(
+                                                  color: dlg.textSub,
+                                                  fontSize: 13.5,
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                              ),
+                                            ),
+                                          )
+                                        : ListView.separated(
+                                            padding: const EdgeInsets.all(2),
+                                            itemCount: entries.length,
+                                            separatorBuilder: (_, __) =>
+                                                const SizedBox(height: 8),
+                                            itemBuilder: (context, index) {
+                                              final e = entries[index];
+                                              final isOvEx =
+                                                  expandedHomeworkOverviewItemIds
+                                                      .contains(e.entryKey);
+                                              void toggleExpand() {
+                                                setDialogState(() {
+                                                  if (isOvEx) {
+                                                    expandedHomeworkOverviewItemIds
+                                                        .remove(e.entryKey);
+                                                  } else {
+                                                    expandedHomeworkOverviewItemIds
+                                                        .add(e.entryKey);
+                                                  }
+                                                });
+                                              }
+
+                                              final card =
+                                                  _buildHomeworkOverviewCard(
+                                                context,
+                                                e,
+                                                isExpanded: isOvEx,
+                                                onTap: toggleExpand,
+                                              );
+                                              if (!e.isActive) return card;
+                                              final deleteSnack = e.childCount >
+                                                      1
+                                                  ? '활성 숙제 ${e.childCount}개를 목록에서 제거했어요.'
+                                                  : '활성 숙제를 목록에서 제거했어요.';
+                                              return _OverviewSwipeToDelete(
+                                                key: ValueKey(
+                                                  'overview_slide_${e.entryKey}',
+                                                ),
+                                                onDeleteConfirmed: () async {
+                                                  final ok =
+                                                      await confirmDeleteActiveOverviewEntry(
+                                                    e,
+                                                  );
+                                                  if (!ok) return false;
+                                                  await refreshOverview();
+                                                  if (!dialogContext.mounted) {
+                                                    return true;
+                                                  }
+                                                  _showHomeworkChipSnackBar(
+                                                    dialogContext,
+                                                    deleteSnack,
+                                                  );
+                                                  return true;
+                                                },
+                                                child: card,
+                                              );
+                                            },
+                                          ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            );
+          },
+        ),
       );
+      dialogAlive = false;
+      loadRevision.dispose();
     } catch (_) {
       if (!context.mounted) return;
       _showHomeworkChipSnackBar(context, '숙제 목록을 불러오지 못했습니다.');
+    } finally {
+      _homeworkOverviewDialogOpen = false;
     }
   }
 
@@ -5816,6 +5896,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     required RightSheetPreloadedSessionPayload payload,
     String? gradingGroupId,
     AsyncUiAction? onNext,
+    required HomeworkGradingLockAccess lockAccess,
   }) async {
     final seenItemIds = <String>{};
     var expectedQuestionCount = 0;
@@ -5867,6 +5948,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           '기존 채점 기록을 확인하지 못해 채점지를 열지 않았습니다.',
         );
       }
+      if (lockAccess.canEdit) {
+        await HomeworkGradingLockService.instance.releaseIfNoDraft(keys);
+      }
       return true;
     }
     if (!context.mounted || !mounted) return true;
@@ -5879,6 +5963,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     final hasSavedGrading = savedSession != null ||
         _testGradingSavedHomeworkIds.contains(payload.homeworkId);
     final baselineStates = _retryBaselineStates(baselineSession);
+    final wrongOnlyStates = _retryBaselineStates(savedSession);
 
     rightSideSheetTestGradingSession.value = RightSideSheetTestGradingSession(
       sessionId: payload.sessionId,
@@ -5899,10 +5984,12 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           savedSession?.correctionAttemptNumbers ?? const <String, int>{},
       baselineAttemptId: baselineSession?.attempt.id ?? '',
       baselineStates: _toRightSheetStateMap(baselineStates),
+      wrongOnlyStates: _toRightSheetStateMap(wrongOnlyStates),
       // 재검사: 틀린것만 보기 ON. OFF면 gradingPages 전체(이전 정답 포함)가 다시 보인다.
-      wrongOnlyDefault: hasSavedGrading && baselineStates.isNotEmpty,
-      gradingLocked: hasSavedGrading,
-      smartConfirmAction: true,
+      wrongOnlyDefault: hasSavedGrading && wrongOnlyStates.isNotEmpty,
+      gradingLocked: hasSavedGrading || !lockAccess.canEdit,
+      readOnlyReason: lockAccess.canEdit ? '' : lockAccess.readOnlyReason,
+      smartConfirmAction: lockAccess.canEdit,
       showSearchChrome: false,
       closeBeforeActionCompletes: true,
       autoFilledCorrectCount: _teacherAutoFilledCorrectCount(
@@ -5913,94 +6000,103 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           currentStates,
         ],
       ),
-      onStatesChanged: (states) {
-        final decoded = _fromRightSheetStateMap(states);
-        _testGradingDraftStatesByHomeworkId[payload.homeworkId] =
-            Map<String, HomeworkAnswerCellState>.from(decoded);
-        _testGradingSerializedDraftByHomeworkId[payload.homeworkId] =
-            _serializeTestGradingDraftRows(
-          homeworkId: payload.homeworkId,
-          gradingPages: payload.gradingPages,
-          states: decoded,
-        );
-      },
-      onNext: onNext,
-      onAction: (action, states, correctionStates) async {
-        if (!mounted) return;
-        final decoded = _fromRightSheetStateMap(states);
-        _testGradingDraftStatesByHomeworkId[payload.homeworkId] =
-            Map<String, HomeworkAnswerCellState>.from(decoded);
-        _testGradingSerializedDraftByHomeworkId[payload.homeworkId] =
-            _serializeTestGradingDraftRows(
-          homeworkId: payload.homeworkId,
-          gradingPages: payload.gradingPages,
-          states: decoded,
-        );
-        final shouldPersist = action == 'complete' || action == 'confirm';
-        final persistenceKeys = <HomeworkBatchConfirmKey>{
-          ...keys,
-          (studentId: studentId, itemId: payload.homeworkId),
-        };
-        if (shouldPersist) {
-          setState(
-            () => _structuredGradingInFlightKeys.addAll(persistenceKeys),
-          );
-          _batchConfirmService.beginStructuredDraftSave(keys);
-        }
-        var savedGrading = true;
-        try {
-          if (shouldPersist) {
-            final targetItem = HomeworkStore.instance.getById(
-                  studentId,
-                  payload.homeworkId,
-                ) ??
-                hw;
-            final saved = await _enqueueStructuredGradingReturn(
-              studentId: studentId,
-              keys: keys,
-              targetItem: targetItem,
-              gradingGroupId: gradingGroupId,
-              action: action,
-              states: decoded,
-              gradingPages: payload.gradingPages,
-              scoreByQuestionKey: payload.scoreByQuestionKey,
-              groupHomeworkTitle: payload.groupHomeworkTitle,
-              baselineAttemptId: baselineSession?.attempt.id ?? '',
-              baselineStates: baselineStates,
-              correctionStates: correctionStates,
-              sourceSnapshotAt: sourceSnapshotAt,
-            );
-            if (!saved) {
-              savedGrading = false;
-              if (mounted) {
-                _showHomeworkChipSnackBar(
-                  this.context,
-                  '채점 초안을 이 PC에 저장하지 못했습니다.',
-                );
-              }
-            } else {
-              _testGradingSavedHomeworkIds.add(payload.homeworkId);
-            }
-          }
-        } finally {
-          if (shouldPersist) {
-            _batchConfirmService.endStructuredDraftSave(keys);
-            if (mounted) {
-              setState(
-                () => _structuredGradingInFlightKeys.removeAll(
-                  persistenceKeys,
-                ),
+      onClosed: lockAccess.canEdit
+          ? () => HomeworkGradingLockService.instance.releaseIfNoDraft(keys)
+          : null,
+      onStatesChanged: lockAccess.canEdit
+          ? (states) {
+              final decoded = _fromRightSheetStateMap(states);
+              _testGradingDraftStatesByHomeworkId[payload.homeworkId] =
+                  Map<String, HomeworkAnswerCellState>.from(decoded);
+              _testGradingSerializedDraftByHomeworkId[payload.homeworkId] =
+                  _serializeTestGradingDraftRows(
+                homeworkId: payload.homeworkId,
+                gradingPages: payload.gradingPages,
+                states: decoded,
               );
             }
-          }
-        }
-        if (!mounted || !savedGrading) return;
-        _markPendingConfirms(
-          keys: keys,
-          action: action,
-          structuredGrading: shouldPersist,
-        );
-      },
+          : null,
+      onNext: onNext,
+      onAction: !lockAccess.canEdit
+          ? null
+          : (action, states, correctionStates) async {
+              if (!mounted) return;
+              final decoded = _fromRightSheetStateMap(states);
+              _testGradingDraftStatesByHomeworkId[payload.homeworkId] =
+                  Map<String, HomeworkAnswerCellState>.from(decoded);
+              _testGradingSerializedDraftByHomeworkId[payload.homeworkId] =
+                  _serializeTestGradingDraftRows(
+                homeworkId: payload.homeworkId,
+                gradingPages: payload.gradingPages,
+                states: decoded,
+              );
+              final shouldPersist = action == 'complete' || action == 'confirm';
+              final persistenceKeys = <HomeworkBatchConfirmKey>{
+                ...keys,
+                (studentId: studentId, itemId: payload.homeworkId),
+              };
+              if (shouldPersist) {
+                setState(
+                  () => _structuredGradingInFlightKeys.addAll(persistenceKeys),
+                );
+                _batchConfirmService.beginStructuredDraftSave(keys);
+              }
+              var savedGrading = true;
+              try {
+                if (shouldPersist) {
+                  final targetItem = HomeworkStore.instance.getById(
+                        studentId,
+                        payload.homeworkId,
+                      ) ??
+                      hw;
+                  final saved = await _enqueueStructuredGradingReturn(
+                    studentId: studentId,
+                    keys: keys,
+                    targetItem: targetItem,
+                    gradingGroupId: gradingGroupId,
+                    action: action,
+                    states: decoded,
+                    gradingPages: payload.gradingPages,
+                    scoreByQuestionKey: payload.scoreByQuestionKey,
+                    groupHomeworkTitle: payload.groupHomeworkTitle,
+                    baselineAttemptId: baselineSession?.attempt.id ?? '',
+                    baselineStates: baselineStates,
+                    correctionStates: correctionStates,
+                    sourceSnapshotAt: sourceSnapshotAt,
+                  );
+                  if (!saved) {
+                    savedGrading = false;
+                    await HomeworkGradingLockService.instance
+                        .releaseIfNoDraft(keys);
+                    if (mounted) {
+                      _showHomeworkChipSnackBar(
+                        this.context,
+                        '채점 초안을 이 PC에 저장하지 못했습니다.',
+                      );
+                    }
+                  } else {
+                    _testGradingSavedHomeworkIds.add(payload.homeworkId);
+                  }
+                }
+              } finally {
+                if (shouldPersist) {
+                  _batchConfirmService.endStructuredDraftSave(keys);
+                  if (mounted) {
+                    setState(
+                      () => _structuredGradingInFlightKeys.removeAll(
+                        persistenceKeys,
+                      ),
+                    );
+                  }
+                }
+              }
+              if (!mounted || !savedGrading) return;
+              _markPendingConfirms(
+                keys: keys,
+                action: action,
+                structuredGrading: shouldPersist,
+              );
+            },
     );
     blockRightSideSheetOpen.value = false;
     if (!rightSideSheetOpen.value) {
@@ -6050,6 +6146,34 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       return;
     }
 
+    final effectiveGradingGroupId =
+        (gradingGroupId ?? HomeworkStore.instance.groupIdOfItem(hw.id) ?? '')
+            .trim();
+    HomeworkGradingLockAccess lockAccess;
+    try {
+      lockAccess = await HomeworkGradingLockService.instance.acquire(
+        studentId: studentId,
+        groupId: effectiveGradingGroupId,
+        keys: keys,
+      );
+    } catch (error) {
+      debugPrint('[GRADING_LOCK][acquire] $error');
+      lockAccess = const HomeworkGradingLockAccess(
+        canEdit: false,
+        targetKey: '',
+      );
+    }
+    if (!context.mounted) {
+      if (lockAccess.canEdit) {
+        await HomeworkGradingLockService.instance.releaseIfNoDraft(keys);
+      }
+      return;
+    }
+    final lockReadOnlyReason =
+        lockAccess.canEdit ? '' : lockAccess.readOnlyReason;
+    Future<void> releaseUnusedLock() =>
+        HomeworkGradingLockService.instance.releaseIfNoDraft(keys);
+
     if (keys.length == 1) {
       final preloadedPayload =
           RightSheetAnswerPreloadService.instance.getSessionPayload(
@@ -6062,8 +6186,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           hw: hw,
           keys: keys,
           payload: preloadedPayload,
-          gradingGroupId: gradingGroupId,
+          gradingGroupId: effectiveGradingGroupId,
           onNext: onNext,
+          lockAccess: lockAccess,
         );
         if (opened) return;
       }
@@ -6113,6 +6238,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               '기존 채점 기록을 확인하지 못해 채점지를 열지 않았습니다.',
             );
           }
+          if (lockAccess.canEdit) await releaseUnusedLock();
           return;
         }
         if (!context.mounted) return;
@@ -6125,6 +6251,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         final hasSavedGrading = savedSession != null ||
             _testGradingSavedHomeworkIds.contains(payload.homeworkId);
         final baselineStates = _retryBaselineStates(baselineSession);
+        final wrongOnlyStates = _retryBaselineStates(savedSession);
         final homeworkStore = HomeworkStore.instance;
         final studentName = _resolveHomeworkPrintStudentName(studentId);
         final groupHomeworkTitle = () {
@@ -6198,10 +6325,12 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               savedSession?.correctionAttemptNumbers ?? const <String, int>{},
           baselineAttemptId: baselineSession?.attempt.id ?? '',
           baselineStates: _toRightSheetStateMap(baselineStates),
+          wrongOnlyStates: _toRightSheetStateMap(wrongOnlyStates),
           // 재검사: 틀린것만 보기 ON. OFF면 gradingPages 전체(이전 정답 포함)가 다시 보인다.
-          wrongOnlyDefault: hasSavedGrading && baselineStates.isNotEmpty,
-          gradingLocked: hasSavedGrading,
-          smartConfirmAction: true,
+          wrongOnlyDefault: hasSavedGrading && wrongOnlyStates.isNotEmpty,
+          gradingLocked: hasSavedGrading || !lockAccess.canEdit,
+          readOnlyReason: lockReadOnlyReason,
+          smartConfirmAction: lockAccess.canEdit,
           showSearchChrome: false,
           closeBeforeActionCompletes: true,
           autoFilledCorrectCount: _teacherAutoFilledCorrectCount(
@@ -6212,94 +6341,102 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               currentStates,
             ],
           ),
-          onStatesChanged: (states) {
-            final decoded = _fromRightSheetStateMap(states);
-            _testGradingDraftStatesByHomeworkId[payload.homeworkId] =
-                Map<String, HomeworkAnswerCellState>.from(decoded);
-            _testGradingSerializedDraftByHomeworkId[payload.homeworkId] =
-                _serializeTestGradingDraftRows(
-              homeworkId: payload.homeworkId,
-              gradingPages: payload.gradingPages,
-              states: decoded,
-            );
-          },
-          onNext: onNext,
-          onAction: (action, states, correctionStates) async {
-            if (!mounted) return;
-            final decoded = _fromRightSheetStateMap(states);
-            _testGradingDraftStatesByHomeworkId[payload.homeworkId] =
-                Map<String, HomeworkAnswerCellState>.from(decoded);
-            _testGradingSerializedDraftByHomeworkId[payload.homeworkId] =
-                _serializeTestGradingDraftRows(
-              homeworkId: payload.homeworkId,
-              gradingPages: payload.gradingPages,
-              states: decoded,
-            );
-            final shouldPersist = action == 'complete' || action == 'confirm';
-            final persistenceKeys = <HomeworkBatchConfirmKey>{
-              ...keys,
-              (studentId: studentId, itemId: payload.homeworkId),
-            };
-            if (shouldPersist) {
-              setState(
-                () => _structuredGradingInFlightKeys.addAll(persistenceKeys),
-              );
-              _batchConfirmService.beginStructuredDraftSave(keys);
-            }
-            var savedGrading = true;
-            try {
-              if (shouldPersist) {
-                final targetItem = HomeworkStore.instance.getById(
-                      studentId,
-                      payload.homeworkId,
-                    ) ??
-                    hw;
-                final saved = await _enqueueStructuredGradingReturn(
-                  studentId: studentId,
-                  keys: keys,
-                  targetItem: targetItem,
-                  gradingGroupId: gradingGroupId,
-                  action: action,
-                  states: decoded,
-                  gradingPages: payload.gradingPages,
-                  scoreByQuestionKey: payload.scoreByQuestionKey,
-                  groupHomeworkTitle: groupHomeworkTitle,
-                  baselineAttemptId: baselineSession?.attempt.id ?? '',
-                  baselineStates: baselineStates,
-                  correctionStates: correctionStates,
-                  sourceSnapshotAt: sourceSnapshotAt,
-                );
-                if (!saved) {
-                  savedGrading = false;
-                  if (mounted) {
-                    _showHomeworkChipSnackBar(
-                      this.context,
-                      '채점 초안을 이 PC에 저장하지 못했습니다.',
-                    );
-                  }
-                } else {
-                  _testGradingSavedHomeworkIds.add(payload.homeworkId);
-                }
-              }
-            } finally {
-              if (shouldPersist) {
-                _batchConfirmService.endStructuredDraftSave(keys);
-                if (mounted) {
-                  setState(
-                    () => _structuredGradingInFlightKeys.removeAll(
-                      persistenceKeys,
-                    ),
+          onClosed: lockAccess.canEdit ? releaseUnusedLock : null,
+          onStatesChanged: lockAccess.canEdit
+              ? (states) {
+                  final decoded = _fromRightSheetStateMap(states);
+                  _testGradingDraftStatesByHomeworkId[payload.homeworkId] =
+                      Map<String, HomeworkAnswerCellState>.from(decoded);
+                  _testGradingSerializedDraftByHomeworkId[payload.homeworkId] =
+                      _serializeTestGradingDraftRows(
+                    homeworkId: payload.homeworkId,
+                    gradingPages: payload.gradingPages,
+                    states: decoded,
                   );
                 }
-              }
-            }
-            if (!mounted || !savedGrading) return;
-            _markPendingConfirms(
-              keys: keys,
-              action: action,
-              structuredGrading: shouldPersist,
-            );
-          },
+              : null,
+          onNext: onNext,
+          onAction: !lockAccess.canEdit
+              ? null
+              : (action, states, correctionStates) async {
+                  if (!mounted) return;
+                  final decoded = _fromRightSheetStateMap(states);
+                  _testGradingDraftStatesByHomeworkId[payload.homeworkId] =
+                      Map<String, HomeworkAnswerCellState>.from(decoded);
+                  _testGradingSerializedDraftByHomeworkId[payload.homeworkId] =
+                      _serializeTestGradingDraftRows(
+                    homeworkId: payload.homeworkId,
+                    gradingPages: payload.gradingPages,
+                    states: decoded,
+                  );
+                  final shouldPersist =
+                      action == 'complete' || action == 'confirm';
+                  final persistenceKeys = <HomeworkBatchConfirmKey>{
+                    ...keys,
+                    (studentId: studentId, itemId: payload.homeworkId),
+                  };
+                  if (shouldPersist) {
+                    setState(
+                      () => _structuredGradingInFlightKeys
+                          .addAll(persistenceKeys),
+                    );
+                    _batchConfirmService.beginStructuredDraftSave(keys);
+                  }
+                  var savedGrading = true;
+                  try {
+                    if (shouldPersist) {
+                      final targetItem = HomeworkStore.instance.getById(
+                            studentId,
+                            payload.homeworkId,
+                          ) ??
+                          hw;
+                      final saved = await _enqueueStructuredGradingReturn(
+                        studentId: studentId,
+                        keys: keys,
+                        targetItem: targetItem,
+                        gradingGroupId: effectiveGradingGroupId,
+                        action: action,
+                        states: decoded,
+                        gradingPages: payload.gradingPages,
+                        scoreByQuestionKey: payload.scoreByQuestionKey,
+                        groupHomeworkTitle: groupHomeworkTitle,
+                        baselineAttemptId: baselineSession?.attempt.id ?? '',
+                        baselineStates: baselineStates,
+                        correctionStates: correctionStates,
+                        sourceSnapshotAt: sourceSnapshotAt,
+                      );
+                      if (!saved) {
+                        savedGrading = false;
+                        await releaseUnusedLock();
+                        if (mounted) {
+                          _showHomeworkChipSnackBar(
+                            this.context,
+                            '채점 초안을 이 PC에 저장하지 못했습니다.',
+                          );
+                        }
+                      } else {
+                        _testGradingSavedHomeworkIds.add(payload.homeworkId);
+                      }
+                    }
+                  } finally {
+                    if (shouldPersist) {
+                      _batchConfirmService.endStructuredDraftSave(keys);
+                      if (mounted) {
+                        setState(
+                          () => _structuredGradingInFlightKeys.removeAll(
+                            persistenceKeys,
+                          ),
+                        );
+                      }
+                    }
+                  }
+                  if (!mounted || !savedGrading) return;
+                  _markPendingConfirms(
+                    keys: keys,
+                    action: action,
+                    structuredGrading: shouldPersist,
+                  );
+                },
         );
         blockRightSideSheetOpen.value = false;
         if (!rightSideSheetOpen.value) {
@@ -6336,6 +6473,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         context,
         '문항 목록을 모두 불러오지 못했습니다. 잠시 후 다시 눌러 주세요.',
       );
+      if (lockAccess.canEdit) await releaseUnusedLock();
       return;
     }
     if (textbookProblemPayload != null) {
@@ -6367,6 +6505,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             '기존 채점 기록을 확인하지 못해 채점지를 열지 않았습니다.',
           );
         }
+        if (lockAccess.canEdit) await releaseUnusedLock();
         return;
       }
       if (!context.mounted) return;
@@ -6380,13 +6519,17 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           _testGradingSavedHomeworkIds
               .contains(textbookProblemPayload.homeworkId);
       final baselineStates = _retryBaselineStates(baselineSession);
+      final wrongOnlyStates = _retryBaselineStates(savedSession);
       final studentName = _resolveHomeworkPrintStudentName(studentId);
       final groupHomeworkTitle = _resolveGradingGroupTitleForPending(
         keys: keys,
         fallbackHomework: hw,
         payloadTitle: textbookProblemPayload.title,
       );
-      if (!mounted) return;
+      if (!mounted) {
+        if (lockAccess.canEdit) await releaseUnusedLock();
+        return;
+      }
       rightSideSheetTestGradingSession.value = RightSideSheetTestGradingSession(
         sessionId:
             'student:$studentId|textbook_problem_grade:${textbookProblemPayload.homeworkId}',
@@ -6418,10 +6561,12 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             savedSession?.correctionAttemptNumbers ?? const <String, int>{},
         baselineAttemptId: baselineSession?.attempt.id ?? '',
         baselineStates: _toRightSheetStateMap(baselineStates),
+        wrongOnlyStates: _toRightSheetStateMap(wrongOnlyStates),
         // 재검사: 틀린것만 보기 ON. OFF면 gradingPages 전체(이전 정답 포함)가 다시 보인다.
-        wrongOnlyDefault: hasSavedGrading && baselineStates.isNotEmpty,
-        gradingLocked: hasSavedGrading,
-        smartConfirmAction: true,
+        wrongOnlyDefault: hasSavedGrading && wrongOnlyStates.isNotEmpty,
+        gradingLocked: hasSavedGrading || !lockAccess.canEdit,
+        readOnlyReason: lockReadOnlyReason,
+        smartConfirmAction: lockAccess.canEdit,
         showSearchChrome: false,
         closeBeforeActionCompletes: true,
         autoFilledCorrectCount: _teacherAutoFilledCorrectCount(
@@ -6432,98 +6577,109 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             currentStates,
           ],
         ),
-        onStatesChanged: (states) {
-          final decoded = _fromRightSheetStateMap(states);
-          _testGradingDraftStatesByHomeworkId[textbookProblemPayload
-              .homeworkId] = Map<String, HomeworkAnswerCellState>.from(decoded);
-          _testGradingSerializedDraftByHomeworkId[textbookProblemPayload
-              .homeworkId] = _serializeTestGradingDraftRows(
-            homeworkId: textbookProblemPayload.homeworkId,
-            gradingPages: textbookProblemPayload.gradingPages,
-            states: decoded,
-          );
-        },
-        onNext: onNext,
-        onAction: (action, states, correctionStates) async {
-          if (!mounted) return;
-          final decoded = _fromRightSheetStateMap(states);
-          _testGradingDraftStatesByHomeworkId[textbookProblemPayload
-              .homeworkId] = Map<String, HomeworkAnswerCellState>.from(decoded);
-          _testGradingSerializedDraftByHomeworkId[textbookProblemPayload
-              .homeworkId] = _serializeTestGradingDraftRows(
-            homeworkId: textbookProblemPayload.homeworkId,
-            gradingPages: textbookProblemPayload.gradingPages,
-            states: decoded,
-          );
-          final shouldPersist = action == 'complete' || action == 'confirm';
-          final persistenceKeys = <HomeworkBatchConfirmKey>{
-            ...keys,
-            (
-              studentId: studentId,
-              itemId: textbookProblemPayload.homeworkId,
-            ),
-          };
-          if (shouldPersist) {
-            setState(
-              () => _structuredGradingInFlightKeys.addAll(persistenceKeys),
-            );
-            _batchConfirmService.beginStructuredDraftSave(keys);
-          }
-          var savedGrading = true;
-          try {
-            if (shouldPersist) {
-              final targetItem = HomeworkStore.instance.getById(
-                    studentId,
-                    textbookProblemPayload.homeworkId,
-                  ) ??
-                  hw;
-              final saved = await _enqueueStructuredGradingReturn(
-                studentId: studentId,
-                keys: keys,
-                targetItem: targetItem,
-                gradingGroupId: gradingGroupId,
-                action: action,
-                states: decoded,
-                gradingPages: textbookProblemPayload.gradingPages,
-                scoreByQuestionKey: textbookProblemPayload.scoreByQuestionKey,
-                groupHomeworkTitle: groupHomeworkTitle,
-                baselineAttemptId: baselineSession?.attempt.id ?? '',
-                baselineStates: baselineStates,
-                correctionStates: correctionStates,
-                sourceSnapshotAt: sourceSnapshotAt,
-              );
-              if (!saved) {
-                savedGrading = false;
-                if (mounted) {
-                  _showHomeworkChipSnackBar(
-                    this.context,
-                    '채점 초안을 이 PC에 저장하지 못했습니다.',
-                  );
-                }
-              } else {
-                _testGradingSavedHomeworkIds
-                    .add(textbookProblemPayload.homeworkId);
-              }
-            }
-          } finally {
-            if (shouldPersist) {
-              _batchConfirmService.endStructuredDraftSave(keys);
-              if (mounted) {
-                setState(
-                  () => _structuredGradingInFlightKeys.removeAll(
-                    persistenceKeys,
-                  ),
+        onClosed: lockAccess.canEdit ? releaseUnusedLock : null,
+        onStatesChanged: lockAccess.canEdit
+            ? (states) {
+                final decoded = _fromRightSheetStateMap(states);
+                _testGradingDraftStatesByHomeworkId[
+                        textbookProblemPayload.homeworkId] =
+                    Map<String, HomeworkAnswerCellState>.from(decoded);
+                _testGradingSerializedDraftByHomeworkId[textbookProblemPayload
+                    .homeworkId] = _serializeTestGradingDraftRows(
+                  homeworkId: textbookProblemPayload.homeworkId,
+                  gradingPages: textbookProblemPayload.gradingPages,
+                  states: decoded,
                 );
               }
-            }
-          }
-          if (!mounted || !savedGrading) return;
-          _markPendingConfirms(
-            keys: keys,
-            action: action,
-            structuredGrading: shouldPersist,
-          );
-        },
+            : null,
+        onNext: onNext,
+        onAction: !lockAccess.canEdit
+            ? null
+            : (action, states, correctionStates) async {
+                if (!mounted) return;
+                final decoded = _fromRightSheetStateMap(states);
+                _testGradingDraftStatesByHomeworkId[
+                        textbookProblemPayload.homeworkId] =
+                    Map<String, HomeworkAnswerCellState>.from(decoded);
+                _testGradingSerializedDraftByHomeworkId[textbookProblemPayload
+                    .homeworkId] = _serializeTestGradingDraftRows(
+                  homeworkId: textbookProblemPayload.homeworkId,
+                  gradingPages: textbookProblemPayload.gradingPages,
+                  states: decoded,
+                );
+                final shouldPersist =
+                    action == 'complete' || action == 'confirm';
+                final persistenceKeys = <HomeworkBatchConfirmKey>{
+                  ...keys,
+                  (
+                    studentId: studentId,
+                    itemId: textbookProblemPayload.homeworkId,
+                  ),
+                };
+                if (shouldPersist) {
+                  setState(
+                    () =>
+                        _structuredGradingInFlightKeys.addAll(persistenceKeys),
+                  );
+                  _batchConfirmService.beginStructuredDraftSave(keys);
+                }
+                var savedGrading = true;
+                try {
+                  if (shouldPersist) {
+                    final targetItem = HomeworkStore.instance.getById(
+                          studentId,
+                          textbookProblemPayload.homeworkId,
+                        ) ??
+                        hw;
+                    final saved = await _enqueueStructuredGradingReturn(
+                      studentId: studentId,
+                      keys: keys,
+                      targetItem: targetItem,
+                      gradingGroupId: effectiveGradingGroupId,
+                      action: action,
+                      states: decoded,
+                      gradingPages: textbookProblemPayload.gradingPages,
+                      scoreByQuestionKey:
+                          textbookProblemPayload.scoreByQuestionKey,
+                      groupHomeworkTitle: groupHomeworkTitle,
+                      baselineAttemptId: baselineSession?.attempt.id ?? '',
+                      baselineStates: baselineStates,
+                      correctionStates: correctionStates,
+                      sourceSnapshotAt: sourceSnapshotAt,
+                    );
+                    if (!saved) {
+                      savedGrading = false;
+                      await releaseUnusedLock();
+                      if (mounted) {
+                        _showHomeworkChipSnackBar(
+                          this.context,
+                          '채점 초안을 이 PC에 저장하지 못했습니다.',
+                        );
+                      }
+                    } else {
+                      _testGradingSavedHomeworkIds
+                          .add(textbookProblemPayload.homeworkId);
+                    }
+                  }
+                } finally {
+                  if (shouldPersist) {
+                    _batchConfirmService.endStructuredDraftSave(keys);
+                    if (mounted) {
+                      setState(
+                        () => _structuredGradingInFlightKeys.removeAll(
+                          persistenceKeys,
+                        ),
+                      );
+                    }
+                  }
+                }
+                if (!mounted || !savedGrading) return;
+                _markPendingConfirms(
+                  keys: keys,
+                  action: action,
+                  structuredGrading: shouldPersist,
+                );
+              },
       );
       blockRightSideSheetOpen.value = false;
       if (!rightSideSheetOpen.value) {
@@ -6534,6 +6690,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       }
       return;
     }
+    if (lockAccess.canEdit) await releaseUnusedLock();
     rightSideSheetTestGradingSession.value = null;
 
     var hasLinkedTextbook = _hasDirectHomeworkTextbookLink(hw);
@@ -11182,6 +11339,56 @@ class _HomeworkOverviewSessionFilterOption {
   });
 }
 
+Widget _buildHomeworkOverviewLoadingState(YggDialogColors dlg) {
+  return Center(
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const YggLoadingIndicator(size: 28),
+        const SizedBox(height: 16),
+        Text(
+          '과제 현황을 불러오는 중이에요.',
+          style: TextStyle(
+            color: dlg.textSub,
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+Widget _buildHomeworkOverviewErrorState(
+  YggDialogColors dlg, {
+  required VoidCallback onRetry,
+}) {
+  return Center(
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.cloud_off_rounded, color: dlg.textSub, size: 28),
+        const SizedBox(height: 12),
+        Text(
+          '과제 현황을 불러오지 못했어요.',
+          style: TextStyle(
+            color: dlg.text,
+            fontSize: 15,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 8),
+        TextButton.icon(
+          onPressed: onRetry,
+          icon: const Icon(Icons.refresh_rounded, size: 18),
+          label: const Text('다시 불러오기'),
+          style: TextButton.styleFrom(foregroundColor: kDlgAccent),
+        ),
+      ],
+    ),
+  );
+}
+
 final Map<String, Map<String, String>> _flowNameCacheByStudent = {};
 final Set<String> _flowLoadingStudentIds = <String>{};
 final Map<String, int> _assignmentRevisionByStudent = {};
@@ -11349,10 +11556,12 @@ Widget _detailRow(String label, String value) {
 }
 
 Widget _buildHomeworkOverviewCard(
+  BuildContext context,
   _HomeworkOverviewEntry entry, {
   required bool isExpanded,
   VoidCallback? onTap,
 }) {
+  final dlg = YggDialogColors.of(context);
   final double indicatorValue = (entry.progress.clamp(0, 100)) / 100.0;
   final String dueLeftText = entry.dueDate == null
       ? '미정'
@@ -11376,8 +11585,8 @@ Widget _buildHomeworkOverviewCard(
               child.title,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Color(0xFFB9C3BA),
+              style: TextStyle(
+                color: dlg.groupChildTitle,
                 fontSize: 14,
                 fontWeight: FontWeight.w700,
                 height: 1.15,
@@ -11391,8 +11600,8 @@ Widget _buildHomeworkOverviewCard(
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 textAlign: TextAlign.right,
-                style: const TextStyle(
-                  color: Color(0xFF8FA1A1),
+                style: TextStyle(
+                  color: dlg.textSub,
                   fontSize: 12.5,
                   fontWeight: FontWeight.w600,
                   height: 1.1,
@@ -11408,8 +11617,8 @@ Widget _buildHomeworkOverviewCard(
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   textAlign: TextAlign.right,
-                  style: const TextStyle(
-                    color: Color(0xFF7D8E8F),
+                  style: TextStyle(
+                    color: dlg.hint,
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
                     height: 1.1,
@@ -11427,7 +11636,7 @@ Widget _buildHomeworkOverviewCard(
         Container(
           width: double.infinity,
           height: 1,
-          color: const Color(0x223A4545),
+          color: dlg.divider,
         ),
         const SizedBox(height: 6),
       ]);
@@ -11438,14 +11647,12 @@ Widget _buildHomeworkOverviewCard(
     duration: const Duration(milliseconds: 170),
     curve: Curves.easeOutCubic,
     width: double.infinity,
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+    padding: const EdgeInsets.all(16),
     decoration: BoxDecoration(
-      color: const Color(0x332C2C2E),
-      borderRadius: BorderRadius.circular(12),
+      color: dlg.fieldBg,
+      borderRadius: BorderRadius.circular(16),
       border: Border.all(
-        color: isExpanded
-            ? kDlgAccent.withValues(alpha: 0.45)
-            : const Color(0x22FFFFFF),
+        color: isExpanded ? kDlgAccent.withValues(alpha: 0.45) : dlg.cardBorder,
       ),
     ),
     child: Column(
@@ -11458,8 +11665,8 @@ Widget _buildHomeworkOverviewCard(
                 entry.overviewLine1Left,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Color(0xFFCDD5D5),
+                style: TextStyle(
+                  color: dlg.groupChildTitle,
                   fontSize: 14.5,
                   fontWeight: FontWeight.w700,
                   height: 1.1,
@@ -11474,8 +11681,8 @@ Widget _buildHomeworkOverviewCard(
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 textAlign: TextAlign.right,
-                style: const TextStyle(
-                  color: kDlgTextSub,
+                style: TextStyle(
+                  color: dlg.textSub,
                   fontSize: 12.5,
                   fontWeight: FontWeight.w700,
                   height: 1.1,
@@ -11492,8 +11699,8 @@ Widget _buildHomeworkOverviewCard(
                 entry.title,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: kDlgText,
+                style: TextStyle(
+                  color: dlg.text,
                   fontSize: 15,
                   fontWeight: FontWeight.w800,
                   height: 1.1,
@@ -11505,8 +11712,8 @@ Widget _buildHomeworkOverviewCard(
               '${entry.childCount}개 과제',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Color(0xFFCAD2C5),
+              style: TextStyle(
+                color: dlg.groupChildTitle,
                 fontSize: 13.5,
                 fontWeight: FontWeight.w700,
                 height: 1.1,
@@ -11518,7 +11725,7 @@ Widget _buildHomeworkOverviewCard(
                   ? Icons.keyboard_arrow_up_rounded
                   : Icons.keyboard_arrow_down_rounded,
               size: 18,
-              color: kDlgTextSub,
+              color: dlg.textSub,
             ),
           ],
         ),
@@ -11587,8 +11794,7 @@ Widget _buildHomeworkOverviewCard(
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                  color:
-                      entry.checkedToday ? kDlgAccent : const Color(0xFF8EA3A8),
+                  color: entry.checkedToday ? kDlgAccent : dlg.textSub,
                   fontSize: 12.5,
                   fontWeight: FontWeight.w700,
                   height: 1.2,
@@ -11605,8 +11811,8 @@ Widget _buildHomeworkOverviewCard(
                   entry.expandLine4Left,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Color(0xFF748686),
+                  style: TextStyle(
+                    color: dlg.hint,
                     fontSize: 12.5,
                     fontWeight: FontWeight.w600,
                     height: 1.1,
@@ -11618,8 +11824,8 @@ Widget _buildHomeworkOverviewCard(
                 entry.expandLine4Right,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Color(0xFF748686),
+                style: TextStyle(
+                  color: dlg.hint,
                   fontSize: 12.5,
                   fontWeight: FontWeight.w600,
                   height: 1.1,
@@ -11635,8 +11841,8 @@ Widget _buildHomeworkOverviewCard(
                   entry.expandLine5Left,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Color(0xFF748686),
+                  style: TextStyle(
+                    color: dlg.hint,
                     fontSize: 12.5,
                     fontWeight: FontWeight.w600,
                     height: 1.1,
@@ -11651,8 +11857,8 @@ Widget _buildHomeworkOverviewCard(
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   textAlign: TextAlign.right,
-                  style: const TextStyle(
-                    color: Color(0xFF748686),
+                  style: TextStyle(
+                    color: dlg.hint,
                     fontSize: 12.5,
                     fontWeight: FontWeight.w600,
                     height: 1.1,
@@ -11662,14 +11868,14 @@ Widget _buildHomeworkOverviewCard(
             ],
           ),
           const SizedBox(height: 10),
-          const Divider(height: 1, thickness: 1, color: kDlgBorder),
+          Divider(height: 1, thickness: 1, color: dlg.divider),
           const SizedBox(height: 8),
           Text(
             '검사 기록 ${entry.expandChildren.length}건',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: Color(0xFFCAD2C5),
+            style: TextStyle(
+              color: dlg.groupChildTitle,
               fontSize: 14.5,
               fontWeight: FontWeight.w700,
               height: 1.1,
@@ -11677,10 +11883,10 @@ Widget _buildHomeworkOverviewCard(
           ),
           const SizedBox(height: 8),
           if (childRows.isEmpty)
-            const Text(
+            Text(
               '검사 기록이 없습니다.',
               style: TextStyle(
-                color: kDlgTextSub,
+                color: dlg.textSub,
                 fontSize: 12.5,
                 fontWeight: FontWeight.w600,
               ),
@@ -11895,11 +12101,21 @@ List<_HomeworkOverviewCompletedGroupEntry>
     final String line5Right = splitCycleText.isEmpty
         ? '${repeatIndex}회차'
         : '${repeatIndex}회차 · $splitCycleText';
+    final assignmentCode = children
+        .map(
+          (child) => _formatHomeworkAssignmentCode(
+            child.assignmentCode,
+            fallback: '',
+          ),
+        )
+        .firstWhere((code) => code.isNotEmpty, orElse: () => '-');
 
     out.add(
       _HomeworkOverviewCompletedGroupEntry(
         groupId: group.id,
         completedAt: completedAt,
+        assignedAt: latestBrief?.assignedAt,
+        assignmentCode: assignmentCode,
         line1Left: _homeworkBookCourseLabel(representativeForBookCourse),
         line1Right: flowName.isEmpty ? '플로우 미지정' : flowName,
         line2Left: title,
@@ -11940,10 +12156,12 @@ List<_HomeworkOverviewCompletedGroupEntry>
 }
 
 Widget _buildCompletedGroupOverviewCard(
+  BuildContext context,
   _HomeworkOverviewCompletedGroupEntry entry, {
   required bool isExpanded,
   required VoidCallback onTap,
 }) {
+  final dlg = YggDialogColors.of(context);
   final childRows = <Widget>[];
   for (int i = 0; i < entry.children.length; i++) {
     final child = entry.children[i];
@@ -11957,8 +12175,8 @@ Widget _buildCompletedGroupOverviewCard(
               '${i + 1}. ${child.title}',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Color(0xFFB9C3BA),
+              style: TextStyle(
+                color: dlg.groupChildTitle,
                 fontSize: 14,
                 fontWeight: FontWeight.w700,
                 height: 1.15,
@@ -11972,8 +12190,8 @@ Widget _buildCompletedGroupOverviewCard(
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 textAlign: TextAlign.right,
-                style: const TextStyle(
-                  color: Color(0xFF8FA1A1),
+                style: TextStyle(
+                  color: dlg.textSub,
                   fontSize: 12.5,
                   fontWeight: FontWeight.w600,
                   height: 1.1,
@@ -11989,8 +12207,8 @@ Widget _buildCompletedGroupOverviewCard(
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   textAlign: TextAlign.right,
-                  style: const TextStyle(
-                    color: Color(0xFF7D8E8F),
+                  style: TextStyle(
+                    color: dlg.hint,
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
                     height: 1.1,
@@ -12008,7 +12226,7 @@ Widget _buildCompletedGroupOverviewCard(
         Container(
           width: double.infinity,
           height: 1,
-          color: const Color(0x223A4545),
+          color: dlg.divider,
         ),
         const SizedBox(height: 6),
       ]);
@@ -12022,14 +12240,13 @@ Widget _buildCompletedGroupOverviewCard(
       duration: const Duration(milliseconds: 170),
       curve: Curves.easeOutCubic,
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: const Color(0x332C2C2E),
-        borderRadius: BorderRadius.circular(12),
+        color: dlg.fieldBg,
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: isExpanded
-              ? kDlgAccent.withValues(alpha: 0.45)
-              : const Color(0x22FFFFFF),
+          color:
+              isExpanded ? kDlgAccent.withValues(alpha: 0.45) : dlg.cardBorder,
         ),
       ),
       child: Column(
@@ -12042,8 +12259,8 @@ Widget _buildCompletedGroupOverviewCard(
                   entry.line1Left,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Color(0xFFCDD5D5),
+                  style: TextStyle(
+                    color: dlg.groupChildTitle,
                     fontSize: 14.5,
                     fontWeight: FontWeight.w700,
                     height: 1.1,
@@ -12058,8 +12275,8 @@ Widget _buildCompletedGroupOverviewCard(
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   textAlign: TextAlign.right,
-                  style: const TextStyle(
-                    color: kDlgTextSub,
+                  style: TextStyle(
+                    color: dlg.textSub,
                     fontSize: 12.5,
                     fontWeight: FontWeight.w700,
                     height: 1.1,
@@ -12076,8 +12293,8 @@ Widget _buildCompletedGroupOverviewCard(
                   entry.line2Left,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: kDlgText,
+                  style: TextStyle(
+                    color: dlg.text,
                     fontSize: 15,
                     fontWeight: FontWeight.w800,
                     height: 1.1,
@@ -12089,8 +12306,8 @@ Widget _buildCompletedGroupOverviewCard(
                 entry.line2Right,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Color(0xFFCDD5D5),
+                style: TextStyle(
+                  color: dlg.groupChildTitle,
                   fontSize: 13.5,
                   fontWeight: FontWeight.w700,
                   height: 1.1,
@@ -12102,7 +12319,7 @@ Widget _buildCompletedGroupOverviewCard(
                     ? Icons.keyboard_arrow_up_rounded
                     : Icons.keyboard_arrow_down_rounded,
                 size: 18,
-                color: kDlgTextSub,
+                color: dlg.textSub,
               ),
             ],
           ),
@@ -12111,8 +12328,8 @@ Widget _buildCompletedGroupOverviewCard(
             children: [
               Text(
                 entry.line3Left,
-                style: const TextStyle(
-                  color: kDlgTextSub,
+                style: TextStyle(
+                  color: dlg.textSub,
                   fontSize: 12.5,
                   fontWeight: FontWeight.w600,
                   height: 1.2,
@@ -12121,11 +12338,47 @@ Widget _buildCompletedGroupOverviewCard(
               const Spacer(),
               Text(
                 entry.line3Right,
-                style: const TextStyle(
-                  color: Color(0xFF8EA3A8),
+                style: TextStyle(
+                  color: dlg.textSub,
                   fontSize: 12.5,
                   fontWeight: FontWeight.w700,
                   height: 1.2,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  entry.assignedAt == null
+                      ? '내준 날짜 미확인'
+                      : '내준 ${_formatDateTime(entry.assignedAt!)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: dlg.textSub,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: dlg.chipBg,
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: dlg.cardBorder),
+                ),
+                child: Text(
+                  entry.assignmentCode,
+                  style: TextStyle(
+                    color: dlg.chipText,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
             ],
@@ -12139,8 +12392,8 @@ Widget _buildCompletedGroupOverviewCard(
                     entry.line4Left,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Color(0xFF748686),
+                    style: TextStyle(
+                      color: dlg.hint,
                       fontSize: 12.5,
                       fontWeight: FontWeight.w600,
                       height: 1.1,
@@ -12152,8 +12405,8 @@ Widget _buildCompletedGroupOverviewCard(
                   entry.line4Right,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Color(0xFF748686),
+                  style: TextStyle(
+                    color: dlg.hint,
                     fontSize: 12.5,
                     fontWeight: FontWeight.w600,
                     height: 1.1,
@@ -12169,8 +12422,8 @@ Widget _buildCompletedGroupOverviewCard(
                     entry.line5Left,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Color(0xFF748686),
+                    style: TextStyle(
+                      color: dlg.hint,
                       fontSize: 12.5,
                       fontWeight: FontWeight.w600,
                       height: 1.1,
@@ -12185,8 +12438,8 @@ Widget _buildCompletedGroupOverviewCard(
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     textAlign: TextAlign.right,
-                    style: const TextStyle(
-                      color: Color(0xFF748686),
+                    style: TextStyle(
+                      color: dlg.hint,
                       fontSize: 12.5,
                       fontWeight: FontWeight.w600,
                       height: 1.1,
@@ -12196,14 +12449,14 @@ Widget _buildCompletedGroupOverviewCard(
               ],
             ),
             const SizedBox(height: 10),
-            const Divider(height: 1, thickness: 1, color: kDlgBorder),
+            Divider(height: 1, thickness: 1, color: dlg.divider),
             const SizedBox(height: 8),
             Text(
               '그룹 과제 ${entry.children.length}개',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Color(0xFFCAD2C5),
+              style: TextStyle(
+                color: dlg.groupChildTitle,
                 fontSize: 14.5,
                 fontWeight: FontWeight.w700,
                 height: 1.1,
@@ -12211,10 +12464,10 @@ Widget _buildCompletedGroupOverviewCard(
             ),
             const SizedBox(height: 8),
             if (childRows.isEmpty)
-              const Text(
+              Text(
                 '하위과제가 없습니다.',
                 style: TextStyle(
-                  color: kDlgTextSub,
+                  color: dlg.textSub,
                   fontSize: 12.5,
                   fontWeight: FontWeight.w600,
                 ),
@@ -13262,6 +13515,23 @@ void _markReservedGroupUiDirty() {
   _reservedGroupUiRevision.value = _reservedGroupUiRevision.value + 1;
 }
 
+/// 서버 그룹이 붙기 전 임시 카드(`legacy_<itemId>`)와 그 뒤 서버 그룹
+/// (`source_homework_item_id`가 같은 item)은 같은 카드로 유지해야 다시 그려지지 않는다.
+String _homeworkGroupCardKey(HomeworkGroup group, Set<String> usedKeys) {
+  const legacyPrefix = 'legacy_';
+  final rawId = group.id.trim();
+  final sourceItemId = rawId.startsWith(legacyPrefix)
+      ? rawId.substring(legacyPrefix.length)
+      : (group.sourceHomeworkItemId ?? '').trim();
+  if (sourceItemId.isNotEmpty) {
+    final itemKey = 'item:$sourceItemId';
+    if (usedKeys.add(itemKey)) return itemKey;
+  }
+  final groupKey = 'group:$rawId';
+  usedKeys.add(groupKey);
+  return groupKey;
+}
+
 // ------------------------
 // 오른쪽 패널: 슬라이드시트와 동일한 과제 칩 렌더링
 // ------------------------
@@ -13273,6 +13543,7 @@ Widget _buildHomeworkChipsReactiveForStudent(
   Set<String> goalSnapshotItemIds = const <String>{},
   bool hasGoalSnapshot = false,
   Map<({String studentId, String itemId}), bool> pendingConfirms = const {},
+  Set<({String studentId, String itemId})> savingConfirms = const {},
   Future<void> Function(
           {required BuildContext context,
           required String studentId,
@@ -13474,6 +13745,7 @@ Widget _buildHomeworkChipsReactiveForStudent(
                                     assignmentCheckLabelByGroupId,
                                 progressRatesByItem: progressRatesByItem,
                                 pendingConfirms: pendingConfirms,
+                                savingConfirms: savingConfirms,
                                 onPhase3Tap: onPhase3Tap,
                                 onHomeworkCheckTap: onHomeworkCheckTap,
                                 onGroupSubmittedDoubleTap:
@@ -13769,11 +14041,11 @@ Future<void> _deleteReservedHomeworkGroup({
     final deletedItemIds = <String>{};
     for (final entry in group.entries) {
       final hwId = entry.key.homeworkItemId.trim();
-      if (hwId.isEmpty || deletedItemIds.contains(hwId)) continue;
-      HomeworkStore.instance.remove(studentId, hwId);
+      if (hwId.isEmpty) continue;
       deletedItemIds.add(hwId);
     }
     if (deletedItemIds.isEmpty) return;
+    HomeworkStore.instance.removeMany(studentId, deletedItemIds);
     if (!context.mounted) return;
     final int deletedCount = deletedItemIds.length;
     final String message = deletedCount > 1
@@ -14528,6 +14800,7 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
   Map<String, String> assignmentCheckLabelByGroupId = const {},
   Map<String, HomeworkGradingProgressRate> progressRatesByItem = const {},
   Map<({String studentId, String itemId}), bool> pendingConfirms = const {},
+  Set<({String studentId, String itemId})> savingConfirms = const {},
   Future<void> Function(
           {required BuildContext context,
           required String studentId,
@@ -14780,6 +15053,8 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
 
   final groupWidgets = <Widget>[];
   final orderedGroupIds = <String>[];
+  final groupCardKeys = <String>[];
+  final usedGroupCardKeys = <String>{};
   final assignedItemIds = assignmentDueByItemId.keys.toSet();
   for (int i = 0; i < cappedGroups.length; i++) {
     final entry = cappedGroups[i];
@@ -14787,6 +15062,8 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
     final children = entry.children;
     if (children.isEmpty) continue;
     orderedGroupIds.add(group.id);
+    final groupCardKey = _homeworkGroupCardKey(group, usedGroupCardKeys);
+    groupCardKeys.add(groupCardKey);
     final summary = buildGroupSummary(group, children);
     final bool hasRunningChild = summary.phase == 2 ||
         children.any((e) => e.runStart != null || e.phase == 2);
@@ -14837,11 +15114,27 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
     final submittedKeys = submittedChildren
         .map((e) => (studentId: studentId, itemId: e.id))
         .toList(growable: false);
-    final bool groupPendingSelected = submittedKeys.any(
-      pendingConfirms.containsKey,
+    // 숙제 검사 초안은 일괄 완료 전까지 phase 1이다. 제출 카드뿐 아니라
+    // 저장 중이거나 이미 pending인 숙제도 체크 대상이다.
+    final pendingCheckKeys = <({String studentId, String itemId})>[
+      for (final child in children)
+        if (child.status != HomeworkStatus.completed &&
+            child.completedAt == null)
+          (studentId: studentId, itemId: child.id),
+    ].where((key) {
+      final submitted = submittedKeys.any(
+        (submittedKey) => submittedKey.itemId == key.itemId,
+      );
+      return submitted ||
+          pendingConfirms.containsKey(key) ||
+          savingConfirms.contains(key);
+    }).toList(growable: false);
+    final bool groupPendingSelected = pendingCheckKeys.any(
+      (key) =>
+          pendingConfirms.containsKey(key) || savingConfirms.contains(key),
     );
     final bool groupPendingComplete = groupPendingSelected &&
-        submittedKeys.any((key) => pendingConfirms[key] == true);
+        pendingCheckKeys.any((key) => pendingConfirms[key] == true);
     final bool groupIsRunning = hasRunningChild;
     final bool groupIsSubmitted = submittedKeys.isNotEmpty;
     final bool groupIsWaiting = summary.phase == 1;
@@ -14891,7 +15184,7 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
                   )
                 : null));
     final groupCard = _SlideableHomeworkChip(
-      key: ValueKey('hw_group_chip_${group.id}'),
+      key: ValueKey('hw_group_chip_$groupCardKey'),
       foregroundPainter: draftUnifiedBorderPainter,
       extension: homeworkDraftEditor == null
           ? null
@@ -15257,7 +15550,17 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
         ),
       ),
     );
-    groupWidgets.add(groupCard);
+    final releasing = HomeworkGradingLockService.instance.releasingKeys.value;
+    final confirming = HomeworkBatchConfirmService.instance.confirmingKeys.value;
+    final groupBusy = children.any((child) {
+      final key = (studentId: studentId, itemId: child.id);
+      return savingConfirms.contains(key) ||
+          releasing.contains(key) ||
+          confirming.contains(key);
+    });
+    groupWidgets.add(
+      groupBusy ? _HomeworkCardBusyCover(child: groupCard) : groupCard,
+    );
   }
 
   if (groupWidgets.isEmpty || orderedGroupIds.isEmpty) return const <Widget>[];
@@ -15279,7 +15582,7 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
       },
       itemBuilder: (context, index) {
         return _buildHomeworkReorderableItem(
-          itemKey: 'current_hw_group_${orderedGroupIds[index]}',
+          itemKey: 'current_hw_group_${groupCardKeys[index]}',
           chip: groupWidgets[index],
           showBottomGap: index != groupWidgets.length - 1,
         );
@@ -16136,9 +16439,10 @@ Future<void> _showHomeworkGroupSlideCancelDialog({
   );
   if (!context.mounted || choice == null) return;
   if (choice == 'remove') {
-    for (final child in children) {
-      HomeworkStore.instance.remove(studentId, child.id);
-    }
+    HomeworkStore.instance.removeMany(
+      studentId,
+      children.map((child) => child.id),
+    );
     if (!context.mounted) return;
     _showHomeworkChipSnackBar(context, '그룹 과제 ${children.length}개를 삭제했어요.');
     return;
@@ -16902,6 +17206,7 @@ Future<_ResolvedHomeworkPrintSource?> _sourceFromPbExportJobForPrint({
   required String sourceKey,
   LearningProblemBankService? problemBankService,
   String preferredPaperSize = '',
+  Set<String>? staleExportJobIdsOut,
 }) async {
   final safeJobId = exportJobId.trim();
   if (academyId.trim().isEmpty || safeJobId.isEmpty) return null;
@@ -16914,6 +17219,15 @@ Future<_ResolvedHomeworkPrintSource?> _sourceFromPbExportJobForPrint({
         academyId: academyId,
         jobId: safeJobId,
       );
+      // 완료로 잠긴 과제여도 PDF 생성 뒤 문항이 수정됐으면 새로 만든다.
+      if (job != null &&
+          await pbService.hasQuestionRevisionsAfterExport(
+            academyId: academyId,
+            job: job,
+          )) {
+        staleExportJobIdsOut?.add(safeJobId);
+        return null;
+      }
       final actualPaperSize = (job?.paperSize ?? '').trim();
       if (resolvedPaperSize.isNotEmpty && actualPaperSize.isNotEmpty) {
         if (!_isPaperSizeCompatibleForPrint(
@@ -17148,7 +17462,12 @@ Future<LearningProblemExportJob?> _ensurePbExportJob({
         renderHash: renderHash,
         previewOnly: false,
       );
-      if (reusableJob != null && reusableJob.id.trim().isNotEmpty) {
+      if (reusableJob != null &&
+          reusableJob.id.trim().isNotEmpty &&
+          !await pbService.hasQuestionRevisionsAfterExport(
+            academyId: safeAcademyId,
+            job: reusableJob,
+          )) {
         progressText?.value = '기존 문제은행 PDF를 재사용합니다...';
         return reusableJob;
       }
@@ -17182,7 +17501,11 @@ Future<LearningProblemExportJob?> _ensurePbExportJob({
     for (final job in compatibleJobs) {
       if (job.status.trim() == 'completed' &&
           (job.outputUrl.trim().isNotEmpty ||
-              job.outputStoragePath.trim().isNotEmpty)) {
+              job.outputStoragePath.trim().isNotEmpty) &&
+          !await pbService.hasQuestionRevisionsAfterExport(
+            academyId: safeAcademyId,
+            job: job,
+          )) {
         progressText?.value = '기존 문제은행 PDF를 재사용합니다...';
         return job;
       }
@@ -17285,6 +17608,7 @@ Future<_ResolvedHomeworkPrintSource?> _resolvePbPrintSource(
     }
   }
 
+  final staleExportJobIds = <String>{};
   final lockedExportJobId = (assignment?.releaseExportJobId ?? '').trim();
   if (lockedExportJobId.isNotEmpty) {
     final resolved = await _sourceFromPbExportJobForPrint(
@@ -17293,6 +17617,7 @@ Future<_ResolvedHomeworkPrintSource?> _resolvePbPrintSource(
       sourceKey: 'pb_export_job:$lockedExportJobId',
       problemBankService: pbService,
       preferredPaperSize: preferredPaperSize,
+      staleExportJobIdsOut: staleExportJobIds,
     );
     if (resolved != null) return resolved;
   }
@@ -17312,14 +17637,19 @@ Future<_ResolvedHomeworkPrintSource?> _resolvePbPrintSource(
           sourceKey: 'pb_export_job:$exportJobId',
           problemBankService: pbService,
           preferredPaperSize: preferredPaperSize,
+          staleExportJobIdsOut: staleExportJobIds,
         );
         if (resolved != null) return resolved;
       }
     }
   }
 
+  // 과제 목록에서 미리 받은 signed URL은 위에서 확인한 잠금/라이브 PDF를
+  // 가리키므로, 그 PDF가 수정 전 내용이면 쓰지 않는다.
   final assignmentSignedUrl = (assignment?.liveReleaseSignedUrl ?? '').trim();
-  if (assignmentSignedUrl.isNotEmpty && preferredPaperSize.isEmpty) {
+  if (assignmentSignedUrl.isNotEmpty &&
+      preferredPaperSize.isEmpty &&
+      staleExportJobIds.isEmpty) {
     // signed URL 경로에서도 export_job.paperSize로 용지 크기 보완 시도.
     if (lockedExportJobId.isNotEmpty) {
       try {
@@ -17390,6 +17720,7 @@ Future<_ResolvedHomeworkPrintSource?> _resolvePbPrintSource(
             sourceKey: 'pb_export_job:$exportJobId',
             problemBankService: pbService,
             preferredPaperSize: preferredPaperSize,
+            staleExportJobIdsOut: staleExportJobIds,
           );
           if (resolved != null) return resolved;
         }
@@ -20149,6 +20480,8 @@ class _HomeworkOverviewEntry {
 class _HomeworkOverviewCompletedGroupEntry {
   final String groupId;
   final DateTime completedAt;
+  final DateTime? assignedAt;
+  final String assignmentCode;
   final String line1Left;
   final String line1Right;
   final String line2Left;
@@ -20164,6 +20497,8 @@ class _HomeworkOverviewCompletedGroupEntry {
   const _HomeworkOverviewCompletedGroupEntry({
     required this.groupId,
     required this.completedAt,
+    required this.assignedAt,
+    required this.assignmentCode,
     required this.line1Left,
     required this.line1Right,
     required this.line2Left,
@@ -20893,6 +21228,39 @@ class _OverviewSwipeToDeleteState extends State<_OverviewSwipeToDelete> {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _HomeworkCardBusyCover extends StatelessWidget {
+  const _HomeworkCardBusyCover({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        child,
+        const Positioned.fill(
+          child: ClipRRect(
+            borderRadius: BorderRadius.all(Radius.circular(12)),
+            child: ColoredBox(
+              color: Color(0x990B1112),
+              child: Center(
+                child: SizedBox(
+                  width: 28,
+                  height: 28,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.6,
+                    color: kDlgAccent,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

@@ -17,8 +17,11 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
+import mock_pdf
+
 HIGH_NAME = "- 내신 기출 (고등)"
 MID_NAME = "- 내신 기출 (중등)"
+MOCK_NAME = "- 모의고사"
 
 
 def program_dir() -> Path:
@@ -77,11 +80,13 @@ def _find_named(root: Path, name: str) -> Path | None:
     return None
 
 
-def discover_roots() -> tuple[Path, Path]:
+def discover_roots() -> tuple[Path, Path, Path]:
     env_high = os.environ.get("EXAM_DESK_HIGH", "").strip()
     env_mid = os.environ.get("EXAM_DESK_MID", "").strip()
+    env_mock = os.environ.get("EXAM_DESK_MOCK", "").strip()
     found_high = Path(env_high) if env_high else None
     found_mid = Path(env_mid) if env_mid else None
+    found_mock = Path(env_mock) if env_mock else None
     seen = set()
     for root in (HERE, HERE.parent, *_dropbox_roots()):
         key = os.path.normcase(str(root))
@@ -92,13 +97,17 @@ def discover_roots() -> tuple[Path, Path]:
             found_high = _find_named(root, HIGH_NAME)
         if found_mid is None:
             found_mid = _find_named(root, MID_NAME)
-        if found_high and found_mid:
+        if found_mock is None:
+            found_mock = _find_named(root, MOCK_NAME)
+        if found_high and found_mid and found_mock:
             break
     if found_high is None:
         found_high = Path.home() / "Dropbox" / HIGH_NAME
     if found_mid is None:
         found_mid = Path.home() / "Dropbox" / MID_NAME
-    return found_high, found_mid
+    if found_mock is None:
+        found_mock = Path.home() / "Dropbox" / MOCK_NAME
+    return found_high, found_mid, found_mock
 
 
 def _dismiss_file(high: Path) -> Path:
@@ -122,7 +131,7 @@ def _migrate_dismiss(path: Path) -> None:
     path.write_text(json.dumps({"ids": ids}, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-HIGH_ROOT, MID_ROOT = discover_roots()
+HIGH_ROOT, MID_ROOT, MOCK_ROOT = discover_roots()
 DISMISS_PATH = _dismiss_file(HIGH_ROOT)
 _migrate_dismiss(DISMISS_PATH)
 
@@ -267,41 +276,52 @@ def parse_filename(name: str) -> dict:
     }
 
 
+def _place_in_period(parsed: dict, period: Path, major: bool, major_group: str) -> tuple[str, str, Path]:
+    name = parsed["new_name"]
+    if major:
+        return major_group, "", period / name
+    if parsed["sigungu"] == "수성구":
+        return "수성구 기타", "수성구", period / "수성구" / name
+    if parsed["sido"] == "대구":
+        return "대구", "대구", period / "대구" / name
+    return "", "", period / name
+
+
+def group_bucket(group: str) -> str:
+    if group in ("주요 8교", "주요 학교"):
+        return ""
+    if group == "수성구 기타":
+        return "수성구"
+    if group == "대구":
+        return "대구"
+    if group == "전국":
+        return "전국구"
+    return ""
+
+
 def classify(parsed: dict, high: Path | None = None, mid: Path | None = None) -> dict:
     high = HIGH_ROOT if high is None else high
     mid = MID_ROOT if mid is None else mid
-    root = high if parsed["grade"].startswith("고") else mid
-    period = root / parsed["period"]
-    grade = parsed["grade"]
-    school = parsed["school"]
-    if grade.startswith("중"):
+    period_root = mid if parsed["grade"].startswith("중") else high
+    period = period_root / parsed["period"]
+    if parsed["grade"].startswith("중"):
         level = "중등"
-        if school in MID_MAJOR_SET:
-            group = "주요 학교"
-            bucket = ""
-            target = period / parsed["new_name"]
-        elif parsed["sigungu"] == "수성구":
-            group = "수성구 기타"
-            bucket = "수성구"
-            target = period / bucket / parsed["new_name"]
-        else:
-            raise ValueError("수성구가 아닌 중학교는 중등 폴더에 넣을 자리가 없습니다")
+        group, bucket, target = _place_in_period(
+            parsed, period, parsed["school"] in MID_MAJOR_SET, "주요 학교"
+        )
+        if not group:
+            raise ValueError("대구가 아닌 중학교는 중등 폴더에 넣을 자리가 없습니다")
         root = mid
     else:
         level = "고등"
-        root = high
-        if school in HIGH_MAJOR_SET:
-            group = "주요 8교"
-            bucket = ""
-            target = period / parsed["new_name"]
-        elif parsed["sigungu"] == "수성구":
-            group = "수성구 기타"
-            bucket = "수성구"
-            target = period / bucket / parsed["new_name"]
-        else:
+        group, bucket, target = _place_in_period(
+            parsed, period, parsed["school"] in HIGH_MAJOR_SET, "주요 8교"
+        )
+        if not group:
             group = "전국"
             bucket = "전국구"
             target = period / bucket / parsed["new_name"]
+        root = high
     return {
         "level": level,
         "group": group,
@@ -313,7 +333,7 @@ def classify(parsed: dict, high: Path | None = None, mid: Path | None = None) ->
 
 def actual_bucket(path: Path) -> str:
     parent = path.parent.name
-    if parent in ("수성구", "전국구", "중등"):
+    if parent in ("수성구", "대구", "전국구", "중등"):
         return parent
     if PERIOD_RE.match(parent):
         return "시험폴더"
@@ -359,9 +379,24 @@ def place_new(target: Path, data: bytes, root: Path) -> tuple[Path, str]:
     raise ValueError("같은 이름의 파일이 너무 많습니다")
 
 
+def mock_pdf_count() -> int:
+    if not MOCK_ROOT.is_dir():
+        return 0
+    return sum(
+        1
+        for path in MOCK_ROOT.rglob("*")
+        if path.is_file() and path.suffix.lower() == ".pdf" and not path.name.startswith("~$")
+    )
+
+
 def import_bytes(filename: str, data: bytes) -> dict:
-    if Path(filename).suffix.lower() != ".hml":
-        raise ValueError("hml 파일만 넣을 수 있습니다")
+    suffix = Path(filename).suffix.lower()
+    if suffix == ".pdf":
+        result = mock_pdf.import_pdf(filename, data, MOCK_ROOT)
+        invalidate()
+        return result
+    if suffix != ".hml":
+        raise ValueError("hml 또는 pdf 파일만 넣을 수 있습니다")
     if not data:
         raise ValueError("빈 파일은 넣지 않습니다")
     parsed = parse_filename(filename)
@@ -608,19 +643,14 @@ def infer_high(rows: list[dict]) -> list[dict]:
 
     done = []
     for row in missing.values():
-        if row["group"] == "주요 8교":
-            bucket = ""
-        elif row["group"] == "수성구 기타":
-            bucket = "수성구"
-        else:
-            bucket = "전국구"
-        row["bucket"] = bucket
+        row["bucket"] = group_bucket(row["group"])
         row["period"] = f"{row['year']} {row['sem']}학기 {row['exam']}"
         done.append(_finish_missing("고등", row))
     exam_order = {"중간": 0, "기말": 1}
+    group_order = {"주요 8교": 0, "수성구 기타": 1, "대구": 2, "전국": 3}
     done.sort(
         key=lambda row: (
-            0 if row["group"] == "주요 8교" else 1 if row["group"] == "수성구 기타" else 2,
+            group_order.get(row["group"], 9),
             HIGH_MAJOR.index(row["school"]) if row["school"] in HIGH_MAJOR_SET else 99,
             row["school"],
             row["year"],
@@ -724,14 +754,14 @@ def infer_middle(rows: list[dict]) -> list[dict]:
 
     done = []
     for row in missing.values():
-        bucket = "" if row["group"] == "주요 학교" else "수성구"
-        row["bucket"] = bucket
+        row["bucket"] = group_bucket(row["group"])
         row["period"] = f"{row['year']} {row['sem']}학기 {row['exam']}"
         done.append(_finish_missing("중등", row))
     exam_order = {"중간": 0, "기말": 1}
+    group_order = {"주요 학교": 0, "수성구 기타": 1, "대구": 2}
     done.sort(
         key=lambda row: (
-            0 if row["group"] == "주요 학교" else 1,
+            group_order.get(row["group"], 9),
             MID_MAJOR.index(row["school"]) if row["school"] in MID_MAJOR_SET else 99,
             row["school"],
             row["year"],
@@ -895,13 +925,13 @@ def search(query: str, level: str, force: bool = False, limit: int = 80) -> dict
 
 def inside_archives(path: Path) -> Path:
     resolved = path.resolve()
-    for root in (HIGH_ROOT, MID_ROOT):
+    for root in (HIGH_ROOT, MID_ROOT, MOCK_ROOT):
         try:
             resolved.relative_to(root.resolve())
             return resolved
         except ValueError:
             continue
-    raise ValueError("두 폴더 안의 파일만 열 수 있습니다")
+    raise ValueError("시험 폴더 안의 파일만 열 수 있습니다")
 
 
 def _self_check() -> None:
@@ -919,6 +949,11 @@ def _self_check() -> None:
     parsed = parse_filename("2024년 서울 강남구 휘문고 고1 1학기기말 수학상 (1).hml")
     assert classify(parsed)["bucket"] == "전국구"
     assert "(1)" not in parsed["new_name"]
+
+    parsed = parse_filename("2024년 대구 달서구 성서고 고2 1학기중간 수학1.hml")
+    daegu_high = classify(parsed)
+    assert daegu_high["group"] == "대구" and daegu_high["bucket"] == "대구"
+    assert daegu_high["target"] == HIGH_ROOT / "2024 1학기 중간" / "대구" / parsed["new_name"]
 
     parsed = parse_filename("내신 2024년 대구시 수성구 경신중 중2공통 1학기1차 중등수학2상 A.hml")
     assert parsed["new_name"] == "2024년 대구 수성구 경신중 중2 1학기1차 중등수학2상 A.hml"
@@ -940,9 +975,14 @@ def _self_check() -> None:
     assert parsed["subject"] == "공통수학2"
     assert parsed["notes"] == ["(서술형 없음)"]
 
+    parsed = parse_filename("2024년 대구 북구 칠곡중 중2 1학기중간 중등수학2상.hml")
+    daegu_mid = classify(parsed)
+    assert daegu_mid["level"] == "중등" and daegu_mid["bucket"] == "대구"
+    assert daegu_mid["target"] == MID_ROOT / "2024 1학기 중간" / "대구" / parsed["new_name"]
+
     try:
         classify(parse_filename("2024년 서울 강남구 휘문중 중2 1학기중간 중등수학2상.hml"))
-        raise AssertionError("non-suseong middle should fail")
+        raise AssertionError("non-daegu middle should fail")
     except ValueError:
         pass
 
@@ -958,6 +998,18 @@ def _self_check() -> None:
         assert status == "same" and again == first
         other, status = place_new(info["target"], b"xyz", high)
         assert status == "variant" and other.name.endswith(" (다른 내용).hml")
+
+        parsed = parse_filename("2020년 대구 달서구 성서고 고2 1학기중간 수학1.hml")
+        info = classify(parsed, high, mid)
+        assert not info["target"].parent.exists()
+        created, status = place_new(info["target"], b"daegu", high)
+        assert status == "created" and created.parent.name == "대구"
+        assert created.parent.parent.name == "2020 1학기 중간"
+
+        parsed = parse_filename("2020년 대구 북구 칠곡중 중3 1학기중간 중등수학3상.hml")
+        info = classify(parsed, high, mid)
+        created, status = place_new(info["target"], b"mid", mid)
+        assert status == "created" and created.parent.name == "대구"
     finally:
         shutil.rmtree(high, ignore_errors=True)
         shutil.rmtree(mid, ignore_errors=True)
@@ -995,6 +1047,23 @@ def _self_check() -> None:
     )
     assert any(item["year"] == "2023" and item["subject"] == "확률과통계" for item in only_ends)
 
+    daegu_gap = infer_high(
+        [
+            row(2022, "성서고", "고2", "수학1", "대구", sigungu="달서구"),
+            row(2024, "성서고", "고2", "수학1", "대구", sigungu="달서구"),
+        ]
+    )
+    assert any(item["year"] == "2023" and item["bucket"] == "대구" and item["group"] == "대구" for item in daegu_gap)
+
+    mid_daegu = infer_middle(
+        [
+            row(2022, "칠곡중", "중2", "중등수학2상", "대구", sigungu="북구"),
+            row(2024, "칠곡중", "중2", "중등수학2상", "대구", sigungu="북구"),
+        ]
+    )
+    assert any(item["year"] == "2023" and item["bucket"] == "대구" for item in mid_daegu)
+    assert not any(item["grade"] == "중1" for item in mid_daegu)
+
     seniors = [row(2024, school, "고3", "미적분", "주요 8교") for school in HIGH_MAJOR if school != "정화여고"]
     seniors.append(row(2024, "정화여고", "고1", "수학상", "주요 8교"))
     assert not any(item["grade"] == "고3" for item in infer_high(seniors))
@@ -1004,6 +1073,7 @@ def _self_check() -> None:
     assert not any(item["grade"] == "중1" for item in mid_missing)
     assert not any(item["sem"] == "2" and item["grade"] == "중1" for item in infer_middle([row(2024, "경신중", "중2", "중등수학2상", "주요 학교")]))
     assert any(item["grade"] == "중1" and item["sem"] == "1" for item in infer_middle([row(2024, "경신중", "중2", "중등수학2상", "주요 학교")]))
+    mock_pdf.self_check()
 
 
 if __name__ == "__main__":

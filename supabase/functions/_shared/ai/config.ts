@@ -1,6 +1,6 @@
 // 모델 이름·추론 강도·가격은 코드가 아니라 환경변수로 바꾼다.
 //   AI_PROVIDER            openai | fake            (기본 openai)
-//   AI_MODEL_PRIMARY       기본 대화                  (기본 gpt-6-sol)
+//   AI_MODEL_PRIMARY       기본 대화                  (기본 gpt-6.1-sol)
 //   AI_MODEL_DEEP          깊게 생각하기               (기본 gpt-6-astra, AI_MODEL_REASONING도 인식)
 //   AI_MODEL_FAST          메모 요약·제목 같은 짧은 작업  (기본 gpt-6-luna)
 //   AI_REASONING_PRIMARY / AI_REASONING_DEEP / AI_REASONING_FAST
@@ -19,7 +19,7 @@ export interface EnvReader {
 export const denoEnv: EnvReader = { get: (name) => Deno.env.get(name) };
 
 const DEFAULT_MODELS: Record<ModelTier, string> = {
-  primary: 'gpt-6-sol',
+  primary: 'gpt-6.1-sol',
   deep: 'gpt-6-astra',
   fast: 'gpt-6-luna',
 };
@@ -85,8 +85,12 @@ export interface ModelPrice extends TokenRates {
   longContext?: TokenRates & { threshold: number };
 }
 
-// USD / 1M tokens (2026-09 OpenAI 공개 가격)
+// USD / 1M tokens (2026-09 OpenAI 공개 가격, gpt-6.1-sol은 2026-10)
 const BUILTIN_PRICES: Record<string, ModelPrice> = {
+  'gpt-6.1-sol': {
+    input: 2, cachedInput: 0.1, cacheWrite: 2.5, output: 10,
+    longContext: { threshold: 272000, input: 4, cachedInput: 0.2, cacheWrite: 5, output: 15 },
+  },
   'gpt-6-astra': {
     input: 10, cachedInput: 1, cacheWrite: 12.5, output: 50,
     longContext: { threshold: 272000, input: 20, cachedInput: 2, cacheWrite: 25, output: 75 },
@@ -103,6 +107,13 @@ const BUILTIN_PRICES: Record<string, ModelPrice> = {
 };
 
 export const WEB_SEARCH_USD_PER_CALL = 0.01;
+/** 파이썬 실행 환경(1GB) 한 세션은 20분 단위로 계산한다. */
+export const CODE_SESSION_USD = 0.03;
+export const CODE_SESSION_MS = 20 * 60 * 1000;
+
+export function codeSessionCostUsd(openMs: number): number {
+  return roundUsd(Math.max(1, Math.ceil(Math.max(0, openMs) / CODE_SESSION_MS)) * CODE_SESSION_USD);
+}
 
 function isRates(v: unknown): v is TokenRates {
   if (!v || typeof v !== 'object') return false;

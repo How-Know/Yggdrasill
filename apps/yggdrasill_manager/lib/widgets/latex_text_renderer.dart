@@ -28,6 +28,9 @@ class LatexTextRenderer extends StatelessWidget {
   final double fractionInlineMathScale;
   final double displayMathScale;
 
+  /// `$…$`도 문장 속 수식으로 그린다(개념 초안·쪽 전사 형식). 금액 등 `$`가 글자인 곳에서는 끈다.
+  final bool dollarMath;
+
   const LatexTextRenderer(
     this.text, {
     super.key,
@@ -42,6 +45,7 @@ class LatexTextRenderer extends StatelessWidget {
     this.inlineMathScale = _defaultInlineMathScale,
     this.fractionInlineMathScale = _defaultFractionInlineMathScale,
     this.displayMathScale = _defaultDisplayMathScale,
+    this.dollarMath = false,
   });
 
   static bool hasLatex(String raw) {
@@ -49,8 +53,50 @@ class LatexTextRenderer extends StatelessWidget {
     return _displayRegex.hasMatch(raw) || _inlineRegex.hasMatch(raw);
   }
 
+  /// `$…$`를 `\(…\)`로 바꾼다. `$$…$$`·`\(…\)`는 그대로 두고, 닫히지 않은 `$`는 글자로 남긴다.
+  /// 학습앱 알림장 제목(`normalizeTodoSheetMath`)과 같은 규칙.
+  static String inlineDollarMath(String raw) {
+    if (!raw.contains(r'$')) return raw;
+    final out = StringBuffer();
+    var i = 0;
+    while (i < raw.length) {
+      final close = raw.startsWith(r'$$', i)
+          ? r'$$'
+          : raw.startsWith(r'\(', i)
+              ? r'\)'
+              : null;
+      if (close != null) {
+        final end = raw.indexOf(close, i + 2);
+        if (end < 0) {
+          out.write(raw.substring(i));
+          break;
+        }
+        out.write(raw.substring(i, end + close.length));
+        i = end + close.length;
+        continue;
+      }
+      if (raw[i] == r'$') {
+        final end = raw.indexOf(r'$', i + 1);
+        if (end < 0) {
+          out.write(raw.substring(i));
+          break;
+        }
+        out
+          ..write(r'\(')
+          ..write(raw.substring(i + 1, end))
+          ..write(r'\)');
+        i = end + 1;
+        continue;
+      }
+      out.write(raw[i]);
+      i += 1;
+    }
+    return out.toString();
+  }
+
   @override
   Widget build(BuildContext context) {
+    final text = dollarMath ? inlineDollarMath(this.text) : this.text;
     final effectiveStyle = DefaultTextStyle.of(context).style.merge(style);
     final displayMathTextStyle =
         _scaleMathTextStyle(effectiveStyle, displayMathScale);

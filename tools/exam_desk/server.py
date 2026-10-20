@@ -161,7 +161,8 @@ class Handler(BaseHTTPRequestHandler):
                 except (ValueError, UnicodeDecodeError) as exc:
                     raise ValueError("파일 이름을 읽지 못했습니다") from exc
                 result = catalog.import_bytes(filename, self._read_body())
-                print(f"import {result['status']} {result['name']}", flush=True)
+                names = ", ".join(item["name"] for item in result.get("items", [result]))
+                print(f"import {result['status']} {names}", flush=True)
                 self._json(result)
                 return
             data = self._read_json()
@@ -203,6 +204,9 @@ class Handler(BaseHTTPRequestHandler):
             "mid_root": str(catalog.MID_ROOT),
             "high_ok": catalog.HIGH_ROOT.is_dir(),
             "mid_ok": catalog.MID_ROOT.is_dir(),
+            "mock_count": catalog.mock_pdf_count(),
+            "mock_root": str(catalog.MOCK_ROOT),
+            "mock_ok": catalog.MOCK_ROOT.is_dir(),
         }
 
     def _file(self, path: Path, cache: str) -> None:
@@ -240,6 +244,7 @@ def main() -> None:
     print(url, flush=True)
     print(catalog.HIGH_ROOT, flush=True)
     print(catalog.MID_ROOT, flush=True)
+    print(catalog.MOCK_ROOT, flush=True)
     print("이 창이 켜져 있는 동안만 이 PC에서 열립니다.", flush=True)
     print("다른 PC에서는 그 PC의 실행 파일을 켜면 됩니다.", flush=True)
     print("이 창을 닫으면 프로그램이 끝납니다.", flush=True)

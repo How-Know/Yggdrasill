@@ -5,7 +5,8 @@
 //   POST { action: 'get_memory', id }                           승인된 기억 하나
 //   POST { action: 'list_conversations', query?, limit?, include_archived? }
 //   POST { action: 'get_conversation', conversation_id, limit? } '답변에서 제외'한 문답은 빠진다
-//   POST { action: 'list_code_requests', query?, limit? } / { action: 'get_code_request', id }  diff 없음
+//   POST { action: 'list_code_requests', query?, limit? } / { action: 'get_code_request', id, section?, offset? }
+//        section 없음: 짧은 구조화 요약. section(request|result|result_text|check_logs|diff) + offset: 원문 구간
 //   POST { action: 'ask', question, conversation_id? }          Think에게 묻기(조회 도구만, 커서 대화에만 남음)
 // 배포: supabase functions deploy ai_think_relay --no-verify-jwt --use-api
 // 설계: docs/architecture/ai-think.md §12

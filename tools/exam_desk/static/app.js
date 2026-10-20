@@ -348,8 +348,9 @@ async function uploadFiles(files) {
   showTab("import")
   const list = ensureImportList()
   for (const file of files) {
-    if (!file.name.toLowerCase().endsWith(".hml")) {
-      list.prepend(resultRow({ status: "error", from: file.name, error: "hml 파일만 넣을 수 있습니다" }))
+    const lower = file.name.toLowerCase()
+    if (!lower.endsWith(".hml") && !lower.endsWith(".pdf")) {
+      list.prepend(resultRow({ status: "error", from: file.name, error: "hml 또는 pdf 파일만 넣을 수 있습니다" }))
       continue
     }
     const pending = resultRow({ status: "pending", from: file.name })
@@ -363,7 +364,8 @@ async function uploadFiles(files) {
         },
         body: file,
       })
-      pending.replaceWith(resultRow(result))
+      const items = result.items && result.items.length ? result.items : [result]
+      pending.replaceWith(...items.map((item) => resultRow({ ...item, from: item.from || result.from })))
     } catch (error) {
       pending.replaceWith(resultRow({ status: "error", from: file.name, error: error.message }))
     }
@@ -383,11 +385,12 @@ async function loadStatus(force) {
     const data = await api(`/api/status${force ? "?refresh=1" : ""}`)
     const high = data.high_count.toLocaleString("ko-KR")
     const mid = data.mid_count.toLocaleString("ko-KR")
-    let text = `고등 폴더 ${high}개 · 중등 폴더 ${mid}개`
-    if (!data.high_ok || !data.mid_ok) text += " · 이 PC의 드롭박스에서 폴더를 찾지 못했습니다"
+    const mock = data.mock_count.toLocaleString("ko-KR")
+    let text = `고등 폴더 ${high}개 · 중등 폴더 ${mid}개 · 모의고사 ${mock}개`
+    if (!data.high_ok || !data.mid_ok || !data.mock_ok) text += " · 이 PC의 드롭박스에서 폴더를 찾지 못했습니다"
     if (data.unread) text += ` · 이름을 읽지 못한 파일 ${data.unread}개`
     line.textContent = text
-    line.title = `${data.high_root}\n${data.mid_root}`
+    line.title = `${data.high_root}\n${data.mid_root}\n${data.mock_root}`
   } catch (error) {
     line.textContent = "폴더를 읽지 못했습니다"
     toast(error.message)

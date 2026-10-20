@@ -66,6 +66,9 @@ test('바뀐 경로에 맞는 검사만 고른다', () => {
   const analyze = items.find((i) => i.id === 'flutter-analyze:yggdrasill_manager');
   assert.deepEqual(analyze.steps[0].files, ['lib/a.dart'], '지운 파일은 분석하지 않는다');
   assert.deepEqual(items.find((i) => i.id === 'deno-check').steps[0].files, ['ai_think/index.ts']);
+  const bridge = items.find((i) => i.id === 'node-test:code_bridge');
+  assert.equal(bridge.compare, 'node-test', '시험별로 바꾸기 전과 비교하고, 패키지를 못 찾으면 환경 문제로 본다');
+  assert.deepEqual(bridge.steps[0].files, ['test/lib.test.mjs']);
   assert.equal(items.find((i) => i.id === 'db-version').status, 'passed');
   assert.equal(items.find((i) => i.id.startsWith('unchecked')).status, 'skipped');
 });

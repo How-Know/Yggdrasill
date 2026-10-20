@@ -69,7 +69,7 @@ class FabTabBarTokens {
   static const double fabTabLabelFontSize = 19;
   static const FontWeight fabTabLabelFontWeight = FontWeight.w400;
   static const double fabTabLetterSpacing = 1;
-  static const double fabTabInnerPadding = 3;
+  static const double fabTabInnerPadding = 4;
   static const double fabTabContentSidePadding = 64;
 
   /// Preview — 학원정보 패널 배경 Dark (스크린샷 기준)

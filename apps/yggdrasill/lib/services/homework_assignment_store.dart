@@ -1338,6 +1338,51 @@ class HomeworkAssignmentStore {
     }
   }
 
+  /// 과제 현황 다이얼로그용 경량 활성 배정 조회.
+  ///
+  /// 출력물 signed URL은 현황 목록에서 쓰지 않으므로 재발급하지 않는다.
+  Future<List<HomeworkAssignmentDetail>> loadActiveAssignmentsForOverview(
+    String studentId,
+  ) async {
+    final key = studentId.trim();
+    if (key.isEmpty) return const <HomeworkAssignmentDetail>[];
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
+      _ensureRealtimeForAcademy(academyId);
+      final rows = await Supabase.instance.client
+          .from('homework_assignments')
+          .select(
+            'id,homework_item_id,group_id,group_title_snapshot,assigned_at,'
+            'due_date,due_at,original_due_at,due_for_check_at,absence_carryover,'
+            'defer_count,order_index,status,note,progress,issue_type,issue_note,'
+            'repeat_index,split_parts,split_round,'
+            'homework_items(id,title,type,page,count,content,flow_id)',
+          )
+          .eq('academy_id', academyId)
+          .eq('student_id', key)
+          .inFilter(
+            'status',
+            const ['assigned', 'in_progress', 'carried_to_class'],
+          )
+          .order('due_date', ascending: true)
+          .order('order_index', ascending: true)
+          .order('assigned_at', ascending: false);
+      return _activeDetailsFromRows(
+        academyId: academyId,
+        rows: (rows as List<dynamic>).cast<Map<String, dynamic>>(),
+      );
+    } catch (e, st) {
+      debugPrint(
+        '[HW_ASSIGN][overviewActive][ERROR] student=$key $e\n$st',
+      );
+      return List<HomeworkAssignmentDetail>.from(
+        _activeAssignmentsCacheByStudent[key] ??
+            const <HomeworkAssignmentDetail>[],
+      );
+    }
+  }
+
   /// Loads active assignments for multiple students with one PostgREST query.
   /// Results populate the same per-student SWR cache used by
   /// [loadActiveAssignments].
@@ -2027,14 +2072,23 @@ class HomeworkAssignmentStore {
   }
 
   Future<Map<String, List<HomeworkAssignmentBrief>>> loadAssignmentsForStudent(
-    String studentId,
-  ) async {
+    String studentId, {
+    Iterable<String>? homeworkItemIds,
+  }) async {
+    final requestedItemIds = homeworkItemIds
+        ?.map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (homeworkItemIds != null && requestedItemIds!.isEmpty) {
+      return <String, List<HomeworkAssignmentBrief>>{};
+    }
     try {
       final academyId = await TenantService.instance.getActiveAcademyId() ??
           await TenantService.instance.ensureActiveAcademy();
       _ensureRealtimeForAcademy(academyId);
       final supa = Supabase.instance.client;
-      final rows = await supa
+      var query = supa
           .from('homework_assignments')
           .select(
             'id,homework_item_id,assigned_at,due_date,due_at,original_due_at,'
@@ -2042,7 +2096,11 @@ class HomeworkAssignmentStore {
             'repeat_index,split_parts,split_round,note',
           )
           .eq('academy_id', academyId)
-          .eq('student_id', studentId)
+          .eq('student_id', studentId);
+      if (requestedItemIds != null) {
+        query = query.inFilter('homework_item_id', requestedItemIds);
+      }
+      final rows = await query
           .order('due_date', ascending: true)
           .order('order_index', ascending: true)
           .order('assigned_at', ascending: true);
@@ -2105,8 +2163,18 @@ class HomeworkAssignmentStore {
   }
 
   Future<Map<String, List<HomeworkAssignmentCheck>>> loadChecksForStudent(
-    String studentId,
-  ) async {
+    String studentId, {
+    Iterable<String>? homeworkItemIds,
+    DateTime? checkedFrom,
+  }) async {
+    final requestedItemIds = homeworkItemIds
+        ?.map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (homeworkItemIds != null && requestedItemIds!.isEmpty) {
+      return <String, List<HomeworkAssignmentCheck>>{};
+    }
     try {
       final academyId = await TenantService.instance.getActiveAcademyId() ??
           await TenantService.instance.ensureActiveAcademy();
@@ -2117,14 +2185,24 @@ class HomeworkAssignmentStore {
       final rows = <Map<String, dynamic>>[];
       var from = 0;
       while (true) {
-        final raw = await supa
+        var query = supa
             .from('homework_assignment_checks')
             .select(
               'id,homework_item_id,assignment_id,checked_at,progress,'
               'outcome,reason,scheduled_due_at,next_due_at,group_check_id',
             )
             .eq('academy_id', academyId)
-            .eq('student_id', studentId)
+            .eq('student_id', studentId);
+        if (requestedItemIds != null) {
+          query = query.inFilter('homework_item_id', requestedItemIds);
+        }
+        if (checkedFrom != null) {
+          query = query.gte(
+            'checked_at',
+            checkedFrom.toUtc().toIso8601String(),
+          );
+        }
+        final raw = await query
             .order('checked_at', ascending: true)
             .order('id', ascending: true)
             .range(from, from + pageSize - 1);

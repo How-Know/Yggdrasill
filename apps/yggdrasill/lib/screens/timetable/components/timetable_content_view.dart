@@ -402,10 +402,15 @@ class TimetableContentViewState extends State<TimetableContentView> {
           child: Container(
             width: 140,
             decoration: BoxDecoration(
-              color: const Color(0xFF2A2A2A),
-              borderRadius: BorderRadius.circular(8),
-              border:
-                  Border.all(color: Color(0xFF2A2A2A), width: 1), // 윤곽선이 티 안 나게
+              color: FabTabBarTokens.previewAcademyPanelStyleFor(
+                Theme.of(context).brightness,
+              ).dropdownBackground,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: FabTabBarTokens.previewAcademyPanelStyleFor(
+                  Theme.of(context).brightness,
+                ).divider,
+              ),
               boxShadow: [
                 BoxShadow(
                   color: Colors.black.withOpacity(0.18),
@@ -631,144 +636,154 @@ class TimetableContentViewState extends State<TimetableContentView> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     // 고정 상단 라벨
-                    Container(
-                      height: 48,
-                      width: double.infinity,
-                      margin: const EdgeInsets.only(bottom: 10),
-                      padding: const EdgeInsets.symmetric(horizontal: 15),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF223131),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      alignment: Alignment.center,
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        mainAxisSize: MainAxisSize.max,
-                        children: [
-                          Text(
-                            '${dayDate.month}/${dayDate.day} ${_weekdayLabel(dayIdx)}',
-                            style: const TextStyle(
-                                color: Color(0xFFEAF2F2),
-                                fontSize: 21,
-                                fontWeight: FontWeight.w700),
-                          ),
-                          const SizedBox(width: 10),
-                          Text(
-                            '총 $totalCount명',
-                            style: const TextStyle(
-                                color: Colors.white70,
-                                fontSize: 15,
-                                fontWeight: FontWeight.w600),
-                          ),
-                        ],
-                      ),
-                    ),
+                    Builder(builder: (context) {
+                      final headerStyle =
+                          FabTabBarTokens.previewAcademyPanelStyleFor(
+                        Theme.of(context).brightness,
+                      );
+                      return Container(
+                        height: 48,
+                        width: double.infinity,
+                        margin: const EdgeInsets.only(bottom: 10),
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        alignment: Alignment.centerLeft,
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                '${dayDate.month}/${dayDate.day} ${_weekdayLabel(dayIdx)}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontFamily: FabTabBarTokens
+                                      .previewAcademyLabelFontFamily,
+                                  color: headerStyle.title,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              '총 $totalCount명',
+                              style: TextStyle(
+                                fontFamily: FabTabBarTokens
+                                    .previewAcademyLabelFontFamily,
+                                color: headerStyle.hint,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }),
                     // 스크롤 가능 본문 (여유 공간 추가로 아래 덮기)
                     SizedBox(
                       height: bodyMinHeight,
-                      child: Container(
-                        padding: const EdgeInsets.fromLTRB(15, 10, 12, 12),
-                        decoration: BoxDecoration(
-                          color: context.yggSurfaceBase,
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(
-                              color: const Color(0xFF223131), width: 1),
-                        ),
-                        child: sortedKeys.isEmpty
-                            ? Padding(
-                                padding: const EdgeInsets.all(4.0),
-                                child: Text(
-                                  widget.placeholderText ??
-                                      '해당 요일에 등록된 항목이 없습니다.',
-                                  style: const TextStyle(
-                                      color: Colors.white38, fontSize: 16),
+                      child: sortedKeys.isEmpty
+                          ? Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Text(
+                                widget.placeholderText ??
+                                    '해당 요일에 등록된 항목이 없습니다.',
+                                style: TextStyle(
+                                  fontFamily: FabTabBarTokens
+                                      .previewAcademyLabelFontFamily,
+                                  color: FabTabBarTokens
+                                      .previewAcademyPanelStyleFor(
+                                    Theme.of(context).brightness,
+                                  ).hint,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w500,
                                 ),
-                              )
-                            : Scrollbar(
+                              ),
+                            )
+                          : Scrollbar(
+                              controller: _daySelectedOverlayScrollController,
+                              child: ListView.builder(
                                 controller: _daySelectedOverlayScrollController,
-                                child: ListView.builder(
-                                  controller:
-                                      _daySelectedOverlayScrollController,
-                                  padding: const EdgeInsets.only(
-                                      bottom: extraScrollSpace),
-                                  itemCount: sortedKeys.length,
-                                  itemBuilder: (context, idx) {
-                                    final k = sortedKeys[idx];
-                                    final list =
-                                        groups[k] ?? const <StudentWithInfo>[];
-                                    final extras =
-                                        specialByTime[k] ?? const <Widget>[];
-                                    final parts = k.split(':');
-                                    final int hour =
-                                        int.tryParse(parts[0]) ?? 0;
-                                    final int minute =
-                                        int.tryParse(parts[1]) ?? 0;
-                                    final DateTime slotStart = DateTime(
-                                      dayDate.year,
-                                      dayDate.month,
-                                      dayDate.day,
-                                      hour,
-                                      minute,
-                                    );
-                                    final overridesForTime =
-                                        blockOverrideByTime[k];
-                                    return Padding(
-                                      padding:
-                                          const EdgeInsets.only(bottom: 16.0),
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Row(
+                                padding: const EdgeInsets.only(
+                                    bottom: extraScrollSpace),
+                                itemCount: sortedKeys.length,
+                                itemBuilder: (context, idx) {
+                                  final k = sortedKeys[idx];
+                                  final list =
+                                      groups[k] ?? const <StudentWithInfo>[];
+                                  final extras =
+                                      specialByTime[k] ?? const <Widget>[];
+                                  final parts = k.split(':');
+                                  final int hour = int.tryParse(parts[0]) ?? 0;
+                                  final int minute =
+                                      int.tryParse(parts[1]) ?? 0;
+                                  final DateTime slotStart = DateTime(
+                                    dayDate.year,
+                                    dayDate.month,
+                                    dayDate.day,
+                                    hour,
+                                    minute,
+                                  );
+                                  final overridesForTime =
+                                      blockOverrideByTime[k];
+                                  return Padding(
+                                    padding:
+                                        const EdgeInsets.only(bottom: 16.0),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            Text(
+                                              k,
+                                              style: TextStyle(
+                                                fontFamily: FabTabBarTokens
+                                                    .previewAcademyLabelFontFamily,
+                                                color: FabTabBarTokens
+                                                    .previewAcademyPanelStyleFor(
+                                                  Theme.of(context).brightness,
+                                                ).title,
+                                                fontSize: 16,
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 10),
+                                        Padding(
+                                          padding:
+                                              const EdgeInsets.only(left: 14),
+                                          child: Wrap(
+                                            spacing: 2.4,
+                                            runSpacing: 2.4,
                                             children: [
-                                              Text(
-                                                k,
-                                                style: const TextStyle(
-                                                  color: Color(0xFFEAF2F2),
-                                                  fontSize: 21,
-                                                  fontWeight: FontWeight.w700,
+                                              ...extras,
+                                              ...list.map(
+                                                (info) =>
+                                                    _buildDraggableStudentCard(
+                                                  info,
+                                                  dayIndex: dayIdx,
+                                                  startTime: slotStart,
+                                                  cellStudents: list,
+                                                  blockOverride:
+                                                      overridesForTime == null
+                                                          ? null
+                                                          : overridesForTime[
+                                                              info.student.id],
+                                                  // ✅ 요일 선택 리스트에서도 스와이프(수정/삭제) 허용
+                                                  // - 선택모드에서도 관리가 가능해야 한다는 요구 반영
+                                                  allowSwipeInSelectMode: true,
                                                 ),
                                               ),
                                             ],
                                           ),
-                                          const SizedBox(height: 10),
-                                          Padding(
-                                            padding:
-                                                const EdgeInsets.only(left: 14),
-                                            child: Wrap(
-                                              spacing: 2.4,
-                                              runSpacing: 2.4,
-                                              children: [
-                                                ...extras,
-                                                ...list.map(
-                                                  (info) =>
-                                                      _buildDraggableStudentCard(
-                                                    info,
-                                                    dayIndex: dayIdx,
-                                                    startTime: slotStart,
-                                                    cellStudents: list,
-                                                    blockOverride:
-                                                        overridesForTime == null
-                                                            ? null
-                                                            : overridesForTime[
-                                                                info.student
-                                                                    .id],
-                                                    // ✅ 요일 선택 리스트에서도 스와이프(수정/삭제) 허용
-                                                    // - 선택모드에서도 관리가 가능해야 한다는 요구 반영
-                                                    allowSwipeInSelectMode:
-                                                        true,
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    );
-                                  },
-                                ),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                },
                               ),
-                      ),
+                            ),
                     ),
                   ],
                 ),
@@ -948,6 +963,9 @@ class TimetableContentViewState extends State<TimetableContentView> {
     _scheduleStudentControlsMeasure();
     final bool isClassListSheetOpen = widget.isClassListSheetOpen;
     final bool hasActiveSearch = _searchQuery.isNotEmpty;
+    final sheetStyle = FabTabBarTokens.previewAcademyPanelStyleFor(
+      Theme.of(context).brightness,
+    );
     const double classListSheetWidth = 420.0;
     const double classSheetOuterLeftInset = 4.0;
     const double classSheetContentRightInset = 8.0;
@@ -989,1400 +1007,1485 @@ class TimetableContentViewState extends State<TimetableContentView> {
                 duration: const Duration(milliseconds: 220),
                 curve: Curves.easeInOutCubic,
                 offset: isClassListSheetOpen ? Offset.zero : const Offset(1, 0),
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: context.yggSurfaceBase,
-                    border: const Border(
-                      left: BorderSide(color: Color(0xFF223131), width: 1),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(0, 8, 0, 16),
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: sheetStyle.groupedCardBackground,
+                      borderRadius: BorderRadius.circular(
+                        FabTabBarTokens.previewAcademyGroupedCardRadius,
+                      ),
+                      border: Border.all(color: sheetStyle.divider),
                     ),
-                  ),
-                  child: Stack(
-                    children: [
-                      Column(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(
+                        FabTabBarTokens.previewAcademyGroupedCardRadius,
+                      ),
+                      child: Stack(
                         children: [
-                          // 학생 컨트롤 영역 (셀 클릭 학생 리스트 제거)
-                          Padding(
-                            padding: const EdgeInsets.only(
-                                left: classSheetOuterLeftInset,
-                                right: classSheetContentRightInset,
-                                top: _kStudentPanelPaddingTop,
-                                bottom: 8),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                SizedBox(
-                                    key: _studentControlsMeasureKey,
-                                    child: Builder(builder: (context) {
-                                      final screenW =
-                                          MediaQuery.of(context).size.width;
-                                      final isNarrow = screenW <= 1600;
-                                      if (isNarrow) {
-                                        // 좁은 화면: 좌우 1:1 영역으로 분할 + 화면 너비에 비례한 크기 조정
-                                        final double t =
-                                            ((screenW - 1200) / 400)
-                                                .clamp(0.0, 1.0);
-                                        final double h = 30 +
-                                            (38 - 30) *
-                                                t; // 1200px에서 30 → 1600px에서 38
-                                        final double regW = 80 +
-                                            (96 - 80) * t; // 등록 버튼 너비 80~96
-                                        final double dropW =
-                                            30 + (38 - 30) * t; // 드롭다운 30~38
-                                        final double dividerLineH = 16 +
-                                            (22 - 16) * t; // 구분선 내부 라인 16~22
-                                        final double searchW = 120 +
-                                            (160 - 120) * t; // 검색바 너비 120~160
-                                        return Row(
-                                          children: [
-                                            Expanded(
-                                              child: Row(
-                                                mainAxisAlignment:
-                                                    MainAxisAlignment.start,
-                                                crossAxisAlignment:
-                                                    CrossAxisAlignment.center,
-                                                mainAxisSize: MainAxisSize.max,
-                                                children: [
-                                                  if (widget
-                                                      .showRegisterControls) ...[
-                                                    SizedBox(
-                                                      width: regW,
-                                                      height: h,
-                                                      child: Material(
-                                                        color: const Color(
-                                                            0xFF1976D2),
-                                                        borderRadius:
-                                                            const BorderRadius
-                                                                .only(
-                                                          topLeft:
-                                                              Radius.circular(
-                                                                  32),
-                                                          bottomLeft:
-                                                              Radius.circular(
-                                                                  32),
-                                                          topRight:
-                                                              Radius.circular(
-                                                                  6),
-                                                          bottomRight:
-                                                              Radius.circular(
-                                                                  6),
-                                                        ),
-                                                        child: InkWell(
-                                                          borderRadius:
-                                                              const BorderRadius
-                                                                  .only(
-                                                            topLeft:
-                                                                Radius.circular(
-                                                                    32),
-                                                            bottomLeft:
-                                                                Radius.circular(
-                                                                    32),
-                                                            topRight:
-                                                                Radius.circular(
-                                                                    6),
-                                                            bottomRight:
-                                                                Radius.circular(
-                                                                    6),
-                                                          ),
-                                                          onTap: widget
-                                                              .onRegisterPressed,
-                                                          child: Row(
-                                                            mainAxisAlignment:
-                                                                MainAxisAlignment
-                                                                    .center,
-                                                            mainAxisSize:
-                                                                MainAxisSize
-                                                                    .max,
-                                                            children: const [
-                                                              Icon(Icons.add,
-                                                                  color: Colors
-                                                                      .white,
-                                                                  size: 16),
-                                                              SizedBox(
-                                                                  width: 6),
-                                                              Text('등록',
-                                                                  style: TextStyle(
+                          Column(
+                            children: [
+                              // 학생 컨트롤 영역 (셀 클릭 학생 리스트 제거)
+                              Padding(
+                                padding: const EdgeInsets.only(
+                                    left: classSheetOuterLeftInset,
+                                    right: classSheetContentRightInset,
+                                    top: _kStudentPanelPaddingTop,
+                                    bottom: 8),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    SizedBox(
+                                        key: _studentControlsMeasureKey,
+                                        child: Builder(builder: (context) {
+                                          final screenW =
+                                              MediaQuery.of(context).size.width;
+                                          final isNarrow = screenW <= 1600;
+                                          if (isNarrow) {
+                                            // 좁은 화면: 좌우 1:1 영역으로 분할 + 화면 너비에 비례한 크기 조정
+                                            final double t =
+                                                ((screenW - 1200) / 400)
+                                                    .clamp(0.0, 1.0);
+                                            final double h = 30 +
+                                                (38 - 30) *
+                                                    t; // 1200px에서 30 → 1600px에서 38
+                                            final double regW = 80 +
+                                                (96 - 80) * t; // 등록 버튼 너비 80~96
+                                            final double dropW = 30 +
+                                                (38 - 30) * t; // 드롭다운 30~38
+                                            final double dividerLineH = 16 +
+                                                (22 - 16) *
+                                                    t; // 구분선 내부 라인 16~22
+                                            final double searchW = 120 +
+                                                (160 - 120) *
+                                                    t; // 검색바 너비 120~160
+                                            return Row(
+                                              children: [
+                                                Expanded(
+                                                  child: Row(
+                                                    mainAxisAlignment:
+                                                        MainAxisAlignment.start,
+                                                    crossAxisAlignment:
+                                                        CrossAxisAlignment
+                                                            .center,
+                                                    mainAxisSize:
+                                                        MainAxisSize.max,
+                                                    children: [
+                                                      if (widget
+                                                          .showRegisterControls) ...[
+                                                        SizedBox(
+                                                          width: regW,
+                                                          height: h,
+                                                          child: Material(
+                                                            color: kDlgAccent,
+                                                            borderRadius:
+                                                                const BorderRadius
+                                                                    .only(
+                                                              topLeft: Radius
+                                                                  .circular(32),
+                                                              bottomLeft: Radius
+                                                                  .circular(32),
+                                                              topRight: Radius
+                                                                  .circular(6),
+                                                              bottomRight:
+                                                                  Radius
+                                                                      .circular(
+                                                                          6),
+                                                            ),
+                                                            child: InkWell(
+                                                              borderRadius:
+                                                                  const BorderRadius
+                                                                      .only(
+                                                                topLeft: Radius
+                                                                    .circular(
+                                                                        32),
+                                                                bottomLeft: Radius
+                                                                    .circular(
+                                                                        32),
+                                                                topRight: Radius
+                                                                    .circular(
+                                                                        6),
+                                                                bottomRight:
+                                                                    Radius
+                                                                        .circular(
+                                                                            6),
+                                                              ),
+                                                              onTap: widget
+                                                                  .onRegisterPressed,
+                                                              child: Row(
+                                                                mainAxisAlignment:
+                                                                    MainAxisAlignment
+                                                                        .center,
+                                                                mainAxisSize:
+                                                                    MainAxisSize
+                                                                        .max,
+                                                                children: const [
+                                                                  Icon(
+                                                                      Icons.add,
                                                                       color: Colors
                                                                           .white,
-                                                                      fontSize:
-                                                                          14,
-                                                                      fontWeight:
-                                                                          FontWeight
-                                                                              .bold)),
-                                                            ],
-                                                          ),
-                                                        ),
-                                                      ),
-                                                    ),
-                                                    Container(
-                                                      height: h,
-                                                      width: 3.0,
-                                                      color: Colors.transparent,
-                                                      child: Center(
-                                                        child: Container(
-                                                          width: 2,
-                                                          height: dividerLineH,
-                                                          color: Colors.white
-                                                              .withOpacity(0.1),
-                                                        ),
-                                                      ),
-                                                    ),
-                                                    Padding(
-                                                      padding: const EdgeInsets
-                                                          .symmetric(
-                                                          horizontal: 2.5),
-                                                      child: GestureDetector(
-                                                        key: _dropdownButtonKey,
-                                                        onTap: () {
-                                                          if (_dropdownOverlay ==
-                                                              null) {
-                                                            widget
-                                                                .onDropdownOpenChanged(
-                                                                    true);
-                                                            _showDropdownMenu();
-                                                          } else {
-                                                            _removeDropdownMenu();
-                                                          }
-                                                        },
-                                                        child:
-                                                            AnimatedContainer(
-                                                          duration:
-                                                              const Duration(
-                                                                  milliseconds:
-                                                                      350),
-                                                          width: dropW,
-                                                          height: h,
-                                                          decoration:
-                                                              ShapeDecoration(
-                                                            color: const Color(
-                                                                0xFF1976D2),
-                                                            shape:
-                                                                RoundedRectangleBorder(
-                                                              borderRadius: widget
-                                                                      .isDropdownOpen
-                                                                  ? BorderRadius
-                                                                      .circular(
-                                                                          50)
-                                                                  : const BorderRadius
-                                                                      .only(
-                                                                      topLeft: Radius
-                                                                          .circular(
-                                                                              6),
-                                                                      bottomLeft:
-                                                                          Radius.circular(
-                                                                              6),
-                                                                      topRight:
-                                                                          Radius.circular(
-                                                                              32),
-                                                                      bottomRight:
-                                                                          Radius.circular(
-                                                                              32),
-                                                                    ),
-                                                            ),
-                                                          ),
-                                                          child: Center(
-                                                            child:
-                                                                AnimatedRotation(
-                                                              turns: widget
-                                                                      .isDropdownOpen
-                                                                  ? 0.5
-                                                                  : 0.0,
-                                                              duration:
-                                                                  const Duration(
-                                                                      milliseconds:
-                                                                          350),
-                                                              curve: Curves
-                                                                  .easeInOut,
-                                                              child: const Icon(
-                                                                Icons
-                                                                    .keyboard_arrow_down,
-                                                                color: Colors
-                                                                    .white,
-                                                                size: 20,
-                                                                key: ValueKey(
-                                                                    'arrow'),
+                                                                      size: 16),
+                                                                  SizedBox(
+                                                                      width: 6),
+                                                                  Text('등록',
+                                                                      style: TextStyle(
+                                                                          color: Colors
+                                                                              .white,
+                                                                          fontSize:
+                                                                              14,
+                                                                          fontWeight:
+                                                                              FontWeight.bold)),
+                                                                ],
                                                               ),
                                                             ),
                                                           ),
                                                         ),
-                                                      ),
-                                                    ),
-                                                    const SizedBox(width: 8),
-                                                  ],
-                                                  if (widget
-                                                      .showRegisterControls) ...[
-                                                    // 수업 등록 버튼 (협소 화면 추가 축소)
-                                                    SizedBox(
-                                                      width: regW,
-                                                      height: h,
-                                                      child: Material(
-                                                        color: const Color(
-                                                            0xFF1976D2),
-                                                        borderRadius:
-                                                            const BorderRadius
-                                                                .only(
-                                                          topLeft:
-                                                              Radius.circular(
-                                                                  32),
-                                                          bottomLeft:
-                                                              Radius.circular(
-                                                                  32),
-                                                          topRight:
-                                                              Radius.circular(
-                                                                  6),
-                                                          bottomRight:
-                                                              Radius.circular(
-                                                                  6),
-                                                        ),
-                                                        child: InkWell(
-                                                          borderRadius:
-                                                              const BorderRadius
-                                                                  .only(
-                                                            topLeft:
-                                                                Radius.circular(
-                                                                    32),
-                                                            bottomLeft:
-                                                                Radius.circular(
-                                                                    32),
-                                                            topRight:
-                                                                Radius.circular(
-                                                                    6),
-                                                            bottomRight:
-                                                                Radius.circular(
-                                                                    6),
-                                                          ),
-                                                          onTap: widget
-                                                              .onRegisterPressed,
-                                                          child: Row(
-                                                            mainAxisAlignment:
-                                                                MainAxisAlignment
-                                                                    .center,
-                                                            mainAxisSize:
-                                                                MainAxisSize
-                                                                    .max,
-                                                            children: const [
-                                                              Icon(Icons.add,
-                                                                  color: Colors
-                                                                      .white,
-                                                                  size: 16),
-                                                              SizedBox(
-                                                                  width: 6),
-                                                              Text('등록',
-                                                                  style: TextStyle(
-                                                                      color: Colors
-                                                                          .white,
-                                                                      fontSize:
-                                                                          14,
-                                                                      fontWeight:
-                                                                          FontWeight
-                                                                              .bold)),
-                                                            ],
-                                                          ),
-                                                        ),
-                                                      ),
-                                                    ),
-                                                    // 구분선
-                                                    Container(
-                                                      height: h,
-                                                      width: 3.0,
-                                                      color: Colors.transparent,
-                                                      child: Center(
-                                                        child: Container(
-                                                          width: 2,
-                                                          height: dividerLineH,
-                                                          color: Colors.white
-                                                              .withOpacity(0.1),
-                                                        ),
-                                                      ),
-                                                    ),
-                                                    // 드롭다운 버튼
-                                                    Padding(
-                                                      padding: const EdgeInsets
-                                                          .symmetric(
-                                                          horizontal: 2.5),
-                                                      child: GestureDetector(
-                                                        key: _dropdownButtonKey,
-                                                        onTap: () {
-                                                          if (_dropdownOverlay ==
-                                                              null) {
-                                                            widget
-                                                                .onDropdownOpenChanged(
-                                                                    true);
-                                                            _showDropdownMenu();
-                                                          } else {
-                                                            _removeDropdownMenu();
-                                                          }
-                                                        },
-                                                        child:
-                                                            AnimatedContainer(
-                                                          duration:
-                                                              const Duration(
-                                                                  milliseconds:
-                                                                      350),
-                                                          width: dropW,
+                                                        Container(
                                                           height: h,
-                                                          decoration:
-                                                              ShapeDecoration(
-                                                            color: const Color(
-                                                                0xFF1976D2),
-                                                            shape:
-                                                                RoundedRectangleBorder(
-                                                              borderRadius: widget
-                                                                      .isDropdownOpen
-                                                                  ? BorderRadius
-                                                                      .circular(
-                                                                          50)
-                                                                  : const BorderRadius
-                                                                      .only(
-                                                                      topLeft: Radius
-                                                                          .circular(
-                                                                              6),
-                                                                      bottomLeft:
-                                                                          Radius.circular(
-                                                                              6),
-                                                                      topRight:
-                                                                          Radius.circular(
-                                                                              32),
-                                                                      bottomRight:
-                                                                          Radius.circular(
-                                                                              32),
-                                                                    ),
-                                                            ),
-                                                          ),
+                                                          width: 3.0,
+                                                          color: Colors
+                                                              .transparent,
                                                           child: Center(
-                                                            child:
-                                                                AnimatedRotation(
-                                                              turns: widget
-                                                                      .isDropdownOpen
-                                                                  ? 0.5
-                                                                  : 0.0,
-                                                              duration:
-                                                                  const Duration(
-                                                                      milliseconds:
-                                                                          350),
-                                                              curve: Curves
-                                                                  .easeInOut,
-                                                              child: const Icon(
-                                                                Icons
-                                                                    .keyboard_arrow_down,
-                                                                color: Colors
-                                                                    .white,
-                                                                size: 20,
-                                                                key: ValueKey(
-                                                                    'arrow'),
-                                                              ),
+                                                            child: Container(
+                                                              width: 2,
+                                                              height:
+                                                                  dividerLineH,
+                                                              color: Colors
+                                                                  .white
+                                                                  .withOpacity(
+                                                                      0.1),
                                                             ),
                                                           ),
                                                         ),
-                                                      ),
-                                                    ),
-                                                    const SizedBox(width: 8),
-                                                  ],
-                                                  // 보강 버튼 (아이콘만, 등록 버튼 색상과 동일)
-                                                  SizedBox(
-                                                    height: h,
-                                                    child: Material(
-                                                      color: const Color(
-                                                          0xFF1976D2),
-                                                      borderRadius:
-                                                          BorderRadius.circular(
-                                                              8),
-                                                      child: InkWell(
-                                                        borderRadius:
-                                                            BorderRadius
-                                                                .circular(8),
-                                                        onTap: () {},
-                                                        child: const Padding(
-                                                          padding: EdgeInsets
-                                                              .symmetric(
+                                                        Padding(
+                                                          padding:
+                                                              const EdgeInsets
+                                                                  .symmetric(
                                                                   horizontal:
-                                                                      12.0),
-                                                          child: Icon(
-                                                              Icons
-                                                                  .event_repeat_rounded,
-                                                              color:
-                                                                  Colors.white,
-                                                              size: 20),
+                                                                      2.5),
+                                                          child:
+                                                              GestureDetector(
+                                                            key:
+                                                                _dropdownButtonKey,
+                                                            onTap: () {
+                                                              if (_dropdownOverlay ==
+                                                                  null) {
+                                                                widget
+                                                                    .onDropdownOpenChanged(
+                                                                        true);
+                                                                _showDropdownMenu();
+                                                              } else {
+                                                                _removeDropdownMenu();
+                                                              }
+                                                            },
+                                                            child:
+                                                                AnimatedContainer(
+                                                              duration:
+                                                                  const Duration(
+                                                                      milliseconds:
+                                                                          350),
+                                                              width: dropW,
+                                                              height: h,
+                                                              decoration:
+                                                                  ShapeDecoration(
+                                                                color:
+                                                                    kDlgAccent,
+                                                                shape:
+                                                                    RoundedRectangleBorder(
+                                                                  borderRadius: widget
+                                                                          .isDropdownOpen
+                                                                      ? BorderRadius
+                                                                          .circular(
+                                                                              50)
+                                                                      : const BorderRadius
+                                                                          .only(
+                                                                          topLeft:
+                                                                              Radius.circular(6),
+                                                                          bottomLeft:
+                                                                              Radius.circular(6),
+                                                                          topRight:
+                                                                              Radius.circular(32),
+                                                                          bottomRight:
+                                                                              Radius.circular(32),
+                                                                        ),
+                                                                ),
+                                                              ),
+                                                              child: Center(
+                                                                child:
+                                                                    AnimatedRotation(
+                                                                  turns: widget
+                                                                          .isDropdownOpen
+                                                                      ? 0.5
+                                                                      : 0.0,
+                                                                  duration: const Duration(
+                                                                      milliseconds:
+                                                                          350),
+                                                                  curve: Curves
+                                                                      .easeInOut,
+                                                                  child:
+                                                                      const Icon(
+                                                                    Icons
+                                                                        .keyboard_arrow_down,
+                                                                    color: Colors
+                                                                        .white,
+                                                                    size: 20,
+                                                                    key: ValueKey(
+                                                                        'arrow'),
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ),
+                                                        const SizedBox(
+                                                            width: 8),
+                                                      ],
+                                                      if (widget
+                                                          .showRegisterControls) ...[
+                                                        // 수업 등록 버튼 (협소 화면 추가 축소)
+                                                        SizedBox(
+                                                          width: regW,
+                                                          height: h,
+                                                          child: Material(
+                                                            color: kDlgAccent,
+                                                            borderRadius:
+                                                                const BorderRadius
+                                                                    .only(
+                                                              topLeft: Radius
+                                                                  .circular(32),
+                                                              bottomLeft: Radius
+                                                                  .circular(32),
+                                                              topRight: Radius
+                                                                  .circular(6),
+                                                              bottomRight:
+                                                                  Radius
+                                                                      .circular(
+                                                                          6),
+                                                            ),
+                                                            child: InkWell(
+                                                              borderRadius:
+                                                                  const BorderRadius
+                                                                      .only(
+                                                                topLeft: Radius
+                                                                    .circular(
+                                                                        32),
+                                                                bottomLeft: Radius
+                                                                    .circular(
+                                                                        32),
+                                                                topRight: Radius
+                                                                    .circular(
+                                                                        6),
+                                                                bottomRight:
+                                                                    Radius
+                                                                        .circular(
+                                                                            6),
+                                                              ),
+                                                              onTap: widget
+                                                                  .onRegisterPressed,
+                                                              child: Row(
+                                                                mainAxisAlignment:
+                                                                    MainAxisAlignment
+                                                                        .center,
+                                                                mainAxisSize:
+                                                                    MainAxisSize
+                                                                        .max,
+                                                                children: const [
+                                                                  Icon(
+                                                                      Icons.add,
+                                                                      color: Colors
+                                                                          .white,
+                                                                      size: 16),
+                                                                  SizedBox(
+                                                                      width: 6),
+                                                                  Text('등록',
+                                                                      style: TextStyle(
+                                                                          color: Colors
+                                                                              .white,
+                                                                          fontSize:
+                                                                              14,
+                                                                          fontWeight:
+                                                                              FontWeight.bold)),
+                                                                ],
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ),
+                                                        // 구분선
+                                                        Container(
+                                                          height: h,
+                                                          width: 3.0,
+                                                          color: Colors
+                                                              .transparent,
+                                                          child: Center(
+                                                            child: Container(
+                                                              width: 2,
+                                                              height:
+                                                                  dividerLineH,
+                                                              color: Colors
+                                                                  .white
+                                                                  .withOpacity(
+                                                                      0.1),
+                                                            ),
+                                                          ),
+                                                        ),
+                                                        // 드롭다운 버튼
+                                                        Padding(
+                                                          padding:
+                                                              const EdgeInsets
+                                                                  .symmetric(
+                                                                  horizontal:
+                                                                      2.5),
+                                                          child:
+                                                              GestureDetector(
+                                                            key:
+                                                                _dropdownButtonKey,
+                                                            onTap: () {
+                                                              if (_dropdownOverlay ==
+                                                                  null) {
+                                                                widget
+                                                                    .onDropdownOpenChanged(
+                                                                        true);
+                                                                _showDropdownMenu();
+                                                              } else {
+                                                                _removeDropdownMenu();
+                                                              }
+                                                            },
+                                                            child:
+                                                                AnimatedContainer(
+                                                              duration:
+                                                                  const Duration(
+                                                                      milliseconds:
+                                                                          350),
+                                                              width: dropW,
+                                                              height: h,
+                                                              decoration:
+                                                                  ShapeDecoration(
+                                                                color:
+                                                                    kDlgAccent,
+                                                                shape:
+                                                                    RoundedRectangleBorder(
+                                                                  borderRadius: widget
+                                                                          .isDropdownOpen
+                                                                      ? BorderRadius
+                                                                          .circular(
+                                                                              50)
+                                                                      : const BorderRadius
+                                                                          .only(
+                                                                          topLeft:
+                                                                              Radius.circular(6),
+                                                                          bottomLeft:
+                                                                              Radius.circular(6),
+                                                                          topRight:
+                                                                              Radius.circular(32),
+                                                                          bottomRight:
+                                                                              Radius.circular(32),
+                                                                        ),
+                                                                ),
+                                                              ),
+                                                              child: Center(
+                                                                child:
+                                                                    AnimatedRotation(
+                                                                  turns: widget
+                                                                          .isDropdownOpen
+                                                                      ? 0.5
+                                                                      : 0.0,
+                                                                  duration: const Duration(
+                                                                      milliseconds:
+                                                                          350),
+                                                                  curve: Curves
+                                                                      .easeInOut,
+                                                                  child:
+                                                                      const Icon(
+                                                                    Icons
+                                                                        .keyboard_arrow_down,
+                                                                    color: Colors
+                                                                        .white,
+                                                                    size: 20,
+                                                                    key: ValueKey(
+                                                                        'arrow'),
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ),
+                                                        const SizedBox(
+                                                            width: 8),
+                                                      ],
+                                                      // 보강 버튼 (아이콘만, 등록 버튼 색상과 동일)
+                                                      SizedBox(
+                                                        height: h,
+                                                        child: Material(
+                                                          color: kDlgAccent,
+                                                          borderRadius:
+                                                              BorderRadius
+                                                                  .circular(8),
+                                                          child: InkWell(
+                                                            borderRadius:
+                                                                BorderRadius
+                                                                    .circular(
+                                                                        8),
+                                                            onTap: () {},
+                                                            child:
+                                                                const Padding(
+                                                              padding: EdgeInsets
+                                                                  .symmetric(
+                                                                      horizontal:
+                                                                          12.0),
+                                                              child: Icon(
+                                                                  Icons
+                                                                      .event_repeat_rounded,
+                                                                  color: Colors
+                                                                      .white,
+                                                                  size: 20),
+                                                            ),
+                                                          ),
                                                         ),
                                                       ),
-                                                    ),
-                                                  ),
-                                                  const SizedBox(width: 8),
-                                                  if (widget
-                                                      .showRegisterControls) ...[
-                                                    const SizedBox(width: 8),
-                                                    AnimatedContainer(
-                                                      duration: const Duration(
-                                                          milliseconds: 250),
-                                                      height: h,
-                                                      width: _isSearchExpanded
-                                                          ? searchW
-                                                          : h,
-                                                      decoration: BoxDecoration(
-                                                        color: const Color(
-                                                            0xFF2A2A2A),
-                                                        borderRadius:
-                                                            BorderRadius
-                                                                .circular(
-                                                                    h / 2),
-                                                        border: Border.all(
-                                                            color: Colors.white
-                                                                .withOpacity(
-                                                                    0.2)),
-                                                      ),
-                                                      child: Row(
-                                                        mainAxisAlignment:
-                                                            _isSearchExpanded
-                                                                ? MainAxisAlignment
-                                                                    .start
-                                                                : MainAxisAlignment
-                                                                    .center,
-                                                        crossAxisAlignment:
-                                                            CrossAxisAlignment
-                                                                .center,
-                                                        children: [
-                                                          IconButton(
-                                                            visualDensity:
-                                                                const VisualDensity(
-                                                                    horizontal:
-                                                                        -4,
-                                                                    vertical:
-                                                                        -4),
-                                                            padding:
+                                                      const SizedBox(width: 8),
+                                                      if (widget
+                                                          .showRegisterControls) ...[
+                                                        const SizedBox(
+                                                            width: 8),
+                                                        AnimatedContainer(
+                                                          duration:
+                                                              const Duration(
+                                                                  milliseconds:
+                                                                      250),
+                                                          height: h,
+                                                          width:
+                                                              _isSearchExpanded
+                                                                  ? searchW
+                                                                  : h,
+                                                          decoration:
+                                                              BoxDecoration(
+                                                            color: sheetStyle
+                                                                .dropdownBackground,
+                                                            borderRadius:
+                                                                BorderRadius
+                                                                    .circular(
+                                                                        h / 2),
+                                                            border: Border.all(
+                                                              color: sheetStyle
+                                                                  .divider,
+                                                            ),
+                                                          ),
+                                                          child: Row(
+                                                            mainAxisAlignment:
                                                                 _isSearchExpanded
+                                                                    ? MainAxisAlignment
+                                                                        .start
+                                                                    : MainAxisAlignment
+                                                                        .center,
+                                                            crossAxisAlignment:
+                                                                CrossAxisAlignment
+                                                                    .center,
+                                                            children: [
+                                                              IconButton(
+                                                                visualDensity:
+                                                                    const VisualDensity(
+                                                                        horizontal:
+                                                                            -4,
+                                                                        vertical:
+                                                                            -4),
+                                                                padding: _isSearchExpanded
                                                                     ? const EdgeInsets
                                                                         .only(
                                                                         left: 8)
                                                                     : EdgeInsets
                                                                         .zero,
-                                                            constraints:
-                                                                const BoxConstraints(
-                                                                    minWidth:
-                                                                        32,
-                                                                    minHeight:
-                                                                        32),
-                                                            icon: const Icon(
-                                                                Icons.search,
-                                                                color: Colors
-                                                                    .white70,
-                                                                size: 20),
-                                                            onPressed: () {
-                                                              setState(() {
-                                                                _isSearchExpanded =
-                                                                    !_isSearchExpanded;
-                                                              });
-                                                              if (_isSearchExpanded) {
-                                                                Future.delayed(
-                                                                    const Duration(
-                                                                        milliseconds:
-                                                                            50),
-                                                                    () {
-                                                                  _searchFocusNode
-                                                                      .requestFocus();
-                                                                });
-                                                              } else {
-                                                                _searchController
-                                                                    .clear();
-                                                                _onSearchChanged(
-                                                                    '');
-                                                                FocusScope.of(
-                                                                        context)
-                                                                    .unfocus();
-                                                              }
-                                                            },
-                                                          ),
-                                                          if (_isSearchExpanded)
-                                                            const SizedBox(
-                                                                width: 10),
-                                                          if (_isSearchExpanded)
-                                                            SizedBox(
-                                                              width:
-                                                                  searchW - 50,
-                                                              child: TextField(
-                                                                controller:
-                                                                    _searchController,
-                                                                focusNode:
-                                                                    _searchFocusNode,
-                                                                style: const TextStyle(
-                                                                    color: Colors
-                                                                        .white,
-                                                                    fontSize:
-                                                                        16.5),
-                                                                decoration:
-                                                                    const InputDecoration(
-                                                                  hintText:
-                                                                      '검색',
-                                                                  hintStyle: TextStyle(
-                                                                      color: Colors
-                                                                          .white54,
-                                                                      fontSize:
-                                                                          16.5),
-                                                                  border:
-                                                                      InputBorder
-                                                                          .none,
-                                                                  isDense: true,
-                                                                  contentPadding:
-                                                                      EdgeInsets
-                                                                          .zero,
-                                                                ),
-                                                                onChanged:
-                                                                    _onSearchChanged,
+                                                                constraints:
+                                                                    const BoxConstraints(
+                                                                        minWidth:
+                                                                            32,
+                                                                        minHeight:
+                                                                            32),
+                                                                icon: Icon(
+                                                                    Icons
+                                                                        .search,
+                                                                    color:
+                                                                        sheetStyle
+                                                                            .icon,
+                                                                    size: 20),
+                                                                onPressed: () {
+                                                                  setState(() {
+                                                                    _isSearchExpanded =
+                                                                        !_isSearchExpanded;
+                                                                  });
+                                                                  if (_isSearchExpanded) {
+                                                                    Future.delayed(
+                                                                        const Duration(
+                                                                            milliseconds:
+                                                                                50),
+                                                                        () {
+                                                                      _searchFocusNode
+                                                                          .requestFocus();
+                                                                    });
+                                                                  } else {
+                                                                    _searchController
+                                                                        .clear();
+                                                                    _onSearchChanged(
+                                                                        '');
+                                                                    FocusScope.of(
+                                                                            context)
+                                                                        .unfocus();
+                                                                  }
+                                                                },
                                                               ),
-                                                            ),
-                                                          if (_isSearchExpanded &&
-                                                              _searchQuery
-                                                                  .isNotEmpty)
-                                                            IconButton(
-                                                              visualDensity:
-                                                                  const VisualDensity(
-                                                                      horizontal:
-                                                                          -4,
-                                                                      vertical:
-                                                                          -4),
-                                                              padding:
-                                                                  const EdgeInsets
-                                                                      .only(
-                                                                      right:
-                                                                          10),
-                                                              constraints:
-                                                                  const BoxConstraints(
+                                                              if (_isSearchExpanded)
+                                                                const SizedBox(
+                                                                    width: 10),
+                                                              if (_isSearchExpanded)
+                                                                SizedBox(
+                                                                  width:
+                                                                      searchW -
+                                                                          50,
+                                                                  child:
+                                                                      TextField(
+                                                                    controller:
+                                                                        _searchController,
+                                                                    focusNode:
+                                                                        _searchFocusNode,
+                                                                    style: TextStyle(
+                                                                        color: sheetStyle
+                                                                            .inputText,
+                                                                        fontSize:
+                                                                            16),
+                                                                    decoration:
+                                                                        InputDecoration(
+                                                                      hintText:
+                                                                          '검색',
+                                                                      hintStyle: TextStyle(
+                                                                          color: sheetStyle
+                                                                              .hint,
+                                                                          fontSize:
+                                                                              16),
+                                                                      border: InputBorder
+                                                                          .none,
+                                                                      isDense:
+                                                                          true,
+                                                                      contentPadding:
+                                                                          EdgeInsets
+                                                                              .zero,
+                                                                    ),
+                                                                    onChanged:
+                                                                        _onSearchChanged,
+                                                                  ),
+                                                                ),
+                                                              if (_isSearchExpanded &&
+                                                                  _searchQuery
+                                                                      .isNotEmpty)
+                                                                IconButton(
+                                                                  visualDensity:
+                                                                      const VisualDensity(
+                                                                          horizontal:
+                                                                              -4,
+                                                                          vertical:
+                                                                              -4),
+                                                                  padding:
+                                                                      const EdgeInsets
+                                                                          .only(
+                                                                          right:
+                                                                              10),
+                                                                  constraints: const BoxConstraints(
                                                                       minWidth:
                                                                           32,
                                                                       minHeight:
                                                                           32),
-                                                              tooltip: '지우기',
-                                                              icon: const Icon(
-                                                                  Icons.clear,
-                                                                  color: Colors
-                                                                      .white70,
-                                                                  size: 16),
-                                                              onPressed: () {
-                                                                _searchController
-                                                                    .clear();
-                                                                _onSearchChanged(
-                                                                    '');
-                                                                FocusScope.of(
-                                                                        context)
-                                                                    .requestFocus(
-                                                                        _searchFocusNode);
-                                                              },
-                                                            ),
-                                                        ],
-                                                      ),
-                                                    ),
-                                                  ],
-                                                ],
-                                              ),
-                                            ),
-                                            // 우측 영역 제거: 모든 버튼을 왼쪽 정렬
-                                          ],
-                                        );
-                                      }
-                                      // 넓은 화면: 기존 레이아웃 유지
-                                      return Row(
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.start,
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        mainAxisSize: MainAxisSize.max,
-                                        children: [
-                                          if (widget.showRegisterControls) ...[
-                                            SizedBox(
-                                              width: 113,
-                                              height: 44,
-                                              child: Material(
-                                                color: const Color(0xFF1976D2),
-                                                borderRadius:
-                                                    const BorderRadius.only(
-                                                  topLeft: Radius.circular(32),
-                                                  bottomLeft:
-                                                      Radius.circular(32),
-                                                  topRight: Radius.circular(6),
-                                                  bottomRight:
-                                                      Radius.circular(6),
-                                                ),
-                                                child: InkWell(
-                                                  borderRadius:
-                                                      const BorderRadius.only(
-                                                    topLeft:
-                                                        Radius.circular(32),
-                                                    bottomLeft:
-                                                        Radius.circular(32),
-                                                    topRight:
-                                                        Radius.circular(6),
-                                                    bottomRight:
-                                                        Radius.circular(6),
-                                                  ),
-                                                  onTap:
-                                                      widget.onRegisterPressed,
-                                                  child: Row(
-                                                    mainAxisAlignment:
-                                                        MainAxisAlignment
-                                                            .center,
-                                                    mainAxisSize:
-                                                        MainAxisSize.max,
-                                                    children: const [
-                                                      Icon(Icons.add,
-                                                          color: Colors.white,
-                                                          size: 20),
-                                                      SizedBox(width: 8),
-                                                      Text('등록',
-                                                          style: TextStyle(
-                                                              color:
-                                                                  Colors.white,
-                                                              fontSize: 16,
-                                                              fontWeight:
-                                                                  FontWeight
-                                                                      .bold)),
+                                                                  tooltip:
+                                                                      '지우기',
+                                                                  icon: const Icon(
+                                                                      Icons
+                                                                          .clear,
+                                                                      color: Colors
+                                                                          .white70,
+                                                                      size: 16),
+                                                                  onPressed:
+                                                                      () {
+                                                                    _searchController
+                                                                        .clear();
+                                                                    _onSearchChanged(
+                                                                        '');
+                                                                    FocusScope.of(
+                                                                            context)
+                                                                        .requestFocus(
+                                                                            _searchFocusNode);
+                                                                  },
+                                                                ),
+                                                            ],
+                                                          ),
+                                                        ),
+                                                      ],
                                                     ],
                                                   ),
                                                 ),
-                                              ),
-                                            ),
-                                            Container(
-                                              height: 44,
-                                              width: 3.0,
-                                              color: Colors.transparent,
-                                              child: Center(
-                                                child: Container(
-                                                  width: 2,
-                                                  height: 28,
-                                                  color: Colors.white
-                                                      .withOpacity(0.1),
-                                                ),
-                                              ),
-                                            ),
-                                            Padding(
-                                              padding:
-                                                  const EdgeInsets.symmetric(
-                                                      horizontal: 2.5),
-                                              child: GestureDetector(
-                                                key: _dropdownButtonKey,
-                                                onTap: () {
-                                                  if (_dropdownOverlay ==
-                                                      null) {
-                                                    widget
-                                                        .onDropdownOpenChanged(
-                                                            true);
-                                                    _showDropdownMenu();
-                                                  } else {
-                                                    _removeDropdownMenu();
-                                                  }
-                                                },
-                                                child: AnimatedContainer(
-                                                  duration: const Duration(
-                                                      milliseconds: 350),
-                                                  width: 44,
+                                                // 우측 영역 제거: 모든 버튼을 왼쪽 정렬
+                                              ],
+                                            );
+                                          }
+                                          // 넓은 화면: 기존 레이아웃 유지
+                                          return Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.start,
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            mainAxisSize: MainAxisSize.max,
+                                            children: [
+                                              if (widget
+                                                  .showRegisterControls) ...[
+                                                SizedBox(
+                                                  width: 113,
                                                   height: 44,
-                                                  decoration: ShapeDecoration(
-                                                    color:
-                                                        const Color(0xFF1976D2),
-                                                    shape:
-                                                        RoundedRectangleBorder(
-                                                      borderRadius: widget
-                                                              .isDropdownOpen
-                                                          ? BorderRadius
-                                                              .circular(50)
-                                                          : const BorderRadius
-                                                              .only(
-                                                              topLeft: Radius
-                                                                  .circular(6),
-                                                              bottomLeft: Radius
-                                                                  .circular(6),
-                                                              topRight: Radius
-                                                                  .circular(32),
-                                                              bottomRight:
-                                                                  Radius
-                                                                      .circular(
-                                                                          32),
-                                                            ),
+                                                  child: Material(
+                                                    color: kDlgAccent,
+                                                    borderRadius:
+                                                        const BorderRadius.only(
+                                                      topLeft:
+                                                          Radius.circular(32),
+                                                      bottomLeft:
+                                                          Radius.circular(32),
+                                                      topRight:
+                                                          Radius.circular(6),
+                                                      bottomRight:
+                                                          Radius.circular(6),
                                                     ),
-                                                  ),
-                                                  child: Center(
-                                                    child: AnimatedRotation(
-                                                      turns:
-                                                          widget.isDropdownOpen
-                                                              ? 0.5
-                                                              : 0.0,
-                                                      duration: const Duration(
-                                                          milliseconds: 350),
-                                                      curve: Curves.easeInOut,
-                                                      child: const Icon(
-                                                        Icons
-                                                            .keyboard_arrow_down,
-                                                        color: Colors.white,
-                                                        size: 28,
-                                                        key: ValueKey('arrow'),
+                                                    child: InkWell(
+                                                      borderRadius:
+                                                          const BorderRadius
+                                                              .only(
+                                                        topLeft:
+                                                            Radius.circular(32),
+                                                        bottomLeft:
+                                                            Radius.circular(32),
+                                                        topRight:
+                                                            Radius.circular(6),
+                                                        bottomRight:
+                                                            Radius.circular(6),
+                                                      ),
+                                                      onTap: widget
+                                                          .onRegisterPressed,
+                                                      child: Row(
+                                                        mainAxisAlignment:
+                                                            MainAxisAlignment
+                                                                .center,
+                                                        mainAxisSize:
+                                                            MainAxisSize.max,
+                                                        children: const [
+                                                          Icon(Icons.add,
+                                                              color:
+                                                                  Colors.white,
+                                                              size: 20),
+                                                          SizedBox(width: 8),
+                                                          Text('등록',
+                                                              style: TextStyle(
+                                                                  color: Colors
+                                                                      .white,
+                                                                  fontSize: 16,
+                                                                  fontWeight:
+                                                                      FontWeight
+                                                                          .bold)),
+                                                        ],
                                                       ),
                                                     ),
                                                   ),
                                                 ),
-                                              ),
-                                            ),
-                                            const SizedBox(width: 6),
-                                          ],
-                                          if (widget.showRegisterControls) ...[
-                                            const SizedBox(width: 8),
-                                            AnimatedContainer(
-                                              duration: const Duration(
-                                                  milliseconds: 250),
-                                              height: 44,
-                                              width:
-                                                  _isSearchExpanded ? 160 : 44,
-                                              decoration: BoxDecoration(
-                                                color: const Color(0xFF2A2A2A),
-                                                borderRadius:
-                                                    BorderRadius.circular(22),
-                                                border: Border.all(
-                                                    color: Colors.white
-                                                        .withOpacity(0.2)),
-                                              ),
-                                              child: Row(
-                                                mainAxisAlignment:
-                                                    _isSearchExpanded
-                                                        ? MainAxisAlignment
-                                                            .start
-                                                        : MainAxisAlignment
-                                                            .center,
-                                                crossAxisAlignment:
-                                                    CrossAxisAlignment.center,
-                                                children: [
-                                                  IconButton(
-                                                    visualDensity:
-                                                        const VisualDensity(
-                                                            horizontal: -4,
-                                                            vertical: -4),
-                                                    padding: _isSearchExpanded
-                                                        ? const EdgeInsets.only(
-                                                            left: 8)
-                                                        : EdgeInsets.zero,
-                                                    constraints:
-                                                        const BoxConstraints(
-                                                            minWidth: 32,
-                                                            minHeight: 32),
-                                                    icon: const Icon(
-                                                        Icons.search,
-                                                        color: Colors.white70,
-                                                        size: 20),
-                                                    onPressed: () {
-                                                      setState(() {
-                                                        _isSearchExpanded =
-                                                            !_isSearchExpanded;
-                                                      });
-                                                      if (_isSearchExpanded) {
-                                                        Future.delayed(
-                                                            const Duration(
-                                                                milliseconds:
-                                                                    50), () {
-                                                          _searchFocusNode
-                                                              .requestFocus();
-                                                        });
+                                                Container(
+                                                  height: 44,
+                                                  width: 3.0,
+                                                  color: Colors.transparent,
+                                                  child: Center(
+                                                    child: Container(
+                                                      width: 2,
+                                                      height: 28,
+                                                      color: Colors.white
+                                                          .withOpacity(0.1),
+                                                    ),
+                                                  ),
+                                                ),
+                                                Padding(
+                                                  padding: const EdgeInsets
+                                                      .symmetric(
+                                                      horizontal: 2.5),
+                                                  child: GestureDetector(
+                                                    key: _dropdownButtonKey,
+                                                    onTap: () {
+                                                      if (_dropdownOverlay ==
+                                                          null) {
+                                                        widget
+                                                            .onDropdownOpenChanged(
+                                                                true);
+                                                        _showDropdownMenu();
                                                       } else {
-                                                        _searchController
-                                                            .clear();
-                                                        _onSearchChanged('');
-                                                        FocusScope.of(context)
-                                                            .unfocus();
+                                                        _removeDropdownMenu();
                                                       }
                                                     },
-                                                  ),
-                                                  if (_isSearchExpanded)
-                                                    const SizedBox(width: 10),
-                                                  if (_isSearchExpanded)
-                                                    Expanded(
-                                                      child: TextField(
-                                                        controller:
-                                                            _searchController,
-                                                        focusNode:
-                                                            _searchFocusNode,
-                                                        style: const TextStyle(
-                                                            color: Colors.white,
-                                                            fontSize: 16.5),
-                                                        decoration:
-                                                            const InputDecoration(
-                                                          hintText: '검색',
-                                                          hintStyle: TextStyle(
-                                                              color: Colors
-                                                                  .white54,
-                                                              fontSize: 16.5),
-                                                          border:
-                                                              InputBorder.none,
-                                                          isDense: true,
-                                                          contentPadding:
-                                                              EdgeInsets.zero,
+                                                    child: AnimatedContainer(
+                                                      duration: const Duration(
+                                                          milliseconds: 350),
+                                                      width: 44,
+                                                      height: 44,
+                                                      decoration:
+                                                          ShapeDecoration(
+                                                        color: kDlgAccent,
+                                                        shape:
+                                                            RoundedRectangleBorder(
+                                                          borderRadius: widget
+                                                                  .isDropdownOpen
+                                                              ? BorderRadius
+                                                                  .circular(50)
+                                                              : const BorderRadius
+                                                                  .only(
+                                                                  topLeft: Radius
+                                                                      .circular(
+                                                                          6),
+                                                                  bottomLeft: Radius
+                                                                      .circular(
+                                                                          6),
+                                                                  topRight: Radius
+                                                                      .circular(
+                                                                          32),
+                                                                  bottomRight: Radius
+                                                                      .circular(
+                                                                          32),
+                                                                ),
                                                         ),
-                                                        onChanged:
-                                                            _onSearchChanged,
+                                                      ),
+                                                      child: Center(
+                                                        child: AnimatedRotation(
+                                                          turns: widget
+                                                                  .isDropdownOpen
+                                                              ? 0.5
+                                                              : 0.0,
+                                                          duration:
+                                                              const Duration(
+                                                                  milliseconds:
+                                                                      350),
+                                                          curve:
+                                                              Curves.easeInOut,
+                                                          child: const Icon(
+                                                            Icons
+                                                                .keyboard_arrow_down,
+                                                            color: Colors.white,
+                                                            size: 28,
+                                                            key: ValueKey(
+                                                                'arrow'),
+                                                          ),
+                                                        ),
                                                       ),
                                                     ),
-                                                  if (_isSearchExpanded &&
-                                                      _searchQuery.isNotEmpty)
-                                                    IconButton(
-                                                      visualDensity:
-                                                          const VisualDensity(
-                                                              horizontal: -4,
-                                                              vertical: -4),
-                                                      padding:
-                                                          const EdgeInsets.only(
-                                                              right: 10),
-                                                      constraints:
-                                                          const BoxConstraints(
-                                                              minWidth: 32,
-                                                              minHeight: 32),
-                                                      tooltip: '지우기',
-                                                      icon: const Icon(
-                                                          Icons.clear,
-                                                          color: Colors.white70,
-                                                          size: 16),
-                                                      onPressed: () {
-                                                        _searchController
-                                                            .clear();
-                                                        _onSearchChanged('');
-                                                        FocusScope.of(context)
-                                                            .requestFocus(
-                                                                _searchFocusNode);
-                                                      },
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 6),
+                                              ],
+                                              if (widget
+                                                  .showRegisterControls) ...[
+                                                const SizedBox(width: 8),
+                                                AnimatedContainer(
+                                                  duration: const Duration(
+                                                      milliseconds: 250),
+                                                  height: 44,
+                                                  width: _isSearchExpanded
+                                                      ? 160
+                                                      : 44,
+                                                  decoration: BoxDecoration(
+                                                    color: sheetStyle
+                                                        .dropdownBackground,
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            22),
+                                                    border: Border.all(
+                                                      color: sheetStyle.divider,
                                                     ),
-                                                ],
-                                              ),
-                                            ),
-                                          ],
-                                        ],
-                                      );
-                                    })),
-                                // 삭제 드롭존
-                                if (_showDeleteZone)
-                                  Padding(
-                                    padding: const EdgeInsets.only(top: 16.0),
-                                    child: DragTarget<Map<String, dynamic>>(
-                                      onWillAccept: (data) {
-                                        if (data == null) return false;
-                                        if (data['type'] != 'move')
-                                          return false;
-                                        if (data['students'] is! List)
-                                          return false;
-                                        if (!data.containsKey('oldDayIndex') ||
-                                            !data.containsKey('oldStartTime')) {
-                                          return false;
-                                        }
-                                        return true;
-                                      },
-                                      onAccept: (data) async {
-                                        if (data['type'] != 'move') return;
-                                        final students =
-                                            (data['students'] as List)
+                                                  ),
+                                                  child: Row(
+                                                    mainAxisAlignment:
+                                                        _isSearchExpanded
+                                                            ? MainAxisAlignment
+                                                                .start
+                                                            : MainAxisAlignment
+                                                                .center,
+                                                    crossAxisAlignment:
+                                                        CrossAxisAlignment
+                                                            .center,
+                                                    children: [
+                                                      IconButton(
+                                                        visualDensity:
+                                                            const VisualDensity(
+                                                                horizontal: -4,
+                                                                vertical: -4),
+                                                        padding: _isSearchExpanded
+                                                            ? const EdgeInsets
+                                                                .only(left: 8)
+                                                            : EdgeInsets.zero,
+                                                        constraints:
+                                                            const BoxConstraints(
+                                                                minWidth: 32,
+                                                                minHeight: 32),
+                                                        icon: Icon(Icons.search,
+                                                            color:
+                                                                sheetStyle.icon,
+                                                            size: 20),
+                                                        onPressed: () {
+                                                          setState(() {
+                                                            _isSearchExpanded =
+                                                                !_isSearchExpanded;
+                                                          });
+                                                          if (_isSearchExpanded) {
+                                                            Future.delayed(
+                                                                const Duration(
+                                                                    milliseconds:
+                                                                        50),
+                                                                () {
+                                                              _searchFocusNode
+                                                                  .requestFocus();
+                                                            });
+                                                          } else {
+                                                            _searchController
+                                                                .clear();
+                                                            _onSearchChanged(
+                                                                '');
+                                                            FocusScope.of(
+                                                                    context)
+                                                                .unfocus();
+                                                          }
+                                                        },
+                                                      ),
+                                                      if (_isSearchExpanded)
+                                                        const SizedBox(
+                                                            width: 10),
+                                                      if (_isSearchExpanded)
+                                                        Expanded(
+                                                          child: TextField(
+                                                            controller:
+                                                                _searchController,
+                                                            focusNode:
+                                                                _searchFocusNode,
+                                                            style: TextStyle(
+                                                                color: sheetStyle
+                                                                    .inputText,
+                                                                fontSize: 16),
+                                                            decoration:
+                                                                InputDecoration(
+                                                              hintText: '검색',
+                                                              hintStyle: TextStyle(
+                                                                  color:
+                                                                      sheetStyle
+                                                                          .hint,
+                                                                  fontSize: 16),
+                                                              border:
+                                                                  InputBorder
+                                                                      .none,
+                                                              isDense: true,
+                                                              contentPadding:
+                                                                  EdgeInsets
+                                                                      .zero,
+                                                            ),
+                                                            onChanged:
+                                                                _onSearchChanged,
+                                                          ),
+                                                        ),
+                                                      if (_isSearchExpanded &&
+                                                          _searchQuery
+                                                              .isNotEmpty)
+                                                        IconButton(
+                                                          visualDensity:
+                                                              const VisualDensity(
+                                                                  horizontal:
+                                                                      -4,
+                                                                  vertical: -4),
+                                                          padding:
+                                                              const EdgeInsets
+                                                                  .only(
+                                                                  right: 10),
+                                                          constraints:
+                                                              const BoxConstraints(
+                                                                  minWidth: 32,
+                                                                  minHeight:
+                                                                      32),
+                                                          tooltip: '지우기',
+                                                          icon: const Icon(
+                                                              Icons.clear,
+                                                              color: Colors
+                                                                  .white70,
+                                                              size: 16),
+                                                          onPressed: () {
+                                                            _searchController
+                                                                .clear();
+                                                            _onSearchChanged(
+                                                                '');
+                                                            FocusScope.of(
+                                                                    context)
+                                                                .requestFocus(
+                                                                    _searchFocusNode);
+                                                          },
+                                                        ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              ],
+                                            ],
+                                          );
+                                        })),
+                                    // 삭제 드롭존
+                                    if (_showDeleteZone)
+                                      Padding(
+                                        padding:
+                                            const EdgeInsets.only(top: 16.0),
+                                        child: DragTarget<Map<String, dynamic>>(
+                                          onWillAccept: (data) {
+                                            if (data == null) return false;
+                                            if (data['type'] != 'move')
+                                              return false;
+                                            if (data['students'] is! List)
+                                              return false;
+                                            if (!data.containsKey(
+                                                    'oldDayIndex') ||
+                                                !data.containsKey(
+                                                    'oldStartTime')) {
+                                              return false;
+                                            }
+                                            return true;
+                                          },
+                                          onAccept: (data) async {
+                                            if (data['type'] != 'move') return;
+                                            final students = (data['students']
+                                                    as List)
                                                 .map((e) => e is StudentWithInfo
                                                     ? e
                                                     : e['student']
                                                         as StudentWithInfo)
                                                 .toList();
-                                        final oldDayIndex =
-                                            data['oldDayIndex'] as int?;
-                                        final oldStartTime =
-                                            data['oldStartTime'] as DateTime?;
-                                        // print('[삭제드롭존] onAccept 호출: students=${students.map((s) => s.student.id).toList()}, oldDayIndex=$oldDayIndex, oldStartTime=$oldStartTime');
-                                        List<Future> futures = [];
+                                            final oldDayIndex =
+                                                data['oldDayIndex'] as int?;
+                                            final oldStartTime =
+                                                data['oldStartTime']
+                                                    as DateTime?;
+                                            // print('[삭제드롭존] onAccept 호출: students=${students.map((s) => s.student.id).toList()}, oldDayIndex=$oldDayIndex, oldStartTime=$oldStartTime');
+                                            List<Future> futures = [];
 
-                                        // 기존 수업 블록 삭제 로직
-                                        for (final student in students) {
-                                          // 1. 해당 학생+요일+시간 블록 1개 찾기 (setId 추출용)
-                                          final targetBlock = DataManager
-                                              .instance.studentTimeBlocks
-                                              .firstWhere(
-                                            (b) =>
-                                                b.studentId ==
-                                                    student.student.id &&
-                                                b.dayIndex == oldDayIndex &&
-                                                b.startHour ==
-                                                    oldStartTime?.hour &&
-                                                b.startMinute ==
-                                                    oldStartTime?.minute,
-                                            orElse: () => StudentTimeBlock(
-                                              id: '',
-                                              studentId: '',
-                                              dayIndex: -1,
-                                              startHour: 0,
-                                              startMinute: 0,
-                                              duration: Duration.zero,
-                                              createdAt: DateTime(0),
-                                              startDate: DateTime(0),
-                                              setId: null,
-                                              number: null,
-                                            ),
-                                          );
-                                          if (targetBlock != null &&
-                                              targetBlock.setId != null) {
-                                            // setId+studentId로 모든 블록 삭제 (일괄 삭제)
-                                            final allBlocks = DataManager
-                                                .instance.studentTimeBlocks;
-                                            final toDelete = allBlocks
-                                                .where((b) =>
-                                                    b.setId ==
-                                                        targetBlock.setId &&
+                                            // 기존 수업 블록 삭제 로직
+                                            for (final student in students) {
+                                              // 1. 해당 학생+요일+시간 블록 1개 찾기 (setId 추출용)
+                                              final targetBlock = DataManager
+                                                  .instance.studentTimeBlocks
+                                                  .firstWhere(
+                                                (b) =>
                                                     b.studentId ==
-                                                        student.student.id)
-                                                .toList();
-                                            for (final b in toDelete) {
-                                              futures.add(DataManager.instance
-                                                  .removeStudentTimeBlock(
-                                                      b.id));
+                                                        student.student.id &&
+                                                    b.dayIndex == oldDayIndex &&
+                                                    b.startHour ==
+                                                        oldStartTime?.hour &&
+                                                    b.startMinute ==
+                                                        oldStartTime?.minute,
+                                                orElse: () => StudentTimeBlock(
+                                                  id: '',
+                                                  studentId: '',
+                                                  dayIndex: -1,
+                                                  startHour: 0,
+                                                  startMinute: 0,
+                                                  duration: Duration.zero,
+                                                  createdAt: DateTime(0),
+                                                  startDate: DateTime(0),
+                                                  setId: null,
+                                                  number: null,
+                                                ),
+                                              );
+                                              if (targetBlock != null &&
+                                                  targetBlock.setId != null) {
+                                                // setId+studentId로 모든 블록 삭제 (일괄 삭제)
+                                                final allBlocks = DataManager
+                                                    .instance.studentTimeBlocks;
+                                                final toDelete = allBlocks
+                                                    .where((b) =>
+                                                        b.setId ==
+                                                            targetBlock.setId &&
+                                                        b.studentId ==
+                                                            student.student.id)
+                                                    .toList();
+                                                for (final b in toDelete) {
+                                                  futures.add(DataManager
+                                                      .instance
+                                                      .removeStudentTimeBlock(
+                                                          b.id));
+                                                }
+                                              }
+                                              // setId가 없는 경우 단일 블록 삭제
+                                              final blocks = DataManager
+                                                  .instance.studentTimeBlocks
+                                                  .where((b) =>
+                                                      b.studentId ==
+                                                          student.student.id &&
+                                                      b.dayIndex ==
+                                                          oldDayIndex &&
+                                                      b.startHour ==
+                                                          oldStartTime?.hour &&
+                                                      b.startMinute ==
+                                                          oldStartTime?.minute)
+                                                  .toList();
+                                              for (final block in blocks) {
+                                                futures.add(DataManager.instance
+                                                    .removeStudentTimeBlock(
+                                                        block.id));
+                                              }
                                             }
-                                          }
-                                          // setId가 없는 경우 단일 블록 삭제
-                                          final blocks = DataManager
-                                              .instance.studentTimeBlocks
-                                              .where((b) =>
-                                                  b.studentId ==
-                                                      student.student.id &&
-                                                  b.dayIndex == oldDayIndex &&
-                                                  b.startHour ==
-                                                      oldStartTime?.hour &&
-                                                  b.startMinute ==
-                                                      oldStartTime?.minute)
-                                              .toList();
-                                          for (final block in blocks) {
-                                            futures.add(DataManager.instance
-                                                .removeStudentTimeBlock(
-                                                    block.id));
-                                          }
-                                        }
 
-                                        try {
-                                          await Future.wait(futures);
-                                        } on ScheduleLockedByMakeupException catch (e) {
-                                          if (mounted) {
-                                            setState(() {
-                                              _showDeleteZone = false;
-                                            });
-                                            await showScheduleLockedByMakeupDialog(
-                                              context,
-                                              e,
-                                              useRoot: true,
-                                            );
-                                          }
-                                          if (widget.onExitSelectMode != null) {
-                                            widget.onExitSelectMode!();
-                                          }
-                                          return;
-                                        } catch (e) {
-                                          if (mounted) {
-                                            setState(() {
-                                              _showDeleteZone = false;
-                                            });
-                                            showAppSnackBar(
-                                                context, '삭제 실패: $e',
-                                                useRoot: true);
-                                          }
-                                          if (widget.onExitSelectMode != null) {
-                                            widget.onExitSelectMode!();
-                                          }
-                                          return;
-                                        }
-                                        await DataManager.instance
-                                            .loadStudents();
-                                        await DataManager.instance
-                                            .loadStudentTimeBlocks();
-                                        setState(() {
-                                          _showDeleteZone = false;
-                                        });
-                                        // 스낵바 즉시 표시 (지연 제거)
-                                        if (mounted) {
-                                          showAppSnackBar(context,
-                                              '${students.length}명 학생의 수업시간이 삭제되었습니다.',
-                                              useRoot: true);
-                                        }
-                                        // 삭제 후 선택모드 종료 콜백 직접 호출
-                                        if (widget.onExitSelectMode != null) {
-                                          widget.onExitSelectMode!();
-                                        }
-                                      },
-                                      builder: (context, candidateData,
-                                          rejectedData) {
-                                        final isHover =
-                                            candidateData.isNotEmpty;
-                                        return AnimatedContainer(
-                                          duration:
-                                              const Duration(milliseconds: 150),
-                                          width: double.infinity,
-                                          height: 72,
-                                          decoration: BoxDecoration(
-                                            color: Colors.grey[900],
-                                            border: Border.all(
-                                              color: isHover
-                                                  ? Colors.red
-                                                  : Colors.grey[700]!,
-                                              width: isHover ? 3 : 2,
-                                            ),
-                                            borderRadius:
-                                                BorderRadius.circular(12),
-                                          ),
-                                          child: Center(
-                                            child: Icon(
-                                              Icons.delete_outline,
-                                              color: isHover
-                                                  ? Colors.red
-                                                  : Colors.white70,
-                                              size: 36,
-                                            ),
-                                          ),
-                                        );
-                                      },
-                                    ),
-                                  ),
-                              ],
-                            ),
-                          ),
-                          // 수업 영역
-                          Expanded(
-                            flex: 1,
-                            child: Stack(
-                              children: [
-                                // 수업 리스트 (기존 내용)
-                                Padding(
-                                  padding: const EdgeInsets.only(
-                                      left: classSheetInnerLeftInset),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Row(
-                                        children: [
-                                          Padding(
-                                            padding: const EdgeInsets.only(
-                                                top: 12, right: 8),
-                                            child: Row(
-                                              children: [
-                                                if (MediaQuery.of(context)
-                                                        .size
-                                                        .width >
-                                                    1600) ...[
-                                                  const SizedBox(width: 6),
-                                                  const Text(
-                                                    '수업',
-                                                    style: TextStyle(
-                                                      color: Color(0xFFEAF2F2),
-                                                      fontSize: 25,
-                                                      fontWeight:
-                                                          FontWeight.w600,
-                                                    ),
-                                                  ),
-                                                ],
-                                              ],
-                                            ),
-                                          ),
-                                          const Spacer(),
-                                          // ✅ 수업 추가 버튼: 타이틀 줄 오른쪽 정렬 + 기존 수업 등록 다이얼로그 연결
-                                          Padding(
-                                            padding: const EdgeInsets.only(
-                                                top: 8, right: 4),
-                                            child: SizedBox(
-                                              width: 48,
-                                              height: 48,
-                                              child: IconButton(
-                                                tooltip: '수업 추가',
-                                                onPressed: () =>
-                                                    _showClassRegistrationDialog(),
-                                                icon: const Icon(
-                                                    Icons.add_rounded),
-                                                iconSize: 30,
-                                                color: const Color(0xFFEAF2F2),
-                                                padding: EdgeInsets.zero,
-                                                splashRadius: 26,
-                                              ),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                      const SizedBox(height: 8),
-                                      Expanded(
-                                        child: ValueListenableBuilder<int>(
-                                          valueListenable: DataManager.instance
-                                              .studentTimeBlocksRevision,
-                                          builder: (context, __, ___) {
-                                            final int unassignedCount =
-                                                _unfilteredDefaultClassCount();
-                                            final filteredClassIds =
-                                                widget.filteredClassIds ??
-                                                    const <String>{};
-
-                                            return ValueListenableBuilder<
-                                                List<ClassInfo>>(
-                                              valueListenable: DataManager
-                                                  .instance.classesNotifier,
-                                              builder:
-                                                  (context, classes, ____) {
-                                                if (classes.isEmpty &&
-                                                    unassignedCount == 0) {
-                                                  return const Center(
-                                                    child: Text('등록된 수업이 없습니다.',
-                                                        style: TextStyle(
-                                                            color:
-                                                                Colors.white38,
-                                                            fontSize: 16)),
-                                                  );
-                                                }
-
-                                                // 정원(수업 카드) 카운트는 "보고 있는 날짜(refDate)" 기준으로 계산한다.
-                                                // 주의: selectedCellStartTime의 날짜는 _selectedDate 기반으로 만들어져
-                                                // 실제 셀(요일 컬럼)의 날짜와 다를 수 있으므로, selectedCellDayIndex를 이용해
-                                                // 주의 월요일 + dayIndex로 실제 날짜를 계산한다.
-                                                DateTime?
-                                                    _selectedCellDateOnly() {
-                                                  final idx = widget
-                                                      .selectedCellDayIndex;
-                                                  if (idx == null) return null;
-                                                  final monday =
-                                                      widget.viewDate.subtract(
-                                                    Duration(
-                                                        days: widget.viewDate
-                                                                .weekday -
-                                                            DateTime.monday),
-                                                  );
-                                                  return DateTime(
-                                                          monday.year,
-                                                          monday.month,
-                                                          monday.day)
-                                                      .add(Duration(days: idx));
-                                                }
-
-                                                final DateTime _baseRef = widget
-                                                        .selectedDayDate ??
-                                                    _selectedCellDateOnly() ??
-                                                    widget.viewDate;
-                                                final DateTime _classCountRef =
-                                                    DateTime(
-                                                        _baseRef.year,
-                                                        _baseRef.month,
-                                                        _baseRef.day);
-
-                                                return Column(
-                                                  children: [
-                                                    if (unassignedCount >
-                                                        0) ...[
-                                                      _ClassCard(
-                                                        key: const ValueKey(
-                                                            '__default_class__'),
-                                                        classInfo: ClassInfo(
-                                                          id: '__default_class__',
-                                                          name: '수업',
-                                                          description: '기본 수업',
-                                                          capacity: null,
-                                                          color: const Color(
-                                                              0xFF223131),
-                                                        ),
-                                                        onEdit: () {},
-                                                        onDelete: () {},
-                                                        reorderIndex: -1,
-                                                        registrationModeType: widget
-                                                            .registrationModeType,
-                                                        studentCountOverride:
-                                                            unassignedCount,
-                                                        refDate: _classCountRef,
-                                                        enableActions: false,
-                                                        showDragHandle: false,
-                                                        onFilterToggle: widget
-                                                                    .onToggleClassFilter !=
-                                                                null
-                                                            ? () =>
-                                                                widget.onToggleClassFilter!(
-                                                                    ClassInfo(
-                                                                  id: '__default_class__',
-                                                                  name: '수업',
-                                                                  description:
-                                                                      '기본 수업',
-                                                                  capacity:
-                                                                      null,
-                                                                  color: const Color(
-                                                                      0xFF223131),
-                                                                ))
-                                                            : null,
-                                                        isFiltered: filteredClassIds
-                                                            .contains(
-                                                                '__default_class__'),
-                                                      ),
-                                                      const SizedBox(
-                                                          height: 12),
-                                                    ],
-                                                    Expanded(
-                                                      child: classes.isEmpty
-                                                          ? SizedBox.shrink()
-                                                          : ReorderableListView
-                                                              .builder(
-                                                              padding:
-                                                                  EdgeInsets
-                                                                      .zero,
-                                                              itemCount: classes
-                                                                  .length,
-                                                              buildDefaultDragHandles:
-                                                                  false,
-                                                              dragStartBehavior:
-                                                                  DragStartBehavior
-                                                                      .down,
-                                                              onReorder:
-                                                                  _onReorder,
-                                                              proxyDecorator:
-                                                                  (child, index,
-                                                                      animation) {
-                                                                // ✅ 드래그 피드백: 그룹리스트와 동일하게 "마우스에 붙는 느낌"
-                                                                // - 살짝 확대 + 떠오르는 그림자
-                                                                return AnimatedBuilder(
-                                                                  animation:
-                                                                      animation,
-                                                                  builder:
-                                                                      (context,
-                                                                          _) {
-                                                                    final t = Curves
-                                                                        .easeOutCubic
-                                                                        .transform(
-                                                                            animation.value);
-                                                                    final scale = 1.0 +
-                                                                        (0.03 *
-                                                                            t);
-                                                                    final elev =
-                                                                        2.0 +
-                                                                            (8.0 *
-                                                                                t);
-                                                                    return Transform
-                                                                        .scale(
-                                                                      scale:
-                                                                          scale,
-                                                                      alignment:
-                                                                          Alignment
-                                                                              .centerLeft,
-                                                                      child:
-                                                                          Material(
-                                                                        color: Colors
-                                                                            .transparent,
-                                                                        elevation:
-                                                                            elev,
-                                                                        shadowColor: Colors
-                                                                            .black
-                                                                            .withOpacity(0.45),
-                                                                        child:
-                                                                            child,
-                                                                      ),
-                                                                    );
-                                                                  },
-                                                                );
-                                                              },
-                                                              itemBuilder:
-                                                                  (context,
-                                                                      idx) {
-                                                                final c =
-                                                                    classes[
-                                                                        idx];
-                                                                final bool
-                                                                    isFiltered =
-                                                                    filteredClassIds
-                                                                        .contains(
-                                                                            c.id);
-                                                                final card =
-                                                                    _ClassCard(
-                                                                  classInfo: c,
-                                                                  onEdit: () =>
-                                                                      _showClassRegistrationDialog(
-                                                                    editTarget:
-                                                                        c,
-                                                                    editIndex:
-                                                                        idx,
-                                                                  ),
-                                                                  onDelete: () =>
-                                                                      _deleteClass(
-                                                                          idx),
-                                                                  reorderIndex:
-                                                                      idx,
-                                                                  registrationModeType:
-                                                                      widget
-                                                                          .registrationModeType,
-                                                                  studentCountOverride:
-                                                                      null,
-                                                                  refDate:
-                                                                      _classCountRef,
-                                                                  onFilterToggle: widget
-                                                                              .onToggleClassFilter !=
-                                                                          null
-                                                                      ? () => widget
-                                                                          .onToggleClassFilter!(c)
-                                                                      : null,
-                                                                  isFiltered:
-                                                                      isFiltered,
-                                                                  showDragHandle:
-                                                                      false,
-                                                                );
-                                                                return Padding(
-                                                                  key: ValueKey(
-                                                                      c.id),
-                                                                  padding: const EdgeInsets
-                                                                      .only(
-                                                                      bottom:
-                                                                          12.0),
-                                                                  // ✅ 기본: 오래 눌러 수업 순서 이동(reorder)
-                                                                  // ✅ 단, 수업이 "선택(필터)"된 상태에서는 드래그=수업단위 이동(class-move)로 분기
-                                                                  child: isFiltered
-                                                                      ? card
-                                                                      : ReorderableDelayedDragStartListener(
-                                                                          index:
-                                                                              idx,
-                                                                          child:
-                                                                              card,
-                                                                        ),
-                                                                );
-                                                              },
-                                                            ),
-                                                    ),
-                                                  ],
+                                            try {
+                                              await Future.wait(futures);
+                                            } on ScheduleLockedByMakeupException catch (e) {
+                                              if (mounted) {
+                                                setState(() {
+                                                  _showDeleteZone = false;
+                                                });
+                                                await showScheduleLockedByMakeupDialog(
+                                                  context,
+                                                  e,
+                                                  useRoot: true,
                                                 );
-                                              },
+                                              }
+                                              if (widget.onExitSelectMode !=
+                                                  null) {
+                                                widget.onExitSelectMode!();
+                                              }
+                                              return;
+                                            } catch (e) {
+                                              if (mounted) {
+                                                setState(() {
+                                                  _showDeleteZone = false;
+                                                });
+                                                showAppSnackBar(
+                                                    context, '삭제 실패: $e',
+                                                    useRoot: true);
+                                              }
+                                              if (widget.onExitSelectMode !=
+                                                  null) {
+                                                widget.onExitSelectMode!();
+                                              }
+                                              return;
+                                            }
+                                            await DataManager.instance
+                                                .loadStudents();
+                                            await DataManager.instance
+                                                .loadStudentTimeBlocks();
+                                            setState(() {
+                                              _showDeleteZone = false;
+                                            });
+                                            // 스낵바 즉시 표시 (지연 제거)
+                                            if (mounted) {
+                                              showAppSnackBar(context,
+                                                  '${students.length}명 학생의 수업시간이 삭제되었습니다.',
+                                                  useRoot: true);
+                                            }
+                                            // 삭제 후 선택모드 종료 콜백 직접 호출
+                                            if (widget.onExitSelectMode !=
+                                                null) {
+                                              widget.onExitSelectMode!();
+                                            }
+                                          },
+                                          builder: (context, candidateData,
+                                              rejectedData) {
+                                            final isHover =
+                                                candidateData.isNotEmpty;
+                                            return AnimatedContainer(
+                                              duration: const Duration(
+                                                  milliseconds: 150),
+                                              width: double.infinity,
+                                              height: 72,
+                                              decoration: BoxDecoration(
+                                                color: Colors.grey[900],
+                                                border: Border.all(
+                                                  color: isHover
+                                                      ? Colors.red
+                                                      : Colors.grey[700]!,
+                                                  width: isHover ? 3 : 2,
+                                                ),
+                                                borderRadius:
+                                                    BorderRadius.circular(12),
+                                              ),
+                                              child: Center(
+                                                child: Icon(
+                                                  Icons.delete_outline,
+                                                  color: isHover
+                                                      ? Colors.red
+                                                      : Colors.white70,
+                                                  size: 36,
+                                                ),
+                                              ),
                                             );
                                           },
                                         ),
                                       ),
-                                    ],
-                                  ),
+                                  ],
                                 ),
-                              ],
-                            ),
+                              ),
+                              // 수업 영역
+                              Expanded(
+                                flex: 1,
+                                child: Stack(
+                                  children: [
+                                    // 수업 리스트 (기존 내용)
+                                    Padding(
+                                      padding: const EdgeInsets.only(
+                                          left: classSheetInnerLeftInset),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Row(
+                                            children: [
+                                              Padding(
+                                                padding: const EdgeInsets.only(
+                                                    top: 12, right: 8),
+                                                child: Row(
+                                                  children: [
+                                                    if (MediaQuery.of(context)
+                                                            .size
+                                                            .width >
+                                                        1600) ...[
+                                                      const SizedBox(width: 6),
+                                                      const Text(
+                                                        '수업',
+                                                        style: TextStyle(
+                                                          color:
+                                                              Color(0xFFEAF2F2),
+                                                          fontSize: 25,
+                                                          fontWeight:
+                                                              FontWeight.w600,
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ],
+                                                ),
+                                              ),
+                                              const Spacer(),
+                                              // ✅ 수업 추가 버튼: 타이틀 줄 오른쪽 정렬 + 기존 수업 등록 다이얼로그 연결
+                                              Padding(
+                                                padding: const EdgeInsets.only(
+                                                    top: 8, right: 4),
+                                                child: SizedBox(
+                                                  width: 48,
+                                                  height: 48,
+                                                  child: IconButton(
+                                                    tooltip: '수업 추가',
+                                                    onPressed: () =>
+                                                        _showClassRegistrationDialog(),
+                                                    icon: const Icon(
+                                                        Icons.add_rounded),
+                                                    iconSize: 30,
+                                                    color:
+                                                        const Color(0xFFEAF2F2),
+                                                    padding: EdgeInsets.zero,
+                                                    splashRadius: 26,
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 8),
+                                          Expanded(
+                                            child: ValueListenableBuilder<int>(
+                                              valueListenable: DataManager
+                                                  .instance
+                                                  .studentTimeBlocksRevision,
+                                              builder: (context, __, ___) {
+                                                final int unassignedCount =
+                                                    _unfilteredDefaultClassCount();
+                                                final filteredClassIds =
+                                                    widget.filteredClassIds ??
+                                                        const <String>{};
+
+                                                return ValueListenableBuilder<
+                                                    List<ClassInfo>>(
+                                                  valueListenable: DataManager
+                                                      .instance.classesNotifier,
+                                                  builder:
+                                                      (context, classes, ____) {
+                                                    if (classes.isEmpty &&
+                                                        unassignedCount == 0) {
+                                                      return const Center(
+                                                        child: Text(
+                                                            '등록된 수업이 없습니다.',
+                                                            style: TextStyle(
+                                                                color: Colors
+                                                                    .white38,
+                                                                fontSize: 16)),
+                                                      );
+                                                    }
+
+                                                    // 정원(수업 카드) 카운트는 "보고 있는 날짜(refDate)" 기준으로 계산한다.
+                                                    // 주의: selectedCellStartTime의 날짜는 _selectedDate 기반으로 만들어져
+                                                    // 실제 셀(요일 컬럼)의 날짜와 다를 수 있으므로, selectedCellDayIndex를 이용해
+                                                    // 주의 월요일 + dayIndex로 실제 날짜를 계산한다.
+                                                    DateTime?
+                                                        _selectedCellDateOnly() {
+                                                      final idx = widget
+                                                          .selectedCellDayIndex;
+                                                      if (idx == null)
+                                                        return null;
+                                                      final monday = widget
+                                                          .viewDate
+                                                          .subtract(
+                                                        Duration(
+                                                            days: widget
+                                                                    .viewDate
+                                                                    .weekday -
+                                                                DateTime
+                                                                    .monday),
+                                                      );
+                                                      return DateTime(
+                                                              monday.year,
+                                                              monday.month,
+                                                              monday.day)
+                                                          .add(Duration(
+                                                              days: idx));
+                                                    }
+
+                                                    final DateTime _baseRef = widget
+                                                            .selectedDayDate ??
+                                                        _selectedCellDateOnly() ??
+                                                        widget.viewDate;
+                                                    final DateTime
+                                                        _classCountRef =
+                                                        DateTime(
+                                                            _baseRef.year,
+                                                            _baseRef.month,
+                                                            _baseRef.day);
+
+                                                    return Column(
+                                                      children: [
+                                                        if (unassignedCount >
+                                                            0) ...[
+                                                          _ClassCard(
+                                                            key: const ValueKey(
+                                                                '__default_class__'),
+                                                            classInfo:
+                                                                ClassInfo(
+                                                              id: '__default_class__',
+                                                              name: '수업',
+                                                              description:
+                                                                  '기본 수업',
+                                                              capacity: null,
+                                                              color: const Color(
+                                                                  0xFF223131),
+                                                            ),
+                                                            onEdit: () {},
+                                                            onDelete: () {},
+                                                            reorderIndex: -1,
+                                                            registrationModeType:
+                                                                widget
+                                                                    .registrationModeType,
+                                                            studentCountOverride:
+                                                                unassignedCount,
+                                                            refDate:
+                                                                _classCountRef,
+                                                            enableActions:
+                                                                false,
+                                                            showDragHandle:
+                                                                false,
+                                                            onFilterToggle: widget
+                                                                        .onToggleClassFilter !=
+                                                                    null
+                                                                ? () =>
+                                                                    widget.onToggleClassFilter!(
+                                                                        ClassInfo(
+                                                                      id: '__default_class__',
+                                                                      name:
+                                                                          '수업',
+                                                                      description:
+                                                                          '기본 수업',
+                                                                      capacity:
+                                                                          null,
+                                                                      color: const Color(
+                                                                          0xFF223131),
+                                                                    ))
+                                                                : null,
+                                                            isFiltered:
+                                                                filteredClassIds
+                                                                    .contains(
+                                                                        '__default_class__'),
+                                                          ),
+                                                          const SizedBox(
+                                                              height: 12),
+                                                        ],
+                                                        Expanded(
+                                                          child: classes.isEmpty
+                                                              ? SizedBox
+                                                                  .shrink()
+                                                              : ReorderableListView
+                                                                  .builder(
+                                                                  padding:
+                                                                      EdgeInsets
+                                                                          .zero,
+                                                                  itemCount:
+                                                                      classes
+                                                                          .length,
+                                                                  buildDefaultDragHandles:
+                                                                      false,
+                                                                  dragStartBehavior:
+                                                                      DragStartBehavior
+                                                                          .down,
+                                                                  onReorder:
+                                                                      _onReorder,
+                                                                  proxyDecorator:
+                                                                      (child,
+                                                                          index,
+                                                                          animation) {
+                                                                    // ✅ 드래그 피드백: 그룹리스트와 동일하게 "마우스에 붙는 느낌"
+                                                                    // - 살짝 확대 + 떠오르는 그림자
+                                                                    return AnimatedBuilder(
+                                                                      animation:
+                                                                          animation,
+                                                                      builder:
+                                                                          (context,
+                                                                              _) {
+                                                                        final t = Curves
+                                                                            .easeOutCubic
+                                                                            .transform(animation.value);
+                                                                        final scale =
+                                                                            1.0 +
+                                                                                (0.03 * t);
+                                                                        final elev =
+                                                                            2.0 +
+                                                                                (8.0 * t);
+                                                                        return Transform
+                                                                            .scale(
+                                                                          scale:
+                                                                              scale,
+                                                                          alignment:
+                                                                              Alignment.centerLeft,
+                                                                          child:
+                                                                              Material(
+                                                                            color:
+                                                                                Colors.transparent,
+                                                                            elevation:
+                                                                                elev,
+                                                                            shadowColor:
+                                                                                Colors.black.withOpacity(0.45),
+                                                                            child:
+                                                                                child,
+                                                                          ),
+                                                                        );
+                                                                      },
+                                                                    );
+                                                                  },
+                                                                  itemBuilder:
+                                                                      (context,
+                                                                          idx) {
+                                                                    final c =
+                                                                        classes[
+                                                                            idx];
+                                                                    final bool
+                                                                        isFiltered =
+                                                                        filteredClassIds
+                                                                            .contains(c.id);
+                                                                    final card =
+                                                                        _ClassCard(
+                                                                      classInfo:
+                                                                          c,
+                                                                      onEdit: () =>
+                                                                          _showClassRegistrationDialog(
+                                                                        editTarget:
+                                                                            c,
+                                                                        editIndex:
+                                                                            idx,
+                                                                      ),
+                                                                      onDelete: () =>
+                                                                          _deleteClass(
+                                                                              idx),
+                                                                      reorderIndex:
+                                                                          idx,
+                                                                      registrationModeType:
+                                                                          widget
+                                                                              .registrationModeType,
+                                                                      studentCountOverride:
+                                                                          null,
+                                                                      refDate:
+                                                                          _classCountRef,
+                                                                      onFilterToggle: widget.onToggleClassFilter !=
+                                                                              null
+                                                                          ? () =>
+                                                                              widget.onToggleClassFilter!(c)
+                                                                          : null,
+                                                                      isFiltered:
+                                                                          isFiltered,
+                                                                      showDragHandle:
+                                                                          false,
+                                                                    );
+                                                                    return Padding(
+                                                                      key: ValueKey(
+                                                                          c.id),
+                                                                      padding: const EdgeInsets
+                                                                          .only(
+                                                                          bottom:
+                                                                              12.0),
+                                                                      // ✅ 기본: 오래 눌러 수업 순서 이동(reorder)
+                                                                      // ✅ 단, 수업이 "선택(필터)"된 상태에서는 드래그=수업단위 이동(class-move)로 분기
+                                                                      child: isFiltered
+                                                                          ? card
+                                                                          : ReorderableDelayedDragStartListener(
+                                                                              index: idx,
+                                                                              child: card,
+                                                                            ),
+                                                                    );
+                                                                  },
+                                                                ),
+                                                        ),
+                                                      ],
+                                                    );
+                                                  },
+                                                );
+                                              },
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
                           ),
+                          if (isClassListSheetOpen && hasActiveSearch)
+                            Positioned.fill(
+                              child: IgnorePointer(
+                                ignoring: false,
+                                child: Container(
+                                  color: Colors.transparent,
+                                  padding: EdgeInsets.only(
+                                    left: dayOverlayLeftInset,
+                                    right: classSheetContentRightInset,
+                                    bottom: 13,
+                                    top: _daySelectedOverlayTopPadding(context),
+                                  ),
+                                  child: _buildSearchResultPanel(
+                                      overlayMode: true),
+                                ),
+                              ),
+                            ),
+                          if (isClassListSheetOpen &&
+                              !hasActiveSearch &&
+                              widget.selectedCellDayIndex != null &&
+                              widget.selectedCellStartTime == null &&
+                              widget.selectedDayDate != null)
+                            Positioned.fill(
+                              child: IgnorePointer(
+                                ignoring: false,
+                                child: Container(
+                                  color: Colors.transparent,
+                                  // 학생 패널과 동일한 좌우/하단 패딩을 적용해 폭/하단 정렬을 맞춤
+                                  padding: EdgeInsets.only(
+                                    left: dayOverlayLeftInset,
+                                    right: classSheetContentRightInset,
+                                    bottom: 13, // 요일 선택 오버레이(초록 박스) 하단 외부 여백 +5
+                                    top: _daySelectedOverlayTopPadding(context),
+                                  ),
+                                  child: _buildDaySelectedOverlayPanel(),
+                                ),
+                              ),
+                            ),
                         ],
                       ),
-                      if (isClassListSheetOpen && hasActiveSearch)
-                        Positioned.fill(
-                          child: IgnorePointer(
-                            ignoring: false,
-                            child: Container(
-                              color: Colors.transparent,
-                              padding: EdgeInsets.only(
-                                left: dayOverlayLeftInset,
-                                right: classSheetContentRightInset,
-                                bottom: 13,
-                                top: _daySelectedOverlayTopPadding(context),
-                              ),
-                              child: _buildSearchResultPanel(overlayMode: true),
-                            ),
-                          ),
-                        ),
-                      if (isClassListSheetOpen &&
-                          !hasActiveSearch &&
-                          widget.selectedCellDayIndex != null &&
-                          widget.selectedCellStartTime == null &&
-                          widget.selectedDayDate != null)
-                        Positioned.fill(
-                          child: IgnorePointer(
-                            ignoring: false,
-                            child: Container(
-                              color: Colors.transparent,
-                              // 학생 패널과 동일한 좌우/하단 패딩을 적용해 폭/하단 정렬을 맞춤
-                              padding: EdgeInsets.only(
-                                left: dayOverlayLeftInset,
-                                right: classSheetContentRightInset,
-                                bottom: 13, // 요일 선택 오버레이(초록 박스) 하단 외부 여백 +5
-                                top: _daySelectedOverlayTopPadding(context),
-                              ),
-                              child: _buildDaySelectedOverlayPanel(),
-                            ),
-                          ),
-                        ),
-                    ],
+                    ),
                   ),
                 ),
               ),
@@ -4426,8 +4529,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
     VoidCallback? onTap,
   }) {
     final brightness = Theme.of(context).brightness;
-    final panelStyle =
-        FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
+    final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
     final cardBg = panelStyle.groupedCardBackground;
     final nameStyle = TextStyle(
         color: panelStyle.title, fontSize: 16, fontWeight: FontWeight.w600);
@@ -4444,9 +4546,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
       duration: const Duration(milliseconds: 140),
       curve: Curves.easeInOut,
       decoration: BoxDecoration(
-        color: selected
-            ? const Color(0xFF33A373).withOpacity(0.18)
-            : cardBg,
+        color: selected ? const Color(0xFF33A373).withOpacity(0.18) : cardBg,
         borderRadius: BorderRadius.circular(12),
         // ✅ border 폭(=1)을 항상 유지해 하이라이트 시에도 다른 카드들이 "밀리지" 않게 한다.
         border: Border.all(
@@ -5199,6 +5299,9 @@ class TimetableContentViewState extends State<TimetableContentView> {
       schoolLevelLabel =
           '${first.student.school} · ${_gradeLabelForStudent(first.student.educationLevel, first.student.grade)}';
     }
+    final panel = FabTabBarTokens.previewAcademyPanelStyleFor(
+      Theme.of(context).brightness,
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -5209,26 +5312,22 @@ class TimetableContentViewState extends State<TimetableContentView> {
             top: overlayMode ? 0 : _kStudentPanelHeaderTopMargin,
             bottom: _kStudentPanelHeaderBottomMargin,
           ),
-          padding: const EdgeInsets.symmetric(horizontal: 15),
-          decoration: BoxDecoration(
-            color: const Color(0xFF223131),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          alignment: Alignment.center,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          alignment: Alignment.centerLeft,
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Flexible(
                 fit: FlexFit.loose,
                 child: Text(
                   titleName,
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 21,
-                      fontWeight: FontWeight.w700),
+                  style: TextStyle(
+                    fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
+                    color: panel.title,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                  ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center,
                 ),
               ),
               if (schoolLevelLabel.isNotEmpty) ...[
@@ -5237,13 +5336,14 @@ class TimetableContentViewState extends State<TimetableContentView> {
                   fit: FlexFit.loose,
                   child: Text(
                     schoolLevelLabel,
-                    style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600),
+                    style: TextStyle(
+                      fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
+                      color: panel.hint,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.center,
                   ),
                 ),
               ],
@@ -5251,18 +5351,12 @@ class TimetableContentViewState extends State<TimetableContentView> {
           ),
         ),
         Expanded(
-          child: Container(
-            padding: const EdgeInsets.fromLTRB(15, 10, 12, 12),
-            decoration: BoxDecoration(
-              color: context.yggSurfaceBase,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: const Color(0xFF223131), width: 1),
-            ),
-            child: Scrollbar(
-              child: SingleChildScrollView(
-                primary: true,
-                child: _buildGroupedStudentCardsByDayTime(_searchResults,
-                    showWeekdayInTimeLabel: true),
+          child: Scrollbar(
+            child: SingleChildScrollView(
+              primary: true,
+              child: _buildGroupedStudentCardsByDayTime(
+                _searchResults,
+                showWeekdayInTimeLabel: true,
               ),
             ),
           ),
@@ -5535,30 +5629,33 @@ class _DropdownMenuHoverItemState extends State<_DropdownMenuHoverItem> {
   bool _hovered = false;
   @override
   Widget build(BuildContext context) {
+    final panel = FabTabBarTokens.previewAcademyPanelStyleFor(
+      Theme.of(context).brightness,
+    );
     final highlight = _hovered || widget.selected;
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       child: InkWell(
         onTap: widget.onTap,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(12),
         child: Container(
           width: 140,
           height: 40,
           padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 16),
           decoration: BoxDecoration(
-            color: highlight
-                ? const Color(0xFF383838).withOpacity(0.7)
-                : Colors.transparent, // 학생등록 다이얼로그와 유사한 하이라이트
-            borderRadius: BorderRadius.circular(8),
+            color:
+                highlight ? panel.changeButtonBackground : Colors.transparent,
+            borderRadius: BorderRadius.circular(12),
           ),
           alignment: Alignment.centerLeft,
           child: Text(
             widget.label,
             style: TextStyle(
-              color: Colors.white,
+              fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
+              color: panel.title,
               fontSize: 15,
-              fontWeight: FontWeight.w500,
+              fontWeight: FontWeight.w600,
             ),
           ),
         ),
@@ -6217,22 +6314,25 @@ class _ClassCardState extends State<_ClassCard> {
         },
         builder: (context, candidateData, rejectedData) {
           // print('[DEBUG][DragTarget] builder: candidateData=$candidateData, rejectedData=$rejectedData, _isHovering=$_isHovering');
+          final panel = FabTabBarTokens.previewAcademyPanelStyleFor(
+            Theme.of(context).brightness,
+          );
           final bool highlight = _isHovering || widget.isFiltered;
-          final Color borderColor = highlight
-              ? (c.color ?? const Color(0xFF223131))
-              : Colors.transparent;
-          final Color indicatorColor = c.color ?? const Color(0xFF223131);
+          final Color borderColor =
+              highlight ? (c.color ?? kDlgAccent) : panel.divider;
+          final Color indicatorColor = c.color ?? kDlgAccent;
+          const cardRadius = 16.0;
           // class-move 드래그는 별도 UX로 다룰 예정(현재: 리스트 편집 UX 우선)
           final cardBody = Container(
             key: widget.key,
             decoration: BoxDecoration(
-              color: const Color(0xFF15171C),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: borderColor, width: 2),
+              color: panel.dropdownBackground,
+              borderRadius: BorderRadius.circular(cardRadius),
+              border: Border.all(color: borderColor, width: highlight ? 2 : 1),
             ),
             child: Material(
               color: Colors.transparent,
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(cardRadius),
               child: Padding(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
@@ -6244,15 +6344,17 @@ class _ClassCardState extends State<_ClassCard> {
                     final String desc = c.description.trim();
                     final bool hasDesc = desc.isNotEmpty;
 
-                    const titleStyle = TextStyle(
-                      color: Color(0xFFEAF2F2),
-                      fontSize: 18,
+                    final titleStyle = TextStyle(
+                      fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
+                      color: panel.title,
+                      fontSize: 16,
                       fontWeight: FontWeight.w600,
                       height: 1.15,
                     );
-                    const descStyle = TextStyle(
-                      color: Colors.white70,
-                      fontSize: 14,
+                    final descStyle = TextStyle(
+                      fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
+                      color: panel.hint,
+                      fontSize: 13,
                       height: 1.15,
                     );
                     const gap = 4.0;
@@ -6319,10 +6421,12 @@ class _ClassCardState extends State<_ClassCard> {
                           c.capacity == null
                               ? '$studentCount명'
                               : '$studentCount/${c.capacity}명',
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 14,
-                            fontWeight: FontWeight.w500,
+                          style: TextStyle(
+                            fontFamily:
+                                FabTabBarTokens.previewAcademyLabelFontFamily,
+                            color: panel.hint,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
                       ],
@@ -6345,14 +6449,14 @@ class _ClassCardState extends State<_ClassCard> {
           }
 
           const double paneW = 140;
-          final radius = BorderRadius.circular(12);
+          final radius = BorderRadius.circular(cardRadius);
           final actionPane = Padding(
             padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
             child: Row(
               children: [
                 Expanded(
                   child: Material(
-                    color: const Color(0xFF223131),
+                    color: panel.changeButtonBackground,
                     borderRadius: BorderRadius.circular(10),
                     child: InkWell(
                       onTap: widget.onEdit,
@@ -6360,10 +6464,13 @@ class _ClassCardState extends State<_ClassCard> {
                       splashFactory: NoSplash.splashFactory,
                       highlightColor: Colors.white.withOpacity(0.06),
                       hoverColor: Colors.white.withOpacity(0.03),
-                      child: const SizedBox.expand(
+                      child: SizedBox.expand(
                         child: Center(
-                          child: Icon(Icons.edit_outlined,
-                              color: Color(0xFFEAF2F2), size: 18),
+                          child: Icon(
+                            Icons.edit_outlined,
+                            color: panel.title,
+                            size: 18,
+                          ),
                         ),
                       ),
                     ),

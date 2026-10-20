@@ -77,6 +77,11 @@ class _CodeBlockBuilder extends MarkdownElementBuilder {
   final TextStyle style;
   final EdgeInsets padding;
 
+  /// null을 돌려주면 flutter_markdown이 빈 인라인을 남겨, 코드 블록이 글 맨 끝일 때(답변 중 닫히지 않은 ```)
+  /// `_inlines.isEmpty` assert로 화면이 깨진다. 자리만 채우고 실제 내용은 [visitElementAfterWithContext]가 그린다.
+  @override
+  Widget? visitText(md.Text text, TextStyle? preferredStyle) => const SizedBox.shrink();
+
   @override
   Widget? visitElementAfterWithContext(
     BuildContext context,

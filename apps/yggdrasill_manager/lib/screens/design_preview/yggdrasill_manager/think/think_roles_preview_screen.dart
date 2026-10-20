@@ -8,7 +8,7 @@ import '../../../think/think_role_bar.dart';
 import '../../../think/think_style.dart';
 
 /// Think 역할 머리·아바타·자료 패널·기억 범위 선택 Preview (목업 데이터만, Supabase 없음).
-/// 폭 버튼으로 좁은 화면(아바타만 보이는 역할 칩)을 확인한다. '답하는 중'은 모션 감소 설정이면 고리가 고정된다.
+/// 폭 버튼으로 좁은 화면(아바타만 보이는 역할 칩)을 확인한다. '답하는 중'은 캐릭터가 움직이고, 모션 감소 설정이면 멈춘다.
 class ThinkRolesPreviewScreen extends StatefulWidget {
   const ThinkRolesPreviewScreen({super.key});
 
@@ -124,7 +124,7 @@ class _ThinkRolesPreviewScreenState extends State<ThinkRolesPreviewScreen> {
                 snapshot: _answer == 1 ? _snapshot : null,
                 recordMissing: _answer == 2,
                 lockReason: _locked ? '답변이 끝난 뒤 바꿀 수 있습니다.' : null,
-                linkedMemories: const [ThinkLinkedItem(id: 'p', title: '교재 선택 기준', note: '제품 부서')],
+                linkedMemories: const [ThinkLinkedItem(id: 'p', title: '교재 선택 기준', note: '문제 풀이 부서')],
                 linkedDocuments: const [ThinkLinkedItem(id: 'd', title: '2학기 진도 운영안', note: '진도 회의')],
                 onLinkMemory: () {},
                 onLinkDocument: () {},

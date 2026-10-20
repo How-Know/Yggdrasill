@@ -4,7 +4,13 @@
 import {
   AiProviderError,
   emptyUsage,
+  type AiBackground,
+  type AiBackgroundPoll,
+  type AiCodeSandbox,
+  type AiFileCitation,
   type AiFunctionCall,
+  type AiSandboxInputFile,
+  type AiSandboxSession,
   type AiMessageOut,
   type AiProvider,
   type AiRequest,
@@ -23,6 +29,95 @@ export interface FakeTurn {
   usage?: Partial<AiUsage>;
   error?: string;
   delayMs?: number;
+  /** 파이썬 실행 횟수. 요청에 실행 환경이 없으면 무시한다. */
+  codeRuns?: number;
+  /** 답변이 가리키는 실행 환경 파일 id. */
+  citedFileIds?: string[];
+  /** 백그라운드 호출에서 끝났다고 알리기 전에 "아직 도는 중"으로 답할 횟수. */
+  pendingPolls?: number;
+}
+
+/** 테스트용 백그라운드 호출. 시작·취소·삭제 기록을 갖는다. */
+export class FakeBackground implements AiBackground {
+  readonly started: { id: string; req: AiRequest; metadata?: Record<string, string> }[] = [];
+  readonly cancelled: string[] = [];
+  readonly removed: string[] = [];
+  private readonly jobs = new Map<string, { req: AiRequest; turn: FakeTurn; polls: number; cancelled: boolean }>();
+
+  constructor(private readonly owner: FakeAiProvider) {}
+
+  start(req: AiRequest, opts: { metadata?: Record<string, string> } = {}): Promise<{ id: string }> {
+    const turn = this.owner.takeTurn(req);
+    const id = `resp_fake_bg_${this.started.length + 1}`;
+    this.started.push({ id, req, metadata: opts.metadata });
+    this.jobs.set(id, { req, turn, polls: 0, cancelled: false });
+    return Promise.resolve({ id });
+  }
+
+  poll(id: string): Promise<AiBackgroundPoll> {
+    const job = this.jobs.get(id);
+    if (!job || this.removed.includes(id)) return Promise.reject(new AiProviderError('not found', 404, 'not_found'));
+    if (job.cancelled) return Promise.resolve({ state: 'failed', error: 'cancelled' });
+    if (job.polls < (job.turn.pendingPolls ?? 0)) {
+      job.polls += 1;
+      return Promise.resolve({ state: 'running', status: 'in_progress' });
+    }
+    if (job.turn.error) return Promise.resolve({ state: 'failed', error: job.turn.error });
+    return Promise.resolve({ state: 'done', result: this.owner.resultOf(job.req, job.turn) });
+  }
+
+  cancel(id: string): Promise<void> {
+    const job = this.jobs.get(id);
+    if (job) job.cancelled = true;
+    this.cancelled.push(id);
+    return Promise.resolve();
+  }
+
+  remove(id: string): Promise<void> {
+    this.removed.push(id);
+    return Promise.resolve();
+  }
+}
+
+/** 테스트용 실행 환경. 열고 닫은 기록과 돌려줄 결과 파일을 갖는다. */
+export class FakeCodeSandbox implements AiCodeSandbox {
+  readonly opened: { containerId: string; files: AiSandboxInputFile[] }[] = [];
+  readonly closed: string[] = [];
+  readonly collected: { containerId: string; preferred: AiFileCitation[] }[] = [];
+
+  constructor(
+    private readonly opts: {
+      outputs?: { fileId: string; name: string; bytes?: Uint8Array }[];
+      openError?: string;
+      collectError?: string;
+    } = {},
+  ) {}
+
+  open(files: AiSandboxInputFile[]): Promise<AiSandboxSession> {
+    if (this.opts.openError) return Promise.reject(new AiProviderError(this.opts.openError, 500, 'sandbox_error'));
+    const containerId = `cntr_fake_${this.opened.length + 1}`;
+    this.opened.push({ containerId, files });
+    const outputs = this.opts.outputs ?? [];
+    const collectError = this.opts.collectError;
+    return Promise.resolve({
+      containerId,
+      collectOutputs: (o) => {
+        this.collected.push({ containerId, preferred: o.preferred });
+        if (collectError) return Promise.reject(new AiProviderError(collectError, 500, 'sandbox_error'));
+        const exts = new Set(o.exts);
+        return Promise.resolve(
+          outputs
+            .filter((f) => exts.has(f.name.slice(f.name.lastIndexOf('.')).toLowerCase()))
+            .slice(0, o.limit)
+            .map((f) => ({ fileId: f.fileId, name: f.name, bytes: f.bytes ?? new TextEncoder().encode(f.name) })),
+        );
+      },
+      close: () => {
+        this.closed.push(containerId);
+        return Promise.resolve();
+      },
+    });
+  }
 }
 
 export type FakeScript = FakeTurn[] | ((req: AiRequest, index: number) => FakeTurn);
@@ -88,7 +183,22 @@ export class FakeAiProvider implements AiProvider {
   private index = 0;
   private seq = 0;
 
-  constructor(private readonly script?: FakeScript) {}
+  readonly sandbox?: FakeCodeSandbox;
+  readonly background: FakeBackground;
+
+  constructor(private readonly script?: FakeScript, opts: { sandbox?: FakeCodeSandbox } = {}) {
+    this.sandbox = opts.sandbox;
+    this.background = new FakeBackground(this);
+  }
+
+  /** FakeBackground 가 쓰는 다음 차례와 그 결과. */
+  takeTurn(req: AiRequest): FakeTurn {
+    return this.nextTurn(req);
+  }
+
+  resultOf(req: AiRequest, turn: FakeTurn): AiResult {
+    return this.toResult(req, turn);
+  }
 
   private id(prefix: string): string {
     this.seq += 1;
@@ -116,6 +226,14 @@ export class FakeAiProvider implements AiProvider {
     for (const query of turn.webSearchQueries ?? []) {
       items.push({ type: 'web_search_call', id: this.id('ws'), status: 'completed', action: { type: 'search', query } });
     }
+    const containerId = req.codeInterpreter?.containerId;
+    const codeRuns = containerId ? turn.codeRuns ?? 0 : 0;
+    for (let i = 0; i < codeRuns; i++) {
+      items.push({ type: 'code_interpreter_call', id: this.id('ci'), status: 'completed', container_id: containerId });
+    }
+    const files: AiFileCitation[] = containerId
+      ? (turn.citedFileIds ?? []).map((fileId) => ({ containerId, fileId, filename: `${fileId}.xlsx` }))
+      : [];
     const functionCalls: AiFunctionCall[] = (turn.functionCalls ?? []).map((fc) => {
       const callId = this.id('call');
       const args = JSON.stringify(fc.arguments);
@@ -127,7 +245,7 @@ export class FakeAiProvider implements AiProvider {
     if (text === undefined && functionCalls.length === 0) text = defaultTurn(req).text;
     if (text !== undefined) {
       const itemId = this.id('msg');
-      messages.push({ itemId, phase: 'final', text, sources: turn.sources ?? [] });
+      messages.push({ itemId, phase: 'final', text, sources: turn.sources ?? [], ...(files.length > 0 ? { files } : {}) });
       items.push({ type: 'message', id: itemId, role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text }] });
     }
 
@@ -139,6 +257,7 @@ export class FakeAiProvider implements AiProvider {
       functionCalls,
       webSearchCalls: turn.webSearchQueries?.length ?? 0,
       webSearchQueries: turn.webSearchQueries ?? [],
+      codeRuns,
       usage: { ...emptyUsage(), inputTokens: 1000, outputTokens: 200, ...turn.usage },
       replay: { kind: 'provider_items', provider: this.name, items },
     };
@@ -154,6 +273,11 @@ export class FakeAiProvider implements AiProvider {
   async *stream(req: AiRequest, signal?: AbortSignal): AsyncGenerator<AiStreamEvent> {
     const turn = this.nextTurn(req);
     const result = this.toResult(req, turn);
+    for (let i = 0; i < (result.codeRuns ?? 0); i++) {
+      const itemId = this.id('ci');
+      yield { type: 'code_run', itemId, status: 'running' };
+      yield { type: 'code_run', itemId, status: 'completed' };
+    }
     for (const m of result.messages) {
       yield { type: 'message_start', itemId: m.itemId, phase: m.phase };
       for (const piece of chunk(m.text, 6)) {

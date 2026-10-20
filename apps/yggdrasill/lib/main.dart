@@ -1670,9 +1670,7 @@ class _GlobalMemoOverlayState extends State<_GlobalMemoOverlay> {
 
 /// 오른쪽 채점 시트 실제 폭 — 정답 PDF 패널 rightInset 과 반드시 동일해야
 /// 두 시트가 틈 없이 붙는다.
-/// (+8 4자리 번호, +12 번호 왼쪽 여백, *0.9 시트 10% 축소)
-const double kRightSideSheetPanelWidth =
-    (238 * 1.2 * 1.2 * 1.1 * 1.155 * 1.26 + 8 + 12) * 0.9;
+const double kRightSideSheetPanelWidth = 534;
 
 class _RightSheetPdfLoadingPane extends StatelessWidget {
   const _RightSheetPdfLoadingPane({
@@ -1746,8 +1744,12 @@ class _GlobalRightSheetPdfPanel extends StatelessWidget {
   static const double _navRailInset = 86.0;
 
   void _closePanelAndRightSheet() {
+    final gradingSession = rightSideSheetTestGradingSession.value;
     rightSideSheetPdfPanelSession.value = null;
     rightSideSheetTestGradingSession.value = null;
+    if (gradingSession?.onClosed != null) {
+      unawaited(gradingSession!.onClosed!());
+    }
     final closeAction = closeRightSideSheetAction;
     if (closeAction != null) {
       unawaited(closeAction());

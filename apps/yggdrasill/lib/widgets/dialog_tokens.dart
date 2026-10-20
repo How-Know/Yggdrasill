@@ -140,6 +140,7 @@ class YggDialogSectionHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final dlg = YggDialogColors.of(context);
     return Padding(
       padding: const EdgeInsets.only(bottom: 10, top: 2),
       child: Row(
@@ -153,15 +154,15 @@ class YggDialogSectionHeader extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 10),
-          Icon(icon, color: kDlgTextSub, size: 18),
+          Icon(icon, color: dlg.textSub, size: 18),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
               title,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: kDlgText,
+              style: TextStyle(
+                color: dlg.text,
                 fontSize: 15,
                 fontWeight: FontWeight.w800,
               ),

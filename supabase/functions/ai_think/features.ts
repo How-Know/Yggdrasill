@@ -3,7 +3,13 @@
 // 설계: docs/architecture/ai-think-actions.md §7
 
 /** 이 Edge 코드가 구현한 기능과 버전. DB(ai_think_db_features)와 앱(client.features)도 같은 버전 이상이어야 쓸 수 있다. */
-export const EDGE_FEATURES = { conversation_split: 1, think_roles: 1, memory_proposals: 1 } as const;
+export const EDGE_FEATURES = {
+  conversation_split: 1,
+  think_roles: 1,
+  memory_proposals: 1,
+  department_work: 1,
+  auto_organize: 1,
+} as const;
 
 export type FeatureName = keyof typeof EDGE_FEATURES;
 
@@ -76,4 +82,26 @@ const SPLIT_REQUEST_RE = /(대화|주제|스레드|채팅).{0,8}(나누|나눠|�
 
 export function isSplitRequest(message: string): boolean {
   return SPLIT_REQUEST_RE.test(message);
+}
+
+/**
+ * 사용자가 이번 메시지에서 직접 정리(분류·요약·기억·중요 표시·맥락 제외 등)를 요청했는지. 문구 규칙이라 완벽하지 않다.
+ * 자동 정리 제안이 꺼져 있을 때 이번 턴에만 정리 도구를 줄지 판단하는 데 쓴다.
+ */
+const ORGANIZE_REQUEST_RE =
+  /정리\s*(해|하자|할|좀|안|제안)|분류|폴더|요약|기억\s*(해|으로|에)|저장해|중요\s*(표시|체크)|맥락.{0,6}(빼|제외)|제외해|기준.{0,6}(바꾸|바꿔|정하|정해|추가|넣)|부서.{0,6}(넘기|넘겨|옮기|옮겨)/;
+/** 거절한 같은 메시지 묶음이라도 사용자가 이번에 직접 빼 달라고 하면 다시 제안할 수 있다. */
+const EXCLUSION_REQUEST_RE = /(맥락|답변|대화|기록|메시지).{0,8}(빼|제외)|제외\s*(해|하자|시켜)|빼\s*(줘|주|달|자)/;
+const IMPORTANCE_REQUEST_RE = /중요\s*(하다고|한\s*것으로)?\s*(표시|체크|마크)/;
+
+export function isOrganizeRequest(message: string): boolean {
+  return ORGANIZE_REQUEST_RE.test(message) || isSplitRequest(message);
+}
+
+export function isExclusionRequest(message: string): boolean {
+  return EXCLUSION_REQUEST_RE.test(message);
+}
+
+export function isImportanceRequest(message: string): boolean {
+  return IMPORTANCE_REQUEST_RE.test(message);
 }

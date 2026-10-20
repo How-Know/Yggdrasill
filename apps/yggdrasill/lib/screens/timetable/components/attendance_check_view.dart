@@ -6,6 +6,7 @@ import '../../../models/session_override.dart';
 import '../../../models/class_info.dart';
 import '../../../models/attendance_record.dart';
 import '../../../services/data_manager.dart';
+import '../../../widgets/app_snackbar.dart';
 import '../../../widgets/dialog_tokens.dart';
 
 class AttendanceCheckView extends StatefulWidget {
@@ -2738,18 +2739,11 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
         setState(() {});
       }
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('이번 회차가 건너뛰기로 설정되었습니다.'),
-          backgroundColor: Color(0xFF1976D2),
-          duration: Duration(milliseconds: 1500),
-        ));
+        showAppSnackBar(context, '이번 회차가 건너뛰기로 설정되었습니다.');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('건너뛰기 설정 실패: $e'),
-          backgroundColor: const Color(0xFFE53E3E),
-        ));
+        showAppSnackBar(context, '건너뛰기 설정 실패: $e');
       }
     }
   }
@@ -2901,18 +2895,11 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
         await DataManager.instance.addSessionOverride(ov);
       }
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('이번 회차 변경이 적용되었습니다.'),
-          backgroundColor: Color(0xFF1976D2),
-          duration: Duration(milliseconds: 1500),
-        ));
+        showAppSnackBar(context, '이번 회차 변경이 적용되었습니다.');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('변경 적용 실패: $e'),
-          backgroundColor: const Color(0xFFE53E3E),
-        ));
+        showAppSnackBar(context, '변경 적용 실패: $e');
       }
     }
   }
@@ -2949,33 +2936,16 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
           session.attendanceStatus = AttendanceStatus.completed;
         });
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('출석으로 변경되었습니다'),
-            backgroundColor: Color(0xFF4CAF50),
-            duration: Duration(milliseconds: 1500),
-          ),
-        );
+        showAppSnackBar(context, '출석으로 변경되었습니다');
       } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('출석 변경에 실패했습니다'),
-            backgroundColor: Color(0xFFE53E3E),
-          ),
-        );
+        showAppSnackBar(context, '출석 변경에 실패했습니다');
       }
       return;
     }
     
     // 아직 시작하지 않은 수업인지 확인 (수업 시작 시간이 현재 시간보다 미래인 경우)
     if (session.dateTime.isAfter(now)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('아직 시작하지 않은 수업입니다.'),
-          backgroundColor: Color(0xFFFF9800),
-          duration: Duration(milliseconds: 2000),
-        ),
-      );
+      showAppSnackBar(context, '아직 시작하지 않은 수업입니다.');
       return;
     }
     
@@ -3040,28 +3010,13 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
       });
 
       // 성공 피드백
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(message),
-          backgroundColor: newStatus == AttendanceStatus.completed 
-              ? const Color(0xFF4CAF50) 
-              : newStatus == AttendanceStatus.arrived
-                  ? const Color(0xFF2196F3)
-                  : const Color(0xFF757575),
-          duration: const Duration(milliseconds: 1500),
-        ),
-      );
+      showAppSnackBar(context, message);
     } catch (e) {
       print('[ERROR] 출석 정보 저장 실패: $e');
       final String msg = e.toString().contains('다른 기기에서 먼저 수정')
           ? '다른 기기에서 먼저 수정되었습니다. 화면을 새로고침 후 다시 시도하세요.'
           : '출석 정보 저장에 실패했습니다.';
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(msg),
-          backgroundColor: const Color(0xFFE53E3E),
-        ),
-      );
+      showAppSnackBar(context, msg);
     }
   }
 
@@ -3247,13 +3202,7 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
             session.attendanceStatus = AttendanceStatus.absent;
           });
 
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('출석이 해제되어 무단결석으로 변경되었습니다.'),
-              backgroundColor: Color(0xFFE53E3E),
-              duration: Duration(milliseconds: 1500),
-            ),
-          );
+          showAppSnackBar(context, '출석이 해제되어 무단결석으로 변경되었습니다.');
         } else {
           // 출석 시간 수정
           await DataManager.instance.saveOrUpdateAttendance(
@@ -3277,22 +3226,11 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
             session.attendanceStatus = AttendanceStatus.completed;
           });
 
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('출석 시간이 수정되었습니다.'),
-              backgroundColor: Color(0xFF4CAF50),
-              duration: Duration(milliseconds: 1500),
-            ),
-          );
+          showAppSnackBar(context, '출석 시간이 수정되었습니다.');
         }
       } catch (e) {
         print('[ERROR] 출석 처리 실패: $e');
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('출석 처리에 실패했습니다.'),
-            backgroundColor: Color(0xFFE53E3E),
-          ),
-        );
+        showAppSnackBar(context, '출석 처리에 실패했습니다.');
       }
     }
   }

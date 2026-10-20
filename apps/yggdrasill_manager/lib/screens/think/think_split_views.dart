@@ -69,12 +69,14 @@ class ThinkSplitEditDialog extends StatefulWidget {
     required this.folderId,
     required this.summary,
     required this.tree,
+    this.confirmLabel = '나눠서 이어가기',
   });
 
   final String title;
   final String? folderId;
   final ThinkSplitSummary summary;
   final ThinkTree tree;
+  final String confirmLabel;
 
   static Future<ThinkSplitEdit?> show(
     BuildContext context, {
@@ -82,10 +84,17 @@ class ThinkSplitEditDialog extends StatefulWidget {
     required String? folderId,
     required ThinkSplitSummary summary,
     required ThinkTree tree,
+    String confirmLabel = '나눠서 이어가기',
   }) =>
       showDialog<ThinkSplitEdit>(
         context: context,
-        builder: (_) => ThinkSplitEditDialog(title: title, folderId: folderId, summary: summary, tree: tree),
+        builder: (_) => ThinkSplitEditDialog(
+          title: title,
+          folderId: folderId,
+          summary: summary,
+          tree: tree,
+          confirmLabel: confirmLabel,
+        ),
       );
 
   @override
@@ -221,7 +230,7 @@ class _ThinkSplitEditDialogState extends State<ThinkSplitEditDialog> {
             onPressed: _valid ? _submit : null,
             style: thinkPrimaryButton(),
             icon: const Icon(Icons.call_split, size: 16),
-            label: const Text('나눠서 이어가기'),
+            label: Text(widget.confirmLabel),
           ),
         ),
       ],

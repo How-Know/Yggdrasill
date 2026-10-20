@@ -390,10 +390,21 @@ class LatexTextRenderer extends StatelessWidget {
         RegExp(r'(^|[^\\])\d+\s*/\s*\d+').hasMatch(formula);
   }
 
-  /// Inline `\(...\)` 로 들어와도 행렬·다줄 환경은 [MathStyle.display]로 그려야 가로로 눌리지 않는다.
+  /// Inline `\(...\)` 로 들어와도 분수·행렬은 [MathStyle.display]로 쌓아 그린다.
   bool _latexFormulaPrefersDisplay(String formula) {
     if (formula.isEmpty) return false;
     final f = formula.toLowerCase();
+    if (f.contains(r'\frac') ||
+        f.contains(r'\dfrac') ||
+        f.contains(r'\tfrac') ||
+        f.contains(r'\displaystyle') ||
+        f.contains(r'\sqrt') ||
+        f.contains(r'\sum') ||
+        f.contains(r'\int') ||
+        f.contains(r'\binom') ||
+        f.contains(r'\over')) {
+      return true;
+    }
     return f.contains(r'\begin{matrix') ||
         f.contains(r'\begin{pmatrix') ||
         f.contains(r'\begin{bmatrix') ||

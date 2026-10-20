@@ -72,6 +72,34 @@ Deno.test('기억은 승인된 것만 읽는다', async () => {
   assertEquals((await call(h.deps, { action: 'search_memories', query: ' ' })).status, 400);
 });
 
+Deno.test('코드 요청: 기본은 짧은 요약, section이면 구간, 잘못된 section은 400', async () => {
+  const h = await harness();
+  const id = '33333333-3333-4333-8333-333333333333';
+  h.store.codeRequests.push({
+    id,
+    title: '수정',
+    status: 'ready',
+    mode: 'change',
+    conversation_id: null,
+    created_at: '2026-10-13T00:00:00Z',
+    request: { goal: 'g', background: '긴 배경 '.repeat(10_000) },
+    round: 1,
+    max_rounds: 1,
+    review_status: null,
+    last_error: null,
+    latest: { round: 1, status: 'finished', result: { summary: '고침', diff_stats: { files: 1, additions: 1, deletions: 0, list: [] } }, result_text: 'r' },
+  });
+  h.store.codeDiffs[id] = 'diff --git a/x b/x';
+  const brief = await call(h.deps, { action: 'get_code_request', id });
+  assert(JSON.stringify(brief.body).length < 12_000);
+  assertEquals(brief.body.code_request.checks.verdict, 'no_record');
+  const part = await call(h.deps, { action: 'get_code_request', id, section: 'request', offset: 7000 });
+  assertEquals(part.body.code_request.offset, 7000);
+  assert(part.body.code_request.next_offset > 7000);
+  assertEquals((await call(h.deps, { action: 'get_code_request', id, section: 'diff' })).body.code_request.text, 'diff --git a/x b/x');
+  assertEquals((await call(h.deps, { action: 'get_code_request', id, section: 'env' })).status, 400);
+});
+
 Deno.test('대화 본문: 답변에서 제외한 문답은 빠지고, 커서 질문은 표시가 남는다', async () => {
   const h = await harness();
   const conv = await h.store.createConversation('커리큘럼');

@@ -897,8 +897,10 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   void _syncFigureMetaWithStem({
     required String stem,
     required Map<String, dynamic> meta,
+    bool inferredImageChoiceQuestion = false,
   }) {
-    final isImageChoiceQuestion = meta['is_image_choice_question'] == true ||
+    final isImageChoiceQuestion = inferredImageChoiceQuestion ||
+        meta['is_image_choice_question'] == true ||
         '${meta['choice_layout'] ?? ''}' == 'image_table';
     if (isImageChoiceQuestion) {
       final assets = meta['figure_assets'];
@@ -908,7 +910,17 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       final count = assetCount > 0 ? assetCount : configuredCount;
       if (count > 0) {
         meta['figure_count'] = count;
+        meta['image_choice_count'] = count;
       }
+      // 추출 결과에 그림 선지 메타가 빠졌더라도 choices 5개가 모두 [그림]이면
+      // 화면에서는 그림 선지형으로 인식한다. 저장 시에도 같은 판정을 메타에
+      // 확정해 두지 않으면 본문 그림 마커가 없다는 이유로 자산이 삭제된다.
+      meta['is_image_choice_question'] = true;
+      meta['choice_layout'] = 'image_table';
+      meta.putIfAbsent(
+        'image_choice_layout',
+        () => <String, dynamic>{'version': 1, 'rows': '2'},
+      );
       return;
     }
     final isBlankChoiceQuestion = meta['is_blank_choice_question'] == true ||
@@ -1676,7 +1688,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       final saveSubjectiveAnswer = !q.allowSubjective
           ? ''
           : (persistableSubjective.isEmpty ? null : persistableSubjective);
-      _syncFigureMetaWithStem(stem: q.stem, meta: normalizedMeta);
+      _syncFigureMetaWithStem(
+        stem: q.stem,
+        meta: normalizedMeta,
+        inferredImageChoiceQuestion: _isImageChoiceQuestion(q),
+      );
       final saveFigureRefs = _figureRefsForSave(q);
 
       await _service.updateQuestionReview(

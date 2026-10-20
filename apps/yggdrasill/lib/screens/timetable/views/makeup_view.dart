@@ -4,6 +4,7 @@ import '../../../services/data_manager.dart';
 import '../../../models/session_override.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
+import '../../../widgets/app_snackbar.dart';
 import '../../../widgets/dialog_tokens.dart';
 import '../../../widgets/utility_glass_dialog_shell.dart';
 
@@ -636,21 +637,11 @@ class _PlannedTile extends StatelessWidget {
                             updated,
                           );
                           if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('보강이 수정되었습니다.'),
-                                backgroundColor: _mkAccent,
-                              ),
-                            );
+                            showAppSnackBar(context, '보강이 수정되었습니다.');
                           }
                         } catch (e) {
                           if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('수정 실패: $e'),
-                                backgroundColor: const Color(0xFFE53E3E),
-                              ),
-                            );
+                            showAppSnackBar(context, '수정 실패: $e');
                           }
                         }
                       }
@@ -673,11 +664,9 @@ class _PlannedTile extends StatelessWidget {
                             rec.departureTime != null;
                         if (completed) {
                           if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('이미 출석 완료된 보강은 취소할 수 없습니다.'),
-                                backgroundColor: Color(0xFFE57373),
-                              ),
+                            showAppSnackBar(
+                              context,
+                              '이미 출석 완료된 보강은 취소할 수 없습니다.',
                             );
                           }
                           return;
@@ -837,21 +826,11 @@ class _OverrideTile extends StatelessWidget {
                                 updated,
                               );
                               if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text('보강이 수정되었습니다.'),
-                                    backgroundColor: Color(0xFF1976D2),
-                                  ),
-                                );
+                                showAppSnackBar(context, '보강이 수정되었습니다.');
                               }
                             } catch (e) {
                               if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text('수정 실패: $e'),
-                                    backgroundColor: const Color(0xFFE53E3E),
-                                  ),
-                                );
+                                showAppSnackBar(context, '수정 실패: $e');
                               }
                             }
                           }
@@ -874,11 +853,9 @@ class _OverrideTile extends StatelessWidget {
                                 rec.departureTime != null;
                             if (completed) {
                               if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text('이미 출석 완료된 보강은 취소할 수 없습니다.'),
-                                    backgroundColor: Color(0xFFE57373),
-                                  ),
+                                showAppSnackBar(
+                                  context,
+                                  '이미 출석 완료된 보강은 취소할 수 없습니다.',
                                 );
                               }
                               return;
@@ -1046,13 +1023,7 @@ extension on _MakeupViewState {
     );
     if (mounted && saved == true) {
       await DataManager.instance.loadSessionOverrides();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('보강이 추가되었습니다.'),
-          backgroundColor: Color(0xFF1976D2),
-          duration: Duration(milliseconds: 1500),
-        ),
-      );
+      showAppSnackBar(context, '보강이 추가되었습니다.');
     }
   }
 }
@@ -1262,12 +1233,7 @@ class _MakeupAddDialogState extends State<MakeupAddDialog> {
 
   Future<void> _save() async {
     if (_studentId == null || _selectedDate == null || _selectedTime == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('학생/날짜/시간을 선택해 주세요'),
-          backgroundColor: Color(0xFFE53E3E),
-        ),
-      );
+      showAppSnackBar(context, '학생/날짜/시간을 선택해 주세요');
       return;
     }
     final dt = DateTime(
@@ -1290,12 +1256,7 @@ class _MakeupAddDialogState extends State<MakeupAddDialog> {
       await DataManager.instance.addSessionOverride(ov);
       if (mounted) Navigator.of(context).pop(true);
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('보강 저장 실패: $e'),
-          backgroundColor: const Color(0xFFE53E3E),
-        ),
-      );
+      showAppSnackBar(context, '보강 저장 실패: $e');
     }
   }
 
@@ -1812,12 +1773,7 @@ class _MakeupEditDialogState extends State<_MakeupEditDialog> {
 
     final parsedDur = int.tryParse(_durationCtrl.text.trim());
     if (parsedDur == null || parsedDur <= 0 || parsedDur > 360) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('기간(분)은 1~360 사이 숫자로 입력해 주세요.'),
-          backgroundColor: Color(0xFFE53E3E),
-        ),
-      );
+      showAppSnackBar(context, '기간(분)은 1~360 사이 숫자로 입력해 주세요.');
       return;
     }
     _duration = parsedDur;

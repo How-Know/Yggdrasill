@@ -1,18 +1,14 @@
-DateTime? _date(dynamic v) =>
-    v is String && v.isNotEmpty ? DateTime.tryParse(v)?.toLocal() : null;
+DateTime? _date(dynamic v) => v is String && v.isNotEmpty ? DateTime.tryParse(v)?.toLocal() : null;
 
 String _str(dynamic v) => v == null ? '' : v.toString();
 
-List<String> _strList(dynamic v) => v is List
-    ? v.map((e) => e?.toString().trim() ?? '').where((e) => e.isNotEmpty).toList()
-    : const <String>[];
+List<String> _strList(dynamic v) =>
+    v is List ? v.map((e) => e?.toString().trim() ?? '').where((e) => e.isNotEmpty).toList() : const <String>[];
 
-List<Map<String, dynamic>> _mapList(dynamic v) => v is List
-    ? v.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList()
-    : const <Map<String, dynamic>>[];
+List<Map<String, dynamic>> _mapList(dynamic v) =>
+    v is List ? v.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList() : const <Map<String, dynamic>>[];
 
-double _num(dynamic v) =>
-    v is num ? v.toDouble() : double.tryParse(v?.toString() ?? '') ?? 0;
+double _num(dynamic v) => v is num ? v.toDouble() : double.tryParse(v?.toString() ?? '') ?? 0;
 
 class ThinkAttachment {
   const ThinkAttachment({
@@ -28,6 +24,8 @@ class ThinkAttachment {
   final int? size;
 
   bool get isImage => mime.startsWith('image/');
+  bool get isSpreadsheet =>
+      mime == 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || mime == 'text/csv';
 
   factory ThinkAttachment.fromJson(Map<String, dynamic> j) => ThinkAttachment(
         path: _str(j['path']),
@@ -99,6 +97,7 @@ class ThinkConversation {
     this.lastMessageAt,
     this.createdAt,
     this.origin = 'owner',
+    this.thinkRoleId = ThinkRoleId.lead,
   });
 
   final String id;
@@ -110,6 +109,9 @@ class ThinkConversation {
 
   /// owner(운영자가 시작) 또는 cursor(Cursor가 Think에게 물으며 시작). 커서 문의는 cursor 대화에만 이어진다.
   final String origin;
+
+  /// 대화를 맡은 부서. 역할 마이그레이션 전 DB에서는 총괄.
+  final ThinkRoleId thinkRoleId;
 
   bool get archived => status == 'archived';
   bool get fromCursor => origin == 'cursor';
@@ -123,9 +125,10 @@ class ThinkConversation {
         lastMessageAt: _date(r['last_message_at']),
         createdAt: _date(r['created_at']),
         origin: _str(r['origin']) == 'cursor' ? 'cursor' : 'owner',
+        thinkRoleId: ThinkRoleId.parse(r['think_role_id'] as String?),
       );
 
-  ThinkConversation copyWith({String? title, String? status, DateTime? lastMessageAt}) =>
+  ThinkConversation copyWith({String? title, String? status, DateTime? lastMessageAt, ThinkRoleId? thinkRoleId}) =>
       ThinkConversation(
         id: id,
         title: title ?? this.title,
@@ -134,6 +137,7 @@ class ThinkConversation {
         lastMessageAt: lastMessageAt ?? this.lastMessageAt,
         createdAt: createdAt,
         origin: origin,
+        thinkRoleId: thinkRoleId ?? this.thinkRoleId,
       );
 }
 
@@ -185,6 +189,7 @@ class ThinkConversationDetail {
     this.splitSummary,
     this.autoSplitSuggestions = true,
     this.splitColumns = false,
+    this.progressSummary,
   });
 
   final String id;
@@ -201,27 +206,189 @@ class ThinkConversationDetail {
   /// DB에 나누기 열이 있다(마이그레이션 반영). 없으면 제안 켜기·끄기를 보여 주지 않는다.
   final bool splitColumns;
 
+  /// 사용자가 승인한 이 대화의 진행 요약. 다음 답변부터 AI 맥락에 참고 자료로 들어간다.
+  final ThinkProgressSummary? progressSummary;
+
   bool get isSplit => splitFromConversationId != null || splitSummary != null;
 
   factory ThinkConversationDetail.fromRow(Map<String, dynamic> r) {
     final from = _str(r['split_from_conversation_id']);
     final summary = ThinkSplitSummary.fromJson(r['split_summary']);
+    final progress = ThinkProgressSummary.fromJson(r['progress_summary']);
     return ThinkConversationDetail(
       id: _str(r['id']),
       splitFromConversationId: from.isEmpty ? null : from,
       splitSummary: summary.isEmpty ? null : summary,
       autoSplitSuggestions: r['auto_split_suggestions'] != false,
       splitColumns: r.containsKey('auto_split_suggestions'),
+      progressSummary: progress.isEmpty ? null : progress,
     );
   }
 
-  ThinkConversationDetail copyWith({bool? autoSplitSuggestions}) => ThinkConversationDetail(
+  ThinkConversationDetail copyWith({bool? autoSplitSuggestions, ThinkProgressSummary? progressSummary}) =>
+      ThinkConversationDetail(
         id: id,
         splitFromConversationId: splitFromConversationId,
         splitSummary: splitSummary,
         autoSplitSuggestions: autoSplitSuggestions ?? this.autoSplitSuggestions,
         splitColumns: splitColumns,
+        progressSummary: progressSummary ?? this.progressSummary,
       );
+}
+
+/// 진행 요약의 다음 행동. 담당·전제·완료 기준은 사용자가 말한 것만 들어간다(비면 정하지 않은 것).
+class ThinkNextAction {
+  const ThinkNextAction({required this.what, this.owner = '', this.prerequisite = '', this.doneWhen = ''});
+
+  final String what;
+  final String owner;
+  final String prerequisite;
+  final String doneWhen;
+
+  factory ThinkNextAction.fromJson(dynamic raw) {
+    if (raw is String) return ThinkNextAction(what: raw.trim());
+    final j = raw is Map ? Map<String, dynamic>.from(raw) : const <String, dynamic>{};
+    return ThinkNextAction(
+      what: _str(j['what']).trim(),
+      owner: _str(j['owner']).trim(),
+      prerequisite: _str(j['prerequisite']).trim(),
+      doneWhen: _str(j['done_when']).trim(),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {'what': what, 'owner': owner, 'prerequisite': prerequisite, 'done_when': doneWhen};
+}
+
+/// 대화 하나의 진행 요약(진행 요약 제안의 payload.summary, 승인된 ai_conversations.progress_summary).
+/// [decided]는 사용자가 확정한 것만. AI 제안·계획은 [open]·[next]에 있고 승인돼도 실행되지 않는다.
+class ThinkProgressSummary {
+  const ThinkProgressSummary({
+    this.purpose = '',
+    this.decided = const [],
+    this.open = const [],
+    this.status = '',
+    this.next = const [],
+    this.approvedAt,
+    this.actionId,
+    this.edited = false,
+  });
+
+  final String purpose;
+  final List<String> decided;
+  final List<String> open;
+  final String status;
+  final List<ThinkNextAction> next;
+
+  /// 승인된 요약에만 있다.
+  final DateTime? approvedAt;
+  final String? actionId;
+
+  /// 승인할 때 사용자가 고쳤다.
+  final bool edited;
+
+  bool get isEmpty => purpose.isEmpty;
+
+  factory ThinkProgressSummary.fromJson(dynamic raw) {
+    final j = raw is Map ? Map<String, dynamic>.from(raw) : const <String, dynamic>{};
+    final action = _str(j['action_id']);
+    return ThinkProgressSummary(
+      purpose: _str(j['purpose']).trim(),
+      decided: _strList(j['decided']),
+      open: _strList(j['open']),
+      status: _str(j['status']).trim(),
+      next: (j['next'] is List ? j['next'] as List : const [])
+          .map(ThinkNextAction.fromJson)
+          .where((n) => n.what.isNotEmpty)
+          .toList(),
+      approvedAt: _date(j['approved_at']),
+      actionId: action.isEmpty ? null : action,
+      edited: j['edited'] == true,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'purpose': purpose,
+        'decided': decided,
+        'open': open,
+        'status': status,
+        'next': next.map((n) => n.toJson()).toList(),
+      };
+}
+
+/// 부서 기준이 가리키는 우선 기억(제목만 보여 준다).
+class ThinkCriteriaMemoryRef {
+  const ThinkCriteriaMemoryRef({required this.id, required this.title});
+
+  final String id;
+  final String title;
+
+  factory ThinkCriteriaMemoryRef.fromJson(Map<String, dynamic> j) =>
+      ThinkCriteriaMemoryRef(id: _str(j['id']), title: _str(j['title']).trim());
+}
+
+/// 부서 기준의 한 상태(제안 카드의 전·후). 접근 권한과 별개로, 그 부서가 먼저 살필 것을 정한다.
+class ThinkCriteriaView {
+  const ThinkCriteriaView({this.questions = const [], this.risks = const [], this.priorityMemories = const []});
+
+  final List<String> questions;
+  final List<String> risks;
+  final List<ThinkCriteriaMemoryRef> priorityMemories;
+
+  bool get isEmpty => questions.isEmpty && risks.isEmpty && priorityMemories.isEmpty;
+
+  /// 승인·저장 때 보내는 형태(우선 기억은 id만).
+  Map<String, dynamic> toCriteriaJson() => {
+        'questions': questions,
+        'risks': risks,
+        'priority_memory_ids': [for (final m in priorityMemories) m.id],
+      };
+
+  factory ThinkCriteriaView.fromJson(dynamic raw) {
+    final j = raw is Map ? Map<String, dynamic>.from(raw) : const <String, dynamic>{};
+    return ThinkCriteriaView(
+      questions: _strList(j['questions']),
+      risks: _strList(j['risks']),
+      priorityMemories: _mapList(j['priority_memories']).map(ThinkCriteriaMemoryRef.fromJson).toList(),
+    );
+  }
+}
+
+/// ai_department_criteria 한 행. [version]으로 동시 수정을 막는다(판이 다르면 저장·승인이 충돌로 멈춘다).
+class ThinkDepartmentCriteria {
+  const ThinkDepartmentCriteria({
+    required this.department,
+    this.questions = const [],
+    this.risks = const [],
+    this.priorityMemoryIds = const [],
+    this.version = 0,
+    this.updatedVia,
+    this.updatedAt,
+  });
+
+  final ThinkRoleId department;
+  final List<String> questions;
+  final List<String> risks;
+  final List<String> priorityMemoryIds;
+  final int version;
+
+  /// `owner`(직접 수정) 또는 `action:<id>`(제안 승인).
+  final String? updatedVia;
+  final DateTime? updatedAt;
+
+  bool get isEmpty => questions.isEmpty && risks.isEmpty && priorityMemoryIds.isEmpty;
+
+  factory ThinkDepartmentCriteria.fromRow(Map<String, dynamic> r) {
+    final via = _str(r['updated_via']);
+    return ThinkDepartmentCriteria(
+      department: ThinkRoleId.parse(_str(r['department'])),
+      questions: _strList(r['questions']),
+      risks: _strList(r['risks']),
+      priorityMemoryIds: _strList(r['priority_memory_ids']),
+      version: (r['version'] as num?)?.toInt() ?? 0,
+      updatedVia: via.isEmpty ? null : via,
+      updatedAt: _date(r['updated_at']),
+    );
+  }
 }
 
 /// 커서 문의 답변의 판정(ai_messages.relay). 서버가 근거 기억을 다시 확인해 정한다.
@@ -256,23 +423,64 @@ class ThinkRelayVerdict {
 }
 
 /// Edge `ROLE_PROFILE_VERSION`과 맞춘다. 역할 프로필 문구만 바뀔 때 갱신.
-const kThinkRoleProfileVersion = 'think-role-2026-10-10';
+const kThinkRoleProfileVersion = 'think-role-2026-10-12';
 
+/// 부서. DB 값 'product'는 그대로 두고 이름만 '문제 풀이'로 바꿨다(2026-10-12).
 enum ThinkRoleId {
   lead('lead', '총괄'),
   education('education', '교육'),
-  product('product', '제품'),
+  product('product', '문제 풀이'),
   engineering('engineering', '개발');
 
   const ThinkRoleId(this.db, this.label);
   final String db;
   final String label;
 
-  static ThinkRoleId parse(String? raw) =>
-      values.firstWhere((r) => r.db == raw, orElse: () => ThinkRoleId.lead);
+  static ThinkRoleId parse(String? raw) => values.firstWhere((r) => r.db == raw, orElse: () => ThinkRoleId.lead);
 
   /// 부서 역할이면 그 부서. 총괄은 없음.
   ThinkDepartmentId? get department => ThinkDepartmentId.parse(db);
+}
+
+/// 마지막 글자 받침에 따라 조사를 붙인다(개발과, 문제 풀이와). 한글이 아니면 [withoutFinal].
+String thinkWithJosa(String word, String withFinal, String withoutFinal) {
+  if (word.isEmpty) return word;
+  final code = word.codeUnitAt(word.length - 1);
+  final hangul = code >= 0xAC00 && code <= 0xD7A3;
+  return '$word${hangul && (code - 0xAC00) % 28 != 0 ? withFinal : withoutFinal}';
+}
+
+/// 대화·부서의 진행 상태. 트리의 부서 캐릭터와 대화 줄에 보인다.
+enum ThinkActivity {
+  idle('쉬는 중'),
+  answering('답하는 중'),
+  waiting('승인 대기'),
+  coding('Cursor 작업 중'),
+  consulting('협의 중');
+
+  const ThinkActivity(this.label);
+  final String label;
+
+  bool get busy => this == answering || this == coding || this == consulting;
+}
+
+class ThinkDepartmentActivity {
+  const ThinkDepartmentActivity(this.activity, {this.consultWith, this.count = 0});
+
+  final ThinkActivity activity;
+
+  /// 협의 중이면 상대 부서.
+  final ThinkRoleId? consultWith;
+
+  /// 승인 대기 제안 수 또는 진행 중인 Cursor 작업 수.
+  final int count;
+
+  String get label => switch (activity) {
+        ThinkActivity.consulting => '↔ ${thinkWithJosa(consultWith?.label ?? '다른 부서', '과', '와')} 협의 중',
+        ThinkActivity.waiting => '승인 대기 $count',
+        ThinkActivity.coding => count > 1 ? 'Cursor 작업 $count' : 'Cursor 작업 중',
+        _ => activity.label,
+      };
 }
 
 enum ThinkMemoryScope {
@@ -290,7 +498,7 @@ enum ThinkMemoryScope {
 
 enum ThinkDepartmentId {
   education('education', '교육'),
-  product('product', '제품'),
+  product('product', '문제 풀이'),
   engineering('engineering', '개발');
 
   const ThinkDepartmentId(this.db, this.label);
@@ -397,6 +605,7 @@ class ThinkMessage {
     this.model,
     this.createdAt,
     this.contextExcluded = false,
+    this.markedImportant = false,
     this.sourceMessageId,
     this.askedBy,
     this.relay,
@@ -406,7 +615,7 @@ class ThinkMessage {
   final String role;
   String content;
   ThinkMessageStatus status;
-  final List<ThinkAttachment> attachments;
+  List<ThinkAttachment> attachments;
   List<ThinkSource> sources;
   List<ThinkToolTrace> toolCalls;
   String? commentary;
@@ -416,6 +625,9 @@ class ThinkMessage {
 
   /// 기록과 트리에는 남지만 AI가 읽는 대화 기록·결정 초안·스펙에서는 빠진다.
   bool contextExcluded;
+
+  /// 화면에서 눈여겨볼 메시지 표시. AI 지시나 원칙이 아니다(자동 정리 제안, 2026-10-12).
+  bool markedImportant;
 
   /// 대화를 나눌 때 복사해 온 원본 메시지.
   final String? sourceMessageId;
@@ -452,6 +664,7 @@ class ThinkMessage {
         model: r['model'] as String?,
         createdAt: _date(r['created_at']),
         contextExcluded: r['context_excluded'] == true,
+        markedImportant: r['marked_important'] == true,
         sourceMessageId: _str(r['source_message_id']).isEmpty ? null : _str(r['source_message_id']),
         askedBy: _str(r['asked_by']).isEmpty ? null : _str(r['asked_by']),
         relay: ThinkRelayVerdict.fromJson(r['relay']),
@@ -485,8 +698,7 @@ enum ThinkTreeKind {
   const ThinkTreeKind(this.db);
   final String db;
 
-  static ThinkTreeKind parse(String raw) =>
-      values.firstWhere((k) => k.db == raw, orElse: () => ThinkTreeKind.folder);
+  static ThinkTreeKind parse(String raw) => values.firstWhere((k) => k.db == raw, orElse: () => ThinkTreeKind.folder);
 }
 
 /// 대화 정리 트리의 노드. 폴더(주제), 대화 배치, 발췌(요약), 종합 문서(본문+출처) 중 하나.
@@ -506,11 +718,15 @@ class ThinkTreeNode {
     this.sourceMessageIds = const [],
     this.createdAt,
     this.updatedAt,
+    this.department,
   });
 
   final String id;
   final String? parentId;
   final ThinkTreeKind kind;
+
+  /// 폴더의 부서. 폴더가 아니거나 부서 마이그레이션 전 DB면 null.
+  final ThinkRoleId? department;
   final String title;
   final String? summary;
   final String? body;
@@ -545,6 +761,7 @@ class ThinkTreeNode {
       sourceMessageIds: sources.map((s) => _str(s['message_id'])).where((s) => s.isNotEmpty).toList(),
       createdAt: _date(r['created_at']),
       updatedAt: _date(r['updated_at']),
+      department: r['department'] is String ? ThinkRoleId.parse(r['department'] as String) : null,
     );
   }
 }
@@ -589,8 +806,7 @@ enum ThinkMemoryKind {
   final String db;
   final String label;
 
-  static ThinkMemoryKind parse(String raw) =>
-      values.firstWhere((k) => k.db == raw, orElse: () => ThinkMemoryKind.note);
+  static ThinkMemoryKind parse(String raw) => values.firstWhere((k) => k.db == raw, orElse: () => ThinkMemoryKind.note);
 }
 
 enum ThinkMemoryStatus {
@@ -675,9 +891,8 @@ class ThinkMemory {
         scopeDepartment: ThinkDepartmentId.parse(r['scope_department']?.toString()),
       );
 
-  String get scopeLabel => memoryScope == ThinkMemoryScope.department
-      ? '${scopeDepartment?.label ?? '?'} 부서'
-      : memoryScope.label;
+  String get scopeLabel =>
+      memoryScope == ThinkMemoryScope.department ? '${scopeDepartment?.label ?? '?'} 부서' : memoryScope.label;
 }
 
 class ThinkMemoryDraft {
@@ -744,9 +959,7 @@ class ThinkMemoryDraft {
       'content': content.trim(),
       'decision_context': isDecision ? nullIfBlank(decisionContext) : null,
       'decision_reason': isDecision ? nullIfBlank(decisionReason) : null,
-      'alternatives': isDecision
-          ? alternatives.map((e) => e.trim()).where((e) => e.isNotEmpty).toList()
-          : <String>[],
+      'alternatives': isDecision ? alternatives.map((e) => e.trim()).where((e) => e.isNotEmpty).toList() : <String>[],
       'tags': tags.map((e) => e.trim()).where((e) => e.isNotEmpty).toList(),
       'sort_order': sortOrder,
       'source_conversation_id': sourceConversationId,
@@ -773,9 +986,7 @@ class ThinkMemoryRevision {
   factory ThinkMemoryRevision.fromRow(Map<String, dynamic> r) => ThinkMemoryRevision(
         version: (r['version'] as num?)?.toInt() ?? 0,
         changedAt: _date(r['changed_at']),
-        snapshot: r['snapshot'] is Map
-            ? Map<String, dynamic>.from(r['snapshot'] as Map)
-            : const {},
+        snapshot: r['snapshot'] is Map ? Map<String, dynamic>.from(r['snapshot'] as Map) : const {},
       );
 }
 
@@ -905,6 +1116,7 @@ class ThinkStatus {
     this.promptVersion = '',
     this.features = const {},
     this.featuresDbError,
+    this.capabilities = const {},
   });
 
   final bool configured;
@@ -921,12 +1133,31 @@ class ThinkStatus {
   /// 서버가 DB 기능 확인에 실패한 이유(함수 없음은 제외). 비밀값은 들어 있지 않다.
   final String? featuresDbError;
 
+  /// DB·앱 버전과 무관한 Edge 기능 버전(예: concept_reference). 없으면 옛 Edge다.
+  final Map<String, int> capabilities;
+
+  /// 개념 탭 참고(concept_id로 저장본 다시 읽기)를 아는 Edge다. 옛 Edge는 concept_id를 말없이 버린다.
+  bool get conceptReference => (capabilities['concept_reference'] ?? 0) >= 1;
+
+  /// 개념 상세에서 고른 서술(statement_id)도 다시 읽는 Edge다. 옛 Edge는 statement_id를 버리고 개념 본문만 읽는다.
+  bool get conceptStatementReference => (capabilities['concept_reference'] ?? 0) >= 3;
+
+  /// 개념 탭 정리 기준 참고(criterion_id로 확정본·초안 다시 읽기)를 아는 Edge다.
+  bool get criterionReference => (capabilities['criterion_reference'] ?? 0) >= 1;
+
+  /// 개념 초안 검토 창 대화(draft_id로 초안 저장본 다시 읽기·변경 카드)를 아는 Edge다.
+  bool get conceptDraftReference => (capabilities['concept_draft_reference'] ?? 0) >= 1;
+
   /// 응답에 없으면 연결된 Edge가 이 기능을 모르는 버전이다.
   ThinkFeatureStatus get conversationSplit => features['conversation_split'] ?? ThinkFeatureStatus.edgeMissing;
 
   ThinkFeatureStatus get thinkRoles => features['think_roles'] ?? ThinkFeatureStatus.edgeMissing;
 
   ThinkFeatureStatus get memoryProposals => features['memory_proposals'] ?? ThinkFeatureStatus.edgeMissing;
+
+  ThinkFeatureStatus get departmentWork => features['department_work'] ?? ThinkFeatureStatus.edgeMissing;
+
+  ThinkFeatureStatus get autoOrganize => features['auto_organize'] ?? ThinkFeatureStatus.edgeMissing;
 
   ThinkStatus withFeatures(Map<String, ThinkFeatureStatus> next) => ThinkStatus(
         configured: configured,
@@ -940,6 +1171,7 @@ class ThinkStatus {
         promptVersion: promptVersion,
         features: next,
         featuresDbError: featuresDbError,
+        capabilities: capabilities,
       );
 
   factory ThinkStatus.fromJson(Map<String, dynamic> j) {
@@ -959,6 +1191,12 @@ class ThinkStatus {
       promptVersion: _str(j['prompt_version']),
       features: parseThinkFeatures(j['features']),
       featuresDbError: _str(j['features_db_error']).isEmpty ? null : _str(j['features_db_error']),
+      capabilities: j['capabilities'] is Map
+          ? {
+              for (final e in (j['capabilities'] as Map).entries)
+                if (e.value is num) e.key.toString(): (e.value as num).toInt(),
+            }
+          : const {},
     );
   }
 }
@@ -1069,6 +1307,8 @@ class ThinkSettings {
     this.budgetMode = 'warn',
     this.webSearchEnabled = true,
     this.codeRequestDailyLimit = 10,
+    this.autoOrganizeEnabled = true,
+    this.autoOrganizeColumn = false,
   });
 
   final double? monthlyBudgetUsd;
@@ -1076,13 +1316,22 @@ class ThinkSettings {
   final bool webSearchEnabled;
   final int codeRequestDailyLimit;
 
+  /// 자동 정리 제안. 끄면 사용자가 직접 정리를 요청할 때만 Think가 분류·기억·정리 제안을 한다.
+  final bool autoOrganizeEnabled;
+
+  /// DB에 자동 정리 설정 열이 있다(마이그레이션 반영). 없으면 켜기·끄기를 보여 주지 않는다.
+  final bool autoOrganizeColumn;
+
   factory ThinkSettings.fromRow(Map<String, dynamic>? r) => r == null
       ? const ThinkSettings()
       : ThinkSettings(
           monthlyBudgetUsd: r['monthly_budget_usd'] == null ? null : _num(r['monthly_budget_usd']),
           budgetMode: _str(r['budget_mode']) == 'block' ? 'block' : 'warn',
           webSearchEnabled: r['web_search_enabled'] != false,
-          codeRequestDailyLimit: r['code_request_daily_limit'] == null ? 10 : _num(r['code_request_daily_limit']).toInt(),
+          codeRequestDailyLimit:
+              r['code_request_daily_limit'] == null ? 10 : _num(r['code_request_daily_limit']).toInt(),
+          autoOrganizeEnabled: r['auto_organize_enabled'] != false,
+          autoOrganizeColumn: r.containsKey('auto_organize_enabled'),
         );
 }
 

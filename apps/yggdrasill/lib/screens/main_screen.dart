@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import '../widgets/home_grading_edit_icon.dart';
 import '../widgets/home_header_weather_icon.dart';
 import '../widgets/home_status_dashboard_icon.dart';
+import '../widgets/class_timetable_icon.dart';
+import '../widgets/schedule_calendar_icon.dart';
 import '../widgets/student_member_icon.dart';
 import '../widgets/tendency_puzzle_icon.dart';
 import 'design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
@@ -727,16 +729,11 @@ class _MainScreenState extends State<MainScreen>
   /// 등원학생 행 — 왼쪽 블록 ↔ 과제칩 사이 여백 (1줄 모드, 절대 px)
   static const double _sideSheetAttendedToHomeworkGap = 22.0;
 
-  /// 2줄 모드 — 이름 텍스트 끝 ↔ 과제칩 (절대 px, scale 미적용)
+  /// 2줄 모드 — 이름 텍스트 끝 ↔ 과제명 (절대 px, scale 미적용)
   static const double _sideSheetAttendedTwoLineNameToHomeworkGap = 56.0;
 
-  /// 사이드시트 과제칩 내부 좌·우 여백 (최대 스케일 기준)
-  static const double _sideSheetHomeworkChipHorizontalPad = 12.0;
-
-  /// 사이드시트 과제칩·등원예정 이름 글자 크기 하한 (등원학생 이름 18px은 고정)
+  /// 사이드시트 과제명·등원예정 이름 글자 크기 하한 (등원학생 이름 18px은 고정)
   static const double _sideSheetHomeworkChipMinFontSize = 16.0;
-  static const double _sideSheetHomeworkChipMinWidth = 70.0;
-  static const double _sideSheetHomeworkChipRadius = 6.0;
 
   /// 27" 4K 기준 화면 너비가 이 비율 이하로 줄면 등원학생 2줄 표시
   static const double _sideSheetAttendedTwoLineWidthRatio = 0.75;
@@ -765,8 +762,6 @@ class _MainScreenState extends State<MainScreen>
   late AnimationController _fabController;
   late Animation<double> _fabScaleAnimation;
   late Animation<double> _fabOpacityAnimation;
-  // UI 전용: 칩 상태/애니메이션(제출 회전·확인 깜빡임)
-  late AnimationController _uiAnimController;
   // 진단용: 사이드 시트 완료 상태 전이 추적
   bool _sideSheetWasComplete = false;
   // 사이드 시트 데이터 캐시
@@ -2063,11 +2058,6 @@ class _MainScreenState extends State<MainScreen>
       begin: 0.0,
       end: 1.0,
     ).animate(CurvedAnimation(parent: _fabController, curve: Curves.easeInOut));
-    // UI 전용 애니메이션 틱(회전·깜빡임 공통)
-    _uiAnimController = AnimationController(
-      duration: const Duration(milliseconds: 1800),
-      vsync: this,
-    )..repeat();
     // 진단 타이머 제거됨
     // 스크롤 컨트롤러 초기화
     _attendedScrollCtrl = ScrollController();
@@ -2316,7 +2306,6 @@ class _MainScreenState extends State<MainScreen>
     _searchController.dispose();
     _attendedScrollCtrl.dispose();
     _waitingScrollCtrl.dispose();
-    _uiAnimController.dispose();
     _animLogTimer?.cancel();
     unawaited(M5QuestionRequestStore.instance.stop());
     unawaited(KioskNoticePrintService.instance.stop());
@@ -2571,11 +2560,13 @@ class _MainScreenState extends State<MainScreen>
       FabTabBarTokens.fabBarLabelFontSize;
 
   TextStyle _sideSheetHomeworkChipTextStyle(BuildContext context) {
-    final palette = FabTabBarTokens.paletteFor(Theme.of(context).brightness);
+    final panel = FabTabBarTokens.previewAcademyPanelStyleFor(
+      Theme.of(context).brightness,
+    );
     return TextStyle(
-      color: palette.labelSelected,
+      color: panel.hint,
       fontSize: FabTabBarTokens.fabBarLabelFontSize,
-      fontWeight: FontWeight.w600,
+      fontWeight: FontWeight.w500,
       fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
       height: 1.0,
       leadingDistribution: TextLeadingDistribution.even,
@@ -2647,17 +2638,9 @@ class _MainScreenState extends State<MainScreen>
     double scale, {
     required bool attendedTwoLine,
   }) {
+    if (attendedTwoLine) return EdgeInsets.zero;
     final rowPad = _sideSheetAttendedNameRowPadding(scale);
-    final horizontalPad = _sideSheetHomeworkChipHorizontalPad * scale;
-    if (attendedTwoLine) {
-      return EdgeInsets.symmetric(horizontal: horizontalPad);
-    }
-    return EdgeInsets.fromLTRB(
-      horizontalPad,
-      rowPad.top,
-      horizontalPad,
-      rowPad.bottom,
-    );
+    return EdgeInsets.fromLTRB(0, rowPad.top, 0, rowPad.bottom);
   }
 
   Widget _sideSheetStudentNameText(
@@ -3396,6 +3379,17 @@ class _MainScreenState extends State<MainScreen>
     ),
   ];
 
+  static const List<FabTabIconPair?> _timetableTabIcons = [
+    FabTabIconPair(
+      outlineSvg: classTimetableOutlineSvg,
+      filledSvg: classTimetableIconSvg,
+    ),
+    FabTabIconPair(
+      outlineSvg: scheduleCalendarOutlineSvg,
+      filledSvg: scheduleCalendarIconSvg,
+    ),
+  ];
+
   List<String> _sharedTabLabels(int menu) {
     switch (menu) {
       case 0:
@@ -3443,8 +3437,8 @@ class _MainScreenState extends State<MainScreen>
         final selected = sharedScreenTabBar.menuIndex == menu
             ? sharedScreenTabBar.selectedIndex.clamp(0, tabs.length - 1)
             : 0;
-        final railWidth = NavigationRailTheme.of(context).minWidth ??
-            navRailMinWidth;
+        final railWidth =
+            NavigationRailTheme.of(context).minWidth ?? navRailMinWidth;
         return Positioned(
           left: railWidth + leftSideSheetClipWidthNotifier.value,
           right: 0,
@@ -3459,6 +3453,7 @@ class _MainScreenState extends State<MainScreen>
               tabIcons: switch (menu) {
                 0 => _homeTabIcons,
                 1 => _studentTabIcons,
+                2 => _timetableTabIcons,
                 _ => null,
               },
             ),
@@ -3862,7 +3857,8 @@ class _MainScreenState extends State<MainScreen>
                                                                           .center,
                                                                   children: [
                                                                     Flexible(
-                                                                      child: Padding(
+                                                                      child:
+                                                                          Padding(
                                                                         padding:
                                                                             const EdgeInsets.only(
                                                                           left:
@@ -3893,11 +3889,10 @@ class _MainScreenState extends State<MainScreen>
                                                                       iconSize:
                                                                           40,
                                                                       color: PreviewAcademyPanelStyle
-                                                                              .forBrightness(
-                                                                            Theme.of(context)
-                                                                                .brightness,
-                                                                          )
-                                                                          .icon,
+                                                                          .forBrightness(
+                                                                        Theme.of(context)
+                                                                            .brightness,
+                                                                      ).icon,
                                                                     ),
                                                                   ],
                                                                 ),
@@ -5133,17 +5128,12 @@ class _MainScreenState extends State<MainScreen>
             return ValueListenableBuilder<int>(
               valueListenable: HomeworkStore.instance.revision,
               builder: (context, _rev, _) {
-                return AnimatedBuilder(
-                  animation: _uiAnimController,
-                  builder: (context, _) {
-                    return _buildHomeworkChipsScroller(
-                      t,
-                      scale: scale,
-                      attendedTwoLine: attendedTwoLine,
-                      hiddenItemIds: hiddenAssignedItemIds,
-                      groupTitleById: groupTitleById,
-                    );
-                  },
+                return _buildHomeworkChipsScroller(
+                  t,
+                  scale: scale,
+                  attendedTwoLine: attendedTwoLine,
+                  hiddenItemIds: hiddenAssignedItemIds,
+                  groupTitleById: groupTitleById,
                 );
               },
             );
@@ -5209,70 +5199,48 @@ class _MainScreenState extends State<MainScreen>
   }) {
     final studentId = t.student.id;
     final groups = HomeworkStore.instance.groups(studentId);
-    final List<Widget> chips = [];
-    void addGroupTitleChip(
-      String rawTitle, {
-      int visualPhase = 1, // 1:대기 2:수행 3:제출 4:확인
-    }) {
-      final chipTitle = _chipDisplayTitle(rawTitle);
-      if (chipTitle.trim().isEmpty) return;
+    final titles = <String>[];
+    for (final group in groups) {
+      final children = HomeworkStore.instance
+          .itemsInGroup(studentId, group.id)
+          // 왼쪽 사이드시트에서는 "현재 수행중(phase=2/runStart 존재)" 항목만 반영한다.
+          .where(_isRunningHomeworkItem)
+          .where((e) => !hiddenItemIds.contains(e.id))
+          .toList();
+      if (children.isEmpty) continue;
+      final fromAssignment = (groupTitleById[group.id] ?? '').trim();
+      final fromGroup = group.title.trim();
+      final rawTitle = fromAssignment.isNotEmpty
+          ? fromAssignment
+          : (fromGroup.isNotEmpty ? fromGroup : '그룹 과제');
+      final title = _chipDisplayTitle(rawTitle);
+      if (title.trim().isEmpty) continue;
+      titles.add(title);
+    }
+    if (titles.isEmpty) return const <Widget>[];
 
-      if (chips.isNotEmpty) chips.add(const SizedBox(width: 8));
-      chips.add(
-        Builder(
-          builder: (context) {
-            final tick = _uiAnimController.value;
-            final phase4Pulse = 0.5 + 0.5 * math.sin(2 * math.pi * tick);
-            final palette = FabTabBarTokens.paletteFor(
-              Theme.of(context).brightness,
-            );
-            // FabStyleTabBar 선택 알약과 동일: palette.highlight
-            final chipFill = palette.highlight;
-            final chipFontSize = _sideSheetHomeworkChipFontSize(scale);
-            final chipRadius = _sideSheetHomeworkChipRadius * scale;
-            final style = _sideSheetHomeworkChipTextStyle(context);
-            final chipPad = _sideSheetHomeworkChipPadding(
-              scale,
-              attendedTwoLine: attendedTwoLine,
-            );
-            final chipHeight = _sideSheetHomeworkChipHeight(
-              scale,
-              attendedTwoLine: attendedTwoLine,
-            );
-            final Color backgroundColor = switch (visualPhase) {
-              2 => chipFill,
-              3 => chipFill,
-              4 => Color.lerp(
-                    chipFill.withValues(
-                      alpha: (chipFill.a * 0.45).clamp(0.0, 1.0),
-                    ),
-                    chipFill,
-                    phase4Pulse,
-                  ) ??
-                  chipFill,
-              _ => Colors.transparent,
-            };
-            Widget chipInner = Container(
-              constraints: BoxConstraints(
-                minWidth: _sideSheetHomeworkChipMinWidth * scale,
-                minHeight: chipHeight,
-              ),
-              padding: chipPad,
-              alignment:
-                  attendedTwoLine ? Alignment.center : Alignment.centerLeft,
-              decoration: BoxDecoration(
-                color: backgroundColor,
-                borderRadius: BorderRadius.circular(chipRadius),
+    final label = titles.join(' · ');
+    return <Widget>[
+      Builder(
+        builder: (context) {
+          final style = _sideSheetHomeworkChipTextStyle(context);
+          final fontSize = _sideSheetHomeworkChipFontSize(scale);
+          return Tooltip(
+            message: label,
+            child: Padding(
+              padding: _sideSheetHomeworkChipPadding(
+                scale,
+                attendedTwoLine: attendedTwoLine,
               ),
               child: Text(
-                chipTitle,
+                label,
                 style: style,
-                textAlign: TextAlign.center,
+                textAlign: TextAlign.left,
                 maxLines: 1,
                 softWrap: false,
                 textScaler: TextScaler.noScaling,
                 strutStyle: StrutStyle(
-                  fontSize: chipFontSize,
+                  fontSize: fontSize,
                   height: 1.0,
                   fontWeight: style.fontWeight,
                   fontFamily: style.fontFamily,
@@ -5284,41 +5252,11 @@ class _MainScreenState extends State<MainScreen>
                   applyHeightToLastDescent: false,
                 ),
               ),
-            );
-
-            return Tooltip(
-              message: chipTitle,
-              child: chipInner,
-            );
-          },
-        ),
-      );
-    }
-
-    for (final group in groups) {
-      final children = HomeworkStore.instance
-          .itemsInGroup(studentId, group.id)
-          // 왼쪽 사이드시트에서는 "현재 수행중(phase=2/runStart 존재)" 항목만 칩에 반영한다.
-          .where(_isRunningHomeworkItem)
-          .where((e) => !hiddenItemIds.contains(e.id))
-          .toList();
-      if (children.isEmpty) continue;
-      final bool hasRunningChild =
-          children.any((e) => e.runStart != null || e.phase == 2);
-      final bool hasSubmittedChild = children.any((e) => e.phase == 3);
-      final bool hasConfirmedChild = children.any((e) => e.phase == 4);
-      final int groupPhase = hasRunningChild
-          ? 2
-          : (hasSubmittedChild ? 3 : (hasConfirmedChild ? 4 : 1));
-
-      final fromAssignment = (groupTitleById[group.id] ?? '').trim();
-      final fromGroup = group.title.trim();
-      final rawTitle = fromAssignment.isNotEmpty
-          ? fromAssignment
-          : (fromGroup.isNotEmpty ? fromGroup : '그룹 과제');
-      addGroupTitleChip(rawTitle, visualPhase: groupPhase);
-    }
-    return chips;
+            ),
+          );
+        },
+      ),
+    ];
   }
 }
 
@@ -6093,9 +6031,10 @@ extension on _MainScreenState {
             },
           );
           if (!ok) {
-            for (final hw in createdItems.reversed) {
-              HomeworkStore.instance.remove(target.student.id, hw.id);
-            }
+            HomeworkStore.instance.removeMany(
+              target.student.id,
+              createdItems.map((hw) => hw.id),
+            );
             HomeworkAssignmentStore.instance
                 .revertOptimisticReservedAssignmentsForItems(
               target.student.id,

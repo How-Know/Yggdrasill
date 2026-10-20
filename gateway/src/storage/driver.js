@@ -385,7 +385,10 @@ function slugForFileName(input) {
 /**
  * Canonical crop storage key.
  * Path: academies/<academy_id>/books/<book_id>/<grade_label>/
- *   <big_order>_<mid_order>_<sub_key>/<problem_number>.png
+ *   <big_order>_<mid_order>_<sub_key>[-<sub_index>]/<problem_number>.png
+ *
+ * 소단원 순번(sub_index)이 다르면 같은 번호도 다른 문항이라 경로가 달라야 한다.
+ * 0 은 붙이지 않아 기존 경로가 그대로 유지된다.
  */
 export function buildTextbookCropStorageKey({
   academyId,
@@ -394,6 +397,7 @@ export function buildTextbookCropStorageKey({
   bigOrder,
   midOrder,
   subKey,
+  subIndex = 0,
   problemNumber,
   ext = 'png',
 }) {
@@ -407,9 +411,11 @@ export function buildTextbookCropStorageKey({
   }
   const bigI = Number.isFinite(Number(bigOrder)) ? Number(bigOrder) : 0;
   const midI = Number.isFinite(Number(midOrder)) ? Number(midOrder) : 0;
+  const subI = Number.parseInt(String(subIndex ?? ''), 10);
+  const subSuffix = Number.isFinite(subI) && subI > 0 ? `-${subI}` : '';
   return (
     `academies/${a}/books/${b}/${g}/` +
-    `${bigI}_${midI}_${s}/${num}.${ext}`
+    `${bigI}_${midI}_${s}${subSuffix}/${num}.${ext}`
   );
 }
 

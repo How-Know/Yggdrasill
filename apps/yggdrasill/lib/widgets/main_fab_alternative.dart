@@ -197,7 +197,9 @@ class _MainFabAlternativeState extends State<MainFabAlternative> {
                                     ],
                                     AppConfirmButton(
                                       enabled: canRunBatchConfirm,
-                                      label: _batchConfirmBusy ? '처리 중' : '완료',
+                                      showIcon: !_batchConfirmBusy,
+                                      label:
+                                          _batchConfirmBusy ? '처리 중...' : '완료',
                                       onPressed: () async {
                                         final action = homeBatchConfirmAction;
                                         if (action == null) return;
@@ -327,7 +329,6 @@ class _NavRailPlusButtonState extends State<NavRailPlusButton>
     super.initState();
     _collapseMenu = _collapseFabMenu;
     collapseNavRailPlusMenu = _collapseMenu;
-    gradingModeActive.addListener(_hideIfNeeded);
     hideGlobalMainFab.addListener(_hideIfNeeded);
     _fabController = AnimationController(
       vsync: this,
@@ -360,8 +361,7 @@ class _NavRailPlusButtonState extends State<NavRailPlusButton>
   }
 
   void _hideIfNeeded() {
-    if ((gradingModeActive.value || hideGlobalMainFab.value) &&
-        _isFabExpanded) {
+    if (hideGlobalMainFab.value && _isFabExpanded) {
       _collapseFabMenu();
     }
     if (mounted) setState(() {});
@@ -372,7 +372,6 @@ class _NavRailPlusButtonState extends State<NavRailPlusButton>
     if (identical(collapseNavRailPlusMenu, _collapseMenu)) {
       collapseNavRailPlusMenu = null;
     }
-    gradingModeActive.removeListener(_hideIfNeeded);
     hideGlobalMainFab.removeListener(_hideIfNeeded);
     _removeMenuOverlay();
     _fabController.dispose();
@@ -559,36 +558,31 @@ class _NavRailPlusButtonState extends State<NavRailPlusButton>
     return ValueListenableBuilder<bool>(
       valueListenable: hideGlobalMainFab,
       builder: (context, hidden, _) {
-        return ValueListenableBuilder<bool>(
-          valueListenable: gradingModeActive,
-          builder: (context, grading, _) {
-            if (hidden || grading) return const SizedBox.shrink();
-            return Padding(
-              padding: const EdgeInsets.only(
-                bottom: FabTabBarTokens.navRailPlusGap,
-              ),
-              child: AnimatedBuilder(
-                animation: _fabController,
-                builder: (context, child) {
-                  return FabStyleActionButton(
-                    icon: _isFabExpanded ? Icons.close : Icons.add,
-                    onPressed: () {
-                      setState(() {
-                        _isFabExpanded = !_isFabExpanded;
-                        if (_isFabExpanded) {
-                          _fabController.forward();
-                          _insertMenuOverlay(context);
-                        } else {
-                          _fabController.reverse();
-                          _removeMenuOverlay();
-                        }
-                      });
-                    },
-                  );
+        if (hidden) return const SizedBox.shrink();
+        return Padding(
+          padding: const EdgeInsets.only(
+            bottom: FabTabBarTokens.navRailPlusGap,
+          ),
+          child: AnimatedBuilder(
+            animation: _fabController,
+            builder: (context, child) {
+              return FabStyleActionButton(
+                icon: _isFabExpanded ? Icons.close : Icons.add,
+                onPressed: () {
+                  setState(() {
+                    _isFabExpanded = !_isFabExpanded;
+                    if (_isFabExpanded) {
+                      _fabController.forward();
+                      _insertMenuOverlay(context);
+                    } else {
+                      _fabController.reverse();
+                      _removeMenuOverlay();
+                    }
+                  });
                 },
-              ),
-            );
-          },
+              );
+            },
+          ),
         );
       },
     );

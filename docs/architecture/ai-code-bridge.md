@@ -226,11 +226,19 @@ Agent.create({
 - 조율(`mode = 'plan'`)도 조사와 같은 읽기 전용 설정이다. 요청문(`buildPlanPrompt`)은 "실무 개발자로서 계획 초안을 코드에 비춰 검토"를 맡긴다.
 - 실행 중 1분마다 "조율/수정/조사 진행 중 · N분 · 도구 M회 · 바뀐 파일 K개 (제한 X분)"을 터미널에 찍는다.
 - 결과를 올리기 전에 키처럼 보이는 문자열(`sk-`, `eyJ`, 긴 16진수 등)을 가린다.
+  diff는 가리면 적용할 수 없어 키처럼 보이면 아예 올리지 않는다(`looksSecret`). 2026-10-15부터 `apikey: AuthService.supabaseAnonKey`,
+  `secret = Deno.env.get('X')`처럼 따옴표 없이 식별자를 점으로 이은 코드 참조는 키로 세지 않는다(이것 때문에 정상 수정 diff가 막혔다).
+  따옴표 안의 값, 점 없는 긴 값, `eyJ`로 시작하는 값, 숫자·대소문자가 섞인 16자 이상 조각이 든 값은 그대로 막는다. 결과 글의 가리기는 전과 같다.
 - 끝나면 `run.wait()` 결과의 토큰 수(`usage`), 도구별 호출 수, 저장소 상태를 함께 올리고 에이전트를 정리(`close`)한다.
   `agent.getUsage()`(달러 비용)는 운영자 계정에서 `feature_unavailable`이라 쓸 수 없다.
 - 수정 실행은 diff를 모은 뒤 같은 복사본에서 자동 검사(`src/checks.mjs`)를 돌리고 `result.verification`에 함께 올린다.
   검사 목록·상태·기준 복사본 비교는 [`ai-think-actions.md`](ai-think-actions.md) §4.5. 검사는 정해진 명령만 돌리고
   (Cursor 에이전트에게 셸을 주는 것이 아니다), 키·토큰 환경 변수는 빼고 넘긴다. AI가 쓴 시험 코드가 이 PC에서 실행된다는 점은 남는다.
+- 2026-10-13(`code_bridge.v8`, `CHECKS_VERSION = 2`): 조율본 `spec.checks`의 요청 검사(`node --test <경로>`만)를 필수 항목으로 돌리고,
+  `package.json`·`test/`가 있는 node 폴더를 자동으로 검사한다. 복사본에 없는 `node_modules`는 작업 폴더 것을 `%TEMP%` 캐시에 복사해
+  junction으로 연결하고 검사 뒤 연결만 지운다. 수정 전 사전 점검(`result.preflight`)을 수정 프롬프트에 넣고, 항목마다 명령·폴더·종료 코드·시간,
+  전체에 판정(`verdict`)·검사한 패치 sha256·구간 시간(`result.timings`)을 남긴다. 수정 프롬프트는 "너는 검사를 돌리지 못한다, 통과했다고 쓰지 않는다"를 적는다.
+  자세한 규칙은 [`ai-think-actions.md`](ai-think-actions.md) §4.5.
 - 재수정 요청(`request.fix_of`)이면 claim 응답의 `fix{diff, base_commit}`로 앞 diff를 얹은 복사본에서 시작한다(§4.6).
   얹지 못하면 실패로 올린다.
 - 이어받기 요청(`request.continue_from`)이면 claim 응답의 `base_patch`(앞 수정의 최종 패치, 서버 RPC `ai_code_bridge_patch_source`)를
@@ -264,7 +272,8 @@ Agent.create({
   앱은 `effort` 열이 없으면(마이그레이션 전) 그 열 없이 회차를 읽는다.
 - **작업자 선택(`resolveModelSelection`):** 시작할 때 `Cursor.models.list()`(1시간 캐시)에서 모델을 id·별칭으로 찾고,
   강도 옵션(`reasoning_effort`, 옛 모델은 `effort`) 중 요청 강도를, 없으면 가장 가까운 값(같은 거리면 높은 쪽)을 고른다.
-  나머지 옵션은 Cursor 기본 조합을 따르고(grok-4.7은 `context 500k`, `fast true`), 목록에 실제로 있는 조합만 쓴다.
+  강도 옵션 하나만 보내고 나머지 옵션(context, fast)은 실행기 기본값에 맡긴다. 2026-10-12에 목록의 기본 조합(grok-4.7 `context 500k`,
+  `fast true`)을 그대로 보냈더니 실행기가 "Invalid parameters for registry model"로 거절해 모든 요청이 실패했다. 목록에 있어도 실행기가 받는다는 보장은 없다.
   강도 옵션이 없는 모델(`composer-2.5` 등)이나 목록을 못 받으면 `{ id }`만 넘기고 회차 강도를 null로 남긴다.
   실행 결과의 `result.model.params`가 있으면 그 값을 실제 강도로 기록한다. 시작 로그에 "모델 · 강도"를 찍는다.
 - 모드의 뜻과 권한, Cursor 키 위치(작업자 환경 변수)는 바뀌지 않는다.
@@ -298,6 +307,13 @@ Agent.create({
   따옴표가 사라져 JSON이 깨진다(예: 검색어 "전"은 깨지고 "전전"은 멀쩡하다). 그대로 거부하면 한글 검색이 모두 막힌다.
   그래서 JSON이 깨지면 경로 칸(`path`, `file`, `dir`, `glob`, `target`이 든 키)의 값만 골라 더 넓은 규칙으로 보고,
   경로 칸을 하나도 못 찾으면 거부한다. 파일 내용이 든 입력(`beforeReadFile`)은 내용이 아니라 경로로만 판단한다
+- 깨진 입력에서 복사본 안·밖은 읽을 대상(최상위 `file_path`, `tool_input`의 경로 칸)으로만 본다(2026-10-15). 전에는 훅 입력의
+  `transcript_path`(대화 기록 위치)와 `attachments[].file_path`까지 대상으로 봐서, 수정 모드에서 한글이 든 파일을 읽으면 복사본 안인데도
+  "Only files inside the working copy can be used."로 막혔다. JSON으로 읽힐 때와 같은 기준이다. 이 값들도 비밀 경로 검사는 그대로 받고,
+  대상을 하나도 못 찾으면 막는다. 막을 때는 어느 칸 때문인지 키 이름을 함께 적는다.
+  공식 Hooks 문서의 공통 입력 중 경로 칸 규칙에 걸리는 이름은 `transcript_path`(문자열 또는 null)뿐이다(`workspace_roots`는 배열,
+  `cwd`·`model_params`는 규칙에 걸리지 않음). `beforeReadFile`의 `attachments`는 `{type: file | rule, file_path}` 목록이다.
+  SDK 로컬 실행이 같은 칸을 보내는지는 문서에 없다. 다른 곁다리 경로 칸이 오면 밖으로 보고 막으므로(안전한 쪽) 거부 메시지의 키 이름을 보고 더한다
 - `tool_input`의 모든 문자열을 비밀 경로 규칙과 대조한다. `Grep`에 비밀 파일 경로를 직접 넣는 우회도 이것으로 막는다
 - 폴더 전체 검색은 `.gitignore`를 따른다. 비밀 파일은 반드시 `.gitignore`에 있어야 한다(현재 `.env*`는 있음)
 - 이 훅은 같은 저장소의 IDE 에이전트에도 적용되는데, 어차피 지키는 규칙이라 문제없다
@@ -310,6 +326,9 @@ Agent.create({
 |------|------|
 | 시작 실패 (`CursorSdkError`) | `isRetryable`이면 대기열로 되돌린다(같은 회차 최대 3회). 아니면 `failed` |
 | 실행 결과 `status: "error"` | 재시도하지 않는다. 사유를 남기고 `failed` |
+| Cursor 대화 기록 경로 | SDK 기본 위치(`~/.cursor/projects/<복사본 경로>/sdk-agent-store/…/agents/agent-<64>/store.db`)는 `%TEMP%` 복사본이면 Windows 260자를 넘어 `node:sqlite`가 열지 못한다. 그러면 대화가 저장되지 않아 턴마다 처음부터 다시 하다가 `[internal] unable to open database file`로 끝난다(2026-10-13 재수정 d6edbfa8, 11분·약 49만 토큰). 작업자는 요청마다 `%TEMP%/ygg-code-bridge/sdk/<요청 id>`에 `SqliteLocalAgentStore`를 열어 `local.store`로 넘기고, 경로가 한도를 넘으면 실행 전에 실패시킨다. 정상 완료면 지우고, 실패면 원인 확인용으로 남긴다 |
+| 결과 보고와 진행 신호가 겹침 | `ai_code_bridge_complete`·`_fail`은 요청 행 → 작업자 행, `_heartbeat`는 작업자 행 → 요청 행 순서로 잠가 겹치면 교착(heartbeat HTTP 500)된다. 작업자는 결과를 올리기 직전 진행 신호를 멈추고 이미 보낸 신호가 끝나기를 기다린다 |
+| 검사용 `node_modules` 캐시 | 연결(junction)은 실제 경로로 풀려 패키지끼리 찾으므로 캐시는 `%TEMP%/ygg-code-bridge/deps/<폴더>-<lock 해시>/node_modules` 모양이어야 한다. 예전 모양(폴더 자체가 node_modules 내용)은 `@cursor/sdk`가 `@bufbuild/protobuf`를 못 찾아 다음 연결 때 새로 만든다 |
 | 형식에 맞지 않는 답 | 원문을 저장하고 `needs_review`. 운영자가 원문을 보고 판단한다 |
 | 한 회차 15분 초과 (조사·조율) | 실행을 취소하고 `failed` (`timeout`) |
 | 수정 30분 초과 | 실행을 취소한다. 바뀐 파일이 있으면 그때까지의 diff를 올려 `needs_review`(적용 불가, 확인만), 없으면 `failed` |

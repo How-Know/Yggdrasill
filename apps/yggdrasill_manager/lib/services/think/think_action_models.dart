@@ -22,7 +22,27 @@ enum ThinkActionKind {
   saveMemory('save_memory', '기억 저장'),
 
   /// 대기 중인 기억 저장 카드를 수정·대체·삭제하자는 카드. 승인 전에는 대상 카드가 그대로다.
-  memoryCardChange('memory_card_change', '기억 카드 변경');
+  memoryCardChange('memory_card_change', '기억 카드 변경'),
+
+  /// Think가 이 대화를 다른 부서가 맡자고 제안. 승인하면 대화 역할이 바뀌고 그 부서의 미분류로 옮겨진다.
+  handoverDepartment('handover_department', '부서 넘기기'),
+
+  /// 정정·폐기된 메시지를 이후 답변 맥락에서 빼자는 제안. 메시지는 지우지 않고, 되돌릴 수 있다.
+  excludeContext('exclude_context', '맥락 제외'),
+
+  /// 중요한 결정·할 일·미결 문제가 나온 메시지에 표시하자는 제안. 화면 표시일 뿐 AI 지시가 아니다.
+  markImportant('mark_important', '중요 표시'),
+
+  /// 이 대화의 진행 요약(목적·확정·미결·상태·다음 행동). 승인해도 작업이 시작되지 않는다.
+  progressSummary('progress_summary', '진행 요약'),
+
+  /// 부서 기준(먼저 확인할 질문·위험·우선 기억)을 바꾸자는 제안.
+  departmentCriteriaChange('department_criteria_change', '부서 기준'),
+
+  /// 개념 초안 검토 대화의 카드. 승인은 검토 창에서 한다(concept_draft_action_apply·다시 정리는 Edge).
+  conceptDraftChange('concept_draft_change', '개념 초안 변경'),
+  conceptCriterionChange('concept_criterion_change', '정리 기준 고치기'),
+  conceptDraftRerun('concept_draft_rerun', '다시 정리');
 
   const ThinkActionKind(this.db, this.label);
   final String db;
@@ -38,6 +58,29 @@ enum ThinkActionKind {
   bool get isCode => this == codeRequest || this == codeChange || this == codePlan;
   bool get isDelete => this == deleteCodeRequest || this == deleteFolder || this == deleteConversation;
   bool get isMemory => this == saveMemory || this == memoryCardChange;
+  bool get isConceptDraft => this == conceptDraftChange || this == conceptCriterionChange || this == conceptDraftRerun;
+
+  /// 정리 패널에 모이는 제안. 코드·삭제 제안은 각자 카드로만 처리한다. Edge `ORGANIZE_KINDS`와 같다.
+  bool get isOrganize => switch (this) {
+        placeConversation ||
+        splitConversation ||
+        saveMemory ||
+        memoryCardChange ||
+        handoverDepartment ||
+        excludeContext ||
+        markImportant ||
+        progressSummary ||
+        departmentCriteriaChange =>
+          true,
+        _ => false,
+      };
+
+  /// 자동 정리 기능과 함께 생긴 종류. 그 기능이 있는 서버만 만든다.
+  bool get isOrganizeOnly =>
+      this == excludeContext || this == markImportant || this == progressSummary || this == departmentCriteriaChange;
+
+  /// 승인 뒤 되돌릴 수 있는 종류(서버 ai_action_undo).
+  bool get isUndoable => this == placeConversation || this == excludeContext || this == markImportant;
 }
 
 enum ThinkActionStatus {
@@ -238,6 +281,19 @@ class ThinkAction {
     return id.isEmpty ? null : id;
   }
 
+  /// 부서 넘기기: 받을 부서. payload를 먼저 본다(승인 때 서버가 쓰는 값).
+  ThinkRoleId? get handoverTo {
+    final raw = _str(payload['to_department']).isNotEmpty ? _str(payload['to_department']) : _str(preview['to_department']);
+    return raw.isEmpty ? null : ThinkRoleId.parse(raw);
+  }
+
+  ThinkRoleId? get handoverFrom {
+    final raw = _str(result?['from_department']).isNotEmpty ? _str(result?['from_department']) : _str(preview['from_department']);
+    return raw.isEmpty ? null : ThinkRoleId.parse(raw);
+  }
+
+  String get handoverReason => _str(payload['reason']).isNotEmpty ? _str(payload['reason']) : _str(preview['reason']);
+
   /// 새 대화에 복사하지 않고 원본에만 남은 것의 수(actions, code_requests, tree_nodes, other_messages).
   Map<String, int> get splitNotCopied {
     final raw = _map(result?['not_copied']);
@@ -245,6 +301,211 @@ class ThinkAction {
       for (final e in raw.entries)
         if (e.value is num) e.key: (e.value as num).toInt(),
     };
+  }
+
+  /// 분류 제안이 같은 답변의 부서 넘기기 뒤에 적용될 때 받을 부서.
+  ThinkRoleId? get placeAfterHandover {
+    final raw = _str(preview['after_handover']);
+    return raw.isEmpty ? null : ThinkRoleId.parse(raw);
+  }
+
+  // ---- 정리 제안 공통
+  /// Think가 왜 지금 이 정리를 제안하는지.
+  String get organizeReason => _str(payload['reason']).isNotEmpty ? _str(payload['reason']) : _str(preview['reason']);
+
+  // ---- 맥락 제외·중요 표시
+  List<String> get organizeMessageIds => _ids(payload['message_ids']);
+
+  /// 제안 때 서버가 확인한 대상 메시지(역할·발췌).
+  List<ThinkOrganizeTarget> get organizeTargets =>
+      (preview['targets'] is List ? preview['targets'] as List : const [])
+          .whereType<Map>()
+          .map((m) => ThinkOrganizeTarget.fromJson(Map<String, dynamic>.from(m)))
+          .toList();
+
+  /// 빼면 이후 답변이 무엇을 참고하지 않게 되는지.
+  String get exclusionImpact => _str(payload['impact']).isNotEmpty ? _str(payload['impact']) : _str(preview['impact']);
+
+  /// 대상 메시지에서 만든 발췌·종합 문서.
+  List<ThinkOrganizeLink> get linkedDocuments => _links(_map(preview['linked'])['documents']);
+
+  /// 대상 메시지에서 승인된 기억.
+  List<ThinkOrganizeLink> get linkedMemories => _links(_map(preview['linked'])['memories']);
+
+  /// 이 대화에 승인된 진행 요약이 있어, 빼도 요약에 내용이 남을 수 있다.
+  bool get exclusionHasSummary => preview['has_summary'] == true || result?['summary_may_include'] == true;
+
+  List<String> get excludedIds => _ids(result?['excluded_ids']);
+  List<String> get markedIds => _ids(result?['marked_ids']);
+
+  // ---- 진행 요약
+  ThinkProgressSummary get progressSummaryProposal => ThinkProgressSummary.fromJson(payload['summary']);
+
+  /// 제안 때 승인돼 있던 요약. 없으면 첫 요약.
+  ThinkProgressSummary? get previousProgressSummary {
+    final s = ThinkProgressSummary.fromJson(preview['previous']);
+    return s.isEmpty ? null : s;
+  }
+
+  /// 제안 때 승인돼 있던 요약을 만든 제안. 지금 요약이 다른 제안에서 왔으면 승인이 충돌로 멈춘다.
+  String? get progressSummaryBaseActionId {
+    final raw = _str(payload['base_action_id']);
+    return raw.isEmpty ? null : raw;
+  }
+
+  // ---- 부서 기준
+  ThinkRoleId? get criteriaDepartment {
+    final raw = _str(payload['department']).isNotEmpty ? _str(payload['department']) : _str(preview['department']);
+    return raw.isEmpty ? null : ThinkRoleId.parse(raw);
+  }
+
+  ThinkCriteriaView get criteriaBefore => ThinkCriteriaView.fromJson(preview['before']);
+  ThinkCriteriaView get criteriaAfter => ThinkCriteriaView.fromJson(preview['after']);
+
+  /// 제안 때 기준의 판. 승인 시 판이 바뀌었으면 충돌로 멈춘다.
+  int get criteriaBaseVersion => (payload['base_version'] as num?)?.toInt() ?? 0;
+
+  /// 승인 때 고칠 수 있는 기준 원문(우선 기억은 id).
+  Map<String, dynamic> get criteriaPayload => _map(payload['criteria']);
+
+  static List<String> _ids(dynamic v) =>
+      v is List ? v.map((e) => _str(e)).where((e) => e.isNotEmpty).toList() : const [];
+
+  static List<ThinkOrganizeLink> _links(dynamic v) => v is List
+      ? v.whereType<Map>().map((m) => ThinkOrganizeLink.fromJson(Map<String, dynamic>.from(m))).toList()
+      : const [];
+}
+
+/// 정리 제안의 대상 메시지. 발췌는 제안 때 서버가 160자로 자른 것이다.
+class ThinkOrganizeTarget {
+  const ThinkOrganizeTarget({required this.id, required this.role, this.excerpt = '', this.createdAt});
+
+  final String id;
+  final String role;
+  final String excerpt;
+  final DateTime? createdAt;
+
+  bool get isUser => role == 'user';
+
+  factory ThinkOrganizeTarget.fromJson(Map<String, dynamic> j) => ThinkOrganizeTarget(
+        id: _str(j['id']),
+        role: _str(j['role']),
+        excerpt: _str(j['excerpt']),
+        createdAt: _date(j['created_at']),
+      );
+}
+
+/// 맥락 제외 대상과 연결된 문서·기억(경고용).
+class ThinkOrganizeLink {
+  const ThinkOrganizeLink({required this.id, required this.title, this.kind = ''});
+
+  final String id;
+  final String title;
+  final String kind;
+
+  factory ThinkOrganizeLink.fromJson(Map<String, dynamic> j) =>
+      ThinkOrganizeLink(id: _str(j['id']), title: _str(j['title']), kind: _str(j['kind']));
+}
+
+/// 일괄 승인 순서(서버 ai_action_apply_batch와 같다). 부서를 먼저 넘겨야 그 부서 폴더로 분류할 수 있다.
+const List<ThinkActionKind> kThinkOrganizeOrder = [
+  ThinkActionKind.handoverDepartment,
+  ThinkActionKind.placeConversation,
+  ThinkActionKind.excludeContext,
+  ThinkActionKind.markImportant,
+  ThinkActionKind.splitConversation,
+  ThinkActionKind.saveMemory,
+  ThinkActionKind.memoryCardChange,
+  ThinkActionKind.progressSummary,
+  ThinkActionKind.departmentCriteriaChange,
+];
+
+/// "기억 1건 저장 · 분류 완료"처럼 종류별로 묶은 처리 결과.
+String thinkOrganizeSummary(Iterable<ThinkAction> applied) {
+  final counts = <ThinkActionKind, int>{};
+  final units = <ThinkActionKind, int>{};
+  for (final a in applied) {
+    counts[a.kind] = (counts[a.kind] ?? 0) + 1;
+    units[a.kind] = (units[a.kind] ?? 0) +
+        switch (a.kind) {
+          ThinkActionKind.excludeContext => a.excludedIds.length,
+          ThinkActionKind.markImportant => a.markedIds.length,
+          _ => 1,
+        };
+  }
+  final order = [...kThinkOrganizeOrder, ...ThinkActionKind.values.where((k) => !kThinkOrganizeOrder.contains(k))];
+  return [
+    for (final k in order)
+      if (counts[k] case final n?)
+        switch (k) {
+          ThinkActionKind.handoverDepartment => '부서 넘기기 완료',
+          ThinkActionKind.placeConversation => '분류 완료',
+          ThinkActionKind.splitConversation => '대화 나누기 완료',
+          ThinkActionKind.saveMemory => '기억 $n건 저장',
+          ThinkActionKind.memoryCardChange => '기억 카드 $n건 정리',
+          ThinkActionKind.excludeContext =>
+            units[k] == 0 ? '맥락 제외(이미 빠져 있던 메시지)' : '메시지 ${units[k]}개 맥락에서 제외',
+          ThinkActionKind.markImportant => units[k] == 0 ? '중요 표시(이미 표시된 메시지)' : '메시지 ${units[k]}개 중요 표시',
+          ThinkActionKind.progressSummary => '진행 요약 저장',
+          ThinkActionKind.departmentCriteriaChange => '부서 기준 변경',
+          _ => '${k.label} $n건',
+        },
+  ].join(' · ');
+}
+
+/// 정리 패널 일괄 승인 한 번의 결과. 일부만 처리됐으면 [failed]를 함께 보여, 전부 된 것처럼 보이지 않게 한다.
+class ThinkOrganizeOutcome {
+  const ThinkOrganizeOutcome({this.applied = const [], this.failed = const [], this.error});
+
+  /// 이번에 승인된 제안(재시도로 이미 승인돼 있던 것 포함).
+  final List<ThinkAction> applied;
+
+  /// 처리하지 못한 항목. 대기 상태로 남아 패널에 다시 보인다.
+  final List<ThinkBatchItemResult> failed;
+
+  /// 요청 자체가 실패했다. 아무것도 처리되지 않았다.
+  final String? error;
+
+  bool get partial => applied.isNotEmpty && failed.isNotEmpty;
+
+  String get summary => thinkOrganizeSummary(applied);
+
+  /// 이번에 나눠 만든 대화(열기 버튼).
+  String? get splitConversationId {
+    for (final a in applied) {
+      final id = a.splitConversationId;
+      if (id != null) return id;
+    }
+    return null;
+  }
+}
+
+/// 일괄 승인(ai_action_apply_batch) 항목 하나의 결과. 실패한 항목만 다시 보여 준다.
+class ThinkBatchItemResult {
+  const ThinkBatchItemResult({required this.id, required this.ok, this.already = false, this.code, this.message, this.action});
+
+  final String id;
+  final bool ok;
+
+  /// 이미 승인돼 있었다(네트워크 재시도 등). 다시 실행하지 않았다.
+  final bool already;
+  final String? code;
+  final String? message;
+
+  /// 처리 뒤 제안 상태. 실패해도 대기 상태 그대로 돌아온다.
+  final ThinkAction? action;
+
+  factory ThinkBatchItemResult.fromJson(Map<String, dynamic> j) {
+    final code = _str(j['code']);
+    final message = _str(j['message']);
+    return ThinkBatchItemResult(
+      id: _str(j['id']),
+      ok: j['ok'] == true,
+      already: j['already'] == true,
+      code: code.isEmpty ? null : code,
+      message: message.isEmpty ? null : message,
+      action: j['action'] is Map ? ThinkAction.fromRow(Map<String, dynamic>.from(j['action'] as Map)) : null,
+    );
   }
 }
 

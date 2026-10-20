@@ -7,14 +7,21 @@ import type { MemoryRow, MessageRow } from '../ai_think/context.ts';
 import { MK_CTX_EXCL } from '../ai_think/document_markers.ts';
 import { memory, testEnv } from '../ai_think/test_support.ts';
 import {
+  changeStatusLine,
+  changeContext,
   continuedText,
+  decisionScope,
+  finalPlanIssues,
   fixSpec,
   followupPrompt,
   MAX_FIX_ATTEMPTS,
+  parseChecks,
   parseDecisions,
+  parsePlanReview,
   parseReview,
   runCodeReview,
   verificationOf,
+  verificationText,
   type ReviewDeps,
   type ReviewRequest,
   type ReviewStore,
@@ -321,10 +328,11 @@ Deno.test('조율: 끝나면 요약을 대화에 붙이고 조율본을 그 답�
   assertEquals(p.preview.decisions, 1);
   const decisions = p.spec.decisions as { id: string; options: { id: string; label: string; recommended: boolean }[] }[];
   assertEquals(decisions.length, 1);
-  assertEquals(decisions[0].id, 'q1');
+  const q = `${decisionScope({ id: 'req-1', round: 2 })}_q1`;
+  assertEquals(decisions[0].id, q);
   assertEquals(decisions[0].options.map((o) => [o.id, o.label, o.recommended]), [
-    ['q1_1', '최근 10개', true],
-    ['q1_2', '전부 보관', false],
+    [`${q}_1`, '최근 10개', true],
+    [`${q}_2`, '전부 보관', false],
   ]);
   assertEquals(store.done[0].status, 'done');
 });
@@ -448,7 +456,20 @@ Deno.test('조율: 운영자에게 물을 것이 있으면 바로 보내지 않�
 // 수정 결과 + 자동 검사
 // ---------------------------------------------------------------------------
 
-const item = (id: string, status: string, output = '') => ({ id, label: `${id} 검사`, status, reason: null, command: `cmd ${id}`, output });
+const item = (id: string, status: string, output = '') => ({
+  id,
+  label: `${id} 검사`,
+  status,
+  reason: null,
+  command: `cmd ${id}`,
+  output,
+  cwd: null,
+  exit_code: null,
+  duration_ms: null,
+  scope: 'required' as const,
+  source: 'auto' as const,
+  env: false,
+});
 const changeReq = (verification: unknown, request: Record<string, unknown> = { goal: 'g', instructions: ['a'] }, status = 'ready'): Partial<ReviewRequest> => ({
   mode: 'change',
   status,
@@ -584,4 +605,178 @@ Deno.test('조율: 앞 회차에 Think가 물은 것을 검토 입력에 넣는�
   const text = JSON.stringify(provider.requests[0].input);
   assert(text.includes('THINK_Q_MARK'));
   assert(text.includes('처음 계획 초안'));
+});
+
+// ---------------------------------------------------------------------------
+// 운영자 답 반영과 최종 지시 (요청 0cb6972e·8fe0e9c8에서 본 증상)
+// ---------------------------------------------------------------------------
+
+const answeredSpec = {
+  goal: '원본 비교 준비',
+  instructions: ['공통 입력 파일을 만든다', '비교 준비 스크립트를 만든다'],
+  constraints: ['운영 DB에 연결하지 않는다', '운영자 결정 — 산출물 범위를 줄일까요?: 전체 유지'],
+  checks: [{ cwd: 'gateway', command: 'node --test test/', why: '시험' }],
+  owner_answers: [{ id: 'q1', plan_request_id: 'p-old', answer_round: 1, question: '산출물 범위를 줄일까요?', answer: '전체 유지' }],
+  discarded_branches: [
+    { kind: 'option', decision_id: 'q1', question: '산출물 범위를 줄일까요?', label: '축소', instructions: ['축소안 승인 시 gateway/test에 시험만 추가한다'] },
+    { kind: 'hold', decision_id: 'q1', question: '산출물 범위를 줄일까요?', holds: ['산출물 범위는 운영자 답변 전 확정하지 않는다'] },
+  ],
+};
+
+Deno.test('질문 id는 조율 요청·회차마다 달라 다른 회차의 q1과 겹치지 않는다', () => {
+  const raw = [{ kind: 'owner', question: 'q', context: '', holds: ['h'], options: [{ label: 'a', detail: '', recommended: true, instructions: ['A 단계'] }, { label: 'b', detail: '', recommended: false, instructions: [] }] }];
+  const a = parseDecisions(raw, decisionScope({ id: '0cb6972e-e8b9-4949-9450-5cd05c950e0e', round: 1 }));
+  const b = parseDecisions(raw, decisionScope({ id: '8fe0e9c8-05bc-4a64-b9cb-9041943469af', round: 1 }));
+  assertEquals(a[0].id, 'p0cb6972er1_q1');
+  assertEquals(b[0].id, 'p8fe0e9c8r1_q1');
+  assertEquals(a[0].options[0].id, 'p0cb6972er1_q1_1');
+  assertEquals(a[0].options[0].instructions, ['A 단계']);
+  assertEquals(a[0].holds, ['h']);
+  assertEquals(parseDecisions(raw)[0].id, 'q1', '앞머리가 없으면 예전 모양');
+});
+
+Deno.test('필수 검사 해석: 폴더 표기를 맞추고 겹친 것은 하나로', () => {
+  assertEquals(parseChecks([
+    { cwd: './gateway/', command: 'node   --test test/', why: 'w' },
+    { cwd: 'gateway', command: 'node --test test/', why: 'dup' },
+    { cwd: '', command: 'node --test tools/v2_a4_compare/test/', why: '' },
+    { cwd: 'x', command: ' ', why: '' },
+    'x',
+  ]), [
+    { cwd: 'gateway', command: 'node --test test/', why: 'w' },
+    { cwd: '.', command: 'node --test tools/v2_a4_compare/test/', why: '' },
+  ]);
+});
+
+Deno.test('최종 지시 검사: 남은 분기·대기 조건·버린 분기를 잡고, 운영자 결정 줄과 기능 설명은 두지 않는다', () => {
+  const plan = parsePlanReview(JSON.stringify({
+    answer: 'a', followup_questions: [], conflicts: [], decisions: [],
+    plan: {
+      title: 't', goal: 'g', focus_paths: [], do_not: [], checks: [], effort: null, effort_reason: null,
+      instructions: [
+        '공통 입력 파일을 만든다',
+        '운영자가 비교 이미지 묶음을 선택하면 PNG 쌍을 만든다',
+        '축소안 승인 시 gateway/test에 시험만 추가한다',
+        '답변 대기 조건과 별도의 기존 뷰어용 CSV 구현 분기는 삭제한다',
+        '카드에서 사용자가 날짜를 선택하면 목록이 바뀐다',
+      ],
+      constraints: ['답이 확정되기 전에는 수정 작업을 시작하지 않는다', '운영자 결정 — 비교 형태: 이미지 묶음', '운영 DB에 연결하지 않는다'],
+    },
+  }))!.plan;
+  const flagged = finalPlanIssues(plan, answeredSpec);
+  assertEquals(flagged.length, 4);
+  assert(flagged.some((f) => f.includes('축소안') && f.includes('버린 분기와 같음')));
+  assert(flagged.some((f) => f.startsWith('제약: 답이 확정되기 전')));
+  assert(!flagged.some((f) => f.includes('날짜를 선택하면')));
+  assert(!flagged.some((f) => f.includes('운영자 결정')));
+});
+
+Deno.test('조율: 최종 지시에 분기가 남으면 Think에게 한 번 고치게 하고, 고친 지시로 수정을 시작한다', async () => {
+  const store = new FakeReviewStore({ ...planReq, round: 1, max_rounds: 1, request: answeredSpec });
+  const dirty = {
+    title: 't', goal: 'g', focus_paths: [], do_not: [], checks: [], effort: null, effort_reason: null,
+    instructions: ['공통 입력 파일을 만든다', '축소안 승인 시 gateway/test에 시험만 추가한다'],
+    constraints: ['비교 형태는 운영자 답변 후 확정한다', '운영자 결정 — 산출물은 전부 유지한다'],
+  };
+  const clean = { ...dirty, instructions: ['공통 입력 파일을 만든다', '비교 준비 스크립트를 만든다'], constraints: ['운영 DB에 연결하지 않는다'], checks: [] };
+  const provider = new FakeAiProvider([planAnswer({ decisions: [], plan: dirty }), planAnswer({ decisions: [], plan: clean })]);
+  assertEquals(await runCodeReview(deps(store, provider).d, 'req-1'), 'done');
+  assertEquals(provider.requests.length, 2);
+  const retry = JSON.stringify(provider.requests[1].input);
+  assert(retry.includes('최종 지시 검사'));
+  assert(retry.includes('축소안 승인 시'));
+  assertEquals(store.starts.length, 1);
+  const spec = store.starts[0].spec;
+  assertEquals(spec.instructions, ['공통 입력 파일을 만든다', '비교 준비 스크립트를 만든다']);
+  assertEquals(spec.constraints, ['운영자 결정 — 산출물 범위를 줄일까요?: 전체 유지', '운영 DB에 연결하지 않는다']);
+  assertEquals(spec.checks, answeredSpec.checks, 'Think가 checks를 비우면 앞 요청의 필수 검사를 잇는다');
+  assertEquals((spec.discarded_branches as unknown[]).length, 2);
+  const fc = spec.final_check as { flagged: string[]; retried: boolean; remaining: string[] };
+  assertEquals(fc.retried, true);
+  const added = { ...clean, checks: [{ cwd: 'tools/db_test', command: 'node --test test/x.test.mjs', why: '추가' }] };
+  const store2 = new FakeReviewStore({ ...planReq, round: 1, max_rounds: 1, request: answeredSpec });
+  await runCodeReview(deps(store2, new FakeAiProvider([planAnswer({ decisions: [], plan: added })])).d, 'req-1');
+  assertEquals(store2.starts[0].spec.checks, [...(answeredSpec.checks as unknown[]), { cwd: 'tools/db_test', command: 'node --test test/x.test.mjs', why: '추가' }], '요청한 필수 검사는 빠지지 않고 Think가 더한 검사가 뒤에 붙는다');
+  assertEquals(fc.flagged.length, 2);
+  assertEquals(fc.remaining, []);
+  const first = JSON.stringify(provider.requests[0].input);
+  assert(first.includes('운영자가 고른 답'));
+  assert(first.includes('버린 분기'));
+  assert(!first.includes('"discarded_branches"'), '버린 분기는 요청 JSON이 아니라 따로 보인다');
+});
+
+Deno.test('조율: 다시 고쳐도 남은 줄은 기능 설명일 수 있어 막지 않되, 버린 분기와 같은 줄과 Think가 쓴 운영자 결정 줄은 뺀다', async () => {
+  const store = new FakeReviewStore({ ...planReq, round: 1, max_rounds: 1, request: answeredSpec });
+  const plan = {
+    title: 't', goal: 'g', focus_paths: [], do_not: [], checks: [], effort: null, effort_reason: null,
+    instructions: ['공통 입력 파일을 만든다', '축소안 승인 시 gateway/test에 시험만 추가한다', '운영자가 적용을 승인하면 작업자가 패치를 적용한다'],
+    constraints: ['운영자 결정 — 산출물은 전부 유지한다'],
+  };
+  const provider = new FakeAiProvider([planAnswer({ decisions: [], plan }), planAnswer({ decisions: [], plan })]);
+  assertEquals(await runCodeReview(deps(store, provider).d, 'req-1'), 'done');
+  const spec = store.starts[0].spec;
+  assertEquals(spec.instructions, ['공통 입력 파일을 만든다', '운영자가 적용을 승인하면 작업자가 패치를 적용한다']);
+  assertEquals(spec.constraints, ['운영자 결정 — 산출물 범위를 줄일까요?: 전체 유지']);
+  assertEquals((spec.final_check as { remaining: string[] }).remaining.length, 2);
+});
+
+Deno.test('조율: 정할 것이 남아 있으면 최종 지시 검사를 하지 않는다', async () => {
+  const store = new FakeReviewStore({ ...planReq, round: 2 });
+  const provider = new FakeAiProvider([planAnswer({})]);
+  await runCodeReview(deps(store, provider).d, 'req-1');
+  assertEquals(provider.requests.length, 1);
+  assertEquals(store.plans[0].spec.final_check, undefined);
+});
+
+// ---------------------------------------------------------------------------
+// 완료 상태: 코드 작성 / 필수 검사 판정 / 확인할 것 / 적용
+// ---------------------------------------------------------------------------
+
+Deno.test('필수 검사 판정: 실행 못 한 필수 검사는 통과가 아니고, 후속 확인은 판정에 넣지 않는다', () => {
+  const v = (items: unknown[], extra: Record<string, unknown> = {}) => verificationOf({ verification: { items, ...extra } })!;
+  assertEquals(v([item('a', 'passed'), item('b', 'preexisting')]).verdict, 'passed');
+  assertEquals(v([item('a', 'passed'), { ...item('gw', 'skipped'), env: true }]).verdict, 'not_run');
+  assertEquals(v([item('a', 'passed'), item('b', 'failed')]).verdict, 'failed');
+  assertEquals(v([item('a', 'passed'), { ...item('db', 'skipped'), scope: 'followup' }]).verdict, 'passed');
+  assertEquals(v([]).verdict, 'none');
+  assertEquals(v([item('a', 'passed')], { stopped: true }).verdict, 'not_run');
+  assertEquals(v([{ id: 'db-test-other', label: 'x', status: 'skipped' }]).verdict, 'none', '예전 기록의 AI 영역 밖 DB 항목은 후속 확인');
+  const text = verificationText(v([
+    { ...item('gw', 'passed'), cwd: 'gateway', exit_code: 0, duration_ms: 2400, source: 'request', command: 'node --test test/a.test.js' },
+    { ...item('flutter', 'skipped'), env: true, reason: 'flutter를 찾지 못했습니다.' },
+  ], { patch_sha256: 'a'.repeat(64) }));
+  assert(text.startsWith('필수 검사 일부 실행 못 함'));
+  assert(text.includes('검사한 패치 aaaaaaaaaaaa'));
+  assert(text.includes('[요청한 검사]'));
+  assert(text.includes('폴더 gateway, 종료 코드 0, 2.4초'));
+  assert(text.includes('[환경]'));
+});
+
+Deno.test('수정 결과 답 끝에 서버가 실행 기록으로 만든 작업 상태를 붙인다', async () => {
+  const v = { items: [item('a', 'passed'), { ...item('gw', 'skipped'), env: true }], patch_sha256: 'b'.repeat(64) };
+  const store = new FakeReviewStore(changeReq(v));
+  store.req!.rounds[0].result!.checks = ['화면 확인'];
+  const provider = new FakeAiProvider([answer({ answer: '시험을 모두 통과했습니다.' })]);
+  await runCodeReview(deps(store, provider).d, 'req-1');
+  const content = store.inserted[0].content;
+  assert(content.includes('**작업 상태**'));
+  assert(content.includes('코드 작성: 완료 (파일 1개)'));
+  assert(content.includes('필수 검사 일부 실행 못 함 (통과 1 · 실패 0 · 실행 못 함 1)'));
+  assert(content.includes('확인할 것: 1개'));
+  assert(content.includes('작업 폴더 적용은 승인 대기'));
+  assert(provider.requests[0].instructions!.includes('실행 기록뿐'));
+  assertEquals(store.fixes.length, 0, '환경 때문에 못 돌린 검사는 다시 고치게 하지 않는다');
+
+  const none = new FakeReviewStore(changeReq(undefined));
+  await runCodeReview(deps(none, new FakeAiProvider([answer({})])).d, 'req-1');
+  assert(none.inserted[0].content.includes('검사 기록 없음 (통과 아님)'));
+  assert(none.inserted[0].content.includes('권하지 않음'));
+});
+
+Deno.test('재수정은 이번 수정에 필요한 검사 실패만 보고 정한다', () => {
+  const r = (items: unknown[]) => changeContext({ ...new FakeReviewStore(changeReq({ items })).req! });
+  assertEquals(r([{ ...item('x', 'failed'), scope: 'followup' }]).willFix, false);
+  assertEquals(r([item('x', 'failed')]).willFix, true);
+  const s = changeStatusLine(new FakeReviewStore(changeReq({ items: [item('x', 'failed')] })).req!, r([item('x', 'failed')]));
+  assert(s.includes('다시 고치는 중'));
 });

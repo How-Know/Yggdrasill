@@ -27,6 +27,8 @@ export interface AiRequest {
   input: AiInputItem[];
   tools?: AiFunctionTool[];
   webSearch?: { contextSize?: 'low' | 'medium' | 'high' };
+  /** 파이썬 실행 도구. sandbox.open으로 연 실행 환경 id를 넘긴다. */
+  codeInterpreter?: { containerId: string };
   toolChoice?: 'auto' | 'none';
   jsonSchema?: { name: string; schema: Record<string, unknown> };
   reasoningEffort?: string;
@@ -61,6 +63,41 @@ export interface AiMessageOut {
   phase: AiPhase;
   text: string;
   sources: AiSource[];
+  /** 파이썬 실행 도구가 만든 파일 중 답변이 가리킨 것. */
+  files?: AiFileCitation[];
+}
+
+export interface AiFileCitation {
+  containerId: string;
+  fileId: string;
+  filename: string;
+}
+
+export interface AiSandboxInputFile {
+  name: string;
+  mime: string;
+  bytes: Uint8Array;
+}
+
+export interface AiSandboxOutputFile {
+  fileId: string;
+  name: string;
+  bytes: Uint8Array;
+}
+
+/** 한 답변 동안 쓰는 파이썬 실행 환경. close는 올린 파일과 실행 환경을 공급자 쪽에서 지운다. */
+export interface AiSandboxSession {
+  readonly containerId: string;
+  /** 실행 환경이 만든 파일(올린 파일 제외)을 내려받는다. 이름 확장자가 exts에 있는 것만, 최대 limit개. */
+  collectOutputs(
+    opts: { exts: string[]; limit: number; maxBytes: number; preferred: AiFileCitation[] },
+    signal?: AbortSignal,
+  ): Promise<AiSandboxOutputFile[]>;
+  close(): Promise<void>;
+}
+
+export interface AiCodeSandbox {
+  open(files: AiSandboxInputFile[], signal?: AbortSignal): Promise<AiSandboxSession>;
 }
 
 export interface AiResult {
@@ -72,6 +109,8 @@ export interface AiResult {
   functionCalls: AiFunctionCall[];
   webSearchCalls: number;
   webSearchQueries: string[];
+  /** 파이썬 실행 횟수. */
+  codeRuns?: number;
   usage: AiUsage;
   replay: AiInputItem;
 }
@@ -82,10 +121,32 @@ export type AiStreamEvent =
   | { type: 'message_done'; itemId: string; phase: AiPhase; text: string }
   | { type: 'function_call_start'; callId: string; name: string }
   | { type: 'web_search'; itemId: string; status: 'searching' | 'completed'; query?: string }
+  | { type: 'code_run'; itemId: string; status: 'running' | 'completed' | 'failed' }
   | { type: 'completed'; result: AiResult };
+
+export type AiBackgroundPoll =
+  | { state: 'running'; status: string }
+  /** completed·incomplete 둘 다. 판정은 result.status 로 한다. */
+  | { state: 'done'; result: AiResult }
+  | { state: 'failed'; error: string };
+
+/**
+ * 함수 실행 시간 한도를 넘는 긴 호출. 공급자 쪽에서 돌리고 id로 결과를 받는다.
+ * 결과를 받기 전까지는 공급자 쪽에 요청·응답이 남으므로, 받은 뒤 remove 로 지운다.
+ */
+export interface AiBackground {
+  start(req: AiRequest, opts?: { metadata?: Record<string, string> }): Promise<{ id: string }>;
+  poll(id: string): Promise<AiBackgroundPoll>;
+  cancel(id: string): Promise<void>;
+  remove(id: string): Promise<void>;
+}
 
 export interface AiProvider {
   readonly name: string;
+  /** 파이썬 실행 환경을 지원하는 공급자만 채운다. */
+  readonly sandbox?: AiCodeSandbox;
+  /** 백그라운드 호출을 지원하는 공급자만 채운다. */
+  readonly background?: AiBackground;
   stream(req: AiRequest, signal?: AbortSignal): AsyncGenerator<AiStreamEvent>;
   complete(req: AiRequest, signal?: AbortSignal): Promise<AiResult>;
 }

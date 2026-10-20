@@ -72,11 +72,14 @@ class RightSideSheetTestGradingSession {
   final Map<String, int> correctionAttemptNumbers;
   final String baselineAttemptId;
   final RightSheetTestGradingStates baselineStates;
+  final RightSheetTestGradingStates wrongOnlyStates;
   final bool wrongOnlyDefault;
   final RightSheetTestGradingStatesChanged? onStatesChanged;
   final RightSheetTestGradingAction? onAction;
   final AsyncUiAction? onNext;
+  final AsyncUiAction? onClosed;
   final bool gradingLocked;
+  final String readOnlyReason;
   final bool closeSheetOnAction;
   final bool closeBeforeActionCompletes;
   final int autoFilledCorrectCount;
@@ -108,11 +111,14 @@ class RightSideSheetTestGradingSession {
     this.correctionAttemptNumbers = const <String, int>{},
     this.baselineAttemptId = '',
     this.baselineStates = const <String, String>{},
+    this.wrongOnlyStates = const <String, String>{},
     this.wrongOnlyDefault = false,
     this.onStatesChanged,
     this.onAction,
     this.onNext,
+    this.onClosed,
     this.gradingLocked = false,
+    this.readOnlyReason = '',
     this.closeSheetOnAction = true,
     this.closeBeforeActionCompletes = false,
     this.autoFilledCorrectCount = 0,

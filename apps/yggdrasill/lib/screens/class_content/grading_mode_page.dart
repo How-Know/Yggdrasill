@@ -10,6 +10,8 @@ import '../../app_overlays.dart';
 import '../../services/data_manager.dart';
 import '../../services/homework_assignment_store.dart';
 import '../../services/homework_departure_draft_service.dart';
+import '../../services/homework_batch_confirm_service.dart';
+import '../../services/homework_grading_lock_service.dart';
 import '../../services/homework_store.dart';
 import '../../services/right_sheet_answer_preload_service.dart';
 import '../../services/tenant_service.dart';
@@ -1708,6 +1710,21 @@ class _GradingModePageState extends State<GradingModePage> {
           submittedTime: submittedTime,
           homeworkTime: homeworkTime,
           queueTime: queueTime,
+          inspectionArrival: section == _GradingSection.homework
+              ? _inspectionArrivalFor(
+                  studentId: studentId,
+                  schedules: assignedChildren.expand(
+                    (child) => (assignmentByItemId[child.id] ?? const []).map(
+                      (assignment) => GradingHomeworkSchedule(
+                        assignedAt: assignment.assignedAt,
+                        dueForCheckAt: assignment.dueForCheckAt,
+                        dueDate: assignment.dueDate,
+                      ),
+                    ),
+                  ),
+                  now: now,
+                )
+              : null,
         ),
       );
     }
@@ -1774,11 +1791,54 @@ class _GradingModePageState extends State<GradingModePage> {
           submittedTime: submittedTime,
           homeworkTime: homeworkTime,
           queueTime: queueTime,
+          inspectionArrival: section == _GradingSection.homework
+              ? _inspectionArrivalFor(
+                  studentId: studentId,
+                  schedules: itemAssignments.map(
+                    (assignment) => GradingHomeworkSchedule(
+                      assignedAt: assignment.assignedAt,
+                      dueForCheckAt: assignment.dueForCheckAt,
+                      dueDate: assignment.dueDate,
+                    ),
+                  ),
+                  now: now,
+                )
+              : null,
         ),
       );
     }
 
     return out;
+  }
+
+  /// 숙제 검사일과 같은 날의 가장 이른 등원. 아직 등원 전이면 null.
+  DateTime? _inspectionArrivalFor({
+    required String studentId,
+    required Iterable<GradingHomeworkSchedule> schedules,
+    required DateTime now,
+  }) {
+    final localNow = now.toLocal();
+    final today = DateTime(localNow.year, localNow.month, localNow.day);
+    DateTime? checkAt;
+    for (final schedule in schedules) {
+      final effective = schedule.effectiveCheckAt;
+      if (effective == null) continue;
+      final local = effective.toLocal();
+      final day = DateTime(local.year, local.month, local.day);
+      if (day != today) continue;
+      if (checkAt == null || effective.isBefore(checkAt)) {
+        checkAt = effective;
+      }
+    }
+    if (checkAt == null) return null;
+    final arrivals = <DateTime>[
+      for (final record in DataManager.instance.attendanceRecordsNotifier.value)
+        if (record.studentId == studentId && record.arrivalTime != null)
+          record.arrivalTime!,
+      if (widget.arrivalTimesByStudentId[studentId] != null)
+        widget.arrivalTimesByStudentId[studentId]!,
+    ];
+    return earliestLocalArrivalOnDay(arrivals, checkAt);
   }
 
   HomeworkItem _buildGroupSummaryItem({
@@ -1963,6 +2023,9 @@ class _GradingGroupEntry {
   final DateTime homeworkTime;
   final DateTime queueTime;
 
+  /// 숙제 칩의 경과 기준. 검사일 당일 등원 시각이며, 등원 전이면 null.
+  final DateTime? inspectionArrival;
+
   const _GradingGroupEntry({
     required this.studentId,
     required this.studentName,
@@ -1975,6 +2038,7 @@ class _GradingGroupEntry {
     required this.submittedTime,
     required this.homeworkTime,
     required this.queueTime,
+    this.inspectionArrival,
   });
 
   bool get hasSubmittedChild => children.any(
@@ -2480,6 +2544,7 @@ class _GradingAnswerBookCardState extends State<_GradingAnswerBookCard> {
                         style: overlay,
                         topEnd: 0.30,
                         bottomStart: 0.42,
+                        showTop: false,
                       ),
                     ),
                     Positioned.fill(
@@ -2594,6 +2659,53 @@ class _SubmittedHomeworkCard extends StatefulWidget {
 class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
   bool _opening = false;
 
+  @override
+  void initState() {
+    super.initState();
+    HomeworkGradingLockService.instance.releasingKeys.addListener(
+      _onReleasingKeys,
+    );
+    HomeworkBatchConfirmService.instance.confirmingKeys.addListener(
+      _onReleasingKeys,
+    );
+  }
+
+  @override
+  void dispose() {
+    HomeworkGradingLockService.instance.releasingKeys.removeListener(
+      _onReleasingKeys,
+    );
+    HomeworkBatchConfirmService.instance.confirmingKeys.removeListener(
+      _onReleasingKeys,
+    );
+    super.dispose();
+  }
+
+  void _onReleasingKeys() {
+    if (mounted) setState(() {});
+  }
+
+  bool get _isReleasing {
+    final releasing = HomeworkGradingLockService.instance.releasingKeys.value;
+    return entry.children.any(
+      (child) => releasing.contains(
+        (studentId: entry.studentId, itemId: child.id),
+      ),
+    );
+  }
+
+  bool get _isBatchConfirming {
+    final confirming = HomeworkBatchConfirmService.instance.confirmingKeys.value;
+    return entry.children.any(
+      (child) => confirming.contains(
+        (studentId: entry.studentId, itemId: child.id),
+      ),
+    );
+  }
+
+  bool get _showsOpenRing =>
+      _opening || isSavingConfirm || _isReleasing || _isBatchConfirming;
+
   _GradingGroupEntry get entry => widget.entry;
   double get cardHeight => widget.cardHeight;
   double get metaHeight => widget.metaHeight;
@@ -2606,7 +2718,7 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
 
   Future<void> _handleTap() async {
     final action = onTap;
-    if (action == null || _opening || isSavingConfirm) return;
+    if (action == null || _showsOpenRing) return;
     setState(() => _opening = true);
     try {
       await action();
@@ -2666,7 +2778,7 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
               ),
             ),
           ),
-          if (isPendingConfirm || isSavingConfirm)
+          if (isPendingConfirm && !_showsOpenRing)
             Positioned.fill(
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(cardRadius),
@@ -2674,25 +2786,21 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
                   child: Container(
                     color: const Color(0xCC0B1112),
                     child: Center(
-                      child: isSavingConfirm
-                          ? YggLoadingIndicator(
-                              size: (42.0 * scale).clamp(28.0, 42.0),
-                            )
-                          : Icon(
-                              isCompleteCheckbox
-                                  ? Icons.check_circle
-                                  : Icons.check_circle_outline,
-                              color: isCompleteCheckbox
-                                  ? const Color(0xFF4CAF50)
-                                  : const Color(0xFF1B6B63),
-                              size: (67.0 * scale).clamp(38.0, 67.0),
-                            ),
+                      child: Icon(
+                        isCompleteCheckbox
+                            ? Icons.check_circle
+                            : Icons.check_circle_outline,
+                        color: isCompleteCheckbox
+                            ? const Color(0xFF4CAF50)
+                            : const Color(0xFF1B6B63),
+                        size: (67.0 * scale).clamp(38.0, 67.0),
+                      ),
                     ),
                   ),
                 ),
               ),
             ),
-          if (_opening)
+          if (_showsOpenRing)
             Positioned.fill(
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(cardRadius),
@@ -2825,13 +2933,12 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
 
     if (onTap == null) return card;
     return MouseRegion(
-      cursor: _opening || isSavingConfirm
+      cursor: _showsOpenRing
           ? SystemMouseCursors.basic
           : SystemMouseCursors.click,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap:
-            _opening || isSavingConfirm ? null : () => unawaited(_handleTap()),
+        onTap: _showsOpenRing ? null : () => unawaited(_handleTap()),
         child: card,
       ),
     );
@@ -2874,14 +2981,18 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
           fontFeatures: const [FontFeature.tabularFigures()],
           shadows: overlay.textShadows,
         );
-        // 제출: 경과 시간 / 숙제: 숙제 배지 / 그 외: 없음.
+        // 제출: 제출 시각부터 경과. 숙제: 같은 경과를 초록 테두리로, 등원 전이면 숙제 배지.
+        final isHomeworkChip = entry.section == _GradingSection.homework;
         final Widget? statusPill = line4 != '-'
             ? CoverPill(
                 style: overlay,
+                tone: isHomeworkChip
+                    ? CoverPillTone.accent
+                    : CoverPillTone.neutral,
                 icon: Icons.schedule_rounded,
                 label: '$line4 \uC804',
               )
-            : (entry.section != _GradingSection.submitted
+            : (isHomeworkChip
                 ? CoverPill(
                     style: overlay,
                     tone: CoverPillTone.accent,
@@ -2902,7 +3013,9 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
                       ),
               ),
             ),
-            Positioned.fill(child: CoverScrim(style: overlay)),
+            Positioned.fill(
+              child: CoverScrim(style: overlay, showTop: false),
+            ),
             Positioned.fill(
               child: CoverHairline(
                 style: overlay,
@@ -2968,15 +3081,16 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
   }
 
   String _buildLine4MinutesSinceSubmitted(_GradingGroupEntry entry) {
-    if (!entry.hasSubmittedChild) return '-';
-    final submitted = entry.submittedTime;
-    final totalMinutes = DateTime.now().difference(submitted).inMinutes;
-    if (totalMinutes < 0) return '0\uBD84';
-    if (totalMinutes < 60) return '$totalMinutes\uBD84';
-    final hours = totalMinutes ~/ 60;
-    final mins = totalMinutes % 60;
-    if (mins == 0) return '$hours\uC2DC\uAC04';
-    return '$hours\uC2DC\uAC04 $mins\uBD84';
+    final DateTime? anchor;
+    if (entry.section == _GradingSection.homework) {
+      anchor = entry.inspectionArrival;
+    } else if (entry.hasSubmittedChild) {
+      anchor = entry.submittedTime;
+    } else {
+      anchor = null;
+    }
+    if (anchor == null) return '-';
+    return formatGradingElapsedSince(anchor, DateTime.now());
   }
 
   List<String> _buildOverlayPageLines(_GradingGroupEntry entry) {

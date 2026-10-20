@@ -5,8 +5,10 @@ import '../../services/think/think_code_controller.dart';
 import '../../services/think/think_controller.dart';
 import '../../services/think/think_models.dart';
 import 'think_memory_proposal_views.dart';
+import 'think_organize_panel.dart';
 import 'think_split_views.dart';
 import 'think_style.dart';
+import 'think_tree_dialogs.dart';
 
 /// ai_think·Supabase·코드 작업자·종합 문서 probe를 한곳에서 본다. 실패는 숨기지 않고 URL·키는 표시하지 않는다.
 Future<void> showThinkStatusDialog(BuildContext context) async {
@@ -30,7 +32,10 @@ class _ThinkStatusDialogState extends State<_ThinkStatusDialog> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _c.refreshConnectionDetails());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _c.refreshConnectionDetails();
+      if (_c.organizeReady && _c.autoOrganizeEnabled == null) _c.refreshOrganizeSettings();
+    });
   }
 
   @override
@@ -105,6 +110,37 @@ class _ThinkStatusDialogState extends State<_ThinkStatusDialog> {
                         reason: thinkMemoryProposalsFeatureReason,
                         detailed: true,
                       ),
+                      const SizedBox(height: 12),
+                      ThinkFeatureStatusView(
+                        feature: status.departmentWork,
+                        label: '부서 트리·협의·넘기기',
+                        reason: thinkDepartmentWorkFeatureReason,
+                        detailed: true,
+                      ),
+                      const SizedBox(height: 12),
+                      ThinkFeatureStatusView(
+                        feature: status.autoOrganize,
+                        label: '자동 정리 제안',
+                        reason: thinkOrganizeFeatureReason,
+                        detailed: true,
+                      ),
+                      if (status.autoOrganize.ready && _c.autoOrganizeEnabled != null) ...[
+                        const SizedBox(height: 8),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: ThinkToggleChip(
+                            label: '자동 정리 제안 받기',
+                            icon: Icons.auto_awesome,
+                            selected: _c.autoOrganizeEnabled!,
+                            enabled: !_c.autoOrganizeSaving,
+                            tooltip: '끄면 "정리해 줘"처럼 직접 부탁할 때만 제안합니다. 모든 대화에 적용됩니다.',
+                            onChanged: (v) async {
+                              final err = await _c.setAutoOrganize(v);
+                              if (err != null && context.mounted) showThinkSnack(context, err, error: true);
+                            },
+                          ),
+                        ),
+                      ],
                     ]),
                   _section('코드 작업자 (code bridge)', [thinkCodeWorkerLine(_code)]),
                   _section('종합 문서 (읽기 probe)', [

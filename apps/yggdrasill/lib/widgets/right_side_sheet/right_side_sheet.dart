@@ -35,6 +35,7 @@ import '../../services/tenant_service.dart';
 import '../../services/textbook_pdf_service.dart';
 import '../memo_dialogs.dart';
 import '../../theme/ygg_semantic_colors.dart';
+import '../app_dialog_action_button.dart';
 import '../utility_glass_dialog_shell.dart';
 
 const Color _rsPanelBg = Color(0xFF10171A);
@@ -44,10 +45,12 @@ const Color _rsText = Color(0xFFEAF2F2);
 const Color _rsTextSub = Color(0xFF9FB3B3);
 const Color _rsAccent = Color(0xFF33A373);
 
-/// 정답 리스트 문항번호 열 — 왼쪽 여백 12 + 번호 영역 64 (4자리 수용).
-const double _rsAnswerQuestionColLeftPad = 12.0;
+/// 정답 리스트 문항번호 열 — 왼쪽 여백 20 + 번호 영역 64 (4자리 수용).
+/// 네 자리를 다 채우면 글자 끝에서 카드 테두리까지 약 16.
+/// 여백 10은 시트 너비 10과 함께 늘려 정답 카드 너비는 그대로다.
+const double _rsAnswerQuestionColLeftPad = 20.0;
 const double _rsAnswerQuestionColWidth = 64.0 + _rsAnswerQuestionColLeftPad;
-const double _rsAnswerQuestionGap = 8.0;
+const double _rsAnswerQuestionGap = 12.0;
 
 /// 정답 카드 안쪽 콘텐츠(이미지·세트형 칩) 공통 왼쪽 들여쓰기.
 const double _rsAnswerContentLeftPad = 16.0;
@@ -58,6 +61,9 @@ const double _rsSetPartCardLeft =
 
 /// 정답 리스트 문항번호·세트형 파트 번호 공통 크기.
 const double _rsAnswerQuestionNumberSize = 22.0;
+
+/// 정답 리스트 본문(주관식 폴백) 크기. 스크롤로 접힌 상단 바도 이 크기를 쓴다.
+const double _rsAnswerBodyFontSize = 25.0;
 
 class _RightSheetFabColors {
   const _RightSheetFabColors({
@@ -232,9 +238,13 @@ class _RightSideSheetState extends State<RightSideSheet> {
   }
 
   void _handleClose() {
+    final session = _testGradingSession;
     if (_mode == RightSideSheetMode.grading || _testGradingSession != null) {
       rightSideSheetPdfPanelSession.value = null;
       rightSideSheetTestGradingSession.value = null;
+    }
+    if (session?.onClosed != null) {
+      unawaited(session!.onClosed!());
     }
     widget.onClose();
   }
@@ -749,7 +759,7 @@ class _RightSideSheetState extends State<RightSideSheet> {
 
     // 선택 결과 반영(학년 포함) + uuid 정규화/서버 반영
     if (mounted) {
-    setState(() {
+      setState(() {
         _books[bookIndex] = _books[bookIndex].copyWith(gradeIndex: gradeIndex);
         _defaultGradeIndex = gradeIndex;
         _selectedBookId = _books[bookIndex].id;
@@ -1363,8 +1373,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
     });
 
     if (!_answerKeyReadOnly) {
-    // ✅ 마지막 선택만 저장되도록 디바운스
-    _schedulePersistBookGrade(bookId);
+      // ✅ 마지막 선택만 저장되도록 디바운스
+      _schedulePersistBookGrade(bookId);
     }
   }
 
@@ -1388,20 +1398,20 @@ class _RightSideSheetState extends State<RightSideSheet> {
           child: Column(
             children: [
               if (_mode != RightSideSheetMode.grading)
-              _TopIconBar(
-                mode: _mode,
-                onModeSelected: (m) {
-                  setState(() => _mode = m);
+                _TopIconBar(
+                  mode: _mode,
+                  onModeSelected: (m) {
+                    setState(() => _mode = m);
                     _syncGradingTabActiveFlag();
-                  if (m == RightSideSheetMode.answerKey) {
+                    if (m == RightSideSheetMode.answerKey) {
                       unawaited(_ensureGradesThenLoadAnswerKeyData());
-                  }
-                  if (m == RightSideSheetMode.memo) {
-                    unawaited(DataManager.instance.loadMemos());
-                  }
-                },
+                    }
+                    if (m == RightSideSheetMode.memo) {
+                      unawaited(DataManager.instance.loadMemos());
+                    }
+                  },
                   onClose: _handleClose,
-              ),
+                ),
               if (_mode != RightSideSheetMode.grading)
                 Divider(height: 1, color: panelStyle.divider),
               Expanded(child: _buildBody()),
@@ -1812,7 +1822,7 @@ class _RightSideSheetState extends State<RightSideSheet> {
       original: newOriginal,
       summary: '요약 중...',
       scheduledAt: edited.scheduledAt,
-          updatedAt: DateTime.now(),
+      updatedAt: DateTime.now(),
     );
     await DataManager.instance.updateMemo(updated);
 
@@ -2618,15 +2628,15 @@ class _MemoCardState extends State<_MemoCard>
             hoverColor: Colors.white.withOpacity(0.03),
             child: Padding(
               padding: const EdgeInsets.all(12),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
                     children: [
                       Expanded(
                         child: Row(
-                      children: [
-                        Text(
+                          children: [
+                            Text(
                               widget.dateLabel,
                               style: const TextStyle(
                                   color: _rsTextSub,
@@ -2634,15 +2644,15 @@ class _MemoCardState extends State<_MemoCard>
                                   fontWeight: FontWeight.w900),
                             ),
                             const SizedBox(width: 8),
-                  Container(
+                            Container(
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
+                              decoration: BoxDecoration(
                                 color: _rsPanelBg,
-                      borderRadius: BorderRadius.circular(999),
+                                borderRadius: BorderRadius.circular(999),
                                 border: Border.all(color: _rsBorder),
-                    ),
-                    child: Text(
+                              ),
+                              child: Text(
                                 widget.categoryLabel,
                                 style: const TextStyle(
                                     color: _rsTextSub,
@@ -2660,16 +2670,16 @@ class _MemoCardState extends State<_MemoCard>
                                   softWrap: false,
                                   style: const TextStyle(
                                       color: _rsTextSub,
-                        fontSize: 12,
+                                      fontSize: 12,
                                       fontWeight: FontWeight.w700),
-                      ),
+                                ),
                               ),
                             ],
                           ],
-                    ),
+                        ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
                   const SizedBox(height: 6),
                   Text(
                     widget.text,
@@ -2726,12 +2736,12 @@ class _MemoCardState extends State<_MemoCard>
                           child: Center(
                             child: Icon(Icons.delete_outline_rounded,
                                 size: 18, color: Colors.white),
-                            ),
                           ),
                         ),
                       ),
                     ),
                   ),
+                ),
                 // Stack에 non-positioned child가 있어야(높이 제약이 무한대일 때) RenderStack이 정상적으로 크기를 계산한다.
                 AnimatedBuilder(
                   animation: _ctrl,
@@ -2950,7 +2960,7 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
       _markBlank();
       return;
     }
-      _close();
+    _close();
   }
 
   void _runFrontAction(VoidCallback action) {
@@ -2991,16 +3001,19 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
       return Tooltip(
         message:
             busy ? '$questionLabel번 해설 PDF 여는 중' : '$questionLabel번 해설 PDF로 이동',
-          child: InkWell(
+        child: InkWell(
           borderRadius: BorderRadius.circular(10),
           onTap: widget.solutionOpenBlocked
               ? null
               : () => unawaited(_openSolution()),
           onDoubleTap: widget.hasSourceInfo ? widget.onShowSourceInfo : null,
           onLongPress: widget.solutionOpenBlocked ? null : widget.onReportIssue,
-          child: SizedBox(
-            width: _questionColumnWidth,
-            height: 44,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(
+              minWidth: _questionColumnWidth,
+              maxWidth: _questionColumnWidth,
+              minHeight: 44,
+            ),
             child: Padding(
               padding: const EdgeInsets.only(left: _questionColumnLeftPad),
               child: Align(
@@ -3014,15 +3027,16 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
                           color: _rsAccent,
                         ),
                       )
-                    // 번호(위) + 문항 종류(아래), 왼쪽 정렬.
+                    // 번호(위, 이름이 붙으면 2줄) + 문항 종류(아래), 왼쪽 정렬.
                     : Column(
                         mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
                             questionLabel,
-                            maxLines: 1,
-                            overflow: TextOverflow.visible,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            softWrap: true,
                             style: Theme.of(context)
                                 .textTheme
                                 .titleMedium
@@ -3036,7 +3050,7 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
                             Text(
                               widget.questionCategory.trim(),
                               maxLines: 1,
-                              overflow: TextOverflow.visible,
+                              overflow: TextOverflow.ellipsis,
                               style: Theme.of(context)
                                   .textTheme
                                   .bodySmall
@@ -3055,7 +3069,7 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
 
     Widget answerCard() {
       final shape = RoundedRectangleBorder(
-            borderRadius: radius,
+        borderRadius: radius,
         side: BorderSide(
           color: widget.borderColor,
           width: _cardBorderWidth,
@@ -3070,12 +3084,12 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
           customBorder: shape,
           onTap: () => _runFrontAction(widget.onToggleState),
           onLongPress: widget.onToggleAbandoned,
-            splashFactory: NoSplash.splashFactory,
+          splashFactory: NoSplash.splashFactory,
           splashColor: Colors.transparent,
           highlightColor: Colors.transparent,
           hoverColor: Colors.transparent,
           focusColor: Colors.transparent,
-            child: Padding(
+          child: Padding(
             padding: const EdgeInsets.symmetric(
               horizontal: 13.7,
               vertical: 13.7,
@@ -3110,7 +3124,7 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
                 if (widget.state == 'blank') ...[
                   const SizedBox(width: 10),
                   const Text(
-                    '빈칸',
+                    '못품',
                     style: TextStyle(
                       color: Color(0xFFE54848),
                       fontSize: 13,
@@ -3180,7 +3194,7 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
       color: Colors.transparent,
       child: Tooltip(
         message: widget.correctedRetry
-            ? '$questionLabel번 · 첫 시도 ${widget.baselineState == 'not_performed' ? '미수행' : widget.baselineState == 'blank' ? '빈칸' : '오답'} → 수정됨'
+            ? '$questionLabel번 · 직전 채점 ${widget.baselineState == 'not_performed' ? '미수행' : widget.baselineState == 'blank' ? '못품' : '오답'} → 수정됨'
             : widget.editLocked
                 ? '$questionLabel번 · 저장된 채점 결과'
                 : '$questionLabel번',
@@ -3188,7 +3202,7 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             questionButton(),
-            const SizedBox(width: 8),
+            const SizedBox(width: _rsAnswerQuestionGap),
             Expanded(
               child: GestureDetector(
                 behavior: HitTestBehavior.translucent,
@@ -3213,7 +3227,7 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
                             child: const SizedBox.expand(
                               child: Center(
                                 child: Text(
-                                  '미풀이',
+                                  '못품',
                                   style: TextStyle(
                                     color: Color(0xFFE54848),
                                     fontSize: 11.5,
@@ -3320,7 +3334,7 @@ class _RightSheetSetPartSwipeCardState
                   borderRadius: BorderRadius.circular(11),
                   child: const Center(
                     child: Text(
-                      '미풀이',
+                      '못품',
                       style: TextStyle(
                         color: Color(0xFFE54848),
                         fontSize: 11.5,
@@ -3367,6 +3381,15 @@ class _AnswerKeyGradingTabPanel extends StatefulWidget {
 class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   static const double _topBarTopInset = 12;
   static const double _searchFieldHeight = 52;
+
+  /// 접힌 상단 바. 글자는 페이지 '모두 정답' 버튼(15)과 같다.
+  static const double _collapsedSessionFontSize = 15;
+  static const double _collapsedSessionLineGap = 6;
+  static const double _collapsedSessionVerticalPad = 10;
+  static const double _collapsedSessionBarHeight =
+      _collapsedSessionVerticalPad * 2 +
+          _collapsedSessionFontSize * 2 +
+          _collapsedSessionLineGap;
   static const double _searchIconSize = 18;
 
   /// 펼침/축소 공통 — 돋보기 왼쪽 위치(패널만 변하고 아이콘은 고정).
@@ -3381,9 +3404,9 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   static const double _answerImageVerticalPadding =
       _answerImageTopPadding + _answerImageBottomPadding;
 
-  /// v11(uniform-line) 렌더 전용 상하 여백 — 세트형 하위 카드와 동일한
-  /// 타이트한 프레이밍.
-  static const double _answerImageTightPadding = 3.0;
+  /// v11(uniform-line) 렌더 전용 상하 여백. 일반 카드와 세트형 하위 카드가
+  /// 같은 값을 쓴다.
+  static const double _answerImageTightPadding = 7.0;
 
   /// v11 uniform-line 렌더 한 줄의 표시 높이(dp).
   /// (템플릿 스트럿 1.5em @15pt, 상하 보더 2.5pt, 160dpi 기준 실측 61px)
@@ -3420,6 +3443,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   String? _searchError;
   Map<String, String> _gradingStates = <String, String>{};
   Map<String, String> _baselineStates = <String, String>{};
+  Map<String, String> _wrongOnlyStates = <String, String>{};
   Map<String, String> _correctionStates = <String, String>{};
   Map<String, int> _correctionAttemptNumbers = <String, int>{};
 
@@ -3498,7 +3522,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
 
   static const double _sessionHeaderBlockHeight = 78;
 
-  double get _stickyHeaderMinExtent => _topBarTopInset + _searchFieldHeight + 8;
+  double get _stickyHeaderMinExtent =>
+      _topBarTopInset + _collapsedSessionBarHeight + 8;
 
   double get _stickyHeaderMaxExtent {
     if (!_showSearchChrome) {
@@ -3696,6 +3721,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       setState(() {
         _gradingStates = <String, String>{};
         _baselineStates = <String, String>{};
+        _wrongOnlyStates = <String, String>{};
         _correctionStates = <String, String>{};
         _correctionAttemptNumbers = <String, int>{};
         _wrongOnlySettledCorrectionKeys = <String>{};
@@ -3720,6 +3746,15 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         baselineStates[key] = normalized;
       }
     });
+    final wrongOnlyStates = <String, String>{};
+    session.wrongOnlyStates.forEach((key, value) {
+      final normalized = _normalizeState(value);
+      if (normalized == 'wrong' ||
+          normalized == 'blank' ||
+          normalized == 'not_performed') {
+        wrongOnlyStates[key] = normalized;
+      }
+    });
     final correctionStates = <String, String>{};
     session.initialCorrectionStates.forEach((key, value) {
       if (value.trim() == 'corrected' && baselineStates.containsKey(key)) {
@@ -3740,6 +3775,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     setState(() {
       _gradingStates = mapped;
       _baselineStates = baselineStates;
+      _wrongOnlyStates = wrongOnlyStates;
       _correctionStates = correctionStates;
       _correctionAttemptNumbers = correctionAttemptNumbers;
       _wrongOnlySettledCorrectionKeys = correctionStates.entries
@@ -3747,7 +3783,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           .map((e) => e.key)
           .toSet();
       _gradingEditLocked = session.gradingLocked;
-      _wrongOnly = session.wrongOnlyDefault && baselineStates.isNotEmpty;
+      _wrongOnly = session.wrongOnlyDefault && wrongOnlyStates.isNotEmpty;
       _answerRenders = <String, LearningProblemAnswerRender>{};
       _answerRenderFailedKeys = <String>{};
       _lastAnswerRenderRouteLogKey = '';
@@ -4405,7 +4441,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   /// '틀린것만 보기'를 쓸 수 있는지. 재채점(베이스라인) 세션이 아니어도
   /// 현재 채점 상태에 오답/미풀이/미수행이 있으면 켤 수 있다.
   bool get _wrongOnlyAvailable {
-    if (_baselineStates.isNotEmpty) return true;
+    if (_wrongOnlyStates.isNotEmpty) return true;
     return _gradingStates.values.any((raw) {
       final state = _normalizeState(raw);
       return state == 'wrong' || state == 'blank' || state == 'not_performed';
@@ -4413,14 +4449,15 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   }
 
   /// '틀린것만 보기'가 켜졌을 때 이 셀을 숨겨야 하는지.
-  /// - 베이스라인(첫 채점 결과)이 있으면: 첫 채점에서 틀렸거나 미풀이/미수행인
+  /// - 직전 반환 결과가 있으면: 직전 채점에서 틀렸거나 미풀이/미수행인
   ///   문항만 남긴다. 이미 확인 저장된 수정완료만 숨기고, 이번 세션에서
   ///   맞음 표시한 문항은 확인 전까지 리스트에 남긴다.
   /// - 없으면 현재 상태가 오답/미풀이/미수행인 문항만 남긴다.
   bool _hideCellForWrongOnly(String key) {
-    if (_baselineStates.isNotEmpty) {
-      if (!_isBaselineRetryKey(key)) return true;
-      return _wrongOnlySettledCorrectionKeys.contains(key);
+    if (_wrongOnlyStates.isNotEmpty) {
+      if (!_wrongOnlyStates.containsKey(key)) return true;
+      return _isBaselineRetryKey(key) &&
+          _wrongOnlySettledCorrectionKeys.contains(key);
     }
     final state = _normalizeState(_gradingStates[key]);
     return state != 'wrong' && state != 'blank' && state != 'not_performed';
@@ -4457,12 +4494,25 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     String key, {
     List<String> partLabels = const <String>[],
   }) async {
+    _setCellState(key, 'blank', partLabels: partLabels);
+  }
+
+  void _setCellState(
+    String key,
+    String next, {
+    List<String> partLabels = const <String>[],
+  }) {
     if (_answerListReadOnly) return;
+    final normalized = _normalizeState(next);
     setState(() {
-      _gradingStates[key] = 'blank';
+      _gradingStates[key] = normalized;
       _applyStateToParts(key, partLabels);
       if (_isBaselineRetryKey(key)) {
-        _correctionStates.remove(key);
+        if (normalized == 'correct') {
+          _correctionStates[key] = 'corrected';
+        } else {
+          _correctionStates.remove(key);
+        }
       }
     });
     _emitStateChanged();
@@ -5514,7 +5564,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         if (!embeddedInFabGlass) const SizedBox(height: _topBarTopInset),
         Row(
           crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
+          children: [
             if (showBackButton) ...[
               const SizedBox(width: closeButtonLeftShift),
               SizedBox(
@@ -5532,7 +5582,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
               ),
               const SizedBox(width: closeButtonToFieldGap),
             ],
-                      Expanded(
+            Expanded(
               child: Container(
                 key: _searchHeaderFieldKey,
                 height: _searchFieldHeight,
@@ -5540,14 +5590,14 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                   horizontal: embeddedInFabGlass ? 4 : 12,
                 ),
                 decoration: fieldDecoration,
-                        child: Row(
-                          children: [
+                child: Row(
+                  children: [
                     Icon(
                       Icons.search_rounded,
                       size: _searchIconSize,
                       color: fabStyle.subText,
-                            ),
-                            const SizedBox(width: 8),
+                    ),
+                    const SizedBox(width: 8),
                     Expanded(
                       child: TextField(
                         controller: _searchCtrl,
@@ -5665,7 +5715,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           runSpacing: 8,
           children: [
             for (int i = 0; i < _recentSearches.length; i++)
-                            Container(
+              Container(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                 decoration: chipDecoration,
@@ -5707,6 +5757,18 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     );
   }
 
+  TextStyle _collapsedSessionTextStyle({
+    required Color color,
+    FontWeight weight = FontWeight.w800,
+  }) {
+    return TextStyle(
+      color: color,
+      fontWeight: weight,
+      fontSize: _collapsedSessionFontSize,
+      height: 1.0,
+    );
+  }
+
   Widget _buildCollapsedSessionInfo(
     RightSideSheetTestGradingSession session,
     _RightSheetFabColors fabStyle,
@@ -5716,78 +5778,65 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     final groupHomeworkTitle = session.groupHomeworkTitle.trim().isEmpty
         ? (session.title.trim().isEmpty ? '그룹 과제' : session.title.trim())
         : session.groupHomeworkTitle.trim();
-    final assignmentCode = session.assignmentCode.trim();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         Row(
           children: [
-            Expanded(
+            Flexible(
               child: Text(
                 studentName,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: fabStyle.subText,
-                  fontWeight: FontWeight.w800,
-                  fontSize: 13,
-                  height: 1.1,
-                ),
+                style: _collapsedSessionTextStyle(color: fabStyle.subText),
               ),
             ),
             if (session.autoFilledCorrectCount > 0) ...[
               const SizedBox(width: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                              decoration: BoxDecoration(
-                  color: const Color(0xFF4B8BFF).withValues(alpha: 0.14),
-                                borderRadius: BorderRadius.circular(999),
-                  border: Border.all(
-                    color: const Color(0xFF4B8BFF).withValues(alpha: 0.35),
-                  ),
-                              ),
-                              child: Text(
+              Flexible(
+                child: Text(
                   '미기록 ${session.autoFilledCorrectCount}문항 정답',
-                  style: const TextStyle(
-                    color: Color(0xFF4B8BFF),
-                    fontSize: 10.5,
-                    fontWeight: FontWeight.w800,
-                    height: 1,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: _collapsedSessionTextStyle(
+                    color: const Color(0xFF4B8BFF),
                   ),
                 ),
               ),
             ],
-            if (assignmentCode.isNotEmpty) ...[
-                              const SizedBox(width: 8),
-              Text(
-                assignmentCode,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: fabStyle.subText,
-                  fontWeight: FontWeight.w800,
-                  fontSize: 12.5,
-                  letterSpacing: 0.2,
-                  height: 1.1,
-                                ),
-                              ),
-                            ],
-                          ],
+          ],
         ),
-        const SizedBox(height: 2),
+        const SizedBox(height: _collapsedSessionLineGap),
         Text(
           groupHomeworkTitle,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: TextStyle(
+          style: _collapsedSessionTextStyle(
             color: fabStyle.text,
-            fontWeight: FontWeight.w900,
-            fontSize: 13.5,
-            height: 1.15,
-                        ),
-                      ),
-                    ],
+            weight: FontWeight.w900,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCollapsedAssignmentCode(
+    RightSideSheetTestGradingSession session,
+    _RightSheetFabColors fabStyle,
+  ) {
+    final assignmentCode = session.assignmentCode.trim();
+    if (assignmentCode.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(left: 8),
+      child: Text(
+        assignmentCode,
+        maxLines: 1,
+        softWrap: false,
+        style: _collapsedSessionTextStyle(color: fabStyle.subText).copyWith(
+          letterSpacing: 0.2,
+        ),
+      ),
     );
   }
 
@@ -5840,13 +5889,13 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                     ),
                   ),
                 ],
-                ],
-              ),
+              ],
             ),
           ),
         ),
-      );
-    }
+      ),
+    );
+  }
 
   /// 과제카드 진입용: 검색 원형 없이 세션 헤더 ↔ 전체 너비 FAB 알약.
   Widget _buildMorphSessionOnlyChrome({
@@ -5857,50 +5906,73 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     final expandedOpacity = (1.0 - (t * 1.35)).clamp(0.0, 1.0);
     final pillOpacity = ((t - 0.08) / 0.55).clamp(0.0, 1.0);
 
-    return Stack(
-      alignment: Alignment.topCenter,
-      children: [
-        Opacity(
-          opacity: expandedOpacity,
-          child: IgnorePointer(
-            ignoring: t > 0.45,
-            child: _buildSessionHeader(
-              session,
-              showWrongOnly: true,
-            ),
-          ),
-        ),
-        if (t > 0.02)
-          Opacity(
-            opacity: pillOpacity,
-            child: Transform.translate(
-              offset: Offset(0, 6 * (1.0 - pillOpacity)),
-              child: SizedBox(
-                height: _searchFieldHeight,
-                width: double.infinity,
-                child: FabStyleGlassPanel(
-                  useFabTabBarBackground: true,
-                  borderRadius: BorderRadius.circular(_searchFieldHeight / 2),
-                  padding: const EdgeInsets.fromLTRB(14, 0, 8, 0),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: _buildCollapsedSessionInfo(
-                          session,
-                          fabStyle,
-                        ),
-                      ),
-                      _buildWrongOnlyToggle(
-                        fabStyle: fabStyle,
-                        compact: true,
-                      ),
-                    ],
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final height = constraints.maxHeight.isFinite
+            ? constraints.maxHeight
+            : _sessionHeaderBlockHeight;
+        final pillHeight = math.min(_collapsedSessionBarHeight, height);
+        return SizedBox(
+          height: height,
+          child: Stack(
+            clipBehavior: Clip.hardEdge,
+            alignment: Alignment.topCenter,
+            children: [
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: Opacity(
+                  opacity: expandedOpacity,
+                  child: IgnorePointer(
+                    ignoring: t > 0.45,
+                    child: _buildSessionHeader(
+                      session,
+                      showWrongOnly: true,
+                    ),
                   ),
                 ),
               ),
-            ),
+              if (t > 0.02)
+                Align(
+                  alignment: Alignment.center,
+                  child: Opacity(
+                    opacity: pillOpacity,
+                    child: Transform.translate(
+                      offset: Offset(0, 6 * (1.0 - pillOpacity)),
+                      child: SizedBox(
+                        height: pillHeight,
+                        width: double.infinity,
+                        child: FabStyleGlassPanel(
+                          useFabTabBarBackground: true,
+                          borderRadius: BorderRadius.circular(
+                            _collapsedSessionBarHeight / 2,
+                          ),
+                          padding: const EdgeInsets.fromLTRB(14, 0, 8, 0),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: _buildCollapsedSessionInfo(
+                                  session,
+                                  fabStyle,
+                                ),
+                              ),
+                              _buildCollapsedAssignmentCode(session, fabStyle),
+                              _buildWrongOnlyToggle(
+                                fabStyle: fabStyle,
+                                compact: true,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
           ),
-      ],
+        );
+      },
     );
   }
 
@@ -5929,9 +6001,14 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         final leftW = lerpDouble(fullW, circleSize, searchPanelT)!
             .clamp(circleSize, fullW);
         final showPill = t > 0.02 && fullW > leftW + gap + 8;
+        final rowH = lerpDouble(
+          _searchFieldHeight,
+          _collapsedSessionBarHeight,
+          t,
+        )!;
 
         return SizedBox(
-          height: _searchFieldHeight,
+          height: rowH,
           child: Stack(
             clipBehavior: Clip.none,
             children: [
@@ -5953,11 +6030,11 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                               : null,
                           customBorder: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(leftRadius),
-          ),
-          child: ClipRRect(
+                          ),
+                          child: ClipRRect(
                             borderRadius: BorderRadius.circular(leftRadius),
-            child: Stack(
-              children: [
+                            child: Stack(
+                              children: [
                                 // 입력 영역만 페이드 — 돋보기는 오버레이로 고정.
                                 Positioned.fill(
                                   child: Opacity(
@@ -6073,12 +6150,10 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                         child: Transform.translate(
                           offset: Offset(10 * (1.0 - pillOpacity), 0),
                           child: SizedBox(
-                            height: _searchFieldHeight,
+                            height: rowH,
                             child: FabStyleGlassPanel(
                               useFabTabBarBackground: true,
-                              borderRadius: BorderRadius.circular(
-                                _searchFieldHeight / 2,
-                              ),
+                              borderRadius: BorderRadius.circular(rowH / 2),
                               padding: const EdgeInsets.fromLTRB(12, 0, 8, 0),
                               child: Row(
                                 children: [
@@ -6087,6 +6162,10 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                                       session,
                                       fabStyle,
                                     ),
+                                  ),
+                                  _buildCollapsedAssignmentCode(
+                                    session,
+                                    fabStyle,
                                   ),
                                   _buildWrongOnlyToggle(
                                     fabStyle: fabStyle,
@@ -6103,10 +6182,10 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                 ],
               ),
               // 돋보기: 크기·좌측 위치 고정. 패널만 알약→원형으로 수축.
-                Positioned(
+              Positioned(
                 left: _searchIconLeft,
-                  top: 0,
-                  bottom: 0,
+                top: 0,
+                bottom: 0,
                 child: IgnorePointer(
                   child: Center(
                     child: Icon(
@@ -6137,7 +6216,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     if (!session.showSearchChrome) {
       return Material(
         type: MaterialType.transparency,
-                  child: Padding(
+        child: Padding(
           key: _gradingSearchOverlayKey,
           padding: const EdgeInsets.fromLTRB(
             _gradingSheetHorizontalInset,
@@ -6145,10 +6224,21 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
             _gradingSheetHorizontalInset,
             8,
           ),
-          child: _buildMorphSessionOnlyChrome(
-            session: session,
-            t: t,
-            fabStyle: fabStyle,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: _buildMorphSessionOnlyChrome(
+                  session: session,
+                  t: t,
+                  fabStyle: fabStyle,
+                ),
+              ),
+              if (session.readOnlyReason.trim().isNotEmpty) ...[
+                const SizedBox(height: 8),
+                _buildGradingReadOnlyNotice(session.readOnlyReason),
+              ],
+            ],
           ),
         ),
       );
@@ -6178,6 +6268,10 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                 t: t,
                 fabStyle: fabStyle,
               ),
+              if (session.readOnlyReason.trim().isNotEmpty) ...[
+                const SizedBox(height: 8),
+                _buildGradingReadOnlyNotice(session.readOnlyReason),
+              ],
               if (_recentSearches.isNotEmpty && recentOpacity > 0)
                 ClipRect(
                   child: Align(
@@ -6224,6 +6318,39 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildGradingReadOnlyNotice(String reason) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFB74D).withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: const Color(0xFFFFB74D).withValues(alpha: 0.52),
+        ),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.lock_outline_rounded,
+            size: 17,
+            color: Color(0xFFFFCC80),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              '${reason.trim()} 읽기 전용으로 열었습니다.',
+              style: const TextStyle(
+                color: Color(0xFFFFE0B2),
+                fontSize: 12.5,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -6357,7 +6484,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         height: 96,
         decoration: BoxDecoration(
           color: fabStyle.panel,
-                      borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(12),
           border: Border.all(color: fabStyle.border),
         ),
         alignment: Alignment.center,
@@ -6373,7 +6500,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
           color: fabStyle.panel,
-                        borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(12),
           border: Border.all(color: const Color(0xFF4A2A2A)),
         ),
         child: Text(
@@ -6616,6 +6743,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
             BuildContext context, void Function([T? result]) close)
         builder,
     bool barrierDismissible = true,
+    double barrierOpacity = 0.54,
   }) async {
     // 정답 PDF 패널도 root Overlay에 올라가므로, 확인창도 root에 올려 그 위에 그린다.
     final overlay = Overlay.maybeOf(context, rootOverlay: true);
@@ -6624,6 +6752,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         context: _navigatorContext,
         useRootNavigator: true,
         barrierDismissible: barrierDismissible,
+        barrierColor: Colors.black.withValues(alpha: barrierOpacity),
         builder: (dialogContext) => builder(
           dialogContext,
           ([result]) =>
@@ -6650,7 +6779,9 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                 child: GestureDetector(
                   onTap: barrierDismissible ? () => close() : null,
                   behavior: HitTestBehavior.opaque,
-                  child: Container(color: Colors.black.withValues(alpha: 0.54)),
+                  child: Container(
+                    color: Colors.black.withValues(alpha: barrierOpacity),
+                  ),
                 ),
               ),
               Center(child: builder(overlayContext, close)),
@@ -7188,8 +7319,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
               ),
               content: SizedBox(
                 width: 520,
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
@@ -7316,10 +7447,10 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     final label = hasScoreData ? '총점' : '정답';
 
     return Align(
-      alignment: Alignment.centerLeft,
+      alignment: Alignment.center,
       child: Text(
         '$label  ${_formatScoreDisplay(result.correctScore)} / ${_formatScoreDisplay(result.totalScore)}',
-        textAlign: TextAlign.left,
+        textAlign: TextAlign.center,
         style: const TextStyle(
           color: _rsText,
           fontWeight: FontWeight.w900,
@@ -7356,7 +7487,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
             border: const Color(0xFFE54848),
             background: background,
             text: const Color(0xFF8F1F2B),
-            label: '빈칸',
+            label: '못품',
           );
         case 'not_performed':
           return (
@@ -7394,7 +7525,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           border: const Color(0xFFE54848),
           background: background,
           text: const Color(0xFFFFD7DE),
-          label: '빈칸',
+          label: '못품',
         );
       case 'not_performed':
         return (
@@ -7538,8 +7669,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                     height: 1.0,
                   ),
                 ),
-              ],
-            ),
+            ],
+          ),
         ),
       );
     }
@@ -7807,17 +7938,21 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
 
     final imageAlignment =
         alignLeft ? Alignment.centerLeft : Alignment.centerRight;
-    final image = Image(
-      image: AnswerRenderImageProvider(url),
-      width: displayWidth,
-      height: displayHeight,
-      fit: BoxFit.contain,
-      alignment: imageAlignment,
-      filterQuality: FilterQuality.high,
-      // 알파 글리프 PNG 는 테마 잉크 색으로 틴트해 그린다.
-      color: tintColor,
-      colorBlendMode: tintColor != null ? BlendMode.srcIn : null,
-      errorBuilder: (_, __, ___) => fallbackBuilder(),
+    final image = ClipRRect(
+      // 정답 카드와 같은 반경 14. 사진 정답의 각진 모서리를 카드에 맞춘다.
+      borderRadius: BorderRadius.circular(14),
+      child: Image(
+        image: AnswerRenderImageProvider(url),
+        width: displayWidth,
+        height: displayHeight,
+        fit: BoxFit.contain,
+        alignment: imageAlignment,
+        filterQuality: FilterQuality.high,
+        // 알파 글리프 PNG 는 테마 잉크 색으로 틴트해 그린다.
+        color: tintColor,
+        colorBlendMode: tintColor != null ? BlendMode.srcIn : null,
+        errorBuilder: (_, __, ___) => fallbackBuilder(),
+      ),
     );
     final content = keepReadableWithHorizontalScroll
         ? SingleChildScrollView(
@@ -7858,10 +7993,14 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   Future<void> _openRawAnswerImageDialog(_RightSheetGradingCellVm cell) async {
     final url = cell.answerImageUrl.trim();
     if (url.isEmpty || !mounted) return;
+    final key = cell.key;
     await _showTopOverlayDialog<void>(
       builder: (dialogContext, closeDialog) => _RawAnswerImageZoomDialog(
         title: '${cell.displayQuestionLabel}번 이미지 정답',
         url: url,
+        initialState: _normalizeState(_gradingStates[key]),
+        readOnly: _answerListReadOnly,
+        onSelect: (state) => _setCellState(key, state),
         onClose: closeDialog,
       ),
     );
@@ -7880,7 +8019,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     }
     final render = _answerRenders[cell.key];
     if (_isRawAnswerImageCell(cell)) {
-    return GestureDetector(
+      return GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: () => unawaited(_openRawAnswerImageDialog(cell)),
         child: LayoutBuilder(
@@ -8013,7 +8152,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
             color: _cardInk,
             fontFamily: 'ChosunNm',
             fontWeight: FontWeight.w700,
-            fontSize: 25,
+            fontSize: _rsAnswerBodyFontSize,
             height: 1.1,
           ),
         ),
@@ -8089,7 +8228,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         for (final part in setParts)
           Padding(
             // 본 정답 카드와 같은 왼쪽·같은 너비. 내용물 들여쓰기는 카드 내부에서.
-            padding: const EdgeInsets.only(left: _rsSetPartCardLeft, top: 6),
+            padding: const EdgeInsets.only(left: _rsSetPartCardLeft, top: 12),
             child: _buildSetPartCard(cell, part, partLabels),
           ),
       ],
@@ -8221,9 +8360,14 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                 child: image,
               )
             : image;
-        return Align(
-          alignment: Alignment.centerLeft,
-          child: content,
+        return Padding(
+          padding: const EdgeInsets.symmetric(
+            vertical: _answerImageTightPadding,
+          ),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: content,
+          ),
         );
       },
     );
@@ -8280,11 +8424,12 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           focusColor: Colors.transparent,
           child: Padding(
             // 본 카드와 동일: 카드 패딩 13.7 + 콘텐츠 들여쓰기 16.
+            // v11 이미지의 추가 7dp는 이미지 쪽에서 더한다.
             padding: const EdgeInsets.fromLTRB(
               13.7 + _rsAnswerContentLeftPad,
-              11,
               13.7,
-              11,
+              13.7,
+              13.7,
             ),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.center,
@@ -8360,59 +8505,54 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     final confirmed = await _showTopOverlayDialog<bool>(
       builder: (overlayContext, close) {
         final fabStyle = _rightSheetFabColors(overlayContext);
-        return SizedBox(
-          width: 470,
-          height: isRange ? 258 : 238,
-          child: UtilityGlassDialogShell(
-            title: title,
-            icon: targetState == 'not_performed'
-                ? Icons.do_not_disturb_on_rounded
-                : Icons.task_alt_rounded,
-            preferredWidth: 470,
-            maxHeight: isRange ? 258 : 238,
-            onClose: () => close(false),
+        final sheetHeight = isRange ? 248.0 : 220.0;
+        return _OverlayBottomSlideIn(
+          child: Align(
+            alignment: Alignment.bottomCenter,
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(22, 20, 22, 18),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Expanded(
-                    child: Text(
-                      message,
-                      style: TextStyle(
-                        color: fabStyle.subText,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                        height: 1.5,
-                        decoration: TextDecoration.none,
-                      ),
+              padding: const EdgeInsets.fromLTRB(24, 0, 24, 18),
+              child: SizedBox(
+                width: 470,
+                height: sheetHeight,
+                child: UtilityGlassDialogShell(
+                  title: title,
+                  icon: targetState == 'not_performed'
+                      ? Icons.do_not_disturb_on_rounded
+                      : Icons.task_alt_rounded,
+                  preferredWidth: 470,
+                  maxHeight: sheetHeight,
+                  onClose: () => close(false),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(22, 16, 22, 16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          message,
+                          style: TextStyle(
+                            color: fabStyle.subText,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            height: 1.5,
+                            decoration: TextDecoration.none,
+                          ),
+                        ),
+                        const Spacer(),
+                        Row(
+                          children: [
+                            AppDialogCloseButton(
+                              onPressed: () => close(false),
+                            ),
+                            const Spacer(),
+                            AppDialogConfirmButton(
+                              onPressed: () => close(true),
+                            ),
+                          ],
+                        ),
+                      ],
                     ),
                   ),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      OutlinedButton(
-                        onPressed: () => close(false),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: fabStyle.text,
-                          side: BorderSide(color: fabStyle.border),
-                          minimumSize: const Size(84, 42),
-                        ),
-                        child: const Text('취소'),
-                      ),
-                      const SizedBox(width: 10),
-                      FilledButton(
-                        onPressed: () => close(true),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: _rsAccent,
-                          foregroundColor: Colors.white,
-                          minimumSize: const Size(92, 42),
-                        ),
-                        child: Text(targetLabel),
-                      ),
-                    ],
-                  ),
-                ],
+                ),
               ),
             ),
           ),
@@ -8479,25 +8619,33 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   }) {
     final fabStyle = _rightSheetFabColors(context);
     final color = onTap == null
-        ? fabStyle.subText.withValues(alpha: 0.45)
-        : fabStyle.subText;
+        ? fabStyle.text.withValues(alpha: 0.45)
+        : fabStyle.text;
+    final borderColor = fabStyle.border;
     return Tooltip(
       message: onLongPress == null ? label : '$label · 길게 눌러 이후 페이지까지',
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-      onTap: onTap,
-          onLongPress: onLongPress,
-          borderRadius: BorderRadius.circular(10),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-            child: Text(
-              label,
-              style: TextStyle(
-                color: color,
-                fontSize: 15,
-                fontWeight: FontWeight.w600,
-                height: 1,
+      child: SizedBox(
+        height: _gradingPageBulkActionHeight,
+        child: Material(
+          color: Colors.transparent,
+          shape: StadiumBorder(side: BorderSide(color: borderColor)),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: onTap,
+            onLongPress: onLongPress,
+            customBorder: const StadiumBorder(),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Center(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    height: 1,
+                  ),
+                ),
               ),
             ),
           ),
@@ -8529,22 +8677,12 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           Padding(
             padding: const EdgeInsets.fromLTRB(
               _rsAnswerQuestionColLeftPad,
-              8,
-              _rsAnswerQuestionColLeftPad,
+              29,
+              10,
               0,
             ),
             child: Row(
               children: [
-                Text(
-                  'p.${page.pageNumber}',
-                  style: TextStyle(
-                    color: fabStyle.text,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 18,
-                    height: 1.0,
-                  ),
-                ),
-                const Spacer(),
                 _buildPageBulkAction(
                   label: '모두 정답',
                   onTap: _answerListReadOnly
@@ -8553,9 +8691,9 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                             _applyPageBulkState(page, targetState: 'correct'),
                           ),
                 ),
-                const SizedBox(width: 2),
+                const SizedBox(width: 8),
                 _buildPageBulkAction(
-                  label: '미수행',
+                  label: '모두 안함',
                   onTap: _answerListReadOnly
                       ? null
                       : () => unawaited(
@@ -8573,6 +8711,16 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                               includeFollowing: true,
                             ),
                           ),
+                ),
+                const Spacer(),
+                Text(
+                  'p.${page.pageNumber}',
+                  style: TextStyle(
+                    color: fabStyle.text,
+                    fontWeight: FontWeight.w800,
+                    fontSize: _gradingPageLabelFontSize,
+                    height: 1.0,
+                  ),
                 ),
               ],
             ),
@@ -8651,59 +8799,54 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     return _showTopOverlayDialog<bool>(
       builder: (overlayContext, close) {
         final fabStyle = _rightSheetFabColors(overlayContext);
-        return SizedBox(
-          width: 470,
-          height: 238,
-          child: UtilityGlassDialogShell(
-            title: title,
-            icon: icon,
-            preferredWidth: 470,
-            maxHeight: 238,
-            onClose: () => close(false),
+        const sheetHeight = 248.0;
+        return _OverlayBottomSlideIn(
+          child: Align(
+            alignment: Alignment.bottomCenter,
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(22, 20, 22, 18),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Expanded(
-                    child: Text(
-                      message,
-                      style: TextStyle(
-                        color: fabStyle.subText,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                        height: 1.5,
-                        decoration: TextDecoration.none,
-                      ),
+              padding: const EdgeInsets.fromLTRB(24, 0, 24, 18),
+              child: SizedBox(
+                width: 470,
+                height: sheetHeight,
+                child: UtilityGlassDialogShell(
+                  title: title,
+                  icon: icon,
+                  preferredWidth: 470,
+                  maxHeight: sheetHeight,
+                  onClose: () => close(false),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(22, 16, 22, 16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          message,
+                          style: TextStyle(
+                            color: fabStyle.subText,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            height: 1.5,
+                            decoration: TextDecoration.none,
+                          ),
+                        ),
+                        const Spacer(),
+                        Row(
+                          children: [
+                            if (showCancel)
+                              AppDialogCloseButton(
+                                onPressed: () => close(false),
+                              ),
+                            const Spacer(),
+                            AppDialogConfirmButton(
+                              label: confirmLabel,
+                              onPressed: () => close(true),
+                            ),
+                          ],
+                        ),
+                      ],
                     ),
                   ),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      if (showCancel) ...[
-                        OutlinedButton(
-                          onPressed: () => close(false),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: fabStyle.text,
-                            side: BorderSide(color: fabStyle.border),
-                            minimumSize: const Size(84, 42),
-                          ),
-                          child: const Text('취소'),
-                        ),
-                        const SizedBox(width: 10),
-                      ],
-                      FilledButton(
-                        onPressed: () => close(true),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: _rsAccent,
-                          foregroundColor: Colors.white,
-                          minimumSize: const Size(92, 42),
-                        ),
-                        child: Text(confirmLabel),
-                      ),
-                    ],
-                  ),
-                ],
+                ),
               ),
             ),
           ),
@@ -8712,12 +8855,10 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     );
   }
 
-  // PDF 뷰어 하단 컨트롤(화살표/해설)과 동일: bottom 16 + control 51.
-  // 닫기/확인/완료 버튼 높이는 이 값으로 통일한다.
+  // 닫기/확인/완료는 공용 다이얼로그 버튼(120×52). 아래 여백은 16.
   static const double _gradingBottomControlsBottomInset = 16;
-  static const double _gradingBottomControlsHeight = 51;
-  static const double _gradingBottomCloseButtonWidth = 84;
-  static const double _gradingBottomActionButtonWidth = 102;
+  static const double _gradingBottomControlsHeight =
+      AppDialogActionMetrics.height;
   static const double _gradingBottomBarTopInset = 12;
   static const double _gradingBottomBarHeight = _gradingBottomBarTopInset +
       _gradingBottomControlsHeight +
@@ -8725,109 +8866,44 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   static const double _gradingAnswerListBottomInset = 4;
   static const double _gradingBottomBarScrollPadding =
       _gradingBottomBarHeight + _gradingAnswerListBottomInset;
+  static const double _gradingPageLabelFontSize = 18;
+  static const double _gradingPageBulkActionHeight = 44;
   static const double _gradingPageSectionGapAbove = 28;
-  static const double _gradingPageSectionGapBelow = 20;
+  static const double _gradingPageSectionGapBelow = 26;
   static const double _gradingSheetHorizontalInset = 10;
-
-  ButtonStyle _gradingBottomBarButtonStyle({
-    required Color foreground,
-    required Color border,
-    required Color background,
-    required double width,
-  }) {
-    return OutlinedButton.styleFrom(
-      backgroundColor: background,
-      side: BorderSide(color: border),
-      foregroundColor: foreground,
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 0),
-      minimumSize: Size(width, _gradingBottomControlsHeight),
-      maximumSize: Size(width * 2, _gradingBottomControlsHeight),
-      fixedSize: Size(width, _gradingBottomControlsHeight),
-      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      visualDensity: VisualDensity.compact,
-    );
-  }
-
-  static const TextStyle _gradingBottomBarButtonLabelStyle = TextStyle(
-    fontSize: 18.5,
-    fontWeight: FontWeight.w800,
-    height: 1.0,
-  );
-
-  Widget _buildGradingBottomBarButton({
-    required String label,
-    required VoidCallback? onPressed,
-    required double width,
-    bool filled = false,
-  }) {
-    final fabStyle = _rightSheetFabColors(context);
-    return SizedBox(
-      width: width,
-      height: _gradingBottomControlsHeight,
-      child: OutlinedButton(
-        onPressed: onPressed,
-        style: _gradingBottomBarButtonStyle(
-          foreground: filled ? Colors.white : fabStyle.text,
-          border: filled ? _rsAccent : fabStyle.border,
-          background: filled ? _rsAccent : Colors.transparent,
-          width: width,
-        ),
-        child: Text(label, style: _gradingBottomBarButtonLabelStyle),
-      ),
-    );
-  }
 
   Widget _buildActionButtons() {
     final session = widget.session;
     if (session?.smartConfirmAction == true) {
-      return Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (session?.onNext != null) ...[
-            _buildGradingBottomBarButton(
-              label: _actionBusy ? '처리중' : '다음',
-              onPressed: _actionBusy
-                  ? null
-                  : () => unawaited(
-                        _runSmartConfirmAction(advanceAfter: true),
-                      ),
-              width: _gradingBottomActionButtonWidth,
-            ),
-            const SizedBox(width: 8),
-          ],
-          _buildGradingBottomBarButton(
-            label: _actionBusy ? '확인중' : '확인',
-            onPressed:
-                _actionBusy ? null : () => unawaited(_runSmartConfirmAction()),
-            width: _gradingBottomActionButtonWidth,
-            filled: true,
-          ),
-        ],
+      return AppDialogConfirmButton(
+        label: _actionBusy ? '확인중' : '확인',
+        onPressed:
+            _actionBusy ? null : () => unawaited(_runSmartConfirmAction()),
       );
     }
 
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        _buildGradingBottomBarButton(
+        AppDialogConfirmButton(
           label: _actionBusy ? '완료중' : '완료',
+          filled: false,
           onPressed:
               _actionBusy ? null : () => unawaited(_runAction('complete')),
-          width: _gradingBottomActionButtonWidth,
         ),
         const SizedBox(width: 8),
-        _buildGradingBottomBarButton(
+        AppDialogConfirmButton(
           label: _actionBusy ? '확인중' : '확인',
           onPressed:
               _actionBusy ? null : () => unawaited(_runAction('confirm')),
-          width: _gradingBottomActionButtonWidth,
-          filled: true,
         ),
       ],
     );
   }
 
   Widget _buildGradingBottomBar(RightSideSheetTestGradingSession session) {
+    final showNext =
+        session.smartConfirmAction == true && session.onNext != null;
     return FabStyleGlassPanel(
       useFabTabBarBackground: true,
       borderRadius: BorderRadius.zero,
@@ -8842,11 +8918,24 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            _buildGradingBottomBarButton(
-              label: '닫기',
+            AppDialogCloseButton(
               onPressed: widget.onClose,
-              width: _gradingBottomCloseButtonWidth,
+              iconOnly: showNext,
             ),
+            if (showNext) ...[
+              const SizedBox(width: 8),
+              AppDialogConfirmButton(
+                label: '다음',
+                filled: false,
+                iconOnly: true,
+                iconSvg: dialogNextChevronSvg,
+                onPressed: _actionBusy
+                    ? null
+                    : () => unawaited(
+                          _runSmartConfirmAction(advanceAfter: true),
+                        ),
+              ),
+            ],
             const SizedBox(width: 12),
             Expanded(child: _buildScoreCalculator(session)),
             if (!_answerListReadOnly) ...[
@@ -8934,7 +9023,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                                 pageNumber: pages[pageIndex].pageNumber,
                               ),
                               if (i != pages[pageIndex].cells.length - 1)
-                                const SizedBox(height: 8),
+                                const SizedBox(height: 12),
                             ],
                           ],
                         ),
@@ -8947,7 +9036,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                         child: Text(
                           _wrongOnly
                               ? (_baselineStates.isNotEmpty
-                                  ? '첫 채점에서 오답·미풀이·미수행이었던 문항이 없습니다.'
+                                  ? '직전 채점에서 오답·미풀이·미수행이었던 문항이 없습니다.'
                                   : '오답·미풀이·미수행으로 표시된 문항이 없습니다.')
                               : '검색 결과가 없습니다.',
                           textAlign: TextAlign.center,
@@ -8993,25 +9082,25 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
             _buildSearchHeader(),
             const SizedBox(height: 24),
             Expanded(
-      child: Container(
-        decoration: BoxDecoration(
+              child: Container(
+                decoration: BoxDecoration(
                   color: fabStyle.panel,
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: fabStyle.border),
                 ),
                 alignment: Alignment.center,
                 padding: const EdgeInsets.all(16),
-          child: Text(
+                child: Text(
                   '테스트 채점 세션이 없습니다.\n수업 화면에서 테스트 제출 카드를 눌러 채점을 시작하세요.',
                   textAlign: TextAlign.center,
-            style: TextStyle(
+                  style: TextStyle(
                     color: fabStyle.subText,
                     fontSize: 13,
                     fontWeight: FontWeight.w700,
                     height: 1.4,
-            ),
-          ),
-        ),
+                  ),
+                ),
+              ),
             ),
           ],
         ),
@@ -9111,15 +9200,15 @@ class _AnswerKeyPdfShortcutExplorerState
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(10, 12, 10, 12),
-            child: _BooksSection(
-              books: widget.books,
-              grades: widget.grades,
-              pdfPathByBookAndGrade: widget.pdfPathByBookAndGrade,
-              onBookGradeDelta: widget.onBookGradeDelta,
-              onOpenBook: widget.onOpenBook,
-              onReorderBooks: widget.onReorderBooks,
-              onSelectBook: widget.onSelectBook,
-              scrollController: _scrollCtrl,
+      child: _BooksSection(
+        books: widget.books,
+        grades: widget.grades,
+        pdfPathByBookAndGrade: widget.pdfPathByBookAndGrade,
+        onBookGradeDelta: widget.onBookGradeDelta,
+        onOpenBook: widget.onOpenBook,
+        onReorderBooks: widget.onReorderBooks,
+        onSelectBook: widget.onSelectBook,
+        scrollController: _scrollCtrl,
       ),
     );
   }
@@ -9411,24 +9500,24 @@ class _BookCardState extends State<_BookCard> {
         // NOTE: ReorderableListView 내부에서 Tooltip(OverlayPortal)이 레이아웃 중 attach되며
         // "A _RenderLayoutBuilder was mutated" 에러가 발생하는 케이스가 있어,
         // 여기서는 Tooltip을 사용하지 않는다. (긴 과정명은 ellipsis로 처리)
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: bg,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: Colors.transparent),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: Align(
-                alignment: Alignment.centerRight,
-                child: Text(
-                  widget.gradeLabel,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: Colors.transparent),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: Text(
+                widget.gradeLabel,
                 style: TextStyle(
                     color: fg, fontSize: 13, fontWeight: FontWeight.w900),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  softWrap: false,
-                  textAlign: TextAlign.right,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                softWrap: false,
+                textAlign: TextAlign.right,
               ),
             ),
           ),
@@ -9451,17 +9540,17 @@ class _BookCardState extends State<_BookCard> {
           }
         },
         child: Material(
-        color: _rsFieldBg,
+          color: _rsFieldBg,
           shape: RoundedRectangleBorder(
             borderRadius: radius,
             side: BorderSide(color: _rsBorder.withOpacity(0.9)),
           ),
-        child: InkWell(
+          child: InkWell(
             onTap: widget.onOpen,
-          borderRadius: radius,
-          splashFactory: NoSplash.splashFactory,
-          highlightColor: Colors.white.withOpacity(0.05),
-          hoverColor: Colors.white.withOpacity(0.03),
+            borderRadius: radius,
+            splashFactory: NoSplash.splashFactory,
+            highlightColor: Colors.white.withOpacity(0.05),
+            hoverColor: Colors.white.withOpacity(0.03),
             child: GestureDetector(
               behavior: HitTestBehavior.translucent,
               onHorizontalDragStart: _handleGradeDragStart,
@@ -9471,19 +9560,19 @@ class _BookCardState extends State<_BookCard> {
               child: ConstrainedBox(
                 constraints:
                     const BoxConstraints(minHeight: _bookCardMinHeight),
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
                             child: Row(
                               children: [
                                 Expanded(
                                   child: LatexTextRenderer(
-                        widget.item.name,
+                                    widget.item.name,
                                     style: const TextStyle(
                                       color: _rsText,
                                       fontSize: 16,
@@ -9491,38 +9580,38 @@ class _BookCardState extends State<_BookCard> {
                                     ),
                                     maxLines: 1,
                                     softWrap: false,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
                                 const SizedBox(width: 10),
                                 // 요구사항: 이름:과정라벨 = 1:1
                                 Expanded(child: buildGradeBadge()),
                               ],
                             ),
                           ),
-                  ],
-                ),
-                const SizedBox(height: 4),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
                       LatexTextRenderer(
-                  widget.item.description,
+                        widget.item.description,
                         style: const TextStyle(
                           color: _rsTextSub,
                           fontSize: 13,
                           fontWeight: FontWeight.w600,
                           height: 1.25,
                         ),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
                   ),
                 ),
               ),
             ),
-            ),
           ),
         ),
-      );
+      ),
+    );
   }
 }
 
@@ -9575,7 +9664,7 @@ class _QuestionSourceInfoDialog extends StatelessWidget {
             height: 34,
             decoration: BoxDecoration(
               color: _rsAccent.withValues(alpha: 0.14),
-        borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(12),
               border: Border.all(color: _rsAccent.withValues(alpha: 0.26)),
             ),
             child: const Icon(
@@ -9617,8 +9706,8 @@ class _QuestionSourceInfoDialog extends StatelessWidget {
                     ),
                   )
                 : Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
                       for (var i = 0; i < visibleRows.length; i++) ...[
                         _QuestionSourceInfoRow(
                           label: visibleRows[i].label,
@@ -9631,11 +9720,11 @@ class _QuestionSourceInfoDialog extends StatelessWidget {
                             color: _rsBorder,
                           ),
                       ],
-                ],
-              ),
-            ),
+                    ],
+                  ),
           ),
         ),
+      ),
       actions: [
         TextButton(
           onPressed: onClose,
@@ -9757,11 +9846,17 @@ class _QuestionIssueTypeChip extends StatelessWidget {
 class _RawAnswerImageZoomDialog extends StatefulWidget {
   final String title;
   final String url;
+  final String initialState;
+  final bool readOnly;
+  final ValueChanged<String> onSelect;
   final VoidCallback onClose;
 
   const _RawAnswerImageZoomDialog({
     required this.title,
     required this.url,
+    required this.initialState,
+    required this.readOnly,
+    required this.onSelect,
     required this.onClose,
   });
 
@@ -9772,13 +9867,34 @@ class _RawAnswerImageZoomDialog extends StatefulWidget {
 
 class _RawAnswerImageZoomDialogState extends State<_RawAnswerImageZoomDialog> {
   static const double _initialScale = 2.0;
+  static const double _dialogWidth = 720;
+  static const double _dialogHeight = 680;
   late final TransformationController _controller;
+  late String _state;
   bool _didSetInitialTransform = false;
 
   @override
   void initState() {
     super.initState();
     _controller = TransformationController();
+    _state = widget.initialState;
+  }
+
+  void _select(String next) {
+    if (widget.readOnly || _state == next) return;
+    setState(() => _state = next);
+    widget.onSelect(next);
+  }
+
+  /// 유리 뒤로 정답 PDF가 비쳐도 버튼 속은 불투명하게 둔다.
+  Widget _solidDialogAction(Widget button) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: const Color(0xFF1C1C1E),
+        borderRadius: BorderRadius.circular(AppDialogActionMetrics.height / 2),
+      ),
+      child: button,
+    );
   }
 
   @override
@@ -9789,51 +9905,31 @@ class _RawAnswerImageZoomDialogState extends State<_RawAnswerImageZoomDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return Dialog(
-      backgroundColor: _rsPanelBg,
-      insetPadding: const EdgeInsets.all(20),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: const BorderSide(color: _rsBorder),
-      ),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 920, maxHeight: 720),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
-                      child: Row(
-                        children: [
-                          Expanded(
-                    child: Text(
-                      widget.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: _rsText,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    onPressed: widget.onClose,
-                    icon: const Icon(Icons.close_rounded),
-                    color: _rsTextSub,
-                    tooltip: '닫기',
-                          ),
-                        ],
-                      ),
-                    ),
-            Flexible(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+    final media = MediaQuery.sizeOf(context);
+    final width = math.min(_dialogWidth, media.width - 48);
+    final height = math.min(_dialogHeight, media.height - 48);
+    final imageBg = FabTabBarTokens.previewAcademyInfoPanelFor(
+      Theme.of(context).brightness,
+    );
+    return SizedBox(
+      width: width,
+      height: height,
+      child: UtilityGlassDialogShell(
+        title: widget.title,
+        icon: Icons.image_outlined,
+        preferredWidth: width,
+        maxHeight: height,
+        onClose: widget.onClose,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(12),
-                  child: Container(
-                    color: _rsFieldBg,
+                  child: ColoredBox(
+                    color: imageBg,
                     child: LayoutBuilder(
                       builder: (context, constraints) {
                         _setInitialCenteredTransform(constraints);
@@ -9852,11 +9948,47 @@ class _RawAnswerImageZoomDialogState extends State<_RawAnswerImageZoomDialog> {
                         );
                       },
                     ),
+                  ),
+                ),
               ),
-            ),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  _solidDialogAction(
+                    AppDialogConfirmButton(
+                      label: '정답',
+                      filled: _state == 'correct',
+                      showIcon: false,
+                      onPressed:
+                          widget.readOnly ? null : () => _select('correct'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  _solidDialogAction(
+                    AppDialogConfirmButton(
+                      label: '오답',
+                      filled: _state == 'wrong',
+                      showIcon: false,
+                      onPressed:
+                          widget.readOnly ? null : () => _select('wrong'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  _solidDialogAction(
+                    AppDialogConfirmButton(
+                      label: '안함',
+                      filled: _state == 'not_performed',
+                      showIcon: false,
+                      onPressed: widget.readOnly
+                          ? null
+                          : () => _select('not_performed'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ),
-            ),
-          ],
         ),
       ),
     );
@@ -10099,76 +10231,76 @@ class _BookSelectDialogBodyState extends State<_BookSelectDialogBody> {
   @override
   Widget build(BuildContext context) {
     return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Divider(height: 1, color: Color(0x22FFFFFF)),
-            const SizedBox(height: 12),
-            Expanded(
-              child: ListView.separated(
-                itemCount: widget.books.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 8),
-                itemBuilder: (context, index) {
-                  final b = widget.books[index];
-                  final gradeIdx = _gradeIndexByBookId[b.id] ?? 0;
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Divider(height: 1, color: Color(0x22FFFFFF)),
+        const SizedBox(height: 12),
+        Expanded(
+          child: ListView.separated(
+            itemCount: widget.books.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 8),
+            itemBuilder: (context, index) {
+              final b = widget.books[index];
+              final gradeIdx = _gradeIndexByBookId[b.id] ?? 0;
               final gradeLabel =
                   widget.grades.isEmpty ? '-' : widget.grades[gradeIdx].label;
-                  return InkWell(
-                    onTap: () => Navigator.of(context).pop<_BookPickResult>(
-                      _BookPickResult(bookIndex: index, gradeIndex: gradeIdx),
-                    ),
+              return InkWell(
+                onTap: () => Navigator.of(context).pop<_BookPickResult>(
+                  _BookPickResult(bookIndex: index, gradeIndex: gradeIdx),
+                ),
+                borderRadius: BorderRadius.circular(12),
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: _rsFieldBg,
                     borderRadius: BorderRadius.circular(12),
-                    child: Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: _rsFieldBg,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: _rsBorder.withOpacity(0.9)),
-                      ),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  b.name,
+                    border: Border.all(color: _rsBorder.withOpacity(0.9)),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              b.name,
                               style: const TextStyle(
                                   color: _rsText,
                                   fontSize: 14,
                                   fontWeight: FontWeight.w900),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  b.description,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              b.description,
                               style: const TextStyle(
                                   color: _rsTextSub,
                                   fontSize: 12,
                                   fontWeight: FontWeight.w600,
                                   height: 1.25),
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ],
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
                             ),
-                          ),
-                          const SizedBox(width: 12),
-                          _GradePickBadge(
-                            label: gradeLabel,
-                            grades: widget.grades,
-                            selectedIndex: gradeIdx,
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      _GradePickBadge(
+                        label: gradeLabel,
+                        grades: widget.grades,
+                        selectedIndex: gradeIdx,
                         onSelected: (i) =>
                             setState(() => _gradeIndexByBookId[b.id] = i),
-                          ),
-                        ],
                       ),
-                    ),
-                  );
-                },
-              ),
-            ),
-          ],
-        );
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
   }
 }
 
@@ -10583,7 +10715,7 @@ class _BookPdfEditDialogState extends State<_BookPdfEditDialog> {
             style: const TextStyle(
                 color: _rsTextSub, fontSize: 13, fontWeight: FontWeight.w800),
             maxLines: 2,
-        overflow: TextOverflow.ellipsis,
+            overflow: TextOverflow.ellipsis,
           ),
         ],
       ),
@@ -10593,16 +10725,16 @@ class _BookPdfEditDialogState extends State<_BookPdfEditDialog> {
         child: Scrollbar(
           controller: _scrollCtrl,
           thumbVisibility: true,
-              child: ListView.separated(
+          child: ListView.separated(
             controller: _scrollCtrl,
             padding: const EdgeInsets.only(top: 8),
-                itemCount: widget.grades.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 8),
-                itemBuilder: (context, i) {
-                  final g = widget.grades[i];
-                  final path = _paths[g.key];
-                  final linked = path != null && path.trim().isNotEmpty;
-                  final fileLabel = linked ? widget.basenameOf(path) : '미연결';
+            itemCount: widget.grades.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 8),
+            itemBuilder: (context, i) {
+              final g = widget.grades[i];
+              final path = _paths[g.key];
+              final linked = path != null && path.trim().isNotEmpty;
+              final fileLabel = linked ? widget.basenameOf(path) : '미연결';
 
               final outlinedStyle = OutlinedButton.styleFrom(
                 foregroundColor: Colors.white70,
@@ -10613,23 +10745,23 @@ class _BookPdfEditDialogState extends State<_BookPdfEditDialog> {
                 padding: const EdgeInsets.symmetric(horizontal: 12),
               );
 
-                  return Container(
+              return Container(
                 padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: _rsFieldBg,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: _rsBorder.withOpacity(0.9)),
-                    ),
+                decoration: BoxDecoration(
+                  color: _rsFieldBg,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: _rsBorder.withOpacity(0.9)),
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
+                  children: [
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Expanded(
                           // ✅ 과정명은 잘리지 않게: 전체 폭을 쓰고 자연스럽게 줄바꿈
-                              child: Text(
-                                g.label,
+                          child: Text(
+                            g.label,
                             style: TextStyle(
                               color: linked ? _rsText : _rsTextSub,
                               fontSize: 14,
@@ -10656,14 +10788,14 @@ class _BookPdfEditDialogState extends State<_BookPdfEditDialog> {
                           child: Tooltip(
                             message: linked ? path! : '미연결',
                             waitDuration: const Duration(milliseconds: 450),
-                          child: Text(
-                            fileLabel,
-                            style: TextStyle(
-                              color: linked ? _rsText : _rsTextSub,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
-                            ),
-                            overflow: TextOverflow.ellipsis,
+                            child: Text(
+                              fileLabel,
+                              style: TextStyle(
+                                color: linked ? _rsText : _rsTextSub,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                              ),
+                              overflow: TextOverflow.ellipsis,
                               maxLines: 1,
                               softWrap: false,
                             ),
@@ -10691,7 +10823,7 @@ class _BookPdfEditDialogState extends State<_BookPdfEditDialog> {
                           label: Text(linked ? '변경' : '연결'),
                         ),
                         if (linked) ...[
-                        const SizedBox(width: 8),
+                          const SizedBox(width: 8),
                           TextButton.icon(
                             onPressed:
                                 (!_busy && linked) ? () => _detach(g) : null,
@@ -10706,12 +10838,12 @@ class _BookPdfEditDialogState extends State<_BookPdfEditDialog> {
                           ),
                         ],
                       ],
-                        ),
-                      ],
                     ),
-                  );
-                },
-              ),
+                  ],
+                ),
+              );
+            },
+          ),
         ),
       ),
       actions: [
@@ -11110,7 +11242,7 @@ class _PdfAttachWizardDialogState extends State<_PdfAttachWizardDialog> {
       style: OutlinedButton.styleFrom(
         foregroundColor: Colors.white70,
         side: BorderSide(color: _rsBorder.withOpacity(0.9)),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         minimumSize: const Size(0, 36),
         padding: const EdgeInsets.symmetric(horizontal: 12),
       ),
@@ -11504,6 +11636,45 @@ class _PdfAttachWizardDialogState extends State<_PdfAttachWizardDialog> {
           child: const Text('닫기'),
         ),
       ],
+    );
+  }
+}
+
+/// 루트 오버레이 확인창을 공용 하단 다이얼로그처럼 아래에서 올린다.
+class _OverlayBottomSlideIn extends StatefulWidget {
+  const _OverlayBottomSlideIn({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_OverlayBottomSlideIn> createState() => _OverlayBottomSlideInState();
+}
+
+class _OverlayBottomSlideInState extends State<_OverlayBottomSlideIn>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 300),
+  )..forward();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final curve = CurvedAnimation(
+      parent: _controller,
+      curve: Curves.easeOutCubic,
+    );
+    return SlideTransition(
+      position: Tween<Offset>(
+        begin: const Offset(0, 1),
+        end: Offset.zero,
+      ).animate(curve),
+      child: widget.child,
     );
   }
 }

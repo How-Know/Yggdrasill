@@ -25,6 +25,8 @@ class UtilityGlassDialogShell extends StatelessWidget {
     this.preferredWidth,
     this.onClose,
     this.headerTrailing,
+    this.backgroundColor,
+    this.blur = true,
   });
 
   final String title;
@@ -36,6 +38,12 @@ class UtilityGlassDialogShell extends StatelessWidget {
   final double? preferredWidth;
   final VoidCallback? onClose;
   final Widget? headerTrailing;
+
+  /// 지정하면 기본 글래스 틴트 대신 이 색을 깐다. 뒤가 비쳐야 할 때 알파를 낮춘다.
+  final Color? backgroundColor;
+
+  /// 별도 오버레이 위에서는 블러가 뒤를 검게 막아, 끄면 반투명 색만으로 뒤가 비친다.
+  final bool blur;
 
   @override
   Widget build(BuildContext context) {
@@ -64,18 +72,19 @@ class UtilityGlassDialogShell extends StatelessWidget {
           clipBehavior: Clip.antiAlias,
           child: Stack(
             children: [
-              Positioned.fill(
-                child: BackdropFilter(
-                  filter: ui.ImageFilter.blur(
-                    sigmaX: blurSigma,
-                    sigmaY: blurSigma,
+              if (blur)
+                Positioned.fill(
+                  child: BackdropFilter(
+                    filter: ui.ImageFilter.blur(
+                      sigmaX: blurSigma,
+                      sigmaY: blurSigma,
+                    ),
+                    child: const ColoredBox(color: Colors.transparent),
                   ),
-                  child: const ColoredBox(color: Colors.transparent),
                 ),
-              ),
               DecoratedBox(
                 decoration: BoxDecoration(
-                  color: UtilityGlassDialogTokens.glassTint,
+                  color: backgroundColor ?? UtilityGlassDialogTokens.glassTint,
                   border: Border.all(
                     color: UtilityGlassDialogTokens.borderColor,
                     width: 0.5,

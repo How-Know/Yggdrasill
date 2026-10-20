@@ -6,7 +6,6 @@ import '../../../models/student_time_block.dart';
 import '../../../services/data_manager.dart';
 import '../../../widgets/swipe_action_reveal.dart';
 import 'student_time_info_dialog.dart';
-import '../../../theme/ygg_semantic_colors.dart';
 import '../../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 
 class TimelineExtraCardEntry {
@@ -162,9 +161,11 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
     final byLevel = grouped.byLevel;
     final sortedLevels = grouped.sortedLevels;
 
-    const accent = Color(0xFF1B6B63);
-    const levelBarColor = Color(0xFF223131);
-    const levelTextColor = Color(0xFFEAF2F2);
+    final panel = FabTabBarTokens.previewAcademyPanelStyleFor(
+      Theme.of(context).brightness,
+    );
+    final levelBarColor = panel.divider;
+    final levelTextColor = panel.title;
 
     final bool useExpanded = maxHeight != null;
 
@@ -175,18 +176,20 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
             constraints: BoxConstraints(minHeight: maxHeight ?? 160),
             decoration: showPanelFrame
                 ? BoxDecoration(
-                    color: context.yggSurfaceBase,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: levelBarColor, width: 1),
+                    color: panel.groupedCardBackground,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: panel.divider),
                   )
                 : null,
             width: double.infinity,
-            child: const Text(
+            child: Text(
               '시간을 선택하면 상세 정보가 여기에 표시됩니다.',
               style: TextStyle(
-                  color: Colors.white38,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w500),
+                fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
+                color: panel.hint,
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+              ),
               textAlign: TextAlign.center,
             ),
           );
@@ -195,23 +198,16 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (showDayTimeHeader && dayTimeLabel.isNotEmpty)
-            Container(
-              height: 48,
-              width: double.infinity,
-              margin: const EdgeInsets.only(bottom: 10),
-              padding: const EdgeInsets.symmetric(horizontal: 15),
-              decoration: BoxDecoration(
-                color: const Color(0xFF223131),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              alignment: Alignment.center,
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10, left: 4, right: 4),
               child: Text(
                 dayTimeLabel,
-                style: const TextStyle(
-                    color: Color(0xFFEAF2F2),
-                    fontSize: 21,
-                    fontWeight: FontWeight.w700),
-                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
+                  color: panel.title,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ),
           if (useExpanded) Expanded(child: emptyBody()) else emptyBody(),
@@ -231,8 +227,13 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
           contentChildren.add(_buildTimelineRows());
         }
       } else if (students.isNotEmpty) {
-          contentChildren
-              .add(_buildLevels(sortedLevels, byLevel, levelBarColor, levelTextColor));
+        contentChildren.add(_buildLevels(
+          sortedLevels,
+          byLevel,
+          levelBarColor,
+          levelTextColor,
+          panel.hint,
+        ));
       }
       // ✅ 셀 선택 리스트에서는 보강/추가/희망/시범 카드가 하단에 정렬되어야 한다.
       if (extras.isNotEmpty && !useTimelineLayout) {
@@ -255,9 +256,9 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
         padding: bodyPadding,
         decoration: showPanelFrame
             ? BoxDecoration(
-                color: context.yggSurfaceBase,
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: levelBarColor, width: 1),
+                color: panel.groupedCardBackground,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: panel.divider),
               )
             : null,
         child: useExpanded && enableInnerScroll
@@ -280,23 +281,16 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (showDayTimeHeader && dayTimeLabel.isNotEmpty)
-          Container(
-            height: 48,
-            width: double.infinity,
-            margin: const EdgeInsets.only(bottom: 10),
-            padding: const EdgeInsets.symmetric(horizontal: 15),
-            decoration: BoxDecoration(
-              color: const Color(0xFF223131),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            alignment: Alignment.center,
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10, left: 4, right: 4),
             child: Text(
               dayTimeLabel,
-              style: const TextStyle(
-                  color: Color(0xFFEAF2F2),
-                  fontSize: 21,
-                  fontWeight: FontWeight.w700),
-              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
+                color: panel.title,
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
         if (useExpanded) Expanded(child: body()) else body(),
@@ -370,26 +364,27 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
         blockNumber: entry.block.number,
       );
 
-      final interactiveCard = (!enableDrag || dayIndex == null || startTime == null)
-          ? studentCard
-          : _DraggablePanelCard(
-              card: studentCard,
-              student: entry.student,
-              allStudents: students,
-              selectedStudentIds: selectedStudentIds,
-              dayIndex: dayIndex!,
-              startTime: startTime!,
-              isClassRegisterMode: isClassRegisterMode,
-              onDragStart: onDragStart,
-              onDragEnd: onDragEnd,
-              blockOverride: entry.block,
-              enableSwipeActions: !isSelectMode &&
-                  refDateForActions != null &&
-                  (onEditTimeBlock != null || onDeleteTimeBlock != null),
-              refDateForActions: refDateForActions,
-              onEditTimeBlock: onEditTimeBlock,
-              onDeleteTimeBlock: onDeleteTimeBlock,
-            );
+      final interactiveCard =
+          (!enableDrag || dayIndex == null || startTime == null)
+              ? studentCard
+              : _DraggablePanelCard(
+                  card: studentCard,
+                  student: entry.student,
+                  allStudents: students,
+                  selectedStudentIds: selectedStudentIds,
+                  dayIndex: dayIndex!,
+                  startTime: startTime!,
+                  isClassRegisterMode: isClassRegisterMode,
+                  onDragStart: onDragStart,
+                  onDragEnd: onDragEnd,
+                  blockOverride: entry.block,
+                  enableSwipeActions: !isSelectMode &&
+                      refDateForActions != null &&
+                      (onEditTimeBlock != null || onDeleteTimeBlock != null),
+                  refDateForActions: refDateForActions,
+                  onEditTimeBlock: onEditTimeBlock,
+                  onDeleteTimeBlock: onDeleteTimeBlock,
+                );
 
       rowEntries.add(_TimelineRowEntry(
         startMinute: entry.startMinute,
@@ -428,18 +423,20 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: List.generate(rowEntries.length, (index) {
         final row = rowEntries[index];
-        final rawOffsetPx = ((row.startMinute - timelineDayStartMinutes) /
-                slotMinutes) *
-            timelineSlotWidth;
+        final rawOffsetPx =
+            ((row.startMinute - timelineDayStartMinutes) / slotMinutes) *
+                timelineSlotWidth;
         final offsetPx = rawOffsetPx.isFinite
             ? rawOffsetPx.clamp(0.0, 100000.0).toDouble()
             : 0.0;
-        final rawWidthPx = (row.durationMinutes / slotMinutes) * timelineSlotWidth;
+        final rawWidthPx =
+            (row.durationMinutes / slotMinutes) * timelineSlotWidth;
         final widthPx = rawWidthPx.isFinite
             ? rawWidthPx.clamp(96.0, 100000.0).toDouble()
             : timelineSlotWidth;
         return Padding(
-          padding: EdgeInsets.only(bottom: index == rowEntries.length - 1 ? 0 : rowGap),
+          padding: EdgeInsets.only(
+              bottom: index == rowEntries.length - 1 ? 0 : rowGap),
           child: SizedBox(
             width: double.infinity,
             height: rowHeight,
@@ -467,6 +464,7 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
     Map<EducationLevel, Map<int, List<StudentWithInfo>>> byLevel,
     Color levelBarColor,
     Color levelTextColor,
+    Color hintColor,
   ) {
     // ✅ 성능: 학생 카드마다 classes를 반복 순회하며 색상 맵을 만들면 비용이 커진다.
     // 패널 빌드 단위로 1회만 생성해서 재사용.
@@ -493,9 +491,12 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
                       Text(
                         _levelLabel(level),
                         style: TextStyle(
-                            color: levelTextColor,
-                            fontSize: 21,
-                            fontWeight: FontWeight.bold),
+                          fontFamily:
+                              FabTabBarTokens.previewAcademyLabelFontFamily,
+                          color: levelTextColor,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                       const Spacer(),
                     ],
@@ -516,10 +517,13 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
                             padding: const EdgeInsets.only(bottom: 6, left: 14),
                             child: Text(
                               '$g학년',
-                              style: const TextStyle(
-                                  color: Color(0xFFEAF2F2),
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w500),
+                              style: TextStyle(
+                                fontFamily: FabTabBarTokens
+                                    .previewAcademyLabelFontFamily,
+                                color: hintColor,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
                           ),
                         Wrap(
@@ -738,13 +742,19 @@ class _PanelStudentCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final brightness = Theme.of(context).brightness;
-    final panelStyle =
-        FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
-    final cardBg = panelStyle.groupedCardBackground;
+    final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
     final nameStyle = TextStyle(
-        color: panelStyle.title, fontSize: 16, fontWeight: FontWeight.w600);
+      fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
+      color: panelStyle.title,
+      fontSize: 16,
+      fontWeight: FontWeight.w600,
+    );
     final schoolStyle = TextStyle(
-        color: panelStyle.hint, fontSize: 13, fontWeight: FontWeight.w500);
+      fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
+      color: panelStyle.hint,
+      fontSize: 13,
+      fontWeight: FontWeight.w500,
+    );
     String gradeLabel(EducationLevel level, int grade) {
       if (grade <= 0) return '';
       switch (level) {
@@ -758,7 +768,8 @@ class _PanelStudentCard extends StatelessWidget {
     }
 
     final school = student.student.school.trim();
-    final grade = gradeLabel(student.student.educationLevel, student.student.grade);
+    final grade =
+        gradeLabel(student.student.educationLevel, student.student.grade);
     final schoolLabel = [
       if (school.isNotEmpty) school,
       if (grade.isNotEmpty) grade,
@@ -774,18 +785,18 @@ class _PanelStudentCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: selected
             ? const Color(0xFF33A373).withOpacity(0.18)
-            : cardBg,
-        borderRadius: BorderRadius.circular(12),
+            : panelStyle.dropdownBackground,
+        borderRadius: BorderRadius.circular(16),
         // ✅ border 폭(=1)을 항상 유지해 하이라이트 시에도 다른 카드들이 "밀리지" 않게 한다.
         border: Border.all(
-          color: showBorder ? const Color(0xFF33A373) : Colors.transparent,
+          color: showBorder ? const Color(0xFF33A373) : panelStyle.divider,
           width: 1,
         ),
       ),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(16),
           onTap: isSelectMode && onToggleSelect != null
               ? () => onToggleSelect!(!selected)
               : (onTapCard ??
@@ -974,15 +985,18 @@ class _DraggablePanelCard extends StatelessWidget {
     if (ref == null || target == null) return core;
     if (onEditTimeBlock == null && onDeleteTimeBlock == null) return core;
 
+    final panel = FabTabBarTokens.previewAcademyPanelStyleFor(
+      Theme.of(context).brightness,
+    );
     const double paneW = 140;
-    final radius = BorderRadius.circular(12);
+    final radius = BorderRadius.circular(16);
     final actionPane = Padding(
       padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
       child: Row(
         children: [
           Expanded(
             child: Material(
-              color: const Color(0xFF223131),
+              color: panel.changeButtonBackground,
               borderRadius: BorderRadius.circular(10),
               child: InkWell(
                 onTap: onEditTimeBlock == null
@@ -993,10 +1007,13 @@ class _DraggablePanelCard extends StatelessWidget {
                 splashFactory: NoSplash.splashFactory,
                 highlightColor: Colors.white.withOpacity(0.06),
                 hoverColor: Colors.white.withOpacity(0.03),
-                child: const SizedBox.expand(
+                child: SizedBox.expand(
                   child: Center(
-                    child: Icon(Icons.edit_outlined,
-                        color: Color(0xFFEAF2F2), size: 18),
+                    child: Icon(
+                      Icons.edit_outlined,
+                      color: panel.title,
+                      size: 18,
+                    ),
                   ),
                 ),
               ),
@@ -1061,17 +1078,22 @@ class _PanelDragFeedback extends StatelessWidget {
     final main = students.isEmpty ? null : students.first;
     if (main == null) return const SizedBox.shrink();
 
+    final panel = FabTabBarTokens.previewAcademyPanelStyleFor(
+      Theme.of(context).brightness,
+    );
     Widget feedbackCard({
       required StudentWithInfo s,
       required bool showText,
     }) {
-      const nameStyle = TextStyle(
-        color: Color(0xFFEAF2F2),
+      final nameStyle = TextStyle(
+        fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
+        color: panel.title,
         fontSize: 16,
         fontWeight: FontWeight.w600,
       );
-      const metaStyle = TextStyle(
-        color: Colors.white60,
+      final metaStyle = TextStyle(
+        fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,
+        color: panel.hint,
         fontSize: 13,
         fontWeight: FontWeight.w500,
       );
@@ -1098,9 +1120,9 @@ class _PanelDragFeedback extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           decoration: BoxDecoration(
-            color: const Color(0xFF15171C),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFF223131), width: 1),
+            color: panel.dropdownBackground,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: panel.divider),
           ),
           child: !showText
               ? const SizedBox.shrink()
@@ -1134,16 +1156,16 @@ class _PanelDragFeedback extends StatelessWidget {
         width: 28,
         height: 28,
         decoration: BoxDecoration(
-          color: const Color(0xFF15171C),
+          color: panel.dropdownBackground,
           shape: BoxShape.circle,
-          border: Border.all(color: const Color(0xFF223131), width: 1),
+          border: Border.all(color: panel.divider),
         ),
         alignment: Alignment.center,
         child: Text(
           '+$n',
-          style: const TextStyle(
-            color: Color(0xFFEAF2F2),
-            fontWeight: FontWeight.bold,
+          style: TextStyle(
+            color: panel.title,
+            fontWeight: FontWeight.w700,
             fontSize: 12,
           ),
         ),

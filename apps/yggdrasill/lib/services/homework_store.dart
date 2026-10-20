@@ -392,8 +392,14 @@ class HomeworkStore {
   String? _rtAcademyId;
   final Map<String, Timer> _rtReloadDebounce = {};
   final Set<String> _rtReloadInFlightStudentIds = <String>{};
-  final Set<String> _rtReloadSuppressedStudentIds = <String>{};
   final Set<String> _rtReloadPendingStudentIds = <String>{};
+  // 이 기기의 쓰기가 끝나기 전에 실시간 재조회를 돌리면 저장이 반쯤 된 서버
+  // 상태로 카드 목록이 교체되어 깜빡인다. 쓰기가 모두 끝난 뒤 한 번만 읽는다.
+  final Map<String, int> _localWriteDepthByStudentId = <String, int>{};
+  final Map<String, DateTime> _localWriteStartedAtByStudentId =
+      <String, DateTime>{};
+  static const Duration _localWriteSettle = Duration(milliseconds: 700);
+  static const Duration _localWriteMaxDefer = Duration(seconds: 20);
   Timer? _rtFallbackPollTimer;
   DateTime? _rtPollCursorUtc;
   String? _rtPollAcademyId;
@@ -425,8 +431,9 @@ class HomeworkStore {
     }
     _rtReloadDebounce.clear();
     _rtReloadInFlightStudentIds.clear();
-    _rtReloadSuppressedStudentIds.clear();
     _rtReloadPendingStudentIds.clear();
+    _localWriteDepthByStudentId.clear();
+    _localWriteStartedAtByStudentId.clear();
     _rtPollCursorUtc = null;
     _rtPollAcademyId = null;
     _rtPollInFlight = false;
@@ -700,6 +707,7 @@ class HomeworkStore {
     DateTime? completedTo,
     String? bookId,
     String? gradeLabel,
+    String? sourceUnitLevel,
     List<String>? itemIds,
   }) async {
     dynamic buildQuery(String selectColumns) {
@@ -717,6 +725,10 @@ class HomeworkStore {
       final grade = (gradeLabel ?? '').trim();
       if (grade.isNotEmpty) {
         query = query.eq('grade_label', grade);
+      }
+      final level = (sourceUnitLevel ?? '').trim();
+      if (level.isNotEmpty) {
+        query = query.eq('source_unit_level', level);
       }
       final ids = itemIds
               ?.map((id) => id.trim())
@@ -1544,6 +1556,9 @@ class HomeworkStore {
     _groupIdByItemId.removeWhere(
         (itemId, gid) => _isLegacyGroupId(gid) || !_containsItemId(itemId));
 
+    // 그룹 연결 전 임시 카드는 서버 그룹이 붙을 자리(활성 그룹 꼬리)에 둔다.
+    // 아이템 순번은 그룹 순번보다 작아서 그대로 쓰면 맨 위에 떴다가 내려간다.
+    final legacyOrderBase = _nextGroupOrderIndex(studentId);
     for (final item in list) {
       if (item.status == HomeworkStatus.completed) continue;
       if (_groupIdByItemId.containsKey(item.id)) continue;
@@ -1555,7 +1570,7 @@ class HomeworkStore {
           title: item.title,
           flowId: item.flowId,
           learningTrackCode: item.learningTrackCode,
-          orderIndex: item.orderIndex,
+          orderIndex: legacyOrderBase + item.orderIndex,
           sourceHomeworkItemId: item.id,
           status: 'active',
           createdAt: item.createdAt,
@@ -1935,6 +1950,7 @@ class HomeworkStore {
     DateTime? completedTo,
     String? bookId,
     String? gradeLabel,
+    String? sourceUnitLevel,
     bool hydrate = false,
   }) async {
     final id = studentId.trim();
@@ -1951,6 +1967,7 @@ class HomeworkStore {
         completedTo: completedTo,
         bookId: bookId,
         gradeLabel: gradeLabel,
+        sourceUnitLevel: sourceUnitLevel,
       );
       final parsed = <HomeworkItem>[
         for (final row in rows) _parseHomeworkItemRow(row),
@@ -2924,7 +2941,7 @@ class HomeworkStore {
   void _scheduleRealtimeReload(String studentId) {
     final sid = studentId.trim();
     if (sid.isEmpty) return;
-    if (_rtReloadSuppressedStudentIds.contains(sid)) {
+    if (_isRealtimeReloadDeferred(sid)) {
       _rtReloadPendingStudentIds.add(sid);
       return;
     }
@@ -2932,6 +2949,50 @@ class HomeworkStore {
     _rtReloadDebounce[sid] = Timer(const Duration(milliseconds: 120), () {
       _rtReloadDebounce.remove(sid);
       unawaited(_runRealtimeReload(sid));
+    });
+  }
+
+  bool _isRealtimeReloadDeferred(String studentId) {
+    if ((_localWriteDepthByStudentId[studentId] ?? 0) <= 0) return false;
+    final startedAt = _localWriteStartedAtByStudentId[studentId];
+    if (startedAt == null) return false;
+    // 응답이 끊긴 쓰기 때문에 다른 기기의 변경까지 계속 막지 않는다.
+    return DateTime.now().difference(startedAt) < _localWriteMaxDefer;
+  }
+
+  void _beginLocalWrite(String studentId) {
+    final sid = studentId.trim();
+    if (sid.isEmpty) return;
+    final depth = _localWriteDepthByStudentId[sid] ?? 0;
+    if (depth <= 0) {
+      _localWriteStartedAtByStudentId[sid] = DateTime.now();
+    }
+    _localWriteDepthByStudentId[sid] = depth + 1;
+    final scheduled = _rtReloadDebounce.remove(sid);
+    if (scheduled != null) {
+      scheduled.cancel();
+      _rtReloadPendingStudentIds.add(sid);
+    }
+  }
+
+  /// realtime 이벤트는 응답보다 늦게 도착할 수 있어 짧게 더 기다린 뒤 푼다.
+  /// 그 사이 이어지는 쓰기는 같은 구간으로 묶이고, 마지막에 한 번만 다시 읽는다.
+  void _endLocalWrite(String studentId) {
+    final sid = studentId.trim();
+    if (sid.isEmpty) return;
+    final generation = _sessionGeneration;
+    Timer(_localWriteSettle, () {
+      if (generation != _sessionGeneration) return;
+      final depth = (_localWriteDepthByStudentId[sid] ?? 0) - 1;
+      if (depth > 0) {
+        _localWriteDepthByStudentId[sid] = depth;
+        return;
+      }
+      _localWriteDepthByStudentId.remove(sid);
+      _localWriteStartedAtByStudentId.remove(sid);
+      if (_rtReloadPendingStudentIds.remove(sid)) {
+        _scheduleRealtimeReload(sid);
+      }
     });
   }
 
@@ -3189,6 +3250,19 @@ class HomeworkStore {
   }
 
   Future<void> _upsertItem(
+    String studentId,
+    HomeworkItem it, {
+    bool syncMappings = false,
+  }) async {
+    _beginLocalWrite(studentId);
+    try {
+      await _upsertItemUnguarded(studentId, it, syncMappings: syncMappings);
+    } finally {
+      _endLocalWrite(studentId);
+    }
+  }
+
+  Future<void> _upsertItemUnguarded(
     String studentId,
     HomeworkItem it, {
     bool syncMappings = false,
@@ -4233,11 +4307,25 @@ class HomeworkStore {
   }
 
   void remove(String studentId, String id) {
+    removeMany(studentId, <String>[id]);
+  }
+
+  /// 여러 하위과제를 지울 때 하나씩 [remove]하면 항목마다 화면 갱신과 서버
+  /// 재조회가 반복된다. 로컬 반영·서버 삭제·순번 정리를 한 번씩만 한다.
+  void removeMany(String studentId, Iterable<String> ids) {
     final list = _byStudentId[studentId];
     if (list == null) return;
-    list.removeWhere((e) => e.id == id);
-    final gid = _groupIdByItemId.remove(id);
-    if (gid != null) {
+    final targetIds = ids
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (targetIds.isEmpty) return;
+    final targetIdSet = targetIds.toSet();
+    list.removeWhere((e) => targetIdSet.contains(e.id));
+    for (final id in targetIds) {
+      final gid = _groupIdByItemId.remove(id);
+      if (gid == null) continue;
       _groupItemsByGroupId[gid]?.removeWhere((e) => e.homeworkItemId == id);
       if (_isLegacyGroupId(gid)) {
         _groupItemsByGroupId.remove(gid);
@@ -4247,12 +4335,17 @@ class HomeworkStore {
     _applyFallbackGroupsForStudent(studentId);
     _sortStudentList(list);
     _bump();
+    _beginLocalWrite(studentId);
     unawaited(() async {
       try {
-        final supa = Supabase.instance.client;
-        await supa.from('homework_items').delete().eq('id', id);
-      } catch (e) {}
-      await _normalizeActiveOrderIndices(studentId);
+        try {
+          final supa = Supabase.instance.client;
+          await supa.from('homework_items').delete().inFilter('id', targetIds);
+        } catch (e) {}
+        await _normalizeActiveOrderIndices(studentId);
+      } finally {
+        _endLocalWrite(studentId);
+      }
     }());
   }
 
@@ -4624,6 +4717,7 @@ class HomeworkStore {
       _bump();
     }
 
+    _beginLocalWrite(studentId);
     try {
       final String academyId =
           (await TenantService.instance.getActiveAcademyId()) ??
@@ -4649,6 +4743,8 @@ class HomeworkStore {
       }
     } catch (_) {
       await _reloadStudent(studentId);
+    } finally {
+      _endLocalWrite(studentId);
     }
   }
 
@@ -6090,6 +6186,7 @@ class HomeworkStore {
       fromPhase: normalizedFromPhase,
     );
     var committed = false;
+    _beginLocalWrite(studentId);
     try {
       final academyId = (await TenantService.instance.getActiveAcademyId()) ??
           await TenantService.instance.ensureActiveAcademy();
@@ -6167,6 +6264,8 @@ class HomeworkStore {
         _bump();
       }
       return 0;
+    } finally {
+      _endLocalWrite(studentId);
     }
   }
 
@@ -7231,8 +7330,7 @@ class HomeworkStore {
 
     final suppressRealtimeReload = !reserveAssignments;
     if (suppressRealtimeReload) {
-      _rtReloadSuppressedStudentIds.add(studentId);
-      _rtReloadDebounce.remove(studentId)?.cancel();
+      _beginLocalWrite(studentId);
     }
     try {
       final supa = Supabase.instance.client;
@@ -7386,17 +7484,7 @@ class HomeworkStore {
       return const <HomeworkItem>[];
     } finally {
       if (suppressRealtimeReload) {
-        // Supabase realtime 이벤트가 응답보다 조금 늦게 도착할 수 있으므로 짧은
-        // 유예 동안 이번 쓰기에서 발생한 이벤트를 흡수한 뒤, 누적 이벤트가
-        // 있었다면 완성된 서버 상태를 반드시 한 번 다시 읽는다.
-        Timer(const Duration(milliseconds: 700), () {
-          _rtReloadSuppressedStudentIds.remove(studentId);
-          _rtReloadDebounce.remove(studentId)?.cancel();
-          final hadPending = _rtReloadPendingStudentIds.remove(studentId);
-          if (hadPending) {
-            _scheduleRealtimeReload(studentId);
-          }
-        });
+        _endLocalWrite(studentId);
       }
     }
   }

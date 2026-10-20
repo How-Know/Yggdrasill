@@ -1,7 +1,7 @@
 // Think 대화의 컨텍스트 조립. AI에 들어가는 내용은 여기서만 정한다.
-//   지시문: 역할 + 교육철학(identity) + 원칙(principle) + 최근 결정 요약
-//   입력:   (나눠 온 대화면 요약) → 지난 대화(글자 수 예산 안에서 최신순) → 이 대화의 작업 상태 → 실행 환경 기능 상태
-//           → 관련 기억 메모 → 이번 질문(+첨부)
+//   지시문: 역할 + 교육철학(identity) + 원칙(principle) + 최근 결정 요약 + (부서 기준)
+//   입력:   (나눠 온 대화면 요약) → 지난 대화(글자 수 예산 안에서 최신순) → (승인된 진행 요약) → 이 대화의 작업 상태
+//           → 실행 환경 기능 상태 → 연결 문서 → 관련 기억 메모 → (개념 탭이 고른 개념의 최신 저장본) → 이번 질문(+첨부)
 
 import { extractSearchTerms } from '../_shared/ai/search_terms.ts';
 import type { AiContentPart, AiInputItem } from '../_shared/ai/types.ts';
@@ -15,10 +15,14 @@ import {
   searchScopeFor,
   selectLeadMemories,
 } from './access_context.ts';
+import type { DepartmentCriteria } from './organize.ts';
 import {
   clip,
+  type DepartmentCriteriaView,
   kstDate,
   linkedDocumentsNote,
+  progressSummaryNote,
+  type ProgressSummaryView,
   relayQuestionLabel,
   relevantMemoriesNote,
   splitSummaryNote,
@@ -112,6 +116,20 @@ export interface BuildContextInput {
   thinkRole?: ThinkRoleId;
   /** 기억 저장 제안 도구를 이번 요청에 노출하는지. 지침의 기억 관련 문장이 달라진다. */
   memoryProposalsReady?: boolean;
+  /** 부서 협의·넘기기 도구를 이번 요청에 노출하는지. 지침에 "부서" 절이 들어간다. */
+  departmentWorkReady?: boolean;
+  /** 정리 제안 도구를 이번 요청에 노출하는지. 지침에 "정리 제안" 절이 들어간다. */
+  organizeReady?: boolean;
+  /** 승인된 진행 요약. excludedAfter: 승인 뒤 맥락 제외가 승인됐다. */
+  progressSummary?: { view: ProgressSummaryView; excludedAfter: boolean } | null;
+  /** 이 대화 부서의 승인된 기준. 우선 기억은 역할 범위 안의 active 기억만 넣는다. */
+  departmentCriteria?: DepartmentCriteria | null;
+  /** 개념 탭이 고른 개념의 참고 블록(chat.ts가 요청마다 다시 읽음). 지시가 아니라서 사용자 메시지 자리에 넣는다. */
+  conceptReference?: string | null;
+  /** 개념 탭이 고른 정리 기준의 참고 블록. 개념 참고와 같은 자리에, 개념 블록 앞에 넣는다. */
+  criterionReference?: string | null;
+  /** 개념 초안 검토 창의 초안 참고 블록. 같은 자리에, 기준·개념 블록 앞에 넣는다. */
+  conceptDraftReference?: string | null;
   now?: Date;
 }
 
@@ -134,6 +152,28 @@ export function normalizeSplitSummary(raw: unknown): SplitSummary | null {
   return summary.purpose ? summary : null;
 }
 
+/** ai_conversations.progress_summary(jsonb). 목적이 비었으면 요약이 없는 것으로 본다. */
+export function normalizeProgressSummary(raw: unknown): ProgressSummaryView | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  const text = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+  const purpose = text(r.purpose);
+  if (!purpose) return null;
+  const next = (Array.isArray(r.next) ? r.next : [])
+    .filter((n): n is Record<string, unknown> => n != null && typeof n === 'object' && !Array.isArray(n))
+    .map((n) => ({ what: text(n.what), owner: text(n.owner), prerequisite: text(n.prerequisite), done_when: text(n.done_when) }))
+    .filter((n) => n.what);
+  return {
+    purpose,
+    decided: textList(r.decided),
+    open: textList(r.open),
+    status: text(r.status),
+    next,
+    approved_at: text(r.approved_at) || null,
+    through_message_id: text(r.through_message_id) || null,
+  };
+}
+
 export interface BuiltContext {
   instructions: string;
   input: AiInputItem[];
@@ -149,19 +189,37 @@ export interface BuiltContext {
   deliveredMaterials: DeliveredMaterial[];
   linkedDocumentIds: string[];
   cacheKeySuffix: string | null;
+  progressSummaryUsed: boolean;
+  /** 지시문에 넣은 부서 기준의 판. 넣지 않았으면 null. */
+  criteriaVersion: number | null;
+  /** 이번 질문과 최근 질문(첨부를 다시 보내는 턴)에 붙은 엑셀. 파이썬 실행 환경에 올린다. */
+  spreadsheets: AttachmentRef[];
 }
 
 export function isImageMime(mime: string): boolean {
   return mime.startsWith('image/');
 }
 
+export const SPREADSHEET_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+export function isSpreadsheetMime(mime: string): boolean {
+  return mime === SPREADSHEET_MIME;
+}
+
+/** 엑셀은 모델 입력에 넣지 않고 파이썬 실행 환경에 올린다(chat.ts). 여기서는 이름만 남긴다. */
 async function attachmentParts(
   store: ThinkContextStore,
   attachments: AttachmentRef[],
+  spreadsheets: Map<string, AttachmentRef>,
 ): Promise<{ parts: AiContentPart[]; failed: string[] }> {
   const parts: AiContentPart[] = [];
   const failed: string[] = [];
   for (const a of attachments) {
+    if (isSpreadsheetMime(a.mime)) {
+      spreadsheets.set(a.path, a);
+      parts.push({ type: 'text', text: `[엑셀 첨부: ${a.name}]` });
+      continue;
+    }
     const url = await store.signAttachment(a.path, CONTEXT_LIMITS.signedUrlSeconds).catch(() => null);
     if (!url) {
       failed.push(a.name);
@@ -204,6 +262,28 @@ export async function buildThinkContext(store: ThinkContextStore, input: BuildCo
   decisions = decisions.slice(0, L.decisionCount);
 
   const fullyIncluded = new Set([...identity, ...principles, ...decisions].map((m) => m.id));
+
+  // 부서 기준의 우선 기억: 역할 범위 안의 active 기억만. 이미 지시문에 있으면 제목만 다시 가리킨다.
+  let criteria: DepartmentCriteriaView | null = null;
+  const priority: MemoryRow[] = [];
+  if (input.departmentCriteria) {
+    const c = input.departmentCriteria;
+    const byId = new Map(memories.map((m) => [m.id, m]));
+    const picked = c.priority_memory_ids.map((id) => byId.get(id)).filter((m): m is MemoryRow => m != null);
+    criteria = {
+      department: c.department,
+      version: c.version,
+      questions: c.questions,
+      risks: c.risks,
+      memories: picked.map((m) => ({ id: m.id, title: m.title, content: fullyIncluded.has(m.id) ? '' : m.content })),
+    };
+    for (const m of picked) {
+      if (fullyIncluded.has(m.id)) continue;
+      fullyIncluded.add(m.id);
+      priority.push(m);
+    }
+  }
+
   const terms = extractSearchTerms(input.userMessage);
   let relevant: MemoryRow[] = [];
   if (terms.length > 0) {
@@ -216,7 +296,7 @@ export async function buildThinkContext(store: ThinkContextStore, input: BuildCo
   }
 
   const deliveredMaterials: DeliveredMaterial[] = [];
-  for (const m of [...identity, ...principles, ...decisions, ...relevant]) {
+  for (const m of [...identity, ...principles, ...decisions, ...priority, ...relevant]) {
     deliveredMaterials.push({ kind: 'memory', id: m.id, title: m.title, delivered: true });
   }
 
@@ -251,6 +331,9 @@ export async function buildThinkContext(store: ThinkContextStore, input: BuildCo
     thinkRole,
     rolesFeatureReady: rolesReady,
     memoryProposalsReady: input.memoryProposalsReady === true,
+    departmentWorkReady: input.departmentWorkReady === true,
+    organizeReady: input.organizeReady === true,
+    criteria,
   });
 
   // 지난 대화: 최신부터 글자 수 예산이 찰 때까지
@@ -273,6 +356,7 @@ export async function buildThinkContext(store: ThinkContextStore, input: BuildCo
     if (picked[i].attachments.length > 0) replayIds.add(picked[i].id);
   }
 
+  const spreadsheets = new Map<string, AttachmentRef>();
   const items: AiInputItem[] = [];
   if (input.splitSummary) {
     items.push({ kind: 'message', role: 'user', parts: [{ type: 'text', text: splitSummaryNote(input.splitSummary) }] });
@@ -287,7 +371,7 @@ export async function buildThinkContext(store: ThinkContextStore, input: BuildCo
     if (text) parts.push({ type: 'text', text: m.asked_by ? `${relayQuestionLabel(m.asked_by)}\n${text}` : text });
     if (m.attachments.length > 0) {
       if (replayIds.has(m.id)) {
-        const { parts: files, failed } = await attachmentParts(store, m.attachments);
+        const { parts: files, failed } = await attachmentParts(store, m.attachments, spreadsheets);
         parts.push(...files);
         if (failed.length > 0) parts.push({ type: 'text', text: attachmentNote(failed) });
       } else {
@@ -297,6 +381,25 @@ export async function buildThinkContext(store: ThinkContextStore, input: BuildCo
     if (parts.length > 0) items.push({ kind: 'message', role: 'user', parts });
   }
 
+  const progress = input.progressSummary ?? null;
+  if (progress) {
+    // 요약이 반영한 마지막 질문 뒤의 새 질문 수. 그 질문이 기록에 없으면(제외·오래됨) 승인 시각으로 센다.
+    const through = progress.view.through_message_id;
+    const idx = through ? usable.findIndex((m) => m.id === through) : -1;
+    const approvedAt = progress.view.approved_at;
+    const after = idx >= 0
+      ? usable.slice(idx + 1)
+      : approvedAt && Number.isFinite(Date.parse(approvedAt))
+      ? usable.filter((m) => Date.parse(m.created_at) > Date.parse(approvedAt))
+      : null;
+    items.push({
+      kind: 'context',
+      text: progressSummaryNote(progress.view, {
+        newTurns: after ? after.filter((m) => m.role === 'user').length : null,
+        excludedAfter: progress.excludedAfter,
+      }),
+    });
+  }
   if (input.workNote) items.push({ kind: 'context', text: input.workNote });
   if (input.featureNote) items.push({ kind: 'context', text: input.featureNote });
   if (linkedDocs.length > 0) {
@@ -306,12 +409,21 @@ export async function buildThinkContext(store: ThinkContextStore, input: BuildCo
     });
   }
   if (relevant.length > 0) items.push({ kind: 'context', text: relevantMemoriesNote(relevant, L.relevantChars) });
+  if (input.conceptDraftReference) {
+    items.push({ kind: 'message', role: 'user', parts: [{ type: 'text', text: input.conceptDraftReference }] });
+  }
+  if (input.criterionReference) {
+    items.push({ kind: 'message', role: 'user', parts: [{ type: 'text', text: input.criterionReference }] });
+  }
+  if (input.conceptReference) {
+    items.push({ kind: 'message', role: 'user', parts: [{ type: 'text', text: input.conceptReference }] });
+  }
 
   const current: AiContentPart[] = [];
   const question = input.userMessage.trim();
   current.push({ type: 'text', text: question || '첨부한 자료를 살펴보고 핵심을 정리해 줘.' });
   if (input.attachments.length > 0) {
-    const { parts: files, failed } = await attachmentParts(store, input.attachments);
+    const { parts: files, failed } = await attachmentParts(store, input.attachments, spreadsheets);
     current.push(...files);
     if (failed.length > 0) current.push({ type: 'text', text: `${attachmentNote(failed)} (파일을 열 수 없었음)` });
   }
@@ -336,5 +448,8 @@ export async function buildThinkContext(store: ThinkContextStore, input: BuildCo
     deliveredMaterials,
     linkedDocumentIds: linkedDocs.map((d) => d.id),
     cacheKeySuffix: await promptCacheKeyParts(access, linkedDocs.map((d) => d.id)),
+    progressSummaryUsed: progress !== null,
+    criteriaVersion: criteria?.version ?? null,
+    spreadsheets: [...spreadsheets.values()],
   };
 }

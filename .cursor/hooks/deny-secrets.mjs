@@ -16,6 +16,10 @@ const LOOSE_SECRET =
   /\.env(?![A-Za-z0-9_])(?!\.example(?![A-Za-z0-9_.-]))|env\.local\.json|\.(pem|key)(?![A-Za-z0-9_])|supabase[\\/]+\.temp|[^\x00-\x7f](env|pem|key)(?![A-Za-z0-9_])/i;
 const WRITE_TOOL = /^(Write|Delete|Edit|StrReplace|MultiEdit)$/;
 const ROOT = (process.env.CODE_BRIDGE_WRITE_ROOT ?? '').trim() ? resolve(process.env.CODE_BRIDGE_WRITE_ROOT.trim()) : null;
+// 훅 입력의 곁다리 경로(대화 기록 위치, 첨부한 파일·규칙). 에이전트가 고른 대상이 아니라서 복사본 안·밖 판단에는
+// 쓰지 않는다(JSON으로 읽힐 때도 최상위 file_path와 tool_input만 본다). 비밀 경로 검사는 그대로 받는다.
+const ENVELOPE_KEY = /^transcript_path$/i;
+const ATTACHMENTS = /(?<!\\)"attachments"\s*:\s*\[[^\]]*\]?/g;
 
 function deny(message) {
   process.stdout.write(JSON.stringify({
@@ -74,12 +78,14 @@ function salvage(text) {
   return values;
 }
 
-function check(entries, isWrite, loose) {
+/** [targets]: 복사본 안·밖과 보호 경로를 볼 대상 경로. 없으면 [entries]의 경로 칸. */
+function check(entries, isWrite, loose, targets = entries) {
   const secret = loose ? ([, v]) => LOOSE_SECRET.test(v) : ([, v]) => isSecret(v);
   if (entries.some(secret)) deny('Secret files (.env, env.local.json, keys) are blocked.');
   if (!ROOT) allow();
-  const pathEntries = entries.filter(([k]) => k !== '');
-  if (pathEntries.some(([k, v]) => isOutside(v, k))) deny('Only files inside the working copy can be used.');
+  const pathEntries = targets.filter(([k]) => k !== '');
+  const outside = pathEntries.find(([k, v]) => isOutside(v, k));
+  if (outside) deny(`Only files inside the working copy can be used (${outside[0]}).`);
   if (isWrite && pathEntries.some(([, v]) => isProtected(v))) deny('.git and .cursor/hooks cannot be changed.');
   allow();
 }
@@ -97,7 +103,9 @@ if (input === null || typeof input !== 'object') {
   const values = /^\s*\{/.test(text) ? salvage(text) : [];
   // IDE에서 파일을 쓰는 입력이 깨졌을 때는 비밀 경로만 본다(읽기처럼 전부 막으면 한글 편집이 멈춘다).
   if (values.length === 0 && !(isWrite && !ROOT)) deny('Hook could not read its input, so the action was blocked.');
-  check(values, isWrite, true);
+  const targets = values.length === 0 ? [] : salvage(text.replace(ATTACHMENTS, '')).filter(([k]) => k !== '' && !ENVELOPE_KEY.test(k));
+  if (ROOT && targets.length === 0) deny('Hook could not read its input, so the action was blocked.');
+  check(values, isWrite, true, targets);
 }
 
 const entries = [];

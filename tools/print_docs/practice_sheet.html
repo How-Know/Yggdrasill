@@ -23,7 +23,12 @@
   // 단위는 모두 mm. 1pt = 0.3528mm.
   const W = 210, H = 297, M = 6;
   const PT = 0.3528;
-  const FOOT = 6.2;
+  const FOOT = 8.4;
+  const FOOT_SIZE = 12;
+  const footBase = H - M - 1.0;
+  // 서버(academy-logos)에 저장된 학원 로고. 여백만 잘라 같은 폴더에 둔다.
+  const LOGO_SRC = 'academy_logo.png';
+  const LOGO_ASPECT = 220 / 232;
   const C = {
     ink: '#1d1d1f',
     frame: '#3a3a3c',
@@ -102,40 +107,32 @@
     return s;
   }
 
+  /// 아래 여백 오른쪽: 학원 로고 + 학원명.
   function logo() {
-    const base = H - M - 1.25;
     const word = '정현 수학';
-    const size = 7.4;
-    const em = size * PT;
-    const wordW = measure(word, size, 600, em * 0.06) - em * 0.06;
-    const markS = 3.1;
-    const markX = x1 - wordW - 1.6 - markS;
-    const markY = base - markS + 0.35;
+    const em = FOOT_SIZE * PT;
+    const spacing = em * 0.04;
+    const wordW = measure(word, FOOT_SIZE, 600, spacing) - spacing;
+    // 한글 글자 몸통의 세로 가운데(기준선 위 약 0.36em)에 로고 가운데를 맞춘다.
+    const logoH = 4.4;
+    const logoW = logoH * LOGO_ASPECT;
+    const logoX = x1 - wordW - 1.8 - logoW;
+    const logoY = footBase - em * 0.36 - logoH / 2;
     return [
-      el('rect', { x: markX, y: markY, width: markS, height: markS, rx: 0.55,
-        fill: 'none', stroke: C.ink, 'stroke-width': 0.55 * PT }),
-      el('circle', { cx: markX + 0.78, cy: markY + 0.78, r: 0.24, fill: C.ink }),
-      text(markX + markS / 2 + 0.12, base - 0.42, 'J', 6.2, C.ink, { weight: 700, anchor: 'middle' }),
-      text(x1, base, word, size, C.ink, { weight: 600, spacing: em * 0.06, anchor: 'end' }),
+      el('image', { href: LOGO_SRC, x: logoX, y: logoY, width: logoW, height: logoH,
+        preserveAspectRatio: 'xMidYMid meet' }),
+      text(x1, footBase, word, FOOT_SIZE, C.ink, { weight: 600, spacing, anchor: 'end' }),
     ].join('');
   }
 
-  /// 아래 여백 왼쪽: No. 와 날짜 칸.
+  /// 아래 여백 왼쪽: No. 칸.
   function footFields() {
-    const base = H - M - 1.25;
-    const size = 6.8;
-    let s = '';
-    let x = x0 + 0.2;
-    const field = (label, w) => {
-      const spacing = size * PT * 0.04;
-      s += text(x, base, label, size, C.label, { spacing });
-      const lx = x + measure(label, size, 400, spacing) + 1.2;
-      s += line(lx, base + 0.7, lx + w, base + 0.7, C.field, 0.4);
-      x = lx + w + 5;
-    };
-    field('No.', 14);
-    field('날짜', 24);
-    return s;
+    const label = 'No.';
+    const spacing = FOOT_SIZE * PT * 0.02;
+    const x = x0 + 0.2;
+    const lx = x + measure(label, FOOT_SIZE, 400, spacing) + 1.6;
+    return text(x, footBase, label, FOOT_SIZE, C.label, { spacing }) +
+      line(lx, footBase + 0.8, lx + 22, footBase + 0.8, C.field, 0.45);
   }
 
   /// 서술형 머리: 왼쪽 제목, 오른쪽 밑줄 칸(교재·날짜·이름).

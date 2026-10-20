@@ -1,6 +1,6 @@
 // ai_think_relay 요청 처리. 운영자 PC의 Cursor 작업창(MCP 서버 tools/think_relay)만 부른다.
 // 인증은 사용자 JWT가 아니라 전용 토큰(비밀값 THINK_RELAY_TOKEN_SHA256과 비교)이다.
-// 읽기는 승인된 기억, 대화 목록·본문('답변에서 제외'한 문답 빼고), 코드 요청 요약(diff 없음)만.
+// 읽기는 승인된 기억, 대화 목록·본문('답변에서 제외'한 문답 빼고), 코드 요청(짧은 요약, 원문·검사 로그·diff는 구간 조회)만.
 // 쓰기는 ask(Think에게 묻기) 하나이고, 커서가 시작한 대화에만 남는다.
 
 import { ALL_SEARCH, type MemorySearchScope } from '../ai_think/access_context.ts';
@@ -10,6 +10,7 @@ import type { ConversationRow } from '../ai_think/chat.ts';
 import type { RelayAskResult } from '../ai_think/relay.ts';
 import type { RelayConversationHit } from '../ai_think/store.ts';
 import { extractSearchTerms } from '../_shared/ai/search_terms.ts';
+import { codeRequestBrief, codeRequestSection, parseSection } from '../ai_think/code_brief.ts';
 
 export interface RelayReadStore {
   listActiveMemories(kinds: string[]): Promise<MemoryRow[]>;
@@ -20,6 +21,7 @@ export interface RelayReadStore {
   listMessages(conversationId: string, limit: number): Promise<MessageRow[]>;
   listCodeRequests(query: string | null, limit: number): Promise<CodeRequestHit[]>;
   getCodeRequest(id: string): Promise<CodeRequestDetail | null>;
+  getCodeRequestDiff?(id: string): Promise<string | null>;
 }
 
 export interface RelayHandlerDeps {
@@ -166,12 +168,17 @@ async function listCodeRequests(store: RelayReadStore, body: Body): Promise<Resp
   return json({ ok: true, code_requests: rows });
 }
 
+/** 기본은 짧은 구조화 요약. 긴 원문(요청·결과·검사 로그·diff)은 section + offset으로 구간씩. */
 async function getCodeRequest(store: RelayReadStore, body: Body): Promise<Response> {
   const id = str(body.id, 64);
   if (!id || !UUID_RE.test(id)) return fail(400, 'id_invalid');
+  const section = body.section == null ? null : parseSection(body.section);
+  if (body.section != null && !section) return fail(400, 'section_invalid');
   const r = await store.getCodeRequest(id);
   if (!r) return fail(404, 'code_request_not_found');
-  return json({ ok: true, code_request: r });
+  if (!section) return json({ ok: true, code_request: codeRequestBrief(r) });
+  const diff = section === 'diff' ? ((await store.getCodeRequestDiff?.(id)) ?? null) : null;
+  return json({ ok: true, code_request: codeRequestSection(r, section, int(body.offset, 0, 0, 10_000_000), diff) });
 }
 
 async function ask(deps: RelayHandlerDeps, body: Body): Promise<Response> {

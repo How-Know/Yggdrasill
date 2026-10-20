@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../app_overlays.dart';
 import '../widgets/app_snackbar.dart';
 import 'homework_assignment_store.dart';
+import 'homework_grading_lock_service.dart';
 import 'homework_grading_return_outbox_service.dart';
 import 'homework_store.dart';
 
@@ -18,12 +19,17 @@ class HomeworkBatchConfirmService {
   final Map<HomeworkBatchConfirmKey, int> _savingDraftCounts =
       <HomeworkBatchConfirmKey, int>{};
 
+  /// 홈 완료 버튼으로 서버에 반영 중인 과제.
+  final ValueNotifier<Set<HomeworkBatchConfirmKey>> confirmingKeys =
+      ValueNotifier<Set<HomeworkBatchConfirmKey>>(<HomeworkBatchConfirmKey>{});
+
   Map<HomeworkBatchConfirmKey, bool> get pending => _pending;
 
   int get pendingCount => _pending.length;
 
   Future<Set<HomeworkBatchConfirmKey>> restoreStructuredDrafts() async {
     await HomeworkGradingReturnOutboxService.instance.initialize();
+    await HomeworkGradingLockService.instance.restoreDraftLeases();
     final restored =
         HomeworkGradingReturnOutboxService.instance.pendingValues();
     _pending.addAll(restored);
@@ -80,7 +86,9 @@ class HomeworkBatchConfirmService {
   }
 
   Future<void> enqueueStructuredDraft(Map<String, dynamic> payload) async {
-    await HomeworkGradingReturnOutboxService.instance.enqueue(payload);
+    final lockedPayload =
+        HomeworkGradingLockService.instance.attachOwnedLockToken(payload);
+    await HomeworkGradingReturnOutboxService.instance.enqueue(lockedPayload);
     _pending.addAll(
       HomeworkGradingReturnOutboxService.instance.pendingValues(),
     );
@@ -95,6 +103,7 @@ class HomeworkBatchConfirmService {
       return false;
     }
     await HomeworkGradingReturnOutboxService.instance.removeForKeys(list);
+    await HomeworkGradingLockService.instance.releaseForKeys(list);
     for (final key in list) {
       _pending.remove(key);
     }
@@ -123,7 +132,31 @@ class HomeworkBatchConfirmService {
       _pending.remove(key);
     }
     syncPendingCount();
+    _markConfirming(pending.keys);
+    try {
+      await _executePendingBatchConfirmBody(context: context, pending: pending);
+    } finally {
+      _unmarkConfirming(pending.keys);
+    }
+  }
 
+  void _markConfirming(Iterable<HomeworkBatchConfirmKey> keys) {
+    confirmingKeys.value = <HomeworkBatchConfirmKey>{
+      ...confirmingKeys.value,
+      ...keys,
+    };
+  }
+
+  void _unmarkConfirming(Iterable<HomeworkBatchConfirmKey> keys) {
+    confirmingKeys.value = <HomeworkBatchConfirmKey>{
+      ...confirmingKeys.value,
+    }..removeAll(keys);
+  }
+
+  Future<void> _executePendingBatchConfirmBody({
+    required BuildContext context,
+    required Map<HomeworkBatchConfirmKey, bool> pending,
+  }) async {
     late final HomeworkGradingReturnProcessResult structuredResult;
     try {
       structuredResult =
@@ -146,6 +179,8 @@ class HomeworkBatchConfirmService {
       final value = pending[key];
       if (value != null) _pending[key] = value;
     }
+    HomeworkGradingLockService.instance
+        .forgetKeys(structuredResult.succeededKeys);
     final legacyPending = <HomeworkBatchConfirmKey, bool>{
       for (final entry in pending.entries)
         if (!structuredResult.succeededKeys.contains(entry.key) &&
@@ -210,6 +245,8 @@ class HomeworkBatchConfirmService {
     for (final key in structuredResult.succeededKeys) {
       _pending.remove(key);
     }
+    HomeworkGradingLockService.instance
+        .forgetKeys(structuredResult.succeededKeys);
     final legacyPending = <HomeworkBatchConfirmKey, bool>{
       for (final entry in readyPending.entries)
         if (!structuredResult.succeededKeys.contains(entry.key) &&

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
 
+import 'services/app_menu.dart';
 import 'services/auth_service.dart';
 import 'services/error_reporter.dart';
 import 'screens/auth/login_screen.dart';
@@ -191,6 +192,25 @@ class MainScreen extends StatefulWidget {
 class _MainScreenState extends State<MainScreen> {
   int _selectedIndex = 0;
 
+  @override
+  void initState() {
+    super.initState();
+    AppMenu.instance.addListener(_onMenuRequest);
+  }
+
+  @override
+  void dispose() {
+    AppMenu.instance.removeListener(_onMenuRequest);
+    super.dispose();
+  }
+
+  void _onMenuRequest() {
+    final index = AppMenu.instance.takeRequest();
+    if (index == null || !mounted) return;
+    setState(() => _selectedIndex = _normalizeIndex(index));
+  }
+
+  // 순서를 바꾸면 AppMenu 상수도 맞춘다.
   final List<Widget> _screens = const [
     CurriculumScreen(),
     ArithmeticScreen(),

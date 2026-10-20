@@ -28,9 +28,9 @@ It records decisions made on 2026-09-28 that the schema alone does not show.
    (env overrides). Do not hardcode a model name at a call site.
 6. Every AI call records one `ai_runs` row via `recordAiRun` (it never throws).
    Keep `feature` names stable; the usage screen groups by them.
-7. Keep the context order in `ai_think/context.ts` stable (instructions, split summary for split
-   conversations, history, work-state note, feature-status note, relevant-memory note, current message).
-   Reordering breaks prompt caching.
+7. Keep the context order in `ai_think/context.ts` stable (instructions ending with the department
+   criteria, split summary for split conversations, history, approved progress summary, work-state note,
+   feature-status note, relevant-memory note, current message). Reordering breaks prompt caching.
 8. Update memories with the optimistic `version` check. An empty update result means
    someone else saved first; reload instead of overwriting.
 9. Tests use `FakeAiProvider` (`AI_PROVIDER=fake`) and never assert exact AI wording.
@@ -61,6 +61,33 @@ It records decisions made on 2026-09-28 that the schema alone does not show.
     (enforced on the Edge). Duplicate checks run in the DB at propose and again at approve. Memory cards do
     not supersede each other and pending cards stay until the operator acts; never auto-withdraw or
     auto-replace one. Not offered in relay mode.
+17. Departments (`ai-think-actions.md` §10, feature `department_work`, needs `think_roles` too): the internal id
+    `product` stays; only its label is "문제 풀이". Moving a conversation or folder across departments changes
+    conversation roles, so the app confirms first and the DB does it in `ai_tree_move_department` /
+    `ai_conversation_move_department`. Handover is a `handover_department` card (approval changes the role and
+    unfiles to that department); never change a role without the operator. Consults (`consult_department`) run
+    without approval, at most 2 per answer, on the primary model with no tools, and the asked department sees
+    only the question, background, and its own plus common memories, never the operator's conversation.
+    Consult answers are not saved as memories. Not offered in relay mode.
+18. Auto-organize (`ai-think-actions.md` §11, feature `auto_organize`): context exclusion, importance marks,
+    progress summaries and department-criteria changes are `ai_actions` proposals like the rest; nothing changes
+    before approval. The organize panel approves through `ai_action_apply_batch`, which runs each item through
+    `ai_action_apply` in its own savepoint, in a fixed order (handover before placement), and returns per-item
+    results. Never batch-approve code or delete proposals, and never re-run an applied item. Exclusion only sets
+    `context_excluded` (never deletes messages, documents, or memories); undo restores only what that action
+    changed. `marked_important` is a display flag, never principle authority or extra context weight. A progress
+    summary lists only operator-confirmed decisions, never invents owners or deadlines, and approving it never
+    starts code, deploy, or DB work. Summary and criteria approvals check `base_action_id` / `base_version` and
+    stop on conflict. Only approved summaries and criteria reach the AI. With `auto_organize_enabled` off, the
+    organize, folder, split, memory, and handover tools are offered only when the operator asks in that message;
+    an unreadable setting counts as off. Current conversation only. Not offered in relay mode.
+19. Spreadsheets (decision 6d0ec9c1, `ai-think.md` §3 "엑셀 분석"): `.xlsx` is the only new input type. The
+    `code_interpreter` tool is offered only when the current or a replayed recent user turn has an `.xlsx`, and
+    only with a sandbox `ai_think` opened (OpenAI Files upload + 1GB container); the xlsx never goes to the model
+    as an input file. Generated `.xlsx`/`.csv`/`.png` are copied to `ai-attachments` and attached to the answer
+    before the container is deleted, together with the uploaded originals, also on failure. The container cost is
+    part of `cost_usd`. Never write spreadsheet contents into the DB or app data, and never run code for Word or
+    PowerPoint.
 
 ## Code investigation (Think ↔ Cursor)
 
@@ -115,6 +142,18 @@ Design and current phase: `docs/architecture/ai-code-bridge.md`.
   answers them in the card; `ai_code_plan_revise` records the answers as `owner_answers` plus
   "운영자 결정 — " constraints and re-runs one plan round. Keep those constraints when writing a new 조율본,
   and never treat a recommended option as the operator's answer.
+- One final instruction (2026-10-13, `ai-think-actions.md` §4.3): option-dependent steps live in
+  `options[].instructions` and waiting conditions in `decisions[].holds`, never as conditionals in
+  `plan.instructions`/`constraints`. Decision ids are request/round scoped (`decisionScope`). The revise RPC
+  keeps only the chosen option's steps and moves the rest to `spec.discarded_branches`; `finalPlanIssues`
+  retries Think once before a change starts. Do not re-ask answered items; report real new conflicts as
+  "새로 발견된 충돌: ".
+- Checks and states (2026-10-13, §4.5–4.6): required checks come from `spec.checks` (`node --test` only) and
+  automatic node folders. "검사 통과" comes only from the worker's `result.verification` (`verdict`,
+  per-item command/cwd/exit_code); a not-run required check is never a pass, `followup` items are reported
+  separately, `env` problems need an environment action instead of a re-fix. A change's `ready` means code
+  written, not verified. `get_code_request` (Think and relay) always returns the short brief
+  (`ai_think/code_brief.ts`); long text is read by `section` + `offset`.
 - Work effort (2026-10-10, `docs/architecture/ai-code-bridge.md` §7.1): the default worker model is
   `grok-4.7`; each request carries `request.effort` (medium/high/xhigh) and `effort_reason`, picked by Think
   and changeable on the card before approval. Empty or unknown means `high`; never treat Think's pick as
@@ -127,7 +166,8 @@ Design: `docs/architecture/ai-think.md` §12.
 
 - Cursor reads Think only through `ai_think_relay` (IDE, MCP server `tools/think_relay`) and the worker's
   `ask_think` (via `ai_code_bridge`). Reads are active memories, conversation lists and bodies (never
-  `context_excluded` messages; reuse `store.listMessages`), and code request summaries without diffs.
+  `context_excluded` messages; reuse `store.listMessages`), and code requests (brief first; request,
+  result, check logs and diff only by `section` paging).
   Never add a relay action that writes memories, tree nodes, actions, or code requests.
 - In relay mode Think gets read tools only (`thinkToolsFor({readOnly: true})`), and an acting tool call is
   refused without running. IDE asks continue only `origin = 'cursor'` conversations.
@@ -144,4 +184,4 @@ Design: `docs/architecture/ai-think.md` §12.
 
 Autonomous DB writes, auto-running migrations, arbitrary SQL, Codex integration,
 vector databases, complex model routers, unapproved applies to the working folder, commits or PRs by the Cursor agent.
-Multi-agent work is limited to the code bridge above.
+Multi-agent work is limited to the code bridge above and department consults (rule 17).

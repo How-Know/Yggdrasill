@@ -507,6 +507,7 @@ class LearningProblemExportJob {
     required this.updatedAt,
     this.startedAt,
     this.finishedAt,
+    this.selectedQuestionRowIds = const <String>[],
   });
 
   final String id;
@@ -519,6 +520,10 @@ class LearningProblemExportJob {
   final bool includeExplanation;
   final List<String> selectedQuestionUids;
   List<String> get selectedQuestionIds => selectedQuestionUids;
+
+  /// `pb_exports.selected_question_ids` (pb_questions.id). The uid list above
+  /// comes from options and holds question_uid values.
+  final List<String> selectedQuestionRowIds;
   final String outputUrl;
   final String outputStorageBucket;
   final String outputStoragePath;
@@ -572,6 +577,10 @@ class LearningProblemExportJob {
       updatedAt: _dateTimeOrNull(map['updated_at']) ?? DateTime.now(),
       startedAt: _dateTimeOrNull(map['started_at']),
       finishedAt: _dateTimeOrNull(map['finished_at']),
+      selectedQuestionRowIds: _listOrEmpty(map['selected_question_ids'])
+          .map((e) => '$e'.trim())
+          .where((e) => e.isNotEmpty)
+          .toList(growable: false),
     );
   }
 }
@@ -2804,6 +2813,67 @@ class LearningProblemBankService {
     return null;
   }
 
+  /// Whether any question in [job] got a meaningful edit (a
+  /// `pb_question_revisions` row) after the worker started rendering it.
+  /// Lookup failures return false so printing never blocks on this check.
+  Future<bool> hasQuestionRevisionsAfterExport({
+    required String academyId,
+    required LearningProblemExportJob job,
+  }) async {
+    final safeAcademyId = academyId.trim();
+    if (safeAcademyId.isEmpty) return false;
+    try {
+      var questionIds = job.selectedQuestionRowIds
+          .map((e) => e.trim())
+          .where((e) => e.isNotEmpty)
+          .toSet()
+          .toList(growable: false);
+      if (questionIds.isEmpty) {
+        final uids = job.selectedQuestionUids
+            .map((e) => e.trim())
+            .where((e) => e.isNotEmpty)
+            .toSet()
+            .toList(growable: false);
+        if (uids.isEmpty) return false;
+        final resolved = <String>{};
+        for (var i = 0; i < uids.length; i += 100) {
+          final chunk =
+              uids.sublist(i, i + 100 > uids.length ? uids.length : i + 100);
+          final rows = await _client
+              .from('pb_questions')
+              .select('id')
+              .eq('academy_id', safeAcademyId)
+              .inFilter('question_uid', chunk);
+          for (final row in rows as List<dynamic>) {
+            if (row is! Map) continue;
+            final id = '${row['id'] ?? ''}'.trim();
+            if (id.isNotEmpty) resolved.add(id);
+          }
+        }
+        questionIds = resolved.toList(growable: false);
+      }
+      if (questionIds.isEmpty) return false;
+      final baseline =
+          (job.startedAt ?? job.createdAt).toUtc().toIso8601String();
+      for (var i = 0; i < questionIds.length; i += 100) {
+        final chunk = questionIds.sublist(
+          i,
+          i + 100 > questionIds.length ? questionIds.length : i + 100,
+        );
+        final rows = await _client
+            .from('pb_question_revisions')
+            .select('id')
+            .inFilter('question_id', chunk)
+            .gt('revised_at', baseline)
+            .limit(1);
+        if ((rows as List<dynamic>).isNotEmpty) return true;
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> clearExportStorageArtifact({
     required String academyId,
     required String jobId,
@@ -3414,7 +3484,11 @@ class LearningProblemBankService {
               out[render.key] = render;
             }
           }
-          if (out.isNotEmpty) return out;
+          // stale_dropped 를 주는 Gateway 는 옛 정답 PNG 를 일부러 뺀 것이라
+          // 빈 결과여도 DB 직접 조회로 되살리지 않는다.
+          if (out.isNotEmpty || result.containsKey('stale_dropped')) {
+            return out;
+          }
         }
       } catch (_) {
         // iPad에서 Gateway가 닿지 않으면 RLS가 보호하는 메타와 Storage를

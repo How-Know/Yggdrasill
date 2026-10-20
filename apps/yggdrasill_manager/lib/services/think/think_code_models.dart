@@ -349,6 +349,8 @@ class ThinkCodeRequest {
     if (mode == ThinkCodeMode.plan && status == ThinkCodeStatus.ready && reviewStatus == ThinkReviewStatus.pending) {
       return '조율본 작성 중';
     }
+    // 수정의 ready는 코드를 만들었다는 뜻이지 검증됐다는 뜻이 아니다. 검사 판정은 카드에서 따로 보인다.
+    if (mode == ThinkCodeMode.change && status == ThinkCodeStatus.ready) return '코드 작성 완료';
     return status.label;
   }
 
@@ -622,6 +624,11 @@ class ThinkCheckItem {
     this.command,
     this.output,
     this.durationMs = 0,
+    this.cwd,
+    this.exitCode,
+    this.followup = false,
+    this.requested = false,
+    this.env = false,
   });
 
   final String id;
@@ -631,15 +638,40 @@ class ThinkCheckItem {
   final String? command;
   final String? output;
   final int durationMs;
+  final String? cwd;
+  final int? exitCode;
+
+  /// 실제 데이터·운영 DB가 있어야 하는 후속 확인. 이번 수정의 필수 검사 판정에 넣지 않는다.
+  final bool followup;
+
+  /// 요청(조율본 checks)에 적힌 검사.
+  final bool requested;
+
+  /// 이 PC 환경(도구·의존성 없음) 때문에 못 돌림. 코드를 다시 고쳐도 풀리지 않는다.
+  final bool env;
+}
+
+/// 필수 검사 판정. 서버 _shared/code_verification.ts checkVerdict와 같은 규칙.
+enum ThinkCheckVerdict {
+  passed('필수 검사 통과'),
+  failed('필수 검사 실패'),
+  notRun('필수 검사 일부 실행 못 함'),
+  none('필수 검사 대상 없음');
+
+  const ThinkCheckVerdict(this.label);
+  final String label;
 }
 
 /// 작업자 자동 검사 결과(result.verification). 운영 DB에는 연결하지 않고 복사본에서 돌린다.
 class ThinkVerification {
-  const ThinkVerification({required this.items, this.note, this.stopped = false});
+  const ThinkVerification({required this.items, this.note, this.stopped = false, this.patchSha256});
 
   final List<ThinkCheckItem> items;
   final String? note;
   final bool stopped;
+
+  /// 검사한 diff의 sha256. 예전 작업자 기록이면 null.
+  final String? patchSha256;
 
   int count(ThinkCheckStatus s) => items.where((i) => i.status == s).length;
   int get passed => count(ThinkCheckStatus.passed);
@@ -647,15 +679,38 @@ class ThinkVerification {
   int get skipped => count(ThinkCheckStatus.skipped);
   int get preexisting => count(ThinkCheckStatus.preexisting);
 
-  /// 적용 전에 경고할 것: 실패·미실행·원래도 실패·중간에 멈춤.
-  bool get clean => failed == 0 && skipped == 0 && preexisting == 0 && !stopped;
+  List<ThinkCheckItem> get required => items.where((i) => !i.followup).toList();
+  List<ThinkCheckItem> get followups => items.where((i) => i.followup).toList();
+  int get requiredFailed => required.where((i) => i.status == ThinkCheckStatus.failed).length;
+  int get requiredSkipped => required.where((i) => i.status == ThinkCheckStatus.skipped).length;
+  List<ThinkCheckItem> get envProblems =>
+      required.where((i) => i.env && i.status == ThinkCheckStatus.skipped).toList();
+
+  ThinkCheckVerdict get verdict {
+    final req = required;
+    if (req.any((i) => i.status == ThinkCheckStatus.failed)) return ThinkCheckVerdict.failed;
+    if (stopped || req.any((i) => i.status == ThinkCheckStatus.skipped)) return ThinkCheckVerdict.notRun;
+    return req.isNotEmpty ? ThinkCheckVerdict.passed : ThinkCheckVerdict.none;
+  }
+
+  /// 판정 문구. 원래도 실패하던 필수 검사는 이번 수정을 확인하지 못했으므로 통과 문구에 따로 밝힌다.
+  String get verdictLabel {
+    final old = required.where((i) => i.status == ThinkCheckStatus.preexisting).length;
+    return verdict == ThinkCheckVerdict.passed && old > 0 ? '${verdict.label} (원래도 실패하던 검사 $old개 제외)' : verdict.label;
+  }
+
+  /// 적용 전에 경고할 것: 필수 검사 실패·미실행·원래도 실패·중간에 멈춤.
+  bool get clean =>
+      verdict == ThinkCheckVerdict.passed && !required.any((i) => i.status == ThinkCheckStatus.preexisting);
 
   static ThinkVerification? fromJson(Object? raw) {
     if (raw is! Map || raw['items'] is! List) return null;
     final note = _str(raw['note']);
+    final sha = _str(raw['patch_sha256']);
     return ThinkVerification(
       note: note.isEmpty ? null : note,
       stopped: raw['stopped'] == true,
+      patchSha256: RegExp(r'^[0-9a-f]{64}$').hasMatch(sha) ? sha : null,
       items: [
         for (final i in _maps(raw['items']))
           ThinkCheckItem(
@@ -666,6 +721,12 @@ class ThinkVerification {
             command: _str(i['command']).isEmpty ? null : _str(i['command']),
             output: _str(i['output']).isEmpty ? null : _str(i['output']),
             durationMs: _int(i['duration_ms']),
+            cwd: _str(i['cwd']).isEmpty ? null : _str(i['cwd']),
+            exitCode: i['exit_code'] is num ? (i['exit_code'] as num).toInt() : null,
+            // 예전 작업자 기록(scope 없음)은 db-test-other만 후속 확인으로 본다.
+            followup: i['scope'] == 'followup' || (i['scope'] == null && _str(i['id']) == 'db-test-other'),
+            requested: i['source'] == 'request',
+            env: i['env'] == true,
           ),
       ],
     );

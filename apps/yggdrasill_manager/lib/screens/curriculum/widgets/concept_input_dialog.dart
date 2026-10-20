@@ -3,21 +3,24 @@ import 'package:flutter/material.dart';
 import '../../../services/concept_service.dart';
 import '../../../widgets/math_shortcuts.dart';
 
+/// [impact]: 고칠 때 맨 위에 보여 줄 "이 개념에 붙은 것" 안내.
 Future<ConceptFormResult?> showConceptInputDialog(
   BuildContext context, {
   ConceptItem? initial,
+  String? impact,
 }) {
   return showDialog<ConceptFormResult>(
     context: context,
     barrierDismissible: false,
-    builder: (ctx) => _ConceptInputDialog(initial: initial),
+    builder: (ctx) => _ConceptInputDialog(initial: initial, impact: impact),
   );
 }
 
 class _ConceptInputDialog extends StatefulWidget {
-  const _ConceptInputDialog({required this.initial});
+  const _ConceptInputDialog({required this.initial, this.impact});
 
   final ConceptItem? initial;
+  final String? impact;
 
   @override
   State<_ConceptInputDialog> createState() => _ConceptInputDialogState();
@@ -72,6 +75,22 @@ class _ConceptInputDialogState extends State<_ConceptInputDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              if (widget.impact != null) ...[
+                Container(
+                  key: const ValueKey('concept-edit-impact'),
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0xFF3A3A3A)),
+                  ),
+                  child: Text(
+                    widget.impact!,
+                    style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.5),
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
               _buildKindSelector(),
               const SizedBox(height: 12),
               _buildSubtypeSelector(),

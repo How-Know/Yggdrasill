@@ -2,7 +2,14 @@ import type { AttachmentRef } from './context.ts';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export const ALLOWED_ATTACHMENT_MIME = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'application/pdf']);
+export const ALLOWED_ATTACHMENT_MIME = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/gif',
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+]);
 export const MAX_MESSAGE_CHARS = 20000;
 export const MAX_ATTACHMENTS = 6;
 export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;

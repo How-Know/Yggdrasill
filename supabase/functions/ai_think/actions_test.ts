@@ -84,7 +84,12 @@ Deno.test('작업 강도: 고른 값과 이유를 명세에 담고, 비었거나
 
 Deno.test('조율 시작: 승인 카드 없이 바로 시작하고, 계획 초안·확인할 점·근거 결론을 함께 보낸다', async () => {
   const { store, conv, call } = await setup();
-  const args = { ...codeArgs, instructions: ['버튼 색 변경'], questions: ['영향 범위'], based_on_request_id: REQ_ID };
+  const checks = [
+    { cwd: './tools/gateway/', command: 'node   --test test/', why: '회귀' },
+    { cwd: 'tools\\gateway', command: 'node --test test/', why: '중복' },
+    { cwd: '', command: 'node --test tools/v2_a4_compare/test/', why: '루트' },
+  ];
+  const args = { ...codeArgs, instructions: ['버튼 색 변경'], questions: ['영향 범위'], checks, based_on_request_id: REQ_ID };
   const miss = await call('start_code_plan', args);
   assertEquals(JSON.parse(miss.output).error, 'based_on_request_not_found');
   store.codeRequests.push(codeRequest());
@@ -98,6 +103,10 @@ Deno.test('조율 시작: 승인 카드 없이 바로 시작하고, 계획 초�
   assertEquals(conversationId, conv.id);
   assertEquals(spec.instructions, ['버튼 색 변경']);
   assertEquals(spec.questions, ['영향 범위']);
+  assertEquals(spec.checks, [
+    { cwd: 'tools/gateway', command: 'node --test test/', why: '회귀' },
+    { cwd: '.', command: 'node --test tools/v2_a4_compare/test/', why: '루트' },
+  ]);
   assertEquals((spec.based_on as Record<string, unknown>).summary, '가능하다');
   assertEquals((spec.memory_refs as unknown[]).length, 1);
   assertEquals(store.actions.filter((a) => a.status === 'proposed').length, 0);

@@ -1,11 +1,26 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'widgets/category_tree.dart';
+import 'widgets/concept_book_dialog.dart';
+import 'widgets/concept_chat_panel.dart';
+import 'widgets/concept_criteria_pane.dart';
+import 'widgets/concept_draft_list_dialog.dart';
+import 'widgets/concept_draft_review_dialog.dart';
+import 'widgets/concept_anchor_dialogs.dart';
 import 'widgets/concept_input_dialog.dart';
+import 'widgets/concept_library_pane.dart';
+import 'widgets/concept_relation_section.dart';
+import 'widgets/concept_workspace.dart';
+import '../../services/concept_draft_service.dart';
+import '../../services/concept_library_controller.dart';
 import '../../services/concept_service.dart';
+import '../../services/concept_topic.dart';
+import '../../services/think/think_concept_chat_controller.dart';
 import '../../widgets/app_navigation_bar.dart';
-import '../../widgets/latex_text_renderer.dart';
 import '../../services/concept_category_service.dart';
+import '../think/think_style.dart';
 
 class CurriculumScreen extends StatefulWidget {
   const CurriculumScreen({super.key});
@@ -24,7 +39,11 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   final _supabase = Supabase.instance.client;
   final ConceptCategoryService _cc = ConceptCategoryService(Supabase.instance.client);
   final ConceptService _conceptSvc = ConceptService(Supabase.instance.client);
-  
+  final ConceptDraftService _draftSvc = ConceptDraftService();
+
+  /// 트리에 붙여 보는 유형·주제 묶음(트리를 다시 읽을 때 함께 읽는다).
+  ConceptTreeMeta _treeMeta = ConceptTreeMeta.empty;
+
   // 학년 선택 상태
   String? _selectedCurriculumId;
   String? _selectedGradeId;
@@ -37,30 +56,31 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   bool _treeBusy = false;
   String? _lastSelectedCategoryId;
   String? _forceExpandNodeId;
-  
+
   // 도메인 탭 상태
   String _selectedDomain = '대수'; // 대수, 해석, 확률통계, 기하
-  
-  
-  
+
   bool _isLoading = true;
-  
-  
+
+  bool _chatOpen = ConceptChatController.instance.panelOpen;
+
+  /// 선택·저장 안 한 입력은 여기에 남는다(메뉴를 옮겨 화면이 다시 만들어져도).
+  final ConceptLibraryController _lib = ConceptLibraryController.instance;
+
   @override
   void initState() {
     super.initState();
+    _lib.ensureStarted();
+    if (!_lib.loaded && !_lib.loading) unawaited(_lib.loadCriteria());
     _loadCurriculums();
     _reloadCategoryTree();
   }
-  
+
   // 교육과정 목록 불러오기
   Future<void> _loadCurriculums() async {
     try {
-      final data = await _supabase
-          .from('curriculum')
-          .select()
-          .order('created_at');
-      
+      final data = await _supabase.from('curriculum').select().order('created_at');
+
       setState(() {
         _curriculums = List<Map<String, dynamic>>.from(data);
         if (_curriculums.isNotEmpty) {
@@ -72,11 +92,11 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
       _showError('교육과정 로드 실패: $e');
     }
   }
-  
+
   // 학년 목록 불러오기
   Future<void> _loadGrades() async {
     if (_selectedCurriculumId == null) return;
-    
+
     try {
       final data = await _supabase
           .from('grade')
@@ -84,7 +104,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
           .eq('curriculum_id', _selectedCurriculumId!)
           .eq('school_level', _schoolLevel)
           .order('display_order');
-      
+
       setState(() {
         _grades = List<Map<String, dynamic>>.from(data);
         _selectedGradeId = _grades.isNotEmpty ? _grades[0]['id'] as String : null;
@@ -94,20 +114,13 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
       _showError('학년 로드 실패: $e');
     }
   }
-  
-  
-  
-  
-  
-  
-  
+
   void _showError(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message)),
     );
   }
-  
-  
+
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
@@ -118,7 +131,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
         ),
       );
     }
-    
+
     return Container(
       color: const Color(0xFF1F1F1F),
       child: Padding(
@@ -136,19 +149,125 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
             ),
             const SizedBox(height: 8),
             const Text(
-              '교육과정 개념과 폴더 구조를 관리합니다.',
+              '정리 기준(왼쪽)과 개념 라이브러리(오른쪽)를 함께 보며 정리합니다.',
               style: TextStyle(color: Color(0xFFB3B3B3), fontSize: 16),
             ),
             const SizedBox(height: 20),
             _buildToolbarCard(),
             const SizedBox(height: 16),
-            Expanded(child: _buildConceptTreeCard()),
+            Expanded(
+              child: ConceptWorkspace(
+                controller: _lib,
+                criteriaDetail: CriteriaDetailPane(
+                  controller: _lib,
+                  onOpenConcept: _openConceptById,
+                  onChatPicked: _openChatForPick,
+                ),
+                criteriaSummary: CriteriaSummaryPane(controller: _lib),
+                libraryDetail: _buildLibraryDetail(),
+                librarySummary: LibrarySummaryPane(controller: _lib, onOpenConcept: _openConceptById),
+                chat: _chatOpen ? ConceptChatPanel(onClose: () => _setChatOpen(false)) : null,
+              ),
+            ),
           ],
         ),
       ),
     );
   }
-  
+
+  void _setChatOpen(bool open) {
+    ConceptChatController.instance.panelOpen = open;
+    setState(() => _chatOpen = open);
+  }
+
+  /// 대화 참고로 골랐을 때 대화 패널이 닫혀 있으면 연다(좁은 화면에서도 보던 칸은 그대로 둔다).
+  void _openChatForPick() {
+    if (!_chatOpen) _setChatOpen(true);
+  }
+
+  Future<void> _openDraftList() async {
+    final id = await showConceptDraftListDialog(context, onConfirmed: () => unawaited(_reloadCategoryTree()));
+    if (id != null && mounted) await _openDraft(id);
+  }
+
+  /// 초안 검토. 확정하면 라이브러리를 다시 읽는다.
+  Future<void> _openDraft(String id) async {
+    final confirmed = await showConceptDraftReviewDialog(context, draftId: id);
+    if (!confirmed || !mounted) return;
+    await _reloadCategoryTree();
+    if (!mounted) return;
+    showThinkSnack(context, '초안을 확정해 라이브러리에 넣었습니다. 다른 영역에 넣은 개념은 그 영역 탭에서 보입니다.');
+  }
+
+  Future<void> _openConceptBook() async {
+    await showConceptBookDialog(
+      context,
+      library: _lib,
+      onDraftReady: (id) => unawaited(_openDraft(id)),
+      onDraftsConfirmed: () => unawaited(_reloadCategoryTree()),
+      onAttached: (pages, problems) {
+        if (!_chatOpen) _setChatOpen(true);
+        _lib.showNarrowChat();
+        if (!mounted) return;
+        showThinkSnack(
+          context,
+          problems.isEmpty
+              ? '쪽 이미지 $pages장을 Think 대화 입력창에 붙였습니다. 질문을 적고 보내세요.'
+              : '쪽 이미지 $pages장을 붙였습니다. 붙이지 못한 것: ${problems.join(' / ')}',
+          error: problems.isNotEmpty,
+        );
+      },
+    );
+  }
+
+  Iterable<ConceptItem> _allConcepts(List<CategoryNode> nodes) sync* {
+    for (final n in nodes) {
+      yield* n.concepts;
+      yield* _allConcepts(n.children);
+    }
+  }
+
+  ConceptItem? _findConcept(String id) {
+    for (final c in _allConcepts(_categoryTree)) {
+      if (c.id == id) return c;
+    }
+    return null;
+  }
+
+  /// 요약·연결에서 개념을 눌렀을 때. 지금 도메인 트리에 없으면 서버에서 읽는다.
+  Future<void> _openConceptById(String id) async {
+    final local = _findConcept(id);
+    if (local != null) {
+      _lib.openConcept(local);
+      return;
+    }
+    try {
+      final fresh = await _conceptSvc.fetchConcept(id);
+      if (!mounted) return;
+      if (fresh == null) {
+        _showError('개념을 찾지 못했습니다(지워졌거나 볼 수 없음).');
+        return;
+      }
+      _lib.openConcept(fresh);
+    } catch (e) {
+      _showError('개념을 열지 못했습니다: $e');
+    }
+  }
+
+  /// 저장된 개념만 고른다. 보낼 때마다 서버가 이 개념의 저장본을 다시 읽는다.
+  void _pickForChat(ConceptItem concept) {
+    final problem = ConceptChatController.instance.pickConcept(concept);
+    if (problem != null) {
+      _showError(problem);
+      return;
+    }
+    if (!_chatOpen) _setChatOpen(true);
+    final name = concept.name.isEmpty ? (concept.kind == ConceptKind.definition ? '정의' : '정리') : concept.name;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('"$name"을(를) Think 대화의 참고 개념으로 골랐습니다.')),
+    );
+  }
+
   Widget _buildToolbarCard() {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -192,73 +311,76 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     );
   }
 
-  Widget _buildConceptTreeCard() {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: const Color(0xFF18181A),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFF2A2A2A)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Text(
-                '개념 라이브러리',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
+  Widget _buildLibraryDetail() {
+    final chat = ConceptChatController.instance;
+    return LibraryDetailPane(
+      badges: [_buildDomainBadge(_selectedDomain)],
+      actions: [
+        if (_treeBusy)
+          const Padding(
+            padding: EdgeInsets.only(right: 8),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: kNavAccent),
                 ),
-              ),
-              const SizedBox(width: 8),
-              _buildDomainBadge(_selectedDomain),
-              const Spacer(),
-              if (_treeBusy)
-                Row(
-                  children: const [
-                    SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: kNavAccent,
-                      ),
-                    ),
-                    SizedBox(width: 6),
-                    Text(
-                      '동기화 중',
-                      style: TextStyle(color: Colors.white54, fontSize: 16),
-                    ),
-                  ],
-                ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          const Divider(color: Color(0xFF2A2A2A), height: 1),
-          const SizedBox(height: 12),
-          Expanded(
-            child: CategoryTree(
-              roots: _categoryTree,
-              forceExpandNodeId: _forceExpandNodeId,
-              rootParentId: _domainRootId,
-              onSelect: (node) {
-                _lastSelectedCategoryId = node.id;
-              },
-              onAddChild: _onAddChildFolder,
-              onRename: _onRenameFolder,
-              onDelete: _onDeleteFolder,
-              onReorderFolder: _onReorderFolder,
-              onTapConcept: _onTapConcept,
-              onEditConcept: _onEditConcept,
-              onDeleteConcept: _onDeleteConcept,
-              onMoveConcept: _onMoveConcept,
-              onMoveFolder: _onMoveFolder,
+                SizedBox(width: 6),
+                Text('동기화 중', style: TextStyle(color: Colors.white54, fontSize: 14)),
+              ],
             ),
           ),
-        ],
+        TextButton.icon(
+          key: const ValueKey('same-name-review-open'),
+          onPressed: () => unawaited(showSameNameReviewDialog(
+            context,
+            store: _lib.relations,
+            onOpenConcept: (id) {
+              Navigator.of(context).pop();
+              unawaited(_openConceptById(id));
+            },
+          )),
+          icon: const Icon(Icons.join_inner, size: 16),
+          label: const Text('같은 이름 검토'),
+          style: TextButton.styleFrom(foregroundColor: kThinkAccent, visualDensity: VisualDensity.compact),
+        ),
+      ],
+      tree: ListenableBuilder(
+        listenable: Listenable.merge(
+            [chat.pickedConcept, _lib.openedConceptId, _lib.statements.countsTick, _lib.relations.openTick]),
+        builder: (context, _) => CategoryTree(
+          roots: _categoryTree,
+          meta: _treeMeta,
+          forceExpandNodeId: _forceExpandNodeId,
+          rootParentId: _domainRootId,
+          onSelect: (node) {
+            _lastSelectedCategoryId = node.id;
+          },
+          onAddChild: _onAddChildFolder,
+          onRename: _onRenameFolder,
+          onDelete: _onDeleteFolder,
+          onReorderFolder: _onReorderFolder,
+          onProposeAnchors: _onProposeAnchors,
+          onTapConcept: _onTapConcept,
+          onEditConcept: _onEditConcept,
+          onDeleteConcept: _onDeleteConcept,
+          onMoveConcept: _onMoveConcept,
+          onMoveFolder: _onMoveFolder,
+          selectedConceptId: chat.pickedConcept.value,
+          openedConceptId: _lib.openedConceptId.value,
+          statementCountOf: _lib.statements.statementCountOf,
+          reviewOpenOf: _lib.relations.reviewOpen,
+          onPickConcept: (_, concept) => _pickForChat(concept),
+        ),
+      ),
+      detail: ConceptDetailView(
+        controller: _lib,
+        onEdit: (concept) => _onEditConcept(null, concept),
+        onPickForChat: _pickForChat,
+        topicOf: _topicOf,
+        onChooseAnchor: _onChooseAnchor,
+        onOpenConceptId: (id) => unawaited(_openConceptById(id)),
       ),
     );
   }
@@ -359,6 +481,44 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
       runSpacing: 8,
       children: [
         OutlinedButton.icon(
+          onPressed: _openConceptBook,
+          icon: const Icon(Icons.menu_book_outlined, size: 18),
+          label: const Text('개념책 불러오기', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: kNavAccent,
+            side: BorderSide(color: kNavAccent.withValues(alpha: 0.5)),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+        ),
+        OutlinedButton.icon(
+          onPressed: _openDraftList,
+          icon: const Icon(Icons.fact_check_outlined, size: 18),
+          label: const Text('개념 초안', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: kNavAccent,
+            side: BorderSide(color: kNavAccent.withValues(alpha: 0.5)),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+        ),
+        OutlinedButton.icon(
+          onPressed: () {
+            final open = !_chatOpen;
+            _setChatOpen(open);
+            if (open) _lib.showNarrowChat();
+          },
+          icon: Icon(_chatOpen ? Icons.forum : Icons.forum_outlined, size: 18),
+          label: Text(_chatOpen ? 'Think 대화 숨기기' : 'Think 대화',
+              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: kNavAccent,
+            side: BorderSide(color: kNavAccent.withValues(alpha: 0.5)),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+        ),
+        OutlinedButton.icon(
           onPressed: _onAddRootFolder,
           icon: const Icon(Icons.create_new_folder, size: 18),
           label: const Text('새 폴더', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
@@ -402,7 +562,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
       ),
     );
   }
-  
+
   // 도메인 선택 칩
   Widget _buildDomainChip(String label) {
     final isSelected = _selectedDomain == label;
@@ -443,15 +603,88 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     setState(() => _treeBusy = true);
     try {
       final tree = await _cc.fetchDomainTree(_selectedDomain);
+      if (!mounted) return;
       setState(() {
         _domainRootId = tree.rootId;
         _categoryTree = tree.nodes;
       });
+      final concepts = _allConcepts(tree.nodes);
+      _lib.syncSelectedConcept(concepts);
+      await _reloadTreeMeta(concepts);
     } catch (e) {
       _showError('카테고리 로드 실패: $e');
     } finally {
       if (mounted) setState(() => _treeBusy = false);
     }
+  }
+
+  Future<void> _reloadTreeMeta([Iterable<ConceptItem>? concepts]) async {
+    final ids = [
+      for (final c in concepts ?? _allConcepts(_categoryTree))
+        if (_isUuid(c.id)) c.id
+    ];
+    try {
+      final meta = await _draftSvc.treeMeta(ids);
+      if (mounted) setState(() => _treeMeta = meta);
+    } catch (e) {
+      _showError('개념 유형·묶음을 읽지 못했습니다: $e');
+    }
+  }
+
+  CategoryNode? _folderOfConcept(String conceptId) {
+    CategoryNode? found;
+    void visit(List<CategoryNode> list) {
+      for (final n in list) {
+        if (found != null) return;
+        if (n.concepts.any((c) => c.id == conceptId)) {
+          found = n;
+          return;
+        }
+        visit(n.children);
+      }
+    }
+
+    visit(_categoryTree);
+    return found;
+  }
+
+  ConceptTopicInfo? _topicOf(ConceptItem concept) {
+    final folder = _folderOfConcept(concept.id);
+    if (folder == null) return null;
+    final anchorId = _treeMeta.anchorOf[concept.id];
+    final anchor = anchorId == null ? null : folder.concepts.where((c) => c.id == anchorId).firstOrNull;
+    final dependents = [
+      for (final c in folder.concepts)
+        if (_treeMeta.anchorOf[c.id] == concept.id) c
+    ];
+    return ConceptTopicInfo(
+      anchor: anchor,
+      dependents: dependents,
+      typeOf: _treeMeta.typeOf,
+      unavailable: _treeMeta.anchorsUnavailable,
+      canChoose: folder.concepts.length > 1,
+    );
+  }
+
+  Future<void> _onChooseAnchor(ConceptItem concept) async {
+    final folder = _folderOfConcept(concept.id);
+    if (folder == null) return;
+    final picked = await showConceptAnchorPicker(context, concept: concept, folder: folder, meta: _treeMeta);
+    if (picked == null || !mounted) return;
+    try {
+      await _draftSvc.setAnchors({concept.id: picked.anchorId}, origin: 'manual');
+      if (!mounted) return;
+      setState(() => _treeMeta = _treeMeta.withAnchors({concept.id: picked.anchorId}));
+      showThinkSnack(context, picked.anchorId == null ? '묶음에서 뺐습니다.' : '묶음을 바꿨습니다.');
+    } on ConceptDraftException catch (e) {
+      if (mounted) showThinkSnack(context, e.message, error: true);
+      await _reloadTreeMeta();
+    }
+  }
+
+  Future<void> _onProposeAnchors(CategoryNode folder) async {
+    final applied = await showConceptAnchorProposalDialog(context, folder: folder, meta: _treeMeta, service: _draftSvc);
+    if (applied == true) await _reloadTreeMeta();
   }
 
   Future<void> _onAddRootFolder() async {
@@ -529,8 +762,11 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
           style: const TextStyle(color: Colors.white),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('취소', style: TextStyle(color: Colors.white70))),
-          TextButton(onPressed: () => Navigator.pop(ctx, value.trim()), child: const Text('확인', style: TextStyle(color: kNavAccent))),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('취소', style: TextStyle(color: Colors.white70))),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, value.trim()),
+              child: const Text('확인', style: TextStyle(color: kNavAccent))),
         ],
       ),
     );
@@ -544,8 +780,12 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
         title: const Text('삭제 확인', style: TextStyle(color: Colors.white)),
         content: Text(message, style: const TextStyle(color: Colors.white70)),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소', style: TextStyle(color: Colors.white70))),
-          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('삭제', style: TextStyle(color: Colors.redAccent))),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('취소', style: TextStyle(color: Colors.white70))),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('삭제', style: TextStyle(color: Colors.redAccent))),
         ],
       ),
     );
@@ -571,7 +811,8 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   List<CategoryNode> _renameRecursive(List<CategoryNode> list, String id, String newName) {
     return list.map((n) {
       if (n.id == id) {
-        return CategoryNode(id: n.id, name: newName, children: n.children, isShortcut: n.isShortcut, concepts: n.concepts);
+        return CategoryNode(
+            id: n.id, name: newName, children: n.children, isShortcut: n.isShortcut, concepts: n.concepts);
       }
       if (n.children.isEmpty) return n;
       return CategoryNode(
@@ -648,12 +889,25 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     }
   }
 
+  /// 트리에서 누르면 그 자리(라이브러리 쪽)에서 연다. 초점은 바꾸지 않는다.
   void _onTapConcept(CategoryNode parent, ConceptItem concept) {
-    _showConceptDetail(concept);
+    _lib.selectConcept(concept);
   }
 
-  Future<void> _onEditConcept(CategoryNode parent, ConceptItem concept) async {
-    final edited = await showConceptInputDialog(context, initial: concept);
+  Future<void> _onEditConcept(CategoryNode? parent, ConceptItem concept) async {
+    String? impact;
+    if (_lib.isSavedConcept(concept)) {
+      final id = concept.id;
+      await Future.wait([
+        if (_lib.sourcesOf(id) == null) _lib.loadSources(id),
+        if (_lib.linkedCriteriaOf(id) == null) _lib.loadConceptLinks(id),
+        if (!_lib.statements.loaded(id)) _lib.statements.load(id),
+        if (!_lib.relations.loaded(id)) _lib.relations.load(id),
+      ]).timeout(const Duration(seconds: 8), onTimeout: () => const []);
+      if (!mounted) return;
+      impact = conceptEditImpact(_lib, concept);
+    }
+    final edited = await showConceptInputDialog(context, initial: concept, impact: impact);
     if (edited == null) return;
     try {
       setState(() => _treeBusy = true);
@@ -665,7 +919,12 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
         content: edited.content,
         level: edited.level,
       );
+      ConceptChatController.instance.conceptSaved(concept.id, name: edited.name, kind: edited.kind);
       await _reloadCategoryTree();
+      if (_lib.selectedConcept?.id == concept.id && _findConcept(concept.id) == null) {
+        final fresh = await _conceptSvc.fetchConcept(concept.id);
+        if (fresh != null) _lib.syncSelectedConcept([fresh]);
+      }
     } catch (e) {
       _showError('개념 수정 실패: $e');
     } finally {
@@ -679,6 +938,8 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     try {
       setState(() => _treeBusy = true);
       await _conceptSvc.deleteConcept(concept.id);
+      ConceptChatController.instance.conceptDeleted(concept.id);
+      _lib.conceptRemoved(concept.id);
       await _reloadCategoryTree();
     } catch (e) {
       _showError('개념 삭제 실패: $e');
@@ -691,8 +952,8 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     required String conceptId,
     required String fromParentId,
     required String toParentId,
-    int? toIndex,
   }) async {
+    if (fromParentId == toParentId) return;
     try {
       setState(() => _treeBusy = true);
       // 임시(비-UUID) 개념은 서버에 없으므로, 대상 폴더로 먼저 저장 후 이동 처리로 간주
@@ -714,23 +975,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
           return;
         }
       }
-      // If moving across parents
-      if (fromParentId != toParentId) {
-        await _conceptSvc.moveConcept(conceptId: conceptId, toCategoryId: toParentId);
-      }
-      // Reorder within destination parent if index provided
-      if (toIndex != null) {
-        final destNode = _findNodeById(_categoryTree, toParentId);
-        if (destNode != null) {
-          final ids = destNode.concepts.map((c) => c.id).toList();
-          // If concept moved from same parent, remove old spot
-          ids.remove(conceptId);
-          // Insert at index
-          final safeIndex = toIndex.clamp(0, ids.length);
-          ids.insert(safeIndex, conceptId);
-          await _conceptSvc.reorderConcepts(categoryId: toParentId, orderedConceptIds: ids);
-        }
-      }
+      await _conceptSvc.moveConcept(conceptId: conceptId, toCategoryId: toParentId);
       await _reloadCategoryTree();
       _forceExpandNodeId = toParentId;
     } catch (e) {
@@ -762,6 +1007,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
         if (found != null) return;
       }
     }
+
     dfs(_categoryTree);
     if (found == null) return null;
     return _Tuple2(parentId, found!);
@@ -784,12 +1030,11 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
         );
       }).toList();
     }
+
     setState(() {
       _categoryTree = rec(_categoryTree);
     });
   }
-
-  
 
   Future<void> _onMoveFolder({
     required String folderId,
@@ -854,32 +1099,6 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     return null;
   }
 
-  void _showConceptDetail(ConceptItem c) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF2A2A2A),
-        title: Text(c.name.isEmpty ? (c.kind == ConceptKind.definition ? '정의' : '정리') : c.name,
-            style: const TextStyle(color: Colors.white)),
-        content: SingleChildScrollView(
-          child: _renderConceptContent(c.content),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('닫기', style: TextStyle(color: Colors.white70))),
-        ],
-      ),
-    );
-  }
-
-  Widget _renderConceptContent(String text) {
-    return LatexTextRenderer(
-      text,
-      style: const TextStyle(color: Color(0xFFB3B3B3), fontSize: 13),
-      crossAxisAlignment: CrossAxisAlignment.start,
-      blockVerticalPadding: 6,
-    );
-  }
-
   // 임시 목업 카테고리 트리 데이터 (도메인별)
   List<CategoryNode> _mockCategoriesFor(String domain) {
     switch (domain) {
@@ -937,77 +1156,4 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
         ];
     }
   }
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
 }
-
-
-

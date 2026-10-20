@@ -46,6 +46,17 @@ test('호출: 정의된 인자만 보내고, 토큰을 Bearer로 붙인다', asy
   assert.deepEqual(sent[0], { url: 'http://relay', auth: 'Bearer tok', body: { action: 'search_memories', query: '정렬', limit: 5 } });
 });
 
+test('코드 요청: section과 offset을 그대로 보낸다', async () => {
+  const sent = [];
+  const call = (action, args) => {
+    sent.push({ action, ...args });
+    return Promise.resolve({ ok: true, code_request: { section: 'diff', text: 'x' } });
+  };
+  await callTool(call, 'think_get_code_request', { id: 'r1', section: 'diff', offset: 7000 });
+  await callTool(call, 'think_get_code_request', { id: 'r1' });
+  assert.deepEqual(sent, [{ action: 'get_code_request', id: 'r1', section: 'diff', offset: 7000 }, { action: 'get_code_request', id: 'r1' }]);
+});
+
 test('ask_think: answered는 근거, needs_owner는 진행 금지와 확인 질문, 실패는 isError', async () => {
   const replies = [
     { ok: true, verdict: 'answered', conversation_id: 'c1', answer: '날짜순', basis: [{ id: 'm1', kind: 'decision', title: '날짜순 원칙' }], owner_questions: [] },

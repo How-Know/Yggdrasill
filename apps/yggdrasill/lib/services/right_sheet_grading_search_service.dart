@@ -9,6 +9,7 @@ import '../screens/resources/exam_preset_support.dart'
 import '../widgets/pdf/homework_answer_viewer_dialog.dart';
 import 'data_manager.dart';
 import 'homework_batch_confirm_service.dart';
+import 'homework_grading_lock_service.dart';
 import 'homework_grading_state_codec.dart';
 import 'homework_test_grading_result_service.dart';
 import 'homework_store.dart';
@@ -266,6 +267,31 @@ class RightSheetGradingSearchService {
       return false;
     }
 
+    final groupId = (HomeworkStore.instance.groupIdOfItem(hw.id) ?? '').trim();
+    HomeworkGradingLockAccess? lockAccess;
+    if (!readOnly) {
+      try {
+        lockAccess = await HomeworkGradingLockService.instance.acquire(
+          studentId: studentId,
+          groupId: groupId,
+          keys: keys,
+        );
+      } catch (error) {
+        debugPrint('[GRADING_LOCK][search_acquire] $error');
+        lockAccess = const HomeworkGradingLockAccess(
+          canEdit: false,
+          targetKey: '',
+        );
+      }
+    }
+    final lockReadOnly = lockAccess != null && !lockAccess.canEdit;
+    final effectiveReadOnly = readOnly || lockReadOnly;
+    final readOnlyReason = readOnly
+        ? '제출되지 않은 과제입니다.'
+        : (lockReadOnly ? lockAccess.readOnlyReason : '');
+    Future<void> releaseUnusedLock() =>
+        HomeworkGradingLockService.instance.releaseIfNoDraft(keys);
+
     final cachedStates =
         _testGradingDraftStatesByHomeworkId[payload.homeworkId] ??
             const <String, HomeworkAnswerCellState>{};
@@ -290,9 +316,13 @@ class RightSheetGradingSearchService {
       if (context.mounted) {
         _showSnackBar(context, '기존 채점 기록을 확인하지 못해 채점지를 열지 않았습니다.');
       }
+      if (lockAccess?.canEdit == true) await releaseUnusedLock();
       return true;
     }
-    if (!context.mounted) return false;
+    if (!context.mounted) {
+      if (lockAccess?.canEdit == true) await releaseUnusedLock();
+      return false;
+    }
     final recordedKeys = <String>{
       ...cachedStates.keys,
       if (savedSession != null) ...savedSession.states.keys,
@@ -315,8 +345,9 @@ class RightSheetGradingSearchService {
     };
     final hasSavedGrading = savedSession != null ||
         _testGradingSavedHomeworkIds.contains(payload.homeworkId);
-    final lockGrading = readOnly || hasSavedGrading;
+    final lockGrading = effectiveReadOnly || hasSavedGrading;
     final baselineStates = _retryBaselineStates(baselineSession);
+    final wrongOnlyStates = _retryBaselineStates(savedSession);
     final studentName = _resolveHomeworkPrintStudentName(studentId);
     final groupHomeworkTitle = _resolveGroupHomeworkTitle(
       studentId: studentId,
@@ -332,7 +363,10 @@ class RightSheetGradingSearchService {
       studentId: studentId,
       hw: hw,
     );
-    if (!context.mounted) return false;
+    if (!context.mounted) {
+      if (lockAccess?.canEdit == true) await releaseUnusedLock();
+      return false;
+    }
 
     rightSideSheetTestGradingSession.value = RightSideSheetTestGradingSession(
       sessionId: 'student:$studentId|test_pb_grade:${payload.homeworkId}',
@@ -353,12 +387,15 @@ class RightSheetGradingSearchService {
           savedSession?.correctionAttemptNumbers ?? const <String, int>{},
       baselineAttemptId: baselineSession?.attempt.id ?? '',
       baselineStates: _toRightSheetStateMap(baselineStates),
-      wrongOnlyDefault: hasSavedGrading && baselineStates.isNotEmpty,
+      wrongOnlyStates: _toRightSheetStateMap(wrongOnlyStates),
+      wrongOnlyDefault: hasSavedGrading && wrongOnlyStates.isNotEmpty,
       gradingLocked: lockGrading,
-      smartConfirmAction: !readOnly,
+      readOnlyReason: readOnlyReason,
+      smartConfirmAction: !effectiveReadOnly,
       closeSheetOnAction: false,
       autoFilledCorrectCount: autoFilledCorrectCount,
-      onStatesChanged: readOnly
+      onClosed: lockAccess?.canEdit == true ? releaseUnusedLock : null,
+      onStatesChanged: effectiveReadOnly
           ? null
           : (states) {
               final decoded = _fromRightSheetStateMap(states);
@@ -371,7 +408,7 @@ class RightSheetGradingSearchService {
                 states: decoded,
               );
             },
-      onAction: readOnly
+      onAction: effectiveReadOnly
           ? null
           : (action, states, correctionStates) async {
               final decoded = _fromRightSheetStateMap(states);
@@ -423,6 +460,7 @@ class RightSheetGradingSearchService {
                   correctionStates: correctionStates,
                 );
                 if (draft == null) {
+                  if (lockAccess?.canEdit == true) await releaseUnusedLock();
                   if (context.mounted) {
                     _showSnackBar(context, '채점 초안을 이 PC에 저장하지 못했습니다.');
                   }

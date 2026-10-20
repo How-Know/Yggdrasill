@@ -7,6 +7,7 @@ import {
   ACTION_TOOLS,
   ACTION_TOOL_LABELS,
   ACTION_TOOL_NAMES,
+  HANDOVER_TOOL_NAME,
   MEMORY_TOOL_NAMES,
   SPLIT_TOOL_NAME,
   dispatchActionTool,
@@ -15,7 +16,25 @@ import {
   type ActionToolSource,
 } from './actions.ts';
 import { canProvideMemoryToAi, legacyVisible, type MemorySearchScope, scopeMemories, searchScopeFor } from './access_context.ts';
+import {
+  CONCEPT_DRAFT_TOOL_LABELS,
+  CONCEPT_DRAFT_TOOL_NAMES,
+  CONCEPT_DRAFT_TOOLS,
+  type ConceptDraftToolSource,
+  DRAFT_CHANGE_TOOL_NAME,
+  dispatchConceptDraftTool,
+} from './concept_draft_tools.ts';
+import { CONSULT_TOOL, CONSULT_TOOL_NAME } from './consult.ts';
 import type { MemoryDetail, MemoryRow } from './context.ts';
+import {
+  CRITERIA_TOOL_NAME,
+  dispatchOrganizeTool,
+  ORGANIZE_PROPOSE_TOOL_NAMES,
+  ORGANIZE_TOOL_LABELS,
+  ORGANIZE_TOOL_NAMES,
+  ORGANIZE_TOOLS,
+  type OrganizeToolSource,
+} from './organize.ts';
 
 export interface CurriculumOutlineQuery {
   curriculumName: string | null;
@@ -53,7 +72,7 @@ export interface BehaviorCard {
   level_contents: string[];
 }
 
-export interface ThinkToolSource extends ActionToolSource {
+export interface ThinkToolSource extends ActionToolSource, OrganizeToolSource, ConceptDraftToolSource {
   searchMemories(terms: string[], limit: number, scope?: MemorySearchScope): Promise<MemoryRow[]>;
   getMemory(id: string): Promise<MemoryDetail | null>;
   curriculumOutline(q: CurriculumOutlineQuery): Promise<CurriculumNode[]>;
@@ -143,7 +162,13 @@ export const THINK_TOOLS: AiFunctionTool[] = [
     },
   },
   ...ACTION_TOOLS,
+  CONSULT_TOOL,
+  ...ORGANIZE_TOOLS,
+  ...CONCEPT_DRAFT_TOOLS,
 ];
+
+/** 부서 협의·넘기기 도구. 부서 기능이 준비된 요청에만 준다. 협의는 chat.ts가 직접 실행한다(모델 호출이 필요해서). */
+export const DEPARTMENT_TOOL_NAMES = new Set([HANDOVER_TOOL_NAME, CONSULT_TOOL_NAME]);
 
 /** 제안을 남기거나 작업을 시작하는 도구. 커서 질문(readOnly)에는 하나도 주지 않는다. */
 export const ACTING_TOOL_NAMES = new Set([
@@ -153,21 +178,47 @@ export const ACTING_TOOL_NAMES = new Set([
   'propose_delete',
   SPLIT_TOOL_NAME,
   ...MEMORY_TOOL_NAMES,
+  ...DEPARTMENT_TOOL_NAMES,
+  ...ORGANIZE_PROPOSE_TOOL_NAMES,
+  ...CONCEPT_DRAFT_TOOL_NAMES,
 ]);
 
 /**
- * 이번 요청에 노출할 도구. 나누기·기억 제안 도구는 서버가 쓸 수 있다고 판단한 요청에만 넣는다.
+ * 이번 요청에 노출할 도구. 나누기·기억 제안·부서·정리 도구는 서버가 쓸 수 있다고 판단한 요청에만 넣는다.
+ * folder·handover는 자동 정리 제안이 꺼진 턴에 분류·넘기기 제안을 뺄 때 false로 준다(생략하면 노출).
  * readOnly(커서 질문)면 조회 도구만 준다. Think와 Cursor가 서로 일을 시키며 맴돌지 않게 한다.
+ * conceptDraft는 검토 창에서 열린 초안을 읽었을 때만 준다. 변경 도구는 저장된 검토가 있을 때만(change).
  */
-export function thinkToolsFor(opts: { split: boolean; memory?: boolean; readOnly?: boolean }): AiFunctionTool[] {
-  if (opts.readOnly) return THINK_TOOLS.filter((t) => !ACTING_TOOL_NAMES.has(t.name));
+export function thinkToolsFor(opts: {
+  split: boolean;
+  memory?: boolean;
+  departments?: boolean;
+  folder?: boolean;
+  handover?: boolean;
+  organize?: boolean;
+  criteria?: boolean;
+  readOnly?: boolean;
+  conceptDraft?: { change: boolean } | null;
+}): AiFunctionTool[] {
+  if (opts.readOnly) return THINK_TOOLS.filter((t) => !ACTING_TOOL_NAMES.has(t.name) && !ORGANIZE_TOOL_NAMES.has(t.name));
+  const draft = opts.conceptDraft ?? null;
   return THINK_TOOLS.filter((t) =>
-    (opts.split || t.name !== SPLIT_TOOL_NAME) && (opts.memory === true || !MEMORY_TOOL_NAMES.has(t.name))
+    (!CONCEPT_DRAFT_TOOL_NAMES.has(t.name) || (draft !== null && (draft.change || t.name !== DRAFT_CHANGE_TOOL_NAME))) &&
+    (opts.split || t.name !== SPLIT_TOOL_NAME) &&
+    (opts.memory === true || !MEMORY_TOOL_NAMES.has(t.name)) &&
+    (opts.departments === true || !DEPARTMENT_TOOL_NAMES.has(t.name)) &&
+    (opts.folder !== false || t.name !== 'propose_folder') &&
+    (opts.handover !== false || t.name !== HANDOVER_TOOL_NAME) &&
+    (opts.organize === true || !ORGANIZE_TOOL_NAMES.has(t.name)) &&
+    (opts.criteria === true || t.name !== CRITERIA_TOOL_NAME)
   );
 }
 
 export const TOOL_LABELS: Record<string, string> = {
   ...ACTION_TOOL_LABELS,
+  ...ORGANIZE_TOOL_LABELS,
+  ...CONCEPT_DRAFT_TOOL_LABELS,
+  [CONSULT_TOOL_NAME]: '부서 협의',
   search_memories: '기억 검색',
   get_memory: '기억 열람',
   get_curriculum_outline: '교육과정 조회',
@@ -175,6 +226,8 @@ export const TOOL_LABELS: Record<string, string> = {
   list_concept_categories: '개념 분류 조회',
   search_behavior_cards: '학습 행동 카드 조회',
   web_search: '웹 검색',
+  code_interpreter: '파이썬 실행',
+  code_sandbox: '엑셀 준비',
 };
 
 export interface ToolRunResult {
@@ -226,6 +279,8 @@ async function dispatch(
   ctx: ActionToolContext | undefined,
 ): Promise<ToolRunResult> {
   if (ACTION_TOOL_NAMES.has(name)) return await dispatchActionTool(name, args, src, ctx);
+  if (ORGANIZE_TOOL_NAMES.has(name)) return await dispatchOrganizeTool(name, args, src, ctx);
+  if (CONCEPT_DRAFT_TOOL_NAMES.has(name)) return await dispatchConceptDraftTool(name, args, src, ctx);
   switch (name) {
     case 'search_memories': {
       const query = str(args.query);
@@ -288,6 +343,8 @@ async function dispatch(
       const rows = await src.searchBehaviorCards(query, int(args.limit, 20, 1, 30));
       return { name, ok: true, output: toOutput(rows), summary: `${query ? `"${query}" ` : ''}${rows.length}건` };
     }
+    case CONSULT_TOOL_NAME:
+      return fail(name, 'consult_unavailable', '지금은 협의할 수 없음');
     default:
       return fail(name, 'unknown_tool', '알 수 없는 도구');
   }

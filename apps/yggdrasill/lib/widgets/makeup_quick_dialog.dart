@@ -12,6 +12,7 @@ import '../models/operating_hours.dart';
 import '../screens/timetable/views/classes_view.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
+import 'app_snackbar.dart';
 import 'dialog_tokens.dart';
 import 'utility_glass_dialog_shell.dart';
 
@@ -1259,10 +1260,7 @@ class _MakeupScheduleDialogState extends State<MakeupScheduleDialog> {
       Navigator.of(context).pop(true);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('보강 등록 실패: $e'),
-          backgroundColor: const Color(0xFFE53E3E),
-        ));
+        showAppSnackBar(context, '보강 등록 실패: $e');
       }
     }
   }

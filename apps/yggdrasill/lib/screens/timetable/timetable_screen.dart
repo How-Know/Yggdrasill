@@ -170,8 +170,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
   final TimetableActionFabOverlay _actionFabOverlay =
       TimetableActionFabOverlay();
   final TimetableWeekNavOverlay _weekNavOverlay = TimetableWeekNavOverlay();
-  final ValueNotifier<bool> _scheduleSidePanelOpen =
-      ValueNotifier<bool>(true);
+  final ValueNotifier<bool> _scheduleSidePanelOpen = ValueNotifier<bool>(true);
 
   void _beginCellRenderPerfTrace({
     required int dayIdx,
@@ -1357,6 +1356,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
           SolidCapsuleTextActionButton(
             tooltip: '선택',
             label: '선택',
+            height: 40,
             onPressed: () {
               setState(() => _isSelectMode = true);
             },
@@ -3050,13 +3050,9 @@ class _TimetableScreenState extends State<TimetableScreen> {
       });
       if (mounted) {
         print('[DEBUG] 클래스 스낵바 출력');
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('${_selectedGroup!.name} 클래스 시간이 등록되었습니다.'),
-            backgroundColor: const Color(0xFF1976D2),
-            behavior: SnackBarBehavior.floating,
-            margin: EdgeInsets.only(bottom: 80, left: 20, right: 20),
-          ),
+        showAppSnackBar(
+          context,
+          '${_selectedGroup!.name} 클래스 시간이 등록되었습니다.',
         );
       } else {
         print('[DEBUG] context not mounted, 클래스 스낵바 출력 불가');
@@ -3941,4 +3937,3 @@ class _BouncyDropdownButtonState extends State<_BouncyDropdownButton>
     );
   }
 }
-

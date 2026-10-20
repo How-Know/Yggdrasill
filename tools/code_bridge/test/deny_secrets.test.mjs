@@ -111,6 +111,30 @@ test('작업자 수정 모드: .git과 훅 파일은 고칠 수 없고, 깨진 �
   assert.equal(runHook(broken, { bom: true, root: ROOT }).permission, 'deny');
 });
 
+test('작업자 수정 모드의 깨진 입력: 대화 기록·첨부 경로가 아니라 읽을 대상으로 복사본 안·밖을 본다', () => {
+  const opt = { bom: true, root: ROOT };
+  const j = (p) => p.replace(/\\/g, '\\\\');
+  const transcript = `,"transcript_path":"${j('C:\\Users\\harry\\.cursor\\projects\\p\\agent-transcripts\\t.jsonl')}"`;
+  // 홀수 바이트 한글("전") 뒤에서 content의 닫는 따옴표가 사라진 모양: ..."content":"정리 기준 전�,"다음 키"...
+  const broken = (target, extra = '') =>
+    `{"hook_event_name":"beforeReadFile"${target ? `,"file_path":"${j(target)}"` : ''},"content":"정리 기준 전\uFFFD,` +
+    `${`${extra}${transcript}`.slice(1)}}`;
+  const attachment = (path) => `,"attachments":[{"type":"rule","file_path":"${j(path)}"}]`;
+
+  assert.equal(runHook(broken(`${ROOT}\\docs\\개념.md`), opt).permission, 'allow');
+  assert.equal(
+    runHook(broken(`${ROOT}\\docs\\개념.md`, attachment('C:\\Users\\harry\\.cursor\\rules\\user.mdc')), opt).permission,
+    'allow',
+  );
+  assert.equal(runHook(broken('C:\\Users\\harry\\Yggdrasill\\docs\\개념.md'), opt).permission, 'deny', '대상이 밖이면 막는다');
+  assert.equal(runHook(broken(null), opt).permission, 'deny', '대상을 못 찾으면 막는다');
+  assert.equal(
+    runHook(broken(`${ROOT}\\docs\\개념.md`, attachment(`${ROOT}\\.env`)), opt).permission,
+    'deny',
+    '첨부도 비밀 경로 검사는 받는다',
+  );
+});
+
 test('따옴표가 먹힌 beforeReadFile: 파일 내용이 아니라 경로로 판단한다', () => {
   const broken = (path) =>
     `{"hook_event_name":"beforeReadFile","file_path":"${path}","content":"entry.key 전\uFFFD, x.pem"}`;

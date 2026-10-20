@@ -17,6 +17,7 @@ class ThinkMessageTile extends StatelessWidget {
     this.onSelect,
     this.highlighted = false,
     this.onToggleExcluded,
+    this.onToggleImportant,
     this.onExcerpt,
     this.onDocument,
     this.onCodeRequest,
@@ -42,6 +43,9 @@ class ThinkMessageTile extends StatelessWidget {
 
   /// 답변 머리에만 붙는 문답 단위 동작. null이면 버튼을 숨긴다.
   final VoidCallback? onToggleExcluded;
+
+  /// 이 메시지 하나의 중요 표시(화면 표시만, AI 원칙이 되지 않음). null이면 표시만 보이고 바꿀 수 없다.
+  final VoidCallback? onToggleImportant;
   final VoidCallback? onExcerpt;
   final VoidCallback? onDocument;
   final VoidCallback? onCodeRequest;
@@ -50,7 +54,7 @@ class ThinkMessageTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final body = message.isUser
-        ? _UserBubble(message: message)
+        ? _UserBubble(message: message, onToggleImportant: onToggleImportant)
         : _AssistantBlock(
             message: message,
             roleSnapshot: roleSnapshot,
@@ -58,6 +62,7 @@ class ThinkMessageTile extends StatelessWidget {
             materialsSelected: materialsSelected,
             onSelect: onSelect,
             onToggleExcluded: onToggleExcluded,
+            onToggleImportant: onToggleImportant,
             onExcerpt: onExcerpt,
             onDocument: onDocument,
             onCodeRequest: onCodeRequest,
@@ -95,10 +100,23 @@ class ThinkMessageTile extends StatelessWidget {
   }
 }
 
-class _UserBubble extends StatelessWidget {
-  const _UserBubble({required this.message});
+const String _importantHint = '화면에서 눈여겨볼 표시입니다. Think가 지켜야 하는 원칙이 되지는 않습니다.';
+
+class _UserBubble extends StatefulWidget {
+  const _UserBubble({required this.message, this.onToggleImportant});
 
   final ThinkMessage message;
+  final VoidCallback? onToggleImportant;
+
+  @override
+  State<_UserBubble> createState() => _UserBubbleState();
+}
+
+class _UserBubbleState extends State<_UserBubble> {
+  /// 마우스를 올렸을 때만 중요 표시 버튼을 보인다(표시된 메시지는 늘 깃발이 보인다).
+  bool _hover = false;
+
+  ThinkMessage get message => widget.message;
 
   @override
   Widget build(BuildContext context) {
@@ -127,33 +145,57 @@ class _UserBubble extends StatelessWidget {
   }
 
   Widget _bubble() {
-    return Align(
-      alignment: Alignment.centerRight,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 640),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          decoration: BoxDecoration(
-            color: kThinkField,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (message.attachments.isNotEmpty) ...[
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  alignment: WrapAlignment.end,
-                  children: [for (final a in message.attachments) ThinkAttachmentChip(attachment: a)],
+    final marked = message.markedImportant;
+    final toggle = widget.onToggleImportant;
+    final showFlag = marked || (_hover && toggle != null);
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.end,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (showFlag)
+            Tooltip(
+              message: toggle == null ? '중요 표시한 메시지. $_importantHint' : (marked ? '중요 표시 지우기' : '중요 표시. $_importantHint'),
+              child: InkWell(
+                onTap: toggle,
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: Icon(marked ? Icons.flag : Icons.flag_outlined, size: 16, color: marked ? kThinkAccent : kThinkSub),
                 ),
-                const SizedBox(height: 8),
-              ],
-              Text(message.content, style: const TextStyle(color: kThinkText, fontSize: 14, height: 1.5)),
-            ],
+              ),
+            ),
+          Flexible(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 640),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                decoration: BoxDecoration(
+                  color: kThinkField,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (message.attachments.isNotEmpty) ...[
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        alignment: WrapAlignment.end,
+                        children: [for (final a in message.attachments) ThinkAttachmentChip(attachment: a)],
+                      ),
+                      const SizedBox(height: 8),
+                    ],
+                    Text(message.content, style: const TextStyle(color: kThinkText, fontSize: 14, height: 1.5)),
+                  ],
+                ),
+              ),
+            ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -167,7 +209,10 @@ class ThinkAttachmentChip extends StatelessWidget {
 
   Future<void> _open(BuildContext context) async {
     try {
-      final url = await ThinkApi.instance.signedAttachmentUrl(attachment.path);
+      final url = await ThinkApi.instance.signedAttachmentUrl(
+        attachment.path,
+        downloadName: attachment.isSpreadsheet ? attachment.name : null,
+      );
       if (context.mounted) await openThinkLink(context, url);
     } catch (e) {
       if (context.mounted) showThinkSnack(context, '첨부 파일을 열지 못했습니다: $e', error: true);
@@ -192,9 +237,17 @@ class ThinkAttachmentChip extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(
-                attachment.isImage ? Icons.image_outlined : Icons.picture_as_pdf_outlined,
+                attachment.isImage
+                    ? Icons.image_outlined
+                    : attachment.isSpreadsheet
+                        ? Icons.table_chart_outlined
+                        : Icons.picture_as_pdf_outlined,
                 size: 16,
-                color: attachment.isImage ? kThinkLink : kThinkError,
+                color: attachment.isImage
+                    ? kThinkLink
+                    : attachment.isSpreadsheet
+                        ? kThinkSuccess
+                        : kThinkError,
               ),
               const SizedBox(width: 8),
               ConstrainedBox(
@@ -233,6 +286,7 @@ class _AssistantBlock extends StatelessWidget {
     this.materialsSelected = false,
     this.onSelect,
     this.onToggleExcluded,
+    this.onToggleImportant,
     this.onExcerpt,
     this.onDocument,
     this.onCodeRequest,
@@ -245,6 +299,7 @@ class _AssistantBlock extends StatelessWidget {
   final bool materialsSelected;
   final VoidCallback? onSelect;
   final VoidCallback? onToggleExcluded;
+  final VoidCallback? onToggleImportant;
   final VoidCallback? onExcerpt;
   final VoidCallback? onDocument;
   final VoidCallback? onCodeRequest;
@@ -289,6 +344,10 @@ class _AssistantBlock extends StatelessWidget {
                 child: ThinkBadge('답변에서 제외됨'),
               ),
             ],
+            if (message.markedImportant) ...[
+              const SizedBox(width: 8),
+              const Tooltip(message: _importantHint, child: ThinkBadge('중요', color: kThinkAccent)),
+            ],
             const Spacer(),
             if (onSelect != null)
               Semantics(
@@ -301,6 +360,15 @@ class _AssistantBlock extends StatelessWidget {
                   icon: const Icon(Icons.library_books_outlined),
                   onPressed: onSelect,
                 ),
+              ),
+            if (onToggleImportant != null)
+              IconButton(
+                tooltip: message.markedImportant ? '중요 표시 지우기' : '중요 표시 (화면 표시만, Think의 원칙이 되지 않음)',
+                visualDensity: VisualDensity.compact,
+                iconSize: 16,
+                color: message.markedImportant ? kThinkAccent : kThinkSub,
+                icon: Icon(message.markedImportant ? Icons.flag : Icons.flag_outlined),
+                onPressed: onToggleImportant,
               ),
             if (onToggleExcluded != null)
               IconButton(
@@ -373,6 +441,18 @@ class _AssistantBlock extends StatelessWidget {
           const SizedBox(height: 12),
         ],
         if (message.content.trim().isNotEmpty) ThinkMarkdown(message.content),
+        if (message.attachments.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          Tooltip(
+            message: 'Think가 만든 파일입니다. 눌러서 내려받으세요.',
+            waitDuration: const Duration(milliseconds: 400),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [for (final a in message.attachments) ThinkAttachmentChip(attachment: a)],
+            ),
+          ),
+        ],
         if (message.relay != null) ...[
           const SizedBox(height: 12),
           _RelayVerdictBox(verdict: message.relay!),

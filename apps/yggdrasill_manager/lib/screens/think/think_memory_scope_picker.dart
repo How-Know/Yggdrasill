@@ -5,7 +5,7 @@ import 'think_style.dart';
 
 IconData thinkDepartmentIcon(ThinkDepartmentId d) => switch (d) {
       ThinkDepartmentId.education => Icons.school_outlined,
-      ThinkDepartmentId.product => Icons.dashboard_customize_outlined,
+      ThinkDepartmentId.product => Icons.quiz_outlined,
       ThinkDepartmentId.engineering => Icons.code,
     };
 

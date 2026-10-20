@@ -136,6 +136,18 @@ class ConceptService {
     return _client.from('concepts').delete().eq('id', id);
   }
 
+  /// 개념 하나를 읽는다(화면에서 열 때). 지웠거나 볼 수 없으면 null.
+  Future<ConceptItem?> fetchConcept(String id) async {
+    final row = await _client.from('concepts').select().eq('id', id).maybeSingle();
+    return row == null ? null : ConceptItem.fromMap(Map<String, dynamic>.from(row));
+  }
+
+  /// 이름·종류만 읽는다(화면 표시용, 본문 없음). 지웠거나 볼 수 없으면 null.
+  Future<ConceptItem?> fetchConceptHeader(String id) async {
+    final row = await _client.from('concepts').select('id,kind,sub_type,name,level').eq('id', id).maybeSingle();
+    return row == null ? null : ConceptItem.fromMap(Map<String, dynamic>.from(row));
+  }
+
   Future<void> moveConcept({
     required String conceptId,
     required String toCategoryId,

@@ -1,0 +1,22 @@
+---
+description: Guidance for textbook answer/solution protection and the problem review (문항검수) flow
+globs: supabase/migrations/**,gateway/src/textbook/**,gateway/src/problem_bank_api.js,apps/yggdrasill_manager/lib/**/*textbook*,tools/db_test/**/*textbook*
+alwaysApply: false
+---
+
+# Textbook Review Guidance
+
+When changing textbook answers, solution refs, crop sync, or the review tables
+and RPCs (`textbook_review_*`), first read `docs/architecture/textbook-review.md`.
+
+- Human corrections (`answer_source = 'manual'`, solution refs with `edited_at`)
+  must survive machine re-runs. Do not bypass the guard; only
+  `textbook_review_release_manual` may set `yggdrasill.manual_override`.
+- Machines open findings with proposals; only an owner action changes data.
+  Never auto-apply a proposal.
+- Owner decisions send the fingerprint the screen showed. A proposal whose base
+  changed is refused even after reload; the owner uses a manual edit instead.
+- Decisions are append-only. Never update or delete `textbook_review_decisions`.
+- Never change the source PDF. Record source errors as correction notes.
+- Student code must not read review tables or functions.
+- The manager tab is Preview-only until the owner approves it (design-system rule).

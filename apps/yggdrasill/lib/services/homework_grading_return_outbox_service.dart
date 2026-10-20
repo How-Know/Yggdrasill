@@ -272,8 +272,12 @@ class HomeworkGradingReturnOutboxService {
       whereArgs: [draft.id],
     );
     try {
+      final hasGradingLock =
+          '${draft.payload['grading_lock_token'] ?? ''}'.trim().isNotEmpty;
       final raw = await Supabase.instance.client.rpc(
-        'homework_commit_structured_grading_return_v2',
+        hasGradingLock
+            ? 'homework_commit_structured_grading_return_v3'
+            : 'homework_commit_structured_grading_return_v2',
         params: {'p_payload': draft.payload},
       );
       final row =

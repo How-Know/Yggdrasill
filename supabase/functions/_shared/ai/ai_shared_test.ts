@@ -1,6 +1,6 @@
 import { assert, assertEquals } from 'jsr:@std/assert@1';
 import { estimateCostUsd, modelFor, priceFor, reasoningFor } from './config.ts';
-import { OpenAiResponsesProvider, buildResponsesBody } from './openai.ts';
+import { backgroundPollOf, buildBackgroundBody, buildResponsesBody, OpenAiResponsesProvider } from './openai.ts';
 import { extractSearchTerms } from './search_terms.ts';
 import { readSse } from './sse.ts';
 import type { AiStreamEvent } from './types.ts';
@@ -8,7 +8,7 @@ import type { AiStreamEvent } from './types.ts';
 const env = (vars: Record<string, string>) => ({ get: (k: string) => vars[k] });
 
 Deno.test('모델 이름과 추론 강도는 환경변수로 바꾼다', () => {
-  assertEquals(modelFor('primary', env({})), 'gpt-6-sol');
+  assertEquals(modelFor('primary', env({})), 'gpt-6.1-sol');
   assertEquals(modelFor('deep', env({ AI_MODEL_REASONING: 'gpt-6-astra-x' })), 'gpt-6-astra-x');
   assertEquals(modelFor('fast', env({ AI_MODEL_FAST: 'my-model' })), 'my-model');
   assertEquals(reasoningFor('fast', env({})), 'none');
@@ -18,6 +18,8 @@ Deno.test('비용: 캐시·캐시 쓰기·출력·웹 검색을 나눠 계산한
   const usage = { inputTokens: 200_000, cachedInputTokens: 80_000, cacheWriteTokens: 20_000, outputTokens: 20_000, reasoningTokens: 10_000 };
   // gpt-6-sol: (100k*2 + 80k*0.2 + 20k*2.5 + 20k*10) / 1M + 2*0.01
   assertEquals(estimateCostUsd('gpt-6-sol', usage, 2, env({})), 0.486);
+  // gpt-6.1-sol은 캐시 입력만 더 싸다: (100k*2 + 80k*0.1 + 20k*2.5 + 20k*10) / 1M + 2*0.01
+  assertEquals(estimateCostUsd('gpt-6.1-sol', usage, 2, env({})), 0.478);
   assertEquals(estimateCostUsd('unknown-model', usage, 0, env({})), null);
   assert(priceFor('gpt-6-sol-2026-08-01', env({})) !== null);
   const override = env({ AI_PRICING_JSON: JSON.stringify({ 'x-model': { input: 1, cachedInput: 0, cacheWrite: 0, output: 0 } }) });
@@ -142,6 +144,58 @@ Deno.test('OpenAI 스트림: 중간 설명, 도구 호출, 출처, 사용량을 
   assertEquals(r.messages[1].sources, [{ url: 'https://ex.com', title: 'Ex' }]);
   assertEquals(r.usage, { inputTokens: 10, cachedInputTokens: 4, cacheWriteTokens: 0, outputTokens: 5, reasoningTokens: 2 });
   assert(r.replay.kind === 'provider_items' && r.replay.items.length === output.length);
+});
+
+Deno.test('OpenAI 백그라운드: store:true 로 시작하고, 상태를 읽고, 취소·삭제 주소를 부른다', async () => {
+  const calls: { method: string; url: string; body: Record<string, unknown> | null }[] = [];
+  const replies: Record<string, unknown>[] = [
+    { id: 'resp_bg', status: 'queued' },
+    { id: 'resp_bg', status: 'in_progress' },
+    {
+      id: 'resp_bg',
+      status: 'completed',
+      model: 'gpt-6.1-sol',
+      output: [{ type: 'message', id: 'm1', role: 'assistant', content: [{ type: 'output_text', text: '{"a":1}' }] }],
+      usage: { input_tokens: 10, output_tokens: 5 },
+    },
+    {},
+    {},
+  ];
+  const fetchImpl = ((url: string, init?: RequestInit) => {
+    calls.push({ method: String(init?.method), url, body: init?.body ? JSON.parse(String(init.body)) : null });
+    return Promise.resolve(new Response(JSON.stringify(replies[calls.length - 1]), { status: 200 }));
+  }) as typeof fetch;
+  const bg = new OpenAiResponsesProvider({ apiKey: 'sk-test', fetchImpl }).background;
+
+  assertEquals(await bg.start({ model: 'gpt-6.1-sol', input: [], maxOutputTokens: 100 }, { metadata: { feature: 'x' } }), { id: 'resp_bg' });
+  assertEquals(calls[0].body?.background, true);
+  assertEquals(calls[0].body?.store, true);
+  assertEquals(calls[0].body?.stream, false);
+  assertEquals(calls[0].body?.metadata, { feature: 'x' });
+  assertEquals((await bg.poll('resp_bg')).state, 'running');
+  const done = await bg.poll('resp_bg');
+  assert(done.state === 'done');
+  assertEquals(done.result.status, 'completed');
+  assertEquals(done.result.usage.outputTokens, 5);
+  await bg.cancel('resp_bg');
+  await bg.remove('resp_bg');
+  assertEquals(calls.map((c) => `${c.method} ${c.url.replace('https://api.openai.com/v1', '')}`), [
+    'POST /responses',
+    'GET /responses/resp_bg',
+    'GET /responses/resp_bg',
+    'POST /responses/resp_bg/cancel',
+    'DELETE /responses/resp_bg',
+  ]);
+});
+
+Deno.test('OpenAI 백그라운드 상태: 실패·취소·미완료를 나눈다', () => {
+  assertEquals(backgroundPollOf({ status: 'failed', error: { message: 'boom' } }, 'openai'), { state: 'failed', error: 'boom' });
+  assertEquals(backgroundPollOf({ status: 'cancelled' }, 'openai'), { state: 'failed', error: 'cancelled' });
+  const cut = backgroundPollOf({ status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output: [] }, 'openai');
+  assert(cut.state === 'done');
+  assertEquals(cut.result.status, 'incomplete');
+  assertEquals(cut.result.incompleteReason, 'max_output_tokens');
+  assertEquals(buildBackgroundBody({ model: 'm', input: [] }).metadata, undefined);
 });
 
 Deno.test('OpenAI 오류 응답은 메시지와 상태 코드를 담은 예외가 된다', async () => {

@@ -1,12 +1,9 @@
 part of '../homework_assign_dialog.dart';
 
-/// 알림장 디자인 비교용. 실제 데이터 없이 모든 칸이 채워진 견본을 그린다.
+/// 실제 데이터 없이 모든 칸이 채워진 알림장 견본을 그린다.
 @visibleForTesting
-Future<List<int>> renderTodoSheetSample(TodoSheetDesign design) {
-  final payload = _todoSheetSamplePayload();
-  return design == TodoSheetDesign.refined
-      ? _renderTodoSheetRefined(payload)
-      : _renderTodoSheetClassic(payload);
+Future<List<int>> renderTodoSheetSample() {
+  return _renderTodoSheetRefined(_todoSheetSamplePayload());
 }
 
 _TodoSheetPayload _todoSheetSamplePayload() {

@@ -1,26 +1,8 @@
 part of '../homework_assign_dialog.dart';
 
-/// 알림장 인쇄 디자인. classic 은 기존 그대로, refined 는 같은 구성을 카드형으로 새로 그린 것.
-enum TodoSheetDesign { classic, refined }
-
-const String _kTodoSheetDesignPrefKey = 'todo_sheet_design';
-
-Future<TodoSheetDesign> loadTodoSheetDesign() async {
-  try {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_kTodoSheetDesignPrefKey);
-    return raw == TodoSheetDesign.refined.name
-        ? TodoSheetDesign.refined
-        : TodoSheetDesign.classic;
-  } catch (_) {
-    return TodoSheetDesign.classic;
-  }
-}
-
-Future<void> saveTodoSheetDesign(TodoSheetDesign design) async {
-  final prefs = await SharedPreferences.getInstance();
-  await prefs.setString(_kTodoSheetDesignPrefKey, design.name);
-}
+/// 접는 눈금. 한가운데보다 4mm 아래.
+/// 5mm는 접었을 때 주름보다 1mm 아래로 보였다.
+const double _todoSheetFoldDrop = 4 * 72 / 25.4;
 
 class _RefinedInk {
   static final ink = sf.PdfColor(29, 29, 31);
@@ -165,7 +147,7 @@ Future<List<int>> _renderTodoSheetRefined(_TodoSheetPayload payload) async {
   final right = size.width - 10;
   final width = right - left;
   final bottom = size.height - 6;
-  final foldY = size.height / 2;
+  final foldY = size.height / 2 + _todoSheetFoldDrop;
   const cardGap = 10.0;
   const cardRadius = 14.0;
   const pad = 14.0;
@@ -177,7 +159,7 @@ Future<List<int>> _renderTodoSheetRefined(_TodoSheetPayload payload) async {
       sf.PdfStringFormat(alignment: sf.PdfTextAlignment.center);
   final whiteBrush = sf.PdfSolidBrush(_RefinedInk.white);
   final cardBrush = sf.PdfSolidBrush(_RefinedInk.card);
-  final dividerPen = sf.PdfPen(_RefinedInk.white, width: 1.4);
+  final dividerPen = sf.PdfPen(_RefinedInk.white, width: 1);
 
   void text(
     sf.PdfGraphics gr,
@@ -352,7 +334,9 @@ Future<List<int>> _renderTodoSheetRefined(_TodoSheetPayload payload) async {
 
   // ── 1쪽 위: 수업 요약 카드 · 학습 기록 카드 ──
   const upperTop = 105.0;
-  final upperBottom = foldY - 11;
+  // 접는 눈금과 위 카드(수업 요약·학습 기록) 사이. 11의 1.5배.
+  const upperGap = 16.5;
+  final upperBottom = foldY - upperGap;
   const summaryCardW = 332.0;
   final summaryRect =
       Rect.fromLTRB(left, upperTop, left + summaryCardW, upperBottom);
@@ -371,7 +355,9 @@ Future<List<int>> _renderTodoSheetRefined(_TodoSheetPayload payload) async {
   final donutCy = summaryBodyTop + donutR + 2;
   final legendX = summaryRect.left + pad + donutR * 2 + 20;
   final legendRight = summaryRect.right - pad;
-  final legendLimitY = summaryRect.bottom - 48;
+  // 아래쪽은 학습 Flow와 특이 사항. 목록이 길어도 Flow 한 줄과 특이 사항은 남긴다.
+  const flowReserve = 112.0;
+  final legendLimitY = summaryRect.bottom - flowReserve;
 
   final hasDonut = !(donutEntries.isEmpty && totalLearningMs <= 0);
   double legendBottomY = summaryBodyTop;
@@ -496,41 +482,175 @@ Future<List<int>> _renderTodoSheetRefined(_TodoSheetPayload payload) async {
     legendBottomY = ly;
   }
   {
-    // 특이 사항: 도넛·범례 아래, 흰 구분선 다음.
-    final notesTop = math.max(
-            hasDonut ? donutCy + donutR : summaryBodyTop + 16,
-            legendBottomY) +
-        13;
-    final nx = summaryRect.left + pad;
-    final nw = summaryRect.width - pad * 2;
-    divider(g, nx, nx + nw, notesTop - 7);
-    text(g, '특이 사항', 'smallBold', _RefinedInk.secondary, nx, notesTop, nw);
-    double ny = notesTop + 15;
-    final notesLimitY = summaryRect.bottom - 10;
-    if (payload.specialNotes.isEmpty) {
-      text(g, '특이 사항이 없습니다.', 'sub', _RefinedInk.tertiary, nx, ny, nw);
+    // 학습 Flow: 수업 요약(도넛·목록) 아래.
+    final flowTop = math.max(
+          hasDonut ? donutCy + donutR + 6 : summaryBodyTop + 18,
+          legendBottomY + 6,
+        ) +
+        8;
+    final ix = summaryRect.left + pad;
+    final iw = summaryRect.width - pad * 2;
+    // 카드 아래는 특이 사항. Flow는 그 위에서 끝낸다.
+    const notesBand = 52.0;
+    final limitY = summaryRect.bottom - notesBand;
+    divider(g, ix, ix + iw, flowTop - 7);
+    var ry = flowTop;
+    text(g, '학습 Flow', 'smallBold', _RefinedInk.secondary, ix, ry, iw);
+    ry += 15;
+    final rec = payload.lessonRecord;
+    if (rec != null && rec.problemRecordCoverage == 'partial' && ry + 12 <= limitY) {
+      text(g, '* 문항 기록이 없는 교재는 문항 수에서 빠짐', 'tiny',
+          _RefinedInk.tertiary, ix, ry, iw);
+      ry += 12;
+    }
+    var flowBottom = ry;
+    if (rec == null || rec.flows.isEmpty) {
+      if (ry + 13 <= limitY) {
+        text(g, '오늘 과제에 연결된 Flow 없음', 'small', _RefinedInk.tertiary, ix,
+            ry, iw);
+        flowBottom = ry + 13;
+      }
     } else {
-      for (int i = 0; i < payload.specialNotes.length; i++) {
-        final remaining = payload.specialNotes.length - i;
-        if (ny + 14 + (remaining > 1 ? overflowH : 0) > notesLimitY) {
-          overflow(g, nx, ny, nw, remaining);
-          break;
+      final nameCounts = <String, int>{};
+      for (final f in rec.flows) {
+        final key = '${f.flowName}|${f.bookName ?? ''}';
+        nameCounts[key] = (nameCounts[key] ?? 0) + 1;
+      }
+      String flowLabel(LessonRecordFlowProgress f) {
+        final flowName = f.flowName.trim().isEmpty ? 'Flow' : f.flowName.trim();
+        final book = (f.bookName ?? '').trim();
+        if (book.isEmpty) return flowName;
+        final grade = (f.gradeLabel ?? '').trim();
+        final dup = (nameCounts['${f.flowName}|${f.bookName ?? ''}'] ?? 0) > 1;
+        return dup && grade.isNotEmpty
+            ? '$flowName · $book ($grade)'
+            : '$flowName · $book';
+      }
+
+      void drawFlowItem(
+          LessonRecordFlowProgress flow, double x, double y, double w) {
+        final pct = flow.progressPercent;
+        final todayPct = pct == null
+            ? 0.0
+            : (flow.todayPercent ?? 0).clamp(
+                0.0, 100.0 - (flow.beforePercent ?? pct).clamp(0.0, 100.0));
+        final rightText = pct == null
+            ? (flow.completed ? '완료' : '진행 중')
+            : '${pct.round()}%';
+        final rightW = widthOf(rightText, 'smallBold') + 2;
+        final todayText =
+            pct != null && todayPct > 0 ? '+${todayPct.round()}%' : '';
+        final todayW =
+            todayText.isEmpty ? 0.0 : widthOf(todayText, 'smallBold') + 2;
+        text(g, flowLabel(flow), 'rowTitle', _RefinedInk.ink, x, y,
+            math.max(0.0, w - rightW - todayW - 10));
+        text(
+            g,
+            rightText,
+            'smallBold',
+            pct == null && flow.completed
+                ? _RefinedInk.accent
+                : _RefinedInk.secondary,
+            x + w - rightW,
+            y + 1,
+            rightW,
+            format: rightAlign);
+        if (todayW > 0) {
+          text(g, todayText, 'smallBold', _RefinedInk.accent,
+              x + w - rightW - 4 - todayW, y + 1, todayW,
+              format: rightAlign);
         }
-        g.drawEllipse(Rect.fromLTWH(nx + 0.5, ny + 4.6, 4, 4),
-            brush: sf.PdfSolidBrush(_RefinedInk.alert));
-        text(g, payload.specialNotes[i], 'sub', _RefinedInk.ink, nx + 10, ny,
-            nw - 10);
-        ny += 14;
+        if (pct != null) {
+          final beforePct = (flow.beforePercent ?? pct).clamp(0.0, 100.0);
+          progressBar(g,
+              x: x,
+              y: y + 16,
+              w: w,
+              previousPct: beforePct,
+              todayPct: todayPct,
+              h: 4);
+        }
+      }
+
+      double flowRowHeight(LessonRecordFlowProgress flow) =>
+          flow.progressPercent != null ? 25.0 : 17.0;
+
+      bool flowFits(double y, double rowH, int remaining) =>
+          y + rowH + (remaining > 1 ? 13 : 0) <= limitY + 6;
+
+      // 한 줄에 들어가면 가로로 둔다. 폭이 부족하면 두 칸으로 나눠 아래로 쌓는다.
+      const flowGap = 8.0;
+      const minFlowW = 100.0;
+      final flows = rec.flows;
+      final oneRow = flows.length == 1 ||
+          flows.length * minFlowW + (flows.length - 1) * flowGap <= iw;
+      if (oneRow) {
+        final rowH = flows.map(flowRowHeight).reduce(math.max);
+        if (ry + rowH > limitY + 6) {
+          overflow(g, ix, ry, iw, flows.length);
+          flowBottom = ry + overflowH;
+        } else {
+          final itemW =
+              (iw - flowGap * (flows.length - 1)) / flows.length;
+          for (int i = 0; i < flows.length; i++) {
+            drawFlowItem(
+                flows[i], ix + i * (itemW + flowGap), ry, itemW);
+          }
+          flowBottom = ry + rowH;
+        }
+      } else {
+        final colW = (iw - flowGap) / 2;
+        final colY = <double>[ry, ry];
+        for (int i = 0; i < flows.length; i++) {
+          final col = i.isEven ? 0 : 1;
+          final rowH = flowRowHeight(flows[i]);
+          final y = colY[col];
+          final x = ix + col * (colW + flowGap);
+          final remaining = flows.length - i;
+          if (!flowFits(y, rowH, remaining)) {
+            overflow(g, x, y, colW, remaining);
+            colY[col] = y + overflowH;
+            break;
+          }
+          drawFlowItem(flows[i], x, y, colW);
+          colY[col] = y + rowH;
+        }
+        flowBottom = math.max(colY[0], colY[1]);
+      }
+    }
+
+    final notesTop = flowBottom + 14;
+    final notesLimitY = summaryRect.bottom - 8;
+    if (notesTop + 12 <= notesLimitY) {
+      divider(g, ix, ix + iw, notesTop - 7);
+      text(g, '특이 사항', 'smallBold', _RefinedInk.secondary, ix, notesTop, iw);
+      double ny = notesTop + 15;
+      if (payload.specialNotes.isEmpty) {
+        text(g, '특이 사항이 없습니다.', 'sub', _RefinedInk.tertiary, ix, ny, iw);
+      } else {
+        for (int i = 0; i < payload.specialNotes.length; i++) {
+          final remaining = payload.specialNotes.length - i;
+          if (ny + 14 + (remaining > 1 ? overflowH : 0) > notesLimitY) {
+            overflow(g, ix, ny, iw, remaining);
+            break;
+          }
+          g.drawEllipse(Rect.fromLTWH(ix + 0.5, ny + 4.6, 4, 4),
+              brush: sf.PdfSolidBrush(_RefinedInk.alert));
+          text(g, payload.specialNotes[i], 'sub', _RefinedInk.ink, ix + 10, ny,
+              iw - 10);
+          ny += 14;
+        }
       }
     }
   }
 
-  // 학습 기록: 큰 숫자 두 개, 흰 타일 네 개, Flow 막대.
+  // 학습 기록: 큰 숫자 네 개, 그 아래 흰 타일.
   {
     final bodyTop = cardTitle(g, recordRect, '학습 기록');
     final ix = recordRect.left + 12;
     final iw = recordRect.width - 24;
     final rec = payload.lessonRecord;
+    const tileH = 39.0;
     if (rec == null) {
       text(g, '학습 기록 없음', 'body', _RefinedInk.tertiary, ix, bodyTop, iw);
     } else {
@@ -540,6 +660,26 @@ Future<List<int>> _renderTodoSheetRefined(_TodoSheetPayload payload) async {
       final corrTotal = rec.correctionRequiredCount;
       final corrDone =
           math.min(rec.correctionSuccessCount ?? 0, corrTotal ?? 0);
+      final accuracy = solved == null || firstTry == null || solved <= 0
+          ? null
+          : '${(math.min(firstTry, solved) * 100 / solved).round()}';
+      // 완료 문항은 오늘 푼 문항 중 하원까지 정답인 수다. 오늘 고친 문항은 여기에 포함된다.
+      final completed = rec.passedProblemCount;
+      final String? paceText;
+      final String paceUnit;
+      if (solved == null) {
+        paceText = null;
+        paceUnit = '기록 없음';
+      } else if (stayMs <= 0 || completed == null || completed <= 0) {
+        paceText = null;
+        paceUnit = '없음';
+      } else {
+        final minutes = stayMs / 60000 / completed;
+        paceText = minutes >= 10
+            ? minutes.toStringAsFixed(0)
+            : minutes.toStringAsFixed(1);
+        paceUnit = '분';
+      }
 
       void valueOrEmpty(String? big, String small,
           {required double x,
@@ -556,148 +696,85 @@ Future<List<int>> _renderTodoSheetRefined(_TodoSheetPayload payload) async {
       }
 
       final heroW = (iw - 8) / 2;
-      final hero = <(String, String?, String)>[
-        ('오늘 푼 문제', solved?.toString(), solved == null ? '기록 없음' : '문항'),
+      // 제목 잉크 6.9pt, 숫자는 좌표보다 7.5pt 아래에서 시작해 27pt에서 끝난다.
+      // 제목과 숫자 사이 10pt. 숫자 하단에서 다음 제목·흰 칸까지 24pt.
+      const titleDy = -2.0;
+      const numberDy = 7.4;
+      const heroInkBottom = numberDy + 27.0;
+      const afterNumberGap = 24.0;
+      final secondTop = bodyTop + heroInkBottom + afterNumberGap - titleDy;
+      final heroes = <(double, List<(String, String?, String)>)>[
         (
-          '평균 시도',
-          solved == null ? null : avgTries?.toStringAsFixed(1),
-          solved == null ? '기록 없음' : (avgTries == null ? '없음' : '회'),
+          bodyTop,
+          [
+            ('새로 푼 문제', solved?.toString(), solved == null ? '기록 없음' : '문항'),
+            (
+              '정답률',
+              accuracy,
+              accuracy != null ? '%' : (solved == null ? '기록 없음' : '없음'),
+            ),
+          ],
+        ),
+        (
+          secondTop,
+          [
+            (
+              '수정한 문제',
+              corrTotal == null || corrTotal <= 0 ? null : '$corrDone',
+              corrTotal == null
+                  ? '기록 없음'
+                  : (corrTotal <= 0 ? '없음' : '/ $corrTotal 성공'),
+            ),
+            (
+              '평균 수정 횟수',
+              solved == null ? null : avgTries?.toStringAsFixed(1),
+              solved == null ? '기록 없음' : (avgTries == null ? '없음' : '회'),
+            ),
+          ],
         ),
       ];
-      for (int i = 0; i < hero.length; i++) {
-        final x = ix + i * (heroW + 8);
-        text(g, hero[i].$1, 'small', _RefinedInk.secondary, x, bodyTop - 2,
-            heroW);
-        valueOrEmpty(hero[i].$2, hero[i].$3,
-            x: x - 0.5, y: bodyTop + 10, w: heroW, numFont: 'hero');
+      for (final row in heroes) {
+        for (int i = 0; i < row.$2.length; i++) {
+          final x = ix + i * (heroW + 8);
+          text(g, row.$2[i].$1, 'small', _RefinedInk.secondary, x,
+              row.$1 + titleDy, heroW);
+          valueOrEmpty(row.$2[i].$2, row.$2[i].$3,
+              x: x - 0.5, y: row.$1 + numberDy, w: heroW, numFont: 'hero');
+        }
       }
 
-      final accuracy = solved == null || firstTry == null || solved <= 0
-          ? null
-          : '${(math.min(firstTry, solved) * 100 / solved).round()}';
+      const tileGap = 6.0;
       final tiles = <(String, String?, String)>[
         (
-          '정답률',
-          accuracy,
-          accuracy != null ? '%' : (solved == null ? '기록 없음' : '없음'),
-        ),
-        (
-          '수정',
-          corrTotal == null || corrTotal <= 0 ? null : '$corrDone',
-          corrTotal == null
-              ? '기록 없음'
-              : (corrTotal <= 0 ? '없음' : '/ $corrTotal 성공'),
-        ),
-        (
-          '숙제',
+          '완료한 숙제',
           rec.homeworkTotal > 0 ? '${rec.homeworkCompleted}' : null,
           rec.homeworkTotal > 0 ? '/ ${rec.homeworkTotal}' : '없음',
         ),
         (
-          '과제',
+          '완료한 과제',
           rec.assignmentTotal > 0 ? '${rec.assignmentCompleted}' : null,
           rec.assignmentTotal > 0 ? '/ ${rec.assignmentTotal}' : '없음',
         ),
       ];
-      const tileH = 39.0;
-      const tileGap = 6.0;
       final tileW = (iw - tileGap) / 2;
-      final tilesTop = bodyTop + 54;
+      final tilesTop = secondTop + heroInkBottom + afterNumberGap;
       for (int i = 0; i < tiles.length; i++) {
-        final tx = ix + (i % 2) * (tileW + tileGap);
-        final ty = tilesTop + (i ~/ 2) * (tileH + tileGap);
-        _refinedRoundRect(g, Rect.fromLTWH(tx, ty, tileW, tileH),
+        final tx = ix + i * (tileW + tileGap);
+        _refinedRoundRect(g, Rect.fromLTWH(tx, tilesTop, tileW, tileH),
             radius: 9, brush: whiteBrush);
-        text(g, tiles[i].$1, 'tiny', _RefinedInk.tertiary, tx + 9, ty + 5.5,
-            tileW - 18);
+        text(g, tiles[i].$1, 'tiny', _RefinedInk.tertiary, tx + 9,
+            tilesTop + 5.5, tileW - 18);
         valueOrEmpty(tiles[i].$2, tiles[i].$3,
-            x: tx + 9, y: ty + 16, w: tileW - 18, numFont: 'tileValue');
+            x: tx + 9, y: tilesTop + 16, w: tileW - 18, numFont: 'tileValue');
       }
 
-      double ry = tilesTop + tileH * 2 + tileGap + 12;
-      final limitY = recordRect.bottom - 10;
-      text(g, '학습 Flow', 'smallBold', _RefinedInk.secondary, ix, ry, iw);
-      ry += 15;
-      if (rec.problemRecordCoverage == 'partial') {
-        text(g, '* 문항 기록이 없는 교재는 문항 수에서 빠짐', 'tiny',
-            _RefinedInk.tertiary, ix, ry, iw);
-        ry += 12;
-      }
-      if (rec.flows.isEmpty) {
-        text(g, '오늘 과제에 연결된 Flow 없음', 'small', _RefinedInk.tertiary, ix,
-            ry, iw);
-      } else {
-        final nameCounts = <String, int>{};
-        for (final f in rec.flows) {
-          final key = '${f.flowName}|${f.bookName ?? ''}';
-          nameCounts[key] = (nameCounts[key] ?? 0) + 1;
-        }
-        String flowLabel(LessonRecordFlowProgress f) {
-          final flowName =
-              f.flowName.trim().isEmpty ? 'Flow' : f.flowName.trim();
-          final book = (f.bookName ?? '').trim();
-          if (book.isEmpty) return flowName;
-          final grade = (f.gradeLabel ?? '').trim();
-          final dup =
-              (nameCounts['${f.flowName}|${f.bookName ?? ''}'] ?? 0) > 1;
-          return dup && grade.isNotEmpty
-              ? '$flowName · $book ($grade)'
-              : '$flowName · $book';
-        }
-
-        for (int i = 0; i < rec.flows.length; i++) {
-          final flow = rec.flows[i];
-          final pct = flow.progressPercent;
-          final rowH = pct != null ? 25.0 : 17.0;
-          final remaining = rec.flows.length - i;
-          if (ry + rowH + (remaining > 1 ? 13 : 0) > limitY + 6) {
-            overflow(g, ix, ry, iw, remaining);
-            break;
-          }
-          final todayPct = pct == null
-              ? 0.0
-              : (flow.todayPercent ?? 0).clamp(
-                  0.0, 100.0 - (flow.beforePercent ?? pct).clamp(0.0, 100.0));
-          final rightText = pct == null
-              ? (flow.completed ? '완료' : '진행 중')
-              : '${pct.round()}%';
-          final rightW = widthOf(rightText, 'smallBold') + 2;
-          final todayText = pct != null && todayPct > 0
-              ? '+${todayPct.round()}%'
-              : '';
-          final todayW =
-              todayText.isEmpty ? 0.0 : widthOf(todayText, 'smallBold') + 2;
-          text(g, flowLabel(flow), 'rowTitle', _RefinedInk.ink, ix, ry,
-              math.max(0.0, iw - rightW - todayW - 10));
-          text(
-              g,
-              rightText,
-              'smallBold',
-              pct == null && flow.completed
-                  ? _RefinedInk.accent
-                  : _RefinedInk.secondary,
-              ix + iw - rightW,
-              ry + 1,
-              rightW,
-              format: rightAlign);
-          if (todayW > 0) {
-            text(g, todayText, 'smallBold', _RefinedInk.accent,
-                ix + iw - rightW - 4 - todayW, ry + 1, todayW,
-                format: rightAlign);
-          }
-          if (pct != null) {
-            final beforePct = (flow.beforePercent ?? pct).clamp(0.0, 100.0);
-            progressBar(g,
-                x: ix,
-                y: ry + 16,
-                w: iw,
-                previousPct: beforePct,
-                todayPct: todayPct,
-                h: 4);
-          }
-          ry += rowH;
-        }
-      }
+      final paceTop = tilesTop + tileH + tileGap;
+      _refinedRoundRect(g, Rect.fromLTWH(ix, paceTop, iw, tileH),
+          radius: 9, brush: whiteBrush);
+      text(g, '문항 당 진행속도', 'tiny', _RefinedInk.tertiary, ix + 9,
+          paceTop + 5.5, iw - 18);
+      valueOrEmpty(paceText, paceUnit,
+          x: ix + 9, y: paceTop + 16, w: iw - 18, numFont: 'tileValue');
     }
   }
 
@@ -886,7 +963,7 @@ Future<List<int>> _renderTodoSheetRefined(_TodoSheetPayload payload) async {
   final right2 = size2.width - 10;
   final width2 = right2 - left;
   final bottom2 = size2.height - 6;
-  final foldY2 = size2.height / 2;
+  final foldY2 = size2.height / 2 + _todoSheetFoldDrop;
 
   text(g2, '학습 내역', 'pageTitle', _RefinedInk.ink, left - 0.5, 6, 200);
   text(

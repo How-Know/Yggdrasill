@@ -70,6 +70,64 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('부서 기능이 준비되면 4부서 칸 안에 미분류·폴더를 나눠 그린다', (tester) async {
+    final c = ThinkController.instance;
+    const ready = {'state': 'ready', 'edge': 1, 'db': 1, 'app': 1};
+    c.status = ThinkStatus.fromJson({
+      'configured': true,
+      'provider': 'openai',
+      'models': {},
+      'features': {'think_roles': ready, 'department_work': ready},
+    });
+    addTearDown(() => c.status = null);
+    c.conversations = const [
+      ThinkConversation(id: 'c1', title: '오답 유형 묶기', status: 'active', messageCount: 2, thinkRoleId: ThinkRoleId.product),
+      ThinkConversation(id: 'c2', title: '2학기 진도', status: 'active', messageCount: 2, thinkRoleId: ThinkRoleId.education),
+    ];
+    c.treeNodes = const [
+      ThinkTreeNode(
+        id: 'f1',
+        kind: ThinkTreeKind.folder,
+        title: '수업 설계',
+        sortOrder: 0,
+        version: 1,
+        department: ThinkRoleId.education,
+      ),
+      ThinkTreeNode(
+        id: 'n2',
+        kind: ThinkTreeKind.conversation,
+        title: '',
+        sortOrder: 0,
+        version: 1,
+        parentId: 'f1',
+        conversationId: 'c2',
+      ),
+    ];
+
+    await tester.pumpWidget(_host(ThinkTreePanel(onNewConversation: () {}), width: 280));
+    await tester.pump();
+
+    expect(c.departmentsReady, isTrue);
+    for (final d in ThinkRoleId.values) {
+      expect(find.text(d.label), findsOneWidget);
+    }
+    expect(find.text('쉬는 중'), findsNWidgets(4));
+    expect(find.text('정리 안 됨'), findsNothing);
+    expect(find.text('주제'), findsNothing);
+    expect(find.text('미분류'), findsOneWidget, reason: '미분류 대화가 있는 문제 풀이 칸에만');
+    expect(find.text('오답 유형 묶기'), findsOneWidget);
+    expect(find.text('수업 설계'), findsOneWidget);
+    expect(find.text('2학기 진도'), findsOneWidget);
+    expect(find.byTooltip('교육 부서 새 폴더'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    c.toggleDepartment(ThinkRoleId.education);
+    await tester.pump();
+    expect(find.text('수업 설계'), findsNothing);
+    c.toggleDepartment(ThinkRoleId.education);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('제외한 답변은 표시와 되돌리기 버튼이 보인다', (tester) async {
     final m = ThinkMessage(
       id: 'm2',

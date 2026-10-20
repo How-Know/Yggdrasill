@@ -14,17 +14,39 @@ String _preview(String text, int max) {
   return line.length <= max ? line : '${line.substring(0, max)}…';
 }
 
+String thinkDepartmentWorkFeatureReason(ThinkFeatureStatus f) => switch (f.state) {
+      ThinkFeatureState.ready =>
+        '대화 목록을 4부서로 나눠 보이고, 부서 사이로 옮기면 답변 관점도 바뀝니다. Think는 다른 부서에 협의하고 부서 넘기기를 제안할 수 있습니다. 역할 기능도 준비돼야 켜집니다.',
+      ThinkFeatureState.dbRequired =>
+        'DB 반영 필요 — 운영 DB에 마이그레이션 20261012100000_ai_think_departments.sql이 아직 없습니다. 그동안 예전 트리를 보이고 부서 협의·넘기기를 하지 않습니다.',
+      ThinkFeatureState.appUpdateRequired => '앱 업데이트 필요 — 이 앱이 부서 트리를 처리한다고 알리지 않았습니다.',
+      ThinkFeatureState.unknown => '서버가 DB 준비 여부를 확인하지 못했습니다. 확인되기 전에는 쓰지 않습니다.',
+      ThinkFeatureState.edgeMissing => 'Edge 배포 필요 — 연결된 ai_think가 부서 기능을 모르는 이전 버전입니다.',
+    };
+
+/// 부서 칸을 쓸 때 '[department] 부서 최상위'를 뜻하는 선택 값.
+String thinkRootFolderOf(ThinkRoleId department) => '$kThinkRootFolder:${department.db}';
+
+/// [thinkRootFolderOf]로 만든 값이면 그 부서.
+ThinkRoleId? thinkRootFolderDepartment(String value) =>
+    value.startsWith('$kThinkRootFolder:') ? ThinkRoleId.parse(value.substring(kThinkRootFolder.length + 1)) : null;
+
 /// 옮길 폴더를 고른다. [movingFolderId]를 주면 그 폴더와 하위 폴더는 고를 수 없다.
 /// [allowRoot]가 false면 '최상위'를 빼고 폴더만 고르게 한다.
+/// 트리가 부서 칸을 쓰면 부서별로 묶어 보이고, 최상위는 부서마다 따로 고른다([thinkRootFolderOf]).
+/// [department]를 주면 그 부서 폴더만 보인다. [currentSection]은 지금 부서 칸(현재 위치 표시용).
 Future<String?> showThinkFolderPicker(
   BuildContext context, {
   required ThinkTree tree,
   String? movingFolderId,
   String? currentParentId,
+  ThinkRoleId? currentSection,
+  ThinkRoleId? department,
   bool allowRoot = true,
   String title = '어디로 옮길까요?',
 }) {
-  final folders = tree.folders();
+  final grouped = tree.departments && department == null;
+  final folders = tree.folders(department: tree.departments ? department : null);
   Widget option(String value, String label, int depth, {bool enabled = true, bool current = false}) {
     return InkWell(
       onTap: enabled && !current ? () => Navigator.pop(context, value) : null,
@@ -34,7 +56,7 @@ Future<String?> showThinkFolderPicker(
         child: Row(
           children: [
             Icon(
-              value == kThinkRootFolder ? Icons.vertical_align_top : Icons.folder_outlined,
+              value.startsWith(kThinkRootFolder) ? Icons.vertical_align_top : Icons.folder_outlined,
               size: 16,
               color: enabled ? kThinkSub : kThinkHint,
             ),
@@ -65,15 +87,42 @@ Future<String?> showThinkFolderPicker(
         height: 360,
         child: ListView(
           children: [
-            if (allowRoot) option(kThinkRootFolder, '최상위', 0, current: currentParentId == null),
-            for (final f in folders)
-              option(
-                f.folder.id,
-                f.folder.title,
-                allowRoot ? f.depth + 1 : f.depth,
-                enabled: movingFolderId == null || !tree.isInside(f.folder.id, movingFolderId),
-                current: f.folder.id == currentParentId,
-              ),
+            if (grouped)
+              for (final d in ThinkRoleId.values) ...[
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+                  child: Text(
+                    '${d.label} 부서',
+                    style: const TextStyle(color: kThinkSub, fontSize: 12, fontWeight: FontWeight.w700),
+                  ),
+                ),
+                if (allowRoot)
+                  option(
+                    thinkRootFolderOf(d),
+                    '${d.label} 최상위',
+                    0,
+                    current: currentParentId == null && currentSection == d,
+                  ),
+                for (final f in tree.folders(department: d))
+                  option(
+                    f.folder.id,
+                    f.folder.title,
+                    allowRoot ? f.depth + 1 : f.depth,
+                    enabled: movingFolderId == null || !tree.isInside(f.folder.id, movingFolderId),
+                    current: f.folder.id == currentParentId,
+                  ),
+              ]
+            else ...[
+              if (allowRoot) option(kThinkRootFolder, '최상위', 0, current: currentParentId == null),
+              for (final f in folders)
+                option(
+                  f.folder.id,
+                  f.folder.title,
+                  allowRoot ? f.depth + 1 : f.depth,
+                  enabled: movingFolderId == null || !tree.isInside(f.folder.id, movingFolderId),
+                  current: f.folder.id == currentParentId,
+                ),
+            ],
             if (folders.isEmpty)
               const Padding(
                 padding: EdgeInsets.all(12),

@@ -1,12 +1,18 @@
 // OpenAI Responses API (POST /v1/responses) 공급자.
-// - store:false 로 호출한다. 같은 턴의 도구 반복에서는 출력 항목(암호화된 추론 포함)을 그대로 되돌려 보낸다.
+// - store:false 로 호출한다(백그라운드 호출만 store:true, 결과를 받은 뒤 지운다).
+//   같은 턴의 도구 반복에서는 출력 항목(암호화된 추론 포함)을 그대로 되돌려 보낸다.
 // - 지난 턴의 답변은 phase:"final_answer" 로 다시 넣는다.
 
+import { OpenAiCodeSandbox } from './openai_sandbox.ts';
 import { readSse } from './sse.ts';
 import {
   AiProviderError,
   emptyUsage,
+  type AiBackground,
+  type AiBackgroundPoll,
+  type AiCodeSandbox,
   type AiContentPart,
+  type AiFileCitation,
   type AiFunctionCall,
   type AiInputItem,
   type AiMessageOut,
@@ -93,6 +99,9 @@ export function buildResponsesBody(req: AiRequest, stream: boolean): Json {
     tools.push({ type: 'web_search', search_context_size: req.webSearch.contextSize ?? 'medium' });
     body.include = ['web_search_call.action.sources'];
   }
+  if (req.codeInterpreter) {
+    tools.push({ type: 'code_interpreter', container: req.codeInterpreter.containerId });
+  }
   if (tools.length > 0) {
     body.tools = tools;
     if (req.toolChoice) body.tool_choice = req.toolChoice;
@@ -117,6 +126,7 @@ function parseMessage(item: Json): AiMessageOut {
   const content = Array.isArray(item.content) ? item.content : [];
   const texts: string[] = [];
   const sources: AiSource[] = [];
+  const files: AiFileCitation[] = [];
   for (const raw of content) {
     const part = asObj(raw);
     if (!part) continue;
@@ -127,13 +137,20 @@ function parseMessage(item: Json): AiMessageOut {
         const ann = asObj(a);
         if (ann?.type === 'url_citation' && asStr(ann.url)) {
           sources.push({ url: asStr(ann.url), title: asStr(ann.title) || undefined });
+        } else if (ann?.type === 'container_file_citation' && asStr(ann.file_id) && asStr(ann.container_id)) {
+          files.push({ containerId: asStr(ann.container_id), fileId: asStr(ann.file_id), filename: asStr(ann.filename) });
         }
       }
     } else if (part.type === 'refusal') {
       texts.push(asStr(part.refusal));
     }
   }
-  return { itemId: asStr(item.id), phase: phaseOf(item), text: texts.join(''), sources };
+  return { itemId: asStr(item.id), phase: phaseOf(item), text: texts.join(''), sources, ...(files.length > 0 ? { files } : {}) };
+}
+
+function codeRunStatus(item: Json): 'running' | 'completed' | 'failed' {
+  const s = asStr(item.status);
+  return s === 'completed' ? 'completed' : s === 'failed' || s === 'incomplete' ? 'failed' : 'running';
 }
 
 export function parseUsage(raw: unknown): AiUsage {
@@ -157,6 +174,7 @@ export function parseResponse(raw: unknown, provider: string): AiResult {
   const functionCalls: AiFunctionCall[] = [];
   const webSearchQueries: string[] = [];
   let webSearchCalls = 0;
+  let codeRuns = 0;
 
   for (const rawItem of output) {
     const item = asObj(rawItem);
@@ -170,6 +188,8 @@ export function parseResponse(raw: unknown, provider: string): AiResult {
       const action = asObj(item.action);
       const query = asStr(action?.query);
       if (query) webSearchQueries.push(query);
+    } else if (item.type === 'code_interpreter_call') {
+      codeRuns += 1;
     }
   }
 
@@ -183,6 +203,7 @@ export function parseResponse(raw: unknown, provider: string): AiResult {
     functionCalls,
     webSearchCalls,
     webSearchQueries,
+    codeRuns,
     usage: parseUsage(resp.usage),
     replay: { kind: 'provider_items', provider, items: output },
   };
@@ -206,10 +227,14 @@ function errorFromBody(status: number, text: string): AiProviderError {
 
 export class OpenAiResponsesProvider implements AiProvider {
   readonly name = 'openai';
+  readonly sandbox: AiCodeSandbox;
+  readonly background: AiBackground;
   private readonly fetchImpl: typeof fetch;
 
   constructor(private readonly opts: OpenAiProviderOptions) {
     this.fetchImpl = opts.fetchImpl ?? fetch;
+    this.sandbox = new OpenAiCodeSandbox({ apiKey: opts.apiKey, baseUrl: opts.baseUrl, fetchImpl: this.fetchImpl });
+    this.background = new OpenAiBackground(opts, this.fetchImpl, this.name);
   }
 
   private async post(req: AiRequest, stream: boolean, signal?: AbortSignal): Promise<Response> {
@@ -266,6 +291,8 @@ export class OpenAiResponsesProvider implements AiProvider {
             yield { type: 'function_call_start', callId: asStr(item.call_id), name: asStr(item.name) };
           } else if (item?.type === 'web_search_call') {
             yield { type: 'web_search', itemId: asStr(item.id), status: 'searching' };
+          } else if (item?.type === 'code_interpreter_call') {
+            yield { type: 'code_run', itemId: asStr(item.id), status: 'running' };
           }
           break;
         }
@@ -287,6 +314,9 @@ export class OpenAiResponsesProvider implements AiProvider {
               status: 'completed',
               query: asStr(action?.query) || undefined,
             };
+          } else if (item?.type === 'code_interpreter_call') {
+            const status = codeRunStatus(item);
+            yield { type: 'code_run', itemId: asStr(item.id), status: status === 'running' ? 'completed' : status };
           }
           break;
         }
@@ -307,5 +337,66 @@ export class OpenAiResponsesProvider implements AiProvider {
       }
     }
     throw new AiProviderError('stream ended before completion');
+  }
+}
+
+const BACKGROUND_CALL_TIMEOUT_MS = 20_000;
+
+export function buildBackgroundBody(req: AiRequest, metadata?: Record<string, string>): Json {
+  const body = buildResponsesBody(req, false);
+  body.background = true;
+  body.store = true;
+  if (metadata && Object.keys(metadata).length > 0) body.metadata = metadata;
+  return body;
+}
+
+export function backgroundPollOf(raw: unknown, provider: string): AiBackgroundPoll {
+  const resp = asObj(raw) ?? {};
+  const status = asStr(resp.status);
+  if (status === 'queued' || status === 'in_progress') return { state: 'running', status };
+  if (status === 'completed' || status === 'incomplete') return { state: 'done', result: parseResponse(resp, provider) };
+  if (status === 'cancelled') return { state: 'failed', error: 'cancelled' };
+  const err = asObj(resp.error);
+  return { state: 'failed', error: asStr(err?.message) || asStr(err?.code) || `response ${status || 'failed'}` };
+}
+
+/** OpenAI 백그라운드 모드(background:true). 응답을 OpenAI에 저장해야 해서 store:true 로 부르고, 결과를 받으면 지운다. */
+export class OpenAiBackground implements AiBackground {
+  constructor(
+    private readonly opts: OpenAiProviderOptions,
+    private readonly fetchImpl: typeof fetch,
+    private readonly provider: string,
+  ) {}
+
+  private async call(path: string, init: RequestInit): Promise<Response> {
+    const res = await this.fetchImpl(`${this.opts.baseUrl ?? 'https://api.openai.com/v1'}${path}`, {
+      ...init,
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.opts.apiKey}` },
+      signal: AbortSignal.timeout(BACKGROUND_CALL_TIMEOUT_MS),
+    });
+    if (!res.ok) throw errorFromBody(res.status, await res.text());
+    return res;
+  }
+
+  async start(req: AiRequest, opts: { metadata?: Record<string, string> } = {}): Promise<{ id: string }> {
+    const res = await this.call('/responses', { method: 'POST', body: JSON.stringify(buildBackgroundBody(req, opts.metadata)) });
+    const id = asStr(asObj(await res.json())?.id);
+    if (!id) throw new AiProviderError('background response without id');
+    return { id };
+  }
+
+  async poll(id: string): Promise<AiBackgroundPoll> {
+    const res = await this.call(`/responses/${encodeURIComponent(id)}`, { method: 'GET' });
+    return backgroundPollOf(await res.json(), this.provider);
+  }
+
+  async cancel(id: string): Promise<void> {
+    const res = await this.call(`/responses/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
+    await res.body?.cancel();
+  }
+
+  async remove(id: string): Promise<void> {
+    const res = await this.call(`/responses/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    await res.body?.cancel();
   }
 }

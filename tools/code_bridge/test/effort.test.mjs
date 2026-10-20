@@ -45,15 +45,11 @@ test('요청 강도: medium·high·xhigh만, 비었거나 모르는 값은 high'
   assert.equal(requestEffort({}), 'high', '옛 요청');
 });
 
-test('grok-4.7: 강도만 바꾸고 나머지는 Cursor 기본 조합(500k, fast)을 따른다', () => {
+test('grok-4.7: 강도 옵션만 보내고, 목록 기본 조합(500k 등)은 보내지 않는다', () => {
   for (const e of ['medium', 'high', 'xhigh']) {
     const out = resolveModelSelection(catalog, 'grok-4.7', e);
     assert.equal(out.effort, e);
-    assert.equal(out.selection.id, 'grok-4.7');
-    assert.deepEqual(
-      [...out.selection.params].sort((a, b) => a.id.localeCompare(b.id)),
-      [{ id: 'context', value: '500k' }, { id: 'fast', value: 'true' }, { id: 'reasoning_effort', value: e }],
-    );
+    assert.deepEqual(out.selection, { id: 'grok-4.7', params: [{ id: 'reasoning_effort', value: e }] });
   }
 });
 
@@ -64,19 +60,6 @@ test('지원하지 않는 강도는 가장 가까운 값, 강도 옵션이 없�
   assert.deepEqual(resolveModelSelection(catalog, 'composer', 'high'), { selection: { id: 'composer-2.5' }, effort: null });
   assert.deepEqual(resolveModelSelection(null, 'grok-4.7', 'high'), { selection: { id: 'grok-4.7' }, effort: null });
   assert.deepEqual(resolveModelSelection(catalog, 'unknown-x', 'high'), { selection: { id: 'unknown-x' }, effort: null });
-});
-
-test('목록에 없는 조합은 만들지 않고, 강도가 맞는 실제 조합 중 기본과 가장 닮은 것을 쓴다', () => {
-  const sparse = {
-    ...grok47,
-    variants: [
-      { params: p('500k', 'high', 'true'), isDefault: true },
-      { params: p('256k', 'medium', 'false') },
-    ],
-  };
-  const out = resolveModelSelection([sparse], 'grok-4.7', 'medium');
-  assert.equal(out.effort, 'medium');
-  assert.deepEqual(out.selection.params, p('256k', 'medium', 'false'));
 });
 
 test('실제 강도: 실행 결과의 모델 옵션을 먼저 보고, 없으면 고른 값', () => {

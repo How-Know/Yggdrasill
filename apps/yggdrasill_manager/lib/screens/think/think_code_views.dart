@@ -524,16 +524,103 @@ IconData _checkIcon(ThinkCheckStatus s) => switch (s) {
       ThinkCheckStatus.preexisting => Icons.history,
     };
 
-/// 한 줄 요약. 미실행은 통과로 세지 않는다.
+/// 한 줄 요약. 판정은 필수 검사로만 정하고, 미실행은 통과로 세지 않는다.
 String thinkVerificationSummary(ThinkVerification v) => v.items.isEmpty
     ? '검사한 항목 없음'
     : [
+        v.verdictLabel,
         '통과 ${v.passed}',
         if (v.failed > 0) '실패 ${v.failed}',
         if (v.skipped > 0) '미실행 ${v.skipped}',
         if (v.preexisting > 0) '원래도 실패 ${v.preexisting}',
+        if (v.followups.isNotEmpty) '후속 확인 ${v.followups.length}',
         if (v.stopped) '중간에 멈춤',
       ].join(' · ');
+
+Color thinkVerdictColor(ThinkCheckVerdict? v) => switch (v) {
+      ThinkCheckVerdict.passed => kThinkSuccess,
+      ThinkCheckVerdict.failed => kThinkError,
+      _ => kThinkLink,
+    };
+
+/// 수정 요청의 상태를 나눠 보인다: 코드 작성 / 필수 검사 / 사용자 확인 / 작업 폴더 적용.
+/// 결과가 도착했다(ready)는 것과 검증됐다는 것은 다르다. 검사 판정은 작업자 실행 기록으로만 정한다.
+class ThinkChangeStateView extends StatelessWidget {
+  const ThinkChangeStateView({super.key, required this.request, required this.round});
+
+  final ThinkCodeRequest request;
+  final ThinkCodeRound round;
+
+  static String applyLabel(ThinkCodeStatus s, ThinkVerification? v) => switch (s) {
+        ThinkCodeStatus.ready => v?.verdict == ThinkCheckVerdict.passed
+            ? '적용 대기 (운영자 승인 필요)'
+            : '적용 대기 (필수 검사 통과 아님, 운영자 판단 필요)',
+        ThinkCodeStatus.applyQueued || ThinkCodeStatus.applying => '적용 진행 중',
+        ThinkCodeStatus.applied => '적용 완료',
+        ThinkCodeStatus.applyFailed => '적용 실패',
+        ThinkCodeStatus.revertQueued ||
+        ThinkCodeStatus.reverting ||
+        ThinkCodeStatus.reverted ||
+        ThinkCodeStatus.revertFailed =>
+          s.label,
+        _ => '적용할 수 없음',
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    final v = round.verification;
+    final files = round.diffStats?.files ?? 0;
+    final code = round.patchAppliable
+        ? '작성 완료 (파일 $files개)'
+        : round.parseOk
+            ? '바뀐 파일 없음'
+            : '결과 형식 확인 필요';
+    final String checks;
+    if (v == null) {
+      checks = '검사 기록 없음 (통과 아님)';
+    } else {
+      final env = v.envProblems;
+      checks = [
+        v.verdictLabel,
+        if (v.requiredFailed > 0) '실패 ${v.requiredFailed}',
+        if (v.verdict == ThinkCheckVerdict.notRun && v.requiredSkipped > 0) '실행 못 함 ${v.requiredSkipped}',
+        if (env.isNotEmpty) '환경 조치 필요: ${env.map((i) => i.reason ?? i.label).join('; ')}',
+      ].join(' · ');
+    }
+    final confirm = (round.result?.checks.length ?? 0) + (v?.followups.length ?? 0);
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: kThinkBg,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: thinkVerdictColor(v?.verdict).withValues(alpha: 0.5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _line('코드 작성', code, kThinkText),
+          _line('필수 검사', checks, thinkVerdictColor(v?.verdict)),
+          _line('확인할 것', confirm == 0 ? '없음' : '$confirm개 (사람이 확인할 점·후속 확인)', kThinkText),
+          _line('작업 폴더', applyLabel(request.status, v), kThinkText),
+        ],
+      ),
+    );
+  }
+
+  Widget _line(String label, String value, Color color) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(width: 72, child: Text(label, style: const TextStyle(color: kThinkHint, fontSize: 12, height: 1.5))),
+            Expanded(
+              child: Text(value,
+                  style: TextStyle(color: color, fontSize: 12, height: 1.5, fontWeight: FontWeight.w600)),
+            ),
+          ],
+        ),
+      );
+}
 
 /// 작업자 자동 검사 결과. 실패·원래도 실패 항목은 눌러서 출력 끝부분을 본다.
 class ThinkVerificationView extends StatelessWidget {
@@ -571,6 +658,9 @@ class ThinkVerificationView extends StatelessWidget {
             TextSpan(children: [
               TextSpan(text: i.label, style: const TextStyle(color: kThinkText)),
               TextSpan(text: '  ${i.status.label}', style: TextStyle(color: color, fontWeight: FontWeight.w700)),
+              if (i.followup) const TextSpan(text: ' [후속 확인]', style: TextStyle(color: kThinkHint)),
+              if (i.requested) const TextSpan(text: ' [요청한 검사]', style: TextStyle(color: kThinkHint)),
+              if (i.env) const TextSpan(text: ' [환경]', style: TextStyle(color: kThinkHint)),
               if (i.reason != null) TextSpan(text: ' · ${i.reason}', style: const TextStyle(color: kThinkSub)),
             ]),
             style: const TextStyle(fontSize: 12, height: 1.5),
@@ -598,7 +688,12 @@ class ThinkVerificationView extends StatelessWidget {
         title: head,
         children: [
           if (i.command != null)
-            SelectableText(i.command!,
+            SelectableText(
+                [
+                  i.command!,
+                  if (i.cwd != null) '폴더: ${i.cwd}',
+                  if (i.exitCode != null) '종료 코드: ${i.exitCode}',
+                ].join('  ·  '),
                 style: const TextStyle(color: kThinkHint, fontSize: 12, fontFamily: 'monospace', height: 1.5)),
           if (i.output != null)
             Container(

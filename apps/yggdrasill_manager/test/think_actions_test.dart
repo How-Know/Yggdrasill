@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:yggdrasill_manager/screens/think/think_action_cards.dart';
+import 'package:yggdrasill_manager/screens/think/think_code_views.dart';
 import 'package:yggdrasill_manager/screens/think/think_tree_panel.dart';
 import 'package:yggdrasill_manager/services/think/think_action_models.dart';
 import 'package:yggdrasill_manager/services/think/think_code_controller.dart';
@@ -231,6 +232,54 @@ void main() {
       expect(ThinkCodeRound.fromRow(_verifiedRound(_withFailure, migration: true)).touchesMigrations, isTrue);
     });
 
+    test('필수 검사 판정: 후속 확인은 빼고, 못 돌린 필수 검사는 통과가 아니다', () {
+      ThinkVerification v(List<Map<String, Object?>> items, {bool stopped = false}) =>
+          ThinkVerification.fromJson({'stopped': stopped, 'items': items})!;
+      final passedWithFollowup = v([
+        {'id': 'request:1', 'status': 'passed', 'scope': 'required', 'source': 'request', 'cwd': 'tools/gw', 'exit_code': 0},
+        {'id': 'db-test-other', 'status': 'skipped', 'scope': 'followup'},
+      ]);
+      expect(passedWithFollowup.verdict, ThinkCheckVerdict.passed);
+      expect(passedWithFollowup.clean, isTrue);
+      expect(passedWithFollowup.items.first.requested, isTrue);
+      expect(passedWithFollowup.items.first.cwd, 'tools/gw');
+      expect(passedWithFollowup.items.first.exitCode, 0);
+      expect(passedWithFollowup.followups.length, 1);
+
+      final env = v([
+        {'id': 'a', 'status': 'passed'},
+        {'id': 'node-test:gw', 'status': 'skipped', 'env': true, 'reason': 'npm ci 필요'},
+      ]);
+      expect(env.verdict, ThinkCheckVerdict.notRun);
+      expect(env.envProblems.single.reason, 'npm ci 필요');
+      expect(env.clean, isFalse);
+
+      expect(v([{'id': 'a', 'status': 'failed'}]).verdict, ThinkCheckVerdict.failed);
+      final old = v([
+        {'id': 'a', 'status': 'passed'},
+        {'id': 'b', 'status': 'preexisting'},
+      ]);
+      expect(old.verdict, ThinkCheckVerdict.passed);
+      expect(old.verdictLabel, '필수 검사 통과 (원래도 실패하던 검사 1개 제외)');
+      expect(old.clean, isFalse);
+      // 예전 기록(scope 없음): db-test-other만 후속 확인.
+      expect(v([{'id': 'db-test-other', 'status': 'skipped'}]).verdict, ThinkCheckVerdict.none);
+      expect(v([{'id': 'a', 'status': 'passed'}], stopped: true).verdict, ThinkCheckVerdict.notRun);
+    });
+
+    test('수정의 ready는 "코드 작성 완료"로 보이고 검증됐다는 문구가 아니다', () {
+      final r = ThinkCodeRequest.fromRow({
+        'id': 'r1',
+        'title': 't',
+        'request': {'goal': 'g'},
+        'status': 'ready',
+        'mode': 'change',
+        'created_at': '2026-10-13T00:00:00Z',
+      });
+      expect(r.statusLabel, '코드 작성 완료');
+      expect(ThinkChangeStateView.applyLabel(ThinkCodeStatus.ready, null), contains('통과 아님'));
+    });
+
     test('조율: 모드·상태 문구, 회차별 Think 질문, 계획 검토 결과', () {
       expect(ThinkCodeMode.parse('plan'), ThinkCodeMode.plan);
       expect(ThinkCodeMode.parse('???'), ThinkCodeMode.investigate);
@@ -397,8 +446,11 @@ void main() {
       expect(find.text('· flutter analyze lib/a.dart'), findsOneWidget);
       expect(find.text('검증 보고'), findsNothing);
       expect(find.textContaining('자동 검사 기록이 없습니다'), findsOneWidget);
+      expect(find.text('코드 작성 완료'), findsOneWidget);
+      expect(find.text('검사 기록 없음 (통과 아님)'), findsOneWidget);
       expect(tester.takeException(), isNull);
 
+      await tester.ensureVisible(find.text('작업 폴더에 적용'));
       await tester.tap(find.text('작업 폴더에 적용'));
       await tester.pumpAndSettle();
       expect(find.text('작업 폴더에 적용할까요?'), findsOneWidget);
@@ -415,9 +467,9 @@ void main() {
       c.setRoundsForTest('r1', [ThinkCodeRound.fromRow(_verifiedRound(_passedOnly))]);
       await tester.pumpWidget(_host(ThinkCodeRequestCard(request: r)));
       await tester.pump();
-      expect(find.textContaining('자동 검사 2개를 모두 통과했습니다'), findsOneWidget);
+      expect(find.textContaining('필수 검사 2개를 모두 통과했습니다'), findsOneWidget);
       expect(find.text('자동 검사'), findsOneWidget);
-      expect(find.text('통과 2'), findsOneWidget);
+      expect(find.text('필수 검사 통과 · 통과 2'), findsOneWidget);
 
       c.setRoundsForTest('r1', [
         ThinkCodeRound.fromRow(_verifiedRound([
@@ -433,7 +485,7 @@ void main() {
       await tester.ensureVisible(find.text('작업 폴더에 적용'));
       await tester.tap(find.text('작업 폴더에 적용'));
       await tester.pumpAndSettle();
-      expect(find.textContaining('미실행 검사 1개는 확인되지 않았습니다'), findsOneWidget);
+      expect(find.textContaining('실행하지 못한 필수 검사 1개는 확인되지 않았습니다'), findsOneWidget);
       expect(find.text('적용'), findsOneWidget);
       await tester.tap(find.text('취소'));
       await tester.pumpAndSettle();
@@ -447,7 +499,7 @@ void main() {
       c.setRoundsForTest('r1', [ThinkCodeRound.fromRow(_verifiedRound(_withFailure, migration: true))]);
       await tester.pumpWidget(_host(ThinkCodeRequestCard(request: r)));
       await tester.pump();
-      expect(find.textContaining('자동 검사 1개가 실패했습니다'), findsOneWidget);
+      expect(find.textContaining('필수 검사 1개가 실패했습니다'), findsOneWidget);
       expect(find.textContaining('운영 DB에 반영되지 않습니다'), findsOneWidget);
       expect(find.text('1 test failed'), findsOneWidget);
       await tester.ensureVisible(find.text('작업 폴더에 적용'));

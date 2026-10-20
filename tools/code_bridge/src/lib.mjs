@@ -1,9 +1,10 @@
 // 작업자의 순수 로직. SDK·네트워크 없이 시험한다(test/lib.test.mjs).
-import { hostname } from 'node:os';
-import { dirname, resolve } from 'node:path';
+import { hostname, tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const PROMPT_VERSION = 'code_bridge.v7';
+// v8: 수정 프롬프트에 필수 검사·사전 확인, "검사를 돌렸다고 쓰지 않는다". 조율 결과에 owner_decision_conflicts·suggested_checks.
+export const PROMPT_VERSION = 'code_bridge.v8';
 export const READ_ONLY_TOOLS = ['read', 'grep', 'glob', 'ls'];
 /** 조사·조율에서 Think에게 물을 때. 'mcp'가 있어야 customTools가 보이고, 저장소 MCP 서버도 함께 켜지므로 .cursor/mcp.json이 있으면 쓰지 않는다. */
 export const ASK_TOOLS = [...READ_ONLY_TOOLS, 'mcp'];
@@ -64,11 +65,11 @@ function closestEffort(wanted, supported) {
   return best;
 }
 
-const sameParams = (a, b) => a.length === b.length && a.every((p) => b.some((q) => q.id === p.id && q.value === p.value));
-
 /**
  * Cursor.models.list() 결과에서 모델과 강도 옵션을 고른다.
- * 강도 이외 옵션(context, fast 등)은 Cursor 기본 조합을 따른다. 목록에 없는 조합은 만들지 않는다.
+ * 강도 옵션 하나만 보낸다. 목록의 기본 조합을 그대로 보내면 실행기가 거절할 수 있다
+ * (2026-10-12 grok-4.7: 목록 기본값인 context 500k를 보내면 "Invalid parameters for registry model").
+ * 나머지 옵션(context, fast 등)은 실행기 기본값을 따른다.
  * catalog가 없거나 모델·강도 옵션을 못 찾으면 { id }만 넘기고 effort는 null(기록에 "강도 모름").
  */
 export function resolveModelSelection(catalog, modelId, wanted) {
@@ -77,18 +78,7 @@ export function resolveModelSelection(catalog, modelId, wanted) {
   const param = (item.parameters ?? []).find((p) => EFFORT_PARAM_IDS.includes(p.id));
   const picked = param ? closestEffort(wanted, (param.values ?? []).map((v) => v.value)) : null;
   if (!param || !picked) return { selection: { id: item.id }, effort: null };
-
-  const variants = (item.variants ?? []).filter((v) => Array.isArray(v.params));
-  const base = (variants.find((v) => v.isDefault) ?? variants[0])?.params ?? [];
-  let params = [...base.filter((p) => p.id !== param.id), { id: param.id, value: picked }];
-  if (variants.length > 0 && !variants.some((v) => sameParams(v.params, params))) {
-    const candidates = variants.filter((v) => v.params.some((p) => p.id === param.id && p.value === picked));
-    const score = (v) => v.params.filter((p) => base.some((q) => q.id === p.id && q.value === p.value)).length;
-    const best = candidates.sort((a, b) => score(b) - score(a))[0];
-    if (!best) return { selection: { id: item.id }, effort: null };
-    params = best.params.map((p) => ({ id: p.id, value: p.value }));
-  }
-  return { selection: { id: item.id, params }, effort: picked };
+  return { selection: { id: item.id, params: [{ id: param.id, value: picked }] }, effort: picked };
 }
 
 /** run.wait() 결과의 모델 선택에서 실제 강도. 없으면 고른 값을 그대로 쓴다. */
@@ -201,7 +191,25 @@ export function buildFollowupPrompt(job) {
   return `${buildPrompt(job)}\n\n${text(job.followup_prompt)}`;
 }
 
-export function buildChangePrompt(job) {
+/** 요청한 필수 검사와 수정 전 확인 결과. 검사는 작업자가 돌리고, Cursor는 그 검사가 통과하게 고친다. */
+function requiredChecksSection(r, preflight) {
+  const checks = objects(r.checks);
+  if (checks.length === 0) return '';
+  const pre = Array.isArray(preflight) ? preflight : [];
+  const lines = checks.map((c, i) => {
+    const p = pre[i];
+    const state = !p ? '' : p.ok ? (p.note ? ` — ${p.note}` : '') : ` — 지금은 돌릴 수 없음: ${p.problem}`;
+    return `${i + 1}. \`${text(c.command)}\` (폴더 ${text(c.cwd) || '.'})${text(c.why) ? ` · ${text(c.why)}` : ''}${state}`;
+  });
+  return `
+## 필수 검사 (수정이 끝나면 작업자가 이 복사본에서 실제로 돌린다)
+${lines.join('\n')}
+- 이 검사가 통과하도록 고치고, 검사가 볼 시험 파일(*.test.js|mjs|cjs)이 없으면 만든다. 폴더 인자는 그 아래 시험 파일 전체로 돌린다.
+- "돌릴 수 없음"인 검사는 이 PC 환경 문제다. 코드로 우회하지 말고 risks에 적는다.
+`;
+}
+
+export function buildChangePrompt(job, opts = {}) {
   const r = job.request && typeof job.request === 'object' ? job.request : {};
   const refs = Array.isArray(r.memory_refs) ? r.memory_refs : [];
   const refLines = refs
@@ -225,10 +233,13 @@ export function buildChangePrompt(job) {
   return `너는 Yggdrasill 저장소의 코드 수정 담당이다. 지금 폴더는 운영자 작업 폴더의 복사본이다. 여기서 요청대로 코드를 고친다.
 - 읽기·검색·편집·삭제 도구만 있다. 명령을 실행할 수 없다(빌드·테스트·git 불가).
 - 대신 수정이 끝나면 작업자가 이 복사본에서 자동 검사를 돌린다: 바뀐 앱의 flutter analyze·flutter test,
-  바뀐 Edge Function의 deno check·deno test, tools/code_bridge의 node --test, AI 영역 DB 함수 파일(supabase/migrations/*_ai_*.sql)은
-  일회용 시험 DB(tools/db_test, PGlite)에 처음부터 적용하고 tools/db_test/test 시험을 돌린다. 실패하면 Think가 다시 고치게 한다.
+  바뀐 Edge Function의 deno check·deno test, tools/code_bridge의 node --test, 바뀐 파일이 속한 node 폴더(가장 가까운 package.json
+  또는 test/ 폴더)의 *.test.js|mjs|cjs, AI 영역 DB 함수 파일(supabase/migrations/*_ai_*.sql)은 일회용 시험 DB(tools/db_test, PGlite)에
+  처음부터 적용하고 tools/db_test/test 시험을 돌린다. 아래 "필수 검사"가 있으면 그것도 돌린다. 이번 수정 때문에 실패하면 Think가 다시 고치게 한다.
 - 그러니 바꾼 동작은 시험으로 남긴다. 앱은 해당 앱의 test/, Edge Function은 *_test.ts, AI 영역 DB 함수는
-  tools/db_test/test/*.test.mjs(harness.mjs의 openAiTestDb 사용)에 둔다. 시험이 실제로 확인하지 않는 것을 확인했다고 쓰지 않는다.
+  tools/db_test/test/*.test.mjs(harness.mjs의 openAiTestDb 사용), node 폴더는 그 폴더의 test/*.test.mjs에 둔다.
+- 너는 검사를 돌리지 못한다. 결과 글에 "시험을 돌렸다", "통과했다", "통과할 것이다"라고 쓰지 않는다. 검사 결과는 작업자 기록으로만 보고된다.
+  시험이 실제로 확인하지 않는 것을 확인했다고 쓰지 않는다.
 - DB 함수 파일은 이미 있는 파일을 고치지 않고 새 파일을 만든다. 번호(앞 14자리)는 폴더의 마지막 번호보다 커야 하고 겹치면 안 된다.
 - 이 폴더 밖의 파일은 읽거나 쓰지 않는다. 비밀 파일(.env, env.local.json, 키 파일), .git, .cursor/hooks는 건드리지 않는다.
 - 요청 범위만 고친다. 관련 없는 리팩터링, 포맷 변경, 파일 이동은 하지 않는다.
@@ -242,7 +253,7 @@ ${fixSection(r)}${continueSection(job)}
 ${planNote}
 바꿀 내용:
 ${bullets(list(r.instructions))}
-
+${requiredChecksSection(r, opts.preflight)}
 근거가 된 조사:
 ${baseLines}
 
@@ -264,7 +275,7 @@ ${refLines.length ? refLines.join('\n') : '(없음)'}
   "summary": "무엇을 바꿨는지 한두 문장",
   "changes": [{ "path": "저장소 기준 경로", "what": "바꾼 내용" }],
   "risks": ["위험이나 확인할 점"],
-  "checks": ["자동 검사로 확인되지 않아 사람이 봐야 할 점 (예: 화면 확인, 운영 DB 반영 전 확인)"],
+  "checks": ["자동 검사로 확인되지 않아 사람이 봐야 할 점 (예: 화면 확인, 실제 데이터로 확인, 운영 DB 반영 전 확인)"],
   "questions_for_think": ["고치지 못했거나 판단이 필요한 점"]
 }`;
 }
@@ -372,6 +383,9 @@ export function buildPlanPrompt(job) {
 - 영향 범위(같이 바뀌어야 할 파일, 마이그레이션, 시험), 빠진 단계
 - 그대로 하면 생길 버그·데이터 위험·보안 문제, 더 단순하거나 안전한 방법
 - 방향이나 우선순위처럼 코드로 정할 수 없는 것은 판단하지 말고 questions_for_owner에 넣는다
+- 제약의 "운영자 결정 — "은 운영자가 이미 고른 답이다. 다시 questions_for_owner로 묻지 않는다.
+  그 결정대로 하면 코드에서 실제 문제가 생기면 owner_decision_conflicts에 근거와 함께 따로 적는다.
+- 수정 뒤 꼭 돌려야 할 node 시험이 자동 검사(앱·Edge Function·tools/code_bridge·tools/db_test·package.json 폴더) 밖에 있으면 suggested_checks에 적는다
 ${continueSection(job)}
 ## 계획 초안
 제목: ${text(job.title)}
@@ -408,14 +422,16 @@ ${refLines.length ? refLines.join('\n') : '(없음)'}
   "suggested_steps": ["네가 고친 구현 단계"],
   "risks": ["위험이나 부작용"],
   "questions_for_think": ["Think에게 되묻는 질문"],
-  "questions_for_owner": ["운영자만 정할 수 있는 것"]
+  "questions_for_owner": ["운영자만 정할 수 있는 것 (이미 정한 운영자 결정은 넣지 않는다)"],
+  "owner_decision_conflicts": [{ "decision": "부딪히는 운영자 결정", "problem": "그대로 하면 생기는 문제", "evidence": [{ "path": "경로", "lines": "10-24" }] }],
+  "suggested_checks": [{ "cwd": "저장소 기준 폴더(루트는 .)", "command": "node --test <시험 파일·폴더>", "why": "확인하는 것" }]
 }
 코드로 확인하지 못한 추측은 findings에 넣지 말고 questions_for_think에 넣는다.`;
 }
 
 /** 작업 종류에 맞는 프롬프트. askThink면 Think 묻기 규칙을 붙인다(조사·조율만). */
 export function promptFor(job, opts = {}) {
-  if (job.mode === 'change') return buildChangePrompt(job);
+  if (job.mode === 'change') return buildChangePrompt(job, opts);
   const base = job.mode === 'plan'
     ? (job.followup_prompt ? `${buildPlanPrompt(job)}\n\n${text(job.followup_prompt)}` : buildPlanPrompt(job))
     : (job.followup_prompt ? buildFollowupPrompt(job) : buildPrompt(job));
@@ -545,9 +561,32 @@ export function parseNumstat(raw) {
   return { files: files.length, additions: sum('additions'), deletions: sum('deletions'), list: files.slice(0, 200) };
 }
 
-/** 키처럼 보이는 문자열이 있으면 true. diff는 가리면 적용할 수 없으므로 올리지 않는다. */
+/**
+ * 키처럼 보이는 문자열이 있으면 true. diff는 가리면 적용할 수 없으므로 올리지 않는다.
+ * `apikey: AuthService.supabaseAnonKey`처럼 따옴표 없이 식별자를 점으로 이은 값은 코드 참조라 세지 않는다
+ * (가리기 [redact]는 그대로 가린다).
+ */
 export function looksSecret(value) {
-  return typeof value === 'string' && redact(value) !== value;
+  if (typeof value !== 'string' || !value) return false;
+  for (const [re] of REDACTIONS) {
+    if (re !== ASSIGNED_SECRET) {
+      if (value.search(re) >= 0) return true;
+      continue;
+    }
+    for (const m of value.matchAll(re)) {
+      if (/["']$/.test(m[1]) || !isCodeReference(m[0].slice(m[1].length))) return true;
+    }
+  }
+  return false;
+}
+
+const CODE_REFERENCE = /^[A-Za-z_$][\w$]*(?:\??\.[A-Za-z_$][\w$]*)+[()[\]!]*$/;
+// 숫자·대문자·소문자가 섞인 16자 이상 조각은 식별자가 아니라 무작위 값으로 본다(SG.xxx.yyy 같은 키).
+const RANDOM_SEGMENT = /^(?=.*\d)(?=.*[a-z])(?=.*[A-Z])[\w$]{16,}$/;
+
+function isCodeReference(value) {
+  if (value.startsWith('eyJ') || !CODE_REFERENCE.test(value)) return false;
+  return !value.split(/[?.()[\]!]+/).some((segment) => RANDOM_SEGMENT.test(segment));
 }
 
 function lastJsonBlock(raw) {
@@ -612,9 +651,21 @@ export function parsePlanResult(raw) {
         .filter((i) => i.problem || i.suggestion),
       suggested_steps: list(data.suggested_steps),
       questions_for_owner: list(data.questions_for_owner),
+      owner_decision_conflicts: objects(data.owner_decision_conflicts)
+        .map((c) => ({
+          decision: text(c.decision),
+          problem: text(c.problem),
+          evidence: objects(c.evidence).map((e) => ({ path: text(e.path), lines: text(e.lines) })).filter((e) => e.path),
+        }))
+        .filter((c) => c.problem),
+      suggested_checks: objects(data.suggested_checks)
+        .map((c) => ({ cwd: text(c.cwd) || '.', command: text(c.command), why: text(c.why) }))
+        .filter((c) => c.command),
     },
   };
 }
+
+const ASSIGNED_SECRET = /((?:api[_-]?key|secret|token|password|passwd)["']?\s*[:=]\s*["']?)[^\s"'`,;]{12,}/gi;
 
 const REDACTIONS = [
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, '[가림: 개인 키]'],
@@ -622,7 +673,7 @@ const REDACTIONS = [
   [/\bsb_(?:secret|publishable)_[A-Za-z0-9_-]{10,}/g, '[가림: 키]'],
   [/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g, '[가림: 토큰]'],
   [/\b(ghp|gho|github_pat|xox[abp])_[A-Za-z0-9_]{20,}/g, '[가림: 토큰]'],
-  [/((?:api[_-]?key|secret|token|password|passwd)["']?\s*[:=]\s*["']?)[^\s"'`,;]{12,}/gi, '$1[가림]'],
+  [ASSIGNED_SECRET, '$1[가림]'],
 ];
 
 /** 결과를 DB에 올리기 전에 키처럼 보이는 문자열을 가린다. */
@@ -634,6 +685,20 @@ export function redact(value) {
 export function redactDeep(value) {
   if (value == null) return value;
   return JSON.parse(redact(JSON.stringify(value)));
+}
+
+// SDK 기본 위치(~/.cursor/projects/<복사본 경로>/sdk-agent-store/<64>/agents/agent-<64>/store.db)는
+// 복사본이 %TEMP% 아래라 Windows 260자를 넘는다. node:sqlite는 긴 경로를 못 열어, 대화가 저장되지 않고
+// 턴마다 처음부터 다시 시작하다 "unable to open database file"로 끝난다.
+const SDK_STORE_TAIL = '\\agents\\agent-'.length + 64 + '\\store.db-wal'.length;
+
+/** 요청마다 Cursor 대화 기록(SQLite)을 둘 짧은 폴더. */
+export function sdkStateRoot(requestId, base = join(tmpdir(), 'ygg-code-bridge', 'sdk')) {
+  return join(base, String(requestId));
+}
+
+export function sdkStorePathFits(root, platform = process.platform) {
+  return platform !== 'win32' || root.length + SDK_STORE_TAIL < 260;
 }
 
 /** SDK 예외를 대기열의 실패 코드로 바꾼다. 재시도 여부는 SDK의 isRetryable을 따른다. */

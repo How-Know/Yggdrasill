@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 
 import '../screens/design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import 'dialog_tokens.dart';
@@ -72,11 +72,15 @@ class CoverScrim extends StatelessWidget {
   /// 아래쪽 띠가 시작하는 지점(0~1).
   final double bottomStart;
 
+  /// 위쪽 띠. 채점 과제카드·정답책 카드는 끈 상태라, 되돌릴 때는 true로 둔다.
+  final bool showTop;
+
   const CoverScrim({
     super.key,
     required this.style,
     this.topEnd = 0.40,
     this.bottomStart = 0.56,
+    this.showTop = true,
   });
 
   @override
@@ -92,7 +96,7 @@ class CoverScrim extends StatelessWidget {
             end: Alignment.bottomCenter,
             stops: [0.0, topEnd, bottomStart, 1.0],
             colors: [
-              color.withValues(alpha: top),
+              color.withValues(alpha: showTop ? top : 0.0),
               color.withValues(alpha: 0.0),
               color.withValues(alpha: 0.0),
               color.withValues(alpha: bottom),

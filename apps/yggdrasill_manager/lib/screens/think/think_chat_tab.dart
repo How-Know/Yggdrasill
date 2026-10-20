@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 
 import '../../services/think/think_clipboard_files.dart';
 import '../../services/think/think_code_controller.dart';
+import '../../services/think/think_action_models.dart';
 import '../../services/think/think_code_models.dart';
 import '../../services/think/think_controller.dart';
 import '../../services/think/think_models.dart';
@@ -17,6 +18,7 @@ import 'think_decision_dialog.dart';
 import 'think_materials_panel.dart';
 import 'think_memory_feedback_dialog.dart';
 import 'think_message_tile.dart';
+import 'think_organize_panel.dart';
 import 'think_role_bar.dart';
 import 'think_split_views.dart';
 import 'think_status_dialog.dart';
@@ -140,6 +142,19 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
     }
   }
 
+  Future<void> _toggleImportant(ThinkMessage m) async {
+    try {
+      await _c.setMessageImportant(m, !m.markedImportant);
+    } catch (e) {
+      if (mounted) showThinkSnack(context, '바꾸지 못했습니다: $e', error: true);
+    }
+  }
+
+  Future<void> _setAutoOrganize(bool enabled) async {
+    final err = await _c.setAutoOrganize(enabled);
+    if (err != null && mounted) showThinkSnack(context, err, error: true);
+  }
+
   Future<void> _excerpt(int index) async {
     final id = _c.selectedId;
     if (id == null) return;
@@ -193,7 +208,7 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
     final result = await FilePicker.platform.pickFiles(
       allowMultiple: true,
       type: FileType.custom,
-      allowedExtensions: const ['png', 'jpg', 'jpeg', 'webp', 'gif', 'pdf'],
+      allowedExtensions: const ['png', 'jpg', 'jpeg', 'webp', 'gif', 'pdf', 'xlsx'],
       withData: false,
     );
     if (result == null) return;
@@ -254,7 +269,10 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
         return LayoutBuilder(
           builder: (context, constraints) {
             final wide = constraints.maxWidth >= 1180;
-            _contextVisible = wide && _showContext;
+            // 넓으면 정리 패널을 맥락 패널 자리에 붙이고, 좁으면 바텀시트로 연다.
+            _c.organizeDockable = wide;
+            final organizeDocked = wide && _c.organizePanelOpen;
+            _contextVisible = wide && _showContext && !organizeDocked;
             // 좁은 화면에서는 트리를 접어 대화 영역을 먼저 확보한다.
             final treeOpen = _c.treePanelOpen ?? constraints.maxWidth >= 960;
             return Row(
@@ -272,7 +290,10 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
                   _collapsedTree(),
                 const SizedBox(width: 16),
                 Expanded(child: _chatPanel()),
-                if (wide && _showContext) ...[
+                if (organizeDocked) ...[
+                  const SizedBox(width: 16),
+                  SizedBox(width: 340, child: ThinkOrganizePanel(onClose: _c.closeOrganizePanel)),
+                ] else if (_contextVisible) ...[
                   const SizedBox(width: 16),
                   SizedBox(width: 280, child: _contextPanel()),
                 ],
@@ -348,6 +369,13 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
                         ),
                         const SizedBox(width: 8),
                       ],
+                      if (_c.pendingOrganize.isNotEmpty) ...[
+                        ThinkOrganizeCountButton(
+                          count: _c.pendingOrganize.length,
+                          onOpen: () => openThinkOrganize(context),
+                        ),
+                        const SizedBox(width: 8),
+                      ],
                       Tooltip(
                         message: '대화 내용을 결정 초안으로 정리합니다. 저장은 직접 확인한 뒤에 합니다.',
                         child: OutlinedButton.icon(
@@ -361,10 +389,18 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
                       ),
                       const SizedBox(width: 4),
                       IconButton(
-                        tooltip: _showContext ? '맥락 패널 숨기기' : '맥락 패널 보기',
+                        tooltip: _contextVisible ? '맥락 패널 숨기기' : '맥락 패널 보기',
                         color: kThinkSub,
-                        onPressed: () => setState(() => _showContext = !_showContext),
-                        icon: Icon(_showContext ? Icons.view_sidebar : Icons.view_sidebar_outlined),
+                        onPressed: () {
+                          // 정리 패널이 그 자리에 있으면 닫고 맥락 패널을 보인다.
+                          if (_c.organizeDockable && _c.organizePanelOpen) {
+                            _c.closeOrganizePanel();
+                            setState(() => _showContext = true);
+                            return;
+                          }
+                          setState(() => _showContext = !_showContext);
+                        },
+                        icon: Icon(_contextVisible ? Icons.view_sidebar : Icons.view_sidebar_outlined),
                       ),
                     ],
                   ),
@@ -414,7 +450,7 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
                     ),
                     alignment: Alignment.center,
                     child: const Text(
-                      '여기에 놓으면 첨부됩니다 (이미지·PDF 파일, 최대 6개)',
+                      '여기에 놓으면 첨부됩니다 (이미지·PDF·엑셀 파일, 최대 6개)',
                       style: TextStyle(color: kThinkText, fontSize: 16, fontWeight: FontWeight.w700),
                     ),
                   ),
@@ -454,6 +490,7 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
               final id = m.id;
               final hasId = id != null && id.isNotEmpty;
               final turnActions = canAct && hasId && !m.isUser && m.status != ThinkMessageStatus.streaming;
+              final canMark = canAct && hasId && _c.organizeReady && m.status != ThinkMessageStatus.streaming;
               final snap = hasId && !m.isUser ? _c.messageSnapshots[id] : null;
               final canShowMaterials = _c.rolesReady && !m.isUser && hasId && m.status != ThinkMessageStatus.streaming;
               final tile = ThinkMessageTile(
@@ -465,6 +502,7 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
                 highlighted: hasId && _c.highlightedMessageIds.contains(id),
                 onSelect: canShowMaterials ? () => _showMaterials(id) : null,
                 onToggleExcluded: turnActions ? () => _toggleExcluded(i) : null,
+                onToggleImportant: canMark ? () => _toggleImportant(m) : null,
                 onExcerpt: turnActions ? () => _excerpt(i) : null,
                 onDocument: turnActions ? () => _document(i) : null,
                 onCodeRequest: turnActions ? () => _codeRequest(i) : null,
@@ -504,8 +542,26 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
       for (final a in actions)
         if (a.codeRequestId != null) a.codeRequestId!
     };
+    // 대기 중인 정리 제안은 카드 대신 답변마다 "정리 제안 N건" 한 줄로 모은다(내용·승인은 정리 패널).
+    final organize = <String, List<ThinkAction>>{};
     for (final a in actions) {
+      if (_c.inOrganizePanel(a)) {
+        final key = a.messageId != null && ids.contains(a.messageId) ? a.messageId! : '';
+        organize.putIfAbsent(key, () => []).add(a);
+        continue;
+      }
       put(a.messageId, ThinkActionCard(key: ValueKey('action-${a.id}'), action: a));
+    }
+    for (final e in organize.entries) {
+      out.putIfAbsent(e.key, () => []).insert(
+            0,
+            ThinkOrganizeEntry(
+              key: ValueKey('organize-${e.key}'),
+              actions: e.value,
+              failed: e.value.where((a) => _c.organizeErrors.containsKey(a.id)).length,
+              onOpen: () => openThinkOrganize(context, messageId: e.key.isEmpty ? null : e.key),
+            ),
+          );
     }
     final convId = _c.selectedId;
     if (convId != null) {
@@ -637,6 +693,13 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
               ],
             ),
             const SizedBox(height: 8),
+            if (_c.pendingAttachments.any((a) => a.isSpreadsheet)) ...[
+              const ThinkNotice(
+                text: '엑셀은 Think가 파이썬으로 열어 분석합니다. 이름·연락처·주소처럼 질문에 필요 없는 개인정보 열은 지우고 올려 주세요.',
+                icon: Icons.privacy_tip_outlined,
+              ),
+              const SizedBox(height: 8),
+            ],
           ],
           Focus(
             onKeyEvent: (node, event) {
@@ -669,7 +732,7 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
           Row(
             children: [
               IconButton(
-                tooltip: '이미지·PDF 첨부',
+                tooltip: '이미지·PDF·엑셀 첨부',
                 color: kThinkSub,
                 onPressed: _c.forbidden ? null : _pickFiles,
                 icon: const Icon(Icons.attach_file),
@@ -711,7 +774,11 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
                     onPressed: _c.canSend ? _send : null,
                     style: thinkPrimaryButton(),
                     icon: const Icon(Icons.send_rounded, size: 18),
-                    label: Text(_c.isStreaming ? '다른 대화 답변 중' : '보내기'),
+                    label: Text(_c.isStreaming
+                        ? '다른 대화 답변 중'
+                        : _c.sendLockedElsewhere
+                            ? '개념 탭에서 답변 중'
+                            : '보내기'),
                   );
                 },
               ),
@@ -753,6 +820,7 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
         (ctx?['relevant'] is List ? ctx!['relevant'] as List : const []).map((e) => e.toString()).toList();
     int n(dynamic v) => v is num ? v.toInt() : 0;
     final excluded = _c.selectedId == null ? 0 : _c.messages.where((m) => m.contextExcluded).length;
+    final summary = _c.selectedDetail?.progressSummary;
     return ThinkPanel(
       child: ListView(
         padding: const EdgeInsets.all(16),
@@ -764,6 +832,12 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
             const SizedBox(height: 16),
           ] else if (_c.status != null) ...[
             ThinkFeatureStatusView(feature: _c.status!.thinkRoles, label: '역할·자료 범위', reason: thinkRolesFeatureReason),
+            const SizedBox(height: 16),
+          ],
+          if (summary != null) ...[
+            _progressSummarySection(summary),
+            const SizedBox(height: 16),
+            const Divider(color: kThinkBorder, height: 1),
             const SizedBox(height: 16),
           ],
           const Text('이번 답변에 쓴 맥락', style: TextStyle(color: kThinkText, fontSize: 14, fontWeight: FontWeight.w800)),
@@ -784,6 +858,8 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
                   : '${n(ctx['history_used'])}개',
             ),
             if (ctx['split_summary'] == true) _kv('나눠 온 요약', '참고 자료로 넣음'),
+            if (ctx['progress_summary'] == true) _kv('진행 요약', '승인된 요약을 참고 자료로 넣음'),
+            if (ctx['criteria_version'] is num) _kv('부서 기준', '판 ${n(ctx['criteria_version'])}을 먼저 살핌'),
             if (relevantIds.isNotEmpty) ...[
               const SizedBox(height: 12),
               const Text('질문과 관련해 찾은 기억',
@@ -798,13 +874,17 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
           ],
           const SizedBox(height: 12),
           const Text(
-            '왼쪽 트리는 답변 맥락에 들어가지 않습니다. 분류를 부탁하면 폴더 이름·경로와 대화 제목만 읽고 제안합니다.',
+            '왼쪽 트리는 답변 맥락에 들어가지 않습니다. 분류를 제안할 때만 폴더 이름·경로와 대화 제목을 읽습니다.',
             style: TextStyle(color: kThinkHint, fontSize: 12, height: 1.5),
           ),
           const SizedBox(height: 16),
           const Divider(color: kThinkBorder, height: 1),
           const SizedBox(height: 16),
           _splitSection(),
+          const SizedBox(height: 16),
+          const Divider(color: kThinkBorder, height: 1),
+          const SizedBox(height: 16),
+          _organizeSection(),
           const SizedBox(height: 16),
           const Divider(color: kThinkBorder, height: 1),
           const SizedBox(height: 16),
@@ -890,6 +970,82 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
           style: thinkOutlineButton(),
           icon: const Icon(Icons.link, size: 16),
           label: const Text('연결·기능 상태 보기'),
+        ),
+      ],
+    );
+  }
+
+  Widget _progressSummarySection(ThinkProgressSummary summary) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text('진행 요약', style: TextStyle(color: kThinkText, fontSize: 14, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 4),
+        Text(
+          '승인됨 · ${formatDateTime(summary.approvedAt)}${summary.edited ? ' · 고쳐서 승인' : ''}',
+          style: const TextStyle(color: kThinkHint, fontSize: 12),
+        ),
+        ThinkProgressSummaryView(summary: summary, compact: true),
+        const SizedBox(height: 8),
+        const Text(
+          '다음 답변부터 참고 자료로 넣습니다. 다음 행동은 계획일 뿐 실행되지 않습니다. 새로 정리하려면 Think에게 진행 요약을 부탁하세요.',
+          style: TextStyle(color: kThinkHint, fontSize: 12, height: 1.5),
+        ),
+      ],
+    );
+  }
+
+  Widget _organizeSection() {
+    final status = _c.status;
+    final enabled = _c.autoOrganizeEnabled;
+    final pending = _c.pendingOrganize.length;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text('정리 제안', style: TextStyle(color: kThinkText, fontSize: 14, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 8),
+        if (status == null)
+          const Text('기능 상태를 아직 받지 못했습니다.', style: TextStyle(color: kThinkHint, fontSize: 12))
+        else if (!_c.organizeReady)
+          ThinkFeatureStatusView(feature: status.autoOrganize, label: '자동 정리 제안', reason: thinkOrganizeFeatureReason)
+        else ...[
+          if (enabled != null)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: ThinkToggleChip(
+                label: '자동 정리 제안 받기',
+                icon: Icons.auto_awesome,
+                selected: enabled,
+                enabled: !_c.autoOrganizeSaving,
+                tooltip: '끄면 "정리해 줘"처럼 직접 부탁할 때만 제안합니다. 모든 대화에 적용됩니다.',
+                onChanged: _setAutoOrganize,
+              ),
+            ),
+          _kv('기다리는 제안', pending == 0 ? '없음' : '$pending건'),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                onPressed: () => openThinkOrganize(context),
+                style: thinkOutlineButton(),
+                icon: const Icon(Icons.playlist_add_check, size: 16),
+                label: const Text('정리 패널'),
+              ),
+              OutlinedButton.icon(
+                onPressed: () => showThinkDepartmentCriteriaDialog(context, department: _c.roleOfConversation(_c.selectedId)),
+                style: thinkOutlineButton(),
+                icon: const Icon(Icons.rule, size: 16),
+                label: const Text('부서 기준'),
+              ),
+            ],
+          ),
+        ],
+        const SizedBox(height: 8),
+        const Text(
+          'Think가 분류·기억·맥락 제외·중요 표시·진행 요약을 제안하면 답변 아래 "정리 제안 N건"으로 모입니다. 승인 전에는 아무것도 바뀌지 않습니다.',
+          style: TextStyle(color: kThinkHint, fontSize: 12, height: 1.5),
         ),
       ],
     );

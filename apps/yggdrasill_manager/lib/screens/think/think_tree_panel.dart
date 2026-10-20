@@ -1,16 +1,19 @@
 import 'package:flutter/material.dart';
 
 import '../../services/think/think_api.dart';
+import '../../services/think/think_code_controller.dart';
 import '../../services/think/think_controller.dart';
 import '../../services/think/think_models.dart';
 import '../../services/think/think_tree.dart';
+import 'think_avatars.dart';
 import 'think_style.dart';
 import 'think_tree_dialogs.dart';
 
 typedef _DropResolver = ThinkDropPlan? Function(ThinkDragItem item, ThinkDropPosition position);
 
 /// 대화 정리 트리. '정리 안 됨'(트리에 놓지 않은 대화)과 폴더·대화·발췌 트리로 나뉜다.
-/// 여기서 하는 정리는 AI 맥락에 영향을 주지 않는다.
+/// 부서 기능이 켜지면 최상위를 4부서(총괄·교육·문제 풀이·개발)로 나누고, 부서마다 캐릭터가 진행 상태를 보인다.
+/// 부서 사이로 옮기면 대화 역할(답변 관점)이 바뀌므로 확인 창을 띄운다. 그 밖의 정리는 AI 맥락에 영향을 주지 않는다.
 class ThinkTreePanel extends StatefulWidget {
   const ThinkTreePanel({super.key, required this.onNewConversation, this.onCollapse});
 
@@ -35,31 +38,108 @@ class _ThinkTreePanelState extends State<ThinkTreePanel> {
     }
   }
 
-  void _drop(ThinkDropPlan plan) => _run(() => _c.applyDrop(plan));
+  /// 부서가 바뀌는 대화가 있으면 먼저 묻는다.
+  Future<void> _drop(ThinkDropPlan plan) async {
+    final dept = plan.department;
+    if (dept != null) {
+      final tree = _c.tree;
+      final node = plan.nodeId == null ? null : tree.byId[plan.nodeId];
+      final item = node != null
+          ? ThinkDragItem.node(node)
+          : plan.conversationId != null
+              ? ThinkDragItem.unfiled(plan.conversationId!)
+              : null;
+      final changed = item == null ? 0 : tree.rolesChangedByPlan(item, plan);
+      final streamingId = _c.isStreaming ? _c.streamingConversationId : null;
+      final streamingNode = streamingId == null ? null : tree.conversationNodes[streamingId];
+      final touchesStreaming = streamingId != null &&
+          (plan.conversationId == streamingId ||
+              (node != null && streamingNode != null && tree.isInside(streamingNode.id, node.id)));
+      if (changed > 0 && touchesStreaming) {
+        showThinkSnack(context, '답변이 끝난 뒤 부서를 옮길 수 있습니다.', error: true);
+        return;
+      }
+      if (changed > 0) {
+        final single = node == null || node.kind == ThinkTreeKind.conversation;
+        final ok = await confirmThink(
+          context,
+          title: '${dept.label} 부서로 옮기기',
+          message: single
+              ? '이 대화를 ${dept.label} 부서로 옮기면 다음 답변부터 ${dept.label} 관점으로 답합니다.\n이미 받은 답변은 바뀌지 않습니다.'
+              : '"${tree.titleOf(node)}"을(를) ${dept.label} 부서로 옮기면 안에 있는 대화 $changed개의 부서도 '
+                  '${dept.label}(으)로 바뀝니다.\n다음 답변부터 ${dept.label} 관점으로 답합니다. 이미 받은 답변은 바뀌지 않습니다.',
+          confirmLabel: '옮기기',
+        );
+        if (!ok) return;
+      }
+    }
+    await _run(() => _c.applyDrop(plan));
+  }
 
   // ------------------------------------------------------------ 메뉴 동작
-  Future<void> _newFolder({String? parentId}) async {
+  Future<void> _newFolder({String? parentId, ThinkRoleId? department}) async {
     final title = await promptThinkText(
       context,
-      title: parentId == null ? '새 폴더' : '새 하위 폴더',
+      title: parentId != null
+          ? '새 하위 폴더'
+          : department != null
+              ? '${department.label} 부서 새 폴더'
+              : '새 폴더',
       hint: '주제 이름',
       confirmLabel: '만들기',
     );
     if (title == null || title.trim().isEmpty) return;
-    await _run(() => _c.createFolder(title, parentId: parentId));
+    await _run(() => _c.createFolder(title, parentId: parentId, department: department));
   }
 
   Future<void> _moveWithPicker(ThinkDragItem item) async {
-    final node = item.node ?? _c.tree.conversationNodes[item.conversationId];
+    final tree = _c.tree;
+    final node = item.node ?? tree.conversationNodes[item.conversationId];
     final picked = await showThinkFolderPicker(
       context,
-      tree: _c.tree,
+      tree: tree,
       movingFolderId: node != null && node.isFolder ? node.id : null,
       currentParentId: node?.parentId,
+      currentSection: tree.departments ? tree.sectionOfItem(item) : null,
     );
     if (picked == null) return;
-    final plan = _c.tree.planMoveInto(item, picked == kThinkRootFolder ? null : picked);
-    if (plan != null) _drop(plan);
+    final dept = thinkRootFolderDepartment(picked);
+    final plan = dept != null
+        ? tree.planMoveInto(item, null, department: dept)
+        : tree.planMoveInto(item, picked == kThinkRootFolder ? null : picked);
+    if (plan != null) await _drop(plan);
+  }
+
+  /// 대화를 다른 부서의 미분류로 보낸다(끌어 옮기기와 같은 동작).
+  Future<void> _sendToDepartment(ThinkConversation conv, ThinkTreeNode? node) async {
+    final tree = _c.tree;
+    final item = node != null ? ThinkDragItem.node(node) : ThinkDragItem.unfiled(conv.id);
+    final current = tree.roleOf(conv.id);
+    final picked = await showDialog<ThinkRoleId>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        backgroundColor: kThinkBg,
+        shape: thinkDialogShape,
+        title: const Text('어느 부서로 보낼까요?', style: TextStyle(color: kThinkText, fontWeight: FontWeight.w800)),
+        children: [
+          for (final d in ThinkRoleId.values)
+            if (d != current)
+              SimpleDialogOption(
+                onPressed: () => Navigator.pop(ctx, d),
+                child: Row(
+                  children: [
+                    ThinkRoleAvatar(role: d, size: 24),
+                    const SizedBox(width: 12),
+                    Text('${d.label} 부서 미분류', style: const TextStyle(color: kThinkText, fontSize: 14)),
+                  ],
+                ),
+              ),
+        ],
+      ),
+    );
+    if (picked == null || !mounted) return;
+    final plan = tree.planUnfile(item, department: picked);
+    if (plan != null) await _drop(plan);
   }
 
   Future<void> _conversationAction(ThinkConversation conv, ThinkTreeNode? node, String action) async {
@@ -69,6 +149,8 @@ class _ThinkTreePanelState extends State<ThinkTreePanel> {
         if (title != null) await _run(() => _c.renameConversation(conv.id, title));
       case 'move':
         await _moveWithPicker(node != null ? ThinkDragItem.node(node) : ThinkDragItem.unfiled(conv.id));
+      case 'department':
+        await _sendToDepartment(conv, node);
       case 'unfile':
         if (node != null) await _run(() => _c.removeNode(node));
       case 'archive':
@@ -160,10 +242,12 @@ class _ThinkTreePanelState extends State<ThinkTreePanel> {
 
   List<PopupMenuEntry<String>> _conversationMenu(ThinkConversation conv, ThinkTreeNode? node) {
     final streaming = _c.isStreaming && _c.streamingConversationId == conv.id;
+    final departments = _c.tree.departments;
     return [
       _item('rename', '이름 바꾸기'),
       if (!conv.archived) _item('move', '폴더로 이동'),
-      if (node != null) _item('unfile', '정리 안 됨으로 빼기'),
+      if (!conv.archived && departments && !streaming) _item('department', '다른 부서로 보내기'),
+      if (node != null) _item('unfile', departments ? '미분류로 빼기' : '정리 안 됨으로 빼기'),
       _item('archive', conv.archived ? '보관 해제' : '보관'),
       if (!streaming) _item('delete', '삭제', danger: true),
     ];
@@ -191,15 +275,48 @@ class _ThinkTreePanelState extends State<ThinkTreePanel> {
       ];
 
   // ------------------------------------------------------------ 행
-  Widget _conversationRow(ThinkConversation conv, {ThinkTreeNode? node, int depth = 0, bool draggable = true, String? trailing}) {
+  /// [department]는 부서 칸의 미분류 행일 때 그 부서(여기에 놓으면 그 부서 미분류로 간다).
+  Widget _conversationRow(
+    ThinkConversation conv, {
+    ThinkTreeNode? node,
+    int depth = 0,
+    bool draggable = true,
+    String? trailing,
+    ThinkRoleId? department,
+  }) {
+    final tree = _c.tree;
+    final misplaced = node != null && tree.isMisplaced(node);
+    String? status;
+    var statusColor = kThinkHint;
+    if (tree.departments && trailing == null) {
+      switch (_c.conversationActivity(conv.id)) {
+        case ThinkActivity.waiting:
+          status = '승인 대기 ${_c.pendingCountOf(conv.id)}';
+          statusColor = kThinkLink;
+        case ThinkActivity.coding:
+          status = 'Cursor 작업';
+          statusColor = kThinkLink;
+        default:
+          if (misplaced) {
+            status = '${tree.roleOf(conv.id).label} 관점';
+            statusColor = kThinkSub;
+          }
+      }
+    }
+    final tooltip = [
+      if (conv.fromCursor) 'Cursor가 Think에게 물으며 시작한 대화입니다. 이어서 직접 말해도 됩니다.',
+      if (misplaced)
+        '이 대화는 ${tree.roleOf(conv.id).label} 관점으로 답합니다. 폴더 부서(${tree.sectionOf(node).label})와 다릅니다.',
+    ];
     return _TreeRow(
       key: ValueKey('conv-${conv.id}'),
       depth: depth,
       icon: conv.fromCursor ? Icons.smart_toy_outlined : Icons.chat_bubble_outline,
       iconColor: conv.fromCursor ? kThinkLink : kThinkHint,
-      tooltip: conv.fromCursor ? 'Cursor가 Think에게 물으며 시작한 대화입니다. 이어서 직접 말해도 됩니다.' : null,
+      tooltip: tooltip.isEmpty ? null : tooltip.join('\n'),
       title: conv.title,
-      trailing: trailing ?? formatRelative(conv.sortTime),
+      trailing: trailing ?? status ?? formatRelative(conv.sortTime),
+      trailingColor: status == null ? null : statusColor,
       selected: conv.id == _c.selectedId,
       streaming: _c.isStreaming && _c.streamingConversationId == conv.id,
       onTap: () => _c.select(conv.id),
@@ -211,8 +328,8 @@ class _ThinkTreePanelState extends State<ThinkTreePanel> {
       resolve: !draggable
           ? null
           : node != null
-              ? (item, pos) => _c.tree.planDrop(item, node, pos)
-              : (item, _) => _c.tree.planUnfile(item),
+              ? (item, pos) => tree.planDrop(item, node, pos)
+              : (item, _) => tree.planUnfile(item, department: department),
       onDrop: _drop,
       unfiledTarget: node == null,
     );
@@ -309,6 +426,65 @@ class _ThinkTreePanelState extends State<ThinkTreePanel> {
   // ------------------------------------------------------------ 목록
   List<Widget> _treeItems() {
     final tree = _c.tree;
+    if (tree.departments) {
+      return [
+        for (final d in ThinkRoleId.values) ..._departmentItems(tree, d),
+      ];
+    }
+    return _flatTreeItems(tree);
+  }
+
+  List<Widget> _departmentItems(ThinkTree tree, ThinkRoleId d) {
+    final collapsed = _c.collapsedDepartments.contains(d);
+    final unfiled = tree.unfiledOf(d);
+    final rows = tree.rows(_c.collapsedFolders, department: d);
+    final unfiledCollapsed = _c.collapsedDepartmentUnfiled.contains(d);
+    final folderCount = tree.children(null).where((n) => n.isFolder && tree.sectionOf(n) == d).length;
+    final ghost = _withGhostFolder(rows, department: d);
+    return [
+      ThinkDepartmentHeader(
+        key: ValueKey('dept-${d.db}'),
+        role: d,
+        activity: _c.departmentActivity(d),
+        summary: [
+          if (folderCount > 0) '폴더 $folderCount',
+          if (unfiled.isNotEmpty) '미분류 ${unfiled.length}',
+        ].join(' · '),
+        collapsed: collapsed,
+        onToggle: () => _c.toggleDepartment(d),
+        onNewFolder: _c.forbidden ? null : () => _newFolder(department: d),
+        resolve: (item) => tree.planDrop(item, null, ThinkDropPosition.inside, department: d),
+        onDrop: _drop,
+      ),
+      if (!collapsed) ...[
+        if (unfiled.isNotEmpty)
+          _SectionHeader(
+            label: '미분류',
+            count: unfiled.length,
+            indent: 16,
+            collapsed: unfiledCollapsed,
+            onToggle: () => _c.toggleDepartmentUnfiled(d),
+            tooltip: '${d.label} 부서 대화 중 아직 폴더에 넣지 않은 대화입니다.',
+            resolve: (item) => tree.planUnfile(item, department: d),
+            onDrop: _drop,
+          ),
+        if (unfiled.isNotEmpty && !unfiledCollapsed)
+          for (final conv in unfiled) _conversationRow(conv, depth: 1, department: d),
+        for (final w in ghost) Padding(padding: const EdgeInsets.only(left: 16), child: w),
+        if (unfiled.isEmpty && ghost.isEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(44, 2, 12, 8),
+            child: Text(
+              _dragging ? '여기 머리에 놓으면 ${d.label} 부서로 옮깁니다.' : '아직 대화가 없습니다.',
+              style: const TextStyle(color: kThinkHint, fontSize: 12),
+            ),
+          ),
+      ],
+      const SizedBox(height: 4),
+    ];
+  }
+
+  List<Widget> _flatTreeItems(ThinkTree tree) {
     final unfiled = tree.unfiled;
     final rows = tree.rows(_c.collapsedFolders);
     return [
@@ -359,7 +535,8 @@ class _ThinkTreePanelState extends State<ThinkTreePanel> {
   }
 
   /// 새 폴더 분류 제안이 있으면 만들 자리(상위 폴더의 맨 아래)에 흐린 행을 끼운다. 저장은 승인 뒤에 한다.
-  List<Widget> _withGhostFolder(List<ThinkTreeRow> rows) {
+  /// [department]가 있으면 그 부서 칸에 들어갈 제안만 끼운다(최상위 새 폴더는 대화 부서 칸).
+  List<Widget> _withGhostFolder(List<ThinkTreeRow> rows, {ThinkRoleId? department}) {
     final out = [for (final row in rows) _nodeRow(row)];
     final pending = _c.pendingPlacement;
     final title = pending?.newFolderTitle;
@@ -367,6 +544,12 @@ class _ThinkTreePanelState extends State<ThinkTreePanel> {
     var at = rows.length;
     var depth = 0;
     final parentId = pending.newFolderParentId;
+    if (department != null) {
+      final tree = _c.tree;
+      final parent = parentId == null ? null : tree.byId[parentId];
+      final section = parent != null ? tree.sectionOf(parent) : _c.roleOfConversation(pending.conversationId);
+      if (section != department) return out;
+    }
     if (parentId != null) {
       final pi = rows.indexWhere((r) => r.node.id == parentId);
       if (pi >= 0) {
@@ -419,7 +602,7 @@ class _ThinkTreePanelState extends State<ThinkTreePanel> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: _c,
+      listenable: Listenable.merge([_c, ThinkCodeController.instance]),
       builder: (context, _) {
         final q = _search.trim().toLowerCase();
         final loading = (_c.conversationsLoading && _c.conversations.isEmpty) || (_c.treeLoading && _c.treeNodes.isEmpty);
@@ -554,9 +737,11 @@ class _SectionHeader extends StatefulWidget {
     this.onToggle,
     this.tooltip,
     this.action,
+    this.indent = 0,
   });
 
   final String label;
+  final double indent;
   final int? count;
   final bool? collapsed;
   final VoidCallback? onToggle;
@@ -576,6 +761,7 @@ class _SectionHeaderState extends State<_SectionHeader> {
   Widget build(BuildContext context) {
     final label = Row(
       children: [
+        SizedBox(width: widget.indent),
         if (widget.collapsed != null)
           Icon(widget.collapsed! ? Icons.chevron_right : Icons.expand_more, size: 16, color: kThinkHint)
         else
@@ -627,6 +813,146 @@ class _SectionHeaderState extends State<_SectionHeader> {
             ),
             if (widget.action != null) widget.action!,
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 부서 칸 머리: 캐릭터·이름·진행 상태. 여기에 놓으면 그 부서 최상위 맨 아래로 옮긴다.
+class ThinkDepartmentHeader extends StatefulWidget {
+  const ThinkDepartmentHeader({
+    super.key,
+    required this.role,
+    required this.activity,
+    required this.summary,
+    required this.collapsed,
+    required this.onToggle,
+    required this.onNewFolder,
+    required this.resolve,
+    required this.onDrop,
+  });
+
+  final ThinkRoleId role;
+  final ThinkDepartmentActivity activity;
+  final String summary;
+  final bool collapsed;
+  final VoidCallback onToggle;
+  final VoidCallback? onNewFolder;
+  final ThinkDropPlan? Function(ThinkDragItem item) resolve;
+  final ValueChanged<ThinkDropPlan> onDrop;
+
+  @override
+  State<ThinkDepartmentHeader> createState() => _ThinkDepartmentHeaderState();
+}
+
+class _ThinkDepartmentHeaderState extends State<ThinkDepartmentHeader> {
+  bool _over = false;
+
+  Color get _statusColor => switch (widget.activity.activity) {
+        ThinkActivity.idle => kThinkHint,
+        ThinkActivity.waiting => kThinkLink,
+        _ => thinkRoleColor(widget.role),
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    final role = widget.role;
+    final color = thinkRoleColor(role);
+    final status = widget.activity.label;
+    return DragTarget<ThinkDragItem>(
+      onWillAcceptWithDetails: (d) {
+        final ok = widget.resolve(d.data) != null;
+        if (ok != _over) setState(() => _over = ok);
+        return ok;
+      },
+      onLeave: (_) => setState(() => _over = false),
+      onAcceptWithDetails: (d) {
+        setState(() => _over = false);
+        final plan = widget.resolve(d.data);
+        if (plan != null) widget.onDrop(plan);
+      },
+      builder: (context, _, __) => AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        margin: const EdgeInsets.only(top: 4),
+        decoration: BoxDecoration(
+          color: _over ? color.withValues(alpha: 0.16) : Colors.transparent,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: _over ? color : Colors.transparent),
+        ),
+        child: InkWell(
+          onTap: widget.onToggle,
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(4, 6, 0, 6),
+            child: Row(
+              children: [
+                Icon(widget.collapsed ? Icons.chevron_right : Icons.expand_more, size: 16, color: kThinkHint),
+                const SizedBox(width: 4),
+                Tooltip(
+                  message: '${role.label} 부서 · $status',
+                  waitDuration: const Duration(milliseconds: 500),
+                  child: ThinkRoleAvatar(
+                    role: role,
+                    size: 32,
+                    activity: widget.activity.activity,
+                    semanticsLabel: '${role.label} 부서 캐릭터, $status',
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              role.label,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(color: kThinkText, fontSize: 14, fontWeight: FontWeight.w800),
+                            ),
+                          ),
+                          if (widget.summary.isNotEmpty) ...[
+                            const SizedBox(width: 8),
+                            Flexible(
+                              child: Text(
+                                widget.summary,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(color: kThinkHint, fontSize: 12),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        status,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: _statusColor,
+                          fontSize: 12,
+                          fontWeight: widget.activity.activity == ThinkActivity.idle ? FontWeight.normal : FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  tooltip: '${role.label} 부서 새 폴더',
+                  visualDensity: VisualDensity.compact,
+                  iconSize: 18,
+                  color: kThinkSub,
+                  onPressed: widget.onNewFolder,
+                  icon: const Icon(Icons.create_new_folder_outlined),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -688,6 +1014,7 @@ class _TreeRow extends StatefulWidget {
     required this.onDragChanged,
     this.iconColor = kThinkHint,
     this.trailing,
+    this.trailingColor,
     this.tooltip,
     this.selected = false,
     this.streaming = false,
@@ -710,6 +1037,9 @@ class _TreeRow extends StatefulWidget {
   final Color iconColor;
   final String title;
   final String? trailing;
+
+  /// 진행 상태(승인 대기 등)를 trailing에 보일 때의 색. null이면 기본 흐린 색.
+  final Color? trailingColor;
   final String? tooltip;
   final bool selected;
   final bool streaming;
@@ -843,9 +1173,9 @@ class _TreeRowState extends State<_TreeRow> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        color: widget.suggested ? kThinkAccent : kThinkHint,
+                        color: widget.suggested ? kThinkAccent : widget.trailingColor ?? kThinkHint,
                         fontSize: 12,
-                        fontWeight: widget.suggested ? FontWeight.w700 : FontWeight.normal,
+                        fontWeight: widget.suggested || widget.trailingColor != null ? FontWeight.w700 : FontWeight.normal,
                       ),
                     ),
                   ),

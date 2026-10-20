@@ -95,8 +95,19 @@ export const TOOLS = [
   {
     name: 'think_get_code_request',
     action: 'get_code_request',
-    description: '코드 요청 하나의 요약과 결과(diff는 없음).',
-    inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false },
+    description:
+      '코드 요청 하나. section 없이 부르면 짧은 요약: 상태, 결과 요약, 바뀐 파일, 작업자 검사 실행 기록(명령·폴더·종료 코드), 막힌 이유, 적용에 필요한 행동, ' +
+      '빠진 원문 목록. 긴 원문은 section(request|result|result_text|check_logs|diff)과 offset(앞 응답의 next_offset)으로 구간씩 읽는다.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        section: { type: 'string', enum: ['request', 'result', 'result_text', 'check_logs', 'diff'] },
+        offset: { type: 'integer', minimum: 0 },
+      },
+      required: ['id'],
+      additionalProperties: false,
+    },
   },
   {
     name: 'ask_think',

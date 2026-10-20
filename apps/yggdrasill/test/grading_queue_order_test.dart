@@ -139,6 +139,47 @@ void main() {
       );
     });
 
+    test('숙제 경과 시각은 검사일 등원 중 가장 이른 시각이다', () {
+      final checkDay = DateTime(2026, 8, 23, 13);
+      final arrivals = [
+        DateTime(2026, 8, 22, 16),
+        DateTime(2026, 8, 23, 18, 40),
+        DateTime(2026, 8, 23, 15, 5),
+      ];
+
+      expect(
+        earliestLocalArrivalOnDay(arrivals, checkDay),
+        DateTime(2026, 8, 23, 15, 5),
+      );
+      expect(
+        earliestLocalArrivalOnDay(
+          [DateTime(2026, 8, 22, 16)],
+          checkDay,
+        ),
+        isNull,
+      );
+    });
+
+    test('경과 표기는 제출 카드와 같은 분·시간 형식이다', () {
+      final start = DateTime(2026, 8, 23, 15, 5);
+      expect(
+        formatGradingElapsedSince(start, DateTime(2026, 8, 23, 15, 20)),
+        '15분',
+      );
+      expect(
+        formatGradingElapsedSince(start, DateTime(2026, 8, 23, 17, 5)),
+        '2시간',
+      );
+      expect(
+        formatGradingElapsedSince(start, DateTime(2026, 8, 23, 17, 12)),
+        '2시간 7분',
+      );
+      expect(
+        formatGradingElapsedSince(start, DateTime(2026, 8, 23, 14)),
+        '0분',
+      );
+    });
+
     test('활성 배정이 없으면 노출하지 않는다', () {
       expect(
         shouldShowUnsubmittedHomeworkInGradingMode(

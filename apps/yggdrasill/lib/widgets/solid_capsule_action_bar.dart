@@ -206,6 +206,7 @@ class SolidCapsuleTextActionButton extends StatelessWidget {
     this.onPressed,
     this.selected = false,
     this.horizontalPadding = 12,
+    this.height,
   });
 
   final String? tooltip;
@@ -213,6 +214,10 @@ class SolidCapsuleTextActionButton extends StatelessWidget {
   final VoidCallback? onPressed;
   final bool selected;
   final double horizontalPadding;
+
+  /// 비우면 글자 높이에 세로 패딩 10을 더한다.
+  /// 아이콘 버튼과 줄을 맞출 때는 아이콘 높이 40을 준다.
+  final double? height;
 
   @override
   Widget build(BuildContext context) {
@@ -222,25 +227,35 @@ class SolidCapsuleTextActionButton extends StatelessWidget {
       selected: selected,
     );
 
+    final labelWidget = Text(
+      label,
+      style: TextStyle(
+        fontSize: 16,
+        fontWeight: FontWeight.w600,
+        color: fg,
+      ),
+    );
+    final buttonHeight = height;
     final button = Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: onPressed,
         borderRadius: BorderRadius.circular(999),
-        child: Padding(
-          padding: EdgeInsets.symmetric(
-            horizontal: horizontalPadding,
-            vertical: 10,
-          ),
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              color: fg,
-            ),
-          ),
-        ),
+        child: buttonHeight == null
+            ? Padding(
+                padding: EdgeInsets.symmetric(
+                  horizontal: horizontalPadding,
+                  vertical: 10,
+                ),
+                child: labelWidget,
+              )
+            : SizedBox(
+                height: buttonHeight,
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: horizontalPadding),
+                  child: Center(child: labelWidget),
+                ),
+              ),
       ),
     );
 

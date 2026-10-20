@@ -3,7 +3,7 @@
 Think 채팅 한 화면에서 코드 조사, 코드 수정, 대화 분류, 삭제를 요청하고 결과까지 본다.
 AI는 **제안만** 하고, 실제 변경은 사용자가 채팅 안 카드에서 승인한 뒤에만 일어난다.
 
-**상태: 2026-09-30 배포. Think ↔ Cursor 조율(§4.3)은 2026-10-01 배포. 조율본 질문은 2026-10-02 구현. 자동 검사·자동 시작·자동 재수정(§4.5·§4.6)은 2026-10-07 구현. 앞 수정 이어받기(§4.7)는 2026-10-08 구현.** 관련: [`ai-think.md`](ai-think.md), [`ai-code-bridge.md`](ai-code-bridge.md)
+**상태: 2026-09-30 배포. Think ↔ Cursor 조율(§4.3)은 2026-10-01 배포. 조율본 질문은 2026-10-02 구현. 자동 검사·자동 시작·자동 재수정(§4.5·§4.6)은 2026-10-07 구현. 앞 수정 이어받기(§4.7)는 2026-10-08 구현. 자동 정리 제안·정리 패널(§11)은 2026-10-12 구현.** 관련: [`ai-think.md`](ai-think.md), [`ai-code-bridge.md`](ai-code-bridge.md)
 
 구현 위치: 마이그레이션 `20260930100000_ai_think_actions.sql`, `ai_think/actions.ts`, `ai_code_bridge/code_review.ts`,
 `tools/code_bridge/src/git_ops.mjs`, 앱 `screens/think/think_action_cards.dart`·`think_code_views.dart`·`think_code_requests_dialog.dart`.
@@ -76,15 +76,16 @@ AI는 **제안만** 하고, 실제 변경은 사용자가 채팅 안 카드에�
 | 열 | 뜻 |
 |------|------|
 | `id`, `conversation_id` (대화 삭제 시 함께 삭제), `message_id` (제안한 답변, 지워지면 비움) | 어느 대화의 어느 답변이 냈는지 |
-| `kind` | `code_request` / `code_change` / `code_plan` / `place_conversation` / `delete_code_request` / `delete_folder` / `delete_conversation` / `split_conversation` / `save_memory` / `memory_card_change` |
-| `status` | `proposed` → `applied` / `rejected` / `failed` (`place_conversation`은 `applied` → `undone` 가능, `split_conversation`은 대화가 이어지면 `expired`) |
+| `kind` | `code_request` / `code_change` / `code_plan` / `place_conversation` / `delete_code_request` / `delete_folder` / `delete_conversation` / `split_conversation` / `save_memory` / `memory_card_change` / `handover_department` / `exclude_context` / `mark_important` / `progress_summary` / `department_criteria_change` / `concept_draft_change` / `concept_criterion_change` / `concept_draft_rerun` |
+| `status` | `proposed` → `applied` / `rejected` / `failed` (`place_conversation`·`exclude_context`·`mark_important`은 `applied` → `undone` 가능, `split_conversation`은 대화가 이어지면 `expired`) |
 | `payload` (jsonb) | 제안 내용. 서버가 검증·정리한 값만 들어간다 |
 | `preview` (jsonb) | 카드에 보일 요약(폴더 경로, 지워질 수 등). 제안 시점에 서버가 계산 |
 | `result` (jsonb) | 실행 결과(만든 폴더·요청 id, 되돌리기 정보) |
 | `error`, `decided_at`, `decided_by`, `created_at` | |
 
 - RLS: 슈퍼관리자만 읽는다. 앱은 직접 쓰지 않는다. `ai_think`가 사용자 JWT로 `ai_action_propose`를 불러 넣는다.
-- 앱용 RPC: `ai_action_apply(p_id, p_overrides)`, `ai_action_reject(p_id)`, `ai_action_undo(p_id)`.
+- 앱용 RPC: `ai_action_apply(p_id, p_overrides)`, `ai_action_reject(p_id)`, `ai_action_undo(p_id)`,
+  `ai_action_apply_batch(p_items)`(정리 패널의 일괄 승인, §11).
   `p_overrides`는 사용자가 카드에서 고친 값(다른 폴더 선택, 요청 문구 수정)만 받는다.
 - 같은 대화에 같은 종류의 `proposed`가 새로 오면 이전 것은 `rejected`(대체됨)로 바꾼다. 카드는 최신 것만 버튼을 보인다.
   기억 카드(`save_memory`·`memory_card_change`)는 예외로, 서로 대체하지 않고 사용자가 처리할 때까지 대기한다(§9).
@@ -103,6 +104,17 @@ AI는 **제안만** 하고, 실제 변경은 사용자가 채팅 안 카드에�
 | `split_conversation` | 새 대화 제목, 이유, 시작 메시지 앞부분, 폴더 경로(없으면 미분류), 다섯 칸 요약 | 새 대화 + 이번 문답 2개 복사 + 요약·폴더 배치(§7) | 없음(원본은 그대로) |
 | `save_memory` | 종류·제목·내용·배경·이유·대안, 제안 이유, 범위 제안, 대체할 기억 제목 | 확정 기억(`active`) 저장, 대체 대상은 `superseded`(§9) | 없음(기억 탭에서 고친다) |
 | `memory_card_change` | 수정·대체·삭제, 대상 카드 제목, 새 내용 | 대기 카드 수정 / 닫고 새 카드 / 닫기(§9) | 없음 |
+| `handover_department` | 지금 부서 → 받을 부서, 이유 | 대화 역할을 받을 부서로 바꾸고 그 부서 미분류로 옮긴다(§10) | 없음(트리에서 다시 옮긴다) |
+| `exclude_context` | 대상 메시지(역할·발췌), 이유, 이후 답변 영향, 연결된 문서·기억, 승인된 요약 여부 | 고른 메시지의 `context_excluded`를 켠다. 메시지는 지우지 않는다(§11) | 이번에 새로 뺀 메시지만 다시 넣는다 |
+| `mark_important` | 대상 메시지(역할·발췌), 이유 | 고른 메시지의 `marked_important`를 켠다(화면 표시만, §11) | 이번에 새로 표시한 메시지만 지운다 |
+| `progress_summary` | 목적·확정·미결·지금 상태·다음 행동, 제안 때의 승인된 요약 | 대화의 `progress_summary`를 바꾼다. 그사이 요약이 바뀌었으면 충돌(§11) | 없음(새 요약을 받는다) |
+| `department_criteria_change` | 부서, 질문·위험·우선 기억의 전후, 판 | 그 부서 기준을 바꾸고 판을 올린다. 판이 다르면 충돌(§11) | 없음(기준 창에서 고친다) |
+| `concept_draft_change` | 초안, 바꿀 것(고치기·빼기·되살리기·종류·새 종류·폴더·나누기·합치기, 30건까지), 건드린 항목의 전·후, 새 종류 | `concept_draft_action_apply`: 저장된 검토에 반영. 제안 뒤 그 항목이 바뀌었으면 `concept_draft_change_stale` | 없음(검토 창에서 고친다) |
+| `concept_criterion_change` | 초안, 기준의 지금 내용(확정본/저장된 초안)과 바꿀 내용 | `concept_draft_action_apply`: 그 기준의 **초안으로만** 저장(판·초안 시각이 제안 때와 같아야 함). 확정은 정리 기준 화면 | 없음 |
+| `concept_draft_rerun` | 초안, 쓸 기준(판·저장된 초안 여부) | `ai_action_apply`가 아니라 `concept_draft_organize` task `rerun`이 새 초안을 만들고 `concept_draft_rerun_finish`가 앞 초안을 `replaced`로 닫으며 `applied`로 남긴다 | 없음(앞 초안은 목록에 남는다) |
+
+개념 초안 카드 세 가지는 `concept_draft_action_propose(p_conversation_id, p_kind, p_payload)`로만 들어간다(사용자 JWT, 초안이 열려 있어야 함).
+같은 대화의 같은 기준 고치기·같은 초안 다시 정리는 새 제안이 앞 제안을 대체한다. 초안 변경은 서로 대체하지 않는다. 규칙은 `concept-library.md` §7.2.
 
 ---
 
@@ -113,13 +125,19 @@ AI는 **제안만** 하고, 실제 변경은 사용자가 채팅 안 카드에�
 - `list_tree_folders`: 폴더 id·경로·항목 수, 현재 대화의 위치
 - `list_conversations(query)`: 대화 id·제목·최근 시각 (최대 20)
 - `list_code_requests(query)`: 코드 요청 id·제목·상태·모드
-- `get_code_request(id)`: 요청 내용과 마지막 결과(정리된 결과, 원문은 앞부분만, diff 통계)
+- `get_code_request(id, section, offset)`: section이 null이면 **항상 짧은 구조화 요약**(9,000자 이하, `ai_think/code_brief.ts`):
+  상태·수정이면 `state{code, checks, needs_owner_check, apply}`, 결과 요약, 바뀐 파일, 검사(`checks`: 판정·항목별 명령·폴더·종료 코드·시간,
+  작업자 실행 기록에서만), 확인할 것, 막힌 이유, 적용에 필요한 행동, 최종 지시 검사, 구간별 시간(`timings_ms`), 요청 요약,
+  `not_included`(빠진 원문과 읽는 법). 긴 원문은 `section`(`request`·`result`·`result_text`·`check_logs`·`diff`) + `offset`으로
+  7,000자씩 읽는다(`next_offset`). Cursor용 relay(`think_get_code_request`)도 같은 모양이다. (2026-10-13, 이전에는 긴 요청이
+  응답 앞을 차지해 12,000자에서 결과가 잘렸다)
 
 제안(행 1개만 남김):
 
 - `propose_code_request(title, goal, questions, focus_paths, constraints, do_not, background)`
-- `start_code_plan(title, goal, instructions, questions, focus_paths, constraints, do_not, background, based_on_request_id)`:
+- `start_code_plan(title, goal, instructions, questions, focus_paths, constraints, do_not, background, checks, based_on_request_id)`:
   코드 수정이 필요하면 이 도구로 Cursor와 조율을 시작한다(§4.3). 제안이 아니라 바로 시작한다.
+  `checks[{cwd, command, why}]`는 사용자가 명시했거나 자동 검사 범위 밖이라 꼭 돌릴 검사다(§4.5). 조율본으로 그대로 이어진다.
   하루 한도에 걸리면 `daily_limit` 오류를 돌려준다. (2026-10-01에 `propose_code_change`를 대신함)
 - 두 코드 도구 모두 `effort`(`medium`·`high`·`xhigh`, 애매하면 `high`)와 `effort_reason`(한 줄)을 받는다.
   운영자는 카드에서 승인 전에 강도를 바꿀 수 있다. (2026-10-10, [`ai-code-bridge.md`](ai-code-bridge.md) §7.1)
@@ -238,6 +256,22 @@ Think: 대화로 의도 확인 → start_code_plan (승인 없이 시작, code_p
 - Think는 `owner_answers`와 "운영자 결정 — " 제약을 다시 묻지 않는다. 새 조율본을 만들 때 서버가 "운영자 결정 — " 줄을 지우지 않고 남긴다.
   수정 실행에도 이 제약이 그대로 들어간다(작업자 변경 없음).
 
+#### 운영자 답 뒤 최종 지시 하나 (2026-10-13, 마이그레이션 `20261013100000_ai_code_plan_answers.sql`, 프롬프트 `code-review-2026-10-13`)
+
+예전에는 답한 뒤에도 거절한 분기·"답변 대기" 조건이 지시에 남고, 회차마다 질문 id가 `q1`부터 다시 시작해 두 번째 답이 첫 답과 겹쳤다.
+
+- 질문 보기마다 `instructions`(그 보기를 고르면 붙을 단계), 질문마다 `holds`(답이 나올 때까지만 지킬 조건)를 둔다.
+  조율본 `instructions`·`constraints`에는 조건문·분기·대기 조건을 쓰지 않는다(스키마 설명과 지침).
+- 질문 id는 요청·회차 범위로 만든다: `p<조율 요청 id 앞 8자>r<회차>_q1`(`decisionScope`). 앱은 id를 그대로 돌려보낸다.
+- `ai_code_plan_revise`: 고른 보기의 단계만 지시에 붙이고(중복 제외), 고르지 않은 보기의 단계와 holds는 지시·제약에서 지워
+  `spec.discarded_branches[{kind: option|hold, plan_request_id, decision_id, question, label|holds, instructions}]`에 이력으로 남긴다.
+  `owner_answers`에는 `plan_request_id`·`answer_round`가 붙어 같은 id(`q1`)의 두 답도 둘 다 남는다. "운영자 결정 — " 줄은 중복을 넣지 않는다.
+- Think 입력: 조율본 JSON에서 `owner_answers`·`discarded_branches`를 빼고 "[운영자가 고른 답 (다시 묻지 않는다)]"·"[버린 분기]" 칸으로 따로 준다.
+  답한 항목과 실제로 충돌하는 새 사실은 다시 묻지 않고 "새로 발견된 충돌: "로 시작하는 질문으로 따로 보고한다(Cursor는 `owner_decision_conflicts`).
+- `planSpec`: Think가 쓴 "운영자 결정 — " 줄은 버리고 서버 줄만 남긴다. 버린 분기와 같은 줄은 지운다. `checks`는 원래 요청 것을 먼저 두고 Think가 더한 것을 뒤에 붙인다.
+- 최종 지시 검사(`finalPlanIssues`): 조율을 끝내고 수정을 시작하기 직전, 지시·제약에 버린 분기와 같은 줄이나 대기·분기 문구
+  (`UNRESOLVED_PATTERNS`)가 남았으면 Think에게 한 번만 고치게 한다. 고친 답을 쓰고 `spec.final_check{flagged, retried, remaining}`에 남긴다.
+
 ### 4.4 요청 상태 추가
 
 `ai_code_requests.mode`: `investigate`(기본) / `change` / `plan`.
@@ -255,7 +289,25 @@ Think: 대화로 의도 확인 → start_code_plan (승인 없이 시작, code_p
 | `supabase/functions/<함수>/**` | `deno check index.ts`(`_shared`가 바뀌면 전부), `*_test.ts`가 있으면 `deno test --allow-env .` |
 | `tools/code_bridge/**` | `node --test test/*.test.mjs` |
 | `supabase/migrations/**` | 번호 검사(기존 파일 수정·삭제, 이름 형식, 번호 중복, 기존 최대 번호 이하이면 실패) + AI 마이그레이션이면 `tools/db_test`(PGlite, 메모리 DB) |
+| node 폴더(가장 가까운 `package.json`, 없으면 `test/`가 있는 폴더. 저장소 루트는 아님) | 그 폴더의 `*.test.js|mjs|cjs`(`_test`·`-test`도) 파일 목록으로 `node --test`. 시험이 없으면 바뀐 JS 파일 `node --check` + "시험 없음" 미실행 (2026-10-13) |
 | 그 밖의 코드 | 검사 없음 → "미실행" 1줄 (`docs/`, `.cursor/rules/`, `.md`·`.mdc`·`.txt`는 빼고) |
+
+**요청한 필수 검사 (2026-10-13, `CHECKS_VERSION = 2`).** 조율본 `spec.checks[{cwd, command, why}]`(Think `start_code_plan.checks`·조율 `plan.checks`)를
+작업자가 `request:N` 항목으로 먼저 돌린다. 받는 명령은 `node --test <저장소 안 상대 경로·glob>`뿐이다(옵션·`..`·따옴표 불가 → 미실행).
+Node 22의 `node --test <폴더>`는 폴더를 찾아 들어가지 않으므로 작업자가 시험 파일 목록으로 펼친다. 해당 파일이 없으면 실패(수정이 만들어야 한다).
+자동 node 검사는 요청 검사가 덮지 않은 파일만 돈다.
+
+- **의존성**: 복사본에는 무시 파일인 `node_modules`가 없다. `package.json`에 의존성이 있으면 작업 폴더의 `node_modules`를
+  `%TEMP%/ygg-code-bridge/deps/<폴더>-<lock 해시>`에 한 번 복사해 두고 복사본에 junction으로 연결한다. 검사가 끝나면 연결만 지운다.
+  작업 폴더에 `node_modules`가 없으면 미실행 + `env: true`(작업 폴더에서 `npm ci`가 필요하다는 이유). 시험이 패키지를 못 찾아
+  불러오지 못하는데 바꾸기 전에도 같으면 "원래도 실패"가 아니라 환경 문제 미실행이다.
+- **사전 점검**: 수정 시작 전에 요청 검사의 명령 모양·폴더·의존성을 확인해(`preflightChecks`) 터미널과 결과(`result.preflight`)에 남기고 수정 프롬프트에 넣는다.
+- **기록**: 항목마다 `command`·`cwd`·`exit_code`·`duration_ms`·`scope`(`required` | `followup`)·`source`(`auto` | `request`)·`env`,
+  전체에 `verdict`·`patch_sha256`(검사한 diff의 sha256)·`base_commit`·`checked_at`. 결과에 `timings{prepare_ms, agent_ms, checks_ms}`.
+- **판정**(`verdict`, 작업자·`_shared/code_verification.ts`·앱 같은 규칙): 필수 항목에 실패가 있으면 `failed`, 미실행이 있거나 중간에 멈췄으면 `not_run`,
+  필수 항목이 있고 모두 통과(원래도 실패 포함)면 `passed`(원래도 실패가 있으면 문구에 "N개 제외"), 필수 항목이 없으면 `none`.
+  `db-test-other`는 `followup`(실데이터 확인 성격)이라 판정에 넣지 않는다. 재수정은 필수 항목 실패만 부른다. `env` 미실행은 재수정하지 않고 환경 조치를 알린다.
+- 중첩 `node --test`가 상위의 `NODE_TEST_CONTEXT`를 물려받으면 실패해도 종료 코드 0이 된다. 작업자는 검사 환경에서 이 변수를 지운다.
 
 - 상태: `passed`(통과) · `failed`(실패) · `skipped`(미실행) · `preexisting`(원래도 실패). **미실행은 통과가 아니다.**
 - 실패한 검사는 수정 전 커밋(`<id>-baseline` 복사본)에서 한 번 더 돌린다. 거기서도 실패하면 "원래도 실패"다.
@@ -291,6 +343,9 @@ Think: 대화로 의도 확인 → start_code_plan (승인 없이 시작, code_p
 ```
 
 - Think 검토문은 CEO 역할로 쓴다: 결론 먼저, 쉬운 말, 숫자는 그대로, 미실행은 통과가 아님, 마이그레이션은 적용 버튼으로 DB에 안 들어감.
+- 완료 상태를 나눈다(2026-10-13): 코드 작성 완료 / 필수 검사 통과·실패·실행 불가 / 사용자 확인 필요 / 작업 폴더 적용 대기·완료.
+  수정 결과 답 끝에 서버가 실행 기록으로 만든 "**작업 상태**" 줄(`changeStatusLine`)을 붙이고, 카드도 같은 네 줄(`ThinkChangeStateView`)을 보인다.
+  수정의 `ready`는 목록에서 "코드 작성 완료"로 보이며 검증됐다는 뜻이 아니다. 검사 결과는 작업자 기록으로만 말한다(모델이 "검사 통과"라고 써도 근거가 아니다).
 - 재수정이 시작되면 앞 카드는 적용 버튼을 숨기고 "새 카드의 결과를 보세요"라고 안내한다. 새 요청이 실패·취소·확인 필요로 끝나면 앞 카드의 적용 버튼이 돌아온다.
 - 2번 재수정해도 실패하면 Think가 무엇이 실패했는지와 다음 선택지를 쉬운 말로 보고한다. 더 고칠지는 운영자가 정한다.
 
@@ -443,7 +498,7 @@ ai_think: 이번 사용자 메시지 저장 → 모델이 답하면서 propose_c
   사용자 메시지나 기억으로 바꿀 수 없다.
 - 결과는 `status` 응답 `features`·`features_db_error`, SSE `conversation` 이벤트 `features`·`split_suggestions`, `ai_runs.features`(그 호출의
   계산 결과)에 남는다. `ai_runs.features` 열이 없는 DB에서는 그 값을 빼고 다시 기록한다.
-- 앱은 `ThinkApi.clientFeatures`(`{conversation_split: 1, think_roles: 1, memory_proposals: 1}`)를 보낸다. 상태 창 "기능 상태"와 맥락 패널 "대화 나누기"에 사용 가능/준비 필요/확인 불가와
+- 앱은 `ThinkApi.clientFeatures`(`{conversation_split: 1, think_roles: 1, memory_proposals: 1, department_work: 1, auto_organize: 1}`)를 보낸다. 상태 창 "기능 상태"와 맥락 패널 "대화 나누기"에 사용 가능/준비 필요/확인 불가와
   이유를 보인다. 기능 상태를 보내지 않는 이전 Edge면 "확인 불가 · Edge 배포 필요"로 보인다.
 
 배포 순서가 어긋났을 때:
@@ -476,7 +531,7 @@ ai_think: 이번 사용자 메시지 저장 → 모델이 답하면서 propose_c
   저장된 역할로 거른다. 기억 피드백의 중복 경고는 운영자 화면 용도라 전체 기억과 비교한다.
 - 앱(매니저 Think): 대화 위 역할 머리(아바타 4종·역할 칩·다른 부서 참조, 720px 미만은 아바타만), 답변별 "이 답변에 쓴 자료 보기"와
   맥락 패널 자료 칸(선택한 답변의 실제 전달 자료, 스냅샷이 없으면 "기록 없음", 연결 기억·문서 추가/해제), 기억 편집·피드백·결정 저장의
-  범위 선택(역할은 제안만, "적용"을 눌러야 바뀜). 답하는 중에는 역할·연결을 바꿀 수 없다. 모션 감소 설정이면 아바타 고리가 고정된다.
+  범위 선택(역할은 제안만, "적용"을 눌러야 바뀜). 답하는 중에는 역할·연결을 바꿀 수 없다. 아바타는 §10의 부서 캐릭터이며 모션 감소 설정이면 움직이지 않는다.
 
 ## 9. 기억 저장 제안 (2026-10-11, 마이그레이션 `20261011100000_ai_think_memory_proposals.sql`)
 
@@ -514,3 +569,111 @@ ai_think: 모델이 propose_memory({memory, reason}) → ai_action_propose('save
   "기억 저장 제안" 절을 넣는다. 준비되지 않으면 예전 문장("결정·원칙·기억은 제안 도구로 만들지 않는다")을 그대로 쓴다.
 - **앱**: 카드(`think_memory_proposal_views.dart`, `ThinkActionCard`), 승인 뒤 기억 목록 새로고침, 변경 카드 승인 뒤 대상 대화의 카드
   다시 읽기, 상태 창 "기억 저장 제안" 줄.
+
+## 10. 부서 트리·부서 협의·부서 넘기기 (2026-10-12, 마이그레이션 `20261012100000_ai_think_departments.sql`)
+
+사장님 결정(2026-10-12): 왼쪽 트리를 4부서(총괄·교육·문제 풀이·개발)로 먼저 나누고, 부서마다 캐릭터로 진행 상태를 보인다.
+Think는 답변 중 다른 부서에 자동으로 협의하고, 대화를 다른 부서로 넘기자고 제안할 수 있다.
+
+- **이름**: 내부 id `product`는 그대로, 이름만 "문제 풀이". 관점은 문제 은행·문항 제작·난이도, 채점·오답 분석·문제 통계,
+  교재·목차·유형 분류. 학생이 문제를 푸는 과정과 풀이 화면은 맡지 않는다(`ROLE_PROFILE_VERSION think-role-2026-10-12`).
+- **폴더 부서**: `ai_tree_nodes.department`(폴더만, 4값). 하위 폴더는 상위 폴더 부서를 트리거가 강제하고, 최상위 폴더 부서를
+  바꾸면 하위 폴더로 내려간다. 기존 폴더는 안 대화들의 최다 역할로 정했다(동률·빈 폴더는 총괄). 기존 대화 역할은 바꾸지 않았다.
+- **대화의 칸**: 폴더 안 대화는 최상위 폴더의 부서 칸, 폴더 밖 대화·미분류는 대화 역할의 칸에 보인다. 폴더 부서와 역할이 다른
+  대화는 "X 관점" 표시만 하고 고치지 않는다.
+- **부서 사이 옮기기**(사람): `ai_tree_move_department`(노드·미분류 대화를 다른 부서 폴더/최상위로, 안의 대화 역할을 모두 그 부서로,
+  `roles_changed` 반환), `ai_conversation_move_department`(대화를 그 부서 미분류로). 앱은 역할이 바뀌는 대화가 있으면 확인 창
+  ("다음 답변부터 X 관점")을 먼저 띄우고, 답하는 중인 대화는 옮기지 않는다. 역할 칩으로 역할을 바꾸면
+  (`ai_conversation_set_think_role`) 폴더 부서와 달라질 때 그 대화를 새 부서 미분류로 뺀다.
+- **부서 넘기기**(Think 제안): 도구 `propose_department_handover({to_department, reason})` → `ai_department_handover_propose`
+  (`handover_department` 제안, 대화당 대기 1장, 새 제안은 앞 제안을 대체). 승인하면 `ai_action_apply`가 같은 부서인지 다시 보고
+  `ai_conversation_change_department(…, unfile=true)`: 역할을 바꾸고 그 부서 미분류로 옮긴다. 대화는 나누지 않는다. 답변당 1장.
+- **부서 협의**(Think 자동): 도구 `consult_department({department, question, background})`(`ai_think/consult.ts`). 승인 없이 답변당
+  최대 2회. 질문받은 부서는 **질문·배경 + 자기 부서·공통 기억만** 보고(사장님 대화 기록·다른 부서 기억은 보지 않음), 도구 없이
+  primary 모델로 답한다. 남은 시간이 15초 미만이면 하지 않는다. 기록: `ai_runs`(feature `think_consult`, `features.consult {from,to}`),
+  그 답변의 도구 기록(질문·답 요약, 공개). SSE `consult {call_id, status: running|done, from, to}`로 앱 트리 캐릭터가
+  "↔ X과 협의 중"을 보인다. 협의 결과는 Think가 답변에 반영하며 기억으로 저장하지 않는다.
+- **같은 부서 폴더**: 기능이 켜지면 `propose_folder`(대화 분류)는 대화 부서와 같은 부서 폴더만 고를 수 있다
+  (`folder_other_department`). 새 폴더는 대화 부서로 만든다. `list_tree_folders`가 폴더 부서와 이 대화 부서를 함께 준다.
+- **노출 조건**: 기능 `department_work`(Edge·DB·앱 모두 1) + `think_roles` 준비 + 커서 문의(relay) 아님. 준비되지 않으면 예전 트리,
+  두 도구 없음, 지침에 "## 부서" 절 없음.
+- **캐릭터 상태**(앱만 계산, 서버 저장 없음): 협의 중 > 답하는 중 > Cursor 작업(그 부서 대화의 진행 중 코드 요청) > 승인 대기(그 부서
+  대화의 대기 제안 수, `pendingActionCounts`) > 쉬는 중. 14×14 픽셀 캐릭터(`think_avatars.dart`)가 모든 역할 아바타를 대신한다.
+  일하는 상태만 움직이고, 모션 감소 설정이면 멈춘다.
+
+| 조합 | 동작 |
+|------|------|
+| 새 Edge + 이전 DB | `department_work` `db_required` → 예전 트리, 협의·넘기기 도구 없음 |
+| 새 Edge + 이전 앱 | `app_update_required` → 도구 없음 |
+| 새 앱 + 이전 DB | 트리 `department` 열이 없으면 빼고 다시 읽음, 예전 트리 |
+| 새 앱 + 이전 Edge | 기능 상태 없음 → 예전 트리 |
+
+## 11. 자동 정리 제안과 정리 패널 (2026-10-12, 마이그레이션 `20261012120000_ai_think_auto_organize.sql`)
+
+Think 상담 스펙 "자동 정리 제안과 승인 중심 운영"을 구현한다. Think가 대화 중에 분류·나누기·기억·부서 넘기기·맥락 제외·중요 표시·
+진행 요약·부서 기준 변경을 먼저 제안하고, 운영자는 고르고 고쳐서 승인만 한다. 승인 전에는 아무것도 바뀌지 않는다.
+
+2026-10-12 운영자 결정:
+
+| 항목 | 결정 |
+|------|------|
+| 중요 표시 | 메시지 표시(`ai_messages.marked_important`). 화면 표시일 뿐 원칙·지시의 권한이 아니다. 점수 체계는 만들지 않는다 |
+| 진행 요약 단위 | 대화마다 하나(`ai_conversations.progress_summary`) |
+| 화면 | 답변 아래 정리 카드는 "정리 제안 N건" 한 줄로 접고, 오른쪽 정리 패널(좁으면 바텀시트)에서 골라 한 번에 승인한다. 코드·삭제 카드는 그대로 |
+| Preview 화면 | 만들지 않고 실제 화면에 바로 반영 |
+| 부서 기준 | 이번에 함께(`ai_department_criteria`) |
+| 범위 | 지금 대화만. 다른 대화·폴더·기간 정리는 아직 하지 않는다 |
+
+```
+ai_think: 기능 auto_organize(Edge·DB·앱 모두 1) 준비 + 커서 문의 아님
+  - 자동 제안 설정(ai_platform_settings.auto_organize_enabled, 기본 켜짐)이 꺼져 있으면 사용자가 이번 메시지에서 정리를 직접
+    요청할 때만 분류·나누기·기억·넘기기·정리 도구를 준다. 설정을 읽지 못하면 꺼진 것으로 본다
+  - 도구: list_conversation_messages(맥락에 들어가는 메시지 id·역할·발췌) →
+          propose_context_exclusion / propose_importance_mark / propose_progress_summary /
+          propose_department_criteria_change(역할이 적용된 대화에서만)
+    → 전용 제안 RPC가 ai_actions에 제안 1행(같은 종류의 앞 대기 제안은 대체). 한 답변에 종류마다 하나
+사용자: 답변 아래 "정리 제안 N건" → 정리 패널 → 항목 고르기·고치기·이번에는 거절 → "선택한 항목 승인"
+  → ai_action_apply_batch([{id, overrides}]) : 슈퍼관리자, 1~20개, 같은 id는 한 번
+     실행 순서: 부서 넘기기 → 분류 → 맥락 제외 → 중요 표시 → 나누기 → 기억 → 기억 카드 → 진행 요약 → 부서 기준
+     항목마다 savepoint로 기존 ai_action_apply를 따로 실행 → [{id, ok, already?, code?, message?, action}]
+     이미 승인된 항목은 다시 실행하지 않고 ok+already, 실패한 항목은 대기 상태로 남는다
+```
+
+- **맥락 제외**: 승인하면 고른 메시지의 `context_excluded`만 켠다. 메시지·문서·기억은 지우지 않는다. 대상 메시지에서 만든 발췌·종합
+  문서와 그 답변에서 저장한 확정 기억은 "따로 판단"으로 경고만 하고 바꾸지 않는다. 승인된 진행 요약이 있으면 내용이 남을 수
+  있다고 알린다. 비판·실패·의견 차이를 감추려고 제안하지 않고, 무엇이 정정·폐기됐는지 이유를 구체적으로 적게 한다(지침).
+  되돌리기는 이번에 새로 뺀 메시지(`result.excluded_ids`)만 다시 넣는다. 대화 삭제는 정리 제안이 아니다.
+- **중요 표시**: 승인하면 `marked_important`를 켠다. 운영자는 답변 머리의 깃발·질문 옆 깃발로 직접 켜고 끌 수도 있다.
+  AI 맥락에서 원칙보다 앞서지 않는다(지침). 되돌리기는 이번에 새로 표시한 메시지만 지운다.
+- **진행 요약**: 목적·확정(사용자가 정한 것만)·미결·지금 상태·다음 행동(무엇, 담당·선행 조건·완료 기준은 사용자가 말한 것만).
+  제안 때 승인돼 있던 요약을 `payload.base_action_id`로 남기고, 승인 때 지금 요약이 다른 제안에서 왔으면 `progress_summary_changed`로
+  멈춘다. 승인된 요약은 다음 답변부터 지난 대화 뒤에 참고 자료로 들어간다(지시·권한 아님, 요약 뒤 새 질문 수와 그 뒤 맥락 제외를
+  함께 알린다). 승인해도 코드 작업·배포·DB 변경은 시작되지 않는다.
+- **부서 기준**: 부서마다 먼저 확인할 질문(8개)·놓치면 안 되는 위험(8개)·우선 참고할 승인 기억(8개, 그 부서가 볼 수 있는 active만).
+  접근 권한과 별개다. 바꿀 때마다 `version`이 오르고 `ai_department_criteria_revisions`에 남는다. 제안 때의 판(`payload.base_version`)과
+  다르면 `criteria_changed`로 멈춘다. 운영자는 맥락 패널 "부서 기준" 창에서 직접 고칠 수 있다(`ai_department_criteria_save`, 판 검사).
+  역할이 적용된 대화의 지시문에 그 부서 기준이 들어간다(교육철학·원칙보다 앞서지 않음).
+- **분류의 부서 확인**: 승인 때 폴더 부서가 지금 대화 부서와 다르면 `place_department_mismatch`로 멈춘다. 그래서 자동 정리 기능이
+  켜진 요청에서만, 같은 답변에서 넘기기를 제안한 부서의 폴더로 분류를 함께 제안할 수 있다(`preview.after_handover`). 일괄 승인은
+  넘기기를 먼저 실행한다. 옛 DB에서는 넘기기가 승인된 뒤 그 부서에서 다시 분류를 제안한다.
+- **거절**: "사용자가 거절함"은 작업 상태 메모로 Think에게 알리고, 같은 내용을 다시 내지 않게 한다(지침). 거절된 맥락 제외·중요 표시
+  제안이 이번 대상 메시지를 모두 담고 있으면, 사용자가 이번 메시지에서 직접 요청한 경우가 아니면 서버가 받지 않는다
+  (`organize_rejected_before`).
+- **앱**(`think_organize_panel.dart`):
+  - 답변 아래 "정리 제안 N건 · 종류" 줄(처리 못 한 건수), 대화 머리 "정리 제안 N" 배지. 넓은 화면(1180px 이상)은 맥락 패널 자리에
+    정리 패널, 좁으면 바텀시트로 띄운다.
+  - 항목마다 무엇을 바꾸는지, 왜 지금인지, 근거(제안한 답변·대상 메시지 원문 보기), 전후·범위, 고치기, "이번에는 거절".
+    처음에는 아무것도 고르지 않는다. 답하는 중에는 승인하지 않는다.
+  - 결과는 "기억 1건 저장 · 분류 완료"처럼 보이고, 실패·충돌 항목만 이유와 함께 남긴다. 성공 항목은 다시 승인하라고 하지 않는다.
+    나눈 대화로는 자동으로 넘어가지 않고 "나눈 대화 열기"를 보인다.
+  - 패널에 들어가는 것: 대기 중인 새 종류 네 개는 늘, 분류·나누기·기억·기억 카드·넘기기는 일괄 승인을 쓸 수 있을 때(`auto_organize`
+    준비)만. 코드·삭제 제안은 답변 아래 카드 그대로다. 처리된 제안은 답변 아래에 결과 한 줄로 남는다(되돌리기 포함).
+  - 맥락 패널: 승인된 진행 요약, 정리 제안(자동 제안 켜기·끄기, 대기 수, 정리 패널·부서 기준 버튼), 이번 답변에 진행 요약·부서
+    기준을 썼는지. 상태 창 "자동 정리 제안" 줄과 같은 켜기·끄기.
+
+| 조합 | 동작 |
+|------|------|
+| 새 Edge + 이전 DB | `auto_organize` `db_required` → 정리 도구·설정·요약·부서 기준 없음, 예전 카드 |
+| 새 Edge + 이전 앱 | `app_update_required` → 정리 도구 없음, 분류·나누기·기억은 예전처럼 |
+| 새 앱 + 이전 DB | 기능이 준비되지 않아 정리 패널을 쓰지 않고 예전 카드. 맥락 패널 "정리 제안"은 준비 필요와 이유만 보이고, 중요 표시 깃발·자동 제안 토글·부서 기준 버튼은 숨김 |
+| 새 앱 + 이전 Edge | 기능 상태 없음 → 예전 카드 |

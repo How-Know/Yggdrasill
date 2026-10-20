@@ -113,11 +113,20 @@ class ThinkApi {
     '.webp': 'image/webp',
     '.gif': 'image/gif',
     '.pdf': 'application/pdf',
+    '.xlsx': spreadsheetMime,
   };
+  static const String spreadsheetMime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  static const String attachmentTypesHint = '이미지(PNG·JPG·WEBP·GIF), PDF, 엑셀(.xlsx)만 첨부할 수 있습니다.';
   static const int maxAttachmentBytes = 20 * 1024 * 1024;
 
   /// 이 앱이 처리할 수 있는 기능과 버전. 서버가 Edge·DB 버전과 함께 보고 기능 상태를 정한다(권한은 서버가 따로 확인).
-  static const Map<String, int> clientFeatures = {'conversation_split': 1, 'think_roles': 1, 'memory_proposals': 1};
+  static const Map<String, int> clientFeatures = {
+    'conversation_split': 1,
+    'think_roles': 1,
+    'memory_proposals': 1,
+    'department_work': 1,
+    'auto_organize': 1,
+  };
 
   SupabaseClient get _db => Supabase.instance.client;
 
@@ -229,10 +238,15 @@ class ThinkApi {
     const base = 'id,title,status,message_count,last_message_at,created_at';
     List<Map<String, dynamic>> rows;
     try {
-      rows = await load('$base,origin');
+      rows = await load('$base,origin,think_role_id');
     } on PostgrestException catch (e) {
-      if (e.code != '42703' && !e.message.contains('origin')) rethrow;
-      rows = await load(base);
+      if (e.code != '42703' && !e.message.contains('think_role_id') && !e.message.contains('origin')) rethrow;
+      try {
+        rows = await load('$base,origin');
+      } on PostgrestException catch (e2) {
+        if (e2.code != '42703' && !e2.message.contains('origin')) rethrow;
+        rows = await load(base);
+      }
     }
     return rows.map(ThinkConversation.fromRow).toList();
   }
@@ -293,6 +307,12 @@ class ThinkApi {
     return rows.map(ThinkMessage.fromRow).toList();
   }
 
+  /// 대화 하나(개념 탭 연결 확인). 지웠거나 볼 수 없으면 null. 열 이름을 고정하지 않는다.
+  Future<ThinkConversation?> getConversation(String id) async {
+    final row = await _db.from('ai_conversations').select().eq('id', id).maybeSingle();
+    return row == null ? null : ThinkConversation.fromRow(row);
+  }
+
   /// 나누기 출처·요약·제안 설정. 열 이름을 고정하지 않아 마이그레이션 전 DB에서는 기본값으로 읽힌다.
   Future<ThinkConversationDetail?> getConversationDetail(String id) async {
     final row = await _db.from('ai_conversations').select().eq('id', id).maybeSingle();
@@ -320,10 +340,8 @@ class ThinkApi {
 
   Future<List<String>> listConversationMemoryLinks(String conversationId) async {
     try {
-      final rows = await _db
-          .from('ai_conversation_memory_links')
-          .select('memory_id')
-          .eq('conversation_id', conversationId);
+      final rows =
+          await _db.from('ai_conversation_memory_links').select('memory_id').eq('conversation_id', conversationId);
       return rows.map((r) => r['memory_id']?.toString() ?? '').where((id) => id.isNotEmpty).toList();
     } on PostgrestException catch (e) {
       if (_isMissingFunction(e) || e.message.contains('ai_conversation_memory_links')) return [];
@@ -396,6 +414,12 @@ class ThinkApi {
     await _db.from('ai_messages').update({'context_excluded': excluded}).inFilter('id', ids);
   }
 
+  /// 화면용 중요 표시. AI 맥락이나 원칙에는 영향이 없다.
+  Future<void> setMessagesImportant(List<String> ids, bool important) async {
+    if (ids.isEmpty) return;
+    await _db.from('ai_messages').update({'marked_important': important}).inFilter('id', ids);
+  }
+
   // ---------------------------------------------------------------- 정리 트리
   static const Map<String, String> _treeErrors = {
     'tree_cycle': '폴더를 자기 자신이나 그 안쪽으로 옮길 수 없습니다.',
@@ -421,24 +445,73 @@ class ThinkApi {
   }
 
   Future<List<ThinkTreeNode>> listTreeNodes() async {
-    final rows = await _db
+    Future<List<Map<String, dynamic>>> load(String extra) => _db
         .from('ai_tree_nodes')
         .select(
-          'id,parent_id,kind,title,summary,body,sort_order,conversation_id,created_via,version,created_at,updated_at,'
+          'id,parent_id,kind,title,summary,body,sort_order,conversation_id,created_via,version,created_at,updated_at,$extra'
           'ai_tree_node_sources(message_id,sort_order)',
         )
         .order('sort_order', ascending: true)
         .limit(5000);
+    List<Map<String, dynamic>> rows;
+    try {
+      rows = await load('department,');
+    } on PostgrestException catch (e) {
+      if (e.code != '42703' && !e.message.contains('department')) rethrow;
+      rows = await load('');
+    }
     return rows.map(ThinkTreeNode.fromRow).toList();
   }
 
-  Future<void> createFolder({required String title, required String? parentId, required int sortOrder}) =>
+  /// [department]는 최상위 폴더에만 쓴다(하위 폴더는 DB가 상위 폴더 부서로 정한다). 부서 마이그레이션 전에는 보내지 않는다.
+  Future<void> createFolder({
+    required String title,
+    required String? parentId,
+    required int sortOrder,
+    ThinkRoleId? department,
+  }) =>
       _db.from('ai_tree_nodes').insert({
         'kind': ThinkTreeKind.folder.db,
         'title': title.trim(),
         'parent_id': parentId,
         'sort_order': sortOrder,
+        if (department != null && parentId == null) 'department': department.db,
       });
+
+  /// 부서를 넘나드는 옮기기. 옮긴 대화(폴더면 안의 모든 대화)의 역할도 그 부서로 바뀐다. 바뀐 대화 수를 돌려준다.
+  Future<int> moveTreeNodeDepartment({
+    String? nodeId,
+    String? conversationId,
+    required String? parentId,
+    required int index,
+    required ThinkRoleId department,
+  }) async {
+    final res = await _db.rpc('ai_tree_move_department', params: {
+      'p_node_id': nodeId,
+      'p_conversation_id': conversationId,
+      'p_parent_id': parentId,
+      'p_index': index,
+      'p_department': department.db,
+    });
+    return res is Map ? (res['roles_changed'] as num?)?.toInt() ?? 0 : 0;
+  }
+
+  /// 대화를 [department]의 미분류로 옮긴다(역할 변경 + 트리에서 빼기).
+  Future<void> moveConversationDepartment(String conversationId, ThinkRoleId department) => _db.rpc(
+        'ai_conversation_move_department',
+        params: {'p_conversation_id': conversationId, 'p_department': department.db},
+      );
+
+  /// 대기 중인 제안이 있는 대화와 개수. 트리의 부서 캐릭터가 "승인 대기"를 보여 줄 때 쓴다.
+  Future<Map<String, int>> pendingActionCounts() async {
+    final rows = await _db.from('ai_actions').select('conversation_id').eq('status', 'proposed').limit(1000);
+    final out = <String, int>{};
+    for (final r in rows) {
+      final id = r['conversation_id'];
+      if (id is String) out[id] = (out[id] ?? 0) + 1;
+    }
+    return out;
+  }
 
   Future<void> updateTreeNode(String id, Map<String, dynamic> patch) =>
       _db.from('ai_tree_nodes').update(patch).eq('id', id);
@@ -535,7 +608,7 @@ class ThinkApi {
     if (user == null) throw ThinkApiException('unauthorized', '로그인이 필요합니다.');
     final mime = mimeForPath(file.path);
     if (mime == null) {
-      throw ThinkApiException('attachment_type_invalid', '이미지(PNG·JPG·WEBP·GIF)와 PDF만 첨부할 수 있습니다.');
+      throw ThinkApiException('attachment_type_invalid', attachmentTypesHint);
     }
     final size = await file.length();
     if (size > maxAttachmentBytes) {
@@ -556,9 +629,50 @@ class ThinkApi {
     } catch (_) {}
   }
 
-  Future<String> signedAttachmentUrl(String path) => _db.storage.from(attachmentBucket).createSignedUrl(path, 600);
+  /// downloadName을 주면 브라우저가 열지 않고 그 이름으로 내려받는다(Storage의 download 쿼리).
+  Future<String> signedAttachmentUrl(String path, {String? downloadName}) async {
+    final url = await _db.storage.from(attachmentBucket).createSignedUrl(path, 600);
+    if (downloadName == null || downloadName.isEmpty) return url;
+    final sep = url.contains('?') ? '&' : '?';
+    return '$url${sep}download=${Uri.encodeQueryComponent(downloadName)}';
+  }
 
   // ---------------------------------------------------------------- 채팅(SSE)
+  /// [conceptId]·[criterionId]는 개념 탭이 고른 개념·정리 기준의 id만 대화 id와 따로 보낸다. 본문·고치는 중인
+  /// 내용은 보내지 않는다(서버가 보낼 때마다 저장본을 다시 읽는다).
+  /// [statementId]는 그 개념에서 고른 서술의 id다. 없으면 기본 서술(개념 본문)이다.
+  /// [draftId]는 개념 초안 검토 창의 초안 id. 새 대화(첫 질문)에도 보낸다(서버가 교육 부서·고정 제목으로 만든다).
+  static Map<String, dynamic> chatRequestBody({
+    required String? conversationId,
+    required String message,
+    required List<ThinkAttachment> attachments,
+    required bool deep,
+    required bool webSearch,
+    ThinkRoleId? newConversationRole,
+    List<ThinkDepartmentId> newConversationRefs = const [],
+    String? conceptId,
+    String? statementId,
+    String? criterionId,
+    String? draftId,
+  }) =>
+      {
+        'action': 'chat',
+        'conversation_id': conversationId,
+        'message': message,
+        'attachments': attachments.map((a) => a.toJson()).toList(),
+        'options': {'deep': deep, 'web_search': webSearch},
+        if (conversationId == null && newConversationRole != null)
+          'role': {
+            'think_role_id': newConversationRole.db,
+            'extra_ref_departments': newConversationRefs.map((d) => d.db).toList(),
+          },
+        if (conversationId != null && conceptId != null) 'concept_id': conceptId,
+        if (conversationId != null && conceptId != null && statementId != null) 'statement_id': statementId,
+        if (conversationId != null && criterionId != null) 'criterion_id': criterionId,
+        if (draftId != null) 'draft_id': draftId,
+        'client': {'features': clientFeatures},
+      };
+
   Future<ThinkChatStream> openChat({
     required String? conversationId,
     required String message,
@@ -567,6 +681,10 @@ class ThinkApi {
     required bool webSearch,
     ThinkRoleId? newConversationRole,
     List<ThinkDepartmentId> newConversationRefs = const [],
+    String? conceptId,
+    String? statementId,
+    String? criterionId,
+    String? draftId,
   }) async {
     var session = _db.auth.currentSession;
     if (session == null) throw ThinkApiException('unauthorized', '로그인이 필요합니다.');
@@ -584,19 +702,19 @@ class ThinkApi {
         'Content-Type': 'application/json',
         'Accept': 'text/event-stream',
       })
-      ..body = jsonEncode({
-        'action': 'chat',
-        'conversation_id': conversationId,
-        'message': message,
-        'attachments': attachments.map((a) => a.toJson()).toList(),
-        'options': {'deep': deep, 'web_search': webSearch},
-        if (conversationId == null && newConversationRole != null)
-          'role': {
-            'think_role_id': newConversationRole.db,
-            'extra_ref_departments': newConversationRefs.map((d) => d.db).toList(),
-          },
-        'client': {'features': clientFeatures},
-      });
+      ..body = jsonEncode(chatRequestBody(
+        conversationId: conversationId,
+        message: message,
+        attachments: attachments,
+        deep: deep,
+        webSearch: webSearch,
+        newConversationRole: newConversationRole,
+        newConversationRefs: newConversationRefs,
+        conceptId: conceptId,
+        statementId: statementId,
+        criterionId: criterionId,
+        draftId: draftId,
+      ));
 
     final http.StreamedResponse response;
     try {
@@ -730,6 +848,29 @@ class ThinkApi {
     'split_title_required': '새 대화 제목을 입력하세요.',
     'split_summary_required': '요약의 "목적"을 입력하세요.',
     'action_kind_not_appliable': '승인해서 실행하는 제안이 아닙니다.',
+    'action_kind_not_in_batch': '정리 패널에서 승인할 수 없는 제안입니다. 답변 아래 카드에서 처리하세요.',
+    'batch_items_invalid': '승인할 항목을 1~20개 고르세요.',
+    'handover_same_department': '이미 그 부서가 맡고 있습니다.',
+    'place_department_mismatch': '대화가 아직 다른 부서에 있어 이 폴더로 옮길 수 없습니다. 부서 넘기기를 먼저 승인하세요.',
+    'memory_card_not_pending': '기억 카드가 이미 처리됐습니다. 새로고침하세요.',
+    'memory_supersede_not_active': '바꾸려던 기억이 이미 바뀌었거나 보관됐습니다. 새로고침하세요.',
+    'organize_target_not_proposed': '제안에 없던 메시지는 더할 수 없습니다.',
+    'organize_targets_invalid': '메시지를 하나 이상 고르세요.',
+    'organize_target_missing': '대상 메시지가 없어졌습니다. 새로고침하세요.',
+    'organize_too_many': '한 번에 고를 수 있는 메시지 수를 넘었습니다.',
+    'summary_purpose_required': '요약의 "목적"을 입력하세요.',
+    'progress_summary_changed': '그사이 진행 요약이 바뀌었습니다. 지금 요약을 확인한 뒤 다시 판단하세요.',
+    'criteria_changed': '그사이 부서 기준이 바뀌었습니다. 새로고침한 뒤 다시 판단하세요.',
+    'criteria_memory_not_allowed': '이 부서가 볼 수 없는 기억은 우선 참고로 넣을 수 없습니다.',
+    'criteria_not_found': '부서 기준이 없습니다. 새로고침하세요.',
+    'concept_draft_change_stale': '제안한 뒤 그 개념을 고쳤습니다. 지금 내용으로 다시 물어보세요.',
+    'concept_draft_closed': '이미 닫힌 초안입니다(확정·버림·다시 정리).',
+    'concept_draft_not_found': '초안을 찾지 못했습니다.',
+    'concept_draft_review_not_saved': '검토를 한 번 저장해야 바꿀 수 있습니다.',
+    'concept_draft_rerun_use_organize': '다시 정리 카드는 개념 초안 검토 창에서 승인하세요.',
+    'concept_draft_change_': '지금 검토에 이 변경을 적용할 수 없습니다. 다시 물어보세요.',
+    'concept_criteria_stale': '제안한 뒤 기준이 바뀌었습니다. 다시 물어보세요.',
+    'concept_criteria_not_found': '기준을 찾지 못했습니다.',
   };
 
   static String codeErrorMessage(Object e) {
@@ -739,6 +880,17 @@ class ThinkApi {
       if (raw.contains(entry.key)) return entry.value;
     }
     return '처리하지 못했습니다: ${e is PostgrestException ? e.message : e}';
+  }
+
+  /// 일괄 승인에서 실패한 항목 한 개의 안내.
+  static String batchErrorMessage(ThinkBatchItemResult r) {
+    final known = _codeErrors[r.code];
+    if (known != null) return known;
+    final raw = '${r.code ?? ''} ${r.message ?? ''}';
+    for (final entry in _codeErrors.entries) {
+      if (raw.contains(entry.key)) return entry.value;
+    }
+    return '처리하지 못했습니다: ${r.message ?? r.code ?? '알 수 없는 오류'}';
   }
 
   Future<List<ThinkCodeRequest>> listCodeRequests() async {
@@ -829,14 +981,55 @@ class ThinkApi {
   Future<ThinkAction> applyAction(String id, {Map<String, dynamic> overrides = const {}}) =>
       _actionRpc('ai_action_apply', {'p_id': id, 'p_overrides': overrides});
 
+  /// 개념 초안 변경·기준 고치기 카드 승인. 다시 정리 카드는 ConceptDraftService.rerun(Edge)으로 한다.
+  Future<ThinkAction> applyConceptDraftAction(String id) => _actionRpc('concept_draft_action_apply', {'p_id': id});
+
   Future<ThinkAction> rejectAction(String id) => _actionRpc('ai_action_reject', {'p_id': id});
 
   /// 조율본 질문에 답하고 다시 조율한다. [answers]: [{id, option_id} 또는 {id, text}]. 새 code_plan 행이 돌아온다.
   Future<ThinkAction> revisePlan(String id, List<Map<String, String>> answers) =>
       _actionRpc('ai_code_plan_revise', {'p_action_id': id, 'p_answers': answers});
 
-  /// 대화 분류만 되돌릴 수 있다.
+  /// 대화 분류·맥락 제외·중요 표시를 되돌릴 수 있다.
   Future<ThinkAction> undoAction(String id) => _actionRpc('ai_action_undo', {'p_id': id});
+
+  /// 정리 패널의 일괄 승인. [items]: [{id, overrides}]. 서버가 정한 순서(부서 넘기기 → 분류 → … → 부서 기준)로
+  /// 항목마다 따로 실행해, 실패한 항목만 대기 상태로 남는다. 이미 승인된 항목은 다시 실행하지 않는다.
+  Future<List<ThinkBatchItemResult>> applyActionsBatch(List<Map<String, dynamic>> items) async {
+    final res = await _db.rpc('ai_action_apply_batch', params: {'p_items': items});
+    if (res is! List) throw ThinkApiException('invalid_response', '서버 응답을 해석하지 못했습니다.');
+    return res.whereType<Map>().map((m) => ThinkBatchItemResult.fromJson(Map<String, dynamic>.from(m))).toList();
+  }
+
+  // ---------------------------------------------------------------- 부서 기준
+  /// 자동 정리 마이그레이션 전 DB에서는 빈 목록.
+  Future<List<ThinkDepartmentCriteria>> listDepartmentCriteria() async {
+    try {
+      final rows = await _db.from('ai_department_criteria').select();
+      return rows.map(ThinkDepartmentCriteria.fromRow).toList();
+    } on PostgrestException catch (e) {
+      if (e.code == '42P01' || e.code == 'PGRST205' || e.message.contains('ai_department_criteria')) return const [];
+      rethrow;
+    }
+  }
+
+  /// 운영자가 직접 고친다. [baseVersion]이 지금 판과 다르면 criteria_changed로 막힌다.
+  Future<ThinkDepartmentCriteria> saveDepartmentCriteria(
+    ThinkRoleId department, {
+    required List<String> questions,
+    required List<String> risks,
+    required List<String> priorityMemoryIds,
+    required int baseVersion,
+  }) async {
+    final res = await _db.rpc('ai_department_criteria_save', params: {
+      'p_department': department.db,
+      'p_criteria': {'questions': questions, 'risks': risks, 'priority_memory_ids': priorityMemoryIds},
+      'p_base_version': baseVersion,
+    });
+    final row = res is Map ? res : (res is List && res.isNotEmpty && res.first is Map ? res.first as Map : null);
+    if (row == null) throw ThinkApiException('invalid_response', '서버 응답을 해석하지 못했습니다.');
+    return ThinkDepartmentCriteria.fromRow(Map<String, dynamic>.from(row));
+  }
 
   Future<List<ThinkCodeRound>> listCodeRounds(String requestId) async {
     Future<List<Map<String, dynamic>>> load(String columns) =>
@@ -889,6 +1082,17 @@ class ThinkApi {
           'web_search_enabled': webSearchEnabled,
           'code_request_daily_limit': codeRequestDailyLimit,
         })
+        .eq('id', true)
+        .select()
+        .single();
+    return ThinkSettings.fromRow(row);
+  }
+
+  /// 자동 정리 제안 켜기·끄기. 꺼도 사용자가 직접 정리를 요청한 답변에서는 Think가 제안한다.
+  Future<ThinkSettings> setAutoOrganize(bool enabled) async {
+    final row = await _db
+        .from('ai_platform_settings')
+        .update({'auto_organize_enabled': enabled})
         .eq('id', true)
         .select()
         .single();

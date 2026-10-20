@@ -272,6 +272,25 @@ test('비밀·보호 경로와 키처럼 보이는 diff', () => {
   assert.ok(!looksSecret('+const color = Colors.red;'));
 });
 
+test('따옴표 없는 코드 참조는 키로 세지 않지만, 값처럼 보이면 그대로 막는다', () => {
+  for (const line of [
+    "+        'apikey': AuthService.supabaseAnonKey,",
+    "+  const secret = Deno.env.get('THINK_RELAY_SECRET');",
+    '+  final token = session?.accessToken;',
+    '+    password: _passwordController.text.trim(),',
+  ]) assert.ok(!looksSecret(line), line);
+
+  for (const line of [
+    '+api_key: "abcd1234efgh5678ijkl"',
+    '+SECRET=Zx81kQp0Lm2Rt7Vb',
+    '+token: Qx7mP2vL9kR4tW8z.Hn3bF6cJ1dS5gY0a',
+    '+token: eyJhbGciOi.eyJzdWIi.abc',
+  ]) assert.ok(looksSecret(line), line);
+
+  const ref = "'apikey': AuthService.supabaseAnonKey,";
+  assert.notEqual(redact(ref), ref, '올리는 결과 글은 전처럼 가린다');
+});
+
 test('재시도 간격은 늘어나되 5분을 넘지 않는다', () => {
   assert.equal(retryDelayMs(1), 30_000);
   assert.equal(retryDelayMs(2), 60_000);

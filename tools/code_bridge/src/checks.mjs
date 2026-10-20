@@ -2,12 +2,20 @@
 // 운영 DB·Supabase에는 연결하지 않는다. DB 검사는 일회용 메모리 DB(tools/db_test, PGlite)만 쓴다.
 // 설계: docs/architecture/ai-code-bridge.md "자동 검사"
 import { spawn, execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { isSecretPath, redact } from './lib.mjs';
 
-export const CHECKS_VERSION = 1;
+// 2: 요청한 필수 검사(spec.checks), node 패키지 시험 자동 탐지, 항목별 cwd·종료 코드·범위(scope)·환경 표시, 판정(verdict).
+export const CHECKS_VERSION = 2;
 export const STATUS = ['passed', 'failed', 'skipped', 'preexisting'];
+/** node --test가 시험으로 보는 파일 이름(작업자가 직접 파일 목록을 넘긴다. Node 22는 폴더 인자를 찾아 들어가지 않는다). */
+export const NODE_TEST_FILE = /[._-]test\.(c|m)?js$/;
+/** 요청한 검사의 node --test 인자: 저장소 안 상대 경로나 glob만. 옵션(-로 시작)·..·따옴표는 받지 않는다. */
+const NODE_TEST_ARG = /^[A-Za-z0-9_][A-Za-z0-9_\-./*]*$/;
+const MAX_TEST_FILES = 400;
 
 const MIGRATIONS = 'supabase/migrations/';
 const FUNCTIONS = 'supabase/functions/';
@@ -25,15 +33,167 @@ const SECRET_ENV = /KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|^CODE_BRIDGE_|^C
 
 const safe = (p) => SAFE_ARG.test(p) && !p.split('/').includes('..');
 
+/** 저장소 기준 폴더 표기를 맞춘다('.'은 루트). 쓸 수 없는 경로면 null. */
+export function normalizeCwd(raw) {
+  const s = String(raw ?? '').trim().replace(/\\/g, '/').replace(/^\.\/+/, '').replace(/\/+$/, '');
+  if (s === '' || s === '.') return '.';
+  if (!safe(s) || s.startsWith('.git') || isSecretPath(s)) return null;
+  return s;
+}
+
+const joinRel = (a, b) => (a === '.' || a === '' ? b : b === '.' || b === '' ? a : `${a}/${b}`);
+
+function globRegex(glob) {
+  let re = '';
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === '*' && glob[i + 1] === '*') {
+      i += 1;
+      if (glob[i + 1] === '/') {
+        i += 1;
+        re += '(?:.*/)?';
+      } else re += '.*';
+    } else if (c === '*') re += '[^/]*';
+    else re += c.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+  }
+  return new RegExp(`^${re}$`);
+}
+
+/**
+ * 요청한 검사 명령을 해석한다. 지금은 `node --test [경로·glob ...]`만 받는다.
+ * @returns {{ ok: true, cwd: string, args: string[] } | { ok: false, reason: string }}
+ */
+export function parseRequiredCheck(raw) {
+  const cwd = normalizeCwd(raw?.cwd);
+  if (cwd == null) return { ok: false, reason: '검사 폴더(cwd)가 저장소 안 경로가 아닙니다.' };
+  const tokens = String(raw?.command ?? '').trim().split(/\s+/).filter(Boolean).map((t) => t.replace(/^["']|["']$/g, ''));
+  if (tokens[0] !== 'node' || tokens[1] !== '--test') {
+    return { ok: false, reason: '지금은 "node --test <시험 파일·폴더·glob>" 모양의 검사만 돌릴 수 있습니다.' };
+  }
+  const args = tokens.slice(2).map((a) => a.replace(/\/+$/, '') || '.');
+  const bad = args.find((a) => a !== '.' && (!NODE_TEST_ARG.test(a) || a.split('/').includes('..')));
+  if (bad) return { ok: false, reason: `쓸 수 없는 인자입니다: ${bad} (옵션·상위 폴더·따옴표 없이 저장소 안 경로만)` };
+  return { ok: true, cwd, args };
+}
+
+/** cwd 기준 인자(폴더·파일·glob)를 실제 시험 파일 목록(cwd 기준)으로 펼친다. 인자가 없으면 cwd 아래 전체. */
+export function expandNodeTestArgs(cwd, args, { exists, isDir, walk }) {
+  const out = new Set();
+  const all = () => walk(cwd);
+  for (const a of args.length ? args : ['.']) {
+    if (a.includes('*')) {
+      const re = globRegex(a);
+      for (const f of all()) if (re.test(f)) out.add(f);
+    } else if (a === '.' || isDir(joinRel(cwd, a))) {
+      for (const f of walk(joinRel(cwd, a))) if (NODE_TEST_FILE.test(f)) out.add(a === '.' ? f : `${a}/${f}`);
+    } else if (exists(joinRel(cwd, a))) out.add(a);
+  }
+  return [...out].sort().slice(0, MAX_TEST_FILES);
+}
+
+/** 바뀐 파일이 속한 node 폴더: 가장 가까운 package.json 폴더, 없으면 test/ 폴더가 있는 가장 가까운 폴더. 저장소 루트는 보지 않는다. */
+export function nodeRootOf(path, exists) {
+  const parts = path.split('/');
+  for (let i = parts.length - 1; i >= 1; i--) {
+    const d = parts.slice(0, i).join('/');
+    if (exists(`${d}/package.json`)) return { dir: d, pkg: true };
+  }
+  for (let i = parts.length - 1; i >= 1; i--) {
+    const d = parts.slice(0, i).join('/');
+    if (exists(`${d}/test`)) return { dir: d, pkg: false };
+  }
+  return null;
+}
+
+/** cwd에서 위로 올라가며 의존성이 있는 package.json 폴더. 없으면 null(의존성 준비가 필요 없다). */
+export function depsRootOf(cwd, { exists, readJson }) {
+  const parts = cwd === '.' ? [] : cwd.split('/');
+  for (let i = parts.length; i >= 1; i--) {
+    const d = parts.slice(0, i).join('/');
+    if (!exists(`${d}/package.json`)) continue;
+    const pkg = readJson(`${d}/package.json`) ?? {};
+    const deps = Object.keys(pkg.dependencies ?? {}).length + Object.keys(pkg.devDependencies ?? {}).length;
+    return deps > 0 ? d : null;
+  }
+  return null;
+}
+
+/**
+ * node 시험 항목. 의존성이 필요한데 작업 폴더에 node_modules가 없으면 환경 문제로 미실행.
+ * 복사본에는 node_modules가 없다(무시 파일). 작업 폴더의 것을 캐시로 복사해 연결한다(prepare 'node-modules').
+ */
+function nodeTestItem({ id, label, cwd, files, source, view, tools }) {
+  const base = { id, label, scope: 'required', source };
+  const depsDir = depsRootOf(cwd, view);
+  if (depsDir && !tools.nodeModules?.(depsDir)) {
+    return {
+      ...base,
+      status: 'skipped',
+      env: true,
+      reason: `${depsDir}/node_modules가 작업 폴더에 없어 시험을 돌리지 못했습니다. 작업 폴더의 ${depsDir}에서 npm ci(또는 npm install)를 한 번 해 주세요.`,
+    };
+  }
+  return {
+    ...base,
+    compare: 'node-test',
+    ...(depsDir ? { prepare: 'node-modules', depsDir } : {}),
+    steps: [{ cmd: 'node', args: ['--test'], files, cwd }],
+  };
+}
+
 /**
  * 바뀐 경로로 돌릴 검사를 정한다. 파일 시스템은 넘겨받은 함수로만 본다(시험 가능).
+ * 모든 항목에 scope(required: 이번 수정에 필요한 검사, followup: 실제 데이터가 있어야 하는 후속 확인)와
+ * source(auto | request)를 붙인다. 도구·의존성이 없어 못 돌리는 항목은 env: true.
  * @param {{ paths: string[], exists: (rel: string) => boolean, list: (relDir: string) => string[],
- *   baseMigrations: string[], tools: { flutter: boolean, deno: boolean, dbTest: boolean } }} input
- * @returns {Array<{ id, label, steps?, after?, files?, status?, reason?, output?, compare? }>}
+ *   isDir?: (rel: string) => boolean, walk?: (relDir: string) => string[], readJson?: (rel: string) => any,
+ *   baseMigrations: string[], required?: Array<{cwd, command, why?}>,
+ *   tools: { flutter: boolean, deno: boolean, dbTest: boolean, nodeModules?: (dir: string) => string|null } }} input
+ * @returns {Array<{ id, label, scope, source, steps?, after?, files?, status?, reason?, output?, compare?, env? }>}
  */
-export function planChecks({ paths, exists, list, baseMigrations, tools }) {
+export function planChecks(input) {
+  const items = planChecksRaw(input);
+  for (const i of items) {
+    i.scope ??= 'required';
+    i.source ??= 'auto';
+  }
+  return items;
+}
+
+function planChecksRaw({ paths, exists, list, isDir = () => false, walk = () => [], readJson = () => null, baseMigrations, required = [], tools }) {
+  const view = { exists, isDir, walk, readJson };
   const items = [];
+  const covered = new Set();
+  (Array.isArray(required) ? required : []).slice(0, 6).forEach((raw, n) => {
+    const command = String(raw?.command ?? '').trim().slice(0, 300);
+    const parsed = parseRequiredCheck(raw);
+    const label = `요청한 검사: ${command || '(명령 없음)'}${parsed.ok && parsed.cwd !== '.' ? ` (${parsed.cwd})` : ''}`;
+    const id = `request:${n + 1}`;
+    if (!parsed.ok) {
+      items.push({ id, label, scope: 'required', source: 'request', status: 'skipped', reason: parsed.reason });
+      return;
+    }
+    const files = expandNodeTestArgs(parsed.cwd, parsed.args, view);
+    if (files.length === 0) {
+      items.push({
+        id,
+        label,
+        scope: 'required',
+        source: 'request',
+        status: 'failed',
+        output: `요청한 검사에 해당하는 시험 파일(*.test.js|mjs|cjs)이 ${parsed.cwd} 아래 ${parsed.args.join(' ') || '.'}에 없습니다.`,
+      });
+      return;
+    }
+    if (!files.every(safe)) {
+      items.push({ id, label, scope: 'required', source: 'request', status: 'skipped', reason: '시험 파일 이름에 쓸 수 없는 글자가 있습니다.' });
+      return;
+    }
+    for (const f of files) covered.add(joinRel(parsed.cwd, f));
+    items.push(nodeTestItem({ id, label, cwd: parsed.cwd, files, source: 'request', view, tools }));
+  });
   const unchecked = new Set();
+  const nodeRoots = new Map();
   const apps = new Map();
   const fns = new Set();
   let shared = false;
@@ -67,14 +227,40 @@ export function planChecks({ paths, exists, list, baseMigrations, tools }) {
       continue;
     }
     if (NO_CHECK.test(p) || p.startsWith('docs/') || p.startsWith('.cursor/rules/')) continue;
+    const root = nodeRootOf(p, exists);
+    if (root) {
+      if (!nodeRoots.has(root.dir)) nodeRoots.set(root.dir, []);
+      nodeRoots.get(root.dir).push(p.slice(root.dir.length + 1));
+      continue;
+    }
     unchecked.add(app ? `apps/${app[1]}` : p.split('/').slice(0, 2).join('/'));
+  }
+
+  for (const [dir, changed] of [...nodeRoots].sort(([a], [b]) => a.localeCompare(b))) {
+    const tests = walk(dir).filter((f) => NODE_TEST_FILE.test(f) && safe(f)).sort().slice(0, MAX_TEST_FILES);
+    const fresh = tests.filter((f) => !covered.has(joinRel(dir, f)));
+    if (tests.length > 0 && fresh.length === 0) continue;
+    if (tests.length > 0) {
+      const rest = fresh.length < tests.length ? `, 요청한 검사에 없는 ${fresh.length}개` : '';
+      items.push(nodeTestItem({ id: `node-test:${dir}`, label: `${dir} 시험 (node --test${rest})`, cwd: dir, files: fresh, source: 'auto', view, tools }));
+      continue;
+    }
+    const scripts = changed.filter((f) => /\.(c|m)?js$/.test(f) && safe(f) && exists(`${dir}/${f}`)).sort().slice(0, 20);
+    if (scripts.length > 0) {
+      items.push({
+        id: `node-syntax:${dir}`,
+        label: `${dir} 문법 검사 (node --check, 시험 파일 없음)`,
+        steps: scripts.map((f) => ({ cmd: 'node', args: ['--check'], files: [f], cwd: dir })),
+      });
+    }
+    items.push({ id: `unchecked:${dir}`, label: `${dir} 시험 (시험 파일 없음)`, status: 'skipped', reason: '이 폴더에는 node 시험 파일(*.test.js|mjs|cjs)이 없습니다.' });
   }
 
   for (const [app, files] of [...apps].sort(([a], [b]) => a.localeCompare(b))) {
     const cwd = `apps/${app}`;
     const pub = `flutter-pub:${app}`;
     if (!tools.flutter) {
-      items.push({ id: `flutter:${app}`, label: `${app} 분석·시험`, status: 'skipped', reason: 'flutter를 찾지 못했습니다.' });
+      items.push({ id: `flutter:${app}`, label: `${app} 분석·시험`, status: 'skipped', env: true, reason: 'flutter를 찾지 못했습니다.' });
       continue;
     }
     items.push({
@@ -118,7 +304,7 @@ export function planChecks({ paths, exists, list, baseMigrations, tools }) {
   for (const f of fns) if (!exists(`${FUNCTIONS}${f}/index.ts`)) unchecked.add(`${FUNCTIONS}${f}`);
   if (targets.length > 0 || shared) {
     if (!tools.deno) {
-      items.push({ id: 'deno', label: 'Edge Function 검사 (deno)', status: 'skipped', reason: 'deno를 찾지 못했습니다. CODE_BRIDGE_DENO에 경로를 넣거나 tools/code_bridge에서 npm install 하세요.' });
+      items.push({ id: 'deno', label: 'Edge Function 검사 (deno)', status: 'skipped', env: true, reason: 'deno를 찾지 못했습니다. CODE_BRIDGE_DENO에 경로를 넣거나 tools/code_bridge에서 npm install 하세요.' });
     } else {
       if (targets.length > 0) {
         items.push({
@@ -139,13 +325,12 @@ export function planChecks({ paths, exists, list, baseMigrations, tools }) {
   }
 
   if (codeBridge) {
-    const tests = list('tools/code_bridge/test').filter((n) => n.endsWith('.test.mjs')).sort();
-    if (tests.length > 0) {
-      items.push({
-        id: 'node-test:code_bridge',
-        label: '코드 작업자 시험 (node --test)',
-        steps: [{ cmd: 'node', args: ['--test'], files: tests.map((t) => `test/${t}`), cwd: 'tools/code_bridge' }],
-      });
+    const dir = 'tools/code_bridge';
+    const tests = list(`${dir}/test`).filter((n) => n.endsWith('.test.mjs')).sort().map((t) => `test/${t}`);
+    const fresh = tests.filter((f) => !covered.has(joinRel(dir, f)));
+    if (fresh.length > 0) {
+      const rest = fresh.length < tests.length ? `, 요청한 검사에 없는 ${fresh.length}개` : '';
+      items.push(nodeTestItem({ id: 'node-test:code_bridge', label: `코드 작업자 시험 (node --test${rest})`, cwd: dir, files: fresh, source: 'auto', view, tools }));
     }
   }
 
@@ -165,6 +350,7 @@ export function planChecks({ paths, exists, list, baseMigrations, tools }) {
             id: 'db-test',
             label: '일회용 시험 DB (PGlite)',
             status: 'skipped',
+            env: true,
             reason: '작업 폴더의 tools/db_test에 npm install이 되어 있지 않습니다.',
           },
     );
@@ -173,6 +359,7 @@ export function planChecks({ paths, exists, list, baseMigrations, tools }) {
     items.push({
       id: 'db-test-other',
       label: 'AI 영역 밖 DB 함수 파일',
+      scope: 'followup',
       status: 'skipped',
       reason: `일회용 시험 DB에는 AI 영역 테이블만 있어 검사하지 못했습니다: ${otherMigrations.join(', ')}. 운영 DB에 올리기 전 따로 확인해야 합니다.`,
     });
@@ -237,10 +424,13 @@ export function tail(s, max = OUTPUT_CHARS) {
   return t.length <= max ? t : `…\n${t.slice(t.length - max)}`;
 }
 
-/** 검사 프로세스에 넘길 환경 변수. 키·토큰과 작업자 설정은 뺀다. */
+/**
+ * 검사 프로세스에 넘길 환경 변수. 키·토큰과 작업자 설정은 뺀다.
+ * NODE_TEST_CONTEXT가 남아 있으면 안쪽 node --test가 결과를 바깥 실행기로만 보내고 실패해도 0으로 끝난다.
+ */
 export function scrubEnv(env) {
   const out = {};
-  for (const [k, v] of Object.entries(env)) if (!SECRET_ENV.test(k)) out[k] = v;
+  for (const [k, v] of Object.entries(env)) if (!SECRET_ENV.test(k) && k !== 'NODE_TEST_CONTEXT') out[k] = v;
   return out;
 }
 
@@ -293,21 +483,141 @@ export function findTools(env, workerDir, repo) {
     deno: deno && existsSync(deno) ? deno : null,
     flutter: flutter || null,
     dbTestModules: existsSync(join(dbTestModules, '@electric-sql', 'pglite')) ? dbTestModules : null,
+    /** 작업 폴더(repo)의 <dir>/node_modules. 없으면 null. */
+    nodeModules: (dir) => {
+      const p = join(repo, dir, 'node_modules');
+      return existsSync(p) ? p : null;
+    },
   };
 }
 
-/** 저장소 기준 파일 존재·목록 함수. */
+const WALK_SKIP = new Set(['node_modules', '.git', '.dart_tool', 'build', '.venv', '__pycache__']);
+
+/** 저장소 기준 파일 존재·목록 함수. walk는 relDir 아래 파일을 relDir 기준 경로로(node_modules 등은 건너뜀). */
 export function fsView(dir) {
+  const isDir = (rel) => {
+    try {
+      return statSync(join(dir, rel)).isDirectory();
+    } catch {
+      return false;
+    }
+  };
   return {
     exists: (rel) => existsSync(join(dir, rel)),
-    list: (rel) => {
+    list: (rel) => (isDir(rel) ? readdirSync(join(dir, rel)) : []),
+    isDir,
+    walk: (rel) => {
+      const out = [];
+      const visit = (sub, depth) => {
+        if (out.length >= 5000 || depth > 8) return;
+        let entries;
+        try {
+          entries = readdirSync(join(dir, rel, sub), { withFileTypes: true });
+        } catch {
+          return;
+        }
+        for (const e of entries) {
+          const p = sub ? `${sub}/${e.name}` : e.name;
+          if (e.isDirectory()) {
+            if (!WALK_SKIP.has(e.name)) visit(p, depth + 1);
+          } else if (e.isFile()) out.push(p);
+        }
+      };
+      visit('', 0);
+      return out;
+    },
+    readJson: (rel) => {
       try {
-        return statSync(join(dir, rel)).isDirectory() ? readdirSync(join(dir, rel)) : [];
+        return JSON.parse(readFileSync(join(dir, rel), 'utf8'));
       } catch {
-        return [];
+        return null;
       }
     },
   };
+}
+
+/** node --test(TAP) 출력의 실패한 시험 이름. 바꾸기 전 상태와 비교해 새로 실패한 것만 이번 수정 탓으로 본다. */
+export function nodeTestFailures(output) {
+  const out = new Set();
+  for (const line of String(output ?? '').split(/\r?\n/)) {
+    const m = /^\s*not ok \d+ - (.+?)\s*(?:#.*)?$/.exec(line);
+    if (m) out.add(m[1]);
+  }
+  return out;
+}
+
+/**
+ * 작업 폴더의 node_modules를 임시 캐시로 한 번 복사하고, 복사본에는 연결(junction)만 만든다.
+ * 시험이 node_modules에 써도 작업 폴더는 바뀌지 않는다. 캐시는 lock 파일 내용이 바뀌면 새로 만든다.
+ * 만든 연결 경로를 돌려준다(검사가 끝나면 runChecks가 지운다).
+ */
+export function linkNodeModules(root, depsDir, source, cacheRoot = join(tmpdir(), 'ygg-code-bridge', 'deps')) {
+  const target = join(root, depsDir, 'node_modules');
+  if (existsSync(target)) return null;
+  const lock = [join(source, '.package-lock.json'), join(dirname(source), 'package-lock.json'), join(dirname(source), 'package.json')].find((f) => existsSync(f));
+  const key = createHash('sha1').update(lock ? readFileSync(lock) : Buffer.from(source)).digest('hex').slice(0, 12);
+  const cache = join(cacheRoot, `${depsDir.replace(/[^A-Za-z0-9_-]/g, '_')}-${key}`);
+  // node는 연결을 실제 경로로 풀어 패키지끼리 찾으므로, 캐시 안에서도 폴더 이름이 node_modules여야 한다.
+  const modules = join(cache, 'node_modules');
+  if (!existsSync(modules)) {
+    const tmp = `${cache}.tmp-${process.pid}`;
+    rmSync(tmp, { recursive: true, force: true });
+    mkdirSync(cacheRoot, { recursive: true });
+    cpSync(source, join(tmp, 'node_modules'), { recursive: true });
+    rmSync(cache, { recursive: true, force: true });
+    renameSync(tmp, cache);
+  }
+  mkdirSync(dirname(target), { recursive: true });
+  symlinkSync(modules, target, 'junction');
+  return target;
+}
+
+/** node 시험 출력에서 불러오지 못한 패키지 이름. 상대 경로(./, ../) 모듈은 코드 문제이므로 보지 않는다. */
+export function missingModule(output) {
+  const m = /Cannot find (?:package|module) '([^'./\\][^':]*)'/.exec(String(output ?? ''));
+  return m ? m[1] : null;
+}
+
+function unlinkQuiet(link) {
+  try {
+    if (lstatSync(link).isSymbolicLink()) unlinkSync(link);
+  } catch {
+    // 이미 없음
+  }
+}
+
+/** 필수 검사 판정. code_review.ts checkVerdict와 같은 규칙. */
+export function checkVerdict(items, stopped = false) {
+  const required = items.filter((i) => (i.scope ?? 'required') === 'required');
+  if (required.some((i) => i.status === 'failed')) return 'failed';
+  if (stopped || required.some((i) => i.status === 'skipped')) return 'not_run';
+  return required.length > 0 ? 'passed' : 'none';
+}
+
+/**
+ * 수정 시작 전 확인: 요청한 필수 검사를 이 PC에서 돌릴 수 있는지(명령 모양, 폴더, 의존성).
+ * 폴더가 아직 없으면 수정이 만들 수 있으므로 문제로 보지 않고 알리기만 한다.
+ * @returns {Array<{ cwd: string|null, command: string, ok: boolean, env: boolean, problem: string|null, note: string|null }>}
+ */
+export function preflightChecks(required, { exists, readJson, tools }) {
+  return (Array.isArray(required) ? required : []).slice(0, 6).map((raw) => {
+    const command = String(raw?.command ?? '').trim().slice(0, 300);
+    const parsed = parseRequiredCheck(raw);
+    if (!parsed.ok) return { cwd: null, command, ok: false, env: false, problem: parsed.reason, note: null };
+    const note = parsed.cwd !== '.' && !exists(parsed.cwd) ? `${parsed.cwd} 폴더가 아직 없습니다. 수정에서 만들어야 합니다.` : null;
+    const depsDir = depsRootOf(parsed.cwd, { exists, readJson });
+    if (depsDir && !tools.nodeModules?.(depsDir)) {
+      return {
+        cwd: parsed.cwd,
+        command,
+        ok: false,
+        env: true,
+        problem: `${depsDir}/node_modules가 작업 폴더에 없습니다. ${depsDir}에서 npm ci(또는 npm install)가 필요합니다.`,
+        note,
+      };
+    }
+    return { cwd: parsed.cwd, command, ok: true, env: false, problem: null, note };
+  });
 }
 
 function command(step, tools) {
@@ -392,6 +702,7 @@ export async function runChecks(opts) {
   let baseDir;
   const baseReady = new Set();
   let stopped = false;
+  const links = [];
 
   const runSteps = async (root, item) => {
     if (item.prepare === 'secret-assets') secretAssetPlaceholders(join(root, item.steps[0].cwd));
@@ -399,27 +710,38 @@ export async function runChecks(opts) {
       const target = join(root, 'tools', 'db_test', 'node_modules');
       if (!existsSync(target)) cpSync(tools.dbTestModules, target, { recursive: true });
     }
+    if (item.prepare === 'node-modules') {
+      const source = tools.nodeModules?.(item.depsDir);
+      if (!source) return { status: 'skipped', env: true, reason: `${item.depsDir}/node_modules가 작업 폴더에 없습니다.`, command: null };
+      const link = (opts.linkNodeModules ?? linkNodeModules)(root, item.depsDir, source);
+      if (link) links.push(link);
+    }
     let output = '';
     let duration = 0;
+    let exitCode = null;
+    let cwd = null;
     const commands = [];
+    const rec = (r) => ({ output, duration_ms: duration, command: commands.join(' && '), exit_code: exitCode, cwd, ...r });
     for (const step of item.steps) {
       const files = root === dir ? step.files : step.files?.filter((f) => existsSync(join(root, step.cwd, f)));
-      if (step.files?.length && !files?.length) return { status: 'no-baseline', output, duration_ms: duration, command: commands.join(' && ') };
+      if (step.files?.length && !files?.length) return rec({ status: 'no-baseline' });
       const cmd = command({ ...step, files }, tools);
       commands.push(cmd.shown);
+      cwd = step.cwd;
       const left = deadline - Date.now();
-      if (left <= 0) return { status: 'skipped', reason: '검사 전체 제한 시간을 넘어 돌리지 못했습니다.', command: commands.join(' && ') };
+      if (left <= 0) return rec({ status: 'skipped', reason: '검사 전체 제한 시간을 넘어 돌리지 못했습니다.' });
       const r = await runStep(join(root, step.cwd), cmd, { env, timeoutMs: Math.min(stepTimeoutMs, left), shouldStop });
       output += `$ ${cmd.shown}\n${r.output}\n`;
       duration += r.duration_ms;
-      if (r.killed === 'stopped') return { status: 'stopped', output, duration_ms: duration, command: commands.join(' && ') };
+      exitCode = r.code;
+      if (r.killed === 'stopped') return rec({ status: 'stopped' });
       if (r.killed === 'timeout') {
-        return { status: 'failed', output: `${output}\n${Math.round(Math.min(stepTimeoutMs, left) / 60_000)}분 안에 끝나지 않아 멈췄습니다.`, duration_ms: duration, command: commands.join(' && ') };
+        return rec({ status: 'failed', output: `${output}\n${Math.round(Math.min(stepTimeoutMs, left) / 60_000)}분 안에 끝나지 않아 멈췄습니다.` });
       }
-      if (r.error) return { status: 'skipped', reason: `실행하지 못했습니다: ${r.error.message}`, output, duration_ms: duration, command: commands.join(' && ') };
-      if (r.code !== 0) return { status: 'failed', output, duration_ms: duration, command: commands.join(' && ') };
+      if (r.error) return rec({ status: 'skipped', reason: `실행하지 못했습니다: ${r.error.message}` });
+      if (r.code !== 0) return rec({ status: 'failed' });
     }
-    return { status: 'passed', output, duration_ms: duration, command: commands.join(' && ') };
+    return rec({ status: 'passed' });
   };
 
   const onBaseline = async (item) => {
@@ -441,65 +763,99 @@ export async function runChecks(opts) {
     return runSteps(baseDir, item);
   };
 
-  for (const item of items) {
-    const base = { id: item.id, label: item.label };
-    if (item.status) {
-      results.push({ ...base, status: item.status, reason: item.reason ?? null, output: item.output ?? null, command: null, duration_ms: 0 });
-      byId.set(item.id, item.status);
-      continue;
-    }
-    if (stopped || shouldStop()) {
-      stopped = true;
-      break;
-    }
-    if (item.after && byId.get(item.after) !== 'passed') {
-      results.push({ ...base, status: 'skipped', reason: '앞 단계(패키지 준비)가 통과하지 않아 돌리지 않았습니다.', output: null, command: null, duration_ms: 0 });
-      byId.set(item.id, 'skipped');
-      continue;
-    }
-    log(`검사: ${item.label}`);
-    let r;
-    try {
-      r = await runSteps(dir, item);
-    } catch (e) {
-      r = { status: 'skipped', reason: `실행하지 못했습니다: ${e.message}`, output: '', duration_ms: 0, command: null };
-    }
-    if (r.status === 'stopped') {
-      stopped = true;
-      break;
-    }
-    let note = null;
-    if (r.status === 'failed' && item.id.startsWith('flutter-pub:') === false) {
-      const b = await onBaseline(item).catch(() => null);
-      if (b?.status === 'stopped') {
+  const empty = { output: null, command: null, cwd: null, exit_code: null, duration_ms: 0 };
+  try {
+    for (const item of items) {
+      const base = { id: item.id, label: item.label, scope: item.scope ?? 'required', source: item.source ?? 'auto', env: item.env === true };
+      if (item.status) {
+        results.push({ ...base, ...empty, status: item.status, reason: item.reason ?? null, output: item.output ?? null });
+        byId.set(item.id, item.status);
+        continue;
+      }
+      if (stopped || shouldStop()) {
         stopped = true;
         break;
       }
-      if (b && (b.status === 'failed' || b.status === 'passed')) {
-        if (item.compare === 'analyze' && b.status === 'failed') {
-          const before = analyzeIssues(b.output);
-          const fresh = [...analyzeIssues(r.output)].filter((k) => !before.has(k));
-          if (fresh.length === 0) {
+      if (item.after && byId.get(item.after) !== 'passed') {
+        results.push({ ...base, ...empty, status: 'skipped', reason: '앞 단계(패키지 준비)가 통과하지 않아 돌리지 않았습니다.' });
+        byId.set(item.id, 'skipped');
+        continue;
+      }
+      log(`검사: ${item.label}`);
+      let r;
+      try {
+        r = await runSteps(dir, item);
+      } catch (e) {
+        r = { ...empty, status: 'skipped', reason: `실행하지 못했습니다: ${e.message}`, output: '' };
+      }
+      if (r.status === 'stopped') {
+        stopped = true;
+        break;
+      }
+      let note = null;
+      if (r.status === 'failed' && item.id.startsWith('flutter-pub:') === false) {
+        const b = await onBaseline(item).catch(() => null);
+        if (b?.status === 'stopped') {
+          stopped = true;
+          break;
+        }
+        if (b && (b.status === 'failed' || b.status === 'passed')) {
+          const parse = item.compare === 'analyze' ? analyzeIssues : item.compare === 'node-test' ? nodeTestFailures : null;
+          if (parse && b.status === 'failed') {
+            const before = parse(b.output);
+            const fresh = [...parse(r.output)].filter((k) => !before.has(k));
+            if (fresh.length === 0) {
+              r.status = 'preexisting';
+              note = item.compare === 'analyze' ? '바꾸기 전에도 있던 문제만 남아 있습니다.' : '바꾸기 전에도 실패하던 시험만 실패합니다.';
+            } else {
+              note = `수정으로 새로 생긴 ${item.compare === 'analyze' ? '문제' : '실패 시험'} ${fresh.length}개:\n${fresh.slice(0, 30).join('\n')}`;
+            }
+          } else if (b.status === 'failed') {
             r.status = 'preexisting';
-            note = '바꾸기 전에도 있던 문제만 남아 있습니다.';
-          } else {
-            note = `수정으로 새로 생긴 문제 ${fresh.length}개:\n${fresh.slice(0, 30).join('\n')}`;
+            note = '바꾸기 전 상태에서도 같은 검사가 실패합니다. 이번 수정 때문이 아닐 수 있습니다.';
           }
-        } else if (b.status === 'failed') {
-          r.status = 'preexisting';
-          note = '바꾸기 전 상태에서도 같은 검사가 실패합니다. 이번 수정 때문이 아닐 수 있습니다.';
+          const missing = item.compare === 'node-test' && r.status === 'preexisting' ? missingModule(r.output) : null;
+          if (missing) {
+            r.status = 'skipped';
+            r.env = true;
+            r.reason =
+              `시험 파일이 쓰는 패키지 '${missing}'를 찾지 못해 시험을 불러오지 못했습니다(바꾸기 전에도 같음). ` +
+              `시험이 실제로 돌지 않았으므로 통과가 아닙니다. 작업 폴더의 ${item.depsDir ?? item.steps?.[0]?.cwd ?? '해당 폴더'}에서 의존성을 설치(npm ci)하고 package.json에 적어 주세요.`;
+            note = null;
+          }
         }
       }
+      const output = note ? `${note}\n\n${tail(r.output, OUTPUT_CHARS - Math.min(note.length, 1500))}` : tail(r.output ?? '');
+      results.push({
+        ...base,
+        env: base.env || r.env === true,
+        status: r.status,
+        reason: r.reason ?? null,
+        output,
+        command: r.command ?? null,
+        cwd: r.cwd ?? null,
+        exit_code: typeof r.exit_code === 'number' ? r.exit_code : null,
+        duration_ms: r.duration_ms ?? 0,
+      });
+      byId.set(item.id, r.status);
+      log(`검사 결과: ${item.label} → ${r.status}`);
     }
-    const output = note ? `${note}\n\n${tail(r.output, OUTPUT_CHARS - Math.min(note.length, 1500))}` : tail(r.output ?? '');
-    results.push({ ...base, status: r.status, reason: r.reason ?? null, output, command: r.command ?? null, duration_ms: r.duration_ms ?? 0 });
-    byId.set(item.id, r.status);
-    log(`검사 결과: ${item.label} → ${r.status}`);
+  } finally {
+    for (const link of links) unlinkQuiet(link);
   }
   if (stopped) {
     for (const item of items) {
       if (byId.has(item.id)) continue;
-      results.push({ id: item.id, label: item.label, status: 'skipped', reason: '검사가 중간에 멈춰 돌리지 못했습니다.', output: null, command: null, duration_ms: 0 });
+      results.push({
+        id: item.id,
+        label: item.label,
+        scope: item.scope ?? 'required',
+        source: item.source ?? 'auto',
+        env: false,
+        ...empty,
+        status: 'skipped',
+        reason: '검사가 중간에 멈춰 돌리지 못했습니다.',
+      });
     }
   }
 
@@ -508,6 +864,7 @@ export async function runChecks(opts) {
     stopped,
     duration_ms: Date.now() - started,
     summary: summarize(results),
+    verdict: checkVerdict(results, stopped),
     items: results,
   };
 }

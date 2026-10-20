@@ -17,6 +17,7 @@ class AppConfirmButton extends StatelessWidget {
   final VoidCallback? onPressed;
   final String label;
   final bool enabled;
+  final bool showIcon;
   final String? iconSvg;
   final double? buttonWidth;
   final Color? backgroundColor;
@@ -26,6 +27,7 @@ class AppConfirmButton extends StatelessWidget {
     required this.onPressed,
     this.label = '완료',
     this.enabled = true,
+    this.showIcon = true,
     this.iconSvg,
     this.buttonWidth,
     this.backgroundColor,
@@ -37,6 +39,7 @@ class AppConfirmButton extends StatelessWidget {
       onPressed: onPressed,
       label: label,
       enabled: enabled,
+      showIcon: showIcon,
       iconSvg: iconSvg ?? _confirmUTurnSvg,
       buttonWidth: buttonWidth ?? width,
       backgroundColor:
@@ -50,6 +53,7 @@ class _AppConfirmButtonBody extends StatefulWidget {
     required this.onPressed,
     required this.label,
     required this.enabled,
+    required this.showIcon,
     required this.iconSvg,
     required this.buttonWidth,
     required this.backgroundColor,
@@ -58,6 +62,7 @@ class _AppConfirmButtonBody extends StatefulWidget {
   final VoidCallback? onPressed;
   final String label;
   final bool enabled;
+  final bool showIcon;
   final String iconSvg;
   final double buttonWidth;
   final Color backgroundColor;
@@ -108,7 +113,7 @@ class _AppConfirmButtonBodyState extends State<_AppConfirmButtonBody> {
                   duration: const Duration(milliseconds: 160),
                   curve: Curves.easeOutCubic,
                   alignment: Alignment.center,
-                  padding: const EdgeInsets.only(right: 6),
+                  padding: EdgeInsets.only(right: widget.showIcon ? 6 : 0),
                   decoration: BoxDecoration(
                     color: color,
                     borderRadius:
@@ -117,16 +122,18 @@ class _AppConfirmButtonBodyState extends State<_AppConfirmButtonBody> {
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      SvgPicture.string(
-                        widget.iconSvg,
-                        width: 24,
-                        height: 24,
-                        colorFilter: const ColorFilter.mode(
-                          Colors.white,
-                          BlendMode.srcIn,
+                      if (widget.showIcon) ...[
+                        SvgPicture.string(
+                          widget.iconSvg,
+                          width: 24,
+                          height: 24,
+                          colorFilter: const ColorFilter.mode(
+                            Colors.white,
+                            BlendMode.srcIn,
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 16),
+                        const SizedBox(width: 16),
+                      ],
                       Text(
                         widget.label,
                         style: const TextStyle(

@@ -114,6 +114,15 @@ import {
 import { logVlmUsage } from "./textbook/vlm_usage_log.js";
 import { normalizeProblemNumberKey } from "./textbook/problem_number_key.js";
 import {
+  currentAnswerRenderHashMap,
+  partitionFreshAnswerRenderRows,
+} from "./problem_bank/answer_render_freshness.js";
+import {
+  fetchManualMarkers,
+  partitionStaleCrops,
+  skippedCropIds,
+} from "./textbook/manual_guard.js";
+import {
   parseTocPages,
   normalizeTocResult,
 } from "./textbook/vlm_toc_client.js";
@@ -5301,7 +5310,7 @@ async function handleUnifiedAnswerRenderAssetsResolve(body, res) {
     .from("answer_render_assets")
     .select(
       "source_id, answer_kind, engine, storage_bucket, storage_path, width_px, height_px, " +
-        "pixel_ratio, style_version, render_error, transparent",
+        "pixel_ratio, style_version, render_error, transparent, source_hash",
     )
     .eq("academy_id", academyId)
     .eq("source_kind", sourceKind)
@@ -5318,12 +5327,24 @@ async function handleUnifiedAnswerRenderAssetsResolve(body, res) {
     return;
   }
 
+  // 정답을 고친 뒤 재렌더 전(또는 실패)인 옛 PNG 는 내보내지 않는다. 앱은
+  // 이미지가 없으면 현재 정답 텍스트를 그리고, 아래 백필이 새 PNG 를 굽는다.
+  const currentHashByKey = await loadCurrentUnifiedAnswerRenderHashes({
+    academyId,
+    sourceKind,
+    sourceIds,
+    styleVersions: orderedStyles,
+    answerKind: requestedAnswerKind,
+  });
+  const { fresh: freshRows, stale: staleRows } =
+    partitionFreshAnswerRenderRows(data, currentHashByKey);
+
   const styleRank = new Map(
     orderedStyles.map((style, index) => [style, index]),
   );
   // 키 = `${sourceId}\n${answerKind}` — 파트 행은 별도 엔트리로 유지된다.
   const bestByEntryKey = new Map();
-  for (const row of Array.isArray(data) ? data : []) {
+  for (const row of freshRows) {
     const sourceId = String(row?.source_id || "").trim();
     const style = String(row?.style_version || "").trim();
     const answerKind = String(row?.answer_kind || "").trim();
@@ -5396,6 +5417,13 @@ async function handleUnifiedAnswerRenderAssetsResolve(body, res) {
       sourceKind,
       sourceIds,
       answerKind: requestedAnswerKind,
+      // 렌더에 실패한 자산은 render_error 로 걸러져 여기 오지 않으므로,
+      // 실패를 열람마다 재시도하지는 않는다.
+      ignoreCooldown: staleRows.some(
+        (row) =>
+          String(row?.style_version || "").trim() ===
+          UNIFIED_ANSWER_RENDER_STYLE_VERSION_V11,
+      ),
     });
   }
 
@@ -5406,8 +5434,50 @@ async function handleUnifiedAnswerRenderAssetsResolve(body, res) {
     answer_kind: requestedAnswerKind,
     requested: sourceIds.length,
     v11_pending: wantsV11 ? v11MissingSourceIds.length : 0,
+    stale_dropped: staleRows.length,
     renders,
   });
+}
+
+async function loadCurrentUnifiedAnswerRenderHashes({
+  academyId,
+  sourceKind,
+  sourceIds,
+  styleVersions,
+  answerKind,
+}) {
+  try {
+    const descriptors = [];
+    for (const styleVersion of styleVersions) {
+      const page =
+        sourceKind === "textbook_crop"
+          ? await fetchUnifiedTextbookAnswerDescriptors({
+              academyId,
+              limit: sourceIds.length,
+              offset: 0,
+              sourceIds,
+              styleVersion,
+            })
+          : await fetchUnifiedPbAnswerDescriptors({
+              academyId,
+              limit: sourceIds.length,
+              offset: 0,
+              sourceIds,
+              styleVersion,
+              answerKinds: ["subjective", "essay"].includes(answerKind)
+                ? [answerKind]
+                : undefined,
+            });
+      descriptors.push(...(page.descriptors || []));
+    }
+    return currentAnswerRenderHashMap(descriptors);
+  } catch (err) {
+    console.warn(
+      "[answer-render] current answer hash lookup failed:",
+      err?.message || err,
+    );
+    return null;
+  }
 }
 
 // v11 백그라운드 렌더 — 동일 대상 중복 트리거 방지용 인플라이트 키 집합.
@@ -5426,6 +5496,7 @@ function scheduleUnifiedAnswerRenderV11Backfill({
   sourceKind,
   sourceIds,
   answerKind = "",
+  ignoreCooldown = false,
 }) {
   const ids = [...new Set(sourceIds)].sort();
   if (ids.length === 0) return false;
@@ -5433,7 +5504,12 @@ function scheduleUnifiedAnswerRenderV11Backfill({
   if (unifiedAnswerV11InflightKeys.has(inflightKey)) return false;
   const now = Date.now();
   const checkedAt = unifiedAnswerV11BackfillCheckedAt.get(inflightKey) || 0;
-  if (now - checkedAt < UNIFIED_ANSWER_V11_BACKFILL_COOLDOWN_MS) return false;
+  if (
+    !ignoreCooldown &&
+    now - checkedAt < UNIFIED_ANSWER_V11_BACKFILL_COOLDOWN_MS
+  ) {
+    return false;
+  }
   unifiedAnswerV11BackfillCheckedAt.set(inflightKey, now);
   if (unifiedAnswerV11BackfillCheckedAt.size > 500) {
     for (const [key, at] of unifiedAnswerV11BackfillCheckedAt) {
@@ -8684,6 +8760,7 @@ async function handleTextbookCropsBatchUpsert(body, res) {
         bigOrder,
         midOrder,
         subKey: subKeyRaw,
+        subIndex,
         problemNumber,
       });
     } catch (e) {
@@ -8979,15 +9056,28 @@ async function handleTextbookCropsSyncScope(body, res) {
   const stale = (existing || []).filter(
     (row) => !keepNumbers.has(String(row?.problem_number || "").trim()),
   );
-  const deletable = stale.filter(
-    (row) => !String(row?.pb_question_uid || "").trim(),
-  );
-  // 문제은행 문항까지 만들어진 crop 은 지우지 않는다. 어떤 번호가 남았는지
-  // 알려줘야 사람이 문제은행에서 정리할 수 있다.
-  const protectedNumbers = stale
-    .filter((row) => String(row?.pb_question_uid || "").trim())
-    .map((row) => String(row?.problem_number || "").trim())
-    .filter(Boolean);
+  // crop 을 지우면 정답·해설 좌표·문항 연결이 연쇄 삭제된다. 문제은행 문항이
+  // 걸렸거나 사람이 고친 자료가 있는 crop 은 남기고, 어떤 번호가 왜 남았는지
+  // 알려줘야 사람이 정리할 수 있다. 표시를 확인하지 못하면 아무것도 지우지 않는다.
+  let markers;
+  try {
+    markers = await fetchManualMarkers({
+      supa,
+      cropIds: stale.map((row) => row.id),
+    });
+  } catch (e) {
+    sendJson(res, 500, {
+      ok: false,
+      error: `crop_sync_guard_failed: ${e?.message || e}`,
+    });
+    return;
+  }
+  const {
+    deletable,
+    kept,
+    questionNumbers: protectedNumbers,
+    manualNumbers,
+  } = partitionStaleCrops(stale, markers);
   if (deletable.length > 0) {
     const { error: deleteError } = await supa
       .from("textbook_problem_crops")
@@ -9010,6 +9100,11 @@ async function handleTextbookCropsSyncScope(body, res) {
     deleted: deletable.length,
     protected: protectedNumbers.length,
     protected_numbers: protectedNumbers,
+    manual_protected: manualNumbers.length,
+    manual_protected_numbers: manualNumbers,
+    protected_reasons: Object.fromEntries(
+      kept.map((row) => [row.problemNumber, row.reasons]),
+    ),
   });
 }
 
@@ -10278,13 +10373,23 @@ async function handleTextbookAnswersBatchUpsert(body, res) {
     return;
   }
 
-  queueTextbookAnswerRender({ academyId, answerRows: rows });
+  // 사람이 고친 정답은 DB 가 건너뛴다. 그 행의 요청 값으로 정답 그림을 구우면
+  // 학생 화면에 저장되지 않은 VLM 정답이 보이므로 실제로 저장된 행만 굽는다.
+  const protectedCropIds = skippedCropIds(
+    rows.map((row) => row.crop_id),
+    data,
+  );
+  const skipped = new Set(protectedCropIds);
+  const writtenRows = rows.filter((row) => !skipped.has(row.crop_id));
+  queueTextbookAnswerRender({ academyId, answerRows: writtenRows });
 
   sendJson(res, 200, {
     ok: true,
     upserted: Array.isArray(data) ? data.length : 0,
-    render_assets: { queued: rows.length },
-    unified_render_assets: { queued: rows.length },
+    protected: protectedCropIds.length,
+    protected_crop_ids: protectedCropIds,
+    render_assets: { queued: writtenRows.length },
+    unified_render_assets: { queued: writtenRows.length },
     rows: data || [],
   });
 }
@@ -10765,9 +10870,15 @@ async function handleTextbookSolutionRefsBatchUpsert(body, res) {
     return;
   }
 
+  const protectedCropIds = skippedCropIds(
+    rows.map((row) => row.crop_id),
+    data,
+  );
   sendJson(res, 200, {
     ok: true,
     upserted: Array.isArray(data) ? data.length : 0,
+    protected: protectedCropIds.length,
+    protected_crop_ids: protectedCropIds,
     rows: data || [],
   });
 }

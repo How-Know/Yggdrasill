@@ -12,6 +12,7 @@ import '../../../services/data_manager.dart';
 import '../../../utils/attendance_judgement.dart';
 import '../../../widgets/pill_tab_selector.dart';
 import '../../../widgets/makeup_quick_dialog.dart';
+import '../../../widgets/app_snackbar.dart';
 import '../../../widgets/dialog_tokens.dart';
 import '../../../theme/ygg_semantic_colors.dart';
 
@@ -181,15 +182,11 @@ class _StudentTimeInfoDialogState extends State<StudentTimeInfoDialog> {
                                           days: 15,
                                         );
                                         if (mounted) {
-                                          ScaffoldMessenger.of(context).showSnackBar(
-                                            const SnackBar(content: Text('예정 수업이 재생성되었습니다.')),
-                                          );
+                                          showAppSnackBar(context, '예정 수업이 재생성되었습니다.');
                                         }
                                       } catch (e) {
                                         if (mounted) {
-                                          ScaffoldMessenger.of(context).showSnackBar(
-                                            SnackBar(content: Text('재생성 실패: $e')),
-                                          );
+                                          showAppSnackBar(context, '재생성 실패: $e');
                                         }
                                       } finally {
                                         if (mounted) setState(() => _resettingPlanned = false);
@@ -661,11 +658,11 @@ class _ScheduleHistoryTab extends StatelessWidget {
               );
             }
             if (context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('일정이 삭제되었습니다.')));
+              showAppSnackBar(context, '일정이 삭제되었습니다.');
             }
           } catch (e) {
             if (context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('삭제 실패: $e')));
+              showAppSnackBar(context, '삭제 실패: $e');
             }
           }
         }
@@ -675,7 +672,7 @@ class _ScheduleHistoryTab extends StatelessWidget {
           if (picked == null) return;
           final ed = it.endDate == null ? null : _dateOnly(it.endDate!);
           if (ed != null && ed.isBefore(picked)) {
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('종료일은 시작일보다 빠를 수 없습니다.')));
+            showAppSnackBar(context, '종료일은 시작일보다 빠를 수 없습니다.');
             return;
           }
           try {
@@ -694,7 +691,7 @@ class _ScheduleHistoryTab extends StatelessWidget {
               );
             }
           } catch (e) {
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('수정 실패: $e')));
+            showAppSnackBar(context, '수정 실패: $e');
           }
         }
 
@@ -737,7 +734,7 @@ class _ScheduleHistoryTab extends StatelessWidget {
           }
           final sd = _dateOnly(it.startDate);
           if (next != null && next!.isBefore(sd)) {
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('종료일은 시작일보다 빠를 수 없습니다.')));
+            showAppSnackBar(context, '종료일은 시작일보다 빠를 수 없습니다.');
             return;
           }
           try {
@@ -756,7 +753,7 @@ class _ScheduleHistoryTab extends StatelessWidget {
               );
             }
           } catch (e) {
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('수정 실패: $e')));
+            showAppSnackBar(context, '수정 실패: $e');
           }
         }
 
@@ -817,7 +814,7 @@ class _ScheduleHistoryTab extends StatelessWidget {
               );
             }
           } catch (e) {
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('수정 실패: $e')));
+            showAppSnackBar(context, '수정 실패: $e');
           }
         }
 
@@ -899,7 +896,7 @@ class _ScheduleHistoryTab extends StatelessWidget {
           final int newStartMin = toMin(startT);
           final int newEndMin = toMin(endT);
           if (newEndMin <= newStartMin) {
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('끝 시간은 시작 시간보다 늦어야 합니다.')));
+            showAppSnackBar(context, '끝 시간은 시작 시간보다 늦어야 합니다.');
             return;
           }
 
@@ -918,7 +915,7 @@ class _ScheduleHistoryTab extends StatelessWidget {
                 refDate: _dateOnly(DateTime.now()),
               );
             } catch (e) {
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('수정 실패: $e')));
+              showAppSnackBar(context, '수정 실패: $e');
             }
             return;
           }
@@ -933,7 +930,7 @@ class _ScheduleHistoryTab extends StatelessWidget {
             if (rem > 0) rem,
           ];
           if (durations.isEmpty) {
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('유효하지 않은 시간 범위입니다.')));
+            showAppSnackBar(context, '유효하지 않은 시간 범위입니다.');
             return;
           }
 
@@ -954,7 +951,7 @@ class _ScheduleHistoryTab extends StatelessWidget {
             final oEnd = oStart + ob.duration.inMinutes;
             final overlap = newStartMin < oEnd && oStart < newEndMin;
             if (overlap) {
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('다른 일정과 시간이 겹칩니다.')));
+              showAppSnackBar(context, '다른 일정과 시간이 겹칩니다.');
               return;
             }
           }
@@ -1088,7 +1085,7 @@ class _ScheduleHistoryTab extends StatelessWidget {
                 refDate: sd,
               );
             } catch (_) {}
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('수정 실패: $e')));
+            showAppSnackBar(context, '수정 실패: $e');
           }
         }
 
@@ -1329,9 +1326,7 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
     required Map<String, ClassInfo> classById,
   }) async {
     if (candidates.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('연결할 예정 수업이 없습니다.')),
-      );
+      showAppSnackBar(context, '연결할 예정 수업이 없습니다.');
       return;
     }
 
@@ -1401,10 +1396,10 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
         planned: planned,
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('보강으로 연결되었습니다.')));
+      showAppSnackBar(context, '보강으로 연결되었습니다.');
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('연결 실패: $e')));
+      showAppSnackBar(context, '연결 실패: $e');
     }
   }
 
@@ -1668,9 +1663,7 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
               );
               if (!mounted) return;
               if (updated > 0) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('회차를 정리했습니다. (${updated}건)')),
-                );
+                showAppSnackBar(context, '회차를 정리했습니다. (${updated}건)');
               }
             } finally {
               if (mounted) {
@@ -1734,26 +1727,24 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
         Future<void> updateAttendanceRecordWithSnack(AttendanceRecord next) async {
           final rid = (next.id ?? '').trim();
           if (rid.isEmpty) {
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('수정할 기록 ID가 없습니다.')));
+            showAppSnackBar(context, '수정할 기록 ID가 없습니다.');
             return;
           }
           try {
             await AttendanceService.instance.updateAttendanceRecord(next.copyWith(updatedAt: DateTime.now()));
             if (!context.mounted) return;
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('수정되었습니다.')));
+            showAppSnackBar(context, '수정되었습니다.');
           } on StateError catch (e) {
             if (!context.mounted) return;
             if (e.message == 'CONFLICT_ATTENDANCE_VERSION') {
               await AttendanceService.instance.loadAttendanceRecords();
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('다른 기기에서 먼저 수정했습니다. 새로고침 후 다시 시도하세요.')),
-              );
+              showAppSnackBar(context, '다른 기기에서 먼저 수정했습니다. 새로고침 후 다시 시도하세요.');
               return;
             }
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('수정 실패: $e')));
+            showAppSnackBar(context, '수정 실패: $e');
           } catch (e) {
             if (!context.mounted) return;
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('수정 실패: $e')));
+            showAppSnackBar(context, '수정 실패: $e');
           }
         }
 
@@ -1844,7 +1835,7 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
           final startMin = toMin(startT);
           final endMin = toMin(endT);
           if (endMin <= startMin) {
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('끝 시간은 시작 시간보다 늦어야 합니다.')));
+            showAppSnackBar(context, '끝 시간은 시작 시간보다 늦어야 합니다.');
             return;
           }
           final base = _dateOnly(r.classDateTime);
@@ -2255,9 +2246,7 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
                           }
                         }
                         if (studentWithInfo == null) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('학생 정보를 찾을 수 없습니다.')),
-                          );
+                          showAppSnackBar(context, '학생 정보를 찾을 수 없습니다.');
                           return;
                         }
 

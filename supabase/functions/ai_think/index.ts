@@ -1,7 +1,9 @@
 // ai_think: 매니저앱 Think 화면 전용 (슈퍼관리자만).
 //   POST { action: 'status', client?: { features } }
-//   POST { action: 'chat', conversation_id?, message, attachments?, options?: { deep?, web_search? }, role?: { think_role_id, extra_ref_departments }, client?: { features } }  → text/event-stream
+//   POST { action: 'chat', conversation_id?, concept_id?, criterion_id?, message, attachments?, options?: { deep?, web_search? }, role?: { think_role_id, extra_ref_departments }, client?: { features } }  → text/event-stream
 //   role은 새 대화(conversation_id 없음)에서만 쓴다. 이어지는 대화는 DB에 저장된 역할을 쓴다.
+//   concept_id·criterion_id는 개념 탭이 고른 개념·정리 기준. 기존 대화에만 붙고, 서버가 요청마다 저장본을 다시 읽는다(본문은 받지 않는다).
+//   draft_id는 개념 초안 검토 창의 초안. 새 대화에도 붙는다(교육 부서, 제목 '개념 초안 검토'). 본문·미저장 편집은 받지 않는다.
 //   client.features: 앱이 지원하는 기능 버전(예: { conversation_split: 1 }). 기능 상태는 요청마다 features.ts로 계산한다.
 //   POST { action: 'decision_draft', conversation_id }
 //   POST { action: 'spec_export', memory_id }
@@ -17,6 +19,9 @@ import { sseComment, sseEvent } from '../_shared/ai/sse.ts';
 import { recordAiRun } from '../_shared/ai/usage.ts';
 import { normalizeThinkRole, parseDepartmentList } from './access_context.ts';
 import { runThinkChat } from './chat.ts';
+import { CONCEPT_REFERENCE_VERSION } from './concept_reference.ts';
+import { CRITERION_REFERENCE_VERSION } from './criterion_reference.ts';
+import { CONCEPT_DRAFT_REFERENCE_VERSION } from './concept_draft_reference.ts';
 import { createDecisionDraft, createMemoryFeedbackDraft, createSpecExport } from './drafts.ts';
 import { computeFeatures, parseClientFeatures, type DbFeatureCheck, type ThinkFeatures } from './features.ts';
 import { THINK_PROMPT_VERSION } from './prompts.ts';
@@ -52,6 +57,12 @@ async function handleStatus(auth: AuthContext, body: Body): Promise<Response> {
     prompt_version: THINK_PROMPT_VERSION,
     features,
     features_db_error: db.ok || db.missing ? null : db.error.slice(0, 300),
+    // DB·앱 버전과 무관한 Edge 기능. 앱은 없으면 옛 Edge로 본다.
+    capabilities: {
+      concept_reference: CONCEPT_REFERENCE_VERSION,
+      criterion_reference: CRITERION_REFERENCE_VERSION,
+      concept_draft_reference: CONCEPT_DRAFT_REFERENCE_VERSION,
+    },
   });
 }
 
@@ -63,9 +74,31 @@ async function handleChat(req: Request, auth: AuthContext, body: Body): Promise<
   if (!message && attachments.length === 0) return errorResponse(400, 'message_required', '메시지를 입력하세요.');
   const conversationId = body.conversation_id == null ? null : uuidOrNull(body.conversation_id);
   if (body.conversation_id != null && !conversationId) return errorResponse(400, 'conversation_id_invalid');
+  // 개념 탭이 고른 개념. 대화 ID와 따로 받고, 본문은 받지 않는다(서버가 저장본을 다시 읽는다).
+  const conceptId = body.concept_id == null ? null : uuidOrNull(body.concept_id);
+  if (body.concept_id != null && !conceptId) return errorResponse(400, 'concept_id_invalid');
+  if (conceptId && !conversationId) {
+    return errorResponse(400, 'concept_requires_conversation', '개념 참고는 이미 있는 대화에만 붙일 수 있습니다.');
+  }
+  // 개념 상세에서 고른 서술. 없으면 기본 서술(개념 본문). 서술 글도 받지 않는다.
+  const conceptStatementId = body.statement_id == null ? null : uuidOrNull(body.statement_id);
+  if (body.statement_id != null && !conceptStatementId) return errorResponse(400, 'statement_id_invalid');
+  if (conceptStatementId && !conceptId) {
+    return errorResponse(400, 'statement_requires_concept', '서술 참고는 개념을 고른 질문에만 붙일 수 있습니다.');
+  }
+  const criterionId = body.criterion_id == null ? null : uuidOrNull(body.criterion_id);
+  if (body.criterion_id != null && !criterionId) return errorResponse(400, 'criterion_id_invalid');
+  if (criterionId && !conversationId) {
+    return errorResponse(400, 'criterion_requires_conversation', '정리 기준 참고는 이미 있는 대화에만 붙일 수 있습니다.');
+  }
+  // 개념 초안 검토 창의 초안. 새 대화에도 붙고(교육 부서·고정 제목), 본문은 받지 않는다.
+  const conceptDraftId = body.draft_id == null ? null : uuidOrNull(body.draft_id);
+  if (body.draft_id != null && !conceptDraftId) return errorResponse(400, 'draft_id_invalid');
   const options = (body.options && typeof body.options === 'object' ? body.options : {}) as Body;
   const roleBody = (body.role && typeof body.role === 'object' ? body.role : null) as Body | null;
-  const newConversationRole = !conversationId && roleBody
+  const newConversationRole = !conversationId && conceptDraftId
+    ? { thinkRoleId: 'education' as const, extraRefDepartments: roleBody ? parseDepartmentList(roleBody.extra_ref_departments) : [] }
+    : !conversationId && roleBody
     ? {
       thinkRoleId: normalizeThinkRole(roleBody.think_role_id),
       extraRefDepartments: parseDepartmentList(roleBody.extra_ref_departments),
@@ -123,6 +156,10 @@ async function handleChat(req: Request, auth: AuthContext, body: Body): Promise<
           wallClockMs,
           features,
           newConversationRole,
+          conceptId,
+          conceptStatementId,
+          criterionId,
+          conceptDraftId,
         },
         {
           provider,

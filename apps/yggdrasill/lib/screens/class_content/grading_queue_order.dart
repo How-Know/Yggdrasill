@@ -36,6 +36,40 @@ class GradingHomeworkSchedule {
   DateTime? get effectiveCheckAt => dueForCheckAt ?? dueDate;
 }
 
+/// 채점 카드의 `n분` / `n시간` / `n시간 m분` 표기.
+///
+/// 제출 카드는 제출 시각, 숙제 카드는 검사일 등원 시각을 [start]로 넣는다.
+String formatGradingElapsedSince(DateTime start, DateTime now) {
+  final totalMinutes = now.difference(start).inMinutes;
+  if (totalMinutes < 0) return '0분';
+  if (totalMinutes < 60) return '$totalMinutes분';
+  final hours = totalMinutes ~/ 60;
+  final mins = totalMinutes % 60;
+  if (mins == 0) return '$hours시간';
+  return '$hours시간 $mins분';
+}
+
+/// [day]와 같은 지역 날짜의 등원 시각 중 가장 이른 시각.
+///
+/// 숙제는 검사일에 오자마자 검사를 받는 것으로 보고, 그 등원을 제출 시점으로 쓴다.
+DateTime? earliestLocalArrivalOnDay(
+  Iterable<DateTime> arrivals,
+  DateTime day,
+) {
+  final localDay = day.toLocal();
+  final target = DateTime(localDay.year, localDay.month, localDay.day);
+  DateTime? earliest;
+  for (final raw in arrivals) {
+    final arrival = raw.toLocal();
+    final arrivalDay = DateTime(arrival.year, arrival.month, arrival.day);
+    if (arrivalDay != target) continue;
+    if (earliest == null || arrival.isBefore(earliest)) {
+      earliest = arrival;
+    }
+  }
+  return earliest;
+}
+
 /// 미제출 숙제를 채점 모드에 노출할지 결정한다.
 ///
 /// 현재 검사 예정일이 오늘인 숙제만 노출한다. 최초 검사일은 이월 사유 표시에만

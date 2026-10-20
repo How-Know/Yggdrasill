@@ -80,7 +80,7 @@ void main() {
       await tester.pumpWidget(_wrap(ThinkRoleBarView(role: ThinkRoleId.education, extraRefs: const [], onRole: (_) {}, onToggleRef: (_) {})));
       expect(find.text('다른 부서 참조'), findsOneWidget);
       expect(find.byTooltip('교육 부서 기억 참조'), findsNothing);
-      expect(find.byTooltip('제품 부서 기억 참조'), findsOneWidget);
+      expect(find.byTooltip('문제 풀이 부서 기억 참조'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
 
@@ -108,8 +108,8 @@ void main() {
         ThinkRoleBarView(role: ThinkRoleId.lead, extraRefs: const [], onRole: (_) {}, onToggleRef: (_) {}),
         width: 600,
       ));
-      expect(find.text('제품'), findsNothing);
-      expect(find.byTooltip('제품 역할'), findsOneWidget);
+      expect(find.text('문제 풀이'), findsNothing);
+      expect(find.byTooltip('문제 풀이 역할'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
   });
@@ -117,10 +117,10 @@ void main() {
   group('아바타', () {
     Finder pulse() => find.descendant(of: find.byType(ThinkRoleAvatar), matching: find.byType(AnimatedBuilder));
 
-    testWidgets('모션 감소면 답하는 중에도 움직이지 않는 고리를 쓴다', (tester) async {
+    testWidgets('모션 감소면 답하는 중에도 캐릭터가 움직이지 않는다', (tester) async {
       await tester.pumpWidget(_wrap(const ThinkRoleAvatar(role: ThinkRoleId.product, active: true), disableAnimations: true));
       expect(pulse(), findsNothing);
-      expect(find.descendant(of: find.byType(ThinkRoleAvatar), matching: find.byType(DecoratedBox)), findsOneWidget);
+      expect(find.descendant(of: find.byType(ThinkRoleAvatar), matching: find.byType(CustomPaint)), findsWidgets);
     });
 
     testWidgets('기본은 답하는 역할만 움직이고, 4개 역할 모두 그려진다', (tester) async {

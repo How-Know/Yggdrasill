@@ -61,15 +61,16 @@
 
 | 테이블 | 역할 | 쓰는 주체 |
 |--------|------|-----------|
-| `ai_conversations` | 대화 묶음 (제목, 보관 여부, 메시지 수) | ai_think, 매니저앱(이름·보관·삭제) |
-| `ai_messages` | 대화 메시지. 첨부·출처·도구 기록·진행 메모·모델. `context_excluded`(답변에서 제외) | ai_think, 매니저앱(제외 전환) |
+| `ai_conversations` | 대화 묶음 (제목, 보관 여부, 메시지 수). `progress_summary`(승인된 진행 요약, 대화마다 하나) | ai_think, 매니저앱(이름·보관·삭제), 승인 RPC(진행 요약) |
+| `ai_messages` | 대화 메시지. 첨부·출처·도구 기록·진행 메모·모델. `context_excluded`(답변에서 제외), `marked_important`(중요 표시, 화면 표시만) | ai_think, 매니저앱(제외·중요 표시 전환), 승인 RPC |
 | `ai_tree_nodes` | 대화 정리 트리. `kind` = folder / conversation(대화 배치) / excerpt(발췌) / document(종합 문서) | 매니저앱(사람) |
 | `ai_tree_node_sources` | 발췌 → 원본 메시지 연결 (메시지가 지워지면 함께 지워짐) | 매니저앱 |
 | `ai_memories` | 기억. `kind` = identity / principle / decision / note, `status` = draft / active / superseded / archived | 매니저앱(사람의 승인) |
 | `ai_memory_revisions` | 기억의 모든 버전 스냅샷 (트리거가 씀) | 트리거 |
 | `ai_runs` | AI 호출 1건 = 1행. 모델, 토큰, 비용, 지연, 오류 | Edge Function(service role) |
-| `ai_platform_settings` | 한 행짜리 설정. 월 한도(USD), 초과 시 경고/차단, 웹 검색 허용 | 매니저앱 |
-| `ai_actions` | AI 작업 제안(코드 조사·수정, 대화 분류, 삭제). `proposed` → `applied` / `rejected` / `undone` | ai_think(제안 RPC), 매니저앱(승인 RPC) |
+| `ai_platform_settings` | 한 행짜리 설정. 월 한도(USD), 초과 시 경고/차단, 웹 검색 허용, 자동 정리 제안 켜기 | 매니저앱 |
+| `ai_actions` | AI 작업 제안(코드 조사·수정, 대화 분류·나누기, 기억, 부서 넘기기, 정리, 삭제). `proposed` → `applied` / `rejected` / `undone` | ai_think(제안 RPC), 매니저앱(승인 RPC) |
+| `ai_department_criteria` | 부서마다 먼저 확인할 질문·놓치면 안 되는 위험·우선 참고할 승인 기억, 판(`version`). 바뀔 때마다 `ai_department_criteria_revisions`에 남는다 | 승인 RPC, 매니저앱(`ai_department_criteria_save`) |
 | `ai_relay_asks` | Cursor가 Think에게 물은 기록(질문 본문은 저장하지 않음, 한도 계산용). §12 | ai_think_relay·ai_code_bridge(service role RPC) |
 
 `ai_conversations.origin`(owner / cursor), `ai_messages.asked_by`(cursor_ide / cursor_worker), `ai_messages.relay`(판정)는
@@ -79,8 +80,17 @@
 - 기억 수정은 낙관적 잠금: `update ... where id = ? and version = ?`. 결과가 비면 다른 곳에서 먼저 고친 것이다.
   `version`은 트리거가 올린다. `active`가 되면 `approved_at`, `approved_by`도 트리거가 채운다.
 - 결정이 다른 결정을 대체하면 `supersedes_id`를 채운다. 새 결정이 `active`가 될 때 매니저앱이 옛 결정을 `superseded`로 바꾼다.
-- 첨부: 비공개 버킷 `ai-attachments`, 경로 `{user_id}/{yyyyMM}/{uuid}-{파일명}`, 20MB, PNG·JPG·WEBP·GIF·PDF.
-  OpenAI에는 900초짜리 서명 URL로 넘긴다.
+- 첨부: 비공개 버킷 `ai-attachments`, 경로 `{user_id}/{yyyyMM}/{uuid}-{파일명}`, 20MB, PNG·JPG·WEBP·GIF·PDF·XLSX.
+  이미지·PDF는 OpenAI에 900초짜리 서명 URL로 넘긴다. 엑셀은 아래 "엑셀 분석"처럼 파이썬 실행 환경에 올린다.
+- 엑셀 분석(결정 6d0ec9c1, `20261014235900_ai_attachments_spreadsheet.sql`):
+  - 이번 질문이나 첨부를 다시 보내는 최근 질문에 `.xlsx`가 있을 때만 연다. `.xls`·`.xlsm`·`.csv` 입력은 받지 않는다.
+  - `ai_think`가 원본을 OpenAI Files(`user_data`)에 올리고, 1GB 실행 환경(`/v1/containers`, `file_ids`)을 만든다.
+    모델에는 `code_interpreter` 도구로 그 실행 환경 id만 넘긴다. 엑셀은 모델 입력 파일로 보내지 않는다.
+  - 답변이 끝나면 실행 환경이 만든 `.xlsx`·`.csv`·`.png`(최대 6개, 개당 20MB)를 같은 버킷의 `{user_id}/{yyyyMM}/think-{uuid}-{이름}`에 저장한다.
+    저장한 파일은 답변 메시지의 `attachments`에 붙는다. 답변이 인용한 파일을 먼저 고른다. 사용자가 멈춘 답변은 옮기지 않는다.
+  - 마지막에 실행 환경과 올린 원본을 OpenAI에서 지운다. AI 호출이나 파일 옮기기가 실패해도 지운다.
+  - 실행 환경을 열지 못하면 도구 없이 답하고 `notice: spreadsheet_unavailable`을 보낸다. 파일을 옮기지 못하면 `notice: answer_files_failed`를 보낸다.
+  - 엑셀 내용을 DB나 앱 데이터에 자동으로 쓰지 않는다. Word·PowerPoint는 코드 실행 대상이 아니다.
 - RPC: `ai_search_memories(p_terms, p_limit)`(키워드 점수 검색; **승인 후** `20261008210000_ai_search_memories_active_only.sql` 적용 시 `active`만 검색),
   `ai_usage_summary(p_from, p_to)`(KST 일·기능·모델별 합계),
   `ai_month_cost_usd()`(KST 이번 달 비용).
@@ -108,6 +118,8 @@
   제외한 메시지는 `store.listMessages`에서 빠지므로 대화 기록·결정 초안·스펙 내보내기 모두에 들어가지 않는다.
   화면과 트리에는 흐리게 남는다.
 - AI 정리 제안(대화 분류 미리보기·승인·되돌리기)은 2026-09-30에 채팅 카드로 넣었다([`ai-think-actions.md`](ai-think-actions.md)).
+  2026-10-12부터 분류·나누기·기억·부서 넘기기·맥락 제외·중요 표시·진행 요약·부서 기준 제안은 답변 아래 "정리 제안 N건"으로 접고
+  정리 패널에서 골라 한 번에 승인한다([`ai-think-actions.md`](ai-think-actions.md) §11). 코드·삭제 제안은 카드 그대로다.
 - 아직 없는 것(확인 뒤 진행): 트리 변경 이력, "좋은 답" 별점, AI 요약 초안, 파생 기억을 골라 지우는 영구 삭제.
 
 ---
@@ -118,11 +130,15 @@
 
 **역할·자료 범위(2026-10-10):** 대화 `think_role_id`(lead/education/product/engineering), 사용자가 고른 추가 참조 부서, 대화에 연결한 승인 active 기억·종합 문서 링크로 `AccessContext`가 판정한다. identity(교육철학)는 역할과 무관하게 유지한다. lead는 허용 범위 안에서 관련도·건수 예산으로 principles·decisions 등을 고른다. `get_memory`·`search_memories`·instructions 주입·`buildThinkContext`·명시 연결 문서 본문 경로가 같은 판정을 쓴다. draft 조회(피드백 편집)는 AI 맥락과 분리한다. 답변마다 `ai_message_context_snapshots`에 당시 역할·실제 전달 자료 id만 남긴다. 기능 `think_roles`는 Edge·DB·앱 버전이 모두 준비됐을 때만 활성화한다. 승인 active가 아닌 기억은 역할과 무관하게 AI에 가지 않는다. 기억 검색은 DB 단계(`ai_search_memories_scoped`)에서 거르고, 역할 프로필 버전(`ROLE_PROFILE_VERSION`)은 `ai_runs.role_profile_version`과 캐시 키에 들어간다. 새 대화의 역할은 요청 `body.role`로 받아 서버가 저장하고, 이어지는 대화는 저장된 역할만 쓴다. 마이그레이션 `20261010160000_ai_think_roles.sql`, 자세한 내용과 예외는 `ai-think-actions.md` §8.
 
-1. `instructions`: 공통 역할 규칙 → (기능 준비 시 역할 프로필) → identity 전문 → principle 요약 → 최근 확정 결정(id 포함) → 대화 범위(scope)
+1. `instructions`: 공통 역할 규칙 → (기능 준비 시 역할 프로필) → identity 전문 → principle 요약 → 최근 확정 결정(id 포함)
+   → (자동 정리 기능 준비 + 역할이 적용된 대화면) 이 부서의 기준(승인된 판만, 교육철학·원칙보다 앞서지 않음) → 대화 범위(scope)
 2. 대화 기록: 최근 40개, 최대 6만 자. 오래된 것부터 뺀다. 첨부는 최근 사용자 메시지 2개까지만 다시 보낸다.
    "답변에서 제외"한 메시지(`context_excluded`)는 처음부터 읽지 않는다. 다른 대화와 정리 트리는 넣지 않는다.
    나눠 온 대화면 나눌 때 정한 요약(`split_summary`)을 기록 맨 앞에 사용자 역할의 "참고 자료"로 넣는다(지시가 아님,
    [`ai-think-actions.md`](ai-think-actions.md) §7).
+   승인된 진행 요약(`progress_summary`)이 있으면 기록 뒤에 "참고 자료"로 넣는다. 요약 뒤 새 질문 수와, 요약 승인 뒤 맥락에서 뺀
+   메시지가 있는지도 함께 적는다. 승인 전 요약 제안은 넣지 않는다. 중요 표시는 대화 기록에 붙이지 않고, 정리 도구
+   `list_conversation_messages`가 이미 표시된 메시지를 알려 줄 뿐이다([`ai-think-actions.md`](ai-think-actions.md) §11).
 3. 작업 상태 메모(기존 대화만): 이 대화의 최근 제안 10개와 코드 요청 8개의 종류·상태·결과 요약(diff 본문은 넣지 않음).
    AI가 "앞에서 낸 제안이 어떻게 됐는지"를 알고 이어 가게 한다. 없으면 넣지 않는다.
    그 뒤에 "실행 환경 기능 상태" 메모(서버가 이번 요청에서 계산한 기능 상태, [`ai-think-actions.md`](ai-think-actions.md) §7.1)를 넣는다.
@@ -130,7 +146,8 @@
    Edge는 RPC 결과에서 `active`만 남기며, RPC가 draft를 함께 반환하는 **구버전 배포**에서는 한도(최대 30)까지 여유 있게 가져온 뒤 자른다.
    draft가 슬롯을 차지해 승인 기억이 밀릴 수 있어, 운영 DB에 `20261008210000_ai_search_memories_active_only.sql` 적용 전에는 완전한 한도 보장을 주장하지 않는다.
    `get_memory`·`search_memories` 도구도 `active`만 AI에 노출한다. `store.getMemory`는 draft 조회(피드백 초안·스펙)용으로 그대로 둔다.
-5. 이번 사용자 메시지(+첨부)
+5. (개념 탭에서 개념을 고른 질문만) 고른 개념의 최신 저장본: 서버가 이번 요청에서 다시 읽은 사용자 역할의 "분석 자료"(§13)
+6. 이번 사용자 메시지(+첨부)
 
 한도 값은 `CONTEXT_LIMITS`에 모여 있다. 화면 오른쪽 "맥락" 패널에 무엇이 들어갔는지 표시된다.
 
@@ -140,6 +157,10 @@
 `search_behavior_cards`, `list_tree_folders`, `list_conversations`, `list_code_requests`, `get_code_request`.
 제안: `propose_code_request`, `propose_folder`, `propose_delete`, `propose_conversation_split`
 (대화 나누기 기능 상태가 준비됨일 때만 노출, [`ai-think-actions.md`](ai-think-actions.md) §7).
+정리(2026-10-12, 기능 `auto_organize` 준비 + 자동 제안이 켜져 있거나 사용자가 정리를 직접 요청한 턴만): 읽기 `list_conversation_messages`,
+제안 `propose_context_exclusion`, `propose_importance_mark`, `propose_progress_summary`, `propose_department_criteria_change`
+(역할이 적용된 대화만). 자동 제안이 꺼져 있으면 분류·나누기·기억·부서 넘기기 제안 도구도 같은 조건에서만 준다
+([`ai-think-actions.md`](ai-think-actions.md) §11).
 조율: `start_code_plan` — 코드 수정은 Think가 바로 고치게 하지 않고 Cursor와 계획을 조율한 뒤 조율본을 운영자에게 승인받는다.
 읽기 전용이라 승인 없이 시작하지만, 시작 전에 대화로 의도를 확인하게 지시한다
 (2026-10-01, `propose_code_change`를 대신함. [`ai-think-actions.md`](ai-think-actions.md) §4.3).
@@ -162,35 +183,36 @@
 
 | action | 요청 | 응답 |
 |--------|------|------|
-| `status` | `{client?{features}}` | `{configured, provider, models{primary,deep,fast}, web_search_enabled, budget{limit_usd,mode,spent_usd,exceeded}, prompt_version, features{conversation_split{state,edge,db,app,permitted}}, features_db_error}` |
-| `chat` | `{conversation_id?, message, attachments?[{path,name,mime,size}], options?{deep, web_search}, client?{features}}` | SSE 스트림 (아래) |
+| `status` | `{client?{features}}` | `{configured, provider, models{primary,deep,fast}, web_search_enabled, budget{limit_usd,mode,spent_usd,exceeded}, prompt_version, features{conversation_split{state,edge,db,app,permitted}}, features_db_error, capabilities{concept_reference, criterion_reference}}` |
+| `chat` | `{conversation_id?, concept_id?, statement_id?, criterion_id?, message, attachments?[{path,name,mime,size}], options?{deep, web_search}, client?{features}}` | SSE 스트림 (아래). `concept_id`·`criterion_id`는 기존 대화에만(§13) |
 | `decision_draft` | `{conversation_id}` | `{draft{title,context,decision,reason,alternatives,conflicts,open_questions,tags}, run_id}` |
 | `memory_feedback_draft` | `{conversation_id, assistant_message_id, user_message_ids?, feedback, update_memory_id?}` | `{draft{candidates[], duplicate_warnings[], insufficient_evidence, notes}, run_id, update_baseline?{memory_id, version}}` — 수정 대상을 고른 경우 AI 호출 **전**에 읽은 id·version을 고정한다. 매니저앱은 기존 기억 수정 저장 시 이 version으로 낙관적 잠금한다. |
 | `spec_export` | `{memory_id}` (확정된 결정만) | `{markdown, suggested_path, run_id}` |
 
 스트림 전에 나는 오류는 JSON `{ok:false, error, message}`:
-400 `message_too_long` · `message_required` · `attachments_*` · `conversation_id_invalid`,
+400 `message_too_long` · `message_required` · `attachments_*` · `conversation_id_invalid` · `concept_id_invalid` · `concept_requires_conversation` · `statement_id_invalid` · `statement_requires_concept` · `criterion_id_invalid` · `criterion_requires_conversation`,
 401, 403 `forbidden`, 429 `budget_exceeded`, 503 `ai_not_configured`, 500.
 
 SSE 이벤트 (15초마다 `: ping` 주석):
 
 | event | data |
 |-------|------|
-| `notice` | `{code: budget_warning \| web_search_disabled}` |
-| `conversation` | `{conversation_id, user_message_id, title, created, model, features, split_suggestions, context{identity, principles, decisions, relevant[], history_used, history_dropped, split_summary}}` |
+| `notice` | `{code: budget_warning \| web_search_disabled \| role_not_applied \| spreadsheet_unavailable \| answer_files_failed}` |
+| `conversation` | `{conversation_id, user_message_id, title, created, model, features, split_suggestions, auto_organize{enabled, asked, pending}?, context{identity, principles, decisions, relevant[], history_used, history_dropped, split_summary, progress_summary, criteria_version, concept, criterion}}` — `concept`·`criterion`은 개념·정리 기준을 붙인 질문만 상태 객체, 아니면 null(§13.2, §13.5) |
 | `message_start` / `message_done` | `{item_id, phase}` — phase는 `message_done`에서 확정된다 (`commentary`면 본문이 아니라 진행 메모) |
 | `delta` | `{item_id, text}` |
 | `tool` | `{call_id, name, label, status: running \| done, ok?, detail?}` |
 | `action` | `{action}` — 제안 도구가 남긴 `ai_actions` 행. 아직 `message_id`가 비어 있다 |
 | `title` | `{conversation_id, title}` (새 대화일 때 빠른 모델이 만든 제목) |
-| `done` | `{conversation_id, assistant_message_id, run_id, status: complete \| stopped, model, usage, web_search_calls, cost_usd, sources, action_ids}` |
-| `error` | `{conversation_id?, assistant_message_id?, code, message, action_ids}` |
+| `done` | `{conversation_id, assistant_message_id, run_id, status: complete \| stopped, model, usage, web_search_calls, cost_usd, sources, attachments, action_ids}` — `attachments`는 Think가 만든 파일 |
+| `error` | `{conversation_id?, assistant_message_id?, code, message, attachments, action_ids}` |
 
 - 답변을 저장한 뒤 서버가 `ai_action_attach`로 이번 제안들에 답변 id를 붙인다. 앱은 `action_ids`로 같은 일을 화면에서 한다.
 
 - 사용자 메시지는 AI 호출 전에 저장한다. AI가 실패해도 질문은 남는다.
 - 클라이언트가 연결을 끊으면(중지) 서버는 받은 부분까지 `stopped`로 저장한다. 시간 초과는 `error` / `timeout`.
 - OpenAI 요청은 `store: false`, 대화 이력은 매 요청 다시 보낸다(상태 없는 호출).
+  예외: 함수 실행 한도를 넘는 개념 초안 정리만 백그라운드 모드(`store: true`)로 부르고 결과를 받은 뒤 지운다(`concept-library.md` §7).
 - 운영자가 커서 대화(`origin = 'cursor'`)에 이어 말하면 일반 대화로 답한다. 기록 속 커서 질문에는 "[Cursor가 보낸 질문]" 표시가 붙는다.
   Cursor 쪽 프로토콜은 `ai_think`가 아니라 `ai_think_relay`다(§12).
 
@@ -202,18 +224,19 @@ SSE 이벤트 (15초마다 `: ping` 주석):
 |------|------|------|
 | `OPENAI_API_KEY` | — | 필수. 없으면 `ai_not_configured` |
 | `AI_PROVIDER` | `openai` | `fake`면 가짜 응답 (키 없이 화면 점검용) |
-| `AI_MODEL_PRIMARY` | `gpt-6-sol` | 기본 대화, 결정 초안, 스펙 |
+| `AI_MODEL_PRIMARY` | `gpt-6.1-sol` (2026-10-12부터, 이전 `gpt-6-sol`) | 기본 대화, 결정 초안, 스펙 |
 | `AI_MODEL_DEEP` | `gpt-6-astra` | "깊게 생각" |
 | `AI_MODEL_FAST` | `gpt-6-luna` | 대화 제목, 메모 요약·추출 |
 | `AI_REASONING_{PRIMARY,DEEP,FAST}` | medium / high / none | 추론 강도 |
 | `AI_MAX_OUTPUT_{PRIMARY,DEEP,FAST}` | 16000 / 32000 / 600 | 출력 토큰 한도(추론 포함) |
 | `AI_PRICING_JSON` | 내장 가격표 | `{"모델":{"input":..,"cachedInput":..,"cacheWrite":..,"output":..}}` (USD / 1M 토큰) |
-| `AI_THINK_WALL_MS` | 140000 | 한 요청 최대 시간 (최소 30000) |
+| `AI_THINK_WALL_MS` | 140000 | 한 요청 최대 시간 (최소 30000). 도구 사용은 이 값의 65%까지. 기본값은 Supabase 무료 한도(150초)에 맞췄다. 운영(Pro, 한도 400초)은 2026-10-14부터 380000 |
 
 - 모델을 바꿀 때는 코드를 고치지 않고 `supabase secrets set AI_MODEL_PRIMARY=...`만 한다.
   가격표에 없는 모델은 `cost_usd`가 비고, 사용량 화면 합계에서 빠진다. 이때는 `AI_PRICING_JSON`을 넣는다.
-- 비용 = (캐시 안 된 입력 × input + 캐시 입력 × cachedInput + 캐시 쓰기 × cacheWrite + 출력 × output) / 1M + 웹 검색 × $0.01.
-  입력이 27만 2천 토큰을 넘으면 장문 가격을 쓴다.
+- 비용 = (캐시 안 된 입력 × input + 캐시 입력 × cachedInput + 캐시 쓰기 × cacheWrite + 출력 × output) / 1M + 웹 검색 × $0.01
+  \+ 파이썬 실행 환경 $0.03 × (연 시간 20분 단위, 최소 1). 입력이 27만 2천 토큰을 넘으면 장문 가격을 쓴다.
+  실행 환경을 쓴 실행은 `ai_runs.features.spreadsheets{files, sandbox, code_runs, answer_files}`에 남는다.
 - 월 한도는 KST 달 기준으로 `ai_runs.cost_usd`를 합해 판단한다. `warn`이면 `notice`만 보내고, `block`이면 429로 막는다.
   메모 요약(`ai_memo_assist`)도 `block`일 때 멈춘다. 메모 요약은 사용자당 분당 30회로 제한한다.
 
@@ -231,6 +254,11 @@ SSE 이벤트 (15초마다 `: ping` 주석):
 운영자가 "승인하고 저장"·"고쳐서 승인"을 눌러야 확정(active) 기억이 되고, 거절하면 아무것도 저장하지 않는다. 같은 기억이 있으면
 제안하지 않거나 대체로 제안하고, 같은 취지의 대기 카드가 있으면 수정·대체·삭제 변경 카드를 따로 낸다. 자세한 내용은 `ai-think-actions.md` §9.
 
+**부서(2026-10-12):** 왼쪽 트리는 4부서(총괄·교육·문제 풀이·개발) 칸으로 먼저 나뉘고, 부서마다 픽셀 캐릭터가 진행 상태(쉬는 중·답하는 중·
+승인 대기·Cursor 작업 중·협의 중)를 보인다. `product`의 이름은 "문제 풀이"(문제 은행·채점·오답 분석·교재 분류, 학생 풀이 화면은 제외)다.
+부서 사이로 옮기면 대화 역할(다음 답변의 관점)도 바뀐다. Think는 답변 중 다른 부서에 질문만 보내 협의할 수 있고(답변당 2회, 질문받은
+부서는 자기 부서·공통 기억만 봄), 대화를 다른 부서로 넘기자는 카드를 낼 수 있다(승인해야 바뀜). 자세한 내용은 `ai-think-actions.md` §10.
+
 ---
 
 ## 9. 테스트·배포
@@ -240,7 +268,11 @@ SSE 이벤트 (15초마다 `: ping` 주석):
 - Flutter: `apps/yggdrasill_manager/test/think_client_test.dart` (SSE 디코더, 오류 변환, 기억 행, 수식 렌더링),
   `think_tree_test.dart`(트리 구성, 끌어 놓기 계획, 문답 묶기), `think_tree_widget_test.dart`(좁은 폭 렌더링),
   `think_code_test.dart`(코드 요청 모델·전체 요청 창), `think_actions_test.dart`(제안 카드, diff 나누기, 적용 상태, 트리 강조),
-  `think_connection_test.dart`(프로젝트 ref·migration 경로·상태 JSON), `think_document_test.dart`(종합 문서·답변 타일)
+  `think_connection_test.dart`(프로젝트 ref·migration 경로·상태 JSON), `think_document_test.dart`(종합 문서·답변 타일),
+  `think_concept_chat_test.dart`(개념 탭 대화: 요청 본문, 중복 전송 잠금, 계정별 연결, 옛 서버 차단, 패널 렌더링),
+  `concept_workspace_test.dart`(정리 기준 저장·확정·재진입, 기준 id 전달, 개념책 쪽 표시·출처, 크게 보기 전환 시 상태 유지)
+- 개념 참고(§13): `supabase/functions/ai_think/concept_reference_test.ts`, 정리 기준 참고(§13.5): `criterion_reference_test.ts`,
+  정리 기준 표·RPC: `tools/db_test/test/concept_criteria.test.mjs`(마이그레이션 `20261016100000_concept_criteria_sources.sql`, 운영 반영은 별도 승인)
 - `memory_feedback_draft`·기억 AI 노출: `supabase/functions/ai_think/memory_feedback_test.ts`, `tools_test.ts`, `context_test.ts`
 - `ai_search_memories` active-only: `tools/db_test/test/ai_search_memories_active_only.test.mjs` (마이그레이션 `20261008210000_ai_search_memories_active_only.sql`, 운영 반영은 별도 승인)
 - 커서 문의(§12): `ai_think/relay_test.ts`, `ai_think_relay/handler_test.ts`, `ai_code_bridge/handler_test.ts`(ask_think),
@@ -369,3 +401,106 @@ Cursor에게 셸 명령은 주지 않는다. Cursor 결과로 결정·기억이 
 - Cursor가 기억을 만들거나 고치는 길은 없다. 커서 대화의 답도 운영자가 승인하기 전에는 기억이 아니다.
 - 커서 문의 모드에서 제안·코드 요청을 만들지 않는다. Think가 작업을 시작해야 하면 운영자 대화에서 한다.
 - 질문 본문은 `ai_relay_asks`에 따로 저장하지 않는다(대화 메시지로만 남는다).
+
+---
+
+## 13. 개념 탭 대화 (2026-10-15)
+
+매니저앱 "개념" 메뉴 오른쪽 패널에서 Think의 **기존 대화**를 이어 가며 개념을 함께 정리한다. 같은 대화라서 그 대화에서 정한
+기준·기억·부서 관점이 그대로 이어진다. 개념서 읽고 정리하기의 첫 단계로, 운영자가 Preview 없이 실제 화면에 바로 넣기로 했다(첨부 포함).
+앱 코드: `services/think/think_concept_chat_controller.dart`, `screens/curriculum/widgets/concept_chat_panel.dart`.
+
+### 13.1 연결
+
+- 사용자가 고른 기존 대화(활성 목록)만 잇는다. 대화 id를 추측하거나 새 대화를 만들지 않고, 대화의 부서·폴더도 바꾸지 않는다.
+- 기기에는 계정별로 `concept_chat_link.v1.<사용자 id>` 키에 `{conversation_id, concept_id}`만 저장한다(UUID가 아니면 버린다).
+  계정이 바뀌면 화면 상태(연결·개념·메시지·입력·첨부)를 비우고 그 계정의 값을 다시 읽는다.
+- 패널을 열 때마다 대화를 다시 확인한다. 없거나 볼 수 없으면 보내기를 막고 다시 연결하라고 안내한다. 보관한 대화는 표시만 하고 이어 갈 수 있다.
+- 개념은 저장된 개념만 고른다(개념 칩 오른쪽 클릭 또는 개념 창의 "Think 대화 참고로 선택"). 패널에서 해제하고, 고른 개념을 지우면 선택도 풀린다.
+  개념을 고르지 않고 보내면 일반 대화다.
+
+### 13.2 서버가 다시 읽기
+
+- 앱은 `chat` 요청에 `concept_id`를 `conversation_id`와 따로 보낸다. 개념 본문·고치는 중인 내용은 보내지 않는다.
+  새 대화에는 붙일 수 없다(`concept_requires_conversation`).
+- 서버는 대화 접근을 확인한 뒤 사용자 JWT로 개념을 다시 읽는다. 0072 `concepts`의 `id, kind, sub_type, name, content, level,
+  main_category_id, updated_at`만 읽고, 분류 경로는 `main_category_id`에서 부모를 따라 최대 12단계까지 간다.
+- 본문은 12,000자까지만 넘긴다. 상태는 `ok` · `truncated` · `not_found`(지웠거나 볼 수 없음) · `error`이고, 경로가 끊기면
+  `path_complete=false`다. 읽지 못하면 "이번에 읽지 못했다"는 블록만 넣고, 앞 대화에 나온 개념 내용을 지금 값으로 쓰지 말라고 지시한다.
+- 참고 블록은 관련 기억 뒤, 이번 질문 앞에 사용자 역할의 "분석 자료"로 들어간다(지시나 권한이 아님). 본문은 메시지·기억·
+  자료 스냅샷(`ai_message_context_snapshots`)에 저장하지 않는다. SSE `conversation.context.concept`와 `ai_runs.features.concept_ref`에는
+  상태(`id, status, updated_at, content_chars, delivered_chars, path_complete`)만 남는다. 앱은 이 값으로 "몇 시 저장본을 읽었는지"를 보여 준다.
+- 프롬프트 경계(`THINK_PROMPT_VERSION`, 처음 `think-2026-10-15`, §13.5부터 `think-2026-10-16`): 저장본이 바뀐 이유를 추측하지 않는다.
+  이 개념 하나만 읽었다고 말하고, 개념 지도 전체를 읽었다거나 변경을 실시간으로 감지한다고 하지 않는다.
+- `status` 응답의 `capabilities.concept_reference`로 서버가 이 기능을 아는지 알린다. 옛 Edge는 `concept_id`를 말없이 버리므로,
+  앱은 이 값이 없으면 개념을 붙여 보내지 않는다. 개념 없이 이야기하는 것은 된다.
+- `concept_reference` 2(2026-10-16): 개념과 함께 사용자가 이은 정리 기준(제목·확정 판·초안 제목, 본문 없음)과 교재 출처
+  (책 이름·학년·PDF 쪽·본문 쪽·단원 경로)를 30개까지 읽어 넣는다. 연결 표를 읽지 못하면(마이그레이션 전 포함) "없음"이 아니라
+  "읽지 못함"으로 넣고, 상태에 `linked_criteria`·`sources` 수(읽지 못하면 null)를 남긴다. 앱은 1 이상이면 개념을 보낸다.
+- `concept_reference` 3(2026-10-20, 개념의 여러 서술 3단계, `concept-library.md` §4.2): 앱은 개념 상세에서 고른 서술의 id만
+  `statement_id`로 함께 보낸다(기본 서술이면 보내지 않는다, 서술 글은 보내지 않는다). `concept_id` 없이 오면 `statement_requires_concept`.
+  서버는 요청마다 사용자 JWT로 `concept_statements`(공통 내용·서술)와 `concept_appearances`를 다시 읽고, 출처마다 어느 서술의 것인지 붙인다.
+  - 넣는 것: 개념 본문(= 기본 서술, 전과 같음), 공통 내용의 확정본·저장된 초안, 서술 목록(제목·확정 판·초안 유무·원문/정리 구분만,
+    30개까지), 고른 서술의 확정본과 저장된 초안(따로 표시, 본문 각 12,000자까지), 교육과정 등장 위치(서술 표시, 판이 비면 "미기록").
+    고르지 않은 서술의 본문은 넣지 않는다.
+  - 고른 서술이 목록에 없으면 `not_found`, 서술 표를 읽지 못하면 `unread`이고, 어느 쪽이든 기본 서술이나 다른 서술로 대신하지 않는다.
+  - 상태: `statement{id, status(base·ok·truncated·not_found·unread), version, confirmed_at, has_draft, draft_saved_at}`와
+    `statements`·`appearances` 수·`has_core`(읽지 못하면 null). 제목·본문은 SSE·실행 기록에 남지 않는다.
+  - 프롬프트 경계(`think-2026-10-20`): 서술은 같은 개념의 다른 설명이다. 옛 판·다른 개념으로 보거나 합치자고 하지 않는다.
+    서술 사이 관계는 저장돼 있지 않으니 이름·학년·문장 비슷함만으로 정하지 않는다. 정리한 글을 원문이라 하지 않는다.
+    확정본과 초안을 섞지 않고, 직접 고치거나 확정할 수 없다. 미기록 교육과정 판을 추측하지 않는다.
+  - 앱은 기본 서술이 아닌 서술을 고른 채로는 3 이상일 때만 보낸다(옛 Edge는 `statement_id`를 버리고 개념 본문만 읽기 때문).
+    패널의 참고 개념 줄에 보낼 서술을 표시하고, 답변 뒤 서버가 읽은 서술 상태를 알린다.
+
+### 13.3 Think 화면과의 관계
+
+- 선택·입력·스트림은 Think 화면과 따로 갖는다. 제안 카드는 Think 화면과 같은 곳(`ThinkController`의 대화별 제안)에 모아 어느 쪽에서 승인해도 같다.
+- 같은 대화로 두 답변을 동시에 받지 않게 앱 안에서 잠근다(`ThinkSendLock`, 대화마다 하나). 다른 쪽이 답변을 받는 중이면 보내기를 막고
+  이유를 보여 주며, 끝나면 다른 쪽이 메시지·제안을 다시 읽는다. 서버는 같은 대화의 동시 질문을 막지 않으므로 다른 기기나 다른 앱 창끼리는 막지 못한다.
+- 개념 탭의 카드는 `ThinkCardScope`로 이 탭의 메시지를 보고, Think 화면의 선택을 말없이 바꾸지 않는다. 대화 나누기를 승인하면 새 대화는
+  만들되 이 탭은 지금 대화에 남고, 새 대화는 사용자가 눌러야 Think 화면에서 열린다. 정리 제안은 한 줄로 모아 Think 화면의 정리 패널에서 확인한다.
+- 첨부는 Think 화면과 같다(이미지·PDF·엑셀, 최대 6개, 끌어 놓기·붙여 넣기).
+
+### 13.4 하지 않은 것
+
+- (2026-10-15 단계) 새 DB 마이그레이션. 정리 기준·연결·출처 표는 다음 단계(§13.5)에서 추가했다.
+- AI가 개념을 직접 고치거나 대량으로 만드는 일, PDF·VLM 자동 분석, 개념 나누기·합치기와 전체 영향 재검토,
+  데이터 이전·재분류·삭제.
+- 동시 편집 보호와 실시간 변경 감지. 보낼 때 한 번 읽은 결과만 보여 준다.
+
+### 13.5 정리 기준 참고 (2026-10-16)
+
+개념 탭이 "정리 기준 ↔ 개념 라이브러리" 공동 편집 화면으로 바뀌면서(화면·저장 구조는 `concept-library.md`), 대화에 정리 기준
+하나를 붙여 물을 수 있다. 개념 참고(§13.1~13.2)와 같은 규칙을 따른다.
+
+- 앱은 `criterion_id`만 따로 보낸다. 기존 대화에만 붙고 새 대화면 `criterion_requires_conversation`이다. 기준 제목·본문과
+  저장하지 않은 편집은 보내지 않는다. 저장된 기준(UUID)만 고를 수 있고, 계정별 연결 값에 `criterion_id`만 더 저장한다.
+- 서버는 대화 접근을 확인한 뒤 사용자 JWT로 `concept_criteria`를 다시 읽어 **확정본(판 vN·확정 시각)과 저장된 초안(저장 시각·
+  기본 틀 여부)을 나눠** 넣는다. 본문은 각각 8,000자, 이 기준에 이은 개념 이름은 30개까지다.
+- 참고 블록은 개념 참고와 같은 자리(관련 기억 뒤, 이번 질문 앞)에 기준 → 개념 순서로 들어간다. 개념과 기준을 함께 붙일 수 있다.
+- 프롬프트 경계(`think-2026-10-16`): 확정본과 초안을 섞지 않고 어느 쪽인지 밝힌다. 기본 틀 초안은 사용자 판단으로 보지 않는다.
+  이 기준 하나만 읽었다고 말하고, 기준이 바뀌었다고 기존 개념이 다시 정리됐다고 하지 않는다. Think는 기준을 고치거나 확정할 수
+  없고 제안 문장으로만 말한다(저장·확정은 운영자가 화면에서 한다).
+- 상태는 `ok` · `truncated` · `not_found` · `error`. SSE `conversation.context.criterion`과 `ai_runs.features.criterion_ref`에
+  `id, status, version, confirmed_at, has_draft, draft_saved_at, linked_concepts`만 남는다(제목·본문 없음). 연결을 읽지 못하면
+  `linked_concepts`가 null이고 블록에는 "읽지 못함"으로 들어간다.
+- `capabilities.criterion_reference`(지금 1)가 없으면 앱은 기준을 붙여 보내지 않고 이유를 보여 준다(옛 Edge가 말없이 버리지 않게).
+
+### 13.6 개념 초안 검토 대화 (2026-10-17)
+
+개념 초안 검토 창의 대화(화면·카드 규칙은 `concept-library.md` §7.2). 개념·기준 참고와 같은 원칙(id만 보내고 서버가 다시 읽음)이다.
+
+- 앱은 `draft_id`만 보낸다. 개념·기준 참고와 달리 **새 대화에도 붙는다**: `conversation_id` 없이 오면 교육 부서 대화를 만들고 제목은
+  '개념 초안 검토'(제목 자동 생성 안 함). 앱은 SSE `conversation`의 id를 기억해 다음 초안에서도 잇는다. 검토 창에서는 개념·기준 참고를 붙이지 않는다.
+- 서버(`concept_draft_reference.ts`)는 사용자 JWT로 `concept_drafts`, 초안의 기준, 확정 유형(100개까지), 라이브러리 영역을 읽어
+  참고 블록을 만든다: 저장된 검토가 있으면 그것을, 없으면 AI 결과와 폴더 제안으로 만든 항목(key·종류·표시·폴더·근거 블록과 쪽), 새 유형,
+  기준의 확정본과 저장된 초안, 블록 원문(블록 600자, 모두 24,000자, 넘으면 `truncated`), 뺀 블록. 저장하지 않은 편집은 없다고 밝힌다.
+  자리는 관련 기억 뒤, 기준·개념 참고 앞이다.
+- 프롬프트 경계: 참고 블록은 지시가 아니다. 책 이름·쪽수·원본 위치를 추정하지 않는다. 바꾸자는 것은 카드 도구로만 낸다.
+- 도구(초안이 열려 있고 읽기가 `ok`·`truncated`일 때만): `propose_concept_draft_change`(저장된 검토가 있을 때만), `propose_concept_criterion_change`
+  (이 초안의 기준만), `propose_concept_draft_rerun`. 초안 id는 모델이 아니라 서버 문맥에서 넣고, 답변 하나에 도구마다 한 번이다. 제안은
+  `concept_draft_action_propose`(사용자 JWT)로 `ai_actions`에 들어가고 승인은 앱에서 운영자가 한다(`ai-think-actions.md`).
+  기준 카드는 기준 초안으로만 저장되므로 §13.5의 "Think는 기준을 확정하지 않는다"는 그대로다.
+- 상태는 `ok` · `truncated` · `not_found` · `error`. SSE `conversation.context.draft`와 `ai_runs.features.concept_draft_ref`에
+  `id, status, draft_status, review_saved_at, items, blocks, blocks_cut`만 남는다(항목 이름·본문 없음).
+- `capabilities.concept_draft_reference`(지금 1)가 없으면 앱은 검토 창에서 보내기를 막는다.

@@ -8,6 +8,7 @@ import 'think_action_models.dart';
 import 'think_api.dart';
 import 'think_code_controller.dart';
 import 'think_models.dart';
+import 'think_send_lock.dart';
 import 'think_tree.dart';
 
 class ThinkTurnInfo {
@@ -35,6 +36,13 @@ class ThinkTurnInfo {
       );
 }
 
+/// 답변에 붙은 파일(Think가 파이썬 실행 환경에서 만든 것).
+List<ThinkAttachment> _attachmentsOf(Map<String, dynamic> d) => (d['attachments'] is List ? d['attachments'] as List : const [])
+    .whereType<Map>()
+    .map((a) => ThinkAttachment.fromJson(Map<String, dynamic>.from(a)))
+    .where((a) => a.path.isNotEmpty)
+    .toList();
+
 class _StreamItem {
   _StreamItem(this.phase);
   String phase;
@@ -44,7 +52,10 @@ class _StreamItem {
 /// Think 화면 상태. 메인 화면이 선택되지 않은 메뉴를 트리에서 빼기 때문에
 /// 답변 스트림과 입력 중인 내용이 메뉴 이동 뒤에도 남도록 화면 밖에 둔다.
 class ThinkController extends ChangeNotifier {
-  ThinkController._();
+  ThinkController._() {
+    ThinkSendLock.instance.addListener(notifyListeners);
+    ThinkSendLock.instance.released.listen(_onSendReleased);
+  }
   static final ThinkController instance = ThinkController._();
 
   final ThinkApi _api = ThinkApi.instance;
@@ -104,10 +115,15 @@ class ThinkController extends ChangeNotifier {
     notifyListeners();
     try {
       final wasReady = rolesReady;
+      final wasOrganizeReady = organizeReady;
       status = await _api.status();
       statusError = null;
       final id = selectedId;
       if (!wasReady && rolesReady && id != null) _loadRoleExtras(id);
+      if (!wasOrganizeReady && organizeReady) {
+        unawaited(refreshOrganizeSettings());
+        unawaited(refreshDepartmentCriteria());
+      }
     } on ThinkApiException catch (e) {
       statusError = e;
     } catch (e) {
@@ -205,6 +221,7 @@ class ThinkController extends ChangeNotifier {
     details.remove(id);
     turnInfo.remove(id);
     costs.remove(id);
+    organizeOutcomes.remove(id);
     if (selectedId == id) selectedId = null;
     notifyListeners();
   }
@@ -228,13 +245,22 @@ class ThinkController extends ChangeNotifier {
 
   List<ThinkTreeNode>? _treeNodesBuilt;
   List<ThinkConversation>? _treeConversationsBuilt;
+  bool? _treeDepartmentsBuilt;
   ThinkTree? _tree;
 
+  /// 서버(Edge·DB)와 이 앱이 모두 부서 기능을 지원할 때만 트리를 부서 칸으로 나눈다.
+  bool get departmentsReady => rolesReady && status?.departmentWork.ready == true;
+
   ThinkTree get tree {
-    if (_tree == null || !identical(_treeNodesBuilt, treeNodes) || !identical(_treeConversationsBuilt, conversations)) {
-      _tree = ThinkTree.build(treeNodes, conversations);
+    final departments = departmentsReady;
+    if (_tree == null ||
+        !identical(_treeNodesBuilt, treeNodes) ||
+        !identical(_treeConversationsBuilt, conversations) ||
+        _treeDepartmentsBuilt != departments) {
+      _tree = ThinkTree.build(treeNodes, conversations, departments: departments);
       _treeNodesBuilt = treeNodes;
       _treeConversationsBuilt = conversations;
+      _treeDepartmentsBuilt = departments;
     }
     return _tree!;
   }
@@ -251,6 +277,87 @@ class ThinkController extends ChangeNotifier {
       treeLoading = false;
       notifyListeners();
     }
+    unawaited(refreshPendingCounts());
+  }
+
+  // ------------------------------------------------------------------ 부서 상태
+  // 트리의 부서 캐릭터가 보여 줄 상태. 서버에 따로 저장하지 않고 이 화면이 아는 것으로만 정한다.
+  Map<String, int> _pendingCounts = {};
+  final Set<ThinkRoleId> collapsedDepartments = {};
+  final Set<ThinkRoleId> collapsedDepartmentUnfiled = {};
+
+  /// 지금 진행 중인 부서 협의(call_id → 묻는 부서·질문 받은 부서).
+  final Map<String, ({ThinkRoleId from, ThinkRoleId to})> _consults = {};
+
+  Future<void> refreshPendingCounts() async {
+    try {
+      _pendingCounts = await _api.pendingActionCounts();
+      notifyListeners();
+    } catch (_) {
+      // 다음 트리 갱신 때 다시 읽는다.
+    }
+  }
+
+  /// 대화의 대기 중 제안 수. 열어 본 대화는 화면이 가진 제안 목록을, 아니면 서버 집계를 쓴다.
+  int pendingCountOf(String conversationId) {
+    final local = _actions[conversationId];
+    if (local != null) return local.where((a) => a.pending).length;
+    return _pendingCounts[conversationId] ?? 0;
+  }
+
+  ThinkRoleId roleOfConversation(String? id) {
+    if (id == null) return conversationRole;
+    if (id == selectedId) return conversationRole;
+    return conversationById(id)?.thinkRoleId ?? ThinkRoleId.lead;
+  }
+
+  /// 대화 한 개의 진행 상태. 답하는 중 > Cursor 작업 > 승인 대기 > 쉬는 중.
+  ThinkActivity conversationActivity(String conversationId) {
+    if (isStreaming && streamingConversationId == conversationId) return ThinkActivity.answering;
+    if (ThinkSendLock.instance.busy(conversationId)) return ThinkActivity.answering;
+    if (ThinkCodeController.instance.requestsFor(conversationId).any((r) => r.status.inProgress)) return ThinkActivity.coding;
+    if (pendingCountOf(conversationId) > 0) return ThinkActivity.waiting;
+    return ThinkActivity.idle;
+  }
+
+  /// 부서 캐릭터의 상태. 협의 중 > 답하는 중 > Cursor 작업 > 승인 대기 > 쉬는 중.
+  ThinkDepartmentActivity departmentActivity(ThinkRoleId dept) {
+    for (final c in _consults.values) {
+      if (c.from == dept) return ThinkDepartmentActivity(ThinkActivity.consulting, consultWith: c.to);
+      if (c.to == dept) return ThinkDepartmentActivity(ThinkActivity.consulting, consultWith: c.from);
+    }
+    if (isStreaming && roleOfConversation(streamingConversationId) == dept) {
+      return const ThinkDepartmentActivity(ThinkActivity.answering);
+    }
+    if (ThinkSendLock.instance.busyConversations.any((id) => roleOfConversation(id) == dept)) {
+      return const ThinkDepartmentActivity(ThinkActivity.answering);
+    }
+    final coding = ThinkCodeController.instance.requests
+        .where((r) => r.status.inProgress && r.conversationId != null && roleOfConversation(r.conversationId) == dept)
+        .length;
+    if (coding > 0) return ThinkDepartmentActivity(ThinkActivity.coding, count: coding);
+    var pending = 0;
+    final ids = {..._pendingCounts.keys, ..._actions.keys};
+    for (final id in ids) {
+      if (roleOfConversation(id) == dept) pending += pendingCountOf(id);
+    }
+    if (pending > 0) return ThinkDepartmentActivity(ThinkActivity.waiting, count: pending);
+    return const ThinkDepartmentActivity(ThinkActivity.idle);
+  }
+
+  void toggleDepartment(ThinkRoleId dept) {
+    if (!collapsedDepartments.remove(dept)) collapsedDepartments.add(dept);
+    notifyListeners();
+  }
+
+  void toggleDepartmentUnfiled(ThinkRoleId dept) {
+    if (!collapsedDepartmentUnfiled.remove(dept)) collapsedDepartmentUnfiled.add(dept);
+    notifyListeners();
+  }
+
+  void _setConversationRoleLocal(String id, ThinkRoleId role) {
+    if (conversationById(id)?.thinkRoleId == role) return;
+    _replaceConversation(id, (c) => c.copyWith(thinkRoleId: role));
   }
 
   void setTreePanelOpen(bool open) {
@@ -277,12 +384,19 @@ class ThinkController extends ChangeNotifier {
     }
   }
 
-  Future<void> createFolder(String title, {String? parentId}) async {
+  /// [department]는 부서 칸을 쓸 때 최상위 폴더의 부서. 하위 폴더는 상위 폴더 부서를 따른다.
+  Future<void> createFolder(String title, {String? parentId, ThinkRoleId? department}) async {
     final t = title.trim();
     if (t.isEmpty) return;
     await _mutateTree(() async {
-      await _api.createFolder(title: t, parentId: parentId, sortOrder: tree.allChildren(parentId).length);
+      await _api.createFolder(
+        title: t,
+        parentId: parentId,
+        sortOrder: tree.allChildren(parentId).length,
+        department: departmentsReady ? department : null,
+      );
       if (parentId != null) collapsedFolders.remove(parentId);
+      if (department != null) collapsedDepartments.remove(department);
     });
   }
 
@@ -315,9 +429,26 @@ class ThinkController extends ChangeNotifier {
     await _mutateTree(() => _api.deleteTreeNode(node.id));
   }
 
+  /// 부서 칸으로 옮기는 계획이면 옮긴 대화의 역할도 서버가 바꾼다(화면이 먼저 확인 창을 띄운다).
   Future<void> applyDrop(ThinkDropPlan plan) async {
+    final dept = plan.department;
+    var rolesMayChange = false;
     await _mutateTree(() async {
-      if (plan.unfile) {
+      if (dept != null && plan.unfile) {
+        final convId = plan.conversationId ?? tree.byId[plan.nodeId]?.conversationId;
+        if (convId == null) return;
+        await _api.moveConversationDepartment(convId, dept);
+        rolesMayChange = true;
+      } else if (dept != null) {
+        await _api.moveTreeNodeDepartment(
+          nodeId: plan.nodeId,
+          conversationId: plan.nodeId == null ? plan.conversationId : null,
+          parentId: plan.parentId,
+          index: plan.index,
+          department: dept,
+        );
+        rolesMayChange = true;
+      } else if (plan.unfile) {
         await _api.deleteTreeNode(plan.nodeId!);
       } else if (plan.nodeId != null) {
         await _api.moveTreeNode(plan.nodeId!, plan.parentId, plan.index);
@@ -325,7 +456,16 @@ class ThinkController extends ChangeNotifier {
         await _api.placeConversation(plan.conversationId!, plan.parentId, plan.index);
       }
       if (plan.parentId != null) collapsedFolders.remove(plan.parentId);
+      if (dept != null) collapsedDepartments.remove(dept);
     });
+    if (rolesMayChange) await _afterRolesChanged();
+  }
+
+  /// 서버가 대화 역할을 바꿨을 수 있다(부서 간 옮기기·넘기기 승인). 목록과 열린 대화의 역할을 다시 읽는다.
+  Future<void> _afterRolesChanged() async {
+    await _refreshConversationsQuietly();
+    final id = selectedId;
+    if (id != null) await _loadRoleSettings(id);
   }
 
   Future<void> createExcerpt({
@@ -455,8 +595,16 @@ class ThinkController extends ChangeNotifier {
     return saved;
   }
 
+  /// 개념 초안 변경·기준 고치기 카드 승인(concept_draft_action_apply). 다시 정리는 검토 창이 Edge로 한다.
+  Future<ThinkAction> applyConceptDraftAction(ThinkAction a) async {
+    final saved = await _api.applyConceptDraftAction(a.id);
+    await _afterAction(saved);
+    return saved;
+  }
+
   Future<void> rejectAction(ThinkAction a) async {
     _putAction(await _api.rejectAction(a.id));
+    organizeErrors.remove(a.id);
     // 나누기 제안을 거절하면 서버가 이 대화의 나누기 제안을 끈다.
     if (a.kind == ThinkActionKind.splitConversation) _setSplitSuggestionsLocal(a.conversationId, false);
   }
@@ -471,35 +619,286 @@ class ThinkController extends ChangeNotifier {
   Future<void> undoAction(ThinkAction a) async {
     final saved = await _api.undoAction(a.id);
     _putAction(saved);
-    await refreshTree();
+    switch (saved.kind) {
+      case ThinkActionKind.excludeContext:
+        _setMessageFlags(saved.conversationId, saved.excludedIds, excluded: false);
+      case ThinkActionKind.markImportant:
+        _setMessageFlags(saved.conversationId, saved.markedIds, important: false);
+      default:
+        await refreshTree();
+    }
   }
 
-  Future<void> _afterAction(ThinkAction a) async {
-    final deleted = a.result?['deleted_id']?.toString();
-    if (a.kind == ThinkActionKind.deleteConversation && deleted != null) _forgetConversation(deleted);
-    if (!a.deletedSelf) _putAction(a);
-    final code = ThinkCodeController.instance;
-    switch (a.kind) {
-      case ThinkActionKind.codeRequest:
-      case ThinkActionKind.codeChange:
-      case ThinkActionKind.codePlan:
-      case ThinkActionKind.deleteCodeRequest:
-        await code.refresh(quiet: true);
-      case ThinkActionKind.placeConversation:
-      case ThinkActionKind.deleteFolder:
-      case ThinkActionKind.deleteConversation:
-        await refreshTree();
-      case ThinkActionKind.splitConversation:
-        await Future.wait([refreshTree(), _refreshConversationsQuietly()]);
-      case ThinkActionKind.saveMemory:
-        await refreshMemories();
-      case ThinkActionKind.memoryCardChange:
-        // 대상 카드(수정·닫힘)와 대체로 생긴 새 카드는 서버가 바꿨다. 대상이 다른 대화에 있을 수 있다.
-        final target = a.memoryTargetConversationId;
-        await Future.wait([
-          loadActions(a.conversationId),
-          if (target != null && target != a.conversationId) loadActions(target),
-        ]);
+  Future<void> _afterAction(ThinkAction a) => _afterActions([a]);
+
+  /// 승인된 제안을 화면에 반영한다. 일괄 승인이면 같은 갱신(트리·기억 등)을 한 번만 한다.
+  Future<void> _afterActions(List<ThinkAction> applied) async {
+    var code = false, tree = false, conversations = false, memories = false, roles = false, criteria = false;
+    final reloadActions = <String>{};
+    final reloadDetails = <String>{};
+    for (final a in applied) {
+      final deleted = a.result?['deleted_id']?.toString();
+      if (a.kind == ThinkActionKind.deleteConversation && deleted != null) _forgetConversation(deleted);
+      if (!a.deletedSelf) _putAction(a);
+      organizeErrors.remove(a.id);
+      switch (a.kind) {
+        case ThinkActionKind.codeRequest:
+        case ThinkActionKind.codeChange:
+        case ThinkActionKind.codePlan:
+        case ThinkActionKind.deleteCodeRequest:
+          code = true;
+        case ThinkActionKind.placeConversation:
+        case ThinkActionKind.deleteFolder:
+        case ThinkActionKind.deleteConversation:
+          tree = true;
+        case ThinkActionKind.splitConversation:
+          tree = true;
+          conversations = true;
+        case ThinkActionKind.saveMemory:
+          memories = true;
+        case ThinkActionKind.memoryCardChange:
+          // 대상 카드(수정·닫힘)와 대체로 생긴 새 카드는 서버가 바꿨다. 대상이 다른 대화에 있을 수 있다.
+          final target = a.memoryTargetConversationId;
+          reloadActions.add(a.conversationId);
+          if (target != null) reloadActions.add(target);
+        case ThinkActionKind.handoverDepartment:
+          final to = a.handoverTo;
+          if (to != null) _setConversationRoleLocal(a.conversationId, to);
+          if (to != null && selectedId == a.conversationId) {
+            conversationRole = to;
+            extraRefDepartments = extraRefDepartments.where((d) => d != to.department).toList();
+          }
+          if (to != null) collapsedDepartments.remove(to);
+          tree = true;
+          roles = true;
+        case ThinkActionKind.excludeContext:
+          _setMessageFlags(a.conversationId, a.excludedIds, excluded: true);
+        case ThinkActionKind.markImportant:
+          _setMessageFlags(a.conversationId, a.markedIds, important: true);
+        case ThinkActionKind.progressSummary:
+          reloadDetails.add(a.conversationId);
+        case ThinkActionKind.departmentCriteriaChange:
+          criteria = true;
+        case ThinkActionKind.conceptDraftChange:
+        case ThinkActionKind.conceptCriterionChange:
+        case ThinkActionKind.conceptDraftRerun:
+          // 초안·기준은 검토 창이 다시 읽는다.
+          break;
+      }
+    }
+    await Future.wait([
+      if (code) ThinkCodeController.instance.refresh(quiet: true),
+      if (tree) refreshTree(),
+      if (conversations) _refreshConversationsQuietly(),
+      if (memories) refreshMemories(),
+      if (roles) _afterRolesChanged(),
+      if (criteria) refreshDepartmentCriteria(),
+      for (final id in reloadActions) loadActions(id),
+      for (final id in reloadDetails) loadDetail(id),
+    ]);
+  }
+
+  void _setMessageFlags(String conversationId, Iterable<String> ids, {bool? excluded, bool? important}) {
+    final wanted = ids.toSet();
+    if (wanted.isEmpty) return;
+    for (final m in _messages[conversationId] ?? const <ThinkMessage>[]) {
+      if (!wanted.contains(m.id)) continue;
+      if (excluded != null) m.contextExcluded = excluded;
+      if (important != null) m.markedImportant = important;
+    }
+    notifyListeners();
+  }
+
+  // ------------------------------------------------------------------ 정리 제안
+  // Think가 분류·나누기·기억·부서 넘기기·맥락 제외·중요 표시·진행 요약·부서 기준을 제안하면, 답변 아래에는
+  // "정리 제안 N건" 한 줄만 두고 오른쪽 정리 패널에서 골라 한 번에 승인한다. 코드·삭제 제안은 카드 그대로.
+
+  /// 서버(Edge·DB)와 이 앱이 모두 자동 정리 제안을 지원한다. 아니면 예전처럼 카드가 답변 아래에 펼쳐진다.
+  bool get organizeReady => status?.autoOrganize.ready == true;
+
+  /// 자동 정리 제안 설정. null이면 아직 읽지 못했다(서버는 읽지 못하면 꺼진 것으로 본다).
+  bool? autoOrganizeEnabled;
+  bool autoOrganizeSaving = false;
+
+  /// 정리 패널을 열었다. [organizeFocusMessageId]가 있으면 그 답변의 제안을 강조한다.
+  bool organizePanelOpen = false;
+  String? organizeFocusMessageId;
+
+  /// 대화 화면이 오른쪽에 정리 패널을 붙일 만큼 넓다. 대화 화면이 그릴 때 맞추고, 좁으면 바텀시트로 연다.
+  bool organizeDockable = false;
+
+  /// 처리하지 못한 항목의 안내(action id → 문구). 다시 승인하거나 거절하면 지운다.
+  final Map<String, String> organizeErrors = {};
+
+  /// 대화별 마지막 일괄 승인 결과.
+  final Map<String, ThinkOrganizeOutcome> organizeOutcomes = {};
+
+  ThinkOrganizeOutcome? get selectedOrganizeOutcome => selectedId == null ? null : organizeOutcomes[selectedId];
+
+  /// 답변 아래 카드 대신 정리 패널에서 처리하는 제안. 새 종류 네 개는 늘 패널로 가고(그 서버만 만든다),
+  /// 분류·나누기·기억·넘기기는 일괄 승인을 쓸 수 있을 때만 패널로 모은다.
+  bool inOrganizePanel(ThinkAction a) => a.pending && a.kind.isOrganize && (organizeReady || a.kind.isOrganizeOnly);
+
+  /// 패널에 모이는 대기 중 제안(선택된 대화, 승인 순서대로).
+  List<ThinkAction> get pendingOrganize => _sortOrganize(actions.where(inOrganizePanel));
+
+  /// 답변 하나에 붙은 대기 중 정리 제안.
+  List<ThinkAction> pendingOrganizeFor(String? messageId) =>
+      messageId == null ? const [] : _sortOrganize(actions.where((a) => a.messageId == messageId && inOrganizePanel(a)));
+
+  static List<ThinkAction> _sortOrganize(Iterable<ThinkAction> list) {
+    final out = list.toList();
+    int rank(ThinkAction a) {
+      final i = kThinkOrganizeOrder.indexOf(a.kind);
+      return i < 0 ? kThinkOrganizeOrder.length : i;
+    }
+
+    out.sort((a, b) {
+      final r = rank(a).compareTo(rank(b));
+      return r != 0 ? r : a.createdAt.compareTo(b.createdAt);
+    });
+    return out;
+  }
+
+  void openOrganizePanel({String? messageId}) {
+    organizePanelOpen = true;
+    organizeFocusMessageId = messageId;
+    if (autoOrganizeEnabled == null) unawaited(refreshOrganizeSettings());
+    notifyListeners();
+  }
+
+  void closeOrganizePanel() {
+    if (!organizePanelOpen) return;
+    organizePanelOpen = false;
+    organizeFocusMessageId = null;
+    notifyListeners();
+  }
+
+  void clearOrganizeOutcome(String conversationId) {
+    if (organizeOutcomes.remove(conversationId) != null) notifyListeners();
+  }
+
+  /// 고른 제안을 한 번에 승인한다. 서버가 항목마다 따로 실행하므로 일부가 실패해도 나머지는 그대로 반영된다.
+  /// 실패한 항목은 대기 상태로 남고 [organizeErrors]에 이유가 붙는다.
+  Future<ThinkOrganizeOutcome> applyOrganize(
+    String conversationId,
+    List<({ThinkAction action, Map<String, dynamic> overrides})> items,
+  ) async {
+    if (items.isEmpty) return const ThinkOrganizeOutcome();
+    ThinkOrganizeOutcome outcome;
+    try {
+      final results = await _api.applyActionsBatch([
+        for (final it in items) {'id': it.action.id, 'overrides': it.overrides},
+      ]);
+      final applied = <ThinkAction>[];
+      final failed = <ThinkBatchItemResult>[];
+      final answered = <String>{};
+      for (final r in results) {
+        answered.add(r.id);
+        final action = r.action;
+        if (r.ok && action != null) {
+          applied.add(action);
+        } else {
+          failed.add(r);
+          organizeErrors[r.id] = ThinkApi.batchErrorMessage(r);
+          if (action != null) _putAction(action);
+        }
+      }
+      for (final it in items) {
+        if (answered.contains(it.action.id)) continue;
+        final missing = ThinkBatchItemResult(id: it.action.id, ok: false, code: 'action_not_found');
+        failed.add(missing);
+        organizeErrors[it.action.id] = ThinkApi.batchErrorMessage(missing);
+      }
+      outcome = ThinkOrganizeOutcome(applied: applied, failed: failed);
+      organizeOutcomes[conversationId] = outcome;
+      notifyListeners();
+      await _afterActions(applied);
+    } catch (e) {
+      outcome = ThinkOrganizeOutcome(error: ThinkApi.codeErrorMessage(e));
+      organizeOutcomes[conversationId] = outcome;
+      notifyListeners();
+    }
+    return outcome;
+  }
+
+  Future<void> refreshOrganizeSettings() async {
+    try {
+      final s = await _api.settings();
+      autoOrganizeEnabled = s.autoOrganizeColumn ? s.autoOrganizeEnabled : null;
+      notifyListeners();
+    } catch (_) {
+      // 상태 창·패널을 다시 열 때 읽는다.
+    }
+  }
+
+  /// 실패하면 이유를 돌려준다.
+  Future<String?> setAutoOrganize(bool enabled) async {
+    autoOrganizeSaving = true;
+    notifyListeners();
+    try {
+      final s = await _api.setAutoOrganize(enabled);
+      autoOrganizeEnabled = s.autoOrganizeEnabled;
+      return null;
+    } catch (e) {
+      return '설정을 바꾸지 못했습니다: ${ThinkApi.codeErrorMessage(e)}';
+    } finally {
+      autoOrganizeSaving = false;
+      notifyListeners();
+    }
+  }
+
+  /// 화면용 중요 표시를 직접 켜고 끈다. AI 맥락에는 영향이 없다.
+  Future<void> setMessageImportant(ThinkMessage m, bool important) async {
+    final id = m.id;
+    final conv = selectedId;
+    if (id == null || id.isEmpty || conv == null) return;
+    await _api.setMessagesImportant([id], important);
+    _setMessageFlags(conv, [id], important: important);
+  }
+
+  // ------------------------------------------------------------------ 부서 기준
+  Map<ThinkRoleId, ThinkDepartmentCriteria> departmentCriteria = {};
+  bool criteriaLoading = false;
+  String? criteriaError;
+
+  Future<void> refreshDepartmentCriteria() async {
+    criteriaLoading = true;
+    notifyListeners();
+    try {
+      final rows = await _api.listDepartmentCriteria();
+      departmentCriteria = {for (final c in rows) c.department: c};
+      criteriaError = null;
+    } catch (e) {
+      criteriaError = '부서 기준을 불러오지 못했습니다: ${ThinkApi.codeErrorMessage(e)}';
+    } finally {
+      criteriaLoading = false;
+      notifyListeners();
+    }
+  }
+
+  /// 운영자가 직접 고친다. 그사이 다른 곳(제안 승인 등)에서 바뀌었으면 충돌로 막히고, 최신 기준을 다시 읽는다.
+  Future<String?> saveDepartmentCriteria(
+    ThinkDepartmentCriteria base, {
+    required List<String> questions,
+    required List<String> risks,
+    required List<String> priorityMemoryIds,
+  }) async {
+    try {
+      final saved = await _api.saveDepartmentCriteria(
+        base.department,
+        questions: questions,
+        risks: risks,
+        priorityMemoryIds: priorityMemoryIds,
+        baseVersion: base.version,
+      );
+      departmentCriteria = {...departmentCriteria, saved.department: saved};
+      notifyListeners();
+      return null;
+    } catch (e) {
+      final message = ThinkApi.codeErrorMessage(e);
+      unawaited(refreshDepartmentCriteria());
+      return message;
     }
   }
 
@@ -570,6 +969,9 @@ class ThinkController extends ChangeNotifier {
     notifyListeners();
     try {
       await _api.setConversationThinkRole(conversationId: id, role: role, extraRefs: refs);
+      _setConversationRoleLocal(id, role);
+      // 폴더 부서와 달라지면 서버가 그 대화를 새 부서의 미분류로 뺐다.
+      if (departmentsReady && role != prevRole) unawaited(refreshTree());
       return null;
     } catch (e) {
       if (selectedId == id) {
@@ -707,14 +1109,18 @@ class ThinkController extends ChangeNotifier {
   }
 
   /// 승인하면 서버가 한 트랜잭션으로 새 대화를 만들고 이번 질문·답변을 복사한다. 그 뒤 새 대화로 넘어간다.
-  Future<ThinkAction> applySplit(ThinkAction a, {Map<String, dynamic> overrides = const {}}) async {
+  /// [open]이 false면(개념 탭 카드) Think 화면의 선택을 바꾸지 않는다.
+  Future<ThinkAction> applySplit(ThinkAction a, {Map<String, dynamic> overrides = const {}, bool open = true}) async {
     final saved = await applyAction(a, overrides: overrides);
     final id = saved.splitConversationId;
-    if (id != null) {
-      justSplitConversationId = id;
-      await openConversation(id);
-    }
+    if (id != null && open) await openSplitConversation(id);
     return saved;
+  }
+
+  /// 나눠서 생긴 새 대화로 넘어간다. 그 대화 위쪽 안내를 펼쳐 보여 준다.
+  Future<void> openSplitConversation(String id) async {
+    justSplitConversationId = id;
+    await openConversation(id);
   }
 
   Future<void> setSplitSuggestions(String conversationId, bool enabled) async {
@@ -823,7 +1229,10 @@ class ThinkController extends ChangeNotifier {
   }
 
   Future<void> select(String id) async {
-    if (selectedId != id) _resetRoleState();
+    if (selectedId != id) {
+      _resetRoleState();
+      organizeFocusMessageId = null;
+    }
     selectedId = id;
     if (justSplitConversationId != id) justSplitConversationId = null;
     messagesError = null;
@@ -888,7 +1297,7 @@ class ThinkController extends ChangeNotifier {
     for (final path in paths) {
       final name = path.split(RegExp(r'[\\/]')).last;
       if (ThinkApi.mimeForPath(path) == null) {
-        problems.add('$name: 이미지(PNG·JPG·WEBP·GIF)와 PDF만 첨부할 수 있습니다.');
+        problems.add('$name: ${ThinkApi.attachmentTypesHint}');
         continue;
       }
       if (accepted >= room) {
@@ -920,7 +1329,11 @@ class ThinkController extends ChangeNotifier {
     await _api.removeAttachment(a.path);
   }
 
-  bool get canSend => !isStreaming && uploadingCount == 0 && composer.text.trim().isNotEmpty && !forbidden;
+  bool get canSend =>
+      !isStreaming && uploadingCount == 0 && composer.text.trim().isNotEmpty && !forbidden && !sendLockedElsewhere;
+
+  /// 개념 탭이 고른 대화로 답변을 받는 중이다. 끝날 때까지 여기서는 보내지 않는다.
+  bool get sendLockedElsewhere => ThinkSendLock.instance.busyElsewhere(selectedId, ThinkSendLock.thinkScreen);
 
   // ------------------------------------------------------------------ 스트리밍
   ThinkChatStream? _stream;
@@ -953,6 +1366,9 @@ class ThinkController extends ChangeNotifier {
     final text = composer.text.trim();
     final attachments = [...pendingAttachments];
     final convId = selectedId;
+    const owner = ThinkSendLock.thinkScreen;
+    var lockedId = convId;
+    if (convId != null && !ThinkSendLock.instance.acquire(convId, owner)) return;
 
     final user = ThinkMessage(
       role: 'user',
@@ -1009,6 +1425,7 @@ class ThinkController extends ChangeNotifier {
       _opening = false;
       streamingConversationId = null;
       _streamingDraft = false;
+      if (lockedId != null) ThinkSendLock.instance.release(lockedId, owner);
       notifyListeners();
       return;
     }
@@ -1036,17 +1453,13 @@ class ThinkController extends ChangeNotifier {
         final d = ev.data;
         switch (ev.event) {
           case 'notice':
-            notice = switch (d['code']) {
-              'budget_warning' => '이번 달 사용 한도를 넘었습니다(경고 모드). 사용량 탭을 확인하세요.',
-              'web_search_disabled' => '웹 검색이 꺼져 있어 검색 없이 답합니다. 사용량 탭에서 켤 수 있습니다.',
-              'role_not_applied' => '고른 역할을 저장하지 못해 총괄로 답합니다.',
-              _ => d['message']?.toString(),
-            };
+            notice = noticeText(d);
             notifyListeners();
           case 'conversation':
             final id = d['conversation_id']?.toString();
             if (id == null) break;
             conversationId = id;
+            if (lockedId == null && ThinkSendLock.instance.acquire(id, owner)) lockedId = id;
             user.id = d['user_message_id']?.toString();
             final ctx = d['context'] is Map ? Map<String, dynamic>.from(d['context'] as Map) : null;
             turnInfo[id] = ThinkTurnInfo(context: ctx, model: d['model']?.toString());
@@ -1054,6 +1467,8 @@ class ThinkController extends ChangeNotifier {
             final features = parseThinkFeatures(d['features']);
             if (features.isNotEmpty) status = status?.withFeatures(features);
             if (d['split_suggestions'] is bool) _setSplitSuggestionsLocal(id, d['split_suggestions'] as bool);
+            final organize = d['auto_organize'];
+            if (organize is Map && organize['enabled'] is bool) autoOrganizeEnabled = organize['enabled'] as bool;
             final role = d['think_role'] is Map ? Map<String, dynamic>.from(d['think_role'] as Map) : null;
             if (role != null && (selectedId == id || (selectedId == null && _streamingDraft))) {
               final saved = ThinkConversationRoleSettings.fromRow({
@@ -1080,6 +1495,7 @@ class ThinkController extends ChangeNotifier {
                     messageCount: 1,
                     lastMessageAt: now,
                     createdAt: now,
+                    thinkRoleId: conversationRole,
                   ),
                   ...conversations,
                 ];
@@ -1119,6 +1535,18 @@ class ThinkController extends ChangeNotifier {
               _putAction(action);
               if (action.kind == ThinkActionKind.codePlan) unawaited(ThinkCodeController.instance.refresh(quiet: true));
             }
+          case 'consult':
+            final callId = d['call_id']?.toString();
+            if (callId == null) break;
+            if (d['status'] == 'running') {
+              _consults[callId] = (
+                from: ThinkRoleId.parse(d['from']?.toString()),
+                to: ThinkRoleId.parse(d['to']?.toString()),
+              );
+            } else {
+              _consults.remove(callId);
+            }
+            notifyListeners();
           case 'title':
             final id = d['conversation_id']?.toString();
             final title = d['title']?.toString();
@@ -1134,6 +1562,7 @@ class ThinkController extends ChangeNotifier {
                 .whereType<Map>()
                 .map((s) => ThinkSource.fromJson(Map<String, dynamic>.from(s)))
                 .toList();
+            assistant.attachments = _attachmentsOf(d);
             assistant.toolCalls = [
               for (final t in assistant.toolCalls)
                 if (!t.running) t
@@ -1156,6 +1585,7 @@ class ThinkController extends ChangeNotifier {
             assistant.id = d['assistant_message_id']?.toString();
             assistant.status = ThinkMessageStatus.error;
             assistant.errorText = d['message']?.toString() ?? '답변을 만들지 못했습니다.';
+            assistant.attachments = _attachmentsOf(d);
             assistant.toolCalls = [
               for (final t in assistant.toolCalls)
                 if (!t.running) t
@@ -1182,6 +1612,9 @@ class ThinkController extends ChangeNotifier {
       _stream = null;
       streamingConversationId = null;
       _streamingDraft = false;
+      _consults.clear();
+      final locked = lockedId;
+      if (locked != null) ThinkSendLock.instance.release(locked, owner);
       notifyListeners();
     }
 
@@ -1194,6 +1627,47 @@ class ThinkController extends ChangeNotifier {
       }
     }
     unawaited(_refreshConversationsQuietly());
+  }
+
+  static String? noticeText(Map<String, dynamic> d) => switch (d['code']) {
+        'budget_warning' => '이번 달 사용 한도를 넘었습니다(경고 모드). 사용량 탭을 확인하세요.',
+        'web_search_disabled' => '웹 검색이 꺼져 있어 검색 없이 답합니다. 사용량 탭에서 켤 수 있습니다.',
+        'role_not_applied' => '고른 역할을 저장하지 못해 총괄로 답합니다.',
+        'spreadsheet_unavailable' => '엑셀을 열 실행 환경을 준비하지 못해 엑셀 없이 답합니다. 잠시 뒤 다시 보내 주세요.',
+        'answer_files_failed' => 'Think가 만든 파일을 옮기지 못했습니다. 필요하면 다시 요청해 주세요.',
+        _ => d['message']?.toString(),
+      };
+
+  // ------------------------------------------------------------------ 다른 화면(개념 탭)의 답변
+  // 제안 카드는 대화별로 여기 한 곳에 모은다. 개념 탭이 받은 제안도 Think 화면과 같은 카드·승인 흐름을 쓴다.
+
+  /// 다른 화면이 같은 대화에 새 질문을 보냈다. 서버처럼 앞의 나누기 제안을 만료시킨다.
+  void beginExternalTurn(String conversationId) => _expirePendingSplits(conversationId);
+
+  void putStreamedAction(ThinkAction a) {
+    _putAction(a);
+    if (a.kind == ThinkActionKind.codePlan) unawaited(ThinkCodeController.instance.refresh(quiet: true));
+  }
+
+  void attachStreamedActions(String conversationId, dynamic ids, String? messageId) {
+    _attachActions(conversationId, ids, messageId);
+    notifyListeners();
+  }
+
+  /// 다른 화면이 받은 답변을 Think 화면에도 반영한다. 읽어 둔 대화만 다시 읽는다.
+  void _onSendReleased(ThinkSendRelease r) {
+    if (r.owner == ThinkSendLock.thinkScreen) return;
+    final id = r.conversationId;
+    if (_messages.containsKey(id)) {
+      unawaited(() async {
+        await _reloadIfIdle(id);
+        if (selectedId == id) await _refreshSnapshots(id);
+      }());
+    } else {
+      unawaited(loadActions(id));
+    }
+    if (costs.containsKey(id)) unawaited(refreshCost(id));
+    if (_started) unawaited(_refreshConversationsQuietly());
   }
 
   /// 서버가 답변을 저장하며 붙인 message_id를 화면의 제안에도 붙인다.
