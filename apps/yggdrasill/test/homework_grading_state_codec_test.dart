@@ -53,6 +53,20 @@ void main() {
         isTrue,
       );
       expect(
+        isHomeworkGradingCorrectionBaseline(
+          HomeworkAnswerCellState.notPerformed,
+        ),
+        isFalse,
+      );
+      expect(
+        isHomeworkGradingCorrectionBaseline(HomeworkAnswerCellState.wrong),
+        isTrue,
+      );
+      expect(
+        isHomeworkGradingCorrectionBaseline(HomeworkAnswerCellState.blank),
+        isTrue,
+      );
+      expect(
         homeworkGradingIncorrectKind(HomeworkAnswerCellState.notPerformed),
         isNull,
       );

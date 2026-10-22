@@ -772,8 +772,14 @@ Future<void> showConceptContentHistory(
               (r) => Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('${formatDateTime(r.changedAt)}에 고치기 전',
+                  Text(
+                      '${formatDateTime(r.changedAt)}에 고치기 전 · '
+                      '${r.viaDraft ? '수정안 확정${r.draftOrigin == 'ai' ? '(AI 제안)' : ''}' : '바로 고침(이유 없음)'}',
                       style: const TextStyle(color: kThinkSub, fontSize: 12, fontWeight: FontWeight.w700)),
+                  if ((r.note ?? '').trim().isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text('고친 이유: ${r.note!.trim()}', style: const TextStyle(color: kThinkLink, fontSize: 12)),
+                  ],
                   const SizedBox(height: 4),
                   Text(r.name, style: const TextStyle(color: kThinkText, fontWeight: FontWeight.w700)),
                   const SizedBox(height: 4),

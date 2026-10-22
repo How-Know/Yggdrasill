@@ -7,11 +7,13 @@ import '../../../services/concept_book_service.dart';
 import '../../../services/concept_library_controller.dart';
 import '../../../services/concept_library_service.dart';
 import '../../../services/concept_service.dart';
+import '../../../services/concept_source_evidence.dart';
 import '../../../widgets/latex_text_renderer.dart';
 import '../../think/think_style.dart';
 import 'concept_anchor_dialogs.dart';
 import 'concept_criteria_pane.dart';
 import 'concept_relation_section.dart';
+import 'concept_source_evidence_view.dart';
 import 'concept_statement_section.dart';
 import 'concept_type_chip.dart';
 import 'concept_workspace.dart';
@@ -125,36 +127,90 @@ Future<void> showConceptSourcesDialog(
 }) {
   return showDialog<void>(
     context: context,
-    builder: (ctx) => AlertDialog(
+    builder: (ctx) => _ConceptSourcesDialog(controller: controller, concept: concept),
+  );
+}
+
+class _ConceptSourcesDialog extends StatefulWidget {
+  const _ConceptSourcesDialog({required this.controller, required this.concept});
+
+  final ConceptLibraryController controller;
+  final ConceptItem concept;
+
+  @override
+  State<_ConceptSourcesDialog> createState() => _ConceptSourcesDialogState();
+}
+
+class _ConceptSourcesDialogState extends State<_ConceptSourcesDialog> {
+  late final ConceptEvidenceController _evidence = widget.controller.evidenceFor(widget.concept.id);
+
+  /// 이 출처 목록으로 한 번 다시 읽었으면 또 읽지 않는다(어긋남이 남아도 되풀이하지 않게).
+  String? _reloadedFor;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_evidence.load());
+  }
+
+  @override
+  void dispose() {
+    _evidence.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = widget.controller;
+    final concept = widget.concept;
+    return AlertDialog(
       backgroundColor: kThinkBg,
       shape: thinkDialogShape,
       title: Text('출처 — ${conceptDisplayName(concept)}',
           style: const TextStyle(color: kThinkText, fontWeight: FontWeight.w800)),
       content: SizedBox(
-        width: 560,
+        width: 640,
         child: ListenableBuilder(
-          listenable: Listenable.merge([controller, controller.statements]),
+          listenable: Listenable.merge([controller, controller.statements, _evidence]),
           builder: (context, _) {
             final list = controller.sourcesOf(concept.id) ?? const <ConceptSourceRef>[];
+            final statementsLoaded = controller.statements.loaded(concept.id);
+            final signature = [
+              for (final s in list)
+                '${s.id}:${statementsLoaded ? controller.statements.statementOfSource(concept.id, s.id) : ''}'
+            ].join(',');
+            if (!_evidence.loading &&
+                signature != _reloadedFor &&
+                conceptEvidenceOutOfDate(_evidence.snapshot, list,
+                    statementsLoaded ? (s) => controller.statements.statementOfSource(concept.id, s.id) : null)) {
+              _reloadedFor = signature;
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) unawaited(_evidence.load());
+              });
+            }
             return Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                if (list.isNotEmpty)
+                  ConceptEvidenceProposeBar(
+                      evidence: _evidence, statements: controller.statements, conceptId: concept.id),
                 if (list.isEmpty)
                   const ConceptHint('이은 출처가 없습니다.')
                 else
                   ConstrainedBox(
-                    constraints: const BoxConstraints(maxHeight: 420),
+                    constraints: const BoxConstraints(maxHeight: 460),
                     child: ListView.separated(
                       shrinkWrap: true,
                       itemCount: list.length,
                       separatorBuilder: (_, __) => const Divider(color: kThinkBorder, height: 16),
-                      itemBuilder: (context, i) => _SourceRow(controller: controller, source: list[i]),
+                      itemBuilder: (context, i) =>
+                          _SourceRow(controller: controller, source: list[i], evidence: _evidence),
                     ),
                   ),
                 const SizedBox(height: 12),
                 const ConceptHint('책 이름·쪽은 이을 때 저장된 교재 구조에서 가져온 값입니다. '
-                    '원본은 PDF 보기 프로그램에서 그 쪽으로 열립니다.'),
+                    '원본은 PDF 보기 프로그램에서 그 쪽으로 열립니다. 근거 범위는 정한 것만 바뀌고, AI 제안은 받아들여야 저장됩니다.'),
               ],
             );
           },
@@ -162,19 +218,20 @@ Future<void> showConceptSourcesDialog(
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.pop(ctx),
+          onPressed: () => Navigator.pop(context),
           child: const Text('닫기', style: TextStyle(color: kThinkSub)),
         ),
       ],
-    ),
-  );
+    );
+  }
 }
 
 class _SourceRow extends StatelessWidget {
-  const _SourceRow({required this.controller, required this.source});
+  const _SourceRow({required this.controller, required this.source, required this.evidence});
 
   final ConceptLibraryController controller;
   final ConceptSourceRef source;
+  final ConceptEvidenceController evidence;
 
   @override
   Widget build(BuildContext context) {
@@ -196,6 +253,7 @@ class _SourceRow extends StatelessWidget {
               const SizedBox(height: 2),
               Text(s.pageLabel, style: const TextStyle(color: kThinkSub, fontSize: 12)),
               ConceptSourceStatementPicker(store: controller.statements, source: s),
+              ConceptSourceEvidenceLine(evidence: evidence, source: s, sourceLabel: conceptSourceLabel(s)),
             ],
           ),
         ),
@@ -309,11 +367,15 @@ class ConceptDetailView extends StatefulWidget {
     this.topicOf,
     this.onChooseAnchor,
     this.onOpenConceptId,
+    this.onBaseChanged,
   });
 
   final ConceptLibraryController controller;
   final void Function(ConceptItem concept) onEdit;
   final void Function(ConceptItem concept) onPickForChat;
+
+  /// 기본 서술이 바뀌었을 때(수정안 확정 등) 개념을 다시 읽는다.
+  final Future<void> Function(String conceptId)? onBaseChanged;
 
   /// 관계·검토 상대 개념을 연다. null이면 여는 버튼을 보이지 않는다.
   final ValueChanged<String>? onOpenConceptId;
@@ -383,6 +445,11 @@ class _ConceptDetailViewState extends State<ConceptDetailView> {
                   if (concept.level != null) ThinkBadge('레벨 ${concept.level}'),
                   if ((_c.statements.statementCountOf(concept.id) ?? 0) > 0)
                     ThinkBadge('서술 ${_c.statements.statementCountOf(concept.id)! + 1}개', color: kThinkLink),
+                  if (_c.statements.contentDraftOf(concept.id) != null)
+                    const Tooltip(
+                      message: '기본 서술 수정안이 저장되어 있습니다. 확정 전이라 기본 서술은 그대로입니다.',
+                      child: ThinkBadge('수정안 있음', color: kThinkAccent),
+                    ),
                   if (_c.relations.reviewOpen(concept.id))
                     const Tooltip(
                       message: '같은 개념인지 판단이 남아 있습니다. 아래 "다른 개념과의 관계"에서 판단합니다.',
@@ -419,6 +486,7 @@ class _ConceptDetailViewState extends State<ConceptDetailView> {
                   controller: _c,
                   concept: concept,
                   onEditBase: () => widget.onEdit(concept),
+                  onBaseChanged: widget.onBaseChanged,
                 )
               else
                 SelectionArea(

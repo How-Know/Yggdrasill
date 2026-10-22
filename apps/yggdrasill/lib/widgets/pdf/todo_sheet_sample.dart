@@ -6,6 +6,12 @@ Future<List<int>> renderTodoSheetSample() {
   return _renderTodoSheetRefined(_todoSheetSamplePayload());
 }
 
+@visibleForTesting
+Future<List<int>> renderTodoSheetSnapshotRoundTripSample() {
+  final json = _todoSheetPayloadToSnapshotJson(_todoSheetSamplePayload());
+  return _renderTodoSheetRefined(_todoSheetPayloadFromSnapshotJson(json));
+}
+
 _TodoSheetPayload _todoSheetSamplePayload() {
   final day = DateTime(2026, 10, 7, 17, 0);
   DateTime at(int h, int m) => DateTime(day.year, day.month, day.day, h, m);

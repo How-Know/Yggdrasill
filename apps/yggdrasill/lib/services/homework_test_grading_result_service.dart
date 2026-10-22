@@ -1346,8 +1346,11 @@ class HomeworkTestGradingResultService {
                 baselineState == HomeworkAnswerCellState.correct
             ? ''
             : encodeHomeworkGradingStoredState(baselineState);
-        final correctionState = correctionStates[key] == 'corrected' &&
-                baselineStateRaw.isNotEmpty &&
+        // 미수행을 나중에 정답으로 바꿔도 수정 이력이 아니다.
+        final correctionState = isHomeworkGradingCorrectionBaseline(
+                  baselineState,
+                ) &&
+                correctionStates[key] == 'corrected' &&
                 state == HomeworkAnswerCellState.correct
             ? 'corrected'
             : '';

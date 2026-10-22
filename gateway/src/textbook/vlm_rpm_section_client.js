@@ -172,7 +172,53 @@ const SECTION_SERIES_CONFIG = Object.freeze({
       },
     ],
   },
+  // 고쟁이 고등은 창의융합 없이 세 단계뿐이고 단계마다 머리말 색이 다르다.
+  gojaengi_high: {
+    bookName: '고쟁이 고등',
+    parts: [
+      {
+        code: 'core_type',
+        slot: 'A',
+        header: 'STEP 1 교과서를 정복하는 핵심 유형',
+        rule:
+          '중단원 첫 지면은 "이전 학습 내용 / 현재 학습 내용" 개념 정리이고 ' +
+          '문항이 없다. 그 개념 지면도 A 이므로 section="core_type" 으로 둔다. ' +
+          '문항 지면은 초록 머리말에 초록 "유형 NN" 배지가 붙고 문항 번호가 ' +
+          '초록색이다.',
+      },
+      {
+        code: 'advanced_type',
+        slot: 'B',
+        header: 'STEP 2 내신 실전문제 체화를 위한 심화 유형',
+        rule:
+          '빨간 머리말에 빨간 "유형 NN" 배지가 붙고 문항 번호가 빨간색이다. ' +
+          '"스키마 schema로 풀이 흐름 알아보기" 지면은 문항 번호 없이 단계별 ' +
+          '해설만 있어도 B 다.',
+      },
+      {
+        code: 'top_type',
+        slot: 'C',
+        header: 'STEP 3 내신 최상위권 굳히기를 위한 최고난도 유형',
+        rule:
+          'C 는 남색 머리말이고 유형 배지가 아예 없다. 문항 번호만 남색으로 ' +
+          '이어진다.',
+      },
+    ],
+    // 목차에 "빠른 정답" 줄이 없어서 마지막 중단원 범위가 PDF 끝까지 열린다.
+    // 그 범위에 섞여 들어온 책 끝 정답 지면을 따로 짚어 앱이 범위를 자른다.
+    trailingAppendix: {
+      code: 'answer_key',
+      rule:
+        '책 끝 "빠른 정답" 지면(머리에 "빠른 정답" 띠, 세 자리 번호와 답이 ' +
+        '격자로 나열)은 어느 STEP 도 아니다. section="answer_key" 로 둔다.',
+    },
+  },
 });
+
+function sectionSeriesConfig(series) {
+  const seriesKey = String(series || '').trim().toLowerCase();
+  return SECTION_SERIES_CONFIG[seriesKey] || SECTION_SERIES_CONFIG.rpm;
+}
 
 // 고쟁이 워크북 지면 분류.
 //
@@ -285,9 +331,9 @@ export function problemBookSectionParts(series) {
 }
 
 export function buildProblemBookSectionPrompt(rawPages, series = 'rpm') {
-  const seriesKey = String(series || '').trim().toLowerCase();
-  const cfg = SECTION_SERIES_CONFIG[seriesKey] || SECTION_SERIES_CONFIG.rpm;
+  const cfg = sectionSeriesConfig(series);
   const parts = cfg.parts;
+  const appendix = cfg.trailingAppendix;
   const pageList = rawPages.map((page, index) => `${index}:${page}`).join(', ');
   const orderLines = [];
   parts.forEach((part, index) => {
@@ -298,9 +344,12 @@ export function buildProblemBookSectionPrompt(rawPages, series = 'rpm') {
     orderLines.push(`${index + 1}) ${part.slot} ${part.code}: ${opener}`);
     if (part.rule) orderLines.push(`   ${part.rule}`);
   });
-  const sectionUnion = [...parts.map((part) => `"${part.code}"`), '"unknown"'].join(
-    ' | ',
-  );
+  if (appendix) orderLines.push(`※ ${appendix.rule}`);
+  const sectionUnion = [
+    ...parts.map((part) => `"${part.code}"`),
+    ...(appendix ? [`"${appendix.code}"`] : []),
+    '"unknown"',
+  ].join(' | ');
   return [
     `당신은 한국 수학 교재 ${cfg.bookName}의 본문 페이지들을 순서대로 분류하는 비전 AI다.`,
     `문항이나 좌표를 추출하지 말고, 각 이미지가 ${cfg.bookName}의 어느 파트인지와 정확한 헤더 가시성만 판정하라.`,
@@ -507,7 +556,11 @@ export async function classifyRpmSectionPages({
 
 export function normalizeRpmSectionResult(parsedJson, rawPages, series = 'rpm') {
   const parts = problemBookSectionParts(series);
-  const allowed = new Set(parts.map((part) => part.code));
+  const appendixCode = sectionSeriesConfig(series).trailingAppendix?.code;
+  const allowed = new Set([
+    ...parts.map((part) => part.code),
+    ...(appendixCode ? [appendixCode] : []),
+  ]);
   const inputPages = Array.isArray(rawPages) ? rawPages : [];
   const byIndex = new Map();
   const rows = Array.isArray(parsedJson?.pages) ? parsedJson.pages : [];

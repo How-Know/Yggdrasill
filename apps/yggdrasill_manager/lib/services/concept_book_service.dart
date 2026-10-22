@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:http/http.dart' as http;
@@ -239,14 +240,22 @@ List<ConceptBookUnitPages> conceptBookUnitPages(List<ConceptBookUnit> units, Map
 }
 
 class ConceptBookService {
-  ConceptBookService({SupabaseClient? client, TextbookPdfService? pdf, http.Client? httpClient})
-      : _client = client,
+  ConceptBookService({
+    SupabaseClient? client,
+    TextbookPdfService? pdf,
+    http.Client? httpClient,
+    List<Duration> retryDelays = const [Duration(seconds: 1), Duration(seconds: 3)],
+  })  : _client = client,
         _pdf = pdf ?? TextbookPdfService(),
-        _http = httpClient ?? http.Client();
+        _http = httpClient ?? http.Client(),
+        _retryDelays = retryDelays;
 
   final SupabaseClient? _client;
   final TextbookPdfService _pdf;
   final http.Client _http;
+
+  /// 원본 PDF 주소·내려받기가 네트워크 문제로 실패했을 때 다시 해 보기 전 기다리는 시간(횟수 = 길이).
+  final List<Duration> _retryDelays;
 
   SupabaseClient get _db => _client ?? Supabase.instance.client;
 
@@ -325,15 +334,36 @@ class ConceptBookService {
 
   /// 원본 PDF 주소(짧게 쓰는 서명 주소).
   Future<String> originalUrl({required String academyId, required String bookId, required String gradeLabel}) async {
-    final target = await _pdf.requestDownloadUrl(
-      academyId: academyId,
-      fileId: bookId,
-      gradeLabel: gradeLabel,
-      kind: 'body',
-      requireMigratedStorage: true,
-    );
+    final target = await _downloadTarget(academyId: academyId, bookId: bookId, gradeLabel: gradeLabel);
     if (target.url.isEmpty) throw Exception('원본 PDF 주소가 비어 있습니다.');
     return target.url;
+  }
+
+  Future<TextbookDownloadTarget> _downloadTarget({
+    required String academyId,
+    required String bookId,
+    required String gradeLabel,
+  }) {
+    return _withRetry(
+      () => _pdf.requestDownloadUrl(
+        academyId: academyId,
+        fileId: bookId,
+        gradeLabel: gradeLabel,
+        kind: 'body',
+        requireMigratedStorage: true,
+      ),
+    );
+  }
+
+  Future<T> _withRetry<T>(Future<T> Function() run) async {
+    for (var attempt = 0;; attempt += 1) {
+      try {
+        return await run();
+      } catch (e) {
+        if (attempt >= _retryDelays.length || !isTransientPdfError(e)) rethrow;
+        await Future<void>.delayed(_retryDelays[attempt]);
+      }
+    }
   }
 
   /// 고른 쪽을 PNG로 그려 임시 파일 경로를 돌려준다. PDF는 기기 임시 폴더에 받아 두고 다시 쓴다.
@@ -343,13 +373,7 @@ class ConceptBookService {
     void Function(int done, int total)? onProgress,
     int longEdgePx = 1600,
   }) async {
-    final target = await _pdf.requestDownloadUrl(
-      academyId: book.academyId,
-      fileId: book.bookId,
-      gradeLabel: book.gradeLabel,
-      kind: 'body',
-      requireMigratedStorage: true,
-    );
+    final target = await _downloadTarget(academyId: book.academyId, bookId: book.bookId, gradeLabel: book.gradeLabel);
     if (target.url.isEmpty) throw Exception('원본 PDF 주소가 비어 있습니다.');
     final temp = await getTemporaryDirectory();
     final dir = Directory(p.join(temp.path, 'yggdrasill_concept_book'));
@@ -360,7 +384,11 @@ class ConceptBookService {
     final expected = target.fileSizeBytes;
     final cached = await pdfFile.exists() && (expected == null || expected <= 0 || await pdfFile.length() == expected);
     if (!cached) {
-      final res = await _http.get(Uri.parse(target.url));
+      final res = await _withRetry(() async {
+        final r = await _http.get(Uri.parse(target.url));
+        if (r.statusCode >= 500) throw _PdfServerBusy(r.statusCode);
+        return r;
+      });
       if (res.statusCode < 200 || res.statusCode >= 300) throw Exception('원본 PDF를 받지 못했습니다(${res.statusCode}).');
       final part = File('${pdfFile.path}.${DateTime.now().microsecondsSinceEpoch}.part');
       await part.writeAsBytes(res.bodyBytes, flush: true);
@@ -385,4 +413,21 @@ class ConceptBookService {
       await doc.dispose();
     }
   }
+}
+
+class _PdfServerBusy implements Exception {
+  const _PdfServerBusy(this.status);
+  final int status;
+
+  @override
+  String toString() => '원본 PDF를 받지 못했습니다($status).';
+}
+
+/// 다시 해 보면 될 수 있는 실패: 연결 끊김, 게이트웨이·저장소 5xx, 게이트웨이가 DB에 닿지 못함.
+/// 링크 없음·저장소 이전 전처럼 다시 해도 같은 결과인 것은 아니다.
+bool isTransientPdfError(Object e) {
+  if (e is _PdfServerBusy || e is SocketException || e is http.ClientException || e is TimeoutException) return true;
+  final s = e.toString();
+  if (s.contains('fetch failed') || s.contains('ECONNRESET') || s.contains('ETIMEDOUT')) return true;
+  return RegExp(r'download_url_failed\(5\d\d\)').hasMatch(s);
 }

@@ -17,4 +17,10 @@ void main() {
       await File(p.join(outDir, 'todo_sheet.pdf')).writeAsBytes(bytes);
     }
   });
+
+  test('saved todo sheet payload renders after a JSON round trip', () async {
+    final bytes = await renderTodoSheetSnapshotRoundTripSample();
+    expect(bytes.length, greaterThan(1000));
+    expect(String.fromCharCodes(bytes.take(5)), '%PDF-');
+  });
 }

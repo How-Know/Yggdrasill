@@ -31,6 +31,7 @@ import '../services/print_routing_service.dart';
 import '../services/right_sheet_answer_preload_service.dart';
 import '../services/resource_service.dart';
 import '../services/textbook_pdf_service.dart';
+import '../services/todo_sheet_snapshot_service.dart';
 import '../utils/naesin_exam_context.dart';
 import '../models/attendance_record.dart';
 import '../models/session_override.dart';
@@ -49,6 +50,7 @@ import 'learning/models/problem_bank_export_models.dart'
 import 'resources/exam_preset_support.dart' show naesinLinkKeyOfPreset;
 import 'design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import '../widgets/app_confirm_button.dart';
+import '../widgets/app_dialog_action_button.dart';
 import '../widgets/departure_summary_dialog.dart';
 import '../widgets/dialog_tokens.dart';
 import '../widgets/home_status_dashboard_icon.dart';
@@ -68,6 +70,7 @@ import '../widgets/attendance_rank_dialog.dart';
 import '../services/student_textbook_report_service.dart';
 import '../widgets/textbook_report_review_dialog.dart';
 import '../utils/homework_card_label.dart';
+import '../utils/homework_completed_overview.dart';
 import '../utils/homework_page_text.dart';
 import '../utils/textbook_problem_source_order.dart';
 import 'class_content/homework_created_date.dart';
@@ -2044,79 +2047,81 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                         HomeworkBatchConfirmService.instance.confirmingKeys,
                     builder: (context, _, __) {
                       return _buildHomeworkChipsReactiveForStudent(
-                student.id,
-                tick,
-                homeworkDraftEditor: draftActive ? draftEditor : null,
-                homeworkDraftReveal: draftActive ? reveal : 0.0,
-                goalSnapshotItemIds: liveIds,
-                hasGoalSnapshot: liveReady,
-                pendingConfirms: _pendingConfirms,
-                savingConfirms: _structuredGradingInFlightKeys,
-                onPhase3Tap: _handleSubmittedChipTapForPending,
-                onHomeworkCheckTap: ({
-                  required context,
-                  required studentId,
-                  required group,
-                  required summary,
-                  required children,
-                }) =>
-                    _handleHomeworkInspectionTap(
-                  context: context,
-                  studentId: studentId,
-                  group: group,
-                  summary: summary,
-                  children: children,
-                ),
-                onGroupSubmittedDoubleTap: (sid, submittedItems) {
-                  final keys = submittedItems
-                      .map((e) => (studentId: sid, itemId: e.id))
-                      .toList(growable: false);
-                  final allSelected = keys.isNotEmpty &&
-                      keys.every(_pendingConfirms.containsKey);
-                  if (allSelected &&
-                      keys.any(_structuredPendingConfirmKeys.contains)) {
-                    unawaited(
-                      _cancelPendingStructuredGrading(
-                        context: context,
-                        keys: keys,
-                      ),
-                    );
-                    return;
-                  }
-                  setState(() {
-                    if (allSelected) {
-                      for (final key in keys) {
-                        _pendingConfirms.remove(key);
-                      }
-                    } else {
-                      for (final key in keys) {
-                        _pendingConfirms.putIfAbsent(key, () => false);
-                      }
-                    }
-                  });
-                },
-                printPickMode: _printPickMode,
-                onPrintPickTap: _handleHomeworkPrintPick,
-                onGroupPrintPickTap: _handleHomeworkGroupPrintPick,
-                onPrintPickLongPress: _handleHomeworkPrintPickWithSettings,
-                onGroupPrintPickLongPress:
-                    _handleHomeworkGroupPrintPickWithSettings,
-                onPrintPickSecondaryTap: _exitHomePrintPickMode,
-                onSlideDownComplete: (key) {
-                  setState(() => _pendingConfirms[key] = true);
-                },
-                expandedHomeworkIds: _expandedHomeworkIds,
-                onToggleExpand: (id) {
-                  setState(() {
-                    if (_expandedHomeworkIds.contains(id)) {
-                      _expandedHomeworkIds.remove(id);
-                    } else {
-                      _expandedHomeworkIds
-                        ..clear()
-                        ..add(id);
-                    }
-                  });
-                },
+                        student.id,
+                        tick,
+                        homeworkDraftEditor: draftActive ? draftEditor : null,
+                        homeworkDraftReveal: draftActive ? reveal : 0.0,
+                        goalSnapshotItemIds: liveIds,
+                        hasGoalSnapshot: liveReady,
+                        pendingConfirms: _pendingConfirms,
+                        savingConfirms: _structuredGradingInFlightKeys,
+                        onPhase3Tap: _handleSubmittedChipTapForPending,
+                        onHomeworkCheckTap: ({
+                          required context,
+                          required studentId,
+                          required group,
+                          required summary,
+                          required children,
+                        }) =>
+                            _handleHomeworkInspectionTap(
+                          context: context,
+                          studentId: studentId,
+                          group: group,
+                          summary: summary,
+                          children: children,
+                        ),
+                        onGroupSubmittedDoubleTap: (sid, submittedItems) {
+                          final keys = submittedItems
+                              .map((e) => (studentId: sid, itemId: e.id))
+                              .toList(growable: false);
+                          final allSelected = keys.isNotEmpty &&
+                              keys.every(_pendingConfirms.containsKey);
+                          if (allSelected &&
+                              keys.any(
+                                  _structuredPendingConfirmKeys.contains)) {
+                            unawaited(
+                              _cancelPendingStructuredGrading(
+                                context: context,
+                                keys: keys,
+                              ),
+                            );
+                            return;
+                          }
+                          setState(() {
+                            if (allSelected) {
+                              for (final key in keys) {
+                                _pendingConfirms.remove(key);
+                              }
+                            } else {
+                              for (final key in keys) {
+                                _pendingConfirms.putIfAbsent(key, () => false);
+                              }
+                            }
+                          });
+                        },
+                        printPickMode: _printPickMode,
+                        onPrintPickTap: _handleHomeworkPrintPick,
+                        onGroupPrintPickTap: _handleHomeworkGroupPrintPick,
+                        onPrintPickLongPress:
+                            _handleHomeworkPrintPickWithSettings,
+                        onGroupPrintPickLongPress:
+                            _handleHomeworkGroupPrintPickWithSettings,
+                        onPrintPickSecondaryTap: _exitHomePrintPickMode,
+                        onSlideDownComplete: (key) {
+                          setState(() => _pendingConfirms[key] = true);
+                        },
+                        expandedHomeworkIds: _expandedHomeworkIds,
+                        onToggleExpand: (id) {
+                          setState(() {
+                            if (_expandedHomeworkIds.contains(id)) {
+                              _expandedHomeworkIds.remove(id);
+                            } else {
+                              _expandedHomeworkIds
+                                ..clear()
+                                ..add(id);
+                            }
+                          });
+                        },
                       );
                     },
                   );
@@ -3278,6 +3283,145 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     }
   }
 
+  Future<void> _showPastTodoSheetsDialog(
+    BuildContext context, {
+    required String studentId,
+    required String studentName,
+  }) async {
+    List<TodoSheetSnapshotSummary> snapshots;
+    try {
+      snapshots =
+          await TodoSheetSnapshotService.instance.listForStudent(studentId);
+    } catch (error) {
+      if (context.mounted) {
+        _showHomeworkChipSnackBar(
+          context,
+          '이전 알림장을 불러오지 못했어요: $error',
+        );
+      }
+      return;
+    }
+    if (!context.mounted) return;
+
+    String dateLabel(DateTime value) {
+      const weekdays = <String>['월', '화', '수', '목', '금', '토', '일'];
+      return '${value.year}.${value.month.toString().padLeft(2, '0')}.'
+          '${value.day.toString().padLeft(2, '0')} '
+          '(${weekdays[value.weekday - 1]})';
+    }
+
+    String? openingSnapshotId;
+    await showUtilityGlassDialog(
+      context: context,
+      title: '$studentName 이전 알림장',
+      icon: Icons.history_rounded,
+      preferredWidth: math.min(MediaQuery.sizeOf(context).width - 48, 620),
+      maxWidth: math.min(MediaQuery.sizeOf(context).width - 48, 620),
+      maxHeight: math.min(MediaQuery.sizeOf(context).height - 48, 680),
+      child: StatefulBuilder(
+        builder: (dialogContext, setDialogState) {
+          final dlg = YggDialogColors.of(dialogContext);
+          if (snapshots.isEmpty) {
+            return Center(
+              child: Text(
+                '저장된 이전 알림장이 없습니다.',
+                style: TextStyle(
+                  color: dlg.textSub,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            );
+          }
+          return ListView.separated(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+            itemCount: snapshots.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 8),
+            itemBuilder: (itemContext, index) {
+              final snapshot = snapshots[index];
+              final opening = openingSnapshotId == snapshot.id;
+              return Material(
+                color: dlg.fieldBg,
+                borderRadius: BorderRadius.circular(12),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(12),
+                  onTap: openingSnapshotId != null
+                      ? null
+                      : () async {
+                          setDialogState(
+                            () => openingSnapshotId = snapshot.id,
+                          );
+                          try {
+                            await previewSavedHomeworkTodoSheet(snapshot.id);
+                          } catch (error) {
+                            if (dialogContext.mounted) {
+                              _showHomeworkChipSnackBar(
+                                dialogContext,
+                                '알림장을 열지 못했어요: $error',
+                              );
+                            }
+                          } finally {
+                            if (dialogContext.mounted) {
+                              setDialogState(() => openingSnapshotId = null);
+                            }
+                          }
+                        },
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.description_outlined,
+                          size: 20,
+                          color: kDlgAccent,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                dateLabel(snapshot.sessionDate),
+                                style: TextStyle(
+                                  color: dlg.text,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                snapshot.className.isEmpty
+                                    ? '정규 수업'
+                                    : snapshot.className,
+                                style: TextStyle(
+                                  color: dlg.textSub,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (opening)
+                          const YggLoadingIndicator(size: 20)
+                        else
+                          Icon(
+                            Icons.chevron_right_rounded,
+                            size: 22,
+                            color: dlg.textSub,
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+
   Future<void> _showHomeworkOverviewDialog(
     BuildContext context,
     String studentId,
@@ -3598,15 +3742,19 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           .toList(growable: false)
         ..sort((a, b) => b.classDateTime.compareTo(a.classDateTime));
       final classRecordsForFilter =
-          allClassRecords.take(30).toList(growable: false);
+          allClassRecords.take(10).toList(growable: false);
+      final recentWindowStart = classRecordsForFilter.isEmpty
+          ? null
+          : classRecordsForFilter.last.classDateTime
+              .subtract(const Duration(minutes: 20));
       final sessionFilterOptions = <_HomeworkOverviewSessionFilterOption>[
         _HomeworkOverviewSessionFilterOption(
           id: '__all_sessions__',
           label: classRecordsForFilter.isEmpty
               ? '전체 수업'
-              : '전체 수업 (최근 ${classRecordsForFilter.length}회차)',
+              : '최근 ${classRecordsForFilter.length}회차',
           targetDay: null,
-          from: null,
+          from: recentWindowStart,
           to: null,
         ),
         ...classRecordsForFilter.map((record) {
@@ -3641,6 +3789,10 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       final expandedCompletedGroupIds = <String>{};
       final expandedHomeworkOverviewItemIds = <String>{};
       String selectedSessionFilterId = sessionFilterOptions.first.id;
+      DateTimeRange? selectedDateRange;
+      String? selectedBookLabel;
+      var sortByBook = false;
+      var historyCoveredFrom = oldestSession ?? DateTime(2000);
       final loadRevision = ValueNotifier<int>(0);
       var dialogAlive = true;
       var loading = true;
@@ -3784,16 +3936,69 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                   (opt) => opt.id == selectedSessionFilterId,
                   orElse: () => sessionFilterOptions.first,
                 );
-                final completedGroupEntries =
-                    _collectRecentCompletedHomeworkGroups(
+                final customRange = selectedDateRange;
+                final usingCustomRange = customRange != null &&
+                    selectedFilter.id == '__all_sessions__';
+                final rangeStart = customRange == null
+                    ? null
+                    : DateTime(
+                        customRange.start.year,
+                        customRange.start.month,
+                        customRange.start.day,
+                      );
+                final rangeEnd = customRange == null
+                    ? null
+                    : DateTime(
+                        customRange.end.year,
+                        customRange.end.month,
+                        customRange.end.day,
+                        23,
+                        59,
+                        59,
+                        999,
+                      );
+                final completedInWindow = _collectRecentCompletedHomeworkGroups(
                   studentId,
                   assignmentsByItem: assignmentsByItem,
-                  checksByItem: checksByItem,
                   targetDay: selectedFilter.targetDay,
-                  windowStart: selectedFilter.from,
-                  windowEnd: selectedFilter.to,
-                  limit: 16,
+                  windowStart:
+                      usingCustomRange ? rangeStart : selectedFilter.from,
+                  windowEnd: usingCustomRange ? rangeEnd : selectedFilter.to,
+                  limit: 0,
                 );
+                final datedEntries = customRange == null || usingCustomRange
+                    ? completedInWindow
+                    : completedInWindow
+                        .where(
+                          (entry) => homeworkCompletionOnDayRange(
+                            entry.completedAt,
+                            start: customRange.start,
+                            end: customRange.end,
+                          ),
+                        )
+                        .toList(growable: false);
+                final bookLabels = datedEntries
+                    .map((entry) => entry.bookLabel)
+                    .toSet()
+                    .toList(growable: false)
+                  ..sort();
+                final effectiveBook = bookLabels.contains(selectedBookLabel)
+                    ? selectedBookLabel
+                    : null;
+                final completedGroupEntries = datedEntries
+                    .where(
+                      (entry) =>
+                          effectiveBook == null ||
+                          entry.bookLabel == effectiveBook,
+                    )
+                    .toList(growable: false);
+                if (sortByBook) {
+                  completedGroupEntries.sort((a, b) {
+                    final bookCmp = a.bookLabel.compareTo(b.bookLabel);
+                    if (bookCmp != 0) return bookCmp;
+                    return b.completedAt.compareTo(a.completedAt);
+                  });
+                }
                 Future<void> refreshOverview() async {
                   await reloadOverview(
                     loadHistory: false,
@@ -3966,66 +4171,68 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Container(
-                        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-                        decoration: BoxDecoration(
-                          color: dlg.fieldBg,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: dlg.border),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: OutlinedButton.icon(
+                          onPressed: () => _showPastTodoSheetsDialog(
+                            dialogContext,
+                            studentId: studentId,
+                            studentName: studentName,
+                          ),
+                          icon: const Icon(Icons.history_rounded, size: 18),
+                          label: const Text('이전 알림장 보기'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: kDlgAccent,
+                            side: BorderSide(color: dlg.border),
+                          ),
                         ),
-                        child: Row(
-                          children: [
-                            Icon(
-                              Icons.filter_alt_rounded,
-                              size: 16,
-                              color: dlg.textSub,
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              '수업기록 필터',
-                              style: TextStyle(
-                                color: dlg.textSub,
-                                fontSize: 12.5,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: DropdownButtonHideUnderline(
-                                child: DropdownButton<String>(
-                                  isExpanded: true,
-                                  value: selectedSessionFilterId,
-                                  dropdownColor: dlg.fieldBg,
-                                  style: TextStyle(
-                                    color: dlg.text,
-                                    fontSize: 13.5,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                  items: sessionFilterOptions
-                                      .map(
-                                        (opt) => DropdownMenuItem<String>(
-                                          value: opt.id,
-                                          child: Text(
-                                            opt.label,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                        ),
-                                      )
-                                      .toList(growable: false),
-                                  onChanged: (value) {
-                                    if (value == null) return;
-                                    setDialogState(() {
-                                      selectedSessionFilterId = value;
-                                      expandedCompletedGroupIds.clear();
-                                      expandedHomeworkOverviewItemIds.clear();
-                                    });
-                                  },
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      _HomeworkOverviewFilterBar(
+                        sessionOptions: sessionFilterOptions,
+                        selectedSessionId: selectedSessionFilterId,
+                        dateRange: selectedDateRange,
+                        bookLabels: bookLabels,
+                        selectedBookLabel: effectiveBook,
+                        sortByBook: sortByBook,
+                        onSessionChanged: (value) {
+                          setDialogState(() {
+                            selectedSessionFilterId = value;
+                            expandedCompletedGroupIds.clear();
+                            expandedHomeworkOverviewItemIds.clear();
+                          });
+                        },
+                        onDateRangeChanged: (range) async {
+                          if (range != null &&
+                              range.start.isBefore(historyCoveredFrom)) {
+                            final from = DateTime(
+                              range.start.year,
+                              range.start.month,
+                              range.start.day,
+                            );
+                            await HomeworkStore.instance.loadCompletedHistory(
+                              studentId: studentId,
+                              completedFrom: from,
+                              hydrate: true,
+                            );
+                            historyCoveredFrom = from;
+                          }
+                          if (!dialogAlive) return;
+                          setDialogState(() {
+                            selectedDateRange = range;
+                            expandedCompletedGroupIds.clear();
+                          });
+                        },
+                        onBookChanged: (value) {
+                          setDialogState(() {
+                            selectedBookLabel = value;
+                          });
+                        },
+                        onSortByBookChanged: (value) {
+                          setDialogState(() {
+                            sortByBook = value;
+                          });
+                        },
                       ),
                       const SizedBox(height: 12),
                       Expanded(
@@ -4046,7 +4253,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                             child: Padding(
                                               padding: const EdgeInsets.all(16),
                                               child: Text(
-                                                '선택한 수업에서 완료한 그룹과제가 없습니다.',
+                                                '이 조건에서 홈 목록을 떠난 그룹과제가 없습니다.',
                                                 textAlign: TextAlign.center,
                                                 style: TextStyle(
                                                   color: dlg.textSub,
@@ -4267,18 +4474,48 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         batchSessionId: record.batchSessionId,
       );
       // 오늘→숙제 전환은 departure_time 트리거가 처리한다.
+      final savedAttendanceId = (DataManager.instance
+                  .getAttendanceRecord(studentId, record.classDateTime)
+                  ?.id ??
+              attendanceId)
+          .trim();
+      var summaryApplied = true;
       try {
         await applyDepartureSummaryAfterSave(
           studentId: studentId,
-          attendanceId: attendanceId,
+          attendanceId: savedAttendanceId,
           result: summary,
         );
       } catch (e) {
+        summaryApplied = false;
         if (context.mounted) {
           _showHomeworkChipSnackBar(
             context,
             '하원은 처리했지만 숙제 확정에 실패했어요: $e',
           );
+        }
+      }
+      if (summaryApplied) {
+        try {
+          await finalizeDepartureTodoSheetSnapshot(
+            attendanceId: savedAttendanceId,
+            studentId: studentId,
+            studentName: student.name,
+            classDateTime: record.classDateTime,
+            arrivalTime: arrival,
+            departureTime: now,
+            result: summary,
+            className: record.className,
+            classEndTime: record.classEndTime,
+            setId: record.setId,
+          );
+        } catch (e) {
+          if (context.mounted) {
+            _showHomeworkChipSnackBar(
+              context,
+              '하원은 처리했지만 알림장 기록 저장에 실패했어요: $e',
+            );
+          }
         }
       }
       HomeworkStore.instance.convertAllTestCardsToPrintForDeparture(studentId);
@@ -8397,25 +8634,28 @@ Future<_HomeworkInspectionChoice?> _showHomeworkInspectionChoiceDialog({
                   color: Colors.transparent,
                   child: InkWell(
                     borderRadius: BorderRadius.circular(
-                      _homeworkCheckActionButtonHeight / 2,
+                      AppDialogActionMetrics.height / 2,
                     ),
                     onTap: close,
                     child: Container(
-                      height: _homeworkCheckActionButtonHeight,
+                      height: AppDialogActionMetrics.height,
                       padding: const EdgeInsets.symmetric(horizontal: 18),
                       alignment: Alignment.center,
                       decoration: BoxDecoration(
                         color: dlg.chipBg,
                         borderRadius: BorderRadius.circular(
-                          _homeworkCheckActionButtonHeight / 2,
+                          AppDialogActionMetrics.height / 2,
                         ),
                       ),
                       child: Text(
                         '취소',
                         style: TextStyle(
                           color: dlg.chipText,
-                          fontSize: FabTabBarTokens.fabBarLabelFontSize,
-                          fontWeight: FontWeight.w600,
+                          fontFamily: 'Pretendard',
+                          fontSize: 18,
+                          height: 1.0,
+                          letterSpacing: 1.4,
+                          fontWeight: FontWeight.w400,
                         ),
                       ),
                     ),
@@ -11915,12 +12155,393 @@ String _generatedAssignmentPrintLine(HomeworkItem hw) =>
 
 String _homeworkBookCourseLabel(HomeworkItem hw) => homeworkBookCourseLabel(hw);
 
+class _HomeworkOverviewFilterBar extends StatelessWidget {
+  const _HomeworkOverviewFilterBar({
+    required this.sessionOptions,
+    required this.selectedSessionId,
+    required this.dateRange,
+    required this.bookLabels,
+    required this.selectedBookLabel,
+    required this.sortByBook,
+    required this.onSessionChanged,
+    required this.onDateRangeChanged,
+    required this.onBookChanged,
+    required this.onSortByBookChanged,
+  });
+
+  final List<_HomeworkOverviewSessionFilterOption> sessionOptions;
+  final String selectedSessionId;
+  final DateTimeRange? dateRange;
+  final List<String> bookLabels;
+  final String? selectedBookLabel;
+  final bool sortByBook;
+  final ValueChanged<String> onSessionChanged;
+  final Future<void> Function(DateTimeRange?) onDateRangeChanged;
+  final ValueChanged<String?> onBookChanged;
+  final ValueChanged<bool> onSortByBookChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final dlg = YggDialogColors.of(context);
+    final sessionLabel = sessionOptions
+        .firstWhere(
+          (opt) => opt.id == selectedSessionId,
+          orElse: () => sessionOptions.first,
+        )
+        .label;
+    final range = dateRange;
+    final dateLabel = range == null
+        ? '기간'
+        : '${range.start.month}/${range.start.day} – ${range.end.month}/${range.end.day}';
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const chipWidth = 80.0;
+        const gap = 8.0;
+        const minField = 148.0;
+        final fieldWidth = math.max(
+          minField,
+          (constraints.maxWidth - chipWidth * 2 - gap * 4) / 3,
+        );
+        final row = Row(
+          children: [
+            SizedBox(
+              width: fieldWidth,
+              child: _HomeworkOverviewMenuField(
+                label: sessionLabel,
+                options: [
+                  for (final opt in sessionOptions)
+                    (id: opt.id, label: opt.label),
+                ],
+                selectedId: selectedSessionId,
+                onSelected: onSessionChanged,
+              ),
+            ),
+            const SizedBox(width: gap),
+            SizedBox(
+              width: fieldWidth,
+              child: _HomeworkOverviewDateField(
+                label: dateLabel,
+                hasRange: range != null,
+                onPick: () async {
+                  final now = DateTime.now();
+                  final today = DateTime(now.year, now.month, now.day);
+                  final initial = range ??
+                      DateTimeRange(
+                        start: today.subtract(const Duration(days: 6)),
+                        end: today,
+                      );
+                  var rangeStart = DateTime(
+                    initial.start.year,
+                    initial.start.month,
+                    initial.start.day,
+                  );
+                  var rangeEnd = DateTime(
+                    initial.end.year,
+                    initial.end.month,
+                    initial.end.day,
+                  );
+                  if (rangeEnd.isAfter(today)) rangeEnd = today;
+                  if (rangeStart.isAfter(rangeEnd)) rangeStart = rangeEnd;
+                  final picked = await showDateRangePicker(
+                    context: context,
+                    locale: const Locale('ko'),
+                    firstDate: DateTime(2018, 1, 1),
+                    lastDate: today,
+                    initialDateRange: DateTimeRange(
+                      start: rangeStart,
+                      end: rangeEnd,
+                    ),
+                    helpText: '완료된 기간',
+                    saveText: '적용',
+                    builder: (context, child) {
+                      final scheme = ColorScheme.fromSeed(
+                        seedColor: kDlgAccent,
+                        brightness: Theme.of(context).brightness,
+                      ).copyWith(
+                        primary: kDlgAccent,
+                        onPrimary: Colors.white,
+                        surface: dlg.fieldBg,
+                        onSurface: dlg.text,
+                      );
+                      // 달력 모드는 화면 크기로 전체 페이지를 그린다. 크기를 줄여 가운데 창으로 띄운다.
+                      const pickerSize = Size(420, 600);
+                      final media = MediaQuery.of(context);
+                      final size = Size(
+                        math.min(pickerSize.width, media.size.width - 48),
+                        math.min(pickerSize.height, media.size.height - 48),
+                      );
+                      return Theme(
+                        data: Theme.of(context).copyWith(
+                          colorScheme: scheme,
+                          datePickerTheme: DatePickerThemeData(
+                            backgroundColor: dlg.bg,
+                            surfaceTintColor: Colors.transparent,
+                            rangePickerBackgroundColor: dlg.bg,
+                            rangePickerSurfaceTintColor: Colors.transparent,
+                            rangePickerHeaderBackgroundColor: dlg.bg,
+                            rangePickerElevation: 0,
+                            rangeSelectionBackgroundColor:
+                                kDlgAccent.withValues(alpha: 0.24),
+                          ),
+                        ),
+                        child: Center(
+                          child: SizedBox(
+                            width: size.width,
+                            height: size.height,
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(28),
+                              child: MediaQuery(
+                                data: media.copyWith(size: size),
+                                child: child ?? const SizedBox.shrink(),
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  );
+                  if (picked != null) await onDateRangeChanged(picked);
+                },
+                onClear: range == null ? null : () => onDateRangeChanged(null),
+              ),
+            ),
+            const SizedBox(width: gap),
+            SizedBox(
+              width: fieldWidth,
+              child: _HomeworkOverviewMenuField(
+                label: selectedBookLabel ?? '전체 교재',
+                options: [
+                  (id: '__all_books__', label: '전체 교재'),
+                  for (final label in bookLabels) (id: label, label: label),
+                ],
+                selectedId: selectedBookLabel ?? '__all_books__',
+                onSelected: (id) {
+                  onBookChanged(id == '__all_books__' ? null : id);
+                },
+              ),
+            ),
+            const SizedBox(width: gap),
+            SizedBox(
+              width: chipWidth,
+              child: YggDialogFilterChip(
+                label: '완료순',
+                selected: !sortByBook,
+                height: 36,
+                labelFontSize: 12.5,
+                onSelected: (_) => onSortByBookChanged(false),
+              ),
+            ),
+            const SizedBox(width: gap),
+            SizedBox(
+              width: chipWidth,
+              child: YggDialogFilterChip(
+                label: '교재순',
+                selected: sortByBook,
+                height: 36,
+                labelFontSize: 12.5,
+                onSelected: (_) => onSortByBookChanged(true),
+              ),
+            ),
+          ],
+        );
+        final needed = fieldWidth * 3 + chipWidth * 2 + gap * 4;
+        if (constraints.maxWidth + 1 < needed) {
+          return SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: row,
+          );
+        }
+        return row;
+      },
+    );
+  }
+}
+
+class _HomeworkOverviewMenuField extends StatelessWidget {
+  const _HomeworkOverviewMenuField({
+    required this.label,
+    required this.options,
+    required this.selectedId,
+    required this.onSelected,
+  });
+
+  final String label;
+  final List<({String id, String label})> options;
+  final String selectedId;
+  final ValueChanged<String> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final dlg = YggDialogColors.of(context);
+    return MenuAnchor(
+      style: MenuStyle(
+        backgroundColor: WidgetStatePropertyAll(dlg.fieldBg),
+        surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
+        elevation: const WidgetStatePropertyAll(6),
+        maximumSize: const WidgetStatePropertyAll(Size(360, 320)),
+        shape: WidgetStatePropertyAll(
+          RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(color: dlg.border),
+          ),
+        ),
+      ),
+      alignmentOffset: const Offset(0, 6),
+      menuChildren: [
+        for (final option in options)
+          MenuItemButton(
+            style: ButtonStyle(
+              backgroundColor: WidgetStatePropertyAll(
+                option.id == selectedId
+                    ? kDlgAccent.withValues(alpha: 0.16)
+                    : Colors.transparent,
+              ),
+              overlayColor: WidgetStatePropertyAll(
+                kDlgAccent.withValues(alpha: 0.08),
+              ),
+            ),
+            onPressed: () => onSelected(option.id),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 328),
+              child: Text(
+                option.label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: dlg.text,
+                  fontSize: 13.5,
+                  fontWeight: option.id == selectedId
+                      ? FontWeight.w800
+                      : FontWeight.w600,
+                ),
+              ),
+            ),
+          ),
+      ],
+      builder: (context, controller, child) {
+        return Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: () {
+              if (controller.isOpen) {
+                controller.close();
+              } else {
+                controller.open();
+              }
+            },
+            child: Ink(
+              height: 36,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                color: dlg.fieldBg,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: dlg.border),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: dlg.text,
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  Icon(
+                    Icons.keyboard_arrow_down_rounded,
+                    size: 18,
+                    color: dlg.textSub,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _HomeworkOverviewDateField extends StatelessWidget {
+  const _HomeworkOverviewDateField({
+    required this.label,
+    required this.hasRange,
+    required this.onPick,
+    required this.onClear,
+  });
+
+  final String label;
+  final bool hasRange;
+  final VoidCallback onPick;
+  final VoidCallback? onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final dlg = YggDialogColors.of(context);
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onPick,
+        child: Ink(
+          height: 36,
+          padding: const EdgeInsets.only(left: 12, right: 4),
+          decoration: BoxDecoration(
+            color: dlg.fieldBg,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: hasRange ? kDlgAccent : dlg.border,
+            ),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                Icons.calendar_month_rounded,
+                size: 16,
+                color: hasRange ? kDlgAccent : dlg.textSub,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: hasRange ? dlg.text : dlg.textSub,
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              if (onClear != null)
+                IconButton(
+                  onPressed: onClear,
+                  icon: Icon(Icons.close_rounded, size: 16, color: dlg.textSub),
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(
+                    minWidth: 28,
+                    minHeight: 28,
+                  ),
+                  tooltip: '기간 지우기',
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 List<_HomeworkOverviewCompletedGroupEntry>
     _collectRecentCompletedHomeworkGroups(
   String studentId, {
   required Map<String, List<HomeworkAssignmentBrief>> assignmentsByItem,
-  Map<String, List<HomeworkAssignmentCheck>> checksByItem =
-      const <String, List<HomeworkAssignmentCheck>>{},
   DateTime? targetDay,
   DateTime? windowStart,
   DateTime? windowEnd,
@@ -11938,46 +12559,6 @@ List<_HomeworkOverviewCompletedGroupEntry>
   final now = DateTime.now();
   final DateTime? targetDateOnly =
       targetDay == null ? null : _dateOnly(targetDay);
-  final today = _dateOnly(now);
-
-  DateTime? latestTodayCheckAt(String itemId) {
-    final checks = checksByItem[itemId];
-    if (checks == null || checks.isEmpty) return null;
-    DateTime? latest;
-    for (final check in checks) {
-      if (_dateOnly(check.checkedAt) != today) continue;
-      if (latest == null || check.checkedAt.isAfter(latest)) {
-        latest = check.checkedAt;
-      }
-    }
-    return latest;
-  }
-
-  bool assignmentCompletedToday(String itemId) {
-    final briefs = assignmentsByItem[itemId];
-    if (briefs == null || briefs.isEmpty) return false;
-    for (final brief in briefs) {
-      if (brief.status != 'completed') continue;
-      // assignment brief에 completed_at이 없어, 오늘 검사 이력과 함께 판정한다.
-      if (latestTodayCheckAt(itemId) != null) return true;
-    }
-    return false;
-  }
-
-  DateTime? completedTimestampOf(HomeworkItem child) {
-    final todayCheckAt = latestTodayCheckAt(child.id);
-    if (child.status == HomeworkStatus.completed || child.completedAt != null) {
-      return child.completedAt ??
-          todayCheckAt ??
-          child.updatedAt ??
-          child.createdAt;
-    }
-    // 오늘 검사로 assignment가 완료됐지만 item 완료 플래그가 아직 없는 경우도 포함한다.
-    if (assignmentCompletedToday(child.id)) {
-      return todayCheckAt ?? child.updatedAt ?? child.createdAt;
-    }
-    return null;
-  }
 
   for (final group in groups) {
     final children = HomeworkStore.instance
@@ -11987,41 +12568,22 @@ List<_HomeworkOverviewCompletedGroupEntry>
           includeCompleted: true,
         )
         .toList(growable: false);
-    if (children.isEmpty) continue;
-    final completedChildren = children.where(
-      (child) {
-        final completedTs = completedTimestampOf(child);
-        if (completedTs == null) return false;
-        if (targetDateOnly != null &&
-            _dateOnly(completedTs) != targetDateOnly) {
-          return false;
-        }
-        if (windowStart != null && completedTs.isBefore(windowStart)) {
-          return false;
-        }
-        if (windowEnd != null && completedTs.isAfter(windowEnd)) {
-          return false;
-        }
-        return true;
-      },
-    ).toList(growable: false);
-    if (completedChildren.isEmpty) continue;
+    // 홈 카드는 하위 과제가 모두 status=completed가 되어야 사라진다.
+    final completedAt = homeworkGroupLeftHomeAt(children);
+    if (completedAt == null) continue;
+    if (targetDateOnly != null && _dateOnly(completedAt) != targetDateOnly) {
+      continue;
+    }
+    if (windowStart != null && completedAt.isBefore(windowStart)) continue;
+    if (windowEnd != null && completedAt.isAfter(windowEnd)) continue;
 
-    DateTime latestCompletedAt =
-        completedTimestampOf(completedChildren.first) ??
-            DateTime.fromMillisecondsSinceEpoch(0);
     int totalDurationMs = 0;
-    for (final child in completedChildren) {
-      final completedTs = completedTimestampOf(child);
-      if (completedTs != null && completedTs.isAfter(latestCompletedAt)) {
-        latestCompletedAt = completedTs;
-      }
+    for (final child in children) {
       final int runningMs = child.runStart != null
           ? now.difference(child.runStart!).inMilliseconds
           : 0;
       totalDurationMs += math.max(0, child.accumulatedMs + runningMs);
     }
-    final completedAt = latestCompletedAt;
     final title = () {
       final raw = group.title.trim();
       if (raw.isNotEmpty) return raw;
@@ -12049,6 +12611,15 @@ List<_HomeworkOverviewCompletedGroupEntry>
       }
       return children.first;
     }();
+    final bookLabel = homeworkOverviewGroupBookLabel(
+      children,
+      groupTitle: group.title,
+    );
+    final genericBookLine =
+        _homeworkBookCourseLabel(representativeForBookCourse);
+    final line1Left = (genericBookLine == '-' || genericBookLine == '프린트')
+        ? bookLabel
+        : genericBookLine;
     int totalQuestionCount = 0;
     int groupCheckCount = 0;
     int homeworkCount = 0;
@@ -12114,9 +12685,10 @@ List<_HomeworkOverviewCompletedGroupEntry>
       _HomeworkOverviewCompletedGroupEntry(
         groupId: group.id,
         completedAt: completedAt,
+        bookLabel: bookLabel,
         assignedAt: latestBrief?.assignedAt,
         assignmentCode: assignmentCode,
-        line1Left: _homeworkBookCourseLabel(representativeForBookCourse),
+        line1Left: line1Left,
         line1Right: flowName.isEmpty ? '플로우 미지정' : flowName,
         line2Left: title,
         line2Right: '${children.length}개 과제',
@@ -15130,8 +15702,7 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
           savingConfirms.contains(key);
     }).toList(growable: false);
     final bool groupPendingSelected = pendingCheckKeys.any(
-      (key) =>
-          pendingConfirms.containsKey(key) || savingConfirms.contains(key),
+      (key) => pendingConfirms.containsKey(key) || savingConfirms.contains(key),
     );
     final bool groupPendingComplete = groupPendingSelected &&
         pendingCheckKeys.any((key) => pendingConfirms[key] == true);
@@ -15551,7 +16122,8 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
       ),
     );
     final releasing = HomeworkGradingLockService.instance.releasingKeys.value;
-    final confirming = HomeworkBatchConfirmService.instance.confirmingKeys.value;
+    final confirming =
+        HomeworkBatchConfirmService.instance.confirmingKeys.value;
     final groupBusy = children.any((child) {
       final key = (studentId: studentId, itemId: child.id);
       return savingConfirms.contains(key) ||
@@ -20480,6 +21052,7 @@ class _HomeworkOverviewEntry {
 class _HomeworkOverviewCompletedGroupEntry {
   final String groupId;
   final DateTime completedAt;
+  final String bookLabel;
   final DateTime? assignedAt;
   final String assignmentCode;
   final String line1Left;
@@ -20497,6 +21070,7 @@ class _HomeworkOverviewCompletedGroupEntry {
   const _HomeworkOverviewCompletedGroupEntry({
     required this.groupId,
     required this.completedAt,
+    required this.bookLabel,
     required this.assignedAt,
     required this.assignmentCode,
     required this.line1Left,

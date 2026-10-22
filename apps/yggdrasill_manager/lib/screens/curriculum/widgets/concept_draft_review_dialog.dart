@@ -4,6 +4,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../../../services/concept_draft_compare.dart';
 import '../../../services/concept_draft_models.dart';
 import '../../../services/concept_draft_service.dart';
 import '../../../services/concept_relation_service.dart';
@@ -83,6 +84,18 @@ class _ConceptDraftReviewDialogState extends State<ConceptDraftReviewDialog> {
   String? _notice;
   bool _noticeError = false;
 
+  /// 비교할 기존 개념(읽기 전용, 개념 id → 내용). 관계에서 고른 개념을 열 때 읽는다.
+  final Map<String, ConceptCompareTarget> _targets = {};
+  final Set<String> _targetsLoading = {};
+  final Map<String, String> _targetErrors = {};
+
+  /// 비교 칸을 연 항목 key.
+  final Set<String> _comparing = {};
+
+  /// AI 비교 제안(저장하지 않는다). 반영한 줄은 검토 관계로 들어가고 여기서 빠진다.
+  ConceptCompareProposal? _proposal;
+  bool _proposing = false;
+
   @override
   void initState() {
     super.initState();
@@ -125,7 +138,11 @@ class _ConceptDraftReviewDialogState extends State<ConceptDraftReviewDialog> {
       final keys = {for (final it in items) it.key};
       _editing.retainWhere(keys.contains);
       _evidence.retainWhere(keys.contains);
-      if (_record?.id != r.id) _images = null;
+      _comparing.retainWhere(keys.contains);
+      if (_record?.id != r.id) {
+        _images = null;
+        _proposal = null;
+      }
       _chat.setDraft(r.id, open: r.isOpen);
       setState(() {
         _record = r;
@@ -168,14 +185,111 @@ class _ConceptDraftReviewDialogState extends State<ConceptDraftReviewDialog> {
       search: _svc.searchLibraryConcepts,
       title: '${kind.label}: 기존 개념 고르기',
       initialQuery: it.title.trim(),
-      hint: kind == ReviewRelationKind.statement
-          ? '고른 개념에 이 항목을 확정 전 서술로 더합니다. 기존 확정 내용·본문은 그대로입니다.'
-          : '라이브러리에 있는 개념만 고를 수 있습니다.',
+      hint: switch (kind) {
+        ReviewRelationKind.statement => '고른 개념에 이 항목을 확정 전 서술로 더합니다. 기존 확정 내용·본문은 그대로입니다.',
+        ReviewRelationKind.source => '고른 개념의 서술에 이 교재 쪽을 출처로만 잇습니다. 새 글은 넣지 않습니다.',
+        ReviewRelationKind.revise => '고른 개념의 기본 서술 수정안으로 저장합니다. 본문은 그 개념 창에서 확정해야 바뀝니다.',
+        _ => '라이브러리에 있는 개념만 고를 수 있습니다.',
+      },
     );
     if (pick == null || !mounted) return;
     _update(
         it.key, (x) => x.copyWith(relation: ReviewRelation(kind: kind, conceptId: pick.id, conceptName: pick.label)));
+    unawaited(_loadTarget(pick.id));
   }
+
+  /// 비교할 기존 개념을 읽는다. 이미 읽었으면 [force] 일 때만 다시 읽는다.
+  Future<void> _loadTarget(String id, {bool force = false}) async {
+    if (_targetsLoading.contains(id) || (!force && _targets.containsKey(id))) return;
+    setState(() {
+      _targetsLoading.add(id);
+      _targetErrors.remove(id);
+    });
+    try {
+      final found = await _svc.compareTargets([id]);
+      if (!mounted) return;
+      setState(() {
+        for (final t in found) {
+          _targets[t.id] = t;
+        }
+        if (found.isEmpty) _targetErrors[id] = '그 개념을 찾지 못했습니다(지워졌을 수 있습니다).';
+      });
+    } catch (e) {
+      if (mounted) setState(() => _targetErrors[id] = '기존 개념을 읽지 못했습니다: $e');
+    } finally {
+      if (mounted) setState(() => _targetsLoading.remove(id));
+    }
+  }
+
+  void _setSourceStatement(ReviewItem it, String? statementId) {
+    final rel = it.relation;
+    if (rel == null || rel.kind != ReviewRelationKind.source) return;
+    final st = _targets[rel.conceptId]?.statement(statementId);
+    _update(
+      it.key,
+      (x) => x.copyWith(
+        relation: ReviewRelation(
+          kind: rel.kind,
+          conceptId: rel.conceptId,
+          conceptName: rel.conceptName,
+          statementId: statementId,
+          statementLabel: statementId == null ? null : st?.label,
+        ),
+      ),
+    );
+  }
+
+  /// 저장된 검토를 기존 개념과 비교한 AI 제안을 받는다. 서버가 저장된 검토를 읽으므로 먼저 저장해야 한다.
+  Future<void> _proposeCompare() async {
+    final r = _record;
+    if (r == null || _proposing) return;
+    if (_dirty || _savedAt == null) {
+      setState(() {
+        _notice = '비교 제안은 저장된 검토로 받습니다. 먼저 "검토 저장"을 누르세요.';
+        _noticeError = true;
+      });
+      return;
+    }
+    setState(() {
+      _proposing = true;
+      _notice = null;
+    });
+    try {
+      final p = await _svc.proposeCompare(r.id);
+      if (!mounted) return;
+      setState(() {
+        _proposal = p;
+        _notice = p.notice;
+        _noticeError = false;
+      });
+      final ids = {
+        for (final s in p.items.values)
+          if (s.conceptId != null) s.conceptId!
+      };
+      for (final id in ids) {
+        unawaited(_loadTarget(id));
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _notice = '비교 제안을 받지 못했습니다: $e';
+          _noticeError = true;
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _proposing = false);
+    }
+  }
+
+  void _applySuggestion(ReviewItem it, ConceptCompareSuggestion s) {
+    if (!s.applicable) return;
+    final label = _targets[s.conceptId]?.statement(s.statementId)?.label;
+    _update(it.key, (x) => x.copyWith(relation: s.relation(statementLabel: label)));
+    setState(() => _proposal = _proposal?.without(it.key));
+    if (s.conceptId != null) unawaited(_loadTarget(s.conceptId!));
+  }
+
+  void _dismissSuggestion(ReviewItem it) => setState(() => _proposal = _proposal?.without(it.key));
 
   void _setRelationKind(ReviewItem it, ReviewRelationKind? kind) {
     if (kind == null) {
@@ -195,6 +309,7 @@ class _ConceptDraftReviewDialogState extends State<ConceptDraftReviewDialog> {
       ),
     );
     if (kind.needsTarget && !keep) unawaited(_pickRelationTarget(it, kind));
+    if (keep) unawaited(_loadTarget(prev!.conceptId!));
   }
 
   void _decideType(String name, bool accept) {
@@ -298,10 +413,13 @@ class _ConceptDraftReviewDialogState extends State<ConceptDraftReviewDialog> {
       for (final p in reviewFolderPaths(kept))
         if (p.length >= 2 && !keys.contains(p.join('\u0000'))) p.join(' > '),
     ];
-    final pages = <int>{for (final it in kept) ...r.sourcePagesFor(it)};
+    final pages = <int>{
+      for (final it in kept)
+        if (!it.held) ...r.sourcePagesFor(it)
+    };
     final noSource = [
       for (final it in kept)
-        if (r.sourcePagesFor(it).isEmpty) it.title.trim()
+        if (!it.held && r.sourcePagesFor(it).isEmpty) it.title.trim()
     ];
     final addedTypes = [
       for (final t in _newTypes)
@@ -310,26 +428,57 @@ class _ConceptDraftReviewDialogState extends State<ConceptDraftReviewDialog> {
     setState(() => _busy = true);
     final named = await _lookupNames(kept);
     final ready = kept.any((it) => it.relation != null) ? await _svc.relationsReady() : true;
+    final compareReady = needsCompareMigration(kept) ? await _svc.compareReady() : true;
+    final revising = {
+      for (final it in kept)
+        if (it.relation?.kind == ReviewRelationKind.revise && it.relation?.conceptId != null) it.relation!.conceptId!
+    };
+    List<ConceptCompareTarget>? revised;
+    if (ready && compareReady && revising.isNotEmpty) {
+      try {
+        revised = await _svc.compareTargets(revising.toList());
+      } catch (_) {
+        revised = null;
+      }
+    }
     if (!mounted) return;
+    final blockedRevise = [
+      for (final t in revised ?? const <ConceptCompareTarget>[])
+        if (t.contentDraft) t.name
+    ];
     setState(() {
       _busy = false;
       if (named != null) _sameNamed = named;
+      for (final t in revised ?? const <ConceptCompareTarget>[]) {
+        _targets[t.id] = t;
+      }
       if (!ready) {
         _notice = kConceptRelationsNotReady;
         _noticeError = true;
+      } else if (!compareReady) {
+        _notice = kConceptCompareNotReady;
+        _noticeError = true;
+      } else if (blockedRevise.isNotEmpty) {
+        _notice = '수정안으로 둔 기존 개념에 이미 저장된 수정안이 있습니다: ${blockedRevise.join(', ')}. '
+            '그 개념 창에서 기존 수정안을 먼저 확정하거나 버린 뒤 확정하세요(덮어쓰지 않습니다).';
+        _noticeError = true;
       }
     });
-    if (!ready) return;
+    if (!ready || !compareReady || blockedRevise.isNotEmpty) return;
     final relations = reviewRelationSummary(r, _items, libraryNames: named?.keys.toSet());
     final relationText = reviewRelationSentence(relations);
     final statements = relations.count(ReviewRelationKind.statement);
+    final attached = kept.where((it) => it.noNewConcept).length;
     final ok = await confirmThink(
       context,
       title: '라이브러리에 넣을까요?',
       message: [
-        statements == 0
+        attached == 0
             ? '개념 ${kept.length}개를 넣습니다(뺀 것 ${_items.length - kept.length}개).'
-            : '새 개념 ${kept.length - statements}개를 넣고 기존 개념에 서술 $statements개를 더합니다(뺀 것 ${_items.length - kept.length}개).',
+            : attached == statements
+                ? '새 개념 ${kept.length - statements}개를 넣고 기존 개념에 서술 $statements개를 더합니다(뺀 것 ${_items.length - kept.length}개).'
+                : '새 개념 ${kept.length - attached}개를 넣고, $attached개는 새 개념 없이 기존 개념에 붙이거나 보류합니다'
+                    '(뺀 것 ${_items.length - kept.length}개).',
         fresh.isEmpty ? '새로 만드는 폴더는 없습니다.' : '새로 만드는 폴더 ${fresh.length}개:\n${fresh.map((p) => '· $p').join('\n')}',
         if (addedTypes.isNotEmpty) '유형 목록에 더하는 새 유형 ${addedTypes.length}개:\n${addedTypes.join('\n')}',
         '출처: ${r.bookName} ${r.gradeLabel} ${pages.length}개 쪽(근거 블록의 쪽).',
@@ -813,7 +962,7 @@ class _ConceptDraftReviewDialogState extends State<ConceptDraftReviewDialog> {
   }
 
   Widget _folderTree(ConceptDraftRecord r) {
-    final kept = _items.where((it) => it.kept && !it.asStatement).toList();
+    final kept = _items.where((it) => it.kept && !it.noNewConcept).toList();
     final paths = reviewFolderPaths(kept);
     if (paths.isEmpty) return const ConceptHint('아직 폴더를 정한 개념이 없습니다.');
     final keys = _libraryKeys;
@@ -928,7 +1077,7 @@ class _ConceptDraftReviewDialogState extends State<ConceptDraftReviewDialog> {
                   const SizedBox(width: 8),
                   Tooltip(message: 'AI가 붙인 유형', child: ThinkBadge('AI: ${c.typeName}', color: kThinkHint)),
                 ],
-                if (!it.asStatement) ...[
+                if (!it.noNewConcept) ...[
                   const SizedBox(width: 8),
                   _typePicker(it, enabled: open && !dropped),
                 ],
@@ -997,7 +1146,7 @@ class _ConceptDraftReviewDialogState extends State<ConceptDraftReviewDialog> {
                 ),
               ),
               _relationRow(it, enabled: open),
-              if (!it.asStatement) ...[
+              if (!it.noNewConcept) ...[
                 Row(
                   children: [
                     const Icon(Icons.folder_outlined, size: 16, color: kThinkSub),
@@ -1091,6 +1240,13 @@ class _ConceptDraftReviewDialogState extends State<ConceptDraftReviewDialog> {
       ReviewRelationKind.newConcept => same.isNotEmpty ? '같은 이름이 있어도 "검토 필요" 표시 없이 따로 새 개념으로 넣습니다.' : null,
       ReviewRelationKind.statement =>
         '새 개념을 만들지 않고 "$target"에 확정 전 서술로 더합니다. 출처 쪽은 그 서술에 이어지고, 기존 확정 내용·본문은 그대로입니다. 유형·폴더·붙일 개념은 쓰지 않습니다.',
+      ReviewRelationKind.source =>
+        '새 개념·글 없이 이 교재 쪽을 "$target"의 ${rel!.statementId == null ? '기본 서술' : '고른 서술'} 출처로만 잇습니다. '
+            '이 항목의 글은 넣지 않고, 근거 범위는 미확인으로 들어갑니다. 유형·폴더·붙일 개념은 쓰지 않습니다.',
+      ReviewRelationKind.revise =>
+        '이 항목 글을 "$target"의 기본 서술 수정안으로 저장하고 출처를 기본 서술에 잇습니다. 본문은 바뀌지 않고, 그 개념 창에서 이유를 적어 확정해야 바뀝니다. '
+            '이미 수정안이 있으면 확정이 막힙니다.',
+      ReviewRelationKind.hold => '이번 확정에 넣지 않고 "보류한 항목"에 남깁니다. 개념 초안 목록의 "보류한 항목"에서 다시 검토하거나 버립니다.',
       ReviewRelationKind.extendsOf => '$title을(를) 새 개념으로 넣고 "$target"을(를) 넓힌 개념으로 기록합니다.',
       ReviewRelationKind.specialCase => '$title을(를) 새 개념으로 넣고 "$target"의 특수한 경우로 기록합니다.',
       ReviewRelationKind.review => rel!.conceptId == null
@@ -1147,7 +1303,223 @@ class _ConceptDraftReviewDialogState extends State<ConceptDraftReviewDialog> {
             ),
           if (rel != null && rel.missingTarget)
             Text('${rel.kind.label}(으)로 두려면 기존 개념을 고르세요.', style: const TextStyle(color: kThinkError, fontSize: 13)),
+          if (rel != null && rel.kind == ReviewRelationKind.source && rel.conceptId != null)
+            _sourceStatementRow(it, rel, enabled: enabled),
           if (hint != null) ConceptHint(hint),
+          if (rel?.conceptId != null && rel!.kind.takesTarget) _compareToggle(it, rel),
+          if (_proposal?.items[it.key] case final s? when !s.sameAs(rel)) _suggestionBox(it, s, enabled: enabled),
+        ],
+      ),
+    );
+  }
+
+  /// 출처만 연결: 고른 개념의 어느 서술에 이을지(기본 서술 또는 다른 서술 하나).
+  Widget _sourceStatementRow(ReviewItem it, ReviewRelation rel, {required bool enabled}) {
+    final w = _wkey(it);
+    final t = _targets[rel.conceptId];
+    if (t == null) {
+      final error = _targetErrors[rel.conceptId];
+      if (error == null && !_targetsLoading.contains(rel.conceptId)) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) unawaited(_loadTarget(rel.conceptId!));
+        });
+      }
+      return Padding(
+        padding: const EdgeInsets.only(left: 22, top: 2),
+        child: ConceptHint(error ?? '이을 서술을 읽는 중입니다…'),
+      );
+    }
+    final missing = rel.statementId != null && t.statement(rel.statementId) == null;
+    return Padding(
+      padding: const EdgeInsets.only(left: 22),
+      child: Row(
+        children: [
+          const Text('이을 서술', style: TextStyle(color: kThinkSub, fontSize: 13)),
+          const SizedBox(width: 8),
+          Flexible(
+            child: DropdownButton<String>(
+              key: ValueKey('draft-relation-statement-$w'),
+              value: missing ? '!' : (rel.statementId ?? ''),
+              isExpanded: true,
+              dropdownColor: kThinkBg,
+              underline: const SizedBox.shrink(),
+              style: const TextStyle(color: kThinkText, fontSize: 13),
+              items: [
+                const DropdownMenuItem(value: '', child: Text('기본 서술')),
+                for (final s in t.statements) DropdownMenuItem(value: s.id, child: Text('다른 서술: ${s.label}')),
+                if (missing)
+                  DropdownMenuItem(
+                    value: '!',
+                    child:
+                        Text('${rel.statementLabel ?? '고른 서술'} (지금은 없음)', style: const TextStyle(color: kThinkError)),
+                  ),
+              ],
+              onChanged: enabled ? (v) => _setSourceStatement(it, v == null || v.isEmpty || v == '!' ? null : v) : null,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _compareToggle(ReviewItem it, ReviewRelation rel) {
+    final w = _wkey(it);
+    final open = _comparing.contains(it.key);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            key: ValueKey('draft-compare-toggle-$w'),
+            onPressed: () {
+              setState(() => open ? _comparing.remove(it.key) : _comparing.add(it.key));
+              if (!open) unawaited(_loadTarget(rel.conceptId!));
+            },
+            icon: Icon(open ? Icons.compare_arrows : Icons.compare_arrows_outlined, size: 16),
+            label: Text(open ? '비교 닫기' : '"${rel.conceptName ?? '고른 개념'}"과(와) 비교'),
+            style: TextButton.styleFrom(foregroundColor: kThinkLink),
+          ),
+        ),
+        if (open) _comparePanel(it, rel),
+      ],
+    );
+  }
+
+  /// 고른 기존 개념의 지금 모습(읽기 전용). 이 항목 글은 카드 위쪽에 있다.
+  Widget _comparePanel(ReviewItem it, ReviewRelation rel) {
+    final w = _wkey(it);
+    final t = _targets[rel.conceptId];
+    final error = _targetErrors[rel.conceptId];
+    Widget body;
+    if (t == null) {
+      body = error != null
+          ? Row(
+              children: [
+                Expanded(child: Text(error, style: const TextStyle(color: kThinkError, fontSize: 13))),
+                TextButton(
+                  onPressed: () => unawaited(_loadTarget(rel.conceptId!, force: true)),
+                  child: const Text('다시 읽기'),
+                ),
+              ],
+            )
+          : const ConceptHint('기존 개념을 읽는 중입니다…');
+    } else {
+      const label = TextStyle(color: kThinkSub, fontSize: 12, fontWeight: FontWeight.w700);
+      body = Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Wrap(
+            spacing: 6,
+            runSpacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Text(t.name, style: const TextStyle(color: kThinkText, fontSize: 14, fontWeight: FontWeight.w700)),
+              if (t.folder.isNotEmpty) ConceptHint(t.folder.join(' > ')),
+              ThinkBadge('출처 ${t.sources}줄${t.books.isEmpty ? '' : ' · ${t.books.join(', ')}'}', color: kThinkSub),
+              if (t.contentDraft) const ThinkBadge('수정안 있음', color: kThinkAccent),
+            ],
+          ),
+          const SizedBox(height: 8),
+          const Text('기본 서술(지금 본문)', style: label),
+          const SizedBox(height: 4),
+          t.content.trim().isEmpty
+              ? const ConceptHint('(비어 있음)')
+              : LatexTextRenderer(
+                  t.content,
+                  dollarMath: true,
+                  style: const TextStyle(color: kThinkText, fontSize: 13, height: 1.6),
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  blockVerticalPadding: 4,
+                ),
+          for (final s in t.statements) ...[
+            const SizedBox(height: 8),
+            Text('다른 서술${s.confirmed ? '' : '(확정 전)'}', style: label),
+            const SizedBox(height: 4),
+            LatexTextRenderer(
+              s.text,
+              dollarMath: true,
+              style: const TextStyle(color: kThinkText, fontSize: 13, height: 1.6),
+              crossAxisAlignment: CrossAxisAlignment.start,
+              blockVerticalPadding: 4,
+            ),
+          ],
+          if (rel.kind == ReviewRelationKind.revise && t.contentDraft) ...[
+            const SizedBox(height: 8),
+            const ThinkNotice(
+              text: '이 개념에는 이미 저장된 수정안이 있어 지금은 "대표 서술 수정안"으로 확정할 수 없습니다. '
+                  '그 개념 창에서 기존 수정안을 먼저 확정하거나 버리세요.',
+              color: kThinkError,
+              icon: Icons.block,
+            ),
+          ],
+          const SizedBox(height: 6),
+          const ConceptHint('비교만 보여 줍니다. 같은 개념인지, 어느 설명이 옳은지는 정하지 않습니다.'),
+        ],
+      );
+    }
+    return Container(
+      key: ValueKey('draft-compare-panel-$w'),
+      margin: const EdgeInsets.only(top: 2, bottom: 6),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: kThinkBg,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: kThinkBorder),
+      ),
+      child: body,
+    );
+  }
+
+  /// AI 비교 제안 한 줄. 반영하면 이 항목의 관계(저장 전)가 바뀐다.
+  Widget _suggestionBox(ReviewItem it, ConceptCompareSuggestion s, {required bool enabled}) {
+    final w = _wkey(it);
+    final st = s.statementId == null ? null : _targets[s.conceptId]?.statement(s.statementId);
+    final what = [
+      s.kind.label,
+      if (s.conceptName != null) '"${s.conceptName}"',
+      if (s.kind == ReviewRelationKind.source) s.statementId == null ? '기본 서술' : '다른 서술 ${st?.label ?? ''}'.trim(),
+    ].join(' · ');
+    return Container(
+      key: ValueKey('draft-compare-suggest-$w'),
+      margin: const EdgeInsets.only(top: 4, bottom: 6),
+      padding: const EdgeInsets.fromLTRB(10, 8, 6, 6),
+      decoration: BoxDecoration(
+        color: kThinkAccent.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: kThinkAccent.withValues(alpha: 0.4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.auto_awesome_outlined, size: 16, color: kThinkAccent),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text('AI 비교 제안: $what',
+                    style: const TextStyle(color: kThinkText, fontSize: 13, fontWeight: FontWeight.w700)),
+              ),
+              TextButton(
+                key: ValueKey('draft-compare-apply-$w'),
+                onPressed: enabled && s.applicable ? () => _applySuggestion(it, s) : null,
+                style: TextButton.styleFrom(foregroundColor: kThinkLink),
+                child: const Text('반영'),
+              ),
+              TextButton(
+                key: ValueKey('draft-compare-dismiss-$w'),
+                onPressed: enabled ? () => _dismissSuggestion(it) : null,
+                style: TextButton.styleFrom(foregroundColor: kThinkSub),
+                child: const Text('무시'),
+              ),
+            ],
+          ),
+          if (s.reason.isNotEmpty) ConceptHint('이유: ${s.reason}'),
+          if (s.differences.isNotEmpty) ConceptHint('다른 점: ${s.differences}'),
+          if (!s.applicable)
+            const Text('그 개념에 이미 수정안이 있어 반영하지 않습니다. 기존 수정안을 먼저 정리하세요.',
+                style: TextStyle(color: kThinkError, fontSize: 13)),
+          const ConceptHint('반영하면 이 항목의 관계만 바뀝니다(저장 전). 확정은 직접 합니다.'),
         ],
       ),
     );
@@ -1167,9 +1539,9 @@ class _ConceptDraftReviewDialogState extends State<ConceptDraftReviewDialog> {
     final target = reviewAnchorTarget(_items, it);
     final options = [
       for (final o in _items)
-        if (o.kept && o.key != it.key && !o.asStatement) o
+        if (o.kept && o.key != it.key && !o.noNewConcept) o
     ];
-    final toStatement = target != null && target.asStatement;
+    final toStatement = target != null && target.noNewConcept;
     final dangling = it.anchor != null && target == null;
     final otherFolder = target != null && target.folder.join('\u0000') != it.folder.join('\u0000');
     final value = it.anchor == null ? '' : (options.any((o) => o.key == it.anchor) ? it.anchor! : '!${it.anchor}');
@@ -1214,7 +1586,7 @@ class _ConceptDraftReviewDialogState extends State<ConceptDraftReviewDialog> {
                             target == null
                                 ? '${it.anchor} (빠진 항목)'
                                 : toStatement
-                                    ? '${it.anchor} (다른 서술로 붙임)'
+                                    ? '${it.anchor} (${target.relation!.kind.label})'
                                     : '${it.anchor} (${target.key}에 합침)',
                             style: TextStyle(color: target == null || toStatement ? kThinkError : kThinkText)),
                       ),
@@ -1233,7 +1605,8 @@ class _ConceptDraftReviewDialogState extends State<ConceptDraftReviewDialog> {
           if (target != null && target.key != it.anchor && !toStatement)
             ConceptHint('${it.anchor}을(를) ${target.key}에 합쳐서 ${target.key}에 붙입니다.'),
           if (dangling) ConceptHint('붙일 개념(${it.anchor})을 빼서 확정할 때 잇지 않습니다.'),
-          if (toStatement) ConceptHint('붙일 개념(${target.key})을 기존 개념의 다른 서술로 붙여 확정할 때 잇지 않습니다.'),
+          if (toStatement)
+            ConceptHint('붙일 개념(${target.key})을 "${target.relation!.kind.label}"(으)로 두어 새 개념이 아니라서 확정할 때 잇지 않습니다.'),
           if (otherFolder && !toStatement) const ConceptHint('붙일 개념과 폴더가 달라 확정할 때 잇지 않습니다(같은 폴더끼리만 묶음).'),
         ],
       ),
@@ -1503,6 +1876,22 @@ class _ConceptDraftReviewDialogState extends State<ConceptDraftReviewDialog> {
                   onPressed: _busy ? null : () => unawaited(_discard()),
                   style: TextButton.styleFrom(foregroundColor: kThinkError),
                   child: const Text('초안 버리기'),
+                ),
+                const SizedBox(width: 8),
+                Tooltip(
+                  message: '저장된 검토 항목마다 같은 이름·겹침·고른 기존 개념과 비교해 넣는 방법을 제안받습니다. 반영은 줄마다 직접 합니다.',
+                  child: OutlinedButton.icon(
+                    key: const ValueKey('draft-compare-propose'),
+                    onPressed: _busy || _proposing ? null : () => unawaited(_proposeCompare()),
+                    style: thinkOutlineButton(),
+                    icon: _proposing
+                        ? const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: kThinkAccent))
+                        : const Icon(Icons.compare_arrows, size: 16),
+                    label: Text(_proposing ? '비교하는 중' : '기존 개념과 비교 제안'),
+                  ),
                 ),
                 const SizedBox(width: 8),
                 OutlinedButton.icon(

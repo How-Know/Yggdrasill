@@ -259,6 +259,13 @@ TocAutofillSeriesRules tocAutofillRulesFor(String seriesKey) {
       trailingMidRowName: '대단원 TEST',
     );
   }
+  if (seriesKey.trim().toLowerCase() == 'gojaengi_high') {
+    return TocAutofillSeriesRules(
+      categoryLabels: kGojaengiCategoryLabels,
+      unitEndRowName: '',
+      isUnitEndName: (_) => false,
+    );
+  }
   if (seriesKey.trim().toLowerCase() == 'suryeok') {
     return TocAutofillSeriesRules(
       categoryLabels: kSuryeokCategoryLabels,
@@ -688,7 +695,16 @@ const Map<String, List<List<String>>> kProblemBookSectionParts =
     <String>['C', 'top_type'],
     <String>['D', 'creative_type'],
   ],
+  'gojaengi_high': <List<String>>[
+    <String>['A', 'core_type'],
+    <String>['B', 'advanced_type'],
+    <String>['C', 'top_type'],
+  ],
 };
+
+/// 파트 분류기가 책 끝 정답 지면에 붙이는 section 코드. 게이트웨이
+/// SECTION_SERIES_CONFIG 의 trailingAppendix.code 와 같아야 한다.
+const String kProblemBookAnswerKeySection = 'answer_key';
 
 /// 쎈/RPM/고쟁이 중단원 본문을 경량 분류해 파트별 페이지 입력 범위를 채운다.
 ///
@@ -716,8 +732,8 @@ Future<ProblemBookPartAutofillReport> autofillProblemBookPartRanges(
     // 워크북 훑기가 채우므로 여기서 미완료로 세면 안 된다.
     if (trailingRowName.isNotEmpty && mid.name == trailingRowName) continue;
     final start = mid.startPage;
-    final end = mid.endPage;
-    if (start == null || end == null || end < start) {
+    final rawEnd = mid.endPage;
+    if (start == null || rawEnd == null || rawEnd < start) {
       incomplete.add('${mid.name}(본문 범위 없음)');
       continue;
     }
@@ -725,13 +741,28 @@ Future<ProblemBookPartAutofillReport> autofillProblemBookPartRanges(
       '파트 경계 분석 중... (${midIndex + 1}/${mids.length}) ${mid.name}',
     );
     final classified = <TextbookRpmSectionPage>[];
-    final allPages = <int>[for (var page = start; page <= end; page += 1) page];
+    final allPages = <int>[
+      for (var page = start; page <= rawEnd; page += 1) page,
+    ];
     final safeBatchSize = batchSize.clamp(1, 24);
     for (var offset = 0; offset < allPages.length; offset += safeBatchSize) {
       final hi = (offset + safeBatchSize).clamp(0, allPages.length);
       classified.addAll(await classify(allPages.sublist(offset, hi)));
     }
     classified.sort((a, b) => a.rawPage.compareTo(b.rawPage));
+
+    // 목차에 부록 경계가 없는 교재(고쟁이 고등)는 마지막 중단원 범위가 PDF
+    // 끝까지 열려 책 끝 "빠른 정답" 지면이 섞인다. 분류기가 그 지면을
+    // 짚어 주면 첫 정답 지면 앞에서 본문을 끊는다.
+    var end = rawEnd;
+    for (final page in classified) {
+      if (page.section != kProblemBookAnswerKeySection) continue;
+      if (page.rawPage > start) {
+        end = page.rawPage - 1;
+        mid.endPage = end;
+      }
+      break;
+    }
 
     // 정확한 상단 머리말 플래그를 우선하고, 모델이 머리말 글자를 놓쳤을 때만
     // 단조로운 section 판정을 보조 신호로 사용한다.

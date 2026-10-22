@@ -23,7 +23,13 @@ import {
 
 const ANSWER_TRANSIENT_STATUSES = new Set([429, 499, 500, 502, 503, 504]);
 // 한 지면에 블록이 여러 개 쌓이고 블록마다 번호가 1번부터 다시 시작하는 교재.
-const ANSWER_DENSE_SERIES = new Set(['gaeyu', 'suryeok', 'gojaengi']);
+// 고쟁이 고등은 블록이 갈리지 않지만 한 지면에 4열 격자로 150문항 넘게 실린다.
+const ANSWER_DENSE_SERIES = new Set([
+  'gaeyu',
+  'suryeok',
+  'gojaengi',
+  'gojaengi_high',
+]);
 const ANSWER_DEFAULT_MAX_RETRIES = 3;
 
 function sleep(ms) {

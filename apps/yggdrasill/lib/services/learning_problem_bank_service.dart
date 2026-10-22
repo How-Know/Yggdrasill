@@ -3433,6 +3433,28 @@ class LearningProblemBankService {
     return out;
   }
 
+  /// 과제 정답 PNG 미리 굽기 요청. 게이트웨이는 대상만 예약하고 바로 답하며,
+  /// 닿지 못해도 게이트웨이의 주기 스캔이 같은 과제를 다시 찾는다.
+  Future<void> requestHomeworkAnswerPrebake({
+    required String academyId,
+    required Iterable<String> homeworkItemIds,
+  }) async {
+    final safeAcademyId = academyId.trim();
+    final ids = homeworkItemIds
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (!hasGateway || safeAcademyId.isEmpty || ids.isEmpty) return;
+    await _gatewayPost(
+      '/answers/render-assets/prebake-homework',
+      body: <String, dynamic>{
+        'academyId': safeAcademyId,
+        'homeworkItemIds': ids,
+      },
+    ).timeout(const Duration(seconds: 8));
+  }
+
   Future<Map<String, LearningProblemAnswerRender>>
       loadUnifiedAnswerRenderAssets({
     required String academyId,

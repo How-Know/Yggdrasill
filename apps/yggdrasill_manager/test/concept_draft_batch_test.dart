@@ -146,6 +146,7 @@ class _FakeService extends ConceptDraftService {
     required List<int> pages,
     List<String> criterionIds = const [],
     ConceptDraftWait? onWait,
+    ConceptDraftRestart? onRestart,
   }) async {
     calls.add('create:${unitPath.last}');
     _maybeFail('create:${unitPath.last}');

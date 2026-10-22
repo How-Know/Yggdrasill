@@ -7,6 +7,7 @@ import '../models/homework_learning_track.dart';
 import 'data_manager.dart';
 import 'tenant_service.dart';
 import 'homework_assignment_store.dart';
+import 'homework_answer_prebake_service.dart';
 import 'learning_problem_bank_service.dart';
 import 'season_roadmap_service.dart';
 import 'attendance_service.dart';
@@ -400,6 +401,21 @@ class HomeworkStore {
       <String, DateTime>{};
   static const Duration _localWriteSettle = Duration(milliseconds: 700);
   static const Duration _localWriteMaxDefer = Duration(seconds: 20);
+
+  /// 서버 저장이 끝나기 전의 새 하위과제/그룹. 그 사이 끝난 재조회가 서버
+  /// 목록(아직 저장 전)으로 덮어써도 카드가 사라지지 않게 다시 붙인다.
+  /// 저장이 끝난 뒤에 시작된 재조회가 오면 그 결과를 사실로 보고 놓아준다.
+  final Map<String, Map<String, _PendingItemCreate>>
+      _pendingItemCreatesByStudentId = {};
+  final Map<String, Map<String, _PendingGroupCreate>>
+      _pendingGroupCreatesByStudentId = {};
+  static const Duration _pendingCreateMaxAge = Duration(minutes: 5);
+  static const List<Duration> _createRetryDelays = <Duration>[
+    Duration(seconds: 1),
+    Duration(seconds: 3),
+    Duration(seconds: 8),
+  ];
+  static const Duration _createRetryBudget = Duration(seconds: 45);
   Timer? _rtFallbackPollTimer;
   DateTime? _rtPollCursorUtc;
   String? _rtPollAcademyId;
@@ -434,6 +450,8 @@ class HomeworkStore {
     _rtReloadPendingStudentIds.clear();
     _localWriteDepthByStudentId.clear();
     _localWriteStartedAtByStudentId.clear();
+    _pendingItemCreatesByStudentId.clear();
+    _pendingGroupCreatesByStudentId.clear();
     _rtPollCursorUtc = null;
     _rtPollAcademyId = null;
     _rtPollInFlight = false;
@@ -1678,12 +1696,224 @@ class HomeworkStore {
     return resolvedOrder;
   }
 
+  bool _hasPendingCreates(String studentId) =>
+      (_pendingItemCreatesByStudentId[studentId]?.isNotEmpty ?? false) ||
+      (_pendingGroupCreatesByStudentId[studentId]?.isNotEmpty ?? false);
+
+  /// [reloadStartedAt]에 시작한 조회가 이 생성 결과를 아직 반영하지 못했을 수
+  /// 있는지. 저장이 끝나기 전에 시작한 조회는 오래된 서버 상태다.
+  bool _pendingCreateUnconfirmed(
+    DateTime registeredAt,
+    DateTime? settledAt,
+    DateTime reloadStartedAt,
+  ) {
+    if (DateTime.now().difference(registeredAt) > _pendingCreateMaxAge) {
+      return false;
+    }
+    if (settledAt == null) return true;
+    return reloadStartedAt.isBefore(settledAt);
+  }
+
+  void _registerPendingItemCreate({
+    required String studentId,
+    required String groupId,
+    required HomeworkItem item,
+  }) {
+    HomeworkGroupItem? link;
+    for (final candidate
+        in _groupItemsByGroupId[groupId] ?? const <HomeworkGroupItem>[]) {
+      if (candidate.homeworkItemId == item.id) {
+        link = candidate;
+        break;
+      }
+    }
+    _pendingItemCreatesByStudentId.putIfAbsent(
+      studentId,
+      () => <String, _PendingItemCreate>{},
+    )[item.id] = _PendingItemCreate(
+      item: item,
+      link: link,
+      registeredAt: DateTime.now(),
+    );
+  }
+
+  void _registerPendingGroupCreate(HomeworkGroup group) {
+    _pendingGroupCreatesByStudentId.putIfAbsent(
+      group.studentId,
+      () => <String, _PendingGroupCreate>{},
+    )[group.id] = _PendingGroupCreate(
+      group: group,
+      registeredAt: DateTime.now(),
+    );
+  }
+
+  void _settlePendingItemCreate(String studentId, String itemId) {
+    _pendingItemCreatesByStudentId[studentId]?[itemId]?.settledAt =
+        DateTime.now();
+  }
+
+  void _settlePendingGroupCreate(String studentId, String groupId) {
+    _pendingGroupCreatesByStudentId[studentId]?[groupId]?.settledAt =
+        DateTime.now();
+  }
+
+  void _forgetPendingItemCreates(String studentId, Iterable<String> itemIds) {
+    final pending = _pendingItemCreatesByStudentId[studentId];
+    if (pending == null) return;
+    for (final id in itemIds) {
+      pending.remove(id);
+    }
+    if (pending.isEmpty) _pendingItemCreatesByStudentId.remove(studentId);
+  }
+
+  /// 서버에 저장되지 않은 것으로 확인된 새 하위과제를 로컬에서만 지운다.
+  void _dropLocalCreatedItem(String studentId, String itemId) {
+    _byStudentId[studentId]?.removeWhere((e) => e.id == itemId);
+    final gid = _groupIdByItemId.remove(itemId);
+    if (gid != null) {
+      _groupItemsByGroupId[gid]?.removeWhere((l) => l.homeworkItemId == itemId);
+    }
+    _forgetPendingItemCreates(studentId, <String>[itemId]);
+  }
+
+  /// 재조회가 덮어쓴 학생 목록에 아직 확인되지 않은 새 하위과제를 다시 붙인다.
+  void _restorePendingItemCreates(String studentId, DateTime reloadStartedAt) {
+    final pending = _pendingItemCreatesByStudentId[studentId];
+    if (pending == null || pending.isEmpty) return;
+    final list = _byStudentId.putIfAbsent(studentId, () => <HomeworkItem>[]);
+    var added = false;
+    pending.removeWhere((id, entry) {
+      if (!_pendingCreateUnconfirmed(
+        entry.registeredAt,
+        entry.settledAt,
+        reloadStartedAt,
+      )) {
+        return true;
+      }
+      if (!list.any((e) => e.id == id)) {
+        list.add(entry.item);
+        added = true;
+      }
+      return false;
+    });
+    if (pending.isEmpty) _pendingItemCreatesByStudentId.remove(studentId);
+    if (added) _sortStudentList(list);
+  }
+
+  /// 그룹 캐시를 서버 기준으로 다시 만든 뒤, 아직 확인되지 않은 새 그룹과
+  /// 하위과제 연결을 다시 붙인다. 임시(legacy) 그룹이 생기기 전에 불러야 한다.
+  void _restorePendingGroupCreates(String studentId, DateTime reloadStartedAt) {
+    final pendingGroups = _pendingGroupCreatesByStudentId[studentId];
+    if (pendingGroups != null && pendingGroups.isNotEmpty) {
+      final groups = _groupsByStudentId.putIfAbsent(
+        studentId,
+        () => <HomeworkGroup>[],
+      );
+      var added = false;
+      pendingGroups.removeWhere((id, entry) {
+        if (!_pendingCreateUnconfirmed(
+          entry.registeredAt,
+          entry.settledAt,
+          reloadStartedAt,
+        )) {
+          return true;
+        }
+        if (!groups.any((g) => g.id == id)) {
+          groups.add(entry.group);
+          added = true;
+        }
+        return false;
+      });
+      if (pendingGroups.isEmpty) {
+        _pendingGroupCreatesByStudentId.remove(studentId);
+      }
+      if (added) groups.sort(_compareGroupByOrder);
+    }
+    final pendingItems = _pendingItemCreatesByStudentId[studentId];
+    if (pendingItems == null || pendingItems.isEmpty) return;
+    final groups = _groupsByStudentId[studentId] ?? const <HomeworkGroup>[];
+    for (final entry in pendingItems.values) {
+      final link = entry.link;
+      if (link == null) continue;
+      if (!_pendingCreateUnconfirmed(
+        entry.registeredAt,
+        entry.settledAt,
+        reloadStartedAt,
+      )) {
+        continue;
+      }
+      if (_groupIdByItemId.containsKey(link.homeworkItemId)) continue;
+      if (!groups.any((g) => g.id == link.groupId)) continue;
+      final links = _groupItemsByGroupId.putIfAbsent(
+        link.groupId,
+        () => <HomeworkGroupItem>[],
+      );
+      if (!links.any((l) => l.homeworkItemId == link.homeworkItemId)) {
+        links.add(link);
+        links.sort(_compareGroupItemByOrder);
+      }
+      _groupIdByItemId[link.homeworkItemId] = link.groupId;
+    }
+  }
+
+  Set<String> get _studentIdsWithPendingCreates => <String>{
+        ..._pendingItemCreatesByStudentId.keys,
+        ..._pendingGroupCreatesByStudentId.keys,
+      };
+
+  /// 응답을 받지 못한 쓰기만 재시도한다. 권한·제약 위반 같은 DB 오류는
+  /// 다시 보내도 같은 결과라 바로 실패로 본다.
+  bool _isTransientWriteError(Object error) {
+    if (error is PostgrestException) {
+      final code = (error.code ?? '').trim();
+      return code.length == 3 && code.startsWith('5');
+    }
+    if (error is AuthException) return false;
+    return true;
+  }
+
+  /// 저장 결과를 모를 때 서버에 하위과제와 그룹 연결이 있는지 확인한다.
+  /// 연결 없이 하위과제만 남았다면 지운다. 확인 자체가 실패하면 null.
+  Future<bool?> _checkCreatedItemOnServer({
+    required String itemId,
+  }) async {
+    try {
+      final academyId = (await TenantService.instance.getActiveAcademyId()) ??
+          await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      final itemRows = await supa
+          .from('homework_items')
+          .select('id')
+          .eq('academy_id', academyId)
+          .eq('id', itemId)
+          .limit(1);
+      if ((itemRows as List).isEmpty) return false;
+      final linkRows = await supa
+          .from('homework_group_items')
+          .select('group_id')
+          .eq('academy_id', academyId)
+          .eq('homework_item_id', itemId)
+          .limit(1);
+      if ((linkRows as List).isNotEmpty) return true;
+      await supa
+          .from('homework_items')
+          .delete()
+          .eq('academy_id', academyId)
+          .eq('id', itemId);
+      return false;
+    } catch (e) {
+      debugPrint('[HW][create][verify] item=$itemId failed: $e');
+      return null;
+    }
+  }
+
   Future<void> _reloadGroups({
     required String academyId,
     String? studentId,
     bool bump = true,
     int? expectedSessionGeneration,
   }) async {
+    final reloadStartedAt = DateTime.now();
     final sid = studentId?.trim() ?? '';
     final targetStudent = sid.isEmpty ? null : sid;
     final supa = Supabase.instance.client;
@@ -1834,8 +2064,12 @@ class HomeworkStore {
       }
 
       if (targetStudent != null) {
+        _restorePendingGroupCreates(targetStudent, reloadStartedAt);
         _applyFallbackGroupsForStudent(targetStudent);
       } else {
+        for (final sid in _studentIdsWithPendingCreates) {
+          _restorePendingGroupCreates(sid, reloadStartedAt);
+        }
         for (final sid in _byStudentId.keys) {
           _applyFallbackGroupsForStudent(sid);
         }
@@ -1846,13 +2080,19 @@ class HomeworkStore {
         // ignore: avoid_print
         print('[HW][groups][ERROR] $e\n$st');
       }
+      // 조회가 실패해 서버 상태를 모르므로 보류 중인 생성은 모두 유지한다.
+      final noServerState = DateTime.fromMillisecondsSinceEpoch(0);
       if (targetStudent != null) {
         _clearGroupCacheForStudent(targetStudent);
+        _restorePendingGroupCreates(targetStudent, noServerState);
         _applyFallbackGroupsForStudent(targetStudent);
       } else {
         _groupsByStudentId.clear();
         _groupItemsByGroupId.clear();
         _groupIdByItemId.clear();
+        for (final sid in _studentIdsWithPendingCreates) {
+          _restorePendingGroupCreates(sid, noServerState);
+        }
         for (final sid in _byStudentId.keys) {
           _applyFallbackGroupsForStudent(sid);
         }
@@ -2667,6 +2907,7 @@ class HomeworkStore {
         return;
       }
       final stopwatch = Stopwatch()..start();
+      final loadStartedAt = DateTime.now();
       final supa = Supabase.instance.client;
       final fetchWatch = Stopwatch()..start();
       final data = await _fetchHomeworkRows(
@@ -2691,6 +2932,9 @@ class HomeworkStore {
       }
       for (final entry in _byStudentId.values) {
         _sortStudentList(entry);
+      }
+      for (final sid in _pendingItemCreatesByStudentId.keys.toList()) {
+        _restorePendingItemCreates(sid, loadStartedAt);
       }
       _loadedStudentIds
         ..clear()
@@ -4251,6 +4495,10 @@ class HomeworkStore {
           item: it,
         );
       }
+      HomeworkAnswerPrebakeService.instance.request(
+        academyId: academyId,
+        homeworkItemIds: [for (final it in items) it.id],
+      );
       await HomeworkAssignmentStore.instance
           .normalizeActiveAssignedOrderForNullDue(studentId);
       await HomeworkAssignmentStore.instance.loadActiveAssignments(studentId);
@@ -4322,6 +4570,7 @@ class HomeworkStore {
         .toList(growable: false);
     if (targetIds.isEmpty) return;
     final targetIdSet = targetIds.toSet();
+    _forgetPendingItemCreates(studentId, targetIds);
     list.removeWhere((e) => targetIdSet.contains(e.id));
     for (final id in targetIds) {
       final gid = _groupIdByItemId.remove(id);
@@ -6961,10 +7210,19 @@ class HomeworkStore {
     if (localOnly) {
       return item.id;
     }
+    _registerPendingItemCreate(
+      studentId: studentId,
+      groupId: cleanedGroupId,
+      item: item,
+    );
 
     Future<void> persistToServer() async {
       if (persistenceBarrier != null) {
-        await persistenceBarrier;
+        try {
+          await persistenceBarrier;
+        } catch (barrierError) {
+          throw _CreateBarrierFailed(barrierError);
+        }
       }
       final academyId = (await TenantService.instance.getActiveAcademyId()) ??
           await TenantService.instance.ensureActiveAcademy();
@@ -7063,6 +7321,11 @@ class HomeworkStore {
         studentId: studentId,
         item: item,
       );
+      HomeworkAnswerPrebakeService.instance.request(
+        academyId: academyId,
+        homeworkItemIds: <String>[item.id],
+      );
+      _settlePendingItemCreate(studentId, item.id);
       if (!deferReload) {
         await _reloadStudent(studentId);
       }
@@ -7072,6 +7335,14 @@ class HomeworkStore {
       await persistToServer();
       return item.id;
     } catch (e, st) {
+      if (e is _CreateBarrierFailed) {
+        // 그룹 저장이 실패해 이 하위과제는 서버에 보내지도 않았다.
+        print('[HW][addWaitingItemToGroup][GROUP_NOT_SAVED] ${e.cause}');
+        _dropLocalCreatedItem(studentId, item.id);
+        _bump();
+        _scheduleRealtimeReload(studentId);
+        return null;
+      }
       if (_supportsRecommendedMinutesColumns &&
           _isMissingRecommendedMinutesColumnError(e)) {
         _supportsRecommendedMinutesColumns = false;
@@ -7144,19 +7415,45 @@ class HomeworkStore {
         }
       }
       // 네트워크 timeout은 서버 commit 여부를 알 수 없다. item/group link
-      // 모두 upsert이므로 한 번 재시도해 부분 커밋을 완성한다.
-      try {
-        await Future<void>.delayed(const Duration(milliseconds: 250));
-        await persistToServer();
-        return item.id;
-      } catch (retryError, retrySt) {
-        print(
-          '[HW][addWaitingItemToGroup][RETRY_NETWORK_ERROR] '
-          '$retryError\n$retrySt',
-        );
+      // 모두 같은 id로 upsert하므로 간격을 늘려 재시도해 부분 커밋을 완성한다.
+      Object lastError = e;
+      final retryStartedAt = DateTime.now();
+      final retryDelays = <Duration>[
+        const Duration(milliseconds: 250),
+        if (_isTransientWriteError(e)) ..._createRetryDelays,
+      ];
+      for (final delay in retryDelays) {
+        if (DateTime.now().difference(retryStartedAt) > _createRetryBudget) {
+          break;
+        }
+        try {
+          await Future<void>.delayed(delay);
+          await persistToServer();
+          return item.id;
+        } catch (retryError, retrySt) {
+          lastError = retryError;
+          print(
+            '[HW][addWaitingItemToGroup][RETRY_NETWORK_ERROR] '
+            '$retryError\n$retrySt',
+          );
+          if (!_isTransientWriteError(retryError)) break;
+        }
       }
-      print('[HW][addWaitingItemToGroup][ERROR] $e\n$st');
-      await _reloadStudent(studentId);
+      print('[HW][addWaitingItemToGroup][ERROR] $lastError\n$st');
+      // 실패로 단정하기 전에 서버에 실제로 저장됐는지 확인한다.
+      final onServer = await _checkCreatedItemOnServer(itemId: item.id);
+      if (onServer == true) {
+        _settlePendingItemCreate(studentId, item.id);
+        return item.id;
+      }
+      if (onServer == false) {
+        _dropLocalCreatedItem(studentId, item.id);
+        _bump();
+      } else {
+        // 확인도 못 했으면 카드는 두고, 다음 서버 조회 결과를 따른다.
+        _settlePendingItemCreate(studentId, item.id);
+      }
+      _scheduleRealtimeReload(studentId);
       return null;
     }
   }
@@ -7330,6 +7627,7 @@ class HomeworkStore {
 
     final suppressRealtimeReload = !reserveAssignments;
     if (suppressRealtimeReload) {
+      _registerPendingGroupCreate(group);
       _beginLocalWrite(studentId);
     }
     try {
@@ -7354,10 +7652,35 @@ class HomeworkStore {
           }, onConflict: 'id');
         }
 
-        groupPersistence = persistGroup().catchError((Object _) async {
-          await Future<void>.delayed(const Duration(milliseconds: 250));
-          await persistGroup();
-        });
+        groupPersistence = () async {
+          try {
+            await persistGroup();
+            return;
+          } catch (firstError) {
+            Object lastError = firstError;
+            final retryStartedAt = DateTime.now();
+            final retryDelays = <Duration>[
+              const Duration(milliseconds: 250),
+              if (_isTransientWriteError(firstError)) ..._createRetryDelays,
+            ];
+            for (final delay in retryDelays) {
+              if (DateTime.now().difference(retryStartedAt) >
+                  _createRetryBudget) {
+                break;
+              }
+              await Future<void>.delayed(delay);
+              try {
+                await persistGroup();
+                return;
+              } catch (retryError) {
+                lastError = retryError;
+                if (!_isTransientWriteError(retryError)) break;
+              }
+            }
+            print('[HW][createGroupWithWaitingItems][GROUP_ERROR] $lastError');
+            throw lastError;
+          }
+        }();
       }
 
       final createFutures = <Future<String?>>[];
@@ -7427,10 +7750,19 @@ class HomeworkStore {
           createdIds.add(createdId);
         }
       }
+      if (!reserveAssignments) {
+        _settlePendingGroupCreate(studentId, groupId);
+        if (createdIds.length < normalized.length) {
+          _scheduleRealtimeReload(studentId);
+        }
+      }
 
+      // 저장 도중 끝난 재조회가 로컬 목록을 바꿨어도 성공 판정이 흔들리지 않게
+      // 보류 목록의 객체도 함께 본다.
       final createdBeforeReload = <HomeworkItem>[];
       for (final id in createdIds) {
-        final item = getById(studentId, id);
+        final item = getById(studentId, id) ??
+            _pendingItemCreatesByStudentId[studentId]?[id]?.item;
         if (item != null) createdBeforeReload.add(item);
       }
 
@@ -7480,6 +7812,7 @@ class HomeworkStore {
       return createdBeforeReload;
     } catch (e, st) {
       print('[HW][createGroupWithWaitingItems][ERROR] $e\n$st');
+      _settlePendingGroupCreate(studentId, groupId);
       await _reloadStudent(studentId);
       return const <HomeworkItem>[];
     } finally {
@@ -7547,6 +7880,7 @@ class HomeworkStore {
     bool persistSnapshot = true,
   }) async {
     final stopwatch = Stopwatch()..start();
+    final reloadStartedAt = DateTime.now();
     late int reloadGeneration;
     try {
       final String academyId =
@@ -7634,6 +7968,7 @@ class HomeworkStore {
       if (_reloadGenerationByStudentId[studentId] != reloadGeneration) return;
       _sortStudentList(list);
       _byStudentId[studentId] = list;
+      _restorePendingItemCreates(studentId, reloadStartedAt);
       _historyByStudentId[studentId]?.removeWhere(
         (item) => list.any((live) => live.id == item.id),
       );
@@ -7656,21 +7991,26 @@ class HomeworkStore {
         expectedSessionGeneration: sessionGeneration,
       );
       if (reconcileServerState) {
-        await _unifyGroupAssignmentCodes(
-          academyId: academyId,
-          studentId: studentId,
-        );
-        final reconciledGroups = await _reconcileDuplicateAssignmentCodeGroups(
-          academyId: academyId,
-          studentId: studentId,
-        );
-        if (reconciledGroups) {
-          await _reloadGroups(
+        // 새 그룹을 저장하는 중이면 서버가 아직 일부만 저장된 상태라, 과제코드
+        // 정리가 그 중간 상태를 중복으로 보고 고칠 수 있다. 다음 조회로 미룬다.
+        if (!_hasPendingCreates(studentId)) {
+          await _unifyGroupAssignmentCodes(
             academyId: academyId,
             studentId: studentId,
-            bump: false,
-            expectedSessionGeneration: sessionGeneration,
           );
+          final reconciledGroups =
+              await _reconcileDuplicateAssignmentCodeGroups(
+            academyId: academyId,
+            studentId: studentId,
+          );
+          if (reconciledGroups) {
+            await _reloadGroups(
+              academyId: academyId,
+              studentId: studentId,
+              bump: false,
+              expectedSessionGeneration: sessionGeneration,
+            );
+          }
         }
         _syncRecoveredAssignmentCodesToServer(
           studentId: studentId,
@@ -8318,6 +8658,41 @@ class HomeworkStore {
       return false;
     }
   }
+}
+
+class _PendingItemCreate {
+  _PendingItemCreate({
+    required this.item,
+    required this.link,
+    required this.registeredAt,
+  });
+
+  final HomeworkItem item;
+  final HomeworkGroupItem? link;
+  final DateTime registeredAt;
+
+  /// 서버 저장이 끝났거나(성공·결과 불명) 판단을 넘긴 시각. 이후 시작된 조회가 사실이다.
+  DateTime? settledAt;
+}
+
+class _PendingGroupCreate {
+  _PendingGroupCreate({
+    required this.group,
+    required this.registeredAt,
+  });
+
+  final HomeworkGroup group;
+  final DateTime registeredAt;
+  DateTime? settledAt;
+}
+
+class _CreateBarrierFailed implements Exception {
+  _CreateBarrierFailed(this.cause);
+
+  final Object cause;
+
+  @override
+  String toString() => '_CreateBarrierFailed($cause)';
 }
 
 class _ItemTransitionSnapshot {

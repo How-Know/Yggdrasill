@@ -1,3 +1,6 @@
+import 'dart:convert';
+
+import 'package:crypto/crypto.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 /// 개념의 여러 서술·교육과정 등장 위치·개념 본문 고친 기록.
@@ -278,16 +281,76 @@ class ConceptAppearance {
 
 /// 기존 개념 본문을 고치기 전 값.
 class ConceptContentRevision {
-  const ConceptContentRevision({required this.name, required this.content, this.changedAt});
+  const ConceptContentRevision({
+    required this.name,
+    required this.content,
+    this.changedAt,
+    this.viaDraft = false,
+    this.note,
+    this.draftOrigin,
+  });
 
   final String name;
   final String content;
   final DateTime? changedAt;
 
+  /// 수정안을 확정해 바뀐 것. false면 수정안 없이 바로 고친 것(이유 없음).
+  final bool viaDraft;
+  final String? note;
+  final String? draftOrigin;
+
   factory ConceptContentRevision.fromRow(Map<String, dynamic> r) => ConceptContentRevision(
         name: r['name'] as String? ?? '',
         content: r['content'] as String? ?? '',
         changedAt: DateTime.tryParse(r['changed_at']?.toString() ?? '')?.toLocal(),
+        viaDraft: r['via'] == 'draft',
+        note: r['note'] as String?,
+        draftOrigin: r['draft_origin'] as String?,
+      );
+}
+
+/// 서버 md5(text)와 같은 값(UTF-8).
+String conceptContentMd5(String text) => md5.convert(utf8.encode(text)).toString();
+
+/// 기본 서술(개념 본문) 수정안. 개념마다 하나이고, 확정해야 본문이 된다.
+class ConceptContentDraft {
+  const ConceptContentDraft({
+    required this.conceptId,
+    required this.content,
+    required this.baseMd5,
+    this.note,
+    this.origin = 'owner',
+    this.savedAtRaw,
+  });
+
+  final String conceptId;
+  final String content;
+
+  /// 수정안을 쓸 때 본 본문의 md5.
+  final String baseMd5;
+
+  /// 왜 고치려는지.
+  final String? note;
+
+  /// 'owner'(운영자가 씀) · 'ai'(운영자가 승인한 AI 제안).
+  final String origin;
+
+  /// 서버가 준 문자열 그대로(마이크로초까지). RPC 기대값으로 되돌려 보낸다.
+  final String? savedAtRaw;
+
+  DateTime? get savedAt => DateTime.tryParse(savedAtRaw ?? '')?.toLocal();
+  String get originLabel => origin == 'ai' ? 'AI 제안(운영자 승인)' : '운영자 작성';
+
+  /// 이 본문을 보고 쓴 수정안인지. 아니면 그 뒤 본문이 바뀐 것이다.
+  bool basedOn(String content) => conceptContentMd5(content) == baseMd5;
+
+  factory ConceptContentDraft.fromRow(Map<String, dynamic> r) => ConceptContentDraft(
+        conceptId: r['concept_id'] as String,
+        content: r['content'] as String? ?? '',
+        baseMd5: r['base_md5'] as String? ?? '',
+        note: r['note'] as String?,
+        origin: r['origin'] as String? ?? 'owner',
+        savedAtRaw: r['saved_at']?.toString(),
       );
 }
 
@@ -319,7 +382,21 @@ class ConceptStatementException implements Exception {
     'concept_statement_other_concept': '다른 개념의 서술에는 이을 수 없습니다.',
     'concept_statement_not_statement': '개념 공통 내용에는 출처·등장 위치를 잇지 않습니다. 서술을 골라 주세요.',
     'concept_statement_source_not_found': '이 출처를 찾을 수 없습니다(빠졌을 수 있습니다).',
+    'concept_content_stale': '그사이 기본 서술(개념 본문)이 바뀌었습니다. 최신 본문을 다시 읽었으니 비교한 뒤 다시 저장해 주세요(입력한 수정안은 남아 있습니다).',
+    'concept_content_draft_stale': '그사이 이 수정안이 바뀌었습니다. 최신 수정안을 다시 읽었습니다(입력한 내용은 남아 있습니다).',
+    'concept_content_base_changed': '수정안을 쓴 뒤 기본 서술이 바뀌어 확정하지 않았습니다. 지금 본문과 비교해 수정안을 다시 저장한 뒤 확정하세요.',
+    'concept_content_concept_not_found': '이 개념을 찾을 수 없습니다(지워졌을 수 있습니다).',
+    'concept_content_required': '수정안 본문을 입력하세요.',
+    'concept_content_too_long': '글이 너무 깁니다(본문 40,000자, 이유 2,000자).',
+    'concept_content_no_draft': '저장된 수정안이 없습니다.',
+    'concept_content_note_required': '왜 고치는지 이유를 적어야 확정합니다.',
   };
+
+  /// 그사이 본문·수정안이 바뀌어 다시 읽어야 하는 경우.
+  bool get contentStale =>
+      code == 'concept_content_stale' ||
+      code == 'concept_content_draft_stale' ||
+      code == 'concept_content_base_changed';
 
   static ConceptStatementException from(Object e, {String? duplicate, String? denied}) {
     if (e is ConceptStatementException) return e;
@@ -382,6 +459,23 @@ abstract class ConceptStatementBackend {
 
   /// 기존 개념 본문을 고치기 전 값. 최근 것부터.
   Future<List<ConceptContentRevision>> contentRevisions(String conceptId);
+
+  /// 기본 서술 수정안. 없으면 null.
+  Future<ConceptContentDraft?> contentDraft(String conceptId);
+
+  /// [base]는 화면에 보였던 본문, [current]는 화면에 보였던 수정안(없었으면 null).
+  /// 본문과 같은 글이면 수정안이 지워지고 null을 돌려준다.
+  Future<ConceptContentDraft?> saveContentDraft({
+    required String conceptId,
+    required String content,
+    String? note,
+    required String base,
+    ConceptContentDraft? current,
+  });
+
+  /// 확정한 뒤의 본문을 돌려준다.
+  Future<String> confirmContentDraft(ConceptContentDraft draft, {required String note});
+  Future<void> discardContentDraft(ConceptContentDraft draft);
 }
 
 class SupabaseConceptStatementBackend implements ConceptStatementBackend {
@@ -472,7 +566,9 @@ class SupabaseConceptStatementBackend implements ConceptStatementBackend {
 
   @override
   Future<void> setSourceStatement({required String sourceId, String? statementId}) => _guard(
-      () => _db.rpc('concept_source_set_statement', params: {'p_source_id': sourceId, 'p_statement_id': statementId}));
+        () => _db.rpc('concept_source_set_statement', params: {'p_source_id': sourceId, 'p_statement_id': statementId}),
+        duplicate: '이 쪽은 이미 그 서술의 출처로 이어져 있습니다. 같은 서술에 같은 쪽을 두 번 잇지 않습니다.',
+      );
 
   @override
   Future<List<ConceptAppearance>> appearancesFor(String conceptId) => _guard(() async {
@@ -516,12 +612,66 @@ class SupabaseConceptStatementBackend implements ConceptStatementBackend {
   Future<void> removeAppearance(String id) => _guard(() => _db.from('concept_appearances').delete().eq('id', id));
 
   @override
-  Future<List<ConceptContentRevision>> contentRevisions(String conceptId) => _guard(() async {
-        final rows = await _db
-            .from('concept_content_revisions')
-            .select('name,content,changed_at')
+  Future<List<ConceptContentRevision>> contentRevisions(String conceptId) async {
+    Future<List<ConceptContentRevision>> read(String columns) => _guard(() async {
+          final rows = await _db
+              .from('concept_content_revisions')
+              .select(columns)
+              .eq('concept_id', conceptId)
+              .order('changed_at', ascending: false);
+          return (rows as List)
+              .map((r) => ConceptContentRevision.fromRow(Map<String, dynamic>.from(r as Map)))
+              .toList();
+        });
+    try {
+      return await read('name,content,changed_at,via,note,draft_origin');
+    } on ConceptStatementException catch (e) {
+      // 수정안 마이그레이션 전에는 이유 열이 없다.
+      if (!e.notReady) rethrow;
+      return read('name,content,changed_at');
+    }
+  }
+
+  @override
+  Future<ConceptContentDraft?> contentDraft(String conceptId) => _guard(() async {
+        final row = await _db
+            .from('concept_content_drafts')
+            .select('concept_id,content,base_md5,note,origin,saved_at')
             .eq('concept_id', conceptId)
-            .order('changed_at', ascending: false);
-        return (rows as List).map((r) => ConceptContentRevision.fromRow(Map<String, dynamic>.from(r as Map))).toList();
+            .maybeSingle();
+        return row == null ? null : ConceptContentDraft.fromRow(Map<String, dynamic>.from(row));
       });
+
+  @override
+  Future<ConceptContentDraft?> saveContentDraft({
+    required String conceptId,
+    required String content,
+    String? note,
+    required String base,
+    ConceptContentDraft? current,
+  }) =>
+      _guard(() async {
+        final data = Map<String, dynamic>.from(await _db.rpc('concept_content_save_draft', params: {
+          'p_concept_id': conceptId,
+          'p_content': content,
+          'p_note': note,
+          'p_base_md5': conceptContentMd5(base),
+          'p_expected_saved_at': current?.savedAtRaw,
+        }) as Map);
+        return data['removed'] == true ? null : ConceptContentDraft.fromRow(data);
+      });
+
+  @override
+  Future<String> confirmContentDraft(ConceptContentDraft draft, {required String note}) => _guard(() async {
+        final data = Map<String, dynamic>.from(await _db.rpc('concept_content_confirm', params: {
+          'p_concept_id': draft.conceptId,
+          'p_expected_saved_at': draft.savedAtRaw,
+          'p_note': note,
+        }) as Map);
+        return data['content'] as String? ?? draft.content;
+      });
+
+  @override
+  Future<void> discardContentDraft(ConceptContentDraft draft) => _guard(() => _db.rpc('concept_content_discard_draft',
+      params: {'p_concept_id': draft.conceptId, 'p_expected_saved_at': draft.savedAtRaw}));
 }

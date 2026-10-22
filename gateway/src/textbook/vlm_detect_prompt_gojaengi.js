@@ -27,8 +27,21 @@ export const GOJAENGI_LABELS = Object.freeze([
   '서술형+상',
 ]);
 
+// 고쟁이 고등 라벨 집합. 문항 번호 오른쪽에 붙는 출제 안내 배지다. 별표와
+// 대표 문제 배지는 고등판에 없다. 둘 이상 붙으면 이 순서로 "+" 로 잇는다
+// (예: "선생님 Pick+교육청변형"). 정규화는 vlm_detect_client 가 맡는다.
+export const GOJAENGI_HIGH_LABEL_PARTS = Object.freeze([
+  '빈출',
+  '서술형',
+  '선생님 Pick',
+  '평가원기출',
+  '평가원변형',
+  '교육청기출',
+  '교육청변형',
+]);
+
 // 고쟁이 슬롯(sub_key) → 탐지 섹션 매핑. 매니저앱 _sectionForSubKey 와
-// 동일하게 유지할 것.
+// 동일하게 유지할 것. 고등은 A~C 만 쓴다.
 export const GOJAENGI_SECTION_BY_SUB_KEY = Object.freeze({
   A: 'core_type',
   B: 'advanced_type',
@@ -134,21 +147,99 @@ const GOJAENGI_SECTION_GUIDES = Object.freeze({
   },
 });
 
+// 고쟁이 고등 단계별 지면 규칙. 중등과 단계 이름은 같지만 유형 머리말이 세
+// 단계 모두 "유형 NN" 한 종류이고, 대표 문제·별표·창의융합·워크북이 없다.
+const GOJAENGI_HIGH_SECTION_GUIDES = Object.freeze({
+  core_type: {
+    title: 'A STEP1 핵심 유형',
+    header: '"STEP 1 교과서를 정복하는 핵심 유형" (초록 머리말)',
+    numberColor: '진한 초록색',
+    lines: [
+      '유형 머리말은 초록 배지 "유형" + 두 자리 번호 + 유형명 한 종류다.',
+      '→ content_group.label="유형 02", title="다항식의 곱셈과 곱셈 공식"',
+      '머리말 아래 설명 문장과 보라 "유형 해결 TIP" 상자는 문항이 아니다.',
+    ],
+  },
+  advanced_type: {
+    title: 'B STEP2 심화 유형',
+    header: '"STEP 2 내신 실전문제 체화를 위한 심화 유형" (빨간 머리말)',
+    numberColor: '진한 빨간색',
+    lines: [
+      '유형 머리말은 빨간 배지 "유형" + 두 자리 번호 + 유형명 한 종류다.',
+      'STEP1 과 같은 유형 번호(유형 01~)가 다시 나온다.',
+      '"스키마 schema로 풀이 흐름 알아보기" 지면은 대표 문항 하나와 "1 단계",',
+      '"조건", "답" 단계별 해설만 있다. 이 지면은 STEP2 중간이나 끝에 끼어 있다.',
+      '세 자리 문항 번호가 하나도 없으면 page_kind="concept_page", items=[] 다.',
+      '스키마의 "1 단계", "조건 ①", "답" 같은 표기는 문항 번호가 아니다.',
+    ],
+  },
+  top_type: {
+    title: 'C STEP3 최고난도 유형',
+    header: '"STEP 3 내신 최상위권 굳히기를 위한 최고난도 유형" (남색 머리말)',
+    numberColor: '남색(진한 파랑)',
+    lines: [
+      '이 단계에는 유형 머리말이 **아예 없다**. 모든 문항의 content_group 은',
+      'kind="none", label="", title="", order=null 로 둔다.',
+    ],
+  },
+});
+
+const GOJAENGI_STRUCTURE_LINES = Object.freeze({
+  middle: [
+    '고쟁이(문제집)의 한 중단원은 네 단계로 이어지고, 그 뒤에 워크북 시험이 붙는다.',
+    '  A STEP1 핵심 유형 → B STEP2 심화 유형 → C STEP3 최고난도 유형 → D 창의융합 유형',
+    '  E 워크북 중단원 TEST · F 워크북 대단원 TEST',
+    '중단원 첫 지면은 문항이 없는 개념 정리다.',
+    '단계 머리말("Step ❶ … 핵심 유형")은 단계가 시작하는 지면뿐 아니라 펼침면',
+    '왼쪽 지면마다 반복 인쇄된다. 머리말이 보인다고 새 단계가 시작한 것은 아니다.',
+  ],
+  high: [
+    '고쟁이 고등(문제집)의 한 중단원은 세 단계로 이어진다. 워크북·창의융합은 없다.',
+    '  A STEP1 핵심 유형 → B STEP2 심화 유형 → C STEP3 최고난도 유형',
+    '중단원 첫 지면은 "이전 학습 내용 / 현재 학습 내용" 개념 정리이고 문항이 없다.',
+    '단계 머리말("STEP 1 … 핵심 유형")은 단계가 시작하는 지면뿐 아니라 펼침면',
+    '왼쪽 지면마다 반복 인쇄된다. 머리말이 보인다고 새 단계가 시작한 것은 아니다.',
+    '책 끝 "빠른 정답" 지면의 번호·답 격자는 문항이 아니다(concept_page).',
+  ],
+});
+
+const GOJAENGI_HIGH_LABEL_LINES = Object.freeze([
+  '  - "빈출"       — 번호 오른쪽의 주황 "빈출" 글자와 왕관 아이콘',
+  '  - "서술형"     — 번호 오른쪽의 파란 "서술형" 글자와 연필 아이콘',
+  '  - "선생님 Pick" — 초록 기울임 "선생님 Pick!" 글자',
+  '  - "평가원기출" / "평가원변형" / "교육청기출" / "교육청변형"',
+  '                 — "평가원"·"교육청" 과 "기출"·"변형" 이 붙은 작은 사각 배지',
+  '  - 둘 이상 붙으면 위 순서대로 "+" 로 잇는다. 예: "빈출+서술형",',
+  '    "선생님 Pick+교육청변형".',
+  '  - 라벨이 없으면 "" (빈 문자열). 별표·난이도 표기는 이 책에 없다.',
+  '  - 지면 오른쪽 끝의 "| 선행 025 |", "| 선행 022, 023 |" 은 같은 책의 더 쉬운',
+  '    문항을 가리키는 안내다. 문항 번호도 라벨도 아니다. items 에 넣지 말고',
+  '    label 에도 넣지 마라.',
+  '  - "유형", "Step" 은 유형/단계 배지이지 문항 라벨이 아니다.',
+]);
+
 export function buildGojaengiDetectPrompt({
   displayPage,
   rawPage,
   sectionHint = '',
+  level = 'middle',
 }) {
+  const high = level === 'high';
   const hint = String(sectionHint || '').trim();
-  const guide = GOJAENGI_SECTION_GUIDES[hint];
-  const isWorkbook = isGojaengiWorkbookHint(hint);
+  const guide = (high ? GOJAENGI_HIGH_SECTION_GUIDES : GOJAENGI_SECTION_GUIDES)[
+    hint
+  ];
+  const isWorkbook = !high && isGojaengiWorkbookHint(hint);
+  const bookName = high ? '고쟁이 고등' : '고쟁이';
   const pageLine =
     displayPage != null && Number.isFinite(displayPage)
-      ? `이 이미지는 교재(고쟁이) 스캔본의 ${displayPage}페이지이다. 이 값은 PDF raw page ${rawPage}와 동일한 입력 페이지 기준이다.`
-      : `이 이미지는 교재(고쟁이) 스캔본의 한 페이지 (PDF raw page ${rawPage}) 이다.`;
+      ? `이 이미지는 교재(${bookName}) 스캔본의 ${displayPage}페이지이다. 이 값은 PDF raw page ${rawPage}와 동일한 입력 페이지 기준이다.`
+      : `이 이미지는 교재(${bookName}) 스캔본의 한 페이지 (PDF raw page ${rawPage}) 이다.`;
   const numberRule = isWorkbook
     ? '두 자리 숫자이고 이 묶음 안에서 01 부터 다시 시작한다.'
-    : '세 자리 숫자이고 책 전체를 관통해 이어진다("054", "119", "634").';
+    : high
+      ? '세 자리 숫자이고 책 전체를 관통해 이어진다("001", "083", "767").'
+      : '세 자리 숫자이고 책 전체를 관통해 이어진다("054", "119", "634").';
 
   return [
     '당신은 한국 중·고등 교재 스캔본에서 "문항 번호" 의 위치를 탐지하는 비전 AI 입니다.',
@@ -157,18 +248,15 @@ export function buildGojaengiDetectPrompt({
     pageLine,
     '',
     '=== 책 구조 (매우 중요) ===',
-    '고쟁이(문제집)의 한 중단원은 네 단계로 이어지고, 그 뒤에 워크북 시험이 붙는다.',
-    '  A STEP1 핵심 유형 → B STEP2 심화 유형 → C STEP3 최고난도 유형 → D 창의융합 유형',
-    '  E 워크북 중단원 TEST · F 워크북 대단원 TEST',
-    '중단원 첫 지면은 문항이 없는 개념 정리다.',
-    '단계 머리말("Step ❶ … 핵심 유형")은 단계가 시작하는 지면뿐 아니라 펼침면',
-    '왼쪽 지면마다 반복 인쇄된다. 머리말이 보인다고 새 단계가 시작한 것은 아니다.',
+    ...GOJAENGI_STRUCTURE_LINES[high ? 'high' : 'middle'],
     '',
     '=== 문항 번호 규칙 ===',
     `번호는 ${numberRule}`,
     '앞자리 0 을 포함해 지면에 인쇄된 대로 적어라 ("054" 는 "54" 가 아니다).',
     '단계가 바뀌어도 번호 색만 바뀌고 번호는 이어진다. 색으로 문항을 걸러 내지 마라.',
-    '유형 배지의 두 자리 번호("핵심 03", "유형 02")는 문항 번호가 아니다.',
+    high
+      ? '유형 배지의 두 자리 번호("유형 02")는 문항 번호가 아니다.'
+      : '유형 배지의 두 자리 번호("핵심 03", "유형 02")는 문항 번호가 아니다.',
     'content_group.label 에만 넣고 item 으로 만들지 마라.',
     displayPage != null && Number.isFinite(displayPage)
       ? `이 지면의 쪽번호는 ${displayPage} 하나뿐이다. 지면 아래 모서리에 혼자 있는 그 숫자만 쪽번호다.`
@@ -199,8 +287,9 @@ export function buildGojaengiDetectPrompt({
         ]),
     '=== 출력 스키마 ===',
     '{',
-    '  "section": "core_type" | "advanced_type" | "top_type" | "creative_type"',
-    '             | "mid_unit_test" | "big_unit_test" | "unknown",',
+    high
+      ? '  "section": "core_type" | "advanced_type" | "top_type" | "unknown",'
+      : '  "section": "core_type" | "advanced_type" | "top_type" | "creative_type"\n             | "mid_unit_test" | "big_unit_test" | "unknown",',
     '  "page_kind": "problem_page" | "concept_page" | "mixed" | "unknown",',
     '  "page_layout": "two_column" | "one_column" | "unknown",',
     '  "items": [',
@@ -211,7 +300,9 @@ export function buildGojaengiDetectPrompt({
     '      "set_range": {"from": <int>, "to": <int>} | null,',
     '      "content_group": {',
     '        "kind": "type" | "none",',
-    '        "label": "<예: \\"핵심 03\\", \\"발전 06\\", \\"유형 02\\", \\"창의융합 1\\". 없으면 \\"\\">",',
+    high
+      ? '        "label": "<예: \\"유형 02\\". 없으면 \\"\\">",'
+      : '        "label": "<예: \\"핵심 03\\", \\"발전 06\\", \\"유형 02\\", \\"창의융합 1\\". 없으면 \\"\\">",',
     '        "title": "<유형명 한 줄. 없으면 \\"\\">",',
     '        "order": <int> | null',
     '      },',
@@ -224,19 +315,25 @@ export function buildGojaengiDetectPrompt({
     '}',
     '',
     '=== 라벨 집합 ===',
-    ...GOJAENGI_LABELS.map((label) => `  - "${label}"`),
-    '  - 위 라벨 중 어느 것도 아니거나 라벨이 아예 없으면 "" (빈 문자열)',
-    '  - 별표(*)와 다른 배지가 함께 보이면 "상+스키마", "서술형+상" 처럼 이어 붙인다.',
-    '  - "대표 문제" 는 유형의 첫 문항에 붙는 둥근 테두리 배지다. 별표와 같이',
-    '    나오는 일은 없다.',
-    '  - "핵심", "발전", "유형", "창의융합", "Step" 은 유형/단계 배지이지 문항',
-    '    라벨이 아니다. label 에 넣지 마라.',
+    ...(high
+      ? GOJAENGI_HIGH_LABEL_LINES
+      : [
+          ...GOJAENGI_LABELS.map((label) => `  - "${label}"`),
+          '  - 위 라벨 중 어느 것도 아니거나 라벨이 아예 없으면 "" (빈 문자열)',
+          '  - 별표(*)와 다른 배지가 함께 보이면 "상+스키마", "서술형+상" 처럼 이어 붙인다.',
+          '  - "대표 문제" 는 유형의 첫 문항에 붙는 둥근 테두리 배지다. 별표와 같이',
+          '    나오는 일은 없다.',
+          '  - "핵심", "발전", "유형", "창의융합", "Step" 은 유형/단계 배지이지 문항',
+          '    라벨이 아니다. label 에 넣지 마라.',
+        ]),
     '',
     '=== 탐지 규칙 ===',
     '[G1] 지면에 보이는 문항 번호를 하나도 빼지 말고 모두 items 에 담아라.',
     '[G2] 문항이 하나도 없고 개념 정리나 스키마 해설만 있는 지면은',
     '     page_kind="concept_page", items=[] 로 두고 notes 에 "concept_page" 를 포함한다.',
-    '     본문 단에 세 자리(워크북은 두 자리) 문항 번호가 하나라도 보이면',
+    high
+      ? '     본문 단에 세 자리 문항 번호가 하나라도 보이면'
+      : '     본문 단에 세 자리(워크북은 두 자리) 문항 번호가 하나라도 보이면',
     '     concept_page 로 두지 마라. 스키마와 문항이 같이 있으면 "mixed" 다.',
     '     notes 에 "concept_page" 를 쓰는 것은 items=[] 일 때만이다.',
     '     개념 카드 제목 앞 숫자, 스키마 단계 번호, 조건 번호를 문항으로 만들지 마라.',
@@ -251,9 +348,18 @@ export function buildGojaengiDetectPrompt({
     '     이 박스가 그대로 크롭 이미지로 잘려 저장되므로 본문이 아닌 것은 넣지 마라.',
     '     **포함**: 지문, 조건 상자, 그림·표·그래프, 선택지(①~⑤), 소문항 "(1) (2)".',
     '     **제외**: 문항 번호와 별표 자체(bbox 에만 담는다), 유형 머리말 상자,',
-    '       단계 머리말, 쪽번호, 오른쪽 위 "정답과 풀이 011쪽" 안내,',
-    '       지면 오른쪽 모서리의 소단원 번호 탭, 지면 아래 "수학의 바이블 개념ON"',
-    '       같은 다른 교재 안내 띠, 이웃 문항의 내용.',
+    high
+      ? '       단계 머리말, 쪽번호, 오른쪽 위 "정답과 풀이 p.2" 안내,'
+      : '       단계 머리말, 쪽번호, 오른쪽 위 "정답과 풀이 011쪽" 안내,',
+    ...(high
+      ? [
+          '       지면 오른쪽 끝의 "| 선행 025 |" 안내 띠, 지면 아래 다른 교재 안내 띠,',
+          '       이웃 문항의 내용.',
+        ]
+      : [
+          '       지면 오른쪽 모서리의 소단원 번호 탭, 지면 아래 "수학의 바이블 개념ON"',
+          '       같은 다른 교재 안내 띠, 이웃 문항의 내용.',
+        ]),
     '     **경계**: 고쟁이는 번호가 위, 본문이 아래로 이어지는 세로 스타일이다.',
     '       ymin 은 번호(와 별표) 아래 끝 직후로 두고, xmin/xmax 는 본문이 차지하는',
     '       단의 좌우 끝으로 둔다. 본문 오른쪽에 딸린 그림이 단 밖으로 나가면',

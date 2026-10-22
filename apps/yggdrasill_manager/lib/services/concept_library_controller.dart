@@ -8,6 +8,7 @@ import 'concept_library_service.dart';
 import 'concept_relation_service.dart';
 import 'concept_relation_store.dart';
 import 'concept_service.dart';
+import 'concept_source_evidence.dart';
 import 'concept_statement_service.dart';
 import 'concept_statement_store.dart';
 import 'think/think_concept_chat_controller.dart';
@@ -114,34 +115,48 @@ class CriterionEdit {
 /// 개념 탭 작업 공간의 상태. 메뉴를 옮겨 다녀도(화면이 다시 만들어져도) 고르던 항목과 저장 안 한 입력이 남는다.
 /// 확대·축소(초점 바꾸기)는 상태만 바꾸고 저장·확정·AI 요청을 하지 않는다.
 class ConceptLibraryController extends ChangeNotifier {
-  ConceptLibraryController._(this._backendFactory, this._chatFactory, this.statements, this.relations);
+  ConceptLibraryController._(
+    this._backendFactory,
+    this._chatFactory,
+    this.statements,
+    this.relations,
+    this._evidenceFactory,
+  );
 
   static final ConceptLibraryController instance = ConceptLibraryController._(
     () => SupabaseConceptLibraryBackend(Supabase.instance.client),
     () => ConceptChatController.instance,
     ConceptStatementStore(() => SupabaseConceptStatementBackend(Supabase.instance.client)),
     ConceptRelationStore(() => SupabaseConceptRelationBackend(Supabase.instance.client)),
+    () => SupabaseConceptEvidenceBackend(Supabase.instance.client),
   );
 
   /// 시험은 `ConceptChatController.forTest()`를 함께 넘긴다. 서술·관계 저장소를 안 주면 그 칸은 "읽는 중"에 머문다.
+  /// 근거 저장소를 안 주면 출처 창은 "근거 범위 저장소가 아직 없음"으로 보인다.
   @visibleForTesting
   factory ConceptLibraryController.forTest(
     ConceptLibraryBackend backend, {
     required ConceptChatController chat,
     ConceptStatementBackend? statementBackend,
     ConceptRelationBackend? relationBackend,
+    ConceptEvidenceBackend? evidenceBackend,
   }) =>
       ConceptLibraryController._(
         () => backend,
         () => chat,
         ConceptStatementStore(() => statementBackend ?? _NeverStatementBackend()),
         ConceptRelationStore(() => relationBackend ?? _NeverRelationBackend()),
+        () => evidenceBackend ?? const ConceptEvidenceUnavailable(),
       )
         .._started = true
         .._attachChat();
 
   final ConceptLibraryBackend Function() _backendFactory;
   final ConceptChatController Function() _chatFactory;
+  final ConceptEvidenceBackend Function() _evidenceFactory;
+
+  /// 출처 근거 범위·근거 블록(`concept-library.md` §4.3). 출처 창마다 [ConceptEvidenceController]를 새로 만든다.
+  ConceptEvidenceController evidenceFor(String conceptId) => ConceptEvidenceController(_evidenceFactory(), conceptId);
 
   /// 개념의 여러 서술·등장 위치(`concept-library.md` §4.2).
   final ConceptStatementStore statements;

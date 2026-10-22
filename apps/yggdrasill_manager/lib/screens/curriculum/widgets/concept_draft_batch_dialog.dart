@@ -215,6 +215,7 @@ class _ConceptDraftBatchDialogState extends State<ConceptDraftBatchDialog> {
                 onProgress: (s, d, t) => say(t > 0 ? '$s ($d/$t)' : s),
               ));
       say(conceptDraftWaitText('개념 초안을 정리하는 중', null));
+      var step = '개념 초안을 정리하는 중';
       draftId = await _withRetry(
           i,
           () => _svc.createDraft(
@@ -222,7 +223,11 @@ class _ConceptDraftBatchDialogState extends State<ConceptDraftBatchDialog> {
                 unitPath: u.path,
                 pages: pages,
                 criterionIds: _criteria.toList(),
-                onWait: (e) => say(conceptDraftWaitText('개념 초안을 정리하는 중', e)),
+                onWait: (e) => say(conceptDraftWaitText(step, e)),
+                onRestart: (note) {
+                  step = '멈춘 정리를 다시 하는 중';
+                  say(note);
+                },
               ));
       _made += 1;
       _draftIds[i] = draftId;

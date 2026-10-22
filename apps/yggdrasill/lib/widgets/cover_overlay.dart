@@ -20,7 +20,8 @@ class CoverOverlayStyle {
   static double padFor(double scale) =>
       (16.0 * scale).clamp(10.0, 16.0).toDouble();
 
-  /// 같은 묶음 안 줄 사이(이름 ↔ 배지, 페이지 ↔ 배지) 간격.
+  /// 같은 묶음 안 줄 사이 간격.
+  /// 채점 과제카드의 페이지↔과제번호 배지는 여기에 2를 더한다.
   static double gapFor(double scale) =>
       (8.0 * scale).clamp(5.0, 8.0).toDouble();
 

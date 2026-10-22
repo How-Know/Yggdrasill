@@ -450,17 +450,15 @@ class StudentScreenState extends State<StudentScreen> {
                   }
                 },
                 onStudentUpdated: (studentWithInfo) async {
-                  await showDialog(
+                  await StudentRegistrationDialog.show(
                     context: context,
-                    builder: (context) => StudentRegistrationDialog(
-                      student: studentWithInfo.student,
-                      onSave: (updatedStudent, basicInfo) async {
-                        await DataManager.instance
-                            .updateStudent(updatedStudent, basicInfo);
-                        showAppSnackBar(context, '학생 정보가 수정되었습니다.');
-                      },
-                      groups: DataManager.instance.groups,
-                    ),
+                    student: studentWithInfo.student,
+                    onSave: (updatedStudent, basicInfo) async {
+                      await DataManager.instance
+                          .updateStudent(updatedStudent, basicInfo);
+                      showAppSnackBar(context, '학생 정보가 수정되었습니다.');
+                    },
+                    groups: DataManager.instance.groups,
                   );
                 },
                 activeFilter: _activeFilter,
@@ -527,19 +525,17 @@ class StudentScreenState extends State<StudentScreen> {
   // 그룹 추가는 그룹 리스트 타이틀의 + 버튼에서 처리한다.
 
   void showStudentRegistrationDialog() {
-    showDialog(
+    StudentRegistrationDialog.show(
       context: context,
-      builder: (context) => StudentRegistrationDialog(
-        onSave: (student, basicInfo) async {
-          await DataManager.instance.addStudent(student, basicInfo);
-          // 저장 직후 즉시 목록 재로딩을 한번 더 보장 (실시간/디바운스 지연 대비)
-          try {
-            await DataManager.instance.loadStudents();
-          } catch (_) {}
-          showAppSnackBar(context, '학생이 등록되었습니다.');
-        },
-        groups: DataManager.instance.groups,
-      ),
+      onSave: (student, basicInfo) async {
+        await DataManager.instance.addStudent(student, basicInfo);
+        // 저장 직후 즉시 목록 재로딩을 한번 더 보장 (실시간/디바운스 지연 대비)
+        try {
+          await DataManager.instance.loadStudents();
+        } catch (_) {}
+        showAppSnackBar(context, '학생이 등록되었습니다.');
+      },
+      groups: DataManager.instance.groups,
     );
   }
 
@@ -862,17 +858,15 @@ class StudentScreenState extends State<StudentScreen> {
               onStudentUpdated: (studentWithInfo) async {
                 _dlog('[DEBUG][StudentScreen] onStudentUpdated 호출: ' +
                     studentWithInfo.student.id);
-                await showDialog(
+                await StudentRegistrationDialog.show(
                   context: context,
-                  builder: (context) => StudentRegistrationDialog(
-                    student: studentWithInfo.student,
-                    onSave: (updatedStudent, basicInfo) async {
-                      await DataManager.instance
-                          .updateStudent(updatedStudent, basicInfo);
-                      showAppSnackBar(context, '학생 정보가 수정되었습니다.');
-                    },
-                    groups: DataManager.instance.groups,
-                  ),
+                  student: studentWithInfo.student,
+                  onSave: (updatedStudent, basicInfo) async {
+                    await DataManager.instance
+                        .updateStudent(updatedStudent, basicInfo);
+                    showAppSnackBar(context, '학생 정보가 수정되었습니다.');
+                  },
+                  groups: DataManager.instance.groups,
                 );
               },
               activeFilter: _activeFilter,

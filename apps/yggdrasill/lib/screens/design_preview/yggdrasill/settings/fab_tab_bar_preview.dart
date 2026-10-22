@@ -1855,6 +1855,7 @@ class _PreviewAcademyGlassMenuPanel extends StatefulWidget {
   final List<PreviewAcademyMenuOption> options;
   final ValueChanged<String> onOptionSelected;
   final Animation<double> animation;
+  final double maxHeight;
 
   const _PreviewAcademyGlassMenuPanel({
     required this.style,
@@ -1862,6 +1863,7 @@ class _PreviewAcademyGlassMenuPanel extends StatefulWidget {
     required this.options,
     required this.onOptionSelected,
     required this.animation,
+    required this.maxHeight,
   });
 
   @override
@@ -1910,21 +1912,26 @@ class _PreviewAcademyGlassMenuPanelState
               clipBehavior: Clip.antiAlias,
               child: ColoredBox(
                 color: glassTint,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 4),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      for (final option in widget.options)
-                        _PreviewAcademyGlassMenuItem(
-                          label: option.label,
-                          selected: option.id == widget.selectedId,
-                          hoverOverlay: hoverOverlay,
-                          style: widget.style,
-                          animation: widget.animation,
-                          onTap: () => widget.onOptionSelected(option.id),
-                        ),
-                    ],
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxHeight: widget.maxHeight),
+                  child: SingleChildScrollView(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          for (final option in widget.options)
+                            _PreviewAcademyGlassMenuItem(
+                              label: option.label,
+                              selected: option.id == widget.selectedId,
+                              hoverOverlay: hoverOverlay,
+                              style: widget.style,
+                              animation: widget.animation,
+                              onTap: () => widget.onOptionSelected(option.id),
+                            ),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -2113,7 +2120,11 @@ class PreviewAcademyDialogSheet extends StatelessWidget {
     return Material(
       type: MaterialType.transparency,
       child: Center(
-        child: ConstrainedBox(
+        child: SingleChildScrollView(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.viewInsetsOf(context).bottom,
+          ),
+          child: ConstrainedBox(
           constraints: const BoxConstraints(
             maxWidth: FabTabBarTokens.previewAcademyInputSheetMaxWidth,
             minHeight: FabTabBarTokens.previewAcademyInputSheetMinHeight,
@@ -2198,6 +2209,7 @@ class PreviewAcademyDialogSheet extends StatelessWidget {
               ),
             ),
           ),
+        ),
         ),
       ),
     );
@@ -2315,6 +2327,8 @@ class PreviewAcademyDialogFieldRow extends StatelessWidget {
   final String emptyHintText;
   final int? maxLines;
   final int? minLines;
+  final double? labelWidth;
+  final bool enabled;
 
   const PreviewAcademyDialogFieldRow({
     super.key,
@@ -2329,6 +2343,8 @@ class PreviewAcademyDialogFieldRow extends StatelessWidget {
     this.emptyHintText = '필수입력',
     this.maxLines = 1,
     this.minLines = 1,
+    this.labelWidth,
+    this.enabled = true,
   });
 
   @override
@@ -2337,6 +2353,7 @@ class PreviewAcademyDialogFieldRow extends StatelessWidget {
       style,
       isEmpty: true,
     );
+    final inputStyle = FabTabBarTokens.previewAcademyFieldInputStyle(style);
 
     return Padding(
       padding: const EdgeInsets.symmetric(
@@ -2349,7 +2366,8 @@ class PreviewAcademyDialogFieldRow extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           SizedBox(
-            width: FabTabBarTokens.previewAcademyInputSheetFieldLabelWidth,
+            width: labelWidth ??
+                FabTabBarTokens.previewAcademyInputSheetFieldLabelWidth,
             child: Text(
               label,
               style: FabTabBarTokens.previewRowLabelStyle(style),
@@ -2362,11 +2380,14 @@ class PreviewAcademyDialogFieldRow extends StatelessWidget {
             child: TextField(
               controller: controller,
               focusNode: focusNode,
+              enabled: enabled,
               keyboardType: keyboardType,
               inputFormatters: inputFormatters,
               maxLines: maxLines,
               minLines: minLines,
-              style: FabTabBarTokens.previewAcademyFieldInputStyle(style),
+              style: enabled
+                  ? inputStyle
+                  : inputStyle.copyWith(color: style.hint),
               decoration: InputDecoration(
                 isDense: true,
                 border: InputBorder.none,
@@ -2395,6 +2416,7 @@ class PreviewAcademyDialogPickerRow extends StatelessWidget {
   final GlobalKey? anchorKey;
   final VoidCallback? onTap;
   final bool valueMuted;
+  final double? labelWidth;
 
   const PreviewAcademyDialogPickerRow({
     super.key,
@@ -2404,6 +2426,7 @@ class PreviewAcademyDialogPickerRow extends StatelessWidget {
     this.anchorKey,
     this.onTap,
     this.valueMuted = false,
+    this.labelWidth,
   });
 
   @override
@@ -2424,7 +2447,8 @@ class PreviewAcademyDialogPickerRow extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           SizedBox(
-            width: FabTabBarTokens.previewAcademyInputSheetFieldLabelWidth,
+            width: labelWidth ??
+                FabTabBarTokens.previewAcademyInputSheetFieldLabelWidth,
             child: Text(
               label,
               style: FabTabBarTokens.previewRowLabelStyle(style),
@@ -3034,6 +3058,7 @@ class _PreviewAcademyGlassMenuOverlay extends StatefulWidget {
   final double left;
   final double top;
   final double menuWidth;
+  final double maxHeight;
   final PreviewAcademyPanelStyle style;
   final String selectedId;
   final List<PreviewAcademyMenuOption> options;
@@ -3043,6 +3068,7 @@ class _PreviewAcademyGlassMenuOverlay extends StatefulWidget {
     required this.left,
     required this.top,
     required this.menuWidth,
+    required this.maxHeight,
     required this.style,
     required this.selectedId,
     required this.options,
@@ -3117,6 +3143,7 @@ class _PreviewAcademyGlassMenuOverlayState
                 selectedId: widget.selectedId,
                 options: widget.options,
                 animation: _controller,
+                maxHeight: widget.maxHeight,
                 onOptionSelected: (id) => _close(id),
               ),
             ),
@@ -3147,6 +3174,8 @@ class PreviewAcademyGlassMenu {
         FabTabBarTokens.previewAcademyMenuTopOffsetFromArrow;
     final left = (anchorTopRight.dx - menuWidth)
         .clamp(8.0, screenSize.width - menuWidth - 8);
+    final maxHeight =
+        (screenSize.height - top - 12).clamp(56.0, screenSize.height);
 
     final overlay = Overlay.of(context, rootOverlay: true);
     final completer = Completer<String?>();
@@ -3162,6 +3191,7 @@ class PreviewAcademyGlassMenu {
         left: left,
         top: top,
         menuWidth: menuWidth,
+        maxHeight: maxHeight,
         style: style,
         selectedId: selectedId,
         options: options,

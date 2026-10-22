@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../../../services/concept_draft_compare.dart';
 import '../../../services/concept_draft_models.dart';
 import '../../../services/concept_draft_service.dart';
 import '../../think/think_style.dart';
@@ -34,6 +35,11 @@ class _ConceptDraftListDialogState extends State<ConceptDraftListDialog> {
   String? _error;
   bool _openOnly = true;
 
+  /// 초안 대신 보류한 항목을 보는 중.
+  bool _holdsView = false;
+  List<ConceptDraftHold>? _holds;
+  String? _holdsError;
+
   /// 한 번에 확정할 초안. 검토를 저장한 검토 중 초안만 고를 수 있다.
   final Set<String> _selected = {};
   bool _busy = false;
@@ -62,6 +68,70 @@ class _ConceptDraftListDialogState extends State<ConceptDraftListDialog> {
     } catch (e) {
       if (mounted) setState(() => _error = '초안 목록을 읽지 못했습니다: $e');
     }
+  }
+
+  Future<void> _loadHolds() async {
+    setState(() {
+      _holds = null;
+      _holdsError = null;
+    });
+    try {
+      final holds = await _svc.openHolds();
+      if (mounted) setState(() => _holds = holds);
+    } catch (e) {
+      if (mounted) setState(() => _holdsError = '보류한 항목을 읽지 못했습니다: $e');
+    }
+  }
+
+  /// 한 초안 기록의 보류 항목으로 새 검토 초안을 만들고 그 초안을 연다.
+  Future<void> _reopen(List<ConceptDraftHold> group) async {
+    final ok = await confirmThink(
+      context,
+      title: '보류한 항목을 다시 검토할까요?',
+      message: '같은 초안 기록(쪽 전사·AI 초안)으로 새 검토 초안을 만들고, 보류한 ${group.length}개 항목만 넣습니다. '
+          '관계·붙일 개념은 비워 둡니다. 새 초안을 버리면 이 항목들은 다시 보류 목록으로 돌아옵니다.',
+      confirmLabel: '다시 검토',
+    );
+    if (!ok || !mounted) return;
+    setState(() => _busy = true);
+    try {
+      final id = await _svc.reopenHolds(group.first.draftId);
+      if (mounted) Navigator.pop(context, id);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _notice = '다시 검토하지 못했습니다: $e';
+        _noticeError = true;
+      });
+      unawaited(_loadHolds());
+    }
+  }
+
+  Future<void> _drop(ConceptDraftHold h) async {
+    final note = await showDialog<String>(
+      context: context,
+      builder: (_) => _DropHoldDialog(title: h.title.trim().isEmpty ? '이 항목' : h.title.trim()),
+    );
+    if (note == null || !mounted) return;
+    setState(() => _busy = true);
+    try {
+      await _svc.dropHold(h.id, note: note.trim().isEmpty ? null : note.trim());
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _notice = '보류 항목을 버렸습니다. 초안 기록은 그대로입니다.';
+        _noticeError = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _notice = '버리지 못했습니다: $e';
+        _noticeError = true;
+      });
+    }
+    unawaited(_loadHolds());
   }
 
   /// 검토 중인 초안은 모두 고를 수 있다. 검토를 저장하지 않은 초안은 AI 초안 그대로 확정한다.
@@ -140,15 +210,28 @@ class _ConceptDraftListDialogState extends State<ConceptDraftListDialog> {
                           Text('개념 초안', style: TextStyle(color: kThinkText, fontSize: 18, fontWeight: FontWeight.w800)),
                     ),
                     ThinkToggleChip(
-                      label: '검토 중만',
-                      icon: Icons.filter_alt_outlined,
-                      selected: _openOnly,
+                      key: const ValueKey('draft-list-holds'),
+                      label: '보류한 항목',
+                      icon: Icons.pause_circle_outline,
+                      selected: _holdsView,
                       enabled: !_busy,
                       onChanged: (v) {
-                        setState(() => _openOnly = v);
-                        unawaited(_load());
+                        setState(() => _holdsView = v);
+                        if (v) unawaited(_loadHolds());
                       },
                     ),
+                    const SizedBox(width: 6),
+                    if (!_holdsView)
+                      ThinkToggleChip(
+                        label: '검토 중만',
+                        icon: Icons.filter_alt_outlined,
+                        selected: _openOnly,
+                        enabled: !_busy,
+                        onChanged: (v) {
+                          setState(() => _openOnly = v);
+                          unawaited(_load());
+                        },
+                      ),
                     IconButton(
                       tooltip: '닫기',
                       onPressed: _busy ? null : () => Navigator.pop(context),
@@ -158,41 +241,45 @@ class _ConceptDraftListDialogState extends State<ConceptDraftListDialog> {
                   ],
                 ),
               ),
-              const Padding(
-                padding: EdgeInsets.fromLTRB(20, 0, 20, 10),
-                child: ConceptHint('"개념책 불러오기"에서 소단원마다 만든 초안입니다. 검토하고 확정할 때만 라이브러리에 들어갑니다. '
-                    '앞 네모로 골라 한 번에 확정할 수 있습니다. 검토를 저장하지 않은 초안은 AI 초안 그대로 들어갑니다.'),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+                child: ConceptHint(_holdsView
+                    ? '확정할 때 "보류"로 두어 넣지 않은 항목입니다. 다시 검토하면 같은 초안 기록으로 새 검토 초안을 만들고, 버리면 목록에서 빠집니다.'
+                    : '"개념책 불러오기"에서 소단원마다 만든 초안입니다. 검토하고 확정할 때만 라이브러리에 들어갑니다. '
+                        '앞 네모로 골라 한 번에 확정할 수 있습니다. 검토를 저장하지 않은 초안은 AI 초안 그대로 들어갑니다.'),
               ),
               const Divider(color: kThinkBorder, height: 1),
               Expanded(
-                child: () {
-                  if (_error != null) {
-                    return Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          ThinkNotice(text: _error!, color: kThinkError, icon: Icons.error_outline),
-                          Align(
-                              alignment: Alignment.centerLeft,
-                              child: TextButton(onPressed: _load, child: const Text('다시 읽기'))),
-                        ],
-                      ),
-                    );
-                  }
-                  if (rows == null) return const Center(child: CircularProgressIndicator(color: kThinkAccent));
-                  if (rows.isEmpty) {
-                    return Center(child: ConceptHint(_openOnly ? '검토 중인 초안이 없습니다.' : '만든 초안이 없습니다.'));
-                  }
-                  return ListView.separated(
-                    padding: const EdgeInsets.all(12),
-                    itemCount: rows.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 6),
-                    itemBuilder: (context, i) => _row(rows[i]),
-                  );
-                }(),
+                child: _holdsView
+                    ? _holdList()
+                    : () {
+                        if (_error != null) {
+                          return Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                ThinkNotice(text: _error!, color: kThinkError, icon: Icons.error_outline),
+                                Align(
+                                    alignment: Alignment.centerLeft,
+                                    child: TextButton(onPressed: _load, child: const Text('다시 읽기'))),
+                              ],
+                            ),
+                          );
+                        }
+                        if (rows == null) return const Center(child: CircularProgressIndicator(color: kThinkAccent));
+                        if (rows.isEmpty) {
+                          return Center(child: ConceptHint(_openOnly ? '검토 중인 초안이 없습니다.' : '만든 초안이 없습니다.'));
+                        }
+                        return ListView.separated(
+                          padding: const EdgeInsets.all(12),
+                          itemCount: rows.length,
+                          separatorBuilder: (_, __) => const SizedBox(height: 6),
+                          itemBuilder: (context, i) => _row(rows[i]),
+                        );
+                      }(),
               ),
-              _footer(rows ?? const []),
+              _holdsView ? _holdFooter() : _footer(rows ?? const []),
             ],
           ),
         ),
@@ -336,4 +423,177 @@ class _ConceptDraftListDialogState extends State<ConceptDraftListDialog> {
   }
 
   String _two(int n) => n.toString().padLeft(2, '0');
+
+  Widget _holdFooter() {
+    if (_notice == null) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+      child: ThinkNotice(
+        text: _notice!,
+        color: _noticeError ? kThinkError : kThinkSuccess,
+        icon: _noticeError ? Icons.error_outline : Icons.check_circle_outline,
+        onClose: _busy ? null : () => setState(() => _notice = null),
+      ),
+    );
+  }
+
+  Widget _holdList() {
+    if (_holdsError != null) {
+      return Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            ThinkNotice(text: _holdsError!, color: kThinkError, icon: Icons.error_outline),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(onPressed: _loadHolds, child: const Text('다시 읽기')),
+            ),
+          ],
+        ),
+      );
+    }
+    final holds = _holds;
+    if (holds == null) return const Center(child: CircularProgressIndicator(color: kThinkAccent));
+    if (holds.isEmpty) return const Center(child: ConceptHint('보류한 항목이 없습니다.'));
+    final groups = groupHoldsByDraft(holds);
+    return ListView.separated(
+      padding: const EdgeInsets.all(12),
+      itemCount: groups.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 8),
+      itemBuilder: (context, i) => _holdGroup(groups[i]),
+    );
+  }
+
+  Widget _holdGroup(List<ConceptDraftHold> group) {
+    final h0 = group.first;
+    return Container(
+      key: ValueKey('hold-group-${h0.draftId}'),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: kThinkPanel,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: kThinkBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(_unitName(h0.unitPath),
+                        style: const TextStyle(color: kThinkText, fontSize: 14, fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 2),
+                    Text('${h0.bookName} · ${h0.gradeLabel} · ${h0.unitPath.join(' > ')}',
+                        style: const TextStyle(color: kThinkSub, fontSize: 12), overflow: TextOverflow.ellipsis),
+                  ],
+                ),
+              ),
+              OutlinedButton.icon(
+                key: ValueKey('hold-reopen-${h0.draftId}'),
+                onPressed: _busy ? null : () => unawaited(_reopen(group)),
+                style: thinkOutlineButton(),
+                icon: const Icon(Icons.replay, size: 16),
+                label: Text('${group.length}개 다시 검토'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          for (final h in group)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(h.title.trim().isEmpty ? '(이름 없음)' : h.title.trim(),
+                            style: const TextStyle(color: kThinkText, fontSize: 13, fontWeight: FontWeight.w600)),
+                        Text(h.content.trim().replaceAll(RegExp(r'\s+'), ' '),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: kThinkSub, fontSize: 12, height: 1.4)),
+                        if (h.reopenedBefore) const ConceptHint('다시 검토하던 초안을 버려 돌아온 항목'),
+                      ],
+                    ),
+                  ),
+                  TextButton(
+                    key: ValueKey('hold-drop-${h.id}'),
+                    onPressed: _busy ? null : () => unawaited(_drop(h)),
+                    style: TextButton.styleFrom(foregroundColor: kThinkError),
+                    child: const Text('버리기'),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 보류 항목 버리기. 이유는 선택이고 500자까지.
+class _DropHoldDialog extends StatefulWidget {
+  const _DropHoldDialog({required this.title});
+
+  final String title;
+
+  @override
+  State<_DropHoldDialog> createState() => _DropHoldDialogState();
+}
+
+class _DropHoldDialogState extends State<_DropHoldDialog> {
+  final TextEditingController _note = TextEditingController();
+
+  @override
+  void dispose() {
+    _note.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: kThinkBg,
+      shape: thinkDialogShape,
+      title: Text('"${widget.title}"을(를) 넣지 않기로 할까요?',
+          style: const TextStyle(color: kThinkText, fontWeight: FontWeight.w800)),
+      content: SizedBox(
+        width: 420,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const ConceptHint('보류 목록에서 빠집니다. 초안 기록과 라이브러리는 그대로입니다.'),
+            const SizedBox(height: 8),
+            TextField(
+              key: const ValueKey('hold-drop-note'),
+              controller: _note,
+              autofocus: true,
+              maxLength: 500,
+              style: const TextStyle(color: kThinkText),
+              decoration: thinkInputDecoration(hint: '이유(선택). 예: 다른 교재로 이미 들어감'),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('취소', style: TextStyle(color: kThinkSub)),
+        ),
+        ElevatedButton(
+          key: const ValueKey('hold-drop-confirm'),
+          onPressed: () => Navigator.pop(context, _note.text),
+          style: thinkPrimaryButton(color: kThinkError),
+          child: const Text('버리기'),
+        ),
+      ],
+    );
+  }
 }

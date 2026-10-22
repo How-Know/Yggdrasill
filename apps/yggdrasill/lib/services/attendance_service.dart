@@ -206,6 +206,21 @@ class AttendanceService {
   List<AttendanceRecord> get attendanceRecords =>
       List.unmodifiable(_attendanceRecords);
 
+  static const int _historyPastDays = 365 * 2;
+  static const int _historyFutureDays = 365;
+  static const int _startupPastDays = 14;
+  static const int _startupFutureDays = 16;
+
+  /// 기본 범위(과거 2년~미래 1년) 전체 로드가 한 번이라도 성공했는지.
+  /// 시작 직후에는 최근 구간만 메모리에 있으므로, 이력으로 회차를 계산하는
+  /// 예정 수업 생성은 이 값이 true가 된 뒤에만 실행한다.
+  final ValueNotifier<bool> attendanceHistoryReadyNotifier =
+      ValueNotifier<bool>(false);
+  bool get isAttendanceHistoryLoaded => attendanceHistoryReadyNotifier.value;
+  Future<void>? _historyLoadInFlight;
+  bool _historyLoadAgain = false;
+  int _historyGeneration = 0;
+
   final ValueNotifier<List<LessonOccurrence>> lessonOccurrencesNotifier =
       ValueNotifier<List<LessonOccurrence>>([]);
   List<LessonOccurrence> _lessonOccurrences = [];
@@ -218,6 +233,8 @@ class AttendanceService {
   final Map<String, Set<String>> _pendingRegenSetIdsByStudent = {};
 
   void reset() {
+    _historyGeneration++;
+    attendanceHistoryReadyNotifier.value = false;
     _attendanceRecords = [];
     if (_sideDebug) {
       print('[ATT][reset] attendanceRecords cleared');
@@ -240,11 +257,77 @@ class AttendanceService {
   /// 그래서 기본 로딩은 날짜 범위를 제한(rolling window)하고, 그 범위 내에서는 페이지네이션으로 모두 가져온다.
   ///
   /// - 기본 범위: 과거 2년 ~ 미래 1년 (학생 수업기록/달력 인디케이터에서 사용하는 date picker 범위와 정합)
+  /// - 기본 범위 전체 로드는 동시에 여러 번 불려도 한 번만 진행하고, 진행 중에
+  ///   들어온 요청이 있으면 끝난 뒤 한 번 더 받는다.
   Future<void> loadAttendanceRecords({
     DateTime? fromInclusive,
     DateTime? toExclusive,
-    int pastDays = 365 * 2,
-    int futureDays = 365,
+    int pastDays = _historyPastDays,
+    int futureDays = _historyFutureDays,
+    bool replaceRangeOnly = false,
+  }) async {
+    final isDefaultHistoryLoad = fromInclusive == null &&
+        toExclusive == null &&
+        pastDays == _historyPastDays &&
+        futureDays == _historyFutureDays &&
+        !replaceRangeOnly;
+    if (isDefaultHistoryLoad) return _loadAttendanceHistory();
+    await _loadAttendanceRange(
+      fromInclusive: fromInclusive,
+      toExclusive: toExclusive,
+      pastDays: pastDays,
+      futureDays: futureDays,
+      replaceRangeOnly: replaceRangeOnly,
+    );
+  }
+
+  /// 앱 시작용: 홈에 필요한 최근 구간(과거 2주~예정 수업 생성 범위)만 받아
+  /// 그 구간만 교체한다. 나머지 이력은 [ensureAttendanceHistoryLoaded]로 받는다.
+  Future<void> loadRecentAttendanceRecords() async {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    await _loadAttendanceRange(
+      fromInclusive: today.subtract(const Duration(days: _startupPastDays)),
+      toExclusive: today.add(const Duration(days: _startupFutureDays + 1)),
+      replaceRangeOnly: true,
+    );
+  }
+
+  /// 기본 범위 전체 이력이 아직 없으면 받는다. 이미 받았으면 바로 끝난다.
+  Future<void> ensureAttendanceHistoryLoaded() {
+    if (isAttendanceHistoryLoaded) return Future<void>.value();
+    return _loadAttendanceHistory();
+  }
+
+  Future<void> _loadAttendanceHistory() {
+    final running = _historyLoadInFlight;
+    if (running != null) {
+      _historyLoadAgain = true;
+      return running;
+    }
+    final future = () async {
+      try {
+        do {
+          _historyLoadAgain = false;
+          final generation = _historyGeneration;
+          final ok = await _loadAttendanceRange();
+          if (ok && generation == _historyGeneration) {
+            attendanceHistoryReadyNotifier.value = true;
+          }
+        } while (_historyLoadAgain);
+      } finally {
+        _historyLoadInFlight = null;
+      }
+    }();
+    _historyLoadInFlight = future;
+    return future;
+  }
+
+  Future<bool> _loadAttendanceRange({
+    DateTime? fromInclusive,
+    DateTime? toExclusive,
+    int pastDays = _historyPastDays,
+    int futureDays = _historyFutureDays,
     bool replaceRangeOnly = false,
   }) async {
     try {
@@ -275,7 +358,7 @@ class AttendanceService {
           _attendanceRecords = [];
           attendanceRecordsNotifier.value = const [];
         }
-        return;
+        return false;
       }
 
       const selectCols =
@@ -407,6 +490,7 @@ class AttendanceService {
         'rangeOnly=$replaceRangeOnly '
         '(rangeUtc=${fromUtc.toIso8601String()}..${toUtc.toIso8601String()})',
       );
+      return true;
     } catch (e, st) {
       print('[SUPA][ERROR] 출석 기록 로드 실패: $e\n$st');
       if (_sideDebug) {
@@ -417,6 +501,7 @@ class AttendanceService {
       }
       // 522/524 같은 일시적 게이트웨이 장애가 기존 출석 화면까지 비우지 않게
       // 마지막으로 성공한 메모리 데이터를 유지한다.
+      return false;
     }
   }
 
@@ -2660,6 +2745,12 @@ class AttendanceService {
   }
 
   Future<void> generatePlannedAttendanceForNextDays({int days = 15}) async {
+    // 회차 계산(_seedCycleMaps)이 메모리의 출석 이력을 쓰므로, 최근 구간만 있는
+    // 상태에서 생성하면 잘못된 cycle이 저장된다.
+    await ensureAttendanceHistoryLoaded();
+    if (!isAttendanceHistoryLoaded) {
+      throw StateError('출석 이력 로드 전에는 예정 수업을 생성하지 않습니다.');
+    }
     final blocks = _d
         .getStudentTimeBlocks()
         .where((b) => b.setId != null && b.setId!.isNotEmpty)
@@ -3769,6 +3860,7 @@ class AttendanceService {
     List<StudentTimeBlock>? blocksOverride,
   }) async {
     if (setIds.isEmpty) return;
+    await ensureAttendanceHistoryLoaded();
 
     final hasPaymentInfo =
         _d.getPaymentRecords().any((p) => p.studentId == studentId);
@@ -4699,6 +4791,7 @@ class AttendanceService {
 
   Future<void> regeneratePlannedAttendanceForOverride(
       SessionOverride ov) async {
+    await ensureAttendanceHistoryLoaded();
     final DateTime? original = ov.originalClassDateTime;
     final DateTime? replacement = ov.replacementClassDateTime;
     final bool canceled = ov.status == OverrideStatus.canceled;
@@ -5381,6 +5474,7 @@ class AttendanceService {
     List<StudentTimeBlock>? blocksOverride,
   }) async {
     if (setId.isEmpty) return;
+    await ensureAttendanceHistoryLoaded();
 
     final hasPaymentInfo =
         _d.getPaymentRecords().any((p) => p.studentId == studentId);

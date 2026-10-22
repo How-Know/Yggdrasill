@@ -92,6 +92,10 @@ class HomeworkTimeDefaultsService {
     add('gojaengi', 'high', 'D', 360);
     add('gojaengi', 'high', 'E', 120);
     add('gojaengi', 'high', 'F', 120);
+    // 고쟁이 고등은 별도 시리즈 키로 저장되고 STEP 셋만 있다.
+    add('gojaengi_high', 'high', 'A', 40);
+    add('gojaengi_high', 'high', 'B', 150);
+    add('gojaengi_high', 'high', 'C', 360);
     return out;
   }
 
@@ -269,7 +273,7 @@ class HomeworkTimeDefaultsService {
     // 대표 문제/서술형은 사용자가 지정한 해당 A/B/C 단계 단가를 그대로 쓴다.
     if (series == 'rpm' && special == '실력 UP') return '실력 UP';
     // 고쟁이는 단계가 넷이고 워크북 TEST 둘이 더 붙어 A~F 를 모두 쓴다.
-    if (series == 'gojaengi') {
+    if (series == 'gojaengi' || series == 'gojaengi_high') {
       final normalizedSubKey = subKey.trim().toUpperCase();
       if (const {'A', 'B', 'C', 'D', 'E', 'F'}.contains(normalizedSubKey)) {
         return normalizedSubKey;

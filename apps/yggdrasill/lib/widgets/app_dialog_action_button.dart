@@ -42,6 +42,9 @@ class AppDialogConfirmButton extends StatelessWidget {
     this.iconOnly = false,
     this.showIcon = true,
     this.iconSvg = _dialogConfirmCheckSvg,
+    this.iconLift = 1,
+    this.iconDx = 0,
+    this.groupEndPad = 10,
   });
 
   final VoidCallback? onPressed;
@@ -53,6 +56,15 @@ class AppDialogConfirmButton extends StatelessWidget {
   final bool showIcon;
   final String iconSvg;
 
+  /// 아이콘을 위로 올리는 양. 체크의 기본은 1.
+  final double iconLift;
+
+  /// 아이콘만 가로로 옮긴다. 음수면 왼쪽.
+  final double iconDx;
+
+  /// 묶음을 왼쪽으로 미는 오른쪽 여백. 10이면 아이콘 왼쪽이 5 줄어든다.
+  final double groupEndPad;
+
   @override
   Widget build(BuildContext context) {
     return _AppDialogActionButton(
@@ -62,6 +74,9 @@ class AppDialogConfirmButton extends StatelessWidget {
       iconSvg: iconSvg,
       iconOnly: iconOnly,
       showIcon: showIcon,
+      iconLift: iconLift,
+      iconDx: iconDx,
+      groupEndPad: groupEndPad,
     );
   }
 }
@@ -104,6 +119,9 @@ class _AppDialogActionButton extends StatefulWidget {
     required this.iconSvg,
     this.iconOnly = false,
     this.showIcon = true,
+    this.iconLift = 1,
+    this.iconDx = 0,
+    this.groupEndPad = 10,
   });
 
   final String label;
@@ -112,6 +130,9 @@ class _AppDialogActionButton extends StatefulWidget {
   final String iconSvg;
   final bool iconOnly;
   final bool showIcon;
+  final double iconLift;
+  final double iconDx;
+  final double groupEndPad;
 
   @override
   State<_AppDialogActionButton> createState() => _AppDialogActionButtonState();
@@ -160,19 +181,25 @@ class _AppDialogActionButtonState extends State<_AppDialogActionButton> {
                   canTap ? () => setState(() => _pressed = false) : null,
               onTap: widget.onPressed,
               behavior: HitTestBehavior.opaque,
-              child: SizedBox(
-                width: widget.iconOnly
-                    ? AppDialogActionMetrics.height
-                    : AppDialogActionMetrics.width,
-                height: AppDialogActionMetrics.height,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  minWidth: widget.iconOnly
+                      ? AppDialogActionMetrics.height
+                      : AppDialogActionMetrics.width,
+                  maxWidth: widget.iconOnly
+                      ? AppDialogActionMetrics.height
+                      : double.infinity,
+                  minHeight: AppDialogActionMetrics.height,
+                  maxHeight: AppDialogActionMetrics.height,
+                ),
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 160),
                   curve: Curves.easeOutCubic,
                   alignment: Alignment.center,
-                  // 오른쪽 10은 묶음을 왼쪽으로 5 옮긴다. 아이콘 왼쪽 여백을 줄인다.
+                  // 오른쪽 여백의 절반만큼 묶음이 왼쪽으로 간다. 아이콘 왼쪽 여백이 줄어든다.
                   padding: widget.iconOnly || !widget.showIcon
                       ? EdgeInsets.zero
-                      : const EdgeInsets.only(right: 10),
+                      : EdgeInsets.only(right: widget.groupEndPad),
                   decoration: BoxDecoration(
                     color: color,
                     borderRadius: BorderRadius.circular(
@@ -189,7 +216,7 @@ class _AppDialogActionButtonState extends State<_AppDialogActionButton> {
                         Transform.translate(
                           offset: widget.iconOnly
                               ? Offset.zero
-                              : const Offset(0, -1),
+                              : Offset(widget.iconDx, -widget.iconLift),
                           child: SvgPicture.string(
                             widget.iconSvg,
                             width: 20,

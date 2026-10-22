@@ -110,13 +110,18 @@ class _ConceptDraftBuildDialogState extends State<ConceptDraftBuildDialog> {
         }
         step = _Step.organize;
         setState(() => _progress = conceptDraftWaitText('개념 초안을 정리하는 중', null));
+        var label = '개념 초안을 정리하는 중';
         final id = await _svc.createDraft(
           book: widget.book,
           unitPath: widget.unit.path,
           pages: _pages,
           criterionIds: _criteria.toList(),
           onWait: (e) {
-            if (mounted) setState(() => _progress = conceptDraftWaitText('개념 초안을 정리하는 중', e));
+            if (mounted) setState(() => _progress = conceptDraftWaitText(label, e));
+          },
+          onRestart: (note) {
+            label = '멈춘 정리를 다시 하는 중';
+            if (mounted) setState(() => _progress = note);
           },
         );
         if (!mounted) return;

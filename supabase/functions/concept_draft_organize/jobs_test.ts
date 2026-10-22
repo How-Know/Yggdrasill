@@ -1,6 +1,6 @@
 import { assert, assertEquals } from 'jsr:@std/assert@1';
 import { FakeAiProvider } from '../_shared/ai/fake.ts';
-import { collectStep, JOB_MAX_MS, jobAgeMs, jobOutcome, pollStep, SAVING_STALE_MS } from './jobs.ts';
+import { collectStep, JOB_MAX_MS, JOB_QUEUED_MAX_MS, jobAgeMs, jobOutcome, pollStep, SAVING_STALE_MS } from './jobs.ts';
 import { type ConceptTypeRef, prepareUnit, type TranscriptBlock } from './organize.ts';
 import { conceptDraftOutcome, conceptDraftRequest, organizeConceptDraft } from './run.ts';
 
@@ -28,6 +28,15 @@ Deno.test('공급자 상태: 도는 중이면 기다리고, 너무 오래면 끊
   assertEquals(pollStep(running, 60_000), 'running');
   assertEquals(pollStep(running, JOB_MAX_MS + 1), 'timeout');
   assertEquals(pollStep({ state: 'failed', error: 'x' }, 1), 'finish');
+});
+
+Deno.test('공급자가 시작조차 안 한 채(queued) 오래 머물면 멈춘 것으로 보고, 처리 중이면 20분까지 기다린다', () => {
+  const queued = { state: 'running', status: 'queued' } as const;
+  const working = { state: 'running', status: 'in_progress' } as const;
+  assertEquals(pollStep(queued, JOB_QUEUED_MAX_MS - 1), 'running');
+  assertEquals(pollStep(queued, JOB_QUEUED_MAX_MS + 1), 'stalled');
+  assertEquals(pollStep(working, JOB_QUEUED_MAX_MS + 1), 'running');
+  assertEquals(pollStep(queued, JOB_MAX_MS + 1), 'timeout');
 });
 
 Deno.test('백그라운드 결과는 바로 부른 정리와 같은 초안·검사가 된다', async () => {

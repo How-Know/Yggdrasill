@@ -12,6 +12,15 @@
 //   POST { task: 'anchors', folder_id, effort? }
 //     → { ok, proposal: { summary, items[{concept_id, anchor_id, current_anchor_id, reason}], checks } }
 //        (라이브러리 폴더 하나의 주제 묶음 제안. 개념은 서버가 읽고 저장하지 않는다. 운영자가 고른 줄만 concept_anchor_set)
+//   POST { task: 'evidence_scope', concept_id, statement_id?(없으면 기본 서술), effort? }
+//     → { ok, proposal: { summary, basis_md5, items[{source_id, scope, current_scope, reason, covered, missing}], checks } }
+//        (서술 하나의 출처마다 근거 범위 제안. 서술 글·근거 블록은 concept_source_evidence 로 서버가 읽고 저장하지 않는다.
+//         운영자가 받아들인 줄만 concept_source_set_evidence(origin 'ai', basis_md5))
+//   POST { task: 'compare', draft_id, keys?: string[], effort? }
+//     → { ok, proposal: { summary, items[{key, choice, concept_id, concept_name, statement_id, reason, differences, draft_exists}],
+//          candidates, checks } }
+//        (저장된 검토 항목마다 기존 후보 개념과 비교해 new·statement·source·revise·hold 를 제안. 항목·후보 글은 서버가 읽고
+//         저장하지 않는다. 운영자가 고른 줄만 앱의 검토에 관계로 들어가고, 확정은 운영자가 한다)
 //   create·rerun 에 background: true 를 붙이면 공급자 백그라운드 호출로 정리를 시작하고 바로 답한다.
 //     → { ok, job_id, status: 'running', poll_after_ms }   (작업은 concept_draft_jobs 에 적는다)
 //   POST { task: 'collect', job_id }
@@ -66,8 +75,22 @@ import {
   organizeConceptDraft,
   proposeConceptAnchors,
   proposeConceptFolders,
+  proposeCompare,
+  proposeEvidenceScopes,
 } from './run.ts';
 import { type AnchorConcept, CONCEPT_ANCHOR_PROMPT_VERSION, MAX_ANCHOR_CONCEPTS } from './anchors.ts';
+import { CONCEPT_EVIDENCE_PROMPT_VERSION, evidenceInput, MAX_EVIDENCE_SOURCES } from './evidence.ts';
+import {
+  type CompareItem,
+  type CompareTarget,
+  compareTargetOf,
+  CONCEPT_COMPARE_PROMPT_VERSION,
+  evidenceText,
+  MAX_COMPARE_CANDIDATES,
+  MAX_COMPARE_ITEMS,
+  overlapNames,
+  reviewEntries,
+} from './compare.ts';
 
 const FEATURE = 'concept_draft_organize';
 const RATE_LIMIT_PER_MINUTE = 6;
@@ -92,7 +115,9 @@ Deno.serve(async (req) => {
   }
   const effortRaw = typeof body.effort === 'string' ? body.effort.trim() : '';
   const effort = EFFORTS.has(effortRaw) ? effortRaw : 'medium';
-  const task = ['create', 'folders', 'rerun', 'anchors', 'collect'].includes(String(body.task)) ? String(body.task) : 'blocks';
+  const task = ['create', 'folders', 'rerun', 'anchors', 'evidence_scope', 'compare', 'collect'].includes(String(body.task))
+    ? String(body.task)
+    : 'blocks';
 
   const long = task === 'create' || task === 'rerun';
   const provider = createAiProvider({ timeoutMs: long ? LONG_AI_TIMEOUT_MS : 140000 });
@@ -111,6 +136,8 @@ Deno.serve(async (req) => {
 
   if (task === 'folders') return await folders(auth, provider, body, effort);
   if (task === 'anchors') return await anchors(auth, provider, body, effort);
+  if (task === 'evidence_scope') return await evidenceScope(auth, provider, body, effort);
+  if (task === 'compare') return await compare(auth, provider, body, effort);
   const background = body.background === true && provider.background != null;
   if (task === 'rerun') {
     return background
@@ -368,9 +395,11 @@ async function collect(auth: AuthContext, provider: AiProvider, body: Record<str
   }
   const next = pollStep(poll, ageMs);
   if (next === 'running') return stillRunning(ageMs);
-  if (next === 'timeout') {
+  if (next === 'timeout' || next === 'stalled') {
+    const last = poll.state === 'running' ? poll.status : '';
+    console.error(`[${FEATURE}] job ${job.id} ${next} after ${Math.round(ageMs / 1000)}s (provider status: ${last})`);
     await bg.cancel(job.response_id).catch((e) => console.error(`[${FEATURE}] cancel failed:`, String(e)));
-    poll = { state: 'failed', error: 'ai_timeout' };
+    poll = { state: 'failed', error: next === 'stalled' ? 'ai_stalled' : 'ai_timeout' };
   }
   const finished = poll as Exclude<AiBackgroundPoll, { state: 'running' }>;
 
@@ -790,5 +819,179 @@ async function anchors(auth: AuthContext, provider: AiProvider, body: Record<str
     cost_usd: costUsd,
     latency_ms: latencyMs,
     prompt_version: CONCEPT_ANCHOR_PROMPT_VERSION,
+  });
+}
+
+async function evidenceScope(auth: AuthContext, provider: AiProvider, body: Record<string, unknown>, effort: string): Promise<Response> {
+  const conceptId = body.concept_id;
+  if (!isUuid(conceptId)) return errorResponse(400, 'invalid_concept');
+  const statementRaw = body.statement_id ?? null;
+  if (statementRaw !== null && !isUuid(statementRaw)) return errorResponse(400, 'invalid_statement');
+  const statementId = statementRaw === null ? null : String(statementRaw);
+
+  const { data, error } = await auth.userClient.rpc('concept_source_evidence', { p_concept_id: conceptId });
+  if (error) {
+    const m = error.message ?? '';
+    if (m.includes('concept_source_concept_not_found')) return errorResponse(404, 'concept_not_found');
+    if (/concept_source_evidence|schema cache|does not exist/.test(m)) return errorResponse(409, 'evidence_not_ready');
+    console.error(`[${FEATURE}] evidence read failed:`, m);
+    return errorResponse(502, 'library_read_failed');
+  }
+  const input = evidenceInput(data, statementId);
+  if (!input) return errorResponse(404, 'statement_not_found');
+  if (input.sources.length === 0) return errorResponse(409, 'no_evidence_blocks');
+  if (input.sources.length > MAX_EVIDENCE_SOURCES) return errorResponse(409, 'too_many_sources');
+  const { data: concept } = await auth.admin.from('concepts').select('name').eq('id', conceptId).maybeSingle();
+
+  const model = modelFor('primary');
+  const started = Date.now();
+  const outcome = await proposeEvidenceScopes(provider, {
+    model,
+    reasoningEffort: effort,
+    conceptName: String((concept as Record<string, unknown> | null)?.name ?? ''),
+    ...input,
+    safetyId: await safetyIdentifier(auth.userId),
+  });
+  const latencyMs = Date.now() - started;
+  if (outcome.error) console.error(`[${FEATURE}] evidence scope failed:`, outcome.error);
+  const { usage, model: usedModel, costUsd } = await record(auth, provider, {
+    model,
+    promptVersion: CONCEPT_EVIDENCE_PROMPT_VERSION,
+    result: outcome.result,
+    error: outcome.error,
+    latencyMs,
+    academyId: null,
+  });
+  if (!outcome.proposal) {
+    return jsonResponse(
+      { ok: false, error: outcome.error ?? 'ai_failed', model: usedModel, usage, cost_usd: costUsd, latency_ms: latencyMs },
+      502,
+    );
+  }
+  return jsonResponse({
+    ok: true,
+    proposal: outcome.proposal,
+    model: usedModel,
+    usage,
+    cost_usd: costUsd,
+    latency_ms: latencyMs,
+    prompt_version: CONCEPT_EVIDENCE_PROMPT_VERSION,
+  });
+}
+
+async function compare(auth: AuthContext, provider: AiProvider, body: Record<string, unknown>, effort: string): Promise<Response> {
+  const draftId = body.draft_id;
+  if (!isUuid(draftId)) return errorResponse(400, 'invalid_draft');
+  const keys = Array.isArray(body.keys) ? new Set(body.keys.map(String)) : null;
+  const { data: row, error } = await auth.admin
+    .from('concept_drafts')
+    .select('id,academy_id,book_id,status,book_name,unit_path,review,draft,prepared,folder_plan')
+    .eq('id', draftId)
+    .maybeSingle();
+  if (error) return errorResponse(502, 'draft_read_failed');
+  if (!row) return errorResponse(404, 'draft_not_found');
+  const draftRow = row as Record<string, unknown>;
+  if (draftRow.status !== 'open') return errorResponse(409, 'draft_closed');
+  if (!(await operatorBook(auth, String(draftRow.academy_id), String(draftRow.book_id)))) {
+    return errorResponse(403, 'book_forbidden');
+  }
+
+  const entries = reviewEntries(draftRow).filter((e) => !keys || keys.has(e.key));
+  if (entries.length === 0) return errorResponse(409, 'no_concepts');
+  const overlaps = overlapNames(draftRow.folder_plan);
+  const names = new Set<string>();
+  for (const e of entries) {
+    if (e.title) names.add(e.title);
+    for (const n of overlaps.get(e.index) ?? []) names.add(n);
+  }
+  const byName = new Map<string, string[]>();
+  if (names.size > 0) {
+    const { data: named, error: namedError } = await auth.admin
+      .from('concepts')
+      .select('id,name')
+      .in('name', [...names])
+      .order('created_at')
+      .limit(500);
+    if (namedError) return errorResponse(502, 'library_read_failed');
+    for (const r of (named ?? []) as Record<string, unknown>[]) {
+      const k = String(r.name ?? '').trim();
+      byName.set(k, [...(byName.get(k) ?? []), String(r.id)]);
+    }
+  }
+  const idsOf = new Map<string, string[]>();
+  for (const e of entries) {
+    const ids = [
+      ...(e.target ? [e.target] : []),
+      ...(byName.get(e.title) ?? []),
+      ...(overlaps.get(e.index) ?? []).flatMap((n) => byName.get(n) ?? []),
+    ];
+    idsOf.set(e.key, [...new Set(ids)].slice(0, MAX_COMPARE_CANDIDATES));
+  }
+  const noCandidates = entries.filter((e) => idsOf.get(e.key)!.length === 0).map((e) => e.key);
+  const withCandidates = entries.filter((e) => idsOf.get(e.key)!.length > 0);
+  if (withCandidates.length === 0) return errorResponse(409, 'no_candidates');
+  const picked = withCandidates.slice(0, MAX_COMPARE_ITEMS);
+  const overLimit = withCandidates.slice(MAX_COMPARE_ITEMS).map((e) => e.key);
+
+  const allIds = [...new Set(picked.flatMap((e) => idsOf.get(e.key)!))];
+  const { data: targetRows, error: targetError } = await auth.userClient.rpc('concept_compare_targets', { p_ids: allIds });
+  if (targetError) {
+    const m = targetError.message ?? '';
+    if (/concept_compare_targets|schema cache|does not exist/.test(m)) return errorResponse(409, 'compare_not_ready');
+    console.error(`[${FEATURE}] compare read failed:`, m);
+    return errorResponse(502, 'library_read_failed');
+  }
+  const targets = new Map<string, CompareTarget>();
+  for (const v of Array.isArray(targetRows) ? targetRows : []) {
+    const t = compareTargetOf(v);
+    if (t) targets.set(t.id, t);
+  }
+  const items: CompareItem[] = picked
+    .map((e) => ({
+      key: e.key,
+      title: e.title,
+      content: e.content,
+      evidence: evidenceText(draftRow.prepared, e.blocks),
+      candidates: idsOf.get(e.key)!.map((id) => targets.get(id)).filter((t): t is CompareTarget => t != null),
+    }))
+    .filter((it) => it.candidates.length > 0);
+  if (items.length === 0) return errorResponse(409, 'no_candidates');
+
+  const model = modelFor('primary');
+  const started = Date.now();
+  const outcome = await proposeCompare(provider, {
+    model,
+    reasoningEffort: effort,
+    unitPath: Array.isArray(draftRow.unit_path) ? draftRow.unit_path.map(String) : [],
+    bookName: String(draftRow.book_name ?? ''),
+    items,
+    noCandidates,
+    overLimit,
+    safetyId: await safetyIdentifier(auth.userId),
+  });
+  const latencyMs = Date.now() - started;
+  if (outcome.error) console.error(`[${FEATURE}] compare failed:`, outcome.error);
+  const { usage, model: usedModel, costUsd } = await record(auth, provider, {
+    model,
+    promptVersion: CONCEPT_COMPARE_PROMPT_VERSION,
+    result: outcome.result,
+    error: outcome.error,
+    latencyMs,
+    academyId: null,
+  });
+  if (!outcome.proposal) {
+    return jsonResponse(
+      { ok: false, error: outcome.error ?? 'ai_failed', model: usedModel, usage, cost_usd: costUsd, latency_ms: latencyMs },
+      502,
+    );
+  }
+  return jsonResponse({
+    ok: true,
+    proposal: outcome.proposal,
+    model: usedModel,
+    usage,
+    cost_usd: costUsd,
+    latency_ms: latencyMs,
+    prompt_version: CONCEPT_COMPARE_PROMPT_VERSION,
   });
 }

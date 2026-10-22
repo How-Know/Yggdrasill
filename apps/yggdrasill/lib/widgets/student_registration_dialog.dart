@@ -6,10 +6,9 @@ import 'package:mneme_flutter/services/data_manager.dart';
 import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 import 'package:mneme_flutter/models/student_payment_info.dart';
-import 'package:mneme_flutter/models/session_override.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
-import 'package:mneme_flutter/widgets/custom_form_dropdown.dart';
 
+import '../screens/design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import 'dialog_tokens.dart';
 
 class StudentRegistrationDialog extends StatefulWidget {
@@ -24,8 +23,33 @@ class StudentRegistrationDialog extends StatefulWidget {
     required this.groups,
   }) : super(key: key);
 
+  static String titleFor(Student? student) {
+    return student == null ? '학생 등록' : '학생 정보 수정';
+  }
+
+  static Future<void> show({
+    required BuildContext context,
+    Student? student,
+    required Future<void> Function(Student, StudentBasicInfo) onSave,
+    required List<GroupInfo> groups,
+  }) {
+    final title = titleFor(student);
+    return PreviewAcademyDialogRoute.show<void>(
+      context: context,
+      barrierLabel: title,
+      builder: (context) {
+        return StudentRegistrationDialog(
+          student: student,
+          onSave: onSave,
+          groups: groups,
+        );
+      },
+    );
+  }
+
   @override
-  State<StudentRegistrationDialog> createState() => _StudentRegistrationDialogState();
+  State<StudentRegistrationDialog> createState() =>
+      _StudentRegistrationDialogState();
 }
 
 class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
@@ -35,17 +59,19 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
   late final TextEditingController _parentPhoneController;
   final TextEditingController _memoController = ImeAwareTextEditingController();
 
+  late final FocusNode _nameFocusNode;
+  late final FocusNode _schoolFocusNode;
+  late final FocusNode _parentPhoneFocusNode;
+  late final FocusNode _phoneFocusNode;
+  late final FocusNode _memoFocusNode;
+  final GlobalKey _gradeAnchorKey = GlobalKey();
+  final GlobalKey _paymentAnchorKey = GlobalKey();
+
   late DateTime _registrationDate;
   late EducationLevel _educationLevel;
   late Grade? _grade;
   GroupInfo? _selectedGroup;
-  // [지불 방식 관련 상태 변수 및 컨트롤러 추가]
   String _paymentType = 'monthly'; // 'monthly' 또는 'session'
-  final TextEditingController _paymentCycleController = ImeAwareTextEditingController();
-
-  // ✅ UI(신형 다이얼로그)에서 필수 입력 상태 표시용
-  bool _isNameValid = false;
-  bool _isSchoolValid = false;
 
   @override
   void initState() {
@@ -57,30 +83,40 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
       final studentsWithInfo = DataManager.instance.students;
       final match = studentsWithInfo.firstWhere(
         (s) => s.student.id == student.id,
-        orElse: () => StudentWithInfo(student: student, basicInfo: StudentBasicInfo(studentId: student.id)),
+        orElse: () => StudentWithInfo(
+            student: student,
+            basicInfo: StudentBasicInfo(studentId: student.id)),
       );
       basicInfo = match.basicInfo;
     }
     _nameController = ImeAwareTextEditingController(text: student?.name);
     _schoolController = ImeAwareTextEditingController(text: student?.school);
-    _phoneController = ImeAwareTextEditingController(text: basicInfo?.phoneNumber ?? student?.phoneNumber);
-    _parentPhoneController = ImeAwareTextEditingController(text: basicInfo?.parentPhoneNumber ?? student?.parentPhoneNumber);
+    _phoneController = ImeAwareTextEditingController(
+        text: basicInfo?.phoneNumber ?? student?.phoneNumber);
+    _parentPhoneController = ImeAwareTextEditingController(
+        text: basicInfo?.parentPhoneNumber ?? student?.parentPhoneNumber);
     _memoController.text = basicInfo?.memo ?? '';
+    _nameFocusNode = FocusNode();
+    _schoolFocusNode = FocusNode();
+    _parentPhoneFocusNode = FocusNode();
+    _phoneFocusNode = FocusNode();
+    _memoFocusNode = FocusNode();
     _registrationDate = DateTime.now();
     _educationLevel = student?.educationLevel ?? EducationLevel.elementary;
 
-    // [지불 방식 데이터 초기화 추가]
     _paymentType = 'monthly';
-    _paymentCycleController.text = '1';
     if (student != null) {
       final grades = gradesByLevel[student.educationLevel] ?? const <Grade>[];
       _grade = grades.firstWhere(
         (g) => g.value == student.grade,
-        orElse: () => grades.isNotEmpty ? grades.first : const Grade(EducationLevel.elementary, '1학년', 1),
+        orElse: () => grades.isNotEmpty
+            ? grades.first
+            : const Grade(EducationLevel.elementary, '1학년', 1),
       );
     } else {
       // 기본값: 초등 1학년
-      _grade = (gradesByLevel[EducationLevel.elementary] ?? const <Grade>[]).isNotEmpty
+      _grade = (gradesByLevel[EducationLevel.elementary] ?? const <Grade>[])
+              .isNotEmpty
           ? (gradesByLevel[EducationLevel.elementary] ?? const <Grade>[]).first
           : null;
     }
@@ -88,26 +124,31 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
 
     // 기존 결제/주차 정보가 있으면 주간 수업횟수/등록일자 초기화
     if (student != null) {
-      final paymentInfo = DataManager.instance.getStudentPaymentInfo(student.id);
+      final paymentInfo =
+          DataManager.instance.getStudentPaymentInfo(student.id);
       if (paymentInfo != null) {
         _registrationDate = paymentInfo.registrationDate;
         _paymentType = paymentInfo.paymentMethod;
       }
     }
 
-    // ✅ 초기 유효성 상태 + 리스너(구버전 UI로 돌아간 느낌 방지)
-    _isNameValid = _nameController.text.trim().isNotEmpty;
-    _isSchoolValid = _schoolController.text.trim().isNotEmpty;
-    _nameController.addListener(() {
-      final next = _nameController.text.trim().isNotEmpty;
-      if (next == _isNameValid) return;
-      setState(() => _isNameValid = next);
+    for (final c in [
+      _nameController,
+      _schoolController,
+      _phoneController,
+      _parentPhoneController,
+      _memoController,
+    ]) {
+      c.addListener(_onFieldChanged);
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _nameFocusNode.requestFocus();
     });
-    _schoolController.addListener(() {
-      final next = _schoolController.text.trim().isNotEmpty;
-      if (next == _isSchoolValid) return;
-      setState(() => _isSchoolValid = next);
-    });
+  }
+
+  void _onFieldChanged() {
+    if (mounted) setState(() {});
   }
 
   List<Grade> _flattenGrades() {
@@ -123,13 +164,21 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
 
   @override
   void dispose() {
-    _nameController.dispose();
-    _schoolController.dispose();
-    _phoneController.dispose();
-    _parentPhoneController.dispose();
-
-    _paymentCycleController.dispose();
-    _memoController.dispose();
+    for (final c in [
+      _nameController,
+      _schoolController,
+      _phoneController,
+      _parentPhoneController,
+      _memoController,
+    ]) {
+      c.removeListener(_onFieldChanged);
+      c.dispose();
+    }
+    _nameFocusNode.dispose();
+    _schoolFocusNode.dispose();
+    _parentPhoneFocusNode.dispose();
+    _phoneFocusNode.dispose();
+    _memoFocusNode.dispose();
     super.dispose();
   }
 
@@ -144,14 +193,76 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
     }
   }
 
-  List<int> _getGradeRange(EducationLevel level) {
-    switch (level) {
-      case EducationLevel.elementary:
-        return List.generate(6, (i) => i + 1);
-      case EducationLevel.middle:
-      case EducationLevel.high:
-        return List.generate(3, (i) => i + 1);
+  String _gradeId(Grade grade) => '${grade.level.name}:${grade.value}';
+
+  String _paymentLabel(String type) => type == 'monthly' ? '월 결제' : '횟수제';
+
+  PreviewAcademyPanelStyle _style(BuildContext context) {
+    return FabTabBarTokens.previewAcademyPanelStyleFor(
+      Theme.of(context).brightness,
+    );
+  }
+
+  Widget _fieldDivider(PreviewAcademyPanelStyle style) {
+    return Divider(
+      height: 1,
+      thickness: 1,
+      indent: FabTabBarTokens.previewAcademyInputSheetFieldPaddingHorizontal,
+      endIndent: FabTabBarTokens.previewAcademyInputSheetFieldPaddingHorizontal,
+      color: style.divider,
+    );
+  }
+
+  Future<void> _pickGrade(PreviewAcademyPanelStyle style) async {
+    final anchor =
+        _gradeAnchorKey.currentContext?.findRenderObject() as RenderBox?;
+    if (anchor == null) return;
+    final grades = _flattenGrades();
+    final pickedId = await PreviewAcademyGlassMenu.show(
+      context: context,
+      anchor: anchor,
+      style: style,
+      selectedId: _grade == null ? '' : _gradeId(_grade!),
+      options: [
+        for (final grade in grades)
+          PreviewAcademyMenuOption(
+              id: _gradeId(grade), label: _gradeLabel(grade)),
+      ],
+    );
+    if (pickedId == null || !mounted) return;
+    Grade? next;
+    for (final grade in grades) {
+      if (_gradeId(grade) == pickedId) {
+        next = grade;
+        break;
+      }
     }
+    if (next == null) return;
+    final selected = next;
+    final levelChanged = _grade != null && _grade!.level != selected.level;
+    setState(() {
+      _grade = selected;
+      _educationLevel = selected.level;
+    });
+    if (levelChanged) _schoolController.clear();
+  }
+
+  Future<void> _pickPayment(PreviewAcademyPanelStyle style) async {
+    final anchor =
+        _paymentAnchorKey.currentContext?.findRenderObject() as RenderBox?;
+    if (anchor == null) return;
+    final pickedId = await PreviewAcademyGlassMenu.show(
+      context: context,
+      anchor: anchor,
+      style: style,
+      selectedId: _paymentType,
+      options: const [
+        PreviewAcademyMenuOption(id: 'monthly', label: '월 결제'),
+        PreviewAcademyMenuOption(id: 'session', label: '횟수제'),
+      ],
+    );
+    if (pickedId == null || !mounted) return;
+    setState(() => _paymentType = pickedId);
   }
 
   Future<void> _selectDate(BuildContext context) async {
@@ -182,62 +293,16 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
     }
   }
 
-  InputDecoration _buildInputDecoration(String label,
-      {bool required = false, bool isValid = false}) {
-    return InputDecoration(
-      labelText: required ? '$label *' : label,
-      labelStyle: const TextStyle(color: Color(0xFF9FB3B3), fontSize: 14),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(8),
-        borderSide: BorderSide(color: const Color(0xFF3A3F44).withOpacity(0.6)),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(8),
-        borderSide: const BorderSide(color: Color(0xFF33A373)),
-      ),
-      filled: true,
-      fillColor: const Color(0xFF15171C),
-      suffixIcon: (required && isValid)
-          ? const Icon(Icons.check_circle,
-              color: Color(0xFF33A373), size: 18)
-          : null,
-    );
-  }
-
-  Widget _buildSectionHeader(String title) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12, top: 4),
-      child: Row(
-        children: [
-          Container(
-            width: 4,
-            height: 16,
-            decoration: BoxDecoration(
-              color: const Color(0xFF33A373),
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Text(
-            title,
-            style: const TextStyle(
-              color: Color(0xFFEAF2F2),
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   void _handleSave() async {
-    print('[DEBUG][dialog] _phoneController.text: \'${_phoneController.text}\'');
-    print('[DEBUG][dialog] _parentPhoneController.text: \'${_parentPhoneController.text}\'');
+    print(
+        '[DEBUG][dialog] _phoneController.text: \'${_phoneController.text}\'');
+    print(
+        '[DEBUG][dialog] _parentPhoneController.text: \'${_parentPhoneController.text}\'');
     print('[DEBUG][dialog] _registrationDate: $_registrationDate');
     print('[DEBUG][dialog] _selectedGroup?.id: ${_selectedGroup?.id}');
-    if (_nameController.text.isEmpty || _schoolController.text.isEmpty || _grade == null) {
+    if (_nameController.text.isEmpty ||
+        _schoolController.text.isEmpty ||
+        _grade == null) {
       return;
     }
 
@@ -263,20 +328,24 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
       grade: _grade!.value,
       educationLevel: _educationLevel,
       phoneNumber: _phoneController.text.isEmpty ? null : _phoneController.text,
-      parentPhoneNumber: _parentPhoneController.text.isEmpty ? null : _parentPhoneController.text,
+      parentPhoneNumber: _parentPhoneController.text.isEmpty
+          ? null
+          : _parentPhoneController.text,
       groupInfo: null,
       groupId: _selectedGroup?.id,
     );
-    
+
     // BasicInfo에서는 등록일자와 지불방식을 제거 (student_payment_info로 이관)
     final basicInfo = StudentBasicInfo(
       studentId: student.id,
       phoneNumber: _phoneController.text.isEmpty ? null : _phoneController.text,
-      parentPhoneNumber: _parentPhoneController.text.isEmpty ? null : _parentPhoneController.text,
+      parentPhoneNumber: _parentPhoneController.text.isEmpty
+          ? null
+          : _parentPhoneController.text,
       groupId: _selectedGroup?.id,
       memo: _memoController.text.isEmpty ? null : _memoController.text,
     );
-    
+
     // StudentPaymentInfo 생성 (등록일자와 지불방식을 여기에 저장)
     final paymentInfo = StudentPaymentInfo(
       id: const Uuid().v4(),
@@ -292,10 +361,10 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
       createdAt: DateTime.now(),
       updatedAt: DateTime.now(),
     );
-    
+
     // 저장(학생/기본정보를 먼저 확실하게 저장한 뒤, 결제정보 저장)
     await widget.onSave(student, basicInfo);
-    
+
     // StudentPaymentInfo도 저장
     try {
       await DataManager.instance.addStudentPaymentInfo(paymentInfo);
@@ -303,7 +372,7 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
     } catch (e) {
       print('[ERROR] StudentPaymentInfo 저장 실패: $e');
     }
-    
+
     // 다이얼로그 종료 전에 약간의 대기 후 닫기(목록 반영 타이밍 안정화)
     await Future.delayed(const Duration(milliseconds: 50));
     if (mounted) {
@@ -313,197 +382,106 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      backgroundColor: kDlgBg,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: const BorderSide(color: Color(0xFF223131)),
+    final style = _style(context);
+    final title = StudentRegistrationDialog.titleFor(widget.student);
+    // '보호자 연락처'가 한 줄에 들어가게 라벨 칸을 112로 둔다.
+    const labelWidth = 112.0;
+
+    return PreviewAcademyDialogSheet(
+      style: style,
+      title: title,
+      onCancel: () => Navigator.of(context).pop(),
+      onConfirm: _handleSave,
+      child: PreviewAcademyDialogGroupedFields(
+        style: style,
+        children: [
+          PreviewAcademyDialogFieldRow(
+            style: style,
+            labelWidth: labelWidth,
+            label: '이름',
+            controller: _nameController,
+            focusNode: _nameFocusNode,
+            textInputAction: TextInputAction.next,
+            onSubmitted: _schoolFocusNode.requestFocus,
+            emptyHintText: '필수입력',
+          ),
+          _fieldDivider(style),
+          PreviewAcademyDialogFieldRow(
+            style: style,
+            labelWidth: labelWidth,
+            label: '학교',
+            controller: _schoolController,
+            focusNode: _schoolFocusNode,
+            textInputAction: TextInputAction.next,
+            onSubmitted: _parentPhoneFocusNode.requestFocus,
+            emptyHintText: '필수입력',
+          ),
+          _fieldDivider(style),
+          PreviewAcademyDialogPickerRow(
+            style: style,
+            labelWidth: labelWidth,
+            anchorKey: _gradeAnchorKey,
+            label: '학년',
+            value: _grade == null ? '학년 선택' : _gradeLabel(_grade!),
+            valueMuted: _grade == null,
+            onTap: () => _pickGrade(style),
+          ),
+          _fieldDivider(style),
+          PreviewAcademyDialogFieldRow(
+            style: style,
+            labelWidth: labelWidth,
+            label: '보호자 연락처',
+            controller: _parentPhoneController,
+            focusNode: _parentPhoneFocusNode,
+            keyboardType: TextInputType.phone,
+            textInputAction: TextInputAction.next,
+            onSubmitted: _phoneFocusNode.requestFocus,
+            emptyHintText: '미입력',
+          ),
+          _fieldDivider(style),
+          PreviewAcademyDialogFieldRow(
+            style: style,
+            labelWidth: labelWidth,
+            label: '학생 연락처',
+            controller: _phoneController,
+            focusNode: _phoneFocusNode,
+            keyboardType: TextInputType.phone,
+            textInputAction: TextInputAction.next,
+            onSubmitted: _memoFocusNode.requestFocus,
+            emptyHintText: '미입력',
+          ),
+          _fieldDivider(style),
+          PreviewAcademyDialogPickerRow(
+            style: style,
+            labelWidth: labelWidth,
+            label: '등록일자',
+            value: DateFormat('yyyy년 MM월 dd일').format(_registrationDate),
+            onTap: () => _selectDate(context),
+          ),
+          _fieldDivider(style),
+          PreviewAcademyDialogPickerRow(
+            style: style,
+            labelWidth: labelWidth,
+            anchorKey: _paymentAnchorKey,
+            label: '지불 방식',
+            value: _paymentLabel(_paymentType),
+            onTap: () => _pickPayment(style),
+          ),
+          _fieldDivider(style),
+          PreviewAcademyDialogFieldRow(
+            style: style,
+            labelWidth: labelWidth,
+            label: '메모',
+            controller: _memoController,
+            focusNode: _memoFocusNode,
+            keyboardType: TextInputType.multiline,
+            textInputAction: TextInputAction.newline,
+            maxLines: 3,
+            minLines: 1,
+            emptyHintText: '미입력',
+          ),
+        ],
       ),
-      titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
-      contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-      actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-      title: Text(
-        widget.student == null ? '학생 등록' : '학생 정보 수정',
-        style: const TextStyle(
-          color: Color(0xFFEAF2F2),
-          fontSize: 20,
-          fontWeight: FontWeight.bold,
-        ),
-      ),
-      content: SizedBox(
-        width: 580,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Divider(color: Color(0xFF223131), height: 1),
-              const SizedBox(height: 20),
-
-              _buildSectionHeader('필수 정보'),
-              Row(
-                children: [
-                  Expanded(
-                    flex: 3,
-                    child: TextField(
-                      controller: _nameController,
-                      style: const TextStyle(color: Color(0xFFEAF2F2)),
-                      decoration: _buildInputDecoration(
-                        '이름',
-                        required: true,
-                        isValid: _isNameValid,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    flex: 3,
-                    child: TextField(
-                      controller: _schoolController,
-                      style: const TextStyle(color: Color(0xFFEAF2F2)),
-                      decoration: _buildInputDecoration(
-                        '학교',
-                        required: true,
-                        isValid: _isSchoolValid,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    flex: 3,
-                    child: CustomFormDropdown<Grade>(
-                      label: '학년',
-                      placeholder: '학년 선택',
-                      value: _grade,
-                      items: _flattenGrades(),
-                      itemLabelBuilder: _gradeLabel,
-                      onChanged: (value) {
-                        final Grade? prev = _grade;
-                        setState(() {
-                          _grade = value;
-                          _educationLevel = value.level;
-                          // 과정(초/중/고)이 바뀌면 학교명은 반드시 다시 맞춰야 함(진학 후 school 미갱신 방지)
-                          if (prev != null && prev.level != value.level) {
-                            _schoolController.clear();
-                            _isSchoolValid = false;
-                          }
-                        });
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  // ✅ 위의 "이름/학교" 2열 레이아웃과 동일하게, 오른쪽 절반은 비워 폭을 1/2로 맞춘다.
-                  const Expanded(flex: 3, child: SizedBox.shrink()),
-                ],
-              ),
-
-              const SizedBox(height: 24),
-              const Divider(color: Color(0xFF223131), height: 1),
-              const SizedBox(height: 20),
-
-              _buildSectionHeader('기본 정보'),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _parentPhoneController,
-                      style: const TextStyle(color: Color(0xFFEAF2F2)),
-                      decoration: _buildInputDecoration('보호자 연락처'),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextField(
-                      controller: _phoneController,
-                      style: const TextStyle(color: Color(0xFFEAF2F2)),
-                      decoration: _buildInputDecoration('학생 연락처'),
-                    ),
-                  ),
-                ],
-              ),
-
-              const SizedBox(height: 24),
-              const Divider(color: Color(0xFF223131), height: 1),
-              const SizedBox(height: 20),
-
-              _buildSectionHeader('추가 정보'),
-              Row(
-                children: [
-                  Expanded(
-                    child: InkWell(
-                      onTap: () => _selectDate(context),
-                      borderRadius: BorderRadius.circular(8),
-                      child: InputDecorator(
-                        decoration: _buildInputDecoration('등록일자'),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              DateFormat('yyyy년 MM월 dd일').format(_registrationDate),
-                              style: const TextStyle(color: Color(0xFFEAF2F2)),
-                            ),
-                            const Icon(
-                              Icons.calendar_today,
-                              color: Color(0xFF9FB3B3),
-                              size: 18,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: CustomFormDropdown<String>(
-                      label: '지불 방식',
-                      value: _paymentType,
-                      items: const ['monthly', 'session'],
-                      itemLabelBuilder: (val) => val == 'monthly' ? '월 결제' : '횟수제',
-                      onChanged: (value) {
-                        setState(() => _paymentType = value);
-                      },
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _memoController,
-                maxLines: 3,
-                style: const TextStyle(color: Color(0xFFEAF2F2)),
-                decoration: _buildInputDecoration('메모'),
-              ),
-            ],
-          ),
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          style: TextButton.styleFrom(
-            foregroundColor: const Color(0xFF9FB3B3),
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-          ),
-          child: const Text('취소'),
-        ),
-        FilledButton(
-          onPressed: _handleSave,
-          style: FilledButton.styleFrom(
-            backgroundColor: const Color(0xFF33A373),
-            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-          ),
-          child: Text(
-            widget.student == null ? '등록' : '수정',
-            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-          ),
-        ),
-      ],
     );
   }
-} 
-
+}

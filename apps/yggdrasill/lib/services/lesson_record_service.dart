@@ -97,6 +97,20 @@ class LessonRecordFlowProgress {
     return total > before ? total - before : 0;
   }
 
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'flow_id': flowId,
+        'flow_name': flowName,
+        'book_id': bookId,
+        'grade_label': gradeLabel,
+        'book_name': bookName,
+        'progress_state': completed ? 'completed' : 'in_progress',
+        'class_item_count': classItemCount,
+        'completed_item_count': completedItemCount,
+        'textbook_total_problems': textbookTotalProblems,
+        'textbook_completed_before': textbookCompletedBefore,
+        'textbook_completed_problems': textbookCompletedProblems,
+      };
+
   factory LessonRecordFlowProgress.fromJson(Map<String, dynamic> json) {
     String? text(dynamic v) {
       final s = (v as String?)?.trim() ?? '';
@@ -163,6 +177,24 @@ class LessonRecordSummary {
   final List<LessonRecordFlowProgress> flows;
 
   bool get hasProblemRecords => problemRecordCoverage != 'none';
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'attendance_id': attendanceId,
+        'is_live': false,
+        'problem_record_coverage': problemRecordCoverage,
+        'solved_problem_count': solvedProblemCount,
+        'first_try_correct_count': firstTryCorrectCount,
+        'correction_required_count': correctionRequiredCount,
+        'correction_success_count': correctionSuccessCount,
+        'passed_problem_count': passedProblemCount,
+        'avg_tries_to_pass': avgTriesToPass,
+        'homework_total': homeworkTotal,
+        'homework_completed': homeworkCompleted,
+        'assignment_total': assignmentTotal,
+        'assignment_completed': assignmentCompleted,
+        'assignment_basis': assignmentBasis,
+        'flows': flows.map((flow) => flow.toJson()).toList(growable: false),
+      };
 
   factory LessonRecordSummary.fromJson(Map<String, dynamic> json) {
     final rawFlows = json['flows'];

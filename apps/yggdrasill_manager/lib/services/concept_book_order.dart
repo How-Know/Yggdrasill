@@ -73,8 +73,18 @@ class ConceptBookOrder {
 }
 
 Map<String, dynamic> _map(Object? v) => v is Map ? Map<String, dynamic>.from(v) : <String, dynamic>{};
-List<Map<String, dynamic>> _maps(Object? v) => v is List ? [for (final e in v) if (e is Map) Map<String, dynamic>.from(e)] : const [];
-List<String> _strings(Object? v) => v is List ? [for (final e in v) if (e != null) e.toString()] : const [];
+List<Map<String, dynamic>> _maps(Object? v) => v is List
+    ? [
+        for (final e in v)
+          if (e is Map) Map<String, dynamic>.from(e)
+      ]
+    : const [];
+List<String> _strings(Object? v) => v is List
+    ? [
+        for (final e in v)
+          if (e != null) e.toString()
+      ]
+    : const [];
 int? _int(Object? v) => v is num ? v.toInt() : null;
 String _key(String conceptId, int page) => '$conceptId\u0001$page';
 
@@ -157,7 +167,16 @@ ConceptBookOrder buildConceptBookOrder({
   }
   final entries = <ConceptBookOrderEntry>[];
   for (final MapEntry(key: id, value: rows) in byConcept.entries) {
-    rows.sort((a, b) => _int(a['raw_page'])!.compareTo(_int(b['raw_page'])!));
+    // 같은 쪽이 기본 서술과 다른 서술의 출처로 함께 이어질 수 있다. 그 쪽 안 순서를 아는 줄을 앞에 둔다.
+    rows.sort((a, b) {
+      final byPage = _int(a['raw_page'])!.compareTo(_int(b['raw_page'])!);
+      if (byPage != 0) return byPage;
+      final ao = _int(a['page_order']), bo = _int(b['page_order']);
+      if (ao == bo) return 0;
+      if (ao == null) return 1;
+      if (bo == null) return -1;
+      return ao.compareTo(bo);
+    });
     final first = rows.first;
     final page = _int(first['raw_page'])!;
     final stored = _int(first['page_order']);
@@ -202,7 +221,8 @@ class ConceptBookOrderService {
 
   static const _page = 1000;
 
-  Future<List<Map<String, dynamic>>> _all(PostgrestTransformBuilder<List<Map<String, dynamic>>> Function(int from, int to) q) async {
+  Future<List<Map<String, dynamic>>> _all(
+      PostgrestTransformBuilder<List<Map<String, dynamic>>> Function(int from, int to) q) async {
     final out = <Map<String, dynamic>>[];
     for (var from = 0;; from += _page) {
       final rows = await q(from, from + _page - 1);
@@ -214,14 +234,16 @@ class ConceptBookOrderService {
   Future<ConceptBookOrder> load(ConceptBookEntry book) async {
     final sources = await _all((from, to) => _db
         .from('concept_sources')
-        .select('id,concept_id,raw_page,display_page,unit_path,page_order,concepts(name,version_label,main_category_id)')
+        .select(
+            'id,concept_id,raw_page,display_page,unit_path,page_order,concepts(name,version_label,main_category_id)')
         .eq('academy_id', book.academyId)
         .eq('book_id', book.bookId)
         .eq('grade_label', book.gradeLabel)
         .order('id')
         .range(from, to));
     if (sources.isEmpty) return const ConceptBookOrder([]);
-    final categories = await _all((from, to) => _db.from('concept_categories').select('id,name,parent_id').order('id').range(from, to));
+    final categories = await _all(
+        (from, to) => _db.from('concept_categories').select('id,name,parent_id').order('id').range(from, to));
     var draftOrders = const <String, int>{};
     if (sources.any((s) => s['page_order'] == null)) {
       final drafts = await _all((from, to) => _db
@@ -235,6 +257,7 @@ class ConceptBookOrderService {
           .range(from, to));
       draftOrders = conceptPageOrdersFromDrafts(drafts);
     }
-    return buildConceptBookOrder(sources: sources, folderPaths: conceptFolderPaths(categories), draftOrders: draftOrders);
+    return buildConceptBookOrder(
+        sources: sources, folderPaths: conceptFolderPaths(categories), draftOrders: draftOrders);
   }
 }

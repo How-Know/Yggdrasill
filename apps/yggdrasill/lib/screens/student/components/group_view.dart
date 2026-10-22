@@ -359,17 +359,15 @@ class _GroupViewState extends State<GroupView> {
                                             IconButton(
                                               onPressed: () async {
                                                 print('[DEBUG] 그룹카드 수정 진입: groupInfo.id=${groupInfo.id}');
-                                                await showDialog(
+                                                await GroupRegistrationDialog.show(
                                                   context: context,
-                                                  builder: (context) => GroupRegistrationDialog(
-                                                    editMode: true,
-                                                    groupInfo: groupInfo,
-                                                    index: index,
-                                                    currentMemberCount: studentsInGroup.length,
-                                                    onSave: (updatedGroup) {
-                                                      widget.onGroupUpdated(updatedGroup, index);
-                                                    },
-                                                  ),
+                                                  editMode: true,
+                                                  groupInfo: groupInfo,
+                                                  index: index,
+                                                  currentMemberCount: studentsInGroup.length,
+                                                  onSave: (updatedGroup) {
+                                                    widget.onGroupUpdated(updatedGroup, index);
+                                                  },
                                                 );
                                               },
                                               icon: const Icon(Icons.edit_rounded),

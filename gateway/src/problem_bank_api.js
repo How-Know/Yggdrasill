@@ -118,6 +118,15 @@ import {
   partitionFreshAnswerRenderRows,
 } from "./problem_bank/answer_render_freshness.js";
 import {
+  answerRenderKindForMode,
+  effectiveQuestionMode,
+  filterUidsBySnapshot,
+  presetForcesOriginalMode,
+  presetQuestionModeMap,
+  presetSelectedQuestionUids,
+  textbookAnswerKindNeedsRender,
+} from "./problem_bank/homework_answer_prebake.js";
+import {
   fetchManualMarkers,
   partitionStaleCrops,
   skippedCropIds,
@@ -5564,6 +5573,314 @@ function scheduleUnifiedAnswerRenderV11Backfill({
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// 과제를 낼 때 정답 PNG 미리 굽기.
+// 이미 최신 PNG가 있는 문항은 백필이 해시로 건너뛰고, 없는 것만 굽는다.
+// 앱 저장 직후 요청과 주기 스캔이 같은 경로를 쓴다.
+// ---------------------------------------------------------------------------
+const HOMEWORK_ANSWER_PREBAKE_CHUNK = 150;
+const HOMEWORK_ANSWER_PREBAKE_SCAN_MS = Math.max(
+  0,
+  Number.parseInt(
+    process.env.PB_HOMEWORK_ANSWER_PREBAKE_SCAN_MS || String(5 * 60 * 1000),
+    10,
+  ) || 0,
+);
+const HOMEWORK_ANSWER_PREBAKE_LOOKBACK_MS = Math.max(
+  60 * 1000,
+  Number.parseInt(
+    process.env.PB_HOMEWORK_ANSWER_PREBAKE_LOOKBACK_MS ||
+      String(6 * 60 * 60 * 1000),
+    10,
+  ) || 6 * 60 * 60 * 1000,
+);
+const HOMEWORK_ANSWER_PREBAKE_SCAN_LIMIT = 2000;
+const HOMEWORK_ANSWER_PREBAKE_RESCAN_MS = 30 * 60 * 1000;
+
+async function resolveHomeworkAnswerPrebakeTargets({
+  academyId,
+  homeworkItemIds,
+}) {
+  const itemIds = [...new Set(homeworkItemIds)].filter((id) => isUuid(id));
+  const cropIds = new Set();
+  const snapshotUidsByItem = new Map();
+  for (const chunk of chunkArray(itemIds, HOMEWORK_ANSWER_PREBAKE_CHUNK)) {
+    const { data, error } = await supa
+      .from("homework_item_problems")
+      .select("homework_item_id, crop_id, pb_question_uid")
+      .eq("academy_id", academyId)
+      .in("homework_item_id", chunk);
+    if (error) {
+      throw new Error(
+        `homework_item_problems_fetch_failed: ${error.message || error}`,
+      );
+    }
+    for (const row of data || []) {
+      const cropId = String(row?.crop_id || "").trim();
+      if (isUuid(cropId)) cropIds.add(cropId);
+      const uid = String(row?.pb_question_uid || "").trim();
+      const itemId = String(row?.homework_item_id || "").trim();
+      if (uid && itemId) {
+        if (!snapshotUidsByItem.has(itemId)) {
+          snapshotUidsByItem.set(itemId, new Set());
+        }
+        snapshotUidsByItem.get(itemId).add(uid);
+      }
+    }
+  }
+
+  const textbookCropIds = [];
+  for (const chunk of chunkArray([...cropIds], HOMEWORK_ANSWER_PREBAKE_CHUNK)) {
+    const { data, error } = await supa
+      .from("textbook_problem_answers")
+      .select("crop_id, answer_kind")
+      .eq("academy_id", academyId)
+      .in("crop_id", chunk);
+    if (error) {
+      throw new Error(
+        `textbook_problem_answers_fetch_failed: ${error.message || error}`,
+      );
+    }
+    for (const row of data || []) {
+      if (!textbookAnswerKindNeedsRender(row?.answer_kind)) continue;
+      const cropId = String(row?.crop_id || "").trim();
+      if (isUuid(cropId)) textbookCropIds.push(cropId);
+    }
+  }
+
+  // 그룹 과제는 학생마다 같은 프리셋을 쓰므로 프리셋 단위로 한 번만 푼다.
+  const itemIdsByPreset = new Map();
+  for (const chunk of chunkArray(itemIds, HOMEWORK_ANSWER_PREBAKE_CHUNK)) {
+    const { data, error } = await supa
+      .from("homework_items")
+      .select("id, pb_preset_id")
+      .eq("academy_id", academyId)
+      .in("id", chunk)
+      .not("pb_preset_id", "is", null);
+    if (error) {
+      throw new Error(`homework_items_fetch_failed: ${error.message || error}`);
+    }
+    for (const row of data || []) {
+      const presetId = String(row?.pb_preset_id || "").trim();
+      if (!isUuid(presetId)) continue;
+      if (!itemIdsByPreset.has(presetId)) itemIdsByPreset.set(presetId, []);
+      itemIdsByPreset.get(presetId).push(String(row.id));
+    }
+  }
+
+  const pbIdsByKind = { subjective: new Set(), essay: new Set() };
+  for (const [presetId, presetItemIds] of itemIdsByPreset) {
+    const { data: preset, error } = await supa
+      .from("pb_export_presets")
+      .select("*")
+      .eq("academy_id", academyId)
+      .eq("id", presetId)
+      .maybeSingle();
+    if (error || !preset) continue;
+    const snapshotUids = new Set();
+    for (const itemId of presetItemIds) {
+      for (const uid of snapshotUidsByItem.get(itemId) || []) {
+        snapshotUids.add(uid);
+      }
+    }
+    const uids = filterUidsBySnapshot(
+      presetSelectedQuestionUids(preset),
+      [...snapshotUids],
+    );
+    if (uids.length === 0) continue;
+    const modeByQuestionUid = presetQuestionModeMap(preset);
+    const forceOriginalMode = presetForcesOriginalMode(preset);
+    const questions = new Map();
+    const foundKeys = new Set();
+    for (const field of ["question_uid", "id"]) {
+      const pending = uids.filter((uid) => isUuid(uid) && !foundKeys.has(uid));
+      for (const chunk of chunkArray(pending, HOMEWORK_ANSWER_PREBAKE_CHUNK)) {
+        const { data, error: questionError } = await supa
+          .from("pb_questions")
+          .select(
+            "id, question_uid, question_type, choices, objective_choices, " +
+              "allow_objective, allow_subjective, meta",
+          )
+          .eq("academy_id", academyId)
+          .eq("is_published", true)
+          .in(field, chunk);
+        if (questionError) {
+          throw new Error(
+            `pb_questions_fetch_failed: ${questionError.message || questionError}`,
+          );
+        }
+        for (const row of data || []) {
+          if (!isUuid(row?.id)) continue;
+          questions.set(row.id, row);
+          foundKeys.add(row.id);
+          if (row.question_uid) foundKeys.add(String(row.question_uid));
+        }
+      }
+    }
+    for (const question of questions.values()) {
+      const kind = answerRenderKindForMode(
+        effectiveQuestionMode(question, {
+          modeByQuestionUid,
+          forceOriginalMode,
+        }),
+      );
+      if (kind) pbIdsByKind[kind].add(question.id);
+    }
+  }
+
+  return {
+    textbookCropIds: [...new Set(textbookCropIds)],
+    pbSubjectiveIds: [...pbIdsByKind.subjective],
+    pbEssayIds: [...pbIdsByKind.essay],
+  };
+}
+
+async function scheduleHomeworkAnswerPrebake({
+  academyId,
+  homeworkItemIds,
+  reason = "",
+}) {
+  const targets = await resolveHomeworkAnswerPrebakeTargets({
+    academyId,
+    homeworkItemIds,
+  });
+  let scheduled = 0;
+  const schedule = (sourceKind, sourceIds, answerKind = "") => {
+    for (const chunk of chunkArray(
+      [...sourceIds].sort(),
+      HOMEWORK_ANSWER_PREBAKE_CHUNK,
+    )) {
+      if (
+        scheduleUnifiedAnswerRenderV11Backfill({
+          academyId,
+          sourceKind,
+          sourceIds: chunk,
+          answerKind,
+        })
+      ) {
+        scheduled += 1;
+      }
+    }
+  };
+  schedule("textbook_crop", targets.textbookCropIds);
+  schedule("pb_question", targets.pbSubjectiveIds, "subjective");
+  schedule("pb_question", targets.pbEssayIds, "essay");
+  const summary = {
+    reason,
+    homework_items: homeworkItemIds.length,
+    textbook_crops: targets.textbookCropIds.length,
+    pb_subjective: targets.pbSubjectiveIds.length,
+    pb_essay: targets.pbEssayIds.length,
+    scheduled_batches: scheduled,
+  };
+  if (
+    summary.textbook_crops + summary.pb_subjective + summary.pb_essay > 0
+  ) {
+    console.log("[answer-prebake] scheduled", JSON.stringify(summary));
+  }
+  return summary;
+}
+
+async function handleHomeworkAnswerPrebake(body, res) {
+  const academyId = String(body?.academy_id || body?.academyId || "").trim();
+  if (!isUuid(academyId)) {
+    sendJson(res, 400, { ok: false, error: "academy_id(uuid) required" });
+    return;
+  }
+  const homeworkItemIds = (
+    Array.isArray(body?.homework_item_ids)
+      ? body.homework_item_ids
+      : Array.isArray(body?.homeworkItemIds)
+        ? body.homeworkItemIds
+        : []
+  )
+    .map((id) => String(id || "").trim())
+    .filter((id) => isUuid(id));
+  if (homeworkItemIds.length === 0) {
+    sendJson(res, 200, { ok: true, homework_items: 0, scheduled_batches: 0 });
+    return;
+  }
+  try {
+    const summary = await scheduleHomeworkAnswerPrebake({
+      academyId,
+      homeworkItemIds,
+      reason: "app",
+    });
+    sendJson(res, 200, { ok: true, ...summary });
+  } catch (err) {
+    sendJson(res, 500, {
+      ok: false,
+      error: `homework_answer_prebake_failed: ${err?.message || err}`,
+    });
+  }
+}
+
+// 앱이 게이트웨이에 닿지 못한 기기(외부망 태블릿 등)에서 낸 과제도 굽도록
+// 최근 생긴 과제를 주기적으로 찾아 같은 경로로 넘긴다.
+let homeworkAnswerPrebakeScanSince = Date.now() - HOMEWORK_ANSWER_PREBAKE_LOOKBACK_MS;
+let homeworkAnswerPrebakeScanRunning = false;
+
+async function runHomeworkAnswerPrebakeScan() {
+  if (homeworkAnswerPrebakeScanRunning) return;
+  homeworkAnswerPrebakeScanRunning = true;
+  const startedAt = Date.now();
+  const sinceIso = new Date(homeworkAnswerPrebakeScanSince).toISOString();
+  try {
+    const itemIdsByAcademy = new Map();
+    const add = (academyId, itemId) => {
+      const a = String(academyId || "").trim();
+      const i = String(itemId || "").trim();
+      if (!isUuid(a) || !isUuid(i)) return;
+      if (!itemIdsByAcademy.has(a)) itemIdsByAcademy.set(a, new Set());
+      itemIdsByAcademy.get(a).add(i);
+    };
+    const itemRows = await supa
+      .from("homework_items")
+      .select("academy_id, id")
+      .gte("created_at", sinceIso)
+      .order("created_at", { ascending: false })
+      .limit(HOMEWORK_ANSWER_PREBAKE_SCAN_LIMIT);
+    if (itemRows.error) throw itemRows.error;
+    for (const row of itemRows.data || []) add(row.academy_id, row.id);
+
+    for (const [academyId, itemIds] of itemIdsByAcademy) {
+      try {
+        await scheduleHomeworkAnswerPrebake({
+          academyId,
+          homeworkItemIds: [...itemIds],
+          reason: "scan",
+        });
+      } catch (err) {
+        console.warn(
+          "[answer-prebake] scan academy failed:",
+          academyId,
+          err?.message || err,
+        );
+      }
+    }
+    // 문항 스냅샷은 과제 행보다 늦게 저장될 수 있어 최근 구간을 다시 본다.
+    // 이미 구운 문항은 해시 비교로 건너뛰므로 다시 봐도 굽지는 않는다.
+    homeworkAnswerPrebakeScanSince =
+      startedAt - HOMEWORK_ANSWER_PREBAKE_RESCAN_MS;
+  } catch (err) {
+    console.warn("[answer-prebake] scan failed:", err?.message || err);
+  } finally {
+    homeworkAnswerPrebakeScanRunning = false;
+  }
+}
+
+function startHomeworkAnswerPrebakeScanner() {
+  if (HOMEWORK_ANSWER_PREBAKE_SCAN_MS <= 0) {
+    console.log("[answer-prebake] scan disabled");
+    return;
+  }
+  setTimeout(() => void runHomeworkAnswerPrebakeScan(), 30 * 1000);
+  setInterval(
+    () => void runHomeworkAnswerPrebakeScan(),
+    HOMEWORK_ANSWER_PREBAKE_SCAN_MS,
+  );
+}
+
 async function upsertUnifiedAnswerRenderAsset({ academyId, descriptor, font }) {
   if (!isUuid(academyId) || !descriptor) return { ok: false, skipped: true };
   const styleVersion = normalizeUnifiedAnswerRenderStyleVersion(
@@ -8213,7 +8530,13 @@ async function handleTextbookVlmClassifyRpmSections(body, res) {
   const seriesRaw = String(body?.series || "rpm")
     .trim()
     .toLowerCase();
-  const allowedSeries = ["ssen", "rpm", "gojaengi", "wonri_middle"];
+  const allowedSeries = [
+    "ssen",
+    "rpm",
+    "gojaengi",
+    "gojaengi_high",
+    "wonri_middle",
+  ];
   const series = allowedSeries.includes(seriesRaw) ? seriesRaw : "";
   if (!series) {
     sendJson(res, 400, {
@@ -12119,6 +12442,15 @@ async function handler(req, res) {
       return;
     }
 
+    if (
+      method === "POST" &&
+      url.pathname === "/answers/render-assets/prebake-homework"
+    ) {
+      const body = await readJson(req);
+      await handleHomeworkAnswerPrebake(body, res);
+      return;
+    }
+
     if (method === "POST" && url.pathname === "/textbook/answers/sync-pb") {
       const body = await readJson(req);
       await handleTextbookAnswersSyncProblemBank(body, res);
@@ -12185,4 +12517,5 @@ server.listen(API_PORT, API_HOST, () => {
       apiKeyRequired: Boolean(API_KEY),
     }),
   );
+  startHomeworkAnswerPrebakeScanner();
 });

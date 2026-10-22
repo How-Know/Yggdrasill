@@ -2970,6 +2970,8 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
         );
         final pad = CoverOverlayStyle.padFor(scale);
         final gap = CoverOverlayStyle.gapFor(scale);
+        // 페이지 줄 ↔ 아래 과제번호 배지. 이름 ↔ 경과·숙제 배지도 같은 값.
+        final chipGap = gap + 2;
         final pageGap = (2.0 * scale).clamp(1.0, 2.0).toDouble();
         final pageStyle = TextStyle(
           color: overlay.ink,
@@ -3027,21 +3029,32 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
               right: pad,
               top: pad,
               child: IgnorePointer(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final name = Text(
                       entry.studentName,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: overlay.titleStyle(context),
-                    ),
-                    if (statusPill != null) ...[
-                      SizedBox(height: gap),
-                      statusPill,
-                    ],
-                  ],
+                    );
+                    if (statusPill == null) return name;
+                    // 배지가 줄보다 길면 이름을 한 글자 남기고 배지 글자를 줄인다.
+                    final pillMax = math.max(
+                      0.0,
+                      constraints.maxWidth - chipGap - 32,
+                    );
+                    return Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        Expanded(child: name),
+                        SizedBox(width: chipGap),
+                        ConstrainedBox(
+                          constraints: BoxConstraints(maxWidth: pillMax),
+                          child: statusPill,
+                        ),
+                      ],
+                    );
+                  },
                 ),
               ),
             ),
@@ -3055,14 +3068,17 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     for (int i = 0; i < pageLines.length; i++) ...[
-                      Text(
-                        pageLines[i],
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: pageStyle,
+                      Padding(
+                        padding: const EdgeInsets.only(left: 2),
+                        child: Text(
+                          pageLines[i],
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: pageStyle,
+                        ),
                       ),
                       SizedBox(
-                        height: i == pageLines.length - 1 ? gap + 2 : pageGap,
+                        height: i == pageLines.length - 1 ? chipGap : pageGap,
                       ),
                     ],
                     CoverPill(

@@ -38,6 +38,7 @@ import 'widgets/dialog_tokens.dart';
 import 'services/app_config.dart';
 import 'services/update_service.dart';
 import 'services/home_realtime_sync_coordinator.dart';
+import 'services/supabase_timeout_http_client.dart';
 import 'package:package_info_plus/package_info_plus.dart' as pkg;
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import 'widgets/right_side_sheet/right_side_sheet.dart';
@@ -69,11 +70,38 @@ Color _windowSurfaceForThemeMode(ThemeMode mode) {
       : YggSemanticColors.surfaceBaseLight;
 }
 
-// ======== Window startup guard (desktop) ========
+// ======== Window startup (desktop) ========
 //
-// 증상: 부팅 직후에는 최대화로 뜨는데, 앱 로딩(초기화) 중에 다시 작은 창으로 "복귀"되는 케이스가 있다.
-// 원인: Windows/플러그인/엔진 초기화 타이밍에 의해 창 bounds/state가 한 번 더 적용되며 maximize가 풀리는 레이스.
-// 해결: 시작 옵션(전체화면/최대화)이 켜져 있으면, 부팅 후 몇 초 동안 상태를 재확인하고 풀리면 재적용한다.
+// 창은 숨긴 채로 최대화/전체화면을 먼저 적용한 뒤 한 번만 보여준다.
+// windowManager.show()는 WS_VISIBLE을 즉시 켜므로, 최대화가 실제로 반영된 것을 확인한 뒤 호출해야
+// 작은 창이 먼저 보이지 않는다.
+Future<void> _applyStartupWindowStateBeforeShow({
+  required bool startFullscreen,
+  required bool startMaximized,
+}) async {
+  if (!(Platform.isWindows || Platform.isLinux || Platform.isMacOS)) return;
+  try {
+    if (startFullscreen) {
+      try {
+        await windowManager.setFullScreen(true);
+      } catch (_) {
+        await windowManager.maximize();
+      }
+    } else if (startMaximized) {
+      await windowManager.maximize();
+    } else {
+      return;
+    }
+    for (var i = 0; i < 30; i++) {
+      if (await windowManager.isMaximized()) return;
+      await Future.delayed(const Duration(milliseconds: 16));
+    }
+  } catch (_) {
+    // 실패해도 첫 프레임 이후 _applyStartupWindowState와 guard가 다시 적용한다.
+  }
+}
+
+// 보험: 시작 후 몇 초 동안 최대화/전체화면이 풀렸는지 재확인하고 풀리면 재적용한다.
 Future<void> _guardStartupWindowState({
   required bool startFullscreen,
   required bool startMaximized,
@@ -121,7 +149,7 @@ Future<void> _guardStartupWindowState({
   }
 }
 
-// 첫 프레임 이후에 전체화면/최대화를 적용 (Show() 복원 이후 시점)
+// 첫 프레임 이후에 전체화면/최대화가 유지되는지 한 번 더 확인한다.
 Future<void> _applyStartupWindowState({
   required bool startFullscreen,
   required bool startMaximized,
@@ -778,7 +806,11 @@ void main() async {
   // Watch 토큰 릴레이 등에서 사용할 수 있도록 해석된 접속 정보를 보관.
   gResolvedSupabaseUrl = supabaseUrl;
   gResolvedSupabaseAnonKey = supabaseAnonKey;
-  await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey);
+  await Supabase.initialize(
+    url: supabaseUrl,
+    anonKey: supabaseAnonKey,
+    httpClient: SupabaseTimeoutHttpClient(),
+  );
   // 서버 전용 모드 플래그(dart-define 또는 OS 환경변수)
   try {
     final define =
@@ -835,6 +867,10 @@ void main() async {
           _windowSurfaceForThemeMode(AppThemeController.mode.value),
     );
     await windowManager.waitUntilReadyToShow(windowOptions, () async {
+      await _applyStartupWindowStateBeforeShow(
+        startFullscreen: fullscreen,
+        startMaximized: maximizeFlag,
+      );
       await windowManager.show();
       if (!(fullscreen || maximizeFlag)) {
         await windowManager.center();
@@ -913,6 +949,22 @@ class _MyAppState extends State<MyApp>
   bool get _isDesktop =>
       Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
+  late final Future<void> _startupDataFuture = _loadStartupData();
+
+  Future<void> _loadStartupData() async {
+    // 초기 데이터 로드 후 최초 1회 동기화
+    await DataManager.instance.initialize();
+    await ExamModeService.instance.initialize();
+    await SyncService.instance.runInitialSyncIfNeeded();
+    // until 미설정 또는 과거인 경우 DB 기반 자동 복원
+    await ExamModeService.instance.ensureOnFromDatabase(
+      () => AcademyDbService.instance.loadAllExamDaysForSeason(
+          DataManager.instance.activeExamSeasonId),
+      () => AcademyDbService.instance.loadAllExamSchedulesForSeason(
+          DataManager.instance.activeExamSeasonId),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -989,6 +1041,7 @@ class _MyAppState extends State<MyApp>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       unawaited(UpdateService.triggerAvailableUpdateNoticeCheck(force: true));
+      DataManager.instance.recoverFailedDataLoadNow();
       unawaited(
         HomeRealtimeSyncCoordinator.instance.resync(reason: 'app_resumed'),
       );
@@ -998,6 +1051,7 @@ class _MyAppState extends State<MyApp>
   @override
   void onWindowFocus() {
     unawaited(UpdateService.triggerAvailableUpdateNoticeCheck(force: true));
+    DataManager.instance.recoverFailedDataLoadNow();
     unawaited(
       HomeRealtimeSyncCoordinator.instance.resync(reason: 'window_focus'),
     );
@@ -1076,19 +1130,7 @@ class _MyAppState extends State<MyApp>
         }
       },
       child: FutureBuilder<void>(
-        future: () async {
-          // 초기 데이터 로드 후 최초 1회 동기화
-          await DataManager.instance.initialize();
-          await ExamModeService.instance.initialize();
-          await SyncService.instance.runInitialSyncIfNeeded();
-          // until 미설정 또는 과거인 경우 DB 기반 자동 복원
-          await ExamModeService.instance.ensureOnFromDatabase(
-            () => AcademyDbService.instance.loadAllExamDaysForSeason(
-                DataManager.instance.activeExamSeasonId),
-            () => AcademyDbService.instance.loadAllExamSchedulesForSeason(
-                DataManager.instance.activeExamSeasonId),
-          );
-        }(),
+        future: _startupDataFuture,
         builder: (context, snapshot) {
           return MaterialApp(
             scaffoldMessengerKey: rootScaffoldMessengerKey,

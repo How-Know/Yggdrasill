@@ -201,7 +201,7 @@ export function buildParseTocPrompt({ pageCount, series = '' }) {
         ]
       : [];
   const gojaengiLines =
-    seriesKey === 'gojaengi'
+    seriesKey === 'gojaengi' || seriesKey === 'gojaengi_high'
       ? [
           '',
           '=== 고쟁이 교재 목차 규칙 (매우 중요) ===',

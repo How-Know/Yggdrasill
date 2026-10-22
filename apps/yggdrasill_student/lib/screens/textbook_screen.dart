@@ -576,11 +576,12 @@ String _completionEstimateLabel(StudentTextbook book, double completion) {
 
 /// 단계별 진행률을 따로 보여 줄 단계형 문제집의 슬롯 글자.
 ///
-/// 쎈은 A/B/C 세 단계이고, 고쟁이는 STEP 셋에 창의융합(D)이 더 붙는다. 워크북
+/// 쎈·고쟁이 고등은 A/B/C 세 단계이고, 고쟁이는 STEP 셋에 창의융합(D)이 더 붙는다. 워크북
 /// TEST(E·F)는 교재에 따라 없기도 해서, 실제로 문항이 잡힌 슬롯만 덧붙인다.
 List<String> _stageProgressLetters(StudentTextbook book) {
   switch (book.series) {
     case 'ssen':
+    case 'gojaengi_high':
       return const ['A', 'B', 'C'];
     case 'gojaengi':
       return <String>[

@@ -381,8 +381,21 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
         topicOf: _topicOf,
         onChooseAnchor: _onChooseAnchor,
         onOpenConceptId: (id) => unawaited(_openConceptById(id)),
+        onBaseChanged: _onBaseChanged,
       ),
     );
+  }
+
+  /// 기본 서술이 수정안 확정 등으로 바뀌었을 때 트리와 열어 둔 개념을 새 저장값으로 바꾼다.
+  Future<void> _onBaseChanged(String conceptId) async {
+    await _reloadCategoryTree();
+    if (!mounted || _lib.selectedConcept?.id != conceptId || _findConcept(conceptId) != null) return;
+    try {
+      final fresh = await _conceptSvc.fetchConcept(conceptId);
+      if (fresh != null) _lib.syncSelectedConcept([fresh]);
+    } catch (e) {
+      _showError('개념을 다시 읽지 못했습니다: $e');
+    }
   }
 
   Widget _buildLabeledControl(String label, Widget child) {
@@ -906,6 +919,10 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
       ]).timeout(const Duration(seconds: 8), onTimeout: () => const []);
       if (!mounted) return;
       impact = conceptEditImpact(_lib, concept);
+      if (_lib.statements.contentDraftOf(id) != null) {
+        impact = '$impact 저장된 기본 서술 수정안이 있습니다. 본문을 여기서 바로 고치면 그 수정안은 '
+            '바뀐 본문과 다시 비교해 저장해야 확정할 수 있습니다.';
+      }
     }
     final edited = await showConceptInputDialog(context, initial: concept, impact: impact);
     if (edited == null) return;

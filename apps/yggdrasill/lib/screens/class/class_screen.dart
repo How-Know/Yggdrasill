@@ -38,12 +38,11 @@ class _ClassScreenState extends State<ClassScreen> {
     int? index,
   }) {
     print('[DEBUG] GroupRegistrationDialog 호출: class_screen.dart, groupInfo.id=[33m${classInfo?.id}[0m');
-    showDialog(
+    GroupRegistrationDialog.show(
       context: context,
-      builder: (context) => GroupRegistrationDialog(
-        editMode: editMode,
-        classInfo: classInfo,
-        onSave: (result) {
+      editMode: editMode,
+      groupInfo: classInfo,
+      onSave: (result) {
           setState(() {
             if (editMode && index != null) {
               _classes[index] = result;
@@ -59,7 +58,6 @@ class _ClassScreenState extends State<ClassScreen> {
             }
           });
         },
-      ),
     );
   }
 

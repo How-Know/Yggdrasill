@@ -8,6 +8,7 @@ import '../services/homework_store.dart';
 import '../services/next_class_start_resolver.dart';
 import '../services/student_behavior_assignment_store.dart';
 import '../utils/homework_page_text.dart';
+import 'app_dialog_action_button.dart';
 import 'dialog_tokens.dart';
 import 'homework_assign_dialog.dart';
 import 'utility_glass_dialog_shell.dart';
@@ -75,6 +76,36 @@ Future<void> applyDepartureSummaryAfterSave({
   await HomeworkStore.instance.reloadStudentHomework(studentId);
 }
 
+Future<void> finalizeDepartureTodoSheetSnapshot({
+  required String attendanceId,
+  required String studentId,
+  required String studentName,
+  required DateTime classDateTime,
+  required DateTime departureTime,
+  required DepartureSummaryResult result,
+  DateTime? arrivalTime,
+  DateTime? classEndTime,
+  String? className,
+  String? setId,
+}) {
+  return finalizeHomeworkTodoSheetSnapshot(
+    attendanceId: attendanceId,
+    studentId: studentId,
+    studentName: studentName,
+    classDateTime: classDateTime,
+    arrivalTime: arrivalTime,
+    departureTime: departureTime,
+    selectedHomeworkIds: result.homeworkItemIds,
+    additionalHomeworkIds: result.rolloverItemIds,
+    selectedBehaviorIds: result.selectedBehaviorIds,
+    irregularBehaviorCounts: result.irregularBehaviorCounts,
+    dueDate: result.dueDate,
+    className: className,
+    classEndTime: classEndTime,
+    setId: setId,
+  );
+}
+
 Future<DepartureSummaryResult?> showDepartureSummaryDialog({
   required BuildContext context,
   required String studentId,
@@ -98,7 +129,7 @@ Future<DepartureSummaryResult?> showDepartureSummaryDialog({
         child: UtilityGlassDialogShell(
           title: '$studentName 하원',
           icon: Icons.logout_rounded,
-          preferredWidth: math.min(media.size.width - 48, 520),
+          preferredWidth: math.min(media.size.width - 48, 680),
           maxHeight: math.min(media.size.height - 48, 760),
           onClose: () => Navigator.of(dialogContext).pop(),
           child: _DepartureSummaryBody(
@@ -216,7 +247,8 @@ Future<_DepartureSummaryPlan> _loadDepartureSummaryPlan({
       );
     });
     entry.children.add(item);
-    if (dueAt != null && (entry.dueAt == null || dueAt.isBefore(entry.dueAt!))) {
+    if (dueAt != null &&
+        (entry.dueAt == null || dueAt.isBefore(entry.dueAt!))) {
       entry.dueAt = dueAt;
     }
   }
@@ -402,7 +434,8 @@ class _DepartureSummaryBodyState extends State<_DepartureSummaryBody> {
 
   Map<String, int> get _selectedIrregularCounts => {
         for (final behavior in _behaviors)
-          if (behavior.isIrregular && (_selectedBehaviors[behavior.id] ?? false))
+          if (behavior.isIrregular &&
+              (_selectedBehaviors[behavior.id] ?? false))
             behavior.id:
                 (_irregularCounts[behavior.id] ?? 1).clamp(1, 20).toInt(),
       };
@@ -494,7 +527,7 @@ class _DepartureSummaryBodyState extends State<_DepartureSummaryBody> {
             ),
           ),
           const SizedBox(height: 16),
-          _actions(colors),
+          _actions(),
         ],
       ),
     );
@@ -777,9 +810,7 @@ class _DepartureSummaryBodyState extends State<_DepartureSummaryBody> {
       trailing: TextButton.icon(
         onPressed: _previewing ? null : _preview,
         icon: Icon(
-          _previewing
-              ? Icons.hourglass_bottom_rounded
-              : Icons.preview_outlined,
+          _previewing ? Icons.hourglass_bottom_rounded : Icons.preview_outlined,
           size: 16,
         ),
         label: Text(_previewing ? '준비 중' : '미리보기'),
@@ -957,36 +988,20 @@ class _DepartureSummaryBodyState extends State<_DepartureSummaryBody> {
     );
   }
 
-  Widget _actions(YggDialogColors colors) {
+  Widget _actions() {
     final canConfirm = !_loading && _error == null;
     return Row(
       children: [
-        Expanded(
-          child: OutlinedButton(
-            onPressed: () => Navigator.of(context).pop(),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: colors.text,
-              side: BorderSide(color: colors.glassBorder),
-              minimumSize: const Size(0, 44),
-              shape: const StadiumBorder(),
-            ),
-            child: const Text('취소'),
-          ),
+        AppDialogCloseButton(
+          label: '취소',
+          onPressed: () => Navigator.of(context).pop(),
         ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: FilledButton(
-            onPressed: canConfirm
-                ? () => Navigator.of(context).pop(_buildResult())
-                : null,
-            style: FilledButton.styleFrom(
-              backgroundColor: kDlgAccent,
-              foregroundColor: Colors.white,
-              minimumSize: const Size(0, 44),
-              shape: const StadiumBorder(),
-            ),
-            child: Text(_printNotice ? '하원 · 알림장 인쇄' : '하원'),
-          ),
+        const Spacer(),
+        AppDialogConfirmButton(
+          label: _printNotice ? '하원 · 알림장 인쇄' : '하원',
+          onPressed: canConfirm
+              ? () => Navigator.of(context).pop(_buildResult())
+              : null,
         ),
       ],
     );

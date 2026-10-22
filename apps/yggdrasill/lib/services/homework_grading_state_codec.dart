@@ -69,3 +69,10 @@ bool isHomeworkGradingRetryState(HomeworkAnswerCellState state) {
   return state != HomeworkAnswerCellState.correct &&
       state != HomeworkAnswerCellState.abandoned;
 }
+
+/// 오답·빈칸만 다음 정답에서 수정으로 남긴다.
+/// 미수행은 다시 채점할 문항이지만, 그 뒤 맞춘 것은 그 문항의 첫 채점이다.
+bool isHomeworkGradingCorrectionBaseline(HomeworkAnswerCellState? state) {
+  return state == HomeworkAnswerCellState.wrong ||
+      state == HomeworkAnswerCellState.blank;
+}

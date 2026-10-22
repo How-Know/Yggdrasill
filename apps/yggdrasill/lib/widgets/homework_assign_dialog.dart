@@ -24,6 +24,7 @@ import '../services/resource_service.dart';
 import '../services/student_behavior_assignment_store.dart';
 import '../services/tag_store.dart';
 import '../services/tenant_service.dart';
+import '../services/todo_sheet_snapshot_service.dart';
 import '../utils/homework_card_label.dart';
 import '../utils/homework_page_text.dart';
 part 'pdf/todo_sheet_refined.dart';
@@ -241,6 +242,233 @@ class _TodoSheetPayload {
   });
 }
 
+Map<String, dynamic> _todoSheetPayloadToSnapshotJson(
+  _TodoSheetPayload payload,
+) {
+  String? iso(DateTime? value) => value?.toUtc().toIso8601String();
+  return <String, dynamic>{
+    'academy_name': payload.academyName,
+    'student_name': payload.studentName,
+    'class_date_time': iso(payload.classDateTime),
+    'due_date': iso(payload.dueDate),
+    'arrival_time': iso(payload.arrivalTime),
+    'departure_time': iso(payload.departureTime),
+    'class_name': payload.className,
+    'class_time_text': payload.classTimeText,
+    'learning_time_text': payload.learningTimeText,
+    'learning_ms': payload.learningMs,
+    'check_rates': [
+      for (final entry in payload.checkRates)
+        <String, dynamic>{
+          'title': entry.title,
+          'progress': entry.progress,
+          'previous_progress': entry.previousProgress,
+          'today_progress': entry.todayProgress,
+          'book_and_course': entry.bookAndCourse,
+          'page': entry.page,
+          'count': entry.count,
+          'assigned_at': iso(entry.assignedAt),
+          'due_date': iso(entry.dueDate),
+          'checked_at': iso(entry.checkedAt),
+          'outcome': entry.outcome,
+          'reason': entry.reason,
+          'is_extra': entry.isExtra,
+        },
+    ],
+    'class_work_entries': [
+      for (final entry in payload.classWorkEntries)
+        <String, dynamic>{
+          'title': entry.title,
+          'book_and_course': entry.bookAndCourse,
+          'page': entry.page,
+          'count': entry.count,
+          'assigned_at': iso(entry.assignedAt),
+          'study_ms': entry.studyMs,
+          'today_check_count': entry.todayCheckCount,
+          'total_check_count': entry.totalCheckCount,
+          'passed': entry.passed,
+          'total_accumulated_ms': entry.totalAccumulatedMs,
+          'sub_entries': [
+            for (final sub in entry.subEntries)
+              <String, dynamic>{
+                'title': sub.title,
+                'page': sub.page,
+                'count': sub.count,
+              },
+          ],
+        },
+    ],
+    'completed_summaries': [
+      for (final entry in payload.completedSummaries)
+        <String, dynamic>{
+          'group_title': entry.groupTitle,
+          'book_and_course': entry.bookAndCourse,
+          'total_ms': entry.totalMs,
+          'assignment_count': entry.assignmentCount,
+          'check_count': entry.checkCount,
+          'progress_pct': entry.progressPct,
+          'previous_progress_pct': entry.previousProgressPct,
+          'total_progress_pct': entry.totalProgressPct,
+          'eta_text': entry.etaText,
+        },
+    ],
+    'completed_entries': [
+      for (final entry in payload.completedEntries) _todoEntryToJson(entry),
+    ],
+    'todo_entries': [
+      for (final entry in payload.todoEntries) _todoEntryToJson(entry),
+    ],
+    'behavior_entries': [
+      for (final entry in payload.behaviorEntries) _todoEntryToJson(entry),
+    ],
+    'behavior_feedback': payload.behaviorFeedback,
+    'lesson_record': payload.lessonRecord?.toJson(),
+    'special_notes': payload.specialNotes,
+  };
+}
+
+Map<String, dynamic> _todoEntryToJson(_TodoListEntry entry) =>
+    <String, dynamic>{
+      'primary': entry.primary,
+      'secondary': entry.secondary,
+      'tertiary': entry.tertiary,
+      'book_title': entry.bookTitle,
+      'item_title': entry.itemTitle,
+      'right_primary': entry.rightPrimary,
+      'right_secondary': entry.rightSecondary,
+      'right_tertiary': entry.rightTertiary,
+    };
+
+_TodoSheetPayload _todoSheetPayloadFromSnapshotJson(
+  Map<String, dynamic> json, {
+  Uint8List? academyLogo,
+}) {
+  String text(String key) => '${json[key] ?? ''}';
+  int integer(dynamic value) =>
+      value is num ? value.toInt() : int.tryParse('$value') ?? 0;
+  double decimal(dynamic value) =>
+      value is num ? value.toDouble() : double.tryParse('$value') ?? 0;
+  DateTime? date(dynamic value) {
+    final parsed = DateTime.tryParse('${value ?? ''}');
+    return parsed?.toLocal();
+  }
+
+  List<Map<String, dynamic>> maps(String key) {
+    final raw = json[key];
+    if (raw is! List) return const <Map<String, dynamic>>[];
+    return raw
+        .whereType<Map>()
+        .map((entry) => Map<String, dynamic>.from(entry))
+        .toList(growable: false);
+  }
+
+  _TodoListEntry todoEntry(Map<String, dynamic> entry) => _TodoListEntry(
+        primary: '${entry['primary'] ?? ''}',
+        secondary: entry['secondary'] as String?,
+        tertiary: entry['tertiary'] as String?,
+        bookTitle: entry['book_title'] as String?,
+        itemTitle: entry['item_title'] as String?,
+        rightPrimary: entry['right_primary'] as String?,
+        rightSecondary: entry['right_secondary'] as String?,
+        rightTertiary: entry['right_tertiary'] as String?,
+      );
+
+  final lessonJson = json['lesson_record'];
+  return _TodoSheetPayload(
+    academyName: text('academy_name'),
+    academyLogo: academyLogo,
+    studentName: text('student_name'),
+    classDateTime: date(json['class_date_time']) ?? DateTime.now(),
+    dueDate: date(json['due_date']),
+    arrivalTime: date(json['arrival_time']),
+    departureTime: date(json['departure_time']) ?? DateTime.now(),
+    className: text('class_name'),
+    classTimeText: text('class_time_text'),
+    learningTimeText: text('learning_time_text'),
+    learningMs: integer(json['learning_ms']),
+    checkRates: [
+      for (final entry in maps('check_rates'))
+        _CheckRateEntry(
+          title: '${entry['title'] ?? ''}',
+          progress:
+              entry['progress'] == null ? null : integer(entry['progress']),
+          previousProgress: entry['previous_progress'] == null
+              ? null
+              : integer(entry['previous_progress']),
+          todayProgress: entry['today_progress'] == null
+              ? null
+              : integer(entry['today_progress']),
+          bookAndCourse: '${entry['book_and_course'] ?? ''}',
+          page: '${entry['page'] ?? ''}',
+          count: '${entry['count'] ?? ''}',
+          assignedAt: date(entry['assigned_at']),
+          dueDate: date(entry['due_date']),
+          checkedAt: date(entry['checked_at']),
+          outcome: entry['outcome'] as String?,
+          reason: entry['reason'] as String?,
+          isExtra: entry['is_extra'] == true,
+        ),
+    ],
+    classWorkEntries: [
+      for (final entry in maps('class_work_entries'))
+        _ClassWorkEntry(
+          title: '${entry['title'] ?? ''}',
+          bookAndCourse: '${entry['book_and_course'] ?? ''}',
+          page: '${entry['page'] ?? ''}',
+          count: '${entry['count'] ?? ''}',
+          assignedAt: date(entry['assigned_at']),
+          studyMs: integer(entry['study_ms']),
+          todayCheckCount: integer(entry['today_check_count']),
+          totalCheckCount: integer(entry['total_check_count']),
+          passed: entry['passed'] == true,
+          totalAccumulatedMs: integer(entry['total_accumulated_ms']),
+          subEntries: [
+            for (final sub
+                in (entry['sub_entries'] as List? ?? const <dynamic>[])
+                    .whereType<Map>())
+              _SubWorkEntry(
+                title: '${sub['title'] ?? ''}',
+                page: '${sub['page'] ?? ''}',
+                count: '${sub['count'] ?? ''}',
+              ),
+          ],
+        ),
+    ],
+    completedSummaries: [
+      for (final entry in maps('completed_summaries'))
+        _CompletedSummaryEntry(
+          groupTitle: '${entry['group_title'] ?? ''}',
+          bookAndCourse: '${entry['book_and_course'] ?? ''}',
+          totalMs: integer(entry['total_ms']),
+          assignmentCount: integer(entry['assignment_count']),
+          checkCount: integer(entry['check_count']),
+          progressPct: decimal(entry['progress_pct']),
+          previousProgressPct: decimal(entry['previous_progress_pct']),
+          totalProgressPct: decimal(entry['total_progress_pct']),
+          etaText: entry['eta_text'] as String?,
+        ),
+    ],
+    completedEntries: [
+      for (final entry in maps('completed_entries')) todoEntry(entry),
+    ],
+    todoEntries: [
+      for (final entry in maps('todo_entries')) todoEntry(entry),
+    ],
+    behaviorEntries: [
+      for (final entry in maps('behavior_entries')) todoEntry(entry),
+    ],
+    behaviorFeedback: text('behavior_feedback'),
+    lessonRecord: lessonJson is Map
+        ? LessonRecordSummary.fromJson(
+            Map<String, dynamic>.from(lessonJson),
+          )
+        : null,
+    specialNotes: (json['special_notes'] as List? ?? const <dynamic>[])
+        .map((entry) => '$entry')
+        .toList(growable: false),
+  );
+}
+
 List<String> _buildSpecialNotes({
   required String studentId,
   required DateTime classDateTime,
@@ -430,6 +658,7 @@ Future<void> printHomeworkTodoSheet({
   String? className,
   DateTime? classEndTime,
   String? setId,
+  bool saveSnapshotIfDeparted = true,
 }) async {
   final payload = await _prepareTodoSheetPayload(
     studentId: studentId,
@@ -446,6 +675,24 @@ Future<void> printHomeworkTodoSheet({
     classEndTime: classEndTime,
     setId: setId,
   );
+  final attendance = _findTodoSheetAttendanceRecord(
+    studentId: studentId,
+    classDateTime: classDateTime,
+  );
+  final attendanceId = (attendance?.id ?? '').trim();
+  if (saveSnapshotIfDeparted &&
+      attendanceId.isNotEmpty &&
+      attendance?.departureTime != null) {
+    try {
+      await TodoSheetSnapshotService.instance.finalize(
+        attendanceId: attendanceId,
+        payload: _todoSheetPayloadToSnapshotJson(payload),
+      );
+    } catch (error, stackTrace) {
+      debugPrint('[TODO_SHEET_SNAPSHOT][PRINT_FALLBACK][ERROR] '
+          '$error\n$stackTrace');
+    }
+  }
   final outPath = await _buildHomeworkTodoPdf(payload: payload);
   await _openPrintDialogForPath(outPath);
   _scheduleTempDelete(outPath);
@@ -512,6 +759,58 @@ Future<void> previewHomeworkTodoSheet({
     className: className,
     classEndTime: classEndTime,
     setId: setId,
+  );
+  final outPath = await _buildHomeworkTodoPdf(payload: payload);
+  await OpenFilex.open(outPath);
+  _scheduleTempDelete(outPath);
+}
+
+/// 하원 확정 뒤 알림장을 다시 계산하지 않아도 되도록 의미 데이터를 고정한다.
+///
+/// 미리보기에서는 호출하지 않는다. 서버 함수도 하원 시간이 없는 출결은 거부한다.
+Future<void> finalizeHomeworkTodoSheetSnapshot({
+  required String attendanceId,
+  required String studentId,
+  required String studentName,
+  required DateTime classDateTime,
+  DateTime? arrivalTime,
+  required DateTime departureTime,
+  required List<String> selectedHomeworkIds,
+  List<String>? additionalHomeworkIds,
+  List<String>? selectedBehaviorIds,
+  Map<String, int>? irregularBehaviorCounts,
+  DateTime? dueDate,
+  String? className,
+  DateTime? classEndTime,
+  String? setId,
+}) async {
+  final payload = await _prepareTodoSheetPayload(
+    studentId: studentId,
+    studentName: studentName,
+    classDateTime: classDateTime,
+    arrivalTime: arrivalTime,
+    departureTime: departureTime,
+    selectedHomeworkIds: selectedHomeworkIds,
+    additionalHomeworkIds: additionalHomeworkIds,
+    selectedBehaviorIds: selectedBehaviorIds,
+    irregularBehaviorCounts: irregularBehaviorCounts,
+    dueDate: dueDate,
+    className: className,
+    classEndTime: classEndTime,
+    setId: setId,
+  );
+  await TodoSheetSnapshotService.instance.finalize(
+    attendanceId: attendanceId,
+    payload: _todoSheetPayloadToSnapshotJson(payload),
+  );
+}
+
+Future<void> previewSavedHomeworkTodoSheet(String snapshotId) async {
+  final json =
+      await TodoSheetSnapshotService.instance.loadPayload(snapshotId.trim());
+  final payload = _todoSheetPayloadFromSnapshotJson(
+    json,
+    academyLogo: DataManager.instance.academySettings.logo,
   );
   final outPath = await _buildHomeworkTodoPdf(payload: payload);
   await OpenFilex.open(outPath);

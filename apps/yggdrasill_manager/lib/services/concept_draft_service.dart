@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'concept_book_service.dart';
+import 'concept_draft_compare.dart';
 import 'concept_draft_models.dart';
 import 'concept_relation_service.dart';
 import 'concept_topic.dart';
@@ -75,6 +76,7 @@ const Map<String, String> _messages = {
   'transcripts_read_failed': '저장된 전사를 읽지 못했습니다.',
   'response_cut': '서버 응답이 중간에 끊겼습니다(서버 실행 시간 한도에 걸렸을 수 있습니다). 초안 목록에 만들어졌는지 확인하세요.',
   'ai_timeout': '정리가 너무 오래 걸려(20분 넘음) 멈췄습니다. 다시 시도하세요.',
+  'ai_stalled': 'AI가 5분 넘게 정리를 시작하지 않아 멈췄습니다. 잠시 뒤 다시 시도하세요.',
   'ai_poll_failed': '정리 결과를 확인하지 못했습니다. 잠시 뒤 다시 시도하세요.',
   'response_missing': '정리 결과를 찾지 못했습니다. 다시 시도하세요.',
   'job_not_found': '정리 작업을 찾지 못했습니다.',
@@ -91,13 +93,32 @@ const Map<String, String> _messages = {
   'concept_anchor_other_folder': '같은 폴더의 개념에만 붙일 수 있습니다.',
   'concept_anchor_cycle': '서로 가리키는 묶음이 생겨 저장하지 않았습니다.',
   'concept_draft_bad_relation': '기존 개념과의 관계 형식이 올바르지 않은 항목이 있습니다.',
-  'concept_draft_relation_target_required': '다른 서술·확장·특수한 경우로 둔 항목은 기존 개념을 골라야 합니다.',
+  'concept_draft_relation_target_required': '다른 서술·출처만 연결·수정안·확장·특수한 경우로 둔 항목은 기존 개념을 골라야 합니다.',
   'concept_draft_relation_target_not_found': '고른 기존 개념을 찾지 못했습니다(지워졌을 수 있습니다). 다시 고르세요.',
+  'concept_draft_relation_statement_not_found': '출처를 이을 서술을 그 개념에서 찾지 못했습니다(지워졌을 수 있습니다). 다시 고르세요.',
+  'concept_draft_revise_draft_exists': '수정안으로 둔 기존 개념에 이미 저장된 수정안이 있어 확정하지 않았습니다. 그 개념 창에서 기존 수정안을 먼저 확정하거나 버리세요.',
+  'concept_content_concept_not_found': '수정안으로 둔 기존 개념을 찾지 못했습니다(지워졌을 수 있습니다). 다시 고르세요.',
+  'concept_draft_no_holds': '다시 검토할 보류 항목이 없습니다(이미 처리했을 수 있습니다).',
+  'concept_draft_hold_closed': '이미 처리한 보류 항목입니다.',
+  'concept_compare_too_many': '한 번에 비교할 개념이 너무 많습니다.',
+  'no_candidates': '비교할 기존 개념 후보가 없습니다. 같은 이름·겹침 제안이 없거나, 관계에서 기존 개념을 고르지 않았습니다.',
+  'compare_not_ready': 'DB에 비교 기능이 아직 반영되지 않았습니다(마이그레이션 필요).',
+  'no_concepts': '비교할 항목이 없습니다.',
   'concept_relation_reverse_exists': '두 개념 사이에 반대 방향 관계가 이미 있습니다. 상세에서 확인하세요.',
 };
 
 const String kConceptRelationsNotReady = 'DB에 개념 관계 저장소가 아직 없어 기존 개념과의 관계를 고른 항목은 확정할 수 없습니다. '
     '마이그레이션을 반영한 뒤 확정하거나, 관계를 "정하지 않음"으로 두세요.';
+
+const String kConceptCompareNotReady = 'DB에 출처만 연결·수정안·보류 기능이 아직 없어 그렇게 둔 항목은 확정할 수 없습니다. '
+    '마이그레이션을 반영한 뒤 확정하거나, 다른 관계로 바꾸세요.';
+
+/// 3단계 마이그레이션(20261020180000)이 있어야 확정할 수 있는 관계.
+bool needsCompareMigration(Iterable<ReviewItem> items) => items.any((it) =>
+    it.kept &&
+    (it.relation?.kind == ReviewRelationKind.source ||
+        it.relation?.kind == ReviewRelationKind.revise ||
+        it.relation?.kind == ReviewRelationKind.hold));
 
 String conceptDraftErrorMessage(String code, [String? fallback]) => _messages[code] ?? fallback ?? '처리하지 못했습니다($code).';
 
@@ -109,6 +130,18 @@ bool isConceptDraftTimeout(ConceptDraftException e) =>
 
 /// 백그라운드 정리를 기다린 시간.
 typedef ConceptDraftWait = void Function(Duration elapsed);
+
+/// 서버가 멈춘 정리 작업을 끊어 같은 쪽으로 새로 시작할 때 알리는 글.
+typedef ConceptDraftRestart = void Function(String note);
+
+/// 서버가 정리 작업을 끊은 이유 중 같은 입력으로 다시 시작하면 대개 되는 것. 앱이 기다리다 멈춘 것은 넣지 않는다
+/// (서버 작업이 아직 돌 수 있어 다시 시작하면 초안이 둘 생길 수 있다).
+const Set<String> kConceptDraftRestartCodes = {'ai_stalled', 'ai_timeout'};
+
+class _ServerStoppedJob implements Exception {
+  _ServerStoppedJob(this.error);
+  final ConceptDraftException error;
+}
 
 /// 정리 진행 글. 기다린 시간이 있으면 붙인다.
 String conceptDraftWaitText(String base, Duration? elapsed) {
@@ -180,7 +213,7 @@ class ConceptDraftService {
   ConceptDraftException _cut() => ConceptDraftException('response_cut', conceptDraftErrorMessage('response_cut'));
 
   Never _rpcError(PostgrestException e) {
-    final m = RegExp(r'concept_(?:draft|anchor)_[a-z_]+').firstMatch(e.message);
+    final m = RegExp(r'concept_(?:draft|anchor|content|compare)_[a-z_]+').firstMatch(e.message);
     final code = m?.group(0) ?? 'db_error';
     throw ConceptDraftException(code, conceptDraftErrorMessage(code, e.message));
   }
@@ -291,24 +324,39 @@ class ConceptDraftService {
     required List<int> pages,
     List<String> criterionIds = const [],
     ConceptDraftWait? onWait,
+    ConceptDraftRestart? onRestart,
   }) async {
-    final res = await _invoke('concept_draft_organize', {
-      'task': 'create',
-      'background': true,
-      'academy_id': book.academyId,
-      'book_id': book.bookId,
-      'grade_label': book.gradeLabel,
-      'unit_path': unitPath,
-      'pages': pages,
-      if (criterionIds.isNotEmpty) 'criterion_ids': criterionIds,
-    });
-    return _draftIdOf(res, onWait, '초안 id를 받지 못했습니다.');
+    Future<String> start() async {
+      final res = await _invoke('concept_draft_organize', {
+        'task': 'create',
+        'background': true,
+        'academy_id': book.academyId,
+        'book_id': book.bookId,
+        'grade_label': book.gradeLabel,
+        'unit_path': unitPath,
+        'pages': pages,
+        if (criterionIds.isNotEmpty) 'criterion_ids': criterionIds,
+      });
+      return _draftIdOf(res, onWait, '초안 id를 받지 못했습니다.', restartable: true);
+    }
+
+    try {
+      return await start();
+    } on _ServerStoppedJob catch (first) {
+      onRestart?.call('${first.error.message.split('.').first}. 같은 쪽으로 한 번 다시 정리합니다.');
+      try {
+        return await start();
+      } on _ServerStoppedJob catch (second) {
+        throw second.error;
+      }
+    }
   }
 
   /// 백그라운드 작업이면 결과를 기다린다. 옛 서버는 바로 초안 id를 준다.
-  Future<String> _draftIdOf(Map<String, dynamic> res, ConceptDraftWait? onWait, String missing) async {
+  Future<String> _draftIdOf(Map<String, dynamic> res, ConceptDraftWait? onWait, String missing,
+      {bool restartable = false}) async {
     final job = res['job_id'];
-    final d = job is String && job.isNotEmpty ? await _collect(job, onWait) : res;
+    final d = job is String && job.isNotEmpty ? await _collect(job, onWait, restartable: restartable) : res;
     final id = d['draft_id'];
     if (id is! String || id.isEmpty) throw ConceptDraftException('invalid_response', missing);
     return id;
@@ -322,7 +370,7 @@ class ConceptDraftService {
     'invalid_response'
   };
 
-  Future<Map<String, dynamic>> _collect(String jobId, ConceptDraftWait? onWait) async {
+  Future<Map<String, dynamic>> _collect(String jobId, ConceptDraftWait? onWait, {bool restartable = false}) async {
     final watch = Stopwatch()..start();
     var misses = 0;
     while (true) {
@@ -334,6 +382,7 @@ class ConceptDraftService {
         final ms = (d['elapsed_ms'] as num?)?.toInt();
         onWait?.call(ms == null ? watch.elapsed : Duration(milliseconds: ms));
       } on ConceptDraftException catch (e) {
+        if (restartable && kConceptDraftRestartCodes.contains(e.code)) throw _ServerStoppedJob(e);
         final transient = _transientCodes.contains(e.code) || e.code.startsWith('http_5');
         if (!transient || ++misses > maxPollMisses) rethrow;
       }
@@ -514,6 +563,10 @@ class ConceptDraftService {
     return ConceptAnchorProposal.fromJson(res);
   }
 
+  /// 서술 하나(null = 기본 서술)의 출처마다 근거 범위 제안. 서술 글·근거 블록은 서버가 읽고, 제안은 저장하지 않는다.
+  Future<Map<String, dynamic>> proposeEvidenceScopes(String conceptId, String? statementId) => _invoke(
+      'concept_draft_organize', {'task': 'evidence_scope', 'concept_id': conceptId, 'statement_id': statementId});
+
   /// 개념 id → 붙일 개념 id(null = 묶음에서 빼기). origin: 'proposal'(제안에서 고름) | 'manual'.
   Future<void> setAnchors(Map<String, String?> links, {required String origin}) async {
     if (links.isEmpty) return;
@@ -538,6 +591,73 @@ class ConceptDraftService {
       return true;
     } catch (e) {
       return !ConceptRelationException.from(e).notReady;
+    }
+  }
+
+  /// 확정 RPC가 출처만 연결·수정안·보류를 읽는지(3단계 마이그레이션 반영). 표가 없다고 확실할 때만 false.
+  Future<bool> compareReady() async {
+    try {
+      await _db.from('concept_draft_holds').select('id').limit(1);
+      return true;
+    } catch (e) {
+      final m = '$e';
+      return !(m.contains('concept_draft_holds') && (m.contains('does not exist') || m.contains('schema cache')));
+    }
+  }
+
+  /// 비교할 기존 개념의 본문·서술·출처 수·수정안 유무. 읽기만 한다.
+  Future<List<ConceptCompareTarget>> compareTargets(List<String> ids) async {
+    if (ids.isEmpty) return const [];
+    try {
+      final res = await _db.rpc('concept_compare_targets', params: {'p_ids': ids});
+      return [
+        for (final r in (res as List?) ?? const [])
+          if (r is Map) ConceptCompareTarget.fromJson(Map<String, dynamic>.from(r)),
+      ];
+    } on PostgrestException catch (e) {
+      _rpcError(e);
+    }
+  }
+
+  /// 저장된 검토 항목을 기존 개념과 비교한 AI 제안. 서버가 저장된 검토를 읽고, 아무것도 저장하지 않는다.
+  Future<ConceptCompareProposal> proposeCompare(String draftId, {List<String>? keys}) async {
+    final d = await _invoke('concept_draft_organize', {
+      'task': 'compare',
+      'draft_id': draftId,
+      if (keys != null) 'keys': keys,
+    });
+    final p = d['proposal'];
+    if (p is! Map) throw ConceptDraftException('invalid_response', '서버 응답을 해석하지 못했습니다.');
+    return ConceptCompareProposal.fromJson(Map<String, dynamic>.from(p));
+  }
+
+  Future<List<ConceptDraftHold>> openHolds() async {
+    try {
+      final res = await _db.rpc('concept_draft_holds_open');
+      return [
+        for (final r in (res as List?) ?? const [])
+          if (r is Map) ConceptDraftHold.fromJson(Map<String, dynamic>.from(r)),
+      ];
+    } on PostgrestException catch (e) {
+      _rpcError(e);
+    }
+  }
+
+  /// 한 초안 기록의 보류 항목으로 새 검토 초안을 만든다. 새 초안 id.
+  Future<String> reopenHolds(String draftId) async {
+    try {
+      final res = await _db.rpc('concept_draft_hold_reopen', params: {'p_draft_id': draftId});
+      return '${(res as Map)['draft_id']}';
+    } on PostgrestException catch (e) {
+      _rpcError(e);
+    }
+  }
+
+  Future<void> dropHold(String holdId, {String? note}) async {
+    try {
+      await _db.rpc('concept_draft_hold_drop', params: {'p_hold_id': holdId, 'p_note': note});
+    } on PostgrestException catch (e) {
+      _rpcError(e);
     }
   }
 

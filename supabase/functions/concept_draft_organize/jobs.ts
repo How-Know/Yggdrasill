@@ -7,6 +7,8 @@ import { type ConceptDraftOutcome, conceptDraftOutcome } from './run.ts';
 
 /** 이보다 오래 끝나지 않은 작업은 취소하고 실패로 둔다. */
 export const JOB_MAX_MS = 20 * 60_000;
+/** 공급자가 이만큼 시작조차 하지 않으면(queued) 멈춘 것으로 보고 취소한다. 앱이 한 번 다시 시작한다. */
+export const JOB_QUEUED_MAX_MS = 5 * 60_000;
 /** 결과를 저장하던 요청이 이만큼 소식이 없으면 다른 요청이 이어받는다. */
 export const SAVING_STALE_MS = 2 * 60_000;
 /** 한 사람이 동시에 돌릴 수 있는 정리 작업 수. */
@@ -49,11 +51,13 @@ export function collectStep(job: Pick<JobRow, 'status' | 'updated_at'>, now: num
   return 'poll';
 }
 
-export type PollStep = 'running' | 'timeout' | 'finish';
+export type PollStep = 'running' | 'stalled' | 'timeout' | 'finish';
 
 export function pollStep(poll: AiBackgroundPoll, ageMs: number): PollStep {
   if (poll.state !== 'running') return 'finish';
-  return ageMs > JOB_MAX_MS ? 'timeout' : 'running';
+  if (ageMs > JOB_MAX_MS) return 'timeout';
+  if (poll.status === 'queued' && ageMs > JOB_QUEUED_MAX_MS) return 'stalled';
+  return 'running';
 }
 
 /** 끝난 결과를 바로 부른 정리와 같은 길로 읽는다. */

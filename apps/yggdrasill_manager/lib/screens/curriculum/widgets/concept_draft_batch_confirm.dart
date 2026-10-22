@@ -25,6 +25,21 @@ class DraftBatchOutcome {
 
 String _unitName(List<String> path) => path.isEmpty ? '(단원 없음)' : path.last;
 
+/// 새 개념 없이 기존 개념에 붙이거나 보류하는 항목 수. 없으면 빈 문자열.
+String _attachedNote(ReviewRelationSummary? s) {
+  if (s == null) return '';
+  final parts = [
+    for (final (k, label) in const [
+      (ReviewRelationKind.statement, '다른 서술'),
+      (ReviewRelationKind.source, '출처만'),
+      (ReviewRelationKind.revise, '수정안'),
+      (ReviewRelationKind.hold, '보류'),
+    ])
+      if (s.count(k) > 0) '$label ${s.count(k)}개',
+  ];
+  return parts.isEmpty ? '' : '(${parts.join(' · ')})';
+}
+
 /// 고른 초안을 확인 창을 거쳐 차례로 확정한다. 검토를 저장하지 않은 초안은 AI 초안·폴더 제안 그대로 검토를 저장한 뒤 확정한다.
 /// 초안마다 따로 확정하므로 하나가 실패해도 앞서 확정한 것은 남는다. 취소했거나 확정할 것이 없으면 null.
 /// 초안·유형·폴더를 읽지 못하면 그 오류를 그대로 던진다.
@@ -56,11 +71,13 @@ Future<DraftBatchOutcome?> confirmDraftBatch(
       names = null;
     }
     final ready = kept.any((it) => it.relation != null) ? await service.relationsReady() : true;
+    final compareReady = needsCompareMigration(kept) ? await service.compareReady() : true;
     plan = planDraftBatchConfirm(records,
         libraryPaths: paths,
         types: types,
         libraryNames: names,
-        relationsBlocked: ready ? null : kConceptRelationsNotReady);
+        relationsBlocked: ready ? null : kConceptRelationsNotReady,
+        compareBlocked: compareReady ? null : kConceptCompareNotReady);
   } finally {
     onProgress(null);
   }
@@ -130,7 +147,7 @@ Future<bool> _askBatch(BuildContext context, DraftBatchPlan plan) async {
                 section('확정할 초안', [
                   for (final r in plan.ready)
                     '· ${_unitName(r.unitPath)} — 개념 ${plan.reviewOf(r).where((it) => it.kept).length}개'
-                        '${(plan.relations[r.id]?.count(ReviewRelationKind.statement) ?? 0) > 0 ? '(다른 서술 ${plan.relations[r.id]!.count(ReviewRelationKind.statement)}개)' : ''}'
+                        '${_attachedNote(plan.relations[r.id])}'
                         '${plan.asIs.containsKey(r.id) ? ' · AI 초안 그대로' : ''}',
                 ]),
                 if (asIs.isNotEmpty)

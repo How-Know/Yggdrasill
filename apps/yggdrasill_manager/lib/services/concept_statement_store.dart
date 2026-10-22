@@ -19,6 +19,11 @@ class ConceptStatementStore extends ChangeNotifier {
   final Map<String, List<ConceptAppearance>> _appearances = {};
   final Map<String, String> _errors = {};
   final Map<String, String?> _selected = {};
+  final Map<String, ConceptContentDraft?> _contentDrafts = {};
+  final Map<String, String> _contentDraftErrors = {};
+
+  /// 마지막으로 실패한 쓰기의 오류 코드. 화면이 "본문이 바뀜" 같은 경우를 가려 다시 읽을 때 쓴다.
+  String? lastErrorCode;
 
   /// DB에 서술 표가 아직 없다(마이그레이션 반영 전).
   bool notReady = false;
@@ -36,6 +41,9 @@ class ConceptStatementStore extends ChangeNotifier {
     _appearances.clear();
     _errors.clear();
     _selected.clear();
+    _contentDrafts.clear();
+    _contentDraftErrors.clear();
+    lastErrorCode = null;
     notReady = false;
     busy = false;
     countsTick.value += 1;
@@ -82,8 +90,14 @@ class ConceptStatementStore extends ChangeNotifier {
           if (a.statementId == statementId) a
       ];
 
+  /// 기본 서술 수정안을 읽었는지. 읽지 못했으면 [contentDraftErrorOf]에 이유가 있다.
+  bool contentDraftLoaded(String conceptId) => _contentDrafts.containsKey(conceptId);
+  ConceptContentDraft? contentDraftOf(String conceptId) => _contentDrafts[conceptId];
+  String? contentDraftErrorOf(String conceptId) => _contentDraftErrors[conceptId];
+
   Future<void> load(String conceptId) async {
     final epoch = _epoch;
+    final draft = _readContentDraft(conceptId);
     try {
       final results = await Future.wait([
         _backend.statementsFor(conceptId),
@@ -103,7 +117,37 @@ class ConceptStatementStore extends ChangeNotifier {
       notReady = ex.notReady;
       _errors[conceptId] = ex.message;
     }
+    await draft;
+    if (epoch != _epoch) return;
     notifyListeners();
+  }
+
+  /// 개념 상세 머리의 "수정안 있음"은 [countsTick]을 듣는다.
+  void _setContentDraft(String conceptId, ConceptContentDraft? d, {bool known = true}) {
+    final had = _contentDrafts[conceptId] != null;
+    if (known) {
+      _contentDrafts[conceptId] = d;
+    } else {
+      _contentDrafts.remove(conceptId);
+    }
+    if (had != (d != null)) countsTick.value += 1;
+  }
+
+  /// 서술과 따로 읽는다. 수정안 저장소가 아직 없어도 서술은 보인다. 읽지 못하면 옛 값을 지운다.
+  Future<void> _readContentDraft(String conceptId) async {
+    final epoch = _epoch;
+    try {
+      final d = await _backend.contentDraft(conceptId);
+      if (epoch != _epoch) return;
+      _setContentDraft(conceptId, d);
+      _contentDraftErrors.remove(conceptId);
+    } catch (e) {
+      if (epoch != _epoch) return;
+      final ex = ConceptStatementException.from(e);
+      _setContentDraft(conceptId, null, known: false);
+      _contentDraftErrors[conceptId] =
+          ex.notReady ? 'DB에 기본 서술 수정안 저장소가 아직 없습니다. 마이그레이션을 반영한 뒤 쓸 수 있습니다.' : '기본 서술 수정안을 읽지 못했습니다: ${ex.message}';
+    }
   }
 
   void conceptRemoved(String conceptId) {
@@ -112,6 +156,8 @@ class ConceptStatementStore extends ChangeNotifier {
     _appearances.remove(conceptId);
     _errors.remove(conceptId);
     _selected.remove(conceptId);
+    _contentDrafts.remove(conceptId);
+    _contentDraftErrors.remove(conceptId);
     countsTick.value += 1;
   }
 
@@ -133,6 +179,7 @@ class ConceptStatementStore extends ChangeNotifier {
     if (busy) return (null, '앞 작업이 끝난 뒤 다시 해 주세요.');
     final epoch = _epoch;
     busy = true;
+    lastErrorCode = null;
     notifyListeners();
     try {
       final out = await send();
@@ -142,7 +189,9 @@ class ConceptStatementStore extends ChangeNotifier {
     } catch (e) {
       if (epoch != _epoch) return (null, null);
       final ex = ConceptStatementException.from(e);
+      lastErrorCode = ex.code;
       if (ex.stale || ex.code == 'concept_statement_not_found') await load(conceptId);
+      if (ex.contentStale) await _readContentDraft(conceptId);
       return (null, ex.message);
     } finally {
       if (epoch == _epoch) {
@@ -175,6 +224,43 @@ class ConceptStatementStore extends ChangeNotifier {
         _statements[base.conceptId]?.removeWhere((s) => s.id == base.id);
         countsTick.value += 1;
       });
+
+  /// 기본 서술 수정안 저장. [base]는 화면에 보였던 본문. 본문과 같은 글이면 수정안이 지워진다(첫 값 null, 오류도 null).
+  Future<(ConceptContentDraft?, String?)> saveContentDraft(
+    String conceptId, {
+    required String content,
+    String? note,
+    required String base,
+  }) =>
+      _run<ConceptContentDraft?>(
+        conceptId,
+        () => _backend.saveContentDraft(
+          conceptId: conceptId,
+          content: content,
+          note: note,
+          base: base,
+          current: _contentDrafts[conceptId],
+        ),
+        (d) {
+          _setContentDraft(conceptId, d);
+          _contentDraftErrors.remove(conceptId);
+        },
+      );
+
+  /// 수정안을 본문으로 올린다. 확정한 뒤의 본문을 돌려준다.
+  Future<(String?, String?)> confirmContentDraft(ConceptContentDraft draft, {required String note}) => _run(
+      draft.conceptId,
+      () => _backend.confirmContentDraft(draft, note: note),
+      (_) => _setContentDraft(draft.conceptId, null));
+
+  Future<String?> discardContentDraft(ConceptContentDraft draft) async {
+    final (_, err) = await _run<void>(
+      draft.conceptId,
+      () => _backend.discardContentDraft(draft),
+      (_) => _setContentDraft(draft.conceptId, null),
+    );
+    return err;
+  }
 
   Future<List<ConceptStatementRevision>> revisions(String statementId) => _backend.revisions(statementId);
   Future<List<ConceptContentRevision>> contentRevisions(String conceptId) => _backend.contentRevisions(conceptId);

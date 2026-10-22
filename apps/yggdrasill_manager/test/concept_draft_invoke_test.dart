@@ -98,6 +98,50 @@ void main() {
       expect(await _code(() => s.service.rerun('a1')), 'ai_timeout');
     });
 
+    test('서버가 멈춘 정리를 끊으면 같은 쪽으로 한 번만 다시 시작한다', () async {
+      final s = _sequence([
+        (200, '{"ok":true,"job_id":"j1"}'),
+        (502, '{"ok":false,"status":"failed","error":"ai_stalled","message":"ai_stalled"}'),
+        (200, '{"ok":true,"job_id":"j2"}'),
+        (200, '{"ok":true,"status":"done","draft_id":"d2"}'),
+      ]);
+      final notes = <String>[];
+      final id = await s.service
+          .createDraft(book: book, unitPath: const ['기본 도형'], pages: const [8, 9], onRestart: notes.add);
+      expect(id, 'd2');
+      expect(notes.single, contains('다시 정리합니다'));
+      expect(s.bodies.map((b) => b['task']).toList(), ['create', 'collect', 'create', 'collect']);
+      expect(s.bodies[2]['pages'], [8, 9]);
+
+      final twice = _sequence([
+        (200, '{"ok":true,"job_id":"j1"}'),
+        (502, '{"ok":false,"status":"failed","error":"ai_timeout","message":"ai_timeout"}'),
+        (200, '{"ok":true,"job_id":"j2"}'),
+        (502, '{"ok":false,"status":"failed","error":"ai_timeout","message":"ai_timeout"}'),
+      ]);
+      expect(
+          await _code(() => twice.service.createDraft(book: book, unitPath: const ['기본 도형'], pages: const [8])),
+          'ai_timeout');
+      expect(twice.bodies.where((b) => b['task'] == 'create'), hasLength(2));
+    });
+
+    test('앱이 기다리다 멈춘 것과 다시 정리는 새로 시작하지 않는다', () async {
+      final waited = _sequence([
+        (200, '{"ok":true,"job_id":"j1"}'),
+        (200, '{"ok":true,"status":"running","elapsed_ms":1000}'),
+      ], maxWait: Duration.zero);
+      expect(await _code(() => waited.service.createDraft(book: book, unitPath: const ['기본 도형'], pages: const [8])),
+          'ai_timeout');
+      expect(waited.bodies.where((b) => b['task'] == 'create'), hasLength(1));
+
+      final rerun = _sequence([
+        (200, '{"ok":true,"job_id":"j1"}'),
+        (502, '{"ok":false,"status":"failed","error":"ai_stalled","message":"ai_stalled"}'),
+      ]);
+      expect(await _code(() => rerun.service.rerun('a1')), 'ai_stalled');
+      expect(rerun.bodies.where((b) => b['task'] == 'rerun'), hasLength(1));
+    });
+
     test('진행 글에 기다린 시간을 붙인다', () {
       expect(conceptDraftWaitText('정리하는 중', null), '정리하는 중 (보통 1~5분)');
       expect(conceptDraftWaitText('정리하는 중', const Duration(seconds: 7)), '정리하는 중 (7초 지남)');

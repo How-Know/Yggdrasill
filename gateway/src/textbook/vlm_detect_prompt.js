@@ -108,10 +108,12 @@ export const VLM_DETECT_LABELS = Object.freeze([
     ...GAEYU_LABELS,
     ...SURYEOK_LABELS,
     ...GOJAENGI_LABELS,
+    ...GOJAENGI_HIGH_LABEL_PARTS,
   ]),
 ]);
 
 import {
+  GOJAENGI_HIGH_LABEL_PARTS,
   GOJAENGI_LABELS,
   buildGojaengiDetectPrompt,
 } from './vlm_detect_prompt_gojaengi.js';
@@ -397,6 +399,18 @@ const SERIES_CONFIGS = Object.freeze({
     labelRules: [],
     partCExtra: [],
   },
+  // 고쟁이 고등. 번호 체계는 중등과 같고 단계가 셋뿐이다. 라벨은 출제 안내
+  // 배지(빈출·서술형·기출/변형)라 중등과 다르다.
+  gojaengi_high: {
+    key: 'gojaengi_high',
+    bookName: '고쟁이 고등',
+    partA: 'STEP1 핵심 유형',
+    partB: 'STEP2 심화 유형',
+    partC: 'STEP3 최고난도 유형',
+    labels: GOJAENGI_HIGH_LABEL_PARTS,
+    labelRules: [],
+    partCExtra: [],
+  },
 });
 
 export function resolveDetectSeriesConfig(series) {
@@ -483,6 +497,7 @@ export const SURYEOK_SECTION_BY_SUB_KEY = Object.freeze({
 });
 
 export {
+  GOJAENGI_HIGH_LABEL_PARTS,
   GOJAENGI_LABELS,
   GOJAENGI_SECTION_BY_SUB_KEY,
   isGojaengiWorkbookHint,
@@ -520,6 +535,14 @@ export function buildDetectProblemsPrompt({
   }
   if (cfg.key === 'gojaengi') {
     return buildGojaengiDetectPrompt({ displayPage, rawPage, sectionHint });
+  }
+  if (cfg.key === 'gojaengi_high') {
+    return buildGojaengiDetectPrompt({
+      displayPage,
+      rawPage,
+      sectionHint,
+      level: 'high',
+    });
   }
   const pageLine =
     displayPage != null && Number.isFinite(displayPage)

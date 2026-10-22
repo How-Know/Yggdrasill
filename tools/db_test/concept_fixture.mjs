@@ -19,6 +19,9 @@ export const CONCEPT_FILES = [
   '20261019100000_concept_draft_jobs.sql',
   '20261020100000_concept_statements.sql',
   '20261020120000_concept_relations.sql',
+  '20261020140000_concept_content_drafts.sql',
+  '20261020160000_concept_source_evidence.sql',
+  '20261020180000_concept_draft_compare.sql',
 ];
 
 const CONCEPT_STUBS = `

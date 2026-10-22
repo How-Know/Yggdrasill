@@ -204,6 +204,12 @@ class _MemStatements implements ConceptStatementBackend {
 
   @override
   Future<List<ConceptContentRevision>> contentRevisions(String conceptId) async => const [];
+
+  @override
+  Future<ConceptContentDraft?> contentDraft(String conceptId) async => null;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError('${invocation.memberName}');
 }
 
 class _Lib implements ConceptLibraryBackend {

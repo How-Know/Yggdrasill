@@ -42,6 +42,7 @@ import 'attendance_service.dart';
 import 'homework_score_service.dart';
 import 'homework_store.dart';
 import 'homework_assignment_store.dart';
+import 'home_realtime_sync_coordinator.dart';
 import 'point_service.dart';
 import 'realtime_reconciler.dart';
 import 'package:supabase_flutter/supabase_flutter.dart'
@@ -109,6 +110,10 @@ class DataManager {
   /// student_id → 학생앱 presence (온라인·학원/집).
   Map<String, StudentAppPresence> _studentAppPresence = {};
   bool _isInitialized = false;
+  Future<void>? _initializeInFlight;
+  Future<void>? _reloadAllInFlight;
+  bool _reloadAllAgain = false;
+  bool _reloadAllNeedsAttendanceHistory = false;
   List<PaymentRecord> _paymentRecords = [];
   List<StudentPaymentInfo> _studentPaymentInfos = [];
   List<StudentPausePeriod> _studentPausePeriods = [];
@@ -1179,6 +1184,11 @@ class DataManager {
   // 1Hz 전역 티커: 과제 러닝 타이머 UI 갱신용
   final ValueNotifier<int> globalTick = ValueNotifier<int>(0);
   Timer? _tickTimer;
+  bool _studentsLoadFailed = false;
+  Timer? _dataRecoveryTimer;
+  int _dataRecoveryAttempt = 0;
+  int _dataRecoveryGeneration = 0;
+  bool _dataRecoveryRunning = false;
   DateTime? _lastPlannedCoverageDay;
   DateTime? _plannedCoverageLastAttemptAt;
   bool _plannedCoverageInFlight = false;
@@ -1231,18 +1241,24 @@ class DataManager {
     }
   }
 
-  Future<void> initialize() async {
-    if (_isInitialized) {
-      return;
-    }
+  /// 앱 시작 시 여러 화면이 동시에 불러도 초기화는 한 번만 진행한다.
+  /// 실패하면 다음 호출에서 다시 시도한다.
+  Future<void> initialize() {
+    if (_isInitialized) return Future<void>.value();
+    return _initializeInFlight ??= _initializeOnce().whenComplete(() {
+      if (!_isInitialized) _initializeInFlight = null;
+    });
+  }
 
+  Future<void> _initializeOnce() async {
     try {
       _configureAttendanceService();
       // 로그인/테넌트 보장 후 일괄 로딩
       try {
         await TenantService.instance.ensureActiveAcademy();
       } catch (_) {}
-      await reloadAllData();
+      // 출석은 최근 구간만 받고, 전체 이력은 홈 동기화 뒤에 받는다.
+      await reloadAllData(deferAttendanceHistory: true);
       // ✅ 데이터 정합성 백필(1회): 등/하원 시간이 있으나 is_present=false인 행 보정
       try {
         await AttendanceService.instance.backfillIsPresentFromTimesOnce();
@@ -1545,8 +1561,10 @@ class DataManager {
 
   Future<void> loadStudents() async {
     print('[DEBUG][loadStudents] 진입');
+    Object? serverLoadError;
     // 서버우선: Supabase에서 먼저 시도 후 성공 시 즉시 반영
     if (TagPresetService.preferSupabaseRead) {
+      bool serverEmpty = false;
       try {
         final academyId = await TenantService.instance.getActiveAcademyId() ??
             await TenantService.instance.ensureActiveAcademy();
@@ -1619,6 +1637,7 @@ class DataManager {
         }
         // 서버에 데이터가 전혀 없으면 로컬로 폴백하여 표시(초기 백필 전 단계 방지)
         if (supaStudents.isEmpty) {
+          serverEmpty = true;
           throw Exception('Empty on server; fallback to local');
         }
 
@@ -1663,14 +1682,23 @@ class DataManager {
         }
         deviceBindingsRevision.value++;
         studentsNotifier.value = List.unmodifiable(_studentsWithInfo);
+        _markStudentsLoadSucceeded();
         print('[DEBUG][loadStudents] (Supabase) ${_studentsWithInfo.length}명');
         return;
-      } catch (_) {
+      } catch (e) {
+        if (!serverEmpty) serverLoadError = e;
         // fallback below
       }
     }
     // 1. students 테이블에서 기본 정보 불러오기
     if (RuntimeFlags.serverOnly) {
+      if (serverLoadError != null) {
+        // 빈 목록으로 확정하면 이후 아무것도 다시 불러오지 않는다. 기존 목록을 두고 재시도한다.
+        print('[DataManager] 학생 목록 로드 실패, 재시도 예약: $serverLoadError');
+        _markStudentsLoadFailed();
+        return;
+      }
+      _markStudentsLoadSucceeded();
       _studentsWithInfo = [];
       studentsNotifier.value = List.unmodifiable(_studentsWithInfo);
       return;
@@ -1742,8 +1770,77 @@ class DataManager {
         StudentWithInfo(student: students[i], basicInfo: basicInfos[i])
     ];
     studentsNotifier.value = List.unmodifiable(_studentsWithInfo);
+    _markStudentsLoadSucceeded();
     print(
         '[DEBUG][loadStudents] studentsNotifier.value 갱신: ${_studentsWithInfo.length}명');
+  }
+
+  bool get studentsLoadFailed => _studentsLoadFailed;
+
+  void _markStudentsLoadSucceeded() {
+    _studentsLoadFailed = false;
+    _dataRecoveryAttempt = 0;
+    _dataRecoveryTimer?.cancel();
+    _dataRecoveryTimer = null;
+  }
+
+  void _markStudentsLoadFailed() {
+    _studentsLoadFailed = true;
+    _scheduleDataRecovery();
+  }
+
+  void _scheduleDataRecovery() {
+    if (_dataRecoveryRunning || (_dataRecoveryTimer?.isActive ?? false)) {
+      return;
+    }
+    final step = _dataRecoveryAttempt < 5 ? _dataRecoveryAttempt : 5;
+    final seconds = (2 << step).clamp(2, 60);
+    _dataRecoveryAttempt++;
+    _dataRecoveryTimer = Timer(Duration(seconds: seconds), () {
+      _dataRecoveryTimer = null;
+      unawaited(_runDataRecovery());
+    });
+  }
+
+  /// 학생 목록을 못 불러온 상태면 즉시 전체 데이터를 다시 불러온다(창 포커스·앱 복귀 시).
+  void recoverFailedDataLoadNow() {
+    if (!_studentsLoadFailed || _dataRecoveryRunning) return;
+    _dataRecoveryTimer?.cancel();
+    _dataRecoveryTimer = null;
+    unawaited(_runDataRecovery());
+  }
+
+  Future<void> _runDataRecovery() async {
+    if (_dataRecoveryRunning) return;
+    final generation = _dataRecoveryGeneration;
+    _dataRecoveryRunning = true;
+    try {
+      print('[DataManager] 데이터 재로드 시도 #$_dataRecoveryAttempt');
+      await reloadAllData();
+    } catch (_) {
+    } finally {
+      _dataRecoveryRunning = false;
+    }
+    if (generation != _dataRecoveryGeneration) return;
+    if (_studentsLoadFailed) {
+      _scheduleDataRecovery();
+      return;
+    }
+    print('[DataManager] 데이터 재로드 성공');
+    unawaited(() async {
+      try {
+        await HomeRealtimeSyncCoordinator.instance
+            .resync(reason: 'data_recovered', force: true);
+      } catch (_) {}
+    }());
+  }
+
+  void _cancelDataRecovery() {
+    _dataRecoveryGeneration++;
+    _studentsLoadFailed = false;
+    _dataRecoveryAttempt = 0;
+    _dataRecoveryTimer?.cancel();
+    _dataRecoveryTimer = null;
   }
 
   /// M5 기기 바인딩만 다시 불러와 UI에 반영(바인딩/해제 시 즉시 표시)
@@ -4385,8 +4482,11 @@ class DataManager {
     _authSub ??= Supabase.instance.client.auth.onAuthStateChange
         .listen((AuthState state) async {
       try {
-        if (state.event == AuthChangeEvent.signedIn ||
-            state.event == AuthChangeEvent.tokenRefreshed) {
+        if (state.event == AuthChangeEvent.tokenRefreshed) {
+          // 토큰 갱신(약 1시간마다)은 데이터가 바뀐 게 아니므로 전체를 다시 받지
+          // 않는다. 만료된 토큰 때문에 직전 로드가 실패했다면 그때만 복구한다.
+          recoverFailedDataLoadNow();
+        } else if (state.event == AuthChangeEvent.signedIn) {
           try {
             await TenantService.instance.ensureActiveAcademy();
           } catch (_) {}
@@ -4407,6 +4507,7 @@ class DataManager {
           await reloadAllData();
         } else if (state.event == AuthChangeEvent.signedOut) {
           // 세션 종료 시 민감 데이터 비움
+          _cancelDataRecovery();
           await HomeworkStore.instance.resetForSession();
           await HomeworkAssignmentStore.instance.resetForSession();
           _studentsWithInfo = [];
@@ -4418,7 +4519,34 @@ class DataManager {
     });
   }
 
-  Future<void> reloadAllData() async {
+  /// 전체 데이터를 다시 받는다. 이미 진행 중이면 새로 시작하지 않고, 끝난 뒤
+  /// 한 번 더 받아 호출자가 요청 시점 이후의 데이터를 받게 한다.
+  ///
+  /// [deferAttendanceHistory]가 true면 출석은 최근 구간만 받는다(앱 시작용).
+  Future<void> reloadAllData({bool deferAttendanceHistory = false}) {
+    if (!deferAttendanceHistory) _reloadAllNeedsAttendanceHistory = true;
+    final running = _reloadAllInFlight;
+    if (running != null) {
+      _reloadAllAgain = true;
+      return running;
+    }
+    final future = () async {
+      try {
+        do {
+          _reloadAllAgain = false;
+          final withHistory = _reloadAllNeedsAttendanceHistory;
+          _reloadAllNeedsAttendanceHistory = false;
+          await _reloadAllDataOnce(withAttendanceHistory: withHistory);
+        } while (_reloadAllAgain);
+      } finally {
+        _reloadAllInFlight = null;
+      }
+    }();
+    _reloadAllInFlight = future;
+    return future;
+  }
+
+  Future<void> _reloadAllDataOnce({required bool withAttendanceHistory}) async {
     try {
       await loadGroups();
     } catch (_) {}
@@ -4462,7 +4590,12 @@ class DataManager {
       await AttendanceService.instance.loadLessonOccurrences();
     } catch (_) {}
     try {
-      await loadAttendanceRecords();
+      if (withAttendanceHistory ||
+          AttendanceService.instance.isAttendanceHistoryLoaded) {
+        await loadAttendanceRecords();
+      } else {
+        await AttendanceService.instance.loadRecentAttendanceRecords();
+      }
     } catch (_) {}
     try {
       await loadStudentPausePeriods();
@@ -6702,6 +6835,10 @@ class DataManager {
   // =================== ATTENDANCE RECORDS ===================
 
   Future<void> forceMigration() => AttendanceService.instance.forceMigration();
+  Future<void> ensureAttendanceHistoryLoaded() =>
+      AttendanceService.instance.ensureAttendanceHistoryLoaded();
+  ValueListenable<bool> get attendanceHistoryReadyNotifier =>
+      AttendanceService.instance.attendanceHistoryReadyNotifier;
   Future<void> loadAttendanceRecords() =>
       AttendanceService.instance.loadAttendanceRecords();
   Future<void> refreshAttendanceRecordsForDate(DateTime dateLocal) =>
@@ -7515,6 +7652,8 @@ class DataManager {
         _sameDate(_lastPlannedCoverageDay!, today)) {
       return;
     }
+    // 시작 직후 최근 구간만 있을 때는 건너뛴다. 이력이 오면 1초 티커가 다시 부른다.
+    if (!AttendanceService.instance.isAttendanceHistoryLoaded) return;
     if (_plannedCoverageInFlight) return;
     final now = DateTime.now();
     if (!force &&

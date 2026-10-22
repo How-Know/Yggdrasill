@@ -1186,10 +1186,10 @@ class _TextbookUnitAuthoringDialogState
 
   /// 유형 머리말이 유형이 바뀔 때만 인쇄돼, 머리말 없는 이어지는 문항이 직전
   /// 유형을 승계해야 하는 슬롯인지. 쎈/RPM 은 B(유형 뽀개기)뿐이고, 고쟁이는
-  /// A(핵심·발전 배지)와 B(유형 배지) 둘 다다. 고쟁이 D(창의융합)는 문항마다
-  /// 배지가 따로 붙으므로 승계하면 안 된다.
+  /// A(중등 핵심·발전, 고등 유형 배지)와 B(유형 배지) 둘 다다. 고쟁이
+  /// D(창의융합)는 문항마다 배지가 따로 붙으므로 승계하면 안 된다.
   bool _carriesTypeGroup(String subKey) {
-    if (_seriesKey == 'gojaengi') return subKey == 'A' || subKey == 'B';
+    if (isGojaengiSeries(_seriesKey)) return subKey == 'A' || subKey == 'B';
     return subKey == 'B';
   }
 
@@ -1257,7 +1257,7 @@ class _TextbookUnitAuthoringDialogState
   }
 
   String? _requiredTypeGroupError(_SubFocus focus, _SubRunState state) {
-    const seriesWithTypeHeaders = {'ssen', 'rpm', 'gojaengi'};
+    const seriesWithTypeHeaders = {'ssen', 'rpm', 'gojaengi', 'gojaengi_high'};
     if (!seriesWithTypeHeaders.contains(_seriesKey) ||
         !_carriesTypeGroup(focus.subKey)) {
       return null;
@@ -1305,7 +1305,7 @@ class _TextbookUnitAuthoringDialogState
       return _kSuryeokCategoryBySubKey[subKey] ?? 'unknown';
     }
     // 게이트웨이 GOJAENGI_SECTION_BY_SUB_KEY 와 동일하게 유지.
-    if (_seriesKey == 'gojaengi') {
+    if (isGojaengiSeries(_seriesKey)) {
       return _kGojaengiSectionBySubKey[subKey] ?? 'unknown';
     }
     switch (subKey) {
@@ -2431,7 +2431,7 @@ class _TextbookUnitAuthoringDialogState
       );
     } else if (_seriesKey == 'suryeok') {
       guarded = _guardSuryeokNumberRewind(state.pageResults);
-    } else if (_seriesKey == 'gojaengi') {
+    } else if (isGojaengiSeries(_seriesKey)) {
       // 고쟁이는 세 자리 연속 번호라 쎈 A의 4자리 basic_drill 가드를 타면
       // 본문 문항이 통째로 개념 지면으로 비워진다.
       return;

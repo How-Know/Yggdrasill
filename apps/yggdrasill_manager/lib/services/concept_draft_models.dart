@@ -441,12 +441,16 @@ class FolderPlan {
 enum ReviewMark { keep, edit, drop }
 
 /// 확정할 때 이 항목을 라이브러리의 기존 개념과 어떻게 둘지(운영자 결정 2026-10-20).
+/// 출처만 연결·대표 수정안·보류는 여러 교재 설명 통합 3단계에서 더했다.
 enum ReviewRelationKind {
   newConcept('new', '새 개념'),
   statement('statement', '기존 개념의 다른 서술'),
+  source('source', '기존 개념에 출처만 연결'),
+  revise('revise', '기존 개념의 대표 서술 수정안'),
   extendsOf('extends', '기존 개념의 확장'),
   specialCase('special_case', '기존 개념의 특수한 경우'),
-  review('review', '검토 필요');
+  review('review', '검토 필요'),
+  hold('hold', '보류(이번에 넣지 않음)');
 
   const ReviewRelationKind(this.db, this.label);
 
@@ -454,8 +458,12 @@ enum ReviewRelationKind {
   final String label;
 
   /// 기존 개념을 꼭 골라야 하는 관계. 검토 필요는 골라도 되고 안 골라도 된다.
-  bool get needsTarget => this == statement || this == extendsOf || this == specialCase;
-  bool get takesTarget => this != newConcept;
+  bool get needsTarget =>
+      this == statement || this == source || this == revise || this == extendsOf || this == specialCase;
+  bool get takesTarget => this != newConcept && this != hold;
+
+  /// 새 개념을 만들지 않는 관계(유형·폴더·주제 묶음을 쓰지 않는다).
+  bool get addsNoConcept => this == statement || this == source || this == revise || this == hold;
 
   static ReviewRelationKind? fromDb(Object? v) {
     for (final k in values) {
@@ -465,9 +473,9 @@ enum ReviewRelationKind {
   }
 }
 
-/// 검토 항목의 관계. [conceptName]은 화면 표시용이고 확정은 [conceptId]만 본다.
+/// 검토 항목의 관계. [conceptName]·[statementLabel]은 화면 표시용이고 확정은 [conceptId]·[statementId]만 본다.
 class ReviewRelation {
-  const ReviewRelation({required this.kind, this.conceptId, this.conceptName});
+  const ReviewRelation({required this.kind, this.conceptId, this.conceptName, this.statementId, this.statementLabel});
 
   static ReviewRelation? fromJson(Object? v) {
     if (v is! Map) return null;
@@ -475,10 +483,15 @@ class ReviewRelation {
     if (kind == null) return null;
     final id = _s(v['concept_id']).trim();
     final name = _s(v['concept_name']).trim();
+    final st = _s(v['statement_id']).trim();
+    final stLabel = _s(v['statement_label']).trim();
+    final hasSt = kind == ReviewRelationKind.source && id.isNotEmpty && st.isNotEmpty;
     return ReviewRelation(
       kind: kind,
       conceptId: kind.takesTarget && id.isNotEmpty ? id : null,
       conceptName: kind.takesTarget && name.isNotEmpty ? name : null,
+      statementId: hasSt ? st : null,
+      statementLabel: hasSt && stLabel.isNotEmpty ? stLabel : null,
     );
   }
 
@@ -486,20 +499,31 @@ class ReviewRelation {
   final String? conceptId;
   final String? conceptName;
 
+  /// 출처만 연결할 때 이을 다른 서술. null 이면 기본 서술.
+  final String? statementId;
+  final String? statementLabel;
+
   bool get missingTarget => kind.needsTarget && conceptId == null;
 
   Map<String, dynamic> toJson() => {
         'kind': kind.db,
         if (conceptId != null) 'concept_id': conceptId,
         if (conceptName != null) 'concept_name': conceptName,
+        if (statementId != null) 'statement_id': statementId,
+        if (statementLabel != null) 'statement_label': statementLabel,
       };
 
   @override
   bool operator ==(Object other) =>
-      other is ReviewRelation && other.kind == kind && other.conceptId == conceptId && other.conceptName == conceptName;
+      other is ReviewRelation &&
+      other.kind == kind &&
+      other.conceptId == conceptId &&
+      other.conceptName == conceptName &&
+      other.statementId == statementId &&
+      other.statementLabel == statementLabel;
 
   @override
-  int get hashCode => Object.hash(kind, conceptId, conceptName);
+  int get hashCode => Object.hash(kind, conceptId, conceptName, statementId, statementLabel);
 }
 
 class ReviewItem {
@@ -568,6 +592,12 @@ class ReviewItem {
 
   /// 새 개념이 아니라 기존 개념의 다른 서술로 붙는 항목(유형·폴더·주제 묶음을 쓰지 않는다).
   bool get asStatement => relation?.kind == ReviewRelationKind.statement;
+
+  /// 새 개념을 만들지 않는 항목(다른 서술·출처만·수정안·보류). 유형·폴더·주제 묶음을 쓰지 않는다.
+  bool get noNewConcept => relation?.kind.addsNoConcept ?? false;
+
+  /// 보류해 이번 확정에 넣지 않는 항목.
+  bool get held => relation?.kind == ReviewRelationKind.hold;
 
   /// AI 개념 하나가 그대로 이어진 항목(나누기 조각이 아님).
   bool get isOriginal => key == 'c$index';
@@ -931,9 +961,9 @@ ReviewItem? reviewAnchorTarget(List<ReviewItem> items, ReviewItem it) {
 Map<String, String> reviewAnchorLinks(List<ReviewItem> items) {
   final out = <String, String>{};
   for (final it in items) {
-    if (!it.kept || it.asStatement) continue;
+    if (!it.kept || it.noNewConcept) continue;
     final t = reviewAnchorTarget(items, it);
-    if (t != null && !t.asStatement && t.folder.join('\u0000') == it.folder.join('\u0000')) out[it.key] = t.key;
+    if (t != null && !t.noNewConcept && t.folder.join('\u0000') == it.folder.join('\u0000')) out[it.key] = t.key;
   }
   return out;
 }
@@ -1021,13 +1051,13 @@ String? legacySubTypeOf(String type, List<ConceptTypeInfo> types, List<ReviewNew
 
 /// 이 새 유형을 쓰는(빼지 않은) 개념 수.
 int newTypeUseCount(List<ReviewItem> items, String name) =>
-    items.where((it) => it.kept && !it.asStatement && conceptTypeKey(it.type) == conceptTypeKey(name)).length;
+    items.where((it) => it.kept && !it.noNewConcept && conceptTypeKey(it.type) == conceptTypeKey(name)).length;
 
 /// 검토에 쓰인 폴더 경로(접두 포함)를 트리 순서로.
 List<List<String>> reviewFolderPaths(List<ReviewItem> items) {
   final seen = <String, List<String>>{};
   for (final it in items) {
-    if (!it.kept || it.asStatement) continue;
+    if (!it.kept || it.noNewConcept) continue;
     for (var n = 1; n <= it.folder.length; n += 1) {
       final p = it.folder.sublist(0, n);
       seen.putIfAbsent(p.join('\u0000'), () => p);
@@ -1068,12 +1098,20 @@ String? reviewProblem(
   if (kept.isEmpty) return '넣을 개념이 없습니다. 하나 이상을 "그대로" 또는 "고쳐서"로 두세요.';
   final known = {for (final t in types) conceptTypeKey(t.name)};
   final proposed = {for (final t in newTypes) conceptTypeKey(t.name): t};
+  final revised = <String, String>{};
   for (final it in kept) {
     final name = it.title.trim().isEmpty ? '${it.index + 1}번 개념' : '"${it.title.trim()}"';
     if (it.title.trim().isEmpty || it.content.trim().isEmpty) return '$name의 이름과 내용을 채우세요.';
     final rel = it.relation;
     if (rel != null && rel.missingTarget) return '$name을 "${rel.kind.label}"(으)로 두려면 기존 개념을 고르세요.';
-    if (it.asStatement) continue;
+    if (rel != null && rel.kind == ReviewRelationKind.revise) {
+      final other = revised[rel.conceptId!];
+      if (other != null) {
+        return '$other와 $name이 같은 개념 "${rel.conceptName ?? '고른 개념'}"의 수정안입니다. 수정안은 개념마다 하나라서 하나만 남기세요.';
+      }
+      revised[rel.conceptId!] = name;
+    }
+    if (it.noNewConcept) continue;
     final key = conceptTypeKey(it.type);
     if (key.isEmpty) return '$name의 유형을 정하세요.';
     if (!known.contains(key)) {
@@ -1157,6 +1195,16 @@ String? reviewRelationSentence(ReviewRelationSummary s) {
   if (parts.isNotEmpty) lines.add('기존 개념과의 관계: ${parts.join(' · ')}.');
   if (s.count(ReviewRelationKind.statement) > 0) {
     lines.add('다른 서술로 붙이는 항목은 새 개념을 만들지 않고 기존 개념에 확정 전 서술로 더합니다. 기존 확정 내용·본문은 그대로입니다.');
+  }
+  if (s.count(ReviewRelationKind.source) > 0) {
+    lines.add('출처만 연결하는 항목은 새 개념·글 없이 이 교재 쪽을 기존 개념의 서술 출처로 잇습니다(근거 범위는 미확인으로 들어갑니다).');
+  }
+  if (s.count(ReviewRelationKind.revise) > 0) {
+    lines.add('대표 서술 수정안은 기존 개념의 본문을 바꾸지 않고 수정안으로 저장합니다. 그 개념 창에서 이유를 적어 확정해야 바뀝니다. '
+        '그 개념에 이미 수정안이 있으면 확정이 막힙니다.');
+  }
+  if (s.count(ReviewRelationKind.hold) > 0) {
+    lines.add('보류한 항목은 이번에 넣지 않고 "보류한 항목" 목록에 남깁니다. 나중에 다시 검토하거나 버릴 수 있습니다.');
   }
   if (s.autoReviews > 0) {
     final names = [...s.sameName.map((t) => '$t(같은 이름)'), ...s.overlap.map((t) => '$t(겹칠 수 있음)')];
@@ -1271,6 +1319,7 @@ DraftBatchPlan planDraftBatchConfirm(
   required List<ConceptTypeInfo> types,
   Set<String>? libraryNames,
   String? relationsBlocked,
+  String? compareBlocked,
 }) {
   final libraryRoots = [
     for (final p in libraryPaths)
@@ -1298,6 +1347,11 @@ DraftBatchPlan planDraftBatchConfirm(
       if (reason != null && !saved) reason = 'AI 초안 그대로는 넣을 수 없습니다: $reason 검토 화면에서 정하고 저장하세요.';
       if (reason == null && relationsBlocked != null && items.any((it) => it.kept && it.relation != null)) {
         reason = relationsBlocked;
+      }
+      if (reason == null &&
+          compareBlocked != null &&
+          items.any((it) => it.kept && it.noNewConcept && !it.asStatement)) {
+        reason = compareBlocked;
       }
     }
     if (reason != null) {

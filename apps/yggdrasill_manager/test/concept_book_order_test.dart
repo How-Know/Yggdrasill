@@ -7,7 +7,9 @@ import 'package:yggdrasill_manager/services/concept_book_service.dart';
 const _unitA = ['소인수분해', '소인수분해', '소수와 합성수'];
 const _unitB = ['소인수분해', '소인수분해', '거듭제곱'];
 
-Map<String, dynamic> _src(String concept, String name, String folder, int page, {int? order, List<String> unit = _unitA}) => {
+Map<String, dynamic> _src(String concept, String name, String folder, int page,
+        {int? order, List<String> unit = _unitA}) =>
+    {
       'concept_id': concept,
       'raw_page': page,
       'display_page': page + 2,
@@ -70,13 +72,25 @@ void main() {
             ],
           },
           'review_concepts': [
-            {'index': 0, 'key': 'c0', 'blocks': ['p8-a1']},
+            {
+              'index': 0,
+              'key': 'c0',
+              'blocks': ['p8-a1']
+            },
             {'index': 1, 'key': 'c1'},
-            {'index': 1, 'key': 'c1.2', 'blocks': ['p9-b3', 'nope']},
+            {
+              'index': 1,
+              'key': 'c1.2',
+              'blocks': ['p9-b3', 'nope']
+            },
           ],
           'draft_concepts': [
-            {'source_blocks': ['p8-a0']},
-            {'source_blocks': ['p8-a0', 'p9-a0']},
+            {
+              'source_blocks': ['p8-a0']
+            },
+            {
+              'source_blocks': ['p8-a0', 'p9-a0']
+            },
           ],
           'blocks': [
             {'id': 'p8-a0', 'raw_page': 8},
@@ -88,6 +102,19 @@ void main() {
       ]);
       expect(orders, {'X\u00018': 2, 'Y\u00018': 1, 'Y\u00019': 1, 'Z\u00019': 2});
     });
+  });
+
+  test('같은 쪽이 기본 서술과 다른 서술의 출처로 함께 있어도 개념은 한 번, 쪽도 한 번이고 아는 쪽 안 순서를 쓴다', () {
+    for (final rows in [
+      [_src('c1', '소수', 'f1', 8), _src('c1', '소수', 'f1', 8, order: 2), _src('c1', '소수', 'f1', 9)],
+      [_src('c1', '소수', 'f1', 9), _src('c1', '소수', 'f1', 8, order: 2), _src('c1', '소수', 'f1', 8)],
+    ]) {
+      final order = buildConceptBookOrder(sources: rows);
+      expect(order.entries, hasLength(1));
+      expect(order.entries.single.pages, [8, 9]);
+      expect(order.entries.single.pageOrder, 2);
+      expect(order.entries.single.orderFrom, ConceptPageOrderFrom.stored);
+    }
   });
 
   group('교재 순서 창', () {

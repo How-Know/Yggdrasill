@@ -15,6 +15,7 @@ import {
   buildWonriMiddleStepHeaderPrompt,
   buildWonriPageClassPrompt,
   GAEYU_ITEM_CATEGORIES,
+  GOJAENGI_HIGH_LABEL_PARTS,
   GOJAENGI_SECTION_BY_SUB_KEY,
   SURYEOK_ITEM_CATEGORIES,
   VLM_DETECT_LABELS,
@@ -723,13 +724,13 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     (series === 'ssen' || series === 'rpm') &&
     out.section === 'basic_drill' &&
     hasStrongBasicDrillNumberEvidence(rawItems);
-  const recoverGojaengiItems =
+  const gojaengiWorkbook =
     series === 'gojaengi' &&
-    hasStrongGojaengiNumberEvidence(rawItems, {
-      workbook:
-        isGojaengiWorkbookHint(sectionHint) ||
-        isGojaengiWorkbookHint(out.section),
-    });
+    (isGojaengiWorkbookHint(sectionHint) ||
+      isGojaengiWorkbookHint(out.section));
+  const recoverGojaengiItems =
+    (series === 'gojaengi' || series === 'gojaengi_high') &&
+    hasStrongGojaengiNumberEvidence(rawItems, { workbook: gojaengiWorkbook });
   const recoverWonriMiddleItems =
     series === 'wonri_middle' &&
     hasStrongWonriMiddleNumberEvidence(rawItems, out.section);
@@ -772,12 +773,9 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
 
   const isGaeyu = series === 'gaeyu';
   const isSuryeok = series === 'suryeok';
-  const isGojaengi = series === 'gojaengi';
+  const isGojaengiHigh = series === 'gojaengi_high';
+  const isGojaengi = series === 'gojaengi' || isGojaengiHigh;
   const isWonriMiddle = series === 'wonri_middle';
-  const gojaengiWorkbook =
-    isGojaengi &&
-    (isGojaengiWorkbookHint(sectionHint) ||
-      isGojaengiWorkbookHint(out.section));
   // 수력충전 크롭 경계용. 유형 머리말은 문항이 아니지만, 앞 문항의 크롭이
   // 머리말을 삼키지 않으려면 위치를 알아야 한다.
   if (isSuryeok && Array.isArray(parsedJson.type_headers)) {
@@ -799,7 +797,9 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     // 쎈/RPM A단계에는 문항 라벨이 없다. 모델이 개념 박스의 글자나 세트
     // 장식을 "중/대표 문제" 등으로 잘못 붙이면 정상 4자리 번호까지 A 검증에서
     // 제거되므로, 확정된 basic_drill 지면에서는 잘못된 라벨을 버린다.
-    const detectedLabel = normalizeDifficultyLabel(raw.label);
+    const detectedLabel = isGojaengiHigh
+      ? normalizeGojaengiHighLabel(raw.label)
+      : normalizeDifficultyLabel(raw.label);
     const label =
       out.section === 'basic_drill' &&
       (series === 'ssen' || series === 'rpm')
@@ -1660,6 +1660,27 @@ function normalizeExpectedStartNumber(input) {
   const n = Number.parseInt(match[0], 10);
   if (!Number.isFinite(n) || n <= 0 || n > 9999) return '';
   return String(n).padStart(4, '0');
+}
+
+// 고쟁이 고등 배지는 여러 개가 한 문항에 같이 붙는다. 모델이 어떤 순서·구분자로
+// 내보내든 GOJAENGI_HIGH_LABEL_PARTS 순서의 "+" 조합 하나로 맞춘다. 중등 라벨
+// (별표 "상", "대표 문제")은 고등 지면에 없으니 버린다.
+const GOJAENGI_HIGH_LABEL_PATTERNS = Object.freeze({
+  빈출: /빈출/,
+  서술형: /서술형|논술/,
+  '선생님 Pick': /선생님|pick/i,
+  평가원기출: /평가원기출/,
+  평가원변형: /평가원변형/,
+  교육청기출: /교육청기출/,
+  교육청변형: /교육청변형/,
+});
+
+function normalizeGojaengiHighLabel(input) {
+  const compact = String(input || '').replace(/\s+/g, '');
+  if (!compact) return '';
+  return GOJAENGI_HIGH_LABEL_PARTS.filter((part) =>
+    GOJAENGI_HIGH_LABEL_PATTERNS[part].test(compact),
+  ).join('+');
 }
 
 function normalizeDifficultyLabel(input) {

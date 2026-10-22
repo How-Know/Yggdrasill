@@ -444,6 +444,10 @@ Edge Function `student_textbook_grade` 에 `homework_group_id` 를 함께 보내
 - 요약 컬럼과 Flow 행은 원자료에서 **다시 계산할 수 있다**. 하원 트리거, 하원 뒤
   알림장 출력, `staff_refresh_lesson_record_v1` 에서 갱신된다.
 - 하원 전에는 스냅샷이 없으므로 `staff_lesson_record_v1` 이 같은 계산을 저장 없이 돌려준다.
+- 과거 알림장 재열람은 계산 원자료를 다시 조합하지 않는다. 정상 하원 확정 뒤
+  `student_class_session_todo_sheet_snapshots` 에 당시 렌더링 의미 데이터(JSON)를
+  회차당 한 번 저장한다. 미리보기는 저장하지 않고, 최초 확정본은 이후 과제 완료·수정이나
+  계산식 변경으로 덮어쓰지 않는다. PDF와 로고 바이너리는 저장하지 않는다.
 
 계산 원본은 `_lesson_record_compute` 하나다. 앱에서 다시 계산하지 않는다.
 정의: `supabase/migrations/20261004120000_lesson_record_summary.sql`
@@ -545,3 +549,6 @@ Edge Function `student_textbook_grade` 에 `homework_group_id` 를 함께 보내
   완료된 그룹이 하위과제마다 갈라진다
   (`20261017150000_lesson_record_homework_archived_groups.sql`).
   알림장 문항 당 진행속도는 머문 시간 ÷ 완료 문항(`passed_problem_count`)이다.
+- **2026-10-22** — 하원 확정 뒤 알림장 의미 payload를 회차당 최초 한 번 고정한다
+  (`20261022002000_todo_sheet_snapshots.sql`). 미리보기는 저장하지 않으며, 과제 현황에서
+  저장된 payload로 과거 알림장을 다시 렌더링한다. 적용 전 회차는 백필하지 않는다.

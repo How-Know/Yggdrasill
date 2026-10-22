@@ -2159,6 +2159,11 @@ class _MainScreenState extends State<MainScreen>
 
   Future<void> _initializeData() async {
     await DataManager.instance.initialize();
+    // 홈 동기화가 오래 걸려도 출석 이력과 예정 수업 생성이 너무 늦어지지 않게 한다.
+    unawaited(Future<void>.delayed(
+      const Duration(seconds: 10),
+      DataManager.instance.ensureAttendanceHistoryLoaded,
+    ));
 
     await HomeworkStore.instance.restoreSnapshotAndStartRealtime();
     await HomeRealtimeSyncCoordinator.instance.resync(
@@ -2169,8 +2174,8 @@ class _MainScreenState extends State<MainScreen>
       unawaited(HomeworkStore.instance.loadAll());
     }
 
-    // 강제 마이그레이션 실행
-    await DataManager.instance.forceMigration();
+    // 홈이 뜬 뒤 출석 전체 이력(과거 2년~)을 뒤에서 받는다. 홈은 기다리지 않는다.
+    unawaited(DataManager.instance.ensureAttendanceHistoryLoaded());
 
     // 태그 이벤트 DB → 메모리 적재
     await TagStore.instance.loadAllFromDb();
@@ -4764,6 +4769,28 @@ class _MainScreenState extends State<MainScreen>
                     attendanceId: savedAttendanceId,
                     result: summary,
                   );
+                  try {
+                    await finalizeDepartureTodoSheetSnapshot(
+                      attendanceId: savedAttendanceId,
+                      studentId: t.student.id,
+                      studentName: t.student.name,
+                      classDateTime: classDateTime,
+                      arrivalTime: arrival2,
+                      departureTime: now,
+                      result: summary,
+                      className: t.classInfo?.name,
+                      classEndTime: classDateTime.add(t.duration),
+                      setId: t.setId,
+                    );
+                  } catch (e) {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('알림장 기록 저장에 실패했어요: $e'),
+                        ),
+                      );
+                    }
+                  }
                   HomeworkStore.instance.convertAllTestCardsToPrintForDeparture(
                     t.student.id,
                   );

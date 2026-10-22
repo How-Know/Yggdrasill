@@ -9,6 +9,7 @@ import '../../../services/concept_statement_service.dart';
 import '../../../services/concept_statement_store.dart';
 import '../../../widgets/latex_text_renderer.dart';
 import '../../think/think_style.dart';
+import 'concept_base_draft.dart';
 import 'concept_library_pane.dart';
 import 'concept_relation_section.dart';
 import 'concept_statement_dialogs.dart';
@@ -62,11 +63,15 @@ class ConceptStatementSection extends StatelessWidget {
     required this.controller,
     required this.concept,
     required this.onEditBase,
+    this.onBaseChanged,
   });
 
   final ConceptLibraryController controller;
   final ConceptItem concept;
   final VoidCallback onEditBase;
+
+  /// 기본 서술 수정안을 확정했거나 본문이 그사이 바뀌었을 때 개념을 다시 읽는다.
+  final Future<void> Function(String conceptId)? onBaseChanged;
 
   ConceptStatementStore get _store => controller.statements;
 
@@ -193,9 +198,11 @@ class ConceptStatementSection extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 8),
-                  if (selected == null)
-                    _BaseContent(concept: concept)
-                  else
+                  if (selected == null) ...[
+                    _BaseContent(concept: concept),
+                    const SizedBox(height: 8),
+                    ConceptBaseDraftBox(store: _store, concept: concept),
+                  ] else
                     _StatementBody(key: ValueKey(selected.id), statement: selected),
                   const SizedBox(height: 10),
                   _Appearances(store: _store, concept: concept, statement: selected),
@@ -206,6 +213,20 @@ class ConceptStatementSection extends StatelessWidget {
                     spacing: 8,
                     children: [
                       if (selected == null) ...[
+                        _smallButton(
+                          _store.contentDraftOf(id) == null ? '수정안 쓰기' : '수정안 열기',
+                          Icons.edit_note,
+                          _store.busy || !_store.contentDraftLoaded(id)
+                              ? null
+                              : () => unawaited(showConceptBaseDraftDialog(
+                                    context,
+                                    controller: controller,
+                                    concept: concept,
+                                    impact: conceptEditImpact(controller, concept),
+                                    onBaseChanged: onBaseChanged,
+                                  )),
+                          key: const ValueKey('base-draft-open'),
+                        ),
                         _smallButton('개념 본문 수정', Icons.edit_outlined, onEditBase, color: kThinkSub),
                         _smallButton('고친 기록', Icons.history,
                             () => unawaited(showConceptContentHistory(context, store: _store, concept: concept)),

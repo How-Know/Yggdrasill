@@ -1210,12 +1210,9 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                       hitSize: 36,
                                       onPressed: () async {
                                         final result =
-                                            await showDialog<GroupInfo>(
+                                            await GroupRegistrationDialog.show(
                                           context: context,
-                                          builder: (context) =>
-                                              GroupRegistrationDialog(
-                                            onSave: (_) {},
-                                          ),
+                                          onSave: (_) {},
                                         );
                                         if (result != null) {
                                           widget.onGroupAdded(result);
@@ -1551,15 +1548,13 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                       .where((s) =>
                                           s.groupInfo?.id == groupInfo.id)
                                       .toList();
-                                  final result = await showDialog<GroupInfo>(
+                                  final result =
+                                      await GroupRegistrationDialog.show(
                                     context: context,
-                                    builder: (context) =>
-                                        GroupRegistrationDialog(
-                                      editMode: true,
-                                      groupInfo: groupInfo,
-                                      currentMemberCount: dialogStudents.length,
-                                      onSave: (_) {},
-                                    ),
+                                    editMode: true,
+                                    groupInfo: groupInfo,
+                                    currentMemberCount: dialogStudents.length,
+                                    onSave: (_) {},
                                   );
                                   if (result != null) {
                                     widget.onGroupUpdated(result, index);
@@ -2707,18 +2702,16 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
               Expanded(
                 child: OutlinedButton.icon(
                   onPressed: () async {
-                    await showDialog(
+                    await StudentRegistrationDialog.show(
                       context: context,
-                      builder: (context) => StudentRegistrationDialog(
-                        student: student,
-                        onSave: (updated, basicInfo) async {
-                          await DataManager.instance
-                              .updateStudent(updated, basicInfo);
-                          showAppSnackBar(context, '학생 정보가 수정되었습니다.',
-                              useRoot: true);
-                        },
-                        groups: DataManager.instance.groups,
-                      ),
+                      student: student,
+                      onSave: (updated, basicInfo) async {
+                        await DataManager.instance
+                            .updateStudent(updated, basicInfo);
+                        showAppSnackBar(context, '학생 정보가 수정되었습니다.',
+                            useRoot: true);
+                      },
+                      groups: DataManager.instance.groups,
                     );
                   },
                   style: OutlinedButton.styleFrom(

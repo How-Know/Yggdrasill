@@ -62,8 +62,14 @@ const double _rsSetPartCardLeft =
 /// 정답 리스트 문항번호·세트형 파트 번호 공통 크기.
 const double _rsAnswerQuestionNumberSize = 22.0;
 
-/// 정답 리스트 본문(주관식 폴백) 크기. 스크롤로 접힌 상단 바도 이 크기를 쓴다.
-const double _rsAnswerBodyFontSize = 25.0;
+/// 정답 PNG가 아직 없을 때 쓰는 글자 크기. v11 PNG(15pt, 160dpi,
+/// pixel_ratio 1)와 같은 크기가 되도록 1pt = 160/72로 환산한다.
+/// 한글은 템플릿처럼 0.9em(30), 수식·영문은 1em(약 33.3).
+const double _rsAnswerRenderDpPerPt = 160 / 72;
+const double _rsAnswerBodyFontSize = 15 * 0.9 * _rsAnswerRenderDpPerPt;
+const double _rsAnswerFallbackMathScale = 1 / 0.9;
+const double _rsAnswerFallbackFractionMathScale =
+    _rsAnswerFallbackMathScale * (1.02 / 0.9);
 
 class _RightSheetFabColors {
   const _RightSheetFabColors({
@@ -3412,7 +3418,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   /// (템플릿 스트럿 1.5em @15pt, 상하 보더 2.5pt, 160dpi 기준 실측 61px)
   static const double _answerV11OneLineHeight = 61.0;
   static const double _answerRenderDefaultPixelRatio = 7.0;
-  static const double _inlineAnswerLineHeight = 30.0;
+  /// PNG 폴백 텍스트의 둘째 줄부터 더하는 줄 높이(분수 등 인라인 수식 포함).
+  static const double _inlineAnswerLineHeight = 42.0;
 
   final TextEditingController _searchCtrl = ImeAwareTextEditingController();
   final FocusNode _searchFocus = FocusNode();
@@ -3757,12 +3764,14 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     });
     final correctionStates = <String, String>{};
     session.initialCorrectionStates.forEach((key, value) {
-      if (value.trim() == 'corrected' && baselineStates.containsKey(key)) {
+      if (value.trim() == 'corrected' &&
+          _isCorrectionBaselineState(baselineStates[key])) {
         correctionStates[key] = 'corrected';
       }
     });
-    baselineStates.forEach((key, _) {
-      if (_normalizeState(mapped[key]) == 'correct') {
+    baselineStates.forEach((key, baseline) {
+      if (_isCorrectionBaselineState(baseline) &&
+          _normalizeState(mapped[key]) == 'correct') {
         correctionStates[key] = 'corrected';
       }
     });
@@ -4438,6 +4447,16 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     return state == 'wrong' || state == 'blank' || state == 'not_performed';
   }
 
+  /// 오답·빈칸만 수정이다. 미수행은 다시 보이지만 정답으로 바꿔도 수정이 아니다.
+  bool _isCorrectionBaselineState(String? raw) {
+    final state = _normalizeState(raw);
+    return state == 'wrong' || state == 'blank';
+  }
+
+  bool _isCorrectionBaselineKey(String key) {
+    return _isCorrectionBaselineState(_baselineStates[key]);
+  }
+
   /// '틀린것만 보기'를 쓸 수 있는지. 재채점(베이스라인) 세션이 아니어도
   /// 현재 채점 상태에 오답/미풀이/미수행이 있으면 켤 수 있다.
   bool get _wrongOnlyAvailable {
@@ -4464,7 +4483,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   }
 
   bool _isCorrectedRetryKey(String key) {
-    return _correctionStates[key] == 'corrected' && _isBaselineRetryKey(key);
+    return _correctionStates[key] == 'corrected' &&
+        _isCorrectionBaselineKey(key);
   }
 
   bool get _answerListReadOnly => widget.session?.onAction == null;
@@ -4479,7 +4499,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       final next = _nextRetryState(key, current);
       _gradingStates[key] = next;
       _applyStateToParts(key, partLabels);
-      if (_isBaselineRetryKey(key)) {
+      if (_isCorrectionBaselineKey(key)) {
         if (next == 'correct') {
           _correctionStates[key] = 'corrected';
         } else {
@@ -4507,7 +4527,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     setState(() {
       _gradingStates[key] = normalized;
       _applyStateToParts(key, partLabels);
-      if (_isBaselineRetryKey(key)) {
+      if (_isCorrectionBaselineKey(key)) {
         if (normalized == 'correct') {
           _correctionStates[key] = 'corrected';
         } else {
@@ -4583,7 +4603,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                     ? 'not_performed'
                     : 'correct';
     _gradingStates[cellKey] = derived;
-    if (_isBaselineRetryKey(cellKey)) {
+    if (_isCorrectionBaselineKey(cellKey)) {
       if (derived == 'correct') {
         _correctionStates[cellKey] = 'corrected';
       } else {
@@ -4610,7 +4630,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         fallbackKey: cellKey,
       );
       _syncSetCellStateFromParts(cellKey, partLabels);
-      if (_isBaselineRetryKey(cellKey)) {
+      if (_isCorrectionBaselineKey(cellKey)) {
         if (_normalizeState(_gradingStates[cellKey]) == 'correct') {
           _correctionStates[cellKey] = 'corrected';
         } else {
@@ -7831,7 +7851,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim()
         .length;
-    final estimatedByLength = (plainLength / 34).ceil();
+    final estimatedByLength = (plainLength / 28).ceil();
     final tallMathExtra =
         RegExp(r'\\(?:dfrac|tfrac|frac)\b|\\left|\\right').hasMatch(answer)
             ? 1
@@ -7839,10 +7859,12 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     return math.max(explicitLines, estimatedByLength) + tallMathExtra;
   }
 
+  /// PNG 폴백 슬롯 높이. 한 줄이면 v11 한 줄 카드와 같은 높이다.
   double _inlineAnswerSlotHeight(_RightSheetGradingCellVm cell) {
-    final lineCount = _estimatedInlineAnswerLineCount(cell);
-    final height = (lineCount * _inlineAnswerLineHeight) + 6.0;
-    return math.max(_answerSlotHeight, height);
+    final lineCount = math.max(1, _estimatedInlineAnswerLineCount(cell));
+    return _answerV11OneLineHeight +
+        (lineCount - 1) * _inlineAnswerLineHeight +
+        _answerImageTightPadding * 2;
   }
 
   /// 객관식·세트형(접힘) 카드가 주관식 1줄 카드와 같은 높이가 되도록 하는
@@ -7873,7 +7895,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     final render = _answerRenders[cell.key];
     if (render != null && render.hasImage) {
       if (!_isAcceptedAnswerRenderStyle(render.styleVersion)) {
-        return _answerSlotHeight;
+        return _inlineAnswerSlotHeight(cell);
       }
       final displayHeight = render.displayHeightDp;
       // v11(uniform-line)은 이미지 자체가 줄 단위로 높이가 통일되어 있으므로
@@ -7903,7 +7925,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         fallbackDisplayHeight + _answerImageVerticalPadding,
       );
     }
-    return _answerSlotHeight;
+    return _inlineAnswerSlotHeight(cell);
   }
 
   Widget _buildAnswerNetworkImage({
@@ -8116,14 +8138,15 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                         softWrap: true,
                         enableDisplayMath: false,
                         crossAxisAlignment: CrossAxisAlignment.start,
-                        inlineMathScale: 0.88,
-                        fractionInlineMathScale: 1.0,
+                        inlineMathScale: _rsAnswerFallbackMathScale,
+                        fractionInlineMathScale:
+                            _rsAnswerFallbackFractionMathScale,
                         style: TextStyle(
                           color: _cardInk,
                           fontFamily: 'ChosunNm',
                           fontWeight: FontWeight.w700,
-                          fontSize: 23,
-                          height: 1.18,
+                          fontSize: _rsAnswerBodyFontSize,
+                          height: 1.2,
                         ),
                       ),
                     ),
@@ -8137,23 +8160,26 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     }
     return SizedBox(
       height: _answerSlotHeightForCell(cell),
-      child: Align(
-        alignment: Alignment.centerLeft,
-        child: LatexTextRenderer(
-          _normalizeAnswerForOverflowDisplay(answer),
-          textAlign: TextAlign.left,
-          overflow: TextOverflow.visible,
-          softWrap: true,
-          enableDisplayMath: false,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          inlineMathScale: 0.9,
-          fractionInlineMathScale: 1.02,
-          style: TextStyle(
-            color: _cardInk,
-            fontFamily: 'ChosunNm',
-            fontWeight: FontWeight.w700,
-            fontSize: _rsAnswerBodyFontSize,
-            height: 1.1,
+      child: Padding(
+        padding: const EdgeInsets.only(left: _rsAnswerContentLeftPad),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: LatexTextRenderer(
+            _normalizeAnswerForOverflowDisplay(answer),
+            textAlign: TextAlign.left,
+            overflow: TextOverflow.visible,
+            softWrap: true,
+            enableDisplayMath: false,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            inlineMathScale: _rsAnswerFallbackMathScale,
+            fractionInlineMathScale: _rsAnswerFallbackFractionMathScale,
+            style: TextStyle(
+              color: _cardInk,
+              fontFamily: 'ChosunNm',
+              fontWeight: FontWeight.w700,
+              fontSize: _rsAnswerBodyFontSize,
+              height: 1.2,
+            ),
           ),
         ),
       ),
@@ -8305,14 +8331,14 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         softWrap: true,
         enableDisplayMath: false,
         crossAxisAlignment: CrossAxisAlignment.start,
-        inlineMathScale: 0.9,
-        fractionInlineMathScale: 1.02,
+        inlineMathScale: _rsAnswerFallbackMathScale,
+        fractionInlineMathScale: _rsAnswerFallbackFractionMathScale,
         style: TextStyle(
           color: _cardInk,
           fontFamily: 'ChosunNm',
           fontWeight: FontWeight.w700,
-          fontSize: 21,
-          height: 1.15,
+          fontSize: _rsAnswerBodyFontSize,
+          height: 1.2,
         ),
       );
     }
@@ -8321,7 +8347,17 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     if (render == null ||
         !render.hasImage ||
         !_isAcceptedAnswerRenderStyle(render.styleVersion)) {
-      return textFallback();
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: _answerImageTightPadding),
+        child: ConstrainedBox(
+          constraints:
+              const BoxConstraints(minHeight: _answerV11OneLineHeight),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: textFallback(),
+          ),
+        ),
+      );
     }
     final pixelRatio = render.pixelRatio <= 0
         ? _answerRenderDefaultPixelRatio
@@ -8601,9 +8637,9 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
             cell.key,
             [for (final part in _setPartsOf(cell)) part.label],
           );
-          if (_isBaselineRetryKey(cell.key) && targetState == 'correct') {
+          if (_isCorrectionBaselineKey(cell.key) && targetState == 'correct') {
             _correctionStates[cell.key] = 'corrected';
-          } else {
+          } else if (_isCorrectionBaselineKey(cell.key)) {
             _correctionStates.remove(cell.key);
           }
         }
@@ -8888,6 +8924,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         AppDialogConfirmButton(
           label: _actionBusy ? '완료중' : '완료',
           filled: false,
+          iconLift: 3,
+          iconDx: -2,
           onPressed:
               _actionBusy ? null : () => unawaited(_runAction('complete')),
         ),

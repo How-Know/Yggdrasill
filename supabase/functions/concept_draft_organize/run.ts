@@ -28,6 +28,14 @@ import {
   CONCEPT_ANCHOR_SCHEMA,
   parseAnchorProposal,
 } from './anchors.ts';
+import {
+  buildEvidencePrompt,
+  CONCEPT_EVIDENCE_SCHEMA,
+  type EvidenceProposal,
+  type EvidenceSource,
+  parseEvidenceProposal,
+} from './evidence.ts';
+import { buildComparePrompt, type CompareItem, type CompareProposal, CONCEPT_COMPARE_SCHEMA, parseCompareProposal } from './compare.ts';
 
 export interface ConceptDraftOutcome {
   result: AiResult | null;
@@ -157,6 +165,79 @@ export async function proposeConceptAnchors(
     return { result, proposal: null, error: `incomplete:${result.incompleteReason ?? 'unknown'}` };
   }
   const proposal = parseAnchorProposal(finalText(result), opts.concepts);
+  if (!proposal) return { result, proposal: null, error: 'invalid_output' };
+  return { result, proposal, error: null };
+}
+
+export async function proposeEvidenceScopes(
+  provider: AiProvider,
+  opts: {
+    model: string;
+    reasoningEffort: string;
+    conceptName: string;
+    basisKind: string;
+    basis: string;
+    basisMd5: string;
+    sources: EvidenceSource[];
+    noBlocks: string[];
+    safetyId?: string;
+  },
+): Promise<{ result: AiResult | null; proposal: EvidenceProposal | null; error: string | null }> {
+  const prompt = buildEvidencePrompt(opts);
+  let result: AiResult | null = null;
+  try {
+    result = await provider.complete({
+      model: opts.model,
+      instructions: prompt.instructions,
+      input: [{ kind: 'message', role: 'user', parts: [{ type: 'text', text: prompt.userText }] }],
+      jsonSchema: { name: 'concept_source_scope', schema: CONCEPT_EVIDENCE_SCHEMA },
+      reasoningEffort: opts.reasoningEffort,
+      maxOutputTokens: prompt.maxOutputTokens,
+      safetyId: opts.safetyId,
+    });
+  } catch (e) {
+    return { result: null, proposal: null, error: e instanceof Error ? e.message : String(e) };
+  }
+  if (result.status !== 'completed') {
+    return { result, proposal: null, error: `incomplete:${result.incompleteReason ?? 'unknown'}` };
+  }
+  const proposal = parseEvidenceProposal(finalText(result), opts.sources, opts.basisMd5, opts.noBlocks);
+  if (!proposal) return { result, proposal: null, error: 'invalid_output' };
+  return { result, proposal, error: null };
+}
+
+export async function proposeCompare(
+  provider: AiProvider,
+  opts: {
+    model: string;
+    reasoningEffort: string;
+    unitPath: string[];
+    bookName: string;
+    items: CompareItem[];
+    noCandidates: string[];
+    overLimit: string[];
+    safetyId?: string;
+  },
+): Promise<{ result: AiResult | null; proposal: CompareProposal | null; error: string | null }> {
+  const prompt = buildComparePrompt(opts);
+  let result: AiResult | null = null;
+  try {
+    result = await provider.complete({
+      model: opts.model,
+      instructions: prompt.instructions,
+      input: [{ kind: 'message', role: 'user', parts: [{ type: 'text', text: prompt.userText }] }],
+      jsonSchema: { name: 'concept_draft_compare', schema: CONCEPT_COMPARE_SCHEMA },
+      reasoningEffort: opts.reasoningEffort,
+      maxOutputTokens: prompt.maxOutputTokens,
+      safetyId: opts.safetyId,
+    });
+  } catch (e) {
+    return { result: null, proposal: null, error: e instanceof Error ? e.message : String(e) };
+  }
+  if (result.status !== 'completed') {
+    return { result, proposal: null, error: `incomplete:${result.incompleteReason ?? 'unknown'}` };
+  }
+  const proposal = parseCompareProposal(finalText(result), opts.items, opts.noCandidates, opts.overLimit);
   if (!proposal) return { result, proposal: null, error: 'invalid_output' };
   return { result, proposal, error: null };
 }

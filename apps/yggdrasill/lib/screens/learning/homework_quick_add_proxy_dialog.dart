@@ -2774,7 +2774,7 @@ class HomeworkQuickAddProxyDialogState
   bool _isGojaengiLinkedBook(_LinkedTextbook? book) {
     if (book == null) return false;
     final series = (_linkedBookSeriesKey ?? '').trim().toLowerCase();
-    if (series == 'gojaengi') return true;
+    if (series == 'gojaengi' || series == 'gojaengi_high') return true;
     final compact =
         book.bookName.trim().replaceAll(RegExp(r'\s+'), '').toLowerCase();
     return compact.contains('고쟁이') || compact.contains('gojaengi');

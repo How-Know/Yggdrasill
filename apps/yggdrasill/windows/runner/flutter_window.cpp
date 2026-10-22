@@ -94,8 +94,14 @@ bool FlutterWindow::OnCreate() {
 
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
+  // Dart (window_manager) shows the window after applying the startup
+  // maximize/fullscreen state. SW_SHOWNORMAL here would restore it to the
+  // normal size, so only show a window that is still hidden, with SW_SHOW.
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
-    this->Show();
+    HWND hwnd = GetHandle();
+    if (hwnd && !::IsWindowVisible(hwnd)) {
+      ::ShowWindow(hwnd, SW_SHOW);
+    }
   });
 
   // Flutter can complete the first frame before the "show window" callback is

@@ -287,7 +287,34 @@ const List<TextbookSeriesCatalogEntry> kTextbookSeriesCatalog =
       TextbookSubSectionPreset(key: 'F', displayName: '대단원 TEST'),
     ],
   ),
+  // 고쟁이 고등. 번호 체계(책 전체 세 자리 연속)와 STEP1~3 구성은 중등과 같고,
+  // 창의융합·워크북이 없어 A~C 세 칸만 쓴다.
+  //   - 유형 머리말은 STEP1·STEP2 모두 "유형 NN" 하나이고 STEP3 에는 없다.
+  //   - 라벨은 별표 대신 빈출 / 서술형 / 선생님 Pick / 평가원·교육청 기출·변형
+  //     배지이고 한 문항에 여럿이 붙으면 "+" 로 잇는다.
+  //   - 정답 파일은 STEP 묶음 아래 번호를 나열할 뿐 본문 쪽 배지가 없고, 해설
+  //     파일도 번호 순으로 이어져 세 자리 번호만으로 매칭된다.
+  TextbookSeriesCatalogEntry(
+    key: 'gojaengi_high',
+    displayName: '고쟁이 고등',
+    defaultTextbookType: '문제집',
+    notes: '한 중단원은 A(STEP1 핵심 유형) / B(STEP2 심화 유형) / '
+        'C(STEP3 최고난도 유형)로 고정됩니다. 단계별 쪽 범위는 지면의 STEP '
+        '머리말을 읽어 자동으로 나눕니다.',
+    subPreset: <TextbookSubSectionPreset>[
+      TextbookSubSectionPreset(key: 'A', displayName: 'A STEP1 핵심 유형'),
+      TextbookSubSectionPreset(key: 'B', displayName: 'B STEP2 심화 유형'),
+      TextbookSubSectionPreset(key: 'C', displayName: 'C STEP3 최고난도 유형'),
+    ],
+  ),
 ];
+
+/// 고쟁이 중등·고등 공통 지면 규칙(세 자리 연속 번호, STEP 단계 구분)을 쓰는
+/// 시리즈인지. 워크북·창의융합처럼 중등에만 있는 코너는 'gojaengi' 로 따로 본다.
+bool isGojaengiSeries(String series) {
+  final key = series.trim().toLowerCase();
+  return key == 'gojaengi' || key == 'gojaengi_high';
+}
 
 // 고쟁이 문항 번호 규칙.
 //
