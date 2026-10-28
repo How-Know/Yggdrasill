@@ -38,6 +38,7 @@ export const CONCEPT_FILES = [
   '20261028010000_concept_review_ref_limit.sql',
   '20261028020000_concept_review_failure_page.sql',
   '20261028030000_concept_review_status_single_pass.sql',
+  '20261028150000_concept_review_compared_snapshot.sql',
 ];
 
 const CONCEPT_STUBS = `

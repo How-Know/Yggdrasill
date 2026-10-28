@@ -29,6 +29,28 @@ const save = (job, gen, items) => r(`select concept_review_job_save($1::uuid, $2
 const submit = (job, gen) => r(`select concept_review_job_submit($1::uuid, $2::bigint, $3::uuid, '참조 상한', null) as r`, [job, gen, conv]);
 const status = (job) => r(`select concept_review_job_status($1::uuid, 60) as r`, [job]);
 const begin = (job, gen) => r(`select concept_review_job_batch_begin($1::uuid, $2::bigint) as r`, [job, gen]);
+const material = (job, gen, positions) =>
+  r(`select concept_review_job_material($1::uuid, $2::bigint, $3::integer[], '{}'::jsonb, 60000) as r`, [job, gen, positions]);
+const snapshotMark = (item) => t.one(`
+  select md5(jsonb_build_array(
+    $1::text, $2::text,
+    coalesce((
+      select jsonb_agg(jsonb_build_array((e->>'id')::uuid, (e->>'version')::int) order by (e->>'id')::uuid)
+        from jsonb_array_elements($3::jsonb) e
+    ), '[]'::jsonb)
+  )::text) as r
+`, [item.name, item.content, JSON.stringify(item.statements ?? [])]);
+const confirmStatement = async (conceptId) => {
+  const row = (await op(
+    `select concept_statement_create($1::uuid, 'statement', $2::jsonb) as r`,
+    [conceptId, JSON.stringify({ title: '확정 서술', body: '비교 대상에 확정 서술을 더한다' })],
+  )).r;
+  await op(
+    `select concept_statement_confirm($1::uuid, $2::int, $3::timestamptz, null) as r`,
+    [row.id, row.version, row.draft_saved_at],
+  );
+  return row;
+};
 const apply = (id) => op(`select * from course_think_action_apply($1::uuid, '{}'::jsonb)`, [id]);
 const refs = (ids, self) => t.one(`select concept_review_refs($1::jsonb, $2::uuid) as r`, [JSON.stringify(ids), self]);
 const refsRejects = (ids, self, pattern) => t.rejects(
@@ -58,10 +80,23 @@ const placementOk = () => review('placement', {
   detail: { basis_kind: 'source', viewed_original: false },
 });
 const four = () => [review('notation'), review('meaning'), foundationOk(), placementOk()];
-const drafted = async (position, concept, reviews) => ({
-  position, concept_id: concept, state: 'drafted', revision: await revision(concept), read_complete: true,
-  unread: null, reviews, next_action: null, reason: null, rework: false,
-});
+const drafted = async (position, concept, reviews) => {
+  const filled = [];
+  for (const rev of reviews) {
+    const ids = Array.isArray(rev.compared_ids) ? rev.compared_ids : [];
+    if (rev.scope !== 'foundation' && ids.length > 0 && rev.compared_marks == null) {
+      const compared_marks = {};
+      for (const id of ids) compared_marks[id] = await markOf(id);
+      filled.push({ ...rev, compared_marks });
+    } else {
+      filled.push(rev);
+    }
+  }
+  return {
+    position, concept_id: concept, state: 'drafted', revision: await revision(concept), read_complete: true,
+    unread: null, reviews: filled, next_action: null, reason: null, rework: false,
+  };
+};
 const cardItem = async (concept, scope, over = {}) => ({
   concept_id: concept, revision: await revision(concept), scope, outcome: 'no_issue_found',
   checked: '이름·본문의 표기', findings: '이번에 본 범위에서 오타를 찾지 못함', basis: '본문 전체를 읽음',
@@ -290,4 +325,87 @@ test('상한이 커진 위치는 고정 목록 순서를 유지하고, 보류의
   await t.exec(`update concepts set content = content || ' 보류 판 변경' where id = '${heldIds[0]}'`);
   const again = await begin(heldJob, heldGen);
   assert.ok(again.recheck.some((x) => x.position === 1 && x.scopes.includes('foundation')));
+});
+
+test('비교 참조: 읽은 지문이 바뀌면 저장을 거절하고 값은 남기지 않는다', async () => {
+  const { job, gen, ids } = await jobOf(2);
+  const confirmed = await confirmStatement(ids[1]);
+  const read = (await material(job, gen, [1, 2])).items.find((x) => x.position === 2);
+  const body = await t.one(`select name, content from concepts where id = $1::uuid`, [ids[1]]);
+  assert.equal(read.content_next_offset, null);
+  assert.equal(read.name, body.name);
+  assert.equal(read.content, body.content);
+  assert.equal(read.statements.length, 1);
+  assert.equal(read.statements[0].id, confirmed.id);
+  assert.equal(read.statements[0].version, 1);
+  assert.equal((await snapshotMark(read)).r, read.text_mark);
+  assert.equal(read.text_mark, await markOf(ids[1]));
+
+  const draft = (await op(
+    `select concept_statement_create($1::uuid, 'statement', $2::jsonb) as r`,
+    [ids[1], JSON.stringify({ title: '초안', body: '아직 확정하지 않은 서술' })],
+  )).r;
+  const again = (await material(job, gen, [2])).items[0];
+  assert.equal(again.text_mark, read.text_mark, '확정 전 초안은 지문을 바꾸지 않는다');
+  assert.equal(again.statements.some((s) => s.id === draft.id), false);
+
+  const seen = read.text_mark;
+  await t.exec(`update concepts set content = content || ' 읽은 뒤 변경' where id = '${ids[1]}'`);
+  const stale = await save(job, gen, [await drafted(1, ids[0], [review('notation', {
+    compared_ids: [ids[1]],
+    compared_marks: { [ids[1]]: seen },
+  })])]);
+  assert.equal(stale.saved, 0);
+  assert.equal(stale.items[0].status, 'error');
+  assert.equal(stale.items[0].code, 'concept_review_compared_changed');
+  assert.equal(stale.items[0].code.includes(ids[1]), false);
+  assert.equal(stale.items[0].code.includes(seen), false);
+  assert.equal(stale.items[0].code.includes('읽은 뒤 변경'), false);
+
+  const missing = await save(job, gen, [await drafted(1, ids[0], [review('notation', {
+    compared_ids: [ids[1]],
+    compared_marks: {},
+  })])]);
+  assert.equal(missing.items[0].code, 'concept_review_compared_changed');
+  assert.equal(missing.items[0].code.includes(ids[1]), false);
+});
+
+test('비교 참조: 저장 뒤 확정 서술 추가는 제출·승인에서 거절하고 기초 개념 저장은 유지한다', async () => {
+  const { job, gen, ids } = await jobOf(2);
+  const saved = await save(job, gen, [await drafted(1, ids[0], [review('notation', { compared_ids: [ids[1]] })])]);
+  assert.equal(saved.items[0].status, 'saved');
+  const before = await markOf(ids[1]);
+  assert.equal((await itemRow(job, 1)).draft[0].compared_text[ids[1]], before);
+  await confirmStatement(ids[1]);
+  assert.notEqual(await markOf(ids[1]), before);
+  const sub = await submit(job, gen);
+  assert.equal(sub.submitted, false);
+  assert.equal(sub.failed[0].position, 1);
+  assert.equal(sub.failed[0].code, 'concept_review_compared_changed');
+  assert.equal(JSON.stringify(sub.failed).includes(ids[1]), false);
+
+  const { job: job2, gen: gen2, ids: ids2 } = await jobOf(2);
+  await save(job2, gen2, [await drafted(1, ids2[0], [review('notation', { compared_ids: [ids2[1]] })])]);
+  const sent = await submit(job2, gen2);
+  assert.equal(sent.submitted, true);
+  await confirmStatement(ids2[1]);
+  const changed = await apply(sent.action.id);
+  assert.equal(changed.result.items[0].code, 'concept_review_compared_changed');
+  assert.equal(String(changed.error).includes(ids2[1]), false);
+  assert.equal(await reviewCount(ids2[0]), 0);
+
+  const { job: job3, gen: gen3, ids: ids3 } = await jobOf(2);
+  const foundation = await save(job3, gen3, [await drafted(1, ids3[0], [review('foundation', {
+    checked: '필요한 초등 기초 개념을 검색해 본문과 비교',
+    findings: '추가할 기초 개념 없음',
+    basis: '대상 본문을 읽음',
+    compared_ids: [ids3[1]],
+    detail: { needs: [{ name: '약수', why: '정의에 쓰임', terms: ['약수'], candidates: [ids3[1]], decision: 'reuse', reuse_id: ids3[1] }] },
+  })])]);
+  assert.equal(foundation.items[0].status, 'saved');
+  const found = (await itemRow(job3, 1)).draft[0];
+  assert.equal(found.scope, 'foundation');
+  assert.equal(found.compared_ids[0], ids3[1]);
+  assert.equal(found.compared_text[ids3[1]], await markOf(ids3[1]));
+  assert.equal(found.compared_marks, undefined);
 });

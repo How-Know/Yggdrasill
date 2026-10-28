@@ -6,6 +6,7 @@ import {
   BATCH_PROMPT_VERSION,
   BATCH_TOOL_NAME,
   JUDGE_INSTRUCTIONS,
+  assignRefLists,
   conceptRefAllowList,
   foundationReview,
   runReviewBatch,
@@ -30,6 +31,9 @@ interface SimConcept {
   id: string; name: string; content: string; rev: number; gone?: boolean; todo: string[]; supplement?: boolean;
   sources?: Rec[]; placements?: Rec[]; resume_scopes?: string[]; created_concepts?: Rec[];
   relations?: Rec[]; same_concept_reviews?: Rec[];
+  /** 32자 지문. 있으면 revision 앞 12자와 맞추고, 같은 호출의 전문 비교 근거가 된다. */
+  textMark?: string;
+  statements?: Rec[];
 }
 interface SimItem { pos: number; concept_id: string; state: string; revision: string; reviews: Rec[] | null; reason: string | null }
 interface SimCard { id: string; kind: string; positions: number[]; reviews: number; status: 'proposed' | 'approved'; items?: Rec[] }
@@ -74,6 +78,8 @@ class JobSim {
     return this.concepts.length;
   }
   rev(pos: number) {
+    const mark = this.concepts[pos - 1].textMark;
+    if (mark) return `${mark.slice(0, 12)}-cccccccccccc-rrrrrrrrrrrr`;
     return `r${pos}-${this.concepts[pos - 1].rev}`;
   }
   pending() {
@@ -182,6 +188,8 @@ class JobSim {
             ...(c.relations ? { relations: c.relations } : {}),
             ...(c.same_concept_reviews ? { same_concept_reviews: c.same_concept_reviews } : {}),
             sources: c.sources ?? [], placements: c.placements ?? [],
+            ...(c.statements ? { statements: c.statements } : {}),
+            ...(c.textMark ? { text_mark: c.textMark } : {}),
           };
           const baseLen = JSON.stringify(base).length;
           if (used > 0 && used + baseLen + (c.content.length - off) > budget) {
@@ -893,14 +901,15 @@ Deno.test('고유 21개 비교는 그 위치를 미결로 두고 다음 묶음�
   sim.concepts[1].placements = [{ id: cid(498) }];
   const provider = new FakeAiProvider(judge({
     reviews: (d) => [review('notation', {
-      compared_ids: d.position === 1 ? refs.map((r) => r.other_id) : Array(11).fill(cid(410)),
+      to_compare_ids: d.position === 1 ? refs.map((r) => r.other_id) : Array(11).fill(cid(410)),
     })],
   }));
   const v = parse(await batch(sim, provider, { target: 2 }));
   assertEquals(sim.items.get(1)!.state, 'deferred');
   assertEquals(sim.items.get(1)!.reviews, null);
-  assert(String(sim.items.get(1)!.reason).startsWith('concept_review_too_many_refs:notation:compared_ids:21:20'));
-  assertEquals(sim.items.get(2)!.reviews![0].compared_ids, [cid(410)]);
+  assert(String(sim.items.get(1)!.reason).startsWith('concept_review_too_many_refs:notation:to_compare_ids:21:20'));
+  assertEquals(sim.items.get(2)!.reviews![0].to_compare_ids, [cid(410)]);
+  assertEquals(sim.items.get(2)!.reviews![0].compared_ids, []);
   assertEquals(v.judged_saved, 1);
   assertEquals(v.deferred.count, 1);
   assertEquals(v.failed.count, 0);
@@ -1063,7 +1072,7 @@ Deno.test('형식 실패는 그 위치만 실패로 남고, 30개를 넘겨도 �
 
 Deno.test('참조 상한 정의가 DB·도구 설명·판단 지시와 같다', async () => {
   assertEquals(CONCEPT_REVIEW_REF_LIMIT, 20);
-  assertEquals(BATCH_PROMPT_VERSION, 'review-batch-2026-10-28a');
+  assertEquals(BATCH_PROMPT_VERSION, 'review-batch-2026-10-28b');
   assertEquals(THINK_PROMPT_VERSION, 'think-2026-10-28c');
   assert(JUDGE_INSTRUCTIONS.includes('고유 20개까지'));
   assert(JUDGE_INSTRUCTIONS.includes('to_compare_ids로 옮겨'));
@@ -1102,4 +1111,115 @@ Deno.test('묶음 검수 집계가 시간 초과되면 미집계가 아니라 �
   const stored = sim.statusDiags.at(-1)!;
   assertEquals(stored.code, 'timeout');
   assert(!JSON.stringify(stored).includes('개념'));
+});
+
+Deno.test('비교 참조: 같은 호출에서 전문과 판이 확인된 개념은 입력과 검증이 같은 목록으로 허용한다', async () => {
+  const markA = 'a'.repeat(32);
+  const markB = 'b'.repeat(32);
+  const sim = new JobSim(3);
+  for (const c of sim.concepts) c.todo = ['notation'];
+  sim.concepts[0].textMark = markA;
+  sim.concepts[1].textMark = markB;
+  sim.concepts[0].relations = [{ id: cid(90), other_id: cid(80) }];
+  const provider = new FakeAiProvider(judge({
+    reviews: (d) => [review('notation', {
+      compared_ids: (d.compared_ids as string[]) ?? [],
+      to_compare_ids: (d.to_compare_ids as string[]) ?? [],
+    })],
+  }));
+  const v = parse(await batch(sim, provider, { target: 3 }));
+  const view = (payloadOf(judgeRequests(provider)[0]).concepts as Rec[]);
+  const byPos = new Map(view.map((c) => [Number(c.position), c]));
+  assertEquals(byPos.get(1)?.compared_ids, [cid(2)]);
+  assertEquals(byPos.get(2)?.compared_ids, [cid(1)]);
+  assertEquals(byPos.get(3)?.compared_ids, [cid(1), cid(2)]);
+  assert(!((byPos.get(1)?.compared_ids as string[]) ?? []).includes(cid(3)), '지문이 없는 개념은 전문 비교 목록에 넣지 않는다');
+  assertEquals(byPos.get(1)?.to_compare_ids, [cid(80)]);
+  assertEquals(byPos.get(1)?.text_mark, undefined);
+  assertEquals(sim.items.get(1)!.reviews![0].compared_ids, [cid(2)]);
+  assertEquals(sim.items.get(1)!.reviews![0].to_compare_ids, [cid(80)]);
+  assertEquals(sim.items.get(1)!.reviews![0].compared_marks, { [cid(2)]: markB });
+  assertEquals(sim.items.get(3)!.reviews![0].compared_ids, [cid(1), cid(2)]);
+  assertEquals(sim.items.get(3)!.reviews![0].compared_marks, { [cid(1)]: markA, [cid(2)]: markB });
+  assertEquals(v.judged_saved, 3);
+  assertEquals(v.failed.count, 0);
+});
+
+Deno.test('비교 참조: 이름·발췌와 비개념 id는 거절하고 값 없이 종류만 진단한다', () => {
+  const self = cid(1);
+  const sibling = cid(2);
+  const excerpt = cid(3);
+  const mark = 'b'.repeat(32);
+  const secret = '비밀본문비교근거';
+  const relation = cid(80);
+  const same = cid(81);
+  const created = cid(82);
+  const placement = cid(70);
+  const course = cid(60);
+  const unit = cid(61);
+  const statement = cid(63);
+  const relationRow = cid(64);
+  const sameRow = cid(65);
+  const unknown = cid(999);
+  const group = [
+    {
+      position: 1, concept_id: self, name: '가', revision: `${'a'.repeat(12)}-cccccccccccc-rrrrrrrrrrrr`,
+      content: secret, data: {
+        relations: [{ id: relationRow, other_id: relation }],
+        same_concept_reviews: [{ id: sameRow, other_id: same }],
+        created_concepts: [{ id: created, name: '만든' }],
+        placements: [{ id: placement, course_id: course }],
+        statements: [{ id: statement, content: secret }],
+      },
+      ids: new Set<string>(), scopes: ['notation'], foundation: false,
+      placementIds: new Set([placement]), courseIds: new Set([course]), courseKeys: new Set<string>(),
+      fullRead: true, textMark: 'a'.repeat(32),
+    },
+    {
+      position: 2, concept_id: sibling, name: '나', revision: `${mark.slice(0, 12)}-cccccccccccc-rrrrrrrrrrrr`,
+      content: '상대 전문', data: {},
+      ids: new Set<string>(), scopes: ['notation'], foundation: false,
+      placementIds: new Set<string>(), courseIds: new Set<string>(), courseKeys: new Set<string>(),
+      fullRead: true, textMark: mark,
+    },
+    {
+      position: 3, concept_id: excerpt, name: '발췌만', revision: 'r3-1',
+      content: '앞부분만', data: {},
+      ids: new Set<string>(), scopes: ['notation'], foundation: false,
+      placementIds: new Set<string>(), courseIds: new Set<string>(), courseKeys: new Set<string>(),
+      fullRead: false, textMark: null,
+    },
+  ] as Parameters<typeof assignRefLists>[0];
+  assignRefLists(group, new Set([unit]), [{ id: course, units: [{ id: unit }] }]);
+  const me = group[0];
+  assertEquals([...(me.comparedIds ?? [])], [sibling]);
+  assertEquals([...(me.toCompareIds ?? [])].sort(), [relation, same, created].sort());
+  const ok = stage1Of(me, judged([review('notation', { compared_ids: [sibling], to_compare_ids: [relation] })]), new Set([unit]));
+  assertEquals(ok.item, null);
+  assertEquals(ok.reviews[0].compared_ids, [sibling]);
+  assertEquals(ok.reviews[0].to_compare_ids, [relation]);
+  assertEquals(ok.reviews[0].compared_marks, { [sibling]: mark });
+  assert(!JSON.stringify(ok.reviews[0]).includes(secret));
+  const cases: [string, string, 'compared_ids' | 'to_compare_ids'][] = [
+    [sibling, 'same_call_concept', 'to_compare_ids'],
+    [relation, 'unread_concept', 'compared_ids'],
+    [excerpt, 'unread_concept', 'compared_ids'],
+    [placement, 'placement_id', 'compared_ids'],
+    [unit, 'course_unit_id', 'compared_ids'],
+    [course, 'course_unit_id', 'compared_ids'],
+    [statement, 'row_id', 'compared_ids'],
+    [relationRow, 'row_id', 'compared_ids'],
+    [sameRow, 'row_id', 'compared_ids'],
+    [unknown, 'unknown_id', 'compared_ids'],
+  ];
+  for (const [id, type, field] of cases) {
+    const got = stage1Of(me, judged([review('notation', { [field]: [id] })]), new Set([unit]));
+    const text = String(got.item?.reason ?? '');
+    assert(text.startsWith('judge_invalid:ref_outside_allow_list:notation:'), text);
+    assert(text.endsWith(`:${type}`), text);
+    assert(!text.includes(id), text);
+    assert(!text.includes(secret));
+    assertEquals(diagnosisFromReason(text).actual_type, type);
+    assertEquals(got.reviews, []);
+  }
 });
