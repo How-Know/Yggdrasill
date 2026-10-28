@@ -43,7 +43,8 @@
 //   새 필드가 없으면 미집계이며, 조건별 충족 수로 그 수를 추산하지 않는다. 판단 지시(review-batch)는 바꾸지 않는다.
 // think-2026-10-28a: 개념 검수 참조는 필드마다 고유 20개다. 상한 초과 미결은 통합 완료·1차 검수가 아니고, 판이 바뀌거나 상한이 커지기 전에는 다시 판단하지 않는다.
 // think-2026-10-28b: 검수 실패는 오류 코드·범위·필드를 먼저 보고, 잘렸으면 작업 장부의 저장 사유를 읽는다. 포괄 문장에 원인을 만들어 넣지 않는다.
-export const THINK_PROMPT_VERSION = 'think-2026-10-28b';
+// think-2026-10-28c: 집계 조회 실패(status_diag.code가 timeout·lookup_failed)는 미집계가 아니다. 0으로 채우지 않고, 최근 진단은 status_diag_only로 다시 집계하지 않고 읽는다.
+export const THINK_PROMPT_VERSION = 'think-2026-10-28c';
 /** 역할 프로필 문구만 바뀔 때. ai_runs.role_profile_version과 대화.role_profile_version에 기록한다. */
 // think-role-2026-10-12: 제품 → 문제 풀이(문제 은행·문항 제작·난이도, 채점·오답 분석·문제 통계, 교재·목차·유형 분류).
 export const ROLE_PROFILE_VERSION = 'think-role-2026-10-12';
@@ -248,6 +249,9 @@ const CONCEPT_REVIEW_BATCH_RULES = [
   '  남은 대상은 다음 요청에서 먼저 이어진다고 알린다. 도구 결과에 없는 이유로 "더 할 수 없다"고 말하지 않는다.',
   '- 비교 참조가 한 필드에서 고유 20개를 넘으면 그 위치의 이번 판단은 저장하지 않고 미결로 남긴다. 그 미결은 통합 완료도 1차 검수 충족도 아니다.',
   '  판이 바뀌거나 그때 기록된 상한보다 상한이 커지기 전에는 자동으로 다시 판단하지 않는다. 내용이 그대로면 보류를 다시 열라고 하지 않는다.',
+  '- 집계는 status_diag로 구분한다. aggregation이 counted면 progress_line·first_pass_line을 그대로 말한다.',
+  '  unaggregated는 응답은 왔지만 집계 필드가 없는 미집계다. failed이거나 status_diag.code가 timeout·lookup_failed이면 조회 실패다.',
+  '  조회 실패를 0개나 미집계로 말하지 않는다. 다시 집계하지 않고 보려면 get_concept_review_job에 status_diag_only true를 넣는다.',
   '- 실패가 있으면 failed.count와 failed.by_code, 각 항목의 diagnosis(code·scope·field)를 먼저 말한다. 확인된 원인과 추정을 구분하고 다음 조치를 말한다.',
   '  failed.omitted가 0보다 크거나 저장 원인을 다시 보려면 get_concept_review_job의 failures를 읽는다. failure_after가 있으면 그 위치 다음을 이어서 읽는다.',
   '  diagnosis.kind가 generic인 예전 포괄 문장에는 범위와 필드를 만들어 넣지 않는다.',
@@ -269,7 +273,9 @@ function conceptReviewJobRules(batch: boolean): string[] {
   '- 카드는 submit_concept_review_drafts로 저장된 초안만 낸다(이 작업에서는 propose_concept_review를 쓰지 않는다). 같은 초안은 다시 내지 않는다.',
   '  거절된 판단은 사용자 의견 없이 같은 내용으로 다시 저장·제출하지 않는다.',
   '- 진행은 두 줄로 적는다. 통합 완료는 progress_line 그대로, 1차 검수 3조건 동시 충족은 first_pass_line 그대로.',
-  '  first_pass_state가 unaggregated이거나 first_pass_line이 없으면 미집계라고 알린다. 0개로 말하지 않고, 조건별 충족 수로 추산하지 않는다.',
+  '  first_pass_state가 unaggregated이면 미집계라고 알린다. 0개로 말하지 않고, 조건별 충족 수로 추산하지 않는다.',
+  '  first_pass_state가 failed이거나 aggregation이 failed이거나 status_diag.code가 timeout·lookup_failed이면 조회 실패다. 0개나 미집계로 말하지 않는다.',
+  '  느린 집계를 다시 실행하지 않고 보려면 get_concept_review_job(status_diag_only true)로 저장된 최근 진단을 읽는다.',
   '  읽은 수·저장한 수·승인 대기 수를 완료 수로 말하지 않는다.',
   '  total_mismatch가 있으면 알린다. 승인 대기 카드가 다른 대화에 있으면 bring_cards로 이 대화에 옮겨 승인받을 수 있다고 알린다.',
   '- 다른 실행이 작업을 넘겨받았다는 오류가 나면 이 답변에서는 더 저장·제출하지 않고 알린다. 다시 넘겨받으려 하지 않는다.',

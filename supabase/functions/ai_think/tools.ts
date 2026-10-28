@@ -44,12 +44,14 @@ import {
 } from './course_map_tools.ts';
 import {
   dispatchReviewJobTool,
+  JOB_READ_TOOL_NAME,
   REVIEW_JOB_ACTING_TOOL_NAMES,
   REVIEW_JOB_TOOL_LABELS,
   REVIEW_JOB_TOOL_NAMES,
   REVIEW_JOB_TOOLS,
   type ReviewJobToolSource,
 } from './concept_review_job_tools.ts';
+import { createStatusTrace, raceTimeout, saveStatusDiag, statusDiagnosis } from './concept_review_status_diag.ts';
 import { BATCH_TOOL, BATCH_TOOL_LABEL, BATCH_TOOL_NAME } from './concept_review_batch.ts';
 import type { MemoryDetail, MemoryRow } from './context.ts';
 import {
@@ -574,10 +576,39 @@ export async function runThinkTool(
   } catch {
     return fail(name, 'invalid_arguments', '인자 형식 오류');
   }
+  const trace = name === JOB_READ_TOOL_NAME && ctx?.reviewJobs ? createStatusTrace(timeoutMs) : null;
+  if (trace && ctx?.reviewJobs) ctx.reviewJobs.statusTrace = trace;
   try {
+    if (trace) {
+      return await raceTimeout(dispatch(name, args, src, ctx), timeoutMs, () => {
+        trace.cancelRequested = true;
+        trace.abort.abort();
+      });
+    }
     return await withTimeout(dispatch(name, args, src, ctx), timeoutMs);
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
+    if (message === 'tool_timeout' && trace) {
+      if (!trace.cancelRequested) {
+        trace.cancelRequested = true;
+        trace.abort.abort();
+      }
+      const diag = statusDiagnosis(trace, 'timeout', 'failed');
+      const diagSave = await saveStatusDiag(src, trace.jobId, diag);
+      return {
+        name,
+        ok: false,
+        output: JSON.stringify({
+          status_diag: diag,
+          diag_save: diagSave,
+          aggregation: 'failed',
+          first_pass_state: 'failed',
+          error: 'timeout',
+          note: '집계 조회가 제한 시간에 끊겼다. 완료 수와 1차 검수 수를 0으로 채우지 않는다. 조회 취소는 데이터베이스 문장이 끝났다는 뜻이 아니다. 다시 집계하지 않고 보려면 status_diag_only를 true로 읽는다.',
+        }),
+        summary: '집계 시간 초과',
+      };
+    }
     console.error(`[ai_think] tool ${name} failed:`, message);
     return fail(name, message === 'tool_timeout' ? 'timeout' : 'lookup_failed', message === 'tool_timeout' ? '시간 초과' : '조회 실패');
   }

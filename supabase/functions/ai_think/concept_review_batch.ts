@@ -24,6 +24,7 @@ import {
   type ReviewJobToolSource,
 } from './concept_review_job_tools.ts';
 import { failureReport, judgeInvalidReason, type Diagnosis } from './concept_review_diagnosis.ts';
+import { createStatusTrace, raceTimeout, saveStatusDiag, STATUS_QUERY_TIMEOUT_MS, statusDiagnosis, type StatusDiagnosis } from './concept_review_status_diag.ts';
 import type { ToolRunResult } from './tools.ts';
 
 export const BATCH_TOOL_NAME = 'run_concept_review_batch';
@@ -282,6 +283,8 @@ export interface BatchDeps {
   now: () => number;
   /** 시험용. 없으면 기본 시간 여유를 쓴다. */
   timing?: { saveReserveMs?: number; minJudgeMs?: number; minGroupMs?: number };
+  /** 집계 조회 제한. 없으면 8초. 제한을 늘리는 설정이 아니다. */
+  statusTimeoutMs?: number;
 }
 
 type Rec = Record<string, unknown>;
@@ -844,7 +847,11 @@ export async function runReviewBatch(call: BatchCall, state: ReviewJobToolContex
   if (!job) return bad('invalid_id', 'id 형식 오류', 'job_id는 find_concept_review_jobs 결과의 것을 쓴다.');
   if (state.batchRan) return bad('review_batch_once', '이미 돌림', '한 답변에 묶음 검수는 한 번이다. 받은 결과로 보고한다.');
   state.batchRan = true;
-  const rpc = (fn: Parameters<NonNullable<ReviewJobToolSource['reviewJobRpc']>>[0], a: Rec) => src.reviewJobRpc!(fn, a);
+  const rpc = (
+    fn: Parameters<NonNullable<ReviewJobToolSource['reviewJobRpc']>>[0],
+    a: Rec,
+    opts?: { signal?: AbortSignal },
+  ) => src.reviewJobRpc!(fn, a, opts);
   const started = deps.now();
   const wanted = typeof args.target === 'number' ? Math.max(1, Math.min(BATCH_MAX, Math.floor(args.target))) : BATCH_MAX;
 
@@ -1353,21 +1360,46 @@ export async function runReviewBatch(call: BatchCall, state: ReviewJobToolContex
   let firstPass: Rec | null = null;
   let firstPassLine: string | null = null;
   let firstPassState = 'unaggregated';
+  let aggregation: 'counted' | 'unaggregated' | 'failed' = 'unaggregated';
+  const statusTrace = createStatusTrace(deps.statusTimeoutMs ?? STATUS_QUERY_TIMEOUT_MS);
+  statusTrace.jobId = job;
+  statusTrace.stage = 'status_rpc';
+  let statusDiag: StatusDiagnosis = statusDiagnosis(statusTrace, 'lookup_failed', 'failed');
   try {
-    const st = rec(await rpc('concept_review_job_status', { p_job_id: job, p_open_limit: 0 }));
-    statusLine = typeof st.progress_line === 'string' ? st.progress_line : null;
-    conditionLine = typeof st.condition_line === 'string' ? st.condition_line : null;
-    counts = st.counts ?? null;
-    conditions = st.conditions ?? null;
+    const pending = rpc('concept_review_job_status', { p_job_id: job, p_open_limit: 0 }, { signal: statusTrace.abort.signal });
+    const st = rec(await raceTimeout(pending, statusTrace.timeoutMs, () => {
+      statusTrace.cancelRequested = true;
+      statusTrace.abort.abort();
+    }));
     const first = firstPassOf(st);
+    if (typeof st.progress_line === 'string') statusLine = st.progress_line;
+    if (typeof st.condition_line === 'string') conditionLine = st.condition_line;
+    counts = st.counts && typeof st.counts === 'object' ? st.counts : null;
+    conditions = st.conditions && typeof st.conditions === 'object' ? st.conditions : null;
     if (first.known && first.value && first.line) {
       firstPass = first.value;
       firstPassLine = first.line;
       firstPassState = 'counted';
+      aggregation = 'counted';
+      statusDiag = statusDiagnosis(statusTrace, 'ok', 'counted');
+    } else {
+      firstPassState = 'unaggregated';
+      aggregation = 'unaggregated';
+      statusDiag = statusDiagnosis(statusTrace, 'unaggregated', 'unaggregated');
     }
-  } catch {
+  } catch (e) {
+    const timed = statusTrace.cancelRequested || (e instanceof Error && e.message === 'tool_timeout');
     statusLine = null;
+    conditionLine = null;
+    counts = null;
+    conditions = null;
+    firstPass = null;
+    firstPassLine = null;
+    firstPassState = 'failed';
+    aggregation = 'failed';
+    statusDiag = statusDiagnosis(statusTrace, timed ? 'timeout' : 'lookup_failed', 'failed');
   }
+  const diagSave = await saveStatusDiag(src, job, statusDiag);
   log.elapsed_ms = deps.now() - started;
   const reason = endReason ?? 'tool_error';
   await rpc('concept_review_job_batch_log', {
@@ -1410,6 +1442,9 @@ export async function runReviewBatch(call: BatchCall, state: ReviewJobToolContex
     tool_error: '저장소 오류로 멈췄다. 저장된 것까지는 남아 있다',
   };
   const value = {
+    status_diag: statusDiag,
+    aggregation,
+    diag_save: diagSave,
     end_reason: reason,
     end_reason_text: REASONS[reason] ?? reason,
     target,
@@ -1449,6 +1484,8 @@ export async function runReviewBatch(call: BatchCall, state: ReviewJobToolContex
       '실패 원인은 failed.items의 diagnosis다. 코드·범위·필드를 말하고, omitted가 0보다 크면 작업 장부의 failures로 이어서 읽는다. kind가 generic이면 예전 포괄 기록이다. ' +
       (firstPassState === 'counted'
         ? `1차 검수 3조건 동시 충족은 "${firstPassLine}" 이다.`
+        : firstPassState === 'failed'
+        ? '집계 조회가 실패했다(status_diag). 완료 수와 1차 검수 수를 0으로 채우지 않는다. 조회 취소는 데이터베이스 문장이 끝났다는 뜻이 아니다.'
         : '1차 검수 3조건 동시 충족 수는 이 응답에 없다(미집계). 0개로 말하지 말고 조건별 수로 추산하지 않는다.'),
   };
   const ok = reason !== 'tool_error' && reason !== 'lease_lost';

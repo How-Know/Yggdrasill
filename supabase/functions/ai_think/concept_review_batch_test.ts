@@ -60,6 +60,9 @@ class JobSim {
   courses: Rec[] = [];
   /** 상태 응답에 1차 검수 집계를 넣지 않는다. 엣지는 0이 아니라 미집계로 전한다. */
   omitFirstPass = false;
+  /** 상태 조회를 끝내지 않는다. 바깥 제한이 진단을 돌려야 한다. */
+  blockStatus = false;
+  statusDiags: Rec[] = [];
 
   constructor(n: number, content: (i: number) => string = (i) => `개념 ${i}의 정의 문장`) {
     this.concepts = Array.from({ length: n }, (_, k) => ({
@@ -90,6 +93,7 @@ class JobSim {
       this.failOnce.delete(fn);
       return Promise.reject(new Error(`${fn}: ${fail}`));
     }
+    if (fn === 'concept_review_job_status' && this.blockStatus) return new Promise(() => {});
     try {
       const out = this.run(fn, a);
       if (this.loseResponseOnce.delete(fn)) return Promise.reject(new Error('fetch failed: connection reset'));
@@ -287,6 +291,11 @@ class JobSim {
       case 'concept_review_job_batch_log':
         this.logs.push(structuredClone(a));
         return `log-${this.logs.length}`;
+      case 'concept_review_job_status_diag_put':
+        this.statusDiags.push(structuredClone(a.p_diag as Rec));
+        return { saved: true };
+      case 'concept_review_job_status_diag_get':
+        return { diagnosis: this.statusDiags.at(-1) ?? null };
       default:
         throw new Error(`${fn}: not_simulated`);
     }
@@ -358,7 +367,7 @@ const newState = (): ReviewJobToolContext => ({ holder: `think:conv:${crypto.ran
 async function batch(
   sim: JobSim,
   provider: FakeAiProvider,
-  opts: { state?: ReviewJobToolContext; target?: number | null; deadlineMs?: number; timing?: BatchDeps['timing']; runs?: RunLog } = {},
+  opts: { state?: ReviewJobToolContext; target?: number | null; deadlineMs?: number; timing?: BatchDeps['timing']; statusTimeoutMs?: number; runs?: RunLog } = {},
 ) {
   const now = Date.now();
   return await runReviewBatch(
@@ -368,7 +377,7 @@ async function batch(
       round: 1, startedAt: now,
     },
     opts.state ?? newState(),
-    { provider, store: { reviewJobRpc: sim.rpc }, recordRun: (opts.runs ?? new RunLog()).record, env: testEnv, now: Date.now, timing: opts.timing },
+    { provider, store: { reviewJobRpc: sim.rpc }, recordRun: (opts.runs ?? new RunLog()).record, env: testEnv, now: Date.now, timing: opts.timing, statusTimeoutMs: opts.statusTimeoutMs },
   );
 }
 
@@ -719,7 +728,7 @@ Deno.test('대화: 기능이 다 준비되면 묶음 검수 도구·지침이 �
   assert(String(chatReq!.instructions).includes(BATCH_TOOL_NAME), '지침에 묶음 검수 규칙이 있다');
   assertEquals(sim.cards.length, 3);
   assertEquals(sim.logs.map((l) => l.p_end_reason), ['target_reached']);
-  assertEquals(THINK_PROMPT_VERSION, 'think-2026-10-28b');
+  assertEquals(THINK_PROMPT_VERSION, 'think-2026-10-28c');
 
   const p2 = new FakeAiProvider(thinkScript());
   await runThinkChat(chatInput({ features }), { provider: p2, store, recordRun: runs.record, emit: new EventLog().emit, env: testEnv });
@@ -1055,7 +1064,7 @@ Deno.test('형식 실패는 그 위치만 실패로 남고, 30개를 넘겨도 �
 Deno.test('참조 상한 정의가 DB·도구 설명·판단 지시와 같다', async () => {
   assertEquals(CONCEPT_REVIEW_REF_LIMIT, 20);
   assertEquals(BATCH_PROMPT_VERSION, 'review-batch-2026-10-28a');
-  assertEquals(THINK_PROMPT_VERSION, 'think-2026-10-28b');
+  assertEquals(THINK_PROMPT_VERSION, 'think-2026-10-28c');
   assert(JUDGE_INSTRUCTIONS.includes('고유 20개까지'));
   assert(JUDGE_INSTRUCTIONS.includes('to_compare_ids로 옮겨'));
   const sql = await Deno.readTextFile(new URL('../../migrations/20261028010000_concept_review_ref_limit.sql', import.meta.url));
@@ -1070,4 +1079,27 @@ Deno.test('참조 상한 정의가 DB·도구 설명·판단 지시와 같다', 
   assert(String(props.items.items.properties.to_compare_ids.description).includes('고유 20개'));
   assertEquals(props.items.items.properties.compared_ids.maxItems, undefined);
   assertEquals(props.items.items.properties.to_compare_ids.maxItems, undefined);
+});
+
+Deno.test('묶음 검수 집계가 시간 초과되면 미집계가 아니라 실패 진단을 돌려준다', async () => {
+  const sim = new JobSim(1);
+  sim.blockStatus = true;
+  const v = parse(await batch(sim, new FakeAiProvider(judge()), { target: 1, statusTimeoutMs: 40 }));
+  assertEquals(v.aggregation, 'failed');
+  assertEquals(v.first_pass_state, 'failed');
+  assertEquals(v.first_pass, null);
+  assertEquals(v.counts, null);
+  assertEquals(v.progress_line, null);
+  assertEquals(v.status_diag.code, 'timeout');
+  assertEquals(v.status_diag.stage, 'status_rpc');
+  assertEquals(v.status_diag.timeout_ms, 40);
+  assert(v.status_diag.elapsed_ms >= 40);
+  assertEquals(v.status_diag.db_cancel, 'requested');
+  assertEquals(typeof v.status_diag.trace_id, 'string');
+  assertEquals(v.diag_save, 'saved');
+  assert(!String(v.note).includes('미집계'));
+  assertEquals(v.status_diag.outcome, 'failed');
+  const stored = sim.statusDiags.at(-1)!;
+  assertEquals(stored.code, 'timeout');
+  assert(!JSON.stringify(stored).includes('개념'));
 });

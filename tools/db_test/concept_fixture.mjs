@@ -37,6 +37,7 @@ export const CONCEPT_FILES = [
   '20261027230000_concept_review_first_pass.sql',
   '20261028010000_concept_review_ref_limit.sql',
   '20261028020000_concept_review_failure_page.sql',
+  '20261028030000_concept_review_status_single_pass.sql',
 ];
 
 const CONCEPT_STUBS = `
@@ -138,13 +139,13 @@ export async function insertConcept(t, name, folder, content = '1보다 큰 자�
   )).id;
 }
 
-export async function openConceptTestDb() {
+export async function openConceptTestDb(files = CONCEPT_FILES) {
   const t = await openAiTestDb();
   await t.exec(CONCEPT_STUBS);
   // 출처 학년 → 교재 과정 키(운영 정의 그대로). 같은 파일의 다른 문장은 교재 표를 써서 함수만 떼어 온다.
   const aliases = readFileSync(join(migrationsDir, '20260429162000_textbook_course_key_aliases.sql'), 'utf8');
   await t.exec(aliases.match(/create or replace function public\._textbook_course_info[\s\S]*?\$\$;/)[0]);
-  for (const f of CONCEPT_FILES) {
+  for (const f of files) {
     try {
       await t.exec(readFileSync(join(migrationsDir, f), 'utf8'));
     } catch (e) {

@@ -6,6 +6,7 @@
 import type { AiFunctionTool } from '../_shared/ai/types.ts';
 import type { ActionRow, ActionToolContext } from './actions.ts';
 import { diagnosisFromReason } from './concept_review_diagnosis.ts';
+import { createStatusTrace, saveStatusDiag, statusDiagnosis, type StatusTrace } from './concept_review_status_diag.ts';
 import type { ToolRunResult } from './tools.ts';
 
 /** compared_ids·to_compare_ids 각각 허용하는 고유 개념 수. DB concept_review_ref_limit() 와 같다. */
@@ -54,7 +55,9 @@ export type ReviewJobRpc =
   | 'concept_review_job_targets'
   | 'concept_review_job_courses'
   | 'concept_review_job_search'
-  | 'concept_review_job_failure_page';
+  | 'concept_review_job_failure_page'
+  | 'concept_review_job_status_diag_get'
+  | 'concept_review_job_status_diag_put';
 
 export const REVIEW_JOB_RPCS: ReadonlySet<ReviewJobRpc> = new Set<ReviewJobRpc>([
   'concept_review_job_targets',
@@ -73,10 +76,12 @@ export const REVIEW_JOB_RPCS: ReadonlySet<ReviewJobRpc> = new Set<ReviewJobRpc>(
   'concept_review_job_batch_begin',
   'concept_review_job_batch_log',
   'concept_review_job_failure_page',
+  'concept_review_job_status_diag_get',
+  'concept_review_job_status_diag_put',
 ]);
 
 export interface ReviewJobToolSource {
-  reviewJobRpc?(fn: ReviewJobRpc, args: Record<string, unknown>): Promise<unknown>;
+  reviewJobRpc?(fn: ReviewJobRpc, args: Record<string, unknown>, opts?: { signal?: AbortSignal }): Promise<unknown>;
 }
 
 export interface ReviewJobToolContext {
@@ -91,6 +96,8 @@ export interface ReviewJobToolContext {
   noTakeover?: boolean;
   /** 이 요청에서 묶음 검수를 이미 돌렸는지(한 답변에 한 번). */
   batchRan?: boolean;
+  /** 이번 상태 조회의 바깥 진단. 시간 초과가 이 함수 밖에서 나도 마지막 단계가 남는다. */
+  statusTrace?: StatusTrace;
 }
 
 /** 한 요청에서 낼 수 있는 검수 카드 수. DB 작업 한도 max_cards_per_request 기본값과 같다. */
@@ -156,6 +163,8 @@ export const REVIEW_JOB_TOOLS: AiFunctionTool[] = [
       '검수 작업의 진행 상태와 다음 묶음을 읽는다. 이 답변이 작업을 넘겨받는다(앞선 실행이 아직 쓰고 있었다면 그 실행의 이후 쓰기는 거부된다). ' +
       'progress_line(완료 수), counts, 미결 항목(open_items: 위치·이유·다음 할 일·diagnosis), 승인 대기 카드(pending_cards: 다른 대화 것 포함), ' +
       '실패 항목(failures: 저장된 reason과 diagnosis, 한 번에 50개, failure_after 다음부터). ' +
+      'status_diag는 이번 집계 조회의 추적 번호·단계·소요·제한·코드다. aggregation이 failed면 조회 실패라 완료 수를 0으로 말하지 않는다. unaggregated는 응답은 왔지만 집계 필드가 없는 미집계다. counted는 집계 성공이다. ' +
+      'status_diag_only가 true면 저장된 최근 집계 진단만 읽는다. 집계 함수는 부르지 않고 작업을 넘겨받지도 않는다. ' +
       'next>0이면 다음 묶음(batch: 위치·개념 요약·판)을 준다. 묶음은 저장된 위치 다음부터이며 앞서 내줬지만 저장되지 않은 위치가 먼저 다시 나온다. ' +
       '이미 지금 판과 맞는 승인 기록이 있는 개념·지워진 개념·승인 대기 카드에 든 개념은 서버가 판단 없이 표시하고 건너뛴다(auto_saved). ' +
       'diagnosis.kind가 specific이면 code·scope·field가 저장된 첫 원인이다. generic은 범위·필드가 없는 예전 포괄 오류다. 원인을 만들어 넣지 않는다.',
@@ -165,8 +174,9 @@ export const REVIEW_JOB_TOOLS: AiFunctionTool[] = [
         job_id: jobId,
         next: { type: ['integer', 'null'], description: '다음 묶음 개수(1~5). 상태만 보려면 0이나 null' },
         failure_after: { type: ['integer', 'null'], description: '저장된 실패를 이 위치 다음부터 읽는다. 처음부터 보려면 0이나 null. next와 작업 임대는 바꾸지 않는다.' },
+        status_diag_only: { type: ['boolean', 'null'], description: 'true면 저장된 최근 집계 진단만 읽는다. 집계를 다시 실행하지 않는다. 상태와 다음 묶음이 필요하면 false나 null.' },
       },
-      required: ['job_id', 'next'],
+      required: ['job_id', 'next', 'failure_after', 'status_diag_only'],
       additionalProperties: false,
     },
   },
@@ -386,11 +396,11 @@ export function rpcError(name: string, e: unknown): ToolRunResult {
   return bad(name, code, known[0], known[1]);
 }
 
-export async function lease(state: ReviewJobToolContext, src: ReviewJobToolSource, job: string): Promise<number> {
+export async function lease(state: ReviewJobToolContext, src: ReviewJobToolSource, job: string, signal?: AbortSignal): Promise<number> {
   const held = state.leases.get(job);
   if (held !== undefined) return held;
   if (state.noTakeover) throw new Error('concept_review_job_claim: concept_review_job_lease_lost');
-  const r = rec(await src.reviewJobRpc!('concept_review_job_claim', { p_job_id: job, p_holder: state.holder, p_mode: 'take' }));
+  const r = rec(await src.reviewJobRpc!('concept_review_job_claim', { p_job_id: job, p_holder: state.holder, p_mode: 'take' }, signal ? { signal } : undefined));
   const gen = typeof r.gen === 'number' ? r.gen : Number(r.gen);
   if (!Number.isFinite(gen)) throw new Error('concept_review_job_claim: unexpected result');
   state.leases.set(job, gen);
@@ -443,56 +453,133 @@ function failureView(page: Rec): Rec {
   };
 }
 
+function traceOf(state: ReviewJobToolContext): StatusTrace {
+  if (!state.statusTrace) state.statusTrace = createStatusTrace(8000);
+  return state.statusTrace;
+}
+
+function timedOut(trace: StatusTrace, e: unknown): boolean {
+  if (trace.cancelRequested) return true;
+  return e instanceof Error && e.message === 'tool_timeout';
+}
+
+async function callJobRpc(src: ReviewJobToolSource, trace: StatusTrace, fn: ReviewJobRpc, args: Rec): Promise<unknown> {
+  return await src.reviewJobRpc!(fn, args, { signal: trace.abort.signal });
+}
+
+function failedLookup(name: string, trace: StatusTrace, src: ReviewJobToolSource, e: unknown): Promise<ToolRunResult> {
+  const code = errorCode(e);
+  const known = /^[a-z][a-z0-9_]*$/.test(code) ? ERRORS[code] : undefined;
+  const diag = statusDiagnosis(trace, 'lookup_failed', 'failed');
+  return saveStatusDiag(src, trace.jobId, diag).then((diagSave) => ({
+    name,
+    ok: false,
+    output: JSON.stringify({
+      status_diag: diag,
+      diag_save: diagSave,
+      aggregation: 'failed',
+      first_pass_state: 'failed',
+      error: known ? code : 'lookup_failed',
+      ...(known ? { next: known[1] } : {}),
+      note: '집계 조회가 실패했다. 완료 수와 1차 검수 수를 0으로 채우지 않는다. 응답에 집계 필드가 없는 미집계와 다르다.',
+    }),
+    summary: known ? known[0] : '조회 실패',
+  }));
+}
+
 async function readJob(name: string, args: Rec, src: ReviewJobToolSource, state: ReviewJobToolContext): Promise<ToolRunResult> {
   const job = uuid(args.job_id);
   if (!job) return bad(name, 'invalid_id', 'id 형식 오류', 'job_id는 find_concept_review_jobs 결과의 것을 쓴다.');
+  const trace = traceOf(state);
+  trace.jobId = job;
   const want = typeof args.next === 'number' ? Math.max(0, Math.min(5, Math.floor(args.next))) : 0;
   const after = typeof args.failure_after === 'number' && Number.isFinite(args.failure_after)
     ? Math.max(0, Math.floor(args.failure_after))
     : 0;
-  let status: Rec;
+  if (args.status_diag_only === true) {
+    trace.stage = 'status_diag_get';
+    try {
+      const page = rec(await callJobRpc(src, trace, 'concept_review_job_status_diag_get', { p_job_id: job }));
+      const diagnosis = page.diagnosis && typeof page.diagnosis === 'object' ? page.diagnosis : null;
+      return out(name, {
+        status_diag: diagnosis,
+        aggregation: 'not_run',
+        diag_save: null,
+        note: '저장된 최근 집계 진단만 읽었다. 집계 함수는 부르지 않았다. 진단이 없으면 아직 저장된 조회가 없는 것이다.',
+      }, '저장된 집계 진단');
+    } catch (e) {
+      if (timedOut(trace, e)) throw new Error('tool_timeout');
+      return await failedLookup(name, trace, src, e);
+    }
+  }
+  let status: Rec | null = null;
   let batch: Rec | null = null;
   let failurePage: Rec = {};
+  let failurePageFailed = false;
   try {
     if (want > 0) {
-      const gen = await lease(state, src, job);
-      batch = rec(await src.reviewJobRpc!('concept_review_job_next', { p_job_id: job, p_gen: gen, p_count: want }));
+      trace.stage = 'lease_rpc';
+      const gen = await lease(state, src, job, trace.abort.signal);
+      trace.stage = 'next_rpc';
+      batch = rec(await callJobRpc(src, trace, 'concept_review_job_next', { p_job_id: job, p_gen: gen, p_count: want }));
     }
-    status = rec(await src.reviewJobRpc!('concept_review_job_status', { p_job_id: job, p_open_limit: 20 }));
-    failurePage = rec(await src.reviewJobRpc!('concept_review_job_failure_page', { p_job_id: job, p_after: after, p_limit: 50 }));
+    trace.stage = 'status_rpc';
+    status = rec(await callJobRpc(src, trace, 'concept_review_job_status', { p_job_id: job, p_open_limit: 20 }));
+    trace.stage = 'failure_page_rpc';
+    try {
+      failurePage = rec(await callJobRpc(src, trace, 'concept_review_job_failure_page', { p_job_id: job, p_after: after, p_limit: 50 }));
+    } catch (e) {
+      if (timedOut(trace, e)) throw new Error('tool_timeout');
+      failurePageFailed = true;
+    }
   } catch (e) {
+    if (timedOut(trace, e)) throw new Error('tool_timeout');
     if (errorCode(e) === 'concept_review_job_lease_lost') state.leases.delete(job);
-    return rpcError(name, e);
+    if (status && typeof status.progress_line === 'string') {
+      failurePageFailed = true;
+    } else {
+      return await failedLookup(name, trace, src, e);
+    }
   }
-  if (typeof status.progress_line !== 'string') throw new Error('concept_review_job_status: unexpected result');
-  const notes: string[] = [`진행 표시는 "${status.progress_line}" 한 줄로 한다. 조건별 충족 수(condition_line)는 통합 완료 수와 섞지 않는다.`];
-  const first = firstPassOf(status);
-  if (first.known) {
+  const first = status ? firstPassOf(status) : { known: false, value: null, line: null };
+  const counted = first.known;
+  const aggregation = counted ? 'counted' : 'unaggregated';
+  const diag = statusDiagnosis(trace, counted ? 'ok' : 'unaggregated', aggregation);
+  const diagSave = await saveStatusDiag(src, job, diag);
+  const progressLine = status && typeof status.progress_line === 'string' ? status.progress_line : null;
+  const notes: string[] = [];
+  if (progressLine) notes.push(`진행 표시는 "${progressLine}" 한 줄로 한다. 조건별 충족 수(condition_line)는 통합 완료 수와 섞지 않는다.`);
+  if (counted) {
     notes.push(`1차 검수 3조건 동시 충족은 "${first.line}" 한 줄로 한다. 통합 완료·조건별 충족 수와 섞지 않고, 조건별 수로 이 수를 추산하지 않는다.`);
   } else {
     notes.push('1차 검수 3조건 동시 충족 수는 이 응답에 없다(미집계). 0개로 말하지 말고, 조건별 충족 수로 추산하지 않는다.');
   }
-  if (status.total_mismatch === true) notes.push('목록 총수와 작업 총수가 다르거나 지워진 개념이 있다(total_mismatch). 사용자에게 알린다.');
-  const pending = Array.isArray(status.pending_cards) ? status.pending_cards : [];
+  notes.push('이번 조회 진단은 status_diag다. 최근 진단만 다시 보려면 status_diag_only를 true로 한다.');
+  if (status?.total_mismatch === true) notes.push('목록 총수와 작업 총수가 다르거나 지워진 개념이 있다(total_mismatch). 사용자에게 알린다.');
+  const pending = status && Array.isArray(status.pending_cards) ? status.pending_cards : [];
   if (pending.some((c) => rec(c).linked !== true)) {
     notes.push('작업에 이어지지 않은 예전 대기 카드가 있다. bring_cards로 이어 옮기거나 conflicts를 사용자에게 알린다.');
   }
+  const counts = status && status.counts && typeof status.counts === 'object' ? status.counts : null;
   const value: Rec = {
-    job: status.job,
-    progress_line: status.progress_line,
-    condition_line: status.condition_line ?? null,
-    first_pass: first.known ? first.value : null,
-    first_pass_line: first.known ? first.line : null,
-    first_pass_state: first.known ? 'counted' : 'unaggregated',
-    counts: status.counts,
-    total_mismatch: status.total_mismatch,
-    open_items: (Array.isArray(status.open_items) ? status.open_items : []).map((raw) => {
+    status_diag: diag,
+    diag_save: diagSave,
+    aggregation,
+    job: status?.job ?? null,
+    progress_line: progressLine,
+    condition_line: status && typeof status.condition_line === 'string' ? status.condition_line : null,
+    first_pass: counted ? first.value : null,
+    first_pass_line: counted ? first.line : null,
+    first_pass_state: counted ? 'counted' : 'unaggregated',
+    counts,
+    total_mismatch: status?.total_mismatch ?? null,
+    open_items: (status && Array.isArray(status.open_items) ? status.open_items : []).map((raw) => {
       const item = rec(raw);
       const reason = typeof item.reason === 'string' ? item.reason : null;
       return { ...item, diagnosis: diagnosisFromReason(reason) };
     }),
     pending_cards: pending,
-    failures: failureView(failurePage),
+    failures: failurePageFailed ? { ...failureView({}), unavailable: true } : failureView(failurePage),
   };
   if (batch) {
     value.batch = (Array.isArray(batch.batch) ? batch.batch : []).map((b) => {
@@ -518,7 +605,7 @@ async function readJob(name: string, args: Rec, src: ReviewJobToolSource, state:
     notes.push('diagnosis.kind가 generic인 항목은 예전 포괄 오류다. 범위와 필드를 만들어 넣지 않는다.');
   }
   value.note = notes.join(' ');
-  return out(name, value, String(status.progress_line));
+  return out(name, value, progressLine ?? '집계 없음');
 }
 
 async function saveProgress(name: string, args: Rec, src: ReviewJobToolSource, state: ReviewJobToolContext): Promise<ToolRunResult> {

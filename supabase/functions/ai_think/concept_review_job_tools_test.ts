@@ -161,6 +161,83 @@ Deno.test('저장된 실패 진단은 재실행 없이 읽고, 예전 포괄 문
   assertEquals(store.reviewJobCalls.filter((x) => x.fn === 'concept_review_job_failure_page').at(-1)!.args.p_after, 2);
 });
 
+Deno.test('집계 시간 초과는 바깥에서 단계와 시간을 돌려주고 0으로 채우지 않는다', async () => {
+  const store = new MemoryThinkStore();
+  store.reviewJobRpc = (fn, args) => {
+    store.reviewJobCalls.push({ fn, args: structuredClone(args) });
+    if (fn === 'concept_review_job_status') return new Promise(() => {});
+    if (fn === 'concept_review_job_status_diag_put') return Promise.resolve({ saved: true });
+    return Promise.resolve(null);
+  };
+  const started = Date.now();
+  const r = await runThinkTool(
+    JOB_READ_TOOL_NAME,
+    JSON.stringify({ job_id: JOB, next: 0, failure_after: null, status_diag_only: null }),
+    store,
+    40,
+    ctx(),
+  );
+  assert(Date.now() - started < 1500);
+  const v = parse(r);
+  assertEquals(r.ok, false);
+  assertEquals(v.error, 'timeout');
+  assertEquals(v.aggregation, 'failed');
+  assertEquals(v.first_pass_state, 'failed');
+  assertEquals(v.counts, undefined);
+  assertEquals(v.first_pass, undefined);
+  assertEquals(v.status_diag.code, 'timeout');
+  assertEquals(v.status_diag.stage, 'status_rpc');
+  assertEquals(v.status_diag.timeout_ms, 40);
+  assert(v.status_diag.elapsed_ms >= 40);
+  assertEquals(v.status_diag.db_cancel, 'requested');
+  assertEquals(v.diag_save, 'saved');
+  assert(!JSON.stringify(v).includes('concept_review_marks'));
+  const put = store.reviewJobCalls.find((x) => x.fn === 'concept_review_job_status_diag_put');
+  assertEquals((put!.args.p_diag as { code: string }).code, 'timeout');
+});
+
+Deno.test('집계 필드가 없으면 미집계로 두고, 진단 저장이 실패해도 이번 응답은 남는다', async () => {
+  const store = new MemoryThinkStore();
+  store.reviewJobData.set('concept_review_job_status', {
+    ...STATUS,
+    pending_cards: [],
+    counts: { complete: 61, awaiting: 3 },
+    conditions: { text: 10, foundation: 0, placement: 0 },
+  });
+  store.reviewJobErrors.set('concept_review_job_status_diag_put', 'concept_review_status_diag_invalid');
+  const v = parse(await call(store, JOB_READ_TOOL_NAME, { job_id: JOB, next: 0, failure_after: null, status_diag_only: null }, ctx()));
+  assertEquals(v.aggregation, 'unaggregated');
+  assertEquals(v.first_pass_state, 'unaggregated');
+  assertEquals(v.first_pass, null);
+  assertEquals(v.counts, { complete: 61, awaiting: 3 });
+  assertEquals(v.progress_line, '514개 중 61개 완료');
+  assertEquals(v.status_diag.code, 'unaggregated');
+  assertEquals(v.diag_save, 'failed');
+  assert(v.note.includes('미집계'));
+  assertEquals(v.status_diag.outcome, 'unaggregated');
+});
+
+Deno.test('저장된 집계 진단은 집계를 다시 실행하지 않고 읽는다', async () => {
+  const store = new MemoryThinkStore();
+  const diagnosis = {
+    trace_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    stage: 'status_rpc',
+    elapsed_ms: 9000,
+    timeout_ms: 8000,
+    code: 'timeout',
+    outcome: 'failed',
+    db_cancel: 'requested',
+  };
+  store.reviewJobData.set('concept_review_job_status_diag_get', { diagnosis });
+  store.reviewJobData.set('concept_review_job_status', STATUS);
+  const v = parse(await call(store, JOB_READ_TOOL_NAME, {
+    job_id: JOB, next: 5, failure_after: 0, status_diag_only: true,
+  }, ctx()));
+  assertEquals(v.aggregation, 'not_run');
+  assertEquals(v.status_diag, diagnosis);
+  assertEquals(store.reviewJobCalls.map((x) => x.fn), ['concept_review_job_status_diag_get']);
+});
+
 Deno.test('저장 오류는 위치마다 다음 할 일과 함께, 제출은 새 카드만 화면에 보내고 한 요청 카드 한도까지', async () => {
   const store = new MemoryThinkStore();
   store.reviewJobData.set('concept_review_job_claim', { gen: 1 });

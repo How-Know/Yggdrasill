@@ -583,4 +583,6 @@ Cursor에게 셸 명령은 주지 않는다. Cursor 결과로 결정·기억이 
 - 프롬프트 경계(`think-2026-10-28a`): 참조 상한 초과 미결을 완료로 말하거나, 내용 변경 없이 다시 판단하라고 하지 않는다.
 - 검수 실패 원인(2026-10-28, concept-library §4.8): 형식 거절의 첫 원인은 `run_concept_review_batch`의 `failed.items[].diagnosis`와 `get_concept_review_job`의 `open_items.diagnosis`·`failures`에서 읽는다. 코드·범위·필드를 먼저 말하고, 잘렸으면 `failure_after`로 이어서 읽는다. `generic`은 예전 포괄 기록이라 원인을 만들지 않는다. 지시문 `think-2026-10-28b`. 판단 지시는 `review-batch-2026-10-28a` 그대로다.
 - 프롬프트 경계(`think-2026-10-28b`): 실패 원인은 도구가 준 코드·범위·필드로 말하고, 확인하지 않은 운영 오류를 추정으로 고치지 않는다.
+- 집계 조회 진단(2026-10-28, concept-library §4.8): `get_concept_review_job`과 `run_concept_review_batch`의 `status_diag`가 추적 번호·마지막 단계·소요·제한·코드를 준다. `aggregation`이 `failed`면 조회 실패이고 0이나 미집계로 말하지 않는다. `unaggregated`는 응답은 왔지만 집계 필드가 없는 경우다. 최근 진단은 `status_diag_only true`로 집계를 다시 부르지 않고 읽는다. 지시문 `think-2026-10-28c`. 판단 지시는 `review-batch-2026-10-28a` 그대로다. 운영에서 8초 안에 끝난다는 보장은 아니다.
+- 프롬프트 경계(`think-2026-10-28c`): 집계 조회 실패와 미집계를 구분하고, 저장된 최근 진단만 다시 집계하지 않고 읽는다.
 - 한 답변 카드 수: 배치 4장, 검토 기록 2장(검수 작업 밖에서 직접 낼 때), 검수 작업 제출 13장(고치기 카드 포함, 작업의 승인 대기 15장까지), 관계 2장, 그 밖 1장(`course_think_card_limit`).

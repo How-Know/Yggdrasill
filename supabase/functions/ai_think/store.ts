@@ -829,9 +829,11 @@ export class SupabaseThinkStore implements ThinkStore {
   }
 
   // --- 개념 검수 작업 (기능 concept_review_jobs가 준비된 요청에서만 부른다) ---
-  async reviewJobRpc(fn: ReviewJobRpc, args: Record<string, unknown>): Promise<unknown> {
+  async reviewJobRpc(fn: ReviewJobRpc, args: Record<string, unknown>, opts?: { signal?: AbortSignal }): Promise<unknown> {
     if (!REVIEW_JOB_RPCS.has(fn)) throw new Error(`review_job_rpc: ${fn} not allowed`);
-    return check(await this.db.rpc(fn, args), fn);
+    const query = this.db.rpc(fn, args);
+    if (opts?.signal && query && typeof query.abortSignal === 'function') query.abortSignal(opts.signal);
+    return check(await query, fn);
   }
 
   async reviewJobRunGate(jobId: string, holder: string): Promise<Record<string, unknown>> {
