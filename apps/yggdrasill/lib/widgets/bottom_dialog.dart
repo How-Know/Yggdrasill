@@ -298,6 +298,7 @@ class BottomDialog extends StatelessWidget {
     this.shrinkWrap = false,
     this.preferredWidth,
     this.maxHeight,
+    this.center = false,
   });
 
   final IconData icon;
@@ -313,6 +314,9 @@ class BottomDialog extends StatelessWidget {
 
   /// 지정하면 화면 72%·640 상한 대신 이 높이를 쓴다. 아래 18을 뺀 화면보다 키우지는 않는다.
   final double? maxHeight;
+
+  /// 화면 가운데. 기본은 하단에 붙는다.
+  final bool center;
 
   @override
   Widget build(BuildContext context) {
@@ -334,9 +338,15 @@ class BottomDialog extends StatelessWidget {
     final maxWidth = requestedWidth == null
         ? math.min(availableWidth, BottomDialogMetrics.maxWidthCap)
         : math.min(math.max(0.0, requestedWidth), availableWidth);
+    final verticalInset = center
+        ? BottomDialogMetrics.outerHorizontalPadding
+        : 0.0;
+    final bottomInset = center
+        ? BottomDialogMetrics.outerHorizontalPadding
+        : BottomDialogMetrics.outerBottomPadding;
     final availableHeight = math.max(
       0.0,
-      media.size.height - BottomDialogMetrics.outerBottomPadding,
+      media.size.height - verticalInset - bottomInset,
     );
     final requestedHeight = maxHeight;
     final maxPanelHeight = requestedHeight == null
@@ -350,15 +360,15 @@ class BottomDialog extends StatelessWidget {
     const blurSigma = FabTabBarTokens.previewAcademyMenuGlassBlurSigma;
 
     return SafeArea(
-      top: false,
+      top: center,
       child: Align(
-        alignment: Alignment.bottomCenter,
+        alignment: center ? Alignment.center : Alignment.bottomCenter,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(
+          padding: EdgeInsets.fromLTRB(
             BottomDialogMetrics.outerHorizontalPadding,
-            0,
+            verticalInset,
             BottomDialogMetrics.outerHorizontalPadding,
-            BottomDialogMetrics.outerBottomPadding,
+            bottomInset,
           ),
           child: ConstrainedBox(
             constraints: BoxConstraints(

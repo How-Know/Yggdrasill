@@ -11,6 +11,7 @@ import '../../../services/attendance_service.dart';
 import '../../../services/data_manager.dart';
 import '../../../utils/attendance_judgement.dart';
 import '../../../widgets/pill_tab_selector.dart';
+import '../../../widgets/bottom_dialog.dart';
 import '../../../widgets/makeup_quick_dialog.dart';
 import '../../../widgets/app_snackbar.dart';
 import '../../../widgets/dialog_tokens.dart';
@@ -2254,6 +2255,9 @@ class _AttendanceHistoryTabState extends State<_AttendanceHistoryTab> {
                         await showDialog<bool>(
                           context: context,
                           barrierDismissible: true,
+                          barrierColor: Colors.black.withValues(
+                            alpha: BottomDialogMetrics.barrierOpacity,
+                          ),
                           builder: (context) => MakeupScheduleDialog(
                             studentWithInfo: studentWithInfo!,
                             absentAttendanceId: originalAttendanceId,

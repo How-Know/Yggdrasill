@@ -12,7 +12,9 @@ import '../models/operating_hours.dart';
 import '../screens/timetable/views/classes_view.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
+import 'app_dialog_action_button.dart';
 import 'app_snackbar.dart';
+import 'bottom_dialog.dart';
 import 'dialog_tokens.dart';
 import 'utility_glass_dialog_shell.dart';
 
@@ -325,6 +327,9 @@ class _MakeupQuickDialogState extends State<MakeupQuickDialog> {
     final picked = await showDialog<AttendanceRecord>(
       context: context,
       barrierDismissible: true,
+      barrierColor: Colors.black.withValues(
+        alpha: BottomDialogMetrics.barrierOpacity,
+      ),
       builder: (context) => _MakeupOriginalLessonPickerDialog(studentWithInfo: s),
     );
     if (picked == null) return;
@@ -351,6 +356,9 @@ class _MakeupQuickDialogState extends State<MakeupQuickDialog> {
     final saved = await showDialog<bool>(
       context: context,
       barrierDismissible: true,
+      barrierColor: Colors.black.withValues(
+        alpha: BottomDialogMetrics.barrierOpacity,
+      ),
       builder: (context) => MakeupScheduleDialog(
         studentWithInfo: s,
         absentAttendanceId: pickedAttendanceId,
@@ -602,8 +610,11 @@ class _MakeupOriginalLessonPickerDialog extends StatefulWidget {
   State<_MakeupOriginalLessonPickerDialog> createState() => _MakeupOriginalLessonPickerDialogState();
 }
 
+enum _MakeupLessonRange { week, month, quarter, all }
+
 class _MakeupOriginalLessonPickerDialogState extends State<_MakeupOriginalLessonPickerDialog> {
   bool _loading = true;
+  _MakeupLessonRange _range = _MakeupLessonRange.month;
 
   static DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
   static String _hm(DateTime d) => '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
@@ -672,232 +683,231 @@ class _MakeupOriginalLessonPickerDialogState extends State<_MakeupOriginalLesson
     setState(() => _loading = false);
   }
 
+  static DateTime _shiftMonths(DateTime base, int deltaMonths) {
+    var year = base.year;
+    var month = base.month + deltaMonths;
+    while (month <= 0) {
+      month += 12;
+      year -= 1;
+    }
+    while (month > 12) {
+      month -= 12;
+      year += 1;
+    }
+    final lastDay = DateTime(year, month + 1, 0).day;
+    final day = base.day > lastDay ? lastDay : base.day;
+    return DateTime(year, month, day);
+  }
+
+  bool _inSelectedRange(DateTime day, DateTime today) {
+    switch (_range) {
+      case _MakeupLessonRange.all:
+        return true;
+      case _MakeupLessonRange.week:
+        final start = today.subtract(const Duration(days: 7));
+        final end = today.add(const Duration(days: 7));
+        return !day.isBefore(start) && !day.isAfter(end);
+      case _MakeupLessonRange.month:
+        return !day.isBefore(_shiftMonths(today, -1)) &&
+            !day.isAfter(_shiftMonths(today, 1));
+      case _MakeupLessonRange.quarter:
+        return !day.isBefore(_shiftMonths(today, -3)) &&
+            !day.isAfter(_shiftMonths(today, 3));
+    }
+  }
+
+  String _lessonDescription(AttendanceRecord r) {
+    final localStart = r.classDateTime.toLocal();
+    final localEnd = r.classEndTime.toLocal();
+    final order = _cycleLabel(r);
+    final when =
+        '${_ymdWithWeekday(localStart)}  ${_hm(localStart)}~${_hm(localEnd)}';
+    if (order == '-') return when;
+    return '$when  ·  $order';
+  }
+
   @override
   Widget build(BuildContext context) {
     final studentName = widget.studentWithInfo.student.name;
+    final dlg = YggDialogColors.of(context);
 
-    Widget headerCell(String v, {required int flex}) {
-      return Expanded(
-        flex: flex,
-        child: Text(
-          v,
-          textAlign: TextAlign.center,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(color: _mkText, fontSize: 13, fontWeight: FontWeight.w900),
-        ),
+    Widget body;
+    if (_loading) {
+      body = const Padding(
+        padding: EdgeInsets.symmetric(vertical: 28),
+        child: Center(child: YggLoadingIndicator()),
       );
-    }
+    } else {
+      final now = DateTime.now();
+      final today = _dateOnly(now);
+      final classById = <String, ClassInfo>{
+        for (final c in DataManager.instance.classes) c.id: c,
+      };
+      final all = DataManager.instance.attendanceRecords
+          .where((r) => r.studentId == widget.studentWithInfo.student.id)
+          .toList();
+      final absent = <AttendanceRecord>[];
+      final planned = <AttendanceRecord>[];
+      for (final r in all) {
+        if (_isPurePlanned(r)) {
+          final d = _dateOnly(r.classDateTime.toLocal());
+          if (d.isBefore(today)) {
+            absent.add(r);
+          } else {
+            planned.add(r);
+          }
+          continue;
+        }
+        if (!r.isPresent) absent.add(r);
+      }
+      absent.sort((a, b) => b.classDateTime.compareTo(a.classDateTime));
+      planned.sort((a, b) => a.classDateTime.compareTo(b.classDateTime));
+      final visibleAbsent = [
+        for (final r in absent)
+          if (_inSelectedRange(_dateOnly(r.classDateTime.toLocal()), today)) r,
+      ];
+      final visiblePlanned = [
+        for (final r in planned)
+          if (_inSelectedRange(_dateOnly(r.classDateTime.toLocal()), today)) r,
+      ];
 
-    Widget headerRow() {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        decoration: BoxDecoration(
-          color: const Color(0xFF223131),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: _mkBorder, width: 1),
-        ),
-        child: Row(
+      Widget column({
+        required String title,
+        required List<AttendanceRecord> records,
+        required String emptyMessage,
+      }) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            headerCell('수업 일정', flex: 22),
-            headerCell('시간', flex: 18),
-            headerCell('회차', flex: 10),
-            headerCell('수업명', flex: 30),
-          ],
-        ),
-      );
-    }
-
-    Widget sectionDivider(String label) {
-      const accent = Color(0xFF33A373);
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 10),
-        child: Row(
-          children: [
-            Expanded(child: Container(height: 1, color: accent.withOpacity(0.6))),
-            const SizedBox(width: 12),
             Text(
-              label,
-              style: const TextStyle(color: Colors.white54, fontSize: 12, fontWeight: FontWeight.w900),
+              title,
+              style: TextStyle(
+                color: dlg.textSub,
+                fontSize: BottomDialogMetrics.mediumFontSize,
+                fontWeight: FontWeight.w600,
+              ),
             ),
-            const SizedBox(width: 12),
-            Expanded(child: Container(height: 1, color: accent.withOpacity(0.6))),
+            const SizedBox(height: 8),
+            Expanded(
+              child: ScrollConfiguration(
+                behavior: ScrollConfiguration.of(context)
+                    .copyWith(scrollbars: false),
+                child: records.isEmpty
+                    ? Text(
+                        emptyMessage,
+                        style: TextStyle(
+                          color: dlg.hint,
+                          fontSize: BottomDialogMetrics.smallFontSize,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      )
+                    : ListView(
+                        children: [
+                          for (final r in records)
+                            BottomDialogActionTile(
+                              icon: Icons.calendar_today_outlined,
+                              label: _classNameOf(r, classById),
+                              description: _lessonDescription(r),
+                              onTap: () => Navigator.of(context).pop(r),
+                            ),
+                        ],
+                      ),
+              ),
+            ),
           ],
-        ),
-      );
-    }
-
-    Widget rowTile({
-      required AttendanceRecord r,
-      required Map<String, ClassInfo> classById,
-    }) {
-      final dateStr = _ymdWithWeekday(r.classDateTime.toLocal());
-      final timeStr = '${_hm(r.classDateTime.toLocal())}~${_hm(r.classEndTime.toLocal())}';
-      final orderStr = _cycleLabel(r);
-      final cname = _classNameOf(r, classById);
-
-      Widget cell(String v, {required int flex, TextAlign align = TextAlign.center, EdgeInsetsGeometry? padding}) {
-        Widget child = Text(
-          v,
-          textAlign: align,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(color: _mkText, fontSize: 13, fontWeight: FontWeight.w700),
         );
-        if (padding != null) child = Padding(padding: padding, child: child);
-        return Expanded(flex: flex, child: child);
       }
 
-      return Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(10),
-          onTap: () => Navigator.of(context).pop(r),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: const Color(0xFF15171C),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: _mkBorder, width: 1),
-            ),
+      body = Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _MakeupLessonRangeBar(
+            selected: _range,
+            onSelected: (next) => setState(() => _range = next),
+          ),
+          const SizedBox(height: BottomDialogMetrics.beforeActionsGap),
+          Expanded(
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                cell(dateStr, flex: 22),
-                cell(timeStr, flex: 18),
-                cell(orderStr, flex: 10),
-                cell(cname, flex: 30, align: TextAlign.left, padding: const EdgeInsets.only(left: 24)),
+                Expanded(
+                  child: column(
+                    title: '결석',
+                    records: visibleAbsent,
+                    emptyMessage: '이 기간의 결석 수업이 없습니다.',
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: column(
+                    title: '예정',
+                    records: visiblePlanned,
+                    emptyMessage: '이 기간의 예정 수업이 없습니다.',
+                  ),
+                ),
               ],
             ),
           ),
-        ),
+        ],
       );
     }
 
-    return AlertDialog(
-      backgroundColor: kDlgBg,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: const BorderSide(color: _mkBorder),
-      ),
-      titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
-      contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
-      actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
-      title: Row(
+    return BottomDialog(
+      icon: Icons.event_note_outlined,
+      title: '수업 일정 선택 · $studentName',
+      shrinkWrap: false,
+      preferredWidth: 1040,
+      onClose: () => Navigator.of(context).pop(),
+      footer: Row(
         children: [
-          Container(
-            width: 40,
-            height: 40,
-            margin: const EdgeInsets.only(right: 12),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.05),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: IconButton(
-              tooltip: '뒤로',
-              icon: const Icon(Icons.arrow_back, color: Colors.white70, size: 20),
-              padding: EdgeInsets.zero,
-              onPressed: () => Navigator.of(context).pop(null),
-            ),
-          ),
-          Expanded(
-            child: Text(
-              '수업 일정 선택 · $studentName',
-              style: const TextStyle(color: _mkText, fontSize: 20, fontWeight: FontWeight.w800),
-              overflow: TextOverflow.ellipsis,
-            ),
+          const Spacer(),
+          AppDialogCloseButton(
+            onPressed: () => Navigator.of(context).pop(),
           ),
         ],
       ),
-      content: SizedBox(
-        width: 860,
-        height: 620,
-        child: _loading
-            ? const Center(child: CircularProgressIndicator(color: _mkAccent))
-            : Builder(
-                builder: (context) {
-                  final now = DateTime.now();
-                  final today = _dateOnly(now);
-                  final classById = <String, ClassInfo>{
-                    for (final c in DataManager.instance.classes) c.id: c,
-                  };
+      child: body,
+    );
+  }
+}
 
-                  final all = DataManager.instance.attendanceRecords
-                      .where((r) => r.studentId == widget.studentWithInfo.student.id)
-                      .toList();
+class _MakeupLessonRangeBar extends StatelessWidget {
+  const _MakeupLessonRangeBar({
+    required this.selected,
+    required this.onSelected,
+  });
 
-                  final absent = <AttendanceRecord>[];
-                  final planned = <AttendanceRecord>[];
+  final _MakeupLessonRange selected;
+  final ValueChanged<_MakeupLessonRange> onSelected;
 
-                  for (final r in all) {
-                    if (_isPurePlanned(r)) {
-                      // 예정은 "오늘 포함 미래"만 별도로 표시
-                      final d = _dateOnly(r.classDateTime.toLocal());
-                      if (d.isBefore(today)) {
-                        absent.add(r); // 과거 planned는 결석으로 취급
-                      } else {
-                        planned.add(r);
-                      }
-                      continue;
-                    }
-                    // 명시적 결석(또는 과거 미출석 기록)
-                    if (!r.isPresent) {
-                      absent.add(r);
-                    }
-                  }
-
-                  absent.sort((a, b) => b.classDateTime.compareTo(a.classDateTime));
-                  planned.sort((a, b) => a.classDateTime.compareTo(b.classDateTime));
-
-                  if (absent.isEmpty && planned.isEmpty) {
-                    return const Center(
-                      child: Text(
-                        '결석/예정 수업이 없습니다.',
-                        style: TextStyle(color: Colors.white54, fontSize: 15, fontWeight: FontWeight.w600),
-                      ),
-                    );
-                  }
-
-                  final items = <Widget>[];
-                  if (absent.isNotEmpty) {
-                    items.add(sectionDivider('결석'));
-                    for (final r in absent) {
-                      items.add(rowTile(r: r, classById: classById));
-                      items.add(const SizedBox(height: 8));
-                    }
-                  }
-                  if (planned.isNotEmpty) {
-                    items.add(sectionDivider('예정'));
-                    for (final r in planned) {
-                      items.add(rowTile(r: r, classById: classById));
-                      items.add(const SizedBox(height: 8));
-                    }
-                  }
-
-                  return Column(
-                    children: [
-                      headerRow(),
-                      const SizedBox(height: 10),
-                      Expanded(
-                        child: Scrollbar(
-                          child: ListView(
-                            children: items,
-                          ),
-                        ),
-                      ),
-                    ],
-                  );
-                },
-              ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(null),
-          style: TextButton.styleFrom(
-            foregroundColor: _mkTextSub,
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+  @override
+  Widget build(BuildContext context) {
+    final dlg = YggDialogColors.of(context);
+    const options = <(_MakeupLessonRange, String)>[
+      (_MakeupLessonRange.week, '1주'),
+      (_MakeupLessonRange.month, '1달'),
+      (_MakeupLessonRange.quarter, '3달'),
+      (_MakeupLessonRange.all, '전체'),
+    ];
+    return Row(
+      children: [
+        Text(
+          '기간',
+          style: TextStyle(
+            color: dlg.textSub,
+            fontSize: BottomDialogMetrics.mediumFontSize,
+            fontWeight: FontWeight.w600,
           ),
-          child: const Text('닫기'),
         ),
+        const SizedBox(width: 12),
+        for (var i = 0; i < options.length; i++) ...[
+          if (i > 0) const SizedBox(width: 8),
+          YggDialogFilterChip(
+            label: options[i].$2,
+            selected: selected == options[i].$1,
+            onSelected: (_) => onSelected(options[i].$1),
+          ),
+        ],
       ],
     );
   }
@@ -1267,84 +1277,66 @@ class _MakeupScheduleDialogState extends State<MakeupScheduleDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      backgroundColor: kDlgBg,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: const BorderSide(color: _mkBorder),
-      ),
-      titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
-      contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
-      actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
-      title: Text(
-        '${widget.studentWithInfo.student.name} 보강 시간 선택',
-        style: const TextStyle(color: _mkText, fontSize: 20, fontWeight: FontWeight.w800),
-        overflow: TextOverflow.ellipsis,
-      ),
-      content: SizedBox(
-        width: 1032, // 860 * 1.2
-        // ✅ 보강 잡기(시간표 다이얼로그) 높이 +30%
-        height: 874, // 672 * 1.3
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // 상단: 시간탭과 동일한 월 기준 주차/화살표 헤더 사용
-                  TimetableHeader(
-                    selectedDate: _weekStart,
-                    onDateChanged: (newDate) {
-                      final monday = newDate.subtract(Duration(days: newDate.weekday - 1));
-                      setState(() {
-                        _weekStart = monday;
-                      });
-                    },
-                    selectedDayIndex: null,
-                    onDaySelected: (_) {},
-                    isRegistrationMode: false,
-                  ),
-                  const SizedBox(height: 12),
-                  Expanded(
-                    child: _hours.isEmpty
-                        ? const Center(child: CircularProgressIndicator())
-                        : ClassesView(
-                            scrollController: _scrollController,
-                            operatingHours: _hours,
-                            breakTimeColor: const Color(0xFF424242),
-                            // ✅ 보강 시간 선택: 클릭 + 드래그 모두 허용(수업시간 등록과 동일한 드래그 UX 재사용)
-                            registrationModeType: 'makeup',
-                            isRegistrationMode: true,
-                            selectedDayIndex: null,
-                            weekStartDate: _weekStart,
-                            selectedStudentWithInfo: null,
-                            onTimeSelected: (dayIdx, startTime) async {
-                              await _addMakeup(dayIdx, startTime);
-                              setState(() {});
-                            },
-                            onTimeRangeSelected: (dayIdx, startTime, durationMinutes) async {
-                              await _addMakeup(dayIdx, startTime, durationMinutesOverride: durationMinutes);
-                              setState(() {});
-                            },
-                          ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          style: TextButton.styleFrom(
-            foregroundColor: _mkTextSub,
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+    final studentName = widget.studentWithInfo.student.name;
+    return BottomDialog(
+      icon: Icons.schedule_outlined,
+      title: '보강 시간 선택 · $studentName',
+      shrinkWrap: false,
+      preferredWidth: 1076,
+      maxHeight: 980,
+      onClose: () => Navigator.of(context).pop(),
+      footer: Row(
+        children: [
+          const Spacer(),
+          AppDialogCloseButton(
+            onPressed: () => Navigator.of(context).pop(),
           ),
-          child: const Text('닫기'),
-        ),
-      ],
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TimetableHeader(
+            selectedDate: _weekStart,
+            onDateChanged: (newDate) {
+              final monday = newDate.subtract(Duration(days: newDate.weekday - 1));
+              setState(() {
+                _weekStart = monday;
+              });
+            },
+            selectedDayIndex: null,
+            onDaySelected: (_) {},
+            isRegistrationMode: false,
+          ),
+          const SizedBox(height: 12),
+          Expanded(
+            child: _hours.isEmpty
+                ? const Center(child: YggLoadingIndicator())
+                : ClassesView(
+                    scrollController: _scrollController,
+                    operatingHours: _hours,
+                    breakTimeColor: const Color(0xFF424242),
+                    registrationModeType: 'makeup',
+                    isRegistrationMode: true,
+                    selectedDayIndex: null,
+                    weekStartDate: _weekStart,
+                    selectedStudentWithInfo: null,
+                    onTimeSelected: (dayIdx, startTime) async {
+                      await _addMakeup(dayIdx, startTime);
+                      setState(() {});
+                    },
+                    onTimeRangeSelected: (dayIdx, startTime, durationMinutes) async {
+                      await _addMakeup(
+                        dayIdx,
+                        startTime,
+                        durationMinutesOverride: durationMinutes,
+                      );
+                      setState(() {});
+                    },
+                  ),
+          ),
+        ],
+      ),
     );
   }
 }

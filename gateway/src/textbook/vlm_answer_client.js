@@ -12,9 +12,11 @@ import {
 import {
   buildExpectedIndex,
   canonicalCorner,
+  createSequentialState,
   expandBadgeRange,
   footerEchoPages,
   resolveExpectedBox,
+  resolveSequentialBox,
   stripFooterEchoBadge,
 } from './vlm_corner_guard.js';
 import {
@@ -323,10 +325,9 @@ export function normalizeAnswerResult(parsedJson, opts = {}) {
     normalizeProblemNumberKey,
   );
   // 개념+유형 고등은 해설 PDF 에서 정답을 읽어 머리 없는 이어지는 지면이 많다.
-  const footerPages =
-    String(opts?.series || '').trim() === 'gaeyu_high'
-      ? footerEchoPages(opts)
-      : new Set();
+  const isGaeyuHigh = String(opts?.series || '').trim() === 'gaeyu_high';
+  const footerPages = isGaeyuHigh ? footerEchoPages(opts) : new Set();
+  const sequential = createSequentialState();
   const rawItems = Array.isArray(parsedJson.items) ? parsedJson.items : [];
   const seen = new Set();
   for (const rawItem of rawItems) {
@@ -334,12 +335,24 @@ export function normalizeAnswerResult(parsedJson, opts = {}) {
     const raw = stripFooterEchoBadge(rawItem, footerPages);
     let problemNumber = String(raw.problem_number ?? '').trim();
     if (!problemNumber) continue;
-    const resolved = resolveExpectedBox(
-      raw,
-      problemNumber,
-      expectedIndex,
-      normalizeProblemNumberKey,
-    );
+    const resolved =
+      (isGaeyuHigh
+        ? resolveSequentialBox(
+            raw,
+            problemNumber,
+            expectedIndex,
+            normalizeProblemNumberKey,
+            sequential,
+            // 정답 글자는 다른 문항과 같을 수 있어 위치로 되풀이를 가린다.
+            parseBbox4(raw.bbox) ? JSON.stringify(parseBbox4(raw.bbox)) : '',
+          )
+        : null) ??
+      resolveExpectedBox(
+        raw,
+        problemNumber,
+        expectedIndex,
+        normalizeProblemNumberKey,
+      );
     if (resolved.reject) continue;
     const badgeCorner = canonicalCorner(raw.source_corner ?? raw.sourceCorner);
     const kindRaw = String(raw.kind ?? '').trim().toLowerCase();

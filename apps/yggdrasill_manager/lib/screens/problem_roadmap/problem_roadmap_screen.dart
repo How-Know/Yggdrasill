@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../theme/manager_shell_colors.dart';
+
 import '../../services/course_map_controller.dart';
 import '../curriculum/widgets/course_map_pane.dart';
 
@@ -11,7 +13,7 @@ class ProblemRoadmapScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: const Color(0xFF1F1F1F),
+      color: ManagerShellColors.surfaceBase,
       child: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(

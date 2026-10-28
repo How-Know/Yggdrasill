@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../theme/manager_shell_colors.dart';
+
 const Color kNavAccent = Color(0xFF33A373); // Yggdrasill 시그니처 초록
 
 class AppNavigationBar extends StatelessWidget {
@@ -18,42 +20,35 @@ class AppNavigationBar extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: 260,
-      decoration: const BoxDecoration(
-        color: Color(0xFF18181A),
-        border: Border(
-          right: BorderSide(color: Color(0xFF2A2A2A), width: 1),
-        ),
-      ),
+      color: ManagerShellColors.surfaceBase,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 헤더
-          Container(
-            padding: const EdgeInsets.all(24),
+          const Padding(
+            padding: EdgeInsets.all(24),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
+                Text(
                   'Yggdrasill',
                   style: TextStyle(
-                    color: Colors.white,
+                    color: ManagerShellColors.navIcon,
                     fontSize: 24,
                     fontWeight: FontWeight.w900,
                   ),
                 ),
-                const SizedBox(height: 6),
+                SizedBox(height: 6),
                 Text(
                   '관리자',
                   style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.5),
+                    color: ManagerShellColors.navSubtitle,
                     fontSize: 15,
                   ),
                 ),
               ],
             ),
           ),
-
-          const Divider(color: Color(0xFF2A2A2A), height: 1),
+          const Divider(color: ManagerShellColors.navDivider, height: 1),
 
           // 네비게이션 항목
           Expanded(
@@ -118,49 +113,14 @@ class AppNavigationBar extends StatelessWidget {
             ),
           ),
 
-          const Divider(color: Color(0xFF2A2A2A), height: 1),
-
-          // 로그아웃 (최하단 고정)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap: onLogout,
-                borderRadius: BorderRadius.circular(10),
-                splashColor: Colors.transparent,
-                highlightColor: Colors.white.withValues(alpha: 0.06),
-                child: Container(
-                  height: 52,
-                  padding: const EdgeInsets.symmetric(horizontal: 18),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1F1F1F),
-                    borderRadius: BorderRadius.circular(10),
-                    border:
-                        Border.all(color: const Color(0xFF2A2A2A), width: 1),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.logout,
-                        size: 24,
-                        color: Colors.white.withValues(alpha: 0.7),
-                      ),
-                      const SizedBox(width: 14),
-                      Text(
-                        '로그아웃',
-                        style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.7),
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
+          const Divider(color: ManagerShellColors.navDivider, height: 1),
+          _NavigationItem(
+            icon: Icons.logout,
+            label: '로그아웃',
+            isSelected: false,
+            onTap: onLogout,
           ),
+          const SizedBox(height: 10),
         ],
       ),
     );
@@ -188,42 +148,35 @@ class _NavigationItem extends StatelessWidget {
         color: Colors.transparent,
         child: InkWell(
           onTap: onTap,
-          borderRadius: BorderRadius.circular(10),
-          splashColor: Colors.transparent, // 흰색 깜빡임 제거
-          highlightColor: kNavAccent.withValues(alpha: 0.12), // 하이라이트 색상만 유지
+          borderRadius: BorderRadius.circular(26),
+          splashColor: Colors.transparent,
+          highlightColor: ManagerShellColors.navHighlight,
           child: Container(
-            // 고정 높이로 위치 이동 방지
             height: 52,
             padding: const EdgeInsets.symmetric(horizontal: 18),
             decoration: BoxDecoration(
               color: isSelected
-                  ? kNavAccent.withValues(alpha: 0.16)
+                  ? ManagerShellColors.navHighlight
                   : Colors.transparent,
-              borderRadius: BorderRadius.circular(10),
-              border: isSelected
-                  ? Border.all(
-                      color: kNavAccent.withValues(alpha: 0.28),
-                      width: 1,
-                    )
-                  : null,
+              borderRadius: BorderRadius.circular(26),
             ),
             child: Row(
               children: [
                 Icon(
                   icon,
-                  size: 24, // 아이콘 크기 증가
+                  size: 24,
                   color: isSelected
-                      ? kNavAccent
-                      : Colors.white.withValues(alpha: 0.7),
+                      ? ManagerShellColors.navIconSelected
+                      : ManagerShellColors.navIcon,
                 ),
                 const SizedBox(width: 14),
                 Text(
                   label,
                   style: TextStyle(
                     color: isSelected
-                        ? kNavAccent
-                        : Colors.white.withValues(alpha: 0.7),
-                    fontSize: 16, // 폰트 크기 증가
+                        ? ManagerShellColors.navIconSelected
+                        : ManagerShellColors.navIcon,
+                    fontSize: 16,
                     fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
                   ),
                 ),

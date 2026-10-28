@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../theme/manager_shell_colors.dart';
+
 class ArithmeticScreen extends StatefulWidget {
   const ArithmeticScreen({super.key});
 
@@ -11,7 +13,7 @@ class _ArithmeticScreenState extends State<ArithmeticScreen> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: const Color(0xFF1F1F1F),
+      color: ManagerShellColors.surfaceBase,
       padding: const EdgeInsets.all(24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

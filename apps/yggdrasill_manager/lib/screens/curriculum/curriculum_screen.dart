@@ -18,6 +18,7 @@ import '../../services/concept_draft_service.dart';
 import '../../services/course_map_controller.dart';
 import '../../services/concept_library_controller.dart';
 import '../../services/concept_service.dart';
+import '../../theme/manager_shell_colors.dart';
 import '../../services/concept_topic.dart';
 import '../../services/think/think_concept_chat_controller.dart';
 import '../../widgets/app_navigation_bar.dart';
@@ -157,7 +158,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   Widget build(BuildContext context) {
     if (_isLoading) {
       return Container(
-        color: const Color(0xFF1F1F1F),
+        color: ManagerShellColors.surfaceBase,
         child: const Center(
           child: CircularProgressIndicator(color: kNavAccent),
         ),
@@ -165,7 +166,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     }
 
     return Container(
-      color: const Color(0xFF1F1F1F),
+      color: ManagerShellColors.surfaceBase,
       child: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(

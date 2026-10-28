@@ -229,6 +229,56 @@ export function resolveExpectedBox(raw, problemNumber, expectedIndex, normalizeK
   return { matched: best.candidate, reject: false };
 }
 
+/// 같은 코너에 같은 번호 후보가 여럿이면 배지 쪽을 보지 않고 본문 차례대로 붙인다.
+///
+/// 개념+유형 고등 해설은 소단원마다 "02-1" 이 다시 나오고, 머리 없는 이어지는
+/// 지면에서 모델은 쪽 배지를 지어 적는다(해설 71쪽 02-1~03-3 을 167쪽이 아니라
+/// "문제 180쪽" 으로 적어 다음 소단원 문항에 붙음). 앱은 아직 못 찾은 문항만
+/// 해설 차례상 이 지면에 올 수 있는 것으로 좁혀 보내므로, 한 응답 안에서 같은
+/// 묶음의 번호는 남은 후보의 본문 차례대로 짝짓는다. 63쪽처럼 "개념 Check 150쪽"
+/// 과 "152쪽" 의 1 이 한 지면에 같이 있으면 첫째·둘째 후보로 갈린다.
+///
+/// [state] 는 한 응답 동안 유지한다. [signature] 가 같은 항목이 두 번 오면 같은
+/// 문항을 되풀이한 것이므로 다음 후보로 넘기지 않는다.
+/// 반환값이 null 이면 이 규칙을 쓸 수 없으니 [resolveExpectedBox] 로 넘긴다.
+export function resolveSequentialBox(
+  raw,
+  problemNumber,
+  expectedIndex,
+  normalizeKey,
+  state,
+  signature = '',
+) {
+  if (!expectedIndex || expectedIndex.byKey.size === 0) return null;
+  const key = normalizeKey(problemNumber);
+  const candidates = expectedIndex.byKey.get(key) || [];
+  const badge = reportedBadge(raw);
+  const group = badge.corner
+    ? candidates.filter((candidate) => candidate.corner === badge.corner)
+    : candidates;
+  if (group.length < 2) return null;
+  const corners = new Set(group.map((candidate) => candidate.corner));
+  if (corners.size > 1 || !group[0].corner) return null;
+  const groupKey = `${group[0].corner}|${key}`;
+  const seen = state.signatures.get(groupKey) || new Set();
+  if (signature && seen.has(signature)) return { matched: null, reject: true };
+  const ordered = [...group].sort(
+    (a, b) => a.page - b.page || a.index - b.index,
+  );
+  const next = ordered.find((candidate) => !state.claimed.has(candidate.index));
+  if (!next) return { matched: null, reject: true };
+  state.claimed.add(next.index);
+  if (signature) {
+    seen.add(signature);
+    state.signatures.set(groupKey, seen);
+  }
+  return { matched: next, reject: false };
+}
+
+export function createSequentialState() {
+  return { claimed: new Set(), signatures: new Map() };
+}
+
 // 묶음 배지는 묶음이 시작되는 지면에만 인쇄된다. 이어지는 지면에서 모델은 적을
 // 배지가 없어 꼬리말에 찍힌 **해설 쪽번호**("중단원 TEST 163")를 출처로 올린다.
 // 그 번호는 본교재·워크북 쪽 번호와 체계가 달라, 출처 대조가 기대 문항을 하나도

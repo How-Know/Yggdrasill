@@ -106,6 +106,7 @@ ButtonStyle studentDetailPillStyle(
   BuildContext context, {
   bool accent = false,
   bool danger = false,
+  bool border = true,
 }) {
   final style = studentDetailPanel(context);
   final brightness = Theme.of(context).brightness;
@@ -129,11 +130,13 @@ ButtonStyle studentDetailPillStyle(
     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
     shape: RoundedRectangleBorder(
       borderRadius: BorderRadius.circular(999),
-      side: BorderSide(
-        color: danger
-            ? dangerColor
-            : (accent ? Colors.transparent : neutralBorder),
-      ),
+      side: border
+          ? BorderSide(
+              color: danger
+                  ? dangerColor
+                  : (accent ? Colors.transparent : neutralBorder),
+            )
+          : BorderSide.none,
     ),
     textStyle: TextStyle(
       fontFamily: FabTabBarTokens.previewAcademyLabelFontFamily,

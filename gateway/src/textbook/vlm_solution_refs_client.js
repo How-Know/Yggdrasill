@@ -9,9 +9,11 @@ import {
 import {
   buildExpectedIndex,
   canonicalCorner,
+  createSequentialState,
   expandBadgeRange,
   footerEchoPages,
   resolveExpectedBox,
+  resolveSequentialBox,
   stripFooterEchoBadge,
 } from './vlm_corner_guard.js';
 import {
@@ -191,8 +193,10 @@ export function normalizeSolutionRefsResult(parsedJson, opts = {}) {
   );
   const series = String(opts?.series || '').trim();
   const isGojaengi = series === 'gojaengi';
-  const stripsFooterEcho = isGojaengi || series === 'gaeyu_high';
+  const isGaeyuHigh = series === 'gaeyu_high';
+  const stripsFooterEcho = isGojaengi || isGaeyuHigh;
   const footerPages = footerEchoPages(opts);
+  const sequential = createSequentialState();
   const rawItems = Array.isArray(parsedJson.items) ? parsedJson.items : [];
   const seen = new Set();
   for (const rawItem of rawItems) {
@@ -202,12 +206,25 @@ export function normalizeSolutionRefsResult(parsedJson, opts = {}) {
       : rawItem;
     const problemNumber = String(raw.problem_number ?? '').trim();
     if (!problemNumber) continue;
-    let resolved = resolveExpectedBox(
-      raw,
-      problemNumber,
-      expectedIndex,
-      normalizeProblemNumberKey,
-    );
+    let resolved =
+      (isGaeyuHigh
+        ? resolveSequentialBox(
+            raw,
+            problemNumber,
+            expectedIndex,
+            normalizeProblemNumberKey,
+            sequential,
+            parseBbox4(raw.number_region)
+              ? JSON.stringify(parseBbox4(raw.number_region))
+              : '',
+          )
+        : null) ??
+      resolveExpectedBox(
+        raw,
+        problemNumber,
+        expectedIndex,
+        normalizeProblemNumberKey,
+      );
     // 같은 지면 아래쪽에서 다음 묶음 머리가 시작하면, 그 위의 마지막 풀이에도
     // 모델이 새 배지 쪽을 붙인다. 현재 기대 후보가 번호상 하나뿐이고 보고 쪽이
     // 딱 한 쪽 차이면 페이지 단서만 버려 다시 대조한다. 요약 상자는 아래의

@@ -643,8 +643,13 @@ class _AccountDialogState extends State<_AccountDialog> {
   }
 
   Future<void> _openSwitchProfile() async {
-    await _showAccountDialog(context, (ctx) => _SwitchProfileDialog(profileMap: _profileMap));
-    await _reload();
+    final navigator = Navigator.of(context);
+    final profileMap = _profileMap;
+    navigator.pop();
+    await _showAccountDialog(
+      navigator.context,
+      (ctx) => _SwitchProfileDialog(profileMap: profileMap),
+    );
   }
 
   @override
@@ -713,6 +718,7 @@ class _AccountDialogState extends State<_AccountDialog> {
       title: '계정',
       onClose: () => Navigator.of(context).pop(),
       shrinkWrap: true,
+      center: true,
       preferredWidth: 520,
       footer: Row(
         children: [
@@ -1679,6 +1685,7 @@ class _SwitchProfileDialog extends StatelessWidget{
       icon: Icons.switch_account_outlined,
       title: '프로필 전환',
       shrinkWrap: true,
+      center: true,
       preferredWidth: 520,
       onClose: () => Navigator.pop(context),
       footer: Row(

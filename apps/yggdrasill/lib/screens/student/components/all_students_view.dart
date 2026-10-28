@@ -2683,7 +2683,11 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                   title: '최근 활동',
                   action: TextButton.icon(
                     onPressed: () => onRequestCourseView(studentWithInfo),
-                    style: studentDetailPillStyle(context, accent: true),
+                    style: studentDetailPillStyle(
+                      context,
+                      accent: true,
+                      border: false,
+                    ),
                     icon: StudentDetailIcon(
                       studentDetailExternalLinkSvg,
                       size: 16,

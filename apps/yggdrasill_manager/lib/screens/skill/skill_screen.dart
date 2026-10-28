@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../services/learning_behavior_card_service.dart';
+import '../../theme/manager_shell_colors.dart';
 import '../../widgets/animated_reorderable_grid.dart';
 
 const Color _skillBg = Color(0xFF1F1F1F);
@@ -264,7 +265,7 @@ class _SkillScreenState extends State<SkillScreen> {
   Widget build(BuildContext context) {
     final orderedCards = _orderedCards();
     return Container(
-      color: _skillBg,
+      color: ManagerShellColors.surfaceBase,
       padding: const EdgeInsets.all(24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

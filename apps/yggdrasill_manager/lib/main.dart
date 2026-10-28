@@ -19,6 +19,7 @@ import 'screens/trait_survey/trait_survey_screen.dart';
 import 'screens/textbook/textbook_screen.dart';
 import 'screens/think/think_screen.dart';
 import 'screens/management/management_screen.dart';
+import 'theme/manager_shell_colors.dart';
 import 'widgets/app_navigation_bar.dart';
 import 'widgets/textbook_background_extract_panel.dart';
 
@@ -38,7 +39,7 @@ void main() {
         size: Size(1400, 900),
         minimumSize: Size(1200, 800),
         center: true,
-        backgroundColor: Color(0xFF1F1F1F),
+        backgroundColor: ManagerShellColors.surfaceBase,
         skipTaskbar: false,
         title: 'Yggdrasill Manager',
         titleBarStyle: TitleBarStyle.normal,
@@ -57,7 +58,7 @@ void main() {
         debugShowCheckedModeBanner: false,
         theme: _buildManagerTheme(),
         home: Scaffold(
-          backgroundColor: const Color(0xFF1F1F1F),
+          backgroundColor: ManagerShellColors.surfaceBase,
           body: Center(
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -110,7 +111,7 @@ ThemeData _buildManagerTheme() {
       brightness: Brightness.dark,
     ),
     useMaterial3: true,
-    scaffoldBackgroundColor: const Color(0xFF1F1F1F),
+    scaffoldBackgroundColor: ManagerShellColors.surfaceBase,
     fontFamily: 'KakaoSmallSans',
     textTheme: const TextTheme(
       displayLarge: TextStyle(fontFamily: 'KakaoBigSans'),
@@ -169,7 +170,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
   Widget build(BuildContext context) {
     if (_isLoading) {
       return const Scaffold(
-        backgroundColor: Color(0xFF1F1F1F),
+        backgroundColor: ManagerShellColors.surfaceBase,
         body: Center(
           child: CircularProgressIndicator(),
         ),
@@ -291,7 +292,7 @@ class _MainScreenState extends State<MainScreen> with WindowListener {
   Widget build(BuildContext context) {
     final int safeIndex = _normalizeIndex(_selectedIndex);
     return Scaffold(
-      backgroundColor: const Color(0xFF1F1F1F),
+      backgroundColor: ManagerShellColors.surfaceBase,
       body: Stack(
         children: [
           Row(

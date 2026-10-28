@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import '../../theme/manager_shell_colors.dart';
 import '../../services/auth_service.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -62,7 +64,7 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF1F1F1F),
+      backgroundColor: ManagerShellColors.surfaceBase,
       body: Center(
         child: Container(
           width: 420,

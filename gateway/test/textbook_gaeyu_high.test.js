@@ -314,29 +314,59 @@ test('해설 꼬리말 쪽·옆 탭을 출처로 적은 이어지는 지면 정�
   );
 });
 
-test('배지를 밝힌 정답은 차례 표시보다 배지를 따른다', () => {
+test('머리 없는 지면에서 지어 적은 배지는 무시하고 본문 차례대로 붙인다', () => {
+  // 해설 71쪽 재현: 실제는 167·168쪽 문제인데 모델이 "문제 180·181쪽" 으로 적었다.
   const out = normalizeAnswerResult(
     {
-      items: [
-        {
-          problem_number: '02-1',
-          kind: 'subjective',
-          answer_text: 'x',
-          source_corner: '문제',
-          source_page: 180,
-          source_page_end: 180,
-        },
-      ],
+      items: ['02-1', '02-2', '03-3'].map((problem_number, i) => ({
+        problem_number,
+        kind: 'subjective',
+        answer_text: 'x',
+        bbox: [100 + i * 100, 50, 120 + i * 100, 300],
+        source_corner: '문제',
+        source_page: problem_number === '03-3' ? 168 : 180,
+        source_page_end: problem_number === '03-3' ? 168 : 180,
+      })),
     },
     {
       expectedEntries: repeatedProblemEntries,
       expectedNumbers: repeatedProblemEntries.map((e) => e.number),
       series: 'gaeyu_high',
-      rawPage: 74,
-      displayPage: 74,
+      rawPage: 71,
+      displayPage: 71,
     },
   );
-  assert.deepEqual(out.items.map((item) => item.expected_index), [4]);
+  assert.deepEqual(
+    out.items.map((item) => item.expected_index),
+    [1, 2, 3],
+  );
+});
+
+test('한 지면에 같은 번호 박스가 둘이면 차례대로 첫째·둘째 후보에 붙고, 되풀이는 버린다', () => {
+  // 해설 63쪽: "개념 Check 150쪽" 과 "152쪽" 의 1 이 한 지면에 있다.
+  const entries = [
+    { number: '1', corner: '개념 Check', page: 150, position: 0 },
+    { number: '1', corner: '개념 Check', page: 152, position: 1 },
+  ];
+  const item = (y, answer_text) => ({
+    problem_number: '1',
+    kind: 'subjective',
+    answer_text,
+    bbox: [y, 50, y + 20, 300],
+    source_corner: '개념 Check',
+    source_page: 150,
+  });
+  const out = normalizeAnswerResult(
+    { items: [item(100, 'ㄱ, ㄷ'), item(100, 'ㄱ, ㄷ'), item(600, 'ㄱ, ㄷ')] },
+    {
+      expectedEntries: entries,
+      expectedNumbers: entries.map((e) => e.number),
+      series: 'gaeyu_high',
+      rawPage: 63,
+      displayPage: 63,
+    },
+  );
+  assert.deepEqual(out.items.map((one) => one.expected_index), [0, 1]);
 });
 
 test('해설 좌표도 꼬리말 쪽을 출처에서 지운다', () => {
