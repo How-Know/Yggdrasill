@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../../services/concept_relation_service.dart';
+import '../../services/concept_service.dart';
+import '../../services/course_map_controller.dart';
 import '../../services/think/think_action_models.dart';
 import '../../services/think/think_api.dart';
 import '../../services/think/think_code_controller.dart';
@@ -21,6 +24,7 @@ import 'think_style.dart';
 import 'think_tree_dialogs.dart';
 
 part 'think_concept_draft_cards.dart';
+part 'think_course_map_cards.dart';
 
 // 채팅 답변 아래에 붙는 작업 카드. AI가 낸 제안(ai_actions)은 여기서 사람이 승인해야 실행된다.
 // 설계: docs/architecture/ai-think-actions.md
@@ -275,6 +279,7 @@ class _ThinkActionCardState extends State<ThinkActionCard> with _BusyState {
     }
     if (a.kind.isOrganizeOnly && a.status != ThinkActionStatus.failed) return _organizeOnly();
     if (a.kind.isConceptDraft && a.status != ThinkActionStatus.failed) return ConceptDraftActionCard(action: a);
+    if (a.kind.isCourseThink && a.status != ThinkActionStatus.failed) return CourseThinkActionCard(action: a);
     if (a.status == ThinkActionStatus.rejected) {
       return _ClosedLine(icon: Icons.block, text: '${a.kind.label} 제안 · 거절함${_subject.isEmpty ? '' : ' · $_subject'}');
     }
@@ -316,8 +321,34 @@ class _ThinkActionCardState extends State<ThinkActionCard> with _BusyState {
 
   Future<void> _approveMemory(ThinkMemoryProposal? edited) => run(
         () => _think.applyAction(a, overrides: edited == null ? const {} : {'memory': edited.toJson()}),
-        done: '기억으로 저장했습니다. 다음 대화부터 Think가 참고합니다.',
+        done: a.memoryRetire
+            ? '기억을 보관으로 내렸습니다. 기록은 남아 있습니다.'
+            : '기억으로 저장했습니다. 다음 대화부터 Think가 참고합니다.',
       );
+
+  bool _flowReady() {
+    if (a.memoryFlowStep <= 1) return true;
+    return _think.actionsOf(a.conversationId).any((other) =>
+        other.id != a.id &&
+        other.kind == ThinkActionKind.saveMemory &&
+        other.memoryFlowKey == a.memoryFlowKey &&
+        other.memoryFlowStep == a.memoryFlowStep - 1 &&
+        other.status == ThinkActionStatus.applied);
+  }
+
+  Widget _flowNote() {
+    if (a.memoryFlowSteps <= 1) return const SizedBox.shrink();
+    final waiting = a.memoryFlowStep > 1 && !_flowReady();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: ThinkNotice(
+        icon: Icons.account_tree_outlined,
+        text: waiting
+            ? '수정 흐름 ${a.memoryFlowStep}/${a.memoryFlowSteps}. 앞 단계가 승인되기 전에는 이 카드를 승인할 수 없습니다.'
+            : '수정 흐름 ${a.memoryFlowStep}/${a.memoryFlowSteps}. ${a.memoryFlowStep == 1 ? '다른 단계보다 먼저 바뀌어야 하는 기억입니다.' : '앞 단계가 승인된 뒤의 내용을 전제로 한 단계입니다.'}',
+      ),
+    );
+  }
 
   Future<void> _editMemory() async {
     final edited = await ThinkMemoryEditDialog.show(context, memory: _memoryWithScope, showScope: _think.rolesReady);
@@ -325,7 +356,57 @@ class _ThinkActionCardState extends State<ThinkActionCard> with _BusyState {
     await _approveMemory(edited);
   }
 
+  Widget _retireMemory() {
+    final title = a.title.isEmpty ? '기억' : a.title;
+    if (a.status == ThinkActionStatus.applied) {
+      return _ClosedLine(icon: Icons.inventory_2_outlined, text: '기억 내리기 · 보관함 · $title');
+    }
+    if (a.status == ThinkActionStatus.rejected) {
+      return _ClosedLine(icon: Icons.block, text: '기억 내리기 제안 · 거절함 · $title');
+    }
+    final ready = !busy && a.memoryBasisReady && _flowReady();
+    return _CardFrame(
+      icon: Icons.inventory_2_outlined,
+      label: '기억 내리기 제안',
+      badge: const ThinkBadge('승인 대기', color: kThinkLink),
+      children: [
+        Text('"$title"을(를) 보관으로 내립니다. 행과 변경 이력은 지우지 않습니다.',
+            style: const TextStyle(color: kThinkText, fontSize: 14, height: 1.5)),
+        if (a.memoryReason.isNotEmpty) ...[
+          _gap(8),
+          thinkCodeLabel('Think가 지금 제안한 이유'),
+          SelectableText(a.memoryReason, style: const TextStyle(color: kThinkText, fontSize: 13, height: 1.5)),
+        ],
+        _gap(8),
+        ThinkMemoryBasisNote(action: a),
+        _flowNote(),
+        const ThinkNotice(
+          icon: Icons.verified_outlined,
+          text: '승인하면 이 기억은 보관되어 다음 대화부터 Think가 쓰지 않습니다. 거절하면 그대로 둡니다.',
+        ),
+        _gap(),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            ElevatedButton.icon(
+              onPressed: ready ? () => _approveMemory(null) : null,
+              style: thinkPrimaryButton(),
+              icon: const Icon(Icons.check, size: 16),
+              label: const Text('승인하고 보관'),
+            ),
+            TextButton(
+              onPressed: busy ? null : () => run(() => _think.rejectAction(a)),
+              child: const Text('거절', style: TextStyle(color: kThinkSub)),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
   Widget _saveMemory() {
+    if (a.memoryRetire) return _retireMemory();
     final m = a.memoryProposal;
     final title = m.title.isEmpty ? a.title : m.title;
     if (a.status == ThinkActionStatus.applied) {
@@ -353,6 +434,9 @@ class _ThinkActionCardState extends State<ThinkActionCard> with _BusyState {
           thinkCodeLabel('Think가 지금 제안한 이유'),
           SelectableText(a.memoryReason, style: const TextStyle(color: kThinkText, fontSize: 13, height: 1.5)),
         ],
+        _gap(8),
+        ThinkMemoryBasisNote(action: a),
+        _flowNote(),
         if (a.supersedesTitle.isNotEmpty) ...[
           _gap(),
           ThinkNotice(
@@ -388,13 +472,13 @@ class _ThinkActionCardState extends State<ThinkActionCard> with _BusyState {
           runSpacing: 8,
           children: [
             ElevatedButton.icon(
-              onPressed: busy || scopeMissing ? null : () => _approveMemory(_memScope == null ? null : _memoryWithScope),
+              onPressed: busy || scopeMissing || !a.memoryBasisReady || !_flowReady() ? null : () => _approveMemory(_memScope == null ? null : _memoryWithScope),
               style: thinkPrimaryButton(),
               icon: const Icon(Icons.check, size: 16),
               label: const Text('승인하고 저장'),
             ),
             OutlinedButton.icon(
-              onPressed: busy ? null : _editMemory,
+              onPressed: busy || !a.memoryBasisReady || !_flowReady() ? null : _editMemory,
               style: thinkOutlineButton(),
               icon: const Icon(Icons.edit_outlined, size: 16),
               label: const Text('고쳐서 승인'),
@@ -445,6 +529,10 @@ class _ThinkActionCardState extends State<ThinkActionCard> with _BusyState {
           thinkCodeLabel('Think가 제안한 이유'),
           SelectableText(a.memoryReason, style: const TextStyle(color: kThinkText, fontSize: 13, height: 1.5)),
         ],
+        if (!withdraw) ...[
+          _gap(8),
+          ThinkMemoryBasisNote(action: a),
+        ],
         _gap(),
         ThinkNotice(
           icon: Icons.info_outline,
@@ -460,14 +548,14 @@ class _ThinkActionCardState extends State<ThinkActionCard> with _BusyState {
           runSpacing: 8,
           children: [
             ElevatedButton.icon(
-              onPressed: busy ? null : () => _approveMemoryChange(null),
+              onPressed: busy || (!withdraw && !a.memoryBasisReady) ? null : () => _approveMemoryChange(null),
               style: thinkPrimaryButton(),
               icon: const Icon(Icons.check, size: 16),
               label: Text('$opLabel 승인'),
             ),
             if (!withdraw)
               OutlinedButton.icon(
-                onPressed: busy
+                onPressed: busy || !a.memoryBasisReady
                     ? null
                     : () async {
                         final edited = await ThinkMemoryEditDialog.show(

@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show PostgrestException;
 import 'package:yggdrasill_manager/screens/curriculum/widgets/concept_draft_review_dialog.dart';
 import 'package:yggdrasill_manager/screens/curriculum/widgets/concept_library_pane.dart';
 import 'package:yggdrasill_manager/screens/curriculum/widgets/concept_relation_section.dart';
@@ -53,19 +54,101 @@ class _MemRelations implements ConceptRelationBackend {
         resolvedAt: DateTime(2026, 10, 20),
       );
 
+  final List<ConceptRelationEvent> events = [];
+
+  static bool _legacy(ConceptRelationKind k) =>
+      k == ConceptRelationKind.extendsOf || k == ConceptRelationKind.specialCase;
+  static String _ctx(String? v) => (v ?? '').trim().toLowerCase();
+
+  /// RPC가 올리는 것과 같은 오류(메시지에 코드).
+  static PostgrestException _rpc(String code) => PostgrestException(message: code, code: 'P0001');
+
   void _put(String from, String to, ConceptRelationKind kind, String origin) {
-    if (relations.any((r) => r.conceptId == to && r.relatedId == from)) {
+    if (relations.any((r) => _legacy(r.kind) && r.conceptId == to && r.relatedId == from)) {
       throw ConceptRelationException('concept_relation_reverse_exists', '반대 방향');
     }
-    relations.removeWhere((r) => r.conceptId == from && r.relatedId == to);
-    relations.add(ConceptRelation(id: 'rel-${++_seq}', conceptId: from, relatedId: to, kind: kind, origin: origin));
+    relations.removeWhere((r) => _legacy(r.kind) && r.conceptId == from && r.relatedId == to);
+    relations
+        .add(ConceptRelation(id: 'rel-${++_seq}', conceptId: from, relatedId: to, kind: kind, origin: origin, rev: 1));
   }
 
+  void _event(String event, ConceptRelation r) => events.insert(
+      0,
+      ConceptRelationEvent(
+        event: event,
+        relationId: r.id,
+        conceptName: pickRows[r.conceptId]?.name ?? '?',
+        relatedName: pickRows[r.relatedId]?.name ?? '?',
+        via: 'manual',
+        kind: r.kind,
+        context: r.context,
+      ));
+
   @override
-  Future<List<ConceptRelation>> relationsFor(String conceptId) async => [
-        for (final r in relations)
-          if (r.conceptId == conceptId || r.relatedId == conceptId) r
-      ];
+  Future<ConceptRelationSheet> relationsFor(String conceptId) async => ConceptRelationSheet(
+        relations: [
+          for (final r in relations)
+            if (r.conceptId == conceptId || r.relatedId == conceptId) r
+        ],
+        events: List.of(events),
+        eventCount: events.length,
+      );
+
+  @override
+  Future<ConceptRelation> saveRelation({
+    String? id,
+    int? rev,
+    required String conceptId,
+    required String relatedId,
+    required ConceptRelationKind kind,
+    String? context,
+    String? basis,
+    String? note,
+  }) async {
+    calls.add('save:${id ?? 'new'}:$conceptId>$relatedId:${kind.db}:${context ?? '-'}');
+    ConceptRelation? old;
+    if (id != null) {
+      old = relations.firstWhere((r) => r.id == id, orElse: () => throw _rpc('concept_relation_not_found'));
+      if (rev != old.rev) throw _rpc('concept_relation_stale');
+    }
+    if (kind.contextRequired && _ctx(context).isEmpty) throw _rpc('concept_relation_context_required');
+    final others = [
+      for (final r in relations)
+        if (r.id != id) r
+    ];
+    final clash = _legacy(kind)
+        ? others.any((r) => _legacy(r.kind) && r.conceptId == conceptId && r.relatedId == relatedId)
+        : others.any((r) =>
+            r.kind == kind && r.conceptId == conceptId && r.relatedId == relatedId && _ctx(r.context) == _ctx(context));
+    if (clash) throw _rpc('concept_relation_exists');
+    final reverse = others.any((r) =>
+        r.conceptId == relatedId &&
+        r.relatedId == conceptId &&
+        (_legacy(kind)
+            ? _legacy(r.kind)
+            : r.kind == kind &&
+                (kind == ConceptRelationKind.kindOf ||
+                    kind == ConceptRelationKind.partOf ||
+                    _ctx(r.context) == _ctx(context))));
+    if (reverse) throw _rpc('concept_relation_reverse_exists');
+    final next = ConceptRelation(
+      id: old?.id ?? 'rel-${++_seq}',
+      conceptId: conceptId,
+      relatedId: relatedId,
+      kind: kind,
+      origin: old?.origin ?? 'manual',
+      context: context,
+      basis: basis,
+      note: note,
+      rev: (old?.rev ?? 0) + 1,
+      decision: const ConceptRelationDecision(via: 'manual'),
+    );
+    relations
+      ..removeWhere((r) => r.id == next.id)
+      ..add(next);
+    _event(old == null ? 'add' : 'change', next);
+    return next;
+  }
 
   @override
   Future<List<ConceptReview>> reviewsFor(String conceptId) async => [
@@ -132,9 +215,12 @@ class _MemRelations implements ConceptRelationBackend {
   }
 
   @override
-  Future<void> removeRelation(String id) async {
+  Future<void> removeRelation(String id, {int? rev}) async {
     calls.add('remove:$id');
-    relations.removeWhere((r) => r.id == id);
+    final r = relations.firstWhere((r) => r.id == id, orElse: () => throw _rpc('concept_relation_not_found'));
+    if (rev != null && rev != r.rev) throw _rpc('concept_relation_stale');
+    relations.remove(r);
+    _event('remove', r);
   }
 
   @override
@@ -531,6 +617,161 @@ void main() {
       expect(err, isNotNull);
       expect(mem.relations, hasLength(1));
     });
+
+    test('직접 저장: 한 쌍에 다른 유형은 함께 두고, 같은 유형·맥락·막힌 반대 방향·맥락 없는 의존은 막는다', () async {
+      final mem = _MemRelations();
+      final store = ConceptRelationStore(() => mem);
+      await store.load(_a);
+      expect(
+          await store.saveRelation(
+              conceptId: _a, relatedId: _b, kind: ConceptRelationKind.dependsOn, context: '증명할 때'),
+          isNull);
+      expect(await store.saveRelation(conceptId: _a, relatedId: _b, kind: ConceptRelationKind.kindOf), isNull);
+      expect(store.relationsOf(_a), hasLength(2));
+
+      expect(
+          await store.saveRelation(
+              conceptId: _a, relatedId: _b, kind: ConceptRelationKind.dependsOn, context: ' 증명할 때 '),
+          contains('이미 있습니다'));
+      expect(
+          await store.saveRelation(
+              conceptId: _b, relatedId: _a, kind: ConceptRelationKind.dependsOn, context: '정의할 때'),
+          isNull,
+          reason: '학습 의존은 맥락이 다르면 반대 방향도 둔다');
+      expect(await store.saveRelation(conceptId: _b, relatedId: _a, kind: ConceptRelationKind.kindOf), contains('반대 방향'));
+      expect(await store.saveRelation(conceptId: _a, relatedId: _c, kind: ConceptRelationKind.derivedFrom), contains('맥락'));
+      expect(mem.relations, hasLength(3));
+    });
+
+    test('읽은 판으로만 고치고 뺀다: 그사이 바뀐 관계는 덮어쓰거나 빼지 않는다', () async {
+      final mem = _MemRelations();
+      final store = ConceptRelationStore(() => mem);
+      await store.load(_a);
+      await store.saveRelation(conceptId: _a, relatedId: _b, kind: ConceptRelationKind.kindOf);
+      final read = store.relationsOf(_a).single;
+      await mem.saveRelation(
+          id: read.id, rev: read.rev, conceptId: _a, relatedId: _b, kind: ConceptRelationKind.kindOf, basis: '다른 창');
+
+      final err =
+          await store.saveRelation(editing: read, conceptId: _a, relatedId: _b, kind: ConceptRelationKind.partOf);
+      expect(err, contains('바뀌었습니다'));
+      expect(mem.relations.single.kind, ConceptRelationKind.kindOf);
+      expect(await store.removeRelation(read), contains('바뀌었습니다'));
+      expect(mem.relations, hasLength(1));
+
+      final fresh = store.relationsOf(_a).single;
+      expect(fresh.basis, '다른 창');
+      expect(await store.removeRelation(fresh), isNull);
+      expect(mem.relations, isEmpty);
+      expect(mem.pickRows, hasLength(3), reason: '관계만 뺀다');
+    });
+  });
+
+  group('관계 유형', () {
+    test('여섯 유형을 읽고, 맥락이 필요한 두 유형은 맥락 안에서만 성립한다고 읽는다', () {
+      for (final k in ConceptRelationKind.values) {
+        expect(ConceptRelationKindX.fromDb(k.db), k);
+      }
+      expect(ConceptRelationKindX.fromDb('prerequisite'), isNull);
+      expect({
+        for (final k in ConceptRelationKind.values)
+          if (k.contextRequired) k
+      }, {ConceptRelationKind.derivedFrom, ConceptRelationKind.dependsOn});
+
+      expect(ConceptRelationKind.dependsOn.sentence('A', 'B', '넓이 공식을 증명할 때'),
+          '맥락 "넓이 공식을 증명할 때"에서: "A"을(를) 배우거나 쓰려면 "B"이(가) 필요');
+      expect(ConceptRelationKind.dependsOn.sentence('A', 'B'), contains('맥락이 기록되지 않음'));
+      expect(ConceptRelationKind.derivedFrom.sentence('A', 'B'), contains('맥락 기록 없음'));
+      expect(ConceptRelationKind.kindOf.sentence('A', 'B', '자연수 범위에서'), '"A"은(는) "B"의 한 종류 · 맥락: 자연수 범위에서');
+      expect(ConceptRelationKind.extendsOf.sentence('A', 'B'), '"A"은(는) "B"을(를) 넓힌 개념', reason: '옛 문장 그대로');
+      expect(ConceptRelationKind.specialCase.sentence('A', 'B'), '"A"은(는) "B"의 특수한 경우');
+      expect(ConceptRelationKind.kindOf.label, isNot(ConceptRelationKind.specialCase.label));
+    });
+
+    test('관계 목록: 방향·생긴 곳과 결정·결정 기록 없음·다시 검토·승인 대기·이력을 읽는다', () {
+      final sheet = conceptRelationSheetFromJson({
+        'id': _a,
+        'name': '확률',
+        'relations': [
+          {
+            'id': 'r1',
+            'direction': 'out',
+            'from': {'id': _a, 'name': '확률', 'text_rev': 'aaa'},
+            'to': {'id': _b, 'name': '확률', 'text_rev': 'bbb'},
+            'kind': 'depends_on',
+            'context': '여사건으로 계산할 때',
+            'basis': '교재 풀이',
+            'note': null,
+            'origin': 'draft',
+            'rev': 2,
+            'created_at': '2026-10-20T01:00:00Z',
+            'decision': {'recorded': true, 'via': 'think', 'at': '2026-10-23T01:00:00Z', 'action_id': 'act1'},
+            'judged': {'recorded': true, 'from_changed': false, 'to_changed': true},
+            'rereview': true,
+          },
+          {
+            'id': 'r2',
+            'direction': 'in',
+            'from': {'id': _c, 'name': '조건부확률', 'text_rev': 'ccc'},
+            'to': {'id': _a, 'name': '확률', 'text_rev': 'aaa'},
+            'kind': 'extends',
+            'context': null,
+            'basis': null,
+            'origin': 'manual',
+            'rev': 1,
+            'decision': {'recorded': false},
+            'judged': {'recorded': false},
+            'rereview': null,
+          },
+          {
+            'id': 'r3',
+            'from': {'id': _c},
+            'to': {'id': _a},
+            'kind': 'unknown_kind',
+          },
+        ],
+        'pending': [
+          {'action_id': 'act2', 'item': 1, 'op': 'change', 'relation_id': 'r1'},
+          {'action_id': 'act2', 'item': 2, 'op': 'add', 'relation_id': null},
+        ],
+        'events': [
+          {
+            'event': 'remove',
+            'relation_id': 'r0',
+            'concept_name': '확률',
+            'related_name': '지운 개념',
+            'before': {'kind': 'part_of', 'context': null},
+            'after': null,
+            'via': 'think',
+            'reason': '겹침',
+            'at': '2026-10-22T01:00:00Z',
+          },
+        ],
+        'event_count': 3,
+      });
+
+      expect(sheet.relations.map((r) => r.id), ['r1', 'r2'], reason: '모르는 유형은 보이지 않는다');
+      final r1 = sheet.relations[0];
+      expect([r1.conceptId, r1.relatedId], [_a, _b]);
+      expect(r1.context, '여사건으로 계산할 때');
+      expect(r1.rev, 2);
+      expect(r1.originLabel, '초안 확정 때 생김');
+      expect(r1.decisionLabel, 'Think 카드를 운영자가 승인', reason: '생긴 곳과 정한 길은 따로');
+      expect(r1.decision!.actionId, 'act1');
+      expect(r1.rereview, isTrue);
+      expect(r1.pendingCards, 1);
+
+      final r2 = sheet.relations[1];
+      expect([r2.conceptId, r2.relatedId], [_c, _a], reason: '들어오는 관계는 상대 → 이 개념');
+      expect(r2.decision, isNull);
+      expect(r2.decisionLabel, contains('결정 기록 없음'));
+      expect(r2.rereview, isNull);
+
+      expect(sheet.pendingAdds, 1);
+      expect(sheet.eventCount, 3);
+      final e = sheet.events.single;
+      expect([e.eventLabel, e.relatedName, e.kind, e.via], ['뺌', '지운 개념', ConceptRelationKind.partOf, 'think']);
+    });
   });
 
   group('개념 상세 관계 칸', () {
@@ -581,8 +822,124 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('decision-save')));
       await tester.pumpAndSettle();
 
-      expect(mem.calls, ['set:$_a>$_b:extends']);
+      expect(mem.calls, ['save:new:$_a>$_b:extends:-']);
       expect(find.text('"확률"은(는) "확률 (기본-2)"을(를) 넓힌 개념'), findsOneWidget);
+    });
+
+    testWidgets('관계 더하기: 학습 의존은 맥락을 적어야 저장되고, 맥락 안에서만 필요하다고 읽는다', (tester) async {
+      final mem = _MemRelations();
+      final c = ConceptLibraryController.forTest(_Lib(), chat: ConceptChatController.forTest(), relationBackend: mem);
+      c.selectConcept(_item());
+      await _pumpDetail(tester, c);
+
+      await tester.tap(find.byKey(const ValueKey('relation-add')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('concept-pick-$_c')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('decision-depends_on')));
+      await tester.pumpAndSettle();
+      expect(find.text('맥락(필수)'), findsOneWidget);
+      expect(tester.widget<ElevatedButton>(find.byKey(const ValueKey('decision-save'))).onPressed, isNull,
+          reason: '맥락 없이는 저장하지 않는다');
+
+      await tester.tap(find.byKey(const ValueKey('decision-reverse')));
+      await tester.enterText(find.byKey(const ValueKey('relation-context')), '여사건으로 계산할 때');
+      await tester.enterText(find.byKey(const ValueKey('relation-basis')), '교재 풀이에서 확률의 덧셈정리를 씀');
+      await tester.pumpAndSettle();
+      expect(find.textContaining('기록할 관계: 맥락 "여사건으로 계산할 때"에서: "조건부확률 (기본)"을(를) 배우거나 쓰려면 "확률"이(가) 필요'),
+          findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('decision-save')));
+      await tester.pumpAndSettle();
+
+      expect(mem.calls, ['save:new:$_c>$_a:depends_on:여사건으로 계산할 때'], reason: '조건부확률 → 확률(기준)');
+      final rel = mem.relations.single;
+      expect(find.text('맥락 "여사건으로 계산할 때"에서: "조건부확률 (기본)"을(를) 배우거나 쓰려면 "확률"이(가) 필요'), findsOneWidget);
+      expect(find.text('"조건부확률 (기본)"을(를) 배우거나 쓰려면 "확률"이(가) 필요'), findsNothing,
+          reason: '조건 없는 선수 관계처럼 보이지 않는다');
+      expect(find.text('근거: 교재 풀이에서 확률의 덧셈정리를 씀'), findsOneWidget);
+      expect(find.text('학습 의존 · 운영자가 직접 저장'), findsOneWidget);
+      expect(find.byKey(ValueKey('relation-edit-${rel.id}')), findsOneWidget);
+      expect(find.text('관계 이력 1건'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('관계 더하기에서 판단만 기록하면 관계를 만들지 않는다', (tester) async {
+      final mem = _MemRelations();
+      final c = ConceptLibraryController.forTest(_Lib(), chat: ConceptChatController.forTest(), relationBackend: mem);
+      c.selectConcept(_item());
+      await _pumpDetail(tester, c);
+      await tester.tap(find.byKey(const ValueKey('relation-add')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('concept-pick-$_b')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('decision-different')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('relation-context')), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('decision-save')));
+      await tester.pumpAndSettle();
+      expect(mem.calls, ['pair:$_a>$_b:different']);
+      expect(mem.relations, isEmpty);
+    });
+
+    testWidgets('기록 없는 옛 관계: "결정 기록 없음"·다시 검토 표시, 고치면 읽은 판으로 보내고 그사이 바뀌었으면 덮어쓰지 않는다',
+        (tester) async {
+      final mem = _MemRelations()
+        ..relations.add(const ConceptRelation(
+            id: 'rel-old',
+            conceptId: _a,
+            relatedId: _b,
+            kind: ConceptRelationKind.specialCase,
+            origin: 'draft',
+            rev: 1,
+            rereview: true));
+      final c = ConceptLibraryController.forTest(_Lib(), chat: ConceptChatController.forTest(), relationBackend: mem);
+      c.selectConcept(_item());
+      await _pumpDetail(tester, c);
+
+      expect(find.text('특수한 경우 · 결정 기록 없음'), findsOneWidget);
+      expect(find.text('다시 검토 필요'), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('relation-edit-rel-old')));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('판단한 뒤 두 개념 중 하나의 글이 바뀌었습니다'), findsOneWidget);
+      expect(find.byKey(const ValueKey('decision-different')), findsNothing, reason: '고칠 때는 판단만 기록하는 길이 없다');
+      expect(tester.widget<ElevatedButton>(find.byKey(const ValueKey('decision-save'))).onPressed, isNull,
+          reason: '바꾼 것이 없으면 저장하지 않는다');
+      await tester.tap(find.byKey(const ValueKey('decision-kind_of')));
+      await tester.pumpAndSettle();
+
+      // 창을 연 사이에 다른 곳에서 이 관계를 고쳤다.
+      await mem.saveRelation(
+          id: 'rel-old', rev: 1, conceptId: _a, relatedId: _b, kind: ConceptRelationKind.specialCase, basis: '다른 창');
+      mem.calls.clear();
+      await tester.tap(find.byKey(const ValueKey('decision-save')));
+      await tester.pumpAndSettle();
+
+      expect(mem.calls, ['save:rel-old:$_a>$_b:kind_of:-']);
+      expect(find.textContaining('읽은 뒤 이 관계가 바뀌었습니다'), findsOneWidget);
+      expect(mem.relations.single.kind, ConceptRelationKind.specialCase, reason: '옛 판으로는 덮어쓰지 않는다');
+      expect(mem.relations.single.basis, '다른 창');
+      expect(find.text('근거: 다른 창'), findsOneWidget, reason: '실패한 뒤 지금 것을 다시 읽는다');
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('관계 빼기는 관계만 지우고 두 개념은 그대로 둔다', (tester) async {
+      final mem = _MemRelations()
+        ..relations.add(const ConceptRelation(
+            id: 'rel-x', conceptId: _c, relatedId: _a, kind: ConceptRelationKind.partOf, origin: 'manual', rev: 3));
+      final c = ConceptLibraryController.forTest(_Lib(), chat: ConceptChatController.forTest(), relationBackend: mem);
+      c.selectConcept(_item());
+      await _pumpDetail(tester, c);
+      await tester.tap(find.byKey(const ValueKey('relation-remove-rel-x')));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('두 개념과 다른 관계는 그대로 남고'), findsOneWidget);
+      await tester.tap(find.text('빼기'));
+      await tester.pumpAndSettle();
+      expect(mem.calls, ['remove:rel-x']);
+      expect(mem.relations, isEmpty);
+      expect(mem.pickRows, hasLength(3), reason: '개념은 그대로');
+      expect(find.textContaining('이은 관계가 없습니다'), findsOneWidget);
+      expect(find.textContaining('· 뺌: "조건부확률"은(는) "확률"을(를) 이루는 요소'), findsOneWidget);
     });
 
     testWidgets('고칠 때 붙은 것을 센다', (tester) async {

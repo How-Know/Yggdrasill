@@ -180,7 +180,8 @@ class _MainFabAlternativeState extends State<MainFabAlternative> {
                             mainAxisSize: MainAxisSize.min,
                             crossAxisAlignment: CrossAxisAlignment.end,
                             children: [
-                              if (gradingModeActive.value) ...[
+                              if (widget.showHomeBatchConfirmFab &&
+                                  gradingModeActive.value) ...[
                                 _buildHistoryButton(),
                                 if (shouldShowBatchConfirmFab)
                                   const SizedBox(width: 12),

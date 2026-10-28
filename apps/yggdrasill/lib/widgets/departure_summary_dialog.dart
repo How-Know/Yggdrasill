@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 
 import '../services/homework_assignment_store.dart';
@@ -9,9 +7,9 @@ import '../services/next_class_start_resolver.dart';
 import '../services/student_behavior_assignment_store.dart';
 import '../utils/homework_page_text.dart';
 import 'app_dialog_action_button.dart';
+import 'bottom_dialog.dart';
 import 'dialog_tokens.dart';
 import 'homework_assign_dialog.dart';
-import 'utility_glass_dialog_shell.dart';
 
 /// 하원 요약에서 확정한 값. 숙제 선택은 하지 않고 수업 계획을 그대로 따른다.
 class DepartureSummaryResult {
@@ -119,30 +117,19 @@ Future<DepartureSummaryResult?> showDepartureSummaryDialog({
 }) {
   return showDialog<DepartureSummaryResult>(
     context: context,
-    barrierColor: Colors.black54,
+    barrierColor: Colors.black.withValues(
+      alpha: BottomDialogMetrics.barrierOpacity,
+    ),
     builder: (dialogContext) {
-      final media = MediaQuery.of(dialogContext);
-      return Dialog(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        insetPadding: const EdgeInsets.all(24),
-        child: UtilityGlassDialogShell(
-          title: '$studentName 하원',
-          icon: Icons.logout_rounded,
-          preferredWidth: math.min(media.size.width - 48, 680),
-          maxHeight: math.min(media.size.height - 48, 760),
-          onClose: () => Navigator.of(dialogContext).pop(),
-          child: _DepartureSummaryBody(
-            studentId: studentId,
-            studentName: studentName,
-            attendanceId: attendanceId,
-            classDateTime: classDateTime,
-            arrivalTime: arrivalTime,
-            classEndTime: classEndTime,
-            className: className,
-            setId: setId,
-          ),
-        ),
+      return _DepartureSummaryBody(
+        studentId: studentId,
+        studentName: studentName,
+        attendanceId: attendanceId,
+        classDateTime: classDateTime,
+        arrivalTime: arrivalTime,
+        classEndTime: classEndTime,
+        className: className,
+        setId: setId,
       );
     },
   );
@@ -493,47 +480,60 @@ class _DepartureSummaryBodyState extends State<_DepartureSummaryBody> {
   @override
   Widget build(BuildContext context) {
     final colors = YggDialogColors.of(context);
-    if (_loading) {
-      return const SizedBox(
-        height: 220,
-        child: Center(child: YggLoadingIndicator()),
-      );
-    }
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Flexible(
-            child: SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  if (_error != null)
-                    _message(colors, _error!, isError: true)
-                  else ...[
-                    _summaryLine(colors),
-                    const SizedBox(height: 16),
-                    _homeworkSection(colors),
-                    if (_nextGroups.isNotEmpty) ...[
-                      const SizedBox(height: 16),
-                      _nextSection(colors),
+    return BottomDialog(
+      icon: Icons.logout_rounded,
+      title: '${widget.studentName} 하원',
+      shrinkWrap: true,
+      onClose: () => Navigator.of(context).pop(),
+      footer: _loading ? null : _actions(),
+      child: _loading
+          ? const SizedBox(
+              height: 220,
+              child: Center(child: YggLoadingIndicator()),
+            )
+          : Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Flexible(
+                  child: CustomScrollView(
+                    shrinkWrap: true,
+                    slivers: [
+                      SliverToBoxAdapter(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            if (_error != null)
+                              _message(colors, _error!, isError: true)
+                            else ...[
+                              _summaryLine(),
+                              const SizedBox(
+                                height: BottomDialogMetrics.beforeActionsGap,
+                              ),
+                              _homeworkSection(colors),
+                              if (_nextGroups.isNotEmpty) ...[
+                                const SizedBox(
+                                  height: BottomDialogMetrics.beforeActionsGap,
+                                ),
+                                _nextSection(colors),
+                              ],
+                              const SizedBox(
+                                height: BottomDialogMetrics.beforeActionsGap,
+                              ),
+                              _noticeSection(colors),
+                            ],
+                          ],
+                        ),
+                      ),
                     ],
-                    const SizedBox(height: 16),
-                    _noticeSection(colors),
-                  ],
-                ],
-              ),
+                  ),
+                ),
+              ],
             ),
-          ),
-          const SizedBox(height: 16),
-          _actions(),
-        ],
-      ),
     );
   }
 
-  Widget _summaryLine(YggDialogColors colors) {
+  Widget _summaryLine() {
     final homeworkCount = _homeworkGroups.length;
     final text = homeworkCount == 0
         ? '지금 하원하면 숙제로 나가는 과제가 없습니다.'
@@ -541,25 +541,10 @@ class _DepartureSummaryBodyState extends State<_DepartureSummaryBody> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          text,
-          style: TextStyle(
-            color: colors.text,
-            fontSize: 15,
-            fontWeight: FontWeight.w800,
-            decoration: TextDecoration.none,
-          ),
-        ),
-        const SizedBox(height: 4),
-        Text(
+        BottomDialogLargeText(text),
+        const SizedBox(height: BottomDialogMetrics.largeToMediumGap),
+        const BottomDialogMediumText(
           '수업 계획의 오늘은 숙제로, 다음은 다음 수업으로 넘어갑니다. 바꾸려면 수업 계획에서 바꿔 주세요.',
-          style: TextStyle(
-            color: colors.textSub,
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-            height: 1.45,
-            decoration: TextDecoration.none,
-          ),
         ),
       ],
     );
@@ -598,41 +583,38 @@ class _DepartureSummaryBodyState extends State<_DepartureSummaryBody> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        SizedBox(
-          height: 36,
-          child: Row(
-            children: [
+        Row(
+          children: [
+            Text(
+              title,
+              style: TextStyle(
+                color: colors.text,
+                fontSize: BottomDialogMetrics.actionLabelFontSize,
+                fontWeight: FontWeight.w800,
+                decoration: TextDecoration.none,
+              ),
+            ),
+            if (count != null) ...[
+              const SizedBox(width: 8),
               Text(
-                title,
+                '$count',
                 style: TextStyle(
-                  color: colors.text,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w800,
+                  color: colors.textSub,
+                  fontSize: BottomDialogMetrics.smallFontSize,
+                  fontWeight: FontWeight.w600,
                   decoration: TextDecoration.none,
                 ),
               ),
-              if (count != null) ...[
-                const SizedBox(width: 8),
-                Text(
-                  '$count',
-                  style: TextStyle(
-                    color: colors.textSub,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    decoration: TextDecoration.none,
-                  ),
-                ),
-              ],
-              const Spacer(),
-              if (trailing != null) trailing,
             ],
-          ),
+            const Spacer(),
+            if (trailing != null) trailing,
+          ],
         ),
-        const SizedBox(height: 4),
+        const SizedBox(height: BottomDialogMetrics.largeToMediumGap),
         DecoratedBox(
           decoration: BoxDecoration(
             color: colors.cardBg,
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(BottomDialogMetrics.cardRadius),
             border: Border.all(color: colors.cardBorder, width: 0.5),
           ),
           child: child,
@@ -652,8 +634,8 @@ class _DepartureSummaryBodyState extends State<_DepartureSummaryBody> {
           if (i > 0)
             Divider(
               height: 1,
-              indent: 16,
-              endIndent: 16,
+              indent: BottomDialogMetrics.cardHorizontalPadding,
+              endIndent: BottomDialogMetrics.cardHorizontalPadding,
               color: colors.divider,
             ),
           _groupRow(colors, groups[i], dimmed: dimmed),
@@ -682,15 +664,18 @@ class _DepartureSummaryBodyState extends State<_DepartureSummaryBody> {
     return Opacity(
       opacity: dimmed ? 0.72 : 1,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        padding: const EdgeInsets.symmetric(
+          horizontal: BottomDialogMetrics.cardHorizontalPadding,
+          vertical: BottomDialogMetrics.cardVerticalPadding,
+        ),
         child: Row(
           children: [
             Icon(
               dimmed ? Icons.redo_rounded : Icons.assignment_outlined,
-              size: 18,
+              size: BottomDialogMetrics.actionIconSize,
               color: iconColor,
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: BottomDialogMetrics.actionIconGap),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -701,19 +686,22 @@ class _DepartureSummaryBodyState extends State<_DepartureSummaryBody> {
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       color: colors.text,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
+                      fontSize: BottomDialogMetrics.actionLabelFontSize,
+                      fontWeight: FontWeight.w800,
                       decoration: TextDecoration.none,
                     ),
                   ),
-                  const SizedBox(height: 4),
+                  const SizedBox(
+                    height: BottomDialogMetrics.actionLabelToDescriptionGap,
+                  ),
                   Text(
                     meta.isEmpty ? source : '$source · $meta',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       color: colors.textSub,
-                      fontSize: 12,
+                      fontSize: BottomDialogMetrics.smallFontSize,
+                      height: 1.25,
                       fontWeight: FontWeight.w600,
                       decoration: TextDecoration.none,
                     ),
@@ -722,13 +710,13 @@ class _DepartureSummaryBodyState extends State<_DepartureSummaryBody> {
               ),
             ),
             if (due != null) ...[
-              const SizedBox(width: 12),
+              const SizedBox(width: BottomDialogMetrics.actionIconGap),
               Text(
                 '${_dateLabel(due)} 검사',
                 style: TextStyle(
                   color: colors.textSub,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
+                  fontSize: BottomDialogMetrics.smallFontSize,
+                  fontWeight: FontWeight.w600,
                   decoration: TextDecoration.none,
                 ),
               ),
@@ -745,7 +733,7 @@ class _DepartureSummaryBodyState extends State<_DepartureSummaryBody> {
         '예정 수업 없음',
         style: TextStyle(
           color: colors.hint,
-          fontSize: 12,
+          fontSize: BottomDialogMetrics.smallFontSize,
           fontWeight: FontWeight.w600,
           decoration: TextDecoration.none,
         ),
@@ -790,7 +778,7 @@ class _DepartureSummaryBodyState extends State<_DepartureSummaryBody> {
               _dueDate == null ? '검사일' : '${_dateLabel(_dueDate!)} 검사',
               style: TextStyle(
                 color: colors.chipText,
-                fontSize: 12,
+                fontSize: BottomDialogMetrics.smallFontSize,
                 fontWeight: FontWeight.w700,
                 decoration: TextDecoration.none,
               ),
@@ -816,7 +804,10 @@ class _DepartureSummaryBodyState extends State<_DepartureSummaryBody> {
         label: Text(_previewing ? '준비 중' : '미리보기'),
         style: TextButton.styleFrom(
           foregroundColor: colors.textSub,
-          textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+          textStyle: const TextStyle(
+            fontSize: BottomDialogMetrics.smallFontSize,
+            fontWeight: FontWeight.w700,
+          ),
         ),
       ),
       child: Column(
@@ -826,29 +817,34 @@ class _DepartureSummaryBodyState extends State<_DepartureSummaryBody> {
             onChanged: (value) => setState(() => _printNotice = value),
             activeThumbColor: Colors.white,
             activeTrackColor: kDlgAccent,
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: BottomDialogMetrics.cardHorizontalPadding,
+            ),
             title: Text(
               '하원하면서 알림장 인쇄',
               style: TextStyle(
                 color: colors.text,
-                fontSize: 14,
-                fontWeight: FontWeight.w700,
+                fontSize: BottomDialogMetrics.actionLabelFontSize,
+                fontWeight: FontWeight.w800,
+                decoration: TextDecoration.none,
               ),
             ),
             subtitle: Text(
               '학습 리포트와 숙제·행동 리스트를 인쇄합니다.',
               style: TextStyle(
                 color: colors.textSub,
-                fontSize: 12,
+                fontSize: BottomDialogMetrics.smallFontSize,
+                height: 1.25,
                 fontWeight: FontWeight.w600,
+                decoration: TextDecoration.none,
               ),
             ),
           ),
           for (final behavior in _behaviors) ...[
             Divider(
               height: 1,
-              indent: 16,
-              endIndent: 16,
+              indent: BottomDialogMetrics.cardHorizontalPadding,
+              endIndent: BottomDialogMetrics.cardHorizontalPadding,
               color: colors.divider,
             ),
             _behaviorRow(colors, behavior),
@@ -873,7 +869,12 @@ class _DepartureSummaryBodyState extends State<_DepartureSummaryBody> {
     return InkWell(
       onTap: () => setState(() => _selectedBehaviors[behavior.id] = !selected),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(8, 4, 16, 4),
+        padding: const EdgeInsets.fromLTRB(
+          8,
+          4,
+          BottomDialogMetrics.cardHorizontalPadding,
+          4,
+        ),
         child: Row(
           children: [
             Checkbox(
@@ -896,10 +897,13 @@ class _DepartureSummaryBodyState extends State<_DepartureSummaryBody> {
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       color: colors.text,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
+                      fontSize: BottomDialogMetrics.actionLabelFontSize,
+                      fontWeight: FontWeight.w800,
                       decoration: TextDecoration.none,
                     ),
+                  ),
+                  const SizedBox(
+                    height: BottomDialogMetrics.actionLabelToDescriptionGap,
                   ),
                   Text(
                     detail,
@@ -907,7 +911,8 @@ class _DepartureSummaryBodyState extends State<_DepartureSummaryBody> {
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       color: colors.textSub,
-                      fontSize: 12,
+                      fontSize: BottomDialogMetrics.smallFontSize,
+                      height: 1.25,
                       fontWeight: FontWeight.w600,
                       decoration: TextDecoration.none,
                     ),
@@ -932,7 +937,7 @@ class _DepartureSummaryBodyState extends State<_DepartureSummaryBody> {
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     color: selected ? colors.text : colors.textSub,
-                    fontSize: 12,
+                    fontSize: BottomDialogMetrics.smallFontSize,
                     fontWeight: FontWeight.w700,
                     decoration: TextDecoration.none,
                   ),
@@ -975,12 +980,16 @@ class _DepartureSummaryBodyState extends State<_DepartureSummaryBody> {
     bool isError = false,
   }) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      padding: const EdgeInsets.symmetric(
+        horizontal: BottomDialogMetrics.cardHorizontalPadding,
+        vertical: BottomDialogMetrics.cardVerticalPadding,
+      ),
       child: Text(
         text,
         style: TextStyle(
           color: isError ? const Color(0xFFFFB4B4) : colors.textSub,
-          fontSize: 13,
+          fontSize: BottomDialogMetrics.smallFontSize,
+          height: 1.25,
           fontWeight: FontWeight.w600,
           decoration: TextDecoration.none,
         ),

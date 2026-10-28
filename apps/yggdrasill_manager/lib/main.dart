@@ -6,9 +6,11 @@ import 'package:window_manager/window_manager.dart';
 
 import 'services/app_menu.dart';
 import 'services/auth_service.dart';
+import 'services/course_map_controller.dart';
 import 'services/error_reporter.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/curriculum/curriculum_screen.dart';
+import 'screens/curriculum/widgets/course_map_pane.dart';
 import 'screens/arithmetic/arithmetic_screen.dart';
 import 'screens/skill/skill_screen.dart';
 import 'screens/problem_roadmap/problem_roadmap_screen.dart';
@@ -189,19 +191,67 @@ class MainScreen extends StatefulWidget {
   State<MainScreen> createState() => _MainScreenState();
 }
 
-class _MainScreenState extends State<MainScreen> {
+class _MainScreenState extends State<MainScreen> with WindowListener {
   int _selectedIndex = 0;
+  bool _preventClose = false;
+  bool _closeAsking = false;
+
+  bool get _desktop => Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
   @override
   void initState() {
     super.initState();
     AppMenu.instance.addListener(_onMenuRequest);
+    if (_desktop) {
+      windowManager.addListener(this);
+      CourseMapController.instance.addListener(_syncPreventClose);
+    }
   }
 
   @override
   void dispose() {
     AppMenu.instance.removeListener(_onMenuRequest);
+    if (_desktop) {
+      windowManager.removeListener(this);
+      CourseMapController.instance.removeListener(_syncPreventClose);
+      if (_preventClose) unawaited(_setPreventClose(false));
+    }
     super.dispose();
+  }
+
+  /// 저장 안 한 과정 편집이 있을 때만 창 닫기를 붙잡는다. 없으면 닫기는 예전 그대로다.
+  void _syncPreventClose() {
+    final dirty = CourseMapController.instance.anyDirty;
+    if (dirty == _preventClose) return;
+    _preventClose = dirty;
+    unawaited(_setPreventClose(dirty));
+  }
+
+  Future<void> _setPreventClose(bool value) async {
+    try {
+      await windowManager.setPreventClose(value);
+    } catch (_) {}
+  }
+
+  @override
+  void onWindowClose() async {
+    if (_closeAsking) return;
+    _closeAsking = true;
+    try {
+      final ok = !mounted ||
+          await confirmDiscardCourseMapEdits(context, CourseMapController.instance, action: '창을 닫으면');
+      if (!ok) return;
+      await _setPreventClose(false);
+      await windowManager.close();
+    } finally {
+      _closeAsking = false;
+    }
+  }
+
+  Future<void> _logout() async {
+    final ok = await confirmDiscardCourseMapEdits(context, CourseMapController.instance, action: '로그아웃하면');
+    if (!ok) return;
+    await AuthService.signOut();
   }
 
   void _onMenuRequest() {
@@ -254,9 +304,7 @@ class _MainScreenState extends State<MainScreen> {
                     _selectedIndex = _normalizeIndex(index);
                   });
                 },
-                onLogout: () async {
-                  await AuthService.signOut();
-                },
+                onLogout: _logout,
               ),
 
               // 메인 콘텐츠

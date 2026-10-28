@@ -225,6 +225,54 @@ function buildGojaengiSolutionRefRules(expectedEntries) {
   ];
 }
 
+// 개념+유형 고등 "정답과 해설". 색 띠 박스 머리("개념 Check 8쪽", "문제 12~14쪽",
+// "연습문제 26~28쪽")가 코너와 본문 쪽을 알려 주고, 박스는 다음 머리까지 단과
+// 지면을 넘어 이어진다. 연습문제 머리 아래의 빠른 정답 격자는 풀이가 아니다.
+function buildConceptPlusHighSolutionRefRules(expectedEntries) {
+  const rows = (Array.isArray(expectedEntries) ? expectedEntries : []).filter(
+    (e) => e && String(e.number || '').trim(),
+  );
+  return [
+    '',
+    '=== 개념+유형 고등 해설 읽는 법 (최우선) ===',
+    '[H1] 지면은 색 띠 머리가 붙은 박스로 나뉜다. 머리 왼쪽에 박스 이름, 오른쪽',
+    '   끝에 본문 쪽 배지가 있다: "개념 Check 8쪽", "문제 12~14쪽",',
+    '   "연습문제 26~28쪽". 박스는 다음 머리가 나올 때까지 아래쪽 → 다음 단 →',
+    '   다음 지면으로 이어진다. 머리가 안 보이는 지면 맨 위는 앞 지면 마지막',
+    '   박스의 연속이니 그 박스의 이름·쪽을 이어받아라.',
+    '[H2] 번호는 박스마다 다시 시작한다. 개념 Check 는 1, 2, 3 …, 문제는 "01-1",',
+    '   "02-3" 같은 하이픈 번호, 연습문제는 1 … N 이다. 번호만 보고 고르지 말고',
+    '   상세표의 박스 이름과 본문 쪽이 맞는 박스에서만 잡아라. 쪽 배지가 범위면',
+    '   상세표의 쪽이 그 안에 들면 일치다.',
+    '[H3] number_region 은 단 왼쪽 맨 앞의 번호 글자만 감싼다("1", "01-2", "17").',
+    '   오른쪽 "답" 표시와 정답은 넣지 마라. content_region 은 그 번호부터 다음',
+    '   번호 직전까지의 정답·풀이 영역이다.',
+    '[H4] 연습문제 머리 바로 아래의 **빠른 정답 격자**("1 ③  2 ②  3 19 …" 가 한',
+    '   줄에 여럿 놓인 연한 색 상자)는 풀이가 아니다. 여기서 number_region 을',
+    '   잡지 마라. 격자 아래 번호별 풀이(번호가 단 왼쪽에 혼자 오고 아래로 식이',
+    '   이어짐)를 잡아라.',
+    '[H5] 개념 Check 는 "1 답 (1) … (2) …" 처럼 풀이 없이 답만 있을 수 있다.',
+    '   그래도 item 으로 만든다.',
+    '[H6] problem_number 는 상세표의 문자열 그대로 돌려줘라("01-1", "1").',
+    '   이 규칙은 [R1] 의 "원문 그대로" 보다 우선한다.',
+    '[H7] source_corner = 박스 머리 이름 그대로("개념 Check", "문제", "연습문제"),',
+    '   source_page / source_page_end = 머리 배지의 시작·끝 쪽("문제 12~14쪽" →',
+    '   12 / 14). 검산용이므로 상세표에 맞추려고 지어내지 말고 보이는 대로 적어라.',
+    ...(rows.length
+      ? [
+          '',
+          '=== 기대 문항 상세표 (이 표가 번호 목록보다 우선한다) ===',
+          '각 줄은 "돌려줄 problem_number | 찾을 박스 | 본문 쪽" 이다.',
+          ...rows.map((e) => {
+            const corner = e.corner ? `박스="${e.corner}"` : '박스=미상';
+            const page = e.page ? `본문=${e.page}쪽` : '본문=미상';
+            return `- problem_number="${e.number}" | ${corner} | ${page}`;
+          }),
+        ]
+      : []),
+  ];
+}
+
 export function buildDetectSolutionRefsPrompt({
   rawPage,
   displayPage,
@@ -235,6 +283,7 @@ export function buildDetectSolutionRefsPrompt({
 }) {
   const seriesKey = String(series || '').trim().toLowerCase();
   const isConceptPlus = seriesKey === 'gaeyu';
+  const isConceptPlusHigh = seriesKey === 'gaeyu_high';
   const isSuryeok = seriesKey === 'suryeok';
   // RPM 해설 문항번호는 책 전체에서 고유하고 오름차순이다. 남은 기대 번호를
   // 보여 주면 모델이 실제 지면 번호를 읽는 대신 목록의 끝번호까지 현재 지면에
@@ -250,7 +299,7 @@ export function buildDetectSolutionRefsPrompt({
       (e) => e && (String(e.corner || '').trim() || e.page),
     );
   const needsSourceBadge =
-    isConceptPlus || isSuryeok || isGojaengiBadged;
+    isConceptPlus || isConceptPlusHigh || isSuryeok || isGojaengiBadged;
   const pageLine =
     displayPage != null && Number.isFinite(displayPage)
       ? `이 이미지는 해설 PDF 의 ${displayPage}페이지이다. 이 값은 PDF raw page ${rawPage}와 동일한 입력 페이지 기준이다.`
@@ -289,6 +338,9 @@ export function buildDetectSolutionRefsPrompt({
     '',
     ...expectedBlock,
     ...(isConceptPlus ? buildConceptPlusSolutionRefRules(expectedEntries) : []),
+    ...(isConceptPlusHigh
+      ? buildConceptPlusHighSolutionRefRules(expectedEntries)
+      : []),
     ...(isSuryeok
         ? buildSuryeokSolutionRefRules(expectedEntries, skipBadges)
         : []),

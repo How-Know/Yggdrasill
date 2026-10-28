@@ -42,7 +42,22 @@ enum ThinkActionKind {
   /// 개념 초안 검토 대화의 카드. 승인은 검토 창에서 한다(concept_draft_action_apply·다시 정리는 Edge).
   conceptDraftChange('concept_draft_change', '개념 초안 변경'),
   conceptCriterionChange('concept_criterion_change', '정리 기준 고치기'),
-  conceptDraftRerun('concept_draft_rerun', '다시 정리');
+  conceptDraftRerun('concept_draft_rerun', '다시 정리'),
+
+  /// 과정 탐색도·개념 라이브러리 카드. 승인은 course_think_action_apply 한 번이고, 항목 카드는 고른 항목만 반영한다.
+  /// 설계: docs/architecture/course-map.md "Think 카드"
+  courseMapChange('course_map_change', '과정 탐색도 고치기'),
+  courseMapCreate('course_map_create', '새 과정'),
+  conceptPlacementChange('concept_placement_change', '개념 배치'),
+  conceptLibraryChange('concept_library_change', '개념 고치기'),
+
+  /// 범위별 개념 검토 기록. 승인하면 기록만 남고 개념 본문·폴더·관계는 바뀌지 않는다.
+  /// 설계: docs/architecture/concept-library.md "범위별 개념 검토"
+  conceptReviewRecord('concept_review_record', '개념 검토 기록'),
+
+  /// 개념 관계 넣기·바꾸기·빼기. 승인한 항목만 반영하고, 빼기는 관계만 지운다(개념은 그대로).
+  /// 설계: docs/architecture/concept-library.md "관계 유형"
+  conceptRelationChange('concept_relation_change', '개념 관계 고치기');
 
   const ThinkActionKind(this.db, this.label);
   final String db;
@@ -59,6 +74,20 @@ enum ThinkActionKind {
   bool get isDelete => this == deleteCodeRequest || this == deleteFolder || this == deleteConversation;
   bool get isMemory => this == saveMemory || this == memoryCardChange;
   bool get isConceptDraft => this == conceptDraftChange || this == conceptCriterionChange || this == conceptDraftRerun;
+  bool get isCourseThink =>
+      this == courseMapChange ||
+      this == courseMapCreate ||
+      this == conceptPlacementChange ||
+      this == conceptLibraryChange ||
+      this == conceptReviewRecord ||
+      this == conceptRelationChange;
+
+  /// 항목마다 빼고 고를 수 있는 카드.
+  bool get hasItems =>
+      this == conceptPlacementChange ||
+      this == conceptLibraryChange ||
+      this == conceptReviewRecord ||
+      this == conceptRelationChange;
 
   /// 정리 패널에 모이는 제안. 코드·삭제 제안은 각자 카드로만 처리한다. Edge `ORGANIZE_KINDS`와 같다.
   bool get isOrganize => switch (this) {
@@ -246,6 +275,44 @@ class ThinkAction {
   /// Think가 왜 지금 저장(변경)을 제안하는지.
   String get memoryReason => _str(payload['reason'] ?? preview['reason']);
 
+  /// 비교 분류. 서버가 조회 기록으로 남긴 값이다.
+  String get memoryRelation => _str(_map(payload['basis'])['relation']);
+
+  String get memoryRelationLabel => switch (memoryRelation) {
+        'duplicate' => '중복',
+        'supplement' => '보완',
+        'conflict' => '충돌',
+        'distinct' => '별개',
+        'hold' => '보류',
+        'retire' => '내리기',
+        _ => '',
+      };
+
+  /// 검색이 성공(결과 있음·0건)한 기록이 카드에 있다. 없으면 승인하지 않는다.
+  bool get memoryBasisReady {
+    final searches = _map(payload['basis'])['searches'];
+    if (searches is! List || searches.isEmpty) return false;
+    return searches.any((s) => s is Map && (s['status'] == 'ok' || s['status'] == 'empty'));
+  }
+
+  /// 비교에 쓴 원문 판. 지금 원문과 다를 수 있다.
+  List<Map<String, dynamic>> get memoryBasisReads {
+    final reads = _map(payload['basis'])['reads'];
+    if (reads is! List) return const [];
+    return reads.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+  }
+
+  Map<String, dynamic> get _memoryFlow => _map(payload['flow']);
+
+  String get memoryFlowKey => _str(_memoryFlow['key']);
+
+  int get memoryFlowStep => _memoryFlow['step'] is num ? (_memoryFlow['step'] as num).toInt() : 0;
+
+  int get memoryFlowSteps => _memoryFlow['steps'] is num ? (_memoryFlow['steps'] as num).toInt() : 0;
+
+  /// 확정 기억을 보관으로 내리는 제안. 행은 지우지 않는다.
+  bool get memoryRetire => payload['op'] == 'retire' || preview['op'] == 'retire';
+
   /// 대체하려는 확정 기억의 제목. 서버가 제안 때 확인한 값이다.
   String get supersedesTitle => _str(preview['supersedes_title']);
 
@@ -367,6 +434,26 @@ class ThinkAction {
 
   /// 승인 때 고칠 수 있는 기준 원문(우선 기억은 id).
   Map<String, dynamic> get criteriaPayload => _map(payload['criteria']);
+
+  // ---- 과정 탐색도·개념 배치·개념 고치기
+  String? get courseId {
+    final id = _str(payload['course_id']).isNotEmpty ? _str(payload['course_id']) : _str(result?['course_id']);
+    return id.isEmpty ? null : id;
+  }
+
+  /// 미리보기 항목(i는 1부터). 승인 때 overrides.skip·units가 이 번호를 쓴다.
+  List<Map<String, dynamic>> get courseItems => (preview['items'] is List ? preview['items'] as List : const [])
+      .whereType<Map>()
+      .map((m) => Map<String, dynamic>.from(m))
+      .toList();
+
+  /// 승인 결과의 항목별 상태(applied·skipped·failed). 번호 → 결과.
+  Map<int, Map<String, dynamic>> get courseItemResults => {
+        for (final m in (result?['items'] is List ? result!['items'] as List : const []).whereType<Map>())
+          if ((m['i'] as num?) != null) (m['i'] as num).toInt(): Map<String, dynamic>.from(m),
+      };
+
+  int courseResultCount(String key) => (result?[key] as num?)?.toInt() ?? 0;
 
   static List<String> _ids(dynamic v) =>
       v is List ? v.map((e) => _str(e)).where((e) => e.isNotEmpty).toList() : const [];

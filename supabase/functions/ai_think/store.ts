@@ -19,7 +19,7 @@ import type { CriteriaInput, DepartmentCriteria, OrganizeMessageRow, ProgressSum
 import type {
   BehaviorCard,
   ConceptCategory,
-  ConceptHit,
+  ConceptSearchPage,
   CurriculumNode,
   CurriculumOutlineQuery,
 } from './tools.ts';
@@ -58,6 +58,25 @@ import {
   DRAFT_TYPE_LIMIT,
   type DraftCriterionRecord,
 } from './concept_draft_reference.ts';
+import type { ConceptTypeRow, CourseMapReadFn } from './course_map_tools.ts';
+import type { ConceptSourceReadFn } from './concept_source_tools.ts';
+import { REVIEW_JOB_RPCS, type ReviewJobRpc } from './concept_review_job_tools.ts';
+
+const CONCEPT_SOURCE_READ_FNS = new Set<string>(['concept_source_list', 'concept_source_page_context', 'concept_source_page_image']);
+/** 게이트웨이가 만든 원본 쪽 이미지. 버킷 정책: 그 학원 소속 운영자만 읽기. */
+const CONCEPT_SOURCE_PAGE_BUCKET = 'concept-source-pages';
+
+const COURSE_MAP_READ_FNS = new Set<string>([
+  'course_maps_list',
+  'concept_placement_overview',
+  'course_map_get',
+  'course_map_placements',
+  'concept_placement_candidates',
+  'concept_think_detail',
+  'concept_review_walk',
+  'concept_review_status',
+  'concept_relation_list',
+]);
 import { isMissingFunctionError, parseDbFeatures, type DbFeatureCheck } from './features.ts';
 import type { ThinkRoleId } from './prompts.ts';
 import type { RelayAsker } from './relay_verdict.ts';
@@ -357,6 +376,52 @@ export class SupabaseThinkStore implements ThinkStore {
     };
   }
 
+  /**
+   * 이번 요청의 기억 조회 기록. 대화에 저장된 역할로 검색·열람하고, 호출자가 넘긴 범위 힌트는 쓰지 않는다.
+   * 함수가 없으면 옛 조회로 돌아가지 않는다.
+   */
+  async openMemoryRead(conversationId: string): Promise<string> {
+    const res = await this.db.rpc('ai_memory_read_open', { p_conversation_id: conversationId });
+    if (res.error) {
+      if (isMissingFunctionError(res.error)) throw new Error('memory_compare_unavailable');
+      throw new Error(s(res.error.message));
+    }
+    const id = typeof res.data === 'string' ? res.data : '';
+    if (!id) throw new Error('memory_read_session_invalid');
+    return id;
+  }
+
+  async searchMemoryLogged(sessionId: string, query: string, terms: string[], _access?: unknown): Promise<Record<string, unknown>> {
+    const res = await this.db.rpc('ai_memory_search', { p_session: sessionId, p_query: query, p_terms: terms });
+    if (res.error) {
+      if (isMissingFunctionError(res.error)) throw new Error('memory_compare_unavailable');
+      throw new Error(s(res.error.message));
+    }
+    return (res.data && typeof res.data === 'object' ? res.data : {}) as Record<string, unknown>;
+  }
+
+  async readMemoryLogged(sessionId: string, memoryId: string, offset: number, _access?: unknown): Promise<Record<string, unknown>> {
+    const res = await this.db.rpc('ai_memory_read', { p_session: sessionId, p_memory_id: memoryId, p_offset: offset });
+    if (res.error) {
+      if (isMissingFunctionError(res.error)) throw new Error('memory_compare_unavailable');
+      throw new Error(s(res.error.message));
+    }
+    return (res.data && typeof res.data === 'object' ? res.data : {}) as Record<string, unknown>;
+  }
+
+  async noteMemoryOutcome(sessionId: string, kind: 'search' | 'read', status: 'error' | 'timeout', memoryId?: string | null): Promise<void> {
+    const res = await this.db.rpc('ai_memory_note_outcome', {
+      p_session: sessionId,
+      p_kind: kind,
+      p_status: status,
+      p_memory_id: memoryId ?? null,
+    });
+    if (res.error) {
+      if (isMissingFunctionError(res.error)) throw new Error('memory_compare_unavailable');
+      throw new Error(s(res.error.message));
+    }
+  }
+
   async curriculumOutline(q: CurriculumOutlineQuery): Promise<CurriculumNode[]> {
     let cq = this.db.from('curriculum').select('id,name').order('name');
     cq = q.curriculumName ? cq.ilike('name', likePattern(q.curriculumName)) : cq.eq('is_active', true);
@@ -443,28 +508,31 @@ export class SupabaseThinkStore implements ThinkStore {
     return paths;
   }
 
-  async searchConcepts(query: string, limit: number): Promise<ConceptHit[]> {
+  async searchConcepts(query: string, limit: number, offset: number): Promise<ConceptSearchPage> {
     const pattern = likePattern(query);
-    if (pattern === '%%') return [];
-    const rows =
-      (check(
-        await this.db
-          .from('concepts')
-          .select('id,name,kind,level,content,main_category_id')
-          .or(`name.ilike.${pattern},content.ilike.${pattern}`)
-          .order('sort_order')
-          .limit(limit),
-        'concepts',
-      ) as Row[] | null) ?? [];
+    if (pattern === '%%') return { total: 0, hits: [] };
+    const res = await this.db
+      .from('concepts')
+      .select('id,name,kind,level,content,main_category_id', { count: 'exact' })
+      .or(`name.ilike.${pattern},content.ilike.${pattern}`)
+      .order('name')
+      .order('id')
+      .range(offset, offset + limit - 1);
+    const rows = (check(res, 'concepts') as Row[] | null) ?? [];
+    const total = typeof (res as { count?: unknown }).count === 'number' ? (res as { count: number }).count : null;
     const paths = await this.categoryPaths(rows.map((r) => s(r.main_category_id)));
-    return rows.map((r) => ({
-      id: s(r.id),
-      name: s(r.name),
-      kind: s(r.kind),
-      level: typeof r.level === 'number' ? r.level : null,
-      category_path: paths.get(s(r.main_category_id)) ?? '',
-      content: s(r.content).slice(0, 800),
-    }));
+    return {
+      total,
+      hits: rows.map((r) => ({
+        id: s(r.id),
+        name: s(r.name),
+        kind: s(r.kind),
+        level: typeof r.level === 'number' ? r.level : null,
+        category_path: paths.get(s(r.main_category_id)) ?? '',
+        content: s(r.content).slice(0, 600),
+        content_chars: s(r.content).length,
+      })),
+    };
   }
 
   async listConceptCategories(parentId: string | null): Promise<ConceptCategory[]> {
@@ -740,6 +808,52 @@ export class SupabaseThinkStore implements ThinkStore {
 
   proposeConceptDraftAction(conversationId: string, kind: ActionKind, payload: Record<string, unknown>): Promise<ActionRow> {
     return this.organizeRpc('concept_draft_action_propose', { p_conversation_id: conversationId, p_kind: kind, p_payload: payload });
+  }
+
+  // --- 과정 탐색도·개념 카드 (기능 course_map_actions가 준비된 요청에서만 부른다) ---
+  async courseMapRead(fn: CourseMapReadFn, args: Record<string, unknown>): Promise<unknown> {
+    if (!COURSE_MAP_READ_FNS.has(fn)) throw new Error(`course_map_read: ${fn} not allowed`);
+    return check(await this.db.rpc(fn, args), fn);
+  }
+
+  async listConceptTypes(): Promise<ConceptTypeRow[]> {
+    const rows = (check(
+      await this.db.from('concept_types').select('name,description').order('sort_order').order('name').limit(200),
+      'concept_types',
+    ) as Row[] | null) ?? [];
+    return rows.map((r) => ({ name: s(r.name), description: s(r.description) }));
+  }
+
+  proposeCourseThinkAction(conversationId: string, kind: ActionKind, payload: Record<string, unknown>): Promise<ActionRow> {
+    return this.organizeRpc('course_think_action_propose', { p_conversation_id: conversationId, p_kind: kind, p_payload: payload });
+  }
+
+  // --- 개념 검수 작업 (기능 concept_review_jobs가 준비된 요청에서만 부른다) ---
+  async reviewJobRpc(fn: ReviewJobRpc, args: Record<string, unknown>): Promise<unknown> {
+    if (!REVIEW_JOB_RPCS.has(fn)) throw new Error(`review_job_rpc: ${fn} not allowed`);
+    return check(await this.db.rpc(fn, args), fn);
+  }
+
+  async reviewJobRunGate(jobId: string, holder: string): Promise<Record<string, unknown>> {
+    const data = check(await this.db.rpc('concept_review_job_run_gate', { p_job_id: jobId, p_holder: holder }), 'concept_review_job_run_gate');
+    return data && typeof data === 'object' ? data as Record<string, unknown> : {};
+  }
+
+  async reviewJobRunFinish(runId: string, costUsd: number | null): Promise<void> {
+    check(await this.db.rpc('concept_review_job_run_finish', { p_run_id: runId, p_cost_usd: costUsd }), 'concept_review_job_run_finish');
+  }
+
+  // --- 개념 출처 원본 다시 읽기 (기능 concept_source_pages가 준비된 요청에서만 부른다) ---
+  async conceptSourceRead(fn: ConceptSourceReadFn, args: Record<string, unknown>): Promise<unknown> {
+    if (!CONCEPT_SOURCE_READ_FNS.has(fn)) throw new Error(`concept_source_read: ${fn} not allowed`);
+    return check(await this.db.rpc(fn, args), fn);
+  }
+
+  /** 저장소 오류 문구에는 경로가 섞일 수 있어 그대로 올리지 않는다. */
+  async readConceptSourcePageImage(key: string): Promise<Uint8Array> {
+    const { data, error } = await this.db.storage.from(CONCEPT_SOURCE_PAGE_BUCKET).download(key);
+    if (error || !data) throw new Error('concept_source_image_download_failed');
+    return new Uint8Array(await (data as Blob).arrayBuffer());
   }
 
   /** 부모를 따라 최상위까지 읽는다. 끊기거나(없음·오류) 순환하거나 너무 깊으면 읽은 데까지와 불완전 표시. */
@@ -1131,6 +1245,9 @@ export class SupabaseThinkStore implements ThinkStore {
       extra_ref_departments: parseDepartmentList(data.extra_ref_departments),
       progress_summary: data.progress_summary && typeof data.progress_summary === 'object'
         ? (data.progress_summary as Record<string, unknown>)
+        : null,
+      context_from_conversation_id: typeof data.context_from_conversation_id === 'string'
+        ? data.context_from_conversation_id
         : null,
     };
   }

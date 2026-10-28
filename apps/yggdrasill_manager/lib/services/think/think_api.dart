@@ -126,6 +126,9 @@ class ThinkApi {
     'memory_proposals': 1,
     'department_work': 1,
     'auto_organize': 1,
+    'course_map_actions': 1,
+    'concept_review': 1,
+    'concept_relation_change': 1,
   };
 
   SupabaseClient get _db => Supabase.instance.client;
@@ -317,6 +320,46 @@ class ThinkApi {
   Future<ThinkConversationDetail?> getConversationDetail(String id) async {
     final row = await _db.from('ai_conversations').select().eq('id', id).maybeSingle();
     return row == null ? null : ThinkConversationDetail.fromRow(row);
+  }
+
+  Future<ThinkContextLookup> lookupConversationContext(String id) async {
+    try {
+      final raw = await _db.rpc('ai_conversation_context_lookup', params: {'p_id': id});
+      final map = raw is Map ? Map<String, dynamic>.from(raw) : const <String, dynamic>{};
+      final status = map['status']?.toString() ?? 'error';
+      final actions = map['actions'];
+      final codes = map['code_requests'];
+      final pending = actions is List
+          ? actions.where((e) => e is Map && e['status'] == 'proposed').length
+          : 0;
+      final summary = ThinkProgressSummary.fromJson(map['progress_summary']);
+      return ThinkContextLookup(
+        status: status,
+        title: map['title']?.toString() ?? '',
+        summary: summary.isEmpty ? null : summary,
+        actionCount: actions is List ? actions.length : 0,
+        pendingCount: pending,
+        codeCount: codes is List ? codes.length : 0,
+      );
+    } catch (_) {
+      return const ThinkContextLookup(status: 'error');
+    }
+  }
+
+  Future<void> setConversationContextSource(String conversationId, String? sourceId) async {
+    try {
+      await _db.rpc('ai_conversation_set_context_source', params: {
+        'p_conversation': conversationId,
+        'p_source': sourceId,
+      });
+    } on PostgrestException catch (e) {
+      final known = _codeErrors.keys.where((k) => e.message.contains(k));
+      final code = known.isEmpty ? null : known.first;
+      throw ThinkApiException(
+        code ?? 'context_source_unavailable',
+        code != null ? _codeErrors[code]! : '고른 대화를 다음 답변의 참고로 두지 못했습니다.',
+      );
+    }
   }
 
   Future<ThinkConversationRoleSettings?> getConversationRoleSettings(String id) async {
@@ -854,6 +897,25 @@ class ThinkApi {
     'place_department_mismatch': '대화가 아직 다른 부서에 있어 이 폴더로 옮길 수 없습니다. 부서 넘기기를 먼저 승인하세요.',
     'memory_card_not_pending': '기억 카드가 이미 처리됐습니다. 새로고침하세요.',
     'memory_supersede_not_active': '바꾸려던 기억이 이미 바뀌었거나 보관됐습니다. 새로고침하세요.',
+    'memory_basis_missing': '비교 근거가 없는 카드입니다. 승인하지 않았습니다. 다시 비교해 제안해 달라고 하세요.',
+    'memory_version_conflict': '비교한 뒤 그 기억이 바뀌었습니다. 지금 원문으로 다시 비교해 제안해 달라고 하세요.',
+    'memory_reread_required': '비교한 기억의 판이 바뀌었습니다. 다시 읽고 제안해 달라고 하세요.',
+    'memory_read_incomplete': '원문을 끝까지 읽지 않은 제안입니다. 다시 비교해 달라고 하세요.',
+    'memory_read_missing': '비교에 필요한 원문을 확인하지 못했습니다. 다시 비교해 달라고 하세요.',
+    'memory_search_required': '관련 기억을 검색하지 않은 제안입니다. 승인하지 않았습니다.',
+    'memory_search_failed': '기억 검색이 실패한 제안입니다. 결과가 없다는 뜻이 아니므로 승인하지 않았습니다.',
+    'memory_supersede_lost': '대체하려던 기억이 그 판이 아니어서 반영하지 않았습니다. 기존 기억은 그대로입니다.',
+    'memory_basis_forbidden': '이 대화에서 볼 수 없는 기억이 비교에 들어 있어 승인하지 않았습니다.',
+    'memory_duplicate_classified': '이미 같은 기억으로 판단된 제안입니다. 새 기억으로 저장하지 않았습니다.',
+    'memory_proposal_rejected': '이미 거절한 같은 내용입니다. 다시 저장하지 않았습니다.',
+    'memory_flow_waiting': '앞 단계가 아직 승인되지 않았습니다. 근본 단계부터 승인하세요.',
+    'memory_flow_blocked': '앞 단계가 거절되거나 실패해서 이 단계는 반영하지 않았습니다.',
+    'memory_flow_order': '수정 흐름의 순서가 맞지 않아 제안하지 않았습니다.',
+    'memory_retire_target_required': '내릴 기억이 지정되지 않아 반영하지 않았습니다.',
+    'context_source_empty': '고른 대화에는 승인된 진행 요약과 작업 상태가 없습니다.',
+    'context_source_not_found': '고른 대화를 찾지 못했습니다.',
+    'context_source_self': '이 대화 자신을 이전 작업으로 고를 수 없습니다.',
+    'context_source_unavailable': '고른 대화의 작업 상태를 읽지 못했습니다. 작업이 없는 것이 아닙니다.',
     'organize_target_not_proposed': '제안에 없던 메시지는 더할 수 없습니다.',
     'organize_targets_invalid': '메시지를 하나 이상 고르세요.',
     'organize_target_missing': '대상 메시지가 없어졌습니다. 새로고침하세요.',
@@ -871,6 +933,14 @@ class ThinkApi {
     'concept_draft_change_': '지금 검토에 이 변경을 적용할 수 없습니다. 다시 물어보세요.',
     'concept_criteria_stale': '제안한 뒤 기준이 바뀌었습니다. 다시 물어보세요.',
     'concept_criteria_not_found': '기준을 찾지 못했습니다.',
+    'course_think_all_failed': '고른 항목이 모두 막혀 아무것도 반영하지 않았습니다. 카드는 승인 대기 그대로이니, 원인을 고친 뒤 같은 카드를 다시 승인할 수 있습니다.',
+    'course_think_nothing_selected': '반영할 항목을 하나 이상 고르세요.',
+    'course_think_bad_overrides': '고른 항목·단원이 올바르지 않습니다. 새로고침한 뒤 다시 고르세요.',
+    'course_map_stale': '제안한 뒤 과정 탐색도가 바뀌었습니다(다른 곳에서 저장). 지금 탐색도로 다시 제안해 달라고 하세요.',
+    'course_map_not_found': '과정을 찾지 못했습니다(보관됐거나 지워졌을 수 있습니다).',
+    'course_map_archived': '보관한 과정입니다. 되살린 뒤에 바꿀 수 있습니다.',
+    'course_map_bad_name': '이름이 비었거나 너무 깁니다.',
+    'course_map_': '과정 탐색도에 이 변경을 반영할 수 없습니다. 지금 탐색도로 다시 제안해 달라고 하세요.',
   };
 
   static String codeErrorMessage(Object e) {
@@ -983,6 +1053,10 @@ class ThinkApi {
 
   /// 개념 초안 변경·기준 고치기 카드 승인. 다시 정리 카드는 ConceptDraftService.rerun(Edge)으로 한다.
   Future<ThinkAction> applyConceptDraftAction(String id) => _actionRpc('concept_draft_action_apply', {'p_id': id});
+
+  /// 과정 탐색도·개념 배치·개념 고치기 카드 승인. [overrides]: {skip: [항목 번호], units: {"번호": 단원 id}}.
+  Future<ThinkAction> applyCourseThinkAction(String id, {Map<String, dynamic> overrides = const {}}) =>
+      _actionRpc('course_think_action_apply', {'p_id': id, 'p_overrides': overrides});
 
   Future<ThinkAction> rejectAction(String id) => _actionRpc('ai_action_reject', {'p_id': id});
 

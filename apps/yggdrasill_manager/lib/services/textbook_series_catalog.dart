@@ -65,7 +65,8 @@ class TextbookSeriesCatalogEntry {
   final bool hasSubUnitRows;
 
   /// 중단원 끝에 붙는 마무리 문제 묶음 행의 이름.
-  /// 개념원리는 "연습문제", 개념+유형은 "단원 다지기".
+  /// 개념원리는 "연습문제", 개념+유형은 "단원 다지기". 빈 문자열이면 마무리
+  /// 행이 없다(개념+유형 고등은 연습문제가 소단원 안에 들어 있다).
   final String unitEndRowName;
 
   /// 마무리 행의 페이지 범위에서 유도되는 슬롯 키. 나머지 슬롯은 일반 소단원
@@ -227,6 +228,33 @@ const List<TextbookSeriesCatalogEntry> kTextbookSeriesCatalog =
       // 없는 소단원까지 미완료로 집계된다. 크롭 저장 전용 카테고리로만 쓴다.
     ],
   ),
+  // 개념+유형 고등. 중등과 이름만 같고 지면 구성은 고등 개념원리에 가깝다.
+  //   - 소단원 하나가 개념 지면(개념 Plus, 개념 Check) → 필수예제 지면(한 쪽에
+  //     예제 하나 + 아래 "문제" 01-1 …) → … → 연습문제 순으로 끝난다. 연습문제는
+  //     소단원마다 붙어 있어 마무리 행을 따로 두지 않는다.
+  //   - 번호: 개념 Check 는 개념 블록마다 1부터 다시 시작해 블록 시작 쪽을 붙여
+  //     "8-1" 로 저장한다. 필수예제 "01", 문제 "01-1", 연습문제 "1" 은 소단원
+  //     안에서 유일하다.
+  //   - 정답 PDF 가 없다. 필수예제는 본문 "풀이" 상자에서, 나머지는 "정답과
+  //     해설" PDF 에서 정답과 풀이 좌표를 함께 뽑는다.
+  TextbookSeriesCatalogEntry(
+    key: 'gaeyu_high',
+    displayName: '개념+유형 고등',
+    defaultTextbookType: '개념서',
+    hasSubUnitRows: true,
+    unitEndRowName: '',
+    supportsProblemExtraction: true,
+    notes: '개념+유형 고등은 대단원 - 중단원 - 소단원 구조로 입력합니다 (번호 제외). '
+        '페이지는 소단원별로만 입력하며, 개념 Check / 필수예제 / 문제 / 연습문제 '
+        '분류는 VLM이 해당 페이지 안에서 자동으로 나눕니다. 정답 PDF 없이 '
+        '정답과 해설 PDF 하나로 정답과 풀이를 함께 추출합니다.',
+    subPreset: <TextbookSubSectionPreset>[
+      TextbookSubSectionPreset(key: 'A', displayName: '개념 Check'),
+      TextbookSubSectionPreset(key: 'B', displayName: '필수예제'),
+      TextbookSubSectionPreset(key: 'C', displayName: '문제'),
+      TextbookSubSectionPreset(key: 'D', displayName: '연습문제'),
+    ],
+  ),
   // 수력충전 문제집. 개념서처럼 대-중-소단원 3계층 트리를 쓰지만 소단원이 아주
   // 잘게 쪼개져 있다 (대수 기준 대단원 하나에 40~50개).
   //   - 소단원 번호("01 거듭제곱과 지수법칙")와 유형 번호("유형 01")는 대단원마다
@@ -314,6 +342,13 @@ const List<TextbookSeriesCatalogEntry> kTextbookSeriesCatalog =
 bool isGojaengiSeries(String series) {
   final key = series.trim().toLowerCase();
   return key == 'gojaengi' || key == 'gojaengi_high';
+}
+
+/// 정답 PDF 없이 "정답과 해설" PDF 하나로 정답까지 뽑는 시리즈인지.
+/// 등록 때 정답 PDF 를 받지 않고, 정답 단계도 해설 PDF 를 읽는다.
+bool textbookSeriesAnswersFromSolutionPdf(String series) {
+  final key = series.trim().toLowerCase();
+  return key == 'wonri_middle' || key == 'gaeyu_high';
 }
 
 // 고쟁이 문항 번호 규칙.

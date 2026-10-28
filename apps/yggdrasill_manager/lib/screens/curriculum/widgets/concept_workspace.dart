@@ -3,24 +3,24 @@ import 'package:flutter/material.dart';
 import '../../../services/concept_library_controller.dart';
 import '../../think/think_style.dart';
 
-/// 개념 탭 작업 공간. 왼쪽은 정리 기준, 오른쪽은 개념 라이브러리(정리 결과)로 위치를 고정하고,
-/// 크게 보는 쪽(초점)에 따라 너비와 보이는 정보만 바꾼다. 네 칸(기준 상세·요약, 라이브러리 상세·요약)과
+/// 개념 탭 작업 공간. 왼쪽은 교육과정 흐름(기준 과정 탐색도), 오른쪽은 개념 라이브러리(정리 결과)로 위치를 고정하고,
+/// 크게 보는 쪽(초점)에 따라 너비와 보이는 정보만 바꾼다. 네 칸(흐름 상세·요약, 라이브러리 상세·요약)과
 /// 대화 패널은 GlobalKey로 붙잡아 두어 초점·화면 폭이 바뀌어도 선택·스크롤·입력이 남는다.
-/// 설계: docs/architecture/concept-library.md
+/// 설계: docs/architecture/concept-library.md, docs/architecture/course-map.md
 class ConceptWorkspace extends StatefulWidget {
   const ConceptWorkspace({
     super.key,
     required this.controller,
-    required this.criteriaDetail,
-    required this.criteriaSummary,
+    required this.courseDetail,
+    required this.courseSummary,
     required this.libraryDetail,
     required this.librarySummary,
     this.chat,
   });
 
   final ConceptLibraryController controller;
-  final Widget criteriaDetail;
-  final Widget criteriaSummary;
+  final Widget courseDetail;
+  final Widget courseSummary;
   final Widget libraryDetail;
   final Widget librarySummary;
 
@@ -41,8 +41,8 @@ class ConceptWorkspace extends StatefulWidget {
 }
 
 class _ConceptWorkspaceState extends State<ConceptWorkspace> {
-  final _criteriaDetailKey = GlobalKey(debugLabel: 'criteriaDetail');
-  final _criteriaSummaryKey = GlobalKey(debugLabel: 'criteriaSummary');
+  final _courseDetailKey = GlobalKey(debugLabel: 'courseDetail');
+  final _courseSummaryKey = GlobalKey(debugLabel: 'courseSummary');
   final _libraryDetailKey = GlobalKey(debugLabel: 'libraryDetail');
   final _librarySummaryKey = GlobalKey(debugLabel: 'librarySummary');
   final _chatKey = GlobalKey(debugLabel: 'conceptChat');
@@ -79,9 +79,9 @@ class _ConceptWorkspaceState extends State<ConceptWorkspace> {
   }
 
   Widget _twoPane(BuildContext context, double work) {
-    final criteriaFocused = _c.focus == ConceptWorkspaceFocus.criteria;
+    final courseFocused = _c.focus == ConceptWorkspaceFocus.courseMap;
     final inner = work - ConceptWorkspace.gap;
-    final left = criteriaFocused ? inner * 2 / 3 : inner / 3;
+    final left = courseFocused ? inner * 2 / 3 : inner / 3;
     final still = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -91,18 +91,18 @@ class _ConceptWorkspaceState extends State<ConceptWorkspace> {
           curve: Curves.easeOutCubic,
           width: left,
           child: IndexedStack(
-            index: criteriaFocused ? 0 : 1,
+            index: courseFocused ? 0 : 1,
             sizing: StackFit.expand,
             children: [
-              _keep(_criteriaDetailKey, widget.criteriaDetail),
-              _keep(_criteriaSummaryKey, widget.criteriaSummary),
+              _keep(_courseDetailKey, widget.courseDetail),
+              _keep(_courseSummaryKey, widget.courseSummary),
             ],
           ),
         ),
         const SizedBox(width: ConceptWorkspace.gap),
         Expanded(
           child: IndexedStack(
-            index: criteriaFocused ? 1 : 0,
+            index: courseFocused ? 1 : 0,
             sizing: StackFit.expand,
             children: [
               _keep(_libraryDetailKey, widget.libraryDetail),
@@ -117,7 +117,7 @@ class _ConceptWorkspaceState extends State<ConceptWorkspace> {
   /// 좁은 화면: 한 칸씩 본다. 요약 칸은 쓰지 않고(상세만), 겹치지 않는다.
   Widget _onePane(Widget? chat) {
     final showChat = chat != null && _c.narrowChat;
-    final index = showChat ? 2 : (_c.focus == ConceptWorkspaceFocus.criteria ? 0 : 1);
+    final index = showChat ? 2 : (_c.focus == ConceptWorkspaceFocus.courseMap ? 0 : 1);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -126,14 +126,14 @@ class _ConceptWorkspaceState extends State<ConceptWorkspace> {
           child: SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: ThinkPillTabs(
-              labels: ['정리 기준', '개념 라이브러리', if (chat != null) 'Think 대화'],
-              icons: [Icons.rule_folder_outlined, Icons.account_tree_outlined, if (chat != null) Icons.forum_outlined],
+              labels: ['교육과정 흐름', '개념 라이브러리', if (chat != null) 'Think 대화'],
+              icons: [Icons.timeline, Icons.account_tree_outlined, if (chat != null) Icons.forum_outlined],
               selected: index,
               onSelected: (i) {
                 if (i == 2) {
                   _c.showNarrowChat();
                 } else {
-                  _c.setFocus(i == 0 ? ConceptWorkspaceFocus.criteria : ConceptWorkspaceFocus.library);
+                  _c.setFocus(i == 0 ? ConceptWorkspaceFocus.courseMap : ConceptWorkspaceFocus.library);
                 }
               },
             ),
@@ -145,7 +145,7 @@ class _ConceptWorkspaceState extends State<ConceptWorkspace> {
             index: index,
             sizing: StackFit.expand,
             children: [
-              _keep(_criteriaDetailKey, widget.criteriaDetail),
+              _keep(_courseDetailKey, widget.courseDetail),
               _keep(_libraryDetailKey, widget.libraryDetail),
               if (chat != null) _keep(_chatKey, chat),
             ],

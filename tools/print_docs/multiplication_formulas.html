@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>곱셈 공식</title>
+<style>
+  @font-face { font-family: 'PD'; font-weight: 400; src: url('file:///C:/Users/harry/Yggdrasill/apps/yggdrasill/assets/fonts/pretendard/Pretendard-Regular.otf'); }
+  @font-face { font-family: 'PD'; font-weight: 600; src: url('file:///C:/Users/harry/Yggdrasill/apps/yggdrasill/assets/fonts/pretendard/Pretendard-SemiBold.otf'); }
+  @font-face { font-family: 'PD'; font-weight: 700; src: url('file:///C:/Users/harry/Yggdrasill/apps/yggdrasill/assets/fonts/pretendard/Pretendard-Bold.otf'); }
+  @font-face { font-family: 'KMain'; src: url('file:///C:/Users/harry/AppData/Local/Pub/Cache/hosted/pub.dev/flutter_math_fork-0.7.4/lib/katex_fonts/fonts/KaTeX_Main-Regular.ttf'); }
+  @font-face { font-family: 'KMath'; src: url('file:///C:/Users/harry/AppData/Local/Pub/Cache/hosted/pub.dev/flutter_math_fork-0.7.4/lib/katex_fonts/fonts/KaTeX_Math-Italic.ttf'); }
+
+  @page { size: A4; margin: 0; }
+  html, body { margin: 0; background: #fff; }
+  body {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    font-family: 'PD', 'Malgun Gothic', sans-serif;
+    color: #1d1d1f;
+    word-break: keep-all;
+  }
+  .page { position: relative; width: 210mm; height: 297mm; overflow: hidden; }
+  svg { position: absolute; inset: 0; display: block; width: 210mm; height: 297mm; }
+  svg text { font-family: 'PD', 'Malgun Gothic', sans-serif; }
+
+  .cell { position: absolute; display: flex; align-items: center; }
+  .intro { font-size: 9.5pt; color: #6e6e73; letter-spacing: -0.01em; }
+  .sec { align-items: baseline; padding-top: 1mm; box-sizing: border-box; flex-wrap: wrap; align-content: center; gap: 2mm; }
+  .sec .no { font-size: 9.5pt; font-weight: 600; color: #8e8e93; }
+  .sec .name { font-size: 11pt; font-weight: 700; letter-spacing: -0.02em; }
+  .label {
+    width: 4.2mm;
+    height: 4.2mm;
+    border: 0.5pt solid #8e8e93;
+    border-radius: 50%;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 7.4pt;
+    font-weight: 600;
+    color: #6e6e73;
+  }
+  .label.note {
+    border-color: #c7c7cc;
+    background: #f2f2f5;
+    font-family: 'KMain', serif;
+    font-size: 9pt;
+    font-weight: 400;
+    padding-top: 0.6mm;
+  }
+  .math {
+    justify-content: flex-end;
+    font-family: 'KMain', serif;
+    font-size: 12pt;
+    line-height: 1;
+    white-space: nowrap;
+  }
+  .v { font-family: 'KMath', serif; font-style: normal; }
+  .bin { margin: 0 0.22em; }
+  .rel { margin-left: 0.32em; }
+  sup { font-size: 70%; line-height: 0; vertical-align: super; margin-left: 0.04em; }
+  .frac {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    vertical-align: middle;
+    font-size: 82%;
+    margin-right: 0.12em;
+    position: relative;
+    top: -0.08em;
+  }
+  .frac span:first-child { padding: 0 0.15em 0.08em; border-bottom: 0.55pt solid #1d1d1f; }
+  .frac span:last-child { padding-top: 0.1em; }
+</style>
+</head>
+<body>
+<div class="page">
+  <svg id="chrome" viewBox="0 0 210 297" xmlns="http://www.w3.org/2000/svg"></svg>
+  <div id="cells"></div>
+</div>
+<script>
+  // 단위는 모두 mm. 1pt = 0.3528mm. 테두리·머리·줄 간격·아래 여백은 연습장 서술형 쪽(practice_sheet.html)과 같다.
+  const W = 210, H = 297, M = 6;
+  const PT = 0.3528;
+  const FOOT = 8.4;
+  const FOOT_SIZE = 12;
+  const footBase = H - M - 1.0;
+  const LOGO_SRC = 'academy_logo.png';
+  const LOGO_ASPECT = 220 / 232;
+  const C = {
+    ink: '#1d1d1f', frame: '#3a3a3c', divider: '#a1a1a6', rule: '#cfcfd4',
+    tick: '#b8b8bd', label: '#8e8e93', field: '#aeaeb2',
+  };
+  const x0 = M, x1 = W - M, mid = W / 2;
+  const frameBottom = H - M - FOOT;
+  const frameTop = M + 15;
+  const ROWS = 20;
+  const pitch = (frameBottom - frameTop) / ROWS;
+  // 왼쪽 단: 번호 | 식(오른쪽 맞춤, 등호가 가운데 선 앞에 모인다). 오른쪽 단은 답 쓰는 자리.
+  const NUM_X = x0 + 4;
+  const EQ_END = mid - 3.4;
+
+  const sections = [
+    ['(1)', '거듭제곱 꼴', [
+      ['1', '(a+b)^2'],
+      ['2', '(a+b)^3'],
+      ['3', '(a+b+c)^2'],
+      ['*', 'a-b'],
+    ]],
+    ['(2)', '합차 꼴', [
+      ['1', '(a+b)(a-b)'],
+      ['2', '(a+b)(a^2-ab+b^2)'],
+      ['3', '(a+b+c)(a^2+b^2+c^2-ab-bc-ca)'],
+      ['*', 'F{(a-b)^2+(b-c)^2+(c-a)^2}'],
+    ]],
+    ['(3)', '다항식 꼴', [
+      ['1', '(x+a)(x+b)'],
+      ['2', '(x+a)(x+b)(x+c)'],
+    ]],
+  ];
+
+  const cv = document.createElement('canvas').getContext('2d');
+  const measure = (s, size, weight = 400, spacing = 0) => {
+    cv.font = `${weight} 100px PD`;
+    return cv.measureText(s).width / 100 * size * PT + spacing * s.length;
+  };
+  const el = (tag, attrs, inner) => {
+    const a = Object.entries(attrs).map(([k, v]) => `${k}="${v}"`).join(' ');
+    return inner == null ? `<${tag} ${a}/>` : `<${tag} ${a}>${inner}</${tag}>`;
+  };
+  const line = (xa, ya, xb, yb, stroke, w) =>
+    el('line', { x1: xa, y1: ya, x2: xb, y2: yb, stroke, 'stroke-width': w * PT, 'stroke-linecap': 'butt' });
+  const text = (x, y, s, size, fill, opt = {}) =>
+    el('text', {
+      x, y, 'font-size': size * PT, fill,
+      'font-weight': opt.weight || 400,
+      'letter-spacing': opt.spacing || 0,
+      'text-anchor': opt.anchor || 'start',
+    }, s);
+  const rowY = (r) => frameTop + pitch * r;
+
+  /// 간단한 수식 표기 → HTML. 영문자는 수학 이탤릭, ^n 은 위첨자, F 는 1/2 분수.
+  function tex(src) {
+    let out = '';
+    for (let i = 0; i < src.length; i++) {
+      const ch = src[i];
+      if (ch === '^') { out += `<sup>${src[++i]}</sup>`; continue; }
+      if (ch === 'F') { out += '<span class="frac"><span>1</span><span>2</span></span>'; continue; }
+      if (/[a-z]/.test(ch)) { out += `<i class="v">${ch}</i>`; continue; }
+      if (ch === '+') { out += '<span class="bin">+</span>'; continue; }
+      if (ch === '-') { out += '<span class="bin">−</span>'; continue; }
+      out += ch;
+    }
+    return out;
+  }
+
+  function cell(cls, r, span, left, right, inner) {
+    return `<div class="cell ${cls}" style="top:${rowY(r)}mm;height:${pitch * span}mm;` +
+      `left:${left}mm;width:${right - left}mm">${inner}</div>`;
+  }
+
+  function build() {
+    let svg = '';
+    let html = '';
+
+    // 1행: 안내 문장.
+    html += cell('intro', 0, 1, x0 + 4, mid - 4,
+      '다항식&nbsp;<i class="v" style="font-family:KMath">a</i>,&nbsp;<i class="v" style="font-family:KMath">b</i>,&nbsp;<i class="v" style="font-family:KMath">c</i>에 대하여 다음 등식이 항상 성립한다.');
+
+    // 단원 줄: 제목만 두고 가운데 단 구분선을 끊는다. 공식 줄: 왼쪽 식, 오른쪽 답.
+    let r = 1;
+    for (const [no, name, items] of sections) {
+      svg += line(x0, rowY(r), x1, rowY(r), C.divider, 0.45);
+      html += cell('sec', r, 1, x0 + 4, mid,
+        `<span class="no">${no}</span><span class="name">${name}</span>`);
+      r++;
+      for (const [mark, expr] of items) {
+        svg += line(x0, rowY(r), x1, rowY(r), C.rule, 0.4);
+        svg += line(mid, rowY(r), mid, rowY(r + 1), C.divider, 0.45);
+        const label = mark === '*'
+          ? '<span class="label note">∗</span>'
+          : `<span class="label">${mark}</span>`;
+        html += cell('', r, 1, NUM_X, NUM_X + 5, label);
+        html += cell('math', r, 1, NUM_X + 6, EQ_END, `<span>${tex(expr)}<span class="rel">=</span></span>`);
+        r++;
+      }
+    }
+    // 남는 줄은 연습장과 같은 풀이 칸.
+    svg += line(x0, rowY(r), x1, rowY(r), C.divider, 0.45);
+    svg += line(mid, rowY(r), mid, frameBottom, C.divider, 0.45);
+    for (r++; r < ROWS; r++) svg += line(x0, rowY(r), x1, rowY(r), C.rule, 0.4);
+    svg += el('rect', {
+      x: x0, y: frameTop, width: x1 - x0, height: frameBottom - frameTop, rx: 2.2,
+      fill: 'none', stroke: C.frame, 'stroke-width': 0.7 * PT,
+    });
+    const ym = (frameTop + frameBottom) / 2;
+    svg += line(x0 - 2.4, ym, x0 - 0.9, ym, C.tick, 0.45);
+    svg += line(x1 + 0.9, ym, x1 + 2.4, ym, C.tick, 0.45);
+    svg += line(mid, frameBottom + 0.8, mid, frameBottom + 2.0, C.tick, 0.45);
+
+    // 머리: 왼쪽 제목, 오른쪽 밑줄 칸.
+    const base = frameTop - 4.6;
+    svg += text(x0 - 0.3, base + 0.2, '곱셈 공식', 19, C.ink, { weight: 700, spacing: -0.4 });
+    const size = 7.6;
+    const spacing = size * PT * 0.04;
+    let x = x1;
+    for (const [label, w] of [['이름', 26], ['날짜', 24]]) {
+      const start = x - w;
+      svg += line(start, base + 0.9, x, base + 0.9, C.field, 0.45);
+      svg += text(start - 1.8, base, label, size, C.label, { anchor: 'end', spacing });
+      x = start - 1.8 - measure(label, size, 400, spacing) - 6.5;
+    }
+
+    // 아래 여백: 왼쪽 No., 오른쪽 학원 로고 + 학원명.
+    const noSpacing = FOOT_SIZE * PT * 0.02;
+    const noX = x0 + 0.2;
+    const lx = noX + measure('No.', FOOT_SIZE, 400, noSpacing) + 1.6;
+    svg += text(noX, footBase, 'No.', FOOT_SIZE, C.label, { spacing: noSpacing });
+    svg += line(lx, footBase + 0.8, lx + 22, footBase + 0.8, C.field, 0.45);
+    const word = '정현 수학';
+    const em = FOOT_SIZE * PT;
+    const wSpacing = em * 0.04;
+    const wordW = measure(word, FOOT_SIZE, 600, wSpacing) - wSpacing;
+    const logoH = 4.4;
+    const logoW = logoH * LOGO_ASPECT;
+    svg += el('image', {
+      href: LOGO_SRC, x: x1 - wordW - 1.8 - logoW, y: footBase - em * 0.36 - logoH / 2,
+      width: logoW, height: logoH, preserveAspectRatio: 'xMidYMid meet',
+    });
+    svg += text(x1, footBase, word, FOOT_SIZE, C.ink, { weight: 600, spacing: wSpacing, anchor: 'end' });
+
+    document.getElementById('chrome').innerHTML = svg;
+    document.getElementById('cells').innerHTML = html;
+  }
+
+  const fonts = ['400', '600', '700'].map((w) => document.fonts.load(`${w} 10px PD`, '곱셈공식이름날짜정현수학No.거듭제곱꼴합차다항식'))
+    .concat([document.fonts.load('10px KMain', '(+)=12'), document.fonts.load('10px KMath', 'abcx')]);
+  Promise.allSettled(fonts).then(build);
+</script>
+</body>
+</html>

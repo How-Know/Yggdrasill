@@ -2761,7 +2761,7 @@ class HomeworkQuickAddProxyDialogState
   bool _isGaeyuLinkedBook(_LinkedTextbook? book) {
     if (book == null) return false;
     final series = (_linkedBookSeriesKey ?? '').trim().toLowerCase();
-    if (series == 'gaeyu') return true;
+    if (series == 'gaeyu' || series == 'gaeyu_high') return true;
     final compact =
         book.bookName.trim().replaceAll(RegExp(r'[\s+]'), '').toLowerCase();
     return compact.contains('개념유형') ||

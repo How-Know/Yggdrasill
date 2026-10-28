@@ -73,6 +73,29 @@ Deno.test('Responses 요청 본문: store:false, strict 도구, 지난 답변 ph
   assertEquals(body.safety_identifier, 's');
 });
 
+Deno.test('도구 결과에 이미지가 있으면 결과 글과 이미지를 함께 모델 입력에 넣는다', () => {
+  const body = buildResponsesBody(
+    {
+      model: 'gpt-6-sol',
+      input: [
+        { kind: 'tool_result', callId: 'c1', output: '{"page":12}', images: [{ url: 'data:image/png;base64,AAAA', detail: 'high' }] },
+        { kind: 'tool_result', callId: 'c2', output: '{}', images: [] },
+      ],
+    },
+    false,
+  );
+  const input = body.input as Record<string, unknown>[];
+  assertEquals(input[0], {
+    type: 'function_call_output',
+    call_id: 'c1',
+    output: [
+      { type: 'input_text', text: '{"page":12}' },
+      { type: 'input_image', image_url: 'data:image/png;base64,AAAA', detail: 'high' },
+    ],
+  });
+  assertEquals(input[1], { type: 'function_call_output', call_id: 'c2', output: '{}' });
+});
+
 function sseBody(events: Record<string, unknown>[], chunkSize = 7): ReadableStream<Uint8Array> {
   const text = events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join('');
   const bytes = new TextEncoder().encode(text);

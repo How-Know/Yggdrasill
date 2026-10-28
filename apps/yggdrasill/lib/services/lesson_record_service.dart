@@ -150,6 +150,10 @@ class LessonRecordSummary {
     this.correctionSuccessCount,
     this.passedProblemCount,
     this.avgTriesToPass,
+    this.maxCorrectionTries,
+    this.homeworkProblemTotal,
+    this.homeworkProblemSolved,
+    this.correctionPoolMetrics = false,
   });
 
   final String attendanceId;
@@ -167,6 +171,18 @@ class LessonRecordSummary {
 
   /// [passedProblemCount] 문항의 회차 첫 채점부터 정답까지 채점 수 평균. 완료 문항이 없으면 null.
   final double? avgTriesToPass;
+
+  /// 오늘 고친 문항의 회차 첫 채점부터 정답까지 채점 수 중 최댓값.
+  final int? maxCorrectionTries;
+
+  /// 서버가 수정 문항을 "오늘 손댄 오답" 기준으로 돌려줬다. 예전 알림장은 false.
+  final bool correctionPoolMetrics;
+
+  /// 오늘 첫 검사한 숙제 배정에 고정된 문항 수. 문항 기록이 있는 배정이 없으면 null.
+  final int? homeworkProblemTotal;
+
+  /// [homeworkProblemTotal] 중 숙제로 맞음·틀림 채점이 된 문항 수.
+  final int? homeworkProblemSolved;
   final int homeworkTotal;
   final int homeworkCompleted;
   final int assignmentTotal;
@@ -188,6 +204,9 @@ class LessonRecordSummary {
         'correction_success_count': correctionSuccessCount,
         'passed_problem_count': passedProblemCount,
         'avg_tries_to_pass': avgTriesToPass,
+        if (correctionPoolMetrics) 'max_correction_tries': maxCorrectionTries,
+        'homework_problem_total': homeworkProblemTotal,
+        'homework_problem_solved': homeworkProblemSolved,
         'homework_total': homeworkTotal,
         'homework_completed': homeworkCompleted,
         'assignment_total': assignmentTotal,
@@ -209,6 +228,10 @@ class LessonRecordSummary {
       correctionSuccessCount: _asInt(json['correction_success_count']),
       passedProblemCount: _asInt(json['passed_problem_count']),
       avgTriesToPass: _asDouble(json['avg_tries_to_pass']),
+      maxCorrectionTries: _asInt(json['max_correction_tries']),
+      correctionPoolMetrics: json.containsKey('max_correction_tries'),
+      homeworkProblemTotal: _asInt(json['homework_problem_total']),
+      homeworkProblemSolved: _asInt(json['homework_problem_solved']),
       homeworkTotal: _asInt(json['homework_total']) ?? 0,
       homeworkCompleted: _asInt(json['homework_completed']) ?? 0,
       assignmentTotal: _asInt(json['assignment_total']) ?? 0,

@@ -15,6 +15,7 @@ import '../models/attendance_record.dart';
 import '../models/student_time_block.dart';
 import '../services/data_manager.dart';
 import '../services/homework_assignment_store.dart';
+import '../services/homework_open_problem_service.dart';
 import '../services/homework_store.dart';
 import '../services/homework_time_defaults_service.dart';
 import '../services/lesson_record_service.dart';
@@ -974,13 +975,22 @@ String _formatDurationKorean(int ms) {
   return '${d.inMinutes}분';
 }
 
-int _groupEstimatedMinutes(Iterable<HomeworkItem> items) {
+/// [openProblems]에 있는 과제는 추천 시간을 남은 문항 비율만큼 줄인다.
+int _groupEstimatedMinutes(
+  Iterable<HomeworkItem> items, {
+  Map<String, HomeworkOpenProblemCount> openProblems =
+      const <String, HomeworkOpenProblemCount>{},
+}) {
   var raw = 0;
   var counted = 0;
   for (final item in items) {
     final confirmed = item.recommendedMinutes ?? 0;
-    final minutes =
+    final full =
         confirmed > 0 ? confirmed : (item.recommendedMinutesAuto ?? 0);
+    final open = openProblems[item.id];
+    final minutes = open == null
+        ? full
+        : (full * math.min(open.open, open.total) / open.total).ceil();
     if (minutes <= 0) continue;
     raw += minutes;
     counted += 1;
@@ -2011,6 +2021,10 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
     addPrintableHomeworkId(entry.key);
   }
 
+  // 문항 스냅샷이 있는 과제는 정답 기록이 없는 문항만 숙제 분량으로 본다.
+  final openProblems =
+      await HomeworkOpenProblemService.instance.fetch(printableHomeworkIds);
+
   // 숙제 리스트는 하위과제(아이템)가 아니라 그룹 과제 단위로 표시한다.
   final todoEntries = <_TodoListEntry>[];
   final todoGroupOrder = <String>[];
@@ -2048,10 +2062,11 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
     final memos = <String>[];
     DateTime? earliestAssigned;
     for (final hw in children) {
-      totalCount += homeworkItemProblemCount(
-        count: hw.count,
-        unitMappings: hw.unitMappings,
-      );
+      totalCount += openProblems[hw.id]?.open ??
+          homeworkItemProblemCount(
+            count: hw.count,
+            unitMappings: hw.unitMappings,
+          );
       final memo = (hw.memo ?? '').trim();
       if (memo.isNotEmpty && !memos.contains(memo)) memos.add(memo);
       final assignedAt = latestAssignmentByItem[hw.id]?.assignedAt;
@@ -2075,7 +2090,8 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
     ].join(' · ');
     final memoText = memos.join(', ');
     final estimateLabel =
-        _formatEstimatedDurationLabel(_groupEstimatedMinutes(children));
+        _formatEstimatedDurationLabel(
+            _groupEstimatedMinutes(children, openProblems: openProblems));
     todoEntries.add(
       _TodoListEntry(
         primary: '□ $bookText',

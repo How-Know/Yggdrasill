@@ -7,6 +7,7 @@ import '../../../services/concept_library_service.dart';
 import '../../../services/concept_service.dart';
 import '../../../services/concept_statement_service.dart';
 import '../../../services/concept_statement_store.dart';
+import '../../../services/course_map_controller.dart';
 import '../../../widgets/latex_text_renderer.dart';
 import '../../think/think_style.dart';
 import 'concept_base_draft.dart';
@@ -464,8 +465,19 @@ class _Appearances extends StatelessWidget {
           for (final a in list)
             Row(
               children: [
-                const Icon(Icons.school_outlined, size: 14, color: kThinkHint),
+                Icon(a.isPlacement ? Icons.timeline : Icons.school_outlined, size: 14, color: kThinkHint),
                 const SizedBox(width: 6),
+                if (a.isPlacement) ...[
+                  const Tooltip(
+                    message: '기준 과정 탐색도의 단원에 놓인 자리입니다. 단원 이름이 바뀌면 이 글도 따라 바뀝니다.',
+                    child: ThinkBadge('기준 단원', color: kThinkAccent),
+                  ),
+                  const SizedBox(width: 4),
+                  if (a.byThink) ...[
+                    const ThinkBadge('Think 배치', color: kThinkLink),
+                    const SizedBox(width: 4),
+                  ],
+                ],
                 Expanded(
                   child: Tooltip(
                     message: a.note ?? a.label,
@@ -489,12 +501,14 @@ class _Appearances extends StatelessWidget {
     final ok = await confirmThink(
       context,
       title: '등장 위치 빼기',
-      message: '"${a.label}"을(를) 뺍니다. 개념과 서술, 다른 등장 위치는 그대로 남습니다.',
+      message: '"${a.label}"을(를) 뺍니다. 개념과 서술, 다른 등장 위치는 그대로 남습니다.'
+          '${a.isPlacement ? '\n기준 과정 탐색도의 그 단원에서도 빠집니다.' : ''}',
       confirmLabel: '빼기',
       destructive: true,
     );
     if (!ok) return;
     final err = await store.removeAppearance(a);
+    if (err == null && a.isPlacement) unawaited(CourseMapController.instance.reloadPlacements());
     if (err != null && context.mounted) showThinkSnack(context, err, error: true);
   }
 }

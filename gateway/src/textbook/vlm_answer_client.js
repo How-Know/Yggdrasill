@@ -13,7 +13,9 @@ import {
   buildExpectedIndex,
   canonicalCorner,
   expandBadgeRange,
+  footerEchoPages,
   resolveExpectedBox,
+  stripFooterEchoBadge,
 } from './vlm_corner_guard.js';
 import {
   normalizeProblemNumberKey,
@@ -26,6 +28,7 @@ const ANSWER_TRANSIENT_STATUSES = new Set([429, 499, 500, 502, 503, 504]);
 // 고쟁이 고등은 블록이 갈리지 않지만 한 지면에 4열 격자로 150문항 넘게 실린다.
 const ANSWER_DENSE_SERIES = new Set([
   'gaeyu',
+  'gaeyu_high',
   'suryeok',
   'gojaengi',
   'gojaengi_high',
@@ -319,10 +322,16 @@ export function normalizeAnswerResult(parsedJson, opts = {}) {
     opts?.expectedEntries,
     normalizeProblemNumberKey,
   );
+  // 개념+유형 고등은 해설 PDF 에서 정답을 읽어 머리 없는 이어지는 지면이 많다.
+  const footerPages =
+    String(opts?.series || '').trim() === 'gaeyu_high'
+      ? footerEchoPages(opts)
+      : new Set();
   const rawItems = Array.isArray(parsedJson.items) ? parsedJson.items : [];
   const seen = new Set();
-  for (const raw of rawItems) {
-    if (!raw || typeof raw !== 'object') continue;
+  for (const rawItem of rawItems) {
+    if (!rawItem || typeof rawItem !== 'object') continue;
+    const raw = stripFooterEchoBadge(rawItem, footerPages);
     let problemNumber = String(raw.problem_number ?? '').trim();
     if (!problemNumber) continue;
     const resolved = resolveExpectedBox(
@@ -381,6 +390,9 @@ export function normalizeAnswerResult(parsedJson, opts = {}) {
       base.problem_number = resolved.matched.number;
     }
     pushUniqueAnswerItem(out.items, seen, base, badgeCorner);
+    // 기대 문항 하나로 특정된 번호는 범위 배지가 아니다. "01-3" 같은 하이픈
+    // 번호를 1~3 범위로 펼치면 같은 지면 다른 코너의 1·2·3 에 번진다.
+    if (resolved.matched) continue;
     for (const expanded of expandAnswerRange(
       problemNumber,
       expectedNumbers,

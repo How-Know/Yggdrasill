@@ -244,6 +244,8 @@ class ConceptAppearance {
     this.unitPath = const [],
     this.note,
     this.createdAt,
+    this.courseUnitId,
+    this.origin = 'owner',
   });
 
   final String id;
@@ -257,6 +259,13 @@ class ConceptAppearance {
   final List<String> unitPath;
   final String? note;
   final DateTime? createdAt;
+
+  /// 기준 과정 탐색도 단원에 놓인 줄이면 그 단원. 이때 판·과정·단원 글은 탐색도에서 채워진다.
+  final String? courseUnitId;
+  final String origin;
+
+  bool get isPlacement => courseUnitId != null;
+  bool get byThink => origin == 'ai';
 
   String get curriculumLabel =>
       curriculumCode == null ? '교육과정 판 미기록' : (kConceptCurriculumLabels[curriculumCode] ?? curriculumCode!);
@@ -276,6 +285,8 @@ class ConceptAppearance {
         unitPath: (r['unit_path'] is List ? r['unit_path'] as List : const []).map((e) => e.toString()).toList(),
         note: r['note'] as String?,
         createdAt: DateTime.tryParse(r['created_at']?.toString() ?? '')?.toLocal(),
+        courseUnitId: r['course_unit_id'] as String?,
+        origin: r['origin'] as String? ?? 'owner',
       );
 }
 
@@ -572,12 +583,20 @@ class SupabaseConceptStatementBackend implements ConceptStatementBackend {
 
   @override
   Future<List<ConceptAppearance>> appearancesFor(String conceptId) => _guard(() async {
-        final rows = await _db
+        Future<List> read(String columns) => _db
             .from('concept_appearances')
-            .select(_appearanceColumns)
+            .select(columns)
             .eq('concept_id', conceptId)
             .order('created_at', ascending: true);
-        return (rows as List).map((r) => ConceptAppearance.fromRow(Map<String, dynamic>.from(r as Map))).toList();
+        List rows;
+        try {
+          rows = await read('$_appearanceColumns,course_unit_id,origin');
+        } on PostgrestException catch (e) {
+          // 기준 단원 열 마이그레이션 전.
+          if (e.code != '42703') rethrow;
+          rows = await read(_appearanceColumns);
+        }
+        return rows.map((r) => ConceptAppearance.fromRow(Map<String, dynamic>.from(r as Map))).toList();
       });
 
   @override

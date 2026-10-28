@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import '../../services/think/think_clipboard_files.dart';
 import '../../services/think/think_code_controller.dart';
 import '../../services/think/think_action_models.dart';
+import '../../services/think/think_api.dart';
 import '../../services/think/think_code_models.dart';
 import '../../services/think/think_controller.dart';
 import '../../services/think/think_models.dart';
@@ -880,6 +881,10 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
           const SizedBox(height: 16),
           const Divider(color: kThinkBorder, height: 1),
           const SizedBox(height: 16),
+          _restoredContextSection(),
+          const SizedBox(height: 16),
+          const Divider(color: kThinkBorder, height: 1),
+          const SizedBox(height: 16),
           _splitSection(),
           const SizedBox(height: 16),
           const Divider(color: kThinkBorder, height: 1),
@@ -926,6 +931,82 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
         ],
       ),
     );
+  }
+
+  Widget _restoredContextSection() {
+    final detail = _c.selectedDetail;
+    final sourceId = detail?.contextFromConversationId;
+    ThinkConversation? source;
+    for (final c in _c.conversations) {
+      if (c.id == sourceId) source = c;
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text('다른 대화의 작업', style: TextStyle(color: kThinkText, fontSize: 14, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 8),
+        Text(
+          sourceId == null
+              ? '이전 자료를 자동으로 넣지 않습니다. 고른 대화의 승인 요약과 작업 상태만 다음 답변의 참고로 읽습니다.'
+              : '다음 답변은 "${source?.title ?? '고른 대화'}"의 승인 요약과 작업 상태를 참고로 읽습니다. 이 대화의 진행 요약으로 복사하지 않습니다. 대기 카드는 확정 지침이 아닙니다.',
+          style: const TextStyle(color: kThinkHint, fontSize: 12, height: 1.5),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            OutlinedButton.icon(
+              onPressed: _c.selectedId == null ? null : _pickRestoredContext,
+              style: thinkOutlineButton(),
+              icon: const Icon(Icons.history, size: 16),
+              label: const Text('대화 골라 보기'),
+            ),
+            if (sourceId != null)
+              TextButton(
+                onPressed: _clearRestoredContext,
+                child: const Text('빼기', style: TextStyle(color: kThinkSub)),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Future<void> _pickRestoredContext() async {
+    final current = _c.selectedId;
+    if (current == null) return;
+    final parent = _c.selectedDetail?.splitFromConversationId;
+    final choices = [
+      for (final c in _c.conversations)
+        if (c.id != current) c,
+    ]..sort((a, b) {
+        if (a.id == parent) return -1;
+        if (b.id == parent) return 1;
+        return (b.lastMessageAt ?? DateTime.fromMillisecondsSinceEpoch(0))
+            .compareTo(a.lastMessageAt ?? DateTime.fromMillisecondsSinceEpoch(0));
+      });
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => _RestoreContextDialog(
+        choices: choices,
+        parentId: parent,
+        onLookup: _c.lookupContext,
+        onUse: (id) => _c.setContextSource(current, id),
+      ),
+    );
+  }
+
+  Future<void> _clearRestoredContext() async {
+    final id = _c.selectedId;
+    if (id == null) return;
+    try {
+      await _c.setContextSource(id, null);
+      if (mounted) showThinkSnack(context, '다음 답변에는 다른 대화의 작업을 넣지 않습니다.');
+    } catch (e) {
+      if (mounted) showThinkSnack(context, e is ThinkApiException ? e.message : '빼지 못했습니다.', error: true);
+    }
   }
 
   Widget _splitSection() {
@@ -1143,6 +1224,141 @@ class _ThinkChatTabState extends State<ThinkChatTab> {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _RestoreContextDialog extends StatefulWidget {
+  const _RestoreContextDialog({
+    required this.choices,
+    required this.parentId,
+    required this.onLookup,
+    required this.onUse,
+  });
+
+  final List<ThinkConversation> choices;
+  final String? parentId;
+  final Future<ThinkContextLookup> Function(String id) onLookup;
+  final Future<void> Function(String id) onUse;
+
+  @override
+  State<_RestoreContextDialog> createState() => _RestoreContextDialogState();
+}
+
+class _RestoreContextDialogState extends State<_RestoreContextDialog> {
+  String? _picked;
+  ThinkContextLookup? _lookup;
+  bool _busy = false;
+  String? _error;
+
+  Future<void> _read(String id) async {
+    setState(() {
+      _picked = id;
+      _busy = true;
+      _error = null;
+      _lookup = null;
+    });
+    final found = await widget.onLookup(id);
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _lookup = found;
+    });
+  }
+
+  Future<void> _use() async {
+    final id = _picked;
+    final found = _lookup;
+    if (id == null || found == null || !found.ok) return;
+    setState(() => _busy = true);
+    try {
+      await widget.onUse(id);
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = e is ThinkApiException ? e.message : '다음 답변의 참고로 두지 못했습니다.';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final found = _lookup;
+    return AlertDialog(
+      backgroundColor: kThinkBg,
+      shape: thinkDialogShape,
+      title: const Text('다른 대화의 작업', style: TextStyle(color: kThinkText, fontWeight: FontWeight.w800, fontSize: 18)),
+      content: SizedBox(
+        width: 460,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              '고른 대화만 읽습니다. 승인 대기 카드는 확정 지침이 아니고, 이 대화의 진행 요약으로 복사하지 않습니다.',
+              style: TextStyle(color: kThinkHint, fontSize: 12, height: 1.5),
+            ),
+            const SizedBox(height: 12),
+            if (widget.choices.isEmpty)
+              const Text('고를 대화가 없습니다.', style: TextStyle(color: kThinkHint, fontSize: 13))
+            else
+              SizedBox(
+                height: 220,
+                child: ListView(
+                  children: [
+                    for (final c in widget.choices)
+                      ListTile(
+                        dense: true,
+                        selected: _picked == c.id,
+                        title: Text(
+                          c.title.isEmpty ? '제목 없음' : c.title,
+                          style: const TextStyle(color: kThinkText, fontSize: 13),
+                        ),
+                        subtitle: c.id == widget.parentId
+                            ? const Text('나눠 온 대화', style: TextStyle(color: kThinkLink, fontSize: 11))
+                            : null,
+                        onTap: _busy ? null : () => _read(c.id),
+                      ),
+                  ],
+                ),
+              ),
+            if (_busy) ...[
+              const SizedBox(height: 12),
+              const LinearProgressIndicator(color: kThinkAccent),
+            ],
+            if (found != null) ...[
+              const SizedBox(height: 12),
+              Text(found.message, style: const TextStyle(color: kThinkText, fontSize: 13, height: 1.5)),
+              if (found.summary != null) ...[
+                const SizedBox(height: 6),
+                Text('목적: ${found.summary!.purpose}', style: const TextStyle(color: kThinkSub, fontSize: 12, height: 1.45)),
+              ],
+              if (found.ok)
+                Text(
+                  '작업 ${found.actionCount}건 · 승인 대기 ${found.pendingCount}건 · 코드 요청 ${found.codeCount}건',
+                  style: const TextStyle(color: kThinkSub, fontSize: 12),
+                ),
+            ],
+            if (_error != null) ...[
+              const SizedBox(height: 8),
+              Text(_error!, style: const TextStyle(color: kThinkError, fontSize: 12, height: 1.45)),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('닫기', style: TextStyle(color: kThinkSub)),
+        ),
+        ElevatedButton(
+          onPressed: _busy || found == null || !found.ok ? null : _use,
+          style: thinkPrimaryButton(),
+          child: const Text('다음 답변에 참고로 두기'),
+        ),
+      ],
     );
   }
 }

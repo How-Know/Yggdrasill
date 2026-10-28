@@ -13,7 +13,14 @@ export type AiInputItem =
   | { kind: 'context'; text: string }
   // 같은 턴 안에서 공급자에게 그대로 되돌려 줘야 하는 출력 항목(추론, 도구 호출 등)
   | { kind: 'provider_items'; provider: string; items: unknown[] }
-  | { kind: 'tool_result'; callId: string; output: string };
+  // images: 도구가 읽은 이미지. 결과 글과 함께 모델 입력에 들어간다.
+  | { kind: 'tool_result'; callId: string; output: string; images?: AiToolImage[] };
+
+export interface AiToolImage {
+  /** data URL(base64) 또는 공급자가 받을 수 있는 주소 */
+  url: string;
+  detail?: 'low' | 'high' | 'auto';
+}
 
 export interface AiFunctionTool {
   name: string;

@@ -1,8 +1,6 @@
-import 'dart:ui';
-
 import 'package:flutter/material.dart';
 
-import '../../../app_overlays.dart';
+import '../../../widgets/corner_action_bar.dart';
 import '../../../widgets/shared_dropdown_dialog.dart';
 import '../../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 
@@ -15,9 +13,10 @@ const double _kFabIconOnlyPillWidth =
 const double _kCollapsedSearchTrailingGap = 12;
 const double _kMenuSearchGap = 12;
 
-/// 시간 메뉴 하단 액션 FAB — 화면 오른쪽 ([FabTabBarTokens.fabBarRightInset]).
+const int _kTimetableMenuIndex = 2;
+
+/// 시간 메뉴 하단 액션 FAB. 유리 막대는 [SharedCornerActionBarHost].
 class TimetableActionFabOverlay {
-  OverlayEntry? _entry;
   VoidCallback? _onAdd;
   VoidCallback? _onSearchToggle;
   VoidCallback? _onSearchCancel;
@@ -29,19 +28,7 @@ class TimetableActionFabOverlay {
   ValueChanged<String>? _onSearchChanged;
   VoidCallback? _onSearchClear;
   FocusNode? _searchFocusNode;
-  bool _syncScheduled = false;
   bool _disposed = false;
-  bool _sideSheetWidthListening = false;
-
-  void _onLeftSideSheetWidthChanged() {
-    _entry?.markNeedsBuild();
-  }
-
-  void _ensureSideSheetWidthListener() {
-    if (_sideSheetWidthListening) return;
-    leftSideSheetClipWidthNotifier.addListener(_onLeftSideSheetWidthChanged);
-    _sideSheetWidthListening = true;
-  }
 
   void sync(
     BuildContext context, {
@@ -58,7 +45,6 @@ class TimetableActionFabOverlay {
     FocusNode? searchFocusNode,
   }) {
     if (_disposed) return;
-    _ensureSideSheetWidthListener();
     _onAdd = onAdd;
     _onSearchToggle = onSearchToggle;
     _onSearchCancel = onSearchCancel;
@@ -71,61 +57,36 @@ class TimetableActionFabOverlay {
     _onSearchClear = onSearchClear;
     _searchFocusNode = searchFocusNode;
 
-    if (_syncScheduled) return;
-    _syncScheduled = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _syncScheduled = false;
-      if (_disposed || !context.mounted) return;
-      final overlay = Overlay.maybeOf(context, rootOverlay: true);
-      if (overlay == null) return;
-
-      if (_entry == null) {
-        _entry = OverlayEntry(builder: _buildOverlay);
-        overlay.insert(_entry!);
-      } else {
-        _entry!.markNeedsBuild();
-      }
-    });
+    sharedCornerActionBar.bind(
+      menuIndex: _kTimetableMenuIndex,
+      width: _TimetableActionFabBar.widthFor(searchExpanded: _searchExpanded),
+      visible: true,
+      builder: _buildContent,
+    );
   }
 
   void markNeedsBuild() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_disposed) _entry?.markNeedsBuild();
-    });
+    if (!_disposed) sharedCornerActionBar.refresh();
   }
 
   void dispose() {
     _disposed = true;
-    if (_sideSheetWidthListening) {
-      leftSideSheetClipWidthNotifier
-          .removeListener(_onLeftSideSheetWidthChanged);
-      _sideSheetWidthListening = false;
-    }
-    _entry?.remove();
-    _entry = null;
+    sharedCornerActionBar.unbindMenu(_kTimetableMenuIndex);
   }
 
-  Widget _buildOverlay(BuildContext _) {
-    return Positioned(
-      right: FabTabBarTokens.fabBarRightInset,
-      bottom: FabTabBarTokens.fabBarBottomInset,
-      child: Material(
-        type: MaterialType.transparency,
-        color: Colors.transparent,
-        child: _TimetableActionFabBar(
-          searchExpanded: _searchExpanded,
-          hasSearchQuery: _hasSearchQuery,
-          controller: _searchController!,
-          focusNode: _searchFocusNode,
-          onAdd: _onAdd ?? () {},
-          onSearchToggle: _onSearchToggle ?? () {},
-          onSearchCancel: _onSearchCancel ?? () {},
-          onRoadmap: _onRoadmap ?? () {},
-          onExport: _onExport ?? () {},
-          onChanged: _onSearchChanged!,
-          onClear: _onSearchClear!,
-        ),
-      ),
+  Widget _buildContent(BuildContext _) {
+    return _TimetableActionFabBar(
+      searchExpanded: _searchExpanded,
+      hasSearchQuery: _hasSearchQuery,
+      controller: _searchController!,
+      focusNode: _searchFocusNode,
+      onAdd: _onAdd ?? () {},
+      onSearchToggle: _onSearchToggle ?? () {},
+      onSearchCancel: _onSearchCancel ?? () {},
+      onRoadmap: _onRoadmap ?? () {},
+      onExport: _onExport ?? () {},
+      onChanged: _onSearchChanged!,
+      onClear: _onSearchClear!,
     );
   }
 }
@@ -153,9 +114,9 @@ class _TimetableActionFabBar extends StatelessWidget {
       _kCollapsedSearchTrailingGap;
   static const double _collapsedWidth = 230;
   static const double _searchExpandedLeftInset = 8;
-  static const double _barHeight = FabTabBarTokens.fabBarHeight;
-  static const double _barPadding = 6;
-  static const Duration _animDuration = Duration(milliseconds: 340);
+  static const double _barHeight = SharedCornerActionBarHost.barHeight;
+  static const double _barPadding = SharedCornerActionBarHost.barPadding;
+  static const Duration _animDuration = SharedCornerActionBarHost.animDuration;
 
   final bool searchExpanded;
   final bool hasSearchQuery;
@@ -169,109 +130,81 @@ class _TimetableActionFabBar extends StatelessWidget {
   final ValueChanged<String> onChanged;
   final VoidCallback onClear;
 
+  static double widthFor({required bool searchExpanded}) =>
+      searchExpanded ? _expandedWidth : _collapsedWidth;
+
   @override
   Widget build(BuildContext context) {
-    final brightness = Theme.of(context).brightness;
-    final palette = FabTabBarTokens.paletteFor(brightness);
-    final radius = BorderRadius.circular(_barHeight / 2);
-    final innerHeight = _barHeight - _barPadding * 2;
+    const innerHeight = _barHeight - _barPadding * 2;
 
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        borderRadius: radius,
-        boxShadow: palette.boxShadows,
-      ),
-      child: ClipRRect(
-        borderRadius: radius,
-        child: BackdropFilter(
-          filter: ImageFilter.blur(
-            sigmaX: FabTabBarTokens.fabRelatedBlurSigmaFor(brightness),
-            sigmaY: FabTabBarTokens.fabRelatedBlurSigmaFor(brightness),
-          ),
-          child: AnimatedContainer(
-            duration: _animDuration,
-            curve: Curves.easeInOutCubic,
-            width: searchExpanded ? _expandedWidth : _collapsedWidth,
-            height: _barHeight,
-            padding: const EdgeInsets.all(_barPadding),
-            decoration: BoxDecoration(
-              color: palette.surface,
-              borderRadius: radius,
-            ),
-            child: ClipRect(
-              child: Stack(
-                alignment: Alignment.centerLeft,
+    return Stack(
+      alignment: Alignment.centerLeft,
+      children: [
+        AnimatedOpacity(
+          opacity: searchExpanded ? 0 : 1,
+          duration: _animDuration,
+          curve: Curves.easeInOutCubic,
+          child: IgnorePointer(
+            ignoring: searchExpanded,
+            child: SizedBox(
+              height: innerHeight,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  AnimatedOpacity(
-                    opacity: searchExpanded ? 0 : 1,
-                    duration: _animDuration,
-                    curve: Curves.easeInOutCubic,
-                    child: IgnorePointer(
-                      ignoring: searchExpanded,
-                      child: SizedBox(
-                        height: innerHeight,
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            FabStyleActionTabPill(
-                              icon: Icons.add_rounded,
-                              label: '추가',
-                              onTap: onAdd,
-                              barHeight: _barHeight,
-                              barPadding: _barPadding,
-                            ),
-                            _TimetableMoreMenuButton(
-                              onRoadmap: onRoadmap,
-                              onExport: onExport,
-                              barHeight: _barHeight,
-                              barPadding: _barPadding,
-                            ),
-                            const SizedBox(width: _kMenuSearchGap),
-                            FabStyleActionTabPill(
-                              icon: Icons.search_rounded,
-                              label: '검색',
-                              iconOnly: true,
-                              iconSize: _kFabIconSize,
-                              selected: hasSearchQuery,
-                              onTap: onSearchToggle,
-                              barHeight: _barHeight,
-                              barPadding: _barPadding,
-                            ),
-                            const SizedBox(width: _collapsedSearchTrailingGap),
-                          ],
-                        ),
-                      ),
-                    ),
+                  FabStyleActionTabPill(
+                    icon: Icons.add_rounded,
+                    label: '추가',
+                    onTap: onAdd,
+                    barHeight: _barHeight,
+                    barPadding: _barPadding,
                   ),
-                  AnimatedOpacity(
-                    opacity: searchExpanded ? 1 : 0,
-                    duration: _animDuration,
-                    curve: Curves.easeInOutCubic,
-                    child: IgnorePointer(
-                      ignoring: !searchExpanded,
-                      child: SizedBox(
-                        width: _expandedWidth - _barPadding * 2,
-                        height: innerHeight,
-                        child: _InlineSearchRow(
-                          controller: controller,
-                          focusNode: focusNode,
-                          hasText: hasSearchQuery,
-                          onChanged: onChanged,
-                          onClear: onClear,
-                          onCancel: onSearchCancel,
-                          barHeight: _barHeight,
-                          barPadding: _barPadding,
-                          leftInset: _searchExpandedLeftInset,
-                        ),
-                      ),
-                    ),
+                  _TimetableMoreMenuButton(
+                    onRoadmap: onRoadmap,
+                    onExport: onExport,
+                    barHeight: _barHeight,
+                    barPadding: _barPadding,
                   ),
+                  const SizedBox(width: _kMenuSearchGap),
+                  FabStyleActionTabPill(
+                    icon: Icons.search_rounded,
+                    label: '검색',
+                    iconOnly: true,
+                    iconSize: _kFabIconSize,
+                    selected: hasSearchQuery,
+                    onTap: onSearchToggle,
+                    barHeight: _barHeight,
+                    barPadding: _barPadding,
+                  ),
+                  const SizedBox(width: _collapsedSearchTrailingGap),
                 ],
               ),
             ),
           ),
         ),
-      ),
+        AnimatedOpacity(
+          opacity: searchExpanded ? 1 : 0,
+          duration: _animDuration,
+          curve: Curves.easeInOutCubic,
+          child: IgnorePointer(
+            ignoring: !searchExpanded,
+            child: SizedBox(
+              width: _expandedWidth - _barPadding * 2,
+              height: innerHeight,
+              child: _InlineSearchRow(
+                controller: controller,
+                focusNode: focusNode,
+                hasText: hasSearchQuery,
+                onChanged: onChanged,
+                onClear: onClear,
+                onCancel: onSearchCancel,
+                barHeight: _barHeight,
+                barPadding: _barPadding,
+                leftInset: _searchExpandedLeftInset,
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

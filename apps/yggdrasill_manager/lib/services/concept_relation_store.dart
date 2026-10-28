@@ -13,6 +13,7 @@ class ConceptRelationStore extends ChangeNotifier {
   int _epoch = 0;
 
   final Map<String, List<ConceptRelation>> _relations = {};
+  final Map<String, ConceptRelationSheet> _sheets = {};
   final Map<String, List<ConceptReview>> _reviews = {};
   final Map<String, ConceptPick> _picks = {};
   final Map<String, String> _errors = {};
@@ -30,6 +31,7 @@ class ConceptRelationStore extends ChangeNotifier {
   void reset() {
     _epoch += 1;
     _relations.clear();
+    _sheets.clear();
     _reviews.clear();
     _picks.clear();
     _errors.clear();
@@ -44,6 +46,9 @@ class ConceptRelationStore extends ChangeNotifier {
   String? errorOf(String conceptId) => _errors[conceptId];
 
   List<ConceptRelation> relationsOf(String conceptId) => _relations[conceptId] ?? const [];
+
+  /// 최근 관계 이력과 승인 대기 중인 관계 추가 수. 읽지 않았으면 null.
+  ConceptRelationSheet? sheetOf(String conceptId) => _sheets[conceptId];
   List<ConceptReview> reviewsOf(String conceptId) => _reviews[conceptId] ?? const [];
   List<ConceptReview> openReviewsOf(String conceptId) => [
         for (final r in reviewsOf(conceptId))
@@ -81,7 +86,8 @@ class ConceptRelationStore extends ChangeNotifier {
     try {
       final results = await Future.wait([backend.relationsFor(conceptId), backend.reviewsFor(conceptId)]);
       if (epoch != _epoch) return;
-      final relations = results[0] as List<ConceptRelation>;
+      final sheet = results[0] as ConceptRelationSheet;
+      final relations = sheet.relations;
       final reviews = results[1] as List<ConceptReview>;
       final ids = <String>{
         for (final r in relations) ...[r.conceptId, r.relatedId],
@@ -93,6 +99,7 @@ class ConceptRelationStore extends ChangeNotifier {
         _picks.addAll(picks);
       }
       _relations[conceptId] = relations;
+      _sheets[conceptId] = sheet;
       _reviews[conceptId] = reviews;
       _errors.remove(conceptId);
       notReady = false;
@@ -113,6 +120,7 @@ class ConceptRelationStore extends ChangeNotifier {
 
   void conceptRemoved(String conceptId) {
     _relations.remove(conceptId);
+    _sheets.remove(conceptId);
     _reviews.remove(conceptId);
     _errors.remove(conceptId);
     if (_open.contains(conceptId)) {
@@ -122,8 +130,16 @@ class ConceptRelationStore extends ChangeNotifier {
     for (final id in _relations.keys.toList()) {
       if (_relations[id]!.any((r) => r.conceptId == conceptId || r.relatedId == conceptId)) {
         _relations.remove(id);
+        _sheets.remove(id);
         _reviews.remove(id);
       }
+    }
+  }
+
+  /// 다른 곳(Think 카드 등)에서 관계가 바뀐 개념. 읽어 둔 것만 다시 읽는다.
+  Future<void> refresh(Iterable<String> conceptIds) async {
+    for (final id in conceptIds.toSet()) {
+      if (_relations.containsKey(id) || _errors.containsKey(id)) await load(id);
     }
   }
 
@@ -158,8 +174,32 @@ class ConceptRelationStore extends ChangeNotifier {
       _run([conceptId, relatedId],
           () => backend.setRelation(conceptId: conceptId, relatedId: relatedId, kind: kind, note: note));
 
+  /// [editing]이 있으면 그 관계를 읽은 판([ConceptRelation.rev]) 기준으로 고친다. 없으면 새로 넣는다.
+  Future<String?> saveRelation({
+    ConceptRelation? editing,
+    required String conceptId,
+    required String relatedId,
+    required ConceptRelationKind kind,
+    String? context,
+    String? basis,
+    String? note,
+  }) =>
+      _run(
+          [conceptId, relatedId, if (editing != null) ...[editing.conceptId, editing.relatedId]],
+          () => backend.saveRelation(
+                id: editing?.id,
+                rev: editing?.rev,
+                conceptId: conceptId,
+                relatedId: relatedId,
+                kind: kind,
+                context: context,
+                basis: basis,
+                note: note,
+              ));
+
+  /// 관계만 뺀다. 두 개념은 그대로 둔다.
   Future<String?> removeRelation(ConceptRelation r) =>
-      _run([r.conceptId, r.relatedId], () => backend.removeRelation(r.id));
+      _run([r.conceptId, r.relatedId], () => backend.removeRelation(r.id, rev: r.rev));
 
   Future<String?> openReview({required String conceptId, String? otherId, String? note}) => _run(
       [conceptId, if (otherId != null) otherId],

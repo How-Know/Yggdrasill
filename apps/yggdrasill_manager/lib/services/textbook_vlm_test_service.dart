@@ -852,6 +852,11 @@ class TextbookVlmItem {
       // 수력충전 (개념 체크는 개념+유형과 이름을 공유한다)
       'type_problem',
       'unit_review',
+      // 개념+유형 고등
+      'high_concept_check',
+      'high_example',
+      'high_problem',
+      'high_exercise',
     };
     final categoryRaw = '${map['category'] ?? ''}'.trim();
     final itemRoleRaw = '${map['item_role'] ?? ''}'.trim();

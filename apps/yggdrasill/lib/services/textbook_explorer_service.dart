@@ -339,7 +339,10 @@ class TextbookExplorerService {
     final payloadMap =
         payload is Map ? _asMap(payload) : const <String, dynamic>{};
     final seriesKey = '${payloadMap['series'] ?? ''}'.trim().toLowerCase();
-    final isWonri = seriesKey == 'wonri' || seriesKey == 'wonri_middle';
+    // 개념+유형 고등도 난이도 대신 문항이름(개념 Check/필수예제/…)을 쓴다.
+    final isWonri = seriesKey == 'wonri' ||
+        seriesKey == 'wonri_middle' ||
+        seriesKey == 'gaeyu_high';
 
     final items = <TbExItem>[];
     var order = 0;

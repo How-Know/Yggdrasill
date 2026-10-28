@@ -18,7 +18,9 @@ import '../../services/tenant_service.dart';
 import '../../services/textbook_download_progress_service.dart';
 import '../../services/textbook_pdf_service.dart';
 import '../../utils/homework_page_text.dart';
+import '../../widgets/app_dialog_action_button.dart';
 import '../../widgets/app_snackbar.dart';
+import '../../widgets/bottom_dialog.dart';
 import '../../widgets/cover_overlay.dart';
 import '../../widgets/dialog_tokens.dart';
 import '../../widgets/home_grading_edit_icon.dart';
@@ -26,7 +28,6 @@ import '../../widgets/home_header_weather_icon.dart';
 import '../../widgets/navigation_rail.dart';
 import '../../widgets/resource_textbook_card.dart';
 import '../../widgets/solid_capsule_action_bar.dart';
-import '../../widgets/utility_glass_dialog_shell.dart';
 import '../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import 'grading_queue_order.dart';
 
@@ -347,8 +348,8 @@ class _GradingModePageState extends State<GradingModePage> {
                                         children: [
                                           SolidCapsuleActionButton(
                                             tooltip: homeworkEntries.isEmpty
-                                                ? '안 함으로 처리할 숙제가 없습니다'
-                                                : '보이는 숙제 안 함 처리',
+                                                ? '정리할 숙제가 없습니다'
+                                                : '숙제 정리',
                                             icon: Icons
                                                 .cleaning_services_outlined,
                                             onPressed:
@@ -391,11 +392,15 @@ class _GradingModePageState extends State<GradingModePage> {
 
   /// 왼쪽 시트 개폐로 부모 폭이 변해도 레일/책카드가 리플로우되지 않도록
   /// 화면 폭(네비 레일 제외) 기준으로 고정한다.
+  /// 248~280(화면의 20%)에 1.1을 곱한 값. 책 카드는 레일 안쪽을 채운다.
   double _resolveAnswerRailWidth(BuildContext context) {
+    const scale = 1.1;
+    const minWidth = 248.0 * scale;
+    const maxWidth = 280.0 * scale;
     final width =
         (MediaQuery.sizeOf(context).width - navRailMinWidth).clamp(0.0, 4000.0);
-    if (width < 820) return 248.0;
-    return (width * 0.2).clamp(248.0, 280.0).toDouble();
+    if (width < 820) return minWidth;
+    return (width * 0.2 * scale).clamp(minWidth, maxWidth).toDouble();
   }
 
   /// ??? ?????? ??? ???(???)????(???) ???? ??????????.
@@ -555,59 +560,34 @@ class _GradingModePageState extends State<GradingModePage> {
     if (entries.isEmpty || _clearingVisibleHomework || !mounted) return;
     final confirmed = await showDialog<bool>(
       context: context,
-      barrierColor: Colors.black54,
+      barrierLabel: '숙제 정리',
+      barrierColor: Colors.black.withValues(
+        alpha: BottomDialogMetrics.barrierOpacity,
+      ),
       builder: (dialogContext) {
-        return Dialog(
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          child: UtilityGlassDialogShell(
-            title: '보이는 숙제 안 함',
-            icon: Icons.cleaning_services_outlined,
-            preferredWidth: 460,
-            maxWidth: 460,
-            maxHeight: 280,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(18, 14, 18, 16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Expanded(
-                    child: Text(
-                      '지금 보이는 숙제 ${entries.length}개를 모두 숙제 안 함으로 처리합니다.\n'
-                      '0%로 기록되고 오늘 과제로 전환됩니다.',
-                      style: const TextStyle(
-                        color: kDlgTextSub,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        height: 1.35,
-                      ),
-                    ),
-                  ),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextButton(
-                          onPressed: () =>
-                              Navigator.of(dialogContext).pop(false),
-                          style: TextButton.styleFrom(
-                            foregroundColor: kDlgTextSub,
-                          ),
-                          child: const Text('취소'),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: FilledButton(
-                          onPressed: () =>
-                              Navigator.of(dialogContext).pop(true),
-                          child: const Text('안 함 처리'),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
+        return BottomDialog(
+          icon: Icons.cleaning_services_outlined,
+          title: '숙제 정리',
+          shrinkWrap: true,
+          onClose: () => Navigator.of(dialogContext).pop(false),
+          footer: Row(
+            children: [
+              AppDialogCloseButton(
+                label: '취소',
+                onPressed: () => Navigator.of(dialogContext).pop(false),
               ),
-            ),
+              const Spacer(),
+              AppDialogConfirmButton(
+                label: '정리',
+                showIcon: false,
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+              ),
+            ],
+          ),
+          child: BottomDialogPrompt(
+            large:
+                '지금 보이는 숙제 ${entries.length}개를 모두 숙제 안 함으로 처리합니다.',
+            medium: '0%로 기록되고 오늘 과제로 전환됩니다.',
           ),
         );
       },

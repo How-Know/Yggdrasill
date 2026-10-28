@@ -13,6 +13,9 @@ import '../services/data_manager.dart';
 import '../services/tenant_service.dart';
 import '../models/teacher.dart';
 import './teacher_registration_dialog.dart';
+import 'app_dialog_action_button.dart';
+import 'bottom_dialog.dart';
+import 'dialog_tokens.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
 SupabaseClient? _safeClient() {
@@ -192,6 +195,9 @@ class AccountButton extends StatelessWidget {
                 await showDialog(
                   context: context,
                   barrierDismissible: true,
+                  barrierColor: Colors.black.withValues(
+                    alpha: BottomDialogMetrics.barrierOpacity,
+                  ),
                   builder: (ctx) => const _AccountDialog(),
                 );
               }
@@ -546,7 +552,7 @@ class _AccountDialogState extends State<_AccountDialog> {
                     if (noPin) {
                       _ownerPinPrompted = true;
                       // PIN 설정 다이얼로그 강제
-                      final ok = await showDialog<bool>(context: context, builder: (c)=> _PinDialog(email: signedEmail, profileMap: _profileMap));
+                      final ok = await _showAccountDialog<bool>(context, (c)=> _PinDialog(email: signedEmail, profileMap: _profileMap));
                       if (ok != true) {
                         // 사용자가 취소한 경우에도 중복 노출 방지
                         _ownerPinPrompted = true;
@@ -632,12 +638,12 @@ class _AccountDialogState extends State<_AccountDialog> {
   Future<void> _openAvatarPicker() async {
     final email = _activeEmail ?? _safeClient()?.auth.currentUser?.email;
     if (email == null) return;
-    await showDialog(context: context, builder: (ctx) => _AvatarPickerDialog(email: email, initialMap: _profileMap));
+    await _showAccountDialog(context, (ctx) => _AvatarPickerDialog(email: email, initialMap: _profileMap));
     await _reload();
   }
 
   Future<void> _openSwitchProfile() async {
-    await showDialog(context: context, builder: (ctx) => _SwitchProfileDialog(profileMap: _profileMap));
+    await _showAccountDialog(context, (ctx) => _SwitchProfileDialog(profileMap: _profileMap));
     await _reload();
   }
 
@@ -661,6 +667,7 @@ class _AccountDialogState extends State<_AccountDialog> {
       // 1) 서버 URL 우선
       if ((teacher?.avatarUrl ?? '').toString().isNotEmpty) {
         return GestureDetector(
+          behavior: HitTestBehavior.opaque,
           onTap: _openAvatarPicker,
           child: CircleAvatar(radius: size/2, backgroundImage: NetworkImage(teacher!.avatarUrl!)),
         );
@@ -668,6 +675,7 @@ class _AccountDialogState extends State<_AccountDialog> {
       // 2) 로컬 경로(과거 데이터) 또는 http
       if (avatarPath.isNotEmpty && (avatarPath.startsWith('http') || File(avatarPath).existsSync())) {
         return GestureDetector(
+          behavior: HitTestBehavior.opaque,
           onTap: _openAvatarPicker,
           child: CircleAvatar(
             radius: size/2,
@@ -681,6 +689,7 @@ class _AccountDialogState extends State<_AccountDialog> {
           : null;
       if (googleUrl != null && googleUrl.isNotEmpty) {
         return GestureDetector(
+          behavior: HitTestBehavior.opaque,
           onTap: _openAvatarPicker,
           child: CircleAvatar(radius: size/2, backgroundImage: NetworkImage(googleUrl)),
         );
@@ -692,90 +701,169 @@ class _AccountDialogState extends State<_AccountDialog> {
           ? const Icon(Icons.person, color: Colors.white)
           : Center(child: Text(label, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800)));
       return GestureDetector(
+        behavior: HitTestBehavior.opaque,
         onTap: _openAvatarPicker,
         child: CircleAvatar(radius: size/2, backgroundColor: color, child: child),
       );
     }
 
-    return Dialog(
-      backgroundColor: const Color(0xFF18181A),
-      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: const BorderSide(color: Color(0xFF2A2A2A))),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 520),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(children:[
-                const Expanded(child: Text('계정', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800))),
-                IconButton(onPressed: ()=>Navigator.of(context).pop(), icon: const Icon(Icons.close, color: Colors.white70))
-              ]),
-              const SizedBox(height: 18),
-              Row(crossAxisAlignment: CrossAxisAlignment.center, children:[
-                avatarWidget(),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: InkWell(
-                    onTap: _openSwitchProfile,
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children:[
-                      Row(children:[
-                        Flexible(child: Text(displayName, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800), overflow: TextOverflow.ellipsis)),
-                        const SizedBox(width: 8),
-                        Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2), decoration: BoxDecoration(color: const Color(0xFF2A2A2A), borderRadius: BorderRadius.circular(999)), child: Text(isOwner? '관리자':'선생님', style: const TextStyle(color: Colors.white70, fontSize: 12)))
-                      ]),
-                      const SizedBox(height: 4),
-                      Text(email, style: const TextStyle(color: Colors.white70))
-                    ]),
-                  ),
-                )
-              ]),
-              const SizedBox(height: 18),
-              // 추가 정보: 학원명, 연락처, PIN 설정
-              Builder(builder: (ctx){
-                final t = _activeTeacher();
-                return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children:[
-                  if (t!=null) Padding(padding: const EdgeInsets.only(bottom:18), child: Text('학원명: ${DataManager.instance.academySettings.name}', style: const TextStyle(color: Colors.white, fontSize: 16))),
-                  if (t!=null && t.contact.isNotEmpty) Padding(padding: const EdgeInsets.only(bottom:18), child: Text('연락처: ${t.contact}', style: const TextStyle(color: Colors.white, fontSize: 16))),
-                  SizedBox(
-                    height: 44,
-                    child: OutlinedButton(
-                      onPressed: () async {
-                        await showDialog(context: context, builder: (ctx)=> _PinSetupDialog(email: email, initialMap: _profileMap));
-                        await _reload();
-                      },
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.white,
-                        side: const BorderSide(color: Color(0xFF2A2A2A)),
-                        backgroundColor: const Color(0xFF1F1F1F),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                        minimumSize: const Size.fromHeight(44),
-                      ),
-                      child: const Text('PIN 설정', style: TextStyle(fontWeight: FontWeight.w700)),
-                    ),
-                  ),
-                ]);
-              }),
-              const SizedBox(height: 8),
-              // 하단 전체폭 로그아웃 버튼
-              Row(children:[
-                Expanded(child: ElevatedButton(
-                  onPressed: () async {
-                    try { await client?.auth.signOut(); if (mounted) Navigator.of(context).pop(); } catch (e) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('로그아웃 실패: $e'))); }
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF1976D2),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    minimumSize: const Size.fromHeight(44),
-                  ),
-                  child: const Text('로그아웃', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
-                ))
-              ])
-            ],
+    final dlg = YggDialogColors.of(context);
+    return BottomDialog(
+      icon: Icons.account_circle_outlined,
+      title: '계정',
+      onClose: () => Navigator.of(context).pop(),
+      shrinkWrap: true,
+      preferredWidth: 520,
+      footer: Row(
+        children: [
+          BottomDialogCancelButton(
+            label: 'PIN 설정',
+            onPressed: () async {
+              await _showAccountDialog(
+                context,
+                (ctx) =>
+                    _PinSetupDialog(email: email, initialMap: _profileMap),
+              );
+              await _reload();
+            },
           ),
-        ),
+          const Spacer(),
+          AppDialogConfirmButton(
+            label: '로그아웃',
+            showIcon: false,
+            onPressed: () async {
+              try {
+                await client?.auth.signOut();
+                if (mounted) Navigator.of(context).pop();
+              } catch (e) {
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('로그아웃 실패: $e')),
+                );
+              }
+            },
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          BottomDialogCard(
+            onTap: _openSwitchProfile,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                avatarWidget(),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                displayName,
+                                style: TextStyle(
+                                  color: dlg.text,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: dlg.chipBg,
+                                borderRadius: BorderRadius.circular(999),
+                              ),
+                              child: Text(
+                                isOwner ? '관리자' : '선생님',
+                                style: TextStyle(
+                                  color: dlg.chipText,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          email,
+                          style: TextStyle(
+                            color: dlg.textSub,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                ),
+              ],
+            ),
+          ),
+          Builder(
+            builder: (ctx) {
+              final t = _activeTeacher();
+              if (t == null) return const SizedBox.shrink();
+              final contact = t.contact.trim();
+              return Padding(
+                padding: const EdgeInsets.only(top: 10),
+                child: BottomDialogCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        '학원명',
+                        style: TextStyle(
+                          color: dlg.textSub,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        DataManager.instance.academySettings.name,
+                        style: TextStyle(
+                          color: dlg.text,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      if (contact.isNotEmpty) ...[
+                        const SizedBox(height: 18),
+                        Text(
+                          '연락처',
+                          style: TextStyle(
+                            color: dlg.textSub,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          contact,
+                          style: TextStyle(
+                            color: dlg.text,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ],
       ),
     );
   }
@@ -944,7 +1032,7 @@ class _ProfilesTabState extends State<_ProfilesTab> {
                       await showDialog(context: context, builder: (ctx)=> _EditProfileDialog(existing: t, onSaved: (_){ _reload(); }));
                     }, child: const Text('편집')),
                     TextButton(onPressed: () async {
-                      await showDialog(context: context, builder: (ctx)=> _PinSetupDialog(email: t.email, initialMap: _profileMap));
+                      await _showAccountDialog(context, (ctx)=> _PinSetupDialog(email: t.email, initialMap: _profileMap));
                       await _reload();
                     }, child: const Text('PIN')),
                   ]),
@@ -991,6 +1079,108 @@ class _ProfileStore {
   static String sha256of(String s) => sha256.convert(utf8.encode(s)).toString();
 }
 
+Future<T?> _showAccountDialog<T>(
+  BuildContext context,
+  WidgetBuilder builder,
+) {
+  return showDialog<T>(
+    context: context,
+    barrierColor: Colors.black.withValues(
+      alpha: BottomDialogMetrics.barrierOpacity,
+    ),
+    builder: builder,
+  );
+}
+
+Future<bool?> _showAccountNotice(
+  BuildContext context, {
+  required String title,
+  required String message,
+  String confirmLabel = '확인',
+  bool showCancel = false,
+}) {
+  return _showAccountDialog<bool>(context, (dialogContext) {
+    final dlg = YggDialogColors.of(dialogContext);
+    return BottomDialog(
+      icon: Icons.info_outline_rounded,
+      title: title,
+      shrinkWrap: true,
+      preferredWidth: 480,
+      onClose: () => Navigator.pop(dialogContext, showCancel ? false : true),
+      footer: Row(
+        children: [
+          if (showCancel)
+            BottomDialogCancelButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+            ),
+          const Spacer(),
+          AppDialogConfirmButton(
+            label: confirmLabel,
+            showIcon: false,
+            onPressed: () => Navigator.pop(dialogContext, true),
+          ),
+        ],
+      ),
+      child: Text(
+        message,
+        style: TextStyle(
+          color: dlg.text,
+          fontSize: 16,
+          fontWeight: FontWeight.w600,
+          height: 1.45,
+        ),
+      ),
+    );
+  });
+}
+
+Widget _accountPinField({
+  required TextEditingController controller,
+  required String hint,
+}) {
+  return Builder(
+    builder: (context) {
+      final dlg = YggDialogColors.of(context);
+      final radius = BorderRadius.circular(18);
+      final border = OutlineInputBorder(
+        borderRadius: radius,
+        borderSide: BorderSide(color: dlg.cardBorder, width: 0.5),
+      );
+      return TextField(
+        controller: controller,
+        maxLength: 6,
+        keyboardType: TextInputType.number,
+        obscureText: true,
+        style: TextStyle(
+          color: dlg.text,
+          fontSize: 16,
+          fontWeight: FontWeight.w800,
+        ),
+        decoration: InputDecoration(
+          counterText: '',
+          hintText: hint,
+          hintStyle: TextStyle(
+            color: dlg.hint,
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+          ),
+          filled: true,
+          fillColor: dlg.fieldBg,
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 14,
+            vertical: 16,
+          ),
+          border: border,
+          enabledBorder: border,
+          focusedBorder: border.copyWith(
+            borderSide: BorderSide(color: dlg.chipSelected, width: 1),
+          ),
+        ),
+      );
+    },
+  );
+}
+
 class _PinDialog extends StatefulWidget {
   final String email; final Map profileMap;
   const _PinDialog({required this.email, required Map profileMap}) : profileMap = profileMap;
@@ -1007,16 +1197,22 @@ class _PinDialogState extends State<_PinDialog>{
     }catch(_){
       saved = (widget.profileMap[widget.email] as Map?)?['pinHash'] as String?;
     }
-    return AlertDialog(
-      backgroundColor: const Color(0xFF1F1F1F),
-      title: Text(saved==null? 'PIN 설정 필요':'PIN 입력', style: const TextStyle(color: Colors.white)),
-      content: Column(mainAxisSize: MainAxisSize.min, children:[
-        TextField(controller:c, maxLength:6, keyboardType: TextInputType.number, obscureText:true, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(counterText:'', hintText:'6자리', hintStyle: TextStyle(color: Colors.white54))),
-        if(err!=null) Padding(padding: const EdgeInsets.only(top:6), child: Text(err!, style: const TextStyle(color: Colors.redAccent)))
-      ]),
-      actions:[
-        TextButton(onPressed: ()=>Navigator.pop(context,null), style: TextButton.styleFrom(foregroundColor: Colors.white, backgroundColor: const Color(0xFF23232A)), child: const Text('취소')),
-        FilledButton(style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2), foregroundColor: Colors.white), onPressed: () async{
+    return BottomDialog(
+      icon: Icons.lock_outline_rounded,
+      title: saved == null ? 'PIN 설정' : 'PIN 입력',
+      shrinkWrap: true,
+      preferredWidth: 480,
+      onClose: () => Navigator.pop(context, null),
+      footer: Row(
+        children: [
+          BottomDialogCancelButton(
+            onPressed: () => Navigator.pop(context, null),
+          ),
+          const Spacer(),
+          AppDialogConfirmButton(
+            label: '확인',
+            showIcon: false,
+            onPressed: () async {
           final v = c.text.trim(); if(v.length!=6){ setState(()=>err='6자리'); return; }
           if(saved==null){
             // 최초 설정: 로컬 저장 + 서버 업데이트
@@ -1042,8 +1238,28 @@ class _PinDialogState extends State<_PinDialog>{
             final ok = saved == _ProfileStore.sha256of(v);
             if(context.mounted) Navigator.pop(context, ok);
           }
-        }, child: const Text('확인'))
-      ],
+        },
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _accountPinField(controller: c, hint: '6자리'),
+          if (err != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              err!,
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.error,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }
@@ -1055,18 +1271,22 @@ class _PinSetupDialog extends StatefulWidget{
 class _PinSetupDialogState extends State<_PinSetupDialog>{
   final a=ImeAwareTextEditingController(); final b=ImeAwareTextEditingController(); String? err;
   @override Widget build(BuildContext context){
-    return AlertDialog(
-      backgroundColor: const Color(0xFF1F1F1F),
-      title: const Text('PIN 설정/변경', style: TextStyle(color: Colors.white)),
-      content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children:[
-        TextField(controller:a, maxLength:6, keyboardType: TextInputType.number, obscureText:true, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(counterText:'', hintText:'새 PIN(6자리)', hintStyle: TextStyle(color: Colors.white54))),
-        const SizedBox(height:8),
-        TextField(controller:b, maxLength:6, keyboardType: TextInputType.number, obscureText:true, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(counterText:'', hintText:'확인', hintStyle: TextStyle(color: Colors.white54))),
-        if(err!=null) Padding(padding: const EdgeInsets.only(top:6), child: Text(err!, style: const TextStyle(color: Colors.redAccent)))
-      ]),
-      actions:[
-        TextButton(onPressed: ()=>Navigator.pop(context), style: TextButton.styleFrom(foregroundColor: Colors.white, backgroundColor: const Color(0xFF23232A)), child: const Text('취소')),
-        FilledButton(style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2), foregroundColor: Colors.white), onPressed: () async{
+    return BottomDialog(
+      icon: Icons.lock_outline_rounded,
+      title: 'PIN 설정',
+      shrinkWrap: true,
+      preferredWidth: 480,
+      onClose: () => Navigator.pop(context),
+      footer: Row(
+        children: [
+          BottomDialogCancelButton(
+            onPressed: () => Navigator.pop(context),
+          ),
+          const Spacer(),
+          AppDialogConfirmButton(
+            label: '저장',
+            showIcon: false,
+            onPressed: () async {
           if(a.text!=b.text || a.text.length!=6){ setState(()=>err='6자리 동일하게 입력'); return; }
           final map = await _ProfileStore.load();
           final p = Map<String,dynamic>.from((map['profiles'] as Map<String,dynamic>? ?? {}));
@@ -1086,8 +1306,30 @@ class _PinSetupDialogState extends State<_PinSetupDialog>{
             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('PIN이 저장되었습니다.')));
           }
           if(context.mounted) Navigator.pop(context);
-        }, child: const Text('저장'))
-      ],
+        },
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _accountPinField(controller: a, hint: '새 PIN(6자리)'),
+          const SizedBox(height: 10),
+          _accountPinField(controller: b, hint: '확인'),
+          if (err != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              err!,
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.error,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }
@@ -1113,7 +1355,7 @@ class _EditProfileDialogState extends State<_EditProfileDialog>{
           GestureDetector(
             onTap: () async {
               // 간단한 샘플(프리셋) 또는 파일 업로드는 _AvatarPickerDialog로 위임
-              await showDialog(context: context, builder: (ctx)=> _AvatarPickerDialog(email: emailC.text.trim(), initialMap: const {}));
+              await _showAccountDialog(context, (ctx)=> _AvatarPickerDialog(email: emailC.text.trim(), initialMap: const {}));
             },
             child: CircleAvatar(radius: 24, backgroundColor: const Color(0xFF2A2A2A), child: const Icon(Icons.person, color: Colors.white70)),
           ),
@@ -1186,51 +1428,189 @@ class _AvatarPickerDialogState extends State<_AvatarPickerDialog>{
   }
 
   @override Widget build(BuildContext context){
-    return AlertDialog(
-      backgroundColor: const Color(0xFF18181A),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: const BorderSide(color: Color(0xFF2A2A2A))),
-      title: const Text('프로필 이미지', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
-      content: SizedBox(
-        width: 416,
-        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children:[
-          const Text('배경 색상', style: TextStyle(color: Colors.white70)),
+    final dlg = YggDialogColors.of(context);
+    final fieldRadius = BorderRadius.circular(18);
+    final fieldBorder = OutlineInputBorder(
+      borderRadius: fieldRadius,
+      borderSide: BorderSide(color: dlg.cardBorder, width: 0.5),
+    );
+    return BottomDialog(
+      icon: Icons.account_circle_outlined,
+      title: '프로필 이미지',
+      shrinkWrap: true,
+      preferredWidth: 480,
+      onClose: () => Navigator.pop(context),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            '배경 색상',
+            style: TextStyle(
+              color: dlg.textSub,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
           const SizedBox(height: 8),
-          Wrap(spacing: 8, runSpacing: 8, children: [
-            for(final c in ['#1976D2','#6A1B9A','#2A2A2A','#0F467D','#009688','#8E44AD','#E67E22','#D32F2F','#388E3C','#455A64'])
-              GestureDetector(onTap: ()=>setState(()=>_color=c), child: Container(width: 28, height: 28, decoration: BoxDecoration(color: _parseColor(c), border: Border.all(color: Colors.white24), borderRadius: BorderRadius.circular(6)), child: _color==c? const Icon(Icons.check, size: 18, color: Colors.white): null)),
-          ]),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final c in [
+                '#1976D2',
+                '#6A1B9A',
+                '#2A2A2A',
+                '#0F467D',
+                '#009688',
+                '#8E44AD',
+                '#E67E22',
+                '#D32F2F',
+                '#388E3C',
+                '#455A64',
+              ])
+                GestureDetector(
+                  onTap: () => setState(() => _color = c),
+                  child: Container(
+                    width: 28,
+                    height: 28,
+                    decoration: BoxDecoration(
+                      color: _parseColor(c),
+                      border: Border.all(
+                        color: _color == c ? dlg.chipSelected : dlg.cardBorder,
+                        width: _color == c ? 2 : 0.5,
+                      ),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: _color == c
+                        ? const Icon(Icons.check, size: 16, color: Colors.white)
+                        : null,
+                  ),
+                ),
+            ],
+          ),
           const SizedBox(height: 16),
-          const Text('표시 방식', style: TextStyle(color: Colors.white70)),
+          Text(
+            '표시 방식',
+            style: TextStyle(
+              color: dlg.textSub,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
           const SizedBox(height: 8),
-          SwitchListTile(title: const Text('아이콘 사용', style: TextStyle(color: Colors.white70)), value: _useIcon, onChanged: (v)=> setState(()=> _useIcon=v), activeColor: const Color(0xFF1976D2), contentPadding: EdgeInsets.zero),
-          const SizedBox(height: 4),
-          TextField(controller: _initialC, maxLength: 2, decoration: const InputDecoration(counterText: '', hintText: '이니셜(최대 2자)', hintStyle: TextStyle(color: Colors.white54)), style: const TextStyle(color: Colors.white), onChanged: (v){ setState(()=> _presetInitial = v.trim()); }),
-          const SizedBox(height: 12),
-          OutlinedButton.icon(onPressed: () async {
-            final pick = await FilePicker.platform.pickFiles(type: FileType.image, withData: false);
-            if(pick!=null && pick.files.isNotEmpty){ setState(()=> _filePath = pick.files.single.path); }
-          }, icon: const Icon(Icons.upload, color: Colors.white70, size: 18), label: const Text('이미지 업로드', style: TextStyle(color: Colors.white))),
-          const SizedBox(height: 8),
-          OutlinedButton.icon(onPressed: () async {
-            final user = _safeClient()?.auth.currentUser;
-            final googleUrl = (user?.userMetadata?['avatar_url'] ?? user?.userMetadata?['picture']) as String?;
-            if (googleUrl != null && googleUrl.isNotEmpty) {
-              setState(()=> {_filePath = googleUrl, _presetInitial = null});
-            } else {
-              if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('구글 프로필 이미지를 찾을 수 없습니다.')));
-            }
-          }, icon: const Icon(Icons.account_circle, color: Colors.white70, size: 18), label: const Text('구글 프로필 사용하기', style: TextStyle(color: Colors.white)))
-        ]),
+          BottomDialogCard(
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '아이콘 사용',
+                    style: TextStyle(
+                      color: dlg.text,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                Switch(
+                  value: _useIcon,
+                  activeColor: dlg.chipSelected,
+                  onChanged: (v) => setState(() => _useIcon = v),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _initialC,
+            maxLength: 2,
+            style: TextStyle(
+              color: dlg.text,
+              fontSize: 16,
+              fontWeight: FontWeight.w800,
+            ),
+            onChanged: (v) => setState(() => _presetInitial = v.trim()),
+            decoration: InputDecoration(
+              counterText: '',
+              hintText: '이니셜(최대 2자)',
+              hintStyle: TextStyle(
+                color: dlg.hint,
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+              filled: true,
+              fillColor: dlg.fieldBg,
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 14,
+                vertical: 16,
+              ),
+              border: fieldBorder,
+              enabledBorder: fieldBorder,
+              focusedBorder: fieldBorder.copyWith(
+                borderSide: BorderSide(color: dlg.chipSelected, width: 1),
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          BottomDialogCard(
+            onTap: () async {
+              final pick = await FilePicker.platform.pickFiles(
+                type: FileType.image,
+                withData: false,
+              );
+              if (pick != null && pick.files.isNotEmpty) {
+                setState(() => _filePath = pick.files.single.path);
+              }
+            },
+            child: Text(
+              '이미지 업로드',
+              style: TextStyle(
+                color: dlg.text,
+                fontSize: 16,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          BottomDialogCard(
+            onTap: () async {
+              final user = _safeClient()?.auth.currentUser;
+              final googleUrl =
+                  (user?.userMetadata?['avatar_url'] ??
+                          user?.userMetadata?['picture'])
+                      as String?;
+              if (googleUrl != null && googleUrl.isNotEmpty) {
+                setState(() {
+                  _filePath = googleUrl;
+                  _presetInitial = null;
+                });
+              } else if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('구글 프로필 이미지를 찾을 수 없습니다.')),
+                );
+              }
+            },
+            child: Text(
+              '구글 프로필 사용하기',
+              style: TextStyle(
+                color: dlg.text,
+                fontSize: 16,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ],
       ),
-      actions: [
-        TextButton(
-          onPressed: ()=>Navigator.pop(context),
-          style: TextButton.styleFrom(foregroundColor: Colors.white, backgroundColor: const Color(0xFF23232A)),
-          child: const Text('취소'),
-        ),
-        FilledButton(
-          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2), foregroundColor: Colors.white),
-          onPressed: () async{
+      footer: Row(
+        children: [
+          BottomDialogCancelButton(
+            onPressed: () => Navigator.pop(context),
+          ),
+          const Spacer(),
+          AppDialogConfirmButton(
+            label: '저장',
+            showIcon: false,
+            onPressed: () async {
           // 1) 업로드 필요 시 Supabase Storage 업로드
           String? finalUrl;
           if(_filePath!=null && _filePath!.isNotEmpty){
@@ -1268,8 +1648,10 @@ class _AvatarPickerDialogState extends State<_AvatarPickerDialog>{
             }
           }catch(_){ }
           if(context.mounted) Navigator.pop(context);
-        }, child: const Text('저장'))
-      ],
+            },
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1292,12 +1674,38 @@ class _SwitchProfileDialog extends StatelessWidget{
   final Map profileMap; const _SwitchProfileDialog({required this.profileMap});
   @override Widget build(BuildContext context){
     final teachers = DataManager.instance.teachersNotifier.value;
-    return AlertDialog(
-      backgroundColor: const Color(0xFF1F1F1F),
-      title: const Text('프로필 전환', style: TextStyle(color: Colors.white)),
-      content: SizedBox(width: 520, height: 360, child: ListView.builder(
-        itemCount: teachers.length,
-        itemBuilder: (ctx,i){
+    final dlg = YggDialogColors.of(context);
+    return BottomDialog(
+      icon: Icons.switch_account_outlined,
+      title: '프로필 전환',
+      shrinkWrap: true,
+      preferredWidth: 520,
+      onClose: () => Navigator.pop(context),
+      footer: Row(
+        children: [
+          BottomDialogCancelButton(
+            label: '닫기',
+            onPressed: () => Navigator.pop(context),
+          ),
+        ],
+      ),
+      child: teachers.isEmpty
+          ? Text(
+              '전환할 프로필이 없습니다.',
+              style: TextStyle(
+                color: dlg.textSub,
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            )
+          : ScrollConfiguration(
+              behavior:
+                  ScrollConfiguration.of(context).copyWith(scrollbars: false),
+              child: ListView.separated(
+                shrinkWrap: true,
+                itemCount: teachers.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 10),
+                itemBuilder: (ctx, i) {
         final t=teachers[i]; final info = (profileMap[t.email] as Map?) ?? {}; final avatar = (info['avatar'] as String?) ?? '';
         String? googleUrl;
         try{ final user = _safeClient()?.auth.currentUser; if(user?.email==t.email){ googleUrl = (user?.userMetadata?['avatar_url'] ?? user?.userMetadata?['picture']) as String?; } }catch(_){ }
@@ -1307,14 +1715,55 @@ class _SwitchProfileDialog extends StatelessWidget{
         else if (googleUrl!=null && googleUrl!.isNotEmpty) { img = NetworkImage(googleUrl!); }
         final bg = _parseColor((t.avatarPresetColor ?? '#2A2A2A'));
         final label = (t.avatarPresetInitial!=null && t.avatarPresetInitial!.isNotEmpty) ? t.avatarPresetInitial! : _initials(t.name);
-        return ListTile(
-          leading: CircleAvatar(
-            backgroundColor: img==null? bg : null,
-            backgroundImage: img,
-            child: img==null ? ( (t.avatarUseIcon ?? false) ? const Icon(Icons.person, color: Colors.white70) : Text(label, style: const TextStyle(color: Colors.white)) ) : null,
+        return BottomDialogCard(
+          child: Row(
+            children: [
+              CircleAvatar(
+                backgroundColor: img == null ? bg : null,
+                backgroundImage: img,
+                child: img == null
+                    ? ((t.avatarUseIcon ?? false)
+                        ? const Icon(Icons.person, color: Colors.white)
+                        : Text(
+                            label,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ))
+                    : null,
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      t.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: dlg.text,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      t.email,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: dlg.textSub,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-          title: Text(t.name, style: const TextStyle(color: Colors.white)),
-          subtitle: Text(t.email, style: const TextStyle(color: Colors.white70)),
           onTap: () async {
             final client = _safeClient();
             final current = client?.auth.currentUser;
@@ -1326,12 +1775,13 @@ class _SwitchProfileDialog extends StatelessWidget{
                   final aid = await TenantService.instance.getActiveAcademyId();
                   final rtSeed = (aid != null) ? await SecureStore.instance.loadRefreshToken(academyId: aid!, email: t.email) : null;
                   if ((rtSeed ?? '').isEmpty) {
-                    final go = await showDialog<bool>(context: context, builder: (c)=> AlertDialog(
-                      backgroundColor: const Color(0xFF1F1F1F),
-                      title: const Text('첫 로그인 필요', style: TextStyle(color: Colors.white)),
-                      content: Text('이 프로필은 최초 1회 Google 로그인으로 등록이 필요합니다. 계속하시겠습니까?\n(${t.email})', style: const TextStyle(color: Colors.white70)),
-                      actions: [TextButton(onPressed: ()=>Navigator.pop(c,false), child: const Text('취소')), FilledButton(onPressed: ()=>Navigator.pop(c,true), child: const Text('계속'))],
-                    ));
+                    final go = await _showAccountNotice(
+                      context,
+                      title: '첫 로그인 필요',
+                      message: '이 프로필은 최초 1회 Google 로그인으로 등록이 필요합니다. 계속하시겠습니까?\n(${t.email})',
+                      confirmLabel: '계속',
+                      showCancel: true,
+                    );
                     if (go == true) {
                       if (!kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
                         HttpServer? server;
@@ -1369,14 +1819,14 @@ class _SwitchProfileDialog extends StatelessWidget{
                           if ((rtNew ?? '').isNotEmpty && aid != null) { await SecureStore.instance.saveRefreshToken(academyId: aid!, email: t.email, refreshToken: rtNew!); }
                         } else {
                           try { await client.auth.signOut(); } catch(_){}
-                          if (context.mounted) { await showDialog(context: context, builder: (c)=> AlertDialog(backgroundColor: const Color(0xFF1F1F1F), title: const Text('로그인 실패', style: TextStyle(color: Colors.white)), content: const Text('선택한 이메일로 로그인해 주세요.', style: TextStyle(color: Colors.white70)), actions:[TextButton(onPressed: ()=>Navigator.pop(c), child: const Text('확인'))])); }
+                          if (context.mounted) { await _showAccountNotice(context, title: '로그인 실패', message: '선택한 이메일로 로그인해 주세요.'); }
                           return;
                         }
                       }
                     } else { return; }
                   }
                   // PIN만으로 전환
-                  final okPin = await showDialog<bool>(context: context, builder: (c)=> _PinDialog(email: t.email, profileMap: profileMap));
+                  final okPin = await _showAccountDialog<bool>(context, (c)=> _PinDialog(email: t.email, profileMap: profileMap));
                   if (okPin==true && context.mounted) {
                     try {
                       final rtNow = (aid != null) ? await SecureStore.instance.loadRefreshToken(academyId: aid!, email: t.email) : null;
@@ -1426,7 +1876,7 @@ class _SwitchProfileDialog extends StatelessWidget{
                             if ((rtNew ?? '').isNotEmpty && aid != null) { await SecureStore.instance.saveRefreshToken(academyId: aid!, email: t.email, refreshToken: rtNew!); }
                           } else {
                             try { await client.auth.signOut(); } catch(_){ }
-                            if (context.mounted) { await showDialog(context: context, builder: (c)=> AlertDialog(backgroundColor: const Color(0xFF1F1F1F), title: const Text('로그인 실패', style: TextStyle(color: Colors.white)), content: const Text('선택한 이메일로 로그인해 주세요.', style: TextStyle(color: Colors.white70)), actions:[TextButton(onPressed: ()=>Navigator.pop(c), child: const Text('확인'))])); }
+                            if (context.mounted) { await _showAccountNotice(context, title: '로그인 실패', message: '선택한 이메일로 로그인해 주세요.'); }
                             return;
                           }
                         }
@@ -1436,12 +1886,11 @@ class _SwitchProfileDialog extends StatelessWidget{
                     try { await DataManager.instance.reloadAllData(); } catch(_){ }
                     Navigator.pop(context);
                   } else if (okPin==false && context.mounted) {
-                    await showDialog(context: context, builder: (c)=> AlertDialog(
-                      backgroundColor: const Color(0xFF1F1F1F),
-                      title: const Text('PIN 오류', style: TextStyle(color: Colors.white)),
-                      content: const Text('PIN이 올바르지 않습니다.', style: TextStyle(color: Colors.white70)),
-                      actions: [TextButton(onPressed: ()=>Navigator.pop(c), child: const Text('확인'))],
-                    ));
+                    await _showAccountNotice(
+                      context,
+                      title: 'PIN 오류',
+                      message: 'PIN이 올바르지 않습니다.',
+                    );
                   }
                   return;
                 } catch (_) { return; }
@@ -1515,12 +1964,11 @@ class _SwitchProfileDialog extends StatelessWidget{
                 try { await client.auth.signOut(); } catch(_) {}
                 if (context.mounted) {
                   Navigator.pop(context); // 계정 다이얼로그 닫기
-                  await showDialog(context: context, builder: (c)=> AlertDialog(
-                    backgroundColor: const Color(0xFF1F1F1F),
-                    title: const Text('로그인 실패', style: TextStyle(color: Colors.white)),
-                    content: const Text('선택한 프로필과 다른 이메일입니다.\n기존 프로필에서 로그아웃됩니다.', style: TextStyle(color: Colors.white70)),
-                    actions: [TextButton(onPressed: ()=>Navigator.pop(c), child: const Text('확인'))],
-                  ));
+                  await _showAccountNotice(
+                    context,
+                    title: '로그인 실패',
+                    message: '선택한 프로필과 다른 이메일입니다.\n기존 프로필에서 로그아웃됩니다.',
+                  );
                 }
                 return;
               }
@@ -1547,7 +1995,7 @@ class _SwitchProfileDialog extends StatelessWidget{
               try{
                 final tt = DataManager.instance.teachersNotifier.value.firstWhere((x)=>x.email.toLowerCase()==t.email.toLowerCase());
                 if ((tt.pinHash ?? '').isEmpty) {
-                  final ok = await showDialog<bool>(context: context, builder: (c)=> _PinDialog(email: t.email, profileMap: profileMap));
+                  final ok = await _showAccountDialog<bool>(context, (c)=> _PinDialog(email: t.email, profileMap: profileMap));
                   proceed = ok==true;
                 }
               }catch(_){ proceed = false; }
@@ -1571,7 +2019,7 @@ class _SwitchProfileDialog extends StatelessWidget{
             }
             // 4) (이미 로그인 일치 상태였던 경우) PIN 검증만으로 전환
             try { await DataManager.instance.loadTeachers(); } catch (_) {}
-            final ok = await showDialog<bool>(context: context, builder: (c)=> _PinDialog(email: t.email, profileMap: profileMap));
+            final ok = await _showAccountDialog<bool>(context, (c)=> _PinDialog(email: t.email, profileMap: profileMap));
             if(ok==true && context.mounted){
               // 세션 전환 시도: 이미 시딩된 rt가 있으면 적용
               try {
@@ -1586,17 +2034,17 @@ class _SwitchProfileDialog extends StatelessWidget{
               Navigator.pop(context);
             } else if (ok==false && context.mounted) {
               // 잘못된 PIN 안내
-              await showDialog(context: context, builder: (c)=> AlertDialog(
-                backgroundColor: const Color(0xFF1F1F1F),
-                title: const Text('PIN 오류', style: TextStyle(color: Colors.white)),
-                content: const Text('PIN이 올바르지 않습니다.', style: TextStyle(color: Colors.white70)),
-                actions: [TextButton(onPressed: ()=>Navigator.pop(c), child: const Text('확인'))],
-              ));
+              await _showAccountNotice(
+                context,
+                title: 'PIN 오류',
+                message: 'PIN이 올바르지 않습니다.',
+              );
             }
           },
         );
-      })),
-      actions:[TextButton(onPressed: ()=>Navigator.pop(context), style: TextButton.styleFrom(foregroundColor: Colors.white, backgroundColor: const Color(0xFF23232A)), child: const Text('닫기'))],
+                },
+              ),
+            ),
     );
   }
 }

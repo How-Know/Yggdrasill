@@ -3840,16 +3840,20 @@ class AttendanceService {
   Future<void> deletePlannedForAllCurrentlyPausedStudents(
       List<StudentPausePeriod> periods) async {
     if (periods.isEmpty) return;
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
     for (final p in periods) {
+      final to = p.pausedTo;
+      if (to != null &&
+          DateTime(to.year, to.month, to.day).isBefore(today)) {
+        continue;
+      }
       await deletePlannedAttendanceForStudent(
         p.studentId,
         fromInclusiveLocal: p.pausedFrom,
         toInclusiveLocal: p.pausedTo,
       );
     }
-    try {
-      await loadAttendanceRecords();
-    } catch (_) {}
   }
 
   Future<void> _regeneratePlannedAttendanceForStudentSets({

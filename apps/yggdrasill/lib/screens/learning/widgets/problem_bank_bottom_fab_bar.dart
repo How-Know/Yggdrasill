@@ -3,6 +3,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 
 import '../../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
+import '../../../widgets/corner_action_bar.dart';
 import '../../../widgets/shared_dropdown_dialog.dart';
 import '../../../widgets/solid_capsule_action_bar.dart';
 
@@ -22,6 +23,7 @@ class ProblemBankBottomFabBar extends StatelessWidget {
     this.alignStart = false,
     this.showSelectAll = true,
     this.showPrimaryActions = true,
+    this.bare = false,
   });
 
   final int cartCount;
@@ -38,12 +40,72 @@ class ProblemBankBottomFabBar extends StatelessWidget {
   final bool showSelectAll;
   final bool showPrimaryActions;
 
+  /// 공용 막대 껍질 안에 넣을 때 유리·여백을 다시 그리지 않는다.
+  final bool bare;
+
+  static const double labeledPillWidth = 112;
+  static const double iconPillWidth = 52;
+  static const double cartPillWidth = 76;
+
+  /// [SharedCornerActionBarHost] 안쪽 여백을 포함한 막대 너비.
+  static double barWidth({
+    bool showSelectAll = true,
+    bool showPrimaryActions = true,
+  }) {
+    var width = SharedCornerActionBarHost.barPadding * 2;
+    if (!showPrimaryActions) return width;
+    if (showSelectAll) width += labeledPillWidth;
+    width += labeledPillWidth + iconPillWidth + cartPillWidth + iconPillWidth;
+    return width;
+  }
+
   @override
   Widget build(BuildContext context) {
     final brightness = Theme.of(context).brightness;
     final palette = FabTabBarTokens.paletteFor(brightness);
     final radius = BorderRadius.circular(FabTabBarTokens.fabBarHeight / 2);
     final disabled = isBusy;
+    final pills = SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ...leading,
+          if (leading.isNotEmpty && showPrimaryActions)
+            const SizedBox(width: 4),
+          if (showPrimaryActions && showSelectAll)
+            _BottomActionPill(
+              onPressed: disabled ? null : onToggleSelectAll,
+              icon: allVisibleSelected ? Icons.remove_done : Icons.done_all,
+              label: allVisibleSelected ? '해제' : '전체',
+              selected: allVisibleSelected,
+            ),
+          if (showPrimaryActions) ...[
+            _BottomActionPill(
+              onPressed: disabled ? null : onCreate,
+              icon: Icons.preview,
+              label: '미리보기',
+            ),
+            _BottomActionPill(
+              onPressed: disabled ? null : onAddToCart,
+              icon: Icons.add,
+              label: '추가',
+              showLabel: false,
+            ),
+            _CartCountPill(
+              count: cartCount,
+              active: cartActive,
+              onTap: disabled ? null : onToggleCart,
+            ),
+            _ClearCartPill(
+              enabled: !disabled && cartCount > 0,
+              onTap: onClearCart,
+            ),
+          ],
+        ],
+      ),
+    );
+    if (bare) return pills;
     final bar = DecoratedBox(
       decoration: BoxDecoration(
         borderRadius: radius,
@@ -63,48 +125,7 @@ class ProblemBankBottomFabBar extends StatelessWidget {
               color: palette.surface,
               borderRadius: radius,
             ),
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  ...leading,
-                  if (leading.isNotEmpty && showPrimaryActions)
-                    const SizedBox(width: 4),
-                  if (showPrimaryActions && showSelectAll)
-                    _BottomActionPill(
-                      onPressed: disabled ? null : onToggleSelectAll,
-                      icon: allVisibleSelected
-                          ? Icons.remove_done
-                          : Icons.done_all,
-                      label: allVisibleSelected ? '해제' : '전체',
-                      selected: allVisibleSelected,
-                    ),
-                  if (showPrimaryActions) ...[
-                    _BottomActionPill(
-                      onPressed: disabled ? null : onCreate,
-                      icon: Icons.preview,
-                      label: '미리보기',
-                    ),
-                    _BottomActionPill(
-                      onPressed: disabled ? null : onAddToCart,
-                      icon: Icons.add,
-                      label: '추가',
-                      showLabel: false,
-                    ),
-                    _CartCountPill(
-                      count: cartCount,
-                      active: cartActive,
-                      onTap: disabled ? null : onToggleCart,
-                    ),
-                    _ClearCartPill(
-                      enabled: !disabled && cartCount > 0,
-                      onTap: onClearCart,
-                    ),
-                  ],
-                ],
-              ),
-            ),
+            child: pills,
           ),
         ),
       ),

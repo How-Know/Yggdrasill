@@ -858,7 +858,10 @@ void main() async {
   // 창을 보여주기 전에 최소/초기 크기를 먼저 적용해 즉시 제한이 걸리도록 처리
   // Surface Pro 12" (2196x1464 @150% → 1464x976) 의 95% 기준 최소 크기
   const Size kMinSize = Size(1430, 950);
-  if (isDesktop) {
+  // 핫리스타트면 창이 이미 떠 있다. waitUntilReadyToShow는 최대화를 풀었다가
+  // 다시 적용하는데, runApp 전이라 새 크기의 프레임을 못 그려 화면이 작은 크기로 굳는다.
+  final windowAlreadyShown = isDesktop && await windowManager.isVisible();
+  if (isDesktop && !windowAlreadyShown) {
     final windowOptions = WindowOptions(
       minimumSize: kMinSize,
       size: (fullscreen || maximizeFlag) ? null : kMinSize,

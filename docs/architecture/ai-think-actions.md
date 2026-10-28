@@ -3,7 +3,7 @@
 Think 채팅 한 화면에서 코드 조사, 코드 수정, 대화 분류, 삭제를 요청하고 결과까지 본다.
 AI는 **제안만** 하고, 실제 변경은 사용자가 채팅 안 카드에서 승인한 뒤에만 일어난다.
 
-**상태: 2026-09-30 배포. Think ↔ Cursor 조율(§4.3)은 2026-10-01 배포. 조율본 질문은 2026-10-02 구현. 자동 검사·자동 시작·자동 재수정(§4.5·§4.6)은 2026-10-07 구현. 앞 수정 이어받기(§4.7)는 2026-10-08 구현. 자동 정리 제안·정리 패널(§11)은 2026-10-12 구현.** 관련: [`ai-think.md`](ai-think.md), [`ai-code-bridge.md`](ai-code-bridge.md)
+**상태: 2026-09-30 배포. Think ↔ Cursor 조율(§4.3)은 2026-10-01 배포. 조율본 질문은 2026-10-02 구현. 자동 검사·자동 시작·자동 재수정(§4.5·§4.6)은 2026-10-07 구현. 앞 수정 이어받기(§4.7)는 2026-10-08 구현. 자동 정리 제안·정리 패널(§11)은 2026-10-12 구현. 과정 탐색도·개념 배치·개념 고치기 카드는 2026-10-23 구현·배포([`course-map.md`](course-map.md) §7).** 관련: [`ai-think.md`](ai-think.md), [`ai-code-bridge.md`](ai-code-bridge.md)
 
 구현 위치: 마이그레이션 `20260930100000_ai_think_actions.sql`, `ai_think/actions.ts`, `ai_code_bridge/code_review.ts`,
 `tools/code_bridge/src/git_ops.mjs`, 앱 `screens/think/think_action_cards.dart`·`think_code_views.dart`·`think_code_requests_dialog.dart`.
@@ -76,7 +76,7 @@ AI는 **제안만** 하고, 실제 변경은 사용자가 채팅 안 카드에�
 | 열 | 뜻 |
 |------|------|
 | `id`, `conversation_id` (대화 삭제 시 함께 삭제), `message_id` (제안한 답변, 지워지면 비움) | 어느 대화의 어느 답변이 냈는지 |
-| `kind` | `code_request` / `code_change` / `code_plan` / `place_conversation` / `delete_code_request` / `delete_folder` / `delete_conversation` / `split_conversation` / `save_memory` / `memory_card_change` / `handover_department` / `exclude_context` / `mark_important` / `progress_summary` / `department_criteria_change` / `concept_draft_change` / `concept_criterion_change` / `concept_draft_rerun` |
+| `kind` | `code_request` / `code_change` / `code_plan` / `place_conversation` / `delete_code_request` / `delete_folder` / `delete_conversation` / `split_conversation` / `save_memory` / `memory_card_change` / `handover_department` / `exclude_context` / `mark_important` / `progress_summary` / `department_criteria_change` / `concept_draft_change` / `concept_criterion_change` / `concept_draft_rerun` / `course_map_change` / `course_map_create` / `concept_placement_change` / `concept_library_change` / `concept_review_record` / `concept_relation_change` |
 | `status` | `proposed` → `applied` / `rejected` / `failed` (`place_conversation`·`exclude_context`·`mark_important`은 `applied` → `undone` 가능, `split_conversation`은 대화가 이어지면 `expired`) |
 | `payload` (jsonb) | 제안 내용. 서버가 검증·정리한 값만 들어간다 |
 | `preview` (jsonb) | 카드에 보일 요약(폴더 경로, 지워질 수 등). 제안 시점에 서버가 계산 |
@@ -116,6 +116,25 @@ AI는 **제안만** 하고, 실제 변경은 사용자가 채팅 안 카드에�
 개념 초안 카드 세 가지는 `concept_draft_action_propose(p_conversation_id, p_kind, p_payload)`로만 들어간다(사용자 JWT, 초안이 열려 있어야 함).
 같은 대화의 같은 기준 고치기·같은 초안 다시 정리는 새 제안이 앞 제안을 대체한다. 초안 변경은 서로 대체하지 않는다. 규칙은 `concept-library.md` §7.2.
 
+과정 탐색도·개념 카드 다섯 가지(2026-10-23)는 `course_think_action_propose(p_conversation_id, p_kind, p_payload)`로 들어가고
+`ai_action_apply`가 아니라 `course_think_action_apply(p_id, p_overrides)`로 승인한다(`ai_action_reject`는 같다).
+
+| kind | 미리보기 | 승인 시 실행 |
+|------|------|------|
+| `course_map_change` | 과정·판, 바꿀 것 줄(더하기·이름·옮기기·보관·과정 정보) 또는 과정 보관·되살리기, 빠지는 배치 수 | `course_map_save`와 같은 검사로 통째로 저장. 판이 다르면 `course_map_stale` |
+| `course_map_create` | 이름·학교급·교육과정, 단원 나무와 수 | 과정을 목록 끝에 만들고 단원 저장 |
+| `concept_placement_change` | 과정, 항목(놓기·옮기기·빼기·순서, 50개까지)마다 경로·근거·`basis`, 고를 단원 목록 | 고른 항목만 항목마다 따로. `p_overrides {skip, units}` |
+| `concept_library_change` | 항목(만들기·고치기·서술 고치기·지우기, 20개까지)마다 전·후, 붙은 것, 같은 이름 | 고른 항목만 항목마다 따로 확정. `p_overrides {skip}`. 붙은 것이 있는 지우기는 막힘(`concept-library.md` §4.4, DB 트리거가 승인 때 다시 셈) |
+| `concept_review_record` | 항목(개념·범위·결과, 20개까지)마다 확인한 것·찾은 것·근거·확인 못 한 것·더 할 일, 비교한 개념, 앞선 기록, 다른 대기 카드 수, 결과별 개수 | 고른 항목만 `concept_quality_reviews`에 항목마다 따로 기록. `p_overrides {skip}`. 그 범위 지문이 바뀌었거나 비교한 개념이 바뀐 항목은 남기지 않음. 개념 본문·폴더·관계는 그대로(`concept-library.md` §4.5) |
+| `concept_relation_change` | 항목(넣기·바꾸기·빼기, 20개까지)마다 두 개념(이름·폴더·id), 지금 상태(생긴 곳·결정 기록 여부)와 바꾼 뒤(유형·맥락·근거·메모), 불확실한 점·이유, 열린 같은 개념 검토, 다른 대기 카드 항목 수, 종류별 개수 | 고른 항목만 빼기 → 바꾸기 → 넣기 순서로 항목마다 따로. `p_overrides {skip}`. 두 개념의 글이 제안 때와 다르거나 관계 판이 다르면 그 항목은 반영하지 않음. 빼기는 관계만 지우고 개념은 그대로. 결정은 `think`·카드 id로 남고 이력에 이유가 남음(`concept-library.md` §4.6) |
+
+같은 대화에서 같은 과정의 `course_map_change`만 새 제안이 앞 제안을 대체하고, 나머지 다섯 가지는 쌓인다. 되돌리기는 없다
+(탐색도·배치는 화면에서, 개념·관계는 개념 화면에서 고친다. 검토 기록은 고치거나 지우지 않는다). 규칙과 카드 화면은 `course-map.md` §7.
+
+검수 작업이 낸 `concept_review_record` 카드(`concept-library.md` §4.8)는 `concept_review_job_cards`로 작업에 이어진다. 승인 대기 카드는
+`bring_cards`로 다른 대화에 옮길 수 있다: `conversation_id`만 바꾸고 `message_id`를 비우며, 내용·상태·승인 이력은 그대로다.
+앱은 카드 상태를 받은 `conversation_id`로 넣으므로 옮긴 대화에서 그대로 승인·거절한다.
+
 ---
 
 ## 3. Think 도구 추가 (`ai_think/tools.ts`)
@@ -145,6 +164,9 @@ AI는 **제안만** 하고, 실제 변경은 사용자가 채팅 안 카드에�
 - `propose_delete(target_kind, target_id, reason)`
 - `propose_conversation_split(title, reason, summary, folder_id)`: 대화 나누기 기능이 준비됐을 때만 노출한다.
   메시지 id는 받지 않는다(§7). (2026-10-09)
+- 과정 탐색도(2026-10-23, `ai_think/course_map_tools.ts`, 기능 `course_map_actions`가 준비되고 커서 문의가 아닐 때만):
+  읽기 `get_course_maps`·`list_placement_candidates`·`get_concept_for_edit`, 제안 `propose_course_map_change`·`propose_course_create`·
+  `propose_concept_placement`(한 답변 4장)·`propose_concept_change`(1장). 도구는 사용자가 맡겼을 때만 쓰게 지침에 적는다(`think-2026-10-23`).
 
 제안 도구는 필수 값이 없거나 대상이 없으면 `{ error, missing }`을 돌려준다. 지시문에 "그럴 땐 사용자에게 물어라"를 넣는다.
 제안이 만들어지면 SSE `action` 이벤트로 바로 카드가 뜬다.
@@ -423,6 +445,8 @@ ai_code_bridge_patch_source → {ok, …, partial: 'timeout'}       (형식 확�
   - 이어받기 요청: 요청 내용에 "이어받는 앞 수정", 회차 칸에 "이어받은 패치: 요청 … n회차 최종 패치 · 파일 n개 · 얹은 방식"(§4.7).
     시간 제한으로 멈춘 패치에서 시작했으면 카드 머리 경고와 회차 칸 제목이 "미완성 패치에서 시작"(§4.7.1)
   - 수정 diff: **diff 복사**, `parse_ok`가 true일 때만 **작업 폴더에 적용**. Cursor가 적은 `checks`는 "사람이 확인할 점"으로 보인다
+  - 과정 탐색도·배치·개념 카드(`think_course_map_cards.dart`): 항목 체크·단원 바꾸기 → "고른 것 승인 (n)"/거절.
+    승인 뒤 반영·못 함·뺌 수와 못 한 항목의 이유 한 줄씩(`course-map.md` §7.2)
   - 거절·대체된 제안은 한 줄로 줄인다
 - **트리 하이라이트**: 대기 중인 분류 제안이 있으면 그 폴더를 강조(초록 테두리 + "제안")하고 조상 폴더를 펼친다.
   새 폴더 제안은 흐린 테두리의 가상 행("새 폴더 제안")으로 상위 폴더 맨 아래에 끼운다. 확정 전에는 아무것도 저장하지 않는다.
@@ -494,11 +518,12 @@ ai_think: 이번 사용자 메시지 저장 → 모델이 답하면서 propose_c
 - `ai_think_db_features()`는 읽기 전용이다(함수·열이 있는지만 본다). 존재하지 않는 RPC를 쓰기 요청으로 시험하지 않는다.
   함수가 없으면(PGRST202·42883) DB 0, 그 밖의 오류는 `unknown`이다. 확인 실패를 사용 가능으로 보지 않는다.
 - 상태: `ready` 준비됨 / `db_required` DB 반영 필요 / `app_update_required` 앱 업데이트 필요 / `unknown` 확인 불가.
+  앱 화면이 바뀌지 않는 기능(`APP_FREE_FEATURES`, 지금 `concept_source_pages`)은 앱 버전을 보지 않아 `app_update_required`가 되지 않는다.
   `ready`이고 앞 대화가 있을 때만 `propose_conversation_split`을 노출한다. 모델에게는 "실행 환경 기능 상태" 메모로 알린다.
   사용자 메시지나 기억으로 바꿀 수 없다.
 - 결과는 `status` 응답 `features`·`features_db_error`, SSE `conversation` 이벤트 `features`·`split_suggestions`, `ai_runs.features`(그 호출의
   계산 결과)에 남는다. `ai_runs.features` 열이 없는 DB에서는 그 값을 빼고 다시 기록한다.
-- 앱은 `ThinkApi.clientFeatures`(`{conversation_split: 1, think_roles: 1, memory_proposals: 1, department_work: 1, auto_organize: 1}`)를 보낸다. 상태 창 "기능 상태"와 맥락 패널 "대화 나누기"에 사용 가능/준비 필요/확인 불가와
+- 앱은 `ThinkApi.clientFeatures`(`{conversation_split: 1, think_roles: 1, memory_proposals: 1, department_work: 1, auto_organize: 1, course_map_actions: 1}`)를 보낸다. 상태 창 "기능 상태"와 맥락 패널 "대화 나누기"에 사용 가능/준비 필요/확인 불가와
   이유를 보인다. 기능 상태를 보내지 않는 이전 Edge면 "확인 불가 · Edge 배포 필요"로 보인다.
 
 배포 순서가 어긋났을 때:
@@ -557,6 +582,7 @@ ai_think: 모델이 propose_memory({memory, reason}) → ai_action_propose('save
        replace:  대상 rejected·superseded(result.replaced_by_action_id) + 새 대기 save_memory, result.new_action_id
 ```
 
+- **비교 근거(2026-10-27, `20261027180000_ai_memory_compare.sql`, `20261027210000_ai_memory_flow.sql`):** 제안은 이번 요청에서 서버가 기록한 검색과, 모델에게 끝까지 전달된 원문 id·version만 카드 `payload.basis`에 남긴다. 검색 발췌와 클라이언트가 적은 version은 근거가 아니다. 승인 때 그 판이 아니면 새 기억도 승인 표시도 남지 않는다. 근거가 없는 기존 대기 카드는 채우거나 지우지 않고 승인만 거절한다. 생성·내용 수정·보관(삭제)은 Think 카드 승인으로만 반영한다. 보관은 행을 지우지 않는다. 서로 기대는 변경은 `payload.flow`의 단계 순서대로만 승인되고, 독립 카드의 일괄 승인 부분 성공은 그대로다. 기억 편집·피드백·결정으로 정리 화면은 바로 저장하지 않는다.
 - **답변당 1장**: 저장·변경 카드를 합쳐 한 답변에 하나만 낸다. Edge(`MemoryToolContext.proposed`)가 막는다. DB 오류로 실패한
   제안은 세지 않으므로, 대기 중복을 만나면 같은 답변에서 변경 카드를 낼 수 있다.
 - **중복**: 중복 판정은 정규화한 제목 기준이다. 내용이 같은데 제목이 다르면 서버가 잡지 못하므로, 지침에서 제안 전에 `search_memories`를

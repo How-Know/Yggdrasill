@@ -190,6 +190,8 @@ class ThinkConversationDetail {
     this.autoSplitSuggestions = true,
     this.splitColumns = false,
     this.progressSummary,
+    this.contextFromConversationId,
+    this.contextColumns = false,
   });
 
   final String id;
@@ -209,6 +211,12 @@ class ThinkConversationDetail {
   /// 사용자가 승인한 이 대화의 진행 요약. 다음 답변부터 AI 맥락에 참고 자료로 들어간다.
   final ThinkProgressSummary? progressSummary;
 
+  /// 사용자가 고른 다른 대화. 그 대화의 요약 본문은 여기 복사되지 않는다.
+  final String? contextFromConversationId;
+
+  /// DB에 맥락 출처 열이 있다.
+  final bool contextColumns;
+
   bool get isSplit => splitFromConversationId != null || splitSummary != null;
 
   factory ThinkConversationDetail.fromRow(Map<String, dynamic> r) {
@@ -222,10 +230,17 @@ class ThinkConversationDetail {
       autoSplitSuggestions: r['auto_split_suggestions'] != false,
       splitColumns: r.containsKey('auto_split_suggestions'),
       progressSummary: progress.isEmpty ? null : progress,
+      contextFromConversationId: _str(r['context_from_conversation_id']).isEmpty ? null : _str(r['context_from_conversation_id']),
+      contextColumns: r.containsKey('context_from_conversation_id'),
     );
   }
 
-  ThinkConversationDetail copyWith({bool? autoSplitSuggestions, ThinkProgressSummary? progressSummary}) =>
+  ThinkConversationDetail copyWith({
+    bool? autoSplitSuggestions,
+    ThinkProgressSummary? progressSummary,
+    String? contextFromConversationId,
+    bool clearContextFrom = false,
+  }) =>
       ThinkConversationDetail(
         id: id,
         splitFromConversationId: splitFromConversationId,
@@ -233,7 +248,39 @@ class ThinkConversationDetail {
         autoSplitSuggestions: autoSplitSuggestions ?? this.autoSplitSuggestions,
         splitColumns: splitColumns,
         progressSummary: progressSummary ?? this.progressSummary,
+        contextFromConversationId: clearContextFrom ? null : (contextFromConversationId ?? this.contextFromConversationId),
+        contextColumns: contextColumns,
       );
+}
+
+/// 고른 대화의 승인 요약·작업 상태 조회. 실패·없음·권한·빈 결과를 구분한다.
+class ThinkContextLookup {
+  const ThinkContextLookup({
+    required this.status,
+    this.title = '',
+    this.summary,
+    this.actionCount = 0,
+    this.pendingCount = 0,
+    this.codeCount = 0,
+  });
+
+  /// ok, empty, not_found, forbidden, error
+  final String status;
+  final String title;
+  final ThinkProgressSummary? summary;
+  final int actionCount;
+  final int pendingCount;
+  final int codeCount;
+
+  bool get ok => status == 'ok';
+
+  String get message => switch (status) {
+        'ok' => '승인된 진행 요약과 작업 상태를 읽었습니다. 대기 카드는 확정 지침이 아닙니다.',
+        'empty' => '이 대화에는 승인된 진행 요약과 작업 상태가 없습니다.',
+        'not_found' => '그 대화를 찾지 못했습니다.',
+        'forbidden' => '그 대화를 볼 수 없습니다. 작업이 없는 것이 아닙니다.',
+        _ => '작업 상태를 읽지 못했습니다. 작업이 없는 것이 아닙니다.',
+      };
 }
 
 /// 진행 요약의 다음 행동. 담당·전제·완료 기준은 사용자가 말한 것만 들어간다(비면 정하지 않은 것).

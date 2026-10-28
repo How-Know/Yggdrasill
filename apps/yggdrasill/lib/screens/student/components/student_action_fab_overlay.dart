@@ -1,47 +1,52 @@
-import 'dart:ui';
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../../../app_overlays.dart';
+import '../../../widgets/corner_action_bar.dart';
+import '../../../widgets/home_grading_edit_icon.dart';
+import '../../../widgets/shared_dropdown_dialog.dart';
+import '../../../widgets/student_detail_icons.dart';
 import '../../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 
 const double _kFabIconSize = 25;
 const double _kFabIconHitSize = 40;
+const double _kFabIconOnlyHorizontalInset = 8;
+const double _kFabIconOnlyPillWidth =
+    _kFabIconOnlyHorizontalInset * 2 + _kFabIconSize;
 const double _kCollapsedSearchTrailingGap = 12;
 const double _kAddSearchGap = 12;
 
-/// 학생 메뉴 하단 액션 FAB — 추가 + 검색 (시간메뉴와 동일 글래스 셸·위치 규칙).
+const int _kStudentMenuIndex = 1;
+
+/// 학생 메뉴 하단 액션 FAB — 추가 + 검색. 유리 막대는 [SharedCornerActionBarHost].
 class StudentActionFabOverlay {
-  OverlayEntry? _entry;
   VoidCallback? _onAdd;
   VoidCallback? _onSearchToggle;
   VoidCallback? _onSearchCancel;
+  bool _showDetailMenu = false;
+  bool _detailPaused = false;
+  Future<void> Function()? _onEditStudent;
+  Future<void> Function()? _onTogglePause;
+  Future<void> Function()? _onWithdrawStudent;
   bool _searchExpanded = false;
   bool _hasSearchQuery = false;
   TextEditingController? _searchController;
   ValueChanged<String>? _onSearchChanged;
   VoidCallback? _onSearchClear;
   FocusNode? _searchFocusNode;
-  bool _syncScheduled = false;
   bool _disposed = false;
-  bool _sideSheetWidthListening = false;
   bool _visible = true;
-
-  void _onLeftSideSheetWidthChanged() {
-    _entry?.markNeedsBuild();
-  }
-
-  void _ensureSideSheetWidthListener() {
-    if (_sideSheetWidthListening) return;
-    leftSideSheetClipWidthNotifier.addListener(_onLeftSideSheetWidthChanged);
-    _sideSheetWidthListening = true;
-  }
 
   void sync(
     BuildContext context, {
     required VoidCallback onAdd,
     required VoidCallback onSearchToggle,
     required VoidCallback onSearchCancel,
+    bool showDetailMenu = false,
+    bool detailPaused = false,
+    Future<void> Function()? onEditStudent,
+    Future<void> Function()? onTogglePause,
+    Future<void> Function()? onWithdrawStudent,
     required bool searchExpanded,
     required bool hasSearchQuery,
     required TextEditingController searchController,
@@ -51,10 +56,14 @@ class StudentActionFabOverlay {
     bool visible = true,
   }) {
     if (_disposed) return;
-    _ensureSideSheetWidthListener();
     _onAdd = onAdd;
     _onSearchToggle = onSearchToggle;
     _onSearchCancel = onSearchCancel;
+    _showDetailMenu = showDetailMenu;
+    _detailPaused = detailPaused;
+    _onEditStudent = onEditStudent;
+    _onTogglePause = onTogglePause;
+    _onWithdrawStudent = onWithdrawStudent;
     _searchExpanded = searchExpanded;
     _hasSearchQuery = hasSearchQuery;
     _searchController = searchController;
@@ -63,65 +72,42 @@ class StudentActionFabOverlay {
     _searchFocusNode = searchFocusNode;
     _visible = visible;
 
-    if (_syncScheduled) return;
-    _syncScheduled = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _syncScheduled = false;
-      if (_disposed || !context.mounted) return;
-      final overlay = Overlay.maybeOf(context, rootOverlay: true);
-      if (overlay == null) return;
-
-      if (!_visible) {
-        _entry?.remove();
-        _entry = null;
-        return;
-      }
-
-      if (_entry == null) {
-        _entry = OverlayEntry(builder: _buildOverlay);
-        overlay.insert(_entry!);
-      } else {
-        _entry!.markNeedsBuild();
-      }
-    });
+    sharedCornerActionBar.bind(
+      menuIndex: _kStudentMenuIndex,
+      width: _StudentActionFabBar.widthFor(
+        searchExpanded: _searchExpanded,
+        showDetailMenu: _showDetailMenu,
+      ),
+      visible: _visible,
+      builder: _buildContent,
+    );
   }
 
   void markNeedsBuild() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_disposed) _entry?.markNeedsBuild();
-    });
+    if (!_disposed) sharedCornerActionBar.refresh();
   }
 
   void dispose() {
     _disposed = true;
-    if (_sideSheetWidthListening) {
-      leftSideSheetClipWidthNotifier
-          .removeListener(_onLeftSideSheetWidthChanged);
-      _sideSheetWidthListening = false;
-    }
-    _entry?.remove();
-    _entry = null;
+    sharedCornerActionBar.unbindMenu(_kStudentMenuIndex);
   }
 
-  Widget _buildOverlay(BuildContext _) {
-    return Positioned(
-      right: FabTabBarTokens.fabBarRightInset,
-      bottom: FabTabBarTokens.fabBarBottomInset,
-      child: Material(
-        type: MaterialType.transparency,
-        color: Colors.transparent,
-        child: _StudentActionFabBar(
-          searchExpanded: _searchExpanded,
-          hasSearchQuery: _hasSearchQuery,
-          controller: _searchController!,
-          focusNode: _searchFocusNode,
-          onAdd: _onAdd ?? () {},
-          onSearchToggle: _onSearchToggle ?? () {},
-          onSearchCancel: _onSearchCancel ?? () {},
-          onChanged: _onSearchChanged!,
-          onClear: _onSearchClear!,
-        ),
-      ),
+  Widget _buildContent(BuildContext _) {
+    return _StudentActionFabBar(
+      searchExpanded: _searchExpanded,
+      hasSearchQuery: _hasSearchQuery,
+      controller: _searchController!,
+      focusNode: _searchFocusNode,
+      onAdd: _onAdd ?? () {},
+      showDetailMenu: _showDetailMenu,
+      detailPaused: _detailPaused,
+      onEditStudent: _onEditStudent,
+      onTogglePause: _onTogglePause,
+      onWithdrawStudent: _onWithdrawStudent,
+      onSearchToggle: _onSearchToggle ?? () {},
+      onSearchCancel: _onSearchCancel ?? () {},
+      onChanged: _onSearchChanged!,
+      onClear: _onSearchClear!,
     );
   }
 }
@@ -132,6 +118,11 @@ class _StudentActionFabBar extends StatelessWidget {
     required this.hasSearchQuery,
     required this.controller,
     required this.onAdd,
+    required this.showDetailMenu,
+    required this.detailPaused,
+    required this.onEditStudent,
+    required this.onTogglePause,
+    required this.onWithdrawStudent,
     required this.onSearchToggle,
     required this.onSearchCancel,
     required this.onChanged,
@@ -140,119 +131,230 @@ class _StudentActionFabBar extends StatelessWidget {
   });
 
   static const double _expandedWidth = 285;
-  // 추가(~112) + 간격(12) + 검색(41) + 검색 오른쪽 여백(12) + 바 좌우 패딩(12).
+  // 추가(112) + 간격(12) + 검색(41) + 검색 오른쪽 여백(12) + 바 좌우 패딩(12).
   static const double _collapsedWidth = 189;
+  // 위에 아이콘 버튼(41)을 추가와 검색 사이에 붙인 너비.
+  static const double _collapsedWidthWithMenu = 230;
   static const double _searchExpandedLeftInset = 8;
-  static const double _barHeight = FabTabBarTokens.fabBarHeight;
-  static const double _barPadding = 6;
-  static const Duration _animDuration = Duration(milliseconds: 340);
+  static const double _barHeight = SharedCornerActionBarHost.barHeight;
+  static const double _barPadding = SharedCornerActionBarHost.barPadding;
+  static const Duration _animDuration = SharedCornerActionBarHost.animDuration;
 
   final bool searchExpanded;
   final bool hasSearchQuery;
   final TextEditingController controller;
   final FocusNode? focusNode;
   final VoidCallback onAdd;
+  final bool showDetailMenu;
+  final bool detailPaused;
+  final Future<void> Function()? onEditStudent;
+  final Future<void> Function()? onTogglePause;
+  final Future<void> Function()? onWithdrawStudent;
   final VoidCallback onSearchToggle;
   final VoidCallback onSearchCancel;
   final ValueChanged<String> onChanged;
   final VoidCallback onClear;
 
+  static double widthFor({
+    required bool searchExpanded,
+    required bool showDetailMenu,
+  }) {
+    if (searchExpanded) return _expandedWidth;
+    return showDetailMenu ? _collapsedWidthWithMenu : _collapsedWidth;
+  }
+
   @override
   Widget build(BuildContext context) {
-    final brightness = Theme.of(context).brightness;
-    final palette = FabTabBarTokens.paletteFor(brightness);
-    final radius = BorderRadius.circular(_barHeight / 2);
-    final innerHeight = _barHeight - _barPadding * 2;
+    const innerHeight = _barHeight - _barPadding * 2;
 
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        borderRadius: radius,
-        boxShadow: palette.boxShadows,
-      ),
-      child: ClipRRect(
-        borderRadius: radius,
-        child: BackdropFilter(
-          filter: ImageFilter.blur(
-            sigmaX: FabTabBarTokens.fabRelatedBlurSigmaFor(brightness),
-            sigmaY: FabTabBarTokens.fabRelatedBlurSigmaFor(brightness),
-          ),
-          child: AnimatedContainer(
-            duration: _animDuration,
-            curve: Curves.easeInOutCubic,
-            width: searchExpanded ? _expandedWidth : _collapsedWidth,
-            height: _barHeight,
-            padding: const EdgeInsets.all(_barPadding),
-            decoration: BoxDecoration(
-              color: palette.surface,
-              borderRadius: radius,
-            ),
-            child: ClipRect(
-              child: Stack(
-                alignment: Alignment.centerLeft,
+    return Stack(
+      alignment: Alignment.centerLeft,
+      children: [
+        AnimatedOpacity(
+          opacity: searchExpanded ? 0 : 1,
+          duration: _animDuration,
+          curve: Curves.easeInOutCubic,
+          child: IgnorePointer(
+            ignoring: searchExpanded,
+            child: SizedBox(
+              height: innerHeight,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  AnimatedOpacity(
-                    opacity: searchExpanded ? 0 : 1,
-                    duration: _animDuration,
-                    curve: Curves.easeInOutCubic,
-                    child: IgnorePointer(
-                      ignoring: searchExpanded,
-                      child: SizedBox(
-                        height: innerHeight,
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            FabStyleActionTabPill(
-                              icon: Icons.add_rounded,
-                              label: '추가',
-                              onTap: onAdd,
-                              barHeight: _barHeight,
-                              barPadding: _barPadding,
-                            ),
-                            const SizedBox(width: _kAddSearchGap),
-                            FabStyleActionTabPill(
-                              icon: Icons.search_rounded,
-                              label: '검색',
-                              iconOnly: true,
-                              iconSize: _kFabIconSize,
-                              selected: hasSearchQuery,
-                              onTap: onSearchToggle,
-                              barHeight: _barHeight,
-                              barPadding: _barPadding,
-                            ),
-                            const SizedBox(width: _kCollapsedSearchTrailingGap),
-                          ],
-                        ),
-                      ),
-                    ),
+                  FabStyleActionTabPill(
+                    icon: Icons.add_rounded,
+                    label: '추가',
+                    onTap: onAdd,
+                    barHeight: _barHeight,
+                    barPadding: _barPadding,
                   ),
-                  AnimatedOpacity(
-                    opacity: searchExpanded ? 1 : 0,
-                    duration: _animDuration,
-                    curve: Curves.easeInOutCubic,
-                    child: IgnorePointer(
-                      ignoring: !searchExpanded,
-                      child: SizedBox(
-                        width: _expandedWidth - _barPadding * 2,
-                        height: innerHeight,
-                        child: _InlineSearchRow(
-                          controller: controller,
-                          focusNode: focusNode,
-                          hasText: hasSearchQuery,
-                          onChanged: onChanged,
-                          onClear: onClear,
-                          onCancel: onSearchCancel,
-                          barHeight: _barHeight,
-                          barPadding: _barPadding,
-                          leftInset: _searchExpandedLeftInset,
-                        ),
-                      ),
+                  if (showDetailMenu)
+                    _StudentDetailMenuButton(
+                      detailPaused: detailPaused,
+                      onEdit: onEditStudent,
+                      onTogglePause: onTogglePause,
+                      onWithdraw: onWithdrawStudent,
+                      barHeight: _barHeight,
+                      barPadding: _barPadding,
                     ),
+                  const SizedBox(width: _kAddSearchGap),
+                  FabStyleActionTabPill(
+                    icon: Icons.search_rounded,
+                    label: '검색',
+                    iconOnly: true,
+                    iconSize: _kFabIconSize,
+                    selected: hasSearchQuery,
+                    onTap: onSearchToggle,
+                    barHeight: _barHeight,
+                    barPadding: _barPadding,
                   ),
+                  const SizedBox(width: _kCollapsedSearchTrailingGap),
                 ],
               ),
             ),
           ),
         ),
+        AnimatedOpacity(
+          opacity: searchExpanded ? 1 : 0,
+          duration: _animDuration,
+          curve: Curves.easeInOutCubic,
+          child: IgnorePointer(
+            ignoring: !searchExpanded,
+            child: SizedBox(
+              width: _expandedWidth - _barPadding * 2,
+              height: innerHeight,
+              child: _InlineSearchRow(
+                controller: controller,
+                focusNode: focusNode,
+                hasText: hasSearchQuery,
+                onChanged: onChanged,
+                onClear: onClear,
+                onCancel: onSearchCancel,
+                barHeight: _barHeight,
+                barPadding: _barPadding,
+                leftInset: _searchExpandedLeftInset,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _StudentDetailMenuButton extends StatelessWidget {
+  const _StudentDetailMenuButton({
+    required this.detailPaused,
+    required this.onEdit,
+    required this.onTogglePause,
+    required this.onWithdraw,
+    required this.barHeight,
+    required this.barPadding,
+  });
+
+  final bool detailPaused;
+  final Future<void> Function()? onEdit;
+  final Future<void> Function()? onTogglePause;
+  final Future<void> Function()? onWithdraw;
+  final double barHeight;
+  final double barPadding;
+
+  @override
+  Widget build(BuildContext context) {
+    final brightness = Theme.of(context).brightness;
+    final style = FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
+    final hoverOverlay = brightness == Brightness.dark
+        ? FabTabBarTokens.previewAcademyMenuGlassHoverOverlayDark
+        : FabTabBarTokens.previewAcademyMenuGlassHoverOverlayLight;
+    final enabled =
+        onEdit != null && onTogglePause != null && onWithdraw != null;
+    const danger = Color(0xFFE57373);
+
+    Widget row({
+      required String svg,
+      required String label,
+      required Color color,
+      required Future<void> Function() action,
+      required SharedDropdownDialogPanelController controller,
+    }) {
+      return SharedDropdownDialogMenuRow(
+        selected: false,
+        style: style,
+        hoverOverlay: hoverOverlay,
+        onTap: () {
+          controller.close();
+          unawaited(action());
+        },
+        child: Row(
+          children: [
+            StudentDetailIcon(svg, size: 20, color: color),
+            const SizedBox(width: 10),
+            Text(
+              label,
+              style: FabTabBarTokens.previewMenuItemTextStyle(style).copyWith(
+                fontSize: SharedDropdownDialogPanel.contentFontSize,
+                fontWeight: FontWeight.w600,
+                color: color,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return SharedDropdownDialog(
+      disabled: !enabled,
+      panelMaxWidth: 280,
+      alignPanelRightToCapsuleBar: true,
+      openPanelAboveAnchor: true,
+      panelRightExtraOffset: _kAddSearchGap +
+          _kFabIconOnlyPillWidth +
+          _kCollapsedSearchTrailingGap,
+      panelBuilder: (context, controller) {
+        return SharedDropdownDialogPanel(
+          title: '',
+          maxHeight: controller.maxHeight,
+          onClose: controller.close,
+          body: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              row(
+                svg: homeGradingEditOutlineSvg,
+                label: '수정',
+                color: style.title,
+                action: onEdit!,
+                controller: controller,
+              ),
+              row(
+                svg:
+                    detailPaused ? studentDetailPlaySvg : studentDetailPauseSvg,
+                label: detailPaused ? '등원' : '휴원',
+                color: style.title,
+                action: onTogglePause!,
+                controller: controller,
+              ),
+              row(
+                svg: studentDetailLogoutSvg,
+                label: '퇴원',
+                color: danger,
+                action: onWithdraw!,
+                controller: controller,
+              ),
+            ],
+          ),
+        );
+      },
+      childBuilder: (context, controller) => FabStyleActionTabPill(
+        icon: Icons.menu_rounded,
+        label: '수정, 휴원, 퇴원',
+        iconOnly: true,
+        iconSize: _kFabIconSize,
+        selected: controller.isOpen,
+        enabled: enabled,
+        onTap: enabled ? controller.toggle : () {},
+        barHeight: barHeight,
+        barPadding: barPadding,
       ),
     );
   }

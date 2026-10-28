@@ -92,3 +92,24 @@ pm2 logs ygg-question-render --lines 200
 배포 순서는 migration 적용 → Edge Function 배포 → worker 시작입니다.
 작업은 priority `0`(현재 문항), `1`(이웃), `2`(warm) 순으로 처리되며,
 stale 작업은 retry 한도 내에서 자동 재큐잉됩니다.
+
+## 8) Think 개념 출처 원본 쪽 이미지
+
+`ygg-pb-api` 안에서 함께 돕니다(별도 pm2 프로세스 없음). Think가 요청한 개념책 PDF 쪽 하나를
+`concept_source_page_images` 대기열에서 가져와 긴 변 1600px PNG로 그리고 private 버킷
+`concept-source-pages`에 올립니다. 원본 PDF는 기존 본문 PDF 캐시(`TEXTBOOK_PDF_CACHE_DIR`)를 함께 씁니다.
+poppler(`pdfinfo`, `pdftoppm`)가 PATH에 있어야 합니다. 설계: `docs/architecture/concept-library.md` §4.7.
+
+```bash
+pm2 restart ygg-pb-api
+pm2 logs ygg-pb-api --lines 200   # "[concept-page] worker started", 처리마다 ready/failed 와 실패 코드
+```
+
+환경 변수:
+
+- `CONCEPT_PAGE_WORKER=0`: 끄기(기본 켜짐)
+- `CONCEPT_PAGE_WORKER_NAME`: 선택적 worker 식별자(기본 `pb-api@<호스트>`)
+
+15초마다 `concept_source_page_workers`에 하트비트를 남기며, 60초 넘게 없으면 Think는 "원본 준비 서버 응답 없음"으로 알립니다.
+migration 적용 전에는 `[concept-page] poll_failed:<코드>`가 한 번 찍히고 30초 간격으로 다시 봅니다(서버는 그대로 동작).
+배포 순서는 migration 적용 → `pm2 restart ygg-pb-api` → `ai_think` 배포입니다.

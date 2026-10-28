@@ -606,7 +606,7 @@ class _ConceptDetailViewState extends State<ConceptDetailView> {
                   labelStyle: const TextStyle(color: kThinkText, fontSize: 13),
                   backgroundColor: kThinkField,
                   side: const BorderSide(color: kThinkBorder),
-                  tooltip: '정리 기준 쪽에서 열기',
+                  tooltip: '정리 기준 창에서 열기',
                   onPressed: () => _c.openCriterion(id),
                   deleteIcon: const Icon(Icons.link_off, size: 16),
                   deleteButtonTooltipMessage: '연결 끊기',
@@ -616,7 +616,7 @@ class _ConceptDetailViewState extends State<ConceptDetailView> {
           ),
         const SizedBox(height: 8),
         if (sel == null)
-          const ConceptHint('정리 기준을 고르면 이 개념에 그 기준을 이을 수 있습니다.')
+          const ConceptHint('툴바 "정리 기준" 창에서 기준을 고르면 이 개념에 그 기준을 이을 수 있습니다.')
         else if (_c.isLocal(sel.id))
           const ConceptHint('고른 기준은 아직 저장 전입니다. 초안을 저장한 뒤 이을 수 있습니다.')
         else if (selLinked)

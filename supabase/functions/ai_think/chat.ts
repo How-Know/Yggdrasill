@@ -23,11 +23,20 @@ import {
   type AiUsage,
 } from '../_shared/ai/types.ts';
 import type { AiRunRecord } from '../_shared/ai/usage.ts';
-import { ORGANIZE_KINDS, workStateNote, type ActionToolContext, type WorkState } from './actions.ts';
+import { ORGANIZE_KINDS, restoredContextNote, workStateNote, type ActionToolContext, type WorkState } from './actions.ts';
 import { loadConceptReference, type ConceptReferenceRead } from './concept_reference.ts';
 import { loadCriterionReference, type CriterionReferenceRead } from './criterion_reference.ts';
 import { CONCEPT_DRAFT_CHAT_TITLE, loadConceptDraftReference, type ConceptDraftReferenceRead } from './concept_draft_reference.ts';
+import {
+  CONCEPT_SOURCE_TOOL_NAMES,
+  SOURCE_ADJACENT_LIMIT,
+  SOURCE_IMAGE_LIMIT,
+  SOURCE_PAGE_TOOL_NAME,
+  SOURCE_PAGE_TOOL_TIMEOUT_MS,
+} from './concept_source_tools.ts';
 import { CONSULT_TOOL_NAME, runConsult, type ConsultState } from './consult.ts';
+import { BATCH_TOOL_NAME, runReviewBatch } from './concept_review_batch.ts';
+import { COURSE_MAP_TOOL_NAMES } from './course_map_tools.ts';
 import {
   SPREADSHEET_MIME,
   buildThinkContext,
@@ -77,6 +86,8 @@ export interface ConversationRow {
   extra_ref_departments?: import('./access_context.ts').DepartmentId[];
   /** 승인된 진행 요약. 마이그레이션 전 DB에는 열이 없어 비어 있다. */
   progress_summary?: Record<string, unknown> | null;
+  /** 사용자가 고른 다른 대화. 없으면 이전 자료를 넣지 않는다. */
+  context_from_conversation_id?: string | null;
 }
 
 export interface NewMessage {
@@ -192,6 +203,8 @@ export interface ChatInput {
    * 앱은 초안 본문·저장하지 않은 편집을 보내지 않고, 서버가 요청마다 저장본을 다시 읽는다.
    */
   conceptDraftId?: string | null;
+  /** 답변 뒤 자동 이어하기 실행. 관문이 준 임대 gen만 쓰고 넘겨받지 않으며, 저장 개수에 한도가 있다. */
+  reviewJobRun?: { jobId: string; gen: number; maxItems: number } | null;
 }
 
 export interface ChatOutcome {
@@ -205,9 +218,12 @@ export interface ChatOutcome {
   /** 저장한 답 본문(판정 블록을 뗀 것). */
   content?: string;
   relay?: RelayVerdict | null;
+  costUsd?: number | null;
 }
 
 export const MAX_TOOL_ROUNDS = 6;
+/** 묶음 검수가 끝나야 하는 시각 = 요청 한도 - 이 값. 그 뒤 마지막 답변(도구 없음)을 쓸 시간이다. */
+export const REVIEW_BATCH_FINAL_RESERVE_MS = 30_000;
 
 /** 파이썬 실행 환경이 만든 파일 중 답변에 붙이는 형식. */
 export const ANSWER_FILE_MIME: Record<string, string> = {
@@ -350,6 +366,12 @@ export async function runThinkChat(input: ChatInput, deps: ChatDeps): Promise<Ch
     proactive;
   const rolesReady = featureReady(features, 'think_roles');
   const memoryAllowed = !relay && featureReady(features, 'memory_proposals') && proactive;
+  const courseMapAllowed = !relay && featureReady(features, 'course_map_actions');
+  const conceptReviewAllowed = courseMapAllowed && featureReady(features, 'concept_review');
+  const conceptRelationAllowed = courseMapAllowed && featureReady(features, 'concept_relation_change');
+  const conceptSourceAllowed = courseMapAllowed && featureReady(features, 'concept_source_pages');
+  const reviewJobsAllowed = conceptReviewAllowed && featureReady(features, 'concept_review_jobs');
+  const reviewBatchAllowed = reviewJobsAllowed && !input.reviewJobRun && featureReady(features, 'concept_review_job_batch');
 
   // 새 대화에 고른 역할은 첫 답변 전에 저장한다. 저장하지 못하면 총괄로 답하고 그렇게 알린다.
   const wanted = isNew && !relay && rolesReady ? input.newConversationRole ?? null : null;
@@ -410,6 +432,7 @@ export async function runThinkChat(input: ChatInput, deps: ChatDeps): Promise<Ch
       workNote = workStateNote(workState);
     } catch (e) {
       console.error('[ai_think] work state failed:', e instanceof Error ? e.message : String(e));
+      workNote = '[이 대화의 작업 상태를 읽지 못했다. 작업이 없는 것이 아니다. 이 실패를 근거로 새 작업이나 기억 제안을 만들지 않는다.]';
     }
   }
   let pendingOrganize: number | null = null;
@@ -438,12 +461,49 @@ export async function runThinkChat(input: ChatInput, deps: ChatDeps): Promise<Ch
       ...(criteriaAllowed ? ['부서 기준'] : []),
     ]
     : undefined;
+  const sourceId = conversation.context_from_conversation_id;
+  let restoredNote: string | null = null;
+  if (!isNew && sourceId && sourceId !== conversationId) {
+    try {
+      const source = await deps.store.getConversation(sourceId);
+      if (!source) {
+        restoredNote = restoredContextNote({ status: 'not_found' });
+      } else {
+        const view = normalizeProgressSummary(source.progress_summary);
+        let foreignWork: WorkState | null = null;
+        let workFailed = false;
+        try {
+          foreignWork = await deps.store.getWorkState(sourceId);
+        } catch (e) {
+          workFailed = true;
+          console.error('[ai_think] restored work state failed:', e instanceof Error ? e.message : String(e));
+        }
+        const workText = foreignWork ? workStateNote(foreignWork) : null;
+        if (workFailed && !view) restoredNote = restoredContextNote({ status: 'error', title: source.title });
+        else if (!view && !workText && !workFailed) restoredNote = restoredContextNote({ status: 'empty', title: source.title });
+        else {
+          restoredNote = restoredContextNote({
+            status: 'ok',
+            title: source.title,
+            purpose: view?.purpose,
+            decided: view?.decided,
+            workNote: workText,
+            workFailed,
+          });
+        }
+      }
+    } catch (e) {
+      console.error('[ai_think] restored context failed:', e instanceof Error ? e.message : String(e));
+      restoredNote = restoredContextNote({ status: 'error' });
+    }
+  }
   const ctx = await buildThinkContext(deps.store, {
     conversationId: isNew ? null : conversationId,
     userMessage: input.message,
     attachments: input.attachments,
     scope: { type: conversation.scope_type, id: conversation.scope_id },
     workNote,
+    restoredNote,
     featureNote: features && !relay
       ? featureStatusNote({
         splitState: features.conversation_split.state,
@@ -451,6 +511,12 @@ export async function runThinkChat(input: ChatInput, deps: ChatDeps): Promise<Ch
         memoryState: features.memory_proposals?.state,
         departmentState: features.department_work?.state,
         organizeState: features.auto_organize?.state,
+        courseMapState: features.course_map_actions?.state,
+        conceptReviewState: features.concept_review?.state,
+        conceptRelationState: features.concept_relation_change?.state,
+        conceptSourceState: features.concept_source_pages?.state,
+        conceptReviewJobState: features.concept_review_jobs?.state,
+        conceptReviewBatchState: input.reviewJobRun ? undefined : features.concept_review_job_batch?.state,
         autoOrganize,
         organizeAsked: userAskedOrganize,
         organizeItems,
@@ -467,6 +533,12 @@ export async function runThinkChat(input: ChatInput, deps: ChatDeps): Promise<Ch
     memoryProposalsReady: memoryAllowed,
     departmentWorkReady: departmentsAllowed,
     organizeReady: organizeTools,
+    courseMapReady: courseMapAllowed,
+    conceptReviewReady: conceptReviewAllowed,
+    conceptRelationReady: conceptRelationAllowed,
+    conceptSourceReady: conceptSourceAllowed,
+    conceptReviewJobsReady: reviewJobsAllowed,
+    conceptReviewBatchReady: reviewBatchAllowed,
     departmentCriteria: criteria,
     conceptReference: conceptRef?.note ?? null,
     criterionReference: criterionRef?.note ?? null,
@@ -484,6 +556,7 @@ export async function runThinkChat(input: ChatInput, deps: ChatDeps): Promise<Ch
     attachments: input.attachments,
     ...(relay ? { asked_by: relay.asker } : {}),
   });
+  const softDeadline = input.startedAt + Math.floor(input.wallClockMs * 0.65);
   const toolCtx: ActionToolContext = {
     conversationId,
     memoryRefs: ctx.memoryRefs,
@@ -502,6 +575,21 @@ export async function runThinkChat(input: ChatInput, deps: ChatDeps): Promise<Ch
     conceptDraft: draftTools
       ? { draftId: draftTools.meta.id, reviewSaved: draftTools.reviewSaved, criterionIds: draftTools.criterionIds, proposed: new Set<string>() }
       : undefined,
+    courseMap: courseMapAllowed
+      ? { proposed: new Map<string, number>(), review: conceptReviewAllowed, relations: conceptRelationAllowed }
+      : undefined,
+    conceptSources: conceptSourceAllowed
+      ? { imagesLeft: SOURCE_IMAGE_LIMIT, adjacentLeft: SOURCE_ADJACENT_LIMIT, deadline: softDeadline }
+      : undefined,
+    reviewJobs: reviewJobsAllowed
+      ? {
+        holder: `think:${conversationId}:${crypto.randomUUID()}`,
+        leases: new Map(input.reviewJobRun ? [[input.reviewJobRun.jobId, input.reviewJobRun.gen]] : []),
+        cards: 0,
+        itemsLeft: input.reviewJobRun ? input.reviewJobRun.maxItems : null,
+        noTakeover: input.reviewJobRun != null,
+      }
+      : undefined,
     access: access ?? undefined,
     recordDelivered,
   };
@@ -517,6 +605,12 @@ export async function runThinkChat(input: ChatInput, deps: ChatDeps): Promise<Ch
     criteria: criteriaAllowed,
     readOnly: relay !== null,
     conceptDraft: draftTools ? { change: draftTools.reviewSaved } : null,
+    courseMap: courseMapAllowed,
+    conceptReview: conceptReviewAllowed,
+    conceptRelations: conceptRelationAllowed,
+    conceptSources: conceptSourceAllowed,
+    reviewJobs: reviewJobsAllowed,
+    reviewBatch: reviewBatchAllowed,
   });
   const exposedTools = new Set(tools.map((t) => t.name));
   emit('conversation', {
@@ -571,7 +665,6 @@ export async function runThinkChat(input: ChatInput, deps: ChatDeps): Promise<Ch
   let errorCode: string | undefined;
   let errorMessage: string | null = null;
 
-  const softDeadline = input.startedAt + Math.floor(input.wallClockMs * 0.65);
   let turnInput: AiInputItem[] = ctx.input;
 
   // 엑셀이 붙은 요청에만 파이썬 실행 환경을 연다. 커서 질문에는 첨부가 없다.
@@ -719,6 +812,22 @@ export async function runThinkChat(input: ChatInput, deps: ChatDeps): Promise<Ch
             output: JSON.stringify({ error: 'tool_not_available', next: '이번 요청에 주지 않은 도구다. 실행 환경 기능 상태 메모를 따른다.' }),
             summary: '이번 요청에서 쓸 수 없음',
           }
+          : fc.name === BATCH_TOOL_NAME
+          ? await runReviewBatch(
+            {
+              callId: fc.callId,
+              rawArguments: fc.arguments,
+              conversationId,
+              userId: input.userId,
+              safetyId: input.safetyId,
+              signal: input.signal,
+              deadline: input.startedAt + input.wallClockMs - REVIEW_BATCH_FINAL_RESERVE_MS,
+              round: round + 1,
+              startedAt: input.startedAt,
+            },
+            toolCtx.reviewJobs,
+            { provider: deps.provider, store: deps.store, recordRun: deps.recordRun, env, now },
+          )
           : fc.name === CONSULT_TOOL_NAME
           ? await runConsult(
             {
@@ -733,15 +842,26 @@ export async function runThinkChat(input: ChatInput, deps: ChatDeps): Promise<Ch
             consultState,
             { provider: deps.provider, store: deps.store, recordRun: deps.recordRun, emit, env, now },
           )
-          : await runThinkTool(fc.name, fc.arguments, deps.store, 8000, toolCtx);
+          : await runThinkTool(
+            fc.name,
+            fc.arguments,
+            deps.store,
+            fc.name === SOURCE_PAGE_TOOL_NAME
+              ? SOURCE_PAGE_TOOL_TIMEOUT_MS
+              : COURSE_MAP_TOOL_NAMES.has(fc.name) || CONCEPT_SOURCE_TOOL_NAMES.has(fc.name)
+              ? 20000
+              : 8000,
+            toolCtx,
+          );
         const label = TOOL_LABELS[fc.name] ?? fc.name;
         traces.push({ name: fc.name, label, detail: r.summary, ok: r.ok });
         emit('tool', { call_id: fc.callId, name: fc.name, label, status: 'done', ok: r.ok, detail: r.summary });
-        if (r.action) {
-          actionIds.push(r.action.id);
-          emit('action', { action: r.action });
+        for (const a of [...(r.action ? [r.action] : []), ...(r.actions ?? [])]) {
+          actionIds.push(a.id);
+          emit('action', { action: a });
         }
-        turnInput.push({ kind: 'tool_result', callId: fc.callId, output: r.output });
+        const images = 'images' in r ? r.images : undefined;
+        turnInput.push({ kind: 'tool_result', callId: fc.callId, output: r.output, ...(images?.length ? { images } : {}) });
       }
     }
   } catch (e) {
@@ -824,6 +944,13 @@ export async function runThinkChat(input: ChatInput, deps: ChatDeps): Promise<Ch
         department_tools: departmentsAllowed,
         consults: consultState?.count ?? 0,
         organize_tools: organizeTools,
+        course_map_tools: courseMapAllowed,
+        concept_review_tools: conceptReviewAllowed,
+        concept_relation_tools: conceptRelationAllowed,
+        concept_source_tools: conceptSourceAllowed,
+        concept_review_job_tools: reviewJobsAllowed,
+        concept_review_batch_tool: reviewBatchAllowed,
+        ...(input.reviewJobRun ? { review_job_run: input.reviewJobRun.jobId } : {}),
         auto_organize_enabled: autoOrganize,
         ...(conceptRef ? { concept_ref: conceptRef.meta } : {}),
         ...(criterionRef ? { criterion_ref: criterionRef.meta } : {}),
@@ -912,5 +1039,16 @@ export async function runThinkChat(input: ChatInput, deps: ChatDeps): Promise<Ch
   // 답변을 저장·알린 뒤에 지운다. 지우기가 늦어도 답변은 이미 남아 있다.
   await sandbox?.close();
 
-  return { conversationId, userMessageId, assistantMessageId, runId, status, errorCode, errorMessage, content, relay: relayVerdict };
+  return {
+    conversationId,
+    userMessageId,
+    assistantMessageId,
+    runId,
+    status,
+    errorCode,
+    errorMessage,
+    content,
+    relay: relayVerdict,
+    costUsd: costKnown ? cost : null,
+  };
 }

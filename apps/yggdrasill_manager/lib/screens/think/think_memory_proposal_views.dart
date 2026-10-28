@@ -64,6 +64,48 @@ class ThinkMemoryProposalView extends StatelessWidget {
   }
 }
 
+/// 비교 근거. 검색 발췌나 모델이 적은 판이 아니라, 카드에 저장된 조회 기록만 보여 준다.
+class ThinkMemoryBasisNote extends StatelessWidget {
+  const ThinkMemoryBasisNote({super.key, required this.action});
+
+  final ThinkAction action;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!action.memoryBasisReady) {
+      return const ThinkNotice(
+        icon: Icons.warning_amber_outlined,
+        text: '비교 근거가 없습니다. 이 카드는 승인할 수 없습니다. 다시 비교해 제안해야 하며, 거절만 할 수 있습니다.',
+      );
+    }
+    final lines = <String>[
+      if (action.memoryRelationLabel.isNotEmpty) '비교: ${action.memoryRelationLabel}',
+      '검색한 범위만 확인했습니다. 모든 기억과 비교한 것은 아닙니다.',
+      if (action.memoryBasisReads.isEmpty) '원문을 비교한 다른 기억은 없습니다.',
+      for (final r in action.memoryBasisReads) _readLine(r),
+      '위에 적힌 version은 비교할 때 읽은 판입니다.',
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (final line in lines)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Text(line, style: const TextStyle(color: kThinkSub, fontSize: 12, height: 1.45)),
+          ),
+      ],
+    );
+  }
+
+  static String _readLine(Map<String, dynamic> r) {
+    final title = _s(r['title']);
+    final role = _s(r['role']) == 'supersede' ? '대체 대상' : '비교';
+    return '$role · ${title.isEmpty ? '(제목 없음)' : title} · version ${_s(r['version'])} · ${_s(r['id'])}';
+  }
+
+  static String _s(dynamic v) => v == null ? '' : v.toString().trim();
+}
+
 /// 승인 전에 기억 내용·범위를 고친다. 확인하면 고친 내용으로 바로 승인한다(서버가 다시 검사한다).
 class ThinkMemoryEditDialog extends StatefulWidget {
   const ThinkMemoryEditDialog({super.key, required this.memory, required this.showScope, required this.confirmLabel});

@@ -15,6 +15,9 @@ class ProblemBankCurriculumControls extends StatelessWidget {
     required this.courseOptions,
     required this.onCourseChanged,
     required this.isBusy,
+    this.showBookSearch = false,
+    this.bookSearchController,
+    this.onBookSearchChanged,
   });
 
   final ProblemBankCurriculumFilter curriculumFilter;
@@ -23,6 +26,9 @@ class ProblemBankCurriculumControls extends StatelessWidget {
   final List<String> courseOptions;
   final ValueChanged<String?> onCourseChanged;
   final bool isBusy;
+  final bool showBookSearch;
+  final TextEditingController? bookSearchController;
+  final ValueChanged<String>? onBookSearchChanged;
 
   static const Color _checkboxActive = Color(0xFF33A373);
 
@@ -209,7 +215,77 @@ class ProblemBankCurriculumControls extends StatelessWidget {
               .toList(growable: false),
           onChanged: onCourseChanged,
         ),
+        if (showBookSearch && bookSearchController != null) ...[
+          const SizedBox(height: 8),
+          _PrivateBookSearchField(
+            controller: bookSearchController!,
+            enabled: !isBusy,
+            onChanged: onBookSearchChanged,
+            panelStyle: panelStyle,
+            brightness: brightness,
+          ),
+        ],
       ],
+    );
+  }
+}
+
+class _PrivateBookSearchField extends StatelessWidget {
+  const _PrivateBookSearchField({
+    required this.controller,
+    required this.enabled,
+    required this.onChanged,
+    required this.panelStyle,
+    required this.brightness,
+  });
+
+  final TextEditingController controller;
+  final bool enabled;
+  final ValueChanged<String>? onChanged;
+  final PreviewAcademyPanelStyle panelStyle;
+  final Brightness brightness;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: problemBankRangeControlHeight,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: panelStyle.dropdownBackground,
+          borderRadius: BorderRadius.circular(10),
+          border: FabTabBarTokens.groupedCardBorderFor(brightness),
+        ),
+        child: TextField(
+          controller: controller,
+          enabled: enabled,
+          onChanged: onChanged,
+          style: TextStyle(
+            color: panelStyle.inputText,
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+          ),
+          decoration: InputDecoration(
+            isDense: true,
+            hintText: '교재 검색',
+            hintStyle: TextStyle(
+              color: panelStyle.hint,
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+            ),
+            prefixIcon: Icon(
+              Icons.search,
+              size: 18,
+              color: panelStyle.icon,
+            ),
+            prefixIconConstraints: const BoxConstraints(
+              minWidth: 36,
+              minHeight: 36,
+            ),
+            border: InputBorder.none,
+            contentPadding: const EdgeInsets.symmetric(vertical: 11),
+          ),
+        ),
+      ),
     );
   }
 }

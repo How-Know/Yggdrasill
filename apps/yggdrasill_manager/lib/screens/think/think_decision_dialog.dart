@@ -33,7 +33,6 @@ class _ThinkDecisionDialogState extends State<ThinkDecisionDialog> {
   final _tags = TextEditingController();
 
   bool _loading = true;
-  bool _saving = false;
   String? _error;
   ThinkDecisionDraft? _draft;
   String? _replacesId;
@@ -83,35 +82,8 @@ class _ThinkDecisionDialogState extends State<ThinkDecisionDialog> {
     }
   }
 
-  Future<void> _save(ThinkMemoryStatus status) async {
-    if (_title.text.trim().isEmpty || _decision.text.trim().isEmpty) {
-      showThinkSnack(context, '제목과 결정 내용을 채워 주세요.', error: true);
-      return;
-    }
-    setState(() => _saving = true);
-    try {
-      final draft = ThinkMemoryDraft(
-        kind: ThinkMemoryKind.decision,
-        status: status,
-        title: _title.text,
-        content: _decision.text,
-        decisionContext: _context.text,
-        decisionReason: _reason.text,
-        alternatives: _alternatives.text.split('\n'),
-        tags: _tags.text.split(RegExp(r'[,，]')),
-        sourceConversationId: widget.conversationId,
-        supersedesId: _replacesId,
-        memoryScope: _scope,
-        scopeDepartment: _department,
-      );
-      final saved = await _c.saveMemory(draft);
-      if (!mounted) return;
-      Navigator.pop(context, saved);
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _saving = false);
-      showThinkSnack(context, '저장하지 못했습니다: $e', error: true);
-    }
+  Future<void> _save(ThinkMemoryStatus _) async {
+    showMemoryApprovalOnly(context);
   }
 
   @override
@@ -141,24 +113,18 @@ class _ThinkDecisionDialogState extends State<ThinkDecisionDialog> {
             ]
           : [
               TextButton(
-                onPressed: _saving ? null : () => Navigator.pop(context),
+                onPressed: () => Navigator.pop(context),
                 child: const Text('폐기', style: TextStyle(color: kThinkSub)),
               ),
               OutlinedButton(
-                onPressed: _saving ? null : () => _save(ThinkMemoryStatus.draft),
+                onPressed: () => _save(ThinkMemoryStatus.draft),
                 style: thinkOutlineButton(),
                 child: const Text('초안으로 저장'),
               ),
               ElevatedButton.icon(
-                onPressed: _saving ? null : () => _save(ThinkMemoryStatus.active),
+                onPressed: () => _save(ThinkMemoryStatus.active),
                 style: thinkPrimaryButton(),
-                icon: _saving
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                      )
-                    : const Icon(Icons.check, size: 18),
+                icon: const Icon(Icons.check, size: 18),
                 label: const Text('승인하고 저장'),
               ),
             ],
@@ -225,7 +191,7 @@ class _ThinkDecisionDialogState extends State<ThinkDecisionDialog> {
             ThinkMemoryScopePicker(
               scope: _scope,
               department: _department,
-              enabled: !_saving,
+              enabled: true,
               suggestedRole: _c.selectedId == widget.conversationId && _c.conversationRole != ThinkRoleId.lead
                   ? _c.conversationRole
                   : null,

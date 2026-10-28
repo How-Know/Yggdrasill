@@ -27,6 +27,7 @@ class UtilityGlassDialogShell extends StatelessWidget {
     this.headerTrailing,
     this.backgroundColor,
     this.blur = true,
+    this.fitContent = false,
   });
 
   final String title;
@@ -44,6 +45,9 @@ class UtilityGlassDialogShell extends StatelessWidget {
 
   /// 별도 오버레이 위에서는 블러가 뒤를 검게 막아, 끄면 반투명 색만으로 뒤가 비친다.
   final bool blur;
+
+  /// 내용이 짧으면 그 높이로 줄어든다. [maxHeight]를 넘으면 내용만 스크롤된다.
+  final bool fitContent;
 
   @override
   Widget build(BuildContext context) {
@@ -92,6 +96,11 @@ class UtilityGlassDialogShell extends StatelessWidget {
                   borderRadius: radius,
                 ),
                 child: Column(
+                  mainAxisSize:
+                      fitContent ? MainAxisSize.min : MainAxisSize.max,
+                  crossAxisAlignment: fitContent
+                      ? CrossAxisAlignment.stretch
+                      : CrossAxisAlignment.center,
                   children: [
                     Padding(
                       padding: const EdgeInsets.fromLTRB(18, 14, 12, 8),
@@ -131,7 +140,13 @@ class UtilityGlassDialogShell extends StatelessWidget {
                       height: 1,
                       color: UtilityGlassDialogTokens.dividerColor,
                     ),
-                    Expanded(child: child),
+                    if (fitContent)
+                      Flexible(
+                        fit: FlexFit.loose,
+                        child: child,
+                      )
+                    else
+                      Expanded(child: child),
                   ],
                 ),
               ),

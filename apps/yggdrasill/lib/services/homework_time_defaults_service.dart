@@ -56,6 +56,14 @@ class HomeworkTimeDefaultsService {
       add('gaeyu', 'middle', category, 120);
     }
 
+    // 개념+유형 고등. 개념 Check 는 개념 지면의 짧은 확인 문항이고,
+    // 연습문제 실력 구간은 개념원리 실력 UP 과 같은 무게로 잡는다.
+    add('gaeyu_high', 'high', 'high_concept_check', 60);
+    add('gaeyu_high', 'high', 'high_example', 120);
+    add('gaeyu_high', 'high', 'high_problem', 120);
+    add('gaeyu_high', 'high', 'high_exercise', 150);
+    add('gaeyu_high', 'high', 'high_exercise_skill', 300);
+
     add('wonri', 'high', '개념원리 익히기', 60);
     add('wonri', 'high', '필수유형', 120);
     add('wonri', 'high', '확인 체크', 120);
@@ -243,6 +251,19 @@ class HomeworkTimeDefaultsService {
         'extra_practice',
       };
       final normalizedSection = section.trim().toLowerCase();
+      if (categories.contains(normalizedSection)) return normalizedSection;
+    }
+    if (series == 'gaeyu_high') {
+      final normalizedSection = section.trim().toLowerCase();
+      if (normalizedSection == 'high_exercise' && label.contains('실력')) {
+        return 'high_exercise_skill';
+      }
+      const categories = {
+        'high_concept_check',
+        'high_example',
+        'high_problem',
+        'high_exercise',
+      };
       if (categories.contains(normalizedSection)) return normalizedSection;
     }
     if (series == 'wonri_middle') {

@@ -118,6 +118,7 @@ class StudentScreenState extends State<StudentScreen> {
   Map<String, Set<String>>? _activeFilter;
 
   final StudentActionFabOverlay _actionFabOverlay = StudentActionFabOverlay();
+  StudentDetailMenuActions? _detailMenu;
 
   // 출석 관리 관련 상태 변수들
   StudentWithInfo? _selectedStudent;
@@ -219,10 +220,26 @@ class StudentScreenState extends State<StudentScreen> {
       selectedIndex: _customTabIndex,
       onSelected: _onStudentTabSelected,
     );
+    _syncActionFab();
+  }
+
+  void _onDetailMenuChanged(StudentDetailMenuActions actions) {
+    _detailMenu = actions;
+    if (!mounted) return;
+    _syncActionFab();
+  }
+
+  void _syncActionFab() {
+    final menu = _detailMenu;
     _actionFabOverlay.sync(
       context,
       visible: _customTabIndex == 0,
       onAdd: showStudentRegistrationDialog,
+      showDetailMenu: menu?.hasStudent ?? false,
+      detailPaused: menu?.isPaused ?? false,
+      onEditStudent: menu?.onEdit,
+      onTogglePause: menu?.onTogglePause,
+      onWithdrawStudent: menu?.onWithdraw,
       onSearchToggle: _toggleSearchFab,
       onSearchCancel: _collapseSearch,
       searchExpanded: _isSearchExpanded,
@@ -744,6 +761,7 @@ class StudentScreenState extends State<StudentScreen> {
             return AllStudentsView(
               students: filteredStudents,
               onShowDetails: (studentWithInfo) {},
+              onDetailMenuChanged: _onDetailMenuChanged,
               onRequestCourseView: _openStudentCourseDetail,
               groups: groups,
               expandedGroups: _expandedGroups,

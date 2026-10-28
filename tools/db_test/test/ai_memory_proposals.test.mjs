@@ -31,8 +31,46 @@ const memory = (over = {}) => ({
   ...over,
 });
 
-const propose = (kind, payload, c = conv) =>
-  su(() => t.one(`select * from ai_action_propose($1, $2, $3::jsonb, '{}'::jsonb)`, [c, kind, JSON.stringify(payload)]));
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+async function readySession(c = conv) {
+  const session = (await su(() => t.one(`select ai_memory_read_open($1) as id`, [c]))).id;
+  await su(() => t.one(`select ai_memory_search($1, '기억', array['기억']) as r`, [session]));
+  return session;
+}
+
+async function readFull(session, memoryId) {
+  let offset = 0;
+  for (let i = 0; i < 8; i += 1) {
+    const body = (await su(() => t.one(`select ai_memory_read($1, $2, $3) as r`, [session, memoryId, offset]))).r;
+    if (body.complete === true || body.next_offset == null || body.status === 'not_found' || body.status === 'forbidden' || body.status === 'version_changed') {
+      return body;
+    }
+    offset = body.next_offset;
+  }
+  return null;
+}
+
+const propose = async (kind, payload, c = conv) => {
+  let body = payload;
+  const needsBasis = kind === 'save_memory' || (kind === 'memory_card_change' && payload.op !== 'withdraw' && payload.op !== 'move');
+  if (needsBasis) {
+    const session = payload.read_session ?? (await readySession(c));
+    const sup = payload.memory?.supersedes_id;
+    const compared = Array.isArray(payload.compared_ids) ? payload.compared_ids : [];
+    if (typeof sup === 'string' && UUID_RE.test(sup)) await readFull(session, sup);
+    for (const id of compared) {
+      if (typeof id === 'string' && UUID_RE.test(id) && id !== sup) await readFull(session, id);
+    }
+    body = {
+      ...payload,
+      read_session: session,
+      relation: payload.relation ?? (sup ? 'supplement' : 'distinct'),
+      compared_ids: compared,
+    };
+  }
+  return su(() => t.one(`select * from ai_action_propose($1, $2, $3::jsonb, '{}'::jsonb)`, [c, kind, JSON.stringify(body)]));
+};
 const apply = (id, over = {}) => su(() => t.one(`select * from ai_action_apply($1, $2::jsonb)`, [id, JSON.stringify(over)]));
 
 test('ai_think_db_features에 memory_proposals=1이 포함된다', async () => {

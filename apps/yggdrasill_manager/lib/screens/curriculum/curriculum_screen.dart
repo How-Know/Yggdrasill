@@ -13,7 +13,9 @@ import 'widgets/concept_input_dialog.dart';
 import 'widgets/concept_library_pane.dart';
 import 'widgets/concept_relation_section.dart';
 import 'widgets/concept_workspace.dart';
+import 'widgets/course_map_pane.dart';
 import '../../services/concept_draft_service.dart';
+import '../../services/course_map_controller.dart';
 import '../../services/concept_library_controller.dart';
 import '../../services/concept_service.dart';
 import '../../services/concept_topic.dart';
@@ -67,13 +69,43 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   /// 선택·저장 안 한 입력은 여기에 남는다(메뉴를 옮겨 화면이 다시 만들어져도).
   final ConceptLibraryController _lib = ConceptLibraryController.instance;
 
+  bool _criteriaOpen = false;
+
   @override
   void initState() {
     super.initState();
     _lib.ensureStarted();
     if (!_lib.loaded && !_lib.loading) unawaited(_lib.loadCriteria());
+    _lib.criteriaDialogRequest.addListener(_openCriteria);
+    _lib.libraryChanged.addListener(_onLibraryChanged);
     _loadCurriculums();
     _reloadCategoryTree();
+  }
+
+  @override
+  void dispose() {
+    _lib.criteriaDialogRequest.removeListener(_openCriteria);
+    _lib.libraryChanged.removeListener(_onLibraryChanged);
+    super.dispose();
+  }
+
+  void _onLibraryChanged() {
+    if (mounted) unawaited(_reloadCategoryTree());
+  }
+
+  Future<void> _openCriteria() async {
+    if (_criteriaOpen || !mounted) return;
+    _criteriaOpen = true;
+    try {
+      await showConceptCriteriaDialog(
+        context,
+        controller: _lib,
+        onOpenConcept: (id) => unawaited(_openConceptById(id)),
+        onChatPicked: _openChatForPick,
+      );
+    } finally {
+      _criteriaOpen = false;
+    }
   }
 
   // 교육과정 목록 불러오기
@@ -149,7 +181,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
             ),
             const SizedBox(height: 8),
             const Text(
-              '정리 기준(왼쪽)과 개념 라이브러리(오른쪽)를 함께 보며 정리합니다.',
+              '교육과정 흐름(왼쪽)과 개념 라이브러리(오른쪽)를 함께 보며 정리합니다.',
               style: TextStyle(color: Color(0xFFB3B3B3), fontSize: 16),
             ),
             const SizedBox(height: 20),
@@ -158,12 +190,15 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
             Expanded(
               child: ConceptWorkspace(
                 controller: _lib,
-                criteriaDetail: CriteriaDetailPane(
-                  controller: _lib,
-                  onOpenConcept: _openConceptById,
-                  onChatPicked: _openChatForPick,
+                courseDetail: CourseMapPane(
+                  controller: CourseMapController.instance,
+                  onOpenConcept: (id) => unawaited(_openConceptById(id)),
                 ),
-                criteriaSummary: CriteriaSummaryPane(controller: _lib),
+                courseSummary: CourseMapSummaryPane(
+                  controller: CourseMapController.instance,
+                  onExpand: () => _lib.setFocus(ConceptWorkspaceFocus.courseMap),
+                  onOpenConcept: (id) => unawaited(_openConceptById(id)),
+                ),
                 libraryDetail: _buildLibraryDetail(),
                 librarySummary: LibrarySummaryPane(controller: _lib, onOpenConcept: _openConceptById),
                 chat: _chatOpen ? ConceptChatPanel(onClose: () => _setChatOpen(false)) : null,
@@ -516,6 +551,17 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
           ),
         ),
         OutlinedButton.icon(
+          onPressed: () => unawaited(_openCriteria()),
+          icon: const Icon(Icons.rule_folder_outlined, size: 18),
+          label: const Text('정리 기준', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: kNavAccent,
+            side: BorderSide(color: kNavAccent.withValues(alpha: 0.5)),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+        ),
+        OutlinedButton.icon(
           onPressed: () {
             final open = !_chatOpen;
             _setChatOpen(open);
@@ -747,12 +793,14 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   }
 
   Future<void> _onDeleteFolder(CategoryNode node) async {
-    final ok = await _confirmDelete('폴더를 삭제하시겠습니까?\\n하위 항목도 함께 삭제됩니다.');
+    final ok = await _confirmDelete('폴더 "${node.name}"와 하위 폴더를 삭제합니다. 안에 개념이 있으면 삭제하지 않습니다.');
     if (ok != true) return;
     try {
       setState(() => _treeBusy = true);
       await _cc.deleteCategory(id: node.id);
       await _reloadCategoryTree();
+    } on ConceptDeleteException catch (e) {
+      _showError(e.message);
     } catch (e) {
       _showError('삭제 실패: $e');
     } finally {
@@ -950,7 +998,22 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   }
 
   Future<void> _onDeleteConcept(CategoryNode parent, ConceptItem concept) async {
-    final ok = await _confirmDelete('이 개념을 삭제하시겠습니까?');
+    final ConceptDeleteCheck check;
+    try {
+      setState(() => _treeBusy = true);
+      check = await _conceptSvc.checkDelete(concept.id);
+    } catch (e) {
+      _showError('지울 수 있는지 확인하지 못해 삭제하지 않았습니다: $e');
+      return;
+    } finally {
+      if (mounted) setState(() => _treeBusy = false);
+    }
+    if (!mounted) return;
+    if (!check.deletable) {
+      await _showDeleteBlocked(concept.name, check.attached);
+      return;
+    }
+    final ok = await _confirmDelete('개념 "${concept.name}"을(를) 삭제합니다. 붙은 자료가 없는 개념입니다.');
     if (ok != true) return;
     try {
       setState(() => _treeBusy = true);
@@ -958,11 +1021,39 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
       ConceptChatController.instance.conceptDeleted(concept.id);
       _lib.conceptRemoved(concept.id);
       await _reloadCategoryTree();
+    } on ConceptDeleteException catch (e) {
+      if (e.attachedBlock && mounted) {
+        await _showDeleteBlocked(concept.name, e.attached, changed: true);
+      } else {
+        _showError('개념 삭제 실패: ${e.message}');
+      }
     } catch (e) {
       _showError('개념 삭제 실패: $e');
     } finally {
       if (mounted) setState(() => _treeBusy = false);
     }
+  }
+
+  Future<void> _showDeleteBlocked(String name, Map<String, int> attached, {bool changed = false}) {
+    final text = conceptAttachedText(attached);
+    return showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF2A2A2A),
+        title: const Text('삭제할 수 없음', style: TextStyle(color: Colors.white)),
+        content: Text(
+          '${changed ? '확인한 뒤 붙은 자료가 생겨 ' : ''}개념 "$name"을(를) 삭제하지 않았습니다.\n'
+          '${text.isEmpty ? '붙은 자료가 있습니다.' : '붙은 자료: $text'}\n\n'
+          '붙은 자료가 하나도 없는 개념만 삭제할 수 있습니다.',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('닫기', style: TextStyle(color: Colors.white70))),
+        ],
+      ),
+    );
   }
 
   Future<void> _onMoveConcept({

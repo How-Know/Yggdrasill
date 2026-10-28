@@ -121,6 +121,21 @@ const Set<String> kConceptPlusCategoryLabels = <String>{
   'STEP3',
 };
 
+/// 개념+유형 고등 목차/트리에서 단원명이 아니라 코너 이름인 항목들.
+/// 연습문제는 소단원마다 끝에 붙은 코너라 행으로 세우지 않는다.
+const Set<String> kConceptPlusHighCategoryLabels = <String>{
+  '개념 Check',
+  '개념Check',
+  '개념 Plus',
+  '개념Plus',
+  '필수예제',
+  '필수 예제',
+  '문제',
+  '연습문제',
+  '실력',
+  'Point',
+};
+
 /// 개념+유형 중단원 끝의 마무리 지면 이름들.
 ///
 /// 목차에는 "• 단원 다지기 / 서술형 완성하기", "• 개념 리뷰 / 마인드맵" 두 줄로
@@ -274,6 +289,13 @@ TocAutofillSeriesRules tocAutofillRulesFor(String seriesKey) {
       specialExerciseRowName: _suryeokSkillTestRowName,
     );
   }
+  if (seriesKey.trim().toLowerCase() == 'gaeyu_high') {
+    return TocAutofillSeriesRules(
+      categoryLabels: kConceptPlusHighCategoryLabels,
+      unitEndRowName: '',
+      isUnitEndName: (_) => false,
+    );
+  }
   if (seriesKey.trim().toLowerCase() == 'gaeyu') {
     return TocAutofillSeriesRules(
       categoryLabels: kConceptPlusCategoryLabels,
@@ -402,6 +424,9 @@ List<TocAutofillBigUnit> buildTocAutofillTree(
             ));
             continue;
           }
+          // 마무리 행이 없는 교재(개념+유형 고등)는 연습문제가 소단원 안에
+          // 들어 있다. 모델이 그 줄을 따로 올려도 행을 세우지 않는다.
+          if (rules.unitEndRowName.isEmpty && sub.isExercise) continue;
           if (sub.isExercise || rules.isUnitEndName(subName)) {
             // 개념+유형은 마무리 지면이 목차에서 두 줄로 쪼개져 인쇄되므로
             // 앞 행에 합치고 페이지는 먼저 인쇄된 값을 유지한다.
@@ -423,7 +448,9 @@ List<TocAutofillBigUnit> buildTocAutofillTree(
             printedPage: sub.page,
           ));
         }
-        if (mid.hasExercise && !midOut.subUnits.any((s) => s.isExercise)) {
+        if (mid.hasExercise &&
+            rules.unitEndRowName.isNotEmpty &&
+            !midOut.subUnits.any((s) => s.isExercise)) {
           midOut.subUnits.add(
             TocAutofillSubUnit(name: rules.unitEndRowName, isExercise: true),
           );

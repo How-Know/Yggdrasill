@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
-import 'dart:ui' as ui;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -50,7 +49,7 @@ import 'learning/models/problem_bank_export_models.dart'
 import 'resources/exam_preset_support.dart' show naesinLinkKeyOfPreset;
 import 'design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import '../widgets/app_confirm_button.dart';
-import '../widgets/app_dialog_action_button.dart';
+import '../widgets/bottom_dialog.dart';
 import '../widgets/departure_summary_dialog.dart';
 import '../widgets/dialog_tokens.dart';
 import '../widgets/home_status_dashboard_icon.dart';
@@ -250,6 +249,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       unawaited(testGradingSessionToClear!.onClosed!());
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      gradingModeActive.value = false;
       homeBatchConfirmFabVisible.value = false;
       if (identical(
         rightSideSheetTestGradingSession.value,
@@ -1018,7 +1018,15 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   double _homeStatusContentTopPadding(BuildContext context) {
     const headerTopPadding = FabTabBarTokens.previewAcademyTopInset - 12;
     const capsuleHeight = 56.0;
-    const headerBottomGap = 12.0;
+    const titleIconSize = 48.0;
+    const titleLineHeight =
+        FabTabBarTokens.previewAcademyMainTitleFontSize * 1.15;
+    // 글자 줄은 48 아이콘 줄 안, 그 줄은 56 헤더 가운데. 사진은 카드 위 27.5.
+    const spaceBelowTitle = (capsuleHeight - titleIconSize) / 2 +
+        (titleIconSize - titleLineHeight) / 2;
+    const avatarTopInset = 27.5;
+    // 수업 현황 글자 아래에서 프로필 사진 위쪽까지 48.
+    const headerBottomGap = 48 - spaceBelowTitle - avatarTopInset;
     return MediaQuery.paddingOf(context).top +
         headerTopPadding +
         capsuleHeight +
@@ -2013,10 +2021,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     }
 
     Widget buildChips(double reveal) {
-      return AnimatedBuilder(
-        animation: _uiAnimController,
-        builder: (context, __) {
-          final tick = _uiAnimController.value; // 0..1
+      return Builder(
+        builder: (context) {
+          final tick = _uiAnimController;
           // 패널을 닫아도 에디터/초안에 남은 스냅샷으로 '+' 판정한다.
           final persistedEditor = _homeworkDraftEditors[attendanceId];
           final draftSnap =
@@ -2283,7 +2290,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   Widget _buildReservedHomeworkSlidePanel({
     required BuildContext context,
     required String studentId,
-    required double tick,
+    required Animation<double> tick,
     bool showContent = true,
   }) {
     return DecoratedBox(
@@ -3896,23 +3903,26 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           showLoading: false,
         ),
       );
-      await showUtilityGlassDialog(
+      final double overviewWidth = math.min(
+        MediaQuery.sizeOf(context).width - 48,
+        1080,
+      );
+      // 제목 71, 본문 위아래 48, 이전 알림장 40, 구간 간격 36, 필터 36, 구역 머리 32,
+      // 접힌 카드 5장(87)과 간격 4칸·목록 안쪽 4. 다섯째 장이 잘리지 않게 여유를 둔다.
+      const overviewHeight = 780.0;
+      await showDialog<void>(
         context: context,
-        title: '$studentName 과제 현황',
-        icon: Icons.assignment_rounded,
-        preferredWidth: math.min(
-          MediaQuery.sizeOf(context).width - 48,
-          1080,
+        barrierColor: Colors.black.withValues(
+          alpha: BottomDialogMetrics.barrierOpacity,
         ),
-        maxWidth: math.min(
-          MediaQuery.sizeOf(context).width - 48,
-          1080,
-        ),
-        maxHeight: math.min(
-          MediaQuery.sizeOf(context).height - 48,
-          760,
-        ),
-        child: ValueListenableBuilder<int>(
+        builder: (routeContext) {
+          return BottomDialog(
+            icon: Icons.assignment_rounded,
+            title: '$studentName 과제 현황',
+            preferredWidth: overviewWidth,
+            maxHeight: overviewHeight,
+            onClose: () => Navigator.of(routeContext).pop(),
+            child: ValueListenableBuilder<int>(
           valueListenable: loadRevision,
           builder: (loadContext, _, __) {
             final dlg = YggDialogColors.of(loadContext);
@@ -4166,11 +4176,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                   if (recorded) await refreshOverview();
                 }
 
-                return Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
                       Align(
                         alignment: Alignment.centerRight,
                         child: OutlinedButton.icon(
@@ -4187,7 +4195,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                           ),
                         ),
                       ),
-                      const SizedBox(height: 8),
+                      const SizedBox(height: BottomDialogMetrics.beforeActionsGap),
                       _HomeworkOverviewFilterBar(
                         sessionOptions: sessionFilterOptions,
                         selectedSessionId: selectedSessionFilterId,
@@ -4234,9 +4242,12 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                           });
                         },
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: BottomDialogMetrics.beforeActionsGap),
                       Expanded(
-                        child: Row(
+                        child: ScrollConfiguration(
+                          behavior: ScrollConfiguration.of(dialogContext)
+                              .copyWith(scrollbars: false),
+                          child: Row(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
                             Expanded(
@@ -4257,7 +4268,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                                 textAlign: TextAlign.center,
                                                 style: TextStyle(
                                                   color: dlg.textSub,
-                                                  fontSize: 13.5,
+                                                  fontSize: BottomDialogMetrics
+                                                      .smallFontSize,
                                                   fontWeight: FontWeight.w600,
                                                 ),
                                               ),
@@ -4268,7 +4280,10 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                             itemCount:
                                                 completedGroupEntries.length,
                                             separatorBuilder: (_, __) =>
-                                                const SizedBox(height: 8),
+                                                const SizedBox(
+                                              height:
+                                                  BottomDialogMetrics.actionGap,
+                                            ),
                                             itemBuilder: (context, index) {
                                               final entry =
                                                   completedGroupEntries[index];
@@ -4343,7 +4358,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                                 textAlign: TextAlign.center,
                                                 style: TextStyle(
                                                   color: dlg.textSub,
-                                                  fontSize: 13.5,
+                                                  fontSize: BottomDialogMetrics
+                                                      .smallFontSize,
                                                   fontWeight: FontWeight.w600,
                                                 ),
                                               ),
@@ -4353,7 +4369,10 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                             padding: const EdgeInsets.all(2),
                                             itemCount: entries.length,
                                             separatorBuilder: (_, __) =>
-                                                const SizedBox(height: 8),
+                                                const SizedBox(
+                                              height:
+                                                  BottomDialogMetrics.actionGap,
+                                            ),
                                             itemBuilder: (context, index) {
                                               final e = entries[index];
                                               final isOvEx =
@@ -4413,14 +4432,16 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                             ),
                           ],
                         ),
+                        ),
                       ),
                     ],
-                  ),
-                );
+                  );
               },
             );
           },
-        ),
+            ),
+          );
+        },
       );
       dialogAlive = false;
       loadRevision.dispose();
@@ -8508,64 +8529,6 @@ Future<_HomeworkInspectionChoice?> _showHomeworkInspectionChoiceDialog({
 
   foreground = Builder(
     builder: (dialogContext) {
-      final dlg = YggDialogColors.of(dialogContext);
-
-      Widget actionCard({
-        required String label,
-        required String description,
-        required _HomeworkInspectionChoice value,
-        required IconData icon,
-      }) {
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 10),
-          child: _HomeworkCheckCard(
-            child: InkWell(
-              borderRadius: BorderRadius.circular(12),
-              onTap: () => close(value),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 2),
-                child: Row(
-                  children: [
-                    Icon(icon, color: kDlgAccent, size: 22),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            label,
-                            style: TextStyle(
-                              color: dlg.text,
-                              fontSize: 16,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                          const SizedBox(height: 3),
-                          Text(
-                            description,
-                            style: TextStyle(
-                              color: dlg.textSub,
-                              fontSize: 13,
-                              height: 1.25,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Icon(
-                      Icons.chevron_right_rounded,
-                      color: dlg.textSub,
-                      size: 22,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        );
-      }
-
       return Material(
         type: MaterialType.transparency,
         child: Stack(
@@ -8575,92 +8538,45 @@ Future<_HomeworkInspectionChoice?> _showHomeworkInspectionChoiceDialog({
                 behavior: HitTestBehavior.opaque,
                 onTap: close,
                 child: ColoredBox(
-                  color: Colors.black.withValues(alpha: 0.18),
+                  color: Colors.black.withValues(
+                    alpha: BottomDialogMetrics.barrierOpacity,
+                  ),
                 ),
               ),
             ),
-            _HomeworkCheckGlassPanel(
+            BottomDialog(
               icon: Icons.fact_check_outlined,
               title: '숙제 검사 대상입니다',
               shrinkWrap: true,
               onClose: close,
-              actions: const <Widget>[],
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    homeworkTitle,
-                    style: TextStyle(
-                      color: dlg.text,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    dueMetaLabel,
-                    style: TextStyle(
-                      color: dlg.textSub,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 18),
-                  actionCard(
+              footer: Align(
+                alignment: Alignment.centerRight,
+                child: BottomDialogCancelButton(onPressed: close),
+              ),
+              child: BottomDialogPrompt(
+                large: homeworkTitle,
+                medium: dueMetaLabel,
+                actions: [
+                  BottomDialogActionTile(
+                    icon: Icons.fact_check_outlined,
                     label: '채점 시작',
                     description: '제출한 숙제를 채점하고 원래 숙제를 종료합니다.',
-                    value: _HomeworkInspectionChoice.grade,
-                    icon: Icons.fact_check_outlined,
+                    onTap: () => close(_HomeworkInspectionChoice.grade),
                   ),
-                  actionCard(
+                  BottomDialogActionTile(
+                    icon: Icons.assignment_late_outlined,
                     label: '숙제 안 함',
                     description:
                         '0%로 기록하고 오늘 과제로 전환합니다. 남은 과제는 하원 때 다시 숙제로 나갑니다.',
-                    value: _HomeworkInspectionChoice.notDone,
-                    icon: Icons.assignment_late_outlined,
+                    onTap: () => close(_HomeworkInspectionChoice.notDone),
                   ),
-                  actionCard(
+                  BottomDialogActionTile(
+                    icon: Icons.inventory_2_outlined,
                     label: '두고 옴',
                     description: '0%로 기록하고 다음 수업으로 연기합니다. 알림장에 사유를 표시합니다.',
-                    value: _HomeworkInspectionChoice.leftBehind,
-                    icon: Icons.inventory_2_outlined,
+                    onTap: () => close(_HomeworkInspectionChoice.leftBehind),
                   ),
                 ],
-              ),
-              bottomChild: Align(
-                alignment: Alignment.centerRight,
-                child: Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(
-                      AppDialogActionMetrics.height / 2,
-                    ),
-                    onTap: close,
-                    child: Container(
-                      height: AppDialogActionMetrics.height,
-                      padding: const EdgeInsets.symmetric(horizontal: 18),
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: dlg.chipBg,
-                        borderRadius: BorderRadius.circular(
-                          AppDialogActionMetrics.height / 2,
-                        ),
-                      ),
-                      child: Text(
-                        '취소',
-                        style: TextStyle(
-                          color: dlg.chipText,
-                          fontFamily: 'Pretendard',
-                          fontSize: 18,
-                          height: 1.0,
-                          letterSpacing: 1.4,
-                          fontWeight: FontWeight.w400,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
               ),
             ),
           ],
@@ -9017,173 +8933,14 @@ class _HomeworkCheckGlassPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final dlg = YggDialogColors.of(context);
-    final brightness = Theme.of(context).brightness;
-    final isDark = brightness == Brightness.dark;
-    final glassTint = isDark
-        ? UtilityGlassDialogTokens.glassTint
-        : FabTabBarTokens.previewAcademyMenuGlassTintLight;
-    final glassBorder =
-        isDark ? UtilityGlassDialogTokens.borderColor : const Color(0x4D000000);
-    final media = MediaQuery.of(context);
-    const panelOuterHorizontalPadding = 28.0;
-    const panelInnerHorizontalPadding = 22.0;
-    final maxWidth = math.min(
-      media.size.width - panelOuterHorizontalPadding * 2,
-      560.0 * 1.1,
-    );
-    final maxHeight = math.min(media.size.height * 0.72, 640.0);
-    final radius = BorderRadius.circular(28);
-    final blurSigma = FabTabBarTokens.previewAcademyMenuGlassBlurSigma;
-
-    return SafeArea(
-      top: false,
-      child: Align(
-        alignment: Alignment.bottomCenter,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(
-            panelOuterHorizontalPadding,
-            0,
-            panelOuterHorizontalPadding,
-            18,
-          ),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxWidth: maxWidth,
-              maxHeight: maxHeight,
-            ),
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                borderRadius: radius,
-                boxShadow: [
-                  BoxShadow(
-                    color: const Color(0x40000000).withValues(alpha: 0.25),
-                    blurRadius: 24,
-                    offset: const Offset(0, 8),
-                  ),
-                ],
-              ),
-              child: ClipRRect(
-                borderRadius: radius,
-                clipBehavior: Clip.antiAlias,
-                child: Stack(
-                  children: [
-                    Positioned.fill(
-                      child: BackdropFilter(
-                        filter: ui.ImageFilter.blur(
-                          sigmaX: blurSigma,
-                          sigmaY: blurSigma,
-                        ),
-                        child: const ColoredBox(color: Colors.transparent),
-                      ),
-                    ),
-                    DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: glassTint,
-                        border: Border.all(color: glassBorder, width: 0.5),
-                        borderRadius: radius,
-                      ),
-                      child: Material(
-                        type: MaterialType.transparency,
-                        child: Column(
-                          mainAxisSize:
-                              shrinkWrap ? MainAxisSize.min : MainAxisSize.max,
-                          children: [
-                            Padding(
-                              padding: const EdgeInsets.fromLTRB(
-                                panelInnerHorizontalPadding,
-                                14,
-                                12,
-                                8,
-                              ),
-                              child: Row(
-                                children: [
-                                  Icon(icon, color: dlg.headerText, size: 24),
-                                  const SizedBox(width: 10),
-                                  Expanded(
-                                    child: Text(
-                                      title,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                        color: dlg.headerText,
-                                        fontSize: 20,
-                                        fontWeight: FontWeight.w800,
-                                        decoration: TextDecoration.none,
-                                      ),
-                                    ),
-                                  ),
-                                  IconButton(
-                                    tooltip: '닫기',
-                                    onPressed: onClose,
-                                    icon: Icon(
-                                      Icons.close_rounded,
-                                      color: dlg.closeIcon,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            Divider(height: 1, color: dlg.divider),
-                            if (shrinkWrap)
-                              Padding(
-                                padding: const EdgeInsets.fromLTRB(
-                                  panelInnerHorizontalPadding,
-                                  24,
-                                  panelInnerHorizontalPadding,
-                                  24,
-                                ),
-                                child: child,
-                              )
-                            else
-                              Expanded(
-                                child: Padding(
-                                  padding: const EdgeInsets.fromLTRB(
-                                    panelInnerHorizontalPadding,
-                                    24,
-                                    panelInnerHorizontalPadding,
-                                    24,
-                                  ),
-                                  child: child,
-                                ),
-                              ),
-                            if (bottomChild != null) ...[
-                              Padding(
-                                padding: const EdgeInsets.fromLTRB(
-                                  panelInnerHorizontalPadding,
-                                  0,
-                                  panelInnerHorizontalPadding,
-                                  14,
-                                ),
-                                child: bottomChild!,
-                              ),
-                            ] else if (actions.isNotEmpty)
-                              Padding(
-                                padding:
-                                    const EdgeInsets.fromLTRB(18, 10, 18, 14),
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.end,
-                                  children: [
-                                    for (var i = 0;
-                                        i < actions.length;
-                                        i++) ...[
-                                      if (i > 0) const SizedBox(width: 8),
-                                      actions[i],
-                                    ],
-                                  ],
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
+    return BottomDialog(
+      icon: icon,
+      title: title,
+      onClose: onClose,
+      footer: bottomChild,
+      actions: actions,
+      shrinkWrap: shrinkWrap,
+      child: child,
     );
   }
 }
@@ -9232,28 +8989,14 @@ class _HomeworkCheckSectionTitle extends StatelessWidget {
 }
 
 class _HomeworkCheckCard extends StatelessWidget {
-  const _HomeworkCheckCard({required this.child});
+  const _HomeworkCheckCard({required this.child, this.onTap});
 
   final Widget child;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    final dlg = YggDialogColors.of(context);
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: dlg.cardBg,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: dlg.cardBorder, width: 0.5),
-      ),
-      child: Material(
-        type: MaterialType.transparency,
-        borderRadius: BorderRadius.circular(18),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          child: child,
-        ),
-      ),
-    );
+    return BottomDialogCard(onTap: onTap, child: child);
   }
 }
 
@@ -11613,8 +11356,8 @@ Widget _buildHomeworkOverviewErrorState(
           '과제 현황을 불러오지 못했어요.',
           style: TextStyle(
             color: dlg.text,
-            fontSize: 15,
-            fontWeight: FontWeight.w700,
+            fontSize: BottomDialogMetrics.largeFontSize,
+            fontWeight: FontWeight.w900,
           ),
         ),
         const SizedBox(height: 8),
@@ -11887,10 +11630,13 @@ Widget _buildHomeworkOverviewCard(
     duration: const Duration(milliseconds: 170),
     curve: Curves.easeOutCubic,
     width: double.infinity,
-    padding: const EdgeInsets.all(16),
+    padding: const EdgeInsets.symmetric(
+      horizontal: BottomDialogMetrics.cardHorizontalPadding,
+      vertical: BottomDialogMetrics.cardVerticalPadding,
+    ),
     decoration: BoxDecoration(
       color: dlg.fieldBg,
-      borderRadius: BorderRadius.circular(16),
+      borderRadius: BorderRadius.circular(BottomDialogMetrics.cardRadius),
       border: Border.all(
         color: isExpanded ? kDlgAccent.withValues(alpha: 0.45) : dlg.cardBorder,
       ),
@@ -12812,10 +12558,13 @@ Widget _buildCompletedGroupOverviewCard(
       duration: const Duration(milliseconds: 170),
       curve: Curves.easeOutCubic,
       width: double.infinity,
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(
+        horizontal: BottomDialogMetrics.cardHorizontalPadding,
+        vertical: BottomDialogMetrics.cardVerticalPadding,
+      ),
       decoration: BoxDecoration(
         color: dlg.fieldBg,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(BottomDialogMetrics.cardRadius),
         border: Border.all(
           color:
               isExpanded ? kDlgAccent.withValues(alpha: 0.45) : dlg.cardBorder,
@@ -14109,7 +13858,7 @@ String _homeworkGroupCardKey(HomeworkGroup group, Set<String> usedKeys) {
 // ------------------------
 Widget _buildHomeworkChipsReactiveForStudent(
   String studentId,
-  double tick, {
+  Animation<double> tick, {
   _HomeworkDraftEditorController? homeworkDraftEditor,
   double homeworkDraftReveal = 1,
   Set<String> goalSnapshotItemIds = const <String>{},
@@ -14381,7 +14130,7 @@ Widget _buildHomeworkChipsReactiveForStudent(
 Widget _buildReservedHomeworkChipsReactiveForStudent(
   BuildContext context,
   String studentId,
-  double tick,
+  Animation<double> tick,
 ) {
   return ValueListenableBuilder<int>(
     valueListenable: StudentFlowStore.instance.revision,
@@ -15358,7 +15107,7 @@ List<MapEntry<HomeworkAssignmentDetail, HomeworkItem>>
 List<Widget> _buildHomeworkChipsOnceForStudent(
   BuildContext context,
   String studentId,
-  double tick,
+  Animation<double> tick,
   Map<String, String> flowNames,
   Map<String, int> assignmentCounts,
   Set<String> hiddenItemIds,
@@ -15531,7 +15280,13 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
     final int childDerivedPhase = runningChild != null
         ? 2
         : (hasSubmitted ? 3 : (hasConfirmed ? 4 : maxPhase.clamp(1, 4)));
-    final bool hasFreshRuntimeSnapshot = runtimePhase >= 1 &&
+    // 이 기기가 하위과제를 저장하는 중이면 서버 runtime은 아직 이전 단계다.
+    final bool hasUnconfirmedChildEdit = children.any(
+      (child) =>
+          HomeworkStore.instance.hasUnconfirmedLocalEdit(studentId, child.id),
+    );
+    final bool hasFreshRuntimeSnapshot = !hasUnconfirmedChildEdit &&
+        runtimePhase >= 1 &&
         runtimePhase <= 4 &&
         (latestUpdated == null ||
             (runtimeUpdatedAt != null &&
@@ -15718,9 +15473,7 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
         ? '수정'
         : (groupIsSubmitted ? '완료' : (groupIsRunning ? '멈춤' : ''));
     final Color draftExtensionBorderColor = groupIsConfirmed
-        ? (Color.lerp(kDlgBorder, kDlgAccent,
-                0.5 + 0.5 * math.sin(2 * math.pi * tick)) ??
-            kDlgBorder)
+        ? kDlgBorder
         : (groupIsSubmitted
             ? Colors.transparent
             : (groupIsRunning
@@ -15747,7 +15500,15 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
                 strokeWidth: 3,
                 cornerRadius: 12,
               )
-            : (draftExtensionBorderColor.a > 0.01
+            : groupIsConfirmed
+                ? _PulseBorderPainter(
+                    tick: tick,
+                    from: kDlgBorder,
+                    to: kDlgAccent,
+                    strokeWidth: 3,
+                    borderRadius: BorderRadius.circular(12),
+                  )
+                : (draftExtensionBorderColor.a > 0.01
                 ? _SolidRoundedBorderPainter(
                     color: draftExtensionBorderColor,
                     strokeWidth: 3,
@@ -19882,7 +19643,7 @@ Widget _buildHomeworkChipVisual(
   int assignmentCount, {
   String? groupId,
   Set<String> assignedItemIds = const <String>{},
-  required double tick,
+  required Animation<double> tick,
   String? dueLabel,
   bool isHomeworkDue = false,
   HomeworkGradingProgressRate progressRate =
@@ -20151,22 +19912,14 @@ Widget _buildHomeworkChipVisual(
     return draggedTextbookKey == targetGroupTextbookKey;
   }
 
-  final double phase4Pulse = 0.5 + 0.5 * math.sin(2 * math.pi * tick);
+  final bool phase4Pulsing = !visualRunning && visualPhase == 4;
   final Border fullBorder = (visualPhase == 3)
       ? Border.all(color: Colors.transparent, width: borderWMax)
       : (visualRunning
           ? Border.all(
               color: unifiedHomeworkAccent.withOpacity(0.9), width: borderWMax)
           : (visualPhase == 4
-              ? Border.all(
-                  color: Color.lerp(
-                        cardTheme.idleBorderColor,
-                        unifiedHomeworkAccent.withOpacity(0.9),
-                        phase4Pulse,
-                      ) ??
-                      cardTheme.idleBorderColor,
-                  width: borderWMax,
-                )
+              ? Border.all(color: Colors.transparent, width: borderWMax)
               : (visualPhase == 1
                   ? Border.all(color: Colors.transparent, width: borderWMax)
                   : Border.all(
@@ -20608,14 +20361,6 @@ Widget _buildHomeworkChipVisual(
       color: groupedCardBackground,
       borderRadius: chipRadius,
       border: border,
-      boxShadow: [
-        if (!visualRunning && visualPhase == 4)
-          BoxShadow(
-            color: unifiedHomeworkAccent.withOpacity(0.08 + 0.14 * phase4Pulse),
-            blurRadius: 14,
-            spreadRadius: 0.5,
-          ),
-      ],
     ),
     header: Column(
       mainAxisSize: MainAxisSize.min,
@@ -20644,6 +20389,26 @@ Widget _buildHomeworkChipVisual(
       children: expandPanelChildren,
     ),
   );
+
+  if (phase4Pulsing) {
+    chipInner = CustomPaint(
+      painter: _PulseGlowPainter(
+        tick: tick,
+        color: unifiedHomeworkAccent,
+        borderRadius: chipRadius,
+      ),
+      foregroundPainter: attachRightExtension
+          ? null
+          : _PulseBorderPainter(
+              tick: tick,
+              from: cardTheme.idleBorderColor,
+              to: unifiedHomeworkAccent.withOpacity(0.9),
+              strokeWidth: borderWMax,
+              borderRadius: chipRadius,
+            ),
+      child: chipInner,
+    );
+  }
 
   if (!visualRunning && visualPhase == 3 && !attachRightExtension) {
     chipInner = CustomPaint(
@@ -20913,16 +20678,87 @@ class _SolidRoundedBorderPainter extends CustomPainter {
   }
 }
 
+double _homeworkPulse(double tick) => 0.5 + 0.5 * math.sin(2 * math.pi * tick);
+
+// 다시 빌드하지 않고 페인트만 다시 하도록 [tick]을 repaint로 쓴다.
+class _PulseBorderPainter extends CustomPainter {
+  final Animation<double> tick;
+  final Color from;
+  final Color to;
+  final double strokeWidth;
+  final BorderRadius borderRadius;
+  _PulseBorderPainter({
+    required this.tick,
+    required this.from,
+    required this.to,
+    required this.strokeWidth,
+    required this.borderRadius,
+  }) : super(repaint: tick);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rrect = borderRadius
+        .toRRect(Offset.zero & size)
+        .deflate(strokeWidth / 2);
+    final paint = Paint()
+      ..color = Color.lerp(from, to, _homeworkPulse(tick.value)) ?? from
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth
+      ..isAntiAlias = true;
+    canvas.drawRRect(rrect, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _PulseBorderPainter oldDelegate) {
+    return oldDelegate.tick != tick ||
+        oldDelegate.from != from ||
+        oldDelegate.to != to ||
+        oldDelegate.strokeWidth != strokeWidth ||
+        oldDelegate.borderRadius != borderRadius;
+  }
+}
+
+class _PulseGlowPainter extends CustomPainter {
+  final Animation<double> tick;
+  final Color color;
+  final BorderRadius borderRadius;
+  _PulseGlowPainter({
+    required this.tick,
+    required this.color,
+    required this.borderRadius,
+  }) : super(repaint: tick);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final shadow = BoxShadow(
+      color: color.withOpacity(0.08 + 0.14 * _homeworkPulse(tick.value)),
+      blurRadius: 14,
+      spreadRadius: 0.5,
+    );
+    final rrect =
+        borderRadius.toRRect(Offset.zero & size).inflate(shadow.spreadRadius);
+    canvas.drawRRect(rrect, shadow.toPaint());
+  }
+
+  @override
+  bool shouldRepaint(covariant _PulseGlowPainter oldDelegate) {
+    return oldDelegate.tick != tick ||
+        oldDelegate.color != color ||
+        oldDelegate.borderRadius != borderRadius;
+  }
+}
+
 class _RotatingBorderPainter extends CustomPainter {
   final Color baseColor;
-  final double tick; // 0..1
+  final Animation<double> tick;
   final double strokeWidth;
   final double cornerRadius;
   _RotatingBorderPainter(
       {required this.baseColor,
       required this.tick,
       this.strokeWidth = 2.0,
-      this.cornerRadius = 8.0});
+      this.cornerRadius = 8.0})
+      : super(repaint: tick);
   @override
   void paint(Canvas canvas, Size size) {
     final rect = Offset.zero & size;
@@ -20931,7 +20767,7 @@ class _RotatingBorderPainter extends CustomPainter {
     final shader = SweepGradient(
       startAngle: 0.0,
       endAngle: 2 * math.pi,
-      transform: GradientRotation(2 * math.pi * tick),
+      transform: GradientRotation(2 * math.pi * tick.value),
       colors: [
         baseColor.withOpacity(0.1),
         baseColor.withOpacity(0.9),

@@ -20,6 +20,17 @@ const _memory = {
   'supersedes_id': null,
 };
 
+const _basis = {
+  'relation': 'distinct',
+  'limit': 'searched_only',
+  'searches': [
+    {'status': 'empty', 'hit_count': 0, 'scope': 'lead'},
+  ],
+  'reads': [
+    {'id': '44444444-4444-4444-8444-444444444444', 'version': 2, 'title': '앞 결정', 'role': 'compared'},
+  ],
+};
+
 Map<String, dynamic> _save(String id,
         {String status = 'proposed',
         Map<String, dynamic> memory = _memory,
@@ -32,7 +43,7 @@ Map<String, dynamic> _save(String id,
       'message_id': 'm2',
       'kind': 'save_memory',
       'status': status,
-      'payload': {'memory': memory, 'reason': '사용자가 "10분 안에 끝내자"고 확정했다'},
+      'payload': {'memory': memory, 'reason': '사용자가 "10분 안에 끝내자"고 확정했다', 'basis': _basis},
       'preview': {'title': memory['title'], 'memory_kind': memory['kind'], ...preview},
       'result': result,
       'superseded': superseded,
@@ -45,7 +56,7 @@ Map<String, dynamic> _change(String id, String op, {String status = 'proposed', 
       'message_id': 'm4',
       'kind': 'memory_card_change',
       'status': status,
-      'payload': {'target_action_id': 'k1', 'op': op, 'memory': memory, 'reason': '같은 취지의 카드가 이미 있다'},
+      'payload': {'target_action_id': 'k1', 'op': op, 'memory': memory, 'reason': '같은 취지의 카드가 이미 있다', 'basis': op == 'withdraw' ? null : _basis},
       'preview': {
         'op': op,
         'title': memory?['title'] ?? '숙제 확인은 수업 시작 10분 안에',
@@ -167,6 +178,20 @@ void main() {
       expect(tester.widget<ButtonStyleButton>(_button('승인하고 저장')).onPressed, isNotNull);
       expect(tester.widget<ButtonStyleButton>(_button('고쳐서 승인')).onPressed, isNotNull);
       expect(find.text('거절'), findsOneWidget);
+      expect(find.textContaining('비교: 별개'), findsOneWidget);
+      expect(find.textContaining('version 2'), findsOneWidget);
+      expect(find.textContaining('검색한 범위만 확인했습니다'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('비교 근거가 없으면 승인·고치기를 막고 거절만 남긴다', (tester) async {
+      final row = _save('k0');
+      (row['payload'] as Map).remove('basis');
+      await tester.pumpWidget(_host(ThinkActionCard(action: _action(row))));
+      expect(find.textContaining('비교 근거가 없습니다'), findsOneWidget);
+      expect(tester.widget<ButtonStyleButton>(_button('승인하고 저장')).onPressed, isNull);
+      expect(tester.widget<ButtonStyleButton>(_button('고쳐서 승인')).onPressed, isNull);
+      expect(tester.widget<ButtonStyleButton>(_button('거절')).onPressed, isNotNull);
       expect(tester.takeException(), isNull);
     });
 
@@ -243,6 +268,25 @@ void main() {
       expect(find.textContaining('기억 카드 변경 제안 · 거절함'), findsOneWidget);
     });
   });
+
+    testWidgets('보관 제안은 행을 지우지 않는다고 알리고, 뒤 단계는 앞 단계 승인 전에 승인할 수 없다', (tester) async {
+      final retire = _action({
+        ..._save('r1', preview: {'op': 'retire', 'title': '앞 결정'}),
+        'payload': {
+          'op': 'retire',
+          'memory_id': '44444444-4444-4444-8444-444444444444',
+          'reason': '더 쓰지 않는다',
+          'basis': _basis,
+          'flow': {'key': 'root', 'step': 2, 'steps': 2},
+        },
+      });
+      await tester.pumpWidget(_host(ThinkActionCard(action: retire)));
+      expect(find.text('기억 내리기 제안'), findsOneWidget);
+      expect(find.textContaining('행과 변경 이력은 지우지 않습니다'), findsOneWidget);
+      expect(find.textContaining('앞 단계가 승인되기 전에는'), findsOneWidget);
+      expect(tester.widget<ButtonStyleButton>(_button('승인하고 보관')).onPressed, isNull);
+      expect(tester.widget<ButtonStyleButton>(_button('거절')).onPressed, isNotNull);
+    });
 
   testWidgets('고치기 창: 제목이 비면 확인할 수 없고, 원칙으로 바꾸면 결정 전용 칸을 숨긴다', (tester) async {
     ThinkMemoryProposal? result;

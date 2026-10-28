@@ -25,7 +25,7 @@
 // 코너 이름 표기가 조금씩 흔들려도("STEP1 쏙쏙 개념 익히기" / "쏙쏙" /
 // "STEP 1 쏙쏙") 같은 코너로 보기 위한 대표 키워드.
 const CORNER_KEYWORDS = [
-  ['concept_check', ['개념확인', '개념체크']],
+  ['concept_check', ['개념확인', '개념체크', '개념CHECK']],
   ['extra_practice', ['한번더', '한번더연습']],
   ['essential_problem', ['필수문제', '필수']],
   ['step_drill', ['쏙쏙']],
@@ -54,6 +54,11 @@ export function canonicalCorner(input) {
       if (compact.includes(keyword)) return id;
     }
   }
+  // 개념+유형 고등 해설 박스 "문제 12~14쪽" / "연습문제 26~28쪽". "문제" 는 다른
+  // 코너 이름에도 들어가므로 쪽 표기를 걷어 낸 뒤 이름 전체가 같을 때만 본다.
+  const name = compact.replace(/[\d~\-.]|쪽|P/g, '');
+  if (name === '문제') return 'high_problem';
+  if (name.startsWith('연습문제')) return 'high_exercise';
   return '';
 }
 
@@ -88,6 +93,8 @@ export function buildExpectedIndex(expectedEntries, normalizeKey) {
       key,
       corner: canonicalCorner(entry?.corner),
       page: Number.isFinite(page) && page > 0 ? page : 0,
+      // 앱이 "같은 번호·코너 중 해설 차례상 다음에 나올 문항" 으로 짚은 항목.
+      frontier: entry?.frontier === true,
     };
     all.push(candidate);
     const keys = new Set([key]);
@@ -206,10 +213,57 @@ export function resolveExpectedBox(raw, problemNumber, expectedIndex, normalizeK
   if (fits.length === 0) return { matched: null, reject: true };
   fits.sort((a, b) => b.score - a.score || a.candidate.index - b.candidate.index);
   const best = fits[0];
+  // 개념+유형 고등 해설은 소단원마다 "02-1" 이 다시 나오고, 머리 없는 이어지는
+  // 지면에서는 배지로 가를 수 없다. 해설은 본문 차례대로 인쇄되므로 앱이 짚은
+  // 차례상 다음 후보가 하나뿐이면 그것으로 정한다.
+  const tied = fits.filter((fit) => fit.score === best.score);
+  if (tied.length > 1) {
+    const frontier = tied.filter((fit) => fit.candidate.frontier);
+    if (frontier.length === 1) {
+      return { matched: frontier[0].candidate, reject: false };
+    }
+  }
   // 후보가 여럿인데 모델이 출처를 안 적었으면 찍지 않는다. 잘못 연결하면
   // 다른 코너의 정답이 조용히 들어앉는다.
   if (best.score === 0 && fits.length > 1) return undecided;
   return { matched: best.candidate, reject: false };
+}
+
+// 묶음 배지는 묶음이 시작되는 지면에만 인쇄된다. 이어지는 지면에서 모델은 적을
+// 배지가 없어 꼬리말에 찍힌 **해설 쪽번호**("중단원 TEST 163")를 출처로 올린다.
+// 그 번호는 본교재·워크북 쪽 번호와 체계가 달라, 출처 대조가 기대 문항을 하나도
+// 못 맞추고 전부 버린다. 실지면 2-2 해설 163쪽에서 12~19 여덟 건이 이렇게 통째로
+// 사라졌다(모델은 여덟 건 다 정확히 찾아 놓고 있었다). 개념+유형 고등 해설
+// 71쪽에서도 "개념편 71" 을 출처로 적어 02-1~03-3 다섯 건이 버려졌다. 요청한
+// 그 지면 번호와 같은 값은 배지가 아니므로 쪽 단서를 지우고 코너·번호로만 대조한다.
+export function footerEchoPages(opts) {
+  const pages = new Set();
+  for (const value of [opts?.rawPage, opts?.displayPage]) {
+    const page = Number.parseInt(String(value ?? ''), 10);
+    if (Number.isFinite(page) && page > 0) pages.add(page);
+  }
+  return pages;
+}
+
+export function stripFooterEchoBadge(raw, footerPages) {
+  if (footerPages.size === 0) return raw;
+  const from = Number.parseInt(
+    String(raw.source_page ?? raw.sourcePage ?? ''),
+    10,
+  );
+  if (!Number.isFinite(from) || !footerPages.has(from)) return raw;
+  // 진짜 범위 배지("본교재 141~142쪽")는 끝 쪽이 지면 번호와 다르다.
+  const to = Number.parseInt(
+    String(raw.source_page_end ?? raw.sourcePageEnd ?? ''),
+    10,
+  );
+  if (Number.isFinite(to) && to > 0 && !footerPages.has(to)) return raw;
+  const out = { ...raw };
+  delete out.source_page;
+  delete out.sourcePage;
+  delete out.source_page_end;
+  delete out.sourcePageEnd;
+  return out;
 }
 
 /// 범위 배지("1~5")를 기대 문항 하나하나로 펼친다.

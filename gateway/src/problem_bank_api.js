@@ -15,6 +15,11 @@ import {
 } from "./problem_bank/render_engine/xelatex_v2/renderer.js";
 import { createMathSvgRenderer } from "./problem_bank/render_engine/math/mathjax_svg_renderer.js";
 import { generateObjectiveDraftForQuestion } from "./problem_bank_extract_worker.js";
+import {
+  createConceptPageStore,
+  createConceptPageWorker,
+  renderPdfPagePng,
+} from "./concept_source_page_worker.js";
 
 const __api_dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__api_dirname, "..", "..");
@@ -4439,7 +4444,12 @@ const ANSWER_RENDER_STYLE_VERSION = "answer-xelatex-v6-rightsheet-bold-hires";
 const ANSWER_RENDER_PIXEL_RATIO = 8;
 // 답지가 코너·소단원 블록으로 쪼개져 번호가 블록마다 1번부터 다시 시작하는
 // 시리즈. 기대 항목마다 코너·본문 페이지 배지를 함께 보내 대조한다.
-const ANSWER_BADGE_SERIES = new Set(["gaeyu", "suryeok", "gojaengi"]);
+const ANSWER_BADGE_SERIES = new Set([
+  "gaeyu",
+  "gaeyu_high",
+  "suryeok",
+  "gojaengi",
+]);
 const TEXTBOOK_ANSWER_RENDER_BUCKET =
   process.env.TEXTBOOK_ANSWER_RENDER_BUCKET || "textbook-answer-renders";
 const TEXTBOOK_ANSWER_RENDER_STYLE_VERSION = "textbook-answer-xelatex-v2-hires";
@@ -9465,6 +9475,8 @@ function parseTextbookExpectedEntries(input) {
           .trim()
           .slice(0, 60),
         page: Number.isFinite(page) && page > 0 ? page : 0,
+        // 같은 번호·코너 후보 중 해설 차례상 다음 문항(앱이 짚는다).
+        frontier: v.frontier === true,
         position,
       };
     })
@@ -9570,6 +9582,9 @@ async function handleTextbookVlmExtractAnswers(body, res) {
     normalized = normalizeAnswerResult(result.parsedJson, {
       expectedNumbers,
       expectedEntries,
+      series,
+      rawPage,
+      displayPage,
     });
     if (normalized.items.length > 0) break;
     const wrong = wrongBadgeLabels(result.parsedJson, expectedEntries);
@@ -12508,6 +12523,23 @@ const server = http.createServer((req, res) => {
   void handler(req, res);
 });
 
+// Think 개념 출처 원본 쪽 이미지. 본문 PDF 원본 캐시(ensureTextbookOriginalCached)를 함께 쓴다.
+function startConceptPageWorker() {
+  if (String(process.env.CONCEPT_PAGE_WORKER || "1").trim() === "0") return;
+  const workerName = (
+    process.env.CONCEPT_PAGE_WORKER_NAME || `pb-api@${os.hostname()}`
+  ).slice(0, 80);
+  createConceptPageWorker({
+    store: createConceptPageStore(supa),
+    workerName,
+    contentKeyOf: textbookContentHashShort,
+    ensureOriginal: ensureTextbookOriginalCached,
+    renderPage: ({ srcPath, page, longEdge }) =>
+      renderPdfPagePng({ execFile: execFileAsync, srcPath, page, longEdge }),
+  }).start();
+  console.log("[concept-page] worker started", JSON.stringify({ workerName }));
+}
+
 server.listen(API_PORT, API_HOST, () => {
   console.log(
     "[pb-api] listening",
@@ -12518,4 +12550,5 @@ server.listen(API_PORT, API_HOST, () => {
     }),
   );
   startHomeworkAnswerPrebakeScanner();
+  startConceptPageWorker();
 });

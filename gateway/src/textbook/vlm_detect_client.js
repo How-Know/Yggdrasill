@@ -14,6 +14,8 @@ import {
   buildSuryeokRangeHeaderPrompt,
   buildWonriMiddleStepHeaderPrompt,
   buildWonriPageClassPrompt,
+  GAEYU_HIGH_ITEM_CATEGORIES,
+  GAEYU_HIGH_LABEL_PARTS,
   GAEYU_ITEM_CATEGORIES,
   GOJAENGI_HIGH_LABEL_PARTS,
   GOJAENGI_SECTION_BY_SUB_KEY,
@@ -685,6 +687,8 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     ...WONRI_MIDDLE_ITEM_CATEGORIES,
     // 개념+유형 전용 섹션 (sub_key A~F 슬롯 대응).
     ...GAEYU_ITEM_CATEGORIES,
+    // 개념+유형 고등 전용 섹션 (sub_key A~D 슬롯 대응).
+    ...GAEYU_HIGH_ITEM_CATEGORIES,
     // 수력충전 전용 섹션 (sub_key A/B 슬롯 대응).
     ...SURYEOK_ITEM_CATEGORIES,
     // 고쟁이 전용 섹션 (sub_key A~F 슬롯 대응).
@@ -734,6 +738,11 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
   const recoverWonriMiddleItems =
     series === 'wonri_middle' &&
     hasStrongWonriMiddleNumberEvidence(rawItems, out.section);
+  // 개념 지면 아래쪽 "개념 Check" 상자만 있는 지면을 모델이 concept_page 로
+  // 적으면서 Check 문항은 그대로 돌려줄 때가 있다. 코너가 붙은 번호 문항이
+  // 있으면 문항 쪽을 믿는다.
+  const recoverGaeyuHighItems =
+    series === 'gaeyu_high' && hasGaeyuHighNumberEvidence(rawItems);
   // 개념원리 일반 소단원의 개념→문항 경계 판정용. 모델이 정확한
   // "개념원리 익히기" 인쇄 문구를 확인했다고 명시한 경우에만 true.
   out.concept_drill_header_visible =
@@ -742,6 +751,7 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     !recoverBasicDrillItems &&
     !recoverGojaengiItems &&
     !recoverWonriMiddleItems &&
+    !recoverGaeyuHighItems &&
     (out.page_kind === 'concept_page' ||
       /\bconcept_page\b/i.test(out.notes))
   ) {
@@ -770,8 +780,14 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     const suffix = 'concept_page_overridden_by_valid_wonri_middle_items';
     out.notes = out.notes ? `${out.notes}; ${suffix}` : suffix;
   }
+  if (recoverGaeyuHighItems && out.page_kind === 'concept_page') {
+    out.page_kind = 'mixed';
+    const suffix = 'concept_page_overridden_by_gaeyu_high_items';
+    out.notes = out.notes ? `${out.notes}; ${suffix}` : suffix;
+  }
 
   const isGaeyu = series === 'gaeyu';
+  const isGaeyuHigh = series === 'gaeyu_high';
   const isSuryeok = series === 'suryeok';
   const isGojaengiHigh = series === 'gojaengi_high';
   const isGojaengi = series === 'gojaengi' || isGojaengiHigh;
@@ -797,9 +813,16 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     // 쎈/RPM A단계에는 문항 라벨이 없다. 모델이 개념 박스의 글자나 세트
     // 장식을 "중/대표 문제" 등으로 잘못 붙이면 정상 4자리 번호까지 A 검증에서
     // 제거되므로, 확정된 basic_drill 지면에서는 잘못된 라벨을 버린다.
-    const detectedLabel = isGojaengiHigh
-      ? normalizeGojaengiHighLabel(raw.label)
-      : normalizeDifficultyLabel(raw.label);
+    const gaeyuHighCategory = isGaeyuHigh
+      ? resolveGaeyuHighCategory(raw, printedNumber, out.section)
+      : '';
+    const detectedLabel = isGaeyuHigh
+      ? gaeyuHighCategory === 'high_exercise'
+        ? normalizeGaeyuHighLabel(raw.label)
+        : ''
+      : isGojaengiHigh
+        ? normalizeGojaengiHighLabel(raw.label)
+        : normalizeDifficultyLabel(raw.label);
     const label =
       out.section === 'basic_drill' &&
       (series === 'ssen' || series === 'rpm')
@@ -827,6 +850,8 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
           printedNumber,
           conceptCheckPage,
         })
+      : isGaeyuHigh
+        ? formatGaeyuHighNumber(gaeyuHighCategory, printedNumber)
       : isSuryeok
         ? formatSuryeokNumber(printedNumber)
         : isGojaengi
@@ -840,7 +865,7 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     // 개념+유형은 대표 번호 하나 아래 (1), (2)가 붙는 구조다. 이 소문항에는
     // 독립 번호가 없으므로 Stage 1 범위 헤더로 저장하면 대표 문항까지 추출
     // 대상에서 빠진다. 세트 여부는 문제은행 추출 단계에서 종속형으로 정한다.
-    const isSet = isGaeyu
+    const isSet = isGaeyu || isGaeyuHigh
       ? false
       : Boolean(raw.is_set_header) || Boolean(inferredSetRange);
     let setRange = null;
@@ -854,7 +879,7 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     if (!setRange && inferredSetRange) {
       setRange = inferredSetRange;
     }
-    if (isGaeyu) setRange = null;
+    if (isGaeyu || isGaeyuHigh) setRange = null;
     const colRaw = raw.column;
     const column =
       colRaw === 1 || colRaw === 2 ? colRaw : colRaw == null ? null : null;
@@ -871,6 +896,8 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     // 빠뜨리면 라벨로 1차 보정하고, 나머지는 아래 majority 백필로 채운다.
     const category = isGaeyu
       ? gaeyuCategory
+      : isGaeyuHigh
+        ? gaeyuHighCategory
       : isSuryeok
         ? resolveSuryeokCategory(raw, out.section)
         : isWonriMiddle
@@ -902,6 +929,8 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     // 확인 문항이라 유형명을 갖지 않는다.
     const groupAllowedCategories = isGaeyu
       ? ['essential_problem']
+      : isGaeyuHigh
+        ? ['high_example', 'high_problem']
       : isSuryeok
         ? ['type_problem']
         : isWonriMiddle
@@ -953,6 +982,7 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
       out.page_kind = 'concept_page';
     }
   }
+  if (isGaeyuHigh) dropGaeyuHighChecksWithoutHeader(out, parsedJson);
   if (gaeyuConceptCheckFixed > 0) {
     const suffix = `gaeyu_concept_check_with_number_fixed=${gaeyuConceptCheckFixed}`;
     out.notes = out.notes ? `${out.notes}; ${suffix}` : suffix;
@@ -1681,6 +1711,85 @@ function normalizeGojaengiHighLabel(input) {
   return GOJAENGI_HIGH_LABEL_PARTS.filter((part) =>
     GOJAENGI_HIGH_LABEL_PATTERNS[part].test(compact),
   ).join('+');
+}
+
+// 개념+유형 고등 연습문제 라벨. 모델이 "교육청 기출", "실력 / 교육청" 처럼 적어도
+// GAEYU_HIGH_LABEL_PARTS 순서의 "+" 조합 하나로 맞춘다.
+const GAEYU_HIGH_LABEL_PATTERNS = Object.freeze({
+  실력: /실력/,
+  교육청: /교육청/,
+  평가원: /평가원/,
+  수능: /수능/,
+  서술형: /서술형/,
+});
+
+export function normalizeGaeyuHighLabel(input) {
+  const compact = String(input || '').replace(/\s+/g, '');
+  if (!compact) return '';
+  return GAEYU_HIGH_LABEL_PARTS.filter((part) =>
+    GAEYU_HIGH_LABEL_PATTERNS[part].test(compact),
+  ).join('+');
+}
+
+const GAEYU_HIGH_PROBLEM_NUMBER = /^0*(\d{1,2})\s*[-–—‐]\s*0*(\d{1,2})$/u;
+
+// 하이픈 번호("01-2")는 이 교재에서 필수예제 아래 "문제" 에만 인쇄된다. 모델이
+// 코너를 잘못 적어도 번호 모양이 더 강한 근거다.
+function resolveGaeyuHighCategory(raw, printedNumber, pageSection) {
+  if (GAEYU_HIGH_PROBLEM_NUMBER.test(String(printedNumber || '').trim())) {
+    return 'high_problem';
+  }
+  const value = String(raw?.category ?? '').trim();
+  const section = GAEYU_HIGH_ITEM_CATEGORIES.includes(pageSection)
+    ? pageSection
+    : '';
+  if (value === 'high_problem') {
+    // 하이픈 없는 "문제" 는 없다. 연습문제 지면에서 온 것이면 연습문제다.
+    return section === 'high_exercise' ? 'high_exercise' : '';
+  }
+  if (GAEYU_HIGH_ITEM_CATEGORIES.includes(value)) return value;
+  return section === 'high_problem' ? '' : section;
+}
+
+function formatGaeyuHighNumber(category, printedNumber) {
+  const raw = String(printedNumber || '').trim();
+  if (category === 'high_problem') {
+    const match = raw.match(GAEYU_HIGH_PROBLEM_NUMBER);
+    if (!match) return '';
+    return `${match[1].padStart(2, '0')}-${Number.parseInt(match[2], 10)}`;
+  }
+  const digits = raw.match(/\d+/u)?.[0];
+  if (!digits) return '';
+  const n = Number.parseInt(digits, 10);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  return category === 'high_example' ? String(n).padStart(2, '0') : String(n);
+}
+
+// 개념 Check 문항은 "개념 Check" 제목 줄 아래에만 인쇄된다. 제목이 없는 개념
+// 지면(공통수학1 136쪽: 개념 ❹ 설명과 "예" 풀이의 (i)(ii), 노란 상자 (1)~(3))
+// 에서 모델이 그 번호들을 개념 Check 로 올린 일이 있어, 제목 위치를 근거로 거른다.
+function dropGaeyuHighChecksWithoutHeader(out, parsedJson) {
+  const header = parseBbox4(parsedJson?.concept_check_header_bbox);
+  const before = out.items.length;
+  out.items = out.items.filter((item) => {
+    if (item.category !== 'high_concept_check') return true;
+    if (!header) return false;
+    const top = item.bbox?.[0] ?? item.item_region?.[0];
+    return top == null || top >= header[0];
+  });
+  const dropped = before - out.items.length;
+  if (dropped === 0) return;
+  const suffix = `gaeyu_high_check_without_header_dropped=${dropped}`;
+  out.notes = out.notes ? `${out.notes}; ${suffix}` : suffix;
+  if (out.items.length === 0) out.page_kind = 'concept_page';
+}
+
+function hasGaeyuHighNumberEvidence(rawItems) {
+  return rawItems.some((raw) => {
+    const category = String(raw?.category ?? '').trim();
+    if (!GAEYU_HIGH_ITEM_CATEGORIES.includes(category)) return false;
+    return /\d/u.test(String(raw?.number ?? '')) && parseBbox4(raw?.bbox) != null;
+  });
 }
 
 function normalizeDifficultyLabel(input) {

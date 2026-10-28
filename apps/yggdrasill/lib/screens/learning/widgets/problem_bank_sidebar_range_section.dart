@@ -21,6 +21,9 @@ class ProblemBankSidebarRangeSection extends StatefulWidget {
     required this.courseOptions,
     required this.onCourseChanged,
     required this.isBusy,
+    this.showBookSearch = false,
+    this.bookSearchController,
+    this.onBookSearchChanged,
   });
 
   final String selectedLevel;
@@ -35,6 +38,9 @@ class ProblemBankSidebarRangeSection extends StatefulWidget {
   final List<String> courseOptions;
   final ValueChanged<String?> onCourseChanged;
   final bool isBusy;
+  final bool showBookSearch;
+  final TextEditingController? bookSearchController;
+  final ValueChanged<String>? onBookSearchChanged;
 
   @override
   State<ProblemBankSidebarRangeSection> createState() =>
@@ -43,7 +49,24 @@ class ProblemBankSidebarRangeSection extends StatefulWidget {
 
 class _ProblemBankSidebarRangeSectionState
     extends State<ProblemBankSidebarRangeSection> {
-  bool _settingsExpanded = false;
+  late bool _settingsExpanded;
+
+  @override
+  void initState() {
+    super.initState();
+    _settingsExpanded = _settingsOnFor(widget.selectedSourceTypeCode);
+  }
+
+  @override
+  void didUpdateWidget(covariant ProblemBankSidebarRangeSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.selectedSourceTypeCode != widget.selectedSourceTypeCode) {
+      _settingsExpanded = _settingsOnFor(widget.selectedSourceTypeCode);
+    }
+  }
+
+  bool _settingsOnFor(String sourceTypeCode) =>
+      sourceTypeCode == 'private_material';
 
   @override
   Widget build(BuildContext context) {
@@ -146,6 +169,9 @@ class _ProblemBankSidebarRangeSectionState
                     courseOptions: widget.courseOptions,
                     onCourseChanged: widget.onCourseChanged,
                     isBusy: widget.isBusy,
+                    showBookSearch: widget.showBookSearch,
+                    bookSearchController: widget.bookSearchController,
+                    onBookSearchChanged: widget.onBookSearchChanged,
                   ),
                 ),
                 sizeCurve: Curves.easeOutCubic,

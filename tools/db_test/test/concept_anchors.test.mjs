@@ -75,14 +75,16 @@ test('고리·다른 폴더·자기 자신·없는 개념·잘못된 요청은 �
   await op(() => t.rejects(`select concept_anchor_set('[]'::jsonb, 'manual')`, [], /concept_anchor_bad_request/));
 });
 
-test('개념을 지우면 그 개념에서 나가고 들어오는 연결이 함께 없어진다', async () => {
+test('연결이 나가거나 들어오는 개념은 지우지 않고 연결도 그대로 남는다', async () => {
   const { ids: [a, b, c] } = await folderWith('지우기 시험', ['가', '나', '다']);
   await setLinks([{ concept_id: b, anchor_id: a }, { concept_id: c, anchor_id: b }]);
-  await t.exec(`delete from concepts where id = '${b}'`);
+  for (const id of [a, b, c]) {
+    await t.rejects(`delete from concepts where id = $1::uuid`, [id], /concept_delete_attached/);
+  }
   assert.equal(Number((await t.one(
     `select count(*)::int as n from concept_anchor_links where concept_id = any($1::uuid[]) or anchor_id = any($1::uuid[])`,
     [[a, b, c]],
-  )).n), 0);
+  )).n), 2);
 });
 
 const PREPARED = {

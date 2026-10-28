@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:flutter/widgets.dart';
 
 import '../auth_service.dart';
+import '../concept_library_controller.dart';
+import '../course_map_controller.dart';
 import 'think_action_models.dart';
 import 'think_api.dart';
 import 'think_code_controller.dart';
@@ -565,10 +567,13 @@ class ThinkController extends ChangeNotifier {
       list[i] = a;
     } else {
       // 서버와 같이, 같은 종류의 대기 중 제안은 새 제안으로 대체된다. 기억 카드는 서로 대체하지 않는다.
+      // 과정 탐색도 카드는 같은 과정의 탐색도 고치기만 대체하고, 배치·개념 고치기·새 과정·검토 기록 카드는 쌓인다.
       if (a.pending && !a.kind.isMemory) {
         for (var j = 0; j < list.length; j++) {
           final o = list[j];
-          if (o.pending && o.kind == a.kind) list[j] = o.copyWith(status: ThinkActionStatus.rejected, superseded: true);
+          if (!o.pending || o.kind != a.kind) continue;
+          if (a.kind.isCourseThink && (a.kind != ThinkActionKind.courseMapChange || o.courseId != a.courseId)) continue;
+          list[j] = o.copyWith(status: ThinkActionStatus.rejected, superseded: true);
         }
       }
       list.add(a);
@@ -598,6 +603,13 @@ class ThinkController extends ChangeNotifier {
   /// 개념 초안 변경·기준 고치기 카드 승인(concept_draft_action_apply). 다시 정리는 검토 창이 Edge로 한다.
   Future<ThinkAction> applyConceptDraftAction(ThinkAction a) async {
     final saved = await _api.applyConceptDraftAction(a.id);
+    await _afterAction(saved);
+    return saved;
+  }
+
+  /// 과정 탐색도·개념 배치·개념 고치기 카드 승인. 항목 카드는 [overrides]로 뺄 항목·바꾼 단원을 보낸다.
+  Future<ThinkAction> applyCourseThinkAction(ThinkAction a, {Map<String, dynamic> overrides = const {}}) async {
+    final saved = await _api.applyCourseThinkAction(a.id, overrides: overrides);
     await _afterAction(saved);
     return saved;
   }
@@ -636,6 +648,9 @@ class ThinkController extends ChangeNotifier {
     var code = false, tree = false, conversations = false, memories = false, roles = false, criteria = false;
     final reloadActions = <String>{};
     final reloadDetails = <String>{};
+    final courseIds = <String?>{};
+    final changedConcepts = <String>{};
+    final removedConcepts = <String>{};
     for (final a in applied) {
       final deleted = a.result?['deleted_id']?.toString();
       if (a.kind == ThinkActionKind.deleteConversation && deleted != null) _forgetConversation(deleted);
@@ -684,7 +699,44 @@ class ThinkController extends ChangeNotifier {
         case ThinkActionKind.conceptDraftRerun:
           // 초안·기준은 검토 창이 다시 읽는다.
           break;
+        case ThinkActionKind.courseMapChange:
+        case ThinkActionKind.courseMapCreate:
+        case ThinkActionKind.conceptPlacementChange:
+          courseIds.add(a.courseId);
+        case ThinkActionKind.conceptLibraryChange:
+          // 새 개념을 바로 단원에 놓았을 수 있다. 어느 과정인지 몰라 읽어 둔 과정을 모두 다시 읽는다.
+          courseIds.add(null);
+          for (final r in a.courseItemResults.values) {
+            final id = r['concept_id']?.toString();
+            final deleted = r['deleted'];
+            if (deleted is Map && deleted['id'] != null) removedConcepts.add(deleted['id'].toString());
+            if (id != null && id.isNotEmpty) changedConcepts.add(id);
+          }
+        case ThinkActionKind.conceptReviewRecord:
+          // 본문은 그대로지만 검토 기록이 붙어 그 개념은 이제 지울 수 없다. 개념 탭이 다시 읽게 한다.
+          for (final r in a.courseItemResults.values) {
+            final id = r['concept_id']?.toString();
+            if (r['status'] == 'applied' && id != null && id.isNotEmpty) changedConcepts.add(id);
+          }
+        case ThinkActionKind.conceptRelationChange:
+          // 개념 글은 그대로고 관계만 바뀐다. 두 개념의 관계 칸을 다시 읽게 한다.
+          for (final r in a.courseItemResults.values) {
+            if (r['status'] != 'applied') continue;
+            for (final key in const ['concept_id', 'related_id']) {
+              final id = r[key]?.toString();
+              if (id != null && id.isNotEmpty) changedConcepts.add(id);
+            }
+          }
       }
+    }
+    if (courseIds.isNotEmpty) {
+      final course = CourseMapController.instance;
+      unawaited(courseIds.contains(null) || courseIds.length > 1
+          ? course.refreshAfterExternalChange()
+          : course.refreshAfterExternalChange(courseId: courseIds.first));
+    }
+    if (changedConcepts.isNotEmpty || removedConcepts.isNotEmpty) {
+      ConceptLibraryController.instance.externalChange(changed: changedConcepts, removed: removedConcepts);
     }
     await Future.wait([
       if (code) ThinkCodeController.instance.refresh(quiet: true),
@@ -1107,6 +1159,21 @@ class ThinkController extends ChangeNotifier {
       // 나누기 정보는 다음에 대화를 열 때 다시 읽는다.
     }
   }
+
+  /// 고른 대화의 승인 요약·작업 상태를 다음 답변의 참고로만 가리킨다. 요약을 복사하지 않는다.
+  Future<void> setContextSource(String conversationId, String? sourceId) async {
+    await _api.setConversationContextSource(conversationId, sourceId);
+    final d = details[conversationId];
+    if (d != null) {
+      details[conversationId] = d.copyWith(
+        contextFromConversationId: sourceId,
+        clearContextFrom: sourceId == null,
+      );
+    }
+    notifyListeners();
+  }
+
+  Future<ThinkContextLookup> lookupContext(String id) => _api.lookupConversationContext(id);
 
   /// 승인하면 서버가 한 트랜잭션으로 새 대화를 만들고 이번 질문·답변을 복사한다. 그 뒤 새 대화로 넘어간다.
   /// [open]이 false면(개념 탭 카드) Think 화면의 선택을 바꾸지 않는다.

@@ -14,6 +14,7 @@ class TextbookExpectedAnswer {
     this.corner = '',
     this.blockTitle = '',
     this.bodyPage,
+    this.frontier = false,
   });
 
   /// Stage 1 이 저장한 문항번호. VLM 도 이 문자열 그대로 돌려줘야 한다.
@@ -32,11 +33,27 @@ class TextbookExpectedAnswer {
   /// 답지 박스 오른쪽 위의 본문 페이지 배지 (예: P.109 → 109).
   final int? bodyPage;
 
+  /// 같은 번호·코너가 한 호출에 여럿 담겼을 때 해설 차례상 먼저 나올 항목.
+  ///
+  /// 개념+유형 고등 해설은 소단원마다 "02-1" 이 다시 나오고, 머리 없는 이어지는
+  /// 지면에서는 배지로 가를 수 없다. 게이트웨이는 배지로 못 가른 동점에서만
+  /// 이 표시를 쓴다.
+  final bool frontier;
+
+  TextbookExpectedAnswer asFrontier() => TextbookExpectedAnswer(
+        number: number,
+        corner: corner,
+        blockTitle: blockTitle,
+        bodyPage: bodyPage,
+        frontier: true,
+      );
+
   Map<String, dynamic> toJson() => <String, dynamic>{
         'problem_number': number,
         if (corner.trim().isNotEmpty) 'corner': corner.trim(),
         if (blockTitle.trim().isNotEmpty) 'title': blockTitle.trim(),
         if (bodyPage != null && bodyPage! > 0) 'page': bodyPage,
+        if (frontier) 'frontier': true,
       };
 }
 
@@ -180,9 +197,55 @@ const Set<String> _kGojaengiBodySections = <String>{
 bool textbookAnswerNeedsCorner(String seriesKey) {
   final key = seriesKey.trim().toLowerCase();
   return key == 'gaeyu' ||
+      key == 'gaeyu_high' ||
       key == 'suryeok' ||
       key == 'gojaengi' ||
       key == 'wonri_middle';
+}
+
+/// 개념+유형 고등 크롭의 section → 해설 상자 머리의 코너 이름
+/// ("개념 Check 8쪽", "문제 9쪽", "연습문제 26~28쪽").
+/// 필수예제는 본문 "풀이" 상자에서 답을 읽으므로 해설 코너가 없다.
+const Map<String, String> _kGaeyuHighAnswerCorners = <String, String>{
+  'high_concept_check': '개념 Check',
+  'high_problem': '문제',
+  'high_exercise': '연습문제',
+};
+
+const Map<String, String> _kGaeyuHighSectionBySubKey = <String, String>{
+  'A': 'high_concept_check',
+  'B': 'high_example',
+  'C': 'high_problem',
+  'D': 'high_exercise',
+};
+
+/// 개념 Check 는 블록마다 1번부터 다시 시작해 앱이 블록 시작 쪽을 붙여
+/// "8-1" 로 저장한다. 해설에는 "개념 Check 8쪽" 상자 아래 "1" 로 인쇄되므로
+/// 번호는 접두어를 떼고, 상자는 접두어 쪽으로 짚는다. 블록이 두 쪽에 걸치면
+/// 뒤쪽 문항의 지면과 상자 머리 쪽이 다르기 때문이다.
+TextbookExpectedAnswer _gaeyuHighExpectedAnswer({
+  required String problemNumber,
+  required String section,
+  required String subKey,
+  int? bodyPage,
+}) {
+  final scoped = _kGaeyuHighSectionBySubKey[subKey.trim().toUpperCase()];
+  final trimmed = scoped ?? section.trim();
+  if (trimmed == 'high_concept_check') {
+    final matched = RegExp(r'^(\d+)-(\d+)$').firstMatch(problemNumber.trim());
+    if (matched != null) {
+      return TextbookExpectedAnswer(
+        number: matched.group(2)!,
+        corner: _kGaeyuHighAnswerCorners[trimmed]!,
+        bodyPage: int.parse(matched.group(1)!),
+      );
+    }
+  }
+  return TextbookExpectedAnswer(
+    number: problemNumber,
+    corner: _kGaeyuHighAnswerCorners[trimmed] ?? '',
+    bodyPage: bodyPage,
+  );
 }
 
 /// 번호가 블록마다 1번부터 다시 시작하는 코너. 앱은 이 코너의 크롭에만
@@ -272,6 +335,14 @@ TextbookExpectedAnswer textbookExpectedAnswerFor({
       number: problemNumber,
       corner: _kWonriMiddleAnswerCorners[section.trim()] ?? '',
       blockTitle: midName.trim(),
+      bodyPage: bodyPage,
+    );
+  }
+  if (seriesKey.trim().toLowerCase() == 'gaeyu_high') {
+    return _gaeyuHighExpectedAnswer(
+      problemNumber: problemNumber,
+      section: section,
+      subKey: subKey,
       bodyPage: bodyPage,
     );
   }

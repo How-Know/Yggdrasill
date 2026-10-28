@@ -39,6 +39,13 @@ export function buildBodySolutionsPrompt({
       expectedNumbers,
     });
   }
+  if (seriesKey === 'gaeyu_high') {
+    return buildConceptPlusHighBodySolutionsPrompt({
+      rawPage,
+      displayPage,
+      expectedNumbers,
+    });
+  }
   const pageLine =
     displayPage != null && Number.isFinite(displayPage)
       ? `이 이미지는 교재(개념원리) 본문 PDF 의 ${displayPage}페이지이다. 이 값은 PDF raw page ${rawPage}와 동일한 입력 페이지 기준이다.`
@@ -155,6 +162,68 @@ function buildWonriMiddleBodySolutionsPrompt({
     '[M2] 문제 본문, 이웃 확인·유제, 다음 예제는 포함하지 마라.',
     '[M3] 기대 번호에 없는 확인·유제를 순서상 추측해 만들지 마라.',
     '[M4] 좌표는 [ymin,xmin,ymax,xmax], 0..1000 기준이다.',
+  ].join('\n');
+}
+
+// 개념+유형 고등 "필수예제" 전용. 한 지면에 예제 하나와 그 "풀이" 상자가
+// 있고, 아래 "문제" 01-1 … 은 해설 PDF 에서 처리한다.
+function buildConceptPlusHighBodySolutionsPrompt({
+  rawPage,
+  displayPage,
+  expectedNumbers,
+}) {
+  const pageLine =
+    displayPage != null && Number.isFinite(displayPage)
+      ? `이 이미지는 교재(개념+유형 고등) 본문 PDF 의 ${displayPage}페이지이다(PDF raw page ${rawPage}).`
+      : `이 이미지는 교재(개념+유형 고등) 본문 PDF 의 한 페이지(PDF raw page ${rawPage})이다.`;
+  const expected = Array.isArray(expectedNumbers)
+    ? expectedNumbers.map((n) => String(n || '').trim()).filter(Boolean)
+    : [];
+  return [
+    '당신은 한국 고등 수학 개념서(개념+유형)의 본문에서 "필수예제" 의 "풀이"',
+    '상자 위치와 정답을 추출하는 비전 AI 입니다.',
+    '반드시 아래 JSON 스키마만 출력하세요. 설명·마크다운·주석·코드펜스 모두 금지.',
+    '',
+    pageLine,
+    '',
+    '=== 페이지 구조 ===',
+    '왼쪽 위에 "필수 예제" 글자와 두 자리 번호("01")가 든 배지, 오른쪽에 유형명이',
+    '있고 그 아래 문제가 인쇄된다. 문제 아래에 "풀이" 라벨이 붙은 상자가 있고,',
+    '왼쪽 여백에는 "Point" 상자가 있다. 풀이 상자는 왼쪽에 설명, 오른쪽에 식이',
+    '놓인 표 모양이며 각 소문항의 마지막 줄에 **굵게** 인쇄된 값이 정답이다.',
+    '지면 아래쪽 "● 문제" 머리말 밑의 01-1, 01-2, 01-3 은 이번 대상이 아니다.',
+    '',
+    expected.length > 0
+      ? `기대 필수예제 번호: ${expected.join(', ')}. 이 지면에 없는 번호는 생략하라.`
+      : '이 지면에 보이는 필수예제의 풀이를 찾아라.',
+    '',
+    '=== 출력 스키마 ===',
+    '{',
+    '  "items": [',
+    '    {',
+    '      "problem_number": "<필수예제 번호. 원문 그대로 (예: \\"01\\")>",',
+    '      "answer_kind": "objective" | "subjective",',
+    '      "answer_text": "<풀이의 굵은 최종 정답. 수식은 LaTeX. 객관식이면 원문자만. 못 찾으면 빈 문자열>",',
+    '      "answer_latex_2d": "<주관식일 때 2D 렌더용 LaTeX. 단순하면 answer_text 와 동일. 객관식이면 빈 문자열>",',
+    '      "number_region": [<ymin>, <xmin>, <ymax>, <xmax>],',
+    '      "content_region": [<ymin>, <xmin>, <ymax>, <xmax>]',
+    '    }',
+    '  ],',
+    '  "notes": "<특이사항 간단히, 없으면 빈 문자열>"',
+    '}',
+    '',
+    '=== 규칙 ===',
+    '[H1] number_region 은 "필수 예제 01" 배지만 감싸는 최소 박스.',
+    '     좌표계: 이미지 좌상단 (0,0), 우하단 (1000,1000). [ymin, xmin, ymax, xmax].',
+    '[H2] content_region 은 "풀이" 상자 전체다. "풀이" 라벨부터 상자 마지막 줄까지.',
+    '     위의 문제 본문, 왼쪽 "Point" 상자, 아래 "● 문제" 구간은 넣지 마라.',
+    '[H3] answer_text 는 풀이 상자 안의 굵은 최종 값이다.',
+    '     - 수식은 LaTeX 로: 분수 "3/4" → "\\\\frac{3}{4}", 루트 "√2" → "\\\\sqrt{2}".',
+    '     - 소문항 (1)(2) 가 있으면 "(1) 12 (2) -5" 형식으로 이어라.',
+    '     - 풀이 중간의 식이나 설명 문구는 넣지 마라. 정답만.',
+    '[H4] 없는 번호/정답을 추측해서 만들지 마라. 보이는 것만 담는다.',
+    '',
+    '지금 첨부된 이미지를 분석해 위 스키마로만 출력하라.',
   ].join('\n');
 }
 

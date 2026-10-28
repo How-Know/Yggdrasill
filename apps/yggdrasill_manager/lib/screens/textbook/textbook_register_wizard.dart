@@ -821,7 +821,7 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
         bodyLegacyUrl: _bodyLegacyCtrl.text.trim().isEmpty
             ? null
             : _bodyLegacyCtrl.text.trim(),
-        answerLegacyUrl: _seriesKey == 'wonri_middle' ||
+        answerLegacyUrl: textbookSeriesAnswersFromSolutionPdf(_seriesKey) ||
                 _answerLegacyCtrl.text.trim().isEmpty
             ? null
             : _answerLegacyCtrl.text.trim(),
@@ -842,7 +842,7 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
         courseLabel: _selectedCourse?.label,
         legacyUrl: registerInput.bodyLegacyUrl,
       );
-      if (_seriesKey != 'wonri_middle') {
+      if (!textbookSeriesAnswersFromSolutionPdf(_seriesKey)) {
         await _uploadPdfIfPicked(
           filePath: _answerPdfPath,
           kind: 'ans',
@@ -1226,11 +1226,11 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
             hint: '본문 legacy URL (옵션, 예: Dropbox 링크)',
           ),
           const SizedBox(height: 20),
-          if (_seriesKey == 'wonri_middle')
-            const Text(
-              '중등 개념원리는 별도 빠른 정답 PDF를 사용하지 않습니다. '
+          if (textbookSeriesAnswersFromSolutionPdf(_seriesKey))
+            Text(
+              '${_series.displayName}은 별도 빠른 정답 PDF를 사용하지 않습니다. '
               '아래 해설 PDF에서 정답과 풀이를 함께 추출합니다.',
-              style: TextStyle(
+              style: const TextStyle(
                 color: Color(0xFF7CC67C),
                 fontSize: 12,
                 height: 1.4,
@@ -1498,17 +1498,18 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
                 ),
                 // 마무리 문제 묶음(연습문제·단원 다지기)은 소단원 사이사이에
                 // 여러 번 있을 수 있어 항상 노출한다.
-                TextButton.icon(
-                  onPressed: () => setState(() => mid.subUnits.add(
-                        _SubUnitEdit(
-                          name: _series.unitEndRowName,
-                          isExercise: true,
-                        ),
-                      )),
-                  icon: const Icon(Icons.add_task, size: 14),
-                  label: Text('${_series.unitEndRowName} 추가',
-                      style: const TextStyle(fontSize: 11)),
-                ),
+                if (_series.unitEndRowName.isNotEmpty)
+                  TextButton.icon(
+                    onPressed: () => setState(() => mid.subUnits.add(
+                          _SubUnitEdit(
+                            name: _series.unitEndRowName,
+                            isExercise: true,
+                          ),
+                        )),
+                    icon: const Icon(Icons.add_task, size: 14),
+                    label: Text('${_series.unitEndRowName} 추가',
+                        style: const TextStyle(fontSize: 11)),
+                  ),
               ],
             ),
           ] else ...[

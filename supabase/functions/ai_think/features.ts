@@ -9,9 +9,22 @@ export const EDGE_FEATURES = {
   memory_proposals: 1,
   department_work: 1,
   auto_organize: 1,
+  course_map_actions: 1,
+  concept_review: 1,
+  concept_relation_change: 1,
+  concept_source_pages: 1,
+  concept_review_jobs: 1,
+  concept_review_job_batch: 1,
 } as const;
 
 export type FeatureName = keyof typeof EDGE_FEATURES;
+
+/** 앱 화면이 바뀌지 않아 앱 버전을 보지 않는 기능. DB·Edge만 준비되면 쓴다. */
+export const APP_FREE_FEATURES: ReadonlySet<FeatureName> = new Set<FeatureName>([
+  'concept_source_pages',
+  'concept_review_jobs',
+  'concept_review_job_batch',
+]);
 
 /** ready: 준비됨 / db_required: DB 반영 필요 / app_update_required: 앱 업데이트 필요 / unknown: 확인 불가 */
 export type FeatureState = 'ready' | 'db_required' | 'app_update_required' | 'unknown';
@@ -66,7 +79,7 @@ export function computeFeatures(db: DbFeatureCheck, client: Record<string, numbe
     let state: FeatureState;
     if (!permitted || dbVersion === null) state = 'unknown';
     else if (dbVersion < edge) state = 'db_required';
-    else if (app < edge) state = 'app_update_required';
+    else if (app < edge && !APP_FREE_FEATURES.has(name)) state = 'app_update_required';
     else state = 'ready';
     out[name] = { state, edge, db: dbVersion, app, permitted };
   }

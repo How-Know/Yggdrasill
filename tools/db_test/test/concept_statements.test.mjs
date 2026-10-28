@@ -315,15 +315,18 @@ test('기존 개념 본문을 고치면 고치기 전 값이 남고, 순서만 �
   await op(() => t.rejects(`delete from concept_content_revisions where concept_id = $1::uuid`, [concept], /permission denied/));
 });
 
-test('개념을 지우면 서술·기록·출처·등장 위치가 함께 사라진다', async () => {
+test('서술·기록·출처·등장 위치가 있는 개념은 지우지 않고 모두 그대로 남는다', async () => {
   const concept = await insertConcept(t, '지울 개념', S.folder, '');
   const st = await confirm(await create(concept, 'statement', { title: '서술', body: '본문' }));
   await addSource(concept, 50, st.id);
   await addAppearance(concept, st.id, 'rev_2022', '중', '1-1');
   await t.exec(`update concepts set content = '고침' where id = '${concept}'`);
-  await t.exec(`delete from concepts where id = '${concept}'`);
-  for (const table of ['concept_statements', 'concept_sources', 'concept_appearances', 'concept_content_revisions']) {
-    assert.equal((await t.all(`select 1 from ${table} where concept_id = $1::uuid`, [concept])).length, 0, table);
-  }
-  assert.equal((await t.all(`select 1 from concept_statement_revisions where statement_id = $1::uuid`, [st.id])).length, 0);
+  const tables = ['concept_statements', 'concept_sources', 'concept_appearances', 'concept_content_revisions'];
+  const count = async (table) => (await t.all(`select 1 from ${table} where concept_id = $1::uuid`, [concept])).length;
+  const before = await Promise.all(tables.map(count));
+  const stRevisions = (await t.all(`select 1 from concept_statement_revisions where statement_id = $1::uuid`, [st.id])).length;
+  assert.ok(before.every((n) => n > 0));
+  await t.rejects(`delete from concepts where id = $1::uuid`, [concept], /concept_delete_attached/);
+  assert.deepEqual(await Promise.all(tables.map(count)), before);
+  assert.equal((await t.all(`select 1 from concept_statement_revisions where statement_id = $1::uuid`, [st.id])).length, stRevisions);
 });

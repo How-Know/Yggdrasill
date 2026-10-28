@@ -369,7 +369,7 @@ function normalizeIndependentSetPayloadQuestions(
 ) {
   const rows = Array.isArray(payloadQuestions) ? payloadQuestions : [];
   const series = compact(textbookScope?.series).toLowerCase();
-  if (series === 'gaeyu') {
+  if (series === 'gaeyu' || series === 'gaeyu_high') {
     const scopeKey = [
       textbookScope?.book_id || textbookScope?.bookId || '',
       textbookScope?.grade_label || textbookScope?.gradeLabel || '',

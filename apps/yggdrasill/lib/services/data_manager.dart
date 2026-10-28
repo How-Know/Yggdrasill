@@ -3602,7 +3602,8 @@ class DataManager {
     return cps.isNotEmpty ? cps.first.nextDueDateTime : null;
   }
 
-  Future<void> loadStudentPausePeriods() async {
+  /// [awaitPlannedCleanup]가 false면 휴원 구간 예정 수업 정리를 기다리지 않는다(전체 재로드용).
+  Future<void> loadStudentPausePeriods({bool awaitPlannedCleanup = true}) async {
     if (!TagPresetService.preferSupabaseRead && !TagPresetService.dualWrite) {
       _studentPausePeriods = [];
       studentPausePeriodsNotifier.value = const [];
@@ -3628,11 +3629,15 @@ class DataManager {
       studentPausePeriodsNotifier.value =
           List.unmodifiable(_studentPausePeriods);
       studentPausePeriodsRevision.value++;
-      try {
-        await AttendanceService.instance
-            .deletePlannedForAllCurrentlyPausedStudents(_studentPausePeriods);
-      } catch (e2, st2) {
+      final cleanup = AttendanceService.instance
+          .deletePlannedForAllCurrentlyPausedStudents(_studentPausePeriods)
+          .catchError((Object e2, StackTrace st2) {
         print('[PAUSE][planned-cleanup-all][WARN] $e2\n$st2');
+      });
+      if (awaitPlannedCleanup) {
+        await cleanup;
+      } else {
+        unawaited(cleanup);
       }
     } catch (e, st) {
       print('[PAUSE][load][WARN] $e\n$st');
@@ -4598,7 +4603,7 @@ class DataManager {
       }
     } catch (_) {}
     try {
-      await loadStudentPausePeriods();
+      await loadStudentPausePeriods(awaitPlannedCleanup: false);
     } catch (_) {}
     try {
       await loadStudentChargePoints();

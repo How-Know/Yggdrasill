@@ -373,6 +373,22 @@ static void persist_bind_date_nvs(uint32_t ymd) {
   prefs.end();
 }
 
+// 저전력 해제 요청이 서버에 도착하기 전에 전원이 끊겨도, 다음 접속에서 한 번 더 보낸다.
+static void persist_bat_unbind_nvs(bool pending) {
+  Preferences prefs;
+  prefs.begin("m5cfg", false);
+  prefs.putBool("bat_unbind", pending);
+  prefs.end();
+}
+
+static bool load_bat_unbind_nvs() {
+  Preferences prefs;
+  prefs.begin("m5cfg", true);
+  bool pending = prefs.getBool("bat_unbind", false);
+  prefs.end();
+  return pending;
+}
+
 static uint32_t load_bind_date_nvs() {
   Preferences prefs;
   prefs.begin("m5cfg", true);
@@ -569,6 +585,19 @@ void onMqttConnect(bool sessionPresent) {
       fw_publish_unbind();
       ui_port_force_unbind();
     }
+  }
+  // 배터리 1% 해제가 전원 차단으로 서버에 닿지 않았으면, 재접속 때 학생을 다시 묶기 전에 푼다.
+  if (load_bat_unbind_nvs()) {
+    Serial.println("[BAT] pending low-battery unbind -> publish before rebind");
+    g_restored_binding_guard_active = false;
+    g_restored_binding_guard_start_ms = 0;
+    g_students_received = false;
+    g_first_ui_data_ready = false;
+    g_last_list_request_ms = 0;
+    fw_publish_unbind();
+    portENTER_CRITICAL(&g_hw_mux);
+    g_force_unbind_pending = true;
+    portEXIT_CRITICAL(&g_hw_mux);
   }
   publish_last_homeworks_sync_status("mqtt_reconnect");
 
@@ -804,6 +833,9 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
       StaticJsonDocument<256> ackDoc;
       if (deserializeJson(ackDoc, da_acc.c_str()) == DeserializationError::Ok) {
         const char* ackAction = ackDoc["action"] | "";
+        if (strcmp(ackAction, "unbind") == 0 && (ackDoc["ok"] | false)) {
+          if (load_bat_unbind_nvs()) persist_bat_unbind_nvs(false);
+        }
         if (strcmp(ackAction, "bind") == 0) {
           bool ok = ackDoc["ok"] | false;
           const char* reason = ackDoc["reason"] | "";
@@ -913,6 +945,7 @@ void sendCommand(const char* action, const char* itemId) {
 void fw_commit_bind(const char* studentIdArg) {
   if (!studentIdArg || !*studentIdArg) return;
   studentId = studentIdArg; // track bound student on device
+  persist_bat_unbind_nvs(false);
   persist_student_id_nvs(studentId);
   persist_bind_date_nvs(current_kst_yyyymmdd());
 
@@ -1005,6 +1038,44 @@ static void handle_bind_day_expiry(uint32_t nowTick) {
     fw_publish_unbind();
     ui_port_force_unbind();
   }
+}
+
+// 방전으로 전원이 끊기기 전에 바인딩을 푼다. bat_unbind를 먼저 남기고
+// 로컬 기록을 지운다. 서버 해제가 확인되기 전에는 표시를 유지해 다음 접속에서 다시 보낸다.
+// 잔량 측정이 한 번 튀는 것만으로 풀리지 않게, 충전 중이 아닌 1% 이하가 5초 간격으로 두 번일 때 실행한다.
+static const uint32_t LOW_BAT_CHECK_MS = 5000;
+static const int LOW_BAT_UNBIND_LEVEL = 1;
+
+static void handle_low_battery_unbind(uint32_t nowTick) {
+  static uint32_t lastMs = 0;
+  static uint8_t lowStreak = 0;
+  if (studentId.length() == 0) {
+    lowStreak = 0;
+    return;
+  }
+  if (lastMs != 0 && (nowTick - lastMs) < LOW_BAT_CHECK_MS) return;
+  lastMs = nowTick;
+
+  int32_t raw = M5.Power.getBatteryLevel();
+  if (raw < 0 || raw > 100 || M5.Power.isCharging() || raw > LOW_BAT_UNBIND_LEVEL) {
+    lowStreak = 0;
+    return;
+  }
+  if (lowStreak < 255) lowStreak++;
+  Serial.printf("[BAT] low level=%ld streak=%u\n", (long)raw, (unsigned)lowStreak);
+  if (lowStreak < 2) return;
+
+  Serial.printf("[BAT] auto unbind at %ld%%\n", (long)raw);
+  persist_bat_unbind_nvs(true);
+  g_students_received = false;
+  g_first_ui_data_ready = false;
+  g_last_list_request_ms = 0;
+  g_restored_binding_guard_active = false;
+  g_restored_binding_guard_start_ms = 0;
+  fw_publish_unbind();
+  ui_port_force_unbind();
+  ui_port_queue_notice(u8"배터리가 부족해 연결을 끊었어요");
+  lowStreak = 0;
 }
 
 void fw_publish_student_info(const char* studentIdArg) {
@@ -1620,6 +1691,7 @@ void loop() {
   }
 
   handle_bind_day_expiry(nowTick);
+  handle_low_battery_unbind(nowTick);
 
   if (g_restored_binding_guard_active && studentId.length() > 0
       && !g_first_ui_data_ready && g_restored_binding_guard_start_ms > 0) {

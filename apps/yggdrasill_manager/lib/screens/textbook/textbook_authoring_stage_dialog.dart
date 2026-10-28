@@ -30,6 +30,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../services/textbook_pdf_page_renderer.dart';
 import '../../services/textbook_pdf_service.dart';
+import '../../services/textbook_series_catalog.dart';
 import '../../services/textbook_vlm_answer_service.dart';
 import '../../services/textbook_vlm_solution_ref_service.dart';
 import '../../widgets/latex_text_renderer.dart';
@@ -196,6 +197,7 @@ int textbookStageCropSubIndexForScope(
     'wonri' => const <String>{'B', 'E'},
     'gaeyu' => const <String>{'B', 'C', 'F'},
     'suryeok' => const <String>{'A', 'B'},
+    'gaeyu_high' => const <String>{'A', 'B', 'C', 'D'},
     _ => const <String>{},
   };
   return indexedKeys.contains(subKey) ? (scope.unitRowIndex ?? 0) : 0;
@@ -249,6 +251,81 @@ List<int> textbookStageOrderForPage({
     if (page < bound.start - leadingPageAllowance) continue;
     if (bound.end != null && page > bound.end! + 1) continue;
     out.add(position);
+  }
+  return out;
+}
+
+/// 이미 해설 지면을 찾은 문항 하나. 본문 쪽과 해설(답지) 쪽의 짝이다.
+typedef TextbookSequenceAnchor = ({int bodyPage, int page});
+
+/// 본문 차례와 어긋난 앵커를 뺀다.
+///
+/// 해설은 본문 차례대로 인쇄되므로 본문 쪽이 늘면 해설 쪽도 줄지 않아야 한다.
+/// 다른 소단원 풀이에 잘못 붙은 저장값(Ⅱ-4 02 소단원 02-1 이 01 소단원 해설
+/// 64쪽에 붙음)이 범위를 막지 않도록 가장 긴 비감소 부분열만 남긴다.
+List<TextbookSequenceAnchor> textbookConsistentAnchors(
+  Iterable<TextbookSequenceAnchor> anchors,
+) {
+  final sorted = anchors.where((a) => a.bodyPage > 0 && a.page > 0).toList()
+    ..sort((a, b) {
+      final byBody = a.bodyPage.compareTo(b.bodyPage);
+      return byBody != 0 ? byBody : a.page.compareTo(b.page);
+    });
+  if (sorted.length < 2) return sorted;
+  final length = List<int>.filled(sorted.length, 1);
+  final previous = List<int>.filled(sorted.length, -1);
+  var best = 0;
+  for (var i = 0; i < sorted.length; i += 1) {
+    for (var j = 0; j < i; j += 1) {
+      if (sorted[j].page <= sorted[i].page && length[j] + 1 > length[i]) {
+        length[i] = length[j] + 1;
+        previous[i] = j;
+      }
+    }
+    if (length[i] > length[best]) best = i;
+  }
+  final out = <TextbookSequenceAnchor>[];
+  for (var i = best; i >= 0; i = previous[i]) {
+    out.add(sorted[i]);
+  }
+  return out.reversed.toList();
+}
+
+/// 본문 [bodyPage] 문항의 풀이가 해설 [page] 에 있을 수 있는지.
+///
+/// 본문에서 앞선 문항이 찾힌 해설 쪽보다 앞일 수 없고, 뒤 문항이 찾힌 쪽보다
+/// 뒤일 수 없다. 같은 본문 쪽끼리는 단·코너 순서를 몰라 서로 묶지 않는다.
+bool textbookSequenceAllowsPage({
+  required List<TextbookSequenceAnchor> anchors,
+  required int bodyPage,
+  required int page,
+}) {
+  if (bodyPage <= 0) return true;
+  for (final anchor in anchors) {
+    if (anchor.bodyPage < bodyPage && page < anchor.page) return false;
+    if (anchor.bodyPage > bodyPage && page > anchor.page) return false;
+  }
+  return true;
+}
+
+/// 한 호출에 같은 번호·코너가 여럿 담기면 본문 차례상 가장 앞선 것만 고른다.
+Set<int> textbookFrontierPositions({
+  required List<int> order,
+  required String Function(int position) keyOf,
+  required int Function(int position) bodyPageOf,
+}) {
+  final groups = <String, List<int>>{};
+  for (final position in order) {
+    groups.putIfAbsent(keyOf(position), () => <int>[]).add(position);
+  }
+  final out = <int>{};
+  for (final group in groups.values) {
+    if (group.length < 2) continue;
+    group.sort((a, b) {
+      final byBody = bodyPageOf(a).compareTo(bodyPageOf(b));
+      return byBody != 0 ? byBody : a.compareTo(b);
+    });
+    out.add(group.first);
   }
   return out;
 }
@@ -399,6 +476,90 @@ class _TextbookAuthoringStageDialogState
 
   bool get _isWonriMiddle =>
       widget.seriesKey.trim().toLowerCase() == 'wonri_middle';
+
+  /// 개념+유형 고등. 정답과 해설을 같은 해설 PDF 에서 본문 차례대로 읽는다.
+  bool get _isGaeyuHigh =>
+      widget.seriesKey.trim().toLowerCase() == 'gaeyu_high';
+
+  /// 이 단계에서 해설 쪽이 확정된 문항들. 정답 격자는 풀이보다 앞 지면에
+  /// 몰려 있어 정답 쪽과 해설 좌표 쪽을 섞으면 범위가 틀어진다. 단계별로 따로 센다.
+  List<TextbookSequenceAnchor> _sequenceAnchors({
+    required bool answer,
+    required Map<String, int> runPages,
+  }) {
+    final anchors = <TextbookSequenceAnchor>[];
+    for (final crop in _crops) {
+      if (crop.isSetHeader) continue;
+      final bodyPage = crop.displayPage ?? 0;
+      if (bodyPage <= 0) continue;
+      int? page = runPages[crop.id];
+      if (page == null && answer) {
+        final saved = _answersByCropId[crop.id];
+        if (saved != null && saved.answerText.trim().isNotEmpty) {
+          page = saved.rawPage;
+        }
+      } else if (page == null) {
+        final saved = _solRefsByCropId[crop.id];
+        if (saved != null && saved.sourceKind == 'sol') page = saved.rawPage;
+      }
+      if (page == null || page <= 0) continue;
+      anchors.add((bodyPage: bodyPage, page: page));
+    }
+    return textbookConsistentAnchors(anchors);
+  }
+
+  List<TextbookSequenceAnchor> _solutionSequenceAnchors({
+    required List<_AnswerTarget> targets,
+    required Map<int, _SolutionRefWithPage> hits,
+  }) =>
+      _sequenceAnchors(answer: false, runPages: <String, int>{
+        for (final hit in hits.entries)
+          targets[hit.key].crop.id: hit.value.rawPage,
+      });
+
+  /// [order] 중 해설 [page] 에 풀이가 있을 수 있는 문항만 남긴다.
+  List<int> _sequenceOrderForPage({
+    required List<int> order,
+    required List<_AnswerTarget> targets,
+    required List<TextbookSequenceAnchor> anchors,
+    required int page,
+  }) {
+    if (!_isGaeyuHigh || anchors.isEmpty) return order;
+    return <int>[
+      for (final position in order)
+        if (textbookSequenceAllowsPage(
+          anchors: anchors,
+          bodyPage: targets[position].crop.displayPage ?? 0,
+          page: page,
+        ))
+          position,
+    ];
+  }
+
+  List<TextbookExpectedAnswer> _batchEntries(
+    List<int> order,
+    List<_AnswerTarget> targets,
+  ) {
+    if (!_isGaeyuHigh) {
+      return <TextbookExpectedAnswer>[
+        for (final position in order) targets[position].expected,
+      ];
+    }
+    final frontier = textbookFrontierPositions(
+      order: order,
+      keyOf: (position) {
+        final expected = targets[position].expected;
+        return '${expected.corner}|${textbookAnswerNumberKey(expected.number)}';
+      },
+      bodyPageOf: (position) => targets[position].crop.displayPage ?? 0,
+    );
+    return <TextbookExpectedAnswer>[
+      for (final position in order)
+        frontier.contains(position)
+            ? targets[position].expected.asFrontier()
+            : targets[position].expected,
+    ];
+  }
 
   bool _savingSolRefs = false;
   bool _loadingPbRuns = false;
@@ -651,6 +812,11 @@ class _TextbookAuthoringStageDialogState
       _answerPdfError = null;
     });
     try {
+      // 정답 PDF 가 없는 교재(개념+유형 고등)는 해설 PDF 의 "답" 줄과
+      // 연습문제 빠른 정답 표에서 정답을 읽는다.
+      final answerKind = textbookSeriesAnswersFromSolutionPdf(widget.seriesKey)
+          ? 'sol'
+          : 'ans';
       final target = await _pdfService.requestDownloadUrl(
         // Do not pass the Stage-1/body link id here. The gateway resolves
         // `link_id` before the logical `(book, grade, kind)` tuple, so passing
@@ -658,7 +824,7 @@ class _TextbookAuthoringStageDialogState
         academyId: widget.academyId,
         fileId: widget.bookId,
         gradeLabel: widget.gradeLabel,
-        kind: 'ans',
+        kind: answerKind,
         requireMigratedStorage: true,
       );
       final url = target.url;
@@ -667,7 +833,7 @@ class _TextbookAuthoringStageDialogState
       final safeBook = widget.bookId.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
       final file = File(p.join(
         tempDir.path,
-        'stage_${safeBook}_${widget.gradeLabel}_answer.pdf',
+        'stage_${safeBook}_${widget.gradeLabel}_answer_$answerKind.pdf',
       ));
       final res = await http.get(Uri.parse(url));
       if (res.statusCode < 200 || res.statusCode >= 300) {
@@ -957,6 +1123,22 @@ class _TextbookAuthoringStageDialogState
         for (var page = startPage; page <= endPage; page += 1) {
           if (pending.isEmpty) break;
           if (!mounted) return;
+          final anchors = _isGaeyuHigh
+              ? _sequenceAnchors(answer: true, runPages: <String, int>{
+                  for (final hit in hits.entries)
+                    targets[hit.key].crop.id: hit.value.rawPage,
+                })
+              : const <TextbookSequenceAnchor>[];
+          // 남은 문항이 모두 이 지면보다 뒤(또는 앞)에 인쇄돼 있으면 묻지 않는다.
+          // 일부만 재실행할 때 앞 소단원 해설의 같은 번호를 집던 자리다.
+          if (_sequenceOrderForPage(
+            order: pending.toList(),
+            targets: targets,
+            anchors: anchors,
+            page: page,
+          ).isEmpty) {
+            continue;
+          }
           setState(() {
             _answerStatus =
                 '답지 $page / $endPage 페이지 분석… · 저장 $savedCount개 · 남은 ${pending.length}개';
@@ -976,12 +1158,17 @@ class _TextbookAuthoringStageDialogState
           }
           for (var sweep = 0; sweep < sweepLimit; sweep += 1) {
             if (pending.isEmpty) break;
-            final order = _stageBlockWindow(
+            final order = _sequenceOrderForPage(
+              order: _stageBlockWindow(
+                targets: targets,
+                blockIndexes: blockIndexes,
+                pending: pending,
+                windowed: windowedBatch,
+                skipBlocks: skipBlocks,
+              ),
               targets: targets,
-              blockIndexes: blockIndexes,
-              pending: pending,
-              windowed: windowedBatch,
-              skipBlocks: skipBlocks,
+              anchors: anchors,
+              page: page,
             );
             if (order.isEmpty) break;
             final windowBlock = windowedBatch ? blockIndexes[order.first] : -1;
@@ -990,9 +1177,7 @@ class _TextbookAuthoringStageDialogState
             try {
               final batch = TextbookExpectedAnswerBatch(
                 positions: order,
-                entries: <TextbookExpectedAnswer>[
-                  for (final position in order) targets[position].expected,
-                ],
+                entries: _batchEntries(order, targets),
                 // 블록 하나만 담은 목록은 번호가 겹치지 않으므로 모델이 배지를
                 // 안 적어도 번호로 짝을 지어도 안전하다.
                 requireExpectedIndex: needsCorner && !windowedBatch,
@@ -1996,10 +2181,19 @@ class _TextbookAuthoringStageDialogState
     for (var page = startPage; page <= endPage; page += 1) {
       if (pending.isEmpty) return;
       if (!mounted) return;
-      final order = _solutionOrderForPage(
-        order: pending.toList()..sort(),
+      // 한 건짜리 목록은 번호만으로 짝을 지으므로, 차례상 이 지면에 올 수 없는
+      // 문항은 아예 묻지 않는다. 앞 소단원 해설의 같은 번호를 집는다.
+      final order = _sequenceOrderForPage(
+        order: _solutionOrderForPage(
+          order: pending.toList()..sort(),
+          targets: targets,
+          bounds: bounds,
+          page: page,
+        ),
         targets: targets,
-        bounds: bounds,
+        anchors: _isGaeyuHigh
+            ? _solutionSequenceAnchors(targets: targets, hits: hits)
+            : const <TextbookSequenceAnchor>[],
         page: page,
       );
       if (order.isEmpty) continue;
@@ -2201,12 +2395,20 @@ class _TextbookAuthoringStageDialogState
         for (var page = startPage; page <= endPage; page += 1) {
           if (pending.isEmpty) break;
           if (!mounted) return;
+          final anchors = _isGaeyuHigh
+              ? _solutionSequenceAnchors(targets: targets, hits: hits)
+              : const <TextbookSequenceAnchor>[];
           // 남은 문항이 전부 이 지면 밖 소단원이면 렌더도 하지 않고 넘긴다.
           // 중단원 TEST 만 남았을 때 앞쪽 본교재 지면 수십 장을 헛돌던 자리다.
-          if (_solutionOrderForPage(
-            order: pending.toList(),
+          if (_sequenceOrderForPage(
+            order: _solutionOrderForPage(
+              order: pending.toList(),
+              targets: targets,
+              bounds: scopeBounds,
+              page: page,
+            ),
             targets: targets,
-            bounds: scopeBounds,
+            anchors: anchors,
             page: page,
           ).isEmpty) {
             continue;
@@ -2230,16 +2432,21 @@ class _TextbookAuthoringStageDialogState
           }
           for (var sweep = 0; sweep < sweepLimit; sweep += 1) {
             if (pending.isEmpty) break;
-            final order = _solutionOrderForPage(
-              order: _stageBlockWindow(
+            final order = _sequenceOrderForPage(
+              order: _solutionOrderForPage(
+                order: _stageBlockWindow(
+                  targets: targets,
+                  blockIndexes: blockIndexes,
+                  pending: pending,
+                  windowed: windowedBatch,
+                  skipBlocks: skipBlocks,
+                ),
                 targets: targets,
-                blockIndexes: blockIndexes,
-                pending: pending,
-                windowed: windowedBatch,
-                skipBlocks: skipBlocks,
+                bounds: scopeBounds,
+                page: page,
               ),
               targets: targets,
-              bounds: scopeBounds,
+              anchors: anchors,
               page: page,
             );
             if (order.isEmpty) continue;
@@ -2249,9 +2456,7 @@ class _TextbookAuthoringStageDialogState
             try {
               final batch = TextbookExpectedAnswerBatch(
                 positions: order,
-                entries: <TextbookExpectedAnswer>[
-                  for (final position in order) targets[position].expected,
-                ],
+                entries: _batchEntries(order, targets),
                 requireExpectedIndex: needsCorner && !windowedBatch,
               );
               final res = await _detectSolutionRefsOnPage(

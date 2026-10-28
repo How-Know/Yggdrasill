@@ -72,6 +72,15 @@ export function toOpenAiInput(items: AiInputItem[]): unknown[] {
       out.push({ type: 'message', role: 'developer', content: it.text });
     } else if (it.kind === 'provider_items') {
       out.push(...it.items);
+    } else if (it.images && it.images.length > 0) {
+      out.push({
+        type: 'function_call_output',
+        call_id: it.callId,
+        output: [
+          { type: 'input_text', text: it.output },
+          ...it.images.map((im) => ({ type: 'input_image', image_url: im.url, detail: im.detail ?? 'auto' })),
+        ],
+      });
     } else {
       out.push({ type: 'function_call_output', call_id: it.callId, output: it.output });
     }

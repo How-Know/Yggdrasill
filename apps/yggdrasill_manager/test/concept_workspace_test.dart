@@ -10,6 +10,7 @@ import 'package:yggdrasill_manager/screens/curriculum/widgets/concept_book_dialo
 import 'package:yggdrasill_manager/screens/curriculum/widgets/concept_criteria_pane.dart';
 import 'package:yggdrasill_manager/screens/curriculum/widgets/concept_library_pane.dart';
 import 'package:yggdrasill_manager/screens/curriculum/widgets/concept_workspace.dart';
+import 'package:yggdrasill_manager/screens/curriculum/widgets/course_map_pane.dart';
 import 'package:yggdrasill_manager/services/concept_book_order.dart';
 import 'package:yggdrasill_manager/services/concept_book_service.dart';
 import 'package:yggdrasill_manager/services/concept_draft_models.dart';
@@ -17,11 +18,14 @@ import 'package:yggdrasill_manager/services/concept_draft_service.dart';
 import 'package:yggdrasill_manager/services/concept_library_controller.dart';
 import 'package:yggdrasill_manager/services/concept_library_service.dart';
 import 'package:yggdrasill_manager/services/concept_service.dart';
+import 'package:yggdrasill_manager/services/course_map_controller.dart';
 import 'package:yggdrasill_manager/services/textbook_pdf_service.dart';
 import 'package:yggdrasill_manager/services/think/think_api.dart';
 import 'package:yggdrasill_manager/services/think/think_concept_chat_controller.dart';
 import 'package:yggdrasill_manager/services/think/think_models.dart';
 import 'package:yggdrasill_manager/services/think/think_send_lock.dart';
+
+import 'course_map_fake.dart';
 
 const _conv = '0d6c1b52-8a3e-4f5d-9b7c-1e2f3a4b5c6d';
 const _conceptA = '6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b';
@@ -397,10 +401,12 @@ void main() {
       await c.loadCriteria();
       c.editOf(id).body.text = '네 가지 + 예외';
 
-      c.setFocus(ConceptWorkspaceFocus.criteria);
+      c.setFocus(ConceptWorkspaceFocus.courseMap);
       c.openConcept(_concept(_conceptA));
       c.openCriterion(id);
-      c.setFocus(ConceptWorkspaceFocus.library);
+      expect(c.focus, ConceptWorkspaceFocus.library, reason: '기준은 창으로 열고 칸은 바꾸지 않는다');
+      expect(c.criteriaDialogRequest.value, 1);
+      c.setFocus(ConceptWorkspaceFocus.courseMap);
       await _settle();
 
       expect(backend.writes, 0);
@@ -896,10 +902,23 @@ void main() {
   });
 
   group('작업 공간 화면', () {
+    (FakeCourseMapBackend, String, CourseMapController) courseMap() {
+      final b = FakeCourseMapBackend();
+      final id = b.addCourse('공통수학1', units: const [
+        U('다항식', [
+          U('다항식의 연산', [U('덧셈과 뺄셈'), U('곱셈')]),
+        ]),
+      ]);
+      return (b, id, CourseMapController.forTest(b));
+    }
+
+    Finder nameField(String text) => find.byWidgetPredicate((w) => w is TextField && w.controller?.text == text);
+
     Future<void> pumpWorkspace(WidgetTester tester, ConceptLibraryController c,
-        {double width = 1400, Widget? chat}) async {
+        {double width = 1400, Widget? chat, CourseMapController? course}) async {
       await tester.binding.setSurfaceSize(Size(width, 800));
       addTearDown(() => tester.binding.setSurfaceSize(null));
+      final map = course ?? courseMap().$3;
       await tester.pumpWidget(MaterialApp(
         home: Scaffold(
           body: SizedBox(
@@ -907,8 +926,11 @@ void main() {
             height: 760,
             child: ConceptWorkspace(
               controller: c,
-              criteriaDetail: CriteriaDetailPane(controller: c, onOpenConcept: (_) {}),
-              criteriaSummary: CriteriaSummaryPane(controller: c),
+              courseDetail: CourseMapPane(controller: map),
+              courseSummary: CourseMapSummaryPane(
+                controller: map,
+                onExpand: () => c.setFocus(ConceptWorkspaceFocus.courseMap),
+              ),
               libraryDetail: LibraryDetailPane(
                 tree: const Center(child: Text('개념 트리')),
                 detail: ConceptDetailView(controller: c, onEdit: (_) {}, onPickForChat: (_) {}),
@@ -927,47 +949,42 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
     }
 
-    ScrollableState editorScroll(WidgetTester tester, String id) => tester.state<ScrollableState>(
-          find.descendant(of: find.byKey(ValueKey('criterion-editor-$id')), matching: find.byType(Scrollable)).first,
-        );
-
-    testWidgets('크게 보기로 오가도 선택·스크롤·저장 안 한 입력이 남고, 저장하지 않는다', (tester) async {
+    testWidgets('크게 보기로 오가도 흐름의 선택·저장 안 한 입력이 남고, 저장하지 않는다', (tester) async {
       final backend = _FakeBackend();
-      backend.seed(title: '지식 분류', body: '네 가지', version: 1);
-      final id = backend.seed(draftTitle: '노드 분리', draftBody: List.generate(30, (i) => '줄 $i').join('\n'));
       final c = _controller(backend);
       await c.loadCriteria();
-      c.selectCriterion(id);
       c.selectConcept(_concept(_conceptA));
-      c.setFocus(ConceptWorkspaceFocus.criteria);
-      await pumpWorkspace(tester, c);
+      c.setFocus(ConceptWorkspaceFocus.courseMap);
+      final (courses, courseId, map) = courseMap();
+      await pumpWorkspace(tester, c, course: map);
       await pumpFor(tester);
 
-      final typed = List.generate(30, (i) => '고친 줄 $i').join('\n');
-      await tester.enterText(find.byWidgetPredicate((w) => w is TextField && w.controller == c.editOf(id).body), typed);
-      await pumpFor(tester);
-      expect(find.text('저장 안 됨'), findsWidgets);
-      editorScroll(tester, id).position.jumpTo(60);
+      final ops = courses.unitId(courseId, '다항식의 연산');
+      await tester.tap(find.byKey(ValueKey('course-unit-$ops')));
       await tester.pump();
+      await tester.enterText(nameField('다항식의 연산'), '다항식의 계산');
+      await pumpFor(tester);
+      expect(find.text('저장 안 됨 1'), findsOneWidget);
 
       await tester.tap(find.text('크게 보기'));
       await pumpFor(tester);
       expect(c.focus, ConceptWorkspaceFocus.library);
-      expect(find.text('열어 둔 개념에 이은 기준'), findsOneWidget, reason: '왼쪽은 기준 요약');
+      expect(find.textContaining('저장하지 않은 변경 1곳'), findsOneWidget, reason: '왼쪽은 흐름 요약');
+      expect(find.text('다항식의 계산'), findsOneWidget);
       expect(find.text('개념 트리'), findsOneWidget);
 
       await tester.tap(find.text('크게 보기'));
       await pumpFor(tester);
-      expect(c.focus, ConceptWorkspaceFocus.criteria);
-      expect(c.selectedCriterionId, id);
-      expect(_fieldOf(tester, c.editOf(id).body).controller!.text, typed);
-      expect(editorScroll(tester, id).position.pixels, 60, reason: '접혀 있는 동안 좁게 다시 배치돼도 스크롤이 남는다');
+      expect(c.focus, ConceptWorkspaceFocus.courseMap);
+      expect(map.draft!.selectedId, ops);
+      expect(nameField('다항식의 계산'), findsOneWidget, reason: '접혀 있는 동안에도 입력이 남는다');
       expect(c.selectedConcept?.id, _conceptA);
+      expect(courses.writes, 0);
       expect(backend.writes, 0);
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('요약에서 기준을 누르면 기준 쪽이 크게 열리고 그 기준이 선택된다', (tester) async {
+    testWidgets('개념 상세의 이은 기준을 누르면 그 기준이 골라지고 기준 창을 연다(칸은 그대로)', (tester) async {
       final backend = _FakeBackend();
       final first = backend.seed(title: '지식 분류', body: '네 가지', version: 1);
       final second = backend.seed(draftTitle: '대표 용어', draftBody: '교과서 용어');
@@ -981,36 +998,85 @@ void main() {
       await pumpWorkspace(tester, c);
       await pumpFor(tester);
 
-      expect(c.focus, ConceptWorkspaceFocus.library);
-      expect(find.textContaining('근거: 사용자가 직접 이음'), findsOneWidget, reason: '실제로 이은 기준만 보인다');
-      await tester.tap(find.textContaining('근거: 사용자가 직접 이음'));
+      expect(find.byTooltip('정리 기준 창에서 열기'), findsOneWidget, reason: '실제로 이은 기준만 보인다');
+      await tester.tap(find.byTooltip('정리 기준 창에서 열기'));
       await pumpFor(tester);
-      expect(c.focus, ConceptWorkspaceFocus.criteria);
+      expect(c.focus, ConceptWorkspaceFocus.library);
       expect(c.selectedCriterionId, second);
+      expect(c.criteriaDialogRequest.value, 1);
+      expect(backend.writes, 0);
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('좁은 화면에서는 한 칸씩 보고, 칸을 바꿔도 입력이 남는다', (tester) async {
+    testWidgets('정리 기준 창은 닫았다 열어도 입력이 남고, 이은 개념을 열면 창이 닫힌다', (tester) async {
       final backend = _FakeBackend();
       final id = backend.seed(draftTitle: '관계 정의', draftBody: '');
+      backend.links[id] = {_conceptA};
+      backend.conceptNames[_conceptA] = '소인수분해';
       final c = _controller(backend);
       await c.loadCriteria();
-      c.setFocus(ConceptWorkspaceFocus.criteria);
-      await pumpWorkspace(tester, c, width: 720, chat: const Center(child: Text('대화 자리')));
+      c.selectCriterion(id);
+      String? opened;
+      await tester.binding.setSurfaceSize(const Size(1400, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (ctx) => TextButton(
+              onPressed: () => showConceptCriteriaDialog(ctx, controller: c, onOpenConcept: (x) => opened = x),
+              child: const Text('기준 열기'),
+            ),
+          ),
+        ),
+      ));
+
+      await tester.tap(find.text('기준 열기'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+          find.byWidgetPredicate((w) => w is TextField && w.controller == c.editOf(id).body), '먼저 알아야 하는 개념');
+      await tester.tap(find.byTooltip('닫기(입력은 남음)'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(ValueKey('criterion-editor-$id')), findsNothing);
+
+      await tester.tap(find.text('기준 열기'));
+      await tester.pumpAndSettle();
+      expect(_fieldOf(tester, c.editOf(id).body).controller!.text, '먼저 알아야 하는 개념');
+      await tester.ensureVisible(find.byTooltip('라이브러리에서 열기', skipOffstage: false));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('라이브러리에서 열기'));
+      await tester.pumpAndSettle();
+      expect(opened, _conceptA);
+      expect(find.byKey(ValueKey('criterion-editor-$id')), findsNothing);
+      expect(c.editOf(id).body.text, '먼저 알아야 하는 개념');
+      expect(backend.writes, 0);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('좁은 화면에서는 한 칸씩 보고, 칸을 바꿔도 흐름 입력이 남는다', (tester) async {
+      final backend = _FakeBackend();
+      final c = _controller(backend);
+      await c.loadCriteria();
+      c.setFocus(ConceptWorkspaceFocus.courseMap);
+      final (courses, courseId, map) = courseMap();
+      await pumpWorkspace(tester, c, width: 720, chat: const Center(child: Text('대화 자리')), course: map);
       await pumpFor(tester);
 
       expect(find.text('Think 대화'), findsOneWidget, reason: '대화를 옆에 둘 자리가 없으면 칸으로 본다');
-      await tester.enterText(
-          find.byWidgetPredicate((w) => w is TextField && w.controller == c.editOf(id).body), '먼저 알아야 하는 개념');
+      final ops = courses.unitId(courseId, '다항식의 연산');
+      await tester.tap(find.byKey(ValueKey('course-unit-$ops')));
+      await tester.pump();
+      await tester.enterText(nameField('다항식의 연산'), '다항식의 계산');
       await tester.tap(find.text('개념 라이브러리'));
       await pumpFor(tester);
       expect(find.text('개념 트리'), findsOneWidget);
       await tester.tap(find.text('Think 대화'));
       await pumpFor(tester);
       expect(find.text('대화 자리'), findsOneWidget);
-      await tester.tap(find.text('정리 기준'));
+      await tester.tap(find.text('교육과정 흐름'));
       await pumpFor(tester);
-      expect(_fieldOf(tester, c.editOf(id).body).controller!.text, '먼저 알아야 하는 개념');
+      expect(nameField('다항식의 계산'), findsOneWidget);
+      expect(map.draft!.dirty, isTrue);
+      expect(courses.writes, 0);
       expect(backend.writes, 0);
       expect(tester.takeException(), isNull);
     });
@@ -1051,7 +1117,7 @@ void main() {
       await pumpFor(tester);
       expect(c.focus, ConceptWorkspaceFocus.library);
       expect(c.editOf(id).body.text, '저장 전 입력');
-      expect(find.text('연결된 기준 없음'), findsNWidgets(2), reason: '기준 요약과 개념 상세 모두 이은 기준이 없다고 보인다');
+      expect(find.text('연결된 기준 없음'), findsOneWidget, reason: '개념 상세에 이은 기준이 없다고 보인다');
       expect(backend.writes, 0);
       expect(tester.takeException(), isNull);
     });

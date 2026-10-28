@@ -242,6 +242,37 @@ class _TextbookUnitAuthoringDialogState
   /// "10-1", "15-1" 처럼 구분한다 (정답 파일도 P.10 / P.15 로 나눠 인쇄된다).
   static const Set<String> _kGaeyuBlockScopedKeys = {'C', 'F'};
 
+  // ── 개념+유형 고등(gaeyu_high) 단일 패스 ──────────────────────────────
+  //
+  // 소단원 행 하나에 네 코너가 모두 들어 있다. 게이트웨이
+  // GAEYU_HIGH_SECTION_BY_SUB_KEY 와 짝이다.
+  static const Map<String, String> _kGaeyuHighSubKeyByCategory = {
+    'high_concept_check': 'A', // 개념 Check
+    'high_example': 'B', // 필수예제
+    'high_problem': 'C', // 문제 (01-1 …)
+    'high_exercise': 'D', // 연습문제
+  };
+  static const Map<String, String> _kGaeyuHighCategoryBySubKey = {
+    'A': 'high_concept_check',
+    'B': 'high_example',
+    'C': 'high_problem',
+    'D': 'high_exercise',
+  };
+  static const Map<String, String> _kGaeyuHighCategoryShortNames = {
+    'high_concept_check': '개념 Check',
+    'high_example': '필수예제',
+    'high_problem': '문제',
+    'high_exercise': '연습문제',
+  };
+
+  /// 네 슬롯 모두 소단원 행마다 번호가 새로 시작한다.
+  static const Set<String> _kGaeyuHighPerSubUnitKeys = {'A', 'B', 'C', 'D'};
+
+  /// 개념 Check 는 소단원 안에서도 개념 블록마다 1부터 다시 시작한다. 해설
+  /// 박스가 "개념 Check 8쪽" 처럼 블록 단위라 블록 시작 쪽을 접두어로 붙인다.
+  /// 블록이 하나뿐이어도 붙여서 번호 모양을 하나로 맞춘다.
+  static const Set<String> _kGaeyuHighBlockScopedKeys = {'A'};
+
   // ── 수력충전(suryeok) 단일 패스 ──────────────────────────────────────
   //
   // 소단원 행 하나가 통째로 한 코너다. 개념 체크는 유형 문제와 번호열을
@@ -279,24 +310,28 @@ class _TextbookUnitAuthoringDialogState
   Map<String, String> get _conceptSubKeyByCategory => switch (_seriesKey) {
         'wonri_middle' => _kWonriMiddleSubKeyByCategory,
         'gaeyu' => _kGaeyuSubKeyByCategory,
+        'gaeyu_high' => _kGaeyuHighSubKeyByCategory,
         'suryeok' => _kSuryeokSubKeyByCategory,
         _ => _kWonriSubKeyByCategory,
       };
   Map<String, String> get _conceptCategoryBySubKey => switch (_seriesKey) {
         'wonri_middle' => _kWonriMiddleCategoryBySubKey,
         'gaeyu' => _kGaeyuCategoryBySubKey,
+        'gaeyu_high' => _kGaeyuHighCategoryBySubKey,
         'suryeok' => _kSuryeokCategoryBySubKey,
         _ => _kWonriCategoryBySubKey,
       };
   Map<String, String> get _conceptCategoryShortNames => switch (_seriesKey) {
         'wonri_middle' => _kWonriMiddleCategoryShortNames,
         'gaeyu' => _kGaeyuCategoryShortNames,
+        'gaeyu_high' => _kGaeyuHighCategoryShortNames,
         'suryeok' => _kSuryeokCategoryShortNames,
         _ => _kWonriCategoryShortNames,
       };
   Set<String> get _conceptPerSubUnitKeys => switch (_seriesKey) {
         'wonri_middle' => _kWonriMiddlePerSubUnitKeys,
         'gaeyu' => _kGaeyuPerSubUnitKeys,
+        'gaeyu_high' => _kGaeyuHighPerSubUnitKeys,
         'suryeok' => _kSuryeokPerSubUnitKeys,
         _ => _kWonriPerSubUnitKeys,
       };
@@ -412,6 +447,11 @@ class _TextbookUnitAuthoringDialogState
           ? pageSection
           : '';
     }
+    if (_seriesKey == 'gaeyu_high') {
+      return _kGaeyuHighSubKeyByCategory.containsKey(pageSection)
+          ? pageSection
+          : '';
+    }
     if (_seriesKey == 'gaeyu') {
       final label = item.label.trim();
       // "연습" 은 구버전 크롭 복원용. 현재 저장 라벨은 "서술형 연습" 이다.
@@ -460,6 +500,13 @@ class _TextbookUnitAuthoringDialogState
       return _wonriMiddleItemName(category, rawLabel, itemRole);
     }
     if (_seriesKey == 'gaeyu') return _gaeyuItemName(category, rawLabel);
+    if (_seriesKey == 'gaeyu_high') {
+      // 연습문제의 "실력" 구간은 이름으로, 출처 배지(교육청 등)는 label 로 둔다.
+      if (category == 'high_exercise' && rawLabel.contains('실력')) {
+        return '연습문제 실력';
+      }
+      return _kGaeyuHighCategoryShortNames[category] ?? '';
+    }
     if (_seriesKey == 'suryeok') {
       // 유형 문제의 이름은 코너가 아니라 지면의 유형명이고, 그것은
       // content_group(유형 01 / 지수법칙의 표현)에 따로 저장된다.
@@ -1122,6 +1169,14 @@ class _TextbookUnitAuthoringDialogState
   /// 그 코너는 정답·해설 단계 스코프에서 사라진다 (소단원이 1/3 완료로 멈춤).
   String _printedNumberFromSavedCrop(Map<String, dynamic> row, String subKey) {
     final number = '${row['problem_number'] ?? ''}'.trim();
+    if (_seriesKey == 'gaeyu_high') {
+      // 개념 Check 의 접두어는 블록 시작 쪽이라 이 문항의 쪽과 다를 수 있다.
+      // 인쇄 번호에 하이픈이 없는 코너라 접두어는 그대로 벗긴다.
+      if (!_kGaeyuHighBlockScopedKeys.contains(subKey.toUpperCase())) {
+        return number;
+      }
+      return RegExp(r'^\d+-(\d+)$').firstMatch(number)?.group(1) ?? number;
+    }
     if (_seriesKey != 'gaeyu') return number;
     if (!_kGaeyuBlockScopedKeys.contains(subKey.toUpperCase())) return number;
     final match = RegExp(r'^(\d+)-(.+)$').firstMatch(number);
@@ -1139,7 +1194,9 @@ class _TextbookUnitAuthoringDialogState
     String subKey,
   ) {
     final section = '${row['section'] ?? _sectionForSubKey(subKey)}';
-    final isMastery = subKey == 'C' || section == 'mastery';
+    // 개념+유형 고등의 C 는 "문제"(01-1 …)라 필수예제 유형명을 지녀야 한다.
+    final isMastery =
+        _seriesKey != 'gaeyu_high' && (subKey == 'C' || section == 'mastery');
     final rawKind = '${row['content_group_kind'] ?? 'none'}'.trim();
     final groupKind =
         isMastery || rawKind != 'type' && rawKind != 'basic_subtopic'
@@ -1198,7 +1255,7 @@ class _TextbookUnitAuthoringDialogState
     String subKey,
     String section,
   ) {
-    if (subKey == 'C' || section == 'mastery') {
+    if (_seriesKey != 'gaeyu_high' && (subKey == 'C' || section == 'mastery')) {
       return const _ResolvedContentGroup.none();
     }
     final kind = item.contentGroupKind.trim();
@@ -1303,6 +1360,10 @@ class _TextbookUnitAuthoringDialogState
     // 게이트웨이 SURYEOK_SECTION_BY_SUB_KEY 와 동일하게 유지.
     if (_seriesKey == 'suryeok') {
       return _kSuryeokCategoryBySubKey[subKey] ?? 'unknown';
+    }
+    // 게이트웨이 GAEYU_HIGH_SECTION_BY_SUB_KEY 와 동일하게 유지.
+    if (_seriesKey == 'gaeyu_high') {
+      return _kGaeyuHighCategoryBySubKey[subKey] ?? 'unknown';
     }
     // 게이트웨이 GOJAENGI_SECTION_BY_SUB_KEY 와 동일하게 유지.
     if (isGojaengiSeries(_seriesKey)) {
@@ -2431,6 +2492,10 @@ class _TextbookUnitAuthoringDialogState
       );
     } else if (_seriesKey == 'suryeok') {
       guarded = _guardSuryeokNumberRewind(state.pageResults);
+    } else if (_seriesKey == 'gaeyu_high') {
+      // 코너마다 머리말이 분명하고 번호 모양("01", "01-1", "1")이 달라서
+      // 지면을 넘나드는 보정이 필요 없다. 실력 구간 승계는 저장 때 한다.
+      return;
     } else if (isGojaengiSeries(_seriesKey)) {
       // 고쟁이는 세 자리 연속 번호라 쎈 A의 4자리 basic_drill 가드를 타면
       // 본문 문항이 통째로 개념 지면으로 비워진다.
@@ -3495,11 +3560,18 @@ class _TextbookUnitAuthoringDialogState
   /// 걸친 블록에 페이지별 접두어를 붙이면 답지 매칭이 어긋난다.
   ///
   /// 반환 키는 `'<subKey>|<rawPage>|<itemIndex>'`, 값은 접두어로 쓸 페이지.
-  /// 블록이 하나뿐인 슬롯은 번호가 겹치지 않으므로 아예 담지 않는다.
+  /// 개념+유형 중등은 블록이 하나뿐인 슬롯을 담지 않고(번호가 겹치지 않음),
+  /// 고등 개념 Check 는 해설의 "개념 Check N쪽" 매칭을 위해 늘 접두어를 붙인다.
   Map<String, int> _gaeyuBlockNumberPrefixes(List<_PageAnalysisRow> pageRows) {
-    if (_seriesKey != 'gaeyu') return const <String, int>{};
+    final isHigh = _seriesKey == 'gaeyu_high';
+    if (_seriesKey != 'gaeyu' && !isHigh) return const <String, int>{};
+    final subKeyByCategory =
+        isHigh ? _kGaeyuHighSubKeyByCategory : _kGaeyuSubKeyByCategory;
+    final blockScopedKeys =
+        isHigh ? _kGaeyuHighBlockScopedKeys : _kGaeyuBlockScopedKeys;
     final blockStartBySubKey = <String, int>{};
     final lastNumberBySubKey = <String, int>{};
+    final lastPageBySubKey = <String, int>{};
     final blockCountBySubKey = <String, int>{};
     final prefixByItem = <String, int>{};
     for (final row in pageRows) {
@@ -3507,26 +3579,75 @@ class _TextbookUnitAuthoringDialogState
       for (var i = 0; i < row.items.length; i += 1) {
         final item = row.items[i];
         final category = _wonriCategoryOfItem(item, row.section);
-        final subKey = _kGaeyuSubKeyByCategory[category];
-        if (subKey == null || !_kGaeyuBlockScopedKeys.contains(subKey)) {
+        final subKey = subKeyByCategory[category];
+        if (subKey == null || !blockScopedKeys.contains(subKey)) {
           continue;
         }
         final digits = RegExp(r'\d+').firstMatch(item.number);
         if (digits == null) continue;
         final number = int.parse(digits[0]!);
         final previous = lastNumberBySubKey[subKey];
-        if (previous == null || number <= previous) {
+        // 개념+유형 고등의 개념 Check 블록 사이에는 필수예제 지면이 끼므로,
+        // 한 쪽 넘게 떨어지면 첫 번호를 놓쳤어도 새 블록으로 본다.
+        final lastPage = lastPageBySubKey[subKey];
+        final skippedPage =
+            isHigh && lastPage != null && printedPage - lastPage > 1;
+        if (previous == null || number <= previous || skippedPage) {
           blockStartBySubKey[subKey] = printedPage;
           blockCountBySubKey[subKey] = (blockCountBySubKey[subKey] ?? 0) + 1;
         }
         lastNumberBySubKey[subKey] = number;
+        lastPageBySubKey[subKey] = printedPage;
         prefixByItem['$subKey|${row.rawPage}|$i'] = blockStartBySubKey[subKey]!;
       }
     }
-    prefixByItem.removeWhere(
-      (key, _) => (blockCountBySubKey[key.split('|').first] ?? 0) <= 1,
-    );
+    if (!isHigh) {
+      prefixByItem.removeWhere(
+        (key, _) => (blockCountBySubKey[key.split('|').first] ?? 0) <= 1,
+      );
+    }
     return prefixByItem;
+  }
+
+  /// 개념+유형 고등 연습문제 라벨(`실력`, `교육청`, `실력+교육청` …).
+  ///
+  /// "▶ 실력" 머리말은 구간 첫 자리에만 찍혀서 모델이 머리말 아래 몇 문항에만
+  /// 실력을 단다(2단 지면의 오른쪽 단, 다음 지면은 빠진다). 한 번 보이면 그
+  /// 소단원 연습문제 끝까지 실력 구간이다. 키는 [_problemKey].
+  Map<String, String> _gaeyuHighExerciseLabels(List<_PageAnalysisRow> rows) {
+    final out = <String, String>{};
+    if (_seriesKey != 'gaeyu_high') return out;
+    final ordered = rows.where((r) => r.ok).toList()
+      ..sort((a, b) => a.rawPage.compareTo(b.rawPage));
+    var skillSeen = false;
+    for (final row in ordered) {
+      for (var i = 0; i < row.items.length; i += 1) {
+        final item = row.items[i];
+        if (_wonriCategoryOfItem(item, row.section) != 'high_exercise') {
+          continue;
+        }
+        var label = item.label.trim();
+        if (label.contains('실력')) {
+          skillSeen = true;
+        } else if (skillSeen) {
+          label = label.isEmpty ? '실력' : '실력+$label';
+        }
+        out[_problemKey(row.rawPage, i)] = label;
+      }
+    }
+    return out;
+  }
+
+  /// 분석 화면 뱃지 글자. 문항이름 뒤에 출처 배지(교육청·평가원·수능)를 붙인다.
+  String _gaeyuHighBadgeText(String category, String label) {
+    final name = _wonriItemName(category, label);
+    final sources = label
+        .split('+')
+        .map((part) => part.trim())
+        .where((part) => part.isNotEmpty && part != '실력')
+        .join('+');
+    if (sources.isEmpty) return name;
+    return name.isEmpty ? sources : '$name · $sources';
   }
 
   /// 저장·시드 양쪽에서 동일한 문항번호를 만들기 위한 단일 진입점.
@@ -3571,8 +3692,11 @@ class _TextbookUnitAuthoringDialogState
       // 핵심문제 익히기 대표 예제 위 색 띠의 유형명. 본문 크롭에서 뺀 대신
       // 여기에 담아 두고, 뒤따르는 확인 문항도 같은 유형을 승계한다.
       'wonri_middle' => const {'middle_core_problem'},
+      // 필수예제와 그 아래 "문제"(01-1, 01-2 …)가 같은 유형명을 공유한다.
+      'gaeyu_high' => const {'high_example', 'high_problem'},
       _ => const {'type_example'},
     };
+    final gaeyuHighLabels = _gaeyuHighExerciseLabels(pageRows);
     for (final row in pageRows) {
       for (var i = 0; i < row.items.length; i += 1) {
         final vlm = row.items[i];
@@ -3584,6 +3708,9 @@ class _TextbookUnitAuthoringDialogState
           skippedNoCategory += 1;
           continue;
         }
+        final itemLabel = _seriesKey == 'gaeyu_high'
+            ? gaeyuHighLabels[_problemKey(row.rawPage, i)] ?? ''
+            : vlm.label.trim();
         final subKey = _conceptSubKeyByCategory[category]!;
         var group = const _ResolvedContentGroup.none();
         if (groupCategories.contains(category)) {
@@ -3628,11 +3755,12 @@ class _TextbookUnitAuthoringDialogState
                         vlm.label.trim().toUpperCase() == 'UP'
                     ? 'UP'
                     : '',
+                'gaeyu_high' => itemLabel,
                 _ => '',
               },
               itemName: _wonriItemName(
                 category,
-                vlm.label,
+                itemLabel,
                 itemRole: vlm.itemRole,
               ),
               isImportant: _seriesKey == 'gaeyu'
@@ -4431,10 +4559,18 @@ class _TextbookUnitAuthoringDialogState
     final rowName = row.nameCtrl.text.trim().isEmpty
         ? (row.isExercise ? '연습문제' : '소단원')
         : row.nameCtrl.text.trim();
-    final answerStart = _positiveInt(row.answerStartCtrl.text);
     final solutionStart = _positiveInt(row.solutionStartCtrl.text);
-    final answerEnd = _wonriNextRowStageStart(focus, answer: true);
     final solutionEnd = _wonriNextRowStageStart(focus, answer: false);
+    // 개념+유형 고등은 정답 PDF 가 없어 해설 PDF 에서 정답도 읽는다.
+    // 중등 개념원리는 단계 창이 따로 해설 범위로 정답을 읽으므로 그대로 둔다.
+    final answersFromSolution = _seriesKey != 'wonri_middle' &&
+        textbookSeriesAnswersFromSolutionPdf(_seriesKey);
+    final answerStart = answersFromSolution
+        ? solutionStart
+        : _positiveInt(row.answerStartCtrl.text);
+    final answerEnd = answersFromSolution
+        ? solutionEnd
+        : _wonriNextRowStageStart(focus, answer: true);
     final rowIndex = _wonriRowIndex(focus);
     final bodyStart = _positiveInt(row.startCtrl.text);
     final bodyEnd = _positiveInt(row.endCtrl.text);
@@ -4655,6 +4791,7 @@ class _TextbookUnitAuthoringDialogState
     final pageRows = state.pageResults.where((r) => r.ok).toList()
       ..sort((a, b) => a.rawPage.compareTo(b.rawPage));
     final numberPrefixes = _gaeyuBlockNumberPrefixes(pageRows);
+    final gaeyuHighLabels = _gaeyuHighExerciseLabels(pageRows);
     for (final row in pageRows) {
       for (var i = 0; i < row.items.length; i += 1) {
         final item = row.items[i];
@@ -4690,7 +4827,9 @@ class _TextbookUnitAuthoringDialogState
           isSetHeader: item.isSetHeader,
           itemName: _wonriItemName(
             category,
-            item.label,
+            _seriesKey == 'gaeyu_high'
+                ? gaeyuHighLabels[_problemKey(row.rawPage, i)] ?? ''
+                : item.label,
             itemRole: item.itemRole,
           ),
           scopeLabel:
@@ -4715,6 +4854,8 @@ class _TextbookUnitAuthoringDialogState
     if (_seriesKey == 'gaeyu') {
       return category == 'descriptive' && problemNumber.startsWith('예제');
     }
+    // 개념+유형 고등은 필수예제만 본문 "풀이" 상자에 답이 있다.
+    if (_seriesKey == 'gaeyu_high') return category == 'high_example';
     return category == 'type_example' || category == 'special_lecture';
   }
 
@@ -5213,17 +5354,19 @@ class _TextbookUnitAuthoringDialogState
                   label: const Text('소단원 추가',
                       style: TextStyle(color: _kTextSub, fontSize: 10)),
                 ),
-                TextButton.icon(
-                  onPressed: () => setState(() => mid.subUnitRows.add(
-                        _SubUnitRowEdit(
-                          name: _currentSeries().unitEndRowName,
-                          isExercise: true,
-                        ),
-                      )),
-                  icon: const Icon(Icons.add_task, size: 13, color: _kTextSub),
-                  label: Text('${_currentSeries().unitEndRowName} 추가',
-                      style: const TextStyle(color: _kTextSub, fontSize: 10)),
-                ),
+                if (_currentSeries().unitEndRowName.isNotEmpty)
+                  TextButton.icon(
+                    onPressed: () => setState(() => mid.subUnitRows.add(
+                          _SubUnitRowEdit(
+                            name: _currentSeries().unitEndRowName,
+                            isExercise: true,
+                          ),
+                        )),
+                    icon:
+                        const Icon(Icons.add_task, size: 13, color: _kTextSub),
+                    label: Text('${_currentSeries().unitEndRowName} 추가',
+                        style: const TextStyle(color: _kTextSub, fontSize: 10)),
+                  ),
               ],
             ),
           ] else ...[
@@ -5450,7 +5593,7 @@ class _TextbookUnitAuthoringDialogState
             Row(
               children: [
                 const SizedBox(width: 38),
-                if (_seriesKey != 'wonri_middle') ...[
+                if (!textbookSeriesAnswersFromSolutionPdf(_seriesKey)) ...[
                   Expanded(
                     child: _textInput(
                       row.answerStartCtrl,
@@ -5465,8 +5608,9 @@ class _TextbookUnitAuthoringDialogState
                 Expanded(
                   child: _textInput(
                     row.solutionStartCtrl,
-                    hint:
-                        _seriesKey == 'wonri_middle' ? '해설(정답 포함) 시작' : '해설 시작',
+                    hint: textbookSeriesAnswersFromSolutionPdf(_seriesKey)
+                        ? '해설(정답 포함) 시작'
+                        : '해설 시작',
                     dense: true,
                     keyboardType: TextInputType.number,
                     inputFormatters: [FilteringTextInputFormatter.digitsOnly],
@@ -6450,6 +6594,7 @@ class _TextbookUnitAuthoringDialogState
       ));
     }
     // Bottom pass: number bboxes (for context)
+    final gaeyuHighLabels = _gaeyuHighExerciseLabels(state.pageResults);
     for (var i = 0; i < row.items.length; i += 1) {
       final item = row.items[i];
       final region = _effectiveItemRegion(
@@ -6476,13 +6621,18 @@ class _TextbookUnitAuthoringDialogState
         groupTitleOverride:
             effectiveGroup.kind == 'type' ? effectiveGroup.title : null,
         // 개념서는 난이도가 없으므로 뱃지에 문항이름을 표시한다.
-        labelOverride: const {'wonri', 'wonri_middle'}.contains(_seriesKey)
-            ? _wonriItemName(
-                _wonriCategoryOfItem(item, ''),
-                item.label,
-                itemRole: item.itemRole,
+        labelOverride: _seriesKey == 'gaeyu_high'
+            ? _gaeyuHighBadgeText(
+                _wonriCategoryOfItem(item, row.section),
+                gaeyuHighLabels[_problemKey(pageNumber, i)] ?? '',
               )
-            : null,
+            : const {'wonri', 'wonri_middle'}.contains(_seriesKey)
+                ? _wonriItemName(
+                    _wonriCategoryOfItem(item, ''),
+                    item.label,
+                    itemRole: item.itemRole,
+                  )
+                : null,
       ));
     }
     // Top pass: drag handles for the selected region. Drawn last so they

@@ -109,6 +109,7 @@ export const VLM_DETECT_LABELS = Object.freeze([
     ...SURYEOK_LABELS,
     ...GOJAENGI_LABELS,
     ...GOJAENGI_HIGH_LABEL_PARTS,
+    ...GAEYU_HIGH_LABEL_PARTS,
   ]),
 ]);
 
@@ -117,6 +118,11 @@ import {
   GOJAENGI_LABELS,
   buildGojaengiDetectPrompt,
 } from './vlm_detect_prompt_gojaengi.js';
+import {
+  GAEYU_HIGH_ITEM_CATEGORIES,
+  GAEYU_HIGH_LABEL_PARTS,
+  buildGaeyuHighDetectPrompt,
+} from './vlm_detect_prompt_gaeyu_high.js';
 
 export function buildRpmSetHeaderPrompt({ rawPage, displayPage }) {
   return [
@@ -375,6 +381,18 @@ const SERIES_CONFIGS = Object.freeze({
     labelRules: [],
     partCExtra: [],
   },
+  // 개념+유형 고등. 이름은 같지만 지면 구성이 고등 개념원리에 가까워 따로 둔다.
+  gaeyu_high: {
+    key: 'gaeyu_high',
+    bookName: '개념+유형 고등',
+    partA: '개념 Check',
+    partB: '필수예제',
+    partC: '문제',
+    partD: '연습문제',
+    labels: GAEYU_HIGH_LABEL_PARTS,
+    labelRules: [],
+    partCExtra: [],
+  },
   // 수력충전(문제집). 소단원 행 하나에 코너가 하나뿐이라 전용 빌더로 분기한다.
   suryeok: {
     key: 'suryeok',
@@ -441,6 +459,8 @@ export const VLM_DETECT_SECTIONS = Object.freeze([
   'unit_drill', // D 탄탄 단원 다지기 (STEP2)
   'descriptive', // E 쓱쓱 서술형 완성하기 (STEP3)
   'extra_practice', // F 한 번 더 연습
+  // 개념+유형 고등 전용 섹션. sub_key A~D 슬롯과 1:1 대응한다.
+  ...GAEYU_HIGH_ITEM_CATEGORIES,
   // 수력충전 전용 섹션. sub_key A/B 슬롯과 1:1 대응한다.
   'type_problem', // A 유형 문제 (개념 체크 포함)
   'unit_review', // B 단원 마무리 평가
@@ -502,6 +522,11 @@ export {
   GOJAENGI_SECTION_BY_SUB_KEY,
   isGojaengiWorkbookHint,
 } from './vlm_detect_prompt_gojaengi.js';
+export {
+  GAEYU_HIGH_ITEM_CATEGORIES,
+  GAEYU_HIGH_LABEL_PARTS,
+  GAEYU_HIGH_SECTION_BY_SUB_KEY,
+} from './vlm_detect_prompt_gaeyu_high.js';
 
 export const VLM_DETECT_PAGE_KINDS = Object.freeze([
   'problem_page',
@@ -529,6 +554,9 @@ export function buildDetectProblemsPrompt({
   }
   if (cfg.key === 'gaeyu') {
     return buildGaeyuDetectPrompt({ displayPage, rawPage });
+  }
+  if (cfg.key === 'gaeyu_high') {
+    return buildGaeyuHighDetectPrompt({ displayPage, rawPage });
   }
   if (cfg.key === 'suryeok') {
     return buildSuryeokDetectPrompt({ displayPage, rawPage, sectionHint });

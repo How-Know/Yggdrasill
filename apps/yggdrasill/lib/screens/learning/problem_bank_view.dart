@@ -3,7 +3,9 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
+import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:open_filex/open_filex.dart';
 
 import '../../app_overlays.dart';
@@ -17,18 +19,30 @@ import '../../utils/naesin_exam_context.dart';
 import '../../theme/ygg_semantic_colors.dart';
 import '../../widgets/animated_reorderable_grid.dart';
 import '../../widgets/app_snackbar.dart';
+import '../../widgets/dialog_tokens.dart';
 import '../../widgets/resource_textbook_card.dart';
+import '../../widgets/corner_action_bar.dart';
+import '../../widgets/problem_bank_cloud_storage_icon.dart';
 import '../../widgets/shared_folder_tree.dart';
 import '../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import 'models/problem_bank_curriculum_filter.dart';
 import 'models/problem_bank_export_models.dart';
 import 'widgets/problem_bank_bottom_fab_bar.dart';
 import 'widgets/problem_bank_export_options_fab.dart';
+import 'widgets/question_mode_count_bar.dart';
 import 'widgets/problem_bank_export_options_panel.dart';
 import 'widgets/problem_bank_export_server_preview_dialog.dart';
 import 'widgets/problem_bank_question_card.dart';
 import 'widgets/problem_bank_school_sheet.dart';
 import 'widgets/problem_bank_sidebar_range_section.dart';
+
+/// 홈·커리큘럼 페이지 제목과 같은 줄 높이 56. 왼쪽 범위 패널은 이 줄 아래 12부터.
+const double _problemBankPageTitleTop =
+    FabTabBarTokens.previewAcademyTopInset - 12;
+const double _problemBankPageTitleRowHeight = 56;
+const double _problemBankPageTitleIconSize = 48 * 0.9 * 0.95 * 0.95;
+const double _problemBankPageTitleGap = 12;
+const double _problemBankQuestionListTopPadding = 16;
 
 class ProblemBankView extends StatefulWidget {
   const ProblemBankView({super.key});
@@ -111,6 +125,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   bool _showOnlySelectedQuestions = false;
   final Map<String, String> _selectedQuestionModes = <String, String>{};
   final ScrollController _questionGridScrollCtrl = ScrollController();
+  final ImeAwareTextEditingController _privateMaterialSearchController =
+      ImeAwareTextEditingController();
   Map<String, Map<String, String>> _questionFigureUrlsByPath =
       const <String, Map<String, String>>{};
   Map<String, String> _questionPreviewUrls = const <String, String>{};
@@ -139,9 +155,11 @@ class _ProblemBankViewState extends State<ProblemBankView> {
 
   @override
   void dispose() {
+    sharedCornerActionBar.unbindMenu(3);
     _pollTimer?.cancel();
     _previewArtifactPollTimer?.cancel();
     _questionGridScrollCtrl.dispose();
+    _privateMaterialSearchController.dispose();
     super.dispose();
   }
 
@@ -1263,6 +1281,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     if (value == null || value == _selectedSourceTypeCode) return;
     setState(() {
       _selectedSourceTypeCode = value;
+      _privateMaterialSearchController.clear();
       _selectedPrivateMaterialKey = '';
       _selectedPrivateMaterialPageKeys = <String>{};
       _privateMaterialUnits = const <ProblemBankPrivateMaterialBigNode>[];
@@ -1775,71 +1794,34 @@ class _ProblemBankViewState extends State<ProblemBankView> {
 
   Widget _buildQuestionStatsFab() {
     final checked = _checkedVisibleQuestions;
-    final checkedTotal = checked.length;
-    final visibleTotal = _visibleQuestions.length;
-    final objectiveCount =
-        _countQuestionsUsingMode(checked, kLearningQuestionModeObjective);
-    final subjectiveCount =
-        _countQuestionsUsingMode(checked, kLearningQuestionModeSubjective);
-    final essayCount =
-        _countQuestionsUsingMode(checked, kLearningQuestionModeEssay);
-    final possibleObjectiveCount =
-        _countQuestionsAllowing(checked, kLearningQuestionModeObjective);
-    final possibleSubjectiveCount =
-        _countQuestionsAllowing(checked, kLearningQuestionModeSubjective);
-    final possibleEssayCount =
-        _countQuestionsAllowing(checked, kLearningQuestionModeEssay);
-    final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(
-      Theme.of(context).brightness,
-    );
-    const fontSize = FabTabBarTokens.fabBarLabelFontSize;
-
-    String countText(int current, int possible) {
-      if (possible > current) return '$current ($possible)';
-      return '$current';
-    }
-
-    Widget stat(String label, int current, int possible) {
-      return Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            label,
-            style: TextStyle(
-              color: panelStyle.hint,
-              fontSize: fontSize,
-              fontWeight: FontWeight.w600,
-              letterSpacing: -0.1,
-            ),
-          ),
-          const SizedBox(width: 6),
-          Text(
-            countText(current, possible),
-            style: TextStyle(
-              color: panelStyle.title,
-              fontSize: fontSize,
-              fontWeight: FontWeight.w600,
-              letterSpacing: -0.1,
-            ),
-          ),
-        ],
-      );
-    }
-
-    return FabStyleGlassPanel(
-      useGroupedCardBackgroundInLight: true,
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          stat('객관식', objectiveCount, possibleObjectiveCount),
-          const SizedBox(width: 18),
-          stat('주관식', subjectiveCount, possibleSubjectiveCount),
-          const SizedBox(width: 18),
-          stat('서술형', essayCount, possibleEssayCount),
-          const SizedBox(width: 18),
-          stat('총', checkedTotal, visibleTotal),
-        ],
+    return QuestionModeCountBar(
+      counts: QuestionModeCounts(
+        objective: _countQuestionsUsingMode(
+          checked,
+          kLearningQuestionModeObjective,
+        ),
+        objectivePossible: _countQuestionsAllowing(
+          checked,
+          kLearningQuestionModeObjective,
+        ),
+        subjective: _countQuestionsUsingMode(
+          checked,
+          kLearningQuestionModeSubjective,
+        ),
+        subjectivePossible: _countQuestionsAllowing(
+          checked,
+          kLearningQuestionModeSubjective,
+        ),
+        essay: _countQuestionsUsingMode(
+          checked,
+          kLearningQuestionModeEssay,
+        ),
+        essayPossible: _countQuestionsAllowing(
+          checked,
+          kLearningQuestionModeEssay,
+        ),
+        total: checked.length,
+        totalPossible: _visibleQuestions.length,
       ),
     );
   }
@@ -4614,6 +4596,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           courseOptions: _courseOptions,
           onCourseChanged: _onDetailedCourseChanged,
           isBusy: isBusy,
+          showBookSearch: _isPrivateMaterialSource,
+          bookSearchController: _privateMaterialSearchController,
+          onBookSearchChanged: (_) => setState(() {}),
         ),
         const SizedBox(height: 8),
         Expanded(
@@ -4640,18 +4625,68 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     );
   }
 
+  void _bindCornerBar(bool exportBusy) {
+    sharedCornerActionBar.bind(
+      menuIndex: 3,
+      width: ProblemBankBottomFabBar.barWidth(),
+      visible: true,
+      builder: (context) => ProblemBankBottomFabBar(
+        bare: true,
+        cartCount: _cartQuestionIds.length,
+        cartActive: _showOnlySelectedQuestions,
+        allVisibleSelected: _allVisibleQuestionsSelected,
+        isBusy: exportBusy,
+        onToggleSelectAll: _toggleSelectAllVisibleQuestions,
+        onToggleCart: _onToggleShowOnlySelectedFilter,
+        onClearCart: _clearCartQuestions,
+        onAddToCart: _addSelectedQuestionsToCart,
+        onCreate: _openExportLayoutPreviewDialog,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final busy = _isInitializing || _isLoadingQuestions || _isLoadingSchools;
     final exportBusy = _isExporting || _isSavingExportLocally;
+    _bindCornerBar(exportBusy);
     final sidebarWidth = sharedFolderTreePanelWidthFor(context);
     return Container(
       color: context.yggSurfaceBase,
       child: Stack(
         children: [
           Positioned(
+            top: _problemBankPageTitleTop,
+            left: 24,
+            height: _problemBankPageTitleRowHeight,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                SvgPicture.string(
+                  problemBankCloudStorageOutlineSvg,
+                  width: _problemBankPageTitleIconSize,
+                  height: _problemBankPageTitleIconSize,
+                  colorFilter: ColorFilter.mode(
+                    FabTabBarTokens.previewAcademyPanelStyleFor(
+                      Theme.of(context).brightness,
+                    ).title,
+                    BlendMode.srcIn,
+                  ),
+                ),
+                const SizedBox(width: 20),
+                const FabStyleScreenMainTitle(
+                  title: '문제은행',
+                  overlay: true,
+                ),
+              ],
+            ),
+          ),
+          Positioned(
             left: 12,
-            top: 12,
+            top: _problemBankPageTitleTop +
+                _problemBankPageTitleRowHeight +
+                _problemBankPageTitleGap,
             bottom: 12,
             width: sidebarWidth,
             child: _buildProblemBankSidebar(isBusy: busy || exportBusy),
@@ -4672,42 +4707,32 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                       ),
                       Positioned(
                         top: 12,
-                        left: 8,
-                        child: _buildQuestionStatsFab(),
-                      ),
-                      Positioned(
-                        top: 12,
                         right: 12,
-                        child: ProblemBankExportOptionsFab(
-                          isBusy: exportBusy,
-                          panel: _buildExportOptionsPanel(),
-                          filterButton: ProblemBankFilterMenuButton(
-                            disabled: exportBusy,
-                            filterActive: _questionFilterActive,
-                            typeFilterOptions: _typeFilterOptions,
-                            difficultyFilterOptions: _difficultyFilterOptions,
-                            selectedTypeFilters: _activeTypeFilters,
-                            selectedDifficultyFilters: _activeDifficultyFilters,
-                            onToggleTypeFilter: _toggleTypeFilter,
-                            onToggleDifficultyFilter: _toggleDifficultyFilter,
-                            onClearFilters: _clearQuestionFilters,
-                          ),
-                        ),
-                      ),
-                      Positioned(
-                        left: 0,
-                        right: 0,
-                        bottom: FabTabBarTokens.fabBarBottomInset,
-                        child: ProblemBankBottomFabBar(
-                          cartCount: _cartQuestionIds.length,
-                          cartActive: _showOnlySelectedQuestions,
-                          allVisibleSelected: _allVisibleQuestionsSelected,
-                          isBusy: exportBusy,
-                          onToggleSelectAll: _toggleSelectAllVisibleQuestions,
-                          onToggleCart: _onToggleShowOnlySelectedFilter,
-                          onClearCart: _clearCartQuestions,
-                          onAddToCart: _addSelectedQuestionsToCart,
-                          onCreate: _openExportLayoutPreviewDialog,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            _buildQuestionStatsFab(),
+                            const SizedBox(width: 12),
+                            ProblemBankExportOptionsFab(
+                              isBusy: exportBusy,
+                              panel: _buildExportOptionsPanel(),
+                              filterButton: ProblemBankFilterMenuButton(
+                                disabled: exportBusy,
+                                filterActive: _questionFilterActive,
+                                typeFilterOptions: _typeFilterOptions,
+                                difficultyFilterOptions:
+                                    _difficultyFilterOptions,
+                                selectedTypeFilters: _activeTypeFilters,
+                                selectedDifficultyFilters:
+                                    _activeDifficultyFilters,
+                                onToggleTypeFilter: _toggleTypeFilter,
+                                onToggleDifficultyFilter:
+                                    _toggleDifficultyFilter,
+                                onClearFilters: _clearQuestionFilters,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ],
@@ -4954,7 +4979,11 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             width: metrics.availableWidth,
             child: ListView.builder(
               controller: _questionGridScrollCtrl,
-              padding: const EdgeInsets.only(right: 6, bottom: 126),
+              padding: const EdgeInsets.only(
+                top: _problemBankQuestionListTopPadding,
+                right: 6,
+                bottom: 126,
+              ),
               itemCount: keys.length,
               itemBuilder: (context, index) {
                 final key = keys[index];
@@ -5030,9 +5059,33 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     );
   }
 
+  List<_PrivateMaterialOption> _visiblePrivateMaterialOptions() {
+    final query = _privateMaterialSearchController.text.trim().toLowerCase();
+    if (query.isEmpty) return _privateMaterialOptions;
+    return [
+      for (final option in _privateMaterialOptions)
+        if (_privateMaterialOptionMatches(option, query)) option,
+    ];
+  }
+
+  bool _privateMaterialOptionMatches(
+    _PrivateMaterialOption option,
+    String query,
+  ) {
+    final card = _privateMaterialBookCards[option.key];
+    final haystack = [
+      option.label,
+      option.gradeLabel,
+      card?.title ?? '',
+      card?.description ?? '',
+      card?.gradeLabel ?? '',
+    ].join(' ').toLowerCase();
+    return haystack.contains(query);
+  }
+
   Widget _buildPrivateMaterialBookPicker() {
     if (_isLoadingSchools || _isLoadingPrivateMaterialBookCards) {
-      return const Center(child: CircularProgressIndicator(strokeWidth: 2));
+      return const Center(child: YggLoadingIndicator());
     }
     if (_privateMaterialOptions.isEmpty) {
       return const Center(
@@ -5047,46 +5100,75 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         ),
       );
     }
+    final options = _visiblePrivateMaterialOptions();
+    if (options.isEmpty) {
+      return const Center(
+        child: Text(
+          '검색 결과가 없습니다.',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: _rsTextMuted,
+            fontWeight: FontWeight.w700,
+            height: 1.5,
+          ),
+        ),
+      );
+    }
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        const cardWidth = resourceTextbookCardDefaultWidth;
+        const minCardWidth = resourceTextbookCardDefaultWidth;
         const spacing = 22.4;
-        final cols = (constraints.maxWidth / (cardWidth + spacing))
-            .floor()
-            .clamp(1, 999);
-        final gridWidth = (cols * cardWidth) + ((cols - 1) * spacing);
+        const trailingInset = 12.0;
+        final available = math.max(
+          minCardWidth,
+          constraints.maxWidth - trailingInset,
+        );
+        var cols = 1;
+        while (cols < 999 &&
+            (cols + 1) * minCardWidth + cols * spacing <= available + 0.5) {
+          cols++;
+        }
+        final cardWidth = (available - (cols - 1) * spacing) / cols;
 
-        return Align(
-          alignment: Alignment.topLeft,
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(0, 0, 12, 120),
-            child: SizedBox(
-              width: gridWidth,
-              child: Wrap(
-                spacing: spacing,
-                runSpacing: spacing,
-                children: [
-                  for (final option in _privateMaterialOptions)
-                    ResourceTextbookCard(
-                      title: _privateMaterialBookCards[option.key]?.title ??
-                          option.label,
-                      description:
-                          _privateMaterialBookCards[option.key]?.description,
-                      gradeLabel:
-                          _privateMaterialBookCards[option.key]?.gradeLabel ??
-                              option.gradeLabel,
-                      coverPath:
-                          _privateMaterialBookCards[option.key]?.coverPath,
-                      backgroundColor: _privateMaterialBookCards[option.key]
-                          ?.backgroundColor,
-                      selected: false,
-                      width: cardWidth,
-                      onTap: () => unawaited(
-                        _onPrivateMaterialChanged(option.key),
+        return ScrollConfiguration(
+          behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
+          child: Align(
+            alignment: Alignment.topLeft,
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(
+                0,
+                _problemBankQuestionListTopPadding,
+                trailingInset,
+                120,
+              ),
+              child: SizedBox(
+                width: available,
+                child: Wrap(
+                  spacing: spacing,
+                  runSpacing: spacing,
+                  children: [
+                    for (final option in options)
+                      ResourceTextbookCard(
+                        title: _privateMaterialBookCards[option.key]?.title ??
+                            option.label,
+                        description:
+                            _privateMaterialBookCards[option.key]?.description,
+                        gradeLabel:
+                            _privateMaterialBookCards[option.key]?.gradeLabel ??
+                                option.gradeLabel,
+                        coverPath:
+                            _privateMaterialBookCards[option.key]?.coverPath,
+                        backgroundColor: _privateMaterialBookCards[option.key]
+                            ?.backgroundColor,
+                        selected: false,
+                        width: cardWidth,
+                        onTap: () => unawaited(
+                          _onPrivateMaterialChanged(option.key),
+                        ),
                       ),
-                    ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
@@ -5101,9 +5183,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       return _buildPrivateMaterialBookPicker();
     }
     if (_isInitializing || _isLoadingQuestions) {
-      return const Center(
-        child: CircularProgressIndicator(strokeWidth: 2),
-      );
+      return const Center(child: YggLoadingIndicator());
     }
     if (_questions.isEmpty) {
       final privateMessage = _privateMaterialQuestionEmptyMessage();
@@ -5150,6 +5230,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                 scrollController: _questionGridScrollCtrl,
                 dragAnchorStrategy: pointerDragAnchorStrategy,
                 scrollBottomPadding: 120,
+                scrollTopPadding: _problemBankQuestionListTopPadding,
                 enableReorder: true,
                 itemBuilder: (context, question) {
                   return _buildQuestionCardTile(question);
@@ -5206,6 +5287,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
               scrollController: _questionGridScrollCtrl,
               dragAnchorStrategy: pointerDragAnchorStrategy,
               scrollBottomPadding: 120,
+              scrollTopPadding: _problemBankQuestionListTopPadding,
               enableReorder: !_showOnlySelectedQuestions,
               itemBuilder: (context, question) {
                 return _buildQuestionCardTile(question);

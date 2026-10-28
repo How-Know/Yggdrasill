@@ -373,6 +373,7 @@ class HomeworkStore {
   final math.Random _assignmentCodeRandom = math.Random();
   final Set<String> _assignmentCodeSyncInFlightItemIds = <String>{};
   bool _supportsAssignmentCodeGroupReconcileRpc = true;
+  bool _supportsGroupBundleRpc = true;
   bool _supportsAssignmentCodeColumn = true;
   bool _supportsLearningTrackColumn = true;
   bool _supportsPbPresetIdColumn = true;
@@ -410,6 +411,14 @@ class HomeworkStore {
   final Map<String, Map<String, _PendingGroupCreate>>
       _pendingGroupCreatesByStudentId = {};
   static const Duration _pendingCreateMaxAge = Duration(minutes: 5);
+
+  /// 이 기기가 바꾸고 아직 서버 확인을 받지 못한 하위과제. 저장 전에 시작된
+  /// 재조회가 예전 단계로 되돌리지 못하게 로컬 값을 유지한다. 저장이 끝난 뒤
+  /// 시작된 재조회, 저장 실패, 만료 중 하나면 서버를 따른다. 서버 version은 RPC
+  /// 내부 update마다 올라가 이 기기의 쓰기와 다른 기기의 쓰기를 구분하지 못한다.
+  final Map<String, Map<String, _LocalItemEdit>> _localItemEditsByStudentId =
+      {};
+  static const Duration _localItemEditMaxAge = Duration(seconds: 20);
   static const List<Duration> _createRetryDelays = <Duration>[
     Duration(seconds: 1),
     Duration(seconds: 3),
@@ -452,6 +461,7 @@ class HomeworkStore {
     _localWriteStartedAtByStudentId.clear();
     _pendingItemCreatesByStudentId.clear();
     _pendingGroupCreatesByStudentId.clear();
+    _localItemEditsByStudentId.clear();
     _rtPollCursorUtc = null;
     _rtPollAcademyId = null;
     _rtPollInFlight = false;
@@ -1776,6 +1786,24 @@ class HomeworkStore {
     _forgetPendingItemCreates(studentId, <String>[itemId]);
   }
 
+  /// 서버에 저장되지 않은 것으로 확인된 새 그룹과 그 하위과제를 로컬에서 지운다.
+  void _dropLocalCreatedGroup(
+    String studentId,
+    String groupId,
+    Iterable<String> itemIds,
+  ) {
+    for (final id in itemIds) {
+      _dropLocalCreatedItem(studentId, id);
+    }
+    _groupsByStudentId[studentId]?.removeWhere((g) => g.id == groupId);
+    _groupItemsByGroupId.remove(groupId);
+    final pending = _pendingGroupCreatesByStudentId[studentId];
+    pending?.remove(groupId);
+    if (pending != null && pending.isEmpty) {
+      _pendingGroupCreatesByStudentId.remove(studentId);
+    }
+  }
+
   /// 재조회가 덮어쓴 학생 목록에 아직 확인되지 않은 새 하위과제를 다시 붙인다.
   void _restorePendingItemCreates(String studentId, DateTime reloadStartedAt) {
     final pending = _pendingItemCreatesByStudentId[studentId];
@@ -1798,6 +1826,105 @@ class HomeworkStore {
     });
     if (pending.isEmpty) _pendingItemCreatesByStudentId.remove(studentId);
     if (added) _sortStudentList(list);
+  }
+
+  /// 로컬에서 바꾼 하위과제의 서버 저장을 시작할 때 부른다. 같은 과제의 연속
+  /// 저장(순서 변경 후 제출 등)은 하나로 묶인다.
+  void _beginLocalItemEdits(String studentId, Iterable<HomeworkItem> items) {
+    final now = DateTime.now();
+    final edits = _localItemEditsByStudentId.putIfAbsent(
+      studentId,
+      () => <String, _LocalItemEdit>{},
+    );
+    for (final item in items) {
+      final edit = edits.putIfAbsent(
+        item.id,
+        () => _LocalItemEdit(item: item, touchedAt: now),
+      );
+      edit
+        ..item = item
+        ..inFlight += 1
+        ..touchedAt = now
+        ..settledAt = null;
+    }
+  }
+
+  /// 저장이 끝나면 부른다. 실패하면 보호를 바로 풀어 다음 재조회가 서버 값으로
+  /// 되돌리게 한다. 성공하면 저장 뒤 시작되는 재조회를 하나 예약해 실시간
+  /// 이벤트가 오지 않아도 서버 값으로 수렴하게 한다.
+  void _endLocalItemEdits(
+    String studentId,
+    Iterable<String> itemIds, {
+    bool failed = false,
+  }) {
+    final edits = _localItemEditsByStudentId[studentId];
+    if (edits != null) {
+      final now = DateTime.now();
+      for (final id in itemIds) {
+        final edit = edits[id];
+        if (edit == null) continue;
+        if (failed) {
+          edits.remove(id);
+          continue;
+        }
+        edit.inFlight = math.max(0, edit.inFlight - 1);
+        if (edit.inFlight == 0) edit.settledAt = now;
+      }
+      if (edits.isEmpty) _localItemEditsByStudentId.remove(studentId);
+    }
+    if (!failed) _scheduleRealtimeReload(studentId);
+  }
+
+  /// 이미 서버에 반영된 변경을 로컬에 먼저 그릴 때 부른다.
+  void _markLocalItemEditsSaved(
+    String studentId,
+    Iterable<HomeworkItem> items,
+  ) {
+    final list = items.toList(growable: false);
+    if (list.isEmpty) return;
+    _beginLocalItemEdits(studentId, list);
+    _endLocalItemEdits(studentId, list.map((e) => e.id));
+  }
+
+  bool _localItemEditUnconfirmed(
+    _LocalItemEdit edit,
+    DateTime reloadStartedAt,
+  ) {
+    if (DateTime.now().difference(edit.touchedAt) > _localItemEditMaxAge) {
+      return false;
+    }
+    if (edit.inFlight > 0) return true;
+    final settledAt = edit.settledAt;
+    return settledAt != null && reloadStartedAt.isBefore(settledAt);
+  }
+
+  /// 아직 서버 확인을 받지 못한 로컬 변경이 있는지. 그룹 요약 카드가 서버
+  /// runtime 대신 하위과제 단계를 기준으로 그리도록 할 때 쓴다.
+  bool hasUnconfirmedLocalEdit(String studentId, String itemId) {
+    final edit = _localItemEditsByStudentId[studentId]?[itemId];
+    if (edit == null) return false;
+    return DateTime.now().difference(edit.touchedAt) <= _localItemEditMaxAge;
+  }
+
+  /// 재조회 결과에서 이 기기가 아직 저장 중인 하위과제를 로컬 값으로 되돌린다.
+  void _restoreLocalItemEdits(String studentId, DateTime reloadStartedAt) {
+    final edits = _localItemEditsByStudentId[studentId];
+    if (edits == null || edits.isEmpty) return;
+    final list = _byStudentId[studentId];
+    var replaced = false;
+    edits.removeWhere((id, edit) {
+      if (!_localItemEditUnconfirmed(edit, reloadStartedAt)) return true;
+      if (list == null) return false;
+      final idx = list.indexWhere((e) => e.id == id);
+      if (idx < 0) return false;
+      if (!identical(list[idx], edit.item)) {
+        list[idx] = edit.item;
+        replaced = true;
+      }
+      return false;
+    });
+    if (edits.isEmpty) _localItemEditsByStudentId.remove(studentId);
+    if (replaced && list != null) _sortStudentList(list);
   }
 
   /// 그룹 캐시를 서버 기준으로 다시 만든 뒤, 아직 확인되지 않은 새 그룹과
@@ -2936,6 +3063,9 @@ class HomeworkStore {
       for (final sid in _pendingItemCreatesByStudentId.keys.toList()) {
         _restorePendingItemCreates(sid, loadStartedAt);
       }
+      for (final sid in _localItemEditsByStudentId.keys.toList()) {
+        _restoreLocalItemEdits(sid, loadStartedAt);
+      }
       _loadedStudentIds
         ..clear()
         ..addAll(_byStudentId.keys);
@@ -3436,6 +3566,15 @@ class HomeworkStore {
           ? (typedExistingRows.first['id'] as String? ?? '').trim()
           : '';
       if (groupId.isEmpty) {
+        // 로컬 연결만 아직 안 들어온 경우다. 여기서 그룹을 새로 만들면
+        // 하위과제 하나가 빈 카드로 따로 떨어져 보인다.
+        final linkRows = await supa
+            .from('homework_group_items')
+            .select('group_id')
+            .eq('academy_id', academyId)
+            .eq('homework_item_id', item.id)
+            .limit(1);
+        if ((linkRows as List).isNotEmpty) return;
         // 화면 순서는 group.order_index 기준이다. 아이템 활성 순번을 그대로
         // 복사하면 유령 active 그룹이 많은 학생에서 새 카드가 맨 위로 간다.
         final nextGroupOrder = await _resolveNextGroupOrderIndex(
@@ -3732,77 +3871,93 @@ class HomeworkStore {
     required String studentId,
     required HomeworkItem item,
   }) async {
-    final mappings = item.unitMappings;
-    if (mappings == null) return;
+    final rows = _buildUnitMappingRows(
+      academyId: academyId,
+      studentId: studentId,
+      item: item,
+    );
+    if (rows == null) return;
     final supa = Supabase.instance.client;
     try {
       await supa.from('homework_item_units').delete().match({
         'academy_id': academyId,
         'homework_item_id': item.id,
       });
-      final bookId = _uuidOrNull(item.bookId) ?? '';
-      final gradeLabel = (item.gradeLabel ?? '').trim();
-      if (bookId.isEmpty || gradeLabel.isEmpty || mappings.isEmpty) return;
-
-      int? asIntOpt(dynamic v) {
-        if (v == null) return null;
-        if (v is int) return v;
-        if (v is num) return v.toInt();
-        if (v is String) return int.tryParse(v);
-        return null;
-      }
-
-      double asDouble(dynamic v, {required double fallback}) {
-        if (v == null) return fallback;
-        if (v is num) return v.toDouble();
-        if (v is String) return double.tryParse(v) ?? fallback;
-        return fallback;
-      }
-
-      String asString(dynamic v, {required String fallback}) {
-        final s = (v == null) ? '' : v.toString().trim();
-        return s.isEmpty ? fallback : s;
-      }
-
-      final rows = <Map<String, dynamic>>[];
-      final seenKeys = <String>{};
-      for (final raw in mappings) {
-        final m = Map<String, dynamic>.from(raw);
-        final bigOrder = asIntOpt(m['bigOrder']);
-        final midOrder = asIntOpt(m['midOrder']);
-        final smallOrder = asIntOpt(m['smallOrder']);
-        if (bigOrder == null || midOrder == null || smallOrder == null)
-          continue;
-        final startPage = asIntOpt(m['startPage']);
-        final endPage = asIntOpt(m['endPage']);
-        final pageCount = asIntOpt(m['pageCount']);
-        final key = '$bigOrder|$midOrder|$smallOrder';
-        if (!seenKeys.add(key)) continue;
-        rows.add({
-          'academy_id': academyId,
-          'homework_item_id': item.id,
-          'student_id': studentId,
-          'book_id': bookId,
-          'grade_label': gradeLabel,
-          'big_order': bigOrder,
-          'mid_order': midOrder,
-          'small_order': smallOrder,
-          'big_name': asString(m['bigName'], fallback: '대단원'),
-          'mid_name': asString(m['midName'], fallback: '중단원'),
-          'small_name': asString(m['smallName'], fallback: '소단원'),
-          'start_page': startPage,
-          'end_page': endPage,
-          'page_count': pageCount,
-          'weight': asDouble(m['weight'], fallback: 1),
-          'source_scope': _normalizeUnitSourceScope(m['sourceScope']),
-        });
-      }
       if (rows.isNotEmpty) {
         await supa.from('homework_item_units').insert(rows);
       }
     } catch (e, st) {
       print('[HW][unitMappings][ERROR] $e\n$st');
     }
+  }
+
+  /// null이면 단원 매핑을 건드리지 않는다. 빈 목록이면 기존 매핑만 지운다.
+  List<Map<String, dynamic>>? _buildUnitMappingRows({
+    required String academyId,
+    required String studentId,
+    required HomeworkItem item,
+  }) {
+    final mappings = item.unitMappings;
+    if (mappings == null) return null;
+    final bookId = _uuidOrNull(item.bookId) ?? '';
+    final gradeLabel = (item.gradeLabel ?? '').trim();
+    if (bookId.isEmpty || gradeLabel.isEmpty || mappings.isEmpty) {
+      return const <Map<String, dynamic>>[];
+    }
+
+    int? asIntOpt(dynamic v) {
+      if (v == null) return null;
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      if (v is String) return int.tryParse(v);
+      return null;
+    }
+
+    double asDouble(dynamic v, {required double fallback}) {
+      if (v == null) return fallback;
+      if (v is num) return v.toDouble();
+      if (v is String) return double.tryParse(v) ?? fallback;
+      return fallback;
+    }
+
+    String asString(dynamic v, {required String fallback}) {
+      final s = (v == null) ? '' : v.toString().trim();
+      return s.isEmpty ? fallback : s;
+    }
+
+    final rows = <Map<String, dynamic>>[];
+    final seenKeys = <String>{};
+    for (final raw in mappings) {
+      final m = Map<String, dynamic>.from(raw);
+      final bigOrder = asIntOpt(m['bigOrder']);
+      final midOrder = asIntOpt(m['midOrder']);
+      final smallOrder = asIntOpt(m['smallOrder']);
+      if (bigOrder == null || midOrder == null || smallOrder == null) continue;
+      final startPage = asIntOpt(m['startPage']);
+      final endPage = asIntOpt(m['endPage']);
+      final pageCount = asIntOpt(m['pageCount']);
+      final key = '$bigOrder|$midOrder|$smallOrder';
+      if (!seenKeys.add(key)) continue;
+      rows.add({
+        'academy_id': academyId,
+        'homework_item_id': item.id,
+        'student_id': studentId,
+        'book_id': bookId,
+        'grade_label': gradeLabel,
+        'big_order': bigOrder,
+        'mid_order': midOrder,
+        'small_order': smallOrder,
+        'big_name': asString(m['bigName'], fallback: '대단원'),
+        'mid_name': asString(m['midName'], fallback: '중단원'),
+        'small_name': asString(m['smallName'], fallback: '소단원'),
+        'start_page': startPage,
+        'end_page': endPage,
+        'page_count': pageCount,
+        'weight': asDouble(m['weight'], fallback: 1),
+        'source_scope': _normalizeUnitSourceScope(m['sourceScope']),
+      });
+    }
+    return rows;
   }
 
   List<int> _parsePagesFromRawPageText(String rawPageText) {
@@ -3897,81 +4052,18 @@ class HomeworkStore {
     required String studentId,
     required HomeworkItem item,
   }) async {
-    final mappings = item.unitMappings ?? const <Map<String, dynamic>>[];
-    final bookId = _uuidOrNull(item.bookId) ?? '';
-    final gradeLabel = (item.gradeLabel ?? '').trim();
-    if (bookId.isEmpty || gradeLabel.isEmpty) return;
+    final pageRows = _buildPageMappingRows(
+      academyId: academyId,
+      studentId: studentId,
+      item: item,
+    );
+    if (pageRows == null) return;
     final supa = Supabase.instance.client;
     try {
       await supa.from('homework_item_pages').delete().match({
         'academy_id': academyId,
         'homework_item_id': item.id,
       });
-
-      int? asIntOpt(dynamic v) {
-        if (v == null) return null;
-        if (v is int) return v;
-        if (v is num) return v.toInt();
-        if (v is String) return int.tryParse(v);
-        return null;
-      }
-
-      final pageRows = <Map<String, dynamic>>[];
-      final seenPages = <int>{};
-
-      for (final raw in mappings) {
-        final m = Map<String, dynamic>.from(raw);
-        final pageCounts = m['pageCounts'];
-        final startPage = asIntOpt(m['startPage']);
-        final endPage = asIntOpt(m['endPage']);
-
-        if (pageCounts is Map && pageCounts.isNotEmpty) {
-          for (final entry in pageCounts.entries) {
-            final page = asIntOpt(entry.key);
-            final count = asIntOpt(entry.value) ?? 0;
-            if (page == null || page <= 0 || !seenPages.add(page)) continue;
-            pageRows.add({
-              'academy_id': academyId,
-              'homework_item_id': item.id,
-              'student_id': studentId,
-              'book_id': bookId,
-              'grade_label': gradeLabel,
-              'page_number': page,
-              'problem_count': count,
-            });
-          }
-        }
-        // 문항이 있는 페이지뿐 아니라 선택 범위의 개념 페이지도 보존한다.
-        // 기존 else-if 구조에서는 pageCounts가 하나라도 있으면 범위 내 0문항
-        // 페이지가 저장되지 않아 그룹 카드의 페이지 합집합에서 사라졌다.
-        if (startPage != null && endPage != null && endPage >= startPage) {
-          for (int p = startPage; p <= endPage; p++) {
-            if (!seenPages.add(p)) continue;
-            pageRows.add({
-              'academy_id': academyId,
-              'homework_item_id': item.id,
-              'student_id': studentId,
-              'book_id': bookId,
-              'grade_label': gradeLabel,
-              'page_number': p,
-              'problem_count': 0,
-            });
-          }
-        }
-      }
-
-      if (pageRows.isEmpty) {
-        pageRows.addAll(
-          _buildManualPageRows(
-            academyId: academyId,
-            studentId: studentId,
-            item: item,
-            bookId: bookId,
-            gradeLabel: gradeLabel,
-          ),
-        );
-      }
-
       if (pageRows.isNotEmpty) {
         await supa.from('homework_item_pages').insert(pageRows);
       }
@@ -3986,7 +4078,113 @@ class HomeworkStore {
     }
   }
 
+  /// null이면 교재 정보가 없어 페이지 매핑을 건드리지 않는다.
+  List<Map<String, dynamic>>? _buildPageMappingRows({
+    required String academyId,
+    required String studentId,
+    required HomeworkItem item,
+  }) {
+    final mappings = item.unitMappings ?? const <Map<String, dynamic>>[];
+    final bookId = _uuidOrNull(item.bookId) ?? '';
+    final gradeLabel = (item.gradeLabel ?? '').trim();
+    if (bookId.isEmpty || gradeLabel.isEmpty) return null;
+
+    int? asIntOpt(dynamic v) {
+      if (v == null) return null;
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      if (v is String) return int.tryParse(v);
+      return null;
+    }
+
+    final pageRows = <Map<String, dynamic>>[];
+    final seenPages = <int>{};
+
+    for (final raw in mappings) {
+      final m = Map<String, dynamic>.from(raw);
+      final pageCounts = m['pageCounts'];
+      final startPage = asIntOpt(m['startPage']);
+      final endPage = asIntOpt(m['endPage']);
+
+      if (pageCounts is Map && pageCounts.isNotEmpty) {
+        for (final entry in pageCounts.entries) {
+          final page = asIntOpt(entry.key);
+          final count = asIntOpt(entry.value) ?? 0;
+          if (page == null || page <= 0 || !seenPages.add(page)) continue;
+          pageRows.add({
+            'academy_id': academyId,
+            'homework_item_id': item.id,
+            'student_id': studentId,
+            'book_id': bookId,
+            'grade_label': gradeLabel,
+            'page_number': page,
+            'problem_count': count,
+          });
+        }
+      }
+      // 문항이 있는 페이지뿐 아니라 선택 범위의 개념 페이지도 보존한다.
+      // 기존 else-if 구조에서는 pageCounts가 하나라도 있으면 범위 내 0문항
+      // 페이지가 저장되지 않아 그룹 카드의 페이지 합집합에서 사라졌다.
+      if (startPage != null && endPage != null && endPage >= startPage) {
+        for (int p = startPage; p <= endPage; p++) {
+          if (!seenPages.add(p)) continue;
+          pageRows.add({
+            'academy_id': academyId,
+            'homework_item_id': item.id,
+            'student_id': studentId,
+            'book_id': bookId,
+            'grade_label': gradeLabel,
+            'page_number': p,
+            'problem_count': 0,
+          });
+        }
+      }
+    }
+
+    if (pageRows.isEmpty) {
+      pageRows.addAll(
+        _buildManualPageRows(
+          academyId: academyId,
+          studentId: studentId,
+          item: item,
+          bookId: bookId,
+          gradeLabel: gradeLabel,
+        ),
+      );
+    }
+    return pageRows;
+  }
+
   Future<void> _syncProblemMappings({
+    required String academyId,
+    required String studentId,
+    required HomeworkItem item,
+  }) async {
+    try {
+      final snapshot = await _buildProblemSnapshotRows(
+        academyId: academyId,
+        studentId: studentId,
+        item: item,
+      );
+      if (snapshot == null || snapshot.rows.isEmpty) return;
+      await Supabase.instance.client.rpc(
+        'homework_replace_item_problem_snapshots',
+        params: {
+          'p_homework_item_id': item.id,
+          'p_rows': snapshot.rows,
+          'p_expected_count': snapshot.expectedCount,
+        },
+      );
+    } catch (e, st) {
+      debugPrint('[HW][problemMappings][ERROR] $e\n$st');
+      rethrow;
+    }
+  }
+
+  /// 문항 단위로 고른 과제의 스냅샷 행. 문항 선택이 없으면 null.
+  /// 고른 문항 수와 행 수가 다르면 예외를 던진다.
+  Future<({List<Map<String, dynamic>> rows, int expectedCount})?>
+      _buildProblemSnapshotRows({
     required String academyId,
     required String studentId,
     required HomeworkItem item,
@@ -3994,267 +4192,255 @@ class HomeworkStore {
     final mappings = item.unitMappings ?? const <Map<String, dynamic>>[];
     final hasExplicitProblemMappings =
         mappings.any((mapping) => mapping.containsKey('problemCrops'));
-    if (!hasExplicitProblemMappings) return;
+    if (!hasExplicitProblemMappings) return null;
     final bookId = (item.bookId ?? '').trim();
     final gradeLabel = (item.gradeLabel ?? '').trim();
-    if (bookId.isEmpty || gradeLabel.isEmpty) return;
+    if (bookId.isEmpty || gradeLabel.isEmpty) return null;
     final supa = Supabase.instance.client;
-    try {
-      int? asIntOpt(dynamic v) {
-        if (v == null) return null;
-        if (v is int) return v;
-        if (v is num) return v.toInt();
-        if (v is String) return int.tryParse(v);
-        return null;
-      }
 
-      String asString(dynamic v, {String fallback = ''}) {
-        final s = v == null ? '' : v.toString().trim();
-        return s.isEmpty ? fallback : s;
-      }
-
-      bool asBool(dynamic v) {
-        if (v is bool) return v;
-        if (v is num) return v != 0;
-        final s = asString(v).toLowerCase();
-        return s == 'true' || s == 't' || s == '1' || s == 'yes';
-      }
-
-      final uuidPattern = RegExp(
-        r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
-      );
-      String? asUuidOpt(dynamic v) {
-        final s = asString(v);
-        return uuidPattern.hasMatch(s) ? s : null;
-      }
-
-      int? problemNumberNumeric(String value) {
-        final s = value.trim();
-        if (!RegExp(r'^\d+$').hasMatch(s)) return null;
-        final parsed = int.tryParse(s);
-        return parsed != null && parsed > 0 ? parsed : null;
-      }
-
-      String normalizeContentGroupKind(dynamic v) {
-        final s = asString(v).toLowerCase();
-        return s == 'basic_subtopic' || s == 'type' ? s : 'none';
-      }
-
-      Iterable<List<T>> chunks<T>(List<T> values, int size) sync* {
-        for (var i = 0; i < values.length; i += size) {
-          final end = (i + size) > values.length ? values.length : i + size;
-          yield values.sublist(i, end);
-        }
-      }
-
-      final cropIds = <String>{};
-      for (final rawMapping in mappings) {
-        final mapping = Map<String, dynamic>.from(rawMapping);
-        final crops = mapping['problemCrops'];
-        if (crops is! List) continue;
-        for (final rawCrop in crops) {
-          if (rawCrop is! Map) continue;
-          final cropId = asUuidOpt(rawCrop['cropId']);
-          if (cropId != null) cropIds.add(cropId);
-        }
-      }
-
-      final cropRowsById = <String, Map<String, dynamic>>{};
-      for (final ids in chunks(cropIds.toList(growable: false), 250)) {
-        final cropRows = await supa
-            .from('textbook_problem_crops')
-            .select(
-              'id, big_order, mid_order, sub_key, big_name, mid_name, '
-              'raw_page, display_page, section, '
-              'problem_number, label, is_set_header, set_from, set_to, '
-              'content_group_kind, content_group_label, content_group_title, '
-              'content_group_order, pb_question_uid, bbox_1k, item_region_1k',
-            )
-            .eq('academy_id', academyId)
-            .eq('book_id', bookId)
-            .eq('grade_label', gradeLabel)
-            .inFilter('id', ids);
-        for (final raw in cropRows) {
-          final row = Map<String, dynamic>.from(raw);
-          final id = asUuidOpt(row['id']);
-          if (id != null) cropRowsById[id] = row;
-        }
-      }
-
-      final rows = <Map<String, dynamic>>[];
-      final seen = <String>{};
-      var sortOrder = 0;
-      for (final rawMapping in mappings) {
-        final mapping = Map<String, dynamic>.from(rawMapping);
-        final crops = mapping['problemCrops'];
-        if (crops is! List) continue;
-        final typeGroups = mapping['typeGroups'];
-        final typeGroupLabel = typeGroups is List && typeGroups.isNotEmpty
-            ? '${typeGroups.first}'
-            : '';
-        final sourceStage = _normalizeProblemStage(mapping['problemStage']);
-        for (final rawCrop in crops) {
-          if (rawCrop is! Map) continue;
-          final crop = Map<String, dynamic>.from(rawCrop);
-          final cropId = asUuidOpt(crop['cropId']);
-          final source = cropId == null
-              ? const <String, dynamic>{}
-              : (cropRowsById[cropId] ?? const <String, dynamic>{});
-          final problemNumber = asString(
-            crop['problemNumber'],
-            fallback: asString(source['problem_number']),
-          );
-          final pageNumber =
-              asIntOpt(crop['displayPage']) ?? asIntOpt(source['display_page']);
-          final rawPage =
-              asIntOpt(crop['rawPage']) ?? asIntOpt(source['raw_page']);
-          final key = cropId ??
-              '$problemNumber|${pageNumber ?? ''}|${crop['subKey'] ?? ''}';
-          if (key.trim().isEmpty || !seen.add(key)) continue;
-          sortOrder += 1;
-          final bigOrder =
-              asIntOpt(crop['bigOrder']) ?? asIntOpt(source['big_order']);
-          final midOrder =
-              asIntOpt(crop['midOrder']) ?? asIntOpt(source['mid_order']);
-          final subKey = asString(
-            crop['subKey'],
-            fallback: asString(source['sub_key']),
-          );
-          final bigName = asString(
-            crop['bigName'],
-            fallback: asString(source['big_name']),
-          );
-          final midName = asString(
-            crop['midName'],
-            fallback: asString(source['mid_name']),
-          );
-          final contentGroupKind = normalizeContentGroupKind(
-            crop['typeKind'] ?? source['content_group_kind'],
-          );
-          final contentGroupLabel = asString(
-            crop['typeLabel'],
-            fallback: asString(source['content_group_label']),
-          );
-          final contentGroupTitle = asString(
-            crop['typeTitle'],
-            fallback: asString(source['content_group_title']),
-          );
-          final contentGroupOrder = asIntOpt(crop['typeOrder']) ??
-              asIntOpt(source['content_group_order']);
-          final label = asString(
-            crop['label'],
-            fallback: asString(source['label']),
-          );
-          final section = asString(
-            crop['section'],
-            fallback: asString(source['section']),
-          );
-          final typeGroupKey = [
-            bigOrder ?? '',
-            midOrder ?? '',
-            subKey,
-            contentGroupKind == 'none' ? section : contentGroupKind,
-            contentGroupOrder ?? '',
-            contentGroupLabel,
-          ].join('|');
-          final resolvedTypeGroupLabel = typeGroupLabel.isNotEmpty
-              ? typeGroupLabel
-              : [
-                  if (contentGroupLabel.isNotEmpty) contentGroupLabel,
-                  if (contentGroupTitle.isNotEmpty) contentGroupTitle,
-                ].join(' ').trim();
-          final pbQuestionUid = asUuidOpt(
-            crop['pbQuestionUid'] ?? source['pb_question_uid'],
-          );
-          final snapshot = <String, dynamic>{
-            'cropId': cropId,
-            'pbQuestionUid': pbQuestionUid,
-            'bigOrder': bigOrder,
-            'midOrder': midOrder,
-            'subKey': subKey,
-            'bigName': bigName,
-            'midName': midName,
-            'rawPage': rawPage,
-            'displayPage': pageNumber,
-            'problemNumber': problemNumber,
-            'label': label,
-            'section': section,
-            'isSetHeader': asBool(source['is_set_header']),
-            'setFrom': asIntOpt(source['set_from']),
-            'setTo': asIntOpt(source['set_to']),
-            'contentGroupKind': contentGroupKind,
-            'contentGroupLabel': contentGroupLabel,
-            'contentGroupTitle': contentGroupTitle,
-            'contentGroupOrder': contentGroupOrder,
-            'typeGroupKey': typeGroupKey,
-            'typeGroupLabel': resolvedTypeGroupLabel,
-            'bbox1k': crop['bbox1k'] ?? source['bbox_1k'],
-            'itemRegion1k': crop['itemRegion1k'] ?? source['item_region_1k'],
-            if (asString(crop['recommenderKey']).isNotEmpty)
-              'recommenderKey': asString(crop['recommenderKey']),
-            if (asIntOpt(crop['recommenderVersion']) != null)
-              'recommenderVersion': asIntOpt(crop['recommenderVersion']),
-            if (asString(crop['recommenderSeed']).isNotEmpty)
-              'recommenderSeed': asString(crop['recommenderSeed']),
-            if (crop['recommenderWeights'] is Map)
-              'recommenderWeights': crop['recommenderWeights'],
-            if (asString(crop['recommenderCategory']).isNotEmpty)
-              'recommenderCategory': asString(crop['recommenderCategory']),
-            if (asString(crop['gradingMode']).isNotEmpty)
-              'gradingMode': asString(crop['gradingMode']),
-          };
-          rows.add({
-            'academy_id': academyId,
-            'homework_item_id': item.id,
-            'student_id': studentId,
-            'book_id': bookId,
-            'grade_label': gradeLabel,
-            'crop_id': cropId,
-            'pb_question_uid': pbQuestionUid,
-            'sort_order': sortOrder,
-            'problem_number': problemNumber,
-            'problem_number_numeric': problemNumberNumeric(problemNumber),
-            'question_label': problemNumber,
-            'page_number': pageNumber,
-            'display_page': pageNumber,
-            'raw_page': rawPage,
-            'big_order': bigOrder,
-            'mid_order': midOrder,
-            'sub_key': subKey,
-            'big_name': bigName,
-            'mid_name': midName,
-            'content_group_kind': contentGroupKind,
-            'content_group_label': contentGroupLabel,
-            'content_group_title': contentGroupTitle,
-            'type_group_key': typeGroupKey,
-            'type_group_label': resolvedTypeGroupLabel,
-            'bbox_1k': crop['bbox1k'] ?? source['bbox_1k'],
-            'item_region_1k': crop['itemRegion1k'] ?? source['item_region_1k'],
-            'crop_snapshot': snapshot,
-            'source_stage': sourceStage,
-          });
-        }
-      }
-      final expectedCount = item.count ?? rows.length;
-      if (expectedCount > 0 && rows.length != expectedCount) {
-        throw StateError(
-          'HOMEWORK_PROBLEM_SNAPSHOT_COUNT_MISMATCH: '
-          'item=${item.id} expected=$expectedCount actual=${rows.length}',
-        );
-      }
-      if (rows.isEmpty) return;
-      await supa.rpc(
-        'homework_replace_item_problem_snapshots',
-        params: {
-          'p_homework_item_id': item.id,
-          'p_rows': rows,
-          'p_expected_count': expectedCount,
-        },
-      );
-    } catch (e, st) {
-      debugPrint('[HW][problemMappings][ERROR] $e\n$st');
-      rethrow;
+    int? asIntOpt(dynamic v) {
+      if (v == null) return null;
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      if (v is String) return int.tryParse(v);
+      return null;
     }
+
+    String asString(dynamic v, {String fallback = ''}) {
+      final s = v == null ? '' : v.toString().trim();
+      return s.isEmpty ? fallback : s;
+    }
+
+    bool asBool(dynamic v) {
+      if (v is bool) return v;
+      if (v is num) return v != 0;
+      final s = asString(v).toLowerCase();
+      return s == 'true' || s == 't' || s == '1' || s == 'yes';
+    }
+
+    final uuidPattern = RegExp(
+      r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+    );
+    String? asUuidOpt(dynamic v) {
+      final s = asString(v);
+      return uuidPattern.hasMatch(s) ? s : null;
+    }
+
+    int? problemNumberNumeric(String value) {
+      final s = value.trim();
+      if (!RegExp(r'^\d+$').hasMatch(s)) return null;
+      final parsed = int.tryParse(s);
+      return parsed != null && parsed > 0 ? parsed : null;
+    }
+
+    String normalizeContentGroupKind(dynamic v) {
+      final s = asString(v).toLowerCase();
+      return s == 'basic_subtopic' || s == 'type' ? s : 'none';
+    }
+
+    Iterable<List<T>> chunks<T>(List<T> values, int size) sync* {
+      for (var i = 0; i < values.length; i += size) {
+        final end = (i + size) > values.length ? values.length : i + size;
+        yield values.sublist(i, end);
+      }
+    }
+
+    final cropIds = <String>{};
+    for (final rawMapping in mappings) {
+      final mapping = Map<String, dynamic>.from(rawMapping);
+      final crops = mapping['problemCrops'];
+      if (crops is! List) continue;
+      for (final rawCrop in crops) {
+        if (rawCrop is! Map) continue;
+        final cropId = asUuidOpt(rawCrop['cropId']);
+        if (cropId != null) cropIds.add(cropId);
+      }
+    }
+
+    final cropRowsById = <String, Map<String, dynamic>>{};
+    for (final ids in chunks(cropIds.toList(growable: false), 250)) {
+      final cropRows = await supa
+          .from('textbook_problem_crops')
+          .select(
+            'id, big_order, mid_order, sub_key, big_name, mid_name, '
+            'raw_page, display_page, section, '
+            'problem_number, label, is_set_header, set_from, set_to, '
+            'content_group_kind, content_group_label, content_group_title, '
+            'content_group_order, pb_question_uid, bbox_1k, item_region_1k',
+          )
+          .eq('academy_id', academyId)
+          .eq('book_id', bookId)
+          .eq('grade_label', gradeLabel)
+          .inFilter('id', ids);
+      for (final raw in cropRows) {
+        final row = Map<String, dynamic>.from(raw);
+        final id = asUuidOpt(row['id']);
+        if (id != null) cropRowsById[id] = row;
+      }
+    }
+
+    final rows = <Map<String, dynamic>>[];
+    final seen = <String>{};
+    var sortOrder = 0;
+    for (final rawMapping in mappings) {
+      final mapping = Map<String, dynamic>.from(rawMapping);
+      final crops = mapping['problemCrops'];
+      if (crops is! List) continue;
+      final typeGroups = mapping['typeGroups'];
+      final typeGroupLabel = typeGroups is List && typeGroups.isNotEmpty
+          ? '${typeGroups.first}'
+          : '';
+      final sourceStage = _normalizeProblemStage(mapping['problemStage']);
+      for (final rawCrop in crops) {
+        if (rawCrop is! Map) continue;
+        final crop = Map<String, dynamic>.from(rawCrop);
+        final cropId = asUuidOpt(crop['cropId']);
+        final source = cropId == null
+            ? const <String, dynamic>{}
+            : (cropRowsById[cropId] ?? const <String, dynamic>{});
+        final problemNumber = asString(
+          crop['problemNumber'],
+          fallback: asString(source['problem_number']),
+        );
+        final pageNumber =
+            asIntOpt(crop['displayPage']) ?? asIntOpt(source['display_page']);
+        final rawPage =
+            asIntOpt(crop['rawPage']) ?? asIntOpt(source['raw_page']);
+        final key = cropId ??
+            '$problemNumber|${pageNumber ?? ''}|${crop['subKey'] ?? ''}';
+        if (key.trim().isEmpty || !seen.add(key)) continue;
+        sortOrder += 1;
+        final bigOrder =
+            asIntOpt(crop['bigOrder']) ?? asIntOpt(source['big_order']);
+        final midOrder =
+            asIntOpt(crop['midOrder']) ?? asIntOpt(source['mid_order']);
+        final subKey = asString(
+          crop['subKey'],
+          fallback: asString(source['sub_key']),
+        );
+        final bigName = asString(
+          crop['bigName'],
+          fallback: asString(source['big_name']),
+        );
+        final midName = asString(
+          crop['midName'],
+          fallback: asString(source['mid_name']),
+        );
+        final contentGroupKind = normalizeContentGroupKind(
+          crop['typeKind'] ?? source['content_group_kind'],
+        );
+        final contentGroupLabel = asString(
+          crop['typeLabel'],
+          fallback: asString(source['content_group_label']),
+        );
+        final contentGroupTitle = asString(
+          crop['typeTitle'],
+          fallback: asString(source['content_group_title']),
+        );
+        final contentGroupOrder = asIntOpt(crop['typeOrder']) ??
+            asIntOpt(source['content_group_order']);
+        final label = asString(
+          crop['label'],
+          fallback: asString(source['label']),
+        );
+        final section = asString(
+          crop['section'],
+          fallback: asString(source['section']),
+        );
+        final typeGroupKey = [
+          bigOrder ?? '',
+          midOrder ?? '',
+          subKey,
+          contentGroupKind == 'none' ? section : contentGroupKind,
+          contentGroupOrder ?? '',
+          contentGroupLabel,
+        ].join('|');
+        final resolvedTypeGroupLabel = typeGroupLabel.isNotEmpty
+            ? typeGroupLabel
+            : [
+                if (contentGroupLabel.isNotEmpty) contentGroupLabel,
+                if (contentGroupTitle.isNotEmpty) contentGroupTitle,
+              ].join(' ').trim();
+        final pbQuestionUid = asUuidOpt(
+          crop['pbQuestionUid'] ?? source['pb_question_uid'],
+        );
+        final snapshot = <String, dynamic>{
+          'cropId': cropId,
+          'pbQuestionUid': pbQuestionUid,
+          'bigOrder': bigOrder,
+          'midOrder': midOrder,
+          'subKey': subKey,
+          'bigName': bigName,
+          'midName': midName,
+          'rawPage': rawPage,
+          'displayPage': pageNumber,
+          'problemNumber': problemNumber,
+          'label': label,
+          'section': section,
+          'isSetHeader': asBool(source['is_set_header']),
+          'setFrom': asIntOpt(source['set_from']),
+          'setTo': asIntOpt(source['set_to']),
+          'contentGroupKind': contentGroupKind,
+          'contentGroupLabel': contentGroupLabel,
+          'contentGroupTitle': contentGroupTitle,
+          'contentGroupOrder': contentGroupOrder,
+          'typeGroupKey': typeGroupKey,
+          'typeGroupLabel': resolvedTypeGroupLabel,
+          'bbox1k': crop['bbox1k'] ?? source['bbox_1k'],
+          'itemRegion1k': crop['itemRegion1k'] ?? source['item_region_1k'],
+          if (asString(crop['recommenderKey']).isNotEmpty)
+            'recommenderKey': asString(crop['recommenderKey']),
+          if (asIntOpt(crop['recommenderVersion']) != null)
+            'recommenderVersion': asIntOpt(crop['recommenderVersion']),
+          if (asString(crop['recommenderSeed']).isNotEmpty)
+            'recommenderSeed': asString(crop['recommenderSeed']),
+          if (crop['recommenderWeights'] is Map)
+            'recommenderWeights': crop['recommenderWeights'],
+          if (asString(crop['recommenderCategory']).isNotEmpty)
+            'recommenderCategory': asString(crop['recommenderCategory']),
+          if (asString(crop['gradingMode']).isNotEmpty)
+            'gradingMode': asString(crop['gradingMode']),
+        };
+        rows.add({
+          'academy_id': academyId,
+          'homework_item_id': item.id,
+          'student_id': studentId,
+          'book_id': bookId,
+          'grade_label': gradeLabel,
+          'crop_id': cropId,
+          'pb_question_uid': pbQuestionUid,
+          'sort_order': sortOrder,
+          'problem_number': problemNumber,
+          'problem_number_numeric': problemNumberNumeric(problemNumber),
+          'question_label': problemNumber,
+          'page_number': pageNumber,
+          'display_page': pageNumber,
+          'raw_page': rawPage,
+          'big_order': bigOrder,
+          'mid_order': midOrder,
+          'sub_key': subKey,
+          'big_name': bigName,
+          'mid_name': midName,
+          'content_group_kind': contentGroupKind,
+          'content_group_label': contentGroupLabel,
+          'content_group_title': contentGroupTitle,
+          'type_group_key': typeGroupKey,
+          'type_group_label': resolvedTypeGroupLabel,
+          'bbox_1k': crop['bbox1k'] ?? source['bbox_1k'],
+          'item_region_1k': crop['itemRegion1k'] ?? source['item_region_1k'],
+          'crop_snapshot': snapshot,
+          'source_stage': sourceStage,
+        });
+      }
+    }
+    final expectedCount = item.count ?? rows.length;
+    if (expectedCount > 0 && rows.length != expectedCount) {
+      throw StateError(
+        'HOMEWORK_PROBLEM_SNAPSHOT_COUNT_MISMATCH: '
+        'item=${item.id} expected=$expectedCount actual=${rows.length}',
+      );
+    }
+    return (rows: rows, expectedCount: expectedCount);
   }
 
   Future<void> _distributeStatsToPages(
@@ -4529,6 +4715,161 @@ class HomeworkStore {
       print('[HW][commitReservedHomeworkBundleRpc][ERROR] $e\n$st');
       return false;
     }
+  }
+
+  /// 바로 내는 그룹 과제를 `homework_create_group_bundle` 한 번으로 저장한다.
+  /// 서버 함수가 한 트랜잭션이라 저장 결과는 전부 아니면 전무다.
+  Future<_GroupBundleOutcome> _persistGroupBundle({
+    required String academyId,
+    required String studentId,
+    required HomeworkGroup group,
+    required List<HomeworkItem> items,
+  }) async {
+    final linkOrderByItemId = <String, int>{
+      for (final link
+          in _groupItemsByGroupId[group.id] ?? const <HomeworkGroupItem>[])
+        link.homeworkItemId: link.itemOrderIndex,
+    };
+    final payloadItems = <Map<String, dynamic>>[];
+    for (var i = 0; i < items.length; i++) {
+      final item = items[i];
+      final payload = _homeworkItemToReservedRpcPayload(
+        item,
+        itemOrderIndex: linkOrderByItemId[item.id] ?? i,
+        splitParts: item.defaultSplitParts,
+      );
+      final unitRows = _buildUnitMappingRows(
+        academyId: academyId,
+        studentId: studentId,
+        item: item,
+      );
+      if (unitRows != null) payload['unit_rows'] = unitRows;
+      final pageRows = _buildPageMappingRows(
+        academyId: academyId,
+        studentId: studentId,
+        item: item,
+      );
+      if (pageRows != null) {
+        payload['page_rows'] = pageRows;
+        try {
+          final problems = await _buildProblemSnapshotRows(
+            academyId: academyId,
+            studentId: studentId,
+            item: item,
+          );
+          if (problems != null && problems.rows.isNotEmpty) {
+            payload['problem_rows'] = problems.rows;
+            payload['problem_expected_count'] = problems.expectedCount;
+          }
+        } catch (e) {
+          // 개별 저장 경로와 같이 문항 스냅샷 없이 과제는 만든다.
+          debugPrint('[HW][groupBundle][problems] item=${item.id} $e');
+        }
+      }
+      payloadItems.add(payload);
+    }
+
+    final params = <String, dynamic>{
+      'p_academy_id': academyId,
+      'p_student_id': studentId,
+      'p_group': <String, dynamic>{
+        'id': group.id,
+        'title': group.title,
+        'flow_id': _uuidOrNull(group.flowId),
+        'learning_track_code':
+            _normalizeLearningTrackCode(group.learningTrackCode),
+        'order_index': group.orderIndex,
+      },
+      'p_items': payloadItems,
+    };
+
+    Future<dynamic> send() => Supabase.instance.client.rpc(
+          'homework_create_group_bundle',
+          params: params,
+        );
+
+    dynamic result;
+    Object? lastError;
+    try {
+      result = await send();
+    } catch (e) {
+      lastError = e;
+      if (_isMissingRpcError(e, 'homework_create_group_bundle')) {
+        _supportsGroupBundleRpc = false;
+        return _GroupBundleOutcome.unsupported;
+      }
+    }
+    if (lastError != null) {
+      // 응답을 못 받았으면 서버 반영 여부를 모른다. 같은 id로 다시 보내도
+      // 이미 있는 행은 건너뛰므로 간격을 늘려 재시도한다.
+      final retryStartedAt = DateTime.now();
+      final retryDelays = <Duration>[
+        const Duration(milliseconds: 250),
+        if (_isTransientWriteError(lastError)) ..._createRetryDelays,
+      ];
+      for (final delay in retryDelays) {
+        if (!_isTransientWriteError(lastError!)) break;
+        if (DateTime.now().difference(retryStartedAt) > _createRetryBudget) {
+          break;
+        }
+        await Future<void>.delayed(delay);
+        try {
+          result = await send();
+          lastError = null;
+          break;
+        } catch (e) {
+          lastError = e;
+          debugPrint('[HW][groupBundle][RETRY_ERROR] $e');
+        }
+      }
+    }
+    if (lastError != null) {
+      print('[HW][groupBundle][ERROR] $lastError');
+      final onServer = await _checkCreatedItemOnServer(itemId: items.first.id);
+      if (onServer == true) return _GroupBundleOutcome.saved;
+      if (onServer == false) return _GroupBundleOutcome.failed;
+      return _GroupBundleOutcome.unknown;
+    }
+
+    if (result is Map) {
+      final orderIndex = result['group_order_index'];
+      if (orderIndex is num) group.orderIndex = orderIndex.toInt();
+      final rows = result['items'];
+      if (rows is List) {
+        final byId = {for (final item in items) item.id: item};
+        for (final raw in rows) {
+          if (raw is! Map) continue;
+          final item = byId[raw['id']];
+          if (item == null) continue;
+          item.version = (raw['version'] as num?)?.toInt() ?? item.version;
+          item.assignmentCode =
+              _normalizeAssignmentCode(raw['assignment_code'] as String?) ??
+                  item.assignmentCode;
+          item.learningTrackCode = _normalizeLearningTrackCode(
+            raw['learning_track_code'] as String?,
+          );
+        }
+      }
+      final problemErrors = result['problem_errors'];
+      if (problemErrors is List && problemErrors.isNotEmpty) {
+        print('[HW][groupBundle][PROBLEM_SNAPSHOT_ERROR] $problemErrors');
+      }
+    }
+    _groupsByStudentId[studentId]?.sort(_compareGroupByOrder);
+    HomeworkAnswerPrebakeService.instance.request(
+      academyId: academyId,
+      homeworkItemIds: [for (final item in items) item.id],
+    );
+    return _GroupBundleOutcome.saved;
+  }
+
+  bool _isMissingRpcError(Object error, String functionName) {
+    final message = error.toString().toLowerCase();
+    return message.contains(functionName) &&
+        (message.contains('does not exist') ||
+            message.contains('could not find') ||
+            message.contains('pgrst202') ||
+            message.contains('42883'));
   }
 
   /// `add` 등에서 비동기 upsert 전에 예약 배정을 넣으면 행이 없어 실패할 수 있어,
@@ -4854,7 +5195,12 @@ class HomeworkStore {
     _sortStudentList(list);
     _applyFallbackGroupsForStudent(studentId);
     _bump();
-    await _upsertItem(studentId, item);
+    _beginLocalItemEdits(studentId, <HomeworkItem>[item]);
+    try {
+      await _upsertItem(studentId, item);
+    } finally {
+      _endLocalItemEdits(studentId, <String>[item.id]);
+    }
   }
 
   HomeworkItem? getById(String studentId, String id) {
@@ -5063,6 +5409,8 @@ class HomeworkStore {
     item.submittedAt = now;
     item.updatedAt = now;
     _bump();
+    _beginLocalWrite(studentId);
+    _beginLocalItemEdits(studentId, <HomeworkItem>[item]);
     try {
       final String academyId =
           (await TenantService.instance.getActiveAcademyId()) ??
@@ -5073,13 +5421,15 @@ class HomeworkStore {
         'p_academy_id': academyId,
         'p_updated_by': updatedBy,
       });
-      // 비동기 보정: 리얼타임 지연 시 강제 재로드
-      unawaited(_reloadStudent(studentId));
+      _endLocalItemEdits(studentId, <String>[id]);
     } catch (e) {
       // ignore: avoid_print
       print('[HW][submit][ERROR] ' + e.toString());
       // 서버 반영 실패 시 로컬 낙관적 업데이트를 정합 상태로 복구한다.
+      _endLocalItemEdits(studentId, <String>[id], failed: true);
       unawaited(_reloadStudent(studentId));
+    } finally {
+      _endLocalWrite(studentId);
     }
   }
 
@@ -5116,6 +5466,11 @@ class HomeworkStore {
     if (submittedIds.isEmpty) return;
     _bump();
 
+    _beginLocalWrite(studentId);
+    _beginLocalItemEdits(
+      studentId,
+      list.where((item) => submittedIds.contains(item.id)),
+    );
     try {
       final String academyId =
           (await TenantService.instance.getActiveAcademyId()) ??
@@ -5130,12 +5485,15 @@ class HomeworkStore {
           }),
         ),
       );
-      unawaited(_reloadStudent(studentId));
+      _endLocalItemEdits(studentId, submittedIds);
     } catch (e) {
       // ignore: avoid_print
       print('[HW][submitBatch][ERROR] $e');
       // 일부 RPC만 성공했을 수도 있으므로 서버 상태를 기준으로 복구한다.
+      _endLocalItemEdits(studentId, submittedIds, failed: true);
       unawaited(_reloadStudent(studentId));
+    } finally {
+      _endLocalWrite(studentId);
     }
   }
 
@@ -5165,7 +5523,7 @@ class HomeworkStore {
       nextOrder = math.max(nextOrder, item.orderIndex + 1);
     }
     final byId = <String, HomeworkItem>{for (final item in list) item.id: item};
-    var changed = false;
+    final changedItems = <HomeworkItem>[];
     for (final id in targetIds) {
       final item = byId[id];
       if (item == null) continue;
@@ -5181,11 +5539,12 @@ class HomeworkStore {
       item.phase = 3;
       item.submittedAt = now;
       item.updatedAt = now;
-      changed = true;
+      changedItems.add(item);
     }
-    if (!changed) return;
+    if (changedItems.isEmpty) return;
     _sortStudentList(list);
     _applyFallbackGroupsForStudent(studentId);
+    _markLocalItemEditsSaved(studentId, changedItems);
     _bump();
   }
 
@@ -5271,6 +5630,8 @@ class HomeworkStore {
     item.runStart = null;
     item.updatedAt = item.confirmedAt;
     _bump();
+    _beginLocalWrite(studentId);
+    _beginLocalItemEdits(studentId, <HomeworkItem>[item]);
     try {
       final String academyId =
           (await TenantService.instance.getActiveAcademyId()) ??
@@ -5284,7 +5645,7 @@ class HomeworkStore {
         'p_academy_id': academyId,
         'p_updated_by': updatedBy,
       });
-      unawaited(_reloadStudent(studentId));
+      _endLocalItemEdits(studentId, <String>[id]);
       if (recordAssignmentCheck) {
         unawaited(
             HomeworkAssignmentStore.instance.recordAssignmentCheckForConfirm(
@@ -5296,7 +5657,10 @@ class HomeworkStore {
       // ignore: avoid_print
       print('[HW][confirm][ERROR] ' + e.toString());
       // 서버 반영 실패 시 로컬 낙관적 업데이트를 정합 상태로 복구한다.
+      _endLocalItemEdits(studentId, <String>[id], failed: true);
       unawaited(_reloadStudent(studentId));
+    } finally {
+      _endLocalWrite(studentId);
     }
   }
 
@@ -5332,6 +5696,11 @@ class HomeworkStore {
     if (changed) {
       _bump();
     }
+    _beginLocalWrite(studentId);
+    _beginLocalItemEdits(
+      studentId,
+      confirmedIds.map((id) => byId[id]!),
+    );
     try {
       final String academyId =
           (await TenantService.instance.getActiveAcademyId()) ??
@@ -5357,7 +5726,7 @@ class HomeworkStore {
         ),
       );
       await _reconcileGroupRuntimeForItems(academyId, confirmedIds);
-      unawaited(_reloadStudent(studentId));
+      _endLocalItemEdits(studentId, confirmedIds);
       if (recordAssignmentCheck) {
         for (final id in confirmedIds) {
           unawaited(
@@ -5371,7 +5740,10 @@ class HomeworkStore {
     } catch (e) {
       // ignore: avoid_print
       print('[HW][confirmBatch][ERROR] ' + e.toString());
+      _endLocalItemEdits(studentId, confirmedIds, failed: true);
       unawaited(_reloadStudent(studentId));
+    } finally {
+      _endLocalWrite(studentId);
     }
   }
 
@@ -7599,14 +7971,18 @@ class HomeworkStore {
         groupTitle.trim().isEmpty ? '그룹 과제' : groupTitle.trim();
     final now = DateTime.now();
     final groupId = const Uuid().v4();
-    // 로컬 max와 서버 active max 중 큰 값을 써서 유령 그룹/캐시 공백에도
-    // 새 그룹이 항상 활성 목록 꼬리에 붙게 한다.
     final academyId = (await TenantService.instance.getActiveAcademyId()) ??
         await TenantService.instance.ensureActiveAcademy();
-    final nextGroupOrder = await _resolveNextGroupOrderIndex(
-      academyId: academyId,
-      studentId: studentId,
-    );
+    final useBundle = !reserveAssignments && _supportsGroupBundleRpc;
+    // 로컬 max와 서버 active max 중 큰 값을 써서 유령 그룹/캐시 공백에도
+    // 새 그룹이 항상 활성 목록 꼬리에 붙게 한다. 일괄 저장 함수는 서버에서
+    // 같은 비교를 하므로 미리 조회하지 않는다.
+    final nextGroupOrder = useBundle
+        ? _nextGroupOrderIndex(studentId)
+        : await _resolveNextGroupOrderIndex(
+            academyId: academyId,
+            studentId: studentId,
+          );
     final group = HomeworkGroup(
       id: groupId,
       studentId: studentId,
@@ -7632,6 +8008,103 @@ class HomeworkStore {
     }
     try {
       final supa = Supabase.instance.client;
+
+      Future<String?> createChild(
+        Map<String, dynamic> entry,
+        int idx, {
+        required bool localOnly,
+        Future<void>? persistenceBarrier,
+      }) {
+        return addWaitingItemToGroup(
+          studentId: studentId,
+          groupId: groupId,
+          title: asText(entry['title']),
+          assignmentCode: sharedAssignmentCode,
+          learningTrackCode: asNullableText(entry['learningTrackCode']),
+          body: asText(entry['body']),
+          page: asText(entry['page']),
+          count: asPositiveInt(entry['count']),
+          timeLimitMinutes: asPositiveInt(entry['timeLimitMinutes']),
+          recommendedMinutes: asPositiveInt(entry['recommendedMinutes']),
+          recommendedMinutesAuto:
+              asPositiveInt(entry['recommendedMinutesAuto']),
+          pbPresetId: asNullableText(entry['pbPresetId']),
+          type: asText(entry['type']),
+          memo: asText(entry['memo']),
+          content: asText(entry['content']),
+          bookId: asNullableText(entry['bookId']),
+          gradeLabel: asNullableText(entry['gradeLabel']),
+          sourceUnitLevel: asNullableText(entry['sourceUnitLevel']),
+          sourceUnitPath: asNullableText(entry['sourceUnitPath']),
+          unitMappings: asUnitMappings(entry['unitMappings']),
+          flowId: asNullableText(entry['flowId']) ??
+              (cleanedFlowId.isEmpty ? null : cleanedFlowId),
+          testOriginFlowId: asNullableText(entry['testOriginFlowId']),
+          color: asColor(entry['color']),
+          defaultSplitParts: asSplitParts(entry['splitParts']),
+          itemOrderIndexOverride: idx,
+          deferReload: true,
+          deferBump: true,
+          localOnly: localOnly,
+          persistenceBarrier: persistenceBarrier,
+        );
+      }
+
+      if (useBundle) {
+        final localItems = <HomeworkItem>[];
+        for (int idx = 0; idx < normalized.length; idx++) {
+          final id = await createChild(normalized[idx], idx, localOnly: true);
+          final item = id == null ? null : getById(studentId, id);
+          if (item == null) continue;
+          localItems.add(item);
+          _registerPendingItemCreate(
+            studentId: studentId,
+            groupId: groupId,
+            item: item,
+          );
+        }
+        _bump();
+        final localIds = [for (final item in localItems) item.id];
+        final outcome = localItems.isEmpty
+            ? _GroupBundleOutcome.failed
+            : await _persistGroupBundle(
+                academyId: academyId,
+                studentId: studentId,
+                group: group,
+                items: localItems,
+              );
+        switch (outcome) {
+          case _GroupBundleOutcome.saved:
+            _settlePendingGroupCreate(studentId, groupId);
+            for (final id in localIds) {
+              _settlePendingItemCreate(studentId, id);
+            }
+            return localItems;
+          case _GroupBundleOutcome.unknown:
+            // 확인도 못 했으면 카드는 두고, 다음 서버 조회 결과를 따른다.
+            _settlePendingGroupCreate(studentId, groupId);
+            for (final id in localIds) {
+              _settlePendingItemCreate(studentId, id);
+            }
+            _scheduleRealtimeReload(studentId);
+            return const <HomeworkItem>[];
+          case _GroupBundleOutcome.failed:
+            _dropLocalCreatedGroup(studentId, groupId, localIds);
+            _bump();
+            _scheduleRealtimeReload(studentId);
+            return const <HomeworkItem>[];
+          case _GroupBundleOutcome.unsupported:
+            // 서버 함수 배포 전이다. 아무것도 저장되지 않았으니 로컬 카드를
+            // 걷어내고 기존 개별 저장 경로로 다시 만든다.
+            _dropLocalCreatedGroup(studentId, groupId, localIds);
+            return createGroupWithWaitingItems(
+              studentId: studentId,
+              groupTitle: groupTitle,
+              flowId: flowId,
+              items: items,
+            );
+        }
+      }
 
       Future<void> groupPersistence = Future<void>.value();
       if (!reserveAssignments) {
@@ -7700,36 +8173,9 @@ class HomeworkStore {
                 groupPersistence,
                 persistenceLanes[laneIndex],
               ]);
-        final createFuture = addWaitingItemToGroup(
-          studentId: studentId,
-          groupId: groupId,
-          title: asText(entry['title']),
-          assignmentCode: sharedAssignmentCode,
-          learningTrackCode: asNullableText(entry['learningTrackCode']),
-          body: asText(entry['body']),
-          page: asText(entry['page']),
-          count: asPositiveInt(entry['count']),
-          timeLimitMinutes: asPositiveInt(entry['timeLimitMinutes']),
-          recommendedMinutes: asPositiveInt(entry['recommendedMinutes']),
-          recommendedMinutesAuto:
-              asPositiveInt(entry['recommendedMinutesAuto']),
-          pbPresetId: asNullableText(entry['pbPresetId']),
-          type: asText(entry['type']),
-          memo: asText(entry['memo']),
-          content: asText(entry['content']),
-          bookId: asNullableText(entry['bookId']),
-          gradeLabel: asNullableText(entry['gradeLabel']),
-          sourceUnitLevel: asNullableText(entry['sourceUnitLevel']),
-          sourceUnitPath: asNullableText(entry['sourceUnitPath']),
-          unitMappings: asUnitMappings(entry['unitMappings']),
-          flowId: asNullableText(entry['flowId']) ??
-              (cleanedFlowId.isEmpty ? null : cleanedFlowId),
-          testOriginFlowId: asNullableText(entry['testOriginFlowId']),
-          color: asColor(entry['color']),
-          defaultSplitParts: asSplitParts(entry['splitParts']),
-          itemOrderIndexOverride: idx,
-          deferReload: true,
-          deferBump: true,
+        final createFuture = createChild(
+          entry,
+          idx,
           localOnly: reserveAssignments,
           persistenceBarrier: itemPersistenceBarrier,
         );
@@ -7969,6 +8415,7 @@ class HomeworkStore {
       _sortStudentList(list);
       _byStudentId[studentId] = list;
       _restorePendingItemCreates(studentId, reloadStartedAt);
+      _restoreLocalItemEdits(studentId, reloadStartedAt);
       _historyByStudentId[studentId]?.removeWhere(
         (item) => list.any((live) => live.id == item.id),
       );
@@ -8658,6 +9105,20 @@ class HomeworkStore {
       return false;
     }
   }
+}
+
+enum _GroupBundleOutcome { saved, failed, unknown, unsupported }
+
+class _LocalItemEdit {
+  _LocalItemEdit({
+    required this.item,
+    required this.touchedAt,
+  });
+
+  HomeworkItem item;
+  int inFlight = 0;
+  DateTime touchedAt;
+  DateTime? settledAt;
 }
 
 class _PendingItemCreate {

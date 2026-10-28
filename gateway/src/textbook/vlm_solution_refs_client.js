@@ -10,7 +10,9 @@ import {
   buildExpectedIndex,
   canonicalCorner,
   expandBadgeRange,
+  footerEchoPages,
   resolveExpectedBox,
+  stripFooterEchoBadge,
 } from './vlm_corner_guard.js';
 import {
   normalizeProblemNumberKey,
@@ -187,13 +189,15 @@ export function normalizeSolutionRefsResult(parsedJson, opts = {}) {
     opts?.expectedEntries,
     normalizeProblemNumberKey,
   );
-  const isGojaengi = String(opts?.series || '').trim() === 'gojaengi';
+  const series = String(opts?.series || '').trim();
+  const isGojaengi = series === 'gojaengi';
+  const stripsFooterEcho = isGojaengi || series === 'gaeyu_high';
   const footerPages = footerEchoPages(opts);
   const rawItems = Array.isArray(parsedJson.items) ? parsedJson.items : [];
   const seen = new Set();
   for (const rawItem of rawItems) {
     if (!rawItem || typeof rawItem !== 'object') continue;
-    let raw = isGojaengi
+    let raw = stripsFooterEcho
       ? stripFooterEchoBadge(rawItem, footerPages)
       : rawItem;
     const problemNumber = String(raw.problem_number ?? '').trim();
@@ -239,6 +243,9 @@ export function normalizeSolutionRefsResult(parsedJson, opts = {}) {
       base.problem_number = resolved.matched.number;
     }
     pushUniqueSolutionRef(out.items, seen, base, badgeCorner);
+    // 기대 문항 하나로 특정된 번호는 범위 배지가 아니다. "01-3" 같은 하이픈
+    // 번호를 1~3 범위로 펼치면 같은 지면 다른 코너의 1·2·3 에 번진다.
+    if (resolved.matched) continue;
     for (const expanded of expandSolutionRefRange(
       problemNumber,
       expectedNumbers,
@@ -261,42 +268,6 @@ export function normalizeSolutionRefsResult(parsedJson, opts = {}) {
     out.items = dropGojaengiSummaryCells(out.items);
     out.items = dropGojaengiSummaryGrid(out.items);
   }
-  return out;
-}
-
-// 묶음 배지는 묶음이 시작되는 지면에만 인쇄된다. 이어지는 지면에서 모델은 적을
-// 배지가 없어 꼬리말에 찍힌 **해설 쪽번호**("중단원 TEST 163")를 출처로 올린다.
-// 그 번호는 본교재·워크북 쪽 번호와 체계가 달라, 출처 대조가 기대 문항을 하나도
-// 못 맞추고 전부 버린다. 실지면 2-2 해설 163쪽에서 12~19 여덟 건이 이렇게 통째로
-// 사라졌다(모델은 여덟 건 다 정확히 찾아 놓고 있었다). 요청한 그 지면 번호와 같은
-// 값은 배지가 아니므로 쪽 단서를 지우고 코너·번호로만 대조한다.
-function footerEchoPages(opts) {
-  const pages = new Set();
-  for (const value of [opts?.rawPage, opts?.displayPage]) {
-    const page = Number.parseInt(String(value ?? ''), 10);
-    if (Number.isFinite(page) && page > 0) pages.add(page);
-  }
-  return pages;
-}
-
-function stripFooterEchoBadge(raw, footerPages) {
-  if (footerPages.size === 0) return raw;
-  const from = Number.parseInt(
-    String(raw.source_page ?? raw.sourcePage ?? ''),
-    10,
-  );
-  if (!Number.isFinite(from) || !footerPages.has(from)) return raw;
-  // 진짜 범위 배지("본교재 141~142쪽")는 끝 쪽이 지면 번호와 다르다.
-  const to = Number.parseInt(
-    String(raw.source_page_end ?? raw.sourcePageEnd ?? ''),
-    10,
-  );
-  if (Number.isFinite(to) && to > 0 && !footerPages.has(to)) return raw;
-  const out = { ...raw };
-  delete out.source_page;
-  delete out.sourcePage;
-  delete out.source_page_end;
-  delete out.sourcePageEnd;
   return out;
 }
 

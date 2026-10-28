@@ -8,6 +8,7 @@
 //   POST { action: 'decision_draft', conversation_id }
 //   POST { action: 'spec_export', memory_id }
 //   POST { action: 'memory_feedback_draft', ... } → { draft, run_id, update_baseline?{memory_id,version} }
+//   POST { action: 'review_job_continue', job_id, conversation_id, client? } → text/event-stream (기본 꺼짐, 409 review_runner_off)
 // 설계: docs/architecture/ai.md
 
 import { corsHeaders } from '../_shared/cors.ts';
@@ -66,7 +67,14 @@ async function handleStatus(auth: AuthContext, body: Body): Promise<Response> {
   });
 }
 
-async function handleChat(req: Request, auth: AuthContext, body: Body): Promise<Response> {
+interface ReviewJobRun {
+  jobId: string;
+  gen: number;
+  maxItems: number;
+  runId: string;
+}
+
+async function handleChat(req: Request, auth: AuthContext, body: Body, reviewRun: ReviewJobRun | null = null): Promise<Response> {
   const message = typeof body.message === 'string' ? body.message.trim() : '';
   if (message.length > MAX_MESSAGE_CHARS) return errorResponse(400, 'message_too_long', `메시지는 ${MAX_MESSAGE_CHARS}자 이하여야 합니다.`);
   const attachments = parseAttachments(body.attachments, auth.userId);
@@ -124,6 +132,7 @@ async function handleChat(req: Request, auth: AuthContext, body: Body): Promise<
   const { features } = await thinkFeatures(store, body);
 
   let closed = false;
+  let runCost: number | null = null;
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       const push = (chunk: Uint8Array) => {
@@ -160,6 +169,7 @@ async function handleChat(req: Request, auth: AuthContext, body: Body): Promise<
           conceptStatementId,
           criterionId,
           conceptDraftId,
+          reviewJobRun: reviewRun ? { jobId: reviewRun.jobId, gen: reviewRun.gen, maxItems: reviewRun.maxItems } : null,
         },
         {
           provider,
@@ -168,11 +178,19 @@ async function handleChat(req: Request, auth: AuthContext, body: Body): Promise<
           emit,
         },
       )
+        .then((outcome) => {
+          runCost = outcome.costUsd ?? null;
+        })
         .catch((e) => {
           console.error('[ai_think] unexpected:', e instanceof Error ? e.message : String(e));
           emit('error', { code: 'internal_error', message: '서버 오류로 답변을 만들지 못했습니다.' });
         })
-        .finally(() => {
+        .finally(async () => {
+          if (reviewRun) {
+            await store.reviewJobRunFinish(reviewRun.runId, runCost).catch((e) => {
+              console.error('[ai_think] review run finish failed:', e instanceof Error ? e.message : String(e));
+            });
+          }
           clearInterval(ping);
           if (!closed) {
             closed = true;
@@ -198,6 +216,39 @@ async function handleChat(req: Request, auth: AuthContext, body: Body): Promise<
       'Cache-Control': 'no-cache',
       'X-Accel-Buffering': 'no',
     },
+  });
+}
+
+const REVIEW_RUN_MESSAGE =
+  '[자동 이어하기] 이 검수 작업을 한 묶음 이어서 한다. 판단·초안 저장·카드 제출까지만 하고, 진행 표시 한 줄과 저장한 위치를 알린다.';
+
+/**
+ * 답변 뒤 자동 이어하기 한 번. 환경 스위치(THINK_REVIEW_RUNNER=on)와 작업별 auto_run이 모두 켜져야 하고(둘 다 기본 꺼짐),
+ * DB 관문이 한도·대기 카드·연속 무진척을 보고 임대를 넘겨받은 뒤에만 채팅 한 번을 돈다. 승인은 하지 않는다.
+ */
+async function handleReviewJobContinue(req: Request, auth: AuthContext, body: Body): Promise<Response> {
+  const jobId = uuidOrNull(body.job_id);
+  const conversationId = uuidOrNull(body.conversation_id);
+  if (!jobId || !conversationId) return errorResponse(400, 'invalid_request', '작업과 대화 id가 필요합니다.');
+  if (Deno.env.get('THINK_REVIEW_RUNNER') !== 'on') {
+    return errorResponse(409, 'review_runner_off', '답변 뒤 자동 이어하기가 꺼져 있습니다.');
+  }
+  const store = new SupabaseThinkStore(auth.userClient as unknown as SupabaseLike);
+  let gate: Record<string, unknown>;
+  try {
+    gate = await store.reviewJobRunGate(jobId, `runner:${crypto.randomUUID()}`);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    return errorResponse(409, 'review_runner_blocked', message.slice(message.lastIndexOf(': ') + 2).slice(0, 120));
+  }
+  if (gate.allowed !== true || typeof gate.run_id !== 'string') {
+    return errorResponse(409, 'review_runner_blocked', String(gate.reason ?? 'unknown'));
+  }
+  return await handleChat(req, auth, { ...body, conversation_id: conversationId, message: REVIEW_RUN_MESSAGE, attachments: [] }, {
+    jobId,
+    gen: Number(gate.gen),
+    maxItems: Number(gate.max_items) || 5,
+    runId: gate.run_id,
   });
 }
 
@@ -315,6 +366,8 @@ Deno.serve(async (req) => {
         return await handleStatus(auth, body);
       case 'chat':
         return await handleChat(req, auth, body);
+      case 'review_job_continue':
+        return await handleReviewJobContinue(req, auth, body);
       case 'decision_draft':
         return await handleDecisionDraft(auth, body);
       case 'memory_feedback_draft':

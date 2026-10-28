@@ -21,11 +21,15 @@ class HomeRealtimeSyncCoordinator {
 
   Future<void>? _inFlight;
   DateTime? _lastCompletedAt;
+  bool _startupSyncRan = false;
 
+  /// 앱 시작 동기화(`force`)가 한 번 돌기 전의 lifecycle 신호는 무시한다.
+  /// 시작 직후 창 활성화 신호가 데이터 초기화 도중 같은 동기화를 또 돌리지 않게 한다.
   Future<void> resync({
     String reason = 'manual',
     bool force = false,
   }) async {
+    if (!force && !_startupSyncRan) return;
     final running = _inFlight;
     if (running != null) {
       await running;
@@ -51,6 +55,7 @@ class HomeRealtimeSyncCoordinator {
       await future;
       _lastCompletedAt = DateTime.now();
     } finally {
+      if (force) _startupSyncRan = true;
       if (identical(_inFlight, future)) {
         _inFlight = null;
       }

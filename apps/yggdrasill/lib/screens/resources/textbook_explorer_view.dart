@@ -12,6 +12,7 @@ import '../../services/textbook_pdf_service.dart';
 import '../../theme/ygg_semantic_colors.dart';
 import '../../widgets/app_snackbar.dart';
 import '../../widgets/dialog_tokens.dart';
+import '../../widgets/corner_action_bar.dart';
 import '../../widgets/shared_dropdown_dialog.dart';
 import '../../widgets/shared_folder_tree.dart';
 import '../../widgets/solid_capsule_action_bar.dart';
@@ -20,6 +21,7 @@ import '../learning/models/problem_bank_export_models.dart';
 import '../learning/widgets/problem_bank_bottom_fab_bar.dart';
 import '../learning/widgets/problem_bank_export_options_fab.dart';
 import '../learning/widgets/problem_bank_export_options_panel.dart';
+import '../learning/widgets/question_mode_count_bar.dart';
 import 'textbook_explorer_export_launcher.dart';
 
 enum TbExRightMode { questions, pdf }
@@ -117,6 +119,7 @@ class TextbookExplorerController extends ChangeNotifier {
   final Map<String, LearningProblemQuestion> _questionMetadataByUid =
       <String, LearningProblemQuestion>{};
   bool questionMetadataLoading = false;
+  String? _visibleMetadataAttemptKey;
 
   // PDF
   final PdfViewerController pdfController = PdfViewerController();
@@ -211,8 +214,7 @@ class TextbookExplorerController extends ChangeNotifier {
   int pageCompletedCount(String smallKey, int rawPage) =>
       pageCompletedCounts['$smallKey#$rawPage'] ?? 0;
 
-  int smallAssignedCount(String smallKey) =>
-      smallAssignedCounts[smallKey] ?? 0;
+  int smallAssignedCount(String smallKey) => smallAssignedCounts[smallKey] ?? 0;
 
   int smallCompletedCount(String smallKey) =>
       smallCompletedCounts[smallKey] ?? 0;
@@ -658,6 +660,53 @@ class TextbookExplorerController extends ChangeNotifier {
         return question != null &&
             selectableQuestionModesOf(question).contains(mode);
       }).length;
+
+  /// 화면에 나온 문항 중 체크된 것의 출제 유형 수. 문제은행 집계와 같은 기준.
+  QuestionModeCounts get visibleSelectionModeCounts {
+    final visible = displayItems;
+    final checked = visible
+        .where((item) => selectedKeys.contains(item.selKey))
+        .toList(growable: false);
+    int using(String mode) =>
+        checked.where((item) => questionModeForItem(item) == mode).length;
+    int allowing(String mode) =>
+        checked.where((item) => _itemAllowsMode(item, mode)).length;
+    return QuestionModeCounts(
+      objective: using(kLearningQuestionModeObjective),
+      objectivePossible: allowing(kLearningQuestionModeObjective),
+      subjective: using(kLearningQuestionModeSubjective),
+      subjectivePossible: allowing(kLearningQuestionModeSubjective),
+      essay: using(kLearningQuestionModeEssay),
+      essayPossible: allowing(kLearningQuestionModeEssay),
+      total: checked.length,
+      totalPossible: visible.length,
+    );
+  }
+
+  bool _itemAllowsMode(TbExItem item, String mode) {
+    final question = _questionMetadataByUid[item.questionUid.trim()];
+    if (question != null) {
+      return selectableQuestionModesOf(question).contains(mode);
+    }
+    return questionModeForItem(item) == mode;
+  }
+
+  /// 집계의 괄호(가능 수)용. 같은 누락 목록은 한 번만 요청한다.
+  void scheduleVisibleSelectionMetadata() {
+    final missingUids = selectedOptionItems
+        .map((item) => item.questionUid.trim())
+        .where(
+          (uid) => uid.isNotEmpty && !_questionMetadataByUid.containsKey(uid),
+        )
+        .toSet()
+        .toList(growable: false)
+      ..sort();
+    if (missingUids.isEmpty || questionMetadataLoading) return;
+    final key = missingUids.join('\u0001');
+    if (_visibleMetadataAttemptKey == key) return;
+    _visibleMetadataAttemptKey = key;
+    unawaited(ensureSelectedQuestionMetadata());
+  }
 
   Future<void> ensureSelectedQuestionMetadata() async {
     final missingUids = selectedOptionItems
@@ -1778,6 +1827,14 @@ class TextbookExplorerContent extends StatelessWidget {
       builder: (context, _) {
         final brightness = Theme.of(context).brightness;
         final style = FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
+        if (!controller.homeworkSelectionMode &&
+            !controller.loading &&
+            controller.error == null &&
+            controller.hasVisibleSelection) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            controller.scheduleVisibleSelectionMetadata();
+          });
+        }
         return Stack(
           clipBehavior: Clip.none,
           children: [
@@ -1792,13 +1849,41 @@ class TextbookExplorerContent extends StatelessWidget {
                       FabTabBarTokens.fabBarHeight +
                       _tbExHeaderBackButtonGap,
               right: 12,
-              child: IgnorePointer(
-                child: FabStyleScreenMainTitle(
-                  title: controller.currentScopeTitle,
-                  overlay: true,
-                  maxLines: 1,
-                ),
-              ),
+              child: controller.homeworkSelectionMode
+                  ? IgnorePointer(
+                      child: FabStyleScreenMainTitle(
+                        title: controller.currentScopeTitle,
+                        overlay: true,
+                        maxLines: 1,
+                      ),
+                    )
+                  : Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: IgnorePointer(
+                            child: FabStyleScreenMainTitle(
+                              title: controller.currentScopeTitle,
+                              overlay: true,
+                              maxLines: 1,
+                            ),
+                          ),
+                        ),
+                        if (!controller.loading &&
+                            controller.error == null) ...[
+                          const SizedBox(width: 12),
+                          QuestionModeCountBar(
+                            counts: controller.visibleSelectionModeCounts,
+                          ),
+                        ],
+                        if (controller.hasSelectionFilter &&
+                            !controller.loading &&
+                            controller.data.hasQuestions) ...[
+                          const SizedBox(width: 12),
+                          _TbExExportOptionsFab(controller: controller),
+                        ],
+                      ],
+                    ),
             ),
             if (!controller.homeworkSelectionMode)
               Positioned(
@@ -1812,15 +1897,6 @@ class TextbookExplorerContent extends StatelessWidget {
                   iconSize: FabTabBarTokens.previewAcademyBaseFontSize + 8,
                   onPressed: () => controller.onClose?.call(),
                 ),
-              ),
-            if (controller.hasSelectionFilter &&
-                !controller.loading &&
-                controller.data.hasQuestions &&
-                !controller.homeworkSelectionMode)
-              Positioned(
-                top: 12,
-                right: 12,
-                child: _TbExExportOptionsFab(controller: controller),
               ),
           ],
         );
@@ -3426,6 +3502,7 @@ class TextbookExplorerFabOverlay {
   void hide() {
     _controller = null;
     _navigator = null;
+    sharedCornerActionBar.unbindMenu(4);
     _entry?.remove();
     _entry = null;
   }
@@ -3475,24 +3552,42 @@ class TextbookExplorerFabOverlay {
                     controller.openExportLayoutPreview(actionContext),
               ),
             ),
-            Positioned(
-              left: _left + _tbExContentHorizontalInset,
-              right: _right,
-              bottom: FabTabBarTokens.fabBarBottomInset,
-              child: ProblemBankBottomFabBar(
-                showSelectAll: false,
-                cartCount: controller.cartCount,
-                cartActive: controller.showOnlyCart,
-                allVisibleSelected: controller.allVisibleSelected,
-                isBusy: busy || !enabled,
-                onToggleSelectAll: controller.toggleSelectAllVisible,
-                onToggleCart: () =>
-                    controller.toggleShowOnlyCart(actionContext),
-                onClearCart: controller.clearCart,
-                onAddToCart: () => controller.addSelectedToCart(actionContext),
-                onCreate: () =>
-                    controller.openExportLayoutPreview(actionContext),
-              ),
+            // 오른쪽 막대는 공용 껍질이 그린다. 화면 오른쪽에서의 거리는
+            // 예전 Positioned(right) + 막대 안쪽 여백과 같다.
+            Builder(
+              builder: (context) {
+                sharedCornerActionBar.bind(
+                  menuIndex: 4,
+                  width: ProblemBankBottomFabBar.barWidth(showSelectAll: false),
+                  right: _right + FabTabBarTokens.fabBarRightInset,
+                  visible: true,
+                  builder: (context) {
+                    final current = _controller;
+                    if (current == null) return const SizedBox.shrink();
+                    final currentContext = _navigator?.context ?? actionContext;
+                    final currentEnabled =
+                        !current.loading && current.data.hasQuestions;
+                    final currentBusy = current.isExporting;
+                    return ProblemBankBottomFabBar(
+                      bare: true,
+                      showSelectAll: false,
+                      cartCount: current.cartCount,
+                      cartActive: current.showOnlyCart,
+                      allVisibleSelected: current.allVisibleSelected,
+                      isBusy: currentBusy || !currentEnabled,
+                      onToggleSelectAll: current.toggleSelectAllVisible,
+                      onToggleCart: () =>
+                          current.toggleShowOnlyCart(currentContext),
+                      onClearCart: current.clearCart,
+                      onAddToCart: () =>
+                          current.addSelectedToCart(currentContext),
+                      onCreate: () =>
+                          current.openExportLayoutPreview(currentContext),
+                    );
+                  },
+                );
+                return const SizedBox.shrink();
+              },
             ),
           ],
         );

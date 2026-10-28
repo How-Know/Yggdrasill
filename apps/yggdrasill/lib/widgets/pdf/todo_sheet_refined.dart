@@ -697,52 +697,98 @@ Future<List<int>> _renderTodoSheetRefined(_TodoSheetPayload payload) async {
 
       final heroW = (iw - 8) / 2;
       // 제목 잉크 6.9pt, 숫자는 좌표보다 7.5pt 아래에서 시작해 27pt에서 끝난다.
-      // 제목과 숫자 사이 10pt. 숫자 하단에서 다음 제목·흰 칸까지 24pt.
+      // 제목과 숫자 사이 10pt. 숫자 하단에서 다음 제목까지는 두 줄 24pt,
+      // 세 줄(수정률·최대 수정 횟수)은 카드 안에 들어가도록 18pt.
       const titleDy = -2.0;
       const numberDy = 7.4;
       const heroInkBottom = numberDy + 27.0;
-      const afterNumberGap = 24.0;
-      final secondTop = bodyTop + heroInkBottom + afterNumberGap - titleDy;
-      final heroes = <(double, List<(String, String?, String)>)>[
+      final poolLayout = rec.correctionPoolMetrics;
+      final afterNumberGap = poolLayout ? 18.0 : 24.0;
+      final solvedRow = <(String, String?, String)>[
+        ('새로 푼 문제', solved?.toString(), solved == null ? '기록 없음' : '문항'),
         (
-          bodyTop,
-          [
-            ('새로 푼 문제', solved?.toString(), solved == null ? '기록 없음' : '문항'),
-            (
-              '정답률',
-              accuracy,
-              accuracy != null ? '%' : (solved == null ? '기록 없음' : '없음'),
-            ),
-          ],
-        ),
-        (
-          secondTop,
-          [
-            (
-              '수정한 문제',
-              corrTotal == null || corrTotal <= 0 ? null : '$corrDone',
-              corrTotal == null
-                  ? '기록 없음'
-                  : (corrTotal <= 0 ? '없음' : '/ $corrTotal 성공'),
-            ),
-            (
-              '평균 수정 횟수',
-              solved == null ? null : avgTries?.toStringAsFixed(1),
-              solved == null ? '기록 없음' : (avgTries == null ? '없음' : '회'),
-            ),
-          ],
+          '정답률',
+          accuracy,
+          accuracy != null ? '%' : (solved == null ? '기록 없음' : '없음'),
         ),
       ];
-      for (final row in heroes) {
-        for (int i = 0; i < row.$2.length; i++) {
+      final avgCell = (
+        '평균 수정 횟수',
+        solved == null ? null : avgTries?.toStringAsFixed(1),
+        solved == null ? '기록 없음' : (avgTries == null ? '없음' : '회'),
+      );
+      final rows = <List<(String, String?, String)>>[solvedRow];
+      if (poolLayout) {
+        final String? rateText;
+        final String rateUnit;
+        if (corrTotal == null) {
+          rateText = null;
+          rateUnit = '기록 없음';
+        } else if (corrTotal <= 0) {
+          rateText = null;
+          rateUnit = '없음';
+        } else {
+          rateText =
+              '${(math.min(corrDone, corrTotal) * 100 / corrTotal).round()}';
+          rateUnit = '%';
+        }
+        final maxTries = rec.maxCorrectionTries;
+        rows.add([
+          (
+            '수정한 문제',
+            corrTotal == null || corrTotal <= 0 ? null : '$corrTotal',
+            corrTotal == null ? '기록 없음' : (corrTotal <= 0 ? '없음' : '문항'),
+          ),
+          ('수정률', rateText, rateUnit),
+        ]);
+        rows.add([
+          avgCell,
+          (
+            '최대 수정 횟수',
+            solved == null || maxTries == null ? null : '$maxTries',
+            solved == null ? '기록 없음' : (maxTries == null ? '없음' : '회'),
+          ),
+        ]);
+      } else {
+        rows.add([
+          (
+            '수정한 문제',
+            corrTotal == null || corrTotal <= 0 ? null : '$corrDone',
+            corrTotal == null
+                ? '기록 없음'
+                : (corrTotal <= 0 ? '없음' : '/ $corrTotal 성공'),
+          ),
+          avgCell,
+        ]);
+      }
+      final rowStep = heroInkBottom + afterNumberGap - titleDy;
+      for (int r = 0; r < rows.length; r++) {
+        final top = bodyTop + r * rowStep;
+        for (int i = 0; i < rows[r].length; i++) {
           final x = ix + i * (heroW + 8);
-          text(g, row.$2[i].$1, 'small', _RefinedInk.secondary, x,
-              row.$1 + titleDy, heroW);
-          valueOrEmpty(row.$2[i].$2, row.$2[i].$3,
-              x: x - 0.5, y: row.$1 + numberDy, w: heroW, numFont: 'hero');
+          text(g, rows[r][i].$1, 'small', _RefinedInk.secondary, x,
+              top + titleDy, heroW);
+          valueOrEmpty(rows[r][i].$2, rows[r][i].$3,
+              x: x - 0.5, y: top + numberDy, w: heroW, numFont: 'hero');
         }
       }
 
+      final hwProblemTotal = rec.homeworkProblemTotal;
+      final hwProblemSolved = rec.homeworkProblemSolved;
+      final String? hwProblemText;
+      final String hwProblemUnit;
+      if (hwProblemTotal == null || hwProblemSolved == null) {
+        hwProblemText = null;
+        hwProblemUnit = rec.homeworkTotal > 0 ? '기록 없음' : '없음';
+      } else if (hwProblemTotal <= 0) {
+        hwProblemText = null;
+        hwProblemUnit = '없음';
+      } else {
+        hwProblemText = '${math.min(hwProblemSolved, hwProblemTotal)}';
+        hwProblemUnit = '/ $hwProblemTotal';
+      }
+
+      // 2x2: 숙제(완료·문항) 한 줄, 과제·진행속도 한 줄.
       const tileGap = 6.0;
       final tiles = <(String, String?, String)>[
         (
@@ -750,31 +796,29 @@ Future<List<int>> _renderTodoSheetRefined(_TodoSheetPayload payload) async {
           rec.homeworkTotal > 0 ? '${rec.homeworkCompleted}' : null,
           rec.homeworkTotal > 0 ? '/ ${rec.homeworkTotal}' : '없음',
         ),
+        ('숙제로 푼 문항', hwProblemText, hwProblemUnit),
         (
           '완료한 과제',
           rec.assignmentTotal > 0 ? '${rec.assignmentCompleted}' : null,
           rec.assignmentTotal > 0 ? '/ ${rec.assignmentTotal}' : '없음',
         ),
+        ('문항 당 진행속도', paceText, paceUnit),
       ];
       final tileW = (iw - tileGap) / 2;
-      final tilesTop = secondTop + heroInkBottom + afterNumberGap;
+      final tilesTop = bodyTop +
+          (rows.length - 1) * rowStep +
+          heroInkBottom +
+          afterNumberGap;
       for (int i = 0; i < tiles.length; i++) {
-        final tx = ix + i * (tileW + tileGap);
-        _refinedRoundRect(g, Rect.fromLTWH(tx, tilesTop, tileW, tileH),
+        final tx = ix + (i % 2) * (tileW + tileGap);
+        final ty = tilesTop + (i ~/ 2) * (tileH + tileGap);
+        _refinedRoundRect(g, Rect.fromLTWH(tx, ty, tileW, tileH),
             radius: 9, brush: whiteBrush);
-        text(g, tiles[i].$1, 'tiny', _RefinedInk.tertiary, tx + 9,
-            tilesTop + 5.5, tileW - 18);
+        text(g, tiles[i].$1, 'tiny', _RefinedInk.tertiary, tx + 9, ty + 5.5,
+            tileW - 18);
         valueOrEmpty(tiles[i].$2, tiles[i].$3,
-            x: tx + 9, y: tilesTop + 16, w: tileW - 18, numFont: 'tileValue');
+            x: tx + 9, y: ty + 16, w: tileW - 18, numFont: 'tileValue');
       }
-
-      final paceTop = tilesTop + tileH + tileGap;
-      _refinedRoundRect(g, Rect.fromLTWH(ix, paceTop, iw, tileH),
-          radius: 9, brush: whiteBrush);
-      text(g, '문항 당 진행속도', 'tiny', _RefinedInk.tertiary, ix + 9,
-          paceTop + 5.5, iw - 18);
-      valueOrEmpty(paceText, paceUnit,
-          x: ix + 9, y: paceTop + 16, w: iw - 18, numFont: 'tileValue');
     }
   }
 

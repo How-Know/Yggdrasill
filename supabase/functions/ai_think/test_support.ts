@@ -16,7 +16,14 @@ import type {
   TreeItemRow,
   WorkState,
 } from './actions.ts';
-import type { BehaviorCard, ConceptCategory, ConceptHit, CurriculumNode, CurriculumOutlineQuery } from './tools.ts';
+import type {
+  BehaviorCard,
+  ConceptCategory,
+  ConceptHit,
+  ConceptSearchPage,
+  CurriculumNode,
+  CurriculumOutlineQuery,
+} from './tools.ts';
 import type {
   ConceptAppearanceRecord,
   ConceptLinkedCriterion,
@@ -27,7 +34,11 @@ import type {
 } from './concept_reference.ts';
 import type { CriterionLinkedConcept, CriterionRecord, CriterionReferenceRead } from './criterion_reference.ts';
 import type { ConceptDraftReferenceRead } from './concept_draft_reference.ts';
+import type { ConceptTypeRow, CourseMapReadFn } from './course_map_tools.ts';
+import type { ConceptSourceReadFn } from './concept_source_tools.ts';
+import type { ReviewJobRpc } from './concept_review_job_tools.ts';
 import type { RelayConversationHit, RelayReservation, RelayReserveInput } from './store.ts';
+import { assessMemoryProposal, memoryDocument, memoryVisible, nextMemoryRead, type MemoryDelivery } from './memory_basis.ts';
 import type { CriteriaInput, DepartmentCriteria, OrganizeMessageRow, ProgressSummaryInput } from './organize.ts';
 
 export function memory(partial: Partial<MemoryRow> & { id: string; kind: string; title: string }): MemoryRow {
@@ -52,6 +63,30 @@ export type TestMemoryRow = MemoryRow & {
   created_at?: string | null;
 };
 
+function flowOf(a: ActionRow): { key: string; step: number; steps: number } | null {
+  const flow = a.payload.flow;
+  if (!flow || typeof flow !== 'object' || Array.isArray(flow)) return null;
+  const f = flow as Record<string, unknown>;
+  if (typeof f.key !== 'string' || typeof f.step !== 'number' || typeof f.steps !== 'number') return null;
+  return { key: f.key, step: f.step, steps: f.steps };
+}
+
+function normalizeFakeFlow(raw: unknown): { key: string; step: number; steps: number } | null | Error {
+  if (raw == null) return null;
+  if (typeof raw !== 'object' || Array.isArray(raw)) return new Error('ai_action_propose: memory_flow_invalid');
+  const f = raw as Record<string, unknown>;
+  const key = typeof f.key === 'string' ? f.key.trim() : '';
+  const step = f.step;
+  const steps = f.steps;
+  if (!/^[a-z0-9][a-z0-9_-]{0,39}$/.test(key) || typeof step !== 'number' || typeof steps !== 'number') {
+    return new Error('ai_action_propose: memory_flow_invalid');
+  }
+  if (!Number.isInteger(step) || !Number.isInteger(steps) || step < 1 || steps < step || steps > 8) {
+    return new Error('ai_action_propose: memory_flow_invalid');
+  }
+  return { key, step, steps };
+}
+
 export class MemoryThinkStore implements ThinkStore {
   memories: TestMemoryRow[] = [];
   conversations: ConversationRow[] = [];
@@ -66,6 +101,7 @@ export class MemoryThinkStore implements ThinkStore {
   attached: { ids: string[]; messageId: string }[] = [];
   linkedDocumentBodies: LinkedDocumentBody[] = [];
   accessByConversation = new Map<string, ConversationAccessState>();
+  memorySessions = new Map<string, { rows: MemoryDelivery[]; access: ConversationAccessState | null }>();
   snapshots: { messageId: string; thinkRoleId?: string; roleProfileVersion: string | null; materials: DeliveredMaterial[] }[] = [];
   private seq = 0;
 
@@ -128,16 +164,109 @@ export class MemoryThinkStore implements ThinkStore {
     });
   }
 
+  private memorySession(id: string): { rows: MemoryDelivery[]; access: ConversationAccessState | null } {
+    const session = this.memorySessions.get(id);
+    if (!session) throw new Error('memory_read_session_invalid');
+    return session;
+  }
+
+  openMemoryRead(conversationId: string): Promise<string> {
+    const id = this.id('sess');
+    this.memorySessions.set(id, { rows: [], access: this.accessByConversation.get(conversationId) ?? null });
+    return Promise.resolve(id);
+  }
+
+  searchMemoryLogged(
+    sessionId: string,
+    query: string,
+    terms: string[],
+    access?: ConversationAccessState | null,
+  ): Promise<Record<string, unknown>> {
+    const session = this.memorySession(sessionId);
+    if (access !== undefined) session.access = access ?? null;
+    const usable = terms.map((t) => t.trim()).filter((t) => t.length >= 2);
+    const scope = session.access?.thinkRoleId ?? null;
+    if (usable.length === 0) {
+      session.rows.push({ kind: 'search', status: 'error', query, hitCount: 0, scope });
+      return Promise.resolve({
+        status: 'error',
+        error: 'memory_search_terms_empty',
+        hit_count: 0,
+        scope,
+        excerpt_only: true,
+        hits: [],
+      });
+    }
+    this.searchCalls.push(usable);
+    const hits = this.memories
+      .filter((m) => m.status === 'active' && memoryVisible(m, session.access))
+      .map((m) => ({ m, score: usable.filter((t) => `${m.title} ${m.content}`.toLowerCase().includes(t.toLowerCase())).length }))
+      .filter((x) => x.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 10)
+      .map((x) => x.m);
+    const status = hits.length === 0 ? 'empty' : 'ok';
+    session.rows.push({ kind: 'search', status, query, hitCount: hits.length, scope });
+    return Promise.resolve({
+      status,
+      hit_count: hits.length,
+      scope,
+      excerpt_only: true,
+      hits: hits.map((m) => ({
+        id: m.id,
+        kind: m.kind,
+        title: m.title,
+        excerpt: m.content.slice(0, 500),
+        version: m.version ?? 1,
+      })),
+    });
+  }
+
+  readMemoryLogged(
+    sessionId: string,
+    memoryId: string,
+    offset: number,
+    access?: ConversationAccessState | null,
+  ): Promise<Record<string, unknown>> {
+    const session = this.memorySession(sessionId);
+    if (access !== undefined) session.access = access ?? null;
+    const m = this.memories.find((x) => x.id === memoryId) ?? null;
+    const target = m
+      ? {
+        id: m.id,
+        version: m.version ?? 1,
+        title: m.title,
+        kind: m.kind,
+        status: m.status,
+        document: memoryDocument(m),
+        visible: memoryVisible(m, session.access),
+      }
+      : null;
+    const read = nextMemoryRead(session.rows, target, offset);
+    session.rows.push(read.delivery);
+    return Promise.resolve(read.body as unknown as Record<string, unknown>);
+  }
+
+  noteMemoryOutcome(sessionId: string, kind: 'search' | 'read', status: 'error' | 'timeout', memoryId?: string | null): Promise<void> {
+    if ((kind !== 'search' && kind !== 'read') || (status !== 'error' && status !== 'timeout')) {
+      return Promise.reject(new Error('memory_outcome_invalid'));
+    }
+    const session = this.memorySession(sessionId);
+    session.rows.push({ kind, status, memoryId: memoryId ?? null });
+    return Promise.resolve();
+  }
+
   curriculumOutline(_q: CurriculumOutlineQuery): Promise<CurriculumNode[]> {
     return Promise.resolve([{ name: '2022 개정', children: [{ name: '중 1-1' }] }]);
   }
 
-  searchConcepts(query: string, limit: number): Promise<ConceptHit[]> {
-    return Promise.resolve(
-      [{ id: 'c1', name: '소인수분해', kind: 'definition', level: 1, category_path: '수와 연산', content: '...' }]
-        .filter((c) => c.name.includes(query))
-        .slice(0, limit),
-    );
+  conceptHits: ConceptHit[] = [
+    { id: 'c1', name: '소인수분해', kind: 'definition', level: 1, category_path: '수와 연산', content: '...', content_chars: 3 },
+  ];
+
+  searchConcepts(query: string, limit: number, offset: number): Promise<ConceptSearchPage> {
+    const all = this.conceptHits.filter((c) => c.name.includes(query) || c.content.includes(query));
+    return Promise.resolve({ total: all.length, hits: all.slice(offset, offset + limit).map((c) => ({ ...c })) });
   }
 
   listConceptCategories(_parentId: string | null): Promise<ConceptCategory[]> {
@@ -226,6 +355,85 @@ export class MemoryThinkStore implements ThinkStore {
     return Promise.resolve(row);
   }
 
+  /** 과정 탐색도 읽기 RPC가 돌려줄 값(함수 이름별). */
+  courseMapData = new Map<CourseMapReadFn, unknown>();
+  /** 읽기·제안 RPC가 낼 오류(예: 'course_map_not_found'). */
+  courseMapReadError: string | null = null;
+  courseMapReads: { fn: CourseMapReadFn; args: Record<string, unknown> }[] = [];
+  conceptTypes: ConceptTypeRow[] = [
+    { name: '정의', description: '용어나 대상이 무엇인지 정하는 것' },
+    { name: '성질', description: '대상이 늘 만족하는 사실' },
+  ];
+  courseThinkProposeError: string | null = null;
+  /** 제안 RPC가 카드에 넣을 미리보기. 없으면 제목·이유만. */
+  courseThinkPreview: Record<string, unknown> | null = null;
+  courseThinkProposals: { conversationId: string; kind: ActionKind; payload: Record<string, unknown> }[] = [];
+
+  /** 검수 작업 RPC가 돌려줄 값과 낼 오류(함수 이름별). */
+  reviewJobData = new Map<ReviewJobRpc, unknown>();
+  reviewJobErrors = new Map<ReviewJobRpc, string>();
+  reviewJobCalls: { fn: ReviewJobRpc; args: Record<string, unknown> }[] = [];
+
+  reviewJobRpc(fn: ReviewJobRpc, args: Record<string, unknown>): Promise<unknown> {
+    this.reviewJobCalls.push({ fn, args: structuredClone(args) });
+    const error = this.reviewJobErrors.get(fn);
+    if (error) return Promise.reject(new Error(`${fn}: ${error}`));
+    return Promise.resolve(structuredClone(this.reviewJobData.get(fn) ?? null));
+  }
+
+  courseMapRead(fn: CourseMapReadFn, args: Record<string, unknown>): Promise<unknown> {
+    this.courseMapReads.push({ fn, args: structuredClone(args) });
+    if (this.courseMapReadError) return Promise.reject(new Error(`${fn}: ${this.courseMapReadError}`));
+    return Promise.resolve(structuredClone(this.courseMapData.get(fn) ?? null));
+  }
+
+  listConceptTypes(): Promise<ConceptTypeRow[]> {
+    return Promise.resolve(this.conceptTypes.map((t) => ({ ...t })));
+  }
+
+  /** 출처 원본 읽기 RPC가 돌려줄 값. 함수면 부를 때마다 인자를 받아 값을 만든다(대기열 상태가 바뀌는 흐름 등). */
+  conceptSourceData = new Map<ConceptSourceReadFn, unknown | ((args: Record<string, unknown>) => unknown)>();
+  conceptSourceReadError: string | null = null;
+  conceptSourceReads: { fn: ConceptSourceReadFn; args: Record<string, unknown> }[] = [];
+  /** 저장된 원본 쪽 이미지(키 → 바이트). 없는 키는 내려받기 실패. */
+  conceptSourceImages = new Map<string, Uint8Array>();
+  conceptSourceImageReads: string[] = [];
+
+  conceptSourceRead(fn: ConceptSourceReadFn, args: Record<string, unknown>): Promise<unknown> {
+    this.conceptSourceReads.push({ fn, args: structuredClone(args) });
+    if (this.conceptSourceReadError) return Promise.reject(new Error(`${fn}: ${this.conceptSourceReadError}`));
+    const v = this.conceptSourceData.get(fn);
+    return Promise.resolve(structuredClone(typeof v === 'function' ? v(args) : v ?? null));
+  }
+
+  readConceptSourcePageImage(key: string): Promise<Uint8Array> {
+    this.conceptSourceImageReads.push(key);
+    const bytes = this.conceptSourceImages.get(key);
+    return bytes ? Promise.resolve(bytes.slice()) : Promise.reject(new Error('concept_source_image_download_failed'));
+  }
+
+  proposeCourseThinkAction(conversationId: string, kind: ActionKind, payload: Record<string, unknown>): Promise<ActionRow> {
+    if (this.courseThinkProposeError) {
+      return Promise.reject(new Error(`course_think_action_propose: ${this.courseThinkProposeError}`));
+    }
+    this.courseThinkProposals.push({ conversationId, kind, payload: structuredClone(payload) });
+    const row: ActionRow = {
+      id: this.id('act'),
+      conversation_id: conversationId,
+      message_id: null,
+      kind,
+      status: 'proposed',
+      payload,
+      preview: this.courseThinkPreview ? structuredClone(this.courseThinkPreview) : { title: kind, reason: payload.reason },
+      result: null,
+      error: null,
+      superseded: false,
+      created_at: new Date().toISOString(),
+    };
+    this.actions.push(row);
+    return Promise.resolve(row);
+  }
+
   searchBehaviorCards(_query: string | null, _limit: number): Promise<BehaviorCard[]> {
     return Promise.resolve([]);
   }
@@ -279,6 +487,95 @@ export class MemoryThinkStore implements ThinkStore {
       this.proposeFailure = null;
       return Promise.reject(new Error(`ai_action_propose: ${message}`));
     }
+    let stored = payload;
+    let shown = preview;
+    if (kind === 'save_memory' && payload.op === 'retire') {
+      const sessionId = typeof payload.read_session === 'string' ? payload.read_session : '';
+      const session = this.memorySessions.get(sessionId);
+      if (!session) return Promise.reject(new Error('ai_action_propose: memory_read_session_invalid'));
+      const memoryId = typeof payload.memory_id === 'string' ? payload.memory_id : '';
+      try {
+        const basis = assessMemoryProposal({
+          rows: session.rows,
+          relation: 'retire',
+          supersedesId: null,
+          comparedIds: memoryId ? [memoryId] : [],
+          plate: (id) => {
+            const m = this.memories.find((x) => x.id === id);
+            if (!m) return null;
+            return {
+              id: m.id,
+              version: m.version ?? 1,
+              title: m.title,
+              status: m.status,
+              contentChars: memoryDocument(m).length,
+              visible: memoryVisible(m, session.access),
+            };
+          },
+        });
+        const plate = this.memories.find((x) => x.id === memoryId);
+        stored = { op: 'retire', memory_id: memoryId, reason: payload.reason ?? null, basis };
+        shown = { ...preview, op: 'retire', relation: 'retire', title: plate?.title ?? '' };
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        return Promise.reject(new Error(`ai_action_propose: ${message}`));
+      }
+    } else if (kind === 'save_memory' || (kind === 'memory_card_change' && payload.op !== 'withdraw')) {
+      if (payload.relation === 'retire') return Promise.reject(new Error('ai_action_propose: memory_relation_required'));
+      const sessionId = typeof payload.read_session === 'string' ? payload.read_session : '';
+      const session = this.memorySessions.get(sessionId);
+      if (!session) return Promise.reject(new Error('ai_action_propose: memory_read_session_invalid'));
+      const memory = payload.memory && typeof payload.memory === 'object' && !Array.isArray(payload.memory)
+        ? payload.memory as Record<string, unknown>
+        : {};
+      const supersedesId = typeof memory.supersedes_id === 'string' ? memory.supersedes_id : null;
+      const comparedIds = Array.isArray(payload.compared_ids)
+        ? payload.compared_ids.filter((id): id is string => typeof id === 'string')
+        : [];
+      try {
+        const basis = assessMemoryProposal({
+          rows: session.rows,
+          relation: typeof payload.relation === 'string' ? payload.relation : '',
+          supersedesId,
+          comparedIds,
+          plate: (id) => {
+            const m = this.memories.find((x) => x.id === id);
+            if (!m) return null;
+            return {
+              id: m.id,
+              version: m.version ?? 1,
+              title: m.title,
+              status: m.status,
+              contentChars: memoryDocument(m).length,
+              visible: memoryVisible(m, session.access),
+            };
+          },
+        });
+        stored = { memory, reason: payload.reason ?? null, basis };
+        shown = { ...preview, relation: basis.relation };
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        return Promise.reject(new Error(`ai_action_propose: ${message}`));
+      }
+    }
+    const flow = normalizeFakeFlow(payload.flow);
+    if (flow instanceof Error) return Promise.reject(flow);
+    if (flow && kind === 'save_memory') {
+      const same = this.actions.filter((a) =>
+        a.conversation_id === conversationId && a.kind === 'save_memory' && a.status === 'proposed' &&
+        flowOf(a)?.key === flow.key && flowOf(a)?.step === flow.step
+      );
+      if (same.length > 0) return Promise.reject(new Error('ai_action_propose: memory_flow_duplicate'));
+      if (flow.step > 1) {
+        const prev = this.actions.some((a) =>
+          a.conversation_id === conversationId && a.kind === 'save_memory' &&
+          (a.status === 'proposed' || a.status === 'applied') &&
+          flowOf(a)?.key === flow.key && flowOf(a)?.step === flow.step - 1 && flowOf(a)?.steps === flow.steps
+        );
+        if (!prev) return Promise.reject(new Error('ai_action_propose: memory_flow_order'));
+      }
+      stored = { ...stored, flow };
+    }
     const memoryCard = kind === 'save_memory' || kind === 'memory_card_change';
     for (const a of this.actions) {
       if (!memoryCard && a.conversation_id === conversationId && a.kind === kind && a.status === 'proposed') {
@@ -292,8 +589,8 @@ export class MemoryThinkStore implements ThinkStore {
       message_id: null,
       kind,
       status: 'proposed',
-      payload,
-      preview,
+      payload: stored,
+      preview: shown,
       result: null,
       error: null,
       superseded: false,
@@ -532,7 +829,16 @@ export class MemoryThinkStore implements ThinkStore {
   }
 
   createConversation(title: string, origin?: 'cursor'): Promise<ConversationRow> {
-    const row = { id: this.id('conv'), title, status: 'active', scope_type: 'general', scope_id: null, origin: origin ?? 'owner' };
+    const row = {
+      id: this.id('conv'),
+      title,
+      status: 'active',
+      scope_type: 'general',
+      scope_id: null,
+      origin: origin ?? 'owner',
+      context_from_conversation_id: null as string | null,
+      progress_summary: null as Record<string, unknown> | null,
+    };
     this.conversations.push(row);
     return Promise.resolve(row);
   }

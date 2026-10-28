@@ -349,6 +349,67 @@ function buildGojaengiAnswerRules() {
   ];
 }
 
+// 개념+유형 고등은 정답 PDF 가 따로 없다. "정답과 해설" PDF 의 박스 머리
+// ("개념 Check 8쪽", "문제 12~14쪽", "연습문제 26~28쪽")가 코너와 본문 쪽을
+// 함께 알려 준다. 개념 Check·문제는 번호 오른쪽 "답" 표시 뒤가 정답이고,
+// 연습문제는 머리 바로 아래 빠른 정답 격자에 몰려 있다.
+function buildConceptPlusHighExpectedTable(expectedEntries) {
+  const rows = (Array.isArray(expectedEntries) ? expectedEntries : []).filter(
+    (e) => e && String(e.number || '').trim(),
+  );
+  if (!rows.length) return [];
+  return [
+    '',
+    '=== 기대 문항 상세표 (이 표가 번호 목록보다 우선한다) ===',
+    '각 줄은 "돌려줄 problem_number | 찾을 박스 | 본문 쪽" 이다. 박스 머리의 쪽',
+    '배지가 그 본문 쪽을 범위에 담은 박스에서만 읽어라.',
+    ...rows.map((e) => {
+      const corner = e.corner ? `박스="${e.corner}"` : '박스=미상';
+      const page = e.page ? `본문=${e.page}쪽` : '본문=미상';
+      return `- problem_number="${e.number}" | ${corner} | ${page}`;
+    }),
+  ];
+}
+
+function buildConceptPlusHighAnswerRules() {
+  return [
+    '',
+    '=== 개념+유형 고등 "정답과 해설" 읽는 법 (최우선) ===',
+    '[H0] 이 지면은 답지가 아니라 **정답과 해설** 지면이다. 정답과 풀이가 함께',
+    '   인쇄돼 있다. 풀이 문장·식은 정답이 아니다. 정답만 뽑아라.',
+    '[H1] 지면은 색 띠 머리가 붙은 박스로 나뉜다. 머리 왼쪽에 박스 이름, 오른쪽',
+    '   끝에 본문 쪽 배지가 있다: "개념 Check 8쪽", "문제 12~14쪽",',
+    '   "연습문제 26~28쪽". 박스는 다음 박스 머리가 나올 때까지 단과 지면을 넘어',
+    '   이어진다. 머리가 안 보이는 지면 맨 위는 앞 지면 마지막 박스의 연속이다.',
+    '[H2] 번호는 박스마다 다시 시작한다. 개념 Check 는 1, 2, 3 …, 문제는 "01-1",',
+    '   "02-3" 처럼 하이픈 번호, 연습문제는 1 … N 이다. 한 지면에 "1" 이 여러',
+    '   박스에 있으므로 **번호만 보고 고르면 반드시 틀린다.** 상세표의 박스 이름과',
+    '   본문 쪽이 맞는 박스에서만 읽어라. 쪽 배지가 "12~14쪽" 처럼 범위면 상세표의',
+    '   쪽이 그 안에 들면 일치다.',
+    '[H3] 개념 Check·문제: 번호 바로 오른쪽 "답" 표시 뒤의 굵은 값이 정답이다.',
+    '   소문항 (1)(2)(3) 이 여러 줄이면 "(1) ... (2) ..." 로 이어 담는다. 그 아래',
+    '   풀이 식은 넣지 마라. 몫·나머지처럼 두 값이면 원문 그대로 둘 다 담는다.',
+    '[H4] 연습문제: 머리 바로 아래 **빠른 정답 격자**("1 ③  2 ②  3 19 …")에서',
+    '   읽는다. 격자 아래 번호별 풀이에는 "답" 표시가 없고 풀이만 있으니 거기서',
+    '   정답을 지어내지 마라. 격자에 없는 번호는 풀이 마지막 줄의 결론 값을 쓴다.',
+    '[H5] problem_number 는 **상세표의 문자열 그대로** 돌려줘라("01-1" 이면 "01-1",',
+    '   "1" 이면 "1"). 이 규칙은 [R3] 의 "원문 그대로" 보다 우선한다.',
+    '[H6] item 마다 실제로 읽은 박스를 source_* 에 적어라.',
+    '   - source_corner = 박스 머리 이름 그대로("개념 Check", "문제", "연습문제")',
+    '   - source_page / source_page_end = 머리 배지의 시작·끝 쪽',
+    '     ("문제 12~14쪽" 이면 12 와 14, "개념 Check 8쪽" 이면 둘 다 8)',
+    '   - 머리가 앞 지면에 있는 연속 박스면 그 머리의 값을 그대로 적는다.',
+    '   - 검산용이다. 상세표와 어긋나면 서버가 버리므로 지어내지 마라.',
+    '[H7] 상세표의 줄마다 item 을 하나씩 만든다. 박스의 첫 문항만 뽑고 끝내지',
+    '   마라. 이 지면에 정말 안 보이는 것만 생략한다.',
+    '[H8] 지면 맨 위(각 단의 첫 박스 머리보다 위)에 있는 번호, 예를 들어 앞 문항',
+    '   풀이 끝에 이어 나오는 "04-2 답 …" 은 앞 지면에서 이어진 박스의 문항이다.',
+    '   머리가 이 지면에 없다고 건너뛰지 마라. 상세표에 있으면 반드시 뽑는다.',
+    '   그 머리를 이 지면에서 볼 수 없으면 source_corner 는 번호 모양에 맞는 박스',
+    '   이름(하이픈 번호면 "문제"), source_page·source_page_end 는 null 로 둔다.',
+  ];
+}
+
 export function buildExtractAnswersPrompt({
   rawPage,
   displayPage,
@@ -359,6 +420,7 @@ export function buildExtractAnswersPrompt({
 }) {
   const seriesKey = String(series || '').trim().toLowerCase();
   const isConceptPlus = seriesKey === 'gaeyu';
+  const isConceptPlusHigh = seriesKey === 'gaeyu_high';
   const isSuryeok = seriesKey === 'suryeok';
   // 고쟁이는 본문·워크북 양쪽에 배지를 실어 보낸다. 옛 요청(본문 배지 없음)도
   // 그대로 받아 주려고 배지가 실려 온 요청에서만 출처 대조로 넘어간다.
@@ -368,11 +430,13 @@ export function buildExtractAnswersPrompt({
       (e) => e && (String(e.corner || '').trim() || e.page),
     );
   // 답지 블록이 번호를 재사용하는 교재는 출처(source_*)를 함께 받아 검산한다.
-  const needsSourceBadge = isConceptPlus || isSuryeok || isGojaengiBadged;
+  const needsSourceBadge =
+    isConceptPlus || isConceptPlusHigh || isSuryeok || isGojaengiBadged;
+  const docName = isConceptPlusHigh ? '정답과 해설' : '답지(정답지)';
   const pageLine =
     displayPage != null && Number.isFinite(displayPage)
-      ? `이 이미지는 답지(정답지) PDF 의 ${displayPage}페이지이다. 이 값은 PDF raw page ${rawPage}와 동일한 입력 페이지 기준이다.`
-      : `이 이미지는 답지(정답지) PDF 의 한 페이지 (PDF raw page ${rawPage}) 이다.`;
+      ? `이 이미지는 ${docName} PDF 의 ${displayPage}페이지이다. 이 값은 PDF raw page ${rawPage}와 동일한 입력 페이지 기준이다.`
+      : `이 이미지는 ${docName} PDF 의 한 페이지 (PDF raw page ${rawPage}) 이다.`;
 
   const expected = Array.isArray(expectedNumbers)
     ? expectedNumbers
@@ -402,6 +466,10 @@ export function buildExtractAnswersPrompt({
     ...expectedBlock,
     ...(isConceptPlus ? buildConceptPlusExpectedTable(expectedEntries) : []),
     ...(isConceptPlus ? buildConceptPlusAnswerRules() : []),
+    ...(isConceptPlusHigh
+      ? buildConceptPlusHighExpectedTable(expectedEntries)
+      : []),
+    ...(isConceptPlusHigh ? buildConceptPlusHighAnswerRules() : []),
     ...(isSuryeok
         ? buildSuryeokExpectedTable(expectedEntries, skipBadges)
         : []),

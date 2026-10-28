@@ -262,7 +262,10 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
               )
             : null,
         child: useExpanded && enableInnerScroll
-            ? Scrollbar(
+            ? ScrollConfiguration(
+                behavior: ScrollConfiguration.of(context).copyWith(
+                  scrollbars: false,
+                ),
                 child: SingleChildScrollView(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,

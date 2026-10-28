@@ -44,6 +44,10 @@ _TodoSheetPayload _todoSheetSamplePayload() {
       correctionSuccessCount: 9,
       passedProblemCount: 44,
       avgTriesToPass: 1.3,
+      maxCorrectionTries: 4,
+      correctionPoolMetrics: true,
+      homeworkProblemTotal: 40,
+      homeworkProblemSolved: 36,
       flows: [
         LessonRecordFlowProgress(
           flowId: 'f1',

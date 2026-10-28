@@ -108,6 +108,8 @@ export interface BuildContextInput {
   scope?: { type: string; id?: string | null } | null;
   /** 이 대화의 제안·코드 요청 상태 요약. 앞쪽이 그대로라 프롬프트 캐시가 유지된다. */
   workNote?: string | null;
+  /** 사용자가 고른 다른 대화의 승인 요약·작업 상태. 고르지 않았으면 넣지 않는다. */
+  restoredNote?: string | null;
   /** 서버가 이번 요청에서 계산한 기능 상태(featureStatusNote). */
   featureNote?: string | null;
   /** 나눠 온 대화의 요약. 사용자 메시지 자리에 참고 자료로 넣는다. */
@@ -120,6 +122,18 @@ export interface BuildContextInput {
   departmentWorkReady?: boolean;
   /** 정리 제안 도구를 이번 요청에 노출하는지. 지침에 "정리 제안" 절이 들어간다. */
   organizeReady?: boolean;
+  /** 과정 탐색도·개념 카드 도구를 이번 요청에 노출하는지. 지침에 그 절이 들어간다. */
+  courseMapReady?: boolean;
+  /** 개념 검토 목록·검토 기록 도구를 이번 요청에 노출하는지. 지침에 "개념 검토" 절이 들어간다. */
+  conceptReviewReady?: boolean;
+  /** 개념 관계 읽기·관계 카드 도구를 이번 요청에 노출하는지. 지침에 "개념 관계" 절이 들어간다. */
+  conceptRelationReady?: boolean;
+  /** 개념 출처 원본 다시 읽기 도구를 이번 요청에 노출하는지. 지침에 "개념 출처 원본 다시 읽기" 절이 들어간다. */
+  conceptSourceReady?: boolean;
+  /** 개념 검수 작업 이어하기 도구를 이번 요청에 노출하는지. 지침에 "개념 검수 작업" 절이 들어간다. */
+  conceptReviewJobsReady?: boolean;
+  /** 50개 묶음 검수 도구를 이번 요청에 노출하는지. "개념 검수 작업" 절에 묶음 검수 규칙이 더해진다. */
+  conceptReviewBatchReady?: boolean;
   /** 승인된 진행 요약. excludedAfter: 승인 뒤 맥락 제외가 승인됐다. */
   progressSummary?: { view: ProgressSummaryView; excludedAfter: boolean } | null;
   /** 이 대화 부서의 승인된 기준. 우선 기억은 역할 범위 안의 active 기억만 넣는다. */
@@ -286,11 +300,13 @@ export async function buildThinkContext(store: ThinkContextStore, input: BuildCo
 
   const terms = extractSearchTerms(input.userMessage);
   let relevant: MemoryRow[] = [];
+  let memorySearchFailed = false;
   if (terms.length > 0) {
     try {
       const hits = await store.searchMemories(terms, L.relevantCount + fullyIncluded.size, searchScopeFor(access));
       relevant = scopeMemories(hits, access).filter((m) => !fullyIncluded.has(m.id)).slice(0, L.relevantCount);
     } catch {
+      memorySearchFailed = true;
       relevant = [];
     }
   }
@@ -334,6 +350,12 @@ export async function buildThinkContext(store: ThinkContextStore, input: BuildCo
     departmentWorkReady: input.departmentWorkReady === true,
     organizeReady: input.organizeReady === true,
     criteria,
+    courseMapReady: input.courseMapReady === true,
+    conceptReviewReady: input.conceptReviewReady === true,
+    conceptRelationReady: input.conceptRelationReady === true,
+    conceptSourceReady: input.conceptSourceReady === true,
+    conceptReviewJobsReady: input.conceptReviewJobsReady === true,
+    conceptReviewBatchReady: input.conceptReviewBatchReady === true,
   });
 
   // 지난 대화: 최신부터 글자 수 예산이 찰 때까지
@@ -401,6 +423,7 @@ export async function buildThinkContext(store: ThinkContextStore, input: BuildCo
     });
   }
   if (input.workNote) items.push({ kind: 'context', text: input.workNote });
+  if (input.restoredNote) items.push({ kind: 'context', text: input.restoredNote });
   if (input.featureNote) items.push({ kind: 'context', text: input.featureNote });
   if (linkedDocs.length > 0) {
     items.push({
@@ -409,6 +432,12 @@ export async function buildThinkContext(store: ThinkContextStore, input: BuildCo
     });
   }
   if (relevant.length > 0) items.push({ kind: 'context', text: relevantMemoriesNote(relevant, L.relevantChars) });
+  else if (memorySearchFailed) {
+    items.push({
+      kind: 'context',
+      text: '[관련 기억 검색에 실패했다. 관련 기억이 없다는 뜻이 아니다. 이 실패를 근거로 새 기억을 제안하지 않는다.]',
+    });
+  }
   if (input.conceptDraftReference) {
     items.push({ kind: 'message', role: 'user', parts: [{ type: 'text', text: input.conceptDraftReference }] });
   }

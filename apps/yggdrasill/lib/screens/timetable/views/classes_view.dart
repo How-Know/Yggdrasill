@@ -1826,10 +1826,14 @@ class _ClassesViewState extends State<ClassesView>
                       },
                     ),
                     Expanded(
-                      child: SingleChildScrollView(
-                        controller: _verticalBodyScrollController,
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                      child: ScrollConfiguration(
+                        behavior: ScrollConfiguration.of(context).copyWith(
+                          scrollbars: false,
+                        ),
+                        child: SingleChildScrollView(
+                          controller: _verticalBodyScrollController,
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Builder(
                               builder: (context) {
@@ -2084,6 +2088,7 @@ class _ClassesViewState extends State<ClassesView>
                               ),
                             ),
                           ],
+                        ),
                         ),
                       ),
                     ),

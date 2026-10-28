@@ -43,11 +43,9 @@ class ThinkMemoryFeedbackDialog extends StatefulWidget {
 class _ThinkMemoryFeedbackDialogState extends State<ThinkMemoryFeedbackDialog> {
   final _feedback = TextEditingController();
   String? _updateMemoryId;
-  bool _loading = false;
   bool _requesting = false;
   String? _error;
   ThinkMemoryFeedbackDraft? _draft;
-  ThinkMemoryFeedbackUpdateBaseline? _updateBaseline;
   final Set<int> _discarded = {};
 
   /// 후보별로 사람이 고른 범위. 고르지 않았으면 새 기억은 공통, 수정은 기존 기억의 범위.
@@ -93,7 +91,6 @@ class _ThinkMemoryFeedbackDialogState extends State<ThinkMemoryFeedbackDialog> {
       if (!mounted) return;
       setState(() {
         _draft = res.draft;
-        _updateBaseline = res.updateBaseline;
         _discarded.clear();
         _scopes.clear();
         _requesting = false;
@@ -107,86 +104,8 @@ class _ThinkMemoryFeedbackDialogState extends State<ThinkMemoryFeedbackDialog> {
     }
   }
 
-  Future<void> _saveCandidate(int index, ThinkMemoryStatus status) async {
-    final draft = _draft;
-    if (draft == null || _discarded.contains(index)) return;
-    final c = draft.candidates[index];
-    if (c.title.trim().isEmpty || c.content.trim().isEmpty) {
-      showThinkSnack(context, '제목과 내용을 채워 주세요.', error: true);
-      return;
-    }
-    final (scope, dept) = _scopeFor(index, c);
-    setState(() => _loading = true);
-    try {
-      if (c.updateMemoryId != null && c.updateMemoryId!.isNotEmpty) {
-        final baseline = _updateBaseline;
-        if (baseline == null || !baseline.isValid || baseline.memoryId != c.updateMemoryId) {
-          throw ThinkApiException(
-            'baseline_mismatch',
-            '초안 기준과 수정 대상이 맞지 않습니다. 초안을 다시 요청하세요.',
-          );
-        }
-        final latest = _c.memoryById(c.updateMemoryId);
-        if (latest == null) {
-          await _c.refreshMemories();
-        }
-        final loaded = _c.memoryById(c.updateMemoryId);
-        if (loaded == null) {
-          throw ThinkApiException('memory_not_found', '수정할 기억이 없어졌습니다. 새로고침하세요.');
-        }
-        final row = ThinkMemoryDraft.fromMemory(loaded)
-          ..title = c.title
-          ..content = c.content
-          ..decisionContext = c.decisionContext
-          ..decisionReason = c.decisionReason
-          ..alternatives = [...c.alternatives]
-          ..tags = [...c.tags]
-          ..status = status
-          ..memoryScope = scope
-          ..scopeDepartment = dept;
-        final lock = ThinkMemory(
-          id: baseline.memoryId,
-          version: baseline.version,
-          kind: loaded.kind,
-          status: loaded.status,
-          title: loaded.title,
-          content: loaded.content,
-        );
-        await _c.saveMemory(row, existing: lock);
-      } else {
-        final row = ThinkMemoryDraft(
-          kind: c.kind,
-          status: status,
-          title: c.title,
-          content: c.content,
-          decisionContext: c.decisionContext,
-          decisionReason: c.decisionReason,
-          alternatives: c.alternatives,
-          tags: c.tags,
-          sourceConversationId: widget.conversationId,
-          memoryScope: scope,
-          scopeDepartment: dept,
-        );
-        await _c.saveMemory(row);
-      }
-      if (!mounted) return;
-      setState(() {
-        _discarded.add(index);
-        _loading = false;
-      });
-      showThinkSnack(context, status == ThinkMemoryStatus.active ? '확정 저장했습니다.' : '초안으로 저장했습니다.');
-    } on ThinkApiException catch (e) {
-      if (!mounted) return;
-      setState(() => _loading = false);
-      final msg = e.code == 'conflict'
-          ? '다른 변경이 반영되어 저장할 수 없습니다. 초안을 다시 요청해 확인하세요.'
-          : e.message;
-      showThinkSnack(context, msg, error: true);
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _loading = false);
-      showThinkSnack(context, '저장하지 못했습니다: $e', error: true);
-    }
+  Future<void> _saveCandidate(int _, ThinkMemoryStatus __) async {
+    showMemoryApprovalOnly(context);
   }
 
   @override
@@ -213,7 +132,7 @@ class _ThinkMemoryFeedbackDialogState extends State<ThinkMemoryFeedbackDialog> {
       ),
       actions: [
         TextButton(
-          onPressed: _loading || _requesting ? null : () => Navigator.pop(context),
+          onPressed: _requesting ? null : () => Navigator.pop(context),
           child: const Text('닫기', style: TextStyle(color: kThinkSub)),
         ),
         if (_draft == null)
@@ -340,7 +259,7 @@ class _ThinkMemoryFeedbackDialogState extends State<ThinkMemoryFeedbackDialog> {
                 department: dept,
                 showLegacy: existing?.memoryScope == ThinkMemoryScope.legacyUnscoped,
                 suggestedRole: _suggestedRole,
-                enabled: !_loading,
+                enabled: true,
                 onChanged: (s, d) => setState(() => _scopes[index] = (s, d)),
               );
             }),
@@ -351,17 +270,17 @@ class _ThinkMemoryFeedbackDialogState extends State<ThinkMemoryFeedbackDialog> {
             runSpacing: 8,
             children: [
               OutlinedButton(
-                onPressed: _loading ? null : () => setState(() => _discarded.add(index)),
+                onPressed: () => setState(() => _discarded.add(index)),
                 style: thinkOutlineButton(),
                 child: const Text('폐기'),
               ),
               OutlinedButton(
-                onPressed: _loading ? null : () => _saveCandidate(index, ThinkMemoryStatus.draft),
+                onPressed: () => _saveCandidate(index, ThinkMemoryStatus.draft),
                 style: thinkOutlineButton(),
                 child: const Text('초안 저장'),
               ),
               ElevatedButton(
-                onPressed: _loading ? null : () => _saveCandidate(index, ThinkMemoryStatus.active),
+                onPressed: () => _saveCandidate(index, ThinkMemoryStatus.active),
                 style: thinkPrimaryButton(),
                 child: const Text('승인하고 저장'),
               ),

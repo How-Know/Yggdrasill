@@ -146,7 +146,7 @@ test('제목이 없거나 너무 길면 막는다', async () => {
   await op(() => t.rejects(`select concept_criteria_create('x', $1, 'owner')`, ['가'.repeat(20001)], /concept_criteria_too_long/));
 });
 
-test('기준–개념 연결은 운영자만 넣고 지우며, 개념을 지우면 연결도 사라진다', async () => {
+test('기준–개념 연결은 운영자만 넣고 지우며, 연결이 있는 개념은 지우지 않는다', async () => {
   const row = await create('연결 시험 기준');
   await t.asUser(() =>
     t.rejects(`insert into concept_criterion_links (criterion_id, concept_id) values ($1::uuid, $2::uuid)`, [row.id, S.concept], /row-level security/));
@@ -162,14 +162,17 @@ test('기준–개념 연결은 운영자만 넣고 지우며, 개념을 지우�
 
   const temp = await insertConcept(t, '임시', S.folder, '');
   await op(() => t.one(`insert into concept_criterion_links (criterion_id, concept_id) values ($1::uuid, $2::uuid) returning concept_id`, [row.id, temp]));
-  await t.exec(`delete from concepts where id = '${temp}'`);
-  assert.equal((await t.all(`select 1 from concept_criterion_links where concept_id = $1::uuid`, [temp])).length, 0);
+  await t.rejects(`delete from concepts where id = $1::uuid`, [temp], /concept_delete_attached/);
+  assert.equal((await t.all(`select 1 from concept_criterion_links where concept_id = $1::uuid`, [temp])).length, 1);
 
   await op(() => t.one(`delete from concept_criterion_links where criterion_id = $1::uuid and concept_id = $2::uuid returning concept_id`, [row.id, S.concept2]));
-  assert.equal((await t.all(`select 1 from concept_criterion_links where criterion_id = $1::uuid`, [row.id])).length, 1);
+  assert.deepEqual(
+    (await t.all(`select concept_id from concept_criterion_links where criterion_id = $1::uuid order by created_at`, [row.id])).map((r) => r.concept_id),
+    [S.concept, temp],
+  );
 });
 
-test('개념 출처는 운영자가 볼 수 있는 학원 교재 쪽만 넣고, 같은 쪽은 한 번만, 개념과 함께 사라진다', async () => {
+test('개념 출처는 운영자가 볼 수 있는 학원 교재 쪽만 넣고, 같은 쪽은 한 번만, 출처가 있는 개념은 지우지 않는다', async () => {
   const insert = (concept, academy, book, page) =>
     t.one(
       `insert into concept_sources (concept_id, academy_id, book_id, grade_label, raw_page, display_page, unit_path)
@@ -209,6 +212,6 @@ test('개념 출처는 운영자가 볼 수 있는 학원 교재 쪽만 넣고, 
 
   const temp = await insertConcept(t, '임시 출처', S.folder, '');
   await op(() => insert(temp, S.academy, S.book, 9));
-  await t.exec(`delete from concepts where id = '${temp}'`);
-  assert.equal((await t.all(`select 1 from concept_sources where concept_id = $1::uuid`, [temp])).length, 0);
+  await t.rejects(`delete from concepts where id = $1::uuid`, [temp], /concept_delete_attached/);
+  assert.equal((await t.all(`select 1 from concept_sources where concept_id = $1::uuid`, [temp])).length, 1);
 });

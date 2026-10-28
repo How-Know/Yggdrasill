@@ -164,8 +164,13 @@ class ConceptCategoryService {
         .update({'name': name}).eq('id', id);
   }
 
+  /// 빈 폴더(하위 폴더 포함)만 지운다. 개념이 있으면 ConceptDeleteException(concept_folder_not_empty).
   Future<void> deleteCategory({required String id}) async {
-    await _client.from('concept_categories').delete().eq('id', id);
+    try {
+      await _client.from('concept_categories').delete().eq('id', id);
+    } catch (e) {
+      throw ConceptDeleteException.from(e);
+    }
   }
 
   Future<void> moveCategory({

@@ -138,6 +138,10 @@ const Map<String, String> kWonriTypeNameBySection = {
   'middle_unit_review': '중단원 마무리하기',
   'middle_descriptive': '서술형 대비 문제',
   'middle_calculation': '계산력 강화하기',
+  'high_concept_check': '개념 Check',
+  'high_example': '필수예제',
+  'high_problem': '문제',
+  'high_exercise': '연습문제',
 };
 
 const Map<String, String> kWonriTypeNameBySubKey = {

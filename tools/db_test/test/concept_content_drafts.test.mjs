@@ -143,7 +143,7 @@ test('수정안을 쓴 뒤 본문이 바뀌면 확정을 막고, 지금 본문�
   assert.equal(out.content, PROPOSAL);
 });
 
-test('수정안을 버리면 본문은 그대로다. 개념을 지우면 수정안도 사라진다', async () => {
+test('수정안을 버리면 본문은 그대로다. 수정안이 있는 개념은 지우지 않고 수정안도 남는다', async () => {
   const concept = await insertConcept(t, '확률(버림)', S.folder, BASE);
   const row = await save(concept, PROPOSAL, BASE);
   await op(() => t.rejects(`select concept_content_discard_draft($1::uuid, now())`, [concept], /concept_content_draft_stale/));
@@ -154,8 +154,8 @@ test('수정안을 버리면 본문은 그대로다. 개념을 지우면 수정�
 
   const again = await insertConcept(t, '확률(지움)', S.folder, BASE);
   await save(again, PROPOSAL, BASE);
-  await t.exec(`delete from concepts where id = '${again}'`);
-  assert.equal((await t.all(`select 1 from concept_content_drafts where concept_id = $1::uuid`, [again])).length, 0);
+  await t.rejects(`delete from concepts where id = $1::uuid`, [again], /concept_delete_attached/);
+  assert.equal((await t.all(`select 1 from concept_content_drafts where concept_id = $1::uuid`, [again])).length, 1);
 });
 
 test('없는 개념에는 수정안을 쓰지 않는다', async () => {

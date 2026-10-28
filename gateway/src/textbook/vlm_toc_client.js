@@ -157,6 +157,27 @@ export function buildParseTocPrompt({ pageCount, series = '' }) {
           '목차 페이지 구석의 다른 학년 교재 안내표(예: "개념플러스유형 1-2" 표)는 목차가 아니다. 무시하라.',
         ]
       : [];
+  const gaeyuHighLines =
+    seriesKey === 'gaeyu_high'
+      ? [
+          '',
+          '=== 개념+유형 고등 교재 목차 규칙 (매우 중요) ===',
+          '이 교재(개념+유형 고등)의 "CONTENTS 차례" 는 3단계다:',
+          '  - 대단원: 왼쪽의 "I. 다항식", "II. 방정식과 부등식" 처럼 로마숫자 + 큰 제목',
+          '    → big_units[].name. 로마숫자는 버리고 이름만 담아라.',
+          '  - 중단원: 오른쪽 칸의 "1 다항식", "2 나머지 정리와 인수분해" 처럼 색 숫자 +',
+          '    굵은 제목 → mid_units[].name. 이름만 담아라. 중단원 줄에는 페이지가',
+          '    없다 — mid_units[].page 는 null.',
+          '  - 소단원: 그 아래 "01 다항식의 연산 ......... 8" 처럼 두 자리 번호 + 이름 +',
+          '    페이지 → sub_units[]. 번호는 버리고 이름만 name 에, 줄 오른쪽 페이지',
+          '    숫자를 page 에 담아라. 모든 소단원은 is_exercise: false 다.',
+          '이 목차에는 "연습문제" 줄이 없다. 연습문제는 각 소단원 끝에 붙어 있으니',
+          '따로 만들지 마라.',
+          '**매우 중요**: 모든 sub_units 항목의 page 를 빠짐없이 채워라.',
+          '"개념 Check", "개념 Plus", "필수예제", "문제", "연습문제", "실력" 같은 코너 이름은',
+          '단원이 아니다 — 어느 레벨에도 넣지 마라.',
+        ]
+      : [];
   const suryeokLines =
     seriesKey === 'suryeok'
       ? [
@@ -244,6 +265,7 @@ export function buildParseTocPrompt({ pageCount, series = '' }) {
     ...wonriLines,
     ...wonriMiddleLines,
     ...gaeyuLines,
+    ...gaeyuHighLines,
     ...suryeokLines,
     ...gojaengiLines,
     '',

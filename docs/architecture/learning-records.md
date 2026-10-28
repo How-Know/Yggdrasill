@@ -355,9 +355,8 @@ Edge Function `student_textbook_grade` 에 `homework_group_id` 를 함께 보내
 
 ### 아직 정하지 않은 것
 
-- **회차별 출제 부분집합을 어디에 담을지.** 지금은 "정답 시도가 없는 문항"으로
-  그때그때 파생한다(테이블 불필요). 선생님이 손으로 조정하게 하려면
-  `assignment × homework_item_problem` 연결 테이블이 필요하다.
+- ~~회차별 출제 부분집합을 어디에 담을지.~~ → 2026-10-22 결정. 아래 "숙제 배정 문항".
+  선생님이 묶음을 손으로 조정하는 UI 는 아직 없다.
   문항 하나를 여러 시기에 다시 푸는 것 자체는 `student_problem_rounds` 로
   갈라 놓았다 — `docs/architecture/problem-rounds.md`.
 - **통과 판정을 뷰로 둘지 캐시 테이블로 둘지.** 지금은 함수에서 매번 계산한다.
@@ -367,6 +366,35 @@ Edge Function `student_textbook_grade` 에 `homework_group_id` 를 함께 보내
   다시 내는 안. 아직 미결.
 - **집 종이 자가채점의 잠정 통과 확정 흐름.** 학생앱 채점은 위 규칙으로 정리됐지만,
   종이로 풀고 집에서 채점한 경우를 학원 검사에서 확정하는 UI 는 아직 없다.
+
+### 숙제 배정 문항 (2026-10-22)
+
+`homework_assignments` 행 하나가 숙제 한 번이다. 그 배정에 나간 문항을
+`homework_assignment_problems` 에 고정한다. 문항별 통계("이 문항이 숙제로 몇 번
+나갔나", "그날 어떤 문항이 나갔나")의 원자료다.
+
+- **기준**: 배정 시각까지 그 과제 문항(`homework_item_problems`, 제외 문항 빼고)에
+  정답 기록이 없는 문항. 학생앱 오답만 재출제와 같은 기준이다. 100문항 중 60문항을
+  맞힌 뒤 나간 숙제는 40문항으로 기록된다.
+- **쓰기**: `homework_assignments` AFTER INSERT 트리거
+  (`_homework_assignment_sync_problems`). 배정을 만드는 경로가 앱·여러 RPC 로 흩어져
+  있어 트리거 하나로 모두 잡는다. 앱은 쓰지 않는다.
+- **스냅샷 재생성**: 과제를 고치면 `homework_item_problems` 를 지우고 다시 만든다
+  (문항 id 가 바뀐다). 그래서 `crop_id` 를 함께 저장하고, 문항 id 는 `on delete set null` 이다.
+  새 스냅샷이 들어오면 **아직 한 번도 검사하지 않은**(`status = 'assigned'`) 배정만
+  다시 맞춘다. 검사가 끝난 배정은 당시 묶음을 그대로 둔다.
+- **도입 전 배정**: 도입 시점에 검사 전이던 배정만 배정 시각 기준으로 채웠다
+  (`source = 'backfill'`). 이미 검사한 배정은 채우지 않는다.
+- **노출 기록과의 관계**: `learning_exposures`(`teacher_assigned`)는 채점 세션에서
+  남는 "보여 줬다" 기록이고 세션이 필수다. 배정 기록은 이 테이블이 맡는다.
+
+- **알림장 숙제 리스트**: 하원 전 미리보기에는 아직 배정이 없으므로
+  `staff_homework_open_problem_counts_v1` 로 같은 기준의 남은 문항 수를 받아 찍는다.
+  예상시간은 과제별 추천 시간 × 남은 문항 비율이다. 문항 스냅샷이 없는 과제는 예전처럼
+  전체 분량을 쓴다.
+
+정의: `supabase/migrations/20261022100000_homework_assignment_problems.sql`,
+`20261022110000_homework_open_problem_counts.sql`
 
 ---
 
@@ -466,7 +494,9 @@ Edge Function `student_textbook_grade` 에 `homework_group_id` 를 함께 보내
 | `solved_problem_count` | 오늘 푼 문항 수 |
 | `first_try_correct_count` | 푼 문항 중 회차 첫 채점이 수업 시간 안이고 정답인 수(바로 맞힘). 알림장은 푼 문항 대비 정답률로 보인다 |
 | `passed_problem_count` / `avg_tries_to_pass` | 푼 문항 중 하원까지 정답이 나온 수 / 그 문항의 회차 첫 채점부터 정답까지 채점 수 평균(미수행 제외, 이전 수업 포함) |
-| `correction_required_count` / `correction_success_count` | 오늘 처음 틀린 문항 수 / 그중 하원까지 고친 수 |
+| `correction_required_count` / `correction_success_count` | 오늘 채점한 오답 문항 수 / 그중 하원까지 고친 수. 알림장 큰 숫자는 앞의 수, 수정률은 둘의 비율 |
+| `max_correction_tries` | 오늘 고친 문항의 회차 첫 채점부터 정답까지 채점 수 중 최댓값 |
+| `homework_problem_total` / `homework_problem_solved` | 오늘 첫 검사한 숙제 배정(등원 전 배정)에 고정된 문항 수 / 그중 배정 뒤 첫 기록이 맞음·틀림·부분인 수. 알림장 "숙제로 푼 문항" |
 | Flow 행 | 오늘 수업 계획이 있으면 그 과제, 계획이 없으면 이번 수업 시간에 손댄 과제(수행 시간·완료·채점)가 걸린 Flow·교재별 진도 |
 
 - **과제 분모**: 목표 제시 스냅샷(`attendance_records.homework_plan_snapshot_groups`)이
@@ -479,6 +509,11 @@ Edge Function `student_textbook_grade` 에 `homework_group_id` 를 함께 보내
   뺀다. **확인 검사 없이 오늘 완료된 과제는 100%로 본다**(알림장 검사내역 Dart 코드도
   같은 기준). 완료되어 보관된 그룹도 한 그룹으로 센다. 활성 그룹만 묶으면 하위과제마다
   한 건이 된다.
+- **숙제로 푼 문항**: 분모는 `homework_assignment_problems` 에서 온다. 미수행(`skipped`)은
+  풀지 않은 것이고, 미풀이(blank)는 `wrong` 으로 저장되므로 푼 것으로 셈한다.
+  숙제 안 함·남김 검사는 검사 뒤 채점이 수업 풀이이므로 검사 전 기록(학생앱 등)만 본다.
+  문항 기록이 있는 배정이 하나도 없으면 null("기록 없음"), 오늘 숙제가 없으면 "없음".
+  (2026-10-22 v5)
 - **알림장 문항 당 진행속도**: 머문 시간(등원~하원) ÷ 완료 문항. 완료 문항은
   `passed_problem_count`다. 오늘 고친 문항은 이 완료 문항에 이미 들어 있어 다시
   더하지 않는다. 저장 컬럼은 아니고 알림장에서만 나눈다.
@@ -495,9 +530,15 @@ Edge Function `student_textbook_grade` 에 `homework_group_id` 를 함께 보내
     구분할 수 없어 센다.
   - 맞음/틀림/부분만 센다. 미풀이(blank)는 `wrong`, 미수행은 `skipped` 로 저장된다.
   (2026-10-05 v3, `20261005180000_lesson_record_homework_check_rule.sql`)
-- **수정 대상/성공**: 오늘만 본다. 회차(`round_id`)의 첫 채점이 수업 시간 안이고 틀린
-  문항이 대상이다(숙제 검사에서 틀린 문항 포함). 그 뒤 하원까지 정답이 나오면 성공이다.
-  어제 틀린 문항은 오늘 고쳐도 수정 대상에 들어가지 않는다.
+- **수정한 문제 / 수정률** (2026-10-27 v6): 오늘 등원~하원 사이에 채점이 있는 오답
+  문항이다. 이번 수업에서 처음 틀린 문항과, 지난 수업에서 틀리고 이번 수업 시작 전까지
+  정답이 없던 문항을 함께 센다. 지난 수업에 이미 정답으로 끝난 문항은 오늘 다시
+  채점해도 세지 않는다. 숙제 검사에서 틀린 문항도 포함한다. 큰 숫자는 이 문항 수고,
+  수정률은 그중 하원까지 정답이 나온 비율이다. 빈칸은 `wrong` 이라 오답에 들어가고,
+  미수행(`skipped`)은 빠진다.
+- **최대 수정 횟수**: 오늘 고친 문항마다 회차 첫 채점부터 정답까지 채점 수(미수행 제외,
+  이전 수업 포함, 정답 채점 포함)를 세고 그 최댓값을 낸다. 한 번 틀리고 바로 고치면 2회다.
+  평균 수정 횟수는 그대로 오늘 정답으로 끝낸 문항 전체의 평균이다.
 - **문항 기록 범위**(`problem_record_coverage`): 대상 과제 중 문항 단위 기록
   (`homework_item_problems`)이 있는 비율이다. 마이그레이션되지 않은 교재만 있으면
   `none` 이고, 문항 숫자 네 개는 모두 null 이다. 0 이 아니라 "기록 없음"이다.
@@ -552,3 +593,12 @@ Edge Function `student_textbook_grade` 에 `homework_group_id` 를 함께 보내
 - **2026-10-22** — 하원 확정 뒤 알림장 의미 payload를 회차당 최초 한 번 고정한다
   (`20261022002000_todo_sheet_snapshots.sql`). 미리보기는 저장하지 않으며, 과제 현황에서
   저장된 payload로 과거 알림장을 다시 렌더링한다. 적용 전 회차는 백필하지 않는다.
+- **2026-10-22** — 숙제 배정을 문항 단위로 기록한다(§9 "숙제 배정 문항",
+  `20261022100000_homework_assignment_problems.sql`). 배정 트리거가 정답 없는 문항을
+  고정하고, 검사 전 배정만 스냅샷 변경을 따라간다. 알림장 학습 기록에
+  "숙제로 푼 문항"(`homework_problem_total`/`homework_problem_solved`, v5)을 더했다.
+  새 기록 테이블과 알림장 확정본을 퇴원 정리 목록에 넣었다.
+- **2026-10-27** — 알림장 "수정한 문제"는 오늘 채점한 오답 문항 수다. 지난 수업에서 틀리고
+  아직 정답이 없던 문항도 오늘 채점이 있으면 센다. 수정률은 그중 하원까지 고친 비율이고,
+  최대 수정 횟수는 오늘 고친 문항의 정답까지 채점 수 최댓값이다
+  (`20261027170000_lesson_record_correction_pool.sql`, v6).

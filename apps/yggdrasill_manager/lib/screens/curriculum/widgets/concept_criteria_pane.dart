@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
@@ -30,13 +31,46 @@ String criterionDisplayTitle(ConceptCriterion c) {
   return t.trim().isEmpty ? '(제목 없음)' : t.trim();
 }
 
-/// 기준 쪽 상세: 목록 + 편집. 확대·축소와 상관없이 입력은 컨트롤러에 남는다.
+/// 개념 탭 툴바의 "정리 기준" 창. 창을 닫아도 입력은 컨트롤러에 남는다.
+Future<void> showConceptCriteriaDialog(
+  BuildContext context, {
+  required ConceptLibraryController controller,
+  required void Function(String conceptId) onOpenConcept,
+  VoidCallback? onChatPicked,
+}) {
+  return showDialog<void>(
+    context: context,
+    builder: (ctx) {
+      final size = MediaQuery.sizeOf(ctx);
+      return Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.all(24),
+        child: SizedBox(
+          width: math.min(1080, size.width - 48),
+          height: math.min(760, size.height - 48),
+          child: CriteriaDetailPane(
+            controller: controller,
+            onOpenConcept: (id) {
+              Navigator.of(ctx).pop();
+              onOpenConcept(id);
+            },
+            onChatPicked: onChatPicked,
+            onClose: () => Navigator.of(ctx).pop(),
+          ),
+        ),
+      );
+    },
+  );
+}
+
+/// 정리 기준 목록 + 편집. 입력은 컨트롤러에 남는다.
 class CriteriaDetailPane extends StatefulWidget {
   const CriteriaDetailPane({
     super.key,
     required this.controller,
     required this.onOpenConcept,
     this.onChatPicked,
+    this.onClose,
   });
 
   final ConceptLibraryController controller;
@@ -46,6 +80,9 @@ class CriteriaDetailPane extends StatefulWidget {
 
   /// 대화 참고로 골랐을 때(대화 패널을 연다).
   final VoidCallback? onChatPicked;
+
+  /// 창으로 열었을 때 닫기.
+  final VoidCallback? onClose;
 
   @override
   State<CriteriaDetailPane> createState() => _CriteriaDetailPaneState();
@@ -114,6 +151,13 @@ class _CriteriaDetailPaneState extends State<CriteriaDetailPane> {
           label: const Text('새 기준'),
           style: TextButton.styleFrom(foregroundColor: kThinkAccent),
         ),
+        if (widget.onClose != null)
+          IconButton(
+            tooltip: '닫기(입력은 남음)',
+            onPressed: widget.onClose,
+            icon: const Icon(Icons.close, size: 18),
+            color: kThinkSub,
+          ),
       ],
     );
   }
@@ -824,188 +868,5 @@ class _ConfirmCriterionDialogState extends State<_ConfirmCriterionDialog> {
         ),
       ],
     );
-  }
-}
-
-/// 기준 쪽 요약(라이브러리를 크게 볼 때). 열어 둔 개념에 실제로 이은 기준과 핵심 설명, 확인할 수 있는 근거만 보인다.
-class CriteriaSummaryPane extends StatefulWidget {
-  const CriteriaSummaryPane({super.key, required this.controller});
-
-  final ConceptLibraryController controller;
-
-  @override
-  State<CriteriaSummaryPane> createState() => _CriteriaSummaryPaneState();
-}
-
-class _CriteriaSummaryPaneState extends State<CriteriaSummaryPane> {
-  final ScrollController _scroll = ScrollController();
-
-  ConceptLibraryController get _c => widget.controller;
-
-  @override
-  void dispose() {
-    _scroll.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: _c,
-      builder: (context, _) => ThinkPanel(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            ConceptPaneHeader(
-              icon: Icons.rule_folder_outlined,
-              title: '정리 기준',
-              badges: [if (_c.loaded) ThinkBadge('${_c.criteria.length}개')],
-              onExpand: () => _c.setFocus(ConceptWorkspaceFocus.criteria),
-            ),
-            const Divider(color: kThinkBorder, height: 1),
-            Expanded(
-              child: Scrollbar(
-                controller: _scroll,
-                child: ListView(
-                  controller: _scroll,
-                  padding: const EdgeInsets.all(14),
-                  children: [
-                    ..._forConcept(),
-                    const SizedBox(height: 18),
-                    ..._all(),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  List<Widget> _forConcept() {
-    final concept = _c.selectedConcept;
-    final out = <Widget>[const ConceptSectionTitle('열어 둔 개념에 이은 기준')];
-    if (concept == null) {
-      out.add(const ConceptHint('라이브러리에서 개념을 열면 그 개념에 이은 기준이 여기에 보입니다.'));
-      return out;
-    }
-    out.add(Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Text('현재 선택한 개념: ${concept.name.isEmpty ? '(이름 없음)' : concept.name}',
-          style: const TextStyle(color: kThinkText, fontSize: 13, fontWeight: FontWeight.w700)),
-    ));
-    if (!_c.isSavedConcept(concept)) {
-      out.add(const ConceptHint('저장 전 개념이라 이은 기준이 없습니다.'));
-      return out;
-    }
-    final err = _c.linkedCriteriaError(concept.id);
-    final ids = _c.linkedCriteriaOf(concept.id);
-    if (err != null) {
-      out.add(ThinkNotice(text: '이은 기준을 읽지 못했습니다: $err', color: kThinkError, icon: Icons.error_outline));
-      return out;
-    }
-    if (ids == null) {
-      out.add(const ConceptHint('이은 기준을 읽는 중입니다.'));
-      return out;
-    }
-    if (ids.isEmpty) {
-      out.add(const Text('연결된 기준 없음', style: TextStyle(color: kThinkSub, fontSize: 13)));
-      out.add(const SizedBox(height: 4));
-      out.add(const ConceptHint('기준 쪽을 크게 열고 "열어 둔 개념 잇기"로 이을 수 있습니다.'));
-      return out;
-    }
-    for (final id in ids) {
-      final c = _c.criterionById(id);
-      out.add(Padding(
-        padding: const EdgeInsets.only(bottom: 8),
-        child: c == null ? const ConceptHint('(목록에 없는 기준 — 다시 불러오면 보입니다)') : _linkedCard(c),
-      ));
-    }
-    return out;
-  }
-
-  Widget _linkedCard(ConceptCriterion c) {
-    final text = (c.confirmed ? c.body : c.draftBody) ?? '';
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: () => _c.openCriterion(c.id),
-        borderRadius: BorderRadius.circular(8),
-        child: Container(
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: kThinkBorder),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(criterionDisplayTitle(c),
-                  style: const TextStyle(color: kThinkText, fontSize: 13, fontWeight: FontWeight.w700)),
-              const SizedBox(height: 4),
-              Text(
-                text.trim().isEmpty ? '(내용 없음)' : text.trim(),
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: kThinkSub, fontSize: 12, height: 1.5),
-              ),
-              const SizedBox(height: 6),
-              ConceptHint(c.confirmed
-                  ? '근거: 사용자가 직접 이음 · 확정 v${c.version} (${formatDateTime(c.confirmedAt)})'
-                  : '근거: 사용자가 직접 이음 · 아직 확정 전 초안 (${formatDateTime(c.draftSavedAt)} 저장)'),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  List<Widget> _all() {
-    final out = <Widget>[ConceptSectionTitle(_c.loaded ? '기준 목록 (${_c.criteria.length})' : '기준 목록')];
-    if (!_c.loaded) {
-      out.add(ConceptHint(_c.loadError ?? '기준을 읽는 중입니다.'));
-      return out;
-    }
-    final ids = _c.itemIds;
-    if (ids.isEmpty) {
-      out.add(const ConceptHint('아직 정리 기준이 없습니다. 크게 보기에서 추가할 수 있습니다.'));
-      return out;
-    }
-    for (final id in ids) {
-      final c = _c.criterionById(id);
-      final edit = _c.peekEdit(id);
-      Widget row() {
-        final typed = edit?.title.text.trim() ?? '';
-        return InkWell(
-          onTap: () => _c.openCriterion(id),
-          borderRadius: BorderRadius.circular(6),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(c == null ? (typed.isEmpty ? '새 기준' : typed) : criterionDisplayTitle(c),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: id == _c.selectedCriterionId ? kThinkAccent : kThinkText,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                    )),
-                const SizedBox(height: 4),
-                Wrap(
-                    spacing: 6,
-                    runSpacing: 4,
-                    children: criterionBadges(c, dirty: _c.isDirty(id), local: _c.isLocal(id))),
-              ],
-            ),
-          ),
-        );
-      }
-
-      out.add(edit == null ? row() : ListenableBuilder(listenable: edit.listenable, builder: (_, __) => row()));
-    }
-    return out;
   }
 }

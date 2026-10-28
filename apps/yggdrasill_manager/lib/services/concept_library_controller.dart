@@ -26,7 +26,8 @@ class _NeverRelationBackend implements ConceptRelationBackend {
 }
 
 /// 개념 탭에서 크게(상세) 보는 쪽. 다른 쪽은 요약으로 보인다. 좁은 화면에서는 보이는 칸이다.
-enum ConceptWorkspaceFocus { criteria, library }
+/// 왼쪽은 교육과정 흐름이다. 정리 기준은 툴바의 대화창으로 연다.
+enum ConceptWorkspaceFocus { courseMap, library }
 
 /// 처음 항목을 만들 때 한 번 넣는 기본 틀. 코드가 항목을 따로 다루지 않는다(만든 뒤에는 일반 항목과 같다).
 class ConceptCriterionTemplate {
@@ -353,15 +354,16 @@ class ConceptLibraryController extends ChangeNotifier {
     if (!isLocal(id)) unawaited(loadCriterionLinks(id));
   }
 
-  /// 요약에서 골랐을 때: 기준 쪽을 크게 보고 그 항목을 연다.
+  /// 개념 상세의 이은 기준을 눌렀을 때: 그 항목을 고르고 정리 기준 창을 열어 달라고 알린다(초점은 그대로).
+  final ValueNotifier<int> criteriaDialogRequest = ValueNotifier(0);
+
   void openCriterion(String id) {
-    focus = ConceptWorkspaceFocus.criteria;
-    narrowChat = false;
     if (selectedCriterionId != id) {
       selectedCriterionId = id;
       if (!isLocal(id)) unawaited(loadCriterionLinks(id));
     }
     notifyListeners();
+    criteriaDialogRequest.value += 1;
   }
 
   String addCriterion() {
@@ -618,6 +620,28 @@ class ConceptLibraryController extends ChangeNotifier {
         return;
       }
     }
+  }
+
+  /// Think 카드 승인처럼 개념 탭 밖에서 개념이 만들어지거나 고쳐지거나 지워졌다. 개념 탭이 듣고 트리를 다시 읽는다.
+  final ValueNotifier<int> libraryChanged = ValueNotifier(0);
+
+  /// [changed]는 고친 개념(본문·이름·유형·폴더·서술), [removed]는 지운 개념. 열어 둔 개념이면 바로 다시 읽고,
+  /// 읽어 둔 다른 개념은 버려 다음에 열 때 새로 읽게 한다.
+  void externalChange({Iterable<String> changed = const [], Iterable<String> removed = const []}) {
+    for (final id in removed) {
+      conceptRemoved(id);
+    }
+    final open = selectedConcept?.id;
+    for (final id in changed.toSet()) {
+      if (id == open) {
+        unawaited(loadConceptType(id));
+        unawaited(statements.load(id));
+      } else {
+        statements.conceptRemoved(id);
+      }
+    }
+    unawaited(relations.refresh(changed));
+    libraryChanged.value += 1;
   }
 
   void conceptRemoved(String id) {

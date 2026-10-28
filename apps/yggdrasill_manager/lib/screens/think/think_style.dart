@@ -275,6 +275,13 @@ ShapeBorder get thinkDialogShape => RoundedRectangleBorder(
       side: const BorderSide(color: kThinkBorder),
     );
 
+const kMemoryApprovalOnly =
+    '기억의 생성·수정·삭제는 Think가 카드를 제안하고, 그 카드를 승인할 때만 반영됩니다. 이 화면에서는 바로 저장하거나 지우지 않습니다.';
+
+void showMemoryApprovalOnly(BuildContext context) {
+  showThinkSnack(context, kMemoryApprovalOnly, error: true);
+}
+
 void showThinkSnack(BuildContext context, String message, {bool error = false}) {
   ScaffoldMessenger.of(context).showSnackBar(
     SnackBar(

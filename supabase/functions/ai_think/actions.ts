@@ -5,8 +5,9 @@
 // 대화 나누기(propose_conversation_split)는 메시지 범위를 모델에게 받지 않는다. 이번 턴의 사용자 메시지 id는 서버가 넣는다(§7).
 // 설계: docs/architecture/ai-think-actions.md
 
-import type { AiFunctionTool } from '../_shared/ai/types.ts';
+import { isMemoryRelation } from './memory_basis.ts';
 import { EFFORT_TOOL_PROPERTIES, effortReason, normalizeEffort } from '../_shared/code_effort.ts';
+import type { AiFunctionTool } from '../_shared/ai/types.ts';
 import { clip, DEPARTMENT_LABELS as DEPARTMENT_NAMES } from './prompts.ts';
 import { CODE_SECTIONS, codeRequestBrief, codeRequestSection, parseSection } from './code_brief.ts';
 import type { OrganizeToolContext } from './organize.ts';
@@ -30,7 +31,13 @@ export type ActionKind =
   | 'department_criteria_change'
   | 'concept_draft_change'
   | 'concept_criterion_change'
-  | 'concept_draft_rerun';
+  | 'concept_draft_rerun'
+  | 'course_map_change'
+  | 'course_map_create'
+  | 'concept_placement_change'
+  | 'concept_library_change'
+  | 'concept_review_record'
+  | 'concept_relation_change';
 
 export interface ActionRow {
   id: string;
@@ -152,6 +159,12 @@ export interface SplitToolContext {
 /** 기억 저장 제안을 쓸 수 있을 때만 채운다(기능 준비됨, 커서 질문 아님). 한 답변에 기억 카드는 하나만. */
 export interface MemoryToolContext {
   proposed: boolean;
+  /** 이번 요청에서 연 조회 기록. 모델에게 주지 않는다. */
+  sessionId?: string;
+  /** 이번 답변에서 진행 중인 기억 변경 흐름. 없으면 기억 카드는 한 장이다. */
+  flowKey?: string;
+  flowStep?: number;
+  flowSteps?: number;
 }
 
 /** 부서 기능이 준비됐을 때만 채운다(커서 질문 아님). 넘기기 제안은 한 답변에 하나. */
@@ -171,6 +184,12 @@ export interface ActionToolContext {
   organize?: OrganizeToolContext;
   /** 개념 초안 검토 대화에서 열린 초안을 읽었을 때만 */
   conceptDraft?: import('./concept_draft_tools.ts').ConceptDraftToolContext;
+  /** 과정 탐색도·개념 카드 기능이 준비된 요청에서만 */
+  courseMap?: import('./course_map_tools.ts').CourseMapToolContext;
+  /** 개념 검수 작업 이어하기가 준비된 요청에서만. 이 요청이 넘겨받은 작업 임대와 낸 카드 수 */
+  reviewJobs?: import('./concept_review_job_tools.ts').ReviewJobToolContext;
+  /** 개념 출처 원본 다시 읽기가 준비된 요청에서만. 한 답변의 이미지·앞뒤 쪽 한도를 센다. */
+  conceptSources?: import('./concept_source_tools.ts').ConceptSourceToolContext;
   /** get_memory·search_memories 범위 판정 */
   access?: import('./access_context.ts').ConversationAccessState;
   /** 도구로 AI에 전달된 자료 id 기록(스냅샷용) */
@@ -180,7 +199,8 @@ export interface ActionToolContext {
 export const SPLIT_TOOL_NAME = 'propose_conversation_split';
 export const MEMORY_TOOL_NAME = 'propose_memory';
 export const MEMORY_CHANGE_TOOL_NAME = 'propose_memory_card_change';
-export const MEMORY_TOOL_NAMES = new Set([MEMORY_TOOL_NAME, MEMORY_CHANGE_TOOL_NAME]);
+export const MEMORY_RETIRE_TOOL_NAME = 'propose_memory_retire';
+export const MEMORY_TOOL_NAMES = new Set([MEMORY_TOOL_NAME, MEMORY_CHANGE_TOOL_NAME, MEMORY_RETIRE_TOOL_NAME]);
 export const HANDOVER_TOOL_NAME = 'propose_department_handover';
 const DEPARTMENT_IDS = ['lead', 'education', 'product', 'engineering'];
 
@@ -213,6 +233,18 @@ const MEMORY_SCHEMA: Record<string, unknown> = {
   ],
   additionalProperties: false,
 };
+
+const MEMORY_FLOW_SCHEMA = nullable({
+  type: 'object',
+  description: '서로 기대는 기억 변경의 순서. 독립된 한 장이면 null. 1단계는 먼저 바뀌어야 하는 근본 기억이다.',
+  properties: {
+    key: { type: 'string', description: '이 흐름을 묶는 짧은 키. 같은 답변의 단계가 같은 값을 쓴다. 영문 소문자·숫자·_- 만, 40자 이내.' },
+    step: { type: 'integer', description: '이 카드의 순서. 1부터.' },
+    steps: { type: 'integer', description: '흐름 전체 단계 수. 최대 8. 모든 단계가 같은 값이다.' },
+  },
+  required: ['key', 'step', 'steps'],
+  additionalProperties: false,
+});
 
 export const ACTION_TOOLS: AiFunctionTool[] = [
   {
@@ -417,14 +449,27 @@ export const ACTION_TOOLS: AiFunctionTool[] = [
     name: MEMORY_TOOL_NAME,
     description:
       '사용자가 이 대화에서 명시적으로 확정한 결론·원칙을 기억으로 저장하자고 카드로 제안한다. 사용자가 카드에서 승인해야 저장된다. ' +
-      '먼저 search_memories로 같은 기억이 있는지 본다. 같으면 제안하지 않고, 바뀐 것이면 supersedes_id로 대체를 제안한다. 한 답변에 하나만.',
+      '먼저 search_memories가 성공해야 하고, 비교에 쓰는 기억은 get_memory로 원문을 끝까지 읽어야 한다. ' +
+      'duplicate면 새 기억을 제안하지 않는다. hold면 제안하지 않는다. ' +
+      '서로 기대지 않으면 한 답변에 하나만. 서로 기대는 변경은 flow로 1단계(근본)부터 순서대로 여러 장 낼 수 있다.',
     parameters: {
       type: 'object',
       properties: {
         memory: MEMORY_SCHEMA,
         reason: { type: 'string', description: '지금 저장할 만하다고 본 근거: 사용자가 무엇을 언제 확정했는지 한 문장' },
+        relation: {
+          type: 'string',
+          enum: ['duplicate', 'supplement', 'conflict', 'distinct', 'hold'],
+          description: '검색·원문 비교 결과. duplicate 중복, supplement 보완, conflict 충돌, distinct 범위나 시점이 달라 별개, hold 판단 보류',
+        },
+        compared_ids: nullable({
+          type: 'array',
+          items: { type: 'string' },
+          description: '비교에 쓴 기억 id. 원문을 끝까지 읽은 것만. 없으면 null. 대체 대상은 supersedes_id에 둔다.',
+        }),
+        flow: MEMORY_FLOW_SCHEMA,
       },
-      required: ['memory', 'reason'],
+      required: ['memory', 'reason', 'relation', 'compared_ids', 'flow'],
       additionalProperties: false,
     },
   },
@@ -440,8 +485,34 @@ export const ACTION_TOOLS: AiFunctionTool[] = [
         op: { type: 'string', enum: ['revise', 'replace', 'withdraw'] },
         memory: { ...MEMORY_SCHEMA, type: ['object', 'null'], description: '고치거나 바꿀 내용. withdraw면 null.' },
         reason: { type: 'string', description: '왜 바꾸거나 없애야 하는지 한 문장' },
+        relation: {
+          type: ['string', 'null'],
+          enum: ['duplicate', 'supplement', 'conflict', 'distinct', 'hold', null],
+          description: 'revise·replace면 비교 결과. withdraw면 null.',
+        },
+        compared_ids: nullable({
+          type: 'array',
+          items: { type: 'string' },
+          description: '비교에 쓴 기억 id. withdraw거나 없으면 null.',
+        }),
       },
-      required: ['target_action_id', 'op', 'memory', 'reason'],
+      required: ['target_action_id', 'op', 'memory', 'reason', 'relation', 'compared_ids'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: MEMORY_RETIRE_TOOL_NAME,
+    description:
+      '확정된 기억을 보관으로 내리자고 카드로 제안한다. 행과 이력은 지우지 않는다. 사용자가 승인해야 보관된다. ' +
+      'memory_id는 get_memory로 원문을 끝까지 읽은 기억이다. 서로 기대는 변경이면 flow로 순서를 붙인다.',
+    parameters: {
+      type: 'object',
+      properties: {
+        memory_id: { type: 'string', description: '보관으로 내릴 확정 기억 id' },
+        reason: { type: 'string', description: '왜 더 쓰지 않아야 하는지 한 문장' },
+        flow: MEMORY_FLOW_SCHEMA,
+      },
+      required: ['memory_id', 'reason', 'flow'],
       additionalProperties: false,
     },
   },
@@ -474,6 +545,7 @@ export const ACTION_TOOL_LABELS: Record<string, string> = {
   [SPLIT_TOOL_NAME]: '대화 나누기 제안',
   [MEMORY_TOOL_NAME]: '기억 저장 제안',
   [MEMORY_CHANGE_TOOL_NAME]: '기억 카드 변경 제안',
+  [MEMORY_RETIRE_TOOL_NAME]: '기억 내리기 제안',
   [HANDOVER_TOOL_NAME]: '부서 넘기기 제안',
 };
 
@@ -882,9 +954,73 @@ const MEMORY_ERRORS: [code: string, summary: string, next: string][] = [
   ['scope_department_required', '부서 없음', '부서 범위면 scope_department를 준다. 모든 부서에 해당하면 common으로 둔다.'],
   ['memory_kind_invalid', '종류 오류', 'kind는 decision 또는 principle이다.'],
   ['memory_scope_invalid', '범위 오류', 'memory_scope는 common 또는 department다.'],
+  ['memory_relation_required', '비교 분류 없음', 'relation은 duplicate·supplement·conflict·distinct·hold 중 하나다. 판단이 안 서면 hold로 두고 제안하지 않는다.'],
+  ['memory_search_required', '검색을 하지 않음', 'search_memories로 관련 기억을 찾은 뒤에 제안한다. 검색하지 않은 것을 관련 기억이 없다고 말하지 않는다.'],
+  ['memory_search_failed', '검색 실패', '검색이 실패했다. 결과가 0건인 것과 다르다. 이 실패를 근거로 제안하지 않고, 검색을 다시 한다.'],
+  ['memory_read_missing', '원문을 읽지 않음', '비교에 쓴 기억은 get_memory로 원문을 끝까지 읽은 뒤 id를 넣는다. 발췌만으로는 비교가 끝나지 않는다.'],
+  ['memory_read_incomplete', '원문이 다 전달되지 않음', 'get_memory가 complete true가 될 때까지 offset으로 이어 읽은 뒤 다시 제안한다.'],
+  ['memory_reread_required', '비교한 판이 바뀜', '읽는 동안 그 기억의 판이 바뀌었다. offset 0부터 다시 읽고 비교한 뒤 제안한다.'],
+  ['memory_basis_forbidden', '비교할 수 없는 기억', '이 대화에서 볼 수 없는 기억은 비교 근거가 아니다. 그 id를 빼고 다시 판단한다.'],
+  ['memory_duplicate_classified', '이미 있는 기억과 같음', '새 기억을 제안하지 않는다. memory_id의 기존 기억을 사용자에게 알린다.'],
+  ['memory_comparison_held', '비교를 보류함', '판단이 보류됐다. 카드를 내지 않고, 무엇을 더 확인해야 하는지 말한다.'],
+  ['memory_compare_target_required', '비교 대상 없음', '보완이나 충돌이면 끝까지 읽은 기억 id를 compared_ids 또는 supersedes_id에 넣는다.'],
+  ['memory_duplicate_target_required', '중복 대상 없음', '중복이면 끝까지 읽은 기존 기억 id를 compared_ids에 넣는다. 새 기억은 제안하지 않는다.'],
+  ['memory_proposal_rejected', '이미 거절된 같은 제안', '같은 제목·같은 본문은 다시 제안하지 않는다. 내용이 달라졌으면 그 차이를 적어 새로 제안한다.'],
+  ['memory_compare_unavailable', '비교 기록을 남길 수 없음', '지금은 기억 제안을 하지 않는다. 실행 환경 기능 상태를 따른다.'],
+  ['memory_read_session_invalid', '조회 기록이 없음', 'search_memories부터 다시 한다. 임의의 조회 번호를 만들지 않는다.'],
+  ['memory_retire_target_required', '내릴 기억 없음', 'propose_memory_retire의 memory_id에 끝까지 읽은 확정 기억 id를 넣는다.'],
+  ['memory_flow_invalid', '흐름 형식 오류', 'flow는 key·step·steps다. step은 1부터, steps는 step 이상 8 이하다. 독립된 한 장이면 flow를 null로 둔다.'],
+  ['memory_flow_order', '흐름 순서가 아님', '1단계(근본)를 먼저 제안한 뒤 다음 step을 낸다. 같은 key·같은 steps여야 한다.'],
+  ['memory_flow_duplicate', '같은 단계가 이미 있음', '그 흐름의 그 단계는 이미 대기 중이다. 다시 내지 않는다.'],
+  ['memory_flow_waiting', '앞 단계가 아직 승인되지 않음', '앞 단계 카드가 승인된 뒤에 이 단계를 승인한다.'],
+  ['memory_flow_blocked', '앞 단계가 막힘', '앞 단계가 거절되거나 실패했다. 이 단계는 승인하지 않고, 흐름을 다시 판단한다.'],
 ];
 
 const UUID_IN_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+interface MemoryFlow {
+  key: string;
+  step: number;
+  steps: number;
+}
+
+function memoryFlow(raw: unknown): MemoryFlow | null {
+  if (raw == null) return null;
+  if (typeof raw !== 'object' || Array.isArray(raw)) throw new Error('memory_flow_invalid');
+  const f = raw as Record<string, unknown>;
+  const key = typeof f.key === 'string' ? f.key.trim() : '';
+  const step = f.step;
+  const steps = f.steps;
+  if (!/^[a-z0-9][a-z0-9_-]{0,39}$/.test(key) || typeof step !== 'number' || typeof steps !== 'number') {
+    throw new Error('memory_flow_invalid');
+  }
+  if (!Number.isInteger(step) || !Number.isInteger(steps) || step < 1 || steps < step || steps > 8) {
+    throw new Error('memory_flow_invalid');
+  }
+  return { key, step, steps };
+}
+
+/** 제안이 성공하기 전에는 흐름 상태를 바꾸지 않는다. */
+function memoryFlowBlock(mem: MemoryToolContext, flow: MemoryFlow | null): string | null {
+  if (!flow) return mem.proposed ? 'memory_already_proposed' : null;
+  if (!mem.flowKey) {
+    if (mem.proposed) return 'memory_already_proposed';
+    if (flow.step !== 1) return 'memory_flow_order';
+    return null;
+  }
+  if (flow.key !== mem.flowKey || flow.steps !== mem.flowSteps || flow.step !== (mem.flowStep ?? 0) + 1) {
+    return 'memory_flow_order';
+  }
+  return null;
+}
+
+function memoryFlowCommit(mem: MemoryToolContext, flow: MemoryFlow | null) {
+  mem.proposed = true;
+  if (!flow) return;
+  mem.flowKey = flow.key;
+  mem.flowStep = flow.step;
+  mem.flowSteps = flow.steps;
+}
 
 function memoryError(name: string, e: unknown): ToolRunResult {
   const message = e instanceof Error ? e.message : String(e);
@@ -892,7 +1028,7 @@ function memoryError(name: string, e: unknown): ToolRunResult {
   if (!known) throw e;
   const id = message.slice(message.indexOf(known[0])).match(UUID_IN_RE)?.[0] ?? null;
   const extra: Record<string, unknown> = { next: known[2] };
-  if (id && known[0] === 'memory_duplicate_active') extra.memory_id = id;
+  if (id && (known[0] === 'memory_duplicate_active' || known[0] === 'memory_duplicate_classified')) extra.memory_id = id;
   else if (id) extra.pending_action_id = id;
   return bad(name, known[0], known[1], extra);
 }
@@ -900,17 +1036,38 @@ function memoryError(name: string, e: unknown): ToolRunResult {
 async function proposeMemory(name: string, args: Record<string, unknown>, src: ActionToolSource, ctx: ActionToolContext): Promise<ToolRunResult> {
   const mem = ctx.memory;
   if (!mem) return bad(name, 'memory_unavailable', '지금은 제안할 수 없음', { next: '실행 환경 기능 상태 메모를 따른다. 제안하지 않는다.' });
-  if (mem.proposed) return bad(name, 'memory_already_proposed', '이미 제안함', { next: '한 답변에 기억 카드는 하나만 낸다.' });
-  const { memory, missing: need } = memoryPayload(args.memory);
-  if (need.length > 0) return missing(name, need);
-  const reason = str(args.reason, 500);
-  let row: ActionRow;
+  let flow: MemoryFlow | null;
   try {
-    row = await src.proposeAction(ctx.conversationId, 'save_memory', { memory, reason }, {});
+    flow = memoryFlow(args.flow);
   } catch (e) {
     return memoryError(name, e);
   }
-  mem.proposed = true;
+  const blocked = memoryFlowBlock(mem, flow);
+  if (blocked === 'memory_already_proposed') {
+    return bad(name, blocked, '이미 제안함', { next: '흐름이 아니면 한 답변에 기억 카드는 하나다. 서로 기대는 변경은 같은 flow로 1단계부터 이어서 낸다.' });
+  }
+  if (blocked) return memoryError(name, new Error(blocked));
+  const { memory, missing: need } = memoryPayload(args.memory);
+  if (need.length > 0) return missing(name, need);
+  if (args.relation === 'retire' || !isMemoryRelation(args.relation)) {
+    return bad(name, 'memory_relation_required', '비교 분류 없음', { next: MEMORY_ERRORS.find(([c]) => c === 'memory_relation_required')![2] });
+  }
+  const reason = str(args.reason, 500);
+  const compared = Array.isArray(args.compared_ids) ? args.compared_ids.filter((id): id is string => typeof id === 'string') : [];
+  let row: ActionRow;
+  try {
+    row = await src.proposeAction(ctx.conversationId, 'save_memory', {
+      memory,
+      reason,
+      read_session: mem.sessionId ?? null,
+      relation: args.relation,
+      compared_ids: compared,
+      ...(flow ? { flow } : {}),
+    }, {});
+  } catch (e) {
+    return memoryError(name, e);
+  }
+  memoryFlowCommit(mem, flow);
   return out(name, { ok: true, action_id: row.id, status: 'proposed', note: MEMORY_PROPOSED_NOTE }, `"${memory.title}"`, row);
 }
 
@@ -938,15 +1095,71 @@ async function proposeMemoryChange(
     need.push(...parsed.missing);
   }
   if (need.length > 0) return missing(name, need);
+  if (op !== 'withdraw' && (args.relation === 'retire' || !isMemoryRelation(args.relation))) {
+    return bad(name, 'memory_relation_required', '비교 분류 없음', { next: 'revise·replace는 relation이 필요하다. 판단이 안 서면 제안하지 않는다.' });
+  }
   const reason = str(args.reason, 500);
+  const compared = Array.isArray(args.compared_ids) ? args.compared_ids.filter((id): id is string => typeof id === 'string') : [];
   let row: ActionRow;
   try {
-    row = await src.proposeAction(ctx.conversationId, 'memory_card_change', { target_action_id: target, op, memory, reason }, {});
+    row = await src.proposeAction(ctx.conversationId, 'memory_card_change', {
+      target_action_id: target,
+      op,
+      memory,
+      reason,
+      read_session: op === 'withdraw' ? null : mem.sessionId ?? null,
+      relation: op === 'withdraw' ? null : args.relation,
+      compared_ids: op === 'withdraw' ? null : compared,
+    }, {});
   } catch (e) {
     return memoryError(name, e);
   }
   mem.proposed = true;
   return out(name, { ok: true, action_id: row.id, status: 'proposed', note: MEMORY_CHANGE_NOTE }, `${op} "${row.preview?.target_title ?? ''}"`, row);
+}
+
+const MEMORY_RETIRE_NOTE =
+  '기억 내리기 카드가 사용자에게 보였다. 아직 보관되지 않았다. 사용자가 승인해야 그 기억이 보관으로 내려가고, 행과 이력은 남는다. 내렸다고 말하지 않는다.';
+
+async function proposeMemoryRetire(
+  name: string,
+  args: Record<string, unknown>,
+  src: ActionToolSource,
+  ctx: ActionToolContext,
+): Promise<ToolRunResult> {
+  const mem = ctx.memory;
+  if (!mem) return bad(name, 'memory_unavailable', '지금은 제안할 수 없음', { next: '실행 환경 기능 상태 메모를 따른다. 제안하지 않는다.' });
+  let flow: MemoryFlow | null;
+  try {
+    flow = memoryFlow(args.flow);
+  } catch (e) {
+    return memoryError(name, e);
+  }
+  const blocked = memoryFlowBlock(mem, flow);
+  if (blocked === 'memory_already_proposed') {
+    return bad(name, blocked, '이미 제안함', { next: '흐름이 아니면 한 답변에 기억 카드는 하나다. 서로 기대는 변경은 같은 flow로 1단계부터 이어서 낸다.' });
+  }
+  if (blocked) return memoryError(name, new Error(blocked));
+  const memoryId = uuid(args.memory_id);
+  if (!memoryId) return missing(name, ['memory_id']);
+  const reason = str(args.reason, 500);
+  let row: ActionRow;
+  try {
+    row = await src.proposeAction(ctx.conversationId, 'save_memory', {
+      op: 'retire',
+      memory_id: memoryId,
+      reason,
+      read_session: mem.sessionId ?? null,
+      relation: 'retire',
+      compared_ids: [memoryId],
+      ...(flow ? { flow } : {}),
+    }, {});
+  } catch (e) {
+    return memoryError(name, e);
+  }
+  memoryFlowCommit(mem, flow);
+  const title = typeof row.preview.title === 'string' ? row.preview.title : '';
+  return out(name, { ok: true, action_id: row.id, status: 'proposed', note: MEMORY_RETIRE_NOTE }, title ? `"${title}"` : memoryId, row);
 }
 
 const HANDOVER_NOTE =
@@ -1058,6 +1271,8 @@ export async function dispatchActionTool(
       return await proposeMemory(name, args, src, ctx);
     case MEMORY_CHANGE_TOOL_NAME:
       return await proposeMemoryChange(name, args, src, ctx);
+    case MEMORY_RETIRE_TOOL_NAME:
+      return await proposeMemoryRetire(name, args, src, ctx);
     case HANDOVER_TOOL_NAME:
       return await proposeHandover(name, args, src, ctx);
     default:
@@ -1088,7 +1303,28 @@ const KIND_LABELS: Record<string, string> = {
   concept_draft_change: '개념 초안 변경 제안',
   concept_criterion_change: '정리 기준 고치기 제안',
   concept_draft_rerun: '다시 정리 제안',
+  course_map_change: '과정 탐색도 고치기 제안',
+  course_map_create: '새 과정 제안',
+  concept_placement_change: '개념 배치 제안',
+  concept_library_change: '개념 고치기 제안',
+  concept_review_record: '개념 검토 기록 제안',
+  concept_relation_change: '개념 관계 고치기 제안',
 };
+
+const COURSE_THINK_KINDS = new Set([
+  'course_map_change',
+  'course_map_create',
+  'concept_placement_change',
+  'concept_library_change',
+  'concept_review_record',
+  'concept_relation_change',
+]);
+
+/** 항목별로 승인하는 카드의 결과(반영·실패·뺌 수). */
+function itemResultNote(result: Record<string, unknown> | null): string {
+  if (!result || typeof result.applied !== 'number') return '';
+  return ` (반영 ${result.applied}개, 실패 ${Number(result.failed ?? 0)}개, 뺌 ${Number(result.skipped ?? 0)}개)`;
+}
 
 /** 정리 패널에 모이는 종류(코드·삭제 제안은 빠진다). 앱 ThinkActionKind.isOrganize와 같다. */
 export const ORGANIZE_KINDS = new Set<string>([
@@ -1157,6 +1393,19 @@ function actionLine(a: ActionRow): string {
   if (a.kind === 'mark_important' && a.status === 'applied') extra = ' (화면에 중요 표시됨)';
   if (a.kind === 'progress_summary' && a.status === 'applied') extra = ' (이 대화의 진행 요약으로 저장됨)';
   if (a.kind === 'department_criteria_change' && a.status === 'applied') extra = ' (부서 기준이 바뀜)';
+  if (COURSE_THINK_KINDS.has(a.kind)) {
+    const items = Array.isArray(p.items) ? p.items : [];
+    const head = items[0] && typeof items[0] === 'object' ? items[0] as Record<string, unknown> : {};
+    const ends = (v: unknown) => String((v && typeof v === 'object' ? (v as Record<string, unknown>).name : '') ?? '');
+    const first = a.kind === 'concept_relation_change'
+      ? (head.from ? `${ends(head.from)} → ${ends(head.to)}` : '')
+      : String(head.name ?? '');
+    const name = (a.kind === 'concept_review_record' || a.kind === 'concept_relation_change') && first
+      ? `${first}${items.length > 1 ? ` 외 ${items.length - 1}개` : ''}`
+      : String(p.course_name ?? p.name ?? '');
+    if (a.status === 'applied') extra = itemResultNote(a.result);
+    return `- ${KIND_LABELS[a.kind]}${name ? ` "${clip(name, 80)}"` : ''}: ${label}${extra} (카드 id: ${a.id})`;
+  }
   return `- ${KIND_LABELS[a.kind] ?? a.kind}${what ? ` "${clip(what, 80)}"` : ''}: ${label}${extra}`;
 }
 
@@ -1201,9 +1450,47 @@ function codeLine(r: CodeRequestDetail): string {
 /** 대화 기록 뒤, 이번 질문 앞에 넣는다. 작업이 없으면 null. */
 export function workStateNote(state: WorkState): string | null {
   if (state.actions.length === 0 && state.codeRequests.length === 0) return null;
-  const lines = ['[이 대화의 작업 상태. 최신이 위. 사용자가 카드에서 승인·거절한 결과이며, 진행 상황을 물으면 이것을 근거로 답한다.]'];
+  const lines = ['[이 대화의 작업 상태. 최신이 위. 사용자가 카드에서 승인·거절한 결과이며, 진행 상황을 물으면 이것을 근거로 답한다. 승인 대기 카드는 확정 기억이나 확정 지침이 아니다.]'];
   const actions = state.actions.filter((a) => !['code_request', 'code_change', 'code_plan'].includes(a.kind) || a.status !== 'applied');
   for (const a of actions.slice(0, 10)) lines.push(actionLine(a));
   for (const r of state.codeRequests.slice(0, 8)) lines.push(codeLine(r));
+  return lines.join('\n');
+}
+
+/** 사용자가 고른 다른 대화의 참고. 이 대화의 진행 요약으로 복사한 것이 아니다. */
+export function restoredContextNote(input: {
+  status: 'ok' | 'empty' | 'not_found' | 'forbidden' | 'error';
+  title?: string;
+  purpose?: string;
+  decided?: string[];
+  workNote?: string | null;
+  workFailed?: boolean;
+}): string {
+  const title = (input.title ?? '').trim() || '고른 대화';
+  if (input.status === 'not_found') {
+    return '[고른 대화를 찾지 못했다. 작업이 없는 것이 아니다. 이 실패로 새 작업이나 기억을 만들지 않는다.]';
+  }
+  if (input.status === 'forbidden') {
+    return '[고른 대화를 볼 수 없다. 작업이 없는 것이 아니다. 이 실패로 새 작업이나 기억을 만들지 않는다.]';
+  }
+  if (input.status === 'error') {
+    return '[고른 대화의 승인 요약과 작업 상태를 읽지 못했다. 작업이 없는 것이 아니다. 이 실패로 새 작업이나 기억을 만들지 않는다.]';
+  }
+  if (input.status === 'empty') {
+    return `[대화 "${title}"에는 승인된 진행 요약과 작업 상태가 없다. 없는 것과 읽지 못한 것은 다르다.]`;
+  }
+  const lines = [
+    `[다른 대화 "${title}"에서 읽어 온 참고. 이 대화의 진행 요약으로 복사하지 않았다. 승인 대기 카드는 확정 기억이나 확정 지침이 아니다.]`,
+  ];
+  if (input.purpose) {
+    lines.push(`승인된 진행 요약의 목적: ${input.purpose}`);
+    const decided = (input.decided ?? []).filter((t) => t.trim());
+    lines.push(decided.length > 0 ? `사용자가 확정한 사항: ${decided.join(' / ')}` : '사용자가 확정한 사항: 없음');
+  } else {
+    lines.push('승인된 진행 요약은 없다.');
+  }
+  if (input.workFailed) lines.push('[그 대화의 작업 상태를 읽지 못했다. 작업이 없는 것이 아니다.]');
+  else if (input.workNote) lines.push(input.workNote);
+  else lines.push('작업 상태 기록은 없다.');
   return lines.join('\n');
 }

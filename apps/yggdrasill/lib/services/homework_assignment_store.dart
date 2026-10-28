@@ -283,6 +283,33 @@ class HomeworkAssignmentStore {
     _bump();
   }
 
+  /// 서버에서 활성 배정을 바꾼 직후 부른다. 마지막 목록은 새 목록이 올 때까지
+  /// 그대로 그려 카드가 사라졌다 나타나지 않게 하고, 쓰기 전에 시작된 조회가
+  /// 캐시를 덮지 못하도록 세대만 올린다. [removedItemIds]는 활성 목록에서
+  /// 빠진 것이 확실한 과제라 미리 지운다.
+  void _markActiveAssignmentsStale(
+    String studentId, {
+    Iterable<String> removedItemIds = const <String>[],
+    Iterable<String> removedFromStatuses = const <String>[],
+  }) {
+    final key = studentId.trim();
+    if (key.isEmpty) return;
+    _activeAssignmentLoadGenerationByStudent[key] =
+        (_activeAssignmentLoadGenerationByStudent[key] ?? 0) + 1;
+    final removed = removedItemIds.map((id) => id.trim()).toSet();
+    final cached = _activeAssignmentsCacheByStudent[key];
+    if (removed.isEmpty || cached == null) return;
+    final statuses = removedFromStatuses.toSet();
+    _activeAssignmentsCacheByStudent[key] =
+        List<HomeworkAssignmentDetail>.unmodifiable(
+      cached.where(
+        (a) =>
+            !removed.contains(a.homeworkItemId.trim()) ||
+            (statuses.isNotEmpty && !statuses.contains(a.status)),
+      ),
+    );
+  }
+
   /// 홈 복구 시 현재 등원 학생 캐시만 무효화하고 UI rebuild는 한 번만 발생시킨다.
   void invalidateActiveAssignmentsForStudents(Iterable<String> studentIds) {
     final ids =
@@ -1648,8 +1675,7 @@ class HomeworkAssignmentStore {
           'status',
           const ['assigned', 'in_progress', 'carried_to_class'],
         );
-    _activeAssignmentsCacheByStudent.remove(normalizedStudentId);
-    _activeAssignmentsLoadCompletedForStudent.remove(normalizedStudentId);
+    _markActiveAssignmentsStale(normalizedStudentId);
     _bump();
   }
 
@@ -1759,8 +1785,7 @@ class HomeworkAssignmentStore {
           : const <String, dynamic>{};
       final nextDueRaw = '${row['next_due_at'] ?? ''}'.trim();
       final attendanceRaw = '${row['attendance_id'] ?? ''}'.trim();
-      _activeAssignmentsCacheByStudent.remove(sid);
-      _activeAssignmentsLoadCompletedForStudent.remove(sid);
+      _markActiveAssignmentsStale(sid);
       _bump();
       return HomeworkAssignmentOutcomeResult(
         groupCheckId: '${row['group_check_id'] ?? requestId}'.trim(),
@@ -1813,8 +1838,7 @@ class HomeworkAssignmentStore {
           ? Map<String, dynamic>.from(raw)
           : const <String, dynamic>{};
       final nextDueRaw = '${row['next_due_at'] ?? ''}'.trim();
-      _activeAssignmentsCacheByStudent.remove(sid);
-      _activeAssignmentsLoadCompletedForStudent.remove(sid);
+      _markActiveAssignmentsStale(sid);
       _bump();
       return HomeworkAssignmentOutcomeResult(
         groupCheckId: '${row['group_check_id'] ?? requestId}'.trim(),
@@ -1856,8 +1880,7 @@ class HomeworkAssignmentStore {
       final row = raw is Map
           ? Map<String, dynamic>.from(raw)
           : const <String, dynamic>{};
-      _activeAssignmentsCacheByStudent.remove(sid);
-      _activeAssignmentsLoadCompletedForStudent.remove(sid);
+      _markActiveAssignmentsStale(sid);
       _bump();
       return HomeworkStructuredGradingRollbackResult(
         rolledBackCount: (row['rolled_back_count'] as num?)?.toInt() ?? 0,
@@ -2654,8 +2677,17 @@ class HomeworkAssignmentStore {
           .eq('student_id', studentId)
           .inFilter('status', statuses)
           .inFilter('homework_item_id', itemIds);
-      _activeAssignmentsCacheByStudent.remove(studentId.trim());
-      _activeAssignmentsLoadCompletedForStudent.remove(studentId.trim());
+      const activeStatuses = <String>{
+        'assigned',
+        'in_progress',
+        'carried_to_class',
+      };
+      _markActiveAssignmentsStale(
+        studentId,
+        removedItemIds:
+            activeStatuses.contains(nextStatus) ? const <String>[] : itemIds,
+        removedFromStatuses: statuses,
+      );
       for (final due in affectedDueDates) {
         await _normalizeAssignedOrderForDueDateIso(
           academyId: academyId,

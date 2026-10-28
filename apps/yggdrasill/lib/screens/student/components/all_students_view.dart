@@ -18,7 +18,6 @@ import '../../../models/session_override.dart';
 import '../../../widgets/student_card.dart';
 import '../../../widgets/student_profile_avatar.dart';
 import '../../../models/group_info.dart';
-import '../../../widgets/student_registration_dialog.dart';
 import '../student_profile_page.dart';
 import '../../../widgets/group_registration_dialog.dart';
 import '../../../services/data_manager.dart';
@@ -33,6 +32,11 @@ import '../../../widgets/textbook_flow_link_action.dart';
 import '../../../app_overlays.dart';
 import '../../../theme/ygg_semantic_colors.dart';
 import '../../../screens/design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
+import '../../../widgets/app_dialog_action_button.dart';
+import '../../../widgets/home_grading_edit_icon.dart';
+import '../../../widgets/schedule_calendar_icon.dart';
+import '../../../widgets/student_detail_icons.dart';
+import 'student_detail_menu_actions.dart';
 import '../../../widgets/solid_capsule_action_bar.dart';
 import 'student_promotion_dialog.dart';
 import 'student_notification_consent_dialog.dart';
@@ -50,6 +54,23 @@ const double _studentHeaderHeight = 76;
 const bool _kStudentListDebug =
     bool.fromEnvironment('YG_STUDENT_LIST_DEBUG', defaultValue: false);
 
+/// 학생 상세의 수정·휴원·퇴원을 하단 추가 옆 버튼에 넘길 때 쓰는 동작.
+class StudentDetailMenuActions {
+  const StudentDetailMenuActions({
+    required this.hasStudent,
+    required this.isPaused,
+    this.onEdit,
+    this.onTogglePause,
+    this.onWithdraw,
+  });
+
+  final bool hasStudent;
+  final bool isPaused;
+  final Future<void> Function()? onEdit;
+  final Future<void> Function()? onTogglePause;
+  final Future<void> Function()? onWithdraw;
+}
+
 class AllStudentsView extends StatefulWidget {
   final List<StudentWithInfo> students;
   final List<GroupInfo> groups;
@@ -66,6 +87,7 @@ class AllStudentsView extends StatefulWidget {
   final Function(StudentWithInfo) onStudentUpdated;
   final Map<String, Set<String>>? activeFilter;
   final Function(Map<String, Set<String>>?) onFilterChanged;
+  final ValueChanged<StudentDetailMenuActions>? onDetailMenuChanged;
 
   const AllStudentsView({
     Key? key,
@@ -84,6 +106,7 @@ class AllStudentsView extends StatefulWidget {
     required this.onStudentUpdated,
     this.activeFilter,
     required this.onFilterChanged,
+    this.onDetailMenuChanged,
   }) : super(key: key);
 
   @override
@@ -96,6 +119,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
   int _detailsWeekOffset = 0; // 0: 이번주, 1: 다음주 ...
   bool _showGroupOverlay = false;
   bool _initialDetailsSeeded = false;
+  bool _detailMenuPublishScheduled = false;
   final Map<String, List<StudentFlow>> _flowByStudentId = {};
   final Set<String> _flowLoadingStudentIds = <String>{};
 
@@ -188,6 +212,16 @@ class _AllStudentsViewState extends State<AllStudentsView> {
     super.initState();
     unawaited(_primeFlowsForStudents(widget.students));
     _seedInitialDetailsStudent();
+    DataManager.instance.studentPausePeriodsRevision
+        .addListener(_publishDetailMenu);
+    _publishDetailMenu();
+  }
+
+  @override
+  void dispose() {
+    DataManager.instance.studentPausePeriodsRevision
+        .removeListener(_publishDetailMenu);
+    super.dispose();
   }
 
   @override
@@ -197,8 +231,85 @@ class _AllStudentsViewState extends State<AllStudentsView> {
       unawaited(_primeFlowsForStudents(widget.students));
       if (!_initialDetailsSeeded && widget.students.isNotEmpty) {
         setState(() => _seedInitialDetailsStudent());
+        _publishDetailMenu();
       }
     }
+  }
+
+  StudentWithInfo? _freshDetails() {
+    final current = _detailsStudent;
+    if (current == null) return null;
+    return _findStudentById(current.student.id) ?? current;
+  }
+
+  void _publishDetailMenu() {
+    if (widget.onDetailMenuChanged == null || _detailMenuPublishScheduled) {
+      return;
+    }
+    _detailMenuPublishScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _detailMenuPublishScheduled = false;
+      if (!mounted) return;
+      final student = _detailsStudent;
+      final paused = student != null &&
+          DataManager.instance.getOpenPauseForStudent(student.student.id) !=
+              null;
+      widget.onDetailMenuChanged!(
+        StudentDetailMenuActions(
+          hasStudent: student != null,
+          isPaused: paused,
+          onEdit: student == null ? null : _editCurrentStudent,
+          onTogglePause: student == null ? null : _togglePauseCurrent,
+          onWithdraw: student == null ? null : _withdrawCurrent,
+        ),
+      );
+    });
+  }
+
+  Future<void> _refreshDetailsAfterPause() async {
+    await DataManager.instance.loadStudents();
+    if (!mounted) return;
+    setState(() {
+      final sid = _detailsStudent?.student.id;
+      if (sid != null && sid.isNotEmpty) {
+        final idx = DataManager.instance.students
+            .indexWhere((s) => s.student.id == sid);
+        if (idx != -1) {
+          _detailsStudent = DataManager.instance.students[idx];
+        }
+      }
+    });
+    _publishDetailMenu();
+  }
+
+  Future<void> _editCurrentStudent() async {
+    final info = _freshDetails();
+    if (info == null || !mounted) return;
+    await editStudentFromDetail(context: context, student: info.student);
+  }
+
+  Future<void> _togglePauseCurrent() async {
+    final info = _freshDetails();
+    if (info == null || !mounted) return;
+    await toggleStudentPauseFromDetail(
+      context: context,
+      student: info.student,
+      onRefresh: _refreshDetailsAfterPause,
+    );
+  }
+
+  Future<void> _withdrawCurrent() async {
+    final info = _freshDetails();
+    if (info == null || !mounted) return;
+    await withdrawStudentFromDetail(
+      context: context,
+      student: info.student,
+      onClosed: () {
+        if (!mounted) return;
+        setState(() => _detailsStudent = null);
+        _publishDetailMenu();
+      },
+    );
   }
 
   Future<void> _handleTextbookDropForStudent(String studentId) async {
@@ -323,12 +434,14 @@ class _AllStudentsViewState extends State<AllStudentsView> {
       _detailsStudent = s;
       _detailsWeekOffset = 0; // 학생 변경 시 이번주로 리셋
     });
+    _publishDetailMenu();
   }
 
   void _clearDetails() {
     setState(() {
       _detailsStudent = null;
     });
+    _publishDetailMenu();
   }
 
   bool get _hasGroupFilter {
@@ -1071,8 +1184,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                             ],
                           ),
                         ),
-                        const SizedBox(height: 20),
-                        const SizedBox(height: 5),
+                        const SizedBox(height: 48),
                         Expanded(
                           child: GestureDetector(
                             behavior: HitTestBehavior.translucent,
@@ -1150,7 +1262,6 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const SizedBox(height: 1),
-                        const SizedBox(height: 5),
                         Padding(
                           padding: const EdgeInsets.fromLTRB(0, 0, 12, 0),
                           child: SizedBox(
@@ -1225,8 +1336,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                             ),
                           ),
                         ),
-                        const SizedBox(height: 20),
-                        const SizedBox(height: 5),
+                        const SizedBox(height: 24),
                         Expanded(
                           flex: 3,
                           child: _detailsStudent != null
@@ -1268,40 +1378,13 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                       weekOffset: _detailsWeekOffset,
                                       onWeekOffsetChanged: (next) => setState(
                                           () => _detailsWeekOffset = next),
-                                      onCloseDetails: () => setState(
-                                          () => _detailsStudent = null),
-                                      onRefreshAfterPauseResume: () async {
-                                        await DataManager.instance
-                                            .loadStudents();
-                                        if (!mounted) return;
-                                        setState(() {
-                                          // 상세 학생 참조를 최신 로드 결과로 갱신(없으면 유지)
-                                          final sid =
-                                              _detailsStudent?.student.id;
-                                          if (sid != null && sid.isNotEmpty) {
-                                            final idx = DataManager
-                                                .instance.students
-                                                .indexWhere((s) =>
-                                                    s.student.id == sid);
-                                            if (idx != -1) {
-                                              _detailsStudent = DataManager
-                                                  .instance.students[idx];
-                                            }
-                                          }
-                                        });
-                                      },
                                     );
                                   },
                                 )
                               : Container(
-                                  decoration: BoxDecoration(
-                                    color: context.yggSurfaceBase,
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(
-                                        color: const Color(0xFF223131),
-                                        width: 1.5),
+                                  decoration: studentDetailCardDecoration(
+                                    context,
                                   ),
-                                  child: const SizedBox.shrink(),
                                 ),
                         ),
                       ],
@@ -1323,7 +1406,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
     return Positioned(
       left: 0,
       right: 0,
-      top: 1 + 5 + _studentHeaderHeight + 12,
+      top: 1 + _studentHeaderHeight + 12,
       bottom: 0,
       child: IgnorePointer(
         ignoring: !show,
@@ -1791,6 +1874,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Icon(
               level == EducationLevel.elementary
@@ -1802,21 +1886,26 @@ class _AllStudentsViewState extends State<AllStudentsView> {
               size: 40,
             ),
             const SizedBox(width: 15),
-            Text(
-              title,
-              style: const TextStyle(
-                color: _studentListPrimaryTextColor,
-                fontSize: 32,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Text(
-              '$totalCount명',
-              style: const TextStyle(
-                color: _studentListMutedTextColor,
-                fontSize: 22,
-              ),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: _studentListPrimaryTextColor,
+                    fontSize: 32,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  '$totalCount명',
+                  style: const TextStyle(
+                    color: _studentListMutedTextColor,
+                    fontSize: 22,
+                  ),
+                ),
+              ],
             ),
           ],
         ),
@@ -1965,16 +2054,12 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
   final Function(StudentWithInfo) onRequestCourseView;
   final int weekOffset; // 0: 이번주, 1: 다음주 ...
   final ValueChanged<int> onWeekOffsetChanged;
-  final VoidCallback onCloseDetails;
-  final Future<void> Function()? onRefreshAfterPauseResume;
   const _EmbeddedStudentDetailsCard({
     required this.studentWithInfo,
     required this.flows,
     required this.onRequestCourseView,
     required this.weekOffset,
     required this.onWeekOffsetChanged,
-    required this.onCloseDetails,
-    this.onRefreshAfterPauseResume,
   });
 
   int _flowPriority(StudentFlow flow) {
@@ -2088,12 +2173,11 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
       studentId: student.id,
     );
 
-    final Color bgColor = context.yggSurfaceBase;
-    final Color outlineColor = const Color(0xFF223131);
+    final panel = studentDetailPanel(context);
     final TextStyle labelStyle =
-        const TextStyle(color: Color(0xFFAEC0C0), fontSize: 14);
-    final TextStyle valueStyle = const TextStyle(
-        color: Color(0xFFEAF2F2), fontSize: 15, fontWeight: FontWeight.w600);
+        FabTabBarTokens.previewAcademyLabelStyle(panel);
+    final TextStyle valueStyle =
+        FabTabBarTokens.previewAcademyValueStyle(panel);
     final String memoText = (basicInfo.memo ?? '').trim().isEmpty
         ? '메모가 없습니다.'
         : (basicInfo.memo ?? '').trim();
@@ -2109,11 +2193,10 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
             Expanded(
               child: Text(flow.name, style: valueStyle),
             ),
-            const Text(
+            Text(
               '공통',
-              style: TextStyle(
-                color: kDlgTextSub,
-                fontSize: 12,
+              style: FabTabBarTokens.previewAcademyValueStyle(panel).copyWith(
+                color: panel.hint,
                 fontWeight: FontWeight.w700,
               ),
             ),
@@ -2126,38 +2209,30 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
     }
 
     Widget section({
-      required IconData icon,
+      required String iconSvg,
       required String title,
       Widget? action,
       required List<Widget> children,
     }) {
       return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
-        decoration: BoxDecoration(
-          color: context.yggSurfaceBase,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: outlineColor.withOpacity(0.4), width: 2),
-        ),
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+        decoration: studentDetailCardDecoration(context),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
-                Icon(icon, size: 18, color: const Color(0xFFB9C8C8)),
+                StudentDetailIcon(iconSvg, size: 18, color: panel.icon),
                 const SizedBox(width: 8),
                 Text(
                   title,
-                  style: const TextStyle(
-                    color: _studentListPrimaryTextColor,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                  ),
+                  style: FabTabBarTokens.previewAcademyLabelStyle(panel),
                 ),
                 const Spacer(),
                 if (action != null) action,
               ],
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: 16),
             ...children,
           ],
         ),
@@ -2214,7 +2289,7 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
       scheduleChildren = [
         Text(
           '등록된 수업 시간이 없습니다.',
-          style: valueStyle.copyWith(color: Colors.white60),
+          style: valueStyle.copyWith(color: panel.hint),
         ),
       ];
     } else {
@@ -2251,7 +2326,7 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
               if (lessonOrder != null)
                 Text(
                   '수업 $lessonOrder',
-                  style: labelStyle.copyWith(color: Colors.white70),
+                  style: labelStyle.copyWith(color: panel.hint),
                 )
               else
                 const SizedBox.shrink(),
@@ -2259,7 +2334,7 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
               Text(
                 _weekdayWithDate(earliest.dayIndex, refMonday),
                 style: labelStyle.copyWith(
-                    color: Colors.white, fontWeight: FontWeight.w600),
+                    color: panel.title, fontWeight: FontWeight.w600),
               ),
               const SizedBox(width: 16),
               Text('$start ~ $end', style: valueStyle),
@@ -2333,7 +2408,7 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             if (isDone) ...[
-              const Icon(Icons.check_rounded, color: c, size: 16),
+              StudentDetailIcon(studentDetailCheckSvg, size: 16, color: c),
               const SizedBox(width: 4),
             ],
             Text(label,
@@ -2462,7 +2537,7 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
     }
 
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -2471,8 +2546,8 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
               StudentProfileAvatar(
                 student: student,
                 radius: 28,
-                fallbackColor:
-                    student.groupInfo?.color ?? const Color(0xFF2C3A3A),
+                fallbackColor: student.groupInfo?.color ??
+                    panel.avatarPlaceholderBackground,
               ),
               const SizedBox(width: 16),
               Expanded(
@@ -2486,17 +2561,14 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                             ? student.name
                             : '${student.name} - $nick';
                       }(),
-                      style: const TextStyle(
-                        color: Color(0xFFEAF2F2),
-                        fontSize: 22,
-                        fontWeight: FontWeight.w700,
+                      style: FabTabBarTokens.previewAcademyTwoLineTitleStyle(
+                        panel,
                       ),
                     ),
-                    const SizedBox(height: 6),
+                    const SizedBox(height: 8),
                     Text(
                       '${student.school} · $levelName · ${grade.name}',
-                      style: const TextStyle(
-                          color: Color(0xFFCFDBDB), fontSize: 15),
+                      style: FabTabBarTokens.previewAcademyValueStyle(panel),
                     ),
                     ...() {
                       final openPause = DataManager.instance
@@ -2515,12 +2587,12 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                             ' · 예상 등원 ${DateFormat('yyyy.MM.dd').format(expected)}');
                       }
                       return <Widget>[
-                        const SizedBox(height: 6),
+                        const SizedBox(height: 8),
                         Text(
                           buf.toString(),
-                          style: const TextStyle(
-                            color: Color(0xFFD7B56D),
-                            fontSize: 13,
+                          style: FabTabBarTokens.previewAcademyValueStyle(panel)
+                              .copyWith(
+                            color: panel.title,
                             fontWeight: FontWeight.w600,
                           ),
                         ),
@@ -2532,29 +2604,32 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  const Text('등록일',
-                      style: TextStyle(color: Color(0xFFA6BAB7), fontSize: 12)),
+                  Text(
+                    '등록일',
+                    style: FabTabBarTokens.previewAcademyValueStyle(panel)
+                        .copyWith(color: panel.hint),
+                  ),
                   const SizedBox(height: 4),
                   Text(
                     DateFormat('yyyy.MM.dd').format(registrationDate),
-                    style: const TextStyle(
-                        color: Color(0xFFEAF2F2),
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600),
+                    style: valueStyle,
                   ),
                 ],
               ),
             ],
           ),
-          const SizedBox(height: 18),
+          const SizedBox(height: 16),
           Expanded(
-            child: ListView(
+            child: ScrollConfiguration(
+              behavior:
+                  ScrollConfiguration.of(context).copyWith(scrollbars: false),
+              child: ListView(
               padding: const EdgeInsets.only(
                 bottom: FabTabBarTokens.fabStyleScreenTabBarBottomPadding,
               ),
               children: [
                 section(
-                  icon: Icons.schedule_outlined,
+                  iconSvg: scheduleCalendarOutlineSvg,
                   title: '수업 시간',
                   action: Row(
                     mainAxisSize: MainAxisSize.min,
@@ -2564,11 +2639,12 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                         onPressed: weekOffset > 0
                             ? () => onWeekOffsetChanged(weekOffset - 1)
                             : null,
-                        icon: Icon(
-                          Icons.chevron_left,
-                          color:
-                              weekOffset > 0 ? Colors.white70 : Colors.white24,
+                        icon: StudentDetailIcon(
+                          dialogNextChevronSvg,
                           size: 20,
+                          angle: studentDetailChevronLeft,
+                          color:
+                              weekOffset > 0 ? panel.icon : panel.chevron,
                         ),
                         splashRadius: 16,
                         padding: EdgeInsets.zero,
@@ -2579,17 +2655,17 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                       ),
                       Text(
                         '${weekOffset == 0 ? '이번주' : '다음주(+${weekOffset}주)'} ${_weekRangeLabel(refMonday)}',
-                        style: const TextStyle(
-                          color: Color(0xFF9FB3B3),
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
+                        style: FabTabBarTokens.previewAcademyValueStyle(panel)
+                            .copyWith(color: panel.hint),
                       ),
                       IconButton(
                         tooltip: '다음 주',
                         onPressed: () => onWeekOffsetChanged(weekOffset + 1),
-                        icon: const Icon(Icons.chevron_right,
-                            color: Colors.white70, size: 20),
+                        icon: StudentDetailIcon(
+                          dialogNextChevronSvg,
+                          size: 20,
+                          color: panel.icon,
+                        ),
                         splashRadius: 16,
                         padding: EdgeInsets.zero,
                         constraints:
@@ -2601,21 +2677,18 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                   ),
                   children: scheduleChildren,
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 16),
                 section(
-                  icon: Icons.timeline_outlined,
+                  iconSvg: studentDetailActivitySvg,
                   title: '최근 활동',
-                  action: OutlinedButton.icon(
+                  action: TextButton.icon(
                     onPressed: () => onRequestCourseView(studentWithInfo),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: const Color(0xFF9FB3B3),
-                      side: const BorderSide(color: Color(0xFF4D5A5A)),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10)),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 14, vertical: 6),
+                    style: studentDetailPillStyle(context, accent: true),
+                    icon: StudentDetailIcon(
+                      studentDetailExternalLinkSvg,
+                      size: 16,
+                      color: panel.changeButtonText,
                     ),
-                    icon: const Icon(Icons.open_in_new_rounded, size: 16),
                     label: const Text('상세'),
                   ),
                   children: [
@@ -2628,9 +2701,9 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                     paymentChipsRow(monthlyStatuses),
                   ],
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 16),
                 section(
-                  icon: Icons.group_work_outlined,
+                  iconSvg: studentDetailGroupsSvg,
                   title: '소속 그룹',
                   children: [
                     student.groupInfo != null
@@ -2640,15 +2713,15 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                         : textValue('미배정'),
                   ],
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 16),
                 section(
-                  icon: Icons.account_tree_outlined,
+                  iconSvg: studentDetailFlowSvg,
                   title: '플로우',
                   children: flowChildren,
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 16),
                 section(
-                  icon: Icons.phone_outlined,
+                  iconSvg: studentDetailPhoneSvg,
                   title: '연락처',
                   children: [
                     infoRow('전화번호', textValue(basicInfo.phoneNumber ?? '-')),
@@ -2657,359 +2730,42 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                         textValue(basicInfo.parentPhoneNumber ?? '-')),
                   ],
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 16),
                 section(
-                  icon: Icons.notes_outlined,
+                  iconSvg: studentDetailNoteSvg,
                   title: '메모',
                   children: [
                     Text(
                       memoText,
-                      style: valueStyle.copyWith(fontWeight: FontWeight.w500),
+                      style: valueStyle,
                     ),
                   ],
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 16),
                 _StudentPinSection(
                   studentId: student.id,
                   studentName: student.name,
-                  outlineColor: outlineColor,
                   labelStyle: labelStyle,
                   valueStyle: valueStyle,
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 16),
                 _StudentSignupCodeSection(
                   studentId: student.id,
                   studentName: student.name,
-                  outlineColor: outlineColor,
                   labelStyle: labelStyle,
                   valueStyle: valueStyle,
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 16),
                 _StudentPaymentChannelSection(
                   studentId: student.id,
                   studentName: student.name,
                   registrationDate: registrationDate,
-                  outlineColor: outlineColor,
                   labelStyle: labelStyle,
                   valueStyle: valueStyle,
                 ),
               ],
             ),
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () async {
-                    await StudentRegistrationDialog.show(
-                      context: context,
-                      student: student,
-                      onSave: (updated, basicInfo) async {
-                        await DataManager.instance
-                            .updateStudent(updated, basicInfo);
-                        showAppSnackBar(context, '학생 정보가 수정되었습니다.',
-                            useRoot: true);
-                      },
-                      groups: DataManager.instance.groups,
-                    );
-                  },
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFF9FB3B3),
-                    side: const BorderSide(color: Color(0xFF4D5A5A)),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10)),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 24),
-                    textStyle: const TextStyle(
-                        fontSize: 16, fontWeight: FontWeight.w700),
-                  ),
-                  icon: const Icon(Icons.edit_outlined, size: 20),
-                  label: const Text('수정'),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () async {
-                    final activePause = DataManager.instance
-                        .getOpenPauseForStudent(student.id);
-                    final now = DateTime.now();
-                    final today = DateTime(now.year, now.month, now.day);
-
-                    final ThemeData pickerTheme = Theme.of(context).copyWith(
-                      colorScheme: const ColorScheme.dark(
-                        primary: Color(0xFF33A373),
-                        surface: Color(0xFF15171C),
-                        onSurface: Colors.white70,
-                      ),
-                      dialogBackgroundColor: context.yggSurfaceBase,
-                    );
-
-                    if (activePause != null) {
-                      // 등원 처리
-                      final picked = await showDatePicker(
-                        context: context,
-                        initialDate: today,
-                        firstDate: activePause.pausedFrom.isAfter(today)
-                            ? today
-                            : activePause.pausedFrom,
-                        lastDate: DateTime(today.year + 2, 12, 31),
-                        builder: (context, child) => Theme(
-                          data: pickerTheme,
-                          child: child!,
-                        ),
-                      );
-                      if (picked == null) return;
-                      try {
-                        await DataManager.instance.resumeStudent(
-                          studentId: student.id,
-                          resumeDateLocal: picked,
-                        );
-                        if (!context.mounted) return;
-                        // ✅ 등원/휴원 처리 후 학생리스트 즉시 새로고침(상위 State에서 처리)
-                        await (onRefreshAfterPauseResume?.call() ??
-                            Future<void>.value());
-                        showAppSnackBar(context, '등원 처리되었습니다.', useRoot: true);
-                      } catch (e) {
-                        if (!context.mounted) return;
-                        showAppSnackBar(context, '등원 처리 실패: $e', useRoot: true);
-                      }
-                      return;
-                    }
-
-                    // 휴원 처리
-                    DateTime? from;
-                    DateTime? to;
-                    final noteController = TextEditingController();
-                    final confirmed = await showDialog<bool>(
-                      context: context,
-                      builder: (context) => StatefulBuilder(
-                        builder: (context, setLocal) => AlertDialog(
-                          backgroundColor: const Color(0xFF232326),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16)),
-                          title: const Text('휴원',
-                              style: TextStyle(color: Colors.white)),
-                          content: SizedBox(
-                            width: 420,
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  '휴원 기간에는 예정 수업이 생성되지 않고 등원이 막힙니다.\n예상 등원일은 메모이며, 실제 종료일은 등원 처리할 때 정해집니다.',
-                                  style: TextStyle(
-                                      color: Colors.white70, height: 1.35),
-                                ),
-                                const SizedBox(height: 12),
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: OutlinedButton(
-                                        onPressed: () async {
-                                          final picked = await showDatePicker(
-                                            context: context,
-                                            initialDate: today,
-                                            firstDate: DateTime(2018, 1, 1),
-                                            lastDate: DateTime(
-                                                today.year + 2, 12, 31),
-                                            builder: (context, child) => Theme(
-                                              data: pickerTheme,
-                                              child: child!,
-                                            ),
-                                          );
-                                          if (picked == null) return;
-                                          setLocal(() => from = picked);
-                                        },
-                                        child: Text(
-                                          from == null
-                                              ? '휴원 시작일 선택'
-                                              : '시작: ${DateFormat('yyyy.MM.dd').format(from!)}',
-                                          style: const TextStyle(
-                                              color: Colors.white70),
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 10),
-                                    Expanded(
-                                      child: OutlinedButton(
-                                        onPressed: () async {
-                                          final base = from ?? today;
-                                          final picked = await showDatePicker(
-                                            context: context,
-                                            initialDate: base,
-                                            firstDate: base,
-                                            lastDate: DateTime(
-                                                today.year + 2, 12, 31),
-                                            builder: (context, child) => Theme(
-                                              data: pickerTheme,
-                                              child: child!,
-                                            ),
-                                          );
-                                          if (picked == null) return;
-                                          setLocal(() => to = picked);
-                                        },
-                                        child: Text(
-                                          to == null
-                                              ? '예상 등원일(메모, 선택)'
-                                              : '예상: ${DateFormat('yyyy.MM.dd').format(to!)}',
-                                          style: const TextStyle(
-                                              color: Colors.white70),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 12),
-                                TextField(
-                                  controller: noteController,
-                                  style: const TextStyle(color: Colors.white),
-                                  decoration: const InputDecoration(
-                                    labelText: '메모(선택)',
-                                    labelStyle:
-                                        TextStyle(color: Colors.white70),
-                                    enabledBorder: OutlineInputBorder(
-                                      borderSide:
-                                          BorderSide(color: Color(0xFF3A3F44)),
-                                    ),
-                                    focusedBorder: OutlineInputBorder(
-                                      borderSide:
-                                          BorderSide(color: Color(0xFF1976D2)),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          actions: [
-                            TextButton(
-                              onPressed: () => Navigator.of(context).pop(false),
-                              child: const Text('취소',
-                                  style: TextStyle(color: Colors.white70)),
-                            ),
-                            TextButton(
-                              onPressed: () => Navigator.of(context).pop(true),
-                              child: const Text('휴원',
-                                  style: TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.bold)),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                    if (confirmed != true) return;
-                    final start = from ?? today;
-                    try {
-                      await DataManager.instance.pauseStudent(
-                        studentId: student.id,
-                        pausedFromLocal: start,
-                        pausedToLocal: to,
-                        note: noteController.text.trim(),
-                      );
-                      if (!context.mounted) return;
-                      // ✅ 등원/휴원 처리 후 학생리스트 즉시 새로고침(상위 State에서 처리)
-                      await (onRefreshAfterPauseResume?.call() ??
-                          Future<void>.value());
-                      showAppSnackBar(context, '휴원 처리되었습니다.', useRoot: true);
-                    } catch (e) {
-                      if (!context.mounted) return;
-                      showAppSnackBar(context, '휴원 처리 실패: $e', useRoot: true);
-                    }
-                  },
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFF9FB3B3),
-                    side: const BorderSide(color: Color(0xFF4D5A5A)),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10)),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 24),
-                    textStyle: const TextStyle(
-                        fontSize: 16, fontWeight: FontWeight.w700),
-                  ),
-                  icon: Icon(
-                    DataManager.instance.getOpenPauseForStudent(student.id) !=
-                            null
-                        ? Icons.play_arrow_rounded
-                        : Icons.pause_circle_outline,
-                    size: 20,
-                  ),
-                  label: Text(
-                    DataManager.instance.getOpenPauseForStudent(student.id) !=
-                            null
-                        ? '등원'
-                        : '휴원',
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () async {
-                    final confirmed = await showDialog<bool>(
-                      context: context,
-                      builder: (context) => AlertDialog(
-                        backgroundColor: const Color(0xFF232326),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(16)),
-                        title: const Text('퇴원',
-                            style: TextStyle(color: Colors.white)),
-                        content: Text(
-                          '${student.name} 학생을 퇴원(삭제) 처리하시겠습니까?\n\n'
-                          '퇴원 처리 시 학생 정보는 아카이브에 최대 1년간 보관됩니다.',
-                          style: const TextStyle(color: Colors.white70),
-                        ),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.of(context).pop(false),
-                            child: const Text('취소',
-                                style: TextStyle(color: Colors.white70)),
-                          ),
-                          TextButton(
-                            onPressed: () => Navigator.of(context).pop(true),
-                            child: const Text('퇴원',
-                                style: TextStyle(
-                                    color: Colors.red,
-                                    fontWeight: FontWeight.bold)),
-                          ),
-                        ],
-                      ),
-                    );
-                    if (confirmed != true) return;
-                    try {
-                      await DataManager.instance.deleteStudent(student.id);
-                      showAppSnackBar(context, '퇴원 처리되었습니다.', useRoot: true);
-                      onCloseDetails();
-                    } catch (e) {
-                      final s = e.toString();
-                      if (s.contains('archive_student') ||
-                          s.contains('student_archives')) {
-                        showAppSnackBar(
-                          context,
-                          '아카이브 생성 실패로 퇴원을 중단했습니다. (서버 마이그레이션 적용 필요)\n$s',
-                          useRoot: true,
-                        );
-                      } else {
-                        showAppSnackBar(context, '퇴원 처리 실패: $e', useRoot: true);
-                      }
-                    }
-                  },
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFFE57373),
-                    side: const BorderSide(color: Color(0xFFE57373)),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10)),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 24),
-                    textStyle: const TextStyle(
-                        fontSize: 16, fontWeight: FontWeight.w700),
-                  ),
-                  icon: const Icon(Icons.logout_rounded, size: 20),
-                  label: const Text('퇴원'),
-                ),
-              ),
-            ],
+            ),
           ),
         ],
       ),
@@ -3146,14 +2902,12 @@ class _MonthlyPaymentStatus {
 class _StudentPinSection extends StatefulWidget {
   final String studentId;
   final String studentName;
-  final Color outlineColor;
   final TextStyle labelStyle;
   final TextStyle valueStyle;
 
   const _StudentPinSection({
     required this.studentId,
     required this.studentName,
-    required this.outlineColor,
     required this.labelStyle,
     required this.valueStyle,
   });
@@ -3311,48 +3065,43 @@ class _StudentPinSectionState extends State<_StudentPinSection> {
 
   @override
   Widget build(BuildContext context) {
+    final panel = studentDetailPanel(context);
     final String valueText;
-    Color valueColor = widget.valueStyle.color ?? const Color(0xFFEAF2F2);
+    Color valueColor = panel.title;
     if (_loading) {
       valueText = '불러오는 중…';
-      valueColor = const Color(0xFF9FB3B3);
+      valueColor = panel.hint;
     } else if (!_pinRequired) {
       valueText = '미설정 (PIN 없이 바로 로그인)';
-      valueColor = const Color(0xFF9FB3B3);
+      valueColor = panel.hint;
     } else if (_pin != null && _pin!.isNotEmpty) {
       valueText = _pin!;
-      valueColor = const Color(0xFF33A373);
+      valueColor = FabTabBarTokens.previewConfirmActionColor;
     } else if (_pinSet) {
       valueText = '설정됨 (학생이 지정)';
-      valueColor = const Color(0xFFEAF2F2);
+      valueColor = panel.title;
     } else {
       valueText = '대기 (첫 로그인 시 설정)';
       valueColor = const Color(0xFFF2B45B);
     }
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
-      decoration: BoxDecoration(
-        color: context.yggSurfaceBase,
-        borderRadius: BorderRadius.circular(14),
-        border:
-            Border.all(color: widget.outlineColor.withOpacity(0.4), width: 2),
-      ),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+      decoration: studentDetailCardDecoration(context),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Icon(Icons.password_outlined,
-                  size: 18, color: Color(0xFFB9C8C8)),
+              StudentDetailIcon(
+                studentDetailPasswordSvg,
+                size: 18,
+                color: panel.icon,
+              ),
               const SizedBox(width: 8),
-              const Text(
+              Text(
                 'M5 로그인 PIN',
-                style: TextStyle(
-                  color: _studentListPrimaryTextColor,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                ),
+                style: FabTabBarTokens.previewAcademyLabelStyle(panel),
               ),
               const Spacer(),
               if (_locked)
@@ -3375,7 +3124,7 @@ class _StudentPinSectionState extends State<_StudentPinSection> {
                 ),
             ],
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 16),
           Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
@@ -3409,41 +3158,31 @@ class _StudentPinSectionState extends State<_StudentPinSection> {
           Row(
             children: [
               Expanded(
-                child: OutlinedButton.icon(
+                child: TextButton.icon(
                   onPressed:
                       (_loading || _busy || _academyId == null) ? null : _editPin,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFF33A373),
-                    side: const BorderSide(color: Color(0xFF33A373)),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10)),
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                    textStyle: const TextStyle(
-                        fontSize: 14, fontWeight: FontWeight.w700),
+                  style: studentDetailPillStyle(context, accent: true),
+                  icon: StudentDetailIcon(
+                    homeGradingEditOutlineSvg,
+                    size: 18,
+                    color: panel.changeButtonText,
                   ),
-                  icon: const Icon(Icons.edit_outlined, size: 18),
                   label: Text(_pinRequired ? 'PIN 수정' : 'PIN 설정'),
                 ),
               ),
               if (_pinRequired) ...[
                 const SizedBox(width: 10),
                 Expanded(
-                  child: OutlinedButton.icon(
+                  child: TextButton.icon(
                     onPressed: (_loading || _busy || _academyId == null)
                         ? null
                         : _clearPin,
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: const Color(0xFF9FB3B3),
-                      side: const BorderSide(color: Color(0xFF4D5A5A)),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10)),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 14, vertical: 12),
-                      textStyle: const TextStyle(
-                          fontSize: 14, fontWeight: FontWeight.w700),
+                    style: studentDetailPillStyle(context),
+                    icon: StudentDetailIcon(
+                      studentDetailUnlockSvg,
+                      size: 18,
+                      color: panel.title,
                     ),
-                    icon: const Icon(Icons.lock_open_outlined, size: 18),
                     label: const Text('해제'),
                   ),
                 ),
@@ -3461,14 +3200,12 @@ class _StudentPinSectionState extends State<_StudentPinSection> {
 class _StudentSignupCodeSection extends StatefulWidget {
   final String studentId;
   final String studentName;
-  final Color outlineColor;
   final TextStyle labelStyle;
   final TextStyle valueStyle;
 
   const _StudentSignupCodeSection({
     required this.studentId,
     required this.studentName,
-    required this.outlineColor,
     required this.labelStyle,
     required this.valueStyle,
   });
@@ -3585,52 +3322,47 @@ class _StudentSignupCodeSectionState extends State<_StudentSignupCodeSection> {
 
   @override
   Widget build(BuildContext context) {
+    final panel = studentDetailPanel(context);
     final String valueText;
-    Color valueColor = widget.valueStyle.color ?? const Color(0xFFEAF2F2);
+    Color valueColor = panel.title;
     if (_loading) {
       valueText = '불러오는 중…';
-      valueColor = const Color(0xFF9FB3B3);
+      valueColor = panel.hint;
     } else if (_accountLinked) {
       valueText = '가입 완료';
-      valueColor = const Color(0xFF33A373);
+      valueColor = FabTabBarTokens.previewConfirmActionColor;
     } else if (_activeCode != null && _activeCode!.isNotEmpty) {
       valueText = _activeCode!;
-      valueColor = const Color(0xFF33A373);
+      valueColor = FabTabBarTokens.previewConfirmActionColor;
     } else {
       valueText = '미발급';
-      valueColor = const Color(0xFF9FB3B3);
+      valueColor = panel.hint;
     }
 
     final bool hasCode =
         !_loading && !_accountLinked && _activeCode != null && _activeCode!.isNotEmpty;
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
-      decoration: BoxDecoration(
-        color: context.yggSurfaceBase,
-        borderRadius: BorderRadius.circular(14),
-        border:
-            Border.all(color: widget.outlineColor.withOpacity(0.4), width: 2),
-      ),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+      decoration: studentDetailCardDecoration(context),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
+          Row(
             children: [
-              Icon(Icons.tablet_mac_outlined,
-                  size: 18, color: Color(0xFFB9C8C8)),
-              SizedBox(width: 8),
+              StudentDetailIcon(
+                studentDetailTabletSvg,
+                size: 18,
+                color: panel.icon,
+              ),
+              const SizedBox(width: 8),
               Text(
                 '학생앱 가입코드',
-                style: TextStyle(
-                  color: _studentListPrimaryTextColor,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                ),
+                style: FabTabBarTokens.previewAcademyLabelStyle(panel),
               ),
             ],
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 16),
           Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
@@ -3660,7 +3392,8 @@ class _StudentSignupCodeSectionState extends State<_StudentSignupCodeSection> {
               alignment: Alignment.centerRight,
               child: Text(
                 '${DateFormat('M월 d일 HH:mm').format(_expiresAt!)} 까지 유효',
-                style: widget.labelStyle.copyWith(fontSize: 12.5),
+                style: FabTabBarTokens.previewAcademyValueStyle(panel)
+                    .copyWith(color: panel.hint),
               ),
             ),
           ],
@@ -3669,38 +3402,28 @@ class _StudentSignupCodeSectionState extends State<_StudentSignupCodeSection> {
             Row(
               children: [
                 Expanded(
-                  child: OutlinedButton.icon(
+                  child: TextButton.icon(
                     onPressed: (_loading || _busy) ? null : _issueCode,
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: const Color(0xFF33A373),
-                      side: const BorderSide(color: Color(0xFF33A373)),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10)),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 14, vertical: 12),
-                      textStyle: const TextStyle(
-                          fontSize: 14, fontWeight: FontWeight.w700),
+                    style: studentDetailPillStyle(context, accent: true),
+                    icon: StudentDetailIcon(
+                      studentDetailQrSvg,
+                      size: 18,
+                      color: panel.changeButtonText,
                     ),
-                    icon: const Icon(Icons.qr_code_2_outlined, size: 18),
                     label: Text(hasCode ? '재발급' : '가입코드 발급'),
                   ),
                 ),
                 if (hasCode) ...[
                   const SizedBox(width: 10),
                   Expanded(
-                    child: OutlinedButton.icon(
+                    child: TextButton.icon(
                       onPressed: _busy ? null : _copyCode,
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: const Color(0xFF9FB3B3),
-                        side: const BorderSide(color: Color(0xFF4D5A5A)),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10)),
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 14, vertical: 12),
-                        textStyle: const TextStyle(
-                            fontSize: 14, fontWeight: FontWeight.w700),
+                      style: studentDetailPillStyle(context),
+                      icon: StudentDetailIcon(
+                        studentDetailCopySvg,
+                        size: 18,
+                        color: panel.title,
                       ),
-                      icon: const Icon(Icons.copy_outlined, size: 18),
                       label: const Text('복사'),
                     ),
                   ),
@@ -3719,7 +3442,6 @@ class _StudentPaymentChannelSection extends StatefulWidget {
   final String studentId;
   final String studentName;
   final DateTime registrationDate;
-  final Color outlineColor;
   final TextStyle labelStyle;
   final TextStyle valueStyle;
 
@@ -3727,7 +3449,6 @@ class _StudentPaymentChannelSection extends StatefulWidget {
     required this.studentId,
     required this.studentName,
     required this.registrationDate,
-    required this.outlineColor,
     required this.labelStyle,
     required this.valueStyle,
   });
@@ -3855,36 +3576,31 @@ class _StudentPaymentChannelSectionState
 
   @override
   Widget build(BuildContext context) {
+    final panel = studentDetailPanel(context);
     final noteText = (_note ?? '').trim();
     final bool hasNote = noteText.isNotEmpty;
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
-      decoration: BoxDecoration(
-        color: context.yggSurfaceBase,
-        borderRadius: BorderRadius.circular(14),
-        border:
-            Border.all(color: widget.outlineColor.withOpacity(0.4), width: 2),
-      ),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+      decoration: studentDetailCardDecoration(context),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
+          Row(
             children: [
-              Icon(Icons.payments_outlined,
-                  size: 18, color: Color(0xFFB9C8C8)),
-              SizedBox(width: 8),
+              StudentDetailIcon(
+                studentDetailWalletSvg,
+                size: 18,
+                color: panel.icon,
+              ),
+              const SizedBox(width: 8),
               Text(
                 '납부 정보',
-                style: TextStyle(
-                  color: _studentListPrimaryTextColor,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                ),
+                style: FabTabBarTokens.previewAcademyLabelStyle(panel),
               ),
             ],
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 16),
           Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
@@ -3900,10 +3616,10 @@ class _StudentPaymentChannelSectionState
                     tooltip: '납부 방식 선택',
                     initialValue: _channel,
                     onSelected: _changeChannel,
-                    color: kDlgBg,
+                    color: panel.dropdownBackground,
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
-                      side: const BorderSide(color: kDlgBorder),
+                      borderRadius: BorderRadius.circular(16),
+                      side: BorderSide(color: panel.border),
                     ),
                     itemBuilder: (context) => PaymentChannel.values
                         .map(
@@ -3913,8 +3629,8 @@ class _StudentPaymentChannelSectionState
                               PaymentChannel.displayName(v),
                               style: TextStyle(
                                 color: v == _channel
-                                    ? kDlgAccent
-                                    : kDlgText,
+                                    ? FabTabBarTokens.previewConfirmActionColor
+                                    : panel.title,
                                 fontWeight: v == _channel
                                     ? FontWeight.w700
                                     : FontWeight.w500,
@@ -3931,11 +3647,11 @@ class _StudentPaymentChannelSectionState
                           style: widget.valueStyle,
                         ),
                         const SizedBox(width: 4),
-                        Icon(
-                          Icons.arrow_drop_down,
-                          color: widget.valueStyle.color ??
-                              const Color(0xFFEAF2F2),
-                          size: 20,
+                        StudentDetailIcon(
+                          dialogNextChevronSvg,
+                          size: 16,
+                          angle: studentDetailChevronDown,
+                          color: panel.icon,
                         ),
                       ],
                     ),
@@ -3964,14 +3680,9 @@ class _StudentPaymentChannelSectionState
                       child: Text(
                         hasNote ? noteText : '없음',
                         textAlign: TextAlign.right,
-                        style: widget.valueStyle.copyWith(
-                          color: hasNote
-                              ? (widget.valueStyle.color ??
-                                  const Color(0xFFEAF2F2))
-                              : const Color(0xFF9FB3B3),
-                          fontWeight:
-                              hasNote ? FontWeight.w600 : FontWeight.w500,
-                        ),
+                        style: hasNote
+                            ? widget.valueStyle
+                            : widget.valueStyle.copyWith(color: panel.hint),
                       ),
                     ),
                   ),
@@ -3982,19 +3693,14 @@ class _StudentPaymentChannelSectionState
           const SizedBox(height: 16),
           SizedBox(
             width: double.infinity,
-            child: OutlinedButton.icon(
+            child: TextButton.icon(
               onPressed: _busy ? null : _editNote,
-              style: OutlinedButton.styleFrom(
-                foregroundColor: const Color(0xFF9FB3B3),
-                side: const BorderSide(color: Color(0xFF4D5A5A)),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10)),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                textStyle: const TextStyle(
-                    fontSize: 14, fontWeight: FontWeight.w700),
+              style: studentDetailPillStyle(context),
+              icon: StudentDetailIcon(
+                homeGradingEditOutlineSvg,
+                size: 18,
+                color: panel.title,
               ),
-              icon: const Icon(Icons.edit_outlined, size: 18),
               label: Text(hasNote ? '특이 사항 수정' : '특이 사항 입력'),
             ),
           ),

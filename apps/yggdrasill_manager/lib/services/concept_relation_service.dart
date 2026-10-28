@@ -2,26 +2,178 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'concept_book_order.dart';
 
-/// 개념 사이 관계(확장·특수한 경우)와 "같은 개념인지 검토 필요" 표시.
-/// 설계: docs/architecture/concept-library.md §4.2
+/// 개념 사이 관계(여섯 유형)와 "같은 개념인지 검토 필요" 표시.
+/// 설계: docs/architecture/concept-library.md §4.2, "관계 유형"
 ///
 /// 운영자가 고른 것만 저장한다. 이름·학년·문장이 비슷하다고 관계를 넣거나 개념을 합치지 않는다.
 /// 쓰기는 RPC로만 한다. "같은 개념"으로 판단해도 두 개념은 그대로 두고 판단만 기록한다.
-enum ConceptRelationKind { extendsOf, specialCase }
+/// 모든 관계는 "[conceptId](출발) → [relatedId](기준)"로 읽는다.
+enum ConceptRelationKind { kindOf, partOf, derivedFrom, dependsOn, extendsOf, specialCase }
 
 extension ConceptRelationKindX on ConceptRelationKind {
-  String get db => this == ConceptRelationKind.extendsOf ? 'extends' : 'special_case';
-  String get label => this == ConceptRelationKind.extendsOf ? '확장' : '특수한 경우';
+  String get db => switch (this) {
+        ConceptRelationKind.kindOf => 'kind_of',
+        ConceptRelationKind.partOf => 'part_of',
+        ConceptRelationKind.derivedFrom => 'derived_from',
+        ConceptRelationKind.dependsOn => 'depends_on',
+        ConceptRelationKind.extendsOf => 'extends',
+        ConceptRelationKind.specialCase => 'special_case',
+      };
 
-  /// "[a]은(는) [b]…" 로 읽는 문장.
-  String sentence(String a, String b) =>
-      this == ConceptRelationKind.extendsOf ? '"$a"은(는) "$b"을(를) 넓힌 개념' : '"$a"은(는) "$b"의 특수한 경우';
+  String get label => switch (this) {
+        ConceptRelationKind.kindOf => '종류·특수화',
+        ConceptRelationKind.partOf => '구성·부분',
+        ConceptRelationKind.derivedFrom => '근거·유도',
+        ConceptRelationKind.dependsOn => '학습 의존',
+        ConceptRelationKind.extendsOf => '확장',
+        ConceptRelationKind.specialCase => '특수한 경우',
+      };
+
+  /// 근거·유도는 어떤 유도인지, 학습 의존은 어떤 목표·방법인지 맥락이 있어야 한다.
+  bool get contextRequired => this == ConceptRelationKind.derivedFrom || this == ConceptRelationKind.dependsOn;
+
+  /// "[a](출발) → [b](기준)"로 읽는 문장. 맥락이 있으면 그 맥락 안에서만 성립한다고 적는다.
+  String sentence(String a, String b, [String? context]) {
+    final c = (context ?? '').trim();
+    final tail = c.isEmpty ? '' : ' · 맥락: $c';
+    return switch (this) {
+      ConceptRelationKind.kindOf => '"$a"은(는) "$b"의 한 종류$tail',
+      ConceptRelationKind.partOf => '"$a"은(는) "$b"을(를) 이루는 요소$tail',
+      ConceptRelationKind.derivedFrom =>
+        '"$a"은(는) "$b"을(를) 근거로 유도·증명됨${c.isEmpty ? ' (맥락 기록 없음)' : ' · $c'}',
+      ConceptRelationKind.dependsOn => c.isEmpty
+          ? '"$a"을(를) 배울 때 "$b"이(가) 필요한 맥락이 기록되지 않음'
+          : '맥락 "$c"에서: "$a"을(를) 배우거나 쓰려면 "$b"이(가) 필요',
+      ConceptRelationKind.extendsOf => '"$a"은(는) "$b"을(를) 넓힌 개념$tail',
+      ConceptRelationKind.specialCase => '"$a"은(는) "$b"의 특수한 경우$tail',
+    };
+  }
 
   static ConceptRelationKind? fromDb(String? v) => switch (v) {
+        'kind_of' => ConceptRelationKind.kindOf,
+        'part_of' => ConceptRelationKind.partOf,
+        'derived_from' => ConceptRelationKind.derivedFrom,
+        'depends_on' => ConceptRelationKind.dependsOn,
         'extends' => ConceptRelationKind.extendsOf,
         'special_case' => ConceptRelationKind.specialCase,
         _ => null,
       };
+}
+
+/// 관계를 누가 어떻게 정했는지. 이 기능 전에 생긴 관계는 기록이 없다([ConceptRelation.decision]이 null).
+class ConceptRelationDecision {
+  const ConceptRelationDecision({required this.via, this.at, this.actionId});
+
+  /// draft · review · manual · think
+  final String via;
+  final DateTime? at;
+
+  /// Think 카드로 정했으면 그 카드 id.
+  final String? actionId;
+
+  String get label => switch (via) {
+        'draft' => '초안 확정에서 운영자가 고름',
+        'review' => '같은 개념 검토에서 운영자가 판단',
+        'think' => 'Think 카드를 운영자가 승인',
+        _ => '운영자가 직접 저장',
+      };
+}
+
+/// 관계 이력 한 줄(넣기·바꾸기·빼기). 그때의 개념 이름을 함께 적어 개념이 지워져도 읽힌다.
+class ConceptRelationEvent {
+  const ConceptRelationEvent({
+    required this.event,
+    required this.relationId,
+    required this.conceptName,
+    required this.relatedName,
+    required this.via,
+    this.kind,
+    this.context,
+    this.reason,
+    this.at,
+  });
+
+  /// add · change · remove
+  final String event;
+  final String relationId;
+  final String conceptName;
+  final String relatedName;
+  final String via;
+
+  /// 바뀐 뒤(빼기면 빼기 전) 유형·맥락.
+  final ConceptRelationKind? kind;
+  final String? context;
+  final String? reason;
+  final DateTime? at;
+
+  String get eventLabel => switch (event) {
+        'add' => '넣음',
+        'remove' => '뺌',
+        _ => '고침',
+      };
+
+  factory ConceptRelationEvent.fromRow(Map<String, dynamic> r) {
+    final state = Map<String, dynamic>.from((r['after'] ?? r['before'] ?? const {}) as Map);
+    return ConceptRelationEvent(
+      event: r['event'] as String? ?? 'change',
+      relationId: r['relation_id']?.toString() ?? '',
+      conceptName: r['concept_name'] as String? ?? '(이름 모름)',
+      relatedName: r['related_name'] as String? ?? '(이름 모름)',
+      via: r['via'] as String? ?? 'manual',
+      kind: ConceptRelationKindX.fromDb(state['kind'] as String?),
+      context: state['context'] as String?,
+      reason: r['reason'] as String?,
+      at: DateTime.tryParse(r['at']?.toString() ?? '')?.toLocal(),
+    );
+  }
+}
+
+/// 개념 하나의 관계와 최근 관계 이력.
+class ConceptRelationSheet {
+  const ConceptRelationSheet({
+    required this.relations,
+    this.events = const [],
+    this.eventCount = 0,
+    this.pendingAdds = 0,
+  });
+
+  final List<ConceptRelation> relations;
+
+  /// 최근 것부터 최대 20개. 전체 수는 [eventCount].
+  final List<ConceptRelationEvent> events;
+  final int eventCount;
+
+  /// 이 개념에 관계를 새로 넣자는, 승인을 기다리는 Think 카드 항목 수.
+  final int pendingAdds;
+}
+
+/// concept_relation_list 결과를 읽는다.
+ConceptRelationSheet conceptRelationSheetFromJson(Map<String, dynamic> data) {
+  final pendingByRelation = <String, int>{};
+  var pendingAdds = 0;
+  for (final p in (data['pending'] as List? ?? const [])) {
+    final id = (p as Map)['relation_id']?.toString();
+    if (id == null || id.isEmpty) {
+      pendingAdds++;
+    } else {
+      pendingByRelation[id] = (pendingByRelation[id] ?? 0) + 1;
+    }
+  }
+  return ConceptRelationSheet(
+    relations: [
+      for (final r in (data['relations'] as List? ?? const []))
+        if (ConceptRelation.fromRow(Map<String, dynamic>.from(r as Map),
+                pendingCards: pendingByRelation[(r)['id']?.toString()] ?? 0)
+            case final rel?)
+          rel
+    ],
+    events: [
+      for (final e in (data['events'] as List? ?? const []))
+        ConceptRelationEvent.fromRow(Map<String, dynamic>.from(e as Map))
+    ],
+    eventCount: (data['event_count'] as num?)?.toInt() ?? 0,
+    pendingAdds: pendingAdds,
+  );
 }
 
 /// 검토 필요를 닫을 때 고르는 판단.
@@ -62,7 +214,7 @@ extension ConceptReviewResolutionX on ConceptReviewResolution {
       };
 }
 
-/// 개념 → 기준 개념. [kind]는 "[conceptId]가 [relatedId]를 넓힘 / [relatedId]의 특수한 경우".
+/// 개념(출발) → 기준 개념. [kind] 문장은 [ConceptRelationKindX.sentence]로 읽는다.
 class ConceptRelation {
   const ConceptRelation({
     required this.id,
@@ -72,6 +224,12 @@ class ConceptRelation {
     required this.origin,
     this.note,
     this.createdAt,
+    this.context,
+    this.basis,
+    this.rev,
+    this.decision,
+    this.rereview,
+    this.pendingCards = 0,
   });
 
   final String id;
@@ -79,31 +237,63 @@ class ConceptRelation {
   final String relatedId;
   final ConceptRelationKind kind;
 
-  /// draft(초안 확정 때 고름) · review(검토 필요를 판단하며) · manual(상세에서 직접).
+  /// 어디서 생겼는지: draft(초안 확정 때 고름) · review(검토 필요를 판단하며) · manual(상세에서 직접) · think(Think 카드).
+  /// 누가 정했는지([decision])와 다르다.
   final String origin;
   final String? note;
   final DateTime? createdAt;
+  final String? context;
+  final String? basis;
+
+  /// 고칠 때마다 오른다. 읽은 판이 지금과 다르면 저장·빼기가 막힌다. 관계 유형 마이그레이션 전 DB면 null.
+  final int? rev;
+  final ConceptRelationDecision? decision;
+
+  /// 판단 뒤 두 개념 중 하나의 글(이름·본문·확정 서술)이 바뀌었으면 true. 판단 때 기록이 없으면 null(모름).
+  final bool? rereview;
+
+  /// 이 관계를 고치거나 빼자는, 승인을 기다리는 Think 카드 항목 수.
+  final int pendingCards;
 
   String get originLabel => switch (origin) {
-        'draft' => '초안 확정 때 고름',
-        'review' => '검토하며 고름',
+        'draft' => '초안 확정 때 생김',
+        'review' => '검토하며 생김',
+        'think' => 'Think 카드 승인으로 생김',
         _ => '직접 넣음',
       };
+
+  String get decisionLabel => decision?.label ?? '결정 기록 없음(이 기능 전에 생긴 관계)';
 
   /// 이 관계에서 [conceptId] 쪽이 아닌 개념.
   String otherOf(String id) => id == conceptId ? relatedId : conceptId;
 
-  static ConceptRelation? fromRow(Map<String, dynamic> r) {
+  /// 표의 한 줄(concept_id·related_id)이나 concept_relation_list 의 한 줄(from·to·decision·rereview).
+  static ConceptRelation? fromRow(Map<String, dynamic> r, {int pendingCards = 0}) {
     final kind = ConceptRelationKindX.fromDb(r['kind'] as String?);
     if (kind == null) return null;
+    final from = r['from'] is Map ? Map<String, dynamic>.from(r['from'] as Map) : null;
+    final to = r['to'] is Map ? Map<String, dynamic>.from(r['to'] as Map) : null;
+    final d = r['decision'] is Map ? Map<String, dynamic>.from(r['decision'] as Map) : null;
     return ConceptRelation(
       id: r['id'] as String,
-      conceptId: r['concept_id'] as String,
-      relatedId: r['related_id'] as String,
+      conceptId: (r['concept_id'] ?? from?['id']) as String,
+      relatedId: (r['related_id'] ?? to?['id']) as String,
       kind: kind,
       origin: r['origin'] as String? ?? 'manual',
       note: r['note'] as String?,
       createdAt: DateTime.tryParse(r['created_at']?.toString() ?? '')?.toLocal(),
+      context: r['context'] as String?,
+      basis: r['basis'] as String?,
+      rev: (r['rev'] as num?)?.toInt(),
+      decision: d == null || d['recorded'] != true
+          ? null
+          : ConceptRelationDecision(
+              via: d['via'] as String? ?? 'manual',
+              at: DateTime.tryParse(d['at']?.toString() ?? '')?.toLocal(),
+              actionId: d['action_id'] as String?,
+            ),
+      rereview: r['rereview'] as bool?,
+      pendingCards: pendingCards,
     );
   }
 }
@@ -195,9 +385,15 @@ class ConceptRelationException implements Exception {
     'concept_relation_forbidden': '최고 관리자만 관계·검토를 바꿀 수 있습니다.',
     'concept_relation_bad_kind': '알 수 없는 관계입니다.',
     'concept_relation_bad_request': '같은 개념끼리는 잇지 않습니다. 다른 개념을 고르세요.',
-    'concept_relation_too_long': '메모가 너무 깁니다(500자).',
+    'concept_relation_too_long': '글이 너무 깁니다(맥락 300자, 근거 1000자, 메모 500자).',
     'concept_relation_not_found': '개념이나 관계를 찾을 수 없습니다(지워졌을 수 있습니다).',
-    'concept_relation_reverse_exists': '반대 방향 관계가 이미 있습니다. 그 관계를 먼저 빼세요.',
+    'concept_relation_reverse_exists':
+        '반대 방향 관계가 이미 있습니다. 서로가 서로의 한 종류·요소로 보이면 같은 개념인지 먼저 검토하세요.',
+    'concept_relation_exists': '같은 방향·유형·맥락의 관계가 이미 있습니다. 있는 관계를 고치세요.',
+    'concept_relation_context_required': '근거·유도와 학습 의존은 맥락(어떤 유도인지, 어떤 목표·방법인지)을 적어야 합니다.',
+    'concept_relation_stale': '읽은 뒤 이 관계가 바뀌었습니다. 다시 읽은 뒤 고치세요.',
+    'concept_relation_unchanged': '바뀐 것이 없습니다.',
+    'concept_relation_rev_required': '관계를 다시 읽은 뒤 고치세요.',
     'concept_review_bad_resolution': '알 수 없는 판단입니다.',
     'concept_review_not_found': '검토 표시를 찾을 수 없습니다.',
     'concept_review_closed': '이미 판단한 검토입니다. 다시 읽어 주세요.',
@@ -230,8 +426,8 @@ class ConceptRelationException implements Exception {
 }
 
 abstract class ConceptRelationBackend {
-  /// 이 개념에서 나가거나 들어오는 관계.
-  Future<List<ConceptRelation>> relationsFor(String conceptId);
+  /// 이 개념에서 나가거나 들어오는 관계와 최근 관계 이력.
+  Future<ConceptRelationSheet> relationsFor(String conceptId);
 
   /// 이 개념이 표시됐거나 비교 상대인 검토(열린 것과 닫힌 것).
   Future<List<ConceptReview>> reviewsFor(String conceptId);
@@ -251,13 +447,28 @@ abstract class ConceptRelationBackend {
   /// 이름(앞뒤 공백·대소문자 무시)이 같은 개념이 둘 이상인 묶음.
   Future<List<List<ConceptPick>>> sameNameGroups();
 
+  /// 확장·특수한 경우를 넣는다. 같은 방향 줄이 있으면 그 줄의 종류를 바꾼다(옛 동작).
   Future<ConceptRelation> setRelation({
     required String conceptId,
     required String relatedId,
     required ConceptRelationKind kind,
     String? note,
   });
-  Future<void> removeRelation(String id);
+
+  /// [id]가 null이면 새로 넣고, 있으면 [rev](읽은 판)가 지금과 같을 때만 고친다. 같은 관계가 이미 있으면 막는다.
+  Future<ConceptRelation> saveRelation({
+    String? id,
+    int? rev,
+    required String conceptId,
+    required String relatedId,
+    required ConceptRelationKind kind,
+    String? context,
+    String? basis,
+    String? note,
+  });
+
+  /// 관계만 뺀다. [rev]를 주면 읽은 판이 지금과 같을 때만.
+  Future<void> removeRelation(String id, {int? rev});
   Future<ConceptReview> openReview({required String conceptId, String? otherId, String? note});
 
   /// [reverse]면 "비교 개념 → 표시된 개념"으로 적는다(확장·특수한 경우의 방향).
@@ -321,17 +532,27 @@ class SupabaseConceptRelationBackend implements ConceptRelationBackend {
 
   static const _pickColumns = 'id,name,version_label,main_category_id,created_at';
 
+  static const _listMissing = {'42883', 'PGRST202'};
+
   @override
-  Future<List<ConceptRelation>> relationsFor(String conceptId) => _guard(() async {
-        final rows = await _db
-            .from('concept_relations')
-            .select(_relationColumns)
-            .or('concept_id.eq.$conceptId,related_id.eq.$conceptId')
-            .order('created_at', ascending: true);
-        return [
-          for (final r in rows as List)
-            if (ConceptRelation.fromRow(Map<String, dynamic>.from(r as Map)) case final rel?) rel
-        ];
+  Future<ConceptRelationSheet> relationsFor(String conceptId) => _guard(() async {
+        final Object? data;
+        try {
+          data = await _db.rpc('concept_relation_list', params: {'p_concept': conceptId});
+        } on PostgrestException catch (e) {
+          if (!_listMissing.contains(e.code)) rethrow;
+          // 관계 유형 마이그레이션 전 DB: 표를 그대로 읽는다(맥락·결정 기록 칸이 아직 없다).
+          final rows = await _db
+              .from('concept_relations')
+              .select(_relationColumns)
+              .or('concept_id.eq.$conceptId,related_id.eq.$conceptId')
+              .order('created_at', ascending: true);
+          return ConceptRelationSheet(relations: [
+            for (final r in rows as List)
+              if (ConceptRelation.fromRow(Map<String, dynamic>.from(r as Map)) case final rel?) rel
+          ]);
+        }
+        return conceptRelationSheetFromJson(Map<String, dynamic>.from(data as Map));
       });
 
   @override
@@ -447,7 +668,35 @@ class SupabaseConceptRelationBackend implements ConceptRelationBackend {
       });
 
   @override
-  Future<void> removeRelation(String id) => _guard(() => _db.rpc('concept_relation_remove', params: {'p_id': id}));
+  Future<ConceptRelation> saveRelation({
+    String? id,
+    int? rev,
+    required String conceptId,
+    required String relatedId,
+    required ConceptRelationKind kind,
+    String? context,
+    String? basis,
+    String? note,
+  }) =>
+      _guard(() async {
+        final data = await _db.rpc('concept_relation_save', params: {
+          'p_id': id,
+          'p_rev': rev,
+          'p_concept': conceptId,
+          'p_related': relatedId,
+          'p_kind': kind.db,
+          'p_context': _note(context),
+          'p_basis': _note(basis),
+          'p_note': _note(note),
+        });
+        return ConceptRelation.fromRow(Map<String, dynamic>.from(data as Map))!;
+      });
+
+  @override
+  Future<void> removeRelation(String id, {int? rev}) => _guard(() => _db.rpc('concept_relation_remove', params: {
+        'p_id': id,
+        if (rev != null) 'p_rev': rev,
+      }));
 
   @override
   Future<ConceptReview> openReview({required String conceptId, String? otherId, String? note}) =>

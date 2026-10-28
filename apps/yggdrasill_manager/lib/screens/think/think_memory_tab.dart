@@ -305,7 +305,6 @@ class _MemoryEditorState extends State<_MemoryEditor> {
   ThinkDepartmentId? _scopeDepartment;
   int _loadedVersion = 0;
   bool _dirty = false;
-  bool _saving = false;
   bool _filling = false;
 
   ThinkController get _c => ThinkController.instance;
@@ -324,7 +323,7 @@ class _MemoryEditorState extends State<_MemoryEditor> {
   void didUpdateWidget(covariant _MemoryEditor old) {
     super.didUpdateWidget(old);
     final m = widget.memory;
-    if (m != null && m.version != _loadedVersion && !_dirty && !_saving) _fill(m);
+    if (m != null && m.version != _loadedVersion && !_dirty) _fill(m);
   }
 
   @override
@@ -361,78 +360,16 @@ class _MemoryEditorState extends State<_MemoryEditor> {
     _dirty = false;
   }
 
-  ThinkMemoryDraft _draft() => ThinkMemoryDraft(
-        kind: _kind,
-        status: _status,
-        title: _title.text,
-        content: _content.text,
-        decisionContext: _context.text,
-        decisionReason: _reason.text,
-        alternatives: _alternatives.text.split('\n'),
-        tags: _tags.text.split(RegExp(r'[,，]')),
-        sortOrder: int.tryParse(_sortOrder.text.trim()) ?? 0,
-        sourceConversationId: widget.memory?.sourceConversationId,
-        supersedesId: widget.memory?.supersedesId,
-        memoryScope: _memoryScope,
-        scopeDepartment: _memoryScope == ThinkMemoryScope.department ? _scopeDepartment : null,
-      );
-
-  Future<void> _run(Future<ThinkMemory?> Function() action, String done) async {
-    setState(() => _saving = true);
-    try {
-      final saved = await action();
-      if (!mounted) return;
-      setState(() {
-        _saving = false;
-        if (saved != null) _fill(saved);
-      });
-      if (saved != null) widget.onSaved(saved);
-      showThinkSnack(context, done);
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _saving = false);
-      final conflict = e is ThinkApiException && e.code == 'conflict';
-      if (conflict) await _c.refreshMemories();
-      if (mounted) showThinkSnack(context, e is ThinkApiException ? e.message : '저장하지 못했습니다: $e', error: true);
-    }
-  }
-
   Future<void> _save() async {
-    if (_title.text.trim().isEmpty || _content.text.trim().isEmpty) {
-      showThinkSnack(context, '제목과 내용을 채워 주세요.', error: true);
-      return;
-    }
-    final existing = widget.memory;
-    await _run(() => _c.saveMemory(_draft(), existing: existing), '저장했습니다.');
+    showMemoryApprovalOnly(context);
   }
 
   Future<void> _approve() async {
-    final m = widget.memory;
-    if (m == null) return;
-    if (_dirty) {
-      _status = ThinkMemoryStatus.active;
-      await _save();
-      return;
-    }
-    await _run(() => _c.setMemoryStatus(m, ThinkMemoryStatus.active), '확정했습니다. 다음 대화부터 반영됩니다.');
+    showMemoryApprovalOnly(context);
   }
 
   Future<void> _delete() async {
-    final m = widget.memory;
-    if (m == null) return;
-    final ok = await confirmThink(
-      context,
-      title: '기억 삭제',
-      message: '"${m.title}"을(를) 지웁니다. 변경 이력도 함께 사라집니다.\n기록만 남기려면 상태를 "보관"으로 바꾸세요.',
-      confirmLabel: '삭제',
-      destructive: true,
-    );
-    if (!ok) return;
-    try {
-      await _c.deleteMemory(m);
-    } catch (e) {
-      if (mounted) showThinkSnack(context, '삭제하지 못했습니다: $e', error: true);
-    }
+    showMemoryApprovalOnly(context);
   }
 
   Future<void> _history() async {
@@ -443,8 +380,7 @@ class _MemoryEditorState extends State<_MemoryEditor> {
       builder: (_) => _RevisionDialog(memory: m),
     );
     if (restored == null || !mounted) return;
-    final latest = _c.memoryById(m.id) ?? m;
-    await _run(() => _c.restoreRevision(latest, restored), 'v${restored.version} 내용으로 되돌렸습니다.');
+    showMemoryApprovalOnly(context);
   }
 
   @override
@@ -482,19 +418,19 @@ class _MemoryEditorState extends State<_MemoryEditor> {
                 IconButton(
                   tooltip: '변경 이력',
                   color: kThinkSub,
-                  onPressed: _saving ? null : _history,
+                  onPressed: _history,
                   icon: const Icon(Icons.history),
                 ),
                 IconButton(
                   tooltip: '삭제',
                   color: kThinkSub,
-                  onPressed: _saving ? null : _delete,
+                  onPressed: _delete,
                   icon: const Icon(Icons.delete_outline),
                 ),
                 if (m.kind == ThinkMemoryKind.decision && m.status == ThinkMemoryStatus.active) ...[
                   const SizedBox(width: 4),
                   OutlinedButton.icon(
-                    onPressed: _saving || _dirty ? null : () => ThinkSpecExportDialog.show(context, m),
+                    onPressed: _dirty ? null : () => ThinkSpecExportDialog.show(context, m),
                     style: thinkOutlineButton(),
                     icon: const Icon(Icons.description_outlined, size: 16),
                     label: const Text('스펙 내보내기'),
@@ -503,7 +439,7 @@ class _MemoryEditorState extends State<_MemoryEditor> {
                 if (m.status == ThinkMemoryStatus.draft) ...[
                   const SizedBox(width: 8),
                   OutlinedButton.icon(
-                    onPressed: _saving ? null : _approve,
+                    onPressed: _approve,
                     style: thinkOutlineButton(),
                     icon: const Icon(Icons.verified_outlined, size: 16, color: kThinkAccent),
                     label: const Text('확정하기'),
@@ -512,15 +448,9 @@ class _MemoryEditorState extends State<_MemoryEditor> {
               ],
               const SizedBox(width: 8),
               ElevatedButton.icon(
-                onPressed: _saving || (m != null && !_dirty) ? null : _save,
+                onPressed: (m != null && !_dirty) ? null : _save,
                 style: thinkPrimaryButton(),
-                icon: _saving
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                      )
-                    : const Icon(Icons.save_outlined, size: 18),
+                icon: const Icon(Icons.save_outlined, size: 18),
                 label: const Text('저장'),
               ),
             ],
@@ -531,6 +461,11 @@ class _MemoryEditorState extends State<_MemoryEditor> {
           child: ListView(
             padding: const EdgeInsets.all(24),
             children: [
+              const ThinkNotice(
+                icon: Icons.verified_outlined,
+                text: kMemoryApprovalOnly,
+              ),
+              const SizedBox(height: 16),
               Row(
                 children: [
                   Expanded(
@@ -586,7 +521,7 @@ class _MemoryEditorState extends State<_MemoryEditor> {
                   scope: _memoryScope,
                   department: _scopeDepartment,
                   showLegacy: widget.memory?.memoryScope == ThinkMemoryScope.legacyUnscoped,
-                  enabled: !_saving,
+                  enabled: true,
                   onChanged: (scope, dept) => setState(() {
                     _memoryScope = scope;
                     _scopeDepartment = dept;

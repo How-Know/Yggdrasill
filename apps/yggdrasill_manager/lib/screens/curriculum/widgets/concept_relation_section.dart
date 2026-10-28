@@ -443,9 +443,286 @@ class _DecisionDialogState extends State<_DecisionDialog> {
   }
 }
 
+// ------------------------------------------------------------------ 관계 넣기·고치기 창
+
+IconData conceptRelationIcon(ConceptRelationKind k) => switch (k) {
+      ConceptRelationKind.kindOf => Icons.category_outlined,
+      ConceptRelationKind.partOf => Icons.extension_outlined,
+      ConceptRelationKind.derivedFrom => Icons.functions,
+      ConceptRelationKind.dependsOn => Icons.school_outlined,
+      ConceptRelationKind.extendsOf => Icons.open_in_full,
+      ConceptRelationKind.specialCase => Icons.filter_center_focus,
+    };
+
+String _kindHelp(ConceptRelationKind k) => switch (k) {
+      ConceptRelationKind.kindOf => 'A는 B의 한 종류(특수화)입니다. 예: 정사각형 → 직사각형',
+      ConceptRelationKind.partOf => 'A는 B를 이루는 요소입니다. 예: 꼭짓점 → 다각형',
+      ConceptRelationKind.derivedFrom => 'A는 B를 근거로 유도·증명됩니다. 어떤 유도인지 맥락에 적습니다.',
+      ConceptRelationKind.dependsOn => 'A를 배우거나 쓰려면 B가 필요합니다. 어떤 목표·방법에서인지 맥락에 적습니다.',
+      ConceptRelationKind.extendsOf => 'A는 B를 넓힌 개념입니다(이전부터 쓰던 유형).',
+      ConceptRelationKind.specialCase => 'A는 B의 특수한 경우입니다(이전부터 쓰던 유형). 종류·특수화와 따로 둡니다.',
+    };
+
+/// 관계 창에서 고른 것. [kind]가 null이면 [judgment](서로 다른 개념·같은 개념) 판단만 기록한다.
+class ConceptRelationDraft {
+  const ConceptRelationDraft({this.kind, this.judgment, this.reverse = false, this.context, this.basis, this.note});
+
+  final ConceptRelationKind? kind;
+  final ConceptReviewResolution? judgment;
+
+  /// "B → A"로 적는다(A = 이 개념).
+  final bool reverse;
+  final String? context;
+  final String? basis;
+  final String? note;
+}
+
+/// [aName](이 개념)과 [bName] 사이 관계를 넣거나([editing]이 null) 고친다. 개념은 합치거나 옮기지 않는다.
+/// [editing]이 있으면 [editingReversed]는 그 관계가 "B → A"인지.
+Future<ConceptRelationDraft?> showConceptRelationDialog(
+  BuildContext context, {
+  required String aName,
+  required String bName,
+  ConceptRelation? editing,
+  bool editingReversed = false,
+}) =>
+    showDialog<ConceptRelationDraft>(
+      context: context,
+      builder: (_) => _RelationDialog(aName: aName, bName: bName, editing: editing, editingReversed: editingReversed),
+    );
+
+class _RelationDialog extends StatefulWidget {
+  const _RelationDialog({required this.aName, required this.bName, this.editing, this.editingReversed = false});
+
+  final String aName;
+  final String bName;
+  final ConceptRelation? editing;
+  final bool editingReversed;
+
+  @override
+  State<_RelationDialog> createState() => _RelationDialogState();
+}
+
+class _RelationDialogState extends State<_RelationDialog> {
+  late ConceptRelationKind? _kind = widget.editing?.kind;
+  ConceptReviewResolution? _judgment;
+  late bool _reverse = widget.editing != null && widget.editingReversed;
+  late final TextEditingController _context = TextEditingController(text: widget.editing?.context ?? '');
+  late final TextEditingController _basis = TextEditingController(text: widget.editing?.basis ?? '');
+  late final TextEditingController _note = TextEditingController(text: widget.editing?.note ?? '');
+
+  @override
+  void dispose() {
+    _context.dispose();
+    _basis.dispose();
+    _note.dispose();
+    super.dispose();
+  }
+
+  static String? _clean(TextEditingController c) => c.text.trim().isEmpty ? null : c.text.trim();
+
+  static String _short(String s) {
+    final r = s.runes;
+    return r.length > 18 ? '${String.fromCharCodes(r.take(17))}…' : s;
+  }
+
+  bool get _changed {
+    final e = widget.editing;
+    if (e == null) return true;
+    return _kind != e.kind ||
+        _reverse != widget.editingReversed ||
+        _clean(_context) != e.context ||
+        _clean(_basis) != e.basis ||
+        _clean(_note) != e.note;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final a = widget.aName;
+    final b = widget.bName;
+    final edit = widget.editing != null;
+    final kind = _kind;
+    final ctx = _context.text.trim();
+    final ready = _judgment != null || (kind != null && (!kind.contextRequired || ctx.isNotEmpty) && _changed);
+    final sentence = _judgment != null
+        ? '기록할 판단: ${_judgment!.sentence(a, b)}'
+        : (kind == null ? null : '기록할 관계: ${_reverse ? kind.sentence(b, a, ctx) : kind.sentence(a, b, ctx)}');
+    return AlertDialog(
+      backgroundColor: kThinkBg,
+      shape: thinkDialogShape,
+      title: Text(edit ? '관계 고치기' : '관계 더하기',
+          style: const TextStyle(color: kThinkText, fontSize: 18, fontWeight: FontWeight.w800)),
+      content: SizedBox(
+        width: 560,
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('A: "$a"', style: const TextStyle(color: kThinkText, fontSize: 14, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 2),
+              Text('B: "$b"', style: const TextStyle(color: kThinkText, fontSize: 14, fontWeight: FontWeight.w700)),
+              if (widget.editing?.rereview == true) ...[
+                const SizedBox(height: 8),
+                const ThinkNotice(
+                  text: '판단한 뒤 두 개념 중 하나의 글이 바뀌었습니다. 지금 글을 보고 이 관계가 맞는지 다시 판단하세요.',
+                  color: kThinkAccent,
+                  icon: Icons.sync_problem,
+                ),
+              ],
+              const SizedBox(height: 12),
+              const Text('관계 유형', style: TextStyle(color: kThinkSub, fontSize: 13, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final k in ConceptRelationKind.values)
+                    ThinkToggleChip(
+                      key: ValueKey('decision-${k.db}'),
+                      label: k.label,
+                      icon: conceptRelationIcon(k),
+                      tooltip: _kindHelp(k),
+                      selected: _kind == k,
+                      onChanged: (_) => setState(() {
+                        _kind = k;
+                        _judgment = null;
+                      }),
+                    ),
+                ],
+              ),
+              if (!edit) ...[
+                const SizedBox(height: 10),
+                const Text('관계 대신 판단만 기록',
+                    style: TextStyle(color: kThinkSub, fontSize: 13, fontWeight: FontWeight.w800)),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    for (final r in const [ConceptReviewResolution.different, ConceptReviewResolution.same])
+                      ThinkToggleChip(
+                        key: ValueKey('decision-${r.db}'),
+                        label: r.label,
+                        icon: r == ConceptReviewResolution.different ? Icons.call_split : Icons.drag_handle,
+                        selected: _judgment == r,
+                        onChanged: (_) => setState(() {
+                          _judgment = r;
+                          _kind = null;
+                        }),
+                      ),
+                  ],
+                ),
+              ],
+              if (kind != null) ...[
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    ThinkToggleChip(
+                      key: const ValueKey('decision-forward'),
+                      label: '"${_short(a)}" → "${_short(b)}"',
+                      tooltip: kind.sentence(a, b, ctx),
+                      icon: Icons.east,
+                      selected: !_reverse,
+                      onChanged: (_) => setState(() => _reverse = false),
+                    ),
+                    ThinkToggleChip(
+                      key: const ValueKey('decision-reverse'),
+                      label: '"${_short(b)}" → "${_short(a)}"',
+                      tooltip: kind.sentence(b, a, ctx),
+                      icon: Icons.east,
+                      selected: _reverse,
+                      onChanged: (_) => setState(() => _reverse = true),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                ConceptHint(_kindHelp(kind)),
+                if (kind == ConceptRelationKind.dependsOn)
+                  const ConceptHint('과정 순서만 보고 넣지 않습니다. A→B, B→C가 있어도 A→C로 넓혀 읽지 않습니다.'),
+                const SizedBox(height: 10),
+                TextField(
+                  key: const ValueKey('relation-context'),
+                  controller: _context,
+                  maxLength: 300,
+                  minLines: 1,
+                  maxLines: 3,
+                  onChanged: (_) => setState(() {}),
+                  style: const TextStyle(color: kThinkText, fontSize: 13),
+                  decoration: thinkInputDecoration(
+                    label: kind.contextRequired ? '맥락(필수)' : '맥락(선택)',
+                    hint: switch (kind) {
+                      ConceptRelationKind.derivedFrom => '예: 완전제곱식으로 고쳐 유도할 때',
+                      ConceptRelationKind.dependsOn => '예: 넓이 공식을 증명할 때',
+                      _ => '예: 자연수 범위에서',
+                    },
+                    dense: true,
+                  ),
+                ),
+                TextField(
+                  key: const ValueKey('relation-basis'),
+                  controller: _basis,
+                  maxLength: 1000,
+                  minLines: 1,
+                  maxLines: 4,
+                  onChanged: (_) => setState(() {}),
+                  style: const TextStyle(color: kThinkText, fontSize: 13),
+                  decoration: thinkInputDecoration(label: '근거(선택)', hint: '왜 이 관계로 보았는지', dense: true),
+                ),
+              ],
+              if (sentence != null) ...[
+                const SizedBox(height: 4),
+                ThinkNotice(text: sentence, color: kThinkLink, icon: Icons.fact_check_outlined),
+              ],
+              const SizedBox(height: 12),
+              TextField(
+                key: const ValueKey('decision-note'),
+                controller: _note,
+                maxLength: 500,
+                minLines: 1,
+                maxLines: 4,
+                onChanged: (_) => setState(() {}),
+                style: const TextStyle(color: kThinkText, fontSize: 13),
+                decoration: thinkInputDecoration(label: _judgment != null ? '판단 이유(선택)' : '메모(선택)', dense: true),
+              ),
+              const ConceptHint('두 개념은 합치거나 옮기지 않고 관계만 기록합니다. 이름·학년·문장이 비슷한 것만으로 정하지 마세요.'),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('취소', style: TextStyle(color: kThinkSub)),
+        ),
+        ElevatedButton(
+          key: const ValueKey('decision-save'),
+          onPressed: ready
+              ? () => Navigator.pop(
+                    context,
+                    ConceptRelationDraft(
+                      kind: _judgment == null ? _kind : null,
+                      judgment: _judgment,
+                      reverse: _judgment == null && _reverse,
+                      context: _judgment == null ? _clean(_context) : null,
+                      basis: _judgment == null ? _clean(_basis) : null,
+                      note: _clean(_note),
+                    ),
+                  )
+              : null,
+          style: thinkPrimaryButton(),
+          child: Text(_judgment != null ? '판단 기록' : (edit ? '고친 관계 저장' : '관계 저장')),
+        ),
+      ],
+    );
+  }
+}
+
 // ------------------------------------------------------------------ 상세 칸
 
-/// 개념 상세의 "다른 개념과의 관계" 칸: 검토 필요 표시, 운영자가 고른 관계, 지난 판단.
+/// 개념 상세의 "다른 개념과의 관계" 칸: 검토 필요 표시, 운영자가 고른 관계, 관계 이력, 지난 판단.
 class ConceptRelationSection extends StatelessWidget {
   const ConceptRelationSection({super.key, required this.controller, required this.concept, this.onOpenConcept});
 
@@ -490,6 +767,7 @@ class ConceptRelationSection extends StatelessWidget {
           );
         }
         final relations = _store.relationsOf(id);
+        final sheet = _store.sheetOf(id);
         final open = _store.openReviewsOf(id);
         final closed = _store.closedReviewsOf(id);
         final busy = _store.busy;
@@ -513,6 +791,12 @@ class ConceptRelationSection extends StatelessWidget {
             if (relations.isEmpty && open.isEmpty)
               const ConceptHint('이은 관계가 없습니다. 운영자가 고른 관계만 기록하고, 이름·학년·문장이 비슷하다고 자동으로 잇지 않습니다.'),
             for (final r in relations) _relationLine(context, r),
+            if ((sheet?.pendingAdds ?? 0) > 0)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: ConceptHint('이 개념에 관계를 넣자는 Think 카드 항목 ${sheet!.pendingAdds}개가 승인을 기다립니다.'),
+              ),
+            if (sheet != null && sheet.eventCount > 0) _history(sheet),
             if (closed.isNotEmpty) ...[
               const SizedBox(height: 6),
               Text('지난 판단 ${closed.length}건',
@@ -584,29 +868,68 @@ class ConceptRelationSection extends StatelessWidget {
 
   Widget _relationLine(BuildContext context, ConceptRelation r) {
     final other = r.otherOf(concept.id);
+    final d = r.decision;
+    final decided = d == null ? '결정 기록 없음' : '${d.label}${d.at == null ? '' : ' · ${_date(d.at)}'}';
     return Padding(
-      padding: const EdgeInsets.only(top: 2),
+      padding: const EdgeInsets.only(top: 4),
       child: Row(
         key: ValueKey('concept-relation-${r.id}'),
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(r.kind == ConceptRelationKind.extendsOf ? Icons.open_in_full : Icons.filter_center_focus,
-              size: 14, color: kThinkLink),
+          Padding(
+            padding: const EdgeInsets.only(top: 3),
+            child: Icon(conceptRelationIcon(r.kind), size: 14, color: kThinkLink),
+          ),
           const SizedBox(width: 6),
           Expanded(
-            child: Tooltip(
-              message: [
-                r.originLabel,
-                if ((r.note ?? '').isNotEmpty) r.note!,
-                if (r.createdAt != null) _date(r.createdAt)
-              ].join('\n'),
-              child: InkWell(
-                onTap: onOpenConcept == null ? null : () => onOpenConcept!(other),
-                child: Text(r.kind.sentence(_name(r.conceptId), _name(r.relatedId)),
-                    style: const TextStyle(color: kThinkSub, fontSize: 12, height: 1.5)),
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Tooltip(
+                  message: [
+                    r.originLabel,
+                    r.decisionLabel,
+                    if ((r.note ?? '').isNotEmpty) r.note!,
+                    if (r.createdAt != null) _date(r.createdAt)
+                  ].join('\n'),
+                  child: InkWell(
+                    onTap: onOpenConcept == null ? null : () => onOpenConcept!(other),
+                    child: Text(r.kind.sentence(_name(r.conceptId), _name(r.relatedId), r.context),
+                        style: const TextStyle(color: kThinkSub, fontSize: 12, height: 1.5)),
+                  ),
+                ),
+                if ((r.basis ?? '').isNotEmpty)
+                  Text('근거: ${r.basis}',
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: kThinkHint, fontSize: 12, height: 1.4)),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 2,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Text('${r.kind.label} · $decided', style: const TextStyle(color: kThinkHint, fontSize: 11)),
+                    if (r.rereview == true)
+                      const Tooltip(
+                        message: '판단한 뒤 두 개념 중 하나의 이름·본문·확정 서술이 바뀌었습니다.',
+                        child: ThinkBadge('다시 검토 필요', color: kThinkAccent),
+                      ),
+                    if (r.pendingCards > 0) ThinkBadge('Think 카드 승인 대기 ${r.pendingCards}', color: kThinkLink),
+                  ],
+                ),
+              ],
             ),
           ),
           IconButton(
+            key: ValueKey('relation-edit-${r.id}'),
+            tooltip: r.rev == null ? '관계 유형 마이그레이션 반영 뒤 고칠 수 있습니다' : '관계 고치기',
+            onPressed: _store.busy || r.rev == null ? null : () => unawaited(_edit(context, r)),
+            icon: const Icon(Icons.edit_outlined, size: 14),
+            color: kThinkHint,
+            visualDensity: VisualDensity.compact,
+          ),
+          IconButton(
+            key: ValueKey('relation-remove-${r.id}'),
             tooltip: '관계 빼기',
             onPressed: _store.busy ? null : () => unawaited(_remove(context, r)),
             icon: const Icon(Icons.close, size: 14),
@@ -618,6 +941,35 @@ class ConceptRelationSection extends StatelessWidget {
     );
   }
 
+  Widget _history(ConceptRelationSheet sheet) {
+    String via(String v) => switch (v) {
+          'think' => 'Think 카드',
+          'draft' => '초안 확정',
+          'review' => '검토',
+          _ => '직접',
+        };
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 6),
+        Text('관계 이력 ${sheet.eventCount}건',
+            style: const TextStyle(color: kThinkSub, fontSize: 12, fontWeight: FontWeight.w700)),
+        for (final e in sheet.events.take(5))
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Tooltip(
+              message: e.reason ?? '',
+              child: Text(
+                '· ${e.eventLabel}: ${e.kind == null ? '"${e.conceptName}" → "${e.relatedName}"' : e.kind!.sentence(e.conceptName, e.relatedName, e.context)}'
+                ' · ${via(e.via)}${e.at == null ? '' : ' · ${_date(e.at)}'}',
+                style: const TextStyle(color: kThinkHint, fontSize: 12, height: 1.5),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
   Future<void> _add(BuildContext context) async {
     final p = await showConceptPickDialog(
       context,
@@ -625,30 +977,55 @@ class ConceptRelationSection extends StatelessWidget {
       title: '관계를 이을 개념 고르기',
       excludeId: concept.id,
       initialQuery: concept.name,
-      hint: '고른 뒤 확장·특수한 경우와 방향을 정합니다.',
+      hint: '고른 뒤 관계 유형과 방향을 정합니다. 같은 개념인지 판단만 기록할 수도 있습니다.',
     );
     if (p == null || !context.mounted) return;
     _store.rememberPick(p);
-    final d = await showConceptDecisionDialog(context, aName: conceptDisplayName(concept), bName: p.label);
+    final d = await showConceptRelationDialog(context, aName: conceptDisplayName(concept), bName: p.label);
     if (d == null || !context.mounted) return;
+    final judgment = d.judgment;
+    final kind = d.kind;
     String? err;
-    switch (d.resolution) {
-      case ConceptReviewResolution.extendsOf:
-      case ConceptReviewResolution.specialCase:
-        final kind = d.resolution == ConceptReviewResolution.extendsOf
-            ? ConceptRelationKind.extendsOf
-            : ConceptRelationKind.specialCase;
-        err = await _store.setRelation(
-          conceptId: d.reverse ? p.id : concept.id,
-          relatedId: d.reverse ? concept.id : p.id,
-          kind: kind,
-          note: d.note,
-        );
-      case ConceptReviewResolution.different:
-      case ConceptReviewResolution.same:
-        err = await _store.decidePair(conceptId: concept.id, otherId: p.id, resolution: d.resolution, note: d.note);
+    if (judgment != null) {
+      err = await _store.decidePair(conceptId: concept.id, otherId: p.id, resolution: judgment, note: d.note);
+    } else if (kind != null) {
+      err = await _store.saveRelation(
+        conceptId: d.reverse ? p.id : concept.id,
+        relatedId: d.reverse ? concept.id : p.id,
+        kind: kind,
+        context: d.context,
+        basis: d.basis,
+        note: d.note,
+      );
+    } else {
+      return;
     }
-    if (context.mounted) showThinkSnack(context, err ?? '판단을 기록했습니다.', error: err != null);
+    if (context.mounted) {
+      showThinkSnack(context, err ?? (judgment != null ? '판단을 기록했습니다.' : '관계를 저장했습니다.'), error: err != null);
+    }
+  }
+
+  Future<void> _edit(BuildContext context, ConceptRelation r) async {
+    final other = r.otherOf(concept.id);
+    final d = await showConceptRelationDialog(
+      context,
+      aName: conceptDisplayName(concept),
+      bName: _name(other),
+      editing: r,
+      editingReversed: r.conceptId != concept.id,
+    );
+    final kind = d?.kind;
+    if (d == null || kind == null || !context.mounted) return;
+    final err = await _store.saveRelation(
+      editing: r,
+      conceptId: d.reverse ? other : concept.id,
+      relatedId: d.reverse ? concept.id : other,
+      kind: kind,
+      context: d.context,
+      basis: d.basis,
+      note: d.note,
+    );
+    if (context.mounted) showThinkSnack(context, err ?? '관계를 고쳤습니다.', error: err != null);
   }
 
   Future<void> _flag(BuildContext context) async {
@@ -696,7 +1073,8 @@ class ConceptRelationSection extends StatelessWidget {
     final ok = await confirmThink(
       context,
       title: '관계 빼기',
-      message: '${r.kind.sentence(_name(r.conceptId), _name(r.relatedId))}(이)라는 관계를 뺍니다. 두 개념과 다른 관계는 그대로 남습니다.',
+      message: '${r.kind.sentence(_name(r.conceptId), _name(r.relatedId), r.context)}(이)라는 관계를 뺍니다. '
+          '두 개념과 다른 관계는 그대로 남고, 뺀 일은 관계 이력에 남습니다.',
       confirmLabel: '빼기',
       destructive: true,
     );

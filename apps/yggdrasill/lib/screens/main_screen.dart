@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../widgets/curriculum_mind_map_icon.dart';
 import '../widgets/home_grading_edit_icon.dart';
+import '../widgets/problem_bank_cloud_storage_icon.dart';
 import '../widgets/home_header_weather_icon.dart';
 import '../widgets/home_status_dashboard_icon.dart';
 import '../widgets/class_timetable_icon.dart';
@@ -25,6 +27,7 @@ import '../models/student.dart';
 import '../models/group_info.dart';
 import '../models/student_view_type.dart';
 import '../widgets/main_fab_alternative.dart';
+import '../widgets/corner_action_bar.dart';
 import '../theme/ygg_semantic_colors.dart';
 import '../app_overlays.dart';
 import '../services/tenant_service.dart';
@@ -1972,6 +1975,9 @@ class _MainScreenState extends State<MainScreen>
     if (closeRightSheet != null) {
       unawaited(closeRightSheet());
     }
+    if (index != 0) {
+      gradingModeActive.value = false;
+    }
     setState(() {
       _selectedIndex = index;
     });
@@ -3384,14 +3390,29 @@ class _MainScreenState extends State<MainScreen>
     ),
   ];
 
+  static const List<FabTabIconPair?> _learningTabIcons = [
+    FabTabIconPair(
+      outlineSvg: curriculumMindMapOutlineSvg,
+      filledSvg: curriculumMindMapFilledSvg,
+      size: 32 * 0.9,
+    ),
+    FabTabIconPair(
+      outlineSvg: problemBankCloudStorageOutlineSvg,
+      filledSvg: problemBankCloudStorageFilledSvg,
+      size: 32 * 0.95,
+    ),
+  ];
+
   static const List<FabTabIconPair?> _timetableTabIcons = [
     FabTabIconPair(
       outlineSvg: classTimetableOutlineSvg,
       filledSvg: classTimetableIconSvg,
+      size: 32 * 0.95,
     ),
     FabTabIconPair(
       outlineSvg: scheduleCalendarOutlineSvg,
       filledSvg: scheduleCalendarIconSvg,
+      size: 32 * 0.95,
     ),
   ];
 
@@ -3459,6 +3480,7 @@ class _MainScreenState extends State<MainScreen>
                 0 => _homeTabIcons,
                 1 => _studentTabIcons,
                 2 => _timetableTabIcons,
+                3 => _learningTabIcons,
                 _ => null,
               },
             ),
@@ -4404,6 +4426,7 @@ class _MainScreenState extends State<MainScreen>
           ),
           _buildUtilityToolbarOverlay(context),
           _buildSharedMenuTabBar(context),
+          SharedCornerActionBarHost(menuIndex: _selectedIndex),
         ],
       ),
       floatingActionButtonLocation:

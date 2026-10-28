@@ -239,12 +239,10 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
     }
     if (next == null) return;
     final selected = next;
-    final levelChanged = _grade != null && _grade!.level != selected.level;
     setState(() {
       _grade = selected;
       _educationLevel = selected.level;
     });
-    if (levelChanged) _schoolController.clear();
   }
 
   Future<void> _pickPayment(PreviewAcademyPanelStyle style) async {

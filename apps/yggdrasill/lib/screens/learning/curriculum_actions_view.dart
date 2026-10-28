@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 import '../../app_overlays.dart';
 import '../../models/behavior_card_drag_payload.dart';
@@ -11,6 +12,26 @@ import '../../widgets/animated_reorderable_grid.dart';
 import '../../widgets/dialog_tokens.dart';
 import '../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import '../resources/exam_preset_card.dart';
+import '../../widgets/curriculum_mind_map_icon.dart';
+
+/// 홈 수업 현황 헤더와 같은 높이. 오른쪽 캡슐이 56이라 제목은 그 가운데에 있다.
+const double _learningPageTitleRowHeight = 56;
+
+/// 페이지 제목 아이콘. 41.04에서 5% 더 줄인 값.
+const double _learningPageTitleIconSize = 48 * 0.9 * 0.95 * 0.95;
+
+const double _learningPageTitleLineHeight =
+    FabTabBarTokens.previewAcademyMainTitleFontSize * 1.15;
+
+/// 행동 제목 위 여백. 페이지 제목과의 48에 포함된다.
+const double _behaviorSectionHeaderTopPadding = 2;
+
+/// 커리큘럼 글자 줄 아래에서 행동 제목 위쪽까지 48.
+/// 글자는 높이 56 줄 가운데. 아이콘이 줄보다 작아도 글자 Y는 같다.
+const double _learningPageTitleBottomGap = 48 -
+    ((_learningPageTitleRowHeight - _learningPageTitleIconSize) / 2 +
+        (_learningPageTitleIconSize - _learningPageTitleLineHeight) / 2) -
+    _behaviorSectionHeaderTopPadding;
 
 const List<IconData> _behaviorIconPack = [
   Icons.directions_run,
@@ -333,7 +354,12 @@ class _CurriculumActionsViewState extends State<CurriculumActionsView> {
   Widget _buildBehaviorSectionHeader(PreviewAcademyPanelStyle panelStyle) {
     final isLight = Theme.of(context).brightness == Brightness.light;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(2, 2, 2, 14),
+      padding: const EdgeInsets.fromLTRB(
+        2,
+        _behaviorSectionHeaderTopPadding,
+        2,
+        14,
+      ),
       child: Row(
         children: [
           Text(
@@ -391,14 +417,42 @@ class _CurriculumActionsViewState extends State<CurriculumActionsView> {
       Theme.of(context).brightness,
     );
     return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+      padding: const EdgeInsets.fromLTRB(
+        24,
+        FabTabBarTokens.previewAcademyTopInset - 12,
+        24,
+        24,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const FabStyleScreenMainTitle(
-            title: '커리큘럼',
-            bottomSpacing: 12,
+          SizedBox(
+            height: _learningPageTitleRowHeight,
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  SvgPicture.string(
+                    curriculumMindMapOutlineSvg,
+                    width: _learningPageTitleIconSize,
+                    height: _learningPageTitleIconSize,
+                    colorFilter: ColorFilter.mode(
+                      panelStyle.title,
+                      BlendMode.srcIn,
+                    ),
+                  ),
+                  const SizedBox(width: 20),
+                  const FabStyleScreenMainTitle(
+                    title: '커리큘럼',
+                    overlay: true,
+                  ),
+                ],
+              ),
+            ),
           ),
+          const SizedBox(height: _learningPageTitleBottomGap),
           Expanded(
             child: LayoutBuilder(
               builder: (context, constraints) {
