@@ -31,7 +31,7 @@ const material = (job, gen, positions, offsets = {}, budget = 60000) =>
     [job, gen, positions, JSON.stringify(offsets), budget]);
 const save = (job, gen, items) => r(`select concept_review_job_save($1::uuid, $2::bigint, $3::jsonb) as r`, [job, gen, JSON.stringify(items)]);
 const submit = (job, gen) => r(`select concept_review_job_submit($1::uuid, $2::bigint, $3::uuid, '50개 검수 결과') as r`, [job, gen, conv]);
-const status = (job) => r(`select concept_review_job_status($1::uuid, 60) as r`, [job]);
+const status = (job) => r(`select concept_review_job_status_live($1::uuid, 60) as r`, [job]);
 const apply = (id, overrides = {}) => op(`select * from course_think_action_apply($1::uuid, $2::jsonb)`, [id, JSON.stringify(overrides)]);
 
 const review = (scope, findings = '이번에 본 범위에서 문제를 찾지 못함') => ({

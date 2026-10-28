@@ -121,7 +121,7 @@ Deno.test('대화: 준비됐으면 검토 도구·지침·기능 상태, 앱·DB
   const f = ready.runs.runs[0].features as Record<string, unknown>;
   assertEquals([f.course_map_tools, f.concept_review_tools], [true, true]);
   assertEquals(ready.runs.runs[0].promptVersion, THINK_PROMPT_VERSION);
-  assertEquals(THINK_PROMPT_VERSION, 'think-2026-10-28c');
+  assertEquals(THINK_PROMPT_VERSION, 'think-2026-10-28d');
 
   const cases: [typeof READY, string, boolean][] = [
     [OLD_APP, '앱 업데이트 필요', true],

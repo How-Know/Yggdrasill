@@ -55,7 +55,9 @@ Deno.test('검수 작업 도구는 검토 기능과 작업 기능이 모두 준�
     limits: { identityChars: 1000, principleChars: 1000, decisionChars: 1000 },
     courseMapReady: true, conceptReviewReady: true,
   };
-  assert(thinkInstructions({ ...base, conceptReviewJobsReady: true }).includes('## 개념 검수 작업'));
+  const jobRules = thinkInstructions({ ...base, conceptReviewJobsReady: true });
+  assert(jobRules.includes('## 개념 검수 작업'));
+  assert(jobRules.includes('progress_freshness'));
   assert(!thinkInstructions(base).includes('## 개념 검수 작업'));
 });
 
@@ -123,6 +125,32 @@ Deno.test('1차 검수 집계가 있으면 그 수를 그대로 전하고, 조�
   assertEquals(v.progress_line, '514개 중 61개 완료');
   assert(v.note.includes(line));
   assert(!v.note.includes('미집계'));
+});
+
+Deno.test('오래된 저장 집계는 채워진 1차 검수 수가 있어도 현재 완료 수가 아니다', async () => {
+  const store = new MemoryThinkStore();
+  const line = '1차 검수 3조건 충족: 250 / 514개(48.6%)';
+  store.reviewJobData.set('concept_review_job_status', {
+    ...STATUS,
+    pending_cards: [],
+    progress_freshness: 'stale',
+    progress_last_success: { progress_line: '514개 중 61개 완료', first_pass_line: line },
+    first_pass: { met: 250, total: 514, percent: 48.6, line },
+    first_pass_line: line,
+    open_items: [{ position: 2, concept_id: C1, name: '소수', reason: '옛 미결', next_action: '다시 판단' }],
+  });
+  const v = parse(await call(store, JOB_READ_TOOL_NAME, { job_id: JOB }, ctx()));
+  assertEquals(v.aggregation, 'stale');
+  assertEquals(v.progress_freshness, 'stale');
+  assertEquals(v.first_pass, null);
+  assertEquals(v.first_pass_line, null);
+  assertEquals(v.progress_line, null);
+  assertEquals(v.counts, null);
+  assertEquals(v.open_items, []);
+  assertEquals(v.progress_last_success.progress_line, '514개 중 61개 완료');
+  assert(v.note.includes('stale'));
+  assert(!v.note.includes('미집계'));
+  assert(!v.note.includes(line));
 });
 
 Deno.test('저장된 실패 진단은 재실행 없이 읽고, 예전 포괄 문장에는 원인을 만들지 않는다', async () => {

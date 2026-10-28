@@ -31,7 +31,7 @@ const save = (job, gen, items) => r(`select concept_review_job_save($1::uuid, $2
 const submit = (job, gen) =>
   r(`select concept_review_job_submit($1::uuid, $2::bigint, $3::uuid, '의존 검수 결과', null) as r`, [job, gen, conv]);
 const begin = (job, gen) => r(`select concept_review_job_batch_begin($1::uuid, $2::bigint) as r`, [job, gen]);
-const status = (job) => r(`select concept_review_job_status($1::uuid, 60) as r`, [job]);
+const status = (job) => r(`select concept_review_job_status_live($1::uuid, 60) as r`, [job]);
 const stateOf = async (id) => (await t.one(`select concept_review_job_concept_state($1::uuid, concept_review_pending_concepts()) as r`, [id])).r;
 const holdOf = async (job, pos) => (await t.one(
   `select concept_review_job_hold_view(held_fixes) as r from concept_review_job_items where job_id = $1::uuid and pos = $2`,

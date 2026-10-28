@@ -21,7 +21,7 @@ const start = (walkId) => r(`select concept_review_job_start($1::uuid, '실패 �
 const claim = async (job) => (await r(`select concept_review_job_claim($1::uuid, 'run', 'take') as r`, [job])).gen;
 const next = (job, gen, n) => r(`select concept_review_job_next($1::uuid, $2::bigint, $3) as r`, [job, gen, n]);
 const save = (job, gen, items) => r(`select concept_review_job_save($1::uuid, $2::bigint, $3::jsonb) as r`, [job, gen, JSON.stringify(items)]);
-const status = (job) => r(`select concept_review_job_status($1::uuid, 60) as r`, [job]);
+const status = (job) => r(`select concept_review_job_status_live($1::uuid, 60) as r`, [job]);
 const begin = (job, gen) => r(`select concept_review_job_batch_begin($1::uuid, $2::bigint) as r`, [job, gen]);
 const page = (job, after = 0, limit = 50) =>
   r(`select concept_review_job_failure_page($1::uuid, $2, $3) as r`, [job, after, limit]);

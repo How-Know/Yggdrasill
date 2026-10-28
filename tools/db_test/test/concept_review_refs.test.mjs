@@ -27,7 +27,7 @@ const claim = async (job) => (await r(`select concept_review_job_claim($1::uuid,
 const targets = (job, gen, n = 50) => r(`select concept_review_job_targets($1::uuid, $2::bigint, $3) as r`, [job, gen, n]);
 const save = (job, gen, items) => r(`select concept_review_job_save($1::uuid, $2::bigint, $3::jsonb) as r`, [job, gen, JSON.stringify(items)]);
 const submit = (job, gen) => r(`select concept_review_job_submit($1::uuid, $2::bigint, $3::uuid, '참조 상한', null) as r`, [job, gen, conv]);
-const status = (job) => r(`select concept_review_job_status($1::uuid, 60) as r`, [job]);
+const status = (job) => r(`select concept_review_job_status_live($1::uuid, 60) as r`, [job]);
 const begin = (job, gen) => r(`select concept_review_job_batch_begin($1::uuid, $2::bigint) as r`, [job, gen]);
 const material = (job, gen, positions) =>
   r(`select concept_review_job_material($1::uuid, $2::bigint, $3::integer[], '{}'::jsonb, 60000) as r`, [job, gen, positions]);

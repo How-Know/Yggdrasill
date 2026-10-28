@@ -13,7 +13,8 @@ import type { ActionRow } from './actions.ts';
 import {
   CONCEPT_REVIEW_REF_LIMIT,
   errorCode,
-  firstPassOf,
+  progressFreshnessNote,
+  progressReadOf,
   FIX_OP_SCHEMA,
   lease,
   REQUIRED_SCOPES,
@@ -1472,33 +1473,32 @@ export async function runReviewBatch(call: BatchCall, state: ReviewJobToolContex
   let firstPass: Rec | null = null;
   let firstPassLine: string | null = null;
   let firstPassState = 'unaggregated';
-  let aggregation: 'counted' | 'unaggregated' | 'failed' = 'unaggregated';
+  let aggregation = 'unaggregated';
+  let progressFreshness: string | null = null;
+  let progressLastSuccess: unknown = null;
   const statusTrace = createStatusTrace(deps.statusTimeoutMs ?? STATUS_QUERY_TIMEOUT_MS);
   statusTrace.jobId = job;
   statusTrace.stage = 'status_rpc';
   let statusDiag: StatusDiagnosis = statusDiagnosis(statusTrace, 'lookup_failed', 'failed');
+  let progressView = progressReadOf({});
   try {
     const pending = rpc('concept_review_job_status', { p_job_id: job, p_open_limit: 0 }, { signal: statusTrace.abort.signal });
     const st = rec(await raceTimeout(pending, statusTrace.timeoutMs, () => {
       statusTrace.cancelRequested = true;
       statusTrace.abort.abort();
     }));
-    const first = firstPassOf(st);
-    if (typeof st.progress_line === 'string') statusLine = st.progress_line;
-    if (typeof st.condition_line === 'string') conditionLine = st.condition_line;
-    counts = st.counts && typeof st.counts === 'object' ? st.counts : null;
-    conditions = st.conditions && typeof st.conditions === 'object' ? st.conditions : null;
-    if (first.known && first.value && first.line) {
-      firstPass = first.value;
-      firstPassLine = first.line;
-      firstPassState = 'counted';
-      aggregation = 'counted';
-      statusDiag = statusDiagnosis(statusTrace, 'ok', 'counted');
-    } else {
-      firstPassState = 'unaggregated';
-      aggregation = 'unaggregated';
-      statusDiag = statusDiagnosis(statusTrace, 'unaggregated', 'unaggregated');
-    }
+    progressView = progressReadOf(st);
+    statusLine = progressView.progressLine;
+    conditionLine = progressView.conditionLine;
+    counts = progressView.counts;
+    conditions = progressView.conditions;
+    firstPass = progressView.firstPass;
+    firstPassLine = progressView.firstPassLine;
+    firstPassState = progressView.firstPassState;
+    aggregation = progressView.aggregation;
+    progressFreshness = progressView.freshness;
+    progressLastSuccess = progressView.lastSuccess;
+    statusDiag = statusDiagnosis(statusTrace, progressView.diagCode, progressView.diagOutcome);
   } catch (e) {
     const timed = statusTrace.cancelRequested || (e instanceof Error && e.message === 'tool_timeout');
     statusLine = null;
@@ -1509,6 +1509,9 @@ export async function runReviewBatch(call: BatchCall, state: ReviewJobToolContex
     firstPassLine = null;
     firstPassState = 'failed';
     aggregation = 'failed';
+    progressFreshness = null;
+    progressLastSuccess = null;
+    progressView = progressReadOf({});
     statusDiag = statusDiagnosis(statusTrace, timed ? 'timeout' : 'lookup_failed', 'failed');
   }
   const diagSave = await saveStatusDiag(src, job, statusDiag);
@@ -1583,6 +1586,8 @@ export async function runReviewBatch(call: BatchCall, state: ReviewJobToolContex
     limits: { max_cards_per_request: maxPerRequest, max_pending_cards: maxPending, max_batch: BATCH_MAX },
     progress_line: statusLine,
     condition_line: conditionLine,
+    progress_freshness: progressFreshness,
+    progress_last_success: progressLastSuccess,
     first_pass: firstPass,
     first_pass_line: firstPassLine,
     first_pass_state: firstPassState,
@@ -1598,7 +1603,8 @@ export async function runReviewBatch(call: BatchCall, state: ReviewJobToolContex
         ? `1차 검수 3조건 동시 충족은 "${firstPassLine}" 이다.`
         : firstPassState === 'failed'
         ? '집계 조회가 실패했다(status_diag). 완료 수와 1차 검수 수를 0으로 채우지 않는다. 조회 취소는 데이터베이스 문장이 끝났다는 뜻이 아니다.'
-        : '1차 검수 3조건 동시 충족 수는 이 응답에 없다(미집계). 0개로 말하지 말고 조건별 수로 추산하지 않는다.'),
+        : progressFreshnessNote(progressView) ??
+          '1차 검수 3조건 동시 충족 수는 이 응답에 없다(미집계). 0개로 말하지 말고 조건별 수로 추산하지 않는다.'),
   };
   const ok = reason !== 'tool_error' && reason !== 'lease_lost';
   const summary =

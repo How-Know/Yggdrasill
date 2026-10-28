@@ -25,7 +25,7 @@ const claim = async (job) => (await r(`select concept_review_job_claim($1::uuid,
 const targets = (job, gen, n = 50) => r(`select concept_review_job_targets($1::uuid, $2::bigint, $3) as r`, [job, gen, n]);
 const save = (job, gen, items) => r(`select concept_review_job_save($1::uuid, $2::bigint, $3::jsonb) as r`, [job, gen, JSON.stringify(items)]);
 const submit = (job, gen) => r(`select concept_review_job_submit($1::uuid, $2::bigint, $3::uuid, '1차 검수', null) as r`, [job, gen, conv]);
-const status = (job) => r(`select concept_review_job_status($1::uuid, 60) as r`, [job]);
+const status = (job) => r(`select concept_review_job_status_live($1::uuid, 60) as r`, [job]);
 const stateOf = async (id) => (await t.one(`select concept_review_job_concept_state($1::uuid, '{}'::uuid[]) as r`, [id])).r;
 const apply = (id, overrides = {}) => op(`select * from course_think_action_apply($1::uuid, $2::jsonb)`, [id, JSON.stringify(overrides)]);
 const reject = (id) => op(`select * from ai_action_reject($1::uuid)`, [id]);

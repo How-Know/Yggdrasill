@@ -44,7 +44,7 @@ function snap(st) {
 }
 
 test('한 순회 집계는 이전과 같고, 진단은 집계 없이 읽히며, 514개 시간을 기록한다', async () => {
-  const files = CONCEPT_FILES.filter((f) => f !== NEW_FILE);
+  const files = CONCEPT_FILES.filter((f) => f !== NEW_FILE && f !== '20261028190000_concept_review_progress_snapshot.sql');
   t = await openConceptTestDb(files);
   const S = await seedConcepts(t);
   const op = (sql, params = []) => t.asSuperadmin(() => t.one(sql, params), S.operator);

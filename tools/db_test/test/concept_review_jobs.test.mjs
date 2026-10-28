@@ -31,7 +31,7 @@ const next = (job, gen, n = 5) => r(`select concept_review_job_next($1::uuid, $2
 const save = (job, gen, items) => r(`select concept_review_job_save($1::uuid, $2::bigint, $3::jsonb) as r`, [job, gen, JSON.stringify(items)]);
 const submit = (job, gen, conv = convA) =>
   r(`select concept_review_job_submit($1::uuid, $2::bigint, $3::uuid, '검수 결과를 남긴다') as r`, [job, gen, conv]);
-const status = (job) => r(`select concept_review_job_status($1::uuid, 60) as r`, [job]);
+const status = (job) => r(`select concept_review_job_status_live($1::uuid, 60) as r`, [job]);
 const apply = (id) => op(`select * from course_think_action_apply($1::uuid, '{}'::jsonb)`, [id]);
 const reject = (id) => op(`select * from ai_action_reject($1::uuid)`, [id]);
 

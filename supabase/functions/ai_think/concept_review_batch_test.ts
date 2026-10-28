@@ -66,6 +66,8 @@ class JobSim {
   omitFirstPass = false;
   /** 상태 조회를 끝내지 않는다. 바깥 제한이 진단을 돌려야 한다. */
   blockStatus = false;
+  /** 상태 응답의 저장 집계 신선도. 있으면 1차 검수 수가 있어도 현재 수로 쓰지 않는다. */
+  progressFreshness: string | null = null;
   statusDiags: Rec[] = [];
 
   constructor(n: number, content: (i: number) => string = (i) => `개념 ${i}의 정의 문장`) {
@@ -294,6 +296,10 @@ class JobSim {
             first_pass: { met: 7, total: this.total, percent: 1.2, line },
             first_pass_line: line,
           }),
+          ...(this.progressFreshness ? {
+            progress_freshness: this.progressFreshness,
+            progress_last_success: { progress_line: '옛 집계', first_pass_line: '옛 1차' },
+          } : {}),
         };
       }
       case 'concept_review_job_batch_log':
@@ -736,7 +742,7 @@ Deno.test('대화: 기능이 다 준비되면 묶음 검수 도구·지침이 �
   assert(String(chatReq!.instructions).includes(BATCH_TOOL_NAME), '지침에 묶음 검수 규칙이 있다');
   assertEquals(sim.cards.length, 3);
   assertEquals(sim.logs.map((l) => l.p_end_reason), ['target_reached']);
-  assertEquals(THINK_PROMPT_VERSION, 'think-2026-10-28c');
+  assertEquals(THINK_PROMPT_VERSION, 'think-2026-10-28d');
 
   const p2 = new FakeAiProvider(thinkScript());
   await runThinkChat(chatInput({ features }), { provider: p2, store, recordRun: runs.record, emit: new EventLog().emit, env: testEnv });
@@ -756,6 +762,20 @@ Deno.test('1차 검수 진행률은 서버 집계 그대로이고, 필드가 없
   assertEquals(u.first_pass_state, 'unaggregated');
   assert(String(u.note).includes('미집계'));
   assert(!String(u.note).includes('1차 검수 3조건 충족: 0'));
+});
+
+Deno.test('오래된 집계는 묶음 결과의 현재 완료 수가 아니다', async () => {
+  const sim = new JobSim(1);
+  sim.progressFreshness = 'stale';
+  const v = parse(await batch(sim, new FakeAiProvider(judge()), { target: 1 }));
+  assertEquals(v.aggregation, 'stale');
+  assertEquals(v.progress_freshness, 'stale');
+  assertEquals(v.first_pass, null);
+  assertEquals(v.progress_line, null);
+  assertEquals(v.progress_last_success.progress_line, '옛 집계');
+  assert(String(v.note).includes('stale'));
+  assert(!String(v.note).includes('1차 검수 3조건 충족: 7'));
+  assert(!String(v.note).includes('미집계'));
 });
 
 Deno.test('노출: 검토·작업·묶음이 모두 준비된 사람 요청에만, 커서 질문·자동 이어하기에는 주지 않는다', () => {
@@ -1073,7 +1093,7 @@ Deno.test('형식 실패는 그 위치만 실패로 남고, 30개를 넘겨도 �
 Deno.test('참조 상한 정의가 DB·도구 설명·판단 지시와 같다', async () => {
   assertEquals(CONCEPT_REVIEW_REF_LIMIT, 20);
   assertEquals(BATCH_PROMPT_VERSION, 'review-batch-2026-10-28b');
-  assertEquals(THINK_PROMPT_VERSION, 'think-2026-10-28c');
+  assertEquals(THINK_PROMPT_VERSION, 'think-2026-10-28d');
   assert(JUDGE_INSTRUCTIONS.includes('고유 20개까지'));
   assert(JUDGE_INSTRUCTIONS.includes('to_compare_ids로 옮겨'));
   const sql = await Deno.readTextFile(new URL('../../migrations/20261028010000_concept_review_ref_limit.sql', import.meta.url));

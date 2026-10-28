@@ -164,6 +164,7 @@ export const REVIEW_JOB_TOOLS: AiFunctionTool[] = [
       'progress_line(완료 수), counts, 미결 항목(open_items: 위치·이유·다음 할 일·diagnosis), 승인 대기 카드(pending_cards: 다른 대화 것 포함), ' +
       '실패 항목(failures: 저장된 reason과 diagnosis, 한 번에 50개, failure_after 다음부터). ' +
       'status_diag는 이번 집계 조회의 추적 번호·단계·소요·제한·코드다. aggregation이 failed면 조회 실패라 완료 수를 0으로 말하지 않는다. unaggregated는 응답은 왔지만 집계 필드가 없는 미집계다. counted는 집계 성공이다. ' +
+      'progress_freshness가 current일 때만 progress_line·first_pass_line·counts가 현재 집계다. stale은 미반영 변경이 있는 옛 집계, refreshing은 갱신 중, absent는 아직 집계 없음, aggregation이 refresh_failed면 갱신 실패다. 이 경우 완료 수를 말하지 않고 progress_last_success를 현재 수로 쓰지 않는다. 조회는 갱신을 시작하거나 기다리지 않는다. ' +
       'status_diag_only가 true면 저장된 최근 집계 진단만 읽는다. 집계 함수는 부르지 않고 작업을 넘겨받지도 않는다. ' +
       'next>0이면 다음 묶음(batch: 위치·개념 요약·판)을 준다. 묶음은 저장된 위치 다음부터이며 앞서 내줬지만 저장되지 않은 위치가 먼저 다시 나온다. ' +
       '이미 지금 판과 맞는 승인 기록이 있는 개념·지워진 개념·승인 대기 카드에 든 개념은 서버가 판단 없이 표시하고 건너뛴다(auto_saved). ' +
@@ -361,6 +362,78 @@ export function firstPassOf(status: Rec): { known: boolean; value: Rec | null; l
   return { known: true, value: fp, line };
 }
 
+const PROGRESS_FRESHNESS = new Set(['current', 'stale', 'refreshing', 'failed', 'absent']);
+
+export interface ProgressRead {
+  freshness: string | null;
+  counted: boolean;
+  aggregation: string;
+  firstPassState: string;
+  diagCode: string;
+  diagOutcome: 'failed' | 'unaggregated' | 'counted' | 'not_run';
+  progressLine: string | null;
+  conditionLine: string | null;
+  firstPass: Rec | null;
+  firstPassLine: string | null;
+  counts: unknown;
+  conditions: unknown;
+  lastSuccess: unknown;
+  progressError: string | null;
+  openItems: unknown[];
+  totalMismatch: unknown;
+}
+
+/** 저장 집계의 신선도. current가 아니면 응답에 남은 완료 수를 현재 수로 쓰지 않는다. 옛 응답에 신선도가 없으면 기존 필드만 본다. */
+export function progressReadOf(status: Rec): ProgressRead {
+  const raw = typeof status.progress_freshness === 'string' ? status.progress_freshness : null;
+  const freshness = raw && PROGRESS_FRESHNESS.has(raw) ? raw : null;
+  const lastSuccess = status.progress_last_success && typeof status.progress_last_success === 'object' && !Array.isArray(status.progress_last_success)
+    ? status.progress_last_success
+    : null;
+  const progressError = typeof status.progress_error === 'string' ? status.progress_error : null;
+  if (freshness && freshness !== 'current') {
+    const state = freshness === 'failed' ? 'refresh_failed' : freshness;
+    return {
+      freshness, counted: false, aggregation: state, firstPassState: state,
+      diagCode: `progress_${freshness}`, diagOutcome: 'unaggregated',
+      progressLine: null, conditionLine: null, firstPass: null, firstPassLine: null,
+      counts: null, conditions: null, lastSuccess, progressError, openItems: [], totalMismatch: null,
+    };
+  }
+  const first = firstPassOf(status);
+  const progressLine = typeof status.progress_line === 'string' ? status.progress_line : null;
+  const conditionLine = typeof status.condition_line === 'string' ? status.condition_line : null;
+  const counts = status.counts && typeof status.counts === 'object' ? status.counts : null;
+  const conditions = status.conditions && typeof status.conditions === 'object' ? status.conditions : null;
+  const openItems = Array.isArray(status.open_items) ? status.open_items : [];
+  const totalMismatch = status.total_mismatch ?? null;
+  if (first.known && first.value && first.line) {
+    return {
+      freshness, counted: true, aggregation: 'counted', firstPassState: 'counted',
+      diagCode: 'ok', diagOutcome: 'counted',
+      progressLine, conditionLine, firstPass: first.value, firstPassLine: first.line,
+      counts, conditions, lastSuccess: null, progressError: null, openItems, totalMismatch,
+    };
+  }
+  return {
+    freshness, counted: false, aggregation: 'unaggregated', firstPassState: 'unaggregated',
+    diagCode: 'unaggregated', diagOutcome: 'unaggregated',
+    progressLine, conditionLine, firstPass: null, firstPassLine: null,
+    counts, conditions, lastSuccess: null, progressError: null, openItems, totalMismatch,
+  };
+}
+
+/** current가 아닐 때 모델에게 남기는 한 줄. 미집계·조회 실패 문구는 호출하는 쪽이 고른다. */
+export function progressFreshnessNote(view: ProgressRead): string | null {
+  if (view.freshness === 'stale') {
+    return 'progress_freshness가 stale이다. progress_last_success는 마지막 성공 스냅샷이고 현재 완료 수가 아니다. 갱신이 끝나기를 기다리지 않는다.';
+  }
+  if (view.freshness === 'refreshing') return '집계를 갱신하는 중이다(refreshing). 지금 완료 수는 없다. 끝나기를 기다리지 않는다.';
+  if (view.freshness === 'failed') return '집계 갱신이 실패했다(refresh_failed). 조회 시간 초과가 아니다. 완료 수를 0이나 옛 수로 말하지 않는다.';
+  if (view.freshness === 'absent') return '아직 저장된 집계가 없다(absent). 0개로 말하지 않는다.';
+  return null;
+}
+
 function str(v: unknown, max: number): string | null {
   if (typeof v !== 'string') return null;
   const t = v.trim();
@@ -541,39 +614,41 @@ async function readJob(name: string, args: Rec, src: ReviewJobToolSource, state:
       return await failedLookup(name, trace, src, e);
     }
   }
-  const first = status ? firstPassOf(status) : { known: false, value: null, line: null };
-  const counted = first.known;
-  const aggregation = counted ? 'counted' : 'unaggregated';
-  const diag = statusDiagnosis(trace, counted ? 'ok' : 'unaggregated', aggregation);
+  const view = status ? progressReadOf(status) : progressReadOf({});
+  const diag = statusDiagnosis(trace, view.diagCode, view.diagOutcome);
   const diagSave = await saveStatusDiag(src, job, diag);
-  const progressLine = status && typeof status.progress_line === 'string' ? status.progress_line : null;
   const notes: string[] = [];
-  if (progressLine) notes.push(`진행 표시는 "${progressLine}" 한 줄로 한다. 조건별 충족 수(condition_line)는 통합 완료 수와 섞지 않는다.`);
-  if (counted) {
-    notes.push(`1차 검수 3조건 동시 충족은 "${first.line}" 한 줄로 한다. 통합 완료·조건별 충족 수와 섞지 않고, 조건별 수로 이 수를 추산하지 않는다.`);
+  if (view.progressLine) notes.push(`진행 표시는 "${view.progressLine}" 한 줄로 한다. 조건별 충족 수(condition_line)는 통합 완료 수와 섞지 않는다.`);
+  const freshNote = progressFreshnessNote(view);
+  if (view.counted) {
+    notes.push(`1차 검수 3조건 동시 충족은 "${view.firstPassLine}" 한 줄로 한다. 통합 완료·조건별 충족 수와 섞지 않고, 조건별 수로 이 수를 추산하지 않는다.`);
+  } else if (freshNote) {
+    notes.push(freshNote);
   } else {
     notes.push('1차 검수 3조건 동시 충족 수는 이 응답에 없다(미집계). 0개로 말하지 말고, 조건별 충족 수로 추산하지 않는다.');
   }
   notes.push('이번 조회 진단은 status_diag다. 최근 진단만 다시 보려면 status_diag_only를 true로 한다.');
-  if (status?.total_mismatch === true) notes.push('목록 총수와 작업 총수가 다르거나 지워진 개념이 있다(total_mismatch). 사용자에게 알린다.');
+  if (view.totalMismatch === true) notes.push('목록 총수와 작업 총수가 다르거나 지워진 개념이 있다(total_mismatch). 사용자에게 알린다.');
   const pending = status && Array.isArray(status.pending_cards) ? status.pending_cards : [];
   if (pending.some((c) => rec(c).linked !== true)) {
     notes.push('작업에 이어지지 않은 예전 대기 카드가 있다. bring_cards로 이어 옮기거나 conflicts를 사용자에게 알린다.');
   }
-  const counts = status && status.counts && typeof status.counts === 'object' ? status.counts : null;
   const value: Rec = {
     status_diag: diag,
     diag_save: diagSave,
-    aggregation,
+    aggregation: view.aggregation,
+    progress_freshness: view.freshness,
+    progress_last_success: view.lastSuccess,
+    progress_error: view.progressError,
     job: status?.job ?? null,
-    progress_line: progressLine,
-    condition_line: status && typeof status.condition_line === 'string' ? status.condition_line : null,
-    first_pass: counted ? first.value : null,
-    first_pass_line: counted ? first.line : null,
-    first_pass_state: counted ? 'counted' : 'unaggregated',
-    counts,
-    total_mismatch: status?.total_mismatch ?? null,
-    open_items: (status && Array.isArray(status.open_items) ? status.open_items : []).map((raw) => {
+    progress_line: view.progressLine,
+    condition_line: view.conditionLine,
+    first_pass: view.firstPass,
+    first_pass_line: view.firstPassLine,
+    first_pass_state: view.firstPassState,
+    counts: view.counts,
+    total_mismatch: view.totalMismatch ?? null,
+    open_items: view.openItems.map((raw) => {
       const item = rec(raw);
       const reason = typeof item.reason === 'string' ? item.reason : null;
       return { ...item, diagnosis: diagnosisFromReason(reason) };
@@ -605,7 +680,7 @@ async function readJob(name: string, args: Rec, src: ReviewJobToolSource, state:
     notes.push('diagnosis.kind가 generic인 항목은 예전 포괄 오류다. 범위와 필드를 만들어 넣지 않는다.');
   }
   value.note = notes.join(' ');
-  return out(name, value, progressLine ?? '집계 없음');
+  return out(name, value, view.progressLine ?? '집계 없음');
 }
 
 async function saveProgress(name: string, args: Rec, src: ReviewJobToolSource, state: ReviewJobToolContext): Promise<ToolRunResult> {
