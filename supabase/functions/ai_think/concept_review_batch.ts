@@ -31,7 +31,9 @@ import type { ToolRunResult } from './tools.ts';
 export const BATCH_TOOL_NAME = 'run_concept_review_batch';
 export const BATCH_TOOL_LABEL = '개념 묶음 검수';
 // review-batch-2026-10-29b: 승인된 카드 뒤에 남은 확인 못 함·비교 필요 필수 범위만 다시 판단한다. 카드 상태가 applied가 아니면 고르지 않는다.
-export const BATCH_PROMPT_VERSION = 'review-batch-2026-10-29b';
+// review-batch-2026-10-30a: 기초 개념 이름으로도 후보를 찾고(같은 이름은 한 자리), 검색어를 40개씩 나눠 모두 찾고,
+//   새로 만들 이름은 라이브러리 전체에서 같은 이름을 확인한다. 판단 지시문은 바꾸지 않는다.
+export const BATCH_PROMPT_VERSION = 'review-batch-2026-10-30a';
 export const BATCH_MAX = 50;
 
 /** 판단 모델 한 번에 넣는 개념 수와 글자 수. */
@@ -55,6 +57,9 @@ const MAX_NEEDS = 3;
 const MAX_TERMS_PER_NEED = 3;
 const CANDIDATES_PER_NEED = 5;
 const CANDIDATE_CHARS = 700;
+/** concept_review_job_search 한 번의 검색어 수와 검색어 길이 상한. */
+const SEARCH_TERMS_PER_CALL = 40;
+const SEARCH_TERM_CHARS = 40;
 /** 카드 한 장에 검토 20개, 개념 하나에 범위 넷까지로 잡은 카드당 개념 수. */
 const CONCEPTS_PER_CARD = 5;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -362,6 +367,16 @@ interface Candidate {
   id: string;
   name: string;
   view: Rec;
+}
+
+function nameKey(v: unknown): string {
+  return String(v ?? '').trim().toLowerCase();
+}
+
+/** 기초 개념 이름을 먼저 검색해, 같은 이름의 기존 개념이 짧은 이름에 밀려 후보에서 빠지지 않게 한다. */
+function needTerms(n: { name: string; terms: string[] }): string[] {
+  const name = n.name.trim();
+  return [...new Set([...(name.length <= SEARCH_TERM_CHARS ? [name] : []), ...n.terms])];
 }
 
 type Outcome =
@@ -1103,6 +1118,25 @@ export async function runReviewBatch(call: BatchCall, state: ReviewJobToolContex
   const jobId: string = job;
   const cardsLeft = () => Math.min(maxPerRequest - lane.cards, maxPending - pending);
 
+  /** 검색어를 RPC 한도(40개)씩 나눠 모두 찾는다. 뒤 개념의 검색어를 버리지 않는다. */
+  async function searchConcepts(terms: string[], per: number) {
+    const byTerm = new Map<string, string[]>();
+    const concepts = new Map<string, Rec>();
+    const types = new Set<string>();
+    const roots = new Set<string>();
+    for (let i = 0; i < terms.length; i += SEARCH_TERMS_PER_CALL) {
+      log.searches += 1;
+      const found = rec(await rpc('concept_review_job_search', {
+        p_job_id: job, p_gen: gen, p_terms: terms.slice(i, i + SEARCH_TERMS_PER_CALL), p_per: per,
+      }));
+      for (const x of (Array.isArray(found.results) ? found.results : []).map(rec)) byTerm.set(String(x.term), strings(x.ids));
+      for (const c of (Array.isArray(found.concepts) ? found.concepts : []).map(rec)) concepts.set(String(c.id), c);
+      for (const t of strings(found.types)) types.add(t);
+      for (const r of strings(found.roots)) roots.add(r);
+    }
+    return { byTerm, concepts, types, roots };
+  }
+
   /** 저장된 초안을 검토 카드(+고치기 카드)로 낸다. 한도·대기 한도까지. */
   async function submitDrafts(): Promise<void> {
     while (cardsLeft() > 0 && !leaseLost) {
@@ -1507,22 +1541,25 @@ export async function runReviewBatch(call: BatchCall, state: ReviewJobToolContex
               log.foundation_skipped += asking.length;
             } else if (asking.length > 0 && !leaseLost) {
               try {
-                const terms = [...new Set(asking.flatMap((s) => s.needs!.flatMap((n) => n.terms)))].slice(0, 40);
-                log.searches += 1;
-                const found = rec(await rpc('concept_review_job_search', { p_job_id: job, p_gen: gen, p_terms: terms, p_per: CANDIDATES_PER_NEED }));
-                const byTerm = new Map((Array.isArray(found.results) ? found.results : []).map(rec).map((x) => [String(x.term), strings(x.ids)]));
-                const concepts = new Map((Array.isArray(found.concepts) ? found.concepts : []).map(rec).map((c) => [String(c.id), c]));
+                const terms = [...new Set(asking.flatMap((s) => s.needs!.flatMap((n) => needTerms(n))))];
+                const found = await searchConcepts(terms, CANDIDATES_PER_NEED);
+                const { byTerm, concepts } = found;
                 const catalog = {
-                  types: new Set(strings(found.types)),
-                  roots: new Set(strings(found.roots)),
-                  names: new Map([...concepts.values()].map((c) => [String(c.name ?? '').trim().toLowerCase(), String(c.id)])),
+                  types: found.types,
+                  roots: found.roots,
+                  names: new Map([...concepts.values()].map((c) => [nameKey(c.name), String(c.id)])),
                 };
                 const perConcept = new Map<number, Map<string, Candidate[]>>();
                 const view = asking.map((s) => {
                   const byNeed = new Map<string, Candidate[]>();
                   const needs = s.needs!.map((n) => {
-                    const ids = [...new Set(n.terms.flatMap((t) => byTerm.get(t) ?? []))].filter((id) => id !== s.m.concept_id);
-                    const cands = ids.map((id) => concepts.get(id)).filter((c): c is Rec => !!c).slice(0, CANDIDATES_PER_NEED).map((c) => ({
+                    const shown = new Set<string>();
+                    const ids = [...new Set(needTerms(n).flatMap((t) => byTerm.get(t) ?? []))].filter((id) => id !== s.m.concept_id);
+                    const cands = ids.map((id) => concepts.get(id)).filter((c): c is Rec => {
+                      if (!c || shown.has(nameKey(c.name))) return false;
+                      shown.add(nameKey(c.name));
+                      return true;
+                    }).slice(0, CANDIDATES_PER_NEED).map((c) => ({
                       id: String(c.id), name: String(c.name ?? ''),
                       view: {
                         id: c.id, name: c.name, type: c.type ?? null, folder: c.folder ?? null, placements: c.placements ?? [],
@@ -1546,6 +1583,18 @@ export async function runReviewBatch(call: BatchCall, state: ReviewJobToolContex
                 );
                 const answers = new Map<number, unknown>();
                 for (const a of Array.isArray(parsed.concepts) ? parsed.concepts : []) answers.set(Number(rec(a).position), a);
+                const adding = [...new Set([...answers.values()].flatMap((a) =>
+                  (Array.isArray(rec(a).needs) ? rec(a).needs as unknown[] : []).map(rec)
+                    .filter((n) => n.decision === 'add')
+                    .map((n) => String(rec(n.create).name ?? '').trim())
+                    .filter((name) => name && name.length <= SEARCH_TERM_CHARS && !catalog.names.has(nameKey(name)))
+                ))];
+                if (adding.length > 0) {
+                  const exact = await searchConcepts(adding, 1);
+                  for (const c of exact.concepts.values()) {
+                    if (adding.some((name) => nameKey(name) === nameKey(c.name))) catalog.names.set(nameKey(c.name), String(c.id));
+                  }
+                }
                 for (const s of asking) {
                   const review = foundationReview(s, answers.get(s.m.position), perConcept.get(s.m.position)!, catalog);
                   if (review && 'ref_limit' in review) {

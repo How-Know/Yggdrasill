@@ -1,4 +1,4 @@
-﻿import { assert, assertEquals } from 'jsr:@std/assert@1';
+import { assert, assertEquals } from 'jsr:@std/assert@1';
 import { FakeAiProvider, type FakeTurn } from '../_shared/ai/fake.ts';
 import type { AiRequest } from '../_shared/ai/types.ts';
 import { runThinkChat, type ChatInput } from './chat.ts';
@@ -166,7 +166,15 @@ class JobSim {
       case 'concept_review_job_search': {
         this.lock(a.p_gen);
         const terms = a.p_terms as string[];
-        const results = terms.map((t) => ({ term: t, ids: this.library.filter((x) => x.name.includes(t) || x.content.includes(t)).map((x) => x.id) }));
+        if (terms.length === 0 || terms.length > 40 || terms.some((t) => t.length > 40)) throw new Error('search: concept_review_job_bad_terms');
+        const per = Math.min(Math.max(Number(a.p_per ?? 5), 1), 8);
+        const results = terms.map((t) => {
+          const byName = this.library.filter((x) => x.name.includes(t))
+            .sort((x, y) => Number(y.name === t) - Number(x.name === t) || x.name.length - y.name.length)
+            .slice(0, per);
+          const byContent = this.library.filter((x) => !byName.includes(x) && x.content.includes(t)).slice(0, per - byName.length);
+          return { term: t, ids: [...byName, ...byContent].map((x) => x.id) };
+        });
         const ids = new Set(results.flatMap((r) => r.ids));
         return {
           results, types: ['정의', '성질'], roots: ['수와 연산'],
@@ -678,6 +686,85 @@ Deno.test('기초 개념 추가·같은 이름 있음·필요 없음: 추가는 
   assertEquals(parse(r).cards, 0);
 });
 
+Deno.test('기초 개념 이름이 같은 기존 개념은 짧은 이름에 밀리지 않고 후보에 들어가 재사용된다', async () => {
+  const sim = new JobSim(1);
+  sim.concepts[0].todo = ['foundation'];
+  sim.library = [
+    ...['중심각의 뜻', '대각의 뜻', '엇각의 뜻', '동위각의 뜻', '각의 뜻'].map((name, k) => ({ id: cid(910 + k), name, content: '각' })),
+    { id: cid(920), name: '각의 뜻과 크기', content: '두 반직선이 이루는 도형과 벌어진 정도' },
+    { id: cid(921), name: '각의 뜻과 크기', content: '같은 이름으로 이미 만든 다른 개념' },
+  ];
+  const provider = new FakeAiProvider(judge({
+    reviews: () => [],
+    foundation: () => ({ needs: [{ name: '각의 뜻과 크기', why: '외각을 설명하려면 필요', terms: ['각'] }], none_basis: null }),
+    decide: (n) => {
+      const same = (n.candidates as Rec[]).find((c) => c.name === n.name);
+      return same
+        ? { decision: 'reuse', reuse_id: same.id, compared_ids: [same.id] }
+        : { decision: 'add', create: { name: String(n.name), type: '정의', folder: ['수와 연산', '초등'], content: '새로 쓴 정의' } };
+    },
+  }));
+  const v = parse(await batch(sim, provider));
+  const search = sim.calls.filter((c) => c.fn === 'concept_review_job_search');
+  assertEquals(search[0].args.p_terms, ['각의 뜻과 크기', '각'], '기초 개념 이름을 검색어 앞에 둔다');
+  const need = ((payloadOf(provider.requests.find((r) => r.jsonSchema?.name === 'concept_review_foundation_judgment')!).concepts as Rec[])[0]
+    .needs as Rec[])[0];
+  const names = (need.candidates as Rec[]).map((c) => c.name);
+  assert(names.includes('각의 뜻과 크기'), '같은 이름 개념이 후보에 있다');
+  assertEquals(names.filter((n) => n === '각의 뜻과 크기').length, 1, '같은 이름은 후보 자리를 하나만 쓴다');
+  const f = sim.items.get(1)!.reviews![0];
+  assertEquals([f.outcome, f.fix], ['no_issue_found', undefined], '새 개념을 만들지 않는다');
+  assertEquals(v.cards_by_kind.library, 0);
+});
+
+Deno.test('검색 후보에 없던 같은 이름으로 새 기초 개념을 만들려 하면 라이브러리 전체에서 이름을 확인해 비교 필요로 둔다', async () => {
+  const sim = new JobSim(1);
+  sim.concepts[0].todo = ['foundation'];
+  sim.library = [
+    { id: cid(930), name: '각도', content: '각의 크기' },
+    { id: cid(931), name: '다각형의 뜻과 구성 요소', content: '세 개 이상의 선분으로 둘러싸인 평면도형' },
+  ];
+  const provider = new FakeAiProvider(judge({
+    reviews: () => [],
+    foundation: () => ({ needs: [{ name: '꼭짓점', why: '꼭짓점 수를 셀 때 필요', terms: ['각도'] }], none_basis: null }),
+    decide: () => ({
+      decision: 'add', create: { name: '다각형의 뜻과 구성 요소', type: '정의', folder: ['수와 연산', '초등'], content: '다시 쓴 정의' },
+    }),
+  }));
+  const v = parse(await batch(sim, provider));
+  const search = sim.calls.filter((c) => c.fn === 'concept_review_job_search');
+  assertEquals(search.length, 2, '후보 검색 뒤 추가하려는 이름만 한 번 더 찾는다');
+  assertEquals([search[1].args.p_terms, search[1].args.p_per], [['다각형의 뜻과 구성 요소'], 1]);
+  const f = sim.items.get(1)!.reviews![0];
+  assertEquals([f.outcome, f.to_compare_ids, f.fix], ['needs_comparison', [cid(931)], undefined], '같은 이름 개념을 또 만들지 않는다');
+  assertEquals(v.cards_by_kind.library, 0);
+});
+
+Deno.test('기초 개념 검색어가 40개를 넘으면 나눠 찾고 뒤 개념의 검색어를 버리지 않는다', async () => {
+  const sim = new JobSim(8);
+  for (const c of sim.concepts) c.todo = ['foundation'];
+  sim.library = [{ id: cid(940), name: '끝 개념 8-3', content: '마지막 위치의 기초 개념' }];
+  const provider = new FakeAiProvider(judge({
+    reviews: () => [],
+    foundation: (d) => ({
+      needs: [1, 2, 3].map((k) => ({ name: `끝 개념 ${d.position}-${k}`, why: '필요', terms: [`검색 ${d.position}-${k}-a`, `검색 ${d.position}-${k}-b`] })),
+      none_basis: null,
+    }),
+    decide: (n) => {
+      const same = (n.candidates as Rec[]).find((c) => c.name === n.name);
+      return same ? { decision: 'reuse', reuse_id: same.id, compared_ids: [same.id] } : {};
+    },
+  }));
+  await batch(sim, provider);
+  const search = sim.calls.filter((c) => c.fn === 'concept_review_job_search');
+  const terms = search.flatMap((c) => c.args.p_terms as string[]);
+  assert(search.every((c) => (c.args.p_terms as string[]).length <= 40));
+  assertEquals(terms.length, 72, '8개 × 기초 개념 3개 × (이름 + 검색어 2개)');
+  assert(terms.includes('끝 개념 8-3'));
+  const last = sim.items.get(8)!.reviews![0];
+  assert((last.compared_ids as string[]).includes(cid(940)), '마지막 위치도 후보를 받아 재사용한다');
+});
+
 Deno.test('배치 고치기: 이 개념의 배치·과정 단원 목록 안에서만 받고, 벗어나면 형식 오류로 다음에 다시 판단한다', async () => {
   const sim = new JobSim(2);
   const course = cid(800);
@@ -1122,7 +1209,7 @@ Deno.test('형식 실패는 그 위치만 실패로 남고, 30개를 넘겨도 �
 
 Deno.test('참조 상한 정의가 DB·도구 설명·판단 지시와 같다', async () => {
   assertEquals(CONCEPT_REVIEW_REF_LIMIT, 20);
-  assertEquals(BATCH_PROMPT_VERSION, 'review-batch-2026-10-29b');
+  assertEquals(BATCH_PROMPT_VERSION, 'review-batch-2026-10-30a');
   assertEquals(THINK_PROMPT_VERSION, 'think-2026-10-30a');
   assert(JUDGE_INSTRUCTIONS.includes('고유 20개까지'));
   assert(JUDGE_INSTRUCTIONS.includes('to_compare_ids로 옮겨'));
@@ -1807,7 +1894,7 @@ Deno.test('승인된 카드 뒤의 확인 못 함·비교 필요는 필수 범�
 });
 
 Deno.test('초등 배치 예외는 지시문의 작성 구분·내용·기존 배치 조건만 확인한다. 이 시험은 실제 모델의 배치 판단 품질을 검증하지 않는다', () => {
-  assertEquals(BATCH_PROMPT_VERSION, 'review-batch-2026-10-29b');
+  assertEquals(BATCH_PROMPT_VERSION, 'review-batch-2026-10-30a');
   assertEquals(THINK_PROMPT_VERSION, 'think-2026-10-30a');
   assert(JUDGE_INSTRUCTIONS.includes('자료 본문에 작성 구분이 적혀 있고'));
   assert(JUDGE_INSTRUCTIONS.includes('Think가 직접 작성한 초등 기초 보완 개념'));
