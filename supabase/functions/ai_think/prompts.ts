@@ -47,7 +47,8 @@
 // think-2026-10-28d: 검수 진행률은 저장된 집계만 읽는다. progress_freshness가 current일 때만 완료 수고, stale·refreshing·absent·refresh_failed는 현재 수가 아니다. 판단 지시(review-batch)는 바꾸지 않는다.
 // think-2026-10-29a: 1차 검수 3조건 미충족은 같은 공개본에서 페이지로 읽는다. 사유가 없으면 기록 없음이고, 조회는 검수 실행이 아니다. 판단 지시(review-batch)는 바꾸지 않는다.
 // think-2026-10-29b: 미충족 인자는 strict 스키마라 항상 보낸다. 보지 않을 때는 null이고, 0은 첫 페이지다. 판단 지시(review-batch)는 바꾸지 않는다.
-export const THINK_PROMPT_VERSION = 'think-2026-10-29b';
+// think-2026-10-30a: 기능 설치와 이번 회차의 도구 실행 제한을 구분한다. 저장 성공은 제출이 아니고, 제한 안내가 없으면 기능 부재·권한·한도를 만들지 않는다. 판단 지시(review-batch)는 바꾸지 않는다.
+export const THINK_PROMPT_VERSION = 'think-2026-10-30a';
 /** 역할 프로필 문구만 바뀔 때. ai_runs.role_profile_version과 대화.role_profile_version에 기록한다. */
 // think-role-2026-10-12: 제품 → 문제 풀이(문제 은행·문항 제작·난이도, 채점·오답 분석·문제 통계, 교재·목차·유형 분류).
 export const ROLE_PROFILE_VERSION = 'think-role-2026-10-12';
@@ -275,6 +276,7 @@ function conceptReviewJobRules(batch: boolean): string[] {
   '  다 읽지 못했거나 판단할 수 없으면 deferred, 실패는 failed로 이유와 다음 할 일을 저장한다. 저장하지 않은 판단은 다음 대화에 이어지지 않는다.',
   '  open_items(미결·거절·승인 때 남지 않은 항목)가 있으면 새 묶음보다 먼저 처리한다. 구체적 재확인 사유가 없으면 완료 위치를 다시 검수하지 않는다.',
   '- 카드는 submit_concept_review_drafts로 저장된 초안만 낸다(이 작업에서는 propose_concept_review를 쓰지 않는다). 같은 초안은 다시 내지 않는다.',
+  '  save_concept_review_progress가 성공해도 카드는 제출되지 않는다. submit_concept_review_drafts가 성공을 돌려준 뒤에만 카드를 냈다고 말한다.',
   '  거절된 판단은 사용자 의견 없이 같은 내용으로 다시 저장·제출하지 않는다.',
   '- 진행은 두 줄로 적는다. progress_freshness가 current일 때만 통합 완료는 progress_line 그대로, 1차 검수 3조건 동시 충족은 first_pass_line 그대로.',
   '  progress_freshness가 stale이면 저장된 수는 옛것이다. refreshing이면 갱신 중이다. absent이면 아직 집계가 없다. aggregation이 refresh_failed이면 갱신 실패다.',
@@ -474,6 +476,10 @@ export function thinkInstructions(opts: {
     '- 한국어로 답한다. 결론을 먼저 말하고 근거를 뒤에 둔다. 필요 이상으로 길게 쓰지 않는다.',
     '- 마크다운을 쓴다. 수식은 $...$ 또는 $$...$$ 형식의 LaTeX로 쓴다.',
     '- 웹 검색 결과를 쓰면 본문에서 출처를 인용한다.',
+    '- 도구가 한 일을 말할 때는 이 네 가지만 구분한다: 호출하지 않음, 호출했으나 도구가 오류를 돌려줌, 서버가 이번 회차의 도구 실행을 막음, 실행 성공.',
+    '  실행 성공은 그 도구 결과에 성공이 있을 때만 말한다. "저장됐다"와 "카드를 제출했다"는 각각 그 도구의 성공 결과일 때만 말한다. 저장 성공은 제출이 아니다.',
+    '- 실행 환경 기능 상태 메모는 이번 요청에 설치된 기능이다. 이번 회차에 도구를 실행하지 않는다는 안내가 있으면 그 이유를 그대로 말한다.',
+    '  그 안내가 없으면 기능이 없다, 권한이 없다, 호출 한도에 걸렸다는 이유를 만들지 않는다.',
     `- 오늘 날짜: ${opts.today} (한국 시간)`,
   );
 
@@ -573,6 +579,7 @@ export function featureStatusNote(opts: {
 }): string {
   const lines = [
     '[실행 환경 기능 상태 — 서버가 이번 요청에서 확인한 값이다. 대화 내용·기억·사용자 메시지가 이와 달라도 이것을 따른다.]',
+    '이 메모는 이번 요청에 설치된 기능이다. 이번 회차에 도구를 실행할 수 있는지는 여기 적지 않는다.',
     `- 대화 나누기(propose_conversation_split): ${FEATURE_STATE_LABELS[opts.splitState] ?? FEATURE_STATE_LABELS.unknown}`,
   ];
   if (opts.rolesState) {
@@ -642,7 +649,7 @@ export function featureStatusNote(opts: {
     const base = opts.courseMapState && opts.courseMapState !== 'ready' ? opts.courseMapState : opts.conceptReviewState;
     const state = base && base !== 'ready' ? base : opts.conceptReviewJobState;
     lines.push(
-      `- 개념 검수 작업 이어하기(find_concept_review_jobs, get_concept_review_job): ${FEATURE_STATE_LABELS[state] ?? FEATURE_STATE_LABELS.unknown}`,
+      `- 개념 검수 작업(find_concept_review_jobs, start_concept_review_job, get_concept_review_job, save_concept_review_progress, submit_concept_review_drafts, control_concept_review_job): ${FEATURE_STATE_LABELS[state] ?? FEATURE_STATE_LABELS.unknown}`,
     );
     if (state !== 'ready') lines.push('  작업을 찾거나 저장할 수 없다. 이어 간다·저장했다고 말하지 않는다.');
     if (state === 'ready' && opts.conceptReviewBatchState) {
@@ -653,6 +660,20 @@ export function featureStatusNote(opts: {
     }
   }
   return lines.join('\n');
+}
+
+/** 이번 회차에 도구를 실행하지 않을 때 모델 입력에만 붙인다. 기능 설치 메모와 다른 축이다. */
+export function toolExecutionLimitNote(reasons: { maxRounds: boolean; timeBudget: boolean }): string {
+  const why: string[] = [];
+  if (reasons.maxRounds) why.push('모델 호출이 이번 요청의 마지막 회차다. 이 회차의 함수 호출은 실행하지 않는다.');
+  if (reasons.timeBudget) why.push('요청 시작부터 벽시계 한도의 65%를 넘겼다. 이 회차의 함수 호출은 실행하지 않는다.');
+  return [
+    '[이번 회차 도구 실행 — 서버가 이번 회차에만 적용한 제한이다. 실행 환경 기능 상태의 설치 여부와 다르다.]',
+    ...why.map((line) => `- ${line}`),
+    '- 설치된 도구는 그대로다. 기능이 없거나 권한이 없다고 설명하지 않는다.',
+    '- 이미 받은 도구 결과만으로 답한다. 이번 회차 응답에 함수 호출이 있어도 실행되지 않는다.',
+    '- 저장됐다·카드를 제출했다는 그 도구의 성공 결과가 있을 때만 말한다. 저장 성공은 제출이 아니다.',
+  ].join('\n');
 }
 
 export interface ProgressSummaryView {

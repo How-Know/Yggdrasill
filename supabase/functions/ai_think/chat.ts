@@ -62,6 +62,7 @@ import {
   clip,
   featureStatusNote,
   relayInstructions,
+  toolExecutionLimitNote,
   spreadsheetNote,
   titleInstructions,
   type ThinkRoleId,
@@ -664,6 +665,14 @@ export async function runThinkChat(input: ChatInput, deps: ChatDeps): Promise<Ch
   let status: ChatOutcome['status'] = 'complete';
   let errorCode: string | undefined;
   let errorMessage: string | null = null;
+  /** 루프를 관측한 사실만. 의도는 적지 않고, 실행하지 않은 호출은 성공·실패로 넣지 않는다. */
+  let toolLoop: {
+    no_function_calls: boolean;
+    max_rounds: boolean;
+    time_budget: boolean;
+    skipped_calls: string[];
+    incomplete_reason: string | null;
+  } | null = null;
 
   let turnInput: AiInputItem[] = ctx.input;
 
@@ -705,15 +714,20 @@ export async function runThinkChat(input: ChatInput, deps: ChatDeps): Promise<Ch
 
   try {
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-      const forceFinal = round === MAX_TOOL_ROUNDS - 1 || now() > softDeadline;
+      const atRoundCap = round === MAX_TOOL_ROUNDS - 1;
+      const pastSoft = now() > softDeadline;
+      const forceFinal = atRoundCap || pastSoft;
       let result: AiResult | null = null;
       streamed.clear();
+      const roundInput = forceFinal
+        ? [...turnInput, { kind: 'context' as const, text: toolExecutionLimitNote({ maxRounds: atRoundCap, timeBudget: pastSoft }) }]
+        : turnInput;
 
       const stream = deps.provider.stream(
         {
           model,
           instructions,
-          input: turnInput,
+          input: roundInput,
           tools,
           webSearch: input.webSearch ? { contextSize: 'medium' } : undefined,
           codeInterpreter: sandbox ? { containerId: sandbox.containerId } : undefined,
@@ -746,7 +760,9 @@ export async function runThinkChat(input: ChatInput, deps: ChatDeps): Promise<Ch
             break;
           }
           case 'function_call_start':
-            emit('tool', { call_id: ev.callId, name: ev.name, label: TOOL_LABELS[ev.name] ?? ev.name, status: 'running' });
+            if (!forceFinal) {
+              emit('tool', { call_id: ev.callId, name: ev.name, label: TOOL_LABELS[ev.name] ?? ev.name, status: 'running' });
+            }
             break;
           case 'web_search':
             emit('tool', {
@@ -794,6 +810,14 @@ export async function runThinkChat(input: ChatInput, deps: ChatDeps): Promise<Ch
       }
 
       if (result.functionCalls.length === 0 || forceFinal) {
+        const reason = result.incompleteReason?.trim();
+        toolLoop = {
+          no_function_calls: result.functionCalls.length === 0,
+          max_rounds: atRoundCap,
+          time_budget: pastSoft,
+          skipped_calls: forceFinal ? result.functionCalls.map((fc) => fc.name) : [],
+          incomplete_reason: result.status === 'incomplete' && reason ? reason.slice(0, 80) : null,
+        };
         if (result.status === 'incomplete' && finalParts.length === 0) {
           throw new AiProviderError(`incomplete: ${result.incompleteReason ?? 'unknown'}`, undefined, 'incomplete');
         }
@@ -937,26 +961,31 @@ export async function runThinkChat(input: ChatInput, deps: ChatDeps): Promise<Ch
     latencyMs: now() - input.startedAt,
     conversationId,
     createdBy: input.userId || null,
-    features: features
+    features: (features || toolLoop)
       ? {
-        ...features,
-        split_tool: splitAllowed,
-        department_tools: departmentsAllowed,
-        consults: consultState?.count ?? 0,
-        organize_tools: organizeTools,
-        course_map_tools: courseMapAllowed,
-        concept_review_tools: conceptReviewAllowed,
-        concept_relation_tools: conceptRelationAllowed,
-        concept_source_tools: conceptSourceAllowed,
-        concept_review_job_tools: reviewJobsAllowed,
-        concept_review_batch_tool: reviewBatchAllowed,
-        ...(input.reviewJobRun ? { review_job_run: input.reviewJobRun.jobId } : {}),
-        auto_organize_enabled: autoOrganize,
-        ...(conceptRef ? { concept_ref: conceptRef.meta } : {}),
-        ...(criterionRef ? { criterion_ref: criterionRef.meta } : {}),
-        ...(draftRef ? { concept_draft_ref: draftRef.meta } : {}),
-        ...(sheets.length > 0
-          ? { spreadsheets: { files: sheets.length, sandbox: sandbox !== null, code_runs: codeRuns, answer_files: answerFiles.length } }
+        ...(features ?? {}),
+        ...(toolLoop ? { tool_loop: toolLoop } : {}),
+        ...(features
+          ? {
+            split_tool: splitAllowed,
+            department_tools: departmentsAllowed,
+            consults: consultState?.count ?? 0,
+            organize_tools: organizeTools,
+            course_map_tools: courseMapAllowed,
+            concept_review_tools: conceptReviewAllowed,
+            concept_relation_tools: conceptRelationAllowed,
+            concept_source_tools: conceptSourceAllowed,
+            concept_review_job_tools: reviewJobsAllowed,
+            concept_review_batch_tool: reviewBatchAllowed,
+            ...(input.reviewJobRun ? { review_job_run: input.reviewJobRun.jobId } : {}),
+            auto_organize_enabled: autoOrganize,
+            ...(conceptRef ? { concept_ref: conceptRef.meta } : {}),
+            ...(criterionRef ? { criterion_ref: criterionRef.meta } : {}),
+            ...(draftRef ? { concept_draft_ref: draftRef.meta } : {}),
+            ...(sheets.length > 0
+              ? { spreadsheets: { files: sheets.length, sandbox: sandbox !== null, code_runs: codeRuns, answer_files: answerFiles.length } }
+              : {}),
+          }
           : {}),
       }
       : null,

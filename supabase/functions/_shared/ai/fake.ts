@@ -35,6 +35,10 @@ export interface FakeTurn {
   citedFileIds?: string[];
   /** 백그라운드 호출에서 끝났다고 알리기 전에 "아직 도는 중"으로 답할 횟수. */
   pendingPolls?: number;
+  /** 공급자가 알린 종료. 없으면 completed. */
+  status?: 'completed' | 'incomplete';
+  /** status가 incomplete일 때 공급자가 준 사유. */
+  incompleteReason?: string;
 }
 
 /** 테스트용 백그라운드 호출. 시작·취소·삭제 기록을 갖는다. */
@@ -252,7 +256,8 @@ export class FakeAiProvider implements AiProvider {
     return {
       provider: this.name,
       model: req.model,
-      status: 'completed',
+      status: turn.status ?? 'completed',
+      ...(turn.incompleteReason ? { incompleteReason: turn.incompleteReason } : {}),
       messages,
       functionCalls,
       webSearchCalls: turn.webSearchQueries?.length ?? 0,

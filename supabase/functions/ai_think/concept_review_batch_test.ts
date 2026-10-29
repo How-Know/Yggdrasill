@@ -772,7 +772,7 @@ Deno.test('대화: 기능이 다 준비되면 묶음 검수 도구·지침이 �
   assert(String(chatReq!.instructions).includes(BATCH_TOOL_NAME), '지침에 묶음 검수 규칙이 있다');
   assertEquals(sim.cards.length, 3);
   assertEquals(sim.logs.map((l) => l.p_end_reason), ['target_reached']);
-  assertEquals(THINK_PROMPT_VERSION, 'think-2026-10-29b');
+  assertEquals(THINK_PROMPT_VERSION, 'think-2026-10-30a');
 
   const p2 = new FakeAiProvider(thinkScript());
   await runThinkChat(chatInput({ features }), { provider: p2, store, recordRun: runs.record, emit: new EventLog().emit, env: testEnv });
@@ -1123,7 +1123,7 @@ Deno.test('형식 실패는 그 위치만 실패로 남고, 30개를 넘겨도 �
 Deno.test('참조 상한 정의가 DB·도구 설명·판단 지시와 같다', async () => {
   assertEquals(CONCEPT_REVIEW_REF_LIMIT, 20);
   assertEquals(BATCH_PROMPT_VERSION, 'review-batch-2026-10-29b');
-  assertEquals(THINK_PROMPT_VERSION, 'think-2026-10-29b');
+  assertEquals(THINK_PROMPT_VERSION, 'think-2026-10-30a');
   assert(JUDGE_INSTRUCTIONS.includes('고유 20개까지'));
   assert(JUDGE_INSTRUCTIONS.includes('to_compare_ids로 옮겨'));
   const sql = await Deno.readTextFile(new URL('../../migrations/20261028010000_concept_review_ref_limit.sql', import.meta.url));
@@ -1808,7 +1808,7 @@ Deno.test('승인된 카드 뒤의 확인 못 함·비교 필요는 필수 범�
 
 Deno.test('초등 배치 예외는 지시문의 작성 구분·내용·기존 배치 조건만 확인한다. 이 시험은 실제 모델의 배치 판단 품질을 검증하지 않는다', () => {
   assertEquals(BATCH_PROMPT_VERSION, 'review-batch-2026-10-29b');
-  assertEquals(THINK_PROMPT_VERSION, 'think-2026-10-29b');
+  assertEquals(THINK_PROMPT_VERSION, 'think-2026-10-30a');
   assert(JUDGE_INSTRUCTIONS.includes('자료 본문에 작성 구분이 적혀 있고'));
   assert(JUDGE_INSTRUCTIONS.includes('Think가 직접 작성한 초등 기초 보완 개념'));
   assert(JUDGE_INSTRUCTIONS.includes('초등의 넓은 영역'));
