@@ -33,7 +33,9 @@ export const BATCH_TOOL_LABEL = '개념 묶음 검수';
 // review-batch-2026-10-29b: 승인된 카드 뒤에 남은 확인 못 함·비교 필요 필수 범위만 다시 판단한다. 카드 상태가 applied가 아니면 고르지 않는다.
 // review-batch-2026-10-30a: 기초 개념 이름으로도 후보를 찾고(같은 이름은 한 자리), 검색어를 40개씩 나눠 모두 찾고,
 //   새로 만들 이름은 라이브러리 전체에서 같은 이름을 확인한다. 판단 지시문은 바꾸지 않는다.
-export const BATCH_PROMPT_VERSION = 'review-batch-2026-10-30a';
+// review-batch-2026-10-30b: 표기·의미·배치에서 오류를 못 찾고 외부 근거만 확인 못 했으면 unverified + evidence_gaps(1차 충족, 근거 미확인).
+//   확인할 수 없는 곁가지 설명은 빼는 수정안을 낸다. 근거 미확인으로 승인된 범위는 다시 판단하지 않는다.
+export const BATCH_PROMPT_VERSION = 'review-batch-2026-10-30b';
 export const BATCH_MAX = 50;
 
 /** 판단 모델 한 번에 넣는 개념 수와 글자 수. */
@@ -67,6 +69,12 @@ const STAGE1_SCOPES = REVIEW_JOB_SCOPES.filter((s) => s !== 'foundation');
 const OPTIONAL_SCOPES = ['classification', 'unit', 'relations'];
 const REJECTED_SAME_REASON = '사용자가 거절한 카드와 같은 판단이 다시 나옴';
 const OUTCOMES = ['no_issue_found', 'issue_found', 'needs_comparison', 'unverified', 'merge_needed'];
+/** 1차 충족(근거 미확인)으로 셀 수 있는 외부 근거. 교재 출처·정확한 학년·단원·원본 그림·용어 유래. */
+export const EVIDENCE_GAPS = ['source', 'grade_unit', 'figure', 'etymology'];
+const EVIDENCE_GAP_LABELS: Record<string, string> = {
+  source: '교재 출처', grade_unit: '정확한 학년·단원', figure: '원본 그림', etymology: '용어 유래',
+};
+const EVIDENCE_GAP_SCOPES = ['notation', 'meaning', 'placement'];
 
 export const BATCH_TOOL: AiFunctionTool = {
   name: BATCH_TOOL_NAME,
@@ -110,6 +118,7 @@ const REVIEW_SCHEMA = {
     compared_ids: { type: 'array', items: { type: 'string' } },
     to_compare_ids: { type: 'array', items: { type: 'string' } },
     basis_kind: { type: ['string', 'null'], enum: ['source', 'judgment', 'none', null] },
+    evidence_gaps: { type: 'array', items: { type: 'string', enum: EVIDENCE_GAPS } },
     fix: {
       type: ['object', 'null'],
       properties: { ops: { type: 'array', items: FIX_OP_SCHEMA } },
@@ -118,7 +127,8 @@ const REVIEW_SCHEMA = {
     },
   },
   required: [
-    'scope', 'outcome', 'checked', 'findings', 'basis', 'unverified', 'follow_up', 'compared_ids', 'to_compare_ids', 'basis_kind', 'fix',
+    'scope', 'outcome', 'checked', 'findings', 'basis', 'unverified', 'follow_up', 'compared_ids', 'to_compare_ids', 'basis_kind',
+    'evidence_gaps', 'fix',
   ],
   additionalProperties: false,
 };
@@ -237,6 +247,15 @@ export const JUDGE_INSTRUCTIONS = [
   '- classification·unit·relations: judge_scopes에 있고 자료가 있을 때만(유형·폴더 / 중복·섞임 / 관계 목록).',
   '결과(outcome): no_issue_found(이번에 본 범위에서 문제를 못 찾음, "검증됨"이 아니다) · issue_found(문제 있음, findings에 구체적으로) ·',
   '  needs_comparison(다른 개념과 비교가 더 필요) · unverified(자료로는 확인할 수 없음) · merge_needed(unit에서만).',
+  '',
+  '1차 초안의 근거 미확인(notation·meaning·placement만):',
+  '- 그 범위의 본문·필수 조건을 검토해 오류를 찾지 못했고, 확인하지 못한 것이 외부 근거뿐이면 outcome은 unverified, evidence_gaps에 그 외부 근거를 적는다.',
+  '  source(교재 출처) · grade_unit(정확한 학년·단원) · figure(원본 그림) · etymology(용어 유래). unverified에 무엇을 확인하지 못했는지 한 줄로 적는다.',
+  '  이 기록은 1차 초안 진행에서 충족(근거 미확인)으로 세고, 이후 개별 검토 목록으로 넘어간다. 확인했다고 쓰지 않는다.',
+  '- placement는 지금 배치가 있고 그 배치가 내용에 맞는데 출처로 확인하지 못한 경우에만 source·grade_unit을 쓴다. 배치가 없으면 쓰지 않는다.',
+  '- 핵심 수식·그림이 수학적으로 맞는지 자체를 판단하지 못했으면 evidence_gaps를 비운다(보류). 실제 오류는 issue_found, 다른 개념과 비교가 필요하면 needs_comparison이다.',
+  '- 확인할 수 없는 비필수 곁가지 설명(예: 기호·용어의 유래)이 본문에 있으면, 미확인으로 남기지 말고 그 문장을 뺀 수정안을 issue_found + fix로 낸다.',
+  '- 그 밖의 outcome과 다른 범위에서는 evidence_gaps를 빈 배열로 둔다.',
   '',
   '고치기 제안(fix) — issue_found일 때만, 그 외에는 null:',
   '- notation·meaning·placement의 issue_found에는 fix가 꼭 있어야 한다. 없으면 issue_found로 쓰지 말고 unverified로 둔다.',
@@ -761,6 +780,13 @@ function reviewItem(raw: unknown, m: Material, units: Set<string>, index: number
     const kind = ['source', 'judgment', 'none'].includes(String(r.basis_kind)) ? String(r.basis_kind) : 'none';
     out.detail = { basis_kind: kind, viewed_original: false, sources: Array.isArray(m.data.sources) ? (m.data.sources as unknown[]).length : 0 };
   }
+  const gaps = r.outcome === 'unverified' && EVIDENCE_GAP_SCOPES.includes(scope)
+    ? [...new Set(strings(r.evidence_gaps).filter((g) => EVIDENCE_GAPS.includes(g)))]
+    : [];
+  if (gaps.length > 0) {
+    out.detail = { ...((out.detail as Rec | undefined) ?? {}), evidence_gaps: gaps };
+    if (!out.unverified) out.unverified = `확인하지 못한 외부 근거: ${gaps.map((g) => EVIDENCE_GAP_LABELS[g]).join(', ')}`;
+  }
   return out;
 }
 
@@ -988,6 +1014,7 @@ function openRequired(snap: Rec): string[] {
   for (const raw of Array.isArray(snap.open) ? snap.open : []) {
     const e = rec(raw);
     const scope = trimmed(e.scope);
+    if (trimmed(e.state) === 'gap') continue;
     if (!REQUIRED_SCOPES.includes(scope) || !OPEN_OUTCOMES.has(trimmed(e.outcome)) || out.includes(scope)) continue;
     out.push(scope);
   }
@@ -1021,8 +1048,9 @@ function unmetCandidate(row: Rec): { position: number; concept_id: string; requi
 
 function scopeStillOpen(data: Rec, scope: string): boolean {
   if (!REQUIRED_SCOPES.includes(scope) || metRequiredScopes(data).has(scope)) return false;
-  const outcome = trimmed(rec(rec(data.review_scopes)[scope]).outcome);
-  return OPEN_OUTCOMES.has(outcome);
+  const latest = rec(rec(data.review_scopes)[scope]);
+  if (trimmed(latest.state) === 'gap') return false;
+  return OPEN_OUTCOMES.has(trimmed(latest.outcome));
 }
 
 function metRequiredScopes(data: Rec): Set<string> {
@@ -1845,6 +1873,7 @@ export async function runReviewBatch(call: BatchCall, state: ReviewJobToolContex
       '카드는 승인 대기다. 승인된 항목만 기록·변경이 되고, 통합 완료는 세 조건(표기·의미, 초등 기초 개념, 배치)이 모두 승인돼야 센다. ' +
       '수정에 의존하는 검토는 초안으로 남고, 고치기 카드가 반영된 뒤 다음 검수가 그 범위만 다시 판단한다. ' +
       '고치기 카드가 반영된 개념은 그 조건을 다시 확인해야 완료다. 통합 완료는 progress_line, 조건별 충족은 condition_line, 1차 검수 3조건 동시 충족은 first_pass_line 그대로 말하고 셋을 섞지 않는다. ' +
+      '1차 충족에는 외부 근거만 확인 못 한 범위(근거 미확인)가 들어 있다. 정밀 검증이나 통합 완료로 말하지 않는다. ' +
       '실패 원인은 failed.items의 diagnosis다. 코드·범위·필드를 말하고, omitted가 0보다 크면 작업 장부의 failures로 이어서 읽는다. kind가 generic이면 예전 포괄 기록이다. ' +
       (firstPassState === 'counted'
         ? `1차 검수 3조건 동시 충족은 "${firstPassLine}" 이다.`

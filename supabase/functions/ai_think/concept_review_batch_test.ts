@@ -5,6 +5,7 @@ import { runThinkChat, type ChatInput } from './chat.ts';
 import {
   BATCH_PROMPT_VERSION,
   BATCH_TOOL_NAME,
+  EVIDENCE_GAPS,
   JUDGE_INSTRUCTIONS,
   assignRefLists,
   conceptRefAllowList,
@@ -1209,7 +1210,7 @@ Deno.test('형식 실패는 그 위치만 실패로 남고, 30개를 넘겨도 �
 
 Deno.test('참조 상한 정의가 DB·도구 설명·판단 지시와 같다', async () => {
   assertEquals(CONCEPT_REVIEW_REF_LIMIT, 20);
-  assertEquals(BATCH_PROMPT_VERSION, 'review-batch-2026-10-30a');
+  assertEquals(BATCH_PROMPT_VERSION, 'review-batch-2026-10-30b');
   assertEquals(THINK_PROMPT_VERSION, 'think-2026-10-30a');
   assert(JUDGE_INSTRUCTIONS.includes('고유 20개까지'));
   assert(JUDGE_INSTRUCTIONS.includes('to_compare_ids로 옮겨'));
@@ -1893,8 +1894,71 @@ Deno.test('승인된 카드 뒤의 확인 못 함·비교 필요는 필수 범�
   assertEquals(provider.requests.some((r) => r.jsonSchema?.name === 'concept_review_foundation_judgment'), false);
 });
 
+Deno.test('근거 미확인으로 승인된 필수 범위는 다시 판단하지 않고, 같은 위치의 다른 확인 못 함만 판단한다', async () => {
+  const sim = new JobSim(3);
+  for (let pos = 1; pos <= 3; pos++) seedItem(sim, pos, 'submitted', `유지-${pos}`, null);
+  const gap = (scope: string) => ({ scope, outcome: 'unverified', state: 'gap' });
+  const open = (scope: string, outcome: string) => ({ scope, outcome, state: 'open' });
+  Object.assign(sim.concepts[1], {
+    todo: [],
+    conditions: { text: 'open', foundation: 'met', placement: 'gap' },
+    reviewScopes: {
+      notation: { state: 'gap', outcome: 'unverified' },
+      meaning: { state: 'open', outcome: 'unverified' },
+      foundation: { state: 'met', outcome: 'no_issue_found' },
+      placement: { state: 'gap', outcome: 'unverified' },
+    },
+    cardStatus: 'applied',
+    itemState: 'submitted',
+  });
+  sim.unmetHandler = () => unmetPage({
+    items: [
+      unmetRow(1, { item_state: 'submitted', card_status: 'applied', todo: [], reason: null, open: [gap('placement')] }),
+      unmetRow(2, {
+        item_state: 'submitted', card_status: 'applied', todo: [], reason: null,
+        open: [gap('notation'), open('meaning', 'unverified'), gap('placement')],
+      }),
+    ],
+  });
+  const provider = new FakeAiProvider(judge({ scopes: ['notation', 'meaning', 'placement'] }));
+  const v = parse(await batch(sim, provider));
+  assertEquals(v.unmet_selected, 1);
+  const view = judgeViews(provider);
+  assertEquals([...view.keys()], [2]);
+  assertEquals(view.get(2)?.judge_scopes, ['meaning']);
+  assert(!saveRows(sim).some((r) => r.position === 1));
+});
+
+Deno.test('표기·의미·배치의 확인 못 함에만 외부 근거 표시를 남기고, 모르는 값은 버린다', () => {
+  const m = refMaterial([]);
+  const got = stage1Of(m, judged([
+    review('notation', { evidence_gaps: ['source'] }),
+    review('meaning', { outcome: 'unverified', evidence_gaps: ['etymology', 'guess', 'etymology'] }),
+  ]), new Set());
+  assertEquals(got.item, null);
+  const [notation, meaning] = got.reviews;
+  assertEquals(notation.detail, undefined);
+  assertEquals(rec(meaning.detail).evidence_gaps, ['etymology']);
+  assert(String(meaning.unverified).includes('용어 유래'));
+  const kept = stage1Of(m, judged([
+    review('meaning', { outcome: 'unverified', unverified: '기호 유래를 자료로 확인하지 못함', evidence_gaps: ['etymology'] }),
+  ]), new Set());
+  assertEquals(kept.reviews[0].unverified, '기호 유래를 자료로 확인하지 못함');
+  const none = stage1Of(m, judged([review('meaning', { outcome: 'unverified', evidence_gaps: [] })]), new Set());
+  assertEquals(none.reviews[0].detail, undefined);
+});
+
+Deno.test('근거 미확인 지시문은 외부 근거 네 가지와 보류·곁가지 삭제 경계를 담는다. 실제 모델의 판단 품질은 검증하지 않는다', () => {
+  assertEquals(BATCH_PROMPT_VERSION, 'review-batch-2026-10-30b');
+  assertEquals(EVIDENCE_GAPS, ['source', 'grade_unit', 'figure', 'etymology']);
+  assert(JUDGE_INSTRUCTIONS.includes('evidence_gaps'));
+  assert(JUDGE_INSTRUCTIONS.includes('evidence_gaps를 비운다(보류)'));
+  assert(JUDGE_INSTRUCTIONS.includes('그 문장을 뺀 수정안을 issue_found + fix로 낸다'));
+  assert(JUDGE_INSTRUCTIONS.includes('배치가 없으면 쓰지 않는다'));
+});
+
 Deno.test('초등 배치 예외는 지시문의 작성 구분·내용·기존 배치 조건만 확인한다. 이 시험은 실제 모델의 배치 판단 품질을 검증하지 않는다', () => {
-  assertEquals(BATCH_PROMPT_VERSION, 'review-batch-2026-10-30a');
+  assertEquals(BATCH_PROMPT_VERSION, 'review-batch-2026-10-30b');
   assertEquals(THINK_PROMPT_VERSION, 'think-2026-10-30a');
   assert(JUDGE_INSTRUCTIONS.includes('자료 본문에 작성 구분이 적혀 있고'));
   assert(JUDGE_INSTRUCTIONS.includes('Think가 직접 작성한 초등 기초 보완 개념'));
