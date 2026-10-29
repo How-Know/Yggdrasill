@@ -374,4 +374,6 @@ Deno.test('미충족 조회는 임대를 하지 않고, 충돌이면 어떤 RPC�
   assertEquals(failed.unmet.returned, null);
   assert(failed.note.includes('미충족 개수는 이 응답에 없다'));
   assert(!failed.note.includes('미충족은 0개'));
+  assert(!failed.note.includes('미충족 없음'));
+  assert(!failed.note.includes('검수 완료'));
 });

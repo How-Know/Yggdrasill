@@ -30,7 +30,7 @@ import type { ToolRunResult } from './tools.ts';
 
 export const BATCH_TOOL_NAME = 'run_concept_review_batch';
 export const BATCH_TOOL_LABEL = '개념 묶음 검수';
-export const BATCH_PROMPT_VERSION = 'review-batch-2026-10-28b';
+export const BATCH_PROMPT_VERSION = 'review-batch-2026-10-29a';
 export const BATCH_MAX = 50;
 
 /** 판단 모델 한 번에 넣는 개념 수와 글자 수. */
@@ -59,6 +59,7 @@ const CONCEPTS_PER_CARD = 5;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const STAGE1_SCOPES = REVIEW_JOB_SCOPES.filter((s) => s !== 'foundation');
 const OPTIONAL_SCOPES = ['classification', 'unit', 'relations'];
+const REJECTED_SAME_REASON = '사용자가 거절한 카드와 같은 판단이 다시 나옴';
 const OUTCOMES = ['no_issue_found', 'issue_found', 'needs_comparison', 'unverified', 'merge_needed'];
 
 export const BATCH_TOOL: AiFunctionTool = {
@@ -73,6 +74,8 @@ export const BATCH_TOOL: AiFunctionTool = {
     `비교 참조가 한 필드에서 고유 ${CONCEPT_REVIEW_REF_LIMIT}개를 넘긴 위치는 미결이며, 판이 바뀌거나 상한이 커지기 전에는 다시 판단하지 않는다. ` +
     '읽지 못하거나 판단할 수 없는 개념은 미결(이유·다음 할 일)로 저장하고 나머지를 계속한다. 한 답변에 한 번만 쓴다. ' +
     '결과의 숫자(대상·보완·건너뜀·저장·카드 종류별·미결·통합 완료·조건별 충족·end_reason)를 그대로 보고한다. 카드를 낸 것은 완료가 아니다. ' +
+    '체크포인트 끝에서 자리가 남으면 필수 조건이 남은 deferred·failed만 이어 고른다. ' +
+    '미충족 조회가 실패하거나 순회가 끊기면(unmet_code·unmet_cursor_stop·unmet_time_stop) 미충족 없음이나 검수 완료로 말하지 않는다. ' +
     '실패는 failed.count와 failed.by_code, 각 항목의 diagnosis(code·scope·field)를 먼저 말한다. omitted가 0보다 크면 get_concept_review_job의 failures로 나머지를 읽는다. ' +
     'diagnosis.kind가 generic이면 범위·필드가 없는 예전 기록이다. 원인을 만들어 넣지 않는다.',
   parameters: {
@@ -216,6 +219,11 @@ export const JUDGE_INSTRUCTIONS = [
   '- placement: 지금 배치(placements)가 출처(sources: 책·학년·과정 키·책 단원)와 맞는지. 과정 단원 목록(courses)에서 고른다.',
   '  기존 배치는 유지하는 것이 기본이다. 분명히 틀린 것만 고친다. 전면 재배치하지 않는다.',
   '  출처가 없거나 학년·단원이 확인되지 않으면 추정해서 놓지 않는다(outcome unverified, basis_kind none).',
+  '  이번 1차 검수의 배치 조건 예외: 자료 본문에 작성 구분이 적혀 있고, 그 작성 구분과 실제 내용으로 Think가 직접 작성한 초등 기초 보완 개념임이 확인되고, 지금 배치가 그 내용에 맞는 초등의 넓은 영역이라는 근거가 있을 때만 이번 1차 검수의 배치 조건을 충족한 것으로 본다.',
+  '  그 경우에도 교재 출처와 정확한 학년·단원은 미확인으로 둔다. 확인된 출처·학년·단원처럼 적지 않는다.',
+  '  출처가 없다는 사실만으로, 또는 폴더·유형만으로 직접 작성했는지와 초등인지를 추정하지 않는다.',
+  '  작성 구분·실제 내용·넓은 영역 배치 근거 중 하나라도 부족하면 이 예외를 쓰지 않는다. 그때는 출처가 없거나 학년·단원이 확인되지 않은 기존 규칙(outcome unverified, basis_kind none)을 적용한다.',
+  '  기존 배치가 내용에 맞으면 유지한다. 배치를 바꾸거나 검토 기록을 남기는 일은 카드 승인과 필요한 재확인을 그대로 따른다. 이 예외로 카드를 낸 것을 완료로 세지 않는다.',
   '  printed_page는 인쇄 쪽, pdf_page는 PDF 쪽이다. 둘을 섞거나 서로 바꿔 쓰지 않는다. 교재 원본(쪽 이미지)은 보지 않았다.',
   '  basis_kind: 출처 메타데이터로 판단했으면 source, 출처 없이 내용으로 판단했으면 judgment, 판단 못 했으면 none.',
   '- classification·unit·relations: judge_scopes에 있고 자료가 있을 때만(유형·폴더 / 중복·섞임 / 관계 목록).',
@@ -316,6 +324,12 @@ interface Material {
   placementIds: Set<string>;
   courseIds: Set<string>;
   courseKeys: Set<string>;
+  /** 새 미충족 경로로 고른 위치의 스냅샷 필수 후보. 판단 범위 계산의 입력으로만 보관한다. */
+  snapshotRequired?: string[];
+  /** 비재개 미충족 경로에서 한 번 계산한 판단 범위. */
+  unmetRange?: string[];
+  /** 새 미충족 경로이고 resume_scopes가 비어 있다. 거절과 같은 판단의 두 번째 저장을 하지 않는다. */
+  unmetFresh?: boolean;
 }
 
 interface Need {
@@ -936,6 +950,53 @@ export function foundationReview(
   };
 }
 
+const trimmed = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+
+function reasonBlocked(snapshotReason: string, supplementReason: string): boolean {
+  if (snapshotReason.startsWith('concept_review_too_many_refs') || supplementReason.startsWith('concept_review_too_many_refs')) return true;
+  if (snapshotReason === REJECTED_SAME_REASON) return true;
+  if (snapshotReason.startsWith('fix_invalid') || supplementReason.startsWith('fix_invalid')) return true;
+  return false;
+}
+
+/** 미충족 페이지 한 줄의 새 경로 자격. supplement.state는 포함 근거로 쓰지 않는다. */
+function unmetCandidate(row: Rec): { position: number; concept_id: string; required: string[] } | null {
+  const snap = rec(row.snapshot);
+  const supplement = row.supplement && typeof row.supplement === 'object' && !Array.isArray(row.supplement) ? rec(row.supplement) : {};
+  const state = trimmed(snap.item_state);
+  if (state !== 'deferred' && state !== 'failed') return null;
+  if (trimmed(snap.category) === 'awaiting') return null;
+  if (reasonBlocked(trimmed(snap.reason), trimmed(supplement.reason))) return null;
+  const required = REQUIRED_SCOPES.filter((s) => strings(snap.todo).includes(s));
+  if (required.length === 0) return null;
+  const position = Number(snap.pos ?? snap.position);
+  const conceptId = typeof snap.concept_id === 'string' ? snap.concept_id : '';
+  if (!Number.isInteger(position) || position < 1 || !conceptId) return null;
+  return { position, concept_id: conceptId, required };
+}
+
+function metRequiredScopes(data: Rec): Set<string> {
+  const c = rec(data.conditions);
+  const met = new Set<string>();
+  if (c.text === 'met') {
+    met.add('notation');
+    met.add('meaning');
+  }
+  if (c.foundation === 'met') met.add('foundation');
+  if (c.placement === 'met') met.add('placement');
+  return met;
+}
+
+function unmetHaltNote(looked: boolean, code: string | null, cursor: string | null, time: string | null): string | null {
+  if (!time && !cursor && !(looked && code !== 'ok')) return null;
+  const bits = [
+    time ? `시간 부족 중단: ${time}` : '',
+    cursor ? `커서 이상: ${cursor}` : '',
+    looked && code !== 'ok' ? `미충족 조회 코드: ${code}` : '',
+  ].filter(Boolean);
+  return `미충족 조회를 마치지 못했다(${bits.join(' · ')}). 이 중단을 남은 미충족이 없는 상태나 검수가 끝난 상태로 적지 않는다.`;
+}
+
 export async function runReviewBatch(call: BatchCall, state: ReviewJobToolContext | undefined, deps: BatchDeps): Promise<ToolRunResult> {
   const src = deps.store;
   if (!state || !src.reviewJobRpc) {
@@ -982,12 +1043,19 @@ export async function runReviewBatch(call: BatchCall, state: ReviewJobToolContex
     submit_failed: 0, submit_blocked: 0, capacity_target: 0, drafted_not_submitted: 0,
     pending_before: pending, max_pending_cards: maxPending, max_cards_per_request: maxPerRequest,
     round: call.round, elapsed_ms: 0, judge_ms: 0, deadline_left_ms: call.deadline - started,
+    unmet_code: null as string | null, unmet_selected: 0,
+    unmet_cursor_stop: null as string | null, unmet_time_stop: null as string | null,
   };
   const deferred: Rec[] = [];
   const failed: Rec[] = [];
   const cards: ActionRow[] = [];
   const cardIds: string[] = [];
   let endReason: string | null = null;
+  let unmetCode: string | null = null;
+  let unmetSelected = 0;
+  let unmetCursorStop: string | null = null;
+  let unmetTimeStop: string | null = null;
+  let unmetLooked = false;
   let usage: AiUsage = emptyUsage();
   let cost = 0;
   let costKnown = true;
@@ -1134,9 +1202,11 @@ export async function runReviewBatch(call: BatchCall, state: ReviewJobToolContex
       const capacity = Math.min(target, Math.max(0, cardsLeft()) * CONCEPTS_PER_CARD);
       log.capacity_target = capacity;
 
-      // 1) 대상: 다시 판단할 실패 위치 먼저, 그다음 통합 완료가 아닌 위치(보완 포함)를 목록 순서대로
+      // 1) 대상: 다시 판단할 실패 위치 먼저, 그다음 통합 완료가 아닌 위치(보완 포함)를 목록 순서대로.
+      // 그 목록이 끝났고 처리 자리가 남을 때만, 필수 조건이 남은 deferred·failed를 미충족 페이지로 이어 고른다.
       const work: { position: number; concept_id: string }[] = [];
       const seen = new Set<number>();
+      const unmetPlan = new Map<number, string[]>();
       const pushWork = (raw: unknown) => {
         const r = rec(raw);
         const position = Number(r.position);
@@ -1161,7 +1231,66 @@ export async function runReviewBatch(call: BatchCall, state: ReviewJobToolContex
         reachedEnd = n.reached_end === true;
         for (const raw of Array.isArray(n.batch) ? n.batch : []) pushWork(raw);
       }
+      const saveReserveMs = deps.timing?.saveReserveMs ?? SAVE_RESERVE_MS;
+      const minJudgeMs = deps.timing?.minJudgeMs ?? MIN_JUDGE_MS;
+      if (!endReason && !leaseLost && reachedEnd && work.length < capacity) {
+        let cursor = 0;
+        let version: number | null = null;
+        while (work.length < capacity) {
+          if (deps.now() >= call.deadline - saveReserveMs - minJudgeMs) {
+            unmetTimeStop = '판단 최소 시간을 남기려고 미충족 순회를 멈춤';
+            break;
+          }
+          unmetLooked = true;
+          let page: Rec;
+          try {
+            page = rec(await rpc('concept_review_job_unmet_page', {
+              p_job_id: job, p_version: version, p_after: cursor, p_limit: 50,
+            }));
+          } catch (e) {
+            if (errorCode(e) === 'concept_review_job_lease_lost') {
+              leaseLost = true;
+              lane.leases.delete(jobId);
+            }
+            unmetCode = errorCode(e);
+            break;
+          }
+          const code = typeof page.code === 'string' ? page.code : 'lookup_failed';
+          unmetCode = code;
+          if (code !== 'ok') break;
+          for (const raw of Array.isArray(page.items) ? page.items : []) {
+            if (work.length >= capacity) break;
+            const candidate = unmetCandidate(rec(raw));
+            if (!candidate || seen.has(candidate.position)) continue;
+            seen.add(candidate.position);
+            work.push({ position: candidate.position, concept_id: candidate.concept_id });
+            unmetPlan.set(candidate.position, candidate.required);
+            unmetSelected += 1;
+          }
+          if (work.length >= capacity) break;
+          const omitted = typeof page.omitted === 'number' ? page.omitted : Number(page.omitted);
+          const hasOmitted = Number.isFinite(omitted) && omitted > 0;
+          if (hasOmitted && (page.next_after == null || page.next_after === '')) {
+            unmetCursorStop = 'omitted가 있는데 next_after가 없음';
+            break;
+          }
+          if (!hasOmitted) break;
+          const nextRaw = page.next_after;
+          const nextAfter = typeof nextRaw === 'number' ? nextRaw : Number(nextRaw);
+          if (!Number.isInteger(nextAfter) || nextAfter <= cursor) {
+            unmetCursorStop = '커서가 전진하지 않음';
+            break;
+          }
+          cursor = nextAfter;
+          const pub = page.published_input_version;
+          version = typeof pub === 'number' && Number.isFinite(pub) ? pub : null;
+        }
+      }
       log.served = work.length;
+      log.unmet_code = unmetCode;
+      log.unmet_selected = unmetSelected;
+      log.unmet_cursor_stop = unmetCursorStop;
+      log.unmet_time_stop = unmetTimeStop;
 
       // 2) 묶어 읽기: 글자 예산 안에서 여러 위치, 긴 본문은 offset 으로 이어 읽는다. 부족한 범위(todo)도 함께 받는다.
       const materials: Material[] = [];
@@ -1223,13 +1352,28 @@ export async function runReviewBatch(call: BatchCall, state: ReviewJobToolContex
             continue;
           }
           const resume = strings(d.resume_scopes);
-          const todo = resume.length > 0 ? resume : strings(d.todo);
-          if (todo.length === 0) {
-            log.already_done += 1;
-            continue;
+          const planned = unmetPlan.get(pos);
+          let scopes: string[];
+          let foundation: boolean;
+          let unmetFresh = false;
+          let unmetRange: string[] | undefined;
+          if (planned && resume.length === 0) {
+            const materialTodo = strings(d.todo);
+            unmetRange = planned.filter((s) => materialTodo.includes(s) && !metRequiredScopes(d).has(s));
+            if (unmetRange.length === 0) continue;
+            unmetFresh = true;
+            scopes = unmetRange.filter((s) => s !== 'foundation');
+            foundation = unmetRange.includes('foundation');
+          } else {
+            const todo = resume.length > 0 ? resume : strings(d.todo);
+            if (todo.length === 0) {
+              log.already_done += 1;
+              continue;
+            }
+            scopes = todo.filter((s) => s !== 'foundation');
+            if (resume.length === 0 && todo.includes('notation')) scopes.push(...OPTIONAL_SCOPES.filter((s) => !scopes.includes(s)));
+            foundation = todo.includes('foundation');
           }
-          const scopes = todo.filter((s) => s !== 'foundation');
-          if (resume.length === 0 && todo.includes('notation')) scopes.push(...OPTIONAL_SCOPES.filter((s) => !scopes.includes(s)));
           const placements = (Array.isArray(d.placements) ? d.placements : []).map(rec);
           const sources = (Array.isArray(d.sources) ? d.sources : []).map(rec);
           const ids = conceptRefAllowList(d, String(d.concept_id ?? ''));
@@ -1239,7 +1383,10 @@ export async function runReviewBatch(call: BatchCall, state: ReviewJobToolContex
           materials.push({
             position: pos, concept_id: String(d.concept_id), name: String(d.name ?? ''), revision, content: acc.content, data: d, ids,
             fullRead, textMark: fullRead ? textMark : null,
-            scopes, foundation: todo.includes('foundation'),
+            scopes, foundation,
+            ...(planned ? { snapshotRequired: [...planned] } : {}),
+            ...(unmetRange ? { unmetRange: [...unmetRange] } : {}),
+            ...(unmetFresh ? { unmetFresh: true } : {}),
             placementIds: new Set(placements.map((p) => String(p.id ?? '')).filter(Boolean)),
             courseIds: new Set(placements.map((p) => String(p.course_id ?? '')).filter(Boolean)),
             courseKeys: new Set(sources.map((x) => (typeof x.course_key === 'string' ? x.course_key : '')).filter(Boolean)),
@@ -1395,14 +1542,17 @@ export async function runReviewBatch(call: BatchCall, state: ReviewJobToolContex
           const outcomes = await saveItems(items);
           const retry = items.filter((it) => {
             const o = outcomes.get(Number(it.position));
-            return o?.kind === 'error' && it.state === 'drafted';
+            if (!(o?.kind === 'error' && it.state === 'drafted')) return false;
+            const material = group.find((g) => g.position === Number(it.position));
+            if (o.code === 'concept_review_job_same_as_rejected' && material?.unmetFresh) return false;
+            return true;
           }).map((it) => {
             const o = outcomes.get(Number(it.position)) as { kind: 'error'; code: string };
             const m = { position: Number(it.position), concept_id: String(it.concept_id), revision: String(it.revision) };
             if (o.code === 'concept_review_job_same_as_rejected') {
               return {
                 ...failedItem(m, ''), state: 'deferred', read_complete: true, rework: true,
-                reason: '사용자가 거절한 카드와 같은 판단이 다시 나옴', next_action: '거절 이유를 사용자에게 확인한 뒤 다시 검수',
+                reason: REJECTED_SAME_REASON, next_action: '거절 이유를 사용자에게 확인한 뒤 다시 검수',
               };
             }
             if (o.code === 'concept_review_too_many_refs') {
@@ -1556,12 +1706,17 @@ export async function runReviewBatch(call: BatchCall, state: ReviewJobToolContex
     nothing_to_do: '처리할 대상이 없다',
     tool_error: '저장소 오류로 멈췄다. 저장된 것까지는 남아 있다',
   };
+  const halt = unmetHaltNote(unmetLooked, unmetCode, unmetCursorStop, unmetTimeStop);
   const value = {
     status_diag: statusDiag,
     aggregation,
     diag_save: diagSave,
     end_reason: reason,
-    end_reason_text: REASONS[reason] ?? reason,
+    end_reason_text: `${REASONS[reason] ?? reason}${halt ? ` ${halt}` : ''}`,
+    unmet_code: unmetCode,
+    unmet_selected: unmetSelected,
+    unmet_cursor_stop: unmetCursorStop,
+    unmet_time_stop: unmetTimeStop,
     target,
     served: log.served,
     retried: log.retried,
@@ -1604,10 +1759,13 @@ export async function runReviewBatch(call: BatchCall, state: ReviewJobToolContex
         : firstPassState === 'failed'
         ? '집계 조회가 실패했다(status_diag). 완료 수와 1차 검수 수를 0으로 채우지 않는다. 조회 취소는 데이터베이스 문장이 끝났다는 뜻이 아니다.'
         : progressFreshnessNote(progressView) ??
-          '1차 검수 3조건 동시 충족 수는 이 응답에 없다(미집계). 0개로 말하지 말고 조건별 수로 추산하지 않는다.'),
+          '1차 검수 3조건 동시 충족 수는 이 응답에 없다(미집계). 0개로 말하지 말고 조건별 수로 추산하지 않는다.') +
+      (halt ? ` ${halt}` : ''),
   };
   const ok = reason !== 'tool_error' && reason !== 'lease_lost';
   const summary =
-    `대상 ${log.served}(보완 ${log.supplement}) · 저장 ${log.drafted} · 미결 ${log.deferred} · 실패 ${failed.length} · 카드 ${log.cards}장 (${reason})`;
+    `대상 ${log.served}(보완 ${log.supplement}) · 저장 ${log.drafted} · 미결 ${log.deferred} · 실패 ${failed.length} · 카드 ${log.cards}장 (${reason})` +
+    (unmetLooked || unmetTimeStop || unmetCursorStop ? ` · 미충족 경로 선정 ${unmetSelected}` : '') +
+    (halt ? ` ${halt}` : '');
   return { name: BATCH_TOOL_NAME, ok, output: JSON.stringify(value), summary, ...(cards.length ? { actions: cards } : {}) };
 }

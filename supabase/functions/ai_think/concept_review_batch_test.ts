@@ -31,11 +31,16 @@ interface SimConcept {
   id: string; name: string; content: string; rev: number; gone?: boolean; todo: string[]; supplement?: boolean;
   sources?: Rec[]; placements?: Rec[]; resume_scopes?: string[]; created_concepts?: Rec[];
   relations?: Rec[]; same_concept_reviews?: Rec[];
+  /** 최신 재료의 조건 충족. text가 met이면 표기·의미가 이미 충족이다. */
+  conditions?: Rec;
   /** 32자 지문. 있으면 revision 앞 12자와 맞추고, 같은 호출의 전문 비교 근거가 된다. */
   textMark?: string;
   statements?: Rec[];
 }
-interface SimItem { pos: number; concept_id: string; state: string; revision: string; reviews: Rec[] | null; reason: string | null }
+interface SimItem {
+  pos: number; concept_id: string; state: string; revision: string; reviews: Rec[] | null; reason: string | null;
+  action_id?: string | null;
+}
 interface SimCard { id: string; kind: string; positions: number[]; reviews: number; status: 'proposed' | 'approved'; items?: Rec[] }
 
 /** 검수 작업 RPC 흉내(임대 gen 확인·위치별 저장·카드당 검토 20개·대기 한도·끝난 위치 건너뛰기). DB 쪽 실제 검사는 db_test 가 한다. */
@@ -68,6 +73,10 @@ class JobSim {
   blockStatus = false;
   /** 상태 응답의 저장 집계 신선도. 있으면 1차 검수 수가 있어도 현재 수로 쓰지 않는다. */
   progressFreshness: string | null = null;
+  /** 초안 저장을 거절된 카드와 같은 판단으로 되돌린다. 기존 항목은 그대로 둔다. */
+  sameRejected = new Set<number>();
+  /** 미충족 페이지. 없으면 code ok·빈 항목이다. */
+  unmetHandler: ((args: Rec) => Rec) | null = null;
   statusDiags: Rec[] = [];
 
   constructor(n: number, content: (i: number) => string = (i) => `개념 ${i}의 정의 문장`) {
@@ -190,6 +199,7 @@ class JobSim {
             ...(c.relations ? { relations: c.relations } : {}),
             ...(c.same_concept_reviews ? { same_concept_reviews: c.same_concept_reviews } : {}),
             sources: c.sources ?? [], placements: c.placements ?? [],
+            ...(c.conditions ? { conditions: c.conditions } : {}),
             ...(c.statements ? { statements: c.statements } : {}),
             ...(c.textMark ? { text_mark: c.textMark } : {}),
           };
@@ -223,6 +233,10 @@ class JobSim {
             continue;
           }
           if (e.state === 'drafted') {
+            if (this.sameRejected.has(pos)) {
+              err('concept_review_job_same_as_rejected');
+              continue;
+            }
             if (e.read_complete !== true) {
               err('concept_review_job_read_incomplete');
               continue;
@@ -238,6 +252,7 @@ class JobSim {
           this.items.set(pos, {
             pos, concept_id: c.id, state: String(e.state), revision: String(e.revision),
             reviews: (e.reviews as Rec[] | null) ?? null, reason: (e.reason as string | null) ?? null,
+            action_id: null,
           });
           out.push({ position: pos, status: 'saved' });
         }
@@ -310,6 +325,12 @@ class JobSim {
         return { saved: true };
       case 'concept_review_job_status_diag_get':
         return { diagnosis: this.statusDiags.at(-1) ?? null };
+      case 'concept_review_job_unmet_page':
+        if (this.unmetHandler) return this.unmetHandler(a);
+        return {
+          code: 'ok', published_input_version: 1, snapshot_at: null,
+          total: 0, returned: 0, omitted: 0, next_after: null, items: [], progress_error: null,
+        };
       default:
         throw new Error(`${fn}: not_simulated`);
     }
@@ -1092,7 +1113,7 @@ Deno.test('형식 실패는 그 위치만 실패로 남고, 30개를 넘겨도 �
 
 Deno.test('참조 상한 정의가 DB·도구 설명·판단 지시와 같다', async () => {
   assertEquals(CONCEPT_REVIEW_REF_LIMIT, 20);
-  assertEquals(BATCH_PROMPT_VERSION, 'review-batch-2026-10-28b');
+  assertEquals(BATCH_PROMPT_VERSION, 'review-batch-2026-10-29a');
   assertEquals(THINK_PROMPT_VERSION, 'think-2026-10-29b');
   assert(JUDGE_INSTRUCTIONS.includes('고유 20개까지'));
   assert(JUDGE_INSTRUCTIONS.includes('to_compare_ids로 옮겨'));
@@ -1242,4 +1263,432 @@ Deno.test('비교 참조: 이름·발췌와 비개념 id는 거절하고 값 없
     assertEquals(diagnosisFromReason(text).actual_type, type);
     assertEquals(got.reviews, []);
   }
+});
+
+const REJECTED_SAME = '사용자가 거절한 카드와 같은 판단이 다시 나옴';
+
+function seedItem(sim: JobSim, pos: number, state: string, reason: string | null = null, actionId: string | null = null) {
+  sim.items.set(pos, {
+    pos, concept_id: cid(pos), state, revision: sim.rev(pos), reviews: null, reason, action_id: actionId,
+  });
+}
+
+function unmetRow(pos: number, snapshot: Rec = {}, supplement: Rec | null = null): Rec {
+  return {
+    snapshot: {
+      pos, concept_id: cid(pos), category: 'open', item_state: 'deferred', todo: ['notation'], reason: null, ...snapshot,
+    },
+    supplement,
+  };
+}
+
+function unmetPage(over: Rec = {}): Rec {
+  return {
+    code: 'ok', published_input_version: 3, snapshot_at: null,
+    total: 0, returned: 0, omitted: 0, next_after: null, items: [], progress_error: null, ...over,
+  };
+}
+
+function judgedPositions(provider: FakeAiProvider): number[] {
+  return judgeRequests(provider).flatMap((r) => (payloadOf(r).concepts as Rec[]).map((c) => Number(c.position)));
+}
+
+function saveRows(sim: JobSim): Rec[] {
+  return sim.calls.filter((c) => c.fn === 'concept_review_job_save').flatMap((c) => (c.args.p_items as Rec[]) ?? []);
+}
+
+function judgeViews(provider: FakeAiProvider): Map<number, Rec> {
+  return new Map(judgeRequests(provider).flatMap((r) => payloadOf(r).concepts as Rec[]).map((c) => [Number(c.position), c]));
+}
+
+Deno.test('체크포인트가 끝나기 전에는 미충족 경로로 들어가지 않는다', async () => {
+  const sim = new JobSim(10);
+  sim.unmetHandler = () => {
+    throw new Error('checkpoint not ended');
+  };
+  const v = parse(await batch(sim, new FakeAiProvider(judge()), { target: 3 }));
+  assertEquals([v.end_reason, v.served, v.unmet_code, v.unmet_selected, v.unmet_cursor_stop, v.unmet_time_stop], [
+    'target_reached', 3, null, 0, null, null,
+  ]);
+  assert(!sim.calls.some((c) => c.fn === 'concept_review_job_unmet_page'));
+  assert(!String(v.summary).includes('미충족 조회를 마치지 못했다'));
+});
+
+Deno.test('재확인·재시도·대상 뒤에만 미충족을 고르고, 다음 커서는 반환된 위치와 공개 버전을 쓴다', async () => {
+  const sim = new JobSim(4);
+  seedItem(sim, 1, 'held');
+  seedItem(sim, 2, 'failed', 'judge_timeout: 이전');
+  seedItem(sim, 4, 'deferred', '이전 미결');
+  sim.concepts[0].resume_scopes = ['foundation'];
+  sim.recheck = [{ position: 1, concept_id: cid(1) }];
+  sim.unmetHandler = (args) => {
+    const after = Number(args.p_after ?? 0);
+    if (after === 0) {
+      return unmetPage({
+        published_input_version: 9, omitted: 1, next_after: 3,
+        items: [unmetRow(1), unmetRow(2), unmetRow(3), unmetRow(1)],
+      });
+    }
+    return unmetPage({
+      published_input_version: 9, omitted: 0, next_after: null,
+      items: [unmetRow(4, { item_state: 'failed', todo: ['notation', 'meaning'] })],
+    });
+  };
+  const provider = new FakeAiProvider(judge({
+    scopes: ['notation', 'meaning', 'placement', 'classification', 'unit', 'relations'],
+    foundation: () => ({ needs: [], none_basis: '기초가 이미 있다' }),
+  }));
+  const v = parse(await batch(sim, provider));
+  const pages = sim.calls.filter((c) => c.fn === 'concept_review_job_unmet_page');
+  const targets = sim.calls.find((c) => c.fn === 'concept_review_job_targets')!;
+  assert(sim.calls.indexOf(targets) < sim.calls.indexOf(pages[0]));
+  assertEquals(pages.map((c) => [c.args.p_after, c.args.p_version, c.args.p_limit]), [[0, null, 50], [3, 9, 50]]);
+  assertEquals(pages[0].args.p_gen, undefined);
+  assertEquals([v.rechecked, v.retried, v.unmet_selected, v.served, v.unmet_code], [1, 1, 1, 4, 'ok']);
+  assertEquals(v.unmet_cursor_stop, null);
+  assertEquals(v.unmet_time_stop, null);
+  assertEquals(v.end_reason, 'reached_end');
+  const view = judgeViews(provider);
+  assertEquals(view.get(1)?.judge_scopes, []);
+  assertEquals(view.get(1)?.foundation_needed, true);
+  assertEquals(view.get(4)?.judge_scopes, ['notation', 'meaning']);
+  assertEquals(view.get(4)?.foundation_needed, false);
+  assert((view.get(3)?.judge_scopes as string[]).includes('classification'));
+  assert(!(view.get(4)?.judge_scopes as string[]).includes('classification'));
+  assert(!(view.get(4)?.judge_scopes as string[]).includes('unit'));
+  assert(!(view.get(4)?.judge_scopes as string[]).includes('relations'));
+  assertEquals(saveRows(sim).find((r) => r.position === 1)?.rework, true);
+  assertEquals(saveRows(sim).find((r) => r.position === 4)?.rework, false);
+  assert(!String(v.summary).includes('미충족 조회를 마치지 못했다'));
+});
+
+Deno.test('미충족 조회가 비최신·교체·오류·커서 이상·시간 부족이면 순회를 끊고 없음이나 완료로 적지 않는다', async () => {
+  for (const code of ['stale', 'refreshing', 'absent', 'failed', 'snapshot_replaced', 'version_required']) {
+    const sim = new JobSim(1);
+    seedItem(sim, 1, 'deferred', `유지-${code}`);
+    sim.unmetHandler = () => unmetPage({ code, items: [unmetRow(1)], omitted: 1, next_after: 1 });
+    const provider = new FakeAiProvider(judge());
+    const v = parse(await batch(sim, provider));
+    assertEquals(v.unmet_code, code, code);
+    assertEquals(v.unmet_selected, 0, code);
+    assertEquals(judgeRequests(provider).length, 0, code);
+    assertEquals(sim.items.get(1)!.reason, `유지-${code}`, code);
+    assertEquals(v.end_reason, 'reached_end', code);
+    assert(String(v.summary).includes('미충족 조회를 마치지 못했다'), code);
+    assert(String(v.note).includes('미충족 조회를 마치지 못했다'), code);
+    assert(String(v.end_reason_text).includes('미충족 조회를 마치지 못했다'), code);
+    assert(!String(v.summary).includes('미충족 없음'), code);
+    assert(!String(v.summary).includes('검수 완료'), code);
+    assert(!String(v.note).includes('미충족 없음'), code);
+    assert(!String(v.note).includes('검수 완료'), code);
+  }
+
+  const replaced = new JobSim(2);
+  seedItem(replaced, 1, 'deferred', '첫째');
+  seedItem(replaced, 2, 'deferred', '둘째');
+  replaced.concepts[0].todo = ['notation'];
+  replaced.unmetHandler = (args) => {
+    if (Number(args.p_after ?? 0) === 0) {
+      return unmetPage({ published_input_version: 4, omitted: 1, next_after: 1, items: [unmetRow(1)] });
+    }
+    return unmetPage({ code: 'snapshot_replaced', published_input_version: 8, items: [unmetRow(2)] });
+  };
+  const replacedRun = parse(await batch(replaced, new FakeAiProvider(judge())));
+  const replacedPages = replaced.calls.filter((c) => c.fn === 'concept_review_job_unmet_page');
+  assertEquals(replacedPages.map((c) => [c.args.p_after, c.args.p_version]), [[0, null], [1, 4]]);
+  assertEquals([replacedRun.unmet_code, replacedRun.unmet_selected], ['snapshot_replaced', 1]);
+  assertEquals(replaced.items.get(2)!.reason, '둘째');
+  assertEquals(replaced.items.get(1)!.state, 'submitted');
+
+  const down = new JobSim(1);
+  seedItem(down, 1, 'deferred', '조회 전');
+  down.failOnce.set('concept_review_job_unmet_page', 'db_down');
+  const downRun = parse(await batch(down, new FakeAiProvider(judge())));
+  assertEquals(downRun.unmet_code, 'db_down');
+  assertEquals(downRun.unmet_selected, 0);
+  assertEquals(down.items.get(1)!.reason, '조회 전');
+  assert(String(downRun.summary).includes('미충족 조회 코드: db_down'));
+  assert(!String(downRun.summary).includes('검수 완료'));
+
+  const stuck = new JobSim(1);
+  seedItem(stuck, 1, 'deferred', '커서');
+  stuck.concepts[0].todo = ['notation'];
+  stuck.unmetHandler = () => unmetPage({ omitted: 4, next_after: 0, items: [unmetRow(1)] });
+  const stuckRun = parse(await batch(stuck, new FakeAiProvider(judge())));
+  assertEquals(stuck.calls.filter((c) => c.fn === 'concept_review_job_unmet_page').length, 1);
+  assertEquals(stuckRun.unmet_code, 'ok');
+  assertEquals(stuckRun.unmet_cursor_stop, '커서가 전진하지 않음');
+  assertEquals(stuckRun.unmet_selected, 1);
+  assert(String(stuckRun.note).includes('커서 이상'));
+  assert(!String(stuckRun.note).includes('미충족 없음'));
+
+  const cut = new JobSim(1);
+  seedItem(cut, 1, 'deferred', '잘림');
+  cut.concepts[0].todo = ['notation'];
+  cut.unmetHandler = () => unmetPage({ omitted: 4, next_after: null, items: [unmetRow(1)] });
+  const cutRun = parse(await batch(cut, new FakeAiProvider(judge())));
+  assertEquals(cut.calls.filter((c) => c.fn === 'concept_review_job_unmet_page').length, 1);
+  assertEquals(cutRun.unmet_cursor_stop, 'omitted가 있는데 next_after가 없음');
+  assert(String(cutRun.summary).includes('미충족 조회를 마치지 못했다'));
+
+  const early = new JobSim(1);
+  seedItem(early, 1, 'deferred', '시간');
+  let earlyCalls = 0;
+  early.unmetHandler = () => {
+    earlyCalls += 1;
+    return unmetPage({ items: [unmetRow(1)] });
+  };
+  const earlyRun = parse(await batch(early, new FakeAiProvider(judge()), {
+    deadlineMs: 1000, timing: { saveReserveMs: 0, minJudgeMs: 999999, minGroupMs: 1 },
+  }));
+  assertEquals(earlyCalls, 0);
+  assertEquals(earlyRun.unmet_code, null);
+  assertEquals(earlyRun.unmet_time_stop, '판단 최소 시간을 남기려고 미충족 순회를 멈춤');
+  assertEquals(earlyRun.unmet_selected, 0);
+  assertEquals(early.items.get(1)!.reason, '시간');
+  assert(String(earlyRun.note).includes('시간 부족 중단'));
+  assert(!String(earlyRun.note).includes('검수 완료'));
+
+  const mid = new JobSim(2);
+  seedItem(mid, 1, 'deferred', '앞');
+  seedItem(mid, 2, 'deferred', '뒤');
+  mid.concepts[0].todo = ['notation'];
+  const start = 5_000_000;
+  let phase: 'before' | 'after' = 'before';
+  mid.unmetHandler = (args) => {
+    if (Number(args.p_after ?? 0) !== 0) throw new Error('next page');
+    phase = 'after';
+    return unmetPage({ published_input_version: 5, omitted: 1, next_after: 1, items: [unmetRow(1)] });
+  };
+  const midRun = parse(await runReviewBatch(
+    {
+      callId: 'call-1', rawArguments: JSON.stringify({ job_id: JOB, target: 50 }), conversationId: 'conv-1',
+      userId: 'user-1', safetyId: 'hash', signal: new AbortController().signal, deadline: start + 30_000,
+      round: 1, startedAt: start,
+    },
+    newState(),
+    {
+      provider: new FakeAiProvider(judge()), store: { reviewJobRpc: mid.rpc }, recordRun: new RunLog().record, env: testEnv,
+      now: () => (phase === 'after' ? start + 100_000 : start),
+      timing: { saveReserveMs: 1000, minJudgeMs: 5000, minGroupMs: 10 },
+    },
+  ));
+  assertEquals(mid.calls.filter((c) => c.fn === 'concept_review_job_unmet_page').length, 1);
+  assertEquals(midRun.unmet_code, 'ok');
+  assertEquals(midRun.unmet_selected, 1);
+  assertEquals(midRun.unmet_time_stop, '판단 최소 시간을 남기려고 미충족 순회를 멈춤');
+  assertEquals(mid.items.get(2)!.reason, '뒤');
+  assertEquals(midRun.end_reason, 'time_budget');
+  assert(!String(midRun.summary).includes('미충족 없음'));
+});
+
+Deno.test('미충족 경로도 요청 전체 50개를 넘기지 않고, 이미 고른 위치는 다시 세지 않는다', async () => {
+  const sim = new JobSim(60);
+  for (let pos = 1; pos <= 60; pos++) seedItem(sim, pos, 'deferred', '이전');
+  sim.unmetHandler = (args) => {
+    const after = Number(args.p_after ?? 0);
+    if (after === 0) {
+      return unmetPage({
+        published_input_version: 2, omitted: 30, next_after: 30,
+        items: [unmetRow(1), unmetRow(1), ...Array.from({ length: 29 }, (_, i) => unmetRow(i + 2))],
+      });
+    }
+    if (after === 30) {
+      return unmetPage({
+        published_input_version: 2, omitted: 0, next_after: null,
+        items: Array.from({ length: 30 }, (_, i) => unmetRow(i + 31)),
+      });
+    }
+    throw new Error(`after ${after}`);
+  };
+  const provider = new FakeAiProvider(judge());
+  const v = parse(await batch(sim, provider));
+  assertEquals([v.unmet_selected, v.served, v.end_reason, v.unmet_code], [50, 50, 'target_reached', 'ok']);
+  assertEquals(v.unmet_cursor_stop, null);
+  const pages = sim.calls.filter((c) => c.fn === 'concept_review_job_unmet_page');
+  assertEquals(pages.map((c) => [c.args.p_after, c.args.p_version]), [[0, null], [30, 2]]);
+  assertEquals([...new Set(judgedPositions(provider))].sort((a, b) => a - b), Array.from({ length: 50 }, (_, i) => i + 1));
+  assertEquals(sim.items.get(51)!.reason, '이전');
+  assertEquals(sim.items.get(51)!.state, 'deferred');
+});
+
+Deno.test('미충족 비재개 범위는 최신 todo와 한 번 교차하고, 빈 교집합은 부르지도 저장하지도 않는다', async () => {
+  const empty = new JobSim(2);
+  seedItem(empty, 1, 'deferred', '스냅샷만');
+  seedItem(empty, 2, 'deferred', '이미 충족');
+  empty.concepts[0].todo = ['placement'];
+  empty.concepts[1].todo = ['notation', 'meaning'];
+  empty.concepts[1].conditions = { text: 'met' };
+  empty.unmetHandler = () => unmetPage({
+    items: [
+      unmetRow(1, { todo: ['notation', 'meaning'] }),
+      unmetRow(2, { todo: ['notation', 'meaning'] }),
+    ],
+  });
+  const emptyProvider = new FakeAiProvider(judge());
+  const emptyRun = parse(await batch(empty, emptyProvider));
+  assertEquals(emptyRun.unmet_selected, 2);
+  assertEquals(judgeRequests(emptyProvider).length, 0);
+  assertEquals(saveRows(empty).length, 0);
+  assertEquals(empty.items.get(1)!.reason, '스냅샷만');
+  assertEquals(empty.items.get(2)!.reason, '이미 충족');
+
+  const sim = new JobSim(2);
+  seedItem(sim, 1, 'failed', '이전 실패');
+  sim.concepts[0].todo = ['notation', 'classification'];
+  sim.concepts[1].todo = ['notation'];
+  sim.unmetHandler = () => unmetPage({
+    items: [unmetRow(1, { item_state: 'failed', todo: ['notation', 'meaning', 'foundation', 'placement'] })],
+  });
+  const provider = new FakeAiProvider(judge({
+    scopes: ['notation', 'meaning', 'placement', 'classification', 'unit', 'relations'],
+  }));
+  const v = parse(await batch(sim, provider));
+  const view = judgeViews(provider);
+  assertEquals(view.get(1)?.judge_scopes, ['notation']);
+  assertEquals(view.get(1)?.foundation_needed, false);
+  assertEquals(view.get(2)?.judge_scopes, ['notation', 'classification', 'unit', 'relations']);
+  assertEquals(sim.items.get(1)!.reviews!.map((r) => r.scope), ['notation']);
+  assertEquals(provider.requests.some((r) => r.jsonSchema?.name === 'concept_review_foundation_judgment'), false);
+  assertEquals(v.unmet_selected, 1);
+  assertEquals(saveRows(sim).find((r) => r.position === 1)?.rework, false);
+});
+
+Deno.test('미충족 후보는 deferred·failed의 남은 필수 조건만이고, 보호 사유와 사용자 확인 기록은 그대로 둔다', async () => {
+  const sim = new JobSim(17);
+  const kept = new Map<number, { state: string; reason: string | null; action_id: string | null }>();
+  const remember = (pos: number, state: string, reason: string | null, actionId: string | null = null) => {
+    seedItem(sim, pos, state, reason, actionId);
+    kept.set(pos, { state, reason, action_id: actionId });
+  };
+  remember(1, 'deferred', '다시 볼 표기');
+  remember(2, 'failed', '다시 볼 의미');
+  for (const [pos, state] of [
+    [4, 'submitted'], [5, 'drafted'], [6, 'waiting'], [7, 'held'], [8, 'reused'], [9, 'missing'],
+  ] as [number, string][]) remember(pos, state, `상태-${state}`);
+  remember(3, 'deferred', '상태 없음');
+  remember(10, 'deferred', '승인 대기');
+  remember(11, 'deferred', '참조 상한');
+  remember(12, 'failed', '보충 상한');
+  remember(13, 'deferred', REJECTED_SAME, 'act-rejected');
+  remember(14, 'failed', '고치기 거부');
+  remember(15, 'deferred', '보충 고치기 거부');
+  remember(16, 'deferred', '사용자 확인이 필요한 검토 기록이 있다: meaning issue', 'act-user');
+  remember(17, 'deferred', '분류만 남음');
+  sim.concepts[0].todo = ['notation'];
+  sim.concepts[1].todo = ['meaning'];
+  sim.unmetHandler = () => unmetPage({
+    items: [
+      unmetRow(1, { item_state: 'deferred', todo: ['notation'] }),
+      unmetRow(2, { item_state: 'failed', todo: ['meaning'] }),
+      unmetRow(3, { item_state: null, todo: ['notation'] }, { state: 'deferred', reason: null }),
+      unmetRow(4, { item_state: 'submitted' }),
+      unmetRow(5, { item_state: 'drafted' }),
+      unmetRow(6, { item_state: 'waiting' }),
+      unmetRow(7, { item_state: 'held' }),
+      unmetRow(8, { item_state: 'reused' }),
+      unmetRow(9, { item_state: 'missing' }),
+      unmetRow(10, { item_state: 'deferred', category: 'awaiting', todo: ['notation'] }),
+      unmetRow(11, { reason: 'concept_review_too_many_refs:meaning:compared_ids:21:20' }),
+      unmetRow(12, { item_state: 'failed', reason: null }, { state: 'deferred', reason: 'concept_review_too_many_refs:notation:compared_ids:21:20' }),
+      unmetRow(13, { reason: REJECTED_SAME }),
+      unmetRow(14, { item_state: 'failed', reason: 'fix_invalid: evidence' }),
+      unmetRow(15, { reason: null }, { state: 'failed', reason: 'fix_invalid: evidence' }),
+      unmetRow(16, { todo: [], reason: '사용자 확인이 필요한 검토 기록이 있다: meaning issue' }),
+      unmetRow(17, { todo: ['classification'] }),
+    ],
+  });
+  const provider = new FakeAiProvider(judge({ scopes: ['notation', 'meaning'] }));
+  const v = parse(await batch(sim, provider));
+  assertEquals(v.unmet_selected, 2);
+  assertEquals([...new Set(judgedPositions(provider))].sort((a, b) => a - b), [1, 2]);
+  assertEquals(sim.items.get(1)!.state, 'submitted');
+  assertEquals(sim.items.get(2)!.state, 'submitted');
+  for (const [pos, prev] of kept) {
+    if (pos === 1 || pos === 2) continue;
+    assertEquals(sim.items.get(pos)!.state, prev.state, String(pos));
+    assertEquals(sim.items.get(pos)!.reason, prev.reason, String(pos));
+    assertEquals(sim.items.get(pos)!.action_id ?? null, prev.action_id, String(pos));
+    assert(!saveRows(sim).some((r) => r.position === pos), String(pos));
+  }
+});
+
+Deno.test('새 미충족 비재개 경로의 거절은 다시 저장하지 않고, 재시도와 의존 재개는 기존 재저장을 유지한다', async () => {
+  const fresh = new JobSim(2);
+  seedItem(fresh, 1, 'submitted', null, 'act-rejected');
+  fresh.sameRejected.add(1);
+  fresh.concepts[0].todo = ['notation'];
+  fresh.unmetHandler = () => unmetPage({ items: [unmetRow(1, { todo: ['notation'] })] });
+  const freshRun = parse(await batch(fresh, new FakeAiProvider(judge())));
+  const freshRows = saveRows(fresh).filter((r) => r.position === 1);
+  assertEquals(freshRows.map((r) => [r.state, r.rework]), [['drafted', false]]);
+  assertEquals(fresh.items.get(1)!.state, 'submitted');
+  assertEquals(fresh.items.get(1)!.action_id, 'act-rejected');
+  assertEquals(fresh.items.get(2)!.state, 'submitted');
+  assertEquals(freshRun.failed.by_code.concept_review_job_same_as_rejected, 1);
+  assertEquals(freshRun.failed.items[0].reason, 'concept_review_job_same_as_rejected');
+
+  const resume = new JobSim(1);
+  seedItem(resume, 1, 'submitted', null, 'act-old');
+  resume.sameRejected.add(1);
+  resume.concepts[0].resume_scopes = ['foundation'];
+  resume.recheck = [{ position: 1, concept_id: cid(1) }];
+  resume.unmetHandler = () => unmetPage({ items: [unmetRow(1)] });
+  const resumeRun = parse(await batch(resume, new FakeAiProvider(judge({
+    reviews: () => [],
+    foundation: () => ({ needs: [], none_basis: '기초 유지' }),
+  }))));
+  assertEquals(saveRows(resume).filter((r) => r.position === 1).map((r) => [r.state, r.rework]), [
+    ['drafted', true], ['deferred', true],
+  ]);
+  assertEquals(resume.items.get(1)!.state, 'deferred');
+  assertEquals(resume.items.get(1)!.action_id, null);
+  assertEquals(resume.items.get(1)!.reason, REJECTED_SAME);
+  assertEquals(resumeRun.unmet_selected, 0);
+  assertEquals(resumeRun.rechecked, 1);
+
+  const retry = new JobSim(1);
+  seedItem(retry, 1, 'failed', 'judge_timeout: 이전', 'act-retry');
+  retry.sameRejected.add(1);
+  retry.unmetHandler = () => unmetPage({ items: [unmetRow(1)] });
+  const retryRun = parse(await batch(retry, new FakeAiProvider(judge())));
+  assertEquals(saveRows(retry).filter((r) => r.position === 1).map((r) => [r.state, r.rework]), [
+    ['drafted', false], ['deferred', true],
+  ]);
+  assertEquals(retry.items.get(1)!.reason, REJECTED_SAME);
+  assertEquals(retry.items.get(1)!.action_id, null);
+  assertEquals([retryRun.retried, retryRun.unmet_selected], [1, 0]);
+
+  const unmetResume = new JobSim(1);
+  seedItem(unmetResume, 1, 'deferred', '의존');
+  unmetResume.concepts[0].resume_scopes = ['foundation'];
+  unmetResume.concepts[0].todo = [...ALL_TODO];
+  unmetResume.unmetHandler = () => unmetPage({ items: [unmetRow(1, { todo: ['notation'] })] });
+  const unmetResumeProvider = new FakeAiProvider(judge({
+    reviews: () => [],
+    foundation: () => ({ needs: [], none_basis: '재개 범위만' }),
+  }));
+  const unmetResumeRun = parse(await batch(unmetResume, unmetResumeProvider));
+  assertEquals(unmetResumeRun.unmet_selected, 1);
+  assertEquals(judgeViews(unmetResumeProvider).get(1)?.judge_scopes, []);
+  assertEquals(judgeViews(unmetResumeProvider).get(1)?.foundation_needed, true);
+  assertEquals(saveRows(unmetResume).find((r) => r.position === 1)?.rework, true);
+  assertEquals(unmetResume.items.get(1)!.reviews!.map((r) => r.scope), ['foundation']);
+});
+
+Deno.test('초등 배치 예외는 지시문의 작성 구분·내용·기존 배치 조건만 확인한다. 이 시험은 실제 모델의 배치 판단 품질을 검증하지 않는다', () => {
+  assertEquals(BATCH_PROMPT_VERSION, 'review-batch-2026-10-29a');
+  assertEquals(THINK_PROMPT_VERSION, 'think-2026-10-29b');
+  assert(JUDGE_INSTRUCTIONS.includes('자료 본문에 작성 구분이 적혀 있고'));
+  assert(JUDGE_INSTRUCTIONS.includes('Think가 직접 작성한 초등 기초 보완 개념'));
+  assert(JUDGE_INSTRUCTIONS.includes('초등의 넓은 영역'));
+  assert(JUDGE_INSTRUCTIONS.includes('이번 1차 검수의 배치 조건을 충족한 것으로 본다'));
+  assert(JUDGE_INSTRUCTIONS.includes('교재 출처와 정확한 학년·단원은 미확인으로 둔다'));
+  assert(JUDGE_INSTRUCTIONS.includes('출처가 없다는 사실만으로'));
+  assert(JUDGE_INSTRUCTIONS.includes('폴더·유형만으로'));
+  assert(JUDGE_INSTRUCTIONS.includes('하나라도 부족하면 이 예외를 쓰지 않는다'));
+  assert(JUDGE_INSTRUCTIONS.includes('outcome unverified, basis_kind none'));
+  assert(JUDGE_INSTRUCTIONS.includes('카드 승인과 필요한 재확인'));
+  assert(JUDGE_INSTRUCTIONS.includes('완료로 세지 않는다'));
+  assert(!JUDGE_INSTRUCTIONS.includes('전용 작성 구분'));
 });
