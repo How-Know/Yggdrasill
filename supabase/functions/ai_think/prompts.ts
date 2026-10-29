@@ -46,7 +46,8 @@
 // think-2026-10-28c: 집계 조회 실패(status_diag.code가 timeout·lookup_failed)는 미집계가 아니다. 0으로 채우지 않고, 최근 진단은 status_diag_only로 다시 집계하지 않고 읽는다.
 // think-2026-10-28d: 검수 진행률은 저장된 집계만 읽는다. progress_freshness가 current일 때만 완료 수고, stale·refreshing·absent·refresh_failed는 현재 수가 아니다. 판단 지시(review-batch)는 바꾸지 않는다.
 // think-2026-10-29a: 1차 검수 3조건 미충족은 같은 공개본에서 페이지로 읽는다. 사유가 없으면 기록 없음이고, 조회는 검수 실행이 아니다. 판단 지시(review-batch)는 바꾸지 않는다.
-export const THINK_PROMPT_VERSION = 'think-2026-10-29a';
+// think-2026-10-29b: 미충족 인자는 strict 스키마라 항상 보낸다. 보지 않을 때는 null이고, 0은 첫 페이지다. 판단 지시(review-batch)는 바꾸지 않는다.
+export const THINK_PROMPT_VERSION = 'think-2026-10-29b';
 /** 역할 프로필 문구만 바뀔 때. ai_runs.role_profile_version과 대화.role_profile_version에 기록한다. */
 // think-role-2026-10-12: 제품 → 문제 풀이(문제 은행·문항 제작·난이도, 채점·오답 분석·문제 통계, 교재·목차·유형 분류).
 export const ROLE_PROFILE_VERSION = 'think-role-2026-10-12';
@@ -281,7 +282,7 @@ function conceptReviewJobRules(batch: boolean): string[] {
   '  first_pass_state가 unaggregated이면 미집계라고 알린다. 0개로 말하지 않고, 조건별 충족 수로 추산하지 않는다.',
   '  first_pass_state가 failed이거나 aggregation이 failed이거나 status_diag.code가 timeout·lookup_failed이면 조회 실패다. 갱신 실패와 구분한다. 0개나 미집계로 말하지 않는다.',
   '  최근 진단은 get_concept_review_job(status_diag_only true)로 다시 집계하지 않고 읽는다.',
-  '- 1차 검수 3조건 미충족을 보라고 하면 get_concept_review_job(unmet_after 0, next 0)으로 읽는다. 이 조회는 검수 실행·보류 해제·완료 처리가 아니다.',
+  '- 1차 검수 3조건 미충족을 보라고 하면 get_concept_review_job(unmet_after 0, unmet_version null, next 0)으로 읽는다. 보지 않을 때는 두 인자를 null로 둔다. 이 조회는 검수 실행·보류 해제·완료 처리가 아니다.',
   '  code가 ok일 때만 항목과 total을 말한다. stale·refreshing·absent·failed·version_required·snapshot_replaced·lookup_failed는 0개가 아니다.',
   '  첫 페이지는 unmet_version을 비울 수 있다. 다음 페이지는 반환된 published_input_version과 next_after를 넣는다.',
   '  snapshot_replaced이면 서로 다른 공개본을 섞지 말고 unmet_after 0으로 다시 읽는다.',

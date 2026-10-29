@@ -168,8 +168,8 @@ export const REVIEW_JOB_TOOLS: AiFunctionTool[] = [
       'status_diag는 이번 집계 조회의 추적 번호·단계·소요·제한·코드다. aggregation이 failed면 조회 실패라 완료 수를 0으로 말하지 않는다. unaggregated는 응답은 왔지만 집계 필드가 없는 미집계다. counted는 집계 성공이다. ' +
       'progress_freshness가 current일 때만 progress_line·first_pass_line·counts가 현재 집계다. stale은 미반영 변경이 있는 옛 집계, refreshing은 갱신 중, absent는 아직 집계 없음, aggregation이 refresh_failed면 갱신 실패다. 이 경우 완료 수를 말하지 않고 progress_last_success를 현재 수로 쓰지 않는다. 조회는 갱신을 시작하거나 기다리지 않는다. ' +
       'status_diag_only가 true면 저장된 최근 집계 진단만 읽는다. 집계 함수는 부르지 않고 작업을 넘겨받지도 않는다. ' +
-      'unmet_after가 있으면 1차 검수 3조건 미충족을 위치 순으로 읽는다. 검수를 실행하거나 보류를 풀거나 작업을 넘겨받지 않는다. ' +
-      '첫 페이지는 unmet_after 0이고 unmet_version은 비울 수 있다. 다음 페이지는 응답의 published_input_version과 next_after를 넣는다. ' +
+      'unmet_after가 정수이면 1차 검수 3조건 미충족을 위치 순으로 읽는다. null이면 그 페이지를 부르지 않는다. 검수를 실행하거나 보류를 풀거나 작업을 넘겨받지 않는다. ' +
+      '첫 페이지는 unmet_after 0이고 unmet_version은 null이다. 다음 페이지는 응답의 published_input_version과 next_after를 넣는다. ' +
       'next>0 또는 status_diag_only true와 함께 보내지 않는다. code가 ok일 때만 항목과 total을 말한다. ' +
       'reason_status가 unrecorded면 사유가 없다는 뜻이지 문제가 없다는 뜻이 아니다. supplement는 공개 스냅샷이 아니다. ' +
       'generic 진단에는 범위와 필드를 만들지 않는다. ' +
@@ -183,10 +183,10 @@ export const REVIEW_JOB_TOOLS: AiFunctionTool[] = [
         next: { type: ['integer', 'null'], description: '다음 묶음 개수(1~5). 상태만 보려면 0이나 null' },
         failure_after: { type: ['integer', 'null'], description: '저장된 실패를 이 위치 다음부터 읽는다. 처음부터 보려면 0이나 null. next와 작업 임대는 바꾸지 않는다.' },
         status_diag_only: { type: ['boolean', 'null'], description: 'true면 저장된 최근 집계 진단만 읽는다. 집계를 다시 실행하지 않는다. 상태와 다음 묶음이 필요하면 false나 null.' },
-        unmet_after: { type: ['integer', 'null'], description: '1차 검수 3조건 미충족을 이 위치 다음부터 읽는다. 첫 페이지는 0. 생략하면 미충족 페이지를 부르지 않는다. next>0이나 status_diag_only와 함께 보내지 않는다.' },
-        unmet_version: { type: ['integer', 'null'], description: '이어서 읽을 공개 번호. 첫 페이지는 비울 수 있다. 다음 페이지는 직전 unmet.published_input_version.' },
+        unmet_after: { type: ['integer', 'null'], description: '1차 검수 3조건 미충족을 이 위치 다음부터 읽는다. 첫 페이지는 0. null이면 미충족 페이지를 부르지 않는다. next>0이나 status_diag_only true일 때는 null.' },
+        unmet_version: { type: ['integer', 'null'], description: '이어서 읽을 공개 번호. 미충족을 보지 않거나 첫 페이지면 null. 다음 페이지는 직전 unmet.published_input_version.' },
       },
-      required: ['job_id', 'next', 'failure_after', 'status_diag_only'],
+      required: ['job_id', 'next', 'failure_after', 'status_diag_only', 'unmet_after', 'unmet_version'],
       additionalProperties: false,
     },
   },
