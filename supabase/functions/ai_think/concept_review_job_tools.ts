@@ -56,6 +56,7 @@ export type ReviewJobRpc =
   | 'concept_review_job_courses'
   | 'concept_review_job_search'
   | 'concept_review_job_failure_page'
+  | 'concept_review_job_unmet_page'
   | 'concept_review_job_status_diag_get'
   | 'concept_review_job_status_diag_put';
 
@@ -76,6 +77,7 @@ export const REVIEW_JOB_RPCS: ReadonlySet<ReviewJobRpc> = new Set<ReviewJobRpc>(
   'concept_review_job_batch_begin',
   'concept_review_job_batch_log',
   'concept_review_job_failure_page',
+  'concept_review_job_unmet_page',
   'concept_review_job_status_diag_get',
   'concept_review_job_status_diag_put',
 ]);
@@ -166,6 +168,11 @@ export const REVIEW_JOB_TOOLS: AiFunctionTool[] = [
       'status_diag는 이번 집계 조회의 추적 번호·단계·소요·제한·코드다. aggregation이 failed면 조회 실패라 완료 수를 0으로 말하지 않는다. unaggregated는 응답은 왔지만 집계 필드가 없는 미집계다. counted는 집계 성공이다. ' +
       'progress_freshness가 current일 때만 progress_line·first_pass_line·counts가 현재 집계다. stale은 미반영 변경이 있는 옛 집계, refreshing은 갱신 중, absent는 아직 집계 없음, aggregation이 refresh_failed면 갱신 실패다. 이 경우 완료 수를 말하지 않고 progress_last_success를 현재 수로 쓰지 않는다. 조회는 갱신을 시작하거나 기다리지 않는다. ' +
       'status_diag_only가 true면 저장된 최근 집계 진단만 읽는다. 집계 함수는 부르지 않고 작업을 넘겨받지도 않는다. ' +
+      'unmet_after가 있으면 1차 검수 3조건 미충족을 위치 순으로 읽는다. 검수를 실행하거나 보류를 풀거나 작업을 넘겨받지 않는다. ' +
+      '첫 페이지는 unmet_after 0이고 unmet_version은 비울 수 있다. 다음 페이지는 응답의 published_input_version과 next_after를 넣는다. ' +
+      'next>0 또는 status_diag_only true와 함께 보내지 않는다. code가 ok일 때만 항목과 total을 말한다. ' +
+      'reason_status가 unrecorded면 사유가 없다는 뜻이지 문제가 없다는 뜻이 아니다. supplement는 공개 스냅샷이 아니다. ' +
+      'generic 진단에는 범위와 필드를 만들지 않는다. ' +
       'next>0이면 다음 묶음(batch: 위치·개념 요약·판)을 준다. 묶음은 저장된 위치 다음부터이며 앞서 내줬지만 저장되지 않은 위치가 먼저 다시 나온다. ' +
       '이미 지금 판과 맞는 승인 기록이 있는 개념·지워진 개념·승인 대기 카드에 든 개념은 서버가 판단 없이 표시하고 건너뛴다(auto_saved). ' +
       'diagnosis.kind가 specific이면 code·scope·field가 저장된 첫 원인이다. generic은 범위·필드가 없는 예전 포괄 오류다. 원인을 만들어 넣지 않는다.',
@@ -176,6 +183,8 @@ export const REVIEW_JOB_TOOLS: AiFunctionTool[] = [
         next: { type: ['integer', 'null'], description: '다음 묶음 개수(1~5). 상태만 보려면 0이나 null' },
         failure_after: { type: ['integer', 'null'], description: '저장된 실패를 이 위치 다음부터 읽는다. 처음부터 보려면 0이나 null. next와 작업 임대는 바꾸지 않는다.' },
         status_diag_only: { type: ['boolean', 'null'], description: 'true면 저장된 최근 집계 진단만 읽는다. 집계를 다시 실행하지 않는다. 상태와 다음 묶음이 필요하면 false나 null.' },
+        unmet_after: { type: ['integer', 'null'], description: '1차 검수 3조건 미충족을 이 위치 다음부터 읽는다. 첫 페이지는 0. 생략하면 미충족 페이지를 부르지 않는다. next>0이나 status_diag_only와 함께 보내지 않는다.' },
+        unmet_version: { type: ['integer', 'null'], description: '이어서 읽을 공개 번호. 첫 페이지는 비울 수 있다. 다음 페이지는 직전 unmet.published_input_version.' },
       },
       required: ['job_id', 'next', 'failure_after', 'status_diag_only'],
       additionalProperties: false,
@@ -304,6 +313,10 @@ const ERRORS: Record<string, [string, string]> = {
     '이 작업의 승인 대기 카드가 한도만큼 있다. 사용자에게 먼저 승인·거절해 달라고 하고 더 내지 않는다.',
   ],
   concept_review_job_conflict: ['멱등 충돌', '같은 초안 판으로 다른 내용이 들어왔다. 진행을 멈추고 사용자에게 알린다.'],
+  concept_review_unmet_conflict: [
+    '미충족 조회 충돌',
+    'unmet_after는 next>0이나 status_diag_only와 함께 보내지 않는다. 미충족만 보려면 next는 0이고 status_diag_only는 false다.',
+  ],
   concept_review_job_bad_transition: ['바꿀 수 없는 상태', '지금 상태에서는 그 동작을 할 수 없다. get_concept_review_job으로 상태를 본다.'],
   concept_review_job_bad_action: ['동작 오류', 'action은 pause·resume·cancel·bring_cards 중 하나다.'],
   course_think_reason_required: ['이유 없음', 'reason을 채운다.'],
@@ -526,6 +539,86 @@ function failureView(page: Rec): Rec {
   };
 }
 
+function storedText(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  const text = v.trim();
+  return text ? text : null;
+}
+
+function finiteInt(v: unknown): number | null | undefined {
+  if (v == null) return null;
+  if (typeof v !== 'number' || !Number.isInteger(v)) return undefined;
+  return v;
+}
+
+function unmetLookupFailed(): Rec {
+  return {
+    code: 'lookup_failed',
+    published_input_version: null,
+    snapshot_at: null,
+    total: null,
+    returned: null,
+    omitted: null,
+    next_after: null,
+    items: null,
+    progress_error: null,
+  };
+}
+
+function unmetView(page: Rec): Rec {
+  const code = typeof page.code === 'string' ? page.code : 'lookup_failed';
+  const published = typeof page.published_input_version === 'number' || typeof page.published_input_version === 'string'
+    ? page.published_input_version
+    : null;
+  const snapshotAt = typeof page.snapshot_at === 'string' ? page.snapshot_at : null;
+  if (code !== 'ok') {
+    return {
+      code,
+      published_input_version: published,
+      snapshot_at: snapshotAt,
+      total: null,
+      returned: null,
+      omitted: null,
+      next_after: null,
+      items: null,
+      progress_error: typeof page.progress_error === 'string' ? page.progress_error : null,
+    };
+  }
+  const rawItems = Array.isArray(page.items) ? page.items : [];
+  const items = rawItems.map((raw) => {
+    const row = rec(raw);
+    const snapshot = rec(row.snapshot);
+    const supplement = row.supplement && typeof row.supplement === 'object' ? rec(row.supplement) : null;
+    const snapReason = storedText(snapshot.reason);
+    const itemReason = supplement ? storedText(supplement.reason) : null;
+    const reason = snapReason ?? itemReason;
+    const reasonBasis = snapReason ? 'snapshot' : itemReason ? 'job_item' : null;
+    return {
+      snapshot,
+      supplement,
+      reason,
+      reason_basis: reasonBasis,
+      reason_status: reason ? 'recorded' : 'unrecorded',
+      diagnosis: reason ? diagnosisFromReason(reason) : null,
+    };
+  });
+  const omitted = Number(page.omitted);
+  return {
+    code: 'ok',
+    published_input_version: published,
+    snapshot_at: snapshotAt,
+    total: typeof page.total === 'number' ? page.total : null,
+    returned: items.length,
+    omitted: Number.isFinite(omitted) ? omitted : null,
+    next_after: page.next_after ?? null,
+    items,
+    progress_error: null,
+    read_more: Number.isFinite(omitted) && omitted > 0
+      ? '다음 페이지는 unmet_after에 next_after, unmet_version에 published_input_version을 넣는다. next>0이나 status_diag_only와 함께 보내지 않는다.'
+      : null,
+  };
+}
+
 function traceOf(state: ReviewJobToolContext): StatusTrace {
   if (!state.statusTrace) state.statusTrace = createStatusTrace(8000);
   return state.statusTrace;
@@ -569,6 +662,21 @@ async function readJob(name: string, args: Rec, src: ReviewJobToolSource, state:
   const after = typeof args.failure_after === 'number' && Number.isFinite(args.failure_after)
     ? Math.max(0, Math.floor(args.failure_after))
     : 0;
+  const unmetAfter = finiteInt(args.unmet_after);
+  const unmetVersion = finiteInt(args.unmet_version);
+  if (args.unmet_after != null) {
+    if (unmetAfter === undefined || (args.unmet_version != null && unmetVersion === undefined)) {
+      return bad(name, 'concept_review_unmet_conflict', '미충족 조회 인자 오류', 'unmet_after와 unmet_version은 정수이거나 비운다.');
+    }
+    if (want > 0 || args.status_diag_only === true) {
+      return bad(
+        name,
+        'concept_review_unmet_conflict',
+        '미충족 조회 충돌',
+        'unmet_after는 next>0이나 status_diag_only와 함께 보내지 않는다. 미충족만 보려면 next는 0이고 status_diag_only는 false다.',
+      );
+    }
+  }
   if (args.status_diag_only === true) {
     trace.stage = 'status_diag_get';
     try {
@@ -589,6 +697,8 @@ async function readJob(name: string, args: Rec, src: ReviewJobToolSource, state:
   let batch: Rec | null = null;
   let failurePage: Rec = {};
   let failurePageFailed = false;
+  let unmetPage: Rec | null = null;
+  let unmetPageFailed = false;
   try {
     if (want > 0) {
       trace.stage = 'lease_rpc';
@@ -604,6 +714,20 @@ async function readJob(name: string, args: Rec, src: ReviewJobToolSource, state:
     } catch (e) {
       if (timedOut(trace, e)) throw new Error('tool_timeout');
       failurePageFailed = true;
+    }
+    if (typeof unmetAfter === 'number') {
+      trace.stage = 'unmet_page_rpc';
+      try {
+        unmetPage = rec(await callJobRpc(src, trace, 'concept_review_job_unmet_page', {
+          p_job_id: job,
+          p_version: unmetVersion,
+          p_after: unmetAfter,
+          p_limit: 50,
+        }));
+      } catch (e) {
+        if (timedOut(trace, e)) throw new Error('tool_timeout');
+        unmetPageFailed = true;
+      }
     }
   } catch (e) {
     if (timedOut(trace, e)) throw new Error('tool_timeout');
@@ -656,6 +780,9 @@ async function readJob(name: string, args: Rec, src: ReviewJobToolSource, state:
     pending_cards: pending,
     failures: failurePageFailed ? { ...failureView({}), unavailable: true } : failureView(failurePage),
   };
+  if (typeof unmetAfter === 'number') {
+    value.unmet = unmetPageFailed || !unmetPage ? unmetLookupFailed() : unmetView(unmetPage);
+  }
   if (batch) {
     value.batch = (Array.isArray(batch.batch) ? batch.batch : []).map((b) => {
       const r = rec(b);
@@ -672,9 +799,24 @@ async function readJob(name: string, args: Rec, src: ReviewJobToolSource, state:
   } else if (Number(failures.omitted) > 0) {
     notes.push('실패 목록이 잘렸다. failure_after에 failures.next_after를 넣어 다시 읽는다.');
   }
+  const unmet = value.unmet ? rec(value.unmet) : null;
+  if (unmet && unmet.code !== 'ok') {
+    notes.push('미충족 개수는 이 응답에 없다. 0개로 말하지 않는다. 조회는 갱신이 끝나기를 기다리지 않고, 검수를 실행하지 않는다.');
+  } else if (unmet && Array.isArray(unmet.items)) {
+    if (unmet.items.some((item) => rec(item).reason_status === 'unrecorded')) {
+      notes.push('reason_status가 unrecorded인 항목은 사유가 기록되지 않은 것이다. 차단이 없다는 뜻이 아니다.');
+    }
+    if (unmet.items.some((item) => rec(item).supplement)) {
+      notes.push('supplement는 공개 스냅샷이 아니다. snapshot_at과 item_updated_at을 구분한다.');
+    }
+    if (Number(unmet.omitted) > 0) {
+      notes.push('미충족 목록이 잘렸다. unmet_after에 next_after, unmet_version에 published_input_version을 넣어 같은 공개본으로 이어서 읽는다.');
+    }
+  }
   const stored = [
     ...(Array.isArray(value.open_items) ? value.open_items : []),
     ...(Array.isArray(failures.items) ? failures.items : []),
+    ...(unmet && Array.isArray(unmet.items) ? unmet.items : []),
   ];
   if (stored.some((item) => rec(rec(item).diagnosis).kind === 'generic')) {
     notes.push('diagnosis.kind가 generic인 항목은 예전 포괄 오류다. 범위와 필드를 만들어 넣지 않는다.');

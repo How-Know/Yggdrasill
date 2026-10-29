@@ -264,6 +264,7 @@ Deno.test('저장된 집계 진단은 집계를 다시 실행하지 않고 읽�
   assertEquals(v.aggregation, 'not_run');
   assertEquals(v.status_diag, diagnosis);
   assertEquals(store.reviewJobCalls.map((x) => x.fn), ['concept_review_job_status_diag_get']);
+  assertEquals(v.unmet, undefined);
 });
 
 Deno.test('저장 오류는 위치마다 다음 할 일과 함께, 제출은 새 카드만 화면에 보내고 한 요청 카드 한도까지', async () => {
@@ -293,4 +294,84 @@ Deno.test('저장 오류는 위치마다 다음 할 일과 함께, 제출은 새
   store.reviewJobData.set('concept_review_job_cards_here', { cards: [action, { ...action, id: 'act-old' }], conflicts: [] });
   const moved = await call(store, JOB_CONTROL_TOOL_NAME, { job_id: JOB, action: 'bring_cards' }, c);
   assertEquals(moved.actions?.map((a) => a.id), ['act-1', 'act-old'], '옮긴 카드를 이 대화 화면에 보낸다');
+});
+
+const SPECIFIC = 'judge_invalid:fix_evidence_empty:placement:reviews[0].fix.ops[0].evidence:non_empty_text:empty_string';
+const GENERIC = 'judge_invalid: 판단 형식이 맞지 않음(범위·결과·근거·고치기 제안·비교 개념)';
+
+Deno.test('미충족 조회는 임대를 하지 않고, 충돌이면 어떤 RPC도 부르지 않는다', async () => {
+  const store = new MemoryThinkStore();
+  store.reviewJobData.set('concept_review_job_status', STATUS);
+  store.reviewJobData.set('concept_review_job_failure_page', { returned: 0, omitted: 0, next_after: null, items: [] });
+  store.reviewJobData.set('concept_review_job_unmet_page', {
+    code: 'ok',
+    published_input_version: 7,
+    snapshot_at: '2026-10-29T00:00:00+00:00',
+    total: 3,
+    returned: 3,
+    omitted: 1,
+    next_after: 12,
+    items: [
+      { snapshot: { pos: 2, name: '소수', reason: SPECIFIC, next_action: '다시 판단' }, supplement: null },
+      { snapshot: { pos: 4, name: '소수', reason: GENERIC }, supplement: null },
+      { snapshot: { pos: 5, name: '기록없음' }, supplement: { name: '기록없음', state: 'deferred', item_updated_at: '2026-10-29T01:00:00+00:00' } },
+    ],
+  });
+  const conflictNext = parse(await call(store, JOB_READ_TOOL_NAME, { job_id: JOB, next: 5, unmet_after: 0 }, ctx()));
+  assertEquals(conflictNext.error, 'concept_review_unmet_conflict');
+  const conflictDiag = parse(await call(store, JOB_READ_TOOL_NAME, {
+    job_id: JOB, next: 0, status_diag_only: true, unmet_after: 0,
+  }, ctx()));
+  assertEquals(conflictDiag.error, 'concept_review_unmet_conflict');
+  const badAfter = parse(await call(store, JOB_READ_TOOL_NAME, { job_id: JOB, next: 0, unmet_after: '12' }, ctx()));
+  assertEquals(badAfter.error, 'concept_review_unmet_conflict');
+  assertEquals(store.reviewJobCalls, []);
+
+  const c = ctx();
+  const first = parse(await call(store, JOB_READ_TOOL_NAME, {
+    job_id: JOB, next: 0, failure_after: 3, unmet_after: 0,
+  }, c));
+  assertEquals(c.reviewJobs!.leases.size, 0);
+  assertEquals(store.reviewJobCalls.map((x) => x.fn), [
+    'concept_review_job_status',
+    'concept_review_job_failure_page',
+    'concept_review_job_unmet_page',
+    'concept_review_job_status_diag_put',
+  ]);
+  assertEquals(store.reviewJobCalls[1]!.args.p_after, 3);
+  assertEquals(store.reviewJobCalls[2]!.args.p_after, 0);
+  assertEquals(store.reviewJobCalls[2]!.args.p_version, null);
+  assertEquals(first.unmet.items[0].diagnosis.kind, 'specific');
+  assertEquals(first.unmet.items[0].diagnosis.code, 'fix_evidence_empty');
+  assertEquals(first.unmet.items[0].reason_basis, 'snapshot');
+  assertEquals(first.unmet.items[1].diagnosis.kind, 'generic');
+  assertEquals(first.unmet.items[1].diagnosis.scope, null);
+  assertEquals(first.unmet.items[1].diagnosis.field, null);
+  assertEquals(first.unmet.items[2].reason_status, 'unrecorded');
+  assertEquals(first.unmet.items[2].reason, null);
+  assertEquals(first.unmet.items[2].diagnosis, null);
+  assertEquals(first.unmet.items[2].reason_basis, null);
+  assert(first.progress_line);
+  assert(!first.note.includes('미충족은 0개'));
+
+  store.reviewJobCalls.length = 0;
+  const next = parse(await call(store, JOB_READ_TOOL_NAME, {
+    job_id: JOB, next: 0, unmet_after: 12, unmet_version: 7,
+  }, c));
+  const nextCall = store.reviewJobCalls.find((x) => x.fn === 'concept_review_job_unmet_page');
+  assertEquals(nextCall!.args.p_after, 12);
+  assertEquals(nextCall!.args.p_version, 7);
+  assertEquals(store.reviewJobCalls.some((x) => x.fn === 'concept_review_job_claim'), false);
+  assertEquals(next.unmet.published_input_version, 7);
+
+  store.reviewJobCalls.length = 0;
+  store.reviewJobErrors.set('concept_review_job_unmet_page', 'db_down');
+  const failed = parse(await call(store, JOB_READ_TOOL_NAME, { job_id: JOB, next: 0, unmet_after: 0 }, c));
+  assertEquals(failed.progress_line, STATUS.progress_line);
+  assertEquals(failed.unmet.code, 'lookup_failed');
+  assertEquals(failed.unmet.items, null);
+  assertEquals(failed.unmet.total, null);
+  assertEquals(failed.unmet.returned, null);
+  assert(failed.note.includes('미충족 개수는 이 응답에 없다'));
+  assert(!failed.note.includes('미충족은 0개'));
 });
