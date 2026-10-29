@@ -30,7 +30,8 @@ import type { ToolRunResult } from './tools.ts';
 
 export const BATCH_TOOL_NAME = 'run_concept_review_batch';
 export const BATCH_TOOL_LABEL = '개념 묶음 검수';
-export const BATCH_PROMPT_VERSION = 'review-batch-2026-10-29a';
+// review-batch-2026-10-29b: 승인된 카드 뒤에 남은 확인 못 함·비교 필요 필수 범위만 다시 판단한다. 카드 상태가 applied가 아니면 고르지 않는다.
+export const BATCH_PROMPT_VERSION = 'review-batch-2026-10-29b';
 export const BATCH_MAX = 50;
 
 /** 판단 모델 한 번에 넣는 개념 수와 글자 수. */
@@ -74,7 +75,9 @@ export const BATCH_TOOL: AiFunctionTool = {
     `비교 참조가 한 필드에서 고유 ${CONCEPT_REVIEW_REF_LIMIT}개를 넘긴 위치는 미결이며, 판이 바뀌거나 상한이 커지기 전에는 다시 판단하지 않는다. ` +
     '읽지 못하거나 판단할 수 없는 개념은 미결(이유·다음 할 일)로 저장하고 나머지를 계속한다. 한 답변에 한 번만 쓴다. ' +
     '결과의 숫자(대상·보완·건너뜀·저장·카드 종류별·미결·통합 완료·조건별 충족·end_reason)를 그대로 보고한다. 카드를 낸 것은 완료가 아니다. ' +
-    '체크포인트 끝에서 자리가 남으면 필수 조건이 남은 deferred·failed만 이어 고른다. ' +
+    '체크포인트 끝에서 자리가 남으면 필수 조건이 남은 deferred·failed를 이어 고른다. ' +
+    '승인된 카드 뒤에 확인 못 함·비교 필요로 남은 필수 범위도 그 범위만 다시 판단한다. 카드 상태가 applied가 아니거나 비어 있으면 고르지 않는다. ' +
+    '관계·분류·개념 단위는 그 경로에 넣지 않는다. ' +
     '미충족 조회가 실패하거나 순회가 끊기면(unmet_code·unmet_cursor_stop·unmet_time_stop) 미충족 없음이나 검수 완료로 말하지 않는다. ' +
     '실패는 failed.count와 failed.by_code, 각 항목의 diagnosis(code·scope·field)를 먼저 말한다. omitted가 0보다 크면 get_concept_review_job의 failures로 나머지를 읽는다. ' +
     'diagnosis.kind가 generic이면 범위·필드가 없는 예전 기록이다. 원인을 만들어 넣지 않는다.',
@@ -951,6 +954,7 @@ export function foundationReview(
 }
 
 const trimmed = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+const OPEN_OUTCOMES = new Set(['unverified', 'needs_comparison']);
 
 function reasonBlocked(snapshotReason: string, supplementReason: string): boolean {
   if (snapshotReason.startsWith('concept_review_too_many_refs') || supplementReason.startsWith('concept_review_too_many_refs')) return true;
@@ -959,20 +963,51 @@ function reasonBlocked(snapshotReason: string, supplementReason: string): boolea
   return false;
 }
 
-/** 미충족 페이지 한 줄의 새 경로 자격. supplement.state는 포함 근거로 쓰지 않는다. */
-function unmetCandidate(row: Rec): { position: number; concept_id: string; required: string[] } | null {
+/** 저장된 보류 사유. 진행 판정이 붙이는 "사용자 확인이 필요한 기록" 문장과는 다르다. */
+function explicitHold(reason: string): boolean {
+  return reason.startsWith('사용자 확인이 필요한 검토 기록');
+}
+
+function openRequired(snap: Rec): string[] {
+  const out: string[] = [];
+  for (const raw of Array.isArray(snap.open) ? snap.open : []) {
+    const e = rec(raw);
+    const scope = trimmed(e.scope);
+    if (!REQUIRED_SCOPES.includes(scope) || !OPEN_OUTCOMES.has(trimmed(e.outcome)) || out.includes(scope)) continue;
+    out.push(scope);
+  }
+  return out;
+}
+
+/** 미충족 페이지 한 줄의 새 경로 자격. supplement.state는 포함 근거로 쓰지 않는다. 카드 상태가 없으면 applied가 아니다. */
+function unmetCandidate(row: Rec): { position: number; concept_id: string; required: string[]; approved: boolean } | null {
   const snap = rec(row.snapshot);
   const supplement = row.supplement && typeof row.supplement === 'object' && !Array.isArray(row.supplement) ? rec(row.supplement) : {};
-  const state = trimmed(snap.item_state);
-  if (state !== 'deferred' && state !== 'failed') return null;
+  const snapReason = trimmed(snap.reason);
+  const supplementReason = trimmed(supplement.reason);
   if (trimmed(snap.category) === 'awaiting') return null;
-  if (reasonBlocked(trimmed(snap.reason), trimmed(supplement.reason))) return null;
-  const required = REQUIRED_SCOPES.filter((s) => strings(snap.todo).includes(s));
-  if (required.length === 0) return null;
+  if (reasonBlocked(snapReason, supplementReason) || explicitHold(snapReason) || explicitHold(supplementReason)) return null;
   const position = Number(snap.pos ?? snap.position);
   const conceptId = typeof snap.concept_id === 'string' ? snap.concept_id : '';
   if (!Number.isInteger(position) || position < 1 || !conceptId) return null;
-  return { position, concept_id: conceptId, required };
+  const state = trimmed(snap.item_state);
+  if (state === 'deferred' || state === 'failed') {
+    const required = REQUIRED_SCOPES.filter((s) => strings(snap.todo).includes(s));
+    if (required.length === 0) return null;
+    return { position, concept_id: conceptId, required, approved: false };
+  }
+  if (state === 'submitted' && trimmed(snap.card_status) === 'applied') {
+    const required = openRequired(snap);
+    if (required.length === 0) return null;
+    return { position, concept_id: conceptId, required, approved: true };
+  }
+  return null;
+}
+
+function scopeStillOpen(data: Rec, scope: string): boolean {
+  if (!REQUIRED_SCOPES.includes(scope) || metRequiredScopes(data).has(scope)) return false;
+  const outcome = trimmed(rec(rec(data.review_scopes)[scope]).outcome);
+  return OPEN_OUTCOMES.has(outcome);
 }
 
 function metRequiredScopes(data: Rec): Set<string> {
@@ -1203,10 +1238,11 @@ export async function runReviewBatch(call: BatchCall, state: ReviewJobToolContex
       log.capacity_target = capacity;
 
       // 1) 대상: 다시 판단할 실패 위치 먼저, 그다음 통합 완료가 아닌 위치(보완 포함)를 목록 순서대로.
-      // 그 목록이 끝났고 처리 자리가 남을 때만, 필수 조건이 남은 deferred·failed를 미충족 페이지로 이어 고른다.
+      // 그 목록이 끝났고 처리 자리가 남을 때만 미충족 페이지로 이어 고른다.
+      // deferred·failed의 남은 필수 todo, 또는 승인된 카드 뒤의 확인 못 함·비교 필요 필수 범위.
       const work: { position: number; concept_id: string }[] = [];
       const seen = new Set<number>();
-      const unmetPlan = new Map<number, string[]>();
+      const unmetPlan = new Map<number, { required: string[]; approved: boolean }>();
       const pushWork = (raw: unknown) => {
         const r = rec(raw);
         const position = Number(r.position);
@@ -1264,7 +1300,7 @@ export async function runReviewBatch(call: BatchCall, state: ReviewJobToolContex
             if (!candidate || seen.has(candidate.position)) continue;
             seen.add(candidate.position);
             work.push({ position: candidate.position, concept_id: candidate.concept_id });
-            unmetPlan.set(candidate.position, candidate.required);
+            unmetPlan.set(candidate.position, { required: candidate.required, approved: candidate.approved });
             unmetSelected += 1;
           }
           if (work.length >= capacity) break;
@@ -1358,8 +1394,15 @@ export async function runReviewBatch(call: BatchCall, state: ReviewJobToolContex
           let unmetFresh = false;
           let unmetRange: string[] | undefined;
           if (planned && resume.length === 0) {
-            const materialTodo = strings(d.todo);
-            unmetRange = planned.filter((s) => materialTodo.includes(s) && !metRequiredScopes(d).has(s));
+            if (planned.approved) {
+              const reason = trimmed(d.item_reason);
+              if (trimmed(d.card_status) !== 'applied' || trimmed(d.item_state) !== 'submitted'
+                || reasonBlocked(reason, '') || explicitHold(reason)) continue;
+              unmetRange = planned.required.filter((s) => scopeStillOpen(d, s));
+            } else {
+              const materialTodo = strings(d.todo);
+              unmetRange = planned.required.filter((s) => materialTodo.includes(s) && !metRequiredScopes(d).has(s));
+            }
             if (unmetRange.length === 0) continue;
             unmetFresh = true;
             scopes = unmetRange.filter((s) => s !== 'foundation');
@@ -1384,7 +1427,7 @@ export async function runReviewBatch(call: BatchCall, state: ReviewJobToolContex
             position: pos, concept_id: String(d.concept_id), name: String(d.name ?? ''), revision, content: acc.content, data: d, ids,
             fullRead, textMark: fullRead ? textMark : null,
             scopes, foundation,
-            ...(planned ? { snapshotRequired: [...planned] } : {}),
+            ...(planned ? { snapshotRequired: [...planned.required] } : {}),
             ...(unmetRange ? { unmetRange: [...unmetRange] } : {}),
             ...(unmetFresh ? { unmetFresh: true } : {}),
             placementIds: new Set(placements.map((p) => String(p.id ?? '')).filter(Boolean)),

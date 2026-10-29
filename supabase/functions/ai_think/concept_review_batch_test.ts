@@ -33,6 +33,11 @@ interface SimConcept {
   relations?: Rec[]; same_concept_reviews?: Rec[];
   /** 최신 재료의 조건 충족. text가 met이면 표기·의미가 이미 충족이다. */
   conditions?: Rec;
+  /** 재료를 읽을 때의 범위별 최신 검토. 없으면 승인 경로의 재확인은 실패한다. */
+  reviewScopes?: Rec;
+  cardStatus?: string | null;
+  itemState?: string | null;
+  itemReason?: string | null;
   /** 32자 지문. 있으면 revision 앞 12자와 맞추고, 같은 호출의 전문 비교 근거가 된다. */
   textMark?: string;
   statements?: Rec[];
@@ -200,6 +205,10 @@ class JobSim {
             ...(c.same_concept_reviews ? { same_concept_reviews: c.same_concept_reviews } : {}),
             sources: c.sources ?? [], placements: c.placements ?? [],
             ...(c.conditions ? { conditions: c.conditions } : {}),
+            ...(c.reviewScopes ? { review_scopes: c.reviewScopes } : {}),
+            ...(c.cardStatus !== undefined ? { card_status: c.cardStatus } : {}),
+            ...(c.itemState !== undefined ? { item_state: c.itemState } : {}),
+            ...(c.itemReason !== undefined ? { item_reason: c.itemReason } : {}),
             ...(c.statements ? { statements: c.statements } : {}),
             ...(c.textMark ? { text_mark: c.textMark } : {}),
           };
@@ -1113,7 +1122,7 @@ Deno.test('형식 실패는 그 위치만 실패로 남고, 30개를 넘겨도 �
 
 Deno.test('참조 상한 정의가 DB·도구 설명·판단 지시와 같다', async () => {
   assertEquals(CONCEPT_REVIEW_REF_LIMIT, 20);
-  assertEquals(BATCH_PROMPT_VERSION, 'review-batch-2026-10-29a');
+  assertEquals(BATCH_PROMPT_VERSION, 'review-batch-2026-10-29b');
   assertEquals(THINK_PROMPT_VERSION, 'think-2026-10-29b');
   assert(JUDGE_INSTRUCTIONS.includes('고유 20개까지'));
   assert(JUDGE_INSTRUCTIONS.includes('to_compare_ids로 옮겨'));
@@ -1306,12 +1315,14 @@ Deno.test('체크포인트가 끝나기 전에는 미충족 경로로 들어가�
   sim.unmetHandler = () => {
     throw new Error('checkpoint not ended');
   };
-  const v = parse(await batch(sim, new FakeAiProvider(judge()), { target: 3 }));
+  const raw = await batch(sim, new FakeAiProvider(judge()), { target: 3 });
+  const v = parse(raw);
   assertEquals([v.end_reason, v.served, v.unmet_code, v.unmet_selected, v.unmet_cursor_stop, v.unmet_time_stop], [
     'target_reached', 3, null, 0, null, null,
   ]);
   assert(!sim.calls.some((c) => c.fn === 'concept_review_job_unmet_page'));
-  assert(!String(v.summary).includes('미충족 조회를 마치지 못했다'));
+  assert(!String(raw.summary).includes('미충족 조회를 마치지 못했다'));
+  assert(!String(v.note).includes('미충족 조회를 마치지 못했다'));
 });
 
 Deno.test('재확인·재시도·대상 뒤에만 미충족을 고르고, 다음 커서는 반환된 위치와 공개 버전을 쓴다', async () => {
@@ -1338,7 +1349,8 @@ Deno.test('재확인·재시도·대상 뒤에만 미충족을 고르고, 다음
     scopes: ['notation', 'meaning', 'placement', 'classification', 'unit', 'relations'],
     foundation: () => ({ needs: [], none_basis: '기초가 이미 있다' }),
   }));
-  const v = parse(await batch(sim, provider));
+  const raw = await batch(sim, provider);
+  const v = parse(raw);
   const pages = sim.calls.filter((c) => c.fn === 'concept_review_job_unmet_page');
   const targets = sim.calls.find((c) => c.fn === 'concept_review_job_targets')!;
   assert(sim.calls.indexOf(targets) < sim.calls.indexOf(pages[0]));
@@ -1359,7 +1371,8 @@ Deno.test('재확인·재시도·대상 뒤에만 미충족을 고르고, 다음
   assert(!(view.get(4)?.judge_scopes as string[]).includes('relations'));
   assertEquals(saveRows(sim).find((r) => r.position === 1)?.rework, true);
   assertEquals(saveRows(sim).find((r) => r.position === 4)?.rework, false);
-  assert(!String(v.summary).includes('미충족 조회를 마치지 못했다'));
+  assert(!String(raw.summary).includes('미충족 조회를 마치지 못했다'));
+  assert(!String(v.note).includes('미충족 조회를 마치지 못했다'));
 });
 
 Deno.test('미충족 조회가 비최신·교체·오류·커서 이상·시간 부족이면 순회를 끊고 없음이나 완료로 적지 않는다', async () => {
@@ -1368,19 +1381,22 @@ Deno.test('미충족 조회가 비최신·교체·오류·커서 이상·시간 
     seedItem(sim, 1, 'deferred', `유지-${code}`);
     sim.unmetHandler = () => unmetPage({ code, items: [unmetRow(1)], omitted: 1, next_after: 1 });
     const provider = new FakeAiProvider(judge());
-    const v = parse(await batch(sim, provider));
+    const raw = await batch(sim, provider);
+    const v = parse(raw);
     assertEquals(v.unmet_code, code, code);
     assertEquals(v.unmet_selected, 0, code);
     assertEquals(judgeRequests(provider).length, 0, code);
     assertEquals(sim.items.get(1)!.reason, `유지-${code}`, code);
     assertEquals(v.end_reason, 'reached_end', code);
-    assert(String(v.summary).includes('미충족 조회를 마치지 못했다'), code);
+    assert(String(raw.summary).includes('미충족 조회를 마치지 못했다'), code);
     assert(String(v.note).includes('미충족 조회를 마치지 못했다'), code);
     assert(String(v.end_reason_text).includes('미충족 조회를 마치지 못했다'), code);
-    assert(!String(v.summary).includes('미충족 없음'), code);
-    assert(!String(v.summary).includes('검수 완료'), code);
+    assert(!String(raw.summary).includes('미충족 없음'), code);
+    assert(!String(raw.summary).includes('검수 완료'), code);
     assert(!String(v.note).includes('미충족 없음'), code);
     assert(!String(v.note).includes('검수 완료'), code);
+    assert(!String(v.end_reason_text).includes('미충족 없음'), code);
+    assert(!String(v.end_reason_text).includes('검수 완료'), code);
   }
 
   const replaced = new JobSim(2);
@@ -1403,12 +1419,16 @@ Deno.test('미충족 조회가 비최신·교체·오류·커서 이상·시간 
   const down = new JobSim(1);
   seedItem(down, 1, 'deferred', '조회 전');
   down.failOnce.set('concept_review_job_unmet_page', 'db_down');
-  const downRun = parse(await batch(down, new FakeAiProvider(judge())));
+  const downRaw = await batch(down, new FakeAiProvider(judge()));
+  const downRun = parse(downRaw);
   assertEquals(downRun.unmet_code, 'db_down');
   assertEquals(downRun.unmet_selected, 0);
   assertEquals(down.items.get(1)!.reason, '조회 전');
-  assert(String(downRun.summary).includes('미충족 조회 코드: db_down'));
-  assert(!String(downRun.summary).includes('검수 완료'));
+  assert(String(downRaw.summary).includes('미충족 조회 코드: db_down'));
+  assert(String(downRun.note).includes('미충족 조회 코드: db_down'));
+  assert(String(downRun.end_reason_text).includes('미충족 조회 코드: db_down'));
+  assert(!String(downRaw.summary).includes('검수 완료'));
+  assert(!String(downRun.note).includes('검수 완료'));
 
   const stuck = new JobSim(1);
   seedItem(stuck, 1, 'deferred', '커서');
@@ -1426,10 +1446,13 @@ Deno.test('미충족 조회가 비최신·교체·오류·커서 이상·시간 
   seedItem(cut, 1, 'deferred', '잘림');
   cut.concepts[0].todo = ['notation'];
   cut.unmetHandler = () => unmetPage({ omitted: 4, next_after: null, items: [unmetRow(1)] });
-  const cutRun = parse(await batch(cut, new FakeAiProvider(judge())));
+  const cutRaw = await batch(cut, new FakeAiProvider(judge()));
+  const cutRun = parse(cutRaw);
   assertEquals(cut.calls.filter((c) => c.fn === 'concept_review_job_unmet_page').length, 1);
   assertEquals(cutRun.unmet_cursor_stop, 'omitted가 있는데 next_after가 없음');
-  assert(String(cutRun.summary).includes('미충족 조회를 마치지 못했다'));
+  assert(String(cutRaw.summary).includes('미충족 조회를 마치지 못했다'));
+  assert(String(cutRun.note).includes('미충족 조회를 마치지 못했다'));
+  assert(String(cutRun.end_reason_text).includes('미충족 조회를 마치지 못했다'));
 
   const early = new JobSim(1);
   seedItem(early, 1, 'deferred', '시간');
@@ -1460,7 +1483,7 @@ Deno.test('미충족 조회가 비최신·교체·오류·커서 이상·시간 
     phase = 'after';
     return unmetPage({ published_input_version: 5, omitted: 1, next_after: 1, items: [unmetRow(1)] });
   };
-  const midRun = parse(await runReviewBatch(
+  const midRaw = await runReviewBatch(
     {
       callId: 'call-1', rawArguments: JSON.stringify({ job_id: JOB, target: 50 }), conversationId: 'conv-1',
       userId: 'user-1', safetyId: 'hash', signal: new AbortController().signal, deadline: start + 30_000,
@@ -1472,14 +1495,16 @@ Deno.test('미충족 조회가 비최신·교체·오류·커서 이상·시간 
       now: () => (phase === 'after' ? start + 100_000 : start),
       timing: { saveReserveMs: 1000, minJudgeMs: 5000, minGroupMs: 10 },
     },
-  ));
+  );
+  const midRun = parse(midRaw);
   assertEquals(mid.calls.filter((c) => c.fn === 'concept_review_job_unmet_page').length, 1);
   assertEquals(midRun.unmet_code, 'ok');
   assertEquals(midRun.unmet_selected, 1);
   assertEquals(midRun.unmet_time_stop, '판단 최소 시간을 남기려고 미충족 순회를 멈춤');
   assertEquals(mid.items.get(2)!.reason, '뒤');
   assertEquals(midRun.end_reason, 'time_budget');
-  assert(!String(midRun.summary).includes('미충족 없음'));
+  assert(!String(midRaw.summary).includes('미충족 없음'));
+  assert(!String(midRun.note).includes('미충족 없음'));
 });
 
 Deno.test('미충족 경로도 요청 전체 50개를 넘기지 않고, 이미 고른 위치는 다시 세지 않는다', async () => {
@@ -1575,6 +1600,9 @@ Deno.test('미충족 후보는 deferred·failed의 남은 필수 조건만이고
   remember(15, 'deferred', '보충 고치기 거부');
   remember(16, 'deferred', '사용자 확인이 필요한 검토 기록이 있다: meaning issue', 'act-user');
   remember(17, 'deferred', '분류만 남음');
+  sim.items.get(5)!.reviews = [{
+    scope: 'notation', outcome: 'no_issue_found', checked: '표기를 확인', findings: '문제 없음', basis: '본문',
+  }];
   sim.concepts[0].todo = ['notation'];
   sim.concepts[1].todo = ['meaning'];
   sim.unmetHandler = () => unmetPage({
@@ -1600,12 +1628,19 @@ Deno.test('미충족 후보는 deferred·failed의 남은 필수 조건만이고
   });
   const provider = new FakeAiProvider(judge({ scopes: ['notation', 'meaning'] }));
   const v = parse(await batch(sim, provider));
+  assert(sim.calls.some((c) => c.fn === 'concept_review_job_unmet_page'));
   assertEquals(v.unmet_selected, 2);
   assertEquals([...new Set(judgedPositions(provider))].sort((a, b) => a - b), [1, 2]);
   assertEquals(sim.items.get(1)!.state, 'submitted');
   assertEquals(sim.items.get(2)!.state, 'submitted');
   for (const [pos, prev] of kept) {
     if (pos === 1 || pos === 2) continue;
+    if (pos === 5) {
+      assertEquals(sim.items.get(pos)!.state, 'submitted', String(pos));
+      assertEquals(sim.items.get(pos)!.reason, prev.reason, String(pos));
+      assert(!saveRows(sim).some((r) => r.position === pos), String(pos));
+      continue;
+    }
     assertEquals(sim.items.get(pos)!.state, prev.state, String(pos));
     assertEquals(sim.items.get(pos)!.reason, prev.reason, String(pos));
     assertEquals(sim.items.get(pos)!.action_id ?? null, prev.action_id, String(pos));
@@ -1676,8 +1711,103 @@ Deno.test('새 미충족 비재개 경로의 거절은 다시 저장하지 않�
   assertEquals(unmetResume.items.get(1)!.reviews!.map((r) => r.scope), ['foundation']);
 });
 
+Deno.test('승인된 카드 뒤의 확인 못 함·비교 필요는 필수 범위만 판단하고 저장한 뒤 카드를 낸다', async () => {
+  const sim = new JobSim(7);
+  for (let pos = 1; pos <= 7; pos++) {
+    const hold = pos === 5;
+    seedItem(sim, pos, 'submitted', hold ? '사용자 확인이 필요한 검토 기록이 있다: meaning issue' : `유지-${pos}`, hold ? 'act-user' : null);
+  }
+  const open = (scope: string, outcome: string) => ({ scope, outcome, state: 'open' });
+  const arm = (pos: number, over: Partial<SimConcept>) => {
+    Object.assign(sim.concepts[pos - 1], over);
+  };
+  arm(1, {
+    todo: [],
+    conditions: { text: 'met', foundation: 'open', placement: 'met' },
+    reviewScopes: {
+      notation: { state: 'met', outcome: 'no_issue_found' },
+      meaning: { state: 'met', outcome: 'no_issue_found' },
+      foundation: { state: 'open', outcome: 'needs_comparison' },
+      placement: { state: 'met', outcome: 'no_issue_found' },
+      relations: { state: 'open', outcome: 'unverified' },
+    },
+    cardStatus: 'applied',
+    itemState: 'submitted',
+  });
+  arm(6, {
+    todo: [],
+    conditions: { text: 'met', foundation: 'met', placement: 'met' },
+    reviewScopes: { foundation: { state: 'met', outcome: 'no_issue_found' } },
+    cardStatus: 'applied',
+    itemState: 'submitted',
+  });
+  arm(7, {
+    todo: [],
+    conditions: { text: 'met', foundation: 'open', placement: 'met' },
+    reviewScopes: { foundation: { state: 'open', outcome: 'unverified' } },
+    cardStatus: 'rejected',
+    itemState: 'submitted',
+    itemReason: null,
+  });
+  sim.unmetHandler = () => unmetPage({
+    items: [
+      unmetRow(1, {
+        item_state: 'submitted', card_status: 'applied', todo: [], reason: null,
+        open: [open('foundation', 'needs_comparison'), open('relations', 'unverified'), open('classification', 'unverified')],
+      }),
+      unmetRow(2, {
+        item_state: 'submitted', todo: [], reason: null,
+        open: [open('foundation', 'needs_comparison')],
+      }),
+      unmetRow(3, {
+        item_state: 'submitted', card_status: 'rejected', todo: [], reason: null,
+        open: [open('placement', 'unverified')],
+      }),
+      unmetRow(4, {
+        item_state: 'submitted', card_status: 'proposed', todo: [], reason: null,
+        open: [open('meaning', 'unverified')],
+      }),
+      unmetRow(5, {
+        item_state: 'submitted', card_status: 'applied', todo: [],
+        reason: '사용자 확인이 필요한 검토 기록이 있다: meaning issue',
+        open: [open('meaning', 'unverified')],
+      }),
+      unmetRow(6, {
+        item_state: 'submitted', card_status: 'applied', todo: [], reason: null,
+        open: [open('foundation', 'needs_comparison')],
+      }),
+      unmetRow(7, {
+        item_state: 'submitted', card_status: 'applied', todo: [], reason: null,
+        open: [open('foundation', 'unverified')],
+      }),
+    ],
+  });
+  const provider = new FakeAiProvider(judge({
+    scopes: ['notation', 'meaning', 'placement', 'classification', 'unit', 'relations'],
+    foundation: () => ({ needs: [], none_basis: '기초가 이미 본문에 있다' }),
+  }));
+  const v = parse(await batch(sim, provider));
+  assert(sim.calls.some((c) => c.fn === 'concept_review_job_unmet_page'));
+  assertEquals([v.unmet_code, v.unmet_selected, v.end_reason], ['ok', 3, 'reached_end']);
+  const view = judgeViews(provider);
+  assertEquals([...view.keys()], [1]);
+  assertEquals(view.get(1)?.judge_scopes, []);
+  assertEquals(view.get(1)?.foundation_needed, true);
+  const saved = saveRows(sim).filter((r) => r.position === 1);
+  assertEquals(saved.map((r) => [r.state, r.rework]), [['drafted', false]]);
+  assertEquals((saved[0].reviews as Rec[]).map((r) => r.scope), ['foundation']);
+  assertEquals(sim.items.get(1)!.state, 'submitted');
+  assertEquals(sim.cards.filter((c) => c.kind === 'concept_review_record').map((c) => c.positions), [[1]]);
+  for (const pos of [2, 3, 4, 5, 6, 7]) {
+    assertEquals(sim.items.get(pos)!.state, 'submitted', String(pos));
+    assertEquals(sim.items.get(pos)!.reason, pos === 5 ? '사용자 확인이 필요한 검토 기록이 있다: meaning issue' : `유지-${pos}`, String(pos));
+    assert(!saveRows(sim).some((r) => r.position === pos), String(pos));
+  }
+  assertEquals(provider.requests.some((r) => r.jsonSchema?.name === 'concept_review_foundation_judgment'), false);
+});
+
 Deno.test('초등 배치 예외는 지시문의 작성 구분·내용·기존 배치 조건만 확인한다. 이 시험은 실제 모델의 배치 판단 품질을 검증하지 않는다', () => {
-  assertEquals(BATCH_PROMPT_VERSION, 'review-batch-2026-10-29a');
+  assertEquals(BATCH_PROMPT_VERSION, 'review-batch-2026-10-29b');
   assertEquals(THINK_PROMPT_VERSION, 'think-2026-10-29b');
   assert(JUDGE_INSTRUCTIONS.includes('자료 본문에 작성 구분이 적혀 있고'));
   assert(JUDGE_INSTRUCTIONS.includes('Think가 직접 작성한 초등 기초 보완 개념'));

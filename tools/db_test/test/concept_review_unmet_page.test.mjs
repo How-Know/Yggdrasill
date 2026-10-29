@@ -101,6 +101,17 @@ test('미충족 페이지는 같은 공개본의 first_pass=false만 읽고 옛 
        ($1::uuid, 11, $2::uuid, 'failed', '항목에만 있는 사유', '항목에 적힌 다음')`,
     [job, cid],
   );
+  const conv = (await t.one(`insert into ai_conversations (title) values ('미충족 카드') returning id`)).id;
+  const applied = (await t.one(
+    `insert into ai_actions (conversation_id, kind, status, payload) values ($1::uuid, 'concept_review_record', 'applied', '{}'::jsonb) returning id`,
+    [conv],
+  )).id;
+  const rejected = (await t.one(
+    `insert into ai_actions (conversation_id, kind, status, payload) values ($1::uuid, 'concept_review_record', 'rejected', '{}'::jsonb) returning id`,
+    [conv],
+  )).id;
+  await t.one(`update concept_review_job_items set action_id = $2::uuid where job_id = $1::uuid and pos = 10`, [job, applied]);
+  await t.one(`update concept_review_job_items set action_id = $2::uuid where job_id = $1::uuid and pos = 11`, [job, rejected]);
   const publish = async (at) => {
     await t.one(
       `update concept_review_progress_positions
@@ -175,12 +186,14 @@ test('미충족 페이지는 같은 공개본의 first_pass=false만 읽고 옛 
   assert.equal(flags.supplement.reason, undefined);
   assert.equal(typeof flags.supplement.item_updated_at, 'string');
   assert.equal(flags.snapshot.item_updated_at, undefined);
+  assert.equal(flags.snapshot.card_status, undefined);
 
   const snap = (await page(job, version, 9, 1)).items[0];
   assert.equal(snap.snapshot.reason, '스냅샷 사유');
   assert.equal(snap.snapshot.next_action, '스냅샷 다음');
   assert.equal(snap.snapshot.name, '스냅샷 이름');
   assert.equal(snap.supplement, null);
+  assert.equal(snap.snapshot.card_status, 'applied');
 
   const filled = (await page(job, version, 10, 1)).items[0];
   assert.equal(filled.snapshot.reason, undefined);
@@ -188,6 +201,7 @@ test('미충족 페이지는 같은 공개본의 first_pass=false만 읽고 옛 
   assert.equal(filled.supplement.reason, '항목에만 있는 사유');
   assert.equal(filled.supplement.next_action, '항목에 적힌 다음');
   assert.equal(filled.supplement.state, 'failed');
+  assert.equal(filled.snapshot.card_status, 'rejected');
   assert.notEqual(filled.supplement.item_updated_at, first.snapshot_at);
 
   const plain = (await page(job, version, 11, 1)).items[0];
