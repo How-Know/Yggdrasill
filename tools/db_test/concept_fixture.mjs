@@ -43,6 +43,7 @@ export const CONCEPT_FILES = [
   '20261028230000_concept_review_progress_cron_step.sql',
   '20261029010000_concept_review_unmet_page.sql',
   '20261029190000_concept_review_unmet_applied_open.sql',
+  '20261030030000_concept_review_source_walk.sql',
 ];
 
 const CONCEPT_STUBS = `

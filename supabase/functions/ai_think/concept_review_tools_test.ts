@@ -5,13 +5,15 @@ import { workStateNote } from './actions.ts';
 import { runThinkChat, type ChatInput } from './chat.ts';
 import {
   CONCEPT_EDIT_READ_TOOL_NAME,
+  COURSE_MAP_TOOLS,
   COURSE_MAPS_TOOL_NAME,
   REVIEW_LIST_TOOL_NAME,
   REVIEW_PROPOSE_TOOL_NAME,
   REVIEW_STATUS_TOOL_NAME,
 } from './course_map_tools.ts';
 import { computeFeatures } from './features.ts';
-import { THINK_PROMPT_VERSION } from './prompts.ts';
+import { THINK_PROMPT_VERSION, thinkInstructions } from './prompts.ts';
+import { COURSE_MAP_READ_FNS, SupabaseThinkStore, type SupabaseLike } from './store.ts';
 import { runThinkTool, thinkToolsFor } from './tools.ts';
 import { EventLog, MemoryThinkStore, RunLog, testEnv } from './test_support.ts';
 
@@ -29,6 +31,7 @@ const C2 = 'cccccccc-0000-4000-8000-000000000002';
 const ST = 'eeeeeeee-0000-4000-8000-000000000001';
 const WALK = 'ffffffff-0000-4000-8000-000000000001';
 const FOLDER = 'abababab-0000-4000-8000-000000000001';
+const COURSE = 'dddddddd-0000-4000-8000-000000000001';
 const REV = '0123456789ab-0123456789ab-0123456789ab';
 const REVIEW_TOOLS = [REVIEW_LIST_TOOL_NAME, REVIEW_STATUS_TOOL_NAME, REVIEW_PROPOSE_TOOL_NAME];
 
@@ -116,12 +119,18 @@ Deno.test('대화: 준비됐으면 검토 도구·지침·기능 상태, 앱·DB
   const req = chatRequest(ready.provider);
   for (const n of REVIEW_TOOLS) assert(toolNames(req).includes(n), n);
   assert(req.instructions!.includes('## 개념 검토'));
+  assert(req.instructions!.includes('source_scope는 all'));
+  assert(req.instructions!.includes('course_unplaced'));
+  assert(req.instructions!.includes('기대 총수'));
+  assert(req.instructions!.includes('start_concept_review_job'));
+  assert(req.instructions!.includes('run_concept_review_batch'));
+  assertEquals(THINK_PROMPT_VERSION, 'think-2026-10-30b');
   assert(featureNote(req).includes('개념 검토 목록·범위별 검토 기록'));
   assert(featureNote(req).includes('개념 검토 목록·범위별 검토 기록(list_concepts_for_review, propose_concept_review): 사용 가능'));
   const f = ready.runs.runs[0].features as Record<string, unknown>;
   assertEquals([f.course_map_tools, f.concept_review_tools], [true, true]);
   assertEquals(ready.runs.runs[0].promptVersion, THINK_PROMPT_VERSION);
-  assertEquals(THINK_PROMPT_VERSION, 'think-2026-10-30a');
+  assertEquals(THINK_PROMPT_VERSION, 'think-2026-10-30b');
 
   const cases: [typeof READY, string, boolean][] = [
     [OLD_APP, '앱 업데이트 필요', true],
@@ -212,6 +221,124 @@ Deno.test('검토 목록 오류: 없는 목록·권한 없음·조회 실패를 
   assertEquals(store.courseMapReads.length, reads);
   assertEquals(store.courseThinkProposals.length, 0);
   assertEquals(parse(await call(store, REVIEW_LIST_TOOL_NAME, { ...LIST_ARGS, walk_id: 'abc' })).error, 'invalid_id');
+});
+
+Deno.test('검토 목록 스키마: 출처 과정과 범위는 nullable이고 required에 든다', () => {
+  const tool = COURSE_MAP_TOOLS.find((t) => t.name === REVIEW_LIST_TOOL_NAME)!;
+  const schema = tool.parameters as {
+    additionalProperties: boolean;
+    required: string[];
+    properties: Record<string, { type?: unknown; enum?: unknown[] }>;
+  };
+  assertEquals(schema.additionalProperties, false);
+  assert(schema.required.includes('source_course_id'));
+  assert(schema.required.includes('source_scope'));
+  assertEquals([...schema.required].sort(), Object.keys(schema.properties).sort());
+  assertEquals(schema.properties.source_course_id.type, ['string', 'null']);
+  assertEquals(schema.properties.source_scope.enum, ['all', 'course_unplaced', null]);
+  assert(COURSE_MAP_READ_FNS.has('concept_review_source_walk'));
+  assert(COURSE_MAP_READ_FNS.has('concept_review_walk'));
+  const rules = thinkInstructions({
+    identity: [], principles: [], decisions: [], today: '2026-10-30',
+    limits: { identityChars: 100, principleChars: 100, decisionChars: 100 },
+    courseMapReady: true, conceptReviewReady: true, conceptReviewJobsReady: true, conceptReviewBatchReady: true,
+  });
+  assert(rules.includes('get_course_maps'));
+  assert(rules.includes('school_level'));
+  assert(rules.includes('course_key'));
+  assert(rules.includes('list_concepts_for_review(walk_id)'));
+  assert(rules.includes('다른 대화'));
+  assert(rules.includes('단순 이어가기'));
+  assert(rules.includes('course_unplaced'));
+  assert(rules.includes('98'));
+});
+
+Deno.test('검토 목록: 출처 조건은 전용 RPC만 쓰고, 이어 읽기·빈 조건은 기존 RPC, 섞이거나 반쪽이면 호출하지 않는다', async () => {
+  const store = new MemoryThinkStore();
+  const sourceFilter = { source_course_id: COURSE, source_scope: 'all', course_key: 'M1-1', course_name: '1-1' };
+  store.courseMapData.set('concept_review_source_walk', walk([brief(C1)], {
+    filter: sourceFilter, total: 1, created_after: 3,
+  }));
+  const made = parse(await call(store, REVIEW_LIST_TOOL_NAME, {
+    ...LIST_ARGS, source_course_id: COURSE, source_scope: 'course_unplaced',
+  }));
+  assertEquals(store.courseMapReads.map((c) => c.fn), ['concept_review_source_walk']);
+  assertEquals(store.courseMapReads[0].args, {
+    p_source_course_id: COURSE, p_source_scope: 'course_unplaced', p_offset: 0, p_limit: 40,
+  });
+  assert(made.note.includes('개념 전체 수'));
+  assertEquals(made.filter, sourceFilter);
+
+  store.courseMapReads.length = 0;
+  store.courseMapData.set('concept_review_walk', walk([brief(C1)]));
+  await call(store, REVIEW_LIST_TOOL_NAME, {
+    ...LIST_ARGS, walk_id: WALK, source_course_id: COURSE, source_scope: 'nope', folder_id: FOLDER, offset: 4,
+  });
+  assertEquals(store.courseMapReads.map((c) => c.fn), ['concept_review_walk']);
+  assertEquals(store.courseMapReads[0].args, { p_walk_id: WALK, p_filter: null, p_offset: 4, p_limit: 40 });
+
+  store.courseMapReads.length = 0;
+  await call(store, REVIEW_LIST_TOOL_NAME, { ...LIST_ARGS, source_course_id: null, source_scope: null });
+  assertEquals(store.courseMapReads.map((c) => c.fn), ['concept_review_walk']);
+  assertEquals(store.courseMapReads[0].args.p_walk_id, null);
+
+  const before = store.courseMapReads.length;
+  const mixed = parse(await call(store, REVIEW_LIST_TOOL_NAME, {
+    ...LIST_ARGS, source_course_id: COURSE, source_scope: 'all', folder_id: FOLDER,
+  }));
+  assertEquals(mixed.error, 'concept_review_source_mixed');
+  const half = parse(await call(store, REVIEW_LIST_TOOL_NAME, { ...LIST_ARGS, source_course_id: COURSE, source_scope: null }));
+  assertEquals(half.error, 'concept_review_source_incomplete');
+  const badScope = parse(await call(store, REVIEW_LIST_TOOL_NAME, { ...LIST_ARGS, source_course_id: COURSE, source_scope: 'unplaced' }));
+  assertEquals(badScope.error, 'concept_review_bad_source_scope');
+  const badId = parse(await call(store, REVIEW_LIST_TOOL_NAME, { ...LIST_ARGS, source_course_id: 'not-a-uuid', source_scope: 'all' }));
+  assertEquals(badId.error, 'invalid_id');
+  assertEquals(store.courseMapReads.length, before, '거절한 조합은 RPC를 부르지 않는다');
+
+  store.courseMapReads.length = 0;
+  store.courseMapReadError = 'concept_review_empty_course_key';
+  const failed = parse(await call(store, REVIEW_LIST_TOOL_NAME, {
+    ...LIST_ARGS, source_course_id: COURSE, source_scope: 'all',
+  }));
+  assertEquals(failed.error, 'concept_review_empty_course_key');
+  assertEquals(store.courseMapReads.map((c) => c.fn), ['concept_review_source_walk']);
+  store.courseMapReadError = 'connection reset';
+  store.courseMapReads.length = 0;
+  assertEquals(parse(await call(store, REVIEW_LIST_TOOL_NAME, {
+    ...LIST_ARGS, source_course_id: COURSE, source_scope: 'all',
+  })).error, 'lookup_failed');
+  assertEquals(store.courseMapReads.map((c) => c.fn), ['concept_review_source_walk'], '실패가 기존 목록 생성으로 넘어가지 않는다');
+});
+
+Deno.test('서버 허용 목록: 출처 전용 RPC는 호출되고, 목록에 없는 함수는 호출되지 않는다', async () => {
+  const calls: [string, Record<string, unknown>][] = [];
+  const db = {
+    from: () => {
+      throw new Error('표를 직접 읽지 않는다');
+    },
+    rpc: (fn: string, args: Record<string, unknown>) => {
+      calls.push([fn, args]);
+      return Promise.resolve({ data: { walk_id: WALK, total: 1 }, error: null });
+    },
+    storage: { from: () => null },
+  } as unknown as SupabaseLike;
+  const live = new SupabaseThinkStore(db);
+  const data = await live.courseMapRead('concept_review_source_walk', {
+    p_source_course_id: COURSE, p_source_scope: 'all', p_offset: 0, p_limit: 40,
+  });
+  assertEquals(data, { walk_id: WALK, total: 1 });
+  assertEquals(calls, [[
+    'concept_review_source_walk',
+    { p_source_course_id: COURSE, p_source_scope: 'all', p_offset: 0, p_limit: 40 },
+  ]]);
+  let message = '';
+  try {
+    await live.courseMapRead('concept_review_walk_everything' as 'concept_review_walk', {});
+  } catch (e) {
+    message = e instanceof Error ? e.message : String(e);
+  }
+  assert(message.includes('not allowed'));
+  assertEquals(calls.length, 1);
 });
 
 Deno.test('검토 상태: id를 검사해 그대로 넘기고, 길면 결과·판만 보내며 그렇게 알린다', async () => {

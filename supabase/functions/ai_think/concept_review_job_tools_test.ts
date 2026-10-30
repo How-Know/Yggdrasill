@@ -7,6 +7,7 @@ import {
   JOB_SAVE_TOOL_NAME,
   JOB_SUBMIT_TOOL_NAME,
   REVIEW_CARDS_PER_REQUEST,
+  REVIEW_JOB_TOOLS,
   REVIEW_JOB_TOOL_NAMES,
 } from './concept_review_job_tools.ts';
 import { computeFeatures } from './features.ts';
@@ -55,18 +56,35 @@ Deno.test('검수 작업 도구는 검토 기능과 작업 기능이 모두 준�
     limits: { identityChars: 1000, principleChars: 1000, decisionChars: 1000 },
     courseMapReady: true, conceptReviewReady: true,
   };
-  const jobRules = thinkInstructions({ ...base, conceptReviewJobsReady: true });
+  const jobRules = thinkInstructions({ ...base, conceptReviewJobsReady: true, conceptReviewBatchReady: true });
   assert(jobRules.includes('## 개념 검수 작업'));
   assert(jobRules.includes('progress_freshness'));
+  assert(jobRules.includes('list_concepts_for_review(walk_id)'));
+  assert(jobRules.includes('기대 총수'));
+  assert(jobRules.includes('start_concept_review_job과 run_concept_review_batch를 부르지 않는다'));
+  assert(jobRules.includes('다른 대화'));
+  assert(jobRules.includes('단순 이어가기'));
+  const findTool = REVIEW_JOB_TOOLS.find((t) => t.name === JOB_FIND_TOOL_NAME)!;
+  assert(findTool.description.includes('course_unplaced'));
+  assert(findTool.description.includes('기대 총수'));
   assert(!thinkInstructions(base).includes('## 개념 검수 작업'));
 });
 
 Deno.test('작업 찾기: 여러 개면 고르지 말라고, 없으면 새 목록을 만들지 말라고 알린다', async () => {
   const store = new MemoryThinkStore();
   store.reviewJobData.set('concept_review_jobs_find', { jobs: [{ job_id: JOB }, { job_id: C1 }], walks: [] });
-  assert(parse(await call(store, JOB_FIND_TOOL_NAME, {}, ctx())).note.includes('고르지 말고'));
+  const many = parse(await call(store, JOB_FIND_TOOL_NAME, {}, ctx()));
+  assert(many.note.includes('고르지 말고'));
+  assert(many.note.includes('다른 대화'));
   store.reviewJobData.set('concept_review_jobs_find', { jobs: [], walks: [] });
-  assert(parse(await call(store, JOB_FIND_TOOL_NAME, {}, ctx())).note.includes('새 목록을 만들지 말고'));
+  const none = parse(await call(store, JOB_FIND_TOOL_NAME, {}, ctx()));
+  assert(none.note.includes('새 목록을 만들지 말고'));
+  assert(none.note.includes('단순 이어가기'));
+  store.reviewJobData.set('concept_review_jobs_find', { jobs: [{ job_id: JOB }], walks: [] });
+  const one = parse(await call(store, JOB_FIND_TOOL_NAME, {}, ctx()));
+  assert(one.note.includes('list_concepts_for_review(walk_id)'));
+  assert(one.note.includes('source_scope'));
+  assert(one.note.includes('start_concept_review_job과 run_concept_review_batch를 부르지 않는다'));
   store.reviewJobErrors.set('concept_review_jobs_find', 'concept_review_forbidden');
   assertEquals(parse(await call(store, JOB_FIND_TOOL_NAME, {}, ctx())).error, 'concept_review_forbidden');
 });

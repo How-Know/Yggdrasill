@@ -246,3 +246,135 @@ test('자동 이어하기 관문은 기본 꺼짐이고, 켜도 한도와 연속
   const j = await t.one(`select status, pause_reason from concept_review_jobs where id = $1::uuid`, [job]);
   assert.deepEqual([j.status, j.pause_reason], ['paused', 'no_progress']);
 });
+
+const targets = (job, gen, n = 50) => r(`select concept_review_job_targets($1::uuid, $2::bigint, $3) as r`, [job, gen, n]);
+const stateOf = async (id) =>
+  (await t.one(`select concept_review_job_concept_state($1::uuid, concept_review_pending_concepts()) as r`, [id])).r;
+const PROPOSE = `select * from course_think_action_propose($1::uuid, 'concept_review_record', $2::jsonb)`;
+const proposeReview = (items) => op(PROPOSE, [convA, JSON.stringify({ items, reason: '출처 검수 기록' })]);
+const reviewItem = async (concept, scope, over = {}) => ({
+  concept_id: concept,
+  revision: await revision(concept),
+  scope,
+  outcome: 'no_issue_found',
+  checked: `${scope} 확인`,
+  findings: '이번에 본 범위에서 문제를 찾지 못함',
+  basis: '본문 전체를 읽음',
+  unverified: null,
+  follow_up: null,
+  compared_ids: [],
+  to_compare_ids: [],
+  ...over,
+});
+const foundationFields = {
+  checked: '필요한 초등 기초 개념을 검색해 본문과 비교',
+  findings: '추가할 기초 개념 없음',
+  basis: '대상 본문을 읽음',
+  detail: { needs: [{ name: '약수', why: '정의에 쓰임', terms: ['약수'], candidates: [], decision: 'reuse', reuse_id: null }], not_seen: null },
+};
+const placementFields = {
+  checked: '출처와 지금 배치를 대조',
+  findings: '배치 유지',
+  basis: '출처 메타데이터. 교재 원본 쪽은 보지 않음',
+  detail: { basis_kind: 'source', viewed_original: false },
+};
+const jobSnap = async (jobId) => (await t.one(
+  `select jsonb_build_object(
+     'id', j.id, 'walk_id', j.walk_id, 'title', j.title, 'status', j.status,
+     'total', j.total, 'checkpoint', j.checkpoint, 'served_through', j.served_through,
+     'items', (
+       select coalesce(jsonb_agg(jsonb_build_object(
+         'pos', i.pos, 'concept_id', i.concept_id, 'state', i.state, 'revision', i.revision
+       ) order by i.pos), '[]'::jsonb)
+         from concept_review_job_items i where i.job_id = j.id
+     ),
+     'reviews', (
+       select coalesce(jsonb_agg(jsonb_build_object(
+         'id', q.id, 'concept_id', q.concept_id, 'scope', q.scope, 'outcome', q.outcome, 'findings', q.findings
+       ) order by q.created_at, q.id), '[]'::jsonb)
+         from concept_quality_reviews q
+        where exists (
+          select 1
+            from concept_review_walks w
+            cross join lateral unnest(w.concept_ids) as u(cid)
+           where w.id = j.walk_id and u.cid = q.concept_id
+        )
+     ),
+     'concept_ids', (select to_jsonb(w.concept_ids) from concept_review_walks w where w.id = j.walk_id)
+   ) as s
+     from concept_review_jobs j where j.id = $1::uuid`,
+  [jobId],
+)).s;
+
+test('기존 폴더 목록의 검토 범위 허용은 그대로다', async () => {
+  const F = await folder(`범위 ${randomUUID().slice(0, 6)}`);
+  const c = await insertConcept(t, `범위 개념 ${randomUUID().slice(0, 6)}`, F);
+  const ok = await walk({ folder_id: F, review: 'unreviewed', review_scope: 'notation' });
+  assert.deepEqual(ok.items.map((i) => i.id), [c]);
+  assert.equal(ok.filter.review_scope, 'notation');
+  await opRejects(`select concept_review_walk(null, $1::jsonb, 0, 40)`, [JSON.stringify({ review_scope: 'all' })], /concept_review_bad_filter/);
+  await opRejects(`select concept_review_walk(null, $1::jsonb, 0, 40)`, [JSON.stringify({ review_scope: 'foundation' })], /concept_review_bad_filter/);
+});
+
+test('출처 목록으로 새 작업을 열어도 기존 작업·승인 행은 그대로고, 묶음은 재사용·부족한 범위·지워진 개념을 가른다', async () => {
+  const { ids, walkId } = await setup([`기존작업 ${randomUUID().slice(0, 6)}`]);
+  const opened = await start(walkId, '기존 폴더 검수');
+  const oldJob = opened.job_id;
+  const g0 = await claim(oldJob, 'keep-old');
+  await next(oldJob, g0, 1);
+  await save(oldJob, g0, [await drafted(1, ids[0])]);
+  const sub = await submit(oldJob, g0);
+  assert.equal((await apply(sub.action.id)).status, 'applied');
+  const before = await jobSnap(oldJob);
+
+  const tag = randomUUID().slice(0, 8);
+  const F = await folder(`출처작업 ${tag}`);
+  const geo = (await r(`select course_maps_list() as r`)).find((c) => c.name === '기하');
+  const done = await insertConcept(t, `완료 ${tag}`, F);
+  const partial = await insertConcept(t, `일부 ${tag}`, F);
+  const gone = await insertConcept(t, `삭제 ${tag}`, F);
+  await t.exec(`update concepts set sort_order = 0 where id = '${done}'`);
+  await t.exec(`update concepts set sort_order = 1 where id = '${partial}'`);
+  await t.exec(`update concepts set sort_order = 2 where id = '${gone}'`);
+  for (const id of [done, partial, gone]) {
+    await t.exec(
+      `insert into concept_sources (concept_id, academy_id, book_id, grade_label, raw_page)
+       values ('${id}', '${S.academy}', '${S.book}', '기하', 12)`,
+    );
+  }
+  const four = [
+    await reviewItem(done, 'notation'),
+    await reviewItem(done, 'meaning'),
+    await reviewItem(done, 'foundation', foundationFields),
+    await reviewItem(done, 'placement', placementFields),
+  ];
+  await apply((await proposeReview(four)).id);
+  await apply((await proposeReview([await reviewItem(partial, 'notation')])).id);
+  assert.equal((await stateOf(done)).state, 'complete');
+  assert.equal((await stateOf(partial)).state, 'todo');
+  assert.deepEqual((await stateOf(partial)).todo, ['meaning', 'foundation', 'placement']);
+
+  const listed = await r(`select concept_review_source_walk($1::uuid, 'all', 0, 60) as r`, [geo.id]);
+  assert.deepEqual(listed.items.map((i) => i.id), [done, partial, gone]);
+  assert.equal(listed.filter.source_scope, 'all');
+  assert.equal(listed.filter.course_key, 'H-geometry');
+  await t.exec(`delete from concept_sources where concept_id = '${gone}'`);
+  await op(`select concept_delete($1::uuid) as r`, [gone]);
+  assert.equal((await stateOf(gone)).state, 'missing');
+
+  const started = await start(listed.walk_id, '기하 출처 검수');
+  assert.equal(started.existing, false);
+  assert.notEqual(started.job_id, oldJob);
+  const row = await t.one(`select walk_id, total from concept_review_jobs where id = $1::uuid`, [started.job_id]);
+  assert.equal(row.walk_id, listed.walk_id);
+  assert.equal(row.total, 3, '지운 개념도 고정한 총수에 남는다');
+  const g = await claim(started.job_id, 'source-run');
+  const batch = await targets(started.job_id, g, 50);
+  assert.equal(batch.auto_saved.reused, 1);
+  assert.equal(batch.auto_saved.missing, 1);
+  assert.equal(batch.batch.length, 1);
+  assert.equal(batch.batch[0].supplement, false);
+  assert.equal(batch.batch[0].concept_id, partial);
+  assert.deepEqual(batch.batch[0].todo, ['meaning', 'foundation', 'placement']);
+  assert.deepEqual(await jobSnap(oldJob), before, '기존 작업·항목·승인 기록·목록 id는 바꾸지 않는다');
+});

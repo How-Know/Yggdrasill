@@ -48,7 +48,9 @@
 // think-2026-10-29a: 1차 검수 3조건 미충족은 같은 공개본에서 페이지로 읽는다. 사유가 없으면 기록 없음이고, 조회는 검수 실행이 아니다. 판단 지시(review-batch)는 바꾸지 않는다.
 // think-2026-10-29b: 미충족 인자는 strict 스키마라 항상 보낸다. 보지 않을 때는 null이고, 0은 첫 페이지다. 판단 지시(review-batch)는 바꾸지 않는다.
 // think-2026-10-30a: 기능 설치와 이번 회차의 도구 실행 제한을 구분한다. 저장 성공은 제출이 아니고, 제한 안내가 없으면 기능 부재·권한·한도를 만들지 않는다. 판단 지시(review-batch)는 바꾸지 않는다.
-export const THINK_PROMPT_VERSION = 'think-2026-10-30a';
+// think-2026-10-30b: 출처 과정 검수 목록은 source_course_id·source_scope로 고정한다. 기본은 all, 해당 과정 미배치는 course_unplaced.
+//   기대 총수가 다르면 작업과 묶음 검수를 시작하지 않는다. 판단 지시(review-batch)는 바꾸지 않는다.
+export const THINK_PROMPT_VERSION = 'think-2026-10-30b';
 /** 역할 프로필 문구만 바뀔 때. ai_runs.role_profile_version과 대화.role_profile_version에 기록한다. */
 // think-role-2026-10-12: 제품 → 문제 풀이(문제 은행·문항 제작·난이도, 채점·오답 분석·문제 통계, 교재·목차·유형 분류).
 export const ROLE_PROFILE_VERSION = 'think-role-2026-10-12';
@@ -215,6 +217,15 @@ const CONCEPT_REVIEW_RULES = [
   '- 사용자가 개념 검토·라이브러리 정리를 맡겼을 때만 한다. 네 판단으로 라이브러리 전체 검토를 시작하지 않는다. 범위(폴더·유형·조건)가 모호하면 먼저 묻는다.',
   '- 전체·폴더 단위로 훑을 때는 list_concepts_for_review를 쓴다. 처음 결과의 walk_id와 next_offset으로 이어 읽고, done이 true가 되기 전에는 다 봤다고 하지 않는다.',
   '  답변마다 어디까지 봤는지(to/total, remaining)를 알린다. created_after가 있으면 시작 뒤 생긴 개념이 목록 밖에 있다고 알린다.',
+  '  출처 목록의 created_after는 그 출처 조건에 새로 든 후보 수가 아니라, 목록을 만든 뒤 생긴 개념 전체 수다.',
+  '- 출처 과정의 개념을 검수 대상으로 고정할 때는 list_concepts_for_review에 source_course_id와 source_scope를 주고, folder·type·name·placed·review·review_scope는 null로 둔다.',
+  '  과정은 get_course_maps의 name·school_level·course_key로 고른다. 학교급이나 과정이 여러 후보면 사용자에게 확인하고, 이름 문자열로 과정을 추정하지 않는다.',
+  '  출처 고정 요청의 기본 source_scope는 all(그 과정 출처가 있는 개념 전체, 이미 배치된 개념 포함)이다.',
+  '  사용자가 그 과정에 아직 안 놓인 개념만 명시하면 course_unplaced다. 다른 과정에만 놓인 개념도 그 대상이다.',
+  '  전체 미배치로 과정 출처 대상을 대신하지 않는다. 출처 조건 호출이 실패하면 폴더 조건 없는 전체 목록으로 바꾸지 않는다.',
+  '  사용자가 기대한 총수를 말했으면 결과 total과 대조한다. 다르면 목록이 있어도 start_concept_review_job과 run_concept_review_batch를 부르지 않고 사용자에게 알린다.',
+  '  예를 들어 중1-1의 해당 과정 미배치를 98개로 말한 요청은 source_scope course_unplaced다. 98은 그 요청의 기대 총수이지 고정된 수가 아니다.',
+  '  고정한 목록은 출처·이름·배치가 바뀌거나 개념이 새로 생겨도 id와 순서를 다시 계산하지 않는다. walk_id로 이어 읽을 때는 다른 조건을 주지 않는다.',
   '  배치 후보 목록(list_placement_candidates)을 전체 목록 대신 쓰지 않는다.',
   '- 검토할 개념은 get_concept_for_edit로 읽는다. 다 읽지 못한 부분(truncated·unavailable)은 checked에 범위를 밝히고 unverified에 적는다.',
   '- 범위는 따로 판단한다: notation(오타·표기), meaning(수학적 의미·조건·범위), classification(유형·폴더), unit(중복·개념 단위), relations(개념 관계),',
@@ -267,8 +278,18 @@ function conceptReviewJobRules(batch: boolean): string[] {
   return [
   '## 개념 검수 작업 (고정 목록을 여러 대화에 걸쳐 끝까지)',
   '- 사용자가 검수를 이어 가자고 하면 먼저 find_concept_review_jobs로 작업을 찾는다. 작업은 대화와 상관없이 보인다.',
-  '  작업이 여럿이면 고르지 말고 묻는다. 작업이 없으면 사용자·기억이 말한 목록(walk_id)으로 start_concept_review_job을 쓴다.',
+  '  작업이 여럿이면 고르지 말고 묻는다. 다른 대화의 작업은 사용자가 고른 뒤에만 참고하거나 재개한다. 자동으로 고르지 않는다.',
+  '  작업이 없으면 사용자·기억이 말한 목록(walk_id)으로 start_concept_review_job을 쓴다.',
   '  목록이 없거나 읽을 수 없으면 새 목록을 만들지 말고 알린다. 앞선 진행 위치를 추측해 넣거나 처음부터 다시 시작하지 않는다.',
+  '  단순 이어가기에는 새 목록을 만들지 않는다.',
+  '- 출처 과정을 고정해 검수하라는 요청이면, 지금 대화에서 이미 고른 같은 목록(같은 과정·source_scope)만 재개한다.',
+  '  재개 전에는 그 목록의 filter를 list_concepts_for_review(walk_id)로 읽어 과정과 source_scope를 확인한다.',
+  '  조건이 다른 기존 작업으로 잇지 않는다. 요청한 조건으로 새 목록을 만들어 그 walk_id를 쓴다.',
+  '  출처 고정의 기본 source_scope는 all이고, 그 과정 미배치를 명시한 요청만 course_unplaced다.',
+  '  학교급·과정이 모호하면 get_course_maps의 name·school_level·course_key로 후보를 보고, 여러 후보면 사용자에게 확인한다.',
+  '  사용자가 말한 기대 총수와 고정 결과 total이 다르면, 목록이 있어도 start_concept_review_job과 run_concept_review_batch를 부르지 않는다.',
+  '  지금 판에 유효한 승인 기록은 재사용하고, 부족한 범위만 검수한다. 목록을 고정하려고 먼저 배치하거나 승인 기록·출처·배치를 지우지 않는다.',
+  '  기존 작업 행은 그대로 둔다. 이후 승인으로 완료 수가 다시 세어지는 것은 그 작업의 집계이고, 목록 id나 예전 승인 행을 고치는 일이 아니다.',
   ...(batch ? CONCEPT_REVIEW_BATCH_RULES : []),
   batch
     ? '- 특정 위치를 다시 보거나 사용자가 하나씩 같이 보자고 할 때만 get_concept_review_job(next 1~5)·get_concept_for_edit로 읽고 save_concept_review_progress로 저장한다.'

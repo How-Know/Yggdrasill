@@ -85,6 +85,7 @@ export type CourseMapReadFn =
   | 'concept_placement_candidates'
   | 'concept_think_detail'
   | 'concept_review_walk'
+  | 'concept_review_source_walk'
   | 'concept_review_status'
   | 'concept_relation_list';
 
@@ -217,13 +218,18 @@ export const COURSE_MAP_TOOLS: AiFunctionTool[] = [
   {
     name: REVIEW_LIST_TOOL_NAME,
     description:
-      '개념 라이브러리를 정해진 순서(폴더 경로 › 순서 › 이름)로 끝까지 훑는 목록을 읽는다. 본문 전체는 싣지 않는다. ' +
-      '새로 시작할 때는 walk_id를 null로 두고 조건을 준다: 그때 조건에 맞는 개념 id를 모두 고정하고 walk_id를 준다. ' +
-      '이어 읽을 때는 같은 walk_id와 next_offset만 준다(조건 칸은 무시한다). 도중에 이름·폴더·검토 상태가 바뀌어도 목록은 그대로라 빠지거나 겹치지 않는다. ' +
-      '시작 뒤 생긴 개념은 목록에 없고 created_after 개수로만 알린다. 그사이 지워진 개념은 missing으로 보인다. ' +
+      '개념 라이브러리를 정해진 순서로 끝까지 훑는 목록을 읽는다. 본문 전체는 싣지 않는다. ' +
+      '새로 시작할 때는 walk_id를 null로 둔다. source_course_id와 source_scope가 둘 다 null이면 폴더·유형·이름·배치·검토 조건으로 고정한다. ' +
+      '둘 다 주면 그 과정 출처로 고정한다. source_scope all은 그 과정 출처가 있는 개념 전체(이미 배치된 개념 포함)이고, ' +
+      'course_unplaced는 그 과정에는 아직 안 놓인 개념만이다(다른 과정에만 놓인 개념은 포함한다). 전체 미배치로 대신하지 않는다. ' +
+      '출처 조건은 folder·type·name·placed·review·review_scope와 섞지 않는다. 둘 중 하나만 주면 목록을 만들지 않는다. ' +
+      '이어 읽을 때는 같은 walk_id와 next_offset만 준다(출처·폴더 등 다른 조건은 무시한다). ' +
+      '고정한 뒤에는 출처·이름·배치가 바뀌거나 개념이 새로 생겨도 id와 순서를 다시 계산하지 않는다. ' +
+      '시작 뒤 생긴 개념은 목록에 없고 created_after 개수로만 알린다. 이 수는 출처 조건의 신규 후보 수가 아니라 그 시각 이후 생긴 개념 전체 수다. ' +
+      '그사이 지워진 개념은 missing으로 보인다. ' +
       '줄마다 id·이름·유형·폴더·본문 앞 120자(excerpt)와 글자 수(chars)·서술·출처·관계·배치 수·같은 이름 개념 수(same_name)·' +
       '열린 같은 개념 검토 수·판(revision)·범위별 검토 상태(review: 기록 있는 범위만, stale이면 내용이 바뀌어 다시 검토 필요)가 있다. ' +
-      '배치 후보 목록과 달리 배치된 개념과 안 된 개념이 모두 든다.',
+      '배치 후보 목록과 달리 all 목록에는 배치된 개념과 안 된 개념이 모두 든다. 결과 filter에 과정과 source_scope가 남는다.',
     parameters: {
       type: 'object',
       properties: {
@@ -237,9 +243,14 @@ export const COURSE_MAP_TOOLS: AiFunctionTool[] = [
           'unreviewed(기록 없음)·stale(내용이 바뀌어 다시 검토 필요)·not_current(둘 중 하나)·has_issue(문제 있음·비교 필요·확인 못 함·병합 필요)·merge_needed. 전체면 null',
         ),
         review_scope: nullableEnum([...REVIEW_SCOPES], 'review 조건을 볼 범위(foundation: 초등 기초 개념, placement: 교육과정 배치). null이면 일곱 범위 중 하나라도'),
+        source_course_id: nullableString('출처로 고정할 과정 id(get_course_maps). 기존 조건 목록이면 null'),
+        source_scope: nullableEnum(
+          ['all', 'course_unplaced'],
+          'all: 그 과정 출처가 있는 개념 전체. course_unplaced: 그 과정에는 아직 안 놓인 개념(다른 과정에만 놓인 개념 포함). 기존 조건 목록이면 null',
+        ),
         offset: { type: ['integer', 'null'], description: '이어 읽을 자리(next_offset). 처음이면 null' },
       },
-      required: ['walk_id', 'folder_id', 'type', 'name', 'placed', 'review', 'review_scope', 'offset'],
+      required: ['walk_id', 'folder_id', 'type', 'name', 'placed', 'review', 'review_scope', 'source_course_id', 'source_scope', 'offset'],
       additionalProperties: false,
     },
   },
@@ -964,28 +975,75 @@ async function readConceptForEdit(name: string, args: Rec, src: CourseMapToolSou
 }
 
 const REVIEW_LIST_LIMIT = 40;
+const SOURCE_SCOPES = new Set(['all', 'course_unplaced']);
+
+function textOrNull(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  const t = v.trim();
+  return t ? t : null;
+}
+
+/** 출처 목록과 섞으면 안 되는 기존 목록 조건이 하나라도 있는지. */
+function reviewListFilterPresent(args: Rec): boolean {
+  return textOrNull(args.folder_id) != null
+    || textOrNull(args.type) != null
+    || textOrNull(args.name) != null
+    || textOrNull(args.placed) != null
+    || textOrNull(args.review) != null
+    || textOrNull(args.review_scope) != null;
+}
 
 async function readReviewList(name: string, args: Rec, src: CourseMapToolSource): Promise<ToolRunResult> {
   const walkId = args.walk_id == null ? null : uuid(args.walk_id);
   if (args.walk_id != null && !walkId) return bad(name, 'invalid_id', 'id 형식 오류', 'walk_id는 앞선 결과의 walk_id를 그대로 쓴다.');
-  const folderId = args.folder_id == null ? null : uuid(args.folder_id);
-  if (args.folder_id != null && !folderId) {
-    return bad(name, 'invalid_id', 'id 형식 오류', 'folder_id는 list_concept_categories의 id를 쓴다.');
-  }
   const offset = offsetOf(args.offset);
-  const filter = walkId ? null : {
-    folder_id: folderId,
-    type: str(args.type, 40),
-    name: str(args.name, 80),
-    placed: args.placed ?? null,
-    review: args.review ?? null,
-    review_scope: args.review_scope ?? null,
-  };
+  const courseText = textOrNull(args.source_course_id);
+  const scopeText = textOrNull(args.source_scope);
   let data: unknown;
   try {
-    data = await src.courseMapRead!('concept_review_walk', {
-      p_walk_id: walkId, p_filter: filter, p_offset: offset, p_limit: REVIEW_LIST_LIMIT,
-    });
+    if (walkId) {
+      data = await src.courseMapRead!('concept_review_walk', {
+        p_walk_id: walkId, p_filter: null, p_offset: offset, p_limit: REVIEW_LIST_LIMIT,
+      });
+    } else if (courseText || scopeText) {
+      if (reviewListFilterPresent(args)) {
+        const mixed = ERRORS.concept_review_source_mixed;
+        return bad(name, 'concept_review_source_mixed', mixed[0], mixed[1]);
+      }
+      const courseId = courseText ? uuid(courseText) : null;
+      if (courseText && !courseId) {
+        return bad(name, 'invalid_id', 'id 형식 오류', 'source_course_id는 get_course_maps의 과정 id를 쓴다.');
+      }
+      if (!courseId || !scopeText || !SOURCE_SCOPES.has(scopeText)) {
+        if (scopeText && !SOURCE_SCOPES.has(scopeText)) {
+          const badScope = ERRORS.concept_review_bad_source_scope;
+          return bad(name, 'concept_review_bad_source_scope', badScope[0], badScope[1]);
+        }
+        const incomplete = ERRORS.concept_review_source_incomplete;
+        return bad(name, 'concept_review_source_incomplete', incomplete[0], incomplete[1]);
+      }
+      data = await src.courseMapRead!('concept_review_source_walk', {
+        p_source_course_id: courseId, p_source_scope: scopeText, p_offset: offset, p_limit: REVIEW_LIST_LIMIT,
+      });
+    } else {
+      const folderId = args.folder_id == null ? null : uuid(args.folder_id);
+      if (args.folder_id != null && !folderId) {
+        return bad(name, 'invalid_id', 'id 형식 오류', 'folder_id는 list_concept_categories의 id를 쓴다.');
+      }
+      data = await src.courseMapRead!('concept_review_walk', {
+        p_walk_id: null,
+        p_filter: {
+          folder_id: folderId,
+          type: str(args.type, 40),
+          name: str(args.name, 80),
+          placed: args.placed ?? null,
+          review: args.review ?? null,
+          review_scope: args.review_scope ?? null,
+        },
+        p_offset: offset,
+        p_limit: REVIEW_LIST_LIMIT,
+      });
+    }
   } catch (e) {
     return proposeError(name, e);
   }
@@ -1032,7 +1090,12 @@ async function readReviewList(name: string, args: Rec, src: CourseMapToolSource)
     const notes: string[] = [];
     if (missing > 0) notes.push(`missing ${missing}개는 목록을 만든 뒤 지워진 개념이다.`);
     if ((count(d.created_after) ?? 0) > 0) {
-      notes.push(`목록을 시작한 뒤 생긴 개념 ${String(d.created_after)}개는 이 목록에 없다. 다 훑은 뒤 사용자에게 알리고 새 목록으로 따로 본다.`);
+      const filter = rec(d.filter);
+      const sourceList = filter.source_course_id != null || filter.source_scope != null;
+      notes.push(
+        `목록을 시작한 뒤 생긴 개념 ${String(d.created_after)}개는 이 목록에 없다. 다 훑은 뒤 사용자에게 알리고 새 목록으로 따로 본다.` +
+          (sourceList ? ' 이 수는 출처 조건에 새로 든 후보 수가 아니라, 목록을 만든 뒤 생긴 개념 전체 수다.' : ''),
+      );
     }
     if (total === 0) notes.push('조건에 맞는 개념이 없다(조회는 성공했다).');
     if (notes.length > 0) value.note = notes.join(' ');
@@ -1317,6 +1380,22 @@ const ERRORS: Record<string, [summary: string, next: string]> = {
   concept_review_walk_not_found: [
     '없는 목록',
     '목록이 30일이 지나 지워졌거나 walk_id가 틀렸다. 어디까지 봤는지 사용자에게 알리고, walk_id를 null로 새 목록을 시작한다.',
+  ],
+  concept_review_bad_source_scope: [
+    '출처 범위 오류',
+    'source_scope는 all 또는 course_unplaced만 쓴다. 출처 목록은 source_course_id와 함께 주고, 실패했다고 폴더 조건 없는 전체 목록으로 바꾸지 않는다.',
+  ],
+  concept_review_source_incomplete: [
+    '출처 조건 불완전',
+    'source_course_id와 source_scope를 둘 다 주거나 둘 다 null로 둔다. 하나만 주면 목록을 만들지 않는다.',
+  ],
+  concept_review_source_mixed: [
+    '출처 조건과 다른 조건이 섞임',
+    '출처 과정 목록은 folder_id·type·name·placed·review·review_scope와 함께 만들지 않는다. 출처만 주거나, 출처 없이 기존 조건을 쓴다.',
+  ],
+  concept_review_empty_course_key: [
+    '과정 키 없음',
+    '이 과정에는 course_key가 없다. get_course_maps에서 course_key가 있는 과정을 고른다. 목록은 만들지 않았다.',
   ],
   concept_review_bad_filter: ['조건 오류', '조건 칸 값을 도구 설명의 값으로 고친다. name은 80자 이내다.'],
   concept_review_folder_not_found: ['없는 폴더', 'folder_id는 list_concept_categories의 id만 쓴다.'],

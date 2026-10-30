@@ -2,6 +2,7 @@
 // 카드는 제안만으로 아무것도 바꾸지 않고, 운영자 승인 때 항목별로 반영된다. 붙은 것이 있는 개념은 지우지 않는다.
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { insertConcept, openConceptTestDb, seedConcepts } from '../concept_fixture.mjs';
 
 let t;
@@ -453,4 +454,133 @@ test('권한과 기능 확인', async () => {
   assert.equal(features.course_map_actions, 1);
   const rows = await opAll(`select kind from ai_actions where conversation_id = $1::uuid`, [conv]);
   assert.ok(rows.length > 0);
+});
+
+const sourceWalk = async (courseId, scope, offset = 0, limit = 60) =>
+  (await op(`select concept_review_source_walk($1::uuid, $2::text, $3::int, $4::int) as r`, [courseId, scope, offset, limit])).r;
+const sourceRejects = (courseId, scope, pattern) =>
+  opRejects(`select concept_review_source_walk($1::uuid, $2::text, 0, 40)`, [courseId, scope], pattern);
+const addSource = (conceptId, grade, page = 10) => t.exec(
+  `insert into concept_sources (concept_id, academy_id, book_id, grade_label, raw_page)
+   values ('${conceptId}', '${S.academy}', '${S.book}', '${grade}', ${page})`,
+);
+const walkCount = async () => (await t.one(`select count(*)::int as n from concept_review_walks`)).n;
+const storedIds = async (walkId) =>
+  (await t.one(`select to_jsonb(concept_ids) as ids from concept_review_walks where id = $1::uuid`, [walkId])).ids;
+
+test('출처 검수 목록: 전체는 배치된 개념을 포함하고, 미배치는 후보와 같은 집합·순서이며, 중복·다른 과정·null 정렬을 가른다', async () => {
+  const geo = await pick('기하');
+  const alg = await pick('대수');
+  const tag = randomUUID().slice(0, 8);
+  const root = (await t.one(`insert into concept_categories (name) values ($1) returning id`, [`출처고정 ${tag}`])).id;
+  const child = (await t.one(
+    `insert into concept_categories (name, parent_id) values ($1, $2::uuid) returning id`,
+    [`하위 ${tag}`, root],
+  )).id;
+  const b = await insertConcept(t, `b-동률 ${tag}`, root);
+  const c = await insertConcept(t, `c-동률 ${tag}`, root);
+  const z = await insertConcept(t, `z-앞 ${tag}`, root);
+  const nil = await insertConcept(t, `a-널 ${tag}`, root);
+  const nested = await insertConcept(t, `자식 ${tag}`, child);
+  const placedHere = await insertConcept(t, `이과정배치 ${tag}`, root);
+  const otherOnly = await insertConcept(t, `다른과정만 ${tag}`, root);
+  const bare = await insertConcept(t, `출처없음 ${tag}`, root);
+  const algebraOnly = await insertConcept(t, `대수출처 ${tag}`, root);
+  await t.exec(`update concepts set sort_order = 0 where id in ('${b}', '${c}', '${z}', '${nested}')`);
+  await t.exec(`update concepts set sort_order = 1 where id = '${placedHere}'`);
+  await t.exec(`update concepts set sort_order = 2 where id = '${otherOnly}'`);
+  await t.exec(`update concepts set sort_order = null where id = '${nil}'`);
+  for (const id of [b, c, z, nil, nested, placedHere, otherOnly]) await addSource(id, '기하');
+  // 같은 개념·책·학년·쪽은 concept_sources_statement_page_unique 에 걸린다. 쪽만 다른 두 번째 출처로 중복 제거를 본다.
+  await addSource(b, '기하', 11);
+  await addSource(algebraOnly, '대수');
+  await add(geo.S1.id, [placedHere]);
+  await add(alg.S1.id, [otherOnly]);
+
+  const all = await sourceWalk(geo.course.id, 'all');
+  const unplaced = await sourceWalk(geo.course.id, 'course_unplaced');
+  const cand = (await op(
+    `select concept_placement_candidates($1::uuid, 'course_sources', null, 0, 50) as r`,
+    [geo.course.id],
+  )).r;
+  const allIds = [b, c, z, placedHere, otherOnly, nil, nested];
+  const unplacedIds = [b, c, z, otherOnly, nil, nested];
+  assert.deepEqual(all.items.map((i) => i.id), allIds, 'sort 0 동률은 이름 순, null sort는 0으로 합치지 않고 뒤, 하위 폴더는 그다음');
+  assert.equal(all.items.filter((i) => i.id === b).length, 1, '출처가 두 개여도 id는 하나');
+  assert.deepEqual(unplaced.items.map((i) => i.id), unplacedIds);
+  assert.deepEqual(cand.items.map((i) => i.id), unplacedIds, 'course_unplaced는 course_sources 후보와 같은 집합·순서');
+  assert.equal(cand.total, unplacedIds.length);
+  assert.ok(allIds.includes(placedHere) && !unplacedIds.includes(placedHere), '이 과정에 놓인 개념은 전체에만 든다');
+  assert.ok(unplacedIds.includes(otherOnly), '다른 과정에만 놓인 개념은 미배치 대상이다');
+  assert.ok(!allIds.includes(bare) && !allIds.includes(algebraOnly));
+  assert.equal(all.filter.source_course_id, geo.course.id);
+  assert.equal(all.filter.source_scope, 'all');
+  assert.equal(all.filter.course_key, 'H-geometry');
+  assert.equal(all.filter.course_name, '기하');
+  assert.ok(all.started_at);
+  assert.equal(all.total, allIds.length);
+  assert.equal(unplaced.filter.source_scope, 'course_unplaced');
+  assert.equal(unplaced.filter.course_key, 'H-geometry');
+  assert.equal(unplaced.filter.course_name, '기하');
+
+  const frozen = await storedIds(all.walk_id);
+  await t.exec(`update concept_sources set grade_label = '대수' where concept_id = '${b}'`);
+  await t.exec(`update concepts set name = 'a-이름바꿈 ${tag}', sort_order = null where id = '${z}'`);
+  await add(geo.S1.id, [otherOnly]);
+  await t.exec(`update course_maps set name = '기하-바뀜' where id = '${geo.course.id}'`);
+  try {
+    const born = await insertConcept(t, `새로생김 ${tag}`, root);
+    const bornBare = await insertConcept(t, `새로출처없음 ${tag}`, root);
+    await addSource(born, '기하');
+    const again = (await op(`select concept_review_walk($1::uuid, null, 0, 60) as r`, [all.walk_id])).r;
+    assert.deepEqual(again.items.map((i) => i.id), allIds, '출처·이름·배치·과정 이름·신규 개념 뒤에도 저장된 순서를 다시 계산하지 않는다');
+    assert.deepEqual(await storedIds(all.walk_id), frozen);
+    assert.equal(again.filter.course_name, '기하');
+    assert.equal(again.filter.course_key, 'H-geometry');
+    assert.equal(again.created_after, 2, 'created_after는 출처 조건의 신규 후보가 아니라 그 시각 이후 생긴 개념 전체 수');
+    assert.ok(!again.items.some((i) => i.id === born || i.id === bornBare));
+
+    await t.exec(`delete from concept_sources where concept_id = '${nil}'`);
+    await op(`select concept_delete($1::uuid) as r`, [nil]);
+    const missing = (await op(`select concept_review_walk($1::uuid, null, 0, 60) as r`, [all.walk_id])).r;
+    assert.equal(missing.items.find((i) => i.id === nil).missing, true);
+    assert.deepEqual(await storedIds(all.walk_id), frozen);
+  } finally {
+    await t.exec(`update course_maps set name = '기하' where id = '${geo.course.id}'`);
+  }
+});
+
+test('출처 검수 목록: 없는 과정·빈 과정 키·잘못된 범위는 저장 전에 거절하고, 기존 폴더 검토 범위는 그대로다', async () => {
+  const geo = await pick('기하');
+  const before = await walkCount();
+  await sourceRejects(randomUUID(), 'all', /course_map_not_found/);
+  const empty = (await t.one(
+    `insert into course_maps (name, school_level, sort_order) values ('키없음과정', '고', 9000) returning id`,
+  )).id;
+  await sourceRejects(empty, 'all', /concept_review_empty_course_key/);
+  await sourceRejects(geo.course.id, 'unplaced', /concept_review_bad_source_scope/);
+  await sourceRejects(geo.course.id, null, /concept_review_bad_source_scope/);
+  assert.equal(await walkCount(), before, '거절된 호출은 목록을 남기지 않는다');
+  await t.asUser(() =>
+    t.rejects(`select concept_review_source_walk($1::uuid, 'all', 0, 40)`, [geo.course.id], /concept_review_forbidden/));
+  await t.asAnon(() =>
+    t.rejects(`select concept_review_source_walk($1::uuid, 'all', 0, 40)`, [geo.course.id], /permission denied/));
+
+  const F = (await t.one(`insert into concept_categories (name) values ($1) returning id`, [`폴더검수 ${randomUUID().slice(0, 6)}`])).id;
+  const c = await insertConcept(t, `폴더개념 ${randomUUID().slice(0, 6)}`, F);
+  const ok = (await op(`select concept_review_walk(null, $1::jsonb, 0, 60) as r`, [
+    JSON.stringify({ folder_id: F, review: 'unreviewed', review_scope: 'notation' }),
+  ])).r;
+  assert.deepEqual(ok.items.map((i) => i.id), [c]);
+  assert.equal(ok.filter.review_scope, 'notation');
+  await opRejects(
+    `select concept_review_walk(null, $1::jsonb, 0, 40)`,
+    [JSON.stringify({ review_scope: 'all' })],
+    /concept_review_bad_filter/,
+  );
+  await opRejects(
+    `select concept_review_walk(null, $1::jsonb, 0, 40)`,
+    [JSON.stringify({ review_scope: 'foundation' })],
+    /concept_review_bad_filter/,
+  );
 });

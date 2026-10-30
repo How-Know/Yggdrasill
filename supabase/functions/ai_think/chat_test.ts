@@ -395,7 +395,7 @@ Deno.test('저장 성공 뒤 제출 호출이 없으면 제출로 기록하지 �
 });
 
 Deno.test('지시문은 설치 상태와 실행 제한을 나누고, 근거 없는 기능 부재를 말하라고 하지 않는다', () => {
-  assertEquals(THINK_PROMPT_VERSION, 'think-2026-10-30a');
+  assertEquals(THINK_PROMPT_VERSION, 'think-2026-10-30b');
   const text = thinkInstructions({
     identity: [], principles: [], decisions: [], today: '2026-10-30',
     limits: { identityChars: 100, principleChars: 100, decisionChars: 100 },

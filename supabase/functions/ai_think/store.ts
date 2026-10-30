@@ -66,7 +66,7 @@ const CONCEPT_SOURCE_READ_FNS = new Set<string>(['concept_source_list', 'concept
 /** 게이트웨이가 만든 원본 쪽 이미지. 버킷 정책: 그 학원 소속 운영자만 읽기. */
 const CONCEPT_SOURCE_PAGE_BUCKET = 'concept-source-pages';
 
-const COURSE_MAP_READ_FNS = new Set<string>([
+export const COURSE_MAP_READ_FNS = new Set<string>([
   'course_maps_list',
   'concept_placement_overview',
   'course_map_get',
@@ -74,6 +74,7 @@ const COURSE_MAP_READ_FNS = new Set<string>([
   'concept_placement_candidates',
   'concept_think_detail',
   'concept_review_walk',
+  'concept_review_source_walk',
   'concept_review_status',
   'concept_relation_list',
 ]);

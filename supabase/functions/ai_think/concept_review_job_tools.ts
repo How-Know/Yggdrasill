@@ -141,7 +141,12 @@ export const REVIEW_JOB_TOOLS: AiFunctionTool[] = [
     name: JOB_FIND_TOOL_NAME,
     description:
       '이어 갈 개념 검수 작업과 최근 순회 목록을 찾는다. 아무것도 만들거나 지우지 않는다. 대화와 상관없이 모든 작업이 보인다. ' +
-      '작업이 여러 개면 고르지 말고 사용자에게 어느 작업인지 묻는다. 목록의 deleted_after는 작업이 없는 목록이 지워지는 때다.',
+      '작업이 여러 개면 고르지 말고 사용자에게 어느 작업인지 묻는다. 다른 대화의 작업은 사용자가 고른 뒤에만 참고하거나 재개한다. ' +
+      '출처 과정 고정은 기본 source_scope all이고, 그 과정에 아직 안 놓인 개념만 명시한 요청은 course_unplaced다. ' +
+      '같은 대화에서 이미 고른 동일 목록만 재개한다. 재개 전에는 list_concepts_for_review(walk_id)의 filter로 과정과 source_scope를 확인한다. ' +
+      '조건이 다른 작업에는 새 대상을 넣지 않고, 요청한 조건의 새 목록을 쓴다. 단순 이어가기에는 새 목록을 만들지 않는다. ' +
+      '사용자가 말한 기대 총수와 목록 total이 다르면 start_concept_review_job과 run_concept_review_batch를 부르지 않는다. ' +
+      '목록의 deleted_after는 작업이 없는 목록이 지워지는 때다.',
     parameters: { type: 'object', properties: {}, required: [], additionalProperties: false },
   },
   {
@@ -970,10 +975,10 @@ export async function dispatchReviewJobTool(
       }
       const jobs = Array.isArray(data.jobs) ? data.jobs : [];
       const note = jobs.length > 1
-        ? '작업이 여러 개다. 고르지 말고 사용자에게 어느 작업을 이어 갈지 묻는다.'
+        ? '작업이 여러 개다. 고르지 말고 사용자에게 어느 작업을 이어 갈지 묻는다. 다른 대화의 작업도 사용자가 고르기 전에는 재개하지 않는다. 조건이 다른 작업으로 새 대상을 넣지 않는다.'
         : jobs.length === 0
-        ? '열린 작업이 없다(조회는 성공했다). 새 목록을 만들지 말고, 이어 갈 목록이 있는지 사용자에게 묻는다.'
-        : '작업이 하나다. 사용자가 말한 작업과 같은지 확인하고 get_concept_review_job으로 이어 간다.';
+        ? '열린 작업이 없다(조회는 성공했다). 단순 이어가기면 새 목록을 만들지 말고, 이어 갈 목록이 있는지 사용자에게 묻는다. 출처 과정을 새로 고정하라는 요청이면 그 조건의 새 목록만 만든다.'
+        : '작업이 하나다. 같은 대화에서 고른 목록이면 list_concepts_for_review(walk_id)의 filter로 과정·source_scope를 확인한 뒤 같으면 재개한다. 조건이 다르면 이 작업으로 잇지 않고 요청한 조건의 새 목록을 쓴다. 기대 총수와 total이 다르면 start_concept_review_job과 run_concept_review_batch를 부르지 않는다.';
       return out(name, { ...data, note }, `작업 ${jobs.length}개`);
     }
     case JOB_START_TOOL_NAME: {
