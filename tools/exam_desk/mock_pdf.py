@@ -18,6 +18,7 @@ SUBJECT_LABEL = {
 }
 SECTION_RE = re.compile(r"\[\s*(?:선택\s*:\s*)?(확률과\s*통계|미적분|기하)\s*\]")
 PROBLEM_RE = re.compile(r"수학\s*영역\s*[\(（]\s*(확률과\s*통계|미적분|기하)\s*[\)）]")
+HEADER_RE = re.compile(r"[\(（]\s*(확률과\s*통계|미적분|기하)\s*[\)）]")
 EDU_RE = re.compile(r"(20\d{2})학년도(\d{1,2})월고([123])전국연합학력평가")
 MOCK_RE = re.compile(r"(20\d{2})학년도대학수학능력시험(\d{1,2})월모의평가")
 SAT_RE = re.compile(r"(20\d{2})학년도대학수학능력시험(?!대비)(?!\d월)")
@@ -98,6 +99,16 @@ def problem_subjects(text: str) -> list[str]:
     return _unique([_canonical(match.group(1)) for match in PROBLEM_RE.finditer(text)])
 
 
+def header_subjects(pages: list[str]) -> list[str]:
+    found = []
+    for page in pages:
+        for line in page.splitlines():
+            if "선택과목" in line or "이어서" in line:
+                continue
+            found.extend(_canonical(match.group(1)) for match in HEADER_RE.finditer(line))
+    return _unique(found)
+
+
 def classify_text(pages: list[str]) -> dict:
     text = "\n".join(pages)
     info = exam_from_text(text)
@@ -111,7 +122,7 @@ def classify_text(pages: list[str]) -> dict:
         if not subjects:
             raise ValueError("해설에서 선택 과목을 읽지 못했습니다")
     else:
-        subjects = problem_subjects(text)
+        subjects = problem_subjects(text) or header_subjects(pages[8:])
         if not subjects:
             raise ValueError("문제지에서 선택 과목을 읽지 못했습니다")
     info["kind"] = kind
@@ -223,6 +234,24 @@ def self_check() -> None:
     july = classify_text(["2025학년도 7월 고3 전국연합학력평가 문제지\n수학영역(기하)"])
     assert july["year"] == 2025 and july["month"] == 7 and july["org"] == "교육청"
     assert july["subjects"] == ["기하"]
+
+    pages = [""] * 8
+    pages.append(
+        "2026학년도 대학수학능력시험 9월 모의평가 문제지\n"
+        "◦이어서, ｢선택과목(확률과 통계)｣ 문제가 제시되오니\n"
+        "(미적분)제2교시\n"
+    )
+    pages.append("◦이어서, ｢선택과목(기하)｣ 문제가 제시되오니")
+    mock_calc = classify_text(pages)
+    assert mock_calc["year"] == 2025 and mock_calc["month"] == 9 and mock_calc["org"] == "평가원"
+    assert mock_calc["subjects"] == ["미적"]
+    assert file_name(mock_calc, "미적") == "2025 고3 9월 평가원 (미적).pdf"
+
+    sat_pages = [""] * 8
+    sat_pages.append("2026학년도 대학수학능력시험 문제지\n(기하)제2교시\n◦이어서, ｢선택과목(확률과 통계)｣")
+    sat_geo = classify_text(sat_pages)
+    assert sat_geo["year"] == 2025 and sat_geo["month"] == 11 and sat_geo["org"] == "수능"
+    assert sat_geo["subjects"] == ["기하"]
 
     grade1 = classify_text(["2024학년도 3월 고1 전국연합학력평가 문제지"])
     assert grade1["grade"] == 1 and grade1["subjects"] == [""]

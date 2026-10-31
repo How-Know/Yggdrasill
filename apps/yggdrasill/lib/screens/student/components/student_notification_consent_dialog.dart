@@ -26,6 +26,7 @@ class _StudentNotificationConsentDialogState
 
   final Set<String> _agreedStudentIds = {};
   final Set<String> _latenessAgreedStudentIds = {};
+  final Set<String> _todoSheetAgreedStudentIds = {};
   final List<DateTime> _pauseDates = [];
   String? _expandedGradeKey;
   bool _initialized = false;
@@ -251,6 +252,9 @@ class _StudentNotificationConsentDialogState
       if (s.basicInfo.notificationConsent) {
         _agreedStudentIds.add(s.student.id);
       }
+      if (s.basicInfo.todoSheetAlimtalkConsent) {
+        _todoSheetAgreedStudentIds.add(s.student.id);
+      }
     }
   }
 
@@ -327,6 +331,32 @@ class _StudentNotificationConsentDialogState
     }
   }
 
+  Future<void> _toggleTodoSheetConsent(
+      StudentWithInfo info, bool value) async {
+    setState(() {
+      if (value) {
+        _todoSheetAgreedStudentIds.add(info.student.id);
+      } else {
+        _todoSheetAgreedStudentIds.remove(info.student.id);
+      }
+    });
+    final updated =
+        info.basicInfo.copyWith(todoSheetAlimtalkConsent: value);
+    try {
+      await DataManager.instance
+          .updateStudentBasicInfo(info.student.id, updated);
+    } catch (_) {
+      setState(() {
+        if (value) {
+          _todoSheetAgreedStudentIds.remove(info.student.id);
+        } else {
+          _todoSheetAgreedStudentIds.add(info.student.id);
+        }
+      });
+      _showSnack('알림장 동의 저장에 실패했습니다.');
+    }
+  }
+
   Future<void> _toggleGradeAll(
       List<StudentWithInfo> students, bool value) async {
     setState(() {
@@ -382,7 +412,7 @@ class _StudentNotificationConsentDialogState
         backgroundColor: kDlgBg,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 640),
+          constraints: const BoxConstraints(maxWidth: 760),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -598,6 +628,9 @@ class _StudentNotificationConsentDialogState
         students.every((s) => _agreedStudentIds.contains(s.student.id));
     final allLatenessAgreed = students.isNotEmpty &&
         students.every((s) => _latenessAgreedStudentIds.contains(s.student.id));
+    final allTodoSheetAgreed = students.isNotEmpty &&
+        students.every(
+            (s) => _todoSheetAgreedStudentIds.contains(s.student.id));
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Column(
@@ -642,6 +675,17 @@ class _StudentNotificationConsentDialogState
                       value: allLatenessAgreed,
                       onChanged: (_) =>
                           _toggleGradeAllLateness(students, !allLatenessAgreed),
+                    ),
+                    const SizedBox(width: 8),
+                    _buildHeaderCheckbox(
+                      label: '알림장',
+                      value: allTodoSheetAgreed,
+                      onChanged: (_) async {
+                        final next = !allTodoSheetAgreed;
+                        for (final student in students) {
+                          await _toggleTodoSheetConsent(student, next);
+                        }
+                      },
                     ),
                     const SizedBox(width: 6),
                     Icon(
@@ -716,6 +760,7 @@ class _StudentNotificationConsentDialogState
         (info.basicInfo.parentPhoneNumber ?? '').trim().isNotEmpty;
     final agreed = _agreedStudentIds.contains(student.id);
     final latenessAgreed = _latenessAgreedStudentIds.contains(student.id);
+    final todoSheetAgreed = _todoSheetAgreedStudentIds.contains(student.id);
 
     return SizedBox(
       height: _allStudentsListRowHeight,
@@ -786,6 +831,13 @@ class _StudentNotificationConsentDialogState
               value: latenessAgreed,
               onChanged: (value) =>
                   _toggleLatenessConsent(info, value ?? false),
+            ),
+            const SizedBox(width: 6),
+            _buildStudentCheckbox(
+              label: '알림장',
+              value: todoSheetAgreed,
+              onChanged: (value) =>
+                  _toggleTodoSheetConsent(info, value ?? false),
             ),
           ],
         ),

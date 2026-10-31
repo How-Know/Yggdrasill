@@ -232,11 +232,14 @@ Deno.test('검토 목록 스키마: 출처 과정과 범위는 nullable이고 re
   };
   assertEquals(schema.additionalProperties, false);
   assert(schema.required.includes('source_course_id'));
+  assert(schema.required.includes('source_book_id'));
   assert(schema.required.includes('source_scope'));
   assertEquals([...schema.required].sort(), Object.keys(schema.properties).sort());
   assertEquals(schema.properties.source_course_id.type, ['string', 'null']);
+  assertEquals(schema.properties.source_book_id.type, ['string', 'null']);
   assertEquals(schema.properties.source_scope.enum, ['all', 'course_unplaced', null]);
   assert(COURSE_MAP_READ_FNS.has('concept_review_source_walk'));
+  assert(COURSE_MAP_READ_FNS.has('concept_review_book_walk'));
   assert(COURSE_MAP_READ_FNS.has('concept_review_walk'));
   const rules = thinkInstructions({
     identity: [], principles: [], decisions: [], today: '2026-10-30',
@@ -308,6 +311,28 @@ Deno.test('검토 목록: 출처 조건은 전용 RPC만 쓰고, 이어 읽기·
     ...LIST_ARGS, source_course_id: COURSE, source_scope: 'all',
   })).error, 'lookup_failed');
   assertEquals(store.courseMapReads.map((c) => c.fn), ['concept_review_source_walk'], '실패가 기존 목록 생성으로 넘어가지 않는다');
+
+  store.courseMapReadError = null;
+  store.courseMapReads.length = 0;
+  const bookFilter = { source_book_id: COURSE, book_name: '개념원리 중1-1', source_scope: 'all' };
+  store.courseMapData.set('concept_review_book_walk', walk([brief(C1)], {
+    filter: bookFilter, total: 1, created_after: 2,
+  }));
+  const bookMade = parse(await call(store, REVIEW_LIST_TOOL_NAME, {
+    ...LIST_ARGS, source_book_id: COURSE, source_scope: null,
+  }));
+  assertEquals(store.courseMapReads.map((c) => c.fn), ['concept_review_book_walk']);
+  assertEquals(store.courseMapReads[0].args, {
+    p_source_book_id: COURSE, p_source_scope: 'all', p_offset: 0, p_limit: 40,
+  });
+  assertEquals(bookMade.filter, bookFilter);
+  assert(bookMade.note.includes('개념 전체 수'));
+  assertEquals(parse(await call(store, REVIEW_LIST_TOOL_NAME, {
+    ...LIST_ARGS, source_book_id: COURSE, source_course_id: COURSE, source_scope: 'all',
+  })).error, 'concept_review_source_mixed');
+  assertEquals(parse(await call(store, REVIEW_LIST_TOOL_NAME, {
+    ...LIST_ARGS, source_book_id: 'not-a-uuid',
+  })).error, 'invalid_id');
 });
 
 Deno.test('서버 허용 목록: 출처 전용 RPC는 호출되고, 목록에 없는 함수는 호출되지 않는다', async () => {

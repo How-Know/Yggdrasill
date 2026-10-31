@@ -49,6 +49,19 @@ class TodoSheetSnapshotService {
     return '$result';
   }
 
+  /// 저장본의 학부모 링크 토큰. 이미 있으면 그 토큰을 다시 준다.
+  Future<String> ensureShareLink(String snapshotId) async {
+    final result = await Supabase.instance.client.rpc(
+      'staff_ensure_todo_sheet_share_link_v1',
+      params: <String, dynamic>{'p_snapshot_id': snapshotId},
+    );
+    final token = '$result'.trim();
+    if (!RegExp(r'^[0-9a-fA-F]{32,64}$').hasMatch(token)) {
+      throw StateError('알림장 링크를 만들지 못했습니다.');
+    }
+    return token;
+  }
+
   Future<List<TodoSheetSnapshotSummary>> listForStudent(
     String studentId,
   ) async {
@@ -79,5 +92,24 @@ class TodoSheetSnapshotService {
       throw StateError('알림장 스냅샷 형식이 올바르지 않습니다.');
     }
     return Map<String, dynamic>.from(payload);
+  }
+
+  /// 화면에서 이전 알림장 목록을 열 때 학생 id가 같이 필요하다.
+  Future<({String studentId, Map<String, dynamic> payload})> loadForPage(
+    String snapshotId,
+  ) async {
+    final row = await Supabase.instance.client
+        .from('student_class_session_todo_sheet_snapshots')
+        .select('student_id,payload')
+        .eq('id', snapshotId)
+        .single();
+    final payload = row['payload'];
+    if (payload is! Map) {
+      throw StateError('알림장 스냅샷 형식이 올바르지 않습니다.');
+    }
+    return (
+      studentId: '${row['student_id'] ?? ''}'.trim(),
+      payload: Map<String, dynamic>.from(payload),
+    );
   }
 }

@@ -125,6 +125,7 @@ class StudentBasicInfo {
   final String? memo;
   final List<StudentFlow> flows;
   final bool notificationConsent;
+  final bool todoSheetAlimtalkConsent;
 
   StudentBasicInfo({
     required this.studentId,
@@ -135,6 +136,7 @@ class StudentBasicInfo {
     this.memo,
     List<StudentFlow>? flows,
     this.notificationConsent = false,
+    this.todoSheetAlimtalkConsent = false,
   }) : flows = flows ?? const <StudentFlow>[];
 
   StudentBasicInfo copyWith({
@@ -146,6 +148,7 @@ class StudentBasicInfo {
     List<StudentFlow>? flows,
     bool clearGroupId = false,
     bool? notificationConsent,
+    bool? todoSheetAlimtalkConsent,
   }) {
     return StudentBasicInfo(
       studentId: studentId,
@@ -156,6 +159,8 @@ class StudentBasicInfo {
       memo: memo ?? this.memo,
       flows: flows ?? this.flows,
       notificationConsent: notificationConsent ?? this.notificationConsent,
+      todoSheetAlimtalkConsent:
+          todoSheetAlimtalkConsent ?? this.todoSheetAlimtalkConsent,
     );
   }
 
@@ -168,6 +173,8 @@ class StudentBasicInfo {
       memo: row['memo'] as String?,
       flows: StudentFlow.decodeList(row['flows']),
       notificationConsent: (row['notification_consent'] as int?) == 1,
+      todoSheetAlimtalkConsent:
+          (row['todo_sheet_alimtalk_consent'] as int?) == 1,
     );
   }
 
@@ -180,6 +187,7 @@ class StudentBasicInfo {
       'memo': memo,
       'flows': StudentFlow.encodeListToJson(flows),
       'notification_consent': notificationConsent ? 1 : 0,
+      'todo_sheet_alimtalk_consent': todoSheetAlimtalkConsent ? 1 : 0,
     };
   }
 

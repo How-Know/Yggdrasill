@@ -359,6 +359,11 @@ AI가 여러 교재를 보고 만든 글은 **수정안**까지만 되고, 운�
   - **검수와 구분**. 목록을 고정하는 것과 검수 작업을 시작하는 것은 다르다. 사용자가 말한 기대 총수와 `total`이 다르면 목록이 있어도 작업과 묶음 검수를 시작하지 않는다.
     기존 작업·승인 행은 고치지 않는다. 지금 판에 유효한 승인 기록 재사용과, 앞으로 승인될 때 완료 집계를 다시 세는 것은 별개다. 재사용은 그 개념의 기존 승인 기록을 그대로 두는 것이고,
     완료 집계 재계산은 같은 작업 행 위에서 승인 결과를 다시 세는 것이다.
+- **출처 교재 검수 목록 및 새 출처 추가 시 근거 미확인 재검토** `concept_review_book_walk(source_book_id, source_scope, offset, limit)` (마이그레이션 `20261031010000`):
+  - `concept_review_jobs_find`가 `books`(`book_id`·`book_name`·`grade_labels`·`concepts`)를 함께 돌려준다.
+  - `list_concepts_for_review`에 `source_book_id`(`resource_files.id`)와 `source_scope`(기본 `all`, 미배치만이면 `course_unplaced`)를 주면 그 교재 출처가 있는 개념을 폴더 경로·`sort_order` nulls last·이름·id 순으로 고정해 `concept_review_walks`에 저장(`filter`: `source_book_id`, `book_name`, `source_scope`)하고 `concept_review_walk(walk_id)`로 돌려준다.
+  - 표기·의미·배치의 최신 승인 기록이 외부 근거 미확인(`gap`: `detail.evidence_gaps`에 `source`·`grade_unit`·`figure` 포함)일 때, 그 기록 승인 시각 이후에 새 `concept_sources`가 추가되면 `concept_review_record_stale`가 참이 되어 한 번 다시 판단(`recheck`) 대상으로 열린다. 다시 판단해 승인된 뒤에도 여전히 외부 근거 미확인이면 새 기록의 `created_at`이 출처 생성 시각 이후이므로 다시 `gap`(`1차 충족(근거 미확인)`)으로 돌아가고 반복하지 않는다.
+  - 초안 비교 제안(`concept_draft_organize` `task: 'compare'`)은 같은 교재·같은 PDF 쪽(`book_id`·`raw_page`)에 이미 연결된 개념도 후보에 포함한다.
 - **상태** `concept_review_status(ids)`(1~20개): 범위마다 최신 기록 전부, 앞선 기록 5개 요약, 기록 수, 승인 대기 중인 카드 항목.
 - **개념 읽기**: `concept_think_detail`에 출처(300개까지, 이은 서술 id), 교육과정 등장 위치, 관계(방향·종류·상대), 같은 개념 검토(20개, 열린 것 먼저),
   판, 범위별 상태, 서술 판을 더했다.

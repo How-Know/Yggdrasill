@@ -7,6 +7,7 @@
 
 export function buildPrompt({
   textbookScope = null,
+  mockScope = null,
   expectedQuestionNumbers = null,
   expectedIndependentSetRanges = null,
 } = {}) {
@@ -279,6 +280,18 @@ export function buildPrompt({
         ...gojaengiLines,
       ]
     : [];
+  const mockLines = mockScope && typeof mockScope === 'object'
+    ? [
+        '=== 모의고사 문제지 추출 범위 ===',
+        '이 PDF 는 교육청·평가원·수능 수학 모의고사 문제지(좌우 2단)다.',
+        `페이지 범위(raw): ${mockScope.raw_page_from ?? ''}~${mockScope.raw_page_to ?? ''}. 첨부된 PDF는 이 범위만 잘라낸 사본일 수 있다.`,
+        'questions[].source_page 는 원본 PDF 의 raw page 번호로 적어라.',
+        '머리글(시험 이름·교시·"홀수형"), "5지선다형"·"단답형" 구간 이름, 쪽 번호, 저작권 문구는 stem 에 넣지 마라.',
+        '문항 끝의 배점 "[2점]" "[3점]" "[4점]" 은 stem 에서 빼고 score 에 정수로 적어라.',
+        '단답형 문항은 선택지가 없는 주관식이다.',
+        '',
+      ]
+    : [];
   const expectedLines = expectedNumbers.length > 0
     ? [
         '=== Stage 1 기준 기대 문항번호 ===',
@@ -321,6 +334,7 @@ export function buildPrompt({
     '반드시 다음 JSON 스키마만 출력합니다. 설명 문장·마크다운 금지. JSON 외 어떤 텍스트도 출력하지 마세요.',
     '',
     ...scopeLines,
+    ...mockLines,
     ...expectedLines,
     ...independentSetLines,
     '=== 출력 스키마 ===',

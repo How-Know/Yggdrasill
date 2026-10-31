@@ -188,6 +188,9 @@ class AccountButton extends StatelessWidget {
                 showDialog(
                   context: context,
                   barrierDismissible: true,
+                  barrierColor: Colors.black.withValues(
+                    alpha: BottomDialogMetrics.barrierOpacity,
+                  ),
                   builder: (ctx) => const _LoginDialog(),
                 );
               } else {
@@ -277,212 +280,262 @@ class _LoginDialogState extends State<_LoginDialog> {
   final _emailController = ImeAwareTextEditingController();
   final _passwordController = ImeAwareTextEditingController();
   bool _obscure = true;
+  bool _oauthBusy = false;
   String? _error;
+  StreamSubscription<AuthState>? _authSub;
 
   @override
   void dispose() {
+    _authSub?.cancel();
     _emailController.dispose();
     _passwordController.dispose();
     super.dispose();
   }
 
+  void _watchSignedIn() {
+    _authSub?.cancel();
+    final client = _safeClient();
+    if (client == null) return;
+    _authSub = client.auth.onAuthStateChange.listen((state) {
+      final email = state.session?.user.email ?? '';
+      if (email.isEmpty || !mounted) return;
+      Navigator.of(context).pop();
+    });
+  }
+
+  Future<void> _signInWithGoogle() async {
+    if (_oauthBusy) return;
+    try {
+      final client = _safeClient();
+      if (client == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Supabase가 초기화되지 않았습니다. 실행 시 --dart-define로 URL/KEY를 전달하세요.',
+            ),
+          ),
+        );
+        return;
+      }
+      if (!kIsWeb &&
+          (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
+        HttpServer? server;
+        try {
+          server = await HttpServer.bind(
+            InternetAddress.loopbackIPv4,
+            3000,
+            shared: true,
+          );
+        } catch (_) {
+          server = await HttpServer.bind(
+            InternetAddress.loopbackIPv4,
+            3001,
+            shared: true,
+          );
+        }
+        await client.auth.signInWithOAuth(
+          OAuthProvider.google,
+          redirectTo: 'http://localhost:${server.port}',
+          queryParams: const {'prompt': 'select_account'},
+        );
+        final req = await server.first;
+        final code = req.uri.queryParameters['code'];
+        if (code != null && code.isNotEmpty) {
+          try {
+            await client.auth.exchangeCodeForSession(code);
+            final ok = (client.auth.currentUser?.email ?? '').isNotEmpty;
+            req.response
+              ..statusCode = ok ? 200 : 401
+              ..headers.set('Content-Type', 'text/html; charset=utf-8')
+              ..write(
+                ok
+                    ? '<html><body style="font-family:sans-serif;background:#111;color:#eee;text-align:center;padding:32px;">로그인이 완료되었습니다. 이 창을 닫으셔도 됩니다.</body></html>'
+                    : '<html><body style="font-family:sans-serif;background:#111;color:#f55;text-align:center;padding:32px;">로그인에 실패했습니다. 이 창을 닫고 다시 시도해 주세요.</body></html>',
+              );
+          } catch (e) {
+            req.response
+              ..statusCode = 500
+              ..headers.set('Content-Type', 'text/plain; charset=utf-8')
+              ..write('세션 교환 실패: $e');
+          }
+        } else {
+          req.response
+            ..statusCode = 400
+            ..headers.set('Content-Type', 'text/plain; charset=utf-8')
+            ..write('유효하지 않은 콜백');
+        }
+        await req.response.close();
+        await server.close(force: true);
+        if (mounted) Navigator.of(context).pop();
+        return;
+      }
+
+      setState(() => _oauthBusy = true);
+      _watchSignedIn();
+      final redirectUrl = (!kIsWeb && (Platform.isAndroid || Platform.isIOS))
+          ? 'yggdrasill://callback'
+          : null;
+      await client.auth.signInWithOAuth(
+        OAuthProvider.google,
+        redirectTo: redirectUrl,
+        queryParams: const {'prompt': 'select_account'},
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _oauthBusy = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('OAuth 시작 실패: $e')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Dialog(
-      backgroundColor: const Color(0xFF18181A),
-      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: const BorderSide(color: Color(0xFF2A2A2A))),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 416),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  const Expanded(
-                    child: Text('로그인', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800)),
-                  ),
-                  IconButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    icon: const Icon(Icons.close, color: Colors.white70),
-                    tooltip: '닫기',
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              const Text('기존 회원', style: TextStyle(color: Colors.white70, fontSize: 13)),
-              const SizedBox(height: 6),
-              TextField(
-                controller: _emailController,
-                keyboardType: TextInputType.emailAddress,
-                decoration: InputDecoration(
-                  hintText: '이메일',
-                  hintStyle: const TextStyle(color: Colors.white54),
-                  filled: true,
-                  fillColor: const Color(0xFF2A2A2A),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: Color(0xFF2A2A2A))),
-                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: Color(0xFF2A2A2A))),
-                  focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: Color(0xFF2A82D2))),
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                ),
-                style: const TextStyle(color: Colors.white),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: _passwordController,
-                obscureText: _obscure,
-                decoration: InputDecoration(
-                  hintText: '비밀번호',
-                  hintStyle: const TextStyle(color: Colors.white54),
-                  filled: true,
-                  fillColor: const Color(0xFF2A2A2A),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: Color(0xFF2A2A2A))),
-                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: Color(0xFF2A2A2A))),
-                  focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: Color(0xFF2A82D2))),
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                  suffixIcon: IconButton(
-                    onPressed: () => setState(() => _obscure = !_obscure),
-                    icon: Icon(_obscure ? Icons.visibility : Icons.visibility_off, color: Colors.white54),
-                  ),
-                ),
-                style: const TextStyle(color: Colors.white),
-              ),
-              const SizedBox(height: 10),
-              if (_error != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
-                  child: Text(_error!, style: const TextStyle(color: Color(0xFFE53E3E), fontSize: 12)),
-                ),
-              Row(
-                children: [
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: () {
-                        final email = _emailController.text.trim();
-                        final pw = _passwordController.text;
-                        if (email.isEmpty || !email.contains('@')) { setState(() => _error = '이메일 형식을 확인하세요.'); return; }
-                        if (pw.isEmpty || pw.length < 6) { setState(() => _error = '비밀번호는 6자 이상이어야 합니다.'); return; }
-                        setState(() => _error = null);
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('로그인(UI만 구현)')));
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF1976D2),
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                      ),
-                      child: const Text('로그인', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              const Divider(height: 1, color: Color(0xFF2A2A2A)),
-              const SizedBox(height: 12),
-              const Text('회원가입', style: TextStyle(color: Colors.white70, fontSize: 13)),
-              const SizedBox(height: 8),
-              SizedBox(
-                height: 44,
-                child: OutlinedButton.icon(
-                  onPressed: () async {
-                    try {
-                      final client = _safeClient();
-                      if (client == null) {
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Supabase가 초기화되지 않았습니다. 실행 시 --dart-define로 URL/KEY를 전달하세요.')));
-                        return;
-                      }
-                      if (!kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
-                        // 1) 데스크톱: 로컬 콜백 서버를 직접 띄우고 코드 교환 수행
-                        // 포트 점유 에러 대비: 공유 바인드 옵션 + 사용 중이면 127.0.0.1:3001로 폴백
-                        HttpServer? server;
-                        try {
-                          server = await HttpServer.bind(InternetAddress.loopbackIPv4, 3000, shared: true);
-                        } catch (_) {
-                          server = await HttpServer.bind(InternetAddress.loopbackIPv4, 3001, shared: true);
-                        }
-                        // 인증 시작 (브라우저로 이동)
-                        await client.auth.signInWithOAuth(
-                          OAuthProvider.google,
-                          redirectTo: 'http://localhost:${server.port}',
-                          queryParams: {'prompt':'select_account'},
-                        );
-                        // 2) 첫 요청 수신 후 코드 교환
-                        final req = await server.first;
-                        final uri = req.uri;
-                        final code = uri.queryParameters['code'];
-                        if (code != null && code.isNotEmpty) {
-                          try {
-                            await client.auth.exchangeCodeForSession(code);
-                            final ok = (client.auth.currentUser?.email ?? '').isNotEmpty;
-                            if (ok) {
-                              req.response
-                                ..statusCode = 200
-                                ..headers.set('Content-Type', 'text/html; charset=utf-8')
-                                ..write('<html><body style="font-family:sans-serif;background:#111;color:#eee;text-align:center;padding:32px;">로그인이 완료되었습니다. 이 창을 닫으셔도 됩니다.</body></html>');
-                            } else {
-                              req.response
-                                ..statusCode = 401
-                                ..headers.set('Content-Type', 'text/html; charset=utf-8')
-                                ..write('<html><body style="font-family:sans-serif;background:#111;color:#f55;text-align:center;padding:32px;">로그인에 실패했습니다. 이 창을 닫고 다시 시도해 주세요.</body></html>');
-                            }
-                          } catch (e) {
-                            req.response
-                              ..statusCode = 500
-                              ..headers.set('Content-Type', 'text/plain; charset=utf-8')
-                              ..write('세션 교환 실패: $e');
-                          }
-                        } else {
-                          req.response
-                            ..statusCode = 400
-                            ..headers.set('Content-Type', 'text/plain; charset=utf-8')
-                            ..write('유효하지 않은 콜백');
-                        }
-                        await req.response.close();
-                        await server.close(force: true);
-                        if (mounted) Navigator.of(context).pop();
-                      } else {
-                        // 3) 모바일/웹: 기본 플로우(스킴/기본 콜백)
-                        final redirectUrl = (Platform.isAndroid || Platform.isIOS)
-                            ? 'yggdrasill://callback'
-                            : null;
-                        await client.auth.signInWithOAuth(
-                          OAuthProvider.google,
-                          redirectTo: redirectUrl,
-                          queryParams: {'prompt':'select_account'},
-                        );
-                        if (mounted) Navigator.of(context).pop();
-                      }
-                    } catch (e) {
-                      if (!mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('OAuth 시작 실패: $e')));
+    final dlg = YggDialogColors.of(context);
+    return BottomDialog(
+      icon: Icons.login_rounded,
+      title: '로그인',
+      shrinkWrap: true,
+      center: true,
+      preferredWidth: 520,
+      onClose: () => Navigator.of(context).pop(),
+      footer: Row(
+        children: [
+          const Spacer(),
+          AppDialogConfirmButton(
+            label: '로그인',
+            showIcon: false,
+            onPressed: _oauthBusy
+                ? null
+                : () {
+                    final email = _emailController.text.trim();
+                    final pw = _passwordController.text;
+                    if (email.isEmpty || !email.contains('@')) {
+                      setState(() => _error = '이메일 형식을 확인하세요.');
+                      return;
                     }
+                    if (pw.isEmpty || pw.length < 6) {
+                      setState(() => _error = '비밀번호는 6자 이상이어야 합니다.');
+                      return;
+                    }
+                    setState(() => _error = null);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('로그인(UI만 구현)')),
+                    );
                   },
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.white,
-                    side: const BorderSide(color: Color(0xFF2A2A2A)),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    backgroundColor: const Color(0xFF2A2A2A),
-                  ),
-                  icon: Padding(
-                    padding: const EdgeInsets.only(right: 6),
-                    child: Image.network(
-                      'https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg',
-                      width: 18,
-                      height: 18,
-                      errorBuilder: (c, e, s) => const Icon(Icons.account_circle, size: 18, color: Colors.white70),
-                    ),
-                  ),
-                  label: const Text('Google로 회원가입'),
-                ),
-              ),
-              const SizedBox(height: 4),
-              const Text('Supabase 제공 양식에 맞춰 OAuth 버튼만 먼저 노출합니다.', style: TextStyle(color: Colors.white54, fontSize: 12)),
-              const SizedBox(height: 8),
-            ],
           ),
-        ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            '기존 회원',
+            style: TextStyle(
+              color: dlg.textSub,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 10),
+          _accountTextField(
+            controller: _emailController,
+            hint: '이메일',
+            keyboardType: TextInputType.emailAddress,
+          ),
+          const SizedBox(height: 10),
+          _accountTextField(
+            controller: _passwordController,
+            hint: '비밀번호',
+            obscureText: _obscure,
+            suffix: IconButton(
+              onPressed: () => setState(() => _obscure = !_obscure),
+              icon: Icon(
+                _obscure ? Icons.visibility : Icons.visibility_off,
+                color: dlg.hint,
+              ),
+            ),
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              _error!,
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.error,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+          const SizedBox(height: 18),
+          Divider(height: 1, color: dlg.divider),
+          const SizedBox(height: 18),
+          Text(
+            '회원가입',
+            style: TextStyle(
+              color: dlg.textSub,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 10),
+          BottomDialogCard(
+            onTap: _oauthBusy ? null : () => unawaited(_signInWithGoogle()),
+            child: _oauthBusy
+                ? Row(
+                    children: [
+                      const YggLoadingIndicator(),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          '브라우저에서 로그인을 마치면 이 화면으로 돌아옵니다.',
+                          style: TextStyle(
+                            color: dlg.text,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            height: 1.35,
+                          ),
+                        ),
+                      ),
+                    ],
+                  )
+                : Row(
+                    children: [
+                      Image.network(
+                        'https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg',
+                        width: 18,
+                        height: 18,
+                        errorBuilder: (c, e, s) => Icon(
+                          Icons.account_circle,
+                          size: 18,
+                          color: dlg.textSub,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'Google로 회원가입',
+                          style: TextStyle(
+                            color: dlg.text,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Supabase 제공 양식에 맞춰 OAuth 버튼만 먼저 노출합니다.',
+            style: TextStyle(
+              color: dlg.hint,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1138,6 +1191,55 @@ Future<bool?> _showAccountNotice(
       ),
     );
   });
+}
+
+Widget _accountTextField({
+  required TextEditingController controller,
+  required String hint,
+  TextInputType? keyboardType,
+  bool obscureText = false,
+  Widget? suffix,
+}) {
+  return Builder(
+    builder: (context) {
+      final dlg = YggDialogColors.of(context);
+      final radius = BorderRadius.circular(18);
+      final border = OutlineInputBorder(
+        borderRadius: radius,
+        borderSide: BorderSide(color: dlg.cardBorder, width: 0.5),
+      );
+      return TextField(
+        controller: controller,
+        keyboardType: keyboardType,
+        obscureText: obscureText,
+        style: TextStyle(
+          color: dlg.text,
+          fontSize: 16,
+          fontWeight: FontWeight.w800,
+        ),
+        decoration: InputDecoration(
+          hintText: hint,
+          hintStyle: TextStyle(
+            color: dlg.hint,
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+          ),
+          filled: true,
+          fillColor: dlg.fieldBg,
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 14,
+            vertical: 16,
+          ),
+          suffixIcon: suffix,
+          border: border,
+          enabledBorder: border,
+          focusedBorder: border.copyWith(
+            borderSide: BorderSide(color: dlg.chipSelected, width: 1),
+          ),
+        ),
+      );
+    },
+  );
 }
 
 Widget _accountPinField({

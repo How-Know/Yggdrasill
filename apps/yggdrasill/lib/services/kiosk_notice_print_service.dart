@@ -6,8 +6,12 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
 
 import '../widgets/departure_summary_dialog.dart'
-    show applyDepartureSummaryAfterSave, buildAutoDepartureSummary;
+    show
+        applyDepartureSummaryAfterSave,
+        buildAutoDepartureSummary,
+        finalizeDepartureTodoSheetSnapshot;
 import '../widgets/homework_assign_dialog.dart' show printHomeworkTodoSheet;
+import '../widgets/todo_sheet_share_link_dialog.dart';
 import 'data_manager.dart';
 import 'homework_departure_draft_service.dart';
 import 'homework_store.dart';
@@ -33,6 +37,8 @@ class KioskNoticePrintService {
   Timer? _pendingPollTimer;
   bool _pendingLoadRunning = false;
   final Set<String> _handledRequestKeys = <String>{};
+  final Set<String> _remoteShareStarted = <String>{};
+  final Map<String, Future<void>> _printJobs = <String, Future<void>>{};
 
   Future<void> start(String academyId) async {
     final normalizedAcademyId = academyId.trim();
@@ -89,6 +95,7 @@ class KioskNoticePrintService {
   }
 
   void _onUpdate(Map<String, dynamic> m) {
+    _scheduleRemoteShareLink(m);
     try {
       final id = m['id'] as String?;
       if (id == null) return;
@@ -107,10 +114,87 @@ class KioskNoticePrintService {
       final requestKey = '$id|${reqTime.toUtc().toIso8601String()}';
       if (!_handledRequestKeys.add(requestKey)) return;
       debugPrint('[KIOSK_PRINT] request id=$id requestedAt=$requestedAt');
-      // ignore: discarded_futures
-      _claimAndProcess(id, requestKey, m);
+      final job = _claimAndProcess(id, requestKey, m);
+      _printJobs[id] = job;
     } catch (e, st) {
       debugPrint('[KIOSK_PRINT][UPDATE_ERROR] $e\n$st');
+    }
+  }
+
+  /// 스탠바이미 하원은 이 PC의 하원 버튼과 달리 출결 갱신으로만 들어온다.
+  /// 알림장에 동의한 학생만, 인쇄가 있으면 인쇄 뒤에 같은 링크 창을 띄운다.
+  void _scheduleRemoteShareLink(Map<String, dynamic> m) {
+    final id = (m['id'] as String?)?.trim() ?? '';
+    final studentId = (m['student_id'] as String?)?.trim() ?? '';
+    if (id.isEmpty || studentId.isEmpty) return;
+    final departure =
+        DateTime.tryParse('${m['departure_time'] ?? ''}')?.toLocal();
+    if (departure == null) return;
+    if (DateTime.now().difference(departure).inMinutes.abs() > 10) return;
+    if (todoSheetShareLinkOwnedByThisApp(id, studentId: studentId)) return;
+    if (!studentAllowsTodoSheetShareLink(studentId)) return;
+    if (!_remoteShareStarted.add(id)) return;
+    scheduleMicrotask(() {
+      unawaited(_finalizeRemoteShareLink(m));
+    });
+  }
+
+  Future<void> _finalizeRemoteShareLink(Map<String, dynamic> m) async {
+    final attendanceId = (m['id'] as String?)?.trim() ?? '';
+    final studentId = (m['student_id'] as String?)?.trim() ?? '';
+    if (attendanceId.isEmpty || studentId.isEmpty) return;
+    final printJob = _printJobs[attendanceId];
+    if (printJob != null) {
+      try {
+        await printJob;
+      } catch (e, st) {
+        debugPrint('[KIOSK_PRINT][SHARE_WAIT] $e\n$st');
+      }
+    }
+    try {
+      DateTime? parse(dynamic v) =>
+          (v == null) ? null : DateTime.tryParse('$v')?.toLocal();
+      final classDateTime = parse(m['class_date_time']) ?? DateTime.now();
+      final arrivalTime = parse(m['arrival_time']);
+      final departureTime = parse(m['departure_time']) ?? DateTime.now();
+      final studentName = _studentName(studentId);
+      HomeworkDepartureDraftService.instance.cacheFromAttendanceRow(m);
+      await HomeworkStore.instance.reloadStudentHomework(studentId);
+      final summary = await buildAutoDepartureSummary(
+        studentId: studentId,
+        attendanceId: attendanceId,
+        classDateTime: classDateTime,
+        arrivalTime: arrivalTime,
+      );
+      try {
+        await applyDepartureSummaryAfterSave(
+          studentId: studentId,
+          attendanceId: attendanceId,
+          result: summary,
+        );
+      } catch (e, st) {
+        debugPrint('[KIOSK_PRINT][SHARE_CONFIRM] $e\n$st');
+      }
+      final snapshotId = await finalizeDepartureTodoSheetSnapshot(
+        attendanceId: attendanceId,
+        studentId: studentId,
+        studentName: studentName,
+        classDateTime: classDateTime,
+        arrivalTime: arrivalTime,
+        departureTime: departureTime,
+        result: summary,
+        className: m['class_name'] as String?,
+        classEndTime: parse(m['class_end_time']),
+        setId: m['set_id'] as String?,
+      );
+      await showTodoSheetShareLinkOnRoot(
+        studentId: studentId,
+        studentName: studentName,
+        snapshotId: snapshotId,
+      );
+    } catch (e, st) {
+      debugPrint('[KIOSK_PRINT][SHARE_LINK] $e\n$st');
+      reportTodoSheetShareLinkFailure('알림장 링크를 만들지 못했어요: $e');
     }
   }
 

@@ -17,13 +17,11 @@ import 'textbook_register_wizard.dart';
 import 'textbook_unit_authoring_dialog.dart';
 import 'textbook_vlm_test_dialog.dart';
 
-/// Phase-1 migration pane for the textbook tab.
+/// 교재 메뉴의 본 화면.
 ///
-/// This screen is intentionally isolated from the legacy [TextbookScreen]
-/// state. It loads its own book list and `resource_file_links` rows so we
-/// can test the Dropbox → Supabase Storage flow without mutating the
-/// existing management UI. When the migration is promoted to default, this
-/// file can be deleted along with the mode switch in `TextbookScreen`.
+/// 예전 교재 관리 화면은 빼 두었다. 이 화면이 교재 목록과
+/// `resource_file_links`를 직접 읽고, Dropbox에서 Supabase Storage로
+/// 올리는 흐름을 맡는다.
 ///
 /// Responsibilities:
 /// 1. List every `resource_files` row that is categorised as a textbook.
@@ -596,7 +594,7 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                '교재 마이그레이션 (Phase 1 · 테스트용)',
+                '교재',
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 22,

@@ -4,7 +4,10 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter_math_fork/flutter_math.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart' show FontLoader, rootBundle;
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -26,10 +29,18 @@ import '../services/student_behavior_assignment_store.dart';
 import '../services/tag_store.dart';
 import '../services/tenant_service.dart';
 import '../services/todo_sheet_snapshot_service.dart';
+import '../screens/design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import '../utils/homework_card_label.dart';
 import '../utils/homework_page_text.dart';
+import 'app_snackbar.dart';
+import 'dialog_tokens.dart';
+import 'past_todo_sheet_icon.dart';
+import 'shared_back_button.dart';
+import 'solid_capsule_action_bar.dart';
+import 'utility_glass_dialog_shell.dart';
 part 'pdf/todo_sheet_refined.dart';
 part 'pdf/todo_sheet_sample.dart';
+part 'pdf/todo_sheet_page.dart';
 
 class HomeworkAssignSelection {
   final List<String> itemIds;
@@ -61,6 +72,7 @@ class _TodoListEntry {
   final String? rightPrimary;
   final String? rightSecondary;
   final String? rightTertiary;
+  final List<_SubWorkEntry> subEntries;
   const _TodoListEntry({
     required this.primary,
     this.secondary,
@@ -70,6 +82,7 @@ class _TodoListEntry {
     this.rightPrimary,
     this.rightSecondary,
     this.rightTertiary,
+    this.subEntries = const <_SubWorkEntry>[],
   });
 }
 
@@ -90,6 +103,7 @@ class _CheckRateEntry {
   /// 학생이 자의로 미리 해온 과제(추가검사 마커)인지 여부.
   /// 검사율 합계에서 분자(오늘 추가분)에는 포함하되 분모(남은%)에서는 제외한다.
   final bool isExtra;
+  final List<_SubWorkEntry> subEntries;
   const _CheckRateEntry({
     required this.title,
     required this.progress,
@@ -104,6 +118,7 @@ class _CheckRateEntry {
     this.outcome,
     this.reason,
     this.isExtra = false,
+    this.subEntries = const <_SubWorkEntry>[],
   });
 }
 
@@ -114,6 +129,35 @@ class _SubWorkEntry {
   const _SubWorkEntry(
       {required this.title, required this.page, required this.count});
 }
+
+_SubWorkEntry _childTaskEntry(HomeworkItem item) {
+  final name = item.title.trim();
+  final page = homeworkItemPageRangeText(
+    page: item.page,
+    unitMappings: item.unitMappings,
+  );
+  final problems = homeworkItemProblemCount(
+    count: item.count,
+    unitMappings: item.unitMappings,
+  );
+  return _SubWorkEntry(
+    title: name.isEmpty ? '(제목 없음)' : name,
+    page: page.isEmpty ? '-' : page,
+    count: problems > 0 ? '$problems' : '-',
+  );
+}
+
+Map<String, dynamic> _childTaskJson(_SubWorkEntry sub) => <String, dynamic>{
+      'title': sub.title,
+      'page': sub.page,
+      'count': sub.count,
+    };
+
+_SubWorkEntry _childTaskFromJson(Map<dynamic, dynamic> sub) => _SubWorkEntry(
+      title: '${sub['title'] ?? ''}',
+      page: '${sub['page'] ?? '-'}',
+      count: '${sub['count'] ?? '-'}',
+    );
 
 class _ClassWorkEntry {
   final String title;
@@ -174,6 +218,23 @@ class _ClassWorkEntry {
   );
 }
 
+class _CompletedChildEntry {
+  final String title;
+  final int progressPct;
+  final int checkCount;
+  final int assignmentCount;
+  final String page;
+  final String count;
+  const _CompletedChildEntry({
+    required this.title,
+    required this.progressPct,
+    required this.checkCount,
+    required this.assignmentCount,
+    this.page = '-',
+    this.count = '-',
+  });
+}
+
 class _CompletedSummaryEntry {
   final String groupTitle;
   final String bookAndCourse;
@@ -184,6 +245,7 @@ class _CompletedSummaryEntry {
   final double previousProgressPct;
   final double totalProgressPct;
   final String? etaText;
+  final List<_CompletedChildEntry> subEntries;
   const _CompletedSummaryEntry({
     required this.groupTitle,
     required this.bookAndCourse,
@@ -194,7 +256,37 @@ class _CompletedSummaryEntry {
     this.previousProgressPct = 0,
     double? totalProgressPct,
     this.etaText,
+    this.subEntries = const <_CompletedChildEntry>[],
   }) : totalProgressPct = totalProgressPct ?? progressPct;
+}
+
+int _assignmentCountForBriefs(List<HomeworkAssignmentBrief> briefs) {
+  final rounds = <int>{};
+  final ids = <String>{};
+  for (final brief in briefs) {
+    if (brief.repeatIndex > 0) rounds.add(brief.repeatIndex);
+    final id = brief.id.trim();
+    if (id.isNotEmpty) ids.add(id);
+  }
+  if (rounds.isNotEmpty) return rounds.length;
+  return ids.length;
+}
+
+int _completedItemProgressPct({
+  required HomeworkItem item,
+  required List<HomeworkAssignmentCheck> checks,
+  required DateTime classDateTime,
+}) {
+  final window = _progressWindowForChecks(checks, classDateTime);
+  final hasTodayCheck =
+      checks.any((check) => _isSameDay(check.checkedAt, classDateTime));
+  var current = window.current;
+  if (!hasTodayCheck &&
+      item.completedAt != null &&
+      _isSameDay(item.completedAt!, classDateTime)) {
+    current = math.max(current, 100);
+  }
+  return current.clamp(0, 150).toInt();
 }
 
 class _TodoSheetPayload {
@@ -274,6 +366,10 @@ Map<String, dynamic> _todoSheetPayloadToSnapshotJson(
           'outcome': entry.outcome,
           'reason': entry.reason,
           'is_extra': entry.isExtra,
+          if (entry.subEntries.isNotEmpty)
+            'sub_entries': [
+              for (final sub in entry.subEntries) _childTaskJson(sub),
+            ],
         },
     ],
     'class_work_entries': [
@@ -290,12 +386,7 @@ Map<String, dynamic> _todoSheetPayloadToSnapshotJson(
           'passed': entry.passed,
           'total_accumulated_ms': entry.totalAccumulatedMs,
           'sub_entries': [
-            for (final sub in entry.subEntries)
-              <String, dynamic>{
-                'title': sub.title,
-                'page': sub.page,
-                'count': sub.count,
-              },
+            for (final sub in entry.subEntries) _childTaskJson(sub),
           ],
         },
     ],
@@ -311,6 +402,17 @@ Map<String, dynamic> _todoSheetPayloadToSnapshotJson(
           'previous_progress_pct': entry.previousProgressPct,
           'total_progress_pct': entry.totalProgressPct,
           'eta_text': entry.etaText,
+          'sub_entries': [
+            for (final sub in entry.subEntries)
+              <String, dynamic>{
+                'title': sub.title,
+                'progress_pct': sub.progressPct,
+                'check_count': sub.checkCount,
+                'assignment_count': sub.assignmentCount,
+                'page': sub.page,
+                'count': sub.count,
+              },
+          ],
         },
     ],
     'completed_entries': [
@@ -338,6 +440,10 @@ Map<String, dynamic> _todoEntryToJson(_TodoListEntry entry) =>
       'right_primary': entry.rightPrimary,
       'right_secondary': entry.rightSecondary,
       'right_tertiary': entry.rightTertiary,
+      if (entry.subEntries.isNotEmpty)
+        'sub_entries': [
+          for (final sub in entry.subEntries) _childTaskJson(sub),
+        ],
     };
 
 _TodoSheetPayload _todoSheetPayloadFromSnapshotJson(
@@ -363,6 +469,12 @@ _TodoSheetPayload _todoSheetPayloadFromSnapshotJson(
         .toList(growable: false);
   }
 
+  List<_SubWorkEntry> childTasks(Map<String, dynamic> entry) {
+    final raw = entry['sub_entries'];
+    if (raw is! List) return const <_SubWorkEntry>[];
+    return raw.whereType<Map>().map(_childTaskFromJson).toList(growable: false);
+  }
+
   _TodoListEntry todoEntry(Map<String, dynamic> entry) => _TodoListEntry(
         primary: '${entry['primary'] ?? ''}',
         secondary: entry['secondary'] as String?,
@@ -372,6 +484,7 @@ _TodoSheetPayload _todoSheetPayloadFromSnapshotJson(
         rightPrimary: entry['right_primary'] as String?,
         rightSecondary: entry['right_secondary'] as String?,
         rightTertiary: entry['right_tertiary'] as String?,
+        subEntries: childTasks(entry),
       );
 
   final lessonJson = json['lesson_record'];
@@ -408,6 +521,7 @@ _TodoSheetPayload _todoSheetPayloadFromSnapshotJson(
           outcome: entry['outcome'] as String?,
           reason: entry['reason'] as String?,
           isExtra: entry['is_extra'] == true,
+          subEntries: childTasks(entry),
         ),
     ],
     classWorkEntries: [
@@ -427,11 +541,7 @@ _TodoSheetPayload _todoSheetPayloadFromSnapshotJson(
             for (final sub
                 in (entry['sub_entries'] as List? ?? const <dynamic>[])
                     .whereType<Map>())
-              _SubWorkEntry(
-                title: '${sub['title'] ?? ''}',
-                page: '${sub['page'] ?? ''}',
-                count: '${sub['count'] ?? ''}',
-              ),
+              _childTaskFromJson(sub),
           ],
         ),
     ],
@@ -447,6 +557,19 @@ _TodoSheetPayload _todoSheetPayloadFromSnapshotJson(
           previousProgressPct: decimal(entry['previous_progress_pct']),
           totalProgressPct: decimal(entry['total_progress_pct']),
           etaText: entry['eta_text'] as String?,
+          subEntries: [
+            for (final sub
+                in (entry['sub_entries'] as List? ?? const <dynamic>[])
+                    .whereType<Map>())
+              _CompletedChildEntry(
+                title: '${sub['title'] ?? ''}',
+                progressPct: integer(sub['progress_pct']),
+                checkCount: integer(sub['check_count']),
+                assignmentCount: integer(sub['assignment_count']),
+                page: '${sub['page'] ?? '-'}',
+                count: '${sub['count'] ?? '-'}',
+              ),
+          ],
         ),
     ],
     completedEntries: [
@@ -769,7 +892,7 @@ Future<void> previewHomeworkTodoSheet({
 /// 하원 확정 뒤 알림장을 다시 계산하지 않아도 되도록 의미 데이터를 고정한다.
 ///
 /// 미리보기에서는 호출하지 않는다. 서버 함수도 하원 시간이 없는 출결은 거부한다.
-Future<void> finalizeHomeworkTodoSheetSnapshot({
+Future<String> finalizeHomeworkTodoSheetSnapshot({
   required String attendanceId,
   required String studentId,
   required String studentName,
@@ -800,7 +923,7 @@ Future<void> finalizeHomeworkTodoSheetSnapshot({
     classEndTime: classEndTime,
     setId: setId,
   );
-  await TodoSheetSnapshotService.instance.finalize(
+  return TodoSheetSnapshotService.instance.finalize(
     attendanceId: attendanceId,
     payload: _todoSheetPayloadToSnapshotJson(payload),
   );
@@ -1553,6 +1676,9 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
         outcome: groupOutcome,
         reason: groupReason,
         isExtra: !groupHasRegularDue,
+        subEntries: [
+          for (final hw in includedItems) _childTaskEntry(hw),
+        ],
       ),
     );
   }
@@ -1707,15 +1833,9 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
         (hw) => (page: hw.page, unitMappings: hw.unitMappings),
       ),
     );
-    final subs = <_SubWorkEntry>[];
-    for (final hw in children) {
-      final t = hw.title.trim().isEmpty ? '(제목 없음)' : hw.title.trim();
-      // 개념원리 하위과제는 page 를 비우므로 문항수만 보이게 '-' 유지.
-      final pg = (hw.page ?? '').trim();
-      final ct =
-          (hw.count != null && hw.count! > 0) ? hw.count.toString() : '-';
-      subs.add(_SubWorkEntry(title: t, page: pg.isEmpty ? '-' : pg, count: ct));
-    }
+    final subs = <_SubWorkEntry>[
+      for (final hw in children) _childTaskEntry(hw),
+    ];
     final totals = _groupCheckPassTotals(
       group: group,
       children: children,
@@ -1781,10 +1901,7 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
                 assignedAt.isBefore(earliestAssigned))) {
           earliestAssigned = assignedAt;
         }
-        final t = hw.title.trim().isEmpty ? '(제목 없음)' : hw.title.trim();
-        final ct =
-            (hw.count != null && hw.count! > 0) ? hw.count.toString() : '-';
-        subs.add(_SubWorkEntry(title: t, page: p.isEmpty ? '-' : p, count: ct));
+        subs.add(_childTaskEntry(hw));
       }
       if (groupStudyMs <= 0) continue;
       final groupObj = HomeworkStore.instance.groupById(studentId, entry.key);
@@ -1855,17 +1972,9 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
   if (completedItems.isNotEmpty) {
     final completedByGroup = <String, List<HomeworkItem>>{};
     for (final hw in completedItems) {
-      final groups = HomeworkStore.instance.groups(studentId);
-      String? matchedGroupId;
-      for (final g in groups) {
-        final children = HomeworkStore.instance
-            .itemsInGroup(studentId, g.id, includeCompleted: true);
-        if (children.any((c) => c.id == hw.id)) {
-          matchedGroupId = g.id;
-          break;
-        }
-      }
-      final key = matchedGroupId ?? hw.id;
+      final groupId =
+          (HomeworkStore.instance.groupIdOfItem(hw.id) ?? '').trim();
+      final key = groupId.isNotEmpty ? groupId : hw.id;
       completedByGroup.putIfAbsent(key, () => <HomeworkItem>[]).add(hw);
     }
     for (final entry in completedByGroup.entries) {
@@ -1967,6 +2076,21 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
           .max(0, currentProgress - previousProgress)
           .clamp(0, 150)
           .toDouble();
+      final linkOrder = <String, int>{};
+      if (groupObj != null) {
+        final links = HomeworkStore.instance.groupLinks(groupObj.id);
+        for (var i = 0; i < links.length; i++) {
+          linkOrder[links[i].homeworkItemId] = i;
+        }
+      }
+      final orderedItems = List<HomeworkItem>.from(items)
+        ..sort((a, b) {
+          final ao = linkOrder[a.id] ?? 1 << 20;
+          final bo = linkOrder[b.id] ?? 1 << 20;
+          if (ao != bo) return ao.compareTo(bo);
+          return (a.completedAt ?? DateTime(1900))
+              .compareTo(b.completedAt ?? DateTime(1900));
+        });
       completedSummaries.add(_CompletedSummaryEntry(
         groupTitle: gTitle,
         bookAndCourse: bookCourse,
@@ -1977,6 +2101,28 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
         previousProgressPct: previousProgressPct,
         totalProgressPct: totalProgressPct,
         etaText: null,
+        subEntries: [
+          for (final item in orderedItems)
+            () {
+              final child = _childTaskEntry(item);
+              return _CompletedChildEntry(
+                title: child.title == '(제목 없음)' ? '과제' : child.title,
+                progressPct: _completedItemProgressPct(
+                  item: item,
+                  checks: checksByItem[item.id] ??
+                      const <HomeworkAssignmentCheck>[],
+                  classDateTime: classDateTime,
+                ),
+                checkCount: item.checkCount,
+                assignmentCount: _assignmentCountForBriefs(
+                  assignmentsByItem[item.id] ??
+                      const <HomeworkAssignmentBrief>[],
+                ),
+                page: child.page,
+                count: child.count,
+              );
+            }(),
+        ],
       ));
     }
   }
@@ -2101,6 +2247,9 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
         rightPrimary: assignedDateText.isEmpty ? null : assignedDateText,
         rightSecondary: estimateLabel.isEmpty ? null : estimateLabel,
         rightTertiary: memoText.isEmpty ? null : memoText,
+        subEntries: [
+          for (final hw in children) _childTaskEntry(hw),
+        ],
       ),
     );
   }
@@ -2167,6 +2316,7 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
               previousProgressPct: entry.previousProgressPct,
               totalProgressPct: entry.totalProgressPct,
               etaText: entry.etaText,
+              subEntries: entry.subEntries,
             ),
           )
           .toList(growable: false);

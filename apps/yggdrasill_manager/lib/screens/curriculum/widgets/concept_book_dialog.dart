@@ -191,7 +191,7 @@ class _ConceptBookDialogState extends State<ConceptBookDialog> {
     return (run: run, tooLong: tooLong);
   }
 
-  Future<void> _runBatch(ConceptBookEntry book) async {
+  Future<void> _runBatch(ConceptBookEntry book, {bool addConcepts = false}) async {
     final units = _batchUnits(book, _batchGroups).run;
     if (units.isEmpty) return;
     final made = await showConceptDraftBatchDialog(
@@ -201,6 +201,7 @@ class _ConceptBookDialogState extends State<ConceptBookDialog> {
       criteria: _lib.criteria,
       service: widget.draftService,
       onConfirmed: widget.onDraftsConfirmed,
+      addConcepts: addConcepts,
     );
     if (!mounted) return;
     setState(() => _batchGroups.clear());
@@ -667,11 +668,18 @@ class _ConceptBookDialogState extends State<ConceptBookDialog> {
           child: const Text('고르기 취소', style: TextStyle(color: kThinkSub)),
         ),
         const SizedBox(width: 6),
-        ElevatedButton.icon(
+        OutlinedButton.icon(
           onPressed: _busy || b.run.isEmpty ? null : () => unawaited(_runBatch(book)),
-          style: thinkPrimaryButton(),
+          style: thinkOutlineButton(),
           icon: const Icon(Icons.playlist_play, size: 18),
-          label: const Text('차례로 만들기'),
+          label: const Text('새로 만들기'),
+        ),
+        const SizedBox(width: 6),
+        ElevatedButton.icon(
+          onPressed: _busy || b.run.isEmpty ? null : () => unawaited(_runBatch(book, addConcepts: true)),
+          style: thinkPrimaryButton(),
+          icon: const Icon(Icons.library_add_check_outlined, size: 18),
+          label: const Text('개념 추가하기'),
         ),
       ],
     );

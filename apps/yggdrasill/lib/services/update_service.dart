@@ -43,6 +43,13 @@ class UpdateService {
   // 간단한 진행 상태 노출용 모델/노티파이어 (앱 내 커스텀 UI 연동)
   static final ValueNotifier<UpdateInfo> progressNotifier =
       ValueNotifier<UpdateInfo>(const UpdateInfo(phase: UpdatePhase.idle));
+
+  /// 업데이트 중 짧은 안내. 상단 글래스 스낵바로 연결한다.
+  static void Function(String message)? _announceListener;
+
+  static void setAnnounceListener(void Function(String message)? listener) {
+    _announceListener = listener;
+  }
   static final ValueNotifier<UpdateNotice?> availableNoticeNotifier =
       ValueNotifier<UpdateNotice?>(null);
   static Timer? _noticeRefreshTimer;
@@ -501,23 +508,7 @@ class UpdateService {
   }
 
   static void _showSnack(BuildContext context, String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          message,
-          style:
-              const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
-        ),
-        backgroundColor: const Color(0xFF232326),
-        behavior: SnackBarBehavior.floating,
-        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-          side: const BorderSide(color: Color(0xFF1976D2), width: 1.1),
-        ),
-        elevation: 0,
-      ),
-    );
+    _announceListener?.call(message);
   }
 
   static _WinArch _detectWindowsArch() {

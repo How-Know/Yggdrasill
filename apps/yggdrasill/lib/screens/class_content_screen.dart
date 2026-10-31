@@ -30,7 +30,6 @@ import '../services/print_routing_service.dart';
 import '../services/right_sheet_answer_preload_service.dart';
 import '../services/resource_service.dart';
 import '../services/textbook_pdf_service.dart';
-import '../services/todo_sheet_snapshot_service.dart';
 import '../utils/naesin_exam_context.dart';
 import '../models/attendance_record.dart';
 import '../models/session_override.dart';
@@ -51,6 +50,7 @@ import 'design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import '../widgets/app_confirm_button.dart';
 import '../widgets/bottom_dialog.dart';
 import '../widgets/departure_summary_dialog.dart';
+import '../widgets/todo_sheet_share_link_dialog.dart';
 import '../widgets/dialog_tokens.dart';
 import '../widgets/home_status_dashboard_icon.dart';
 import '../widgets/student_profile_avatar.dart';
@@ -3294,138 +3294,11 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     BuildContext context, {
     required String studentId,
     required String studentName,
-  }) async {
-    List<TodoSheetSnapshotSummary> snapshots;
-    try {
-      snapshots =
-          await TodoSheetSnapshotService.instance.listForStudent(studentId);
-    } catch (error) {
-      if (context.mounted) {
-        _showHomeworkChipSnackBar(
-          context,
-          '이전 알림장을 불러오지 못했어요: $error',
-        );
-      }
-      return;
-    }
-    if (!context.mounted) return;
-
-    String dateLabel(DateTime value) {
-      const weekdays = <String>['월', '화', '수', '목', '금', '토', '일'];
-      return '${value.year}.${value.month.toString().padLeft(2, '0')}.'
-          '${value.day.toString().padLeft(2, '0')} '
-          '(${weekdays[value.weekday - 1]})';
-    }
-
-    String? openingSnapshotId;
-    await showUtilityGlassDialog(
-      context: context,
-      title: '$studentName 이전 알림장',
-      icon: Icons.history_rounded,
-      preferredWidth: math.min(MediaQuery.sizeOf(context).width - 48, 620),
-      maxWidth: math.min(MediaQuery.sizeOf(context).width - 48, 620),
-      maxHeight: math.min(MediaQuery.sizeOf(context).height - 48, 680),
-      child: StatefulBuilder(
-        builder: (dialogContext, setDialogState) {
-          final dlg = YggDialogColors.of(dialogContext);
-          if (snapshots.isEmpty) {
-            return Center(
-              child: Text(
-                '저장된 이전 알림장이 없습니다.',
-                style: TextStyle(
-                  color: dlg.textSub,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            );
-          }
-          return ListView.separated(
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
-            itemCount: snapshots.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 8),
-            itemBuilder: (itemContext, index) {
-              final snapshot = snapshots[index];
-              final opening = openingSnapshotId == snapshot.id;
-              return Material(
-                color: dlg.fieldBg,
-                borderRadius: BorderRadius.circular(12),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(12),
-                  onTap: openingSnapshotId != null
-                      ? null
-                      : () async {
-                          setDialogState(
-                            () => openingSnapshotId = snapshot.id,
-                          );
-                          try {
-                            await previewSavedHomeworkTodoSheet(snapshot.id);
-                          } catch (error) {
-                            if (dialogContext.mounted) {
-                              _showHomeworkChipSnackBar(
-                                dialogContext,
-                                '알림장을 열지 못했어요: $error',
-                              );
-                            }
-                          } finally {
-                            if (dialogContext.mounted) {
-                              setDialogState(() => openingSnapshotId = null);
-                            }
-                          }
-                        },
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Row(
-                      children: [
-                        Icon(
-                          Icons.description_outlined,
-                          size: 20,
-                          color: kDlgAccent,
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                dateLabel(snapshot.sessionDate),
-                                style: TextStyle(
-                                  color: dlg.text,
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w800,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                snapshot.className.isEmpty
-                                    ? '정규 수업'
-                                    : snapshot.className,
-                                style: TextStyle(
-                                  color: dlg.textSub,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        if (opening)
-                          const YggLoadingIndicator(size: 20)
-                        else
-                          Icon(
-                            Icons.chevron_right_rounded,
-                            size: 22,
-                            color: dlg.textSub,
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
-              );
-            },
-          );
-        },
-      ),
+  }) {
+    return showPastTodoSheetsDialog(
+      context,
+      studentId: studentId,
+      studentName: studentName,
     );
   }
 
@@ -4182,11 +4055,17 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                       Align(
                         alignment: Alignment.centerRight,
                         child: OutlinedButton.icon(
-                          onPressed: () => _showPastTodoSheetsDialog(
-                            dialogContext,
-                            studentId: studentId,
-                            studentName: studentName,
-                          ),
+                          onPressed: () {
+                            Navigator.of(dialogContext).pop();
+                            WidgetsBinding.instance.addPostFrameCallback((_) {
+                              if (!context.mounted) return;
+                              _showPastTodoSheetsDialog(
+                                context,
+                                studentId: studentId,
+                                studentName: studentName,
+                              );
+                            });
+                          },
                           icon: const Icon(Icons.history_rounded, size: 18),
                           label: const Text('이전 알림장 보기'),
                           style: OutlinedButton.styleFrom(
@@ -4476,6 +4355,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     if (summary == null) return;
 
     final now = DateTime.now();
+    ownTodoSheetShareLinkAttendance(attendanceId);
+    ownTodoSheetShareLinkStudent(studentId);
     try {
       final arrival = record.arrivalTime ?? now;
       await DataManager.instance.saveOrUpdateAttendance(
@@ -4516,9 +4397,11 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           );
         }
       }
+      String? snapshotId;
+      ownTodoSheetShareLinkAttendance(savedAttendanceId);
       if (summaryApplied) {
         try {
-          await finalizeDepartureTodoSheetSnapshot(
+          snapshotId = await finalizeDepartureTodoSheetSnapshot(
             attendanceId: savedAttendanceId,
             studentId: studentId,
             studentName: student.name,
@@ -4561,6 +4444,14 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           if (!context.mounted) return;
           _showHomeworkChipSnackBar(context, '알림장 인쇄에 실패했어요: $e');
         }
+      }
+      if (snapshotId != null && context.mounted) {
+        await showTodoSheetShareLinkAfterDeparture(
+          context: context,
+          studentId: studentId,
+          studentName: student.name,
+          snapshotId: snapshotId,
+        );
       }
       if (!context.mounted) return;
       _showHomeworkChipSnackBar(context, '${student.name} 하원 처리되었습니다.');

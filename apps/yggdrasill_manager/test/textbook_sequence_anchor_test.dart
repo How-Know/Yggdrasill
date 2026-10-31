@@ -49,6 +49,19 @@ void main() {
     );
   });
 
+  test('같은 본문 쪽에 제대로 붙은 저장값이 있으면 잘못 붙은 하나가 범위를 막지 않는다', () {
+    // 연습문제 17·18(177쪽)이 해설 70쪽에 잘못 저장되고 14~16 은 75쪽에 제대로 저장됨.
+    final anchors = textbookConsistentAnchors(const [
+      (bodyPage: 166, page: 70),
+      (bodyPage: 177, page: 70),
+      (bodyPage: 177, page: 75),
+    ]);
+    expect(
+      textbookSequenceAllowsPage(anchors: anchors, bodyPage: 171, page: 72),
+      isTrue,
+    );
+  });
+
   test('같은 본문 쪽 문항끼리는 범위를 묶지 않는다', () {
     final anchors = textbookConsistentAnchors(const [
       (bodyPage: 175, page: 74),
@@ -75,6 +88,30 @@ void main() {
       bodyPageOf: (p) => pages[p]!,
     );
     expect(frontier, {1});
+  });
+
+  test('읽는 순서보다 본문 차례가 앞선 해설 좌표는 버린다', () {
+    // 해설 70쪽: 왼쪽 단 맨 위 01 소단원 연습문제 17·18 을 모델이 "177쪽" 으로 적었다.
+    final dropped = textbookOutOfReadingOrder(const [
+      (bodyPage: 177, region: [40, 60, 60, 100]),
+      (bodyPage: 177, region: [200, 60, 220, 100]),
+      (bodyPage: 165, region: [420, 60, 440, 100]),
+      (bodyPage: 165, region: [600, 60, 620, 100]),
+      (bodyPage: 165, region: [800, 60, 820, 100]),
+      (bodyPage: 166, region: [100, 540, 120, 580]),
+      (bodyPage: 166, region: [500, 540, 520, 580]),
+    ]);
+    expect(dropped, {0, 1});
+  });
+
+  test('왼쪽 단 아래가 오른쪽 단 위보다 먼저 읽힌다', () {
+    final dropped = textbookOutOfReadingOrder(const [
+      (bodyPage: 171, region: [50, 560, 70, 600]),
+      (bodyPage: 170, region: [800, 60, 820, 100]),
+      (bodyPage: 0, region: [10, 10, 20, 20]),
+      (bodyPage: 172, region: null),
+    ]);
+    expect(dropped, isEmpty);
   });
 
   test('frontier 표시는 요청 JSON 에 실린다', () {

@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../services/think/think_api.dart';
 import '../../services/think/think_models.dart';
+import '../../theme/manager_shell_colors.dart';
 
 class ManagementScreen extends StatefulWidget {
   const ManagementScreen({super.key});
@@ -309,7 +310,7 @@ class _ManagementScreenState extends State<ManagementScreen> {
     final docsPhilosophy = '$docsRoot${sep}philosophy.md';
     final docsTodo = '$docsRoot${sep}TODO.md';
     return Container(
-      color: const Color(0xFF1F1F1F),
+      color: ManagerShellColors.surfaceBase,
       padding: const EdgeInsets.all(24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -935,7 +936,7 @@ class _MarkdownViewerPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF1F1F1F),
+      backgroundColor: ManagerShellColors.surfaceBase,
       appBar: AppBar(
         backgroundColor: const Color(0xFF18181A),
         title: Text(title, style: const TextStyle(color: Colors.white)),
@@ -1441,7 +1442,7 @@ class _AssessmentStructurePage extends StatelessWidget {
     final philosophy = _docPath(['philosophy.md']);
 
     return Scaffold(
-      backgroundColor: const Color(0xFF1F1F1F),
+      backgroundColor: ManagerShellColors.surfaceBase,
       appBar: AppBar(
         backgroundColor: const Color(0xFF18181A),
         title: const Text('구조 요약', style: TextStyle(color: Colors.white)),

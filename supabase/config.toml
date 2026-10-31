@@ -12,4 +12,7 @@ verify_jwt = false
 [functions.ai_code_bridge]
 verify_jwt = false
 
+[functions.todo_sheet_public]
+verify_jwt = false
+
 

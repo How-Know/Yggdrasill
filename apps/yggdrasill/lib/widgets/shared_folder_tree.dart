@@ -39,6 +39,7 @@ class SharedFolderTreeNode {
     this.rowStyle = SharedFolderTreeRowStyle.pill,
     this.showDividerWhenCollapsed = false,
     this.showDividerAfter = false,
+    this.rowHeight,
     this.data,
   });
 
@@ -50,6 +51,9 @@ class SharedFolderTreeNode {
   final SharedFolderTreeRowStyle rowStyle;
   final bool showDividerWhenCollapsed;
   final bool showDividerAfter;
+
+  /// 섹션 줄의 누르는 영역 높이. 비우면 글자 줄과 위아래 12.
+  final double? rowHeight;
   final Object? data;
 }
 
@@ -392,35 +396,42 @@ class SharedFolderTreePanel extends StatelessWidget {
               hoverColor: Colors.transparent,
               splashColor: Colors.transparent,
               highlightColor: Colors.transparent,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 8,
-                  vertical: sharedFolderTreeNavRowPaddingVertical,
-                ),
-                child: Row(
+              child: SizedBox(
+                height: node.rowHeight,
+                child: Padding(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: node.rowHeight == null
+                        ? sharedFolderTreeNavRowPaddingVertical
+                        : 0,
+                  ),
+                  child: Row(
                   children: [
-                    const SizedBox(width: sharedFolderTreeLeadingWidth),
-                    const SizedBox(width: 2),
-                    Expanded(
-                      child: Text(
-                        node.label,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: labelColor,
-                          fontWeight: FontWeight.w400,
-                          fontSize: FabTabBarTokens.fabBarLabelFontSize,
-                          letterSpacing: -0.1,
+                      const SizedBox(width: sharedFolderTreeLeadingWidth),
+                      const SizedBox(width: 2),
+                      Expanded(
+                        child: Text(
+                          node.label,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: labelColor,
+                            fontWeight: FontWeight.w400,
+                            fontSize: FabTabBarTokens.fabBarLabelFontSize,
+                            letterSpacing: -0.1,
+                          ),
                         ),
                       ),
-                    ),
-                    if (hasChildren)
-                      Icon(
-                        isExpanded ? Icons.expand_more : Icons.chevron_right,
-                        size: 20,
-                        color: chevronColor,
-                      ),
-                  ],
+                      if (hasChildren)
+                        Icon(
+                          isExpanded
+                              ? Icons.expand_more
+                              : Icons.chevron_right,
+                          size: 20,
+                          color: chevronColor,
+                        ),
+                    ],
+                  ),
                 ),
               ),
             ),

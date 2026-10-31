@@ -86,6 +86,7 @@ export type CourseMapReadFn =
   | 'concept_think_detail'
   | 'concept_review_walk'
   | 'concept_review_source_walk'
+  | 'concept_review_book_walk'
   | 'concept_review_status'
   | 'concept_relation_list';
 
@@ -243,14 +244,15 @@ export const COURSE_MAP_TOOLS: AiFunctionTool[] = [
           'unreviewed(기록 없음)·stale(내용이 바뀌어 다시 검토 필요)·not_current(둘 중 하나)·has_issue(문제 있음·비교 필요·확인 못 함·병합 필요)·merge_needed. 전체면 null',
         ),
         review_scope: nullableEnum([...REVIEW_SCOPES], 'review 조건을 볼 범위(foundation: 초등 기초 개념, placement: 교육과정 배치). null이면 일곱 범위 중 하나라도'),
-        source_course_id: nullableString('출처로 고정할 과정 id(get_course_maps). 기존 조건 목록이면 null'),
+        source_course_id: nullableString('출처로 고정할 과정 id(get_course_maps). 기존 조건 목록이나 교재 목록이면 null'),
+        source_book_id: nullableString('출처로 고정할 교재 id(find_concept_review_jobs의 books.book_id). 기존 조건 목록이나 과정 목록이면 null'),
         source_scope: nullableEnum(
           ['all', 'course_unplaced'],
-          'all: 그 과정 출처가 있는 개념 전체. course_unplaced: 그 과정에는 아직 안 놓인 개념(다른 과정에만 놓인 개념 포함). 기존 조건 목록이면 null',
+          'all: 그 과정·교재 출처가 있는 개념 전체. course_unplaced: 그 과정·교재 과정에는 아직 안 놓인 개념(다른 과정에만 놓인 개념 포함). 기존 조건 목록이면 null',
         ),
         offset: { type: ['integer', 'null'], description: '이어 읽을 자리(next_offset). 처음이면 null' },
       },
-      required: ['walk_id', 'folder_id', 'type', 'name', 'placed', 'review', 'review_scope', 'source_course_id', 'source_scope', 'offset'],
+      required: ['walk_id', 'folder_id', 'type', 'name', 'placed', 'review', 'review_scope', 'source_course_id', 'source_book_id', 'source_scope', 'offset'],
       additionalProperties: false,
     },
   },
@@ -998,12 +1000,30 @@ async function readReviewList(name: string, args: Rec, src: CourseMapToolSource)
   if (args.walk_id != null && !walkId) return bad(name, 'invalid_id', 'id 형식 오류', 'walk_id는 앞선 결과의 walk_id를 그대로 쓴다.');
   const offset = offsetOf(args.offset);
   const courseText = textOrNull(args.source_course_id);
+  const bookText = textOrNull(args.source_book_id);
   const scopeText = textOrNull(args.source_scope);
   let data: unknown;
   try {
     if (walkId) {
       data = await src.courseMapRead!('concept_review_walk', {
         p_walk_id: walkId, p_filter: null, p_offset: offset, p_limit: REVIEW_LIST_LIMIT,
+      });
+    } else if (bookText) {
+      if (courseText || reviewListFilterPresent(args)) {
+        const mixed = ERRORS.concept_review_source_mixed;
+        return bad(name, 'concept_review_source_mixed', mixed[0], mixed[1]);
+      }
+      const bookId = uuid(bookText);
+      if (!bookId) {
+        return bad(name, 'invalid_id', 'id 형식 오류', 'source_book_id는 find_concept_review_jobs의 books.book_id를 쓴다.');
+      }
+      const bookScope = scopeText ?? 'all';
+      if (!SOURCE_SCOPES.has(bookScope)) {
+        const badScope = ERRORS.concept_review_bad_source_scope;
+        return bad(name, 'concept_review_bad_source_scope', badScope[0], badScope[1]);
+      }
+      data = await src.courseMapRead!('concept_review_book_walk', {
+        p_source_book_id: bookId, p_source_scope: bookScope, p_offset: offset, p_limit: REVIEW_LIST_LIMIT,
       });
     } else if (courseText || scopeText) {
       if (reviewListFilterPresent(args)) {
@@ -1091,7 +1111,7 @@ async function readReviewList(name: string, args: Rec, src: CourseMapToolSource)
     if (missing > 0) notes.push(`missing ${missing}개는 목록을 만든 뒤 지워진 개념이다.`);
     if ((count(d.created_after) ?? 0) > 0) {
       const filter = rec(d.filter);
-      const sourceList = filter.source_course_id != null || filter.source_scope != null;
+      const sourceList = filter.source_course_id != null || filter.source_book_id != null || filter.source_scope != null;
       notes.push(
         `목록을 시작한 뒤 생긴 개념 ${String(d.created_after)}개는 이 목록에 없다. 다 훑은 뒤 사용자에게 알리고 새 목록으로 따로 본다.` +
           (sourceList ? ' 이 수는 출처 조건에 새로 든 후보 수가 아니라, 목록을 만든 뒤 생긴 개념 전체 수다.' : ''),
@@ -1396,6 +1416,10 @@ const ERRORS: Record<string, [summary: string, next: string]> = {
   concept_review_empty_course_key: [
     '과정 키 없음',
     '이 과정에는 course_key가 없다. get_course_maps에서 course_key가 있는 과정을 고른다. 목록은 만들지 않았다.',
+  ],
+  concept_review_book_not_found: [
+    '없는 교재',
+    'source_book_id는 find_concept_review_jobs의 books.book_id만 쓴다. 목록은 만들지 않았다.',
   ],
   concept_review_bad_filter: ['조건 오류', '조건 칸 값을 도구 설명의 값으로 고친다. name은 80자 이내다.'],
   concept_review_folder_not_found: ['없는 폴더', 'folder_id는 list_concept_categories의 id만 쓴다.'],

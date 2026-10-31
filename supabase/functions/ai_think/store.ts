@@ -75,6 +75,7 @@ export const COURSE_MAP_READ_FNS = new Set<string>([
   'concept_think_detail',
   'concept_review_walk',
   'concept_review_source_walk',
+  'concept_review_book_walk',
   'concept_review_status',
   'concept_relation_list',
 ]);

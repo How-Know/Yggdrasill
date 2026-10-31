@@ -56,7 +56,6 @@ LV_IMG_DECLARE(stop_100dp_999999_FILL0_wght400_GRAD0_opsz48);
 LV_IMG_DECLARE(lists_100dp_999999_FILL0_wght400_GRAD0_opsz48);
 LV_IMG_DECLARE(check_100dp_999999_FILL0_wght400_GRAD0_opsz48);
 
-struct ConfirmToWaitCtx;
 extern void screensaver_attach_activity(lv_obj_t* root);
 
 // 간단 포팅: 시뮬레이터 레이아웃을 축약 반영
@@ -79,8 +78,6 @@ static lv_obj_t* s_raise_question_confirm_popup = nullptr;
 static lv_obj_t* s_test_start_confirm_popup = nullptr;
 static int s_test_start_popup_group_idx = -1;
 static lv_obj_t* s_test_abort_confirm_popup = nullptr;
-static lv_obj_t* s_confirm_to_wait_popup = nullptr;
-static ConfirmToWaitCtx* s_confirm_to_wait_ctx = nullptr;
 static lv_obj_t* s_entry_hub = nullptr;
 static lv_obj_t* s_hub_topbar = nullptr;
 static lv_obj_t* s_welcome_page = nullptr;
@@ -293,10 +290,6 @@ struct HwChildEntry {
   int8_t phase;
   int32_t accumulated;
 };
-struct ConfirmToWaitCtx {
-  char group_id[40];
-};
-
 struct HwGroupData {
   char group_id[40];
   char group_title[40];
@@ -684,7 +677,6 @@ static void close_bind_confirm_popup(void);
 static void close_raise_question_confirm_popup(void);
 static void close_test_start_confirm_popup(void);
 static void close_test_abort_confirm_popup(void);
-static void close_confirm_to_wait_popup(void);
 static void show_raise_question_confirm_popup(void);
 static void show_test_start_confirm_popup(int group_idx);
 static void show_test_abort_confirm_popup(void);
@@ -696,7 +688,6 @@ static void show_test_perform_screen(int group_idx);
 static void close_test_perform_screen(void);
 static void show_test_end_popup(void);
 static void close_test_end_popup(void);
-static void show_confirm_phase_to_waiting_popup(const char* group_id, int group_idx);
 static void show_entry_hub_overlay(uint8_t page_idx = 1);
 static void set_hub_pager_visible(bool visible);
 static void close_student_info_screen(bool show_entry_hub);
@@ -820,13 +811,12 @@ static void snackbar_clicked_cb(lv_event_t* e) {
   if (s_snackbar_type == 1) {
     uint32_t now = millis();
     if (now < s_snackbar_click_enable_after_ms) return;
-    bool in_homework_list = (s_pages && lv_obj_is_valid(s_pages) && s_homeworks_mode);
-    bool detail_open = (s_hw_detail_screen && lv_obj_is_valid(s_hw_detail_screen));
-    if (!detail_open && in_homework_list && s_first_p4_group_idx >= 0) {
-      lv_obj_t* target = s_list && lv_obj_is_valid(s_list)
-        ? lv_obj_get_child(s_list, s_first_p4_group_idx)
-        : nullptr;
-      if (target && lv_obj_is_valid(target)) lv_obj_scroll_to_view(target, LV_ANIM_ON);
+    // 완료 예정은 카드에 남긴다. 일반 확인만 대기로 보내고, 알림은 한 번에 끈다.
+    if (s_groups) {
+      for (uint8_t i = 0; i < s_group_cnt; i++) {
+        if (s_groups[i].phase != 4 || s_groups[i].pending_complete) continue;
+        (void)fw_publish_group_transition(s_groups[i].group_id, 4);
+      }
     }
     s_phase4_alarm_muted = true;
     g_should_vibrate_phase4 = false;
@@ -1585,17 +1575,6 @@ static void close_test_abort_confirm_popup(void) {
   s_test_abort_confirm_popup = nullptr;
 }
 
-static void close_confirm_to_wait_popup(void) {
-  if (s_confirm_to_wait_popup && lv_obj_is_valid(s_confirm_to_wait_popup)) {
-    lv_obj_del(s_confirm_to_wait_popup);
-  }
-  s_confirm_to_wait_popup = nullptr;
-  if (s_confirm_to_wait_ctx) {
-    free(s_confirm_to_wait_ctx);
-    s_confirm_to_wait_ctx = nullptr;
-  }
-}
-
 static void show_raise_question_confirm_popup(void) {
   if (s_raise_question_confirm_popup && lv_obj_is_valid(s_raise_question_confirm_popup)) return;
 
@@ -1880,100 +1859,6 @@ void show_complete_overlay(void) {
   s_complete_timeout_timer = lv_timer_create(complete_overlay_timeout_cb, 2500, nullptr);
   lv_timer_set_repeat_count(s_complete_timeout_timer, 1);
   screensaver_attach_activity(lv_scr_act());
-}
-
-static void show_confirm_phase_to_waiting_popup(const char* group_id, int group_idx) {
-  if (!group_id || !group_id[0]) return;
-  if (s_confirm_to_wait_popup && lv_obj_is_valid(s_confirm_to_wait_popup)) return;
-
-  ConfirmToWaitCtx* ctx = (ConfirmToWaitCtx*)malloc(sizeof(ConfirmToWaitCtx));
-  if (!ctx) return;
-  strncpy(ctx->group_id, group_id, sizeof(ctx->group_id) - 1);
-  ctx->group_id[sizeof(ctx->group_id) - 1] = '\0';
-  s_confirm_to_wait_ctx = ctx;
-
-  const char* line1 = u8"과제";
-  if (group_idx >= 0 && (unsigned)group_idx < s_group_cnt) {
-    const HwGroupData& g = s_groups[group_idx];
-    if (g.group_title[0]) line1 = g.group_title;
-    else if (g.book_name[0]) line1 = g.book_name;
-  }
-
-  s_confirm_to_wait_popup = lv_obj_create(lv_scr_act());
-  lv_obj_set_size(s_confirm_to_wait_popup, 276, 168);
-  lv_obj_center(s_confirm_to_wait_popup);
-  lv_obj_set_style_bg_color(s_confirm_to_wait_popup, lv_color_hex(0x202020), 0);
-  lv_obj_set_style_bg_opa(s_confirm_to_wait_popup, LV_OPA_COVER, 0);
-  lv_obj_set_style_border_width(s_confirm_to_wait_popup, 1, 0);
-  lv_obj_set_style_border_color(s_confirm_to_wait_popup, lv_color_hex(0x3A3A3A), 0);
-  lv_obj_set_style_radius(s_confirm_to_wait_popup, 14, 0);
-  lv_obj_set_style_pad_all(s_confirm_to_wait_popup, 12, 0);
-  lv_obj_set_style_pad_row(s_confirm_to_wait_popup, 10, 0);
-  lv_obj_clear_flag(s_confirm_to_wait_popup, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_set_flex_flow(s_confirm_to_wait_popup, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_flex_align(s_confirm_to_wait_popup, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-  lv_obj_t* msg = lv_label_create(s_confirm_to_wait_popup);
-  lv_obj_set_width(msg, 248);
-  lv_obj_set_style_text_align(msg, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(msg, &kakao_kr_16, 0);
-  lv_obj_set_style_text_color(msg, lv_color_hex(0xD0D0D0), 0);
-  lv_label_set_long_mode(msg, LV_LABEL_LONG_WRAP);
-  char msgbuf[160];
-  snprintf(msgbuf, sizeof(msgbuf), u8"%.*s\n과제를 찾아왔나요?", 32, line1);
-  lv_label_set_text(msg, msgbuf);
-
-  lv_obj_t* row = lv_obj_create(s_confirm_to_wait_popup);
-  lv_obj_set_width(row, lv_pct(100));
-  lv_obj_set_height(row, 50);
-  lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_border_width(row, 0, 0);
-  lv_obj_set_style_pad_all(row, 0, 0);
-  lv_obj_set_style_pad_column(row, 12, 0);
-  lv_obj_set_scrollbar_mode(row, LV_SCROLLBAR_MODE_OFF);
-  lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-  lv_obj_t* cancel_btn = lv_btn_create(row);
-  lv_obj_set_size(cancel_btn, 118, 40);
-  lv_obj_set_style_radius(cancel_btn, LV_RADIUS_CIRCLE, 0);
-  style_flat_button(cancel_btn);
-  lv_obj_set_style_bg_color(cancel_btn, lv_color_hex(0x323232), 0);
-  lv_obj_set_style_border_width(cancel_btn, 0, 0);
-  lv_obj_t* cancel_lbl = lv_label_create(cancel_btn);
-  lv_obj_set_style_text_font(cancel_lbl, &kakao_kr_16, 0);
-  lv_label_set_text(cancel_lbl, u8"취소");
-  lv_obj_center(cancel_lbl);
-  lv_obj_add_event_cb(cancel_btn, [](lv_event_t* e) {
-    (void)e;
-    close_confirm_to_wait_popup();
-  }, LV_EVENT_CLICKED, NULL);
-
-  lv_obj_t* confirm_btn = lv_btn_create(row);
-  lv_obj_set_size(confirm_btn, 118, 40);
-  style_pill_confirm(confirm_btn);
-  lv_obj_set_style_border_width(confirm_btn, 0, 0);
-  lv_obj_t* confirm_lbl = lv_label_create(confirm_btn);
-  lv_obj_set_style_text_font(confirm_lbl, &kakao_kr_16, 0);
-  lv_label_set_text(confirm_lbl, u8"확인");
-  lv_obj_center(confirm_lbl);
-  lv_obj_add_event_cb(confirm_btn, [](lv_event_t* e) {
-    (void)e;
-    char gid[40] = {};
-    if (s_confirm_to_wait_ctx) {
-      strncpy(gid, s_confirm_to_wait_ctx->group_id, sizeof(gid) - 1);
-      gid[sizeof(gid) - 1] = '\0';
-    }
-    close_confirm_to_wait_popup();
-    if (gid[0]) {
-      // 확인→대기 전환(재시도)일 뿐 완료가 아니므로 완료 다이얼로그는 띄우지 않는다.
-      // 완료 안내는 채점자가 실제 완료 처리해 카드가 목록에서 사라질 때만 표시된다.
-      (void)fw_publish_group_transition(gid, 4);
-    }
-  }, LV_EVENT_CLICKED, NULL);
-
-  screensaver_attach_activity(s_confirm_to_wait_popup);
 }
 
 static void finish_logout(bool print_notice) {
@@ -4255,7 +4140,6 @@ static void build_student_list_ui() {
   close_raise_question_confirm_popup();
   close_test_start_confirm_popup();
   close_test_abort_confirm_popup();
-  close_confirm_to_wait_popup();
   if (s_hub_clock_timer) { lv_timer_del(s_hub_clock_timer); s_hub_clock_timer = nullptr; }
   if (s_entry_hub && lv_obj_is_valid(s_entry_hub)) { lv_obj_del(s_entry_hub); s_entry_hub = nullptr; s_entry_name_label = nullptr; s_hub_clock_label = nullptr; s_hub_battery_widget = nullptr; s_hub_battery_label = nullptr; }
   if (s_student_info_screen && lv_obj_is_valid(s_student_info_screen)) { lv_obj_del(s_student_info_screen); s_student_info_screen = nullptr; }
@@ -4323,7 +4207,6 @@ static void build_homeworks_ui_internal() {
   close_raise_question_confirm_popup();
   close_test_start_confirm_popup();
   close_test_abort_confirm_popup();
-  close_confirm_to_wait_popup();
   if (s_hub_clock_timer) { lv_timer_del(s_hub_clock_timer); s_hub_clock_timer = nullptr; }
   if (s_entry_hub && lv_obj_is_valid(s_entry_hub)) { lv_obj_del(s_entry_hub); s_entry_hub = nullptr; s_entry_name_label = nullptr; s_hub_clock_label = nullptr; s_hub_battery_widget = nullptr; s_hub_battery_label = nullptr; }
   if (s_student_info_screen && lv_obj_is_valid(s_student_info_screen)) { lv_obj_del(s_student_info_screen); s_student_info_screen = nullptr; }
@@ -4641,7 +4524,6 @@ void ui_before_screen_change(void) {
   close_raise_question_confirm_popup();
   close_test_start_confirm_popup();
   close_test_abort_confirm_popup();
-  close_confirm_to_wait_popup();
   close_student_info_screen(false);
   close_stopwatch_screen(false);
   close_hw_add_menu_page();
@@ -4661,7 +4543,6 @@ void ui_before_screensaver(void) {
   close_raise_question_confirm_popup();
   close_test_start_confirm_popup();
   close_test_abort_confirm_popup();
-  close_confirm_to_wait_popup();
   close_volume_popup();
   close_brightness_popup();
   if (s_hub_clock_timer) { lv_timer_del(s_hub_clock_timer); s_hub_clock_timer = nullptr; }
@@ -5577,7 +5458,9 @@ static void hw_perform_card_action(int group_idx) {
       update_detail_play_button_visual();
     }
   } else if (phase == 4) {
-    show_confirm_phase_to_waiting_popup(g.group_id, group_idx);
+    if (!fw_publish_group_transition(g.group_id, 4)) return;
+    // 완료 예정만 바로 완료 안내. 일반 확인은 대기로만 내려간다.
+    if (g.pending_complete) show_complete_overlay();
   }
 }
 
@@ -6240,7 +6123,10 @@ void ui_port_update_homeworks(const JsonArray& groups) {
       }
       if (!still) completed_any = true;
     }
-    if (completed_any) show_complete_overlay();
+    // 카드에서 이미 완료 안내를 띄운 경우에는 목록 갱신이 같은 안내를 다시 열지 않는다.
+    if (completed_any && !(s_complete_overlay && lv_obj_is_valid(s_complete_overlay))) {
+      show_complete_overlay();
+    }
   }
 
   memcpy(s_hw_cache, new_cache, sizeof(HwCacheEntry) * new_cnt);

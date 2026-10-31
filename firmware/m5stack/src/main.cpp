@@ -1042,9 +1042,16 @@ static void handle_bind_day_expiry(uint32_t nowTick) {
 
 // 방전으로 전원이 끊기기 전에 바인딩을 푼다. bat_unbind를 먼저 남기고
 // 로컬 기록을 지운다. 서버 해제가 확인되기 전에는 표시를 유지해 다음 접속에서 다시 보낸다.
-// 잔량 측정이 한 번 튀는 것만으로 풀리지 않게, 충전 중이 아닌 1% 이하가 5초 간격으로 두 번일 때 실행한다.
+// 잔량 측정이 한 번 튀는 것만으로 풀리지 않게, 외부 전원이 없는 1% 이하가 5초 간격으로 두 번일 때 실행한다.
 static const uint32_t LOW_BAT_CHECK_MS = 5000;
 static const int LOW_BAT_UNBIND_LEVEL = 1;
+
+// 고장난 배터리는 충전 전류가 없어 isCharging()이 꺼진 채 USB로만 켜진다.
+// Core2는 USB가 VBUS, 어댑터 단자가 ACIN이다. 둘 중 하나라도 있으면 해제하지 않는다.
+static bool external_power_present() {
+  if (M5.Power.isCharging() == m5::Power_Class::is_charging) return true;
+  return M5.Power.Axp192.isVBUS() || M5.Power.Axp192.isACIN();
+}
 
 static void handle_low_battery_unbind(uint32_t nowTick) {
   static uint32_t lastMs = 0;
@@ -1057,7 +1064,7 @@ static void handle_low_battery_unbind(uint32_t nowTick) {
   lastMs = nowTick;
 
   int32_t raw = M5.Power.getBatteryLevel();
-  if (raw < 0 || raw > 100 || M5.Power.isCharging() || raw > LOW_BAT_UNBIND_LEVEL) {
+  if (raw < 0 || raw > 100 || external_power_present() || raw > LOW_BAT_UNBIND_LEVEL) {
     lowStreak = 0;
     return;
   }

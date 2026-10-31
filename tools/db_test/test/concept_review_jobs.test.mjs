@@ -378,3 +378,73 @@ test('출처 목록으로 새 작업을 열어도 기존 작업·승인 행은 �
   assert.deepEqual(batch.batch[0].todo, ['meaning', 'foundation', 'placement']);
   assert.deepEqual(await jobSnap(oldJob), before, '기존 작업·항목·승인 기록·목록 id는 바꾸지 않는다');
 });
+
+test('특정 교재 출처 고정 목록은 그 교재 개념만 묶고, 새 출처가 추가되면 외부 근거 미확인(gap)을 한 번 다시 판단한 뒤 실패 시 다시 gap으로 둔다', async () => {
+  const F = await folder(`교재목록 ${randomUUID().slice(0, 6)}`);
+  const c1 = await insertConcept(t, '교재개념 ㄱ', F);
+  const c2 = await insertConcept(t, '교재개념 ㄴ', F);
+  const bookB = randomUUID();
+  await t.exec(`insert into resource_files (id, academy_id, name) values ('${bookB}', '${S.academy}', '개념원리 1-1')`);
+  await t.exec(
+    `insert into concept_sources (concept_id, academy_id, book_id, grade_label, raw_page, created_at)
+     values ('${c1}', '${S.academy}', '${S.book}', '중1-1', 10, '2026-10-30T00:00:00Z'),
+            ('${c2}', '${S.academy}', '${bookB}', '중1-1', 20, '2026-10-30T00:00:00Z')`,
+  );
+
+  // c1: notation·foundation·placement는 met, meaning은 외부 근거 미확인(gap: source)
+  await apply((await proposeReview([
+    await reviewItem(c1, 'notation'),
+    await reviewItem(c1, 'meaning', {
+      outcome: 'unverified',
+      unverified: '교재 출처 미확인',
+      detail: { evidence_gaps: ['source'] },
+    }),
+    await reviewItem(c1, 'foundation', { detail: { needs: [], none_basis: '추가 기초 없음' } }),
+    await reviewItem(c1, 'placement', { detail: { basis_kind: 'source' } }),
+  ])).id);
+
+  const st1 = await stateOf(c1);
+  assert.equal(st1.scopes.meaning.state, 'gap');
+  assert.deepEqual(st1.todo, []);
+
+  // 새 교재(bookB) 출처가 c1에 추가되면 meaning(gap)과 placement가 recheck 대상으로 열린다.
+  await t.exec(
+    `insert into concept_sources (concept_id, academy_id, book_id, grade_label, raw_page, created_at)
+     values ('${c1}', '${S.academy}', '${bookB}', '중1-1', 21, clock_timestamp() + interval '1 second')`,
+  );
+  const st2 = await stateOf(c1);
+  assert.equal(st2.scopes.meaning.state, 'recheck');
+  assert.equal(st2.scopes.placement.state, 'recheck');
+  assert.deepEqual(st2.todo, ['meaning', 'placement']);
+
+  // 특정 교재(bookB)로 검수 목록을 고정하면 c1, c2가 묶이고 find_concept_review_jobs의 books에도 나온다.
+  const found = await r(`select concept_review_jobs_find() as r`);
+  const foundBook = found.books.find((b) => b.book_id === bookB);
+  assert.ok(foundBook);
+  assert.equal(foundBook.book_name, '개념원리 1-1');
+  assert.equal(foundBook.concepts, 2);
+
+  const bookWalk = await r(`select concept_review_book_walk($1::uuid, 'all', 0, 40) as r`, [bookB]);
+  assert.equal(bookWalk.filter.source_book_id, bookB);
+  assert.equal(bookWalk.filter.book_name, '개념원리 1-1');
+  assert.deepEqual(bookWalk.items.map((i) => i.id), [c1, c2]);
+
+  // 다시 판단해도 여전히 외부 근거 미확인(gap)으로 승인되면 다시 gap(1차 충족)으로 돌아가고 반복하지 않는다.
+  await t.exec(
+    `update concept_sources set created_at = clock_timestamp() - interval '1 second'
+      where concept_id = '${c1}' and book_id = '${bookB}'`,
+  );
+  await apply((await proposeReview([
+    await reviewItem(c1, 'meaning', {
+      outcome: 'unverified',
+      unverified: '새 교재에서도 외부 근거 미확인',
+      detail: { evidence_gaps: ['source'] },
+    }),
+    await reviewItem(c1, 'placement', { detail: { basis_kind: 'source' } }),
+  ])).id);
+  const st3 = await stateOf(c1);
+  assert.equal(st3.scopes.meaning.state, 'gap');
+  assert.equal(st3.scopes.placement.state, 'met');
+  assert.deepEqual(st3.todo, []);
+});
+

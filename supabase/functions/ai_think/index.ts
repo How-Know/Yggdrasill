@@ -19,7 +19,8 @@ import { createAiProvider, isAiConfigured } from '../_shared/ai/provider.ts';
 import { sseComment, sseEvent } from '../_shared/ai/sse.ts';
 import { recordAiRun } from '../_shared/ai/usage.ts';
 import { normalizeThinkRole, parseDepartmentList } from './access_context.ts';
-import { runThinkChat } from './chat.ts';
+import { runThinkChat, REVIEW_BATCH_FINAL_RESERVE_MS } from './chat.ts';
+import { runReviewBatch } from './concept_review_batch.ts';
 import { CONCEPT_REFERENCE_VERSION } from './concept_reference.ts';
 import { CRITERION_REFERENCE_VERSION } from './criterion_reference.ts';
 import { CONCEPT_DRAFT_REFERENCE_VERSION } from './concept_draft_reference.ts';
@@ -344,6 +345,135 @@ async function handleSpecExport(auth: AuthContext, body: Body): Promise<Response
   return jsonResponse({ ok: true, markdown: out.value.markdown, suggested_path: out.value.suggestedPath, run_id: out.runId });
 }
 
+async function handleBookReview(req: Request, auth: AuthContext, body: Body): Promise<Response> {
+  const subAction = body.sub_action === 'approve' ? 'approve' : 'run';
+  const bookId = uuidOrNull(body.book_id);
+  const bookName = typeof body.book_name === 'string' ? body.book_name.trim() : '';
+  let jobId = uuidOrNull(body.job_id);
+  let walkId: string | null = null;
+  let conversationId = uuidOrNull(body.conversation_id);
+
+  const wallClockMs = thinkWallClockMs();
+  const provider = createAiProvider({ timeoutMs: wallClockMs + 5000 });
+  if (!provider) return errorResponse(503, 'ai_not_configured', 'OPENAI_API_KEY 비밀값이 설정되지 않았습니다.');
+  const budget = await getBudgetStatus(auth.admin).catch(() => null);
+  if (budget?.exceeded && budget.mode === 'block') return errorResponse(429, 'budget_exceeded', '이번 달 AI 한도를 넘었습니다.');
+
+  const store = new SupabaseThinkStore(auth.userClient as unknown as SupabaseLike);
+  if (!conversationId) {
+    const conv = await store.createConversation(`교재 개념 추가 검수: ${bookName || '새 교재'}`.slice(0, 120));
+    conversationId = conv.id;
+  }
+  if (!jobId) {
+    if (!bookId) return errorResponse(400, 'book_id_required', '교재 id가 필요합니다.');
+    const walkRes = (await store.courseMapRead('concept_review_book_walk', {
+      p_source_book_id: bookId,
+      p_source_scope: 'all',
+      p_offset: 0,
+      p_limit: 40,
+    })) as Record<string, unknown>;
+    walkId = typeof walkRes.walk_id === 'string' ? walkRes.walk_id : null;
+    if (!walkId) return errorResponse(502, 'walk_create_failed', '교재 검수 목록을 만들지 못했습니다.');
+    const startRes = (await store.reviewJobRpc('concept_review_job_start', {
+      p_walk_id: walkId,
+      p_title: `${bookName || '새 교재'} 개념 추가 검수`.slice(0, 120),
+    })) as Record<string, unknown>;
+    jobId = typeof startRes.job_id === 'string' ? startRes.job_id : null;
+    if (!jobId) return errorResponse(502, 'job_start_failed', '교재 검수 작업을 열지 못했습니다.');
+  }
+
+  const safetyId = await safetyIdentifier(auth.userId);
+  const runBatchOnce = async () => {
+    const startedAt = Date.now();
+    const signal = AbortSignal.any([req.signal, AbortSignal.timeout(wallClockMs)]);
+    const out = await runReviewBatch(
+      {
+        callId: `book_review_${startedAt}`,
+        rawArguments: JSON.stringify({ job_id: jobId, target: 50 }),
+        conversationId: conversationId!,
+        userId: auth.userId,
+        safetyId,
+        signal,
+        deadline: startedAt + wallClockMs - REVIEW_BATCH_FINAL_RESERVE_MS,
+        round: 1,
+        startedAt,
+      },
+      { holder: `think:${conversationId}:${startedAt}`, leases: new Map(), cards: 0 },
+      { provider, store, recordRun: (rec) => recordAiRun(auth.admin, rec), env: Deno.env, now: Date.now },
+    );
+    try {
+      return JSON.parse(out.output) as Record<string, unknown>;
+    } catch {
+      return { error: 'batch_parse_failed' } as Record<string, unknown>;
+    }
+  };
+
+  const applyPendingCards = async () => {
+    const stRes = await auth.userClient.rpc('concept_review_job_status_live', { p_job_id: jobId, p_open_limit: 20 });
+    const st = (stRes.data ?? {}) as Record<string, unknown>;
+    const pending = Array.isArray(st.pending_cards) ? (st.pending_cards as Record<string, unknown>[]) : [];
+    const ordered = [...pending].sort((a, b) => {
+      const ka = String(a.kind ?? '') === 'concept_review_record' ? 0 : 1;
+      const kb = String(b.kind ?? '') === 'concept_review_record' ? 0 : 1;
+      return ka - kb;
+    });
+    let appliedReviews = 0;
+    let appliedFixes = 0;
+    for (const card of ordered) {
+      const actionId = typeof card.action_id === 'string' ? card.action_id : '';
+      if (!actionId) continue;
+      const res = await auth.userClient.rpc('course_think_action_apply', { p_id: actionId, p_overrides: {} });
+      if (!res.error) {
+        if (String(card.kind ?? '') === 'concept_review_record') appliedReviews += 1;
+        else appliedFixes += 1;
+      }
+    }
+    return { appliedReviews, appliedFixes };
+  };
+
+  const syncProgressSnapshot = async () => {
+    for (let i = 0; i < 6; i += 1) {
+      const step = await auth.userClient.rpc('concept_review_progress_step', { p_job_id: jobId, p_limit: 50 });
+      const data = (step.data ?? {}) as Record<string, unknown>;
+      if (step.error || data.more !== true) break;
+    }
+  };
+
+  if (subAction === 'approve') {
+    const first = await applyPendingCards();
+    let second = { appliedReviews: 0, appliedFixes: 0 };
+    if (first.appliedFixes > 0) {
+      await runBatchOnce();
+      second = await applyPendingCards();
+    }
+    await syncProgressSnapshot();
+    const liveRes = await auth.userClient.rpc('concept_review_job_status_live', { p_job_id: jobId, p_open_limit: 20 });
+    return jsonResponse({
+      ok: true,
+      job_id: jobId,
+      conversation_id: conversationId,
+      applied_reviews: first.appliedReviews + second.appliedReviews,
+      applied_fixes: first.appliedFixes + second.appliedFixes,
+      live: liveRes.data ?? null,
+    });
+  }
+
+  const batch = await runBatchOnce();
+  await syncProgressSnapshot();
+  const liveRes = await auth.userClient.rpc('concept_review_job_status_live', { p_job_id: jobId, p_open_limit: 20 });
+  const endReason = String(batch.end_reason ?? '');
+  const hasMore = endReason === 'target_reached' || endReason === 'time_budget';
+  return jsonResponse({
+    ok: true,
+    job_id: jobId,
+    walk_id: walkId,
+    conversation_id: conversationId,
+    batch,
+    live: liveRes.data ?? null,
+    has_more: hasMore,
+  });
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   if (req.method !== 'POST') return errorResponse(405, 'method_not_allowed');
@@ -374,6 +504,8 @@ Deno.serve(async (req) => {
         return await handleMemoryFeedbackDraft(auth, body);
       case 'spec_export':
         return await handleSpecExport(auth, body);
+      case 'book_review':
+        return await handleBookReview(req, auth, body);
       default:
         return errorResponse(400, 'unknown_action');
     }

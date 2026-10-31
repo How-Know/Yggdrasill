@@ -1,0 +1,10 @@
+[build]
+  publish = "."
+
+[[edge_functions]]
+  function = "sheet"
+  path = "/s"
+
+[[edge_functions]]
+  function = "sheet"
+  path = "/s/"

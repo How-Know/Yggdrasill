@@ -369,6 +369,52 @@ test('한 지면에 같은 번호 박스가 둘이면 차례대로 첫째·둘�
   assert.deepEqual(out.items.map((one) => one.expected_index), [0, 1]);
 });
 
+test('이어지는 박스 문항에 아래쪽 다음 박스 쪽을 적어도 하나뿐인 후보면 붙인다', () => {
+  // 해설 103쪽: 본문 238쪽 03-1 에 다음 박스 머리 "문제 240쪽" 을 적었다.
+  const entries = [{ number: '03-1', corner: '문제', page: 238, position: 0 }];
+  const item = (source_page) => ({
+    problem_number: '03-1',
+    kind: 'subjective',
+    answer_text: '3',
+    bbox: [100, 50, 120, 300],
+    source_corner: '문제',
+    source_page,
+  });
+  const opts = {
+    expectedEntries: entries,
+    expectedNumbers: ['03-1'],
+    series: 'gaeyu_high',
+    rawPage: 103,
+    displayPage: 103,
+  };
+  assert.deepEqual(
+    normalizeAnswerResult({ items: [item(240)] }, opts).items.map(
+      (one) => one.expected_index,
+    ),
+    [0],
+  );
+  // 다음 소단원의 같은 번호(10쪽 넘게 뒤)는 여전히 버린다.
+  assert.equal(normalizeAnswerResult({ items: [item(250)] }, opts).items.length, 0);
+  // 앞 박스 쪽은 다음 박스 머리가 아니므로 버린다.
+  assert.equal(normalizeAnswerResult({ items: [item(236)] }, opts).items.length, 0);
+
+  const refs = normalizeSolutionRefsResult(
+    {
+      items: [
+        {
+          problem_number: '03-1',
+          source_corner: '문제',
+          source_page: 240,
+          number_region: [60, 40, 80, 90],
+          content_region: [60, 40, 300, 480],
+        },
+      ],
+    },
+    opts,
+  );
+  assert.deepEqual(refs.items.map((one) => one.expected_index), [0]);
+});
+
 test('해설 좌표도 꼬리말 쪽을 출처에서 지운다', () => {
   const out = normalizeSolutionRefsResult(
     {

@@ -74,7 +74,7 @@ Future<void> applyDepartureSummaryAfterSave({
   await HomeworkStore.instance.reloadStudentHomework(studentId);
 }
 
-Future<void> finalizeDepartureTodoSheetSnapshot({
+Future<String> finalizeDepartureTodoSheetSnapshot({
   required String attendanceId,
   required String studentId,
   required String studentName,

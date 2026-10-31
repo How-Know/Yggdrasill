@@ -272,16 +272,23 @@ class SolidCapsuleActionButton extends StatefulWidget {
   const SolidCapsuleActionButton({
     super.key,
     this.tooltip,
-    required this.icon,
+    this.icon,
+    this.iconBuilder,
     this.onPressed,
     this.selected = false,
     this.accentWhenSelected = false,
     this.iconSize = 25,
     this.hitSize = 40,
-  });
+  }) : assert(
+          icon != null || iconBuilder != null,
+          'icon 또는 iconBuilder가 필요합니다',
+        );
 
   final String? tooltip;
-  final IconData icon;
+  final IconData? icon;
+
+  /// Material 아이콘 대신 그릴 때. 색과 크기는 버튼이 넘긴다.
+  final Widget Function(Color color, double size)? iconBuilder;
   final VoidCallback? onPressed;
   final bool selected;
   final bool accentWhenSelected;
@@ -347,14 +354,19 @@ class _SolidCapsuleActionButtonState extends State<SolidCapsuleActionButton>
     );
     final enabled = widget.onPressed != null;
     final shellScales = _SolidCapsuleBounceScope.maybeOf(context) != null;
+    final color = enabled ? fg : fg.withValues(alpha: 0.35);
+    final built = widget.iconBuilder?.call(color, widget.iconSize);
 
     Widget icon = SizedBox(
       width: widget.hitSize,
       height: widget.hitSize,
-      child: Icon(
-        widget.icon,
-        size: widget.iconSize,
-        color: enabled ? fg : fg.withValues(alpha: 0.35),
+      child: Center(
+        child: built ??
+            Icon(
+              widget.icon,
+              size: widget.iconSize,
+              color: color,
+            ),
       ),
     );
 

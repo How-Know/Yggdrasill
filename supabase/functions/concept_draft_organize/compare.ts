@@ -276,6 +276,22 @@ export function overlapNames(folderPlan: unknown): Map<number, string[]> {
   return out;
 }
 
+/** 근거 블록이 속한 원본 PDF 쪽 번호(중복 제외, 등장 순). */
+export function entryPages(prepared: unknown, blockIds: string[]): number[] {
+  const p = (prepared ?? {}) as Record<string, unknown>;
+  const byId = new Map<string, number>();
+  for (const b of Array.isArray(p.blocks) ? (p.blocks as Record<string, unknown>[]) : []) {
+    const page = Number(b.raw_page);
+    if (Number.isInteger(page) && page > 0) byId.set(str(b.id), page);
+  }
+  const out: number[] = [];
+  for (const id of blockIds) {
+    const page = byId.get(id);
+    if (page !== undefined && !out.includes(page)) out.push(page);
+  }
+  return out;
+}
+
 /** 근거 블록 글을 순서대로 한 줄씩. */
 export function evidenceText(prepared: unknown, blockIds: string[]): string {
   const p = (prepared ?? {}) as Record<string, unknown>;

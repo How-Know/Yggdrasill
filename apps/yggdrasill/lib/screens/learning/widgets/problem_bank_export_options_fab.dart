@@ -10,6 +10,7 @@ class ProblemBankExportOptionsFab extends StatelessWidget {
     required this.panel,
     required this.isBusy,
     this.filterButton,
+    this.viewButton,
     this.questionOptionsButton,
     this.selectionButton,
     this.panelMaxWidth = 920,
@@ -18,6 +19,7 @@ class ProblemBankExportOptionsFab extends StatelessWidget {
   final Widget panel;
   final bool isBusy;
   final Widget? filterButton;
+  final Widget? viewButton;
   final Widget? questionOptionsButton;
   final Widget? selectionButton;
   final double panelMaxWidth;
@@ -28,10 +30,12 @@ class ProblemBankExportOptionsFab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final hasFilter = filterButton != null;
+    final hasView = viewButton != null;
     final hasQuestionOptions = questionOptionsButton != null;
     final hasSelection = selectionButton != null;
     final siblingOffset =
         (hasFilter ? _barItemSpacing + _barButtonHitSize : 0.0) +
+            (hasView ? _barItemSpacing + _barButtonHitSize : 0.0) +
             (hasQuestionOptions ? _barItemSpacing + _barButtonHitSize : 0.0) +
             (hasSelection ? _barItemSpacing + 52 : 0.0);
 
@@ -62,6 +66,7 @@ class ProblemBankExportOptionsFab extends StatelessWidget {
             ),
           ),
           if (filterButton != null) filterButton!,
+          if (viewButton != null) viewButton!,
           if (questionOptionsButton != null) questionOptionsButton!,
           if (selectionButton != null) selectionButton!,
         ],

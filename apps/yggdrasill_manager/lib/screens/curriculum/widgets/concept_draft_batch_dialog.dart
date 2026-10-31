@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../../../services/concept_book_service.dart';
+import '../../../services/concept_draft_compare.dart';
 import '../../../services/concept_draft_models.dart';
 import '../../../services/concept_draft_service.dart';
 import '../../../services/concept_library_service.dart';
@@ -12,7 +13,8 @@ import 'concept_draft_batch_confirm.dart';
 import 'concept_workspace.dart';
 
 /// 고른 중단원의 소단원 초안을 차례로(한 번에 하나씩) 만든다. 다 만든 뒤 운영자가 누르면 이번에 만든 초안을 한 번에 확정한다.
-/// 돌려주는 값은 초안을 하나라도 만들었는지. onConfirmed: 한 번에 확정해 라이브러리가 바뀌었을 때.
+/// addConcepts가 true면 소단원마다 추출 → 기존 개념 비교 → 확정(다른 서술은 확정 서술로) → 자동 검수까지 이어서 실행한다.
+/// 돌려주는 값은 초안을 하나라도 만들었는지. onConfirmed: 확정해 라이브러리가 바뀌었을 때.
 Future<bool> showConceptDraftBatchDialog(
   BuildContext context, {
   required ConceptBookEntry book,
@@ -21,6 +23,7 @@ Future<bool> showConceptDraftBatchDialog(
   ConceptDraftService? service,
   Duration rateLimitWait = const Duration(seconds: 65),
   VoidCallback? onConfirmed,
+  bool addConcepts = false,
 }) async {
   final made = await showDialog<bool>(
     context: context,
@@ -32,6 +35,7 @@ Future<bool> showConceptDraftBatchDialog(
       service: service,
       rateLimitWait: rateLimitWait,
       onConfirmed: onConfirmed,
+      addConcepts: addConcepts,
     ),
   );
   return made ?? false;
@@ -58,6 +62,7 @@ class ConceptDraftBatchDialog extends StatefulWidget {
     this.service,
     this.rateLimitWait = const Duration(seconds: 65),
     this.onConfirmed,
+    this.addConcepts = false,
   });
 
   final ConceptBookEntry book;
@@ -65,6 +70,7 @@ class ConceptDraftBatchDialog extends StatefulWidget {
   final List<ConceptCriterion> criteria;
   final ConceptDraftService? service;
   final VoidCallback? onConfirmed;
+  final bool addConcepts;
 
   /// 요청 제한(분당 횟수)에 걸리면 이만큼 기다렸다가 같은 단계를 한 번 다시 한다.
   final Duration rateLimitWait;
@@ -88,6 +94,21 @@ class _ConceptDraftBatchDialogState extends State<ConceptDraftBatchDialog> {
   String? _confirmProgress;
   String? _confirmNotice;
   bool _confirmError = false;
+
+  /// 개념 추가하기(addConcepts) 집계 및 자동 검수 상태.
+  int _linkedTotal = 0;
+  int _statementsTotal = 0;
+  int _newConceptsTotal = 0;
+  int _revisesTotal = 0;
+  int _holdsTotal = 0;
+  bool _reviewRunning = false;
+  String? _reviewJobId;
+  String? _reviewConvId;
+  String? _reviewProgressLine;
+  String? _reviewFirstPassLine;
+  int _pendingCardsCount = 0;
+  int _reusedReviewCount = 0;
+  int _judgedSavedCount = 0;
 
   Map<int, Set<int>>? _reads;
   String? _readsError;
@@ -131,12 +152,20 @@ class _ConceptDraftBatchDialogState extends State<ConceptDraftBatchDialog> {
   Future<void> _start() async {
     final ok = await confirmThink(
       context,
-      title: '소단원 ${widget.units.length}개를 차례로 만들까요?',
-      message: [
-        '한 번에 하나씩 쪽 전사 → 개념 초안 정리 → 폴더 제안을 합니다. 예상 비용 약 \$${_cost.toStringAsFixed(2)}(시범 실측 기준 대략값).',
-        '만드는 동안에는 라이브러리에 넣지 않습니다. 다 만든 뒤 이 창에서 한 번에 확정하거나, "개념 초안" 목록에서 하나씩 검토합니다.',
-        '"멈추기"를 누르면 지금 하던 소단원까지 하고 멈춥니다. 만들어진 초안과 전사는 남고, 다시 고르면 남은 것만 합니다.',
-      ].join('\n\n'),
+      title: widget.addConcepts
+          ? '소단원 ${widget.units.length}개의 개념을 추가하고 자동 검수할까요?'
+          : '소단원 ${widget.units.length}개를 차례로 만들까요?',
+      message: widget.addConcepts
+          ? [
+              '소단원마다 쪽 전사 → 초안 정리 → 폴더 제안 → 기존 개념 비교 → 반영(기존 개념은 출처·확정 서술로 연결, 없는 개념은 신규 추가)을 차례로 실행한 뒤, 새로 추가·변경된 개념만 자동 검수합니다.',
+              '예상 추출 비용 약 \$${_cost.toStringAsFixed(2)}(시범 실측 기준 대략값, 비교·검수 비용 별도).',
+              '모든 단계가 끝나면 마지막에 반영·검수 요약과 승인 대기 카드를 한 번에 확인하고 승인할 수 있습니다.',
+            ].join('\n\n')
+          : [
+              '한 번에 하나씩 쪽 전사 → 개념 초안 정리 → 폴더 제안을 합니다. 예상 비용 약 \$${_cost.toStringAsFixed(2)}(시범 실측 기준 대략값).',
+              '만드는 동안에는 라이브러리에 넣지 않습니다. 다 만든 뒤 이 창에서 한 번에 확정하거나, "개념 초안" 목록에서 하나씩 검토합니다.',
+              '"멈추기"를 누르면 지금 하던 소단원까지 하고 멈춥니다. 만들어진 초안과 전사는 남고, 다시 고르면 남은 것만 합니다.',
+            ].join('\n\n'),
       confirmLabel: '시작',
     );
     if (!ok || !mounted) return;
@@ -144,6 +173,7 @@ class _ConceptDraftBatchDialogState extends State<ConceptDraftBatchDialog> {
       _running = true;
       _stopRequested = false;
       _stopReason = null;
+      _confirmNotice = null;
     });
     try {
       final cov = await _svc.coverage();
@@ -173,6 +203,13 @@ class _ConceptDraftBatchDialogState extends State<ConceptDraftBatchDialog> {
         continue;
       }
       await _runUnit(i);
+    }
+    if (!mounted) return;
+    if (widget.addConcepts && _confirmedIds.isNotEmpty) {
+      widget.onConfirmed?.call();
+      if (!_stopRequested && _stopReason == null) {
+        await _runAutoBookReview();
+      }
     }
     if (!mounted) return;
     setState(() {
@@ -233,11 +270,15 @@ class _ConceptDraftBatchDialogState extends State<ConceptDraftBatchDialog> {
       _draftIds[i] = draftId;
       say('넣을 폴더를 제안하는 중');
       await _withRetry(i, () => _svc.proposeFolders(draftId!));
-      if (!mounted) return;
-      setState(() {
-        _states[i] = _UnitState.done;
-        _messages[i] = '초안을 만들었습니다.';
-      });
+      if (widget.addConcepts) {
+        await _autoCompareAndConfirmUnit(i, draftId!, u, say);
+      } else {
+        if (!mounted) return;
+        setState(() {
+          _states[i] = _UnitState.done;
+          _messages[i] = '초안을 만들었습니다.';
+        });
+      }
     } catch (e) {
       if (!mounted) return;
       final code = e is ConceptDraftException ? e.code : '';
@@ -245,7 +286,9 @@ class _ConceptDraftBatchDialogState extends State<ConceptDraftBatchDialog> {
       setState(() {
         if (draftId != null) {
           _states[i] = _UnitState.folderFailed;
-          _messages[i] = '초안은 만들었지만 폴더 제안을 하지 못했습니다(검토 화면에서 폴더를 정하면 됩니다): $text';
+          _messages[i] = widget.addConcepts
+              ? '초안은 만들었지만 자동 비교·확정을 끝내지 못했습니다(개념 초안 목록에서 검토할 수 있습니다): $text'
+              : '초안은 만들었지만 폴더 제안을 하지 못했습니다(검토 화면에서 폴더를 정하면 됩니다): $text';
         } else {
           _states[i] = _UnitState.failed;
           _messages[i] = text;
@@ -255,13 +298,253 @@ class _ConceptDraftBatchDialogState extends State<ConceptDraftBatchDialog> {
     }
   }
 
+  Future<void> _autoCompareAndConfirmUnit(
+    int i,
+    String draftId,
+    ConceptBookUnitPages u,
+    void Function(String) say,
+  ) async {
+    say('기존 개념과 비교 준비 중');
+    final rec = await _svc.fetchDraft(draftId);
+    final types = await _svc.conceptTypes();
+    final paths = await _svc.libraryFolderPaths();
+    final defaultRoot = paths.isNotEmpty && paths.first.isNotEmpty ? paths.first.first : '대수';
+    final defaultSub = u.path.isNotEmpty ? u.path.last : '기타';
+    final knownTypes = {for (final t in types) t.name};
+    final fallbackType = types.isNotEmpty ? types.first.name : '정의';
+
+    final newTypes = [
+      for (final t in initialNewTypes(rec))
+        t.copyWith(
+          legacySubType: const {'정의', '연산', '정리'}.contains(t.legacySubType) ? t.legacySubType : '정리',
+          accept: true,
+        ),
+    ];
+    for (final nt in newTypes) {
+      knownTypes.add(nt.name);
+    }
+
+    var items = initialReview(rec);
+    items = [
+      for (final it in items)
+        it.copyWith(
+          type: knownTypes.contains(it.type.trim()) ? it.type.trim() : fallbackType,
+          folder: it.folder.length >= 2 ? it.folder : [defaultRoot, defaultSub],
+        ),
+    ];
+    var savedAt = await _svc.saveReview(draftId, items, rec.reviewSavedAt, newTypes: newTypes);
+
+    final keptKeys = [for (final it in items) if (it.kept) it.key];
+    final suggestions = <String, ConceptCompareSuggestion>{};
+    for (var offset = 0; offset < keptKeys.length; offset += 12) {
+      final chunk = keptKeys.sublist(offset, math.min(offset + 12, keptKeys.length));
+      say('기존 개념과 비교하는 중 (${ math.min(offset + 12, keptKeys.length)}/${keptKeys.length})');
+      try {
+        final prop = await _withRetry(i, () => _svc.proposeCompare(draftId, keys: chunk));
+        suggestions.addAll(prop.items);
+      } on ConceptDraftException catch (e) {
+        if (e.code != 'no_candidates') rethrow;
+      }
+    }
+
+    if (suggestions.isNotEmpty) {
+      items = [
+        for (final it in items)
+          () {
+            final s = suggestions[it.key];
+            if (s == null || !it.kept) return it;
+            if (s.kind == ReviewRelationKind.revise && s.draftExists) {
+              return it.copyWith(
+                relation: ReviewRelation(
+                  kind: ReviewRelationKind.hold,
+                  conceptId: s.conceptId,
+                  conceptName: s.conceptName,
+                ),
+              );
+            }
+            return it.copyWith(relation: s.relation());
+          }(),
+      ];
+      savedAt = await _svc.saveReview(draftId, items, savedAt, newTypes: newTypes);
+    }
+
+    say('라이브러리에 반영하는 중');
+    final result = await _svc.confirmWithStatements(draftId, savedAt);
+    final linked = (result['linked'] as num?)?.toInt() ?? 0;
+    final stmts = (result['statements'] as num?)?.toInt() ?? 0;
+    final revises = (result['revises'] as num?)?.toInt() ?? 0;
+    final holds = (result['holds'] as num?)?.toInt() ?? 0;
+    final conceptsList = (result['concepts'] as List?) ?? const [];
+    final newCount = conceptsList
+        .where((c) => c is Map && !const {'source', 'statement', 'revise'}.contains('${c['relation'] ?? ''}'))
+        .length;
+
+    if (!mounted) return;
+    setState(() {
+      _confirmedIds.add(draftId);
+      _linkedTotal += linked;
+      _statementsTotal += stmts;
+      _newConceptsTotal += newCount;
+      _revisesTotal += revises;
+      _holdsTotal += holds;
+      _states[i] = _UnitState.done;
+      final parts = <String>[
+        if (linked > 0) '출처 연결 $linked',
+        if (stmts > 0) '확정 서술 $stmts',
+        if (newCount > 0) '새 개념 $newCount',
+        if (revises > 0) '수정안 대기 $revises',
+        if (holds > 0) '보류 $holds',
+      ];
+      _messages[i] = '반영 완료${parts.isEmpty ? '' : ' (${parts.join(' · ')})'}';
+    });
+  }
+
+  void _updateReviewSummary(Map<String, dynamic> res) {
+    final jobId = '${res['job_id'] ?? ''}'.trim();
+    final convId = '${res['conversation_id'] ?? ''}'.trim();
+    if (jobId.isNotEmpty) _reviewJobId = jobId;
+    if (convId.isNotEmpty) _reviewConvId = convId;
+    final batch = res['batch'];
+    if (batch is Map) {
+      final skipped = batch['auto_skipped'];
+      if (skipped is Map) {
+        _reusedReviewCount += (skipped['reused'] as num?)?.toInt() ?? 0;
+      }
+      _judgedSavedCount += (batch['judged_saved'] as num?)?.toInt() ?? 0;
+    }
+    final live = res['live'];
+    if (live is Map) {
+      _reviewProgressLine = '${live['progress_line'] ?? ''}'.trim();
+      _reviewFirstPassLine = '${live['first_pass_line'] ?? ''}'.trim();
+      final pending = live['pending_cards'];
+      _pendingCardsCount = pending is List ? pending.length : 0;
+    }
+  }
+
+  Future<void> _runAutoBookReview() async {
+    if (!mounted) return;
+    setState(() {
+      _reviewRunning = true;
+      _confirmProgress = '새로 추가·변경된 개념을 자동 검수하는 중...';
+    });
+    try {
+      for (var round = 0; round < 8; round += 1) {
+        if (!mounted || _stopRequested) break;
+        final res = await _svc.runBookReview(
+          book: widget.book,
+          jobId: _reviewJobId,
+          conversationId: _reviewConvId,
+        );
+        if (!mounted) return;
+        setState(() {
+          _updateReviewSummary(res);
+          _confirmProgress = _reviewProgressLine != null && _reviewProgressLine!.isNotEmpty
+              ? '자동 검수 진행 중 · $_reviewProgressLine'
+              : '자동 검수 진행 중...';
+        });
+        if (res['has_more'] != true) break;
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _confirmNotice = '자동 검수 중 오류가 발생했습니다: ${e is ConceptDraftException ? e.message : e}';
+        _confirmError = true;
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _reviewRunning = false;
+          _confirmProgress = null;
+        });
+      }
+    }
+  }
+
+  Future<void> _approveAutoReview() async {
+    final jobId = _reviewJobId;
+    final convId = _reviewConvId;
+    if (jobId == null || convId == null) return;
+    setState(() {
+      _confirming = true;
+      _confirmProgress = '검수·배치 카드를 승인하고 반영 결과를 확인하는 중...';
+      _confirmNotice = null;
+    });
+    try {
+      final res = await _svc.approveBookReview(jobId: jobId, conversationId: convId);
+      if (!mounted) return;
+      final appliedReviews = (res['applied_reviews'] as num?)?.toInt() ?? 0;
+      final appliedFixes = (res['applied_fixes'] as num?)?.toInt() ?? 0;
+      widget.onConfirmed?.call();
+      setState(() {
+        _updateReviewSummary(res);
+        _confirming = false;
+        _confirmProgress = null;
+        _confirmNotice = '검토 카드 $appliedReviews장 · 배치/고치기 카드 $appliedFixes장을 최종 승인했습니다.';
+        _confirmError = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _confirming = false;
+        _confirmProgress = null;
+        _confirmNotice = '카드 승인 중 오류가 발생했습니다: ${e is ConceptDraftException ? e.message : e}';
+        _confirmError = true;
+      });
+    }
+  }
+
+  Widget _addConceptsResultBox() {
+    if (!widget.addConcepts || (_confirmedIds.isEmpty && _reviewProgressLine == null)) {
+      return const SizedBox.shrink();
+    }
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: kThinkField,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: kThinkBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('개념 추가 · 자동 검수 결과',
+              style: TextStyle(color: kThinkText, fontSize: 13, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 4),
+          Text(
+            '교재 반영: 기존 개념 출처 연결 $_linkedTotal개 · 확정 서술 추가 $_statementsTotal개 · 새 개념 $_newConceptsTotal개'
+            '${_revisesTotal > 0 ? ' · 대표 수정안 대기 $_revisesTotal개' : ''}'
+            '${_holdsTotal > 0 ? ' · 보류 $_holdsTotal개' : ''}',
+            style: const TextStyle(color: kThinkSub, fontSize: 12, height: 1.4),
+          ),
+          if (_reviewProgressLine != null && _reviewProgressLine!.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              '검수 집계: $_reviewProgressLine'
+              '${_reviewFirstPassLine != null && _reviewFirstPassLine!.isNotEmpty ? ' · $_reviewFirstPassLine' : ''}',
+              style: const TextStyle(color: kThinkText, fontSize: 12, fontWeight: FontWeight.w700, height: 1.4),
+            ),
+          ],
+          if (_reusedReviewCount > 0 || _judgedSavedCount > 0 || _pendingCardsCount > 0) ...[
+            const SizedBox(height: 2),
+            Text(
+              '기존 승인 기록 재사용 $_reusedReviewCount개 · 새로 검수 저장 $_judgedSavedCount개 · 승인 대기 카드 $_pendingCardsCount장',
+              style: const TextStyle(color: kThinkSub, fontSize: 12, height: 1.4),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
     final reads = _reads;
     final failed = _states.where((s) => s == _UnitState.failed).length;
+    final busy = _running || _confirming || _reviewRunning;
     return PopScope(
-      canPop: !_running && !_confirming,
+      canPop: !busy,
       child: Dialog(
         backgroundColor: kThinkBg,
         shape: thinkDialogShape,
@@ -276,15 +559,17 @@ class _ConceptDraftBatchDialogState extends State<ConceptDraftBatchDialog> {
               children: [
                 Row(
                   children: [
-                    const Icon(Icons.playlist_play, color: kThinkAccent, size: 20),
+                    Icon(widget.addConcepts ? Icons.library_add_check_outlined : Icons.playlist_play,
+                        color: kThinkAccent, size: 20),
                     const SizedBox(width: 8),
-                    const Expanded(
-                      child: Text('개념 초안 이어서 만들기',
-                          style: TextStyle(color: kThinkText, fontSize: 18, fontWeight: FontWeight.w800)),
+                    Expanded(
+                      child: Text(
+                          widget.addConcepts ? '교재 개념 추가하기 (추출 · 비교 · 자동 검수)' : '개념 초안 이어서 만들기',
+                          style: const TextStyle(color: kThinkText, fontSize: 18, fontWeight: FontWeight.w800)),
                     ),
                     IconButton(
                       tooltip: '닫기',
-                      onPressed: _running || _confirming ? null : () => Navigator.pop(context, _made > 0),
+                      onPressed: busy ? null : () => Navigator.pop(context, _made > 0 || _confirmedIds.isNotEmpty),
                       icon: const Icon(Icons.close, size: 20),
                       color: kThinkSub,
                     ),
@@ -295,8 +580,10 @@ class _ConceptDraftBatchDialogState extends State<ConceptDraftBatchDialog> {
                     '${widget.book.bookName ?? '(책 이름을 볼 수 없음)'} · ${widget.book.gradeLabel} · 소단원 ${widget.units.length}개',
                     style: const TextStyle(color: kThinkText, fontSize: 14, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 6),
-                const ConceptHint('한 번에 하나씩 차례로 만듭니다. 만드는 동안에는 확정하지 않습니다. 다 만든 뒤 "만든 초안 한 번에 확정"을 누르면 '
-                    '검토 없이 AI 초안·폴더 제안 그대로 넣고, 하나씩 보려면 "개념 초안" 목록에서 검토합니다.'),
+                ConceptHint(widget.addConcepts
+                    ? '소단원마다 추출 → 기존 개념과 비교 → 반영(다른 서술은 확정 서술로 저장)까지 마친 뒤, 새로 추가·변경된 범위만 자동 검수합니다.'
+                    : '한 번에 하나씩 차례로 만듭니다. 만드는 동안에는 확정하지 않습니다. 다 만든 뒤 "만든 초안 한 번에 확정"을 누르면 '
+                        '검토 없이 AI 초안·폴더 제안 그대로 넣고, 하나씩 보려면 "개념 초안" 목록에서 검토합니다.'),
                 const SizedBox(height: 8),
                 if (_readsError != null)
                   ThinkNotice(text: _readsError!, color: kThinkError, icon: Icons.error_outline)
@@ -315,7 +602,7 @@ class _ConceptDraftBatchDialogState extends State<ConceptDraftBatchDialog> {
                           label: '${c.title ?? c.draftTitle ?? ''}${c.confirmed ? ' v${c.version}' : ' (초안)'}',
                           icon: Icons.rule_folder_outlined,
                           selected: _criteria.contains(c.id),
-                          enabled: !_running && !_finished,
+                          enabled: !busy && !_finished,
                           onChanged: (v) => setState(() {
                             if (v && _criteria.length < 10) {
                               _criteria.add(c.id);
@@ -336,11 +623,12 @@ class _ConceptDraftBatchDialogState extends State<ConceptDraftBatchDialog> {
                     itemBuilder: (context, i) => _unitRow(i),
                   ),
                 ),
+                _addConceptsResultBox(),
                 if (_stopReason != null) ...[
                   ThinkNotice(text: _stopReason!, color: kThinkError, icon: Icons.error_outline),
                   const SizedBox(height: 8),
                 ],
-                if (_finished && _stopReason == null)
+                if (_finished && _stopReason == null && !widget.addConcepts)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 8),
                     child: ThinkNotice(
@@ -374,7 +662,17 @@ class _ConceptDraftBatchDialogState extends State<ConceptDraftBatchDialog> {
                           width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: kThinkAccent)),
                       const SizedBox(width: 10),
                     ],
-                    if (!_running && _toConfirm.isNotEmpty) ...[
+                    if (!busy && widget.addConcepts && _pendingCardsCount > 0 && _reviewJobId != null) ...[
+                      ElevatedButton.icon(
+                        key: const ValueKey('batch-approve-book-review'),
+                        onPressed: () => unawaited(_approveAutoReview()),
+                        style: thinkPrimaryButton(),
+                        icon: const Icon(Icons.done_all, size: 18),
+                        label: Text('검수·배치 결과 최종 승인 ($_pendingCardsCount장)'),
+                      ),
+                      const SizedBox(width: 8),
+                    ],
+                    if (!busy && !widget.addConcepts && _toConfirm.isNotEmpty) ...[
                       OutlinedButton.icon(
                         key: const ValueKey('batch-confirm-made'),
                         onPressed: _confirming ? null : () => unawaited(_confirmMade()),
@@ -384,22 +682,22 @@ class _ConceptDraftBatchDialogState extends State<ConceptDraftBatchDialog> {
                       ),
                       const SizedBox(width: 8),
                     ],
-                    if (_running)
+                    if (_running || _reviewRunning)
                       TextButton(
                         onPressed: _stopRequested ? null : () => setState(() => _stopRequested = true),
-                        child: Text(_stopRequested ? '지금 소단원까지 하고 멈춥니다' : '멈추기',
+                        child: Text(_stopRequested ? '지금 단계까지 하고 멈춥니다' : '멈추기',
                             style: const TextStyle(color: kThinkLink)),
                       )
                     else
                       ElevatedButton.icon(
-                        onPressed: reads == null || widget.units.isEmpty || !_hasWork || _confirming
+                        onPressed: reads == null || widget.units.isEmpty || !_hasWork || busy
                             ? null
                             : () => unawaited(_start()),
                         style: thinkPrimaryButton(),
                         icon: Icon(_finished ? Icons.refresh : Icons.play_arrow, size: 18),
-                        label: Text(_finished ? '남은 것 다시 하기' : '차례로 만들기'),
+                        label: Text(_finished ? '남은 것 다시 하기' : (widget.addConcepts ? '개념 추가하기' : '차례로 만들기')),
                       ),
-                    if (_running) ...[
+                    if (_running || _reviewRunning) ...[
                       const SizedBox(width: 8),
                       const SizedBox(
                           width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: kThinkAccent)),
@@ -464,9 +762,9 @@ class _ConceptDraftBatchDialogState extends State<ConceptDraftBatchDialog> {
     final u = widget.units[i];
     final (icon, color, label) = switch (_states[i]) {
       _UnitState.waiting => (Icons.radio_button_unchecked, kThinkHint, '대기'),
-      _UnitState.running => (Icons.timelapse, kThinkAccent, '만드는 중'),
+      _UnitState.running => (Icons.timelapse, kThinkAccent, '진행 중'),
       _UnitState.done => (Icons.check_circle, kThinkSuccess, '완료'),
-      _UnitState.folderFailed => (Icons.check_circle_outline, kThinkAccent, '폴더 제안 없음'),
+      _UnitState.folderFailed => (Icons.check_circle_outline, kThinkAccent, widget.addConcepts ? '부분 완료' : '폴더 제안 없음'),
       _UnitState.failed => (Icons.error_outline, kThinkError, '실패'),
       _UnitState.stopped => (Icons.pause_circle_outline, kThinkHint, '멈춤'),
     };

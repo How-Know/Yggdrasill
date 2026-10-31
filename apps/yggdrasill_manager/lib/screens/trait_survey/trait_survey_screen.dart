@@ -8,6 +8,7 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 
 import '../../services/auth_service.dart';
+import '../../theme/manager_shell_colors.dart';
 
 class TraitSurveyScreen extends StatefulWidget {
   const TraitSurveyScreen({super.key});
@@ -126,7 +127,7 @@ class _TraitSurveyScreenState extends State<TraitSurveyScreen> {
     }
 
     return Container(
-      color: const Color(0xFF1F1F1F),
+      color: ManagerShellColors.surfaceBase,
       child: Column(
         children: [
           Container(

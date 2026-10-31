@@ -4955,6 +4955,29 @@ function isMissingRelationError(error, relationName = '') {
   );
 }
 
+// 모의고사 문항(mock_exam_items)에 추출된 문제은행 문항 id 를 적는다.
+async function linkMockExamItems({ academyId, documentId, client = supa }) {
+  const { data: rows, error } = await client
+    .from('pb_questions')
+    .select('id,meta')
+    .eq('academy_id', academyId)
+    .eq('document_id', documentId);
+  if (error) throw new Error(`mock_item_link_fetch_failed:${error.message}`);
+  let linked = 0;
+  for (const row of rows || []) {
+    const itemId = String(row?.meta?.mock_exam_item?.item_id || '').trim();
+    if (!itemId) continue;
+    const { error: updateErr } = await client
+      .from('mock_exam_items')
+      .update({ pb_question_id: row.id })
+      .eq('academy_id', academyId)
+      .eq('id', itemId);
+    if (updateErr) throw new Error(`mock_item_link_update_failed:${updateErr.message}`);
+    linked += 1;
+  }
+  return linked;
+}
+
 async function reconcileTextbookCropQuestionLinks({
   academyId,
   documentId,
@@ -5736,6 +5759,17 @@ async function processOneJob(job) {
     console.log(
       '[pb-extract-worker] textbook_crop_links',
       JSON.stringify({ jobId: job.id, ...textbookCropLinkStats }),
+    );
+  }
+
+  if (hasPdfSource && doc?.meta?.mock_scope && questions.length > 0) {
+    const linked = await linkMockExamItems({
+      academyId: job.academy_id,
+      documentId: job.document_id,
+    });
+    console.log(
+      '[pb-extract-worker] mock_exam_item_links',
+      JSON.stringify({ jobId: job.id, linked }),
     );
   }
 

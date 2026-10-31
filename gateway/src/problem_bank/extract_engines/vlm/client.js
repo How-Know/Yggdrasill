@@ -324,6 +324,7 @@ export async function callGeminiWithPdf({
   apiKey,
   timeoutMs = 180000,
   textbookScope = null,
+  mockScope = null,
   expectedQuestionNumbers = null,
   expectedIndependentSetRanges = null,
 }) {
@@ -351,6 +352,7 @@ export async function callGeminiWithPdf({
           {
             text: buildPrompt({
               textbookScope,
+              mockScope,
               expectedQuestionNumbers,
               expectedIndependentSetRanges,
             }),

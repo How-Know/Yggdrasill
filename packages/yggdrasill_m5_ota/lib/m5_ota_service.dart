@@ -154,10 +154,36 @@ class M5OtaService {
   static Future<void> _ensureServer(File bin) async {
     final path = bin.absolute.path;
     if (_server != null && _servingPath == path) return;
-    await _server?.close(force: true);
-    _servingPath = path;
-    final server = await HttpServer.bind(InternetAddress.anyIPv4, _port);
-    _server = server;
+    if (_server != null) {
+      await _server!.close(force: true);
+      _server = null;
+    }
+    try {
+      final server = await HttpServer.bind(
+        InternetAddress.anyIPv4,
+        _port,
+        shared: true,
+      );
+      _server = server;
+      _servingPath = path;
+      _listen(server, path);
+    } on SocketException catch (e) {
+      // 운영 앱이 1호기를 배포하며 같은 포트를 이미 연 경우.
+      // 그 서버도 같은 firmware.bin을 요청마다 읽으므로, 예약만 이어서 보낸다.
+      if (_isAddressInUse(e) && await _existingServerServesFirmware()) {
+        _servingPath = path;
+        return;
+      }
+      if (_isAddressInUse(e)) {
+        throw M5OtaException(
+          '업데이트 파일 서버(8091)가 이미 사용 중입니다. 운영 앱을 완전히 종료한 뒤 다시 시도해 주세요.',
+        );
+      }
+      rethrow;
+    }
+  }
+
+  static void _listen(HttpServer server, String path) {
     unawaited(server.forEach((request) async {
       try {
         if (request.uri.path != '/firmware.bin') {
@@ -177,6 +203,38 @@ class M5OtaService {
         } catch (_) {}
       }
     }));
+  }
+
+  static bool _isAddressInUse(SocketException error) {
+    final code = error.osError?.errorCode;
+    return code == 10048 || code == 98 || code == 48;
+  }
+
+  static Future<bool> _existingServerServesFirmware() async {
+    Socket? socket;
+    try {
+      socket = await Socket.connect(
+        InternetAddress.loopbackIPv4,
+        _port,
+        timeout: const Duration(seconds: 2),
+      );
+      socket.write(
+        'GET /firmware.bin HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n',
+      );
+      await socket.flush();
+      final header = StringBuffer();
+      await for (final chunk
+          in socket.timeout(const Duration(seconds: 2))) {
+        header.write(utf8.decode(chunk, allowMalformed: true));
+        if (header.toString().contains('\r\n\r\n')) break;
+      }
+      final text = header.toString();
+      return text.startsWith('HTTP/1.1 200') || text.startsWith('HTTP/1.0 200');
+    } catch (_) {
+      return false;
+    } finally {
+      socket?.destroy();
+    }
   }
 
   static Future<void> _mqttPublishAll(

@@ -105,7 +105,7 @@ export interface ReviewJobToolContext {
 /** 한 요청에서 낼 수 있는 검수 카드 수. DB 작업 한도 max_cards_per_request 기본값과 같다. */
 export const REVIEW_CARDS_PER_REQUEST = 13;
 const CARD_LIMIT = REVIEW_CARDS_PER_REQUEST;
-const OUTPUT_CHARS = 14000;
+const OUTPUT_CHARS = 24000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const REVIEW_JOB_SCOPES = ['notation', 'meaning', 'classification', 'unit', 'relations', 'foundation', 'placement'];
 /** 통합 완료 3조건(표기·의미 / 초등 기초 개념 / 배치)에 드는 범위. 이 범위의 문제 있음에는 고치기 제안이 있어야 한다. */
@@ -827,6 +827,37 @@ async function readJob(name: string, args: Rec, src: ReviewJobToolSource, state:
     notes.push('diagnosis.kind가 generic인 항목은 예전 포괄 오류다. 범위와 필드를 만들어 넣지 않는다.');
   }
   value.note = notes.join(' ');
+  const openList = Array.isArray(value.open_items) ? value.open_items : null;
+  if (openList && JSON.stringify(value).length > OUTPUT_CHARS) {
+    let omittedOpen = 0;
+    while (openList.length > 0 && JSON.stringify(value).length > OUTPUT_CHARS) {
+      openList.pop();
+      omittedOpen += 1;
+    }
+    if (omittedOpen > 0) value.open_items_omitted = omittedOpen;
+  }
+  const failList = Array.isArray(failures.items) ? failures.items : null;
+  if (failList && failList.length > 1 && JSON.stringify(value).length > OUTPUT_CHARS) {
+    while (failList.length > 1 && JSON.stringify(value).length > OUTPUT_CHARS) {
+      failList.pop();
+      failures.returned = failList.length;
+      failures.omitted = Number(failures.omitted ?? 0) + 1;
+      failures.next_after = rec(failList.at(-1)).position ?? null;
+    }
+    failures.read_more = 'failure_after에 next_after를 넣어 get_concept_review_job을 다시 부른다.';
+  }
+  const unmetList = unmet && Array.isArray(unmet.items) ? unmet.items : null;
+  if (unmet && unmetList && unmetList.length > 1 && JSON.stringify(value).length > OUTPUT_CHARS) {
+    while (unmetList.length > 1 && JSON.stringify(value).length > OUTPUT_CHARS) {
+      unmetList.pop();
+      unmet.returned = unmetList.length;
+      unmet.omitted = Number(unmet.omitted ?? 0) + 1;
+      const lastSnap = rec(rec(unmetList.at(-1)).snapshot);
+      unmet.next_after = lastSnap.pos ?? lastSnap.position ?? null;
+    }
+    unmet.read_more =
+      '다음 페이지는 unmet_after에 next_after, unmet_version에 published_input_version을 넣는다. next>0이나 status_diag_only와 함께 보내지 않는다.';
+  }
   return out(name, value, view.progressLine ?? '집계 없음');
 }
 

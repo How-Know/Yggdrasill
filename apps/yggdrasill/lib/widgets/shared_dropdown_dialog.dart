@@ -190,7 +190,7 @@ class SharedDropdownDialogPanel extends StatelessWidget {
   static const double contentFontSize = 16;
   static const double headerBlockHeight = 61;
   static const EdgeInsets headerPadding =
-      EdgeInsets.fromLTRB(horizontalInset, 12, horizontalInset - 6, 12);
+      EdgeInsets.fromLTRB(22, 12, horizontalInset - 6, 12);
   static const EdgeInsets bodyPadding =
       EdgeInsets.fromLTRB(horizontalInset, 12, horizontalInset, 12);
 
@@ -402,6 +402,10 @@ class SharedDropdownDialogMenuRow extends StatefulWidget {
     required this.hoverOverlay,
     required this.onTap,
     required this.child,
+    this.checkColor,
+    this.checkSize,
+    this.checkGap,
+    this.checkTop = 0,
   });
 
   final bool selected;
@@ -409,6 +413,16 @@ class SharedDropdownDialogMenuRow extends StatefulWidget {
   final Color hoverOverlay;
   final VoidCallback onTap;
   final Widget child;
+  final Color? checkColor;
+
+  /// 비우면 글자 크기(16)와 칸 너비 24를 쓴다.
+  final double? checkSize;
+
+  /// 아이콘 오른쪽 끝에서 글자까지의 간격. 비우면 칸 너비 24 가운데 정렬.
+  final double? checkGap;
+
+  /// 체크를 글자 쪽으로 내릴 때 쓰는 위쪽 여백.
+  final double checkTop;
 
   @override
   State<SharedDropdownDialogMenuRow> createState() =>
@@ -436,22 +450,47 @@ class _SharedDropdownDialogMenuRowState extends State<SharedDropdownDialogMenuRo
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                SizedBox(
-                  width: 24,
-                  child: widget.selected
-                      ? Icon(
-                          Icons.check_rounded,
-                          size: SharedDropdownDialogPanel.contentFontSize,
-                          color: widget.style.title,
-                        )
-                      : null,
-                ),
+                _checkLeading(),
                 Expanded(child: widget.child),
               ],
             ),
           ),
         ),
       ),
+    );
+  }
+
+  Widget _checkLeading() {
+    final iconSize =
+        widget.checkSize ?? SharedDropdownDialogPanel.contentFontSize;
+    final icon = Icon(
+      Icons.check_rounded,
+      size: iconSize,
+      color: widget.checkColor ?? widget.style.title,
+    );
+    final gap = widget.checkGap;
+    if (gap == null) {
+      return SizedBox(
+        width: 24,
+        child: widget.selected ? icon : null,
+      );
+    }
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: iconSize,
+          child: widget.selected
+              ? Padding(
+                  padding: EdgeInsets.only(top: widget.checkTop),
+                  child: icon,
+                )
+              : null,
+        ),
+        SizedBox(width: gap),
+      ],
     );
   }
 }

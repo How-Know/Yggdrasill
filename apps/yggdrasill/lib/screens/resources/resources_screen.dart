@@ -35,12 +35,12 @@ import '../../services/textbook_pdf_service.dart';
 import '../../services/textbook_download_progress_service.dart';
 import '../../services/textbook_viewer_preference.dart';
 import '../../services/learning_problem_bank_service.dart';
+import '../../services/mock_exam_resource_service.dart';
 import '../../theme/ygg_semantic_colors.dart';
 import '../../widgets/app_snackbar.dart';
 import '../../widgets/dialog_tokens.dart';
 import '../../widgets/shared_folder_tree.dart';
 import 'exam_preset_card.dart';
-import 'exam_preset_preview_launcher.dart';
 import 'exam_preset_support.dart';
 import 'other_resource_card.dart';
 
@@ -238,13 +238,13 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
 
   final LearningProblemBankService _examPresetService =
       LearningProblemBankService();
-  final ExamPresetPreviewLauncher _examPresetPreviewLauncher =
-      ExamPresetPreviewLauncher();
   List<LearningProblemDocumentExportPreset> _examPresets =
       const <LearningProblemDocumentExportPreset>[];
   bool _examPresetsLoading = false;
   String? _examPresetsLoadedForFolderId;
   String? _examPresetOpeningId;
+  final MockExamResourceService _mockExamService = MockExamResourceService();
+  List<MockExamResourceCard> _mockExamCards = const <MockExamResourceCard>[];
   String? _otherDocumentOpeningId;
 
   double _folderTreePanelWidth(BuildContext context) {
@@ -2404,12 +2404,17 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     setState(() {
       _examPresetsLoading = true;
       _examPresetsLoadedForFolderId = folderId;
+      _mockExamCards = const <MockExamResourceCard>[];
       if (selection == null) {
         _examPresets = const <LearningProblemDocumentExportPreset>[];
         _examPresetsLoading = false;
       }
     });
     if (selection == null) return;
+    if (selection.isMock) {
+      await _reloadMockExamCards(folderId, selection);
+      return;
+    }
 
     try {
       final academyId = await TenantService.instance.getActiveAcademyId();
@@ -2444,29 +2449,96 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     }
   }
 
-  Future<void> _openExamPresetPreview(
-    LearningProblemDocumentExportPreset preset,
+  Future<void> _reloadMockExamCards(
+    String? folderId,
+    ExamFolderSelection selection,
   ) async {
-    if (_examPresetOpeningId != null) return;
+    final grade =
+        int.tryParse(selection.gradeKey.replaceAll(RegExp(r'\D'), ''));
+    var cards = const <MockExamResourceCard>[];
+    try {
+      final academyId =
+          (await TenantService.instance.getActiveAcademyId() ?? '').trim();
+      if (academyId.isNotEmpty && grade != null) {
+        cards = await _mockExamService.listCards(
+          academyId: academyId,
+          grade: grade,
+        );
+      }
+    } catch (_) {
+      cards = const <MockExamResourceCard>[];
+    }
+    if (!mounted || _selectedFolderIdForTree != folderId) return;
+    setState(() {
+      _examPresets = const <LearningProblemDocumentExportPreset>[];
+      _mockExamCards = cards;
+      _examPresetsLoading = false;
+    });
+  }
+
+  Future<void> _openMockExamExplorer(MockExamResourceCard card) async {
+    if (_explorer != null || _examPresetOpeningId != null) return;
+    setState(() => _examPresetOpeningId = card.id);
     final academyId = await TenantService.instance.getActiveAcademyId();
+    if (!mounted || _examPresetOpeningId != card.id) return;
     final safeAcademyId = (academyId ?? '').trim();
-    if (safeAcademyId.isEmpty) {
-      if (!mounted) return;
-      showAppSnackBar(context, '학원 정보가 없어 프리셋을 열 수 없습니다.');
+    if (safeAcademyId.isEmpty || _currentCategory != 'exam') {
+      setState(() => _examPresetOpeningId = null);
+      if (safeAcademyId.isEmpty) {
+        showAppSnackBar(context, '학원 정보가 없어 시험을 열 수 없습니다.');
+      }
       return;
     }
+    final controller = TextbookExplorerController(
+      academyId: safeAcademyId,
+      bookId: card.id,
+      gradeLabel: '',
+      bookTitle: card.title,
+      mockExamCard: card,
+    );
+    controller.onClose = _closeTextbookExplorer;
+    setState(() {
+      _explorer = controller;
+      _examPresetOpeningId = null;
+    });
+    hideGlobalMemoFloatingBanners.value = true;
+    hideGlobalMainFab.value = true;
+    _syncFabTabBarOverlay();
+    unawaited(controller.loadMockExam());
+  }
+
+  Future<void> _openExamPresetExplorer(
+    LearningProblemDocumentExportPreset preset,
+  ) async {
+    if (_explorer != null || _examPresetOpeningId != null) return;
     setState(() => _examPresetOpeningId = preset.id);
-    try {
-      await _examPresetPreviewLauncher.openPresetPreview(
-        context: context,
-        academyId: safeAcademyId,
-        preset: preset,
-      );
-    } finally {
-      if (mounted) {
-        setState(() => _examPresetOpeningId = null);
+    final academyId = await TenantService.instance.getActiveAcademyId();
+    if (!mounted || _examPresetOpeningId != preset.id) return;
+    final safeAcademyId = (academyId ?? '').trim();
+    if (safeAcademyId.isEmpty || _currentCategory != 'exam') {
+      setState(() => _examPresetOpeningId = null);
+      if (safeAcademyId.isEmpty) {
+        showAppSnackBar(context, '학원 정보가 없어 시험을 열 수 없습니다.');
       }
+      return;
     }
+    final title = preset.displayName.trim();
+    final controller = TextbookExplorerController(
+      academyId: safeAcademyId,
+      bookId: preset.id,
+      gradeLabel: '',
+      bookTitle: title.isEmpty ? '시험' : title,
+      examPaperMode: true,
+    );
+    controller.onClose = _closeTextbookExplorer;
+    setState(() {
+      _explorer = controller;
+      _examPresetOpeningId = null;
+    });
+    hideGlobalMemoFloatingBanners.value = true;
+    hideGlobalMainFab.value = true;
+    _syncFabTabBarOverlay();
+    unawaited(controller.loadExamPreset(preset));
   }
 
   Future<void> _openOtherResourceLink(String link) async {
@@ -2729,9 +2801,9 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
           Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // 좌측 폴더 트리: 너비 220~330 (화면 비례) + 좌우 패딩 12
+              // 좌측 폴더 트리: 너비 220~330 (화면 비례). 좌우·위 12, 아래는 탭바와 같은 24.
               Padding(
-                padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+                padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
                 child: SizedBox(
                   width: _folderTreePanelWidth(context),
                   child: _explorer != null
@@ -3247,6 +3319,7 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
               : SharedFolderTreeRowStyle.pill,
           showDividerWhenCollapsed: isExam && depth == 0,
           showDividerAfter: isExam && depth > 0 && i == folders.length - 1,
+          rowHeight: isExam && depth == 0 ? 56 : null,
           data: folders[i],
           children: _buildSharedFolderTreeNodes(folders[i].id, depth + 1),
         ),
@@ -3976,7 +4049,10 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
           final gridCardHeight = gridCardWidth;
           final gridWidth = constraints.maxWidth;
           final presets = _examPresets;
-          final rowCount = presets.isEmpty ? 0 : (presets.length / cols).ceil();
+          final mock = selection?.isMock == true;
+          final mockCards = _mockExamCards;
+          final cardCount = mock ? mockCards.length : presets.length;
+          final rowCount = cardCount == 0 ? 0 : (cardCount / cols).ceil();
           final baseContentHeight = rowCount == 0
               ? gridCardHeight
               : (rowCount * gridCardHeight) + ((rowCount - 1) * spacing);
@@ -4019,17 +4095,17 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                 ),
               );
             }
-            if (presets.isEmpty) {
+            if (cardCount == 0) {
               return SizedBox(
                 width: gridWidth,
                 height: contentHeight,
                 child: Padding(
                   padding:
                       EdgeInsets.only(top: _resourcesPageTitleBandHeight + 48),
-                  child: const Align(
+                  child: Align(
                     alignment: Alignment.topCenter,
                     child: Text(
-                      '연결된 프리셋이 없습니다.',
+                      mock ? '등록된 모의고사가 없습니다.' : '연결된 프리셋이 없습니다.',
                       style: TextStyle(
                         color: Colors.white70,
                         fontWeight: FontWeight.w600,
@@ -4045,22 +4121,40 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
               child: Stack(
                 clipBehavior: Clip.none,
                 children: [
-                  for (int i = 0; i < presets.length; i++)
-                    Positioned(
-                      left: (i % cols) * (gridCardWidth + spacing),
-                      top: _resourcesPageTitleBandHeight +
-                          (i ~/ cols) * (gridCardHeight + spacing),
-                      width: gridCardWidth,
-                      height: gridCardHeight,
-                      child: _buildExamPresetDragCell(
-                        preset: presets[i],
-                        gridCardWidth: gridCardWidth,
-                        gridCardHeight: gridCardHeight,
-                        busy: _examPresetOpeningId == presets[i].id,
-                        onTap: () =>
-                            unawaited(_openExamPresetPreview(presets[i])),
+                  if (mock)
+                    for (int i = 0; i < mockCards.length; i++)
+                      Positioned(
+                        left: (i % cols) * (gridCardWidth + spacing),
+                        top: _resourcesPageTitleBandHeight +
+                            (i ~/ cols) * (gridCardHeight + spacing),
+                        width: gridCardWidth,
+                        height: gridCardHeight,
+                        child: ExamPaperCard(
+                          line1: mockCards[i].line1,
+                          line2: mockCards[i].line2,
+                          footer: '탭하여 번호·문항·원본 보기',
+                          busy: _examPresetOpeningId == mockCards[i].id,
+                          onTap: () =>
+                              unawaited(_openMockExamExplorer(mockCards[i])),
+                        ),
                       ),
-                    ),
+                  if (!mock)
+                    for (int i = 0; i < presets.length; i++)
+                      Positioned(
+                        left: (i % cols) * (gridCardWidth + spacing),
+                        top: _resourcesPageTitleBandHeight +
+                            (i ~/ cols) * (gridCardHeight + spacing),
+                        width: gridCardWidth,
+                        height: gridCardHeight,
+                        child: _buildExamPresetDragCell(
+                          preset: presets[i],
+                          gridCardWidth: gridCardWidth,
+                          gridCardHeight: gridCardHeight,
+                          busy: _examPresetOpeningId == presets[i].id,
+                          onTap: () =>
+                              unawaited(_openExamPresetExplorer(presets[i])),
+                        ),
+                      ),
                 ],
               ),
             );

@@ -34,16 +34,44 @@ class ExamPresetCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final parsed = parsedNaesinLinkOfPreset(preset);
+    return ExamPaperCard(
+      line1: parsed == null ? preset.displayName : examPresetCardLine1(parsed),
+      line2: parsed == null ? '' : examPresetCardLine2(parsed),
+      footer: '탭하여 번호·문항 보기',
+      onTap: onTap,
+      busy: busy,
+    );
+  }
+}
+
+/// 시험 카드 틀. 내신 프리셋과 모의고사 카드가 같이 쓴다.
+class ExamPaperCard extends StatelessWidget {
+  const ExamPaperCard({
+    super.key,
+    required this.line1,
+    required this.line2,
+    required this.footer,
+    required this.onTap,
+    this.busy = false,
+  });
+
+  final String line1;
+  final String line2;
+  final String footer;
+  final VoidCallback? onTap;
+  final bool busy;
+
+  @override
+  Widget build(BuildContext context) {
     final brightness = Theme.of(context).brightness;
     final isDark = brightness == Brightness.dark;
     final cardRadius = FabTabBarTokens.previewAcademyGroupedCardRadius;
-    final line1 = parsed == null ? preset.displayName : examPresetCardLine1(parsed);
-    final line2 = parsed == null ? '' : examPresetCardLine2(parsed);
     final textColor = isDark ? Colors.white : const Color(0xFF1A1A1A);
     final subColor = isDark ? Colors.white70 : const Color(0xFF666666);
 
     return MouseRegion(
-      cursor: onTap == null ? SystemMouseCursors.basic : SystemMouseCursors.click,
+      cursor:
+          onTap == null ? SystemMouseCursors.basic : SystemMouseCursors.click,
       child: GestureDetector(
         onTap: busy ? null : onTap,
         child: Opacity(
@@ -69,7 +97,7 @@ class ExamPresetCard extends StatelessWidget {
                         ? const Color(0xFF2B2B2B)
                         : const Color(0xFFF4F4F4),
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(14, 16, 14, 14),
+                      padding: const EdgeInsets.fromLTRB(16, 16, 14, 14),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -104,7 +132,7 @@ class ExamPresetCard extends StatelessWidget {
                           Row(
                             children: [
                               Icon(
-                                Icons.picture_as_pdf_outlined,
+                                Icons.format_list_numbered_rounded,
                                 size: 14,
                                 color: isDark
                                     ? const Color(0xFF7FB8A8)
@@ -113,7 +141,7 @@ class ExamPresetCard extends StatelessWidget {
                               const SizedBox(width: 4),
                               Expanded(
                                 child: Text(
-                                  '탭하여 서버 PDF 미리보기',
+                                  footer,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: TextStyle(

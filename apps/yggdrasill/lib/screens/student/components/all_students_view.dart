@@ -2537,7 +2537,7 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
     }
 
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      padding: const EdgeInsets.fromLTRB(24, 24, 24, 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -2683,10 +2683,23 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                   title: '최근 활동',
                   action: TextButton.icon(
                     onPressed: () => onRequestCourseView(studentWithInfo),
-                    style: studentDetailPillStyle(
-                      context,
-                      accent: true,
-                      border: false,
+                    style: TextButton.styleFrom(
+                      foregroundColor: panel.changeButtonText,
+                      backgroundColor: Colors.transparent,
+                      padding: EdgeInsets.zero,
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      visualDensity: VisualDensity.compact,
+                      shape: const RoundedRectangleBorder(
+                        side: BorderSide.none,
+                      ),
+                      textStyle: TextStyle(
+                        fontFamily:
+                            FabTabBarTokens.previewAcademyLabelFontFamily,
+                        fontSize: FabTabBarTokens.previewAcademyBaseFontSize,
+                        fontWeight: FontWeight.w600,
+                        color: panel.changeButtonText,
+                      ),
                     ),
                     icon: StudentDetailIcon(
                       studentDetailExternalLinkSvg,

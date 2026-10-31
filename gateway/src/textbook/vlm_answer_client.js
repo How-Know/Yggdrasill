@@ -18,6 +18,7 @@ import {
   resolveExpectedBox,
   resolveSequentialBox,
   stripFooterEchoBadge,
+  stripNextBoxBadge,
 } from './vlm_corner_guard.js';
 import {
   normalizeProblemNumberKey,
@@ -332,10 +333,10 @@ export function normalizeAnswerResult(parsedJson, opts = {}) {
   const seen = new Set();
   for (const rawItem of rawItems) {
     if (!rawItem || typeof rawItem !== 'object') continue;
-    const raw = stripFooterEchoBadge(rawItem, footerPages);
+    let raw = stripFooterEchoBadge(rawItem, footerPages);
     let problemNumber = String(raw.problem_number ?? '').trim();
     if (!problemNumber) continue;
-    const resolved =
+    let resolved =
       (isGaeyuHigh
         ? resolveSequentialBox(
             raw,
@@ -353,6 +354,23 @@ export function normalizeAnswerResult(parsedJson, opts = {}) {
         expectedIndex,
         normalizeProblemNumberKey,
       );
+    if (isGaeyuHigh && resolved.reject) {
+      const softened = stripNextBoxBadge(
+        raw,
+        problemNumber,
+        expectedIndex,
+        normalizeProblemNumberKey,
+      );
+      if (softened !== raw) {
+        raw = softened;
+        resolved = resolveExpectedBox(
+          raw,
+          problemNumber,
+          expectedIndex,
+          normalizeProblemNumberKey,
+        );
+      }
+    }
     if (resolved.reject) continue;
     const badgeCorner = canonicalCorner(raw.source_corner ?? raw.sourceCorner);
     const kindRaw = String(raw.kind ?? '').trim().toLowerCase();

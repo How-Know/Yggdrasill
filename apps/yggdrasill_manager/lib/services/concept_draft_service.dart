@@ -470,6 +470,21 @@ class ConceptDraftService {
     }
   }
 
+  /// 개념 추가하기: 다른 서술(statement)도 바로 확정 서술(version = 1)로 저장하며 확정한다.
+  Future<Map<String, dynamic>> confirmWithStatements(String id, String savedAt) async {
+    try {
+      final res = await _db.rpc('concept_draft_confirm', params: {
+        'p_id': id,
+        'p_expected_review_saved_at': savedAt,
+        'p_confirm_statements': true,
+      });
+      final result = res is Map ? res['result'] : null;
+      return result is Map ? Map<String, dynamic>.from(result) : const {};
+    } on PostgrestException catch (e) {
+      _rpcError(e);
+    }
+  }
+
   Future<void> discard(String id, String? savedAt) async {
     try {
       await _db.rpc('concept_draft_discard', params: {'p_id': id, 'p_expected_review_saved_at': savedAt});
@@ -629,6 +644,35 @@ class ConceptDraftService {
     final p = d['proposal'];
     if (p is! Map) throw ConceptDraftException('invalid_response', '서버 응답을 해석하지 못했습니다.');
     return ConceptCompareProposal.fromJson(Map<String, dynamic>.from(p));
+  }
+
+  /// 교재 개념 추가하기의 자동 묶음 검수 한 회차 실행.
+  Future<Map<String, dynamic>> runBookReview({
+    required ConceptBookEntry book,
+    String? jobId,
+    String? conversationId,
+  }) async {
+    return await _invoke('ai_think', {
+      'action': 'book_review',
+      'sub_action': 'run',
+      'book_id': book.bookId,
+      'book_name': '${book.bookName ?? ''} ${book.gradeLabel}'.trim(),
+      if (jobId != null) 'job_id': jobId,
+      if (conversationId != null) 'conversation_id': conversationId,
+    });
+  }
+
+  /// 교재 개념 추가하기에서 나온 검수·배치·고치기 대기 카드를 일괄 승인하고 의존 범위를 재확인한다.
+  Future<Map<String, dynamic>> approveBookReview({
+    required String jobId,
+    required String conversationId,
+  }) async {
+    return await _invoke('ai_think', {
+      'action': 'book_review',
+      'sub_action': 'approve',
+      'job_id': jobId,
+      'conversation_id': conversationId,
+    });
   }
 
   Future<List<ConceptDraftHold>> openHolds() async {

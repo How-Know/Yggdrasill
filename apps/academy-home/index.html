@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>정현수학교습소</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      background: #fff;
+      color: #1d1d1f;
+      font-family: Pretendard, -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    main {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      padding: 22vh 24px 28px;
+    }
+    .logo {
+      width: 84px;
+      height: 84px;
+      object-fit: contain;
+    }
+    h1 {
+      margin: 22px 0 0;
+      font-size: clamp(40px, 6vw, 56px);
+      font-weight: 600;
+      letter-spacing: -0.03em;
+      line-height: 1.08;
+    }
+    .lead {
+      margin: 10px 0 0;
+      max-width: 28em;
+      color: #6e6e73;
+      font-size: 21px;
+      font-weight: 400;
+      letter-spacing: -0.016em;
+      line-height: 1.38;
+    }
+    .sheet {
+      margin-top: 26px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 112px;
+      height: 44px;
+      padding: 0 22px;
+      border: 0;
+      border-radius: 980px;
+      background: #33a373;
+      color: #fff;
+      font: inherit;
+      font-size: 17px;
+      letter-spacing: -0.01em;
+      cursor: pointer;
+    }
+    .sheet:hover { background: #45b289; }
+    .sheet:focus-visible {
+      outline: 2px solid #33a373;
+      outline-offset: 3px;
+    }
+    footer {
+      margin-top: auto;
+      padding-top: 64px;
+      color: #86868b;
+      font-size: 12px;
+      letter-spacing: -0.01em;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <img class="logo" src="logo.png" alt="">
+    <h1>정현수학교습소</h1>
+    <p class="lead">디테일한 강의, 초개인화된 수업</p>
+    <button class="sheet" type="button">알림장</button>
+    <footer>Copyright © 2026 정현수학교습소</footer>
+  </main>
+</body>
+</html>

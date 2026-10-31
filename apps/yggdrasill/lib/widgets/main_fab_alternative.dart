@@ -1,14 +1,11 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'memo_dialogs.dart';
 import 'payment_management_dialog.dart';
 import 'makeup_quick_dialog.dart';
 import '../app_overlays.dart';
 import 'app_confirm_button.dart';
-import 'home_grading_history_icon.dart';
-import 'solid_capsule_action_bar.dart';
 import 'dialog_tokens.dart';
 import '../services/exam_mode.dart';
 import '../screens/design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
@@ -109,39 +106,6 @@ class _MainFabAlternativeState extends State<MainFabAlternative> {
     return railWidth + FabTabBarTokens.fabBarLeftInsetFromNavRail;
   }
 
-  Widget _buildHistoryButton() {
-    final brightness = Theme.of(context).brightness;
-    const hit = 40.0;
-    return Tooltip(
-      message: '이전 채점',
-      child: SolidCapsuleActionBar(
-        padding: const EdgeInsets.all(8),
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: () {
-            final action = homeGradingHistoryAction;
-            if (action != null) unawaited(action());
-          },
-          child: SizedBox(
-            width: hit,
-            height: hit,
-            child: Center(
-              child: SvgPicture.string(
-                homeGradingHistorySvg,
-                width: 25,
-                height: 25,
-                colorFilter: ColorFilter.mode(
-                  SolidCapsuleActionBarTokens.iconColor(brightness),
-                  BlendMode.srcIn,
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<bool>(
@@ -180,12 +144,6 @@ class _MainFabAlternativeState extends State<MainFabAlternative> {
                             mainAxisSize: MainAxisSize.min,
                             crossAxisAlignment: CrossAxisAlignment.end,
                             children: [
-                              if (widget.showHomeBatchConfirmFab &&
-                                  gradingModeActive.value) ...[
-                                _buildHistoryButton(),
-                                if (shouldShowBatchConfirmFab)
-                                  const SizedBox(width: 12),
-                              ],
                               if (shouldShowBatchConfirmFab)
                                 Column(
                                   mainAxisSize: MainAxisSize.min,

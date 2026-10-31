@@ -24,6 +24,7 @@ import '../../widgets/bottom_dialog.dart';
 import '../../widgets/cover_overlay.dart';
 import '../../widgets/dialog_tokens.dart';
 import '../../widgets/home_grading_edit_icon.dart';
+import '../../widgets/home_grading_history_icon.dart';
 import '../../widgets/home_header_weather_icon.dart';
 import '../../widgets/navigation_rail.dart';
 import '../../widgets/resource_textbook_card.dart';
@@ -346,6 +347,26 @@ class _GradingModePageState extends State<GradingModePage> {
                                       const SizedBox(width: 12),
                                       SolidCapsuleActionBar(
                                         children: [
+                                          SolidCapsuleActionButton(
+                                            tooltip: '이전 채점',
+                                            iconBuilder: (color, size) =>
+                                                SvgPicture.string(
+                                              homeGradingHistorySvg,
+                                              width: size,
+                                              height: size,
+                                              colorFilter: ColorFilter.mode(
+                                                color,
+                                                BlendMode.srcIn,
+                                              ),
+                                            ),
+                                            onPressed: () {
+                                              final action =
+                                                  homeGradingHistoryAction;
+                                              if (action != null) {
+                                                unawaited(action());
+                                              }
+                                            },
+                                          ),
                                           SolidCapsuleActionButton(
                                             tooltip: homeworkEntries.isEmpty
                                                 ? '정리할 숙제가 없습니다'
@@ -2965,7 +2986,7 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
         );
         // 제출: 제출 시각부터 경과. 숙제: 같은 경과를 초록 테두리로, 등원 전이면 숙제 배지.
         final isHomeworkChip = entry.section == _GradingSection.homework;
-        final Widget? statusPill = line4 != '-'
+        final CoverPill? statusPill = line4 != '-'
             ? CoverPill(
                 style: overlay,
                 tone: isHomeworkChip
@@ -3011,25 +3032,49 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
               child: IgnorePointer(
                 child: LayoutBuilder(
                   builder: (context, constraints) {
+                    final nameStyle = overlay.titleStyle(context);
                     final name = Text(
                       entry.studentName,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: overlay.titleStyle(context),
+                      style: nameStyle,
                     );
                     if (statusPill == null) return name;
-                    // 배지가 줄보다 길면 이름을 한 글자 남기고 배지 글자를 줄인다.
-                    final pillMax = math.max(
-                      0.0,
-                      constraints.maxWidth - chipGap - 32,
+                    final nameWidth = _singleLineTextWidth(
+                      entry.studentName,
+                      nameStyle,
+                      textScaler: MediaQuery.textScalerOf(context),
                     );
+                    final pillWidth = _coverStatusPillWidth(statusPill);
+                    // 이름과 배지가 한 줄에 들어가면 배지는 오른쪽 끝.
+                    // 모자라면 이름은 첫 줄 전체를 쓰고, 배지는 다음 줄 왼쪽.
+                    if (nameWidth + chipGap + pillWidth > constraints.maxWidth) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          name,
+                          SizedBox(height: gap),
+                          ConstrainedBox(
+                            constraints:
+                                BoxConstraints(maxWidth: constraints.maxWidth),
+                            child: statusPill,
+                          ),
+                        ],
+                      );
+                    }
                     return Row(
                       crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
                         Expanded(child: name),
                         SizedBox(width: chipGap),
                         ConstrainedBox(
-                          constraints: BoxConstraints(maxWidth: pillMax),
+                          constraints: BoxConstraints(
+                            maxWidth: math.max(
+                              0.0,
+                              constraints.maxWidth - chipGap,
+                            ),
+                          ),
                           child: statusPill,
                         ),
                       ],
@@ -3233,4 +3278,37 @@ class _SubmittedHomeworkCardState extends State<_SubmittedHomeworkCard> {
     if (uri == null) return path;
     return uri.toFilePath(windows: Platform.isWindows);
   }
+}
+
+double _singleLineTextWidth(
+  String text,
+  TextStyle style, {
+  TextScaler textScaler = TextScaler.noScaling,
+}) {
+  final painter = TextPainter(
+    text: TextSpan(text: text, style: style),
+    maxLines: 1,
+    textDirection: TextDirection.ltr,
+    textScaler: textScaler,
+  )..layout();
+  return painter.width;
+}
+
+/// [CoverPill]이 글자를 줄이지 않을 때의 가로 너비.
+double _coverStatusPillWidth(CoverPill pill) {
+  final hasIcon = pill.icon != null;
+  final hasDot = !hasIcon && pill.tone == CoverPillTone.accent;
+  final hasLeading = hasIcon || hasDot;
+  final leadingWidth =
+      hasIcon ? CoverOverlayStyle.pillFontSize : (hasDot ? 7.0 : 0.0);
+  final textWidth = _singleLineTextWidth(
+    pill.label,
+    pill.style.pillTextStyle.copyWith(
+      fontWeight: pill.emphasize ? FontWeight.w700 : FontWeight.w600,
+      letterSpacing: pill.emphasize ? 0.8 : null,
+    ),
+  );
+  final leftPad = hasLeading ? 10.0 : 12.0;
+  final leadingBlock = hasLeading ? leadingWidth + 6.0 : 0.0;
+  return leftPad + leadingBlock + textWidth + 12.0;
 }

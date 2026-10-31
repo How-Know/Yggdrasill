@@ -98,6 +98,24 @@ module.exports = {
       env: { NODE_ENV: 'production' }
     },
     {
+      name: 'ygg-mock-exam',
+      cwd: __dirname,
+      script: 'src/mock_exam_worker.js',
+      exec_mode: 'fork',
+      instances: 1,
+      watch: false,
+      autorestart: true,
+      max_restarts: 20,
+      min_uptime: '10s',
+      restart_delay: 5000,
+      kill_timeout: 10000,
+      max_memory_restart: '500M',
+      merge_logs: true,
+      time: true,
+      log_date_format: 'YYYY-MM-DD HH:mm:ss.SSS Z',
+      env: { NODE_ENV: 'production' }
+    },
+    {
       name: 'ygg-pb-figure',
       cwd: __dirname,
       script: 'src/problem_bank_figure_worker.js',

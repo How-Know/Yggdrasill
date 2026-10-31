@@ -35,7 +35,7 @@ class AcademyDbService {
         mem ? inMemoryDatabasePath : await _resolveLocalDbPath();
     return await openDatabaseWithLog(
       path,
-      version: 58,
+      version: 59,
       onConfigure: (db) async {
         // 잠금 최소화를 위한 설정은 유지
         await db.execute('PRAGMA journal_mode=WAL');
@@ -112,6 +112,8 @@ class AcademyDbService {
             group_id TEXT,
             memo TEXT,
             flows TEXT,
+            notification_consent INTEGER DEFAULT 0,
+            todo_sheet_alimtalk_consent INTEGER DEFAULT 0,
             FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
           )
         ''');
@@ -1991,6 +1993,22 @@ class AcademyDbService {
             ''');
           } catch (e) {
             print('[DB][마이그레이션] v58 채점 반환 outbox 생성 실패: $e');
+          }
+        }
+        if (oldVersion < 59) {
+          try {
+            final cols =
+                await db.rawQuery("PRAGMA table_info(student_basic_info)");
+            final has =
+                cols.any((c) => c['name'] == 'todo_sheet_alimtalk_consent');
+            if (!has) {
+              await db.execute(
+                "ALTER TABLE student_basic_info ADD COLUMN todo_sheet_alimtalk_consent INTEGER DEFAULT 0",
+              );
+            }
+          } catch (e) {
+            print(
+                '[DB][마이그레이션] v59 student_basic_info.todo_sheet_alimtalk_consent 추가 실패: $e');
           }
         }
       },

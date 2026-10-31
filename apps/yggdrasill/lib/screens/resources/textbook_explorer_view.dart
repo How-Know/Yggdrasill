@@ -7,6 +7,7 @@ import 'package:pdfrx/pdfrx.dart';
 
 import '../../app_overlays.dart';
 import '../../services/learning_problem_bank_service.dart';
+import '../../services/mock_exam_resource_service.dart';
 import '../../services/textbook_explorer_service.dart';
 import '../../services/textbook_pdf_service.dart';
 import '../../theme/ygg_semantic_colors.dart';
@@ -15,16 +16,20 @@ import '../../widgets/dialog_tokens.dart';
 import '../../widgets/corner_action_bar.dart';
 import '../../widgets/shared_dropdown_dialog.dart';
 import '../../widgets/shared_folder_tree.dart';
+import '../../widgets/shared_back_button.dart';
 import '../../widgets/solid_capsule_action_bar.dart';
+import '../../widgets/textbook_view_menu_icon.dart';
 import '../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import '../learning/models/problem_bank_export_models.dart';
 import '../learning/widgets/problem_bank_bottom_fab_bar.dart';
+import '../learning/widgets/problem_bank_question_card.dart';
 import '../learning/widgets/problem_bank_export_options_fab.dart';
 import '../learning/widgets/problem_bank_export_options_panel.dart';
 import '../learning/widgets/question_mode_count_bar.dart';
+import 'exam_preset_support.dart';
 import 'textbook_explorer_export_launcher.dart';
 
-enum TbExRightMode { questions, pdf }
+enum TbExRightMode { questions, questionView, pdf }
 
 /// 교재 단원/문항 탐색 상태. 자원 화면(좌측 트리 패널 / 우측 콘텐츠)에서
 /// 공유한다.
@@ -39,6 +44,8 @@ class TextbookExplorerController extends ChangeNotifier {
     this.folderLabel,
     this.onClose,
     this.homeworkSelectionMode = false,
+    this.examPaperMode = false,
+    this.mockExamCard,
     this.autoSelectAllQuestionsOnRangeChange = false,
   });
 
@@ -50,6 +57,13 @@ class TextbookExplorerController extends ChangeNotifier {
   final String? categoryLabel;
   final String? folderLabel;
   final bool homeworkSelectionMode;
+
+  /// 시험 프리셋 진입. 번호 보기·문항 보기만 쓰고 원본 PDF는 열지 않는다.
+  final bool examPaperMode;
+
+  /// 모의고사 카드 진입. 시험처럼 번호 보기로 시작하고, 원본은 그 문제지 PDF다.
+  final MockExamResourceCard? mockExamCard;
+  bool get mockExamMode => mockExamCard != null;
   final bool autoSelectAllQuestionsOnRangeChange;
   VoidCallback? onClose;
 
@@ -120,6 +134,12 @@ class TextbookExplorerController extends ChangeNotifier {
       <String, LearningProblemQuestion>{};
   bool questionMetadataLoading = false;
   String? _visibleMetadataAttemptKey;
+  final Map<String, String> questionPreviewUrls = <String, String>{};
+  final Map<String, String> questionPreviewStatus = <String, String>{};
+  final Map<String, String> questionPreviewError = <String, String>{};
+  bool questionCardsLoading = false;
+  int _questionCardLoadGen = 0;
+  String _questionCardLoadKey = '';
 
   // PDF
   final PdfViewerController pdfController = PdfViewerController();
@@ -233,6 +253,7 @@ class TextbookExplorerController extends ChangeNotifier {
       '${unitBigKey(big)}/mid:${mid.order}:${mid.name}';
 
   Future<void> load() async {
+    if (examPaperMode || mockExamMode) return;
     loading = true;
     error = null;
     notifyListeners();
@@ -256,6 +277,368 @@ class TextbookExplorerController extends ChangeNotifier {
       loading = false;
       error = '교재 데이터를 불러오지 못했습니다.\n$e';
       if (!_disposed) notifyListeners();
+    }
+  }
+
+  /// 시험 카드에서 들어온 프리셋 문항을 교재 탐색기와 같은 트리·번호·문항 보기로 연다.
+  Future<void> loadExamPreset(
+    LearningProblemDocumentExportPreset preset,
+  ) async {
+    loading = true;
+    error = null;
+    notifyListeners();
+    try {
+      var effective = preset;
+      try {
+        final latest = await _problemBankService.getExportPresetById(
+          academyId: academyId,
+          presetId: preset.id,
+        );
+        if (latest != null) effective = latest;
+      } catch (_) {}
+      if (_disposed) return;
+
+      final presetUids = effective.selectedQuestionUids
+          .map((uid) => uid.trim())
+          .where((uid) => uid.isNotEmpty)
+          .toList(growable: false);
+      if (presetUids.isEmpty) {
+        loading = false;
+        error = '저장된 문항이 없습니다.';
+        notifyListeners();
+        return;
+      }
+
+      final fetched = await _problemBankService.loadQuestionsByQuestionUids(
+        academyId: academyId,
+        questionUids: presetUids,
+      );
+      if (_disposed) return;
+      final ordered = _orderExamQuestions(presetUids, fetched);
+      if (ordered.isEmpty) {
+        loading = false;
+        error = '연결된 문항을 찾을 수 없습니다.';
+        notifyListeners();
+        return;
+      }
+
+      _applyLoadedData(_dataFromExamQuestions(ordered));
+      _checkAllExamPages();
+      for (final question in ordered) {
+        _rememberQuestion(question);
+      }
+      _seedExamQuestionModes(effective, ordered);
+      loading = false;
+      error = null;
+      notifyListeners();
+    } catch (e) {
+      if (_disposed) return;
+      loading = false;
+      error = '시험 문항을 불러오지 못했습니다.\n$e';
+      notifyListeners();
+    }
+  }
+
+  /// 모의고사 카드: 공통·선택과목 구간별로 쪽 → 문항. 문항 영역은 원본 문제지 좌표다.
+  Future<void> loadMockExam() async {
+    final card = mockExamCard;
+    if (card == null) return;
+    loading = true;
+    error = null;
+    notifyListeners();
+    try {
+      final items = await MockExamResourceService().listItems(card);
+      if (_disposed) return;
+      if (items.isEmpty) {
+        loading = false;
+        error = '판독된 문항이 없습니다.';
+        notifyListeners();
+        return;
+      }
+      final ids = items
+          .map((item) => item.pbQuestionId)
+          .where((id) => id.isNotEmpty)
+          .toList(growable: false);
+      final questionsById = <String, LearningProblemQuestion>{};
+      if (ids.isNotEmpty) {
+        try {
+          final fetched = await _problemBankService.loadQuestionsByQuestionUids(
+            academyId: academyId,
+            questionUids: ids,
+          );
+          for (final q in fetched) {
+            questionsById[q.id.trim()] = q;
+          }
+        } catch (_) {
+          // 문항 카드만 비고 번호·원본 보기는 그대로 쓴다.
+        }
+      }
+      if (_disposed) return;
+      _applyLoadedData(_dataFromMockItems(card, items, questionsById));
+      _checkAllExamPages();
+      for (final q in questionsById.values) {
+        _rememberQuestion(q);
+      }
+      loading = false;
+      notifyListeners();
+    } catch (e) {
+      if (_disposed) return;
+      loading = false;
+      error = '모의고사 문항을 불러오지 못했습니다.\n$e';
+      notifyListeners();
+    }
+  }
+
+  TbExData _dataFromMockItems(
+    MockExamResourceCard card,
+    List<MockExamResourceItem> items,
+    Map<String, LearningProblemQuestion> questionsById,
+  ) {
+    final sections = <String>['common', if (card.elective.isNotEmpty) card.elective];
+    final mids = <TbExMidUnit>[];
+    final itemsByPage = <int, List<TbExItem>>{};
+    var order = 0;
+    for (var s = 0; s < sections.length; s++) {
+      final section = sections[s];
+      final smallKey = 'mock|$section';
+      final sectionItems = items.where((i) => i.section == section).toList()
+        ..sort((a, b) => a.number.compareTo(b.number));
+      if (sectionItems.isEmpty) continue;
+      final byPage = <int, List<TbExItem>>{};
+      for (final item in sectionItems) {
+        final question = questionsById[item.pbQuestionId];
+        final tb = TbExItem(
+          cropId: item.pbQuestionId,
+          questionUid: question?.stableQuestionKey.trim() ?? '',
+          problemNumber: '${item.number}',
+          difficultyLabel: '',
+          answerKind: mockExamIsObjective(card.grade, item.number)
+              ? TbAnswerKind.objective
+              : TbAnswerKind.subjective,
+          section: '',
+          isWonri: false,
+          typeGroupKind: 'type',
+          typeGroupLabel: kMockExamSectionLabels[section] ?? section,
+          typeGroupTitle: '',
+          rawPage: item.rawPage,
+          displayPage: null,
+          bigOrder: 0,
+          midOrder: s,
+          subKey: 'all',
+          isSetHeader: false,
+          setFrom: null,
+          setTo: null,
+          xmin: item.region[1] / 1000,
+          ymin: item.region[0] / 1000,
+          xmax: item.region[3] / 1000,
+          ymax: item.region[2] / 1000,
+          sortOrder: order++,
+        );
+        byPage.putIfAbsent(item.rawPage, () => <TbExItem>[]).add(tb);
+        itemsByPage.putIfAbsent(item.rawPage, () => <TbExItem>[]).add(tb);
+      }
+      final pageNumbers = byPage.keys.toList()..sort();
+      final first = sectionItems.first.number;
+      final last = sectionItems.last.number;
+      mids.add(
+        TbExMidUnit(
+          name: kMockExamSectionLabels[section] ?? section,
+          order: s,
+          smalls: [
+            TbExSmallUnit(
+              key: smallKey,
+              name: '$first~$last번',
+              order: 0,
+              items: [for (final p in pageNumbers) ...byPage[p]!],
+              pages: [
+                for (final p in pageNumbers)
+                  TbExPage(rawPage: p, displayPage: null, items: byPage[p]!),
+              ],
+            ),
+          ],
+        ),
+      );
+    }
+    return TbExData(
+      units: [TbExBigUnit(name: card.title, order: 0, mids: mids)],
+      itemsByPage: itemsByPage,
+      totalPages: itemsByPage.length,
+      totalQuestions: order,
+    );
+  }
+
+  List<LearningProblemQuestion> _orderExamQuestions(
+    List<String> presetUids,
+    List<LearningProblemQuestion> fetched,
+  ) {
+    final orderIndexByUid = <String, int>{};
+    for (var i = 0; i < presetUids.length; i++) {
+      orderIndexByUid[presetUids[i]] = i;
+    }
+    final ordered = List<LearningProblemQuestion>.from(fetched)
+      ..sort((a, b) {
+        final ai = orderIndexByUid[a.stableQuestionKey.trim()] ??
+            orderIndexByUid[a.id.trim()] ??
+            1 << 20;
+        final bi = orderIndexByUid[b.stableQuestionKey.trim()] ??
+            orderIndexByUid[b.id.trim()] ??
+            1 << 20;
+        return ai.compareTo(bi);
+      });
+    return ordered;
+  }
+
+  TbExData _dataFromExamQuestions(List<LearningProblemQuestion> questions) {
+    final items = <TbExItem>[];
+    for (var i = 0; i < questions.length; i++) {
+      final question = questions[i];
+      final uid = question.stableQuestionKey.trim();
+      if (uid.isEmpty) continue;
+      final group = _examTypeGroup(question);
+      items.add(
+        TbExItem(
+          cropId: question.id.trim(),
+          questionUid: uid,
+          problemNumber: '${items.length + 1}',
+          difficultyLabel: _examDifficultyLabel(question),
+          answerKind: _examAnswerKind(question),
+          section: '',
+          isWonri: false,
+          typeGroupKind: group.$1,
+          typeGroupLabel: group.$2,
+          typeGroupTitle: group.$3,
+          rawPage: 1,
+          displayPage: null,
+          bigOrder: 0,
+          midOrder: 0,
+          subKey: 'all',
+          isSetHeader: false,
+          setFrom: null,
+          setTo: null,
+          xmin: 0,
+          ymin: 0,
+          xmax: 0,
+          ymax: 0,
+          sortOrder: items.length,
+        ),
+      );
+    }
+    const smallKey = '0|0|all';
+    final page = TbExPage(rawPage: 1, displayPage: null, items: items);
+    final title = bookTitle.trim().isEmpty ? '시험' : bookTitle.trim();
+    return TbExData(
+      units: [
+        TbExBigUnit(
+          name: title,
+          order: 0,
+          mids: [
+            TbExMidUnit(
+              name: '문항',
+              order: 0,
+              smalls: [
+                TbExSmallUnit(
+                  key: smallKey,
+                  name: '전체',
+                  order: 0,
+                  items: items,
+                  pages: [page],
+                ),
+              ],
+            ),
+          ],
+        ),
+      ],
+      itemsByPage: <int, List<TbExItem>>{1: items},
+      totalPages: 0,
+      totalQuestions: items.length,
+    );
+  }
+
+  void _checkAllExamPages() {
+    checkedPageKeys.clear();
+    expandedNodeIds.clear();
+    for (final big in data.units) {
+      expandedNodeIds.add(unitBigKey(big));
+      for (final mid in big.mids) {
+        expandedNodeIds.add(unitMidKey(big, mid));
+        for (final small in mid.smalls) {
+          expandedNodeIds.add('small:${small.key}');
+          for (final page in small.pages) {
+            checkedPageKeys.add('${small.key}#${page.rawPage}');
+          }
+        }
+      }
+    }
+  }
+
+  void _seedExamQuestionModes(
+    LearningProblemDocumentExportPreset preset,
+    List<LearningProblemQuestion> questions,
+  ) {
+    final followsOriginal = naesinLinkKeyOfPreset(preset).isNotEmpty;
+    for (final question in questions) {
+      final uid = question.stableQuestionKey.trim();
+      if (uid.isEmpty) continue;
+      if (followsOriginal) {
+        selectedQuestionModesByUid[uid] = originalQuestionModeOf(question);
+        continue;
+      }
+      final raw = preset.questionModeByQuestionUid[uid] ??
+          preset.questionModeByQuestionUid[question.id.trim()];
+      if (raw == null || raw.trim().isEmpty) continue;
+      selectedQuestionModesByUid[uid] = normalizeQuestionModeSelection(
+        question,
+        raw,
+        fallbackMode: kLearningQuestionModeOriginal,
+      );
+    }
+  }
+
+  (String, String, String) _examTypeGroup(LearningProblemQuestion question) {
+    final raw = _examContentGroupMap(question);
+    final kind = '${raw['kind'] ?? ''}'.trim();
+    final label = '${raw['label'] ?? ''}'.trim();
+    final title = '${raw['title'] ?? ''}'.trim();
+    if (kind == 'type' && label.isNotEmpty) return (kind, label, title);
+    return ('type', '문항', '');
+  }
+
+  Map<String, dynamic> _examContentGroupMap(LearningProblemQuestion question) {
+    final direct = question.meta['textbook_content_group'];
+    if (direct is Map) {
+      return Map<String, dynamic>.from(direct);
+    }
+    final crop = question.meta['textbook_crop_page'];
+    if (crop is Map) {
+      final group = crop['content_group'];
+      if (group is Map) {
+        return Map<String, dynamic>.from(group);
+      }
+    }
+    return const <String, dynamic>{};
+  }
+
+  String _examDifficultyLabel(LearningProblemQuestion question) {
+    final direct = '${question.meta['textbook_difficulty_label'] ?? ''}'.trim();
+    if (direct.isNotEmpty) return direct;
+    final crop = question.meta['textbook_crop_page'];
+    if (crop is Map) {
+      final label = '${crop['difficulty_label'] ?? crop['label'] ?? ''}'.trim();
+      if (label.isNotEmpty) return label;
+    }
+    return '';
+  }
+
+  TbAnswerKind _examAnswerKind(LearningProblemQuestion question) {
+    switch (originalQuestionModeOf(question)) {
+      case kLearningQuestionModeObjective:
+        return TbAnswerKind.objective;
+      case kLearningQuestionModeEssay:
+        return TbAnswerKind.essay;
+      case kLearningQuestionModeSubjective:
+        return TbAnswerKind.subjective;
+      default:
+        return TbAnswerKind.unknown;
     }
   }
 
@@ -910,6 +1293,10 @@ class TextbookExplorerController extends ChangeNotifier {
   /// 우측 상단 FAB 타이틀. 선택 범위가 한 소단원 안이면 소단원명,
   /// 여러 소단원이면 가능한 가장 가까운 공통 중단원/대단원명으로 축약한다.
   String get currentScopeTitle {
+    if (examPaperMode || mockExamMode) {
+      final title = bookTitle.trim();
+      return title.isEmpty ? '시험' : title;
+    }
     if (checkedPageKeys.isEmpty) return '범위 선택';
     TbExBigUnit? matchedBig;
     TbExMidUnit? matchedMid;
@@ -1149,10 +1536,222 @@ class TextbookExplorerController extends ChangeNotifier {
   }
 
   void switchMode(TbExRightMode next) {
+    if (examPaperMode && next == TbExRightMode.pdf) return;
     if (mode == next) return;
     mode = next;
     notifyListeners();
     if (next == TbExRightMode.pdf) ensurePdfLoaded();
+    if (next == TbExRightMode.questionView) {
+      _questionCardLoadKey = '';
+      scheduleQuestionCards();
+    }
+  }
+
+  LearningProblemQuestion? questionForUid(String uid) {
+    final key = uid.trim();
+    if (key.isEmpty) return null;
+    return _questionMetadataByUid[key];
+  }
+
+  void setItemQuestionMode(String uid, String mode) {
+    final key = uid.trim();
+    final question = _questionMetadataByUid[key];
+    if (question == null) return;
+    final next = normalizeQuestionModeSelection(
+      question,
+      mode,
+      fallbackMode: originalQuestionModeOf(question),
+    );
+    if (selectedQuestionModesByUid[key] == next) return;
+    selectedQuestionModesByUid[key] = next;
+    notifyListeners();
+  }
+
+  /// 문항 보기에 나온 문항의 문제은행 카드와 썸네일을 불러온다.
+  void scheduleQuestionCards() {
+    if (_disposed || mode != TbExRightMode.questionView) return;
+    final uids = displayItems
+        .map((item) => item.questionUid.trim())
+        .where((uid) => uid.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+    final key = uids.join('\u0001');
+    if (key == _questionCardLoadKey) return;
+    _questionCardLoadKey = key;
+    final gen = ++_questionCardLoadGen;
+    unawaited(_loadQuestionCards(gen, uids));
+  }
+
+  Future<void> retryQuestionCardPreview(LearningProblemQuestion question) async {
+    final id = question.id.trim();
+    if (id.isEmpty || _disposed) return;
+    questionPreviewUrls.remove(id);
+    questionPreviewStatus[id] = 'running';
+    questionPreviewError.remove(id);
+    notifyListeners();
+    await _fetchQuestionCardPreviews([question]);
+    if (!_disposed) notifyListeners();
+  }
+
+  Future<void> _loadQuestionCards(int gen, List<String> uids) async {
+    if (uids.isEmpty) {
+      if (!_disposed && gen == _questionCardLoadGen) {
+        questionCardsLoading = false;
+        notifyListeners();
+      }
+      return;
+    }
+    questionCardsLoading = true;
+    notifyListeners();
+    try {
+      final missing = uids
+          .where((uid) => !_questionMetadataByUid.containsKey(uid))
+          .toList(growable: false);
+      if (missing.isNotEmpty) {
+        final questions = await _problemBankService.loadQuestionsByQuestionUids(
+          academyId: academyId,
+          questionUids: missing,
+        );
+        if (_disposed || gen != _questionCardLoadGen) return;
+        for (final question in questions) {
+          _rememberQuestion(question);
+        }
+      }
+      if (_disposed || gen != _questionCardLoadGen) return;
+      final needPreview = <LearningProblemQuestion>[];
+      for (final uid in uids) {
+        final question = _questionMetadataByUid[uid];
+        if (question == null) continue;
+        final id = question.id.trim();
+        if (id.isEmpty || questionPreviewUrls.containsKey(id)) continue;
+        needPreview.add(question);
+      }
+      if (needPreview.isNotEmpty) {
+        await _fetchQuestionCardPreviews(needPreview);
+      }
+    } catch (_) {
+      // 실패한 문항은 카드의 다시 시도로 남긴다.
+    } finally {
+      if (!_disposed && gen == _questionCardLoadGen) {
+        questionCardsLoading = false;
+        notifyListeners();
+      }
+    }
+  }
+
+  void _rememberQuestion(LearningProblemQuestion question) {
+    final stableKey = question.stableQuestionKey.trim();
+    final id = question.id.trim();
+    if (stableKey.isNotEmpty) _questionMetadataByUid[stableKey] = question;
+    if (id.isNotEmpty && id != stableKey) _questionMetadataByUid[id] = question;
+  }
+
+  Future<void> _fetchQuestionCardPreviews(
+    List<LearningProblemQuestion> questions,
+  ) async {
+    if (questions.isEmpty || academyId.trim().isEmpty) return;
+    for (final question in questions) {
+      final id = question.id.trim();
+      if (id.isEmpty) continue;
+      questionPreviewStatus[id] = 'running';
+      questionPreviewError.remove(id);
+    }
+    if (!_disposed) notifyListeners();
+
+    final byDocument = <String, List<LearningProblemQuestion>>{};
+    for (final question in questions) {
+      byDocument
+          .putIfAbsent(question.documentId.trim(), () => [])
+          .add(question);
+    }
+
+    for (final entry in byDocument.entries) {
+      if (_disposed) return;
+      final batch = entry.value;
+      final ids = batch
+          .map((question) {
+            final uid = question.questionUid.trim();
+            return uid.isNotEmpty ? uid : question.id.trim();
+          })
+          .where((id) => id.isNotEmpty)
+          .toList(growable: false);
+      final modeMap = <String, String>{
+        for (final question in batch)
+          if (question.stableQuestionKey.trim().isNotEmpty)
+            question.stableQuestionKey.trim(): kLearningQuestionModeSubjective,
+      };
+      var urlMap = <String, String>{};
+      try {
+        urlMap = await _problemBankService.batchRenderThumbnails(
+          academyId: academyId,
+          questionIds: ids,
+          documentId: entry.key,
+          templateProfile: 'naesin',
+          paperSize: 'A4',
+          questionModeByQuestionUid: modeMap,
+        );
+      } catch (_) {
+        urlMap = <String, String>{};
+      }
+      if (_disposed) return;
+      _applyPreviewUrls(batch, urlMap);
+
+      final missing = batch.where((question) {
+        final id = question.id.trim();
+        return id.isNotEmpty && !questionPreviewUrls.containsKey(id);
+      }).toList(growable: false);
+      if (missing.isNotEmpty) {
+        final fallbackIds = missing
+            .map((question) {
+              final uid = question.questionUid.trim();
+              return uid.isNotEmpty ? uid : question.id.trim();
+            })
+            .where((id) => id.isNotEmpty)
+            .toList(growable: false);
+        try {
+          final fallback = await _problemBankService.fetchQuestionPreviews(
+            academyId: academyId,
+            questionIds: fallbackIds,
+          );
+          if (_disposed) return;
+          _applyPreviewUrls(missing, fallback);
+        } catch (_) {
+          // 아래 실패 표시로 넘긴다.
+        }
+      }
+
+      for (final question in batch) {
+        final id = question.id.trim();
+        if (id.isEmpty || questionPreviewUrls.containsKey(id)) continue;
+        questionPreviewStatus[id] = 'failed';
+        questionPreviewError[id] = _problemBankService.hasGateway
+            ? '서버 미리보기 응답에서 누락되었습니다.'
+            : 'Supabase Storage에 저장된 Worker 미리보기가 없습니다.';
+      }
+    }
+  }
+
+  void _applyPreviewUrls(
+    List<LearningProblemQuestion> questions,
+    Map<String, String> urlMap,
+  ) {
+    final idByKey = <String, String>{};
+    for (final question in questions) {
+      final id = question.id.trim();
+      final uid = question.questionUid.trim();
+      if (id.isEmpty) continue;
+      idByKey[id] = id;
+      if (uid.isNotEmpty) idByKey[uid] = id;
+    }
+    for (final entry in urlMap.entries) {
+      final id = idByKey[entry.key.trim()];
+      final url = entry.value.trim();
+      if (id == null || id.isEmpty || url.isEmpty) continue;
+      questionPreviewUrls[id] = url;
+      questionPreviewStatus[id] = 'completed';
+      questionPreviewError.remove(id);
+    }
   }
 
   Future<void> ensurePdfLoaded() async {
@@ -1161,15 +1760,22 @@ class TextbookExplorerController extends ChangeNotifier {
     pdfLoading = true;
     notifyListeners();
     try {
-      final source = await TextbookPdfService.instance.resolve(
-        TextbookPdfRef(
-          academyId: academyId,
-          fileId: bookId,
-          gradeLabel: gradeLabel,
-          kind: 'body',
-          displayName: bookTitle,
-        ),
-      );
+      final card = mockExamCard;
+      final source = card != null
+          ? TextbookPdfSource.remoteUrl(
+              url: await MockExamResourceService().signedPaperUrl(card),
+              migrationStatus: 'mock_exam',
+              linkId: card.paperId,
+            )
+          : await TextbookPdfService.instance.resolve(
+              TextbookPdfRef(
+                academyId: academyId,
+                fileId: bookId,
+                gradeLabel: gradeLabel,
+                kind: 'body',
+                displayName: bookTitle,
+              ),
+            );
       pdfSource = source;
       pdfLoading = false;
     } catch (e) {
@@ -1228,10 +1834,14 @@ class TextbookExplorerTreePanel extends StatelessWidget {
             subtitle: controller.homeworkSelectionMode ? null : _subtitle(),
             reserveSubtitleSlot: !controller.homeworkSelectionMode,
             titleLeading: _buildTitleLeading(context, style),
-            titleTrailing: controller.homeworkSelectionMode
+            titleTrailing: controller.homeworkSelectionMode ||
+                    controller.examPaperMode ||
+                    controller.mockExamMode
                 ? null
                 : _buildTitleTrailing(context, style),
-            reserveTitleTrailingSlot: !controller.homeworkSelectionMode,
+            reserveTitleTrailingSlot: !controller.homeworkSelectionMode &&
+                !controller.examPaperMode &&
+                !controller.mockExamMode,
             titleTrailingSlotFraction: 0.32,
             hideHeader: controller.homeworkSelectionMode,
             isLoading: controller.loading,
@@ -1250,6 +1860,11 @@ class TextbookExplorerTreePanel extends StatelessWidget {
   }
 
   String? _subtitle() {
+    if (controller.examPaperMode || controller.mockExamMode) {
+      if (controller.loading) return null;
+      final count = controller.data.totalQuestions;
+      return count > 0 ? '총 $count문항' : null;
+    }
     if (controller.loading) return null;
     if (!controller.basicInfoExpanded) {
       final desc = (controller.description ?? '').trim();
@@ -1316,8 +1931,10 @@ class TextbookExplorerTreePanel extends StatelessWidget {
             for (final page in small.pages)
               SharedFolderTreeNode(
                 id: 'page:${small.key}#${page.rawPage}',
-                label: '${page.displayPage ?? page.rawPage}쪽 · '
-                    '${page.isConceptPage ? '개념' : '${page.numberedQuestionCount}문항'}',
+                label: controller.examPaperMode
+                    ? '${page.numberedQuestionCount}문항'
+                    : '${page.displayPage ?? page.rawPage}쪽 · '
+                        '${page.isConceptPage ? '개념' : '${page.numberedQuestionCount}문항'}',
                 icon: Icons.description_outlined,
                 selectedIcon: Icons.check_circle_outline,
                 data: _NodeTag.page(small, page),
@@ -1703,65 +2320,6 @@ class TextbookExplorerTreePanel extends StatelessWidget {
   }
 }
 
-/// [SolidCapsuleActionBar]와 동일 토큰의 원형 단일 아이콘 버튼.
-class _SolidCircleActionButton extends StatelessWidget {
-  const _SolidCircleActionButton({
-    required this.icon,
-    required this.onPressed,
-    this.tooltip,
-    this.iconSize = FabTabBarTokens.previewAcademyBaseFontSize + 8,
-    this.size = FabTabBarTokens.fabBarHeight,
-  });
-
-  final IconData icon;
-  final VoidCallback? onPressed;
-  final String? tooltip;
-  final double iconSize;
-  final double size;
-
-  @override
-  Widget build(BuildContext context) {
-    final brightness = Theme.of(context).brightness;
-    final fg = SolidCapsuleActionBarTokens.iconColor(brightness);
-
-    final button = Material(
-      color: Colors.transparent,
-      shape: const CircleBorder(),
-      child: InkWell(
-        customBorder: const CircleBorder(),
-        onTap: onPressed,
-        child: SizedBox(
-          width: size,
-          height: size,
-          child: Icon(icon, size: iconSize, color: fg),
-        ),
-      ),
-    );
-
-    final child = tooltip == null || tooltip!.isEmpty
-        ? button
-        : Tooltip(message: tooltip, child: button);
-
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        boxShadow: SolidCapsuleActionBarTokens.boxShadows(brightness),
-      ),
-      child: Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: SolidCapsuleActionBarTokens.background(brightness),
-          border:
-              Border.all(color: SolidCapsuleActionBarTokens.border(brightness)),
-        ),
-        child: child,
-      ),
-    );
-  }
-}
-
 class _MiniIconButton extends StatelessWidget {
   const _MiniIconButton({
     required this.icon,
@@ -1815,6 +2373,12 @@ const double _tbExTypeLabelInset = _tbExContentHorizontalInset +
     _tbExTypeCheckboxGap;
 const double _tbExQuestionCardExtraInset = 4.0;
 
+/// 문제은행 문항 카드 그리드와 같은 크기.
+const double _tbExQuestionCardSpacing = 8;
+const double _tbExQuestionCardPreferredWidth = 428;
+const double _tbExQuestionCardMinWidth = 390;
+const double _tbExQuestionCardHeight = 304;
+
 class TextbookExplorerContent extends StatelessWidget {
   const TextbookExplorerContent({super.key, required this.controller});
 
@@ -1827,6 +2391,14 @@ class TextbookExplorerContent extends StatelessWidget {
       builder: (context, _) {
         final brightness = Theme.of(context).brightness;
         final style = FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
+        if (!controller.homeworkSelectionMode &&
+            !controller.loading &&
+            controller.error == null &&
+            controller.mode == TbExRightMode.questionView) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            controller.scheduleQuestionCards();
+          });
+        }
         if (!controller.homeworkSelectionMode &&
             !controller.loading &&
             controller.error == null &&
@@ -1870,14 +2442,7 @@ class TextbookExplorerContent extends StatelessWidget {
                           ),
                         ),
                         if (!controller.loading &&
-                            controller.error == null) ...[
-                          const SizedBox(width: 12),
-                          QuestionModeCountBar(
-                            counts: controller.visibleSelectionModeCounts,
-                          ),
-                        ],
-                        if (controller.hasSelectionFilter &&
-                            !controller.loading &&
+                            controller.error == null &&
                             controller.data.hasQuestions) ...[
                           const SizedBox(width: 12),
                           _TbExExportOptionsFab(controller: controller),
@@ -1890,11 +2455,10 @@ class TextbookExplorerContent extends StatelessWidget {
                 top: _tbExTitleOverlayTop +
                     (_tbExTitleLineHeight - FabTabBarTokens.fabBarHeight) / 2,
                 left: _tbExContentHorizontalInset,
-                child: _SolidCircleActionButton(
-                  icon: Icons.arrow_back_rounded,
-                  tooltip: '교재 목록으로 돌아가기',
-                  size: FabTabBarTokens.fabBarHeight,
-                  iconSize: FabTabBarTokens.previewAcademyBaseFontSize + 8,
+                child: SharedBackButton(
+                  tooltip: controller.examPaperMode
+                      ? '시험 목록으로 돌아가기'
+                      : '교재 목록으로 돌아가기',
                   onPressed: () => controller.onClose?.call(),
                 ),
               ),
@@ -1928,7 +2492,151 @@ class TextbookExplorerContent extends StatelessWidget {
     if (controller.mode == TbExRightMode.pdf) {
       return _buildPdf(context, style);
     }
+    if (controller.mode == TbExRightMode.questionView) {
+      return _buildQuestionBankCards(context, style);
+    }
     return _buildQuestions(context, style);
+  }
+
+  Widget _buildQuestionBankCards(
+    BuildContext context,
+    PreviewAcademyPanelStyle style,
+  ) {
+    if (!controller.hasSelectionFilter) {
+      return Center(
+        child: Text(
+          '왼쪽 단원 트리에서 소단원 또는 페이지를 체크하세요.',
+          style: TextStyle(color: style.hint, fontSize: 14),
+        ),
+      );
+    }
+    final items = controller.displayItems;
+    if (items.isEmpty) {
+      return Center(
+        child: Text(
+          controller.showOnlyCart
+              ? '장바구니에 표시할 문항이 없습니다.'
+              : controller.questionFilterActive
+                  ? '필터 조건에 맞는 문항이 없습니다.'
+                  : '선택한 범위에 표시할 문항이 없습니다.',
+          style: TextStyle(color: style.hint, fontSize: 14),
+        ),
+      );
+    }
+    final resolved = items
+        .where((item) => controller.questionForUid(item.questionUid) != null)
+        .toList(growable: false);
+    if (resolved.isEmpty && controller.questionCardsLoading) {
+      return const Center(child: YggLoadingIndicator(size: 28));
+    }
+    if (resolved.isEmpty) {
+      return Center(
+        child: Text(
+          '문항 카드를 찾지 못했습니다.',
+          style: TextStyle(color: style.hint, fontSize: 14),
+        ),
+      );
+    }
+    final grouped = <String, List<TbExItem>>{};
+    for (final item in resolved) {
+      grouped.putIfAbsent(item.typeGroupKey, () => <TbExItem>[]).add(item);
+    }
+    final keys = grouped.keys.toList(growable: false);
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(
+        _tbExContentHorizontalInset,
+        _tbExScrollTopPadding,
+        4,
+        120,
+      ),
+      itemCount: keys.length,
+      itemBuilder: (context, index) {
+        final key = keys[index];
+        final groupItems = grouped[key] ?? const <TbExItem>[];
+        return Padding(
+          padding: EdgeInsets.only(bottom: index == keys.length - 1 ? 0 : 18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildTypeHeader(style, key, groupItems),
+              const SizedBox(height: 10),
+              _buildQuestionBankGrid(groupItems),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildQuestionBankGrid(List<TbExItem> items) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth.isFinite && constraints.maxWidth > 0
+            ? constraints.maxWidth
+            : _tbExQuestionCardPreferredWidth;
+        var columns = ((width + _tbExQuestionCardSpacing) /
+                (_tbExQuestionCardPreferredWidth + _tbExQuestionCardSpacing))
+            .round()
+            .clamp(1, 99)
+            .toInt();
+        var cardWidth =
+            (width - (columns - 1) * _tbExQuestionCardSpacing) / columns;
+        while (columns > 1 && cardWidth < _tbExQuestionCardMinWidth) {
+          columns -= 1;
+          cardWidth =
+              (width - (columns - 1) * _tbExQuestionCardSpacing) / columns;
+        }
+        final rowCount = (items.length / columns).ceil();
+        final gridHeight = (rowCount * _tbExQuestionCardHeight) +
+            ((rowCount - 1) * _tbExQuestionCardSpacing);
+        return SizedBox(
+          width: width,
+          height: gridHeight,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              for (var i = 0; i < items.length; i++)
+                Positioned(
+                  left: (i % columns) * (cardWidth + _tbExQuestionCardSpacing),
+                  top: (i ~/ columns) *
+                      (_tbExQuestionCardHeight + _tbExQuestionCardSpacing),
+                  width: cardWidth,
+                  height: _tbExQuestionCardHeight,
+                  child: _buildQuestionBankCard(items[i]),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildQuestionBankCard(TbExItem item) {
+    final question = controller.questionForUid(item.questionUid);
+    if (question == null) return const SizedBox.shrink();
+    final selected = controller.isItemEffectivelySelected(item.selKey);
+    final id = question.id.trim();
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => controller.toggleSelectKeys([item.selKey], !selected),
+      child: ProblemBankQuestionCard(
+        question: question,
+        selected: selected,
+        selectedMode: controller.questionModeForItem(item),
+        previewImageUrl: controller.questionPreviewUrls[id],
+        previewStatus: controller.questionPreviewStatus[id] ?? '',
+        previewErrorMessage: controller.questionPreviewError[id] ?? '',
+        onRetryPreview: () {
+          unawaited(controller.retryQuestionCardPreview(question));
+        },
+        onSelectedChanged: (next) {
+          controller.toggleSelectKeys([item.selKey], next);
+        },
+        onModeSelected: (mode) {
+          controller.setItemQuestionMode(item.questionUid, mode);
+        },
+      ),
+    );
   }
 
   Widget _buildQuestions(BuildContext context, PreviewAcademyPanelStyle style) {
@@ -2956,40 +3664,6 @@ class _DiffDot extends StatelessWidget {
   }
 }
 
-// ================================================================= FAB BAR
-class TbExModeFabBar {
-  TbExModeFabBar._();
-
-  static const double _compactPillWidth = 88;
-
-  static List<Widget> leadingPills({
-    required TbExRightMode mode,
-    required bool enabled,
-    required VoidCallback onQuestionsMode,
-    required VoidCallback onPdfMode,
-  }) {
-    final disabled = !enabled;
-    return [
-      FabStyleActionTabPill(
-        icon: Icons.grid_view_rounded,
-        label: '문항',
-        selected: mode == TbExRightMode.questions,
-        enabled: !disabled,
-        onTap: onQuestionsMode,
-        width: _compactPillWidth,
-      ),
-      FabStyleActionTabPill(
-        icon: Icons.picture_as_pdf_outlined,
-        label: '원본',
-        selected: mode == TbExRightMode.pdf,
-        enabled: !disabled,
-        onTap: onPdfMode,
-        width: _compactPillWidth,
-      ),
-    ];
-  }
-}
-
 class _TbExExportOptionsFab extends StatelessWidget {
   const _TbExExportOptionsFab({required this.controller});
 
@@ -3002,8 +3676,13 @@ class _TbExExportOptionsFab extends StatelessWidget {
       builder: (context, _) {
         final busy = controller.isExporting;
         final showQuestionOptions =
-            controller.mode == TbExRightMode.questions &&
+            (controller.mode == TbExRightMode.questions ||
+                controller.mode == TbExRightMode.questionView) &&
                 controller.selectedKeys.isNotEmpty;
+        const viewButtonSpan = 62.0;
+        const selectionSpan = 74.0;
+        final questionOptionsSpan = showQuestionOptions ? 62.0 : 0.0;
+        final afterViewSpan = questionOptionsSpan + selectionSpan;
         return ProblemBankExportOptionsFab(
           isBusy: busy,
           panel: _TbExExportOptionsPanel(controller: controller),
@@ -3017,7 +3696,12 @@ class _TbExExportOptionsFab extends StatelessWidget {
             onToggleTypeFilter: controller.toggleTypeFilter,
             onToggleDifficultyFilter: controller.toggleDifficultyFilter,
             onClearFilters: controller.clearQuestionFilters,
-            panelRightExtraOffset: showQuestionOptions ? 136 : 74,
+            panelRightExtraOffset: viewButtonSpan + afterViewSpan,
+          ),
+          viewButton: _TbExViewMenuButton(
+            controller: controller,
+            disabled: busy,
+            panelRightExtraOffset: afterViewSpan,
           ),
           questionOptionsButton: showQuestionOptions
               ? _TbExQuestionOptionsButton(
@@ -3034,6 +3718,93 @@ class _TbExExportOptionsFab extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+class _TbExViewMenuButton extends StatelessWidget {
+  const _TbExViewMenuButton({
+    required this.controller,
+    required this.disabled,
+    required this.panelRightExtraOffset,
+  });
+
+  final TextbookExplorerController controller;
+  final bool disabled;
+  final double panelRightExtraOffset;
+
+  @override
+  Widget build(BuildContext context) {
+    return SharedDropdownDialog(
+      disabled: disabled,
+      panelMaxWidth: 280,
+      alignPanelRightToCapsuleBar: true,
+      panelRightExtraOffset: panelRightExtraOffset,
+      maxHeightScreenFraction: 0.4,
+      panelBuilder: (context, dropdownController) {
+        final brightness = Theme.of(context).brightness;
+        final isDark = brightness == Brightness.dark;
+        final style = FabTabBarTokens.previewAcademyPanelStyleFor(brightness);
+        final hoverOverlay = isDark
+            ? FabTabBarTokens.previewAcademyMenuGlassHoverOverlayDark
+            : FabTabBarTokens.previewAcademyMenuGlassHoverOverlayLight;
+        const check = FabTabBarTokens.previewConfirmActionColor;
+
+        void select(TbExRightMode mode) {
+          controller.switchMode(mode);
+          dropdownController.close();
+        }
+
+        Widget row(String label, TbExRightMode mode) {
+          final selected = controller.mode == mode;
+          return SharedDropdownDialogMenuRow(
+            selected: selected,
+            checkColor: check,
+            checkSize: 20,
+            checkGap: 8,
+            checkTop: 3,
+            style: style,
+            hoverOverlay: hoverOverlay,
+            onTap: () => select(mode),
+            child: Text(
+              label,
+              style: FabTabBarTokens.previewMenuItemTextStyle(style).copyWith(
+                fontSize: SharedDropdownDialogPanel.contentFontSize,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
+              ),
+            ),
+          );
+        }
+
+        return SharedDropdownDialogPanel(
+          title: '보기',
+          maxHeight: dropdownController.maxHeight,
+          onClose: dropdownController.close,
+          body: ListenableBuilder(
+            listenable: controller,
+            builder: (context, _) => Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(height: 6),
+                row('번호 보기', TbExRightMode.questions),
+                row('문항 보기', TbExRightMode.questionView),
+                if (!controller.examPaperMode)
+                  row('원본 보기', TbExRightMode.pdf),
+                const SizedBox(height: 6),
+              ],
+            ),
+          ),
+        );
+      },
+      childBuilder: (context, dropdownController) => SolidCapsuleActionButton(
+        tooltip: '보기',
+        selected: dropdownController.isOpen,
+        onPressed: disabled ? null : dropdownController.toggle,
+        iconBuilder: (color, size) => TextbookViewMenuIcon(
+          color: color,
+          size: size,
+        ),
+      ),
     );
   }
 }
@@ -3393,69 +4164,6 @@ class _TbExExportOptionsPanel extends StatelessWidget {
   }
 }
 
-class TbExFabBar extends StatelessWidget {
-  const TbExFabBar({
-    super.key,
-    required this.mode,
-    required this.cartCount,
-    required this.selectedCount,
-    required this.enabled,
-    required this.onQuestionsMode,
-    required this.onPdfMode,
-    required this.onAdd,
-    required this.onOpenCart,
-  });
-
-  final TbExRightMode mode;
-  final int cartCount;
-  final int selectedCount;
-  final bool enabled;
-  final VoidCallback onQuestionsMode;
-  final VoidCallback onPdfMode;
-  final VoidCallback onAdd;
-  final VoidCallback onOpenCart;
-
-  @override
-  Widget build(BuildContext context) {
-    final disabled = !enabled;
-
-    return FabStyleActionTabBar(
-      children: [
-        FabStyleActionTabPill(
-          icon: Icons.grid_view_rounded,
-          label: '문항',
-          selected: mode == TbExRightMode.questions,
-          enabled: !disabled,
-          onTap: onQuestionsMode,
-          width: 88,
-        ),
-        FabStyleActionTabPill(
-          icon: Icons.picture_as_pdf_outlined,
-          label: '원본',
-          selected: mode == TbExRightMode.pdf,
-          enabled: !disabled,
-          onTap: onPdfMode,
-          width: 88,
-        ),
-        FabStyleActionTabPill(
-          icon: Icons.add_rounded,
-          label: selectedCount > 0 ? '추가 $selectedCount' : '추가',
-          enabled: !disabled,
-          onTap: onAdd,
-          width: selectedCount > 0 ? 128 : 112,
-        ),
-        FabStyleActionTabPill(
-          icon: Icons.shopping_cart_outlined,
-          label: cartCount > 0 ? '장바구니 $cartCount' : '장바구니',
-          enabled: !disabled && cartCount > 0,
-          onTap: onOpenCart,
-          width: 144,
-        ),
-      ],
-    );
-  }
-}
-
 /// 교재 탐색 액션 FAB — [FabStyleScreenTabBarOverlay]와 동일 루트 오버레이·Y 기준.
 class TextbookExplorerFabOverlay {
   OverlayEntry? _entry;
@@ -3522,36 +4230,22 @@ class TextbookExplorerFabOverlay {
     return ListenableBuilder(
       listenable: controller,
       builder: (context, _) {
-        final enabled = !controller.loading && controller.data.hasQuestions;
-        final busy = controller.isExporting;
         return Stack(
           children: [
-            Positioned(
-              left: railWidth + FabTabBarTokens.fabBarLeftInsetFromNavRail,
-              bottom: FabTabBarTokens.fabBarBottomInset,
-              child: ProblemBankBottomFabBar(
-                showPrimaryActions: false,
-                alignStart: true,
-                leading: TbExModeFabBar.leadingPills(
-                  mode: controller.mode,
-                  enabled: enabled,
-                  onQuestionsMode: () =>
-                      controller.switchMode(TbExRightMode.questions),
-                  onPdfMode: () => controller.switchMode(TbExRightMode.pdf),
+            if (!controller.loading && controller.error == null)
+              Positioned(
+                left: railWidth,
+                right: 0,
+                bottom: FabTabBarTokens.fabBarBottomInset,
+                child: IgnorePointer(
+                  child: Center(
+                    child: QuestionModeCountBar(
+                      counts: controller.visibleSelectionModeCounts,
+                      height: FabTabBarTokens.fabBarHeight,
+                    ),
+                  ),
                 ),
-                cartCount: controller.cartCount,
-                cartActive: controller.showOnlyCart,
-                allVisibleSelected: controller.allVisibleSelected,
-                isBusy: busy || !enabled,
-                onToggleSelectAll: controller.toggleSelectAllVisible,
-                onToggleCart: () =>
-                    controller.toggleShowOnlyCart(actionContext),
-                onClearCart: controller.clearCart,
-                onAddToCart: () => controller.addSelectedToCart(actionContext),
-                onCreate: () =>
-                    controller.openExportLayoutPreview(actionContext),
               ),
-            ),
             // 오른쪽 막대는 공용 껍질이 그린다. 화면 오른쪽에서의 거리는
             // 예전 Positioned(right) + 막대 안쪽 여백과 같다.
             Builder(

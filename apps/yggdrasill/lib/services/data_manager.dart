@@ -1590,11 +1590,20 @@ class DataManager {
             nickname: (nick == null || nick.isEmpty) ? null : nick,
           );
         }).toList();
-        final sbiRows = await supa
-            .from('student_basic_info')
-            .select(
-                'student_id,phone_number,parent_phone_number,group_id,memo,notification_consent')
-            .eq('academy_id', academyId);
+        List<dynamic> sbiRows;
+        try {
+          sbiRows = await supa
+              .from('student_basic_info')
+              .select(
+                  'student_id,phone_number,parent_phone_number,group_id,memo,notification_consent,todo_sheet_alimtalk_consent')
+              .eq('academy_id', academyId);
+        } catch (_) {
+          sbiRows = await supa
+              .from('student_basic_info')
+              .select(
+                  'student_id,phone_number,parent_phone_number,group_id,memo,notification_consent')
+              .eq('academy_id', academyId);
+        }
         final Map<String, Map<String, dynamic>> byId = {
           for (final m in (sbiRows as List))
             (m['student_id'] as String): Map<String, dynamic>.from(m)
@@ -1629,6 +1638,8 @@ class DataManager {
               registrationDate: reg,
               memo: info['memo'] as String?,
               notificationConsent: info['notification_consent'] == true,
+              todoSheetAlimtalkConsent:
+                  info['todo_sheet_alimtalk_consent'] == true,
             ));
           } else {
             basicInfos
@@ -2737,6 +2748,7 @@ class DataManager {
           'group_id': basicInfo.groupId,
           'memo': basicInfo.memo,
           'notification_consent': basicInfo.notificationConsent,
+          'todo_sheet_alimtalk_consent': basicInfo.todoSheetAlimtalkConsent,
         }, onConflict: 'student_id');
       } catch (e, st) {
         print('[SUPA][teachers insert] $e\n$st');
@@ -2788,6 +2800,7 @@ class DataManager {
           'group_id': basicInfo.groupId,
           'memo': basicInfo.memo,
           'notification_consent': basicInfo.notificationConsent,
+          'todo_sheet_alimtalk_consent': basicInfo.todoSheetAlimtalkConsent,
         }, onConflict: 'student_id');
       } catch (e, st) {
         print('[SUPA][updateStudent server-only] $e\n$st');
@@ -2822,6 +2835,7 @@ class DataManager {
           'group_id': basicInfo.groupId,
           'memo': basicInfo.memo,
           'notification_consent': basicInfo.notificationConsent,
+          'todo_sheet_alimtalk_consent': basicInfo.todoSheetAlimtalkConsent,
         }, onConflict: 'student_id');
       } catch (e, st) {
         print('[SUPA][classes upsert(add)] $e\n$st');
@@ -3257,6 +3271,7 @@ class DataManager {
             'group_id': basicInfo.groupId,
             'memo': basicInfo.memo,
             'notification_consent': basicInfo.notificationConsent,
+            'todo_sheet_alimtalk_consent': basicInfo.todoSheetAlimtalkConsent,
           }, onConflict: 'student_id');
         } catch (e, st) {
           print('[SUPA][updateStudentBasicInfo server-only] $e\n$st');
@@ -3285,6 +3300,7 @@ class DataManager {
             'group_id': basicInfo.groupId,
             'memo': basicInfo.memo,
             'notification_consent': basicInfo.notificationConsent,
+            'todo_sheet_alimtalk_consent': basicInfo.todoSheetAlimtalkConsent,
           }, onConflict: 'student_id');
         } catch (e, st) {
           print('[SUPA][student_payment_info upsert(update)] $e\n$st');

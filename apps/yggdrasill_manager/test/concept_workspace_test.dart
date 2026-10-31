@@ -886,11 +886,13 @@ void main() {
 
       await tester.tap(find.text('초안 안 한 소단원만'));
       await tester.pump();
-      expect(find.text('차례로 만들기'), findsNothing);
+      expect(find.text('새로 만들기'), findsNothing);
+      expect(find.text('개념 추가하기'), findsNothing);
       await tester.tap(find.byIcon(Icons.check_box_outline_blank));
       await tester.pump();
       expect(find.text('중단원 1개 · 새로 만들 소단원 1개'), findsOneWidget, reason: '초안이 있는 소단원은 빼고 센다');
-      expect(find.text('차례로 만들기'), findsOneWidget);
+      expect(find.text('새로 만들기'), findsOneWidget);
+      expect(find.text('개념 추가하기'), findsOneWidget);
       await tester.tap(find.text('고르기 취소'));
       await tester.pump();
       await tester.tap(find.text('검토하기'));

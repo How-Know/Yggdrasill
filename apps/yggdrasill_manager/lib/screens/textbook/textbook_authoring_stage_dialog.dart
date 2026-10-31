@@ -301,11 +301,67 @@ bool textbookSequenceAllowsPage({
   required int page,
 }) {
   if (bodyPage <= 0) return true;
+  // 같은 본문 쪽에 저장값이 여럿이면 가장 넓게 잡는다. 하나가 잘못 붙어도
+  // 같은 쪽의 제대로 붙은 문항이 범위를 열어 둔다.
+  final spans = <int, ({int min, int max})>{};
   for (final anchor in anchors) {
-    if (anchor.bodyPage < bodyPage && page < anchor.page) return false;
-    if (anchor.bodyPage > bodyPage && page > anchor.page) return false;
+    final span = spans[anchor.bodyPage];
+    spans[anchor.bodyPage] = span == null
+        ? (min: anchor.page, max: anchor.page)
+        : (
+            min: math.min(span.min, anchor.page),
+            max: math.max(span.max, anchor.page),
+          );
+  }
+  for (final entry in spans.entries) {
+    if (entry.key < bodyPage && page < entry.value.min) return false;
+    if (entry.key > bodyPage && page > entry.value.max) return false;
   }
   return true;
+}
+
+/// 해설 지면 한 장의 응답 중 읽는 순서와 본문 차례가 어긋난 항목의 순번.
+///
+/// 해설은 두 단으로 왼쪽 단 위→아래, 오른쪽 단 위→아래 순서로 본문 차례를
+/// 따른다. 해설 70쪽 맨 위의 01 소단원 연습문제 17·18 풀이를 모델이 "177쪽" 으로
+/// 적어 02 소단원 마지막 문항에 붙였는데, 같은 지면 아래 165쪽 개념 Check 보다
+/// 먼저 읽히므로 차례가 어긋난다. 가장 긴 비감소 부분열 밖의 항목을 버린다.
+/// 영역이나 본문 쪽을 모르는 항목은 판정하지 않는다.
+Set<int> textbookOutOfReadingOrder(
+  List<({int bodyPage, List<int>? region})> items,
+) {
+  final ranked = <int>[
+    for (var i = 0; i < items.length; i += 1)
+      if (items[i].bodyPage > 0 && (items[i].region?.length ?? 0) == 4) i,
+  ];
+  if (ranked.length < 2) return <int>{};
+  int column(int i) => items[i].region![1] >= 500 ? 1 : 0;
+  ranked.sort((a, b) {
+    final byColumn = column(a).compareTo(column(b));
+    if (byColumn != 0) return byColumn;
+    return items[a].region![0].compareTo(items[b].region![0]);
+  });
+  final length = List<int>.filled(ranked.length, 1);
+  final previous = List<int>.filled(ranked.length, -1);
+  var best = 0;
+  for (var i = 0; i < ranked.length; i += 1) {
+    for (var j = 0; j < i; j += 1) {
+      if (items[ranked[j]].bodyPage <= items[ranked[i]].bodyPage &&
+          length[j] + 1 > length[i]) {
+        length[i] = length[j] + 1;
+        previous[i] = j;
+      }
+    }
+    if (length[i] > length[best]) best = i;
+  }
+  final keep = <int>{};
+  for (var i = best; i >= 0; i = previous[i]) {
+    keep.add(ranked[i]);
+  }
+  return <int>{
+    for (final i in ranked)
+      if (!keep.contains(i)) i,
+  };
 }
 
 /// 한 호출에 같은 번호·코너가 여럿 담기면 본문 차례상 가장 앞선 것만 고른다.
@@ -481,24 +537,25 @@ class _TextbookAuthoringStageDialogState
   bool get _isGaeyuHigh =>
       widget.seriesKey.trim().toLowerCase() == 'gaeyu_high';
 
-  /// 이 단계에서 해설 쪽이 확정된 문항들. 정답 격자는 풀이보다 앞 지면에
+  /// 이 단계에서 해설 쪽이 저장된 문항들. 정답 격자는 풀이보다 앞 지면에
   /// 몰려 있어 정답 쪽과 해설 좌표 쪽을 섞으면 범위가 틀어진다. 단계별로 따로 센다.
-  List<TextbookSequenceAnchor> _sequenceAnchors({
-    required bool answer,
-    required Map<String, int> runPages,
-  }) {
+  ///
+  /// 이번 실행에서 막 찾은 짝은 넣지 않는다. 앞으로만 훑으므로 새 짝이 걸러
+  /// 주는 것은 없고, 잘못 붙은 짝 하나가 뒤 지면 전체를 막는다(해설 70쪽 01 소단원
+  /// 연습문제 17·18 이 "177쪽" 으로 붙자 167~176쪽 문항을 71쪽부터 묻지 않았다).
+  List<TextbookSequenceAnchor> _sequenceAnchors({required bool answer}) {
     final anchors = <TextbookSequenceAnchor>[];
     for (final crop in _crops) {
       if (crop.isSetHeader) continue;
       final bodyPage = crop.displayPage ?? 0;
       if (bodyPage <= 0) continue;
-      int? page = runPages[crop.id];
-      if (page == null && answer) {
+      int? page;
+      if (answer) {
         final saved = _answersByCropId[crop.id];
         if (saved != null && saved.answerText.trim().isNotEmpty) {
           page = saved.rawPage;
         }
-      } else if (page == null) {
+      } else {
         final saved = _solRefsByCropId[crop.id];
         if (saved != null && saved.sourceKind == 'sol') page = saved.rawPage;
       }
@@ -508,14 +565,33 @@ class _TextbookAuthoringStageDialogState
     return textbookConsistentAnchors(anchors);
   }
 
-  List<TextbookSequenceAnchor> _solutionSequenceAnchors({
+  /// `textbookOutOfReadingOrder` 로 어긋난 해설 좌표를 걸러낸다.
+  List<TextbookVlmSolutionRefItem> _dropOutOfReadingOrder({
+    required List<TextbookVlmSolutionRefItem> items,
+    required List<int> order,
     required List<_AnswerTarget> targets,
-    required Map<int, _SolutionRefWithPage> hits,
-  }) =>
-      _sequenceAnchors(answer: false, runPages: <String, int>{
-        for (final hit in hits.entries)
-          targets[hit.key].crop.id: hit.value.rawPage,
-      });
+    required int page,
+  }) {
+    int bodyPageOf(TextbookVlmSolutionRefItem item) {
+      final index = item.expectedIndex;
+      if (index < 0 || index >= order.length) return 0;
+      return targets[order[index]].crop.displayPage ?? 0;
+    }
+
+    final dropped = textbookOutOfReadingOrder(<({int bodyPage, List<int>? region})>[
+      for (final item in items)
+        (bodyPage: bodyPageOf(item), region: item.numberRegion1k),
+    ]);
+    if (dropped.isEmpty) return items;
+    debugPrint(
+      '[stage3] p$page 읽는 순서와 본문 차례가 어긋나 버림: '
+      '${[for (final i in dropped) '${items[i].problemNumber}@${bodyPageOf(items[i])}'].join(', ')}',
+    );
+    return <TextbookVlmSolutionRefItem>[
+      for (var i = 0; i < items.length; i += 1)
+        if (!dropped.contains(i)) items[i],
+    ];
+  }
 
   /// [order] 중 해설 [page] 에 풀이가 있을 수 있는 문항만 남긴다.
   List<int> _sequenceOrderForPage({
@@ -1115,6 +1191,9 @@ class _TextbookAuthoringStageDialogState
       final skipBlocks = <int>{};
       final passLimit = windowedBatch ? 0 : 1;
       final sweepLimit = windowedBatch ? _kStageWindowSweeps : 1;
+      final anchors = _isGaeyuHigh
+          ? _sequenceAnchors(answer: true)
+          : const <TextbookSequenceAnchor>[];
       for (var pass = 0; pass < passLimit; pass += 1) {
         if (pending.isEmpty) break;
         final pendingAtPassStart = pending.length;
@@ -1123,12 +1202,6 @@ class _TextbookAuthoringStageDialogState
         for (var page = startPage; page <= endPage; page += 1) {
           if (pending.isEmpty) break;
           if (!mounted) return;
-          final anchors = _isGaeyuHigh
-              ? _sequenceAnchors(answer: true, runPages: <String, int>{
-                  for (final hit in hits.entries)
-                    targets[hit.key].crop.id: hit.value.rawPage,
-                })
-              : const <TextbookSequenceAnchor>[];
           // 남은 문항이 모두 이 지면보다 뒤(또는 앞)에 인쇄돼 있으면 묻지 않는다.
           // 일부만 재실행할 때 앞 소단원 해설의 같은 번호를 집던 자리다.
           if (_sequenceOrderForPage(
@@ -2192,7 +2265,7 @@ class _TextbookAuthoringStageDialogState
         ),
         targets: targets,
         anchors: _isGaeyuHigh
-            ? _solutionSequenceAnchors(targets: targets, hits: hits)
+            ? _sequenceAnchors(answer: false)
             : const <TextbookSequenceAnchor>[],
         page: page,
       );
@@ -2387,6 +2460,9 @@ class _TextbookAuthoringStageDialogState
       final passLimit = windowedBatch ? 0 : 1;
       const sweepLimit = 1;
       final scopeBounds = _solutionScopeBounds;
+      final anchors = _isGaeyuHigh
+          ? _sequenceAnchors(answer: false)
+          : const <TextbookSequenceAnchor>[];
       for (var pass = 0; pass < passLimit; pass += 1) {
         if (pending.isEmpty) break;
         final pendingAtPassStart = pending.length;
@@ -2395,9 +2471,6 @@ class _TextbookAuthoringStageDialogState
         for (var page = startPage; page <= endPage; page += 1) {
           if (pending.isEmpty) break;
           if (!mounted) return;
-          final anchors = _isGaeyuHigh
-              ? _solutionSequenceAnchors(targets: targets, hits: hits)
-              : const <TextbookSequenceAnchor>[];
           // 남은 문항이 전부 이 지면 밖 소단원이면 렌더도 하지 않고 넘긴다.
           // 중단원 TEST 만 남았을 때 앞쪽 본교재 지면 수십 장을 헛돌던 자리다.
           if (_sequenceOrderForPage(
@@ -2512,10 +2585,20 @@ class _TextbookAuthoringStageDialogState
                   sectionsToVerify.add('descriptive');
                 }
               }
-              final pageItems = sectionsToVerify.isNotEmpty
-                  ? res.items.where(
-                      (item) => !sectionsToVerify.contains(itemSection(item)))
+              final verifiedItems = sectionsToVerify.isNotEmpty
+                  ? res.items
+                      .where((item) =>
+                          !sectionsToVerify.contains(itemSection(item)))
+                      .toList()
                   : res.items;
+              final pageItems = _isGaeyuHigh
+                  ? _dropOutOfReadingOrder(
+                      items: verifiedItems,
+                      order: order,
+                      targets: targets,
+                      page: page,
+                    )
+                  : verifiedItems;
               for (final it in pageItems) {
                 final matched = batch.resolve(
                   detectedNumber: it.problemNumber,

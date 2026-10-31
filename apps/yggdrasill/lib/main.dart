@@ -39,7 +39,6 @@ import 'services/app_config.dart';
 import 'services/update_service.dart';
 import 'services/home_realtime_sync_coordinator.dart';
 import 'services/supabase_timeout_http_client.dart';
-import 'package:package_info_plus/package_info_plus.dart' as pkg;
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import 'widgets/right_side_sheet/right_side_sheet.dart';
 import 'widgets/pdf/homework_answer_viewer_dialog.dart';
@@ -1276,8 +1275,6 @@ class _MyAppState extends State<MyApp>
                     builder: (ctx) => const _GlobalRightSheetPdfPanel()),
                 OverlayEntry(builder: (ctx) => const _GlobalMemoOverlay()),
                 OverlayEntry(
-                    builder: (ctx) => const _GlobalStartupUpdateCard()),
-                OverlayEntry(
                     builder: (ctx) => const TopGlassUpdateNoticeBridge()),
                 OverlayEntry(
                   builder: (ctx) => ValueListenableBuilder<Widget?>(
@@ -1300,181 +1297,6 @@ class _MyAppState extends State<MyApp>
   }
 }
 
-class _GlobalStartupUpdateCard extends StatefulWidget {
-  const _GlobalStartupUpdateCard();
-  @override
-  State<_GlobalStartupUpdateCard> createState() =>
-      _GlobalStartupUpdateCardState();
-}
-
-class _GlobalStartupUpdateCardState extends State<_GlobalStartupUpdateCard> {
-  UpdateInfo _info = const UpdateInfo(phase: UpdatePhase.idle);
-  String _version = '';
-
-  @override
-  void initState() {
-    super.initState();
-    UpdateService.progressNotifier.addListener(_onUpdate);
-    _loadVersion();
-  }
-
-  Future<void> _loadVersion() async {
-    try {
-      final info = await pkg.PackageInfo.fromPlatform();
-      setState(() {
-        _version = info.version;
-      });
-    } catch (_) {}
-  }
-
-  void _onUpdate() {
-    setState(() {
-      _info = UpdateService.progressNotifier.value;
-    });
-  }
-
-  @override
-  void dispose() {
-    UpdateService.progressNotifier.removeListener(_onUpdate);
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final showChecking = _info.phase == UpdatePhase.checking ||
-        _info.phase == UpdatePhase.downloading;
-    final showReady = _info.phase == UpdatePhase.readyToApply;
-    if (!showChecking && !showReady) return const SizedBox.shrink();
-    const primary = Color(0xFF1976D2);
-    const cardColor = Color(0xFF232326);
-    const borderColor = Color(0xFF2A2A2A);
-    final title = showChecking
-        ? (_info.phase == UpdatePhase.checking ? '업데이트 확인 중' : '업데이트 다운로드 중')
-        : '업데이트 적용 준비 완료';
-    final subtitle = _info.message ??
-        (showChecking
-            ? (_info.phase == UpdatePhase.checking
-                ? '최신 버전을 확인하고 있어요.'
-                : '업데이트 파일을 내려받고 있어요.')
-            : '잠시 후 앱이 자동으로 재시작됩니다.');
-
-    // 안내 배너: 앱의 다크 톤/타이포/컬러 규칙에 맞춘 비침투(non-blocking) UI
-    return IgnorePointer(
-      ignoring: true,
-      child: Align(
-        alignment: Alignment.topCenter,
-        child: Padding(
-          padding: const EdgeInsets.only(top: 18),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 560),
-            child: Material(
-              color: Colors.transparent,
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                decoration: BoxDecoration(
-                  color: cardColor,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: borderColor),
-                  boxShadow: const [
-                    BoxShadow(
-                        color: Colors.black54,
-                        blurRadius: 14,
-                        spreadRadius: 0,
-                        offset: Offset(0, 6)),
-                  ],
-                ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: primary.withOpacity(0.22),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: primary.withOpacity(0.35)),
-                      ),
-                      child: Icon(
-                        showChecking
-                            ? Icons.system_update_alt
-                            : Icons.check_circle,
-                        color: primary,
-                        size: 22,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Row(
-                            children: [
-                              Text(title,
-                                  style: const TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.w900,
-                                      fontSize: 15)),
-                              const SizedBox(width: 8),
-                              if (_version.isNotEmpty)
-                                Text('v$_version',
-                                    style: const TextStyle(
-                                        color: Colors.white54,
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w700)),
-                              if ((_info.tag ?? '').isNotEmpty) ...[
-                                const SizedBox(width: 8),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 8, vertical: 3),
-                                  decoration: BoxDecoration(
-                                    color: primary.withOpacity(0.12),
-                                    borderRadius: BorderRadius.circular(999),
-                                    border: Border.all(
-                                        color: primary.withOpacity(0.35)),
-                                  ),
-                                  child: Text(
-                                    _info.tag!,
-                                    style: const TextStyle(
-                                        color: Color(0xFF9CCBFF),
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w800),
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            subtitle,
-                            style: const TextStyle(
-                                color: Colors.white70,
-                                height: 1.25,
-                                fontWeight: FontWeight.w700),
-                          ),
-                          const SizedBox(height: 10),
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(999),
-                            child: LinearProgressIndicator(
-                              minHeight: 4.5,
-                              color: primary,
-                              backgroundColor: borderColor,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
 
 Future<void> _openRangeAddDialog(BuildContext context) async {
   await showDialog(

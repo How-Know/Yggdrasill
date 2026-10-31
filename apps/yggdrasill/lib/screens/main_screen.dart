@@ -5,6 +5,8 @@ import '../widgets/home_grading_edit_icon.dart';
 import '../widgets/problem_bank_cloud_storage_icon.dart';
 import '../widgets/home_header_weather_icon.dart';
 import '../widgets/home_status_dashboard_icon.dart';
+import '../widgets/resource_tab_icons.dart';
+import '../widgets/settings_tab_icons.dart';
 import '../widgets/class_timetable_icon.dart';
 import '../widgets/schedule_calendar_icon.dart';
 import '../widgets/student_member_icon.dart';
@@ -60,6 +62,7 @@ import '../widgets/utility_glass_dialog_shell.dart';
 import '../widgets/dark_panel_route.dart';
 import '../widgets/flow_setup_dialog.dart';
 import '../widgets/departure_summary_dialog.dart';
+import '../widgets/todo_sheet_share_link_dialog.dart';
 import '../widgets/homework_assign_dialog.dart';
 import '../widgets/left_side_sheet/favorite_templates_panel.dart';
 import '../widgets/right_side_sheet/file_shortcut_tab.dart';
@@ -3403,6 +3406,36 @@ class _MainScreenState extends State<MainScreen>
     ),
   ];
 
+  static const List<FabTabIconPair?> _resourcesTabIcons = [
+    FabTabIconPair(
+      outlineSvg: resourceBookOutlineSvg,
+      filledSvg: resourceBookFilledSvg,
+    ),
+    FabTabIconPair(
+      outlineSvg: resourceExamPapersOutlineSvg,
+      filledSvg: resourceExamPapersFilledSvg,
+    ),
+    FabTabIconPair(
+      outlineSvg: resourceDocumentOutlineSvg,
+      filledSvg: resourceDocumentFilledSvg,
+    ),
+  ];
+
+  static const List<FabTabIconPair?> _settingsTabIcons = [
+    FabTabIconPair(
+      outlineSvg: settingsUniversityOutlineSvg,
+      filledSvg: settingsUniversityFilledSvg,
+    ),
+    FabTabIconPair(
+      outlineSvg: settingsTrainingOutlineSvg,
+      filledSvg: settingsTrainingFilledSvg,
+    ),
+    FabTabIconPair(
+      outlineSvg: settingsToolsOutlineSvg,
+      filledSvg: settingsToolsFilledSvg,
+    ),
+  ];
+
   static const List<FabTabIconPair?> _timetableTabIcons = [
     FabTabIconPair(
       outlineSvg: classTimetableOutlineSvg,
@@ -3481,6 +3514,8 @@ class _MainScreenState extends State<MainScreen>
                 1 => _studentTabIcons,
                 2 => _timetableTabIcons,
                 3 => _learningTabIcons,
+                4 => _resourcesTabIcons,
+                5 => _settingsTabIcons,
                 _ => null,
               },
             ),
@@ -4757,6 +4792,8 @@ class _MainScreenState extends State<MainScreen>
                   return false;
                 }
                 final now = DateTime.now();
+                ownTodoSheetShareLinkAttendance(attendanceId);
+                ownTodoSheetShareLinkStudent(t.student.id);
                 setState(() {
                   _leavedSetIds.add(t.setId);
                   _leaveTimes[t.setId] = now;
@@ -4792,8 +4829,10 @@ class _MainScreenState extends State<MainScreen>
                     attendanceId: savedAttendanceId,
                     result: summary,
                   );
+                  String? snapshotId;
+                  ownTodoSheetShareLinkAttendance(savedAttendanceId);
                   try {
-                    await finalizeDepartureTodoSheetSnapshot(
+                    snapshotId = await finalizeDepartureTodoSheetSnapshot(
                       attendanceId: savedAttendanceId,
                       studentId: t.student.id,
                       studentName: t.student.name,
@@ -4842,6 +4881,14 @@ class _MainScreenState extends State<MainScreen>
                         );
                       }
                     }
+                  }
+                  if (snapshotId != null && context.mounted) {
+                    await showTodoSheetShareLinkAfterDeparture(
+                      context: context,
+                      studentId: t.student.id,
+                      studentName: t.student.name,
+                      snapshotId: snapshotId,
+                    );
                   }
                 } catch (e) {
                   print('[ERROR] 출석 기록 동기화 실패: $e');

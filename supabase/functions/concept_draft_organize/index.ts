@@ -85,6 +85,7 @@ import {
   type CompareTarget,
   compareTargetOf,
   CONCEPT_COMPARE_PROMPT_VERSION,
+  entryPages,
   evidenceText,
   MAX_COMPARE_CANDIDATES,
   MAX_COMPARE_ITEMS,
@@ -130,7 +131,8 @@ Deno.serve(async (req) => {
     .eq('created_by', auth.userId)
     .eq('feature', FEATURE)
     .gte('created_at', since);
-  if ((count ?? 0) >= RATE_LIMIT_PER_MINUTE) return errorResponse(429, 'rate_limited');
+  const rateLimit = long || task === 'blocks' ? RATE_LIMIT_PER_MINUTE : 30;
+  if ((count ?? 0) >= rateLimit) return errorResponse(429, 'rate_limited');
   const budget = await getBudgetStatus(auth.admin).catch(() => null);
   if (budget?.exceeded && budget.mode === 'block') return errorResponse(429, 'budget_exceeded');
 
@@ -919,11 +921,35 @@ async function compare(auth: AuthContext, provider: AiProvider, body: Record<str
     }
   }
   const idsOf = new Map<string, string[]>();
+  const pagesByKey = new Map<string, number[]>();
+  const allPages = new Set<number>();
+  for (const e of entries) {
+    const pages = entryPages(draftRow.prepared, e.blocks);
+    pagesByKey.set(e.key, pages);
+    for (const p of pages) allPages.add(p);
+  }
+  const byPage = new Map<number, string[]>();
+  if (allPages.size > 0) {
+    const { data: pageSources } = await auth.admin
+      .from('concept_sources')
+      .select('concept_id,raw_page')
+      .eq('book_id', String(draftRow.book_id))
+      .in('raw_page', [...allPages])
+      .order('page_order', { ascending: true, nullsFirst: false })
+      .order('created_at', { ascending: true })
+      .limit(500);
+    for (const r of (pageSources ?? []) as Record<string, unknown>[]) {
+      const p = Number(r.raw_page);
+      const cid = String(r.concept_id ?? '').trim();
+      if (Number.isInteger(p) && cid) byPage.set(p, [...(byPage.get(p) ?? []), cid]);
+    }
+  }
   for (const e of entries) {
     const ids = [
       ...(e.target ? [e.target] : []),
       ...(byName.get(e.title) ?? []),
       ...(overlaps.get(e.index) ?? []).flatMap((n) => byName.get(n) ?? []),
+      ...(pagesByKey.get(e.key) ?? []).flatMap((p) => byPage.get(p) ?? []),
     ];
     idsOf.set(e.key, [...new Set(ids)].slice(0, MAX_COMPARE_CANDIDATES));
   }

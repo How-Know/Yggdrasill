@@ -12,9 +12,11 @@ import '../../services/problem_bank_service.dart';
 import '../../services/textbook_course_catalog.dart';
 import '../../services/textbook_series_catalog.dart';
 import '../../services/textbook_unit_progress_service.dart';
+import '../../theme/manager_shell_colors.dart';
 import '../../widgets/latex_text_renderer.dart';
 import 'grading_equiv_tab.dart';
 import 'handwriting_review_tab.dart';
+import 'mock_exam/mock_exam_quick_switch_panel.dart';
 import 'problem_bank_models.dart';
 import 'review/problem_bank_review_mode.dart';
 import 'review/problem_bank_review_panes.dart';
@@ -40,7 +42,7 @@ class ProblemBankScreen extends StatefulWidget {
 
 class _ProblemBankScreenState extends State<ProblemBankScreen>
     with SingleTickerProviderStateMixin {
-  static const Color _bg = Color(0xFF0B1112);
+  static const Color _bg = ManagerShellColors.surfaceBase;
   static const Color _panel = Color(0xFF10171A);
   static const Color _field = Color(0xFF15171C);
   static const Color _border = Color(0xFF223131);
@@ -191,6 +193,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   /// 업로드 탭 워크스페이스. null 이면 현재 문서를 따르고, true 면 내신,
   /// false 면 시중교재. 헤더 클릭으로만 덮어쓴다.
   bool? _workspaceExamPaperOverride;
+
+  /// 헤더 클릭 순서는 내신 → 시중교재 → 모의고사 → 내신. 모의고사가 앞선다.
+  bool _showingMockExamWorkspace = false;
+  final GlobalKey<MockExamQuickSwitchPanelState> _mockExamPanelKey =
+      GlobalKey<MockExamQuickSwitchPanelState>();
   ProblemBankDocument? _parkedTextbookDocument;
   int? _parkedTextbookPage;
   ProblemBankDocument? _parkedExamPaperDocument;
@@ -400,9 +407,15 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     return !_isTextbookPdfDocument(_activeDocument);
   }
 
+  bool _isMockExamDocument(ProblemBankDocument? document) =>
+      document != null &&
+      '${document.meta['extract_mode'] ?? ''}' == 'mock_exam_pdf';
+
   ProblemBankDocument? _firstExamPaperDocument() {
     for (final document in _documents) {
-      if (!_isTextbookPdfDocument(document)) return document;
+      if (!_isTextbookPdfDocument(document) && !_isMockExamDocument(document)) {
+        return document;
+      }
     }
     return _parkedExamPaperDocument;
   }
@@ -2408,7 +2421,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           _expandedTextbookSwitchGroups
               .add(_textbookSwitchGroupLabel(summary.document));
           _showPrivateOnly = false;
-        } else {
+        } else if (!_isMockExamDocument(summary.document)) {
           _allExamDocuments = <ProblemBankDocument>[
             summary.document,
             ..._allExamDocuments.where((doc) => doc.id != summary.document.id),
@@ -17010,6 +17023,15 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         : document.sourceFilename.trim();
   }
 
+  Future<void> _openMockExamDocument(String documentId) async {
+    if (_activeDocument?.id == documentId) return;
+    if (_dirtyQuestionIds.isNotEmpty || _dirtyDocumentMeta) {
+      _showSnack('현재 문항 수정사항을 저장한 뒤 문서를 전환해주세요.', error: true);
+      return;
+    }
+    await _loadDocumentContext(documentId);
+  }
+
   Future<void> _openExamPaperDocument(ProblemBankDocument document) async {
     if (_dirtyQuestionIds.isNotEmpty || _dirtyDocumentMeta) {
       _showSnack('현재 문항 수정사항을 저장한 뒤 문서를 전환해주세요.', error: true);
@@ -17385,7 +17407,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   }
 
   Widget _buildUploadTabBody() {
-    final examPaper = _showingExamPaperWorkspace;
+    final mock = _showingMockExamWorkspace;
+    final examPaper = !mock && _showingExamPaperWorkspace;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -17397,7 +17420,14 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               children: [
                 _buildReviewWorkspaceHeader(examPaper: examPaper),
                 const SizedBox(height: 12),
-                if (examPaper)
+                if (mock)
+                  MockExamQuickSwitchPanel(
+                    key: _mockExamPanelKey,
+                    academyId: _academyId ?? '',
+                    activeDocumentId: _activeDocument?.id,
+                    onOpenDocument: _openMockExamDocument,
+                  )
+                else if (examPaper)
                   _buildExamPaperQuickSwitchPanel()
                 else
                   _buildTextbookQuickSwitchPanel(),
@@ -17440,7 +17470,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                 children: [
                   Expanded(
                     child: Text(
-                      examPaper ? '내신 기출 검수' : '시중교재 페이지 검수',
+                      _showingMockExamWorkspace
+                          ? '모의고사 페이지 검수'
+                          : examPaper
+                              ? '내신 기출 검수'
+                              : '시중교재 페이지 검수',
                       style: const TextStyle(
                         color: _text,
                         fontSize: 16,
@@ -17448,11 +17482,15 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                       ),
                     ),
                   ),
-                  if (examPaper) ...[
+                  if (examPaper || _showingMockExamWorkspace) ...[
                     FilledButton.icon(
-                      onPressed: _isExamBatchRunning
-                          ? null
-                          : () => unawaited(_openExamBatchUploadDialog()),
+                      onPressed: _showingMockExamWorkspace
+                          ? () => unawaited(
+                                _mockExamPanelKey.currentState?.upload(),
+                              )
+                          : _isExamBatchRunning
+                              ? null
+                              : () => unawaited(_openExamBatchUploadDialog()),
                       style: FilledButton.styleFrom(
                         backgroundColor: _accent,
                         visualDensity: VisualDensity.compact,
@@ -17475,9 +17513,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               ),
               const SizedBox(height: 8),
               Text(
-                examPaper
-                    ? '학교·연도별 내신 기출을 검수합니다. 헤더를 클릭하면 시중교재 검수로 전환합니다.'
-                    : 'PDF 추출 문항을 페이지별로 검수합니다. 클릭하면 내신 기출 검수로 전환합니다.',
+                _showingMockExamWorkspace
+                    ? '교육청·평가원·수능 PDF의 문항 영역·정답·해설 위치를 검수합니다. 클릭하면 내신 기출 검수로 전환합니다.'
+                    : examPaper
+                        ? '학교·연도별 내신 기출을 검수합니다. 헤더를 클릭하면 시중교재 검수로 전환합니다.'
+                        : 'PDF 추출 문항을 페이지별로 검수합니다. 클릭하면 모의고사 검수로 전환합니다.',
                 style: const TextStyle(
                   color: _textSub,
                   fontSize: 12,
@@ -17492,7 +17532,27 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   }
 
   Future<void> _toggleReviewWorkspace() async {
-    final goingExam = !_showingExamPaperWorkspace;
+    final fromMock = _showingMockExamWorkspace;
+    if (!fromMock && !_showingExamPaperWorkspace) {
+      if (_dirtyQuestionIds.isNotEmpty || _dirtyDocumentMeta) {
+        _showSnack('현재 문항 수정사항을 저장한 뒤 전환해주세요.', error: true);
+        return;
+      }
+      if (_isTextbookPdfDocument(_activeDocument)) {
+        _parkedTextbookDocument = _activeDocument;
+        _parkedTextbookPage = _requestedTextbookPage;
+      }
+      setState(() {
+        _showingMockExamWorkspace = true;
+        _workspaceExamPaperOverride = true;
+      });
+      _clearActiveDocumentForExamWorkspace();
+      return;
+    }
+    if (fromMock) {
+      setState(() => _showingMockExamWorkspace = false);
+    }
+    final goingExam = fromMock;
     if (goingExam) {
       if (_isTextbookPdfDocument(_activeDocument)) {
         _parkedTextbookDocument = _activeDocument;

@@ -5,6 +5,7 @@ import {
   type CompareItem,
   compareTargetOf,
   CONCEPT_COMPARE_SCHEMA,
+  entryPages,
   evidenceText,
   overlapNames,
   parseCompareProposal,
@@ -68,8 +69,9 @@ Deno.test('폴더 제안의 겹침은 라이브러리 개념만 이름으로 쓰
   });
   assertEquals([...names.entries()], [[0, ['소수']], [1, ['합성수']]]);
   assertEquals(overlapNames(null).size, 0);
-  const prepared = { blocks: [{ id: 'a', title: '정의', text: '글 A' }, { id: 'b', text: '글 B', figure_description: '그림' }] };
+  const prepared = { blocks: [{ id: 'a', raw_page: 12, title: '정의', text: '글 A' }, { id: 'b', raw_page: 14, text: '글 B', figure_description: '그림' }] };
   assertEquals(evidenceText(prepared, ['b', 'zz', 'a']), '글 B 그림\n정의 글 A');
+  assertEquals(entryPages(prepared, ['b', 'zz', 'a', 'b']), [14, 12]);
 });
 
 Deno.test('지시에 항목 글·근거, 후보의 폴더·출처 수·책·수정안 있음·다른 서술이 들어간다', () => {

@@ -308,12 +308,37 @@ export function stripFooterEchoBadge(raw, footerPages) {
     10,
   );
   if (Number.isFinite(to) && to > 0 && !footerPages.has(to)) return raw;
+  return withoutBadgePage(raw);
+}
+
+function withoutBadgePage(raw) {
   const out = { ...raw };
   delete out.source_page;
   delete out.sourcePage;
   delete out.source_page_end;
   delete out.sourcePageEnd;
   return out;
+}
+
+// 개념+유형 고등 해설에서 머리 없이 이어지는 박스의 문항에 모델이 같은 지면
+// 아래쪽의 다음 박스 머리 쪽을 붙인다(해설 103쪽: 본문 238쪽 03-1 에 다음
+// 박스 "문제 240쪽" 을 적음). 앱이 차례상 보낸 같은 번호 후보가 하나뿐이고
+// 코너가 같으며 보고 쪽이 그 후보보다 몇 쪽 뒤일 때만 쪽 단서를 버린다.
+// 같은 번호는 소단원마다 10쪽 남짓 간격으로 다시 나오므로 그보다 좁게 둔다.
+const NEXT_BOX_BADGE_MAX_GAP = 3;
+
+export function stripNextBoxBadge(raw, problemNumber, expectedIndex, normalizeKey) {
+  const candidates = expectedIndex?.byKey?.get(normalizeKey(problemNumber));
+  if (!Array.isArray(candidates) || candidates.length !== 1) return raw;
+  const candidate = candidates[0];
+  const badge = reportedBadge(raw);
+  if (!badge.lo || !candidate.page) return raw;
+  if (candidate.corner && badge.corner && candidate.corner !== badge.corner) {
+    return raw;
+  }
+  const gap = badge.lo - candidate.page;
+  if (gap < 1 || gap > NEXT_BOX_BADGE_MAX_GAP) return raw;
+  return withoutBadgePage(raw);
 }
 
 /// 범위 배지("1~5")를 기대 문항 하나하나로 펼친다.

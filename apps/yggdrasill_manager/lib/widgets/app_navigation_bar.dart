@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../theme/manager_shell_colors.dart';
+import 'manager_nav_icons.dart';
 
 const Color kNavAccent = Color(0xFF33A373); // Yggdrasill 시그니처 초록
 
@@ -19,7 +20,7 @@ class AppNavigationBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 260,
+      width: 220,
       color: ManagerShellColors.surfaceBase,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -49,62 +50,60 @@ class AppNavigationBar extends StatelessWidget {
             ),
           ),
           const Divider(color: ManagerShellColors.navDivider, height: 1),
-
-          // 네비게이션 항목
           Expanded(
             child: ListView(
               padding: const EdgeInsets.symmetric(vertical: 12),
               children: [
                 _NavigationItem(
-                  icon: Icons.school_outlined,
+                  svg: managerNavIdeaSvg,
                   label: '개념',
                   isSelected: selectedIndex == 0,
                   onTap: () => onDestinationSelected(0),
                 ),
                 _NavigationItem(
-                  icon: Icons.calculate_outlined,
+                  svg: managerNavCalculatorSvg,
                   label: '연산',
                   isSelected: selectedIndex == 1,
                   onTap: () => onDestinationSelected(1),
                 ),
                 _NavigationItem(
-                  icon: Icons.psychology_outlined,
+                  svg: managerNavMedalSvg,
                   label: '스킬',
                   isSelected: selectedIndex == 2,
                   onTap: () => onDestinationSelected(2),
                 ),
                 _NavigationItem(
-                  icon: Icons.account_tree_outlined,
+                  svg: managerNavJourneySvg,
                   label: '문항로드맵',
                   isSelected: selectedIndex == 3,
                   onTap: () => onDestinationSelected(3),
                 ),
                 _NavigationItem(
-                  icon: Icons.quiz_outlined,
+                  svg: managerNavCloudStorageSvg,
                   label: '문제은행',
                   isSelected: selectedIndex == 4,
                   onTap: () => onDestinationSelected(4),
                 ),
                 _NavigationItem(
-                  icon: Icons.psychology_outlined,
+                  svg: managerNavSurveySvg,
                   label: '성향조사',
                   isSelected: selectedIndex == 5,
                   onTap: () => onDestinationSelected(5),
                 ),
                 _NavigationItem(
-                  icon: Icons.menu_book_outlined,
+                  svg: managerNavOpenBookSvg,
                   label: '교재',
                   isSelected: selectedIndex == 6,
                   onTap: () => onDestinationSelected(6),
                 ),
                 _NavigationItem(
-                  icon: Icons.forum_outlined,
+                  svg: managerNavChatSvg,
                   label: 'Think',
                   isSelected: selectedIndex == 7,
                   onTap: () => onDestinationSelected(7),
                 ),
                 _NavigationItem(
-                  icon: Icons.settings_outlined,
+                  svg: managerNavSettingsSvg,
                   label: '설정',
                   isSelected: selectedIndex == 8,
                   onTap: () => onDestinationSelected(8),
@@ -112,10 +111,9 @@ class AppNavigationBar extends StatelessWidget {
               ],
             ),
           ),
-
           const Divider(color: ManagerShellColors.navDivider, height: 1),
           _NavigationItem(
-            icon: Icons.logout,
+            svg: managerNavLogoutSvg,
             label: '로그아웃',
             isSelected: false,
             onTap: onLogout,
@@ -128,13 +126,13 @@ class AppNavigationBar extends StatelessWidget {
 }
 
 class _NavigationItem extends StatelessWidget {
-  final IconData icon;
+  final String svg;
   final String label;
   final bool isSelected;
   final VoidCallback onTap;
 
   const _NavigationItem({
-    required this.icon,
+    required this.svg,
     required this.label,
     required this.isSelected,
     required this.onTap,
@@ -142,6 +140,9 @@ class _NavigationItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final color = isSelected
+        ? ManagerShellColors.navIconSelected
+        : ManagerShellColors.navIcon;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
       child: Material(
@@ -162,20 +163,12 @@ class _NavigationItem extends StatelessWidget {
             ),
             child: Row(
               children: [
-                Icon(
-                  icon,
-                  size: 24,
-                  color: isSelected
-                      ? ManagerShellColors.navIconSelected
-                      : ManagerShellColors.navIcon,
-                ),
+                ManagerNavIcon(svg, color: color),
                 const SizedBox(width: 14),
                 Text(
                   label,
                   style: TextStyle(
-                    color: isSelected
-                        ? ManagerShellColors.navIconSelected
-                        : ManagerShellColors.navIcon,
+                    color: color,
                     fontSize: 16,
                     fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
                   ),

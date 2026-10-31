@@ -189,6 +189,9 @@ class _FakeService extends ConceptDraftService {
     rows[id] = {...rows[id]!, 'status': 'confirmed'};
     return {'concepts': [], 'folders': [], 'sources': 0};
   }
+
+  @override
+  Future<Map<String, dynamic>> confirmWithStatements(String id, String savedAt) => confirm(id, savedAt);
 }
 
 Future<void> _pumpBatch(WidgetTester tester, _FakeService svc, void Function(bool) onDone) async {

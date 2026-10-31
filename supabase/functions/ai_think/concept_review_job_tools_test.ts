@@ -395,3 +395,39 @@ Deno.test('미충족 조회는 임대를 하지 않고, 충돌이면 어떤 RPC�
   assert(!failed.note.includes('미충족 없음'));
   assert(!failed.note.includes('검수 완료'));
 });
+
+Deno.test('작업 장부가 길어도 전체 문자열을 자르지 않고 open_items를 먼저 줄여 unmet을 보존한다', async () => {
+  const store = new MemoryThinkStore();
+  const longText = '가'.repeat(1100);
+  store.reviewJobData.set('concept_review_job_status', {
+    ...STATUS,
+    progress_freshness: 'current',
+    open_items: Array.from({ length: 20 }, (_, i) => ({
+      position: i + 1,
+      concept_id: C1,
+      name: `개념 ${i + 1}`,
+      reason: longText,
+      next_action: '다시 확인',
+    })),
+  });
+  store.reviewJobData.set('concept_review_job_failure_page', { returned: 0, omitted: 0, next_after: null, items: [] });
+  store.reviewJobData.set('concept_review_job_unmet_page', {
+    code: 'ok',
+    published_input_version: 1323,
+    snapshot_at: '2026-10-30T10:15:00+00:00',
+    total: 3,
+    returned: 3,
+    omitted: 0,
+    next_after: null,
+    items: [
+      { snapshot: { pos: 82, concept_id: C1, name: '정비례 관계의 그래프가 지나는 사분면', todo: ['placement'] }, supplement: null },
+      { snapshot: { pos: 83, concept_id: C1, name: '정비례 관계의 그래프의 증가와 감소', todo: ['placement'] }, supplement: null },
+      { snapshot: { pos: 84, concept_id: C1, name: '정비례 관계의 그래프와 a의 절댓값', todo: ['placement'] }, supplement: null },
+    ],
+  });
+  const res = parse(await call(store, JOB_READ_TOOL_NAME, { job_id: JOB, next: 0, unmet_after: 0 }, ctx()));
+  assertEquals(res.truncated, undefined);
+  assertEquals(res.unmet.items.map((x: { snapshot: { pos: number } }) => x.snapshot.pos), [82, 83, 84]);
+  assert(res.open_items_omitted > 0);
+});
+

@@ -15,6 +15,7 @@ import {
   resolveExpectedBox,
   resolveSequentialBox,
   stripFooterEchoBadge,
+  stripNextBoxBadge,
 } from './vlm_corner_guard.js';
 import {
   normalizeProblemNumberKey,
@@ -229,12 +230,15 @@ export function normalizeSolutionRefsResult(parsedJson, opts = {}) {
     // 모델이 새 배지 쪽을 붙인다. 현재 기대 후보가 번호상 하나뿐이고 보고 쪽이
     // 딱 한 쪽 차이면 페이지 단서만 버려 다시 대조한다. 요약 상자는 아래의
     // content-region/격자 필터가 별도로 제거한다.
-    if (isGojaengi && resolved.reject) {
-      const softened = stripAdjacentBlockBadge(
-        raw,
-        problemNumber,
-        expectedIndex,
-      );
+    if ((isGojaengi || isGaeyuHigh) && resolved.reject) {
+      const softened = isGojaengi
+        ? stripAdjacentBlockBadge(raw, problemNumber, expectedIndex)
+        : stripNextBoxBadge(
+            raw,
+            problemNumber,
+            expectedIndex,
+            normalizeProblemNumberKey,
+          );
       if (softened !== raw) {
         raw = softened;
         resolved = resolveExpectedBox(

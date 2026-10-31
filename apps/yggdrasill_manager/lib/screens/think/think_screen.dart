@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../services/think/think_code_controller.dart';
 import '../../services/think/think_controller.dart';
+import '../../theme/manager_shell_colors.dart';
 import 'think_chat_tab.dart';
 import 'think_memory_tab.dart';
 import 'think_status_dialog.dart';
@@ -39,7 +40,7 @@ class _ThinkScreenState extends State<ThinkScreen> {
       listenable: _c,
       builder: (context, _) {
         return Container(
-          color: kThinkBg,
+          color: ManagerShellColors.surfaceBase,
           padding: const EdgeInsets.all(24),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,

@@ -920,6 +920,9 @@ async function splitChunkInputsByPage({
         input.textbookScope,
         pageRange,
       ),
+      mockScope: input.mockScope
+        ? { ...input.mockScope, raw_page_from: page, raw_page_to: page }
+        : null,
       chunkIndex: input.chunkIndex,
       totalChunks: input.totalChunks,
     };
@@ -940,11 +943,15 @@ async function splitChunkInputsByPage({
 async function buildVlmPdfInputs({
   originalPdfBuffer,
   textbookScope,
+  mockScope = null,
   maxPagesPerChunk = TEXTBOOK_VLM_CHUNK_MAX_PAGES,
 }) {
   const src = await PDFDocument.load(originalPdfBuffer);
   const originalPageCount = src.getPageCount();
-  const resolved = resolveTextbookPageRange(textbookScope, originalPageCount);
+  const resolved = resolveTextbookPageRange(
+    textbookScope || mockScope,
+    originalPageCount,
+  );
   if (!resolved) {
     return {
       originalPageCount,
@@ -955,6 +962,7 @@ async function buildVlmPdfInputs({
           pageRange: null,
           slicedPageCount: originalPageCount,
           textbookScope,
+          mockScope,
           chunkIndex: 1,
           totalChunks: 1,
         },
@@ -984,6 +992,9 @@ async function buildVlmPdfInputs({
       pageRange,
       slicedPageCount: pageRange.end - pageRange.start + 1,
       textbookScope: buildTextbookScopeForPageRange(textbookScope, pageRange),
+      mockScope: mockScope
+        ? { ...mockScope, raw_page_from: pageRange.start, raw_page_to: pageRange.end }
+        : null,
       chunkIndex: i + 1,
       totalChunks: ranges.length,
     });
@@ -1078,6 +1089,7 @@ async function callGeminiChunkWithRetry({
         apiKey,
         timeoutMs,
         textbookScope: input.textbookScope,
+        mockScope: input.mockScope,
         expectedQuestionNumbers: input.expectedQuestionNumbers,
         expectedIndependentSetRanges: input.expectedIndependentSetRanges,
       });
@@ -1146,6 +1158,7 @@ async function callGeminiChunkWithRetry({
           apiKey,
           timeoutMs,
           textbookScope: input.textbookScope,
+          mockScope: input.mockScope,
           expectedQuestionNumbers: recoveryExpected,
           expectedIndependentSetRanges: input.expectedIndependentSetRanges,
         });
@@ -1449,6 +1462,59 @@ async function fetchTextbookCropPages({ supa, academyId, textbookScope, log = nu
     }
     return emptyTextbookCropIndex();
   }
+}
+
+function mockScopeOf(doc) {
+  const scope = doc?.meta?.mock_scope;
+  return scope && typeof scope === 'object' && compact(scope.exam_id) ? scope : null;
+}
+
+// 모의고사 문항(mock_exam_items)을 교재 크롭 색인과 같은 모양으로 읽는다.
+// 기대 번호는 이 문제지에서 크롭한 문항만, 정답은 해설에서 읽은 값을 쓴다.
+async function fetchMockItemIndex({ supa, mockScope, log = null }) {
+  const empty = { ...emptyTextbookCropIndex(), answers: new Map() };
+  if (!supa || !mockScope) return empty;
+  const { data, error } = await supa
+    .from('mock_exam_items')
+    .select('id,problem_number,paper_id,raw_page,answer_kind,answer_text,answer_source,updated_at')
+    .eq('exam_id', mockScope.exam_id)
+    .eq('section', mockScope.section);
+  if (error || !Array.isArray(data)) {
+    log?.('vlm_mock_items_skip', { reason: error?.message || 'no_rows' });
+    return empty;
+  }
+  const byNumber = new Map();
+  const answers = new Map();
+  for (const row of data) {
+    const key = problemNumberKey(row?.problem_number);
+    if (!key) continue;
+    const rawPage = Number(row?.raw_page);
+    if (
+      Number.isFinite(rawPage) &&
+      rawPage > 0 &&
+      (!mockScope.paper_id || compact(row.paper_id) === compact(mockScope.paper_id))
+    ) {
+      byNumber.set(key, {
+        cropId: compact(row.id),
+        problemNumber: String(row.problem_number),
+        rawPage,
+        displayPage: rawPage,
+        problemLabel: '',
+        contentGroup: {},
+        mockItemId: compact(row.id),
+      });
+    }
+    if (compact(row.answer_text) && compact(row.answer_kind)) {
+      answers.set(key, {
+        answer_kind: row.answer_kind,
+        answer_text: row.answer_text,
+        answer_source: row.answer_source,
+        updated_at: row.updated_at,
+      });
+    }
+  }
+  log?.('vlm_mock_items_loaded', { itemCount: byNumber.size, answerCount: answers.size });
+  return { byNumber, setHeaderRanges: [], answers };
 }
 
 function applyTextbookAnswerSidecar(vlmQ, sidecar) {
@@ -1831,6 +1897,7 @@ function toPayloadQuestion({
         ? { textbook_difficulty_label: compact(vlmQ.textbook_difficulty_label) }
         : {}),
       ...(vlmQ?.textbook_crop_page ? { textbook_crop_page: vlmQ.textbook_crop_page } : {}),
+      ...(vlmQ?.mock_exam_item ? { mock_exam_item: vlmQ.mock_exam_item } : {}),
     },
   };
 }
@@ -1871,17 +1938,22 @@ export async function runVlmExtraction({
     doc?.meta?.textbook_scope && typeof doc.meta.textbook_scope === 'object'
       ? doc.meta.textbook_scope
       : null;
+  const mockScope = textbookScope ? null : mockScopeOf(doc);
   const pdfInputs = await buildVlmPdfInputs({
     originalPdfBuffer,
     textbookScope,
+    mockScope,
   });
 
-  const cropIndex = await fetchTextbookCropPages({
-    supa,
-    academyId: job.academy_id,
-    textbookScope,
-    log,
-  });
+  const cropIndex = mockScope
+    ? await fetchMockItemIndex({ supa, mockScope, log })
+    : await fetchTextbookCropPages({
+        supa,
+        academyId: job.academy_id,
+        textbookScope,
+        log,
+      });
+  const itemScoped = Boolean(textbookScope || mockScope);
   const cropPagesByNumber = cropIndex.byNumber instanceof Map
     ? cropIndex.byNumber
     : new Map();
@@ -1898,18 +1970,18 @@ export async function runVlmExtraction({
       input,
     );
   }
-  if (textbookScope && cropPagesByNumber.size === 0) {
-    throw new Error('vlm_textbook_crop_scope_empty');
+  if (itemScoped && cropPagesByNumber.size === 0) {
+    throw new Error(mockScope ? 'vlm_mock_item_scope_empty' : 'vlm_textbook_crop_scope_empty');
   }
-  const extractionInputs = textbookScope
+  const extractionInputs = itemScoped
     ? pdfInputs.inputs.filter(
         (input) =>
           Array.isArray(input.expectedQuestionNumbers) &&
           input.expectedQuestionNumbers.length > 0,
       )
     : pdfInputs.inputs;
-  if (textbookScope && extractionInputs.length === 0) {
-    throw new Error('vlm_textbook_chunk_scope_empty');
+  if (itemScoped && extractionInputs.length === 0) {
+    throw new Error(mockScope ? 'vlm_mock_chunk_scope_empty' : 'vlm_textbook_chunk_scope_empty');
   }
 
   if (typeof log === 'function') {
@@ -2022,12 +2094,14 @@ export async function runVlmExtraction({
     throw new Error(`vlm_existing_fetch_failed:${existingErr.message}`);
   }
   const existingByNum = indexExistingByQuestionNumber(existingRows || []);
-  const answerSidecars = await fetchTextbookAnswerSidecars({
-    supa,
-    academyId: job.academy_id,
-    textbookScope,
-    log,
-  });
+  const answerSidecars = mockScope
+    ? cropIndex.answers || new Map()
+    : await fetchTextbookAnswerSidecars({
+        supa,
+        academyId: job.academy_id,
+        textbookScope,
+        log,
+      });
 
   // 문항 번호 기준 오름차순으로 source_order 부여. 번호가 비어있는 케이스는 맨 뒤로 밀어낸다.
   const ordered = vlmQuestions.slice().sort((a, b) => {
@@ -2050,7 +2124,18 @@ export async function runVlmExtraction({
       ? applyTextbookAnswerSidecar(vlmQ, answerSidecars.get(qKey))
       : vlmQ;
     const cropPage = qKey ? cropPagesByNumber.get(qKey) : null;
-    if (cropPage?.rawPage) {
+    if (cropPage?.mockItemId) {
+      enrichedVlmQ = {
+        ...(enrichedVlmQ || {}),
+        source_page: cropPage.rawPage,
+        mock_exam_item: {
+          item_id: cropPage.mockItemId,
+          exam_id: mockScope.exam_id,
+          section: mockScope.section,
+          raw_page: cropPage.rawPage,
+        },
+      };
+    } else if (cropPage?.rawPage) {
       enrichedVlmQ = {
         ...(enrichedVlmQ || {}),
         source_page: cropPage.displayPage || cropPage.rawPage,
