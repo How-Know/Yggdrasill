@@ -123,7 +123,7 @@ class _ArithmeticScreenState extends State<ArithmeticScreen> {
     _titleCtrl.text = item.title;
     _exampleCtrl.text = item.exampleExpr;
     _criteriaCtrl.text = item.criteria;
-    _scoreCtrl.text = item.unitScore.toStringAsFixed(1);
+    _scoreCtrl.text = item.unitScore.toStringAsFixed(2);
     _secCtrl.text = item.estSeconds.toStringAsFixed(1);
     _orderCtrl.text = '${item.sortOrder}';
     _editCategory = kArithmeticCategories.contains(item.category) ? item.category : kArithmeticCategories.first;
@@ -143,7 +143,7 @@ class _ArithmeticScreenState extends State<ArithmeticScreen> {
       _titleCtrl.text = fromConcept != null ? '${fromConcept.name} (세부 단계)' : '';
       _exampleCtrl.text = '';
       _criteriaCtrl.text = fromConcept != null ? '${fromConcept.name}의 세부 연산 단계' : '';
-      _scoreCtrl.text = '2.5';
+      _scoreCtrl.text = '0.25';
       _secCtrl.text = '3.0';
       _orderCtrl.text = '900';
       _editConceptId = fromConcept?.id;
@@ -152,7 +152,7 @@ class _ArithmeticScreenState extends State<ArithmeticScreen> {
   }
 
   Future<void> _nudgeScore(ArithmeticPrimitiveItem item, double delta) async {
-    final next = (item.unitScore + delta).clamp(0.1, 100.0);
+    final next = (item.unitScore + delta).clamp(0.05, 100.0);
     try {
       await _svc.savePrimitive(
         id: item.id,
@@ -603,9 +603,9 @@ class _ArithmeticScreenState extends State<ArithmeticScreen> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     IconButton(
-                      tooltip: '-0.5점',
+                      tooltip: '-0.05점',
                       visualDensity: VisualDensity.compact,
-                      onPressed: () => unawaited(_nudgeScore(item, -0.5)),
+                      onPressed: () => unawaited(_nudgeScore(item, -0.05)),
                       icon: const Icon(Icons.remove_circle_outline, size: 18, color: kThinkSub),
                     ),
                     Container(
@@ -616,14 +616,14 @@ class _ArithmeticScreenState extends State<ArithmeticScreen> {
                         border: Border.all(color: kThinkAccent),
                       ),
                       child: Text(
-                        '${item.unitScore.toStringAsFixed(1)}점',
+                        '${item.unitScore.toStringAsFixed(2)}점',
                         style: const TextStyle(color: kThinkText, fontSize: 14, fontWeight: FontWeight.w900),
                       ),
                     ),
                     IconButton(
-                      tooltip: '+0.5점',
+                      tooltip: '+0.05점',
                       visualDensity: VisualDensity.compact,
-                      onPressed: () => unawaited(_nudgeScore(item, 0.5)),
+                      onPressed: () => unawaited(_nudgeScore(item, 0.05)),
                       icon: const Icon(Icons.add_circle_outline, size: 18, color: kThinkSub),
                     ),
                   ],
