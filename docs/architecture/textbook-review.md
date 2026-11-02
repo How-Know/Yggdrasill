@@ -332,16 +332,31 @@ screen also keeps a per-run sent set so one run never sends a crop twice.
   (`issue_kind`) and, for `data` issues, proposes the corrected stem or
   choices based on the stored markup (`stem_raw` in the payload); the proposal
   is saved as `fix_proposal` and is never applied by the model.
-  One data error is detected by rule, not by the model: the common stem
-  repeated inside the item stem (`stripCommonStem`, same in the Edge Function
-  and the manager service). The renderer draws common stem + item, so the
-  instruction appears twice. The rule forces `stem_ok = false`,
-  `issue_kind = data`, and stores a `fix_proposal` with the item stem minus
-  the common part (`source: system`, `reason_code: common_stem_duplicate`).
-  The screen also recognises it on already-reviewed rows and offers "공통
-  발문 중복 제거 + 품질 승인" per problem and "공통 발문 중복 제거 (n)" for
-  the unit; the bulk action approves only problems whose other checks are
-  fine and re-runs the render check for the rest.
+  One data error is detected by rule, not by the model: common-stem
+  duplication (`commonStemFix`, same in the Edge Function and the manager
+  service). The renderer draws `meta.set_model.common_stem` + item stem, so
+  the instruction appears twice. Two shapes are handled: (1) the instruction
+  is repeated at the head of the item stem → strip it from the stem; (2) the
+  common stem holds the whole item (`common_stem == stem`) → the common stem
+  becomes its first paragraph (the instruction) and the item stem the rest.
+  Shape 2 is applied only when the common stem actually ends with this
+  item's own text, so a legitimate multi-paragraph common stem (condition
+  box) is left alone. The rule forces `stem_ok = false`, `issue_kind = data`,
+  and stores a `fix_proposal` with `stem` and, for shape 2, `common_stem`
+  (`source: system`, `reason_code: common_stem_duplicate`).
+  Applying goes through `textbook_review_apply_problem_fix(..., p_common_stem)`;
+  a common-stem change is written to every `pb_questions` row of the same
+  set (same `document_id` and set key) because the renderer takes the group's
+  common stem from its first item. The screen recognises both shapes on
+  already-reviewed rows, prefills the editor (common stem field + item stem),
+  and offers "공통 발문 중복 제거 + 품질 승인" per problem and "공통 발문 중복
+  제거 (n)" for the unit. The bulk action approves only problems whose other
+  checks are fine, re-runs the render check for the rest, and loops a few
+  times because fixing one set's common stem exposes the head duplication on
+  its other items.
+- Math bulk: "해설·AI 일치 답 일괄 채택 (n)" adopts the printed solution's
+  answer and approves math for problems where the printed answer and the AI
+  answer agree but the grading answer differs (with the problem-bank sync).
 - Stage 3 compares the grading answer, the transcribed solution answer (when
   present), and the AI answer, and proposes concept ids, thinking codes and
   draft proposals.

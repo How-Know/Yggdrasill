@@ -1,6 +1,7 @@
 import { assert, assertEquals } from 'jsr:@std/assert@1';
 import {
   combineStem,
+  commonStemFix,
   isReviewTodo,
   normalizeIssueKind,
   normalizeProposedChoices,
@@ -46,6 +47,21 @@ Deno.test('공통 발문이 개별 발문에 중복되면 공통 부분을 뗀 �
   assertEquals(stripCommonStem('다음을 구하여라.', '다음을 구하여라.'), null);
   // 앞머리가 아니어도 정확히 같은 문자열이면 제거한다
   assertEquals(stripCommonStem('다음을 구하여라.', '[문단]7\n다음을 구하여라.'), '7');
+});
+
+Deno.test('공통 발문에 개별 본문까지 통째로 들어 있으면 공통 발문은 지시문만, 개별 발문은 나머지만 남긴다', () => {
+  const full = '다음 수의 약수를 모두 구하고, 소수인지 합성수인지 ([공백:2]) 안에 써넣어라.\n[문단]\n9\n약수: box(~~)';
+  // common_stem == stem
+  assertEquals(commonStemFix(full, full), {
+    stem: '9\n약수: box(~~)',
+    commonStem: '다음 수의 약수를 모두 구하고, 소수인지 합성수인지 ([공백:2]) 안에 써넣어라.',
+  });
+  // 지시문만 중복이면 공통 발문은 그대로
+  assertEquals(commonStemFix('다음을 구하여라.', '다음을 구하여라.[문단]7'), { stem: '7', commonStem: null });
+  // 조건 상자처럼 여러 문단으로 된 정당한 공통 발문은 건드리지 않는다
+  assertEquals(commonStemFix('다음 물음에 답하여라.[문단][박스시작]a>0[박스끝]', '12'), null);
+  // 공통 발문이 다른 문항(9번)의 본문을 담고 있으면 이 문항(12번)에서는 판단하지 않는다
+  assertEquals(commonStemFix(full, '다음 수의 약수를 모두 구하고, 소수인지 합성수인지 ([공백:2]) 안에 써넣어라.\n[문단]\n12\n약수: box(~~)'), null);
 });
 
 Deno.test('재검수 대상: 미검수·풀이 없음·해설 미전사(시도 전)만, 승인·전사 시도 후는 제외', () => {

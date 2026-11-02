@@ -1,4 +1,4 @@
-import { type AuthContext, errorResponse, jsonResponse, safetyIdentifier } from '../_shared/ai/auth.ts';
+﻿import { type AuthContext, errorResponse, jsonResponse, safetyIdentifier } from '../_shared/ai/auth.ts';
 import { getBudgetStatus } from '../_shared/ai/budget.ts';
 import { estimateCostUsd, modelFor, reasoningFor, thinkWallClockMs } from '../_shared/ai/config.ts';
 import { createAiProvider } from '../_shared/ai/provider.ts';
@@ -8,7 +8,7 @@ import { uuidOrNull } from './validate.ts';
 
 type Rec = Record<string, unknown>;
 
-export const TEXTBOOK_REVIEW_PROMPT_VERSION = 'textbook-problem-review-2026-11-02c';
+export const TEXTBOOK_REVIEW_PROMPT_VERSION = 'textbook-problem-review-2026-11-02d';
 
 /** 품질 이상의 원인 분류. data=문항 데이터(본문·선지) 오류, engine=조판 엔진 문제, figure=도형 자산 문제 */
 export type IssueKind = 'none' | 'data' | 'engine' | 'figure';
@@ -108,6 +108,36 @@ export function stripCommonStem(commonStem: unknown, stem: unknown): string | nu
   }
   rest = rest.replace(/^(\s|\[문단\])+/, '').replace(/(\s|\[문단\])+$/, '');
   return rest.trim() ? rest : null;
+}
+
+export interface CommonStemFix {
+  stem: string;
+  /** 공통 발문도 바꿔야 할 때(공통 발문에 개별 본문이 통째로 들어간 경우) 새 값. 아니면 null. */
+  commonStem: string | null;
+}
+
+const squash = (s: string) => s.replace(/\s+|\[문단\]/g, '');
+
+/**
+ * 공통 발문 중복의 두 형태를 모두 다룬다(Manager `computeCommonStemFix` 와 같은 규칙).
+ * 1) 지시문이 개별 발문 앞머리에 다시 들어 있음 → 개별 발문에서 공통 부분만 뺀다.
+ * 2) 공통 발문에 개별 문항 본문까지 통째로 들어 있음(common_stem == stem 등) → 공통 발문은 첫 문단(지시문)만,
+ *    개별 발문은 지시문을 뺀 나머지. 공통 발문이 실제로 이 문항의 본문을 담고 있을 때만 적용한다.
+ */
+export function commonStemFix(commonStem: unknown, stem: unknown): CommonStemFix | null {
+  const common = String(commonStem ?? '').trim();
+  const s = String(stem ?? '');
+  if (!common || !s.trim()) return null;
+  const direct = stripCommonStem(common, s);
+  if (direct !== null) return { stem: direct, commonStem: null };
+  const paras = common.split('[문단]').map((p) => p.trim()).filter((p) => p.length > 0);
+  if (paras.length < 2) return null;
+  const instr = paras[0];
+  const rest = stripCommonStem(instr, s);
+  if (rest === null) return null;
+  const sqRest = squash(rest);
+  if (!sqRest || !squash(common).endsWith(sqRest)) return null;
+  return { stem: rest, commonStem: instr };
 }
 
 const SOLUTION_TRANSCRIBE_SCHEMA: Rec = {
@@ -749,7 +779,8 @@ export async function handleTextbookProblemReview(
       .filter((x) => x.length > 0);
 
     // 공통 발문이 개별 발문에 그대로 들어 있으면 학생 화면에 지시문이 두 번 보인다. 모델 판정과 무관하게 데이터 오류로 잡는다.
-    const dupStripped = stripCommonStem(it.common_stem, it.stem);
+    const dupFix = commonStemFix(it.common_stem, it.stem);
+    const dupStripped = dupFix?.stem ?? null;
     const stemOk = b.stem_ok !== false && dupStripped === null;
     const choicesOk = b.choices_ok !== false;
     const figureOk = b.figure_ok !== false;
@@ -794,7 +825,9 @@ export async function handleTextbookProblemReview(
       : null;
     const proposedChoices = issueKind === 'data' ? normalizeProposedChoices(b.proposed_choices) : null;
     const choicesDiffer = proposedChoices !== null && JSON.stringify(proposedChoices) !== JSON.stringify(it.choices ?? []);
-    const fixReason = dupStripped !== null
+    const fixReason = dupFix?.commonStem
+      ? '공통 발문(common_stem)에 개별 문항 본문까지 들어 있어, 공통 발문은 지시문만 남기고 개별 발문에서 지시문을 뺐습니다.'
+      : dupStripped !== null
       ? '공통 발문(common_stem)이 개별 발문에도 들어 있어 공통 부분을 제거했습니다.'
       : typeof b.fix_reason === 'string'
       ? b.fix_reason
@@ -803,6 +836,7 @@ export async function handleTextbookProblemReview(
       ? {
         kind: issueKind,
         stem: proposedStem,
+        common_stem: dupFix?.commonStem ?? null,
         choices: choicesDiffer ? proposedChoices : null,
         reason: fixReason,
         reason_code: dupStripped !== null ? 'common_stem_duplicate' : null,
@@ -924,7 +958,7 @@ export async function handleTextbookProblemReview(
         proposal: proposedStem || choicesDiffer
           ? {
             target: 'problem',
-            after: { stem: proposedStem, choices: choicesDiffer ? proposedChoices : null },
+            after: { stem: proposedStem, common_stem: dupFix?.commonStem ?? null, choices: choicesDiffer ? proposedChoices : null },
             reason: fixReason ?? '원본과 대조한 데이터 수정 제안',
             keeps: '정답·해설 위치는 그대로 유지합니다.',
           }

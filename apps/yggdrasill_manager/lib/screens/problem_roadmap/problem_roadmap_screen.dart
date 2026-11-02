@@ -96,6 +96,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
   /// 본문·선지 수정 편집기(AI 제안이 있으면 제안으로, 없으면 현재 값으로 채운다). 선지는 한 줄에 "① 본문".
   final _stemEditCtrl = TextEditingController();
   final _choicesEditCtrl = TextEditingController();
+  final _commonStemEditCtrl = TextEditingController();
   List<String> _editingVisualTags = const [];
   List<Map<String, dynamic>> _editingAlternatives = const [];
 
@@ -113,6 +114,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     _origAnswerCtrl.dispose();
     _stemEditCtrl.dispose();
     _choicesEditCtrl.dispose();
+    _commonStemEditCtrl.dispose();
     if (widget.service == null) _svc.dispose();
     super.dispose();
   }
@@ -231,7 +233,10 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     _origSolutionCtrl.text = item.solutionTranscribed ?? '';
     _origAnswerCtrl.text = item.solutionAnswer ?? '';
     // 편집기 기본값: AI/규칙 수정 제안 → 공통 발문 중복이면 공통 부분을 뺀 본문 → 현재 본문
-    _stemEditCtrl.text = item.hasPendingFixProposal ? (item.proposedStem ?? item.stem) : (item.stemWithoutCommonStem ?? item.stem);
+    final dupFix = item.commonStemFix;
+    _stemEditCtrl.text = item.hasPendingFixProposal ? (item.proposedStem ?? item.stem) : (dupFix?.stem ?? item.stem);
+    _commonStemEditCtrl.text =
+        item.hasPendingFixProposal ? (item.proposedCommonStem ?? item.commonStem) : (dupFix?.commonStem ?? item.commonStem);
     _choicesEditCtrl.text = _choicesToLines(item.hasPendingFixProposal ? (item.proposedChoices ?? item.rawChoices) : item.rawChoices);
     _editingVisualTags = [...item.visualTags];
     _editingAlternatives = [for (final a in item.alternativeSolutions) Map<String, dynamic>.from(a)];
@@ -259,7 +264,12 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
 
   /// 편집기의 본문·선지가 저장된 문항과 다른가
   bool _problemEditDirty(TextbookProblemReviewItem item) =>
-      _stemEditCtrl.text.trim() != item.stem.trim() || _choicesToLines(_linesToChoices(_choicesEditCtrl.text)) != _choicesToLines(item.rawChoices);
+      _stemEditCtrl.text.trim() != item.stem.trim() ||
+      _commonStemEditDirty(item) ||
+      _choicesToLines(_linesToChoices(_choicesEditCtrl.text)) != _choicesToLines(item.rawChoices);
+
+  bool _commonStemEditDirty(TextbookProblemReviewItem item) =>
+      item.commonStem.isNotEmpty && _commonStemEditCtrl.text.trim() != item.commonStem.trim();
 
   // ── V2 카드 렌더 (정답+해설 · AI 풀이 · 대안 풀이) ───────────────────────
 
@@ -583,12 +593,14 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
       final choices = _linesToChoices(_choicesEditCtrl.text);
       final stemChanged = stem != item.stem.trim();
       final choicesChanged = _choicesToLines(choices) != _choicesToLines(item.rawChoices);
+      final commonChanged = _commonStemEditDirty(item);
       final res = await _svc.applyProblemFix(
         cropId: item.cropId,
         stem: stemChanged ? stem : null,
         choices: choicesChanged ? choices : null,
+        commonStem: commonChanged ? _commonStemEditCtrl.text.trim() : null,
         approveQuality: approve,
-        note: item.hasPendingFixProposal ? 'AI 제안 ${stemChanged || choicesChanged ? '적용' : '검토'}' : null,
+        note: item.hasPendingFixProposal ? 'AI 제안 ${stemChanged || choicesChanged || commonChanged ? '적용' : '검토'}' : null,
       );
       if (approve) {
         // 시각 태그·해설 편집도 같이 저장한다(정답은 건드리지 않는다).
@@ -603,9 +615,10 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
       }
       if (!mounted) return;
       final changed = (res['changed'] as List?)?.map((e) => '$e').toList() ?? const <String>[];
+      final members = (res['set_members_updated'] as num?)?.toInt() ?? 0;
       final what = changed.isEmpty
           ? '본문·선지 변경 없음'
-          : '${changed.map((c) => c == 'stem' ? '본문' : '선지').join('·')} 수정을 문제은행에 적용';
+          : '${changed.map((c) => c == 'stem' ? '본문' : c == 'common_stem' ? '공통 발문${members > 1 ? '(세트 $members문항)' : ''}' : '선지').join('·')} 수정을 문제은행에 적용';
       setState(() {
         _saving = false;
         _notice = '문항 ${item.problemNumber}번: $what${approve ? ' · 품질 승인' : ' · V2 카드를 다시 찍습니다'}';
@@ -629,10 +642,54 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
 
   /// 공통 발문 중복 문항: 편집기에 공통 부분을 뺀 본문을 넣고 바로 적용(+승인)한다.
   Future<void> _fixCommonStemDup(TextbookProblemReviewItem item, {required bool approve}) async {
-    final stripped = item.stemWithoutCommonStem;
-    if (stripped == null) return;
-    _stemEditCtrl.text = stripped;
+    final fix = item.commonStemFix;
+    if (fix == null) return;
+    _stemEditCtrl.text = fix.stem;
+    _commonStemEditCtrl.text = fix.commonStem ?? item.commonStem;
     await _applyProblemFix(item, approve: approve);
+  }
+
+  /// 수학 원터치 일괄: 해설 정답과 AI 정답이 같고 채점 정답만 다른 문항은 그 답을 채택하고 수학 승인한다(문제은행 정답도 동기화).
+  List<TextbookProblemReviewItem> get _agreedAnswerFixes =>
+      [for (final it in _items) if (it.mathStatus == 'issue' && it.solutionAndAiAgreeAgainstExisting) it];
+
+  Future<void> _bulkAdoptAgreedAnswers() async {
+    final scope = _selectedScope;
+    final targets = _agreedAnswerFixes;
+    if (scope == null || targets.isEmpty) return;
+    setState(() {
+      _saving = true;
+      _notice = null;
+    });
+    var done = 0;
+    var synced = 0;
+    try {
+      for (final it in targets) {
+        final ans = (it.solutionAnswer ?? '').trim();
+        if (ans.isEmpty) continue;
+        final sync = await _svc.saveItemEdit(
+          cropId: it.cropId,
+          newAnswer: ans,
+          visualTags: it.visualTags,
+          approveMath: true,
+        );
+        done++;
+        if (((sync?['changed'] as List?) ?? const []).isNotEmpty) synced++;
+      }
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _notice = '해설·AI 일치 정답 $done문항 채택·수학 승인 · 문제은행 정답 $synced문항 함께 맞춤';
+      });
+      await _loadItems(scope, reloadPreviews: false);
+      await _loadUnits();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _notice = '정답 일괄 채택 실패($done문항 처리 후): $e';
+      });
+    }
   }
 
   /// 공통 발문 중복이 있는 문항(승인·보류 제외)
@@ -665,23 +722,37 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     var fixed = 0;
     var approved = 0;
     final recheck = <String>[];
+    final touched = <String>{};
     try {
-      for (final it in targets) {
-        final stripped = it.stemWithoutCommonStem;
-        if (stripped == null) continue;
-        final approve = _onlyIssueIsCommonStemDup(it);
-        await _svc.applyProblemFix(
-          cropId: it.cropId,
-          stem: stripped,
-          approveQuality: approve,
-          note: '공통 발문 중복 제거(일괄)',
-        );
-        fixed++;
-        if (approve) {
-          approved++;
-        } else {
-          recheck.add(it.cropId);
+      // 공통 발문을 세트 단위로 고치면 같은 세트의 다른 문항이 새로 "앞머리 중복"으로 드러난다.
+      // 그래서 다시 읽고 남은 것이 없을 때까지 몇 번 돈다(진전이 없으면 멈춘다).
+      var pending = targets;
+      for (var round = 0; round < 4 && pending.isNotEmpty; round++) {
+        var progressed = false;
+        for (final it in pending) {
+          final fix = it.commonStemFix;
+          if (fix == null) continue;
+          final approve = _onlyIssueIsCommonStemDup(it);
+          await _svc.applyProblemFix(
+            cropId: it.cropId,
+            stem: fix.stem,
+            commonStem: fix.commonStem,
+            approveQuality: approve,
+            note: '공통 발문 중복 제거(일괄)',
+          );
+          progressed = true;
+          fixed++;
+          touched.add(it.cropId);
+          if (approve) {
+            approved++;
+          } else {
+            recheck.add(it.cropId);
+          }
         }
+        if (!progressed) break;
+        await _loadItems(scope, reloadPreviews: false);
+        if (!mounted) return;
+        pending = [for (final x in _commonStemDups) if (!touched.contains(x.cropId)) x];
       }
       if (!mounted) return;
       setState(() {
@@ -689,8 +760,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
         _notice = '공통 발문 중복 $fixed문항 제거 · 다른 문제 없는 $approved문항 품질 승인'
             '${recheck.isNotEmpty ? ' · ${recheck.length}문항은 V2 렌더 검수를 다시 합니다' : ''}';
       });
-      await _loadItems(scope, reloadPreviews: false);
-      final changedItems = [for (final x in _items) if (targets.any((t) => t.cropId == x.cropId)) x];
+      final changedItems = [for (final x in _items) if (touched.contains(x.cropId)) x];
       if (changedItems.isNotEmpty) await _loadEnginePreviews(scope, changedItems, merge: true);
       await _loadUnits();
       if (recheck.isNotEmpty && mounted && !_runningReview) {
@@ -725,11 +795,18 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     if (scope == null) return;
     final stem = _stemEditCtrl.text.trim();
     final choices = _linesToChoices(_choicesEditCtrl.text);
+    final common = _commonStemEditCtrl.text.trim();
     await _renderCard(
       item,
       kind: 'fix_preview',
-      text: '$stem\n${_choicesToLines(choices)}',
-      build: () => _svc.renderProposedProblemCard(academyId: scope.academyId, item: item, stem: stem, choices: choices),
+      text: '$common\n$stem\n${_choicesToLines(choices)}',
+      build: () => _svc.renderProposedProblemCard(
+        academyId: scope.academyId,
+        item: item,
+        stem: stem,
+        choices: choices,
+        commonStem: item.commonStem.isNotEmpty ? common : null,
+      ),
     );
   }
 
@@ -940,6 +1017,13 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
             style: _outlineButtonStyle(color: _kBlue),
             icon: const Icon(Icons.verified_outlined, size: 18, color: _kBlue),
             label: Text('품질 정상 일괄 승인 ($qualCleanCount)'),
+          ),
+        if (_agreedAnswerFixes.isNotEmpty)
+          OutlinedButton.icon(
+            onPressed: _saving ? null : () => unawaited(_bulkAdoptAgreedAnswers()),
+            style: _outlineButtonStyle(color: _kAccent),
+            icon: const Icon(Icons.fact_check_outlined, size: 18, color: _kAccent),
+            label: Text('해설·AI 일치 답 일괄 채택 (${_agreedAnswerFixes.length})'),
           ),
         if (_commonStemDups.isNotEmpty)
           OutlinedButton.icon(
@@ -2251,16 +2335,47 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
           if (dup) ...[
             const SizedBox(height: 6),
             Text(
-              '공통 발문 "${item.commonStem.length > 60 ? '${item.commonStem.substring(0, 60)}…' : item.commonStem}" 이(가) 개별 발문에도 들어 있어 '
-              '학생 화면에 두 번 보입니다. 편집기에는 공통 부분을 뺀 본문을 채워 두었습니다. 공통 발문은 그대로 유지됩니다.',
+              item.commonStemFix?.commonStem != null
+                  ? '공통 발문에 이 문항의 본문까지 통째로 들어 있어 학생 화면에 지시문·답란이 두 번 보입니다. '
+                      '공통 발문은 첫 문단(지시문)만 남기고(같은 세트 문항 모두에 적용), 개별 발문은 지시문을 뺀 나머지로 채워 두었습니다.'
+                  : '공통 발문 "${item.commonStem.length > 60 ? '${item.commonStem.substring(0, 60)}…' : item.commonStem}" 이(가) 개별 발문에도 들어 있어 '
+                      '학생 화면에 두 번 보입니다. 편집기에는 공통 부분을 뺀 본문을 채워 두었습니다. 공통 발문은 그대로 유지됩니다.',
               style: const TextStyle(color: _kTextSub, fontSize: 12, height: 1.35),
             ),
           ] else if (reason.isNotEmpty) ...[
             const SizedBox(height: 6),
             Text('제안 이유: $reason', style: const TextStyle(color: _kTextSub, fontSize: 12, height: 1.35)),
           ],
+          if (item.commonStem.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            const Text(
+              '공통 발문 (세트 전체가 공유 · 바꾸면 같은 세트 문항 모두에 적용)',
+              style: TextStyle(color: _kTextSub, fontSize: 12, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 6),
+            TextField(
+              controller: _commonStemEditCtrl,
+              minLines: 1,
+              maxLines: 5,
+              onChanged: (_) => setState(() {}),
+              style: const TextStyle(color: _kText, fontSize: 13, height: 1.4),
+              decoration: _inputDecoration('공통 발문'),
+            ),
+            if (_commonStemEditDirty(item)) ...[
+              const SizedBox(height: 6),
+              Text(
+                '현재 저장값: ${item.commonStem.trim()}',
+                style: const TextStyle(color: _kTextMuted, fontSize: 11.5, height: 1.35),
+                maxLines: 4,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ],
           const SizedBox(height: 10),
-          const Text('발문 (마크업 [문단]·\$수식\$ 유지)', style: TextStyle(color: _kTextSub, fontSize: 12, fontWeight: FontWeight.w700)),
+          Text(
+            item.commonStem.isNotEmpty ? '개별 발문 (공통 발문 제외 · 마크업 [문단]·\$수식\$ 유지)' : '발문 (마크업 [문단]·\$수식\$ 유지)',
+            style: const TextStyle(color: _kTextSub, fontSize: 12, fontWeight: FontWeight.w700),
+          ),
           const SizedBox(height: 6),
           TextField(
             controller: _stemEditCtrl,
@@ -2313,6 +2428,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
                       ? null
                       : () => setState(() {
                             _stemEditCtrl.text = item.stem;
+                            _commonStemEditCtrl.text = item.commonStem;
                             _choicesEditCtrl.text = _choicesToLines(item.rawChoices);
                           }),
                   icon: const Icon(Icons.restore_rounded, size: 16, color: _kTextSub),

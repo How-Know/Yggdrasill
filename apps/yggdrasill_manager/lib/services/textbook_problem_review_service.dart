@@ -44,6 +44,39 @@ String? stripCommonStem(String commonStem, String stem) {
   return rest.trim().isEmpty ? null : rest;
 }
 
+/// 공통 발문 중복을 고치는 데 필요한 변경. [stem] 은 개별 발문의 새 값, [commonStem] 은 공통 발문의 새 값(바꿀 필요 없으면 null).
+class CommonStemFix {
+  const CommonStemFix({required this.stem, this.commonStem});
+  final String stem;
+  final String? commonStem;
+}
+
+String _squash(String s) => s.replaceAll(RegExp(r'\s+|\[문단\]'), '');
+
+/// 공통 발문 중복의 두 형태를 모두 다룬다.
+/// 1) 공통 발문(지시문)이 개별 발문 앞머리에 다시 들어 있음 → 개별 발문에서 공통 부분만 뺀다.
+/// 2) 공통 발문에 개별 문항 본문까지 통째로 들어 있음(common_stem == stem 등) → 공통 발문은 첫 문단(지시문)만 남기고,
+///    개별 발문은 지시문을 뺀 나머지로 한다. 공통 발문이 실제로 이 문항의 본문을 담고 있을 때만 적용한다
+///    (조건 상자처럼 여러 문단으로 된 정당한 공통 발문은 건드리지 않는다).
+/// Edge `commonStemFix` 와 같은 규칙이다.
+CommonStemFix? computeCommonStemFix(String commonStem, String stem) {
+  final common = commonStem.trim();
+  if (common.isEmpty || stem.trim().isEmpty) return null;
+  final direct = stripCommonStem(common, stem);
+  if (direct != null) return CommonStemFix(stem: direct);
+
+  final paras = common.split('[문단]').map((p) => p.trim()).where((p) => p.isNotEmpty).toList();
+  if (paras.length < 2) return null;
+  final instr = paras.first;
+  final rest = stripCommonStem(instr, stem);
+  if (rest == null) return null;
+  // 공통 발문이 "지시문 + 이 문항의 본문" 꼴일 때만 공통 발문을 지시문으로 줄인다.
+  final sqCommon = _squash(common);
+  final sqRest = _squash(rest);
+  if (sqRest.isEmpty || !sqCommon.endsWith(sqRest)) return null;
+  return CommonStemFix(stem: rest, commonStem: instr);
+}
+
 class TextbookReviewUnitScope {
   const TextbookReviewUnitScope({
     required this.academyId,
@@ -364,13 +397,29 @@ class TextbookProblemReviewItem {
   String? get proposedStem => fixProposal['stem'] is String && '${fixProposal['stem']}'.trim().isNotEmpty ? '${fixProposal['stem']}' : null;
 
   /// 공통 발문이 개별 발문에도 들어 있어 학생 화면에 지시문이 두 번 보이는 상태인가(규칙 판정, AI 결과와 무관)
-  bool get commonStemDuplicated => stemWithoutCommonStem != null;
+  bool get commonStemDuplicated => commonStemFix != null;
+
+  /// 공통 발문 중복을 고치는 변경(개별 발문 새 값, 필요하면 공통 발문 새 값). 중복이 없으면 null.
+  CommonStemFix? get commonStemFix => computeCommonStemFix(commonStem, stem);
 
   /// 개별 발문에서 공통 발문 부분을 뗀 본문. 중복이 없으면 null.
-  String? get stemWithoutCommonStem => stripCommonStem(commonStem, stem);
+  String? get stemWithoutCommonStem => commonStemFix?.stem;
 
   /// 저장된 수정 제안이 "공통 발문 중복 제거" 규칙 제안인가
   bool get fixProposalIsCommonStemDup => fixProposal['reason_code'] == 'common_stem_duplicate';
+
+  /// 수정 제안에 포함된 공통 발문 새 값(공통 발문에 개별 본문이 섞여 있던 경우)
+  String? get proposedCommonStem =>
+      fixProposal['common_stem'] is String && '${fixProposal['common_stem']}'.trim().isNotEmpty ? '${fixProposal['common_stem']}' : null;
+
+  /// 해설 정답과 AI 정답이 서로 같은데 채점 정답만 다른가(일괄 채택 대상)
+  bool get solutionAndAiAgreeAgainstExisting {
+    String norm(String s) => s.replaceAll(RegExp(r'[\s$]'), '').toLowerCase();
+    final sol = norm(solutionAnswer ?? '');
+    final ai = norm(aiAnswer ?? '');
+    if (sol.isEmpty || ai.isEmpty || sol != ai) return false;
+    return norm(existingAnswer) != sol;
+  }
   List<Map<String, dynamic>>? get proposedChoices => fixProposal['choices'] is List
       ? [for (final x in fixProposal['choices'] as List) if (x is Map) Map<String, dynamic>.from(x)]
       : null;
@@ -703,10 +752,12 @@ class TextbookProblemReviewService {
     required TextbookProblemReviewItem item,
     required String stem,
     List<Map<String, dynamic>>? choices,
+    String? commonStem,
   }) async {
     final body = stem.trim();
     if (body.isEmpty) return '';
-    final full = item.commonStem.isNotEmpty && !body.contains(item.commonStem) ? '${item.commonStem}[문단]$body' : body;
+    final common = (commonStem ?? item.commonStem).trim();
+    final full = common.isNotEmpty && !body.contains(common) ? '$common[문단]$body' : body;
     return _pb.renderCustomStemThumbnail(
       academyId: academyId,
       id: 'review-${item.cropId}-fix',
@@ -778,6 +829,7 @@ class TextbookProblemReviewService {
     List<Map<String, dynamic>>? choices,
     bool approveQuality = false,
     String? note,
+    String? commonStem,
   }) async {
     final res = await _db.rpc('textbook_review_apply_problem_fix', params: {
       'p_crop_id': cropId,
@@ -785,6 +837,7 @@ class TextbookProblemReviewService {
       'p_choices': choices,
       'p_approve_quality': approveQuality,
       'p_note': note,
+      'p_common_stem': commonStem,
     });
     return res is Map ? Map<String, dynamic>.from(res) : const {};
   }
