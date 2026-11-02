@@ -1,4 +1,4 @@
-﻿import { type AuthContext, errorResponse, jsonResponse, safetyIdentifier } from '../_shared/ai/auth.ts';
+import { type AuthContext, errorResponse, jsonResponse, safetyIdentifier } from '../_shared/ai/auth.ts';
 import { getBudgetStatus } from '../_shared/ai/budget.ts';
 import { estimateCostUsd, modelFor, reasoningFor, thinkWallClockMs } from '../_shared/ai/config.ts';
 import { createAiProvider } from '../_shared/ai/provider.ts';

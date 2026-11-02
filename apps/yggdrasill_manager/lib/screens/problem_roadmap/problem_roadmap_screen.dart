@@ -97,6 +97,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
   final _stemEditCtrl = TextEditingController();
   final _choicesEditCtrl = TextEditingController();
   final _commonStemEditCtrl = TextEditingController();
+  final _bulkErrors = <String>[];
   List<String> _editingVisualTags = const [];
   List<Map<String, dynamic>> _editingAlternatives = const [];
 
@@ -516,6 +517,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
       _saving = true;
       _notice = null;
     });
+    _bulkErrors.clear();
     var fixNote = '';
     var recheck = <String>[];
     try {
@@ -540,7 +542,8 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
       if (!mounted) return;
       setState(() {
         _saving = false;
-        _notice = '${axis == 'math' ? '수학적 검수' : '품질 검수'} 정상 $count문항 승인$fixNote';
+        _notice = '${axis == 'math' ? '수학적 검수' : '품질 검수'} 정상 $count문항 승인$fixNote'
+            '${_bulkErrors.isEmpty ? '' : ' · 실패 ${_bulkErrors.length}문항(${_bulkErrors.first})'}';
       });
       await _loadItems(scope, reloadPreviews: false);
       await _loadUnits();
@@ -696,12 +699,18 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     for (final it in _agreedAnswerFixes) {
       final ans = (it.solutionAnswer ?? '').trim();
       if (ans.isEmpty) continue;
-      final sync = await _svc.saveItemEdit(
-        cropId: it.cropId,
-        newAnswer: ans,
-        visualTags: it.visualTags,
-        approveMath: true,
-      );
+      final Map<String, dynamic>? sync;
+      try {
+        sync = await _svc.saveItemEdit(
+          cropId: it.cropId,
+          newAnswer: ans,
+          visualTags: it.visualTags,
+          approveMath: true,
+        );
+      } catch (e) {
+        _bulkErrors.add('${it.problemNumber}번: $e');
+        continue;
+      }
       done++;
       if (((sync?['changed'] as List?) ?? const []).isNotEmpty) synced++;
     }
@@ -742,16 +751,21 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
         final fix = it.commonStemFix;
         if (fix == null) continue;
         final approve = _onlyIssueIsCommonStemDup(it);
-        await _svc.applyProblemFix(
-          cropId: it.cropId,
-          stem: fix.stem,
-          commonStem: fix.commonStem,
-          approveQuality: approve,
-          note: '공통 발문 중복 제거(일괄)',
-        );
+        touched.add(it.cropId);
+        try {
+          await _svc.applyProblemFix(
+            cropId: it.cropId,
+            stem: fix.stem,
+            commonStem: fix.commonStem,
+            approveQuality: approve,
+            note: '공통 발문 중복 제거(일괄)',
+          );
+        } catch (e) {
+          _bulkErrors.add('${it.problemNumber}번: $e');
+          continue;
+        }
         progressed = true;
         fixed++;
-        touched.add(it.cropId);
         if (approve) {
           approved++;
         } else {
