@@ -21,6 +21,8 @@ and 6 are not built.
   - `output`: what students see renders correctly (출력 품질).
 - **Proposal only.** System checks and AI open findings, and may attach a
   proposal. Only an owner action changes data. Nothing is applied automatically.
+  An owner action may apply the proposal in the same touch (see "One-touch
+  approval"); the AI itself never writes answers, stems, or choices.
 - **Keep and correct.** The source PDF is never changed. Errors in the printed
   source are recorded as correction notes.
 - **Staff only.** Students never read review tables or functions.
@@ -190,7 +192,9 @@ edit RPC below.
 
 Migrations `20261101030000_textbook_problem_review_pipeline.sql`,
 `20261102010000_textbook_review_set_common_stem.sql`,
-`20261102030000_textbook_review_solution_vision_and_v2_render_check.sql`.
+`20261102030000_textbook_review_solution_vision_and_v2_render_check.sql`,
+`20261102160000_textbook_review_unit_overview_arg_limit.sql`,
+`20261102180000_textbook_review_one_touch_fix_and_engine_hold.sql`.
 Edge code: `supabase/functions/ai_think/textbook_problem_review.ts`
 (prompt version `TEXTBOOK_REVIEW_PROMPT_VERSION`). Manager code:
 `services/textbook_problem_review_service.dart`,
@@ -208,19 +212,85 @@ Edge code: `supabase/functions/ai_think/textbook_problem_review.ts`
 - AI solve: `ai_solution`, `ai_answer`, concept ids, thinking codes, the three
   difficulty axes (concept, thinking, arithmetic; recomputed by
   `textbook_problem_recalc_scores`).
-- Judgement: `math_status` and `quality_status`, each `pending`, `clean`,
-  `issue`, or `approved`. `quality_checks` keeps the stage-2 flags
-  (`judged_from_v2_image`, `fidelity_ok`, `solution_vision`), `render_checks`
-  and `render_checked_at` keep the stage-4 result.
+- Judgement: `math_status` is `pending`, `clean`, `issue`, or `approved`.
+  `quality_status` has one more value, `held`: the problem is on the
+  render-engine hold list (below). `quality_checks` keeps the stage-2 flags
+  (`judged_from_v2_image`, `fidelity_ok`, `solution_vision`, `issue_kind`),
+  `render_checks` and `render_checked_at` keep the stage-4 result
+  (`issue_kind`, `engine_symptom` included).
+- `issue_kind` classifies a quality issue: `data` (the stem or choices stored
+  in the problem bank are wrong; fixable from the screen), `engine` (the V2
+  renderer or markup conversion is wrong; needs a gateway code change),
+  `figure` (missing or wrong figure), or `none`.
+- `fix_proposal`: for `data` issues, the AI's minimal corrected stem and/or
+  choices (`{kind, stem, choices, reason, source, created_at}`). Once applied,
+  `applied_at`, `applied_fields`, `applied_note` are appended.
+- Engine hold: `engine_hold_note`, `engine_held_at`, `engine_held_by`,
+  `engine_resolved_at`, `engine_hold_snapshot` (the quality and render checks
+  at the time of the hold, for before/after comparison).
 - `alternative_solutions`: a jsonb array of extra solutions the owner adds.
 
 Reads go through `textbook_review_unit_overview(academy, book, grade, big, mid)`
 (one row per problem with crop, problem-bank, answer, solution-ref and analysis
-fields). Owner edits go through `textbook_review_save_item_edit`, which can set
-the answer, the AI solution, visual tags, the transcribed solution and its
-answer, alternative solutions, and approve the math or quality axis. Changing
-the transcribed text sets `solution_source = 'manual'`; saving the same text
-keeps `textbook_vision`.
+fields, including the problem-bank answers `pb_objective_answer_key`,
+`pb_subjective_answer`). The function builds its row with several
+`jsonb_build_object` calls joined by `||`; Postgres allows at most 100
+arguments per call, so keep each call at 50 pairs or fewer.
+
+### One-touch approval
+
+Owner edits go through `textbook_review_save_item_edit`, which can set the
+answer, the AI solution, visual tags, the transcribed solution and its answer,
+alternative solutions, and approve the math or quality axis. Changing the
+transcribed text sets `solution_source = 'manual'`; saving the same text keeps
+`textbook_vision`.
+
+- Math axis. Saving a grading answer also syncs the linked `pb_questions` row
+  (`p_sync_pb_answer`, default on) through `textbook_review_sync_pb_answer`:
+  `objective_answer_key` when the question allows objective answers and the
+  answer parses as choice numbers (`3`, `③`, `1,3`, `3번` →
+  `textbook_review_objective_key`), and `subjective_answer` (the choice text for
+  a keyed answer, otherwise the answer itself). The screen's "해설 답 채택 후
+  승인" and "AI 답 채택 후 승인" therefore fix the grading answer and both
+  problem-bank answers in one touch. `pb_questions_emit_revision` logs the
+  change as usual.
+- Quality axis. `textbook_review_apply_problem_fix(crop, stem, choices,
+  approve_quality, note)` writes the stem and choices to `pb_questions` (only
+  the fields that changed), records the application in `fix_proposal`, and
+  when `approve_quality` is set approves the axis and resolves the open
+  `fidelity`/`output` findings as `applied`. Without approval it clears
+  `render_checks` so the screen re-runs the stage-4 check on the new render.
+  The screen prefills the editor with the AI proposal (or the current values),
+  lets the owner edit, previews the result as a V2 card ("①′ 수정안
+  미리보기"), and offers "적용 후 재검수" and "적용 + 품질 승인".
+
+### Render-engine hold list
+
+A quality issue the screen cannot fix (`issue_kind = engine`, or any issue the
+owner judges as an engine problem) is put on hold instead of being approved or
+left as `issue`:
+
+- `textbook_review_set_engine_hold(crop_ids, hold, note)`. Holding sets
+  `quality_status = 'held'`, stores the note (defaults to the render or quality
+  issue title) and `engine_hold_snapshot`, and moves the problem's open quality
+  findings to `held`. Releasing sets `quality_status = 'issue'`,
+  `engine_resolved_at`, and reopens the findings.
+- A held problem keeps `held` through stage 1-3 and stage 4 re-runs; only an
+  owner action (release, or quality approval) changes it. Approving a held
+  problem sets `engine_resolved_at`.
+- Counting: `textbook_review_books_and_units` reports `quality_held_count`
+  separately. The screen shows `품질 승인 X / (N − held)` and `엔진 보류 K
+  (별도 관리)`, so approved problems count as done and held problems do not
+  drag the unit's progress.
+- `textbook_review_engine_hold_list()` returns, across all books, the units
+  with held problems or problems resolved in the last 30 days, with crop ids.
+  The screen's "렌더 엔진 목록" dialog
+  (`textbook_review_engine_hold_panel.dart`) lists them with the judgement at
+  hold time, re-renders the two V2 cards on demand with the current engine
+  (the gateway renders fresh on every call, so "다시 렌더링" is just another
+  request), runs the stage-4 check again for the held set, and approves the
+  ones that come back clean, one by one or in bulk. This is the loop for
+  "fix the renderer, then look at the problems that were broken before".
 
 ### Why the client orchestrates
 
@@ -258,7 +328,10 @@ screen also keeps a per-run sent set so one run never sends a crop twice.
   image, as a student would see it**, not from the stem text. The original
   crop is only for fidelity (`fidelity_ok`: does the render match the print).
   Set problems get the common stem combined with the item
-  (`[공통 지시문] ... [문항] ...`).
+  (`[공통 지시문] ... [문항] ...`). When it finds an issue it classifies it
+  (`issue_kind`) and, for `data` issues, proposes the corrected stem or
+  choices based on the stored markup (`stem_raw` in the payload); the proposal
+  is saved as `fix_proposal` and is never applied by the model.
 - Stage 3 compares the grading answer, the transcribed solution answer (when
   present), and the AI answer, and proposes concept ids, thinking codes and
   draft proposals.
@@ -280,9 +353,10 @@ solution_kind}` items. The model reads both images as a student and reports
 `problem_ok`, `answer_ok`, `solution_ok` with an issue title and detail.
 
 Writes: `render_checks`, `render_checked_at`, finding `check_key`
-`ai_v2_render_student_view`, and `quality_status`: approved stays approved;
-otherwise `clean` only when the render is fine and the stage-2 checks were
-fine, else `issue`. Every call records an `ai_runs` row with feature
+`ai_v2_render_student_view`, and `quality_status`: `approved` and `held` stay
+as they are; otherwise `clean` only when the render is fine and the stage-2
+checks were fine, else `issue`. A finding opened for a held problem is created
+as `held`, and re-runs keep a finding's current status. Every call records an `ai_runs` row with feature
 `textbook_problem_review` or `textbook_problem_render_check`.
 
 ## Manager screen (문항검수)
@@ -290,20 +364,27 @@ fine, else `issue`. Every call records an `ai_runs` row with feature
 `apps/yggdrasill_manager/lib/screens/problem_roadmap/problem_roadmap_screen.dart`.
 Three columns:
 
-- Left: the unit's problem list with math and quality status.
-- Centre: the math review card (answers side by side, compare result), the
-  solution edit card (transcribed solution, its answer, AI solution; "해설
-  저장"), and the quality review card (stage-2 flags, render-check state,
-  findings).
+- Left: the unit's problem list with math and quality status, the issue kind
+  badge (데이터/엔진/도형), and a "문제은행 정답 다름" badge when the
+  problem-bank answers differ from the grading answer. Filter tabs include
+  "엔진 보류".
+- Centre: the math review card (answers side by side, compare result,
+  problem-bank answers), the solution edit card (transcribed solution, its
+  answer, AI solution; "해설 저장"), and the quality review card (stage-2
+  flags, render-check state, findings, the stem/choices fix editor, and the
+  hold banner for held problems).
 - Right, a vertical stack rendered **only with V2**: ① the problem card,
-  ② answer + printed solution (or AI solution), ③ the AI solution when a printed
-  one exists, then one card per alternative solution with add and remove. Card
-  images are cached per `crop | kind | text hash` and rebuilt when the text
-  changes. The client LaTeX renderer is not used here, because the point of the
-  stack is to see exactly what students will see.
-- Header menu: "전체 강제 재검수" (ignores `isReviewTodo`) and "V2 렌더 검수만
-  전체 다시" (stage 4 only). "해설 답 채택 후 승인" copies the printed
-  solution's answer into the grading answer and approves.
+  ①′ the preview of the edited stem/choices when the editor differs from the
+  stored values, ② answer + printed solution (or AI solution), ③ the AI
+  solution when a printed one exists, then one card per alternative solution
+  with add and remove. Card images are cached per `crop | kind | text hash` and
+  rebuilt when the text changes. The client LaTeX renderer is not used here,
+  because the point of the stack is to see exactly what students will see.
+- Header: "전체 강제 재검수" (ignores `isReviewTodo`), "V2 렌더 검수만 전체
+  다시" (stage 4 only), "AI 엔진 의심 일괄 보류" (holds every problem whose
+  latest issue is classified `engine`), and "렌더 엔진 목록" (the cross-book
+  hold dialog). "해설 답 채택 후 승인" and "AI 답 채택 후 승인" copy the
+  answer into the grading answer, sync the problem-bank answers, and approve.
 
 The older Preview under
 `screens/design_preview/yggdrasill_manager/textbook_review/` with mock data is
@@ -317,8 +398,9 @@ superseded by this screen.
   (`node --test "test/**/*.test.js"`).
 - `apps/yggdrasill_manager`: `test/textbook_review_preview_test.dart`.
 - `supabase/functions/ai_think`: `textbook_problem_review_test.ts` (image
-  parsing, common-stem combining, `isReviewTodo`). AI tests use
-  `FakeAiProvider` and do not assert model wording.
+  parsing, common-stem combining, `isReviewTodo`, `issue_kind` and proposed
+  choice normalizing). AI tests use `FakeAiProvider` and do not assert model
+  wording.
 
 ## Open questions
 

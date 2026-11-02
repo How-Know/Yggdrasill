@@ -1,5 +1,11 @@
 import { assert, assertEquals } from 'jsr:@std/assert@1';
-import { combineStem, isReviewTodo, parseReviewImages } from './textbook_problem_review.ts';
+import {
+  combineStem,
+  isReviewTodo,
+  normalizeIssueKind,
+  normalizeProposedChoices,
+  parseReviewImages,
+} from './textbook_problem_review.ts';
 
 const CROP = '0f6a2c1e-7b3d-4e8f-9a1b-2c3d4e5f6a7b';
 
@@ -36,4 +42,23 @@ Deno.test('재검수 대상: 미검수·풀이 없음·해설 미전사(시도 �
   }, false));
   assert(!isReviewTodo({ math_status: 'clean', ai_solution: 'x', has_solution_ref: false }, false));
   assert(isReviewTodo({ math_status: 'approved', ai_solution: 'x' }, true));
+});
+
+Deno.test('이상 원인 분류: 이상이 없으면 none, 모르는 값은 data 로 본다', () => {
+  assertEquals(normalizeIssueKind('engine', false), 'none');
+  assertEquals(normalizeIssueKind('engine', true), 'engine');
+  assertEquals(normalizeIssueKind('figure', true), 'figure');
+  assertEquals(normalizeIssueKind('weird', true), 'data');
+  assertEquals(normalizeIssueKind(undefined, true), 'data');
+});
+
+Deno.test('선지 수정안은 label 이 있는 {label,text} 배열만 받는다', () => {
+  assertEquals(normalizeProposedChoices(null), null);
+  assertEquals(normalizeProposedChoices([]), null);
+  assertEquals(normalizeProposedChoices([{ label: '①', text: ' 2 ' }, { label: '②', text: '3' }]), [
+    { label: '①', text: '2' },
+    { label: '②', text: '3' },
+  ]);
+  assertEquals(normalizeProposedChoices([{ label: '', text: '2' }]), null);
+  assertEquals(normalizeProposedChoices(['①']), null);
 });

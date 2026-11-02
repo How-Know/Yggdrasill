@@ -29,3 +29,14 @@ and RPCs (`textbook_review_*`), first read `docs/architecture/textbook-review.md
   LaTeX renderer there.
 - `isReviewTodo` must stay identical in the Edge Function and the manager
   service; a failed Vision read is not retried automatically.
+- The AI classifies quality issues (`issue_kind`: data/engine/figure) and may
+  store a `fix_proposal`; it never writes `pb_questions`. Applying a stem or
+  choices fix, or syncing the problem-bank answers, happens only through
+  `textbook_review_apply_problem_fix` / `textbook_review_save_item_edit` on an
+  owner action.
+- `quality_status = 'held'` means a render-engine hold. Stage re-runs and
+  render checks must keep `held` and `approved`; only an owner action
+  (release or approval) changes them. Counts treat held problems separately
+  from the approval target.
+- `textbook_review_unit_overview` and similar builders: at most 50 pairs per
+  `jsonb_build_object` call (Postgres 100-argument limit); split with `||`.

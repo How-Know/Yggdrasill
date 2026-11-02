@@ -8,7 +8,30 @@ import { uuidOrNull } from './validate.ts';
 
 type Rec = Record<string, unknown>;
 
-export const TEXTBOOK_REVIEW_PROMPT_VERSION = 'textbook-problem-review-2026-11-02a';
+export const TEXTBOOK_REVIEW_PROMPT_VERSION = 'textbook-problem-review-2026-11-02b';
+
+/** 품질 이상의 원인 분류. data=문항 데이터(본문·선지) 오류, engine=조판 엔진 문제, figure=도형 자산 문제 */
+export type IssueKind = 'none' | 'data' | 'engine' | 'figure';
+
+export function normalizeIssueKind(v: unknown, hasIssue: boolean): IssueKind {
+  if (!hasIssue) return 'none';
+  return v === 'engine' || v === 'figure' || v === 'data' ? v : 'data';
+}
+
+/** 모델이 낸 선지 수정안을 {label,text}[] 로 정리한다. 형식이 맞지 않으면 null. */
+export function normalizeProposedChoices(v: unknown): Array<{ label: string; text: string }> | null {
+  if (!Array.isArray(v) || v.length === 0) return null;
+  const out: Array<{ label: string; text: string }> = [];
+  for (const c of v as unknown[]) {
+    if (!c || typeof c !== 'object') return null;
+    const r = c as Rec;
+    const label = String(r.label ?? '').trim();
+    const text = String(r.text ?? '').trim();
+    if (!label) return null;
+    out.push({ label, text });
+  }
+  return out;
+}
 
 /** 매니저앱이 묶음마다 함께 보내는 이미지. 해설 크롭은 해설 PDF 좌표 영역을 앱에서 잘라 base64로, V2 렌더는 서명 URL로 온다. */
 export interface ReviewImageInput {
@@ -95,6 +118,10 @@ const BLIND_SOLVE_SCHEMA: Rec = {
           'fidelity_ok',
           'quality_issue_title',
           'quality_issue_detail',
+          'issue_kind',
+          'proposed_stem',
+          'proposed_choices',
+          'fix_reason',
         ],
         properties: {
           crop_id: { type: 'string' },
@@ -121,6 +148,18 @@ const BLIND_SOLVE_SCHEMA: Rec = {
           fidelity_ok: { type: 'boolean' },
           quality_issue_title: { type: ['string', 'null'] },
           quality_issue_detail: { type: ['string', 'null'] },
+          issue_kind: { type: 'string', enum: ['none', 'data', 'engine', 'figure'] },
+          proposed_stem: { type: ['string', 'null'] },
+          proposed_choices: {
+            type: ['array', 'null'],
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['label', 'text'],
+              properties: { label: { type: 'string' }, text: { type: 'string' } },
+            },
+          },
+          fix_reason: { type: ['string', 'null'] },
         },
       },
     },
@@ -202,7 +241,7 @@ const RENDER_CHECK_SCHEMA: Rec = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['crop_id', 'problem_ok', 'answer_ok', 'solution_ok', 'issue_title', 'issue_detail'],
+        required: ['crop_id', 'problem_ok', 'answer_ok', 'solution_ok', 'issue_title', 'issue_detail', 'issue_kind', 'engine_symptom'],
         properties: {
           crop_id: { type: 'string' },
           problem_ok: { type: 'boolean' },
@@ -210,6 +249,8 @@ const RENDER_CHECK_SCHEMA: Rec = {
           solution_ok: { type: 'boolean' },
           issue_title: { type: ['string', 'null'] },
           issue_detail: { type: ['string', 'null'] },
+          issue_kind: { type: 'string', enum: ['none', 'data', 'engine', 'figure'] },
+          engine_symptom: { type: ['string', 'null'] },
         },
       },
     },
@@ -251,6 +292,16 @@ const BLIND_SOLVE_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔�
    - latex_v2_ok: 화면에서 수식이 수학 기호로 제대로 조판됐는지(\\frac, \\sqrt, ^, _ 같은 LaTeX 원문이 글자로 노출되거나, $ 기호가 보이거나, ?? 또는 깨진 글자가 보이면 false).
    - fidelity_ok: 원본 크롭 이미지가 주어졌을 때, V2 렌더(또는 텍스트)의 내용이 원본과 같은지(숫자·부호·조건·선지 내용이 바뀌거나 빠지지 않았는지). 원본 크롭이 없으면 true.
    - 이상이 하나라도 있으면 quality_issue_title과 quality_issue_detail에 학생 입장에서 무엇이 어떻게 보이는지(예: "②번 선지가 화면에 없음", "분수가 \\frac{1}{2} 글자로 노출됨")를 한글로 명확히 적고, 이상이 없으면 둘 다 null로 두세요.
+4-1. 이상의 원인 분류(issue_kind) — 운영자가 어디를 고칠지 정하는 기준입니다:
+   - "data": 문항 데이터 자체가 틀렸다. 발문·선지 글자가 원본과 다르거나 빠짐, 선지 개수 부족, 수식의 LaTeX 문법이 깨져 있음(괄호 짝이 안 맞음, $ 짝이 안 맞음 등), 마크업 오타. → 데이터를 고치면 해결된다.
+   - "engine": 데이터 텍스트는 맞는데 우리 조판 엔진이 잘못 그린다. 올바른 LaTeX인데 겹침·잘림·간격 이상·기호 누락, 줄바꿈이 엉킴, 표/상자 마크업이 그려지지 않음. → 엔진(템플릿)을 고쳐야 하며 같은 표기를 쓰는 다른 문항에도 반복된다.
+   - "figure": 도형·그래프 자산이 없거나 잘림(텍스트·LaTeX 문제가 아님).
+   - 이상이 없으면 "none".
+4-2. 데이터 수정 제안(proposed_stem, proposed_choices, fix_reason) — issue_kind 가 "data"일 때만:
+   - proposed_stem: stem_raw(개별 발문 원문, 공통 지시문 제외)를 최소한으로 고친 전체 본문. 마크업([문단], [박스시작]/[박스끝], [표시작]/[표끝], [[공백:n]], $...$ 수식)은 원문 형식을 그대로 유지하고, 틀린 부분만 바꾸세요. 원본 크롭 이미지가 있으면 그것을 기준으로 맞추세요. 고칠 것이 없으면 null.
+   - proposed_choices: 선지를 고쳐야 할 때만 전체 선지 배열 [{label:"①", text:"..."}, ...]을 적고, 아니면 null. label 은 원문 그대로(①~⑤ 또는 ㄱ,ㄴ,ㄷ).
+   - fix_reason: 무엇을 왜 고쳤는지 한 줄. 제안이 없으면 null.
+   - "engine"·"figure"·"none" 이면 proposed_stem, proposed_choices, fix_reason 모두 null.
 5. 시각 요소 태그(visual_tags):
    - 문항에 도형·그래프·표 등 시각 요소가 있거나 언급되면 아래 표준 태그 중 해당하는 것을 모두 넣으세요(없으면 빈 배열 []):
      ["수직선", "좌표평면", "일차함수(직선)", "이차함수(포물선)", "삼차·사차함수", "유리·무리함수", "지수·로그함수", "삼각함수", "각·평행선", "삼각형", "직각삼각형", "이등변·정삼각형", "사각형", "다각형", "원·부채꼴·접선", "합동·닮음", "입체도형·회전체", "전개도·겨냥도", "표(Table)", "조건상자(보기)", "통계그래프(히스토그램·상자그림)", "수형도·경로망"]`;
@@ -287,7 +338,13 @@ const RENDER_CHECK_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔
 - problem_ok: 문항 카드가 학생이 읽기에 온전한가.
 - answer_ok: 정답 표기가 보이고 읽히는가(정답 카드가 없으면 true).
 - solution_ok: 해설/풀이 카드가 끝까지 읽히는가(해설 카드가 없으면 true).
-- 이상이 있으면 issue_title(한 줄)과 issue_detail(어느 카드의 어디가 어떻게 보이는지)을 한글로 적고, 없으면 둘 다 null.`;
+- 이상이 있으면 issue_title(한 줄)과 issue_detail(어느 카드의 어디가 어떻게 보이는지)을 한글로 적고, 없으면 둘 다 null.
+- issue_kind: 이상의 원인 분류. 운영자가 어디를 고칠지 정하는 기준입니다.
+  - "engine": 내용은 맞아 보이는데 조판이 잘못됐다 — 수식·글자 겹침, 가장자리 잘림, 간격 이상, 기호가 빠짐, 줄바꿈이 엉킴, 표/상자가 그려지지 않음, 마크업이 글자로 노출됨. 같은 표기를 쓰는 다른 문항에서도 반복될 문제.
+  - "data": 내용 자체의 문제 — 선지가 빠짐, 정답이 비어 있음, 해설이 중간에서 끝남, 글자·수식 오타, LaTeX 원문이 그대로 노출될 만큼 문법이 깨짐.
+  - "figure": 도형·그래프가 없거나 잘림.
+  - "none": 이상 없음.
+- engine_symptom: issue_kind 가 "engine"일 때 증상을 짧은 명사구로(예: "분수 세로 겹침", "루트 기호 누락", "표 테두리 미출력"). 같은 증상끼리 묶어 엔진 수정 목록을 만드는 데 씁니다. 아니면 null.`;
 
 async function loadDictionaries(auth: AuthContext, bookId: string, gradeLabel: string) {
   const [arithRes, thinkRes, sourceConceptsRes] = await Promise.all([
@@ -357,7 +414,7 @@ async function upsertOpenFinding(auth: AuthContext, row: Rec): Promise<void> {
       .limit(1);
     const existing = (data ?? [])[0] as Rec | undefined;
     if (existing?.id) {
-      await auth.admin.from('textbook_review_findings').update({ ...row, status: 'open' }).eq('id', existing.id);
+      await auth.admin.from('textbook_review_findings').update({ ...row, status: row.status ?? 'open' }).eq('id', existing.id);
       return;
     }
   }
@@ -518,6 +575,7 @@ export async function handleTextbookProblemReview(
         label: it.label,
         question_type: it.question_type,
         stem: combineStem(it.common_stem, it.stem).slice(0, 2800),
+        stem_raw: String(it.stem ?? '').slice(0, 2800),
         choices: it.choices,
         objective_choices: it.objective_choices,
         figure_refs: it.figure_refs,
@@ -663,12 +721,33 @@ export async function handleTextbookProblemReview(
 
     const existing = await auth.admin
       .from('textbook_problem_analyses')
-      .select('solution_transcribed,solution_answer,solution_source,render_checks')
+      .select('solution_transcribed,solution_answer,solution_source,render_checks,quality_status,fix_proposal')
       .eq('crop_id', cropId)
       .maybeSingle();
     const prev = (existing.data ?? {}) as Rec;
     // 운영자가 직접 고친 원본 해설은 Vision 결과로 덮지 않는다.
     const keepManual = prev.solution_source === 'manual' && typeof prev.solution_transcribed === 'string';
+    // 엔진 보류 중인 문항은 재검수해도 보류를 유지한다(엔진 목록에서 따로 관리).
+    const keepHeld = prev.quality_status === 'held';
+
+    // 데이터 수정 제안: 원문과 실제로 다를 때만 남긴다. 이미 적용된 제안은 비운다.
+    const issueKind = normalizeIssueKind(b.issue_kind, !qualityOk);
+    const proposedStem = issueKind === 'data' && typeof b.proposed_stem === 'string' && b.proposed_stem.trim() &&
+        b.proposed_stem.trim() !== String(it.stem ?? '').trim()
+      ? b.proposed_stem.trim()
+      : null;
+    const proposedChoices = issueKind === 'data' ? normalizeProposedChoices(b.proposed_choices) : null;
+    const choicesDiffer = proposedChoices !== null && JSON.stringify(proposedChoices) !== JSON.stringify(it.choices ?? []);
+    const fixProposal: Rec = proposedStem || choicesDiffer
+      ? {
+        kind: issueKind,
+        stem: proposedStem,
+        choices: choicesDiffer ? proposedChoices : null,
+        reason: typeof b.fix_reason === 'string' ? b.fix_reason : null,
+        source: 'stage2',
+        created_at: nowIso,
+      }
+      : {};
 
     await auth.admin.from('textbook_problem_analyses').upsert({
       crop_id: cropId,
@@ -698,10 +777,12 @@ export async function handleTextbookProblemReview(
         fidelity_ok: fidelityOk,
         issue_title: b.quality_issue_title ?? null,
         issue_detail: b.quality_issue_detail ?? null,
+        issue_kind: issueKind,
         solution_vision: s
           ? { found: s.found === true, confidence: s.confidence ?? null, note: s.note ?? null }
           : null,
       },
+      fix_proposal: fixProposal,
       // 문항 본문이 다시 풀렸으니 이전 V2 렌더 판정은 비운다(해설·정답 카드가 바뀐다).
       render_checks: {},
       render_checked_at: null,
@@ -714,7 +795,7 @@ export async function handleTextbookProblemReview(
       draft_proposals: drafts,
       analyzed_at: nowIso,
       math_status: answerMatched ? 'clean' : 'issue',
-      quality_status: qualityOk ? 'clean' : 'issue',
+      quality_status: keepHeld ? 'held' : (qualityOk ? 'clean' : 'issue'),
       updated_at: nowIso,
     });
 
@@ -776,7 +857,16 @@ export async function handleTextbookProblemReview(
           figure_ok: figureOk,
           latex_v2_ok: latexOk,
           fidelity_ok: fidelityOk,
+          issue_kind: issueKind,
         },
+        proposal: proposedStem || choicesDiffer
+          ? {
+            target: 'problem',
+            after: { stem: proposedStem, choices: choicesDiffer ? proposedChoices : null },
+            reason: typeof b.fix_reason === 'string' ? b.fix_reason : '원본과 대조한 데이터 수정 제안',
+            keeps: '정답·해설 위치는 그대로 유지합니다.',
+          }
+          : null,
         status: 'open',
         ai_run_id: aiRunId,
       }).catch(() => null);
@@ -964,7 +1054,11 @@ export async function handleTextbookProblemRenderCheck(
     const stage2Ok = qc.stem_ok !== false && qc.choices_ok !== false && qc.figure_ok !== false &&
       qc.latex_v2_ok !== false && qc.fidelity_ok !== false && !qc.issue_title;
     const prevStatus = String(a.quality_status ?? 'pending');
-    const nextStatus = prevStatus === 'approved' ? 'approved' : (renderOk && stage2Ok ? 'clean' : 'issue');
+    // 승인·엔진 보류는 재검수로 바꾸지 않는다. 보류 문항은 엔진 목록에서 재렌더 결과를 보고 운영자가 승인한다.
+    const nextStatus = prevStatus === 'approved' || prevStatus === 'held'
+      ? prevStatus
+      : (renderOk && stage2Ok ? 'clean' : 'issue');
+    const issueKind = normalizeIssueKind(r.issue_kind, !renderOk);
 
     await auth.admin.from('textbook_problem_analyses').update({
       render_checks: {
@@ -973,6 +1067,8 @@ export async function handleTextbookProblemRenderCheck(
         solution_ok: solutionOk,
         issue_title: r.issue_title ?? null,
         issue_detail: r.issue_detail ?? null,
+        issue_kind: issueKind,
+        engine_symptom: issueKind === 'engine' && typeof r.engine_symptom === 'string' ? r.engine_symptom : null,
         solution_kind: x.solutionKind,
         checked_problem: !!x.problemUrl,
         checked_answer_solution: !!x.answerSolutionUrl,
@@ -995,14 +1091,21 @@ export async function handleTextbookProblemRenderCheck(
         check_key: 'ai_v2_render_student_view',
         title: String(r.issue_title ?? 'V2 렌더 카드 읽기 문제'),
         detail: String(r.issue_detail ?? '학생 시점에서 문항·정답·해설 카드 중 읽히지 않는 부분이 있습니다.'),
-        evidence: { problem_ok: problemOk, answer_ok: answerOk, solution_ok: solutionOk, solution_kind: x.solutionKind },
-        status: 'open',
+        evidence: {
+          problem_ok: problemOk,
+          answer_ok: answerOk,
+          solution_ok: solutionOk,
+          solution_kind: x.solutionKind,
+          issue_kind: issueKind,
+          engine_symptom: issueKind === 'engine' ? r.engine_symptom ?? null : null,
+        },
+        status: prevStatus === 'held' ? 'held' : 'open',
         ai_run_id: aiRunId,
       }).catch(() => null);
     } else {
       await resolveOpenFinding(auth, x.cropId, 'ai_v2_render_student_view').catch(() => null);
     }
-    results.push({ crop_id: x.cropId, problem_ok: problemOk, answer_ok: answerOk, solution_ok: solutionOk });
+    results.push({ crop_id: x.cropId, problem_ok: problemOk, answer_ok: answerOk, solution_ok: solutionOk, issue_kind: issueKind });
     processed += 1;
   }
 

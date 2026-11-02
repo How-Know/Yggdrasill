@@ -23,6 +23,7 @@ class TextbookReviewUnitScope {
     required this.qualityCleanCount,
     required this.qualityIssueCount,
     required this.qualityApprovedCount,
+    this.qualityHeldCount = 0,
   });
 
   factory TextbookReviewUnitScope.fromJson(Map<String, dynamic> m) => TextbookReviewUnitScope(
@@ -42,6 +43,7 @@ class TextbookReviewUnitScope {
         qualityCleanCount: (m['quality_clean_count'] as num?)?.toInt() ?? 0,
         qualityIssueCount: (m['quality_issue_count'] as num?)?.toInt() ?? 0,
         qualityApprovedCount: (m['quality_approved_count'] as num?)?.toInt() ?? 0,
+        qualityHeldCount: (m['quality_held_count'] as num?)?.toInt() ?? 0,
       );
 
   final String academyId;
@@ -60,6 +62,12 @@ class TextbookReviewUnitScope {
   final int qualityCleanCount;
   final int qualityIssueCount;
   final int qualityApprovedCount;
+
+  /// 렌더 엔진 문제로 보류된 문항 수. 품질 진행률 분모에서 빼고 따로 관리한다.
+  final int qualityHeldCount;
+
+  /// 품질 검수 분모: 엔진 보류를 뺀 문항 수(승인한 것은 완료로 집계).
+  int get qualityTargetCount => (problemCount - qualityHeldCount).clamp(0, problemCount);
 
   String get key => '$academyId|$bookId|$gradeLabel|$bigOrder|$midOrder';
   String get bookTitle => '$bookName ($gradeLabel)';
@@ -118,6 +126,16 @@ class TextbookProblemReviewItem {
     required this.thinkings,
     required this.arithmetics,
     required this.findings,
+    this.rawChoices = const [],
+    this.pbObjectiveAnswerKey = '',
+    this.pbSubjectiveAnswer = '',
+    this.pbAllowObjective = false,
+    this.pbAllowSubjective = false,
+    this.fixProposal = const {},
+    this.engineHoldNote,
+    this.engineHeldAt,
+    this.engineResolvedAt,
+    this.engineHoldSnapshot = const {},
   });
 
   factory TextbookProblemReviewItem.fromJson(Map<String, dynamic> m) {
@@ -154,7 +172,21 @@ class TextbookProblemReviewItem {
       setType: '${m['set_type'] ?? ''}'.trim(),
       setHeaderNumber: '${m['set_header_number'] ?? ''}'.trim(),
       questionType: '${m['question_type'] ?? ''}',
-      choices: [for (final x in (m['choices'] as List?) ?? const []) '$x'],
+      choices: [
+        for (final x in (m['choices'] as List?) ?? const [])
+          x is Map ? '${x['label'] ?? ''} ${x['text'] ?? ''}'.trim() : '$x',
+      ],
+      rawChoices: mapList(m['choices']),
+      pbObjectiveAnswerKey: '${m['pb_objective_answer_key'] ?? ''}'.trim(),
+      pbSubjectiveAnswer: '${m['pb_subjective_answer'] ?? ''}'.trim(),
+      pbAllowObjective: m['pb_allow_objective'] == true,
+      pbAllowSubjective: m['pb_allow_subjective'] == true,
+      fixProposal: m['fix_proposal'] is Map ? Map<String, dynamic>.from(m['fix_proposal'] as Map) : const <String, dynamic>{},
+      engineHoldNote: m['engine_hold_note'] is String ? '${m['engine_hold_note']}' : null,
+      engineHeldAt: m['engine_held_at'] is String ? DateTime.tryParse('${m['engine_held_at']}') : null,
+      engineResolvedAt: m['engine_resolved_at'] is String ? DateTime.tryParse('${m['engine_resolved_at']}') : null,
+      engineHoldSnapshot:
+          m['engine_hold_snapshot'] is Map ? Map<String, dynamic>.from(m['engine_hold_snapshot'] as Map) : const <String, dynamic>{},
       solutionTranscribed: m['solution_transcribed'] is String ? '${m['solution_transcribed']}' : null,
       solutionAnswer: m['solution_answer'] is String ? '${m['solution_answer']}' : null,
       solutionSource: m['solution_source'] is String ? '${m['solution_source']}' : null,
@@ -247,7 +279,67 @@ class TextbookProblemReviewItem {
   final List<Map<String, dynamic>> arithmetics;
   final List<Map<String, dynamic>> findings;
 
+  /// 문제은행 선지 원형 [{label, text}]. 수정 적용 때 그대로 보낸다.
+  final List<Map<String, dynamic>> rawChoices;
+
+  /// 문제은행 사본의 정답(적재 확인이 채점 정답과 대조하는 값)
+  final String pbObjectiveAnswerKey;
+  final String pbSubjectiveAnswer;
+  final bool pbAllowObjective;
+  final bool pbAllowSubjective;
+
+  /// AI 데이터 수정 제안 {kind, stem, choices, reason, source, created_at, applied_at?, applied_fields?}
+  final Map<String, dynamic> fixProposal;
+
+  /// 렌더 엔진 보류(quality_status == 'held') 정보
+  final String? engineHoldNote;
+  final DateTime? engineHeldAt;
+  final DateTime? engineResolvedAt;
+  final Map<String, dynamic> engineHoldSnapshot;
+
   String get previewLookupKey => questionUid.isNotEmpty ? questionUid : pbQuestionId;
+
+  bool get isEngineHeld => qualityStatus == 'held';
+
+  /// 2단계(문항 카드)·4단계(정답·해설 카드) 판정에서 AI 가 분류한 원인. engine > figure > data 순으로 강한 쪽을 쓴다.
+  String get issueKind {
+    final a = '${qualityChecks['issue_kind'] ?? ''}';
+    final b = '${renderChecks['issue_kind'] ?? ''}';
+    if (a == 'engine' || b == 'engine') return 'engine';
+    if (a == 'figure' || b == 'figure') return 'figure';
+    if (a == 'data' || b == 'data') return 'data';
+    return 'none';
+  }
+
+  bool get aiSuspectsEngine => qualityStatus == 'issue' && issueKind == 'engine';
+  String get engineSymptom => '${renderChecks['engine_symptom'] ?? ''}'.trim();
+
+  /// 아직 적용하지 않은 데이터 수정 제안이 있는가
+  bool get hasPendingFixProposal {
+    if (fixProposal['applied_at'] != null) return false;
+    final s = fixProposal['stem'];
+    final c = fixProposal['choices'];
+    return (s is String && s.trim().isNotEmpty) || (c is List && c.isNotEmpty);
+  }
+
+  String? get proposedStem => fixProposal['stem'] is String && '${fixProposal['stem']}'.trim().isNotEmpty ? '${fixProposal['stem']}' : null;
+  List<Map<String, dynamic>>? get proposedChoices => fixProposal['choices'] is List
+      ? [for (final x in fixProposal['choices'] as List) if (x is Map) Map<String, dynamic>.from(x)]
+      : null;
+
+  /// 문제은행 사본 정답이 채점 정답과 다른가(표기 공백·$ 제거 후 단순 비교)
+  bool get pbAnswerDiffers {
+    String norm(String s) => s.replaceAll(RegExp(r'[\s$]'), '').toLowerCase();
+    final mine = norm(existingAnswer);
+    if (mine.isEmpty) return false;
+    final pb = pbAllowObjective && pbObjectiveAnswerKey.isNotEmpty ? pbObjectiveAnswerKey : pbSubjectiveAnswer;
+    if (pb.trim().isEmpty) return false;
+    return norm(pb) != mine;
+  }
+
+  /// V2 렌더 카드 중 하나라도 이상으로 판정됐는가
+  bool get renderHasIssue =>
+      renderChecks['problem_ok'] == false || renderChecks['answer_ok'] == false || renderChecks['solution_ok'] == false;
 
   String get displayStem {
     if (commonStem.isEmpty || stem.contains(commonStem)) return stem;
@@ -307,6 +399,55 @@ class TextbookReviewChunkImage {
       };
 
   bool get isEmpty => (solutionImageBase64 ?? '').isEmpty && (v2ProblemUrl ?? '').isEmpty;
+}
+
+/// 엔진 보류 문항이 있는 단원 한 줄(textbook_review_engine_hold_list)
+class TextbookReviewEngineHoldUnit {
+  const TextbookReviewEngineHoldUnit({
+    required this.scope,
+    required this.heldCropIds,
+    required this.resolvedCropIds,
+  });
+
+  factory TextbookReviewEngineHoldUnit.fromJson(Map<String, dynamic> m) => TextbookReviewEngineHoldUnit(
+        scope: TextbookReviewUnitScope(
+          academyId: '${m['academy_id'] ?? ''}',
+          bookId: '${m['book_id'] ?? ''}',
+          bookName: '${m['book_name'] ?? ''}',
+          gradeLabel: '${m['grade_label'] ?? ''}',
+          bigOrder: (m['big_order'] as num?)?.toInt() ?? 1,
+          midOrder: (m['mid_order'] as num?)?.toInt() ?? 1,
+          bigName: '${m['big_name'] ?? ''}',
+          midName: '${m['mid_name'] ?? ''}',
+          problemCount: 0,
+          analyzedCount: 0,
+          mathCleanCount: 0,
+          mathIssueCount: 0,
+          mathApprovedCount: 0,
+          qualityCleanCount: 0,
+          qualityIssueCount: 0,
+          qualityApprovedCount: 0,
+          qualityHeldCount: (m['held_count'] as num?)?.toInt() ?? 0,
+        ),
+        heldCropIds: [for (final x in (m['held_crop_ids'] as List?) ?? const []) '$x'],
+        resolvedCropIds: [for (final x in (m['resolved_crop_ids'] as List?) ?? const []) '$x'],
+      );
+
+  final TextbookReviewUnitScope scope;
+  final List<String> heldCropIds;
+  final List<String> resolvedCropIds;
+}
+
+class TextbookReviewEngineHoldEntry {
+  const TextbookReviewEngineHoldEntry({required this.unit, required this.item, required this.resolved});
+
+  final TextbookReviewEngineHoldUnit unit;
+  final TextbookProblemReviewItem item;
+
+  /// 보류했다가 승인(해결)된 문항
+  final bool resolved;
+
+  TextbookReviewUnitScope get scope => unit.scope;
 }
 
 class TextbookProblemReviewService {
@@ -507,6 +648,26 @@ class TextbookProblemReviewService {
     );
   }
 
+  /// 수정 제안(또는 운영자가 고친 본문·선지)을 적용하기 전에 V2 로 미리 찍어 본다.
+  /// 세트 공통 지시문은 같이 붙여 학생이 볼 모양에 가깝게 한다.
+  Future<String> renderProposedProblemCard({
+    required String academyId,
+    required TextbookProblemReviewItem item,
+    required String stem,
+    List<Map<String, dynamic>>? choices,
+  }) async {
+    final body = stem.trim();
+    if (body.isEmpty) return '';
+    final full = item.commonStem.isNotEmpty && !body.contains(item.commonStem) ? '${item.commonStem}[문단]$body' : body;
+    return _pb.renderCustomStemThumbnail(
+      academyId: academyId,
+      id: 'review-${item.cropId}-fix',
+      stem: full,
+      questionNumber: item.problemNumber,
+      choices: choices ?? item.rawChoices,
+    );
+  }
+
   /// 학생 시점 V2 렌더 검수. 문항 카드 URL과 정답+해설 카드 URL을 ai_think 에 보내 판정받는다.
   Future<Map<String, dynamic>> runRenderCheck({
     required String academyId,
@@ -532,7 +693,9 @@ class TextbookProblemReviewService {
     return (res is Map ? (res['approved'] as num?)?.toInt() : null) ?? 0;
   }
 
-  Future<void> saveItemEdit({
+  /// 정답·풀이·해설 저장(+승인). 정답을 넘기면 문제은행 사본의 주관식·객관식 정답도 함께 맞춘다.
+  /// 반환: pb_answer_sync {synced, pb_question_id, changed:[...]} (정답을 안 넘겼으면 null)
+  Future<Map<String, dynamic>?> saveItemEdit({
     required String cropId,
     String? newAnswer,
     String? aiSolution,
@@ -542,8 +705,9 @@ class TextbookProblemReviewService {
     String? solutionTranscribed,
     String? solutionAnswer,
     List<Map<String, dynamic>>? alternativeSolutions,
+    bool syncPbAnswer = true,
   }) async {
-    await _db.rpc('textbook_review_save_item_edit', params: {
+    final res = await _db.rpc('textbook_review_save_item_edit', params: {
       'p_crop_id': cropId,
       'p_new_answer': newAnswer,
       'p_ai_solution': aiSolution,
@@ -553,7 +717,68 @@ class TextbookProblemReviewService {
       'p_solution_transcribed': solutionTranscribed,
       'p_solution_answer': solutionAnswer,
       'p_alternative_solutions': alternativeSolutions,
+      'p_sync_pb_answer': syncPbAnswer,
     });
+    final sync = res is Map ? res['pb_answer_sync'] : null;
+    return sync is Map ? Map<String, dynamic>.from(sync) : null;
+  }
+
+  /// 본문·선지 수정을 문제은행 문항에 적용한다(+품질 승인). 반환: {changed:[stem|choices], pb_question_id, approved}
+  Future<Map<String, dynamic>> applyProblemFix({
+    required String cropId,
+    String? stem,
+    List<Map<String, dynamic>>? choices,
+    bool approveQuality = false,
+    String? note,
+  }) async {
+    final res = await _db.rpc('textbook_review_apply_problem_fix', params: {
+      'p_crop_id': cropId,
+      'p_stem': stem,
+      'p_choices': choices,
+      'p_approve_quality': approveQuality,
+      'p_note': note,
+    });
+    return res is Map ? Map<String, dynamic>.from(res) : const {};
+  }
+
+  /// 렌더 엔진 문제로 보류(hold=true) / 보류 해제(hold=false, 다시 '오류' 상태로)
+  Future<int> setEngineHold(List<String> cropIds, {required bool hold, String? note}) async {
+    if (cropIds.isEmpty) return 0;
+    final res = await _db.rpc('textbook_review_set_engine_hold', params: {
+      'p_crop_ids': cropIds,
+      'p_hold': hold,
+      'p_note': note,
+    });
+    return (res is Map ? (res['updated'] as num?)?.toInt() : null) ?? 0;
+  }
+
+  /// 엔진 보류 문항이 있는 단원 목록(보류 중 + 최근 30일 내 해결). 문항 상세는 fetchUnitItems 로 단원별로 읽는다.
+  Future<List<TextbookReviewEngineHoldUnit>> fetchEngineHoldUnits() async {
+    final res = await _db.rpc('textbook_review_engine_hold_list');
+    final map = res is Map ? Map<String, dynamic>.from(res) : const <String, dynamic>{};
+    return [
+      for (final r in (map['units'] as List?) ?? const [])
+        if (r is Map) TextbookReviewEngineHoldUnit.fromJson(Map<String, dynamic>.from(r)),
+    ];
+  }
+
+  /// 엔진 보류 목록의 문항 상세. 단원별 overview 를 읽어 보류·해결 crop 만 고른다.
+  Future<List<TextbookReviewEngineHoldEntry>> fetchEngineHoldEntries() async {
+    final units = await fetchEngineHoldUnits();
+    final out = <TextbookReviewEngineHoldEntry>[];
+    for (final u in units) {
+      final items = await fetchUnitItems(u.scope);
+      final byId = {for (final it in items) it.cropId: it};
+      for (final id in u.heldCropIds) {
+        final it = byId[id];
+        if (it != null) out.add(TextbookReviewEngineHoldEntry(unit: u, item: it, resolved: false));
+      }
+      for (final id in u.resolvedCropIds) {
+        final it = byId[id];
+        if (it != null) out.add(TextbookReviewEngineHoldEntry(unit: u, item: it, resolved: true));
+      }
+    }
+    return out;
   }
 
   Future<int> acceptDraftProposal({

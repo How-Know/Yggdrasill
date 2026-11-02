@@ -3932,9 +3932,11 @@ class ProblemBankService {
     required String id,
     required String stem,
     String questionNumber = '',
+    List<Map<String, dynamic>> choices = const [],
   }) async {
     final safeStem = stem.trim();
     if (!hasGateway || academyId.trim().isEmpty || safeStem.isEmpty) return '';
+    final objective = choices.isNotEmpty;
     final result = await _gatewayPost(
       '/pb/preview/custom-thumbnail',
       body: <String, dynamic>{
@@ -3943,11 +3945,11 @@ class ProblemBankService {
           'id': id,
           'question_uid': id,
           'question_number': questionNumber,
-          'question_type': '주관식',
+          'question_type': objective ? '객관식' : '주관식',
           'stem': safeStem,
-          'choices': const <dynamic>[],
-          'allow_objective': false,
-          'allow_subjective': true,
+          'choices': choices,
+          'allow_objective': objective,
+          'allow_subjective': !objective,
           'meta': const <String, dynamic>{},
         },
       },
