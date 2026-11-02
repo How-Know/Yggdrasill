@@ -195,9 +195,11 @@ Migrations `20261101030000_textbook_problem_review_pipeline.sql`,
 `20261102010000_textbook_review_set_common_stem.sql`,
 `20261102030000_textbook_review_solution_vision_and_v2_render_check.sql`,
 `20261102160000_textbook_review_unit_overview_arg_limit.sql`,
-`20261102180000_textbook_review_one_touch_fix_and_engine_hold.sql`.
+`20261102180000_textbook_review_one_touch_fix_and_engine_hold.sql`,
+`20261103120000_textbook_review_original_and_figures.sql`.
 Edge code: `supabase/functions/ai_think/textbook_problem_review.ts`
-(prompt version `TEXTBOOK_REVIEW_PROMPT_VERSION`). Manager code:
+(prompt version `TEXTBOOK_REVIEW_PROMPT_VERSION`) and
+`supabase/functions/ai_think/textbook_problem_fix.ts`. Manager code:
 `services/textbook_problem_review_service.dart`,
 `services/textbook_review_solution_image_service.dart`,
 `screens/problem_roadmap/problem_roadmap_screen.dart`.
@@ -223,9 +225,14 @@ Edge code: `supabase/functions/ai_think/textbook_problem_review.ts`
   in the problem bank are wrong; fixable from the screen), `engine` (the V2
   renderer or markup conversion is wrong; needs a gateway code change),
   `figure` (missing or wrong figure), or `none`.
-- `fix_proposal`: for `data` issues, the AI's minimal corrected stem and/or
-  choices (`{kind, stem, choices, reason, source, created_at}`). Once applied,
-  `applied_at`, `applied_fields`, `applied_note` are appended.
+- `fix_proposal`: the corrected stem, choices and common stem
+  (`{kind, stem, common_stem, choices, reason, reason_code, source,
+  created_at}`). `source` is `system` (common-stem rule), `stage2`, or
+  `fix_pass` (the original-comparison pass below, which adds
+  `text_matches_original`, `engine_issue`, `figure_layout`, `figure_crops`,
+  `figure_measure`, `fix_pass_at`). Once applied, `applied_at`,
+  `applied_fields`, `applied_note` are appended. A stage-2 re-solve replaces
+  the whole object.
 - Engine hold: `engine_hold_note`, `engine_held_at`, `engine_held_by`,
   `engine_resolved_at`, `engine_hold_snapshot` (the quality and render checks
   at the time of the hold, for before/after comparison).
@@ -234,7 +241,10 @@ Edge code: `supabase/functions/ai_think/textbook_problem_review.ts`
 Reads go through `textbook_review_unit_overview(academy, book, grade, big, mid)`
 (one row per problem with crop, problem-bank, answer, solution-ref and analysis
 fields, including the problem-bank answers `pb_objective_answer_key`,
-`pb_subjective_answer`). The function builds its row with several
+`pb_subjective_answer`, the original coordinates `item_region_1k` (falls back
+to `bbox_1k`), the set header's `set_header_raw_page` /
+`set_header_region_1k`, and the problem-bank figures `pb_figure_assets` /
+`pb_figure_layout`). The function builds its row with several
 `jsonb_build_object` calls joined by `||`; Postgres allows at most 100
 arguments per call, so keep each call at 50 pairs or fewer.
 
@@ -256,14 +266,21 @@ transcribed text sets `solution_source = 'manual'`; saving the same text keeps
   problem-bank answers in one touch. `pb_questions_emit_revision` logs the
   change as usual.
 - Quality axis. `textbook_review_apply_problem_fix(crop, stem, choices,
-  approve_quality, note)` writes the stem and choices to `pb_questions` (only
-  the fields that changed), records the application in `fix_proposal`, and
+  approve_quality, note, common_stem, figure_layout, figure_assets)` writes the
+  stem, choices, common stem (whole set), `meta.figure_layout` and
+  `meta.figure_assets` to `pb_questions` (only the fields that changed; new
+  figure assets also set `figure_count`, `figure_refs`, and clear
+  `figure_review_required`), records the application in `fix_proposal`, and
   when `approve_quality` is set approves the axis and resolves the open
-  `fidelity`/`output` findings as `applied`. Without approval it clears
-  `render_checks` so the screen re-runs the stage-4 check on the new render.
-  The screen prefills the editor with the AI proposal (or the current values),
-  lets the owner edit, previews the result as a V2 card ("①′ 수정안
-  미리보기"), and offers "적용 후 재검수" and "적용 + 품질 승인".
+  `fidelity`/`output` findings. Without approval it clears `render_checks` so
+  the stage-4 check runs again on the new render.
+  The screen prefills the editor with the proposal (text, common-stem rule,
+  figure layout), lets the owner edit, and has **one** approval button:
+  "품질 검수 승인" saves whatever the editor changed (cropping and uploading
+  proposed figures first) and approves. "수정만 적용" applies without
+  approval and re-runs the original-compared render check. "①′ 미리보기"
+  shows the edited text as a V2 card; figure placement is checked on the real
+  card after applying, because the text preview has no figures.
 
 ### Render-engine hold list
 
@@ -305,11 +322,22 @@ the images for each chunk and the Edge Function only sees URLs and base64:
    solution (or body) PDF once per book and grade, renders the
    `content_region_1k` with pdfrx (padded, about 1100 px wide), and sends it
    as a base64 PNG.
-3. It posts `crop_ids` plus `images` (per crop: `solution_image_base64`,
-   `solution_image_mime`, `v2_problem_url`) to `ai_think` action
+3. For every problem it also renders the **original problem** from the body
+   PDF (`raw_page` + `item_region_1k`, same padding) and, for set problems,
+   the set header region. Crop PNGs (`storage_key`) do not exist, so nothing
+   is signed from storage; the original is always rendered from the PDF.
+   Renders are cached per page region for the session.
+4. It posts `crop_ids` plus `images` (per crop: `solution_image_base64`,
+   `v2_problem_url`, `original_image_base64` with `original_width_px`,
+   `original_height_px`, `original_region_1k`, `original_raw_page`, and
+   `set_header_image_base64`) to `ai_think` action
    `textbook_problem_review`, six problems per call. Only https URLs and
    png/jpeg/webp base64 under 4M characters are accepted.
-4. After the unit is done it runs the render check pass (below).
+5. After the unit is done it runs the render check pass, then the fix pass
+   (both below).
+
+Sending textbook page images to the external AI is approved by the owner
+(same basis as the solution crops).
 
 `isReviewTodo` is the same on both sides: `pending` or no AI solution is todo;
 `approved` is not; otherwise a problem is todo only if it has a solution ref,
@@ -324,10 +352,11 @@ screen also keeps a per-run sent set so one run never sends a crop twice.
   final answer, confidence, and `found = false` when the crop does not contain
   this problem's solution. It does not solve the problem.
 - Stage 2 runs in parallel with stage 1. The model sees the V2 render of the
-  problem (detail high) and, when a crop exists, the original textbook crop
-  (detail auto). It solves independently and judges quality **from the V2
-  image, as a student would see it**, not from the stem text. The original
-  crop is only for fidelity (`fidelity_ok`: does the render match the print).
+  problem (detail high), the original problem rendered from the body PDF
+  (detail high) and, for set problems, the set header. It solves
+  independently and judges quality **from the V2 image, as a student would
+  see it**, not from the stem text. The original is for fidelity
+  (`fidelity_ok`: does the render match the print).
   Set problems get the common stem combined with the item
   (`[공통 지시문] ... [문항] ...`). When it finds an issue it classifies it
   (`issue_kind`) and, for `data` issues, proposes the corrected stem or
@@ -349,8 +378,8 @@ screen also keeps a per-run sent set so one run never sends a crop twice.
   a common-stem change is written to every `pb_questions` row of the same
   set (same `document_id` and set key) because the renderer takes the group's
   common stem from its first item. The screen recognises both shapes on
-  already-reviewed rows, prefills the editor (common stem field + item stem),
-  and offers "공통 발문 중복 제거 + 품질 승인" per problem.
+  already-reviewed rows and prefills the editor (common stem field + item
+  stem), so the single approval button applies it.
 
 ### Bulk actions
 
@@ -361,16 +390,26 @@ person:
 - "품질 일괄 처리", in order:
   1. every common-stem fix in the unit (looping a few times, because fixing
      one set's common stem exposes the head duplication on its other items);
-     fixed problems whose other checks are fine are approved at once;
+     fixed problems whose other checks are fine and that have no figures are
+     approved at once (figure problems still need the original comparison);
   2. question type fixes (below);
-  3. every pending AI data proposal (`fix_proposal` stem / choices / common
-     stem) is applied to `pb_questions` without approval;
-  4. the stage-4 V2 render check runs again for the problems changed in 1
-     and 3. A fix applied after the stage-2 solve supersedes the stale stage-2
-     flags, so the problem becomes `clean` when the new render is fine;
-  5. every `clean` problem is approved.
-  What remains are render or engine problems and issues the AI could not
-  propose a fix for. The notice reports the count left.
+  3. up to two rounds of:
+     a. the fix pass (below) for every problem that needs it;
+     b. every pending proposal (text, figure layout, figure crops) is applied
+        to `pb_questions` without approval; proposed figure crops are cut
+        from the body PDF and uploaded first;
+     c. the stage-4 render check, **compared with the original**, for the
+        changed problems and every unapproved problem not yet compared with
+        the original (approval must rest on that comparison);
+     d. problems whose V2 figure size is off (`figure_size_ratio` outside
+        0.8 to 1.25) get every `widthEm` multiplied by `1 / ratio` and are
+        checked again.
+     The second round runs only if some problem still needs a fix pass (it
+     became `issue` in the comparison, or stayed `issue` after its proposal).
+  4. every `clean` problem is approved.
+  What remains are engine problems and issues the AI could not fix. The
+  notice reports what was proposed, applied, re-checked and resized, and the
+  count left. The pause button stops after the current chunk.
 - "수학 일괄 처리": adopts the printed solution's answer (with the
   problem-bank sync) where the printed answer and the AI answer agree but the
   grading answer differs; keeps and approves the grading answer where it
@@ -412,16 +451,68 @@ so the owner can edit any problem by hand.
 The manager app renders two V2 cards per problem through
 `/pb/preview/custom-thumbnail`: the problem card and an answer + solution card
 (`정답 X` then the printed solution, or the AI solution when there is none).
-It posts up to eight `{crop_id, problem_url, answer_solution_url,
-solution_kind}` items. The model reads both images as a student and reports
-`problem_ok`, `answer_ok`, `solution_ok` with an issue title and detail.
+It posts `{crop_id, problem_url, answer_solution_url, solution_kind}` plus the
+original images (same fields as stage 2), four problems per call (the Edge
+Function accepts up to eight). The model reads the cards as a student and
+reports `problem_ok`, `answer_ok`, `solution_ok`, and, when the original is
+attached, compares the problem card with it: `fidelity_ok` (same text,
+choices and figures), `figure_position_ok`, and `figure_size_ratio` (V2
+figure size relative to the text, divided by the same in the original; null
+without figures).
 
-Writes: `render_checks`, `render_checked_at`, finding `check_key`
-`ai_v2_render_student_view`, and `quality_status`: `approved` and `held` stay
-as they are; otherwise `clean` only when the render is fine and the stage-2
-checks were fine, else `issue`. A finding opened for a held problem is created
-as `held`, and re-runs keep a finding's current status. Every call records an `ai_runs` row with feature
+Writes: `render_checks` (with `original_compared`, `flagged_after_approval`),
+`render_checked_at`, finding `check_key` `ai_v2_render_student_view` (axis
+`fidelity` when the original differs, else `output`), and `quality_status`:
+`approved` and `held` stay as they are; otherwise `clean` only when every
+check passes (size ratio within 0.8 to 1.25), else `issue`. When the original
+was compared, that result supersedes the stage-2 flags (the stage-2 finding is
+resolved on a pass), because stage 2 may have judged an older render. An
+approved problem that differs from the original keeps its approval and gets
+`flagged_after_approval` with a title prefixed `[승인 후 원본 대조]`. A finding
+opened for a held problem is created as `held`, and re-runs keep a finding's
+current status. Every call records an `ai_runs` row with feature
 `textbook_problem_review` or `textbook_problem_render_check`.
+
+### Fix pass (`textbook_problem_fix`)
+
+Runs after the render check (end of a unit run, and inside the bulk action)
+for problems the manager selects with `needsFixPass`: an original image
+exists, and the problem is `issue`, or `clean` with figures; it has not run
+since the last solve (`fix_pass_at` absent), or the problem is still `issue`
+after its proposal was applied. The Edge Function skips any requested problem
+without an original image. Three problems per call (at most four); per problem
+the app sends the original (detail high), the set header (auto) and the V2
+card (high) with the stored stem, choices, common stem, figure count and the
+open issue titles.
+
+The model compares the original with the stored markup and returns the full
+corrected stem, choices and common stem (or `text_matches_original`), an
+`engine_issue` note when the markup is right but the render is wrong, and for
+figures: each figure's box in the original (`bbox_1k`), its placement
+(`right_of_text`, `left_of_text`, `below_text`, `inline`, with `align`), its
+state on the V2 card (`ok`, `missing`, `cut`, `size`, `position`, `unknown`),
+and a sample text block (`bbox_1k` + line count). Code, not the model, turns
+that into a layout:
+
+- text em in pixels = sample height / ((lines − 1) × 1.7 + 1), the V2 line
+  pitch;
+- `widthEm` = figure width in pixels / em, clamped to 4 to 40 in 0.5 steps;
+- `right_of_text` → `inline-right` / anchor right, `left_of_text` →
+  `inline-left` / left, otherwise `below-stem` with the given alignment;
+- figure *i* in the original maps to the *i*-th asset (approved first, then
+  newest, by `figure_index`; key `idx:N`). A figure without an asset gets a
+  new index and a `figure_crops` entry (`missing`); a `cut` figure gets a
+  crop for its own index. Missing `[그림]` markers are appended to the stem.
+
+The result is stored as `fix_proposal` (`source: fix_pass`). When a
+common-stem rule proposal is still pending, its text is kept and only the
+figure fields are added. Applying a figure crop converts
+the box from original-image coordinates to page coordinates
+(`cropBoxToPageRegion`), renders that region from the body PDF at about
+900 px, uploads it to `problem-previews` as an approved manual asset
+(`source: textbook_review_original_crop`), and passes the full asset list to
+`textbook_review_apply_problem_fix`; the renderer picks the newest approved
+asset per index, so the crop replaces a cut figure.
 
 ## Manager screen (문항검수)
 
@@ -429,15 +520,19 @@ as `held`, and re-runs keep a finding's current status. Every call records an `a
 Three columns:
 
 - Left: the unit's problem list with math and quality status, the issue kind
-  badge (데이터/엔진/도형), and a "문제은행 정답 다름" badge when the
-  problem-bank answers differ from the grading answer. Filter tabs include
-  "엔진 보류".
+  badge (데이터/엔진/도형, or "승인 후 원본 차이"), and a "문제은행 정답 다름"
+  badge when the problem-bank answers differ from the grading answer. Filter
+  tabs include "엔진 보류" and "승인 후 원본 차이".
 - Centre: the math review card (answers side by side, compare result,
   problem-bank answers), the solution edit card (transcribed solution, its
   answer, AI solution; "해설 저장"), and the quality review card (stage-2
-  flags, render-check state, findings, the stem/choices fix editor, and the
-  hold banner for held problems).
-- Right, a vertical stack rendered **only with V2**: ① the problem card,
+  flags, original-comparison state, findings, the stem/choices/figure editor,
+  the single "품질 검수 승인" button, and the hold banner for held problems).
+  The figure editor lists each `figure_layout` item (width in em, position,
+  anchor) and the figures the proposal will crop from the original;
+  "교재 원본 대조 수정안 만들기" runs the fix pass for that problem alone.
+- Right, a vertical stack: ⓪ the original problem (and set header) rendered
+  from the body PDF, then, rendered **only with V2**, ① the problem card,
   ①′ the preview of the edited stem/choices when the editor differs from the
   stored values, ② answer + printed solution (or AI solution), ③ the AI
   solution when a printed one exists, then one card per alternative solution
@@ -445,7 +540,9 @@ Three columns:
   rebuilt when the text changes. The client LaTeX renderer is not used here,
   because the point of the stack is to see exactly what students will see.
 - Header: "전체 강제 재검수" (ignores `isReviewTodo`), "V2 렌더 검수만 전체
-  다시" (stage 4 only), "AI 엔진 의심 일괄 보류" (holds every problem whose
+  다시(원본 대조)" (stage 4 only), "승인 문항 원본 재대조" (stage 4 for
+  approved problems not yet compared with the original; approval is kept and
+  differences are flagged), "AI 엔진 의심 일괄 보류" (holds every problem whose
   latest issue is classified `engine`), and "렌더 엔진 목록" (the cross-book
   hold dialog). "해설 답 채택 후 승인" and "AI 답 채택 후 승인" copy the
   answer into the grading answer, sync the problem-bank answers, and approve.
@@ -460,48 +557,17 @@ superseded by this screen.
   `test/textbook_review.test.mjs` (`node --test`).
 - `gateway`: `test/textbook_manual_guard.test.js`
   (`node --test "test/**/*.test.js"`).
-- `apps/yggdrasill_manager`: `test/textbook_review_preview_test.dart`.
+- `apps/yggdrasill_manager`: `test/textbook_review_preview_test.dart`,
+  `test/textbook_review_common_stem_test.dart`,
+  `test/textbook_review_original_figure_test.dart` (figure helpers,
+  `needsFixPass`, figure proposals, original-comparison flags, chunk image
+  payload).
 - `supabase/functions/ai_think`: `textbook_problem_review_test.ts` (image
-  parsing, common-stem combining, `isReviewTodo`, `issue_kind` and proposed
-  choice normalizing). AI tests use `FakeAiProvider` and do not assert model
-  wording.
-
-## Planned next (owner decisions, 2026-11-03)
-
-Why some quality issues are not fixed automatically today: stage 2 never sees
-the original problem. It signs `storage_key` for an "original crop", but crop
-PNGs do not exist, so the model can tell that text is missing on the V2 render
-but cannot restore it, and `fix_proposal` stays empty.
-
-Decided flow:
-
-1. **Original problem image for every problem.** The manager app renders the
-   problem's region from the body PDF (pdfrx, like the solution crop) and
-   sends it as base64 with each stage-2 chunk. The Edge Function stops signing
-   `storage_key`.
-2. **Fix pass only for flagged problems.** Every problem is solved as now.
-   Problems judged as having a quality issue get a second pass that compares
-   the original image with the stored markup and writes the full corrected
-   stem, choices, and common stem as `fix_proposal`.
-3. **One approval button.** The editor is prefilled with the proposal; the
-   owner edits if needed. "품질 검수 승인" saves the editor to `pb_questions`
-   and approves in one touch.
-4. **Bulk approves automatically.** "품질 일괄 처리" applies proposals, re-runs
-   the V2 render check against the original image, and approves the problems
-   that pass.
-5. **Already approved problems are re-checked against the original.**
-   Approval is kept; problems that differ from the original are flagged for
-   the owner.
-6. **Figures.** For problems with figures, the model reads the figure box and
-   the body text height from the original image; code computes
-   `figure_layout` (`widthEm` from the ratio, `position` / `anchor` /
-   offsets from the placement), applies it, and checks the new V2 render
-   against the original. Problems whose figure file is missing or cut get the
-   figure region cropped from the original PDF and registered as the figure
-   asset, then sized and placed the same way.
-
-Sending textbook page images to the external AI is approved by the owner
-(same basis as the solution crops).
+  parsing including originals, common-stem combining, `isReviewTodo`,
+  `issue_kind`, proposed choice normalizing, figure size ratio) and
+  `textbook_problem_fix_test.ts` (box normalizing, em from the text sample,
+  layout items, asset mapping and crops, figure markers). AI tests use
+  `FakeAiProvider` and do not assert model wording.
 
 ## Open questions
 

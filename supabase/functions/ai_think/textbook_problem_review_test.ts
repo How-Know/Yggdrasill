@@ -2,6 +2,8 @@ import { assert, assertEquals } from 'jsr:@std/assert@1';
 import {
   combineStem,
   commonStemFix,
+  figureMarkerCount,
+  figureSizeRatioOk,
   isReviewTodo,
   normalizeIssueKind,
   normalizeProposedChoices,
@@ -24,6 +26,36 @@ Deno.test('해설 크롭 base64 와 V2 서명 URL 만 받는다 (잘못된 키·
   const b = m.get('1f6a2c1e-7b3d-4e8f-9a1b-2c3d4e5f6a7b')!;
   assertEquals(b.solutionImageDataUrl, null);
   assertEquals(b.v2ProblemUrl, null);
+  assertEquals(b.originalImageDataUrl, null);
+});
+
+Deno.test('교재 원본 이미지는 앱이 보낸 base64 와 픽셀 크기·쪽 좌표를 함께 받는다', () => {
+  const m = parseReviewImages({
+    [CROP]: {
+      original_image_base64: 'iVBORw0KGgo=',
+      original_width_px: 1100,
+      original_height_px: 420,
+      original_region_1k: [100, 40, 300, 520],
+      original_raw_page: 12,
+      set_header_image_base64: 'iVBORw0KGgo=',
+    },
+  });
+  const a = m.get(CROP)!;
+  assert(a.originalImageDataUrl!.startsWith('data:image/png;base64,'));
+  assertEquals(a.originalSize, { width: 1100, height: 420 });
+  assertEquals(a.originalRegion1k, [100, 40, 300, 520]);
+  assertEquals(a.originalRawPage, 12);
+  assert(a.setHeaderImageDataUrl!.startsWith('data:image/png;base64,'));
+  assertEquals(a.solutionImageDataUrl, null);
+});
+
+Deno.test('그림 마커 수와 그림 크기 비율 허용 범위', () => {
+  assertEquals(figureMarkerCount('다음 그림에서[그림] x 는? [[PB_FIG_3]] [도형]'), 3);
+  assertEquals(figureMarkerCount('그림 없음'), 0);
+  assert(figureSizeRatioOk(null));
+  assert(figureSizeRatioOk(1.1));
+  assert(!figureSizeRatioOk(1.4));
+  assert(!figureSizeRatioOk(0.6));
 });
 
 Deno.test('세트 문항은 공통 지시문과 개별 문항을 합쳐 읽는다', () => {

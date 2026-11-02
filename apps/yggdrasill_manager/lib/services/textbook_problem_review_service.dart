@@ -94,6 +94,84 @@ CommonStemFix? computeCommonStemFix(String commonStem, String stem) {
   return CommonStemFix(stem: rest, commonStem: instr);
 }
 
+final _figureMarkerRe = RegExp(r'\[\[PB_FIG_[^\]]+\]\]|\[(?:그림|도형|도표)\]');
+
+/// 본문 안 그림 마커 수. 렌더러는 마커 순서대로 그림 자산을 놓는다(Edge `figureMarkerCount` 와 같다).
+int figureMarkerCount(String stem) => _figureMarkerRe.allMatches(stem).length;
+
+/// 렌더러(hydrateFiguresForXeLatex)와 같은 규칙으로 고른 그림 자산: figure_index 별 승인 우선·최신 우선 하나, figure_index 순.
+List<Map<String, dynamic>> orderedFigureAssets(List<Map<String, dynamic>> assets) {
+  final byIdx = <int, Map<String, dynamic>>{};
+  for (final a in assets) {
+    final idx = int.tryParse('${a['figure_index'] ?? ''}');
+    if (idx == null || idx <= 0) continue;
+    final prev = byIdx[idx];
+    if (prev == null) {
+      byIdx[idx] = a;
+      continue;
+    }
+    final pa = prev['approved'] == true ? 1 : 0;
+    final ca = a['approved'] == true ? 1 : 0;
+    if (ca > pa || (ca == pa && '${a['created_at'] ?? ''}'.compareTo('${prev['created_at'] ?? ''}') > 0)) byIdx[idx] = a;
+  }
+  final keys = byIdx.keys.toList()..sort();
+  return [for (final k in keys) byIdx[k]!];
+}
+
+/// 원본 이미지(쪽 영역 [region1k] 를 찍은 것) 안의 상자 [box]([ymin, xmin, ymax, xmax] 0..1000)를 쪽 좌표로 바꾼다.
+/// [margin] 은 이미지 기준 0..1000 여유(그림 가장자리 선이 잘리지 않게).
+List<int>? cropBoxToPageRegion(List<int> region1k, List<int> box, {int margin = 12}) {
+  if (region1k.length != 4 || box.length != 4) return null;
+  final b0 = (box[0] - margin).clamp(0, 1000);
+  final b1 = (box[1] - margin).clamp(0, 1000);
+  final b2 = (box[2] + margin).clamp(0, 1000);
+  final b3 = (box[3] + margin).clamp(0, 1000);
+  final h = region1k[2] - region1k[0];
+  final w = region1k[3] - region1k[1];
+  if (b2 <= b0 || b3 <= b1 || h <= 0 || w <= 0) return null;
+  return [
+    region1k[0] + (b0 * h / 1000).floor(),
+    region1k[1] + (b1 * w / 1000).floor(),
+    region1k[0] + (b2 * h / 1000).ceil(),
+    region1k[1] + (b3 * w / 1000).ceil(),
+  ];
+}
+
+/// figure_layout 항목 목록(assetKey 별 widthEm·position·anchor·offset). 없으면 빈 목록.
+List<Map<String, dynamic>> figureLayoutItems(Map<String, dynamic>? layout) => [
+      for (final x in (layout?['items'] as List?) ?? const [])
+        if (x is Map && '${x['assetKey'] ?? ''}'.trim().isNotEmpty) Map<String, dynamic>.from(x),
+    ];
+
+/// 배치 비교용 서명. jsonb 는 키 순서를 바꾸므로 값만 순서대로 모은다.
+String figureLayoutSignature(Map<String, dynamic>? layout) {
+  String n(Object? v) => v is num ? v.toDouble().toStringAsFixed(2) : '${v ?? ''}';
+  final parts = [
+    for (final it in figureLayoutItems(layout))
+      '${it['assetKey']}|${n(it['widthEm'])}|${it['position'] ?? ''}|${it['anchor'] ?? ''}|${n(it['offsetXEm'] ?? 0)}|${n(it['offsetYEm'] ?? 0)}',
+  ]..sort();
+  return parts.join(';');
+}
+
+/// 그림 폭(widthEm)을 배율만큼 바꾼 배치(4~40em, 0.5em 단위). [keys] 를 주면 그 그림만.
+Map<String, dynamic> scaleFigureLayout(Map<String, dynamic> layout, double factor, {Set<String>? keys}) {
+  final items = [
+    for (final it in figureLayoutItems(layout))
+      if (keys == null || keys.contains(it['assetKey']))
+        {
+          ...it,
+          'widthEm': ((((it['widthEm'] as num?)?.toDouble() ?? 20) * factor).clamp(4.0, 40.0) * 2).round() / 2,
+        }
+      else
+        it,
+  ];
+  return {...layout, 'version': layout['version'] ?? 1, 'items': items, 'groups': layout['groups'] ?? const []};
+}
+
+/// 렌더 검수에서 그림 크기 비율(V2 ÷ 원본)이 이 범위 밖이면 크기를 다시 맞춘다(Edge FIGURE_SIZE_RATIO_* 와 같다).
+const double kFigureSizeRatioMin = 0.8;
+const double kFigureSizeRatioMax = 1.25;
+
 class TextbookReviewUnitScope {
   const TextbookReviewUnitScope({
     required this.academyId,
@@ -226,12 +304,21 @@ class TextbookProblemReviewItem {
     this.engineHeldAt,
     this.engineResolvedAt,
     this.engineHoldSnapshot = const {},
+    this.itemRegion1k = const [],
+    this.setHeaderRawPage,
+    this.setHeaderRegion1k = const [],
+    this.pbFigureAssets = const [],
+    this.pbFigureLayout = const {},
   });
 
   factory TextbookProblemReviewItem.fromJson(Map<String, dynamic> m) {
     List<Map<String, dynamic>> mapList(Object? v) => [
-          for (final x in (v as List?) ?? const [])
+          for (final x in (v is List ? v : const []))
             if (x is Map) Map<String, dynamic>.from(x),
+        ];
+    List<int> ints(Object? v) => [
+          for (final x in (v is List ? v : const []))
+            if (x is num) x.toInt(),
         ];
     return TextbookProblemReviewItem(
       cropId: '${m['crop_id'] ?? ''}',
@@ -278,6 +365,12 @@ class TextbookProblemReviewItem {
       engineResolvedAt: m['engine_resolved_at'] is String ? DateTime.tryParse('${m['engine_resolved_at']}') : null,
       engineHoldSnapshot:
           m['engine_hold_snapshot'] is Map ? Map<String, dynamic>.from(m['engine_hold_snapshot'] as Map) : const <String, dynamic>{},
+      itemRegion1k: ints(m['item_region_1k']),
+      setHeaderRawPage: (m['set_header_raw_page'] as num?)?.toInt(),
+      setHeaderRegion1k: ints(m['set_header_region_1k']),
+      pbFigureAssets: mapList(m['pb_figure_assets']),
+      pbFigureLayout:
+          m['pb_figure_layout'] is Map ? Map<String, dynamic>.from(m['pb_figure_layout'] as Map) : const <String, dynamic>{},
       solutionTranscribed: m['solution_transcribed'] is String ? '${m['solution_transcribed']}' : null,
       solutionAnswer: m['solution_answer'] is String ? '${m['solution_answer']}' : null,
       solutionSource: m['solution_source'] is String ? '${m['solution_source']}' : null,
@@ -425,6 +518,70 @@ class TextbookProblemReviewItem {
   final DateTime? engineResolvedAt;
   final Map<String, dynamic> engineHoldSnapshot;
 
+  /// 본문 PDF 쪽(raw_page) 안의 문항 영역 [ymin, xmin, ymax, xmax] 0..1000 (item_region_1k, 없으면 bbox_1k)
+  final List<int> itemRegion1k;
+
+  /// 세트 문항이면 세트 머리(공통 지시문) 크롭의 쪽·영역
+  final int? setHeaderRawPage;
+  final List<int> setHeaderRegion1k;
+
+  /// 문제은행 그림 자산(meta.figure_assets 원본)과 배치(meta.figure_layout)
+  final List<Map<String, dynamic>> pbFigureAssets;
+  final Map<String, dynamic> pbFigureLayout;
+
+  bool get canRenderOriginal => rawPage > 0 && itemRegion1k.length == 4;
+  bool get canRenderSetHeader => (setHeaderRawPage ?? 0) > 0 && setHeaderRegion1k.length == 4;
+
+  /// 그림이 있는 문항(그림 자산이 있거나 본문에 그림 자리가 있음)
+  bool get hasFigures => orderedFigureAssets(pbFigureAssets).isNotEmpty || figureMarkerCount(stem) > 0;
+
+  /// 원본 대조 수정 단계(textbook_problem_fix)를 이번 풀이 뒤에 돌렸는가
+  DateTime? get fixPassAt => fixProposal['fix_pass_at'] is String ? DateTime.tryParse('${fixProposal['fix_pass_at']}') : null;
+  DateTime? get fixAppliedAt => fixProposal['applied_at'] is String ? DateTime.tryParse('${fixProposal['applied_at']}') : null;
+
+  /// 수정 단계 대상: 품질 오류 문항과 그림 문항(승인·보류·미검수 제외). 아직 안 돌렸거나, 수정을 적용했는데도 오류로 남은 경우.
+  bool get needsFixPass {
+    if (!canRenderOriginal) return false;
+    if (qualityStatus != 'issue' && qualityStatus != 'clean') return false;
+    if (qualityStatus == 'clean' && !hasFigures) return false;
+    final ran = fixPassAt;
+    if (ran == null) return true;
+    final applied = fixAppliedAt;
+    return qualityStatus == 'issue' && applied != null && applied.isAfter(ran);
+  }
+
+  /// 수정 단계가 낸 그림 배치(figure_layout)와 원본에서 다시 잘라낼 그림
+  Map<String, dynamic>? get proposedFigureLayout =>
+      fixProposal['figure_layout'] is Map ? Map<String, dynamic>.from(fixProposal['figure_layout'] as Map) : null;
+  List<Map<String, dynamic>> get proposedFigureCrops => [
+        for (final x in (fixProposal['figure_crops'] is List ? fixProposal['figure_crops'] as List : const []))
+          if (x is Map) Map<String, dynamic>.from(x),
+      ];
+
+  /// 아직 적용하지 않은 그림 제안(배치가 지금과 다르거나 잘라 등록할 그림이 있음)
+  bool get hasPendingFigureProposal {
+    if (fixProposal['applied_at'] != null) return false;
+    final layout = proposedFigureLayout;
+    final layoutDiffers = layout != null && figureLayoutSignature(layout) != figureLayoutSignature(pbFigureLayout);
+    return layoutDiffers || proposedFigureCrops.isNotEmpty;
+  }
+
+  /// 원본과 직접 대조한 V2 렌더 검수를 했는가
+  bool get originalCompared => renderChecks['original_compared'] == true;
+
+  /// 승인한 뒤 원본 대조에서 차이가 나온 문항(승인은 유지)
+  bool get approvedButDiffers => qualityStatus == 'approved' && renderChecks['flagged_after_approval'] == true;
+
+  /// 승인 문항인데 아직 원본과 대조하지 않음
+  bool get needsOriginalRecheck => qualityStatus == 'approved' && !originalCompared && canRenderOriginal;
+
+  /// V2 그림 크기 ÷ 원본 그림 크기(글자 대비). 원본 대조에서 잰 값.
+  double? get figureSizeRatio => (renderChecks['figure_size_ratio'] as num?)?.toDouble();
+  bool get figureNeedsResize {
+    final r = figureSizeRatio;
+    return r != null && r > 0 && (r < kFigureSizeRatioMin || r > kFigureSizeRatioMax);
+  }
+
   String get previewLookupKey => questionUid.isNotEmpty ? questionUid : pbQuestionId;
 
   bool get isEngineHeld => qualityStatus == 'held';
@@ -498,7 +655,15 @@ class TextbookProblemReviewItem {
 
   /// V2 렌더 카드 중 하나라도 이상으로 판정됐는가
   bool get renderHasIssue =>
-      renderChecks['problem_ok'] == false || renderChecks['answer_ok'] == false || renderChecks['solution_ok'] == false;
+      renderChecks['problem_ok'] == false ||
+      renderChecks['answer_ok'] == false ||
+      renderChecks['solution_ok'] == false ||
+      renderChecks['fidelity_ok'] == false ||
+      renderChecks['figure_position_ok'] == false ||
+      figureNeedsResize;
+
+  /// 원본과 직접 대조한 V2 렌더 검수가 통과해 2단계(문항 카드) 판정을 덮어쓴 상태
+  bool get stage2Superseded => originalCompared && renderCheckedAt != null && !renderHasIssue;
 
   String get displayStem {
     if (commonStem.isEmpty || stem.contains(commonStem)) return stem;
@@ -542,12 +707,18 @@ class TextbookProblemReviewItem {
   }
 }
 
-/// 묶음 검수 때 문항마다 함께 보내는 이미지(해설 크롭 base64 · V2 문항 카드 URL)
+/// 묶음 검수 때 문항마다 함께 보내는 이미지(해설 크롭 base64 · V2 문항 카드 URL · 교재 원본 base64)
 class TextbookReviewChunkImage {
-  const TextbookReviewChunkImage({this.solutionImageBase64, this.v2ProblemUrl});
+  const TextbookReviewChunkImage({this.solutionImageBase64, this.v2ProblemUrl, this.original, this.setHeader});
 
   final String? solutionImageBase64;
   final String? v2ProblemUrl;
+
+  /// 본문 PDF 에서 찍은 문항 영역(원본). 픽셀 크기·쪽 좌표도 함께 보낸다(그림 크기 계산·그림 다시 잘라내기용).
+  final TextbookReviewRenderedRegion? original;
+
+  /// 세트 머리(공통 지시문) 원본
+  final TextbookReviewRenderedRegion? setHeader;
 
   Map<String, dynamic> toJson() => <String, dynamic>{
         if (solutionImageBase64 != null && solutionImageBase64!.isNotEmpty) ...{
@@ -555,9 +726,22 @@ class TextbookReviewChunkImage {
           'solution_image_mime': 'image/png',
         },
         if (v2ProblemUrl != null && v2ProblemUrl!.isNotEmpty) 'v2_problem_url': v2ProblemUrl,
+        if (original != null) ...{
+          'original_image_base64': base64Encode(original!.bytes),
+          'original_image_mime': 'image/png',
+          'original_width_px': original!.widthPx,
+          'original_height_px': original!.heightPx,
+          'original_region_1k': original!.region1k,
+          'original_raw_page': original!.rawPage,
+        },
+        if (setHeader != null) ...{
+          'set_header_image_base64': base64Encode(setHeader!.bytes),
+          'set_header_image_mime': 'image/png',
+        },
       };
 
-  bool get isEmpty => (solutionImageBase64 ?? '').isEmpty && (v2ProblemUrl ?? '').isEmpty;
+  bool get isEmpty =>
+      (solutionImageBase64 ?? '').isEmpty && (v2ProblemUrl ?? '').isEmpty && original == null && setHeader == null;
 }
 
 /// 엔진 보류 문항이 있는 단원 한 줄(textbook_review_engine_hold_list)
@@ -701,16 +885,65 @@ class TextbookProblemReviewService {
     return out;
   }
 
-  /// 묶음 검수 전에 문항마다 (1) 해설 PDF 좌표 영역 크롭(원본 해설 Vision 전사용) (2) V2 문항 카드 URL(학생 시점 품질 검수용)을 모은다.
+  // ── 교재 원본(본문 PDF 좌표 렌더) ──────────────────────────────────────
+  // 크롭 PNG 는 저장소에 없다. 원본은 항상 본문 PDF 의 raw_page + item_region_1k 로 그때그때 찍는다.
+
+  final Map<String, Future<TextbookReviewRenderedRegion?>> _regionCache = {};
+
+  Future<TextbookReviewRenderedRegion?> _cachedBodyRegion(
+    TextbookReviewUnitScope scope,
+    int rawPage,
+    List<int> region1k,
+  ) async {
+    final key = '${scope.bookId}|${scope.gradeLabel}|$rawPage|${region1k.join(',')}';
+    final hit = _regionCache[key];
+    if (hit != null) return hit;
+    if (_regionCache.length > 400) _regionCache.clear();
+    final load = _solutionImages
+        .renderRegion(
+          academyId: scope.academyId,
+          bookId: scope.bookId,
+          gradeLabel: scope.gradeLabel,
+          sourceKind: 'body',
+          rawPage: rawPage,
+          region1k: region1k,
+        )
+        .then<TextbookReviewRenderedRegion?>((r) => r, onError: (Object _) => null);
+    _regionCache[key] = load;
+    final r = await load;
+    if (r == null) _regionCache.remove(key);
+    return r;
+  }
+
+  /// 문항 영역 원본 이미지. PDF·좌표가 없으면 null.
+  Future<TextbookReviewRenderedRegion?> originalImage(TextbookReviewUnitScope scope, TextbookProblemReviewItem it) =>
+      it.canRenderOriginal ? _cachedBodyRegion(scope, it.rawPage, it.itemRegion1k) : Future.value(null);
+
+  /// 세트 머리(공통 지시문) 원본 이미지. 세트 문항이 아니거나 좌표가 없으면 null.
+  Future<TextbookReviewRenderedRegion?> setHeaderImage(TextbookReviewUnitScope scope, TextbookProblemReviewItem it) =>
+      it.isSetQuestion && it.canRenderSetHeader
+          ? _cachedBodyRegion(scope, it.setHeaderRawPage!, it.setHeaderRegion1k)
+          : Future.value(null);
+
+  /// 렌더 검수·수정 단계에 붙일 원본 이미지 묶음(JSON 필드)
+  Future<Map<String, dynamic>> originalImagesJson(TextbookReviewUnitScope scope, TextbookProblemReviewItem it) async {
+    final o = await originalImage(scope, it);
+    final h = await setHeaderImage(scope, it);
+    return TextbookReviewChunkImage(original: o, setHeader: h).toJson();
+  }
+
+  /// 묶음 검수 전에 문항마다 (1) 해설 PDF 좌표 영역 크롭(원본 해설 Vision 전사용) (2) V2 문항 카드 URL(학생 시점 품질 검수용)
+  /// (3) 본문 PDF 문항 영역 원본(원본 대조용, 세트면 세트 머리도)을 모은다.
   Future<Map<String, TextbookReviewChunkImage>> prepareChunkImages({
     required TextbookReviewUnitScope scope,
     required List<TextbookProblemReviewItem> items,
     required Map<String, String> previewUrlsByCropId,
+    bool includeSolution = true,
   }) async {
     final out = <String, TextbookReviewChunkImage>{};
     for (final it in items) {
       String? b64;
-      if (it.canCropSolution) {
+      if (includeSolution && it.canCropSolution) {
         try {
           final png = await _solutionImages.renderSolutionCrop(
             academyId: scope.academyId,
@@ -729,8 +962,95 @@ class TextbookProblemReviewService {
       final img = TextbookReviewChunkImage(
         solutionImageBase64: b64,
         v2ProblemUrl: v2 != null && v2.startsWith('https://') ? v2 : null,
+        original: await originalImage(scope, it),
+        setHeader: await setHeaderImage(scope, it),
       );
       if (!img.isEmpty) out[it.cropId] = img;
+    }
+    return out;
+  }
+
+  /// 원본 대조 수정 단계. 원본 이미지가 있는 문항만 처리된다(최대 4문항). 결과는 fix_proposal 에 저장된다.
+  Future<Map<String, dynamic>> runFixPass(
+    TextbookReviewUnitScope scope, {
+    required List<String> cropIds,
+    required Map<String, TextbookReviewChunkImage> images,
+  }) async {
+    if (cropIds.isEmpty) return const {'ok': true, 'processed': 0};
+    final res = await _db.functions.invoke('ai_think', body: {
+      'action': 'textbook_problem_fix',
+      'academy_id': scope.academyId,
+      'book_id': scope.bookId,
+      'grade_label': scope.gradeLabel,
+      'big_order': scope.bigOrder,
+      'mid_order': midOrderOf(scope),
+      'crop_ids': cropIds,
+      'images': {for (final e in images.entries) e.key: e.value.toJson()},
+    });
+    final data = res.data;
+    if (data is Map) return Map<String, dynamic>.from(data);
+    throw Exception('원본 대조 수정 응답을 해석하지 못했습니다.');
+  }
+
+  /// 수정 단계가 고른 그림 영역을 본문 PDF 에서 잘라 문제은행 그림 자산으로 올린다.
+  /// 반환: 새 자산 목록(figure_index 는 제안대로). 그림 하나라도 못 자르면 예외.
+  Future<List<Map<String, dynamic>>> cropAndUploadFigures({
+    required TextbookReviewUnitScope scope,
+    required TextbookProblemReviewItem item,
+    required List<Map<String, dynamic>> crops,
+  }) async {
+    if (crops.isEmpty) return const [];
+    if (item.documentId.isEmpty) throw Exception('문제은행 문서가 없어 그림을 등록할 수 없습니다.');
+    final measure = item.fixProposal['figure_measure'] is Map
+        ? Map<String, dynamic>.from(item.fixProposal['figure_measure'] as Map)
+        : const <String, dynamic>{};
+    final measuredRegion = [
+      for (final x in (measure['region_1k'] is List ? measure['region_1k'] as List : const []))
+        if (x is num) x.toInt(),
+    ];
+    final rawPage = (measure['raw_page'] as num?)?.toInt() ?? item.rawPage;
+    // 수정 단계에 보낸 원본과 같은 영역(여백 포함). 기록이 없으면 지금 원본을 다시 찍어 영역을 얻는다.
+    final region = measuredRegion.length == 4 ? measuredRegion : (await originalImage(scope, item))?.region1k ?? const <int>[];
+    if (region.length != 4) throw Exception('원본 문항 좌표가 없어 그림을 잘라낼 수 없습니다.');
+    final out = <Map<String, dynamic>>[];
+    for (final c in crops) {
+      final idx = (c['figure_index'] as num?)?.toInt() ?? 0;
+      final box = [
+        for (final x in (c['bbox_1k'] is List ? c['bbox_1k'] as List : const []))
+          if (x is num) x.toInt(),
+      ];
+      final pageRegion = cropBoxToPageRegion(region, box);
+      if (idx <= 0 || pageRegion == null) throw Exception('그림 $idx 영역이 올바르지 않습니다.');
+      final png = await _solutionImages.renderRegion(
+        academyId: scope.academyId,
+        bookId: scope.bookId,
+        gradeLabel: scope.gradeLabel,
+        sourceKind: 'body',
+        rawPage: rawPage,
+        region1k: pageRegion,
+        pad1k: 0,
+        targetWidthPx: 900,
+      );
+      if (png == null) throw Exception('그림 $idx 을(를) 본문 PDF 에서 잘라내지 못했습니다.');
+      final asset = await _pb.uploadManualFigureAsset(
+        academyId: scope.academyId,
+        documentId: item.documentId,
+        questionNumber: item.problemNumber,
+        bytes: png.bytes,
+        fileName: 'review_figure_$idx.png',
+      );
+      out.add({
+        ...asset,
+        'figure_index': idx,
+        'source': 'textbook_review_original_crop',
+        'status': 'review_original_crop',
+        'approved': true,
+        'width_px': png.widthPx,
+        'height_px': png.heightPx,
+        'raw_page': rawPage,
+        'crop_region_1k': pageRegion,
+        'replace_reason': '${c['reason'] ?? ''}',
+      });
     }
     return out;
   }
@@ -890,7 +1210,8 @@ class TextbookProblemReviewService {
     return res is Map && res['changed'] == true;
   }
 
-  /// 본문·선지 수정을 문제은행 문항에 적용한다(+품질 승인). 반환: {changed:[stem|choices], pb_question_id, approved}
+  /// 본문·선지·공통 발문·그림 배치·그림 자산 수정을 문제은행 문항에 적용한다(+품질 승인).
+  /// 반환: {changed:[stem|choices|common_stem|figure_assets|figure_layout], pb_question_id, approved}
   Future<Map<String, dynamic>> applyProblemFix({
     required String cropId,
     String? stem,
@@ -898,6 +1219,8 @@ class TextbookProblemReviewService {
     bool approveQuality = false,
     String? note,
     String? commonStem,
+    Map<String, dynamic>? figureLayout,
+    List<Map<String, dynamic>>? figureAssets,
   }) async {
     final res = await _db.rpc('textbook_review_apply_problem_fix', params: {
       'p_crop_id': cropId,
@@ -906,6 +1229,8 @@ class TextbookProblemReviewService {
       'p_approve_quality': approveQuality,
       'p_note': note,
       'p_common_stem': commonStem,
+      'p_figure_layout': figureLayout,
+      'p_figure_assets': figureAssets,
     });
     return res is Map ? Map<String, dynamic>.from(res) : const {};
   }

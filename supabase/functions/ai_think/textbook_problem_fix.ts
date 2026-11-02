@@ -1,0 +1,497 @@
+import { type AuthContext, errorResponse, jsonResponse, safetyIdentifier } from '../_shared/ai/auth.ts';
+import { getBudgetStatus } from '../_shared/ai/budget.ts';
+import { estimateCostUsd, modelFor, reasoningFor, thinkWallClockMs } from '../_shared/ai/config.ts';
+import { createAiProvider } from '../_shared/ai/provider.ts';
+import { type AiContentPart, finalText } from '../_shared/ai/types.ts';
+import { recordAiRun } from '../_shared/ai/usage.ts';
+import {
+  figureMarkerCount,
+  normalizeProposedChoices,
+  parseProblems,
+  parseReviewImages,
+  stripCommonStem,
+  TEXTBOOK_REVIEW_PROMPT_VERSION,
+} from './textbook_problem_review.ts';
+import { uuidOrNull } from './validate.ts';
+
+type Rec = Record<string, unknown>;
+
+// ── 그림 배치 계산(순수 함수) ─────────────────────────────────────────────
+
+/** V2 본문 줄 간격(em). 원본의 줄 간격도 비슷하다고 보고 본문 글줄 묶음 높이에서 글자 크기를 잰다. */
+export const LINE_PITCH_EM = 1.7;
+const GLYPH_EM = 1.0;
+const MIN_WIDTH_EM = 4;
+const MAX_WIDTH_EM = 40;
+
+export type FigurePlacement = 'right_of_text' | 'left_of_text' | 'below_text' | 'inline';
+export type FigureAlign = 'left' | 'center' | 'right';
+export type FigureV2State = 'ok' | 'missing' | 'cut' | 'size' | 'position' | 'unknown';
+
+export interface FigureMeasure {
+  /** 원본 이미지 기준 [ymin, xmin, ymax, xmax] 0..1000 */
+  bbox: [number, number, number, number];
+  placement: FigurePlacement;
+  align: FigureAlign;
+  v2State: FigureV2State;
+}
+
+export function normalizeBox(v: unknown): [number, number, number, number] | null {
+  if (!Array.isArray(v) || v.length !== 4) return null;
+  const n = v.map((x) => Number(x));
+  if (n.some((x) => !Number.isFinite(x))) return null;
+  const [ymin, xmin, ymax, xmax] = n.map((x) => Math.max(0, Math.min(1000, Math.round(x))));
+  if (ymax - ymin < 5 || xmax - xmin < 5) return null;
+  return [ymin, xmin, ymax, xmax];
+}
+
+export function parseFigureMeasures(v: unknown): FigureMeasure[] {
+  const out: FigureMeasure[] = [];
+  for (const f of Array.isArray(v) ? v : []) {
+    if (!f || typeof f !== 'object') continue;
+    const r = f as Rec;
+    const bbox = normalizeBox(r.bbox_1k);
+    if (!bbox) continue;
+    const placement = ['right_of_text', 'left_of_text', 'below_text', 'inline'].includes(String(r.placement))
+      ? r.placement as FigurePlacement
+      : 'below_text';
+    const align = ['left', 'center', 'right'].includes(String(r.align)) ? r.align as FigureAlign : 'center';
+    const v2State = ['ok', 'missing', 'cut', 'size', 'position'].includes(String(r.v2_state))
+      ? r.v2_state as FigureV2State
+      : 'unknown';
+    out.push({ bbox, placement, align, v2State });
+  }
+  return out;
+}
+
+/**
+ * 원본 이미지에서 본문 글자 1em 의 픽셀 크기. 연속한 본문 글줄 묶음(상자 높이, 줄 수)으로 잰다:
+ * 높이 = (줄 수 - 1) × 줄 간격 + 글자 높이(1em).
+ */
+export function emPxFromTextSample(sample: unknown, imageHeightPx: number): number | null {
+  if (!sample || typeof sample !== 'object' || !(imageHeightPx > 0)) return null;
+  const r = sample as Rec;
+  const box = normalizeBox(r.bbox_1k);
+  const lines = Math.round(Number(r.lines));
+  if (!box || !Number.isFinite(lines) || lines < 1 || lines > 30) return null;
+  const hPx = ((box[2] - box[0]) / 1000) * imageHeightPx;
+  const em = hPx / ((lines - 1) * LINE_PITCH_EM + GLYPH_EM);
+  return em >= 4 ? em : null;
+}
+
+/** 원본 배치 → V2 figure_layout 항목(widthEm·position·anchor). 글자 크기를 못 쟀으면 기존 폭을 쓴다. */
+export function figureLayoutItem(
+  m: FigureMeasure,
+  emPx: number | null,
+  imageWidthPx: number,
+  fallbackWidthEm: number,
+): { widthEm: number; position: string; anchor: string; offsetXEm: number; offsetYEm: number } {
+  const position = m.placement === 'right_of_text'
+    ? 'inline-right'
+    : m.placement === 'left_of_text'
+    ? 'inline-left'
+    : 'below-stem';
+  const anchor = m.placement === 'right_of_text' ? 'right' : m.placement === 'left_of_text' ? 'left' : m.align;
+  let widthEm = fallbackWidthEm;
+  if (emPx && imageWidthPx > 0) {
+    widthEm = (((m.bbox[3] - m.bbox[1]) / 1000) * imageWidthPx) / emPx;
+  }
+  widthEm = Math.round(Math.max(MIN_WIDTH_EM, Math.min(MAX_WIDTH_EM, widthEm)) * 2) / 2;
+  return { widthEm, position, anchor, offsetXEm: 0, offsetYEm: 0 };
+}
+
+/** 렌더러(hydrateFiguresForXeLatex)와 같은 규칙: figure_index 별로 approved 우선 · 최신 우선 하나만, figure_index 순. */
+export function orderedFigureAssets(assets: unknown): Rec[] {
+  const byIdx = new Map<number, Rec>();
+  for (const a of Array.isArray(assets) ? assets : []) {
+    if (!a || typeof a !== 'object') continue;
+    const r = a as Rec;
+    const idx = Number.parseInt(String(r.figure_index ?? ''), 10);
+    if (!Number.isFinite(idx) || idx <= 0) continue;
+    const prev = byIdx.get(idx);
+    if (!prev) {
+      byIdx.set(idx, r);
+      continue;
+    }
+    const pa = prev.approved === true ? 1 : 0;
+    const ca = r.approved === true ? 1 : 0;
+    if (ca > pa || (ca === pa && String(r.created_at ?? '') > String(prev.created_at ?? ''))) byIdx.set(idx, r);
+  }
+  return [...byIdx.entries()].sort((x, y) => x[0] - y[0]).map(([, r]) => r);
+}
+
+export interface FigureCropRequest {
+  figure_index: number;
+  /** 원본 이미지 기준 [ymin, xmin, ymax, xmax] 0..1000 */
+  bbox_1k: number[];
+  reason: 'missing' | 'cut';
+}
+
+export interface FigureProposal {
+  layout: { version: number; items: Rec[]; groups: unknown[] };
+  crops: FigureCropRequest[];
+}
+
+/**
+ * 원본에서 잰 그림들(읽는 순서)을 문제은행 그림 자산(figure_index 순)에 차례로 짝지어 figure_layout 을 만든다.
+ * 자산이 모자라면 새 figure_index 로, V2 에서 없거나 잘린 그림은 같은 figure_index 로 원본에서 다시 잘라 등록하도록 crops 에 남긴다.
+ */
+export function buildFigureProposal(args: {
+  measures: FigureMeasure[];
+  emPx: number | null;
+  imageWidthPx: number;
+  assets: unknown;
+  currentLayout: unknown;
+}): FigureProposal | null {
+  const { measures, emPx, imageWidthPx } = args;
+  if (measures.length === 0) return null;
+  const ordered = orderedFigureAssets(args.assets);
+  const maxIdx = ordered.reduce((m, a) => Math.max(m, Number.parseInt(String(a.figure_index), 10) || 0), 0);
+  const cur = args.currentLayout && typeof args.currentLayout === 'object' ? args.currentLayout as Rec : {};
+  const curItems = (Array.isArray(cur.items) ? cur.items : []).filter((x): x is Rec => !!x && typeof x === 'object');
+  const curByKey = new Map(curItems.map((it) => [String(it.assetKey ?? ''), it]));
+  const items: Rec[] = [];
+  const crops: FigureCropRequest[] = [];
+  const used = new Set<string>();
+  let extra = 0;
+  measures.forEach((m, i) => {
+    const asset = ordered[i];
+    const idx = asset ? Number.parseInt(String(asset.figure_index), 10) : maxIdx + (++extra);
+    const key = `idx:${idx}`;
+    const prev = curByKey.get(key) ?? curByKey.get(`ord:${i + 1}`);
+    const prevWidth = Number(prev?.widthEm);
+    const item = figureLayoutItem(m, emPx, imageWidthPx, Number.isFinite(prevWidth) && prevWidth > 0 ? prevWidth : 20);
+    const prevHeight = Number(prev?.heightEm);
+    items.push({ assetKey: key, ...item, heightEm: Number.isFinite(prevHeight) && prevHeight > 0 ? prevHeight : 1.6 });
+    used.add(key);
+    if (!asset) crops.push({ figure_index: idx, bbox_1k: [...m.bbox], reason: 'missing' });
+    else if (m.v2State === 'cut' || m.v2State === 'missing') crops.push({ figure_index: idx, bbox_1k: [...m.bbox], reason: 'cut' });
+  });
+  for (const it of curItems) {
+    const k = String(it.assetKey ?? '');
+    if (k && !used.has(k)) items.push(it);
+  }
+  return {
+    layout: { version: 1, items, groups: Array.isArray(cur.groups) ? cur.groups : [] },
+    crops,
+  };
+}
+
+/** 그림 자리가 모자라면 본문 끝에 [그림] 마커를 붙인다(렌더러는 마커 순서대로 그림을 놓는다). */
+export function ensureFigureMarkers(stem: string, figureCount: number): string {
+  const missing = figureCount - figureMarkerCount(stem);
+  if (missing <= 0) return stem;
+  return `${stem.replace(/\s+$/, '')}${'\n[그림]'.repeat(missing)}`;
+}
+
+// ── 수정 단계(원본 대조 수정안) ───────────────────────────────────────────
+
+const FIX_SCHEMA: Rec = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['problems'],
+  properties: {
+    problems: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: [
+          'crop_id',
+          'text_matches_original',
+          'corrected_stem',
+          'corrected_common_stem',
+          'corrected_choices',
+          'fix_reason',
+          'engine_issue',
+          'figures',
+          'text_sample',
+        ],
+        properties: {
+          crop_id: { type: 'string' },
+          text_matches_original: { type: 'boolean' },
+          corrected_stem: { type: ['string', 'null'] },
+          corrected_common_stem: { type: ['string', 'null'] },
+          corrected_choices: {
+            type: ['array', 'null'],
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['label', 'text'],
+              properties: { label: { type: 'string' }, text: { type: 'string' } },
+            },
+          },
+          fix_reason: { type: ['string', 'null'] },
+          engine_issue: { type: ['string', 'null'] },
+          figures: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['bbox_1k', 'placement', 'align', 'v2_state'],
+              properties: {
+                bbox_1k: { type: 'array', items: { type: 'integer' } },
+                placement: { type: 'string', enum: ['right_of_text', 'left_of_text', 'below_text', 'inline'] },
+                align: { type: 'string', enum: ['left', 'center', 'right'] },
+                v2_state: { type: 'string', enum: ['ok', 'missing', 'cut', 'size', 'position', 'unknown'] },
+              },
+            },
+          },
+          text_sample: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['bbox_1k', 'lines'],
+            properties: {
+              bbox_1k: { type: 'array', items: { type: 'integer' } },
+              lines: { type: 'integer' },
+            },
+          },
+        },
+      },
+    },
+  },
+};
+
+const FIX_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔진의 [수정 단계: 교재 원본 대조 수정안] 담당입니다.
+각 문항마다 (가) 문제은행에 저장된 데이터(common_stem 공통 발문, stem 개별 발문, choices 선지 — 마크업 포함), (나) 교재 본문 PDF에서
+이 문항 영역을 잘라낸 "원본 이미지"(세트 문항이면 공통 지시문이 인쇄된 "세트 머리 원본 이미지"도), (다) 지금 학생에게 보이는 "V2 렌더 화면",
+(라) 앞 단계에서 지적된 문제(issues)가 주어집니다. 목표는 저장 데이터를 원본과 똑같은 문항으로 고친 전체 본문을 쓰고, 그림의 자리와 크기를 재는 것입니다.
+
+[1. 본문·선지 수정안 — 원본 이미지가 기준]
+- 원본에 인쇄된 이 문항(세트 머리 제외)을 처음부터 끝까지 다시 적은 전체 개별 발문을 corrected_stem 에 적으세요. 저장된 stem 이 원본과 같으면 null.
+- 마크업은 저장 형식을 그대로 따릅니다: 수식 $...$(LaTeX), 문단 구분 [문단], 상자 [박스시작]...[박스끝], 표 [표시작]...[표끝], 빈칸 [[공백:n]] 등
+  저장 stem 에 쓰인 표기를 유지하고, 그림 자리에는 [그림] 마커를 둡니다(그림이 본문 옆이나 아래에 있으면 그 그림이 딸린 문단의 끝).
+- 세트 문항: 학생 화면은 common_stem 다음에 stem 을 이어 그립니다. corrected_stem 에 공통 지시문을 넣지 마세요.
+  공통 발문 자체가 원본(세트 머리)과 다를 때만 corrected_common_stem 에 전체 공통 발문을 적고, 아니면 null.
+- 선지: 원본의 선지(①~⑤ 또는 ㄱ,ㄴ,ㄷ)와 저장 choices 가 다르면 전체 선지 배열을 corrected_choices 에, 같거나 원본에 선지가 없으면 null.
+- 원본에 없는 내용을 지어내지 마세요. 원본에서 읽을 수 없는 부분은 저장값을 그대로 둡니다.
+- text_matches_original: 저장 데이터(공통 발문·발문·선지)가 원본과 내용상 같으면 true(이때 corrected_* 는 모두 null).
+- engine_issue: 데이터는 원본과 같은데 V2 화면만 잘못 그려졌을 때(겹침·잘림·간격·기호 누락·마크업 노출) 짧은 증상. 아니면 null.
+- fix_reason: 무엇을 왜 고쳤는지 한두 문장. 고친 것이 없으면 null.
+
+[2. 그림 측정 — 개별 문항 원본 이미지 기준(세트 머리 이미지는 제외)]
+- 원본 이미지 안의 그림·그래프·도형(글자로 된 표·상자는 제외)을 읽는 순서대로 figures 에 넣습니다. 없으면 [].
+- bbox_1k: 원본 이미지 전체를 0..1000 으로 본 [ymin, xmin, ymax, xmax]. 그림의 선·점·라벨까지 다 들어가고 본문 글자는 들어가지 않게.
+- placement: 본문 글 오른쪽에 나란히 있으면 "right_of_text", 왼쪽이면 "left_of_text", 본문 아래(또는 위)에 따로 있으면 "below_text",
+  글줄 안에 끼어 있는 작은 그림이면 "inline".
+- align: 그림의 가로 위치(left / center / right).
+- v2_state: V2 화면에서 그 그림의 상태 — 정상 "ok", 없음 "missing", 잘리거나 일부만 보임 "cut", 크기가 눈에 띄게 다름 "size",
+  자리가 다름 "position", V2 화면이 없으면 "unknown".
+- text_sample: 원본 이미지에서 그림·선지·수식 블록이 끼지 않은 연속된 본문 글줄(2~4줄이 좋고, 1줄뿐이면 1줄)을 감싼 bbox_1k 와 그 줄 수 lines.
+  글자 크기를 재는 데 씁니다. 본문 글줄이 없으면 bbox_1k = [], lines = 0.`;
+
+const MAX_FIX_CHUNK = 4;
+
+/**
+ * 품질 이상 문항·그림 문항의 수정 단계. 매니저앱이 원본 이미지(본문 PDF 좌표 렌더)와 V2 문항 카드를 보내면
+ * 원본과 같아지도록 고친 전체 본문·선지·공통 발문과 그림 배치(figure_layout)·다시 잘라낼 그림을 fix_proposal 에 쓴다.
+ * 문제은행(pb_questions)은 건드리지 않는다. 적용은 운영자 승인 또는 품질 일괄 처리가 한다.
+ *   body: { academy_id, book_id, grade_label, big_order, mid_order, crop_ids: [...], images: { [crop_id]: {...} } }
+ */
+export async function handleTextbookProblemFix(req: Request, auth: AuthContext, body: Rec): Promise<Response> {
+  const academyId = uuidOrNull(body.academy_id);
+  const bookId = uuidOrNull(body.book_id);
+  const gradeLabel = typeof body.grade_label === 'string' ? body.grade_label.trim() : '';
+  const bigOrder = Number(body.big_order);
+  const midOrder = Number(body.mid_order);
+  if (!academyId || !bookId || !gradeLabel || !Number.isInteger(bigOrder) || !Number.isInteger(midOrder)) {
+    return errorResponse(400, 'invalid_scope', '학원, 교재, 학년, 중단원 정보가 필요합니다.');
+  }
+  const cropIds = (Array.isArray(body.crop_ids) ? body.crop_ids as unknown[] : [])
+    .map((x) => uuidOrNull(x))
+    .filter((x): x is string => !!x)
+    .slice(0, MAX_FIX_CHUNK);
+  const images = parseReviewImages(body.images);
+  if (cropIds.length === 0) return jsonResponse({ ok: true, processed: 0, results: [] });
+
+  const wallClockMs = thinkWallClockMs();
+  const provider = createAiProvider({ timeoutMs: wallClockMs + 5000 });
+  if (!provider) return errorResponse(503, 'ai_not_configured', 'OPENAI_API_KEY 비밀값이 설정되지 않았습니다.');
+  const budget = await getBudgetStatus(auth.admin).catch(() => null);
+  if (budget?.exceeded && budget.mode === 'block') {
+    return errorResponse(429, 'budget_exceeded', '이번 달 AI 한도를 넘었습니다.');
+  }
+
+  const overviewRes = await auth.userClient.rpc('textbook_review_unit_overview', {
+    p_academy_id: academyId,
+    p_book_id: bookId,
+    p_grade_label: gradeLabel,
+    p_big_order: bigOrder,
+    p_mid_order: midOrder,
+  });
+  if (overviewRes.error) return errorResponse(502, 'overview_failed', overviewRes.error.message);
+  const wanted = new Set(cropIds);
+  const targets = (((overviewRes.data as Rec | null)?.items ?? []) as unknown[])
+    .map((x) => (x ?? {}) as Rec)
+    .filter((it) => wanted.has(String(it.crop_id)) && !!images.get(String(it.crop_id))?.originalImageDataUrl);
+  if (targets.length === 0) {
+    return jsonResponse({ ok: true, processed: 0, skipped: cropIds.length, results: [] });
+  }
+
+  const startedAt = Date.now();
+  const model = modelFor('primary');
+  const safetyId = await safetyIdentifier(auth.userId);
+  const signal = AbortSignal.any([req.signal, AbortSignal.timeout(wallClockMs)]);
+
+  const parts: AiContentPart[] = [{
+    type: 'text',
+    text: JSON.stringify({
+      problems: targets.map((it) => {
+        const qc = (it.quality_checks ?? {}) as Rec;
+        const rc = (it.render_checks ?? {}) as Rec;
+        return {
+          crop_id: it.crop_id,
+          problem_number: it.problem_number,
+          question_type: it.question_type,
+          is_set_question: String(it.common_stem ?? '').trim().length > 0,
+          common_stem: String(it.common_stem ?? '').trim(),
+          stem: String(it.stem ?? '').slice(0, 4000),
+          choices: it.choices,
+          figure_asset_count: orderedFigureAssets(it.pb_figure_assets).length,
+          stem_figure_markers: figureMarkerCount(it.stem),
+          issues: {
+            problem_card: qc.issue_title ? `${qc.issue_title}: ${qc.issue_detail ?? ''}` : null,
+            render_check: rc.issue_title ? `${rc.issue_title}: ${rc.issue_detail ?? ''}` : null,
+          },
+        };
+      }),
+    }),
+  }];
+  for (const it of targets) {
+    const cid = String(it.crop_id);
+    const img = images.get(cid)!;
+    parts.push({ type: 'text', text: `[crop_id=${cid} · ${it.problem_number}번 교재 원본 이미지(본문 PDF 문항 영역)]` });
+    parts.push({ type: 'image', url: img.originalImageDataUrl!, detail: 'high' });
+    if (img.setHeaderImageDataUrl) {
+      parts.push({ type: 'text', text: `[crop_id=${cid} · ${it.problem_number}번이 속한 세트 머리(공통 지시문) 원본 이미지]` });
+      parts.push({ type: 'image', url: img.setHeaderImageDataUrl, detail: 'auto' });
+    }
+    if (img.v2ProblemUrl) {
+      parts.push({ type: 'text', text: `[crop_id=${cid} · ${it.problem_number}번 V2 렌더 화면(지금 학생이 보는 화면)]` });
+      parts.push({ type: 'image', url: img.v2ProblemUrl, detail: 'high' });
+    }
+  }
+
+  const res = await provider.complete(
+    {
+      model,
+      instructions: FIX_INSTRUCTIONS,
+      input: [{ kind: 'message', role: 'user', parts }],
+      jsonSchema: { name: 'textbook_problem_fix', schema: FIX_SCHEMA },
+      reasoningEffort: reasoningFor('primary'),
+      maxOutputTokens: 14000,
+      safetyId,
+    },
+    signal,
+  );
+  const byCrop = parseProblems(finalText(res));
+  const costUsd = estimateCostUsd(model, res.usage, 0);
+  await recordAiRun(auth.admin, {
+    feature: 'textbook_problem_fix',
+    provider: provider.name,
+    model,
+    promptVersion: TEXTBOOK_REVIEW_PROMPT_VERSION,
+    status: 'ok',
+    error: null,
+    usage: res.usage,
+    webSearchCalls: 0,
+    toolCalls: 0,
+    costUsd,
+    latencyMs: Date.now() - startedAt,
+    conversationId: null,
+    createdBy: auth.userId,
+    features: { book_id: bookId, grade_label: gradeLabel, big_order: bigOrder, mid_order: midOrder, count: targets.length },
+  });
+
+  const nowIso = new Date().toISOString();
+  const results: Rec[] = [];
+  for (const it of targets) {
+    const cid = String(it.crop_id);
+    const r = byCrop.get(cid);
+    if (!r) continue;
+    const img = images.get(cid)!;
+    const prev = (it.fix_proposal ?? {}) as Rec;
+    const curStem = String(it.stem ?? '');
+    const curCommon = String(it.common_stem ?? '').trim();
+
+    // 규칙(공통 발문 중복) 제안이 아직 적용 전이면 본문 제안은 그대로 두고 그림만 더한다.
+    const keepRuleText = prev.reason_code === 'common_stem_duplicate' && !prev.applied_at;
+    const textSame = r.text_matches_original === true;
+    let stem = !textSame && typeof r.corrected_stem === 'string' && r.corrected_stem.trim() &&
+        r.corrected_stem.trim() !== curStem.trim()
+      ? r.corrected_stem.trim()
+      : null;
+    const common = !textSame && curCommon && typeof r.corrected_common_stem === 'string' &&
+        r.corrected_common_stem.trim() && r.corrected_common_stem.trim() !== curCommon
+      ? r.corrected_common_stem.trim()
+      : null;
+    // 개별 발문에 공통 지시문을 또 넣었으면 떼어 낸다(학생 화면에 두 번 보이는 것을 막는다).
+    if (stem && (common ?? curCommon)) {
+      const stripped = stripCommonStem(common ?? curCommon, stem);
+      if (stripped !== null) stem = stripped.trim() !== curStem.trim() ? stripped : null;
+    }
+    const proposedChoices = textSame ? null : normalizeProposedChoices(r.corrected_choices);
+    const choices = proposedChoices && JSON.stringify(proposedChoices) !== JSON.stringify(it.choices ?? [])
+      ? proposedChoices
+      : null;
+
+    const measures = parseFigureMeasures(r.figures);
+    const size = img.originalSize;
+    const emPx = size ? emPxFromTextSample(r.text_sample, size.height) : null;
+    const figure = size
+      ? buildFigureProposal({
+        measures,
+        emPx,
+        imageWidthPx: size.width,
+        assets: it.pb_figure_assets,
+        currentLayout: it.pb_figure_layout,
+      })
+      : null;
+    // 새로 등록할 그림이 있는데 본문에 그림 자리가 모자라면 마커를 붙인다.
+    if (figure && figure.crops.some((c) => c.reason === 'missing')) {
+      const base = keepRuleText && typeof prev.stem === 'string' ? prev.stem : (stem ?? curStem);
+      const withMarkers = ensureFigureMarkers(base, measures.length);
+      if (withMarkers !== base) stem = withMarkers;
+    }
+
+    const hasText = !!(stem || common || choices);
+    const fixProposal: Rec = {
+      kind: hasText ? 'data' : figure ? 'figure' : r.engine_issue ? 'engine' : 'none',
+      stem,
+      common_stem: common,
+      choices,
+      reason: typeof r.fix_reason === 'string' && r.fix_reason.trim() ? r.fix_reason.trim() : null,
+      reason_code: null,
+      source: 'fix_pass',
+      text_matches_original: textSame,
+      engine_issue: typeof r.engine_issue === 'string' && r.engine_issue.trim() ? r.engine_issue.trim() : null,
+      figure_layout: figure?.layout ?? null,
+      figure_crops: figure?.crops ?? [],
+      figure_measure: {
+        figures: measures.map((m) => ({ bbox_1k: m.bbox, placement: m.placement, align: m.align, v2_state: m.v2State })),
+        text_sample: r.text_sample ?? null,
+        em_px: emPx === null ? null : Math.round(emPx * 10) / 10,
+        image_px: size ? [size.width, size.height] : null,
+        region_1k: img.originalRegion1k,
+        raw_page: img.originalRawPage,
+      },
+      fix_pass_at: nowIso,
+      created_at: nowIso,
+    };
+    if (keepRuleText) {
+      for (const k of ['kind', 'stem', 'common_stem', 'choices', 'reason', 'reason_code', 'source']) fixProposal[k] = prev[k] ?? null;
+      if (stem && figure?.crops.some((c) => c.reason === 'missing')) fixProposal.stem = stem;
+    }
+
+    await auth.admin.from('textbook_problem_analyses').update({ fix_proposal: fixProposal, updated_at: nowIso }).eq('crop_id', cid);
+    results.push({
+      crop_id: cid,
+      has_text_fix: !!(fixProposal.stem || fixProposal.common_stem || fixProposal.choices),
+      figures: measures.length,
+      figure_crops: figure?.crops.length ?? 0,
+      text_matches_original: textSame,
+    });
+  }
+
+  return jsonResponse({ ok: true, processed: results.length, results, cost_usd: costUsd });
+}

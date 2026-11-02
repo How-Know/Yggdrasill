@@ -9,6 +9,23 @@ import 'package:pdfrx/pdfrx.dart';
 
 import 'textbook_pdf_service.dart';
 
+/// PDF 쪽 좌표 영역을 찍은 PNG. region1k 는 실제로 찍은 영역(여백 포함, 쪽 기준 0..1000).
+class TextbookReviewRenderedRegion {
+  const TextbookReviewRenderedRegion({
+    required this.bytes,
+    required this.widthPx,
+    required this.heightPx,
+    required this.region1k,
+    required this.rawPage,
+  });
+
+  final Uint8List bytes;
+  final int widthPx;
+  final int heightPx;
+  final List<int> region1k;
+  final int rawPage;
+}
+
 /// 문항검수용 — 해설 PDF(또는 본문 PDF)에서 `textbook_problem_solution_refs` 좌표 영역만 잘라 PNG로 만든다.
 ///
 /// Stage 3에서 저장한 좌표([ymin, xmin, ymax, xmax], 0..1000)는 쪽 전체 기준이므로 pdfrx 부분 렌더(x, y, width, height)로
@@ -81,22 +98,45 @@ class TextbookReviewSolutionImageService {
     required int rawPage,
     required List<int> region1k,
   }) async {
+    final r = await renderRegion(
+      academyId: academyId,
+      bookId: bookId,
+      gradeLabel: gradeLabel,
+      sourceKind: sourceKind,
+      rawPage: rawPage,
+      region1k: region1k,
+    );
+    return r?.bytes;
+  }
+
+  /// 본문/해설 PDF 한 쪽의 좌표 영역([ymin, xmin, ymax, xmax] 0..1000)을 PNG 로 찍는다.
+  /// 반환값에는 실제로 찍은 영역(여백 포함)과 픽셀 크기가 들어 있어, 그 이미지 안의 좌표를 쪽 좌표로 되돌릴 수 있다.
+  Future<TextbookReviewRenderedRegion?> renderRegion({
+    required String academyId,
+    required String bookId,
+    required String gradeLabel,
+    required String sourceKind,
+    required int rawPage,
+    required List<int> region1k,
+    int pad1k = kRegionPad1k,
+    int targetWidthPx = kTargetCropWidthPx,
+  }) async {
     if (rawPage < 1 || region1k.length != 4) return null;
     final kind = sourceKind == 'body' ? 'body' : 'sol';
     final doc = await _ensureDoc(academyId: academyId, bookId: bookId, gradeLabel: gradeLabel, kind: kind);
     if (doc == null || rawPage > doc.pages.length) return null;
     final page = doc.pages[rawPage - 1];
 
-    final ymin = (region1k[0] - kRegionPad1k).clamp(0, 1000);
-    final xmin = (region1k[1] - kRegionPad1k).clamp(0, 1000);
-    final ymax = (region1k[2] + kRegionPad1k).clamp(0, 1000);
-    final xmax = (region1k[3] + kRegionPad1k).clamp(0, 1000);
+    final ymin = (region1k[0] - pad1k).clamp(0, 1000);
+    final xmin = (region1k[1] - pad1k).clamp(0, 1000);
+    final ymax = (region1k[2] + pad1k).clamp(0, 1000);
+    final xmax = (region1k[3] + pad1k).clamp(0, 1000);
     if (ymax <= ymin || xmax <= xmin) return null;
 
     final cropWFrac = (xmax - xmin) / 1000.0;
     final cropHFrac = (ymax - ymin) / 1000.0;
     // 잘라낸 폭이 목표 해상도가 되도록 쪽 전체 배율을 정한다(너무 작은 영역이면 전체 배율 상한으로 묶는다).
-    var fullW = kTargetCropWidthPx / cropWFrac;
+    var fullW = targetWidthPx / cropWFrac;
     var fullH = fullW * (page.height / page.width);
     final longEdge = fullW > fullH ? fullW : fullH;
     if (longEdge > kMaxFullLongEdgePx) {
@@ -123,7 +163,14 @@ class TextbookReviewSolutionImageService {
       final image = await img.createImage();
       try {
         final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-        return bytes?.buffer.asUint8List();
+        if (bytes == null) return null;
+        return TextbookReviewRenderedRegion(
+          bytes: bytes.buffer.asUint8List(),
+          widthPx: image.width,
+          heightPx: image.height,
+          region1k: [ymin, xmin, ymax, xmax],
+          rawPage: rawPage,
+        );
       } finally {
         image.dispose();
       }

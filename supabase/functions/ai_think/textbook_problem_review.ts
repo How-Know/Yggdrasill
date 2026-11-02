@@ -8,7 +8,7 @@ import { uuidOrNull } from './validate.ts';
 
 type Rec = Record<string, unknown>;
 
-export const TEXTBOOK_REVIEW_PROMPT_VERSION = 'textbook-problem-review-2026-11-03a';
+export const TEXTBOOK_REVIEW_PROMPT_VERSION = 'textbook-problem-review-2026-11-03b';
 
 /** 품질 이상의 원인 분류. data=문항 데이터(본문·선지) 오류, engine=조판 엔진 문제, figure=도형 자산 문제 */
 export type IssueKind = 'none' | 'data' | 'engine' | 'figure';
@@ -33,13 +33,31 @@ export function normalizeProposedChoices(v: unknown): Array<{ label: string; tex
   return out;
 }
 
-/** 매니저앱이 묶음마다 함께 보내는 이미지. 해설 크롭은 해설 PDF 좌표 영역을 앱에서 잘라 base64로, V2 렌더는 서명 URL로 온다. */
+/**
+ * 매니저앱이 문항마다 함께 보내는 이미지. 해설 크롭·교재 원본(본문 PDF 문항 영역, 세트 머리 영역)은 앱이 PDF 좌표로
+ * 잘라 base64로, V2 렌더는 서명 URL로 온다. 원본 크롭 PNG는 저장소에 없으므로 서버는 원본을 따로 찾지 않는다.
+ */
 export interface ReviewImageInput {
   solutionImageDataUrl: string | null;
   v2ProblemUrl: string | null;
+  originalImageDataUrl: string | null;
+  /** 원본 이미지 픽셀 크기(그림 크기 계산용). 앱이 함께 보낸다. */
+  originalSize: { width: number; height: number } | null;
+  /** 원본을 잘라낸 쪽 좌표 [ymin, xmin, ymax, xmax] 0..1000(여백 포함)과 쪽 번호. 그림을 원본에서 다시 잘라낼 때 쓴다. */
+  originalRegion1k: number[] | null;
+  originalRawPage: number | null;
+  setHeaderImageDataUrl: string | null;
 }
 
 const MAX_SOLUTION_IMAGE_CHARS = 4_000_000; // base64 약 3MB
+
+function imageDataUrl(b64Raw: unknown, mimeRaw: unknown): string | null {
+  const b64 = typeof b64Raw === 'string' ? b64Raw.trim() : '';
+  const mime = typeof mimeRaw === 'string' && /^image\/(png|jpeg|webp)$/.test(mimeRaw) ? mimeRaw : 'image/png';
+  return b64 && b64.length <= MAX_SOLUTION_IMAGE_CHARS && /^[A-Za-z0-9+/=]+$/.test(b64)
+    ? `data:${mime};base64,${b64}`
+    : null;
+}
 
 export function parseReviewImages(raw: unknown): Map<string, ReviewImageInput> {
   const out = new Map<string, ReviewImageInput>();
@@ -47,19 +65,31 @@ export function parseReviewImages(raw: unknown): Map<string, ReviewImageInput> {
   for (const [cropId, v] of Object.entries(raw as Rec)) {
     if (!uuidOrNull(cropId) || !v || typeof v !== 'object') continue;
     const r = v as Rec;
-    const b64 = typeof r.solution_image_base64 === 'string' ? r.solution_image_base64.trim() : '';
-    const mime = typeof r.solution_image_mime === 'string' && /^image\/(png|jpeg|webp)$/.test(r.solution_image_mime)
-      ? r.solution_image_mime
-      : 'image/png';
     const url = typeof r.v2_problem_url === 'string' ? r.v2_problem_url.trim() : '';
+    const original = imageDataUrl(r.original_image_base64, r.original_image_mime);
+    const w = Number(r.original_width_px);
+    const h = Number(r.original_height_px);
+    const region = Array.isArray(r.original_region_1k) && r.original_region_1k.length === 4 &&
+        r.original_region_1k.every((x) => Number.isFinite(Number(x)))
+      ? (r.original_region_1k as unknown[]).map((x) => Math.round(Number(x)))
+      : null;
+    const page = Number(r.original_raw_page);
     out.set(cropId, {
-      solutionImageDataUrl: b64 && b64.length <= MAX_SOLUTION_IMAGE_CHARS && /^[A-Za-z0-9+/=]+$/.test(b64)
-        ? `data:${mime};base64,${b64}`
-        : null,
+      solutionImageDataUrl: imageDataUrl(r.solution_image_base64, r.solution_image_mime),
       v2ProblemUrl: /^https:\/\//.test(url) ? url : null,
+      originalImageDataUrl: original,
+      originalSize: original && w > 0 && h > 0 ? { width: Math.round(w), height: Math.round(h) } : null,
+      originalRegion1k: original ? region : null,
+      originalRawPage: original && Number.isInteger(page) && page > 0 ? page : null,
+      setHeaderImageDataUrl: imageDataUrl(r.set_header_image_base64, r.set_header_image_mime),
     });
   }
   return out;
+}
+
+/** 본문 안 그림 마커 수([그림]·[도형]·[도표]·[[PB_FIG_id]]). 렌더러가 마커 순서대로 그림을 소비한다. */
+export function figureMarkerCount(stem: unknown): number {
+  return (String(stem ?? '').match(/\[\[PB_FIG_[^\]]+\]\]|\[(?:그림|도형|도표)\]/g) ?? []).length;
 }
 
 /** 세트 문항은 공통 지시문과 개별 문항을 합쳐 읽는다. */
@@ -331,12 +361,27 @@ const RENDER_CHECK_SCHEMA: Rec = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['crop_id', 'problem_ok', 'answer_ok', 'solution_ok', 'issue_title', 'issue_detail', 'issue_kind', 'engine_symptom'],
+        required: [
+          'crop_id',
+          'problem_ok',
+          'answer_ok',
+          'solution_ok',
+          'fidelity_ok',
+          'figure_position_ok',
+          'figure_size_ratio',
+          'issue_title',
+          'issue_detail',
+          'issue_kind',
+          'engine_symptom',
+        ],
         properties: {
           crop_id: { type: 'string' },
           problem_ok: { type: 'boolean' },
           answer_ok: { type: 'boolean' },
           solution_ok: { type: 'boolean' },
+          fidelity_ok: { type: 'boolean' },
+          figure_position_ok: { type: 'boolean' },
+          figure_size_ratio: { type: ['number', 'null'] },
           issue_title: { type: ['string', 'null'] },
           issue_detail: { type: ['string', 'null'] },
           issue_kind: { type: 'string', enum: ['none', 'data', 'engine', 'figure'] },
@@ -360,7 +405,7 @@ const SOLUTION_TRANSCRIBE_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검
 
 const BLIND_SOLVE_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔진의 [2단계: 블라인드 독립 풀이 · 연산 측정 · 품질 검수(학생 시점 V2 렌더 기준)] 담당입니다.
 각 문항마다 (가) 문항 데이터 텍스트(공통 발문 common_stem, 개별 발문 stem, 선지 choices, 수식 equations, 도형 figure_refs)와
-(나) 학생이 실제로 보게 되는 화면인 "V2 렌더링 이미지"(우리 조판 엔진이 PDF로 찍어낸 카드), (다) 교재 원본을 잘라낸 "원본 크롭 이미지"가 주어질 수 있습니다.
+(나) 학생이 실제로 보게 되는 화면인 "V2 렌더링 이미지"(우리 조판 엔진이 PDF로 찍어낸 카드), (다) 교재 본문 PDF에서 이 문항 영역을 잘라낸 "원본 이미지"(세트 문항은 공통 지시문이 인쇄된 "세트 머리 원본 이미지"가 따로 올 수 있음)가 주어질 수 있습니다.
 기존 정답은 모르는 상태에서 직접 풀고, 품질은 반드시 V2 렌더링 이미지(학생 시점)를 기준으로 판정하세요.
 
 [수행 원칙]
@@ -370,7 +415,7 @@ const BLIND_SOLVE_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔�
    - 발문 안의 예시 설명 상자([박스시작] ... [박스끝])가 있어도 본래 질문에 대한 답을 구하세요.
 2. 블라인드 독립 풀이(ai_solution, ai_answer):
    - 처음부터 끝까지 스스로 풀어 LaTeX 수식($...$)을 포함한 단계별 풀이를 ai_solution에 작성하고, 최종 답을 ai_answer에 적으세요(객관식이고 선지가 있으면 선지 번호 ①~⑤, 주관식이면 기약분수/수식).
-   - V2 렌더 이미지나 원본 크롭이 있으면 그 이미지도 함께 보고 푸세요(텍스트에 도형 정보가 없어도 이미지에 도형이 있으면 그것을 근거로 풉니다).
+   - V2 렌더 이미지나 원본 이미지가 있으면 그 이미지도 함께 보고 푸세요(텍스트에 도형 정보가 없어도 이미지에 도형이 있으면 그것을 근거로 풉니다).
    - 텍스트와 이미지를 모두 합쳐도 발문 절단·보기 누락·도형 누락 때문에 전혀 풀 수 없을 때만 ai_answer는 "판단불가"로 적고 quality_issue에 원인을 적으세요.
 3. 연산 복잡도 카운트(arithmetic_ops):
    - 당신이 작성한 ai_solution의 각 계산 단계에서 실제로 수행한 세부 연산 코드(제공된 arithmetic_primitives 목록의 code)와 등장 횟수(count >= 1)를 정확히 세어 기록하세요.
@@ -380,7 +425,8 @@ const BLIND_SOLVE_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔�
    - choices_ok: 객관식 선지 ①~⑤ 또는 <보기> ㄱ,ㄴ,ㄷ 가 화면에 모두 보이고 순서·내용이 맞는지.
    - figure_ok: 도형/그래프/표가 필요한 문항에서 화면에 도형이 있고 잘림·겹침·크기 이상이 없는지. 도형이 필요 없는 문항은 true.
    - latex_v2_ok: 화면에서 수식이 수학 기호로 제대로 조판됐는지(\\frac, \\sqrt, ^, _ 같은 LaTeX 원문이 글자로 노출되거나, $ 기호가 보이거나, ?? 또는 깨진 글자가 보이면 false).
-   - fidelity_ok: 원본 크롭 이미지가 주어졌을 때, V2 렌더(또는 텍스트)의 내용이 원본과 같은지(숫자·부호·조건·선지 내용이 바뀌거나 빠지지 않았는지). 원본 크롭이 없으면 true.
+   - fidelity_ok: 원본 이미지가 주어졌을 때, V2 렌더(또는 텍스트)의 내용이 원본과 같은지(숫자·부호·조건·선지·그림이 바뀌거나 빠지지 않았는지). 원본 이미지가 없으면 true.
+     세트 문항은 원본에서 공통 지시문이 세트 머리에 한 번만 인쇄되는 것이 정상입니다. V2 화면에 공통 지시문이 한 번 보이면 일치, 두 번 보이면 불일치입니다.
    - 이상이 하나라도 있으면 quality_issue_title과 quality_issue_detail에 학생 입장에서 무엇이 어떻게 보이는지(예: "②번 선지가 화면에 없음", "분수가 \\frac{1}{2} 글자로 노출됨")를 한글로 명확히 적고, 이상이 없으면 둘 다 null로 두세요.
 4-1. 이상의 원인 분류(issue_kind) — 운영자가 어디를 고칠지 정하는 기준입니다:
    - "data": 문항 데이터 자체가 틀렸다. 발문·선지 글자가 원본과 다르거나 빠짐, 선지 개수 부족, 수식의 LaTeX 문법이 깨져 있음(괄호 짝이 안 맞음, $ 짝이 안 맞음 등), 마크업 오타. → 데이터를 고치면 해결된다.
@@ -389,7 +435,7 @@ const BLIND_SOLVE_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔�
    - 이상이 없으면 "none".
 4-2. 데이터 수정 제안(proposed_stem, proposed_choices, fix_reason) — issue_kind 가 "data"일 때만:
    - 화면에 같은 지시문이 두 번 보이면(공통 지시문이 stem_raw 에도 들어 있는 경우) issue_kind 는 "data" 이고, proposed_stem 은 stem_raw 에서 공통 지시문 부분을 뺀 개별 문항 본문만 적으세요.
-   - proposed_stem: stem_raw(개별 발문 원문, 공통 지시문 제외)를 최소한으로 고친 전체 본문. 마크업([문단], [박스시작]/[박스끝], [표시작]/[표끝], [[공백:n]], $...$ 수식)은 원문 형식을 그대로 유지하고, 틀린 부분만 바꾸세요. 원본 크롭 이미지가 있으면 그것을 기준으로 맞추세요. 고칠 것이 없으면 null.
+   - proposed_stem: stem_raw(개별 발문 원문, 공통 지시문 제외)를 최소한으로 고친 전체 본문. 마크업([문단], [박스시작]/[박스끝], [표시작]/[표끝], [[공백:n]], $...$ 수식)은 원문 형식을 그대로 유지하고, 틀린 부분만 바꾸세요. 원본 이미지가 있으면 그것을 기준으로 맞추세요(빠진 글자는 원본에서 읽어 채웁니다). 고칠 것이 없으면 null.
    - proposed_choices: 선지를 고쳐야 할 때만 전체 선지 배열 [{label:"①", text:"..."}, ...]을 적고, 아니면 null. label 은 원문 그대로(①~⑤ 또는 ㄱ,ㄴ,ㄷ).
    - fix_reason: 무엇을 왜 고쳤는지 한 줄. 제안이 없으면 null.
    - "engine"·"figure"·"none" 이면 proposed_stem, proposed_choices, fix_reason 모두 null.
@@ -417,7 +463,9 @@ const COMPARE_ANALYZE_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 
    - 기존 사전에 꼭 필요한 실전 알고리즘이나 세부 연산이 빠져 있다면 draft_proposals에 최대 1~2개만 제안하세요(점수는 연산 0.10~1.50, 범용 사고틀 3.5~7.5, 실전 알고리즘 5.0~9.5). 충분하면 빈 배열 []로 두세요.`;
 
 const RENDER_CHECK_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔진의 [V2 렌더링 학생 시점 검수] 담당입니다.
-각 문항마다 우리 조판 엔진(V2, XeLaTeX)이 실제로 찍어낸 카드 이미지가 주어집니다: (1) 문항 카드, (2) 정답+해설 카드(원본 해설 또는 AI 풀이). 학생이 이 화면을 보고 공부한다고 생각하고, 보이는 그대로 판단하세요. 수학적으로 맞는지는 여기서 판단하지 않습니다.
+각 문항마다 우리 조판 엔진(V2, XeLaTeX)이 실제로 찍어낸 카드 이미지가 주어집니다: (1) 문항 카드, (2) 정답+해설 카드(원본 해설 또는 AI 풀이).
+(3) 교재 원본 이미지(본문 PDF에서 이 문항 영역을 잘라낸 것)와, 세트 문항이면 공통 지시문이 인쇄된 세트 머리 원본 이미지가 함께 올 수 있습니다.
+학생이 이 화면을 보고 공부한다고 생각하고, 보이는 그대로 판단하세요. 수학적으로 맞는지는 여기서 판단하지 않습니다.
 
 [판정 기준 — 하나라도 해당하면 해당 항목 false]
 - 수식이 기호로 조판되지 않고 LaTeX 원문(\\frac, \\sqrt, ^, _, \\, $)이나 ??, 깨진 글자, 빈 네모(□ 외의 깨짐)로 보인다.
@@ -432,11 +480,16 @@ const RENDER_CHECK_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔
 - problem_ok: 문항 카드가 학생이 읽기에 온전한가.
 - answer_ok: 정답 표기가 보이고 읽히는가(정답 카드가 없으면 true).
 - solution_ok: 해설/풀이 카드가 끝까지 읽히는가(해설 카드가 없으면 true).
-- 이상이 있으면 issue_title(한 줄)과 issue_detail(어느 카드의 어디가 어떻게 보이는지)을 한글로 적고, 없으면 둘 다 null.
+- fidelity_ok: 원본 이미지가 있을 때 문항 카드의 내용이 원본과 같은가(글자·숫자·부호·수식·조건·선지·그림이 빠지거나 바뀌거나 두 번 나오지 않음). 원본 이미지가 없으면 true.
+  - 글꼴, 줄바꿈 위치, 단 배치, 원문자 모양 같은 조판 차이는 무시합니다.
+  - 세트 문항: 원본은 공통 지시문을 세트 머리에 한 번 인쇄합니다. 카드에 공통 지시문이 한 번 보이면 일치, 두 번 보이면 불일치입니다.
+- figure_position_ok: 원본에 그림이 있을 때 카드의 그림이 원본과 같은 자리(본문 오른쪽·왼쪽에 나란히, 본문 아래, 가로 정렬)에 있는가. 원본에 그림이 없으면 true.
+- figure_size_ratio: 원본과 카드 모두에 그림이 있을 때, "본문 글자 크기에 대한 그림 크기"가 카드에서 원본의 몇 배인지(같으면 1.0, 카드 그림이 더 크면 1보다 큼, 예 1.4 · 0.7). 각 이미지 안에서 그림 폭을 본문 글자 크기와 비교해 추정하세요. 그림이 없으면 null.
+- 이상이 있으면 issue_title(한 줄)과 issue_detail(어느 카드의 어디가 어떻게 보이는지, 원본과 무엇이 다른지)을 한글로 적고, 없으면 둘 다 null.
 - issue_kind: 이상의 원인 분류. 운영자가 어디를 고칠지 정하는 기준입니다.
   - "engine": 내용은 맞아 보이는데 조판이 잘못됐다 — 수식·글자 겹침, 가장자리 잘림, 간격 이상, 기호가 빠짐, 줄바꿈이 엉킴, 표/상자가 그려지지 않음, 마크업이 글자로 노출됨. 같은 표기를 쓰는 다른 문항에서도 반복될 문제.
-  - "data": 내용 자체의 문제 — 선지가 빠짐, 정답이 비어 있음, 해설이 중간에서 끝남, 글자·수식 오타, LaTeX 원문이 그대로 노출될 만큼 문법이 깨짐.
-  - "figure": 도형·그래프가 없거나 잘림.
+  - "data": 내용 자체의 문제 — 선지가 빠짐, 정답이 비어 있음, 해설이 중간에서 끝남, 글자·수식 오타, 원본과 글자·조건이 다름, LaTeX 원문이 그대로 노출될 만큼 문법이 깨짐.
+  - "figure": 도형·그래프가 없거나 잘림, 또는 원본과 크기·위치가 크게 다름.
   - "none": 이상 없음.
 - engine_symptom: issue_kind 가 "engine"일 때 증상을 짧은 명사구로(예: "분수 세로 겹침", "루트 기호 누락", "표 테두리 미출력"). 같은 증상끼리 묶어 엔진 수정 목록을 만드는 데 씁니다. 아니면 null.`;
 
@@ -482,20 +535,8 @@ async function loadDictionaries(auth: AuthContext, bookId: string, gradeLabel: s
   return { arithList, thinkList, conceptMap };
 }
 
-/** 원본 교재 크롭(textbook-crops 버킷)의 서명 URL. 실패하면 null — 원본 대조만 건너뛴다. */
-async function signCropImage(auth: AuthContext, bucket: unknown, key: unknown): Promise<string | null> {
-  const b = String(bucket ?? '').trim();
-  const k = String(key ?? '').trim();
-  if (!b || !k) return null;
-  // Db 타입은 from/rpc 만 노출한다. 실제 supabase-js 클라이언트에는 storage 가 있다(테스트 메모리 구현은 없음).
-  const storage = (auth.admin as unknown as { storage?: { from(b: string): { createSignedUrl(k: string, s: number): Promise<{ data: { signedUrl?: string } | null }> } } }).storage;
-  if (!storage) return null;
-  const { data } = await storage.from(b).createSignedUrl(k, 60 * 20).catch(() => ({ data: null }));
-  return data?.signedUrl ?? null;
-}
-
 /** 같은 crop_id·check_key 의 열린 항목이 있으면 갱신, 없으면 새로 만든다(부분 유니크 인덱스라 upsert 추론이 안 된다). */
-async function upsertOpenFinding(auth: AuthContext, row: Rec): Promise<void> {
+export async function upsertOpenFinding(auth: AuthContext, row: Rec): Promise<void> {
   const cropId = String(row.crop_id);
   const checkKey = String(row.check_key ?? '');
   if (checkKey) {
@@ -524,7 +565,7 @@ async function resolveOpenFinding(auth: AuthContext, cropId: string, checkKey: s
     .in('status', ['open', 'held']);
 }
 
-function parseProblems(text: string): Map<string, Rec> {
+export function parseProblems(text: string): Map<string, Rec> {
   const out = new Map<string, Rec>();
   let parsed: { problems?: Rec[] } = {};
   try {
@@ -614,13 +655,6 @@ export async function handleTextbookProblemReview(
   const signal = AbortSignal.any([req.signal, AbortSignal.timeout(wallClockMs)]);
   let usage = emptyUsage();
 
-  // 원본 크롭 서명 URL(원본 대조용)
-  const cropUrlByCrop = new Map<string, string>();
-  await Promise.all(batchItems.map(async (it) => {
-    const url = await signCropImage(auth, it.storage_bucket, it.storage_key);
-    if (url) cropUrlByCrop.set(String(it.crop_id), url);
-  }));
-
   // ── 1단계: 원본 해설 전사(Vision). 해설 크롭 이미지가 온 문항만.
   const solutionTargets = batchItems.filter((it) => images.get(String(it.crop_id))?.solutionImageDataUrl);
   const solutionCall = solutionTargets.length === 0 ? Promise.resolve(null) : (() => {
@@ -675,21 +709,24 @@ export async function handleTextbookProblemReview(
         figure_refs: it.figure_refs,
         equations: it.equations,
         has_v2_image: !!images.get(String(it.crop_id))?.v2ProblemUrl,
-        has_original_crop: cropUrlByCrop.has(String(it.crop_id)),
+        has_original_image: !!images.get(String(it.crop_id))?.originalImageDataUrl,
       })),
     }),
   }];
   for (const it of batchItems) {
     const cid = String(it.crop_id);
-    const v2 = images.get(cid)?.v2ProblemUrl;
-    if (v2) {
+    const img = images.get(cid);
+    if (img?.v2ProblemUrl) {
       blindParts.push({ type: 'text', text: `[crop_id=${cid} · ${it.problem_number}번 V2 렌더링 화면(학생이 보는 화면)]` });
-      blindParts.push({ type: 'image', url: v2, detail: 'high' });
+      blindParts.push({ type: 'image', url: img.v2ProblemUrl, detail: 'high' });
     }
-    const orig = cropUrlByCrop.get(cid);
-    if (orig) {
-      blindParts.push({ type: 'text', text: `[crop_id=${cid} · ${it.problem_number}번 교재 원본 크롭]` });
-      blindParts.push({ type: 'image', url: orig, detail: 'auto' });
+    if (img?.originalImageDataUrl) {
+      blindParts.push({ type: 'text', text: `[crop_id=${cid} · ${it.problem_number}번 교재 원본 이미지(본문 PDF 문항 영역)]` });
+      blindParts.push({ type: 'image', url: img.originalImageDataUrl, detail: 'high' });
+    }
+    if (img?.setHeaderImageDataUrl) {
+      blindParts.push({ type: 'text', text: `[crop_id=${cid} · ${it.problem_number}번이 속한 세트의 머리(공통 지시문) 원본 이미지]` });
+      blindParts.push({ type: 'image', url: img.setHeaderImageDataUrl, detail: 'auto' });
     }
   }
   const blindCall = provider.complete(
@@ -773,6 +810,7 @@ export async function handleTextbookProblemReview(
       count: batchItems.length,
       solution_images: solutionTargets.length,
       v2_images: batchItems.filter((it) => images.get(String(it.crop_id))?.v2ProblemUrl).length,
+      original_images: batchItems.filter((it) => images.get(String(it.crop_id))?.originalImageDataUrl).length,
     },
   });
 
@@ -1046,8 +1084,20 @@ export function isReviewTodo(it: Rec, forceRerun: boolean): boolean {
 /**
  * V2 렌더링 학생 시점 검수. 매니저앱이 문항 카드·정답+해설 카드를 V2로 찍어 서명 URL을 보내면
  * 모델이 학생 시점에서 읽히는지 판정하고 render_checks·quality_status·findings 에 반영한다.
- *   body: { academy_id, items: [{ crop_id, problem_url?, answer_solution_url?, solution_kind?: 'textbook'|'ai' }] }
+ * 교재 원본 이미지(base64)가 같이 오면 원본과 같은지(내용·그림 위치·그림 크기)도 본다.
+ *   body: { academy_id, items: [{ crop_id, problem_url?, answer_solution_url?, solution_kind?: 'textbook'|'ai',
+ *           original_image_base64?, set_header_image_base64? }] }
  */
+/** 그림 크기 비율(V2 ÷ 원본)이 이 범위 밖이면 크기를 다시 맞춘다. */
+export const FIGURE_SIZE_RATIO_MIN = 0.8;
+export const FIGURE_SIZE_RATIO_MAX = 1.25;
+
+export function figureSizeRatioOk(ratio: unknown): boolean {
+  const r = Number(ratio);
+  if (ratio === null || ratio === undefined || !Number.isFinite(r) || r <= 0) return true;
+  return r >= FIGURE_SIZE_RATIO_MIN && r <= FIGURE_SIZE_RATIO_MAX;
+}
+
 export async function handleTextbookProblemRenderCheck(
   req: Request,
   auth: AuthContext,
@@ -1065,10 +1115,17 @@ export async function handleTextbookProblemRenderCheck(
         ? r.answer_solution_url
         : null,
       solutionKind: r.solution_kind === 'ai' ? 'ai' : 'textbook',
+      originalUrl: imageDataUrl(r.original_image_base64, r.original_image_mime),
+      setHeaderUrl: imageDataUrl(r.set_header_image_base64, r.set_header_image_mime),
     }))
-    .filter((x): x is { cropId: string; problemUrl: string | null; answerSolutionUrl: string | null; solutionKind: string } =>
-      !!x.cropId && (!!x.problemUrl || !!x.answerSolutionUrl)
-    )
+    .filter((x): x is {
+      cropId: string;
+      problemUrl: string | null;
+      answerSolutionUrl: string | null;
+      solutionKind: string;
+      originalUrl: string | null;
+      setHeaderUrl: string | null;
+    } => !!x.cropId && (!!x.problemUrl || !!x.answerSolutionUrl))
     .slice(0, 8);
   if (items.length === 0) return jsonResponse({ ok: true, processed: 0 });
 
@@ -1109,6 +1166,7 @@ export async function handleTextbookProblemRenderCheck(
           label: crop.label ?? '',
           has_problem_card: !!x.problemUrl,
           has_answer_solution_card: !!x.answerSolutionUrl,
+          has_original_image: !!x.originalUrl,
           solution_kind: x.solutionKind,
         };
       }),
@@ -1118,6 +1176,14 @@ export async function handleTextbookProblemRenderCheck(
     if (x.problemUrl) {
       parts.push({ type: 'text', text: `[crop_id=${x.cropId} · 문항 카드(V2)]` });
       parts.push({ type: 'image', url: x.problemUrl, detail: 'high' });
+    }
+    if (x.originalUrl) {
+      parts.push({ type: 'text', text: `[crop_id=${x.cropId} · 교재 원본 이미지(본문 PDF 문항 영역)]` });
+      parts.push({ type: 'image', url: x.originalUrl, detail: 'high' });
+    }
+    if (x.setHeaderUrl) {
+      parts.push({ type: 'text', text: `[crop_id=${x.cropId} · 세트 머리(공통 지시문) 원본 이미지]` });
+      parts.push({ type: 'image', url: x.setHeaderUrl, detail: 'auto' });
     }
     if (x.answerSolutionUrl) {
       parts.push({
@@ -1135,7 +1201,7 @@ export async function handleTextbookProblemRenderCheck(
       input: [{ kind: 'message', role: 'user', parts }],
       jsonSchema: { name: 'textbook_problem_render_check', schema: RENDER_CHECK_SCHEMA },
       reasoningEffort: 'low',
-      maxOutputTokens: 6000,
+      maxOutputTokens: 8000,
       safetyId,
     },
     signal,
@@ -1156,7 +1222,7 @@ export async function handleTextbookProblemRenderCheck(
     latencyMs: Date.now() - startedAt,
     conversationId: null,
     createdBy: auth.userId,
-    features: { count: targets.length },
+    features: { count: targets.length, original_images: targets.filter((x) => x.originalUrl).length },
   });
 
   const nowIso = new Date().toISOString();
@@ -1166,32 +1232,56 @@ export async function handleTextbookProblemRenderCheck(
     const r = byCrop.get(x.cropId);
     if (!r) continue;
     const a = analysisByCrop.get(x.cropId)!;
+    const originalCompared = !!x.originalUrl && !!x.problemUrl;
     const problemOk = r.problem_ok !== false;
     const answerOk = r.answer_ok !== false;
     const solutionOk = r.solution_ok !== false;
-    const renderOk = problemOk && answerOk && solutionOk;
+    const fidelityOk = !originalCompared || r.fidelity_ok !== false;
+    const figurePositionOk = !originalCompared || r.figure_position_ok !== false;
+    const sizeRatio = originalCompared && typeof r.figure_size_ratio === 'number' && Number.isFinite(r.figure_size_ratio) &&
+        r.figure_size_ratio > 0
+      ? Math.round(r.figure_size_ratio * 100) / 100
+      : null;
+    const figureSizeOk = figureSizeRatioOk(sizeRatio);
+    const renderOk = problemOk && answerOk && solutionOk && fidelityOk && figurePositionOk && figureSizeOk;
     const qc = (a.quality_checks ?? {}) as Rec;
-    // 2단계 판정 뒤에 본문·선지 수정이 적용됐으면 그 판정은 옛 화면 기준이다. 이번 V2 렌더 판정만 본다.
+    // 2단계 판정 뒤에 본문·선지·그림 수정이 적용됐거나 이번 검수가 원본과 직접 대조했으면 2단계 판정은 옛 화면 기준이다.
+    // 이번 V2 렌더 판정만 본다.
     const fp = (a.fix_proposal ?? {}) as Rec;
     const fixAppliedAfterSolve = typeof fp.applied_at === 'string' &&
       Array.isArray(fp.applied_fields) && fp.applied_fields.length > 0 &&
       (!a.solved_at || Date.parse(String(fp.applied_at)) > Date.parse(String(a.solved_at)));
-    const stage2Ok = fixAppliedAfterSolve || (qc.stem_ok !== false && qc.choices_ok !== false && qc.figure_ok !== false &&
-      qc.latex_v2_ok !== false && qc.fidelity_ok !== false && !qc.issue_title);
+    const stage2Ok = fixAppliedAfterSolve || originalCompared ||
+      (qc.stem_ok !== false && qc.choices_ok !== false && qc.figure_ok !== false &&
+        qc.latex_v2_ok !== false && qc.fidelity_ok !== false && !qc.issue_title);
     const prevStatus = String(a.quality_status ?? 'pending');
-    // 승인·엔진 보류는 재검수로 바꾸지 않는다. 보류 문항은 엔진 목록에서 재렌더 결과를 보고 운영자가 승인한다.
+    // 승인·엔진 보류는 재검수로 바꾸지 않는다. 승인 문항이 원본과 다르면 승인은 두고 표시만 한다(finding).
+    // 보류 문항은 엔진 목록에서 재렌더 결과를 보고 운영자가 승인한다.
     const nextStatus = prevStatus === 'approved' || prevStatus === 'held'
       ? prevStatus
       : (renderOk && stage2Ok ? 'clean' : 'issue');
-    const issueKind = normalizeIssueKind(r.issue_kind, !renderOk);
+    const figureOnly = problemOk && answerOk && solutionOk && fidelityOk && (!figurePositionOk || !figureSizeOk);
+    const issueKind = figureOnly ? 'figure' : normalizeIssueKind(r.issue_kind, !renderOk);
+    const issueTitle = typeof r.issue_title === 'string' && r.issue_title.trim()
+      ? r.issue_title
+      : !figureSizeOk
+      ? `그림 크기가 원본과 다름 (원본 대비 ${sizeRatio}배)`
+      : !figurePositionOk
+      ? '그림 위치가 원본과 다름'
+      : null;
 
     await auth.admin.from('textbook_problem_analyses').update({
       render_checks: {
         problem_ok: problemOk,
         answer_ok: answerOk,
         solution_ok: solutionOk,
-        issue_title: r.issue_title ?? null,
-        issue_detail: r.issue_detail ?? null,
+        fidelity_ok: fidelityOk,
+        figure_position_ok: figurePositionOk,
+        figure_size_ratio: sizeRatio,
+        original_compared: originalCompared,
+        flagged_after_approval: prevStatus === 'approved' && !renderOk,
+        issue_title: renderOk ? null : issueTitle,
+        issue_detail: renderOk ? null : (r.issue_detail ?? null),
         issue_kind: issueKind,
         engine_symptom: issueKind === 'engine' && typeof r.engine_symptom === 'string' ? r.engine_symptom : null,
         solution_kind: x.solutionKind,
@@ -1209,17 +1299,21 @@ export async function handleTextbookProblemRenderCheck(
         academy_id: academyId,
         crop_id: x.cropId,
         stage: 'render',
-        axis: 'output',
-        error_type: 'render_item',
+        axis: fidelityOk ? 'output' : 'fidelity',
+        error_type: fidelityOk ? 'render_item' : 'problem_transcription',
         severity: 'warning',
         source: 'ai',
         check_key: 'ai_v2_render_student_view',
-        title: String(r.issue_title ?? 'V2 렌더 카드 읽기 문제'),
-        detail: String(r.issue_detail ?? '학생 시점에서 문항·정답·해설 카드 중 읽히지 않는 부분이 있습니다.'),
+        title: `${prevStatus === 'approved' ? '[승인 후 원본 대조] ' : ''}${issueTitle ?? 'V2 렌더 카드 읽기 문제'}`,
+        detail: String(r.issue_detail ?? '학생 시점에서 문항·정답·해설 카드 중 읽히지 않거나 원본과 다른 부분이 있습니다.'),
         evidence: {
           problem_ok: problemOk,
           answer_ok: answerOk,
           solution_ok: solutionOk,
+          fidelity_ok: fidelityOk,
+          figure_position_ok: figurePositionOk,
+          figure_size_ratio: sizeRatio,
+          original_compared: originalCompared,
           solution_kind: x.solutionKind,
           issue_kind: issueKind,
           engine_symptom: issueKind === 'engine' ? r.engine_symptom ?? null : null,
@@ -1229,8 +1323,18 @@ export async function handleTextbookProblemRenderCheck(
       }).catch(() => null);
     } else {
       await resolveOpenFinding(auth, x.cropId, 'ai_v2_render_student_view').catch(() => null);
+      // 원본과 직접 대조해 정상이면 2단계(문항 카드) 지적도 끝난 것으로 본다.
+      if (originalCompared) await resolveOpenFinding(auth, x.cropId, 'ai_quality_v2_student_view').catch(() => null);
     }
-    results.push({ crop_id: x.cropId, problem_ok: problemOk, answer_ok: answerOk, solution_ok: solutionOk, issue_kind: issueKind });
+    results.push({
+      crop_id: x.cropId,
+      problem_ok: problemOk,
+      answer_ok: answerOk,
+      solution_ok: solutionOk,
+      fidelity_ok: fidelityOk,
+      figure_size_ratio: sizeRatio,
+      issue_kind: issueKind,
+    });
     processed += 1;
   }
 

@@ -28,6 +28,7 @@ import { createDecisionDraft, createMemoryFeedbackDraft, createSpecExport } from
 import { computeFeatures, parseClientFeatures, type DbFeatureCheck, type ThinkFeatures } from './features.ts';
 import { THINK_PROMPT_VERSION } from './prompts.ts';
 import { SupabaseThinkStore, type SupabaseLike } from './store.ts';
+import { handleTextbookProblemFix } from './textbook_problem_fix.ts';
 import { handleTextbookProblemRenderCheck, handleTextbookProblemReview } from './textbook_problem_review.ts';
 import { MAX_MESSAGE_CHARS, parseAttachments, uuidOrNull } from './validate.ts';
 
@@ -570,6 +571,8 @@ Deno.serve(async (req) => {
         return await handleTextbookProblemReview(req, auth, body);
       case 'textbook_problem_render_check':
         return await handleTextbookProblemRenderCheck(req, auth, body);
+      case 'textbook_problem_fix':
+        return await handleTextbookProblemFix(req, auth, body);
       default:
         return errorResponse(400, 'unknown_action');
     }
