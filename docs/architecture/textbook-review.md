@@ -349,14 +349,24 @@ screen also keeps a per-run sent set so one run never sends a crop twice.
   set (same `document_id` and set key) because the renderer takes the group's
   common stem from its first item. The screen recognises both shapes on
   already-reviewed rows, prefills the editor (common stem field + item stem),
-  and offers "공통 발문 중복 제거 + 품질 승인" per problem and "공통 발문 중복
-  제거 (n)" for the unit. The bulk action approves only problems whose other
-  checks are fine, re-runs the render check for the rest, and loops a few
-  times because fixing one set's common stem exposes the head duplication on
-  its other items.
-- Math bulk: "해설·AI 일치 답 일괄 채택 (n)" adopts the printed solution's
-  answer and approves math for problems where the printed answer and the AI
-  answer agree but the grading answer differs (with the problem-bank sync).
+  and offers "공통 발문 중복 제거 + 품질 승인" per problem.
+
+### Bulk actions
+
+There are no separate fix buttons; each axis has one bulk action that fixes
+what a rule can fix, approves what is clean, and leaves only what needs a
+person:
+
+- "품질 일괄 처리": applies every common-stem fix in the unit (looping a few
+  times, because fixing one set's common stem exposes the head duplication on
+  its other items), approves the fixed problems whose other checks are fine,
+  approves every `clean` problem, and re-runs the render check for fixed
+  problems that still had other flags. What remains are render or engine
+  problems and AI data proposals that need a look.
+- "수학 일괄 처리": adopts the printed solution's answer (with the
+  problem-bank sync) where the printed answer and the AI answer agree but the
+  grading answer differs, then approves every `clean` problem. What remains
+  are real disagreements.
 - Stage 3 compares the grading answer, the transcribed solution answer (when
   present), and the AI answer, and proposes concept ids, thinking codes and
   draft proposals.

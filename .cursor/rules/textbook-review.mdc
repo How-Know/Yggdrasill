@@ -40,3 +40,5 @@ and RPCs (`textbook_review_*`), first read `docs/architecture/textbook-review.md
   from the approval target.
 - `textbook_review_unit_overview` and similar builders: at most 50 pairs per
   `jsonb_build_object` call (Postgres 100-argument limit); split with `||`.
+- In plpgsql, append to a `text[]` with `array_append(arr, 'x'::text)`, not
+  `arr || 'x'` (the literal is read as an array literal: 22P02).

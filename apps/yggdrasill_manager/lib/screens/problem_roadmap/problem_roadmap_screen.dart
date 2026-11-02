@@ -507,29 +507,65 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     }
   }
 
+  /// 일괄 처리. 규칙으로 바로 고칠 수 있는 것은 고치고(수학: 해설·AI 일치 답 채택, 품질: 공통 발문 중복 제거),
+  /// 정상 문항은 승인한다. 사람이 봐야 하는 것(품질은 렌더·엔진 문제)만 남긴다.
   Future<void> _bulkApproveClean(String axis) async {
-    final ids = [
-      for (final it in _items)
-        if (axis == 'math' && it.mathStatus == 'clean')
-          it.cropId
-        else if (axis == 'quality' && it.qualityStatus == 'clean')
-          it.cropId,
-    ];
-    if (ids.isEmpty) return;
-    setState(() => _saving = true);
+    final scope = _selectedScope;
+    if (scope == null) return;
+    setState(() {
+      _saving = true;
+      _notice = null;
+    });
+    var fixNote = '';
+    var recheck = <String>[];
     try {
-      final count = await _svc.approveAxis(ids, axis);
+      if (axis == 'math') {
+        final (done, synced) = await _adoptAgreedAnswers();
+        if (done > 0) fixNote = ' · 해설·AI 일치 답 $done문항 채택(문제은행 정답 $synced문항 동기화)';
+      } else {
+        final (fixed, approvedByFix, again) = await _applyCommonStemDupFixes(scope);
+        recheck = again;
+        if (fixed > 0) {
+          fixNote = ' · 공통 발문 중복 $fixed문항 수정($approvedByFix문항 승인'
+              '${again.isNotEmpty ? ', ${again.length}문항 렌더 재검수' : ''})';
+        }
+      }
+      if (!mounted) return;
+      await _loadItems(scope, reloadPreviews: false);
+      final ids = [
+        for (final it in _items)
+          if (axis == 'math' ? it.mathStatus == 'clean' : it.qualityStatus == 'clean') it.cropId,
+      ];
+      final count = ids.isEmpty ? 0 : await _svc.approveAxis(ids, axis);
       if (!mounted) return;
       setState(() {
         _saving = false;
-        _notice = '${axis == 'math' ? '수학적 검수' : '품질 검수'} 정상 문항 $count개를 일괄 승인했습니다.';
+        _notice = '${axis == 'math' ? '수학적 검수' : '품질 검수'} 정상 $count문항 승인$fixNote';
       });
+      await _loadItems(scope, reloadPreviews: false);
       await _loadUnits();
+      if (recheck.isNotEmpty && mounted && !_runningReview) {
+        final again = [for (final x in _items) if (recheck.contains(x.cropId)) x];
+        setState(() {
+          _runningReview = true;
+          _stopRequested = false;
+        });
+        try {
+          await _runRenderCheckPass(scope, only: again);
+        } finally {
+          if (mounted) {
+            setState(() {
+              _runningReview = false;
+              _runProgress = null;
+            });
+          }
+        }
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _saving = false;
-        _notice = '일괄 승인 실패: $e';
+        _notice = '일괄 처리 실패: $e';
       });
     }
   }
@@ -653,43 +689,23 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
   List<TextbookProblemReviewItem> get _agreedAnswerFixes =>
       [for (final it in _items) if (it.mathStatus == 'issue' && it.solutionAndAiAgreeAgainstExisting) it];
 
-  Future<void> _bulkAdoptAgreedAnswers() async {
-    final scope = _selectedScope;
-    final targets = _agreedAnswerFixes;
-    if (scope == null || targets.isEmpty) return;
-    setState(() {
-      _saving = true;
-      _notice = null;
-    });
+  /// 반환: (채택 문항 수, 문제은행 정답이 실제로 바뀐 문항 수)
+  Future<(int, int)> _adoptAgreedAnswers() async {
     var done = 0;
     var synced = 0;
-    try {
-      for (final it in targets) {
-        final ans = (it.solutionAnswer ?? '').trim();
-        if (ans.isEmpty) continue;
-        final sync = await _svc.saveItemEdit(
-          cropId: it.cropId,
-          newAnswer: ans,
-          visualTags: it.visualTags,
-          approveMath: true,
-        );
-        done++;
-        if (((sync?['changed'] as List?) ?? const []).isNotEmpty) synced++;
-      }
-      if (!mounted) return;
-      setState(() {
-        _saving = false;
-        _notice = '해설·AI 일치 정답 $done문항 채택·수학 승인 · 문제은행 정답 $synced문항 함께 맞춤';
-      });
-      await _loadItems(scope, reloadPreviews: false);
-      await _loadUnits();
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _saving = false;
-        _notice = '정답 일괄 채택 실패($done문항 처리 후): $e';
-      });
+    for (final it in _agreedAnswerFixes) {
+      final ans = (it.solutionAnswer ?? '').trim();
+      if (ans.isEmpty) continue;
+      final sync = await _svc.saveItemEdit(
+        cropId: it.cropId,
+        newAnswer: ans,
+        visualTags: it.visualTags,
+        approveMath: true,
+      );
+      done++;
+      if (((sync?['changed'] as List?) ?? const []).isNotEmpty) synced++;
     }
+    return (done, synced);
   }
 
   /// 공통 발문 중복이 있는 문항(승인·보류 제외)
@@ -709,84 +725,48 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
         (!it.hasPendingFixProposal || it.fixProposalIsCommonStemDup);
   }
 
-  /// 단원 전체의 공통 발문 중복을 규칙으로 한 번에 제거한다.
-  /// 중복 말고 다른 문제가 없는 문항은 품질 승인까지, 나머지는 수정만 적용하고 V2 렌더 검수를 다시 돌린다.
-  Future<void> _bulkFixCommonStemDups() async {
-    final scope = _selectedScope;
-    final targets = _commonStemDups;
-    if (scope == null || targets.isEmpty) return;
-    setState(() {
-      _saving = true;
-      _notice = null;
-    });
+  /// 단원 전체의 공통 발문 중복을 규칙으로 고친다. 중복 말고 다른 문제가 없는 문항은 품질 승인까지,
+  /// 나머지는 수정만 적용한다(호출한 쪽에서 V2 렌더 검수를 다시 돌린다).
+  /// 반환: (수정 문항 수, 그중 승인 수, 렌더 재검수할 crop id)
+  Future<(int, int, List<String>)> _applyCommonStemDupFixes(TextbookReviewUnitScope scope) async {
     var fixed = 0;
     var approved = 0;
     final recheck = <String>[];
     final touched = <String>{};
-    try {
-      // 공통 발문을 세트 단위로 고치면 같은 세트의 다른 문항이 새로 "앞머리 중복"으로 드러난다.
-      // 그래서 다시 읽고 남은 것이 없을 때까지 몇 번 돈다(진전이 없으면 멈춘다).
-      var pending = targets;
-      for (var round = 0; round < 4 && pending.isNotEmpty; round++) {
-        var progressed = false;
-        for (final it in pending) {
-          final fix = it.commonStemFix;
-          if (fix == null) continue;
-          final approve = _onlyIssueIsCommonStemDup(it);
-          await _svc.applyProblemFix(
-            cropId: it.cropId,
-            stem: fix.stem,
-            commonStem: fix.commonStem,
-            approveQuality: approve,
-            note: '공통 발문 중복 제거(일괄)',
-          );
-          progressed = true;
-          fixed++;
-          touched.add(it.cropId);
-          if (approve) {
-            approved++;
-          } else {
-            recheck.add(it.cropId);
-          }
+    // 공통 발문을 세트 단위로 고치면 같은 세트의 다른 문항이 새로 "앞머리 중복"으로 드러난다.
+    // 그래서 다시 읽고 남은 것이 없을 때까지 몇 번 돈다(진전이 없으면 멈춘다).
+    var pending = _commonStemDups;
+    for (var round = 0; round < 4 && pending.isNotEmpty; round++) {
+      var progressed = false;
+      for (final it in pending) {
+        final fix = it.commonStemFix;
+        if (fix == null) continue;
+        final approve = _onlyIssueIsCommonStemDup(it);
+        await _svc.applyProblemFix(
+          cropId: it.cropId,
+          stem: fix.stem,
+          commonStem: fix.commonStem,
+          approveQuality: approve,
+          note: '공통 발문 중복 제거(일괄)',
+        );
+        progressed = true;
+        fixed++;
+        touched.add(it.cropId);
+        if (approve) {
+          approved++;
+        } else {
+          recheck.add(it.cropId);
         }
-        if (!progressed) break;
-        await _loadItems(scope, reloadPreviews: false);
-        if (!mounted) return;
-        pending = [for (final x in _commonStemDups) if (!touched.contains(x.cropId)) x];
       }
-      if (!mounted) return;
-      setState(() {
-        _saving = false;
-        _notice = '공통 발문 중복 $fixed문항 제거 · 다른 문제 없는 $approved문항 품질 승인'
-            '${recheck.isNotEmpty ? ' · ${recheck.length}문항은 V2 렌더 검수를 다시 합니다' : ''}';
-      });
+      if (!progressed || !mounted) break;
+      await _loadItems(scope, reloadPreviews: false);
+      pending = [for (final x in _commonStemDups) if (!touched.contains(x.cropId)) x];
+    }
+    if (touched.isNotEmpty && mounted) {
       final changedItems = [for (final x in _items) if (touched.contains(x.cropId)) x];
       if (changedItems.isNotEmpty) await _loadEnginePreviews(scope, changedItems, merge: true);
-      await _loadUnits();
-      if (recheck.isNotEmpty && mounted && !_runningReview) {
-        final again = [for (final x in _items) if (recheck.contains(x.cropId)) x];
-        setState(() {
-          _runningReview = true;
-          _stopRequested = false;
-        });
-        try {
-          await _runRenderCheckPass(scope, only: again);
-        } finally {
-          if (mounted) {
-            setState(() {
-              _runningReview = false;
-              _runProgress = null;
-            });
-          }
-        }
-      }
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _saving = false;
-        _notice = '공통 발문 중복 제거 실패($fixed문항 처리 후): $e';
-      });
     }
+    return (fixed, approved, recheck);
   }
 
   /// 수정안(편집기 내용)을 적용 전에 V2 로 찍어 오른쪽 스택에 보여 준다.
@@ -1004,33 +984,21 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
           label: Text(_stopRequested ? '이번 묶음 후 멈춤' : '일시정지', style: const TextStyle(color: _kError)),
         )
       else ...[
-        if (mathCleanCount > 0)
+        if (mathCleanCount > 0 || _agreedAnswerFixes.isNotEmpty)
           OutlinedButton.icon(
             onPressed: _saving ? null : () => unawaited(_bulkApproveClean('math')),
             style: _outlineButtonStyle(color: _kAccent),
             icon: const Icon(Icons.done_all_rounded, size: 18, color: _kAccent),
-            label: Text('수학 정상 일괄 승인 ($mathCleanCount)'),
+            label: Text('수학 일괄 처리 (정상 $mathCleanCount'
+                '${_agreedAnswerFixes.isNotEmpty ? ' + 해설·AI 일치 답 채택 ${_agreedAnswerFixes.length}' : ''})'),
           ),
-        if (qualCleanCount > 0)
+        if (qualCleanCount > 0 || _commonStemDups.isNotEmpty)
           OutlinedButton.icon(
             onPressed: _saving ? null : () => unawaited(_bulkApproveClean('quality')),
             style: _outlineButtonStyle(color: _kBlue),
             icon: const Icon(Icons.verified_outlined, size: 18, color: _kBlue),
-            label: Text('품질 정상 일괄 승인 ($qualCleanCount)'),
-          ),
-        if (_agreedAnswerFixes.isNotEmpty)
-          OutlinedButton.icon(
-            onPressed: _saving ? null : () => unawaited(_bulkAdoptAgreedAnswers()),
-            style: _outlineButtonStyle(color: _kAccent),
-            icon: const Icon(Icons.fact_check_outlined, size: 18, color: _kAccent),
-            label: Text('해설·AI 일치 답 일괄 채택 (${_agreedAnswerFixes.length})'),
-          ),
-        if (_commonStemDups.isNotEmpty)
-          OutlinedButton.icon(
-            onPressed: _saving ? null : () => unawaited(_bulkFixCommonStemDups()),
-            style: _outlineButtonStyle(color: _kBlue),
-            icon: const Icon(Icons.content_cut_rounded, size: 18, color: _kBlue),
-            label: Text('공통 발문 중복 제거 (${_commonStemDups.length})'),
+            label: Text('품질 일괄 처리 (정상 $qualCleanCount'
+                '${_commonStemDups.isNotEmpty ? ' + 공통 발문 중복 수정 ${_commonStemDups.length}' : ''})'),
           ),
         if (_engineSuspects.isNotEmpty)
           OutlinedButton.icon(
