@@ -332,6 +332,16 @@ screen also keeps a per-run sent set so one run never sends a crop twice.
   (`issue_kind`) and, for `data` issues, proposes the corrected stem or
   choices based on the stored markup (`stem_raw` in the payload); the proposal
   is saved as `fix_proposal` and is never applied by the model.
+  One data error is detected by rule, not by the model: the common stem
+  repeated inside the item stem (`stripCommonStem`, same in the Edge Function
+  and the manager service). The renderer draws common stem + item, so the
+  instruction appears twice. The rule forces `stem_ok = false`,
+  `issue_kind = data`, and stores a `fix_proposal` with the item stem minus
+  the common part (`source: system`, `reason_code: common_stem_duplicate`).
+  The screen also recognises it on already-reviewed rows and offers "공통
+  발문 중복 제거 + 품질 승인" per problem and "공통 발문 중복 제거 (n)" for
+  the unit; the bulk action approves only problems whose other checks are
+  fine and re-runs the render check for the rest.
 - Stage 3 compares the grading answer, the transcribed solution answer (when
   present), and the AI answer, and proposes concept ids, thinking codes and
   draft proposals.

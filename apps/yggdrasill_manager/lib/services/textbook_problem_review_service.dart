@@ -5,6 +5,45 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'problem_bank_service.dart';
 import 'textbook_review_solution_image_service.dart';
 
+/// 공통 발문(common_stem)이 개별 발문(stem) 앞머리에 그대로 들어 있으면(공백·[문단] 차이는 무시)
+/// 공통 부분을 뗀 개별 본문을 돌려준다. 중복이 없거나 떼어내면 본문이 비는 경우 null.
+/// Edge `stripCommonStem` 과 같은 규칙이다. 학생 화면은 공통 발문 + 개별 발문을 이어 그리므로
+/// 이 중복은 지시문이 두 번 보이는 데이터 오류다.
+String? stripCommonStem(String commonStem, String stem) {
+  final c = commonStem.replaceAll(RegExp(r'\s+'), '');
+  final s = stem;
+  if (c.isEmpty || s.trim().isEmpty) return null;
+  const para = '[문단]';
+  final ws = RegExp(r'\s');
+  var i = 0;
+  var j = 0;
+  while (i < s.length && j < c.length) {
+    final ch = s[i];
+    if (ws.hasMatch(ch)) {
+      i++;
+      continue;
+    }
+    if (s.startsWith(para, i) && !c.startsWith(para, j)) {
+      i += para.length;
+      continue;
+    }
+    if (ch != c[j]) break;
+    i++;
+    j++;
+  }
+  String rest;
+  if (j >= c.length) {
+    rest = s.substring(i);
+  } else {
+    final exact = commonStem.trim();
+    final at = exact.isEmpty ? -1 : s.indexOf(exact);
+    if (at < 0) return null;
+    rest = s.substring(0, at) + s.substring(at + exact.length);
+  }
+  rest = rest.replaceFirst(RegExp(r'^(\s|\[문단\])+'), '').replaceFirst(RegExp(r'(\s|\[문단\])+$'), '');
+  return rest.trim().isEmpty ? null : rest;
+}
+
 class TextbookReviewUnitScope {
   const TextbookReviewUnitScope({
     required this.academyId,
@@ -323,6 +362,15 @@ class TextbookProblemReviewItem {
   }
 
   String? get proposedStem => fixProposal['stem'] is String && '${fixProposal['stem']}'.trim().isNotEmpty ? '${fixProposal['stem']}' : null;
+
+  /// 공통 발문이 개별 발문에도 들어 있어 학생 화면에 지시문이 두 번 보이는 상태인가(규칙 판정, AI 결과와 무관)
+  bool get commonStemDuplicated => stemWithoutCommonStem != null;
+
+  /// 개별 발문에서 공통 발문 부분을 뗀 본문. 중복이 없으면 null.
+  String? get stemWithoutCommonStem => stripCommonStem(commonStem, stem);
+
+  /// 저장된 수정 제안이 "공통 발문 중복 제거" 규칙 제안인가
+  bool get fixProposalIsCommonStemDup => fixProposal['reason_code'] == 'common_stem_duplicate';
   List<Map<String, dynamic>>? get proposedChoices => fixProposal['choices'] is List
       ? [for (final x in fixProposal['choices'] as List) if (x is Map) Map<String, dynamic>.from(x)]
       : null;

@@ -230,7 +230,8 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     _solutionEditCtrl.text = item.aiSolution ?? '';
     _origSolutionCtrl.text = item.solutionTranscribed ?? '';
     _origAnswerCtrl.text = item.solutionAnswer ?? '';
-    _stemEditCtrl.text = item.hasPendingFixProposal ? (item.proposedStem ?? item.stem) : item.stem;
+    // 편집기 기본값: AI/규칙 수정 제안 → 공통 발문 중복이면 공통 부분을 뺀 본문 → 현재 본문
+    _stemEditCtrl.text = item.hasPendingFixProposal ? (item.proposedStem ?? item.stem) : (item.stemWithoutCommonStem ?? item.stem);
     _choicesEditCtrl.text = _choicesToLines(item.hasPendingFixProposal ? (item.proposedChoices ?? item.rawChoices) : item.rawChoices);
     _editingVisualTags = [...item.visualTags];
     _editingAlternatives = [for (final a in item.alternativeSolutions) Map<String, dynamic>.from(a)];
@@ -626,6 +627,98 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     }
   }
 
+  /// 공통 발문 중복 문항: 편집기에 공통 부분을 뺀 본문을 넣고 바로 적용(+승인)한다.
+  Future<void> _fixCommonStemDup(TextbookProblemReviewItem item, {required bool approve}) async {
+    final stripped = item.stemWithoutCommonStem;
+    if (stripped == null) return;
+    _stemEditCtrl.text = stripped;
+    await _applyProblemFix(item, approve: approve);
+  }
+
+  /// 공통 발문 중복이 있는 문항(승인·보류 제외)
+  List<TextbookProblemReviewItem> get _commonStemDups =>
+      [for (final it in _items) if (it.commonStemDuplicated && it.qualityStatus != 'approved' && !it.isEngineHeld) it];
+
+  /// 발문 중복 말고 다른 품질 문제가 없는가(2단계 나머지 플래그·정답/해설 카드 판정이 모두 정상)
+  static bool _onlyIssueIsCommonStemDup(TextbookProblemReviewItem it) {
+    final qc = it.qualityChecks;
+    final rc = it.renderChecks;
+    return qc['choices_ok'] != false &&
+        qc['figure_ok'] != false &&
+        qc['latex_v2_ok'] != false &&
+        qc['fidelity_ok'] != false &&
+        rc['answer_ok'] != false &&
+        rc['solution_ok'] != false &&
+        (!it.hasPendingFixProposal || it.fixProposalIsCommonStemDup);
+  }
+
+  /// 단원 전체의 공통 발문 중복을 규칙으로 한 번에 제거한다.
+  /// 중복 말고 다른 문제가 없는 문항은 품질 승인까지, 나머지는 수정만 적용하고 V2 렌더 검수를 다시 돌린다.
+  Future<void> _bulkFixCommonStemDups() async {
+    final scope = _selectedScope;
+    final targets = _commonStemDups;
+    if (scope == null || targets.isEmpty) return;
+    setState(() {
+      _saving = true;
+      _notice = null;
+    });
+    var fixed = 0;
+    var approved = 0;
+    final recheck = <String>[];
+    try {
+      for (final it in targets) {
+        final stripped = it.stemWithoutCommonStem;
+        if (stripped == null) continue;
+        final approve = _onlyIssueIsCommonStemDup(it);
+        await _svc.applyProblemFix(
+          cropId: it.cropId,
+          stem: stripped,
+          approveQuality: approve,
+          note: '공통 발문 중복 제거(일괄)',
+        );
+        fixed++;
+        if (approve) {
+          approved++;
+        } else {
+          recheck.add(it.cropId);
+        }
+      }
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _notice = '공통 발문 중복 $fixed문항 제거 · 다른 문제 없는 $approved문항 품질 승인'
+            '${recheck.isNotEmpty ? ' · ${recheck.length}문항은 V2 렌더 검수를 다시 합니다' : ''}';
+      });
+      await _loadItems(scope, reloadPreviews: false);
+      final changedItems = [for (final x in _items) if (targets.any((t) => t.cropId == x.cropId)) x];
+      if (changedItems.isNotEmpty) await _loadEnginePreviews(scope, changedItems, merge: true);
+      await _loadUnits();
+      if (recheck.isNotEmpty && mounted && !_runningReview) {
+        final again = [for (final x in _items) if (recheck.contains(x.cropId)) x];
+        setState(() {
+          _runningReview = true;
+          _stopRequested = false;
+        });
+        try {
+          await _runRenderCheckPass(scope, only: again);
+        } finally {
+          if (mounted) {
+            setState(() {
+              _runningReview = false;
+              _runProgress = null;
+            });
+          }
+        }
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _notice = '공통 발문 중복 제거 실패($fixed문항 처리 후): $e';
+      });
+    }
+  }
+
   /// 수정안(편집기 내용)을 적용 전에 V2 로 찍어 오른쪽 스택에 보여 준다.
   Future<void> _previewProblemFix(TextbookProblemReviewItem item) async {
     final scope = _selectedScope;
@@ -847,6 +940,13 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
             style: _outlineButtonStyle(color: _kBlue),
             icon: const Icon(Icons.verified_outlined, size: 18, color: _kBlue),
             label: Text('품질 정상 일괄 승인 ($qualCleanCount)'),
+          ),
+        if (_commonStemDups.isNotEmpty)
+          OutlinedButton.icon(
+            onPressed: _saving ? null : () => unawaited(_bulkFixCommonStemDups()),
+            style: _outlineButtonStyle(color: _kBlue),
+            icon: const Icon(Icons.content_cut_rounded, size: 18, color: _kBlue),
+            label: Text('공통 발문 중복 제거 (${_commonStemDups.length})'),
           ),
         if (_engineSuspects.isNotEmpty)
           OutlinedButton.icon(
@@ -1243,6 +1343,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
       };
 
   (String, Color)? _issueKindBadge(TextbookProblemReviewItem item) {
+    if (item.commonStemDuplicated && item.qualityStatus != 'approved') return ('데이터: 공통 발문 중복', _kError);
     if (item.qualityStatus != 'issue' && !item.isEngineHeld) return null;
     return switch (item.issueKind) {
       'engine' => ('AI 분류: 엔진${item.engineSymptom.isNotEmpty ? ' · ${item.engineSymptom}' : ''}', _kWarn),
@@ -1952,7 +2053,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     final judgedFromImage = qc['judged_from_v2_image'] == true;
     final kindBadge = _issueKindBadge(item);
     final dirty = _problemEditDirty(item);
-    final showEditor = item.qualityStatus == 'issue' || item.isEngineHeld || item.hasPendingFixProposal || dirty;
+    final showEditor = item.qualityStatus == 'issue' || item.isEngineHeld || item.hasPendingFixProposal || item.commonStemDuplicated || dirty;
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -2000,7 +2101,14 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
                   label: const Text('엔진 수정 확인됨 → 품질 승인'),
                 ),
               ] else ...[
-                if (dirty || item.hasPendingFixProposal)
+                if (item.commonStemDuplicated && item.qualityStatus != 'approved')
+                  ElevatedButton.icon(
+                    onPressed: _saving ? null : () => unawaited(_fixCommonStemDup(item, approve: true)),
+                    style: _primaryButtonStyle(),
+                    icon: const Icon(Icons.content_cut_rounded, size: 18),
+                    label: const Text('공통 발문 중복 제거 + 품질 승인'),
+                  )
+                else if (dirty || item.hasPendingFixProposal)
                   ElevatedButton.icon(
                     onPressed: _saving ? null : () => unawaited(_applyProblemFix(item, approve: true)),
                     style: _primaryButtonStyle(),
@@ -2113,10 +2221,11 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
   Widget _buildProblemFixEditor(TextbookProblemReviewItem item, {required bool dirty}) {
     final fp = item.fixProposal;
     final hasProposal = item.hasPendingFixProposal;
+    final dup = item.commonStemDuplicated;
     final reason = '${fp['reason'] ?? ''}'.trim();
     return Container(
       padding: const EdgeInsets.all(14),
-      decoration: _innerDecoration(borderColor: hasProposal ? _kAccent.withValues(alpha: 0.6) : null),
+      decoration: _innerDecoration(borderColor: hasProposal || dup ? _kAccent.withValues(alpha: 0.6) : null),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -2126,15 +2235,27 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               Text(
-                hasProposal ? 'AI 데이터 수정안 (문제은행 문항에 적용됨)' : '본문·선지 직접 수정 (문제은행 문항에 적용됨)',
+                dup
+                    ? '공통 발문 중복 제거안 (문제은행 문항에 적용됨)'
+                    : hasProposal
+                        ? 'AI 데이터 수정안 (문제은행 문항에 적용됨)'
+                        : '본문·선지 직접 수정 (문제은행 문항에 적용됨)',
                 style: const TextStyle(color: _kText, fontSize: 13, fontWeight: FontWeight.w800),
               ),
-              if (hasProposal) _pillBadge('원본 크롭 대조 제안', _kAccent),
+              if (dup) _pillBadge('규칙 판정: 공통 발문 중복', _kAccent)
+              else if (hasProposal) _pillBadge(item.fixProposalIsCommonStemDup ? '규칙 제안' : '원본 크롭 대조 제안', _kAccent),
               if (dirty) _pillBadge('저장 전 변경 있음', _kWarn),
               if (fp['applied_at'] != null) _pillBadge('이전 수정안 적용됨', _kTextMuted),
             ],
           ),
-          if (reason.isNotEmpty) ...[
+          if (dup) ...[
+            const SizedBox(height: 6),
+            Text(
+              '공통 발문 "${item.commonStem.length > 60 ? '${item.commonStem.substring(0, 60)}…' : item.commonStem}" 이(가) 개별 발문에도 들어 있어 '
+              '학생 화면에 두 번 보입니다. 편집기에는 공통 부분을 뺀 본문을 채워 두었습니다. 공통 발문은 그대로 유지됩니다.',
+              style: const TextStyle(color: _kTextSub, fontSize: 12, height: 1.35),
+            ),
+          ] else if (reason.isNotEmpty) ...[
             const SizedBox(height: 6),
             Text('제안 이유: $reason', style: const TextStyle(color: _kTextSub, fontSize: 12, height: 1.35)),
           ],

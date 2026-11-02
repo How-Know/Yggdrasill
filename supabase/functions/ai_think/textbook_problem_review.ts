@@ -8,7 +8,7 @@ import { uuidOrNull } from './validate.ts';
 
 type Rec = Record<string, unknown>;
 
-export const TEXTBOOK_REVIEW_PROMPT_VERSION = 'textbook-problem-review-2026-11-02b';
+export const TEXTBOOK_REVIEW_PROMPT_VERSION = 'textbook-problem-review-2026-11-02c';
 
 /** 품질 이상의 원인 분류. data=문항 데이터(본문·선지) 오류, engine=조판 엔진 문제, figure=도형 자산 문제 */
 export type IssueKind = 'none' | 'data' | 'engine' | 'figure';
@@ -68,6 +68,46 @@ export function combineStem(commonStem: unknown, stem: unknown): string {
   const s = String(stem ?? '').trim();
   if (c && !s.includes(c)) return `[공통 지시문] ${c}\n[문항] ${s}`;
   return s;
+}
+
+/**
+ * 공통 발문(common_stem)이 개별 발문(stem) 앞머리에 그대로 들어 있으면(공백·[문단] 차이는 무시)
+ * 공통 부분을 떼어낸 개별 본문을 돌려준다. 중복이 없거나 떼어내면 본문이 비는 경우 null.
+ * 학생 화면은 공통 발문 + 개별 발문을 이어 그리므로 이 중복은 지시문이 두 번 보이는 데이터 오류다.
+ */
+export function stripCommonStem(commonStem: unknown, stem: unknown): string | null {
+  const c = String(commonStem ?? '').replace(/\s+/g, '');
+  const s = String(stem ?? '');
+  if (!c || !s.trim()) return null;
+  const para = '[문단]';
+  let i = 0;
+  let j = 0;
+  while (i < s.length && j < c.length) {
+    const ch = s[i];
+    if (/\s/.test(ch)) {
+      i++;
+      continue;
+    }
+    if (s.startsWith(para, i) && !c.startsWith(para, j)) {
+      i += para.length;
+      continue;
+    }
+    if (ch !== c[j]) break;
+    i++;
+    j++;
+  }
+  let rest: string | null = null;
+  if (j >= c.length) {
+    rest = s.slice(i);
+  } else {
+    // 앞머리가 아니면 정확히 같은 문자열이 들어 있는 경우만 제거한다.
+    const exact = String(commonStem ?? '').trim();
+    const at = exact ? s.indexOf(exact) : -1;
+    if (at < 0) return null;
+    rest = s.slice(0, at) + s.slice(at + exact.length);
+  }
+  rest = rest.replace(/^(\s|\[문단\])+/, '').replace(/(\s|\[문단\])+$/, '');
+  return rest.trim() ? rest : null;
 }
 
 const SOLUTION_TRANSCRIBE_SCHEMA: Rec = {
@@ -298,6 +338,7 @@ const BLIND_SOLVE_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔�
    - "figure": 도형·그래프 자산이 없거나 잘림(텍스트·LaTeX 문제가 아님).
    - 이상이 없으면 "none".
 4-2. 데이터 수정 제안(proposed_stem, proposed_choices, fix_reason) — issue_kind 가 "data"일 때만:
+   - 화면에 같은 지시문이 두 번 보이면(공통 지시문이 stem_raw 에도 들어 있는 경우) issue_kind 는 "data" 이고, proposed_stem 은 stem_raw 에서 공통 지시문 부분을 뺀 개별 문항 본문만 적으세요.
    - proposed_stem: stem_raw(개별 발문 원문, 공통 지시문 제외)를 최소한으로 고친 전체 본문. 마크업([문단], [박스시작]/[박스끝], [표시작]/[표끝], [[공백:n]], $...$ 수식)은 원문 형식을 그대로 유지하고, 틀린 부분만 바꾸세요. 원본 크롭 이미지가 있으면 그것을 기준으로 맞추세요. 고칠 것이 없으면 null.
    - proposed_choices: 선지를 고쳐야 할 때만 전체 선지 배열 [{label:"①", text:"..."}, ...]을 적고, 아니면 null. label 은 원문 그대로(①~⑤ 또는 ㄱ,ㄴ,ㄷ).
    - fix_reason: 무엇을 왜 고쳤는지 한 줄. 제안이 없으면 null.
@@ -707,12 +748,24 @@ export async function handleTextbookProblemReview(
       .map((x) => String(x).trim())
       .filter((x) => x.length > 0);
 
-    const stemOk = b.stem_ok !== false;
+    // 공통 발문이 개별 발문에 그대로 들어 있으면 학생 화면에 지시문이 두 번 보인다. 모델 판정과 무관하게 데이터 오류로 잡는다.
+    const dupStripped = stripCommonStem(it.common_stem, it.stem);
+    const stemOk = b.stem_ok !== false && dupStripped === null;
     const choicesOk = b.choices_ok !== false;
     const figureOk = b.figure_ok !== false;
     const latexOk = b.latex_v2_ok !== false;
     const fidelityOk = b.fidelity_ok !== false;
-    const qualityOk = stemOk && choicesOk && figureOk && latexOk && fidelityOk && !b.quality_issue_title;
+    const issueTitle: string | null = typeof b.quality_issue_title === 'string' && b.quality_issue_title.trim()
+      ? b.quality_issue_title
+      : dupStripped !== null
+      ? '공통 발문 중복 표시 (개별 발문에 공통 지시문이 다시 들어 있음)'
+      : null;
+    const issueDetail: string | null = typeof b.quality_issue_detail === 'string' && b.quality_issue_detail.trim()
+      ? b.quality_issue_detail
+      : dupStripped !== null
+      ? 'common_stem과 stem 에 같은 지시문이 들어 있어 학생 화면에 두 번 표시됩니다. 개별 발문에서 공통 부분을 제거하면 해결됩니다.'
+      : null;
+    const qualityOk = stemOk && choicesOk && figureOk && latexOk && fidelityOk && !issueTitle;
 
     const solutionFound = s?.found === true && typeof s?.solution_transcribed === 'string' && s.solution_transcribed.trim().length > 0;
     const answerMatched = c.answer_matched === true;
@@ -731,20 +784,29 @@ export async function handleTextbookProblemReview(
     const keepHeld = prev.quality_status === 'held';
 
     // 데이터 수정 제안: 원문과 실제로 다를 때만 남긴다. 이미 적용된 제안은 비운다.
-    const issueKind = normalizeIssueKind(b.issue_kind, !qualityOk);
-    const proposedStem = issueKind === 'data' && typeof b.proposed_stem === 'string' && b.proposed_stem.trim() &&
-        b.proposed_stem.trim() !== String(it.stem ?? '').trim()
+    const issueKind: IssueKind = dupStripped !== null ? 'data' : normalizeIssueKind(b.issue_kind, !qualityOk);
+    // 공통 발문 중복은 규칙으로 바로 고친 본문을 제안한다(모델 제안보다 우선).
+    const proposedStem = dupStripped !== null
+      ? dupStripped
+      : issueKind === 'data' && typeof b.proposed_stem === 'string' && b.proposed_stem.trim() &&
+          b.proposed_stem.trim() !== String(it.stem ?? '').trim()
       ? b.proposed_stem.trim()
       : null;
     const proposedChoices = issueKind === 'data' ? normalizeProposedChoices(b.proposed_choices) : null;
     const choicesDiffer = proposedChoices !== null && JSON.stringify(proposedChoices) !== JSON.stringify(it.choices ?? []);
+    const fixReason = dupStripped !== null
+      ? '공통 발문(common_stem)이 개별 발문에도 들어 있어 공통 부분을 제거했습니다.'
+      : typeof b.fix_reason === 'string'
+      ? b.fix_reason
+      : null;
     const fixProposal: Rec = proposedStem || choicesDiffer
       ? {
         kind: issueKind,
         stem: proposedStem,
         choices: choicesDiffer ? proposedChoices : null,
-        reason: typeof b.fix_reason === 'string' ? b.fix_reason : null,
-        source: 'stage2',
+        reason: fixReason,
+        reason_code: dupStripped !== null ? 'common_stem_duplicate' : null,
+        source: dupStripped !== null ? 'system' : 'stage2',
         created_at: nowIso,
       }
       : {};
@@ -775,8 +837,8 @@ export async function handleTextbookProblemReview(
         figure_ok: figureOk,
         latex_v2_ok: latexOk,
         fidelity_ok: fidelityOk,
-        issue_title: b.quality_issue_title ?? null,
-        issue_detail: b.quality_issue_detail ?? null,
+        issue_title: issueTitle,
+        issue_detail: issueDetail,
         issue_kind: issueKind,
         solution_vision: s
           ? { found: s.found === true, confidence: s.confidence ?? null, note: s.note ?? null }
@@ -848,8 +910,8 @@ export async function handleTextbookProblemReview(
         severity: 'warning',
         source: 'ai',
         check_key: 'ai_quality_v2_student_view',
-        title: String(b.quality_issue_title ?? '학생 시점 V2 렌더 품질 확인 필요'),
-        detail: String(b.quality_issue_detail ?? 'V2 렌더링 화면에서 발문·선지·도형·수식 표시를 확인해야 합니다.'),
+        title: issueTitle ?? '학생 시점 V2 렌더 품질 확인 필요',
+        detail: issueDetail ?? 'V2 렌더링 화면에서 발문·선지·도형·수식 표시를 확인해야 합니다.',
         evidence: {
           judged_from_v2_image: b.judged_from_v2_image === true,
           stem_ok: stemOk,
@@ -863,7 +925,7 @@ export async function handleTextbookProblemReview(
           ? {
             target: 'problem',
             after: { stem: proposedStem, choices: choicesDiffer ? proposedChoices : null },
-            reason: typeof b.fix_reason === 'string' ? b.fix_reason : '원본과 대조한 데이터 수정 제안',
+            reason: fixReason ?? '원본과 대조한 데이터 수정 제안',
             keeps: '정답·해설 위치는 그대로 유지합니다.',
           }
           : null,

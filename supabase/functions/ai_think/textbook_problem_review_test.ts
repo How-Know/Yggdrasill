@@ -5,6 +5,7 @@ import {
   normalizeIssueKind,
   normalizeProposedChoices,
   parseReviewImages,
+  stripCommonStem,
 } from './textbook_problem_review.ts';
 
 const CROP = '0f6a2c1e-7b3d-4e8f-9a1b-2c3d4e5f6a7b';
@@ -28,6 +29,23 @@ Deno.test('세트 문항은 공통 지시문과 개별 문항을 합쳐 읽는�
   assertEquals(combineStem('다음 수의 약수를 모두 구하여라.', '7'), '[공통 지시문] 다음 수의 약수를 모두 구하여라.\n[문항] 7');
   assertEquals(combineStem('', 'x+1=2'), 'x+1=2');
   assertEquals(combineStem('A', 'A 그리고 B'), 'A 그리고 B');
+});
+
+Deno.test('공통 발문이 개별 발문에 중복되면 공통 부분을 뗀 본문을 제안한다', () => {
+  const common = '다음 수의 약수를 모두 구하고, 소수인지 합성수인지 ([공백:2]) 안에 써넣어라.';
+  assertEquals(
+    stripCommonStem(common, '다음 수의 약수를 모두 구하고, 소수인지 합성수인지 ([공백:2]) 안에 써넣어라.\n[문단]\n9\n약수: box(~~)'),
+    '9\n약수: box(~~)',
+  );
+  // 공백·[문단] 차이는 무시한다
+  assertEquals(stripCommonStem('다음을 구하여라.', '다음을  구하여라.[문단]7'), '7');
+  // 중복이 없으면 null
+  assertEquals(stripCommonStem(common, '9\n약수: box(~~)'), null);
+  assertEquals(stripCommonStem('', '9'), null);
+  // 떼어내면 본문이 비는 경우는 건드리지 않는다
+  assertEquals(stripCommonStem('다음을 구하여라.', '다음을 구하여라.'), null);
+  // 앞머리가 아니어도 정확히 같은 문자열이면 제거한다
+  assertEquals(stripCommonStem('다음을 구하여라.', '[문단]7\n다음을 구하여라.'), '7');
 });
 
 Deno.test('재검수 대상: 미검수·풀이 없음·해설 미전사(시도 전)만, 승인·전사 시도 후는 제외', () => {
