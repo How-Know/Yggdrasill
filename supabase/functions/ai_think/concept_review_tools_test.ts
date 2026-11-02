@@ -122,8 +122,9 @@ Deno.test('대화: 준비됐으면 검토 도구·지침·기능 상태, 앱·DB
   assert(req.instructions!.includes('source_scope는 all'));
   assert(req.instructions!.includes('course_unplaced'));
   assert(req.instructions!.includes('기대 총수'));
-  assert(req.instructions!.includes('start_concept_review_job'));
-  assert(req.instructions!.includes('run_concept_review_batch'));
+  // 검수 작업·묶음 검수 기능이 준비되지 않은 요청에는 그 도구 이름을 지침에 적지 않는다.
+  assert(!req.instructions!.includes('start_concept_review_job'));
+  assert(!req.instructions!.includes('run_concept_review_batch'));
   assertEquals(THINK_PROMPT_VERSION, 'think-2026-10-30b');
   assert(featureNote(req).includes('개념 검토 목록·범위별 검토 기록'));
   assert(featureNote(req).includes('개념 검토 목록·범위별 검토 기록(list_concepts_for_review, propose_concept_review): 사용 가능'));

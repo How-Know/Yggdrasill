@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../services/textbook_problem_review_service.dart';
-import '../../widgets/latex_text_renderer.dart';
 import '../problem_bank/widgets/problem_bank_question_card.dart';
 
 // ── 신형 다크 틸(학습앱 디자인 시스템 §2.2 kDlg* 토큰) 팔레트
@@ -18,6 +17,7 @@ const Color _kAccent = Color(0xFF33A373);
 const Color _kChipSelected = Color(0xFF1B6B63);
 const Color _kBlue = Color(0xFF64B5F6);
 const Color _kError = Color(0xFFE57373);
+const Color _kWarn = Color(0xFFE0B35A);
 
 const List<String> kStandardVisualTags = [
   '수직선',
@@ -43,6 +43,9 @@ const List<String> kStandardVisualTags = [
   '통계그래프(히스토그램·상자그림)',
   '수형도·경로망',
 ];
+
+const int _kReviewChunkSize = 6;
+const int _kRenderCheckChunkSize = 5;
 
 class ProblemRoadmapScreen extends StatefulWidget {
   const ProblemRoadmapScreen({super.key, this.service});
@@ -71,14 +74,23 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
   TextbookReviewUnitScope? _selectedScope;
   List<TextbookProblemReviewItem> _items = const [];
   Map<String, String> _previewUrlsByCropId = const {};
+  Future<void>? _previewLoad;
   String? _selectedCropId;
+
+  /// V2 카드(정답+해설 · AI 풀이 · 대안 풀이) 서명 URL 캐시. 키: cropId|kind|본문 해시
+  final Map<String, String> _cardUrlCache = {};
+  final Set<String> _cardRendering = {};
+  final Map<String, String> _cardErrors = {};
 
   /// 필터: 0 전체, 1 확인필요(오류·불일치), 2 새초안제안, 3 미검수, 4 승인완료
   int _filterTab = 0;
 
   final _answerEditCtrl = TextEditingController();
   final _solutionEditCtrl = TextEditingController();
+  final _origSolutionCtrl = TextEditingController();
+  final _origAnswerCtrl = TextEditingController();
   List<String> _editingVisualTags = const [];
+  List<Map<String, dynamic>> _editingAlternatives = const [];
 
   @override
   void initState() {
@@ -90,6 +102,9 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
   void dispose() {
     _answerEditCtrl.dispose();
     _solutionEditCtrl.dispose();
+    _origSolutionCtrl.dispose();
+    _origAnswerCtrl.dispose();
+    if (widget.service == null) _svc.dispose();
     super.dispose();
   }
 
@@ -143,7 +158,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     }
   }
 
-  Future<void> _loadItems(TextbookReviewUnitScope scope) async {
+  Future<void> _loadItems(TextbookReviewUnitScope scope, {bool reloadPreviews = true}) async {
     setState(() {
       _loadingItems = true;
       _error = null;
@@ -162,7 +177,12 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
           _selectedCropId = null;
         }
       });
-      unawaited(_loadEnginePreviews(scope, items));
+      if (reloadPreviews) {
+        _previewLoad = _loadEnginePreviews(scope, items);
+        unawaited(_previewLoad);
+      }
+      final sel = _items.where((x) => x.cropId == _selectedCropId).firstOrNull;
+      if (sel != null) _ensureSelectedCards(sel);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -197,8 +217,94 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     _selectedCropId = item.cropId;
     _answerEditCtrl.text = item.existingAnswer.isNotEmpty ? item.existingAnswer : (item.aiAnswer ?? '');
     _solutionEditCtrl.text = item.aiSolution ?? '';
+    _origSolutionCtrl.text = item.solutionTranscribed ?? '';
+    _origAnswerCtrl.text = item.solutionAnswer ?? '';
     _editingVisualTags = [...item.visualTags];
+    _editingAlternatives = [for (final a in item.alternativeSolutions) Map<String, dynamic>.from(a)];
+    _ensureSelectedCards(item);
   }
+
+  // ── V2 카드 렌더 (정답+해설 · AI 풀이 · 대안 풀이) ───────────────────────
+
+  String _cardKey(String cropId, String kind, String text) => '$cropId|$kind|${text.trim().hashCode}';
+
+  void _ensureSelectedCards(TextbookProblemReviewItem item) {
+    final scope = _selectedScope;
+    if (scope == null || !_svc.hasGateway) return;
+    // ① 정답 + 해설(원본 우선, 없으면 AI 풀이)
+    if (item.primarySolutionText.isNotEmpty || item.displayAnswer.isNotEmpty) {
+      unawaited(_renderCard(
+        item,
+        kind: 'answer_solution',
+        text: '${item.displayAnswer}\n${item.primarySolutionText}',
+        build: () => _svc.renderAnswerSolutionCard(
+          academyId: scope.academyId,
+          item: item,
+          solutionText: item.primarySolutionText,
+          solutionKind: item.primarySolutionKind,
+        ),
+      ));
+    }
+    // ② 원본 해설이 따로 있을 때 AI 풀이 카드
+    if (item.hasOriginalSolution && item.hasAiSolution) {
+      unawaited(_renderCard(
+        item,
+        kind: 'ai_solution',
+        text: item.aiSolution!,
+        build: () => _svc.renderSolutionOnlyCard(
+          academyId: scope.academyId,
+          item: item,
+          solutionText: item.aiSolution!,
+          kindKey: 'ai',
+        ),
+      ));
+    }
+    // ③ 대안 풀이
+    for (var i = 0; i < item.alternativeSolutions.length; i += 1) {
+      final alt = item.alternativeSolutions[i];
+      final text = '${alt['solution'] ?? ''}'.trim();
+      if (text.isEmpty) continue;
+      unawaited(_renderCard(
+        item,
+        kind: 'alt_$i',
+        text: text,
+        build: () => _svc.renderSolutionOnlyCard(
+          academyId: scope.academyId,
+          item: item,
+          solutionText: text,
+          kindKey: 'alt$i',
+        ),
+      ));
+    }
+  }
+
+  Future<String> _renderCard(
+    TextbookProblemReviewItem item, {
+    required String kind,
+    required String text,
+    required Future<String> Function() build,
+  }) async {
+    final key = _cardKey(item.cropId, kind, text);
+    final cached = _cardUrlCache[key];
+    if (cached != null) return cached;
+    if (_cardRendering.contains(key)) return '';
+    _cardRendering.add(key);
+    if (mounted) setState(() {});
+    try {
+      final url = await build();
+      if (url.isNotEmpty) _cardUrlCache[key] = url;
+      _cardErrors.remove(key);
+      return url;
+    } catch (e) {
+      _cardErrors[key] = '$e';
+      return '';
+    } finally {
+      _cardRendering.remove(key);
+      if (mounted) setState(() {});
+    }
+  }
+
+  // ── 검수 실행 ────────────────────────────────────────────────────────────
 
   Future<void> _runUnitReview({bool forceRerun = false}) async {
     final scope = _selectedScope;
@@ -207,38 +313,143 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
       _runningReview = true;
       _stopRequested = false;
       _notice = null;
-      _runProgress = '중단원 문항 검수를 시작하는 중 (세트 공통 발문 결합 · 블라인드 풀이 · 3축 난이도 · 품질 검사)...';
+      _runProgress = '해설 PDF·V2 문항 카드를 준비하는 중...';
     });
     var totalProcessed = 0;
+    var renderChecked = 0;
     try {
-      for (var round = 0; round < 30; round += 1) {
+      // V2 문항 카드 URL이 있어야 학생 시점 품질 검수가 된다. 썸네일 로드를 기다린다.
+      if (_previewLoad != null) await _previewLoad;
+      if (_previewUrlsByCropId.isEmpty && _items.isNotEmpty) {
+        await _loadEnginePreviews(scope, _items);
+      }
+
+      // 이번 실행에서 이미 보낸 문항은 다시 고르지 않는다(전사 실패 등으로 대상에 남아도 같은 실행에서 반복하지 않음).
+      final sentThisRun = <String>{};
+      for (var round = 0; round < 60; round += 1) {
         if (!mounted || _stopRequested) break;
+        final todo = (forceRerun ? _items : _items.where((x) => x.isReviewTodo))
+            .where((x) => !sentThisRun.contains(x.cropId))
+            .toList();
+        if (todo.isEmpty) break;
+        final chunk = todo.take(_kReviewChunkSize).toList();
+        sentThisRun.addAll(chunk.map((x) => x.cropId));
+        final total = _items.length;
+        setState(() {
+          _runProgress =
+              '검수 진행 중: ${total - todo.length} / $total 문항 완료 · 이번 묶음 ${chunk.map((x) => x.problemNumber).join(', ')}번 — 해설 영역 잘라내는 중...';
+        });
+        final images = await _svc.prepareChunkImages(
+          scope: scope,
+          items: chunk,
+          previewUrlsByCropId: _previewUrlsByCropId,
+        );
+        if (!mounted || _stopRequested) break;
+        setState(() {
+          _runProgress =
+              '검수 진행 중: ${total - todo.length} / $total 문항 완료 · 이번 묶음 ${chunk.length}문항 — 원본 해설 전사 · 블라인드 풀이 · 학생 시점 품질 검수 중...';
+        });
         final res = await _svc.runReviewChunk(
           scope,
-          chunkSize: 8,
-          forceRerun: forceRerun && round == 0,
+          chunkSize: _kReviewChunkSize,
+          forceRerun: forceRerun,
+          cropIds: [for (final x in chunk) x.cropId],
+          images: images,
         );
         final processed = (res['processed'] as num?)?.toInt() ?? 0;
-        final remaining = (res['remaining'] as num?)?.toInt() ?? 0;
-        final total = (res['total'] as num?)?.toInt() ?? scope.problemCount;
         totalProcessed += processed;
         if (!mounted) return;
-        await _loadItems(scope);
-        setState(() {
-          _runProgress = '검수 진행 중: ${total - remaining} / $total 문항 완료 (이번 묶음 $processed문항 처리)';
-        });
-        if (res['done'] == true || remaining <= 0 || processed <= 0) break;
+        await _loadItems(scope, reloadPreviews: false);
+        if (res['done'] == true || processed <= 0) break;
       }
+
+      // 2차: 정답·해설 카드를 V2로 찍어 학생 시점 렌더 검수
+      if (mounted && !_stopRequested && _svc.hasGateway) {
+        renderChecked = await _runRenderCheckPass(scope);
+      }
+
       if (!mounted) return;
       await _loadUnits();
       setState(() {
         _notice = _stopRequested
             ? '요청에 따라 일시정지했습니다 ($totalProcessed문항 검수 완료).'
-            : '중단원 검수가 완료되었습니다 ($totalProcessed문항 처리). 정상 문항은 일괄 승인하고 확인 필요 문항만 점검하세요.';
+            : '중단원 검수가 완료되었습니다 ($totalProcessed문항 처리 · V2 렌더 검수 $renderChecked문항). 정상 문항은 일괄 승인하고 확인 필요 문항만 점검하세요.';
       });
     } catch (e) {
       if (!mounted) return;
       setState(() => _notice = '검수 실행 중 오류: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _runningReview = false;
+          _runProgress = null;
+        });
+      }
+    }
+  }
+
+  /// 아직 V2 렌더 검수를 안 한 문항을 묶어 정답+해설 카드를 찍고 ai_think 에 학생 시점 판정을 맡긴다.
+  Future<int> _runRenderCheckPass(TextbookReviewUnitScope scope, {List<TextbookProblemReviewItem>? only}) async {
+    var checked = 0;
+    final targets = (only ?? _items.where((x) => x.needsRenderCheck)).toList();
+    if (targets.isEmpty) return 0;
+    for (var i = 0; i < targets.length; i += _kRenderCheckChunkSize) {
+      if (!mounted || _stopRequested) break;
+      final chunk = targets.skip(i).take(_kRenderCheckChunkSize).toList();
+      setState(() {
+        _runProgress = 'V2 렌더 검수: ${i + 1}~${i + chunk.length} / ${targets.length} 문항 — 정답+해설 카드를 V2로 찍는 중...';
+      });
+      final payload = <Map<String, dynamic>>[];
+      for (final it in chunk) {
+        final problemUrl = _previewUrlsByCropId[it.cropId];
+        String solUrl = '';
+        if (it.primarySolutionText.isNotEmpty || it.displayAnswer.isNotEmpty) {
+          solUrl = await _renderCard(
+            it,
+            kind: 'answer_solution',
+            text: '${it.displayAnswer}\n${it.primarySolutionText}',
+            build: () => _svc.renderAnswerSolutionCard(
+              academyId: scope.academyId,
+              item: it,
+              solutionText: it.primarySolutionText,
+              solutionKind: it.primarySolutionKind,
+            ),
+          );
+        }
+        if ((problemUrl ?? '').isEmpty && solUrl.isEmpty) continue;
+        payload.add({
+          'crop_id': it.cropId,
+          if ((problemUrl ?? '').isNotEmpty) 'problem_url': problemUrl,
+          if (solUrl.isNotEmpty) 'answer_solution_url': solUrl,
+          'solution_kind': it.primarySolutionKind,
+        });
+      }
+      if (payload.isEmpty) continue;
+      if (!mounted) break;
+      setState(() {
+        _runProgress = 'V2 렌더 검수: ${i + 1}~${i + chunk.length} / ${targets.length} 문항 — 학생 시점으로 읽히는지 판정 중...';
+      });
+      final res = await _svc.runRenderCheck(academyId: scope.academyId, items: payload);
+      checked += (res['processed'] as num?)?.toInt() ?? 0;
+    }
+    if (mounted) await _loadItems(scope, reloadPreviews: false);
+    return checked;
+  }
+
+  Future<void> _renderCheckSingle(TextbookProblemReviewItem item) async {
+    final scope = _selectedScope;
+    if (scope == null || _runningReview) return;
+    setState(() {
+      _runningReview = true;
+      _stopRequested = false;
+      _notice = null;
+    });
+    try {
+      final n = await _runRenderCheckPass(scope, only: [item]);
+      if (!mounted) return;
+      setState(() => _notice = n > 0 ? '${item.problemNumber}번 V2 렌더 검수를 다시 했습니다.' : 'V2 카드 URL을 만들지 못해 검수하지 못했습니다.');
+    } catch (e) {
+      if (mounted) setState(() => _notice = 'V2 렌더 검수 실패: $e');
     } finally {
       if (mounted) {
         setState(() {
@@ -284,6 +495,9 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
   }) async {
     setState(() => _saving = true);
     try {
+      final origSol = _origSolutionCtrl.text.trim();
+      final origAns = _origAnswerCtrl.text.trim();
+      final origChanged = origSol != (item.solutionTranscribed ?? '').trim() || origAns != (item.solutionAnswer ?? '').trim();
       await _svc.saveItemEdit(
         cropId: item.cropId,
         newAnswer: overrideAnswer ?? _answerEditCtrl.text.trim(),
@@ -291,13 +505,16 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
         visualTags: _editingVisualTags,
         approveMath: approveMath,
         approveQuality: approveQuality,
+        solutionTranscribed: origChanged ? origSol : null,
+        solutionAnswer: origChanged ? origAns : null,
+        alternativeSolutions: _editingAlternatives,
       );
       if (!mounted) return;
       setState(() {
         _saving = false;
         _notice = '문항 ${item.problemNumber}번 변경·승인을 반영했습니다.';
       });
-      if (_selectedScope != null) await _loadItems(_selectedScope!);
+      if (_selectedScope != null) await _loadItems(_selectedScope!, reloadPreviews: false);
       await _loadUnits();
     } catch (e) {
       if (!mounted) return;
@@ -321,7 +538,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
         _saving = false;
         _notice = '초안($code)을 사전에 정식 등록하고 이 중단원 $backfilled개 문항에 자동 반영했습니다.';
       });
-      if (_selectedScope != null) await _loadItems(_selectedScope!);
+      if (_selectedScope != null) await _loadItems(_selectedScope!, reloadPreviews: false);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -329,6 +546,80 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
         _notice = '초안 등록 실패: $e';
       });
     }
+  }
+
+  Future<void> _addAlternativeSolution(TextbookProblemReviewItem item) async {
+    final titleCtrl = TextEditingController();
+    final solCtrl = TextEditingController();
+    final ansCtrl = TextEditingController(text: item.displayAnswer);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _kPanelBg,
+        title: const Text('대안 풀이 추가', style: TextStyle(color: _kText, fontSize: 16, fontWeight: FontWeight.w800)),
+        content: SizedBox(
+          width: 560,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: titleCtrl,
+                style: const TextStyle(color: _kText, fontSize: 13),
+                decoration: _inputDecoration('풀이 이름 (예: 대입법, 그래프 이용)'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: solCtrl,
+                maxLines: 8,
+                style: const TextStyle(color: _kText, fontSize: 13, height: 1.45),
+                decoration: _inputDecoration('풀이 본문 (LaTeX \$...\$ 지원)'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: ansCtrl,
+                style: const TextStyle(color: _kText, fontSize: 13),
+                decoration: _inputDecoration('이 풀이의 정답'),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('취소')),
+          ElevatedButton(
+            style: _primaryButtonStyle(),
+            onPressed: () => Navigator.of(ctx).pop(solCtrl.text.trim().isNotEmpty),
+            child: const Text('추가'),
+          ),
+        ],
+      ),
+    );
+    final newAlt = ok == true
+        ? <String, dynamic>{
+            'id': DateTime.now().microsecondsSinceEpoch.toString(),
+            'source': 'manual',
+            'title': titleCtrl.text.trim().isEmpty ? '대안 풀이 ${_editingAlternatives.length + 1}' : titleCtrl.text.trim(),
+            'solution': solCtrl.text.trim(),
+            'answer': ansCtrl.text.trim(),
+            'created_at': DateTime.now().toIso8601String(),
+          }
+        : null;
+    titleCtrl.dispose();
+    solCtrl.dispose();
+    ansCtrl.dispose();
+    if (newAlt == null || !mounted) return;
+    setState(() => _editingAlternatives = [..._editingAlternatives, newAlt]);
+    await _saveAndApproveSingle(item);
+  }
+
+  Future<void> _removeAlternativeSolution(TextbookProblemReviewItem item, int index) async {
+    if (index < 0 || index >= _editingAlternatives.length) return;
+    setState(() {
+      _editingAlternatives = [
+        for (var i = 0; i < _editingAlternatives.length; i += 1)
+          if (i != index) _editingAlternatives[i],
+      ];
+    });
+    await _saveAndApproveSingle(item);
   }
 
   List<TextbookProblemReviewItem> get _filteredItems {
@@ -369,7 +660,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
           ],
           const SizedBox(height: 14),
           Expanded(
-            child: _loadingUnits || _loadingItems
+            child: _loadingUnits || (_loadingItems && _items.isEmpty)
                 ? const Center(child: CircularProgressIndicator(color: _kAccent))
                 : _error != null
                     ? Center(child: Text(_error!, style: const TextStyle(color: _kError, fontSize: 14)))
@@ -403,7 +694,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
             ),
             SizedBox(height: 2),
             Text(
-              '세트 공통 발문 결합 · 블라인드 독립 풀이 · 3축 난이도(개념/사고/연산) · V2 엔진 렌더링 카드 대조',
+              '해설 PDF 좌표 영역 원본 해설 전사 · 블라인드 독립 풀이 · 3축 난이도 · V2 렌더 카드 학생 시점 품질 검수',
               style: TextStyle(color: _kTextSub, fontSize: 12.5),
             ),
           ],
@@ -443,6 +734,39 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
             label: const Text('중단원 문항 검수 실행'),
           ),
           const SizedBox(width: 6),
+          PopupMenuButton<String>(
+            tooltip: '추가 작업',
+            color: _kPanelBg,
+            icon: const Icon(Icons.more_vert_rounded, color: _kTextSub, size: 20),
+            onSelected: (v) {
+              if (v == 'rerun_all') unawaited(_runUnitReview(forceRerun: true));
+              if (v == 'render_check' && _selectedScope != null) {
+                unawaited(() async {
+                  setState(() {
+                    _runningReview = true;
+                    _stopRequested = false;
+                  });
+                  try {
+                    final n = await _runRenderCheckPass(_selectedScope!, only: _items.toList());
+                    if (mounted) setState(() => _notice = 'V2 렌더 검수를 $n문항에 다시 했습니다.');
+                  } catch (e) {
+                    if (mounted) setState(() => _notice = 'V2 렌더 검수 실패: $e');
+                  } finally {
+                    if (mounted) {
+                      setState(() {
+                        _runningReview = false;
+                        _runProgress = null;
+                      });
+                    }
+                  }
+                }());
+              }
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'rerun_all', child: Text('전체 강제 재검수', style: TextStyle(color: _kText, fontSize: 13))),
+              PopupMenuItem(value: 'render_check', child: Text('V2 렌더 검수만 전체 다시', style: TextStyle(color: _kText, fontSize: 13))),
+            ],
+          ),
         ],
         IconButton(
           tooltip: '새로고침',
@@ -498,6 +822,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
                         setState(() {
                           _selectedBookKey = v;
                           _selectedScope = _unitsForSelectedBook.firstOrNull;
+                          _selectedCropId = null;
                         });
                         if (_selectedScope != null) unawaited(_loadItems(_selectedScope!));
                       },
@@ -533,7 +858,10 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
                       : (k) {
                           final hit = units.where((u) => u.key == k).firstOrNull;
                           if (hit == null) return;
-                          setState(() => _selectedScope = hit);
+                          setState(() {
+                            _selectedScope = hit;
+                            _selectedCropId = null;
+                          });
                           unawaited(_loadItems(hit));
                         },
                 ),
@@ -556,9 +884,9 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // 좌측: 문항 리스트 패널 (신형 다크 틸 스타일)
+        // 좌측: 문항 리스트 패널
         SizedBox(
-          width: 390,
+          width: 360,
           child: Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
@@ -597,33 +925,41 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
           ),
         ),
         const SizedBox(width: 14),
-        // 우측: 선택된 문항의 [우리 엔진 렌더링 프리뷰 + 수학 검수 + 품질 검수] 상세 영역
+        // 가운데: 수학 검수 · 품질 검수 · 해설 편집
         Expanded(
           child: selected == null
-              ? Container(
-                  decoration: BoxDecoration(
-                    color: _kPanelBg,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: _kBorder),
-                  ),
-                  child: const Center(child: Text('좌측 목록에서 문항을 선택하세요.', style: TextStyle(color: _kTextSub))),
-                )
+              ? _emptyPanel('좌측 목록에서 문항을 선택하세요.')
               : SingleChildScrollView(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      _buildRenderedEnginePreviewSection(selected),
-                      const SizedBox(height: 14),
                       _buildMathReviewCard(selected),
+                      const SizedBox(height: 14),
+                      _buildSolutionEditCard(selected),
                       const SizedBox(height: 14),
                       _buildQualityReviewCard(selected),
                     ],
                   ),
                 ),
         ),
+        const SizedBox(width: 14),
+        // 우측: 학생이 보는 그대로 — V2 엔진 카드 세로 배치 (문항 → 정답+해설 → AI 풀이 → 대안 풀이)
+        SizedBox(
+          width: 440,
+          child: selected == null ? _emptyPanel('V2 렌더 카드') : _buildV2CardStack(selected),
+        ),
       ],
     );
   }
+
+  Widget _emptyPanel(String text) => Container(
+        decoration: BoxDecoration(
+          color: _kPanelBg,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: _kBorder),
+        ),
+        child: Center(child: Text(text, style: const TextStyle(color: _kTextSub))),
+      );
 
   Widget _filterTabChip(int index, String label, {bool highlightError = false}) {
     final sel = _filterTab == index;
@@ -730,255 +1066,276 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(color: _kTextSub, fontSize: 12),
             ),
-            if (item.totalDifficulty > 0 || item.visualTags.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 6,
-                runSpacing: 4,
-                children: [
-                  if (item.totalDifficulty > 0)
-                    _pillBadge(
-                      '난이도 ${item.totalDifficulty.toStringAsFixed(1)} (개 ${item.conceptScore.toStringAsFixed(1)} · 사 ${item.thinkingScore.toStringAsFixed(1)} · 연 ${item.arithmeticScore.toStringAsFixed(2)})',
-                      _kAccent,
-                    ),
-                  for (final vt in item.visualTags.take(2)) _pillBadge(vt, _kTextSub),
-                ],
-              ),
-            ],
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              children: [
+                if (item.totalDifficulty > 0)
+                  _pillBadge(
+                    '난이도 ${item.totalDifficulty.toStringAsFixed(1)} (개 ${item.conceptScore.toStringAsFixed(1)} · 사 ${item.thinkingScore.toStringAsFixed(1)} · 연 ${item.arithmeticScore.toStringAsFixed(2)})',
+                    _kAccent,
+                  ),
+                _pillBadge(
+                  item.hasOriginalSolution
+                      ? (item.solutionSource == 'manual' ? '원본 해설 (직접 입력)' : '원본 해설 전사됨')
+                      : item.hasSolutionRef
+                          ? '원본 해설 미전사'
+                          : '해설 좌표 없음',
+                  item.hasOriginalSolution ? _kBlue : (item.hasSolutionRef ? _kWarn : _kTextMuted),
+                ),
+                if (item.renderCheckedAt != null)
+                  _pillBadge(
+                    item.renderChecks['problem_ok'] == false ||
+                            item.renderChecks['answer_ok'] == false ||
+                            item.renderChecks['solution_ok'] == false
+                        ? 'V2 렌더 이상'
+                        : 'V2 렌더 정상',
+                    item.renderChecks['problem_ok'] == false ||
+                            item.renderChecks['answer_ok'] == false ||
+                            item.renderChecks['solution_ok'] == false
+                        ? _kError
+                        : _kAccent,
+                  ),
+                for (final vt in item.visualTags.take(2)) _pillBadge(vt, _kTextSub),
+              ],
+            ),
           ],
         ),
       ),
     );
   }
 
-  /// 상단: 학습앱 문제은행 카드와 동일한 우리 엔진(V2 서버 PDF 썸네일 + LatexTextRenderer) 렌더링 카드 뷰
-  Widget _buildRenderedEnginePreviewSection(TextbookProblemReviewItem item) {
-    final previewUrl = _previewUrlsByCropId[item.cropId];
+  // ── 우측: V2 카드 스택 ───────────────────────────────────────────────────
+
+  Widget _buildV2CardStack(TextbookProblemReviewItem item) {
+    final problemUrl = _previewUrlsByCropId[item.cropId];
     final qc = item.qualityChecks;
-    final hasQualityIssue = item.qualityStatus == 'issue' || qc['issue_title'] != null;
+    final rc = item.renderChecks;
+    final problemIssue = item.qualityStatus == 'issue' &&
+        (qc['stem_ok'] == false || qc['choices_ok'] == false || qc['figure_ok'] == false || qc['latex_v2_ok'] == false ||
+            qc['fidelity_ok'] == false || rc['problem_ok'] == false);
+    final solutionIssue = rc['answer_ok'] == false || rc['solution_ok'] == false;
+
+    final primaryKey = _cardKey(item.cropId, 'answer_solution', '${item.displayAnswer}\n${item.primarySolutionText}');
+    final aiKey = item.hasAiSolution ? _cardKey(item.cropId, 'ai_solution', item.aiSolution!) : null;
 
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: _kPanelBg,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: hasQualityIssue ? _kError.withValues(alpha: 0.7) : _kBorder),
+        border: Border.all(color: (problemIssue || solutionIssue) ? _kError.withValues(alpha: 0.7) : _kBorder),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
             children: [
-              const Icon(Icons.preview_rounded, color: _kAccent, size: 19),
+              const Icon(Icons.smartphone_rounded, color: _kAccent, size: 18),
               const SizedBox(width: 8),
-              Text(
-                '우리 엔진 렌더링 미리보기 — ${item.problemNumber}번',
-                style: const TextStyle(color: _kText, fontSize: 15.5, fontWeight: FontWeight.w800),
+              Expanded(
+                child: Text(
+                  '학생이 보는 화면 (V2 엔진) — ${item.problemNumber}번',
+                  style: const TextStyle(color: _kText, fontSize: 14.5, fontWeight: FontWeight.w800),
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
-              if (item.isSetQuestion) ...[
-                const SizedBox(width: 8),
-                _pillBadge(
-                  item.setHeaderNumber.isNotEmpty
-                      ? '독립/종속 세트 (${item.setHeaderNumber}) · 공통 발문 연결됨'
-                      : '세트 문항 · 공통 발문 연결됨',
-                  _kBlue,
-                ),
-              ],
-              const Spacer(),
-              if (_loadingPreviews)
-                const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: _kAccent),
-                ),
+              if (_loadingPreviews || _cardRendering.isNotEmpty)
+                const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: _kAccent)),
+              IconButton(
+                tooltip: 'V2 렌더 검수 다시',
+                onPressed: _runningReview || !_svc.hasGateway ? null : () => unawaited(_renderCheckSingle(item)),
+                icon: const Icon(Icons.rule_rounded, color: _kTextSub, size: 18),
+              ),
             ],
           ),
-          if (hasQualityIssue && qc['issue_title'] != null) ...[
-            const SizedBox(height: 10),
-            _buildBanner(
-              '렌더링·전사 점검 사유 — ${qc['issue_title']}: ${qc['issue_detail'] ?? ''}',
-              _kError,
-              Icons.warning_amber_rounded,
-            ),
+          if (!_svc.hasGateway) ...[
+            const SizedBox(height: 8),
+            _buildBanner('게이트웨이가 연결되지 않아 V2 카드를 만들 수 없습니다.', _kWarn, Icons.cloud_off_rounded),
           ],
-          const SizedBox(height: 12),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // 좌측: 학습앱 문제은행 카드(서버 PDF V2 썸네일 이미지 그대로 표시)
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      '① 학습앱 문제은행 카드 이미지 (서버 PDF V2 엔진)',
-                      style: TextStyle(color: _kTextSub, fontSize: 12, fontWeight: FontWeight.w700),
-                    ),
-                    const SizedBox(height: 6),
-                    ProblemBankQuestionCard(
-                      backgroundColor: Colors.white,
-                      borderColor: hasQualityIssue ? _kError : const Color(0xFFD5DDDD),
-                      child: SizedBox(
-                        height: 230,
-                        width: double.infinity,
-                        child: previewUrl != null && previewUrl.isNotEmpty
-                            ? Image.network(
-                                previewUrl,
-                                fit: BoxFit.fitWidth,
-                                alignment: Alignment.topCenter,
-                                errorBuilder: (_, __, ___) => _buildLatexEngineCardFallback(item),
-                              )
-                            : _buildLatexEngineCardFallback(item),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 14),
-              // 우측: 수식 렌더러(LatexTextRenderer) 실시간 조판 및 공통 발문/개별 발문 분리 확인
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      '② 공통 발문 + 개별 문항 수식 엔진(LatexTextRenderer) 조판',
-                      style: TextStyle(color: _kTextSub, fontSize: 12, fontWeight: FontWeight.w700),
-                    ),
-                    const SizedBox(height: 6),
-                    ProblemBankQuestionCard(
-                      backgroundColor: Colors.white,
-                      borderColor: const Color(0xFFD5DDDD),
-                      child: Container(
-                        constraints: const BoxConstraints(minHeight: 230),
-                        padding: const EdgeInsets.all(10),
-                        child: _buildLatexEngineCardFallback(item),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// 학습앱/매니저앱 수식 렌더러(LatexTextRenderer)로 실제 문제은행 종이 카드 위에서 그리는 화면
-  Widget _buildLatexEngineCardFallback(TextbookProblemReviewItem item) {
-    final cleanCommon = _cleanMarkupForRender(item.commonStem);
-    final cleanStem = _cleanMarkupForRender(item.stem);
-
-    return SingleChildScrollView(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (cleanCommon.isNotEmpty && !cleanStem.contains(cleanCommon)) ...[
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              margin: const EdgeInsets.only(bottom: 8),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF1F6F5),
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: const Color(0xFFB8D4CE)),
-              ),
+          if (rc['issue_title'] != null) ...[
+            const SizedBox(height: 8),
+            _buildBanner('V2 렌더 검수 — ${rc['issue_title']}: ${rc['issue_detail'] ?? ''}', _kError, Icons.warning_amber_rounded),
+          ],
+          const SizedBox(height: 10),
+          Expanded(
+            child: SingleChildScrollView(
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text(
-                    item.setHeaderNumber.isNotEmpty
-                        ? '[${item.setHeaderNumber} 공통 발문]'
-                        : '[세트 공통 발문]',
-                    style: const TextStyle(
-                      color: Color(0xFF1B6B63),
-                      fontSize: 11,
-                      fontWeight: FontWeight.w800,
-                    ),
+                  _v2CardSection(
+                    title: '① 문항 카드',
+                    subtitle: item.isSetQuestion ? '세트 공통 발문 포함 · 문제은행 카드와 동일 렌더' : '문제은행 카드와 동일 렌더',
+                    url: problemUrl,
+                    loading: _loadingPreviews && (problemUrl ?? '').isEmpty,
+                    issue: problemIssue,
+                    issueText: qc['issue_title'] != null ? '${qc['issue_title']}: ${qc['issue_detail'] ?? ''}' : null,
+                    badges: [
+                      if (qc['judged_from_v2_image'] == true) ('AI가 이 화면을 보고 판정', _kAccent),
+                      if (qc['judged_from_v2_image'] == false && item.qualityStatus != 'pending') ('텍스트만으로 판정됨', _kWarn),
+                      if (qc['fidelity_ok'] == false) ('원본과 내용 불일치', _kError),
+                    ],
                   ),
-                  const SizedBox(height: 3),
-                  LatexTextRenderer(
-                    cleanCommon,
-                    softWrap: true,
-                    enableDisplayMath: true,
-                    style: const TextStyle(
-                      color: Color(0xFF1E2929),
-                      fontSize: 13.2,
-                      fontWeight: FontWeight.w700,
-                      height: 1.5,
+                  const SizedBox(height: 12),
+                  _v2CardSection(
+                    title: '② 정답 + ${item.hasOriginalSolution ? '원본 해설' : 'AI 풀이'}',
+                    subtitle: item.hasOriginalSolution
+                        ? (item.solutionSource == 'manual'
+                            ? '운영자가 입력한 해설'
+                            : '해설 PDF ${item.solutionRawPage ?? '-'}쪽 영역을 Vision으로 전사')
+                        : (item.hasSolutionRef ? '원본 해설이 아직 없어 AI 풀이를 표시' : '해설 좌표 없음 · AI 풀이'),
+                    url: _cardUrlCache[primaryKey],
+                    loading: _cardRendering.contains(primaryKey),
+                    error: _cardErrors[primaryKey],
+                    issue: solutionIssue,
+                    issueText: null,
+                    emptyText: item.primarySolutionText.isEmpty && item.displayAnswer.isEmpty ? '정답·해설이 아직 없습니다. 검수를 실행하세요.' : null,
+                    badges: [
+                      ('정답 ${item.displayAnswer.isEmpty ? '-' : item.displayAnswer}', _kBlue),
+                      if (rc['answer_ok'] == false) ('정답 표기 안 보임', _kError),
+                      if (rc['solution_ok'] == false) ('해설 읽기 문제', _kError),
+                    ],
+                  ),
+                  if (item.hasOriginalSolution && item.hasAiSolution && aiKey != null) ...[
+                    const SizedBox(height: 12),
+                    _v2CardSection(
+                      title: '③ AI 독립 풀이',
+                      subtitle: 'AI 정답 ${item.aiAnswer ?? '-'} · 원본 해설과 비교용',
+                      url: _cardUrlCache[aiKey],
+                      loading: _cardRendering.contains(aiKey),
+                      error: _cardErrors[aiKey],
+                      issue: false,
+                      issueText: null,
+                      badges: const [],
                     ),
+                  ],
+                  for (var i = 0; i < item.alternativeSolutions.length; i += 1) ...[
+                    const SizedBox(height: 12),
+                    Builder(builder: (_) {
+                      final alt = item.alternativeSolutions[i];
+                      final text = '${alt['solution'] ?? ''}'.trim();
+                      final k = _cardKey(item.cropId, 'alt_$i', text);
+                      return _v2CardSection(
+                        title: '${_circledNumber(i + (item.hasOriginalSolution && item.hasAiSolution ? 4 : 3))} ${alt['title'] ?? '대안 풀이 ${i + 1}'}',
+                        subtitle: '${alt['source'] == 'ai' ? 'AI 제안' : '직접 입력'} · 정답 ${alt['answer'] ?? '-'}',
+                        url: _cardUrlCache[k],
+                        loading: _cardRendering.contains(k),
+                        error: _cardErrors[k],
+                        issue: false,
+                        issueText: null,
+                        badges: const [],
+                        onRemove: _saving ? null : () => unawaited(_removeAlternativeSolution(item, i)),
+                      );
+                    }),
+                  ],
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    onPressed: _saving ? null : () => unawaited(_addAlternativeSolution(item)),
+                    style: _outlineButtonStyle(color: _kTextSub),
+                    icon: const Icon(Icons.add_rounded, size: 16, color: _kTextSub),
+                    label: const Text('대안 풀이 추가'),
                   ),
                 ],
               ),
             ),
-          ],
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                '${item.problemNumber}. ',
-                style: const TextStyle(
-                  color: Color(0xFF1B6B63),
-                  fontSize: 14,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-              Expanded(
-                child: LatexTextRenderer(
-                  cleanStem.isEmpty ? '(발문 텍스트 없음)' : cleanStem,
-                  softWrap: true,
-                  enableDisplayMath: true,
-                  style: const TextStyle(
-                    color: Color(0xFF232323),
-                    fontSize: 13.8,
-                    height: 1.58,
-                  ),
-                ),
-              ),
-            ],
           ),
-          if (item.choices.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 16,
-              runSpacing: 6,
-              children: [
-                for (var i = 0; i < item.choices.length; i += 1)
-                  LatexTextRenderer(
-                    '${_circledNumber(i + 1)} ${_cleanMarkupForRender(item.choices[i])}',
-                    style: const TextStyle(
-                      color: Color(0xFF232323),
-                      fontSize: 13,
-                      height: 1.45,
-                    ),
-                  ),
-              ],
-            ),
-          ],
         ],
       ),
     );
   }
 
-  String _cleanMarkupForRender(String raw) {
-    return raw
-        .replaceAll('[문단]', '\n')
-        .replaceAll('[박스시작]', '\n┌ ')
-        .replaceAll('[박스끝]', ' ┘\n')
-        .replaceAll('[표시작]', '\n')
-        .replaceAll('[표끝]', '\n')
-        .replaceAll(RegExp(r'\[\[?공백:\d+\]?\]'), ' □ ')
-        .replaceAll(RegExp(r'\\text\{box\{~~\}\}'), ' □ ')
-        .replaceAll('box{~~}', ' □ ')
-        .trim();
+  Widget _v2CardSection({
+    required String title,
+    required String subtitle,
+    required String? url,
+    required bool loading,
+    required bool issue,
+    required String? issueText,
+    required List<(String, Color)> badges,
+    String? error,
+    String? emptyText,
+    VoidCallback? onRemove,
+  }) {
+    final hasUrl = (url ?? '').isNotEmpty;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(title, style: const TextStyle(color: _kText, fontSize: 13, fontWeight: FontWeight.w800)),
+            ),
+            if (onRemove != null)
+              IconButton(
+                tooltip: '이 풀이 삭제',
+                onPressed: onRemove,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                icon: const Icon(Icons.close_rounded, size: 16, color: _kTextMuted),
+              ),
+          ],
+        ),
+        Text(subtitle, style: const TextStyle(color: _kTextSub, fontSize: 11.5)),
+        if (badges.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Wrap(spacing: 6, runSpacing: 4, children: [for (final b in badges) _pillBadge(b.$1, b.$2)]),
+        ],
+        if (issueText != null) ...[
+          const SizedBox(height: 6),
+          Text(issueText, style: const TextStyle(color: _kError, fontSize: 11.5, height: 1.35)),
+        ],
+        const SizedBox(height: 6),
+        ProblemBankQuestionCard(
+          backgroundColor: Colors.white,
+          borderColor: issue ? _kError : const Color(0xFFD5DDDD),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 96),
+            child: hasUrl
+                ? Image.network(
+                    url!,
+                    fit: BoxFit.fitWidth,
+                    alignment: Alignment.topCenter,
+                    loadingBuilder: (_, child, progress) => progress == null
+                        ? child
+                        : const SizedBox(
+                            height: 96,
+                            child: Center(child: CircularProgressIndicator(strokeWidth: 2, color: _kAccent)),
+                          ),
+                    errorBuilder: (_, __, ___) => const SizedBox(
+                      height: 96,
+                      child: Center(
+                        child: Text('V2 카드 이미지를 불러오지 못했습니다.', style: TextStyle(color: Color(0xFF9A3B3B), fontSize: 12)),
+                      ),
+                    ),
+                  )
+                : SizedBox(
+                    height: 96,
+                    child: Center(
+                      child: loading
+                          ? const CircularProgressIndicator(strokeWidth: 2, color: _kAccent)
+                          : Text(
+                              error != null
+                                  ? 'V2 렌더 실패: $error'
+                                  : (emptyText ?? (_svc.hasGateway ? 'V2 카드를 아직 만들지 않았습니다.' : '게이트웨이 미연결')),
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(color: Color(0xFF6B7A7A), fontSize: 12),
+                            ),
+                    ),
+                  ),
+          ),
+        ),
+      ],
+    );
   }
 
   String _circledNumber(int n) {
-    const nums = ['①', '②', '③', '④', '⑤'];
+    const nums = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨'];
     return (n >= 1 && n <= nums.length) ? nums[n - 1] : '$n)';
   }
 
-  /// 1) 수학적 검수 카드 (신형 다크 틸 디자인)
+  // ── 가운데: 수학적 검수 카드 ─────────────────────────────────────────────
+
   Widget _buildMathReviewCard(TextbookProblemReviewItem item) {
     final (mLabel, mColor) = _statusBadge(item.mathStatus, '수학 검수');
     final matched = item.answerMatched;
@@ -997,14 +1354,24 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
             children: [
               const Icon(Icons.functions_rounded, color: _kAccent, size: 20),
               const SizedBox(width: 8),
-              Text(
-                '수학적 검수 (${item.matchMode == '3way' ? '기존답 · 해설답 · AI답 3자 대조' : '기존답 · AI답 2자 대조'})',
-                style: const TextStyle(color: _kText, fontSize: 15.5, fontWeight: FontWeight.w800),
+              Expanded(
+                child: Text(
+                  '수학적 검수 (${item.matchMode == '3way' ? '기존답 · 해설답 · AI답 3자 대조' : '기존답 · AI답 2자 대조'})',
+                  style: const TextStyle(color: _kText, fontSize: 15.5, fontWeight: FontWeight.w800),
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
               const SizedBox(width: 8),
               _pillBadge(mLabel, mColor),
-              const Spacer(),
-              if (matched == false && (item.aiAnswer ?? '').isNotEmpty && item.aiAnswer != '판단불가') ...[
+            ],
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            alignment: WrapAlignment.end,
+            children: [
+              if (matched == false && (item.aiAnswer ?? '').isNotEmpty && item.aiAnswer != '판단불가')
                 OutlinedButton.icon(
                   onPressed: _saving
                       ? null
@@ -1017,8 +1384,19 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
                   icon: const Icon(Icons.auto_fix_high_rounded, size: 16, color: _kAccent),
                   label: Text('AI 답(${item.aiAnswer}) 채택 후 승인'),
                 ),
-                const SizedBox(width: 8),
-              ],
+              if (matched == false && (item.solutionAnswer ?? '').isNotEmpty && item.solutionAnswer != item.aiAnswer)
+                OutlinedButton.icon(
+                  onPressed: _saving
+                      ? null
+                      : () => unawaited(_saveAndApproveSingle(
+                            item,
+                            approveMath: true,
+                            overrideAnswer: item.solutionAnswer,
+                          )),
+                  style: _outlineButtonStyle(color: _kBlue),
+                  icon: const Icon(Icons.menu_book_rounded, size: 16, color: _kBlue),
+                  label: Text('해설 답(${item.solutionAnswer}) 채택 후 승인'),
+                ),
               ElevatedButton.icon(
                 onPressed: _saving ? null : () => unawaited(_saveAndApproveSingle(item, approveMath: true)),
                 style: _primaryButtonStyle(),
@@ -1046,17 +1424,17 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
               const SizedBox(width: 10),
               Expanded(
                 child: _answerCompareTile(
-                  '2단계 AI 블라인드 풀이 정답',
-                  value: item.aiAnswer ?? '(검수 전)',
-                  accent: matched == false ? _kError : _kAccent,
+                  '원본 해설 정답 (Vision 전사)',
+                  value: item.hasSolutionRef ? (item.solutionAnswer ?? (item.hasOriginalSolution ? '(답 표기 없음)' : '(전사 전)')) : '(해설 좌표 없음 · 2자 대조)',
+                  accent: _kBlue,
                 ),
               ),
               const SizedBox(width: 10),
               Expanded(
                 child: _answerCompareTile(
-                  '1단계 해설지 추출 정답',
-                  value: item.hasSolutionRef ? (item.solutionAnswer ?? '(추출 전)') : '(해설 좌표 없음 · 2자 대조)',
-                  accent: _kBlue,
+                  'AI 블라인드 풀이 정답',
+                  value: item.aiAnswer ?? '(검수 전)',
+                  accent: matched == false ? _kError : _kAccent,
                 ),
               ),
             ],
@@ -1076,19 +1454,18 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     const Text(
                       '3축 난이도 분해',
                       style: TextStyle(color: _kText, fontSize: 13, fontWeight: FontWeight.w800),
                     ),
-                    const SizedBox(width: 10),
                     _pillBadge('총점 ${item.totalDifficulty.toStringAsFixed(2)}점', _kAccent),
-                    const SizedBox(width: 6),
                     _pillBadge('개념 ${item.conceptScore.toStringAsFixed(2)}점', _kBlue),
-                    const SizedBox(width: 6),
                     _pillBadge('사고 ${item.thinkingScore.toStringAsFixed(2)}점', _kAccent),
-                    const SizedBox(width: 6),
                     _pillBadge('연산 ${item.arithmeticScore.toStringAsFixed(2)}점', _kTextSub),
                   ],
                 ),
@@ -1153,12 +1530,97 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
                 ),
               ),
           ],
+        ],
+      ),
+    );
+  }
+
+  // ── 가운데: 해설 편집 카드 (원본 해설 · AI 풀이 분리 저장) ───────────────
+
+  Widget _buildSolutionEditCard(TextbookProblemReviewItem item) {
+    final sv = item.qualityChecks['solution_vision'];
+    final visionNote = sv is Map ? sv['note'] : null;
+    final visionConf = sv is Map ? sv['confidence'] : null;
+    final visionFailed = item.hasSolutionRef && !item.hasOriginalSolution && item.hasAiSolution;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _kPanelBg,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: visionFailed ? _kWarn.withValues(alpha: 0.7) : _kBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.menu_book_rounded, color: _kBlue, size: 20),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  '해설 — 원본 해설(교재)과 AI 독립 풀이를 따로 저장',
+                  style: TextStyle(color: _kText, fontSize: 15.5, fontWeight: FontWeight.w800),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 8),
+              _pillBadge(
+                item.hasOriginalSolution
+                    ? (item.solutionSource == 'manual' ? '원본 직접 입력' : '원본 Vision 전사${visionConf != null ? ' · $visionConf' : ''}')
+                    : (item.hasSolutionRef ? '원본 미전사' : '해설 좌표 없음'),
+                item.hasOriginalSolution ? _kBlue : (item.hasSolutionRef ? _kWarn : _kTextMuted),
+              ),
+              const SizedBox(width: 8),
+              ElevatedButton.icon(
+                onPressed: _saving ? null : () => unawaited(_saveAndApproveSingle(item)),
+                style: _primaryButtonStyle(),
+                icon: const Icon(Icons.save_outlined, size: 17),
+                label: const Text('해설 저장'),
+              ),
+            ],
+          ),
+          if (visionFailed) ...[
+            const SizedBox(height: 10),
+            _buildBanner(
+              '해설 PDF ${item.solutionRawPage ?? '-'}쪽 좌표 영역에서 원본 해설을 읽지 못했습니다${visionNote != null ? ' — $visionNote' : ''}. '
+              '좌표를 확인하거나 아래에 직접 입력하세요. 그 전까지 학생 화면에는 AI 풀이가 표시됩니다.',
+              _kWarn,
+              Icons.warning_amber_rounded,
+            ),
+          ],
           const SizedBox(height: 12),
-          const Text('AI 독립 풀이 과정 (LaTeX 지원 · 수정 가능)', style: TextStyle(color: _kTextSub, fontSize: 12)),
+          Row(
+            children: [
+              const Expanded(
+                child: Text('원본 해설 (교재 해설 PDF 전사 · 수정 가능)', style: TextStyle(color: _kTextSub, fontSize: 12)),
+              ),
+              SizedBox(
+                width: 180,
+                height: 34,
+                child: TextField(
+                  controller: _origAnswerCtrl,
+                  style: const TextStyle(color: _kText, fontSize: 12.5, fontWeight: FontWeight.w700),
+                  decoration: _inputDecoration('해설 정답'),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          TextField(
+            controller: _origSolutionCtrl,
+            maxLines: 6,
+            minLines: 3,
+            style: const TextStyle(color: _kText, fontSize: 13, height: 1.45),
+            decoration: _inputDecoration(item.hasSolutionRef ? '검수를 실행하면 해설 PDF 영역에서 전사됩니다. 직접 입력해도 됩니다.' : '해설 좌표가 없는 문항입니다. 직접 입력할 수 있습니다.'),
+          ),
+          const SizedBox(height: 12),
+          Text('AI 독립 풀이 (정답 ${item.aiAnswer ?? '-'} · 수정 가능)', style: const TextStyle(color: _kTextSub, fontSize: 12)),
           const SizedBox(height: 6),
           TextField(
             controller: _solutionEditCtrl,
-            maxLines: 4,
+            maxLines: 6,
+            minLines: 3,
             style: const TextStyle(color: _kText, fontSize: 13, height: 1.45),
             decoration: _inputDecoration('AI 독립 풀이 텍스트'),
           ),
@@ -1181,7 +1643,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
           Text(label, style: const TextStyle(color: _kTextSub, fontSize: 11.5)),
           const SizedBox(height: 6),
           child ??
-              LatexTextRenderer(
+              Text(
                 value ?? '',
                 style: TextStyle(color: accent, fontSize: 14, fontWeight: FontWeight.w800),
               ),
@@ -1190,14 +1652,18 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     );
   }
 
-  /// 2) 품질 · V2 렌더링 · 시각 태그 검수 카드 (신형 다크 틸 디자인)
+  // ── 가운데: 품질 · V2 렌더링 · 시각 태그 검수 카드 ──────────────────────
+
   Widget _buildQualityReviewCard(TextbookProblemReviewItem item) {
     final (qLabel, qColor) = _statusBadge(item.qualityStatus, '품질 검수');
     final qc = item.qualityChecks;
+    final rc = item.renderChecks;
     final stemOk = qc['stem_ok'] != false;
     final choicesOk = qc['choices_ok'] != false;
     final figureOk = qc['figure_ok'] != false;
     final latexOk = qc['latex_v2_ok'] != false;
+    final fidelityOk = qc['fidelity_ok'] != false;
+    final judgedFromImage = qc['judged_from_v2_image'] == true;
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -1213,13 +1679,16 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
             children: [
               const Icon(Icons.high_quality_rounded, color: _kBlue, size: 20),
               const SizedBox(width: 8),
-              const Text(
-                '품질 · V2 렌더링 · 시각 요소 태그 검수',
-                style: TextStyle(color: _kText, fontSize: 15.5, fontWeight: FontWeight.w800),
+              const Expanded(
+                child: Text(
+                  '품질 검수 — 학생 시점 V2 렌더 기준',
+                  style: TextStyle(color: _kText, fontSize: 15.5, fontWeight: FontWeight.w800),
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
               const SizedBox(width: 8),
               _pillBadge(qLabel, qColor),
-              const Spacer(),
+              const SizedBox(width: 8),
               ElevatedButton.icon(
                 onPressed: _saving ? null : () => unawaited(_saveAndApproveSingle(item, approveQuality: true)),
                 style: _primaryButtonStyle(),
@@ -1228,15 +1697,38 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
               ),
             ],
           ),
+          if (qc['issue_title'] != null) ...[
+            const SizedBox(height: 10),
+            _buildBanner('문항 카드 — ${qc['issue_title']}: ${qc['issue_detail'] ?? ''}', _kError, Icons.warning_amber_rounded),
+          ],
+          if (rc['issue_title'] != null) ...[
+            const SizedBox(height: 8),
+            _buildBanner('정답·해설 카드 — ${rc['issue_title']}: ${rc['issue_detail'] ?? ''}', _kError, Icons.warning_amber_rounded),
+          ],
           const SizedBox(height: 10),
           Wrap(
             spacing: 8,
             runSpacing: 6,
             children: [
-              _pillBadge(stemOk ? '발문·공통지시문 정상' : '발문 전사 확인필요', stemOk ? _kAccent : _kError),
+              _pillBadge(
+                item.qualityStatus == 'pending'
+                    ? '문항 카드 판정 전'
+                    : judgedFromImage
+                        ? '문항 카드: V2 화면을 보고 판정'
+                        : '문항 카드: 텍스트만으로 판정(V2 이미지 없었음)',
+                item.qualityStatus == 'pending' ? _kTextMuted : (judgedFromImage ? _kAccent : _kWarn),
+              ),
+              _pillBadge(stemOk ? '발문 온전' : '발문 절단/겹침 의심', stemOk ? _kAccent : _kError),
               _pillBadge(choicesOk ? '선지·보기 완비' : '선지·보기 누락 의심', choicesOk ? _kAccent : _kError),
-              _pillBadge(figureOk ? '도형 위치·크기 정상' : '도형 잘림/누락 의심', figureOk ? _kAccent : _kError),
-              _pillBadge(latexOk ? 'V2 수식 문법 정상' : 'V2 수식·빈칸 표기 확인', latexOk ? _kAccent : _kError),
+              _pillBadge(figureOk ? '도형 표시 정상' : '도형 잘림/누락 의심', figureOk ? _kAccent : _kError),
+              _pillBadge(latexOk ? '수식 조판 정상' : '수식 깨짐/LaTeX 노출', latexOk ? _kAccent : _kError),
+              _pillBadge(fidelityOk ? '원본과 내용 일치' : '원본과 내용 불일치', fidelityOk ? _kAccent : _kError),
+              _pillBadge(
+                item.renderCheckedAt == null
+                    ? '정답·해설 카드 검수 전'
+                    : (rc['answer_ok'] != false && rc['solution_ok'] != false ? '정답·해설 카드 읽힘' : '정답·해설 카드 이상'),
+                item.renderCheckedAt == null ? _kTextMuted : (rc['answer_ok'] != false && rc['solution_ok'] != false ? _kAccent : _kError),
+              ),
             ],
           ),
           const SizedBox(height: 14),

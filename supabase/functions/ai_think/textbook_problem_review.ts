@@ -819,13 +819,18 @@ export async function handleTextbookProblemReview(
   });
 }
 
-/** 재검수 대상: 미검수, 풀이 없음, 또는 해설 좌표가 있는데 원본 해설 전사가 아직 없는 문항(승인된 것은 제외). */
+/**
+ * 재검수 대상: 미검수, 풀이 없음, 또는 해설 좌표가 있는데 원본 해설 전사를 아직 시도하지 않은 문항(승인된 것은 제외).
+ * Vision 전사를 시도했다가 못 읽은 문항(quality_checks.solution_vision 기록 있음)은 다시 대상이 되지 않는다 — 운영자가 좌표를 고치거나 직접 입력한다.
+ */
 export function isReviewTodo(it: Rec, forceRerun: boolean): boolean {
   if (forceRerun) return true;
   const mathStatus = String(it.math_status ?? 'pending');
   if (mathStatus === 'pending' || !it.ai_solution) return true;
   if (mathStatus === 'approved') return false;
-  return it.has_solution_ref === true && !it.solution_transcribed;
+  const qc = (it.quality_checks ?? {}) as Rec;
+  const visionTried = qc.solution_vision !== null && qc.solution_vision !== undefined;
+  return it.has_solution_ref === true && !it.solution_transcribed && !visionTried;
 }
 
 /**

@@ -3925,6 +3925,38 @@ class ProblemBankService {
     return '';
   }
 
+  /// 임의 본문(정답·해설 등)을 문항 카드와 같은 V2(xelatex) 엔진으로 찍은 썸네일 서명 URL.
+  /// 문항검수 화면이 원본 해설·AI 풀이·정답 카드를 학생이 보는 그대로 보여주고 AI 렌더 검수에 넘길 때 쓴다.
+  Future<String> renderCustomStemThumbnail({
+    required String academyId,
+    required String id,
+    required String stem,
+    String questionNumber = '',
+  }) async {
+    final safeStem = stem.trim();
+    if (!hasGateway || academyId.trim().isEmpty || safeStem.isEmpty) return '';
+    final result = await _gatewayPost(
+      '/pb/preview/custom-thumbnail',
+      body: <String, dynamic>{
+        'academyId': academyId.trim(),
+        'question': <String, dynamic>{
+          'id': id,
+          'question_uid': id,
+          'question_number': questionNumber,
+          'question_type': '주관식',
+          'stem': safeStem,
+          'choices': const <dynamic>[],
+          'allow_objective': false,
+          'allow_subjective': true,
+          'meta': const <String, dynamic>{},
+        },
+      },
+    );
+    final thumbnail = result['thumbnail'];
+    if (thumbnail is Map) return '${thumbnail['url'] ?? ''}'.trim();
+    return '';
+  }
+
   Future<Map<String, ProblemBankPdfPreviewArtifact>>
       fetchQuestionPdfPreviewArtifacts({
     required String academyId,

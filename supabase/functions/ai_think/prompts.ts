@@ -224,7 +224,7 @@ const CONCEPT_REVIEW_RULES = [
   '  출처 고정 요청의 기본 source_scope는 all(그 과정 출처가 있는 개념 전체, 이미 배치된 개념 포함)이다.',
   '  사용자가 그 과정에 아직 안 놓인 개념만 명시하면 course_unplaced다. 다른 과정에만 놓인 개념도 그 대상이다.',
   '  전체 미배치로 과정 출처 대상을 대신하지 않는다. 출처 조건 호출이 실패하면 폴더 조건 없는 전체 목록으로 바꾸지 않는다.',
-  '  사용자가 기대한 총수를 말했으면 결과 total과 대조한다. 다르면 목록이 있어도 start_concept_review_job과 run_concept_review_batch를 부르지 않고 사용자에게 알린다.',
+  '  사용자가 기대한 총수를 말했으면 결과 total과 대조한다. 다르면 목록이 있어도 검수 작업 시작이나 묶음 검수를 부르지 않고 사용자에게 알린다.',
   '  예를 들어 중1-1의 해당 과정 미배치를 98개로 말한 요청은 source_scope course_unplaced다. 98은 그 요청의 기대 총수이지 고정된 수가 아니다.',
   '  고정한 목록은 출처·이름·배치가 바뀌거나 개념이 새로 생겨도 id와 순서를 다시 계산하지 않는다. walk_id로 이어 읽을 때는 다른 조건을 주지 않는다.',
   '  배치 후보 목록(list_placement_candidates)을 전체 목록 대신 쓰지 않는다.',
@@ -288,7 +288,9 @@ function conceptReviewJobRules(batch: boolean): string[] {
   '  조건이 다른 기존 작업으로 잇지 않는다. 요청한 조건으로 새 목록을 만들어 그 walk_id를 쓴다.',
   '  출처 고정의 기본 source_scope는 all이고, 그 과정 미배치를 명시한 요청만 course_unplaced다.',
   '  학교급·과정이 모호하면 get_course_maps의 name·school_level·course_key로 후보를 보고, 여러 후보면 사용자에게 확인한다.',
-  '  사용자가 말한 기대 총수와 고정 결과 total이 다르면, 목록이 있어도 start_concept_review_job과 run_concept_review_batch를 부르지 않는다.',
+  batch
+    ? '  사용자가 말한 기대 총수와 고정 결과 total이 다르면, 목록이 있어도 start_concept_review_job과 run_concept_review_batch를 부르지 않는다.'
+    : '  사용자가 말한 기대 총수와 고정 결과 total이 다르면, 목록이 있어도 start_concept_review_job을 부르지 않는다.',
   '  지금 판에 유효한 승인 기록은 재사용하고, 부족한 범위만 검수한다. 외부 근거 미확인(evidence_gaps: source·grade_unit·figure)으로 1차 충족(gap) 처리됐던 개념에 그 뒤 새 교재 출처가 추가되면 그 범위를 한 번 다시 판단해 해소를 시도하고, 여전히 미확인이면 다시 1차 충족(근거 미확인)으로 둔다. 목록을 고정하려고 먼저 배치하거나 승인 기록·출처·배치를 지우지 않는다.',
   '  기존 작업 행은 그대로 둔다. 이후 승인으로 완료 수가 다시 세어지는 것은 그 작업의 집계이고, 목록 id나 예전 승인 행을 고치는 일이 아니다.',
   ...(batch ? CONCEPT_REVIEW_BATCH_RULES : []),
