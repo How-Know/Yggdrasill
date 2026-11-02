@@ -4,10 +4,11 @@ This note covers phase 1 of reviewing migrated textbook problems: protecting
 human corrections from machine re-runs, recording review findings and owner
 decisions, and the manager-app "문항검수" tab that shows them.
 
-Status (2026-10-14): manual protection, the review tables, the load check, and
-the decision RPCs exist in migrations that have not been pushed yet. The gateway
-guard is in place. The manager tab exists only as a design Preview with mock
-data. The AI stages are not built.
+Status (2026-11-02): manual protection, the review tables, the load check, and
+the decision RPCs are deployed. The gateway guard is in place. AI stages 1 to 4
+(solution transcription, independent solve, compare, render check) run from the
+production 문항검수 screen in the manager app; see "AI pipeline" below. Stages 5
+and 6 are not built.
 
 ## Principles
 
@@ -174,35 +175,139 @@ counts, open counts by axis, and the current fingerprint to send with decisions.
 | # | Stage | Key | State |
 |---|-------|-----|-------|
 | 0 | 적재 확인 | `load` | Built (database) |
-| 1 | 해설 전사 | `solution_text` | Planned |
-| 2 | AI 독립 풀이 | `solve` | Planned |
-| 3 | 대조·판정 | `compare` | Planned |
-| 4 | 렌더 검수 | `render` | Planned |
+| 1 | 해설 전사 | `solution_text` | Built (Edge `textbook_problem_review`, Vision on the solution crop) |
+| 2 | AI 독립 풀이 | `solve` | Built (same action, judged on the V2 render) |
+| 3 | 대조·판정 | `compare` | Built (same action) |
+| 4 | 렌더 검수 | `render` | Built (Edge `textbook_problem_render_check`, second pass) |
 | 5 | 개념서 | `concept` | Planned |
 | 6 | 마감 | `close` | Planned |
 
-Planned stages write findings with proposals and never change data directly.
+AI stages open findings and store their analysis per problem. They never change
+answers or solution refs; the owner does that through the decision RPCs or the
+edit RPC below.
 
-## Manager tab
+## AI pipeline
 
-The Preview lives in
-`apps/yggdrasill_manager/lib/screens/design_preview/yggdrasill_manager/textbook_review/`
-and uses mock data. Run `flutter run -d windows` in
-`apps/yggdrasill_design_preview` and open "문항검수" in the manager hub.
+Migrations `20261101030000_textbook_problem_review_pipeline.sql`,
+`20261102010000_textbook_review_set_common_stem.sql`,
+`20261102030000_textbook_review_solution_vision_and_v2_render_check.sql`.
+Edge code: `supabase/functions/ai_think/textbook_problem_review.ts`
+(prompt version `TEXTBOOK_REVIEW_PROMPT_VERSION`). Manager code:
+`services/textbook_problem_review_service.dart`,
+`services/textbook_review_solution_image_service.dart`,
+`screens/problem_roadmap/problem_roadmap_screen.dart`.
 
-- A stage strip shows progress and the decisions left per stage.
-- The item list filters by decision needed, held, passed, or all.
-- The detail view shows the evidence (problem, grading answer, AI solution,
-  solution position) and one card per finding with "무엇이 문제인가" and
-  "어떻게 고칠까" (current value, new value, reason, what changes, what stays).
-- Owner actions: apply the proposal, edit directly, no problem, hold, reopen,
-  release protection.
-- A stale proposal shows a notice under its title, and its apply button is
-  disabled.
-- The decision history is shown in full.
+### Where the result lives
 
-The production tab is wired to the RPCs only after the owner approves the
-Preview.
+`textbook_problem_analyses`, one row per crop:
+
+- Original solution: `solution_transcribed`, `solution_answer`,
+  `solution_source` (`textbook_vision` or `manual`), `solution_extracted_at`.
+  This is the printed solution read from the solution PDF. It is never derived
+  from the AI solve.
+- AI solve: `ai_solution`, `ai_answer`, concept ids, thinking codes, the three
+  difficulty axes (concept, thinking, arithmetic; recomputed by
+  `textbook_problem_recalc_scores`).
+- Judgement: `math_status` and `quality_status`, each `pending`, `clean`,
+  `issue`, or `approved`. `quality_checks` keeps the stage-2 flags
+  (`judged_from_v2_image`, `fidelity_ok`, `solution_vision`), `render_checks`
+  and `render_checked_at` keep the stage-4 result.
+- `alternative_solutions`: a jsonb array of extra solutions the owner adds.
+
+Reads go through `textbook_review_unit_overview(academy, book, grade, big, mid)`
+(one row per problem with crop, problem-bank, answer, solution-ref and analysis
+fields). Owner edits go through `textbook_review_save_item_edit`, which can set
+the answer, the AI solution, visual tags, the transcribed solution and its
+answer, alternative solutions, and approve the math or quality axis. Changing
+the transcribed text sets `solution_source = 'manual'`; saving the same text
+keeps `textbook_vision`.
+
+### Why the client orchestrates
+
+The V2 renderer (xelatex) and the textbook PDFs live on the operator PC behind
+the gateway; the Edge Function cannot reach them. So the manager app prepares
+the images for each chunk and the Edge Function only sees URLs and base64:
+
+1. The screen loads V2 problem thumbnails for the unit
+   (`/pb/preview/batch-render`, signed Supabase URLs).
+2. For each todo problem with a real solution ref, the app downloads the
+   solution (or body) PDF once per book and grade, renders the
+   `content_region_1k` with pdfrx (padded, about 1100 px wide), and sends it
+   as a base64 PNG.
+3. It posts `crop_ids` plus `images` (per crop: `solution_image_base64`,
+   `solution_image_mime`, `v2_problem_url`) to `ai_think` action
+   `textbook_problem_review`, six problems per call. Only https URLs and
+   png/jpeg/webp base64 under 4M characters are accepted.
+4. After the unit is done it runs the render check pass (below).
+
+`isReviewTodo` is the same on both sides: `pending` or no AI solution is todo;
+`approved` is not; otherwise a problem is todo only if it has a solution ref,
+no transcribed solution, and Vision has not been tried yet
+(`quality_checks.solution_vision` absent). A problem whose Vision read failed
+is therefore not retried on every run; "전체 강제 재검수" overrides this. The
+screen also keeps a per-run sent set so one run never sends a crop twice.
+
+### Stages 1 to 3 (`textbook_problem_review`)
+
+- Stage 1 (reasoning low) transcribes the solution crop verbatim: text, the
+  final answer, confidence, and `found = false` when the crop does not contain
+  this problem's solution. It does not solve the problem.
+- Stage 2 runs in parallel with stage 1. The model sees the V2 render of the
+  problem (detail high) and, when a crop exists, the original textbook crop
+  (detail auto). It solves independently and judges quality **from the V2
+  image, as a student would see it**, not from the stem text. The original
+  crop is only for fidelity (`fidelity_ok`: does the render match the print).
+  Set problems get the common stem combined with the item
+  (`[공통 지시문] ... [문항] ...`).
+- Stage 3 compares the grading answer, the transcribed solution answer (when
+  present), and the AI answer, and proposes concept ids, thinking codes and
+  draft proposals.
+- Writes: the analysis row (manual solutions are kept, `render_checks` is
+  reset), `math_status` and `quality_status` (`clean` or `issue`), and
+  findings with `check_key` `ai_answer_compare`, `ai_quality_v2_student_view`,
+  `ai_solution_vision`. A re-run updates the open finding or resolves it as
+  `auto_cleared`. Findings are matched by selecting the open row for
+  `(crop_id, check_key)` first; the partial unique index cannot be targeted by
+  a client upsert.
+
+### Stage 4 (`textbook_problem_render_check`)
+
+The manager app renders two V2 cards per problem through
+`/pb/preview/custom-thumbnail`: the problem card and an answer + solution card
+(`정답 X` then the printed solution, or the AI solution when there is none).
+It posts up to eight `{crop_id, problem_url, answer_solution_url,
+solution_kind}` items. The model reads both images as a student and reports
+`problem_ok`, `answer_ok`, `solution_ok` with an issue title and detail.
+
+Writes: `render_checks`, `render_checked_at`, finding `check_key`
+`ai_v2_render_student_view`, and `quality_status`: approved stays approved;
+otherwise `clean` only when the render is fine and the stage-2 checks were
+fine, else `issue`. Every call records an `ai_runs` row with feature
+`textbook_problem_review` or `textbook_problem_render_check`.
+
+## Manager screen (문항검수)
+
+`apps/yggdrasill_manager/lib/screens/problem_roadmap/problem_roadmap_screen.dart`.
+Three columns:
+
+- Left: the unit's problem list with math and quality status.
+- Centre: the math review card (answers side by side, compare result), the
+  solution edit card (transcribed solution, its answer, AI solution; "해설
+  저장"), and the quality review card (stage-2 flags, render-check state,
+  findings).
+- Right, a vertical stack rendered **only with V2**: ① the problem card,
+  ② answer + printed solution (or AI solution), ③ the AI solution when a printed
+  one exists, then one card per alternative solution with add and remove. Card
+  images are cached per `crop | kind | text hash` and rebuilt when the text
+  changes. The client LaTeX renderer is not used here, because the point of the
+  stack is to see exactly what students will see.
+- Header menu: "전체 강제 재검수" (ignores `isReviewTodo`) and "V2 렌더 검수만
+  전체 다시" (stage 4 only). "해설 답 채택 후 승인" copies the printed
+  solution's answer into the grading answer and approves.
+
+The older Preview under
+`screens/design_preview/yggdrasill_manager/textbook_review/` with mock data is
+superseded by this screen.
 
 ## Checks
 
@@ -211,6 +316,9 @@ Preview.
 - `gateway`: `test/textbook_manual_guard.test.js`
   (`node --test "test/**/*.test.js"`).
 - `apps/yggdrasill_manager`: `test/textbook_review_preview_test.dart`.
+- `supabase/functions/ai_think`: `textbook_problem_review_test.ts` (image
+  parsing, common-stem combining, `isReviewTodo`). AI tests use
+  `FakeAiProvider` and do not assert model wording.
 
 ## Open questions
 

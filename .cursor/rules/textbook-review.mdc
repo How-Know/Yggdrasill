@@ -19,4 +19,13 @@ and RPCs (`textbook_review_*`), first read `docs/architecture/textbook-review.md
 - Decisions are append-only. Never update or delete `textbook_review_decisions`.
 - Never change the source PDF. Record source errors as correction notes.
 - Student code must not read review tables or functions.
-- The manager tab is Preview-only until the owner approves it (design-system rule).
+- The printed solution (`solution_transcribed`, `solution_source`) comes from
+  Vision on the solution PDF crop or from the owner. Never fill it from the AI
+  solve (`ai_solution`); keep the two apart.
+- AI quality judgement is made from the V2 render images (what students see),
+  not from the stem text. The manager app prepares the images (solution crop,
+  V2 cards) and sends URLs/base64; the Edge Function does not call the gateway.
+- The 문항검수 right-hand stack renders with V2 only. Do not add the client
+  LaTeX renderer there.
+- `isReviewTodo` must stay identical in the Edge Function and the manager
+  service; a failed Vision read is not retried automatically.
