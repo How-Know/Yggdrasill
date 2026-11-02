@@ -28,6 +28,7 @@ import { createDecisionDraft, createMemoryFeedbackDraft, createSpecExport } from
 import { computeFeatures, parseClientFeatures, type DbFeatureCheck, type ThinkFeatures } from './features.ts';
 import { THINK_PROMPT_VERSION } from './prompts.ts';
 import { SupabaseThinkStore, type SupabaseLike } from './store.ts';
+import { handleTextbookProblemRenderCheck, handleTextbookProblemReview } from './textbook_problem_review.ts';
 import { MAX_MESSAGE_CHARS, parseAttachments, uuidOrNull } from './validate.ts';
 
 declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void } | undefined;
@@ -409,58 +410,117 @@ async function handleBookReview(req: Request, auth: AuthContext, body: Body): Pr
   };
 
   const applyPendingCards = async () => {
-    const stRes = await auth.userClient.rpc('concept_review_job_status_live', { p_job_id: jobId, p_open_limit: 20 });
+    const stRes = await auth.userClient.rpc('concept_review_job_status', { p_job_id: jobId, p_open_limit: 20 });
     const st = (stRes.data ?? {}) as Record<string, unknown>;
-    const pending = Array.isArray(st.pending_cards) ? (st.pending_cards as Record<string, unknown>[]) : [];
-    const ordered = [...pending].sort((a, b) => {
-      const ka = String(a.kind ?? '') === 'concept_review_record' ? 0 : 1;
-      const kb = String(b.kind ?? '') === 'concept_review_record' ? 0 : 1;
+    const fromStatus = Array.isArray(st.pending_cards) ? (st.pending_cards as Record<string, unknown>[]) : [];
+    const { data: convActions } = await auth.admin
+      .from('ai_actions')
+      .select('id,kind,status')
+      .eq('conversation_id', conversationId!)
+      .eq('status', 'proposed')
+      .order('created_at', { ascending: true });
+    const byId = new Map<string, { action_id: string; kind: string }>();
+    for (const c of fromStatus) {
+      const id = typeof c.action_id === 'string' ? c.action_id : '';
+      if (id) byId.set(id, { action_id: id, kind: String(c.kind ?? '') });
+    }
+    for (const a of (convActions ?? []) as Record<string, unknown>[]) {
+      const id = typeof a.id === 'string' ? a.id : '';
+      if (id && !byId.has(id)) byId.set(id, { action_id: id, kind: String(a.kind ?? '') });
+    }
+    const ordered = [...byId.values()].sort((a, b) => {
+      const ka = a.kind === 'concept_review_record' ? 0 : 1;
+      const kb = b.kind === 'concept_review_record' ? 0 : 1;
       return ka - kb;
     });
     let appliedReviews = 0;
     let appliedFixes = 0;
     for (const card of ordered) {
-      const actionId = typeof card.action_id === 'string' ? card.action_id : '';
-      if (!actionId) continue;
-      const res = await auth.userClient.rpc('course_think_action_apply', { p_id: actionId, p_overrides: {} });
+      const res = await auth.userClient.rpc('course_think_action_apply', { p_id: card.action_id, p_overrides: {} });
       if (!res.error) {
-        if (String(card.kind ?? '') === 'concept_review_record') appliedReviews += 1;
+        if (card.kind === 'concept_review_record') appliedReviews += 1;
         else appliedFixes += 1;
+      } else {
+        console.error('[ai_think] book_review apply card error:', card.action_id, res.error.message);
       }
     }
     return { appliedReviews, appliedFixes };
   };
 
-  const syncProgressSnapshot = async () => {
+  const submitRemainingDrafts = async (): Promise<boolean> => {
+    const { count } = await auth.admin
+      .from('concept_review_job_items')
+      .select('pos', { count: 'exact', head: true })
+      .eq('job_id', jobId!)
+      .eq('state', 'drafted');
+    if (!count || count <= 0) return false;
+    const claimRes = await auth.userClient.rpc('concept_review_job_claim', {
+      p_job_id: jobId,
+      p_holder: `think:${conversationId}:${Date.now()}`,
+      p_mode: 'take',
+    });
+    const gen = Number((claimRes.data as Record<string, unknown> | null)?.gen ?? 0);
+    if (!Number.isFinite(gen) || gen <= 0) return false;
     for (let i = 0; i < 6; i += 1) {
-      const step = await auth.userClient.rpc('concept_review_progress_step', { p_job_id: jobId, p_limit: 50 });
+      const subRes = await auth.userClient.rpc('concept_review_job_submit', {
+        p_job_id: jobId,
+        p_gen: gen,
+        p_conversation_id: conversationId,
+        p_reason: `개념 검수 작업 묶음 검수 결과(${new Date().toISOString().slice(0, 10)})`,
+        p_max_cards: 13,
+      });
+      const sub = (subRes.data ?? {}) as Record<string, unknown>;
+      if (subRes.error || sub.submitted !== true) break;
+    }
+    return true;
+  };
+
+  const syncProgressSnapshot = async () => {
+    for (let i = 0; i < 4; i += 1) {
+      const step = await auth.userClient.rpc('concept_review_progress_step', { p_job_id: jobId, p_limit: 100 });
       const data = (step.data ?? {}) as Record<string, unknown>;
       if (step.error || data.more !== true) break;
     }
   };
 
+  const readFastStatus = async (): Promise<Record<string, unknown>> => {
+    const stRes = await auth.userClient.rpc('concept_review_job_status', { p_job_id: jobId, p_open_limit: 20 });
+    const st = ((stRes.data ?? {}) as Record<string, unknown>);
+    if (typeof st.progress_line === 'string' && st.progress_line) return st;
+    const last = (st.progress_last_success ?? {}) as Record<string, unknown>;
+    return {
+      ...st,
+      progress_line: typeof last.progress_line === 'string' ? last.progress_line : null,
+      first_pass_line: typeof last.first_pass_line === 'string' ? last.first_pass_line : null,
+      condition_line: typeof last.condition_line === 'string' ? last.condition_line : null,
+    };
+  };
+
   if (subAction === 'approve') {
-    const first = await applyPendingCards();
-    let second = { appliedReviews: 0, appliedFixes: 0 };
-    if (first.appliedFixes > 0) {
-      await runBatchOnce();
-      second = await applyPendingCards();
+    let totalReviews = 0;
+    let totalFixes = 0;
+    for (let pass = 0; pass < 4; pass += 1) {
+      const applied = await applyPendingCards();
+      totalReviews += applied.appliedReviews;
+      totalFixes += applied.appliedFixes;
+      const submittedMore = await submitRemainingDrafts();
+      if (!submittedMore && applied.appliedReviews === 0 && applied.appliedFixes === 0) break;
     }
     await syncProgressSnapshot();
-    const liveRes = await auth.userClient.rpc('concept_review_job_status_live', { p_job_id: jobId, p_open_limit: 20 });
+    const live = await readFastStatus();
     return jsonResponse({
       ok: true,
       job_id: jobId,
       conversation_id: conversationId,
-      applied_reviews: first.appliedReviews + second.appliedReviews,
-      applied_fixes: first.appliedFixes + second.appliedFixes,
-      live: liveRes.data ?? null,
+      applied_reviews: totalReviews,
+      applied_fixes: totalFixes,
+      live,
     });
   }
 
   const batch = await runBatchOnce();
   await syncProgressSnapshot();
-  const liveRes = await auth.userClient.rpc('concept_review_job_status_live', { p_job_id: jobId, p_open_limit: 20 });
+  const live = await readFastStatus();
   const endReason = String(batch.end_reason ?? '');
   const hasMore = endReason === 'target_reached' || endReason === 'time_budget';
   return jsonResponse({
@@ -469,7 +529,7 @@ async function handleBookReview(req: Request, auth: AuthContext, body: Body): Pr
     walk_id: walkId,
     conversation_id: conversationId,
     batch,
-    live: liveRes.data ?? null,
+    live,
     has_more: hasMore,
   });
 }
@@ -506,6 +566,10 @@ Deno.serve(async (req) => {
         return await handleSpecExport(auth, body);
       case 'book_review':
         return await handleBookReview(req, auth, body);
+      case 'textbook_problem_review':
+        return await handleTextbookProblemReview(req, auth, body);
+      case 'textbook_problem_render_check':
+        return await handleTextbookProblemRenderCheck(req, auth, body);
       default:
         return errorResponse(400, 'unknown_action');
     }

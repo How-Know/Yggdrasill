@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { randomUUID } from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -47,6 +48,14 @@ function formatKstTime(d) {
     hour12: false,
   }).format(d);
 }
+
+const EMPHASIS_TITLE = {
+  arrival: '등원 안내',
+  departure: '하원 안내',
+  late: '지각 안내',
+};
+const SHEET_BUTTON_NAME = '알림장 조회';
+const SHEET_LINK_ORIGIN = 'https://mneme.co.kr/s';
 
 function renderTemplate(template, params) {
   let out = template;
@@ -170,6 +179,82 @@ async function issueBizppurioToken() {
     throw new Error(`token_issue_failed:${code || res.status}`);
   }
   return accessToken;
+}
+
+async function ensureTodoSheetShareToken(attendanceId) {
+  const { data: snapshot, error } = await supa
+    .from('student_class_session_todo_sheet_snapshots')
+    .select('id, academy_id, student_id')
+    .eq('attendance_id', attendanceId)
+    .maybeSingle();
+  if (error || !snapshot) return null;
+
+  const { data: existing } = await supa
+    .from('todo_sheet_share_links')
+    .select('token')
+    .eq('snapshot_id', snapshot.id)
+    .order('created_at', { ascending: true })
+    .limit(1);
+  const found = existing?.[0]?.token;
+  if (found) return found;
+
+  const token = `${randomUUID()}${randomUUID()}`.replace(/-/g, '');
+  const { error: insertErr } = await supa.from('todo_sheet_share_links').insert({
+    token,
+    academy_id: snapshot.academy_id,
+    student_id: snapshot.student_id,
+    snapshot_id: snapshot.id,
+  });
+  if (!insertErr) return token;
+
+  const { data: again } = await supa
+    .from('todo_sheet_share_links')
+    .select('token')
+    .eq('snapshot_id', snapshot.id)
+    .order('created_at', { ascending: true })
+    .limit(1);
+  return again?.[0]?.token ?? null;
+}
+
+async function resolveAttendanceTemplate({ target, alimtalkSettings, basicInfo, attendanceId }) {
+  if (target === 'arrival' || target === 'late') {
+    const codeKey = target === 'arrival' ? 'arrival_template_code' : 'late_template_code';
+    const messageKey = target === 'arrival' ? 'arrival_message_template' : 'late_message_template';
+    return {
+      templateCode: alimtalkSettings[codeKey],
+      templateMessage: alimtalkSettings[messageKey],
+      title: EMPHASIS_TITLE[target],
+      button: null,
+    };
+  }
+
+  const plain = {
+    templateCode: alimtalkSettings.departure_template_code,
+    templateMessage: alimtalkSettings.departure_message_template,
+    title: EMPHASIS_TITLE.departure,
+    button: null,
+  };
+  if (basicInfo?.todo_sheet_alimtalk_consent !== true) return plain;
+  const sheetCode = alimtalkSettings.departure_sheet_template_code;
+  const sheetMessage = alimtalkSettings.departure_sheet_message_template;
+  if (!sheetCode || !sheetMessage) return plain;
+  const shareToken = await ensureTodoSheetShareToken(attendanceId);
+  if (!shareToken) {
+    console.warn('[alimtalk-worker] sheet snapshot missing, sending plain departure:', attendanceId);
+    return plain;
+  }
+  const url = `${SHEET_LINK_ORIGIN}?t=${shareToken}`;
+  return {
+    templateCode: sheetCode,
+    templateMessage: sheetMessage,
+    title: EMPHASIS_TITLE.departure,
+    button: [{
+      name: SHEET_BUTTON_NAME,
+      type: 'WL',
+      url_mobile: url,
+      url_pc: url,
+    }],
+  };
 }
 
 function buildRefKey(queueId, eventType) {
@@ -317,7 +402,7 @@ async function processBatch() {
 
       const { data: basicInfo } = await supa
         .from('student_basic_info')
-        .select('student_id, parent_phone_number, notification_consent')
+        .select('student_id, parent_phone_number, notification_consent, todo_sheet_alimtalk_consent')
         .eq('student_id', attendance.student_id)
         .maybeSingle();
 
@@ -335,7 +420,7 @@ async function processBatch() {
 
       const { data: alimtalkSettings } = await supa
         .from('academy_alimtalk_settings')
-        .select('academy_id, sender_key, sender_number, arrival_template_code, arrival_message_template, departure_template_code, departure_message_template, late_template_code, late_message_template, enabled')
+        .select('academy_id, sender_key, sender_number, arrival_template_code, arrival_message_template, departure_template_code, departure_message_template, departure_sheet_template_code, departure_sheet_message_template, late_template_code, late_message_template, enabled')
         .eq('academy_id', attendance.academy_id)
         .maybeSingle();
 
@@ -437,16 +522,14 @@ async function processBatch() {
           .limit(1);
         if (alreadySent && alreadySent.length > 0) continue;
 
-        const templateCode = target === 'arrival'
-          ? alimtalkSettings.arrival_template_code
-          : target === 'departure'
-            ? alimtalkSettings.departure_template_code
-            : alimtalkSettings.late_template_code;
-        const templateMessage = target === 'arrival'
-          ? alimtalkSettings.arrival_message_template
-          : target === 'departure'
-            ? alimtalkSettings.departure_message_template
-            : alimtalkSettings.late_message_template;
+        const resolved = await resolveAttendanceTemplate({
+          target,
+          alimtalkSettings,
+          basicInfo,
+          attendanceId: attendance.id,
+        });
+        const templateCode = resolved.templateCode;
+        const templateMessage = resolved.templateMessage;
 
         if (!templateCode || !templateMessage) {
           errors.push(`missing_template:${target}`);
@@ -477,6 +560,8 @@ async function processBatch() {
               message: renderTemplate(String(templateMessage), params),
               senderkey: alimtalkSettings.sender_key,
               templatecode: templateCode,
+              title: resolved.title,
+              ...(resolved.button ? { button: resolved.button } : {}),
             },
           },
         };

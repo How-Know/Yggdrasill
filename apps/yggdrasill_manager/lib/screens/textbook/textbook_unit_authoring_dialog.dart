@@ -4059,14 +4059,23 @@ class _TextbookUnitAuthoringDialogState
               final numberKey = textbookAnswerNumberKey(item.problemNumber);
               final cropId = idByNumberKey[numberKey];
               if (cropId == null || cropId.isEmpty) continue;
-              matchedKeys.add(numberKey);
-              if (item.answerText.isNotEmpty || item.answerLatex2d.isNotEmpty) {
+              var answerText = item.answerText.trim();
+              var answerLatex2d = item.answerLatex2d.trim();
+              // 증명 문항처럼 풀이 상자(content_region)는 찾았지만 별도의 굵은
+              // 최종 답이 없어 빈 문자열로 온 경우 해설지와 같이 '풀이 참조'로 채운다.
+              if (answerText.isEmpty &&
+                  answerLatex2d.isEmpty &&
+                  item.contentRegion1k != null) {
+                answerText = '풀이 참조';
+                answerLatex2d = '풀이 참조';
+              }
+              if (answerText.isNotEmpty || answerLatex2d.isNotEmpty) {
+                matchedKeys.add(numberKey);
                 answers.add(TextbookAnswerUpload(
                   cropId: cropId,
                   answerKind: item.answerKind,
-                  answerText: item.answerText,
-                  answerLatex2d:
-                      item.answerLatex2d.isEmpty ? null : item.answerLatex2d,
+                  answerText: answerText,
+                  answerLatex2d: answerLatex2d.isEmpty ? null : answerLatex2d,
                 ));
               }
               refs.add(TextbookSolutionRefUpload(

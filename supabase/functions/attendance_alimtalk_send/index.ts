@@ -118,6 +118,97 @@ async function issueBizppurioToken() {
   return token;
 }
 
+const EMPHASIS_TITLE = {
+  arrival: '등원 안내',
+  departure: '하원 안내',
+  late: '지각 안내',
+} as const;
+const SHEET_BUTTON_NAME = '알림장 조회';
+const SHEET_LINK_ORIGIN = 'https://mneme.co.kr/s';
+
+async function ensureTodoSheetShareToken(
+  admin: ReturnType<typeof createAdminClient>,
+  attendanceId: string,
+) {
+  const { data: snapshot, error } = await admin
+    .from('student_class_session_todo_sheet_snapshots')
+    .select('id, academy_id, student_id')
+    .eq('attendance_id', attendanceId)
+    .maybeSingle();
+  if (error || !snapshot) return null;
+
+  const { data: existing } = await admin
+    .from('todo_sheet_share_links')
+    .select('token')
+    .eq('snapshot_id', snapshot.id)
+    .order('created_at', { ascending: true })
+    .limit(1);
+  const found = existing?.[0]?.token;
+  if (found) return String(found);
+
+  const token = `${crypto.randomUUID()}${crypto.randomUUID()}`.replace(/-/g, '');
+  const { error: insertErr } = await admin.from('todo_sheet_share_links').insert({
+    token,
+    academy_id: snapshot.academy_id,
+    student_id: snapshot.student_id,
+    snapshot_id: snapshot.id,
+  });
+  if (!insertErr) return token;
+
+  const { data: again } = await admin
+    .from('todo_sheet_share_links')
+    .select('token')
+    .eq('snapshot_id', snapshot.id)
+    .order('created_at', { ascending: true })
+    .limit(1);
+  return again?.[0]?.token ? String(again[0].token) : null;
+}
+
+async function resolveAttendanceTemplate(args: {
+  admin: ReturnType<typeof createAdminClient>;
+  target: 'arrival' | 'departure' | 'late';
+  alimtalkSettings: Record<string, unknown>;
+  sheetConsent: boolean;
+  attendanceId: string;
+}) {
+  const { admin, target, alimtalkSettings, sheetConsent, attendanceId } = args;
+  if (target === 'arrival' || target === 'late') {
+    const codeKey = target === 'arrival' ? 'arrival_template_code' : 'late_template_code';
+    const messageKey = target === 'arrival' ? 'arrival_message_template' : 'late_message_template';
+    return {
+      templateCode: alimtalkSettings[codeKey] as string | null,
+      templateMessage: alimtalkSettings[messageKey] as string | null,
+      title: EMPHASIS_TITLE[target],
+      button: null as Array<Record<string, string>> | null,
+    };
+  }
+
+  const plain = {
+    templateCode: alimtalkSettings.departure_template_code as string | null,
+    templateMessage: alimtalkSettings.departure_message_template as string | null,
+    title: EMPHASIS_TITLE.departure,
+    button: null as Array<Record<string, string>> | null,
+  };
+  if (!sheetConsent) return plain;
+  const sheetCode = String(alimtalkSettings.departure_sheet_template_code ?? '').trim();
+  const sheetMessage = String(alimtalkSettings.departure_sheet_message_template ?? '').trim();
+  if (!sheetCode || !sheetMessage) return plain;
+  const shareToken = await ensureTodoSheetShareToken(admin, attendanceId);
+  if (!shareToken) return plain;
+  const url = `${SHEET_LINK_ORIGIN}?t=${shareToken}`;
+  return {
+    templateCode: sheetCode,
+    templateMessage: sheetMessage,
+    title: EMPHASIS_TITLE.departure,
+    button: [{
+      name: SHEET_BUTTON_NAME,
+      type: 'WL',
+      url_mobile: url,
+      url_pc: url,
+    }],
+  };
+}
+
 function buildRefKey(queueId: string, eventType: string) {
   const base = queueId.replace(/[^0-9a-f]/gi, '').slice(0, 24);
   const suffix = eventType.slice(0, 2);
@@ -259,7 +350,7 @@ Deno.serve(async (req) => {
 
     const { data: basicInfo } = await admin
       .from('student_basic_info')
-      .select('student_id, parent_phone_number, notification_consent')
+      .select('student_id, parent_phone_number, notification_consent, todo_sheet_alimtalk_consent')
       .eq('student_id', attendance.student_id)
       .maybeSingle();
 
@@ -277,7 +368,7 @@ Deno.serve(async (req) => {
 
     const { data: alimtalkSettings } = await admin
       .from('academy_alimtalk_settings')
-      .select('academy_id, sender_key, sender_number, arrival_template_code, arrival_message_template, departure_template_code, departure_message_template, late_template_code, late_message_template, enabled')
+      .select('academy_id, sender_key, sender_number, arrival_template_code, arrival_message_template, departure_template_code, departure_message_template, departure_sheet_template_code, departure_sheet_message_template, late_template_code, late_message_template, enabled')
       .eq('academy_id', attendance.academy_id)
       .maybeSingle();
 
@@ -406,16 +497,15 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      const templateCode = target === 'arrival'
-        ? alimtalkSettings?.arrival_template_code
-        : target === 'departure'
-          ? alimtalkSettings?.departure_template_code
-          : alimtalkSettings?.late_template_code;
-      const templateMessage = target === 'arrival'
-        ? alimtalkSettings?.arrival_message_template
-        : target === 'departure'
-          ? alimtalkSettings?.departure_message_template
-          : alimtalkSettings?.late_message_template;
+      const resolved = await resolveAttendanceTemplate({
+        admin,
+        target,
+        alimtalkSettings: alimtalkSettings as Record<string, unknown>,
+        sheetConsent: basicInfo?.todo_sheet_alimtalk_consent === true,
+        attendanceId: attendance.id,
+      });
+      const templateCode = resolved.templateCode;
+      const templateMessage = resolved.templateMessage;
 
       if (!templateCode || !templateMessage) {
         errors.push(`missing_template:${target}`);
@@ -447,6 +537,8 @@ Deno.serve(async (req) => {
             message,
             senderkey: alimtalkSettings?.sender_key,
             templatecode: templateCode,
+            title: resolved.title,
+            ...(resolved.button ? { button: resolved.button } : {}),
           },
         },
       };

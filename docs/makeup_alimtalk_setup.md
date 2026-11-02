@@ -33,13 +33,17 @@
 - `makeup_message_template` — 치환용 본문(워커가 변수 채움)
 - `makeup_alimtalk_enabled` — **`true`**일 때만 보강 알림톡 발송
 
+2026-11-02 승인본은 강조표기형이다. 워커가 `title`로 `보강 안내`를 넣는다.
+
 ### 예시 (SQL)
 
 ```sql
 update public.academy_alimtalk_settings
 set
-  makeup_template_code = 'YOUR_TEMPLATE_CODE',
-  makeup_message_template = '[#{학원명}] #{학생명} 보강 예약: 원래 #{원래수업일시} → #{보강수업일시} (#{변경사유})',
+  makeup_template_code = 'bizp_2026103117181166187439334',
+  makeup_message_template = $msg$#{학생명} 학생의 #{원래수업일시} 수업을 #{보강수업일시}에 보강하게 되어 안내드립니다. (방긋)
+
+사유: #{변경사유}$msg$,
   makeup_alimtalk_enabled = true
 where academy_id = 'YOUR_ACADEMY_UUID';
 ```

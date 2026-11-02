@@ -26,7 +26,6 @@ import '../services/next_class_start_resolver.dart';
 import '../services/print_routing_service.dart';
 import '../services/resource_service.dart';
 import '../services/student_behavior_assignment_store.dart';
-import '../services/tag_store.dart';
 import '../services/tenant_service.dart';
 import '../services/todo_sheet_snapshot_service.dart';
 import '../screens/design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
@@ -797,7 +796,6 @@ Future<void> printHomeworkTodoSheet({
     dueDate: dueDate,
     className: className,
     classEndTime: classEndTime,
-    setId: setId,
   );
   final attendance = _findTodoSheetAttendanceRecord(
     studentId: studentId,
@@ -882,7 +880,6 @@ Future<void> previewHomeworkTodoSheet({
     dueDate: dueDate,
     className: className,
     classEndTime: classEndTime,
-    setId: setId,
   );
   final outPath = await _buildHomeworkTodoPdf(payload: payload);
   await OpenFilex.open(outPath);
@@ -921,7 +918,6 @@ Future<String> finalizeHomeworkTodoSheetSnapshot({
     dueDate: dueDate,
     className: className,
     classEndTime: classEndTime,
-    setId: setId,
   );
   return TodoSheetSnapshotService.instance.finalize(
     attendanceId: attendanceId,
@@ -1173,85 +1169,6 @@ String _formatWeekdayKorean(DateTime dt) {
 String _formatClassTimeRange(DateTime start, DateTime? end) {
   final endText = _formatTime(end ?? start.add(const Duration(hours: 2)));
   return '(${_formatWeekdayKorean(start)} ${_formatTime(start)} - $endText)';
-}
-
-String _behaviorDegreeLabel(int count) {
-  if (count >= 5) return '많이';
-  if (count >= 3) return '자주';
-  return '조금';
-}
-
-String _buildBehaviorFeedback({
-  required String studentId,
-  required DateTime classDateTime,
-  String? setId,
-}) {
-  final events = <TagEvent>[];
-  final primarySetId = (setId ?? '').trim();
-  if (primarySetId.isNotEmpty) {
-    events.addAll(TagStore.instance.getEventsForSet(primarySetId));
-  }
-  if (events.isEmpty) {
-    final seen = <String>{};
-    for (final rec in DataManager.instance.attendanceRecords) {
-      if (rec.studentId != studentId) continue;
-      if (!_isSameDay(rec.classDateTime, classDateTime)) continue;
-      final sid = (rec.setId ?? '').trim();
-      if (sid.isEmpty || !seen.add(sid)) continue;
-      events.addAll(TagStore.instance.getEventsForSet(sid));
-    }
-  }
-
-  if (events.isEmpty) {
-    return '태도: 집중하여 공부했습니다.';
-  }
-
-  final counts = <String, int>{};
-  final noteTexts = <String>[];
-  for (final e in events) {
-    final tag = e.tagName.trim();
-    if (tag.isNotEmpty && tag != '기록') {
-      counts[tag] = (counts[tag] ?? 0) + 1;
-    }
-    final note = (e.note ?? '').trim();
-    if (note.isNotEmpty) noteTexts.add(note);
-  }
-
-  if (counts.isEmpty) {
-    if (noteTexts.isNotEmpty) {
-      return '태도: ${noteTexts.first}';
-    }
-    return '태도: 집중하여 공부했습니다.';
-  }
-
-  final sorted = counts.entries.toList()
-    ..sort((a, b) => b.value.compareTo(a.value));
-  final parts = <String>[];
-  for (final entry in sorted.take(3)) {
-    final tag = entry.key;
-    final degree = _behaviorDegreeLabel(entry.value);
-    if (tag.contains('졸')) {
-      parts.add('수업시간에 $degree 졸았습니다.');
-      continue;
-    }
-    if (tag.contains('스마트') || tag.contains('폰')) {
-      parts.add('스마트폰을 $degree 사용했습니다.');
-      continue;
-    }
-    if (tag.contains('딴짓')) {
-      parts.add('딴짓을 $degree 했습니다.');
-      continue;
-    }
-    if (tag.contains('떠듬')) {
-      parts.add('산만한 발화가 $degree 있었습니다.');
-      continue;
-    }
-    parts.add('$tag 행동이 $degree 있었습니다.');
-  }
-  if (parts.isEmpty) {
-    return '태도: 집중하여 공부했습니다.';
-  }
-  return '태도: ${parts.join(' ')}';
 }
 
 bool _hasTodayHomeworkActivity(HomeworkItem hw, DateTime classDateTime) {
@@ -1508,7 +1425,6 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
   DateTime? dueDate,
   String? className,
   DateTime? classEndTime,
-  String? setId,
 }) async {
   final settings = DataManager.instance.academySettings;
   final academyName = settings.name.trim().isNotEmpty
@@ -2286,10 +2202,6 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
     return '정규 수업';
   })();
   final resolvedClassEnd = classEndTime ?? matchedRecord?.classEndTime;
-  final explicitSetId = (setId ?? '').trim();
-  final resolvedSetId = explicitSetId.isNotEmpty
-      ? explicitSetId
-      : (matchedRecord?.setId ?? '').trim();
   final lessonAttendanceId = (matchedRecord?.id ?? '').trim();
   final lessonRecord = lessonAttendanceId.isEmpty
       ? null
@@ -2339,11 +2251,7 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
     completedEntries: completedEntries,
     todoEntries: todoEntries,
     behaviorEntries: behaviorTodoEntries,
-    behaviorFeedback: _buildBehaviorFeedback(
-      studentId: studentId,
-      classDateTime: classDateTime,
-      setId: resolvedSetId,
-    ),
+    behaviorFeedback: '',
     lessonRecord: lessonRecord,
     specialNotes: _buildSpecialNotes(
       studentId: studentId,

@@ -865,7 +865,16 @@ export function stage1Of(m: Material, raw: unknown, units: Set<string>): Stage1 
       : null;
     const noneBasis = f ? text(f.none_basis, 1000) : null;
     const foundationAnswered = needs !== null && (needs.length > 0 || noneBasis !== null);
-    if (reviews.length === given.length && reviews.length + (foundationAnswered ? 1 : 0) >= 1) {
+    const missing: string[] = (['notation', 'meaning', 'placement'] as const).filter((s) => m.scopes.includes(s) && !seen.has(s));
+    if (m.foundation && !foundationAnswered) missing.push('foundation');
+    const answered = reviews.length + (foundationAnswered ? 1 : 0) >= 1;
+    if (answered && missing.length > 0) {
+      return {
+        ...base,
+        item: { ...failedItem(m, `judge_missing: ${missing.join(',')}`), read_complete: true },
+      };
+    }
+    if (reviews.length === given.length && answered) {
       return { ...base, item: null, reviews, needs: foundationAnswered ? needs : null, noneBasis };
     }
     return invalidItem(diag({

@@ -87,7 +87,7 @@ class JobSim {
 
   constructor(n: number, content: (i: number) => string = (i) => `개념 ${i}의 정의 문장`) {
     this.concepts = Array.from({ length: n }, (_, k) => ({
-      id: cid(k + 1), name: `개념${k + 1}`, content: content(k + 1), rev: 1, todo: [...ALL_TODO],
+      id: cid(k + 1), name: `개념${k + 1}`, content: content(k + 1), rev: 1, todo: ['notation'],
     }));
   }
 
@@ -404,10 +404,10 @@ function judge(opts: {
           reason: '교재 원본 쪽 확인이 필요함', unread: '교재 원본', next_action: '원본 쪽을 열어 본 뒤 다시 검수',
         };
       }
-      const scopes = (d.judge_scopes as string[]);
+      const requested = Array.isArray(d.judge_scopes) ? d.judge_scopes as string[] : [];
       return {
         position, status: 'judged', reason: null, unread: null, next_action: null,
-        reviews: opts.reviews?.(d) ?? (opts.scopes ?? ['notation']).filter((s) => scopes.includes(s)).map((s) => review(s)),
+        reviews: opts.reviews?.(d) ?? (opts.scopes ?? ['notation']).filter((s) => requested.includes(s)).map((s) => review(s)),
         foundation: d.foundation_needed === true ? (opts.foundation?.(d) ?? null) : null,
       };
     });
@@ -465,6 +465,7 @@ Deno.test('50개 × 범위 1개: 한 요청에서 50개 판단·저장, 카드 3
 
 Deno.test('여러 범위·긴 본문: 이어 읽어 판을 맞추고, 너무 긴 것은 미결로, 카드는 20개 이하로 나눈다', async () => {
   const sim = new JobSim(30, (i) => (i === 15 ? '가'.repeat(45000) : i % 10 === 0 ? `${i}번 긴 본문 `.repeat(3500) : `개념 ${i}의 정의 문장`));
+  for (const c of sim.concepts) c.todo = ['notation', 'meaning'];
   sim.bumpOnRead.add(20);
   const provider = new FakeAiProvider(judge({ scopes: ['notation', 'meaning', 'classification'] }));
   const v = parse(await batch(sim, provider));
@@ -640,8 +641,25 @@ Deno.test('의존이 풀린 범위만 다시 판단한다. 나머지 범위와 �
   assertEquals([v.rechecked, v.served, v.judged_saved], [1, 1, 1]);
 });
 
+Deno.test('재개 범위의 표기와 기초 개념은 판단 요청에 들어가고, 분류·개념 단위·관계는 붙지 않는다', async () => {
+  const sim = new JobSim(1);
+  const c = sim.concepts[0];
+  c.todo = ['meaning', 'placement', 'unit'];
+  c.resume_scopes = ['notation', 'foundation'];
+  const provider = new FakeAiProvider(judge({
+    foundation: () => ({ needs: [], none_basis: '필요한 기초 개념 없음' }),
+  }));
+  const v = parse(await batch(sim, provider));
+  const view = judgeViews(provider).get(1);
+  assertEquals(view?.judge_scopes, ['notation']);
+  assertEquals(view?.foundation_needed, true);
+  assertEquals(sim.items.get(1)!.reviews!.map((r) => r.scope), ['notation', 'foundation']);
+  assertEquals(v.judged_saved, 1);
+});
+
 Deno.test('검토를 보류한 제출은 고치기 카드만 세고, 빈 검토 카드로 반복하지 않는다', async () => {
   const sim = new JobSim(1);
+  sim.concepts[0].todo = ['notation'];
   sim.holdReviews = true;
   const provider = new FakeAiProvider(judge({
     scopes: ['notation'],
@@ -799,6 +817,7 @@ Deno.test('배치 고치기: 이 개념의 배치·과정 단원 목록 안에�
 
 Deno.test('기초 개념 2단계 실패: 1단계 판단은 저장하고 기초 개념은 판단 안 함으로 남겨 다음에 보완한다', async () => {
   const sim = new JobSim(2);
+  for (const c of sim.concepts) c.todo = ['notation', 'meaning', 'foundation'];
   sim.library = [{ id: cid(903), name: '약수', content: '나누어떨어지게 하는 수' }];
   const provider = new FakeAiProvider(judge({
     scopes: ['notation', 'meaning'],
@@ -936,18 +955,19 @@ Deno.test('참조는 필드마다 고유 20개까지 남기고, 21개와 잘못�
   const twentyOne = idsFrom(200, 21);
   const self = cid(1);
   const one = twenty[0];
-  const dup = stage1Of(refMaterial([one], self), judged([review('notation', { compared_ids: Array(11).fill(one) })]), new Set());
+  const notationOnly = (allowed: string[]) => ({ ...refMaterial(allowed, self), scopes: ['notation'] });
+  const dup = stage1Of(notationOnly([one]), judged([review('notation', { compared_ids: Array(11).fill(one) })]), new Set());
   assertEquals(dup.item, null);
   assertEquals(dup.reviews[0].compared_ids, [one]);
 
   const ordered = stage1Of(
-    refMaterial([twenty[1], twenty[0]], self),
+    notationOnly([twenty[1], twenty[0]]),
     judged([review('notation', { compared_ids: [twenty[1], twenty[0], twenty[1], twenty[0]] })]),
     new Set(),
   );
   assertEquals(ordered.reviews[0].compared_ids, [twenty[1], twenty[0]]);
 
-  const both = stage1Of(refMaterial(twenty, self), judged([review('notation', { compared_ids: twenty, to_compare_ids: twenty })]), new Set());
+  const both = stage1Of(notationOnly(twenty), judged([review('notation', { compared_ids: twenty, to_compare_ids: twenty })]), new Set());
   assertEquals(both.reviews[0].compared_ids, twenty);
   assertEquals(both.reviews[0].to_compare_ids, twenty);
 
@@ -975,6 +995,34 @@ Deno.test('참조는 필드마다 고유 20개까지 남기고, 21개와 잘못�
   const shaped = stage1Of(refMaterial([one], self), judged([review('notation', { compared_ids: 'not-an-array' })]), new Set());
   assertEquals(shaped.item?.state, 'failed');
   assertEquals(shaped.reviews, []);
+});
+
+Deno.test('요청한 필수 판단이 빠지면 일부 결과를 저장하지 않고 그 위치를 실패로 둔다', () => {
+  const asked = {
+    ...refMaterial([cid(2)]),
+    scopes: ['notation', 'meaning', 'classification', 'unit'],
+    foundation: true,
+  };
+  const partial = stage1Of(asked, judged([review('notation')]), new Set());
+  assertEquals(partial.item?.state, 'failed');
+  assertEquals(partial.reviews, []);
+  assertEquals(partial.item?.reviews, null);
+  assert(String(partial.item?.reason).includes('judge_missing: meaning'));
+
+  const noFoundation = stage1Of(asked, {
+    status: 'judged', reviews: [review('notation'), review('meaning')], foundation: null,
+  }, new Set());
+  assertEquals(noFoundation.item?.state, 'failed');
+  assertEquals(noFoundation.reviews, []);
+  assert(String(noFoundation.item?.reason).includes('foundation'));
+
+  const complete = stage1Of(asked, {
+    status: 'judged',
+    reviews: [review('notation'), review('meaning')],
+    foundation: { needs: [], none_basis: '필요한 기초 개념 없음' },
+  }, new Set());
+  assertEquals(complete.item, null);
+  assertEquals(complete.reviews.map((r) => r.scope), ['notation', 'meaning']);
 });
 
 Deno.test('묶음이 허용하는 개념 id는 관계·같은 개념·만든 개념 칸만이다', () => {
@@ -1032,6 +1080,7 @@ Deno.test('기초 개념 비교도 21개를 자르지 않고, 후보 밖 id는 �
 
 Deno.test('고유 21개 비교는 그 위치를 미결로 두고 다음 묶음에서 다시 판단하지 않는다', async () => {
   const sim = new JobSim(2);
+  for (const c of sim.concepts) c.todo = ['notation'];
   const refs = idsFrom(400, 21).map((id) => ({ other_id: id }));
   sim.concepts[0].relations = refs;
   sim.concepts[0].placements = [{ id: cid(499) }];
@@ -1171,6 +1220,7 @@ Deno.test('형식 거절은 첫 원인만 남기고, 본문·잘못된 id는 진
 
 Deno.test('형식 실패는 그 위치만 실패로 남고, 30개를 넘겨도 이번 결과에서 모두 읽힌다', async () => {
   const sim = new JobSim(2);
+  for (const c of sim.concepts) c.todo = ['notation'];
   const provider = new FakeAiProvider(judge({
     reviews: (d) => d.position === 1
       ? [review('notation', { compared_ids: ['not-a-uuid'] })]
@@ -1419,6 +1469,7 @@ Deno.test('재확인·재시도·대상 뒤에만 미충족을 고르고, 다음
   seedItem(sim, 2, 'failed', 'judge_timeout: 이전');
   seedItem(sim, 4, 'deferred', '이전 미결');
   sim.concepts[0].resume_scopes = ['foundation'];
+  sim.concepts[3].todo = ['notation', 'meaning'];
   sim.recheck = [{ position: 1, concept_id: cid(1) }];
   sim.unmetHandler = (args) => {
     const after = Number(args.p_after ?? 0);
@@ -1940,11 +1991,11 @@ Deno.test('표기·의미·배치의 확인 못 함에만 외부 근거 표시�
   assertEquals(notation.detail, undefined);
   assertEquals(rec(meaning.detail).evidence_gaps, ['etymology']);
   assert(String(meaning.unverified).includes('용어 유래'));
-  const kept = stage1Of(m, judged([
+  const kept = stage1Of({ ...m, scopes: ['meaning'] }, judged([
     review('meaning', { outcome: 'unverified', unverified: '기호 유래를 자료로 확인하지 못함', evidence_gaps: ['etymology'] }),
   ]), new Set());
   assertEquals(kept.reviews[0].unverified, '기호 유래를 자료로 확인하지 못함');
-  const none = stage1Of(m, judged([review('meaning', { outcome: 'unverified', evidence_gaps: [] })]), new Set());
+  const none = stage1Of({ ...m, scopes: ['meaning'] }, judged([review('meaning', { outcome: 'unverified', evidence_gaps: [] })]), new Set());
   assertEquals(none.reviews[0].detail, undefined);
 });
 

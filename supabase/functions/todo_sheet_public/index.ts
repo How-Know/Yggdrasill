@@ -603,16 +603,12 @@ export function renderSheet(payload: Row): { student: string; who: string; body:
   const done = rows(payload.completed_summaries);
   const classes = rows(payload.class_work_entries);
   const behaviors = rows(payload.behavior_entries);
-  const feedback = text(payload.behavior_feedback);
   const due = parsed(payload.due_date);
   const dueText = due
     ? `${monthDay(payload.due_date)} (${weekdayKo(payload.due_date)}) 검사`
     : '검사일 미정';
   const classMinutes = classes.reduce((sum, entry) => sum + int(entry.study_ms), 0);
-  const behaviorBody = [
-    behaviors.map(behaviorRow).join(''),
-    feedback ? `<p class="feedback">${esc(feedback)}</p>` : '',
-  ].join('');
+  const behaviorBody = behaviors.map(behaviorRow).join('');
   const folds = [
     fold('숙제 검사 내역', checks.count, checks.side, checks.body),
     fold(
@@ -638,7 +634,7 @@ export function renderSheet(payload: Row): { student: string; who: string; body:
     fold(
       '행동리스트',
       behaviors.length,
-      behaviors.length ? '' : (feedback || '행동 없음'),
+      behaviors.length ? '' : '행동 없음',
       behaviorBody,
     ),
   ].join('');
@@ -739,7 +735,8 @@ export function renderDocument(student: string, sheets: SheetView[], currentId: 
     .donut em, .donut small { font-style: normal; color: #636369; font-size: 12px; font-weight: 700; }
     .donut small { display: block; margin-top: 3px; font-weight: 600; }
     .legend { flex: 1; min-width: 0; }
-    .legend-row { display: flex; gap: 8px; margin-top: 12px; }
+    .legend-row { display: flex; gap: 8px; align-items: flex-start; }
+    .legend-row + .legend-row { margin-top: 12px; }
     .legend-row .minor { margin-top: 6px; }
     .legend-row > i { width: 8px; height: 8px; border-radius: 2px; margin-top: 6px; flex: none; }
     .legend-row > div { min-width: 0; flex: 1; }

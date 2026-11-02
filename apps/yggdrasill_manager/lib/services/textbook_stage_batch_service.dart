@@ -564,14 +564,18 @@ class TextbookStageBatchService {
           problemNumber: crop.problemNumber,
           itemName: crop.itemName,
         );
-        if (item.answerText.isNotEmpty || item.answerLatex2d.isNotEmpty) {
+        final resolvedAnswerText = item.answerText.trim().isNotEmpty
+            ? item.answerText.trim()
+            : (item.contentRegion1k != null ? '풀이 참조' : '');
+        final resolvedAnswerLatex = item.answerLatex2d.trim().isNotEmpty
+            ? item.answerLatex2d.trim()
+            : resolvedAnswerText;
+        if (resolvedAnswerText.isNotEmpty) {
           answerUploads.add(TextbookAnswerUpload(
             cropId: crop.id,
             answerKind: item.answerKind,
-            answerText: item.answerText,
-            answerLatex2d: item.answerLatex2d.isEmpty
-                ? item.answerText
-                : item.answerLatex2d,
+            answerText: resolvedAnswerText,
+            answerLatex2d: resolvedAnswerLatex,
             answerSource: 'vlm',
             rawPage: page,
             displayPage: crop.displayPage,

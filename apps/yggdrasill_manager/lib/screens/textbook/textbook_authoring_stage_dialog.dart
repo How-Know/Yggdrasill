@@ -3390,14 +3390,19 @@ class _TextbookAuthoringStageDialogState
             }
             final hasAnswer =
                 _answersByCropId[c.id]?.answerText.trim().isNotEmpty == true;
-            if (!hasAnswer && it.answerText.isNotEmpty) {
+            final resolvedAnswerText = it.answerText.trim().isNotEmpty
+                ? it.answerText.trim()
+                : (it.contentRegion1k != null ? '풀이 참조' : '');
+            final resolvedAnswerLatex = it.answerLatex2d.trim().isNotEmpty
+                ? it.answerLatex2d.trim()
+                : resolvedAnswerText;
+            if (!hasAnswer && resolvedAnswerText.isNotEmpty) {
               _answersByCropId[c.id] = _AnswerDraft(
                 cropId: c.id,
                 problemNumber: c.problemNumber,
                 kind: it.answerKind,
-                answerText: it.answerText,
-                answerLatex2d:
-                    it.answerLatex2d.isEmpty ? it.answerText : it.answerLatex2d,
+                answerText: resolvedAnswerText,
+                answerLatex2d: resolvedAnswerLatex,
                 source: 'vlm',
                 rawPage: page,
                 dirty: true,

@@ -21,7 +21,10 @@
 - `sender_number` (발신번호)
 - `arrival_template_code`, `arrival_message_template`
 - `departure_template_code`, `departure_message_template`
+- `departure_sheet_template_code`, `departure_sheet_message_template` (알림장 동의 학생의 하원)
 - `late_template_code`, `late_message_template`
+
+2026-11-02 승인본은 강조표기형이다. 워커가 `title`로 `등원 안내`, `하원 안내`, `지각 안내`를 넣는다. 알림장 템플릿만 웹링크 버튼 `알림장 조회`를 붙인다.
 
 ### Template Placeholders
 메시지 템플릿에서 다음 키를 치환합니다. `#{key}`, `{key}`, `{{key}}` 형식 모두 지원합니다.

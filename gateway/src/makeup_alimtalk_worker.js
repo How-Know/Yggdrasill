@@ -437,6 +437,7 @@ async function processBatch() {
             message: renderTemplate(String(templateMessage), params),
             senderkey: alimtalkSettings.sender_key,
             templatecode: templateCode,
+            title: '보강 안내',
           },
         },
       };

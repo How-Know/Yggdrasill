@@ -6,10 +6,9 @@
 
 update public.academy_alimtalk_settings
 set
-  makeup_template_code = 'bizp_2026040916544225806394927',
-  makeup_message_template = coalesce(
-    nullif(trim(makeup_message_template), ''),
-    '[#{학원명}] #{학생명} 보강 예약: 원래 #{원래수업일시} → #{보강수업일시} (#{변경사유})'
-  ),
+  makeup_template_code = 'bizp_2026103117181166187439334',
+  makeup_message_template = $msg$#{학생명} 학생의 #{원래수업일시} 수업을 #{보강수업일시}에 보강하게 되어 안내드립니다. (방긋)
+
+사유: #{변경사유}$msg$,
   makeup_alimtalk_enabled = true
 where true;
