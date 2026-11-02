@@ -56,12 +56,23 @@ String _squash(String s) => s.replaceAll(RegExp(r'\s+|\[문단\]'), '');
 /// 서술형으로 봐야 하는 표현(Edge `ESSAY_PATTERN` 과 같다)
 final kEssayPattern = RegExp(r'서술하(시오|여라)|과정을\s*(쓰|서술|설명)|풀이\s*과정|이유를\s*(쓰|설명|서술)|설명하(시오|여라)|증명하(시오|여라)');
 
-/// 공통 발문의 첫 지시문: 첫 [문단]/줄바꿈 앞, 없으면 첫 문장(. ? ! 로 끝남). 뒤에 이어지는 내용이 없으면 null.
+/// 지시문 문장으로 볼 수 있는 표현(Edge `looksLikeInstruction` 과 같다).
+final _instructionPattern = RegExp(
+  r'(다음|아래|보기|위|오른쪽|왼쪽)|(구하|쓰|써넣|채우|고르|찾|연결|나타내|계산|비교|완성|판단|말하|답하|표시|그리|그려|풀어|인수분해|소인수분해|약분|통분|정리)(여라|시오|라|자|기|고)|\?',
+);
+
+bool looksLikeInstruction(String text) {
+  final t = text.trim();
+  return t.length >= 4 && _instructionPattern.hasMatch(t);
+}
+
+/// 공통 발문의 첫 지시문: 첫 [문단]/줄바꿈 앞, 없으면 첫 문장(. ? ! 로 끝남). 뒤에 이어지는 내용이 없거나 지시문이 아니면 null.
 String? leadingInstruction(String common) {
   final parts = common.split(RegExp(r'\[문단\]|\n')).map((p) => p.trim()).where((p) => p.isNotEmpty).toList();
-  if (parts.length >= 2) return parts.first;
+  if (parts.length >= 2) return looksLikeInstruction(parts.first) ? parts.first : null;
   final m = RegExp(r'^(.+?[.?!])\s*(\S[\s\S]*)$').firstMatch(common.trim());
-  return m?.group(1)?.trim();
+  final first = m?.group(1)?.trim();
+  return first != null && looksLikeInstruction(first) ? first : null;
 }
 
 /// 답 비교용 정규화: 공백·$·중괄호·\left/\right 를 지우고 곱셈 기호를 하나로 맞춘다.
@@ -72,26 +83,42 @@ String normalizeAnswerForCompare(String s) => s
     .toLowerCase();
 
 /// 공통 발문 중복의 두 형태를 모두 다룬다.
-/// 1) 공통 발문(지시문)이 개별 발문 앞머리에 다시 들어 있음 → 개별 발문에서 공통 부분만 뺀다.
-/// 2) 공통 발문에 개별 문항 본문까지 통째로 들어 있음(common_stem == stem 등) → 공통 발문은 첫 문단(지시문)만 남기고,
-///    개별 발문은 지시문을 뺀 나머지로 한다. 공통 발문이 실제로 이 문항의 본문을 담고 있을 때만 적용한다
-///    (조건 상자처럼 여러 문단으로 된 정당한 공통 발문은 건드리지 않는다).
+/// 1) 공통 발문(지시문)이 개별 발문 앞머리에 다시 들어 있음 → 개별 발문에서 공통 부분만 뺀다(단, 공통 발문이 숫자·식 조각이면 떼어내지 않는다).
+/// 2) 공통 발문에 개별 문항 본문까지 통째로 들어 있음(common_stem == stem 등) →
+///    (가) 첫 문단이 지시문이면 공통 발문은 첫 문단(지시문)만 남기고 개별 발문은 지시문을 뺀 나머지,
+///    (나) 첫 문단이 숫자·식이고 두 번째 문단이 지시문이면(예: "36=2^2×3^2\n다음 표의 빈칸에...") 공통 발문은 그 지시문 문단만 남기고,
+///         개별 발문에서도 앞머리 중복 지시문을 뺀다.
 /// Edge `commonStemFix` 와 같은 규칙이다.
 CommonStemFix? computeCommonStemFix(String commonStem, String stem) {
   final common = commonStem.trim();
   if (common.isEmpty || stem.trim().isEmpty) return null;
-  final direct = stripCommonStem(common, stem);
-  if (direct != null) return CommonStemFix(stem: direct);
+  if (looksLikeInstruction(common)) {
+    final direct = stripCommonStem(common, stem);
+    if (direct != null) return CommonStemFix(stem: direct);
+  }
 
   final instr = leadingInstruction(common);
-  if (instr == null) return null;
-  final rest = stripCommonStem(instr, stem);
-  if (rest == null) return null;
-  // 공통 발문이 "지시문 + 이 문항의 본문" 꼴일 때만 공통 발문을 지시문으로 줄인다.
-  final sqCommon = _squash(common);
-  final sqRest = _squash(rest);
-  if (sqRest.isEmpty || !sqCommon.endsWith(sqRest)) return null;
-  return CommonStemFix(stem: rest, commonStem: instr);
+  if (instr != null) {
+    final rest = stripCommonStem(instr, stem);
+    if (rest != null) {
+      final sqCommon = _squash(common);
+      final sqRest = _squash(rest);
+      if (sqRest.isNotEmpty && sqCommon.endsWith(sqRest)) {
+        return CommonStemFix(stem: rest, commonStem: instr);
+      }
+    }
+  }
+
+  final parts = common.split(RegExp(r'\[문단\]|\n')).map((p) => p.trim()).where((p) => p.isNotEmpty).toList();
+  if (parts.length >= 2 && !looksLikeInstruction(parts.first)) {
+    final instrPart = parts.skip(1).where(looksLikeInstruction).firstOrNull;
+    if (instrPart != null) {
+      final strippedFromStem = stripCommonStem(instrPart, stem) ?? stripCommonStem('${parts.first}\n$instrPart', stem);
+      final nextStem = strippedFromStem ?? stem.trim();
+      if (nextStem.isNotEmpty) return CommonStemFix(stem: nextStem, commonStem: instrPart);
+    }
+  }
+  return null;
 }
 
 final _figureMarkerRe = RegExp(r'\[\[PB_FIG_[^\]]+\]\]|\[(?:그림|도형|도표)\]');
@@ -539,15 +566,29 @@ class TextbookProblemReviewItem {
   DateTime? get fixPassAt => fixProposal['fix_pass_at'] is String ? DateTime.tryParse('${fixProposal['fix_pass_at']}') : null;
   DateTime? get fixAppliedAt => fixProposal['applied_at'] is String ? DateTime.tryParse('${fixProposal['applied_at']}') : null;
 
-  /// 수정 단계 대상: 품질 오류 문항과 그림 문항(승인·보류·미검수 제외). 아직 안 돌렸거나, 수정을 적용했는데도 오류로 남은 경우.
+  /// 수정 단계 대상: 품질 오류 문항·그림 문항(승인·보류·미검수 제외)과, 품질 승인 뒤라도 2단계/4단계에서
+  /// 공통 발문·지시문 누락이나 원본 불일치가 남아 있는 문항. 아직 안 돌렸거나, 아직 적용할 수정안이 없거나, 수정을 적용했는데도 오류로 남은 경우.
   bool get needsFixPass {
-    if (!canRenderOriginal) return false;
-    if (qualityStatus != 'issue' && qualityStatus != 'clean') return false;
-    if (qualityStatus == 'clean' && !hasFigures) return false;
+    if (!canRenderOriginal || isEngineHeld) return false;
+    final hasTextDiscrepancy = qualityChecks['stem_ok'] == false ||
+        qualityChecks['fidelity_ok'] == false ||
+        renderChecks['problem_ok'] == false ||
+        renderChecks['fidelity_ok'] == false ||
+        approvedButDiffers;
+    if (qualityStatus == 'approved') {
+      if (!hasTextDiscrepancy || stage2Superseded) return false;
+    } else if (qualityStatus != 'issue' && qualityStatus != 'clean') {
+      return false;
+    } else if (qualityStatus == 'clean' && !hasFigures && !hasTextDiscrepancy) {
+      return false;
+    }
+    if (hasPendingFixProposal || hasPendingFigureProposal) return false;
     final ran = fixPassAt;
     if (ran == null) return true;
     final applied = fixAppliedAt;
-    return qualityStatus == 'issue' && applied != null && applied.isAfter(ran);
+    if (applied != null && applied.isAfter(ran)) return qualityStatus == 'issue' || hasTextDiscrepancy;
+    // 이전 fix_pass 가 돌았지만 수정안을 하나도 못 냈고(당시 공통 발문 누락/판정 버그 등) 여전히 불일치가 남아 있으면 한 번 더 기회를 준다.
+    return (qualityStatus == 'issue' || hasTextDiscrepancy) && fixProposal['text_matches_original'] != true;
   }
 
   /// 수정 단계가 낸 그림 배치(figure_layout)와 원본에서 다시 잘라낼 그림
@@ -599,12 +640,15 @@ class TextbookProblemReviewItem {
   bool get aiSuspectsEngine => qualityStatus == 'issue' && issueKind == 'engine';
   String get engineSymptom => '${renderChecks['engine_symptom'] ?? ''}'.trim();
 
-  /// 아직 적용하지 않은 데이터 수정 제안이 있는가
+  /// 아직 적용하지 않은 데이터 수정 제안이 있는가(개별 발문·공통 발문·선지 중 하나라도)
   bool get hasPendingFixProposal {
     if (fixProposal['applied_at'] != null) return false;
     final s = fixProposal['stem'];
+    final cs = fixProposal['common_stem'];
     final c = fixProposal['choices'];
-    return (s is String && s.trim().isNotEmpty) || (c is List && c.isNotEmpty);
+    return (s is String && s.trim().isNotEmpty) ||
+        (cs is String && cs.trim().isNotEmpty) ||
+        (c is List && c.isNotEmpty);
   }
 
   String? get proposedStem => fixProposal['stem'] is String && '${fixProposal['stem']}'.trim().isNotEmpty ? '${fixProposal['stem']}' : null;
@@ -678,7 +722,8 @@ class TextbookProblemReviewItem {
     return '$commonStem\n\n$stem';
   }
 
-  bool get isSetQuestion => setType.isNotEmpty || commonStem.isNotEmpty || setHeaderNumber.isNotEmpty;
+  bool get isSetQuestion =>
+      setType.isNotEmpty || commonStem.isNotEmpty || setHeaderNumber.isNotEmpty || canRenderSetHeader || proposedCommonStem != null;
   bool get hasIssue => mathStatus == 'issue' || qualityStatus == 'issue' || findings.isNotEmpty;
   bool get hasDrafts => draftProposals.isNotEmpty;
   bool get isFullyApproved => mathStatus == 'approved' && qualityStatus == 'approved';

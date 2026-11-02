@@ -90,15 +90,41 @@ void main() {
       expect(_item({}).needsFixPass, isTrue);
       expect(_item({'item_region_1k': []}).needsFixPass, isFalse);
       expect(_item({'quality_status': 'approved'}).needsFixPass, isFalse);
+      // 품질 승인 뒤라도 2단계/4단계에서 지시문 누락·원본 불일치가 남아 있고 아직 원본 대조 재검수로 덮어쓰이지 않았으면 수정 대상
+      expect(_item({'quality_status': 'approved', 'quality_checks': {'stem_ok': false}}).needsFixPass, isTrue);
+      expect(
+        _item({
+          'quality_status': 'approved',
+          'quality_checks': {'stem_ok': false},
+          'render_checked_at': '2026-11-03T02:00:00Z',
+          'render_checks': {'original_compared': true, 'problem_ok': true, 'fidelity_ok': true},
+        }).needsFixPass,
+        isFalse,
+      );
       expect(_item({'quality_status': 'clean', 'stem': '그림 없음'}).needsFixPass, isFalse);
       expect(_item({'quality_status': 'clean'}).needsFixPass, isTrue);
-      const ran = {'fix_pass_at': '2026-11-03T01:00:00Z'};
+      const ran = {'fix_pass_at': '2026-11-03T01:00:00Z', 'text_matches_original': true};
       expect(_item({'fix_proposal': ran}).needsFixPass, isFalse);
       expect(_item({'fix_proposal': {...ran, 'applied_at': '2026-11-03T02:00:00Z'}}).needsFixPass, isTrue);
+      // 이전 fix_pass 에서 수정안을 못 냈고(text_matches_original != true) 여전히 오류로 남아 있으면 다시 돌린다
+      expect(_item({'fix_proposal': {'fix_pass_at': '2026-11-03T01:00:00Z'}}).needsFixPass, isTrue);
       expect(
         _item({'quality_status': 'clean', 'fix_proposal': {...ran, 'applied_at': '2026-11-03T02:00:00Z'}}).needsFixPass,
         isFalse,
       );
+    });
+
+    test('hasPendingFixProposal 과 computeCommonStemFix: 공통 발문만 바뀐 제안도 잡고 숫자·식 첫 문단으로 잘못 줄이지 않는다', () {
+      expect(
+        _item({'fix_proposal': {'common_stem': '다음 수의 약수의 개수를 구하여라.'}}).hasPendingFixProposal,
+        isTrue,
+      );
+      const tableStem = r'다음 표의 빈칸에 알맞은 수를 써넣어라.[문단]15=3\times5[표시작]×|1[표끝]';
+      final fixed = computeCommonStemFix('36=2^{2}\\times3^{2}\n[문단]\n$tableStem', tableStem);
+      expect(fixed?.commonStem, '다음 표의 빈칸에 알맞은 수를 써넣어라.');
+      expect(fixed?.stem, r'15=3\times5[표시작]×|1[표끝]');
+      expect(computeCommonStemFix(r'36=2^{2}\times3^{2}', tableStem), isNull);
+      expect(computeCommonStemFix('36', '36\n480'), isNull);
     });
 
     test('hasPendingFigureProposal: 배치가 지금과 다르거나 잘라 등록할 그림이 있고 아직 적용 전', () {

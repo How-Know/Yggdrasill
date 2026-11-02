@@ -290,7 +290,8 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
       _pendingFigureCrops(item).isNotEmpty;
 
   bool _commonStemEditDirty(TextbookProblemReviewItem item) =>
-      item.commonStem.isNotEmpty && _commonStemEditCtrl.text.trim() != item.commonStem.trim();
+      (item.isSetQuestion || _commonStemEditCtrl.text.trim().isNotEmpty) &&
+      _commonStemEditCtrl.text.trim() != item.commonStem.trim();
 
   bool _figureLayoutDirty(TextbookProblemReviewItem item) =>
       figureLayoutSignature({'items': _figureLayoutEdit}) != figureLayoutSignature(item.pbFigureLayout);
@@ -459,24 +460,30 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
         renderChecked = await _runRenderCheckPass(scope);
       }
 
-      // 3차: 품질 오류 문항·그림 문항은 원본과 저장 본문·그림을 대조해 수정안을 만든다(적용은 승인·일괄 처리에서).
-      var fixProposed = 0;
+      // 3차: 품질 오류 문항·그림 문항은 원본과 대조해 수정안을 만들고 → 문제은행에 적용 → V2 재렌더 → 원본 대조 재검수 →
+      // 통과한 문항 승인까지 한 번에 마친다(분석만 하고 끝내지 않는다).
+      final fixNotes = <String>[];
       if (mounted && !_stopRequested) {
-        final targets = [for (final x in _items) if (x.needsFixPass) x];
-        if (targets.isNotEmpty) {
-          fixProposed = await _runFixPass(scope, targets);
-          if (mounted) await _loadItems(scope, reloadPreviews: false);
+        await _bulkQualityFixes(scope, fixNotes);
+        if (mounted && !_stopRequested) {
+          final cleanIds = [for (final x in _items) if (x.qualityStatus == 'clean') x.cropId];
+          if (cleanIds.isNotEmpty) {
+            final approved = await _svc.approveAxis(cleanIds, 'quality');
+            if (approved > 0) fixNotes.add('품질 $approved문항 승인');
+            if (mounted) await _loadItems(scope, reloadPreviews: false);
+          }
         }
       }
 
       if (!mounted) return;
       await _loadUnits();
+      final leftQual = _items.where((x) => x.qualityStatus == 'issue').length;
       setState(() {
         _notice = _stopRequested
             ? '요청에 따라 일시정지했습니다 ($totalProcessed문항 검수 완료).'
             : '중단원 검수가 완료되었습니다 ($totalProcessed문항 처리 · V2 렌더 검수 $renderChecked문항'
-                '${fixProposed > 0 ? ' · 원본 대조 수정안 $fixProposed문항' : ''}). '
-                '"품질 일괄 처리"가 수정안 적용 → 원본 대조 재검수 → 통과 문항 승인까지 한 번에 합니다.';
+                '${fixNotes.isEmpty ? '' : ' · ${fixNotes.join(' · ')}'}'
+                ' · 남은 품질 오류 $leftQual문항).';
       });
     } catch (e) {
       if (!mounted) return;
@@ -792,22 +799,54 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     return done;
   }
 
-  /// 원본 대조 수정 단계만 이 문항에 다시 돌리고 편집기를 새 수정안으로 채운다.
+  /// 원본 대조 수정 단계만 이 문항에 돌리고, 수정안이 나오면 문제은행에 바로 적용 → V2 카드 재렌더 → 교재 원본과 대조 재검수까지 마친다.
   Future<void> _fixPassSingle(TextbookProblemReviewItem item) async {
     final scope = _selectedScope;
     if (scope == null || _runningReview) return;
     setState(() => _notice = null);
     _bulkErrors.clear();
     try {
-      final n = await _whileRunning(() => _runFixPass(scope, [item]));
+      final (n, applied) = await _whileRunning(() async {
+        final count = await _runFixPass(scope, [item]);
+        if (!mounted || count <= 0) return (count, false);
+        await _loadItems(scope, reloadPreviews: false);
+        final cur = _items.where((x) => x.cropId == item.cropId).firstOrNull;
+        if (cur == null) return (count, false);
+        final text = _textProposalUsable(cur);
+        final figure = cur.hasPendingFigureProposal;
+        if (!text && !figure) return (count, false);
+        setState(() => _runProgress = '${item.problemNumber}번 수정안 적용 중...');
+        final res = await _applyFixFor(
+          scope,
+          cur,
+          stem: text ? cur.proposedStem : null,
+          choices: text ? cur.proposedChoices : null,
+          commonStem: text ? cur.proposedCommonStem : null,
+          figureLayout: figure ? cur.proposedFigureLayout : null,
+          figureCrops: figure ? cur.proposedFigureCrops : const [],
+          note: '원본 대조 수정안 적용',
+        );
+        final changed = ((res['changed'] as List?) ?? const []).isNotEmpty;
+        if (!changed || !mounted) return (count, false);
+        await _loadItems(scope, reloadPreviews: false);
+        final fresh = _items.where((x) => x.cropId == item.cropId).firstOrNull;
+        if (fresh != null) {
+          await _loadEnginePreviews(scope, [fresh], merge: true);
+          await _runRenderCheckPass(scope, only: [fresh]);
+        }
+        return (count, true);
+      });
       if (!mounted) return;
       await _loadItems(scope, reloadPreviews: false);
+      await _loadUnits();
       final fresh = _items.where((x) => x.cropId == item.cropId).firstOrNull;
       if (fresh != null) _selectItem(fresh);
       setState(() {
-        _notice = n > 0
-            ? '${item.problemNumber}번 원본 대조 수정안을 편집기에 채웠습니다. 확인 후 "품질 검수 승인"을 누르면 저장·승인됩니다.'
-            : '${item.problemNumber}번 원본 대조 실패${_bulkErrors.isEmpty ? '' : ': ${_bulkErrors.first}'}';
+        _notice = applied
+            ? '${item.problemNumber}번 원본 대조 수정안을 문제은행에 적용하고 V2 카드를 다시 찍어 재검수했습니다.'
+            : n > 0
+                ? '${item.problemNumber}번 원본 대조 완료(고칠 내용이 없거나 이미 원본과 같습니다).'
+                : '${item.problemNumber}번 원본 대조 실패${_bulkErrors.isEmpty ? '' : ': ${_bulkErrors.first}'}';
       });
     } catch (e) {
       if (mounted) setState(() => _notice = '원본 대조 실패: $e');
@@ -1016,9 +1055,11 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     return (done, synced);
   }
 
-  /// 공통 발문 중복이 있는 문항(승인·보류 제외)
-  List<TextbookProblemReviewItem> get _commonStemDups =>
-      [for (final it in _items) if (it.commonStemDuplicated && it.qualityStatus != 'approved' && !it.isEngineHeld) it];
+  /// 공통 발문 중복이 있는 문항(보류 제외 · 이미 품질 승인된 문항도 앞 단계에서 오염된 공통 발문은 고칠 수 있게 포함한다)
+  List<TextbookProblemReviewItem> get _commonStemDups => [
+        for (final it in _items)
+          if (it.commonStemDuplicated && !it.isEngineHeld && (it.qualityStatus != 'approved' || !it.stage2Superseded)) it,
+      ];
 
   /// 발문 중복 말고 다른 품질 문제가 없는가(2단계 나머지 플래그·정답/해설 카드 판정이 모두 정상).
   /// 그림 문항은 원본 대조(크기·위치)를 거쳐야 하므로 여기서 바로 승인하지 않는다.
@@ -1092,10 +1133,13 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
   static bool _textProposalUsable(TextbookProblemReviewItem it) =>
       it.hasPendingFixProposal && !it.fixProposalIsCommonStemDup && !it.commonStemDuplicated;
 
-  /// 아직 적용하지 않은 수정안(본문 또는 그림)이 있는 문항(승인·보류 제외)
+  /// 아직 적용하지 않은 수정안(본문 또는 그림)이 있는 문항(보류 제외 · 승인된 문항도 원본 대조로 새로 찾은 수정안은 적용한다)
   List<TextbookProblemReviewItem> get _pendingProposals => [
         for (final it in _items)
-          if (it.qualityStatus != 'approved' && !it.isEngineHeld && (_textProposalUsable(it) || it.hasPendingFigureProposal)) it,
+          if (!it.isEngineHeld &&
+              (it.qualityStatus != 'approved' || !it.stage2Superseded) &&
+              (_textProposalUsable(it) || it.hasPendingFigureProposal))
+            it,
       ];
 
   Future<int> _applyQuestionKindFixes() async {
@@ -2898,7 +2942,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
             const SizedBox(height: 6),
             Text('제안 이유: $reason', style: const TextStyle(color: _kTextSub, fontSize: 12, height: 1.35)),
           ],
-          if (item.commonStem.isNotEmpty) ...[
+          if (item.isSetQuestion) ...[
             const SizedBox(height: 10),
             const Text(
               '공통 발문 (세트 전체가 공유 · 바꾸면 같은 세트 문항 모두에 적용)',
@@ -2916,7 +2960,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
             if (_commonStemEditDirty(item)) ...[
               const SizedBox(height: 6),
               Text(
-                '현재 저장값: ${item.commonStem.trim()}',
+                '현재 저장값: ${item.commonStem.trim().isEmpty ? '(비어 있음)' : item.commonStem.trim()}',
                 style: const TextStyle(color: _kTextMuted, fontSize: 11.5, height: 1.35),
                 maxLines: 4,
                 overflow: TextOverflow.ellipsis,
@@ -2925,7 +2969,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
           ],
           const SizedBox(height: 10),
           Text(
-            item.commonStem.isNotEmpty ? '개별 발문 (공통 발문 제외 · 마크업 [문단]·\$수식\$ 유지)' : '발문 (마크업 [문단]·\$수식\$ 유지)',
+            item.isSetQuestion ? '개별 발문 (공통 발문 제외 · 마크업 [문단]·\$수식\$ 유지)' : '발문 (마크업 [문단]·\$수식\$ 유지)',
             style: const TextStyle(color: _kTextSub, fontSize: 12, fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 6),
@@ -2970,7 +3014,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
                 onPressed: _saving || _runningReview || !item.canRenderOriginal ? null : () => unawaited(_fixPassSingle(item)),
                 style: _outlineButtonStyle(color: _kAccent),
                 icon: const Icon(Icons.compare_rounded, size: 16, color: _kAccent),
-                label: Text(item.fixPassAt == null ? '교재 원본 대조 수정안 만들기' : '교재 원본 대조 다시'),
+                label: Text(item.fixPassAt == null ? '원본 대조로 AI가 바로 고치기' : '원본 대조로 AI가 다시 고치기'),
               ),
               OutlinedButton.icon(
                 onPressed: _saving || !_svc.hasGateway ? null : () => unawaited(_previewProblemFix(item)),

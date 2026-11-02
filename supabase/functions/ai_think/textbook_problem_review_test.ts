@@ -102,6 +102,15 @@ Deno.test('공통 발문에 개별 본문까지 통째로 들어 있으면 공�
   assertEquals(commonStemFix('다음 물음에 답하여라.[문단][박스시작]a>0[박스끝]', '12'), null);
   // 공통 발문이 다른 문항(9번)의 본문을 담고 있으면 이 문항(12번)에서는 판단하지 않는다
   assertEquals(commonStemFix(full, '다음 수의 약수를 모두 구하고, 소수인지 합성수인지 ([공백:2]) 안에 써넣어라.\n[문단]\n12\n약수: box(~~)'), null);
+  // 첫 문단이 지시문이 아니라 숫자·식('36=2^2×3^2')이고 두 번째 문단이 지시문이면 숫자·식으로 줄이지 않고 지시문을 살린다
+  const tableStem = '다음 표의 빈칸에 알맞은 수를 써넣어라.\n[문단]15=3\\times5[표시작]×|1[표끝]';
+  assertEquals(commonStemFix(`36=2^{2}\\times3^{2}\n[문단]\n${tableStem}`, tableStem), {
+    stem: '15=3\\times5[표시작]×|1[표끝]',
+    commonStem: '다음 표의 빈칸에 알맞은 수를 써넣어라.',
+  });
+  // 이미 잘못 줄어든 공통 발문('36=2^2×3^2'만 남은 상태)은 다른 문항에서 개별 발문을 자르지 않는다
+  assertEquals(commonStemFix('36=2^{2}\\times3^{2}', tableStem), null);
+  assertEquals(commonStemFix('36', '36\n480'), null);
 });
 
 Deno.test('재검수 대상: 미검수·풀이 없음·해설 미전사(시도 전)만, 승인·전사 시도 후는 제외', () => {

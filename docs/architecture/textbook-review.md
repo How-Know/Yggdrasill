@@ -365,10 +365,15 @@ screen also keeps a per-run sent set so one run never sends a crop twice.
   One data error is detected by rule, not by the model: common-stem
   duplication (`commonStemFix`, same in the Edge Function and the manager
   service). The renderer draws `meta.set_model.common_stem` + item stem, so
-  the instruction appears twice. Two shapes are handled: (1) the instruction
-  is repeated at the head of the item stem → strip it from the stem; (2) the
+  the instruction appears twice.   Two shapes are handled: (1) the instruction
+  is repeated at the head of the item stem → strip it from the stem (only when
+  the common stem itself looks like an instruction sentence, so a corrupted
+  expression fragment such as `'36'` never trims the item stem); (2) the
   common stem holds the whole item (`common_stem == stem`) → the common stem
-  becomes its first paragraph (the instruction) and the item stem the rest.
+  becomes its instruction paragraph (`looksLikeInstruction`: first paragraph if
+  it is an instruction, else the first subsequent instruction paragraph when
+  the first paragraph is an expression such as `'36=2^2×3^2'`) and the item
+  stem the rest.
   Shape 2 is applied only when the common stem actually ends with this
   item's own text, so a legitimate multi-paragraph common stem (condition
   box) is left alone. The rule forces `stem_ok = false`, `issue_kind = data`,
@@ -376,10 +381,13 @@ screen also keeps a per-run sent set so one run never sends a crop twice.
   (`source: system`, `reason_code: common_stem_duplicate`).
   Applying goes through `textbook_review_apply_problem_fix(..., p_common_stem)`;
   a common-stem change is written to every `pb_questions` row of the same
-  set (same `document_id` and set key) because the renderer takes the group's
-  common stem from its first item. The screen recognises both shapes on
-  already-reviewed rows and prefills the editor (common stem field + item
-  stem), so the single approval button applies it.
+  set (same `document_id` and set key, or sibling crops in the same
+  `is_set_header` range when no set key was stored yet) as well as
+  `pb_question_sets.common_stem` and `pb_delivery_units.source_meta`, because
+  the renderer takes the group's common stem from its first item or delivery
+  unit. The screen recognises both shapes on already-reviewed rows and
+  prefills the editor (common stem field + item stem), so the single approval
+  button applies it.
 
 ### Bulk actions
 
@@ -407,6 +415,10 @@ person:
      The second round runs only if some problem still needs a fix pass (it
      became `issue` in the comparison, or stayed `issue` after its proposal).
   4. every `clean` problem is approved.
+  "중단원 문항 검수 실행" runs this same fix → apply → V2 re-render →
+  original-compared re-check → auto-approve sequence at the end of the unit
+  run, and the per-problem "원본 대조로 AI가 바로 고치기" button also applies
+  the proposal and re-checks the V2 card at once.
   What remains are engine problems and issues the AI could not fix. The
   notice reports what was proposed, applied, re-checked and resized, and the
   count left. The pause button stops after the current chunk.

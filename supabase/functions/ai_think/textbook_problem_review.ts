@@ -8,7 +8,7 @@ import { uuidOrNull } from './validate.ts';
 
 type Rec = Record<string, unknown>;
 
-export const TEXTBOOK_REVIEW_PROMPT_VERSION = 'textbook-problem-review-2026-11-03c';
+export const TEXTBOOK_REVIEW_PROMPT_VERSION = 'textbook-problem-review-2026-11-03d';
 
 /** 품질 이상의 원인 분류. data=문항 데이터(본문·선지) 오류, engine=조판 엔진 문제, figure=도형 자산 문제 */
 export type IssueKind = 'none' | 'data' | 'engine' | 'figure';
@@ -148,12 +148,22 @@ export interface CommonStemFix {
 
 const squash = (s: string) => s.replace(/\s+|\[문단\]/g, '');
 
-/** 공통 발문의 첫 지시문: 첫 [문단]/줄바꿈 앞, 없으면 첫 문장(. ? ! 로 끝남). 뒤에 이어지는 내용이 없으면 null. */
+/** 지시문 문장으로 볼 수 있는 표현(공통 발문을 첫 문단으로 줄일 때 지시문인지 확인한다). */
+const INSTRUCTION_PATTERN =
+  /(다음|아래|보기|위|오른쪽|왼쪽)|(구하|쓰|써넣|채우|고르|찾|연결|나타내|계산|비교|완성|판단|말하|답하|표시|그리|그려|풀어|인수분해|소인수분해|약분|통분|정리)(여라|시오|라|자|기|고)|\?/;
+
+export function looksLikeInstruction(text: string): boolean {
+  const t = text.trim();
+  return t.length >= 4 && INSTRUCTION_PATTERN.test(t);
+}
+
+/** 공통 발문의 첫 지시문: 첫 [문단]/줄바꿈 앞, 없으면 첫 문장(. ? ! 로 끝남). 뒤에 이어지는 내용이 없거나 지시문이 아니면 null. */
 export function leadingInstruction(common: string): string | null {
   const parts = common.split(/\[문단\]|\n/).map((p) => p.trim()).filter((p) => p.length > 0);
-  if (parts.length >= 2) return parts[0];
+  if (parts.length >= 2) return looksLikeInstruction(parts[0]) ? parts[0] : null;
   const m = /^(.+?[.?!])\s*(\S[\s\S]*)$/.exec(common.trim());
-  return m ? m[1].trim() : null;
+  const first = m ? m[1].trim() : null;
+  return first && looksLikeInstruction(first) ? first : null;
 }
 
 /** 서술형으로 봐야 하는 표현(발문에 있으면 무조건 서술형) */
@@ -169,23 +179,40 @@ export function expectedQuestionKind(fullStem: unknown, choices: unknown): Quest
 
 /**
  * 공통 발문 중복의 두 형태를 모두 다룬다(Manager `computeCommonStemFix` 와 같은 규칙).
- * 1) 지시문이 개별 발문 앞머리에 다시 들어 있음 → 개별 발문에서 공통 부분만 뺀다.
- * 2) 공통 발문에 개별 문항 본문까지 통째로 들어 있음(common_stem == stem 등) → 공통 발문은 첫 문단(지시문)만,
- *    개별 발문은 지시문을 뺀 나머지. 공통 발문이 실제로 이 문항의 본문을 담고 있을 때만 적용한다.
+ * 1) 지시문이 개별 발문 앞머리에 다시 들어 있음 → 개별 발문에서 공통 부분만 뺀다(단, 공통 발문이 지시문이 아니라
+ *    숫자·식 조각이면 떼어내지 않는다 — 예: common_stem='36' 인 손상 상태에서 stem='36\n480' 을 잘못 자르지 않게).
+ * 2) 공통 발문에 개별 문항 본문까지 통째로 들어 있음(common_stem == stem 등) →
+ *    (가) 첫 문단이 지시문이면 공통 발문은 첫 문단(지시문)만 남기고 개별 발문은 지시문을 뺀 나머지,
+ *    (나) 첫 문단이 숫자·식이고 두 번째 문단이 지시문이면(예: "36=2^2×3^2\n다음 표의 빈칸에 알맞은 수를 써넣어라.\n...")
+ *         공통 발문은 그 지시문 문단만 남기고, 개별 발문에서도 앞머리 중복 지시문을 뺀다.
  */
 export function commonStemFix(commonStem: unknown, stem: unknown): CommonStemFix | null {
   const common = String(commonStem ?? '').trim();
   const s = String(stem ?? '');
   if (!common || !s.trim()) return null;
-  const direct = stripCommonStem(common, s);
-  if (direct !== null) return { stem: direct, commonStem: null };
+  if (looksLikeInstruction(common)) {
+    const direct = stripCommonStem(common, s);
+    if (direct !== null) return { stem: direct, commonStem: null };
+  }
   const instr = leadingInstruction(common);
-  if (!instr) return null;
-  const rest = stripCommonStem(instr, s);
-  if (rest === null) return null;
-  const sqRest = squash(rest);
-  if (!sqRest || !squash(common).endsWith(sqRest)) return null;
-  return { stem: rest, commonStem: instr };
+  if (instr) {
+    const rest = stripCommonStem(instr, s);
+    if (rest !== null) {
+      const sqRest = squash(rest);
+      if (sqRest && squash(common).endsWith(sqRest)) return { stem: rest, commonStem: instr };
+    }
+  }
+  // 첫 문단이 숫자·식이고 뒤에 지시문 문단이 있는 오염된 공통 발문(예: "36=2^2×3^2\n다음 표의 빈칸에...")을 복구한다.
+  const parts = common.split(/\[문단\]|\n/).map((p) => p.trim()).filter((p) => p.length > 0);
+  if (parts.length >= 2 && !looksLikeInstruction(parts[0])) {
+    const instrPart = parts.slice(1).find((p) => looksLikeInstruction(p));
+    if (instrPart) {
+      const strippedFromStem = stripCommonStem(instrPart, s) ?? stripCommonStem(`${parts[0]}\n${instrPart}`, s);
+      const nextStem = strippedFromStem ?? s.trim();
+      if (nextStem) return { stem: nextStem, commonStem: instrPart };
+    }
+  }
+  return null;
 }
 
 const SOLUTION_TRANSCRIBE_SCHEMA: Rec = {
@@ -238,6 +265,7 @@ const BLIND_SOLVE_SCHEMA: Rec = {
           'quality_issue_detail',
           'issue_kind',
           'proposed_stem',
+          'proposed_common_stem',
           'proposed_choices',
           'fix_reason',
           'question_kind',
@@ -270,6 +298,7 @@ const BLIND_SOLVE_SCHEMA: Rec = {
           quality_issue_detail: { type: ['string', 'null'] },
           issue_kind: { type: 'string', enum: ['none', 'data', 'engine', 'figure'] },
           proposed_stem: { type: ['string', 'null'] },
+          proposed_common_stem: { type: ['string', 'null'] },
           proposed_choices: {
             type: ['array', 'null'],
             items: {
@@ -433,12 +462,13 @@ const BLIND_SOLVE_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔�
    - "engine": 데이터 텍스트는 맞는데 우리 조판 엔진이 잘못 그린다. 올바른 LaTeX인데 겹침·잘림·간격 이상·기호 누락, 줄바꿈이 엉킴, 표/상자 마크업이 그려지지 않음. → 엔진(템플릿)을 고쳐야 하며 같은 표기를 쓰는 다른 문항에도 반복된다.
    - "figure": 도형·그래프 자산이 없거나 잘림(텍스트·LaTeX 문제가 아님).
    - 이상이 없으면 "none".
-4-2. 데이터 수정 제안(proposed_stem, proposed_choices, fix_reason) — issue_kind 가 "data"일 때만:
+4-2. 데이터 수정 제안(proposed_stem, proposed_common_stem, proposed_choices, fix_reason) — issue_kind 가 "data"일 때만:
    - 화면에 같은 지시문이 두 번 보이면(공통 지시문이 stem_raw 에도 들어 있는 경우) issue_kind 는 "data" 이고, proposed_stem 은 stem_raw 에서 공통 지시문 부분을 뺀 개별 문항 본문만 적으세요.
-   - proposed_stem: stem_raw(개별 발문 원문, 공통 지시문 제외)를 최소한으로 고친 전체 본문. 마크업([문단], [박스시작]/[박스끝], [표시작]/[표끝], [[공백:n]], $...$ 수식)은 원문 형식을 그대로 유지하고, 틀린 부분만 바꾸세요. 원본 이미지가 있으면 그것을 기준으로 맞추세요(빠진 글자는 원본에서 읽어 채웁니다). 고칠 것이 없으면 null.
+   - 세트 문항의 공통 발문(common_stem)이 비어 있거나, 지시문 문장이 빠졌거나, 세트 첫 문항의 숫자·식(예: "36", "36=2^2×3^2")이 잘못 들어 있으면 세트 머리 원본 이미지(또는 문항 원본)에서 읽은 원래 공통 지시문 전체를 proposed_common_stem 에 적으세요. 고칠 것이 없거나 세트 문항이 아니면 null.
+   - proposed_stem: stem_raw(개별 발문 원문, 공통 지시문 제외)를 최소한으로 고친 전체 본문. 마크업([문단], [박스시작]/[박스끝], [표시작]/[표끝], [[공백:n]], $...$ 수식)은 원문 형식을 그대로 유지하고, 틀린 부분만 바꾸세요. 원본 이미지가 있으면 그것을 기준으로 맞추세요(빠진 글자는 원본에서 읽어 채우고, 원본에 없는 엉뚱한 숫자·문단은 뺍니다). 고칠 것이 없으면 null.
    - proposed_choices: 선지를 고쳐야 할 때만 전체 선지 배열 [{label:"①", text:"..."}, ...]을 적고, 아니면 null. label 은 원문 그대로(①~⑤ 또는 ㄱ,ㄴ,ㄷ).
    - fix_reason: 무엇을 왜 고쳤는지 한 줄. 제안이 없으면 null.
-   - "engine"·"figure"·"none" 이면 proposed_stem, proposed_choices, fix_reason 모두 null.
+   - "engine"·"figure"·"none" 이면 proposed_stem, proposed_common_stem, proposed_choices, fix_reason 모두 null.
 4-3. 문항 유형(question_kind): 원본·V2 화면 기준으로 학생이 답하는 방식.
    - "서술하시오", "과정을 쓰시오", "풀이 과정", "이유를 쓰시오", "설명하시오", "증명하시오" 같은 표현이 있으면 무조건 "essay".
    - 그 외 선지(①~⑤)를 골라 답하면 "objective", 답만 쓰면 "subjective".
@@ -889,6 +919,12 @@ export async function handleTextbookProblemReview(
           b.proposed_stem.trim() !== String(it.stem ?? '').trim()
       ? b.proposed_stem.trim()
       : null;
+    const proposedCommonStem = dupFix?.commonStem ?? (
+      issueKind === 'data' && typeof b.proposed_common_stem === 'string' && b.proposed_common_stem.trim() &&
+        b.proposed_common_stem.trim() !== String(it.common_stem ?? '').trim()
+        ? b.proposed_common_stem.trim()
+        : null
+    );
     const proposedChoices = issueKind === 'data' ? normalizeProposedChoices(b.proposed_choices) : null;
     const choicesDiffer = proposedChoices !== null && JSON.stringify(proposedChoices) !== JSON.stringify(it.choices ?? []);
     const fixReason = dupFix?.commonStem
@@ -898,11 +934,11 @@ export async function handleTextbookProblemReview(
       : typeof b.fix_reason === 'string'
       ? b.fix_reason
       : null;
-    const fixProposal: Rec = proposedStem || choicesDiffer
+    const fixProposal: Rec = proposedStem || proposedCommonStem || choicesDiffer
       ? {
         kind: issueKind,
         stem: proposedStem,
-        common_stem: dupFix?.commonStem ?? null,
+        common_stem: proposedCommonStem,
         choices: choicesDiffer ? proposedChoices : null,
         reason: fixReason,
         reason_code: dupStripped !== null ? 'common_stem_duplicate' : null,
@@ -1040,10 +1076,10 @@ export async function handleTextbookProblemReview(
           fidelity_ok: fidelityOk,
           issue_kind: issueKind,
         },
-        proposal: proposedStem || choicesDiffer
+        proposal: proposedStem || proposedCommonStem || choicesDiffer
           ? {
             target: 'problem',
-            after: { stem: proposedStem, common_stem: dupFix?.commonStem ?? null, choices: choicesDiffer ? proposedChoices : null },
+            after: { stem: proposedStem, common_stem: proposedCommonStem, choices: choicesDiffer ? proposedChoices : null },
             reason: fixReason ?? '원본과 대조한 데이터 수정 제안',
             keeps: '정답·해설 위치는 그대로 유지합니다.',
           }

@@ -177,6 +177,58 @@ export function buildFigureProposal(args: {
   };
 }
 
+export interface NormalizedTextFix {
+  stem: string | null;
+  commonStem: string | null;
+  choices: Array<{ label: string; text: string }> | null;
+  textSame: boolean;
+}
+
+/**
+ * 모델이 낸 본문·공통 발문·선지 수정안을 정리한다.
+ * - 모델이 text_matches_original=true 를 찍었어도 실제 corrected_* 를 적었으면 그 값을 그대로 쓴다.
+ * - 공통 발문이 비어 있던 세트 문항도 세트 머리에서 읽은 corrected_common_stem 을 받는다.
+ * - 개별 발문에 공통 지시문이 또 들어갔으면 떼어 내고, 떼어낸 뒤에도 바뀌었을 때만 stem 을 남긴다.
+ */
+export function normalizeTextFix(args: {
+  textMatchesOriginal: unknown;
+  correctedStem: unknown;
+  correctedCommonStem: unknown;
+  correctedChoices: unknown;
+  currentStem: unknown;
+  currentCommonStem: unknown;
+  currentChoices: unknown;
+}): NormalizedTextFix {
+  const curStem = String(args.currentStem ?? '');
+  const curCommon = String(args.currentCommonStem ?? '').trim();
+  const rawStem = typeof args.correctedStem === 'string' && args.correctedStem.trim() ? args.correctedStem.trim() : null;
+  const rawCommon = typeof args.correctedCommonStem === 'string' && args.correctedCommonStem.trim()
+    ? args.correctedCommonStem.trim()
+    : null;
+  let stem = rawStem && rawStem !== curStem.trim() ? rawStem : null;
+  const commonStem = rawCommon && rawCommon !== curCommon ? rawCommon : null;
+  const effectiveCommon = commonStem ?? curCommon;
+  if (stem && effectiveCommon) {
+    const stripped = stripCommonStem(effectiveCommon, stem);
+    if (stripped !== null) stem = stripped.trim() !== curStem.trim() ? stripped : null;
+  } else if (!stem && commonStem) {
+    // 공통 발문이 새로 생기거나 바뀌면서 기존 stem 앞머리에 그 지시문이 중복돼 있던 경우 함께 떼어낸다.
+    const stripped = stripCommonStem(commonStem, curStem);
+    if (stripped !== null && stripped.trim() !== curStem.trim()) stem = stripped;
+  }
+  const proposedChoices = normalizeProposedChoices(args.correctedChoices);
+  const choices = proposedChoices && JSON.stringify(proposedChoices) !== JSON.stringify(args.currentChoices ?? [])
+    ? proposedChoices
+    : null;
+  const hasAny = !!(stem || commonStem || choices);
+  return {
+    stem,
+    commonStem,
+    choices,
+    textSame: !hasAny && args.textMatchesOriginal === true,
+  };
+}
+
 /** 그림 자리가 모자라면 본문 끝에 [그림] 마커를 붙인다(렌더러는 마커 순서대로 그림을 놓는다). */
 export function ensureFigureMarkers(stem: string, figureCount: number): string {
   const missing = figureCount - figureMarkerCount(stem);
@@ -258,14 +310,18 @@ const FIX_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔진의 [�
 (라) 앞 단계에서 지적된 문제(issues)가 주어집니다. 목표는 저장 데이터를 원본과 똑같은 문항으로 고친 전체 본문을 쓰고, 그림의 자리와 크기를 재는 것입니다.
 
 [1. 본문·선지 수정안 — 원본 이미지가 기준]
-- 원본에 인쇄된 이 문항(세트 머리 제외)을 처음부터 끝까지 다시 적은 전체 개별 발문을 corrected_stem 에 적으세요. 저장된 stem 이 원본과 같으면 null.
+- 원본에 인쇄된 이 문항(세트 머리 제외)을 처음부터 끝까지 다시 적은 전체 개별 발문을 corrected_stem 에 적으세요. 저장된 stem 이 원본과 완전히 같을 때만 null.
 - 마크업은 저장 형식을 그대로 따릅니다: 수식 $...$(LaTeX), 문단 구분 [문단], 상자 [박스시작]...[박스끝], 표 [표시작]...[표끝], 빈칸 [[공백:n]] 등
   저장 stem 에 쓰인 표기를 유지하고, 그림 자리에는 [그림] 마커를 둡니다(그림이 본문 옆이나 아래에 있으면 그 그림이 딸린 문단의 끝).
-- 세트 문항: 학생 화면은 common_stem 다음에 stem 을 이어 그립니다. corrected_stem 에 공통 지시문을 넣지 마세요.
-  공통 발문 자체가 원본(세트 머리)과 다를 때만 corrected_common_stem 에 전체 공통 발문을 적고, 아니면 null.
+- 세트 문항(common_stem 이 있거나 세트 머리 원본 이미지가 함께 온 문항):
+  - 학생 화면은 common_stem(세트 머리 지시문) 다음에 stem(이 문항 본문)을 이어 그립니다. corrected_stem 에 공통 지시문을 넣지 마세요.
+  - 세트 머리 원본 이미지(또는 문항 원본 위쪽에 보이는 세트 지시문, 앞 단계 issues 에 적힌 원래 공통 지시문)와 저장된 common_stem 이 다르면
+    (예: common_stem 이 비어 있거나, 지시문 대신 '36'·'36=2^2×3^2' 같은 첫 문항 식이나 예시만 들어 있거나, 지시문 문장이 빠졌을 때)
+    반드시 세트 전체가 공유할 원래 공통 지시문 전체를 corrected_common_stem 에 적으세요! 같을 때만 null.
+  - 저장된 stem 이나 common_stem 에 다른 문항(예: 세트 첫 문항)의 숫자·식이 잘못 섞여 있으면 이 문항 원본에 인쇄된 내용만 남기세요.
 - 선지: 원본의 선지(①~⑤ 또는 ㄱ,ㄴ,ㄷ)와 저장 choices 가 다르면 전체 선지 배열을 corrected_choices 에, 같거나 원본에 선지가 없으면 null.
 - 원본에 없는 내용을 지어내지 마세요. 원본에서 읽을 수 없는 부분은 저장값을 그대로 둡니다.
-- text_matches_original: 저장 데이터(공통 발문·발문·선지)가 원본과 내용상 같으면 true(이때 corrected_* 는 모두 null).
+- text_matches_original: 저장 데이터(공통 발문·발문·선지)가 원본과 내용상 완전히 같고 V2 카드에도 빠진 지시문·엉뚱한 숫자가 없을 때만 true(이때만 corrected_* 가 모두 null). 앞 단계 issues 에 지시문 누락·내용 불일치가 지적됐으면 반드시 원본을 보고 corrected_stem 또는 corrected_common_stem 을 채우고 text_matches_original 은 false 로 두세요.
 - engine_issue: 데이터는 원본과 같은데 V2 화면만 잘못 그려졌을 때(겹침·잘림·간격·기호 누락·마크업 노출) 짧은 증상. 아니면 null.
 - fix_reason: 무엇을 왜 고쳤는지 한두 문장. 고친 것이 없으면 null.
 
@@ -343,7 +399,11 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
           crop_id: it.crop_id,
           problem_number: it.problem_number,
           question_type: it.question_type,
-          is_set_question: String(it.common_stem ?? '').trim().length > 0,
+          is_set_question: String(it.common_stem ?? '').trim().length > 0 ||
+            String(it.set_type ?? '').trim().length > 0 ||
+            String(it.set_header_number ?? '').trim().length > 0 ||
+            !!images.get(String(it.crop_id))?.setHeaderImageDataUrl,
+          set_header_number: String(it.set_header_number ?? '').trim(),
           common_stem: String(it.common_stem ?? '').trim(),
           stem: String(it.stem ?? '').slice(0, 4000),
           choices: it.choices,
@@ -416,24 +476,19 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
 
     // 규칙(공통 발문 중복) 제안이 아직 적용 전이면 본문 제안은 그대로 두고 그림만 더한다.
     const keepRuleText = prev.reason_code === 'common_stem_duplicate' && !prev.applied_at;
-    const textSame = r.text_matches_original === true;
-    let stem = !textSame && typeof r.corrected_stem === 'string' && r.corrected_stem.trim() &&
-        r.corrected_stem.trim() !== curStem.trim()
-      ? r.corrected_stem.trim()
-      : null;
-    const common = !textSame && curCommon && typeof r.corrected_common_stem === 'string' &&
-        r.corrected_common_stem.trim() && r.corrected_common_stem.trim() !== curCommon
-      ? r.corrected_common_stem.trim()
-      : null;
-    // 개별 발문에 공통 지시문을 또 넣었으면 떼어 낸다(학생 화면에 두 번 보이는 것을 막는다).
-    if (stem && (common ?? curCommon)) {
-      const stripped = stripCommonStem(common ?? curCommon, stem);
-      if (stripped !== null) stem = stripped.trim() !== curStem.trim() ? stripped : null;
-    }
-    const proposedChoices = textSame ? null : normalizeProposedChoices(r.corrected_choices);
-    const choices = proposedChoices && JSON.stringify(proposedChoices) !== JSON.stringify(it.choices ?? [])
-      ? proposedChoices
-      : null;
+    const textFix = normalizeTextFix({
+      textMatchesOriginal: r.text_matches_original,
+      correctedStem: r.corrected_stem,
+      correctedCommonStem: r.corrected_common_stem,
+      correctedChoices: r.corrected_choices,
+      currentStem: curStem,
+      currentCommonStem: curCommon,
+      currentChoices: it.choices,
+    });
+    let stem = textFix.stem;
+    const common = textFix.commonStem;
+    const choices = textFix.choices;
+    const textSame = textFix.textSame;
 
     const measures = parseFigureMeasures(r.figures);
     const size = img.originalSize;

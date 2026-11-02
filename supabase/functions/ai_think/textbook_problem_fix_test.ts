@@ -6,6 +6,7 @@ import {
   figureLayoutItem,
   LINE_PITCH_EM,
   normalizeBox,
+  normalizeTextFix,
   orderedFigureAssets,
   parseFigureMeasures,
 } from './textbook_problem_fix.ts';
@@ -86,4 +87,49 @@ Deno.test('새 그림 수만큼 본문에 [그림] 마커가 없으면 끝에 �
   assertEquals(ensureFigureMarkers('다음 그림에서 x 의 값은?', 1), '다음 그림에서 x 의 값은?\n[그림]');
   assertEquals(ensureFigureMarkers('그림[그림]에서 ', 2), '그림[그림]에서\n[그림]');
   assertEquals(ensureFigureMarkers('[그림] 두 개 [그림]', 2), '[그림] 두 개 [그림]');
+});
+
+Deno.test('본문·공통 발문 수정안 정리: 공통 발문만 바뀐 경우도 받고 모델이 text_matches_original=true 를 찍어도 수정안을 살린다', () => {
+  // 공통 발문만 바뀜(예: common_stem='36' → 원래 지시문) + 모델이 실수로 text_matches_original=true 로 응답
+  const commonOnly = normalizeTextFix({
+    textMatchesOriginal: true,
+    correctedStem: null,
+    correctedCommonStem: '다음 수의 약수의 개수를 구하여라.',
+    correctedChoices: null,
+    currentStem: '480',
+    currentCommonStem: '36',
+    currentChoices: [],
+  });
+  assertEquals(commonOnly, {
+    stem: null,
+    commonStem: '다음 수의 약수의 개수를 구하여라.',
+    choices: null,
+    textSame: false,
+  });
+
+  // 기존 common_stem 이 비어 있던 세트 문항도 세트 머리 지시문을 받는다
+  const emptyCommon = normalizeTextFix({
+    textMatchesOriginal: false,
+    correctedStem: null,
+    correctedCommonStem: '다음 표의 빈칸에 알맞은 수를 써넣어라.',
+    correctedChoices: null,
+    currentStem: '15=3\\times5',
+    currentCommonStem: '',
+    currentChoices: [],
+  });
+  assertEquals(emptyCommon.commonStem, '다음 표의 빈칸에 알맞은 수를 써넣어라.');
+  assertEquals(emptyCommon.textSame, false);
+
+  // 공통 발문이 새로 채워질 때 기존 stem 앞머리에 그 지시문이 중복돼 있으면 함께 떼어낸다
+  const stripExisting = normalizeTextFix({
+    textMatchesOriginal: false,
+    correctedStem: null,
+    correctedCommonStem: '다음 수의 약수의 개수를 구하여라.',
+    correctedChoices: null,
+    currentStem: '다음 수의 약수의 개수를 구하여라.[문단]480',
+    currentCommonStem: '36',
+    currentChoices: [],
+  });
+  assertEquals(stripExisting.commonStem, '다음 수의 약수의 개수를 구하여라.');
+  assertEquals(stripExisting.stem, '480');
 });
