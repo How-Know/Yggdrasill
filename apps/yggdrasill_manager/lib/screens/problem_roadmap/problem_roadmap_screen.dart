@@ -109,6 +109,9 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
 
   /// 교재 원본 이미지 로드. 같은 Future 를 다시 써서 다시 그릴 때 깜빡이지 않게 한다. 키: crop|쪽|영역
   final Map<String, Future<TextbookReviewRenderedRegion?>> _originalFutures = {};
+
+  /// 수학 일괄에서 다시 푼 문항의 그때 내용(problemTextSignature). 내용이 그대로면 이 앱 실행에서 다시 풀지 않는다.
+  final Map<String, String> _mathResolvedSig = {};
   List<String> _editingVisualTags = const [];
   List<Map<String, dynamic>> _editingAlternatives = const [];
 
@@ -563,7 +566,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     }
   }
 
-  /// 일괄 처리. 규칙으로 바로 고칠 수 있는 것은 고치고(수학: 해설·AI 일치 답 채택, 품질: 공통 발문 중복 제거),
+  /// 일괄 처리. 규칙으로 바로 고칠 수 있는 것은 고치고(수학: 재풀이 뒤 해설·AI 일치 답 채택, 품질: 공통 발문 중복 제거),
   /// 정상 문항은 승인한다. 사람이 봐야 하는 것(품질은 렌더·엔진 문제)만 남긴다.
   Future<void> _bulkApproveClean(String axis) async {
     final scope = _selectedScope;
@@ -577,6 +580,12 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     try {
       final extraApprove = <String>[];
       if (axis == 'math') {
+        final resolved = await _whileRunning(() => _mathResolvePass(scope));
+        if (!mounted) return;
+        if (resolved > 0) {
+          notes.add('지금 본문·교재 원본으로 $resolved문항 다시 풀이');
+          await _loadItems(scope, reloadPreviews: false);
+        }
         final (done, synced) = await _adoptAgreedAnswers();
         if (done > 0) notes.add('해설·AI 일치 답 $done문항 채택(문제은행 정답 $synced문항 동기화)');
         // 채점 정답 = AI 답이면 해설 답이 없거나 달라도 2:1 로 채점 정답을 유지하고 승인한다.
@@ -680,6 +689,51 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     if (applied > 0) notes.add('수정안 $applied문항 적용');
     if (checked.isNotEmpty) notes.add('원본 대조 재검수 ${checked.length}문항');
     if (resized.isNotEmpty) notes.add('그림 크기 재조정 ${resized.length}문항');
+  }
+
+  /// 규칙으로 끝나지 않는 수학 오류 중 이 앱 실행에서 같은 내용으로 아직 다시 풀지 않은 문항
+  List<TextbookProblemReviewItem> get _mathResolveTargets => [
+        for (final it in _items)
+          if (it.needsMathResolve && _mathResolvedSig[it.cropId] != it.problemTextSignature) it,
+      ];
+
+  /// 수학 일괄의 재풀이(math_only). 지금 본문·교재 원본으로 다시 풀어 채점 정답·해설 정답과 대조한다.
+  /// 수학 결과만 바뀌고 품질 판정·승인은 그대로다. 반환: 다시 푼 문항 수
+  Future<int> _mathResolvePass(TextbookReviewUnitScope scope) async {
+    final targets = _mathResolveTargets;
+    if (targets.isEmpty) return 0;
+    if (_previewLoad != null) await _previewLoad;
+    var done = 0;
+    for (var i = 0; i < targets.length; i += _kReviewChunkSize) {
+      if (!mounted || _stopRequested) break;
+      final chunk = targets.skip(i).take(_kReviewChunkSize).toList();
+      final range = '${i + 1}~${i + chunk.length} / ${targets.length} 문항';
+      setState(() => _runProgress = '수학 재풀이: $range — 본문 PDF에서 교재 원본을 찍는 중...');
+      final images = await _svc.prepareChunkImages(
+        scope: scope,
+        items: chunk,
+        previewUrlsByCropId: _previewUrlsByCropId,
+        onlyMissingSolutions: true,
+      );
+      if (!mounted || _stopRequested) break;
+      setState(() => _runProgress = '수학 재풀이: $range — 지금 본문과 교재 원본으로 다시 풀고 채점 정답·해설 정답과 대조하는 중...');
+      try {
+        final res = await _svc.runReviewChunk(
+          scope,
+          chunkSize: chunk.length,
+          mathOnly: true,
+          cropIds: [for (final x in chunk) x.cropId],
+          images: images,
+        );
+        done += (res['processed'] as num?)?.toInt() ?? 0;
+        for (final x in chunk) {
+          _mathResolvedSig[x.cropId] = x.problemTextSignature;
+        }
+      } catch (e) {
+        _bulkErrors.add('${chunk.map((x) => x.problemNumber).join(',')}번 재풀이: $e');
+      }
+    }
+    return done;
   }
 
   /// 렌더 검수 진행 표시(_runningReview)를 켠 채로 실행한다. 이미 켜져 있으면 그대로 둔다.
@@ -1342,6 +1396,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
   }
 
   Widget _buildTopHeader(int mathCleanCount, int qualCleanCount) {
+    final mathResolveCount = _mathResolveTargets.length;
     final actions = <Widget>[
       if (_runningReview)
         OutlinedButton.icon(
@@ -1351,12 +1406,15 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
           label: Text(_stopRequested ? '이번 묶음 후 멈춤' : '일시정지', style: const TextStyle(color: _kError)),
         )
       else ...[
-        if (mathCleanCount + _agreedAnswerFixes.length + _mathConfirmedCount > 0)
+        if (mathCleanCount + _agreedAnswerFixes.length + _mathConfirmedCount + mathResolveCount > 0)
           OutlinedButton.icon(
             onPressed: _saving ? null : () => unawaited(_bulkApproveClean('math')),
             style: _outlineButtonStyle(color: _kAccent),
             icon: const Icon(Icons.done_all_rounded, size: 18, color: _kAccent),
-            label: Text('수학 일괄 처리 (${mathCleanCount + _agreedAnswerFixes.length + _mathConfirmedCount})'),
+            label: Text('수학 일괄 처리 (정상 $mathCleanCount'
+                '${_agreedAnswerFixes.isNotEmpty ? ' · 해설·AI 일치 ${_agreedAnswerFixes.length}' : ''}'
+                '${_mathConfirmedCount > 0 ? ' · 채점=AI $_mathConfirmedCount' : ''}'
+                '${mathResolveCount > 0 ? ' · 재풀이 $mathResolveCount' : ''})'),
           ),
         if (qualCleanCount + _commonStemDups.length + _kindFixes.length + _pendingProposals.length + _fixPassTargets.length > 0)
           OutlinedButton.icon(
@@ -1698,7 +1756,13 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
             runSpacing: 8,
             children: [
               _filterTabChip(0, '전체 ${_items.length}'),
-              _filterTabChip(1, '오류·불일치 $issueCount', highlightError: issueCount > 0),
+              _filterTabChip(
+                1,
+                '오류·불일치 $issueCount'
+                '${issueCount > 0 ? ' (수학 ${_items.where((x) => x.mathStatus == 'issue').length}'
+                    ' · 품질 ${_items.where((x) => x.qualityStatus == 'issue').length})' : ''}',
+                highlightError: issueCount > 0,
+              ),
               if (draftCount > 0) _filterTabChip(2, '새 초안 $draftCount'),
               _filterTabChip(3, '미검수 ${_items.where((x) => x.mathStatus == 'pending').length}'),
               _filterTabChip(4, '승인완료 ${_items.where((x) => x.isFullyApproved).length}'),

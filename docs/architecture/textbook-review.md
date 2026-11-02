@@ -410,13 +410,26 @@ person:
   What remains are engine problems and issues the AI could not fix. The
   notice reports what was proposed, applied, re-checked and resized, and the
   count left. The pause button stops after the current chunk.
-- "수학 일괄 처리": adopts the printed solution's answer (with the
-  problem-bank sync) where the printed answer and the AI answer agree but the
-  grading answer differs; keeps and approves the grading answer where it
-  equals the AI answer (two of three agree); then approves every `clean`
-  problem. Answers are compared after `normalizeAnswerForCompare` (spaces,
-  `$`, braces, `\left`/`\right`, multiplication signs). What remains are real
-  disagreements.
+- "수학 일괄 처리", in order:
+  1. re-solves every math `issue` the two rules below cannot settle
+     (`needsMathResolve`), with the current problem text and the original
+     image. The AI answer may come from before a stem fix (for example
+     "판단불가" because the statement was missing then). This is stage 2 with
+     `math_only` (below). The app skips a problem it already re-solved in
+     this session when its text (`problemTextSignature`: common stem, stem,
+     choices, figure count) has not changed;
+  2. adopts the printed solution's answer (with the problem-bank sync) where
+     the printed answer and the AI answer agree but the grading answer
+     differs;
+  3. keeps and approves the grading answer where it equals the AI answer (two
+     of three agree);
+  4. approves every `clean` problem.
+  Answers are compared after `normalizeAnswerForCompare` (spaces, `$`,
+  braces, `\left`/`\right`, multiplication signs). What remains are real
+  disagreements. The button also shows when only re-solve targets are left.
+- The "오류·불일치" tab counts a problem when either axis is `issue` or it
+  has an open finding, so a quality approval alone does not remove a math
+  error. The tab label shows the math and quality counts.
 
 ### Question type
 
@@ -437,7 +450,19 @@ The stem / choices / common-stem editor is always shown on the quality card,
 so the owner can edit any problem by hand.
 - Stage 3 compares the grading answer, the transcribed solution answer (when
   present), and the AI answer, and proposes concept ids, thinking codes and
-  draft proposals.
+  draft proposals. The solution it compares with follows the storage rule
+  (`effectiveSolution`): the owner's manual solution, else this run's Vision
+  transcription, else the stored Vision transcription (no solution image
+  sent, or Vision could not read it this time).
+- `math_only: true` (with `crop_ids`) re-solves only math `issue` problems and
+  writes only the math side: AI solution and answer, arithmetic counts, match
+  mode, `answer_matched`, `mismatch_reason`, concept and thinking ids, draft
+  proposals, `analyzed_at`, `math_status`, and the `ai_answer_compare`
+  finding (plus the transcription when a solution image was sent for a
+  problem without one). Quality checks, `quality_status`, `fix_proposal`,
+  render checks and `solved_at` stay: `solved_at` marks the stage-2 quality
+  judgement that stage 4 compares fix times against. A problem the model left
+  out of its answer is skipped, not cleared.
 - Writes: the analysis row (manual solutions are kept, `render_checks` is
   reset), `math_status` and `quality_status` (`clean` or `issue`), and
   findings with `check_key` `ai_answer_compare`, `ai_quality_v2_student_view`,

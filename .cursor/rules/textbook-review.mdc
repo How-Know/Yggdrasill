@@ -48,6 +48,10 @@ and RPCs (`textbook_review_*`), first read `docs/architecture/textbook-review.md
   that pass the original-compared render check).
 - Re-checking an approved problem against the original keeps `approved`; a
   difference only sets `render_checks.flagged_after_approval`.
+- Stage 2 with `math_only` re-solves math `issue` problems (used by
+  "수학 일괄 처리" after stem fixes) and writes only the math side. It must not
+  touch quality checks, `quality_status`, `fix_proposal`, render checks or
+  `solved_at`.
 - `quality_status = 'held'` means a render-engine hold. Stage re-runs and
   render checks must keep `held` and `approved`; only an owner action
   (release or approval) changes them. Counts treat held problems separately

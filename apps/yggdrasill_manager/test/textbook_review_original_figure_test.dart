@@ -173,6 +173,54 @@ void main() {
       expect(failed.stage2Superseded, isFalse);
       expect(failed.renderHasIssue, isTrue);
     });
+
+    test('needsMathResolve: 수학 일괄 규칙으로 끝나지 않는 수학 오류만 다시 푼다', () {
+      // 채점 정답 = 해설 정답인데 AI 가 옛 본문으로 판단불가
+      expect(
+        _item({'math_status': 'issue', 'existing_answer': '×', 'solution_answer': r'$\times$', 'ai_answer': '판단불가'})
+            .needsMathResolve,
+        isTrue,
+      );
+      // 해설·AI 일치 → 해설 답 채택 규칙
+      expect(
+        _item({'math_status': 'issue', 'existing_answer': '3', 'solution_answer': '4', 'ai_answer': '4'}).needsMathResolve,
+        isFalse,
+      );
+      // 채점 정답 = AI 답 → 2:1 유지 규칙
+      expect(
+        _item({'math_status': 'issue', 'existing_answer': '4', 'solution_answer': '3', 'ai_answer': '4'}).needsMathResolve,
+        isFalse,
+      );
+      expect(_item({'math_status': 'approved', 'existing_answer': '×', 'ai_answer': '판단불가'}).needsMathResolve, isFalse);
+      expect(_item({'math_status': 'clean'}).needsMathResolve, isFalse);
+    });
+
+    test('problemTextSignature 는 본문·공통 발문·선지·그림 수가 바뀌면 달라진다', () {
+      final base = _item({'common_stem': '다음을 구하여라.'});
+      expect(base.problemTextSignature, _item({'common_stem': '다음을 구하여라.'}).problemTextSignature);
+      expect(base.problemTextSignature == _item({'common_stem': '다음을 구하여라.', 'stem': '7'}).problemTextSignature, isFalse);
+      expect(base.problemTextSignature == _item({}).problemTextSignature, isFalse);
+      expect(
+        base.problemTextSignature ==
+            _item({
+              'common_stem': '다음을 구하여라.',
+              'choices': [
+                {'label': '①', 'text': '2'},
+              ],
+            }).problemTextSignature,
+        isFalse,
+      );
+      expect(
+        base.problemTextSignature ==
+            _item({
+              'common_stem': '다음을 구하여라.',
+              'pb_figure_assets': [
+                {'figure_index': 1, 'path': 'a'},
+              ],
+            }).problemTextSignature,
+        isFalse,
+      );
+    });
   });
 
   test('TextbookReviewChunkImage.toJson 은 원본 이미지와 좌표를 함께 보낸다', () {

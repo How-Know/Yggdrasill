@@ -8,7 +8,7 @@ import { uuidOrNull } from './validate.ts';
 
 type Rec = Record<string, unknown>;
 
-export const TEXTBOOK_REVIEW_PROMPT_VERSION = 'textbook-problem-review-2026-11-03b';
+export const TEXTBOOK_REVIEW_PROMPT_VERSION = 'textbook-problem-review-2026-11-03c';
 
 /** 품질 이상의 원인 분류. data=문항 데이터(본문·선지) 오류, engine=조판 엔진 문제, figure=도형 자산 문제 */
 export type IssueKind = 'none' | 'data' | 'engine' | 'figure';
@@ -591,6 +591,8 @@ export async function handleTextbookProblemReview(
   const midOrder = Number(body.mid_order);
   const chunkSize = Math.max(1, Math.min(10, Number(body.chunk_size) || 6));
   const forceRerun = body.force_rerun === true;
+  // 수학만 다시 푼다(수학 오류 문항). 품질 판정·승인·수정안·V2 렌더 판정은 그대로 둔다.
+  const mathOnly = body.math_only === true;
   const requestedCropIds = Array.isArray(body.crop_ids)
     ? (body.crop_ids as unknown[]).map((x) => uuidOrNull(x)).filter((x): x is string => !!x)
     : [];
@@ -628,7 +630,7 @@ export async function handleTextbookProblemReview(
     return errorResponse(502, 'overview_failed', overviewRes.error.message);
   }
   const allItems = (((overviewRes.data as Rec | null)?.items ?? []) as unknown[]).map((x) => (x ?? {}) as Rec);
-  const todoItems = allItems.filter((it) => isReviewTodo(it, forceRerun));
+  const todoItems = allItems.filter((it) => mathOnly ? isMathResolveTarget(it) : isReviewTodo(it, forceRerun));
 
   if (todoItems.length === 0) {
     return jsonResponse({ ok: true, processed: 0, remaining: 0, total: allItems.length, done: true });
@@ -755,8 +757,7 @@ export async function handleTextbookProblemReview(
     problems: batchItems.map((it) => {
       const cid = String(it.crop_id);
       const b = blindByCrop.get(cid) ?? {};
-      const s = solutionByCrop.get(cid);
-      const solutionFound = s?.found === true;
+      const sol = effectiveSolution(it, solutionByCrop.get(cid));
       return {
         crop_id: it.crop_id,
         problem_number: it.problem_number,
@@ -764,8 +765,8 @@ export async function handleTextbookProblemReview(
         stem: combineStem(it.common_stem, it.stem).slice(0, 2200),
         choices: it.choices,
         existing_answer: it.existing_answer,
-        solution_transcribed: solutionFound ? String(s!.solution_transcribed ?? '').slice(0, 3000) : null,
-        solution_answer: solutionFound && typeof s!.solution_answer === 'string' ? s!.solution_answer : null,
+        solution_transcribed: sol ? sol.text.slice(0, 3000) : null,
+        solution_answer: sol?.answer ?? null,
         ai_solution: b.ai_solution ?? '',
         ai_answer: b.ai_answer ?? '',
       };
@@ -808,6 +809,7 @@ export async function handleTextbookProblemReview(
       big_order: bigOrder,
       mid_order: midOrder,
       count: batchItems.length,
+      math_only: mathOnly,
       solution_images: solutionTargets.length,
       v2_images: batchItems.filter((it) => images.get(String(it.crop_id))?.v2ProblemUrl).length,
       original_images: batchItems.filter((it) => images.get(String(it.crop_id))?.originalImageDataUrl).length,
@@ -821,6 +823,8 @@ export async function handleTextbookProblemReview(
     const b = blindByCrop.get(cropId) ?? {};
     const c = compareByCrop.get(cropId) ?? {};
     const s = solutionByCrop.get(cropId);
+    // 수학만 다시 풀 때 모델이 이 문항을 빠뜨렸으면 기존 풀이를 지우지 않는다.
+    if (mathOnly && (typeof b.ai_answer !== 'string' || typeof c.answer_matched !== 'boolean')) continue;
 
     const arithCounts: Record<string, number> = {};
     for (const op of (Array.isArray(b.arithmetic_ops) ? b.arithmetic_ops : []) as Rec[]) {
@@ -860,8 +864,9 @@ export async function handleTextbookProblemReview(
     const qualityOk = stemOk && choicesOk && figureOk && latexOk && fidelityOk && !issueTitle;
 
     const solutionFound = s?.found === true && typeof s?.solution_transcribed === 'string' && s.solution_transcribed.trim().length > 0;
+    const sol = effectiveSolution(it, s);
     const answerMatched = c.answer_matched === true;
-    const matchMode = solutionFound || it.has_solution_ref === true ? '3way' : '2way';
+    const matchMode = sol || it.has_solution_ref === true ? '3way' : '2way';
     const drafts = Array.isArray(c.draft_proposals) ? c.draft_proposals : [];
 
     const existing = await auth.admin
@@ -906,45 +911,10 @@ export async function handleTextbookProblemReview(
       }
       : {};
 
-    await auth.admin.from('textbook_problem_analyses').upsert({
-      crop_id: cropId,
-      academy_id: academyId,
-      solution_transcribed: keepManual
-        ? prev.solution_transcribed
-        : solutionFound
-        ? String(s!.solution_transcribed).trim()
-        : (prev.solution_source === 'textbook_vision' ? prev.solution_transcribed ?? null : null),
-      solution_answer: keepManual
-        ? prev.solution_answer ?? null
-        : solutionFound
-        ? (typeof s!.solution_answer === 'string' ? s!.solution_answer : null)
-        : (prev.solution_source === 'textbook_vision' ? prev.solution_answer ?? null : null),
-      solution_source: keepManual ? 'manual' : solutionFound ? 'textbook_vision' : (prev.solution_source ?? null),
-      solution_extracted_at: solutionFound ? nowIso : undefined,
+    const mathFields = {
       ai_solution: typeof b.ai_solution === 'string' ? b.ai_solution : null,
       ai_answer: typeof b.ai_answer === 'string' ? b.ai_answer : null,
       arithmetic_counts: arithCounts,
-      visual_tags: visualTags,
-      quality_checks: {
-        judged_from_v2_image: b.judged_from_v2_image === true,
-        stem_ok: stemOk,
-        choices_ok: choicesOk,
-        figure_ok: figureOk,
-        latex_v2_ok: latexOk,
-        fidelity_ok: fidelityOk,
-        issue_title: issueTitle,
-        issue_detail: issueDetail,
-        issue_kind: issueKind,
-        question_kind_ai: ['objective', 'subjective', 'essay'].includes(String(b.question_kind)) ? b.question_kind : null,
-        solution_vision: s
-          ? { found: s.found === true, confidence: s.confidence ?? null, note: s.note ?? null }
-          : null,
-      },
-      fix_proposal: fixProposal,
-      // 문항 본문이 다시 풀렸으니 이전 V2 렌더 판정은 비운다(해설·정답 카드가 바뀐다).
-      render_checks: {},
-      render_checked_at: null,
-      solved_at: nowIso,
       match_mode: matchMode,
       answer_matched: answerMatched,
       mismatch_reason: typeof c.mismatch_reason === 'string' ? c.mismatch_reason : null,
@@ -953,9 +923,63 @@ export async function handleTextbookProblemReview(
       draft_proposals: drafts,
       analyzed_at: nowIso,
       math_status: answerMatched ? 'clean' : 'issue',
-      quality_status: keepHeld ? 'held' : (qualityOk ? 'clean' : 'issue'),
       updated_at: nowIso,
-    });
+    };
+
+    if (mathOnly) {
+      // solved_at 은 2단계 품질 판정의 시점이다(4단계가 그 뒤 수정 적용 여부를 본다). 수학만 다시 풀 때는 두고 analyzed_at 만 바꾼다.
+      await auth.admin.from('textbook_problem_analyses').update({
+        ...mathFields,
+        ...(solutionFound && !keepManual
+          ? {
+            solution_transcribed: String(s!.solution_transcribed).trim(),
+            solution_answer: typeof s!.solution_answer === 'string' ? s!.solution_answer : null,
+            solution_source: 'textbook_vision',
+            solution_extracted_at: nowIso,
+          }
+          : {}),
+      }).eq('crop_id', cropId);
+    } else {
+      await auth.admin.from('textbook_problem_analyses').upsert({
+        crop_id: cropId,
+        academy_id: academyId,
+        solution_transcribed: keepManual
+          ? prev.solution_transcribed
+          : solutionFound
+          ? String(s!.solution_transcribed).trim()
+          : (prev.solution_source === 'textbook_vision' ? prev.solution_transcribed ?? null : null),
+        solution_answer: keepManual
+          ? prev.solution_answer ?? null
+          : solutionFound
+          ? (typeof s!.solution_answer === 'string' ? s!.solution_answer : null)
+          : (prev.solution_source === 'textbook_vision' ? prev.solution_answer ?? null : null),
+        solution_source: keepManual ? 'manual' : solutionFound ? 'textbook_vision' : (prev.solution_source ?? null),
+        solution_extracted_at: solutionFound ? nowIso : undefined,
+        visual_tags: visualTags,
+        quality_checks: {
+          judged_from_v2_image: b.judged_from_v2_image === true,
+          stem_ok: stemOk,
+          choices_ok: choicesOk,
+          figure_ok: figureOk,
+          latex_v2_ok: latexOk,
+          fidelity_ok: fidelityOk,
+          issue_title: issueTitle,
+          issue_detail: issueDetail,
+          issue_kind: issueKind,
+          question_kind_ai: ['objective', 'subjective', 'essay'].includes(String(b.question_kind)) ? b.question_kind : null,
+          solution_vision: s
+            ? { found: s.found === true, confidence: s.confidence ?? null, note: s.note ?? null }
+            : null,
+        },
+        fix_proposal: fixProposal,
+        // 문항 본문이 다시 풀렸으니 이전 V2 렌더 판정은 비운다(해설·정답 카드가 바뀐다).
+        render_checks: {},
+        render_checked_at: null,
+        solved_at: nowIso,
+        ...mathFields,
+        quality_status: keepHeld ? 'held' : (qualityOk ? 'clean' : 'issue'),
+      });
+    }
 
     await auth.userClient.rpc('textbook_problem_recalc_scores', { p_crop_id: cropId });
 
@@ -972,14 +996,12 @@ export async function handleTextbookProblemReview(
         severity: 'blocker',
         source: 'ai',
         check_key: 'ai_answer_compare',
-        title: `정답 불일치 (기존: ${it.existing_answer ?? '없음'} / 해설: ${
-          solutionFound ? (s!.solution_answer ?? '없음') : '없음'
-        } / AI: ${b.ai_answer ?? '없음'})`,
+        title: `정답 불일치 (기존: ${it.existing_answer ?? '없음'} / 해설: ${sol?.answer ?? '없음'} / AI: ${b.ai_answer ?? '없음'})`,
         detail: String(c.mismatch_reason ?? '기존 정답과 AI 독립 풀이 정답이 일치하지 않습니다.'),
         evidence: {
           existing_answer: it.existing_answer,
           ai_answer: b.ai_answer,
-          solution_answer: solutionFound ? s!.solution_answer : null,
+          solution_answer: sol?.answer ?? null,
         },
         proposal: proposedAns
           ? {
@@ -996,7 +1018,8 @@ export async function handleTextbookProblemReview(
       await resolveOpenFinding(auth, cropId, 'ai_answer_compare').catch(() => null);
     }
 
-    if (!qualityOk) {
+    // 수학만 다시 풀 때는 품질 지적을 건드리지 않는다.
+    if (!mathOnly && !qualityOk) {
       await upsertOpenFinding(auth, {
         academy_id: academyId,
         crop_id: cropId,
@@ -1028,7 +1051,7 @@ export async function handleTextbookProblemReview(
         status: 'open',
         ai_run_id: aiRunId,
       }).catch(() => null);
-    } else {
+    } else if (!mathOnly) {
       await resolveOpenFinding(auth, cropId, 'ai_quality_v2_student_view').catch(() => null);
     }
 
@@ -1079,6 +1102,27 @@ export function isReviewTodo(it: Rec, forceRerun: boolean): boolean {
   const qc = (it.quality_checks ?? {}) as Rec;
   const visionTried = qc.solution_vision !== null && qc.solution_vision !== undefined;
   return it.has_solution_ref === true && !it.solution_transcribed && !visionTried;
+}
+
+/** 수학만 다시 풀 대상(math_only): 수학 오류로 남은 문항. 본문을 고친 뒤 옛 본문으로 푼 AI 답을 새로 맞출 때 쓴다. */
+export function isMathResolveTarget(it: Rec): boolean {
+  return String(it.math_status ?? 'pending') === 'issue';
+}
+
+/**
+ * 정답 대조에 쓸 원본 해설. 저장 규칙과 같은 해설로 대조한다: 운영자가 직접 고친 해설 → 이번 Vision 전사 →
+ * 저장된 Vision 전사(이번에 해설 이미지를 안 보냈거나 못 읽은 경우) 순. 없으면 null.
+ */
+export function effectiveSolution(it: Rec, vision: Rec | undefined): { text: string; answer: string | null } | null {
+  const answerOf = (v: unknown) => typeof v === 'string' && v.trim() ? v.trim() : null;
+  const storedText = typeof it.solution_transcribed === 'string' ? it.solution_transcribed.trim() : '';
+  if (it.solution_source === 'manual' && storedText) return { text: storedText, answer: answerOf(it.solution_answer) };
+  const visionText = vision?.found === true && typeof vision.solution_transcribed === 'string'
+    ? vision.solution_transcribed.trim()
+    : '';
+  if (visionText) return { text: visionText, answer: answerOf(vision!.solution_answer) };
+  if (it.solution_source === 'textbook_vision' && storedText) return { text: storedText, answer: answerOf(it.solution_answer) };
+  return null;
 }
 
 /**

@@ -2,8 +2,10 @@ import { assert, assertEquals } from 'jsr:@std/assert@1';
 import {
   combineStem,
   commonStemFix,
+  effectiveSolution,
   figureMarkerCount,
   figureSizeRatioOk,
+  isMathResolveTarget,
   isReviewTodo,
   normalizeIssueKind,
   normalizeProposedChoices,
@@ -114,6 +116,37 @@ Deno.test('재검수 대상: 미검수·풀이 없음·해설 미전사(시도 �
   }, false));
   assert(!isReviewTodo({ math_status: 'clean', ai_solution: 'x', has_solution_ref: false }, false));
   assert(isReviewTodo({ math_status: 'approved', ai_solution: 'x' }, true));
+});
+
+Deno.test('수학만 다시 풀 대상은 수학 오류 문항뿐이다', () => {
+  assert(isMathResolveTarget({ math_status: 'issue', ai_solution: 'x' }));
+  assert(!isMathResolveTarget({ math_status: 'approved' }));
+  assert(!isMathResolveTarget({ math_status: 'clean' }));
+  assert(!isMathResolveTarget({ math_status: 'pending' }));
+  assert(!isMathResolveTarget({}));
+});
+
+Deno.test('정답 대조 해설: 직접 고친 해설 → 이번 Vision 전사 → 저장된 Vision 전사', () => {
+  const vision = { found: true, solution_transcribed: ' 새 전사 ', solution_answer: ' ③ ' };
+  // 직접 고친 해설은 이번 전사보다 우선한다
+  assertEquals(
+    effectiveSolution({ solution_source: 'manual', solution_transcribed: '직접', solution_answer: '②' }, vision),
+    { text: '직접', answer: '②' },
+  );
+  assertEquals(effectiveSolution({ solution_source: 'textbook_vision', solution_transcribed: '옛 전사' }, vision), {
+    text: '새 전사',
+    answer: '③',
+  });
+  // 이번에 해설 이미지를 안 보냈거나 못 읽었으면 저장된 전사로 3자 대조한다
+  const stored = { solution_source: 'textbook_vision', solution_transcribed: '옛 전사', solution_answer: '$\\times$' };
+  assertEquals(effectiveSolution(stored, undefined), { text: '옛 전사', answer: '$\\times$' });
+  assertEquals(effectiveSolution(stored, { found: false, solution_transcribed: '' }), { text: '옛 전사', answer: '$\\times$' });
+  assertEquals(effectiveSolution({ solution_source: 'textbook_vision', solution_transcribed: '답 없음', solution_answer: ' ' }, undefined), {
+    text: '답 없음',
+    answer: null,
+  });
+  assertEquals(effectiveSolution({}, undefined), null);
+  assertEquals(effectiveSolution({ solution_source: 'manual', solution_transcribed: '  ' }, undefined), null);
 });
 
 Deno.test('이상 원인 분류: 이상이 없으면 none, 모르는 값은 data 로 본다', () => {

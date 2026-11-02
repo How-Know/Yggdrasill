@@ -639,6 +639,13 @@ class TextbookProblemReviewItem {
     final ai = normalizeAnswerForCompare(aiAnswer ?? '');
     return cur.isNotEmpty && cur == ai;
   }
+
+  /// 수학 일괄의 두 규칙(해설·AI 일치 답 채택, 채점 정답 = AI 답 유지)으로 끝나지 않는 수학 오류.
+  /// 본문을 고치기 전에 푼 AI 답(판단불가 등)일 수 있어 지금 본문·교재 원본으로 다시 푼다.
+  bool get needsMathResolve => mathStatus == 'issue' && !solutionAndAiAgreeAgainstExisting && !existingConfirmedByAi;
+
+  /// AI 가 풀 문항 내용(공통 발문·본문·선지·그림 수). 같은 내용으로 이미 다시 풀었는지 가릴 때 쓴다.
+  String get problemTextSignature => [commonStem, stem, jsonEncode(rawChoices), '${pbFigureAssets.length}'].join('\u0001');
   List<Map<String, dynamic>>? get proposedChoices => fixProposal['choices'] is List
       ? [for (final x in fixProposal['choices'] as List) if (x is Map) Map<String, dynamic>.from(x)]
       : null;
@@ -939,11 +946,12 @@ class TextbookProblemReviewService {
     required List<TextbookProblemReviewItem> items,
     required Map<String, String> previewUrlsByCropId,
     bool includeSolution = true,
+    bool onlyMissingSolutions = false,
   }) async {
     final out = <String, TextbookReviewChunkImage>{};
     for (final it in items) {
       String? b64;
-      if (includeSolution && it.canCropSolution) {
+      if (includeSolution && it.canCropSolution && !(onlyMissingSolutions && it.hasOriginalSolution)) {
         try {
           final png = await _solutionImages.renderSolutionCrop(
             academyId: scope.academyId,
@@ -1059,6 +1067,7 @@ class TextbookProblemReviewService {
     TextbookReviewUnitScope scope, {
     int chunkSize = 6,
     bool forceRerun = false,
+    bool mathOnly = false,
     List<String> cropIds = const [],
     Map<String, TextbookReviewChunkImage> images = const {},
   }) async {
@@ -1071,6 +1080,7 @@ class TextbookProblemReviewService {
       'mid_order': midOrderOf(scope),
       'chunk_size': chunkSize,
       'force_rerun': forceRerun,
+      if (mathOnly) 'math_only': true,
       if (cropIds.isNotEmpty) 'crop_ids': cropIds,
       if (images.isNotEmpty) 'images': {for (final e in images.entries) e.key: e.value.toJson()},
     });
