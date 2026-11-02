@@ -58,6 +58,12 @@ Deno.test('공통 발문에 개별 본문까지 통째로 들어 있으면 공�
   });
   // 지시문만 중복이면 공통 발문은 그대로
   assertEquals(commonStemFix('다음을 구하여라.', '다음을 구하여라.[문단]7'), { stem: '7', commonStem: null });
+  // [문단] 없이 한 줄로 붙은 경우
+  assertEquals(commonStemFix('다음 수를 소인수분해하여라. 48', '다음 수를 소인수분해하여라. 48'), {
+    stem: '48',
+    commonStem: '다음 수를 소인수분해하여라.',
+  });
+  assertEquals(commonStemFix('다음 수를 소인수분해하여라.', '48'), null);
   // 조건 상자처럼 여러 문단으로 된 정당한 공통 발문은 건드리지 않는다
   assertEquals(commonStemFix('다음 물음에 답하여라.[문단][박스시작]a>0[박스끝]', '12'), null);
   // 공통 발문이 다른 문항(9번)의 본문을 담고 있으면 이 문항(12번)에서는 판단하지 않는다

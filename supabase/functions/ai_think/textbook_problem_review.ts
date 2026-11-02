@@ -8,7 +8,7 @@ import { uuidOrNull } from './validate.ts';
 
 type Rec = Record<string, unknown>;
 
-export const TEXTBOOK_REVIEW_PROMPT_VERSION = 'textbook-problem-review-2026-11-02d';
+export const TEXTBOOK_REVIEW_PROMPT_VERSION = 'textbook-problem-review-2026-11-03a';
 
 /** 품질 이상의 원인 분류. data=문항 데이터(본문·선지) 오류, engine=조판 엔진 문제, figure=도형 자산 문제 */
 export type IssueKind = 'none' | 'data' | 'engine' | 'figure';
@@ -118,6 +118,25 @@ export interface CommonStemFix {
 
 const squash = (s: string) => s.replace(/\s+|\[문단\]/g, '');
 
+/** 공통 발문의 첫 지시문: 첫 [문단]/줄바꿈 앞, 없으면 첫 문장(. ? ! 로 끝남). 뒤에 이어지는 내용이 없으면 null. */
+export function leadingInstruction(common: string): string | null {
+  const parts = common.split(/\[문단\]|\n/).map((p) => p.trim()).filter((p) => p.length > 0);
+  if (parts.length >= 2) return parts[0];
+  const m = /^(.+?[.?!])\s*(\S[\s\S]*)$/.exec(common.trim());
+  return m ? m[1].trim() : null;
+}
+
+/** 서술형으로 봐야 하는 표현(발문에 있으면 무조건 서술형) */
+export const ESSAY_PATTERN = /서술하(시오|여라)|과정을\s*(쓰|서술|설명)|풀이\s*과정|이유를\s*(쓰|설명|서술)|설명하(시오|여라)|증명하(시오|여라)/;
+
+export type QuestionKind = 'objective' | 'subjective' | 'essay';
+
+/** 규칙 기준 문항 유형: 서술형 표현 → essay, 선지 2개 이상 → objective, 그 외 subjective */
+export function expectedQuestionKind(fullStem: unknown, choices: unknown): QuestionKind {
+  if (ESSAY_PATTERN.test(String(fullStem ?? ''))) return 'essay';
+  return Array.isArray(choices) && choices.length >= 2 ? 'objective' : 'subjective';
+}
+
 /**
  * 공통 발문 중복의 두 형태를 모두 다룬다(Manager `computeCommonStemFix` 와 같은 규칙).
  * 1) 지시문이 개별 발문 앞머리에 다시 들어 있음 → 개별 발문에서 공통 부분만 뺀다.
@@ -130,9 +149,8 @@ export function commonStemFix(commonStem: unknown, stem: unknown): CommonStemFix
   if (!common || !s.trim()) return null;
   const direct = stripCommonStem(common, s);
   if (direct !== null) return { stem: direct, commonStem: null };
-  const paras = common.split('[문단]').map((p) => p.trim()).filter((p) => p.length > 0);
-  if (paras.length < 2) return null;
-  const instr = paras[0];
+  const instr = leadingInstruction(common);
+  if (!instr) return null;
   const rest = stripCommonStem(instr, s);
   if (rest === null) return null;
   const sqRest = squash(rest);
@@ -192,9 +210,11 @@ const BLIND_SOLVE_SCHEMA: Rec = {
           'proposed_stem',
           'proposed_choices',
           'fix_reason',
+          'question_kind',
         ],
         properties: {
           crop_id: { type: 'string' },
+          question_kind: { type: 'string', enum: ['objective', 'subjective', 'essay'] },
           ai_solution: { type: 'string' },
           ai_answer: { type: 'string' },
           arithmetic_ops: {
@@ -373,6 +393,9 @@ const BLIND_SOLVE_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔�
    - proposed_choices: 선지를 고쳐야 할 때만 전체 선지 배열 [{label:"①", text:"..."}, ...]을 적고, 아니면 null. label 은 원문 그대로(①~⑤ 또는 ㄱ,ㄴ,ㄷ).
    - fix_reason: 무엇을 왜 고쳤는지 한 줄. 제안이 없으면 null.
    - "engine"·"figure"·"none" 이면 proposed_stem, proposed_choices, fix_reason 모두 null.
+4-3. 문항 유형(question_kind): 원본·V2 화면 기준으로 학생이 답하는 방식.
+   - "서술하시오", "과정을 쓰시오", "풀이 과정", "이유를 쓰시오", "설명하시오", "증명하시오" 같은 표현이 있으면 무조건 "essay".
+   - 그 외 선지(①~⑤)를 골라 답하면 "objective", 답만 쓰면 "subjective".
 5. 시각 요소 태그(visual_tags):
    - 문항에 도형·그래프·표 등 시각 요소가 있거나 언급되면 아래 표준 태그 중 해당하는 것을 모두 넣으세요(없으면 빈 배열 []):
      ["수직선", "좌표평면", "일차함수(직선)", "이차함수(포물선)", "삼차·사차함수", "유리·무리함수", "지수·로그함수", "삼각함수", "각·평행선", "삼각형", "직각삼각형", "이등변·정삼각형", "사각형", "다각형", "원·부채꼴·접선", "합동·닮음", "입체도형·회전체", "전개도·겨냥도", "표(Table)", "조건상자(보기)", "통계그래프(히스토그램·상자그림)", "수형도·경로망"]`;
@@ -874,6 +897,7 @@ export async function handleTextbookProblemReview(
         issue_title: issueTitle,
         issue_detail: issueDetail,
         issue_kind: issueKind,
+        question_kind_ai: ['objective', 'subjective', 'essay'].includes(String(b.question_kind)) ? b.question_kind : null,
         solution_vision: s
           ? { found: s.found === true, confidence: s.confidence ?? null, note: s.note ?? null }
           : null,
@@ -1059,7 +1083,7 @@ export async function handleTextbookProblemRenderCheck(
   const cropIds = items.map((x) => x.cropId);
   const { data: analyses } = await auth.admin
     .from('textbook_problem_analyses')
-    .select('crop_id,academy_id,quality_status,quality_checks,textbook_problem_crops(problem_number,label)')
+    .select('crop_id,academy_id,quality_status,quality_checks,fix_proposal,solved_at,textbook_problem_crops(problem_number,label)')
     .in('crop_id', cropIds);
   const analysisByCrop = new Map<string, Rec>();
   for (const a of (analyses ?? []) as Rec[]) {
@@ -1147,8 +1171,13 @@ export async function handleTextbookProblemRenderCheck(
     const solutionOk = r.solution_ok !== false;
     const renderOk = problemOk && answerOk && solutionOk;
     const qc = (a.quality_checks ?? {}) as Rec;
-    const stage2Ok = qc.stem_ok !== false && qc.choices_ok !== false && qc.figure_ok !== false &&
-      qc.latex_v2_ok !== false && qc.fidelity_ok !== false && !qc.issue_title;
+    // 2단계 판정 뒤에 본문·선지 수정이 적용됐으면 그 판정은 옛 화면 기준이다. 이번 V2 렌더 판정만 본다.
+    const fp = (a.fix_proposal ?? {}) as Rec;
+    const fixAppliedAfterSolve = typeof fp.applied_at === 'string' &&
+      Array.isArray(fp.applied_fields) && fp.applied_fields.length > 0 &&
+      (!a.solved_at || Date.parse(String(fp.applied_at)) > Date.parse(String(a.solved_at)));
+    const stage2Ok = fixAppliedAfterSolve || (qc.stem_ok !== false && qc.choices_ok !== false && qc.figure_ok !== false &&
+      qc.latex_v2_ok !== false && qc.fidelity_ok !== false && !qc.issue_title);
     const prevStatus = String(a.quality_status ?? 'pending');
     // 승인·엔진 보류는 재검수로 바꾸지 않는다. 보류 문항은 엔진 목록에서 재렌더 결과를 보고 운영자가 승인한다.
     const nextStatus = prevStatus === 'approved' || prevStatus === 'held'

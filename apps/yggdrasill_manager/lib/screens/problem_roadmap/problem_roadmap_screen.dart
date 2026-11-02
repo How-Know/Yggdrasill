@@ -518,52 +518,72 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
       _notice = null;
     });
     _bulkErrors.clear();
-    var fixNote = '';
-    var recheck = <String>[];
+    final notes = <String>[];
     try {
+      final extraApprove = <String>[];
       if (axis == 'math') {
         final (done, synced) = await _adoptAgreedAnswers();
-        if (done > 0) fixNote = ' · 해설·AI 일치 답 $done문항 채택(문제은행 정답 $synced문항 동기화)';
+        if (done > 0) notes.add('해설·AI 일치 답 $done문항 채택(문제은행 정답 $synced문항 동기화)');
+        // 채점 정답 = AI 답이면 해설 답이 없거나 달라도 2:1 로 채점 정답을 유지하고 승인한다.
+        final confirmed = [for (final it in _items) if (it.mathStatus == 'issue' && it.existingConfirmedByAi) it.cropId];
+        if (confirmed.isNotEmpty) {
+          extraApprove.addAll(confirmed);
+          notes.add('채점 정답 = AI 답 ${confirmed.length}문항 유지 승인');
+        }
       } else {
+        // 1) 규칙: 공통 발문 중복
         final (fixed, approvedByFix, again) = await _applyCommonStemDupFixes(scope);
-        recheck = again;
-        if (fixed > 0) {
-          fixNote = ' · 공통 발문 중복 $fixed문항 수정($approvedByFix문항 승인'
-              '${again.isNotEmpty ? ', ${again.length}문항 렌더 재검수' : ''})';
+        final recheck = <String>{...again};
+        if (fixed > 0) notes.add('공통 발문 중복 $fixed문항 수정($approvedByFix문항 바로 승인)');
+        // 2) 규칙: 문항 유형(객관식·주관식·서술형) 표시
+        final kinds = await _applyQuestionKindFixes();
+        if (kinds > 0) notes.add('문항 유형 표시 $kinds문항 수정');
+        // 3) AI 데이터 수정안 적용 → V2 렌더 재검수로 확인
+        final aiFixed = await _applyAiDataProposals();
+        recheck.addAll(aiFixed);
+        if (aiFixed.isNotEmpty) notes.add('AI 수정안 ${aiFixed.length}문항 적용');
+        if (recheck.isNotEmpty && mounted) {
+          await _loadItems(scope, reloadPreviews: false);
+          final again2 = [for (final x in _items) if (recheck.contains(x.cropId)) x];
+          await _loadEnginePreviews(scope, again2, merge: true);
+          setState(() {
+            _runningReview = true;
+            _stopRequested = false;
+          });
+          try {
+            await _runRenderCheckPass(scope, only: again2);
+          } finally {
+            if (mounted) {
+              setState(() {
+                _runningReview = false;
+                _runProgress = null;
+              });
+            }
+          }
+          notes.add('수정 문항 ${again2.length}개 V2 렌더 재검수');
         }
       }
       if (!mounted) return;
       await _loadItems(scope, reloadPreviews: false);
-      final ids = [
+      final ids = <String>{
         for (final it in _items)
           if (axis == 'math' ? it.mathStatus == 'clean' : it.qualityStatus == 'clean') it.cropId,
-      ];
+        ...extraApprove,
+      }.toList();
       final count = ids.isEmpty ? 0 : await _svc.approveAxis(ids, axis);
       if (!mounted) return;
-      setState(() {
-        _saving = false;
-        _notice = '${axis == 'math' ? '수학적 검수' : '품질 검수'} 정상 $count문항 승인$fixNote'
-            '${_bulkErrors.isEmpty ? '' : ' · 실패 ${_bulkErrors.length}문항(${_bulkErrors.first})'}';
-      });
       await _loadItems(scope, reloadPreviews: false);
       await _loadUnits();
-      if (recheck.isNotEmpty && mounted && !_runningReview) {
-        final again = [for (final x in _items) if (recheck.contains(x.cropId)) x];
-        setState(() {
-          _runningReview = true;
-          _stopRequested = false;
-        });
-        try {
-          await _runRenderCheckPass(scope, only: again);
-        } finally {
-          if (mounted) {
-            setState(() {
-              _runningReview = false;
-              _runProgress = null;
-            });
-          }
-        }
-      }
+      final left = axis == 'math'
+          ? _items.where((x) => x.mathStatus == 'issue').length
+          : _items.where((x) => x.qualityStatus == 'issue').length;
+      setState(() {
+        _saving = false;
+        _notice = '${axis == 'math' ? '수학적 검수' : '품질 검수'} $count문항 승인'
+            '${notes.isEmpty ? '' : ' · ${notes.join(' · ')}'}'
+            ' · 남은 오류 $left문항'
+            '${_bulkErrors.isEmpty ? '' : ' · 실패 ${_bulkErrors.length}문항(${_bulkErrors.first})'}';
+      });
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -783,6 +803,75 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     return (fixed, approved, recheck);
   }
 
+  /// 문항 유형 표시가 규칙(서술형 표현·선지 유무)과 다른 문항
+  List<TextbookProblemReviewItem> get _kindFixes => [for (final it in _items) if (it.questionKindMismatch) it];
+
+  /// AI 가 낸 데이터 수정안(본문·선지·공통 발문)이 아직 적용되지 않은 오류 문항(규칙 제안·승인·보류 제외)
+  List<TextbookProblemReviewItem> get _aiDataProposals => [
+        for (final it in _items)
+          if (it.qualityStatus == 'issue' && it.hasPendingFixProposal && !it.fixProposalIsCommonStemDup && !it.commonStemDuplicated) it,
+      ];
+
+  Future<int> _applyQuestionKindFixes() async {
+    var n = 0;
+    for (final it in _kindFixes) {
+      try {
+        if (await _svc.setQuestionKind(it.cropId, it.expectedQuestionKind)) n++;
+      } catch (e) {
+        _bulkErrors.add('${it.problemNumber}번 유형: $e');
+      }
+    }
+    return n;
+  }
+
+  /// AI 수정안을 그대로 적용한다(승인은 하지 않음). 적용한 crop id 를 돌려주고, 호출한 쪽이 V2 렌더 재검수로 확인한다.
+  Future<List<String>> _applyAiDataProposals() async {
+    final out = <String>[];
+    for (final it in _aiDataProposals) {
+      try {
+        final res = await _svc.applyProblemFix(
+          cropId: it.cropId,
+          stem: it.proposedStem,
+          choices: it.proposedChoices,
+          commonStem: it.proposedCommonStem,
+          note: 'AI 수정안 일괄 적용',
+        );
+        if (((res['changed'] as List?) ?? const []).isNotEmpty) out.add(it.cropId);
+      } catch (e) {
+        _bulkErrors.add('${it.problemNumber}번 AI 수정안: $e');
+      }
+    }
+    return out;
+  }
+
+  Future<void> _setQuestionKind(TextbookProblemReviewItem item, String kind) async {
+    final scope = _selectedScope;
+    if (scope == null) return;
+    setState(() => _saving = true);
+    try {
+      final changed = await _svc.setQuestionKind(item.cropId, kind);
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _notice = changed ? '${item.problemNumber}번 유형을 ${_kindLabel(kind)}(으)로 바꿨습니다.' : '${item.problemNumber}번 유형이 이미 ${_kindLabel(kind)}입니다.';
+      });
+      await _loadItems(scope, reloadPreviews: false);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _notice = '유형 변경 실패: $e';
+      });
+    }
+  }
+
+  static String _kindLabel(String k) => switch (k) {
+        'objective' => '객관식',
+        'subjective' => '주관식',
+        'essay' => '서술형',
+        _ => '미분류',
+      };
+
   /// 수정안(편집기 내용)을 적용 전에 V2 로 찍어 오른쪽 스택에 보여 준다.
   Future<void> _previewProblemFix(TextbookProblemReviewItem item) async {
     final scope = _selectedScope;
@@ -947,6 +1036,8 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     ];
   }
 
+  int get _mathConfirmedCount => _items.where((it) => it.mathStatus == 'issue' && it.existingConfirmedByAi).length;
+
   List<TextbookProblemReviewItem> get _engineSuspects => [for (final it in _items) if (it.aiSuspectsEngine) it];
   int get _engineHeldCount => _items.where((x) => x.isEngineHeld).length;
   int get _engineHeldTotal => _units.fold(0, (s, u) => s + u.qualityHeldCount);
@@ -998,21 +1089,22 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
           label: Text(_stopRequested ? '이번 묶음 후 멈춤' : '일시정지', style: const TextStyle(color: _kError)),
         )
       else ...[
-        if (mathCleanCount > 0 || _agreedAnswerFixes.isNotEmpty)
+        if (mathCleanCount + _agreedAnswerFixes.length + _mathConfirmedCount > 0)
           OutlinedButton.icon(
             onPressed: _saving ? null : () => unawaited(_bulkApproveClean('math')),
             style: _outlineButtonStyle(color: _kAccent),
             icon: const Icon(Icons.done_all_rounded, size: 18, color: _kAccent),
-            label: Text('수학 일괄 처리 (정상 $mathCleanCount'
-                '${_agreedAnswerFixes.isNotEmpty ? ' + 해설·AI 일치 답 채택 ${_agreedAnswerFixes.length}' : ''})'),
+            label: Text('수학 일괄 처리 (${mathCleanCount + _agreedAnswerFixes.length + _mathConfirmedCount})'),
           ),
-        if (qualCleanCount > 0 || _commonStemDups.isNotEmpty)
+        if (qualCleanCount + _commonStemDups.length + _kindFixes.length + _aiDataProposals.length > 0)
           OutlinedButton.icon(
             onPressed: _saving ? null : () => unawaited(_bulkApproveClean('quality')),
             style: _outlineButtonStyle(color: _kBlue),
-            icon: const Icon(Icons.verified_outlined, size: 18, color: _kBlue),
+            icon: const Icon(Icons.auto_fix_high_rounded, size: 18, color: _kBlue),
             label: Text('품질 일괄 처리 (정상 $qualCleanCount'
-                '${_commonStemDups.isNotEmpty ? ' + 공통 발문 중복 수정 ${_commonStemDups.length}' : ''})'),
+                '${_commonStemDups.isNotEmpty ? ' · 발문 중복 ${_commonStemDups.length}' : ''}'
+                '${_aiDataProposals.isNotEmpty ? ' · AI 수정안 ${_aiDataProposals.length}' : ''}'
+                '${_kindFixes.isNotEmpty ? ' · 유형 ${_kindFixes.length}' : ''})'),
           ),
         if (_engineSuspects.isNotEmpty)
           OutlinedButton.icon(
@@ -2119,8 +2211,6 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     final judgedFromImage = qc['judged_from_v2_image'] == true;
     final kindBadge = _issueKindBadge(item);
     final dirty = _problemEditDirty(item);
-    final showEditor = item.qualityStatus == 'issue' || item.isEngineHeld || item.hasPendingFixProposal || item.commonStemDuplicated || dirty;
-
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: _panelDecoration(
@@ -2216,10 +2306,10 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
             const SizedBox(height: 8),
             _buildBanner('정답·해설 카드 — ${rc['issue_title']}: ${rc['issue_detail'] ?? ''}', _kError, Icons.warning_amber_rounded),
           ],
-          if (showEditor && !item.isEngineHeld) ...[
-            const SizedBox(height: 12),
-            _buildProblemFixEditor(item, dirty: dirty),
-          ],
+          const SizedBox(height: 12),
+          _buildQuestionKindRow(item),
+          const SizedBox(height: 12),
+          _buildProblemFixEditor(item, dirty: dirty),
           const SizedBox(height: 10),
           Wrap(
             spacing: 8,
@@ -2281,6 +2371,60 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     final l = t.toLocal();
     String two(int n) => n.toString().padLeft(2, '0');
     return '${l.month}/${l.day} ${two(l.hour)}:${two(l.minute)}';
+  }
+
+  /// 문항 유형(객관식·주관식·서술형): 문제은행 표시값, 규칙 기준, AI 판단을 보여 주고 눌러서 바꾼다.
+  Widget _buildQuestionKindRow(TextbookProblemReviewItem item) {
+    final cur = item.currentQuestionKind;
+    final want = item.expectedQuestionKind;
+    final ai = item.aiQuestionKind;
+    final mismatch = item.questionKindMismatch;
+    final kw = item.essayKeyword;
+    final reason = want == 'essay'
+        ? "'$kw' 포함 → 서술형"
+        : want == 'objective'
+            ? '선지 ${item.rawChoices.length}개 → 객관식'
+            : '선지 없음 → 주관식';
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: _innerDecoration(borderColor: mismatch ? _kError.withValues(alpha: 0.6) : null),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          const Text('문항 유형', style: TextStyle(color: _kText, fontSize: 13, fontWeight: FontWeight.w800)),
+          for (final k in const ['objective', 'subjective', 'essay'])
+            ChoiceChip(
+              label: Text(_kindLabel(k)),
+              selected: cur == k,
+              onSelected: _saving || item.pbQuestionId.isEmpty || cur == k ? null : (_) => unawaited(_setQuestionKind(item, k)),
+              selectedColor: (mismatch ? _kError : _kAccent).withValues(alpha: 0.25),
+              backgroundColor: _kPanelBg,
+              labelStyle: TextStyle(
+                color: cur == k ? (mismatch ? _kError : _kAccent) : _kTextSub,
+                fontSize: 12.5,
+                fontWeight: cur == k ? FontWeight.w800 : FontWeight.w600,
+              ),
+              side: BorderSide(color: cur == k ? (mismatch ? _kError : _kAccent) : _kBorder),
+            ),
+          _pillBadge('규칙: $reason', mismatch ? _kError : _kTextMuted),
+          if (ai != null) _pillBadge('AI: ${_kindLabel(ai)}', ai == want ? _kTextMuted : _kWarn),
+          if (mismatch)
+            ElevatedButton.icon(
+              onPressed: _saving ? null : () => unawaited(_setQuestionKind(item, want)),
+              style: _primaryButtonStyle(),
+              icon: const Icon(Icons.auto_fix_high_rounded, size: 16),
+              label: Text('${_kindLabel(want)}(으)로 맞추기'),
+            ),
+          if (cur.isEmpty || mismatch)
+            Text(
+              '문제은행 표시: ${cur.isEmpty ? '미분류' : _kindLabel(cur)} · 객관식 허용 ${item.pbAllowObjective ? 'O' : 'X'} · 주관식 허용 ${item.pbAllowSubjective ? 'O' : 'X'} · 서술형 ${item.pbAllowEssay ? 'O' : 'X'}',
+              style: const TextStyle(color: _kTextMuted, fontSize: 11.5),
+            ),
+        ],
+      ),
+    );
   }
 
   /// 본문·선지 편집기. AI 수정안이 있으면 제안으로 채워져 있고, 원문과 다른 부분을 아래에 보여 준다.

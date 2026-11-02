@@ -25,6 +25,14 @@ void main() {
     expect(stripCommonStem('다음을 구하여라.', '[문단]7\n다음을 구하여라.'), '7');
   });
 
+  test('서술형 표현과 답 비교 정규화', () {
+    expect(kEssayPattern.hasMatch('풀이 과정을 쓰시오.'), isTrue);
+    expect(kEssayPattern.hasMatch('그 이유를 설명하시오.'), isTrue);
+    expect(kEssayPattern.hasMatch('다음 수를 소인수분해하여라.'), isFalse);
+    expect(normalizeAnswerForCompare(r'$2^4 \times 3$'), normalizeAnswerForCompare('2^4×3'));
+    expect(normalizeAnswerForCompare(r'2^{4}\cdot 3'), normalizeAnswerForCompare('2^4×3'));
+  });
+
   group('computeCommonStemFix', () {
     const full = '$common\n[문단]\n9\n약수: box(~~)';
 
@@ -42,6 +50,18 @@ void main() {
 
     test('여러 문단으로 된 정당한 공통 발문(조건 상자)은 건드리지 않는다', () {
       expect(computeCommonStemFix('다음 물음에 답하여라.[문단][박스시작]a>0[박스끝]', '12'), isNull);
+    });
+
+    test('[문단] 없이 줄바꿈·한 줄로 붙어 있어도 지시문을 찾는다', () {
+      const one = '다음 수를 소인수분해하여라. 48';
+      final fix = computeCommonStemFix(one, one)!;
+      expect(fix.stem, '48');
+      expect(fix.commonStem, '다음 수를 소인수분해하여라.');
+      final fix2 = computeCommonStemFix('다음 수를 소인수분해하여라.\n48', '다음 수를 소인수분해하여라.\n48')!;
+      expect(fix2.stem, '48');
+      expect(fix2.commonStem, '다음 수를 소인수분해하여라.');
+      // 한 문장짜리 정상 공통 발문은 건드리지 않는다
+      expect(computeCommonStemFix('다음 수를 소인수분해하여라.', '48'), isNull);
     });
 
     test('공통 발문이 다른 문항의 본문을 담고 있으면 이 문항에서는 판단하지 않는다', () {

@@ -357,16 +357,44 @@ There are no separate fix buttons; each axis has one bulk action that fixes
 what a rule can fix, approves what is clean, and leaves only what needs a
 person:
 
-- "품질 일괄 처리": applies every common-stem fix in the unit (looping a few
-  times, because fixing one set's common stem exposes the head duplication on
-  its other items), approves the fixed problems whose other checks are fine,
-  approves every `clean` problem, and re-runs the render check for fixed
-  problems that still had other flags. What remains are render or engine
-  problems and AI data proposals that need a look.
+- "품질 일괄 처리", in order:
+  1. every common-stem fix in the unit (looping a few times, because fixing
+     one set's common stem exposes the head duplication on its other items);
+     fixed problems whose other checks are fine are approved at once;
+  2. question type fixes (below);
+  3. every pending AI data proposal (`fix_proposal` stem / choices / common
+     stem) is applied to `pb_questions` without approval;
+  4. the stage-4 V2 render check runs again for the problems changed in 1
+     and 3. A fix applied after the stage-2 solve supersedes the stale stage-2
+     flags, so the problem becomes `clean` when the new render is fine;
+  5. every `clean` problem is approved.
+  What remains are render or engine problems and issues the AI could not
+  propose a fix for. The notice reports the count left.
 - "수학 일괄 처리": adopts the printed solution's answer (with the
   problem-bank sync) where the printed answer and the AI answer agree but the
-  grading answer differs, then approves every `clean` problem. What remains
-  are real disagreements.
+  grading answer differs; keeps and approves the grading answer where it
+  equals the AI answer (two of three agree); then approves every `clean`
+  problem. Answers are compared after `normalizeAnswerForCompare` (spaces,
+  `$`, braces, `\left`/`\right`, multiplication signs). What remains are real
+  disagreements.
+
+### Question type
+
+The quality card shows the problem-bank type (객관식 / 주관식 / 서술형, read
+like the problem-bank badge from `question_type`, `allow_objective`,
+`allow_subjective`, `meta.allow_essay`), the rule type, and the AI's type
+(`quality_checks.question_kind_ai`, stage 2). The rule: an essay expression
+("서술하시오", "과정을 쓰시오", "풀이 과정", "이유를 쓰시오", "설명하시오",
+"증명하시오") in the combined stem makes it 서술형, otherwise two or more
+choices make it 객관식, else 주관식. The owner can click a type, and
+"품질 일괄 처리" applies the rule type through
+`textbook_review_set_question_kind(crop, kind)`. That function sets only what
+the type requires: 객관식 turns objective on and leaves subjective as is (dual
+mode); 주관식 turns subjective on and leaves objective as is (generated
+choices); 서술형 sets subjective and essay on and objective off.
+
+The stem / choices / common-stem editor is always shown on the quality card,
+so the owner can edit any problem by hand.
 - Stage 3 compares the grading answer, the transcribed solution answer (when
   present), and the AI answer, and proposes concept ids, thinking codes and
   draft proposals.
