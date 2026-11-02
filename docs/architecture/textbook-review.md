@@ -67,8 +67,9 @@ Migration `20261014233000_textbook_manual_guard.sql`.
 - Crop storage keys include the sub-section index when it is above 0
   (`<big>_<mid>_<sub_key>-<sub_index>/<number>.png`), so the same number in two
   sub-sections no longer shares a path.
-- Crops are currently stored as coordinates only, so most rows have no PNG file.
-  Stages that need images must render them from the page PDF by coordinates.
+- Crops are stored as coordinates only. Storing crop PNGs was abandoned, so
+  `storage_key` does not point to a file. Every stage that needs an image of
+  the original renders it from the page PDF by coordinates.
 
 ## Review core
 
@@ -465,9 +466,45 @@ superseded by this screen.
   choice normalizing). AI tests use `FakeAiProvider` and do not assert model
   wording.
 
+## Planned next (owner decisions, 2026-11-03)
+
+Why some quality issues are not fixed automatically today: stage 2 never sees
+the original problem. It signs `storage_key` for an "original crop", but crop
+PNGs do not exist, so the model can tell that text is missing on the V2 render
+but cannot restore it, and `fix_proposal` stays empty.
+
+Decided flow:
+
+1. **Original problem image for every problem.** The manager app renders the
+   problem's region from the body PDF (pdfrx, like the solution crop) and
+   sends it as base64 with each stage-2 chunk. The Edge Function stops signing
+   `storage_key`.
+2. **Fix pass only for flagged problems.** Every problem is solved as now.
+   Problems judged as having a quality issue get a second pass that compares
+   the original image with the stored markup and writes the full corrected
+   stem, choices, and common stem as `fix_proposal`.
+3. **One approval button.** The editor is prefilled with the proposal; the
+   owner edits if needed. "품질 검수 승인" saves the editor to `pb_questions`
+   and approves in one touch.
+4. **Bulk approves automatically.** "품질 일괄 처리" applies proposals, re-runs
+   the V2 render check against the original image, and approves the problems
+   that pass.
+5. **Already approved problems are re-checked against the original.**
+   Approval is kept; problems that differ from the original are flagged for
+   the owner.
+6. **Figures.** For problems with figures, the model reads the figure box and
+   the body text height from the original image; code computes
+   `figure_layout` (`widthEm` from the ratio, `position` / `anchor` /
+   offsets from the placement), applies it, and checks the new V2 render
+   against the original. Problems whose figure file is missing or cut get the
+   figure region cropped from the original PDF and registered as the figure
+   asset, then sized and placed the same way.
+
+Sending textbook page images to the external AI is approved by the owner
+(same basis as the solution crops).
+
 ## Open questions
 
 - Whether to re-grade already graded student records after an answer
   correction.
-- Publisher terms before sending textbook pages to an external AI.
 - The authoring and stage dialogs do not yet show protected counts.
