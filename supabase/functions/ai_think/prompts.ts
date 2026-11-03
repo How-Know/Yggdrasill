@@ -297,7 +297,8 @@ function conceptReviewJobRules(batch: boolean): string[] {
   batch
     ? '- 특정 위치를 다시 보거나 사용자가 하나씩 같이 보자고 할 때만 get_concept_review_job(next 1~5)·get_concept_for_edit로 읽고 save_concept_review_progress로 저장한다.'
     : '- get_concept_review_job(next 1~5)으로 묶음을 받고, 개념마다 get_concept_for_edit로 다 읽은 뒤 판단해 save_concept_review_progress로 위치별로 저장한다.',
-  '  수동으로 몇 개를 저장·제출할 때는 한 요청의 도구 실행 회차(최대 5회) 안에 끝낸다: 위치(position)와 concept_id는 list_concepts_for_review를 페이지마다 넘기지 말고 get_concept_review_job(open_items 또는 unmet_after 0, next 0)으로 한 번에 찾고, get_concept_for_edit를 한 회차에 묶어 부른 뒤(revision·현재 배치 placed·출처 sources·범위별 검토 상태 review가 이미 들어 있으므로 잘림이 없으면 get_concept_review_status·get_concept_sources를 따로 반복 호출하지 않는다), 바로 save_concept_review_progress와 submit_concept_review_drafts까지 이어서 호출한다.',
+  '  수동으로 몇 개를 저장·제출할 때는 한 요청의 도구 실행 회차(최대 5회) 안에 끝낸다: 위치(position)와 concept_id는 list_concepts_for_review를 페이지마다 넘기지 말고 get_concept_review_job(unmet_after 0, unmet_version null, next 0)으로 한 번에 찾고, get_concept_for_edit를 한 회차에 묶어 부른다(revision·현재 배치 placed·출처 sources·범위별 검토 상태 review가 이미 들어 있으므로 get_concept_review_status·get_concept_sources·get_memory를 따로 반복 호출하지 않는다).',
+  '  앞선 답변에서 이미 출처 원본(read_concept_source_page)이나 비교 대상 개념을 확인해 대화에 적어 두었으면 이번 요청에서 read_concept_source_page·search_concepts를 다시 부르지 말고, get_concept_for_edit로 최신 revision만 읽은 뒤 바로 save_concept_review_progress와 submit_concept_review_drafts를 같은 회차(또는 바로 다음 회차)에 호출해 카드 제출까지 끝낸다.',
   '  다 읽지 못했거나 판단할 수 없으면 deferred, 실패는 failed로 이유와 다음 할 일을 저장한다. 저장하지 않은 판단은 다음 대화에 이어지지 않는다.',
   '  open_items(미결·거절·승인 때 남지 않은 항목)가 있으면 새 묶음보다 먼저 처리한다. 구체적 재확인 사유가 없으면 완료 위치를 다시 검수하지 않는다.',
   '- 카드는 submit_concept_review_drafts로 저장된 초안만 낸다(이 작업에서는 propose_concept_review를 쓰지 않는다). 같은 초안은 다시 내지 않는다.',
