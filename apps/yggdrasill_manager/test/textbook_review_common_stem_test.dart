@@ -31,6 +31,48 @@ void main() {
     expect(kEssayPattern.hasMatch('다음 수를 소인수분해하여라.'), isFalse);
     expect(normalizeAnswerForCompare(r'$2^4 \times 3$'), normalizeAnswerForCompare('2^4×3'));
     expect(normalizeAnswerForCompare(r'2^{4}\cdot 3'), normalizeAnswerForCompare('2^4×3'));
+    expect(normalizeAnswerForCompare(r'$-3 \leq x < 4$'), normalizeAnswerForCompare('-3 ≤ x < 4'));
+    expect(normalizeAnswerForCompare(r'$x \geq 2$'), normalizeAnswerForCompare('x ≥ 2'));
+  });
+
+  test('해설지에 답만 인쇄된 문항(isAnswerOnlyOriginalSolution)과 [image] 자리표시자 정답 처리', () {
+    final answerOnlyItem = TextbookProblemReviewItem.fromJson({
+      'crop_id': 'c1',
+      'problem_number': '02',
+      'raw_page': 44,
+      'has_solution_ref': true,
+      'solution_raw_page': 3,
+      'solution_transcribed': null,
+      'solution_answer': r'$-4$',
+      'ai_answer': r'$-4$',
+      'ai_solution': '풀이',
+      'existing_answer': '[image]',
+      'fix_proposal': {'proposed_answer': '-4'},
+      'quality_checks': {
+        'solution_vision': {'found': true, 'confidence': 'high'},
+      },
+    });
+    expect(answerOnlyItem.hasOriginalSolution, isFalse);
+    expect(answerOnlyItem.isAnswerOnlyOriginalSolution, isTrue);
+    expect(answerOnlyItem.solutionVisionFailed, isFalse);
+    expect(answerOnlyItem.displayAnswer, '-4');
+
+    final failedVisionItem = TextbookProblemReviewItem.fromJson({
+      'crop_id': 'c2',
+      'problem_number': '19',
+      'raw_page': 45,
+      'has_solution_ref': true,
+      'solution_raw_page': 3,
+      'solution_transcribed': null,
+      'solution_answer': null,
+      'ai_answer': '5',
+      'ai_solution': '풀이',
+      'quality_checks': {
+        'solution_vision': {'found': false, 'confidence': 'low', 'note': '번호 불일치'},
+      },
+    });
+    expect(failedVisionItem.isAnswerOnlyOriginalSolution, isFalse);
+    expect(failedVisionItem.solutionVisionFailed, isTrue);
   });
 
   group('computeCommonStemFix', () {

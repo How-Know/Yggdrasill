@@ -230,3 +230,30 @@ Deno.test('선지 수정안은 label 이 있는 {label,text} 배열만 받는다
   assertEquals(normalizeProposedChoices([{ label: '', text: '2' }]), null);
   assertEquals(normalizeProposedChoices(['①']), null);
 });
+
+Deno.test('해설 전체 페이지 폴백 이미지 파싱 및 답만 있는 해설 문항(isReviewTodo) 판별', () => {
+  const id = '00000000-0000-4000-8000-000000000001';
+  const parsed = parseReviewImages({
+    [id]: {
+      solution_page_image_base64: 'aGVsbG8=',
+      solution_page_image_mime: 'image/png',
+      solution_page_raw_page: 4,
+    },
+  });
+  assertEquals(parsed.get(id)?.solutionPageImageDataUrl, 'data:image/png;base64,aGVsbG8=');
+  assertEquals(parsed.get(id)?.solutionPageRawPage, 4);
+
+  // 해설지에 풀이 없이 정답만 인쇄된 문항(solution_answer 가 있으면 이미 전사된 것으로 본다)
+  assertEquals(
+    isReviewTodo({
+      math_status: 'clean',
+      ai_solution: '풀이',
+      has_solution_ref: true,
+      solution_transcribed: null,
+      solution_answer: '$-4$',
+      quality_checks: {},
+    }, false),
+    false,
+  );
+});
+

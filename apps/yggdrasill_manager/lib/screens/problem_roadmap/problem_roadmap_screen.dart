@@ -1045,6 +1045,8 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
         items: chunk,
         previewUrlsByCropId: _previewUrlsByCropId,
         includeSolution: true,
+        includeSolutionPageFallback: true,
+        allItems: _items,
       );
       final ids = <String>[];
       for (final it in chunk) {
@@ -1108,11 +1110,15 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
       await _loadUnits();
       final fresh = _items.where((x) => x.cropId == item.cropId).firstOrNull;
       if (fresh != null) _selectItem(fresh);
+      final solRecovered = fresh != null &&
+          (fresh.hasOriginalSolution != item.hasOriginalSolution ||
+              fresh.solutionAnswer != item.solutionAnswer ||
+              fresh.proposedAnswer != item.proposedAnswer);
       setState(() {
         _notice = applied
-            ? '${item.problemNumber}번 원본 대조 수정안을 문제은행에 적용하고 V2 카드를 다시 찍어 재검수했습니다.'
+            ? '${item.problemNumber}번 원본 대조 수정안을 문제은행에 적용하고 V2 카드를 다시 찍어 재검수했습니다${solRecovered ? ' (해설/정답 복구 포함)' : ''}.'
             : n > 0
-                ? '${item.problemNumber}번 원본 대조 완료(고칠 내용이 없거나 이미 원본과 같습니다).'
+                ? '${item.problemNumber}번 원본·해설 대조 완료${solRecovered ? ' (해설 페이지에서 정답·해설을 찾아 반영했습니다)' : ' (고칠 내용이 없거나 이미 원본과 같습니다)'}.'
                 : '${item.problemNumber}번 원본 대조 실패${_bulkErrors.isEmpty ? '' : ': ${_bulkErrors.first}'}';
       });
     } catch (e) {
@@ -2227,10 +2233,14 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
                 _pillBadge(
                   item.hasOriginalSolution
                       ? (item.solutionSource == 'manual' ? '원본 해설 (직접 입력)' : '원본 해설 전사됨')
-                      : item.hasSolutionRef
-                          ? '원본 해설 미전사'
-                          : '해설 좌표 없음',
-                  item.hasOriginalSolution ? _kBlue : (item.hasSolutionRef ? _kWarn : _kTextMuted),
+                      : item.isAnswerOnlyOriginalSolution
+                          ? '원본 정답 확인됨 (풀이 생략)'
+                          : item.hasSolutionRef
+                              ? '원본 해설 미전사'
+                              : '해설 좌표 없음',
+                  (item.hasOriginalSolution || item.isAnswerOnlyOriginalSolution)
+                      ? _kBlue
+                      : (item.hasSolutionRef ? _kWarn : _kTextMuted),
                 ),
                 if (item.renderCheckedAt != null)
                   _pillBadge(item.renderHasIssue ? 'V2 렌더 이상' : 'V2 렌더 정상', item.renderHasIssue ? _kError : _kAccent),
@@ -2352,7 +2362,9 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
                         ? (item.solutionSource == 'manual'
                             ? '운영자가 입력한 해설'
                             : '해설 PDF ${item.solutionRawPage ?? '-'}쪽 영역을 Vision으로 전사')
-                        : (item.hasSolutionRef ? '원본 해설이 아직 없어 AI 풀이를 표시' : '해설 좌표 없음 · AI 풀이'),
+                        : item.isAnswerOnlyOriginalSolution
+                            ? '해설지(${item.solutionRawPage ?? '-'}쪽)에 답만 인쇄된 문항 · 학생 화면에는 AI 풀이를 표시'
+                            : (item.hasSolutionRef ? '원본 해설이 아직 없어 AI 풀이를 표시' : '해설 좌표 없음 · AI 풀이'),
                     url: _cardUrlCache[primaryKey],
                     loading: _cardRendering.contains(primaryKey),
                     error: _cardErrors[primaryKey],
@@ -2842,7 +2854,8 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     final sv = item.qualityChecks['solution_vision'];
     final visionNote = sv is Map ? sv['note'] : null;
     final visionConf = sv is Map ? sv['confidence'] : null;
-    final visionFailed = item.hasSolutionRef && !item.hasOriginalSolution && item.hasAiSolution;
+    final visionFailed =
+        item.hasSolutionRef && !item.hasOriginalSolution && !item.isAnswerOnlyOriginalSolution && item.hasAiSolution;
     final solDirty = _solutionEditDirty(item);
 
     return Container(
@@ -2873,11 +2886,24 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
             children: [
               _pillBadge(
                 item.hasOriginalSolution
-                    ? (item.solutionSource == 'manual' ? '원본 직접 입력 (DB 저장됨)' : '원본 Vision 전사${visionConf != null ? ' · $visionConf' : ''} (DB 저장됨)')
-                    : (item.hasSolutionRef ? '원본 미전사' : '해설 좌표 없음'),
-                item.hasOriginalSolution ? _kBlue : (item.hasSolutionRef ? _kWarn : _kTextMuted),
+                    ? (item.solutionSource == 'manual'
+                        ? '원본 직접 입력 (DB 저장됨)'
+                        : '원본 Vision 전사${visionConf != null ? ' · $visionConf' : ''} (DB 저장됨)')
+                    : item.isAnswerOnlyOriginalSolution
+                        ? '원본 정답 확인됨 · 해설지 풀이 생략${visionConf != null ? ' · $visionConf' : ''} (AI 풀이 사용)'
+                        : (item.hasSolutionRef ? '원본 미전사' : '해설 좌표 없음'),
+                (item.hasOriginalSolution || item.isAnswerOnlyOriginalSolution)
+                    ? _kBlue
+                    : (item.hasSolutionRef ? _kWarn : _kTextMuted),
               ),
               if (solDirty) _pillBadge('저장 전 해설 변경 있음', _kWarn),
+              if (item.canRenderOriginal && (visionFailed || !item.hasOriginalSolution))
+                OutlinedButton.icon(
+                  onPressed: _saving || _runningReview ? null : () => unawaited(_fixPassSingle(item)),
+                  style: _outlineButtonStyle(color: _kBlue),
+                  icon: const Icon(Icons.find_in_page_rounded, size: 17, color: _kBlue),
+                  label: const Text('해설 페이지 전체에서 다시 찾기'),
+                ),
               ElevatedButton.icon(
                 onPressed: _saving || !solDirty ? null : () => unawaited(_saveAndApproveSingle(item)),
                 style: _primaryButtonStyle(),
@@ -2890,7 +2916,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
             const SizedBox(height: 10),
             _buildBanner(
               '해설 PDF ${item.solutionRawPage ?? '-'}쪽 좌표 영역에서 원본 해설을 읽지 못했습니다${visionNote != null ? ' — $visionNote' : ''}. '
-              '좌표를 확인하거나 아래에 직접 입력하세요. 그 전까지 학생 화면에는 AI 풀이가 표시됩니다.',
+              '"해설 페이지 전체에서 다시 찾기"를 누르면 쪽 전체에서 문항 블록을 찾아 전사·좌표 보정합니다. 그 전까지 학생 화면에는 AI 풀이가 표시됩니다.',
               _kWarn,
               Icons.warning_amber_rounded,
             ),
@@ -2911,7 +2937,13 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
             maxLines: 6,
             minLines: 3,
             style: const TextStyle(color: _kText, fontSize: 13, height: 1.45),
-            decoration: _inputDecoration(item.hasSolutionRef ? '검수를 실행하면 해설 PDF 영역에서 전사됩니다. 직접 입력해도 됩니다.' : '해설 좌표가 없는 문항입니다. 직접 입력할 수 있습니다.'),
+            decoration: _inputDecoration(
+              item.isAnswerOnlyOriginalSolution
+                  ? '해설지에 정답만 인쇄되어 있고 풀이 과정은 생략된 문항입니다(학생 화면에는 아래 AI 풀이가 표시됩니다). 직접 입력해도 됩니다.'
+                  : item.hasSolutionRef
+                      ? '검수를 실행하면 해설 PDF 영역에서 전사됩니다. 직접 입력해도 됩니다.'
+                      : '해설 좌표가 없는 문항입니다. 직접 입력할 수 있습니다.',
+            ),
           ),
           const SizedBox(height: 12),
           Text('AI 독립 풀이 (정답 ${item.aiAnswer ?? '-'} · 고치면 저장 버튼이 켜집니다)', style: const TextStyle(color: _kTextSub, fontSize: 12)),

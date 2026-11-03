@@ -91,11 +91,13 @@ String? leadingInstruction(String common) {
   return first != null && looksLikeInstruction(first) ? first : null;
 }
 
-/// 답 비교용 정규화: 공백·$·중괄호·\left/\right 를 지우고 곱셈 기호를 하나로 맞춘다.
+/// 답 비교용 정규화: 공백·$·중괄호·\left/\right 를 지우고 곱셈·부등호·원 기호를 하나로 맞춘다.
 String normalizeAnswerForCompare(String s) => s
     .replaceAll(RegExp(r'\\left|\\right'), '')
     .replaceAll(RegExp(r'\\times|\\cdot|·|\*'), '×')
-    .replaceAll(RegExp(r'\\bigcirc|○'), 'o')
+    .replaceAll(RegExp(r'\\leq|\\le\b'), '≤')
+    .replaceAll(RegExp(r'\\geq|\\ge\b'), '≥')
+    .replaceAll(RegExp(r'\\bigcirc|○|◯'), 'o')
     .replaceAll(RegExp(r'[\s${}\\]'), '')
     .toLowerCase();
 
@@ -748,7 +750,8 @@ class TextbookProblemReviewItem {
 
   /// 수정 단계 대상:
   /// 1) 수학 오류가 있는데 아직 정답 수정안(proposedAnswer)이나 2:1 합의 답이 없는 문항(원본 PDF + 정답/해설 PDF 대조 필요),
-  /// 2) 품질 오류 문항·그림 문항(승인·보류·미검수 제외)과, 품질 승인 뒤라도 2단계/4단계에서 공통 발문·지시문 누락이나 원본 불일치가 남아 있는 문항.
+  /// 2) 해설 좌표가 어긋나 Vision 이 원본 해설을 찾지 못한 문항(해설 PDF 쪽 전체 탐색으로 복구 필요),
+  /// 3) 품질 오류 문항·그림 문항(승인·보류·미검수 제외)과, 품질 승인 뒤라도 2단계/4단계에서 공통 발문·지시문 누락이나 원본 불일치가 남아 있는 문항.
   bool get needsFixPass {
     if (!canRenderOriginal || isEngineHeld) return false;
     final mathNeedsFixPass = mathStatus == 'issue' &&
@@ -758,6 +761,7 @@ class TextbookProblemReviewItem {
         !existingMatchesSolution &&
         fixPassAt == null;
     if (mathNeedsFixPass) return true;
+    if (solutionVisionFailed && fixPassAt == null) return true;
 
     final hasTextDiscrepancy = qualityChecks['stem_ok'] == false ||
         qualityChecks['fidelity_ok'] == false ||
@@ -993,7 +997,28 @@ class TextbookProblemReviewItem {
   bool get isFullyApproved => mathStatus == 'approved' && qualityStatus == 'approved';
 
   bool get hasOriginalSolution => (solutionTranscribed ?? '').trim().isNotEmpty;
+  bool get hasSolutionAnswer => (solutionAnswer ?? '').trim().isNotEmpty && solutionAnswer!.trim() != '판단불가';
   bool get hasAiSolution => (aiSolution ?? '').trim().isNotEmpty;
+
+  /// 해설 PDF 에서 해당 문항의 정답 또는 해설 블록을 확인했는가
+  bool get solutionVisionFound =>
+      hasOriginalSolution ||
+      hasSolutionAnswer ||
+      (qualityChecks['solution_vision'] is Map && (qualityChecks['solution_vision'] as Map)['found'] == true);
+
+  /// 수력충전 등 연산 교재처럼 해설지에 풀이 과정 없이 정답만 한 줄로 인쇄된 문항(정상 확인 상태)
+  bool get isAnswerOnlyOriginalSolution =>
+      !hasOriginalSolution &&
+      (hasSolutionAnswer ||
+          (qualityChecks['solution_vision'] is Map && (qualityChecks['solution_vision'] as Map)['found'] == true));
+
+  /// 해설 좌표가 있었으나 해당 크롭에서 문항 해설·정답을 찾지 못한 문항(번호 재시작·좌표 어긋남 가능성)
+  bool get solutionVisionFailed =>
+      hasSolutionRef &&
+      !hasOriginalSolution &&
+      !isAnswerOnlyOriginalSolution &&
+      qualityChecks['solution_vision'] is Map &&
+      (qualityChecks['solution_vision'] as Map)['found'] == false;
 
   /// 해설 좌표가 있어서 해설 PDF에서 영역을 잘라낼 수 있는 문항
   bool get canCropSolution =>
@@ -1005,7 +1030,7 @@ class TextbookProblemReviewItem {
     if (mathStatus == 'pending' || !hasAiSolution) return true;
     if (mathStatus == 'approved') return false;
     final visionTried = qualityChecks['solution_vision'] != null;
-    return hasSolutionRef && !hasOriginalSolution && !visionTried;
+    return hasSolutionRef && !hasOriginalSolution && !isAnswerOnlyOriginalSolution && !visionTried;
   }
 
   /// 해설·정답 카드가 바뀌었거나 아직 V2 렌더 검수를 안 한 문항
@@ -1015,17 +1040,29 @@ class TextbookProblemReviewItem {
   String get primarySolutionText => hasOriginalSolution ? solutionTranscribed!.trim() : (aiSolution ?? '').trim();
   String get primarySolutionKind => hasOriginalSolution ? 'textbook' : 'ai';
 
-  /// 가장 신뢰할 정답 표기: 운영자 저장 정답 → 해설 정답 → AI 정답
+  static final RegExp _imagePlaceholderAnswerRe =
+      RegExp(r'^(\[?\s*image\s*\]?|\(\s*image\s*\)|\[그림\])$', caseSensitive: false);
+
+  /// 가장 신뢰할 정답 표기: 유효한 저장 정답([image] 제외) → 제안 정답 → 해설 정답 → AI 정답
   String get displayAnswer {
-    if (existingAnswer.trim().isNotEmpty) return existingAnswer.trim();
+    final cur = existingAnswer.trim();
+    if (cur.isNotEmpty && !_imagePlaceholderAnswerRe.hasMatch(cur)) return cur;
+    if ((proposedAnswer ?? '').trim().isNotEmpty) return proposedAnswer!.trim();
     if ((solutionAnswer ?? '').trim().isNotEmpty) return solutionAnswer!.trim();
-    return (aiAnswer ?? '').trim();
+    if ((aiAnswer ?? '').trim().isNotEmpty && aiAnswer!.trim() != '판단불가') return aiAnswer!.trim();
+    return cur;
   }
 }
 
-/// 묶음 검수 때 문항마다 함께 보내는 이미지(해설 크롭 base64 · V2 문항 카드 URL · 교재 원본 base64)
+/// 묶음 검수 때 문항마다 함께 보내는 이미지(해설 크롭 base64 · V2 문항 카드 URL · 교재 원본 base64 · 해설 전체 페이지 폴백)
 class TextbookReviewChunkImage {
-  const TextbookReviewChunkImage({this.solutionImageBase64, this.v2ProblemUrl, this.original, this.setHeader});
+  const TextbookReviewChunkImage({
+    this.solutionImageBase64,
+    this.v2ProblemUrl,
+    this.original,
+    this.setHeader,
+    this.solutionPage,
+  });
 
   final String? solutionImageBase64;
   final String? v2ProblemUrl;
@@ -1035,6 +1072,9 @@ class TextbookReviewChunkImage {
 
   /// 세트 머리(공통 지시문) 원본
   final TextbookReviewRenderedRegion? setHeader;
+
+  /// 해설 좌표가 어긋났거나 해설 답 불일치일 때 보내는 해설 PDF 한 쪽 전체 이미지
+  final TextbookReviewRenderedRegion? solutionPage;
 
   Map<String, dynamic> toJson() => <String, dynamic>{
         if (solutionImageBase64 != null && solutionImageBase64!.isNotEmpty) ...{
@@ -1054,10 +1094,19 @@ class TextbookReviewChunkImage {
           'set_header_image_base64': base64Encode(setHeader!.bytes),
           'set_header_image_mime': 'image/png',
         },
+        if (solutionPage != null) ...{
+          'solution_page_image_base64': base64Encode(solutionPage!.bytes),
+          'solution_page_image_mime': 'image/png',
+          'solution_page_raw_page': solutionPage!.rawPage,
+        },
       };
 
   bool get isEmpty =>
-      (solutionImageBase64 ?? '').isEmpty && (v2ProblemUrl ?? '').isEmpty && original == null && setHeader == null;
+      (solutionImageBase64 ?? '').isEmpty &&
+      (v2ProblemUrl ?? '').isEmpty &&
+      original == null &&
+      setHeader == null &&
+      solutionPage == null;
 }
 
 /// 엔진 보류 문항이 있는 단원 한 줄(textbook_review_engine_hold_list)
@@ -1248,19 +1297,69 @@ class TextbookProblemReviewService {
     return TextbookReviewChunkImage(original: o, setHeader: h).toJson();
   }
 
+  /// 문항의 해설 PDF 쪽 번호를 구한다(직접 좌표가 있으면 그 쪽, 없으면 같은 소단원·인접 본문 쪽 문항의 해설 쪽을 추론).
+  int? inferSolutionRawPage(TextbookProblemReviewItem it, List<TextbookProblemReviewItem> allItems) {
+    if ((it.solutionRawPage ?? 0) > 0) return it.solutionRawPage;
+    if ((it.answerRawPage ?? 0) > 0) return it.answerRawPage;
+    int? bestPage;
+    var bestDist = 1 << 30;
+    for (final other in allItems) {
+      final p = other.solutionRawPage ?? other.answerRawPage;
+      if (p == null || p <= 0) continue;
+      final sameSub = it.subKey.isNotEmpty && other.subKey == it.subKey;
+      final dist = (other.rawPage - it.rawPage).abs() * 10 + (sameSub ? 0 : 5);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestPage = p;
+      }
+    }
+    return bestPage;
+  }
+
+  /// 해설 PDF 한 쪽 전체 이미지(캐시). 해설 번호 좌표가 어긋났을 때 쪽 전체에서 블록·문항을 다시 찾는 용도.
+  Future<TextbookReviewRenderedRegion?> fullSolutionPage(
+    TextbookReviewUnitScope scope,
+    TextbookProblemReviewItem it,
+    List<TextbookProblemReviewItem> allItems,
+  ) async {
+    final page = inferSolutionRawPage(it, allItems);
+    if (page == null || page <= 0) return null;
+    final kind = it.solutionSourceKind != 'none' && it.solutionSourceKind.isNotEmpty ? it.solutionSourceKind : 'sol';
+    final key = '${scope.bookId}|${scope.gradeLabel}|$kind|$page|full_page';
+    final hit = _regionCache[key];
+    if (hit != null) return hit;
+    final load = _solutionImages
+        .renderFullPage(
+          academyId: scope.academyId,
+          bookId: scope.bookId,
+          gradeLabel: scope.gradeLabel,
+          sourceKind: kind,
+          rawPage: page,
+        )
+        .then<TextbookReviewRenderedRegion?>((r) => r, onError: (Object _) => null);
+    _regionCache[key] = load;
+    final r = await load;
+    if (r == null) _regionCache.remove(key);
+    return r;
+  }
+
   /// 묶음 검수 전에 문항마다 (1) 해설 PDF 좌표 영역 크롭(원본 해설 Vision 전사용) (2) V2 문항 카드 URL(학생 시점 품질 검수용)
-  /// (3) 본문 PDF 문항 영역 원본(원본 대조용, 세트면 세트 머리도)을 모은다.
+  /// (3) 본문 PDF 문항 영역 원본(원본 대조용, 세트면 세트 머리도)
+  /// (4) 필요 시 해설 PDF 한 쪽 전체 이미지(좌표 어긋남·해설 미전사·정답 불일치 폴백용)를 모은다.
   Future<Map<String, TextbookReviewChunkImage>> prepareChunkImages({
     required TextbookReviewUnitScope scope,
     required List<TextbookProblemReviewItem> items,
     required Map<String, String> previewUrlsByCropId,
     bool includeSolution = true,
     bool onlyMissingSolutions = false,
+    bool includeSolutionPageFallback = false,
+    List<TextbookProblemReviewItem> allItems = const [],
   }) async {
     final out = <String, TextbookReviewChunkImage>{};
+    final pool = allItems.isNotEmpty ? allItems : items;
     for (final it in items) {
       String? b64;
-      if (includeSolution && !(onlyMissingSolutions && it.hasOriginalSolution)) {
+      if (includeSolution && !(onlyMissingSolutions && (it.hasOriginalSolution || it.isAnswerOnlyOriginalSolution))) {
         if (it.canCropSolution) {
           try {
             final png = await _solutionImages.renderSolutionCrop(
@@ -1292,12 +1391,21 @@ class TextbookProblemReviewService {
           }
         }
       }
+      TextbookReviewRenderedRegion? solPage;
+      final needsSolPage = includeSolutionPageFallback &&
+          (it.solutionVisionFailed ||
+              it.mathStatus == 'issue' ||
+              (!it.hasOriginalSolution && !it.isAnswerOnlyOriginalSolution));
+      if (needsSolPage) {
+        solPage = await fullSolutionPage(scope, it, pool);
+      }
       final v2 = previewUrlsByCropId[it.cropId];
       final img = TextbookReviewChunkImage(
         solutionImageBase64: b64,
         v2ProblemUrl: v2 != null && v2.startsWith('https://') ? v2 : null,
         original: await originalImage(scope, it),
         setHeader: await setHeaderImage(scope, it),
+        solutionPage: solPage,
       );
       if (!img.isEmpty) out[it.cropId] = img;
     }

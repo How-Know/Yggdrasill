@@ -109,6 +109,26 @@ class TextbookReviewSolutionImageService {
     return r?.bytes;
   }
 
+  /// 해설(또는 본문) PDF 한 쪽 전체를 PNG 로 찍는다(해설 번호 좌표가 어긋났을 때 쪽 전체에서 다시 찾는 폴백용).
+  Future<TextbookReviewRenderedRegion?> renderFullPage({
+    required String academyId,
+    required String bookId,
+    required String gradeLabel,
+    required String sourceKind,
+    required int rawPage,
+    int targetWidthPx = 1400,
+  }) =>
+      renderRegion(
+        academyId: academyId,
+        bookId: bookId,
+        gradeLabel: gradeLabel,
+        sourceKind: sourceKind,
+        rawPage: rawPage,
+        region1k: const [0, 0, 1000, 1000],
+        pad1k: 0,
+        targetWidthPx: targetWidthPx,
+      );
+
   /// 본문/해설 PDF 한 쪽의 좌표 영역([ymin, xmin, ymax, xmax] 0..1000)을 PNG 로 찍는다.
   /// 반환값에는 실제로 찍은 영역(여백 포함)과 픽셀 크기가 들어 있어, 그 이미지 안의 좌표를 쪽 좌표로 되돌릴 수 있다.
   Future<TextbookReviewRenderedRegion?> renderRegion({

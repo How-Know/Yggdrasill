@@ -286,6 +286,7 @@ const FIX_SCHEMA: Rec = {
           'proposed_ai_solution',
           'proposed_solution_answer',
           'proposed_solution_transcribed',
+          'corrected_solution_bbox_1k',
           'math_reason',
         ],
         properties: {
@@ -309,6 +310,10 @@ const FIX_SCHEMA: Rec = {
           proposed_ai_solution: { type: ['string', 'null'] },
           proposed_solution_answer: { type: ['string', 'null'] },
           proposed_solution_transcribed: { type: ['string', 'null'] },
+          corrected_solution_bbox_1k: {
+            type: ['array', 'null'],
+            items: { type: 'integer' },
+          },
           math_reason: { type: ['string', 'null'] },
           figures: {
             type: 'array',
@@ -372,14 +377,18 @@ const FIX_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔진의 [�
 - text_sample: 원본 이미지에서 그림·선지·수식 블록이 끼지 않은 연속된 본문 글줄(2~4줄이 좋고, 1줄뿐이면 1줄)을 감싼 bbox_1k 와 그 줄 수 lines.
   글자 크기를 재는 데 씁니다. 본문 글줄이 없으면 bbox_1k = [], lines = 0.
 
-[3. 정답·해설·AI 풀이 수정안 — 본문 PDF 원본 + 정답/해설 PDF 원본 대조]
+[3. 정답·해설·AI 풀이 수정안 — 본문 PDF 원본 + 정답/해설 PDF 원본(영역 크롭 및 전체 쪽) 대조]
 - 정답이 이상한 경우(math_status 가 "issue", 기존 저장 정답 existing_answer 가 비어 있음, "[image]" 로만 되어 있음, 또는 해설 정답·AI 정답과 불일치):
   - 본문 PDF 원본 이미지(세트 머리 지시문·표 구조·빈칸 위치 포함)와 정답/해설 PDF 원본 이미지를 직접 읽고 대조해, 학생 채점과 문제은행에 바로 저장할 정확한 최종 정답을 proposed_answer 에 적으세요.
   - 특히 정답이 표 빈칸 채우기이거나 이미지/다중 빈칸인 경우: 본문 표의 빈칸 순서(위→아래, 왼쪽→오른쪽)나 번호((1), (2)...)에 맞춰 정답/해설 이미지(또는 직접 푼 결과)의 값들을 빠짐없이 텍스트/LaTeX로 적으세요(예: "1, 3, 5, 15" 또는 "(1) 2 (2) 3"). 절대로 "[image]"나 "판단불가"로 적지 마세요.
   - 원본 본문 이미지(세트 지시문 포함)를 보고 처음부터 다시 푼 풀이를 proposed_ai_solution 에, 그 답을 proposed_ai_answer 에 적으세요.
-  - 정답/해설 이미지가 주어졌으면 거기서 읽은 최종 정답을 proposed_solution_answer 에, 문항 번호·"답 ..." 줄·"[해설]" 머리말을 모두 뺀 순수 해설 본문만 proposed_solution_transcribed 에 적으세요(풀이 없이 답만 있으면 null).
+  - 정답/해설 이미지가 주어졌으면 거기서 읽은 최종 정답을 proposed_solution_answer 에, 문항 번호·"답 ..." 줄·"[해설]" 머리말을 모두 뺀 순수 해설 본문만 proposed_solution_transcribed 에 적으세요(풀이 과정 없이 정답만 인쇄된 문항이면 null).
   - math_reason 에는 왜 이 정답으로 확정했는지 한 줄로 적으세요.
-- 수학 정답이 이미 일치하고(math_status 가 "approved" 또는 "clean") 기존 정답도 정상이면 proposed_answer, proposed_ai_answer, proposed_ai_solution, proposed_solution_answer, proposed_solution_transcribed, math_reason 은 모두 null 로 두세요.`;
+- 해설 좌표 어긋남 복구("해설 PDF 전체 페이지 이미지"가 함께 주어진 경우):
+  - 수력충전 등 연산 교재는 한 해설 페이지 안에서 번호가 01번부터 여러 번 새로 시작하므로 기존 해설 크롭 좌표가 엉뚱한 블록을 가리켜 solution_vision_found = false 이거나 다른 문항의 답이 읽혔을 수 있습니다.
+  - "해설 PDF 전체 페이지 이미지"가 주어졌으면 페이지 안에서 (1) 본문 쪽수 배지(예: "p.<body_display_page>", "P.<body_display_page>", "<body_page>쪽") 또는 소단원 제목(sub_key / item_name), (2) 문항 번호(problem_number), (3) 본문 문제의 수식·내용과 정확히 대응하는 정답·해설 위치를 페이지 전체에서 찾으세요.
+  - 찾은 위치에서 최종 정답은 proposed_solution_answer 에, 순수 해설 본문은 proposed_solution_transcribed 에(풀이 없이 답만 있으면 null), 그리고 전체 페이지 이미지(0..1000) 기준 해당 문항 정답·해설 블록의 영역 좌표 [ymin, xmin, ymax, xmax] 를 corrected_solution_bbox_1k 에 적으세요. 전체 페이지 이미지가 없거나 찾지 못했으면 corrected_solution_bbox_1k 는 null 로 두세요.
+- 수학 정답이 이미 일치하고(math_status 가 "approved" 또는 "clean") 기존 정답도 정상이며 해설도 이미 확인된 경우(solution_vision_found !== false)에는 proposed_answer, proposed_ai_answer, proposed_ai_solution, proposed_solution_answer, proposed_solution_transcribed, corrected_solution_bbox_1k, math_reason 은 모두 null 로 두세요.`;
 
 const MAX_FIX_CHUNK = 4;
 
@@ -440,9 +449,15 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
       problems: targets.map((it) => {
         const qc = (it.quality_checks ?? {}) as Rec;
         const rc = (it.render_checks ?? {}) as Rec;
+        const sv = (qc.solution_vision ?? {}) as Rec;
         return {
           crop_id: it.crop_id,
           problem_number: it.problem_number,
+          body_page: it.raw_page ?? null,
+          body_display_page: it.display_page ?? it.raw_page ?? null,
+          sub_key: String(it.sub_key ?? '').trim(),
+          sub_index: it.sub_index ?? 0,
+          item_name: String(it.item_name ?? '').trim(),
           question_type: it.question_type,
           is_fill_in_blank: isFillInBlankProblem(it.common_stem, it.stem),
           is_set_question: String(it.common_stem ?? '').trim().length > 0 ||
@@ -459,6 +474,7 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
           pb_subjective_answer: it.pb_subjective_answer ?? '',
           solution_answer: it.solution_answer ?? null,
           solution_transcribed: typeof it.solution_transcribed === 'string' ? it.solution_transcribed.slice(0, 2000) : null,
+          solution_vision_found: typeof sv.found === 'boolean' ? sv.found : null,
           ai_answer: it.ai_answer ?? null,
           math_status: it.math_status ?? 'pending',
           quality_status: it.quality_status ?? 'pending',
@@ -466,6 +482,7 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
           stem_figure_markers: figureMarkerCount(it.stem),
           issues: {
             math_mismatch: it.math_status === 'issue' ? (it.mismatch_reason ?? '기존 정답·해설 정답·AI 정답 불일치 또는 미저장') : null,
+            solution_missing: sv.found === false ? (sv.note ?? '기존 해설 좌표 영역에서 해당 문항의 정답·해설을 찾지 못함') : null,
             problem_card: qc.issue_title ? `${qc.issue_title}: ${qc.issue_detail ?? ''}` : null,
             render_check: rc.issue_title ? `${rc.issue_title}: ${rc.issue_detail ?? ''}` : null,
           },
@@ -476,15 +493,23 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
   for (const it of targets) {
     const cid = String(it.crop_id);
     const img = images.get(cid)!;
-    parts.push({ type: 'text', text: `[crop_id=${cid} · ${it.problem_number}번 교재 원본 이미지(본문 PDF 문항 영역)]` });
+    parts.push({ type: 'text', text: `[crop_id=${cid} · ${it.problem_number}번 교재 원본 이미지(본문 PDF ${it.raw_page ?? '-'}쪽 문항 영역)]` });
     parts.push({ type: 'image', url: img.originalImageDataUrl!, detail: 'high' });
     if (img.setHeaderImageDataUrl) {
       parts.push({ type: 'text', text: `[crop_id=${cid} · ${it.problem_number}번이 속한 세트 머리(공통 지시문) 원본 이미지]` });
       parts.push({ type: 'image', url: img.setHeaderImageDataUrl, detail: 'auto' });
     }
     if (img.solutionImageDataUrl) {
-      parts.push({ type: 'text', text: `[crop_id=${cid} · ${it.problem_number}번 정답/해설 PDF 영역 원본 이미지]` });
+      parts.push({ type: 'text', text: `[crop_id=${cid} · ${it.problem_number}번 정답/해설 PDF 영역 크롭 이미지]` });
       parts.push({ type: 'image', url: img.solutionImageDataUrl, detail: 'high' });
+    }
+    if (img.solutionPageImageDataUrl) {
+      parts.push({
+        type: 'text',
+        text:
+          `[crop_id=${cid} · ${it.problem_number}번 해설 PDF ${img.solutionPageRawPage ?? it.solution_raw_page ?? '-'}쪽 전체 페이지 이미지 (본문 표시쪽 ${it.display_page ?? it.raw_page ?? '-'}쪽 · 소단원 "${it.sub_key ?? ''}" · 문항 내용과 대조해 해당 문항 블록 탐색)]`,
+      });
+      parts.push({ type: 'image', url: img.solutionPageImageDataUrl, detail: 'high' });
     }
     if (img.v2ProblemUrl) {
       parts.push({ type: 'text', text: `[crop_id=${cid} · ${it.problem_number}번 V2 렌더 화면(지금 학생이 보는 화면)]` });
@@ -586,6 +611,7 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
       ? cleanSolutionTranscribedText(r.proposed_solution_transcribed, it.problem_number, proposedSolAnswer ?? proposedAnswer ?? it.solution_answer)
       : '';
     const proposedSolTranscribed = cleanedSolText || null;
+    const correctedSolBox = normalizeBox(r.corrected_solution_bbox_1k);
     const mathReason = trimOrNull(r.math_reason) ?? trimOrNull(prev.math_reason);
 
     const hasText = !!(stem || common || choices);
@@ -600,6 +626,7 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
       proposed_ai_solution: proposedAiSolution,
       proposed_solution_answer: proposedSolAnswer,
       proposed_solution_transcribed: proposedSolTranscribed,
+      corrected_solution_bbox_1k: correctedSolBox,
       math_reason: mathReason,
       reason: typeof r.fix_reason === 'string' && r.fix_reason.trim() ? r.fix_reason.trim() : null,
       reason_code: null,
@@ -628,6 +655,9 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
     const autoHoldEngine = !hasText && !figure && !!engineSymptom &&
       it.quality_status !== 'approved' && it.quality_status !== 'held';
     const keepManualSol = it.solution_source === 'manual' && typeof it.solution_transcribed === 'string' && it.solution_transcribed.trim();
+    const curQc = (it.quality_checks ?? {}) as Rec;
+    const curSv = (curQc.solution_vision ?? {}) as Rec;
+    const recoveredSol = !keepManualSol && !!(proposedSolAnswer || proposedSolTranscribed);
     const updatePatch: Rec = {
       fix_proposal: fixProposal,
       updated_at: nowIso,
@@ -637,11 +667,26 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
           ...(proposedAiSolution ? { ai_solution: proposedAiSolution } : {}),
         }
         : {}),
-      ...(!keepManualSol && (proposedSolAnswer || proposedSolTranscribed)
+      ...(recoveredSol
         ? {
-          ...(proposedSolAnswer && !it.solution_answer ? { solution_answer: proposedSolAnswer } : {}),
-          ...(proposedSolTranscribed && !it.solution_transcribed ? { solution_transcribed: proposedSolTranscribed } : {}),
+          ...(proposedSolAnswer && (!it.solution_answer || curSv.found === false || it.math_status === 'issue')
+            ? { solution_answer: proposedSolAnswer }
+            : {}),
+          ...(proposedSolTranscribed && (!it.solution_transcribed || curSv.found === false)
+            ? { solution_transcribed: proposedSolTranscribed }
+            : {}),
           solution_source: it.solution_source ?? 'textbook_vision',
+          solution_extracted_at: nowIso,
+          quality_checks: {
+            ...curQc,
+            solution_vision: {
+              found: true,
+              confidence: 'high',
+              note: img.solutionPageImageDataUrl
+                ? '해설 PDF 전체 페이지에서 블록·문항 대조로 탐색 완료'
+                : (curSv.note ?? null),
+            },
+          },
         }
         : {}),
       ...(autoHoldEngine
@@ -655,6 +700,26 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
     };
 
     await auth.admin.from('textbook_problem_analyses').update(updatePatch).eq('crop_id', cid);
+    if (recoveredSol) {
+      await auth.admin
+        .from('textbook_review_findings')
+        .update({ status: 'resolved', resolution: 'auto_cleared', resolved_at: nowIso })
+        .eq('crop_id', cid)
+        .eq('check_key', 'ai_solution_vision')
+        .in('status', ['open', 'held']);
+    }
+    const solPage = img.solutionPageRawPage ?? (Number(it.solution_raw_page) || 0);
+    if (correctedSolBox && solPage > 0) {
+      await auth.admin
+        .from('textbook_problem_solution_refs')
+        .update({
+          raw_page: solPage,
+          content_region_1k: correctedSolBox,
+          updated_at: nowIso,
+        })
+        .eq('crop_id', cid)
+        .is('edited_at', null);
+    }
     if (autoHoldEngine) {
       await auth.admin
         .from('textbook_review_findings')

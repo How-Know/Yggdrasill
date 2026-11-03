@@ -8,7 +8,7 @@ import { uuidOrNull } from './validate.ts';
 
 type Rec = Record<string, unknown>;
 
-export const TEXTBOOK_REVIEW_PROMPT_VERSION = 'textbook-problem-review-2026-11-03f';
+export const TEXTBOOK_REVIEW_PROMPT_VERSION = 'textbook-problem-review-2026-11-03g';
 
 /** 품질 이상의 원인 분류. data=문항 데이터(본문·선지) 오류, engine=조판 엔진 문제, figure=도형 자산 문제 */
 export type IssueKind = 'none' | 'data' | 'engine' | 'figure';
@@ -47,6 +47,9 @@ export interface ReviewImageInput {
   originalRegion1k: number[] | null;
   originalRawPage: number | null;
   setHeaderImageDataUrl: string | null;
+  /** 해설 좌표 어긋남·미전사·답 불일치 때 보내는 해설 PDF 한 쪽 전체 이미지와 쪽 번호 */
+  solutionPageImageDataUrl: string | null;
+  solutionPageRawPage: number | null;
 }
 
 const MAX_SOLUTION_IMAGE_CHARS = 4_000_000; // base64 약 3MB
@@ -74,6 +77,8 @@ export function parseReviewImages(raw: unknown): Map<string, ReviewImageInput> {
       ? (r.original_region_1k as unknown[]).map((x) => Math.round(Number(x)))
       : null;
     const page = Number(r.original_raw_page);
+    const solPageImg = imageDataUrl(r.solution_page_image_base64, r.solution_page_image_mime);
+    const solPage = Number(r.solution_page_raw_page);
     out.set(cropId, {
       solutionImageDataUrl: imageDataUrl(r.solution_image_base64, r.solution_image_mime),
       v2ProblemUrl: /^https:\/\//.test(url) ? url : null,
@@ -82,6 +87,8 @@ export function parseReviewImages(raw: unknown): Map<string, ReviewImageInput> {
       originalRegion1k: original ? region : null,
       originalRawPage: original && Number.isInteger(page) && page > 0 ? page : null,
       setHeaderImageDataUrl: imageDataUrl(r.set_header_image_base64, r.set_header_image_mime),
+      solutionPageImageDataUrl: solPageImg,
+      solutionPageRawPage: solPageImg && Number.isInteger(solPage) && solPage > 0 ? solPage : null,
     });
   }
   return out;
@@ -151,7 +158,9 @@ const squash = (s: string) => s.replace(/\s+|\[문단\]/g, '');
 const normAnsSimple = (s: string) =>
   s.replace(/\\left|\\right/g, '')
     .replace(/\\times|\\cdot|·|\*/g, '×')
-    .replace(/\\bigcirc|○/g, 'o')
+    .replace(/\\leq|\\le\b/g, '≤')
+    .replace(/\\geq|\\ge\b/g, '≥')
+    .replace(/\\bigcirc|○|◯/g, 'o')
     .replace(/[\s${}\\]/g, '')
     .toLowerCase();
 
@@ -1349,7 +1358,7 @@ export function isReviewTodo(it: Rec, forceRerun: boolean): boolean {
   if (mathStatus === 'approved') return false;
   const qc = (it.quality_checks ?? {}) as Rec;
   const visionTried = qc.solution_vision !== null && qc.solution_vision !== undefined;
-  return it.has_solution_ref === true && !it.solution_transcribed && !visionTried;
+  return it.has_solution_ref === true && !it.solution_transcribed && !it.solution_answer && !visionTried;
 }
 
 /** 수학만 다시 풀 대상(math_only): 수학 오류로 남은 문항. 본문을 고친 뒤 옛 본문으로 푼 AI 답을 새로 맞출 때 쓴다. */
