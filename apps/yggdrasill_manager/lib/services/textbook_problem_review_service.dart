@@ -56,9 +56,9 @@ String _squash(String s) => s.replaceAll(RegExp(r'\s+|\[문단\]'), '');
 /// 서술형으로 봐야 하는 표현(Edge `ESSAY_PATTERN` 과 같다)
 final kEssayPattern = RegExp(r'서술하(시오|여라)|과정을\s*(쓰|서술|설명)|풀이\s*과정|이유를\s*(쓰|설명|서술)|설명하(시오|여라)|증명하(시오|여라)');
 
-/// 빈칸형 문항 판별: 발문·공통발문·수식에 빈칸 채우기 지시나 네모(□, [[공백:n]], \square, \Box 등)가 있는 문항(Edge `FILL_IN_BLANK_PATTERN` 과 같다).
+/// 빈칸형 문항 판별: 발문·공통발문·수식에 빈칸 채우기 지시나 네모(□, [[공백:n]], box{~~}, \square, \Box 등)가 있는 문항(Edge `FILL_IN_BLANK_PATTERN` 과 같다).
 final kFillInBlankPattern = RegExp(
-  r'\[\[?\s*공백\s*:\s*\d+\s*\]\]?|\\(?:square|Box|boxed)\b|[□▢]|(?:빈칸|네모|\(\s*\)|\[\s*\])\s*(?:에|안에)|알맞은\s*(?:수|말|식|값|기호|것|숫자)를?\s*(?:써넣|쓰시오|써라|채우)',
+  r'\[\[?\s*공백\s*:\s*\d+(?:\.\d+)?\s*\]\]?|\bbox\s*\{|\\(?:square|Box|boxed)\b|[□▢]|(?:빈칸|네모|\(\s*\)|\[\s*\])\s*(?:에|안에)|알맞은\s*(?:수|말|식|값|기호|것|숫자)를?\s*(?:써넣|쓰시오|써라|채우)',
 );
 
 bool isFillInBlankProblem(String commonStem, String stem) => kFillInBlankPattern.hasMatch('$commonStem\n$stem');

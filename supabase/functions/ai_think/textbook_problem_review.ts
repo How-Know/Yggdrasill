@@ -271,9 +271,9 @@ export function leadingInstruction(common: string): string | null {
 /** 서술형으로 봐야 하는 표현(발문에 있으면 무조건 서술형) */
 export const ESSAY_PATTERN = /서술하(시오|여라)|과정을\s*(쓰|서술|설명)|풀이\s*과정|이유를\s*(쓰|설명|서술)|설명하(시오|여라)|증명하(시오|여라)/;
 
-/** 빈칸형 문항 판별: 발문·공통발문·수식에 빈칸 채우기 지시나 네모(□, [[공백:n]], \square, \Box 등)가 있는 문항 */
+/** 빈칸형 문항 판별: 발문·공통발문·수식에 빈칸 채우기 지시나 네모(□, [[공백:n]], box{~~}, \square, \Box 등)가 있는 문항 */
 export const FILL_IN_BLANK_PATTERN =
-  /\[\[?\s*공백\s*:\s*\d+\s*\]\]?|\\(?:square|Box|boxed)\b|[□▢]|(?:빈칸|네모|\(\s*\)|\[\s*\])\s*(?:에|안에)|알맞은\s*(?:수|말|식|값|기호|것|숫자)를?\s*(?:써넣|쓰시오|써라|채우)/;
+  /\[\[?\s*공백\s*:\s*\d+(?:\.\d+)?\s*\]\]?|\bbox\s*\{|\\(?:square|Box|boxed)\b|[□▢]|(?:빈칸|네모|\(\s*\)|\[\s*\])\s*(?:에|안에)|알맞은\s*(?:수|말|식|값|기호|것|숫자)를?\s*(?:써넣|쓰시오|써라|채우)/;
 
 export function isFillInBlankProblem(commonStem: unknown, stem: unknown): boolean {
   const combined = `${String(commonStem ?? '')}\n${String(stem ?? '')}`;
@@ -1252,10 +1252,14 @@ export async function handleTextbookProblemReview(
       }).catch(() => null);
     } else {
       if (existingAnsRaw) {
-        await auth.userClient.rpc('textbook_review_sync_pb_answer', {
-          p_crop_id: cropId,
-          p_answer: existingAnsRaw,
-        }).catch(() => null);
+        try {
+          await auth.admin.rpc('textbook_review_sync_pb_answer', {
+            p_crop_id: cropId,
+            p_answer: existingAnsRaw,
+          });
+        } catch {
+          // ignore sync failure during batch review
+        }
       }
       await resolveOpenFinding(auth, cropId, 'ai_answer_compare').catch(() => null);
       await resolveOpenFinding(auth, cropId, 'load:answer_missing').catch(() => null);
