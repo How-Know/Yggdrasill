@@ -79,8 +79,86 @@ String? leadingInstruction(String common) {
 String normalizeAnswerForCompare(String s) => s
     .replaceAll(RegExp(r'\\left|\\right'), '')
     .replaceAll(RegExp(r'\\times|\\cdot|·|\*'), '×')
+    .replaceAll(RegExp(r'\\bigcirc|○'), 'o')
     .replaceAll(RegExp(r'[\s${}\\]'), '')
     .toLowerCase();
+
+/// 공통 발문이 비어 있지 않은데 지시문이 아니라 숫자·수식 조각(예: '36', '36=2^2×3^2')만 들어 있는 손상 상태인가
+bool isCorruptedCommonStem(String commonStem) {
+  final c = commonStem.trim();
+  if (c.isEmpty) return false;
+  final parts = c.split(RegExp(r'\[문단\]|\n')).map((p) => p.trim()).where((p) => p.isNotEmpty);
+  return !parts.any(looksLikeInstruction);
+}
+
+/// 원본 해설 전사 텍스트에서 이중 추출된 '[해설]'/'[풀이]' 머리말과 '16 답 ×'·'[정답] ③' 같은 정답 줄을 제거한다.
+String cleanSolutionTranscribedText(
+  String rawText, {
+  String? problemNumber,
+  String? solutionAnswer,
+}) {
+  var s = rawText.replaceAll('\r\n', '\n').trim();
+  if (s.isEmpty) return '';
+  final numDigits = (problemNumber ?? '').replaceAll(RegExp(r'[^0-9]'), '').replaceFirst(RegExp(r'^0+'), '');
+  final numEsc = numDigits.isNotEmpty ? '0*$numDigits(?:\\s*번|\\.|\\))?' : '(?:0*\\d{1,3}(?:\\s*번|\\.|\\))?)';
+  final ansNorm = normalizeAnswerForCompare(solutionAnswer ?? '');
+
+  for (var pass = 0; pass < 6 && s.isNotEmpty; pass++) {
+    final prev = s;
+    s = s.replaceFirst(RegExp(r'^(?:\s|\[문단\])+'), '');
+    s = s.replaceFirst(
+      RegExp(r'^(?:\[\s*(?:해설|풀이|정답과\s*해설|정답\s*및\s*해설)\s*\]|<\s*(?:해설|풀이)\s*>|(?:해설|풀이)\s*[:：])\s*', caseSensitive: false),
+      '',
+    );
+    s = s.replaceFirst(RegExp(r'^(?:해설|풀이)\s*(?:\n|\[문단\])+'), '');
+    s = s.replaceFirst(RegExp(r'^(?:\s|\[문단\])+'), '');
+
+    final firstBreak = RegExp(r'\n|\[문단\]').firstMatch(s);
+    final firstLine = (firstBreak != null ? s.substring(0, firstBreak.start) : s).trim();
+    final restAfterFirst =
+        firstBreak != null ? s.substring(firstBreak.start).replaceFirst(RegExp(r'^(?:\s|\[문단\])+'), '') : '';
+
+    final isProseDap = RegExp(r'^(?:답|정답)(?:[은는이가을를도만]|(?:\s*없음))').hasMatch(firstLine);
+    final bracketOrNumberedAnsRe = RegExp(
+      '^(?:$numEsc\\s*(?:\\[\\s*(?:답|정답)\\s*\\]|(?:답|정답))(?![은는이가을를도만])(?:\\s*[:：]?\\s*\\S.*|\$)|\\[\\s*(?:답|정답)\\s*\\]\\s*[:：]?\\s*\\S.*|(?:답|정답)\\s*[:：]\\s*\\S.*)',
+      caseSensitive: false,
+    );
+    final bareDapMatch = !isProseDap ? RegExp(r'^(?:답|정답)\s+(\S.*)$').firstMatch(firstLine) : null;
+    final isBareDapHeader = bareDapMatch != null &&
+        (restAfterFirst.isNotEmpty ||
+            (ansNorm.isNotEmpty && normalizeAnswerForCompare(bareDapMatch.group(1)!) == ansNorm));
+    if (!isProseDap && (bracketOrNumberedAnsRe.hasMatch(firstLine) || isBareDapHeader)) {
+      final inlineSol = RegExp(r'(?:\[\s*(?:해설|풀이)\s*\]|(?:해설|풀이)\s*[:：])\s*(.+)$').firstMatch(firstLine);
+      s = inlineSol != null
+          ? '${inlineSol.group(1)!.trim()}${restAfterFirst.isNotEmpty ? '\n$restAfterFirst' : ''}'
+          : restAfterFirst;
+      continue;
+    }
+
+    if (numDigits.isNotEmpty) {
+      final m = RegExp('^0*$numDigits(?:\\s*번|\\.|\\))?\\s+(.+)\$').firstMatch(firstLine);
+      if (m != null && ansNorm.isNotEmpty && normalizeAnswerForCompare(m.group(1)!.trim()) == ansNorm) {
+        s = restAfterFirst;
+        continue;
+      }
+    }
+
+    if (ansNorm.isNotEmpty && firstLine.isNotEmpty && normalizeAnswerForCompare(firstLine) == ansNorm && restAfterFirst.isNotEmpty) {
+      s = restAfterFirst;
+      continue;
+    }
+
+    if (s == prev) break;
+  }
+
+  s = s
+      .replaceAll(RegExp(r'(?:^|\n|\[문단\])\s*\[\s*(?:해설|풀이)\s*\]\s*(?=\n|\[문단\]|$)'), '\n')
+      .replaceFirst(RegExp(r'^\s*\[\s*(?:해설|풀이)\s*\]\s*'), '')
+      .replaceFirst(RegExp(r'^(?:\s|\[문단\])+'), '')
+      .replaceFirst(RegExp(r'(?:\s|\[문단\])+$'), '')
+      .trim();
+  return s;
+}
 
 /// 공통 발문 중복의 두 형태를 모두 다룬다.
 /// 1) 공통 발문(지시문)이 개별 발문 앞머리에 다시 들어 있음 → 개별 발문에서 공통 부분만 뺀다(단, 공통 발문이 숫자·식 조각이면 떼어내지 않는다).
@@ -88,6 +166,7 @@ String normalizeAnswerForCompare(String s) => s
 ///    (가) 첫 문단이 지시문이면 공통 발문은 첫 문단(지시문)만 남기고 개별 발문은 지시문을 뺀 나머지,
 ///    (나) 첫 문단이 숫자·식이고 두 번째 문단이 지시문이면(예: "36=2^2×3^2\n다음 표의 빈칸에...") 공통 발문은 그 지시문 문단만 남기고,
 ///         개별 발문에서도 앞머리 중복 지시문을 뺀다.
+/// 3) 공통 발문이 이미 숫자·식 조각('36=2^2×3^2', '36' 등)으로만 잘려 있고 개별 발문 첫 문단에 실제 공통 지시문이 남아 있는 경우 복구한다.
 /// Edge `commonStemFix` 와 같은 규칙이다.
 CommonStemFix? computeCommonStemFix(String commonStem, String stem) {
   final common = commonStem.trim();
@@ -116,6 +195,14 @@ CommonStemFix? computeCommonStemFix(String commonStem, String stem) {
       final strippedFromStem = stripCommonStem(instrPart, stem) ?? stripCommonStem('${parts.first}\n$instrPart', stem);
       final nextStem = strippedFromStem ?? stem.trim();
       if (nextStem.isNotEmpty) return CommonStemFix(stem: nextStem, commonStem: instrPart);
+    }
+  }
+
+  if (isCorruptedCommonStem(common)) {
+    final stemInstr = leadingInstruction(stem);
+    if (stemInstr != null) {
+      final rest = stripCommonStem(stemInstr, stem);
+      if (rest != null) return CommonStemFix(stem: rest, commonStem: stemInstr);
     }
   }
   return null;
@@ -336,6 +423,8 @@ class TextbookProblemReviewItem {
     this.setHeaderRegion1k = const [],
     this.pbFigureAssets = const [],
     this.pbFigureLayout = const {},
+    this.answerRawPage,
+    this.answerBbox1k = const [],
   });
 
   factory TextbookProblemReviewItem.fromJson(Map<String, dynamic> m) {
@@ -398,7 +487,15 @@ class TextbookProblemReviewItem {
       pbFigureAssets: mapList(m['pb_figure_assets']),
       pbFigureLayout:
           m['pb_figure_layout'] is Map ? Map<String, dynamic>.from(m['pb_figure_layout'] as Map) : const <String, dynamic>{},
-      solutionTranscribed: m['solution_transcribed'] is String ? '${m['solution_transcribed']}' : null,
+      answerRawPage: (m['answer_raw_page'] as num?)?.toInt(),
+      answerBbox1k: ints(m['answer_bbox_1k']),
+      solutionTranscribed: m['solution_transcribed'] is String
+          ? cleanSolutionTranscribedText(
+              '${m['solution_transcribed']}',
+              problemNumber: '${m['problem_number'] ?? ''}',
+              solutionAnswer: m['solution_answer'] is String ? '${m['solution_answer']}' : null,
+            )
+          : null,
       solutionAnswer: m['solution_answer'] is String ? '${m['solution_answer']}' : null,
       solutionSource: m['solution_source'] is String ? '${m['solution_source']}' : null,
       alternativeSolutions: mapList(m['alternative_solutions']),
@@ -556,8 +653,13 @@ class TextbookProblemReviewItem {
   final List<Map<String, dynamic>> pbFigureAssets;
   final Map<String, dynamic> pbFigureLayout;
 
+  /// 답지 PDF 안의 정답 영역(해설 좌표가 따로 없는 문항이나 표·이미지 정답 대조용)
+  final int? answerRawPage;
+  final List<int> answerBbox1k;
+
   bool get canRenderOriginal => rawPage > 0 && itemRegion1k.length == 4;
   bool get canRenderSetHeader => (setHeaderRawPage ?? 0) > 0 && setHeaderRegion1k.length == 4;
+  bool get canCropAnswer => (answerRawPage ?? 0) > 0 && answerBbox1k.length == 4;
 
   /// 그림이 있는 문항(그림 자산이 있거나 본문에 그림 자리가 있음)
   bool get hasFigures => orderedFigureAssets(pbFigureAssets).isNotEmpty || figureMarkerCount(stem) > 0;
@@ -566,14 +668,24 @@ class TextbookProblemReviewItem {
   DateTime? get fixPassAt => fixProposal['fix_pass_at'] is String ? DateTime.tryParse('${fixProposal['fix_pass_at']}') : null;
   DateTime? get fixAppliedAt => fixProposal['applied_at'] is String ? DateTime.tryParse('${fixProposal['applied_at']}') : null;
 
-  /// 수정 단계 대상: 품질 오류 문항·그림 문항(승인·보류·미검수 제외)과, 품질 승인 뒤라도 2단계/4단계에서
-  /// 공통 발문·지시문 누락이나 원본 불일치가 남아 있는 문항. 아직 안 돌렸거나, 아직 적용할 수정안이 없거나, 수정을 적용했는데도 오류로 남은 경우.
+  /// 수정 단계 대상:
+  /// 1) 수학 오류가 있는데 아직 정답 수정안(proposedAnswer)이나 2:1 합의 답이 없는 문항(원본 PDF + 정답/해설 PDF 대조 필요),
+  /// 2) 품질 오류 문항·그림 문항(승인·보류·미검수 제외)과, 품질 승인 뒤라도 2단계/4단계에서 공통 발문·지시문 누락이나 원본 불일치가 남아 있는 문항.
   bool get needsFixPass {
     if (!canRenderOriginal || isEngineHeld) return false;
+    final mathNeedsFixPass = mathStatus == 'issue' &&
+        proposedAnswer == null &&
+        !solutionAndAiAgreeAgainstExisting &&
+        !existingConfirmedByAi &&
+        !existingMatchesSolution &&
+        fixPassAt == null;
+    if (mathNeedsFixPass) return true;
+
     final hasTextDiscrepancy = qualityChecks['stem_ok'] == false ||
         qualityChecks['fidelity_ok'] == false ||
         renderChecks['problem_ok'] == false ||
         renderChecks['fidelity_ok'] == false ||
+        isCorruptedCommonStem(commonStem) ||
         approvedButDiffers;
     if (qualityStatus == 'approved') {
       if (!hasTextDiscrepancy || stage2Superseded) return false;
@@ -599,7 +711,7 @@ class TextbookProblemReviewItem {
           if (x is Map) Map<String, dynamic>.from(x),
       ];
 
-  /// 아직 적용하지 않은 그림 제안(배치가 지금과 다르거나 잘라 등록할 그림이 있음)
+  /// 아직 적용하지 않은 그림 제안(배치가 지금과 다르거나 잘라 등록할 그림이 있음, 또는 그림 문항에서 원본 대조 배치를 아직 DB 에 반영하지 않음)
   bool get hasPendingFigureProposal {
     if (fixProposal['applied_at'] != null) return false;
     final layout = proposedFigureLayout;
@@ -669,6 +781,43 @@ class TextbookProblemReviewItem {
   String? get proposedCommonStem =>
       fixProposal['common_stem'] is String && '${fixProposal['common_stem']}'.trim().isNotEmpty ? '${fixProposal['common_stem']}' : null;
 
+  /// 원본 PDF + 정답/해설 PDF 대조(또는 3단계 대조)에서 제시된 정답 수정안
+  String? get proposedAnswer {
+    final direct = fixProposal['proposed_answer'];
+    if (direct is String && direct.trim().isNotEmpty && direct.trim() != '판단불가') {
+      return direct.trim();
+    }
+    for (final f in findings) {
+      if (f['axis'] == 'validity' && f['proposal'] is Map) {
+        final after = (f['proposal'] as Map)['after'];
+        final val = after is Map ? '${after['value'] ?? ''}'.trim() : '';
+        if (val.isNotEmpty && val != '판단불가') return val;
+      }
+    }
+    return null;
+  }
+
+  String? get proposedAiAnswer =>
+      fixProposal['proposed_ai_answer'] is String && '${fixProposal['proposed_ai_answer']}'.trim().isNotEmpty
+          ? '${fixProposal['proposed_ai_answer']}'.trim()
+          : null;
+  String? get proposedAiSolution =>
+      fixProposal['proposed_ai_solution'] is String && '${fixProposal['proposed_ai_solution']}'.trim().isNotEmpty
+          ? '${fixProposal['proposed_ai_solution']}'.trim()
+          : null;
+  String? get proposedSolutionAnswer =>
+      fixProposal['proposed_solution_answer'] is String && '${fixProposal['proposed_solution_answer']}'.trim().isNotEmpty
+          ? '${fixProposal['proposed_solution_answer']}'.trim()
+          : null;
+  String? get proposedSolutionTranscribed =>
+      fixProposal['proposed_solution_transcribed'] is String && '${fixProposal['proposed_solution_transcribed']}'.trim().isNotEmpty
+          ? '${fixProposal['proposed_solution_transcribed']}'.trim()
+          : null;
+  String? get proposedMathReason =>
+      fixProposal['math_reason'] is String && '${fixProposal['math_reason']}'.trim().isNotEmpty
+          ? '${fixProposal['math_reason']}'.trim()
+          : null;
+
   /// 해설 정답과 AI 정답이 서로 같은데 채점 정답만 다른가(일괄 채택 대상)
   bool get solutionAndAiAgreeAgainstExisting {
     final sol = normalizeAnswerForCompare(solutionAnswer ?? '');
@@ -682,6 +831,27 @@ class TextbookProblemReviewItem {
     final cur = normalizeAnswerForCompare(existingAnswer);
     final ai = normalizeAnswerForCompare(aiAnswer ?? '');
     return cur.isNotEmpty && cur == ai;
+  }
+
+  /// 채점 정답과 해설 정답이 같다(AI 답만 옛 본문 등으로 판단불가/불일치였을 때 2:1 로 채점 정답 유지).
+  bool get existingMatchesSolution {
+    final cur = normalizeAnswerForCompare(existingAnswer);
+    final sol = normalizeAnswerForCompare(solutionAnswer ?? '');
+    return cur.isNotEmpty && sol.isNotEmpty && cur == sol;
+  }
+
+  /// 수학 일괄 처리에서 DB 에 반영할 확정 정답(원본·해설 대조 수정안 → 해설·AI 합의 → 채점·AI 합의 → 채점·해설 합의 → 해설 정답 → AI 정답)
+  String? get resolvedMathAnswer {
+    if (proposedAnswer != null && proposedAnswer!.isNotEmpty) return proposedAnswer;
+    if (solutionAndAiAgreeAgainstExisting && (solutionAnswer ?? '').trim().isNotEmpty) return solutionAnswer!.trim();
+    if (existingConfirmedByAi && existingAnswer.trim().isNotEmpty) return existingAnswer.trim();
+    if (existingMatchesSolution && existingAnswer.trim().isNotEmpty) return existingAnswer.trim();
+    if ((solutionAnswer ?? '').trim().isNotEmpty && (solutionAnswer ?? '').trim() != '판단불가') return solutionAnswer!.trim();
+    if ((aiAnswer ?? '').trim().isNotEmpty && (aiAnswer ?? '').trim() != '판단불가') return aiAnswer!.trim();
+    if (existingAnswer.trim().isNotEmpty && !RegExp(r'^(\[?\s*image\s*\]?|\(\s*image\s*\)|\[그림\])$', caseSensitive: false).hasMatch(existingAnswer.trim())) {
+      return existingAnswer.trim();
+    }
+    return null;
   }
 
   /// 수학 일괄의 두 규칙(해설·AI 일치 답 채택, 채점 정답 = AI 답 유지)으로 끝나지 않는 수학 오류.
@@ -724,7 +894,11 @@ class TextbookProblemReviewItem {
 
   bool get isSetQuestion =>
       setType.isNotEmpty || commonStem.isNotEmpty || setHeaderNumber.isNotEmpty || canRenderSetHeader || proposedCommonStem != null;
-  bool get hasIssue => mathStatus == 'issue' || qualityStatus == 'issue' || findings.isNotEmpty;
+  bool get hasOpenFindings => findings.any((f) => f['status'] != 'held');
+  bool get hasIssue =>
+      mathStatus == 'issue' ||
+      (!isEngineHeld && qualityStatus == 'issue') ||
+      (!isEngineHeld && !isFullyApproved && hasOpenFindings);
   bool get hasDrafts => draftProposals.isNotEmpty;
   bool get isFullyApproved => mathStatus == 'approved' && qualityStatus == 'approved';
 
@@ -996,19 +1170,36 @@ class TextbookProblemReviewService {
     final out = <String, TextbookReviewChunkImage>{};
     for (final it in items) {
       String? b64;
-      if (includeSolution && it.canCropSolution && !(onlyMissingSolutions && it.hasOriginalSolution)) {
-        try {
-          final png = await _solutionImages.renderSolutionCrop(
-            academyId: scope.academyId,
-            bookId: scope.bookId,
-            gradeLabel: scope.gradeLabel,
-            sourceKind: it.solutionSourceKind,
-            rawPage: it.solutionRawPage!,
-            region1k: it.solutionRegion1k,
-          );
-          if (png != null && png.isNotEmpty) b64 = base64Encode(png);
-        } catch (_) {
-          b64 = null;
+      if (includeSolution && !(onlyMissingSolutions && it.hasOriginalSolution)) {
+        if (it.canCropSolution) {
+          try {
+            final png = await _solutionImages.renderSolutionCrop(
+              academyId: scope.academyId,
+              bookId: scope.bookId,
+              gradeLabel: scope.gradeLabel,
+              sourceKind: it.solutionSourceKind,
+              rawPage: it.solutionRawPage!,
+              region1k: it.solutionRegion1k,
+            );
+            if (png != null && png.isNotEmpty) b64 = base64Encode(png);
+          } catch (_) {
+            b64 = null;
+          }
+        }
+        if (b64 == null && it.canCropAnswer) {
+          try {
+            final png = await _solutionImages.renderSolutionCrop(
+              academyId: scope.academyId,
+              bookId: scope.bookId,
+              gradeLabel: scope.gradeLabel,
+              sourceKind: 'sol',
+              rawPage: it.answerRawPage!,
+              region1k: it.answerBbox1k,
+            );
+            if (png != null && png.isNotEmpty) b64 = base64Encode(png);
+          } catch (_) {
+            b64 = null;
+          }
         }
       }
       final v2 = previewUrlsByCropId[it.cropId];
@@ -1147,7 +1338,11 @@ class TextbookProblemReviewService {
     String? answerText,
   }) async {
     final ans = (answerText ?? item.displayAnswer).trim();
-    final sol = solutionText.trim();
+    final sol = cleanSolutionTranscribedText(
+      solutionText,
+      problemNumber: item.problemNumber,
+      solutionAnswer: ans,
+    );
     if (sol.isEmpty && ans.isEmpty) return '';
     final buf = StringBuffer();
     if (ans.isNotEmpty) buf.write('정답  $ans');
@@ -1235,6 +1430,7 @@ class TextbookProblemReviewService {
     required String cropId,
     String? newAnswer,
     String? aiSolution,
+    String? aiAnswer,
     required List<String> visualTags,
     bool approveMath = false,
     bool approveQuality = false,
@@ -1254,6 +1450,7 @@ class TextbookProblemReviewService {
       'p_solution_answer': solutionAnswer,
       'p_alternative_solutions': alternativeSolutions,
       'p_sync_pb_answer': syncPbAnswer,
+      if (aiAnswer != null) 'p_ai_answer': aiAnswer,
     });
     final sync = res is Map ? res['pb_answer_sync'] : null;
     return sync is Map ? Map<String, dynamic>.from(sync) : null;

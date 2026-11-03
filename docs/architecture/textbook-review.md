@@ -351,12 +351,32 @@ screen also keeps a per-run sent set so one run never sends a crop twice.
 - Stage 1 (reasoning low) transcribes the solution crop verbatim: text, the
   final answer, confidence, and `found = false` when the crop does not contain
   this problem's solution. It does not solve the problem.
+  - Answer and explanation are strictly separated: `solution_answer` holds
+    only the final answer, and `solution_transcribed` holds only the pure
+    explanation body (never the problem number, `"16 답 ×"` / `"[정답] ③"`
+    answer lines, or `"[해설]"` / `"[풀이]"` headers, which are stripped by
+    `cleanSolutionTranscribedText` in TypeScript, Dart, and SQL
+    `textbook_review_clean_solution_text`).
 - Stage 2 runs in parallel with stage 1. The model sees the V2 render of the
   problem (detail high), the original problem rendered from the body PDF
   (detail high) and, for set problems, the set header. It solves
-  independently and judges quality **from the V2 image, as a student would
-  see it**, not from the stem text. The original is for fidelity
+  independently (reading the original PDF and set header images when the
+  stored text is incomplete) and judges quality **from the V2 image, as a
+  student would see it**, not from the stem text. The original is for fidelity
   (`fidelity_ok`: does the render match the print).
+  - **Problems with figures (`itemHasFigures` / `hasFigures`) are always
+    classified as `quality_status = 'issue'` (`issue_kind = 'figure'`) in
+    Round 1**, regardless of whether math or text errors exist, so that every
+    figure problem goes through original PDF comparison, automatic figure
+    sizing and placement (`figure_layout` / `figure_crops`), and DB
+    application in Round 2.
+  - Pure rendering engine issues (`issue_kind = 'engine'`, text matches
+    original, no figures) are **automatically held (`quality_status = 'held'`)**
+    in Round 1 and excluded from the active error count and approval
+    denominator.
+  - Problems with no math or quality issues (and no figures) are
+    **automatically approved (`approved`) in Round 1** (with problem-bank
+    answer sync for math).
   Set problems get the common stem combined with the item
   (`[공통 지시문] ... [문항] ...`). When it finds an issue it classifies it
   (`issue_kind`) and, for `data` issues, proposes the corrected stem or

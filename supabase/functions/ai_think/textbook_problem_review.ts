@@ -8,7 +8,7 @@ import { uuidOrNull } from './validate.ts';
 
 type Rec = Record<string, unknown>;
 
-export const TEXTBOOK_REVIEW_PROMPT_VERSION = 'textbook-problem-review-2026-11-03d';
+export const TEXTBOOK_REVIEW_PROMPT_VERSION = 'textbook-problem-review-2026-11-03e';
 
 /** 품질 이상의 원인 분류. data=문항 데이터(본문·선지) 오류, engine=조판 엔진 문제, figure=도형 자산 문제 */
 export type IssueKind = 'none' | 'data' | 'engine' | 'figure';
@@ -148,6 +148,91 @@ export interface CommonStemFix {
 
 const squash = (s: string) => s.replace(/\s+|\[문단\]/g, '');
 
+const normAnsSimple = (s: string) =>
+  s.replace(/\\left|\\right/g, '')
+    .replace(/\\times|\\cdot|·|\*/g, '×')
+    .replace(/\\bigcirc|○/g, 'o')
+    .replace(/[\s${}\\]/g, '')
+    .toLowerCase();
+
+/**
+ * 원본 해설 전사 텍스트에서 이중 추출된 '[해설]'/'[풀이]' 머리말과 '16 답 ×'·'[정답] ③' 같은 정답 줄을 제거한다.
+ * 정답은 solution_answer 에 따로 저장하고 카드 렌더링 때 '정답 ... [해설]' 머리말을 붙이므로, 해설 본문에는 순수 풀이만 남긴다.
+ */
+export function cleanSolutionTranscribedText(
+  rawText: unknown,
+  problemNumber?: unknown,
+  solutionAnswer?: unknown,
+): string {
+  let s = String(rawText ?? '').replace(/\r\n/g, '\n').trim();
+  if (!s) return '';
+  const numDigits = String(problemNumber ?? '').replace(/[^0-9]/g, '').replace(/^0+/, '');
+  const numEsc = numDigits ? `0*${numDigits}(?:\\s*번|\\.|\\))?` : '(?:0*\\d{1,3}(?:\\s*번|\\.|\\))?)';
+  const ansNorm = normAnsSimple(String(solutionAnswer ?? ''));
+
+  for (let pass = 0; pass < 6 && s.length > 0; pass++) {
+    const prev = s;
+    s = s.replace(/^(?:\s|\[문단\])+/, '');
+    // 1) 앞머리 [해설], [풀이], <해설>, <풀이>, 해설:, 풀이: 제거
+    s = s.replace(/^(?:\[\s*(?:해설|풀이|정답과\s*해설|정답\s*및\s*해설)\s*\]|<\s*(?:해설|풀이)\s*>|(?:해설|풀이)\s*[:：])\s*/i, '');
+    s = s.replace(/^(?:해설|풀이)\s*(?:\n|\[문단\])+/, '');
+    s = s.replace(/^(?:\s|\[문단\])+/, '');
+
+    // 2) 첫 줄이 '(문항번호) 답/정답 ...' 또는 '[정답] ...' 인 경우 첫 줄 제거
+    const firstLineBreak = s.search(/\n|\[문단\]/);
+    const firstLine = (firstLineBreak >= 0 ? s.slice(0, firstLineBreak) : s).trim();
+    const restAfterFirst = firstLineBreak >= 0 ? s.slice(firstLineBreak).replace(/^(?:\s|\[문단\])+/, '') : '';
+
+    // '답 없음', '답은 ...', '답이 ...' 같은 서술 문장은 정답 줄이 아니다.
+    const isProseDap = /^(?:답|정답)(?:[은는이가을를도만]|(?:\s*없음))/.test(firstLine);
+    const bracketOrNumberedAnsRe = new RegExp(
+      `^(?:${numEsc}\\s*(?:\\[\\s*(?:답|정답)\\s*\\]|(?:답|정답))(?![은는이가을를도만])(?:\\s*[:：]?\\s*\\S.*|$)|\\[\\s*(?:답|정답)\\s*\\]\\s*[:：]?\\s*\\S.*|(?:답|정답)\\s*[:：]\\s*\\S.*)`,
+      'i',
+    );
+    const bareDapMatch = !isProseDap ? firstLine.match(/^(?:답|정답)\s+(\S.*)$/) : null;
+    const isBareDapHeader = !!bareDapMatch && (
+      restAfterFirst.length > 0 ||
+      (ansNorm.length > 0 && normAnsSimple(bareDapMatch[1]) === ansNorm)
+    );
+    if (!isProseDap && (bracketOrNumberedAnsRe.test(firstLine) || isBareDapHeader)) {
+      const inlineSol = firstLine.match(/(?:\[\s*(?:해설|풀이)\s*\]|(?:해설|풀이)\s*[:：])\s*(.+)$/);
+      s = inlineSol ? `${inlineSol[1].trim()}${restAfterFirst ? '\n' + restAfterFirst : ''}` : restAfterFirst;
+      continue;
+    }
+
+    // 3) 첫 줄이 '문항번호 + 정답값' 만으로 이루어진 경우 제거
+    if (numDigits) {
+      const numPrefixRe = new RegExp(`^0*${numDigits}(?:\\s*번|\\.|\\))?\\s+(.+)$`);
+      const m = firstLine.match(numPrefixRe);
+      if (m) {
+        const tail = m[1].trim();
+        if (ansNorm && normAnsSimple(tail) === ansNorm) {
+          s = restAfterFirst;
+          continue;
+        }
+      }
+    }
+
+    // 4) 첫 줄이 순수하게 정답값(solution_answer)과 완전히 같은 한 줄이고 뒤에 해설이 이어지는 경우
+    if (ansNorm && firstLine && normAnsSimple(firstLine) === ansNorm && restAfterFirst) {
+      s = restAfterFirst;
+      continue;
+    }
+
+    if (s === prev) break;
+  }
+
+  // 본문 중간에 단독 줄로 들어간 [해설] / [풀이] 머리말도 정리한다.
+  s = s
+    .replace(/(?:^|\n|\[문단\])\s*\[\s*(?:해설|풀이)\s*\]\s*(?=\n|\[문단\]|$)/g, '\n')
+    .replace(/^\s*\[\s*(?:해설|풀이)\s*\]\s*/g, '')
+    .replace(/^(?:\s|\[문단\])+/, '')
+    .replace(/(?:\s|\[문단\])+$/, '')
+    .trim();
+
+  return s;
+}
+
 /** 지시문 문장으로 볼 수 있는 표현(공통 발문을 첫 문단으로 줄일 때 지시문인지 확인한다). */
 const INSTRUCTION_PATTERN =
   /(다음|아래|보기|위|오른쪽|왼쪽)|(구하|쓰|써넣|채우|고르|찾|연결|나타내|계산|비교|완성|판단|말하|답하|표시|그리|그려|풀어|인수분해|소인수분해|약분|통분|정리)(여라|시오|라|자|기|고)|\?/;
@@ -155,6 +240,23 @@ const INSTRUCTION_PATTERN =
 export function looksLikeInstruction(text: string): boolean {
   const t = text.trim();
   return t.length >= 4 && INSTRUCTION_PATTERN.test(t);
+}
+
+/** 공통 발문이 비어 있지 않은데 지시문이 아니라 숫자·수식 조각(예: '36', '36=2^2×3^2')만 들어 있는 손상 상태인가 */
+export function isCorruptedCommonStem(commonStem: unknown): boolean {
+  const c = String(commonStem ?? '').trim();
+  if (!c) return false;
+  const parts = c.split(/\[문단\]|\n/).map((p) => p.trim()).filter((p) => p.length > 0);
+  return !parts.some((p) => looksLikeInstruction(p));
+}
+
+/** 문항에 그림·도형·그래프가 있는가(있으면 1회차에서 무조건 품질 문제로 취급해 원본 대조·크기·배치 수정안을 제시한다). */
+export function itemHasFigures(it: Rec, b?: Rec): boolean {
+  const assets = Array.isArray(it.pb_figure_assets) ? it.pb_figure_assets : [];
+  if (assets.some((a) => a && typeof a === 'object' && Number((a as Rec).figure_index) > 0)) return true;
+  if (figureMarkerCount(it.stem) > 0) return true;
+  if (b && (b.figure_ok === false || b.issue_kind === 'figure')) return true;
+  return false;
 }
 
 /** 공통 발문의 첫 지시문: 첫 [문단]/줄바꿈 앞, 없으면 첫 문장(. ? ! 로 끝남). 뒤에 이어지는 내용이 없거나 지시문이 아니면 null. */
@@ -210,6 +312,14 @@ export function commonStemFix(commonStem: unknown, stem: unknown): CommonStemFix
       const strippedFromStem = stripCommonStem(instrPart, s) ?? stripCommonStem(`${parts[0]}\n${instrPart}`, s);
       const nextStem = strippedFromStem ?? s.trim();
       if (nextStem) return { stem: nextStem, commonStem: instrPart };
+    }
+  }
+  // 공통 발문이 이미 숫자·식 조각('36=2^2×3^2', '36' 등)으로만 잘려 있고 개별 발문 첫 문단에 실제 공통 지시문이 남아 있는 경우 복구한다.
+  if (isCorruptedCommonStem(common)) {
+    const stemInstr = leadingInstruction(s);
+    if (stemInstr) {
+      const rest = stripCommonStem(stemInstr, s);
+      if (rest) return { stem: rest, commonStem: stemInstr };
     }
   }
   return null;
@@ -422,14 +532,15 @@ const RENDER_CHECK_SCHEMA: Rec = {
 };
 
 const SOLUTION_TRANSCRIBE_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔진의 [1단계: 원본 해설 전사] 담당입니다.
-각 문항마다 교재 해설지(또는 본문)에서 그 문항의 풀이가 인쇄된 영역을 잘라낸 이미지가 주어집니다. 이미지에 인쇄된 해설을 그대로 옮겨 적으세요.
+각 문항마다 교재 해설지(또는 본문)에서 그 문항의 풀이가 인쇄된 영역을 잘라낸 이미지가 주어집니다. 이미지에 인쇄된 정답과 해설을 분리해 옮겨 적으세요.
 
 [수행 원칙]
-1. 전사(solution_transcribed)는 "원본 그대로"가 기준입니다. 풀지 말고, 고치지 말고, 요약하지 마세요. 인쇄된 풀이 단계·문장·수식을 순서대로 한글+LaTeX($...$)로 옮깁니다. 줄바꿈은 \\n으로 구분합니다.
-   - 분수는 \\frac{a}{b}, 근호는 \\sqrt{}, 거듭제곱은 ^{}, 원문자 선지는 ①~⑤ 그대로 적습니다.
-   - 해설에 "답 ③", "따라서 x=4" 처럼 최종 답이 적혀 있으면 그 답을 solution_answer에 적습니다(객관식은 번호, 주관식은 값/식). 답이 명시되지 않았으면 마지막 결론 값을 적고 note에 "답 표기 없음, 결론 값 사용"이라고 적습니다.
-2. 잘린 영역에 해당 문항 번호의 풀이가 보이지 않거나(다른 문항의 풀이만 보임, 번호만 있고 내용이 잘림 등) 읽을 수 없으면 found=false 로 두고 solution_transcribed는 읽은 만큼만, solution_answer는 null, note에 원인을 적습니다.
-3. 영역 안에 다른 문항의 풀이 일부가 함께 보이면 그 부분은 제외하고 요청된 문항 번호의 풀이만 전사합니다.
+1. 정답(solution_answer)과 해설(solution_transcribed)을 반드시 분리합니다(이중 추출 금지):
+   - solution_answer: 최종 답만 적습니다(객관식은 ①~⑤, 주관식·표·다중 빈칸은 값/식 그대로, 예: "$\\times$", "(1) 1, 3 (2) 5, 15"). 답이 명시되지 않았으면 풀이 마지막 결론 값을 적고 note에 "답 표기 없음, 결론 값 사용"이라고 적습니다.
+   - solution_transcribed: 순수 풀이 과정(해설 본문)만 원본 그대로 한글+LaTeX($...$)로 적습니다. 문항 번호("16", "01." 등), 정답 줄("16 답 ×", "답 ③", "[정답] ..."), "[해설]"·"[풀이]" 같은 머리말은 절대 solution_transcribed 에 넣지 마세요(화면에서 '정답'과 '[해설]' 머리말을 따로 붙이므로 넣으면 두 번 나옵니다). 해설지에 풀이 과정 없이 정답만 인쇄된 문항이면 solution_transcribed 는 빈 문자열 "" 로 두고 solution_answer 에만 정답을 적으세요(found=true 유지).
+   - 분수는 \\frac{a}{b}, 근호는 \\sqrt{}, 거듭제곱은 ^{}, 원문자 선지는 ①~⑤ 그대로 적고 줄바꿈은 \\n으로 구분합니다.
+2. 잘린 영역에 해당 문항 번호의 정답·풀이가 전혀 보이지 않거나(다른 문항만 보임 등) 읽을 수 없으면 found=false 로 두고 solution_transcribed는 "", solution_answer는 null, note에 원인을 적습니다.
+3. 영역 안에 다른 문항의 풀이 일부가 함께 보이면 그 부분은 제외하고 요청된 문항 번호의 것만 전사합니다.
 4. confidence: 글자·수식이 선명하고 완결되면 high, 일부 흐리거나 잘려 추정이 섞이면 medium, 대부분 추정이면 low.`;
 
 const BLIND_SOLVE_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔진의 [2단계: 블라인드 독립 풀이 · 연산 측정 · 품질 검수(학생 시점 V2 렌더 기준)] 담당입니다.
@@ -443,9 +554,9 @@ const BLIND_SOLVE_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔�
    - common_stem이 "다음 수의 약수를 모두 구하여라."이고 stem이 "7"이면 "7의 약수를 모두 구하는 문제"입니다. 발문 누락이나 판단불가로 판정하지 마세요.
    - 발문 안의 예시 설명 상자([박스시작] ... [박스끝])가 있어도 본래 질문에 대한 답을 구하세요.
 2. 블라인드 독립 풀이(ai_solution, ai_answer):
-   - 처음부터 끝까지 스스로 풀어 LaTeX 수식($...$)을 포함한 단계별 풀이를 ai_solution에 작성하고, 최종 답을 ai_answer에 적으세요(객관식이고 선지가 있으면 선지 번호 ①~⑤, 주관식이면 기약분수/수식).
-   - V2 렌더 이미지나 원본 이미지가 있으면 그 이미지도 함께 보고 푸세요(텍스트에 도형 정보가 없어도 이미지에 도형이 있으면 그것을 근거로 풉니다).
-   - 텍스트와 이미지를 모두 합쳐도 발문 절단·보기 누락·도형 누락 때문에 전혀 풀 수 없을 때만 ai_answer는 "판단불가"로 적고 quality_issue에 원인을 적으세요.
+   - 처음부터 끝까지 스스로 풀어 LaTeX 수식($...$)을 포함한 단계별 풀이를 ai_solution에 작성하고, 최종 답을 ai_answer에 적으세요(객관식이고 선지가 있으면 선지 번호 ①~⑤, 주관식이면 기약분수/수식, 표 빈칸 채우기면 빈칸 값들).
+   - 중요: 만약 텍스트 데이터(common_stem, stem)에 지시문이나 문장이 빠져 있거나 다른 문항 숫자('36' 등)가 잘못 들어 있더라도, 첨부된 "원본 이미지"와 "세트 머리 원본 이미지"에서 실제 문제와 공통 지시문을 직접 읽고 문제를 끝까지 풀어 정확한 ai_answer 를 구하세요! 원본 이미지에서 문제를 읽을 수 있는데 텍스트가 불완전하다는 이유로 ai_answer 를 "판단불가"로 적지 마세요(텍스트/V2 화면의 누락은 아래 4번 품질 검수에서 stem_ok=false, fidelity_ok=false 로 지적하고 proposed_stem / proposed_common_stem 으로 고치면 됩니다).
+   - 텍스트와 원본 이미지를 모두 합쳐도 문제가 잘려 전혀 풀 수 없을 때만 ai_answer는 "판단불가"로 적으세요.
 3. 연산 복잡도 카운트(arithmetic_ops):
    - 당신이 작성한 ai_solution의 각 계산 단계에서 실제로 수행한 세부 연산 코드(제공된 arithmetic_primitives 목록의 code)와 등장 횟수(count >= 1)를 정확히 세어 기록하세요.
 4. 품질 검수 — 학생 시점(V2 렌더링 이미지) 기준:
@@ -876,32 +987,61 @@ export async function handleTextbookProblemReview(
     // 공통 발문이 개별 발문에 그대로 들어 있으면 학생 화면에 지시문이 두 번 보인다. 모델 판정과 무관하게 데이터 오류로 잡는다.
     const dupFix = commonStemFix(it.common_stem, it.stem);
     const dupStripped = dupFix?.stem ?? null;
-    const stemOk = b.stem_ok !== false && dupStripped === null;
+    const corruptedCommon = dupFix === null && isCorruptedCommonStem(it.common_stem);
+    const hasFigures = itemHasFigures(it, b);
+    const stemOk = b.stem_ok !== false && dupStripped === null && !corruptedCommon;
     const choicesOk = b.choices_ok !== false;
     const figureOk = b.figure_ok !== false;
     const latexOk = b.latex_v2_ok !== false;
-    const fidelityOk = b.fidelity_ok !== false;
+    const fidelityOk = b.fidelity_ok !== false && !corruptedCommon;
     const issueTitle: string | null = typeof b.quality_issue_title === 'string' && b.quality_issue_title.trim()
       ? b.quality_issue_title
       : dupStripped !== null
       ? '공통 발문 중복 표시 (개별 발문에 공통 지시문이 다시 들어 있음)'
+      : corruptedCommon
+      ? '공통 지시문 누락·오염 (공통 발문에 지시문 대신 수식·숫자만 들어 있음)'
+      : hasFigures
+      ? '그림·도형 문항 원본 대조 및 크기·배치 확인 필요'
       : null;
     const issueDetail: string | null = typeof b.quality_issue_detail === 'string' && b.quality_issue_detail.trim()
       ? b.quality_issue_detail
       : dupStripped !== null
       ? 'common_stem과 stem 에 같은 지시문이 들어 있어 학생 화면에 두 번 표시됩니다. 개별 발문에서 공통 부분을 제거하면 해결됩니다.'
+      : corruptedCommon
+      ? `공통 발문(common_stem="${String(it.common_stem ?? '')}")에 지시문 문장이 없어 원본 세트 머리 지시문으로 복원해야 합니다.`
+      : hasFigures
+      ? '이미지가 있는 문항은 교재 원본과 대조해 그림 크기·위치를 자동 조정하고 수정안을 반영합니다.'
       : null;
-    const qualityOk = stemOk && choicesOk && figureOk && latexOk && fidelityOk && !issueTitle;
+    // 이미지가 있는 문항은 무조건 품질 문제로 취급해 원본 대조(크기·배치 수정안 제시)를 거치게 한다.
+    const qualityOk = !hasFigures && stemOk && choicesOk && figureOk && latexOk && fidelityOk && !issueTitle;
 
-    const solutionFound = s?.found === true && typeof s?.solution_transcribed === 'string' && s.solution_transcribed.trim().length > 0;
+    const cleanedVisionSol = s?.found === true
+      ? cleanSolutionTranscribedText(s.solution_transcribed, it.problem_number, s.solution_answer)
+      : '';
+    const solutionAnswerFound = s?.found === true && typeof s?.solution_answer === 'string' && s.solution_answer.trim().length > 0;
+    const solutionTextFound = s?.found === true && cleanedVisionSol.length > 0;
+    const solutionFound = solutionTextFound || solutionAnswerFound;
     const sol = effectiveSolution(it, s);
-    const answerMatched = c.answer_matched === true;
+    const existingAnsRaw = String(it.existing_answer ?? '').trim();
+    const existingAnsMissingOrImage = !existingAnsRaw ||
+      String(it.answer_kind ?? '') === 'image' ||
+      /^(?:\[\s*image\s*\]|\(\s*image\s*\)|\[그림\])$/i.test(existingAnsRaw);
+    const normExisting = normAnsSimple(existingAnsRaw);
+    const normAi = normAnsSimple(String(b.ai_answer ?? ''));
+    const normSol = normAnsSimple(String(sol?.answer ?? ''));
+    const deterministicMatch = !existingAnsMissingOrImage &&
+      normExisting.length > 0 &&
+      normAi.length > 0 &&
+      b.ai_answer !== '판단불가' &&
+      normExisting === normAi &&
+      (!normSol || normExisting === normSol);
+    const answerMatched = !existingAnsMissingOrImage && (c.answer_matched === true || deterministicMatch);
     const matchMode = sol || it.has_solution_ref === true ? '3way' : '2way';
     const drafts = Array.isArray(c.draft_proposals) ? c.draft_proposals : [];
 
     const existing = await auth.admin
       .from('textbook_problem_analyses')
-      .select('solution_transcribed,solution_answer,solution_source,render_checks,quality_status,fix_proposal')
+      .select('solution_transcribed,solution_answer,solution_source,render_checks,quality_status,fix_proposal,engine_held_at,engine_hold_note')
       .eq('crop_id', cropId)
       .maybeSingle();
     const prev = (existing.data ?? {}) as Rec;
@@ -911,22 +1051,38 @@ export async function handleTextbookProblemReview(
     const keepHeld = prev.quality_status === 'held';
 
     // 데이터 수정 제안: 원문과 실제로 다를 때만 남긴다. 이미 적용된 제안은 비운다.
-    const issueKind: IssueKind = dupStripped !== null ? 'data' : normalizeIssueKind(b.issue_kind, !qualityOk);
+    const issueKind: IssueKind = dupStripped !== null || corruptedCommon
+      ? 'data'
+      : hasFigures && b.issue_kind !== 'data'
+      ? 'figure'
+      : normalizeIssueKind(b.issue_kind, !qualityOk);
+    // 렌더 엔진 문제(본문·원본 충실도 이상이 없고 도형 문항도 아닌데 조판 엔진만 깨진 경우)는 1회차에서 바로 보류(held)로 넘긴다.
+    const autoHoldEngine = !qualityOk && issueKind === 'engine' && dupStripped === null && !corruptedCommon &&
+      fidelityOk && !hasFigures;
     // 공통 발문 중복은 규칙으로 바로 고친 본문을 제안한다(모델 제안보다 우선).
     const proposedStem = dupStripped !== null
       ? dupStripped
-      : issueKind === 'data' && typeof b.proposed_stem === 'string' && b.proposed_stem.trim() &&
+      : (issueKind === 'data' || hasFigures) && typeof b.proposed_stem === 'string' && b.proposed_stem.trim() &&
           b.proposed_stem.trim() !== String(it.stem ?? '').trim()
       ? b.proposed_stem.trim()
       : null;
     const proposedCommonStem = dupFix?.commonStem ?? (
-      issueKind === 'data' && typeof b.proposed_common_stem === 'string' && b.proposed_common_stem.trim() &&
+      (issueKind === 'data' || corruptedCommon) && typeof b.proposed_common_stem === 'string' && b.proposed_common_stem.trim() &&
         b.proposed_common_stem.trim() !== String(it.common_stem ?? '').trim()
         ? b.proposed_common_stem.trim()
         : null
     );
     const proposedChoices = issueKind === 'data' ? normalizeProposedChoices(b.proposed_choices) : null;
     const choicesDiffer = proposedChoices !== null && JSON.stringify(proposedChoices) !== JSON.stringify(it.choices ?? []);
+    const proposedAns = !answerMatched
+      ? (typeof c.proposed_answer === 'string' && c.proposed_answer.trim() && c.proposed_answer.trim() !== '판단불가'
+        ? c.proposed_answer.trim()
+        : (sol?.answer && sol.answer !== '판단불가'
+          ? sol.answer
+          : (typeof b.ai_answer === 'string' && b.ai_answer.trim() && b.ai_answer.trim() !== '판단불가'
+            ? b.ai_answer.trim()
+            : null)))
+      : null;
     const fixReason = dupFix?.commonStem
       ? '공통 발문(common_stem)에 개별 문항 본문까지 들어 있어, 공통 발문은 지시문만 남기고 개별 발문에서 지시문을 뺐습니다.'
       : dupStripped !== null
@@ -934,12 +1090,14 @@ export async function handleTextbookProblemReview(
       : typeof b.fix_reason === 'string'
       ? b.fix_reason
       : null;
-    const fixProposal: Rec = proposedStem || proposedCommonStem || choicesDiffer
+    const fixProposal: Rec = proposedStem || proposedCommonStem || choicesDiffer || proposedAns
       ? {
         kind: issueKind,
         stem: proposedStem,
         common_stem: proposedCommonStem,
         choices: choicesDiffer ? proposedChoices : null,
+        proposed_answer: proposedAns,
+        math_reason: !answerMatched && typeof c.mismatch_reason === 'string' ? c.mismatch_reason : null,
         reason: fixReason,
         reason_code: dupStripped !== null ? 'common_stem_duplicate' : null,
         source: dupStripped !== null ? 'system' : 'stage2',
@@ -947,47 +1105,57 @@ export async function handleTextbookProblemReview(
       }
       : {};
 
+    // 1회차 검수에서 수학적 대조에 아무 이상이 없으면 바로 자동 승인(approved)하고 문제은행 정답도 동기화한다.
+    const nextMathStatus = answerMatched ? 'approved' : 'issue';
     const mathFields = {
       ai_solution: typeof b.ai_solution === 'string' ? b.ai_solution : null,
       ai_answer: typeof b.ai_answer === 'string' ? b.ai_answer : null,
       arithmetic_counts: arithCounts,
       match_mode: matchMode,
       answer_matched: answerMatched,
-      mismatch_reason: typeof c.mismatch_reason === 'string' ? c.mismatch_reason : null,
+      mismatch_reason: answerMatched ? null : (typeof c.mismatch_reason === 'string' ? c.mismatch_reason : null),
       concept_ids: [...new Set(validConceptIds)],
       thinking_ids: [...new Set(validThinkingIds)],
       draft_proposals: drafts,
       analyzed_at: nowIso,
-      math_status: answerMatched ? 'clean' : 'issue',
+      math_status: nextMathStatus,
+      ...(answerMatched ? { math_approved_at: nowIso, math_approved_by: auth.userId } : {}),
       updated_at: nowIso,
     };
 
     if (mathOnly) {
       // solved_at 은 2단계 품질 판정의 시점이다(4단계가 그 뒤 수정 적용 여부를 본다). 수학만 다시 풀 때는 두고 analyzed_at 만 바꾼다.
+      const prevFp = (prev.fix_proposal ?? {}) as Rec;
       await auth.admin.from('textbook_problem_analyses').update({
         ...mathFields,
+        fix_proposal: proposedAns
+          ? { ...prevFp, proposed_answer: proposedAns, math_reason: typeof c.mismatch_reason === 'string' ? c.mismatch_reason : null }
+          : prevFp,
         ...(solutionFound && !keepManual
           ? {
-            solution_transcribed: String(s!.solution_transcribed).trim(),
-            solution_answer: typeof s!.solution_answer === 'string' ? s!.solution_answer : null,
+            solution_transcribed: cleanedVisionSol || (prev.solution_transcribed ?? null),
+            solution_answer: typeof s!.solution_answer === 'string' ? s!.solution_answer : (prev.solution_answer ?? null),
             solution_source: 'textbook_vision',
             solution_extracted_at: nowIso,
           }
           : {}),
       }).eq('crop_id', cropId);
     } else {
+      const nextQualStatus = keepHeld || autoHoldEngine ? 'held' : (qualityOk ? 'clean' : 'issue');
       await auth.admin.from('textbook_problem_analyses').upsert({
         crop_id: cropId,
         academy_id: academyId,
         solution_transcribed: keepManual
           ? prev.solution_transcribed
-          : solutionFound
-          ? String(s!.solution_transcribed).trim()
-          : (prev.solution_source === 'textbook_vision' ? prev.solution_transcribed ?? null : null),
+          : solutionTextFound
+          ? cleanedVisionSol
+          : (prev.solution_source === 'textbook_vision'
+            ? cleanSolutionTranscribedText(prev.solution_transcribed, it.problem_number, prev.solution_answer) || null
+            : null),
         solution_answer: keepManual
           ? prev.solution_answer ?? null
-          : solutionFound
-          ? (typeof s!.solution_answer === 'string' ? s!.solution_answer : null)
+          : solutionAnswerFound
+          ? String(s!.solution_answer).trim()
           : (prev.solution_source === 'textbook_vision' ? prev.solution_answer ?? null : null),
         solution_source: keepManual ? 'manual' : solutionFound ? 'textbook_vision' : (prev.solution_source ?? null),
         solution_extracted_at: solutionFound ? nowIso : undefined,
@@ -999,6 +1167,7 @@ export async function handleTextbookProblemReview(
           figure_ok: figureOk,
           latex_v2_ok: latexOk,
           fidelity_ok: fidelityOk,
+          has_figures: hasFigures,
           issue_title: issueTitle,
           issue_detail: issueDetail,
           issue_kind: issueKind,
@@ -1013,16 +1182,20 @@ export async function handleTextbookProblemReview(
         render_checked_at: null,
         solved_at: nowIso,
         ...mathFields,
-        quality_status: keepHeld ? 'held' : (qualityOk ? 'clean' : 'issue'),
+        quality_status: nextQualStatus,
+        ...(autoHoldEngine && !keepHeld
+          ? {
+            engine_held_at: nowIso,
+            engine_held_by: auth.userId,
+            engine_hold_note: issueTitle ?? '렌더 엔진 조판 확인 필요',
+          }
+          : {}),
       });
     }
 
     await auth.userClient.rpc('textbook_problem_recalc_scores', { p_crop_id: cropId });
 
     if (!answerMatched) {
-      const proposedAns = typeof c.proposed_answer === 'string' && c.proposed_answer.trim()
-        ? c.proposed_answer.trim()
-        : String(b.ai_answer ?? '');
       await upsertOpenFinding(auth, {
         academy_id: academyId,
         crop_id: cropId,
@@ -1051,7 +1224,15 @@ export async function handleTextbookProblemReview(
         ai_run_id: aiRunId,
       }).catch(() => null);
     } else {
+      if (existingAnsRaw) {
+        await auth.userClient.rpc('textbook_review_sync_pb_answer', {
+          p_crop_id: cropId,
+          p_answer: existingAnsRaw,
+        }).catch(() => null);
+      }
       await resolveOpenFinding(auth, cropId, 'ai_answer_compare').catch(() => null);
+      await resolveOpenFinding(auth, cropId, 'load:answer_missing').catch(() => null);
+      await resolveOpenFinding(auth, cropId, 'load:answer_mismatch').catch(() => null);
     }
 
     // 수학만 다시 풀 때는 품질 지적을 건드리지 않는다.
@@ -1084,7 +1265,7 @@ export async function handleTextbookProblemReview(
             keeps: '정답·해설 위치는 그대로 유지합니다.',
           }
           : null,
-        status: 'open',
+        status: keepHeld || autoHoldEngine ? 'held' : 'open',
         ai_run_id: aiRunId,
       }).catch(() => null);
     } else if (!mathOnly) {
@@ -1151,13 +1332,17 @@ export function isMathResolveTarget(it: Rec): boolean {
  */
 export function effectiveSolution(it: Rec, vision: Rec | undefined): { text: string; answer: string | null } | null {
   const answerOf = (v: unknown) => typeof v === 'string' && v.trim() ? v.trim() : null;
-  const storedText = typeof it.solution_transcribed === 'string' ? it.solution_transcribed.trim() : '';
-  if (it.solution_source === 'manual' && storedText) return { text: storedText, answer: answerOf(it.solution_answer) };
-  const visionText = vision?.found === true && typeof vision.solution_transcribed === 'string'
-    ? vision.solution_transcribed.trim()
+  const storedAns = answerOf(it.solution_answer);
+  const storedText = typeof it.solution_transcribed === 'string'
+    ? cleanSolutionTranscribedText(it.solution_transcribed, it.problem_number, storedAns)
     : '';
-  if (visionText) return { text: visionText, answer: answerOf(vision!.solution_answer) };
-  if (it.solution_source === 'textbook_vision' && storedText) return { text: storedText, answer: answerOf(it.solution_answer) };
+  if (it.solution_source === 'manual' && (storedText || storedAns)) return { text: storedText, answer: storedAns };
+  const visionAns = vision?.found === true ? answerOf(vision.solution_answer) : null;
+  const visionText = vision?.found === true && typeof vision.solution_transcribed === 'string'
+    ? cleanSolutionTranscribedText(vision.solution_transcribed, it.problem_number, visionAns)
+    : '';
+  if (visionText || visionAns) return { text: visionText, answer: visionAns };
+  if (it.solution_source === 'textbook_vision' && (storedText || storedAns)) return { text: storedText, answer: storedAns };
   return null;
 }
 
@@ -1331,23 +1516,33 @@ export async function handleTextbookProblemRenderCheck(
     const fixAppliedAfterSolve = typeof fp.applied_at === 'string' &&
       Array.isArray(fp.applied_fields) && fp.applied_fields.length > 0 &&
       (!a.solved_at || Date.parse(String(fp.applied_at)) > Date.parse(String(a.solved_at)));
-    const stage2Ok = fixAppliedAfterSolve || originalCompared ||
+    const hasFigures = qc.has_figures === true || qc.issue_kind === 'figure' || sizeRatio !== null ||
+      (Array.isArray((fp.figure_measure as Rec | undefined)?.figures) &&
+        ((fp.figure_measure as Rec).figures as unknown[]).length > 0);
+    // 그림이 있는 문항은 1회차에서 수정안(figure_layout·figure_crops)을 제시한 뒤 2차(품질 일괄 처리)에서 DB에 적용된 뒤에야 통과로 본다.
+    const figureAppliedOrNone = !hasFigures || typeof fp.applied_at === 'string';
+    const stage2Ok = fixAppliedAfterSolve || (originalCompared && figureAppliedOrNone) ||
       (qc.stem_ok !== false && qc.choices_ok !== false && qc.figure_ok !== false &&
         qc.latex_v2_ok !== false && qc.fidelity_ok !== false && !qc.issue_title);
     const prevStatus = String(a.quality_status ?? 'pending');
-    // 승인·엔진 보류는 재검수로 바꾸지 않는다. 승인 문항이 원본과 다르면 승인은 두고 표시만 한다(finding).
-    // 보류 문항은 엔진 목록에서 재렌더 결과를 보고 운영자가 승인한다.
+    const figureOnly = problemOk && answerOk && solutionOk && fidelityOk && (!figurePositionOk || !figureSizeOk || (hasFigures && !figureAppliedOrNone));
+    const issueKind = figureOnly ? 'figure' : normalizeIssueKind(r.issue_kind, !renderOk);
+    const autoHoldEngine = prevStatus !== 'approved' && prevStatus !== 'held' && !renderOk &&
+      issueKind === 'engine' && fidelityOk && !hasFigures;
+    // 승인·엔진 보류는 재검수로 바꾸지 않는다. 1회차·2차에서 이상이 없고(그림 문항은 수정안 반영 후) 통과한 문항은 바로 승인(approved)한다.
     const nextStatus = prevStatus === 'approved' || prevStatus === 'held'
       ? prevStatus
-      : (renderOk && stage2Ok ? 'clean' : 'issue');
-    const figureOnly = problemOk && answerOk && solutionOk && fidelityOk && (!figurePositionOk || !figureSizeOk);
-    const issueKind = figureOnly ? 'figure' : normalizeIssueKind(r.issue_kind, !renderOk);
+      : autoHoldEngine
+      ? 'held'
+      : (renderOk && stage2Ok && figureAppliedOrNone ? 'approved' : 'issue');
     const issueTitle = typeof r.issue_title === 'string' && r.issue_title.trim()
       ? r.issue_title
       : !figureSizeOk
       ? `그림 크기가 원본과 다름 (원본 대비 ${sizeRatio}배)`
       : !figurePositionOk
       ? '그림 위치가 원본과 다름'
+      : hasFigures && !figureAppliedOrNone
+      ? '그림·도형 문항 원본 대조 수정안 확인 필요'
       : null;
 
     await auth.admin.from('textbook_problem_analyses').update({
@@ -1360,8 +1555,8 @@ export async function handleTextbookProblemRenderCheck(
         figure_size_ratio: sizeRatio,
         original_compared: originalCompared,
         flagged_after_approval: prevStatus === 'approved' && !renderOk,
-        issue_title: renderOk ? null : issueTitle,
-        issue_detail: renderOk ? null : (r.issue_detail ?? null),
+        issue_title: renderOk && figureAppliedOrNone ? null : issueTitle,
+        issue_detail: renderOk && figureAppliedOrNone ? null : (r.issue_detail ?? null),
         issue_kind: issueKind,
         engine_symptom: issueKind === 'engine' && typeof r.engine_symptom === 'string' ? r.engine_symptom : null,
         solution_kind: x.solutionKind,
@@ -1371,6 +1566,16 @@ export async function handleTextbookProblemRenderCheck(
       },
       render_checked_at: nowIso,
       quality_status: nextStatus,
+      ...(nextStatus === 'approved' && prevStatus !== 'approved'
+        ? { quality_approved_at: nowIso, quality_approved_by: auth.userId }
+        : {}),
+      ...(autoHoldEngine
+        ? {
+          engine_held_at: nowIso,
+          engine_held_by: auth.userId,
+          engine_hold_note: issueTitle ?? (typeof r.engine_symptom === 'string' ? r.engine_symptom : '렌더 엔진 조판 확인 필요'),
+        }
+        : {}),
       updated_at: nowIso,
     }).eq('crop_id', x.cropId);
 
@@ -1398,13 +1603,15 @@ export async function handleTextbookProblemRenderCheck(
           issue_kind: issueKind,
           engine_symptom: issueKind === 'engine' ? r.engine_symptom ?? null : null,
         },
-        status: prevStatus === 'held' ? 'held' : 'open',
+        status: prevStatus === 'held' || autoHoldEngine ? 'held' : 'open',
         ai_run_id: aiRunId,
       }).catch(() => null);
     } else {
       await resolveOpenFinding(auth, x.cropId, 'ai_v2_render_student_view').catch(() => null);
       // 원본과 직접 대조해 정상이면 2단계(문항 카드) 지적도 끝난 것으로 본다.
-      if (originalCompared) await resolveOpenFinding(auth, x.cropId, 'ai_quality_v2_student_view').catch(() => null);
+      if (originalCompared && figureAppliedOrNone) {
+        await resolveOpenFinding(auth, x.cropId, 'ai_quality_v2_student_view').catch(() => null);
+      }
     }
     results.push({
       crop_id: x.cropId,

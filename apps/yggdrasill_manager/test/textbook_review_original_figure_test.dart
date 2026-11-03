@@ -123,8 +123,29 @@ void main() {
       final fixed = computeCommonStemFix('36=2^{2}\\times3^{2}\n[문단]\n$tableStem', tableStem);
       expect(fixed?.commonStem, '다음 표의 빈칸에 알맞은 수를 써넣어라.');
       expect(fixed?.stem, r'15=3\times5[표시작]×|1[표끝]');
-      expect(computeCommonStemFix(r'36=2^{2}\times3^{2}', tableStem), isNull);
+      expect(computeCommonStemFix(r'36=2^{2}\times3^{2}', tableStem)?.commonStem, '다음 표의 빈칸에 알맞은 수를 써넣어라.');
       expect(computeCommonStemFix('36', '36\n480'), isNull);
+    });
+
+    test('cleanSolutionTranscribedText 와 resolvedMathAnswer: [해설]·정답 줄 이중 추출을 제거하고 정답 수정안을 우선 쓴다', () {
+      expect(
+        cleanSolutionTranscribedText(
+          '16 답 \$\\times\$\n\$\\boxed{2}\$는 소수이지만, 나머지 짝수는 합성수이다.',
+          problemNumber: '16',
+          solutionAnswer: r'$\times$',
+        ),
+        r'$\boxed{2}$는 소수이지만, 나머지 짝수는 합성수이다.',
+      );
+      expect(
+        cleanSolutionTranscribedText('[정답] ③\n[해설]\n풀이 본문', problemNumber: '03', solutionAnswer: '③'),
+        '풀이 본문',
+      );
+      final withProp = _item({
+        'math_status': 'issue',
+        'existing_answer': '',
+        'fix_proposal': {'proposed_answer': '1, 3, 5, 15'},
+      });
+      expect(withProp.resolvedMathAnswer, '1, 3, 5, 15');
     });
 
     test('hasPendingFigureProposal: 배치가 지금과 다르거나 잘라 등록할 그림이 있고 아직 적용 전', () {

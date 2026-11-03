@@ -21,7 +21,32 @@ and RPCs (`textbook_review_*`), first read `docs/architecture/textbook-review.md
 - Student code must not read review tables or functions.
 - The printed solution (`solution_transcribed`, `solution_source`) comes from
   Vision on the solution PDF crop or from the owner. Never fill it from the AI
-  solve (`ai_solution`); keep the two apart.
+  solve (`ai_solution`); keep the two apart. Strip `[해설]` / `[풀이]` headers
+  and `16 답 ×` / `[정답]` answer lines from `solution_transcribed`
+  (`cleanSolutionTranscribedText` / `textbook_review_clean_solution_text`) so
+  the answer and `[해설]` label are never duplicated on V2 cards.
+- Two-round review flow:
+  1. **Round 1 ("중단원 문항 검수 실행")**:
+     - Clean math problems (without missing/image answers) and clean
+       non-figure quality problems that pass the original-compared V2 render
+       check are **auto-approved (`approved`)** right away.
+     - Pure rendering engine issues (`issue_kind = 'engine'`) are
+       **auto-held (`held`)** and excluded from the error count and approval
+       denominator.
+     - Every problem with figures (`hasFigures`) is treated as a quality issue
+       (`issue_kind = 'figure'`) so it goes through original comparison,
+       automatic figure sizing/placement, and proposal presentation.
+     - Every remaining math or quality error problem runs
+       `textbook_problem_fix` (reading the body PDF original, set header PDF,
+       and answer/solution PDF crop) to generate and present unified proposals
+       (`fix_proposal.proposed_answer`, `stem`, `common_stem`, `choices`,
+       `figure_layout`, `figure_crops`) in the UI editors without applying
+       them to `pb_questions` / `textbook_problem_answers` yet.
+  2. **Round 2 ("수학 일괄 처리" / "품질 일괄 처리")**:
+     - After the owner reviews/tweaks the presented proposals, clicking
+       "수학 일괄 처리" or "품질 일괄 처리" applies the proposals to DB
+       (`textbook_problem_answers` + `pb_questions`), re-verifies only the
+       affected problems, and approves those that pass.
 - AI quality judgement is made from the V2 render images (what students see),
   not from the stem text. The manager app prepares the images (solution crop,
   V2 cards, and the original problem / set header rendered from the body PDF

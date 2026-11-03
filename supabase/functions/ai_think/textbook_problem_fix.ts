@@ -5,6 +5,7 @@ import { createAiProvider } from '../_shared/ai/provider.ts';
 import { type AiContentPart, finalText } from '../_shared/ai/types.ts';
 import { recordAiRun } from '../_shared/ai/usage.ts';
 import {
+  cleanSolutionTranscribedText,
   figureMarkerCount,
   normalizeProposedChoices,
   parseProblems,
@@ -144,8 +145,8 @@ export function buildFigureProposal(args: {
   currentLayout: unknown;
 }): FigureProposal | null {
   const { measures, emPx, imageWidthPx } = args;
-  if (measures.length === 0) return null;
   const ordered = orderedFigureAssets(args.assets);
+  if (measures.length === 0 && ordered.length === 0) return null;
   const maxIdx = ordered.reduce((m, a) => Math.max(m, Number.parseInt(String(a.figure_index), 10) || 0), 0);
   const cur = args.currentLayout && typeof args.currentLayout === 'object' ? args.currentLayout as Rec : {};
   const curItems = (Array.isArray(cur.items) ? cur.items : []).filter((x): x is Rec => !!x && typeof x === 'object');
@@ -154,19 +155,39 @@ export function buildFigureProposal(args: {
   const crops: FigureCropRequest[] = [];
   const used = new Set<string>();
   let extra = 0;
-  measures.forEach((m, i) => {
-    const asset = ordered[i];
-    const idx = asset ? Number.parseInt(String(asset.figure_index), 10) : maxIdx + (++extra);
-    const key = `idx:${idx}`;
-    const prev = curByKey.get(key) ?? curByKey.get(`ord:${i + 1}`);
-    const prevWidth = Number(prev?.widthEm);
-    const item = figureLayoutItem(m, emPx, imageWidthPx, Number.isFinite(prevWidth) && prevWidth > 0 ? prevWidth : 20);
-    const prevHeight = Number(prev?.heightEm);
-    items.push({ assetKey: key, ...item, heightEm: Number.isFinite(prevHeight) && prevHeight > 0 ? prevHeight : 1.6 });
-    used.add(key);
-    if (!asset) crops.push({ figure_index: idx, bbox_1k: [...m.bbox], reason: 'missing' });
-    else if (m.v2State === 'cut' || m.v2State === 'missing') crops.push({ figure_index: idx, bbox_1k: [...m.bbox], reason: 'cut' });
-  });
+  if (measures.length === 0) {
+    ordered.forEach((asset, i) => {
+      const idx = Number.parseInt(String(asset.figure_index), 10);
+      const key = `idx:${idx}`;
+      const prev = curByKey.get(key) ?? curByKey.get(`ord:${i + 1}`);
+      const prevWidth = Number(prev?.widthEm);
+      const prevHeight = Number(prev?.heightEm);
+      items.push({
+        assetKey: key,
+        widthEm: Number.isFinite(prevWidth) && prevWidth > 0 ? prevWidth : 16,
+        position: typeof prev?.position === 'string' && prev.position ? prev.position : 'below-stem',
+        anchor: typeof prev?.anchor === 'string' && prev.anchor ? prev.anchor : 'center',
+        offsetXEm: Number(prev?.offsetXEm) || 0,
+        offsetYEm: Number(prev?.offsetYEm) || 0,
+        heightEm: Number.isFinite(prevHeight) && prevHeight > 0 ? prevHeight : 1.6,
+      });
+      used.add(key);
+    });
+  } else {
+    measures.forEach((m, i) => {
+      const asset = ordered[i];
+      const idx = asset ? Number.parseInt(String(asset.figure_index), 10) : maxIdx + (++extra);
+      const key = `idx:${idx}`;
+      const prev = curByKey.get(key) ?? curByKey.get(`ord:${i + 1}`);
+      const prevWidth = Number(prev?.widthEm);
+      const item = figureLayoutItem(m, emPx, imageWidthPx, Number.isFinite(prevWidth) && prevWidth > 0 ? prevWidth : 20);
+      const prevHeight = Number(prev?.heightEm);
+      items.push({ assetKey: key, ...item, heightEm: Number.isFinite(prevHeight) && prevHeight > 0 ? prevHeight : 1.6 });
+      used.add(key);
+      if (!asset) crops.push({ figure_index: idx, bbox_1k: [...m.bbox], reason: 'missing' });
+      else if (m.v2State === 'cut' || m.v2State === 'missing') crops.push({ figure_index: idx, bbox_1k: [...m.bbox], reason: 'cut' });
+    });
+  }
   for (const it of curItems) {
     const k = String(it.assetKey ?? '');
     if (k && !used.has(k)) items.push(it);
@@ -258,6 +279,12 @@ const FIX_SCHEMA: Rec = {
           'engine_issue',
           'figures',
           'text_sample',
+          'proposed_answer',
+          'proposed_ai_answer',
+          'proposed_ai_solution',
+          'proposed_solution_answer',
+          'proposed_solution_transcribed',
+          'math_reason',
         ],
         properties: {
           crop_id: { type: 'string' },
@@ -275,6 +302,12 @@ const FIX_SCHEMA: Rec = {
           },
           fix_reason: { type: ['string', 'null'] },
           engine_issue: { type: ['string', 'null'] },
+          proposed_answer: { type: ['string', 'null'] },
+          proposed_ai_answer: { type: ['string', 'null'] },
+          proposed_ai_solution: { type: ['string', 'null'] },
+          proposed_solution_answer: { type: ['string', 'null'] },
+          proposed_solution_transcribed: { type: ['string', 'null'] },
+          math_reason: { type: ['string', 'null'] },
           figures: {
             type: 'array',
             items: {
@@ -334,7 +367,16 @@ const FIX_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔진의 [�
 - v2_state: V2 화면에서 그 그림의 상태 — 정상 "ok", 없음 "missing", 잘리거나 일부만 보임 "cut", 크기가 눈에 띄게 다름 "size",
   자리가 다름 "position", V2 화면이 없으면 "unknown".
 - text_sample: 원본 이미지에서 그림·선지·수식 블록이 끼지 않은 연속된 본문 글줄(2~4줄이 좋고, 1줄뿐이면 1줄)을 감싼 bbox_1k 와 그 줄 수 lines.
-  글자 크기를 재는 데 씁니다. 본문 글줄이 없으면 bbox_1k = [], lines = 0.`;
+  글자 크기를 재는 데 씁니다. 본문 글줄이 없으면 bbox_1k = [], lines = 0.
+
+[3. 정답·해설·AI 풀이 수정안 — 본문 PDF 원본 + 정답/해설 PDF 원본 대조]
+- 정답이 이상한 경우(math_status 가 "issue", 기존 저장 정답 existing_answer 가 비어 있음, "[image]" 로만 되어 있음, 또는 해설 정답·AI 정답과 불일치):
+  - 본문 PDF 원본 이미지(세트 머리 지시문·표 구조·빈칸 위치 포함)와 정답/해설 PDF 원본 이미지를 직접 읽고 대조해, 학생 채점과 문제은행에 바로 저장할 정확한 최종 정답을 proposed_answer 에 적으세요.
+  - 특히 정답이 표 빈칸 채우기이거나 이미지/다중 빈칸인 경우: 본문 표의 빈칸 순서(위→아래, 왼쪽→오른쪽)나 번호((1), (2)...)에 맞춰 정답/해설 이미지(또는 직접 푼 결과)의 값들을 빠짐없이 텍스트/LaTeX로 적으세요(예: "1, 3, 5, 15" 또는 "(1) 2 (2) 3"). 절대로 "[image]"나 "판단불가"로 적지 마세요.
+  - 원본 본문 이미지(세트 지시문 포함)를 보고 처음부터 다시 푼 풀이를 proposed_ai_solution 에, 그 답을 proposed_ai_answer 에 적으세요.
+  - 정답/해설 이미지가 주어졌으면 거기서 읽은 최종 정답을 proposed_solution_answer 에, 문항 번호·"답 ..." 줄·"[해설]" 머리말을 모두 뺀 순수 해설 본문만 proposed_solution_transcribed 에 적으세요(풀이 없이 답만 있으면 null).
+  - math_reason 에는 왜 이 정답으로 확정했는지 한 줄로 적으세요.
+- 수학 정답이 이미 일치하고(math_status 가 "approved" 또는 "clean") 기존 정답도 정상이면 proposed_answer, proposed_ai_answer, proposed_ai_solution, proposed_solution_answer, proposed_solution_transcribed, math_reason 은 모두 null 로 두세요.`;
 
 const MAX_FIX_CHUNK = 4;
 
@@ -407,9 +449,19 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
           common_stem: String(it.common_stem ?? '').trim(),
           stem: String(it.stem ?? '').slice(0, 4000),
           choices: it.choices,
+          existing_answer: it.existing_answer ?? null,
+          answer_kind: it.answer_kind ?? null,
+          pb_objective_answer_key: it.pb_objective_answer_key ?? '',
+          pb_subjective_answer: it.pb_subjective_answer ?? '',
+          solution_answer: it.solution_answer ?? null,
+          solution_transcribed: typeof it.solution_transcribed === 'string' ? it.solution_transcribed.slice(0, 2000) : null,
+          ai_answer: it.ai_answer ?? null,
+          math_status: it.math_status ?? 'pending',
+          quality_status: it.quality_status ?? 'pending',
           figure_asset_count: orderedFigureAssets(it.pb_figure_assets).length,
           stem_figure_markers: figureMarkerCount(it.stem),
           issues: {
+            math_mismatch: it.math_status === 'issue' ? (it.mismatch_reason ?? '기존 정답·해설 정답·AI 정답 불일치 또는 미저장') : null,
             problem_card: qc.issue_title ? `${qc.issue_title}: ${qc.issue_detail ?? ''}` : null,
             render_check: rc.issue_title ? `${rc.issue_title}: ${rc.issue_detail ?? ''}` : null,
           },
@@ -425,6 +477,10 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
     if (img.setHeaderImageDataUrl) {
       parts.push({ type: 'text', text: `[crop_id=${cid} · ${it.problem_number}번이 속한 세트 머리(공통 지시문) 원본 이미지]` });
       parts.push({ type: 'image', url: img.setHeaderImageDataUrl, detail: 'auto' });
+    }
+    if (img.solutionImageDataUrl) {
+      parts.push({ type: 'text', text: `[crop_id=${cid} · ${it.problem_number}번 정답/해설 PDF 영역 원본 이미지]` });
+      parts.push({ type: 'image', url: img.solutionImageDataUrl, detail: 'high' });
     }
     if (img.v2ProblemUrl) {
       parts.push({ type: 'text', text: `[crop_id=${cid} · ${it.problem_number}번 V2 렌더 화면(지금 학생이 보는 화면)]` });
@@ -493,15 +549,13 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
     const measures = parseFigureMeasures(r.figures);
     const size = img.originalSize;
     const emPx = size ? emPxFromTextSample(r.text_sample, size.height) : null;
-    const figure = size
-      ? buildFigureProposal({
-        measures,
-        emPx,
-        imageWidthPx: size.width,
-        assets: it.pb_figure_assets,
-        currentLayout: it.pb_figure_layout,
-      })
-      : null;
+    const figure = buildFigureProposal({
+      measures,
+      emPx,
+      imageWidthPx: size?.width ?? 0,
+      assets: it.pb_figure_assets,
+      currentLayout: it.pb_figure_layout,
+    });
     // 새로 등록할 그림이 있는데 본문에 그림 자리가 모자라면 마커를 붙인다.
     if (figure && figure.crops.some((c) => c.reason === 'missing')) {
       const base = keepRuleText && typeof prev.stem === 'string' ? prev.stem : (stem ?? curStem);
@@ -509,17 +563,39 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
       if (withMarkers !== base) stem = withMarkers;
     }
 
+    const trimOrNull = (v: unknown) => typeof v === 'string' && v.trim() && v.trim() !== '판단불가' ? v.trim() : null;
+    const proposedAnswer = trimOrNull(r.proposed_answer) ??
+      (it.math_status === 'issue'
+        ? (trimOrNull(r.proposed_solution_answer) ?? trimOrNull(r.proposed_ai_answer) ??
+          trimOrNull(prev.proposed_answer) ?? trimOrNull(it.solution_answer) ?? trimOrNull(it.ai_answer))
+        : trimOrNull(prev.proposed_answer));
+    const proposedAiAnswer = trimOrNull(r.proposed_ai_answer);
+    const proposedAiSolution = trimOrNull(r.proposed_ai_solution);
+    const proposedSolAnswer = trimOrNull(r.proposed_solution_answer);
+    const cleanedSolText = typeof r.proposed_solution_transcribed === 'string' && r.proposed_solution_transcribed.trim()
+      ? cleanSolutionTranscribedText(r.proposed_solution_transcribed, it.problem_number, proposedSolAnswer ?? proposedAnswer ?? it.solution_answer)
+      : '';
+    const proposedSolTranscribed = cleanedSolText || null;
+    const mathReason = trimOrNull(r.math_reason) ?? trimOrNull(prev.math_reason);
+
     const hasText = !!(stem || common || choices);
+    const engineSymptom = typeof r.engine_issue === 'string' && r.engine_issue.trim() ? r.engine_issue.trim() : null;
     const fixProposal: Rec = {
-      kind: hasText ? 'data' : figure ? 'figure' : r.engine_issue ? 'engine' : 'none',
+      kind: hasText ? 'data' : figure ? 'figure' : engineSymptom ? 'engine' : 'none',
       stem,
       common_stem: common,
       choices,
+      proposed_answer: proposedAnswer,
+      proposed_ai_answer: proposedAiAnswer,
+      proposed_ai_solution: proposedAiSolution,
+      proposed_solution_answer: proposedSolAnswer,
+      proposed_solution_transcribed: proposedSolTranscribed,
+      math_reason: mathReason,
       reason: typeof r.fix_reason === 'string' && r.fix_reason.trim() ? r.fix_reason.trim() : null,
       reason_code: null,
       source: 'fix_pass',
       text_matches_original: textSame,
-      engine_issue: typeof r.engine_issue === 'string' && r.engine_issue.trim() ? r.engine_issue.trim() : null,
+      engine_issue: engineSymptom,
       figure_layout: figure?.layout ?? null,
       figure_crops: figure?.crops ?? [],
       figure_measure: {
@@ -538,13 +614,53 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
       if (stem && figure?.crops.some((c) => c.reason === 'missing')) fixProposal.stem = stem;
     }
 
-    await auth.admin.from('textbook_problem_analyses').update({ fix_proposal: fixProposal, updated_at: nowIso }).eq('crop_id', cid);
+    // 본문·그림 수정이 전혀 필요 없고 조판 엔진 문제만 있는 문항은 바로 보류(held)로 전환한다.
+    const autoHoldEngine = !hasText && !figure && !!engineSymptom &&
+      it.quality_status !== 'approved' && it.quality_status !== 'held';
+    const keepManualSol = it.solution_source === 'manual' && typeof it.solution_transcribed === 'string' && it.solution_transcribed.trim();
+    const updatePatch: Rec = {
+      fix_proposal: fixProposal,
+      updated_at: nowIso,
+      ...(proposedAiAnswer && (!it.ai_answer || it.ai_answer === '판단불가' || it.math_status === 'issue')
+        ? {
+          ai_answer: proposedAiAnswer,
+          ...(proposedAiSolution ? { ai_solution: proposedAiSolution } : {}),
+        }
+        : {}),
+      ...(!keepManualSol && (proposedSolAnswer || proposedSolTranscribed)
+        ? {
+          ...(proposedSolAnswer && !it.solution_answer ? { solution_answer: proposedSolAnswer } : {}),
+          ...(proposedSolTranscribed && !it.solution_transcribed ? { solution_transcribed: proposedSolTranscribed } : {}),
+          solution_source: it.solution_source ?? 'textbook_vision',
+        }
+        : {}),
+      ...(autoHoldEngine
+        ? {
+          quality_status: 'held',
+          engine_held_at: nowIso,
+          engine_held_by: auth.userId,
+          engine_hold_note: engineSymptom,
+        }
+        : {}),
+    };
+
+    await auth.admin.from('textbook_problem_analyses').update(updatePatch).eq('crop_id', cid);
+    if (autoHoldEngine) {
+      await auth.admin
+        .from('textbook_review_findings')
+        .update({ status: 'held' })
+        .eq('crop_id', cid)
+        .in('axis', ['fidelity', 'output'])
+        .eq('status', 'open');
+    }
     results.push({
       crop_id: cid,
       has_text_fix: !!(fixProposal.stem || fixProposal.common_stem || fixProposal.choices),
+      has_math_fix: !!proposedAnswer,
       figures: measures.length,
       figure_crops: figure?.crops.length ?? 0,
       text_matches_original: textSame,
+      held_engine: autoHoldEngine,
     });
   }
 

@@ -1,12 +1,15 @@
 import { assert, assertEquals } from 'jsr:@std/assert@1';
 import {
+  cleanSolutionTranscribedText,
   combineStem,
   commonStemFix,
   effectiveSolution,
   figureMarkerCount,
   figureSizeRatioOk,
+  isCorruptedCommonStem,
   isMathResolveTarget,
   isReviewTodo,
+  itemHasFigures,
   normalizeIssueKind,
   normalizeProposedChoices,
   parseReviewImages,
@@ -108,9 +111,42 @@ Deno.test('공통 발문에 개별 본문까지 통째로 들어 있으면 공�
     stem: '15=3\\times5[표시작]×|1[표끝]',
     commonStem: '다음 표의 빈칸에 알맞은 수를 써넣어라.',
   });
-  // 이미 잘못 줄어든 공통 발문('36=2^2×3^2'만 남은 상태)은 다른 문항에서 개별 발문을 자르지 않는다
-  assertEquals(commonStemFix('36=2^{2}\\times3^{2}', tableStem), null);
+  // 이미 잘못 줄어든 공통 발문('36=2^2×3^2'만 남은 상태)인데 개별 발문 첫 문단에 실제 공통 지시문이 남아 있으면 지시문을 복구한다
+  assertEquals(commonStemFix('36=2^{2}\\times3^{2}', tableStem), {
+    stem: '15=3\\times5[표시작]×|1[표끝]',
+    commonStem: '다음 표의 빈칸에 알맞은 수를 써넣어라.',
+  });
   assertEquals(commonStemFix('36', '36\n480'), null);
+  assert(isCorruptedCommonStem('36'));
+  assert(isCorruptedCommonStem('36=2^{2}\\times3^{2}'));
+  assert(!isCorruptedCommonStem('다음 수의 약수의 개수를 구하여라.'));
+  assert(!isCorruptedCommonStem(''));
+});
+
+Deno.test('원본 해설 전사 정리: [해설] 머리말과 문항번호·답/정답 줄 이중 추출을 제거한다', () => {
+  assertEquals(
+    cleanSolutionTranscribedText('16 답 $\\times$\n$\\boxed{2}$는 소수이지만, 나머지 짝수는 합성수이다.', '16', '$\\times$'),
+    '$\\boxed{2}$는 소수이지만, 나머지 짝수는 합성수이다.',
+  );
+  assertEquals(
+    cleanSolutionTranscribedText('[정답] ③\n[해설]\n$2^3=8$이므로 답은 ③이다.', '05', '③'),
+    '$2^3=8$이므로 답은 ③이다.',
+  );
+  assertEquals(
+    cleanSolutionTranscribedText('[해설] 16 답 × [문단] [해설] 2는 소수이다.', '16', '×'),
+    '2는 소수이다.',
+  );
+  assertEquals(
+    cleanSolutionTranscribedText('16 답 $\\times$', '16', '$\\times$'),
+    '',
+  );
+});
+
+Deno.test('그림 문항 판별: 그림 자산·[그림] 마커·AI figure 판정이 있으면 무조건 그림 문항으로 분류한다', () => {
+  assert(itemHasFigures({ pb_figure_assets: [{ figure_index: 1, path: 'a.png' }], stem: 'x' }));
+  assert(itemHasFigures({ pb_figure_assets: [], stem: '다음 그림에서[그림]' }));
+  assert(itemHasFigures({ pb_figure_assets: [], stem: 'x' }, { issue_kind: 'figure' }));
+  assert(!itemHasFigures({ pb_figure_assets: [], stem: '그림 없는 문항' }, { issue_kind: 'none', figure_ok: true }));
 });
 
 Deno.test('재검수 대상: 미검수·풀이 없음·해설 미전사(시도 전)만, 승인·전사 시도 후는 제외', () => {
