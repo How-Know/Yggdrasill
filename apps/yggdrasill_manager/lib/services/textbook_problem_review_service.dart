@@ -722,6 +722,30 @@ class TextbookProblemReviewItem {
   DateTime? get fixPassAt => fixProposal['fix_pass_at'] is String ? DateTime.tryParse('${fixProposal['fix_pass_at']}') : null;
   DateTime? get fixAppliedAt => fixProposal['applied_at'] is String ? DateTime.tryParse('${fixProposal['applied_at']}') : null;
 
+  /// AI·규칙 수정안이 DB 에 반영된 내역 한 줄 요약. 반영된 적이 없으면 null.
+  String? get appliedFixSummary {
+    if (fixAppliedAt == null) return null;
+    final fields = [
+      for (final x in (fixProposal['applied_fields'] is List ? fixProposal['applied_fields'] as List : const []))
+        switch ('$x') {
+          'common_stem' => '공통 발문',
+          'stem' => '개별 발문',
+          'choices' => '선지',
+          'figure_assets' => '원본 크롭 그림',
+          'figure_layout' => '그림 크기·배치',
+          _ => '$x',
+        },
+    ];
+    final note = '${fixProposal['applied_note'] ?? ''}'.trim();
+    final reason = '${fixProposal['reason'] ?? ''}'.trim();
+    final parts = <String>[
+      if (fields.isNotEmpty) '${fields.join('·')} DB 반영 완료' else if (note.isNotEmpty) '$note 완료' else '수정안 DB 반영 완료',
+      if (fields.isNotEmpty && note.isNotEmpty) note,
+      if (reason.isNotEmpty && reason != note) reason,
+    ];
+    return parts.join(' — ');
+  }
+
   /// 수정 단계 대상:
   /// 1) 수학 오류가 있는데 아직 정답 수정안(proposedAnswer)이나 2:1 합의 답이 없는 문항(원본 PDF + 정답/해설 PDF 대조 필요),
   /// 2) 품질 오류 문항·그림 문항(승인·보류·미검수 제외)과, 품질 승인 뒤라도 2단계/4단계에서 공통 발문·지시문 누락이나 원본 불일치가 남아 있는 문항.

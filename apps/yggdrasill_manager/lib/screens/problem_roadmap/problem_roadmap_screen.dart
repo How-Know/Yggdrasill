@@ -291,6 +291,23 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
       _figureLayoutDirty(item) ||
       _pendingFigureCrops(item).isNotEmpty;
 
+  /// 수학 정답 입력칸이 DB 저장 정답과 다른가
+  bool _mathEditDirty(TextbookProblemReviewItem item) =>
+      _answerEditCtrl.text.trim() != item.existingAnswer.trim();
+
+  /// 해설 편집칸(해설 정답·원본 해설·AI 풀이)이 DB 저장값과 다른가
+  bool _solutionEditDirty(TextbookProblemReviewItem item) =>
+      _origAnswerCtrl.text.trim() != (item.solutionAnswer ?? '').trim() ||
+      _origSolutionCtrl.text.trim() != (item.solutionTranscribed ?? '').trim() ||
+      _solutionEditCtrl.text.trim() != (item.aiSolution ?? '').trim();
+
+  /// 시각 태그 선택이 DB 저장값과 다른가
+  bool _visualTagsDirty(TextbookProblemReviewItem item) {
+    final a = [..._editingVisualTags]..sort();
+    final b = [...item.visualTags]..sort();
+    return a.join('\u0001') != b.join('\u0001');
+  }
+
   bool _commonStemEditDirty(TextbookProblemReviewItem item) =>
       (item.isSetQuestion || _commonStemEditCtrl.text.trim().isNotEmpty) &&
       _commonStemEditCtrl.text.trim() != item.commonStem.trim();
@@ -2550,6 +2567,8 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
   Widget _buildMathReviewCard(TextbookProblemReviewItem item) {
     final (mLabel, mColor) = _statusBadge(item.mathStatus, '수학 검수');
     final matched = item.answerMatched;
+    final mathDirty = _mathEditDirty(item);
+    final needMathSave = item.mathStatus != 'approved' || mathDirty || item.pbAnswerDiffers;
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -2579,7 +2598,14 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
             spacing: 8,
             runSpacing: 8,
             alignment: WrapAlignment.end,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
+              if (item.mathStatus == 'approved' && !needMathSave)
+                _pillBadge(
+                  item.answerManual ? '✓ 수정 정답·문제은행 DB 반영 완료' : '✓ 채점 정답·문제은행 DB 반영 완료',
+                  _kAccent,
+                ),
+              if (mathDirty) _pillBadge('저장 전 정답 변경 있음', _kWarn),
               if (matched == false && (item.aiAnswer ?? '').isNotEmpty && item.aiAnswer != '판단불가')
                 OutlinedButton.icon(
                   onPressed: _saving
@@ -2607,10 +2633,21 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
                   label: Text('해설 답(${item.solutionAnswer}) 채택 후 승인'),
                 ),
               ElevatedButton.icon(
-                onPressed: _saving ? null : () => unawaited(_saveAndApproveSingle(item, approveMath: true)),
+                onPressed: _saving || !needMathSave ? null : () => unawaited(_saveAndApproveSingle(item, approveMath: true)),
                 style: _primaryButtonStyle(),
-                icon: const Icon(Icons.check_circle_outline_rounded, size: 18),
-                label: Text(item.mathStatus == 'approved' ? '수학 재승인 저장' : '수학적 검수 승인'),
+                icon: Icon(
+                  item.mathStatus == 'approved' && !needMathSave ? Icons.task_alt_rounded : Icons.check_circle_outline_rounded,
+                  size: 18,
+                ),
+                label: Text(
+                  item.mathStatus == 'approved'
+                      ? (mathDirty
+                          ? '정답 수정 저장 (승인 유지)'
+                          : item.pbAnswerDiffers
+                              ? '문제은행 정답 동기화 저장'
+                              : '정답 반영·승인 완료 (변경 없음)')
+                      : '수학적 검수 승인${mathDirty ? ' (정답 수정 포함)' : ''}',
+                ),
               ),
             ],
           ),
@@ -2618,11 +2655,26 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
           LayoutBuilder(
             builder: (context, constraints) {
               final saved = _answerCompareTile(
-                '기존 저장 정답 (직접 수정 가능)',
-                child: TextField(
-                  controller: _answerEditCtrl,
-                  style: const TextStyle(color: _kText, fontSize: 14, fontWeight: FontWeight.w800),
-                  decoration: _inputDecoration('정답 입력'),
+                item.mathStatus == 'approved' && !mathDirty
+                    ? '현재 DB 저장 정답 (바꾸면 저장 버튼이 켜집니다)'
+                    : '기존 저장 정답 (직접 수정 가능)',
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    TextField(
+                      controller: _answerEditCtrl,
+                      onChanged: (_) => setState(() {}),
+                      style: const TextStyle(color: _kText, fontSize: 14, fontWeight: FontWeight.w800),
+                      decoration: _inputDecoration('정답 입력'),
+                    ),
+                    if (mathDirty) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        '현재 DB 저장값: ${item.existingAnswer.trim().isEmpty ? '(비어 있음)' : item.existingAnswer.trim()}',
+                        style: const TextStyle(color: _kTextMuted, fontSize: 11.5),
+                      ),
+                    ],
+                  ],
                 ),
               );
               final fromBook = _answerCompareTile(
@@ -2743,11 +2795,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
               Container(
                 margin: const EdgeInsets.only(bottom: 8),
                 padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: _kChipSelected.withValues(alpha: 0.25),
-                  borderRadius: BorderRadius.circular(_kInnerRadius),
-                  border: Border.all(color: _kAccent, width: 0.5),
-                ),
+                decoration: _innerDecoration(),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
@@ -2757,15 +2805,19 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
                       crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
                         _pillBadge(
-                          dp['target'] == 'arithmetic' ? '새 연산 초안' : '새 사고 초안',
-                          _kAccent,
+                          dp['target'] == 'arithmetic' ? '선택 사항 · 새 연산 사전 제안' : '선택 사항 · 새 사고 사전 제안',
+                          _kTextSub,
                         ),
-                        ElevatedButton.icon(
+                        const Text(
+                          '문항 검수 완료와는 무관합니다 (사전에 추가하고 싶을 때만 클릭)',
+                          style: TextStyle(color: _kTextMuted, fontSize: 11.5),
+                        ),
+                        OutlinedButton.icon(
                           onPressed: _saving
                               ? null
                               : () => unawaited(_acceptDraftProposal(item, '${dp['code'] ?? ''}')),
-                          style: _primaryButtonStyle(),
-                          icon: const Icon(Icons.add_task_rounded, size: 16),
+                          style: _outlineButtonStyle(color: _kTextSub),
+                          icon: const Icon(Icons.add_task_rounded, size: 16, color: _kTextSub),
                           label: const Text('사전 등록 + 앞 문항 백필'),
                         ),
                       ],
@@ -2773,7 +2825,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
                     const SizedBox(height: 8),
                     Text(
                       '${dp['title']} (${dp['category']} · ${dp['unit_score']}점) — ${dp['criteria'] ?? dp['trigger_cond'] ?? ''}',
-                      style: const TextStyle(color: _kText, fontSize: 13, fontWeight: FontWeight.w600, height: 1.35),
+                      style: const TextStyle(color: _kTextSub, fontSize: 12.5, fontWeight: FontWeight.w600, height: 1.35),
                     ),
                   ],
                 ),
@@ -2791,6 +2843,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     final visionNote = sv is Map ? sv['note'] : null;
     final visionConf = sv is Map ? sv['confidence'] : null;
     final visionFailed = item.hasSolutionRef && !item.hasOriginalSolution && item.hasAiSolution;
+    final solDirty = _solutionEditDirty(item);
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -2820,15 +2873,16 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
             children: [
               _pillBadge(
                 item.hasOriginalSolution
-                    ? (item.solutionSource == 'manual' ? '원본 직접 입력' : '원본 Vision 전사${visionConf != null ? ' · $visionConf' : ''}')
+                    ? (item.solutionSource == 'manual' ? '원본 직접 입력 (DB 저장됨)' : '원본 Vision 전사${visionConf != null ? ' · $visionConf' : ''} (DB 저장됨)')
                     : (item.hasSolutionRef ? '원본 미전사' : '해설 좌표 없음'),
                 item.hasOriginalSolution ? _kBlue : (item.hasSolutionRef ? _kWarn : _kTextMuted),
               ),
+              if (solDirty) _pillBadge('저장 전 해설 변경 있음', _kWarn),
               ElevatedButton.icon(
-                onPressed: _saving ? null : () => unawaited(_saveAndApproveSingle(item)),
+                onPressed: _saving || !solDirty ? null : () => unawaited(_saveAndApproveSingle(item)),
                 style: _primaryButtonStyle(),
-                icon: const Icon(Icons.save_outlined, size: 18),
-                label: const Text('해설 저장'),
+                icon: Icon(solDirty ? Icons.save_outlined : Icons.task_alt_rounded, size: 18),
+                label: Text(solDirty ? '해설 수정 저장' : '해설 DB 반영 완료 (변경 없음)'),
               ),
             ],
           ),
@@ -2842,26 +2896,29 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
             ),
           ],
           const SizedBox(height: 12),
-          const Text('원본 해설 (교재 해설 PDF 전사 · 수정 가능)', style: TextStyle(color: _kTextSub, fontSize: 13, fontWeight: FontWeight.w600)),
+          const Text('원본 해설 (교재 해설 PDF 전사 · 고치면 저장 버튼이 켜집니다)', style: TextStyle(color: _kTextSub, fontSize: 13, fontWeight: FontWeight.w600)),
           const SizedBox(height: 8),
           TextField(
             controller: _origAnswerCtrl,
+            onChanged: (_) => setState(() {}),
             style: const TextStyle(color: _kText, fontSize: 14, fontWeight: FontWeight.w700),
             decoration: _inputDecoration('해설 정답'),
           ),
           const SizedBox(height: 6),
           TextField(
             controller: _origSolutionCtrl,
+            onChanged: (_) => setState(() {}),
             maxLines: 6,
             minLines: 3,
             style: const TextStyle(color: _kText, fontSize: 13, height: 1.45),
             decoration: _inputDecoration(item.hasSolutionRef ? '검수를 실행하면 해설 PDF 영역에서 전사됩니다. 직접 입력해도 됩니다.' : '해설 좌표가 없는 문항입니다. 직접 입력할 수 있습니다.'),
           ),
           const SizedBox(height: 12),
-          Text('AI 독립 풀이 (정답 ${item.aiAnswer ?? '-'} · 수정 가능)', style: const TextStyle(color: _kTextSub, fontSize: 12)),
+          Text('AI 독립 풀이 (정답 ${item.aiAnswer ?? '-'} · 고치면 저장 버튼이 켜집니다)', style: const TextStyle(color: _kTextSub, fontSize: 12)),
           const SizedBox(height: 6),
           TextField(
             controller: _solutionEditCtrl,
+            onChanged: (_) => setState(() {}),
             maxLines: 6,
             minLines: 3,
             style: const TextStyle(color: _kText, fontSize: 13, height: 1.45),
@@ -2905,6 +2962,10 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     final judgedFromImage = qc['judged_from_v2_image'] == true;
     final kindBadge = _issueKindBadge(item);
     final dirty = _problemEditDirty(item);
+    final tagsDirty = _visualTagsDirty(item);
+    final anyQualityDirty = dirty || tagsDirty;
+    final canSaveQuality = !_saving && !_runningReview && (item.qualityStatus != 'approved' || anyQualityDirty);
+    final appliedSummary = item.appliedFixSummary;
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: _panelDecoration(
@@ -2937,6 +2998,8 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
             children: [
               _pillBadge(qLabel, qColor),
               if (kindBadge != null) _pillBadge(kindBadge.$1, kindBadge.$2),
+              if (appliedSummary != null && !dirty) _pillBadge('✓ AI·규칙 수정 DB 반영됨', _kAccent),
+              if (anyQualityDirty) _pillBadge('저장 전 변경 있음', _kWarn),
               if (item.isEngineHeld) ...[
                 OutlinedButton.icon(
                   onPressed: _saving ? null : () => unawaited(_setEngineHold([item], hold: false)),
@@ -2951,18 +3014,25 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
                   label: const Text('엔진 수정 확인됨 → 품질 승인'),
                 ),
               ] else ...[
-                // 승인 버튼은 하나: 편집기(본문·선지·공통 발문·그림 배치·원본 크롭 그림)에 바뀐 것이 있으면 문제은행에 저장하고 승인한다.
+                // 승인 버튼은 하나: 이미 승인된 문항은 본문·그림·시각태그를 바꿨을 때만 버튼이 활성화된다.
                 ElevatedButton.icon(
-                  onPressed: _saving || _runningReview
+                  onPressed: !canSaveQuality
                       ? null
                       : () => unawaited(
                             dirty ? _applyProblemFix(item, approve: true) : _saveAndApproveSingle(item, approveQuality: true),
                           ),
                   style: _primaryButtonStyle(),
-                  icon: const Icon(Icons.verified_outlined, size: 18),
+                  icon: Icon(
+                    item.qualityStatus == 'approved' && !anyQualityDirty ? Icons.task_alt_rounded : Icons.verified_outlined,
+                    size: 18,
+                  ),
                   label: Text(
                     item.qualityStatus == 'approved'
-                        ? (dirty ? '수정 저장 (승인 유지)' : '품질·시각태그 재저장')
+                        ? (dirty
+                            ? '본문·그림 수정 저장 (승인 유지)'
+                            : tagsDirty
+                                ? '시각태그 수정 저장 (승인 유지)'
+                                : '품질 반영·승인 완료 (변경 없음)')
                         : '품질 검수 승인${dirty ? ' (수정 저장 포함)' : ''}',
                   ),
                 ),
@@ -2976,6 +3046,14 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
               ],
             ],
           ),
+          if (appliedSummary != null && !dirty) ...[
+            const SizedBox(height: 10),
+            _buildBanner(
+              '$appliedSummary · 아래 입력칸과 오른쪽 ① 문항 카드가 DB에 반영된 최종 상태입니다.',
+              _kAccent,
+              Icons.task_alt_rounded,
+            ),
+          ],
           if (item.isEngineHeld) ...[
             const SizedBox(height: 10),
             _buildBanner(
@@ -3162,7 +3240,9 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
                     ? '공통 발문 중복 제거안 (승인 시 문제은행 문항에 저장)'
                     : hasProposal
                         ? '수정안 (승인 시 문제은행 문항에 저장)'
-                        : '본문·선지·그림 직접 수정 (승인 시 문제은행 문항에 저장)',
+                        : dirty
+                            ? '본문·선지·그림 직접 수정 중 (위 저장 버튼을 누르면 DB에 반영)'
+                            : '현재 DB 저장 본문·선지·그림 (추가로 고치면 위 저장 버튼이 켜집니다)',
                 style: const TextStyle(color: _kText, fontSize: 13, fontWeight: FontWeight.w800),
               ),
               if (dup)
@@ -3179,8 +3259,8 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
               if (fromFixPass && fp['text_matches_original'] == true) _pillBadge('본문·선지는 원본과 같음', _kTextMuted),
               if (fromFixPass && '${fp['engine_issue'] ?? ''}'.trim().isNotEmpty)
                 _pillBadge('엔진 의심: ${fp['engine_issue']}', _kWarn),
-              if (dirty) _pillBadge('저장 전 변경 있음', _kWarn),
-              if (fp['applied_at'] != null) _pillBadge('이전 수정안 적용됨', _kTextMuted),
+              if (dirty) _pillBadge('저장 전 변경 있음', _kWarn) else _pillBadge('현재 입력칸 = DB 저장본', _kTextMuted),
+              if (fp['applied_at'] != null && !dirty) _pillBadge('✓ 수정안 DB 반영 완료', _kAccent),
             ],
           ),
           if (dup) ...[
@@ -3195,7 +3275,10 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
             ),
           ] else if (reason.isNotEmpty) ...[
             const SizedBox(height: 6),
-            Text('제안 이유: $reason', style: const TextStyle(color: _kTextSub, fontSize: 12, height: 1.35)),
+            Text(
+              fp['applied_at'] != null && !dirty ? 'DB 반영된 수정 내역: $reason' : '제안 이유: $reason',
+              style: const TextStyle(color: _kTextSub, fontSize: 12, height: 1.35),
+            ),
           ],
           if (item.isSetQuestion) ...[
             const SizedBox(height: 10),
@@ -3272,10 +3355,10 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
                 label: Text(item.fixPassAt == null ? '원본 대조로 AI가 바로 고치기' : '원본 대조로 AI가 다시 고치기'),
               ),
               OutlinedButton.icon(
-                onPressed: _saving || !_svc.hasGateway ? null : () => unawaited(_previewProblemFix(item)),
+                onPressed: _saving || !_svc.hasGateway || !dirty ? null : () => unawaited(_previewProblemFix(item)),
                 style: _outlineButtonStyle(color: _kBlue),
                 icon: const Icon(Icons.preview_rounded, size: 16, color: _kBlue),
-                label: const Text('본문·선지 V2 미리보기 (오른쪽에 표시)'),
+                label: const Text('본문·선지 V2 미리보기 (수정 시 활성화)'),
               ),
               OutlinedButton.icon(
                 onPressed: _saving || _runningReview || !dirty ? null : () => unawaited(_applyProblemFix(item, approve: false)),

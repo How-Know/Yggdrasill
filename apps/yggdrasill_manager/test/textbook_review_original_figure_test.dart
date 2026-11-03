@@ -162,6 +162,19 @@ void main() {
       });
       expect(blankItem.isFillInBlank, isTrue);
       expect(blankItem.stage2TextSuperseded, isTrue);
+
+      // appliedFixSummary 는 DB 에 반영된 수정 필드와 메모를 한 줄로 요약한다
+      final appliedItem = _item({
+        'fix_proposal': {
+          'applied_at': '2026-11-03T05:00:00Z',
+          'applied_fields': ['common_stem', 'figure_layout'],
+          'applied_note': '그림 크기 원본 비율(1.0배) 자동 조정',
+        },
+      });
+      expect(
+        appliedItem.appliedFixSummary,
+        '공통 발문·그림 크기·배치 DB 반영 완료 — 그림 크기 원본 비율(1.0배) 자동 조정',
+      );
     });
 
     test('hasPendingFigureProposal: 배치가 지금과 다르거나 잘라 등록할 그림이 있고 아직 적용 전', () {
