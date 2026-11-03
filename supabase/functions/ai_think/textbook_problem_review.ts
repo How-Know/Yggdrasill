@@ -8,7 +8,7 @@ import { uuidOrNull } from './validate.ts';
 
 type Rec = Record<string, unknown>;
 
-export const TEXTBOOK_REVIEW_PROMPT_VERSION = 'textbook-problem-review-2026-11-03e';
+export const TEXTBOOK_REVIEW_PROMPT_VERSION = 'textbook-problem-review-2026-11-03f';
 
 /** 품질 이상의 원인 분류. data=문항 데이터(본문·선지) 오류, engine=조판 엔진 문제, figure=도형 자산 문제 */
 export type IssueKind = 'none' | 'data' | 'engine' | 'figure';
@@ -270,6 +270,27 @@ export function leadingInstruction(common: string): string | null {
 
 /** 서술형으로 봐야 하는 표현(발문에 있으면 무조건 서술형) */
 export const ESSAY_PATTERN = /서술하(시오|여라)|과정을\s*(쓰|서술|설명)|풀이\s*과정|이유를\s*(쓰|설명|서술)|설명하(시오|여라)|증명하(시오|여라)/;
+
+/** 빈칸형 문항 판별: 발문·공통발문·수식에 빈칸 채우기 지시나 네모(□, [[공백:n]], \square, \Box 등)가 있는 문항 */
+export const FILL_IN_BLANK_PATTERN =
+  /\[\[?\s*공백\s*:\s*\d+\s*\]\]?|\\(?:square|Box|boxed)\b|[□▢]|(?:빈칸|네모|\(\s*\)|\[\s*\])\s*(?:에|안에)|알맞은\s*(?:수|말|식|값|기호|것|숫자)를?\s*(?:써넣|쓰시오|써라|채우)/;
+
+export function isFillInBlankProblem(commonStem: unknown, stem: unknown): boolean {
+  const combined = `${String(commonStem ?? '')}\n${String(stem ?? '')}`;
+  return FILL_IN_BLANK_PATTERN.test(combined);
+}
+
+/**
+ * 빈칸형 문항에서 모델이 정상 조판된 네모(□)·빈칸 자체를 '불명확한 빈칸 추가'·'단독 빈칸'·'빈칸 노출'로 잘못 지적한 경우인지 판별한다.
+ * 실제 대괄호 마크업 글자([[공백:1]] 등)가 그대로 노출됐다는 지적이 아니면 오판으로 보고 무시한다.
+ */
+export function isFalseBlankComplaint(isFillInBlank: boolean, title: unknown, detail: unknown): boolean {
+  if (!isFillInBlank) return false;
+  const text = `${String(title ?? '')} ${String(detail ?? '')}`.trim();
+  if (!text) return false;
+  if (/\[\[?\s*공백|박스시작|박스끝|표시작|표끝|PB_FIG/i.test(text)) return false;
+  return /(?:용도가\s*불명확한\s*빈칸|단독\s*빈칸|빈칸이\s*(?:추가|하나\s*더|더\s*보|노출|있)|네모가\s*(?:추가|더\s*보|노출))/.test(text);
+}
 
 export type QuestionKind = 'objective' | 'subjective' | 'essay';
 
@@ -561,7 +582,8 @@ const BLIND_SOLVE_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔�
    - 당신이 작성한 ai_solution의 각 계산 단계에서 실제로 수행한 세부 연산 코드(제공된 arithmetic_primitives 목록의 code)와 등장 횟수(count >= 1)를 정확히 세어 기록하세요.
 4. 품질 검수 — 학생 시점(V2 렌더링 이미지) 기준:
    - judged_from_v2_image: V2 렌더 이미지를 실제로 보고 판정했으면 true, 이미지가 없어서 텍스트만으로 판정했으면 false.
-   - stem_ok: 렌더 화면에서 발문이 온전하게 읽히는지(문장 절단, 글자 겹침, 빈칸 표식([공백], box 등)이 그대로 노출됨, 문단이 사라짐 등이 없는지). 독립형 세트에서 stem에 숫자/식만 있는 것은 정상입니다.
+   - stem_ok: 렌더 화면에서 발문이 온전하게 읽히는지(문장 절단, 글자 겹침, 변환되지 않은 마크업 문자열([[공백:1]], [박스시작] 등)이 글자 그대로 노출됨, 문단이 사라짐 등이 없는지). 독립형 세트에서 stem에 숫자/식만 있는 것은 정상입니다.
+     - 중요(빈칸형 문항 · is_fill_in_blank = true): "□ 안에 알맞은 수를 써넣어라", "다음 표의 빈칸에 알맞은 수를 써넣어라" 같은 빈칸형 문항은 지시문 안, 결론 수식("⇒ 90 = 2 × □ × 5" 등), 수형도·표 안에 빈 네모 상자(□)가 하나 또는 여러 개 그려져 있는 것이 정상적인 문항 형식입니다. 지시문이나 수식에 네모(□)·빈칸이 있다고 해서 "용도가 불명확한 빈칸 추가"나 "단독 빈칸 노출"로 절대 판정하지 마세요(stem_ok = true, fidelity_ok = true).
    - choices_ok: 객관식 선지 ①~⑤ 또는 <보기> ㄱ,ㄴ,ㄷ 가 화면에 모두 보이고 순서·내용이 맞는지.
    - figure_ok: 도형/그래프/표가 필요한 문항에서 화면에 도형이 있고 잘림·겹침·크기 이상이 없는지. 도형이 필요 없는 문항은 true.
    - latex_v2_ok: 화면에서 수식이 수학 기호로 제대로 조판됐는지(\\frac, \\sqrt, ^, _ 같은 LaTeX 원문이 글자로 노출되거나, $ 기호가 보이거나, ?? 또는 깨진 글자가 보이면 false).
@@ -615,7 +637,8 @@ const RENDER_CHECK_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔
 - 도형·그래프·표가 있어야 할 자리에 없거나, 잘리거나, 너무 작아 읽을 수 없다.
 - 줄바꿈이 엉켜 풀이 단계의 순서를 따라갈 수 없다.
 - 정답 카드에 정답이 보이지 않는다(비어 있음), 또는 해설이 중간에서 끊긴다.
-- 원문 마크업([문단], [박스시작], [표시작], [[공백:1]] 등)이 그대로 글자로 노출된다.
+- 원문 마크업([문단], [박스시작], [표시작], [[공백:1]] 같은 대괄호 문자열)이 변환되지 않고 글자 그대로 노출된다.
+  - 주의(빈칸형 문항 · is_fill_in_blank = true): "□ 안에 알맞은 수를 써넣어라", 표·수형도·결론 수식("⇒ 90 = 2 × □ × 5" 등)의 네모 상자(□)는 학생이 답을 채우는 정상적인 빈칸입니다. 네모(□)가 발문이나 식에 들어 있다는 이유로 problem_ok=false 나 fidelity_ok=false 로 판정하지 마세요.
 
 [출력]
 - problem_ok: 문항 카드가 학생이 읽기에 온전한가.
@@ -845,6 +868,7 @@ export async function handleTextbookProblemReview(
         item_name: it.item_name,
         label: it.label,
         question_type: it.question_type,
+        is_fill_in_blank: isFillInBlankProblem(it.common_stem, it.stem),
         stem: combineStem(it.common_stem, it.stem).slice(0, 2800),
         stem_raw: String(it.stem ?? '').slice(0, 2800),
         choices: it.choices,
@@ -988,13 +1012,15 @@ export async function handleTextbookProblemReview(
     const dupFix = commonStemFix(it.common_stem, it.stem);
     const dupStripped = dupFix?.stem ?? null;
     const corruptedCommon = dupFix === null && isCorruptedCommonStem(it.common_stem);
+    const isFillInBlank = isFillInBlankProblem(it.common_stem, it.stem);
+    const falseBlank = isFalseBlankComplaint(isFillInBlank, b.quality_issue_title, b.quality_issue_detail);
     const hasFigures = itemHasFigures(it, b);
-    const stemOk = b.stem_ok !== false && dupStripped === null && !corruptedCommon;
+    const stemOk = (b.stem_ok !== false || falseBlank) && dupStripped === null && !corruptedCommon;
     const choicesOk = b.choices_ok !== false;
     const figureOk = b.figure_ok !== false;
     const latexOk = b.latex_v2_ok !== false;
-    const fidelityOk = b.fidelity_ok !== false && !corruptedCommon;
-    const issueTitle: string | null = typeof b.quality_issue_title === 'string' && b.quality_issue_title.trim()
+    const fidelityOk = (b.fidelity_ok !== false || falseBlank) && !corruptedCommon;
+    const issueTitle: string | null = !falseBlank && typeof b.quality_issue_title === 'string' && b.quality_issue_title.trim()
       ? b.quality_issue_title
       : dupStripped !== null
       ? '공통 발문 중복 표시 (개별 발문에 공통 지시문이 다시 들어 있음)'
@@ -1003,7 +1029,7 @@ export async function handleTextbookProblemReview(
       : hasFigures
       ? '그림·도형 문항 원본 대조 및 크기·배치 확인 필요'
       : null;
-    const issueDetail: string | null = typeof b.quality_issue_detail === 'string' && b.quality_issue_detail.trim()
+    const issueDetail: string | null = !falseBlank && typeof b.quality_issue_detail === 'string' && b.quality_issue_detail.trim()
       ? b.quality_issue_detail
       : dupStripped !== null
       ? 'common_stem과 stem 에 같은 지시문이 들어 있어 학생 화면에 두 번 표시됩니다. 개별 발문에서 공통 부분을 제거하면 해결됩니다.'
@@ -1168,6 +1194,7 @@ export async function handleTextbookProblemReview(
           latex_v2_ok: latexOk,
           fidelity_ok: fidelityOk,
           has_figures: hasFigures,
+          is_fill_in_blank: isFillInBlank,
           issue_title: issueTitle,
           issue_detail: issueDetail,
           issue_kind: issueKind,
@@ -1353,9 +1380,9 @@ export function effectiveSolution(it: Rec, vision: Rec | undefined): { text: str
  *   body: { academy_id, items: [{ crop_id, problem_url?, answer_solution_url?, solution_kind?: 'textbook'|'ai',
  *           original_image_base64?, set_header_image_base64? }] }
  */
-/** 그림 크기 비율(V2 ÷ 원본)이 이 범위 밖이면 크기를 다시 맞춘다. */
-export const FIGURE_SIZE_RATIO_MIN = 0.8;
-export const FIGURE_SIZE_RATIO_MAX = 1.25;
+/** 그림 크기 비율(V2 ÷ 원본)이 이 범위 밖이면 크기를 다시 맞춘다(0.85~1.15, 목표 1.0배). */
+export const FIGURE_SIZE_RATIO_MIN = 0.85;
+export const FIGURE_SIZE_RATIO_MAX = 1.15;
 
 export function figureSizeRatioOk(ratio: unknown): boolean {
   const r = Number(ratio);
@@ -1382,6 +1409,7 @@ export async function handleTextbookProblemRenderCheck(
       solutionKind: r.solution_kind === 'ai' ? 'ai' : 'textbook',
       originalUrl: imageDataUrl(r.original_image_base64, r.original_image_mime),
       setHeaderUrl: imageDataUrl(r.set_header_image_base64, r.set_header_image_mime),
+      isFillInBlank: r.is_fill_in_blank === true,
     }))
     .filter((x): x is {
       cropId: string;
@@ -1390,6 +1418,7 @@ export async function handleTextbookProblemRenderCheck(
       solutionKind: string;
       originalUrl: string | null;
       setHeaderUrl: string | null;
+      isFillInBlank: boolean;
     } => !!x.cropId && (!!x.problemUrl || !!x.answerSolutionUrl))
     .slice(0, 8);
   if (items.length === 0) return jsonResponse({ ok: true, processed: 0 });
@@ -1425,10 +1454,12 @@ export async function handleTextbookProblemRenderCheck(
       problems: targets.map((x) => {
         const a = analysisByCrop.get(x.cropId)!;
         const crop = (a.textbook_problem_crops ?? {}) as Rec;
+        const qc = (a.quality_checks ?? {}) as Rec;
         return {
           crop_id: x.cropId,
           problem_number: crop.problem_number ?? '',
           label: crop.label ?? '',
+          is_fill_in_blank: x.isFillInBlank || qc.is_fill_in_blank === true,
           has_problem_card: !!x.problemUrl,
           has_answer_solution_card: !!x.answerSolutionUrl,
           has_original_image: !!x.originalUrl,
@@ -1497,11 +1528,14 @@ export async function handleTextbookProblemRenderCheck(
     const r = byCrop.get(x.cropId);
     if (!r) continue;
     const a = analysisByCrop.get(x.cropId)!;
+    const qc = (a.quality_checks ?? {}) as Rec;
+    const isFillInBlank = x.isFillInBlank || qc.is_fill_in_blank === true;
+    const falseBlank = isFalseBlankComplaint(isFillInBlank, r.issue_title, r.issue_detail);
     const originalCompared = !!x.originalUrl && !!x.problemUrl;
-    const problemOk = r.problem_ok !== false;
+    const problemOk = r.problem_ok !== false || falseBlank;
     const answerOk = r.answer_ok !== false;
     const solutionOk = r.solution_ok !== false;
-    const fidelityOk = !originalCompared || r.fidelity_ok !== false;
+    const fidelityOk = !originalCompared || r.fidelity_ok !== false || falseBlank;
     const figurePositionOk = !originalCompared || r.figure_position_ok !== false;
     const sizeRatio = originalCompared && typeof r.figure_size_ratio === 'number' && Number.isFinite(r.figure_size_ratio) &&
         r.figure_size_ratio > 0
@@ -1509,7 +1543,6 @@ export async function handleTextbookProblemRenderCheck(
       : null;
     const figureSizeOk = figureSizeRatioOk(sizeRatio);
     const renderOk = problemOk && answerOk && solutionOk && fidelityOk && figurePositionOk && figureSizeOk;
-    const qc = (a.quality_checks ?? {}) as Rec;
     // 2단계 판정 뒤에 본문·선지·그림 수정이 적용됐거나 이번 검수가 원본과 직접 대조했으면 2단계 판정은 옛 화면 기준이다.
     // 이번 V2 렌더 판정만 본다.
     const fp = (a.fix_proposal ?? {}) as Rec;
@@ -1535,7 +1568,7 @@ export async function handleTextbookProblemRenderCheck(
       : autoHoldEngine
       ? 'held'
       : (renderOk && stage2Ok && figureAppliedOrNone ? 'approved' : 'issue');
-    const issueTitle = typeof r.issue_title === 'string' && r.issue_title.trim()
+    const issueTitle = !falseBlank && typeof r.issue_title === 'string' && r.issue_title.trim()
       ? r.issue_title
       : !figureSizeOk
       ? `그림 크기가 원본과 다름 (원본 대비 ${sizeRatio}배)`

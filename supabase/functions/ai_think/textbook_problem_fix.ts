@@ -7,6 +7,7 @@ import { recordAiRun } from '../_shared/ai/usage.ts';
 import {
   cleanSolutionTranscribedText,
   figureMarkerCount,
+  isFillInBlankProblem,
   normalizeProposedChoices,
   parseProblems,
   parseReviewImages,
@@ -180,7 +181,8 @@ export function buildFigureProposal(args: {
       const key = `idx:${idx}`;
       const prev = curByKey.get(key) ?? curByKey.get(`ord:${i + 1}`);
       const prevWidth = Number(prev?.widthEm);
-      const item = figureLayoutItem(m, emPx, imageWidthPx, Number.isFinite(prevWidth) && prevWidth > 0 ? prevWidth : 20);
+      const colFallback = Math.round(Math.max(MIN_WIDTH_EM, Math.min(MAX_WIDTH_EM, ((m.bbox[3] - m.bbox[1]) / 1000) * 26)) * 2) / 2;
+      const item = figureLayoutItem(m, emPx, imageWidthPx, Number.isFinite(prevWidth) && prevWidth > 0 ? prevWidth : colFallback);
       const prevHeight = Number(prev?.heightEm);
       items.push({ assetKey: key, ...item, heightEm: Number.isFinite(prevHeight) && prevHeight > 0 ? prevHeight : 1.6 });
       used.add(key);
@@ -346,6 +348,7 @@ const FIX_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔진의 [�
 - 원본에 인쇄된 이 문항(세트 머리 제외)을 처음부터 끝까지 다시 적은 전체 개별 발문을 corrected_stem 에 적으세요. 저장된 stem 이 원본과 완전히 같을 때만 null.
 - 마크업은 저장 형식을 그대로 따릅니다: 수식 $...$(LaTeX), 문단 구분 [문단], 상자 [박스시작]...[박스끝], 표 [표시작]...[표끝], 빈칸 [[공백:n]] 등
   저장 stem 에 쓰인 표기를 유지하고, 그림 자리에는 [그림] 마커를 둡니다(그림이 본문 옆이나 아래에 있으면 그 그림이 딸린 문단의 끝).
+- 빈칸형 문항(is_fill_in_blank = true, 예: "□ 안에 알맞은 수를 써넣어라", 결론 수식 "⇒ 90 = 2 × □ × 5" 등): 지시문이나 결론 수식에 들어 있는 네모(□, [[공백:n]], \\square)는 원본 그대로 유지해야 하는 정상 빈칸입니다. 빈칸을 지우거나 오류로 취급하지 마세요.
 - 세트 문항(common_stem 이 있거나 세트 머리 원본 이미지가 함께 온 문항):
   - 학생 화면은 common_stem(세트 머리 지시문) 다음에 stem(이 문항 본문)을 이어 그립니다. corrected_stem 에 공통 지시문을 넣지 마세요.
   - 세트 머리 원본 이미지(또는 문항 원본 위쪽에 보이는 세트 지시문, 앞 단계 issues 에 적힌 원래 공통 지시문)와 저장된 common_stem 이 다르면
@@ -441,6 +444,7 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
           crop_id: it.crop_id,
           problem_number: it.problem_number,
           question_type: it.question_type,
+          is_fill_in_blank: isFillInBlankProblem(it.common_stem, it.stem),
           is_set_question: String(it.common_stem ?? '').trim().length > 0 ||
             String(it.set_type ?? '').trim().length > 0 ||
             String(it.set_header_number ?? '').trim().length > 0 ||
@@ -548,7 +552,13 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
 
     const measures = parseFigureMeasures(r.figures);
     const size = img.originalSize;
-    const emPx = size ? emPxFromTextSample(r.text_sample, size.height) : null;
+    const sampleLines = r.text_sample && typeof r.text_sample === 'object' ? Math.round(Number((r.text_sample as Rec).lines)) : 0;
+    const rawEmPx = size ? emPxFromTextSample(r.text_sample, size.height) : null;
+    // 1줄짜리 발문(예: "90을 소인수분해 하는 과정이다. □ 안에 알맞은 수를 써넣어라.")은 글자 상자 높이가 좁게 잡혀
+    // 1em 이 과소 추정되고 그림 폭(widthEm)이 1.3배 이상 커질 수 있다. 2단 교재 1단 폭(약 26~27em)을 하한으로 쓴다.
+    const emPx = rawEmPx && size && size.width > 0 && sampleLines <= 1
+      ? Math.max(rawEmPx, size.width / 27)
+      : (rawEmPx ?? (size && size.width > 0 ? size.width / 26 : null));
     const figure = buildFigureProposal({
       measures,
       emPx,

@@ -82,6 +82,9 @@ void main() {
       expect(figureLayoutItems(only).map((x) => x['widthEm']), [20, 19]);
       expect(figureLayoutItems(only).first['position'], 'below-stem');
       expect(only['groups'], isEmpty);
+      // 기존 pb_figure_layout 이 비어 있어도 fallbackCount/fallbackAssets 가 있으면 기본 20em 에서 배율(예: 1/1.3)만큼 줄인 항목을 만든다
+      final fromEmpty = scaleFigureLayout(const {}, 1 / 1.3, fallbackCount: 1);
+      expect(figureLayoutItems(fromEmpty).map((x) => x['widthEm']), [15.5]);
     });
   });
 
@@ -146,6 +149,19 @@ void main() {
         'fix_proposal': {'proposed_answer': '1, 3, 5, 15'},
       });
       expect(withProp.resolvedMathAnswer, '1, 3, 5, 15');
+
+      // 빈칸형 문항에서 도형 외 단독 빈칸 오판은 stage2TextSuperseded 로 숨긴다
+      final blankItem = _item({
+        'stem': r'90을 소인수분해 하는 과정이다. □ 안에 알맞은 수를 써넣어라.[그림]\Rightarrow 90=2\times\square\times5',
+        'quality_checks': {
+          'issue_title': '도형 외에 용도가 불명확한 빈칸이 추가됨',
+          'issue_detail': '결론 식 위에 단독 빈칸이 하나 더 보입니다.',
+        },
+        'render_checks': {'original_compared': true, 'problem_ok': true, 'fidelity_ok': true, 'figure_size_ratio': 1.3},
+        'render_checked_at': '2026-11-03T02:00:00Z',
+      });
+      expect(blankItem.isFillInBlank, isTrue);
+      expect(blankItem.stage2TextSuperseded, isTrue);
     });
 
     test('hasPendingFigureProposal: 배치가 지금과 다르거나 잘라 등록할 그림이 있고 아직 적용 전', () {

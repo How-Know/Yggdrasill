@@ -56,6 +56,22 @@ String _squash(String s) => s.replaceAll(RegExp(r'\s+|\[문단\]'), '');
 /// 서술형으로 봐야 하는 표현(Edge `ESSAY_PATTERN` 과 같다)
 final kEssayPattern = RegExp(r'서술하(시오|여라)|과정을\s*(쓰|서술|설명)|풀이\s*과정|이유를\s*(쓰|설명|서술)|설명하(시오|여라)|증명하(시오|여라)');
 
+/// 빈칸형 문항 판별: 발문·공통발문·수식에 빈칸 채우기 지시나 네모(□, [[공백:n]], \square, \Box 등)가 있는 문항(Edge `FILL_IN_BLANK_PATTERN` 과 같다).
+final kFillInBlankPattern = RegExp(
+  r'\[\[?\s*공백\s*:\s*\d+\s*\]\]?|\\(?:square|Box|boxed)\b|[□▢]|(?:빈칸|네모|\(\s*\)|\[\s*\])\s*(?:에|안에)|알맞은\s*(?:수|말|식|값|기호|것|숫자)를?\s*(?:써넣|쓰시오|써라|채우)',
+);
+
+bool isFillInBlankProblem(String commonStem, String stem) => kFillInBlankPattern.hasMatch('$commonStem\n$stem');
+
+/// 빈칸형 문항에서 모델이 정상 조판된 네모(□)·빈칸 자체를 '불명확한 빈칸 추가'·'단독 빈칸'·'빈칸 노출'로 잘못 지적한 경우인가
+bool isFalseBlankComplaint(bool isFillInBlank, Object? title, Object? detail) {
+  if (!isFillInBlank) return false;
+  final text = '${title ?? ''} ${detail ?? ''}'.trim();
+  if (text.isEmpty) return false;
+  if (RegExp(r'\[\[?\s*공백|박스시작|박스끝|표시작|표끝|PB_FIG', caseSensitive: false).hasMatch(text)) return false;
+  return RegExp(r'(?:용도가\s*불명확한\s*빈칸|단독\s*빈칸|빈칸이\s*(?:추가|하나\s*더|더\s*보|노출|있)|네모가\s*(?:추가|더\s*보|노출))').hasMatch(text);
+}
+
 /// 지시문 문장으로 볼 수 있는 표현(Edge `looksLikeInstruction` 과 같다).
 final _instructionPattern = RegExp(
   r'(다음|아래|보기|위|오른쪽|왼쪽)|(구하|쓰|써넣|채우|고르|찾|연결|나타내|계산|비교|완성|판단|말하|답하|표시|그리|그려|풀어|인수분해|소인수분해|약분|통분|정리)(여라|시오|라|자|기|고)|\?',
@@ -268,9 +284,47 @@ String figureLayoutSignature(Map<String, dynamic>? layout) {
 }
 
 /// 그림 폭(widthEm)을 배율만큼 바꾼 배치(4~40em, 0.5em 단위). [keys] 를 주면 그 그림만.
-Map<String, dynamic> scaleFigureLayout(Map<String, dynamic> layout, double factor, {Set<String>? keys}) {
+/// 기존 layout 에 항목이 비어 있어도 [fallbackAssets] 나 [fallbackCount] 가 있으면 기본 폭(20em)에서 배율을 곱해 항목을 만든다.
+Map<String, dynamic> scaleFigureLayout(
+  Map<String, dynamic> layout,
+  double factor, {
+  Set<String>? keys,
+  List<Map<String, dynamic>> fallbackAssets = const [],
+  int fallbackCount = 0,
+}) {
+  var baseItems = figureLayoutItems(layout);
+  if (baseItems.isEmpty) {
+    final ordered = orderedFigureAssets(fallbackAssets);
+    if (ordered.isNotEmpty) {
+      baseItems = [
+        for (final a in ordered)
+          {
+            'assetKey': 'idx:${a['figure_index']}',
+            'widthEm': 20.0,
+            'position': 'below-stem',
+            'anchor': 'center',
+            'offsetXEm': 0,
+            'offsetYEm': 0,
+            'heightEm': 1.6,
+          },
+      ];
+    } else if (fallbackCount > 0) {
+      baseItems = [
+        for (var i = 1; i <= fallbackCount; i++)
+          {
+            'assetKey': 'idx:$i',
+            'widthEm': 20.0,
+            'position': 'below-stem',
+            'anchor': 'center',
+            'offsetXEm': 0,
+            'offsetYEm': 0,
+            'heightEm': 1.6,
+          },
+      ];
+    }
+  }
   final items = [
-    for (final it in figureLayoutItems(layout))
+    for (final it in baseItems)
       if (keys == null || keys.contains(it['assetKey']))
         {
           ...it,
@@ -283,8 +337,8 @@ Map<String, dynamic> scaleFigureLayout(Map<String, dynamic> layout, double facto
 }
 
 /// 렌더 검수에서 그림 크기 비율(V2 ÷ 원본)이 이 범위 밖이면 크기를 다시 맞춘다(Edge FIGURE_SIZE_RATIO_* 와 같다).
-const double kFigureSizeRatioMin = 0.8;
-const double kFigureSizeRatioMax = 1.25;
+const double kFigureSizeRatioMin = 0.85;
+const double kFigureSizeRatioMax = 1.15;
 
 class TextbookReviewUnitScope {
   const TextbookReviewUnitScope({
@@ -874,6 +928,9 @@ class TextbookProblemReviewItem {
     return norm(pb) != mine;
   }
 
+  /// 빈칸형(□ 안에 알맞은 수를 써넣어라, 표·수형도·결론식의 □ 등) 문항인가
+  bool get isFillInBlank => isFillInBlankProblem(commonStem, stem) || qualityChecks['is_fill_in_blank'] == true;
+
   /// V2 렌더 카드 중 하나라도 이상으로 판정됐는가
   bool get renderHasIssue =>
       renderChecks['problem_ok'] == false ||
@@ -885,6 +942,15 @@ class TextbookProblemReviewItem {
 
   /// 원본과 직접 대조한 V2 렌더 검수가 통과해 2단계(문항 카드) 판정을 덮어쓴 상태
   bool get stage2Superseded => originalCompared && renderCheckedAt != null && !renderHasIssue;
+
+  /// 2단계 문항 본문 지적이 원본 대조 본문 통과로 대체되었거나 빈칸형 정상 네모를 오판한 경우인가(2단계 배너 숨김 기준)
+  bool get stage2TextSuperseded =>
+      stage2Superseded ||
+      (originalCompared &&
+          renderCheckedAt != null &&
+          renderChecks['problem_ok'] != false &&
+          renderChecks['fidelity_ok'] != false) ||
+      isFalseBlankComplaint(isFillInBlank, qualityChecks['issue_title'], qualityChecks['issue_detail']);
 
   String get displayStem {
     if (commonStem.isEmpty || stem.contains(commonStem)) return stem;

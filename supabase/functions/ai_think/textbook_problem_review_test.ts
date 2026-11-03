@@ -7,6 +7,8 @@ import {
   figureMarkerCount,
   figureSizeRatioOk,
   isCorruptedCommonStem,
+  isFalseBlankComplaint,
+  isFillInBlankProblem,
   isMathResolveTarget,
   isReviewTodo,
   itemHasFigures,
@@ -147,6 +149,22 @@ Deno.test('그림 문항 판별: 그림 자산·[그림] 마커·AI figure 판�
   assert(itemHasFigures({ pb_figure_assets: [], stem: '다음 그림에서[그림]' }));
   assert(itemHasFigures({ pb_figure_assets: [], stem: 'x' }, { issue_kind: 'figure' }));
   assert(!itemHasFigures({ pb_figure_assets: [], stem: '그림 없는 문항' }, { issue_kind: 'none', figure_ok: true }));
+});
+
+Deno.test('빈칸형 문항 판별 및 빈칸 오판 필터링: 발문·수식의 □ 빈칸은 정상으로 보고 실제 마크업 노출만 오류로 남긴다', () => {
+  assert(isFillInBlankProblem('', '90을 소인수분해 하는 과정이다. □ 안에 알맞은 수를 써넣어라.\n[그림]\n$\\Rightarrow 90 = 2 \\times \\square \\times 5$'));
+  assert(isFillInBlankProblem('다음 표의 빈칸에 알맞은 수를 써넣어라.', '15=3\\times5'));
+  assert(!isFillInBlankProblem('', '다음 수를 소인수분해하여라. 90'));
+
+  assert(
+    isFalseBlankComplaint(
+      true,
+      '도형 외에 용도가 불명확한 빈칸이 추가됨',
+      '결론 식 위에 단독 빈칸이 하나 더 보입니다. 아래 수형도 안에는 실제 답을 쓰는 빈칸 두 개가 따로 있어, 학생은 위쪽 빈칸에 무엇을 써야 하는지 알 수 없습니다.',
+    ),
+  );
+  // 실제 [[공백:1]] 마크업 글자 노출은 진짜 오류다
+  assert(!isFalseBlankComplaint(true, '마크업 노출', '화면에 [[공백:1]] 글자가 그대로 보입니다.'));
 });
 
 Deno.test('재검수 대상: 미검수·풀이 없음·해설 미전사(시도 전)만, 승인·전사 시도 후는 제외', () => {

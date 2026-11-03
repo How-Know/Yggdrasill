@@ -812,8 +812,9 @@ function normalizeMathSegment(mathContent) {
   // 동그라미 한글(㉠–㉭)·동그라미 숫자(①–⑳) 는 수식 폰트에 글리프가 없어 math mode 로 들어가면
   // 서버 PDF 에서 통째로 누락된다(본문 폰트엔 글리프 존재). \text{} 로 감싸 본문 폰트로 강제 출력.
   out = out.replace(/[\u3260-\u326D\u2460-\u2473]/g, (ch) => `\\text{${ch}}`);
-  // DB 에 이미 들어가 있는 \boxed{\phantom{...}} 형태도 3:2 빈칸 네모로 치환.
+  // DB 에 이미 들어가 있는 \boxed{\phantom{...}} 또는 \boxed{~~} 형태도 3:2 빈칸 네모로 치환.
   out = out.replace(/\\boxed\s*\{\s*\\phantom\s*\{[^}]*\}\s*\}/g, '\\mtemptybox{}');
+  out = out.replace(/\\boxed\s*\{\s*(?:~+|\s*)\s*\}/g, '\\mtemptybox{}');
   // VLM 추출에서 \times·\div 등 연산자 매크로가 box{} placeholder 와 공백 없이 붙어
   //   \timesbox{(나)} 처럼 미정의 제어열이 되는 경우가 있다. 분리해 placeholder 변환이
   //   되도록 연산자 매크로 뒤에 공백을 넣어 box{} 를 노출시킨다.

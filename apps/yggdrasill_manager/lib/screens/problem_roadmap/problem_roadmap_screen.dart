@@ -568,6 +568,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
           if ((problemUrl ?? '').isNotEmpty) 'problem_url': problemUrl,
           if (solUrl.isNotEmpty) 'answer_solution_url': solUrl,
           'solution_kind': it.primarySolutionKind,
+          'is_fill_in_blank': it.isFillInBlank,
           ...original,
         });
       }
@@ -594,7 +595,24 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     try {
       final n = await _runRenderCheckPass(scope, only: [item]);
       if (!mounted) return;
-      setState(() => _notice = n > 0 ? '${item.problemNumber}번 V2 렌더 검수를 다시 했습니다.' : 'V2 카드 URL을 만들지 못해 검수하지 못했습니다.');
+      final cur = _items.where((x) => x.cropId == item.cropId).firstOrNull;
+      var resized = false;
+      if (cur != null && cur.figureNeedsResize && !cur.isEngineHeld) {
+        final sized = await _resizeFiguresFromRenderCheck(includeApproved: true);
+        if (sized.contains(item.cropId) && mounted) {
+          resized = true;
+          await _loadItems(scope, reloadPreviews: false);
+          final fresh = _items.where((x) => x.cropId == item.cropId).firstOrNull;
+          if (fresh != null) {
+            await _loadEnginePreviews(scope, [fresh], merge: true);
+            await _runRenderCheckPass(scope, only: [fresh]);
+          }
+        }
+      }
+      if (!mounted) return;
+      setState(() => _notice = n > 0
+          ? '${item.problemNumber}번 V2 렌더 검수를 다시 했습니다${resized ? ' (그림 크기 자동 조정 완료)' : ''}.'
+          : 'V2 카드 URL을 만들지 못해 검수하지 못했습니다.');
     } catch (e) {
       if (mounted) setState(() => _notice = 'V2 렌더 검수 실패: $e');
     } finally {
@@ -1085,18 +1103,27 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     }
   }
 
-  /// 원본 대조에서 V2 그림 크기가 원본 비율을 벗어난 문항: 폭(widthEm)을 1/비율 배로 고쳐 적용한다(승인 안 함).
+  /// 원본 대조에서 V2 그림 크기가 원본 비율을 벗어난 문항: 폭(widthEm)을 1/비율 배로 고쳐 적용한다(승인 문항은 승인 유지).
+  /// 기존 figure_layout 이 비어 있던 문항도 기본 폭(20em)에서 1/비율 배로 줄인 배치를 새로 만들어 적용한다.
   /// 반환: 적용한 crop id
-  Future<List<String>> _resizeFiguresFromRenderCheck() async {
+  Future<List<String>> _resizeFiguresFromRenderCheck({bool includeApproved = true}) async {
     final out = <String>[];
     for (final it in _items) {
       if (!mounted || _stopRequested) break;
-      if (it.qualityStatus == 'approved' || it.isEngineHeld || !it.figureNeedsResize) continue;
-      if (figureLayoutItems(it.pbFigureLayout).isEmpty) continue;
+      if (it.isEngineHeld || !it.figureNeedsResize) continue;
+      if (!includeApproved && it.qualityStatus == 'approved') continue;
+      final scaled = scaleFigureLayout(
+        it.pbFigureLayout,
+        1 / it.figureSizeRatio!,
+        fallbackAssets: it.pbFigureAssets,
+        fallbackCount: figureMarkerCount(it.stem),
+      );
+      if (figureLayoutItems(scaled).isEmpty) continue;
       try {
         final res = await _svc.applyProblemFix(
           cropId: it.cropId,
-          figureLayout: scaleFigureLayout(it.pbFigureLayout, 1 / it.figureSizeRatio!),
+          figureLayout: scaled,
+          approveQuality: it.qualityStatus == 'approved',
           note: '그림 크기를 원본 글자 비율에 맞춰 재조정',
         );
         if (((res['changed'] as List?) ?? const []).isNotEmpty) out.add(it.cropId);
@@ -1586,16 +1613,29 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
   List<TextbookProblemReviewItem> get _fixPassTargets => [for (final it in _items) if (it.needsFixPass) it];
   int get _approvedDiffCount => _items.where((x) => x.approvedButDiffers).length;
 
-  /// 고른 문항만 교재 원본과 대조해 V2 렌더 검수를 다시 한다(승인 문항은 승인 유지, 차이만 표시).
+  /// 고른 문항만 교재 원본과 대조해 V2 렌더 검수를 다시 한다(승인 문항은 승인 유지, 그림 크기 차이가 나오면 바로 자동 조정 후 재렌더·재대조).
   Future<void> _renderCheckMany(List<TextbookProblemReviewItem> items, String label) async {
     final scope = _selectedScope;
     if (scope == null || items.isEmpty || _runningReview) return;
     setState(() => _notice = null);
     try {
-      final n = await _whileRunning(() => _runRenderCheckPass(scope, only: items));
+      final (n, resizedCount) = await _whileRunning(() async {
+        final count = await _runRenderCheckPass(scope, only: items);
+        if (!mounted || _stopRequested) return (count, 0);
+        final sized = await _resizeFiguresFromRenderCheck(includeApproved: true);
+        if (sized.isNotEmpty && mounted && !_stopRequested) {
+          await _loadItems(scope, reloadPreviews: false);
+          final sizedItems = [for (final x in _items) if (sized.contains(x.cropId)) x];
+          await _loadEnginePreviews(scope, sizedItems, merge: true);
+          await _runRenderCheckPass(scope, only: sizedItems);
+        }
+        return (count, sized.length);
+      });
       if (!mounted) return;
       final diff = _approvedDiffCount;
-      setState(() => _notice = '$label: $n문항 완료${diff > 0 ? ' · 승인 후 원본 차이 $diff문항("승인 후 원본 차이" 탭)' : ''}');
+      setState(() => _notice = '$label: $n문항 완료'
+          '${resizedCount > 0 ? ' · 그림 크기 자동 조정 $resizedCount문항' : ''}'
+          '${diff > 0 ? ' · 승인 후 원본 차이 $diff문항("승인 후 원본 차이" 탭)' : ''}');
     } catch (e) {
       if (mounted) setState(() => _notice = '$label 실패: $e');
     }
@@ -2132,6 +2172,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
                     item.setHeaderNumber.isNotEmpty ? '세트 ${item.setHeaderNumber}' : '세트형',
                     _kBlue,
                   ),
+                if (item.isFillInBlank) _pillBadge('빈칸형', _kAccent),
                 Text(
                   'PDF ${item.rawPage}쪽',
                   style: const TextStyle(color: _kTextSub, fontSize: 13, fontWeight: FontWeight.w600),
@@ -2260,14 +2301,14 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
                     url: problemUrl,
                     loading: _loadingPreviews && (problemUrl ?? '').isEmpty,
                     issue: problemIssue,
-                    issueText: qc['issue_title'] != null && !item.stage2Superseded
+                    issueText: qc['issue_title'] != null && !item.stage2TextSuperseded
                         ? '${qc['issue_title']}: ${qc['issue_detail'] ?? ''}'
                         : null,
                     badges: [
                       if (item.originalCompared) ('AI가 ⓪ 원본과 대조', _kAccent),
                       if (!item.originalCompared && qc['judged_from_v2_image'] == true) ('AI가 이 화면을 보고 판정', _kAccent),
                       if (qc['judged_from_v2_image'] == false && item.qualityStatus != 'pending') ('텍스트만으로 판정됨', _kWarn),
-                      if (rc['fidelity_ok'] == false || (!item.stage2Superseded && qc['fidelity_ok'] == false))
+                      if (rc['fidelity_ok'] == false || (!item.stage2TextSuperseded && qc['fidelity_ok'] == false))
                         ('원본과 내용 불일치', _kError),
                       if (rc['figure_position_ok'] == false) ('그림 위치 원본과 다름', _kError),
                       if (item.figureNeedsResize) ('그림 크기 원본 대비 ×${item.figureSizeRatio!.toStringAsFixed(2)}', _kError),
@@ -2945,7 +2986,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
               Icons.build_circle_outlined,
             ),
           ],
-          if (qc['issue_title'] != null && !item.stage2Superseded) ...[
+          if (qc['issue_title'] != null && !item.stage2TextSuperseded) ...[
             const SizedBox(height: 10),
             _buildBanner('문항 카드 — ${qc['issue_title']}: ${qc['issue_detail'] ?? ''}', _kError, Icons.warning_amber_rounded),
           ],
@@ -3079,6 +3120,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
               side: BorderSide(color: cur == k ? (mismatch ? _kError : _kAccent) : _kBorder),
             ),
           _pillBadge('규칙: $reason', mismatch ? _kError : _kTextMuted),
+          if (item.isFillInBlank) _pillBadge('빈칸형 (발문·수식 □ 빈칸 정상)', _kAccent),
           if (ai != null) _pillBadge('AI: ${_kindLabel(ai)}', ai == want ? _kTextMuted : _kWarn),
           if (mismatch)
             ElevatedButton.icon(
