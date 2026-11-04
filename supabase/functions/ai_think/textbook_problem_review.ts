@@ -339,8 +339,15 @@ export function isDataFixableSymptom(
   if (commonStem !== undefined && sanitizeProblemMarkup(commonStem) !== String(commonStem ?? '')) return true;
   const text = `${String(title ?? '')} ${String(detail ?? '')} ${String(symptom ?? '')}`.trim();
   if (!text) return false;
-  return /(?:common_stem|공통\s*(?:지시문|발문)|이중\s*대괄호|\[\[\s*\]\]|\[공백|참조\s*기호|한글\s*표지|\([가나다라마바사]\)|빈\s*괄호|자리표시자|\[image\]|계산식이?\s*두\s*번|중복\s*표시)/i
+  return /(?:common_stem|공통\s*(?:지시문|발문)|저장된\s*개별\s*발문|첫\s*줄\s*수식.*표시되지|소문항\s*(?:정답|별)|이중\s*대괄호|\[\[\s*\]\]|\[공백|참조\s*기호|한글\s*표지|\([가나다라마바사]\)|빈\s*괄호|자리표시자|\[image\]|계산식이?\s*두\s*번|중복\s*표시)/i
     .test(text);
+}
+
+/** 소문항 정답 사이 공백이 수식 모드에서 붙어 보인다는 지적(카드 렌더 포맷에서 [공백:1.5]로 해결됨)인지 판별한다. */
+export function isSubAnswerSpacingComplaint(title: unknown, detail: unknown): boolean {
+  const text = `${String(title ?? '')} ${String(detail ?? '')}`.trim();
+  if (!text) return false;
+  return /(?:소문항\s*(?:정답|별\s*정답).*(?:구분|이어짐|붙어)|앞\s*소문항의\s*답과\s*다음\s*번호가\s*붙어)/.test(text);
 }
 
 export type QuestionKind = 'objective' | 'subjective' | 'essay';
@@ -1600,9 +1607,10 @@ export async function handleTextbookProblemRenderCheck(
     const qc = (a.quality_checks ?? {}) as Rec;
     const isFillInBlank = x.isFillInBlank || qc.is_fill_in_blank === true;
     const falseBlank = isFalseBlankComplaint(isFillInBlank, r.issue_title, r.issue_detail);
+    const falseSubAnsSpacing = isSubAnswerSpacingComplaint(r.issue_title, r.issue_detail);
     const originalCompared = !!x.originalUrl && !!x.problemUrl;
     const problemOk = r.problem_ok !== false || falseBlank;
-    const answerOk = r.answer_ok !== false;
+    const answerOk = r.answer_ok !== false || falseSubAnsSpacing;
     const solutionOk = r.solution_ok !== false;
     const fidelityOk = !originalCompared || r.fidelity_ok !== false || falseBlank;
     const figurePositionOk = !originalCompared || r.figure_position_ok !== false;
@@ -1635,13 +1643,14 @@ export async function handleTextbookProblemRenderCheck(
       : rawIssueKind;
     const autoHoldEngine = prevStatus !== 'approved' && prevStatus !== 'held' && !renderOk &&
       issueKind === 'engine' && fidelityOk && qc.fidelity_ok !== false && !dataSymptom && !hasFigures;
-    // 승인·엔진 보류는 재검수로 바꾸지 않는다. 1회차·2차에서 이상이 없고(그림 문항은 수정안 반영 후) 통과한 문항은 바로 승인(approved)한다.
-    const nextStatus = prevStatus === 'approved' || prevStatus === 'held'
+    // 이전 보류(held) 문항이라도 이번 V2 렌더 검수에서 문항 카드가 정상(problemOk && fidelityOk)이고 엔진 문제가 아니면 보류를 해제한다.
+    const unholdFromRender = prevStatus === 'held' && problemOk && fidelityOk && issueKind !== 'engine';
+    const nextStatus = prevStatus === 'approved' || (prevStatus === 'held' && !unholdFromRender)
       ? prevStatus
       : autoHoldEngine
       ? 'held'
       : (renderOk && stage2Ok && figureAppliedOrNone ? 'approved' : 'issue');
-    const issueTitle = !falseBlank && typeof r.issue_title === 'string' && r.issue_title.trim()
+    const issueTitle = !falseBlank && !falseSubAnsSpacing && typeof r.issue_title === 'string' && r.issue_title.trim()
       ? r.issue_title
       : !figureSizeOk
       ? `그림 크기가 원본과 다름 (원본 대비 ${sizeRatio}배)`
@@ -1674,6 +1683,14 @@ export async function handleTextbookProblemRenderCheck(
       quality_status: nextStatus,
       ...(nextStatus === 'approved' && prevStatus !== 'approved'
         ? { quality_approved_at: nowIso, quality_approved_by: auth.userId }
+        : {}),
+      ...(unholdFromRender
+        ? {
+          engine_held_at: null,
+          engine_held_by: null,
+          engine_hold_note: null,
+          ...(nextStatus === 'approved' ? { engine_resolved_at: nowIso } : {}),
+        }
         : {}),
       ...(autoHoldEngine
         ? {

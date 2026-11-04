@@ -101,6 +101,26 @@ String normalizeAnswerForCompare(String s) => s
     .replaceAll(RegExp(r'[\s${}\\]'), '')
     .toLowerCase();
 
+/// V2 정답+해설 카드에 넣을 정답 문자열 포맷:
+/// '1) 1, 2, 4, 8 2) 1, 2, 3, 4, 6, 12' 처럼 소문항 번호가 이어진 정답은 TeX 수식 모드에서 공백이 무시되어
+/// '82)', '123)', '1)1' 처럼 앞 답과 다음 소문항 번호가 붙어 보인다. 소문항 번호 앞뒤에 고정 공백 마커([공백:N])를 넣는다.
+String formatAnswerForCard(String raw) {
+  var s = raw.trim();
+  if (s.isEmpty) return s;
+  if (RegExp(r'^\s*(?:\(\s*1\s*\)|1\)|⑴)\s*\S').hasMatch(s)) {
+    s = s.replaceAllMapped(
+      RegExp(r'(?<=\S)\s+(?=(?:\(\s*(?:[2-9]|\d{2,})\s*\)|(?:[2-9]|\d{2,})\)|[⑵-⑼])\s*)'),
+      (_) => '[공백:1.5]',
+    );
+    s = s.replaceAllMapped(
+      RegExp(r'((?:^|\[공백:[\d.]+\])\s*(?:\(\s*\d+\s*\)|\d+\)|[⑴-⑼]))\s*'),
+      (m) => '${m.group(1)}[공백:0.4]',
+    );
+  }
+  s = s.replaceAll(RegExp(r'\s*\n+\s*'), '[공백:1.5]');
+  return s;
+}
+
 /// 공통 발문이 비어 있지 않은데 지시문이 아니라 숫자·수식 조각(예: '36', '36=2^2×3^2')만 들어 있는 손상 상태인가
 bool isCorruptedCommonStem(String commonStem) {
   final c = commonStem.trim();
@@ -1578,8 +1598,9 @@ class TextbookProblemReviewService {
       solutionAnswer: ans,
     );
     if (sol.isEmpty && ans.isEmpty) return '';
+    final formattedAns = formatAnswerForCard(ans);
     final buf = StringBuffer();
-    if (ans.isNotEmpty) buf.write('정답  $ans');
+    if (formattedAns.isNotEmpty) buf.write('정답  $formattedAns');
     if (sol.isNotEmpty) {
       if (buf.isNotEmpty) buf.write('[문단]');
       buf.write(solutionKind == 'ai' ? '[AI 풀이]' : '[해설]');

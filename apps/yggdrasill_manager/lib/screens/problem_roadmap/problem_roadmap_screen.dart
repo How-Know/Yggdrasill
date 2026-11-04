@@ -818,6 +818,25 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     final approvedQualIds = <String>{};
     final touchedCropIds = <String>{};
 
+    // 0-a) 엔진 보류(held) 상태이지만 실제로는 데이터 분류(issueKind == 'data')이거나 문항 카드 렌더가 정상(problem_ok == true)인
+    //      오판 보류 문항은 먼저 보류를 해제하여 일괄 처리 대상에 포함시킨다.
+    final falseHeldIds = [
+      for (final x in _items)
+        if (x.isEngineHeld &&
+            (x.issueKind == 'data' ||
+                x.hasPendingFixProposal ||
+                x.proposalAlreadyReflectedInDb ||
+                (x.renderChecks['problem_ok'] == true &&
+                    x.renderChecks['fidelity_ok'] != false &&
+                    x.renderChecks['issue_kind'] != 'engine')))
+          x.cropId,
+    ];
+    if (falseHeldIds.isNotEmpty) {
+      await _svc.setEngineHold(falseHeldIds, hold: false);
+      touchedCropIds.addAll(falseHeldIds);
+      await _loadItems(scope, reloadPreviews: false);
+    }
+
     // 0) 현재 선택된 문항에 운영자가 직접 손질한 편집 내용이 있으면 먼저 반영한다.
     final sel = _items.where((x) => x.cropId == _selectedCropId).firstOrNull;
     if (sel != null && !sel.isEngineHeld && _problemEditDirty(sel)) {

@@ -42,6 +42,13 @@ void main() {
     expect(percentOf(202, 202), 100);
   });
 
+  test('formatAnswerForCard 는 소문항 번호(1) 2) 3)) 사이와 번호 뒤에 고정 공백 마커를 넣는다', () {
+    expect(
+      formatAnswerForCard('1) 1, 2, 4, 8 2) 1, 2, 3, 4, 6, 12 3) 1, 2, 4 4) 4'),
+      '1)[공백:0.4]1, 2, 4, 8[공백:1.5]2)[공백:0.4]1, 2, 3, 4, 6, 12[공백:1.5]3)[공백:0.4]1, 2, 4[공백:1.5]4)[공백:0.4]4',
+    );
+  });
+
   test('해설지에 답만 인쇄된 문항(isAnswerOnlyOriginalSolution)과 [image] 자리표시자 정답 처리', () {
     final answerOnlyItem = TextbookProblemReviewItem.fromJson({
       'crop_id': 'c1',
