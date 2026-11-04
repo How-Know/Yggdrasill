@@ -132,4 +132,17 @@ Deno.test('본문·공통 발문 수정안 정리: 공통 발문만 바뀐 경�
   });
   assertEquals(stripExisting.commonStem, '다음 수의 약수의 개수를 구하여라.');
   assertEquals(stripExisting.stem, '480');
+
+  // 모델이 corrected_stem 을 비웠어도 기존 stem 에 [ [[공백:3]] ] 나 aligned 내 날한글이 있으면 자동으로 정규화한 stem 을 제안한다
+  const syntaxFixed = normalizeTextFix({
+    textMatchesOriginal: true,
+    correctedStem: null,
+    correctedCommonStem: null,
+    correctedChoices: null,
+    currentStem: '두 수의 [ [[공백:3]] ]의 합',
+    currentCommonStem: '',
+    currentChoices: [],
+  });
+  assertEquals(syntaxFixed.stem, '두 수의 [[공백:3]]의 합');
+  assertEquals(syntaxFixed.textSame, false);
 });

@@ -7,6 +7,7 @@ import {
   figureMarkerCount,
   figureSizeRatioOk,
   isCorruptedCommonStem,
+  isDataFixableSymptom,
   isFalseBlankComplaint,
   isFillInBlankProblem,
   isMathResolveTarget,
@@ -15,6 +16,7 @@ import {
   normalizeIssueKind,
   normalizeProposedChoices,
   parseReviewImages,
+  sanitizeProblemMarkup,
   stripCommonStem,
 } from './textbook_problem_review.ts';
 
@@ -256,4 +258,26 @@ Deno.test('해설 전체 페이지 폴백 이미지 파싱 및 답만 있는 해
     false,
   );
 });
+
+Deno.test('렌더 엔진 문법 정규화(sanitizeProblemMarkup)와 데이터 수정 가능 증상(isDataFixableSymptom) 판별', () => {
+  // 1) 삼중 대괄호 공백 마커 → 단일 대괄호 빈칸 [[공백:N]]
+  assertEquals(
+    sanitizeProblemMarkup('두 수의 [ [[공백:3]] ]의 합에 [ [[공백:2]] ]인 부호를 붙인다.'),
+    '두 수의 [[공백:3]]의 합에 [[공백:2]]인 부호를 붙인다.',
+  );
+  // 2) 수식 블록 안 날한글 라벨 (가)~(라) → \text{(가)}
+  assertEquals(
+    sanitizeProblemMarkup('\\begin{aligned}\n& = (-7) \\leftarrow (가) \\\\\n& = -10 \\leftarrow (나)\n\\end{aligned}'),
+    '\\begin{aligned}\n& = (-7) \\leftarrow \\text{(가)} \\\\\n& = -10 \\leftarrow \\text{(나)}\n\\end{aligned}',
+  );
+  // 3) \text{box{~~}} → box{~~}
+  assertEquals(sanitizeProblemMarkup('= \\text{box{~~}}'), '= box{~~}');
+
+  // 본문 수정으로 해결 가능한 증상은 engine 이 아니라 data 로 분류해야 한다
+  assert(isDataFixableSymptom('빈칸 마크업이 이중 대괄호로 노출됨', '[[ ]] 형태로 표시됨', '빈칸 마크업 노출'));
+  assert(isDataFixableSymptom('계산 단계의 한글 표지 누락', '(가), (나)가 빈 괄호로 보임', null));
+  assert(isDataFixableSymptom(null, null, '저장된 common_stem 대신 개별 계산식을 표시하여 공통 지시문이 누락되고 계산식이 두 번 표시됨.'));
+  assert(!isDataFixableSymptom('분수 기호 세로 겹침', '분자와 분모가 겹쳐 보임', '분수 겹침', '\\frac{1}{2}', ''));
+});
+
 

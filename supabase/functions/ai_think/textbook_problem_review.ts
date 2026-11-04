@@ -8,7 +8,7 @@ import { uuidOrNull } from './validate.ts';
 
 type Rec = Record<string, unknown>;
 
-export const TEXTBOOK_REVIEW_PROMPT_VERSION = 'textbook-problem-review-2026-11-03g';
+export const TEXTBOOK_REVIEW_PROMPT_VERSION = 'textbook-problem-review-2026-11-04a';
 
 /** 품질 이상의 원인 분류. data=문항 데이터(본문·선지) 오류, engine=조판 엔진 문제, figure=도형 자산 문제 */
 export type IssueKind = 'none' | 'data' | 'engine' | 'figure';
@@ -299,6 +299,48 @@ export function isFalseBlankComplaint(isFillInBlank: boolean, title: unknown, de
   if (!text) return false;
   if (/\[\[?\s*공백|박스시작|박스끝|표시작|표끝|PB_FIG/i.test(text)) return false;
   return /(?:용도가\s*불명확한\s*빈칸|단독\s*빈칸|빈칸이\s*(?:추가|하나\s*더|더\s*보|노출|있)|네모가\s*(?:추가|더\s*보|노출))/.test(text);
+}
+
+/**
+ * 렌더 엔진 문법과 다르게 작성된 본문 마크업·LaTeX 를 표준 문법으로 정규화한다.
+ * 1) '[ [[공백:3]] ]' 처럼 대괄호가 삼중으로 겹친 공백 마커 → '[[공백:3]]' (바깥 [] + 안쪽 [공백:3] = 단일 대괄호 빈칸)
+ * 2) '\text{box{~~}}' 처럼 \text{} 안에 들어간 빈칸 마커 → 'box{~~}'
+ * 3) 수식 블록(\begin{aligned|array|cases|gathered|split}) 안의 날한글 라벨 '(가)'~'(하)' 또는 화살표 뒤 날한글 → '\text{(가)}'
+ */
+export function sanitizeProblemMarkup(raw: unknown): string {
+  let s = String(raw ?? '');
+  if (!s) return s;
+  s = s.replace(/\[\s*\[\s*\[공백\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*\]\s*\]\s*\]/g, '[[공백:$1]]');
+  s = s.replace(/\\text\s*\{\s*box\s*\{\s*(?:~~)?\s*\}\s*\}/gi, 'box{~~}');
+  s = s.replace(
+    /(\\begin\{(aligned|alignedat|gathered|split|array|cases)\})([\s\S]*?)(\\end\{\2\})/g,
+    (_m, open: string, _env: string, body: string, close: string) => {
+      const fixedBody = body
+        .replace(/(?<!\\text\{)\(([가-힣]{1,4})\)/g, '\\text{($1)}')
+        .replace(/(\\(?:left|right|leftrightarrow|Left|Right)arrow\s*)([가-힣]{1,6})(?![가-힣}])/g, '$1\\text{$2}');
+      return `${open}${fixedBody}${close}`;
+    },
+  );
+  return s;
+}
+
+/**
+ * AI 가 'engine' 으로 잘못 분류하더라도 실제로는 본문·공통발문 데이터 수정으로 해결되는 증상인지 판별한다.
+ * - 오타, 빠짐(참조 기호 (가)~(라) 누락, 지시문 누락 등), 중복, 렌더 엔진 문법 위반([ [[공백:N]] ], 수식 내 날한글 등)은 모두 data 오류다.
+ */
+export function isDataFixableSymptom(
+  title: unknown,
+  detail: unknown,
+  symptom: unknown,
+  stem?: unknown,
+  commonStem?: unknown,
+): boolean {
+  if (stem !== undefined && sanitizeProblemMarkup(stem) !== String(stem ?? '')) return true;
+  if (commonStem !== undefined && sanitizeProblemMarkup(commonStem) !== String(commonStem ?? '')) return true;
+  const text = `${String(title ?? '')} ${String(detail ?? '')} ${String(symptom ?? '')}`.trim();
+  if (!text) return false;
+  return /(?:common_stem|공통\s*(?:지시문|발문)|이중\s*대괄호|\[\[\s*\]\]|\[공백|참조\s*기호|한글\s*표지|\([가나다라마바사]\)|빈\s*괄호|자리표시자|\[image\]|계산식이?\s*두\s*번|중복\s*표시)/i
+    .test(text);
 }
 
 export type QuestionKind = 'objective' | 'subjective' | 'essay';
@@ -600,14 +642,18 @@ const BLIND_SOLVE_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔�
      세트 문항은 원본에서 공통 지시문이 세트 머리에 한 번만 인쇄되는 것이 정상입니다. V2 화면에 공통 지시문이 한 번 보이면 일치, 두 번 보이면 불일치입니다.
    - 이상이 하나라도 있으면 quality_issue_title과 quality_issue_detail에 학생 입장에서 무엇이 어떻게 보이는지(예: "②번 선지가 화면에 없음", "분수가 \\frac{1}{2} 글자로 노출됨")를 한글로 명확히 적고, 이상이 없으면 둘 다 null로 두세요.
 4-1. 이상의 원인 분류(issue_kind) — 운영자가 어디를 고칠지 정하는 기준입니다:
-   - "data": 문항 데이터 자체가 틀렸다. 발문·선지 글자가 원본과 다르거나 빠짐, 선지 개수 부족, 수식의 LaTeX 문법이 깨져 있음(괄호 짝이 안 맞음, $ 짝이 안 맞음 등), 마크업 오타. → 데이터를 고치면 해결된다.
-   - "engine": 데이터 텍스트는 맞는데 우리 조판 엔진이 잘못 그린다. 올바른 LaTeX인데 겹침·잘림·간격 이상·기호 누락, 줄바꿈이 엉킴, 표/상자 마크업이 그려지지 않음. → 엔진(템플릿)을 고쳐야 하며 같은 표기를 쓰는 다른 문항에도 반복된다.
+   - "data": 본문·공통발문·선지·정답 텍스트를 수정하면 해결되는 모든 문제입니다!
+     * 글자·숫자·수식·참조 기호((가)~(라) 등)·지시문·선지가 빠지거나 원본과 다름, 오타, 중복 표시.
+     * 렌더 엔진 문법과 다르게 작성된 마크업·LaTeX:
+       - 우리 엔진의 공백 마커는 단일 대괄호 [공백:n] 입니다(소괄호 빈칸은 ([공백:n]), 단일 대괄호 빈칸 [   ] 은 [[공백:n]], 네모 상자 빈칸은 box{~~} 또는 □). 만약 [ [[공백:n]] ] 처럼 대괄호를 겹쳐 써서 화면에 [[ ]] 로 보이거나, \\text{box{~~}} 처럼 잘못 감싸 마크업이 노출되면 무조건 "data" 입니다.
+       - 수식 환경($...$, \\begin{aligned}...\\end{aligned} 등) 안에 한글((가), (나) 등)을 \\text{(가)} 로 감싸지 않고 날한글로 적어 화면에 빈 괄호 () 만 보이는 경우도 엔진 결함이 아니라 LaTeX 문법 작성 오류이므로 무조건 "data" 입니다.
+   - "engine": 저장된 본문·공통발문·선지 텍스트와 LaTeX·마크업 문법이 100% 올바르고 원본과도 완전히 일치하는데, 본문을 어떻게 수정해도 해결할 수 없고 조판 엔진(템플릿) 자체를 고쳐야만 해결되는 순수 렌더링 결함(예: 정상 수식인데 분수·첨자가 겹침, 카드 폭 밖으로 잘림)일 때만 "engine"으로 분류합니다. 본문 수정으로 고칠 수 있으면 절대 "engine"으로 분류하지 마세요.
    - "figure": 도형·그래프 자산이 없거나 잘림(텍스트·LaTeX 문제가 아님).
    - 이상이 없으면 "none".
 4-2. 데이터 수정 제안(proposed_stem, proposed_common_stem, proposed_choices, fix_reason) — issue_kind 가 "data"일 때만:
    - 화면에 같은 지시문이 두 번 보이면(공통 지시문이 stem_raw 에도 들어 있는 경우) issue_kind 는 "data" 이고, proposed_stem 은 stem_raw 에서 공통 지시문 부분을 뺀 개별 문항 본문만 적으세요.
    - 세트 문항의 공통 발문(common_stem)이 비어 있거나, 지시문 문장이 빠졌거나, 세트 첫 문항의 숫자·식(예: "36", "36=2^2×3^2")이 잘못 들어 있으면 세트 머리 원본 이미지(또는 문항 원본)에서 읽은 원래 공통 지시문 전체를 proposed_common_stem 에 적으세요. 고칠 것이 없거나 세트 문항이 아니면 null.
-   - proposed_stem: stem_raw(개별 발문 원문, 공통 지시문 제외)를 최소한으로 고친 전체 본문. 마크업([문단], [박스시작]/[박스끝], [표시작]/[표끝], [[공백:n]], $...$ 수식)은 원문 형식을 그대로 유지하고, 틀린 부분만 바꾸세요. 원본 이미지가 있으면 그것을 기준으로 맞추세요(빠진 글자는 원본에서 읽어 채우고, 원본에 없는 엉뚱한 숫자·문단은 뺍니다). 고칠 것이 없으면 null.
+   - proposed_stem: stem_raw(개별 발문 원문, 공통 지시문 제외)를 최소한으로 고친 전체 본문. 마크업([문단], [박스시작]/[박스끝], [표시작]/[표끝], [공백:n], box{~~}, $...$ 수식)은 엔진 표준 문법을 따르고, 수식 안의 한글 라벨은 \\text{(가)} 로 감싸며, 대괄호 빈칸은 [[공백:n]]([ [[공백:n]] ] 금지)으로 적으세요. 원본 이미지가 있으면 그것을 기준으로 맞추세요(빠진 글자는 원본에서 읽어 채우고, 원본에 없는 엉뚱한 숫자·문단은 뺍니다). 고칠 것이 없으면 null.
    - proposed_choices: 선지를 고쳐야 할 때만 전체 선지 배열 [{label:"①", text:"..."}, ...]을 적고, 아니면 null. label 은 원문 그대로(①~⑤ 또는 ㄱ,ㄴ,ㄷ).
    - fix_reason: 무엇을 왜 고쳤는지 한 줄. 제안이 없으면 null.
    - "engine"·"figure"·"none" 이면 proposed_stem, proposed_common_stem, proposed_choices, fix_reason 모두 null.
@@ -660,8 +706,8 @@ const RENDER_CHECK_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔
 - figure_size_ratio: 원본과 카드 모두에 그림이 있을 때, "본문 글자 크기에 대한 그림 크기"가 카드에서 원본의 몇 배인지(같으면 1.0, 카드 그림이 더 크면 1보다 큼, 예 1.4 · 0.7). 각 이미지 안에서 그림 폭을 본문 글자 크기와 비교해 추정하세요. 그림이 없으면 null.
 - 이상이 있으면 issue_title(한 줄)과 issue_detail(어느 카드의 어디가 어떻게 보이는지, 원본과 무엇이 다른지)을 한글로 적고, 없으면 둘 다 null.
 - issue_kind: 이상의 원인 분류. 운영자가 어디를 고칠지 정하는 기준입니다.
-  - "engine": 내용은 맞아 보이는데 조판이 잘못됐다 — 수식·글자 겹침, 가장자리 잘림, 간격 이상, 기호가 빠짐, 줄바꿈이 엉킴, 표/상자가 그려지지 않음, 마크업이 글자로 노출됨. 같은 표기를 쓰는 다른 문항에서도 반복될 문제.
-  - "data": 내용 자체의 문제 — 선지가 빠짐, 정답이 비어 있음, 해설이 중간에서 끝남, 글자·수식 오타, 원본과 글자·조건이 다름, LaTeX 원문이 그대로 노출될 만큼 문법이 깨짐.
+  - "data": 본문·공통발문·선지·정답 데이터를 수정하면 해결되는 모든 문제 — 글자·수식·참조 기호((가)~(라) 등)·지시문·선지가 빠지거나 두 번 나옴, 오타, 원본과 내용이 다름, 정답이 비어 있거나 [image] 자리표시자임, 해설이 중간에서 끝남, 또는 렌더 엔진 문법과 다르게 작성됨(예: [ [[공백:n]] ] 처럼 대괄호를 겹쳐 써서 [[ ]] 로 노출됨, 수식 안에 \\text{(가)} 없이 한글을 써서 빈 괄호 () 로 보임, LaTeX/마크업 문법 오타).
+  - "engine": 본문·공통발문·선지 데이터와 LaTeX·마크업 문법이 100% 올바르고 원본과도 완전히 일치하는데, 본문을 수정해서는 해결할 수 없고 렌더 엔진(템플릿) 자체를 수정해야만 하는 순수 조판 결함(예: 정상 수식인데 분수·첨자 겹침, 카드 가장자리 잘림, 간격 깨짐). 본문 텍스트나 마크업 문법을 고쳐 해결할 수 있으면 절대 "engine"으로 분류하지 마세요.
   - "figure": 도형·그래프가 없거나 잘림, 또는 원본과 크기·위치가 크게 다름.
   - "none": 이상 없음.
 - engine_symptom: issue_kind 가 "engine"일 때 증상을 짧은 명사구로(예: "분수 세로 겹침", "루트 기호 누락", "표 테두리 미출력"). 같은 증상끼리 묶어 엔진 수정 목록을 만드는 데 씁니다. 아니면 null.`;
@@ -1085,21 +1131,31 @@ export async function handleTextbookProblemReview(
     // 엔진 보류 중인 문항은 재검수해도 보류를 유지한다(엔진 목록에서 따로 관리).
     const keepHeld = prev.quality_status === 'held';
 
+    const curStemStr = String(it.stem ?? '');
+    const sanitizedCurStem = sanitizeProblemMarkup(curStemStr);
+    const hasSyntaxFix = sanitizedCurStem !== curStemStr;
+    const dataFixable = hasSyntaxFix || isDataFixableSymptom(issueTitle, issueDetail, null, curStemStr, it.common_stem);
+
     // 데이터 수정 제안: 원문과 실제로 다를 때만 남긴다. 이미 적용된 제안은 비운다.
-    const issueKind: IssueKind = dupStripped !== null || corruptedCommon
+    const rawIssueKind: IssueKind = dupStripped !== null || corruptedCommon || dataFixable
       ? 'data'
       : hasFigures && b.issue_kind !== 'data'
       ? 'figure'
       : normalizeIssueKind(b.issue_kind, !qualityOk);
-    // 렌더 엔진 문제(본문·원본 충실도 이상이 없고 도형 문항도 아닌데 조판 엔진만 깨진 경우)는 1회차에서 바로 보류(held)로 넘긴다.
+    const issueKind: IssueKind = rawIssueKind === 'engine' && (!fidelityOk || dataFixable) ? 'data' : rawIssueKind;
+    // 렌더 엔진 문제(본문·원본 충실도 이상이 없고 도형 문항도 아니며 본문 수정으로 고칠 수 없는 순수 조판 결함)만 1회차에서 보류(held)로 넘긴다.
     const autoHoldEngine = !qualityOk && issueKind === 'engine' && dupStripped === null && !corruptedCommon &&
-      fidelityOk && !hasFigures;
+      !dataFixable && fidelityOk && !hasFigures;
     // 공통 발문 중복은 규칙으로 바로 고친 본문을 제안한다(모델 제안보다 우선).
+    const aiProposedStem = typeof b.proposed_stem === 'string' && b.proposed_stem.trim()
+      ? sanitizeProblemMarkup(b.proposed_stem.trim())
+      : null;
     const proposedStem = dupStripped !== null
-      ? dupStripped
-      : (issueKind === 'data' || hasFigures) && typeof b.proposed_stem === 'string' && b.proposed_stem.trim() &&
-          b.proposed_stem.trim() !== String(it.stem ?? '').trim()
-      ? b.proposed_stem.trim()
+      ? sanitizeProblemMarkup(dupStripped)
+      : (issueKind === 'data' || hasFigures) && aiProposedStem && aiProposedStem !== curStemStr.trim()
+      ? aiProposedStem
+      : hasSyntaxFix
+      ? sanitizedCurStem
       : null;
     const proposedCommonStem = dupFix?.commonStem ?? (
       (issueKind === 'data' || corruptedCommon) && typeof b.proposed_common_stem === 'string' && b.proposed_common_stem.trim() &&
@@ -1572,9 +1628,13 @@ export async function handleTextbookProblemRenderCheck(
         qc.latex_v2_ok !== false && qc.fidelity_ok !== false && !qc.issue_title);
     const prevStatus = String(a.quality_status ?? 'pending');
     const figureOnly = problemOk && answerOk && solutionOk && fidelityOk && (!figurePositionOk || !figureSizeOk || (hasFigures && !figureAppliedOrNone));
-    const issueKind = figureOnly ? 'figure' : normalizeIssueKind(r.issue_kind, !renderOk);
+    const dataSymptom = isDataFixableSymptom(r.issue_title, r.issue_detail, r.engine_symptom);
+    const rawIssueKind = figureOnly ? 'figure' : normalizeIssueKind(r.issue_kind, !renderOk);
+    const issueKind: IssueKind = rawIssueKind === 'engine' && (!fidelityOk || qc.fidelity_ok === false || dataSymptom)
+      ? 'data'
+      : rawIssueKind;
     const autoHoldEngine = prevStatus !== 'approved' && prevStatus !== 'held' && !renderOk &&
-      issueKind === 'engine' && fidelityOk && !hasFigures;
+      issueKind === 'engine' && fidelityOk && qc.fidelity_ok !== false && !dataSymptom && !hasFigures;
     // 승인·엔진 보류는 재검수로 바꾸지 않는다. 1회차·2차에서 이상이 없고(그림 문항은 수정안 반영 후) 통과한 문항은 바로 승인(approved)한다.
     const nextStatus = prevStatus === 'approved' || prevStatus === 'held'
       ? prevStatus

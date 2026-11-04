@@ -7,10 +7,12 @@ import { recordAiRun } from '../_shared/ai/usage.ts';
 import {
   cleanSolutionTranscribedText,
   figureMarkerCount,
+  isDataFixableSymptom,
   isFillInBlankProblem,
   normalizeProposedChoices,
   parseProblems,
   parseReviewImages,
+  sanitizeProblemMarkup,
   stripCommonStem,
   TEXTBOOK_REVIEW_PROMPT_VERSION,
 } from './textbook_problem_review.ts';
@@ -224,9 +226,12 @@ export function normalizeTextFix(args: {
 }): NormalizedTextFix {
   const curStem = String(args.currentStem ?? '');
   const curCommon = String(args.currentCommonStem ?? '').trim();
-  const rawStem = typeof args.correctedStem === 'string' && args.correctedStem.trim() ? args.correctedStem.trim() : null;
+  const sanitizedCurStem = sanitizeProblemMarkup(curStem);
+  const rawStem = typeof args.correctedStem === 'string' && args.correctedStem.trim()
+    ? sanitizeProblemMarkup(args.correctedStem.trim())
+    : (sanitizedCurStem !== curStem ? sanitizedCurStem : null);
   const rawCommon = typeof args.correctedCommonStem === 'string' && args.correctedCommonStem.trim()
-    ? args.correctedCommonStem.trim()
+    ? sanitizeProblemMarkup(args.correctedCommonStem.trim())
     : null;
   let stem = rawStem && rawStem !== curStem.trim() ? rawStem : null;
   const commonStem = rawCommon && rawCommon !== curCommon ? rawCommon : null;
@@ -350,20 +355,27 @@ const FIX_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔진의 [�
 (라) 앞 단계에서 지적된 문제(issues)가 주어집니다. 목표는 저장 데이터를 원본과 똑같은 문항으로 고친 전체 본문을 쓰고, 그림의 자리와 크기를 재는 것입니다.
 
 [1. 본문·선지 수정안 — 원본 이미지가 기준]
-- 원본에 인쇄된 이 문항(세트 머리 제외)을 처음부터 끝까지 다시 적은 전체 개별 발문을 corrected_stem 에 적으세요. 저장된 stem 이 원본과 완전히 같을 때만 null.
-- 마크업은 저장 형식을 그대로 따릅니다: 수식 $...$(LaTeX), 문단 구분 [문단], 상자 [박스시작]...[박스끝], 표 [표시작]...[표끝], 빈칸 [[공백:n]] 등
-  저장 stem 에 쓰인 표기를 유지하고, 그림 자리에는 [그림] 마커를 둡니다(그림이 본문 옆이나 아래에 있으면 그 그림이 딸린 문단의 끝).
-- 빈칸형 문항(is_fill_in_blank = true, 예: "□ 안에 알맞은 수를 써넣어라", 결론 수식 "⇒ 90 = 2 × □ × 5" 등): 지시문이나 결론 수식에 들어 있는 네모(□, [[공백:n]], \\square)는 원본 그대로 유지해야 하는 정상 빈칸입니다. 빈칸을 지우거나 오류로 취급하지 마세요.
+- 원본에 인쇄된 이 문항(세트 머리 제외)을 처음부터 끝까지 다시 적은 전체 개별 발문을 corrected_stem 에 적으세요. 저장된 stem 이 원본과 완전히 같고 V2 렌더링 문법 문제도 없을 때만 null.
+- 마크업과 LaTeX 문법(우리 V2 렌더 엔진 규칙):
+  - 수식 $...$(LaTeX), 문단 구분 [문단], 상자 [박스시작]...[박스끝], 표 [표시작]...[표끝], 그림 자리 [그림].
+  - 공백 마커는 단일 대괄호 [공백:n] 입니다!
+    * 그냥 빈칸 공백: [공백:3]
+    * 소괄호 빈칸 (   ): ([공백:3])
+    * 단일 대괄호 빈칸 [   ]: [[공백:3]] (바깥 [ ] 한 겹 + 안쪽 [공백:3]. 절대로 [ [[공백:3]] ] 처럼 대괄호를 세 겹으로 쓰지 마세요 — 그렇게 쓰면 화면에 [[ ]] 로 이중 대괄호가 노출됩니다. 저장된 stem 에 [ [[공백:n]] ] 이 있으면 반드시 [[공백:n]] 으로 고쳐 corrected_stem 에 적으세요!)
+    * 네모 상자 빈칸 □: box{~~} 또는 □ (절대로 \\text{box{~~}} 처럼 \\text{} 안에 넣지 마세요).
+  - 수식 환경($...$, \\begin{aligned}...\\end{aligned}, \\begin{array}...\\end{array} 등) 안에 한글((가), (나), (다), (라) 같은 단계 기호나 단어)을 쓸 때는 반드시 \\text{(가)} 처럼 \\text{...} 로 감싸야 합니다! \\text{} 없이 날한글로 \\leftarrow (가) 처럼 적으면 수식 폰트에 한글이 없어 화면에 빈 괄호 () 만 찍힙니다. 저장된 stem 의 수식 안에 날한글이 있어 V2 화면에서 한글이 빠졌으면 반드시 \\text{(가)} 로 감싼 본문을 corrected_stem 에 적으세요(이것은 엔진 오류가 아니라 본문 문법 수정 대상입니다).
+- 빈칸형 문항(is_fill_in_blank = true, 예: "□ 안에 알맞은 수를 써넣어라", 결론 수식 "⇒ 90 = 2 × □ × 5" 등): 지시문이나 결론 수식에 들어 있는 네모(□, [공백:n], box{~~}, \\square)는 원본 그대로 유지해야 하는 정상 빈칸입니다. 빈칸을 지우거나 오류로 취급하지 마세요.
 - 세트 문항(common_stem 이 있거나 세트 머리 원본 이미지가 함께 온 문항):
   - 학생 화면은 common_stem(세트 머리 지시문) 다음에 stem(이 문항 본문)을 이어 그립니다. corrected_stem 에 공통 지시문을 넣지 마세요.
   - 세트 머리 원본 이미지(또는 문항 원본 위쪽에 보이는 세트 지시문, 앞 단계 issues 에 적힌 원래 공통 지시문)와 저장된 common_stem 이 다르면
     (예: common_stem 이 비어 있거나, 지시문 대신 '36'·'36=2^2×3^2' 같은 첫 문항 식이나 예시만 들어 있거나, 지시문 문장이 빠졌을 때)
     반드시 세트 전체가 공유할 원래 공통 지시문 전체를 corrected_common_stem 에 적으세요! 같을 때만 null.
+  - 만약 저장된 common_stem 과 stem 이 이미 원본과 똑같은데(형제 문항에서 방금 고쳐진 경우 등) 첨부된 옛 V2 이미지에만 예전 식이 두 번 보인다면, 데이터는 이미 고쳐진 것이므로 text_matches_original = true, engine_issue = null 로 두세요(절대 engine_issue 로 적지 마세요!).
   - 저장된 stem 이나 common_stem 에 다른 문항(예: 세트 첫 문항)의 숫자·식이 잘못 섞여 있으면 이 문항 원본에 인쇄된 내용만 남기세요.
 - 선지: 원본의 선지(①~⑤ 또는 ㄱ,ㄴ,ㄷ)와 저장 choices 가 다르면 전체 선지 배열을 corrected_choices 에, 같거나 원본에 선지가 없으면 null.
 - 원본에 없는 내용을 지어내지 마세요. 원본에서 읽을 수 없는 부분은 저장값을 그대로 둡니다.
-- text_matches_original: 저장 데이터(공통 발문·발문·선지)가 원본과 내용상 완전히 같고 V2 카드에도 빠진 지시문·엉뚱한 숫자가 없을 때만 true(이때만 corrected_* 가 모두 null). 앞 단계 issues 에 지시문 누락·내용 불일치가 지적됐으면 반드시 원본을 보고 corrected_stem 또는 corrected_common_stem 을 채우고 text_matches_original 은 false 로 두세요.
-- engine_issue: 데이터는 원본과 같은데 V2 화면만 잘못 그려졌을 때(겹침·잘림·간격·기호 누락·마크업 노출) 짧은 증상. 아니면 null.
+- text_matches_original: 저장 데이터(공통 발문·발문·선지)와 마크업·LaTeX 문법이 원본과 완전히 같을 때 true(이때만 corrected_* 가 모두 null).
+- engine_issue: 저장된 본문·공통발문·선지 텍스트와 LaTeX·마크업 문법이 100% 올바르고 본문을 수정해서는 절대 해결할 수 없는 순수 조판 엔진 결함(예: 올바른 수식인데 분수·첨자가 겹침, 카드 폭 밖으로 잘림)일 때만 짧은 증상을 적으세요. 오타, 누락, common_stem 문제, [ [[공백:n]] ] 대괄호 중복, 수식 내 \\text{} 미사용 한글 누락처럼 본문을 고쳐 해결할 수 있는 경우에는 절대로 engine_issue 를 적지 말고 null 로 두세요!
 - fix_reason: 무엇을 왜 고쳤는지 한두 문장. 고친 것이 없으면 null.
 
 [2. 그림 측정 — 개별 문항 원본 이미지 기준(세트 머리 이미지는 제외)]
@@ -615,7 +627,11 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
     const mathReason = trimOrNull(r.math_reason) ?? trimOrNull(prev.math_reason);
 
     const hasText = !!(stem || common || choices);
-    const engineSymptom = typeof r.engine_issue === 'string' && r.engine_issue.trim() ? r.engine_issue.trim() : null;
+    const rawEngineSymptom = typeof r.engine_issue === 'string' && r.engine_issue.trim() ? r.engine_issue.trim() : null;
+    const isFakeEngine = rawEngineSymptom !== null &&
+      isDataFixableSymptom(r.fix_reason, rawEngineSymptom, rawEngineSymptom, curStem, curCommon);
+    const engineSymptom = isFakeEngine ? null : rawEngineSymptom;
+    const effectiveTextSame = textSame || (!hasText && isFakeEngine);
     const fixProposal: Rec = {
       kind: hasText ? 'data' : figure ? 'figure' : engineSymptom ? 'engine' : 'none',
       stem,
@@ -631,7 +647,7 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
       reason: typeof r.fix_reason === 'string' && r.fix_reason.trim() ? r.fix_reason.trim() : null,
       reason_code: null,
       source: 'fix_pass',
-      text_matches_original: textSame,
+      text_matches_original: effectiveTextSame,
       engine_issue: engineSymptom,
       figure_layout: figure?.layout ?? null,
       figure_crops: figure?.crops ?? [],

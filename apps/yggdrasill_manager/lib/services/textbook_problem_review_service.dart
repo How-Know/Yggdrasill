@@ -342,6 +342,12 @@ Map<String, dynamic> scaleFigureLayout(
 const double kFigureSizeRatioMin = 0.85;
 const double kFigureSizeRatioMax = 1.15;
 
+/// done/total 을 반올림한 퍼센트. 분모가 0이면 0.
+int percentOf(int done, int total) {
+  if (total <= 0) return 0;
+  return ((done * 100) / total).round().clamp(0, 100);
+}
+
 class TextbookReviewUnitScope {
   const TextbookReviewUnitScope({
     required this.academyId,
@@ -361,6 +367,7 @@ class TextbookReviewUnitScope {
     required this.qualityIssueCount,
     required this.qualityApprovedCount,
     this.qualityHeldCount = 0,
+    this.bothApprovedCount = 0,
   });
 
   factory TextbookReviewUnitScope.fromJson(Map<String, dynamic> m) => TextbookReviewUnitScope(
@@ -381,6 +388,7 @@ class TextbookReviewUnitScope {
         qualityIssueCount: (m['quality_issue_count'] as num?)?.toInt() ?? 0,
         qualityApprovedCount: (m['quality_approved_count'] as num?)?.toInt() ?? 0,
         qualityHeldCount: (m['quality_held_count'] as num?)?.toInt() ?? 0,
+        bothApprovedCount: (m['both_approved_count'] as num?)?.toInt() ?? 0,
       );
 
   final String academyId;
@@ -403,8 +411,14 @@ class TextbookReviewUnitScope {
   /// 렌더 엔진 문제로 보류된 문항 수. 품질 진행률 분모에서 빼고 따로 관리한다.
   final int qualityHeldCount;
 
+  /// 수학·품질이 모두 승인된 문항 수. 교재·중단원 드롭다운 진행률의 분자.
+  final int bothApprovedCount;
+
   /// 품질 검수 분모: 엔진 보류를 뺀 문항 수(승인한 것은 완료로 집계).
   int get qualityTargetCount => (problemCount - qualityHeldCount).clamp(0, problemCount);
+
+  /// (수학·품질 모두 승인) / 전체 문항. 문항이 없으면 0.
+  int get bothApprovedPercent => percentOf(bothApprovedCount, problemCount);
 
   String get key => '$academyId|$bookId|$gradeLabel|$bigOrder|$midOrder';
   String get bookTitle => '$bookName ($gradeLabel)';
@@ -821,18 +835,40 @@ class TextbookProblemReviewItem {
 
   bool get isEngineHeld => qualityStatus == 'held';
 
-  /// 2단계(문항 카드)·4단계(정답·해설 카드) 판정에서 AI 가 분류한 원인. engine > figure > data 순으로 강한 쪽을 쓴다.
+  /// 2단계(문항 카드)·4단계(정답·해설 카드) 판정에서 AI 가 분류한 원인.
+  /// 본문·공통발문 수정으로 고칠 수 있는 경우(data 또는 fidelity_ok=false)가 engine 보다 우선한다.
   String get issueKind {
     final a = '${qualityChecks['issue_kind'] ?? ''}';
     final b = '${renderChecks['issue_kind'] ?? ''}';
-    if (a == 'engine' || b == 'engine') return 'engine';
     if (a == 'figure' || b == 'figure') return 'figure';
-    if (a == 'data' || b == 'data') return 'data';
+    if (a == 'data' ||
+        b == 'data' ||
+        qualityChecks['fidelity_ok'] == false ||
+        renderChecks['fidelity_ok'] == false ||
+        hasPendingFixProposal) {
+      return 'data';
+    }
+    if (a == 'engine' || b == 'engine') return 'engine';
     return 'none';
   }
 
-  bool get aiSuspectsEngine => qualityStatus == 'issue' && issueKind == 'engine';
+  bool get aiSuspectsEngine =>
+      qualityStatus == 'issue' &&
+      issueKind == 'engine' &&
+      qualityChecks['fidelity_ok'] != false &&
+      renderChecks['fidelity_ok'] != false &&
+      !hasPendingFixProposal;
   String get engineSymptom => '${renderChecks['engine_symptom'] ?? ''}'.trim();
+
+  /// 수정 제안(공통 발문·개별 발문)이 이미 DB(pb_questions)에 반영되어 있는 상태인가(형제 세트 문항 일괄 갱신 등)
+  bool get proposalAlreadyReflectedInDb {
+    final pStem = proposedStem?.trim();
+    final pCommon = proposedCommonStem?.trim();
+    if (pStem == null && pCommon == null) return false;
+    final stemMatches = pStem == null || pStem == stem.trim();
+    final commonMatches = pCommon == null || pCommon == commonStem.trim();
+    return stemMatches && commonMatches;
+  }
 
   /// 아직 적용하지 않은 데이터 수정 제안이 있는가(개별 발문·공통 발문·선지 중 하나라도)
   bool get hasPendingFixProposal {

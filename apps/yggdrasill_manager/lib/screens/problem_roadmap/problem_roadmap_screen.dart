@@ -149,6 +149,17 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     return hit?.bookTitle ?? bookKey;
   }
 
+  (int done, int total) _bookProgress(String bookKey) {
+    var done = 0;
+    var total = 0;
+    for (final u in _units) {
+      if ('${u.bookId}|${u.gradeLabel}' != bookKey) continue;
+      done += u.bothApprovedCount;
+      total += u.problemCount;
+    }
+    return (done, total);
+  }
+
   List<TextbookReviewUnitScope> get _unitsForSelectedBook => [
         for (final u in _units)
           if ('${u.bookId}|${u.gradeLabel}' == _selectedBookKey) u,
@@ -931,7 +942,8 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
       } else if (x.qualityStatus == 'issue' &&
           (touchedCropIds.contains(x.cropId) ||
               x.fixAppliedAt != null ||
-              x.fixProposal['text_matches_original'] == true)) {
+              x.fixProposal['text_matches_original'] == true ||
+              x.proposalAlreadyReflectedInDb)) {
         approvedQualIds.add(x.cropId);
       }
     }
@@ -1431,7 +1443,9 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
           figureCrops: figure ? it.proposedFigureCrops : const [],
           note: '원본 대조 수정안 일괄 적용',
         );
-        if (((res['changed'] as List?) ?? const []).isNotEmpty || it.hasFigures) out.add(it.cropId);
+        if (((res['changed'] as List?) ?? const []).isNotEmpty || it.hasFigures || it.proposalAlreadyReflectedInDb) {
+          out.add(it.cropId);
+        }
       } catch (e) {
         _bulkErrors.add('${it.problemNumber}번 수정안: $e');
       }
@@ -1854,11 +1868,14 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
       child: LayoutBuilder(
         builder: (context, constraints) {
           final bookField = _scopeDropdown<String>(
-            width: constraints.maxWidth < 860 ? constraints.maxWidth : 240,
+            width: constraints.maxWidth < 860 ? constraints.maxWidth : 300,
             value: books.contains(_selectedBookKey) ? _selectedBookKey : books.firstOrNull,
             items: [
               for (final k in books)
-                DropdownMenuItem(value: k, child: Text(_bookLabelOf(k), overflow: TextOverflow.ellipsis)),
+                DropdownMenuItem(
+                  value: k,
+                  child: _scopeProgressLabel(_bookLabelOf(k), _bookProgress(k)),
+                ),
             ],
             onChanged: _runningReview
                 ? null
@@ -1876,7 +1893,10 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
             value: units.any((u) => u.key == _selectedScope?.key) ? _selectedScope?.key : units.firstOrNull?.key,
             items: [
               for (final u in units)
-                DropdownMenuItem(value: u.key, child: Text(u.unitTitle, overflow: TextOverflow.ellipsis)),
+                DropdownMenuItem(
+                  value: u.key,
+                  child: _scopeProgressLabel(u.unitTitle, (u.bothApprovedCount, u.problemCount)),
+                ),
             ],
             onChanged: _runningReview
                 ? null
@@ -1943,6 +1963,34 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
         Icon(icon, size: 18, color: color),
         const SizedBox(width: 8),
         Text(text, style: const TextStyle(color: _kTextSub, fontSize: 13, fontWeight: FontWeight.w600)),
+      ],
+    );
+  }
+
+  /// 드롭다운 항목: 이름과 (수학·품질 모두 승인)/(전체) 퍼센트.
+  Widget _scopeProgressLabel(String title, (int done, int total) progress) {
+    final pct = percentOf(progress.$1, progress.$2);
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            title,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(color: _kText, fontSize: 13, fontWeight: FontWeight.w700),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Tooltip(
+          message: '수학·품질 모두 승인 ${progress.$1} / ${progress.$2}',
+          child: Text(
+            '$pct%',
+            style: TextStyle(
+              color: pct >= 100 ? _kAccent : _kTextSub,
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ),
       ],
     );
   }

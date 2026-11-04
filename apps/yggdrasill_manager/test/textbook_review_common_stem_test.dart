@@ -35,6 +35,13 @@ void main() {
     expect(normalizeAnswerForCompare(r'$x \geq 2$'), normalizeAnswerForCompare('x ≥ 2'));
   });
 
+  test('진행률 퍼센트는 반올림하고 분모가 0이면 0이다', () {
+    expect(percentOf(0, 0), 0);
+    expect(percentOf(1, 3), 33);
+    expect(percentOf(2, 3), 67);
+    expect(percentOf(202, 202), 100);
+  });
+
   test('해설지에 답만 인쇄된 문항(isAnswerOnlyOriginalSolution)과 [image] 자리표시자 정답 처리', () {
     final answerOnlyItem = TextbookProblemReviewItem.fromJson({
       'crop_id': 'c1',
