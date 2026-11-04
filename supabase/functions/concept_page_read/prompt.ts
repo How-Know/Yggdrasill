@@ -142,7 +142,7 @@ export function buildConceptPagePrompt(input: ConceptPageInput): {
     '',
     '회색 상자 밖의 내용을 모두 옮겨 적어 주세요.',
   ].join('\n');
-  return { instructions: INSTRUCTIONS, userText, maxOutputTokens: 16000 };
+  return { instructions: INSTRUCTIONS, userText, maxOutputTokens: 24000 };
 }
 
 function clampInt(v: unknown, lo: number, hi: number): number | null {

@@ -274,6 +274,20 @@ interface OrganizeContext {
   effort: string;
 }
 
+async function organizeWithFallback(provider: AiProvider, opts: ConceptDraftOpts): Promise<ConceptDraftOutcome> {
+  const first = await organizeConceptDraft(provider, opts);
+  if (
+    !first.draft &&
+    opts.reasoningEffort !== 'low' &&
+    first.error &&
+    (first.error.startsWith('incomplete:') || first.error === 'invalid_output' || first.error.toLowerCase().includes('timed out'))
+  ) {
+    console.warn(`[${FEATURE}] retrying with effort=low after ${first.error}`);
+    return await organizeConceptDraft(provider, { ...opts, reasoningEffort: 'low' });
+  }
+  return first;
+}
+
 async function organize(
   auth: AuthContext,
   provider: AiProvider,
@@ -285,12 +299,12 @@ async function organize(
   const prep = await prepareOrganize(auth, body, effort, store);
   if (prep instanceof Response) return prep;
   const started = Date.now();
-  const outcome = await organizeConceptDraft(provider, prep.opts);
+  const outcome = await organizeWithFallback(provider, prep.opts);
   const done = await finishOrganize(auth, provider, prep.ctx, outcome, Date.now() - started, rerunOf);
   return jsonResponse(done.body, done.status);
 }
 
-/** 백그라운드로 정리를 시작한다. 결과는 collect 가 받아 초안으로 저장한다. */
+/** 백그라운드로 정리를 시작한다. 최근 백그라운드 큐가 멈춘 적이 있으면 실시간 keepAlive 경로로 바로 실행한다. */
 async function startOrganize(
   auth: AuthContext,
   provider: AiProvider,
@@ -303,6 +317,23 @@ async function startOrganize(
   const prep = await prepareOrganize(auth, body, effort, true);
   if (prep instanceof Response) return prep;
   const { ctx, opts } = prep;
+
+  const recentFailSince = new Date(Date.now() - 2 * 3600_000).toISOString();
+  const { count: recentFailedCount } = await auth.admin
+    .from('concept_draft_jobs')
+    .select('id', { count: 'exact', head: true })
+    .eq('created_by', auth.userId)
+    .eq('status', 'failed')
+    .in('error', ['ai_stalled', 'ai_timeout'])
+    .gte('created_at', recentFailSince);
+  if ((recentFailedCount ?? 0) > 0) {
+    return keepAliveJson(async () => {
+      const started = Date.now();
+      const outcome = await organizeWithFallback(provider, opts);
+      const done = await finishOrganize(auth, provider, ctx, outcome, Date.now() - started, rerunOf);
+      return jsonResponse(done.body, done.status);
+    }, corsHeaders);
+  }
 
   const { count, error: countError } = await auth.admin
     .from('concept_draft_jobs')
@@ -362,6 +393,9 @@ function stillRunning(elapsedMs: number): Response {
   return jsonResponse({ ok: true, status: 'running', elapsed_ms: elapsedMs, poll_after_ms: POLL_AFTER_MS });
 }
 
+const DIRECT_FALLBACK_QUEUED_MS = 25_000;
+const DIRECT_FALLBACK_RUNNING_MS = 120_000;
+
 /** 백그라운드 정리 결과를 받는다. 끝났으면 한 요청만 초안을 저장하고, 공급자 쪽 응답을 지운다. */
 async function collect(auth: AuthContext, provider: AiProvider, body: Record<string, unknown>): Promise<Response> {
   const jobId = body.job_id;
@@ -396,14 +430,12 @@ async function collect(auth: AuthContext, provider: AiProvider, body: Record<str
     poll = { state: 'failed', error: 'response_missing' };
   }
   const next = pollStep(poll, ageMs);
-  if (next === 'running') return stillRunning(ageMs);
-  if (next === 'timeout' || next === 'stalled') {
-    const last = poll.state === 'running' ? poll.status : '';
-    console.error(`[${FEATURE}] job ${job.id} ${next} after ${Math.round(ageMs / 1000)}s (provider status: ${last})`);
-    await bg.cancel(job.response_id).catch((e) => console.error(`[${FEATURE}] cancel failed:`, String(e)));
-    poll = { state: 'failed', error: next === 'stalled' ? 'ai_stalled' : 'ai_timeout' };
-  }
-  const finished = poll as Exclude<AiBackgroundPoll, { state: 'running' }>;
+  const bgSlow = poll.state === 'running' &&
+    ((poll.status === 'queued' && ageMs >= DIRECT_FALLBACK_QUEUED_MS) || ageMs >= DIRECT_FALLBACK_RUNNING_MS);
+  if (next === 'running' && !bgSlow) return stillRunning(ageMs);
+
+  const shouldFallbackDirect = bgSlow || next === 'timeout' || next === 'stalled' ||
+    (poll.state === 'failed' && poll.error === 'response_missing');
 
   const { data: claimed, error: claimError } = await auth.admin
     .from('concept_draft_jobs')
@@ -431,6 +463,47 @@ async function collect(auth: AuthContext, provider: AiProvider, body: Record<str
     effort: job.effort,
   };
   const rerunOf = job.rerun_action_id && job.rerun_of ? { actionId: job.rerun_action_id, draftId: job.rerun_of } : null;
+
+  if (shouldFallbackDirect) {
+    console.warn(`[${FEATURE}] job ${job.id} switching to direct real-time organize after ${Math.round(ageMs / 1000)}s`);
+    await bg.cancel(job.response_id).catch(() => {});
+    await bg.remove(job.response_id).catch(() => {});
+    return keepAliveJson(async () => {
+      const critIds = (job.criteria ?? []).map((c) => String(c.id ?? '')).filter(isUuid);
+      let loadedCriteria: ReturnType<typeof criterionRefs> = [];
+      if (critIds.length > 0) {
+        const { data: critRows } = await auth.admin
+          .from('concept_criteria')
+          .select('id,title,body,version,draft_title,draft_body,draft_saved_at')
+          .in('id', critIds);
+        loadedCriteria = criterionRefs((critRows ?? []) as Record<string, unknown>[]);
+      }
+      const directStarted = Date.now();
+      const outcome = await organizeWithFallback(provider, {
+        model: job.model,
+        reasoningEffort: job.effort,
+        bookName: job.book_name,
+        gradeLabel: job.grade_label,
+        unitPath: job.unit_path,
+        prepared: job.prepared,
+        criteria: loadedCriteria,
+        types: job.concept_types,
+        safetyId: await safetyIdentifier(auth.userId),
+      });
+      const done = await finishOrganize(auth, provider, ctx, outcome, Date.now() - directStarted, rerunOf);
+      const ok = done.body.ok === true;
+      const close = {
+        status: ok ? 'done' : 'failed',
+        draft_id: ok ? String(done.body.draft_id) : null,
+        error: ok ? null : String(done.body.error ?? 'ai_failed'),
+        finished_at: new Date().toISOString(),
+      };
+      await auth.admin.from('concept_draft_jobs').update(close).eq('id', job.id);
+      return jsonResponse({ ...done.body, status: close.status }, done.status);
+    }, corsHeaders);
+  }
+
+  const finished = poll as Exclude<AiBackgroundPoll, { state: 'running' }>;
   const done = await finishOrganize(auth, provider, ctx, jobOutcome(finished, job), ageMs, rerunOf);
   const ok = done.body.ok === true;
   const close = {

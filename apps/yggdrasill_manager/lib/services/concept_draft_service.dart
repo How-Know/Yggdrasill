@@ -126,7 +126,11 @@ typedef ConceptDraftProgress = void Function(String step, int done, int total);
 
 /// 서버가 AI 응답을 기다리다 끊은 실패. 내용과 상관없이 응답이 멈춘 것이라 한 번 더 하면 대개 된다.
 bool isConceptDraftTimeout(ConceptDraftException e) =>
-    e.code.toLowerCase().contains('timed out') || e.code == 'response_cut';
+    e.code.toLowerCase().contains('timed out') ||
+    e.code == 'response_cut' ||
+    e.code.startsWith('incomplete:') ||
+    e.code == 'http_504' ||
+    e.code == 'http_502';
 
 /// 백그라운드 정리를 기다린 시간.
 typedef ConceptDraftWait = void Function(Duration elapsed);

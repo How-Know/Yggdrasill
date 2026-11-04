@@ -40,6 +40,65 @@ function runInBackground(task: Promise<unknown>) {
   if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime?.waitUntil) EdgeRuntime.waitUntil(task);
 }
 
+/**
+ * 긴 JSON 응답(book_review 등)이 Supabase 게이트웨이의 150초 유휴 제한(504 Request idle timeout)에 끊기지 않도록
+ * 200 헤더와 공백을 10초마다 먼저 흘려보낸 뒤 완료 시 JSON 본문(원래 상태 코드는 http_status)을 기록한다.
+ */
+function keepAliveJson(work: () => Promise<Response>, intervalMs = 10_000): Response {
+  const enc = new TextEncoder();
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let closed = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const push = (s: string) => {
+        if (closed) return;
+        try {
+          controller.enqueue(enc.encode(s));
+        } catch {
+          closed = true;
+        }
+      };
+      push(' ');
+      timer = setInterval(() => push(' '), intervalMs);
+      void (async () => {
+        let out: Record<string, unknown>;
+        try {
+          const res = await work();
+          const text = await res.text();
+          let parsed: unknown = null;
+          try {
+            parsed = JSON.parse(text);
+          } catch {
+            parsed = null;
+          }
+          const obj = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? (parsed as Record<string, unknown>)
+            : { ok: false, error: 'invalid_response' };
+          out = { ...obj, http_status: res.status };
+        } catch (e) {
+          console.error('[ai_think] keepalive work failed:', e instanceof Error ? e.message : String(e));
+          out = { ok: false, error: 'internal_error', message: '서버 오류가 발생했습니다.', http_status: 500 };
+        }
+        clearInterval(timer);
+        push(JSON.stringify(out));
+        if (!closed) {
+          closed = true;
+          try {
+            controller.close();
+          } catch {
+            // 이미 닫힘
+          }
+        }
+      })();
+    },
+    cancel() {
+      closed = true;
+      clearInterval(timer);
+    },
+  });
+  return new Response(stream, { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+}
+
 // 슈퍼관리자 확인(Deno.serve)을 통과한 요청만 여기 온다.
 async function thinkFeatures(store: SupabaseThinkStore, body: Body): Promise<{ features: ThinkFeatures; db: DbFeatureCheck }> {
   const db = await store.dbFeatures();
@@ -385,18 +444,19 @@ async function handleBookReview(req: Request, auth: AuthContext, body: Body): Pr
   }
 
   const safetyId = await safetyIdentifier(auth.userId);
+  const batchWallMs = Math.min(wallClockMs, 115_000);
   const runBatchOnce = async () => {
     const startedAt = Date.now();
-    const signal = AbortSignal.any([req.signal, AbortSignal.timeout(wallClockMs)]);
+    const signal = AbortSignal.any([req.signal, AbortSignal.timeout(batchWallMs + 15_000)]);
     const out = await runReviewBatch(
       {
         callId: `book_review_${startedAt}`,
-        rawArguments: JSON.stringify({ job_id: jobId, target: 50 }),
+        rawArguments: JSON.stringify({ job_id: jobId, target: 25 }),
         conversationId: conversationId!,
         userId: auth.userId,
         safetyId,
         signal,
-        deadline: startedAt + wallClockMs - REVIEW_BATCH_FINAL_RESERVE_MS,
+        deadline: startedAt + batchWallMs - REVIEW_BATCH_FINAL_RESERVE_MS,
         round: 1,
         startedAt,
       },
@@ -566,7 +626,7 @@ Deno.serve(async (req) => {
       case 'spec_export':
         return await handleSpecExport(auth, body);
       case 'book_review':
-        return await handleBookReview(req, auth, body);
+        return keepAliveJson(() => handleBookReview(req, auth, body));
       case 'textbook_problem_review':
         return await handleTextbookProblemReview(req, auth, body);
       case 'textbook_problem_render_check':

@@ -428,13 +428,25 @@ class _ConceptDraftBatchDialogState extends State<ConceptDraftBatchDialog> {
       _confirmProgress = '새로 추가·변경된 개념을 자동 검수하는 중...';
     });
     try {
-      for (var round = 0; round < 8; round += 1) {
+      var retries = 0;
+      for (var round = 0; round < 20; round += 1) {
         if (!mounted || _stopRequested) break;
-        final res = await _svc.runBookReview(
-          book: widget.book,
-          jobId: _reviewJobId,
-          conversationId: _reviewConvId,
-        );
+        Map<String, dynamic> res;
+        try {
+          res = await _svc.runBookReview(
+            book: widget.book,
+            jobId: _reviewJobId,
+            conversationId: _reviewConvId,
+          );
+          retries = 0;
+        } on ConceptDraftException catch (e) {
+          if (isConceptDraftTimeout(e) && retries < 2) {
+            retries += 1;
+            round -= 1;
+            continue;
+          }
+          rethrow;
+        }
         if (!mounted) return;
         setState(() {
           _updateReviewSummary(res);
