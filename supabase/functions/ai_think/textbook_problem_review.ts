@@ -339,15 +339,15 @@ export function isDataFixableSymptom(
   if (commonStem !== undefined && sanitizeProblemMarkup(commonStem) !== String(commonStem ?? '')) return true;
   const text = `${String(title ?? '')} ${String(detail ?? '')} ${String(symptom ?? '')}`.trim();
   if (!text) return false;
-  return /(?:common_stem|공통\s*(?:지시문|발문)|저장된\s*개별\s*발문|첫\s*줄\s*수식.*표시되지|소문항\s*(?:정답|별)|이중\s*대괄호|\[\[\s*\]\]|\[공백|참조\s*기호|한글\s*표지|\([가나다라마바사]\)|빈\s*괄호|자리표시자|\[image\]|계산식이?\s*두\s*번|중복\s*표시)/i
+  return /(?:common_stem|공통\s*(?:지시문|발문)|저장된\s*개별\s*발문|첫\s*줄\s*수식.*표시되지|소문항\s*(?:정답|별)|정답\s*줄\s*(?:가로\s*넘침|오른쪽\s*잘림|넘침)|이중\s*대괄호|\[\[\s*\]\]|\[공백|참조\s*기호|한글\s*표지|\([가나다라마바사]\)|빈\s*괄호|자리표시자|\[image\]|계산식이?\s*두\s*번|중복\s*표시)/i
     .test(text);
 }
 
-/** 소문항 정답 사이 공백이 수식 모드에서 붙어 보인다는 지적(카드 렌더 포맷에서 [공백:1.5]로 해결됨)인지 판별한다. */
+/** 소문항 정답 사이 공백·줄바꿈(한 줄 가로 넘침 포함) 지적(검수 카드 렌더 포맷에서 [문단] 줄바꿈으로 해결됨)인지 판별한다. */
 export function isSubAnswerSpacingComplaint(title: unknown, detail: unknown): boolean {
   const text = `${String(title ?? '')} ${String(detail ?? '')}`.trim();
   if (!text) return false;
-  return /(?:소문항\s*(?:정답|별\s*정답).*(?:구분|이어짐|붙어)|앞\s*소문항의\s*답과\s*다음\s*번호가\s*붙어)/.test(text);
+  return /(?:소문항\s*(?:정답|별\s*정답).*(?:구분|이어짐|붙어)|앞\s*소문항의\s*답과\s*다음\s*번호가\s*붙어|정답\s*줄\s*(?:가로\s*넘침|오른쪽\s*잘림|넘침)|한\s*줄에\s*배치하여.*잘려)/.test(text);
 }
 
 export type QuestionKind = 'objective' | 'subjective' | 'essay';
