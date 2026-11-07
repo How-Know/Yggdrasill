@@ -4593,6 +4593,13 @@ function buildPreamble({
       lines.push('\\newcommand{\\jeonghwaBoldLt}{\\tikz[baseline=-0.8pt]\\draw[line width=1.35pt,line cap=round,line join=round] (5.0pt,6.2pt)--(0.4pt,3.1pt)--(5.0pt,0pt);}');
       lines.push('\\newcommand{\\jeonghwaBoldGt}{\\tikz[baseline=-0.8pt]\\draw[line width=1.35pt,line cap=round,line join=round] (0.4pt,6.2pt)--(5.0pt,3.1pt)--(0.4pt,0pt);}');
     }
+    if (isHwanggeumProfile) {
+      lines.push('\\newfontfamily\\hwanggeumLightBoldLatin{Malgun Gothic}[FakeBold=1.5]');
+      lines.push('\\newhangulfontfamily\\hwanggeumLightBoldHangul{Malgun Gothic}[FakeBold=1.5]');
+      lines.push('\\newcommand{\\hwanggeumLightBold}{\\hwanggeumLightBoldLatin\\hwanggeumLightBoldHangul}');
+      lines.push('\\newcommand{\\hwanggeumBoldLt}{\\tikz[baseline=-0.8pt]\\draw[line width=0.95pt,line cap=round,line join=round] (5.0pt,6.2pt)--(0.4pt,3.1pt)--(5.0pt,0pt);}');
+      lines.push('\\newcommand{\\hwanggeumBoldGt}{\\tikz[baseline=-0.8pt]\\draw[line width=0.95pt,line cap=round,line join=round] (0.4pt,6.2pt)--(5.0pt,3.1pt)--(0.4pt,0pt);}');
+    }
     if (isDongdoProfile) {
       lines.push('\\newhangulfontfamily\\dongdoTitleHangul{Malgun Gothic}[FakeBold=0.4]');
     }
@@ -5232,11 +5239,11 @@ function buildPreamble({
       lines.push('      ([shift={(\\mockLayCenterX,\\mockLayRuleY-6pt)}]current page.north west) --%');
       lines.push('      ([shift={(\\mockLayCenterX,\\mockLayVRuleEndY+16pt)}]current page.north west);%');
       lines.push('    \\ifgyeongsinlastpage%');
-      lines.push('      \\node[anchor=south west,fill=white,draw=black,line width=0.65pt,inner xsep=5.8pt,inner ysep=5.8pt,outer sep=0pt] at ([shift={(\\mockLayCenterX+10.5pt,\\mockLayVRuleEndY+16pt)}]current page.north west)%');
-      lines.push('        {\\parbox{\\dimexpr\\gyeongsinFrameRightX-\\mockLayCenterX-32pt\\relax}{\\lineskiplimit=-10pt\\lineskip=0pt\\setstretch{1}\\YggWithUnifiedDigits{\\fontsize{10.6pt}{16.2pt}\\selectfont'
-        + '\\noindent 이 시험문제의 저작권은 \\gyeongsinCopyrightSchool 에 있습니다. 저작권법\\linebreak '
-        + '에 의해 보호받는 저작물이므로 전재와 복제는 금지되며,\\linebreak '
-        + '이를 어길 시 저작권법에 의거 처벌될 수 있습니다.\\par}}};%');
+      lines.push('      \\node[anchor=south,fill=white,draw=black,line width=0.65pt,inner xsep=14pt,inner ysep=7.5pt,outer sep=0pt] at ([shift={({0.5*(\\mockLayCenterX+\\gyeongsinFrameRightX)},\\mockLayVRuleEndY+12pt)}]current page.north west)%');
+      lines.push('        {\\vbox{\\lineskiplimit=-10pt\\lineskip=0pt\\setstretch{1}\\YggWithUnifiedDigits{\\fontsize{10.8pt}{14.8pt}\\selectfont\\baselineskip=14.8pt'
+        + '\\hbox{이 시험문제의 저작권은 \\gyeongsinCopyrightSchool{}에 있습니다. 저작권법}'
+        + '\\hbox{에 의해 보호받는 저작물이므로 전재와 복제는 금지되며,}'
+        + '\\hbox{이를 어길 시 저작권법에 의거 처벌될 수 있습니다.}}}};%');
       lines.push('      \\global\\gyeongsinlastpagefalse%');
       lines.push('    \\fi%');
       lines.push('    \\node[anchor=center,inner sep=0pt] at ([shift={(\\mockLayCenterX,\\mockLayVRuleEndY-18pt)}]current page.north west)%');
@@ -9140,7 +9147,7 @@ function renderMockGridPageLatex(
     // row-pair strut 매크로 선언 (페이지 내에서 반드시 컬럼 minipage 전에 실행되어야 함).
     pairProbePrelude.join('\n'),
     (isGyeongsinProfile || isDaeryunProfile || isDongdoProfile || isSoseonProfile || isOseongProfile || isJeonghwaProfile || isHwanggeumProfile)
-      ? '\\global\\setlength{\\gyeongsinColFrameW}{\\dimexpr 0.5\\linewidth+14pt\\relax}'
+      ? '\\global\\setlength{\\gyeongsinColFrameW}{\\dimexpr 0.5\\linewidth+14pt\\relax}%'
       : '',
     '\\noindent',
     `\\begin{minipage}[t][${heightMacro}][t]{${MOCK_MINIPAGE_WIDTH}}`,
@@ -9233,18 +9240,17 @@ function renderMockGridPageLatex(
     ].join('\n');
   }
 
-  // --- 일반/첫 페이지 경로: 좌/우 minipage 직접 배치. ---
-  //   mock/csat 일반 페이지도 [t] minipage 의 첫 baseline/글자 높이 때문에 실제 문항번호
-  //   ink top 이 가로선보다 크게 내려가 보인다. PDF 실측 기준 -8pt 는 약 35pt gap,
-  //   -28pt 는 약 15pt gap 으로 선과 겹치지 않는 자연 여백만 남긴다.
-  //   과제형은 별도 A4 레이아웃 보정값을 유지한다.
-  //   능인중은 1페이지 앞에 표지 블록이 먼저 나오므로 \pagetotal 에 의존하지 않고 고정 \textheight 를 쓴다.
+  // --- 일반/첫 페이지 경로: outer minipage 안에 좌/우 minipage 배치. ---
+  //   좌/우 첫 줄 높이(예: 연립방정식 array vs 일반 텍스트)가 다를 때 두 컬럼 minipage 의
+  //   합성 높이(ht+dp)가 \mockColumnHeight + |ht_L - ht_R| 로 불어나 \textheight 를 넘기면,
+  //   \vspace* 뒤에서 페이지 분할이 일어나 빈 프레임 페이지가 먼저 송출되는 문제가 생긴다.
+  //   제목 페이지 경로와 동일하게 폭 \linewidth 의 outer minipage[t][\mockColumnHeight][t] 로
+  //   한 번 감싸면 내부 첫 줄 높이와 무관하게 페이지 빌더가 보는 박스 총높이가 항상
+  //   \mockColumnHeight(\textheight-8pt) 로 고정되어 빈 페이지 분할과 Overfull \vbox 를 막는다.
   const preColumnsVspace = titleHeader
     ? ''
-    : (isAssignmentProfile ? '\\vspace*{-34.6pt}' : '\\vspace*{-28pt}');
-  const heightCalc = (isFirstPage && !isNeunginProfile && !isJeonghwaProfile && !isHwanggeumProfile)
-    ? '\\setlength{\\mockColumnHeight}{\\dimexpr\\pagegoal-\\pagetotal-4pt\\relax}'
-    : '\\setlength{\\mockColumnHeight}{\\dimexpr\\textheight-8pt\\relax}';
+    : (isAssignmentProfile ? '\\vspace*{-34.6pt}\\nopagebreak' : '\\vspace*{-28pt}\\nopagebreak');
+  const heightCalc = '\\setlength{\\mockColumnHeight}{\\dimexpr\\textheight-8pt\\relax}';
 
   return [
     '\\begingroup',
@@ -9252,9 +9258,11 @@ function renderMockGridPageLatex(
     heightCalc,
     '\\ifdim\\mockColumnHeight<180pt\\setlength{\\mockColumnHeight}{180pt}\\fi',
     preColumnsVspace,
+    '\\noindent\\begin{minipage}[t][\\mockColumnHeight][t]{\\linewidth}',
     `\\setlength{\\mockLeftSlotHeight}{\\dimexpr(\\mockColumnHeight-${leftGapExpr})/${safeLeftSlots}\\relax}`,
     `\\setlength{\\mockRightSlotHeight}{\\dimexpr(\\mockColumnHeight-${rightGapExpr})/${safeRightSlots}\\relax}`,
     buildColumnsBlock('\\mockColumnHeight', '\\mockLeftSlotHeight', '\\mockRightSlotHeight'),
+    '\\end{minipage}',
     '\\par',
     '\\endgroup',
   ].join('\n');
@@ -9269,7 +9277,7 @@ function renderMockGridPageLatex(
  *   - titleSub                : 부제
  *   - schoolName, subjectName, examType, timeLimit, studentName : 하단 정보표
  */
-function renderCoverPageLatex(coverTexts, { academyLogoPath = '' } = {}) {
+function renderCoverPageLatex(coverTexts, { academyLogoPath = '', includeCoverBlankPage = true } = {}) {
   const src = (coverTexts && typeof coverTexts === 'object') ? coverTexts : {};
   const topTitle = String(src.titleTop || src.topTitle || '').trim();
   const titleMain = String(src.titleMain || src.subjectTitle || '').trim();
@@ -9325,13 +9333,15 @@ function renderCoverPageLatex(coverTexts, { academyLogoPath = '' } = {}) {
   }
   out.push('\\end{center}');
   out.push('\\end{titlepage}');
-  // 2페이지: 접지용 빈 페이지 (인쇄 시 속지 보호/접지면 확보용).
-  // titlepage 환경 내부에서 \clearpage 를 호출하면 다음 빈 페이지도 같은 pagestyle 이 적용됨.
-  out.push('\\begingroup');
-  out.push('\\thispagestyle{empty}');
-  out.push('\\null');
-  out.push('\\clearpage');
-  out.push('\\endgroup');
+  if (includeCoverBlankPage) {
+    // 2페이지: 접지용 빈 페이지 (인쇄 시 속지 보호/접지면 확보용).
+    // titlepage 환경 내부에서 \clearpage 를 호출하면 다음 빈 페이지도 같은 pagestyle 이 적용됨.
+    out.push('\\begingroup');
+    out.push('\\thispagestyle{empty}');
+    out.push('\\null');
+    out.push('\\clearpage');
+    out.push('\\endgroup');
+  }
   return out.join('\n');
 }
 
@@ -9353,7 +9363,7 @@ const MOCK_COVER_REF_H = 1031.8;
  * 문제 첫 쪽이 1쪽이 되도록 끝에서 쪽 번호를 되돌린다.
  * 가로 위치는 용지 폭 비율, 세로 위치는 용지 높이 비율로 옮겨 여백 비율을 유지한다.
  */
-function renderMockCoverPageLatex(coverTexts, { paper = 'B4', subjectTitle = '' } = {}) {
+function renderMockCoverPageLatex(coverTexts, { paper = 'B4', subjectTitle = '', includeCoverBlankPage = true } = {}) {
   const src = (coverTexts && typeof coverTexts === 'object') ? coverTexts : {};
   const clean = (v) => String(v ?? '').replace(/\s+/g, ' ').trim();
   const esc = (v) => escapeLatexText(clean(v));
@@ -9493,10 +9503,12 @@ function renderMockCoverPageLatex(coverTexts, { paper = 'B4', subjectTitle = '' 
 
   out.push('\\end{tikzpicture}');
   out.push('\\clearpage');
-  out.push('\\AtBeginShipoutNext{\\global\\quickanswerpagetrue\\global\\mocktitlepagefalse}');
-  out.push('\\thispagestyle{empty}');
-  out.push('\\null');
-  out.push('\\clearpage');
+  if (includeCoverBlankPage) {
+    out.push('\\AtBeginShipoutNext{\\global\\quickanswerpagetrue\\global\\mocktitlepagefalse}');
+    out.push('\\thispagestyle{empty}');
+    out.push('\\null');
+    out.push('\\clearpage');
+  }
   out.push('\\global\\quickanswerpagefalse');
   out.push('\\setcounter{page}{1}');
   out.push('\\endgroup');
@@ -9872,7 +9884,7 @@ const GYEONGSIN_COVER_REF_HEIGHT_PT = 1031.81;
 // 모든 용지가 같은 세로:가로 비율이므로 실제 용지 높이 비율로 일괄 축척한다.
 function renderGyeongsinCoverPageLatex(
   gyeongsinMeta,
-  { gyeongsinLogoPath = '', schoolName = '', paper = 'B4' } = {},
+  { gyeongsinLogoPath = '', schoolName = '', paper = 'B4', includeCoverBlankPage = true } = {},
 ) {
   const meta = gyeongsinMeta || resolveGyeongsinExamMeta();
   const paperKey = String(paper || 'B4').toUpperCase();
@@ -9979,11 +9991,13 @@ function renderGyeongsinCoverPageLatex(
 
   out.push('\\end{tikzpicture}');
   out.push('\\clearpage');
-  // 단면 인쇄용 빈 뒷면
-  out.push('\\AtBeginShipoutNext{\\global\\quickanswerpagetrue\\global\\mocktitlepagefalse}');
-  out.push('\\thispagestyle{empty}');
-  out.push('\\null');
-  out.push('\\clearpage');
+  if (includeCoverBlankPage) {
+    // 단면 인쇄용 빈 뒷면
+    out.push('\\AtBeginShipoutNext{\\global\\quickanswerpagetrue\\global\\mocktitlepagefalse}');
+    out.push('\\thispagestyle{empty}');
+    out.push('\\null');
+    out.push('\\clearpage');
+  }
   out.push('\\global\\quickanswerpagefalse');
   out.push('\\setcounter{page}{1}');
   out.push('\\endgroup');
@@ -10012,7 +10026,7 @@ function formatNeunginCoverExamTitleLatex(rawTitle, pt, font) {
 
 function renderNeunginCoverPageLatex(
   neunginMeta,
-  { gyeongsinLogoPath = '', schoolName = '', paper = 'B4' } = {},
+  { gyeongsinLogoPath = '', schoolName = '', paper = 'B4', includeCoverBlankPage = false } = {},
 ) {
   const meta = neunginMeta || resolveGyeongsinExamMeta({ schoolName: schoolName || '능인중학교' });
   const paperKey = String(paper || 'B4').toUpperCase();
@@ -10153,11 +10167,13 @@ function renderNeunginCoverPageLatex(
 
   out.push('\\end{tikzpicture}');
   out.push('\\clearpage');
-  // 단면 인쇄용 빈 뒷면
-  out.push('\\AtBeginShipoutNext{\\global\\quickanswerpagetrue\\global\\mocktitlepagefalse}');
-  out.push('\\thispagestyle{empty}');
-  out.push('\\null');
-  out.push('\\clearpage');
+  if (includeCoverBlankPage) {
+    // 단면 인쇄용 빈 뒷면
+    out.push('\\AtBeginShipoutNext{\\global\\quickanswerpagetrue\\global\\mocktitlepagefalse}');
+    out.push('\\thispagestyle{empty}');
+    out.push('\\null');
+    out.push('\\clearpage');
+  }
   out.push('\\global\\quickanswerpagefalse');
   out.push('\\setcounter{page}{1}');
   out.push('\\endgroup');
@@ -10166,7 +10182,7 @@ function renderNeunginCoverPageLatex(
 
 function renderSoseonCoverPageLatex(
   soseonMeta,
-  { gyeongsinLogoPath = '', schoolName = '', paper = 'B4' } = {},
+  { gyeongsinLogoPath = '', schoolName = '', paper = 'B4', includeCoverBlankPage = false } = {},
 ) {
   const meta = soseonMeta || resolveGyeongsinExamMeta({ schoolName: schoolName || '소선여자중학교' });
   const paperKey = String(paper || 'B4').toUpperCase();
@@ -10222,11 +10238,13 @@ function renderSoseonCoverPageLatex(
 
   out.push('\\end{tikzpicture}');
   out.push('\\clearpage');
-  // 단면 인쇄용 빈 뒷면
-  out.push('\\AtBeginShipoutNext{\\global\\quickanswerpagetrue\\global\\mocktitlepagefalse}');
-  out.push('\\thispagestyle{empty}');
-  out.push('\\null');
-  out.push('\\clearpage');
+  if (includeCoverBlankPage) {
+    // 단면 인쇄용 빈 뒷면
+    out.push('\\AtBeginShipoutNext{\\global\\quickanswerpagetrue\\global\\mocktitlepagefalse}');
+    out.push('\\thispagestyle{empty}');
+    out.push('\\null');
+    out.push('\\clearpage');
+  }
   out.push('\\global\\quickanswerpagefalse');
   out.push('\\setcounter{page}{1}');
   out.push('\\endgroup');
@@ -10235,7 +10253,7 @@ function renderSoseonCoverPageLatex(
 
 function renderOseongCoverPageLatex(
   oseongMeta,
-  { schoolName = '', paper = 'B4' } = {},
+  { schoolName = '', paper = 'B4', includeCoverBlankPage = false } = {},
 ) {
   const meta = oseongMeta || resolveGyeongsinExamMeta({ schoolName: schoolName || '오성중학교' });
   const paperKey = String(paper || 'B4').toUpperCase();
@@ -10312,11 +10330,13 @@ function renderOseongCoverPageLatex(
 
   out.push('\\end{tikzpicture}');
   out.push('\\clearpage');
-  // 단면 인쇄용 빈 뒷면
-  out.push('\\AtBeginShipoutNext{\\global\\quickanswerpagetrue\\global\\mocktitlepagefalse}');
-  out.push('\\thispagestyle{empty}');
-  out.push('\\null');
-  out.push('\\clearpage');
+  if (includeCoverBlankPage) {
+    // 단면 인쇄용 빈 뒷면
+    out.push('\\AtBeginShipoutNext{\\global\\quickanswerpagetrue\\global\\mocktitlepagefalse}');
+    out.push('\\thispagestyle{empty}');
+    out.push('\\null');
+    out.push('\\clearpage');
+  }
   out.push('\\global\\quickanswerpagefalse');
   out.push('\\setcounter{page}{1}');
   out.push('\\endgroup');
@@ -10325,7 +10345,7 @@ function renderOseongCoverPageLatex(
 
 function renderJeonghwaCoverPageLatex(
   jeonghwaMeta,
-  { gyeongsinLogoPath = '', schoolName = '', paper = 'B4', totalPagesWithCover = '' } = {},
+  { gyeongsinLogoPath = '', schoolName = '', paper = 'B4', totalPagesWithCover = '', includeCoverBlankPage = false } = {},
 ) {
   const meta = jeonghwaMeta || resolveGyeongsinExamMeta({ schoolName: schoolName || '정화중학교' });
   const paperKey = String(paper || 'B4').toUpperCase();
@@ -10467,11 +10487,13 @@ function renderJeonghwaCoverPageLatex(
 
   out.push('\\end{tikzpicture}');
   out.push('\\clearpage');
-  // 단면 인쇄용 빈 뒷면
-  out.push('\\AtBeginShipoutNext{\\global\\quickanswerpagetrue\\global\\mocktitlepagefalse}');
-  out.push('\\thispagestyle{empty}');
-  out.push('\\null');
-  out.push('\\clearpage');
+  if (includeCoverBlankPage) {
+    // 단면 인쇄용 빈 뒷면
+    out.push('\\AtBeginShipoutNext{\\global\\quickanswerpagetrue\\global\\mocktitlepagefalse}');
+    out.push('\\thispagestyle{empty}');
+    out.push('\\null');
+    out.push('\\clearpage');
+  }
   out.push('\\global\\quickanswerpagefalse');
   out.push('\\setcounter{page}{1}');
   out.push('\\endgroup');
@@ -10480,7 +10502,7 @@ function renderJeonghwaCoverPageLatex(
 
 function renderHwanggeumCoverPageLatex(
   hwanggeumMeta,
-  { gyeongsinLogoPath = '', schoolName = '', paper = 'B4', totalPagesWithCover = '', totalSheetsWithCover = '' } = {},
+  { gyeongsinLogoPath = '', schoolName = '', paper = 'B4', totalPagesWithCover = '', totalSheetsWithCover = '', includeCoverBlankPage = false } = {},
 ) {
   const meta = hwanggeumMeta || resolveGyeongsinExamMeta({ schoolName: schoolName || '황금중학교' });
   const paperKey = String(paper || 'B4').toUpperCase();
@@ -10521,12 +10543,12 @@ function renderHwanggeumCoverPageLatex(
     esc('* 부정한 휴대물을 보거나 무선기기 등을 이용하는 행위'),
     esc('* 대리시험을 의뢰하거나 대리로 시험에 응시한 행위'),
     esc('* 다른 수험생에게 답을 보여주기를 강요하거나 위협하는 행위'),
-    `* \\uline{${esc('시험 종료령(타종) 시작 후에도 계속 답안지를 작성')}}하는 행위`,
+    `* {\\hwanggeumLightBold \\smash{\\uline{${esc('시험 종료령(타종) 시작 후에도 계속 답안지를 작성')}}}하는 행위}`,
     esc('* 감독관의 본인 확인 및 소지품 검색 요구에 따르지 않는 행위'),
     esc('* 반입 금지 물품을 당일 제출하지 않고 반입하는 행위'),
     esc('* 시험시간 동안 휴대 금지 물품(책, 연습장, 메모지 등)을 책상 서랍 등 임의의 장소에 보관한 행위 등 의심 가능 행동 일체 금지'),
-    `{\\daeryunHeavyHangul\\bfseries ${esc('※ 부정행위가 이루어진 과목은 0점 처리되며 생활교육위원회의 조치를 받습니다.')}}`,
-    `{\\daeryunHeavyHangul\\bfseries ${esc('(예) 2교시에 반입금지물품 적발 시 1, 2교시 시험 과목 모두 0점 처리됨.')}}`,
+    `{\\hwanggeumLightBold ${esc('※ 부정행위가 이루어진 과목은 0점 처리되며 생활교육위원회의 조치를 받습니다.')}}`,
+    `{\\hwanggeumLightBold ${esc('(예) 2교시에 반입금지물품 적발 시 1, 2교시 시험 과목 모두 0점 처리됨.')}}`,
   ];
 
   const out = [];
@@ -10537,14 +10559,14 @@ function renderHwanggeumCoverPageLatex(
   out.push('\\noindent\\null');
   out.push('\\begin{tikzpicture}[remember picture,overlay,every node/.style={inner sep=0pt,outer sep=0pt}]');
 
-  // 상단 헤더 (학년도·학기·시험·학년 / ( 수 학 ) / 월·일·교시 시행)
-  out.push(`\\node[anchor=center] at ${at(0, 175)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(20.5)}\\bfseries ${topLine1Tex}}}};`);
-  out.push(`\\node[anchor=center] at ${at(0, 208)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(26)}\\bfseries ${topLine2Tex}}}};`);
-  out.push(`\\node[anchor=center] at ${at(0, 245)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(20.5)}\\bfseries ${topLine3Tex}}}};`);
+  // 상단 헤더 (학년도·학기·시험·학년 / ( 수 학 ) / 월·일·교시 시행 — 모두 위로 10pt 이동)
+  out.push(`\\node[anchor=center] at ${at(0, 165)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(20.5)}\\bfseries ${topLine1Tex}}}};`);
+  out.push(`\\node[anchor=center] at ${at(0, 198)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(26)}\\bfseries ${topLine2Tex}}}};`);
+  out.push(`\\node[anchor=center] at ${at(0, 235)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(20.5)}\\bfseries ${topLine3Tex}}}};`);
 
-  // Box 1: 구성표 및 안내 1~6
-  out.push(`\\draw[line width=${pt(0.75)}] ${at(boxL, 273)} rectangle ${at(boxR, 535.5)};`);
-  out.push(`\\node[anchor=west] at ${at(boxL + 13, 286)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(11.8)} 1. 이 문제지는 다음과 같이 구성되어 있습니다.}}};`);
+  // Box 1: 구성표 및 안내 1~6 (내부 전체 약한 강조 통일, 과목코드 숫자만 강한 강조)
+  out.push(`\\draw[line width=${pt(0.75)}] ${at(boxL, 273)} rectangle ${at(boxR, 515.5)};`);
+  out.push(`\\node[anchor=west] at ${at(boxL + 13, 288.5)} {{\\YggWithUnifiedDigits{\\hwanggeumLightBold${font(11.3)} 1. 이 문제지는 다음과 같이 구성되어 있습니다.}}};`);
 
   // Box 1 내부 표 (4열: 과목코드 | 문제지 | 선택형 문항수(배점) | 서답형 문항수(배점))
   const c0 = -271.9;
@@ -10552,69 +10574,71 @@ function renderHwanggeumCoverPageLatex(
   const c2 = -70.8;
   const c3 = 93.8;
   const c4 = 274.2;
-  const tTop = 295.4;
-  const tMid = 315.5;
-  const tBot = 344.3;
+  const tTop = 304.0;
+  const tMid = 329.0;
+  const tBot = 365.0;
   out.push(`\\draw[line width=${pt(0.65)}] ${at(c0, tTop)} rectangle ${at(c4, tBot)};`);
   out.push(`\\draw[line width=${pt(0.6)}] ${at(c0, tMid)} -- ${at(c4, tMid)};`);
   out.push(`\\draw[line width=${pt(0.6)}] ${at(c1, tTop)} -- ${at(c1, tBot)};`);
   out.push(`\\draw[line width=${pt(0.6)}] ${at(c2, tTop)} -- ${at(c2, tBot)};`);
   out.push(`\\draw[line width=${pt(0.6)}] ${at(c3, tTop)} -- ${at(c3, tBot)};`);
 
-  out.push(`\\node[anchor=center] at ${at((c0 + c1) / 2, (tTop + tMid) / 2)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(11.2)}\\bfseries 과목코드}}};`);
-  out.push(`\\node[anchor=center] at ${at((c1 + c2) / 2, (tTop + tMid) / 2)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(11.2)}\\bfseries 문제지}}};`);
-  out.push(`\\node[anchor=center] at ${at((c2 + c3) / 2, (tTop + tMid) / 2)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(11.2)}\\bfseries 선택형 문항수(배점)}}};`);
-  out.push(`\\node[anchor=center] at ${at((c3 + c4) / 2, (tTop + tMid) / 2)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(11.2)}\\bfseries 서답형 문항수(배점)}}};`);
+  out.push(`\\node[anchor=center] at ${at((c0 + c1) / 2, (tTop + tMid) / 2)} {{\\YggWithUnifiedDigits{\\hwanggeumLightBold${font(13.2)} 과목코드}}};`);
+  out.push(`\\node[anchor=center] at ${at((c1 + c2) / 2, (tTop + tMid) / 2)} {{\\YggWithUnifiedDigits{\\hwanggeumLightBold${font(13.2)} 문제지}}};`);
+  out.push(`\\node[anchor=center] at ${at((c2 + c3) / 2, (tTop + tMid) / 2)} {{\\YggWithUnifiedDigits{\\hwanggeumLightBold${font(13.2)} 선택형 문항수(배점)}}};`);
+  out.push(`\\node[anchor=center] at ${at((c3 + c4) / 2, (tTop + tMid) / 2)} {{\\YggWithUnifiedDigits{\\hwanggeumLightBold${font(13.2)} 서답형 문항수(배점)}}};`);
 
-  out.push(`\\node[anchor=center] at ${at((c0 + c1) / 2, (tMid + tBot) / 2)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(18.5)}\\bfseries ${esc(meta.daeryunSubjectCode)}}}};`);
-  out.push(`\\node[anchor=center] at ${at((c1 + c2) / 2, (tMid + tBot) / 2)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(11.6)} 총${esc(totalSheetsStr)}장,\\ ${esc(totalPagesStr)}면}}};`);
-  out.push(`\\node[anchor=center] at ${at((c2 + c3) / 2, (tMid + tBot) / 2)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(11.6)} ${esc(meta.neunginObjectiveCountText)}문항(${esc(meta.hwanggeumObjectiveScoreText)})}}};`);
-  out.push(`\\node[anchor=center] at ${at((c3 + c4) / 2, (tMid + tBot) / 2)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(11.6)} ${esc(meta.daeryunEssayCountText)}문항(${esc(meta.hwanggeumEssayScoreText)})}}};`);
+  out.push(`\\node[anchor=center] at ${at((c0 + c1) / 2, (tMid + tBot) / 2)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic\\daeryunHeavyHangul${font(23)}\\bfseries ${esc(meta.daeryunSubjectCode)}}}};`);
+  out.push(`\\node[anchor=center] at ${at((c1 + c2) / 2, (tMid + tBot) / 2)} {{\\YggWithUnifiedDigits{\\hwanggeumLightBold${font(13.8)} 총${esc(totalSheetsStr)}장,\\ ${esc(totalPagesStr)}면}}};`);
+  out.push(`\\node[anchor=center] at ${at((c2 + c3) / 2, (tMid + tBot) / 2)} {{\\YggWithUnifiedDigits{\\hwanggeumLightBold${font(13.8)} ${esc(meta.neunginObjectiveCountText)}문항(${esc(meta.hwanggeumObjectiveScoreText)})}}};`);
+  out.push(`\\node[anchor=center] at ${at((c3 + c4) / 2, (tMid + tBot) / 2)} {{\\YggWithUnifiedDigits{\\hwanggeumLightBold${font(13.8)} ${esc(meta.daeryunEssayCountText)}문항(${esc(meta.hwanggeumEssayScoreText)})}}};`);
 
-  // Box 1 하단 주의사항 및 2~6번 항목 (원본과 동일한 줄바꿈)
-  const box1BodyTex = `\\noindent\\hspace*{${pt(5)}}※ 문제지 면수는 표지를 포함한 면 수입니다. 문항에 따라 배점이 다릅니다.\\par\\vspace{${pt(6.2)}}`
-    + `\\noindent 2. 문제지 면수와 인쇄 상태만 확인하고, \\uline{시작종이 울릴 때까지 절대 표지를 넘기지 마시오.}\\par\\vspace{${pt(6.2)}}`
-    + `\\noindent 3. OMR 답안지에 학년, 반, 번호, 과목코드를 정확히 표기하십시오.\\par\\vspace{${pt(6.2)}}`
-    + `\\noindent 4. OMR 답안지에는 \\uline{컴퓨터용 수성 사인펜만 사용하십시오.} 선택형 답을 수정할 경우 개인용 수정 테이프를\\linebreak `
-    + `사용하십시오. (예비마킹 금지)\\par\\vspace{${pt(6.2)}}`
-    + `\\noindent\\hspace*{${pt(4)}}5. 서술형 문항의 답은 OMR 답안지의 서술형 답란에 기재하십시오. (답안지 번호 유의)\\par\\vspace{${pt(6.2)}}`
-    + `\\noindent\\hspace*{${pt(4)}}\\mbox{6. 서술형 답은 OMR 답안지에 연필 또는 검은색 볼펜을 사용하여 채점 교사가 알아볼 수 있도록 정확하게 작성해야 합니다.}\\par`;
-  out.push(`\\node[anchor=north west] at ${at(boxL + 11.5, 355)} {\\parbox{${pt(boxHalf * 2 - 14)}}{\\lineskiplimit=-10pt\\lineskip=0pt\\setstretch{1}\\gyeongsinGothic${font(11.0, 21.5)} \\YggWithUnifiedDigits{${box1BodyTex}}}};`);
+  // Box 1 하단 주의사항 및 2~6번 항목 (약한 강조 통일, 4번 둘째줄 들여쓰기, 6번 아래 여백을 1번 줄 뒤 간격과 일치)
+  const box1BodyTex = `\\noindent\\hspace*{${pt(5)}}※ 문제지 면수는 표지를 포함한 면 수입니다. 문항에 따라 배점이 다릅니다.\\par`
+    + `\\noindent 2. 문제지 면수와 인쇄 상태만 확인하고, \\uline{시작종이 울릴 때까지 절대 표지를 넘기지 마시오.}\\par`
+    + `\\noindent 3. OMR 답안지에 학년, 반, 번호, 과목코드를 정확히 표기하십시오.\\par`
+    + `\\setbox0=\\hbox{4.\\ }\\noindent\\copy0 OMR 답안지에는 \\uline{컴퓨터용 수성 사인펜만 사용하십시오.} 선택형 답을 수정할 경우 개인용 수정 테이프를\\\\`
+    + `\\hspace*{\\wd0}사용하십시오. (예비마킹 금지)\\par`
+    + `\\noindent 5. 서술형 문항의 답은 OMR 답안지의 서술형 답란에 기재하십시오. (답안지 번호 유의)\\par`
+    + `\\noindent 6. 서술형 답은 OMR 답안지에 연필 또는 검은색 볼펜을 사용하여 채점 교사가 알아볼 수 있도록 정확하게 작성해야 합니다.\\par`;
+  out.push(`\\node[anchor=north west] at ${at(boxL + 11.5, 376)} {\\parbox{${pt(boxHalf * 2 - 20)}}{\\lineskiplimit=-10pt\\lineskip=0pt\\setstretch{1}\\hwanggeumLightBold${font(10.5, 20.0)} \\YggWithUnifiedDigits{${box1BodyTex}}}};`);
 
-  // Box 2: < 반입 금지 물품 > (타이틀 < > 굵게 처리, 원본과 동일한 3줄 줄바꿈)
-  out.push(`\\draw[line width=${pt(0.75)}] ${at(boxL, 544.9)} rectangle ${at(boxR, 630.3)};`);
-  out.push(`\\node[anchor=center] at ${at(0, 565)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic\\daeryunHeavyHangul${font(12.2)}\\bfseries \\jeonghwaBoldLt\\ 반입 금지 물품 \\jeonghwaBoldGt}}};`);
+  // Box 2: < 반입 금지 물품 > (타이틀 강조 정도를 Box 1과 동일한 약한 강조로 통일, 폰트 -0.5pt 축소, 원본과 동일한 3줄 줄바꿈)
+  out.push(`\\draw[line width=${pt(0.75)}] ${at(boxL, 525.0)} rectangle ${at(boxR, 610.4)};`);
+  out.push(`\\node[anchor=center] at ${at(0, 545)} {{\\YggWithUnifiedDigits{\\hwanggeumLightBold${font(12.2)} \\hwanggeumBoldLt\\ 반입 금지 물품 \\hwanggeumBoldGt}}};`);
   const box2LinesTex = [
     esc('통신(블루투스 기능 포함)·결제 기능이 있는 물품(휴대전화, 스마트워치, 스마트링, 스마트 글라스, 태블릿, 이어폰 등),'),
     esc('전자식 화면표시기(LCD, LED 등)가 있는 물품(전자사전, 전자식 화면표시기가 있는 시계, 텀블러 등), 기타 충전식 물품'),
     esc('(전자담배, 보조배터리 등) 등 모든 전자 물품'),
-  ].join('\\linebreak ');
-  out.push(`\\node[anchor=north west] at ${at(boxL + 11.5, 579)} {\\parbox{${pt(boxHalf * 2 - 23)}}{\\lineskiplimit=-10pt\\lineskip=0pt\\setstretch{1}\\gyeongsinGothic${font(10.8, 17.3)} \\YggWithUnifiedDigits{\\noindent ${box2LinesTex}\\par}}};`);
+  ].join('\\\\');
+  out.push(`\\node[anchor=north west] at ${at(boxL + 11.5, 559)} {\\parbox{${pt(boxHalf * 2 - 20)}}{\\lineskiplimit=-10pt\\lineskip=0pt\\setstretch{1}\\gyeongsinGothic${font(10.3, 15.8)} \\YggWithUnifiedDigits{\\noindent ${box2LinesTex}\\par}}};`);
 
-  // Box 3: < 부정행위 유형 > (타이틀 < > 굵게 처리, 9개 * 항목 + 하단 굵은 주의사항 2줄)
-  out.push(`\\draw[line width=${pt(0.75)}] ${at(boxL, 639.4)} rectangle ${at(boxR, 877.3)};`);
-  out.push(`\\node[anchor=center] at ${at(0, 661)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic\\daeryunHeavyHangul${font(12.2)}\\bfseries \\jeonghwaBoldLt\\ 부정행위 유형 \\jeonghwaBoldGt}}};`);
+  // Box 3: < 부정행위 유형 > (타이틀 및 내부 강조 글자들의 강조 정도를 Box 1과 동일하게 통일)
+  out.push(`\\draw[line width=${pt(0.75)}] ${at(boxL, 619.5)} rectangle ${at(boxR, 857.4)};`);
+  out.push(`\\node[anchor=center] at ${at(0, 641)} {{\\YggWithUnifiedDigits{\\hwanggeumLightBold${font(12.2)} \\hwanggeumBoldLt\\ 부정행위 유형 \\hwanggeumBoldGt}}};`);
   misconductBullets.forEach((lineTex, idx) => {
-    const yPos = 677 + idx * 18.7;
-    out.push(`\\node[anchor=west] at ${at(boxL + 19.7, yPos)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(10.8)} ${lineTex}}}};`);
+    const yPos = 659 + idx * 18.2;
+    out.push(`\\node[anchor=west] at ${at(boxL + 16.5, yPos)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(10.3)} ${lineTex}}}};`);
   });
 
-  // 하단 교표 + 학교명 (자간 좁게 기본 간격 유지)
+  // 하단 교표 + 학교명 (학교명 폰트 확대 및 Box 3 하단(857.4)과 페이지 번호(980) 정중앙(915)으로 이동)
   const logoGraphic = logoPathTex
-    ? `\\ensuremath{\\vcenter{\\hbox{\\includegraphics[height=${pt(38)},width=${pt(120)},keepaspectratio]{${logoPathTex}}}}}\\hspace{${pt(12)}}`
+    ? `\\ensuremath{\\vcenter{\\hbox{\\includegraphics[height=${pt(40)},width=${pt(125)},keepaspectratio]{${logoPathTex}}}}}\\hspace{${pt(12)}}`
     : '';
-  out.push(`\\node[anchor=center] at ${at(0, 924)} {${logoGraphic}\\ensuremath{\\vcenter{\\hbox{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(29)}\\bfseries ${schoolSpaced}}}}}};`);
+  out.push(`\\node[anchor=center] at ${at(0, 915)} {${logoGraphic}\\ensuremath{\\vcenter{\\hbox{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(34)}\\bfseries ${schoolSpaced}}}}}};`);
 
   // 표지 최하단 페이지 번호 (5 - 1)
   out.push(`\\node[anchor=center] at ${at(0, 980)} {{\\YggWithUnifiedDigits{\\fontsize{10.2pt}{12pt}\\selectfont ${esc(`${totalPagesStr} - 1`)}}}};`);
 
   out.push('\\end{tikzpicture}');
   out.push('\\clearpage');
-  // 단면 인쇄용 빈 뒷면
-  out.push('\\AtBeginShipoutNext{\\global\\quickanswerpagetrue\\global\\mocktitlepagefalse}');
-  out.push('\\thispagestyle{empty}');
-  out.push('\\null');
-  out.push('\\clearpage');
+  if (includeCoverBlankPage) {
+    // 단면 인쇄용 빈 뒷면
+    out.push('\\AtBeginShipoutNext{\\global\\quickanswerpagetrue\\global\\mocktitlepagefalse}');
+    out.push('\\thispagestyle{empty}');
+    out.push('\\null');
+    out.push('\\clearpage');
+  }
   out.push('\\global\\quickanswerpagefalse');
   out.push('\\setcounter{page}{1}');
   out.push('\\endgroup');
@@ -11541,6 +11565,7 @@ export function buildDocumentTexSource(questions, options = {}) {
     academyLogoPath = '',
     academyName = '',
     includeCoverPage = false,
+    includeCoverBlankPage = undefined,
     coverPageTexts = {},
     gyeongsinLogoPath = '',
     gyeongsinSchoolName = '',
@@ -11710,12 +11735,33 @@ export function buildDocumentTexSource(questions, options = {}) {
   const effectiveLayoutMeta = layoutMeta && typeof layoutMeta === 'object' ? layoutMeta : null;
   let lastMode = null;
 
+  const parseExplicitCoverBlank = (val) => {
+    if (typeof val === 'boolean') return val;
+    if (typeof val === 'number') return val !== 0;
+    const s = String(val ?? '').trim().toLowerCase();
+    if (s === 'true' || s === '1' || s === 'yes' || s === 'on') return true;
+    if (s === 'false' || s === '0' || s === 'no' || s === 'off') return false;
+    return undefined;
+  };
+  const explicitCoverBlank =
+    parseExplicitCoverBlank(includeCoverBlankPage) ??
+    parseExplicitCoverBlank(coverPageTexts?.includeCoverBlankPage);
+  const resolvedIncludeCoverBlankPage =
+    explicitCoverBlank !== undefined
+      ? explicitCoverBlank
+      : (isMockExamProfile || isGyeongsinProfile);
+
   // 표지 페이지 삽입 (본문 앞). 경신중/능인중은 전체 문제지 면 수를 계산한 뒤 아래에서 삽입한다.
   if (includeCoverPage && isMockExamProfile) {
-    parts.push(renderMockCoverPageLatex(coverPageTexts, { paper, subjectTitle }));
+    parts.push(renderMockCoverPageLatex(coverPageTexts, {
+      paper,
+      subjectTitle,
+      includeCoverBlankPage: resolvedIncludeCoverBlankPage,
+    }));
   } else if (includeCoverPage && !isNaesinSchoolProfile) {
     parts.push(renderCoverPageLatex(coverPageTexts, {
       academyLogoPath: logoEnabled ? academyLogoPath : '',
+      includeCoverBlankPage: resolvedIncludeCoverBlankPage,
     }));
   }
 
@@ -12015,23 +12061,27 @@ export function buildDocumentTexSource(questions, options = {}) {
         gyeongsinLogoPath,
         schoolName: gyeongsinSchoolName,
         paper,
+        includeCoverBlankPage: resolvedIncludeCoverBlankPage,
       }));
     } else if (isNeunginProfile && includeCoverPage && gyeongsinMeta) {
       parts.push(renderNeunginCoverPageLatex(gyeongsinMeta, {
         gyeongsinLogoPath,
         schoolName: gyeongsinSchoolName,
         paper,
+        includeCoverBlankPage: resolvedIncludeCoverBlankPage,
       }));
     } else if (isSoseonProfile && includeCoverPage && gyeongsinMeta) {
       parts.push(renderSoseonCoverPageLatex(gyeongsinMeta, {
         gyeongsinLogoPath,
         schoolName: gyeongsinSchoolName,
         paper,
+        includeCoverBlankPage: resolvedIncludeCoverBlankPage,
       }));
     } else if (isOseongProfile && includeCoverPage && gyeongsinMeta) {
       parts.push(renderOseongCoverPageLatex(gyeongsinMeta, {
         schoolName: gyeongsinSchoolName,
         paper,
+        includeCoverBlankPage: resolvedIncludeCoverBlankPage,
       }));
     } else if (isJeonghwaProfile && includeCoverPage && gyeongsinMeta) {
       const hasManualTotalPages = String(coverPageTexts?.totalPageCount ?? '').trim().length > 0;
@@ -12043,6 +12093,7 @@ export function buildDocumentTexSource(questions, options = {}) {
         schoolName: gyeongsinSchoolName,
         paper,
         totalPagesWithCover,
+        includeCoverBlankPage: resolvedIncludeCoverBlankPage,
       }));
     } else if (isHwanggeumProfile && includeCoverPage && gyeongsinMeta) {
       const hasManualTotalPages = String(coverPageTexts?.totalPageCount ?? '').trim().length > 0;
@@ -12056,6 +12107,7 @@ export function buildDocumentTexSource(questions, options = {}) {
         paper,
         totalPagesWithCover,
         totalSheetsWithCover,
+        includeCoverBlankPage: resolvedIncludeCoverBlankPage,
       }));
     }
 

@@ -234,6 +234,53 @@ class ExamResourcePrint {
                   trimmedTemplate == 'hwanggeum')
               ? 'naesin'
               : templateProfile;
+      final jobOptionTemplate =
+          '${job.options['templateProfile'] ?? ''}'.trim();
+      if (jobOptionTemplate.isNotEmpty &&
+          jobOptionTemplate != trimmedTemplate) {
+        return false;
+      }
+      final wantCover = _parseBool(
+        renderConfig['includeCoverPage'],
+        fallback: false,
+      );
+      final jobCover = _parseBool(
+        job.options['includeCoverPage'],
+        fallback: false,
+      );
+      if (wantCover != jobCover) return false;
+      if (wantCover) {
+        final defaultBlank = trimmedTemplate == 'mock' ||
+            trimmedTemplate == 'csat' ||
+            trimmedTemplate == 'gyeongsin' ||
+            trimmedTemplate == 'naesin';
+        final wantBlank = _parseBool(
+          renderConfig['includeCoverBlankPage'] ??
+              (renderConfig['coverPageTexts'] is Map
+                  ? (renderConfig['coverPageTexts']
+                      as Map)['includeCoverBlankPage']
+                  : null),
+          fallback: defaultBlank,
+        );
+        final jobBlank = _parseBool(
+          job.options['includeCoverBlankPage'] ??
+              (job.options['coverPageTexts'] is Map
+                  ? (job.options['coverPageTexts']
+                      as Map)['includeCoverBlankPage']
+                  : null),
+          fallback: defaultBlank,
+        );
+        if (wantBlank != jobBlank) return false;
+      }
+      if (renderConfig['pageColumnQuestionCounts'] is List &&
+          (renderConfig['pageColumnQuestionCounts'] as List).isNotEmpty) {
+        final wantCounts =
+            '${renderConfig['pageColumnQuestionCounts']}'.trim();
+        final jobCounts =
+            '${job.options['pageColumnQuestionCounts'] ?? const <dynamic>[]}'
+                .trim();
+        if (wantCounts != jobCounts) return false;
+      }
       final jobFollowsOriginal =
           job.options['naesinOriginalModePolicyVersion'] == 1;
       return !job.previewOnly &&

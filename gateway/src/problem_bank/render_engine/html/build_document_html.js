@@ -2213,6 +2213,7 @@ export function buildDocumentHtml({
     && academyLogoDataUrl.length > 0
     && /^data:image\//i.test(academyLogoDataUrl);
   const includeCoverPage = isMockStyle && layout?.includeCoverPage === true;
+  const includeCoverBlankPage = layout?.includeCoverBlankPage !== false;
   const hidePreviewHeader = layout?.hidePreviewHeader === true;
   const hideQuestionNumber = layout?.hideQuestionNumber === true;
   const questionNumberPlacement = String(layout?.questionNumberPlacement || 'inline').trim();
@@ -2805,7 +2806,7 @@ export function buildDocumentHtml({
       .join('');
     const renderCoverPages = () => `
       <div class="mock-cover-pages">
-        <section class="mock-cover-page">
+        <section class="mock-cover-page${includeCoverBlankPage ? '' : ' page-break'}">
           <div class="mock-cover-sheet">
             <div class="mock-cover-top-row">
               <span class="mock-cover-chip-left">제 1교시</span>
@@ -2880,7 +2881,7 @@ export function buildDocumentHtml({
             <div class="mock-cover-org">${escapeHtml(coverPageTexts.organization)}</div>
           </div>
         </section>
-        <section class="mock-cover-blank page-break"></section>
+        ${includeCoverBlankPage ? '<section class="mock-cover-blank page-break"></section>' : ''}
       </div>
     `;
     const renderMockHeader = (pageNo, isTitlePage) => {

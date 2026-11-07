@@ -992,6 +992,18 @@ export async function renderPdfWithXeLatex({
     const coverPageTexts = (renderConfig?.coverPageTexts && typeof renderConfig.coverPageTexts === 'object')
       ? renderConfig.coverPageTexts
       : {};
+    const rawCoverBlank =
+      renderConfig?.includeCoverBlankPage ??
+      coverPageTexts?.includeCoverBlankPage;
+    const defaultCoverBlank =
+      profile === 'mock' ||
+      profile === 'csat' ||
+      profile === 'gyeongsin' ||
+      profile === 'naesin';
+    const includeCoverBlankPage =
+      rawCoverBlank !== undefined && rawCoverBlank !== null && rawCoverBlank !== ''
+        ? (rawCoverBlank === true || String(rawCoverBlank).trim().toLowerCase() === 'true')
+        : defaultCoverBlank;
     const academyLogoDataUrl = includeAcademyLogo
       ? String(renderConfig?.academyLogoDataUrl || '').trim()
       : '';
@@ -1043,6 +1055,7 @@ export async function renderPdfWithXeLatex({
       academyLogoPath,
       academyName,
       includeCoverPage,
+      includeCoverBlankPage,
       coverPageTexts,
       gyeongsinLogoPath,
       gyeongsinSchoolName,
@@ -1246,6 +1259,7 @@ export async function renderPdfWithXeLatex({
       includeQuestionScore,
       questionScoreByQuestionId,
       includeCoverPage,
+      includeCoverBlankPage,
       includeAcademyLogo: includeAcademyLogo && !!academyLogoPath,
       coverPageTexts,
       renderConfigVersion,

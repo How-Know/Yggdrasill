@@ -232,6 +232,11 @@ function normalizeCoverPageTexts(raw, defaults = {}) {
   const totalPageCount = normalizeWhitespace(src.totalPageCount ?? seed.totalPageCount ?? '');
   const footerLabel = normalizeWhitespace(src.footerLabel ?? seed.footerLabel ?? '');
   const pageStartNumber = normalizeWhitespace(src.pageStartNumber ?? seed.pageStartNumber ?? '');
+  const rawCoverBlank = src.includeCoverBlankPage ?? seed.includeCoverBlankPage;
+  const hasExplicitCoverBlank = rawCoverBlank !== undefined && rawCoverBlank !== null && rawCoverBlank !== '';
+  const includeCoverBlankPage = hasExplicitCoverBlank
+    ? (rawCoverBlank === true || String(rawCoverBlank).trim().toLowerCase() === 'true')
+    : undefined;
   return {
     topTitle,
     subjectTitle,
@@ -253,6 +258,7 @@ function normalizeCoverPageTexts(raw, defaults = {}) {
     ...(totalPageCount ? { totalPageCount } : {}),
     ...(footerLabel ? { footerLabel } : {}),
     ...(pageStartNumber ? { pageStartNumber } : {}),
+    ...(includeCoverBlankPage !== undefined ? { includeCoverBlankPage } : {}),
   };
 }
 
@@ -456,6 +462,13 @@ function buildHtmlLayout(renderConfig, baseLayout) {
     subjectTitleText,
   );
   const includeCoverPage = renderConfig?.includeCoverPage === true;
+  const rawCoverBlank =
+    renderConfig?.includeCoverBlankPage ??
+    renderConfig?.coverPageTexts?.includeCoverBlankPage;
+  const includeCoverBlankPage =
+    rawCoverBlank !== undefined && rawCoverBlank !== null && rawCoverBlank !== ''
+      ? (rawCoverBlank === true || String(rawCoverBlank).trim().toLowerCase() === 'true')
+      : true;
   const hidePreviewHeader = renderConfig?.hidePreviewHeader === true
     || renderConfig?.hideDocumentHeader === true;
   const hideQuestionNumber = renderConfig?.hideQuestionNumber === true;
@@ -502,6 +515,7 @@ function buildHtmlLayout(renderConfig, baseLayout) {
     titlePageIndices,
     titlePageHeaders,
     includeCoverPage,
+    includeCoverBlankPage,
     hidePreviewHeader,
     hideQuestionNumber,
     questionNumberPlacement,
@@ -687,6 +701,7 @@ export async function renderPdfWithHtmlEngine({
     includeQuestionScore: layout?.includeQuestionScore === true,
     questionScoreByQuestionId: layout?.questionScoreByQuestionId || {},
     includeCoverPage: layout?.includeCoverPage === true,
+    includeCoverBlankPage: layout?.includeCoverBlankPage !== false,
     includeAcademyLogo: layout?.includeAcademyLogo === true,
     coverPageTexts: layout?.coverPageTexts || normalizeCoverPageTexts(null),
     renderConfigVersion,

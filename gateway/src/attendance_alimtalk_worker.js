@@ -56,6 +56,7 @@ const EMPHASIS_TITLE = {
 };
 const SHEET_BUTTON_NAME = '알림장 조회';
 const SHEET_LINK_ORIGIN = 'https://mneme.co.kr/s';
+const SHEET_WAIT_MS = 5 * 60 * 1000;
 
 function renderTemplate(template, params) {
   let out = template;
@@ -216,7 +217,13 @@ async function ensureTodoSheetShareToken(attendanceId) {
   return again?.[0]?.token ?? null;
 }
 
-async function resolveAttendanceTemplate({ target, alimtalkSettings, basicInfo, attendanceId }) {
+function sheetWaitExpired(queuedAt) {
+  const createdMs = new Date(queuedAt).getTime();
+  if (Number.isNaN(createdMs)) return true;
+  return Date.now() - createdMs >= SHEET_WAIT_MS;
+}
+
+async function resolveAttendanceTemplate({ target, alimtalkSettings, basicInfo, attendanceId, queuedAt }) {
   if (target === 'arrival' || target === 'late') {
     const codeKey = target === 'arrival' ? 'arrival_template_code' : 'late_template_code';
     const messageKey = target === 'arrival' ? 'arrival_message_template' : 'late_message_template';
@@ -240,7 +247,10 @@ async function resolveAttendanceTemplate({ target, alimtalkSettings, basicInfo, 
   if (!sheetCode || !sheetMessage) return plain;
   const shareToken = await ensureTodoSheetShareToken(attendanceId);
   if (!shareToken) {
-    console.warn('[alimtalk-worker] sheet snapshot missing, sending plain departure:', attendanceId);
+    if (!sheetWaitExpired(queuedAt)) {
+      return { waitForSheet: true };
+    }
+    console.warn('[alimtalk-worker] sheet snapshot missing after wait, sending plain departure:', attendanceId);
     return plain;
   }
   const url = `${SHEET_LINK_ORIGIN}?t=${shareToken}`;
@@ -327,7 +337,7 @@ async function processBatch() {
 
   let queueQuery = supa
     .from('attendance_notification_queue')
-    .select('id, attendance_id, academy_id, student_id, event_type, status, attempts')
+    .select('id, attendance_id, academy_id, student_id, event_type, status, attempts, created_at')
     .in('status', ['pending', 'error'])
     .lt('attempts', MAX_ATTEMPTS);
   if (ONLY_TODAY) {
@@ -511,6 +521,7 @@ async function processBatch() {
       const errors = [];
       let anySent = false;
       let lastMessageId = null;
+      let waitingForSheet = false;
 
       for (const target of sendTargets) {
         const { data: alreadySent } = await supa
@@ -527,7 +538,17 @@ async function processBatch() {
           alimtalkSettings,
           basicInfo,
           attendanceId: attendance.id,
+          queuedAt: row.created_at,
         });
+        if (resolved.waitForSheet) {
+          waitingForSheet = true;
+          await setQueueStatus(row.id, {
+            status: 'pending',
+            attempts: Number(row.attempts || 0),
+            last_error: 'waiting_for_todo_sheet',
+          });
+          break;
+        }
         const templateCode = resolved.templateCode;
         const templateMessage = resolved.templateMessage;
 
@@ -610,6 +631,11 @@ async function processBatch() {
             error: err,
           });
         }
+      }
+
+      if (waitingForSheet) {
+        summary.skipped += 1;
+        continue;
       }
 
       if (errors.length > 0) {

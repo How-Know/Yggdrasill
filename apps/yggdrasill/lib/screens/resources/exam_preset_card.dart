@@ -24,12 +24,14 @@ class ExamPresetCard extends StatelessWidget {
     super.key,
     required this.preset,
     required this.onTap,
+    this.onOriginalTap,
     this.busy = false,
     this.printPick = false,
   });
 
   final LearningProblemDocumentExportPreset preset;
   final VoidCallback? onTap;
+  final VoidCallback? onOriginalTap;
   final bool busy;
   final bool printPick;
 
@@ -41,6 +43,7 @@ class ExamPresetCard extends StatelessWidget {
       line2: parsed == null ? '' : examPresetCardLine2(parsed),
       footer: printPick ? '탭하여 프리셋 인쇄' : kExamPaperCardFooter,
       onTap: onTap,
+      onOriginalTap: onOriginalTap,
       busy: busy,
       printPick: printPick,
     );
@@ -58,6 +61,7 @@ class ExamPaperCard extends StatelessWidget {
     required this.line2,
     required this.footer,
     required this.onTap,
+    this.onOriginalTap,
     this.busy = false,
     this.printPick = false,
   });
@@ -66,6 +70,7 @@ class ExamPaperCard extends StatelessWidget {
   final String line2;
   final String footer;
   final VoidCallback? onTap;
+  final VoidCallback? onOriginalTap;
   final bool busy;
   final bool printPick;
 
@@ -164,6 +169,40 @@ class ExamPaperCard extends StatelessWidget {
                                   ),
                                 ),
                               ),
+                              if (!printPick && onOriginalTap != null) ...[
+                                const SizedBox(width: 6),
+                                GestureDetector(
+                                  onTap: busy ? null : onOriginalTap,
+                                  behavior: HitTestBehavior.opaque,
+                                  child: MouseRegion(
+                                    cursor: busy
+                                        ? SystemMouseCursors.basic
+                                        : SystemMouseCursors.click,
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 4,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: isDark
+                                            ? const Color(0xFF3A3F44)
+                                            : const Color(0xFFE4E4E4),
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      child: Text(
+                                        '원본 보기',
+                                        style: TextStyle(
+                                          color: isDark
+                                              ? Colors.white70
+                                              : const Color(0xFF444444),
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ],
                           ),
                         ],

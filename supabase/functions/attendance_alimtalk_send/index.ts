@@ -9,6 +9,7 @@ type QueueRow = {
   event_type: 'arrival' | 'departure' | 'late';
   status: string;
   attempts: number;
+  created_at: string;
 };
 
 const BIZ_DOMAIN = (Deno.env.get('BIZPPURIO_DOMAIN') ?? 'api.bizppurio.com').trim();
@@ -125,6 +126,7 @@ const EMPHASIS_TITLE = {
 } as const;
 const SHEET_BUTTON_NAME = '알림장 조회';
 const SHEET_LINK_ORIGIN = 'https://mneme.co.kr/s';
+const SHEET_WAIT_MS = 5 * 60 * 1000;
 
 async function ensureTodoSheetShareToken(
   admin: ReturnType<typeof createAdminClient>,
@@ -164,14 +166,21 @@ async function ensureTodoSheetShareToken(
   return again?.[0]?.token ? String(again[0].token) : null;
 }
 
+function sheetWaitExpired(queuedAt: string) {
+  const createdMs = new Date(queuedAt).getTime();
+  if (Number.isNaN(createdMs)) return true;
+  return Date.now() - createdMs >= SHEET_WAIT_MS;
+}
+
 async function resolveAttendanceTemplate(args: {
   admin: ReturnType<typeof createAdminClient>;
   target: 'arrival' | 'departure' | 'late';
   alimtalkSettings: Record<string, unknown>;
   sheetConsent: boolean;
   attendanceId: string;
+  queuedAt: string;
 }) {
-  const { admin, target, alimtalkSettings, sheetConsent, attendanceId } = args;
+  const { admin, target, alimtalkSettings, sheetConsent, attendanceId, queuedAt } = args;
   if (target === 'arrival' || target === 'late') {
     const codeKey = target === 'arrival' ? 'arrival_template_code' : 'late_template_code';
     const messageKey = target === 'arrival' ? 'arrival_message_template' : 'late_message_template';
@@ -194,7 +203,10 @@ async function resolveAttendanceTemplate(args: {
   const sheetMessage = String(alimtalkSettings.departure_sheet_message_template ?? '').trim();
   if (!sheetCode || !sheetMessage) return plain;
   const shareToken = await ensureTodoSheetShareToken(admin, attendanceId);
-  if (!shareToken) return plain;
+  if (!shareToken) {
+    if (!sheetWaitExpired(queuedAt)) return { waitForSheet: true as const };
+    return plain;
+  }
   const url = `${SHEET_LINK_ORIGIN}?t=${shareToken}`;
   return {
     templateCode: sheetCode,
@@ -279,7 +291,7 @@ Deno.serve(async (req) => {
 
   let queueQuery = admin
     .from('attendance_notification_queue')
-    .select('id, attendance_id, academy_id, student_id, event_type, status, attempts')
+    .select('id, attendance_id, academy_id, student_id, event_type, status, attempts, created_at')
     .in('status', ['pending', 'error'])
     .lt('attempts', MAX_ATTEMPTS);
   if (forceQueueId) {
@@ -484,6 +496,7 @@ Deno.serve(async (req) => {
     const errors: string[] = [];
     let lastMessageId = '';
     let anySent = false;
+    let waitingForSheet = false;
 
     for (const target of sendTargets) {
       const { data: alreadySent } = await admin
@@ -503,7 +516,17 @@ Deno.serve(async (req) => {
         alimtalkSettings: alimtalkSettings as Record<string, unknown>,
         sheetConsent: basicInfo?.todo_sheet_alimtalk_consent === true,
         attendanceId: attendance.id,
+        queuedAt: row.created_at,
       });
+      if ('waitForSheet' in resolved && resolved.waitForSheet) {
+        waitingForSheet = true;
+        await admin.from('attendance_notification_queue').update({
+          status: 'pending',
+          attempts: row.attempts,
+          last_error: 'waiting_for_todo_sheet',
+        }).eq('id', row.id);
+        break;
+      }
       const templateCode = resolved.templateCode;
       const templateMessage = resolved.templateMessage;
 
@@ -586,6 +609,11 @@ Deno.serve(async (req) => {
           error: enrichedMessage,
         });
       }
+    }
+
+    if (waitingForSheet) {
+      skipped += 1;
+      continue;
     }
 
     if (errors.length > 0) {

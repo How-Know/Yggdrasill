@@ -39,6 +39,7 @@ class ProblemBankPreviewRefreshRequest {
     required this.coverPageTexts,
     required this.includeAcademyLogo,
     required this.includeCoverPage,
+    this.includeCoverBlankPage = true,
     required this.includeAnswerSheet,
     required this.includeExplanation,
     required this.includeQuestionScore,
@@ -61,6 +62,7 @@ class ProblemBankPreviewRefreshRequest {
   final Map<String, dynamic> coverPageTexts;
   final bool includeAcademyLogo;
   final bool includeCoverPage;
+  final bool includeCoverBlankPage;
   final bool includeAnswerSheet;
   final bool includeExplanation;
   final bool includeQuestionScore;
@@ -88,6 +90,7 @@ class ProblemBankPreviewRefreshRequest {
     Map<String, dynamic>? coverPageTexts,
     bool? includeAcademyLogo,
     bool? includeCoverPage,
+    bool? includeCoverBlankPage,
     bool? includeAnswerSheet,
     bool? includeExplanation,
     bool? includeQuestionScore,
@@ -111,6 +114,8 @@ class ProblemBankPreviewRefreshRequest {
       coverPageTexts: coverPageTexts ?? this.coverPageTexts,
       includeAcademyLogo: includeAcademyLogo ?? this.includeAcademyLogo,
       includeCoverPage: includeCoverPage ?? this.includeCoverPage,
+      includeCoverBlankPage:
+          includeCoverBlankPage ?? this.includeCoverBlankPage,
       includeAnswerSheet: includeAnswerSheet ?? this.includeAnswerSheet,
       includeExplanation: includeExplanation ?? this.includeExplanation,
       includeQuestionScore: includeQuestionScore ?? this.includeQuestionScore,
@@ -139,6 +144,7 @@ class ProblemBankPreviewRefreshResult {
     this.coverPageTexts = const <String, dynamic>{},
     this.includeAcademyLogo = true,
     this.includeCoverPage = false,
+    this.includeCoverBlankPage,
     this.includeAnswerSheet = false,
     this.includeExplanation = false,
     this.includeQuestionScore = false,
@@ -157,6 +163,7 @@ class ProblemBankPreviewRefreshResult {
   final Map<String, dynamic> coverPageTexts;
   final bool includeAcademyLogo;
   final bool includeCoverPage;
+  final bool? includeCoverBlankPage;
   final bool includeAnswerSheet;
   final bool includeExplanation;
   final bool includeQuestionScore;
@@ -219,6 +226,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
     this.initialCoverPageTexts = const <String, dynamic>{},
     this.initialIncludeAcademyLogo = true,
     this.initialIncludeCoverPage = false,
+    this.initialIncludeCoverBlankPage,
     this.initialIncludeAnswerSheet = false,
     this.initialIncludeExplanation = false,
     this.initialIncludeQuestionScore = false,
@@ -261,6 +269,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
   final Map<String, dynamic> initialCoverPageTexts;
   final bool initialIncludeAcademyLogo;
   final bool initialIncludeCoverPage;
+  final bool? initialIncludeCoverBlankPage;
   final bool initialIncludeAnswerSheet;
   final bool initialIncludeExplanation;
   final bool initialIncludeQuestionScore;
@@ -337,6 +346,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
     Map<String, dynamic> initialCoverPageTexts = const <String, dynamic>{},
     bool initialIncludeAcademyLogo = true,
     bool initialIncludeCoverPage = false,
+    bool? initialIncludeCoverBlankPage,
     bool initialIncludeAnswerSheet = false,
     bool initialIncludeExplanation = false,
     bool initialIncludeQuestionScore = false,
@@ -393,6 +403,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
               initialCoverPageTexts: initialCoverPageTexts,
               initialIncludeAcademyLogo: initialIncludeAcademyLogo,
               initialIncludeCoverPage: initialIncludeCoverPage,
+              initialIncludeCoverBlankPage: initialIncludeCoverBlankPage,
               initialIncludeAnswerSheet: initialIncludeAnswerSheet,
               initialIncludeExplanation: initialIncludeExplanation,
               initialIncludeQuestionScore: initialIncludeQuestionScore,
@@ -522,6 +533,7 @@ class _ProblemBankExportServerPreviewDialogState
   String _editingPresetName = '';
   late bool _includeAcademyLogo;
   late bool _includeCoverPage;
+  late bool _includeCoverBlankPage;
   late bool _includeAnswerSheet;
   late bool _includeExplanation;
   late bool _includeQuestionScore;
@@ -592,6 +604,10 @@ class _ProblemBankExportServerPreviewDialogState
     );
     _includeAcademyLogo = widget.initialIncludeAcademyLogo;
     _includeCoverPage = widget.initialIncludeCoverPage;
+    _includeCoverBlankPage = widget.initialIncludeCoverBlankPage ??
+        _readCoverBlankPageFlag(
+          widget.initialCoverPageTexts['includeCoverBlankPage'],
+        );
     _includeAnswerSheet = widget.initialIncludeAnswerSheet;
     _includeExplanation = widget.initialIncludeExplanation;
     _includeQuestionScore = widget.initialIncludeQuestionScore;
@@ -1841,7 +1857,44 @@ class _ProblemBankExportServerPreviewDialogState
         '',
         allowEmpty: true,
       ),
+      'includeCoverBlankPage': _readCoverBlankPageFlag(
+        src['includeCoverBlankPage'],
+      ),
     };
+  }
+
+  bool get _defaultIncludeCoverBlankPage {
+    if (widget.isGyeongsinTemplate) return true;
+    if (widget.isNeunginTemplate ||
+        widget.isDaeryunTemplate ||
+        widget.isDongdoTemplate ||
+        widget.isSoseonTemplate ||
+        widget.isOseongTemplate ||
+        widget.isJeonghwaTemplate ||
+        widget.isHwanggeumTemplate ||
+        widget.isAssignmentTemplate) {
+      return false;
+    }
+    return true;
+  }
+
+  bool _readCoverBlankPageFlag(dynamic raw) {
+    if (raw is bool) return raw;
+    if (raw is num) return raw != 0;
+    final text = '${raw ?? ''}'.trim().toLowerCase();
+    if (text == 'true' || text == '1' || text == 'yes' || text == 'on') {
+      return true;
+    }
+    if (text == 'false' || text == '0' || text == 'no' || text == 'off') {
+      return false;
+    }
+    return _defaultIncludeCoverBlankPage;
+  }
+
+  int get _coverPageSheetCount {
+    final raw = widget.initialCoverPageTexts['coverPageCount'];
+    final parsed = raw is int ? raw : int.tryParse('${raw ?? ''}');
+    return (parsed != null && parsed >= 1) ? parsed : 1;
   }
 
   void _disposeCoverGroupControllers() {
@@ -2058,6 +2111,11 @@ class _ProblemBankExportServerPreviewDialogState
     _gyeongsinFooterLabelController.text = '${normalized['footerLabel'] ?? ''}';
     _gyeongsinPageStartController.text =
         '${normalized['pageStartNumber'] ?? ''}';
+    if (normalized.containsKey('includeCoverBlankPage')) {
+      _includeCoverBlankPage = _readCoverBlankPageFlag(
+        normalized['includeCoverBlankPage'],
+      );
+    }
     final groups = (normalized['subjectGroups'] as List<dynamic>)
         .whereType<Map>()
         .map((row) => row.map((key, value) => MapEntry('$key', value)))
@@ -2183,6 +2241,7 @@ class _ProblemBankExportServerPreviewDialogState
         _coverOrganizationController.text,
         '${defaults['organization'] ?? ''}',
       ),
+      'includeCoverBlankPage': _includeCoverBlankPage,
       if (widget.isGyeongsinTemplate ||
           widget.isNeunginTemplate ||
           widget.isDaeryunTemplate ||
@@ -2309,6 +2368,7 @@ class _ProblemBankExportServerPreviewDialogState
       coverPageTexts: _coverPageTextsPayload(),
       includeAcademyLogo: _includeAcademyLogo,
       includeCoverPage: _includeCoverPage,
+      includeCoverBlankPage: _includeCoverBlankPage,
       includeAnswerSheet: _includeAnswerSheet,
       includeExplanation: _includeExplanation,
       includeQuestionScore: _includeQuestionScore,
@@ -2348,6 +2408,7 @@ class _ProblemBankExportServerPreviewDialogState
         'coverPageTexts': payload.coverPageTexts,
         'includeAcademyLogo': payload.includeAcademyLogo,
         'includeCoverPage': payload.includeCoverPage,
+        'includeCoverBlankPage': payload.includeCoverBlankPage,
         'includeAnswerSheet': payload.includeAnswerSheet,
         'includeExplanation': payload.includeExplanation,
         'includeQuestionScore': payload.includeQuestionScore,
@@ -2602,6 +2663,15 @@ class _ProblemBankExportServerPreviewDialogState
         _viewerRevision += 1;
         _includeAcademyLogo = refreshed.includeAcademyLogo;
         _includeCoverPage = refreshed.includeCoverPage;
+        if (refreshed.includeCoverBlankPage != null) {
+          _includeCoverBlankPage = refreshed.includeCoverBlankPage!;
+        } else if (refreshed.coverPageTexts.containsKey(
+          'includeCoverBlankPage',
+        )) {
+          _includeCoverBlankPage = _readCoverBlankPageFlag(
+            refreshed.coverPageTexts['includeCoverBlankPage'],
+          );
+        }
         _includeAnswerSheet = refreshed.includeAnswerSheet;
         _includeExplanation = refreshed.includeExplanation;
         _includeQuestionScore = refreshed.includeQuestionScore;
@@ -4971,23 +5041,23 @@ class _ProblemBankExportServerPreviewDialogState
                                               },
                                             ),
                                           if (!widget.isDaeryunTemplate &&
-                                              !widget.isDongdoTemplate)
+                                              !widget.isDongdoTemplate) ...[
                                             _buildTitleSwitchTile(
                                               label: '표지',
                                               description:
                                                   widget.isNeunginTemplate
-                                                  ? 'ON 시 능인중 문제지 표지를 단면인쇄용(표지 + 빈 페이지)으로 앞에 추가합니다.'
+                                                  ? 'ON 시 능인중 문제지 표지를 앞에 추가합니다.'
                                                   : (widget.isSoseonTemplate
-                                                        ? 'ON 시 소선여중 문제지 표지를 단면인쇄용(표지 + 빈 페이지)으로 앞에 추가합니다.'
+                                                        ? 'ON 시 소선여중 문제지 표지를 앞에 추가합니다.'
                                                         : (widget.isOseongTemplate
-                                                              ? 'ON 시 오성중 문제지 표지를 단면인쇄용(표지 + 빈 페이지)으로 앞에 추가합니다.'
+                                                              ? 'ON 시 오성중 문제지 표지를 앞에 추가합니다.'
                                                               : (widget.isJeonghwaTemplate
-                                                                    ? 'ON 시 정화중 문제지 표지를 단면인쇄용(표지 + 빈 페이지)으로 앞에 추가합니다.'
+                                                                    ? 'ON 시 정화중 문제지 표지를 앞에 추가합니다.'
                                                                     : (widget.isHwanggeumTemplate
-                                                                          ? 'ON 시 황금중 문제지 표지를 단면인쇄용(표지 + 빈 페이지)으로 앞에 추가합니다.'
+                                                                          ? 'ON 시 황금중 문제지 표지를 앞에 추가합니다.'
                                                                           : (widget.isGyeongsinTemplate
-                                                                                ? 'ON 시 경신중 [문제지 표지]를 단면인쇄용(표지 + 빈 페이지)으로 앞에 추가합니다.'
-                                                                                : 'ON 시 맨 앞에 표지 1페이지 + 빈 페이지 1페이지를 추가합니다.'))))),
+                                                                                ? 'ON 시 경신중 [문제지 표지]를 앞에 추가합니다.'
+                                                                                : 'ON 시 맨 앞에 표지 페이지를 추가합니다.'))))),
                                               value: _includeCoverPage,
                                               onChanged: (value) {
                                                 setState(() {
@@ -4995,6 +5065,21 @@ class _ProblemBankExportServerPreviewDialogState
                                                 });
                                               },
                                             ),
+                                            if (_includeCoverPage &&
+                                                _coverPageSheetCount.isOdd)
+                                              _buildTitleSwitchTile(
+                                                label: '표지 뒤 빈 페이지',
+                                                description:
+                                                    '홀수 쪽 표지 뒷면에 빈 페이지를 넣습니다. (모의고사·경신중 기본 ON, 외 학교 기본 OFF)',
+                                                value: _includeCoverBlankPage,
+                                                onChanged: (value) {
+                                                  setState(() {
+                                                    _includeCoverBlankPage =
+                                                        value;
+                                                  });
+                                                },
+                                              ),
+                                          ],
                                           _buildTitleSwitchTile(
                                             label: '점수',
                                             description:

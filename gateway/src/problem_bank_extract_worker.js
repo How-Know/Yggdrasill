@@ -8,6 +8,7 @@ import { generateQuestionPreviews } from './problem_bank_preview_service.js';
 import { joinGeminiTextParts } from './problem_bank/extract_engines/vlm/client.js';
 import { runVlmExtraction } from './problem_bank/extract_engines/vlm/runner.js';
 import { syncMockExamPresetsForExam } from './mock_exam/mock_preset.js';
+import { syncMiddleSchoolPresetForDocument } from './problem_bank/naesin_preset.js';
 
 const htmlDecode = hePkg.decode;
 
@@ -6050,6 +6051,36 @@ async function processOneJob(job) {
       })
       .eq('id', doc.id),
   );
+
+  if (!hasTextbookScope && !doc?.meta?.mock_scope && questions.length > 0) {
+    try {
+      const naesinSync = await syncMiddleSchoolPresetForDocument(supa, doc.id, {
+        preserveCustomLayout: true,
+      });
+      if (naesinSync?.synced) {
+        console.log(
+          '[pb-extract-worker] naesin_preset_synced',
+          JSON.stringify({
+            jobId: job.id,
+            docId: doc.id,
+            mode: naesinSync.mode,
+            presetId: naesinSync.preset?.id || '',
+            templateProfile: naesinSync.templateProfile,
+            naesinLinkKey: naesinSync.naesinLinkKey,
+          }),
+        );
+      }
+    } catch (naesinErr) {
+      console.warn(
+        '[pb-extract-worker] naesin_preset_sync_skip',
+        JSON.stringify({
+          jobId: job.id,
+          docId: doc.id,
+          message: compact(naesinErr?.message || naesinErr),
+        }),
+      );
+    }
+  }
 
   return {
     jobStatus,

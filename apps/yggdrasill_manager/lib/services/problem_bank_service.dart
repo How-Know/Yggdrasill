@@ -2979,6 +2979,19 @@ class ProblemBankService {
         })
         .eq('academy_id', academyId)
         .eq('document_id', documentId);
+    if (hasGateway && sourceTypeCode.trim() == 'school_past') {
+      try {
+        await _gatewayPost(
+          '/pb/documents/${documentId.trim()}/sync-naesin-preset',
+          body: <String, dynamic>{
+            'academyId': academyId.trim(),
+            'preserveCustomLayout': true,
+          },
+        );
+      } catch (error) {
+        debugPrint('syncNaesinPresetForDocument failed: $error');
+      }
+    }
   }
 
   Future<void> deleteQuestionsForDocument({

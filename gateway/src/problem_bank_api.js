@@ -15,6 +15,7 @@ import {
 } from "./problem_bank/render_engine/xelatex_v2/renderer.js";
 import { createMathSvgRenderer } from "./problem_bank/render_engine/math/mathjax_svg_renderer.js";
 import { generateObjectiveDraftForQuestion } from "./problem_bank_extract_worker.js";
+import { syncMiddleSchoolPresetForDocument } from "./problem_bank/naesin_preset.js";
 import {
   createConceptPageStore,
   createConceptPageWorker,
@@ -709,8 +710,26 @@ function normalizeCoverPageTexts(raw, defaults = {}) {
   const objectiveCount = normalizeWhitespace(
     src.objectiveCount ?? seed.objectiveCount ?? "",
   );
+  const subjectiveCount = normalizeWhitespace(
+    src.subjectiveCount ?? seed.subjectiveCount ?? "",
+  );
   const essayCount = normalizeWhitespace(
     src.essayCount ?? seed.essayCount ?? "",
+  );
+  const periodLabel = normalizeWhitespace(
+    src.periodLabel ?? seed.periodLabel ?? "",
+  );
+  const subjectCode = normalizeWhitespace(
+    src.subjectCode ?? seed.subjectCode ?? "",
+  );
+  const sheetTypeLabel = normalizeWhitespace(
+    src.sheetTypeLabel ?? seed.sheetTypeLabel ?? "",
+  );
+  const objectiveScore = normalizeWhitespace(
+    src.objectiveScore ?? seed.objectiveScore ?? "",
+  );
+  const essayScore = normalizeWhitespace(
+    src.essayScore ?? seed.essayScore ?? "",
   );
   const totalPageCount = normalizeWhitespace(
     src.totalPageCount ?? seed.totalPageCount ?? "",
@@ -721,6 +740,14 @@ function normalizeCoverPageTexts(raw, defaults = {}) {
   const pageStartNumber = normalizeWhitespace(
     src.pageStartNumber ?? seed.pageStartNumber ?? "",
   );
+  const rawCoverBlank = src.includeCoverBlankPage ?? seed.includeCoverBlankPage;
+  const hasExplicitCoverBlank =
+    rawCoverBlank !== undefined &&
+    rawCoverBlank !== null &&
+    rawCoverBlank !== "";
+  const includeCoverBlankPage = hasExplicitCoverBlank
+    ? normalizeBool(rawCoverBlank, true)
+    : undefined;
   return {
     topTitle,
     subjectTitle,
@@ -738,10 +765,17 @@ function normalizeCoverPageTexts(raw, defaults = {}) {
     ...(headerExamTitle ? { headerExamTitle } : {}),
     ...(subjectName ? { subjectName } : {}),
     ...(objectiveCount ? { objectiveCount } : {}),
+    ...(subjectiveCount ? { subjectiveCount } : {}),
     ...(essayCount ? { essayCount } : {}),
+    ...(periodLabel ? { periodLabel } : {}),
+    ...(subjectCode ? { subjectCode } : {}),
+    ...(sheetTypeLabel ? { sheetTypeLabel } : {}),
+    ...(objectiveScore ? { objectiveScore } : {}),
+    ...(essayScore ? { essayScore } : {}),
     ...(totalPageCount ? { totalPageCount } : {}),
     ...(footerLabel ? { footerLabel } : {}),
     ...(pageStartNumber ? { pageStartNumber } : {}),
+    ...(includeCoverBlankPage !== undefined ? { includeCoverBlankPage } : {}),
   };
 }
 
@@ -1160,6 +1194,21 @@ function normalizeExportRenderConfig(
   const profileHint = normalizeTemplateProfile(
     src.templateProfile || defaults.templateProfile,
   );
+  const defaultCoverBlankForProfile =
+    profileHint === "mock" ||
+    profileHint === "csat" ||
+    profileHint === "gyeongsin" ||
+    profileHint === "naesin";
+  const rawCoverBlank =
+    src.includeCoverBlankPage ??
+    src.coverBlankPage ??
+    coverPageTexts?.includeCoverBlankPage ??
+    defaults.includeCoverBlankPage ??
+    defaults.coverPageTexts?.includeCoverBlankPage;
+  const includeCoverBlankPage =
+    rawCoverBlank !== undefined && rawCoverBlank !== null && rawCoverBlank !== ""
+      ? normalizeBool(rawCoverBlank, defaultCoverBlankForProfile)
+      : defaultCoverBlankForProfile;
   const questionNumberPlacement = normalizeQuestionNumberPlacement(
     src.questionNumberPlacement ?? src.question_number_placement,
     defaults.questionNumberPlacement ||
@@ -1221,6 +1270,7 @@ function normalizeExportRenderConfig(
     titlePageIndices,
     titlePageHeaders,
     includeCoverPage,
+    includeCoverBlankPage,
     hidePreviewHeader,
     hideQuestionNumber,
     questionNumberPlacement,
@@ -1375,6 +1425,7 @@ function buildRenderHashPayload({
     questionScoreByQuestionUid: renderConfig.questionScoreByQuestionUid,
     questionScoreByQuestionId: renderConfig.questionScoreByQuestionUid,
     includeCoverPage: renderConfig.includeCoverPage,
+    includeCoverBlankPage: renderConfig.includeCoverBlankPage,
     hidePreviewHeader: renderConfig.hidePreviewHeader === true,
     hideQuestionNumber: renderConfig.hideQuestionNumber === true,
     questionNumberPlacement: renderConfig.questionNumberPlacement,
@@ -1438,6 +1489,7 @@ function buildExportOptions({
     questionScoreByQuestionUid: renderConfig.questionScoreByQuestionUid,
     questionScoreByQuestionId: renderConfig.questionScoreByQuestionUid,
     includeCoverPage: renderConfig.includeCoverPage,
+    includeCoverBlankPage: renderConfig.includeCoverBlankPage,
     hidePreviewHeader: renderConfig.hidePreviewHeader === true,
     hideQuestionNumber: renderConfig.hideQuestionNumber === true,
     questionNumberPlacement: renderConfig.questionNumberPlacement,
@@ -2405,6 +2457,7 @@ async function createExportJob(body, res) {
     questionScoreByQuestionUid: renderConfig.questionScoreByQuestionUid,
     questionScoreByQuestionId: renderConfig.questionScoreByQuestionUid,
     includeCoverPage: renderConfig.includeCoverPage,
+    includeCoverBlankPage: renderConfig.includeCoverBlankPage,
     coverPageTexts: renderConfig.coverPageTexts,
     layoutColumns: renderConfig.layoutColumns,
     maxQuestionsPerPage: renderConfig.maxQuestionsPerPage,
@@ -2448,6 +2501,7 @@ async function createExportJob(body, res) {
     questionScoreByQuestionUid: renderConfig.questionScoreByQuestionUid,
     questionScoreByQuestionId: renderConfig.questionScoreByQuestionUid,
     includeCoverPage: renderConfig.includeCoverPage,
+    includeCoverBlankPage: renderConfig.includeCoverBlankPage,
     coverPageTexts: renderConfig.coverPageTexts,
     layoutColumns: renderConfig.layoutColumns,
     maxQuestionsPerPage: renderConfig.maxQuestionsPerPage,
@@ -3379,6 +3433,25 @@ async function getDocumentExportPreset(documentId, url, res) {
     return;
   }
   sendJson(res, 200, { ok: true, preset: data || null });
+}
+
+async function handleSyncNaesinPresetForDocument(documentId, body, res) {
+  if (!isUuid(documentId)) {
+    sendJson(res, 400, { ok: false, error: "documentId must be uuid" });
+    return;
+  }
+  try {
+    const preserveCustomLayout = body?.preserveCustomLayout !== false;
+    const result = await syncMiddleSchoolPresetForDocument(supa, documentId, {
+      preserveCustomLayout,
+    });
+    sendJson(res, 200, { ok: true, ...result });
+  } catch (err) {
+    sendJson(res, 500, {
+      ok: false,
+      error: `naesin_preset_sync_failed:${compact(err?.message || err, 400)}`,
+    });
+  }
 }
 
 async function listExportPresets(url, res) {
@@ -12268,6 +12341,15 @@ async function handler(req, res) {
     ) {
       const documentId = url.pathname.split("/")[3];
       await getDocumentExportPreset(documentId, url, res);
+      return;
+    }
+    if (
+      method === "POST" &&
+      /^\/pb\/documents\/[^/]+\/sync-naesin-preset$/.test(url.pathname)
+    ) {
+      const documentId = url.pathname.split("/")[3];
+      const body = await readJson(req);
+      await handleSyncNaesinPresetForDocument(documentId, body, res);
       return;
     }
     if (method === "GET" && url.pathname === "/pb/export-presets") {

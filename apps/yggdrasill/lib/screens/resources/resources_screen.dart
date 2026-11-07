@@ -45,6 +45,7 @@ import '../../widgets/app_snackbar.dart';
 import '../../widgets/dialog_tokens.dart';
 import '../../widgets/shared_folder_tree.dart';
 import 'exam_preset_card.dart';
+import 'exam_preset_preview_launcher.dart';
 import 'exam_preset_support.dart';
 import 'other_resource_card.dart';
 
@@ -1387,6 +1388,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     required double gridCardHeight,
     required bool busy,
     required VoidCallback onTap,
+    VoidCallback? onOriginalTap,
     required bool printPick,
   }) {
     final card = ExamPresetCard(
@@ -1394,6 +1396,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
       busy: busy,
       printPick: printPick,
       onTap: onTap,
+      onOriginalTap: onOriginalTap,
     );
     if (busy || printPick) return card;
 
@@ -2930,6 +2933,37 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     hideGlobalMainFab.value = true;
     _syncFabTabBarOverlay();
     unawaited(controller.loadExamPreset(preset));
+  }
+
+  Future<void> _openExamPresetOriginalPreview(
+    LearningProblemDocumentExportPreset preset,
+  ) async {
+    if (_explorer != null || _examPresetOpeningId != null) return;
+    setState(() => _examPresetOpeningId = preset.id);
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId();
+      if (!mounted) return;
+      final safeAcademyId = (academyId ?? '').trim();
+      if (safeAcademyId.isEmpty || _currentCategory != 'exam') {
+        if (safeAcademyId.isEmpty) {
+          showAppSnackBar(context, '학원 정보가 없어 프리셋을 열 수 없습니다.');
+        }
+        return;
+      }
+      final launcher = ExamPresetPreviewLauncher(service: _examPresetService);
+      await launcher.openPresetPreview(
+        context: context,
+        academyId: safeAcademyId,
+        preset: preset,
+      );
+      if (mounted) {
+        unawaited(_reloadExamPresetsForSelectedFolder());
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _examPresetOpeningId = null);
+      }
+    }
   }
 
   Future<void> _openOtherResourceLink(String link) async {
@@ -4570,6 +4604,11 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                                 ? _handleExamPresetPrint(presets[i])
                                 : _openExamPresetExplorer(presets[i]),
                           ),
+                          onOriginalTap: _printPickMode
+                              ? null
+                              : () => unawaited(
+                                    _openExamPresetOriginalPreview(presets[i]),
+                                  ),
                         ),
                       ),
                 ],

@@ -2331,10 +2331,21 @@ function normalizeCoverPageTexts(raw, defaults = {}) {
   const headerExamTitle = normalizeWhitespace(src.headerExamTitle ?? seed.headerExamTitle ?? '');
   const subjectName = normalizeWhitespace(src.subjectName ?? seed.subjectName ?? '');
   const objectiveCount = normalizeWhitespace(src.objectiveCount ?? seed.objectiveCount ?? '');
+  const subjectiveCount = normalizeWhitespace(src.subjectiveCount ?? seed.subjectiveCount ?? '');
   const essayCount = normalizeWhitespace(src.essayCount ?? seed.essayCount ?? '');
+  const periodLabel = normalizeWhitespace(src.periodLabel ?? seed.periodLabel ?? '');
+  const subjectCode = normalizeWhitespace(src.subjectCode ?? seed.subjectCode ?? '');
+  const sheetTypeLabel = normalizeWhitespace(src.sheetTypeLabel ?? seed.sheetTypeLabel ?? '');
+  const objectiveScore = normalizeWhitespace(src.objectiveScore ?? seed.objectiveScore ?? '');
+  const essayScore = normalizeWhitespace(src.essayScore ?? seed.essayScore ?? '');
   const totalPageCount = normalizeWhitespace(src.totalPageCount ?? seed.totalPageCount ?? '');
   const footerLabel = normalizeWhitespace(src.footerLabel ?? seed.footerLabel ?? '');
   const pageStartNumber = normalizeWhitespace(src.pageStartNumber ?? seed.pageStartNumber ?? '');
+  const rawCoverBlank = src.includeCoverBlankPage ?? seed.includeCoverBlankPage;
+  const hasExplicitCoverBlank = rawCoverBlank !== undefined && rawCoverBlank !== null && rawCoverBlank !== '';
+  const includeCoverBlankPage = hasExplicitCoverBlank
+    ? normalizeBool(rawCoverBlank, true)
+    : undefined;
   return {
     topTitle,
     subjectTitle,
@@ -2352,10 +2363,17 @@ function normalizeCoverPageTexts(raw, defaults = {}) {
     ...(headerExamTitle ? { headerExamTitle } : {}),
     ...(subjectName ? { subjectName } : {}),
     ...(objectiveCount ? { objectiveCount } : {}),
+    ...(subjectiveCount ? { subjectiveCount } : {}),
     ...(essayCount ? { essayCount } : {}),
+    ...(periodLabel ? { periodLabel } : {}),
+    ...(subjectCode ? { subjectCode } : {}),
+    ...(sheetTypeLabel ? { sheetTypeLabel } : {}),
+    ...(objectiveScore ? { objectiveScore } : {}),
+    ...(essayScore ? { essayScore } : {}),
     ...(totalPageCount ? { totalPageCount } : {}),
     ...(footerLabel ? { footerLabel } : {}),
     ...(pageStartNumber ? { pageStartNumber } : {}),
+    ...(includeCoverBlankPage !== undefined ? { includeCoverBlankPage } : {}),
   };
 }
 
@@ -2634,6 +2652,19 @@ function buildRenderConfigFromJob(job) {
   const coverPageTexts = normalizeCoverPageTexts(
     options.coverPageTexts || options.coverTexts || options.coverPageTextConfig,
   );
+  const defaultCoverBlankForProfile =
+    profileHint === 'mock' ||
+    profileHint === 'csat' ||
+    profileHint === 'gyeongsin' ||
+    profileHint === 'naesin';
+  const rawCoverBlank =
+    options.includeCoverBlankPage ??
+    options.coverBlankPage ??
+    coverPageTexts?.includeCoverBlankPage;
+  const includeCoverBlankPage =
+    rawCoverBlank !== undefined && rawCoverBlank !== null && rawCoverBlank !== ''
+      ? normalizeBool(rawCoverBlank, defaultCoverBlankForProfile)
+      : defaultCoverBlankForProfile;
   const titlePageHeaders = normalizeTitlePageHeaders(
     options.titlePageHeaders || options.titleHeaders,
     titlePageIndices,
@@ -2670,6 +2701,7 @@ function buildRenderConfigFromJob(job) {
     includeAcademyLogo,
     questionScoreByQuestionUid,
     includeCoverPage,
+    includeCoverBlankPage,
     hidePreviewHeader,
     hideQuestionNumber,
     questionNumberPlacement,
@@ -2748,6 +2780,7 @@ function computeRenderHash(renderConfig) {
     includeQuestionScore: renderConfig.includeQuestionScore,
     questionScoreByQuestionUid: renderConfig.questionScoreByQuestionUid,
     includeCoverPage: renderConfig.includeCoverPage,
+    includeCoverBlankPage: renderConfig.includeCoverBlankPage,
     questionNumberPlacement: renderConfig.questionNumberPlacement,
     questionNumberFormat: renderConfig.questionNumberFormat,
     renumberQuestions: renderConfig.renumberQuestions === true,
@@ -4697,6 +4730,7 @@ async function processOneJob(job) {
         timeLimitText: String(renderConfig.timeLimitText || '').trim(),
         includeAcademyLogo: rendered.includeAcademyLogo === true,
         includeCoverPage: rendered.includeCoverPage === true,
+        includeCoverBlankPage: rendered.includeCoverBlankPage === true,
         coverPageTexts: rendered.coverPageTexts || {},
         includeAnswerSheet: rendered.includeAnswerSheet === true,
         includeExplanation: rendered.includeExplanation === true,
@@ -4781,6 +4815,7 @@ async function processOneJob(job) {
           timeLimitText: String(renderConfig.timeLimitText || '').trim(),
           includeAcademyLogo: rendered.includeAcademyLogo === true,
           includeCoverPage: rendered.includeCoverPage === true,
+          includeCoverBlankPage: rendered.includeCoverBlankPage === true,
           coverPageTexts: rendered.coverPageTexts || {},
           includeAnswerSheet: rendered.includeAnswerSheet === true,
           includeExplanation: rendered.includeExplanation === true,

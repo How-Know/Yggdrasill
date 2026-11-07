@@ -190,6 +190,7 @@ class _PresetPreviewSession {
     }
     config['mathEngine'] = mathEngine;
     config['disableAutoLabels'] = true;
+    config.remove('renderHash');
     return config;
   }
 
@@ -269,6 +270,7 @@ class _PresetPreviewSession {
     }
     final currentQuestionScoreByUid = <String, double>{
       for (final entry in scoreEntries) entry.questionId: entry.defaultScore,
+      ...settings.questionScoreByQuestionId,
     };
 
     await ProblemBankExportServerPreviewDialog.open(
@@ -309,11 +311,11 @@ class _PresetPreviewSession {
       layoutColumns: settings.layoutColumnCount,
       maxQuestionsPerPage: settings.maxQuestionsPerPageCount,
       totalQuestionCount: questions.length,
-      initialPageColumnQuestionCounts: _readMapRows(
+      initialPageColumnQuestionCounts: _readMapRowsPreferNonEmpty(
         initialPrimary('pageColumnQuestionCounts'),
         initialFallback('pageColumnQuestionCounts'),
       ),
-      initialColumnLabelAnchors: _readMapRows(
+      initialColumnLabelAnchors: _readMapRowsPreferNonEmpty(
         initialPrimary('columnLabelAnchors'),
         initialFallback('columnLabelAnchors'),
       ),
@@ -327,7 +329,20 @@ class _PresetPreviewSession {
       ),
       initialIncludeCoverPage: _readBool(
         initialPrimary('includeCoverPage'),
-        false,
+        settings.templateProfile == 'gyeongsin' ||
+            settings.templateProfile == 'neungin' ||
+            settings.templateProfile == 'soseon' ||
+            settings.templateProfile == 'oseong' ||
+            settings.templateProfile == 'jeonghwa' ||
+            settings.templateProfile == 'hwanggeum',
+      ),
+      initialIncludeCoverBlankPage: _readNullableBool(
+        initialPrimary('includeCoverBlankPage') ??
+            (initialPrimary('coverPageTexts') is Map
+                ? (initialPrimary('coverPageTexts')
+                    as Map)['includeCoverBlankPage']
+                : null) ??
+            initialFallback('includeCoverBlankPage'),
       ),
       initialIncludeAnswerSheet: settings.includeAnswerSheet,
       initialIncludeExplanation: settings.includeExplanation,
@@ -372,6 +387,7 @@ class _PresetPreviewSession {
           'timeLimitText': request.timeLimitText.trim(),
           'includeAcademyLogo': request.includeAcademyLogo,
           'includeCoverPage': request.includeCoverPage,
+          'includeCoverBlankPage': request.includeCoverBlankPage,
           'coverPageTexts': request.coverPageTexts,
           'includeAnswerSheet': request.includeAnswerSheet,
           'includeExplanation': request.includeExplanation,
@@ -420,6 +436,10 @@ class _PresetPreviewSession {
             refreshed.resultSummary['includeCoverPage'],
             false,
           ),
+          includeCoverBlankPage: _readNullableBool(
+                refreshed.resultSummary['includeCoverBlankPage'],
+              ) ??
+              request.includeCoverBlankPage,
           includeAnswerSheet: settings.includeAnswerSheet,
           includeExplanation: settings.includeExplanation,
           includeQuestionScore: settings.includeQuestionScore,
@@ -457,6 +477,7 @@ class _PresetPreviewSession {
           'timeLimitText': request.timeLimitText.trim(),
           'includeAcademyLogo': request.includeAcademyLogo,
           'includeCoverPage': request.includeCoverPage,
+          'includeCoverBlankPage': request.includeCoverBlankPage,
           'coverPageTexts': request.coverPageTexts,
           'includeAnswerSheet': request.includeAnswerSheet,
           'includeExplanation': request.includeExplanation,
@@ -539,6 +560,15 @@ class _PresetPreviewSession {
     return fallback;
   }
 
+  static bool? _readNullableBool(dynamic raw) {
+    if (raw is bool) return raw;
+    if (raw == null) return null;
+    final text = '$raw'.trim().toLowerCase();
+    if (text == 'true' || text == '1') return true;
+    if (text == 'false' || text == '0') return false;
+    return null;
+  }
+
   static List<Map<String, dynamic>> _readMapRows(
     dynamic raw, [
     dynamic fallback,
@@ -549,6 +579,15 @@ class _PresetPreviewSession {
         .whereType<Map>()
         .map((e) => e.map((key, value) => MapEntry('$key', value)))
         .toList(growable: false);
+  }
+
+  static List<Map<String, dynamic>> _readMapRowsPreferNonEmpty(
+    dynamic raw, [
+    dynamic fallback,
+  ]) {
+    final primary = _readMapRows(raw);
+    if (primary.isNotEmpty) return primary;
+    return _readMapRows(fallback);
   }
 
   static List<int> _readPositiveIntList(
