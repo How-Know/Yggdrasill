@@ -1290,12 +1290,12 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
     final legacy = (summary.completedStage3Units - auto).clamp(0, summary.totalUnits);
     if (auto > 0) {
       final label = legacy > 0
-          ? '자동 $auto · 기존 $legacy / 총 ${summary.totalUnits}'
-          : '자동 분석 $auto/${summary.totalUnits} 완료';
+          ? '1차 검수완료 $auto · 기존 $legacy / 총 ${summary.totalUnits}'
+          : '1차 검수완료 $auto/${summary.totalUnits}';
       return _UnitProgressBadge(
         label: label,
         color: const Color(0xFF33A373),
-        icon: Icons.auto_awesome_rounded,
+        icon: Icons.verified_rounded,
       );
     }
     final ready = summary.totalUnits > 0 &&

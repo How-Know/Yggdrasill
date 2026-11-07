@@ -1056,7 +1056,7 @@ class _TextbookUnitAuthoringDialogState
               'content_group_label, content_group_title, content_group_order, '
               'column_index, bbox_1k, item_region_1k, companion_regions, '
               'big_order, mid_order, '
-              'sub_key')
+              'sub_key, textbook_problem_analyses(math_status, quality_status)')
           .eq('academy_id', widget.academyId)
           .eq('book_id', widget.bookId)
           .eq('grade_label', widget.gradeLabel)
@@ -1089,8 +1089,26 @@ class _TextbookUnitAuthoringDialogState
             .add(row);
       }
       if (!mounted) return;
+      var autoSynced = false;
+      final nowIso = DateTime.now().toUtc().toIso8601String();
       setState(() {
         for (final entry in byFocus.entries) {
+          final nonHeader = entry.value.where((r) => r['is_set_header'] != true).toList();
+          if (nonHeader.isNotEmpty && !_autoAnalyzedScopes.containsKey(entry.key)) {
+            final allApproved = nonHeader.every((r) {
+              final rawAn = r['textbook_problem_analyses'];
+              final an = rawAn is List
+                  ? (rawAn.isNotEmpty && rawAn.first is Map ? rawAn.first as Map : null)
+                  : (rawAn is Map ? rawAn : null);
+              return an != null &&
+                  '${an['math_status'] ?? ''}' == 'approved' &&
+                  '${an['quality_status'] ?? ''}' == 'approved';
+            });
+            if (allApproved) {
+              _autoAnalyzedScopes[entry.key] = nowIso;
+              autoSynced = true;
+            }
+          }
           final focus = _focusFromStateKey(entry.key);
           if (focus == null) continue;
           final state = _ensureSubState(focus);
@@ -1113,6 +1131,9 @@ class _TextbookUnitAuthoringDialogState
           state.error = null;
         }
       });
+      if (autoSynced) {
+        unawaited(_saveTree(silent: true));
+      }
     } catch (_) {
       // 저장된 영역 복원은 보조 기능이다. 실패해도 신규 분석 흐름은 유지한다.
     }
@@ -4659,10 +4680,10 @@ class _TextbookUnitAuthoringDialogState
       child: const Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.auto_awesome_rounded, size: 10, color: _kAccent),
+          Icon(Icons.verified_rounded, size: 10, color: _kAccent),
           SizedBox(width: 3),
           Text(
-            '자동분석',
+            '1차 검수완료',
             style: TextStyle(color: _kAccent, fontSize: 9.5, fontWeight: FontWeight.w800),
           ),
         ],
