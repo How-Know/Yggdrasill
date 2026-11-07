@@ -48,6 +48,10 @@ class TextbookStageBatchService {
     required String subKey,
     required int subIndex,
     String seriesKey = '',
+    int? answerStartPage,
+    int? answerEndPage,
+    int? solutionStartPage,
+    int? solutionEndPage,
     void Function(String status)? onStatus,
   }) async {
     final crops = await _loadCrops(
@@ -131,6 +135,8 @@ class TextbookStageBatchService {
                 academyId: academyId,
                 crops: solutionCrops,
                 answers: true,
+                startPage: answerStartPage ?? solutionStartPage,
+                endPage: answerEndPage ?? solutionEndPage,
                 onStatus: onStatus,
               );
         final detailedSolutionResult = solutionDoc == null
@@ -145,6 +151,8 @@ class TextbookStageBatchService {
                 academyId: academyId,
                 crops: solutionCrops,
                 answers: false,
+                startPage: solutionStartPage,
+                endPage: solutionEndPage,
                 onStatus: onStatus,
               );
         return TextbookStageBatchResult(
@@ -191,6 +199,8 @@ class TextbookStageBatchService {
         gradeLabel: gradeLabel,
         seriesKey: seriesKey,
         crops: crops,
+        startPage: answerStartPage,
+        endPage: answerEndPage,
         onStatus: onStatus,
       );
       final solResult = await _runSolutionRefs(
@@ -200,6 +210,8 @@ class TextbookStageBatchService {
         gradeLabel: gradeLabel,
         crops: crops,
         seriesKey: seriesKey,
+        startPage: solutionStartPage,
+        endPage: solutionEndPage,
         onStatus: onStatus,
       );
       return TextbookStageBatchResult(
@@ -355,6 +367,8 @@ class TextbookStageBatchService {
     required String gradeLabel,
     required List<_BatchCrop> crops,
     String seriesKey = '',
+    int? startPage,
+    int? endPage,
     void Function(String status)? onStatus,
   }) async {
     final answerCrops = crops.where((crop) => !crop.isSetHeader).toList();
@@ -377,16 +391,24 @@ class TextbookStageBatchService {
     if (targets.isEmpty) {
       return const _SavedWithMissing(saved: 0, missing: <String>[]);
     }
-    final batch = TextbookExpectedAnswerBatch(
-      positions: <int>[for (var i = 0; i < targets.length; i += 1) i],
-      entries: <TextbookExpectedAnswer>[for (final t in targets) t.expected],
-      requireExpectedIndex: textbookAnswerNeedsCorner(seriesKey),
-    );
+    final requireExpectedIndex = textbookAnswerNeedsCorner(seriesKey);
 
     final hits = <int, _BatchAnswerHit>{};
     final answerImagePageCache = <int, Uint8List>{};
     final pageErrors = <String>[];
     final totalPages = doc.pages.length;
+    final firstPage = (startPage != null && startPage > 0)
+        ? startPage.clamp(1, totalPages)
+        : 1;
+    final initialLastPage = (endPage != null && endPage >= firstPage)
+        ? endPage.clamp(firstPage, totalPages)
+        : (startPage != null && startPage > 0
+            ? (firstPage + 2).clamp(firstPage, totalPages)
+            : totalPages);
+    // 지정된 범위 안에서 다 못 찾았을 때만 바로 다음 1페이지까지 여유로 확인한다.
+    final maxAllowedPage = (startPage != null && startPage > 0)
+        ? (initialLastPage + 1).clamp(firstPage, totalPages)
+        : totalPages;
 
     Future<Uint8List?> answerImagePagePng(int page) async {
       final cached = answerImagePageCache[page];
@@ -404,8 +426,25 @@ class TextbookStageBatchService {
       }
     }
 
-    for (var page = 1; page <= totalPages; page += 1) {
-      onStatus?.call('정답 VLM $page / $totalPages 페이지...');
+    for (var page = firstPage;
+        page <= maxAllowedPage && hits.length < targets.length;
+        page += 1) {
+      if (page > initialLastPage && hits.length >= targets.length) break;
+      final remainingPositions = <int>[
+        for (var i = 0; i < targets.length; i += 1)
+          if (!hits.containsKey(i)) i,
+      ];
+      if (remainingPositions.isEmpty) break;
+      final pageBatch = TextbookExpectedAnswerBatch(
+        positions: remainingPositions,
+        entries: <TextbookExpectedAnswer>[
+          for (final pos in remainingPositions) targets[pos].expected,
+        ],
+        requireExpectedIndex: requireExpectedIndex,
+      );
+      onStatus?.call(
+        '정답 VLM $page / $initialLastPage 페이지 (남은 ${remainingPositions.length}문항)...',
+      );
       Uint8List png;
       try {
         png = await renderPdfPageToPng(
@@ -423,13 +462,13 @@ class TextbookStageBatchService {
           academyId: academyId,
           bookId: bookId,
           gradeLabel: gradeLabel,
-          expectedNumbers: batch.numbers,
-          expectedDetails: batch.entries,
+          expectedNumbers: pageBatch.numbers,
+          expectedDetails: pageBatch.entries,
           seriesKey: seriesKey,
         );
         for (final item in result.items) {
           if (item.answerText.trim().isEmpty) continue;
-          final matched = batch.resolve(
+          final matched = pageBatch.resolve(
             detectedNumber: item.problemNumber,
             expectedIndex: item.expectedIndex,
           );
@@ -455,7 +494,7 @@ class TextbookStageBatchService {
         }
       } catch (e) {
         pageErrors.add('p$page: $e');
-        onStatus?.call('정답 VLM $page / $totalPages 페이지 실패: $e');
+        onStatus?.call('정답 VLM $page / $initialLastPage 페이지 실패: $e');
         continue;
       }
     }
@@ -629,6 +668,8 @@ class TextbookStageBatchService {
     required String academyId,
     required List<_BatchCrop> crops,
     required bool answers,
+    int? startPage,
+    int? endPage,
     void Function(String status)? onStatus,
   }) async {
     final targets = crops
@@ -649,10 +690,23 @@ class TextbookStageBatchService {
     final pending = <int>{for (var i = 0; i < targets.length; i += 1) i};
     final hits = <int, _WonriMiddleCombinedHit>{};
     final totalPages = doc.pages.length;
-    for (var page = 1; page <= totalPages && pending.isNotEmpty; page += 1) {
+    final firstPage = (startPage != null && startPage > 0)
+        ? startPage.clamp(1, totalPages)
+        : 1;
+    final initialLastPage = (endPage != null && endPage >= firstPage)
+        ? endPage.clamp(firstPage, totalPages)
+        : (startPage != null && startPage > 0
+            ? (firstPage + 3).clamp(firstPage, totalPages)
+            : totalPages);
+    final maxAllowedPage = (startPage != null && startPage > 0)
+        ? (initialLastPage + 1).clamp(firstPage, totalPages)
+        : totalPages;
+    for (var page = firstPage;
+        page <= maxAllowedPage && pending.isNotEmpty;
+        page += 1) {
       onStatus?.call(
         '중등 개념원리 ${answers ? '빠른 정답' : '상세 해설'} VLM '
-        '$page / $totalPages 페이지... '
+        '$page / $initialLastPage 페이지... '
         '남은 ${pending.length}개',
       );
       Uint8List png;
@@ -831,11 +885,14 @@ class TextbookStageBatchService {
     required String gradeLabel,
     required List<_BatchCrop> crops,
     String seriesKey = '',
+    int? startPage,
+    int? endPage,
     void Function(String status)? onStatus,
   }) async {
+    final solCrops = crops.where((crop) => !crop.isSetHeader).toList();
     // 정답 단계와 같은 이유로 순서 배열을 쓴다.
     final targets = <_BatchTarget>[
-      for (final c in crops)
+      for (final c in solCrops)
         if (c.problemNumber.trim().isNotEmpty)
           _BatchTarget(
             crop: c,
@@ -850,15 +907,38 @@ class TextbookStageBatchService {
     if (targets.isEmpty) {
       return const _SavedWithMissing(saved: 0, missing: <String>[]);
     }
-    final batch = TextbookExpectedAnswerBatch(
-      positions: <int>[for (var i = 0; i < targets.length; i += 1) i],
-      entries: <TextbookExpectedAnswer>[for (final t in targets) t.expected],
-      requireExpectedIndex: textbookAnswerNeedsCorner(seriesKey),
-    );
+    final requireExpectedIndex = textbookAnswerNeedsCorner(seriesKey);
     final hits = <int, _SolutionRefWithPage>{};
     final totalPages = doc.pages.length;
-    for (var page = 1; page <= totalPages; page += 1) {
-      onStatus?.call('해설 VLM $page / $totalPages 페이지...');
+    final firstPage = (startPage != null && startPage > 0)
+        ? startPage.clamp(1, totalPages)
+        : 1;
+    final initialLastPage = (endPage != null && endPage >= firstPage)
+        ? endPage.clamp(firstPage, totalPages)
+        : (startPage != null && startPage > 0
+            ? (firstPage + 3).clamp(firstPage, totalPages)
+            : totalPages);
+    final maxAllowedPage = (startPage != null && startPage > 0)
+        ? (initialLastPage + 1).clamp(firstPage, totalPages)
+        : totalPages;
+    for (var page = firstPage;
+        page <= maxAllowedPage && hits.length < targets.length;
+        page += 1) {
+      final remainingPositions = <int>[
+        for (var i = 0; i < targets.length; i += 1)
+          if (!hits.containsKey(i)) i,
+      ];
+      if (remainingPositions.isEmpty) break;
+      final pageBatch = TextbookExpectedAnswerBatch(
+        positions: remainingPositions,
+        entries: <TextbookExpectedAnswer>[
+          for (final pos in remainingPositions) targets[pos].expected,
+        ],
+        requireExpectedIndex: requireExpectedIndex,
+      );
+      onStatus?.call(
+        '해설 VLM $page / $initialLastPage 페이지 (남은 ${remainingPositions.length}문항)...',
+      );
       Uint8List png;
       try {
         png = await renderPdfPageToPng(
@@ -876,14 +956,14 @@ class TextbookStageBatchService {
           academyId: academyId,
           bookId: bookId,
           gradeLabel: gradeLabel,
-          expectedNumbers: batch.numbers,
-          expectedDetails: batch.entries,
+          expectedNumbers: pageBatch.numbers,
+          expectedDetails: pageBatch.entries,
           seriesKey: seriesKey,
         );
         String itemSection(TextbookVlmSolutionRefItem item) {
           final index = item.expectedIndex;
-          if (index >= 0 && index < targets.length) {
-            return targets[index].crop.section;
+          if (index >= 0 && index < remainingPositions.length) {
+            return targets[remainingPositions[index]].crop.section;
           }
           return RegExp(r'^(예제|유제|연습)').hasMatch(item.problemNumber)
               ? 'descriptive'
@@ -891,7 +971,7 @@ class TextbookStageBatchService {
         }
 
         final sections = <String>{
-          for (final target in targets) target.crop.section
+          for (final pos in remainingPositions) targets[pos].crop.section
         };
         final reported = <(String, String)>[
           for (final item in result.items)
@@ -899,7 +979,7 @@ class TextbookStageBatchService {
         ];
         final sectionsToVerify = <String>{};
         if (seriesKey == 'gaeyu' && sections.length > 1) {
-          for (var position = 0; position < targets.length; position += 1) {
+          for (final position in remainingPositions) {
             if (hits.containsKey(position)) continue;
             final target = targets[position];
             final number = target.crop.problemNumber.trim();
@@ -919,7 +999,7 @@ class TextbookStageBatchService {
                 .where((item) => !sectionsToVerify.contains(itemSection(item)))
             : result.items;
         for (final item in pageItems) {
-          final matched = batch.resolve(
+          final matched = pageBatch.resolve(
             detectedNumber: item.problemNumber,
             expectedIndex: item.expectedIndex,
           );
@@ -946,7 +1026,7 @@ class TextbookStageBatchService {
               for (final position in sectionPositions)
                 targets[position].expected,
             ],
-            requireExpectedIndex: textbookAnswerNeedsCorner(seriesKey),
+            requireExpectedIndex: requireExpectedIndex,
           );
           final verified = await _solutionRefService.detectOnPage(
             imageBytes: png,

@@ -4301,6 +4301,9 @@ class _TextbookUnitAuthoringDialogState
           setState(() => _batchDone = i + 1);
           continue;
         }
+        // _runFocusedAnalysis 내부에서 resetBeforeUpload = hadSavedExtraction 으로 다시 켜지므로,
+        // 업로드 직전에 반드시 false 로 덮어써야 전체 삭제(statement timeout) 없이 기존 ID 보존 UPSERT만 수행된다.
+        state.resetBeforeUpload = false;
         stepSay('1/4단계 — 본문 영역 좌표 DB 덮어쓰기(기존 ID 보존) 저장 중...');
         await _uploadFocused(focus);
         if (!mounted) break;
@@ -4368,6 +4371,29 @@ class _TextbookUnitAuthoringDialogState
                 .toList()
             : <String>[focus.subKey];
         final subIndex = _isWonriRowFocus(focus) ? (_wonriRowIndex(focus) ?? 0) : 0;
+        int? answerStart;
+        int? answerEnd;
+        int? solutionStart;
+        int? solutionEnd;
+        if (_isWonriRowFocus(focus)) {
+          final row = _wonriRowFor(focus);
+          solutionStart = row == null ? null : _positiveInt(row.solutionStartCtrl.text);
+          solutionEnd = _wonriNextRowStageStart(focus, answer: false);
+          final answersFromSolution = _seriesKey != 'wonri_middle' &&
+              textbookSeriesAnswersFromSolutionPdf(_seriesKey);
+          answerStart = answersFromSolution
+              ? solutionStart
+              : (row == null ? null : _positiveInt(row.answerStartCtrl.text));
+          answerEnd = answersFromSolution
+              ? solutionEnd
+              : _wonriNextRowStageStart(focus, answer: true);
+        } else {
+          final stageScope = _stageScopeFor(focus);
+          answerStart = stageScope.answerStartPage;
+          answerEnd = stageScope.answerEndPage;
+          solutionStart = stageScope.solutionStartPage;
+          solutionEnd = stageScope.solutionEndPage;
+        }
         for (final sk in subKeysToRun) {
           try {
             await _stageBatchService.runStage23ForSubunit(
@@ -4379,6 +4405,10 @@ class _TextbookUnitAuthoringDialogState
               subKey: sk,
               subIndex: subIndex,
               seriesKey: _seriesKey,
+              answerStartPage: answerStart,
+              answerEndPage: answerEnd,
+              solutionStartPage: solutionStart,
+              solutionEndPage: solutionEnd,
               onStatus: (st) => stepSay('3/4단계 ($sk) — $st'),
             );
           } catch (e) {
@@ -5098,6 +5128,12 @@ class _TextbookUnitAuthoringDialogState
   int? _wonriNextRowStageStart(_SubFocus focus, {required bool answer}) {
     final wonriIndex = _wonriRowIndex(focus);
     if (wonriIndex == null) return null;
+    final curRow = _wonriRowFor(focus);
+    final currentStart = curRow == null
+        ? null
+        : _positiveInt(
+            answer ? curRow.answerStartCtrl.text : curRow.solutionStartCtrl.text,
+          );
     var passed = false;
     for (var b = 0; b < _bigUnits.length; b += 1) {
       for (var m = 0; m < _bigUnits[b].middles.length; m += 1) {
@@ -5113,7 +5149,9 @@ class _TextbookUnitAuthoringDialogState
           final page = _positiveInt(answer
               ? rows[i].answerStartCtrl.text
               : rows[i].solutionStartCtrl.text);
-          if (page != null) return page;
+          if (page == null) continue;
+          if (currentStart != null && page < currentStart) continue;
+          return page;
         }
       }
     }
