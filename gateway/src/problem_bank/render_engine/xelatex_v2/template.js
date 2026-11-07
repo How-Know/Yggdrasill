@@ -5633,6 +5633,19 @@ function renderIndependentSetGroupLatex(group, {
     lines.push(`\\noindent\\questionnumber{${escapeLatexText(headerLabel)}}\\par\\nobreak\\vspace{0.15em}`);
   }
   const firstItem = items[0] || {};
+  const figMarkerRe = /\[\s*(?:그림|도형|도표)\s*\]|\[\[PB_FIG_/;
+  const commonHasFigMarker = figMarkerRe.test(commonStem);
+  const explicitCommonPaths = Array.isArray(firstItem?.common_figure_local_paths)
+    ? firstItem.common_figure_local_paths
+    : [];
+  const donorItem = commonHasFigMarker && explicitCommonPaths.length === 0
+    ? items.find(
+        (it) =>
+          Array.isArray(it?.figure_local_paths) &&
+          it.figure_local_paths.length > 0 &&
+          !figMarkerRe.test(String(it?.stem || '')),
+      ) || null
+    : null;
   const commonQuestion = {
     ...firstItem,
     id: `${firstItem?.id || firstItem?.question_uid || 'common'}:common`,
@@ -5641,13 +5654,25 @@ function renderIndependentSetGroupLatex(group, {
     stem: commonStem,
     choices: [],
     objective_choices: [],
-    meta: commonStemRenderMetaFromItem(firstItem),
-    figure_local_paths: Array.isArray(firstItem?.common_figure_local_paths)
-      ? firstItem.common_figure_local_paths
-      : [],
-    figure_local_infos: Array.isArray(firstItem?.common_figure_local_infos)
-      ? firstItem.common_figure_local_infos
-      : [],
+    meta: donorItem
+      ? {
+          ...commonStemRenderMetaFromItem(firstItem),
+          ...(Array.isArray(donorItem?.meta?.figure_assets)
+            ? { figure_assets: donorItem.meta.figure_assets }
+            : {}),
+          ...(donorItem?.meta?.figure_layout
+            ? { figure_layout: donorItem.meta.figure_layout }
+            : {}),
+        }
+      : commonStemRenderMetaFromItem(firstItem),
+    figure_local_paths: donorItem
+      ? donorItem.figure_local_paths
+      : explicitCommonPaths,
+    figure_local_infos: donorItem
+      ? (Array.isArray(donorItem?.figure_local_infos) ? donorItem.figure_local_infos : [])
+      : (Array.isArray(firstItem?.common_figure_local_infos)
+          ? firstItem.common_figure_local_infos
+          : []),
   };
   lines.push(renderOneQuestion(commonQuestion, {
     showQuestionNumber: false,
@@ -5659,7 +5684,23 @@ function renderIndependentSetGroupLatex(group, {
   }));
   lines.push('\\vspace{\\baselineskip}');
   for (let itemIdx = 0; itemIdx < items.length; itemIdx += 1) {
-    const item = items[itemIdx];
+    const rawItem = items[itemIdx];
+    const usedCommonPaths = Array.isArray(commonQuestion.figure_local_paths)
+      ? commonQuestion.figure_local_paths
+      : [];
+    const rawPaths = Array.isArray(rawItem?.figure_local_paths)
+      ? rawItem.figure_local_paths
+      : [];
+    const sharesSameFigureAsCommon =
+      commonHasFigMarker &&
+      usedCommonPaths.length > 0 &&
+      !figMarkerRe.test(String(rawItem?.stem || '')) &&
+      (Boolean(donorItem) ||
+        (rawPaths.length === usedCommonPaths.length &&
+          rawPaths.every((p, idx) => p === usedCommonPaths[idx])));
+    const item = sharesSameFigureAsCommon
+      ? { ...rawItem, figure_local_paths: [], figure_local_infos: [] }
+      : rawItem;
     const hasItemDisplayContent =
       String(item?.stem || '').trim().length > 0
       || (Array.isArray(item?.choices) && item.choices.length > 0)

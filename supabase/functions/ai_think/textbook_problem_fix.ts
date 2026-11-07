@@ -244,6 +244,18 @@ export function normalizeTextFix(args: {
     const stripped = stripCommonStem(commonStem, curStem);
     if (stripped !== null && stripped.trim() !== curStem.trim()) stem = stripped;
   }
+  if (
+    stem &&
+    curStem.includes('[박스시작]') &&
+    curStem.includes('[박스끝]') &&
+    !stem.includes('[박스시작]') &&
+    /(?:^|\n|\[문단\])\s*해\s+/.test(stem)
+  ) {
+    stem = stem.replace(
+      /(\[문단\]\s*|\n\s*)(해\s+[\s\S]+)$/,
+      '$1[박스시작]\n$2\n[박스끝]',
+    );
+  }
   const proposedChoices = normalizeProposedChoices(args.correctedChoices);
   const choices = proposedChoices && JSON.stringify(proposedChoices) !== JSON.stringify(args.currentChoices ?? [])
     ? proposedChoices
@@ -668,9 +680,16 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
       fix_pass_at: nowIso,
       created_at: nowIso,
     };
-    if (keepRuleText) {
-      for (const k of ['kind', 'stem', 'common_stem', 'choices', 'reason', 'reason_code', 'source']) fixProposal[k] = prev[k] ?? null;
-      if (stem && figure?.crops.some((c) => c.reason === 'missing')) fixProposal.stem = stem;
+    if (keepRuleText && !hasText) {
+      const prevStemContent = String(prev.stem ?? '')
+        .replace(/\[(?:문단|박스시작|박스끝|보기시작|보기끝)\]/g, '')
+        .trim();
+      if (prevStemContent) {
+        for (const k of ['kind', 'stem', 'common_stem', 'choices', 'reason', 'reason_code', 'source']) {
+          fixProposal[k] = prev[k] ?? null;
+        }
+        if (stem && figure?.crops.some((c) => c.reason === 'missing')) fixProposal.stem = stem;
+      }
     }
 
     // 본문·그림 수정이 전혀 필요 없고 조판 엔진 문제만 있는 문항은 바로 보류(held)로 전환한다.

@@ -144,7 +144,8 @@ export function stripCommonStem(commonStem: unknown, stem: unknown): string | nu
     rest = s.slice(0, at) + s.slice(at + exact.length);
   }
   rest = rest.replace(/^(\s|\[문단\])+/, '').replace(/(\s|\[문단\])+$/, '');
-  return rest.trim() ? rest : null;
+  const contentOnly = rest.replace(/\[(?:문단|박스시작|박스끝|보기시작|보기끝)\]/g, '').trim();
+  return contentOnly ? rest : null;
 }
 
 export interface CommonStemFix {
@@ -312,6 +313,7 @@ export function sanitizeProblemMarkup(raw: unknown): string {
   if (!s) return s;
   s = s.replace(/\[\s*\[\s*\[공백\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*\]\s*\]\s*\]/g, '[[공백:$1]]');
   s = s.replace(/\\text\s*\{\s*box\s*\{\s*(?:~~)?\s*\}\s*\}/gi, 'box{~~}');
+  s = s.replace(/\\(?:boxed|box)\s*\{\s*(?:\\phantom\s*\{[^}]*\}|~~|\s*)\s*\}/gi, 'box{~~}');
   s = s.replace(
     /(\\begin\{(aligned|alignedat|gathered|split|array|cases)\})([\s\S]*?)(\\end\{\2\})/g,
     (_m, open: string, _env: string, body: string, close: string) => {

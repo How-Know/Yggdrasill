@@ -4417,6 +4417,21 @@ class _TextbookUnitAuthoringDialogState
   ) async {
     final big = _bigUnits[focus.bigIndex];
     final mid = big.middles[focus.midIndex];
+    final isWonri = _isWonriRowFocus(focus);
+    final targetSubIndex = isWonri ? (_wonriRowIndex(focus) ?? 0) : 0;
+    final state = _subStates[_stateKeyFor(focus)];
+    final focusPages = <int>{
+      if (state != null)
+        for (final r in state.pageResults)
+          if (r.rawPage > 0) r.rawPage,
+    };
+    bool matchesFocus(TextbookProblemReviewItem it) {
+      if (subKeys.isNotEmpty && !subKeys.contains(it.subKey)) return false;
+      if (isWonri && it.subIndex != targetSubIndex) return false;
+      if (focusPages.isNotEmpty && !focusPages.contains(it.rawPage)) return false;
+      return true;
+    }
+
     final scope = TextbookReviewUnitScope(
       academyId: widget.academyId,
       bookId: widget.bookId,
@@ -4436,10 +4451,7 @@ class _TextbookUnitAuthoringDialogState
       qualityApprovedCount: 0,
     );
     var allItems = await _reviewService.fetchUnitItems(scope);
-    var targetItems = [
-      for (final it in allItems)
-        if (subKeys.isEmpty || subKeys.contains(it.subKey)) it,
-    ];
+    var targetItems = [for (final it in allItems) if (matchesFocus(it)) it];
     if (targetItems.isEmpty) return;
 
     stepSay('4/4단계 — 과제형 V2 문항 카드 렌더링 중 (${targetItems.length}문항)...');
@@ -4449,64 +4461,155 @@ class _TextbookUnitAuthoringDialogState
     );
 
     const chunkSize = 6;
-    for (var idx = 0; idx < targetItems.length; idx += chunkSize) {
+    final reviewChunks = <List<TextbookProblemReviewItem>>[
+      for (var idx = 0; idx < targetItems.length; idx += chunkSize)
+        targetItems.skip(idx).take(chunkSize).toList(),
+    ];
+    for (var b = 0; b < reviewChunks.length; b += 2) {
       if (!mounted) return;
-      final chunk = targetItems.skip(idx).take(chunkSize).toList();
-      stepSay('4/4단계 — AI 선풀이 · 3축 난이도 · 원본 해설 전사 (${idx + 1}~${idx + chunk.length}/${targetItems.length}문항)...');
-      final images = await _reviewService.prepareChunkImages(
-        scope: scope,
-        items: chunk,
-        previewUrlsByCropId: previewUrls,
+      final batch = reviewChunks.skip(b).take(2).toList();
+      final doneCount = b * chunkSize;
+      stepSay(
+        '4/4단계 — AI 선풀이 · 3축 난이도 · 원본 해설 전사 '
+        '(${doneCount + 1}~${(doneCount + batch.fold<int>(0, (s, c) => s + c.length)).clamp(1, targetItems.length)}/${targetItems.length}문항)...',
       );
-      await _reviewService.runReviewChunk(
-        scope,
-        chunkSize: chunk.length,
-        forceRerun: true,
-        cropIds: [for (final x in chunk) x.cropId],
-        images: images,
-      );
+      await Future.wait([
+        for (final chunk in batch)
+          () async {
+            final images = await _reviewService.prepareChunkImages(
+              scope: scope,
+              items: chunk,
+              previewUrlsByCropId: previewUrls,
+            );
+            await _reviewService.runReviewChunk(
+              scope,
+              chunkSize: chunk.length,
+              forceRerun: true,
+              cropIds: [for (final x in chunk) x.cropId],
+              images: images,
+            );
+          }(),
+      ]);
     }
 
     allItems = await _reviewService.fetchUnitItems(scope);
-    targetItems = [
-      for (final it in allItems)
-        if (subKeys.isEmpty || subKeys.contains(it.subKey)) it,
-    ];
+    targetItems = [for (final it in allItems) if (matchesFocus(it)) it];
 
-    // 해설 미전사 또는 수학 정답 불일치 문항은 AI 풀이 정답을 앵커로 해설 PDF 전체 페이지를 탐색해 자동 보정한다.
+    // 해설 미전사 또는 수학·품질·도형 점검 대상 문항은 AI 풀이 정답을 앵커로 해설 PDF 전체 페이지를 탐색해 수정안을 만든다.
     final fixTargets = [
       for (final it in targetItems)
         if (it.canRenderOriginal &&
             (it.solutionVisionFailed || it.mathStatus == 'issue' || it.qualityStatus == 'issue' || it.hasFigures))
           it,
     ];
-    for (var idx = 0; idx < fixTargets.length; idx += 3) {
+    final fixChunks = <List<TextbookProblemReviewItem>>[
+      for (var idx = 0; idx < fixTargets.length; idx += 3)
+        fixTargets.skip(idx).take(3).toList(),
+    ];
+    for (var b = 0; b < fixChunks.length; b += 2) {
       if (!mounted) return;
-      final chunk = fixTargets.skip(idx).take(3).toList();
-      stepSay('4/4단계 — AI 정답 기반 해설 전체 페이지 탐색 및 원본 대조 수정안 생성 (${idx + 1}~${idx + chunk.length}/${fixTargets.length})...');
-      final images = await _reviewService.prepareChunkImages(
-        scope: scope,
-        items: chunk,
-        previewUrlsByCropId: previewUrls,
-        includeSolution: true,
-        includeSolutionPageFallback: true,
-        allItems: allItems,
+      final batch = fixChunks.skip(b).take(2).toList();
+      final doneCount = b * 3;
+      stepSay(
+        '4/4단계 — AI 정답 기반 해설 전체 페이지 탐색 및 원본 대조 수정안 생성 '
+        '(${doneCount + 1}~${(doneCount + batch.fold<int>(0, (s, c) => s + c.length)).clamp(1, fixTargets.length)}/${fixTargets.length})...',
       );
-      await _reviewService.runFixPass(
-        scope,
-        cropIds: [for (final x in chunk) x.cropId],
-        images: images,
-      );
+      await Future.wait([
+        for (final chunk in batch)
+          () async {
+            final images = await _reviewService.prepareChunkImages(
+              scope: scope,
+              items: chunk,
+              previewUrlsByCropId: previewUrls,
+              includeSolution: true,
+              includeSolutionPageFallback: true,
+              allItems: allItems,
+            );
+            await _reviewService.runFixPass(
+              scope,
+              cropIds: [for (final x in chunk) x.cropId],
+              images: images,
+            );
+          }(),
+      ]);
     }
 
     allItems = await _reviewService.fetchUnitItems(scope);
-    targetItems = [
-      for (final it in allItems)
-        if (subKeys.isEmpty || subKeys.contains(it.subKey)) it,
-    ];
+    targetItems = [for (final it in allItems) if (matchesFocus(it)) it];
+
+    // 생성된 본문·공통발문·선지·도형 수정안과 수학 정답 수정안을 DB 에 즉시 자동 반영하고 승인한다.
+    stepSay('4/4단계 — 생성된 수정안(공통발문·본문·도형·정답) DB 자동 반영 및 승인 확정 중...');
+    for (final it in targetItems) {
+      if (!mounted) return;
+      try {
+        final rawCrops = it.fixProposal['figure_crops'];
+        final cropSpecs = [
+          if (rawCrops is List)
+            for (final c in rawCrops)
+              if (c is Map) Map<String, dynamic>.from(c),
+        ];
+        List<Map<String, dynamic>>? uploadedAssets;
+        if (cropSpecs.isNotEmpty && it.pbQuestionId.isNotEmpty && it.canRenderOriginal) {
+          uploadedAssets = await _reviewService.cropAndUploadFigures(
+            scope: scope,
+            item: it,
+            crops: cropSpecs,
+          );
+        }
+        final propStem = (it.fixProposal['stem'] as String?)?.trim();
+        final propCommon = (it.fixProposal['common_stem'] as String?)?.trim();
+        final rawChoices = it.fixProposal['choices'];
+        final propChoices = rawChoices is List
+            ? [for (final c in rawChoices) if (c is Map) Map<String, dynamic>.from(c)]
+            : null;
+        final rawLayout = it.fixProposal['figure_layout'];
+        final propLayout = rawLayout is Map ? Map<String, dynamic>.from(rawLayout) : null;
+        final canApproveQual = !it.isEngineHeld;
+        if ((propStem != null && propStem.isNotEmpty) ||
+            (propCommon != null && propCommon.isNotEmpty) ||
+            propChoices != null ||
+            propLayout != null ||
+            uploadedAssets != null ||
+            canApproveQual) {
+          await _reviewService.applyProblemFix(
+            cropId: it.cropId,
+            stem: (propStem != null && propStem.isNotEmpty) ? propStem : null,
+            commonStem: (propCommon != null && propCommon.isNotEmpty) ? propCommon : null,
+            choices: propChoices,
+            figureLayout: propLayout,
+            figureAssets: uploadedAssets,
+            approveQuality: canApproveQual,
+            note: '자동 분석 파이프라인 DB 자동 반영',
+          );
+        }
+      } catch (e) {
+        debugPrint('[auto-analyze] applyProblemFix warning (${it.problemNumber}): $e');
+      }
+
+      try {
+        final resolvedAns = (it.resolvedMathAnswer ?? it.proposedAnswer ?? it.existingAnswer).trim();
+        if (resolvedAns.isNotEmpty && resolvedAns != '판단불가') {
+          await _reviewService.saveItemEdit(
+            cropId: it.cropId,
+            newAnswer: resolvedAns,
+            aiSolution: it.proposedAiSolution ?? it.aiSolution,
+            aiAnswer: it.proposedAiAnswer ?? resolvedAns,
+            visualTags: it.visualTags,
+            solutionTranscribed: it.proposedSolutionTranscribed,
+            solutionAnswer: it.proposedSolutionAnswer,
+            approveMath: true,
+          );
+        }
+      } catch (e) {
+        debugPrint('[auto-analyze] saveItemEdit warning (${it.problemNumber}): $e');
+      }
+    }
+
+    allItems = await _reviewService.fetchUnitItems(scope);
+    targetItems = [for (final it in allItems) if (matchesFocus(it)) it];
     final cleanMath = [for (final x in targetItems) if (x.mathStatus == 'clean') x.cropId];
     if (cleanMath.isNotEmpty) await _reviewService.approveAxis(cleanMath, 'math');
-    final cleanQual = [for (final x in targetItems) if (x.qualityStatus == 'clean' && !x.hasFigures) x.cropId];
+    final cleanQual = [for (final x in targetItems) if (x.qualityStatus == 'clean' && !x.isEngineHeld) x.cropId];
     if (cleanQual.isNotEmpty) await _reviewService.approveAxis(cleanQual, 'quality');
   }
 

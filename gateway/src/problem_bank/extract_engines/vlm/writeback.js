@@ -783,8 +783,18 @@ export function buildRowUpdate(existingRow, vlmQ, opts = {}) {
       : (requestedSetTypeAllowed || 'dependent_set'))
     : '';
   const isIndependentSet = isSet && setType === 'independent_set';
-  const commonStem = isIndependentSet ? String(vlmQ?.stem || '').trim() : '';
   const independentSetItemOnly = isIndependentSet && subs.length === 1;
+  const commonStem = isIndependentSet
+    ? (independentSetItemOnly
+        ? String(vlmQ?.stem || '').trim()
+        : String(
+            vlmSetModel.common_stem ||
+              vlmSetModel.commonStem ||
+              vlmQ?.common_stem ||
+              vlmQ?.commonStem ||
+              '',
+          ).trim())
+    : '';
   const qType = labelMarksEssay
     ? '서술형'
     : isSet

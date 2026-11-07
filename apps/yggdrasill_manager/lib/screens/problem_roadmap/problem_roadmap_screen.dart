@@ -555,35 +555,47 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
             .where((x) => !sentThisRun.contains(x.cropId))
             .toList();
         if (todo.isEmpty) break;
-        final chunk = todo.take(_kReviewChunkSize).toList();
-        sentThisRun.addAll(chunk.map((x) => x.cropId));
+        final chunk1 = todo.take(_kReviewChunkSize).toList();
+        final chunk2 = todo.skip(_kReviewChunkSize).take(_kReviewChunkSize).toList();
+        final parallelChunks = [
+          chunk1,
+          if (chunk2.isNotEmpty) chunk2,
+        ];
+        for (final c in parallelChunks) {
+          sentThisRun.addAll(c.map((x) => x.cropId));
+        }
+        final batchCount = parallelChunks.fold<int>(0, (s, c) => s + c.length);
         final total = _items.length;
         setState(() {
           _runProgress =
-              '검수 진행 중: ${total - todo.length} / $total 문항 완료 · 이번 묶음 ${chunk.map((x) => x.problemNumber).join(', ')}번 — 해설 영역 잘라내는 중...';
+              '검수 진행 중: ${total - todo.length} / $total 문항 완료 · 이번 묶음 $batchCount문항 — 원본 해설 전사 · 블라인드 풀이 · 학생 시점 품질 검수 중...';
         });
-        final images = await _svc.prepareChunkImages(
-          scope: scope,
-          items: chunk,
-          previewUrlsByCropId: _previewUrlsByCropId,
-        );
-        if (!mounted || _stopRequested) break;
-        setState(() {
-          _runProgress =
-              '검수 진행 중: ${total - todo.length} / $total 문항 완료 · 이번 묶음 ${chunk.length}문항 — 원본 해설 전사 · 블라인드 풀이 · 학생 시점 품질 검수 중...';
-        });
-        final res = await _svc.runReviewChunk(
-          scope,
-          chunkSize: _kReviewChunkSize,
-          forceRerun: forceRerun,
-          cropIds: [for (final x in chunk) x.cropId],
-          images: images,
-        );
-        final processed = (res['processed'] as num?)?.toInt() ?? 0;
-        totalProcessed += processed;
+        final results = await Future.wait([
+          for (final chunk in parallelChunks)
+            () async {
+              final images = await _svc.prepareChunkImages(
+                scope: scope,
+                items: chunk,
+                previewUrlsByCropId: _previewUrlsByCropId,
+              );
+              if (!mounted || _stopRequested) return const <String, dynamic>{};
+              return await _svc.runReviewChunk(
+                scope,
+                chunkSize: chunk.length,
+                forceRerun: forceRerun,
+                cropIds: [for (final x in chunk) x.cropId],
+                images: images,
+              );
+            }(),
+        ]);
+        var roundProcessed = 0;
+        for (final res in results) {
+          roundProcessed += (res['processed'] as num?)?.toInt() ?? 0;
+        }
+        totalProcessed += roundProcessed;
         if (!mounted) return;
         await _loadItems(scope, reloadPreviews: false);
-        if (res['done'] == true || processed <= 0) break;
+        if (roundProcessed <= 0) break;
       }
 
       // 2차: 정답·해설 카드를 V2로 찍어 학생 시점 렌더 검수(교재 원본과 직접 대조)
@@ -628,6 +640,37 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
           fixProposed = await _runFixPass(scope, fixTargets);
           if (mounted) await _loadItems(scope, reloadPreviews: false);
         }
+
+        // 생성된 수학·품질 수정안을 즉시 DB 에 반영하고 V2 재렌더·재검수·자동 승인까지 한 번에 완결한다.
+        if (mounted && !_stopRequested) {
+          final autoNotes = <String>[];
+          final appliedMath = await _bulkMathFixes(scope, autoNotes);
+          if (mounted) await _loadItems(scope, reloadPreviews: false);
+          final mathApproveIds = <String>{
+            for (final it in _items)
+              if (it.mathStatus == 'clean' || (it.mathStatus == 'approved' && it.pbAnswerDiffers))
+                it.cropId,
+            ...appliedMath,
+          }.toList();
+          if (mathApproveIds.isNotEmpty) {
+            autoMathApproved += await _svc.approveAxis(mathApproveIds, 'math');
+          }
+
+          if (mounted && !_stopRequested) {
+            final appliedQual = await _bulkQualityFixes(scope, autoNotes);
+            if (mounted) await _loadItems(scope, reloadPreviews: false);
+            final qualApproveIds = <String>{
+              for (final it in _items)
+                if (!it.isEngineHeld && it.qualityStatus == 'clean')
+                  it.cropId,
+              ...appliedQual,
+            }.toList();
+            if (qualApproveIds.isNotEmpty) {
+              autoQualApproved += await _svc.approveAxis(qualApproveIds, 'quality');
+            }
+            if (mounted) await _loadItems(scope, reloadPreviews: false);
+          }
+        }
       }
 
       if (!mounted) return;
@@ -640,13 +683,12 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
       setState(() {
         _notice = _stopRequested
             ? '요청에 따라 일시정지했습니다 ($totalProcessed문항 검수 완료).'
-            : '1회차 전체 검수가 완료되었습니다 '
+            : '전체 자동 검수·수정·승인이 완료되었습니다 '
                 '(처리 $totalProcessed · V2 검수 $renderChecked'
-                '${autoMathApproved + autoQualApproved > 0 ? ' · 정상 자동승인 수학 $autoMathApproved/품질 $autoQualApproved' : ''}'
+                '${autoMathApproved + autoQualApproved > 0 ? ' · 자동승인 수학 $autoMathApproved/품질 $autoQualApproved' : ''}'
                 '${autoHeld > 0 || heldCount > 0 ? ' · 엔진 보류 $heldCount' : ''}'
-                '${fixProposed > 0 ? ' · 원본/해설 PDF 대조 수정안 $fixProposed문항 제시' : ''}'
-                ' · 남은 확인 대상 수학 $leftMath/품질 $leftQual). '
-                '수정안을 확인하신 뒤 "수학 일괄 처리" · "품질 일괄 처리"를 누르면 DB 반영 후 해당 문항들만 재검수합니다.';
+                '${fixProposed > 0 ? ' · 원본/해설 PDF 대조 수정안 $fixProposed문항 자동반영' : ''}'
+                ' · 남은 확인 대상 수학 $leftMath/품질 $leftQual).';
       });
     } catch (e) {
       if (!mounted) return;
@@ -1167,34 +1209,52 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
   /// 반환: 수정안을 만든 문항 수
   Future<int> _runFixPass(TextbookReviewUnitScope scope, List<TextbookProblemReviewItem> targets) async {
     var done = 0;
-    for (var i = 0; i < targets.length; i += _kFixChunkSize) {
+    final chunks = <List<TextbookProblemReviewItem>>[
+      for (var i = 0; i < targets.length; i += _kFixChunkSize)
+        targets.skip(i).take(_kFixChunkSize).toList(),
+    ];
+    for (var b = 0; b < chunks.length; b += 2) {
       if (!mounted || _stopRequested) break;
-      final chunk = targets.skip(i).take(_kFixChunkSize).toList();
-      final range = '${i + 1}~${i + chunk.length} / ${targets.length} 문항';
-      setState(() => _runProgress = '원본 대조 수정안: $range — 본문·정답 PDF에서 원본을 찍는 중...');
-      final images = await _svc.prepareChunkImages(
-        scope: scope,
-        items: chunk,
-        previewUrlsByCropId: _previewUrlsByCropId,
-        includeSolution: true,
-        includeSolutionPageFallback: true,
-        allItems: _items,
-      );
-      final ids = <String>[];
-      for (final it in chunk) {
-        if (images[it.cropId]?.original != null) {
-          ids.add(it.cropId);
-        } else {
-          _bulkErrors.add('${it.problemNumber}번: 본문 PDF 원본을 찍지 못함');
-        }
-      }
-      if (ids.isEmpty || !mounted) continue;
+      final batch = chunks.skip(b).take(2).toList();
+      final startIdx = b * _kFixChunkSize + 1;
+      final endIdx = (b * _kFixChunkSize + batch.fold<int>(0, (s, c) => s + c.length)).clamp(1, targets.length);
+      final range = '$startIdx~$endIdx / ${targets.length} 문항';
       setState(() => _runProgress = '원본 대조 수정안: $range — 원본과 저장된 본문·선지·그림을 대조해 수정안을 만드는 중...');
-      try {
-        final res = await _svc.runFixPass(scope, cropIds: ids, images: {for (final id in ids) id: images[id]!});
-        done += (res['processed'] as num?)?.toInt() ?? 0;
-      } catch (e) {
-        _bulkErrors.add('${chunk.map((x) => x.problemNumber).join(',')}번 원본 대조: $e');
+      final counts = await Future.wait([
+        for (final chunk in batch)
+          () async {
+            final images = await _svc.prepareChunkImages(
+              scope: scope,
+              items: chunk,
+              previewUrlsByCropId: _previewUrlsByCropId,
+              includeSolution: true,
+              includeSolutionPageFallback: true,
+              allItems: _items,
+            );
+            final ids = <String>[];
+            for (final it in chunk) {
+              if (images[it.cropId]?.original != null) {
+                ids.add(it.cropId);
+              } else {
+                _bulkErrors.add('${it.problemNumber}번: 본문 PDF 원본을 찍지 못함');
+              }
+            }
+            if (ids.isEmpty || !mounted) return 0;
+            try {
+              final res = await _svc.runFixPass(
+                scope,
+                cropIds: ids,
+                images: {for (final id in ids) id: images[id]!},
+              );
+              return (res['processed'] as num?)?.toInt() ?? 0;
+            } catch (e) {
+              _bulkErrors.add('${chunk.map((x) => x.problemNumber).join(',')}번 원본 대조: $e');
+              return 0;
+            }
+          }(),
+      ]);
+      for (final c in counts) {
+        done += c;
       }
     }
     return done;

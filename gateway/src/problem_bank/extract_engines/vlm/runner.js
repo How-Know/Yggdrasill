@@ -285,21 +285,42 @@ function splitRepeatedIndependentCommonStem(stem) {
   const first = compact(lines[0]);
   if (!first) return null;
   const commonPromptVerbs =
-    '(?:나타내시오|구하시오|답하시오|쓰시오|써넣으시오|계산하시오|완성하시오|고르시오|서술하시오|푸시오|이항하시오|비교하시오|판별하시오)';
+    '(?:나타내|구하|답하|쓰|써넣|채우|계산하|완성하|고르|찾|선택하|서술하|풀|풀이|이항하|비교하|판별하|판단하|말하|그리|그려|표시하|작도하|분류하|연결하|고치|바꾸)(?:시오|여라|어라|아라|으시오|라|자)';
   const trailingCondition = '(?:\\.?\\s*\\([^)]*\\))?\\.?$';
   const looksLikeCommonPrompt =
-    new RegExp(`(?:다음|아래|보기).*${commonPromptVerbs}${trailingCondition}`).test(first) ||
-    new RegExp(`(?:거듭제곱|제곱근|인수분해|소인수분해|식|값).*${commonPromptVerbs}${trailingCondition}`).test(first);
+    new RegExp(`(?:다음|아래|보기|그림).*${commonPromptVerbs}${trailingCondition}`).test(first) ||
+    new RegExp(`(?:거듭제곱|제곱근|인수분해|소인수분해|식|값|도형|교점|교선|각|선분|직선|반직선).*${commonPromptVerbs}${trailingCondition}`).test(first);
   if (!looksLikeCommonPrompt) return null;
-  const rest = lines.slice(1).join('\n').trim();
+  const restLines = lines.slice(1);
+  while (restLines.length > 0 && /^\[(?:문단|박스시작|박스끝)\]$/.test(compact(restLines[0]))) {
+    restLines.shift();
+  }
+  let commonStemOut = first;
+  if (
+    /(?:오른쪽|왼쪽|다음|아래)?\s*그림/.test(first) &&
+    restLines.length >= 2 &&
+    compact(restLines[0]) === '[그림]'
+  ) {
+    const afterFig = restLines.slice(1);
+    while (afterFig.length > 0 && /^\[(?:문단|박스시작|박스끝)\]$/.test(compact(afterFig[0]))) {
+      afterFig.shift();
+    }
+    if (afterFig.join('\n').trim()) {
+      commonStemOut = `${first}\n[그림]`;
+      restLines.splice(0, restLines.length, ...afterFig);
+    }
+  }
+  const rest = restLines.join('\n').trim();
   if (!rest) return null;
-  return { commonStem: first, itemStem: rest };
+  return { commonStem: commonStemOut, itemStem: rest };
 }
 
 function independentCommonStemCompareKey(commonStem) {
   return compact(commonStem)
+    .replace(/\[\s*(?:문단|그림)\s*\]/g, ' ')
     .replace(/\[+\s*공백\s*:\s*\d+\s*\]+/g, '[공백]')
-    .replace(/\s+/g, ' ');
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function contentLinesWithoutStructuralMarkers(value) {
@@ -328,11 +349,16 @@ function stripItemStemFromIndependentCommonStem(commonStem, itemStem) {
   const itemText = itemLines.join('\n').trim();
   const commonLines = contentLinesWithoutStructuralMarkers(common);
   const commonText = commonLines.join('\n').trim();
-  if (!itemText || !commonText.endsWith(itemText)) {
+  if (!itemText) return trimTrailingStructuralMarkers(common);
+  if (commonText === itemText) {
+    const split = splitRepeatedIndependentCommonStem(common);
+    return split ? trimTrailingStructuralMarkers(split.commonStem) : '';
+  }
+  if (!commonText.endsWith(itemText)) {
     return trimTrailingStructuralMarkers(common);
   }
   const prefix = commonText.slice(0, commonText.length - itemText.length).trim();
-  return trimTrailingStructuralMarkers(prefix || common);
+  return trimTrailingStructuralMarkers(prefix);
 }
 
 function normalizeSetHeaderRange(crop) {
@@ -443,7 +469,15 @@ function normalizeIndependentSetPayloadQuestions(
           textbookScope?.mid_order ?? textbookScope?.midOrder ?? '',
           textbookScope?.sub_key || textbookScope?.subKey || '',
         ].join(':');
-        const setKey = `independent:${stableShortHash(`${scopeKey}:${split.commonStem}:${i}`)}`;
+        const setKey = `independent:${stableShortHash(`${scopeKey}:${independentCommonStemCompareKey(split.commonStem)}:${i}`)}`;
+        let groupCommonStem = split.commonStem;
+        for (let k = i; k < j; k += 1) {
+          const candidateCommon = candidates[k]?.split?.commonStem || '';
+          if (/\[그림\]/.test(candidateCommon) && !/\[그림\]/.test(groupCommonStem)) {
+            groupCommonStem = candidateCommon;
+            break;
+          }
+        }
         for (let k = i; k < j; k += 1) {
           const { row, split: oneSplit } = candidates[k];
           const prevMeta = row.meta && typeof row.meta === 'object' ? row.meta : {};
@@ -458,7 +492,7 @@ function normalizeIndependentSetPayloadQuestions(
               version: 1,
               set_type: 'independent_set',
               set_key: setKey,
-              common_stem: split.commonStem,
+              common_stem: groupCommonStem,
               item_label: String(row.question_number || '').trim(),
               item_order: k - i + 1,
               delivery_policy: 'independent_items_with_common_stem',
@@ -506,8 +540,18 @@ function normalizeIndependentSetPayloadQuestions(
         commonBySetKey.set(setKey, common);
       }
       const range = rangeByQuestionKey.get(problemNumberKey(row?.question_number));
-      if (range && common && !commonByHeaderSetKey.has(range.setKey)) {
-        commonByHeaderSetKey.set(range.setKey, common);
+      if (range) {
+        let candidateCommon = common;
+        if (!candidateCommon) {
+          const splitFromStem = splitRepeatedIndependentCommonStem(row?.stem);
+          if (splitFromStem) {
+            candidateCommon = splitFromStem.commonStem;
+            row.stem = splitFromStem.itemStem;
+          }
+        }
+        if (candidateCommon && !commonByHeaderSetKey.has(range.setKey)) {
+          commonByHeaderSetKey.set(range.setKey, candidateCommon);
+        }
       }
       const renderMode = compact(row?.meta?.set_render_mode).toLowerCase();
       if (
@@ -530,10 +574,23 @@ function normalizeIndependentSetPayloadQuestions(
         prevSet.common_stem || prevSet.commonStem,
         row?.stem,
       );
-      const commonStem = ownCommonStem
-        || commonBySetKey.get(range.setKey)
-        || commonByHeaderSetKey.get(range.setKey)
+      const sharedCommon = commonBySetKey.get(range.setKey) || commonByHeaderSetKey.get(range.setKey) || '';
+      const commonStem =
+        (/\[그림\]/.test(sharedCommon) && !/\[그림\]/.test(ownCommonStem || '')
+          ? sharedCommon
+          : ownCommonStem)
+        || sharedCommon
         || '';
+      if (commonStem && typeof row?.stem === 'string') {
+        const splitFromItem = splitRepeatedIndependentCommonStem(row.stem);
+        if (
+          splitFromItem &&
+          independentCommonStemCompareKey(splitFromItem.commonStem) ===
+            independentCommonStemCompareKey(commonStem)
+        ) {
+          row.stem = splitFromItem.itemStem;
+        }
+      }
       const nextFlags = Array.from(new Set([
         ...(Array.isArray(row.flags) ? row.flags : []),
         ...(!commonStem ? ['independent_set_common_stem_missing'] : []),
@@ -561,7 +618,84 @@ function normalizeIndependentSetPayloadQuestions(
       };
     }
   }
+  propagateIndependentSetSharedFigures(rows);
   return rows;
+}
+
+function propagateIndependentSetSharedFigures(rows) {
+  const bySetKey = new Map();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const setModel = row?.meta?.set_model && typeof row.meta.set_model === 'object'
+      ? row.meta.set_model
+      : null;
+    if (!setModel || compact(setModel.set_type) !== 'independent_set') continue;
+    const setKey = compact(setModel.set_key || setModel.setKey);
+    if (!setKey) continue;
+    const list = bySetKey.get(setKey) || [];
+    list.push(row);
+    bySetKey.set(setKey, list);
+  }
+  for (const members of bySetKey.values()) {
+    if (members.length < 2) continue;
+    const commonCandidate = members
+      .map((m) => String(m?.meta?.set_model?.common_stem || '').trim())
+      .find((c) => /\[그림\]/.test(c))
+      || members
+        .map((m) => String(m?.meta?.set_model?.common_stem || '').trim())
+        .find(Boolean)
+      || '';
+    if (!commonCandidate) continue;
+    const membersWithAssets = members.filter(
+      (m) => Array.isArray(m?.meta?.figure_assets) && m.meta.figure_assets.length > 0,
+    );
+    const commonMentionsFigure = /(?:그림|\[그림\])/.test(commonCandidate);
+    const isSharedFigureSet =
+      /\[그림\]/.test(commonCandidate) ||
+      (commonMentionsFigure &&
+        membersWithAssets.length === 1 &&
+        compact(membersWithAssets[0]?.stem) !== '[그림]');
+    if (!isSharedFigureSet || membersWithAssets.length === 0) continue;
+    const donor = membersWithAssets[0];
+    const sharedAssets = donor.meta.figure_assets;
+    const sharedLayout =
+      donor?.meta?.figure_layout && typeof donor.meta.figure_layout === 'object'
+        ? donor.meta.figure_layout
+        : buildDefaultPdfFigureLayout(sharedAssets);
+    const sharedCommonStem = /\[그림\]/.test(commonCandidate)
+      ? commonCandidate
+      : `${commonCandidate}\n[그림]`;
+    for (const member of members) {
+      const prevMeta = member.meta && typeof member.meta === 'object' ? member.meta : {};
+      const prevSet = prevMeta.set_model && typeof prevMeta.set_model === 'object'
+        ? prevMeta.set_model
+        : {};
+      if (typeof member.stem === 'string') {
+        const strippedLeadingFig = member.stem
+          .replace(/^(?:\s*\[(?:문단|그림)\]\s*\r?\n)+/, '')
+          .trim();
+        if (strippedLeadingFig) {
+          member.stem = strippedLeadingFig;
+        }
+      }
+      const hasOwnAssets =
+        Array.isArray(prevMeta.figure_assets) && prevMeta.figure_assets.length > 0;
+      member.meta = {
+        ...prevMeta,
+        ...(!hasOwnAssets
+          ? {
+              figure_assets: sharedAssets,
+              figure_layout: sharedLayout,
+            }
+          : {}),
+        set_model: {
+          ...prevSet,
+          common_stem: sharedCommonStem,
+          common_figure_assets: sharedAssets,
+          common_figure_layout: sharedLayout,
+        },
+      };
+    }
+  }
 }
 
 function expectedQuestionKeys(numbers) {
