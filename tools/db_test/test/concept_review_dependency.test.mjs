@@ -99,6 +99,50 @@ const move = async (concept, unitId) => review('placement', {
   detail: { basis_kind: 'source', viewed_original: false },
   fix: { kind: 'placement', ops: [{ op: 'move', placement_id: (await placementOf(concept)).id, unit_id: unitId, evidence: '책 단원 "1. 유리수"' }] },
 });
+const textMark = (id) => t.one(`select concept_review_text_mark($1::uuid) as r`, [id]).then((x) => x.r);
+const setContent = (id, content) => t.one(`update concepts set content = $1 where id = $2::uuid returning id`, [content, id]);
+const reviewCards = (job) => t.all(
+  `select a.id, a.status, a.payload
+     from concept_review_job_cards jc
+     join ai_actions a on a.id = jc.action_id
+    where jc.job_id = $1::uuid and a.kind = 'concept_review_record'
+    order by jc.created_at, a.id`,
+  [job],
+);
+// 1단계 비교는 읽은 지문 판이 있어야 저장된다. 기초 개념 범위는 저장 때 다시 읽으므로 판을 넣지 않는다.
+const marked = async (rev) => {
+  const ids = rev.compared_ids ?? [];
+  if (rev.scope === 'foundation' || ids.length === 0 || rev.compared_marks) return rev;
+  const compared_marks = {};
+  for (const id of ids) compared_marks[id] = await textMark(id);
+  return { ...rev, compared_marks };
+};
+
+// 기초 판단은 이미 카드에 연결되어 있고, 배치 수정은 아직 보류인 항목.
+async function heldFoundation() {
+  const ctx = await setup(1);
+  const base = await insertConcept(t, `기초 비교 ${randomUUID().slice(0, 8)}`, ctx.F, '처음 비교 지문');
+  await targets(ctx.job, ctx.gen);
+  await save(ctx.job, ctx.gen, [await drafted(1, ctx.ids[0], [
+    review('notation'),
+    review('meaning'),
+    foundationOk([base]),
+    await move(ctx.ids[0], ctx.P.leaves[1].id),
+  ])]);
+  const first = await submit(ctx.job, ctx.gen);
+  assert.equal(first.submitted, true, '첫 기초 판단은 카드로 나간다');
+  assert.ok(first.action.payload.items.some((i) => i.scope === 'foundation'));
+  const row = await itemRow(ctx.job, 1);
+  assert.equal(row.state, 'held');
+  assert.equal(row.scope_cards.foundation.action_id, first.action.id);
+  await apply(first.action.id);
+  assert.equal((await itemRow(ctx.job, 1)).state, 'held', '배치 수정이 남아 있으면 항목은 보류다');
+  const foundationId = (await t.one(
+    `select id from concept_quality_reviews where concept_id = $1::uuid and scope = 'foundation'`,
+    [ctx.ids[0]],
+  )).id;
+  return { ...ctx, base, first, foundationId };
+}
 
 test('무관한 검토는 먼저 내고 의존 범위만 보류한다. 반영 뒤 그 범위만 지금 판으로 다시 판단한다', async () => {
   const { job, gen, ids, P } = await setup(1);
@@ -234,7 +278,7 @@ test('성공한 기록은 남기고, 비교 근거가 바뀐 범위만 다시 �
   await targets(job, gen);
   await save(job, gen, [await drafted(1, ids[0], [
     review('notation'),
-    review('meaning', { compared_ids: [base] }),
+    await marked(review('meaning', { compared_ids: [base] })),
     foundationOk(),
     placementOk(),
   ])]);
@@ -251,7 +295,7 @@ test('성공한 기록은 남기고, 비교 근거가 바뀐 범위만 다시 �
   const tg = await targets(job, gen);
   assert.deepEqual(tg.batch[0].todo, ['meaning']);
   await material(job, gen, [1]);
-  await save(job, gen, [await drafted(1, ids[0], [review('meaning', { compared_ids: [base] })], { rework: true })]);
+  await save(job, gen, [await drafted(1, ids[0], [await marked(review('meaning', { compared_ids: [base] }))], { rework: true })]);
   const again = await submit(job, gen);
   await apply(again.action.id);
   assert.equal((await t.one(
@@ -272,8 +316,8 @@ test('서로 비교만 하는 검토는 함께 내고, 서로의 글을 고치�
   const plain = await setup(2);
   await targets(plain.job, plain.gen);
   await save(plain.job, plain.gen, [
-    await drafted(1, plain.ids[0], [review('notation'), review('meaning', { compared_ids: [plain.ids[1]] }), placementOk()]),
-    await drafted(2, plain.ids[1], [review('notation'), review('meaning', { compared_ids: [plain.ids[0]] }), placementOk()]),
+    await drafted(1, plain.ids[0], [review('notation'), await marked(review('meaning', { compared_ids: [plain.ids[1]] })), placementOk()]),
+    await drafted(2, plain.ids[1], [review('notation'), await marked(review('meaning', { compared_ids: [plain.ids[0]] })), placementOk()]),
   ]);
   const both = await submit(plain.job, plain.gen);
   assert.equal(both.fix_actions.length, 0);
@@ -285,8 +329,8 @@ test('서로 비교만 하는 검토는 함께 내고, 서로의 글을 고치�
   const edit = await setup(2);
   await targets(edit.job, edit.gen);
   await save(edit.job, edit.gen, [
-    await drafted(1, edit.ids[0], [contentEdit('첫째 글을 고친다'), review('meaning', { compared_ids: [edit.ids[1]] }), placementOk()]),
-    await drafted(2, edit.ids[1], [contentEdit('둘째 글을 고친다'), review('meaning', { compared_ids: [edit.ids[0]] }), placementOk()]),
+    await drafted(1, edit.ids[0], [contentEdit('첫째 글을 고친다'), await marked(review('meaning', { compared_ids: [edit.ids[1]] })), placementOk()]),
+    await drafted(2, edit.ids[1], [contentEdit('둘째 글을 고친다'), await marked(review('meaning', { compared_ids: [edit.ids[0]] })), placementOk()]),
   ]);
   const waited = await submit(edit.job, edit.gen);
   const lib = waited.fix_actions.find((a) => a.kind === 'concept_library_change');
@@ -355,4 +399,155 @@ test('고른 항목이 없으면 예외이고, 일부만 승인하면 반영된�
   assert.deepEqual(partial.result.items.map((x) => x.status), ['applied', 'skipped', 'applied']);
   assert.equal((await stateOf(ids[0])).conditions.text, 'missing');
   assert.equal((await stateOf(ids[1])).scopes.notation.state, 'met');
+});
+
+test('비교 지문이 바뀐 기초 개념은 그 범위를 다시 저장했을 때만 새 카드가 된다', async () => {
+  const { job, gen, ids, base, first, foundationId } = await heldFoundation();
+  const before = await reviewCards(job);
+  await setContent(base, '비교 지문을 바꿈');
+
+  const stale = await submit(job, gen);
+  assert.equal(stale.submitted, false, '다시 저장하지 않은 옛 초안은 카드가 되지 않는다');
+  assert.equal((await reviewCards(job)).length, before.length);
+
+  const versionBefore = (await itemRow(job, 1)).draft_version;
+  const saved = await save(job, gen, [await drafted(1, ids[0], [foundationOk([base])])]);
+  assert.equal(saved.items[0].status, 'saved');
+  const draftedRow = await itemRow(job, 1);
+  assert.ok(draftedRow.draft_version > versionBefore);
+  assert.equal(draftedRow.state, 'held');
+  assert.equal(draftedRow.draft.find((r) => r.scope === 'foundation').compared_text[base], await textMark(base));
+
+  const again = await submit(job, gen);
+  assert.equal(again.submitted, true);
+  assert.equal(again.existing, false);
+  assert.deepEqual(again.action.payload.items.map((i) => i.scope), ['foundation']);
+  assert.equal(again.action.payload.items[0].outcome, 'no_issue_found');
+  assert.notEqual(again.action.id, first.action.id);
+  const cardsAfter = await reviewCards(job);
+  assert.equal(cardsAfter.length, before.length + 1, '같은 결과로 다시 저장하면 카드는 한 장이다');
+
+  const repeated = await submit(job, gen);
+  assert.equal((await reviewCards(job)).length, cardsAfter.length, '같은 초안을 다시 내도 카드는 늘지 않는다');
+  if (repeated.submitted) assert.equal(repeated.existing, true);
+
+  const held = await itemRow(job, 1);
+  assert.equal(held.state, 'held');
+  assert.ok(held.held_fixes.some((h) => h.scope === 'placement'), '미해결 배치 수정은 그대로 보류다');
+  assert.equal(held.scope_cards.foundation.action_id, again.action.id);
+  assert.equal(held.scope_cards.notation.action_id, first.action.id, '앞서 승인된 범위의 카드 연결은 남는다');
+  const placement = first.fix_actions.find((a) => a.kind === 'concept_placement_change');
+  assert.equal((await t.one(`select status from ai_actions where id = $1::uuid`, [placement.id])).status, 'proposed');
+
+  const approved = await apply(again.action.id);
+  assert.equal(approved.status, 'applied');
+  const rows = await t.all(
+    `select id from concept_quality_reviews where concept_id = $1::uuid and scope = 'foundation' order by created_at, id`,
+    [ids[0]],
+  );
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].id, foundationId, '이전 승인 기록은 지우지 않는다');
+  assert.equal((await stateOf(ids[0])).conditions.foundation, 'met');
+});
+
+test('다른 범위만 저장하면 항목 버전이 올라도 옛 기초 초안은 나가지 않는다', async () => {
+  const { job, gen, ids, base } = await heldFoundation();
+  await setContent(base, '비교 지문만 바꿈');
+  const versionBefore = (await itemRow(job, 1)).draft_version;
+  const saved = await save(job, gen, [await drafted(1, ids[0], [review('meaning')])]);
+  assert.equal(saved.items[0].status, 'saved');
+  const row = await itemRow(job, 1);
+  assert.ok(row.draft_version > versionBefore, '다른 범위를 저장해도 항목 버전은 오른다');
+  assert.equal(row.draft.some((r) => r.scope === 'foundation'), false);
+  const before = (await reviewCards(job)).length;
+  const sub = await submit(job, gen);
+  assert.equal(sub.submitted, false);
+  assert.equal((await reviewCards(job)).length, before);
+});
+
+test('바뀐 비교 개념을 초안에서 빼면 기초 판단은 나가지 않는다', async () => {
+  const { job, gen, ids, base } = await heldFoundation();
+  await setContent(base, '비교 지문을 바꿨지만 초안에서는 빠진다');
+  const saved = await save(job, gen, [await drafted(1, ids[0], [foundationOk([])])]);
+  assert.equal(saved.items[0].status, 'saved');
+  const foundation = (await itemRow(job, 1)).draft.find((r) => r.scope === 'foundation');
+  assert.equal(foundation.compared_text[base], undefined);
+  assert.ok((await itemRow(job, 1)).draft_version > 1);
+  const before = (await reviewCards(job)).length;
+  const sub = await submit(job, gen);
+  assert.equal(sub.submitted, false, '비교 대상을 뺀 초안은 재검토로 치지 않는다');
+  assert.equal((await reviewCards(job)).length, before);
+});
+
+test('외부 근거 공백이나 본문까지 바뀐 미검토 초안은 나가지 않는다', async () => {
+  const gap = await setup(1);
+  await targets(gap.job, gap.gen);
+  await save(gap.job, gap.gen, [await drafted(1, gap.ids[0], [
+    review('notation'),
+    review('meaning', {
+      outcome: 'unverified', unverified: '교재 출처를 확인하지 못함', detail: { evidence_gaps: ['source'] },
+    }),
+    foundationOk(),
+    await move(gap.ids[0], gap.P.leaves[1].id),
+  ])]);
+  const first = await submit(gap.job, gap.gen);
+  await apply(first.action.id);
+  await t.exec(
+    `insert into concept_sources (concept_id, academy_id, book_id, grade_label, raw_page, display_page, unit_path, created_at)
+     values ('${gap.ids[0]}', '${S.academy}', '${S.book}', '중2-1', 90, 90, '{"Ⅰ. 수와 식","1. 유리수"}', clock_timestamp() + interval '1 second')`,
+  );
+  assert.equal((await stateOf(gap.ids[0])).scopes.meaning.state, 'recheck', '새 출처는 근거 공백을 다시 보게 한다');
+  const beforeGap = (await reviewCards(gap.job)).length;
+  const gapSubmit = await submit(gap.job, gap.gen);
+  assert.equal(gapSubmit.submitted, false, '근거 공백만으로는 옛 초안이 나가지 않는다');
+  assert.equal((await reviewCards(gap.job)).length, beforeGap);
+  assert.equal((await itemRow(gap.job, 1)).state, 'held');
+
+  const both = await heldFoundation();
+  await setContent(both.ids[0], '검토 대상 본문도 바뀜');
+  await setContent(both.base, '비교 지문도 바뀜');
+  const beforeBoth = (await reviewCards(both.job)).length;
+  const bothSubmit = await submit(both.job, both.gen);
+  assert.equal(bothSubmit.submitted, false, '본문과 비교 지문이 함께 바뀐 옛 초안은 나가지 않는다');
+  assert.equal((await reviewCards(both.job)).length, beforeBoth);
+  assert.equal((await itemRow(both.job, 1)).state, 'held');
+});
+
+test('승인 전에 비교 지문이 다시 바뀌면 새 기초 카드는 반영되지 않는다', async () => {
+  const { job, gen, ids, base, foundationId } = await heldFoundation();
+  await setContent(base, '한 번 바뀐 비교 지문');
+  await save(job, gen, [await drafted(1, ids[0], [foundationOk([base])])]);
+  const again = await submit(job, gen);
+  assert.equal(again.action.payload.items.length, 1);
+  await setContent(base, '승인 전에 또 바뀐 비교 지문');
+  const blocked = await apply(again.action.id);
+  assert.equal(blocked.status, 'proposed');
+  assert.match(blocked.error, /concept_review_compared_changed/);
+  const rows = await t.all(
+    `select id from concept_quality_reviews where concept_id = $1::uuid and scope = 'foundation'`,
+    [ids[0]],
+  );
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].id, foundationId);
+});
+
+test('거절한 기초 카드와 승인 대기 카드는 같은 초안으로 다시 만들어지지 않는다', async () => {
+  const { job, gen, ids, base } = await heldFoundation();
+  await setContent(base, '거절 전에 바뀐 비교 지문');
+  await save(job, gen, [await drafted(1, ids[0], [foundationOk([base])])]);
+  const again = await submit(job, gen);
+  assert.equal((await reviewCards(job)).length, 2);
+  const waiting = await submit(job, gen);
+  assert.equal((await reviewCards(job)).length, 2, '승인 대기 카드를 같은 초안으로 다시 만들지 않는다');
+  if (waiting.submitted) assert.equal(waiting.existing, true);
+
+  await reject(again.action.id);
+  const version = (await itemRow(job, 1)).draft_version;
+  const saved = await save(job, gen, [await drafted(1, ids[0], [foundationOk([base])])]);
+  assert.equal(saved.items[0].status, 'unchanged', '거절된 같은 초안은 다시 저장되지 않는다');
+  assert.equal((await itemRow(job, 1)).draft_version, version);
+  const afterReject = await submit(job, gen);
+  assert.equal((await reviewCards(job)).length, 2, '거절된 초안을 자동으로 다시 제안하지 않는다');
+  if (afterReject.submitted) assert.equal(afterReject.existing, true);
+  assert.equal((await itemRow(job, 1)).held_fixes.some((h) => h.scope === 'placement'), true);
 });

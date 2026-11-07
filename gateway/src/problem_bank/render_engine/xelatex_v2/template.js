@@ -13,6 +13,9 @@
  *   5. Render boxes with tcolorbox, apply hanging indent via \leftskip
  */
 
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
 import { resolveFigureLayout } from '../utils/figure_layout.js';
 import {
   applyInlineAlignmentMarkers,
@@ -3915,6 +3918,15 @@ function resolveRenderableChoices(question) {
 /*  Page geometry & fonts                                              */
 /* ------------------------------------------------------------------ */
 
+// 8절은 Konica 8K(270x390mm). b4paper 는 ISO B4(250x353mm)다.
+function geometryPaperOption(paper) {
+  const p = String(paper || 'B4').trim().toUpperCase();
+  if (p === 'A4') return 'a4paper';
+  if (p === 'A3') return 'a3paper';
+  if (p === '8절' || p === '8K') return 'paperwidth=270mm,paperheight=390mm';
+  return 'b4paper';
+}
+
 function paperGeometry(paper) {
   const p = String(paper || 'B4').toUpperCase();
   // 좌/우 여백은 사용자 요청으로 30% 축소 (20mm * 0.7 = 14mm).
@@ -3932,17 +3944,96 @@ function paperGeometry(paper) {
   //     절대 위치를 고정. 홀수형/수학영역은 보정 없이 6pt 상승.
   // headheight 54pt : 페이지번호/홀수형 박스를 \raisebox 로 올릴 공간 확보.
   const vmargins = 'top=29.95mm,bottom=20mm,headheight=54pt,headsep=19.5pt';
-  if (p === 'A4') return `a4paper,hmargin=14mm,${vmargins}`;
-  if (p === 'A3') return `a3paper,hmargin=14mm,${vmargins}`;
-  return `b4paper,hmargin=14mm,${vmargins}`;
+  return `${geometryPaperOption(p)},hmargin=14mm,${vmargins}`;
 }
 
 function assignmentPaperGeometry(paper) {
   const p = String(paper || 'B4').toUpperCase();
   const vmargins = 'top=26.5mm,bottom=20mm,headheight=54pt,headsep=17pt';
-  if (p === 'A4') return `a4paper,hmargin=11.34mm,${vmargins}`;
-  if (p === 'A3') return `a3paper,hmargin=11.34mm,${vmargins}`;
-  return `b4paper,hmargin=11.34mm,${vmargins}`;
+  return `${geometryPaperOption(p)},hmargin=11.34mm,${vmargins}`;
+}
+
+function gyeongsinPaperGeometry(paper) {
+  const p = String(paper || 'B4').toUpperCase();
+  // 좌우 여백은 모의고사형(hmargin=14mm)을 그대로 따르고, 상하 여백은 원본보다 좁게 잡아
+  // 문제 본문 가용 높이를 넉넉하게 확보한다.
+  const vmargins = 'top=18.5mm,bottom=21.5mm,headheight=12pt,headsep=8pt';
+  return `${geometryPaperOption(p)},hmargin=14mm,${vmargins}`;
+}
+
+function neunginPaperGeometry(paper) {
+  const p = String(paper || 'B4').toUpperCase();
+  // 능인중 문제 페이지는 모든 쪽에 상단 과목명·학년 박스와 가로선이 들어가므로
+  // 상단 여백을 35mm(≈99pt)로 확보하고 하단은 22.5mm(≈64pt)로 잡는다.
+  const vmargins = 'top=35mm,bottom=22.5mm,headheight=12pt,headsep=8pt';
+  return `${geometryPaperOption(p)},hmargin=14mm,${vmargins}`;
+}
+
+function daeryunPaperGeometry(paper) {
+  const p = String(paper || 'B4').toUpperCase();
+  // 대륜중 일반 문제 페이지(2쪽~): 우상단 큰 쪽 번호와 상단 가로선 아래 본문 시작.
+  const vmargins = 'top=29mm,bottom=22mm,headheight=12pt,headsep=8pt';
+  return `${geometryPaperOption(p)},hmargin=14mm,${vmargins}`;
+}
+
+function daeryunTitlePaperGeometry(paper) {
+  const p = String(paper || 'B4').toUpperCase();
+  const paperOpt = geometryPaperOption(p);
+  // 대륜중 1쪽(제목 페이지): 상단 시험명 + 입체 과목 상자 + 좌측 교시/답안지형/과목코드/시험일시 아래 가로선.
+  return `${paperOpt},hmargin=14mm,top=162pt,bottom=22mm,headheight=12pt,headsep=8pt`;
+}
+
+function dongdoPaperGeometry(paper) {
+  const p = String(paper || 'B4').toUpperCase();
+  const vmargins = 'top=18.5mm,bottom=21.5mm,headheight=12pt,headsep=8pt';
+  return `${geometryPaperOption(p)},hmargin=14mm,${vmargins}`;
+}
+
+function dongdoTitlePaperGeometry(paper) {
+  const p = String(paper || 'B4').toUpperCase();
+  const paperOpt = geometryPaperOption(p);
+  // 동도중 1쪽(제목 페이지): 일반 페이지 상단 테두리 높이에 맞춰 상단 헤더 박스(117.1pt) + 본문 여백(14pt) 확보.
+  return `${paperOpt},hmargin=14mm,top=169.5pt,bottom=21.5mm,headheight=12pt,headsep=8pt`;
+}
+
+function soseonPaperGeometry(paper) {
+  const p = String(paper || 'B4').toUpperCase();
+  const vmargins = 'top=18.5mm,bottom=21.5mm,headheight=12pt,headsep=8pt';
+  return `${geometryPaperOption(p)},hmargin=14mm,${vmargins}`;
+}
+
+function soseonTitlePaperGeometry(paper) {
+  const p = String(paper || 'B4').toUpperCase();
+  const paperOpt = geometryPaperOption(p);
+  // 소선여중 첫 문제 페이지: 일반 페이지 상단 테두리 높이에 맞춰 상단 헤더 표(113.4pt) + 본문 여백(14pt) 확보.
+  return `${paperOpt},hmargin=14mm,top=165.8pt,bottom=21.5mm,headheight=12pt,headsep=8pt`;
+}
+
+function oseongPaperGeometry(paper) {
+  const p = String(paper || 'B4').toUpperCase();
+  const vmargins = 'top=18.5mm,bottom=21.5mm,headheight=12pt,headsep=8pt';
+  return `${geometryPaperOption(p)},hmargin=14mm,${vmargins}`;
+}
+
+function oseongTitlePaperGeometry(paper) {
+  const p = String(paper || 'B4').toUpperCase();
+  const paperOpt = geometryPaperOption(p);
+  // 오성중 첫 문제 페이지: 상단 시험명 + 과목명/코드 알약 + 선택형/서답형 배점표 + 가로 구분선 + 본문 여백 확보.
+  return `${paperOpt},hmargin=14mm,top=176pt,bottom=21.5mm,headheight=12pt,headsep=8pt`;
+}
+
+function jeonghwaPaperGeometry(paper) {
+  const p = String(paper || 'B4').toUpperCase();
+  const vmargins = 'top=18.5mm,bottom=23.5mm,headheight=12pt,headsep=8pt';
+  return `${geometryPaperOption(p)},hmargin=14mm,${vmargins}`;
+}
+
+function gyeongsinTitlePaperGeometry(paper) {
+  const p = String(paper || 'B4').toUpperCase();
+  const paperOpt = geometryPaperOption(p);
+  // 테두리 상단은 일반 페이지(본문 상단 18.5mm - 14pt)와 같은 높이에 두고, 그 아래
+  // 제목 칸(104.8pt)과 과목명·실시일자 칸(31.8pt), 본문 여백(14pt)을 원본 스캔 비율대로 확보한다.
+  return `${paperOpt},hmargin=14mm,top=189.04pt,bottom=21.5mm,headheight=12pt,headsep=8pt`;
 }
 
 function fontSpecDirective(fontPath, fontFamily, fontBold) {
@@ -3995,9 +4086,31 @@ function buildPreamble({
   pairAnchorSupport = false,
 }) {
   const isAssignmentForGeometry = profile === 'assignment';
+  const isGyeongsinForGeometry = profile === 'gyeongsin';
+  const isNeunginForGeometry = profile === 'neungin';
+  const isDaeryunForGeometry = profile === 'daeryun';
+  const isDongdoForGeometry = profile === 'dongdo';
+  const isSoseonForGeometry = profile === 'soseon';
+  const isOseongForGeometry = profile === 'oseong';
+  const isJeonghwaForGeometry = profile === 'jeonghwa';
+  const isHwanggeumForGeometry = profile === 'hwanggeum';
   const geom = geometryOverride || (isAssignmentForGeometry
     ? assignmentPaperGeometry(paper)
-    : paperGeometry(paper));
+    : (isGyeongsinForGeometry
+        ? gyeongsinPaperGeometry(paper)
+        : (isNeunginForGeometry
+            ? neunginPaperGeometry(paper)
+            : (isDaeryunForGeometry
+                ? daeryunPaperGeometry(paper)
+                : (isDongdoForGeometry
+                    ? dongdoPaperGeometry(paper)
+                    : (isSoseonForGeometry
+                        ? soseonPaperGeometry(paper)
+                        : (isOseongForGeometry
+                            ? oseongPaperGeometry(paper)
+                            : (isJeonghwaForGeometry
+                                ? jeonghwaPaperGeometry(paper)
+                                : (isHwanggeumForGeometry ? gyeongsinPaperGeometry(paper) : paperGeometry(paper))))))))));
   const mainFont = fontFamily || 'Malgun Gothic';
   const boldFont = fontBold || `${mainFont} Bold`;
   const size = fontSize || 11;
@@ -4006,9 +4119,20 @@ function buildPreamble({
   // 사용자 요청 7차: HTML/MathJax 엔진의 `YggSubject` 폰트(기본 AppleSDGothicNeoB.ttf)
   //   를 XeLaTeX 에도 `\YggSubject` 로 등록. subjectFontPath 가 빈 값이면
   //   noop 매크로로 선언 (폴백 = 메인 폰트).
-  const subjectFontDirective = subjectFontPath
+  const resolvedSubjectFontPath = (() => {
+    for (const candidate of [
+      subjectFontPath,
+      process.env.PB_PDF_FONT_SUBJECT_PATH,
+      'C:\\Users\\harry\\Downloads\\apple산돌고딕네오2\\apple산돌고딕네오2\\AppleSDGothicNeoB.ttf',
+    ]) {
+      const safe = String(candidate || '').trim();
+      if (safe && fs.existsSync(safe)) return safe;
+    }
+    return '';
+  })();
+  const subjectFontDirective = resolvedSubjectFontPath
     ? (() => {
-      const normalized = subjectFontPath.replace(/\\/g, '/');
+      const normalized = resolvedSubjectFontPath.replace(/\\/g, '/');
       const fileName = normalized.split('/').pop();
       const dir = normalized.replace(/[^/]+$/, '');
       const ext = fileName.includes('.') ? fileName.split('.').pop() : 'ttf';
@@ -4017,15 +4141,20 @@ function buildPreamble({
         + `  Extension = .${ext},\n`
         + `  UprightFont = ${fileName},\n`
         + `  BoldFont = ${fileName},\n`
-        + `  BoldFeatures = {FakeBold=1.3},\n`
+        + `]\n`
+        + `\\newhangulfontfamily\\YggSubjectHangul{${fileName}}[\n`
+        + `  Path = ${dir},\n`
+        + `  Extension = .${ext},\n`
+        + `  UprightFont = ${fileName},\n`
+        + `  BoldFont = ${fileName},\n`
         + `]`;
     })()
-    : '\\newcommand{\\YggSubject}{}';
+    : '\\newcommand{\\YggSubject}{}\n\\newcommand{\\YggSubjectHangul}{}';
   // 제목페이지 부제/메인타이틀/큰 홀수형 박스는 HTML `.mock-first-subject`, `.mock-chip-type`
   // 와 같은 YggSubject 계열을 명시적으로 사용한다.
-  const subjectDisplayFontDirective = subjectFontPath
+  const subjectDisplayFontDirective = resolvedSubjectFontPath
     ? (() => {
-      const normalized = subjectFontPath.replace(/\\/g, '/');
+      const normalized = resolvedSubjectFontPath.replace(/\\/g, '/');
       const fileName = normalized.split('/').pop();
       const dir = normalized.replace(/[^/]+$/, '');
       const ext = fileName.includes('.') ? fileName.split('.').pop() : 'ttf';
@@ -4034,10 +4163,17 @@ function buildPreamble({
         + `  Extension = .${ext},\n`
         + `  UprightFont = ${fileName},\n`
         + `  BoldFont = ${fileName},\n`
-        + `  BoldFeatures = {FakeBold=1.3},\n`
+        + `  BoldFeatures = {FakeBold=0.25},\n`
+        + `]\n`
+        + `\\newhangulfontfamily\\YggSubjectDisplayHangul{${fileName}}[\n`
+        + `  Path = ${dir},\n`
+        + `  Extension = .${ext},\n`
+        + `  UprightFont = ${fileName},\n`
+        + `  BoldFont = ${fileName},\n`
+        + `  BoldFeatures = {FakeBold=0.25},\n`
         + `]`;
     })()
-    : '\\newcommand{\\YggSubjectDisplay}{\\YggSubject}';
+    : '\\newcommand{\\YggSubjectDisplay}{\\YggSubject}\n\\newcommand{\\YggSubjectDisplayHangul}{}';
   const topLabelFontDirective = '\\newfontfamily\\YggTopLabel{Malgun Gothic}[\n'
     + '  BoldFont = {Malgun Gothic Bold},\n'
     + ']';
@@ -4084,7 +4220,32 @@ function buildPreamble({
   })();
   const isMockExamProfile = profile === 'mock' || profile === 'csat';
   const isAssignmentProfile = profile === 'assignment';
-  const isMock = isMockExamProfile || isAssignmentProfile;
+  const isGyeongsinProfile = profile === 'gyeongsin';
+  const isNeunginProfile = profile === 'neungin';
+  const isDaeryunProfile = profile === 'daeryun';
+  const isDongdoProfile = profile === 'dongdo';
+  const isSoseonProfile = profile === 'soseon';
+  const isOseongProfile = profile === 'oseong';
+  const isJeonghwaProfile = profile === 'jeonghwa';
+  const isHwanggeumProfile = profile === 'hwanggeum';
+  const isNaesinSchoolProfile = isGyeongsinProfile || isNeunginProfile || isDaeryunProfile || isDongdoProfile || isSoseonProfile || isOseongProfile || isJeonghwaProfile || isHwanggeumProfile;
+  const isMock = isMockExamProfile || isAssignmentProfile || isNaesinSchoolProfile;
+  // 모의고사형 표지는 본문 글꼴과 무관하게 함초롬바탕(HCR Batang)으로 그린다.
+  const mockCoverFontDirective = (() => {
+    const dir = MOCK_COVER_FONT_DIR;
+    if (!isMockExamProfile || !fs.existsSync(`${dir}HCRBatang.ttf`)) return '\\newcommand{\\YggMockCover}{}';
+    return '\\newfontfamily\\YggMockCoverLatin{HCRBatang.ttf}[\n'
+      + `  Path = ${dir},\n`
+      + '  UprightFont = HCRBatang.ttf,\n'
+      + '  BoldFont = HCRBatang-Bold.ttf,\n'
+      + ']\n'
+      + '\\newhangulfontfamily\\YggMockCoverHangul{HCRBatang.ttf}[\n'
+      + `  Path = ${dir},\n`
+      + '  UprightFont = HCRBatang.ttf,\n'
+      + '  BoldFont = HCRBatang-Bold.ttf,\n'
+      + ']\n'
+      + '\\newcommand{\\YggMockCover}{\\YggMockCoverLatin\\YggMockCoverHangul}';
+  })();
 
   const lines = [];
   // 모의고사형은 일반 페이지 헤더가 짝수/홀수 페이지 레이아웃이 달라야 하므로 `twoside` 활성화.
@@ -4129,7 +4290,7 @@ function buildPreamble({
   lines.push('\\usepackage{wrapfig}');
   // adjustbox: \includegraphics 에 'max width' 같은 확장 키 사용.
   lines.push('\\usepackage[export]{adjustbox}');
-  lines.push('\\usepackage{xcolor}');
+  lines.push('\\usepackage[table]{xcolor}');
   lines.push('\\usepackage[normalem]{ulem}');
   lines.push('\\usepackage{enumitem}');
   lines.push('\\usepackage{multicol}');
@@ -4184,6 +4345,7 @@ function buildPreamble({
   lines.push(subjectDisplayFontDirective);
   lines.push(topLabelFontDirective);
   lines.push(pretendardFontDirective);
+  lines.push(mockCoverFontDirective);
   // ── 숫자를 한글(HG) charclass 로 국지 편입하는 래퍼 ──────────────────────
   //   배경: xetexko 는 유니코드 charclass (HG/CJ/Latin 등) 에 따라 font instance 를
   //     자동 분기한다. `\newfontfamily\YggTopLabel{Malgun Gothic}` 같은 선언이 있어도
@@ -4248,14 +4410,14 @@ function buildPreamble({
   const formBoxSpec = '{\\tikz[baseline=(box.center)]'
     + '\\node[draw=black,line width=0.56pt,line join=round,line cap=round,'
     + 'rounded corners=2.205pt,minimum height=25.83pt,inner xsep=6pt,inner ysep=0pt,outer sep=0pt] (box) '
-    + '{{\\YggSubjectDisplay\\fontsize{14.5pt}{14.5pt}\\selectfont\\bfseries'
+    + '{{\\YggSubjectDisplay\\YggSubjectDisplayHangul\\fontsize{14.5pt}{14.5pt}\\selectfont\\bfseries'
     + '\\scalebox{0.95}[1]{홀수형}}};}';
   // 제목페이지 전용 큰 홀수형 박스. 스크린샷 기준으로 오른쪽에 별도로 배치되며,
   // 텍스트는 장평 95% + 박스 안 수직 중앙 정렬.
   const titleFormBoxSpec = '{\\tikz[baseline=(box.center)]'
     + '\\node[draw=black,line width=0.8pt,line join=round,line cap=round,'
     + 'rounded corners=3.0pt,minimum height=35.2pt,inner xsep=8.6pt,inner ysep=0pt,outer sep=0pt] (box) '
-    + '{{\\YggSubjectDisplay\\fontsize{20.7pt}{20.7pt}\\selectfont\\bfseries'
+    + '{{\\YggSubjectDisplay\\YggSubjectDisplayHangul\\fontsize{20.7pt}{20.7pt}\\selectfont\\bfseries'
     + '\\scalebox{0.95}[1]{홀수형}}};}';
   // 사용자 요청 20차: 제2교시 박스 높이만 10% 증가 (위치 = box.center baseline 유지).
   //   minimum height: 26pt → 28.6pt, rounded corners: 13pt → 14.3pt (height/2 유지, pill).
@@ -4307,44 +4469,20 @@ function buildPreamble({
     // 사용자 요청 23차: subjectTitle 에 숫자가 포함될 경우(예: "수학 1", "물리 2") 한글/숫자
     //   instance 분기가 일어나지 않도록 `\YggWithUnifiedDigits` 로 감싼다. 래퍼는 scope
     //   종료 시 charclass 를 원복하므로 본문에 영향 없음.
-    const centerTitleSpec = `\\YggWithUnifiedDigits{{\\YggSubject\\fontsize{22.88pt}{27.5pt}\\selectfont\\bfseries ${escapeLatexText(subjectTitle)}}}`;
+    const centerTitleSpec = '\\YggWithUnifiedDigits{{\\YggSubject\\YggSubjectHangul\\fontsize{22.88pt}{27.5pt}\\selectfont\\bfseries \\mockRunningTitle}}';
     lines.push('\\pagestyle{fancy}');
     lines.push('\\fancyhf{}');
-    // 사용자 요청 12차: 상단 페이지 라벨 전체를 추가로 5pt 더 아래로 이동.
-    //   일반 페이지 기준 raisebox = 14.37pt → 9.37pt.
-    //   [totalheight][depth] = 0pt 로 layout 에는 영향 없음.
-    // 사용자 요청 17차:
-    //   - `top=29.95mm` 으로 geometry 를 6pt 위로 이동. 헤더 영역 전체가 6pt 상승.
-    //   - 페이지번호는 "절대 위치 고정" 이 필요하므로 raisebox 를 9.37pt → 3.37pt 로 6pt 감소
-    //     → geometry 상승분(-6pt) + raisebox 감소분(+6pt) 상쇄 → 페이지번호 y = 불변.
-    //   - 홀수형박스는 raisebox 를 9.37pt 유지 → 헤더 상승분(-6pt) 만 반영되어 6pt 위로 이동.
-    //   - 가운데 "수학 영역" (centerTitleSpec) 은 raisebox 없음 → 자연히 6pt 위로 이동.
-    // 사용자 요청 19차:
-    //   - 비제목 페이지 디바이더를 3pt 위로 올림 (아래 mockLayRuleY 11pt→14pt 변경)
-    //   - 수학영역/홀수형박스도 3pt 위로 이동해 디바이더와 같이 상승
-    //   - 페이지라벨은 "절대 위치 고정" 이므로 raisebox 3.37pt 유지
-    //   - 수학영역: fancyhead[C] 전체를 \raisebox{3pt} 로 감싸 3pt 상승
-    //   - 홀수형박스: raisebox 9.37pt → 12.37pt (3pt 추가 상승)
-    // 사용자 요청 20차:
-    //   - 홀수형박스 스펙을 fbox → tikz(box.center) 로 교체 (제목페이지 스타일 참조, 70%).
-    //     tikz 박스는 baseline=(box.center) 이므로 raisebox 값은 "박스 중심의 상승량" 이 된다.
-    //     기존 fbox 시각 top 위치(≈baseline+28pt) 를 유지하도록 raisebox 12.37 → 15.7pt 로 조정.
-    //     (box 높이 24.6pt / 2 = 12.3pt + 15.7pt = 28.0pt, 기존 top 대비 거의 동일)
-    // 사용자 요청 21차: 홀수형박스 중심을 "수학 영역" 텍스트 vertical center 와 수평 정렬.
-    //   centerTitleSpec : font 22.88pt, 한글 글자 top ≈ baseline + 16pt, descender 없음 →
-    //                     visual center ≈ baseline + 8pt.  여기에 \raisebox{3pt} 적용 →
-    //                     수학영역 visual center ≈ hbox_baseline + 11pt.
-    //   홀수형박스      : tikz baseline=(box.center) 이므로 raisebox 값 = "박스 중심의 상승량".
-    //                     수학영역 center(11pt) 와 일치시키기 위해 raisebox 15.7pt → 11pt.
-    lines.push(isAssignmentProfile
-      ? `\\fancyhead[LE,RO]{\\raisebox{10.5pt}[0pt][0pt]{${assignmentPageNumSpec}}}`
-      : `\\fancyhead[LE,RO]{\\raisebox{3.37pt}[0pt][0pt]{${pageNumSpec}}}`);
-    lines.push(isAssignmentProfile
-      ? `\\fancyhead[C]{\\raisebox{10.5pt}[0pt][0pt]{${centerTitleSpec}}}`
-      : `\\fancyhead[C]{\\raisebox{3pt}[0pt][0pt]{${centerTitleSpec}}}`);
-    lines.push(isAssignmentProfile
-      ? `\\fancyhead[LO,RE]{${assignmentHeaderLogoGraphic}}`
-      : `\\fancyhead[LO,RE]{\\raisebox{11pt}[0pt][0pt]{${formBoxSpec}}}`);
+    if (!isNaesinSchoolProfile) {
+      lines.push(isAssignmentProfile
+        ? `\\fancyhead[LE,RO]{\\raisebox{10.5pt}[0pt][0pt]{${assignmentPageNumSpec}}}`
+        : `\\fancyhead[LE,RO]{\\raisebox{3.37pt}[0pt][0pt]{${pageNumSpec}}}`);
+      lines.push(isAssignmentProfile
+        ? `\\fancyhead[C]{\\raisebox{10.5pt}[0pt][0pt]{${centerTitleSpec}}}`
+        : `\\fancyhead[C]{\\raisebox{3pt}[0pt][0pt]{${centerTitleSpec}}}`);
+      lines.push(isAssignmentProfile
+        ? `\\fancyhead[LO,RE]{${assignmentHeaderLogoGraphic}}`
+        : `\\fancyhead[LO,RE]{\\raisebox{11pt}[0pt][0pt]{${formBoxSpec}}}`);
+    }
     // header rule / footer pagebox 는 절대 좌표로 그리므로 fancyhdr 의 기본 rule 은 끈다.
     lines.push('\\renewcommand{\\headrulewidth}{0pt}');
     lines.push('\\renewcommand{\\footrulewidth}{0pt}');
@@ -4391,80 +4529,134 @@ function buildPreamble({
     // 기본 매크로를 빈 값으로 선언해두기(제목페이지 아닌 경우 참조 오류 방지).
     lines.push('\\providecommand{\\mockTitlePageSubtitle}{}');
     lines.push('\\providecommand{\\mockTitlePageMain}{}');
+    lines.push('\\providecommand{\\mockTitlePageSub}{}');
+    lines.push(`\\providecommand{\\mockRunningTitle}{${escapeLatexText(subjectTitle || '수학 영역')}}`);
     // 과제형 전용: 제목페이지타이틀과 같은 줄 가운데에 표시되는 "과제목표" 텍스트.
     lines.push('\\providecommand{\\mockTitlePageGoal}{}');
+    lines.push('\\providecommand{\\gyeongsinFooterText}{}');
+    lines.push('\\providecommand{\\gyeongsinCopyrightSchool}{경신중학교}');
+    lines.push('\\providecommand{\\neunginHeaderSubject}{수\\hspace{0.85em}학}');
+    lines.push('\\providecommand{\\neunginHeaderGrade}{3학년}');
+    lines.push('\\providecommand{\\neunginPageText}{1 / 1}');
+    lines.push('\\providecommand{\\neunginFooterLogo}{}');
+    lines.push('\\providecommand{\\daeryunHeaderTitle}{2026학년도 2학기 중간시험 2학년 문제지}');
+    lines.push('\\providecommand{\\daeryunHeaderSubject}{수\\hspace{0.6em}학}');
+    lines.push('\\providecommand{\\daeryunPeriodLabel}{제 2 교시}');
+    lines.push('\\providecommand{\\daeryunSheetType}{답안지 D형}');
+    lines.push('\\providecommand{\\daeryunSubjectCode}{04}');
+    lines.push('\\providecommand{\\daeryunDateText}{9월 22일 화요일}');
+    lines.push('\\providecommand{\\daeryunFooterLeft}{2026학년도 2학기 중간시험}');
+    lines.push('\\providecommand{\\daeryunFooterRight}{대륜중학교 2학년 수학}');
+    lines.push('\\providecommand{\\daeryunCurrentPage}{1}');
+    lines.push('\\providecommand{\\daeryunTotalPages}{1}');
+    lines.push('\\providecommand{\\daeryunTotalSheets}{1}');
+    lines.push('\\providecommand{\\daeryunObjectiveCount}{12}');
+    lines.push('\\providecommand{\\daeryunEssayCount}{4}');
+    lines.push('\\providecommand{\\dongdoHeaderTitle}{2024학년도 수학과 제3학년 2학기 기말고사}');
+    lines.push('\\providecommand{\\dongdoSubjectCode}{05}');
+    lines.push('\\providecommand{\\dongdoTotalCount}{22}');
+    lines.push('\\providecommand{\\dongdoObjectiveCount}{20}');
+    lines.push('\\providecommand{\\dongdoEssayCount}{2}');
+    lines.push('\\providecommand{\\dongdoTotalScore}{100점}');
+    lines.push('\\providecommand{\\dongdoObjectiveScore}{80점}');
+    lines.push('\\providecommand{\\dongdoEssayScore}{20점}');
+    lines.push('\\providecommand{\\dongdoFooterLeft}{(동도중) 3학년 수학}');
+    lines.push('\\providecommand{\\dongdoCurrentPage}{1}');
+    lines.push('\\providecommand{\\dongdoTotalPages}{1}');
+    lines.push('\\providecommand{\\dongdoTotalSheets}{1}');
+    lines.push('\\providecommand{\\soseonHeaderExamTitle}{3학년 2학기 기말시험}');
+    lines.push('\\providecommand{\\soseonHeaderDatePeriod}{2026년 10월 27일 3교시}');
+    lines.push('\\providecommand{\\soseonHeaderSubject}{【\\ 수\\ 학\\ 】}');
+    lines.push('\\providecommand{\\soseonSubjectCode}{04}');
+    lines.push('\\providecommand{\\soseonObjectiveCount}{18}');
+    lines.push('\\providecommand{\\soseonEssayCount}{4}');
+    lines.push('\\providecommand{\\soseonTotalCount}{22}');
+    lines.push('\\providecommand{\\soseonTotalPages}{5}');
+    lines.push('\\providecommand{\\soseonFooterText}{(3학년 수학 교과 5쪽 중 1쪽)}');
+    lines.push('\\providecommand{\\oseongHeaderExamTitle}{2026학년도 오성중학교 2학기 기말시험 문제지}');
+    lines.push('\\providecommand{\\oseongHeaderSubject}{중3 수학}');
+    lines.push('\\providecommand{\\oseongSubjectCode}{04}');
+    lines.push('\\providecommand{\\oseongObjectiveBreakdownTex}{3점$\\times$3문항=\\phantom{0}9점\\\\4점$\\times$9문항=36점\\\\5점$\\times$4문항=20점}');
+    lines.push('\\providecommand{\\oseongEssayCount}{4}');
+    lines.push('\\providecommand{\\oseongEssayScore}{35점}');
+    lines.push('\\providecommand{\\oseongFooterText}{중3-수학-1/4}');
+    lines.push('\\providecommand{\\jeonghwaFooterLineOne}{정화중학교 2학년 수학 8 - 2}');
+    lines.push('\\providecommand{\\jeonghwaFooterLineTwo}{- 이 문제지의 무단 복제를 금합니다. -}');
+    lines.push('\\providecommand{\\hwanggeumFooterCenter}{5 - 2}');
+    lines.push('\\providecommand{\\hwanggeumFooterRight}{3학년 수학과 황금중학교}');
+    if (isNaesinSchoolProfile) {
+      lines.push('\\newhangulfontfamily\\gyeongsinGothicHangul{Malgun Gothic}[BoldFont = {Malgun Gothic Bold}]');
+      lines.push('\\newcommand{\\gyeongsinGothic}{\\YggTopLabel\\gyeongsinGothicHangul}');
+    }
+    if (isDaeryunProfile || isOseongProfile || isJeonghwaProfile || isHwanggeumProfile) {
+      lines.push('\\newhangulfontfamily\\daeryunHeavyHangul{Malgun Gothic Bold}[BoldFont = {Malgun Gothic Bold}, FakeBold=1.4, BoldFeatures={FakeBold=1.4}]');
+      lines.push('\\newcommand{\\jeonghwaBoldLt}{\\tikz[baseline=-0.8pt]\\draw[line width=1.35pt,line cap=round,line join=round] (5.0pt,6.2pt)--(0.4pt,3.1pt)--(5.0pt,0pt);}');
+      lines.push('\\newcommand{\\jeonghwaBoldGt}{\\tikz[baseline=-0.8pt]\\draw[line width=1.35pt,line cap=round,line join=round] (0.4pt,6.2pt)--(5.0pt,3.1pt)--(0.4pt,0pt);}');
+    }
+    if (isDongdoProfile) {
+      lines.push('\\newhangulfontfamily\\dongdoTitleHangul{Malgun Gothic}[FakeBold=0.4]');
+    }
+    lines.push('\\newif\\ifgyeongsinlastpage');
+    lines.push('\\gyeongsinlastpagefalse');
+    lines.push('\\newif\\ifjeonghwasublastcolleft');
+    lines.push('\\jeonghwasublastcolleftfalse');
+    lines.push('\\newif\\ifjeonghwasublastcolright');
+    lines.push('\\jeonghwasublastcolrightfalse');
+    lines.push('\\newif\\ifmockpagenotice');
+    lines.push('\\mockpagenoticefalse');
+    lines.push('\\newif\\ifmockpagenoticefull');
+    lines.push('\\mockpagenoticefullfalse');
+    lines.push('\\providecommand{\\mockPageNoticeEmphasis}{}');
+    lines.push('\\newlength{\\gyeongsinColFrameW}');
     lines.push('\\fancypagestyle{mocktitle}{%');
     lines.push('  \\fancyhf{}%');
-    // 사용자 요청 16차:
-    //   - 제목페이지의 부제/페이지라벨 정렬은 유지
-    //   - 가로 디바이더와 슬롯 시작점만 더 아래로
-    //   - 오른쪽은 페이지번호 + 홀수형 박스 세로 스택
-    //   - 왼쪽은 기본 "제 2교시" pill 박스. 과제형은 로고만 두고 pill 은 제거.
-    lines.push(`  \\fancyhead[LE]{\\raisebox{47.53pt}[0pt][0pt]{${pageNumSpec}}}%`);
-    lines.push(isAssignmentProfile
-      ? '  \\fancyhead[LO]{}%'
-      : `  \\fancyhead[LO]{\\raisebox{13.1pt}[0pt][0pt]{${titleSessionBoxSpec}}}%`);
-    lines.push(`  \\fancyhead[RO]{${isAssignmentProfile ? assignmentTitleRightHeaderSpec : titleRightHeaderSpec}}%`);
-    // 부제(위) → \\[11.7pt] → 수학영역(아래, 큰글씨) 순서.
-    //   parbox[b] 로 마지막 줄 baseline 이 head box 바닥에 align.
-    lines.push('  \\fancyhead[C]{%');
-    if (isAssignmentProfile) {
-      // 과제목표(가운데): \rlap 으로 폭 0 의 오버레이를 만들어 본문폭 정중앙에 배치한다.
-      //   - 같은 hbox 줄에 놓이므로 baseline 이 제목(parbox[b] 하단)과 자동으로 수평 정렬.
-      //   - 글자 크기는 제목페이지타이틀의 1/3, 색은 회색.
-      lines.push('    \\rlap{\\makebox[\\textwidth][c]{%');
-      lines.push('      \\ifx\\mockTitlePageGoal\\empty\\else%');
-      lines.push(`      \\textcolor[gray]{0.55}{{\\fontsize{\\the\\dimexpr ${titleGoalScale}\\mockTitleFontSize\\relax}{\\the\\dimexpr ${titleGoalScale}\\mockTitleLead\\relax}`
-        + '\\selectfont\\mockTitlePageGoal}}%');
-      lines.push('      \\fi%');
-      lines.push('    }}%');
-      lines.push('    \\makebox[\\textwidth][l]{%');
-      lines.push('      \\parbox[b]{\\dimexpr 0.64\\textwidth\\relax}{%');
-      lines.push('        \\raggedright%');
-    } else {
-      lines.push('    \\parbox[b]{\\dimexpr 0.6\\textwidth\\relax}{%');
-      lines.push('      \\centering%');
-    }
-    // 사용자 요청 14차:
-    //   - 부제/메인타이틀 폰트를 HTML title row 와 같은 YggSubjectDisplay 로 통일
-    //   - 메인타이틀 크기 +10% (기존 1.32 → 1.452)
-    //   - 부제↔메인타이틀 간격 +30% (11.7pt → 15.21pt)
-    // 사용자 요청 22차: 부제("2026학년도 …") 의 숫자 '2026' 이 한글과 다른 instance 로
-    //   분기되는 이질감 제거를 위해 `\YggWithUnifiedDigits` 래퍼로 감싼다. 래퍼는 지역 scope
-    //   에서만 0-9 의 charclass 를 HG 로 바꿨다가 즉시 원복하므로 본문 숫자에는 영향 없음.
-    lines.push('      \\ifx\\mockTitlePageSubtitle\\empty\\else%');
-    lines.push(`      \\YggWithUnifiedDigits{{\\YggTopLabel\\fontsize{\\the\\dimexpr ${titleTopScale}\\mockTitleTopFontSize\\relax}{\\the\\dimexpr ${titleTopScale}\\mockTitleTopLead\\relax}`
-      + '\\selectfont\\mockTitlePageSubtitle}}\\\\[15.21pt]%');
-    lines.push('      \\fi%');
-    // 사용자 요청 23차: 제목페이지 메인 타이틀(기본 "수학 영역") 에 숫자가 올 수 있으므로
-    //   `\YggWithUnifiedDigits` 로 감싸 한글-숫자 instance 통일. 래퍼 범위는 이 한 줄.
-    // 사용자 요청 24차: `\bfseries` + 22pt ↑ 환경에서 한글 어간격이 시각적으로 좁아 보이는
-    //   문제("띄어쓰기가 반영이 안된 것처럼 보임") 를 `\spaceskip` 으로 보강. `\spaceskip`
-    //   은 0pt 가 아닐 때 interword-glue 를 덮어쓰므로 그룹 내에서만 적용되도록 스코프 유지.
-    // 사용자 요청 25차: 0.5em 은 과도 → 80% 수준인 0.4em 로 축소. 한글 사이 공간이
-    //   시각적으로 "1글자" 정도로 자연스러워지도록.
-    // 제목페이지 타이틀("수학 영역")을 Pretendard 로 교체 (과제형·모의고사형 공통).
-    //   한글 라우팅: kotex(xetexko) 에서 `\newfontfamily`(\YggPretendard) 는 Latin 전용이라
-    //   한글에는 영향이 없다. 한글까지 바꾸려면 `\newhangulfontfamily`(\YggPretendardHangul)
-    //   가 필요하므로 둘을 함께 적용한다.
-    //   레이아웃 불변 보장: \vphantom 의 본문은 원본 폰트 렌더(\YggSubjectDisplay 는 한글에
-    //   무영향 → 한글은 기존 main hangul 폰트로 렌더)와 동일 = "교체 전 타이틀" 의 정확한
-    //   height/depth. Pretendard 글리프는 \smash(높이/깊이 0)로 같은 baseline 위에 올린다.
-    //   → parbox[b] 마지막줄 baseline·박스 높이가 종전과 동일 → 부제 위치/가로선(절대좌표)/
-    //   본문 슬롯 시작이 1pt 도 움직이지 않는다(검증: 차이 픽셀이 타이틀 글자에만 국한).
-    //   (Pretendard 가 더 커도 시각적으로만 확장될 뿐 레이아웃 영향 없음 — 크기 축소 허용)
-    lines.push(`      \\YggWithUnifiedDigits{{\\fontsize{\\the\\dimexpr ${titleMainScale}\\mockTitleFontSize\\relax}{\\the\\dimexpr ${titleMainScale}\\mockTitleLead\\relax}`
-      + '\\selectfont\\bfseries\\spaceskip=0.4em\\xspaceskip=0.4em'
-      + '\\vphantom{{\\YggSubjectDisplay\\mockTitlePageMain}}'
-      + '\\smash{{\\YggPretendard\\YggPretendardHangul\\mockTitlePageMain}}}}%');
-    lines.push(isAssignmentProfile ? '      }%' : '    }%');
-    if (isAssignmentProfile) {
-      if (logoEnabled) {
-        lines.push(`      \\hfill ${assignmentTitleLogoGraphic}%`);
+    if (!isNaesinSchoolProfile) {
+      lines.push(`  \\fancyhead[LE]{\\raisebox{47.53pt}[0pt][0pt]{${pageNumSpec}}}%`);
+      lines.push(isAssignmentProfile
+        ? '  \\fancyhead[LO]{}%'
+        : `  \\fancyhead[LO]{\\raisebox{13.1pt}[0pt][0pt]{${titleSessionBoxSpec}}}%`);
+      lines.push(`  \\fancyhead[RO]{${isAssignmentProfile ? assignmentTitleRightHeaderSpec : titleRightHeaderSpec}}%`);
+      lines.push('  \\fancyhead[C]{%');
+      if (isAssignmentProfile) {
+        lines.push('    \\rlap{\\makebox[\\textwidth][c]{%');
+        lines.push('      \\ifx\\mockTitlePageGoal\\empty\\else%');
+        lines.push(`      \\textcolor[gray]{0.55}{{\\fontsize{\\the\\dimexpr ${titleGoalScale}\\mockTitleFontSize\\relax}{\\the\\dimexpr ${titleGoalScale}\\mockTitleLead\\relax}`
+          + '\\selectfont\\mockTitlePageGoal}}%');
+        lines.push('      \\fi%');
+        lines.push('    }}%');
+        lines.push('    \\makebox[\\textwidth][l]{%');
+        lines.push('      \\parbox[b]{\\dimexpr 0.64\\textwidth\\relax}{%');
+        lines.push('        \\raggedright%');
+      } else {
+        lines.push('    \\parbox[b]{\\dimexpr 0.76\\textwidth\\relax}{%');
+        lines.push('      \\centering%');
       }
-      lines.push('    }%');
+      lines.push('      \\ifx\\mockTitlePageSubtitle\\empty\\else%');
+      lines.push(`      \\YggWithUnifiedDigits{{\\YggTopLabel\\fontsize{\\the\\dimexpr ${titleTopScale}\\mockTitleTopFontSize\\relax}{\\the\\dimexpr ${titleTopScale}\\mockTitleTopLead\\relax}`
+        + '\\selectfont\\mockTitlePageSubtitle}}\\\\[15.21pt]%');
+      lines.push('      \\fi%');
+      const titleMainFontMacro = isAssignmentProfile
+        ? '\\YggPretendard\\YggPretendardHangul'
+        : '\\YggSubjectDisplay\\YggSubjectDisplayHangul';
+      const titleSubFontMacro = isAssignmentProfile
+        ? '\\YggPretendardRegular\\YggPretendardRegularHangul'
+        : '\\YggSubject\\YggSubjectHangul';
+      lines.push(`      \\YggWithUnifiedDigits{{\\fontsize{\\the\\dimexpr ${titleMainScale}\\mockTitleFontSize\\relax}{\\the\\dimexpr ${titleMainScale}\\mockTitleLead\\relax}`
+        + '\\selectfont\\bfseries\\spaceskip=0.4em\\xspaceskip=0.4em'
+        + '\\vphantom{{\\YggSubjectDisplay\\mockTitlePageMain}}'
+        + `\\smash{{${titleMainFontMacro}\\mockTitlePageMain}`
+        + '\\ifx\\mockTitlePageSub\\empty\\else'
+        + `{\\fontsize{\\the\\dimexpr 9\\dimexpr ${titleMainScale}\\mockTitleFontSize\\relax/10\\relax}{\\the\\dimexpr 9\\dimexpr ${titleMainScale}\\mockTitleLead\\relax/10\\relax}\\selectfont\\bfseries\\spaceskip=0.26em\\xspaceskip=0.26em ${titleSubFontMacro}\\mockTitlePageSub}`
+        + '\\fi}}}%');
+      lines.push(isAssignmentProfile ? '      }%' : '    }%');
+      if (isAssignmentProfile) {
+        if (logoEnabled) {
+          lines.push(`      \\hfill ${assignmentTitleLogoGraphic}%`);
+        }
+        lines.push('    }%');
+      }
+      lines.push('  }%');
     }
-    lines.push('  }%');
     lines.push('  \\renewcommand{\\headrulewidth}{0pt}%');
     lines.push('  \\renewcommand{\\footrulewidth}{0pt}%');
     lines.push('  \\fancyfoot{}%');
@@ -4627,77 +4819,497 @@ function buildPreamble({
       : '  \\addtolength{\\mockLayVRuleStartY}{14pt}%');
 
     lines.push('  \\begin{tikzpicture}[remember picture,overlay]%');
-    // 상단 header rule 과 세로 단구분선이 '한 점' 에서 만나도록 공유 y 좌표 사용.
-    //   \mockLayRuleY = \mockLayTopY + 11pt (본문 상단선보다 11pt 위, 일반 페이지용).
-    //   → 가로선과 슬롯 첫 줄(= \mockLayTopY) 사이 간격 = 11pt.
-    // 사용자 요청 17차: +14pt → +11pt 로 3pt 축소 (디바이더가 본문에 더 가까워짐).
-    //   효과: 디바이더-라벨박스 top 사이 간격이 10pt → 7pt 로 ~30% 감소.
-    //   단, 이 변경만으로는 페이지라벨-디바이더 간격이 3pt 증가하므로
-    //   위의 `top=29.95mm` 6pt 축소와 결합해 전체적으로 페이지라벨-디바이더 간격은
-    //   14.87pt → 11.87pt (20% 감소) 로 맞춘다.
-    // 사용자 요청 19차: +11pt → +14pt 로 3pt 확대. 두 가지 목적 동시 달성:
-    //   1) 제목페이지 디바이더-슬롯 간격(14pt)과 일치 → 페이지 간 일관성.
-    //   2) 비제목 페이지 디바이더가 3pt 위로 이동 → 페이지라벨과의 간격 ~20% 축소.
-    //      (디바이더↔페이지라벨 하단 간격 ≈ 11.85pt → 8.85pt, 약 25% 감소.)
-    //   수학영역/홀수형 박스는 위 raisebox 보정으로 3pt 함께 상승.
-    lines.push(isAssignmentProfile
-      ? '    \\pgfmathsetlengthmacro{\\mockLayRuleY}{\\mockLayTopY+20pt}%'
-      : '    \\pgfmathsetlengthmacro{\\mockLayRuleY}{\\mockLayTopY+14pt}%');
-    // 상단 header rule + 세로 단구분선.
-    //   - 일반 페이지  : 가로선 y = \mockLayRuleY        / 세로선 시작 y = \mockLayRuleY.
-    //   - 제목페이지   : 가로선 y = \mockLayVRuleStartY  / 세로선 시작 y = \mockLayVRuleStartY.
-    //                   → 제목페이지에선 가로선도 헤더 아래로 내려 세로선 상단과 정확히 교차.
-    // 세로선이 페이지박스 위에서 끝나는 y 좌표 (본문 하단 + 5pt). 기존엔 본문 하단(\mockLayBotY)까지
-    //   그렸으나 사용자 요청으로 세로선 종료 지점을 5pt 위로 올린다.
-    lines.push(isAssignmentProfile
-      ? '    \\pgfmathsetlengthmacro{\\mockLayVRuleEndY}{\\mockLayBotY-12pt}%'
-      : '    \\pgfmathsetlengthmacro{\\mockLayVRuleEndY}{\\mockLayBotY+5pt}%');
-    // 굵기 정책(사용자 요청):
-    //   - 가로선 / 페이지박스 : 0.6pt (기존과 동일).
-    //   - 세로 단구분선       : 0.8pt (가로선보다 약간 더 두껍게 — "단 구분선만 조금 더 두껍게").
-    lines.push('    \\ifmocktitlepage%');
-    // 제목페이지: 가로선 (수학영역 아래).
-    lines.push('      \\draw[line width=0.6pt]%');
-    lines.push('        ([shift={(\\mockLayLeftX,\\mockLayVRuleStartY)}]current page.north west) --%');
-    lines.push('        ([shift={(\\mockLayRightX,\\mockLayVRuleStartY)}]current page.north west);%');
-    // 사용자 요청 10차: 세로선 시작 y 를 **가로선과 동일**한 \mockLayVRuleStartY 로 맞춤
-    //   → 가로선과 세로선이 붙어있음. (메인 타이틀 폰트가 +20% 커졌지만 가로선 offset 을
-    //   14pt 로 낮췄기 때문에 여전히 수학영역 아래에 위치 → 관통 없음.)
-    lines.push('      \\draw[line width=0.8pt]%');
-    lines.push('        ([shift={(\\mockLayCenterX,\\mockLayVRuleStartY)}]current page.north west) --%');
-    lines.push('        ([shift={(\\mockLayCenterX,\\mockLayVRuleEndY)}]current page.north west);%');
-    lines.push('    \\else%');
-    // 일반 페이지: 가로선 (본문 상단보다 14pt 위 = 슬롯 첫 줄과 14pt 간격).
-    lines.push('      \\draw[line width=0.6pt]%');
-    lines.push('        ([shift={(\\mockLayLeftX,\\mockLayRuleY)}]current page.north west) --%');
-    lines.push('        ([shift={(\\mockLayRightX,\\mockLayRuleY)}]current page.north west);%');
-    // 일반 페이지: 세로선 (가로선 y ~ 본문 하단 + 5pt).
-    lines.push('      \\draw[line width=0.8pt]%');
-    lines.push('        ([shift={(\\mockLayCenterX,\\mockLayRuleY)}]current page.north west) --%');
-    lines.push('        ([shift={(\\mockLayCenterX,\\mockLayVRuleEndY)}]current page.north west);%');
-    lines.push('    \\fi%');
-    if (isAssignmentProfile) {
-      lines.push('    \\pgfmathsetlengthmacro{\\mockLayAssignmentFooterY}{\\mockLayVRuleEndY-22pt}%');
-      lines.push('    \\node[anchor=base,inner sep=0pt,font=\\fontsize{12.96pt}{14.5pt}\\selectfont\\bfseries] at ([shift={(\\mockLayCenterX,\\mockLayAssignmentFooterY)}]current page.north west) {\\thepage};%');
-      if (logoEnabled) {
-        lines.push('    \\ifodd\\value{page}%');
-        lines.push(`      \\node[anchor=base west,inner sep=0pt,font=\\fontsize{9.8pt}{11pt}\\selectfont] at ([shift={(\\mockLayLeftX,\\mockLayAssignmentFooterY)}]current page.north west) {{\\YggPretendardRegular\\YggPretendardRegularHangul ${safeAcademyName}}};%`);
-        lines.push('    \\else%');
-        lines.push(`      \\node[anchor=base east,inner sep=0pt,font=\\fontsize{9.8pt}{11pt}\\selectfont] at ([shift={(\\mockLayRightX,\\mockLayAssignmentFooterY)}]current page.north west) {${safeAssignmentFooterTitle}};%`);
+    if (isGyeongsinProfile) {
+      lines.push('    \\pgfmathsetlengthmacro{\\gyeongsinFrameLeftX}{\\mockLayLeftX-14pt}%');
+      lines.push('    \\pgfmathsetlengthmacro{\\gyeongsinFrameRightX}{\\mockLayRightX+14pt}%');
+      lines.push('    \\pgfmathsetlengthmacro{\\mockLayRuleY}{\\mockLayTopY+14pt}%');
+      // 본문 테두리 하단. 저작권 박스와 쪽 표기는 이 테두리 밖 아래에 따로 그린다.
+      lines.push('    \\pgfmathsetlengthmacro{\\mockLayVRuleEndY}{\\mockLayBotY-2pt}%');
+      lines.push('    \\ifmocktitlepage%');
+      // 첫 문제 페이지: 테두리 상단(일반 페이지와 같은 높이) 아래 104.8pt 제목 칸 + 31.8pt 과목명·실시일자 칸.
+      lines.push('      \\pgfmathsetlengthmacro{\\gyeongsinHeaderTopY}{\\mockLayVRuleStartY+136.6pt}%');
+      lines.push('      \\pgfmathsetlengthmacro{\\gyeongsinHeaderMidY}{\\mockLayVRuleStartY+31.8pt}%');
+      lines.push('      \\draw[line width=0.7pt]%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX,\\gyeongsinHeaderTopY)}]current page.north west) rectangle%');
+      lines.push('        ([shift={(\\gyeongsinFrameRightX,\\mockLayVRuleEndY)}]current page.north west);%');
+      lines.push('      \\draw[line width=0.7pt]%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX,\\gyeongsinHeaderMidY)}]current page.north west) --%');
+      lines.push('        ([shift={(\\gyeongsinFrameRightX,\\gyeongsinHeaderMidY)}]current page.north west);%');
+      lines.push('      \\draw[line width=0.7pt]%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX,\\mockLayVRuleStartY)}]current page.north west) --%');
+      lines.push('        ([shift={(\\gyeongsinFrameRightX,\\mockLayVRuleStartY)}]current page.north west);%');
+      lines.push('      \\node[anchor=west,inner sep=0pt] at ([shift={(\\gyeongsinFrameLeftX+48pt,\\gyeongsinHeaderMidY+52.4pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{26pt}{30pt}\\selectfont\\spaceskip=0.42em\\xspaceskip=0.42em \\mockTitlePageSubtitle}};%');
+      lines.push('      \\node[anchor=west,inner sep=0pt] at ([shift={(\\gyeongsinFrameLeftX+12.6pt,\\mockLayVRuleStartY+15.9pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{12.5pt}{15pt}\\selectfont\\bfseries 과목명:\\ \\mockTitlePageMain}};%');
+      lines.push('      \\node[anchor=east,inner sep=0pt] at ([shift={(\\gyeongsinFrameRightX-11.7pt,\\mockLayVRuleStartY+15.9pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{12.5pt}{15pt}\\selectfont\\bfseries\\spaceskip=0.75em\\xspaceskip=0.75em \\mockTitlePageGoal}};%');
+      lines.push('      \\draw[line width=0.7pt]%');
+      lines.push('        ([shift={(\\mockLayCenterX,\\mockLayVRuleStartY)}]current page.north west) --%');
+      lines.push('        ([shift={(\\mockLayCenterX,\\mockLayVRuleEndY)}]current page.north west);%');
+      lines.push('    \\else%');
+      lines.push('      \\draw[line width=0.7pt]%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX,\\mockLayRuleY)}]current page.north west) rectangle%');
+      lines.push('        ([shift={(\\gyeongsinFrameRightX,\\mockLayVRuleEndY)}]current page.north west);%');
+      lines.push('      \\draw[line width=0.7pt]%');
+      lines.push('        ([shift={(\\mockLayCenterX,\\mockLayRuleY)}]current page.north west) --%');
+      lines.push('        ([shift={(\\mockLayCenterX,\\mockLayVRuleEndY)}]current page.north west);%');
+      lines.push('    \\fi%');
+      // 마지막 문제 페이지: 오른쪽 단 하단 안쪽에 회색 확인 사항 박스.
+      lines.push('    \\ifgyeongsinlastpage%');
+      lines.push('      \\pgfmathsetlengthmacro{\\gyeongsinCheckBotY}{\\mockLayVRuleEndY+14pt}%');
+      lines.push('      \\pgfmathsetlengthmacro{\\gyeongsinCheckTopY}{\\mockLayVRuleEndY+69.6pt}%');
+      lines.push('      \\filldraw[fill=black!14,draw=black,line width=0.6pt]%');
+      lines.push('        ([shift={(\\mockLayCenterX+7pt,\\gyeongsinCheckBotY)}]current page.north west) rectangle%');
+      lines.push('        ([shift={(\\gyeongsinFrameRightX-12pt,\\gyeongsinCheckTopY)}]current page.north west);%');
+      lines.push('      \\node[anchor=west,inner sep=0pt] at ([shift={(\\mockLayCenterX+15pt,\\mockLayVRuleEndY+41.8pt)}]current page.north west)%');
+      lines.push('        {\\parbox{\\dimexpr\\gyeongsinFrameRightX-\\mockLayCenterX-35pt\\relax}{\\setstretch{1}\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{11.5pt}{18.6pt}\\selectfont'
+        + ' \\makebox[1.35em][l]{⊙}확인 사항\\\\'
+        + '\\makebox[1.35em][l]{•}답안지의 해당란에 필요한 내용을 정확히 기입(표기)\\\\'
+        + '\\hspace*{1.35em}했는지 확인하시오.}}};%');
+      lines.push('      \\global\\gyeongsinlastpagefalse%');
+      lines.push('    \\fi%');
+      lines.push('    \\draw[line width=0.6pt]%');
+      lines.push('      ([shift={(\\gyeongsinFrameLeftX+4pt,\\mockLayVRuleEndY-4.5pt)}]current page.north west) rectangle%');
+      lines.push('      ([shift={(\\gyeongsinFrameRightX-4pt,\\mockLayVRuleEndY-21pt)}]current page.north west);%');
+      lines.push('    \\node[anchor=center,inner sep=0pt] at ([shift={(\\mockLayCenterX,\\mockLayVRuleEndY-12.75pt)}]current page.north west)%');
+      lines.push('      {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{8.4pt}{10pt}\\selectfont 이 시험문제의 저작권은 \\gyeongsinCopyrightSchool 에 있습니다. 저작권법에 의해 보호받는 저작물이므로 전재와 복제는 금지되며, 이를 어길 시 저작권법에 의거 처벌될 수 있습니다.}};%');
+      lines.push('    \\node[anchor=center,inner sep=0pt] at ([shift={(\\mockLayCenterX,\\mockLayVRuleEndY-37pt)}]current page.north west)%');
+      lines.push('      {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{13pt}{15pt}\\selectfont\\bfseries \\gyeongsinFooterText}};%');
+    } else if (isNeunginProfile) {
+      lines.push('    \\pgfmathsetlengthmacro{\\mockLayRuleY}{\\mockLayTopY+14pt}%');
+      lines.push('    \\pgfmathsetlengthmacro{\\mockLayVRuleEndY}{\\mockLayBotY-2pt}%');
+      lines.push('    \\node[anchor=center,inner sep=0pt] at ([shift={(\\mockLayCenterX,\\mockLayRuleY+24pt)}]current page.north west)%');
+      lines.push('      {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{24pt}{28pt}\\selectfont\\bfseries \\neunginHeaderSubject}};%');
+      lines.push('    \\filldraw[fill=black!14,draw=black,line width=0.6pt,rounded corners=6.5pt]%');
+      lines.push('      ([shift={(\\mockLayRightX-56pt,\\mockLayRuleY+8pt)}]current page.north west) rectangle%');
+      lines.push('      ([shift={(\\mockLayRightX,\\mockLayRuleY+32pt)}]current page.north west);%');
+      lines.push('    \\node[anchor=center,inner sep=0pt] at ([shift={(\\mockLayRightX-28pt,\\mockLayRuleY+20pt)}]current page.north west)%');
+      lines.push('      {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{12.5pt}{15pt}\\selectfont\\bfseries \\neunginHeaderGrade}};%');
+      lines.push('    \\draw[line width=0.7pt]%');
+      lines.push('      ([shift={(\\mockLayLeftX,\\mockLayRuleY)}]current page.north west) --%');
+      lines.push('      ([shift={(\\mockLayRightX,\\mockLayRuleY)}]current page.north west);%');
+      lines.push('    \\draw[line width=0.7pt]%');
+      lines.push('      ([shift={(\\mockLayCenterX,\\mockLayRuleY)}]current page.north west) --%');
+      lines.push('      ([shift={(\\mockLayCenterX,\\mockLayVRuleEndY)}]current page.north west);%');
+      lines.push('    \\draw[line width=0.7pt]%');
+      lines.push('      ([shift={(\\mockLayLeftX,\\mockLayVRuleEndY)}]current page.north west) --%');
+      lines.push('      ([shift={(\\mockLayRightX,\\mockLayVRuleEndY)}]current page.north west);%');
+      lines.push('    \\ifgyeongsinlastpage%');
+      lines.push('      \\pgfmathsetlengthmacro{\\neunginCheckBotY}{\\mockLayVRuleEndY+18pt}%');
+      lines.push('      \\pgfmathsetlengthmacro{\\neunginCheckTopY}{\\neunginCheckBotY+39pt}%');
+      lines.push('      \\filldraw[fill=white,draw=black,line width=0.6pt]%');
+      lines.push('        ([shift={(\\mockLayCenterX+7pt,\\neunginCheckBotY)}]current page.north west) rectangle%');
+      lines.push('        ([shift={(\\mockLayRightX,\\neunginCheckTopY)}]current page.north west);%');
+      lines.push('      \\node[anchor=west,inner sep=0pt] at ([shift={(\\mockLayCenterX+17pt,\\neunginCheckBotY+19.5pt)}]current page.north west)%');
+      lines.push('        {\\parbox{\\dimexpr\\mockLayRightX-\\mockLayCenterX-24pt\\relax}{\\setstretch{1}\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{11pt}{16.5pt}\\selectfont\\bfseries'
+        + ' *\\ 답안지의 해당란에 필요한 내용을 정확히 기입(표기)했는지\\endgraf'
+        + '\\hspace*{0.85em}확인하시오.\\endgraf}}};%');
+      lines.push('      \\global\\gyeongsinlastpagefalse%');
+      lines.push('    \\fi%');
+      lines.push('    \\node[anchor=west,inner sep=0pt] at ([shift={(\\mockLayLeftX,\\mockLayVRuleEndY-18pt)}]current page.north west)%');
+      lines.push('      {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{9.5pt}{12pt}\\selectfont 이 시험지의 무단 전재 또는 복제를 금합니다.}};%');
+      lines.push('    \\node[anchor=center,inner sep=0pt] at ([shift={(\\mockLayCenterX,\\mockLayVRuleEndY-18pt)}]current page.north west)%');
+      lines.push('      {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{11pt}{13pt}\\selectfont\\bfseries \\neunginPageText}};%');
+      lines.push('    \\node[anchor=east,inner sep=0pt] at ([shift={(\\mockLayRightX,\\mockLayVRuleEndY-18pt)}]current page.north west)%');
+      lines.push('      {\\neunginFooterLogo\\ensuremath{\\vcenter{\\hbox{\\vbox to 17.6pt{\\hbox{\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{12pt}{12pt}\\selectfont\\bfseries \\gyeongsinCopyrightSchool}}\\nointerlineskip\\vfill\\hbox{\\gyeongsinGothic\\fontsize{5.4pt}{5.4pt}\\selectfont\\bfseries \\raisebox{0pt}[\\height][0pt]{NEUNGIN MIDDLE SCHOOL}}}}}}};%');
+    } else if (isDaeryunProfile) {
+      lines.push('    \\pgfmathsetlengthmacro{\\mockLayRuleY}{\\mockLayTopY+14pt}%');
+      lines.push('    \\pgfmathsetlengthmacro{\\mockLayVRuleEndY}{\\mockLayBotY-2pt}%');
+      lines.push('    \\ifmocktitlepage%');
+      lines.push('      \\pgfmathsetlengthmacro{\\daeryunRuleY}{\\mockLayTopY+14pt}%');
+      lines.push('      \\node[anchor=center,inner sep=0pt] at ([shift={(\\mockLayCenterX,\\daeryunRuleY+112.5pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{19pt}{22pt}\\selectfont\\bfseries\\spaceskip=0.45em\\xspaceskip=0.45em \\daeryunHeaderTitle}};%');
+      lines.push('      \\node[anchor=east,inner sep=0pt] at ([shift={(\\mockLayRightX-2pt,\\daeryunRuleY+114.2pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{20pt}{23pt}\\selectfont\\bfseries \\daeryunCurrentPage}};%');
+      lines.push('      \\fill[black!45,rounded corners=9.5pt]%');
+      lines.push('        ([shift={(\\mockLayCenterX-88.8pt,\\daeryunRuleY+48.6pt)}]current page.north west) rectangle%');
+      lines.push('        ([shift={(\\mockLayCenterX+95.8pt,\\daeryunRuleY+89.8pt)}]current page.north west);%');
+      lines.push('      \\filldraw[fill=white,draw=black,line width=0.95pt,rounded corners=9.5pt]%');
+      lines.push('        ([shift={(\\mockLayCenterX-92.3pt,\\daeryunRuleY+52.1pt)}]current page.north west) rectangle%');
+      lines.push('        ([shift={(\\mockLayCenterX+92.3pt,\\daeryunRuleY+93.3pt)}]current page.north west);%');
+      lines.push('      \\node[anchor=center,inner sep=0pt] at ([shift={(\\mockLayCenterX,\\daeryunRuleY+72.7pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{30pt}{34pt}\\selectfont\\bfseries \\daeryunHeaderSubject}};%');
+      lines.push('      \\node[anchor=center,inner sep=0pt] at ([shift={(\\mockLayLeftX+69pt,\\daeryunRuleY+87.9pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{19pt}{22pt}\\selectfont\\bfseries \\daeryunPeriodLabel}};%');
+      lines.push('      \\node[anchor=center,inner sep=0pt] at ([shift={(\\mockLayLeftX+69.5pt,\\daeryunRuleY+57.8pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{17.5pt}{20pt}\\selectfont\\bfseries \\daeryunSheetType}};%');
+      lines.push('      \\node[anchor=west,inner sep=0pt] at ([shift={(\\mockLayLeftX+7.4pt,\\daeryunRuleY+21.2pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\gyeongsinGothic\\YggTopLabel\\daeryunHeavyHangul\\fontsize{11.8pt}{12pt}\\selectfont \\vbox{\\baselineskip=13.8pt\\hbox{과목}\\hbox{코드}}}};%');
+      lines.push('      \\node[anchor=west,inner sep=0pt] at ([shift={(\\mockLayLeftX+46.7pt,\\daeryunRuleY+20.6pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{21pt}{24pt}\\selectfont\\bfseries \\daeryunSubjectCode}};%');
+      lines.push('      \\node[anchor=west,inner sep=0pt] at ([shift={(\\mockLayLeftX+93.3pt,\\daeryunRuleY+21.2pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\gyeongsinGothic\\YggTopLabel\\daeryunHeavyHangul\\fontsize{11.8pt}{12pt}\\selectfont \\vbox{\\baselineskip=13.8pt\\hbox{시험}\\hbox{일시}}}};%');
+      lines.push('      \\node[anchor=west,inner sep=0pt] at ([shift={(\\mockLayLeftX+139.3pt,\\daeryunRuleY+20.6pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{13pt}{15pt}\\selectfont\\bfseries \\daeryunDateText}};%');
+      lines.push('      \\draw[line width=1.6pt]%');
+      lines.push('        ([shift={(\\mockLayLeftX,\\daeryunRuleY)}]current page.north west) --%');
+      lines.push('        ([shift={(\\mockLayRightX,\\daeryunRuleY)}]current page.north west);%');
+      lines.push('      \\draw[line width=0.7pt]%');
+      lines.push('        ([shift={(\\mockLayCenterX,\\daeryunRuleY)}]current page.north west) --%');
+      lines.push('        ([shift={(\\mockLayCenterX,\\mockLayVRuleEndY)}]current page.north west);%');
+      lines.push('    \\else%');
+      lines.push('      \\node[anchor=east,inner sep=0pt] at ([shift={(\\mockLayRightX-2pt,\\mockLayRuleY+16pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{20pt}{23pt}\\selectfont\\bfseries \\daeryunCurrentPage}};%');
+      lines.push('      \\draw[line width=0.7pt]%');
+      lines.push('        ([shift={(\\mockLayLeftX,\\mockLayRuleY)}]current page.north west) --%');
+      lines.push('        ([shift={(\\mockLayRightX,\\mockLayRuleY)}]current page.north west);%');
+      lines.push('      \\draw[line width=0.7pt]%');
+      lines.push('        ([shift={(\\mockLayCenterX,\\mockLayRuleY)}]current page.north west) --%');
+      lines.push('        ([shift={(\\mockLayCenterX,\\mockLayVRuleEndY)}]current page.north west);%');
+      lines.push('    \\fi%');
+      lines.push('    \\draw[line width=0.7pt]%');
+      lines.push('      ([shift={(\\mockLayLeftX,\\mockLayVRuleEndY)}]current page.north west) --%');
+      lines.push('      ([shift={(\\mockLayRightX,\\mockLayVRuleEndY)}]current page.north west);%');
+      lines.push('    \\ifgyeongsinlastpage%');
+      lines.push('      \\pgfmathsetlengthmacro{\\daeryunCopyBotY}{\\mockLayVRuleEndY+7pt}%');
+      lines.push('      \\pgfmathsetlengthmacro{\\daeryunCopyTopY}{\\daeryunCopyBotY+47.3pt}%');
+      lines.push('      \\filldraw[fill=white,draw=black,line width=0.6pt]%');
+      lines.push('        ([shift={(\\mockLayCenterX+10pt,\\daeryunCopyBotY)}]current page.north west) rectangle%');
+      lines.push('        ([shift={(\\mockLayRightX-2pt,\\daeryunCopyTopY)}]current page.north west);%');
+      lines.push('      \\node[anchor=west,inner sep=0pt] at ([shift={(\\mockLayCenterX+16.1pt,\\daeryunCopyBotY+23.65pt)}]current page.north west)%');
+      lines.push('        {\\parbox{\\dimexpr\\mockLayRightX-\\mockLayCenterX-24.8pt\\relax}{\\setstretch{1}\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{8.8pt}{13.2pt}\\selectfont'
+        + ' \\noindent ※\\ 이 문제지의 저작권은 \\gyeongsinCopyrightSchool 에 있습니다. 이 문제지는 저작권법에\\linebreak 의해 보호받는 저작물이므로 허락 없이 일부 또는 전부를 무단 복제, 배포,\\linebreak 출판, 전자 출판하는 등 저작권을 침해하는 일체의 행위를 금합니다.\\par}}};%');
+      lines.push('      \\global\\gyeongsinlastpagefalse%');
+      lines.push('    \\fi%');
+      lines.push('    \\node[anchor=west,inner sep=0pt] at ([shift={(\\mockLayLeftX,\\mockLayVRuleEndY-18pt)}]current page.north west)%');
+      lines.push('      {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{10pt}{12pt}\\selectfont\\bfseries \\daeryunFooterLeft}};%');
+      lines.push('    \\node[anchor=center,inner sep=0pt] at ([shift={(\\mockLayCenterX,\\mockLayVRuleEndY-18pt)}]current page.north west)%');
+      lines.push('      {\\begin{tikzpicture}[baseline=0pt]\\draw[line width=0.5pt] (0,0) rectangle (\\mockPageBoxW,\\mockPageBoxH);\\draw[line width=0.5pt] (0,0) -- (\\mockPageBoxW,\\mockPageBoxH);\\pgfmathsetlengthmacro{\\mockPageBoxFont}{0.46*\\mockPageBoxH}\\pgfmathsetlengthmacro{\\mockPageBoxLead}{0.55*\\mockPageBoxH}\\node[anchor=center,inner sep=0pt] at (0.22\\mockPageBoxW,0.66\\mockPageBoxH) {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{\\mockPageBoxFont}{\\mockPageBoxLead}\\selectfont\\bfseries \\daeryunCurrentPage}};\\node[anchor=center,inner sep=0pt] at (0.78\\mockPageBoxW,0.34\\mockPageBoxH) {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{\\mockPageBoxFont}{\\mockPageBoxLead}\\selectfont\\bfseries \\daeryunTotalPages}};\\end{tikzpicture}};%');
+      lines.push('    \\node[anchor=east,inner sep=0pt] at ([shift={(\\mockLayRightX,\\mockLayVRuleEndY-18pt)}]current page.north west)%');
+      lines.push('      {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{10pt}{12pt}\\selectfont\\bfseries \\daeryunFooterRight}};%');
+    } else if (isDongdoProfile) {
+      lines.push('    \\pgfmathsetlengthmacro{\\gyeongsinFrameLeftX}{\\mockLayLeftX-14pt}%');
+      lines.push('    \\pgfmathsetlengthmacro{\\gyeongsinFrameRightX}{\\mockLayRightX+14pt}%');
+      lines.push('    \\pgfmathsetlengthmacro{\\mockLayRuleY}{\\mockLayTopY+14pt}%');
+      lines.push('    \\pgfmathsetlengthmacro{\\mockLayVRuleEndY}{\\mockLayBotY-2pt}%');
+      lines.push('    \\ifmocktitlepage%');
+      lines.push('      \\pgfmathsetlengthmacro{\\dongdoHeaderTopY}{\\mockLayVRuleStartY+117.1pt}%');
+      lines.push('      \\draw[line width=0.7pt]%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX,\\dongdoHeaderTopY)}]current page.north west) rectangle%');
+      lines.push('        ([shift={(\\gyeongsinFrameRightX,\\mockLayVRuleEndY)}]current page.north west);%');
+      lines.push('      \\draw[line width=0.7pt]%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX,\\mockLayVRuleStartY)}]current page.north west) --%');
+      lines.push('        ([shift={(\\gyeongsinFrameRightX,\\mockLayVRuleStartY)}]current page.north west);%');
+      lines.push('      \\draw[line width=0.7pt]%');
+      lines.push('        ([shift={(\\mockLayCenterX,\\mockLayVRuleStartY)}]current page.north west) --%');
+      lines.push('        ([shift={(\\mockLayCenterX,\\mockLayVRuleEndY)}]current page.north west);%');
+      lines.push('      \\node[anchor=center,inner sep=0pt] at ([shift={(\\mockLayCenterX,\\mockLayVRuleStartY+100.2pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\YggTopLabel\\dongdoTitleHangul\\fontsize{22pt}{25pt}\\selectfont \\dongdoHeaderTitle}};%');
+      // 좌측 4×3 과목코드/문항수/점수 표 (출제자/승인자 우측 칸은 복사 시 가려지는 영역이므로 생략)
+      lines.push('      \\draw[line width=0.55pt]%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX+22pt,\\mockLayVRuleStartY+5.8pt)}]current page.north west) rectangle%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX+260.4pt,\\mockLayVRuleStartY+83.3pt)}]current page.north west);%');
+      lines.push('      \\draw[line width=0.55pt]%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX+22pt,\\mockLayVRuleStartY+64.1pt)}]current page.north west) --%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX+260.4pt,\\mockLayVRuleStartY+64.1pt)}]current page.north west);%');
+      lines.push('      \\draw[line width=0.55pt]%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX+22pt,\\mockLayVRuleStartY+31.6pt)}]current page.north west) --%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX+260.4pt,\\mockLayVRuleStartY+31.6pt)}]current page.north west);%');
+      lines.push('      \\draw[line width=0.55pt]%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX+81.6pt,\\mockLayVRuleStartY+5.8pt)}]current page.north west) --%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX+81.6pt,\\mockLayVRuleStartY+83.3pt)}]current page.north west);%');
+      lines.push('      \\draw[line width=0.55pt]%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX+141.2pt,\\mockLayVRuleStartY+5.8pt)}]current page.north west) --%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX+141.2pt,\\mockLayVRuleStartY+83.3pt)}]current page.north west);%');
+      lines.push('      \\draw[line width=0.55pt]%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX+200.8pt,\\mockLayVRuleStartY+5.8pt)}]current page.north west) --%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX+200.8pt,\\mockLayVRuleStartY+83.3pt)}]current page.north west);%');
+      lines.push('      \\node[anchor=center,inner sep=0pt] at ([shift={(\\gyeongsinFrameLeftX+51.8pt,\\mockLayVRuleStartY+73.7pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{9.8pt}{11.5pt}\\selectfont 과목코드}};%');
+      lines.push('      \\node[anchor=center,inner sep=0pt] at ([shift={(\\gyeongsinFrameLeftX+111.4pt,\\mockLayVRuleStartY+73.7pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{9.8pt}{11.5pt}\\selectfont 총문항}};%');
+      lines.push('      \\node[anchor=center,inner sep=0pt] at ([shift={(\\gyeongsinFrameLeftX+171.0pt,\\mockLayVRuleStartY+73.7pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{9.8pt}{11.5pt}\\selectfont 선택형}};%');
+      lines.push('      \\node[anchor=center,inner sep=0pt] at ([shift={(\\gyeongsinFrameLeftX+230.6pt,\\mockLayVRuleStartY+73.7pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{9.8pt}{11.5pt}\\selectfont 서술형}};%');
+      lines.push('      \\node[anchor=center,inner sep=0pt] at ([shift={(\\gyeongsinFrameLeftX+51.8pt,\\mockLayVRuleStartY+47.8pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{25pt}{28pt}\\selectfont\\bfseries \\dongdoSubjectCode}};%');
+      lines.push('      \\node[anchor=center,inner sep=0pt] at ([shift={(\\gyeongsinFrameLeftX+111.4pt,\\mockLayVRuleStartY+47.8pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{25pt}{28pt}\\selectfont\\bfseries \\dongdoTotalCount}};%');
+      lines.push('      \\node[anchor=center,inner sep=0pt] at ([shift={(\\gyeongsinFrameLeftX+171.0pt,\\mockLayVRuleStartY+47.8pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{25pt}{28pt}\\selectfont\\bfseries \\dongdoObjectiveCount}};%');
+      lines.push('      \\node[anchor=center,inner sep=0pt] at ([shift={(\\gyeongsinFrameLeftX+230.6pt,\\mockLayVRuleStartY+47.8pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{25pt}{28pt}\\selectfont\\bfseries \\dongdoEssayCount}};%');
+      lines.push('      \\node[anchor=center,inner sep=0pt] at ([shift={(\\gyeongsinFrameLeftX+51.8pt,\\mockLayVRuleStartY+18.7pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{12.5pt}{14.5pt}\\selectfont 점수}};%');
+      lines.push('      \\node[anchor=center,inner sep=0pt] at ([shift={(\\gyeongsinFrameLeftX+111.4pt,\\mockLayVRuleStartY+18.7pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{12.5pt}{14.5pt}\\selectfont \\dongdoTotalScore}};%');
+      lines.push('      \\node[anchor=center,inner sep=0pt] at ([shift={(\\gyeongsinFrameLeftX+171.0pt,\\mockLayVRuleStartY+18.7pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{12.5pt}{14.5pt}\\selectfont \\dongdoObjectiveScore}};%');
+      lines.push('      \\node[anchor=center,inner sep=0pt] at ([shift={(\\gyeongsinFrameLeftX+230.6pt,\\mockLayVRuleStartY+18.7pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{12.5pt}{14.5pt}\\selectfont \\dongdoEssayScore}};%');
+      lines.push('    \\else%');
+      lines.push('      \\draw[line width=0.7pt]%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX,\\mockLayRuleY)}]current page.north west) rectangle%');
+      lines.push('        ([shift={(\\gyeongsinFrameRightX,\\mockLayVRuleEndY)}]current page.north west);%');
+      lines.push('      \\draw[line width=0.7pt]%');
+      lines.push('        ([shift={(\\mockLayCenterX,\\mockLayRuleY)}]current page.north west) --%');
+      lines.push('        ([shift={(\\mockLayCenterX,\\mockLayVRuleEndY)}]current page.north west);%');
+      lines.push('    \\fi%');
+      lines.push('    \\ifgyeongsinlastpage%');
+      lines.push('      \\pgfmathsetlengthmacro{\\dongdoConfirmBotY}{\\mockLayVRuleEndY+4.2pt}%');
+      lines.push('      \\pgfmathsetlengthmacro{\\dongdoConfirmTopY}{\\dongdoConfirmBotY+71.5pt}%');
+      lines.push('      \\filldraw[fill=white,draw=black,line width=0.6pt]%');
+      lines.push('        ([shift={(\\mockLayCenterX+7pt,\\dongdoConfirmBotY)}]current page.north west) rectangle%');
+      lines.push('        ([shift={(\\gyeongsinFrameRightX-7.7pt,\\dongdoConfirmTopY)}]current page.north west);%');
+      lines.push('      \\node[anchor=west,inner sep=0pt] at ([shift={(\\mockLayCenterX+17pt,\\dongdoConfirmBotY+35.75pt)}]current page.north west)%');
+      lines.push('        {\\parbox{\\dimexpr\\gyeongsinFrameRightX-\\mockLayCenterX-32pt\\relax}{\\setstretch{1.28}\\YggWithUnifiedDigits{\\fontsize{10pt}{14.5pt}\\selectfont'
+        + ' \\noindent $\\ast$\\ \\textbf{확인 사항}\\par\\vspace{2pt}'
+        + '\\noindent\\hspace*{0.95em}답안지의 해당란에 필요한 내용을 정확히 기입(표기)\\linebreak\\hspace*{0.95em}했는지 확인하시오.\\par}}};%');
+      lines.push('      \\global\\gyeongsinlastpagefalse%');
+      lines.push('    \\fi%');
+      lines.push('    \\node[anchor=west,inner sep=0pt] at ([shift={(\\gyeongsinFrameLeftX+2pt,\\mockLayVRuleEndY-26pt)}]current page.north west)%');
+      lines.push('      {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{11.5pt}{14pt}\\selectfont \\dongdoFooterLeft}};%');
+      lines.push('    \\node[anchor=north,inner sep=0pt] at ([shift={(\\mockLayCenterX,\\mockLayVRuleEndY-3.5pt)}]current page.north west)%');
+      lines.push('      {\\begin{tikzpicture}[baseline=0pt]\\draw[line width=0.55pt] (0,0) rectangle (58pt,31pt);\\draw[line width=0.55pt] (0,0) -- (58pt,31pt);\\node[anchor=center,inner sep=0pt] at (9.5pt,22.5pt) {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{9.6pt}{11pt}\\selectfont \\dongdoCurrentPage}};\\node[anchor=center,inner sep=0pt] at (48.5pt,7.5pt) {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{9.6pt}{11pt}\\selectfont \\dongdoTotalPages}};\\end{tikzpicture}};%');
+      lines.push('    \\node[anchor=east,inner sep=0pt] at ([shift={(\\gyeongsinFrameRightX-4pt,\\mockLayVRuleEndY-26pt)}]current page.north west)%');
+      lines.push('      {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{11.5pt}{14pt}\\selectfont 무단 전재 또는 복사 금지}};%');
+    } else if (isSoseonProfile) {
+      lines.push('    \\pgfmathsetlengthmacro{\\gyeongsinFrameLeftX}{\\mockLayLeftX-14pt}%');
+      lines.push('    \\pgfmathsetlengthmacro{\\gyeongsinFrameRightX}{\\mockLayRightX+14pt}%');
+      lines.push('    \\pgfmathsetlengthmacro{\\mockLayRuleY}{\\mockLayTopY+14pt}%');
+      lines.push('    \\pgfmathsetlengthmacro{\\mockLayVRuleEndY}{\\mockLayBotY-2pt}%');
+      lines.push('    \\ifmocktitlepage%');
+      lines.push('      \\pgfmathsetlengthmacro{\\soseonHeaderTopY}{\\mockLayVRuleStartY+113.4pt}%');
+      lines.push('      \\pgfmathsetlengthmacro{\\soseonMidTopY}{\\mockLayVRuleStartY+42.0pt}%');
+      lines.push('      \\pgfmathsetlengthmacro{\\soseonMidBotY}{\\mockLayVRuleStartY+22.5pt}%');
+      lines.push('      \\draw[line width=1.0pt]%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX,\\soseonHeaderTopY+4.5pt)}]current page.north west) --%');
+      lines.push('        ([shift={(\\mockLayCenterX,\\soseonHeaderTopY+4.5pt)}]current page.north west);%');
+      lines.push('      \\draw[line width=0.95pt]%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX,\\soseonHeaderTopY)}]current page.north west) --%');
+      lines.push('        ([shift={(\\mockLayCenterX,\\soseonHeaderTopY)}]current page.north west) --%');
+      lines.push('        ([shift={(\\mockLayCenterX,\\soseonMidTopY)}]current page.north west) --%');
+      lines.push('        ([shift={(\\gyeongsinFrameRightX,\\soseonMidTopY)}]current page.north west) --%');
+      lines.push('        ([shift={(\\gyeongsinFrameRightX,\\mockLayVRuleEndY)}]current page.north west) --%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX,\\mockLayVRuleEndY)}]current page.north west) -- cycle;%');
+      lines.push('      \\draw[line width=0.75pt]%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX,\\soseonMidTopY)}]current page.north west) --%');
+      lines.push('        ([shift={(\\mockLayCenterX,\\soseonMidTopY)}]current page.north west);%');
+      lines.push('      \\draw[line width=0.75pt]%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX,\\soseonMidBotY)}]current page.north west) --%');
+      lines.push('        ([shift={(\\mockLayCenterX,\\soseonMidBotY)}]current page.north west);%');
+      lines.push('      \\draw[line width=0.85pt]%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX,\\mockLayVRuleStartY)}]current page.north west) --%');
+      lines.push('        ([shift={(\\gyeongsinFrameRightX,\\mockLayVRuleStartY)}]current page.north west);%');
+      lines.push('      \\draw[line width=0.75pt]%');
+      lines.push('        ([shift={(\\mockLayCenterX,\\soseonMidTopY)}]current page.north west) --%');
+      lines.push('        ([shift={(\\mockLayCenterX,\\mockLayVRuleStartY)}]current page.north west);%');
+      lines.push('      \\draw[line width=0.55pt]%');
+      lines.push('        ([shift={(\\mockLayCenterX,\\mockLayVRuleStartY)}]current page.north west) --%');
+      lines.push('        ([shift={(\\mockLayCenterX,\\mockLayVRuleEndY)}]current page.north west);%');
+      lines.push('      \\draw[line width=0.55pt]%');
+      lines.push('        ([shift={(\\gyeongsinFrameRightX-8pt,\\soseonMidTopY)}]current page.north west) --%');
+      lines.push('        ([shift={(\\gyeongsinFrameRightX-8pt,\\mockLayVRuleStartY)}]current page.north west);%');
+      lines.push('      \\node[anchor=center,inner sep=0pt] at ([shift={(\\gyeongsinFrameLeftX+115pt,\\mockLayVRuleStartY+89.9pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\fontsize{16.5pt}{19pt}\\selectfont\\bfseries \\soseonHeaderExamTitle}};%');
+      lines.push('      \\node[anchor=center,inner sep=0pt] at ([shift={(\\gyeongsinFrameLeftX+115pt,\\mockLayVRuleStartY+63.9pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\fontsize{13.5pt}{16pt}\\selectfont\\bfseries \\soseonHeaderDatePeriod}};%');
+      lines.push('      \\node[anchor=east,inner sep=0pt] at ([shift={(\\mockLayCenterX-10pt,\\mockLayVRuleStartY+77.7pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\fontsize{24pt}{28pt}\\selectfont\\bfseries \\soseonHeaderSubject}};%');
+      lines.push('      \\node[anchor=west,inner sep=0pt] at ([shift={(\\gyeongsinFrameLeftX+8.5pt,\\mockLayVRuleStartY+32.25pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\fontsize{10.5pt}{13pt}\\selectfont 과목코드\\ (\\ \\soseonSubjectCode\\ )}};%');
+      lines.push('      \\node[anchor=west,inner sep=0pt] at ([shift={(\\gyeongsinFrameLeftX+8.5pt,\\mockLayVRuleStartY+11.25pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\fontsize{10.5pt}{13pt}\\selectfont \\tikz[baseline=-0.5pt]\\fill (0,0)--(0,6.5pt)--(5.5pt,3.25pt)--cycle;\\hspace{0.2em}문항수\\ :\\ 선택형(\\soseonObjectiveCount)\\ \\ 서술형(\\soseonEssayCount)\\ \\ 계\\ (\\soseonTotalCount)문제}};%');
+      lines.push('      \\node[anchor=west,inner sep=0pt] at ([shift={(\\mockLayCenterX+8.5pt,\\mockLayVRuleStartY+29.5pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\fontsize{10.5pt}{13pt}\\selectfont \\tikz[baseline=-0.5pt]\\fill (0,0)--(0,6.5pt)--(5.5pt,3.25pt)--cycle;\\hspace{0.2em}배점\\ :\\ 각\\ 문항에\\ 표시}};%');
+      lines.push('      \\node[anchor=west,inner sep=0pt] at ([shift={(\\mockLayCenterX+8.5pt,\\mockLayVRuleStartY+12.5pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\fontsize{10.5pt}{13pt}\\selectfont \\tikz[baseline=-0.5pt]\\fill (0,0)--(0,6.5pt)--(5.5pt,3.25pt)--cycle;\\hspace{0.2em}문제지\\ (\\soseonTotalPages)\\ 면}};%');
+      lines.push('    \\else%');
+      lines.push('      \\draw[line width=0.95pt]%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX,\\mockLayRuleY)}]current page.north west) rectangle%');
+      lines.push('        ([shift={(\\gyeongsinFrameRightX,\\mockLayVRuleEndY)}]current page.north west);%');
+      lines.push('      \\draw[line width=0.55pt]%');
+      lines.push('        ([shift={(\\mockLayCenterX,\\mockLayRuleY)}]current page.north west) --%');
+      lines.push('        ([shift={(\\mockLayCenterX,\\mockLayVRuleEndY)}]current page.north west);%');
+      lines.push('    \\fi%');
+      lines.push('    \\node[anchor=center,inner sep=0pt] at ([shift={(\\mockLayCenterX,\\mockLayVRuleEndY-23pt)}]current page.north west)%');
+      lines.push('      {\\YggWithUnifiedDigits{\\fontsize{11pt}{13pt}\\selectfont \\soseonFooterText}};%');
+    } else if (isOseongProfile) {
+      lines.push('    \\pgfmathsetlengthmacro{\\gyeongsinFrameLeftX}{\\mockLayLeftX-14pt}%');
+      lines.push('    \\pgfmathsetlengthmacro{\\gyeongsinFrameRightX}{\\mockLayRightX+14pt}%');
+      lines.push('    \\pgfmathsetlengthmacro{\\mockLayRuleY}{\\mockLayTopY+14pt}%');
+      lines.push('    \\pgfmathsetlengthmacro{\\mockLayVRuleEndY}{\\mockLayBotY-2pt}%');
+      lines.push('    \\ifmocktitlepage%');
+      lines.push('      \\node[anchor=center,inner sep=0pt] at ([shift={(\\mockLayCenterX,\\mockLayVRuleStartY+104pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{21pt}{23pt}\\selectfont\\bfseries \\oseongHeaderExamTitle}};%');
+      lines.push('      \\node[anchor=center,inner sep=0pt] at ([shift={(\\mockLayCenterX,\\mockLayVRuleStartY+72pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{28pt}{30pt}\\selectfont\\bfseries \\oseongHeaderSubject}};%');
+      lines.push('      \\draw[line width=0.75pt]%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX+26.5pt,\\mockLayVRuleStartY+87.5pt)}]current page.north west) -- ++(55pt,0pt)%');
+      lines.push('        arc[start angle=90,end angle=-90,radius=15.5pt] -- ++(-55pt,0pt)%');
+      lines.push('        arc[start angle=-90,end angle=-270,radius=15.5pt] -- cycle;%');
+      lines.push('      \\node[anchor=center,inner sep=0pt] at ([shift={(\\gyeongsinFrameLeftX+54pt,\\mockLayVRuleStartY+72pt)}]current page.north west)%');
+      lines.push('        {\\gyeongsinGothic{\\fontsize{19pt}{21pt}\\selectfont\\bfseries 코드}\\hspace{0.22em}{\\fontsize{20pt}{21pt}\\selectfont\\bfseries \\oseongSubjectCode}};%');
+      lines.push('      \\draw[line width=0.65pt]%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX+11pt,\\mockLayVRuleStartY+3.5pt)}]current page.north west) rectangle%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX+255pt,\\mockLayVRuleStartY+48pt)}]current page.north west);%');
+      lines.push('      \\draw[line width=0.55pt]%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX+58pt,\\mockLayVRuleStartY+3.5pt)}]current page.north west) --%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX+58pt,\\mockLayVRuleStartY+48pt)}]current page.north west);%');
+      lines.push('      \\draw[line width=0.55pt]%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX+133pt,\\mockLayVRuleStartY+3.5pt)}]current page.north west) --%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX+133pt,\\mockLayVRuleStartY+48pt)}]current page.north west);%');
+      lines.push('      \\draw[line width=0.55pt]%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX+180pt,\\mockLayVRuleStartY+3.5pt)}]current page.north west) --%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX+180pt,\\mockLayVRuleStartY+48pt)}]current page.north west);%');
+      lines.push('      \\node[anchor=center,inner sep=0pt] at ([shift={(\\gyeongsinFrameLeftX+34.5pt,\\mockLayVRuleStartY+25.75pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{13.5pt}{15pt}\\selectfont\\bfseries 선택형}};%');
+      lines.push('      \\node[anchor=center,inner sep=0pt] at ([shift={(\\gyeongsinFrameLeftX+95.5pt,\\mockLayVRuleStartY+25.75pt)}]current page.north west)%');
+      lines.push('        {\\parbox{72pt}{\\lineskiplimit=-10pt\\lineskip=0pt\\centering\\setstretch{1}\\gyeongsinGothic\\fontsize{8.0pt}{9.2pt}\\selectfont \\YggWithUnifiedDigits{\\oseongObjectiveBreakdownTex}\\par}};%');
+      lines.push('      \\node[anchor=center,inner sep=0pt] at ([shift={(\\gyeongsinFrameLeftX+156.5pt,\\mockLayVRuleStartY+25.75pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{13.5pt}{15pt}\\selectfont\\bfseries 서답형}};%');
+      lines.push('      \\node[anchor=center,inner sep=0pt] at ([shift={(\\gyeongsinFrameLeftX+217.5pt,\\mockLayVRuleStartY+25.75pt)}]current page.north west)%');
+      lines.push('        {\\parbox{72pt}{\\lineskiplimit=-10pt\\lineskip=0pt\\centering\\setstretch{1}\\gyeongsinGothic\\fontsize{8.8pt}{9.8pt}\\selectfont \\YggWithUnifiedDigits{서술형\\ \\oseongEssayCount 문항\\\\[-1pt]차등배점\\ \\oseongEssayScore}\\par}};%');
+      lines.push('      \\draw[line width=1.1pt]%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX,\\mockLayVRuleStartY)}]current page.north west) --%');
+      lines.push('        ([shift={(\\gyeongsinFrameRightX,\\mockLayVRuleStartY)}]current page.north west);%');
+      lines.push('      \\draw[line width=0.55pt]%');
+      lines.push('        ([shift={(\\mockLayCenterX,\\mockLayVRuleStartY)}]current page.north west) --%');
+      lines.push('        ([shift={(\\mockLayCenterX,\\mockLayVRuleEndY)}]current page.north west);%');
+      lines.push('    \\else%');
+      lines.push('      \\draw[line width=1.1pt]%');
+      lines.push('        ([shift={(\\gyeongsinFrameLeftX,\\mockLayRuleY)}]current page.north west) --%');
+      lines.push('        ([shift={(\\gyeongsinFrameRightX,\\mockLayRuleY)}]current page.north west);%');
+      lines.push('      \\draw[line width=0.55pt]%');
+      lines.push('        ([shift={(\\mockLayCenterX,\\mockLayRuleY)}]current page.north west) --%');
+      lines.push('        ([shift={(\\mockLayCenterX,\\mockLayVRuleEndY)}]current page.north west);%');
+      lines.push('    \\fi%');
+      lines.push('    \\ifgyeongsinlastpage%');
+      lines.push('      \\node[anchor=south west,fill=white,draw=black,line width=0.65pt,inner xsep=5.5pt,inner ysep=5.5pt,outer sep=0pt] at ([shift={(\\mockLayCenterX+14pt,\\mockLayVRuleEndY+2pt)}]current page.north west)%');
+      lines.push('        {\\parbox{\\dimexpr\\gyeongsinFrameRightX-\\mockLayCenterX-24.5pt\\relax}{\\lineskiplimit=-10pt\\lineskip=0pt\\setstretch{1}\\YggWithUnifiedDigits{\\fontsize{11.6pt}{15.2pt}\\selectfont\\bfseries'
+        + ' {\\centering\\noindent [확인 사항]\\par}\\vspace{2pt}'
+        + '\\setbox0=\\hbox{\\tikz[baseline=-2.4pt]\\draw[line width=0.8pt] (0,0) circle (2.0pt);\\hspace{0.35em}}'
+        + '\\hangindent=\\wd0\\hangafter=1\\noindent\\copy0 답안지의 해당란에 필요한 내용을 정확히 기입(표기)\\linebreak 했는지 확인하시오.\\par\\vspace{1.5pt}'
+        + '\\hangindent=\\wd0\\hangafter=1\\noindent\\copy0 이 문제지에 관한 저작권은 \\gyeongsinCopyrightSchool 에 있습니다.\\par}}};%');
+      lines.push('      \\global\\gyeongsinlastpagefalse%');
+      lines.push('    \\fi%');
+      lines.push('    \\node[anchor=center,inner sep=0pt] at ([shift={(\\mockLayCenterX,\\mockLayVRuleEndY-23pt)}]current page.north west)%');
+      lines.push('      {\\YggWithUnifiedDigits{\\fontsize{11pt}{13pt}\\selectfont \\oseongFooterText}};%');
+    } else if (isJeonghwaProfile) {
+      lines.push('    \\pgfmathsetlengthmacro{\\gyeongsinFrameLeftX}{\\mockLayLeftX-14pt}%');
+      lines.push('    \\pgfmathsetlengthmacro{\\gyeongsinFrameRightX}{\\mockLayRightX+14pt}%');
+      lines.push('    \\pgfmathsetlengthmacro{\\mockLayRuleY}{\\mockLayTopY+14pt}%');
+      lines.push('    \\pgfmathsetlengthmacro{\\mockLayVRuleEndY}{\\mockLayBotY-2pt}%');
+      lines.push('    \\draw[line width=0.8pt]%');
+      lines.push('      ([shift={(\\gyeongsinFrameLeftX,\\mockLayRuleY)}]current page.north west) rectangle%');
+      lines.push('      ([shift={(\\gyeongsinFrameRightX,\\mockLayVRuleEndY)}]current page.north west);%');
+      lines.push('    \\draw[line width=0.55pt]%');
+      lines.push('      ([shift={(\\mockLayCenterX,\\mockLayRuleY-12pt)}]current page.north west) --%');
+      lines.push('      ([shift={(\\mockLayCenterX,\\mockLayVRuleEndY+14pt)}]current page.north west);%');
+      lines.push('    \\ifjeonghwasublastcolleft%');
+      lines.push('      \\pgfmathsetlengthmacro{\\jeonghwaLeftColCenterX}{0.5*(\\gyeongsinFrameLeftX+\\mockLayCenterX)}%');
+      lines.push('      \\node[anchor=center,inner sep=0pt] at ([shift={(\\jeonghwaLeftColCenterX,\\mockLayVRuleEndY+18pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{10.5pt}{12.5pt}\\selectfont\\bfseries \\jeonghwaBoldLt 뒷면에 문제 있음\\jeonghwaBoldGt}};%');
+      lines.push('      \\global\\jeonghwasublastcolleftfalse%');
+      lines.push('    \\fi%');
+      lines.push('    \\ifjeonghwasublastcolright%');
+      lines.push('      \\pgfmathsetlengthmacro{\\jeonghwaRightColCenterX}{0.5*(\\mockLayCenterX+\\gyeongsinFrameRightX)}%');
+      lines.push('      \\node[anchor=center,inner sep=0pt] at ([shift={(\\jeonghwaRightColCenterX,\\mockLayVRuleEndY+18pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{10.5pt}{12.5pt}\\selectfont\\bfseries \\jeonghwaBoldLt 뒷면에 문제 있음\\jeonghwaBoldGt}};%');
+      lines.push('      \\global\\jeonghwasublastcolrightfalse%');
+      lines.push('    \\fi%');
+      lines.push('    \\ifgyeongsinlastpage%');
+      lines.push('      \\pgfmathsetlengthmacro{\\jeonghwaRightColCenterX}{0.5*(\\mockLayCenterX+\\gyeongsinFrameRightX)}%');
+      lines.push('      \\node[anchor=center,inner sep=0pt] at ([shift={(\\jeonghwaRightColCenterX,\\mockLayVRuleEndY+18pt)}]current page.north west)%');
+      lines.push('        {\\YggWithUnifiedDigits{\\fontsize{11pt}{13pt}\\selectfont\\bfseries -\\ 끝\\ -}};%');
+      lines.push('      \\global\\gyeongsinlastpagefalse%');
+      lines.push('    \\fi%');
+      lines.push('    \\node[anchor=center,inner sep=0pt] at ([shift={(\\mockLayCenterX,\\mockLayVRuleEndY-11.5pt)}]current page.north west)%');
+      lines.push('      {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{10.6pt}{11pt}\\selectfont \\jeonghwaFooterLineOne}};%');
+      lines.push('    \\node[anchor=center,inner sep=0pt] at ([shift={(\\mockLayCenterX,\\mockLayVRuleEndY-21.7pt)}]current page.north west)%');
+      lines.push('      {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{10.6pt}{11pt}\\selectfont \\jeonghwaFooterLineTwo}};%');
+    } else if (isHwanggeumProfile) {
+      lines.push('    \\pgfmathsetlengthmacro{\\gyeongsinFrameLeftX}{\\mockLayLeftX-14pt}%');
+      lines.push('    \\pgfmathsetlengthmacro{\\gyeongsinFrameRightX}{\\mockLayRightX+14pt}%');
+      lines.push('    \\pgfmathsetlengthmacro{\\mockLayRuleY}{\\mockLayTopY+14pt}%');
+      lines.push('    \\pgfmathsetlengthmacro{\\mockLayVRuleEndY}{\\mockLayBotY-2pt}%');
+      lines.push('    \\draw[line width=0.8pt]%');
+      lines.push('      ([shift={(\\gyeongsinFrameLeftX,\\mockLayRuleY)}]current page.north west) rectangle%');
+      lines.push('      ([shift={(\\gyeongsinFrameRightX,\\mockLayVRuleEndY)}]current page.north west);%');
+      lines.push('    \\draw[line width=0.55pt]%');
+      lines.push('      ([shift={(\\mockLayCenterX,\\mockLayRuleY-6pt)}]current page.north west) --%');
+      lines.push('      ([shift={(\\mockLayCenterX,\\mockLayVRuleEndY+16pt)}]current page.north west);%');
+      lines.push('    \\ifgyeongsinlastpage%');
+      lines.push('      \\node[anchor=south west,fill=white,draw=black,line width=0.65pt,inner xsep=5.8pt,inner ysep=5.8pt,outer sep=0pt] at ([shift={(\\mockLayCenterX+10.5pt,\\mockLayVRuleEndY+16pt)}]current page.north west)%');
+      lines.push('        {\\parbox{\\dimexpr\\gyeongsinFrameRightX-\\mockLayCenterX-32pt\\relax}{\\lineskiplimit=-10pt\\lineskip=0pt\\setstretch{1}\\YggWithUnifiedDigits{\\fontsize{10.6pt}{16.2pt}\\selectfont'
+        + '\\noindent 이 시험문제의 저작권은 \\gyeongsinCopyrightSchool 에 있습니다. 저작권법\\linebreak '
+        + '에 의해 보호받는 저작물이므로 전재와 복제는 금지되며,\\linebreak '
+        + '이를 어길 시 저작권법에 의거 처벌될 수 있습니다.\\par}}};%');
+      lines.push('      \\global\\gyeongsinlastpagefalse%');
+      lines.push('    \\fi%');
+      lines.push('    \\node[anchor=center,inner sep=0pt] at ([shift={(\\mockLayCenterX,\\mockLayVRuleEndY-18pt)}]current page.north west)%');
+      lines.push('      {\\YggWithUnifiedDigits{\\fontsize{10.2pt}{12pt}\\selectfont \\hwanggeumFooterCenter}};%');
+      lines.push('    \\node[anchor=east,inner sep=0pt] at ([shift={(\\gyeongsinFrameRightX-20pt,\\mockLayVRuleEndY-18pt)}]current page.north west)%');
+      lines.push('      {\\YggWithUnifiedDigits{\\fontsize{10.2pt}{12pt}\\selectfont \\hwanggeumFooterRight}};%');
+    } else {
+      lines.push(isAssignmentProfile
+        ? '    \\pgfmathsetlengthmacro{\\mockLayRuleY}{\\mockLayTopY+20pt}%'
+        : '    \\pgfmathsetlengthmacro{\\mockLayRuleY}{\\mockLayTopY+14pt}%');
+      lines.push(isAssignmentProfile
+        ? '    \\pgfmathsetlengthmacro{\\mockLayVRuleEndY}{\\mockLayBotY-12pt}%'
+        : '    \\pgfmathsetlengthmacro{\\mockLayVRuleEndY}{\\mockLayBotY+5pt}%');
+      lines.push('    \\ifmocktitlepage%');
+      lines.push('      \\draw[line width=0.6pt]%');
+      lines.push('        ([shift={(\\mockLayLeftX,\\mockLayVRuleStartY)}]current page.north west) --%');
+      lines.push('        ([shift={(\\mockLayRightX,\\mockLayVRuleStartY)}]current page.north west);%');
+      lines.push('      \\draw[line width=0.8pt]%');
+      lines.push('        ([shift={(\\mockLayCenterX,\\mockLayVRuleStartY)}]current page.north west) --%');
+      lines.push('        ([shift={(\\mockLayCenterX,\\mockLayVRuleEndY)}]current page.north west);%');
+      lines.push('    \\else%');
+      lines.push('      \\draw[line width=0.6pt]%');
+      lines.push('        ([shift={(\\mockLayLeftX,\\mockLayRuleY)}]current page.north west) --%');
+      lines.push('        ([shift={(\\mockLayRightX,\\mockLayRuleY)}]current page.north west);%');
+      lines.push('      \\draw[line width=0.8pt]%');
+      lines.push('        ([shift={(\\mockLayCenterX,\\mockLayRuleY)}]current page.north west) --%');
+      lines.push('        ([shift={(\\mockLayCenterX,\\mockLayVRuleEndY)}]current page.north west);%');
+      lines.push('    \\fi%');
+      if (isAssignmentProfile) {
+        lines.push('    \\pgfmathsetlengthmacro{\\mockLayAssignmentFooterY}{\\mockLayVRuleEndY-22pt}%');
+        lines.push('    \\node[anchor=base,inner sep=0pt,font=\\fontsize{12.96pt}{14.5pt}\\selectfont\\bfseries] at ([shift={(\\mockLayCenterX,\\mockLayAssignmentFooterY)}]current page.north west) {\\thepage};%');
+        if (logoEnabled) {
+          lines.push('    \\ifodd\\value{page}%');
+          lines.push(`      \\node[anchor=base west,inner sep=0pt,font=\\fontsize{9.8pt}{11pt}\\selectfont] at ([shift={(\\mockLayLeftX,\\mockLayAssignmentFooterY)}]current page.north west) {{\\YggPretendardRegular\\YggPretendardRegularHangul ${safeAcademyName}}};%`);
+          lines.push('    \\else%');
+          lines.push(`      \\node[anchor=base east,inner sep=0pt,font=\\fontsize{9.8pt}{11pt}\\selectfont] at ([shift={(\\mockLayRightX,\\mockLayAssignmentFooterY)}]current page.north west) {${safeAssignmentFooterTitle}};%`);
+          lines.push('    \\fi%');
+        }
+      } else {
+        lines.push('    \\begin{scope}[shift={([shift={(\\mockLayBoxX,\\mockLayBoxY)}]current page.north west)}]%');
+        lines.push('      \\draw[line width=0.6pt] (0,0) rectangle (\\mockPageBoxW,\\mockPageBoxH);%');
+        lines.push('      \\draw[line width=0.6pt] (0,0) -- (\\mockPageBoxW,\\mockPageBoxH);%');
+        lines.push('      \\pgfmathsetlengthmacro{\\mockPageBoxFont}{0.46*\\mockPageBoxH}%');
+        lines.push('      \\pgfmathsetlengthmacro{\\mockPageBoxLead}{0.55*\\mockPageBoxH}%');
+        lines.push('      \\node[anchor=center, inner sep=0pt] at (0.18\\mockPageBoxW,0.65\\mockPageBoxH)%');
+        lines.push('        {\\fontsize{\\mockPageBoxFont}{\\mockPageBoxLead}\\selectfont\\thepage};%');
+        lines.push('      \\node[anchor=center, inner sep=0pt] at (0.82\\mockPageBoxW,0.35\\mockPageBoxH)%');
+        lines.push('        {\\fontsize{\\mockPageBoxFont}{\\mockPageBoxLead}\\selectfont\\pageref{LastPage}};%');
+        lines.push('    \\end{scope}%');
+        lines.push('    \\ifmockpagenotice%');
+        lines.push('      \\pgfmathsetlengthmacro{\\mockNoticeLeftX}{\\mockLayRightX-0.4775*\\textwidth+4pt}%');
+        lines.push('      \\pgfmathsetlengthmacro{\\mockNoticeBotY}{\\mockLayVRuleEndY+0.275pt}%');
+        lines.push('      \\ifmockpagenoticefull%');
+        lines.push('        \\pgfmathsetlengthmacro{\\mockNoticeTopY}{\\mockNoticeBotY+98pt}%');
+        lines.push('      \\else%');
+        lines.push('        \\pgfmathsetlengthmacro{\\mockNoticeTopY}{\\mockNoticeBotY+60pt}%');
+        lines.push('      \\fi%');
+        lines.push('      \\filldraw[fill=white,draw=black,line width=0.55pt]%');
+        lines.push('        ([shift={(\\mockNoticeLeftX,\\mockNoticeBotY)}]current page.north west) rectangle%');
+        lines.push('        ([shift={(\\mockLayRightX,\\mockNoticeTopY)}]current page.north west);%');
+        lines.push('      \\node[anchor=north west,inner sep=0pt] at ([shift={(\\mockNoticeLeftX+10.5pt,\\mockNoticeTopY-8.5pt)}]current page.north west)%');
+        lines.push('        {\\parbox{\\dimexpr 0.4775\\textwidth-25pt\\relax}{\\setstretch{1}\\setlength{\\parskip}{0pt}\\YggWithUnifiedDigits{\\fontsize{10.2pt}{15.4pt}\\selectfont '
+          + '\\noindent{\\raisebox{-0.22ex}{\\fontsize{10.5pt}{10.5pt}\\selectfont *}}\\hspace{0.38em}확인 사항\\endgraf\\vspace{5.5pt}'
+          + '\\hangindent=1.08em\\hangafter=1\\noindent\\makebox[1.08em][l]{\\raisebox{0.12ex}{\\fontsize{7.2pt}{7.2pt}\\selectfont ○}}답안지의 해당란에 필요한 내용을 정확히 기입(표기)했는지 확인\\linebreak 하시오.\\endgraf'
+          + '\\ifmockpagenoticefull'
+          + '\\vspace{6pt}'
+          + '\\hangindent=1.08em\\hangafter=1\\noindent\\makebox[1.08em][l]{\\raisebox{0.12ex}{\\fontsize{7.2pt}{7.2pt}\\selectfont ○}}이어서, {\\YggSubjectDisplay\\YggSubjectDisplayHangul\\bfseries \\mockPageNoticeEmphasis} 문제가 제시되오니, 자신이\\linebreak 선택한 과목인지 확인하시오.\\endgraf'
+          + '\\fi'
+          + '}}};%');
+        lines.push('      \\global\\mockpagenoticefalse%');
+        lines.push('      \\global\\mockpagenoticefullfalse%');
         lines.push('    \\fi%');
       }
-    } else {
-      // 페이지박스 (scope 원점 = 박스 좌하단).
-      lines.push('    \\begin{scope}[shift={([shift={(\\mockLayBoxX,\\mockLayBoxY)}]current page.north west)}]%');
-      lines.push('      \\draw[line width=0.6pt] (0,0) rectangle (\\mockPageBoxW,\\mockPageBoxH);%');
-      lines.push('      \\draw[line width=0.6pt] (0,0) -- (\\mockPageBoxW,\\mockPageBoxH);%');
-      lines.push('      \\pgfmathsetlengthmacro{\\mockPageBoxFont}{0.46*\\mockPageBoxH}%');
-      lines.push('      \\pgfmathsetlengthmacro{\\mockPageBoxLead}{0.55*\\mockPageBoxH}%');
-      lines.push('      \\node[anchor=center, inner sep=0pt] at (0.18\\mockPageBoxW,0.65\\mockPageBoxH)%');
-      lines.push('        {\\fontsize{\\mockPageBoxFont}{\\mockPageBoxLead}\\selectfont\\thepage};%');
-      lines.push('      \\node[anchor=center, inner sep=0pt] at (0.82\\mockPageBoxW,0.35\\mockPageBoxH)%');
-      lines.push('        {\\fontsize{\\mockPageBoxFont}{\\mockPageBoxLead}\\selectfont\\pageref{LastPage}};%');
-      lines.push('    \\end{scope}%');
     }
     lines.push('  \\end{tikzpicture}%');
     lines.push('  \\fi'); // \ifquickanswerpage 닫기
@@ -4848,14 +5460,47 @@ function getFirstLineProbeLatex(question, {
     const isSplitContinuation = !!(question?.__pb_split_part
       && question.__pb_split_part.isFirst === false);
     if (!isSplitContinuation) {
-      if (numberAbove) {
+  const gyeongsinEssayIdx = Number(question?.__gyeongsinEssayIndex || 0);
+  const neunginSeodapIdx = Number(question?.__neunginSeodapIndex || 0);
+  const daeryunEssayIdx = Number(question?.__daeryunEssayIndex || 0);
+  const dongdoEssayIdx = Number(question?.__dongdoEssayIndex || 0);
+  const soseonEssayIdx = Number(question?.__soseonEssayIndex || 0);
+  const oseongEssayIdx = Number(question?.__oseongEssayIndex || 0);
+  const jeonghwaSubIdx = Number(question?.__jeonghwaSubjectiveIndex || 0);
+  const jeonghwaEssayIdx = Number(question?.__jeonghwaEssayIndex || 0);
+  const hwanggeumEssayIdx = Number(question?.__hwanggeumEssayIndex || 0);
+  if (gyeongsinEssayIdx > 0 || dongdoEssayIdx > 0 || soseonEssayIdx > 0 || jeonghwaSubIdx > 0 || jeonghwaEssayIdx > 0 || hwanggeumEssayIdx > 0) {
+    const eIdx = gyeongsinEssayIdx || dongdoEssayIdx || soseonEssayIdx || jeonghwaSubIdx || jeonghwaEssayIdx || hwanggeumEssayIdx;
+    const fontPt = Math.max(7, Number(stemSizePt) || 11);
+    const leadPt = Math.max(fontPt * 1.18, fontPt + 1).toFixed(2);
+    const labelStr = jeonghwaSubIdx > 0
+      ? `단답형 ${eIdx}.`
+      : (jeonghwaEssayIdx > 0
+          ? `서술형 ${eIdx}.`
+          : (hwanggeumEssayIdx > 0
+              ? `【서술형${eIdx}】`
+              : (soseonEssayIdx > 0 ? `[서술형${eIdx}]` : `[서술형 ${eIdx}]`)));
+    parts.push(`{\\fontsize{${fontPt.toFixed(2)}pt}{${leadPt}pt}\\selectfont\\bfseries ${labelStr}}\\enspace`);
+  } else if (neunginSeodapIdx > 0) {
+    const fontPt = Math.max(7, Number(stemSizePt) || 11);
+    const leadPt = Math.max(fontPt * 1.18, fontPt + 1).toFixed(2);
+    const kindLabel = question?.__neunginSeodapKind === 'essay' ? '서·논술형' : '단답형';
+    parts.push(`{\\fontsize{${fontPt.toFixed(2)}pt}{${leadPt}pt}\\selectfont\\bfseries 【서답형 ${neunginSeodapIdx}】\\hspace*{0.35em}(${kindLabel})}`);
+    return `\\hbox{${parts.join('')}}`;
+  } else if (daeryunEssayIdx > 0 || oseongEssayIdx > 0) {
+    parts.push(`${inlineQuestionNumberLatex(String(daeryunEssayIdx || oseongEssayIdx), {
+      stemSizePt,
+      inlineNumberFontPtOverride,
+    })}\\enspace`);
+  } else if (numberAbove) {
         parts.push(`\\textbf{${escapeLatexText(String(qNumDisplay))}}`);
         return `\\hbox{${parts.join('')}}`;
+      } else {
+        parts.push(`${inlineQuestionNumberLatex(qNumDisplay, {
+          stemSizePt,
+          inlineNumberFontPtOverride,
+        })}\\enspace`);
       }
-      parts.push(`${inlineQuestionNumberLatex(qNumDisplay, {
-        stemSizePt,
-        inlineNumberFontPtOverride,
-      })}\\enspace`);
     }
   }
   if (firstText) {
@@ -5062,6 +5707,16 @@ function renderOneQuestion(question, {
   pairAnchorId = '',
   pairAnchorYOffsetPt = 0,
   pairAnchorMeasure = false,
+  isGyeongsinProfile = false,
+  isNeunginProfile = false,
+  isDaeryunProfile = false,
+  isDongdoProfile = false,
+  isSoseonProfile = false,
+  isOseongProfile = false,
+  isJeonghwaProfile = false,
+  isHwanggeumProfile = false,
+  columnIndex = 0,
+  slotRowIndex = 0,
 } = {}) {
   if (question?.__render_kind === 'independent_set_group') {
     return renderIndependentSetGroupLatex(question, {
@@ -5840,35 +6495,238 @@ function renderOneQuestion(question, {
   const pairAnchorTex = pairAnchorMeasure && safePairAnchorId
     ? `\\YggPairAnchor{${safePairAnchorId}}`
     : '';
-  const pairAnchorFirstOffsetTex = sectionLabel ? pairAnchorOffsetTex : '';
-  const pairAnchorNumberOffsetTex = sectionLabel ? '' : pairAnchorOffsetTex;
-  const pairAnchorLabelTex = sectionLabel ? pairAnchorTex : '';
-  const pairAnchorNumberTex = sectionLabel ? '' : pairAnchorTex;
-  if (sectionLabel) {
+  // 경신중/능인중/대륜중/동도중 서술형·서답형 안내 블록은 열 라벨 설정과 무관하게 첫 문항 바로 위에 항상 붙는다.
+  const gyeongsinEssayNotice = isGyeongsinProfile && question?.__gyeongsinFirstEssay === true;
+  const neunginSubNotice = isNeunginProfile && question?.__neunginFirstSubjective === true;
+  const neunginEssayNotice = isNeunginProfile && question?.__neunginFirstEssay === true;
+  const daeryunFirstQuestion = isDaeryunProfile && question?.__daeryunFirstQuestion === true;
+  const daeryunEssayNotice = isDaeryunProfile && question?.__daeryunFirstEssay === true && !daeryunFirstQuestion;
+  const dongdoFirstQuestion = isDongdoProfile && question?.__dongdoFirstQuestion === true;
+  const dongdoEssayNotice = isDongdoProfile && question?.__dongdoFirstEssay === true;
+  const soseonFirstQuestion = isSoseonProfile && question?.__soseonFirstQuestion === true;
+  const soseonEssayNotice = isSoseonProfile && question?.__soseonFirstEssay === true;
+  const oseongEssayNotice = isOseongProfile && question?.__oseongFirstEssay === true;
+  const jeonghwaFirstObjective = isJeonghwaProfile && question?.__jeonghwaFirstObjective === true;
+  const jeonghwaFirstSeodap = isJeonghwaProfile && question?.__jeonghwaFirstSeodap === true;
+  const jeonghwaFirstSubjective = isJeonghwaProfile && question?.__jeonghwaFirstSubjective === true;
+  const jeonghwaFirstEssay = isJeonghwaProfile && question?.__jeonghwaFirstEssay === true;
+  const hasLeadBlock = !!sectionLabel || gyeongsinEssayNotice || neunginSubNotice || neunginEssayNotice || daeryunFirstQuestion || daeryunEssayNotice || dongdoFirstQuestion || dongdoEssayNotice || soseonFirstQuestion || soseonEssayNotice || oseongEssayNotice || jeonghwaFirstObjective || jeonghwaFirstSeodap || jeonghwaFirstSubjective || jeonghwaFirstEssay;
+  const pairAnchorFirstOffsetTex = hasLeadBlock ? pairAnchorOffsetTex : '';
+  const pairAnchorNumberOffsetTex = hasLeadBlock ? '' : pairAnchorOffsetTex;
+  const pairAnchorLabelTex = hasLeadBlock ? pairAnchorTex : '';
+  const pairAnchorNumberTex = hasLeadBlock ? '' : pairAnchorTex;
+  if (gyeongsinEssayNotice) {
+    const shiftExpr = columnIndex === 1
+      ? '\\hspace{-1em}\\hspace*{\\dimexpr\\linewidth+23pt-\\gyeongsinColFrameW\\relax}'
+      : '\\hspace{-1em}\\hspace*{-5pt}';
+    const noticeBox = '\\makebox[0pt][l]{\\tikz[baseline={([yshift=-12pt]box.north)}]{'
+      + '\\node[fill=white,draw=black,line width=0.6pt,inner xsep=10pt,inner ysep=9pt,outer sep=0pt,'
+      + 'text width=\\dimexpr\\gyeongsinColFrameW-41pt\\relax,align=left] (box) '
+      + '{\\setstretch{1}\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{11pt}{18pt}\\selectfont '
+      + '※ 서술형 문항은 반드시 OMR카드에 작성하시오.\\\\\\hspace*{1.15em}교과서에 나오는 표현을 사용하고, 정자로 쓰시오.}};}}';
+    parts.push(
+      `${pairAnchorFirstOffsetTex}\\noindent\\YggVtwoBaselineGuide{}${shiftExpr}${pairAnchorLabelTex}${noticeBox}\\par`,
+      '\\vspace{14pt}',
+    );
+  } else if (neunginSubNotice || neunginEssayNotice) {
+    const rangeTxt = neunginEssayNotice
+      ? (question?.__neunginEssayRangeText || '1')
+      : (question?.__neunginSubRangeText || '1');
+    const bodyTxt = neunginEssayNotice
+      ? `※\\ 【서답형 ${escapeLatexText(rangeTxt)}】 답안지에 풀이 과정과 답을 모두 작성하시오. 단, 학교에서 배운 교육과정 범위 내에서 서술하시오.`
+      : `※\\ 【서답형 ${escapeLatexText(rangeTxt)}】 답안지에 답만 작성하시오.`;
+    const noticeLine = `{\\setstretch{1.25}\\YggWithUnifiedDigits{\\fontsize{10.5pt}{15pt}\\selectfont\\bfseries \\hangindent=1.35em\\hangafter=1\\noindent ${bodyTxt}\\par}}`;
+    parts.push(
+      `${pairAnchorFirstOffsetTex}\\noindent\\YggVtwoBaselineGuide{}\\hspace{-1em}${pairAnchorLabelTex}${noticeLine}`,
+      '\\vspace{8pt}',
+    );
+  } else if (daeryunFirstQuestion) {
+    const bulbTex = '\\tikz[baseline=-2.2pt]{\\draw[line width=0.5pt] (0,1.2pt) circle (2.3pt);\\draw[line width=0.5pt] (-1.2pt,-1.2pt) rectangle (1.2pt,-2.3pt);\\draw[line width=0.45pt] (0,4.2pt)--(0,5.5pt) (-2.8pt,3.3pt)--(-3.9pt,4.3pt) (2.8pt,3.3pt)--(3.9pt,4.3pt) (-3.4pt,1.2pt)--(-4.7pt,1.2pt) (3.4pt,1.2pt)--(4.7pt,1.2pt);}\\hspace{0.3em}';
+    const openDotTex = '\\tikz[baseline=-2.2pt]\\draw[line width=0.55pt] (0,0) circle (1.7pt);\\hspace{0.2em}';
+    const solidDotTex = '\\tikz[baseline=-2.4pt]\\fill (0,0) circle (2.8pt);';
+    const topPart = `{\\setstretch{1}\\YggWithUnifiedDigits{\\fontsize{9.2pt}{13pt}\\selectfont `
+      + `\\hangindent=1.35em\\hangafter=1\\noindent ${bulbTex}\\uline{\\textbf{문제지는 총 \\daeryunTotalSheets 장 \\daeryunTotalPages 면}}이며, 반드시 총 면수를 꼭 확인하시오.\\par\\vspace{2pt}`
+      + `\\hangindent=1.35em\\hangafter=1\\noindent ${bulbTex}\\uline{\\textbf{선택형 문항 \\daeryunObjectiveCount 문항, 서술형 문항은 \\daeryunEssayCount 문항}}입니다. 문항마다 배점이\\linebreak 다를 수 있으니 반드시 확인하시기 바랍니다.\\par}}`;
+    const botPart = `{\\setstretch{1}\\leftskip=6pt\\YggWithUnifiedDigits{\\fontsize{8.8pt}{12.6pt}\\selectfont `
+      + `\\noindent \\textbf{※ 답안은 다음과 같은 방식으로 작성합니다.}\\par\\vspace{2.2pt}`
+      + `\\hangindent=0.85em\\hangafter=1\\noindent ${openDotTex}\\textbf{선택형} : 물음에 알맞은 답을 골라 OMR답안지의 선택형 답란에\\linebreak 컴퓨터용 수성 사인펜으로 “${solidDotTex}”와 같이 표기하시오.\\par\\vspace{2pt}`
+      + `\\hangindent=0.85em\\hangafter=1\\noindent ${openDotTex}\\textbf{서술형} : 물음에 알맞은 답을 OMR답안지의 서술형 답란에 연필이나\\linebreak 볼펜을 이용하여 정자로 쓰시오.\\par}}`;
+    const instBox = '\\makebox[0pt][l]{\\hspace*{2.7pt}\\raisebox{0pt}[9pt][\\depth]{\\tikz[baseline={([yshift=-16pt]inst.north)}]{'
+      + '\\node[fill=white,draw=black,line width=0.6pt,inner xsep=5pt,inner ysep=5.2pt,outer sep=0pt,'
+      + 'text width=\\dimexpr\\gyeongsinColFrameW-31.9pt\\relax,align=left] (inst) {'
+      + `${topPart}\\vspace{4pt}\\hrule height 0.5pt\\vspace{4.5pt}${botPart}\\vspace{1.5pt}\\hrule height 0pt`
+      + '};\\draw[line width=0.5pt] ([yshift=1.9pt]inst.south west) -- ([yshift=1.9pt]inst.south east);}}}';
+    const firstPillText = question?.__daeryunFirstEssay === true ? '서\\hspace{0.15em}술\\hspace{0.15em}형' : '선\\hspace{0.15em}택\\hspace{0.15em}형';
+    const pillBox = `\\makebox[0pt][l]{\\makebox[\\dimexpr\\gyeongsinColFrameW-18pt\\relax][c]{\\tikz[baseline=(p.base)]{\\node[draw=black,line width=1.35pt,rounded corners=8.5pt,minimum width=153pt,minimum height=30.8pt,inner sep=0pt] (p) {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{15.5pt}{18pt}\\selectfont\\bfseries ${firstPillText}}};}}}`;
+    parts.push(
+      `${pairAnchorFirstOffsetTex}\\noindent\\YggVtwoBaselineGuide{}\\hspace{-1em}${pairAnchorLabelTex}${instBox}\\par`,
+      '\\vspace{12pt}',
+      `\\noindent\\hspace{-1em}${pillBox}\\par`,
+      '\\vspace{11pt}',
+    );
+  } else if (daeryunEssayNotice) {
+    const pillBox = '\\makebox[0pt][l]{\\makebox[\\dimexpr\\gyeongsinColFrameW-18pt\\relax][c]{\\tikz[baseline={([yshift=-13pt]p.north)}]{\\node[draw=black,line width=1.35pt,rounded corners=8.5pt,minimum width=153pt,minimum height=30.8pt,inner sep=0pt] (p) {\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{15.5pt}{18pt}\\selectfont\\bfseries 서\\hspace{0.15em}술\\hspace{0.15em}형}};}}}';
+    parts.push(
+      `${pairAnchorFirstOffsetTex}\\noindent\\YggVtwoBaselineGuide{}\\hspace{-1em}${pairAnchorLabelTex}${pillBox}\\par`,
+      '\\vspace{11pt}',
+    );
+  } else if (dongdoFirstQuestion || dongdoEssayNotice) {
+    const openDotTex = '\\tikz[baseline=-2.2pt]\\draw[line width=0.55pt] (0,0) circle (1.75pt);\\hspace{0.35em}';
+    if (dongdoFirstQuestion) {
+      const ruleShiftExpr = columnIndex === 1
+        ? '\\hspace{-1em}\\hspace*{\\dimexpr\\linewidth+14pt-\\gyeongsinColFrameW\\relax}'
+        : '\\hspace{-1em}\\hspace*{-14pt}';
+      const instLines = `{\\setstretch{1}\\leftskip=0pt\\YggWithUnifiedDigits{\\fontsize{9.6pt}{15.8pt}\\selectfont `
+        + `\\noindent ${openDotTex}이 문제지는 \\dongdoTotalSheets 장 \\dongdoTotalPages 면으로 되어 있으니 반드시 확인하시오.\\par`
+        + `\\noindent ${openDotTex}선택형은 선택형답란에 서술형은 서술형답란에 답을 쓰시오.\\par`
+        + `\\noindent ${openDotTex}모든 문항의 답은 정해진 해당 번호 답란에 정확하게 기재하시오.\\par`
+        + `\\noindent ${openDotTex}배점은 각 문항에 적혀 있는 점수를 확인하시오.\\par}}`;
+      const instBox = '\\makebox[0pt][l]{\\raisebox{0pt}[9pt][\\depth]{\\tikz[baseline={([yshift=-16.5pt]dinst.north)}]{'
+        + '\\node[inner sep=0pt,outer sep=0pt,text width=\\dimexpr\\gyeongsinColFrameW-28pt\\relax,align=left] (dinst) {'
+        + instLines
+        + '};}}}';
+      parts.push(
+        `${pairAnchorFirstOffsetTex}\\noindent\\YggVtwoBaselineGuide{}\\hspace{-1em}${pairAnchorLabelTex}${instBox}\\par`,
+        '\\vspace{4pt}',
+        `\\noindent${ruleShiftExpr}\\makebox[0pt][l]{\\rule{\\gyeongsinColFrameW}{0.6pt}}\\par`,
+        '\\vspace{10pt}',
+      );
+    }
+    if (dongdoEssayNotice) {
+      const essayHead = '\\makebox[0pt][l]{\\makebox[\\dimexpr\\gyeongsinColFrameW-28pt\\relax][c]{\\YggWithUnifiedDigits{\\fontsize{10.5pt}{13pt}\\selectfont $<$지금부터는 서술형 문항입니다$>$}}}';
+      const essayBoxInner = `{\\setstretch{1}\\leftskip=0pt\\YggWithUnifiedDigits{\\fontsize{9.5pt}{15.5pt}\\selectfont `
+        + `\\noindent ${openDotTex}풀이와 답을 모두 쓸 것.\\par`
+        + `\\noindent ${openDotTex}부분 점수 있음.\\par`
+        + `\\noindent ${openDotTex}교육과정 내의 풀이 방법 및 기호를 사용할 것.\\par`
+        + `\\noindent\\hspace*{1.05em}(그렇지 않은 경우, 감점 및 오답 처리함.)\\par}}`;
+      const essayBox = '\\makebox[0pt][l]{\\tikz[baseline={([yshift=-11pt]ebox.north)}]{'
+        + '\\node[fill=white,draw=black,line width=0.6pt,inner xsep=6.5pt,inner ysep=5.5pt,outer sep=0pt,'
+        + 'text width=\\dimexpr\\gyeongsinColFrameW-39pt\\relax,align=left] (ebox) {'
+        + essayBoxInner
+        + '};}}';
+      parts.push(
+        `${dongdoFirstQuestion ? '' : pairAnchorFirstOffsetTex}\\noindent\\YggVtwoBaselineGuide{}\\hspace{-1em}${dongdoFirstQuestion ? '' : pairAnchorLabelTex}${essayHead}\\par`,
+        '\\vspace{6pt}',
+        `\\noindent\\hspace{-1em}${essayBox}\\par`,
+        '\\vspace{10pt}',
+      );
+    }
+  } else if (soseonFirstQuestion || soseonEssayNotice) {
+    if (soseonFirstQuestion) {
+      const soseonInstInner = `{\\setstretch{1}\\leftskip=0pt\\YggWithUnifiedDigits{\\fontsize{9.6pt}{14.8pt}\\selectfont `
+        + `\\noindent \\textbf{※ 시험 유의사항}\\par\\vspace{1.5pt}`
+        + `\\noindent 1. 선택형 수정 - 수정테이프 사용\\par`
+        + `\\noindent 2. 서술형 수정 - 두 줄 긋고 다시 작성\\par`
+        + `\\noindent 3. 선택형과 서술형 모두 OMR카드에 표기\\par}}`;
+      const soseonInstBox = '\\makebox[0pt][l]{\\hspace*{-7pt}\\raisebox{0pt}[9pt][\\depth]{\\tikz[baseline={([yshift=-16.5pt]sinst.north)}]{'
+        + '\\node[fill=white,draw=black,line width=0.6pt,inner xsep=5.5pt,inner ysep=5pt,outer sep=0pt,'
+        + 'text width=\\dimexpr\\gyeongsinColFrameW-33pt\\relax,align=left] (sinst) {'
+        + soseonInstInner
+        + '};}}}';
+      parts.push(
+        `${pairAnchorFirstOffsetTex}\\noindent\\YggVtwoBaselineGuide{}\\hspace{-1em}${pairAnchorLabelTex}${soseonInstBox}\\par`,
+        '\\vspace{10pt}',
+      );
+    }
+    if (soseonEssayNotice) {
+      const soseonEssayInner = `{\\setstretch{1}\\leftskip=0pt\\YggWithUnifiedDigits{\\fontsize{9.6pt}{14.5pt}\\selectfont\\bfseries `
+        + `\\setbox0=\\hbox{※\\ }\\noindent\\copy0 이후 문제는 서술형 문제입니다.\\par\\vspace{1pt}`
+        + `\\noindent\\hspace*{\\dimexpr\\wd0+1.4pt\\relax}풀이과정이 없으면 감점이 있으니 반드시 작성하시오.\\par}}`;
+      const soseonEssayBox = '\\makebox[0pt][l]{\\hspace*{-7pt}\\raisebox{0pt}[9pt][\\depth]{\\tikz[baseline={([yshift=-16.5pt]sebox.north)}]{'
+        + '\\node[fill=white,draw=black,line width=0.6pt,inner xsep=5.5pt,inner ysep=4.5pt,outer sep=0pt,'
+        + 'text width=\\dimexpr\\gyeongsinColFrameW-33pt\\relax,align=left] (sebox) {'
+        + soseonEssayInner
+        + '};}}}';
+      parts.push(
+        `${soseonFirstQuestion ? '' : pairAnchorFirstOffsetTex}\\noindent\\YggVtwoBaselineGuide{}\\hspace{-1em}${soseonFirstQuestion ? '' : pairAnchorLabelTex}${soseonEssayBox}\\par`,
+        '\\vspace{9pt}',
+      );
+    }
+  } else if (oseongEssayNotice) {
+    const openDotTex = '\\tikz[baseline=-2.2pt]\\draw[line width=0.55pt] (0,0) circle (1.75pt);\\hspace{0.35em}';
+    const rangeTxt = escapeLatexText(String(question?.__oseongEssayRangeText || '1-4'));
+    const oseongBotInner = `{\\lineskiplimit=-10pt\\lineskip=0pt\\setstretch{1}\\leftskip=0pt\\YggWithUnifiedDigits{\\fontsize{9.6pt}{12.4pt}\\selectfont `
+      + `{\\centering\\noindent $<$서술형 답안 작성시 유의사항$>$\\par}\\vspace{1.2pt}`
+      + `\\noindent ${openDotTex}풀이 과정 반드시 포함. 부분 점수 있음.\\par}}`;
+    const oseongEssayCombinedBox = '\\makebox[0pt][l]{\\raisebox{0pt}[9pt][\\depth]{\\tikz[baseline={([yshift=-15pt]otop.north)}]{'
+      + '\\node[fill=white,draw=black,line width=0.6pt,inner xsep=6pt,inner ysep=5.0pt,outer sep=0pt,'
+      + 'text width=\\dimexpr\\gyeongsinColFrameW-34pt\\relax,align=left] (obot) {'
+      + oseongBotInner
+      + '};'
+      + `\\node[anchor=south,fill=white,draw=black,line width=0.6pt,minimum width=164pt,minimum height=22.5pt,inner sep=0pt,outer sep=0pt] (otop) at ([yshift=3.5pt]obot.north) {\\YggWithUnifiedDigits{\\fontsize{11.0pt}{13pt}\\selectfont\\bfseries 서답형(서술형 ${rangeTxt})}};`
+      + '}}}';
+    parts.push(
+      `${pairAnchorFirstOffsetTex}\\noindent\\YggVtwoBaselineGuide{}\\hspace{-1em}${pairAnchorLabelTex}${oseongEssayCombinedBox}\\par`,
+      '\\vspace{7pt}',
+    );
+  } else if (jeonghwaFirstObjective || jeonghwaFirstSeodap || jeonghwaFirstSubjective || jeonghwaFirstEssay) {
+    let leadPlaced = false;
+    const jeonghwaColShiftExpr = columnIndex === 1
+      ? '\\hspace{-1em}\\hspace*{\\dimexpr\\linewidth+28.6pt-\\gyeongsinColFrameW\\relax}'
+      : '\\hspace{-1em}\\hspace*{0.6pt}';
+    if (jeonghwaFirstObjective) {
+      const objHead = '\\makebox[0pt][l]{\\makebox[\\dimexpr\\gyeongsinColFrameW-29.2pt\\relax][c]{\\raisebox{-8pt}[9pt][\\depth]{\\YggWithUnifiedDigits{\\gyeongsinGothic\\fontsize{12pt}{14pt}\\selectfont\\bfseries 【선택형 문항】}}}}';
+      parts.push(
+        `${pairAnchorFirstOffsetTex}\\noindent\\YggVtwoBaselineGuide{}${jeonghwaColShiftExpr}${pairAnchorLabelTex}${objHead}\\par`,
+        '\\vspace{22pt}',
+      );
+      leadPlaced = true;
+    }
+    if (jeonghwaFirstSeodap) {
+      const seodapBoxInner = `{\\lineskiplimit=-10pt\\lineskip=0pt\\setstretch{1}\\YggWithUnifiedDigits{\\gyeongsinGothic`
+        + `{\\fontsize{13.5pt}{16.5pt}\\selectfont\\bfseries 서답형 문항}\\par\\vspace{7.5pt}`
+        + `{\\fontsize{9.6pt}{16.8pt}\\selectfont 모든 서답형(단답형, 서술형) 정답은\\\\`
+        + `답안지 카드 ‘서답형 답란’의 ‘{\\bfseries 문항번호}’칸에 {\\bfseries 문항번호}를\\\\`
+        + `반드시 기입한 후 답안을 작성하도록 합니다.\\\\`
+        + `답안지 카드는 {\\bfseries 1장}만 사용할 수 있습니다.\\par}}}`;
+      const seodapBox = '\\makebox[0pt][l]{\\raisebox{-4pt}[9pt][\\depth]{\\tikz[baseline={([yshift=-15pt]jhseodap.north)}]{'
+        + '\\node[fill=white,draw=black,line width=0.65pt,inner xsep=6pt,inner ysep=8pt,outer sep=0pt,'
+        + 'text width=\\dimexpr\\gyeongsinColFrameW-41.85pt\\relax,align=center] (jhseodap) {'
+        + seodapBoxInner
+        + '};}}}';
+      parts.push(
+        `${leadPlaced ? '' : pairAnchorFirstOffsetTex}\\noindent\\YggVtwoBaselineGuide{}${jeonghwaColShiftExpr}${leadPlaced ? '' : pairAnchorLabelTex}${seodapBox}\\par`,
+        '\\vspace{24pt}',
+      );
+      leadPlaced = true;
+    }
+    if (jeonghwaFirstSubjective) {
+      const subInner = `{\\lineskiplimit=-10pt\\lineskip=0pt\\setstretch{1}\\leftskip=0pt\\YggWithUnifiedDigits{`
+        + `{\\centering\\noindent\\gyeongsinGothic\\fontsize{12pt}{15pt}\\selectfont\\bfseries 【단답형 문항】\\par}\\vspace{9pt}`
+        + `{\\fontsize{10.5pt}{23pt}\\selectfont\\noindent ※ 단답형 문항은 답안지의 서답형 답란에 {\\gyeongsinGothic\\fontsize{12.2pt}{23pt}\\selectfont\\bfseries\\uline{문항 번호}}와\\\\`
+        + `{\\gyeongsinGothic\\fontsize{12.2pt}{23pt}\\selectfont\\bfseries\\uline{답만}} 쓰도록 합니다.\\par}}}`;
+      const subBlock = '\\makebox[0pt][l]{\\raisebox{0pt}[9pt][\\depth]{\\tikz[baseline={([yshift=-14pt]jhsub.north)}]{'
+        + '\\node[inner sep=0pt,outer sep=0pt,text width=\\dimexpr\\gyeongsinColFrameW-29.2pt\\relax,align=left] (jhsub) {'
+        + subInner
+        + '};}}}';
+      parts.push(
+        `${leadPlaced ? '' : pairAnchorFirstOffsetTex}\\noindent\\YggVtwoBaselineGuide{}${jeonghwaColShiftExpr}${leadPlaced ? '' : pairAnchorLabelTex}${subBlock}\\par`,
+        '\\vspace{15pt}',
+      );
+      leadPlaced = true;
+    }
+    if (jeonghwaFirstEssay) {
+      const essInner = `{\\lineskiplimit=-10pt\\lineskip=0pt\\setstretch{1}\\leftskip=0pt\\YggWithUnifiedDigits{`
+        + `{\\centering\\noindent\\gyeongsinGothic\\fontsize{12pt}{15pt}\\selectfont\\bfseries 【서술형 문항】\\par}\\vspace{9pt}`
+        + `{\\fontsize{10.5pt}{22pt}\\selectfont\\noindent ※ 서술형 문항은 답안지의 서술형 답란에 {\\gyeongsinGothic\\fontsize{12.0pt}{22pt}\\selectfont\\bfseries\\uline{문항 번호와}}\\\\`
+        + `{\\gyeongsinGothic\\fontsize{12.0pt}{22pt}\\selectfont\\bfseries\\uline{풀이과정, 답}}을 모두 적으시오. 풀이과정에 따라 부분점\\\\`
+        + `수가 부여됩니다.\\par}}}`;
+      const essBlock = '\\makebox[0pt][l]{\\raisebox{0pt}[9pt][\\depth]{\\tikz[baseline={([yshift=-14pt]jhess.north)}]{'
+        + '\\node[inner sep=0pt,outer sep=0pt,text width=\\dimexpr\\gyeongsinColFrameW-29.2pt\\relax,align=left] (jhess) {'
+        + essInner
+        + '};}}}';
+      parts.push(
+        `${leadPlaced ? '' : pairAnchorFirstOffsetTex}\\noindent\\YggVtwoBaselineGuide{}${jeonghwaColShiftExpr}${leadPlaced ? '' : pairAnchorLabelTex}${essBlock}\\par`,
+        '\\vspace{15pt}',
+      );
+    }
+  }
+  if (sectionLabel && !isGyeongsinProfile && !isNeunginProfile && !isDaeryunProfile && !isDongdoProfile && !isSoseonProfile && !isOseongProfile && !isJeonghwaProfile && !isHwanggeumProfile) {
     const spaced = Array.from(String(sectionLabel)).map((c) => escapeLatexText(c)).join('\\,');
-    // 10% 확대: 폰트 13.2pt(약 \large 의 1.1배), fboxsep 4.4pt, 좌우 \hspace 13.2pt, fboxrule 0.55pt.
-    // \hspace{-1em} 으로 leftskip 바깥으로 빼서 slot minipage 왼쪽 경계에 딱 붙임.
-    // 사용자 요청 22차: 라벨박스 내부 '5지선다형' 같은 텍스트에서 '5' 만 Latin instance
-    //   로 분기되는 이질감을 제거하기 위해 fbox 내부 전체를 `\YggWithUnifiedDigits` 로
-    //   감싼다. 래퍼는 지역 scope 에서만 charclass 를 바꾸고 원복하므로 본문 미영향.
-    //   (아래 buildLabelProbe 도 동일하게 감싸 ht/dp 계산이 실제 렌더와 1:1 일치하도록 함.)
     const labelBoxInner = '{\\setlength{\\fboxrule}{0.55pt}\\setlength{\\fboxsep}{4.4pt}'
       + '\\fbox{\\YggWithUnifiedDigits{\\YggTopLabel\\hspace{13.2pt}\\fontsize{13.2pt}{15.84pt}\\selectfont '
       + spaced
       + '\\hspace{13.2pt}}}}';
-    // labelBox 를 \raisebox 로 감싸 line ht 를 조절한다.
-    //   - 사용자 요청 20차 (초안): 가로 구분선-라벨박스 상단 간격을 30% 축소.
-    //     기존(raise=0pt, strut +5pt) 기준 gap ≈ 19pt (divider y = body_top-14pt,
-    //     labelBox visible top ≈ body_top+5pt).
-    //   - 사용자 요청 21차 (수정본):
-    //       ① gap 을 기존 13pt → 11.7pt (10% 축소) 만 조정.
-    //       ② 라벨박스 text baseline 과 짝슬롯 qNum baseline 이 수평 유지.
-    //     구현: `\raisebox{0pt}[\dimexpr\height-2.3pt\relax][\depth]` 로 **baseline 은
-    //     그대로 두고 reported ht 만 2.3pt 축소** 한다. (과거 raise=7.3pt 방식은 baseline
-    //     자체가 이동해 qNum 과의 수평이 깨지는 부작용이 있어 철회)
-    //     → 짝 slot strut 에도 동일한 2.3pt 축소 적용 → line ht = a - 2.3pt, 양쪽 공통
-    //       baseline 유지 → labelBox ink top = body_top - 2.3pt → gap = 14 - 2.3 = 11.7pt ✓
-    //   - 라벨박스 ↔ 문항번호 간격 (\vspace) 은 10pt → 7pt (30% 축소) 유지.
     const labelBox = `\\raisebox{0pt}[\\dimexpr\\height-2.3pt\\relax][\\depth]{${labelBoxInner}}`;
     parts.push(
       `${pairAnchorFirstOffsetTex}\\noindent\\YggVtwoBaselineGuide{}\\hspace{-1em}${pairAnchorLabelTex}${labelBox}\\par`,
@@ -5876,23 +6734,56 @@ function renderOneQuestion(question, {
     );
   }
 
-  if (numberAbove && emitQuestionNumber && qNumDisplay) {
+  const gyeongsinEssayIdx = Number(question?.__gyeongsinEssayIndex || 0);
+  const neunginSeodapIdx = Number(question?.__neunginSeodapIndex || 0);
+  const daeryunEssayIdx = Number(question?.__daeryunEssayIndex || 0);
+  const dongdoEssayIdx = Number(question?.__dongdoEssayIndex || 0);
+  const soseonEssayIdx = Number(question?.__soseonEssayIndex || 0);
+  const oseongEssayIdx = Number(question?.__oseongEssayIndex || 0);
+  const jeonghwaSubIdx = Number(question?.__jeonghwaSubjectiveIndex || 0);
+  const jeonghwaEssayIdx = Number(question?.__jeonghwaEssayIndex || 0);
+  const hwanggeumEssayIdx = Number(question?.__hwanggeumEssayIndex || 0);
+  const effectiveQNumDisplay = (daeryunEssayIdx > 0 || oseongEssayIdx > 0)
+    ? String(daeryunEssayIdx || oseongEssayIdx)
+    : qNumDisplay;
+  if ((gyeongsinEssayIdx > 0 || dongdoEssayIdx > 0 || soseonEssayIdx > 0 || jeonghwaSubIdx > 0 || jeonghwaEssayIdx > 0 || hwanggeumEssayIdx > 0) && emitQuestionNumber) {
+    const eIdx = gyeongsinEssayIdx || dongdoEssayIdx || soseonEssayIdx || jeonghwaSubIdx || jeonghwaEssayIdx || hwanggeumEssayIdx;
+    const strut = hasLeadBlock ? '' : firstLineStrut;
+    const labelStr = jeonghwaSubIdx > 0
+      ? `단답형 ${eIdx}.`
+      : (jeonghwaEssayIdx > 0
+          ? `서술형 ${eIdx}.`
+          : (hwanggeumEssayIdx > 0
+              ? `【서술형${eIdx}】`
+              : (soseonEssayIdx > 0 ? `[서술형${eIdx}]` : `[서술형 ${eIdx}]`)));
+    const essayNumTex = `{\\fontsize{${questionFontSizePt.toFixed(2)}pt}{${questionLeadPt}pt}\\selectfont\\bfseries ${labelStr}}`;
     parts.push(
-      `${pairAnchorNumberOffsetTex}\\noindent\\YggVtwoBaselineGuide{}${pairAnchorNumberTex}{\\fontsize{${aboveNumberFontPt}pt}{${aboveNumberLeadPt}pt}\\selectfont\\bfseries ${escapeLatexText(String(qNumDisplay))}}\\par\\nobreak\\vspace{0.2pt}`,
+      `${pairAnchorNumberOffsetTex}\\noindent\\YggVtwoBaselineGuide{}\\hspace{-1em}${pairAnchorNumberTex}${strut}${essayNumTex}\\enspace`,
     );
-  } else if (emitQuestionNumber && qNum) {
+  } else if (neunginSeodapIdx > 0 && emitQuestionNumber) {
+    const strut = hasLeadBlock ? '' : firstLineStrut;
+    const kindLabel = question?.__neunginSeodapKind === 'essay' ? '서·논술형' : '단답형';
+    const seodapHeadTex = `{\\YggWithUnifiedDigits{\\fontsize{${questionFontSizePt.toFixed(2)}pt}{${questionLeadPt}pt}\\selectfont\\bfseries 【서답형 ${neunginSeodapIdx}】\\hspace*{0.35em}{\\mdseries (${kindLabel})}}}`;
+    parts.push(
+      `${pairAnchorNumberOffsetTex}\\noindent\\YggVtwoBaselineGuide{}\\hspace{-1em}${pairAnchorNumberTex}${strut}${seodapHeadTex}\\par\\nobreak\\vspace{2pt}`,
+    );
+  } else if (numberAbove && emitQuestionNumber && effectiveQNumDisplay) {
+    parts.push(
+      `${pairAnchorNumberOffsetTex}\\noindent\\YggVtwoBaselineGuide{}${pairAnchorNumberTex}{\\fontsize{${aboveNumberFontPt}pt}{${aboveNumberLeadPt}pt}\\selectfont\\bfseries ${escapeLatexText(String(effectiveQNumDisplay))}}\\par\\nobreak\\vspace{0.2pt}`,
+    );
+  } else if (emitQuestionNumber && (qNum || daeryunEssayIdx > 0 || oseongEssayIdx > 0)) {
     // 라벨이 있으면 문항번호는 "두 번째 라인" → 이미 라벨 박스가 라인 ht 결정.
     // 라벨이 없으면 문항번호 라인이 "첫 표시 라인" → firstLineStrut(짝 slot 라벨박스 \vphantom)
     // 을 여기서 소비해 라벨박스와 동일 ht 를 가지도록 한다.
-    const strut = sectionLabel ? '' : firstLineStrut;
-    const inlineNumberTex = inlineQuestionNumberLatex(qNumDisplay, {
+    const strut = hasLeadBlock ? '' : firstLineStrut;
+    const inlineNumberTex = inlineQuestionNumberLatex(effectiveQNumDisplay, {
       stemSizePt: questionFontSizePt,
       inlineNumberFontPtOverride,
     });
     parts.push(
       `${pairAnchorNumberOffsetTex}\\noindent\\YggVtwoBaselineGuide{}\\hspace{-1em}${pairAnchorNumberTex}${strut}${inlineNumberTex}\\enspace`,
     );
-  } else if (!sectionLabel && firstLineStrut) {
+  } else if (!hasLeadBlock && firstLineStrut) {
     parts.push(`${pairAnchorNumberOffsetTex}\\noindent\\YggVtwoBaselineGuide{}${pairAnchorNumberTex}${firstLineStrut}`);
   }
 
@@ -6543,7 +7434,30 @@ function renderOneQuestion(question, {
       if (typeof cur !== 'string' || cur.length === 0) return;
       // "\ [N점]" : \ = 고정폭 공백(hbox 내에서도 유지). \enspace 는 단락 종료 전에는 줄바꿈 허용이라
       // 한 줄 끝에서 점수가 다음 줄로 내려가 보일 수 있음 → \ 를 사용해 마지막 어절과 밀착.
-      const suffix = `\\ {\\small\\mbox{[${escapeLatexText(scoreText)}점]}}`;
+      let scoreLabel;
+      let suffix;
+      if (isNeunginProfile) {
+        const isNeunginEssay = question?.__neunginSeodapKind === 'essay';
+        scoreLabel = isNeunginEssay
+          ? `(${escapeLatexText(scoreText)}점, 부분 점수 있음)`
+          : `(${escapeLatexText(scoreText)}점)`;
+        suffix = isNeunginEssay
+          ? `\\allowbreak\\hspace*{\\fill}{\\small\\mbox{${scoreLabel}}}`
+          : `\\ {\\small\\mbox{${scoreLabel}}}`;
+      } else if (isSoseonProfile && soseonEssayIdx > 0) {
+        const isSubPartScore = Boolean(setSubScores) && partIdx !== lastIdxBySubQ.get(0);
+        scoreLabel = isSubPartScore
+          ? `[${escapeLatexText(scoreText)}점, 부분 점수 있음]`
+          : `[${escapeLatexText(scoreText)}점]`;
+        suffix = `\\ {\\small\\mbox{${scoreLabel}}}`;
+      } else {
+        scoreLabel = gyeongsinEssayIdx > 0
+          ? `[${escapeLatexText(scoreText)}점, 부분점수 있음]`
+          : `[${escapeLatexText(scoreText)}점]`;
+        suffix = gyeongsinEssayIdx > 0
+          ? `\\allowbreak\\hspace*{\\fill}{\\small\\mbox{${scoreLabel}}}`
+          : `\\ {\\small\\mbox{${scoreLabel}}}`;
+      }
       // 세트형 소문항은 "(N) ..." 을 `{\setbox0=\hbox{...} ... \par}` 한 그룹으로 감싸 렌더한다.
       // 이 경우 `\par}` 바깥에 suffix 를 붙이면 그룹이 이미 paragraph 를 종료한 뒤라
       // 점수가 새 paragraph 로 떨어져 "줄바꿈된 상태"로 보이게 된다.
@@ -6570,6 +7484,20 @@ function renderOneQuestion(question, {
       }
     };
     if (setSubScores) {
+      if ((isDongdoProfile || isSoseonProfile) && (dongdoEssayIdx > 0 || soseonEssayIdx > 0) && !isNonFinalSplitPart) {
+        let subScoreSum = 0;
+        for (const v of setSubScores.values()) {
+          if (Number.isFinite(Number(v))) subScoreSum += Number(v);
+        }
+        const totalScoreVal = subScoreSum > 0
+          ? subScoreSum
+          : resolveQuestionScore(question, questionScoreByQuestionId || {});
+        const totalTxt = formatQuestionScore(totalScoreVal);
+        if (totalTxt) {
+          const headIdx = lastIdxBySubQ.get(0);
+          appendScoreSuffix(headIdx, isSoseonProfile ? totalTxt : `총 ${totalTxt}`);
+        }
+      }
       // 세트형: 각 소문항별 점수 부착.
       for (const [subKey, value] of setSubScores.entries()) {
         const subNum = Number(subKey);
@@ -7293,13 +8221,102 @@ function wrapIndependentSetQuestionsForSinglePreview(questions) {
   });
 }
 
-function chunkQuestionsForMockGrid(questions, questionsPerPage) {
+function resolveQuestionElectiveSubject(question) {
+  if (!question || typeof question !== 'object') return '';
+  const candidates = [
+    question?.meta?.mock_exam_item?.section,
+    question?.meta?.mock_scope?.section,
+    question?.course_key,
+    question?.courseKey,
+    question?.course_label,
+    question?.courseLabel,
+    ...(Array.isArray(question?.__setChildren)
+      ? question.__setChildren.flatMap((c) => [
+          c?.meta?.mock_exam_item?.section,
+          c?.meta?.mock_scope?.section,
+          c?.course_key,
+          c?.course_label,
+        ])
+      : []),
+  ];
+  for (const raw of candidates) {
+    const s = String(raw || '').replace(/\s+/g, '').toLowerCase();
+    if (!s || s === 'common' || s === '공통') continue;
+    if (s.includes('probstats') || s.includes('확률') || s.includes('통계') || s.includes('확통')) {
+      return '확률과 통계';
+    }
+    if (s.includes('geometry') || s.includes('기하')) {
+      return '기하';
+    }
+    if (s.includes('calculus') || s === '미적분' || s === 'h-calculus' || s === '미적분2') {
+      return '미적분';
+    }
+  }
+  return '';
+}
+
+function parseMockPageNoticeLabel(rawLabel) {
+  const raw = String(rawLabel ?? '').replace(/\s+/g, ' ').trim();
+  if (!raw) return null;
+  const norm = raw.replace(/^[*※◦○\s]+/, '').trim();
+  if (!norm) return null;
+  if (
+    norm === '확인 사항'
+    || norm === '확인사항'
+    || norm === '단축형'
+    || norm === '기본'
+  ) {
+    return {
+      mode: 'compact',
+      emphasisText: '',
+      reservePt: 68,
+      label: '확인 사항',
+    };
+  }
+  let inner = norm.replace(/^[「『]+|[」』]+$/g, '').trim();
+  if (!inner.includes('선택과목')) {
+    const sub = inner.replace(/^\(|\)$/g, '').trim() || '확률과 통계';
+    inner = `선택과목(${sub})`;
+  }
+  return {
+    mode: 'full',
+    emphasisText: `「${inner}」`,
+    reservePt: 105,
+    label: inner,
+  };
+}
+
+function chunkQuestionsForMockGrid(
+  questions,
+  questionsPerPage,
+  { splitOnElectiveChange = false } = {},
+) {
   const list = Array.isArray(questions) ? questions : [];
   const size = Math.max(1, parsePositiveInt(questionsPerPage, 4));
   const pages = [];
-  for (let i = 0; i < list.length; i += size) {
-    pages.push(list.slice(i, i + size));
+  if (!splitOnElectiveChange) {
+    for (let i = 0; i < list.length; i += size) {
+      pages.push(list.slice(i, i + size));
+    }
+    return pages;
   }
+  let curPage = [];
+  let prevElective = null;
+  for (let i = 0; i < list.length; i += 1) {
+    const q = list[i];
+    const curElective = resolveQuestionElectiveSubject(q);
+    if (curPage.length > 0 && prevElective !== null && curElective !== prevElective) {
+      pages.push(curPage);
+      curPage = [];
+    }
+    curPage.push(q);
+    prevElective = curElective;
+    if (curPage.length >= size) {
+      pages.push(curPage);
+      curPage = [];
+    }
+  }
+  if (curPage.length > 0) pages.push(curPage);
   return pages;
 }
 
@@ -7311,7 +8328,13 @@ function chunkQuestionsForMockGrid(questions, questionsPerPage) {
 //   넘쳐 겹치는 문제를 막는다. 반환 형식은 chunkQuestionsForAssignmentGrid 와 동일.
 function chunkQuestionsForMockGridHeightAware(
   questions,
-  { columnCapacity = 1.0, largeThreshold = 0.55, columnsPerPage = 2, maxPerColumn = 2 } = {},
+  {
+    columnCapacity = 1.0,
+    largeThreshold = 0.55,
+    columnsPerPage = 2,
+    maxPerColumn = 2,
+    splitOnElectiveChange = false,
+  } = {},
 ) {
   const list = Array.isArray(questions) ? questions : [];
   const pages = [];
@@ -7319,6 +8342,7 @@ function chunkQuestionsForMockGridHeightAware(
   let columns = [];
   let curCol = [];
   let curFill = 0;
+  let prevElective = null;
   const flushCol = () => {
     columns.push(curCol);
     curCol = [];
@@ -7342,6 +8366,16 @@ function chunkQuestionsForMockGridHeightAware(
     columns = [];
   };
   for (const q of list) {
+    const curElective = resolveQuestionElectiveSubject(q);
+    if (
+      splitOnElectiveChange
+      && prevElective !== null
+      && curElective !== prevElective
+      && (curCol.length > 0 || columns.length > 0)
+    ) {
+      flushPage();
+    }
+    prevElective = curElective;
     const ratio = estimateAssignmentSlotFillRatio(q);
     const isLarge = ratio >= largeThreshold;
     // 현재 단에 못 들어가면 단을 넘긴다.
@@ -7454,6 +8488,7 @@ function chunkQuestionsByMeasuredHeights(
     fillRatio = 0.7,
     // (pageNo: 1-based) => 그 페이지 컬럼 전체 높이(pt). 제목페이지는 더 작다.
     columnHeightPtForPage,
+    splitOnElectiveChange = false,
   } = {},
 ) {
   const list = Array.isArray(questions) ? questions : [];
@@ -7462,6 +8497,7 @@ function chunkQuestionsByMeasuredHeights(
   let pageColumns = [];
   let curCol = [];
   let pageNo = 1;
+  let prevElective = null;
 
   const slotHeightPt = (H, pos) => {
     const n = Math.max(1, slotsPerColumn);
@@ -7510,6 +8546,17 @@ function chunkQuestionsByMeasuredHeights(
 
   for (let i = 0; i < list.length; i += 1) {
     const q = list[i];
+    const curElective = resolveQuestionElectiveSubject(q);
+    if (
+      splitOnElectiveChange
+      && prevElective !== null
+      && curElective !== prevElective
+      && (curCol.length > 0 || pageColumns.length > 0)
+    ) {
+      closeColumn();
+      flushPage();
+    }
+    prevElective = curElective;
     const rawH = Number(heightsPt?.[i]);
     const H = columnHeight();
     // 측정값이 없는 문항은 보수적으로 "컬럼 독차지" 취급.
@@ -7610,6 +8657,15 @@ function renderMockSlotColumnBody(
     // 슬롯 개별 높이 표현식(LaTeX dimen 식 또는 길이 매크로). 길이는 slotCount 와 동일.
     // 지정되지 않은(또는 falsy) 원소는 slotHeightMacro 로 폴백.
     perSlotHeightExprs = [],
+    isGyeongsinProfile = false,
+    isNeunginProfile = false,
+    isDaeryunProfile = false,
+    isDongdoProfile = false,
+    isSoseonProfile = false,
+    isOseongProfile = false,
+    isJeonghwaProfile = false,
+    isHwanggeumProfile = false,
+    columnIndex = 0,
   } = {},
 ) {
   const lines = [];
@@ -7637,6 +8693,16 @@ function renderMockSlotColumnBody(
         pairAnchorId: pairAnchorIds[i] || '',
         pairAnchorYOffsetPt: Number(pairAnchorOffsetsPt[i] || 0),
         pairAnchorMeasure,
+        isGyeongsinProfile,
+        isNeunginProfile,
+        isDaeryunProfile,
+        isDongdoProfile,
+        isSoseonProfile,
+        isOseongProfile,
+        isJeonghwaProfile,
+        isHwanggeumProfile,
+        columnIndex,
+        slotRowIndex: i,
       }));
     } else {
       lines.push('\\vspace*{0.6\\baselineskip}');
@@ -7800,6 +8866,16 @@ function renderMockGridPageLatex(
     includeQuestionScore = false,
     questionScoreByQuestionId = null,
     isAssignmentProfile = false,
+    isGyeongsinProfile = false,
+    isNeunginProfile = false,
+    isDaeryunProfile = false,
+    isDongdoProfile = false,
+    isSoseonProfile = false,
+    isOseongProfile = false,
+    isJeonghwaProfile = false,
+    isHwanggeumProfile = false,
+    isLastProblemPage = false,
+    mockNoticeReservePt = 0,
     titleHeader = null, // { titleTop, title, subtitle } (null = 일반 페이지)
     // 페이지 내 문항별 sectionLabel. 길이 = pageQuestions.length. 각 원소는 string | null.
     sectionLabels = [],
@@ -7900,6 +8976,17 @@ function renderMockGridPageLatex(
     //   * 짝슬롯 qNum 줄에 분수·큰 수식이 있어 qNum ht 가 strut ht(=a-2.3) 를 초과할 경우
     //     line ceiling 이 그쪽 ht 로 확장 → labelBox 위치도 자연히 그에 맞춰 내려감.
     if (labelL || labelR) {
+      if (isGyeongsinProfile || isNeunginProfile || isDaeryunProfile || isDongdoProfile || isSoseonProfile || isOseongProfile || isJeonghwaProfile || isHwanggeumProfile) {
+        // 경신중/능인중/대륜중/동도중/소선여중/오성중/정화중 안내 블록은 해당 단 내부 안내로 들어가며, 반대편 단의 슬롯을
+        // 아래로 밀어내지 않는다.
+        leftStrutMacros.push('');
+        rightStrutMacros.push('');
+        leftLabelStrutMacros.push(null);
+        rightLabelStrutMacros.push(null);
+        leftTopPadsPt.push(0);
+        rightTopPadsPt.push(0);
+        continue;
+      }
       const probeText = labelL || labelR;
       const macroName = `pair@labelprobe@${pageMacroPrefix}@${r}`;
       pairProbePrelude.push(
@@ -7920,6 +9007,51 @@ function renderMockGridPageLatex(
     //   분수(\dfrac), 위·아래첨자 등으로 한쪽 첫 줄 ht 가 커질 경우, 짝 slot 에도 동일 ht 가 주입되어
     //   "첫 hbox top edge" 가 수평으로 맞춰진다.
     //   depth 는 복사하지 않는다. 반대쪽에 분수가 없을 때 아래 줄간격까지 커지는 것을 막기 위함.
+    const hasCustomLeadL = !!(qL && (
+      qL.__gyeongsinFirstEssay
+      || qL.__neunginFirstSubjective
+      || qL.__neunginFirstEssay
+      || qL.__daeryunFirstQuestion
+      || qL.__daeryunFirstEssay
+      || qL.__dongdoFirstQuestion
+      || qL.__dongdoFirstEssay
+      || qL.__soseonFirstQuestion
+      || qL.__soseonFirstEssay
+      || qL.__oseongFirstEssay
+      || qL.__jeonghwaFirstObjective
+      || qL.__jeonghwaFirstSeodap
+      || qL.__jeonghwaFirstSubjective
+      || qL.__jeonghwaFirstEssay
+    ));
+    const hasCustomLeadR = !!(qR && (
+      qR.__gyeongsinFirstEssay
+      || qR.__neunginFirstSubjective
+      || qR.__neunginFirstEssay
+      || qR.__daeryunFirstQuestion
+      || qR.__daeryunFirstEssay
+      || qR.__dongdoFirstQuestion
+      || qR.__dongdoFirstEssay
+      || qR.__soseonFirstQuestion
+      || qR.__soseonFirstEssay
+      || qR.__oseongFirstEssay
+      || qR.__jeonghwaFirstObjective
+      || qR.__jeonghwaFirstSeodap
+      || qR.__jeonghwaFirstSubjective
+      || qR.__jeonghwaFirstEssay
+    ));
+    if (hasCustomLeadL || hasCustomLeadR) {
+      leftPairAnchorIds[r] = '';
+      rightPairAnchorIds[r] = '';
+      leftPairAnchorOffsetsPt[r] = 0;
+      rightPairAnchorOffsetsPt[r] = 0;
+      leftStrutMacros.push('');
+      rightStrutMacros.push('');
+      leftLabelStrutMacros.push(null);
+      rightLabelStrutMacros.push(null);
+      leftTopPadsPt.push(0);
+      rightTopPadsPt.push(0);
+      continue;
+    }
     const probeL = qL ? getFirstLineProbeLatex(qL, {
       showQuestionNumber,
       questionNumberPlacement,
@@ -7972,21 +9104,44 @@ function renderMockGridPageLatex(
     if (!measuredHeightsPt.every((h) => Number.isFinite(h) && h > 0)) return null;
     return { measuredHeightsPt, columnHeightPt: Number(columnHeightPt), slotGapPt: 8 };
   };
+  const leftReservePt = isJeonghwaProfile && leftQuestions.some((q) => q?.__jeonghwaLastSubjective === true)
+    ? 26
+    : 0;
+  const leftColHeightExpr = leftReservePt > 0
+    ? `\\dimexpr\\mockColumnHeight-${leftReservePt}pt\\relax`
+    : '\\mockColumnHeight';
+  const rightReservePt = isGyeongsinProfile && isLastProblemPage
+    ? 82
+    : (isNeunginProfile && isLastProblemPage
+        ? 64
+        : (isDaeryunProfile && isLastProblemPage
+            ? 62
+            : ((isDongdoProfile || isOseongProfile || isHwanggeumProfile) && isLastProblemPage
+                ? 82
+                : (isJeonghwaProfile && (isLastProblemPage || rightQuestions.some((q) => q?.__jeonghwaLastSubjective === true))
+                    ? 26
+                    : Math.max(0, Number(mockNoticeReservePt) || 0)))));
+  const rightColHeightExpr = rightReservePt > 0
+    ? `\\dimexpr\\mockColumnHeight-${rightReservePt}pt\\relax`
+    : '\\mockColumnHeight';
   const leftPerSlotHeights = computePerSlotHeightExprs(
     safeLeftSlots,
-    '\\mockColumnHeight',
+    leftColHeightExpr,
     leftGapExpr,
     slotOverflowGuard(safeLeftSlots, leftQuestions),
   );
   const rightPerSlotHeights = computePerSlotHeightExprs(
     safeRightSlots,
-    '\\mockColumnHeight',
+    rightColHeightExpr,
     rightGapExpr,
     slotOverflowGuard(safeRightSlots, rightQuestions),
   );
   const buildColumnsBlock = (heightMacro, leftHeightMacro, rightHeightMacro) => [
     // row-pair strut 매크로 선언 (페이지 내에서 반드시 컬럼 minipage 전에 실행되어야 함).
     pairProbePrelude.join('\n'),
+    (isGyeongsinProfile || isDaeryunProfile || isDongdoProfile || isSoseonProfile || isOseongProfile || isJeonghwaProfile || isHwanggeumProfile)
+      ? '\\global\\setlength{\\gyeongsinColFrameW}{\\dimexpr 0.5\\linewidth+14pt\\relax}'
+      : '',
     '\\noindent',
     `\\begin{minipage}[t][${heightMacro}][t]{${MOCK_MINIPAGE_WIDTH}}`,
     renderMockSlotColumnBody(leftQuestions, safeLeftSlots, leftHeightMacro, {
@@ -8005,6 +9160,15 @@ function renderMockGridPageLatex(
       pairAnchorOffsetsPt: leftPairAnchorOffsetsPt,
       pairAnchorMeasure,
       perSlotHeightExprs: leftPerSlotHeights,
+      isGyeongsinProfile,
+      isNeunginProfile,
+      isDaeryunProfile,
+      isDongdoProfile,
+      isSoseonProfile,
+      isOseongProfile,
+      isJeonghwaProfile,
+      isHwanggeumProfile,
+      columnIndex: 0,
     }),
     '\\end{minipage}',
     '\\hfill',
@@ -8025,9 +9189,18 @@ function renderMockGridPageLatex(
       pairAnchorOffsetsPt: rightPairAnchorOffsetsPt,
       pairAnchorMeasure,
       perSlotHeightExprs: rightPerSlotHeights,
+      isGyeongsinProfile,
+      isNeunginProfile,
+      isDaeryunProfile,
+      isDongdoProfile,
+      isSoseonProfile,
+      isOseongProfile,
+      isJeonghwaProfile,
+      isHwanggeumProfile,
+      columnIndex: 1,
     }),
     '\\end{minipage}',
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 
   // --- 제목 페이지 경로: outer minipage 안에 좌/우 minipage. ---
   // outer minipage 는 자기 높이가 고정이므로 중간에 페이지 breaker 가 끼어들지 않는다.
@@ -8044,14 +9217,6 @@ function renderMockGridPageLatex(
   //   - 상/하단 overlay 선 좌표: 변화 없음 (shipout overlay 는 \textheight/geometry 기반)
   //   - 페이지 빌더가 보는 unbreakable box 높이만 8pt 감소 → 첫 페이지 밀림 방지
   if (titleHeader) {
-    // 사용자 요청(5차): 제목페이지 타이틀/부제를 fancyhdr 의 `[C]` parbox[b] 로 이관.
-    //   - 제목페이지 전용 `\newgeometry{...,headheight=72pt,headsep=14pt,...}` (호출부에서 적용).
-    //   - 본문에서는 headerBlock 출력하지 않음 → `\mockHeaderBoxHeight = 0`.
-    //   - 가로선을 "부제 ↔ 타이틀 사이" 로 이동했으므로, 슬롯 시작도 함께 위로 당겨서
-    //     타이틀 바로 밑에 자연스러운 간격(≈12pt)만 두고 시작하도록 한다.
-    //     → body_top 기준 `\vspace*{-14pt}` 로 슬롯 첫 줄을 14pt 위로 올림.
-    //     (타이틀 bottom ≈ body_top - 16pt 이므로 슬롯 label top ≈ body_top - 3pt
-    //      ⇒ 타이틀 bottom 과 slot label top 간 ≈ 13pt 간격.)
     return [
       '\\begingroup',
       '\\setlength{\\mockSlotGap}{8pt}',
@@ -8073,12 +9238,13 @@ function renderMockGridPageLatex(
   //   ink top 이 가로선보다 크게 내려가 보인다. PDF 실측 기준 -8pt 는 약 35pt gap,
   //   -28pt 는 약 15pt gap 으로 선과 겹치지 않는 자연 여백만 남긴다.
   //   과제형은 별도 A4 레이아웃 보정값을 유지한다.
+  //   능인중은 1페이지 앞에 표지 블록이 먼저 나오므로 \pagetotal 에 의존하지 않고 고정 \textheight 를 쓴다.
   const preColumnsVspace = titleHeader
     ? ''
     : (isAssignmentProfile ? '\\vspace*{-34.6pt}' : '\\vspace*{-28pt}');
-  const heightCalc = isFirstPage
+  const heightCalc = (isFirstPage && !isNeunginProfile && !isJeonghwaProfile && !isHwanggeumProfile)
     ? '\\setlength{\\mockColumnHeight}{\\dimexpr\\pagegoal-\\pagetotal-4pt\\relax}'
-    : '\\setlength{\\mockColumnHeight}{\\textheight}';
+    : '\\setlength{\\mockColumnHeight}{\\dimexpr\\textheight-8pt\\relax}';
 
   return [
     '\\begingroup',
@@ -8165,6 +9331,1292 @@ function renderCoverPageLatex(coverTexts, { academyLogoPath = '' } = {}) {
   out.push('\\thispagestyle{empty}');
   out.push('\\null');
   out.push('\\clearpage');
+  out.push('\\endgroup');
+  return out.join('\n');
+}
+
+const MOCK_PAPER_SIZE_PT = {
+  A4: { w: 595.28, h: 841.89 },
+  B4: { w: 708.66, h: 1000.63 },
+  A3: { w: 841.89, h: 1190.55 },
+  '8절': { w: 765.35, h: 1105.51 },
+};
+// HTML(MathJax) 엔진 표지를 JIS B4(728.5x1031.8pt)로 찍어 잰 위치.
+const MOCK_COVER_FONT_DIR = fileURLToPath(
+  new URL('../../../../../apps/yggdrasill/assets/fonts/hancom/', import.meta.url),
+).replace(/\\/g, '/');
+const MOCK_COVER_REF_W = 728.5;
+const MOCK_COVER_REF_H = 1031.8;
+
+/**
+ * 모의고사형 표지 + 단면 인쇄용 빈 뒷면. 두 쪽 모두 쪽 번호·머리말을 그리지 않고,
+ * 문제 첫 쪽이 1쪽이 되도록 끝에서 쪽 번호를 되돌린다.
+ * 가로 위치는 용지 폭 비율, 세로 위치는 용지 높이 비율로 옮겨 여백 비율을 유지한다.
+ */
+function renderMockCoverPageLatex(coverTexts, { paper = 'B4', subjectTitle = '' } = {}) {
+  const src = (coverTexts && typeof coverTexts === 'object') ? coverTexts : {};
+  const clean = (v) => String(v ?? '').replace(/\s+/g, ' ').trim();
+  const esc = (v) => escapeLatexText(clean(v));
+  const size = MOCK_PAPER_SIZE_PT[String(paper || 'B4').trim().toUpperCase()]
+    || MOCK_PAPER_SIZE_PT[String(paper || '').trim()]
+    || MOCK_PAPER_SIZE_PT.B4;
+  const sx = size.w / MOCK_COVER_REF_W;
+  const sy = size.h / MOCK_COVER_REF_H;
+  const fs = Math.min(sx, sy);
+  const n = (v) => v.toFixed(2);
+  const X = (x) => `${n(x * sx)}pt`;
+  const at = (x, y) => `([shift={(${n(x * sx)}pt,-${n(y * sy)}pt)}]current page.north west)`;
+  const font = (pt, lead = pt * 1.2) => `\\fontsize{${n(pt * fs)}pt}{${n(lead * fs)}pt}\\selectfont`;
+  const lw = (v) => `line width=${n(v * fs)}pt`;
+  const base = (glyphBottom, pt) => glyphBottom - pt * 0.09;
+  const fit = (width, body) => `\\mockCoverFit{${X(width)}}{${body}}`;
+
+  const topTitle = clean(src.topTitle) || '2026학년도 대학수학능력시험 문제지';
+  const subject = clean(src.subjectTitle) || clean(subjectTitle) || '수학 영역';
+  const phrase = clean(src.handwritingPhrase) || '이 많은 별빛이 내린 언덕 위에';
+  const organization = clean(src.organization) || '한국교육과정평가원';
+  const rawGroups = Array.isArray(src.subjectGroups) && src.subjectGroups.length > 0
+    ? src.subjectGroups
+    : [
+        { label: '공통과목', pageRange: '1~12쪽', items: [] },
+        {
+          label: '선택과목',
+          pageRange: '',
+          items: [
+            { name: '확률과 통계', pages: '9~12쪽' },
+            { name: '미적분', pages: '13~16쪽' },
+            { name: '기하', pages: '17~20쪽' },
+          ],
+        },
+      ];
+
+  const boxL = 85.5;
+  const boxR = 642;
+  const out = [];
+  out.push('\\begingroup');
+  out.push('\\AtBeginShipoutNext{\\global\\quickanswerpagetrue\\global\\mocktitlepagefalse}');
+  out.push('\\thispagestyle{empty}');
+  out.push('\\def\\mockCoverFit#1#2{\\setbox0\\hbox{#2}\\ifdim\\wd0>#1\\resizebox{#1}{!}{\\box0}\\else\\box0\\fi}');
+  out.push('\\noindent\\null');
+  out.push('\\begin{tikzpicture}[remember picture,overlay,every node/.style={inner sep=0pt,outer sep=0pt,font=\\YggMockCover}]');
+
+  // 교시 칩 · 시험명 · 과목명 · 문형
+  out.push(`\\draw[${lw(0.6)},draw=black!53,rounded corners=${n(15.25 * fs)}pt] ${at(72.5, 72)} rectangle ${at(156.5, 102.5)};`);
+  out.push(`\\node[anchor=center,text=black!80] at ${at(114.5, 87.6)} {\\YggWithUnifiedDigits{${font(14.2)}\\bfseries 제 2 교시}};`);
+  out.push(`\\node[anchor=base,text=black!87] at ${at(362.25, base(120.5, 17.16))} {\\YggWithUnifiedDigits{${fit(500, `${font(17.16)}\\bfseries ${esc(topTitle)}`)}}};`);
+  out.push(`\\node[anchor=base] at ${at(362, base(190, 47.04))} {${fit(280, `{\\YggSubjectDisplay\\YggSubjectDisplayHangul${font(47.04, 47.04)}\\bfseries ${esc(subject)}}`)}};`);
+  out.push(`\\draw[${lw(0.9)},draw=black!40,rounded corners=${n(4 * fs)}pt] ${at(572, 146)} rectangle ${at(661, 188)};`);
+  out.push(`\\node[anchor=center] at ${at(616.5, 167)} {{${font(24.5, 24.5)}\\bfseries 홀수형}};`);
+
+  // 성명 · 수험 번호
+  const idTop = 213.5;
+  const idBot = 244.5;
+  const idMid = (idTop + idBot) / 2;
+  out.push(`\\draw[${lw(0.8)},draw=black!45] ${at(boxL, idTop)} rectangle ${at(273.5, idBot)};`);
+  out.push(`\\draw[${lw(0.8)},draw=black!45] ${at(133.5, idTop)} -- ${at(133.5, idBot)};`);
+  out.push(`\\node[anchor=center,text=black!73] at ${at(109.5, idMid)} {${font(14.4)}성명};`);
+  out.push(`\\draw[${lw(0.8)},draw=black!45] ${at(283.5, idTop)} rectangle ${at(boxR, idBot)};`);
+  out.push(`\\draw[${lw(0.8)},draw=black!45] ${at(357.5, idTop)} -- ${at(357.5, idBot)};`);
+  out.push(`\\node[anchor=center,text=black!73] at ${at(320.5, idMid)} {${font(14.4)}수험 번호};`);
+  const cellW = (boxR - 357.5) / 10;
+  for (let i = 1; i < 10; i += 1) {
+    const x = 357.5 + cellW * i;
+    out.push(`\\draw[${lw(0.7)},draw=black!44,dash pattern=on ${n(0.7 * fs)}pt off ${n(1.4 * fs)}pt] ${at(x, idTop)} -- ${at(x, idBot)};`);
+  }
+  out.push(`\\node[anchor=center,text=black!60] at ${at(357.5 + cellW * 5.5, idMid)} {${font(11.6)}—};`);
+
+  // 안내 사항
+  const infoPt = 14.92;
+  const infoBullet = 109;
+  const infoText = 127.5;
+  const infoW = boxR - 14 - infoText;
+  out.push(`\\draw[${lw(0.8)},draw=black!36] ${at(boxL, 275)} rectangle ${at(boxR, 589.5)};`);
+  const infoLine = (bottom, text, { bullet = true } = {}) => {
+    const y = base(bottom, infoPt);
+    if (bullet) {
+      out.push(`\\node[anchor=base west,text=black!77] at ${at(infoBullet, y)} {${font(infoPt)}○};`);
+    }
+    out.push(`\\node[anchor=base west,text=black!77] at ${at(infoText, y)} {\\YggWithUnifiedDigits{${fit(infoW, `${font(infoPt)}${text}`)}}};`);
+  };
+  infoLine(310, '문제지의 해당란에 성명과 수험 번호를 정확히 쓰시오.');
+  infoLine(341.5, '답안지의 필적 확인란에 다음의 문구를 정자로 기재하시오.');
+  out.push(`\\filldraw[${lw(0.8)},draw=black!38,fill=black!9] ${at(132, 354.5)} rectangle ${at(418, 388.5)};`);
+  out.push(`\\node[anchor=center,text=black!80] at ${at(275, 371.5)} {${fit(270, `${font(14.6)}\\bfseries ${esc(phrase)}`)}};`);
+  infoLine(417, '답안지의 해당란에 성명과 수험 번호를 쓰고, 또 수험 번호,');
+  infoLine(446.5, '문형(홀수/짝수), 답을 정확히 표시하시오.', { bullet: false });
+  infoLine(478.5, '단답형 답의 숫자에 \\textquotesingle 0\\textquotesingle 이 포함되면 그 \\textquotesingle 0\\textquotesingle 도 답란에 반드시 표시하시오.');
+  infoLine(511, '문항에 따라 배점이 다르니, 각 물음의 끝에 표시된 배점을 참고하시오.');
+  infoLine(540, '배점은 2점, 3점 또는 4점입니다.', { bullet: false });
+  infoLine(572.5, '계산은 문제지의 여백을 활용하시오.');
+
+  // 과목별 쪽 안내
+  const subjTop = 609.5;
+  const subjBot = 832.5;
+  out.push(`\\draw[${lw(0.8)},draw=black!36] ${at(boxL, subjTop)} rectangle ${at(boxR, subjBot)};`);
+  out.push(`\\node[anchor=base west,text=black!80] at ${at(97.5, base(640, 14.79))} {${fit(boxR - 10 - 97.5, `${font(14.79)}※ 공통과목 및 자신이 선택한 과목의 문제지를 확인하고, 답을 정확히 표시하시오.`)}};`);
+  const rows = [];
+  for (const group of rawGroups) {
+    if (!group || typeof group !== 'object') continue;
+    rows.push({ major: true, name: clean(group.label) || '과목', pages: clean(group.pageRange || group.pages) });
+    for (const item of (Array.isArray(group.items) ? group.items : [])) {
+      const name = clean(item?.name || item?.label);
+      const pages = clean(item?.pages || item?.pageRange);
+      if (name || pages) rows.push({ major: false, name, pages });
+    }
+  }
+  const firstBottom = 672.5;
+  const lastBottomMax = 822;
+  const pitch = rows.length > 1 ? Math.min(37.4, (lastBottomMax - firstBottom) / (rows.length - 1)) : 37.4;
+  const rowScale = Math.min(1, pitch / 26);
+  const rangeRight = 620.5;
+  rows.forEach((row, i) => {
+    const namePt = 18.1 * rowScale;
+    const rangePt = 16.3 * rowScale;
+    const y = base(firstBottom + pitch * i, namePt);
+    const nameX = row.major ? 107 : 141;
+    const nameTex = row.major
+      ? `${font(namePt)}\\bfseries ○ ${esc(row.name)}`
+      : `${font(namePt)}${esc(row.name)}`;
+    out.push(`\\node[anchor=base west,text=black!80] (mockCoverRowName${i}) at ${at(nameX, y)} {\\YggWithUnifiedDigits{${nameTex}}};`);
+    if (row.pages) {
+      out.push(`\\node[anchor=base east,text=black!80] (mockCoverRowPages${i}) at ${at(rangeRight, y)} {\\YggWithUnifiedDigits{${font(rangePt)}${esc(row.pages)}}};`);
+      out.push(`\\draw[${lw(0.8)},draw=black!44,dash pattern=on ${n(0.8 * fs)}pt off ${n(1.6 * fs)}pt] `
+        + `([shift={(${n(5 * fs)}pt,${n(2 * fs)}pt)}]mockCoverRowName${i}.base east) -- `
+        + `([shift={(-${n(5 * fs)}pt,${n(2 * fs)}pt)}]mockCoverRowPages${i}.base west);`);
+    }
+  });
+
+  // 표지 넘김 경고 · 기관명
+  out.push(`\\filldraw[${lw(0.8)},draw=black!36,fill=black!7] ${at(boxL, 864)} rectangle ${at(boxR, 913)};`);
+  out.push(`\\node[anchor=center,text=black!87] at ${at(363.5, 888.5)} {${font(15.83)}\\bfseries ※ 시험이 시작되기 전까지 표지를 넘기지 마시오.};`);
+  out.push(`\\node[anchor=base] at ${at(363, base(965.5, 31.4))} {${fit(560, `${font(31.4)}\\bfseries ${esc(organization)}`)}};`);
+
+  out.push('\\end{tikzpicture}');
+  out.push('\\clearpage');
+  out.push('\\AtBeginShipoutNext{\\global\\quickanswerpagetrue\\global\\mocktitlepagefalse}');
+  out.push('\\thispagestyle{empty}');
+  out.push('\\null');
+  out.push('\\clearpage');
+  out.push('\\global\\quickanswerpagefalse');
+  out.push('\\setcounter{page}{1}');
+  out.push('\\endgroup');
+  return out.join('\n');
+}
+
+const GYEONGSIN_WEEKDAYS = [
+  '일요일',
+  '월요일',
+  '화요일',
+  '수요일',
+  '목요일',
+  '금요일',
+  '토요일',
+];
+
+function resolveGyeongsinExamMeta({
+  coverPageTexts = {},
+  titlePageTopText = '',
+  subjectTitle = '',
+  questions = [],
+  problemPageCount = 1,
+  schoolName = '',
+} = {}) {
+  const rawSrc = coverPageTexts && typeof coverPageTexts === 'object' ? coverPageTexts : {};
+  // 예전 미리보기 창이 빈 값을 "null" 문자열로 저장한 설정이 남아 있을 수 있다.
+  const src = Object.fromEntries(Object.entries(rawSrc).map(([key, value]) => {
+    const trimmed = typeof value === 'string' ? value.trim() : value;
+    return [key, trimmed === 'null' || trimmed === 'undefined' ? '' : value];
+  }));
+  const kstNow = new Date(Date.now() + 9 * 60 * 60 * 1000);
+  const rawDate = String(src.examDate || '').trim()
+    || `${kstNow.getUTCFullYear()}.${kstNow.getUTCMonth() + 1}.${kstNow.getUTCDate()}`;
+  let coverDateBoxText = rawDate;
+  let headerDateText = `실시일자 : ${rawDate} 2 교시`;
+  const dateMatch = rawDate.match(/(\d{4})\s*[.\-/년]\s*(\d{1,2})\s*[.\-/월]\s*(\d{1,2})/);
+  if (dateMatch) {
+    const y = Number.parseInt(dateMatch[1], 10);
+    const m = Number.parseInt(dateMatch[2], 10);
+    const d = Number.parseInt(dateMatch[3], 10);
+    const explicitWeekdayMatch = rawDate.match(/(일|월|화|수|목|금|토)요일/);
+    const weekday = explicitWeekdayMatch
+      ? `${explicitWeekdayMatch[1]}요일`
+      : GYEONGSIN_WEEKDAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()] || '월요일';
+    const mm = String(m).padStart(2, '0');
+    const dd = String(d).padStart(2, '0');
+    coverDateBoxText = `${y}.${mm}.${dd}.(${weekday})`;
+    headerDateText = `실시일자 : ${y}년 ${m}월 ${d}일 ${weekday} 2 교시`;
+  }
+
+  const rawTopText = String(titlePageTopText || '').trim();
+  const isDefaultCsatTopText =
+    !rawTopText || rawTopText === '2026학년도 대학수학능력시험 문제지';
+  const coverExamTitle =
+    String(src.coverExamTitle || '').trim()
+    || (!isDefaultCsatTopText ? rawTopText : '')
+    || '2026학년도 3학년 2학기 기말시험';
+
+  const rawHeaderTitle = String(src.headerExamTitle || '').trim();
+  let headerExamTitle = rawHeaderTitle;
+  if (!headerExamTitle) {
+    const gradeSemMatch = coverExamTitle.match(/(\d+)\s*학년\s*(\d+)\s*학기\s*(.+)$/);
+    if (gradeSemMatch) {
+      headerExamTitle = `제 ${gradeSemMatch[1]} 학년 ${gradeSemMatch[2]} 학기 ${gradeSemMatch[3].trim()}`;
+    } else {
+      headerExamTitle = '제 3 학년 2 학기 기말시험';
+    }
+  }
+
+  const rawSubject = String(src.subjectName || '').trim();
+  const cleanSubjectTitle = String(subjectTitle || '').trim().replace(/\s*영역$/, '');
+  const subjectName = rawSubject || cleanSubjectTitle || '수학';
+  const subjectChars = Array.from(subjectName).map((ch) => escapeLatexText(ch));
+  const coverSubjectDisplayTex = subjectChars.length === 2
+    ? `(\\hspace{0.9em}${subjectChars[0]}\\hspace{1.4em}${subjectChars[1]}\\hspace{0.9em})`
+    : `(\\hspace{0.7em}${escapeLatexText(subjectName)}\\hspace{0.7em})`;
+
+  const qList = Array.isArray(questions) ? questions : [];
+  let autoEssayCount = 0;
+  let autoSubjectiveCount = 0;
+  let autoObjectiveCountRaw = 0;
+  let autoObjectiveScoreSum = 0;
+  let autoEssayScoreSum = 0;
+  const objectiveScoreCounts = new Map();
+  for (const q of qList) {
+    const qMode = String(
+      q?.mode || q?.questionMode || q?.export_mode || q?.exportMode || '',
+    ).trim().toLowerCase();
+    const qMeta = q?.meta && typeof q.meta === 'object' ? q.meta : {};
+    let qScore = Number(qMeta.score_point ?? qMeta.scorePoint ?? q?.score ?? q?.default_score ?? q?.points ?? 0) || 0;
+    if (qScore <= 0 && Array.isArray(qMeta.score_parts)) {
+      qScore = qMeta.score_parts.reduce((acc, p) => acc + (Number(p?.value ?? p?.score ?? 0) || 0), 0);
+    }
+    if (qMode === 'essay') {
+      autoEssayCount += 1;
+      autoEssayScoreSum += qScore;
+    } else if (qMode === 'subjective') {
+      autoSubjectiveCount += 1;
+      autoEssayScoreSum += qScore;
+    } else {
+      autoObjectiveCountRaw += 1;
+      autoObjectiveScoreSum += qScore;
+      if (qScore > 0) {
+        const roundedScore = Math.round(qScore * 10) / 10;
+        objectiveScoreCounts.set(roundedScore, (objectiveScoreCounts.get(roundedScore) || 0) + 1);
+      }
+    }
+  }
+  const autoObjectiveCount = Math.max(0, qList.length - autoEssayCount);
+  const autoTotalPages = Math.max(1, Number(problemPageCount) || 1);
+
+  const objectiveCountText = String(src.objectiveCount ?? '').trim() || String(autoObjectiveCount);
+  const neunginObjectiveCountText = String(src.objectiveCount ?? '').trim() || String(autoObjectiveCountRaw);
+  const subjectiveCountText = String(src.subjectiveCount ?? '').trim() || String(autoSubjectiveCount);
+  const essayCountText = String(src.essayCount ?? '').trim() || String(autoEssayCount);
+  const daeryunEssayCountText = String(src.essayCount ?? '').trim() || String(autoSubjectiveCount + autoEssayCount);
+  const totalPageCountText = String(src.totalPageCount ?? '').trim() || String(autoTotalPages);
+  const parsedTotalPages = Math.max(1, Number.parseInt(totalPageCountText, 10) || autoTotalPages);
+  const totalSheetCountText = String(Math.ceil(parsedTotalPages / 2));
+  const parsedTotalQ =
+    (Number.parseInt(neunginObjectiveCountText, 10) || 0)
+    + (Number.parseInt(subjectiveCountText, 10) || 0)
+    + (Number.parseInt(essayCountText, 10) || 0);
+  const totalQuestionCountText = String(parsedTotalQ > 0 ? parsedTotalQ : qList.length);
+  const periodLabel = String(src.periodLabel || '').trim() || '제 1교시';
+  const daeryunPeriodLabel = String(src.periodLabel || '').trim() || '제 2 교시';
+  const subjectCode = String(src.subjectCode || '').trim() || '05';
+  const daeryunSubjectCode = String(src.subjectCode || '').trim() || '04';
+  const sheetTypeLabel = String(src.sheetTypeLabel || src.sheetType || '').trim() || '답안지 D형';
+  let neunginDateBoxText = rawDate;
+  let daeryunDateText = rawDate;
+  if (dateMatch) {
+    const y = Number.parseInt(dateMatch[1], 10);
+    const m = Number.parseInt(dateMatch[2], 10);
+    const d = Number.parseInt(dateMatch[3], 10);
+    const explicitWeekdayMatch = rawDate.match(/(일|월|화|수|목|금|토)요일/);
+    const weekday = explicitWeekdayMatch
+      ? `${explicitWeekdayMatch[1]}요일`
+      : GYEONGSIN_WEEKDAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()] || '월요일';
+    neunginDateBoxText = `${y}년 ${m}월 ${d}일`;
+    daeryunDateText = `${m}월 ${d}일 ${weekday}`;
+  }
+
+  const gradeMatch = (rawHeaderTitle + ' ' + coverExamTitle + ' ' + headerExamTitle).match(/(\d)\s*학년(?!도)/);
+  const gradeLabel = gradeMatch ? `${gradeMatch[1]}학년` : '3학년';
+  const fullSchoolName = String(schoolName || '').replace(/\s+/g, '') || '경신중학교';
+  const shortSchoolName = fullSchoolName
+    .replace(/여자중학교$/, '여중')
+    .replace(/여자고등학교$/, '여고')
+    .replace(/중학교$/, '중')
+    .replace(/고등학교$/, '고');
+  const footerLabel = String(src.footerLabel || '').trim() || `${shortSchoolName} ${subjectName} ${gradeLabel}`;
+  const daeryunFooterRight = String(src.footerLabel || '').trim() || `${fullSchoolName} ${gradeLabel} ${subjectName}`;
+  const rawDaeryunTitleCandidate =
+    (String(src.headerExamTitle || '').trim().includes('학년도')
+      ? String(src.headerExamTitle || '').trim()
+      : String(src.coverExamTitle || src.headerExamTitle || '').trim())
+    || coverExamTitle;
+  let daeryunHeaderTitle = rawDaeryunTitleCandidate.replace(/^제\s*(?=\d\s*학년)/, '').trim();
+  const swappedDaeryun = daeryunHeaderTitle.match(/^(.*?)(\d\s*학년)\s+(\d\s*학기\s*\S+)(.*)$/);
+  if (swappedDaeryun) {
+    daeryunHeaderTitle = `${swappedDaeryun[1]}${swappedDaeryun[3].trim()} ${swappedDaeryun[2].replace(/\s+/g, '')}${swappedDaeryun[4]}`.trim();
+  }
+  if (!/문제지$/.test(daeryunHeaderTitle)) {
+    daeryunHeaderTitle = `${daeryunHeaderTitle} 문제지`;
+  }
+  const daeryunFooterLeft = daeryunHeaderTitle
+    .replace(/\s*문제지$/, '')
+    .replace(/\s*\d\s*학년(?!도)/, '')
+    .replace(/\s+/g, ' ')
+    .trim() || '2026학년도 2학기 중간시험';
+  const dongdoTotalCountNum =
+    (Number.parseInt(neunginObjectiveCountText, 10) || 0)
+    + (Number.parseInt(daeryunEssayCountText, 10) || 0);
+  const dongdoTotalCountText = String(dongdoTotalCountNum > 0 ? dongdoTotalCountNum : qList.length);
+  const formatDongdoScore = (raw, fallbackNum) => {
+    const s = String(raw ?? '').trim();
+    if (!s) return `${fallbackNum}점`;
+    return s.endsWith('점') ? s : `${s}점`;
+  };
+  const useAutoScoreSum = Math.round(autoObjectiveScoreSum + autoEssayScoreSum) === 100;
+  const defaultObjScore = useAutoScoreSum ? Math.round(autoObjectiveScoreSum) : 80;
+  const defaultEssScore = useAutoScoreSum ? Math.round(autoEssayScoreSum) : 20;
+  const dongdoObjectiveScoreText = formatDongdoScore(src.objectiveScore, defaultObjScore);
+  const dongdoEssayScoreText = formatDongdoScore(src.essayScore, defaultEssScore);
+  const parsedObjScore = Number.parseFloat(dongdoObjectiveScoreText.replace(/[^0-9.]/g, '')) || defaultObjScore;
+  const parsedEssScore = Number.parseFloat(dongdoEssayScoreText.replace(/[^0-9.]/g, '')) || defaultEssScore;
+  const dongdoTotalScoreText = formatDongdoScore(src.totalScore, Math.round(parsedObjScore + parsedEssScore));
+  const dongdoFooterLeft = String(src.footerLabel || '').trim() || `(${shortSchoolName}) ${gradeLabel} ${subjectName}`;
+  const rawDongdoTitle = String(src.headerExamTitle || '').trim().includes('학년도')
+    ? String(src.headerExamTitle || '').trim()
+    : String(src.coverExamTitle || '').trim();
+  let dongdoHeaderTitle = '';
+  if (rawDongdoTitle && rawDongdoTitle.includes('과 ')) {
+    dongdoHeaderTitle = rawDongdoTitle;
+  } else {
+    const yearMatch = (rawDongdoTitle || coverExamTitle).match(/(\d{4})\s*학년도/);
+    const yStr = yearMatch ? `${yearMatch[1]}학년도` : `${year}학년도`;
+    const semExamMatch = (rawDongdoTitle || headerExamTitle || coverExamTitle).match(/([12])\s*학기\s*(\S+)/);
+    const semStr = semExamMatch ? `${semExamMatch[1]}학기` : '2학기';
+    const examKindRaw = semExamMatch ? semExamMatch[2].replace(/시험$/, '고사') : '기말고사';
+    const gNum = gradeMatch ? gradeMatch[1] : '3';
+    dongdoHeaderTitle = `${yStr} ${subjectName}과 제${gNum}학년 ${semStr} ${examKindRaw}`;
+  }
+  let soseonCoverExamTitle = String(src.coverExamTitle || '').trim() || coverExamTitle;
+  const swappedSoseon = soseonCoverExamTitle.match(/^(.*?)(\d\s*학년)\s+(\d\s*학기)\s*(.*)$/);
+  if (swappedSoseon) {
+    soseonCoverExamTitle = `${swappedSoseon[1]}${swappedSoseon[3].replace(/\s+/g, '')} ${swappedSoseon[2].replace(/\s+/g, '')} ${swappedSoseon[4]}`.trim();
+  }
+  if (!/문제지$/.test(soseonCoverExamTitle)) {
+    soseonCoverExamTitle = `${soseonCoverExamTitle} 문제지`;
+  }
+  const soseonHeaderExamTitle = headerExamTitle
+    .replace(/^제\s*/, '')
+    .replace(/(\d)\s*학년/g, '$1학년')
+    .replace(/(\d)\s*학기/g, '$1학기')
+    .replace(/\s+/g, ' ')
+    .trim() || '3학년 2학기 기말시험';
+  const rawSoseonPeriod = String(src.periodLabel || '').trim() || '3교시';
+  const soseonPeriodShort = rawSoseonPeriod.replace(/^제\s*/, '').replace(/\s+/g, '');
+  const soseonHeaderDatePeriod = `${neunginDateBoxText} ${soseonPeriodShort}`;
+  const soseonFooterBase = String(src.footerLabel || '').trim() || `${gradeLabel} ${subjectName} 교과`;
+  const oseongPeriodLabel = String(src.periodLabel || '').trim() || '제 1 교시';
+  const oseongCoverExamTitle = (String(src.coverExamTitle || '').trim() || coverExamTitle)
+    .replace(/\s*\d\s*학년(?!도)/g, '')
+    .replace(/\s*문제지$/, '')
+    .replace(/\s+/g, ' ')
+    .trim() || '2026학년도 2학기 기말시험';
+  const oseongCoverSubjectLine = `${gradeLabel} ${subjectName}(${daeryunSubjectCode})`;
+  let oseongHeaderExamTitle = String(src.headerExamTitle || '').trim();
+  if (!oseongHeaderExamTitle || !oseongHeaderExamTitle.includes('중학교')) {
+    const yearMatch = oseongCoverExamTitle.match(/(\d{4})\s*학년도/);
+    const yStr = yearMatch ? `${yearMatch[1]}학년도` : `${year}학년도`;
+    const restExam = oseongCoverExamTitle.replace(/^\d{4}\s*학년도\s*/, '').trim() || '2학기 기말시험';
+    oseongHeaderExamTitle = `${yStr} ${fullSchoolName} ${restExam} 문제지`;
+  } else if (!/문제지$/.test(oseongHeaderExamTitle)) {
+    oseongHeaderExamTitle = `${oseongHeaderExamTitle} 문제지`;
+  }
+  const gradeNumStr = gradeMatch ? gradeMatch[1] : '3';
+  const oseongHeaderSubject = `중${gradeNumStr} ${subjectName}`;
+  const oseongFooterBase = String(src.footerLabel || '').trim() || `중${gradeNumStr}-${subjectName}`;
+  let oseongObjectiveBreakdownTex = '';
+  const customObjBreakdown = String(src.objectiveBreakdown || src.objectiveScore || '').trim();
+  if (customObjBreakdown && customObjBreakdown.includes('문항')) {
+    oseongObjectiveBreakdownTex = customObjBreakdown
+      .split(/\s*[/\n]\s*/)
+      .filter(Boolean)
+      .map((line) => escapeLatexText(line).replace(/(\d+점)\s*[xX×]\s*(\d+문항)/g, '$1$\\times$$2'))
+      .join('\\\\');
+  } else if (objectiveScoreCounts.size > 0) {
+    const sortedScores = [...objectiveScoreCounts.keys()].sort((a, b) => a - b);
+    oseongObjectiveBreakdownTex = sortedScores
+      .map((sc) => {
+        const cnt = objectiveScoreCounts.get(sc);
+        const sumVal = Math.round(sc * cnt * 10) / 10;
+        const padTex = sumVal < 10 ? '\\phantom{0}' : '';
+        return `${escapeLatexText(String(sc))}점$\\times$${escapeLatexText(String(cnt))}문항=${padTex}${escapeLatexText(String(sumVal))}점`;
+      })
+      .join('\\\\');
+  } else {
+    oseongObjectiveBreakdownTex = '3점$\\times$3문항=\\phantom{0}9점\\\\4점$\\times$9문항=36점\\\\5점$\\times$4문항=20점';
+  }
+  const oseongEssayScoreDefault = autoEssayScoreSum > 0 ? Math.round(autoEssayScoreSum) : 35;
+  const oseongEssayScoreText = formatDongdoScore(src.essayScore, oseongEssayScoreDefault);
+  const jeonghwaCoverExamTitle = (String(src.coverExamTitle || '').trim() || coverExamTitle)
+    .replace(/\s*문제지$/, '')
+    .replace(/\s+/g, ' ')
+    .trim() || '2026학년도 2학년 2학기 중간시험';
+  const rawJeonghwaPeriod = String(src.periodLabel || '').trim() || '1교시';
+  const jeonghwaPeriodShort = rawJeonghwaPeriod.replace(/^제\s*/, '').replace(/\s+/g, '');
+  let jeonghwaMonthDay = '9월 23일';
+  if (dateMatch) {
+    const m = Number.parseInt(dateMatch[2], 10);
+    const d = Number.parseInt(dateMatch[3], 10);
+    jeonghwaMonthDay = `${m}월  ${d}일`;
+  }
+  const jeonghwaCoverDatePeriod = `${jeonghwaMonthDay}  ${jeonghwaPeriodShort}  시행`;
+  const jeonghwaObjScoreDefault = autoObjectiveScoreSum > 0 ? Math.round(autoObjectiveScoreSum) : 40;
+  const jeonghwaEssScoreDefault = autoEssayScoreSum > 0 ? Math.round(autoEssayScoreSum) : 60;
+  const jeonghwaObjectiveScoreNum = String(src.objectiveScore ?? '').trim().replace(/점$/, '') || String(jeonghwaObjScoreDefault);
+  const jeonghwaEssayScoreNum = String(src.essayScore ?? '').trim().replace(/점$/, '') || String(jeonghwaEssScoreDefault);
+  const jeonghwaFooterBase = String(src.footerLabel || '').trim() || `${fullSchoolName} ${gradeLabel} ${subjectName}`;
+  const hwanggeumYearMatch = coverExamTitle.match(/(\d{4})\s*학년도/);
+  const hwanggeumYearNum = hwanggeumYearMatch ? hwanggeumYearMatch[1] : String(year);
+  const hwanggeumSemMatch = coverExamTitle.match(/([12])\s*학기/);
+  const hwanggeumSemNum = hwanggeumSemMatch ? hwanggeumSemMatch[1] : '1';
+  const hwanggeumKindMatch = coverExamTitle.match(/(중간|기말)/);
+  const hwanggeumKindStr = hwanggeumKindMatch ? hwanggeumKindMatch[1] : '기말';
+  const hwanggeumGradeNum = gradeMatch ? gradeMatch[1] : '3';
+  const hwanggeumMonthNum = dateMatch ? String(Number.parseInt(dateMatch[2], 10)) : '6';
+  const hwanggeumDayNum = dateMatch ? String(Number.parseInt(dateMatch[3], 10)) : '30';
+  const hwanggeumPeriodMatch = String(src.periodLabel || '1교시').match(/(\d+)/);
+  const hwanggeumPeriodNum = hwanggeumPeriodMatch ? hwanggeumPeriodMatch[1] : '1';
+  const hwanggeumObjScoreDefault = autoObjectiveScoreSum > 0 ? Math.round(autoObjectiveScoreSum) : 65;
+  const hwanggeumEssScoreDefault = autoEssayScoreSum > 0 ? Math.round(autoEssayScoreSum) : 35;
+  const hwanggeumObjectiveScoreText = formatDongdoScore(src.objectiveScore, hwanggeumObjScoreDefault);
+  const hwanggeumEssayScoreText = formatDongdoScore(src.essayScore, hwanggeumEssScoreDefault);
+  const hwanggeumFooterRight = String(src.footerLabel || '').trim() || `${gradeLabel} ${subjectName}과 ${fullSchoolName}`;
+  const parsedPageStart = Number.parseInt(String(src.pageStartNumber ?? '').trim(), 10);
+  const pageStartNumber = Number.isFinite(parsedPageStart) && parsedPageStart >= 1
+    ? parsedPageStart
+    : 1;
+
+  return {
+    coverDateBoxText,
+    neunginDateBoxText,
+    daeryunDateText,
+    headerDateText,
+    coverExamTitle,
+    headerExamTitle,
+    daeryunHeaderTitle,
+    daeryunFooterLeft,
+    daeryunFooterRight,
+    dongdoHeaderTitle,
+    dongdoFooterLeft,
+    dongdoTotalCountText,
+    dongdoObjectiveScoreText,
+    dongdoEssayScoreText,
+    dongdoTotalScoreText,
+    soseonCoverExamTitle,
+    soseonHeaderExamTitle,
+    soseonHeaderDatePeriod,
+    soseonFooterBase,
+    oseongPeriodLabel,
+    oseongCoverExamTitle,
+    oseongCoverSubjectLine,
+    oseongHeaderExamTitle,
+    oseongHeaderSubject,
+    oseongFooterBase,
+    oseongObjectiveBreakdownTex,
+    oseongEssayScoreText,
+    jeonghwaCoverExamTitle,
+    jeonghwaCoverDatePeriod,
+    jeonghwaObjectiveScoreNum,
+    jeonghwaEssayScoreNum,
+    jeonghwaFooterBase,
+    hwanggeumYearNum,
+    hwanggeumSemNum,
+    hwanggeumKindStr,
+    hwanggeumGradeNum,
+    hwanggeumMonthNum,
+    hwanggeumDayNum,
+    hwanggeumPeriodNum,
+    hwanggeumObjectiveScoreText,
+    hwanggeumEssayScoreText,
+    hwanggeumFooterRight,
+    subjectName,
+    coverSubjectDisplayTex,
+    objectiveCountText,
+    neunginObjectiveCountText,
+    subjectiveCountText,
+    essayCountText,
+    daeryunEssayCountText,
+    totalQuestionCountText,
+    totalPageCountText,
+    totalSheetCountText,
+    periodLabel,
+    daeryunPeriodLabel,
+    subjectCode,
+    daeryunSubjectCode,
+    sheetTypeLabel,
+    gradeLabel,
+    footerLabel,
+    pageStartNumber,
+    fullSchoolName,
+  };
+}
+
+const GYEONGSIN_PAPER_HEIGHT_PT = { A4: 841.89, B4: 1000.63, A3: 1190.55, '8절': 1105.51 };
+const GYEONGSIN_COVER_REF_HEIGHT_PT = 1031.81;
+
+// 원본 스캔(26 경신중 기출 1쪽)을 세로 1031.81pt 로 놓고 잰 위치.
+// 모든 용지가 같은 세로:가로 비율이므로 실제 용지 높이 비율로 일괄 축척한다.
+function renderGyeongsinCoverPageLatex(
+  gyeongsinMeta,
+  { gyeongsinLogoPath = '', schoolName = '', paper = 'B4' } = {},
+) {
+  const meta = gyeongsinMeta || resolveGyeongsinExamMeta();
+  const paperKey = String(paper || 'B4').toUpperCase();
+  const scale = (GYEONGSIN_PAPER_HEIGHT_PT[paperKey] || GYEONGSIN_PAPER_HEIGHT_PT.B4)
+    / GYEONGSIN_COVER_REF_HEIGHT_PT;
+  const pt = (v) => `${(v * scale).toFixed(2)}pt`;
+  const at = (dx, y) => `([xshift=${pt(dx)},yshift=-${pt(y)}]current page.north)`;
+  const font = (size, lead = size * 1.2) => `\\fontsize{${pt(size)}}{${pt(lead)}}\\selectfont`;
+
+  const boxHalf = 280.75;
+  const boxL = -boxHalf;
+  const boxR = boxHalf;
+  const textL = boxL + 17;
+  const grayL = boxL + 8;
+  const grayR = boxR - 8;
+  const grayTextL = grayL + 12.4;
+  const grayTextW = (grayR - grayL) - 12.4 - 5;
+  const tableL = boxL + 17.3;
+  const tableR = boxR - 17.3;
+  const tableW = tableR - tableL;
+  const logoH = 36;
+  const logoW = 89;
+
+  const logoPathTex = gyeongsinLogoPath ? String(gyeongsinLogoPath).replace(/\\/g, '/') : '';
+  const esc = (v) => escapeLatexText(String(v ?? ''));
+  const grayPara = (label, body, hang = 1.25) =>
+    `\\hangindent=${hang}em\\hangafter=1\\noindent ${label}\\ ${body}\\par`;
+
+  const out = [];
+  out.push('\\begingroup');
+  out.push('\\AtBeginShipoutNext{\\global\\quickanswerpagetrue\\global\\mocktitlepagefalse}');
+  out.push('\\thispagestyle{empty}');
+  out.push('\\setstretch{1}\\setlength{\\parskip}{0pt}');
+  out.push('\\noindent\\null');
+  out.push('\\begin{tikzpicture}[remember picture,overlay,every node/.style={inner sep=0pt,outer sep=0pt,font=\\gyeongsinGothic}]');
+
+  // 상단 날짜·교시 상자
+  out.push(`\\draw[line width=${pt(1)},rounded corners=${pt(13)}] ${at(boxL, 72.5)} rectangle ${at(boxL + 154, 108.6)};`);
+  out.push(`\\node[anchor=center] at ${at(boxL + 77, 90.55)} {${font(14.5)}${esc(meta.coverDateBoxText)}};`);
+  out.push(`\\draw[line width=${pt(1)},rounded corners=${pt(9)}] ${at(boxR - 117, 72.5)} rectangle ${at(boxR, 108.6)};`);
+  out.push(`\\node[anchor=center] at ${at(boxR - 58.5, 90.55)} {${font(14.5)}제\\hspace{${pt(10)}}2\\hspace{${pt(10)}}교시};`);
+
+  // 제목부
+  out.push(`\\node[anchor=center] at ${at(0, 155.6)} {${font(36)}\\bfseries [문제지\\hspace{0.35em}표지]};`);
+  out.push(`\\node[anchor=center] at ${at(0, 213.8)} {${font(25)}${esc(meta.coverExamTitle)}};`);
+  out.push(`\\node[anchor=center] at ${at(0, 256.7)} {${font(28)}\\bfseries (\\hspace{${pt(17)}}${esc(meta.subjectName)}\\hspace{${pt(17)}})};`);
+
+  // 바깥 안내 상자
+  out.push(`\\draw[line width=${pt(1)}] ${at(boxL, 281)} rectangle ${at(boxR, 918.2)};`);
+
+  // 1. 문제지 구성
+  out.push(`\\node[anchor=west] at ${at(textL, 296)} {${font(16)}1. 이 문제지는 다음과 같이 구성되어 있습니다.};`);
+  out.push(`\\fill[black!15] ${at(tableL, 313.5)} rectangle ${at(tableR, 336.1)};`);
+  out.push(`\\draw[line width=${pt(0.8)}] ${at(tableL, 313.5)} rectangle ${at(tableR, 359.9)};`);
+  out.push(`\\draw[line width=${pt(0.8)}] ${at(tableL, 336.1)} -- ${at(tableR, 336.1)};`);
+  out.push(`\\draw[line width=${pt(0.8)}] ${at(tableL + tableW / 3, 313.5)} -- ${at(tableL + tableW / 3, 359.9)};`);
+  out.push(`\\draw[line width=${pt(0.8)}] ${at(tableL + (2 * tableW) / 3, 313.5)} -- ${at(tableL + (2 * tableW) / 3, 359.9)};`);
+  const colCenters = [tableL + tableW / 6, tableL + tableW / 2, tableL + (5 * tableW) / 6];
+  const heads = ['선택형 문항 수', '서술형 문항 수', '전체 문제지 면 수'];
+  const values = [
+    `(\\hspace{1.8em}${esc(meta.objectiveCountText)}\\hspace{1.8em}) 문항`,
+    `(\\hspace{1.8em}${esc(meta.essayCountText)}\\hspace{1.8em}) 문항`,
+    `(\\hspace{1.8em}${esc(meta.totalPageCountText)}\\hspace{1.8em}) 쪽`,
+  ];
+  colCenters.forEach((cx, i) => {
+    out.push(`\\node[anchor=center] at ${at(cx, 324.8)} {${font(13)}${heads[i]}};`);
+    out.push(`\\node[anchor=center] at ${at(cx, 348)} {${font(13)}${values[i]}};`);
+  });
+  out.push(`\\node[anchor=west] at ${at(boxL + 19, 376.7)} {${font(13)}※ 문항에 따라 배점이 다르니, 각 물음의 끝에 표시된 배점을 참고하시오.};`);
+
+  // 2. 답안지 표기 유의사항
+  out.push(`\\node[anchor=west] at ${at(textL, 412)} {${font(16)}2. 답안지 표기(기입) 유의사항};`);
+  // 줄바꿈 위치는 원본 스캔과 같게 고정한다.
+  out.push(`\\filldraw[fill=black!18,draw=black,line width=${pt(0.8)}] ${at(grayL, 427.8)} rectangle ${at(grayR, 607.1)};`);
+  out.push(`\\node[anchor=west,text width=${pt(grayTextW)},align=justify] at ${at(grayTextL, 517.45)} {${font(12.6, 24)}\\setlength{\\parskip}{0pt}%`);
+  out.push(grayPara('가.', '선택형 문항은 컴퓨터용 수성 사인펜을 사용하여 답란을 마킹 할 것.'));
+  out.push(grayPara('나.', '서술형 또는 단답형 문항은 \\uline{검은색 볼펜}이나 \\uline{연필}로 답란에 알아볼 수 있도록 작성해야\\linebreak 하며, 문항번호와 서술형 또는 단답형 답안이 서로 반드시 일치해야 함.'));
+  out.push(grayPara('다.', '시험 종료가 임박해서 답안지 교체를 하게 된다면 시험 종료령 이후에는 답안 작성을 완\\linebreak{}료할 수 없으니 유의해야 함.'));
+  out.push(grayPara('라.', '답란은 잘못 표기하여 수정테이프를 사용한 경우 잘못 마킹한 부분을 모두 정확히 제거\\linebreak{}해야 함.'));
+  out.push('};');
+
+  // 3. 부정행위 및 화장실 이용 유의사항
+  out.push(`\\node[anchor=west] at ${at(textL, 627.5)} {${font(16)}3. 주의해야 할 부정행위 유형 및 화장실 이용 시 유의사항};`);
+  out.push(`\\filldraw[fill=black!18,draw=black,line width=${pt(0.8)}] ${at(grayL, 643.1)} rectangle ${at(grayR, 871.1)};`);
+  out.push(`\\node[anchor=west,text width=${pt(grayTextW)},align=justify] at ${at(grayTextL, 757.1)} {${font(12.6, 24)}\\setlength{\\parskip}{0pt}%`);
+  out.push(grayPara('가.', '쉬는 시간을 포함한 모든 시험 시간 중에 고사실 반입 금지 물품을 소지하거나 지정된\\linebreak 장소 외 별도의 장소에 보관한 경우'));
+  out.push(`{${font(12.2, 24)}\\spaceskip=0.28em plus 0.4em\\setbox0\\hbox{※ 고사실 반입 금지 물품 :\\ }\\hangindent=\\dimexpr1.25em+\\wd0\\relax\\hangafter=1\\noindent\\hspace*{1.25em}\\unhcopy0 휴대전화, 스마트기기(스마트워치 포함), 블루투스 이어폰 등등 모든\\linebreak 전자기기\\par}`);
+  out.push(grayPara('나.', '시작종이 울리기 전에 문제지 표지를 넘기거나 종료령 이후 답안지를 작성하는 행위'));
+  out.push(grayPara('다.', '시작종이 울리기 전에 시험과 관련된 내용을 책상, 시험지 표지등에 표기하는 행위'));
+  out.push(grayPara('라.', '시험 실시 중에는 \\uline{한 교실에서 한 명씩만} 화장실 이용'));
+  out.push(grayPara('마.', '화장실을 이용할 때나, 화장실 이용 후 고사실로 복귀 할 때 다른 학생과 마주치더라도\\linebreak 어떠한 의사소통도 금지'));
+  out.push('};');
+
+  out.push(`\\node[anchor=west] at ${at(textL, 897.2)} {${font(20.5)}\\bfseries ※ 시작종이 울리기 전에 표지를 넘기면 부정행위입니다.};`);
+
+  // 학교 로고 + 학교명 (로고가 없는 학교는 이름만 가운데에 둔다)
+  const schoolChars = Array.from(String(schoolName || '경신중학교').replace(/\s+/g, ''));
+  const schoolGap = schoolChars.length <= 5 ? 15 : (schoolChars.length === 6 ? 11 : 8);
+  const schoolNameTex = schoolChars.map((ch) => esc(ch)).join(`\\hspace{${pt(schoolGap)}}`);
+  const schoolLogoTex = logoPathTex
+    ? `\\ensuremath{\\vcenter{\\hbox{\\includegraphics[height=${pt(logoH)},width=${pt(logoW)},keepaspectratio]{${logoPathTex}}}}}\\hspace{${pt(13.8)}}`
+    : '';
+  out.push(`\\node[anchor=center] at ${at(0, 944.8)} {${font(31)}\\bfseries ${schoolLogoTex}${schoolNameTex}};`);
+
+  out.push('\\end{tikzpicture}');
+  out.push('\\clearpage');
+  // 단면 인쇄용 빈 뒷면
+  out.push('\\AtBeginShipoutNext{\\global\\quickanswerpagetrue\\global\\mocktitlepagefalse}');
+  out.push('\\thispagestyle{empty}');
+  out.push('\\null');
+  out.push('\\clearpage');
+  out.push('\\global\\quickanswerpagefalse');
+  out.push('\\setcounter{page}{1}');
+  out.push('\\endgroup');
+  return out.join('\n');
+}
+
+function formatNeunginCoverExamTitleLatex(rawTitle, pt, font) {
+  const esc = (v) => escapeLatexText(String(v ?? ''));
+  let normalized = String(rawTitle || '').trim() || '2026학년도 2학기 3학년 중간시험 문제지';
+  // "2026학년도 3학년 2학기 기말시험" 형태면 능인중 양식 순서("2026학년도 2학기 3학년 기말시험")로 맞춘다.
+  const swapped = normalized.match(/^(.*?)(\d\s*학년)\s+(\d\s*학기)\s*(.*)$/);
+  if (swapped) {
+    normalized = `${swapped[1]}${swapped[3].replace(/\s+/g, '')} ${swapped[2].replace(/\s+/g, '')} ${swapped[4]}`.trim();
+  }
+  if (!/문제지$/.test(normalized)) {
+    normalized = `${normalized} 문제지`;
+  }
+  const gm = normalized.match(/^(.*?)(\d\s*학년)(?!도)(.*)$/);
+  if (!gm) return esc(normalized);
+  const pre = esc(gm[1]);
+  const grade = esc(gm[2].replace(/\s+/g, ''));
+  const post = esc(gm[3]);
+  const gradeBox = `\\tikz[baseline=(g.base)]\\node[draw=black,line width=${pt(0.9)},inner xsep=${pt(5)},inner ysep=${pt(3.2)}] (g) {${font(17)}\\bfseries ${grade}};`;
+  return `${pre}${gradeBox}${post}`;
+}
+
+function renderNeunginCoverPageLatex(
+  neunginMeta,
+  { gyeongsinLogoPath = '', schoolName = '', paper = 'B4' } = {},
+) {
+  const meta = neunginMeta || resolveGyeongsinExamMeta({ schoolName: schoolName || '능인중학교' });
+  const paperKey = String(paper || 'B4').toUpperCase();
+  const scale = (GYEONGSIN_PAPER_HEIGHT_PT[paperKey] || GYEONGSIN_PAPER_HEIGHT_PT.B4)
+    / GYEONGSIN_COVER_REF_HEIGHT_PT;
+  const pt = (v) => `${(v * scale).toFixed(2)}pt`;
+  // 상단 여백(인쇄 시 추가된 윗여백)을 20% 줄이기 위해 전체 기준 y 를 30pt 위로 당긴다.
+  const yOff = 30;
+  const at = (dx, y) => `([xshift=${pt(dx)},yshift=-${pt(y - yOff)}]current page.north)`;
+  const font = (size, lead = size * 1.2) => `\\fontsize{${pt(size)}}{${pt(lead)}}\\selectfont`;
+
+  const boxHalf = 315;
+  const boxL = -boxHalf;
+  const boxR = boxHalf;
+  const boxW = boxR - boxL;
+  const textL = boxL + 10;
+  const textW = boxW - 20;
+  const logoPathTex = gyeongsinLogoPath ? String(gyeongsinLogoPath).replace(/\\/g, '/') : '';
+  const esc = (v) => escapeLatexText(String(v ?? ''));
+  const circ = `{\\raisebox{0.08ex}{${font(9.5)}○}}`;
+  const item = (body, hang = 1.25) =>
+    `\\hangindent=${hang}em\\hangafter=1\\noindent\\makebox[${hang}em][l]{${circ}}${body}\\par`;
+  const centerHead = (title) =>
+    `{\\centering\\gyeongsinGothic${font(12.2, 16)}\\bfseries ${title}\\par}`;
+
+  const out = [];
+  out.push('\\begingroup');
+  out.push('\\AtBeginShipoutNext{\\global\\quickanswerpagetrue\\global\\mocktitlepagefalse}');
+  out.push('\\thispagestyle{empty}');
+  out.push('\\setstretch{1}\\setlength{\\parskip}{0pt}');
+  out.push('\\noindent\\null');
+  out.push('\\begin{tikzpicture}[remember picture,overlay,every node/.style={inner sep=0pt,outer sep=0pt}]');
+
+  // 상단 실시일자 · 교시 상자
+  out.push(`\\draw[line width=${pt(0.8)}] ${at(boxL, 152)} rectangle ${at(boxL + 186, 182)};`);
+  out.push(`\\node[anchor=center] at ${at(boxL + 93, 167)} {{\\YggWithUnifiedDigits{${font(14.5)}\\bfseries ${esc(meta.neunginDateBoxText)}}}};`);
+  out.push(`\\draw[line width=${pt(0.8)}] ${at(boxR - 158, 152)} rectangle ${at(boxR, 182)};`);
+  out.push(`\\node[anchor=center] at ${at(boxR - 79, 167)} {{\\YggWithUnifiedDigits{${font(14.5)}\\bfseries ${esc(meta.periodLabel)}}}};`);
+
+  // 시험명 · 과목명 · 과목코드 상자 (이중 밑줄 제거 + 상단 박스와의 줄간격 확보)
+  const titleTex = formatNeunginCoverExamTitleLatex(meta.coverExamTitle, pt, font);
+  out.push(`\\node[anchor=center] at ${at(0, 211)} {{\\YggWithUnifiedDigits{${font(17)}\\bfseries ${titleTex}}}};`);
+
+  const subjChars = Array.from(String(meta.subjectName || '수학').replace(/\s+/g, '')).map((c) => esc(c));
+  const subjTex = subjChars.join(`\\hspace{${pt(14)}}`);
+  out.push(`\\node[anchor=center] at ${at(0, 252)} {{\\gyeongsinGothic${font(34)}\\bfseries ${subjTex}}};`);
+
+  out.push(`\\draw[line width=${pt(0.8)}] ${at(-83, 283)} rectangle ${at(83, 312)};`);
+  out.push(`\\draw[line width=${pt(0.8)}] ${at(35, 283)} -- ${at(35, 312)};`);
+  out.push(`\\node[anchor=center] at ${at(-24, 297.5)} {{\\YggWithUnifiedDigits{${font(14)}\\bfseries 과목\\hspace{0.35em}코드}}};`);
+  out.push(`\\node[anchor=center] at ${at(59, 297.5)} {{\\YggWithUnifiedDigits{${font(15)}\\bfseries ${esc(meta.subjectCode)}}}};`);
+
+  // 1) 상단 유의사항 + 문항수 표 상자 (상하 여백 균등 확보, 문항개수 표 아래 여백 확대, 박스 간 간격 확대)
+  out.push(`\\draw[line width=${pt(0.8)}] ${at(boxL, 323)} rectangle ${at(boxR, 517.5)};`);
+  const tL = -18;
+  const tR = boxR - 22;
+  const tY0 = 355;
+  const tYMid = 373;
+  const tY1 = 391;
+  const tX1 = tL + 66;
+  const tX2 = tX1 + 66;
+  const tX3 = tX2 + 58;
+  const tX4 = tX3 + 74;
+  out.push(`\\draw[line width=${pt(0.65)}] ${at(tL, tY0)} rectangle ${at(tR, tY1)};`);
+  out.push(`\\draw[line width=${pt(0.65)}] ${at(tX1, tY0)} -- ${at(tX1, tY1)};`);
+  out.push(`\\draw[line width=${pt(0.65)}] ${at(tX2, tY0)} -- ${at(tX2, tY1)};`);
+  out.push(`\\draw[line width=${pt(0.65)}] ${at(tX3, tY0)} -- ${at(tX3, tY1)};`);
+  out.push(`\\draw[line width=${pt(0.65)}] ${at(tX4, tY0)} -- ${at(tX4, tY1)};`);
+  out.push(`\\draw[line width=${pt(0.65)}] ${at(tX3, tYMid)} -- ${at(tR, tYMid)};`);
+  out.push(`\\node[anchor=center] at ${at((tL + tX1) / 2, (tY0 + tY1) / 2)} {{\\YggWithUnifiedDigits{${font(11)}선택형}}};`);
+  out.push(`\\node[anchor=center] at ${at((tX1 + tX2) / 2, (tY0 + tY1) / 2)} {{\\YggWithUnifiedDigits{${font(11)}${esc(meta.neunginObjectiveCountText)}\\hspace{0.25em}문항}}};`);
+  out.push(`\\node[anchor=center] at ${at((tX2 + tX3) / 2, (tY0 + tY1) / 2)} {{\\YggWithUnifiedDigits{${font(11)}서답형}}};`);
+  out.push(`\\node[anchor=center] at ${at((tX3 + tX4) / 2, (tY0 + tYMid) / 2)} {{\\YggWithUnifiedDigits{${font(10.6)}단답형}}};`);
+  out.push(`\\node[anchor=center] at ${at((tX4 + tR) / 2, (tY0 + tYMid) / 2)} {{\\YggWithUnifiedDigits{${font(10.6)}${esc(meta.subjectiveCountText)}\\hspace{0.25em}문항}}};`);
+  out.push(`\\node[anchor=center] at ${at((tX3 + tX4) / 2, (tYMid + tY1) / 2)} {{\\YggWithUnifiedDigits{${font(10.6)}서·논술형}}};`);
+  out.push(`\\node[anchor=center] at ${at((tX4 + tR) / 2, (tYMid + tY1) / 2)} {{\\YggWithUnifiedDigits{${font(10.6)}${esc(meta.essayCountText)}\\hspace{0.25em}문항}}};`);
+
+  // 첫 줄은 표 위쪽 전체 폭을 쓰고, 둘째 항목은 표 왼쪽 영역만 써서 표와 절대 겹치지 않는다.
+  out.push(`\\node[anchor=north west,text width=${pt(textW)}] at ${at(textL, 333)} {{\\YggWithUnifiedDigits{${font(12.2, 18)}\\setlength{\\parskip}{0pt}%`);
+  out.push(item('학년, 과목명, 과목 코드를 확인하고, 감독 선생님의 지시에 따라 문제지 매수와 인쇄 상태 등을 점검하시오.'));
+  out.push('}}};');
+  const leftOfTableW = tL - textL - 8;
+  out.push(`\\node[anchor=north west,text width=${pt(leftOfTableW)}] at ${at(textL, 355)} {{\\YggWithUnifiedDigits{${font(12.2, 16.5)}\\setlength{\\parskip}{0pt}%`);
+  out.push(`\\noindent\\makebox[1.25em][l]{${circ}}본 교과목은 {\\bfseries 총\\,${esc(meta.totalPageCountText)}면, 총\\,${esc(meta.totalQuestionCountText)}문항}이니 확인하시오.\\par`);
+  out.push(`{\\centering ${font(11.2, 14.5)}(표지제외)\\par}`);
+  out.push('}}};');
+  out.push(`\\node[anchor=north west,text width=${pt(textW)}] at ${at(textL, 400)} {{\\YggWithUnifiedDigits{${font(12.2, 18.2)}\\setlength{\\parskip}{1.4pt}%`);
+  out.push(item('인적 사항의 표기가 바르게 되었는지 반드시 확인하시오.'));
+  out.push(item('지정된 필기구 (선택형: 컴퓨터용 수성싸인펜, 수정테이프) (서답형: 컴퓨터용 수성싸인펜, 연필(샤프), 볼펜,\\linebreak 수정테이프, 지우개)를 사용하시오.'));
+  out.push(item('서답형 문항은 OMR카드의 서답형 답란에 답안을 작성하시오.'));
+  out.push(item('문항에 따라 배점이 다를 수 있으니 각 물음 끝에 표시된 배점을 참고하시오.'));
+  out.push(item('선택형 답안 수정 시 수정테이프를 사용하여 수정할 수 있고, 필요한 경우 답안지를 교체하시오.'));
+  out.push('}}};');
+
+  // 2) 【부정행위 유형】 + 【0점 처리 사례】 상자 (상하 여백 대칭, 하단 빈 공간 제거)
+  out.push(`\\draw[line width=${pt(0.8)}] ${at(boxL, 526)} rectangle ${at(boxR, 823)};`);
+  out.push(`\\node[anchor=north west,text width=${pt(textW)}] at ${at(textL, 536)} {{\\YggWithUnifiedDigits{${font(12.0, 17.6)}\\setlength{\\parskip}{0.8pt}%`);
+  out.push(centerHead('【부정행위 유형】'));
+  out.push('\\vspace{2pt}');
+  out.push(item('다른 수험생의 답안지를 보거나 보여주는 행위'));
+  out.push(item('다른 수험생과 손동작, 소리 등으로 서로 신호를 하는 행위'));
+  out.push(item('부정한 휴대물을 보거나 무선기기 등을 이용하는 행위'));
+  out.push(item('대리시험을 의뢰하거나 대리로 시험에 응시한 행위'));
+  out.push(item('다른 수험생에게 답을 보여주기를 강요하거나 위협하는 행위'));
+  out.push(item('시험 종료령이 울린 후에도 계속 답안지를 작성하는 행위'));
+  out.push(item('감독관의 본인 확인 및 소지품 검색 요구에 따르지 않는 행위'));
+  out.push(item('시험실 반입 금지 물품을 당일 고사 실시 이전에 제출하지 않고 소지하고 있는 행위'));
+  out.push(item('시험시간 동안 휴대 금지 물품(책, 연습장, 메모지 등)을 책상 서랍 등 임의의 장소에 보관한 행위'));
+  out.push(item('그 밖에 명시되지 않은 유형은 위원회의 심의를 거쳐 학교장이 결정한다.'));
+  out.push('\\vspace{4.5pt}');
+  out.push(centerHead('【0점 처리 사례】'));
+  out.push('\\vspace{2pt}');
+  out.push(item('부정행위자가 부정행위를 한 해당 고사의 해당 과목'));
+  out.push(item('부정행위 협조자도 부정행위자와 동일하게 처리'));
+  out.push(item('OMR카드의 고의 훼손(학업성적관리위원회의 심의를 거쳐 학교장이 결정)'));
+  out.push('}}};');
+
+  // 3) 【시험실 반입 금지 물품】 상자 (상하 여백 대칭 + 박스 간격 확대)
+  out.push(`\\draw[line width=${pt(0.8)}] ${at(boxL, 832)} rectangle ${at(boxR, 916)};`);
+  out.push(`\\node[anchor=north west,text width=${pt(textW)}] at ${at(textL, 842)} {{\\YggWithUnifiedDigits{${font(11.8, 16.5)}\\setlength{\\parskip}{1.5pt}%`);
+  out.push(centerHead('【시험실 반입 금지 물품】'));
+  out.push('\\vspace{2pt}');
+  out.push('\\noindent 휴대전화, 스마트기기(스마트워치 등), 디지털 카메라, 전자사전, MP3 플레이어, 카메라펜, 전자계산기, 라디오,\\linebreak 휴대용 미디어 플레이어, 통신·결제기능(블루투스 등) 또는 전자식 화면표시기(LED, LCD 등)가 있는 시계,\\linebreak 전자담배, 통신(블루투스) 기능이 있는 이어폰 등 모든 전자기기\\par');
+  out.push('}}};');
+
+  // 4) 하단 회색 경고 배너
+  out.push(`\\filldraw[fill=black!16,draw=black,line width=${pt(0.8)}] ${at(boxL, 925)} rectangle ${at(boxR, 957)};`);
+  out.push(`\\node[anchor=center] at ${at(0, 941)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(16.8)}\\bfseries ※\\hspace{0.35em}본령이 울릴 때까지 표지를 넘기지 마시오.}}};`);
+
+  // 5) 학교 로고 + 학교명 (가로형 로고도 폭 제한에 눌려 작아지지 않도록 width 를 넉넉히 두고 높이 기준으로 맞춘다)
+  const schoolChars = Array.from(String(schoolName || '능인중학교').replace(/\s+/g, ''));
+  const schoolGap = schoolChars.length <= 5 ? 16 : (schoolChars.length === 6 ? 11 : 8);
+  const schoolNameTex = schoolChars.map((ch) => esc(ch)).join(`\\hspace{${pt(schoolGap)}}`);
+  const schoolLogoTex = logoPathTex
+    ? `\\ensuremath{\\vcenter{\\hbox{\\includegraphics[height=${pt(26.5)},width=${pt(95)},keepaspectratio]{${logoPathTex}}}}}\\hspace{${pt(12)}}`
+    : '';
+  out.push(`\\node[anchor=center] at ${at(0, 983)} {{\\gyeongsinGothic${font(28)}\\bfseries ${schoolLogoTex}\\ensuremath{\\vcenter{\\hbox{\\raisebox{0pt}[\\height][0pt]{${schoolNameTex}}}}}}};`);
+
+  out.push('\\end{tikzpicture}');
+  out.push('\\clearpage');
+  // 단면 인쇄용 빈 뒷면
+  out.push('\\AtBeginShipoutNext{\\global\\quickanswerpagetrue\\global\\mocktitlepagefalse}');
+  out.push('\\thispagestyle{empty}');
+  out.push('\\null');
+  out.push('\\clearpage');
+  out.push('\\global\\quickanswerpagefalse');
+  out.push('\\setcounter{page}{1}');
+  out.push('\\endgroup');
+  return out.join('\n');
+}
+
+function renderSoseonCoverPageLatex(
+  soseonMeta,
+  { gyeongsinLogoPath = '', schoolName = '', paper = 'B4' } = {},
+) {
+  const meta = soseonMeta || resolveGyeongsinExamMeta({ schoolName: schoolName || '소선여자중학교' });
+  const paperKey = String(paper || 'B4').toUpperCase();
+  const scale = (GYEONGSIN_PAPER_HEIGHT_PT[paperKey] || GYEONGSIN_PAPER_HEIGHT_PT.B4)
+    / GYEONGSIN_COVER_REF_HEIGHT_PT;
+  const pt = (v) => `${(v * scale).toFixed(2)}pt`;
+  const at = (dx, y) => `([xshift=${pt(dx)},yshift=-${pt(y)}]current page.north)`;
+  const font = (size, lead = size * 1.2) => `\\fontsize{${pt(size)}}{${pt(lead)}}\\selectfont`;
+
+  const boxHalf = 338.5;
+  const boxL = -boxHalf;
+  const boxR = boxHalf;
+  const infoHalf = 248.2;
+  const infoL = -infoHalf;
+  const infoR = infoHalf;
+  const logoPathTex = gyeongsinLogoPath ? String(gyeongsinLogoPath).replace(/\\/g, '/') : '';
+  const esc = (v) => escapeLatexText(String(v ?? ''));
+  const triBullet = `\\tikz[baseline=${pt(-1)}]\\draw[line width=${pt(0.65)}] (0,0)--(0,${pt(8)})--(${pt(6.8)},${pt(4)})--cycle;\\hspace{${pt(6)}}`;
+  const subjChars = Array.from(String(meta.subjectName || '수학').replace(/\s+/g, '')).map((c) => esc(c));
+  const subjSpaced = subjChars.join(`\\hspace{${pt(18)}}`);
+
+  const out = [];
+  out.push('\\begingroup');
+  out.push('\\AtBeginShipoutNext{\\global\\quickanswerpagetrue\\global\\mocktitlepagefalse}');
+  out.push('\\thispagestyle{empty}');
+  out.push('\\setstretch{1}\\setlength{\\parskip}{0pt}');
+  out.push('\\noindent\\null');
+  out.push('\\begin{tikzpicture}[remember picture,overlay,every node/.style={inner sep=0pt,outer sep=0pt}]');
+
+  // 바깥 전체 테두리
+  out.push(`\\draw[line width=${pt(0.95)}] ${at(boxL, 42)} rectangle ${at(boxR, 995)};`);
+
+  // 상단 시험명 (밑줄 없음, 폰트 확대, 상단 여백 추가 후 요소 간 간격 축소) + 과목명
+  out.push(`\\node[anchor=center] at ${at(0, 205)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(28.5)}\\bfseries ${esc(meta.soseonCoverExamTitle)}}}};`);
+
+  out.push(`\\node[anchor=center] at ${at(0, 305)} {{\\gyeongsinGothic${font(46)}\\bfseries ${subjSpaced}}};`);
+
+  // 중앙 학교 엠블럼
+  if (logoPathTex) {
+    out.push(`\\node[anchor=center] at ${at(0, 480)} {\\includegraphics[height=${pt(138)},width=${pt(155)},keepaspectratio]{${logoPathTex}}};`);
+  }
+
+  // 하단 안내 상자 (4줄 — 테두리 진하게, 상하 여백 및 줄간격 축소)
+  out.push(`\\draw[line width=${pt(1.15)}] ${at(infoL, 636)} rectangle ${at(infoR, 776)};`);
+  out.push(`\\node[anchor=west] at ${at(infoL + 16, 661)} {{\\YggWithUnifiedDigits{${font(15.5)}\\bfseries ${triBullet}문항수 : 선택형 ${esc(meta.neunginObjectiveCountText)}문항, 서술형 ${esc(meta.daeryunEssayCountText)}문항 계 ${esc(meta.dongdoTotalCountText)}문항}}};`);
+  out.push(`\\node[anchor=west] at ${at(infoL + 16, 691)} {{\\YggWithUnifiedDigits{${font(15.5)}\\bfseries ${triBullet}문제지 면수 : ${esc(meta.totalPageCountText)}면 (표지면 제외)}}};`);
+  out.push(`\\node[anchor=west] at ${at(infoL + 16, 721)} {{\\YggWithUnifiedDigits{${font(15.5)}\\bfseries ${triBullet}과목코드 : ${esc(meta.daeryunSubjectCode)}}}};`);
+  out.push(`\\node[anchor=west] at ${at(infoL + 16, 751)} {{\\YggWithUnifiedDigits{${font(15.5)}\\bfseries ${triBullet}배점 : 각 문항에 표시}}};`);
+
+  // 최하단 회색 배너 (좌우 테두리에서 띄움 + 조금 더 진한 배경색)
+  out.push(`\\filldraw[fill=black!32,draw=black,line width=${pt(0.75)}] ${at(boxL + 13, 926)} rectangle ${at(boxR - 13, 972)};`);
+  out.push(`\\node[anchor=center] at ${at(0, 949)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(18)}\\bfseries ※\\hspace{0.35em}시험이 시작되기 전까지 표지를 넘기지 마시오.}}};`);
+
+  out.push('\\end{tikzpicture}');
+  out.push('\\clearpage');
+  // 단면 인쇄용 빈 뒷면
+  out.push('\\AtBeginShipoutNext{\\global\\quickanswerpagetrue\\global\\mocktitlepagefalse}');
+  out.push('\\thispagestyle{empty}');
+  out.push('\\null');
+  out.push('\\clearpage');
+  out.push('\\global\\quickanswerpagefalse');
+  out.push('\\setcounter{page}{1}');
+  out.push('\\endgroup');
+  return out.join('\n');
+}
+
+function renderOseongCoverPageLatex(
+  oseongMeta,
+  { schoolName = '', paper = 'B4' } = {},
+) {
+  const meta = oseongMeta || resolveGyeongsinExamMeta({ schoolName: schoolName || '오성중학교' });
+  const paperKey = String(paper || 'B4').toUpperCase();
+  const scale = (GYEONGSIN_PAPER_HEIGHT_PT[paperKey] || GYEONGSIN_PAPER_HEIGHT_PT.B4)
+    / GYEONGSIN_COVER_REF_HEIGHT_PT;
+  const pt = (v) => `${(v * scale).toFixed(2)}pt`;
+  const at = (dx, y) => `([xshift=${pt(dx)},yshift=-${pt(y)}]current page.north)`;
+  const font = (size, lead = size * 1.2) => `\\fontsize{${pt(size)}}{${pt(lead)}}\\selectfont`;
+
+  const boxHalf = 281.5;
+  const boxL = -boxHalf;
+  const boxR = boxHalf;
+  const esc = (v) => escapeLatexText(String(v ?? ''));
+
+  const misconductItemsTex = [
+    esc('다른 학생의 답안지를 보거나 보여주는 행위'),
+    esc('다른 학생에게 답을 알려주거나 알려주기를 강요·위협하는 행위'),
+    esc('손동작, 소리 등으로 다른 학생과 신호를 주고받는 행위'),
+    esc('휴대 금지 물품을 소지·사용하거나, 무선기기 등을 이용하는 행위'),
+    `${esc('시험과 관련된 내용을 책상, 개인 소지품 등에 기록하거나, 책, 노트, 쪽지 등을')}\\linebreak ${esc('보거나 주고받는 행위')}`,
+    esc('본령 전에 시험지(표지 포함)에 낙서, 메모를 하거나 문제를 푸는 행위'),
+    esc('종료령 이후에도 답안을 작성하는 행위'),
+    esc('시험과 관련한 감독관의 정당한 지시에 불응하는 행위'),
+    `${esc('위에 명시한 유형 외에도 공정한 시험 진행을 방해한다고 판단되는 모든 의심')}\\linebreak \\mbox{${esc('행위는 부정행위 대상이 되어 학업성적관리위원회 심의를 거쳐 학교장이 판단함.')}}`,
+  ];
+  const misconductTex = misconductItemsTex
+    .map((itemTex) => `\\setbox0=\\hbox{\\textbullet\\hspace{0.55em}}\\hangindent=\\wd0\\hangafter=1\\noindent\\copy0 ${itemTex}\\par`)
+    .join(`\\vspace{${pt(4.2)}}`);
+  const prohibitedTex = [
+    esc('휴대전화, 스마트기기(스마트워치 등), 디지털카메라, 전자사전, MP3 플레이어,'),
+    esc('카메라 펜, 전자계산기, 라디오, 휴대용 미디어 플레이어, 통신·결제 기능(블루투'),
+    esc('스 등) 또는 전자식 화면표시기(LCD, LED 등)가 있는 전자시계, 전자담배, 통신'),
+    esc('(블루투스) 기능이 있는 이어폰 등 모든 전자기기, 이 외에 시험의 공정성을 저해'),
+    esc('한다고 판단되는 모든 물품'),
+  ].join('\\linebreak ');
+
+  const pillPath = (xL, yTop, width, height) => {
+    const r = height / 2;
+    const straightW = Math.max(0, width - height);
+    return `${at(xL + r, yTop)} -- ++(${pt(straightW)},0pt) arc[start angle=90,end angle=-90,radius=${pt(r)}] -- ++(-${pt(straightW)},0pt) arc[start angle=-90,end angle=-270,radius=${pt(r)}] -- cycle`;
+  };
+
+  const out = [];
+  out.push('\\begingroup');
+  out.push('\\AtBeginShipoutNext{\\global\\quickanswerpagetrue\\global\\mocktitlepagefalse}');
+  out.push('\\thispagestyle{empty}');
+  out.push('\\lineskiplimit=-10pt\\lineskip=0pt\\setstretch{1}\\setlength{\\parskip}{0pt}');
+  out.push('\\noindent\\null');
+  out.push('\\begin{tikzpicture}[remember picture,overlay,every node/.style={inner sep=0pt,outer sep=0pt}]');
+
+  // 좌상단 교시 알약 박스 (완전한 반원 캡슐 형태)
+  out.push(`\\draw[line width=${pt(0.95)}] ${pillPath(boxL, 123, 114, 38)};`);
+  out.push(`\\node[anchor=center] at ${at(boxL + 57, 142)} {{\\gyeongsinGothic${font(18.5)}\\bfseries ${esc(meta.oseongPeriodLabel)}}};`);
+
+  // 중앙 시험명 + 학년·과목(과목코드) (2026을 5pt 위로 올려 학년·과목과 간격 +5pt 확보)
+  out.push(`\\node[anchor=center] at ${at(0, 215)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(34)}\\bfseries ${esc(meta.oseongCoverExamTitle)}}}};`);
+  out.push(`\\node[anchor=center] at ${at(0, 289)} {{\\YggWithUnifiedDigits{\\YggTopLabel\\daeryunHeavyHangul${font(62)}\\bfseries ${esc(meta.oseongCoverSubjectLine)}}}};`);
+
+  // Box 1: 부정행위 유형 (완전한 알약 모양 태그 + 내부 폰트 확대 및 줄바꿈 일치)
+  out.push(`\\filldraw[fill=black,draw=black] ${pillPath(boxL, 378, 134, 28)};`);
+  out.push(`\\node[anchor=center,text=white] at ${at(boxL + 67, 392)} {{\\gyeongsinGothic${font(16)}\\bfseries 부정행위 유형}};`);
+  out.push(`\\draw[line width=${pt(0.75)}] ${at(boxL, 412)} rectangle ${at(boxR, 680)};`);
+  out.push(`\\node[anchor=north west] at ${at(boxL + 12, 424.5)} {\\parbox{${pt(boxHalf * 2 - 24)}}{\\lineskiplimit=-10pt\\lineskip=0pt\\setstretch{1}\\gyeongsinGothic${font(13.8, 20.2)}\\YggWithUnifiedDigits{${misconductTex}}\\par}};`);
+
+  // Box 2: 시험 중 휴대 금지 물품 (완전한 알약 모양 태그 + 내부 폰트 확대 및 줄바꿈 일치)
+  out.push(`\\filldraw[fill=black,draw=black] ${pillPath(boxL, 698, 198, 28)};`);
+  out.push(`\\node[anchor=center,text=white] at ${at(boxL + 99, 712)} {{\\gyeongsinGothic${font(16)}\\bfseries 시험 중 휴대 금지 물품}};`);
+  out.push(`\\draw[line width=${pt(0.75)}] ${at(boxL, 732)} rectangle ${at(boxR, 850)};`);
+  out.push(`\\node[anchor=north west] at ${at(boxL + 12, 744)} {\\parbox{${pt(boxHalf * 2 - 24)}}{\\lineskiplimit=-10pt\\lineskip=0pt\\setstretch{1}\\gyeongsinGothic${font(14.0, 20.6)}\\YggWithUnifiedDigits{\\noindent ${prohibitedTex}\\par}}};`);
+
+  // Box 3: 하단 회색 주의 문구 박스 (폰트 확대)
+  out.push(`\\filldraw[fill=black!16,draw=black,line width=${pt(0.75)}] ${at(boxL, 870)} rectangle ${at(boxR, 912)};`);
+  out.push(`\\node[anchor=center] at ${at(0, 891)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(19.5)}\\bfseries ※시험이 시작되기 전까지 표지를 넘기지 마시오.}}};`);
+
+  out.push('\\end{tikzpicture}');
+  out.push('\\clearpage');
+  // 단면 인쇄용 빈 뒷면
+  out.push('\\AtBeginShipoutNext{\\global\\quickanswerpagetrue\\global\\mocktitlepagefalse}');
+  out.push('\\thispagestyle{empty}');
+  out.push('\\null');
+  out.push('\\clearpage');
+  out.push('\\global\\quickanswerpagefalse');
+  out.push('\\setcounter{page}{1}');
+  out.push('\\endgroup');
+  return out.join('\n');
+}
+
+function renderJeonghwaCoverPageLatex(
+  jeonghwaMeta,
+  { gyeongsinLogoPath = '', schoolName = '', paper = 'B4', totalPagesWithCover = '' } = {},
+) {
+  const meta = jeonghwaMeta || resolveGyeongsinExamMeta({ schoolName: schoolName || '정화중학교' });
+  const paperKey = String(paper || 'B4').toUpperCase();
+  const scale = (GYEONGSIN_PAPER_HEIGHT_PT[paperKey] || GYEONGSIN_PAPER_HEIGHT_PT.B4)
+    / GYEONGSIN_COVER_REF_HEIGHT_PT;
+  const pt = (v) => `${(v * scale).toFixed(2)}pt`;
+  const at = (dx, y) => `([xshift=${pt(dx)},yshift=-${pt(y)}]current page.north)`;
+  const font = (size, lead = size * 1.2) => `\\fontsize{${pt(size)}}{${pt(lead)}}\\selectfont`;
+
+  const boxHalf = 284.0;
+  const boxL = -boxHalf;
+  const boxR = boxHalf;
+  const esc = (v) => escapeLatexText(String(v ?? ''));
+  const logoPathTex = gyeongsinLogoPath ? String(gyeongsinLogoPath).replace(/\\/g, '/') : '';
+  const totalPagesStr = String(totalPagesWithCover || meta.totalPageCountText || '8');
+
+  // 상단 시험명에서 '2학년'의 숫자만 조금 더 크게 강조 ('2학기'는 기본 폰트 크기 유지)
+  const rawTitle = String(meta.jeonghwaCoverExamTitle || '2026학년도 2학년 2학기 중간시험');
+  const titleTex = esc(rawTitle)
+    .replace(/(\d)(?=\s*학년(?!도))/g, `{${font(33)}$1}`)
+    .replace(/\s+/g, '\\hspace{0.55em}');
+
+  const subjChars = Array.from(String(meta.subjectName || '수학').replace(/\s+/g, '')).map((c) => esc(c));
+  const subjSpaced = subjChars.join(`\\hspace{${pt(21)}}`);
+
+  const effectiveSchoolName = String(schoolName || meta.fullSchoolName || '정화중학교').replace(/\s+/g, '');
+  const schoolSpaced = esc(effectiveSchoolName);
+
+  const rawDatePeriod = String(meta.jeonghwaCoverDatePeriod || '9월 23일 1교시 시행').trim();
+  const dpMatch = rawDatePeriod.match(/^(\S+월)\s*(\S+일)\s*(\S+)\s*(시행)$/);
+  const datePeriodTex = dpMatch
+    ? `${esc(dpMatch[1])}\\hspace{${pt(30)}}${esc(dpMatch[2])}\\hspace{${pt(30)}}${esc(dpMatch[3])}\\hspace{${pt(12.5)}}${esc(dpMatch[4])}`
+    : esc(rawDatePeriod).replace(/\s+/g, `\\hspace{${pt(22)}}`);
+
+  const misconductBullets = [
+    esc('* 다른 수험생의 답안지를 보거나 보여주는 행위'),
+    esc('* 다른 수험생과 손동작, 소리 등으로 서로 신호를 하는 행위'),
+    esc('* 부정한 휴대물을 보거나 무선기기 등을 이용하는 행위'),
+    esc('* 대리시험을 의뢰하거나 대리로 시험에 응시한 행위'),
+    esc('* 다른 수험생에게 답을 보여주기를 강요하거나 위협하는 행위'),
+    `{\\daeryunHeavyHangul\\bfseries * \\uline{${esc('시험 본령(타종) 전 문제를 풀거나 시험 종료령(타종)이 울린 후에도 계속 답안지를 작성하는 행위')}}}`,
+    esc('* 감독관의 본인 확인 및 소지품 검색 요구에 따르지 않는 행위'),
+    esc('* 반입 금지 물품을 당일 고사 실시 이전에 제출하지 않는 행위'),
+    esc('* 시험시간 동안 휴대 금지 물품(책, 연습장, 메모지 등)을 책상 서랍 등 임의의 장소에 보관한 행위 등'),
+    esc('* 일체의 시험방해행위(교사 지시 미이행 행위, 시험과 무관한 질문을 하는 행위 등)'),
+    `{\\daeryunHeavyHangul\\bfseries ${esc('※ 부정행위가 이루어진 과목은 0점 처리되며 학업성적관리위원회의 조치를 받습니다.')}}`,
+  ];
+
+  const out = [];
+  out.push('\\begingroup');
+  out.push('\\AtBeginShipoutNext{\\global\\quickanswerpagetrue\\global\\mocktitlepagefalse}');
+  out.push('\\thispagestyle{empty}');
+  out.push('\\lineskiplimit=-10pt\\lineskip=0pt\\setstretch{1}\\setlength{\\parskip}{0pt}');
+  out.push('\\noindent\\null');
+  out.push('\\begin{tikzpicture}[remember picture,overlay,every node/.style={inner sep=0pt,outer sep=0pt}]');
+
+  // 상단 헤더 (시험명 / 과목명(밑줄 없음, 자간 축소) / 과목 코드 / 시행일시 — 상하 간격 각 60pt)
+  out.push(`\\node[anchor=center] at ${at(0, 135)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(24)}\\bfseries ${titleTex}}}};`);
+  out.push(`\\node[anchor=center] at ${at(0, 195)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(44)}\\bfseries ${subjSpaced}}}};`);
+  out.push(`\\node[anchor=center] at ${at(0, 255)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(17.5)}\\bfseries 과목\\hspace{${pt(11)}}코드\\hspace{${pt(11)}}(\\hspace{${pt(18)}}${esc(meta.subjectCode)}\\hspace{${pt(18)}})}}};`);
+  out.push(`\\node[anchor=center] at ${at(0, 282)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(17.5)}\\bfseries ${datePeriodTex}}}};`);
+
+  // Box 1: 구성표 및 안내 1, 2, 3
+  out.push(`\\draw[line width=${pt(0.75)}] ${at(boxL, 315)} rectangle ${at(boxR, 507)};`);
+  out.push(`\\node[anchor=west] at ${at(boxL + 12, 334)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(12.2)}\\bfseries 1. 이 문제지는 다음과 같이 구성되어 있습니다.}}};`);
+
+  // Box 1 내부 표 (5열: 면수 | 선택형 문항수 | 선택형 총점 | 서답형 문항수(단답형/서술형) | 서답형 총점)
+  const tblL = boxL + 19;
+  const colW = 103.4;
+  const c0 = tblL;
+  const c1 = tblL + colW;
+  const c2 = tblL + colW * 2;
+  const c3 = tblL + colW * 3;
+  const c35 = tblL + colW * 3.5;
+  const c4 = tblL + colW * 4;
+  const c5 = tblL + colW * 5;
+  const tTop = 353.0;
+  const tSub = 371.0;
+  const tMid = 392.5;
+  const tBot = 419.5;
+  out.push(`\\draw[line width=${pt(0.65)}] ${at(c0, tTop)} rectangle ${at(c5, tBot)};`);
+  out.push(`\\draw[line width=${pt(0.6)}] ${at(c0, tMid)} -- ${at(c5, tMid)};`);
+  out.push(`\\draw[line width=${pt(0.6)}] ${at(c3, tSub)} -- ${at(c4, tSub)};`);
+  out.push(`\\draw[line width=${pt(0.6)}] ${at(c1, tTop)} -- ${at(c1, tBot)};`);
+  out.push(`\\draw[line width=${pt(0.6)}] ${at(c2, tTop)} -- ${at(c2, tBot)};`);
+  out.push(`\\draw[line width=${pt(0.6)}] ${at(c3, tTop)} -- ${at(c3, tBot)};`);
+  out.push(`\\draw[line width=${pt(0.6)}] ${at(c35, tSub)} -- ${at(c35, tBot)};`);
+  out.push(`\\draw[line width=${pt(0.6)}] ${at(c4, tTop)} -- ${at(c4, tBot)};`);
+
+  out.push(`\\node[anchor=center] at ${at((c0 + c1) / 2, (tTop + tMid) / 2)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(11.2)}\\bfseries 문제지 면수}}};`);
+  out.push(`\\node[anchor=center] at ${at((c1 + c2) / 2, (tTop + tMid) / 2)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(11.2)}\\bfseries 선택형 문항수}}};`);
+  out.push(`\\node[anchor=center] at ${at((c2 + c3) / 2, (tTop + tMid) / 2)} {\\parbox{${pt(colW - 4)}}{\\lineskiplimit=-10pt\\lineskip=0pt\\centering\\setstretch{1}\\gyeongsinGothic${font(11.2, 13.2)}\\bfseries 선택형\\\\문제 총점\\par}};`);
+  out.push(`\\node[anchor=center] at ${at((c3 + c4) / 2, (tTop + tSub) / 2)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(10.8)}\\bfseries 서답형 문항수}}};`);
+  out.push(`\\node[anchor=center] at ${at((c3 + c35) / 2, (tSub + tMid) / 2)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(10.8)}\\bfseries 단답형}}};`);
+  out.push(`\\node[anchor=center] at ${at((c35 + c4) / 2, (tSub + tMid) / 2)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(10.8)}\\bfseries 서술형}}};`);
+  out.push(`\\node[anchor=center] at ${at((c4 + c5) / 2, (tTop + tMid) / 2)} {\\parbox{${pt(colW - 4)}}{\\lineskiplimit=-10pt\\lineskip=0pt\\centering\\setstretch{1}\\gyeongsinGothic${font(11.2, 13.2)}\\bfseries 서답형\\\\문제 총점\\par}};`);
+
+  out.push(`\\node[anchor=center] at ${at((c0 + c1) / 2, (tMid + tBot) / 2)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(12.2)}\\bfseries ${esc(totalPagesStr)}쪽}}};`);
+  out.push(`\\node[anchor=center] at ${at((c1 + c2) / 2, (tMid + tBot) / 2)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(12.2)}\\bfseries ${esc(meta.neunginObjectiveCountText)}}}};`);
+  out.push(`\\node[anchor=center] at ${at((c2 + c3) / 2, (tMid + tBot) / 2)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(12.2)}\\bfseries ${esc(meta.jeonghwaObjectiveScoreNum)}}}};`);
+  out.push(`\\node[anchor=center] at ${at((c3 + c35) / 2, (tMid + tBot) / 2)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(12.2)}\\bfseries ${esc(meta.subjectiveCountText)}}}};`);
+  out.push(`\\node[anchor=center] at ${at((c35 + c4) / 2, (tMid + tBot) / 2)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(12.2)}\\bfseries ${esc(meta.essayCountText)}}}};`);
+  out.push(`\\node[anchor=center] at ${at((c4 + c5) / 2, (tMid + tBot) / 2)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(12.2)}\\bfseries ${esc(meta.jeonghwaEssayScoreNum)}}}};`);
+
+  // Box 1 안내 2, 3 (원본과 동일한 어절에서 줄바꿈)
+  const box1Items23Tex = `\\setbox0=\\hbox{2.\\ }\\hangindent=\\wd0\\hangafter=1\\noindent\\copy0 문제지 면수와 인쇄 상태를 반드시 확인하시오. 문제지 인쇄 상태 미확인에 따른 불이익은 학생\\linebreak `
+    + `에게 있습니다. \\uline{시작종이 울릴 때까지 절대 표지를 넘기지 마시오.}\\par\\vspace{${pt(4.5)}}`
+    + `\\setbox0=\\hbox{3.\\ }\\hangindent=\\wd0\\hangafter=1\\noindent\\copy0 OMR 답안지에는 \\uline{컴퓨터용 수성 사인펜만} 사용하시오. 선택형 답을 수정할 경우 개인용 수정\\linebreak `
+    + `테이프를 사용하십시오.\\par`;
+  out.push(`\\node[anchor=north west] at ${at(boxL + 12, 430)} {\\parbox{${pt(boxHalf * 2 - 24)}}{\\lineskiplimit=-10pt\\lineskip=0pt\\setstretch{1}\\gyeongsinGothic${font(12.2, 16.8)}\\bfseries \\YggWithUnifiedDigits{${box1Items23Tex}}}};`);
+
+  // Box 2: < 반입 금지 물품 > (타이틀 < > 굵게 처리, 원본과 동일한 3줄 줄바꿈)
+  out.push(`\\draw[line width=${pt(0.75)}] ${at(boxL, 515)} rectangle ${at(boxR, 590)};`);
+  out.push(`\\node[anchor=center] at ${at(0, 531)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic\\daeryunHeavyHangul${font(12.5)}\\bfseries \\jeonghwaBoldLt\\ 반입 금지 물품 \\jeonghwaBoldGt}}};`);
+  const box2LinesTex = [
+    esc('휴대전화, 스마트기기(스마트워치 등), 디지털 카메라, 전자사전, MP3 플레이어, 카메라펜, 전자계산기, 라디'),
+    esc('오, 휴대용 미디어 플레이어, 통신·결제기능(블루투스 등) 또는 전자식 화면표시기(LCD, LED 등)가 있는 전'),
+    esc('자시계, 전자담배, 블루투스 이어폰 등 모든 전자기기'),
+  ].join('\\linebreak ');
+  out.push(`\\node[anchor=north west] at ${at(boxL + 12, 544)} {\\parbox{${pt(boxHalf * 2 - 24)}}{\\lineskiplimit=-10pt\\lineskip=0pt\\setstretch{1}\\gyeongsinGothic${font(11.3, 15.2)}\\bfseries \\YggWithUnifiedDigits{\\noindent ${box2LinesTex}\\par}}};`);
+
+  // Box 3: < 부정행위 유형 > (타이틀 < > 굵게 처리, 폰트 크기·굵기 반입금지박스와 동일, 왼쪽 여백 4pt 축소)
+  out.push(`\\draw[line width=${pt(0.75)}] ${at(boxL, 598)} rectangle ${at(boxR, 867)};`);
+  out.push(`\\node[anchor=center] at ${at(0, 615)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic\\daeryunHeavyHangul${font(12.5)}\\bfseries \\jeonghwaBoldLt\\ 부정행위 유형 \\jeonghwaBoldGt}}};`);
+  misconductBullets.forEach((lineTex, idx) => {
+    const yPos = 636 + idx * 21.8;
+    out.push(`\\node[anchor=west] at ${at(boxL + 18, yPos)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(11.3)}\\bfseries ${lineTex}}}};`);
+  });
+
+  // 하단 교표 + 학교명 (가로로 긴 로고도 폭 제한에 눌려 작아지지 않도록 width 를 넉넉히 부여)
+  const logoGraphic = logoPathTex
+    ? `\\ensuremath{\\vcenter{\\hbox{\\includegraphics[height=${pt(42)},width=${pt(140)},keepaspectratio]{${logoPathTex}}}}}\\hspace{${pt(18)}}`
+    : '';
+  out.push(`\\node[anchor=center] at ${at(0, 906)} {${logoGraphic}\\ensuremath{\\vcenter{\\hbox{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(36)}\\bfseries ${schoolSpaced}}}}}};`);
+
+  // 표지 최하단 페이지 번호 및 저작권 문구 (두 줄 모두 10.6pt 동일 크기·동일 기본 굵기, 줄간격 좁게)
+  out.push(`\\node[anchor=center] at ${at(0, 944)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(10.6)} ${esc(`${meta.jeonghwaFooterBase} ${totalPagesStr} - 1`)}}}};`);
+  out.push(`\\node[anchor=center] at ${at(0, 954.2)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(10.6)} - 이 문제지의 무단 복제를 금합니다. -}}};`);
+
+  out.push('\\end{tikzpicture}');
+  out.push('\\clearpage');
+  // 단면 인쇄용 빈 뒷면
+  out.push('\\AtBeginShipoutNext{\\global\\quickanswerpagetrue\\global\\mocktitlepagefalse}');
+  out.push('\\thispagestyle{empty}');
+  out.push('\\null');
+  out.push('\\clearpage');
+  out.push('\\global\\quickanswerpagefalse');
+  out.push('\\setcounter{page}{1}');
+  out.push('\\endgroup');
+  return out.join('\n');
+}
+
+function renderHwanggeumCoverPageLatex(
+  hwanggeumMeta,
+  { gyeongsinLogoPath = '', schoolName = '', paper = 'B4', totalPagesWithCover = '', totalSheetsWithCover = '' } = {},
+) {
+  const meta = hwanggeumMeta || resolveGyeongsinExamMeta({ schoolName: schoolName || '황금중학교' });
+  const paperKey = String(paper || 'B4').toUpperCase();
+  const scale = (GYEONGSIN_PAPER_HEIGHT_PT[paperKey] || GYEONGSIN_PAPER_HEIGHT_PT.B4)
+    / GYEONGSIN_COVER_REF_HEIGHT_PT;
+  const pt = (v) => `${(v * scale).toFixed(2)}pt`;
+  const at = (dx, y) => `([xshift=${pt(dx)},yshift=-${pt(y)}]current page.north)`;
+  const font = (size, lead = size * 1.2) => `\\fontsize{${pt(size)}}{${pt(lead)}}\\selectfont`;
+
+  const boxHalf = 306.9;
+  const boxL = -boxHalf;
+  const boxR = boxHalf;
+  const esc = (v) => escapeLatexText(String(v ?? ''));
+  const logoPathTex = gyeongsinLogoPath ? String(gyeongsinLogoPath).replace(/\\/g, '/') : '';
+  const totalPagesStr = String(totalPagesWithCover || meta.totalPageCountText || '5');
+  const totalSheetsStr = String(totalSheetsWithCover || Math.max(1, Math.ceil(Number(totalPagesStr || 5) / 2)));
+
+  const yearNum = esc(meta.hwanggeumYearNum || '2026');
+  const semNum = esc(meta.hwanggeumSemNum || '1');
+  const kindStr = esc(meta.hwanggeumKindStr || '기말');
+  const gradeNum = esc(meta.hwanggeumGradeNum || '3');
+  const monthNum = esc(meta.hwanggeumMonthNum || '6');
+  const dayNum = esc(meta.hwanggeumDayNum || '30');
+  const periodNum = esc(meta.hwanggeumPeriodNum || '1');
+
+  const topLine1Tex = `${yearNum}학년도\\hspace{${pt(7)}}(\\hspace{${pt(5)}}${semNum}\\hspace{${pt(5)}})학기\\hspace{${pt(7)}}(\\hspace{${pt(6)}}${kindStr}\\hspace{${pt(6)}})시험\\hspace{${pt(7)}}(\\hspace{${pt(5)}}${gradeNum}\\hspace{${pt(5)}})학년`;
+  const subjChars = Array.from(String(meta.subjectName || '수학').replace(/\s+/g, '')).map((c) => esc(c));
+  const subjSpaced = subjChars.join(`\\hspace{${pt(14)}}`);
+  const topLine2Tex = `(\\hspace{${pt(10)}}${subjSpaced}\\hspace{${pt(10)}})`;
+  const topLine3Tex = `(\\hspace{${pt(9)}}${monthNum}\\hspace{${pt(9)}})월\\hspace{${pt(28)}}(\\hspace{${pt(9)}}${dayNum}\\hspace{${pt(9)}})일\\hspace{${pt(28)}}(\\hspace{${pt(9)}}${periodNum}\\hspace{${pt(9)}})교시\\hspace{${pt(8)}}시행`;
+
+  const effectiveSchoolName = String(schoolName || meta.fullSchoolName || '황금중학교').replace(/\s+/g, '');
+  const schoolSpaced = esc(effectiveSchoolName);
+
+  const misconductBullets = [
+    esc('* 다른 수험생의 답안지를 보거나 보여주는 행위'),
+    esc('* 다른 수험생과 손동작, 소리 등으로 서로 신호를 하는 행위'),
+    esc('* 부정한 휴대물을 보거나 무선기기 등을 이용하는 행위'),
+    esc('* 대리시험을 의뢰하거나 대리로 시험에 응시한 행위'),
+    esc('* 다른 수험생에게 답을 보여주기를 강요하거나 위협하는 행위'),
+    `* \\uline{${esc('시험 종료령(타종) 시작 후에도 계속 답안지를 작성')}}하는 행위`,
+    esc('* 감독관의 본인 확인 및 소지품 검색 요구에 따르지 않는 행위'),
+    esc('* 반입 금지 물품을 당일 제출하지 않고 반입하는 행위'),
+    esc('* 시험시간 동안 휴대 금지 물품(책, 연습장, 메모지 등)을 책상 서랍 등 임의의 장소에 보관한 행위 등 의심 가능 행동 일체 금지'),
+    `{\\daeryunHeavyHangul\\bfseries ${esc('※ 부정행위가 이루어진 과목은 0점 처리되며 생활교육위원회의 조치를 받습니다.')}}`,
+    `{\\daeryunHeavyHangul\\bfseries ${esc('(예) 2교시에 반입금지물품 적발 시 1, 2교시 시험 과목 모두 0점 처리됨.')}}`,
+  ];
+
+  const out = [];
+  out.push('\\begingroup');
+  out.push('\\AtBeginShipoutNext{\\global\\quickanswerpagetrue\\global\\mocktitlepagefalse}');
+  out.push('\\thispagestyle{empty}');
+  out.push('\\lineskiplimit=-10pt\\lineskip=0pt\\setstretch{1}\\setlength{\\parskip}{0pt}');
+  out.push('\\noindent\\null');
+  out.push('\\begin{tikzpicture}[remember picture,overlay,every node/.style={inner sep=0pt,outer sep=0pt}]');
+
+  // 상단 헤더 (학년도·학기·시험·학년 / ( 수 학 ) / 월·일·교시 시행)
+  out.push(`\\node[anchor=center] at ${at(0, 175)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(20.5)}\\bfseries ${topLine1Tex}}}};`);
+  out.push(`\\node[anchor=center] at ${at(0, 208)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(26)}\\bfseries ${topLine2Tex}}}};`);
+  out.push(`\\node[anchor=center] at ${at(0, 245)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(20.5)}\\bfseries ${topLine3Tex}}}};`);
+
+  // Box 1: 구성표 및 안내 1~6
+  out.push(`\\draw[line width=${pt(0.75)}] ${at(boxL, 273)} rectangle ${at(boxR, 535.5)};`);
+  out.push(`\\node[anchor=west] at ${at(boxL + 13, 286)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(11.8)} 1. 이 문제지는 다음과 같이 구성되어 있습니다.}}};`);
+
+  // Box 1 내부 표 (4열: 과목코드 | 문제지 | 선택형 문항수(배점) | 서답형 문항수(배점))
+  const c0 = -271.9;
+  const c1 = -175.4;
+  const c2 = -70.8;
+  const c3 = 93.8;
+  const c4 = 274.2;
+  const tTop = 295.4;
+  const tMid = 315.5;
+  const tBot = 344.3;
+  out.push(`\\draw[line width=${pt(0.65)}] ${at(c0, tTop)} rectangle ${at(c4, tBot)};`);
+  out.push(`\\draw[line width=${pt(0.6)}] ${at(c0, tMid)} -- ${at(c4, tMid)};`);
+  out.push(`\\draw[line width=${pt(0.6)}] ${at(c1, tTop)} -- ${at(c1, tBot)};`);
+  out.push(`\\draw[line width=${pt(0.6)}] ${at(c2, tTop)} -- ${at(c2, tBot)};`);
+  out.push(`\\draw[line width=${pt(0.6)}] ${at(c3, tTop)} -- ${at(c3, tBot)};`);
+
+  out.push(`\\node[anchor=center] at ${at((c0 + c1) / 2, (tTop + tMid) / 2)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(11.2)}\\bfseries 과목코드}}};`);
+  out.push(`\\node[anchor=center] at ${at((c1 + c2) / 2, (tTop + tMid) / 2)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(11.2)}\\bfseries 문제지}}};`);
+  out.push(`\\node[anchor=center] at ${at((c2 + c3) / 2, (tTop + tMid) / 2)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(11.2)}\\bfseries 선택형 문항수(배점)}}};`);
+  out.push(`\\node[anchor=center] at ${at((c3 + c4) / 2, (tTop + tMid) / 2)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(11.2)}\\bfseries 서답형 문항수(배점)}}};`);
+
+  out.push(`\\node[anchor=center] at ${at((c0 + c1) / 2, (tMid + tBot) / 2)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(18.5)}\\bfseries ${esc(meta.daeryunSubjectCode)}}}};`);
+  out.push(`\\node[anchor=center] at ${at((c1 + c2) / 2, (tMid + tBot) / 2)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(11.6)} 총${esc(totalSheetsStr)}장,\\ ${esc(totalPagesStr)}면}}};`);
+  out.push(`\\node[anchor=center] at ${at((c2 + c3) / 2, (tMid + tBot) / 2)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(11.6)} ${esc(meta.neunginObjectiveCountText)}문항(${esc(meta.hwanggeumObjectiveScoreText)})}}};`);
+  out.push(`\\node[anchor=center] at ${at((c3 + c4) / 2, (tMid + tBot) / 2)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(11.6)} ${esc(meta.daeryunEssayCountText)}문항(${esc(meta.hwanggeumEssayScoreText)})}}};`);
+
+  // Box 1 하단 주의사항 및 2~6번 항목 (원본과 동일한 줄바꿈)
+  const box1BodyTex = `\\noindent\\hspace*{${pt(5)}}※ 문제지 면수는 표지를 포함한 면 수입니다. 문항에 따라 배점이 다릅니다.\\par\\vspace{${pt(6.2)}}`
+    + `\\noindent 2. 문제지 면수와 인쇄 상태만 확인하고, \\uline{시작종이 울릴 때까지 절대 표지를 넘기지 마시오.}\\par\\vspace{${pt(6.2)}}`
+    + `\\noindent 3. OMR 답안지에 학년, 반, 번호, 과목코드를 정확히 표기하십시오.\\par\\vspace{${pt(6.2)}}`
+    + `\\noindent 4. OMR 답안지에는 \\uline{컴퓨터용 수성 사인펜만 사용하십시오.} 선택형 답을 수정할 경우 개인용 수정 테이프를\\linebreak `
+    + `사용하십시오. (예비마킹 금지)\\par\\vspace{${pt(6.2)}}`
+    + `\\noindent\\hspace*{${pt(4)}}5. 서술형 문항의 답은 OMR 답안지의 서술형 답란에 기재하십시오. (답안지 번호 유의)\\par\\vspace{${pt(6.2)}}`
+    + `\\noindent\\hspace*{${pt(4)}}\\mbox{6. 서술형 답은 OMR 답안지에 연필 또는 검은색 볼펜을 사용하여 채점 교사가 알아볼 수 있도록 정확하게 작성해야 합니다.}\\par`;
+  out.push(`\\node[anchor=north west] at ${at(boxL + 11.5, 355)} {\\parbox{${pt(boxHalf * 2 - 14)}}{\\lineskiplimit=-10pt\\lineskip=0pt\\setstretch{1}\\gyeongsinGothic${font(11.0, 21.5)} \\YggWithUnifiedDigits{${box1BodyTex}}}};`);
+
+  // Box 2: < 반입 금지 물품 > (타이틀 < > 굵게 처리, 원본과 동일한 3줄 줄바꿈)
+  out.push(`\\draw[line width=${pt(0.75)}] ${at(boxL, 544.9)} rectangle ${at(boxR, 630.3)};`);
+  out.push(`\\node[anchor=center] at ${at(0, 565)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic\\daeryunHeavyHangul${font(12.2)}\\bfseries \\jeonghwaBoldLt\\ 반입 금지 물품 \\jeonghwaBoldGt}}};`);
+  const box2LinesTex = [
+    esc('통신(블루투스 기능 포함)·결제 기능이 있는 물품(휴대전화, 스마트워치, 스마트링, 스마트 글라스, 태블릿, 이어폰 등),'),
+    esc('전자식 화면표시기(LCD, LED 등)가 있는 물품(전자사전, 전자식 화면표시기가 있는 시계, 텀블러 등), 기타 충전식 물품'),
+    esc('(전자담배, 보조배터리 등) 등 모든 전자 물품'),
+  ].join('\\linebreak ');
+  out.push(`\\node[anchor=north west] at ${at(boxL + 11.5, 579)} {\\parbox{${pt(boxHalf * 2 - 23)}}{\\lineskiplimit=-10pt\\lineskip=0pt\\setstretch{1}\\gyeongsinGothic${font(10.8, 17.3)} \\YggWithUnifiedDigits{\\noindent ${box2LinesTex}\\par}}};`);
+
+  // Box 3: < 부정행위 유형 > (타이틀 < > 굵게 처리, 9개 * 항목 + 하단 굵은 주의사항 2줄)
+  out.push(`\\draw[line width=${pt(0.75)}] ${at(boxL, 639.4)} rectangle ${at(boxR, 877.3)};`);
+  out.push(`\\node[anchor=center] at ${at(0, 661)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic\\daeryunHeavyHangul${font(12.2)}\\bfseries \\jeonghwaBoldLt\\ 부정행위 유형 \\jeonghwaBoldGt}}};`);
+  misconductBullets.forEach((lineTex, idx) => {
+    const yPos = 677 + idx * 18.7;
+    out.push(`\\node[anchor=west] at ${at(boxL + 19.7, yPos)} {{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(10.8)} ${lineTex}}}};`);
+  });
+
+  // 하단 교표 + 학교명 (자간 좁게 기본 간격 유지)
+  const logoGraphic = logoPathTex
+    ? `\\ensuremath{\\vcenter{\\hbox{\\includegraphics[height=${pt(38)},width=${pt(120)},keepaspectratio]{${logoPathTex}}}}}\\hspace{${pt(12)}}`
+    : '';
+  out.push(`\\node[anchor=center] at ${at(0, 924)} {${logoGraphic}\\ensuremath{\\vcenter{\\hbox{\\YggWithUnifiedDigits{\\gyeongsinGothic${font(29)}\\bfseries ${schoolSpaced}}}}}};`);
+
+  // 표지 최하단 페이지 번호 (5 - 1)
+  out.push(`\\node[anchor=center] at ${at(0, 980)} {{\\YggWithUnifiedDigits{\\fontsize{10.2pt}{12pt}\\selectfont ${esc(`${totalPagesStr} - 1`)}}}};`);
+
+  out.push('\\end{tikzpicture}');
+  out.push('\\clearpage');
+  // 단면 인쇄용 빈 뒷면
+  out.push('\\AtBeginShipoutNext{\\global\\quickanswerpagetrue\\global\\mocktitlepagefalse}');
+  out.push('\\thispagestyle{empty}');
+  out.push('\\null');
+  out.push('\\clearpage');
+  out.push('\\global\\quickanswerpagefalse');
+  out.push('\\setcounter{page}{1}');
   out.push('\\endgroup');
   return out.join('\n');
 }
@@ -8655,6 +11107,14 @@ function buildSlotMeasureDocumentLatex(visualQList, {
   preamble,
   paper,
   isAssignmentProfile,
+  isGyeongsinProfile = false,
+  isNeunginProfile = false,
+  isDaeryunProfile = false,
+  isDongdoProfile = false,
+  isSoseonProfile = false,
+  isOseongProfile = false,
+  isJeonghwaProfile = false,
+  isHwanggeumProfile = false,
   effectiveStemSizePt,
   assignmentAboveNumberFontPt,
   hideQuestionNumber,
@@ -8671,6 +11131,9 @@ function buildSlotMeasureDocumentLatex(visualQList, {
   }
   parts.push('\\raggedright');
   parts.push('\\lineskiplimit=0.4em\\lineskip=1.2em\n');
+  if (isGyeongsinProfile || isDaeryunProfile || isDongdoProfile || isSoseonProfile || isOseongProfile || isJeonghwaProfile || isHwanggeumProfile) {
+    parts.push('\\global\\setlength{\\gyeongsinColFrameW}{\\dimexpr 0.5\\linewidth+14pt\\relax}');
+  }
   parts.push('\\newwrite\\YggSlotHgtOut');
   parts.push('\\immediate\\openout\\YggSlotHgtOut=\\jobname.hgt');
   parts.push('\\newbox\\YggSlotMeasureBox');
@@ -8684,8 +11147,24 @@ function buildSlotMeasureDocumentLatex(visualQList, {
   const titleTopMm = isAssignmentProfile ? '36.81mm' : '52.59mm';
   const titleHeadSepPt = isAssignmentProfile ? '27.08pt' : '38.68pt';
   const titleHMargin = isAssignmentProfile ? '11.34mm' : '14mm';
-  const titleGeom = `${paper === 'A3' ? 'a3paper' : (paper === 'A4' ? 'a4paper' : 'b4paper')}`
-    + `,hmargin=${titleHMargin},top=${titleTopMm},bottom=20mm,headheight=72pt,headsep=${titleHeadSepPt}`;
+  const titleGeom = isGyeongsinProfile
+    ? gyeongsinTitlePaperGeometry(paper)
+    : (isNeunginProfile
+        ? neunginPaperGeometry(paper)
+        : (isDaeryunProfile
+            ? daeryunTitlePaperGeometry(paper)
+            : (isDongdoProfile
+                ? dongdoTitlePaperGeometry(paper)
+                : (isSoseonProfile
+                    ? soseonTitlePaperGeometry(paper)
+                    : (isOseongProfile
+                        ? oseongTitlePaperGeometry(paper)
+                        : (isJeonghwaProfile
+                            ? jeonghwaPaperGeometry(paper)
+                            : (isHwanggeumProfile
+                                ? gyeongsinPaperGeometry(paper)
+                                : geometryPaperOption(paper)
+                                  + `,hmargin=${titleHMargin},top=${titleTopMm},bottom=20mm,headheight=72pt,headsep=${titleHeadSepPt}`)))))));
   parts.push(`\\YggNewGeometryNoClear{${titleGeom}}`);
   parts.push('\\immediate\\write\\YggSlotHgtOut{TITLEH:\\the\\textheight}');
   parts.push('\\YggRestoreGeometryNoClear');
@@ -8700,6 +11179,14 @@ function buildSlotMeasureDocumentLatex(visualQList, {
       questionScoreByQuestionId,
       sectionLabel: null,
       layoutColumns: 2,
+      isGyeongsinProfile,
+      isNeunginProfile,
+      isDaeryunProfile,
+      isDongdoProfile,
+      isSoseonProfile,
+      isOseongProfile,
+      isJeonghwaProfile,
+      isHwanggeumProfile,
     });
     parts.push('\\setbox\\YggSlotMeasureBox=\\hbox{\\begin{minipage}[t]{\\dimexpr 0.4775\\linewidth-4pt\\relax}');
     parts.push(body);
@@ -8738,12 +11225,296 @@ export function buildVisualQuestionList(questions, {
         groupIndependentSetQuestionsForRender(qList),
         { capacityRatio: independentSetSplitCapacity },
       );
-  return applyDependentSetSplitPlan(grouped, dependentSetSplitPlan, stemSizePt);
+  const splitList = applyDependentSetSplitPlan(grouped, dependentSetSplitPlan, stemSizePt);
+  if (profile === 'gyeongsin') {
+    let essayIdx = 0;
+    return splitList.map((item) => {
+      if (!item || typeof item !== 'object') return item;
+      const qMode = String(
+        item.mode || item.questionMode || item.export_mode || item.exportMode || '',
+      ).trim().toLowerCase();
+      if (qMode !== 'essay') return item;
+      const isSplitContinuation = !!(item.__pb_split_part && item.__pb_split_part.isFirst === false);
+      if (!isSplitContinuation) {
+        essayIdx += 1;
+      }
+      return {
+        ...item,
+        __gyeongsinEssayIndex: Math.max(1, essayIdx),
+        __gyeongsinFirstEssay: essayIdx === 1 && !isSplitContinuation,
+      };
+    });
+  }
+  if (profile === 'neungin') {
+    let seodapIdx = 0;
+    const subIndices = [];
+    const essayIndices = [];
+    for (const item of splitList) {
+      if (!item || typeof item !== 'object') continue;
+      const qMode = String(
+        item.mode || item.questionMode || item.export_mode || item.exportMode || '',
+      ).trim().toLowerCase();
+      if (qMode !== 'subjective' && qMode !== 'essay') continue;
+      const isSplitContinuation = !!(item.__pb_split_part && item.__pb_split_part.isFirst === false);
+      if (!isSplitContinuation) {
+        seodapIdx += 1;
+        if (qMode === 'subjective') subIndices.push(seodapIdx);
+        else essayIndices.push(seodapIdx);
+      }
+    }
+    const subRangeText = subIndices.length <= 1
+      ? String(subIndices[0] || 1)
+      : `${subIndices[0]}-${subIndices[subIndices.length - 1]}`;
+    const essayRangeText = essayIndices.length <= 1
+      ? String(essayIndices[0] || 1)
+      : `${essayIndices[0]}-${essayIndices[essayIndices.length - 1]}`;
+    seodapIdx = 0;
+    let seenSub = false;
+    let seenEssay = false;
+    return splitList.map((item) => {
+      if (!item || typeof item !== 'object') return item;
+      const qMode = String(
+        item.mode || item.questionMode || item.export_mode || item.exportMode || '',
+      ).trim().toLowerCase();
+      if (qMode !== 'subjective' && qMode !== 'essay') return item;
+      const isSplitContinuation = !!(item.__pb_split_part && item.__pb_split_part.isFirst === false);
+      if (!isSplitContinuation) {
+        seodapIdx += 1;
+      }
+      const isFirstSub = qMode === 'subjective' && !seenSub && !isSplitContinuation;
+      const isFirstEssay = qMode === 'essay' && !seenEssay && !isSplitContinuation;
+      if (isFirstSub) seenSub = true;
+      if (isFirstEssay) seenEssay = true;
+      return {
+        ...item,
+        __neunginSeodapIndex: Math.max(1, seodapIdx),
+        __neunginSeodapKind: qMode === 'essay' ? 'essay' : 'subjective',
+        __neunginFirstSubjective: isFirstSub,
+        __neunginFirstEssay: isFirstEssay,
+        __neunginSubRangeText: subRangeText,
+        __neunginEssayRangeText: essayRangeText,
+      };
+    });
+  }
+  if (profile === 'daeryun') {
+    let essayIdx = 0;
+    let seenEssay = false;
+    let seenFirstQuestion = false;
+    return splitList.map((item) => {
+      if (!item || typeof item !== 'object') return item;
+      const isSplitContinuation = !!(item.__pb_split_part && item.__pb_split_part.isFirst === false);
+      const isFirstQuestion = !seenFirstQuestion && !isSplitContinuation;
+      if (isFirstQuestion) seenFirstQuestion = true;
+      const qMode = String(
+        item.mode || item.questionMode || item.export_mode || item.exportMode || '',
+      ).trim().toLowerCase();
+      const isEssayOrSub = qMode === 'essay' || qMode === 'subjective';
+      if (!isEssayOrSub) {
+        return isFirstQuestion
+          ? { ...item, __daeryunFirstQuestion: true }
+          : item;
+      }
+      if (!isSplitContinuation) {
+        essayIdx += 1;
+      }
+      const isFirstEssay = !seenEssay && !isSplitContinuation;
+      if (isFirstEssay) seenEssay = true;
+      return {
+        ...item,
+        __daeryunFirstQuestion: isFirstQuestion,
+        __daeryunEssayIndex: Math.max(1, essayIdx),
+        __daeryunFirstEssay: isFirstEssay,
+      };
+    });
+  }
+  if (profile === 'dongdo') {
+    let essayIdx = 0;
+    let seenEssay = false;
+    let seenFirstQuestion = false;
+    return splitList.map((item) => {
+      if (!item || typeof item !== 'object') return item;
+      const isSplitContinuation = !!(item.__pb_split_part && item.__pb_split_part.isFirst === false);
+      const isFirstQuestion = !seenFirstQuestion && !isSplitContinuation;
+      if (isFirstQuestion) seenFirstQuestion = true;
+      const qMode = String(
+        item.mode || item.questionMode || item.export_mode || item.exportMode || '',
+      ).trim().toLowerCase();
+      const isEssayOrSub = qMode === 'essay' || qMode === 'subjective';
+      if (!isEssayOrSub) {
+        return isFirstQuestion
+          ? { ...item, __dongdoFirstQuestion: true }
+          : item;
+      }
+      if (!isSplitContinuation) {
+        essayIdx += 1;
+      }
+      const isFirstEssay = !seenEssay && !isSplitContinuation;
+      if (isFirstEssay) seenEssay = true;
+      return {
+        ...item,
+        __dongdoFirstQuestion: isFirstQuestion,
+        __dongdoEssayIndex: Math.max(1, essayIdx),
+        __dongdoFirstEssay: isFirstEssay,
+      };
+    });
+  }
+  if (profile === 'soseon') {
+    let essayIdx = 0;
+    let seenEssay = false;
+    let seenFirstQuestion = false;
+    return splitList.map((item) => {
+      if (!item || typeof item !== 'object') return item;
+      const isSplitContinuation = !!(item.__pb_split_part && item.__pb_split_part.isFirst === false);
+      const isFirstQuestion = !seenFirstQuestion && !isSplitContinuation;
+      if (isFirstQuestion) seenFirstQuestion = true;
+      const qMode = String(
+        item.mode || item.questionMode || item.export_mode || item.exportMode || '',
+      ).trim().toLowerCase();
+      const isEssayOrSub = qMode === 'essay' || qMode === 'subjective';
+      if (!isEssayOrSub) {
+        return isFirstQuestion
+          ? { ...item, __soseonFirstQuestion: true }
+          : item;
+      }
+      if (!isSplitContinuation) {
+        essayIdx += 1;
+      }
+      const isFirstEssay = !seenEssay && !isSplitContinuation;
+      if (isFirstEssay) seenEssay = true;
+      return {
+        ...item,
+        __soseonFirstQuestion: isFirstQuestion,
+        __soseonEssayIndex: Math.max(1, essayIdx),
+        __soseonFirstEssay: isFirstEssay,
+      };
+    });
+  }
+  if (profile === 'oseong') {
+    const classifyOseongEssay = (item) => {
+      if (!item || typeof item !== 'object') return false;
+      const mode = String(
+        item.mode || item.questionMode || item.export_mode || item.exportMode || '',
+      ).trim().toLowerCase();
+      const rawNum = String(item.question_number || item.number || '').trim();
+      return mode === 'essay' || mode === 'subjective' || rawNum.includes('서술') || rawNum.includes('서답');
+    };
+    let totalEssayCount = 0;
+    for (const item of splitList) {
+      if (!item || typeof item !== 'object') continue;
+      const isSplitContinuation = !!(item.__pb_split_part && item.__pb_split_part.isFirst === false);
+      if (!isSplitContinuation && classifyOseongEssay(item)) {
+        totalEssayCount += 1;
+      }
+    }
+    const essayRangeText = totalEssayCount > 1 ? `1-${totalEssayCount}` : '1';
+    let essayIdx = 0;
+    let firstEssayMarked = false;
+    return splitList.map((item) => {
+      if (!item || typeof item !== 'object') return item;
+      const isSplitContinuation = !!(item.__pb_split_part && item.__pb_split_part.isFirst === false);
+      if (!classifyOseongEssay(item)) return item;
+      if (!isSplitContinuation) {
+        essayIdx += 1;
+      }
+      const isFirstEssay = !firstEssayMarked && !isSplitContinuation;
+      if (isFirstEssay) firstEssayMarked = true;
+      return {
+        ...item,
+        __oseongEssayIndex: Math.max(1, essayIdx),
+        __oseongFirstEssay: isFirstEssay,
+        __oseongEssayRangeText: essayRangeText,
+      };
+    });
+  }
+  if (profile === 'jeonghwa') {
+    const classifyJeonghwaKind = (item) => {
+      if (!item || typeof item !== 'object') return 'objective';
+      const mode = String(
+        item.mode || item.questionMode || item.export_mode || item.exportMode || '',
+      ).trim().toLowerCase();
+      const rawNum = String(item.question_number || item.number || '').trim();
+      if (mode === 'essay' || rawNum.includes('서술') || rawNum.includes('논술')) return 'essay';
+      if (mode === 'subjective' || rawNum.includes('단답') || rawNum.includes('서답')) return 'subjective';
+      return 'objective';
+    };
+    let lastSubIdxInList = -1;
+    splitList.forEach((item, idx) => {
+      if (item && typeof item === 'object' && classifyJeonghwaKind(item) === 'subjective') {
+        lastSubIdxInList = idx;
+      }
+    });
+    let subIdx = 0;
+    let essayIdx = 0;
+    let seenObjective = false;
+    let seenSeodap = false;
+    let seenSubjective = false;
+    let seenEssay = false;
+    return splitList.map((item, idx) => {
+      if (!item || typeof item !== 'object') return item;
+      const isSplitContinuation = !!(item.__pb_split_part && item.__pb_split_part.isFirst === false);
+      const kind = classifyJeonghwaKind(item);
+      if (kind === 'objective') {
+        const isFirstObj = !seenObjective && !isSplitContinuation;
+        if (isFirstObj) seenObjective = true;
+        return isFirstObj
+          ? { ...item, __jeonghwaFirstObjective: true }
+          : item;
+      }
+      const isFirstSeodap = !seenSeodap && !isSplitContinuation;
+      if (isFirstSeodap) seenSeodap = true;
+      if (kind === 'subjective') {
+        if (!isSplitContinuation) subIdx += 1;
+        const isFirstSub = !seenSubjective && !isSplitContinuation;
+        if (isFirstSub) seenSubjective = true;
+        return {
+          ...item,
+          __jeonghwaSubjectiveIndex: Math.max(1, subIdx),
+          __jeonghwaFirstSeodap: isFirstSeodap,
+          __jeonghwaFirstSubjective: isFirstSub,
+          __jeonghwaLastSubjective: idx === lastSubIdxInList,
+        };
+      }
+      if (!isSplitContinuation) essayIdx += 1;
+      const isFirstEss = !seenEssay && !isSplitContinuation;
+      if (isFirstEss) seenEssay = true;
+      return {
+        ...item,
+        __jeonghwaEssayIndex: Math.max(1, essayIdx),
+        __jeonghwaFirstSeodap: isFirstSeodap,
+        __jeonghwaFirstEssay: isFirstEss,
+      };
+    });
+  }
+  if (profile === 'hwanggeum') {
+    let essayIdx = 0;
+    return splitList.map((item) => {
+      if (!item || typeof item !== 'object') return item;
+      const isSplitContinuation = !!(item.__pb_split_part && item.__pb_split_part.isFirst === false);
+      const qMode = String(
+        item.mode || item.questionMode || item.export_mode || item.exportMode || '',
+      ).trim().toLowerCase();
+      const rawNum = String(item.question_number || item.number || '').trim();
+      const isEssayOrSub = qMode === 'essay' || qMode === 'subjective' || rawNum.includes('서술') || rawNum.includes('서답');
+      if (!isEssayOrSub) return item;
+      if (!isSplitContinuation) {
+        essayIdx += 1;
+      }
+      return {
+        ...item,
+        __hwanggeumEssayIndex: Math.max(1, essayIdx),
+      };
+    });
+  }
+  return splitList;
 }
 
 export function effectiveStemSizePtFor(profile, fontSize) {
-  const base = Math.max(8, Number(fontSize || 11) - (profile === 'assignment' ? 1.0 : 0.5));
-  return base;
+  const requested = Math.max(8, Number(fontSize || 11));
+  // 모의고사·수능형은 화면의 글자 크기(기본 11pt)를 문항 본문에 그대로 쓴다.
+  // 경신중 등 나머지 양식은 0.5pt, 과제형은 1pt 를 뺀다.
+  if (profile === 'mock' || profile === 'csat') return requested;
+  const trim = profile === 'assignment' ? 1.0 : 0.5;
+  return Math.max(8, requested - trim);
 }
 
 export function buildDocumentTexSource(questions, options = {}) {
@@ -8771,6 +11542,8 @@ export function buildDocumentTexSource(questions, options = {}) {
     academyName = '',
     includeCoverPage = false,
     coverPageTexts = {},
+    gyeongsinLogoPath = '',
+    gyeongsinSchoolName = '',
     includeQuestionScore = false,
     questionScoreByQuestionId = null,
     includeQuickAnswer = false,
@@ -8818,9 +11591,7 @@ export function buildDocumentTexSource(questions, options = {}) {
 
   const logoEnabled = includeAcademyLogo && !!academyLogoPath;
   const isAssignmentProfile = profile === 'assignment';
-  const effectiveStemSizePt = isAssignmentProfile
-    ? Math.max(8, Number(fontSize || 11) - 1.0)
-    : Math.max(8, Number(fontSize || 11) - 0.5);
+  const effectiveStemSizePt = effectiveStemSizePtFor(profile, fontSize);
   const assignmentAboveNumberFontPt = isAssignmentProfile
     ? Math.max(8, ((Number(fontSize || 11) + 1) * 1.21) - 1.0)
     : null;
@@ -8902,11 +11673,28 @@ export function buildDocumentTexSource(questions, options = {}) {
   }
   // 측정 패스: visualQList(그룹핑/분할 반영 후) 를 최종 렌더와 동일한 조건으로 조판해
   //   높이만 기록하는 문서를 반환. 최종 패스와 같은 입력이므로 visualQList 순서가 보장된다.
+  const isGyeongsinProfile = profile === 'gyeongsin';
+  const isNeunginProfile = profile === 'neungin';
+  const isDaeryunProfile = profile === 'daeryun';
+  const isDongdoProfile = profile === 'dongdo';
+  const isSoseonProfile = profile === 'soseon';
+  const isOseongProfile = profile === 'oseong';
+  const isJeonghwaProfile = profile === 'jeonghwa';
+  const isHwanggeumProfile = profile === 'hwanggeum';
+  const isNaesinSchoolProfile = isGyeongsinProfile || isNeunginProfile || isDaeryunProfile || isDongdoProfile || isSoseonProfile || isOseongProfile || isJeonghwaProfile || isHwanggeumProfile;
   if (slotHeightMeasure) {
     return buildSlotMeasureDocumentLatex(visualQList, {
       preamble,
       paper,
       isAssignmentProfile,
+      isGyeongsinProfile,
+      isNeunginProfile,
+      isDaeryunProfile,
+      isDongdoProfile,
+      isSoseonProfile,
+      isOseongProfile,
+      isJeonghwaProfile,
+      isHwanggeumProfile,
       effectiveStemSizePt,
       assignmentAboveNumberFontPt,
       hideQuestionNumber,
@@ -8918,12 +11706,14 @@ export function buildDocumentTexSource(questions, options = {}) {
   }
 
   const isMockExamProfile = profile === 'mock' || profile === 'csat';
-  const isMock = isMockExamProfile || isAssignmentProfile;
+  const isMock = isMockExamProfile || isAssignmentProfile || isNaesinSchoolProfile;
   const effectiveLayoutMeta = layoutMeta && typeof layoutMeta === 'object' ? layoutMeta : null;
   let lastMode = null;
 
-  // 표지 페이지 삽입 (본문 앞). mock/csat 뿐 아니라 일반 프로파일에서도 옵션이 켜졌으면 허용.
-  if (includeCoverPage) {
+  // 표지 페이지 삽입 (본문 앞). 경신중/능인중은 전체 문제지 면 수를 계산한 뒤 아래에서 삽입한다.
+  if (includeCoverPage && isMockExamProfile) {
+    parts.push(renderMockCoverPageLatex(coverPageTexts, { paper, subjectTitle }));
+  } else if (includeCoverPage && !isNaesinSchoolProfile) {
     parts.push(renderCoverPageLatex(coverPageTexts, {
       academyLogoPath: logoEnabled ? academyLogoPath : '',
     }));
@@ -8964,6 +11754,7 @@ export function buildDocumentTexSource(questions, options = {}) {
       }
     }
     const buildTitleHeaderForPage = (pageNo) => {
+      if (isNeunginProfile || isJeonghwaProfile || isHwanggeumProfile) return null;
       if (!titlePageSet.has(pageNo)) return null;
       const override = titlePageHeaderMap.get(pageNo) || {};
       const title = override.title || subjectTitle || '';
@@ -9075,6 +11866,7 @@ export function buildDocumentTexSource(questions, options = {}) {
           slotGapPt: 8,
           fillRatio,
           columnHeightPtForPage,
+          splitOnElectiveChange: isMockExamProfile,
         },
       );
       pages = measuredPlanResult.pages;
@@ -9101,11 +11893,170 @@ export function buildDocumentTexSource(questions, options = {}) {
       const mockPlan = chunkQuestionsForMockGridHeightAware(visualQList, {
         columnsPerPage: 2,
         maxPerColumn: Math.max(1, leftSlots),
+        splitOnElectiveChange: isMockExamProfile,
       });
       pages = mockPlan.pages;
       assignmentPageColumnCounts = mockPlan.pageColumnCounts;
     } else {
-      pages = chunkQuestionsForMockGrid(visualQList, qPerPage);
+      pages = chunkQuestionsForMockGrid(visualQList, qPerPage, {
+        splitOnElectiveChange: isMockExamProfile,
+      });
+      if (
+        isMockExamProfile
+        && pages.some((p, idx) => idx < pages.length - 1 && p.length < qPerPage)
+      ) {
+        assignmentPageColumnCounts = pages.map((p) => ({
+          left: Math.max(1, Math.min(leftSlots, p.length)),
+          right: Math.max(0, p.length - leftSlots),
+        }));
+        if (effectiveLayoutMeta) {
+          effectiveLayoutMeta.slotPlacement = {
+            source: 'elective_split',
+            pageColumnCounts: assignmentPageColumnCounts,
+          };
+        }
+      }
+    }
+
+    const gyeongsinMeta = isNaesinSchoolProfile
+      ? resolveGyeongsinExamMeta({
+          coverPageTexts,
+          titlePageTopText,
+          subjectTitle,
+          questions: qList,
+          problemPageCount: pages.length,
+          schoolName: isDongdoProfile
+            ? (gyeongsinSchoolName || '동도중학교')
+            : (isSoseonProfile
+                ? (gyeongsinSchoolName || '소선여자중학교')
+                : (isOseongProfile
+                    ? (gyeongsinSchoolName || '오성중학교')
+                    : (isJeonghwaProfile
+                        ? (gyeongsinSchoolName || '정화중학교')
+                        : (isHwanggeumProfile
+                            ? (gyeongsinSchoolName || '황금중학교')
+                            : (isDaeryunProfile
+                                ? (gyeongsinSchoolName || '대륜중학교')
+                                : (isNeunginProfile
+                                    ? (gyeongsinSchoolName || '능인중학교')
+                                    : (gyeongsinSchoolName || '경신중학교'))))))),
+        })
+      : null;
+    if (gyeongsinMeta) {
+      parts.push(`\\gdef\\gyeongsinCopyrightSchool{${escapeLatexText(gyeongsinMeta.fullSchoolName)}}`);
+      if (isNeunginProfile) {
+        const subjChars = Array.from(String(gyeongsinMeta.subjectName || '수학').replace(/\s+/g, '')).map((c) => escapeLatexText(c));
+        const subjSpaced = subjChars.join('\\hspace{0.85em}');
+        const logoTex = gyeongsinLogoPath
+          ? `\\ensuremath{\\vcenter{\\hbox{\\includegraphics[height=18pt,width=55pt,keepaspectratio]{${String(gyeongsinLogoPath).replace(/\\/g, '/')}}}}}\\hspace{4pt}`
+          : '';
+        parts.push(`\\gdef\\neunginHeaderSubject{${subjSpaced}}`);
+        parts.push(`\\gdef\\neunginHeaderGrade{${escapeLatexText(gyeongsinMeta.gradeLabel)}}`);
+        parts.push(`\\gdef\\neunginFooterLogo{${logoTex}}`);
+      } else if (isDaeryunProfile) {
+        const subjChars = Array.from(String(gyeongsinMeta.subjectName || '수학').replace(/\s+/g, '')).map((c) => escapeLatexText(c));
+        const subjSpaced = subjChars.join('\\hspace{1.05em}');
+        const periodTex = escapeLatexText(gyeongsinMeta.daeryunPeriodLabel).replace(
+          /(\d+)/g,
+          '{\\fontsize{23.5pt}{26pt}\\selectfont $1}',
+        );
+        const sheetTypeTex = escapeLatexText(gyeongsinMeta.sheetTypeLabel).replace(
+          /([A-Za-z0-9]+)/g,
+          '{\\fontsize{19.5pt}{22pt}\\selectfont $1}',
+        );
+        const codeChars = Array.from(String(gyeongsinMeta.daeryunSubjectCode || '04').replace(/\s+/g, '')).map((c) => escapeLatexText(c));
+        const codeTex = codeChars.join('\\hspace{0.12em}');
+        parts.push(`\\gdef\\daeryunHeaderTitle{${escapeLatexText(gyeongsinMeta.daeryunHeaderTitle)}}`);
+        parts.push(`\\gdef\\daeryunHeaderSubject{${subjSpaced}}`);
+        parts.push(`\\gdef\\daeryunPeriodLabel{${periodTex}}`);
+        parts.push(`\\gdef\\daeryunSheetType{${sheetTypeTex}}`);
+        parts.push(`\\gdef\\daeryunSubjectCode{${codeTex}}`);
+        parts.push(`\\gdef\\daeryunDateText{${escapeLatexText(gyeongsinMeta.daeryunDateText)}}`);
+        parts.push(`\\gdef\\daeryunFooterLeft{${escapeLatexText(gyeongsinMeta.daeryunFooterLeft)}}`);
+        parts.push(`\\gdef\\daeryunFooterRight{${escapeLatexText(gyeongsinMeta.daeryunFooterRight)}}`);
+        parts.push(`\\gdef\\daeryunTotalPages{${escapeLatexText(gyeongsinMeta.totalPageCountText)}}`);
+        parts.push(`\\gdef\\daeryunTotalSheets{${escapeLatexText(gyeongsinMeta.totalSheetCountText)}}`);
+        parts.push(`\\gdef\\daeryunObjectiveCount{${escapeLatexText(gyeongsinMeta.neunginObjectiveCountText)}}`);
+        parts.push(`\\gdef\\daeryunEssayCount{${escapeLatexText(gyeongsinMeta.daeryunEssayCountText)}}`);
+      } else if (isDongdoProfile) {
+        parts.push(`\\gdef\\dongdoHeaderTitle{${escapeLatexText(gyeongsinMeta.dongdoHeaderTitle)}}`);
+        parts.push(`\\gdef\\dongdoSubjectCode{${escapeLatexText(gyeongsinMeta.subjectCode)}}`);
+        parts.push(`\\gdef\\dongdoTotalCount{${escapeLatexText(gyeongsinMeta.dongdoTotalCountText)}}`);
+        parts.push(`\\gdef\\dongdoObjectiveCount{${escapeLatexText(gyeongsinMeta.neunginObjectiveCountText)}}`);
+        parts.push(`\\gdef\\dongdoEssayCount{${escapeLatexText(gyeongsinMeta.daeryunEssayCountText)}}`);
+        parts.push(`\\gdef\\dongdoTotalScore{${escapeLatexText(gyeongsinMeta.dongdoTotalScoreText)}}`);
+        parts.push(`\\gdef\\dongdoObjectiveScore{${escapeLatexText(gyeongsinMeta.dongdoObjectiveScoreText)}}`);
+        parts.push(`\\gdef\\dongdoEssayScore{${escapeLatexText(gyeongsinMeta.dongdoEssayScoreText)}}`);
+        parts.push(`\\gdef\\dongdoFooterLeft{${escapeLatexText(gyeongsinMeta.dongdoFooterLeft)}}`);
+        parts.push(`\\gdef\\dongdoTotalPages{${escapeLatexText(gyeongsinMeta.totalPageCountText)}}`);
+        parts.push(`\\gdef\\dongdoTotalSheets{${escapeLatexText(gyeongsinMeta.totalSheetCountText)}}`);
+      } else if (isSoseonProfile) {
+        const subjChars = Array.from(String(gyeongsinMeta.subjectName || '수학').replace(/\s+/g, '')).map((c) => escapeLatexText(c));
+        const subjBracketTex = `【\\ ${subjChars.join('\\hspace{0.55em}')}\\ 】`;
+        parts.push(`\\gdef\\soseonHeaderExamTitle{${escapeLatexText(gyeongsinMeta.soseonHeaderExamTitle)}}`);
+        parts.push(`\\gdef\\soseonHeaderDatePeriod{${escapeLatexText(gyeongsinMeta.soseonHeaderDatePeriod)}}`);
+        parts.push(`\\gdef\\soseonHeaderSubject{${subjBracketTex}}`);
+        parts.push(`\\gdef\\soseonSubjectCode{${escapeLatexText(gyeongsinMeta.daeryunSubjectCode)}}`);
+        parts.push(`\\gdef\\soseonObjectiveCount{${escapeLatexText(gyeongsinMeta.neunginObjectiveCountText)}}`);
+        parts.push(`\\gdef\\soseonEssayCount{${escapeLatexText(gyeongsinMeta.daeryunEssayCountText)}}`);
+        parts.push(`\\gdef\\soseonTotalCount{${escapeLatexText(gyeongsinMeta.dongdoTotalCountText)}}`);
+        parts.push(`\\gdef\\soseonTotalPages{${escapeLatexText(gyeongsinMeta.totalPageCountText)}}`);
+      } else if (isOseongProfile) {
+        parts.push(`\\gdef\\oseongHeaderExamTitle{${escapeLatexText(gyeongsinMeta.oseongHeaderExamTitle)}}`);
+        parts.push(`\\gdef\\oseongHeaderSubject{${escapeLatexText(gyeongsinMeta.oseongHeaderSubject)}}`);
+        parts.push(`\\gdef\\oseongSubjectCode{${escapeLatexText(gyeongsinMeta.daeryunSubjectCode)}}`);
+        parts.push(`\\gdef\\oseongObjectiveBreakdownTex{${gyeongsinMeta.oseongObjectiveBreakdownTex}}`);
+        parts.push(`\\gdef\\oseongEssayCount{${escapeLatexText(gyeongsinMeta.daeryunEssayCountText)}}`);
+        parts.push(`\\gdef\\oseongEssayScore{${escapeLatexText(gyeongsinMeta.oseongEssayScoreText)}}`);
+      }
+    }
+    if (isGyeongsinProfile && includeCoverPage && gyeongsinMeta) {
+      parts.push(renderGyeongsinCoverPageLatex(gyeongsinMeta, {
+        gyeongsinLogoPath,
+        schoolName: gyeongsinSchoolName,
+        paper,
+      }));
+    } else if (isNeunginProfile && includeCoverPage && gyeongsinMeta) {
+      parts.push(renderNeunginCoverPageLatex(gyeongsinMeta, {
+        gyeongsinLogoPath,
+        schoolName: gyeongsinSchoolName,
+        paper,
+      }));
+    } else if (isSoseonProfile && includeCoverPage && gyeongsinMeta) {
+      parts.push(renderSoseonCoverPageLatex(gyeongsinMeta, {
+        gyeongsinLogoPath,
+        schoolName: gyeongsinSchoolName,
+        paper,
+      }));
+    } else if (isOseongProfile && includeCoverPage && gyeongsinMeta) {
+      parts.push(renderOseongCoverPageLatex(gyeongsinMeta, {
+        schoolName: gyeongsinSchoolName,
+        paper,
+      }));
+    } else if (isJeonghwaProfile && includeCoverPage && gyeongsinMeta) {
+      const hasManualTotalPages = String(coverPageTexts?.totalPageCount ?? '').trim().length > 0;
+      const totalPagesWithCover = hasManualTotalPages
+        ? gyeongsinMeta.totalPageCountText
+        : String(pages.length + 1);
+      parts.push(renderJeonghwaCoverPageLatex(gyeongsinMeta, {
+        gyeongsinLogoPath,
+        schoolName: gyeongsinSchoolName,
+        paper,
+        totalPagesWithCover,
+      }));
+    } else if (isHwanggeumProfile && includeCoverPage && gyeongsinMeta) {
+      const hasManualTotalPages = String(coverPageTexts?.totalPageCount ?? '').trim().length > 0;
+      const totalPagesWithCover = hasManualTotalPages
+        ? gyeongsinMeta.totalPageCountText
+        : String(pages.length + 1);
+      const totalSheetsWithCover = String(Math.max(1, Math.ceil(Number(totalPagesWithCover || 5) / 2)));
+      parts.push(renderHwanggeumCoverPageLatex(gyeongsinMeta, {
+        gyeongsinLogoPath,
+        schoolName: gyeongsinSchoolName,
+        paper,
+        totalPagesWithCover,
+        totalSheetsWithCover,
+      }));
     }
 
     // mock 경로 전체에 걸쳐 sectionLabel 결정을 위한 "직전 문항 mode".
@@ -9122,21 +12073,23 @@ export function buildDocumentTexSource(questions, options = {}) {
       } while (n >= 0);
       return s;
     };
-    // 제목페이지 전용 geometry (사용자 요청 4차):
-    //   - 부제(×1.1) + vskip 11.7pt + 큰 타이틀(\mockTitleFontSize) 을 fancyhdr 의 [C] vbox 로 그림.
-    //     vbox 예상 높이 ≈ 22pt(부제 lead) + 11.7pt + 36pt(타이틀 lead) ≈ 70pt ⇒ headheight=72pt.
-    //   - headsep=14pt : 헤더 바닥 ↔ body_top 간격. 가로선은 이 범위 혹은 헤더 내부에 배치됨.
-    //   - top ≈ 34mm ≈ 96.4pt : headheight+headsep = 86pt 를 top 안에 수용.
-    //   - bottom / hmargin 은 일반 페이지와 동일 (세로선 끝 / 페이지박스 위치 유지).
-    // 사용자 요청 18차: 제목페이지 부제/페이지라벨 정렬은 유지한 채,
-    //   가로 디바이더와 슬롯 시작점을 한 번 더 아래로 보낸다.
-    //   body_top 과 headsep 을 동일하게 +4.56pt 확장하면 header bottom 은 유지되고
-    //   body_top/디바이더/슬롯만 선형으로 하향된다.
     const titleTopMm = isAssignmentProfile ? '36.81mm' : '52.59mm';
     const titleHeadSepPt = isAssignmentProfile ? '27.08pt' : '38.68pt';
     const titleHMargin = isAssignmentProfile ? '11.34mm' : '14mm';
-    const titleGeom = `${paper === 'A3' ? 'a3paper' : (paper === 'A4' ? 'a4paper' : 'b4paper')}`
-      + `,hmargin=${titleHMargin},top=${titleTopMm},bottom=20mm,headheight=72pt,headsep=${titleHeadSepPt}`;
+    const titleGeom = isGyeongsinProfile
+      ? gyeongsinTitlePaperGeometry(paper)
+      : (isNeunginProfile
+          ? neunginPaperGeometry(paper)
+          : (isDaeryunProfile
+              ? daeryunTitlePaperGeometry(paper)
+              : (isDongdoProfile
+                  ? dongdoTitlePaperGeometry(paper)
+                  : (isSoseonProfile
+                      ? soseonTitlePaperGeometry(paper)
+                      : (isOseongProfile
+                          ? oseongTitlePaperGeometry(paper)
+                          : geometryPaperOption(paper)
+                            + `,hmargin=${titleHMargin},top=${titleTopMm},bottom=20mm,headheight=72pt,headsep=${titleHeadSepPt}`)))));
     // 직전 페이지가 제목페이지였는지 기록 (일반 페이지 진입 시 \restoregeometry 삽입용).
     let activeTitleGeom = false;
     const autoColumnLabelAnchors = [];
@@ -9207,36 +12160,112 @@ export function buildDocumentTexSource(questions, options = {}) {
         }
       }
     }
+    const pageElectives = pages.map((pageQs) => {
+      for (const q of (Array.isArray(pageQs) ? pageQs : [])) {
+        const el = resolveQuestionElectiveSubject(q);
+        if (el) return el;
+      }
+      return '';
+    });
+    const firstDetectedElective = pageElectives.find(Boolean) || '';
+    if (isMockExamProfile && !hidePreviewHeader && !disableAutoLabels) {
+      // 모든 문항이 동일 선택과목(공통 없음)인 경우 1페이지 제목 부제에 자동 반영
+      if (
+        pageElectives[0]
+        && pageElectives.every((el) => el === pageElectives[0])
+      ) {
+        const existing1 = titlePageHeaderMap.get(1);
+        if (!existing1 || !String(existing1.subtitle || '').trim()) {
+          titlePageHeaderMap.set(1, {
+            title: String(existing1?.title || subjectTitle || '수학 영역').trim(),
+            subtitle: pageElectives[0],
+            titleTop: String(existing1?.titleTop || titlePageTopText || '').trim(),
+            goalText: String(existing1?.goalText || '').trim(),
+          });
+        }
+      }
+      // 공통과목(또는 이전 구간) 뒤 선택과목이 시작되는 페이지를 자동으로 제목 페이지로 지정
+      for (let i = 1; i < pages.length; i += 1) {
+        const curEl = pageElectives[i];
+        const prevEl = pageElectives[i - 1];
+        if (curEl && curEl !== prevEl) {
+          const pNo = i + 1;
+          titlePageSet.add(pNo);
+          const existing = titlePageHeaderMap.get(pNo);
+          if (!existing || !String(existing.subtitle || '').trim()) {
+            titlePageHeaderMap.set(pNo, {
+              title: String(existing?.title || subjectTitle || '수학 영역').trim(),
+              subtitle: curEl,
+              titleTop: String(existing?.titleTop || titlePageTopText || '').trim(),
+              goalText: String(existing?.goalText || '').trim(),
+            });
+          }
+        }
+      }
+    }
+    if (effectiveLayoutMeta && isMockExamProfile) {
+      effectiveLayoutMeta.titlePageIndices = [...titlePageSet].sort((a, b) => a - b);
+      effectiveLayoutMeta.titlePageHeaders = [...titlePageSet]
+        .sort((a, b) => a - b)
+        .map((pNo) => {
+          const h = titlePageHeaderMap.get(pNo) || {};
+          return {
+            page: pNo,
+            title: String(h.title || subjectTitle || '수학 영역').trim(),
+            subtitle: String(h.subtitle || '').trim(),
+          };
+        });
+    }
+    const formatParenSubtitle = (raw) => {
+      const s = String(raw || '').trim();
+      if (!s) return '';
+      return (s.startsWith('(') && s.endsWith(')')) ? s : `(${s})`;
+    };
+    let currentRunningTitle = (titlePageHeaderMap.get(1)?.title || subjectTitle || '수학 영역').trim();
+    let currentRunningSub = formatParenSubtitle(titlePageHeaderMap.get(1)?.subtitle || '');
     for (let i = 0; i < pages.length; i += 1) {
       const pageNo = i + 1;
-      const titleHeader = hidePreviewHeader ? null : buildTitleHeaderForPage(pageNo);
-      // 페이지 진입 시 제목페이지 플래그 명시 설정 — shipout overlay 가 세로선
-      //   시작 y 를 결정하는 근거. renderMockGridPageLatex 내부에서 true 를 set 하지만
-      //   '일반 페이지' 에선 명시적으로 false 로 리셋해야 직전 제목페이지 상태가
-      //   이월되지 않는다.
+      let titleHeader = hidePreviewHeader ? null : buildTitleHeaderForPage(pageNo);
+      if (isGyeongsinProfile && gyeongsinMeta && titleHeader) {
+        const override = titlePageHeaderMap.get(pageNo) || {};
+        const customTop = String(override.titleTop || '').trim();
+        const customTitle = String(override.title || '').trim();
+        titleHeader = {
+          titleTop:
+            (customTop && customTop !== '2026학년도 대학수학능력시험 문제지')
+              ? customTop
+              : gyeongsinMeta.headerExamTitle,
+          title:
+            (customTitle && customTitle !== '수학 영역')
+              ? customTitle
+              : gyeongsinMeta.subjectName,
+          subtitle: '',
+          goalText: gyeongsinMeta.headerDateText,
+        };
+      }
       if (titleHeader) {
         if (i > 0 && activeTitleGeom) {
           parts.push('\\newpage\n');
         } else if (i > 0) {
           parts.push('\\newpage\n');
         }
-        // 제목페이지 진입: geometry 를 headheight 확장 버전으로 전환.
         if (!activeTitleGeom) {
           parts.push(`\\YggNewGeometryNoClear{${titleGeom}}`);
           activeTitleGeom = true;
         }
-        // `\fancyhead[C]` vbox 가 참조할 글로벌 매크로에 부제/타이틀 텍스트 세팅.
-        //   (subtitle 필드는 현재 디자인에서 사용하지 않음 — titleTop=부제, title=메인타이틀.)
+        if (pageNo > 1) {
+          lastModeMock = null;
+        }
+        currentRunningTitle = (titleHeader.title || subjectTitle || '수학 영역').trim();
+        currentRunningSub = formatParenSubtitle(titleHeader.subtitle);
         parts.push(`\\gdef\\mockTitlePageSubtitle{${escapeLatexText(titleHeader.titleTop || '')}}`);
-        parts.push(`\\gdef\\mockTitlePageMain{${escapeLatexText(titleHeader.title || '')}}`);
+        parts.push(`\\gdef\\mockTitlePageMain{${escapeLatexText(currentRunningTitle)}}`);
+        parts.push(`\\gdef\\mockTitlePageSub{${escapeLatexText(currentRunningSub)}}`);
+        parts.push(`\\gdef\\mockRunningTitle{${escapeLatexText(currentRunningTitle + currentRunningSub)}}`);
         parts.push(`\\gdef\\mockTitlePageGoal{${escapeLatexText(titleHeader.goalText || '')}}`);
         parts.push('\\thispagestyle{mocktitle}');
-        // 이 페이지(ship out 직전)에만 제목페이지 플래그 ON.
-        //   \AtBeginShipoutNext 는 '다음 1회의 shipout 직전' 실행되므로
-        //   \AddToShipoutPictureFG 의 \ifmocktitlepage 분기를 이 페이지에서만 true 로.
         parts.push('\\AtBeginShipoutNext{\\global\\mocktitlepagetrue}');
       } else {
-        // 일반 페이지: 직전이 제목페이지였다면 geometry 를 원복.
         if (activeTitleGeom) {
           parts.push('\\newpage\n');
           parts.push('\\YggRestoreGeometryNoClear');
@@ -9244,10 +12273,56 @@ export function buildDocumentTexSource(questions, options = {}) {
         } else if (i > 0) {
           parts.push('\\newpage\n');
         }
+        parts.push(`\\gdef\\mockRunningTitle{${escapeLatexText(currentRunningTitle + currentRunningSub)}}`);
         parts.push('\\AtBeginShipoutNext{\\global\\mocktitlepagefalse}');
-        if (i === 0 && logoEnabled && !includeCoverPage) {
-          // 첫 페이지 로고 강조(mockfirst) — 표지가 없고 제목 페이지 헤더도 없을 때.
+        if (i === 0 && logoEnabled && !includeCoverPage && !isNaesinSchoolProfile) {
           parts.push('\\thispagestyle{mockfirst}');
+        }
+      }
+      if (isNaesinSchoolProfile && gyeongsinMeta) {
+        const currentProblemPageNo = gyeongsinMeta.pageStartNumber + i;
+        if (isGyeongsinProfile) {
+          const footerStr = `(${gyeongsinMeta.footerLabel}) - (${gyeongsinMeta.totalPageCountText}) - (${currentProblemPageNo})`;
+          parts.push(`\\gdef\\gyeongsinFooterText{${escapeLatexText(footerStr)}}`);
+        } else if (isNeunginProfile) {
+          parts.push(`\\gdef\\neunginPageText{${escapeLatexText(`${currentProblemPageNo} / ${gyeongsinMeta.totalPageCountText}`)}}`);
+        } else if (isDaeryunProfile) {
+          parts.push(`\\gdef\\daeryunCurrentPage{${escapeLatexText(String(currentProblemPageNo))}}`);
+        } else if (isDongdoProfile) {
+          parts.push(`\\gdef\\dongdoCurrentPage{${escapeLatexText(String(currentProblemPageNo))}}`);
+        } else if (isSoseonProfile) {
+          const soseonFooterStr = `(${gyeongsinMeta.soseonFooterBase} ${gyeongsinMeta.totalPageCountText}쪽 중 ${currentProblemPageNo}쪽)`;
+          parts.push(`\\gdef\\soseonFooterText{${escapeLatexText(soseonFooterStr)}}`);
+        } else if (isOseongProfile) {
+          const oseongFooterStr = `${gyeongsinMeta.oseongFooterBase}-${currentProblemPageNo}/${gyeongsinMeta.totalPageCountText}`;
+          parts.push(`\\gdef\\oseongFooterText{${escapeLatexText(oseongFooterStr)}}`);
+        } else if (isJeonghwaProfile) {
+          const hasManualTotalPages = String(coverPageTexts?.totalPageCount ?? '').trim().length > 0;
+          const hasManualStartPage = String(coverPageTexts?.pageStartNumber ?? '').trim().length > 0;
+          const jeonghwaTotalPagesStr = hasManualTotalPages
+            ? gyeongsinMeta.totalPageCountText
+            : String(pages.length + (includeCoverPage ? 1 : 0));
+          const jeonghwaPageNo = hasManualStartPage
+            ? currentProblemPageNo
+            : (currentProblemPageNo + (includeCoverPage ? 1 : 0));
+          const lineOneStr = `${gyeongsinMeta.jeonghwaFooterBase} ${jeonghwaTotalPagesStr} - ${jeonghwaPageNo}`;
+          parts.push(`\\gdef\\jeonghwaFooterLineOne{${escapeLatexText(lineOneStr)}}`);
+        } else if (isHwanggeumProfile) {
+          const hasManualTotalPages = String(coverPageTexts?.totalPageCount ?? '').trim().length > 0;
+          const hasManualStartPage = String(coverPageTexts?.pageStartNumber ?? '').trim().length > 0;
+          const hwanggeumTotalPagesStr = hasManualTotalPages
+            ? gyeongsinMeta.totalPageCountText
+            : String(pages.length + (includeCoverPage ? 1 : 0));
+          const hwanggeumPageNo = hasManualStartPage
+            ? currentProblemPageNo
+            : (currentProblemPageNo + (includeCoverPage ? 1 : 0));
+          parts.push(`\\gdef\\hwanggeumFooterCenter{${escapeLatexText(`${hwanggeumTotalPagesStr} - ${hwanggeumPageNo}`)}}`);
+          parts.push(`\\gdef\\hwanggeumFooterRight{${escapeLatexText(gyeongsinMeta.hwanggeumFooterRight)}}`);
+        }
+        if (i === pages.length - 1) {
+          parts.push('\\AtBeginShipoutNext{\\global\\gyeongsinlastpagetrue}');
+        } else {
+          parts.push('\\AtBeginShipoutNext{\\global\\gyeongsinlastpagefalse}');
         }
       }
       const ov = overrides[i] || assignmentPageColumnCounts?.[i] || null;
@@ -9255,33 +12330,40 @@ export function buildDocumentTexSource(questions, options = {}) {
       const pageRightSlots = ov ? ov.right : rightSlots;
       // 페이지 문항들의 sectionLabel 결정. 문항 mode 가 직전 mode 와 다를 때만 라벨 부여.
       const pageQs = pages[i];
+      if (isJeonghwaProfile && i < pages.length - 1) {
+        const leftQsOnPage = pageQs.slice(0, pageLeftSlots);
+        const rightQsOnPage = pageQs.slice(pageLeftSlots, pageLeftSlots + pageRightSlots);
+        if (rightQsOnPage.some((q) => q?.__jeonghwaLastSubjective === true)) {
+          parts.push('\\AtBeginShipoutNext{\\global\\jeonghwasublastcolrighttrue}');
+        } else if (leftQsOnPage.some((q) => q?.__jeonghwaLastSubjective === true)) {
+          parts.push('\\AtBeginShipoutNext{\\global\\jeonghwasublastcollefttrue}');
+        }
+      }
       const pageAnchorMap = normalizedAnchorByPage.get(pageNo) || new Map();
-      const pageLabels = isMockExamProfile
+      const pageLabels = (isMockExamProfile || isNaesinSchoolProfile)
         ? pageQs.map((q, idx) => {
-          const qMode = q?.mode
+          const rawQMode = q?.mode
             || q?.questionMode
             || q?.export_mode
             || q?.exportMode
             || 'objective';
+          const qMode = isMockExamProfile
+            ? (rawQMode === 'objective' ? 'objective' : 'subjective')
+            : rawQMode;
           const modeChanged = qMode !== lastModeMock;
           lastModeMock = qMode;
+          if (isNaesinSchoolProfile) return null;
           const columnIndex = idx < pageLeftSlots ? 0 : 1;
           const rowIndex = idx < pageLeftSlots ? idx : (idx - pageLeftSlots);
           const anchorKey = `${columnIndex}:${rowIndex}`;
           const override = pageAnchorMap.get(anchorKey);
-          // 사용자가 × 로 제거한 slot: 라벨을 완전히 출력하지 않음.
           if (override?.source === 'suppressed') return null;
-          // 사용자가 직접 입력한 라벨 / 이전 렌더에서 auto 로 붙었다가 클라이언트가 보관해서
-          //   다시 전달한 라벨: 그대로 출력. (auto 든 manual 이든 label 이 있으면 우선.)
           if (override && override.label) {
             return override.label;
           }
-          // 새로고침/PDF 생성 경로에서는 모드 전환 기반 자동 라벨 생성을 중단한다.
-          //   (최초 렌더 경로에서는 flag 가 false 라 아래 기본 분기로 진입해 auto-gen 됨)
           if (disableAutoLabels) return null;
           if (!modeChanged) return null;
           if (qMode === 'objective') return '5지선다형';
-          if (qMode === 'essay') return '서술형';
           return '단답형';
         })
         : pageQs.map(() => null);
@@ -9315,6 +12397,75 @@ export function buildDocumentTexSource(questions, options = {}) {
           paddingTopPt: defaultPaddingTopPt,
         });
       });
+      // 모의고사형 하단 확인 사항 박스 결정 (columnIndex: 1, rowIndex: 99).
+      //   - 공통 마지막 페이지(다음 페이지가 선택과목/추가 제목 페이지): 선택과목 안내 포함 박스
+      //   - 전체 마지막 페이지: 단축형 확인 사항 박스
+      let parsedPageNotice = null;
+      if (isMockExamProfile && !hidePreviewHeader) {
+        const noticeOverride = pageAnchorMap.get('1:99');
+        if (noticeOverride?.source === 'suppressed') {
+          autoColumnLabelAnchors.push({
+            page: pageNo,
+            columnIndex: 1,
+            rowIndex: 99,
+            label: '',
+            source: 'suppressed',
+            topPt: 0,
+            paddingTopPt: 0,
+          });
+        } else if (noticeOverride && noticeOverride.label) {
+          parsedPageNotice = parseMockPageNoticeLabel(noticeOverride.label);
+          if (parsedPageNotice) {
+            autoColumnLabelAnchors.push({
+              page: pageNo,
+              columnIndex: 1,
+              rowIndex: 99,
+              label: noticeOverride.label,
+              source: noticeOverride.source === 'manual' ? 'manual' : 'auto',
+              topPt: 0,
+              paddingTopPt: 0,
+            });
+          }
+        } else if (!disableAutoLabels) {
+          const isPreElectivePage = pageNo < pages.length && (
+            titlePageSet.has(pageNo + 1)
+            || (pageElectives[pageNo] && pageElectives[pageNo] !== pageElectives[pageNo - 1])
+          );
+          if (isPreElectivePage) {
+            const nextHeaderSub = String(titlePageHeaderMap.get(pageNo + 1)?.subtitle || '').trim();
+            const nextElective = nextHeaderSub
+              || pageElectives[pageNo]
+              || firstDetectedElective
+              || '확률과 통계';
+            const cleanNext = nextElective.replace(/^\(|\)$/g, '').trim() || '확률과 통계';
+            const autoLabel = cleanNext.includes('선택과목')
+              ? cleanNext
+              : `선택과목(${cleanNext})`;
+            parsedPageNotice = parseMockPageNoticeLabel(autoLabel);
+          } else if (pageNo === pages.length) {
+            parsedPageNotice = parseMockPageNoticeLabel('확인 사항');
+          }
+          if (parsedPageNotice) {
+            autoColumnLabelAnchors.push({
+              page: pageNo,
+              columnIndex: 1,
+              rowIndex: 99,
+              label: parsedPageNotice.label,
+              source: 'auto',
+              topPt: 0,
+              paddingTopPt: 0,
+            });
+          }
+        }
+      }
+      if (parsedPageNotice) {
+        parts.push(`\\gdef\\mockPageNoticeEmphasis{${escapeLatexText(parsedPageNotice.emphasisText)}}`);
+        parts.push(
+          `\\AtBeginShipoutNext{\\global\\mockpagenoticetrue\\global\\mockpagenoticefull${parsedPageNotice.mode === 'full' ? 'true' : 'false'}}`,
+        );
+      } else if (isMockExamProfile) {
+        parts.push('\\AtBeginShipoutNext{\\global\\mockpagenoticefalse\\global\\mockpagenoticefullfalse}');
+      }
       parts.push(
         renderMockGridPageLatex(pages[i], {
           leftSlots: pageLeftSlots,
@@ -9328,6 +12479,16 @@ export function buildDocumentTexSource(questions, options = {}) {
           includeQuestionScore,
           questionScoreByQuestionId,
           isAssignmentProfile,
+          isGyeongsinProfile,
+          isNeunginProfile,
+          isDaeryunProfile,
+          isDongdoProfile,
+          isSoseonProfile,
+          isOseongProfile,
+          isJeonghwaProfile,
+          isHwanggeumProfile,
+          isLastProblemPage: i === pages.length - 1,
+          mockNoticeReservePt: parsedPageNotice ? parsedPageNotice.reservePt : 0,
           titleHeader,
           sectionLabels: pageLabels,
           pageMacroPrefix: toPageMacroPrefix(i),
@@ -9400,11 +12561,14 @@ export function buildDocumentTexSource(questions, options = {}) {
           || 'objective';
 
         if (isMock) {
-          if (qMode !== lastMode) {
-            if (qMode === 'objective') sectionLabel = '5지선다형';
-            else if (qMode === 'essay') sectionLabel = '서술형';
+          const effectiveLabelMode = isMockExamProfile
+            ? (qMode === 'objective' ? 'objective' : 'subjective')
+            : qMode;
+          if (effectiveLabelMode !== lastMode) {
+            if (effectiveLabelMode === 'objective') sectionLabel = '5지선다형';
+            else if (effectiveLabelMode === 'essay') sectionLabel = '서술형';
             else sectionLabel = '단답형';
-            lastMode = qMode;
+            lastMode = effectiveLabelMode;
           }
         }
 

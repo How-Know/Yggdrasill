@@ -1635,6 +1635,24 @@ class ProblemBankExportPreset {
     return raw == 'rev_2015' ? 'rev_2015' : 'rev_2022';
   }
 
+  String get mockExamLinkKey =>
+      '${renderConfig['mockExamLinkKey'] ?? ''}'.trim();
+
+  Map<String, dynamic> get mockExamMeta {
+    final raw = renderConfig['mockExamMeta'];
+    if (raw is Map<String, dynamic>) return raw;
+    if (raw is Map) {
+      return raw.map((key, value) => MapEntry('$key', value));
+    }
+    return const <String, dynamic>{};
+  }
+
+  bool get isMockExamPreset {
+    if (mockExamLinkKey.isNotEmpty) return true;
+    if (mockExamMeta.isNotEmpty) return true;
+    return false;
+  }
+
   factory ProblemBankExportPreset.fromMap(Map<String, dynamic> map) {
     final renderConfigRaw = map['render_config'] ?? map['renderConfig'];
     final renderConfig = renderConfigRaw is Map

@@ -18,6 +18,7 @@ from collections import defaultdict
 from pathlib import Path
 
 import mock_pdf
+import mock_sync
 
 HIGH_NAME = "- 내신 기출 (고등)"
 MID_NAME = "- 내신 기출 (중등)"
@@ -393,6 +394,10 @@ def import_bytes(filename: str, data: bytes) -> dict:
     suffix = Path(filename).suffix.lower()
     if suffix == ".pdf":
         result = mock_pdf.import_pdf(filename, data, MOCK_ROOT)
+        note = mock_sync.sync_placed([item.get("path", "") for item in result.get("items", [])])
+        result["server"] = note
+        for item in result.get("items", []):
+            item["server"] = note
         invalidate()
         return result
     if suffix != ".hml":

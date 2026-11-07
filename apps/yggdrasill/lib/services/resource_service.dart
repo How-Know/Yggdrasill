@@ -1370,6 +1370,89 @@ class ResourceService {
     }
   }
 
+  /// 본문 PDF 페이지에 있는 문항이 가리키는 정답·해설 PDF 페이지.
+  ///
+  /// 개념 페이지처럼 문항이 없으면 결과에 넣지 않는다. 해설이 본문 PDF 안에
+  /// 있는 경우(`source_kind = body`)와 해설 없음(`none`)은 해설 PDF 페이지가
+  /// 아니므로 제외한다.
+  Future<({List<int> answerRawPages, List<int> solutionRawPages})>
+      loadTextbookCompanionPdfPages({
+    required String bookId,
+    required String gradeLabel,
+    required Iterable<int> bodyRawPages,
+  }) async {
+    final safeBookId = bookId.trim();
+    final safeGrade = gradeLabel.trim();
+    final pages = bodyRawPages.where((page) => page > 0).toSet().toList()
+      ..sort();
+    if (safeBookId.isEmpty || safeGrade.isEmpty || pages.isEmpty) {
+      return (answerRawPages: <int>[], solutionRawPages: <int>[]);
+    }
+
+    Iterable<List<T>> chunks<T>(List<T> values, int size) sync* {
+      for (var i = 0; i < values.length; i += size) {
+        final end = (i + size) > values.length ? values.length : i + size;
+        yield values.sublist(i, end);
+      }
+    }
+
+    int? asInt(dynamic value) {
+      if (value is int) return value;
+      if (value is num) return value.toInt();
+      if (value is String) return int.tryParse(value.trim());
+      return null;
+    }
+
+    final academyId = await TenantService.instance.getActiveAcademyId() ??
+        await TenantService.instance.ensureActiveAcademy();
+    final supa = Supabase.instance.client;
+    final cropIds = <String>{};
+    for (final rawPages in chunks(pages, 200)) {
+      final rows = await supa
+          .from('textbook_problem_crops')
+          .select('id')
+          .eq('academy_id', academyId)
+          .eq('book_id', safeBookId)
+          .eq('grade_label', safeGrade)
+          .inFilter('raw_page', rawPages);
+      for (final row in rows) {
+        final id = '${row['id'] ?? ''}'.trim();
+        if (id.isNotEmpty) cropIds.add(id);
+      }
+    }
+    if (cropIds.isEmpty) {
+      return (answerRawPages: <int>[], solutionRawPages: <int>[]);
+    }
+
+    final answerPages = <int>{};
+    final solutionPages = <int>{};
+    final ids = cropIds.toList(growable: false);
+    for (final idChunk in chunks(ids, 200)) {
+      final answerRows = await supa
+          .from('textbook_problem_answers')
+          .select('raw_page')
+          .inFilter('crop_id', idChunk);
+      for (final row in answerRows) {
+        final page = asInt(row['raw_page']);
+        if (page != null && page > 0) answerPages.add(page);
+      }
+      final solutionRows = await supa
+          .from('textbook_problem_solution_refs')
+          .select('raw_page, source_kind')
+          .eq('academy_id', academyId)
+          .inFilter('crop_id', idChunk);
+      for (final row in solutionRows) {
+        final sourceKind = '${row['source_kind'] ?? ''}'.trim().toLowerCase();
+        if (sourceKind == 'none' || sourceKind == 'body') continue;
+        final page = asInt(row['raw_page']);
+        if (page != null && page > 0) solutionPages.add(page);
+      }
+    }
+    final answer = answerPages.toList()..sort();
+    final solution = solutionPages.toList()..sort();
+    return (answerRawPages: answer, solutionRawPages: solution);
+  }
+
   Future<List<Map<String, dynamic>>> loadHomeworkItemProblemSnapshots({
     required Iterable<String> homeworkItemIds,
   }) async {

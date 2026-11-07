@@ -9,6 +9,11 @@ import 'package:pdfrx/pdfrx.dart';
 
 import 'pb_export_tokens.dart';
 
+String _koreaTodayExamDate() {
+  final now = DateTime.now().toUtc().add(const Duration(hours: 9));
+  return '${now.year}.${now.month}.${now.day}';
+}
+
 class ProblemBankPreviewQuestionScoreEntry {
   const ProblemBankPreviewQuestionScoreEntry({
     required this.questionId,
@@ -195,6 +200,14 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
     this.initialTitlePageTopText = '2026학년도 대학수학능력시험 문제지',
     this.initialTitlePageGoalText = '다시 풀기',
     this.isAssignmentTemplate = false,
+    this.isGyeongsinTemplate = false,
+    this.isNeunginTemplate = false,
+    this.isDaeryunTemplate = false,
+    this.isDongdoTemplate = false,
+    this.isSoseonTemplate = false,
+    this.isOseongTemplate = false,
+    this.isJeonghwaTemplate = false,
+    this.isHwanggeumTemplate = false,
     this.initialTimeLimitText = '',
     this.layoutColumns = 1,
     this.maxQuestionsPerPage = 4,
@@ -229,6 +242,14 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
   final String initialTitlePageTopText;
   final String initialTitlePageGoalText;
   final bool isAssignmentTemplate;
+  final bool isGyeongsinTemplate;
+  final bool isNeunginTemplate;
+  final bool isDaeryunTemplate;
+  final bool isDongdoTemplate;
+  final bool isSoseonTemplate;
+  final bool isOseongTemplate;
+  final bool isJeonghwaTemplate;
+  final bool isHwanggeumTemplate;
   final String initialTimeLimitText;
   final int layoutColumns;
   final int maxQuestionsPerPage;
@@ -294,6 +315,14 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
     String initialTitlePageTopText = '2026학년도 대학수학능력시험 문제지',
     String initialTitlePageGoalText = '다시 풀기',
     bool isAssignmentTemplate = false,
+    bool isGyeongsinTemplate = false,
+    bool isNeunginTemplate = false,
+    bool isDaeryunTemplate = false,
+    bool isDongdoTemplate = false,
+    bool isSoseonTemplate = false,
+    bool isOseongTemplate = false,
+    bool isJeonghwaTemplate = false,
+    bool isHwanggeumTemplate = false,
     String initialTimeLimitText = '',
     int layoutColumns = 1,
     int maxQuestionsPerPage = 4,
@@ -345,6 +374,14 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
               initialTitlePageTopText: initialTitlePageTopText,
               initialTitlePageGoalText: initialTitlePageGoalText,
               isAssignmentTemplate: isAssignmentTemplate,
+              isGyeongsinTemplate: isGyeongsinTemplate,
+              isNeunginTemplate: isNeunginTemplate,
+              isDaeryunTemplate: isDaeryunTemplate,
+              isDongdoTemplate: isDongdoTemplate,
+              isSoseonTemplate: isSoseonTemplate,
+              isOseongTemplate: isOseongTemplate,
+              isJeonghwaTemplate: isJeonghwaTemplate,
+              isHwanggeumTemplate: isHwanggeumTemplate,
               initialTimeLimitText: initialTimeLimitText,
               layoutColumns: layoutColumns,
               maxQuestionsPerPage: maxQuestionsPerPage,
@@ -441,6 +478,21 @@ class _ProblemBankExportServerPreviewDialogState
   late final TextEditingController _coverSubjectTitleController;
   late final TextEditingController _coverPhraseController;
   late final TextEditingController _coverOrganizationController;
+  late final TextEditingController _gyeongsinExamDateController;
+  late final TextEditingController _gyeongsinPeriodLabelController;
+  late final TextEditingController _gyeongsinSubjectCodeController;
+  late final TextEditingController _gyeongsinSheetTypeController;
+  late final TextEditingController _gyeongsinCoverExamTitleController;
+  late final TextEditingController _gyeongsinHeaderExamTitleController;
+  late final TextEditingController _gyeongsinSubjectNameController;
+  late final TextEditingController _gyeongsinObjectiveCountController;
+  late final TextEditingController _gyeongsinSubjectiveCountController;
+  late final TextEditingController _gyeongsinEssayCountController;
+  late final TextEditingController _gyeongsinObjectiveScoreController;
+  late final TextEditingController _gyeongsinEssayScoreController;
+  late final TextEditingController _gyeongsinTotalPageCountController;
+  late final TextEditingController _gyeongsinFooterLabelController;
+  late final TextEditingController _gyeongsinPageStartController;
   final List<TextEditingController> _coverGroupLabelControllers =
       <TextEditingController>[];
   final List<TextEditingController> _coverGroupPageRangeControllers =
@@ -520,6 +572,21 @@ class _ProblemBankExportServerPreviewDialogState
     _coverSubjectTitleController = TextEditingController();
     _coverPhraseController = TextEditingController();
     _coverOrganizationController = TextEditingController();
+    _gyeongsinExamDateController = TextEditingController();
+    _gyeongsinPeriodLabelController = TextEditingController();
+    _gyeongsinSubjectCodeController = TextEditingController();
+    _gyeongsinSheetTypeController = TextEditingController();
+    _gyeongsinObjectiveScoreController = TextEditingController();
+    _gyeongsinEssayScoreController = TextEditingController();
+    _gyeongsinCoverExamTitleController = TextEditingController();
+    _gyeongsinHeaderExamTitleController = TextEditingController();
+    _gyeongsinSubjectNameController = TextEditingController();
+    _gyeongsinObjectiveCountController = TextEditingController();
+    _gyeongsinSubjectiveCountController = TextEditingController();
+    _gyeongsinEssayCountController = TextEditingController();
+    _gyeongsinTotalPageCountController = TextEditingController();
+    _gyeongsinFooterLabelController = TextEditingController();
+    _gyeongsinPageStartController = TextEditingController();
     _syncCoverPageTextControllers(
       _normalizeCoverPageTexts(widget.initialCoverPageTexts),
     );
@@ -566,6 +633,21 @@ class _ProblemBankExportServerPreviewDialogState
     _coverSubjectTitleController.dispose();
     _coverPhraseController.dispose();
     _coverOrganizationController.dispose();
+    _gyeongsinExamDateController.dispose();
+    _gyeongsinPeriodLabelController.dispose();
+    _gyeongsinSubjectCodeController.dispose();
+    _gyeongsinSheetTypeController.dispose();
+    _gyeongsinObjectiveScoreController.dispose();
+    _gyeongsinEssayScoreController.dispose();
+    _gyeongsinCoverExamTitleController.dispose();
+    _gyeongsinHeaderExamTitleController.dispose();
+    _gyeongsinSubjectNameController.dispose();
+    _gyeongsinObjectiveCountController.dispose();
+    _gyeongsinSubjectiveCountController.dispose();
+    _gyeongsinEssayCountController.dispose();
+    _gyeongsinTotalPageCountController.dispose();
+    _gyeongsinFooterLabelController.dispose();
+    _gyeongsinPageStartController.dispose();
     _disposeCoverGroupControllers();
     super.dispose();
   }
@@ -874,6 +956,7 @@ class _ProblemBankExportServerPreviewDialogState
           if (page < 1 || page > _computedPageColumnCounts.length) return false;
           if (col < 0 || col > 1) return false;
           if (rowIndex < 0) return false;
+          if (col == 1 && rowIndex == 99) return true;
           final pageCounts = _computedPageColumnCounts[page - 1];
           final rowLimit = col < pageCounts.length ? pageCounts[col] : 0;
           return rowIndex < rowLimit;
@@ -1234,7 +1317,7 @@ class _ProblemBankExportServerPreviewDialogState
       columnIndex: columnIndex,
       rowIndex: rowIndex,
     );
-    controller.text = '5지선다형';
+    controller.text = widget.isGyeongsinTemplate ? '서술형' : '5지선다형';
     _setAnchorLabel(
       pageIndex: pageIndex,
       columnIndex: columnIndex,
@@ -1263,6 +1346,7 @@ class _ProblemBankExportServerPreviewDialogState
       if (page - 1 < 0 || page - 1 >= _computedPageColumnCounts.length) {
         return false;
       }
+      if (columnIndex == 1 && rowIndex == 99) return true;
       final pageCounts = _computedPageColumnCounts[page - 1];
       final rowLimit = columnIndex < pageCounts.length
           ? pageCounts[columnIndex]
@@ -1470,7 +1554,10 @@ class _ProblemBankExportServerPreviewDialogState
     String fallback, {
     bool allowEmpty = false,
   }) {
-    final text = '$raw'.replaceAll(RegExp(r'\s+'), ' ').trim();
+    var text = raw == null
+        ? ''
+        : '$raw'.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (text == 'null') text = '';
     if (allowEmpty) return text;
     if (text.isEmpty) return fallback;
     return text;
@@ -1668,6 +1755,92 @@ class _ProblemBankExportServerPreviewDialogState
         src['organization'],
         '${defaults['organization'] ?? ''}',
       ),
+      'examDate': _normalizeCoverTextValue(
+        src['examDate'],
+        _koreaTodayExamDate(),
+        allowEmpty: true,
+      ),
+      'coverExamTitle': _normalizeCoverTextValue(
+        src['coverExamTitle'],
+        '2026학년도 3학년 2학기 기말시험',
+        allowEmpty: true,
+      ),
+      'headerExamTitle': _normalizeCoverTextValue(
+        src['headerExamTitle'],
+        '제 3 학년 2 학기 기말시험',
+        allowEmpty: true,
+      ),
+      'subjectName': _normalizeCoverTextValue(
+        src['subjectName'],
+        '수학',
+        allowEmpty: true,
+      ),
+      'objectiveCount': _normalizeCoverTextValue(
+        src['objectiveCount'],
+        '',
+        allowEmpty: true,
+      ),
+      'subjectiveCount': _normalizeCoverTextValue(
+        src['subjectiveCount'],
+        '',
+        allowEmpty: true,
+      ),
+      'essayCount': _normalizeCoverTextValue(
+        src['essayCount'],
+        '',
+        allowEmpty: true,
+      ),
+      'periodLabel': _normalizeCoverTextValue(
+        src['periodLabel'],
+        widget.isDaeryunTemplate
+            ? '제 2 교시'
+            : (widget.isSoseonTemplate
+                  ? '3교시'
+                  : ((widget.isJeonghwaTemplate || widget.isHwanggeumTemplate)
+                        ? '1교시'
+                        : (widget.isOseongTemplate ? '제 1 교시' : '제 1교시'))),
+        allowEmpty: true,
+      ),
+      'subjectCode': _normalizeCoverTextValue(
+        src['subjectCode'],
+        (widget.isDaeryunTemplate ||
+                widget.isSoseonTemplate ||
+                widget.isOseongTemplate ||
+                widget.isHwanggeumTemplate)
+            ? '04'
+            : '05',
+        allowEmpty: true,
+      ),
+      'sheetTypeLabel': _normalizeCoverTextValue(
+        src['sheetTypeLabel'] ?? src['sheetType'],
+        '답안지 D형',
+        allowEmpty: true,
+      ),
+      'objectiveScore': _normalizeCoverTextValue(
+        src['objectiveScore'],
+        '',
+        allowEmpty: true,
+      ),
+      'essayScore': _normalizeCoverTextValue(
+        src['essayScore'],
+        '',
+        allowEmpty: true,
+      ),
+      'totalPageCount': _normalizeCoverTextValue(
+        src['totalPageCount'],
+        '',
+        allowEmpty: true,
+      ),
+      'footerLabel': _normalizeCoverTextValue(
+        src['footerLabel'],
+        '',
+        allowEmpty: true,
+      ),
+      'pageStartNumber': _normalizeCoverTextValue(
+        src['pageStartNumber'],
+        '',
+        allowEmpty: true,
+      ),
     };
   }
 
@@ -1813,6 +1986,78 @@ class _ProblemBankExportServerPreviewDialogState
     _coverSubjectTitleController.text = '${normalized['subjectTitle'] ?? ''}';
     _coverPhraseController.text = '${normalized['handwritingPhrase'] ?? ''}';
     _coverOrganizationController.text = '${normalized['organization'] ?? ''}';
+    final examDate = '${normalized['examDate'] ?? ''}'.trim();
+    _gyeongsinExamDateController.text = examDate.isNotEmpty
+        ? examDate
+        : _koreaTodayExamDate();
+    final periodLabel = '${normalized['periodLabel'] ?? ''}'.trim();
+    _gyeongsinPeriodLabelController.text = periodLabel.isNotEmpty
+        ? periodLabel
+        : (widget.isDaeryunTemplate
+              ? '제 2 교시'
+              : (widget.isSoseonTemplate
+                    ? '3교시'
+                    : ((widget.isJeonghwaTemplate || widget.isHwanggeumTemplate)
+                          ? '1교시'
+                          : (widget.isOseongTemplate ? '제 1 교시' : '제 1교시'))));
+    final subjectCode = '${normalized['subjectCode'] ?? ''}'.trim();
+    _gyeongsinSubjectCodeController.text = subjectCode.isNotEmpty
+        ? subjectCode
+        : ((widget.isDaeryunTemplate ||
+                  widget.isSoseonTemplate ||
+                  widget.isOseongTemplate ||
+                  widget.isHwanggeumTemplate)
+              ? '04'
+              : '05');
+    final sheetTypeLabel = '${normalized['sheetTypeLabel'] ?? ''}'.trim();
+    _gyeongsinSheetTypeController.text = sheetTypeLabel.isNotEmpty
+        ? sheetTypeLabel
+        : '답안지 D형';
+    final coverExamTitle = '${normalized['coverExamTitle'] ?? ''}'.trim();
+    _gyeongsinCoverExamTitleController.text = coverExamTitle.isNotEmpty
+        ? coverExamTitle
+        : (widget.isDaeryunTemplate
+              ? '2026학년도 2학기 중간시험 2학년 문제지'
+              : (widget.isDongdoTemplate
+                    ? '2026학년도 수학과 제3학년 2학기 기말고사'
+                    : (widget.isSoseonTemplate
+                          ? '2026학년도 2학기 3학년 기말시험 문제지'
+                          : (widget.isOseongTemplate
+                                ? '2026학년도 2학기 기말시험'
+                                : (widget.isJeonghwaTemplate
+                                      ? '2026학년도 2학년 2학기 중간시험'
+                                      : (widget.isHwanggeumTemplate
+                                            ? '2026학년도 1학기 기말시험 3학년'
+                                            : '2026학년도 3학년 2학기 기말시험'))))));
+    final headerExamTitle = '${normalized['headerExamTitle'] ?? ''}'.trim();
+    _gyeongsinHeaderExamTitleController.text = headerExamTitle.isNotEmpty
+        ? headerExamTitle
+        : (widget.isDaeryunTemplate
+              ? '2026학년도 2학기 중간시험 2학년 문제지'
+              : (widget.isDongdoTemplate
+                    ? '2026학년도 수학과 제3학년 2학기 기말고사'
+                    : (widget.isSoseonTemplate
+                          ? '3학년 2학기 기말시험'
+                          : (widget.isOseongTemplate
+                                ? '2026학년도 오성중학교 2학기 기말시험 문제지'
+                                : '제 3 학년 2 학기 기말시험'))));
+    final subjectName = '${normalized['subjectName'] ?? ''}'.trim();
+    _gyeongsinSubjectNameController.text = subjectName.isNotEmpty
+        ? subjectName
+        : '수학';
+    _gyeongsinObjectiveCountController.text =
+        '${normalized['objectiveCount'] ?? ''}';
+    _gyeongsinSubjectiveCountController.text =
+        '${normalized['subjectiveCount'] ?? ''}';
+    _gyeongsinEssayCountController.text = '${normalized['essayCount'] ?? ''}';
+    _gyeongsinObjectiveScoreController.text =
+        '${normalized['objectiveScore'] ?? ''}';
+    _gyeongsinEssayScoreController.text = '${normalized['essayScore'] ?? ''}';
+    _gyeongsinTotalPageCountController.text =
+        '${normalized['totalPageCount'] ?? ''}';
+    _gyeongsinFooterLabelController.text = '${normalized['footerLabel'] ?? ''}';
+    _gyeongsinPageStartController.text =
+        '${normalized['pageStartNumber'] ?? ''}';
     final groups = (normalized['subjectGroups'] as List<dynamic>)
         .whereType<Map>()
         .map((row) => row.map((key, value) => MapEntry('$key', value)))
@@ -1938,6 +2183,116 @@ class _ProblemBankExportServerPreviewDialogState
         _coverOrganizationController.text,
         '${defaults['organization'] ?? ''}',
       ),
+      if (widget.isGyeongsinTemplate ||
+          widget.isNeunginTemplate ||
+          widget.isDaeryunTemplate ||
+          widget.isDongdoTemplate ||
+          widget.isSoseonTemplate ||
+          widget.isOseongTemplate ||
+          widget.isJeonghwaTemplate ||
+          widget.isHwanggeumTemplate) ...<String, dynamic>{
+        'examDate': _normalizeCoverTextValue(
+          _gyeongsinExamDateController.text,
+          _koreaTodayExamDate(),
+        ),
+        'periodLabel': _normalizeCoverTextValue(
+          _gyeongsinPeriodLabelController.text,
+          widget.isDaeryunTemplate
+              ? '제 2 교시'
+              : (widget.isSoseonTemplate
+                    ? '3교시'
+                    : ((widget.isJeonghwaTemplate || widget.isHwanggeumTemplate)
+                          ? '1교시'
+                          : (widget.isOseongTemplate ? '제 1 교시' : '제 1교시'))),
+        ),
+        'subjectCode': _normalizeCoverTextValue(
+          _gyeongsinSubjectCodeController.text,
+          (widget.isDaeryunTemplate ||
+                  widget.isSoseonTemplate ||
+                  widget.isOseongTemplate ||
+                  widget.isHwanggeumTemplate)
+              ? '04'
+              : '05',
+        ),
+        'sheetTypeLabel': _normalizeCoverTextValue(
+          _gyeongsinSheetTypeController.text,
+          '답안지 D형',
+        ),
+        'coverExamTitle': _normalizeCoverTextValue(
+          _gyeongsinCoverExamTitleController.text,
+          widget.isDaeryunTemplate
+              ? '2026학년도 2학기 중간시험 2학년 문제지'
+              : (widget.isDongdoTemplate
+                    ? '2026학년도 수학과 제3학년 2학기 기말고사'
+                    : (widget.isSoseonTemplate
+                          ? '2026학년도 2학기 3학년 기말시험 문제지'
+                          : (widget.isOseongTemplate
+                                ? '2026학년도 2학기 기말시험'
+                                : (widget.isJeonghwaTemplate
+                                      ? '2026학년도 2학년 2학기 중간시험'
+                                      : (widget.isHwanggeumTemplate
+                                            ? '2026학년도 1학기 기말시험 3학년'
+                                            : '2026학년도 3학년 2학기 기말시험'))))),
+        ),
+        'headerExamTitle': _normalizeCoverTextValue(
+          (widget.isDaeryunTemplate || widget.isDongdoTemplate)
+              ? _gyeongsinCoverExamTitleController.text
+              : _gyeongsinHeaderExamTitleController.text,
+          widget.isDaeryunTemplate
+              ? '2026학년도 2학기 중간시험 2학년 문제지'
+              : (widget.isDongdoTemplate
+                    ? '2026학년도 수학과 제3학년 2학기 기말고사'
+                    : (widget.isSoseonTemplate
+                          ? '3학년 2학기 기말시험'
+                          : (widget.isOseongTemplate
+                                ? '2026학년도 오성중학교 2학기 기말시험 문제지'
+                                : '제 3 학년 2 학기 기말시험'))),
+        ),
+        'subjectName': _normalizeCoverTextValue(
+          _gyeongsinSubjectNameController.text,
+          '수학',
+        ),
+        'objectiveCount': _normalizeCoverTextValue(
+          _gyeongsinObjectiveCountController.text,
+          '',
+          allowEmpty: true,
+        ),
+        'subjectiveCount': _normalizeCoverTextValue(
+          _gyeongsinSubjectiveCountController.text,
+          '',
+          allowEmpty: true,
+        ),
+        'essayCount': _normalizeCoverTextValue(
+          _gyeongsinEssayCountController.text,
+          '',
+          allowEmpty: true,
+        ),
+        'objectiveScore': _normalizeCoverTextValue(
+          _gyeongsinObjectiveScoreController.text,
+          '',
+          allowEmpty: true,
+        ),
+        'essayScore': _normalizeCoverTextValue(
+          _gyeongsinEssayScoreController.text,
+          '',
+          allowEmpty: true,
+        ),
+        'totalPageCount': _normalizeCoverTextValue(
+          _gyeongsinTotalPageCountController.text,
+          '',
+          allowEmpty: true,
+        ),
+        'footerLabel': _normalizeCoverTextValue(
+          _gyeongsinFooterLabelController.text,
+          '',
+          allowEmpty: true,
+        ),
+        'pageStartNumber': _normalizeCoverTextValue(
+          _gyeongsinPageStartController.text,
+          '',
+          allowEmpty: true,
+        ),
+      },
     };
   }
 
@@ -2295,6 +2650,11 @@ class _ProblemBankExportServerPreviewDialogState
               ? refreshed.titlePageIndices
               : _titlePageIndexSet.toList(growable: false);
           _titlePageIndexSet = _normalizeTitlePageIndices(refreshedTitles);
+          if (refreshed.titlePageHeaders.isNotEmpty) {
+            _titlePageHeaderMap = _parseTitlePageHeaders(
+              refreshed.titlePageHeaders,
+            );
+          }
           for (final entry in _labelControllers.entries) {
             final updated =
                 '${_columnLabelAnchorMap[entry.key]?['label'] ?? ''}'.trim();
@@ -3095,6 +3455,359 @@ class _ProblemBankExportServerPreviewDialogState
     );
   }
 
+  Widget _buildGyeongsinInfoEditor() {
+    final isNeungin = widget.isNeunginTemplate;
+    final isDaeryun = widget.isDaeryunTemplate;
+    final isDongdo = widget.isDongdoTemplate;
+    final isSoseon = widget.isSoseonTemplate;
+    final isOseong = widget.isOseongTemplate;
+    final isJeonghwa = widget.isJeonghwaTemplate;
+    final isHwanggeum = widget.isHwanggeumTemplate;
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.fromLTRB(10, 9, 10, 4),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0C1419),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFF23333B)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            isDaeryun
+                ? '대륜중 시험 정보 (자동 반영 / 수동 수정)'
+                : (isDongdo
+                      ? '동도중 시험 정보 (자동 반영 / 수동 수정)'
+                      : (isSoseon
+                            ? '소선여중 시험 정보 (자동 반영 / 수동 수정)'
+                            : (isOseong
+                                  ? '오성중 시험 정보 (자동 반영 / 수동 수정)'
+                                  : (isJeonghwa
+                                        ? '정화중 시험 정보 (자동 반영 / 수동 수정)'
+                                        : (isHwanggeum
+                                              ? '황금중 시험 정보 (자동 반영 / 수동 수정)'
+                                              : (isNeungin
+                                                    ? '능인중 시험 정보 (자동 반영 / 수동 수정)'
+                                                    : '경신중 시험 정보 (자동 반영 / 수동 수정)')))))),
+            style: const TextStyle(
+              color: _textPrimary,
+              fontSize: 12.4,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            isDaeryun
+                ? '날짜를 입력하면 요일이 자동 계산됩니다. 선택형·서술형(주관식 포함) 문항 수와 총 장·면 수는 비워두면 자동으로 계산됩니다.'
+                : (isDongdo
+                      ? '총문항·선택형·서술형(주관식 포함) 문항 수와 총 장·면 수, 점수는 비워두면 자동으로 계산됩니다.'
+                      : (isSoseon
+                            ? '표지 및 1페이지 상단의 문항 수(선택형·서술형·계)와 전체 면수는 비워두면 자동으로 계산됩니다.'
+                            : (isOseong
+                                  ? '1페이지 상단의 선택형 점수별 문항 수·서술형 배점 및 전체 면수는 비워두면 자동으로 계산됩니다.'
+                                  : (isJeonghwa
+                                        ? '표지 구성표의 문항 수(선택형·단답형·서술형), 총점, 전체 면수는 비워두면 자동으로 계산됩니다.'
+                                        : (isHwanggeum
+                                              ? '표지 구성표의 문항 수(선택형·서답형), 배점, 총 장·면 수는 비워두면 자동으로 계산됩니다.'
+                                              : (isNeungin
+                                                    ? '문항 수(선택형·단답형·서논술형)와 전체 면수는 비워두면 실제 문항/페이지 수로 자동 계산됩니다.'
+                                                    : '날짜를 입력하면 요일이 자동 계산되고 2교시는 고정됩니다. 문항 수와 전체 면수는 비워두면 실제 문항/페이지 수로 자동 계산됩니다.')))))),
+            style: const TextStyle(
+              color: _textMuted,
+              fontSize: 11.2,
+              fontWeight: FontWeight.w600,
+              height: 1.35,
+            ),
+          ),
+          const SizedBox(height: 8),
+          if (isDaeryun) ...[
+            Row(
+              children: [
+                Expanded(
+                  child: _buildCoverTextField(
+                    label: '시험일시 (예: 2026.9.22)',
+                    controller: _gyeongsinExamDateController,
+                    hintText: _koreaTodayExamDate(),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _buildCoverTextField(
+                    label: '교시',
+                    controller: _gyeongsinPeriodLabelController,
+                    hintText: '제 2 교시',
+                  ),
+                ),
+              ],
+            ),
+            Row(
+              children: [
+                Expanded(
+                  child: _buildCoverTextField(
+                    label: '답안지 형',
+                    controller: _gyeongsinSheetTypeController,
+                    hintText: '답안지 D형',
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _buildCoverTextField(
+                    label: '과목코드',
+                    controller: _gyeongsinSubjectCodeController,
+                    hintText: '04',
+                  ),
+                ),
+              ],
+            ),
+          ] else if (isDongdo) ...[
+            Row(
+              children: [
+                Expanded(
+                  child: _buildCoverTextField(
+                    label: '과목코드',
+                    controller: _gyeongsinSubjectCodeController,
+                    hintText: '05',
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _buildCoverTextField(
+                    label: '선택형 점수 (비우면 80점)',
+                    controller: _gyeongsinObjectiveScoreController,
+                    hintText: '80점',
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _buildCoverTextField(
+                    label: '서술형 점수 (비우면 20점)',
+                    controller: _gyeongsinEssayScoreController,
+                    hintText: '20점',
+                  ),
+                ),
+              ],
+            ),
+          ] else if (isOseong) ...[
+            Row(
+              children: [
+                Expanded(
+                  child: _buildCoverTextField(
+                    label: '교시',
+                    controller: _gyeongsinPeriodLabelController,
+                    hintText: '제 1 교시',
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _buildCoverTextField(
+                    label: '과목 코드',
+                    controller: _gyeongsinSubjectCodeController,
+                    hintText: '04',
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _buildCoverTextField(
+                    label: '서술형 배점 (자동)',
+                    controller: _gyeongsinEssayScoreController,
+                    hintText: '35점',
+                  ),
+                ),
+              ],
+            ),
+          ] else if (isNeungin || isSoseon || isJeonghwa || isHwanggeum)
+            Row(
+              children: [
+                Expanded(
+                  flex: 2,
+                  child: _buildCoverTextField(
+                    label: '실시일자 (예: 2026.10.27)',
+                    controller: _gyeongsinExamDateController,
+                    hintText: _koreaTodayExamDate(),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _buildCoverTextField(
+                    label: '교시',
+                    controller: _gyeongsinPeriodLabelController,
+                    hintText: isSoseon
+                        ? '3교시'
+                        : ((isJeonghwa || isHwanggeum) ? '1교시' : '제 1교시'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _buildCoverTextField(
+                    label: '과목 코드',
+                    controller: _gyeongsinSubjectCodeController,
+                    hintText: (isSoseon || isHwanggeum) ? '04' : '05',
+                  ),
+                ),
+              ],
+            )
+          else
+            _buildCoverTextField(
+              label: '실시일자 (예: 2026.10.26 — 요일 자동·2교시 고정)',
+              controller: _gyeongsinExamDateController,
+              hintText: _koreaTodayExamDate(),
+            ),
+          _buildCoverTextField(
+            label: (isDaeryun || isDongdo) ? '1페이지 상단 시험명' : '표지 시험명 (1페이지 상단)',
+            controller: _gyeongsinCoverExamTitleController,
+            hintText: isDaeryun
+                ? '2026학년도 2학기 중간시험 2학년 문제지'
+                : (isDongdo
+                      ? '2026학년도 수학과 제3학년 2학기 기말고사'
+                      : (isSoseon
+                            ? '2026학년도 2학기 3학년 기말시험 문제지'
+                            : (isOseong
+                                  ? '2026학년도 2학기 기말시험'
+                                  : (isJeonghwa
+                                        ? '2026학년도 2학년 2학기 중간시험'
+                                        : (isHwanggeum
+                                              ? '2026학년도 1학기 기말시험 3학년'
+                                              : (isNeungin
+                                                    ? '2026학년도 2학기 3학년 중간시험 문제지'
+                                                    : '2026학년도 3학년 2학기 기말시험')))))),
+          ),
+          if (!isNeungin && !isDaeryun && !isDongdo && !isJeonghwa && !isHwanggeum)
+            _buildCoverTextField(
+              label: '문제지 상단 시험명 (문제 첫 페이지)',
+              controller: _gyeongsinHeaderExamTitleController,
+              hintText: isSoseon
+                  ? '3학년 2학기 기말시험'
+                  : (isOseong ? '2026학년도 오성중학교 2학기 기말시험 문제지' : '제 3 학년 2 학기 기말시험'),
+            ),
+          _buildCoverTextField(
+            label: '과목명 (기본 수학)',
+            controller: _gyeongsinSubjectNameController,
+            hintText: '수학',
+          ),
+          if (isNeungin || isJeonghwa)
+            Row(
+              children: [
+                Expanded(
+                  child: _buildCoverTextField(
+                    label: '선택형 문항 수 (자동)',
+                    controller: _gyeongsinObjectiveCountController,
+                    hintText: '자동',
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _buildCoverTextField(
+                    label: '단답형 문항 수 (자동)',
+                    controller: _gyeongsinSubjectiveCountController,
+                    hintText: '자동',
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _buildCoverTextField(
+                    label: isJeonghwa ? '서술형 문항 수 (자동)' : '서·논술형 문항 수 (자동)',
+                    controller: _gyeongsinEssayCountController,
+                    hintText: '자동',
+                  ),
+                ),
+              ],
+            )
+          else
+            Row(
+              children: [
+                Expanded(
+                  child: _buildCoverTextField(
+                    label: '선택형 문항 수 (비우면 자동)',
+                    controller: _gyeongsinObjectiveCountController,
+                    hintText: '자동',
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _buildCoverTextField(
+                    label: '서술형 문항 수 (비우면 자동)',
+                    controller: _gyeongsinEssayCountController,
+                    hintText: '자동',
+                  ),
+                ),
+              ],
+            ),
+          if (isJeonghwa || isHwanggeum)
+            Row(
+              children: [
+                Expanded(
+                  child: _buildCoverTextField(
+                    label: '선택형 총점 (비우면 자동)',
+                    controller: _gyeongsinObjectiveScoreController,
+                    hintText: isHwanggeum ? '65점' : '40',
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _buildCoverTextField(
+                    label: '서답형 총점 (비우면 자동)',
+                    controller: _gyeongsinEssayScoreController,
+                    hintText: isHwanggeum ? '35점' : '60',
+                  ),
+                ),
+              ],
+            ),
+          Row(
+            children: [
+              Expanded(
+                child: _buildCoverTextField(
+                  label: '전체 문제지 면 수 (비우면 자동)',
+                  controller: _gyeongsinTotalPageCountController,
+                  hintText: '자동',
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _buildCoverTextField(
+                  label: '시작 페이지 번호 (기본 1)',
+                  controller: _gyeongsinPageStartController,
+                  hintText: '1',
+                ),
+              ),
+            ],
+          ),
+          if (!isNeungin)
+            _buildCoverTextField(
+              label: isDaeryun
+                  ? '하단 우측 문구 (비우면 자동: 대륜중학교 · 학년 · 과목)'
+                  : (isDongdo
+                        ? '하단 좌측 문구 (비우면 자동: (동도중) · 학년 · 과목)'
+                        : (isSoseon
+                              ? '하단 과목 문구 (비우면 자동: 학년 · 과목 · 교과)'
+                              : (isOseong
+                                    ? '하단 과목 문구 (비우면 자동: 중학년-과목)'
+                                    : (isJeonghwa
+                                          ? '하단 과목 문구 (비우면 자동: 정화중학교 · 학년 · 과목)'
+                                          : (isHwanggeum
+                                                ? '하단 우측 문구 (비우면 자동: 학년 · 과목과 · 황금중학교)'
+                                                : '하단 소속/학년 문구 (비우면 자동: 출처 학교 · 과목 · 학년)'))))),
+              controller: _gyeongsinFooterLabelController,
+              hintText: isDaeryun
+                  ? '대륜중학교 2학년 수학'
+                  : (isDongdo
+                        ? '(동도중) 3학년 수학'
+                        : (isSoseon
+                              ? '3학년 수학 교과'
+                              : (isOseong
+                                    ? '중3-수학'
+                                    : (isJeonghwa
+                                          ? '정화중학교 2학년 수학'
+                                          : (isHwanggeum
+                                                ? '3학년 수학과 황금중학교'
+                                                : '경신중 수학 3학년'))))),
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildCoverPageTextEditor() {
     return Container(
       width: double.infinity,
@@ -3314,7 +4027,10 @@ class _ProblemBankExportServerPreviewDialogState
           final page = int.tryParse('${row['page'] ?? 0}') ?? 0;
           final col = int.tryParse('${row['columnIndex'] ?? -1}') ?? -1;
           final rowIndex = int.tryParse('${row['rowIndex'] ?? 0}') ?? -1;
-          return page == pageNo && col == columnIndex && rowIndex >= 0;
+          return page == pageNo &&
+              col == columnIndex &&
+              rowIndex >= 0 &&
+              rowIndex < 99;
         })
         .toList(growable: true);
     out.sort((a, b) {
@@ -3493,6 +4209,126 @@ class _ProblemBankExportServerPreviewDialogState
             ),
           ),
       ],
+    );
+  }
+
+  Widget _buildPageNoticeEditor({required int pageIndex}) {
+    final key = _anchorKey(pageIndex, 1, rowIndex: 99);
+    final hasNotice = _columnLabelAnchorMap.containsKey(key);
+    if (!hasNotice) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(8, 7, 8, 7),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0C1418),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: const Color(0xFF213037)),
+        ),
+        child: Row(
+          children: [
+            const Expanded(
+              child: Text(
+                '하단 안내박스 없음',
+                style: TextStyle(
+                  color: _textMuted,
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            IconButton(
+              onPressed: () {
+                final isLastPage =
+                    pageIndex == _computedPageColumnCounts.length - 1;
+                final nextSub =
+                    (_titlePageHeaderMap[pageIndex + 2]?['subtitle'] ?? '')
+                        .trim();
+                final defaultText = isLastPage
+                    ? '확인 사항'
+                    : '선택과목(${nextSub.isNotEmpty ? nextSub : '확률과 통계'})';
+                final controller = _controllerForAnchor(
+                  pageIndex: pageIndex,
+                  columnIndex: 1,
+                  rowIndex: 99,
+                );
+                controller.text = defaultText;
+                _setAnchorLabel(
+                  pageIndex: pageIndex,
+                  columnIndex: 1,
+                  rowIndex: 99,
+                  rawLabel: defaultText,
+                );
+                setState(() {});
+              },
+              visualDensity: VisualDensity.compact,
+              iconSize: 18,
+              tooltip: '안내박스 추가',
+              color: _textPrimary,
+              icon: const Icon(Icons.add_circle_outline_rounded),
+            ),
+          ],
+        ),
+      );
+    }
+    final controller = _controllerForAnchor(
+      pageIndex: pageIndex,
+      columnIndex: 1,
+      rowIndex: 99,
+    );
+    return TextField(
+      controller: controller,
+      style: const TextStyle(
+        color: _textPrimary,
+        fontSize: 12.4,
+        fontWeight: FontWeight.w700,
+      ),
+      cursorColor: _textPrimary,
+      onChanged: (value) {
+        _setAnchorLabel(
+          pageIndex: pageIndex,
+          columnIndex: 1,
+          rowIndex: 99,
+          rawLabel: value,
+        );
+      },
+      decoration: InputDecoration(
+        isDense: true,
+        filled: true,
+        fillColor: const Color(0xFF0C1418),
+        labelText: '하단 안내박스 (확인 사항 또는 선택과목명)',
+        labelStyle: const TextStyle(
+          color: _textMuted,
+          fontSize: 11.8,
+          fontWeight: FontWeight.w700,
+        ),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 10,
+          vertical: 9,
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: const BorderSide(color: Color(0xFF213037)),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: const BorderSide(color: _accent, width: 1.1),
+        ),
+        suffixIcon: IconButton(
+          onPressed: () {
+            controller.clear();
+            _setAnchorLabel(
+              pageIndex: pageIndex,
+              columnIndex: 1,
+              rowIndex: 99,
+              rawLabel: '',
+            );
+            setState(() {});
+          },
+          icon: const Icon(Icons.close_rounded, size: 16),
+          tooltip: '안내박스 제거',
+          color: _textMuted,
+        ),
+      ),
     );
   }
 
@@ -3721,6 +4557,18 @@ class _ProblemBankExportServerPreviewDialogState
                     columnIndex: 1,
                     title: '오른쪽 단',
                   ),
+                  if (!widget.isAssignmentTemplate &&
+                      !widget.isGyeongsinTemplate &&
+                      !widget.isNeunginTemplate &&
+                      !widget.isDaeryunTemplate &&
+                      !widget.isDongdoTemplate &&
+                      !widget.isSoseonTemplate &&
+                      !widget.isOseongTemplate &&
+                      !widget.isJeonghwaTemplate &&
+                      !widget.isHwanggeumTemplate) ...[
+                    const SizedBox(height: 6),
+                    _buildPageNoticeEditor(pageIndex: index),
+                  ],
                 ],
                 if (titleSelected) ...[
                   const SizedBox(height: 8),
@@ -4076,13 +4924,24 @@ class _ProblemBankExportServerPreviewDialogState
                                         crossAxisAlignment:
                                             CrossAxisAlignment.start,
                                         children: [
-                                          _buildCoverTextField(
-                                            label:
-                                                '제목 페이지 상단 문구 (모든 제목 페이지 공통)',
-                                            controller:
-                                                _titlePageTopTextController,
-                                            hintText: _defaultTitlePageTopText,
-                                          ),
+                                          if (widget.isGyeongsinTemplate ||
+                                              widget.isNeunginTemplate ||
+                                              widget.isDaeryunTemplate ||
+                                              widget.isDongdoTemplate ||
+                                              widget.isSoseonTemplate ||
+                                              widget.isOseongTemplate ||
+                                              widget.isJeonghwaTemplate ||
+                                              widget.isHwanggeumTemplate)
+                                            _buildGyeongsinInfoEditor()
+                                          else
+                                            _buildCoverTextField(
+                                              label:
+                                                  '제목 페이지 상단 문구 (모든 제목 페이지 공통)',
+                                              controller:
+                                                  _titlePageTopTextController,
+                                              hintText:
+                                                  _defaultTitlePageTopText,
+                                            ),
                                           if (widget.isAssignmentTemplate)
                                             _buildCoverTextField(
                                               label:
@@ -4092,28 +4951,50 @@ class _ProblemBankExportServerPreviewDialogState
                                               hintText:
                                                   _defaultTitlePageGoalText,
                                             ),
-                                          _buildTitleSwitchTile(
-                                            label: '학원 로고',
-                                            description:
-                                                '모의고사형 제목 페이지에 학원 로고를 표시합니다.',
-                                            value: _includeAcademyLogo,
-                                            onChanged: (value) {
-                                              setState(() {
-                                                _includeAcademyLogo = value;
-                                              });
-                                            },
-                                          ),
-                                          _buildTitleSwitchTile(
-                                            label: '표지',
-                                            description:
-                                                'ON 시 맨 앞에 표지 1페이지 + 빈 페이지 1페이지를 추가합니다.',
-                                            value: _includeCoverPage,
-                                            onChanged: (value) {
-                                              setState(() {
-                                                _includeCoverPage = value;
-                                              });
-                                            },
-                                          ),
+                                          if (!widget.isGyeongsinTemplate &&
+                                              !widget.isNeunginTemplate &&
+                                              !widget.isDaeryunTemplate &&
+                                              !widget.isDongdoTemplate &&
+                                              !widget.isSoseonTemplate &&
+                                              !widget.isOseongTemplate &&
+                                              !widget.isJeonghwaTemplate &&
+                                              !widget.isHwanggeumTemplate)
+                                            _buildTitleSwitchTile(
+                                              label: '학원 로고',
+                                              description:
+                                                  '모의고사형 제목 페이지에 학원 로고를 표시합니다.',
+                                              value: _includeAcademyLogo,
+                                              onChanged: (value) {
+                                                setState(() {
+                                                  _includeAcademyLogo = value;
+                                                });
+                                              },
+                                            ),
+                                          if (!widget.isDaeryunTemplate &&
+                                              !widget.isDongdoTemplate)
+                                            _buildTitleSwitchTile(
+                                              label: '표지',
+                                              description:
+                                                  widget.isNeunginTemplate
+                                                  ? 'ON 시 능인중 문제지 표지를 단면인쇄용(표지 + 빈 페이지)으로 앞에 추가합니다.'
+                                                  : (widget.isSoseonTemplate
+                                                        ? 'ON 시 소선여중 문제지 표지를 단면인쇄용(표지 + 빈 페이지)으로 앞에 추가합니다.'
+                                                        : (widget.isOseongTemplate
+                                                              ? 'ON 시 오성중 문제지 표지를 단면인쇄용(표지 + 빈 페이지)으로 앞에 추가합니다.'
+                                                              : (widget.isJeonghwaTemplate
+                                                                    ? 'ON 시 정화중 문제지 표지를 단면인쇄용(표지 + 빈 페이지)으로 앞에 추가합니다.'
+                                                                    : (widget.isHwanggeumTemplate
+                                                                          ? 'ON 시 황금중 문제지 표지를 단면인쇄용(표지 + 빈 페이지)으로 앞에 추가합니다.'
+                                                                          : (widget.isGyeongsinTemplate
+                                                                                ? 'ON 시 경신중 [문제지 표지]를 단면인쇄용(표지 + 빈 페이지)으로 앞에 추가합니다.'
+                                                                                : 'ON 시 맨 앞에 표지 1페이지 + 빈 페이지 1페이지를 추가합니다.'))))),
+                                              value: _includeCoverPage,
+                                              onChanged: (value) {
+                                                setState(() {
+                                                  _includeCoverPage = value;
+                                                });
+                                              },
+                                            ),
                                           _buildTitleSwitchTile(
                                             label: '점수',
                                             description:
@@ -4173,7 +5054,15 @@ class _ProblemBankExportServerPreviewDialogState
                                               });
                                             },
                                           ),
-                                          if (_includeCoverPage)
+                                          if (_includeCoverPage &&
+                                              !widget.isGyeongsinTemplate &&
+                                              !widget.isNeunginTemplate &&
+                                              !widget.isDaeryunTemplate &&
+                                              !widget.isDongdoTemplate &&
+                                              !widget.isSoseonTemplate &&
+                                              !widget.isOseongTemplate &&
+                                              !widget.isJeonghwaTemplate &&
+                                              !widget.isHwanggeumTemplate)
                                             _buildCoverPageTextEditor(),
                                           const SizedBox(height: 4),
                                           Text(

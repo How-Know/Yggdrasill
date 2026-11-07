@@ -110,6 +110,11 @@ class PrintRoutingService {
       case 'JISB5':
       case 'ISOB5':
         return 'B5';
+      case '8K':
+      case 'K8':
+      case 'PRC8K':
+      case 'ROC8K':
+        return '8K';
       case 'LETTER':
       case 'NORTHAMERICALETTER':
         return 'NorthAmericaLetter';
@@ -600,6 +605,9 @@ class PrintRoutingService {
         break;
       case 'B5':
         pjlToken = 'JISB5';
+        break;
+      case '8K':
+        pjlToken = '8K';
         break;
       case 'NorthAmericaLetter':
         pjlToken = 'LETTER';

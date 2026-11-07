@@ -80,13 +80,33 @@ Worker `gateway/src/mock_exam_worker.js` (pm2 `ygg-mock-exam`) picks up
    'mock_past'`, `meta.mock_scope`) and one extract job each. The extract worker
    uses the item pages as expected numbers and the answers as the answer
    sidecar, then writes `pb_question_id` back to the items.
+4. **Export presets (`gateway/src/mock_exam/mock_preset.js`).** When a grade-3
+   exam has its common 22 and elective 8 `pb_questions` extracted, the worker
+   automatically upserts one `pb_export_presets` row (`preset_kind = 'settings'`,
+   `render_config.mockExamLinkKey = 'H3|{year}|{month}|{org}|{elective}'`) per
+   elective paper (30 questions combined). It fixes the 12-page 2-column slot
+   counts (`2/2, 2/1, 2/1, 1/1, 1/1, 1/2, 2/1, 1/1, 1/1, 1/1, 1/1, 1/1`),
+   title pages `[1, 9]`, objective/short-answer anchors (`5지선다형` on p.1 & p.9,
+   `단답형` on p.6 & p.12, `선택과목(...)` notice on p.8, `확인 사항` on p.12),
+   `paperSize = '8절'`, `includeQuestionScore = true`, and the original-style
+   `titlePageTopText` (수능 / 평가원 6·9월 모의평가 / 교육청 전국연합학력평가).
 
 Re-runs set `progress.request`: `all` and `crops` re-queue problem-bank
 extraction; `solutions` only re-reads the solution PDFs and keeps the existing
 section documents; `problem_bank` only re-queues extraction.
 
 Bulk import from a folder: `node scripts/mock_exam_enqueue.mjs --academy <id>
-<pdf> ...` (same file-name rule as the manager dialog).
+<pdf> ...` (same file-name rule as the manager dialog). `--register` uploads the
+PDFs and leaves the exam in `draft`, so the learning-app card and the manager
+list appear without starting extraction. The manager's re-run menu then queues
+extraction from those stored PDFs.
+
+The mock-exam worker also watches the Dropbox `- 모의고사` folder (or
+`MOCK_EXAM_DIR`) about every 30 seconds and registers new or changed files the
+same way, without queueing. The exam desk, after it places a PDF, runs that
+register step immediately when this PC has the gateway folder and Node. A file
+that arrives only through Dropbox is picked up by the watcher. Exams already in
+`review` keep their stored PDFs.
 
 ## Manager workspace
 
@@ -102,14 +122,21 @@ Mock documents are kept out of the 내신 tree (`meta.extract_mode =
 ## Learning app
 
 Resources → exam tab → "고N 모의고사" folder (virtual roots
-`exam-folder-H{1,2,3}-mock`). `MockExamResourceService` lists exams in `review`
-as cards: one per problem paper, so 고3 has one card per elective (common 22 +
-that elective's 8; common pages are the same in every elective paper) and 고1/2
-have one card per exam. A card opens `TextbookExplorerController` in mock mode:
-number cards first, then item cards or the original PDF (signed URL of the
-problem paper). Item cards use the linked `pb_questions`, which the learning app
-reads only when `is_published = true`, so they appear after the manager
-publishes the section documents. Number cards and the original work before that.
+`exam-folder-H{1,2,3}-mock`). Under each grade, a month folder (`3월`, `4월`,
+…) appears only when that grade has a paper in that month. The grade folder
+shows every month; a month folder shows that month. `MockExamResourceService`
+lists every exam that
+has a problem paper, including ones still in `draft`. One card per problem
+paper, so 고3 has one card per elective (common 22 + that elective's 8; common
+pages are the same in every elective paper) and 고1/2 have one card per exam.
+The card is the same `ExamPaperCard` as 내신, with the footer "탭하여 번호·문항
+보기". A card opens `TextbookExplorerController` only when its questions have
+been extracted: grades 1·2 need items, and a grade-3 card needs items in that
+elective. It then shows number cards, then item cards. Original PDF is not
+offered. Exams without those items are cards only. Item cards use the linked
+`pb_questions`, which the learning app reads only when `is_published = true`,
+so they appear after the manager publishes the section documents. Number cards
+work before that.
 
 ## Not in this build
 

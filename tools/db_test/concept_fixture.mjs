@@ -49,6 +49,7 @@ export const CONCEPT_FILES = [
   '20261031020000_concept_draft_confirm_statements.sql',
   '20261031130000_concept_review_progress_fair_queue.sql',
   '20261101003000_concept_review_open_required_scopes.sql',
+  '20261104150000_concept_review_held_compared_rereview.sql',
 ];
 
 const CONCEPT_STUBS = `

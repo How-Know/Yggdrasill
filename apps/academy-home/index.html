@@ -44,12 +44,18 @@
       letter-spacing: -0.016em;
       line-height: 1.38;
     }
+    .actions {
+      margin-top: 40px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    }
     .sheet {
-      margin-top: 26px;
-      display: inline-flex;
+      display: flex;
       align-items: center;
       justify-content: center;
-      min-width: 112px;
+      width: 200px;
       height: 44px;
       padding: 0 22px;
       border: 0;
@@ -62,6 +68,12 @@
       cursor: pointer;
     }
     .sheet:hover { background: #45b289; }
+    a.quiet {
+      background: #e5e5ea;
+      color: #1d1d1f;
+    }
+    a.quiet:hover { background: #d1d1d6; }
+    a.sheet { text-decoration: none; }
     .sheet:focus-visible {
       outline: 2px solid #33a373;
       outline-offset: 3px;
@@ -73,15 +85,121 @@
       font-size: 12px;
       letter-spacing: -0.01em;
     }
+
+    /* 첫 화면 모션
+       빼기: 아래 main의 class="intro"만 지운다.
+       고치기: 시간 --intro-time, 이동 --intro-rise, 가속 --intro-ease */
+    main.intro {
+      --intro-ease: cubic-bezier(0.16, 1, 0.3, 1);
+      --intro-rise: 22px;
+      --intro-time: 1.5s;
+      --intro-blur: 6px;
+    }
+    main.intro .logo {
+      animation: intro-logo 1.7s var(--intro-ease) 0.08s both;
+    }
+    main.intro h1 {
+      animation: intro-title var(--intro-time) var(--intro-ease) 0.28s both;
+    }
+    main.intro .lead {
+      animation: intro-rise 1.35s var(--intro-ease) 0.5s both;
+    }
+    main.intro .sheet:nth-child(1) { animation: intro-rise 1.15s var(--intro-ease) 0.72s both; }
+    main.intro .sheet:nth-child(2) { animation: intro-rise 1.15s var(--intro-ease) 0.86s both; }
+    main.intro .sheet:nth-child(3) { animation: intro-rise 1.15s var(--intro-ease) 1s both; }
+    main.intro footer {
+      animation: intro-fade 1.4s var(--intro-ease) 1.05s both;
+    }
+    @keyframes intro-logo {
+      from { opacity: 0; transform: scale(0.94); }
+      to { opacity: 1; transform: none; }
+    }
+    @keyframes intro-title {
+      from {
+        opacity: 0;
+        transform: translateY(var(--intro-rise));
+        filter: blur(var(--intro-blur));
+        letter-spacing: -0.012em;
+      }
+      to {
+        opacity: 1;
+        transform: none;
+        filter: none;
+        letter-spacing: -0.03em;
+      }
+    }
+    @keyframes intro-rise {
+      from { opacity: 0; transform: translateY(var(--intro-rise)); }
+      to { opacity: 1; transform: none; }
+    }
+    @keyframes intro-fade {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      main.intro .logo,
+      main.intro h1,
+      main.intro .lead,
+      main.intro .sheet,
+      main.intro footer {
+        animation: none;
+      }
+    }
   </style>
+  <link rel="stylesheet" href="/chrome.css">
 </head>
 <body>
-  <main>
+  <header class="phonebar">
+    <a class="phonebar-name" href="/">정현수학교습소</a>
+    <div class="phonebar-tools">
+      <button class="iconbtn" type="button" id="open-search" aria-label="검색">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="11" cy="11" r="6.25" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <path d="M15.8 15.8 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        </svg>
+      </button>
+      <button class="iconbtn" type="button" id="open-menu" aria-label="메뉴" aria-expanded="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 7h16M4 12h16M4 17h16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+  <div class="panel" id="menu-panel" hidden>
+    <div class="panel-top">
+      <button class="iconbtn" type="button" data-close aria-label="닫기">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </div>
+    <a href="/notices">공지</a>
+    <a href="/location">위치</a>
+    <a href="/consult">신규 상담</a>
+  </div>
+  <div class="panel" id="search-panel" hidden>
+    <div class="panel-top">
+      <button class="iconbtn" type="button" data-close aria-label="닫기">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </div>
+    <input class="panel-search" id="site-search" type="search" placeholder="검색" autocomplete="off" enterkeyhint="search">
+    <div id="search-list"></div>
+    <p class="panel-empty" id="search-empty" hidden>없는 메뉴입니다.</p>
+  </div>
+  <main class="intro">
     <img class="logo" src="logo.png" alt="">
     <h1>정현수학교습소</h1>
     <p class="lead">디테일한 강의, 초개인화된 수업</p>
-    <button class="sheet" type="button">알림장</button>
+    <div class="actions">
+      <a class="sheet quiet" href="/notices">공지</a>
+      <a class="sheet quiet" href="/location">위치</a>
+      <a class="sheet" href="/consult">신규 상담</a>
+    </div>
     <footer>Copyright © 2026 정현수학교습소</footer>
   </main>
+  <script src="/chrome.js"></script>
 </body>
 </html>

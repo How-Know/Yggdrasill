@@ -9,10 +9,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import sharp from 'sharp';
 import { checkXeLatexInstallation, getXeLatexBinary } from './check_installation.js';
+import { resolveSchoolBranding } from '../school_branding.js';
 import {
   buildTexSource,
   buildDocumentTexSource,
@@ -407,10 +409,28 @@ function ensureInstalled() {
 }
 
 function countPdfPages(pdfPath) {
+  try {
+    const logPath = pdfPath.replace(/\.pdf$/i, '.log');
+    if (fs.existsSync(logPath)) {
+      const logStr = fs.readFileSync(logPath, 'utf-8');
+      const logMatch = logStr.match(/Output written on [\s\S]*?\((\d+)\s+pages?\)/i);
+      if (logMatch) {
+        const count = Number.parseInt(logMatch[1], 10);
+        if (Number.isFinite(count) && count > 0) return count;
+      }
+    }
+  } catch (_) {
+    // ignore log read failure
+  }
   const buf = fs.readFileSync(pdfPath);
   const str = buf.toString('latin1');
   const matches = str.match(/\/Type\s*\/Page(?!s)/g);
-  return matches ? matches.length : 1;
+  if (matches && matches.length > 0) return matches.length;
+  const countMatches = [...str.matchAll(/\/Count\s+(\d+)/g)]
+    .map((m) => Number.parseInt(m[1], 10))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  if (countMatches.length > 0) return Math.max(...countMatches);
+  return 1;
 }
 
 function normalizeHexColor(raw, fallback = 'EAF2F7') {
@@ -899,14 +919,76 @@ export async function renderPdfWithXeLatex({
   const questionNumberFormat = String(renderConfig?.questionNumberFormat || 'source').trim();
   const geometryOverride = String(renderConfig?.geometryOverride || '').trim();
   const fontFamily = fontFamilyResolved || fontFamilyRequested || 'Malgun Gothic';
-  const isMockProfile = profile === 'mock' || profile === 'csat' || profile === 'assignment';
+  const isMockProfile =
+    profile === 'mock' ||
+    profile === 'csat' ||
+    profile === 'assignment' ||
+    profile === 'gyeongsin' ||
+    profile === 'neungin' ||
+    profile === 'daeryun' ||
+    profile === 'dongdo' ||
+    profile === 'soseon' ||
+    profile === 'oseong' ||
+    profile === 'jeonghwa' ||
+    profile === 'hwanggeum';
   const cols = (Number(layoutColumns || 1) >= 2 || isMockProfile) ? 2 : 1;
 
   try {
     await hydrateFiguresForXeLatex(questions || [], supabaseClient, workDir);
+    if (supabaseClient && Array.isArray(questions) && questions.length > 0) {
+      const docIds = [...new Set(
+        questions
+          .filter((q) => !q?.course_label && !q?.courseLabel && !q?.meta?.mock_exam_item?.section)
+          .map((q) => String(q?.document_id || q?.documentId || '').trim())
+          .filter(Boolean),
+      )];
+      if (docIds.length > 0) {
+        try {
+          const { data: docRows } = await supabaseClient
+            .from('pb_documents')
+            .select('id,course_key,course_label')
+            .in('id', docIds);
+          if (Array.isArray(docRows)) {
+            const byId = new Map(docRows.map((d) => [String(d.id || ''), d]));
+            for (const q of questions) {
+              const doc = byId.get(String(q?.document_id || q?.documentId || '').trim());
+              if (doc) {
+                if (!q.course_key) q.course_key = String(doc.course_key || '');
+                if (!q.course_label) q.course_label = String(doc.course_label || '');
+              }
+            }
+          }
+        } catch (_) {}
+      }
+    }
 
     const includeAcademyLogo = renderConfig?.includeAcademyLogo === true;
     const includeCoverPage = renderConfig?.includeCoverPage === true;
+    let gyeongsinLogoPath = '';
+    let gyeongsinSchoolName = '';
+    if (profile === 'gyeongsin' || profile === 'neungin' || profile === 'daeryun' || profile === 'dongdo' || profile === 'soseon' || profile === 'oseong' || profile === 'jeonghwa' || profile === 'hwanggeum') {
+      const branding = await resolveSchoolBranding({
+        questions,
+        supabaseClient,
+        workDir,
+        includeLogo: profile === 'neungin' ? true : ((profile === 'daeryun' || profile === 'dongdo' || profile === 'oseong') ? false : includeCoverPage),
+        defaultSchoolKey: profile === 'neungin'
+          ? '능인중'
+          : (profile === 'daeryun'
+              ? '대륜중'
+              : (profile === 'dongdo'
+                  ? '동도중'
+                  : (profile === 'soseon'
+                      ? '소선여중'
+                      : (profile === 'oseong'
+                          ? '오성중'
+                          : (profile === 'jeonghwa'
+                              ? '정화중'
+                              : (profile === 'hwanggeum' ? '황금중' : '경신중')))))),
+      });
+      gyeongsinLogoPath = branding.logoPath;
+      gyeongsinSchoolName = branding.schoolName;
+    }
     const coverPageTexts = (renderConfig?.coverPageTexts && typeof renderConfig.coverPageTexts === 'object')
       ? renderConfig.coverPageTexts
       : {};
@@ -962,6 +1044,8 @@ export async function renderPdfWithXeLatex({
       academyName,
       includeCoverPage,
       coverPageTexts,
+      gyeongsinLogoPath,
+      gyeongsinSchoolName,
       includeQuestionScore,
       questionScoreByQuestionId,
       includeQuickAnswer,
@@ -1188,8 +1272,12 @@ export async function renderPdfWithXeLatex({
         applied: pairAnchor2PassApplied,
         corrections: pairAnchorSummary,
       },
-      titlePageIndices: titlePageIndices.length > 0 ? titlePageIndices : [1],
-      titlePageHeaders,
+      titlePageIndices: Array.isArray(layoutMeta.titlePageIndices) && layoutMeta.titlePageIndices.length > 0
+        ? layoutMeta.titlePageIndices
+        : (titlePageIndices.length > 0 ? titlePageIndices : [1]),
+      titlePageHeaders: Array.isArray(layoutMeta.titlePageHeaders) && layoutMeta.titlePageHeaders.length > 0
+        ? layoutMeta.titlePageHeaders
+        : titlePageHeaders,
       // 측정 기반 자동 배치가 적용된 경우 최종 페이지/컬럼 배치를 노출.
       pageColumnQuestionCounts: Array.isArray(layoutMeta?.slotPlacement?.pageColumnCounts)
         ? layoutMeta.slotPlacement.pageColumnCounts.map((one, idx) => ({

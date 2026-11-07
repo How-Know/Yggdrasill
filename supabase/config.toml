@@ -15,4 +15,10 @@ verify_jwt = false
 [functions.todo_sheet_public]
 verify_jwt = false
 
+[functions.consultation_request]
+verify_jwt = false
+
+[functions.academy_notices_public]
+verify_jwt = false
+
 

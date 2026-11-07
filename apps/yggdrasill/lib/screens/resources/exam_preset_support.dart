@@ -8,12 +8,19 @@ class ExamFolderSelection {
     required this.gradeKey,
     this.school,
     this.isMock = false,
+    this.month,
   });
 
   final String gradeKey;
   final String? school;
   final bool isMock;
+
+  /// 모의고사 월 폴더. 학년 폴더를 고르면 null.
+  final int? month;
 }
+
+String mockExamMonthFolderId(String gradeKey, int month) =>
+    'exam-folder-$gradeKey-mock-m$month';
 
 ExamFolderSelection? parseExamFolderSelection(String? folderId) {
   if (folderId == null || folderId.isEmpty || folderId == '__FAVORITES__') {
@@ -22,6 +29,16 @@ ExamFolderSelection? parseExamFolderSelection(String? folderId) {
   if (!folderId.startsWith('exam-folder-')) return null;
 
   final tail = folderId.substring('exam-folder-'.length);
+  final mockMonth = RegExp(r'^(H[123])-mock-m(\d{1,2})$').firstMatch(tail);
+  if (mockMonth != null) {
+    final month = int.tryParse(mockMonth.group(2) ?? '');
+    if (month == null || month < 1 || month > 12) return null;
+    return ExamFolderSelection(
+      gradeKey: mockMonth.group(1)!,
+      isMock: true,
+      month: month,
+    );
+  }
   if (tail.endsWith('-mock')) {
     final gradeKey = tail.substring(0, tail.length - '-mock'.length);
     if (gradeKey.isEmpty) return null;

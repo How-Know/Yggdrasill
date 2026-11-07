@@ -15879,6 +15879,16 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           preset: latestPreset,
         );
       },
+      onOpenPreset: (preset) async {
+        await ProblemBankDocumentPresetPreviewLauncher(
+          service: _service,
+          showSnack: _showSnack,
+        ).openPreset(
+          context: context,
+          academyId: academyId,
+          preset: preset,
+        );
+      },
     );
   }
 

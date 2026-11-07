@@ -8,3 +8,11 @@
 [[edge_functions]]
   function = "sheet"
   path = "/s/"
+
+[[edge_functions]]
+  function = "consult"
+  path = "/api/consult"
+
+[[edge_functions]]
+  function = "notices"
+  path = "/api/notices"

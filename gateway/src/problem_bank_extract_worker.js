@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { generateQuestionPreviews } from './problem_bank_preview_service.js';
 import { joinGeminiTextParts } from './problem_bank/extract_engines/vlm/client.js';
 import { runVlmExtraction } from './problem_bank/extract_engines/vlm/runner.js';
+import { syncMockExamPresetsForExam } from './mock_exam/mock_preset.js';
 
 const htmlDecode = hePkg.decode;
 
@@ -5771,6 +5772,25 @@ async function processOneJob(job) {
       '[pb-extract-worker] mock_exam_item_links',
       JSON.stringify({ jobId: job.id, linked }),
     );
+    const mockExamId = compact(doc?.meta?.mock_scope?.exam_id);
+    if (mockExamId) {
+      try {
+        const presetSync = await syncMockExamPresetsForExam(supa, mockExamId);
+        console.log(
+          '[pb-extract-worker] mock_exam_presets_synced',
+          JSON.stringify({ jobId: job.id, examId: mockExamId, synced: presetSync.synced }),
+        );
+      } catch (presetErr) {
+        console.warn(
+          '[pb-extract-worker] mock_exam_presets_sync_skip',
+          JSON.stringify({
+            jobId: job.id,
+            examId: mockExamId,
+            message: compact(presetErr?.message || presetErr),
+          }),
+        );
+      }
+    }
   }
 
   let setDeliveryStats = { sets: 0, items: 0, deliveryUnits: 0, skipped: true };

@@ -2290,17 +2290,19 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           ),
         };
         if (presetSettings.layoutColumnCount == 2) {
+          final presetAnchors = readMapRows(
+            preset.renderConfig['columnLabelAnchors'],
+            const <dynamic>[],
+          );
           initialRenderPatch = <String, dynamic>{
             ...initialRenderPatch,
+            'disableAutoLabels': presetAnchors.isNotEmpty,
             'layoutMode': 'custom_columns',
             'pageColumnQuestionCounts': readMapRows(
               preset.renderConfig['pageColumnQuestionCounts'],
               const <dynamic>[],
             ),
-            'columnLabelAnchors': readMapRows(
-              preset.renderConfig['columnLabelAnchors'],
-              const <dynamic>[],
-            ),
+            'columnLabelAnchors': presetAnchors,
             'titlePageIndices': readPositiveIntList(
               preset.renderConfig['titlePageIndices'],
               const <dynamic>[],
@@ -2311,6 +2313,51 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             ),
           };
         }
+      }
+
+      Map<String, dynamic>? gyeongsinInitialCoverTexts;
+      bool? gyeongsinInitialIncludeCover;
+      if (_exportSettings.templateProfile == 'gyeongsin' ||
+          _exportSettings.templateProfile == 'neungin' ||
+          _exportSettings.templateProfile == 'daeryun' ||
+          _exportSettings.templateProfile == 'dongdo' ||
+          _exportSettings.templateProfile == 'soseon' ||
+          _exportSettings.templateProfile == 'oseong' ||
+          _exportSettings.templateProfile == 'jeonghwa' ||
+          _exportSettings.templateProfile == 'hwanggeum') {
+        final isNoCoverSchool = _exportSettings.templateProfile == 'daeryun' ||
+            _exportSettings.templateProfile == 'dongdo';
+        final presetConfig =
+            presetToApply?.renderConfig ?? const <String, dynamic>{};
+        final presetCoverTexts = readCoverPageTexts(
+          presetConfig['coverPageTexts'],
+          const <String, dynamic>{},
+        );
+        // 경신중/능인중/대륜중/동도중 표지 문구가 저장된 프리셋만 사용자가 직접 정한 표지 설정으로 본다.
+        final presetHasGyeongsinCover = presetCoverTexts.containsKey(
+              'coverExamTitle',
+            ) ||
+            presetCoverTexts.containsKey('headerExamTitle');
+        final autoTexts = buildGyeongsinAutoCoverTexts(selected);
+        gyeongsinInitialCoverTexts = <String, dynamic>{
+          ...presetCoverTexts,
+          ...autoTexts,
+          if (presetHasGyeongsinCover) ...{
+            for (final key in const ['coverExamTitle', 'headerExamTitle'])
+              if ('${presetCoverTexts[key] ?? ''}'.trim().isNotEmpty)
+                key: presetCoverTexts[key],
+          },
+        };
+        gyeongsinInitialIncludeCover = isNoCoverSchool
+            ? false
+            : (presetHasGyeongsinCover
+                  ? readBoolFlag(presetConfig['includeCoverPage'], null, true)
+                  : true);
+        initialRenderPatch = <String, dynamic>{
+          ...initialRenderPatch,
+          'includeCoverPage': gyeongsinInitialIncludeCover,
+          'coverPageTexts': gyeongsinInitialCoverTexts,
+        };
       }
 
       final completed = await _ensureCompletedExportForSelection(
@@ -2392,6 +2439,14 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             ? kLearningDefaultTitlePageGoalText
             : initialTitlePageGoalText,
         isAssignmentTemplate: _exportSettings.templateProfile == 'assignment',
+        isGyeongsinTemplate: _exportSettings.templateProfile == 'gyeongsin',
+        isNeunginTemplate: _exportSettings.templateProfile == 'neungin',
+        isDaeryunTemplate: _exportSettings.templateProfile == 'daeryun',
+        isDongdoTemplate: _exportSettings.templateProfile == 'dongdo',
+        isSoseonTemplate: _exportSettings.templateProfile == 'soseon',
+        isOseongTemplate: _exportSettings.templateProfile == 'oseong',
+        isJeonghwaTemplate: _exportSettings.templateProfile == 'jeonghwa',
+        isHwanggeumTemplate: _exportSettings.templateProfile == 'hwanggeum',
         initialTimeLimitText: initialTimeLimitText,
         initialIncludeAcademyLogo: readBoolFlag(
           initialPrimary('includeAcademyLogo'),
@@ -2417,11 +2472,12 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           initialPrimary('titlePageHeaders'),
           initialFallback('titlePageHeaders'),
         ),
-        initialIncludeCoverPage: readBoolFlag(
-          initialPrimary('includeCoverPage'),
-          initialFallback('includeCoverPage'),
-          false,
-        ),
+        initialIncludeCoverPage: gyeongsinInitialIncludeCover ??
+            readBoolFlag(
+              initialPrimary('includeCoverPage'),
+              initialFallback('includeCoverPage'),
+              false,
+            ),
         initialIncludeAnswerSheet: readBoolFlag(
           initialPrimary('includeAnswerSheet'),
           initialFallback('includeAnswerSheet'),
@@ -2445,10 +2501,11 @@ class _ProblemBankViewState extends State<ProblemBankView> {
               initialFallback('questionScoreByQuestionId'),
         ),
         questionScoreEntries: scoreEntries,
-        initialCoverPageTexts: readCoverPageTexts(
-          initialPrimary('coverPageTexts'),
-          initialFallback('coverPageTexts'),
-        ),
+        initialCoverPageTexts: gyeongsinInitialCoverTexts ??
+            readCoverPageTexts(
+              initialPrimary('coverPageTexts'),
+              initialFallback('coverPageTexts'),
+            ),
         initialEditingPresetId: editingPresetId,
         initialEditingPresetName: editingPresetName,
         assignmentFlowNames: StudentFlow.defaultNames,
@@ -4408,10 +4465,28 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                   layoutColumnLabel: '2단',
                   maxQuestionsPerPageLabel: '4',
                 );
-              } else if (value == '모의고사형' || value == '수능형') {
+              } else if (value == '모의고사형' ||
+                  value == '수능형' ||
+                  value == '경신중' ||
+                  value == '능인중' ||
+                  value == '대륜중' ||
+                  value == '동도중' ||
+                  value == '소선여중' ||
+                  value == '오성중' ||
+                  value == '정화중' ||
+                  value == '황금중') {
                 _exportSettings = _exportSettings.copyWith(
                   templateLabel: value,
-                  paperLabel: 'B4',
+                  paperLabel: (value == '경신중' ||
+                          value == '능인중' ||
+                          value == '대륜중' ||
+                          value == '동도중' ||
+                          value == '소선여중' ||
+                          value == '오성중' ||
+                          value == '정화중' ||
+                          value == '황금중')
+                      ? 'B4'
+                      : '8절',
                   layoutColumnLabel: '2단',
                   maxQuestionsPerPageLabel: '4',
                 );

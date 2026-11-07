@@ -58,4 +58,37 @@ void main() {
       isNull,
     );
   });
+
+  test('모의고사 프리셋 여부를 mockExamLinkKey 또는 mockExamMeta로 판별한다', () {
+    final naesin = ProblemBankExportPreset.fromMap(<String, dynamic>{
+      'id': 'naesin-1',
+      'academy_id': 'academy-1',
+      'display_name': '2025 대륜고 1학기 기말',
+      'preset_kind': 'settings',
+      'render_config': <String, dynamic>{
+        'naesinLinkKey': 'H2|H-math1|기말고사|대륜고|2025|',
+      },
+    });
+    final mock = ProblemBankExportPreset.fromMap(<String, dynamic>{
+      'id': 'mock-1',
+      'academy_id': 'academy-1',
+      'display_name': '2025 고3 11월 수능 (미적분)',
+      'preset_kind': 'settings',
+      'render_config': <String, dynamic>{
+        'mockExamLinkKey': 'H3|2025|11|csat|calculus',
+        'mockExamMeta': <String, dynamic>{
+          'grade': 3,
+          'examYear': 2025,
+          'examMonth': 11,
+          'org': 'csat',
+          'electiveLabel': '미적분',
+        },
+      },
+    });
+
+    expect(naesin.isMockExamPreset, isFalse);
+    expect(mock.isMockExamPreset, isTrue);
+    expect(mock.mockExamLinkKey, 'H3|2025|11|csat|calculus');
+    expect(mock.mockExamMeta['electiveLabel'], '미적분');
+  });
 }

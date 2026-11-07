@@ -66,6 +66,7 @@ import '../widgets/latex_text_renderer.dart';
 import '../widgets/fab_style_home_screen_header.dart';
 import '../widgets/solid_capsule_action_bar.dart';
 import '../widgets/attendance_rank_dialog.dart';
+import '../widgets/academy_notice_dialog.dart';
 import '../services/student_textbook_report_service.dart';
 import '../widgets/textbook_report_review_dialog.dart';
 import '../utils/homework_card_label.dart';
@@ -1001,6 +1002,11 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                         ),
                       ),
                   ],
+                ),
+                SolidCapsuleActionButton(
+                  tooltip: '공지',
+                  icon: Icons.campaign_rounded,
+                  onPressed: () => unawaited(showAcademyNoticeDialog(context)),
                 ),
               ],
             ),
@@ -4445,9 +4451,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           _showHomeworkChipSnackBar(context, '알림장 인쇄에 실패했어요: $e');
         }
       }
-      if (snapshotId != null && context.mounted) {
-        await showTodoSheetShareLinkAfterDeparture(
-          context: context,
+      if (snapshotId != null) {
+        watchTodoSheetShareLinkIfAlimtalkFails(
+          attendanceId: savedAttendanceId,
           studentId: studentId,
           studentName: student.name,
           snapshotId: snapshotId,
@@ -17581,9 +17587,19 @@ bool _isCompatiblePbExportForPrint({
   required List<String> selectedQuestionUids,
   required bool followsOriginalQuestionTypes,
 }) {
-  final expectedTemplate = templateProfile.trim() == 'assignment'
-      ? 'naesin'
-      : templateProfile.trim();
+  final trimmedTemplate = templateProfile.trim();
+  final expectedTemplate =
+      (trimmedTemplate == 'assignment' ||
+              trimmedTemplate == 'gyeongsin' ||
+              trimmedTemplate == 'neungin' ||
+              trimmedTemplate == 'daeryun' ||
+              trimmedTemplate == 'dongdo' ||
+              trimmedTemplate == 'soseon' ||
+              trimmedTemplate == 'oseong' ||
+              trimmedTemplate == 'jeonghwa' ||
+              trimmedTemplate == 'hwanggeum')
+          ? 'naesin'
+          : trimmedTemplate;
   final jobFollowsOriginalQuestionTypes =
       job.options['naesinOriginalModePolicyVersion'] == 1;
   return !job.previewOnly &&

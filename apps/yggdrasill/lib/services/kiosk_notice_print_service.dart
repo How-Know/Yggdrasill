@@ -122,7 +122,7 @@ class KioskNoticePrintService {
   }
 
   /// 스탠바이미 하원은 이 PC의 하원 버튼과 달리 출결 갱신으로만 들어온다.
-  /// 알림장에 동의한 학생만, 인쇄가 있으면 인쇄 뒤에 같은 링크 창을 띄운다.
+  /// 알림장에 동의한 학생만, 하원 알림톡이 실패하면 링크 창을 띄운다.
   void _scheduleRemoteShareLink(Map<String, dynamic> m) {
     final id = (m['id'] as String?)?.trim() ?? '';
     final studentId = (m['student_id'] as String?)?.trim() ?? '';
@@ -187,7 +187,9 @@ class KioskNoticePrintService {
         classEndTime: parse(m['class_end_time']),
         setId: m['set_id'] as String?,
       );
-      await showTodoSheetShareLinkOnRoot(
+      if (snapshotId.isEmpty) return;
+      watchTodoSheetShareLinkIfAlimtalkFails(
+        attendanceId: attendanceId,
         studentId: studentId,
         studentName: studentName,
         snapshotId: snapshotId,

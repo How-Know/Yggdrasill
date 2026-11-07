@@ -25,11 +25,13 @@ class ExamPresetCard extends StatelessWidget {
     required this.preset,
     required this.onTap,
     this.busy = false,
+    this.printPick = false,
   });
 
   final LearningProblemDocumentExportPreset preset;
   final VoidCallback? onTap;
   final bool busy;
+  final bool printPick;
 
   @override
   Widget build(BuildContext context) {
@@ -37,12 +39,16 @@ class ExamPresetCard extends StatelessWidget {
     return ExamPaperCard(
       line1: parsed == null ? preset.displayName : examPresetCardLine1(parsed),
       line2: parsed == null ? '' : examPresetCardLine2(parsed),
-      footer: '탭하여 번호·문항 보기',
+      footer: printPick ? '탭하여 프리셋 인쇄' : kExamPaperCardFooter,
       onTap: onTap,
       busy: busy,
+      printPick: printPick,
     );
   }
 }
+
+/// 내신 프리셋과 모의고사 카드가 같이 쓰는 하단 안내.
+const String kExamPaperCardFooter = '탭하여 번호·문항 보기';
 
 /// 시험 카드 틀. 내신 프리셋과 모의고사 카드가 같이 쓴다.
 class ExamPaperCard extends StatelessWidget {
@@ -53,6 +59,7 @@ class ExamPaperCard extends StatelessWidget {
     required this.footer,
     required this.onTap,
     this.busy = false,
+    this.printPick = false,
   });
 
   final String line1;
@@ -60,6 +67,7 @@ class ExamPaperCard extends StatelessWidget {
   final String footer;
   final VoidCallback? onTap;
   final bool busy;
+  final bool printPick;
 
   @override
   Widget build(BuildContext context) {
@@ -70,9 +78,12 @@ class ExamPaperCard extends StatelessWidget {
     final subColor = isDark ? Colors.white70 : const Color(0xFF666666);
 
     return MouseRegion(
-      cursor:
-          onTap == null ? SystemMouseCursors.basic : SystemMouseCursors.click,
+      cursor: onTap == null
+          ? SystemMouseCursors.basic
+          : (printPick ? SystemMouseCursors.copy : SystemMouseCursors.click),
       child: GestureDetector(
+        behavior:
+            printPick ? HitTestBehavior.opaque : HitTestBehavior.deferToChild,
         onTap: busy ? null : onTap,
         child: Opacity(
           opacity: busy ? 0.65 : 1,

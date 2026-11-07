@@ -10,6 +10,7 @@ import '../widgets/settings_tab_icons.dart';
 import '../widgets/class_timetable_icon.dart';
 import '../widgets/schedule_calendar_icon.dart';
 import '../widgets/student_member_icon.dart';
+import '../widgets/consultation_phone_icon.dart';
 import '../widgets/tendency_puzzle_icon.dart';
 import 'design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import '../widgets/navigation_rail.dart';
@@ -3388,6 +3389,10 @@ class _MainScreenState extends State<MainScreen>
       filledSvg: studentMemberIconSvg,
     ),
     FabTabIconPair(
+      outlineSvg: consultationPhoneOutlineSvg,
+      filledSvg: consultationPhoneFilledSvg,
+    ),
+    FabTabIconPair(
       outlineSvg: tendencyPuzzleOutlineSvg,
       filledSvg: tendencyPuzzleIconSvg,
     ),
@@ -3454,7 +3459,7 @@ class _MainScreenState extends State<MainScreen>
       case 0:
         return const ['현황', '채점'];
       case 1:
-        return const ['학생', '성향'];
+        return const ['학생', '상담', '성향'];
       case 2:
         return const ['수업', '일정'];
       case 3:
@@ -4882,9 +4887,9 @@ class _MainScreenState extends State<MainScreen>
                       }
                     }
                   }
-                  if (snapshotId != null && context.mounted) {
-                    await showTodoSheetShareLinkAfterDeparture(
-                      context: context,
+                  if (snapshotId != null) {
+                    watchTodoSheetShareLinkIfAlimtalkFails(
+                      attendanceId: savedAttendanceId,
                       studentId: t.student.id,
                       studentName: t.student.name,
                       snapshotId: snapshotId,

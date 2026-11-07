@@ -29,6 +29,8 @@ import '../timetable/components/timetable_top_bar.dart';
 import '../../widgets/student_member_icon.dart';
 import '../../widgets/tendency_puzzle_icon.dart';
 import 'components/tendency_webview.dart';
+import 'components/consultation_requests_view.dart';
+import '../../widgets/consultation_phone_icon.dart';
 import 'components/student_registration_status_dialog.dart';
 import 'components/student_action_fab_overlay.dart';
 // removed student_details_dialog
@@ -52,7 +54,7 @@ void _dlog(String message) {
   }());
 }
 
-/// 학생 메뉴 페이지 타이틀. 학생·성향이 같은 크기와 간격을 쓴다.
+/// 학생 메뉴 페이지 타이틀. 학생·상담·성향이 같은 크기와 간격을 쓴다.
 class _StudentMenuPageTitle extends StatelessWidget {
   const _StudentMenuPageTitle({
     required this.svg,
@@ -195,7 +197,7 @@ class StudentScreenState extends State<StudentScreen> {
   }
 
   void _syncMemoFloatingVisibility() {
-    final isTendencyTab = _customTabIndex == 1;
+    final isTendencyTab = _customTabIndex == 2;
     // 학생 탭에서는 항상 메모 플로팅을 숨김
     hideGlobalMemoFloatingBanners.value = true;
     blockRightSideSheetOpen.value = isTendencyTab;
@@ -577,10 +579,16 @@ class StudentScreenState extends State<StudentScreen> {
               leading: Align(
                 alignment: Alignment.centerLeft,
                 child: _StudentMenuPageTitle(
-                  svg: _customTabIndex == 0
-                      ? studentMemberIconSvg
-                      : tendencyPuzzleIconSvg,
-                  title: _customTabIndex == 0 ? '학생' : '성향',
+                  svg: switch (_customTabIndex) {
+                    0 => studentMemberIconSvg,
+                    1 => consultationPhoneFilledSvg,
+                    _ => tendencyPuzzleIconSvg,
+                  },
+                  title: switch (_customTabIndex) {
+                    0 => '학생',
+                    1 => '상담',
+                    _ => '성향',
+                  },
                   color: panelStyle.title,
                 ),
               ),
@@ -599,9 +607,12 @@ class StudentScreenState extends State<StudentScreen> {
                   // FAB/탭바는 오버레이이므로 본문을 줄이지 않는다.
                   // 리스트·상세는 스크롤 하단 패딩으로 FAB 아래까지 지나간다.
                   return _buildAllStudentsView();
-                } else {
-                  // 성향 → 웹 설문 임베드
-                  return Container(
+                }
+                if (_customTabIndex == 1) {
+                  return const ConsultationRequestsView();
+                }
+                // 성향 → 웹 설문 임베드
+                return Container(
                     margin: const EdgeInsets.only(right: 24),
                     decoration: BoxDecoration(
                       color: context.yggSurfaceBase,
@@ -613,7 +624,6 @@ class StudentScreenState extends State<StudentScreen> {
                       child: const TendencyWebView(),
                     ),
                   );
-                }
               },
             ),
           ),

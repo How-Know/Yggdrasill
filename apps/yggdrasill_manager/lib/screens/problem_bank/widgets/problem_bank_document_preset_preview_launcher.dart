@@ -41,6 +41,84 @@ class ProblemBankDocumentPresetPreviewLauncher {
             academyId: academyId,
             questionUids: requestedUids,
           );
+    await _openSession(
+      context: context,
+      academyId: academyId,
+      sourceDocumentId: document.id,
+      preset: effectivePreset,
+      questions: _orderQuestionsByUids(questions, requestedUids),
+    );
+  }
+
+  Future<void> openPreset({
+    required BuildContext context,
+    required String academyId,
+    required ProblemBankExportPreset preset,
+  }) async {
+    final effectivePreset = await service.getExportPresetById(
+          academyId: academyId,
+          presetId: preset.id,
+        ) ??
+        preset;
+    final requestedUids = effectivePreset.selectedQuestionUids
+        .map((uid) => uid.trim())
+        .where((uid) => uid.isNotEmpty)
+        .toList(growable: false);
+    if (requestedUids.isEmpty) {
+      showSnack('프리셋에 연결된 문항이 없습니다.', error: true);
+      return;
+    }
+    final questions = await service.loadQuestionsByQuestionUids(
+      academyId: academyId,
+      questionUids: requestedUids,
+    );
+    final sourceDocumentId = effectivePreset.sourceDocumentId.trim().isNotEmpty
+        ? effectivePreset.sourceDocumentId.trim()
+        : (effectivePreset.sourceDocumentIds.isNotEmpty
+            ? effectivePreset.sourceDocumentIds.first.trim()
+            : (questions.isNotEmpty ? questions.first.documentId.trim() : ''));
+    if (sourceDocumentId.isEmpty) {
+      showSnack('프리셋 원본 문서를 찾을 수 없습니다.', error: true);
+      return;
+    }
+    await _openSession(
+      context: context,
+      academyId: academyId,
+      sourceDocumentId: sourceDocumentId,
+      preset: effectivePreset,
+      questions: _orderQuestionsByUids(questions, requestedUids),
+    );
+  }
+
+  List<ProblemBankQuestion> _orderQuestionsByUids(
+    List<ProblemBankQuestion> fetched,
+    List<String> requestedUids,
+  ) {
+    if (requestedUids.isEmpty || fetched.length <= 1) return fetched;
+    final indexByKey = <String, int>{};
+    for (var i = 0; i < requestedUids.length; i++) {
+      indexByKey.putIfAbsent(requestedUids[i].trim(), () => i);
+    }
+    final ordered = List<ProblemBankQuestion>.from(fetched)
+      ..sort((a, b) {
+        final ai = indexByKey[a.questionUid.trim()] ??
+            indexByKey[a.id.trim()] ??
+            1 << 20;
+        final bi = indexByKey[b.questionUid.trim()] ??
+            indexByKey[b.id.trim()] ??
+            1 << 20;
+        return ai.compareTo(bi);
+      });
+    return ordered;
+  }
+
+  Future<void> _openSession({
+    required BuildContext context,
+    required String academyId,
+    required String sourceDocumentId,
+    required ProblemBankExportPreset? preset,
+    required List<ProblemBankQuestion> questions,
+  }) async {
     if (questions.isEmpty) {
       showSnack('프리셋으로 만들 문항이 없습니다.', error: true);
       return;
@@ -48,8 +126,8 @@ class ProblemBankDocumentPresetPreviewLauncher {
     final session = _ManagerPresetPreviewSession(
       service: service,
       academyId: academyId,
-      document: document,
-      preset: effectivePreset,
+      sourceDocumentId: sourceDocumentId,
+      preset: preset,
       questions: questions,
       showSnack: showSnack,
     );
@@ -73,7 +151,7 @@ class _ManagerPresetPreviewSession {
   _ManagerPresetPreviewSession({
     required this.service,
     required this.academyId,
-    required this.document,
+    required this.sourceDocumentId,
     required this.preset,
     required this.questions,
     required this.showSnack,
@@ -85,13 +163,14 @@ class _ManagerPresetPreviewSession {
     final profile =
         '${renderConfig['templateProfile'] ?? 'csat'}'.trim().toLowerCase();
     if (profile == 'csat' || profile == 'mock') {
-      // 학습앱에서 모의고사형을 선택할 때와 동일하게 B4를 기본 용지로
-      // 적용한다. 초기 매니저 연동에서 잘못 저장된 A4 프리셋도 복구한다.
-      renderConfig['paperSize'] = 'B4';
+      renderConfig['paperSize'] = '8절';
     } else if (sourcePreset != null &&
         !sourcePreset.renderConfig.containsKey('paperSize') &&
         sourcePreset.paperSize.trim().isNotEmpty) {
       renderConfig['paperSize'] = sourcePreset.paperSize.trim();
+    }
+    if (_mapRows(renderConfig['columnLabelAnchors']).isEmpty) {
+      renderConfig['disableAutoLabels'] = false;
     }
     final followsOriginalQuestionTypes =
         '${renderConfig['naesinLinkKey'] ?? ''}'.trim().isNotEmpty;
@@ -158,12 +237,12 @@ class _ManagerPresetPreviewSession {
     'includeExplanation': false,
     'includeQuestionScore': false,
     'mathEngine': 'xelatex-v2',
-    'disableAutoLabels': true,
+    'disableAutoLabels': false,
   };
 
   final ProblemBankService service;
   final String academyId;
-  final ProblemBankDocument document;
+  final String sourceDocumentId;
   ProblemBankExportPreset? preset;
   final List<ProblemBankQuestion> questions;
   final void Function(String message, {bool error}) showSnack;
@@ -217,7 +296,7 @@ class _ManagerPresetPreviewSession {
     final nextConfig = config ?? renderConfig;
     final job = await service.createExportJob(
       academyId: academyId,
-      documentId: document.id,
+      documentId: sourceDocumentId,
       templateProfile:
           '${nextConfig['templateProfile'] ?? templateProfile}'.trim(),
       paperSize: '${nextConfig['paperSize'] ?? paperSize}'.trim(),
@@ -284,6 +363,24 @@ class _ManagerPresetPreviewSession {
           '${renderConfig['titlePageTopText'] ?? '2026학년도 대학수학능력시험 문제지'}',
       initialTitlePageGoalText:
           '${renderConfig['titlePageGoalText'] ?? '다시 풀기'}',
+      isAssignmentTemplate:
+          '${renderConfig['templateProfile'] ?? ''}'.trim() == 'assignment',
+      isGyeongsinTemplate:
+          '${renderConfig['templateProfile'] ?? ''}'.trim() == 'gyeongsin',
+      isNeunginTemplate:
+          '${renderConfig['templateProfile'] ?? ''}'.trim() == 'neungin',
+      isDaeryunTemplate:
+          '${renderConfig['templateProfile'] ?? ''}'.trim() == 'daeryun',
+      isDongdoTemplate:
+          '${renderConfig['templateProfile'] ?? ''}'.trim() == 'dongdo',
+      isSoseonTemplate:
+          '${renderConfig['templateProfile'] ?? ''}'.trim() == 'soseon',
+      isOseongTemplate:
+          '${renderConfig['templateProfile'] ?? ''}'.trim() == 'oseong',
+      isJeonghwaTemplate:
+          '${renderConfig['templateProfile'] ?? ''}'.trim() == 'jeonghwa',
+      isHwanggeumTemplate:
+          '${renderConfig['templateProfile'] ?? ''}'.trim() == 'hwanggeum',
       initialTimeLimitText: '${renderConfig['timeLimitText'] ?? ''}',
       layoutColumns: _readInt(renderConfig['layoutColumns'], 2),
       maxQuestionsPerPage: _readInt(renderConfig['maxQuestionsPerPage'], 4),
@@ -292,7 +389,7 @@ class _ManagerPresetPreviewSession {
         renderConfig['pageColumnQuestionCounts'],
         completed.resultSummary['pageColumnQuestionCounts'],
       ),
-      initialColumnLabelAnchors: _mapRows(
+      initialColumnLabelAnchors: _mapRowsPreferNonEmpty(
         renderConfig['columnLabelAnchors'],
         completed.resultSummary['columnLabelAnchors'],
       ),
@@ -354,7 +451,7 @@ class _ManagerPresetPreviewSession {
         try {
           final updated = await service.saveExportSettingsAsPreset(
             academyId: academyId,
-            sourceDocumentId: document.id,
+            sourceDocumentId: sourceDocumentId,
             selectedQuestionUidsOrdered: orderedUids,
             questionModeByQuestionUid: questionModes,
             renderConfig: renderConfig,

@@ -61,7 +61,7 @@ class TextbookExplorerController extends ChangeNotifier {
   /// 시험 프리셋 진입. 번호 보기·문항 보기만 쓰고 원본 PDF는 열지 않는다.
   final bool examPaperMode;
 
-  /// 모의고사 카드 진입. 시험처럼 번호 보기로 시작하고, 원본은 그 문제지 PDF다.
+  /// 모의고사 카드 진입. 내신 시험과 같이 번호 보기·문항 보기만 연다.
   final MockExamResourceCard? mockExamCard;
   bool get mockExamMode => mockExamCard != null;
   final bool autoSelectAllQuestionsOnRangeChange;
@@ -1536,7 +1536,7 @@ class TextbookExplorerController extends ChangeNotifier {
   }
 
   void switchMode(TbExRightMode next) {
-    if (examPaperMode && next == TbExRightMode.pdf) return;
+    if ((examPaperMode || mockExamMode) && next == TbExRightMode.pdf) return;
     if (mode == next) return;
     mode = next;
     notifyListeners();
@@ -1931,7 +1931,7 @@ class TextbookExplorerTreePanel extends StatelessWidget {
             for (final page in small.pages)
               SharedFolderTreeNode(
                 id: 'page:${small.key}#${page.rawPage}',
-                label: controller.examPaperMode
+                label: controller.examPaperMode || controller.mockExamMode
                     ? '${page.numberedQuestionCount}문항'
                     : '${page.displayPage ?? page.rawPage}쪽 · '
                         '${page.isConceptPage ? '개념' : '${page.numberedQuestionCount}문항'}',
@@ -2456,7 +2456,7 @@ class TextbookExplorerContent extends StatelessWidget {
                     (_tbExTitleLineHeight - FabTabBarTokens.fabBarHeight) / 2,
                 left: _tbExContentHorizontalInset,
                 child: SharedBackButton(
-                  tooltip: controller.examPaperMode
+                  tooltip: controller.examPaperMode || controller.mockExamMode
                       ? '시험 목록으로 돌아가기'
                       : '교재 목록으로 돌아가기',
                   onPressed: () => controller.onClose?.call(),
@@ -3788,7 +3788,7 @@ class _TbExViewMenuButton extends StatelessWidget {
                 const SizedBox(height: 6),
                 row('번호 보기', TbExRightMode.questions),
                 row('문항 보기', TbExRightMode.questionView),
-                if (!controller.examPaperMode)
+                if (!controller.examPaperMode && !controller.mockExamMode)
                   row('원본 보기', TbExRightMode.pdf),
                 const SizedBox(height: 6),
               ],
@@ -4067,11 +4067,29 @@ class _TbExExportOptionsPanel extends StatelessWidget {
                   maxQuestionsPerPageLabel: '4',
                 ),
               );
-            } else if (value == '모의고사형' || value == '수능형') {
+            } else if (value == '모의고사형' ||
+                value == '수능형' ||
+                value == '경신중' ||
+                value == '능인중' ||
+                value == '대륜중' ||
+                value == '동도중' ||
+                value == '소선여중' ||
+                value == '오성중' ||
+                value == '정화중' ||
+                value == '황금중') {
               controller.patchExportSettings(
                 settings.copyWith(
                   templateLabel: value,
-                  paperLabel: 'B4',
+                  paperLabel: (value == '경신중' ||
+                          value == '능인중' ||
+                          value == '대륜중' ||
+                          value == '동도중' ||
+                          value == '소선여중' ||
+                          value == '오성중' ||
+                          value == '정화중' ||
+                          value == '황금중')
+                      ? 'B4'
+                      : '8절',
                   layoutColumnLabel: '2단',
                   maxQuestionsPerPageLabel: '4',
                 ),

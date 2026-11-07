@@ -24,6 +24,9 @@ import '../../widgets/pdf/pdf_editor_dialog.dart';
 import '../../widgets/pdf/textbook_viewer_dialog.dart';
 import '../../widgets/resource_file_meta_dialog.dart';
 import 'textbook_explorer_view.dart';
+import 'textbook_print_dialog.dart';
+import 'exam_print_paper_dialog.dart';
+import 'exam_resource_print.dart';
 import '../../widgets/latex_text_renderer.dart';
 import '../../models/education_level.dart';
 import '../../models/textbook_drag_payload.dart';
@@ -32,6 +35,7 @@ import '../../utils/naesin_exam_context.dart';
 import '../../app_overlays.dart';
 import '../../services/print_routing_service.dart';
 import '../../services/textbook_pdf_service.dart';
+import '../../services/resource_service.dart';
 import '../../services/textbook_download_progress_service.dart';
 import '../../services/textbook_viewer_preference.dart';
 import '../../services/learning_problem_bank_service.dart';
@@ -245,6 +249,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
   String? _examPresetOpeningId;
   final MockExamResourceService _mockExamService = MockExamResourceService();
   List<MockExamResourceCard> _mockExamCards = const <MockExamResourceCard>[];
+  Map<String, List<int>> _mockExamMonthsByGrade = const <String, List<int>>{};
   String? _otherDocumentOpeningId;
 
   double _folderTreePanelWidth(BuildContext context) {
@@ -305,6 +310,9 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
   List<_ResourceFolder> _childFoldersOf(String? parentId) {
     final list =
         _folders.where((f) => (f.parentId ?? '') == (parentId ?? '')).toList();
+    if (_currentCategory == 'exam') {
+      list.addAll(_mockMonthFoldersOf(parentId));
+    }
     list.sort((a, b) {
       final ai = a.orderIndex ?? 1 << 20; // nulls last
       final bi = b.orderIndex ?? 1 << 20;
@@ -312,6 +320,33 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
       return a.name.toLowerCase().compareTo(b.name.toLowerCase());
     });
     return list;
+  }
+
+  List<_ResourceFolder> _mockMonthFoldersOf(String? parentId) {
+    if (parentId == null) return const <_ResourceFolder>[];
+    final selection = parseExamFolderSelection(parentId);
+    if (selection == null || !selection.isMock || selection.month != null) {
+      return const <_ResourceFolder>[];
+    }
+    final months = _mockExamMonthsByGrade[selection.gradeKey] ?? const <int>[];
+    return [
+      for (final month in months)
+        _ResourceFolder(
+          id: mockExamMonthFolderId(selection.gradeKey, month),
+          name: '$month월',
+          color: null,
+          description: '',
+          position: Offset.zero,
+          size: _defaultFolderSize,
+          shape: 'rect',
+          parentId: parentId,
+          orderIndex: month,
+        ),
+    ];
+  }
+
+  bool _acceptsResourceFileDrop(String folderId) {
+    return parseExamFolderSelection(folderId)?.month == null;
   }
 
   List<_ResourceFile> _childFilesOf(String? parentId) {
@@ -536,11 +571,18 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
 
   static const String _printTempPrefix = 'res_print_';
 
-  Future<void> _openPrintDialogForPath(String path) async {
+  Future<void> _openPrintDialogForPath(
+    String path, {
+    bool skipRawTcpFirst = false,
+    String preferredPaperSize = '',
+    String debugSource = 'resources.book_print',
+  }) async {
     await PrintRoutingService.instance.printFile(
       path: path,
       channel: PrintRoutingChannel.general,
-      debugSource: 'resources.book_print',
+      debugSource: debugSource,
+      preferredPaperSize: preferredPaperSize,
+      skipRawTcpFirst: skipRawTcpFirst,
     );
   }
 
@@ -787,6 +829,159 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     await _openPrintDialogForPath(pathToPrint);
   }
 
+  String _pdfPageRangeText(Iterable<int> pages) {
+    final sorted = pages.where((page) => page > 0).toSet().toList()..sort();
+    if (sorted.isEmpty) return '';
+    final chunks = <String>[];
+    var start = sorted.first;
+    var prev = sorted.first;
+    for (var i = 1; i < sorted.length; i++) {
+      final cur = sorted[i];
+      if (cur == prev + 1) {
+        prev = cur;
+        continue;
+      }
+      chunks.add(start == prev ? '$start' : '$start-$prev');
+      start = cur;
+      prev = cur;
+    }
+    chunks.add(start == prev ? '$start' : '$start-$prev');
+    return chunks.join(',');
+  }
+
+  Future<String?> _localTextbookPdfPath({
+    required _ResourceFile file,
+    required String grade,
+    required String kind,
+    required void Function(String message) onProgress,
+  }) async {
+    final raw = file.linksByGrade['$grade#$kind']?.trim() ?? '';
+    final lower = raw.toLowerCase();
+    final looksLocal = raw.isNotEmpty &&
+        !lower.startsWith('http://') &&
+        !lower.startsWith('https://') &&
+        !lower.startsWith('storage:');
+    if (looksLocal && lower.endsWith('.pdf') && await File(raw).exists()) {
+      return raw;
+    }
+    final academyId = await TenantService.instance.getActiveAcademyId();
+    if (academyId == null || academyId.trim().isEmpty) return null;
+    onProgress('PDF를 준비하는 중입니다...');
+    final source = await TextbookPdfService.instance.resolve(
+      TextbookPdfRef(
+        academyId: academyId,
+        fileId: file.id,
+        gradeLabel: grade,
+        kind: kind,
+      ),
+    );
+    final path = source.localPath?.trim() ?? '';
+    if (path.isNotEmpty && await File(path).exists()) return path;
+    return null;
+  }
+
+  Future<void> _printOriginalTextbookPart({
+    required _ResourceFile file,
+    required String grade,
+    required String kind,
+    required String label,
+    required List<int> rawPages,
+    required PrintDuplexMode duplexMode,
+    required ValueNotifier<String> progressText,
+  }) async {
+    if (rawPages.isEmpty) {
+      throw StateError('$label PDF에서 인쇄할 페이지를 찾지 못했습니다.');
+    }
+    progressText.value = '$label PDF를 준비하는 중입니다...';
+    final sourcePath = await _localTextbookPdfPath(
+      file: file,
+      grade: grade,
+      kind: kind,
+      onProgress: (message) => progressText.value = '$label $message',
+    );
+    if (sourcePath == null || sourcePath.isEmpty) {
+      throw StateError('$label PDF를 찾지 못했습니다.');
+    }
+    final out = await _buildPdfForPrintRange(
+      inputPath: sourcePath,
+      pageRange: _pdfPageRangeText(rawPages),
+    );
+    if (out == null || out.isEmpty) {
+      throw StateError('$label 페이지 범위를 확인하세요.');
+    }
+    _scheduleTempDelete(out);
+    progressText.value = '$label을 프린터로 전송 중입니다...';
+    final sent = await PrintRoutingService.instance.printFile(
+      path: out,
+      channel: PrintRoutingChannel.general,
+      debugSource: 'resources.textbook_$kind',
+      duplexMode: duplexMode,
+      skipRawTcpFirst: true,
+    );
+    if (!sent) {
+      throw StateError('$label 인쇄 요청을 프린터로 넘기지 못했습니다.');
+    }
+  }
+
+  Future<void> _printOriginalTextbook({
+    required _ResourceFile file,
+    required String grade,
+    required TextbookOriginalPrintRequest request,
+    required ValueNotifier<String> progressText,
+  }) async {
+    await _printOriginalTextbookPart(
+      file: file,
+      grade: grade,
+      kind: 'body',
+      label: '본문',
+      rawPages: request.bodyRawPages,
+      duplexMode: request.duplexMode,
+      progressText: progressText,
+    );
+    if (!request.includeAnswer && !request.includeSolution) return;
+    progressText.value = '정답·해설 페이지를 찾는 중입니다...';
+    final companion =
+        await ResourceService.instance.loadTextbookCompanionPdfPages(
+      bookId: file.id,
+      gradeLabel: grade,
+      bodyRawPages: request.bodyRawPages,
+    );
+    final notes = <String>[];
+    if (request.includeAnswer) {
+      if (companion.answerRawPages.isEmpty) {
+        notes.add('고른 페이지에서 정답 PDF 페이지를 찾지 못했습니다.');
+      } else {
+        await _printOriginalTextbookPart(
+          file: file,
+          grade: grade,
+          kind: 'ans',
+          label: '정답',
+          rawPages: companion.answerRawPages,
+          duplexMode: request.duplexMode,
+          progressText: progressText,
+        );
+      }
+    }
+    if (request.includeSolution) {
+      if (companion.solutionRawPages.isEmpty) {
+        notes.add('고른 페이지에서 해설 PDF 페이지를 찾지 못했습니다.');
+      } else {
+        await _printOriginalTextbookPart(
+          file: file,
+          grade: grade,
+          kind: 'sol',
+          label: '해설',
+          rawPages: companion.solutionRawPages,
+          duplexMode: request.duplexMode,
+          progressText: progressText,
+        );
+      }
+    }
+    if (notes.isNotEmpty) {
+      throw StateError(notes.join(' '));
+    }
+  }
+
   void _setResourcePrintPickMode(bool value) {
     if (_printPickMode == value) return;
     if (!mounted) {
@@ -803,9 +998,29 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
       _setResourcePrintPickMode(false);
       return;
     }
+    if (_currentCategory == 'exam') {
+      final selection = parseExamFolderSelection(_selectedFolderIdForTree);
+      if (selection == null) {
+        showAppSnackBar(context, '인쇄할 시험 폴더를 선택하세요.');
+        return;
+      }
+      final hasCards = selection.isMock
+          ? _mockExamCards.isNotEmpty
+          : _examPresets.isNotEmpty;
+      if (_examPresetsLoading) {
+        showAppSnackBar(context, '시험 목록을 불러오는 중입니다.');
+        return;
+      }
+      if (!hasCards) {
+        showAppSnackBar(context, '인쇄할 시험이 없습니다.');
+        return;
+      }
+      _setResourcePrintPickMode(true);
+      return;
+    }
     if (_currentCategory != 'textbook') {
       if (!mounted) return;
-      showAppSnackBar(context, '교재 탭에서만 인쇄를 지원합니다.');
+      showAppSnackBar(context, '교재와 시험 탭에서만 인쇄를 지원합니다.');
       return;
     }
     await _ensureGradesLoaded();
@@ -847,22 +1062,165 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
       showAppSnackBar(context, '해당 과정에 본문 링크가 없습니다.');
       return;
     }
-    _setResourcePrintPickMode(false);
-    final range = await showDialog<String>(
+    var academyId = '';
+    try {
+      academyId = await TenantService.instance.getActiveAcademyId() ?? '';
+    } catch (_) {}
+    if (!mounted) return;
+    final request = await showDialog<TextbookOriginalPrintRequest>(
       context: context,
-      builder: (ctx) => _PrintRangeDialog(file: file, gradeLabel: grade),
+      barrierColor: Colors.black54,
+      builder: (ctx) => TextbookOriginalPrintDialog(
+        academyId: academyId,
+        bookId: file.id,
+        gradeLabel: grade,
+        bookTitle: file.name,
+      ),
     );
-    if (range == null) return;
+    if (request == null || !mounted) return;
     try {
       await _runWithPrintProgressDialog(
         run: (progressText) async {
-          await _printBookRange(
-            file,
-            range,
+          await _printOriginalTextbook(
+            file: file,
+            grade: grade,
+            request: request,
             progressText: progressText,
           );
         },
       );
+    } on StateError catch (e) {
+      if (!mounted) return;
+      showAppSnackBar(context, e.message);
+    } catch (_) {
+      if (!mounted) return;
+      showAppSnackBar(context, '인쇄 요청 중 오류가 발생했습니다.');
+    }
+  }
+
+  Future<ExamPrintSelection?> _pickExamPrintPaper({
+    required String documentTitle,
+    required ExamPrintPaper initial,
+    bool showAnswerOptions = false,
+  }) {
+    return showDialog<ExamPrintSelection>(
+      context: context,
+      barrierColor: Colors.black54,
+      builder: (ctx) => ExamPrintPaperDialog(
+        documentTitle: documentTitle,
+        initial: initial,
+        showAnswerOptions: showAnswerOptions,
+      ),
+    );
+  }
+
+  Future<void> _sendExamPdf({
+    required String path,
+    required String paperSize,
+    required PrintDuplexMode duplexMode,
+    required String debugSource,
+    required ValueNotifier<String> progressText,
+  }) async {
+    progressText.value = '선택한 용지에 맞추는 중입니다...';
+    final fitted = await ExamResourcePrint().fitPdfToPaper(
+      inputPath: path,
+      paperSize: paperSize,
+    );
+    if (fitted != path) _scheduleTempDelete(fitted);
+    progressText.value = '$paperSize 용지로 프린터에 전송 중입니다...';
+    final sent = await PrintRoutingService.instance.printFile(
+      path: fitted,
+      channel: PrintRoutingChannel.general,
+      debugSource: debugSource,
+      preferredPaperSize: paperSize,
+      duplexMode: duplexMode,
+    );
+    if (!sent) {
+      throw StateError('인쇄 요청을 프린터로 넘기지 못했습니다.');
+    }
+  }
+
+  Future<void> _handleExamPresetPrint(
+    LearningProblemDocumentExportPreset preset,
+  ) async {
+    if (!_printPickMode) return;
+    final paper = await _pickExamPrintPaper(
+      documentTitle: preset.displayName,
+      initial: examPrintPaperDefault(mockExam: false),
+    );
+    if (paper == null || !mounted) return;
+    try {
+      await _runWithPrintProgressDialog(
+        run: (progressText) async {
+          final prepared = await ExamResourcePrint().preparePresetPdf(
+            preset: preset,
+            onProgress: (message) => progressText.value = message,
+          );
+          _scheduleTempDelete(prepared.path);
+          await _sendExamPdf(
+            path: prepared.path,
+            paperSize: paper.paper.label,
+            duplexMode: paper.duplexMode,
+            debugSource: 'resources.exam_preset',
+            progressText: progressText,
+          );
+        },
+      );
+    } on StateError catch (e) {
+      if (!mounted) return;
+      showAppSnackBar(context, e.message);
+    } catch (_) {
+      if (!mounted) return;
+      showAppSnackBar(context, '인쇄 요청 중 오류가 발생했습니다.');
+    }
+  }
+
+  Future<void> _handleMockExamPrint(MockExamResourceCard card) async {
+    if (!_printPickMode) return;
+    final title =
+        card.line2.trim().isEmpty ? card.line1 : '${card.line1} ${card.line2}';
+    final paper = await _pickExamPrintPaper(
+      documentTitle: title,
+      initial: examPrintPaperDefault(mockExam: true),
+      showAnswerOptions: true,
+    );
+    if (paper == null || !mounted) return;
+    try {
+      await _runWithPrintProgressDialog(
+        run: (progressText) async {
+          final path = await ExamResourcePrint().prepareMockExamOriginalPdf(
+            card: card,
+            onProgress: (message) => progressText.value = message,
+          );
+          _scheduleTempDelete(path);
+          await _sendExamPdf(
+            path: path,
+            paperSize: paper.paper.label,
+            duplexMode: paper.duplexMode,
+            debugSource: 'resources.exam_mock_original',
+            progressText: progressText,
+          );
+          if (!paper.includeAnswer && !paper.includeSolution) return;
+          final solution = await ExamResourcePrint().prepareMockExamSolutionPdf(
+            card: card,
+            onProgress: (message) => progressText.value = message,
+          );
+          if (solution == null || solution.isEmpty) {
+            throw StateError('정답·해설 원본 PDF가 없습니다.');
+          }
+          _scheduleTempDelete(solution);
+          await _sendExamPdf(
+            path: solution,
+            paperSize: 'A4',
+            duplexMode: paper.duplexMode,
+            debugSource: 'resources.exam_mock_solution',
+            progressText: progressText,
+          );
+        },
+      );
+    } on StateError catch (e) {
+      if (!mounted) return;
+      showAppSnackBar(context, e.message);
     } catch (_) {
       if (!mounted) return;
       showAppSnackBar(context, '인쇄 요청 중 오류가 발생했습니다.');
@@ -1029,13 +1387,15 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     required double gridCardHeight,
     required bool busy,
     required VoidCallback onTap,
+    required bool printPick,
   }) {
     final card = ExamPresetCard(
       preset: preset,
       busy: busy,
+      printPick: printPick,
       onTap: onTap,
     );
-    if (busy) return card;
+    if (busy || printPick) return card;
 
     Widget buildFeedbackContent({required bool compact}) {
       if (compact) {
@@ -2386,6 +2746,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
         });
         if (_currentCategory == 'exam') {
           unawaited(_reloadExamPresetsForSelectedFolder());
+          unawaited(_loadMockExamMonthFolders());
         }
       }
     } catch (_) {
@@ -2469,11 +2830,41 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
       cards = const <MockExamResourceCard>[];
     }
     if (!mounted || _selectedFolderIdForTree != folderId) return;
+    final months = cards.map((card) => card.month).toSet().toList()..sort();
+    final shown = selection.month == null
+        ? cards
+        : cards
+            .where((card) => card.month == selection.month)
+            .toList(growable: false);
     setState(() {
       _examPresets = const <LearningProblemDocumentExportPreset>[];
-      _mockExamCards = cards;
+      _mockExamCards = shown;
+      _mockExamMonthsByGrade = <String, List<int>>{
+        ..._mockExamMonthsByGrade,
+        selection.gradeKey: months,
+      };
       _examPresetsLoading = false;
     });
+  }
+
+  Future<void> _loadMockExamMonthFolders() async {
+    if (_currentCategory != 'exam') return;
+    final academyId =
+        (await TenantService.instance.getActiveAcademyId() ?? '').trim();
+    if (academyId.isEmpty) return;
+    final months = <String, List<int>>{};
+    for (final grade in <int>[1, 2, 3]) {
+      try {
+        final cards = await _mockExamService.listCards(
+          academyId: academyId,
+          grade: grade,
+        );
+        final values = cards.map((card) => card.month).toSet().toList()..sort();
+        if (values.isNotEmpty) months['H$grade'] = values;
+      } catch (_) {}
+    }
+    if (!mounted || _currentCategory != 'exam') return;
+    setState(() => _mockExamMonthsByGrade = months);
   }
 
   Future<void> _openMockExamExplorer(MockExamResourceCard card) async {
@@ -2794,145 +3185,154 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
   Widget build(BuildContext context) {
     // ignore: avoid_print
     print('[RES] ResourcesScreen build');
-    return Scaffold(
-      backgroundColor: context.yggSurfaceBase,
-      body: Stack(
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // 좌측 폴더 트리: 너비 220~330 (화면 비례). 좌우·위 12, 아래는 탭바와 같은 24.
-              Padding(
-                padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
-                child: SizedBox(
-                  width: _folderTreePanelWidth(context),
-                  child: _explorer != null
-                      ? TextbookExplorerTreePanel(controller: _explorer!)
-                      : _buildFolderTreeDecoratedPanel(),
-                ),
-              ),
-              Expanded(
-                child: Padding(
-                  padding: EdgeInsets.fromLTRB(
-                    0,
-                    12,
-                    12,
-                    _explorer != null ? 0 : 12,
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (event) {
+        if (!_printPickMode) return;
+        if (event.buttons & kSecondaryMouseButton == 0) return;
+        _setResourcePrintPickMode(false);
+      },
+      child: Scaffold(
+        backgroundColor: context.yggSurfaceBase,
+        body: Stack(
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // 좌측 폴더 트리: 너비 220~330 (화면 비례). 좌우·위 12, 아래는 탭바와 같은 24.
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+                  child: SizedBox(
+                    width: _folderTreePanelWidth(context),
+                    child: _explorer != null
+                        ? TextbookExplorerTreePanel(controller: _explorer!)
+                        : _buildFolderTreeDecoratedPanel(),
                   ),
-                  child: _explorer != null
-                      ? TextbookExplorerContent(controller: _explorer!)
-                      : Stack(
-                          clipBehavior: Clip.none,
-                          children: [
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                Expanded(
-                                  child: Stack(
-                                    clipBehavior: Clip.none,
-                                    children: [
-                                      Positioned.fill(
-                                        child: IndexedStack(
-                                          index: _customTabIndex,
-                                          children: [
-                                            _buildTextbooksTreeLayout(0),
-                                            _buildTextbooksTreeLayout(1),
-                                            _buildTextbooksTreeLayout(2),
-                                          ],
+                ),
+                Expanded(
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      0,
+                      12,
+                      12,
+                      _explorer != null ? 0 : 12,
+                    ),
+                    child: _explorer != null
+                        ? TextbookExplorerContent(controller: _explorer!)
+                        : Stack(
+                            clipBehavior: Clip.none,
+                            children: [
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  Expanded(
+                                    child: Stack(
+                                      clipBehavior: Clip.none,
+                                      children: [
+                                        Positioned.fill(
+                                          child: IndexedStack(
+                                            index: _customTabIndex,
+                                            children: [
+                                              _buildTextbooksTreeLayout(0),
+                                              _buildTextbooksTreeLayout(1),
+                                              _buildTextbooksTreeLayout(2),
+                                            ],
+                                          ),
                                         ),
-                                      ),
-                                      if (_currentCategory == 'other')
-                                        Positioned(
-                                          top: _resourcesPageTitleBandHeight -
-                                              _otherTabListHeaderHeight,
-                                          left: 0,
-                                          right: 0,
-                                          child: _buildOtherTabListHeader(),
-                                        ),
-                                    ],
+                                        if (_currentCategory == 'other')
+                                          Positioned(
+                                            top: _resourcesPageTitleBandHeight -
+                                                _otherTabListHeaderHeight,
+                                            left: 0,
+                                            right: 0,
+                                            child: _buildOtherTabListHeader(),
+                                          ),
+                                      ],
+                                    ),
                                   ),
-                                ),
-                              ],
-                            ),
-                            Positioned(
-                              top: FabTabBarTokens.previewAcademyTopInset - 12,
-                              left: 24,
-                              right: 12,
-                              child: IgnorePointer(
-                                child: Align(
-                                  alignment: Alignment.centerLeft,
-                                  child: Text(
-                                    _resourceTabLabels[_customTabIndex],
-                                    style: FabTabBarTokens
-                                        .previewAcademyMainTitleStyle(
-                                      FabTabBarTokens
-                                          .previewAcademyPanelStyleFor(
-                                        Theme.of(context).brightness,
+                                ],
+                              ),
+                              Positioned(
+                                top:
+                                    FabTabBarTokens.previewAcademyTopInset - 12,
+                                left: 24,
+                                right: 12,
+                                child: IgnorePointer(
+                                  child: Align(
+                                    alignment: Alignment.centerLeft,
+                                    child: Text(
+                                      _resourceTabLabels[_customTabIndex],
+                                      style: FabTabBarTokens
+                                          .previewAcademyMainTitleStyle(
+                                        FabTabBarTokens
+                                            .previewAcademyPanelStyleFor(
+                                          Theme.of(context).brightness,
+                                        ),
                                       ),
                                     ),
                                   ),
                                 ),
                               ),
-                            ),
-                          ],
-                        ),
-                ),
-              ),
-            ],
-          ),
-          if (_printPickMode)
-            Positioned(
-              top: 86,
-              left: 0,
-              right: 0,
-              child: Center(
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: _rsPanelBg,
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: _rsAccent.withOpacity(0.8)),
-                    boxShadow: [
-                      BoxShadow(
-                          color: Colors.black.withOpacity(0.35),
-                          blurRadius: 10,
-                          offset: const Offset(0, 6)),
-                    ],
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.print, size: 16, color: _rsAccent),
-                      const SizedBox(width: 6),
-                      const Text('인쇄할 파일을 고르세요',
-                          style: TextStyle(
-                              color: _rsText,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w800)),
-                      const SizedBox(width: 8),
-                      InkWell(
-                        onTap: () => _setResourcePrintPickMode(false),
-                        borderRadius: BorderRadius.circular(999),
-                        child: Container(
-                          width: 20,
-                          height: 20,
-                          decoration: BoxDecoration(
-                            color: Colors.black.withOpacity(0.25),
-                            shape: BoxShape.circle,
-                            border: Border.all(color: _rsBorder),
+                            ],
                           ),
-                          alignment: Alignment.center,
-                          child: const Icon(Icons.close,
-                              size: 12, color: _rsTextSub),
+                  ),
+                ),
+              ],
+            ),
+            if (_printPickMode)
+              Positioned(
+                top: 86,
+                left: 0,
+                right: 0,
+                child: Center(
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: _rsPanelBg,
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: _rsAccent.withOpacity(0.8)),
+                      boxShadow: [
+                        BoxShadow(
+                            color: Colors.black.withOpacity(0.35),
+                            blurRadius: 10,
+                            offset: const Offset(0, 6)),
+                      ],
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.print, size: 16, color: _rsAccent),
+                        const SizedBox(width: 6),
+                        const Text('인쇄할 파일을 고르세요',
+                            style: TextStyle(
+                                color: _rsText,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w800)),
+                        const SizedBox(width: 8),
+                        InkWell(
+                          onTap: () => _setResourcePrintPickMode(false),
+                          borderRadius: BorderRadius.circular(999),
+                          child: Container(
+                            width: 20,
+                            height: 20,
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.25),
+                              shape: BoxShape.circle,
+                              border: Border.all(color: _rsBorder),
+                            ),
+                            alignment: Alignment.center,
+                            child: const Icon(Icons.close,
+                                size: 12, color: _rsTextSub),
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ),
-            ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -3353,13 +3753,14 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
 
     return DragTarget<_ResourceFile>(
       onWillAccept: (incomingFile) {
-        final ok = incomingFile != null;
+        final ok = incomingFile != null && _acceptsResourceFileDrop(folder.id);
         if (ok) {
           setState(() => _fileDropTargetFolderId = folder.id);
         }
         return ok;
       },
       onAcceptWithDetails: (details) async {
+        if (!_acceptsResourceFileDrop(folder.id)) return;
         final incoming = details.data;
         final idx = _files.indexWhere((x) => x.id == incoming.id);
         if (idx != -1) {
@@ -3726,13 +4127,15 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
       children: [
         DragTarget<_ResourceFile>(
           onWillAccept: (incomingFile) {
-            final ok = incomingFile != null;
+            final ok =
+                incomingFile != null && _acceptsResourceFileDrop(folder.id);
             if (ok) {
               setState(() => _fileDropTargetFolderId = folder.id);
             }
             return ok;
           },
           onAcceptWithDetails: (details) async {
+            if (!_acceptsResourceFileDrop(folder.id)) return;
             final incoming = details.data;
             final idx = _files.indexWhere((x) => x.id == incoming.id);
             if (idx != -1) {
@@ -4132,10 +4535,20 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                         child: ExamPaperCard(
                           line1: mockCards[i].line1,
                           line2: mockCards[i].line2,
-                          footer: '탭하여 번호·문항·원본 보기',
+                          footer: _printPickMode
+                              ? '탭하여 원본 인쇄'
+                              : kExamPaperCardFooter,
                           busy: _examPresetOpeningId == mockCards[i].id,
-                          onTap: () =>
-                              unawaited(_openMockExamExplorer(mockCards[i])),
+                          printPick: _printPickMode,
+                          onTap: _printPickMode
+                              ? () => unawaited(
+                                    _handleMockExamPrint(mockCards[i]),
+                                  )
+                              : (mockCards[i].extracted
+                                  ? () => unawaited(
+                                        _openMockExamExplorer(mockCards[i]),
+                                      )
+                                  : null),
                         ),
                       ),
                   if (!mock)
@@ -4151,8 +4564,12 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                           gridCardWidth: gridCardWidth,
                           gridCardHeight: gridCardHeight,
                           busy: _examPresetOpeningId == presets[i].id,
-                          onTap: () =>
-                              unawaited(_openExamPresetExplorer(presets[i])),
+                          printPick: _printPickMode,
+                          onTap: () => unawaited(
+                            _printPickMode
+                                ? _handleExamPresetPrint(presets[i])
+                                : _openExamPresetExplorer(presets[i]),
+                          ),
                         ),
                       ),
                 ],
@@ -6742,6 +7159,13 @@ class _GridFileCardState extends State<_GridFileCard> {
         cursor:
             isPrintMode ? SystemMouseCursors.copy : SystemMouseCursors.click,
         child: GestureDetector(
+          behavior: isPrintMode
+              ? HitTestBehavior.opaque
+              : HitTestBehavior.deferToChild,
+          onSecondaryTap: () {
+            if (!isPrintMode) return;
+            resState?._setResourcePrintPickMode(false);
+          },
           onTap: () async {
             if (isPrintMode) {
               await resState?._handlePrintPick(file);

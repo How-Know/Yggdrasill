@@ -153,6 +153,86 @@ const PROFILE_LAYOUT = {
     questionGap: 12,
     choiceIndent: 20,
   },
+  gyeongsin: {
+    title: '경신중 시험지',
+    margin: 44,
+    headerHeight: 36,
+    stemSize: 11.0,
+    choiceSize: 10.4,
+    lineHeight: 15.0,
+    questionGap: 10,
+    choiceIndent: 18,
+  },
+  neungin: {
+    title: '능인중 시험지',
+    margin: 44,
+    headerHeight: 36,
+    stemSize: 11.0,
+    choiceSize: 10.4,
+    lineHeight: 15.0,
+    questionGap: 10,
+    choiceIndent: 18,
+  },
+  daeryun: {
+    title: '대륜중 시험지',
+    margin: 44,
+    headerHeight: 36,
+    stemSize: 11.0,
+    choiceSize: 10.4,
+    lineHeight: 15.0,
+    questionGap: 10,
+    choiceIndent: 18,
+  },
+  dongdo: {
+    title: '동도중 시험지',
+    margin: 44,
+    headerHeight: 36,
+    stemSize: 11.0,
+    choiceSize: 10.4,
+    lineHeight: 15.0,
+    questionGap: 10,
+    choiceIndent: 18,
+  },
+  soseon: {
+    title: '소선여중 시험지',
+    margin: 44,
+    headerHeight: 36,
+    stemSize: 11.0,
+    choiceSize: 10.4,
+    lineHeight: 15.0,
+    questionGap: 10,
+    choiceIndent: 18,
+  },
+  oseong: {
+    title: '오성중 시험지',
+    margin: 44,
+    headerHeight: 36,
+    stemSize: 11.0,
+    choiceSize: 10.4,
+    lineHeight: 15.0,
+    questionGap: 10,
+    choiceIndent: 18,
+  },
+  jeonghwa: {
+    title: '정화중 시험지',
+    margin: 44,
+    headerHeight: 36,
+    stemSize: 11.0,
+    choiceSize: 10.4,
+    lineHeight: 15.0,
+    questionGap: 10,
+    choiceIndent: 18,
+  },
+  hwanggeum: {
+    title: '황금중 시험지',
+    margin: 44,
+    headerHeight: 36,
+    stemSize: 11.0,
+    choiceSize: 10.4,
+    lineHeight: 15.0,
+    questionGap: 10,
+    choiceIndent: 18,
+  },
   review_compact: {
     title: '\uAC80\uD1A0 PDF',
     margin: 32,
@@ -1957,6 +2037,30 @@ function normalizePaper(raw) {
 
 function normalizeProfile(raw) {
   const p = String(raw || '').trim().toLowerCase();
+  if (p === 'gyeongsin' || p === '경신중') {
+    return 'gyeongsin';
+  }
+  if (p === 'neungin' || p === '능인중') {
+    return 'neungin';
+  }
+  if (p === 'daeryun' || p === '대륜중') {
+    return 'daeryun';
+  }
+  if (p === 'dongdo' || p === '동도중') {
+    return 'dongdo';
+  }
+  if (p === 'soseon' || p === '소선여중') {
+    return 'soseon';
+  }
+  if (p === 'oseong' || p === '오성중') {
+    return 'oseong';
+  }
+  if (p === 'jeonghwa' || p === '정화중') {
+    return 'jeonghwa';
+  }
+  if (p === 'hwanggeum' || p === '황금중') {
+    return 'hwanggeum';
+  }
   if (
     p === 'csat' ||
     p === 'mock' ||
@@ -2222,6 +2326,15 @@ function normalizeCoverPageTexts(raw, defaults = {}) {
   const organization = normalizeWhitespace(
     src.organization || src.organizationName || seed.organization || '한국교육과정평가원',
   ) || '한국교육과정평가원';
+  const examDate = normalizeWhitespace(src.examDate ?? seed.examDate ?? '');
+  const coverExamTitle = normalizeWhitespace(src.coverExamTitle ?? seed.coverExamTitle ?? '');
+  const headerExamTitle = normalizeWhitespace(src.headerExamTitle ?? seed.headerExamTitle ?? '');
+  const subjectName = normalizeWhitespace(src.subjectName ?? seed.subjectName ?? '');
+  const objectiveCount = normalizeWhitespace(src.objectiveCount ?? seed.objectiveCount ?? '');
+  const essayCount = normalizeWhitespace(src.essayCount ?? seed.essayCount ?? '');
+  const totalPageCount = normalizeWhitespace(src.totalPageCount ?? seed.totalPageCount ?? '');
+  const footerLabel = normalizeWhitespace(src.footerLabel ?? seed.footerLabel ?? '');
+  const pageStartNumber = normalizeWhitespace(src.pageStartNumber ?? seed.pageStartNumber ?? '');
   return {
     topTitle,
     subjectTitle,
@@ -2234,6 +2347,15 @@ function normalizeCoverPageTexts(raw, defaults = {}) {
     electiveItems,
     subjectGroups,
     organization,
+    ...(examDate ? { examDate } : {}),
+    ...(coverExamTitle ? { coverExamTitle } : {}),
+    ...(headerExamTitle ? { headerExamTitle } : {}),
+    ...(subjectName ? { subjectName } : {}),
+    ...(objectiveCount ? { objectiveCount } : {}),
+    ...(essayCount ? { essayCount } : {}),
+    ...(totalPageCount ? { totalPageCount } : {}),
+    ...(footerLabel ? { footerLabel } : {}),
+    ...(pageStartNumber ? { pageStartNumber } : {}),
   };
 }
 

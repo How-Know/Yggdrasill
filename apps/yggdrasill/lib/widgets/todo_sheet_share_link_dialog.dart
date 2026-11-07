@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../main.dart' show rootNavigatorKey;
 import '../services/data_manager.dart';
@@ -68,9 +69,64 @@ bool todoSheetShareLinkOwnedByThisApp(
   return DateTime.now().difference(ownedAt) < const Duration(minutes: 2);
 }
 
+final Set<String> _departureAlimtalkWatches = <String>{};
+
+/// 하원 직후에는 링크 창을 열지 않는다.
+/// 알림톡이 보내지지 않거나 재시도까지 실패하면 그때 같은 창을 연다.
+void watchTodoSheetShareLinkIfAlimtalkFails({
+  required String attendanceId,
+  required String studentId,
+  required String studentName,
+  required String snapshotId,
+}) {
+  if (!studentAllowsTodoSheetShareLink(studentId)) return;
+  final attendance = attendanceId.trim();
+  final snapshot = snapshotId.trim();
+  if (attendance.isEmpty || snapshot.isEmpty) return;
+  if (!_departureAlimtalkWatches.add(attendance)) return;
+  unawaited(() async {
+    try {
+      final failed = await _departureAlimtalkFailed(attendance);
+      if (!failed) return;
+      await showTodoSheetShareLinkOnRoot(
+        studentId: studentId,
+        studentName: studentName,
+        snapshotId: snapshot,
+      );
+    } finally {
+      _departureAlimtalkWatches.remove(attendance);
+    }
+  }());
+}
+
+/// 워커는 약 1분마다, 최대 5번 다시 보낸다. 그 안이면 기다린다.
+Future<bool> _departureAlimtalkFailed(String attendanceId) async {
+  final deadline = DateTime.now().add(const Duration(minutes: 7));
+  while (true) {
+    try {
+      final result = await Supabase.instance.client.rpc(
+        'staff_departure_alimtalk_outcome_v1',
+        params: <String, dynamic>{'p_attendance_id': attendanceId},
+      );
+      final outcome = '$result'.trim();
+      if (outcome == 'sent') return false;
+      if (outcome == 'failed') return true;
+    } catch (error, stackTrace) {
+      debugPrint('[TODO_SHEET_SHARE][ALIMTALK] $error\n$stackTrace');
+      final text = '$error';
+      if (text.contains('staff_departure_alimtalk_outcome_v1') ||
+          text.contains('PGRST202')) {
+        return false;
+      }
+    }
+    if (!DateTime.now().isBefore(deadline)) return true;
+    await Future<void>.delayed(const Duration(seconds: 5));
+  }
+}
+
 /// 알림장 수신에 동의한 학생만, 하원으로 고정된 알림장 주소를 보여 준다.
 ///
-/// 알림톡은 보내지 않는다. 링크 생성에 실패해도 하원 자체는 되돌리지 않는다.
+/// 링크 생성에 실패해도 하원 자체는 되돌리지 않는다.
 Future<void> showTodoSheetShareLinkAfterDeparture({
   required BuildContext context,
   required String studentId,
@@ -178,7 +234,7 @@ class _TodoSheetShareLinkDialogState extends State<_TodoSheetShareLinkDialog> {
           BottomDialogLargeText('$name 알림장'),
           const SizedBox(height: BottomDialogMetrics.largeToMediumGap),
           const BottomDialogMediumText(
-            '이 컴퓨터가 켜져 있을 때만 열립니다.',
+            '알림톡을 보내지 못했습니다. 이 주소로 알림장을 열 수 있습니다.',
           ),
           const SizedBox(height: BottomDialogMetrics.beforeActionsGap),
           BottomDialogCard(

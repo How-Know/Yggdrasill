@@ -37,26 +37,8 @@ const List<int> _naesinLinkYears = <int>[
   2027,
   2028,
 ];
-const List<String> _naesinMiddleSchools = <String>[
-  '경신중',
-  '능인중',
-  '대륜중',
-  '동도중',
-  '소선여중',
-  '오성중',
-  '정화중',
-  '황금중',
-];
-const List<String> _naesinHighSchools = <String>[
-  '경북고',
-  '경신고',
-  '능인고',
-  '대구여고',
-  '대륜고',
-  '오성고',
-  '정화여고',
-  '혜화여고',
-];
+const List<String> _naesinMiddleSchools = kNaesinMiddleSchools;
+const List<String> _naesinHighSchools = kNaesinHighSchools;
 
 class _NaesinLinkSelection {
   const _NaesinLinkSelection({
@@ -91,26 +73,43 @@ Future<void> showProblemBankExportPresetDialog({
     ProblemBankDocument document,
     ProblemBankExportPreset? latestPreset,
   )? onOpenDocumentPreset,
+  Future<void> Function(
+    ProblemBankExportPreset preset,
+  )? onOpenPreset,
 }) async {
   List<ProblemBankExportPreset> presets;
   List<ProblemBankDocument> naesinDocuments;
+  List<ProblemBankDocument> mockDocuments;
   Map<String, int> questionCounts;
   try {
     presets = await service.listExportPresets(
       academyId: academyId,
-      limit: 300,
+      limit: 500,
     );
     naesinDocuments = (await service.listAllSchoolPastDocuments(
       academyId: academyId,
     ))
         .where((document) => document.status.trim().toLowerCase() == 'ready')
         .toList(growable: false);
+    mockDocuments = (await service.listAllMockPastDocuments(
+      academyId: academyId,
+    ))
+        .where((document) {
+          final status = document.status.trim().toLowerCase();
+          return status == 'ready' ||
+              status == 'draft_ready' ||
+              status == 'draft_review_required';
+        })
+        .toList(growable: false);
     questionCounts = await service.countQuestionsByDocumentIds(
       academyId: academyId,
-      documentIds: naesinDocuments.map((document) => document.id),
+      documentIds: <String>[
+        ...naesinDocuments.map((document) => document.id),
+        ...mockDocuments.map((document) => document.id),
+      ],
     );
   } catch (e) {
-    showSnack('프리셋/내신 문서 목록 조회 실패: $e', error: true);
+    showSnack('프리셋/추출본 목록 조회 실패: $e', error: true);
     return;
   }
   if (!context.mounted) return;
@@ -125,9 +124,11 @@ Future<void> showProblemBankExportPresetDialog({
           : 2;
 
   var workingPresets = presets;
-  var workingDocuments = naesinDocuments;
+  var workingNaesinDocuments = naesinDocuments;
+  var workingMockDocuments = mockDocuments;
   var workingQuestionCounts = questionCounts;
-  var showNaesinDocuments = false;
+  var isMockCategory = false;
+  var showExtractedDocuments = false;
   var isWorking = false;
 
   await showDialog<void>(
@@ -138,22 +139,35 @@ Future<void> showProblemBankExportPresetDialog({
         try {
           final refreshed = await service.listExportPresets(
             academyId: academyId,
-            limit: 300,
+            limit: 500,
           );
-          final refreshedDocuments =
+          final refreshedNaesinDocuments =
               (await service.listAllSchoolPastDocuments(academyId: academyId))
                   .where(
                     (document) =>
                         document.status.trim().toLowerCase() == 'ready',
                   )
                   .toList(growable: false);
+          final refreshedMockDocuments =
+              (await service.listAllMockPastDocuments(academyId: academyId))
+                  .where((document) {
+                    final status = document.status.trim().toLowerCase();
+                    return status == 'ready' ||
+                        status == 'draft_ready' ||
+                        status == 'draft_review_required';
+                  })
+                  .toList(growable: false);
           final refreshedCounts = await service.countQuestionsByDocumentIds(
             academyId: academyId,
-            documentIds: refreshedDocuments.map((document) => document.id),
+            documentIds: <String>[
+              ...refreshedNaesinDocuments.map((document) => document.id),
+              ...refreshedMockDocuments.map((document) => document.id),
+            ],
           );
           setModalState(() {
             workingPresets = refreshed;
-            workingDocuments = refreshedDocuments;
+            workingNaesinDocuments = refreshedNaesinDocuments;
+            workingMockDocuments = refreshedMockDocuments;
             workingQuestionCounts = refreshedCounts;
           });
         } catch (e) {
@@ -363,7 +377,7 @@ Future<void> showProblemBankExportPresetDialog({
         final existing = _parseNaesinLinkKey(currentLinkKey);
         final sourceDocument = _sourceDocumentForPreset(
           preset,
-          workingDocuments,
+          workingNaesinDocuments,
         );
         final sourceGradeKey = sourceDocument == null
             ? ''
@@ -830,19 +844,69 @@ Future<void> showProblemBankExportPresetDialog({
         return _naesinLinkSummaryLabel(preset.naesinLinkKey);
       }
 
-      ProblemBankExportPreset? latestPresetForDocument(String documentId) {
-        return latestExportPresetForDocument(workingPresets, documentId);
+      String mockLinkLabel(ProblemBankExportPreset preset) {
+        final meta = preset.mockExamMeta;
+        if (meta.isNotEmpty) {
+          final year = '${meta['examYear'] ?? ''}'.trim();
+          final grade = '${meta['grade'] ?? ''}'.trim();
+          final month = '${meta['examMonth'] ?? ''}'.trim();
+          final orgRaw = '${meta['org'] ?? ''}'.trim();
+          final org = orgRaw == 'csat'
+              ? '수능'
+              : (orgRaw == 'kice'
+                  ? '평가원'
+                  : (orgRaw == 'edu' ? '교육청' : orgRaw));
+          final electiveLabel = '${meta['electiveLabel'] ?? ''}'.trim();
+          return <String>[
+            if (year.isNotEmpty) '${year}년',
+            if (grade.isNotEmpty) '고$grade',
+            if (month.isNotEmpty) '${month}월',
+            if (org.isNotEmpty) org,
+            if (electiveLabel.isNotEmpty) electiveLabel,
+          ].join(' · ');
+        }
+        return _mockLinkSummaryLabel(preset.mockExamLinkKey);
+      }
+
+      ProblemBankExportPreset? latestPresetForDocument(
+        String documentId,
+        Iterable<ProblemBankExportPreset> scopePresets,
+      ) {
+        return latestExportPresetForDocument(scopePresets, documentId);
       }
 
       Future<void> openDocument(
         ProblemBankDocument document,
+        Iterable<ProblemBankExportPreset> scopePresets,
         StateSetter setModalState,
       ) async {
         final callback = onOpenDocumentPreset;
         if (callback == null || isWorking) return;
         setModalState(() => isWorking = true);
         try {
-          await callback(document, latestPresetForDocument(document.id));
+          await callback(
+            document,
+            latestPresetForDocument(document.id, scopePresets),
+          );
+          await reloadPresets(setModalState);
+        } catch (e) {
+          showSnack('프리셋 편집기 열기 실패: $e', error: true);
+        } finally {
+          if (dialogContext.mounted) {
+            setModalState(() => isWorking = false);
+          }
+        }
+      }
+
+      Future<void> openPresetEditor(
+        ProblemBankExportPreset preset,
+        StateSetter setModalState,
+      ) async {
+        final callback = onOpenPreset;
+        if (callback == null || isWorking) return;
+        setModalState(() => isWorking = true);
+        try {
+          await callback(preset);
           await reloadPresets(setModalState);
         } catch (e) {
           showSnack('프리셋 편집기 열기 실패: $e', error: true);
@@ -855,6 +919,25 @@ Future<void> showProblemBankExportPresetDialog({
 
       return StatefulBuilder(
         builder: (context, setModalState) {
+          final scopedPresets = workingPresets
+              .where((item) => item.isMockExamPreset == isMockCategory)
+              .toList(growable: false);
+          final scopedDocuments =
+              isMockCategory ? workingMockDocuments : workingNaesinDocuments;
+          final currentCount = showExtractedDocuments
+              ? scopedDocuments.length
+              : scopedPresets.length;
+          final titleText = isMockCategory
+              ? (showExtractedDocuments ? '모의고사 추출본' : '모의고사 기출 프리셋')
+              : (showExtractedDocuments ? '내신 추출본' : '내신 기출 프리셋');
+          final subtitleText = isMockCategory
+              ? (showExtractedDocuments
+                  ? '추출된 모의고사 구간(공통·선택과목) 문서를 확인하고 연결된 프리셋을 엽니다.'
+                  : '추출 시 자동 생성된 모의고사 기출(공통+선택 30문항) 프리셋을 관리합니다.')
+              : (showExtractedDocuments
+                  ? '업로드가 완료된 내신 문서를 선택해 프리셋을 만들거나 최신 프리셋을 편집합니다.'
+                  : '내신 기출 양식·문항 프리셋을 관리하고 학교·학년 셀에 연결합니다.');
+
           return Dialog(
             backgroundColor: const Color(0xFF10171A),
             shape: RoundedRectangleBorder(
@@ -872,8 +955,8 @@ Future<void> showProblemBankExportPresetDialog({
                     Row(
                       children: [
                         Text(
-                          showNaesinDocuments ? '내신 추출본' : '저장된 프리셋',
-                          style: TextStyle(
+                          titleText,
+                          style: const TextStyle(
                             color: Color(0xFFEAF2F2),
                             fontSize: 18,
                             fontWeight: FontWeight.w800,
@@ -881,12 +964,23 @@ Future<void> showProblemBankExportPresetDialog({
                         ),
                         const SizedBox(width: 8),
                         Text(
-                          '${showNaesinDocuments ? workingDocuments.length : workingPresets.length}개',
+                          '$currentCount개',
                           style: const TextStyle(
                             color: Color(0xFF9FB3B3),
                             fontSize: 13,
                             fontWeight: FontWeight.w700,
                           ),
+                        ),
+                        const SizedBox(width: 16),
+                        _PresetCategorySegmentedSwitch(
+                          isMockCategory: isMockCategory,
+                          disabled: isWorking,
+                          onSelectNaesin: () => setModalState(() {
+                            isMockCategory = false;
+                          }),
+                          onSelectMock: () => setModalState(() {
+                            isMockCategory = true;
+                          }),
                         ),
                         const Spacer(),
                         if (isWorking)
@@ -935,12 +1029,10 @@ Future<void> showProblemBankExportPresetDialog({
                     ),
                     const SizedBox(height: 4),
                     Padding(
-                      padding: EdgeInsets.only(right: 8),
+                      padding: const EdgeInsets.only(right: 8),
                       child: Text(
-                        showNaesinDocuments
-                            ? '업로드가 완료된 내신 문서를 선택해 프리셋을 만들거나 최신 프리셋을 편집합니다.'
-                            : '학습앱 문제은행에서 저장한 양식·문항 프리셋을 관리합니다.',
-                        style: TextStyle(
+                        subtitleText,
+                        style: const TextStyle(
                           color: Color(0xFF9FB3B3),
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
@@ -952,35 +1044,41 @@ Future<void> showProblemBankExportPresetDialog({
                       children: [
                         ChoiceChip(
                           label: const Text('저장된 프리셋'),
-                          selected: !showNaesinDocuments,
+                          selected: !showExtractedDocuments,
                           onSelected: isWorking
                               ? null
                               : (_) => setModalState(
-                                    () => showNaesinDocuments = false,
+                                    () => showExtractedDocuments = false,
                                   ),
                         ),
                         const SizedBox(width: 8),
                         ChoiceChip(
-                          label: const Text('내신 추출본'),
-                          selected: showNaesinDocuments,
+                          label: Text(
+                            isMockCategory ? '모의고사 추출본' : '내신 추출본',
+                          ),
+                          selected: showExtractedDocuments,
                           onSelected: isWorking
                               ? null
                               : (_) => setModalState(
-                                    () => showNaesinDocuments = true,
+                                    () => showExtractedDocuments = true,
                                   ),
                         ),
                       ],
                     ),
                     const SizedBox(height: 10),
                     Expanded(
-                      child: (showNaesinDocuments
-                              ? workingDocuments.isEmpty
-                              : workingPresets.isEmpty)
+                      child: (showExtractedDocuments
+                              ? scopedDocuments.isEmpty
+                              : scopedPresets.isEmpty)
                           ? Center(
                               child: Text(
-                                showNaesinDocuments
-                                    ? '업로드 완료된 내신 추출본이 없습니다.'
-                                    : '저장된 프리셋이 없습니다.',
+                                showExtractedDocuments
+                                    ? (isMockCategory
+                                        ? '추출된 모의고사 구간 문서가 없습니다.'
+                                        : '업로드 완료된 내신 추출본이 없습니다.')
+                                    : (isMockCategory
+                                        ? '저장된 모의고사 기출 프리셋이 없습니다.'
+                                        : '저장된 내신 기출 프리셋이 없습니다.'),
                                 style: const TextStyle(
                                   color: Color(0xFF9FB3B3),
                                   fontWeight: FontWeight.w700,
@@ -994,9 +1092,9 @@ Future<void> showProblemBankExportPresetDialog({
                                   top: 2,
                                   bottom: 6,
                                 ),
-                                itemCount: showNaesinDocuments
-                                    ? workingDocuments.length
-                                    : workingPresets.length,
+                                itemCount: showExtractedDocuments
+                                    ? scopedDocuments.length
+                                    : scopedPresets.length,
                                 gridDelegate:
                                     SliverGridDelegateWithFixedCrossAxisCount(
                                   crossAxisCount: gridColumns,
@@ -1005,10 +1103,12 @@ Future<void> showProblemBankExportPresetDialog({
                                   mainAxisExtent: 132,
                                 ),
                                 itemBuilder: (context, index) {
-                                  if (showNaesinDocuments) {
-                                    final document = workingDocuments[index];
-                                    final latest =
-                                        latestPresetForDocument(document.id);
+                                  if (showExtractedDocuments) {
+                                    final document = scopedDocuments[index];
+                                    final latest = latestPresetForDocument(
+                                      document.id,
+                                      scopedPresets,
+                                    );
                                     return _NaesinDocumentCard(
                                       document: document,
                                       questionCount:
@@ -1019,20 +1119,31 @@ Future<void> showProblemBankExportPresetDialog({
                                           isWorking || onOpenDocumentPreset == null,
                                       onTap: () => openDocument(
                                         document,
+                                        scopedPresets,
                                         setModalState,
                                       ),
                                     );
                                   }
-                                  final preset = workingPresets[index];
+                                  final preset = scopedPresets[index];
                                   return _ExportPresetCard(
                                     preset: preset,
                                     disabled: isWorking,
-                                    naesinLinkLabel: naesinLinkLabel(preset),
+                                    naesinLinkLabel: isMockCategory
+                                        ? mockLinkLabel(preset)
+                                        : naesinLinkLabel(preset),
                                     createdAtLabel: createdAtLabel(preset),
-                                    onLink: () => linkPresetToNaesinCell(
-                                      preset,
-                                      setModalState,
-                                    ),
+                                    onTap: onOpenPreset == null
+                                        ? null
+                                        : () => openPresetEditor(
+                                              preset,
+                                              setModalState,
+                                            ),
+                                    onLink: isMockCategory
+                                        ? null
+                                        : () => linkPresetToNaesinCell(
+                                              preset,
+                                              setModalState,
+                                            ),
                                     onRename: () =>
                                         renamePreset(preset, setModalState),
                                     onDelete: () =>
@@ -1162,12 +1273,86 @@ class _NaesinDocumentCard extends StatelessWidget {
   }
 }
 
+class _PresetCategorySegmentedSwitch extends StatelessWidget {
+  const _PresetCategorySegmentedSwitch({
+    required this.isMockCategory,
+    required this.disabled,
+    required this.onSelectNaesin,
+    required this.onSelectMock,
+  });
+
+  final bool isMockCategory;
+  final bool disabled;
+  final VoidCallback onSelectNaesin;
+  final VoidCallback onSelectMock;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget buildButton({
+      required String label,
+      required bool selected,
+      required VoidCallback onTap,
+    }) {
+      return InkWell(
+        borderRadius: BorderRadius.circular(7),
+        onTap: disabled ? null : onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
+          decoration: BoxDecoration(
+            color: selected ? const Color(0xFF1F3834) : Colors.transparent,
+            borderRadius: BorderRadius.circular(7),
+            border: Border.all(
+              color: selected ? const Color(0xFF3E8A7A) : Colors.transparent,
+            ),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: selected
+                  ? const Color(0xFFEAF2F2)
+                  : const Color(0xFF9FB3B3),
+              fontSize: 12.5,
+              fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0B1114),
+        borderRadius: BorderRadius.circular(9),
+        border: Border.all(color: const Color(0xFF223131)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          buildButton(
+            label: '내신 기출',
+            selected: !isMockCategory,
+            onTap: onSelectNaesin,
+          ),
+          const SizedBox(width: 2),
+          buildButton(
+            label: '모의고사 기출',
+            selected: isMockCategory,
+            onTap: onSelectMock,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _ExportPresetCard extends StatelessWidget {
   const _ExportPresetCard({
     required this.preset,
     required this.disabled,
     required this.naesinLinkLabel,
     required this.createdAtLabel,
+    this.onTap,
     required this.onLink,
     required this.onRename,
     required this.onDelete,
@@ -1177,6 +1362,7 @@ class _ExportPresetCard extends StatelessWidget {
   final bool disabled;
   final String naesinLinkLabel;
   final String createdAtLabel;
+  final VoidCallback? onTap;
   final VoidCallback? onLink;
   final VoidCallback? onRename;
   final VoidCallback? onDelete;
@@ -1197,99 +1383,104 @@ class _ExportPresetCard extends StatelessWidget {
       child: Material(
         color: const Color(0xFF0F171B),
         borderRadius: BorderRadius.circular(12),
-        child: Ink(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFF223131)),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 10, 6, 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Text(
-                        preset.displayName,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Color(0xFFEAF2F2),
-                          fontSize: 14,
-                          fontWeight: FontWeight.w800,
-                          height: 1.2,
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: '내신 연결',
-                      onPressed: disabled ? null : onLink,
-                      icon: const Icon(Icons.link_outlined, size: 16),
-                      color: const Color(0xFF9FB3B3),
-                      splashRadius: 16,
-                      constraints:
-                          const BoxConstraints.tightFor(width: 28, height: 28),
-                      padding: EdgeInsets.zero,
-                      visualDensity: VisualDensity.compact,
-                    ),
-                    IconButton(
-                      tooltip: '이름 수정',
-                      onPressed: disabled ? null : onRename,
-                      icon: const Icon(Icons.edit_outlined, size: 16),
-                      color: const Color(0xFF9FB3B3),
-                      splashRadius: 16,
-                      constraints:
-                          const BoxConstraints.tightFor(width: 28, height: 28),
-                      padding: EdgeInsets.zero,
-                      visualDensity: VisualDensity.compact,
-                    ),
-                    IconButton(
-                      tooltip: '삭제',
-                      onPressed: disabled ? null : onDelete,
-                      icon: const Icon(Icons.delete_outline, size: 16),
-                      color: const Color(0xFFD38E8E),
-                      splashRadius: 16,
-                      constraints:
-                          const BoxConstraints.tightFor(width: 28, height: 28),
-                      padding: EdgeInsets.zero,
-                      visualDensity: VisualDensity.compact,
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  metaLine,
-                  style: const TextStyle(
-                    color: Color(0xFF9FB3B3),
-                    fontSize: 11.6,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                if (naesinLinkLabel.isNotEmpty) ...[
-                  const SizedBox(height: 4),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: disabled ? null : onTap,
+          child: Ink(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFF223131)),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 6, 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
                   Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Icon(Icons.link,
-                          size: 12, color: Color(0xFFAFC2D6)),
-                      const SizedBox(width: 4),
                       Expanded(
                         child: Text(
-                          naesinLinkLabel,
-                          maxLines: 1,
+                          preset.displayName,
+                          maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
-                            color: Color(0xFFAFC2D6),
-                            fontSize: 11.4,
-                            fontWeight: FontWeight.w700,
+                            color: Color(0xFFEAF2F2),
+                            fontSize: 14,
+                            fontWeight: FontWeight.w800,
+                            height: 1.2,
                           ),
                         ),
                       ),
+                      if (onLink != null)
+                        IconButton(
+                          tooltip: '내신 연결',
+                          onPressed: disabled ? null : onLink,
+                          icon: const Icon(Icons.link_outlined, size: 16),
+                          color: const Color(0xFF9FB3B3),
+                          splashRadius: 16,
+                          constraints:
+                              const BoxConstraints.tightFor(width: 28, height: 28),
+                          padding: EdgeInsets.zero,
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      IconButton(
+                        tooltip: '이름 수정',
+                        onPressed: disabled ? null : onRename,
+                        icon: const Icon(Icons.edit_outlined, size: 16),
+                        color: const Color(0xFF9FB3B3),
+                        splashRadius: 16,
+                        constraints:
+                            const BoxConstraints.tightFor(width: 28, height: 28),
+                        padding: EdgeInsets.zero,
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      IconButton(
+                        tooltip: '삭제',
+                        onPressed: disabled ? null : onDelete,
+                        icon: const Icon(Icons.delete_outline, size: 16),
+                        color: const Color(0xFFD38E8E),
+                        splashRadius: 16,
+                        constraints:
+                            const BoxConstraints.tightFor(width: 28, height: 28),
+                        padding: EdgeInsets.zero,
+                        visualDensity: VisualDensity.compact,
+                      ),
                     ],
                   ),
+                  const SizedBox(height: 6),
+                  Text(
+                    metaLine,
+                    style: const TextStyle(
+                      color: Color(0xFF9FB3B3),
+                      fontSize: 11.6,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  if (naesinLinkLabel.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        const Icon(Icons.link,
+                            size: 12, color: Color(0xFFAFC2D6)),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            naesinLinkLabel,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Color(0xFFAFC2D6),
+                              fontSize: 11.4,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
         ),
@@ -1608,4 +1799,33 @@ String _naesinLinkSummaryLabel(String rawKey) {
     pieces.add(parsed.cellLabel.trim());
   }
   return pieces.join(' · ');
+}
+
+String _mockLinkSummaryLabel(String rawKey) {
+  final trimmed = rawKey.trim();
+  if (trimmed.isEmpty) return '';
+  final parts = trimmed.split('|');
+  if (parts.length < 4) return trimmed;
+  final gradeKey = parts[0].trim();
+  final year = parts[1].trim();
+  final month = parts[2].trim();
+  final orgRaw = parts[3].trim();
+  final electiveRaw = parts.length >= 5 ? parts[4].trim() : '';
+  final orgLabel = orgRaw == 'csat'
+      ? '수능'
+      : (orgRaw == 'kice'
+          ? '평가원'
+          : (orgRaw == 'edu' ? '교육청' : orgRaw));
+  final electiveLabel = electiveRaw == 'probstats'
+      ? '확률과 통계'
+      : (electiveRaw == 'calculus'
+          ? '미적분'
+          : (electiveRaw == 'geometry' ? '기하' : electiveRaw));
+  return <String>[
+    if (year.isNotEmpty) '${year}년',
+    if (gradeKey.isNotEmpty) _gradeDisplayLabel(gradeKey),
+    if (month.isNotEmpty) '${month}월',
+    if (orgLabel.isNotEmpty) orgLabel,
+    if (electiveLabel.isNotEmpty) electiveLabel,
+  ].join(' · ');
 }

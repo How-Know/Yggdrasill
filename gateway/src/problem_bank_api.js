@@ -268,6 +268,30 @@ function normalizeTemplateProfile(raw) {
   const s = String(raw || "")
     .trim()
     .toLowerCase();
+  if (s === "gyeongsin" || s === "경신중") {
+    return "gyeongsin";
+  }
+  if (s === "neungin" || s === "능인중") {
+    return "neungin";
+  }
+  if (s === "daeryun" || s === "대륜중") {
+    return "daeryun";
+  }
+  if (s === "dongdo" || s === "동도중") {
+    return "dongdo";
+  }
+  if (s === "soseon" || s === "소선여중") {
+    return "soseon";
+  }
+  if (s === "oseong" || s === "오성중") {
+    return "oseong";
+  }
+  if (s === "jeonghwa" || s === "정화중") {
+    return "jeonghwa";
+  }
+  if (s === "hwanggeum" || s === "황금중") {
+    return "hwanggeum";
+  }
   if (
     s === "csat" ||
     s === "mock" ||
@@ -284,7 +308,16 @@ function normalizeTemplateProfile(raw) {
 function templateProfileForPbExportsColumn(profile) {
   const normalized = normalizeTemplateProfile(profile);
   // DB check constraint currently allows only naesin/csat/mock.
-  return normalized === "assignment" || normalized === "review_compact"
+  return normalized === "assignment" ||
+    normalized === "review_compact" ||
+    normalized === "gyeongsin" ||
+    normalized === "neungin" ||
+    normalized === "daeryun" ||
+    normalized === "dongdo" ||
+    normalized === "soseon" ||
+    normalized === "oseong" ||
+    normalized === "jeonghwa" ||
+    normalized === "hwanggeum"
     ? "naesin"
     : normalized;
 }
@@ -663,6 +696,31 @@ function normalizeCoverPageTexts(raw, defaults = {}) {
         seed.organization ||
         "한국교육과정평가원",
     ) || "한국교육과정평가원";
+  const examDate = normalizeWhitespace(src.examDate ?? seed.examDate ?? "");
+  const coverExamTitle = normalizeWhitespace(
+    src.coverExamTitle ?? seed.coverExamTitle ?? "",
+  );
+  const headerExamTitle = normalizeWhitespace(
+    src.headerExamTitle ?? seed.headerExamTitle ?? "",
+  );
+  const subjectName = normalizeWhitespace(
+    src.subjectName ?? seed.subjectName ?? "",
+  );
+  const objectiveCount = normalizeWhitespace(
+    src.objectiveCount ?? seed.objectiveCount ?? "",
+  );
+  const essayCount = normalizeWhitespace(
+    src.essayCount ?? seed.essayCount ?? "",
+  );
+  const totalPageCount = normalizeWhitespace(
+    src.totalPageCount ?? seed.totalPageCount ?? "",
+  );
+  const footerLabel = normalizeWhitespace(
+    src.footerLabel ?? seed.footerLabel ?? "",
+  );
+  const pageStartNumber = normalizeWhitespace(
+    src.pageStartNumber ?? seed.pageStartNumber ?? "",
+  );
   return {
     topTitle,
     subjectTitle,
@@ -675,6 +733,15 @@ function normalizeCoverPageTexts(raw, defaults = {}) {
     electiveItems,
     subjectGroups,
     organization,
+    ...(examDate ? { examDate } : {}),
+    ...(coverExamTitle ? { coverExamTitle } : {}),
+    ...(headerExamTitle ? { headerExamTitle } : {}),
+    ...(subjectName ? { subjectName } : {}),
+    ...(objectiveCount ? { objectiveCount } : {}),
+    ...(essayCount ? { essayCount } : {}),
+    ...(totalPageCount ? { totalPageCount } : {}),
+    ...(footerLabel ? { footerLabel } : {}),
+    ...(pageStartNumber ? { pageStartNumber } : {}),
   };
 }
 
@@ -1126,6 +1193,19 @@ function normalizeExportRenderConfig(
       defaults.naesin_link_key ||
       "",
   ).trim();
+  const mockExamLinkKey = String(
+    src.mockExamLinkKey ||
+      src.mock_exam_link_key ||
+      defaults.mockExamLinkKey ||
+      defaults.mock_exam_link_key ||
+      "",
+  ).trim();
+  const mockExamMeta =
+    src.mockExamMeta && typeof src.mockExamMeta === "object"
+      ? normalizeJsonObject(src.mockExamMeta, {})
+      : defaults.mockExamMeta && typeof defaults.mockExamMeta === "object"
+        ? normalizeJsonObject(defaults.mockExamMeta, {})
+        : null;
   return {
     // Force server-side renderer to latest stable path even if older app build
     // sends a stale renderConfigVersion.
@@ -1178,6 +1258,8 @@ function normalizeExportRenderConfig(
     mathEngine: mathEngineNormalized || undefined,
     disableAutoLabels,
     ...(naesinLinkKey ? { naesinLinkKey } : {}),
+    ...(mockExamLinkKey ? { mockExamLinkKey } : {}),
+    ...(mockExamMeta ? { mockExamMeta } : {}),
   };
 }
 

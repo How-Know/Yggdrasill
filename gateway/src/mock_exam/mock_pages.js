@@ -49,8 +49,12 @@ function range(from, to) {
 }
 
 export function parseRegion(raw) {
-  if (!Array.isArray(raw) || raw.length !== 4) return null;
-  const values = raw.map((v) => Math.round(Number(v)));
+  const unwrapped =
+    Array.isArray(raw) && raw.length === 1 && Array.isArray(raw[0]) && raw[0].length === 4
+      ? raw[0]
+      : raw;
+  if (!Array.isArray(unwrapped) || unwrapped.length !== 4) return null;
+  const values = unwrapped.map((v) => Math.round(Number(v)));
   if (values.some((v) => !Number.isFinite(v))) return null;
   const [y1, x1, y2, x2] = values.map((v) => Math.min(1000, Math.max(0, v)));
   if (y2 - y1 < 5 || x2 - x1 < 5) return null;
@@ -123,7 +127,7 @@ export function buildSolutionPagePrompt({ grade, page }) {
   return [
     '이 이미지는 한국 고등학교 수학 모의고사 "정답 및 해설(풀이)" 지면의 한 쪽이다.',
     `학년: 고${grade}. 쪽: ${page}.`,
-    '지면은 보통 좌우 2단이다. 세 가지를 찾아라.',
+    '지면은 보통 2단~4단이다. 세 가지를 찾아라.',
     '',
     '1) answer_tables: 빠른 정답 상자. "01. ⑤ 02. ④ … 16. 7" 처럼 번호와 정답이 나열된 상자다.',
     '   - label: 상자 머리에 적힌 구간 이름을 그대로 적는다(예: "[공통: 수학Ⅰ·수학Ⅱ]", "[선택: 확률과 통계]").',
@@ -189,9 +193,35 @@ function arrayOf(value) {
   return Array.isArray(value) ? value : [];
 }
 
-function columnOf(region) {
-  if (!region) return 0;
-  return (region[1] + region[3]) / 2 < 500 ? 0 : 1;
+/// 한 쪽의 요소들을 왼쪽 끝 x 좌표(`region[1]`) 기준으로 다단(2~4단) 클러스터로 묶는다.
+/// 같은 단 안에서는 x 가 약간의 들여쓰기 차이(120 이내)만 나고, 다른 단으로 넘어가면
+/// 보통 200 이상 벌어진다.
+export function assignColumnsForEvents(events, gapThreshold = 140) {
+  const xs = events
+    .map((e) => (Array.isArray(e?.region) ? Number(e.region[1]) : NaN))
+    .filter((x) => Number.isFinite(x))
+    .sort((a, b) => a - b);
+  const anchors = [];
+  for (const x of xs) {
+    if (anchors.length === 0 || x - anchors[anchors.length - 1] >= gapThreshold) {
+      anchors.push(x);
+    }
+  }
+  return (region) => {
+    if (!Array.isArray(region) || anchors.length <= 1) return 0;
+    const x = Number(region[1]);
+    if (!Number.isFinite(x)) return 0;
+    let bestIdx = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < anchors.length; i += 1) {
+      const dist = Math.abs(x - anchors[i]);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestIdx = i;
+      }
+    }
+    return bestIdx;
+  };
 }
 
 /// 해설 지면들을 읽는 차례(왼쪽 단 위→아래, 오른쪽 단 위→아래, 다음 쪽)로
@@ -227,8 +257,9 @@ export function assignSolutionSections({ grade, paperElective = '', pages }) {
     for (const block of result.blocks || []) {
       events.push({ kind: 'block', region: block.numberRegion, block });
     }
+    const colOf = assignColumnsForEvents(events);
     events.sort((a, b) => {
-      const col = columnOf(a.region) - columnOf(b.region);
+      const col = colOf(a.region) - colOf(b.region);
       if (col !== 0) return col;
       return (a.region?.[0] ?? 0) - (b.region?.[0] ?? 0);
     });
@@ -240,7 +271,12 @@ export function assignSolutionSections({ grade, paperElective = '', pages }) {
       }
       if (event.kind === 'table') {
         const labelSection = sectionFromLabel(event.table.label);
-        if (ELECTIVES.includes(labelSection)) currentElective = labelSection;
+        // 같은 쪽에 해설 블록(23~30)이 함께 있는 상자만 구간 전환에 쓴다.
+        // 1쪽 빠른 정답 모아보기(확통·미적·기하 3상자)가 뒤쪽 해설 구간을 오염시키지 않게 한다.
+        const hasElectiveBlocksOnPage = (result.blocks || []).some((b) => b.number > GRADE3_COMMON_LAST);
+        if (hasElectiveBlocksOnPage && ELECTIVES.includes(labelSection)) {
+          currentElective = labelSection;
+        }
         for (const entry of event.table.entries) {
           const section = resolve(entry.number, labelSection);
           if (!section) continue;
@@ -299,13 +335,20 @@ export function assignProblemItems({ grade, paperElective, pages, takeCommon }) 
 }
 
 /// 해설 PDF 텍스트에서 선택과목 해설이 시작하는 쪽을 찾는다(1부터).
+/// 평가원의 `■ [선택: 미적분]`, 교육청의 `[미적분]`, `확률과 통계 해설` 등을 모두 찾는다.
 /// 텍스트 층이 없거나 못 찾으면 null.
 export function electiveStartPageFromText(pageTexts, elective) {
   const label = SECTION_LABELS[elective];
   if (!label) return null;
-  const pattern = new RegExp(`선택\\s*[:：]?\\s*${label.replace(/\s+/g, '\\s*')}`);
+  const spaced = label.replace(/\s+/g, '\\s*');
+  const patterns = [
+    new RegExp(`선택\\s*[:：]?\\s*${spaced}`),
+    new RegExp(`\\[\\s*${spaced}\\s*\\]`),
+    new RegExp(`${spaced}\\s*(?:정답|해설)`),
+  ];
   for (let i = 0; i < (pageTexts || []).length; i += 1) {
-    if (pattern.test(pageTexts[i] || '')) return i + 1;
+    const text = pageTexts[i] || '';
+    if (patterns.some((p) => p.test(text))) return i + 1;
   }
   return null;
 }

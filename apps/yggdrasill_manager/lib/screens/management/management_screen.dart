@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/think/think_api.dart';
 import '../../services/think/think_models.dart';
 import '../../theme/manager_shell_colors.dart';
+import 'school_logo_card.dart';
 
 class ManagementScreen extends StatefulWidget {
   const ManagementScreen({super.key});
@@ -338,6 +339,8 @@ class _ManagementScreenState extends State<ManagementScreen> {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       _buildM5TestDeviceCard(),
+                      const SizedBox(height: 16),
+                      const SchoolLogoCard(),
                       const SizedBox(height: 16),
                       // 성향조사 웹 설정
                       Container(

@@ -1,9 +1,54 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 
 import '../screens/design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
-import 'solid_capsule_action_bar.dart';
+
+final Set<VoidCallback> _sharedDropdownClosers = <VoidCallback>{};
+final Set<RenderBox> _sharedDropdownPassThroughBoxes = <RenderBox>{};
+
+/// 펼쳐진 공용 드롭다운을 모두 닫는다.
+void closeOpenSharedDropdowns() {
+  for (final close in List<VoidCallback>.of(_sharedDropdownClosers)) {
+    close();
+  }
+}
+
+bool _sharedDropdownPassThroughContains(Offset globalPosition) {
+  for (final box in _sharedDropdownPassThroughBoxes) {
+    if (!box.attached || !box.hasSize) continue;
+    final rect = (box.localToGlobal(Offset.zero) & box.size).inflate(4);
+    if (rect.contains(globalPosition)) return true;
+  }
+  return false;
+}
+
+/// 드롭다운 바깥을 눌러 닫는 층이 이 영역은 통과시킨다.
+///
+/// 미리보기처럼 드롭다운 아래에 있는 버튼이 첫 탭을 직접 받게 한다.
+class SharedDropdownHitPassThrough extends SingleChildRenderObjectWidget {
+  const SharedDropdownHitPassThrough({super.key, required super.child});
+
+  @override
+  RenderObject createRenderObject(BuildContext context) {
+    return _RenderSharedDropdownHitPassThrough();
+  }
+}
+
+class _RenderSharedDropdownHitPassThrough extends RenderProxyBox {
+  @override
+  void attach(PipelineOwner owner) {
+    super.attach(owner);
+    _sharedDropdownPassThroughBoxes.add(this);
+  }
+
+  @override
+  void detach() {
+    _sharedDropdownPassThroughBoxes.remove(this);
+    super.detach();
+  }
+}
 
 /// 앵커 버튼 아래에 펼쳐지는 공용 드롭다운 다이얼로그(글래스 패널) 토큰·셸·오버레이.
 ///
@@ -47,8 +92,21 @@ class SharedDropdownDialog extends StatefulWidget {
 
 class _SharedDropdownDialogState extends State<SharedDropdownDialog> {
   final OverlayPortalController _overlayController = OverlayPortalController();
+  late final VoidCallback _registeredClose = _closeOverlay;
 
   bool get _isOpen => _overlayController.isShowing;
+
+  @override
+  void initState() {
+    super.initState();
+    _sharedDropdownClosers.add(_registeredClose);
+  }
+
+  @override
+  void dispose() {
+    _sharedDropdownClosers.remove(_registeredClose);
+    super.dispose();
+  }
 
   void _toggleOverlay() {
     if (widget.disabled) return;
@@ -114,10 +172,7 @@ class _SharedDropdownDialogState extends State<SharedDropdownDialog> {
         return Stack(
           children: [
             Positioned.fill(
-              child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onTap: _closeOverlay,
-              ),
+              child: _SharedDropdownDismissBarrier(onTap: _closeOverlay),
             ),
             if (widget.openPanelAboveAnchor)
               Positioned(
@@ -138,6 +193,42 @@ class _SharedDropdownDialogState extends State<SharedDropdownDialog> {
       },
       child: widget.childBuilder(context, controller),
     );
+  }
+}
+
+class _SharedDropdownDismissBarrier extends SingleChildRenderObjectWidget {
+  _SharedDropdownDismissBarrier({required VoidCallback onTap})
+      : super(child: _SharedDropdownDismissBarrierHitTarget(onTap: onTap));
+
+  @override
+  RenderObject createRenderObject(BuildContext context) {
+    return _RenderSharedDropdownDismissBarrier();
+  }
+}
+
+class _SharedDropdownDismissBarrierHitTarget extends StatelessWidget {
+  const _SharedDropdownDismissBarrierHitTarget({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: const SizedBox.expand(),
+    );
+  }
+}
+
+class _RenderSharedDropdownDismissBarrier extends RenderProxyBox {
+  @override
+  bool hitTest(BoxHitTestResult result, {required Offset position}) {
+    if (size.contains(position) &&
+        _sharedDropdownPassThroughContains(localToGlobal(position))) {
+      return false;
+    }
+    return super.hitTest(result, position: position);
   }
 }
 

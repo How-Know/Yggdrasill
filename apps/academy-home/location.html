@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>위치 · 정현수학교습소</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      background: #fff;
+      color: #1d1d1f;
+      font-family: Pretendard, -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    main {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 10vh 24px 48px;
+    }
+    .logo {
+      width: 64px;
+      height: 64px;
+      object-fit: contain;
+    }
+    h1 {
+      margin: 18px 0 0;
+      font-size: clamp(32px, 5vw, 40px);
+      font-weight: 600;
+      letter-spacing: -0.03em;
+      line-height: 1.1;
+      text-align: center;
+    }
+    .lead {
+      margin: 8px 0 0;
+      color: #6e6e73;
+      font-size: 17px;
+      letter-spacing: -0.016em;
+      line-height: 1.4;
+      text-align: center;
+    }
+    .column {
+      width: min(420px, 100%);
+      margin-top: 36px;
+    }
+    .diagram {
+      background: #e5e5ea;
+      border-radius: 12px;
+      padding: 8px 6px 4px;
+    }
+    .diagram svg {
+      display: block;
+      width: 100%;
+      height: auto;
+      font-family: inherit;
+    }
+    h2 {
+      margin: 32px 0 0;
+      color: #6e6e73;
+      font-size: 13px;
+      font-weight: 400;
+      letter-spacing: -0.01em;
+    }
+    .place {
+      margin: 10px 0 0;
+      font-size: 22px;
+      font-weight: 600;
+      letter-spacing: -0.03em;
+      line-height: 1.3;
+    }
+    .sub {
+      margin: 6px 0 0;
+      color: #6e6e73;
+      font-size: 15px;
+      letter-spacing: -0.016em;
+      line-height: 1.45;
+    }
+    .rows { margin-top: 8px; }
+    .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: baseline;
+      padding: 14px 0;
+      border-top: 1px solid #f3f3f6;
+      font-size: 17px;
+      letter-spacing: -0.016em;
+      line-height: 1.35;
+    }
+    .row .meta {
+      color: #6e6e73;
+      text-align: right;
+    }
+    .note {
+      margin: 8px 0 0;
+      color: #6e6e73;
+      font-size: 15px;
+      letter-spacing: -0.016em;
+      line-height: 1.45;
+    }
+    a.phone {
+      color: inherit;
+      text-decoration: none;
+    }
+    .maps {
+      display: flex;
+      justify-content: center;
+      gap: 28px;
+      margin-top: 16px;
+    }
+    .brand {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      color: #6e6e73;
+      font-size: 12px;
+      letter-spacing: -0.01em;
+      text-decoration: none;
+    }
+    .brand svg {
+      display: block;
+      width: 48px;
+      height: 48px;
+      transition: transform 0.45s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .brand:hover svg { transform: scale(1.06); }
+    .brand:focus-visible {
+      outline: 2px solid #33a373;
+      outline-offset: 4px;
+      border-radius: 16px;
+    }
+    footer {
+      margin-top: auto;
+      padding-top: 64px;
+      color: #86868b;
+      font-size: 12px;
+      letter-spacing: -0.01em;
+      text-align: center;
+    }
+  </style>
+  <link rel="stylesheet" href="/chrome.css">
+</head>
+<body>
+  <header class="phonebar">
+    <a class="phonebar-name" href="/">정현수학교습소</a>
+    <div class="phonebar-tools">
+      <button class="iconbtn" type="button" id="open-search" aria-label="검색">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="11" cy="11" r="6.25" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <path d="M15.8 15.8 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        </svg>
+      </button>
+      <button class="iconbtn" type="button" id="open-menu" aria-label="메뉴" aria-expanded="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 7h16M4 12h16M4 17h16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+  <div class="panel" id="menu-panel" hidden>
+    <div class="panel-top">
+      <button class="iconbtn" type="button" data-close aria-label="닫기">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </div>
+    <a href="/notices">공지</a>
+    <a href="/location">위치</a>
+    <a href="/consult">신규 상담</a>
+  </div>
+  <div class="panel" id="search-panel" hidden>
+    <div class="panel-top">
+      <button class="iconbtn" type="button" data-close aria-label="닫기">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </div>
+    <input class="panel-search" id="site-search" type="search" placeholder="검색" autocomplete="off" enterkeyhint="search">
+    <div id="search-list"></div>
+    <p class="panel-empty" id="search-empty" hidden>없는 메뉴입니다.</p>
+  </div>
+  <main class="with-fab">
+    <a href="/"><img class="logo" src="logo.png" alt="정현수학교습소"></a>
+    <h1>위치</h1>
+    <p class="lead">지하철 2호선 담티역 2번 출구에서 490m</p>
+    <div class="column">
+      <div class="diagram">
+        <svg viewBox="0 0 360 470" role="img" aria-label="담티역 2번 출구에서 달구벌대로를 따라 삼거리에서 교학로 서쪽으로 건너 남쪽, 490m. 소선여중앞 정류장은 교학로 서쪽, 학원도 서쪽, 바로 아래 메가커피. 길 사이 북쪽에 만촌3차화성, 메가커피 남쪽에 대청초, 동쪽 길 너머 대륜중고, 교학로12길 남쪽에 삼정그린코어와 만촌우방1차, 교학로 남서쪽에 만촌자이르네">
+          <g fill="none" stroke="#fff" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M60 10 L380 170" stroke-width="26"/>
+            <path d="M150 55 L110 150 L103 470" stroke-width="16"/>
+            <path d="M262 111 L240 190 V470" stroke-width="12"/>
+            <path d="M8 330 H330" stroke-width="12"/>
+            <path d="M103 400 H8" stroke-width="11"/>
+          </g>
+          <path d="M60 10 L380 170" fill="none" stroke="#33a373" stroke-width="5" stroke-linecap="round"/>
+          <circle cx="194" cy="77" r="7" fill="#fff" stroke="#33a373" stroke-width="2.5"/>
+          <text x="16" y="24" fill="#86868b" font-size="11">북</text>
+          <text x="194" y="54" text-anchor="middle" fill="#1d1d1f" font-size="15" font-weight="600" stroke="#e5e5ea" stroke-width="4" paint-order="stroke">담티역</text>
+          <text x="350" y="190" text-anchor="end" fill="#33a373" font-size="13" font-weight="600" stroke="#e5e5ea" stroke-width="4" paint-order="stroke">지하철 2호선</text>
+          <path d="M170.5 82.1 L171.4 80.2 L152.1 70.6 L145.2 66.5 L110 150 L108 242 L88 242" fill="none" stroke="#86868b" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="1.5 6"/>
+          <text x="86" y="108" text-anchor="end" fill="#6e6e73" font-size="13" stroke="#e5e5ea" stroke-width="4" paint-order="stroke">도보 490m</text>
+          <circle cx="166" cy="91" r="10" fill="#1d1d1f"/>
+          <text x="166" y="95" text-anchor="middle" fill="#fff" font-size="11" font-weight="600">2</text>
+          <text x="166" y="119" text-anchor="middle" fill="#6e6e73" font-size="13" stroke="#e5e5ea" stroke-width="4" paint-order="stroke">번 출구</text>
+          <circle cx="100.9" cy="200" r="4.5" fill="#1d1d1f"/>
+          <text x="92" y="197" text-anchor="end" fill="#1d1d1f" font-size="14" font-weight="600" stroke="#e5e5ea" stroke-width="4" paint-order="stroke">소선여중앞</text>
+          <text x="92" y="215" text-anchor="end" fill="#6e6e73" font-size="12" stroke="#e5e5ea" stroke-width="4" paint-order="stroke">425 · 504 · 수성5</text>
+          <circle cx="88" cy="242" r="11" fill="#33a373"/>
+          <circle cx="88" cy="242" r="4.2" fill="#fff"/>
+          <text x="124" y="240" fill="#1d1d1f" font-size="14" font-weight="600" stroke="#e5e5ea" stroke-width="4" paint-order="stroke">정현수학교습소</text>
+          <text x="124" y="257" fill="#6e6e73" font-size="12" stroke="#e5e5ea" stroke-width="4" paint-order="stroke">교학로 44 2층</text>
+          <circle cx="88" cy="274" r="3.5" fill="#6e6e73"/>
+          <text x="80" y="278" text-anchor="end" fill="#6e6e73" font-size="12" font-weight="600" stroke="#e5e5ea" stroke-width="4" paint-order="stroke">메가커피</text>
+          <g fill="#6e6e73" font-size="11" stroke="#e5e5ea" stroke-width="3" paint-order="stroke">
+            <circle cx="172" cy="170" r="2.2" fill="#86868b" stroke="none"/>
+            <text x="180" y="174">만촌3차화성</text>
+            <circle cx="22" cy="308" r="2.2" fill="#86868b" stroke="none"/>
+            <text x="30" y="312">대청초</text>
+            <circle cx="300" cy="215" r="2.2" fill="#86868b" stroke="none"/>
+            <text x="308" y="219">대륜중고</text>
+            <circle cx="150" cy="372" r="2.2" fill="#86868b" stroke="none"/>
+            <text x="158" y="376">삼정그린코어</text>
+            <circle cx="262" cy="372" r="2.2" fill="#86868b" stroke="none"/>
+            <text x="270" y="376">만촌우방1차</text>
+            <circle cx="20" cy="432" r="2.2" fill="#86868b" stroke="none"/>
+            <text x="28" y="436">만촌자이르네</text>
+          </g>
+        </svg>
+      </div>
+      <div class="maps">
+        <a class="brand" href="https://naver.me/FlzicxBM" target="_blank" rel="noopener noreferrer">
+          <svg viewBox="0 0 48 48" aria-hidden="true">
+            <circle cx="24" cy="24" r="24" fill="#03C75A"/>
+            <path fill="#fff" transform="translate(14.64 14.64) scale(0.78)" d="M16.273 12.845 7.376 0H0v24h7.726V11.156L16.624 24H24V0h-7.727v12.845Z"/>
+          </svg>
+          네이버
+        </a>
+        <a class="brand" href="https://kko.to/j0aAItyyXe" target="_blank" rel="noopener noreferrer">
+          <svg viewBox="0 0 48 48" aria-hidden="true">
+            <circle cx="24" cy="24" r="24" fill="#FEE500"/>
+            <ellipse cx="24" cy="22" rx="12" ry="9.2" fill="#3C1E1E"/>
+            <path fill="#3C1E1E" d="M17.6 28.8 15.2 35.4 23.8 30.2Z"/>
+          </svg>
+          카카오
+        </a>
+      </div>
+
+      <h2>주소</h2>
+      <p class="place">대구 수성구 교학로 44 2층</p>
+      <p class="sub">지번 대구 수성구 만촌동 872-43<br>우편번호 42075</p>
+
+      <h2>버스</h2>
+      <p class="note">소선여중앞 02955 · 대청초등학교건너 방면</p>
+      <div class="rows">
+        <div class="row"><span>425</span><span class="meta">황금고가교네거리 ↔ 매곡</span></div>
+        <div class="row"><span>504</span><span class="meta">방천리공영차고지 ↔ 두리봉터널</span></div>
+        <div class="row"><span>수성5</span><span class="meta">가창초등학교앞 ↔ 두리봉터널</span></div>
+      </div>
+
+      <h2>운영 시간</h2>
+      <div class="rows">
+        <div class="row"><span>월 – 금</span><span class="meta">15:00 – 22:00</span></div>
+        <div class="row"><span>토</span><span class="meta">10:00 – 22:00</span></div>
+        <div class="row"><span>일</span><span class="meta">10:00 – 15:00</span></div>
+      </div>
+
+      <h2>전화</h2>
+      <p class="place"><a class="phone" href="tel:053-745-5356">053-745-5356</a></p>
+      <p class="sub">무선 인터넷, 대기공간, 예약, 유아의자, 간편결제</p>
+
+    </div>
+    <footer>Copyright © 2026 정현수학교습소</footer>
+  </main>
+  <a class="fab" href="/consult" aria-label="신규 상담">
+    <span class="fab-pill" aria-hidden="true">
+      <img class="fab-mark" src="/fab-chat.svg" alt="" width="20" height="20">
+      <span>신규 상담</span>
+    </span>
+    <span class="fab-dot" aria-hidden="true">
+      <img class="fab-mark" src="/fab-chat.svg" alt="" width="20" height="20">
+    </span>
+  </a>
+  <script src="/chrome.js"></script>
+</body>
+</html>

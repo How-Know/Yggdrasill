@@ -622,3 +622,6 @@ Edge Function `student_textbook_grade` 에 `homework_group_id` 를 함께 보내
   알림장에 동의한 학생의 하원만 `하원 안내 (알림장)`을 쓰고, 버튼 `알림장 조회`의 주소는
   `https://mneme.co.kr/s?t=`와 그 회차 토큰이다. 동의하지 않은 하원은 버튼 없는 하원 v2다.
   강조 문구는 발송 본문에 `title`로 붙인다. 저장본이 없으면 그 하원은 버튼 없는 하원으로 보낸다.
+  하원 직후 링크 창은 띄우지 않는다. 하원 알림톡이 건너뛰어지거나 5번까지 실패하면,
+  또는 7분이 지나도 보내지지 않으면 같은 링크 창을 띄운다
+  (`staff_departure_alimtalk_outcome_v1`).

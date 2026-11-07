@@ -39,6 +39,7 @@ class MockExamResourceCard {
     required this.paperId,
     required this.storageBucket,
     required this.storagePath,
+    required this.extracted,
   });
 
   final String examId;
@@ -52,6 +53,9 @@ class MockExamResourceCard {
   final String paperId;
   final String storageBucket;
   final String storagePath;
+
+  /// 추출이 끝나 번호·문항 보기로 열 수 있는 시험.
+  final bool extracted;
 
   String get id => '$examId|$elective';
 
@@ -101,17 +105,19 @@ class MockExamResourceService {
         .from('mock_exams')
         .select('id, grade, exam_year, exam_month, org')
         .eq('academy_id', academyId)
-        .eq('grade', grade)
-        .eq('status', 'review');
+        .eq('grade', grade);
     final examRows = (exams as List<dynamic>)
         .map((e) => Map<String, dynamic>.from(e as Map))
         .toList();
     if (examRows.isEmpty) return const <MockExamResourceCard>[];
-    final papers = await _client
+    final examIds = examRows.map((e) => '${e['id']}').toList();
+    final papersFuture = _client
         .from('mock_exam_papers')
         .select('id, exam_id, elective, storage_bucket, storage_path')
         .eq('kind', 'problem')
-        .inFilter('exam_id', examRows.map((e) => '${e['id']}').toList());
+        .inFilter('exam_id', examIds);
+    final sectionsByExam = await _extractedSections(examIds);
+    final papers = await papersFuture;
     final papersByExam = <String, List<Map<String, dynamic>>>{};
     for (final raw in papers as List<dynamic>) {
       final row = Map<String, dynamic>.from(raw as Map);
@@ -122,6 +128,8 @@ class MockExamResourceService {
     for (final exam in examRows) {
       final rows = papersByExam['${exam['id']}'] ?? const [];
       for (final paper in rows) {
+        final elective = '${paper['elective'] ?? ''}';
+        final sections = sectionsByExam['${exam['id']}'] ?? const <String>{};
         cards.add(
           MockExamResourceCard(
             examId: '${exam['id']}',
@@ -129,10 +137,13 @@ class MockExamResourceService {
             examYear: n(exam['exam_year']),
             month: n(exam['exam_month']),
             org: '${exam['org'] ?? ''}',
-            elective: '${paper['elective'] ?? ''}',
+            elective: elective,
             paperId: '${paper['id']}',
             storageBucket: '${paper['storage_bucket'] ?? 'problem-documents'}',
             storagePath: '${paper['storage_path'] ?? ''}',
+            extracted: elective.isEmpty
+                ? sections.isNotEmpty
+                : sections.contains(elective),
           ),
         );
       }
@@ -147,6 +158,29 @@ class MockExamResourceService {
           );
     });
     return cards;
+  }
+
+  /// 문항이 있는 구간. 고3 카드는 그 선택과목 구간이 있을 때만 추출된 것으로 본다.
+  Future<Map<String, Set<String>>> _extractedSections(
+      List<String> examIds) async {
+    final out = <String, Set<String>>{};
+    var from = 0;
+    while (true) {
+      final rows = await _client
+          .from('mock_exam_items')
+          .select('exam_id, section')
+          .inFilter('exam_id', examIds)
+          .range(from, from + 999);
+      final list = rows as List<dynamic>;
+      for (final raw in list) {
+        final row = Map<String, dynamic>.from(raw as Map);
+        out
+            .putIfAbsent('${row['exam_id']}', () => <String>{})
+            .add('${row['section']}');
+      }
+      if (list.length < 1000) return out;
+      from += 1000;
+    }
   }
 
   /// 카드의 문항: 공통 + 그 카드의 선택과목.
@@ -185,4 +219,36 @@ class MockExamResourceService {
   Future<String> signedPaperUrl(MockExamResourceCard card) => _client.storage
       .from(card.storageBucket)
       .createSignedUrl(card.storagePath, 60 * 60);
+
+  /// 정답과 해설이 함께 들어 있는 해설 PDF. 같은 선택과목을 먼저 보고, 없으면 공통 해설을 본다.
+  Future<String?> signedSolutionUrl(MockExamResourceCard card) async {
+    final rows = await _client
+        .from('mock_exam_papers')
+        .select('elective, storage_bucket, storage_path')
+        .eq('exam_id', card.examId)
+        .eq('kind', 'solution');
+    final papers = (rows as List<dynamic>)
+        .map((raw) => Map<String, dynamic>.from(raw as Map))
+        .where((row) => '${row['storage_path'] ?? ''}'.trim().isNotEmpty)
+        .toList();
+    Map<String, dynamic>? picked;
+    for (final row in papers) {
+      if ('${row['elective'] ?? ''}' == card.elective) {
+        picked = row;
+        break;
+      }
+    }
+    if (picked == null) {
+      for (final row in papers) {
+        if ('${row['elective'] ?? ''}' == '') {
+          picked = row;
+          break;
+        }
+      }
+    }
+    if (picked == null) return null;
+    final bucket = '${picked['storage_bucket'] ?? 'problem-documents'}';
+    final path = '${picked['storage_path']}'.trim();
+    return _client.storage.from(bucket).createSignedUrl(path, 60 * 60);
+  }
 }

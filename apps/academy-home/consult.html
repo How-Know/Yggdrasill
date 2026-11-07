@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>신규 상담 · 정현수학교습소</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      background: #fff;
+      color: #1d1d1f;
+      font-family: Pretendard, -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    main {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 10vh 24px 48px;
+    }
+    .logo {
+      width: 64px;
+      height: 64px;
+      object-fit: contain;
+    }
+    h1 {
+      margin: 18px 0 0;
+      font-size: clamp(32px, 5vw, 40px);
+      font-weight: 600;
+      letter-spacing: -0.03em;
+      line-height: 1.1;
+      text-align: center;
+    }
+    .lead {
+      margin: 8px 0 0;
+      color: #6e6e73;
+      font-size: 17px;
+      letter-spacing: -0.016em;
+      line-height: 1.4;
+      text-align: center;
+    }
+    form, .done {
+      width: min(420px, 100%);
+      margin-top: 36px;
+    }
+    label {
+      display: block;
+      margin: 22px 0 8px;
+      color: #6e6e73;
+      font-size: 13px;
+      letter-spacing: -0.01em;
+    }
+    label:first-child { margin-top: 0; }
+    .mark { margin-left: 6px; }
+    input[type="tel"],
+    input[type="text"],
+    textarea {
+      width: 100%;
+      border: 0;
+      border-radius: 12px;
+      background: #f3f3f6;
+      color: #1d1d1f;
+      font: inherit;
+      font-size: 17px;
+      letter-spacing: -0.016em;
+      padding: 14px 16px;
+    }
+    textarea {
+      min-height: 120px;
+      resize: vertical;
+      line-height: 1.45;
+    }
+    input:focus, textarea:focus {
+      outline: 2px solid #33a373;
+      outline-offset: 1px;
+    }
+    ::placeholder { color: #86868b; }
+    .consent {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      margin-top: 28px;
+    }
+    .consent input {
+      width: 22px;
+      height: 22px;
+      margin: 1px 0 0;
+      accent-color: #33a373;
+      flex: none;
+    }
+    .consent p {
+      margin: 0;
+      color: #6e6e73;
+      font-size: 13px;
+      letter-spacing: -0.01em;
+      line-height: 1.5;
+    }
+    .submit {
+      width: 100%;
+      margin-top: 28px;
+      height: 48px;
+      border: 0;
+      border-radius: 980px;
+      background: #33a373;
+      color: #fff;
+      font: inherit;
+      font-size: 17px;
+      letter-spacing: -0.01em;
+      cursor: pointer;
+    }
+    .submit:hover:not(:disabled) { background: #45b289; }
+    .submit:disabled {
+      background: #f3f3f6;
+      color: #86868b;
+      cursor: default;
+    }
+    .submit:focus-visible {
+      outline: 2px solid #33a373;
+      outline-offset: 3px;
+    }
+    .error {
+      min-height: 1.4em;
+      margin: 14px 0 0;
+      color: #1d1d1f;
+      font-size: 14px;
+      letter-spacing: -0.01em;
+      text-align: center;
+    }
+    .done { text-align: center; }
+    .done[hidden], form[hidden] { display: none; }
+    .home {
+      display: inline-flex;
+      margin-top: 22px;
+      color: #33a373;
+      font-size: 17px;
+      letter-spacing: -0.01em;
+      text-decoration: none;
+    }
+    .hp {
+      position: absolute;
+      left: -10000px;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+    }
+    footer {
+      margin-top: auto;
+      padding-top: 64px;
+      color: #86868b;
+      font-size: 12px;
+      letter-spacing: -0.01em;
+      text-align: center;
+    }
+  </style>
+  <link rel="stylesheet" href="/chrome.css">
+</head>
+<body>
+  <header class="phonebar">
+    <a class="phonebar-name" href="/">정현수학교습소</a>
+    <div class="phonebar-tools">
+      <button class="iconbtn" type="button" id="open-search" aria-label="검색">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="11" cy="11" r="6.25" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <path d="M15.8 15.8 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        </svg>
+      </button>
+      <button class="iconbtn" type="button" id="open-menu" aria-label="메뉴" aria-expanded="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 7h16M4 12h16M4 17h16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+  <div class="panel" id="menu-panel" hidden>
+    <div class="panel-top">
+      <button class="iconbtn" type="button" data-close aria-label="닫기">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </div>
+    <a href="/notices">공지</a>
+    <a href="/location">위치</a>
+    <a href="/consult">신규 상담</a>
+  </div>
+  <div class="panel" id="search-panel" hidden>
+    <div class="panel-top">
+      <button class="iconbtn" type="button" data-close aria-label="닫기">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </div>
+    <input class="panel-search" id="site-search" type="search" placeholder="검색" autocomplete="off" enterkeyhint="search">
+    <div id="search-list"></div>
+    <p class="panel-empty" id="search-empty" hidden>없는 메뉴입니다.</p>
+  </div>
+  <main>
+    <a href="/"><img class="logo" src="logo.png" alt="정현수학교습소"></a>
+    <h1>신규 상담</h1>
+    <p class="lead">확인 후 전화드리겠습니다.</p>
+    <form id="form" novalidate>
+      <div class="hp" aria-hidden="true">
+        <label for="company">회사</label>
+        <input id="company" name="company" type="text" tabindex="-1" autocomplete="off">
+      </div>
+      <label for="phone">휴대폰 번호<span class="mark">필수</span></label>
+      <input id="phone" name="phone" type="tel" inputmode="numeric" autocomplete="tel" maxlength="13" placeholder="010-0000-0000" required>
+      <label for="time">상담 가능한 시간<span class="mark">필수</span></label>
+      <input id="time" name="time" type="text" maxlength="80" placeholder="평일 저녁 7시 이후" required>
+      <label for="question">궁금하신 점<span class="mark">선택</span></label>
+      <textarea id="question" name="question" maxlength="500" placeholder="학년, 과목처럼 미리 알려 주실 내용"></textarea>
+      <label class="consent">
+        <input id="consent" type="checkbox">
+        <p>휴대폰 번호와 상담 가능 시간을 상담 연락을 위해 수집합니다. 궁금하신 점은 선택입니다. 상담을 마친 뒤 1년 동안 보관하고, 그 전에 삭제를 요청하면 바로 지웁니다. 동의하지 않으면 상담 연락을 드리지 못합니다. 만 14세 미만은 보호자가 신청해 주세요.</p>
+      </label>
+      <button class="submit" id="submit" type="submit" disabled>신청</button>
+      <p class="error" id="error" role="status"></p>
+    </form>
+    <div class="done" id="done" hidden>
+      <p class="lead">신청되었습니다. 확인 후 연락드리겠습니다.</p>
+      <a class="home" href="/">홈으로</a>
+    </div>
+    <footer>Copyright © 2026 정현수학교습소</footer>
+  </main>
+  <script>
+    const form = document.querySelector('#form');
+    const phone = document.querySelector('#phone');
+    const time = document.querySelector('#time');
+    const question = document.querySelector('#question');
+    const consent = document.querySelector('#consent');
+    const submit = document.querySelector('#submit');
+    const error = document.querySelector('#error');
+    const company = document.querySelector('#company');
+
+    function digits(value) {
+      return value.replace(/\D/g, '').slice(0, 11);
+    }
+
+    function sync() {
+      const phoneOk = digits(phone.value).length >= 10;
+      submit.disabled = !(phoneOk && time.value.trim() && consent.checked);
+    }
+
+    phone.addEventListener('input', () => {
+      const d = digits(phone.value);
+      let view = d;
+      if (d.length > 7) view = d.slice(0, 3) + '-' + d.slice(3, 7) + '-' + d.slice(7);
+      else if (d.length > 3) view = d.slice(0, 3) + '-' + d.slice(3);
+      phone.value = view;
+      sync();
+    });
+    time.addEventListener('input', sync);
+    consent.addEventListener('change', sync);
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      error.textContent = '';
+      submit.disabled = true;
+      try {
+        const response = await fetch('/api/consult', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            phone: phone.value,
+            availableTime: time.value,
+            question: question.value,
+            consent: consent.checked,
+            company: company.value,
+          }),
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok || !body.ok) {
+          error.textContent = body.message || '신청을 받지 못했습니다. 잠시 후 다시 부탁드리겠습니다.';
+          sync();
+          return;
+        }
+        form.hidden = true;
+        document.querySelector('#done').hidden = false;
+      } catch {
+        error.textContent = '신청을 받지 못했습니다. 잠시 후 다시 부탁드리겠습니다.';
+        sync();
+      }
+    });
+  </script>
+  <script src="/chrome.js"></script>
+</body>
+</html>

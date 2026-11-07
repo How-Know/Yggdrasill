@@ -69,9 +69,10 @@ test('문제지 판독: 좌표가 없거나 겹친 번호는 버린다', () => {
       { number: '3.', region: [10, 520, 300, 980] },
       { number: 3, region: [310, 520, 600, 980] },
       { number: 4, region: [1, 2, 3] },
+      { number: 5, region: [[10, 20, 100, 200]] },
     ],
   });
-  assert.deepEqual(out.items.map((i) => i.number), [3]);
+  assert.deepEqual(out.items.map((i) => i.number), [3, 5]);
 });
 
 test('해설: 공통 정답 상자와 선택 정답 상자, 해설 시작점을 구간에 배정한다', () => {
@@ -188,6 +189,41 @@ test('해설 텍스트에서 선택과목 시작 쪽을 찾는다', () => {
   const texts = ['■ [공통: 수학Ⅰ·수학Ⅱ]', '...', '■ [선택: 확률과 통계]\n23. 출제의도'];
   assert.equal(electiveStartPageFromText(texts, 'probstats'), 3);
   assert.equal(electiveStartPageFromText(texts, 'geometry'), null);
+  assert.equal(electiveStartPageFromText(['1쪽', '[미적분]\n23.'], 'calculus'), 2);
+  assert.equal(electiveStartPageFromText(['1쪽', '확률과 통계 해설\n23.'], 'probstats'), 2);
+});
+
+test('3단 해설 지면에서 1단 중간이 기하로 바뀔 때 2단 위쪽 기하 26~28번도 기하로 들어간다', () => {
+  const p5 = normalizeSolutionPage({
+    section_headers: [{ label: '[기하]', region: [600, 104, 620, 200] }],
+    blocks: [
+      { number: 30, number_region: [200, 104, 210, 119], content_region: [200, 104, 580, 350] },
+      { number: 23, number_region: [693, 104, 703, 119], content_region: [693, 104, 740, 350] },
+      { number: 26, number_region: [292, 372, 302, 387], content_region: [292, 372, 700, 620] },
+      { number: 29, number_region: [773, 372, 783, 387], content_region: [773, 372, 950, 620] },
+      { number: 30, number_region: [497, 641, 507, 656], content_region: [497, 641, 900, 900] },
+    ],
+  });
+  const p4 = normalizeSolutionPage({
+    section_headers: [{ label: '[미적분]', region: [450, 104, 470, 200] }],
+    blocks: [
+      { number: 23, number_region: [498, 104, 508, 120], content_region: [498, 104, 550, 350] },
+    ],
+  });
+  const { solutions } = assignSolutionSections({
+    grade: 3,
+    paperElective: 'calculus',
+    pages: [
+      { page: 4, result: p4 },
+      { page: 5, result: p5 },
+    ],
+  });
+  // p.5 1단 상단은 미적분 30번, 1단 하단 [기하] 뒤와 2단 상단(y=292)·하단·3단은 모두 기하에 배정된다.
+  assert.equal(solutions.get('calculus|30')?.page, 5);
+  assert.equal(solutions.get('geometry|23')?.page, 5);
+  assert.equal(solutions.get('geometry|26')?.page, 5);
+  assert.equal(solutions.get('geometry|29')?.page, 5);
+  assert.equal(solutions.get('geometry|30')?.page, 5);
 });
 
 test('문제은행 추출 프롬프트에 모의고사 규칙이 실린다', () => {

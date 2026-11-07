@@ -1443,6 +1443,41 @@ class ProblemBankService {
     return documents;
   }
 
+  /// 모의고사 기출 구간 문서(`source_type_code == 'mock_past'`)를 모두 읽는다.
+  Future<List<ProblemBankDocument>> listAllMockPastDocuments({
+    required String academyId,
+  }) async {
+    const pageSize = 1000;
+    var offset = 0;
+    final documents = <ProblemBankDocument>[];
+    while (true) {
+      final rows = await _client
+          .from('pb_documents')
+          .select('*')
+          .eq('academy_id', academyId)
+          .order('created_at', ascending: false)
+          .range(offset, offset + pageSize - 1);
+      final rawRows = rows as List<dynamic>;
+      documents.addAll(
+        rawRows
+            .map(
+              (row) => ProblemBankDocument.fromMap(
+                Map<String, dynamic>.from(row as Map<dynamic, dynamic>),
+              ),
+            )
+            .where(
+              (document) =>
+                  document.sourceTypeCode.trim().toLowerCase() == 'mock_past' ||
+                  '${document.meta['extract_mode'] ?? ''}'.trim() ==
+                      'mock_exam_pdf',
+            ),
+      );
+      if (rawRows.length < pageSize) break;
+      offset += pageSize;
+    }
+    return documents;
+  }
+
   /// 문서별 실제 저장 문항 수를 배치로 집계한다.
   ///
   /// PostgREST 응답 기본 상한(1000행)을 넘는 교재도 정확히 세기 위해

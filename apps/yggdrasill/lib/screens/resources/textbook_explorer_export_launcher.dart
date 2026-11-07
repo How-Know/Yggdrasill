@@ -86,7 +86,9 @@ class TextbookExplorerExportLauncher {
       onActiveJobChanged: onActiveJobChanged,
     );
 
-    final completed = await session.createPreviewExport();
+    final completed = await session.createPreviewExport(
+      patch: session.initialRenderPatch(),
+    );
     if (!context.mounted) return;
     if (completed == null ||
         completed.status != 'completed' ||
@@ -133,6 +135,27 @@ class _TbExExportPreviewSession {
       onSettingsChanged;
   final void Function(LearningProblemExportJob? job)? onActiveJobChanged;
   late String mathEngine;
+  Map<String, dynamic>? _gyeongsinInitialCoverTexts;
+
+  Map<String, dynamic> initialRenderPatch() {
+    if (settings.templateProfile != 'gyeongsin' &&
+        settings.templateProfile != 'neungin' &&
+        settings.templateProfile != 'daeryun' &&
+        settings.templateProfile != 'dongdo' &&
+        settings.templateProfile != 'soseon' &&
+        settings.templateProfile != 'oseong' &&
+        settings.templateProfile != 'jeonghwa' &&
+        settings.templateProfile != 'hwanggeum') {
+      return const <String, dynamic>{};
+    }
+    final coverTexts = buildGyeongsinAutoCoverTexts(questions);
+    _gyeongsinInitialCoverTexts = coverTexts;
+    return <String, dynamic>{
+      'includeCoverPage': settings.templateProfile != 'daeryun' &&
+          settings.templateProfile != 'dongdo',
+      'coverPageTexts': coverTexts,
+    };
+  }
 
   void _emitSettings() => onSettingsChanged?.call(settings);
 
@@ -176,7 +199,7 @@ class _TbExExportPreviewSession {
       'selectedQuestionUidsOrdered': orderedUids,
       'selectedQuestionIdsOrdered': orderedUids,
       'mathEngine': mathEngine,
-      'disableAutoLabels': true,
+      'disableAutoLabels': patch['disableAutoLabels'] == true,
     };
   }
 
@@ -461,6 +484,14 @@ class _TbExExportPreviewSession {
               : '${initialPrimary('titlePageGoalText') ?? initialFallback('titlePageGoalText')}'
                   .trim(),
       isAssignmentTemplate: settings.templateProfile == 'assignment',
+      isGyeongsinTemplate: settings.templateProfile == 'gyeongsin',
+      isNeunginTemplate: settings.templateProfile == 'neungin',
+      isDaeryunTemplate: settings.templateProfile == 'daeryun',
+      isDongdoTemplate: settings.templateProfile == 'dongdo',
+      isSoseonTemplate: settings.templateProfile == 'soseon',
+      isOseongTemplate: settings.templateProfile == 'oseong',
+      isJeonghwaTemplate: settings.templateProfile == 'jeonghwa',
+      isHwanggeumTemplate: settings.templateProfile == 'hwanggeum',
       initialTimeLimitText: initialTimeLimitText,
       initialIncludeAcademyLogo: _readBoolFlag(
         initialPrimary('includeAcademyLogo'),
@@ -486,21 +517,23 @@ class _TbExExportPreviewSession {
         initialPrimary('titlePageHeaders'),
         initialFallback('titlePageHeaders'),
       ),
-      initialIncludeCoverPage: _readBoolFlag(
-        initialPrimary('includeCoverPage'),
-        initialFallback('includeCoverPage'),
-        false,
-      ),
+      initialIncludeCoverPage: _gyeongsinInitialCoverTexts != null ||
+          _readBoolFlag(
+            initialPrimary('includeCoverPage'),
+            initialFallback('includeCoverPage'),
+            false,
+          ),
       initialIncludeAnswerSheet: settings.includeAnswerSheet,
       initialIncludeExplanation: settings.includeExplanation,
       initialIncludeQuestionScore: settings.includeQuestionScore,
       initialMathEngine: mathEngine,
       initialQuestionScoreByQuestionId: currentQuestionScoreByUid,
       questionScoreEntries: scoreEntries,
-      initialCoverPageTexts: _readCoverPageTexts(
-        initialPrimary('coverPageTexts'),
-        initialFallback('coverPageTexts'),
-      ),
+      initialCoverPageTexts: _gyeongsinInitialCoverTexts ??
+          _readCoverPageTexts(
+            initialPrimary('coverPageTexts'),
+            initialFallback('coverPageTexts'),
+          ),
       assignmentFlowNames: StudentFlow.defaultNames,
       onRefreshRequested: (request) async {
         settings = settings.copyWith(

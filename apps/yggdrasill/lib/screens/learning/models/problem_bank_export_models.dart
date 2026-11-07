@@ -7,7 +7,14 @@ import 'package:crypto/crypto.dart';
 import '../../../services/learning_problem_bank_service.dart';
 
 const List<String> kLearningProblemTemplateOptions = <String>[
-  '\uB0B4\uC2E0\uD615',
+  '\uACBD\uC2E0\uC911',
+  '능인중',
+  '대륜중',
+  '동도중',
+  '소선여중',
+  '오성중',
+  '정화중',
+  '황금중',
   '\uBAA8\uC758\uACE0\uC0AC\uD615',
   '\uACFC\uC81C\uD615',
 ];
@@ -639,6 +646,23 @@ class LearningProblemLayoutSlot {
 
 String templateToProfile(String template) {
   switch (template.trim()) {
+    case '\uACBD\uC2E0\uC2E0':
+    case '\uACBD\uC2E0\uC911':
+      return 'gyeongsin';
+    case '능인중':
+      return 'neungin';
+    case '대륜중':
+      return 'daeryun';
+    case '동도중':
+      return 'dongdo';
+    case '소선여중':
+      return 'soseon';
+    case '오성중':
+      return 'oseong';
+    case '정화중':
+      return 'jeonghwa';
+    case '황금중':
+      return 'hwanggeum';
     case '\uC218\uB2A5\uD615':
     case '\uBAA8\uC758\uACE0\uC0AC\uD615':
       return 'csat';
@@ -646,12 +670,28 @@ String templateToProfile(String template) {
       return 'assignment';
     case '\uB0B4\uC2E0\uD615':
     default:
-      return 'naesin';
+      return 'gyeongsin';
   }
 }
 
 String profileToTemplate(String profile) {
   switch (profile.trim()) {
+    case 'gyeongsin':
+      return '경신중';
+    case 'neungin':
+      return '능인중';
+    case 'daeryun':
+      return '대륜중';
+    case 'dongdo':
+      return '동도중';
+    case 'soseon':
+      return '소선여중';
+    case 'oseong':
+      return '오성중';
+    case 'jeonghwa':
+      return '정화중';
+    case 'hwanggeum':
+      return '황금중';
     case 'mock':
     case 'csat':
       return '모의고사형';
@@ -660,7 +700,7 @@ String profileToTemplate(String profile) {
       return '과제형';
     case 'naesin':
     default:
-      return '내신형';
+      return '경신중';
   }
 }
 
@@ -1191,4 +1231,54 @@ dynamic _canonicalizeJsonValue(dynamic value) {
     return value.map(_canonicalizeJsonValue).toList(growable: false);
   }
   return value;
+}
+
+/// 경신중 표지 초기 문구. 실시일자는 한국 날짜로 채운다.
+/// 학년·학기·중간/기말은 선택 문항이 모두 같은 내신 기출 출처일 때만 채운다.
+/// 중간/기말이 섞이거나 출처 없는 문항이 끼면 시험 구분을 비운다.
+Map<String, dynamic> buildGyeongsinAutoCoverTexts(
+  List<LearningProblemQuestion> questions,
+) {
+  final now = DateTime.now().toUtc().add(const Duration(hours: 9));
+  final out = <String, dynamic>{
+    'examDate': '${now.year}.${now.month}.${now.day}',
+  };
+  if (!questions.any((q) => q.sourceTypeCode.trim() == 'school_past')) {
+    return out;
+  }
+  String unanimous(String Function(LearningProblemQuestion q) read) {
+    final values = <String>{};
+    for (final q in questions) {
+      final value = q.sourceTypeCode.trim() == 'school_past' ? read(q) : '';
+      if (value.isEmpty) return '';
+      values.add(value);
+    }
+    return values.length == 1 ? values.first : '';
+  }
+
+  final term = unanimous((q) {
+    final label = q.examTermLabel;
+    if (label.contains('중간')) return '중간';
+    if (label.contains('기말')) return '기말';
+    return '';
+  });
+  final grade = unanimous((q) {
+    final match = RegExp(r'[1-6]').firstMatch(q.gradeLabel) ??
+        RegExp(r'[1-6]').firstMatch(q.gradeKey);
+    return match?.group(0) ?? '';
+  });
+  final semester = unanimous((q) {
+    final match = RegExp(r'[12]').firstMatch(q.semesterLabel);
+    if (match != null) return match.group(0)!;
+    final key = q.courseKey.trim();
+    if (key.endsWith('-1') || key.endsWith('-c1')) return '1';
+    if (key.endsWith('-2') || key.endsWith('-c2')) return '2';
+    return '';
+  });
+  final schoolYear = now.month <= 2 ? now.year - 1 : now.year;
+  final g = grade.isEmpty ? '3' : grade;
+  final s = semester.isEmpty ? '2' : semester;
+  out['coverExamTitle'] = '$schoolYear학년도 $g학년 $s학기 $term시험';
+  out['headerExamTitle'] = '제 $g 학년 $s 학기 $term시험';
+  return out;
 }

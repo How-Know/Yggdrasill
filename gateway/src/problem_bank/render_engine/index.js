@@ -223,6 +223,15 @@ function normalizeCoverPageTexts(raw, defaults = {}) {
   const organization = normalizeWhitespace(
     src.organization || src.organizationName || seed.organization || '한국교육과정평가원',
   ) || '한국교육과정평가원';
+  const examDate = normalizeWhitespace(src.examDate ?? seed.examDate ?? '');
+  const coverExamTitle = normalizeWhitespace(src.coverExamTitle ?? seed.coverExamTitle ?? '');
+  const headerExamTitle = normalizeWhitespace(src.headerExamTitle ?? seed.headerExamTitle ?? '');
+  const subjectName = normalizeWhitespace(src.subjectName ?? seed.subjectName ?? '');
+  const objectiveCount = normalizeWhitespace(src.objectiveCount ?? seed.objectiveCount ?? '');
+  const essayCount = normalizeWhitespace(src.essayCount ?? seed.essayCount ?? '');
+  const totalPageCount = normalizeWhitespace(src.totalPageCount ?? seed.totalPageCount ?? '');
+  const footerLabel = normalizeWhitespace(src.footerLabel ?? seed.footerLabel ?? '');
+  const pageStartNumber = normalizeWhitespace(src.pageStartNumber ?? seed.pageStartNumber ?? '');
   return {
     topTitle,
     subjectTitle,
@@ -235,6 +244,15 @@ function normalizeCoverPageTexts(raw, defaults = {}) {
     electiveItems,
     subjectGroups,
     organization,
+    ...(examDate ? { examDate } : {}),
+    ...(coverExamTitle ? { coverExamTitle } : {}),
+    ...(headerExamTitle ? { headerExamTitle } : {}),
+    ...(subjectName ? { subjectName } : {}),
+    ...(objectiveCount ? { objectiveCount } : {}),
+    ...(essayCount ? { essayCount } : {}),
+    ...(totalPageCount ? { totalPageCount } : {}),
+    ...(footerLabel ? { footerLabel } : {}),
+    ...(pageStartNumber ? { pageStartNumber } : {}),
   };
 }
 

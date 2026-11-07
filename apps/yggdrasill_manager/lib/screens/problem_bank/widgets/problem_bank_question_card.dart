@@ -7,12 +7,14 @@ class ProblemBankQuestionCard extends StatelessWidget {
     required this.child,
     required this.backgroundColor,
     required this.borderColor,
+    this.radius = 10,
     super.key,
   });
 
   final Widget child;
   final Color backgroundColor;
   final Color borderColor;
+  final double radius;
 
   @override
   Widget build(BuildContext context) {
@@ -22,7 +24,7 @@ class ProblemBankQuestionCard extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(8, 8, 8, 6),
         decoration: BoxDecoration(
           color: backgroundColor,
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(radius),
           border: Border.all(color: borderColor),
         ),
         child: child,

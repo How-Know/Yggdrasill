@@ -81,10 +81,17 @@ class ProblemBankBottomFabBar extends StatelessWidget {
               selected: allVisibleSelected,
             ),
           if (showPrimaryActions) ...[
-            _BottomActionPill(
-              onPressed: disabled ? null : onCreate,
-              icon: Icons.preview,
-              label: '미리보기',
+            SharedDropdownHitPassThrough(
+              child: _BottomActionPill(
+                onPressed: disabled
+                    ? null
+                    : () {
+                        closeOpenSharedDropdowns();
+                        onCreate();
+                      },
+                icon: Icons.preview,
+                label: '미리보기',
+              ),
             ),
             _BottomActionPill(
               onPressed: disabled ? null : onAddToCart,

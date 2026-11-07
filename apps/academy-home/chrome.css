@@ -1,0 +1,168 @@
+/* 휴대폰 상단 막대, 검색·메뉴, 오른쪽 아래 상담 버튼.
+   막대와 내용 사이는 --bar-gap 하나. 페이지마다 따로 두지 않는다. */
+:root { --bar-gap: 36px; }
+
+.phonebar { display: none; }
+.panel[hidden] { display: none; }
+.panel:not([hidden]) {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  padding: 8px 24px 48px;
+}
+.panel-top {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 -8px 12px;
+}
+.iconbtn {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 22px;
+  background: transparent;
+  color: #1d1d1f;
+  cursor: pointer;
+}
+.iconbtn svg {
+  width: 22px;
+  height: 22px;
+  display: block;
+  margin: 0 auto;
+}
+.iconbtn:focus-visible {
+  outline: 2px solid #33a373;
+  outline-offset: 2px;
+}
+.panel-search {
+  width: 100%;
+  margin: 8px 0 20px;
+  border: 0;
+  border-radius: 12px;
+  background: #f3f3f6;
+  color: #1d1d1f;
+  font: inherit;
+  font-size: 17px;
+  letter-spacing: -0.016em;
+  padding: 14px 16px;
+}
+.panel-search:focus {
+  outline: 2px solid #33a373;
+  outline-offset: 1px;
+}
+.panel-search::placeholder { color: #86868b; }
+.panel a {
+  display: block;
+  padding: 16px 0;
+  color: #1d1d1f;
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.25;
+  text-decoration: none;
+}
+.panel-empty {
+  margin: 12px 0 0;
+  color: #6e6e73;
+  font-size: 17px;
+  letter-spacing: -0.016em;
+}
+
+/* 알약과 원형 두 개를 같은 오른쪽 아래에 겹쳐 두고 투명도·크기만 바꾼다.
+   너비·패딩을 줄이면 iOS 사파리에서 상자와 아이콘이 따로 움직여 버벅인다. */
+.fab {
+  --fab-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  position: fixed;
+  right: max(16px, env(safe-area-inset-right));
+  bottom: max(8px, env(safe-area-inset-bottom));
+  z-index: 30;
+  width: 120px;
+  height: 44px;
+  color: #fff;
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.fab-pill,
+.fab-dot {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  height: 44px;
+  border-radius: 980px;
+  background: #33a373;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  pointer-events: none;
+  will-change: transform, opacity;
+  transition: opacity 0.22s ease, transform 0.32s var(--fab-ease);
+}
+.fab-pill {
+  gap: 7px;
+  padding: 0 18px 0 14px;
+  font-size: 17px;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  transform-origin: calc(100% - 22px) 50%;
+}
+.fab-dot {
+  width: 44px;
+  opacity: 0;
+  transform: scale(0.84);
+}
+.fab-mark {
+  width: 20px;
+  height: 20px;
+  display: block;
+  flex: none;
+}
+.fab.is-compact { width: 44px; }
+.fab.is-compact .fab-pill {
+  opacity: 0;
+  transform: scale(0.88);
+}
+.fab.is-compact .fab-dot {
+  opacity: 1;
+  transform: none;
+}
+.fab:hover .fab-pill,
+.fab:hover .fab-dot { background: #45b289; }
+.fab:focus-visible {
+  outline: 2px solid #33a373;
+  outline-offset: 3px;
+  border-radius: 980px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .fab-pill, .fab-dot { transition: none; }
+}
+main.with-fab {
+  padding-bottom: calc(80px + env(safe-area-inset-bottom));
+}
+
+@media (max-width: 760px) {
+  .phonebar {
+    display: flex;
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    align-items: center;
+    justify-content: space-between;
+    height: 56px;
+    padding: 0 8px 0 20px;
+    background: #fff;
+  }
+  .phonebar-name {
+    color: #1d1d1f;
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: -0.04em;
+    text-decoration: none;
+  }
+  .phonebar-tools { display: flex; }
+  main { padding-top: var(--bar-gap); }
+}

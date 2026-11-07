@@ -29,8 +29,11 @@ import {
   expectedNumbers,
   normalizeProblemPage,
   normalizeSolutionPage,
+  sectionFromLabel,
 } from './mock_exam/mock_pages.js';
 import { logVlmUsage } from './textbook/vlm_usage_log.js';
+import { syncMockExamFolder } from './mock_exam/register_files.js';
+import { syncMockExamPresetsForExam } from './mock_exam/mock_preset.js';
 
 const execFileAsync = promisify(execFileCb);
 
@@ -59,6 +62,10 @@ const PAGE_CONCURRENCY = Math.max(
 );
 const RENDER_DPI = Number.parseInt(process.env.MOCK_EXAM_RENDER_DPI || '130', 10) || 130;
 const PROCESS_ONCE = process.argv.includes('--once');
+const SYNC_MS = Math.max(
+  0,
+  Number.parseInt(process.env.MOCK_EXAM_SYNC_MS || '30000', 10) || 30000,
+);
 const PB_SOURCE_VERSION = 'mock_exam_pdf_v1';
 const ELECTIVE_ORDER = ['', ...ELECTIVES];
 const ORG_LABELS = { edu: '교육청', kice: '평가원', csat: '수능' };
@@ -157,18 +164,29 @@ async function readPages({ paper, buffer, pages, prompt, normalize, stage }) {
   return withTempPdf(buffer, async (pdfPath, dir) =>
     mapLimit(pages, PAGE_CONCURRENCY, async (page) => {
       const png = await renderPage(pdfPath, dir, page);
-      const res = await callGeminiImageJson({
-        imageBuffer: png,
-        prompt: prompt(page),
-        model: MODEL,
-        apiKey: GEMINI_API_KEY,
-      });
-      logVlmUsage(stage, res.usageMetadata, {
-        paper: paper.id.slice(0, 8),
-        page,
-        elapsed: `${res.elapsedMs}ms`,
-      });
-      return { page, result: normalize(res.parsedJson) };
+      let lastResult = { page, result: normalize(null) };
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const res = await callGeminiImageJson({
+          imageBuffer: png,
+          prompt: prompt(page),
+          model: MODEL,
+          apiKey: GEMINI_API_KEY,
+        });
+        logVlmUsage(stage, res.usageMetadata, {
+          paper: paper.id.slice(0, 8),
+          page,
+          elapsed: `${res.elapsedMs}ms`,
+        });
+        const result = normalize(res.parsedJson);
+        lastResult = { page, result };
+        const hasContent =
+          (result?.items?.length || 0) > 0 ||
+          (result?.blocks?.length || 0) > 0 ||
+          (result?.answerTables?.length || 0) > 0 ||
+          (result?.headers?.length || 0) > 0;
+        if (hasContent) break;
+      }
+      return lastResult;
     }),
   );
 }
@@ -261,35 +279,70 @@ async function stageCrops(exam, papers) {
   return rows.length;
 }
 
-async function stageSolutions(exam, papers) {
+async function stageSolutions(exam, papers, { replaceVlm = false } = {}) {
   const solutions = sortPapers(papers, 'solution');
   if (solutions.length === 0) return { answers: 0, solutions: 0 };
   const existing = await loadItems(exam.id);
   const answers = new Map();
   const positions = new Map();
+  const readBySha = new Map();
   for (let i = 0; i < solutions.length; i += 1) {
     const paper = solutions[i];
-    const buffer = await downloadPaper(paper);
-    const pageCount = await savePageCount(paper, buffer);
-    // 공통 해설은 첫 해설지에서 받는다. 나머지는 선택과목 머리가 있는 쪽부터 본다.
-    let startPage = 1;
-    if (i > 0 && paper.elective) {
+    const shaKey = compact(paper.sha256);
+    let read = shaKey ? readBySha.get(shaKey) : null;
+    if (!read) {
+      const buffer = await downloadPaper(paper);
+      const pageCount = await savePageCount(paper, buffer);
       const texts = await withTempPdf(buffer, (pdfPath) => pageTexts(pdfPath));
-      startPage = electiveStartPageFromText(texts, paper.elective) || 1;
+      // 공통 해설은 첫 해설지에서 받는다. 나머지는 선택과목 머리가 있는 쪽부터 본다.
+      let startPage = 1;
+      if (i > 0 && paper.elective) {
+        startPage = electiveStartPageFromText(texts, paper.elective) || 1;
+      }
+      const pages = [];
+      for (let p = startPage; p <= pageCount; p += 1) pages.push(p);
+      await setProgress(exam, 'solutions', {
+        solutions: { paper: paper.elective || 'common', done: i, total: solutions.length },
+      });
+      read = await readPages({
+        paper,
+        buffer,
+        pages,
+        prompt: (page) => buildSolutionPagePrompt({ grade: exam.grade, page }),
+        normalize: normalizeSolutionPage,
+        stage: 'mock-solutions',
+      });
+      // 텍스트 층에 '[기하]' 등이 있는 쪽은 23번 블록 바로 위에 머리표를 보장한다.
+      // VLM 이 머리를 엉뚱한 단에 찍었거나 빠뜨렸어도 23번 바로 위에서 구간이 바뀌게 한다.
+      for (const pageEntry of read) {
+        const pageText = texts[pageEntry.page - 1] || '';
+        for (const el of ELECTIVES) {
+          if (electiveStartPageFromText([pageText], el) !== 1) continue;
+          const b23 = (pageEntry.result?.blocks || []).find((b) => b.number === 23);
+          const firstAfter22 =
+            b23 ||
+            (pageEntry.result?.blocks || [])
+              .filter((b) => b.number > 22)
+              .sort((a, b) => a.number - b.number)[0];
+          if (!firstAfter22?.numberRegion) continue;
+          const synthRegion = [
+            Math.max(0, firstAfter22.numberRegion[0] - 10),
+            firstAfter22.numberRegion[1],
+            firstAfter22.numberRegion[0],
+            firstAfter22.numberRegion[3],
+          ];
+          pageEntry.result.headers = (pageEntry.result.headers || []).filter(
+            (h) => sectionFromLabel(h.label) !== el,
+          );
+          pageEntry.result.headers.push({ label: SECTION_LABELS[el], region: synthRegion });
+        }
+      }
+      if (shaKey && startPage === 1) readBySha.set(shaKey, read);
+    } else {
+      await setProgress(exam, 'solutions', {
+        solutions: { paper: paper.elective || 'common', done: i, total: solutions.length },
+      });
     }
-    const pages = [];
-    for (let p = startPage; p <= pageCount; p += 1) pages.push(p);
-    await setProgress(exam, 'solutions', {
-      solutions: { paper: paper.elective || 'common', done: i, total: solutions.length },
-    });
-    const read = await readPages({
-      paper,
-      buffer,
-      pages,
-      prompt: (page) => buildSolutionPagePrompt({ grade: exam.grade, page }),
-      normalize: normalizeSolutionPage,
-      stage: 'mock-solutions',
-    });
     const assigned = assignSolutionSections({
       grade: exam.grade,
       paperElective: paper.elective,
@@ -305,6 +358,9 @@ async function stageSolutions(exam, papers) {
 
   const rows = [];
   const keys = new Set([...answers.keys(), ...positions.keys()]);
+  if (replaceVlm) {
+    for (const key of existing.keys()) keys.add(key);
+  }
   for (const key of keys) {
     const [section, numberText] = key.split('|');
     const number = Number(numberText);
@@ -322,14 +378,22 @@ async function stageSolutions(exam, papers) {
       row.answer_source = 'vlm';
     }
     const position = positions.get(key);
-    if (position && prev?.solution_source !== 'manual') {
-      row.solution_paper_id = position.paperId;
-      row.solution_raw_page = position.page;
-      row.solution_number_region_1k = position.numberRegion;
-      row.solution_content_region_1k = position.contentRegion;
-      row.solution_source = 'vlm';
+    if (prev?.solution_source !== 'manual') {
+      if (position) {
+        row.solution_paper_id = position.paperId;
+        row.solution_raw_page = position.page;
+        row.solution_number_region_1k = position.numberRegion;
+        row.solution_content_region_1k = position.contentRegion;
+        row.solution_source = 'vlm';
+      } else if (replaceVlm && prev?.solution_raw_page != null) {
+        row.solution_paper_id = null;
+        row.solution_raw_page = null;
+        row.solution_number_region_1k = null;
+        row.solution_content_region_1k = null;
+        row.solution_source = 'vlm';
+      }
     }
-    rows.push(row);
+    if (Object.keys(row).length > 4) rows.push(row);
   }
   // upsert 는 행마다 컬럼이 같아야 하므로 바뀌는 컬럼 묶음별로 나눠 쓴다.
   const groups = new Map();
@@ -531,16 +595,25 @@ export async function processExam(exam) {
     await setProgress(exam, 'crops', { crop_count: cropCount });
   }
   if (request === 'all' || request === 'solutions') {
-    const counts = await stageSolutions(exam, papers || []);
+    const counts = await stageSolutions(exam, papers || [], {
+      replaceVlm: request === 'solutions',
+    });
     await setProgress(exam, 'solutions', { answer_count: counts.answers, solution_count: counts.solutions });
   }
   const { items, sections } = await stageProblemBank(exam, papers || [], {
     requeue: request === 'all' || request === 'crops' || request === 'problem_bank',
   });
+  let presetSync = { synced: 0 };
+  try {
+    presetSync = await syncMockExamPresetsForExam(supa, exam.id);
+  } catch (err) {
+    log('preset_sync_skip', { examId: exam.id, message: compact(err?.message || err) });
+  }
   exam.progress = {
     ...exam.progress,
     missing: missingReport(exam, items),
     sections,
+    presets_synced: presetSync.synced,
     finished_at: new Date().toISOString(),
   };
   await updateExam(exam.id, {
@@ -613,9 +686,25 @@ async function main() {
   log('boot', { model: MODEL, dpi: RENDER_DPI, concurrency: PAGE_CONCURRENCY });
   await reclaimStale().catch(() => {});
   let lastReclaim = Date.now();
+  let lastSync = 0;
+  let syncing = false;
+  const maybeSyncFolder = () => {
+    if (PROCESS_ONCE || SYNC_MS === 0 || syncing || Date.now() - lastSync < SYNC_MS) return;
+    syncing = true;
+    lastSync = Date.now();
+    syncMockExamFolder(supa)
+      .then((summary) => {
+        if (summary.pending > 0) log('folder_sync', summary);
+      })
+      .catch((err) => log('folder_sync_error', { message: compact(err?.message || err) }))
+      .finally(() => {
+        syncing = false;
+      });
+  };
   while (true) {
     let worked = false;
     try {
+      maybeSyncFolder();
       if (Date.now() - lastReclaim > STALE_MS / 2) {
         await reclaimStale().catch(() => {});
         lastReclaim = Date.now();

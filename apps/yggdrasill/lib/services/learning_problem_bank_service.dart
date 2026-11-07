@@ -2643,7 +2643,17 @@ class LearningProblemBankService {
     }
 
     final storageTemplateProfile =
-        templateProfile.trim() == 'assignment' ? 'naesin' : templateProfile;
+        (templateProfile.trim() == 'assignment' ||
+                templateProfile.trim() == 'gyeongsin' ||
+                templateProfile.trim() == 'neungin' ||
+                templateProfile.trim() == 'daeryun' ||
+                templateProfile.trim() == 'dongdo' ||
+                templateProfile.trim() == 'soseon' ||
+                templateProfile.trim() == 'oseong' ||
+                templateProfile.trim() == 'jeonghwa' ||
+                templateProfile.trim() == 'hwanggeum')
+            ? 'naesin'
+            : templateProfile;
     final basePayload = <String, dynamic>{
       'academy_id': academyId,
       'document_id': documentId,

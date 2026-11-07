@@ -321,6 +321,9 @@ function resultRow(result) {
     title.textContent = result.from || "파일"
     meta.textContent = result.error || ""
   }
+  if (result.server && result.status !== "pending" && result.status !== "error") {
+    meta.textContent = meta.textContent ? `${meta.textContent} · ${result.server}` : result.server
+  }
   wrap.append(kicker, title, meta)
   row.append(wrap)
   if (result.path && result.status !== "error") {
