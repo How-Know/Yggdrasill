@@ -400,7 +400,11 @@ const FIX_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔진의 [�
   - 수력충전 등 연산 교재는 한 해설 페이지 안에서 번호가 01번부터 여러 번 새로 시작하므로 기존 해설 크롭 좌표가 엉뚱한 블록을 가리켜 solution_vision_found = false 이거나 다른 문항의 답이 읽혔을 수 있습니다.
   - "해설 PDF 전체 페이지 이미지"가 주어졌으면 페이지 안에서 (1) 본문 쪽수 배지(예: "p.<body_display_page>", "P.<body_display_page>", "<body_page>쪽") 또는 소단원 제목(sub_key / item_name), (2) 문항 번호(problem_number), (3) 본문 문제의 수식·내용과 정확히 대응하는 정답·해설 위치를 페이지 전체에서 찾으세요.
   - 찾은 위치에서 최종 정답은 proposed_solution_answer 에, 순수 해설 본문은 proposed_solution_transcribed 에(풀이 없이 답만 있으면 null), 그리고 전체 페이지 이미지(0..1000) 기준 해당 문항 정답·해설 블록의 영역 좌표 [ymin, xmin, ymax, xmax] 를 corrected_solution_bbox_1k 에 적으세요. 전체 페이지 이미지가 없거나 찾지 못했으면 corrected_solution_bbox_1k 는 null 로 두세요.
-- 수학 정답이 이미 일치하고(math_status 가 "approved" 또는 "clean") 기존 정답도 정상이며 해설도 이미 확인된 경우(solution_vision_found !== false)에는 proposed_answer, proposed_ai_answer, proposed_ai_solution, proposed_solution_answer, proposed_solution_transcribed, corrected_solution_bbox_1k, math_reason 은 모두 null 로 두세요.`;
+- 수학 정답이 이미 일치하고(math_status 가 "approved" 또는 "clean") 기존 정답도 정상이며 해설도 이미 확인된 경우(solution_vision_found !== false)에는 proposed_answer, proposed_ai_answer, proposed_ai_solution, proposed_solution_answer, proposed_solution_transcribed, corrected_solution_bbox_1k, math_reason 은 모두 null 로 두세요.
+- [4. 핀셋 정밀 추출 모드 (is_pincette = true 또는 저장된 stem 이 비어 있는 문항)]
+  - 빠진 문항을 새로 영역 지정했거나 기존 추출이 이상해 정확도 우선으로 다시 뽑는 문항입니다.
+  - 반드시 본문 원본 이미지를 처음부터 끝까지 정밀하게 읽어 전체 본문을 corrected_stem 에(세트 문항이면 공통 지시문을 corrected_common_stem 에, 선지가 있으면 corrected_choices 에) 작성하고, 직접 문제를 풀어 proposed_ai_solution 과 proposed_ai_answer, 최종 확정 정답 proposed_answer 를 모두 채우세요.
+  - 해설 크롭 또는 해설 전체 페이지 이미지가 함께 주어졌으면, 당신이 푼 정답(proposed_ai_answer)과 본문 쪽수 배지(p.<body_display_page>)·문항 번호를 대조해 정확히 일치하는 정답·해설 블록을 찾아 proposed_solution_answer, proposed_solution_transcribed, corrected_solution_bbox_1k 를 채우세요.`;
 
 const MAX_FIX_CHUNK = 4;
 
@@ -423,6 +427,7 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
     .map((x) => uuidOrNull(x))
     .filter((x): x is string => !!x)
     .slice(0, MAX_FIX_CHUNK);
+  const isPincette = body.pincette === true;
   const images = parseReviewImages(body.images);
   if (cropIds.length === 0) return jsonResponse({ ok: true, processed: 0, results: [] });
 
@@ -464,6 +469,7 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
         const sv = (qc.solution_vision ?? {}) as Rec;
         return {
           crop_id: it.crop_id,
+          is_pincette: isPincette || String(it.stem ?? '').trim().length === 0,
           problem_number: it.problem_number,
           body_page: it.raw_page ?? null,
           body_display_page: it.display_page ?? it.raw_page ?? null,
@@ -535,7 +541,7 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
       instructions: FIX_INSTRUCTIONS,
       input: [{ kind: 'message', role: 'user', parts }],
       jsonSchema: { name: 'textbook_problem_fix', schema: FIX_SCHEMA },
-      reasoningEffort: reasoningFor('primary'),
+      reasoningEffort: isPincette ? 'high' : reasoningFor('primary'),
       maxOutputTokens: 14000,
       safetyId,
     },
@@ -726,15 +732,76 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
     }
     const solPage = img.solutionPageRawPage ?? (Number(it.solution_raw_page) || 0);
     if (correctedSolBox && solPage > 0) {
-      await auth.admin
+      const { data: existingRef } = await auth.admin
         .from('textbook_problem_solution_refs')
-        .update({
+        .select('crop_id,edited_at')
+        .eq('crop_id', cid)
+        .maybeSingle();
+      if (!existingRef) {
+        await auth.admin.from('textbook_problem_solution_refs').insert({
+          crop_id: cid,
+          academy_id: academyId,
+          source_kind: 'sol',
           raw_page: solPage,
+          number_region_1k: correctedSolBox,
           content_region_1k: correctedSolBox,
           updated_at: nowIso,
-        })
-        .eq('crop_id', cid)
-        .is('edited_at', null);
+        });
+      } else if (!existingRef.edited_at) {
+        await auth.admin
+          .from('textbook_problem_solution_refs')
+          .update({
+            raw_page: solPage,
+            content_region_1k: correctedSolBox,
+            updated_at: nowIso,
+          })
+          .eq('crop_id', cid)
+          .is('edited_at', null);
+      }
+    }
+    if (isPincette) {
+      const pincetteStem = stem ?? (typeof r.corrected_stem === 'string' && r.corrected_stem.trim()
+        ? sanitizeProblemMarkup(r.corrected_stem.trim())
+        : (curStem.trim() || null));
+      const pincetteCommon = common ?? (typeof r.corrected_common_stem === 'string' && r.corrected_common_stem.trim()
+        ? sanitizeProblemMarkup(r.corrected_common_stem.trim())
+        : null);
+      if (pincetteStem || pincetteCommon || choices || figure?.layout) {
+        try {
+          await auth.userClient.rpc('textbook_review_apply_problem_fix', {
+            p_crop_id: cid,
+            p_stem: pincetteStem,
+            p_choices: choices,
+            p_common_stem: pincetteCommon,
+            p_figure_layout: figure?.layout ?? null,
+            p_figure_assets: null,
+            p_approve_quality: false,
+            p_note: '핀셋 정밀 추출 자동 반영',
+          });
+        } catch (e) {
+          console.error('[textbook_problem_fix] pincette apply fix failed:', e);
+        }
+      }
+      const pincetteAns = proposedAnswer ?? proposedSolAnswer ?? proposedAiAnswer;
+      if (pincetteAns) {
+        try {
+          await auth.userClient.rpc('textbook_review_save_item_edit', {
+            p_crop_id: cid,
+            p_new_answer: pincetteAns,
+            p_ai_solution: proposedAiSolution ?? (typeof it.ai_solution === 'string' ? it.ai_solution : null),
+            p_visual_tags: Array.isArray(it.visual_tags) ? it.visual_tags : [],
+            p_approve_math: true,
+            p_approve_quality: false,
+            p_solution_transcribed: proposedSolTranscribed ?? null,
+            p_solution_answer: proposedSolAnswer ?? null,
+            p_alternative_solutions: Array.isArray(it.alternative_solutions) ? it.alternative_solutions : [],
+            p_sync_pb_answer: true,
+            p_ai_answer: proposedAiAnswer ?? pincetteAns,
+          });
+        } catch (e) {
+          console.error('[textbook_problem_fix] pincette save answer failed:', e);
+        }
+      }
     }
     if (autoHoldEngine) {
       await auth.admin

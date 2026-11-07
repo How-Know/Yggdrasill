@@ -49,6 +49,45 @@ void main() {
     );
   });
 
+  test('페이지·문항번호 흐름순 정렬(compareItemsByPageAndNumber) 및 누락 문항 감지(detectMissingProblemGaps)', () {
+    final i1 = TextbookProblemReviewItem.fromJson({
+      'crop_id': 'c1',
+      'problem_number': '01',
+      'raw_page': 25,
+      'sub_key': 'A',
+      'sub_index': 0,
+    });
+    final i2 = TextbookProblemReviewItem.fromJson({
+      'crop_id': 'c2',
+      'problem_number': '02',
+      'raw_page': 25,
+      'sub_key': 'A',
+      'sub_index': 0,
+    });
+    final i4 = TextbookProblemReviewItem.fromJson({
+      'crop_id': 'c4',
+      'problem_number': '04',
+      'raw_page': 25,
+      'sub_key': 'A',
+      'sub_index': 0,
+    });
+    final i10 = TextbookProblemReviewItem.fromJson({
+      'crop_id': 'c10',
+      'problem_number': '10',
+      'raw_page': 26,
+      'sub_key': 'A',
+      'sub_index': 0,
+    });
+    final list = [i10, i4, i1, i2]..sort(compareItemsByPageAndNumber);
+    expect(list.map((e) => e.problemNumber).toList(), ['01', '02', '04', '10']);
+
+    final gaps = detectMissingProblemGaps(list);
+    expect(gaps, hasLength(1));
+    expect(gaps.single.missingNumber, '03');
+    expect(gaps.single.rawPage, 25);
+    expect(gaps.single.afterCropId, 'c2');
+  });
+
   test('해설지에 답만 인쇄된 문항(isAnswerOnlyOriginalSolution)과 [image] 자리표시자 정답 처리', () {
     final answerOnlyItem = TextbookProblemReviewItem.fromJson({
       'crop_id': 'c1',

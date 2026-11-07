@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../services/textbook_problem_review_service.dart';
 import '../../services/textbook_review_solution_image_service.dart';
 import '../problem_bank/widgets/problem_bank_question_card.dart';
+import 'textbook_pincette_extract_dialog.dart';
 import 'textbook_review_engine_hold_panel.dart';
 
 // 학습앱 글래스 카드와 같은 역할 색. 화면 배경은 검정, 카드는 #1C1C1E, 안쪽 칸은 #2C2C2E.
@@ -52,10 +53,83 @@ const int _kReviewChunkSize = 6;
 const int _kRenderCheckChunkSize = 4;
 const int _kFixChunkSize = 3;
 
+/// 자동 분석(원스톱 추출·검수) 완료 후 띄우는 1차 검수·핀셋 추출 전체 화면 다이얼로그(학습앱 다크 글래스 디자인 언어).
+Future<bool> showTextbookAutoAnalyzeReviewDialog(
+  BuildContext context, {
+  required String bookId,
+  required String gradeLabel,
+  required int bigOrder,
+  required int midOrder,
+  String? subKey,
+  List<int> conceptPages = const [],
+  String? headerTitle,
+  bool autoStartReviewOnLoad = false,
+  Future<void> Function()? onConfirmAutoAnalyze,
+}) async {
+  var confirmed = false;
+  await showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    barrierColor: Colors.black.withValues(alpha: 0.85),
+    builder: (ctx) => Dialog(
+      backgroundColor: _kBg,
+      insetPadding: const EdgeInsets.all(16),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(_kPanelRadius),
+        side: const BorderSide(color: _kBorder, width: 0.5),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: SizedBox(
+        width: MediaQuery.of(ctx).size.width - 32,
+        height: MediaQuery.of(ctx).size.height - 32,
+        child: ProblemRoadmapScreen(
+          initialBookId: bookId,
+          initialGradeLabel: gradeLabel,
+          initialBigOrder: bigOrder,
+          initialMidOrder: midOrder,
+          initialSubKey: subKey,
+          conceptPages: conceptPages,
+          headerTitle: headerTitle ?? '1차 검수 · 자동 분석 결과 확인 (페이지·문항 흐름순)',
+          autoStartReviewOnLoad: autoStartReviewOnLoad,
+          onConfirmAutoAnalyze: () async {
+            confirmed = true;
+            if (onConfirmAutoAnalyze != null) await onConfirmAutoAnalyze();
+          },
+          onCloseModal: () => Navigator.of(ctx).pop(),
+        ),
+      ),
+    ),
+  );
+  return confirmed;
+}
+
 class ProblemRoadmapScreen extends StatefulWidget {
-  const ProblemRoadmapScreen({super.key, this.service});
+  const ProblemRoadmapScreen({
+    super.key,
+    this.service,
+    this.initialBookId,
+    this.initialGradeLabel,
+    this.initialBigOrder,
+    this.initialMidOrder,
+    this.initialSubKey,
+    this.conceptPages = const [],
+    this.headerTitle,
+    this.autoStartReviewOnLoad = false,
+    this.onConfirmAutoAnalyze,
+    this.onCloseModal,
+  });
 
   final TextbookProblemReviewService? service;
+  final String? initialBookId;
+  final String? initialGradeLabel;
+  final int? initialBigOrder;
+  final int? initialMidOrder;
+  final String? initialSubKey;
+  final List<int> conceptPages;
+  final String? headerTitle;
+  final bool autoStartReviewOnLoad;
+  final Future<void> Function()? onConfirmAutoAnalyze;
+  final VoidCallback? onCloseModal;
 
   @override
   State<ProblemRoadmapScreen> createState() => _ProblemRoadmapScreenState();
@@ -89,6 +163,9 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
 
   /// 필터: 0 전체, 1 확인필요(오류·불일치), 2 새초안제안, 3 미검수, 4 승인완료, 5 엔진 보류, 6 승인 후 원본 차이
   int _filterTab = 0;
+  String? _selectedSubKeyFilter;
+  bool _initialScopeApplied = false;
+  bool _autoStartedOnce = false;
 
   final _answerEditCtrl = TextEditingController();
   final _solutionEditCtrl = TextEditingController();
@@ -177,14 +254,33 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
         _units = list;
         _loadingUnits = false;
         if (list.isNotEmpty) {
+          TextbookReviewUnitScope? initialMatch;
+          if (!_initialScopeApplied && widget.initialBookId != null) {
+            _initialScopeApplied = true;
+            _selectedSubKeyFilter = widget.initialSubKey?.trim().isNotEmpty == true ? widget.initialSubKey!.trim() : null;
+            initialMatch = list.where((u) {
+              if (u.bookId != widget.initialBookId) return false;
+              if (widget.initialGradeLabel != null && u.gradeLabel != widget.initialGradeLabel) return false;
+              if (widget.initialBigOrder != null && u.bigOrder != widget.initialBigOrder) return false;
+              if (widget.initialMidOrder != null && u.midOrder != widget.initialMidOrder) return false;
+              return true;
+            }).firstOrNull;
+          }
           final currentKey = _selectedScope?.key;
-          final matched = currentKey != null ? list.where((u) => u.key == currentKey).firstOrNull : null;
+          final matched = initialMatch ?? (currentKey != null ? list.where((u) => u.key == currentKey).firstOrNull : null);
           _selectedScope = matched ?? list.first;
           _selectedBookKey = '${_selectedScope!.bookId}|${_selectedScope!.gradeLabel}';
         }
       });
       if (_selectedScope != null) {
         await _loadItems(_selectedScope!);
+        if (mounted && widget.autoStartReviewOnLoad && !_autoStartedOnce) {
+          _autoStartedOnce = true;
+          final scopedItems = _scopedItems;
+          if (scopedItems.any((x) => x.isReviewTodo || x.needsRenderCheck)) {
+            unawaited(_runUnitReview());
+          }
+        }
       }
     } catch (e) {
       if (!mounted) return;
@@ -201,15 +297,20 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
       _error = null;
     });
     try {
-      final items = await _svc.fetchUnitItems(scope);
+      final rawItems = await _svc.fetchUnitItems(scope);
+      final items = [...rawItems]..sort(compareItemsByPageAndNumber);
       if (!mounted) return;
       setState(() {
         _items = items;
         _loadingItems = false;
+        if (_selectedSubKeyFilter != null && !items.any((x) => x.subKey == _selectedSubKeyFilter)) {
+          _selectedSubKeyFilter = null;
+        }
         if (_filterTab == 5 && !items.any((x) => x.isEngineHeld)) _filterTab = 0;
         if (_filterTab == 6 && !items.any((x) => x.approvedButDiffers)) _filterTab = 0;
-        final cur = _selectedCropId != null ? items.where((x) => x.cropId == _selectedCropId).firstOrNull : null;
-        final pick = cur ?? items.where((x) => x.hasIssue).firstOrNull ?? items.firstOrNull;
+        final visible = _scopedItems;
+        final cur = _selectedCropId != null ? visible.where((x) => x.cropId == _selectedCropId).firstOrNull : null;
+        final pick = cur ?? visible.where((x) => x.hasIssue).firstOrNull ?? visible.firstOrNull;
         if (pick != null) {
           _selectItem(pick);
         } else {
@@ -1651,9 +1752,20 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     await _saveAndApproveSingle(item);
   }
 
+  List<String> get _availableSubKeys {
+    final s = <String>{for (final it in _items) if (it.subKey.trim().isNotEmpty) it.subKey.trim()};
+    return s.toList()..sort();
+  }
+
+  List<TextbookProblemReviewItem> get _scopedItems {
+    final sub = _selectedSubKeyFilter;
+    if (sub == null || sub.isEmpty) return _items;
+    return [for (final it in _items) if (it.subKey == sub) it];
+  }
+
   List<TextbookProblemReviewItem> get _filteredItems {
     return [
-      for (final it in _items)
+      for (final it in _scopedItems)
         if (_filterTab == 0 ||
             (_filterTab == 1 && it.hasIssue) ||
             (_filterTab == 2 && it.hasDrafts) ||
@@ -1663,6 +1775,163 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
             (_filterTab == 6 && it.approvedButDiffers))
           it,
     ];
+  }
+
+  /// 핀셋 추출 1: AI 고정밀 타겟 재추출(본문 PDF 원본 + 세트 머리 + 해설 전체 페이지를 고해상도·상위 추론으로 다시 읽어 DB 에 즉시 반영)
+  Future<void> _runAiPincetteExtract(TextbookProblemReviewItem item) async {
+    final scope = _selectedScope;
+    if (scope == null || _runningReview) return;
+    setState(() => _notice = null);
+    _bulkErrors.clear();
+    try {
+      await _whileRunning(() async {
+        setState(() => _runProgress = '핀셋 정밀 추출 중: ${item.problemNumber}번 (${item.rawPage}쪽) — 본문·세트머리·해설 전체 페이지 고해상도 로드 중...');
+        final images = await _svc.prepareChunkImages(
+          scope: scope,
+          items: [item],
+          previewUrlsByCropId: _previewUrlsByCropId,
+          includeSolution: true,
+          includeSolutionPageFallback: true,
+          forceSolutionPageFallback: true,
+          allItems: _items,
+        );
+        if (!mounted) return;
+        setState(() => _runProgress = '핀셋 정밀 추출 중: ${item.problemNumber}번 — 상위 추론(high)으로 본문·수식·AI 정답·해설 위치 정밀 추출 및 DB 반영 중...');
+        await _svc.runFixPass(
+          scope,
+          cropIds: [item.cropId],
+          images: images,
+          pincette: true,
+        );
+        if (!mounted) return;
+        await _loadItems(scope, reloadPreviews: false);
+        final fresh = _items.where((x) => x.cropId == item.cropId).firstOrNull;
+        if (fresh != null) {
+          if (fresh.proposedFigureCrops.isNotEmpty) {
+            setState(() => _runProgress = '핀셋 정밀 추출 중: ${item.problemNumber}번 — 도형 ${fresh.proposedFigureCrops.length}개 크롭·업로드 중...');
+            await _applyFixFor(
+              scope,
+              fresh,
+              figureLayout: fresh.proposedFigureLayout,
+              figureCrops: fresh.proposedFigureCrops,
+              note: '핀셋 추출 도형 크롭 반영',
+            );
+            await _loadItems(scope, reloadPreviews: false);
+          }
+          final updated = _items.where((x) => x.cropId == item.cropId).firstOrNull ?? fresh;
+          setState(() => _runProgress = '핀셋 정밀 추출 중: ${item.problemNumber}번 — 과제형 V2 카드 렌더링 및 원본 대조 검수 중...');
+          await _loadEnginePreviews(scope, [updated], merge: true);
+          _cardUrlCache.removeWhere((k, _) => k.startsWith('${item.cropId}|'));
+          await _runRenderCheckPass(scope, only: [updated]);
+        }
+      });
+      if (!mounted) return;
+      await _loadItems(scope, reloadPreviews: false);
+      await _loadUnits();
+      final fresh = _items.where((x) => x.cropId == item.cropId).firstOrNull;
+      if (fresh != null) _selectItem(fresh);
+      setState(() {
+        _notice = '${item.problemNumber}번 고정밀 핀셋 추출 및 V2 카드 재검수를 완료했습니다.';
+      });
+    } catch (e) {
+      if (mounted) setState(() => _notice = '핀셋 추출 실패: $e');
+    }
+  }
+
+  /// 핀셋 추출 2: PDF 페이지에서 마우스 드래그로 직접 영역을 지정해 빠진 문항을 추가하거나 이상 문항을 재추출한다.
+  Future<void> _openDragPincetteDialog({
+    TextbookProblemReviewItem? existingItem,
+    MissingProblemGap? gap,
+  }) async {
+    final scope = _selectedScope;
+    if (scope == null || _runningReview) return;
+    final defaultPage = existingItem?.rawPage ?? gap?.rawPage ?? (_scopedItems.firstOrNull?.rawPage ?? 1);
+    final defaultDisplayPage = existingItem?.displayPage ?? gap?.displayPage;
+    final defaultNum = existingItem?.problemNumber ?? gap?.missingNumber ?? '';
+    final defaultSubKey = existingItem?.subKey ?? gap?.subKey ?? (_selectedSubKeyFilter ?? 'A');
+    final defaultSubIndex = existingItem?.subIndex ?? gap?.subIndex ?? 0;
+
+    final dragResult = await showTextbookPincetteDragDialog(
+      context,
+      service: _svc,
+      scope: scope,
+      initialRawPage: defaultPage,
+      initialDisplayPage: defaultDisplayPage,
+      initialProblemNumber: defaultNum,
+      initialSubKey: defaultSubKey,
+      initialSubIndex: defaultSubIndex,
+      initialRegion1k: existingItem?.itemRegion1k,
+      isNewMissingProblem: existingItem == null,
+    );
+    if (dragResult == null || !mounted) return;
+
+    setState(() => _notice = null);
+    try {
+      String targetCropId = existingItem?.cropId ?? '';
+      await _whileRunning(() async {
+        setState(() => _runProgress = '핀셋 영역 저장 중: ${dragResult.problemNumber}번 (PDF ${dragResult.rawPage}쪽)...');
+        targetCropId = await _svc.upsertPincetteCrop(
+          scope: scope,
+          subKey: dragResult.subKey,
+          subIndex: dragResult.subIndex,
+          rawPage: dragResult.rawPage,
+          displayPage: dragResult.displayPage,
+          problemNumber: dragResult.problemNumber,
+          itemRegion1k: dragResult.region1k,
+          cropId: existingItem?.cropId,
+        );
+        await _loadItems(scope, reloadPreviews: false);
+      });
+      if (!mounted || targetCropId.isEmpty) return;
+      final targetItem = _items.where((x) => x.cropId == targetCropId).firstOrNull;
+      if (targetItem != null) {
+        _selectItem(targetItem);
+        await _runAiPincetteExtract(targetItem);
+      }
+    } catch (e) {
+      if (mounted) setState(() => _notice = '핀셋 영역 추출 실패: $e');
+    }
+  }
+
+  /// 자동 분석 1차 검수 화면에서 [수정안 일괄 반영 및 소단원 확정] 실행
+  Future<void> _confirmAutoAnalyzeSubunit() async {
+    final scope = _selectedScope;
+    if (scope == null || _saving || _runningReview) return;
+    setState(() {
+      _saving = true;
+      _notice = null;
+    });
+    final notes = <String>[];
+    try {
+      await _whileRunning(() async {
+        await _bulkMathFixes(scope, notes);
+        await _bulkQualityFixes(scope, notes);
+      });
+      if (!mounted) return;
+      await _loadItems(scope, reloadPreviews: false);
+      final targetItems = _scopedItems;
+      final mathIds = [for (final x in targetItems) if (x.mathStatus != 'approved') x.cropId];
+      if (mathIds.isNotEmpty) await _svc.approveAxis(mathIds, 'math');
+      final qualIds = [for (final x in targetItems) if (!x.isEngineHeld && x.qualityStatus != 'approved') x.cropId];
+      if (qualIds.isNotEmpty) await _svc.approveAxis(qualIds, 'quality');
+      if (widget.onConfirmAutoAnalyze != null) {
+        await widget.onConfirmAutoAnalyze!();
+      }
+      if (!mounted) return;
+      await _loadItems(scope, reloadPreviews: false);
+      await _loadUnits();
+      setState(() {
+        _saving = false;
+        _notice = '소단원 ${targetItems.length}문항 수정안 반영 및 최종 확정을 완료했습니다.';
+      });
+      widget.onCloseModal?.call();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _notice = '소단원 확정 실패: $e';
+      });
+    }
   }
 
   /// 원본 대조 수정 단계를 돌릴 문항(오류 문항·그림 문항 중 아직 안 돌렸거나 수정 후에도 오류인 것)
@@ -1826,20 +2095,34 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
         onPressed: _loadingUnits || _runningReview ? null : () => unawaited(_loadUnits()),
         icon: const Icon(Icons.refresh_rounded, color: _kTextSub, size: 20),
       ),
+      if (widget.onConfirmAutoAnalyze != null)
+        ElevatedButton.icon(
+          onPressed: _saving || _runningReview ? null : () => unawaited(_confirmAutoAnalyzeSubunit()),
+          style: _primaryButtonStyle(),
+          icon: const Icon(Icons.verified_rounded, size: 18),
+          label: const Text('수정안 일괄 반영 및 소단원 확정'),
+        ),
+      if (widget.onCloseModal != null)
+        OutlinedButton.icon(
+          onPressed: _saving || _runningReview ? null : widget.onCloseModal,
+          style: _outlineButtonStyle(color: _kTextSub),
+          icon: const Icon(Icons.close_rounded, size: 18, color: _kTextSub),
+          label: const Text('닫기'),
+        ),
     ];
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final title = const Column(
+        final title = Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              '문항검수',
-              style: TextStyle(color: _kText, fontSize: 20, fontWeight: FontWeight.w800),
+              widget.headerTitle ?? '문항검수',
+              style: const TextStyle(color: _kText, fontSize: 20, fontWeight: FontWeight.w800),
             ),
-            SizedBox(height: 4),
-            Text(
-              '해설 PDF 좌표 영역 원본 해설 전사 · 블라인드 독립 풀이 · 3축 난이도 · V2 렌더 카드 학생 시점 품질 검수',
+            const SizedBox(height: 4),
+            const Text(
+              '페이지·문항 흐름순 검수 · 과제형 V2 렌더링(학생 화면) · AI 선풀이 정답 대조 · 고정밀 핀셋 재추출',
               style: TextStyle(color: _kTextSub, fontSize: 14, fontWeight: FontWeight.w600, height: 1.35),
             ),
           ],
@@ -1930,12 +2213,23 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
                   },
           );
           final held = _engineHeldCount;
+          final subKeys = _availableSubKeys;
+          final gaps = detectMissingProblemGaps(_scopedItems);
           final badges = Wrap(
             spacing: 8,
             runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              _pillBadge('수학 승인 $mathApproved / ${_items.length}', _kAccent),
-              _pillBadge('품질 승인 $qualApproved / ${_items.length - held}', _kBlue),
+              if (subKeys.length > 1) ...[
+                _subKeyFilterChip(null, '전체 슬롯'),
+                for (final sk in subKeys) _subKeyFilterChip(sk, '슬롯 $sk'),
+              ],
+              if (widget.conceptPages.isNotEmpty)
+                _pillBadge('개념 페이지 ${widget.conceptPages.length}쪽', _kBlue),
+              if (gaps.isNotEmpty)
+                _pillBadge('누락 의심 ${gaps.length}건', _kWarn),
+              _pillBadge('수학 승인 $mathApproved / ${_scopedItems.length}', _kAccent),
+              _pillBadge('품질 승인 $qualApproved / ${_scopedItems.length - held}', _kBlue),
               if (held > 0) _pillBadge('엔진 보류 $held (별도 관리)', _kWarn),
             ],
           );
@@ -2066,6 +2360,8 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                _buildPincetteToolbarCard(selected),
+                const SizedBox(height: 12),
                 _buildMathReviewCard(selected),
                 const SizedBox(height: 12),
                 _buildSolutionEditCard(selected),
@@ -2090,6 +2386,8 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
+                            _buildPincetteToolbarCard(selected),
+                            const SizedBox(height: 12),
                             _buildMathReviewCard(selected),
                             const SizedBox(height: 12),
                             _buildSolutionEditCard(selected),
@@ -2118,32 +2416,193 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     );
   }
 
+  Widget _subKeyFilterChip(String? subKey, String label) {
+    final sel = _selectedSubKeyFilter == subKey;
+    return InkWell(
+      borderRadius: BorderRadius.circular(999),
+      onTap: () => setState(() {
+        _selectedSubKeyFilter = subKey;
+        final visible = _scopedItems;
+        if (_selectedCropId == null || !visible.any((x) => x.cropId == _selectedCropId)) {
+          final pick = visible.where((x) => x.hasIssue).firstOrNull ?? visible.firstOrNull;
+          if (pick != null) _selectItem(pick);
+        }
+      }),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: sel ? _kChipSelected : _kFieldBg,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: sel ? _kAccent : _kBorder, width: 0.5),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: sel ? _kText : _kTextSub,
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 가운데 상단: 핀셋 추출(정확도 우선 재시도 — AI 고정밀 타겟 재추출 + PDF 마우스 드래그 영역 직접 지정) 카드
+  Widget _buildPincetteToolbarCard(TextbookProblemReviewItem item) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: _panelDecoration(borderColor: _kAccent.withValues(alpha: 0.45)),
+      child: Wrap(
+        spacing: 10,
+        runSpacing: 8,
+        alignment: WrapAlignment.spaceBetween,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.center_focus_strong_rounded, color: _kAccent, size: 20),
+              const SizedBox(width: 8),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '핀셋 정밀 추출 (${item.problemNumber}번 · PDF ${item.rawPage}쪽)',
+                    style: const TextStyle(color: _kText, fontSize: 14, fontWeight: FontWeight.w800),
+                  ),
+                  const Text(
+                    '이상하거나 빠진 문항을 고해상도·상위 추론(high) 또는 PDF 직접 드래그로 정확하게 다시 뽑습니다.',
+                    style: TextStyle(color: _kTextSub, fontSize: 11.5, fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              ElevatedButton.icon(
+                onPressed: _saving || _runningReview || !item.canRenderOriginal
+                    ? null
+                    : () => unawaited(_runAiPincetteExtract(item)),
+                style: _primaryButtonStyle(),
+                icon: const Icon(Icons.auto_fix_high_rounded, size: 17),
+                label: const Text('AI 고정밀 핀셋 재추출'),
+              ),
+              OutlinedButton.icon(
+                onPressed: _saving || _runningReview
+                    ? null
+                    : () => unawaited(_openDragPincetteDialog(existingItem: item)),
+                style: _outlineButtonStyle(color: _kAccent),
+                icon: const Icon(Icons.crop_free_rounded, size: 17, color: _kAccent),
+                label: const Text('PDF 영역 직접 드래그 추출'),
+              ),
+              OutlinedButton.icon(
+                onPressed: _saving || _runningReview
+                    ? null
+                    : () => unawaited(_openDragPincetteDialog()),
+                style: _outlineButtonStyle(color: _kBlue),
+                icon: const Icon(Icons.add_box_outlined, size: 17, color: _kBlue),
+                label: const Text('빠진 문항 직접 추가'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildProblemListPanel(
     List<TextbookProblemReviewItem> filtered,
     int issueCount,
     int draftCount,
   ) {
+    final scoped = _scopedItems;
+    final gaps = _filterTab == 0 ? detectMissingProblemGaps(scoped) : const <MissingProblemGap>[];
+    final gapsByAfterId = <String, List<MissingProblemGap>>{};
+    for (final g in gaps) {
+      gapsByAfterId.putIfAbsent(g.afterCropId, () => []).add(g);
+    }
+
+    // 페이지 흐름순으로 [페이지 구획 헤더 / 개념 페이지 안내 / 문항 타일 / 누락 의심 핀셋 카드] 목록을 구성한다.
+    final rows = <Widget>[];
+    final conceptSet = widget.conceptPages.toSet();
+    final emittedConceptPages = <int>{};
+    int? lastPage;
+    for (final it in filtered) {
+      for (final cp in widget.conceptPages) {
+        if (cp < it.rawPage && emittedConceptPages.add(cp)) {
+          rows.add(_pageSectionHeader(cp, null, isConceptOnly: true));
+        }
+      }
+      if (lastPage != it.rawPage) {
+        lastPage = it.rawPage;
+        emittedConceptPages.add(it.rawPage);
+        rows.add(_pageSectionHeader(
+          it.rawPage,
+          it.displayPage,
+          isConceptOnly: false,
+          hasConceptMark: conceptSet.contains(it.rawPage),
+        ));
+      }
+      rows.add(_problemListTile(it));
+      final afterGaps = gapsByAfterId[it.cropId];
+      if (afterGaps != null) {
+        for (final g in afterGaps) {
+          rows.add(_missingProblemGapTile(g));
+        }
+      }
+    }
+    for (final cp in widget.conceptPages) {
+      if (emittedConceptPages.add(cp)) {
+        rows.add(_pageSectionHeader(cp, null, isConceptOnly: true));
+      }
+    }
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: _panelDecoration(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          Row(
+            children: [
+              const Icon(Icons.format_list_numbered_rounded, color: _kAccent, size: 17),
+              const SizedBox(width: 6),
+              const Expanded(
+                child: Text(
+                  '페이지·문항번호 흐름순 목록',
+                  style: TextStyle(color: _kText, fontSize: 13.5, fontWeight: FontWeight.w800),
+                ),
+              ),
+              TextButton.icon(
+                onPressed: _saving || _runningReview ? null : () => unawaited(_openDragPincetteDialog()),
+                style: TextButton.styleFrom(
+                  foregroundColor: _kAccent,
+                  visualDensity: VisualDensity.compact,
+                ),
+                icon: const Icon(Icons.add_rounded, size: 16),
+                label: const Text('빠진 문항 추가', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
           Wrap(
             spacing: 8,
             runSpacing: 8,
             children: [
-              _filterTabChip(0, '전체 ${_items.length}'),
+              _filterTabChip(0, '전체 ${scoped.length}'),
               _filterTabChip(
                 1,
                 '오류·불일치 $issueCount'
-                '${issueCount > 0 ? ' (수학 ${_items.where((x) => x.mathStatus == 'issue').length}'
-                    ' · 품질 ${_items.where((x) => x.qualityStatus == 'issue').length})' : ''}',
+                '${issueCount > 0 ? ' (수학 ${scoped.where((x) => x.mathStatus == 'issue').length}'
+                    ' · 품질 ${scoped.where((x) => x.qualityStatus == 'issue').length})' : ''}',
                 highlightError: issueCount > 0,
               ),
               if (draftCount > 0) _filterTabChip(2, '새 초안 $draftCount'),
-              _filterTabChip(3, '미검수 ${_items.where((x) => x.mathStatus == 'pending').length}'),
-              _filterTabChip(4, '승인완료 ${_items.where((x) => x.isFullyApproved).length}'),
+              _filterTabChip(3, '미검수 ${scoped.where((x) => x.mathStatus == 'pending').length}'),
+              _filterTabChip(4, '승인완료 ${scoped.where((x) => x.isFullyApproved).length}'),
               if (_engineHeldCount > 0) _filterTabChip(5, '엔진 보류 $_engineHeldCount'),
               if (_approvedDiffCount > 0) _filterTabChip(6, '승인 후 원본 차이 $_approvedDiffCount'),
             ],
@@ -2151,16 +2610,88 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
           const SizedBox(height: 12),
           const Divider(color: _kBorder, height: 1),
           Expanded(
-            child: filtered.isEmpty
+            child: rows.isEmpty
                 ? const Center(child: Text('해당 조건의 문항이 없습니다.', style: TextStyle(color: _kTextSub, fontSize: 14, fontWeight: FontWeight.w600)))
                 : ListView.separated(
                     padding: const EdgeInsets.symmetric(vertical: 8),
-                    itemCount: filtered.length,
+                    itemCount: rows.length,
                     separatorBuilder: (_, __) => const SizedBox(height: 8),
-                    itemBuilder: (_, i) => _problemListTile(filtered[i]),
+                    itemBuilder: (_, i) => rows[i],
                   ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _pageSectionHeader(int rawPage, int? displayPage, {required bool isConceptOnly, bool hasConceptMark = false}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+      decoration: BoxDecoration(
+        color: isConceptOnly ? _kBlue.withValues(alpha: 0.12) : Colors.black.withValues(alpha: 0.35),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: isConceptOnly ? _kBlue.withValues(alpha: 0.45) : _kBorder, width: 0.5),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            isConceptOnly ? Icons.auto_stories_outlined : Icons.description_outlined,
+            size: 14,
+            color: isConceptOnly ? _kBlue : _kTextSub,
+          ),
+          const SizedBox(width: 6),
+          Text(
+            'PDF $rawPage쪽${displayPage != null && displayPage > 0 && displayPage != rawPage ? ' (교재 $displayPage쪽)' : ''}',
+            style: TextStyle(
+              color: isConceptOnly ? _kBlue : _kText,
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const Spacer(),
+          if (isConceptOnly)
+            _pillBadge('개념 페이지 (문항 없음)', _kBlue)
+          else if (hasConceptMark)
+            _pillBadge('개념+문항 페이지', _kBlue),
+        ],
+      ),
+    );
+  }
+
+  Widget _missingProblemGapTile(MissingProblemGap gap) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(_kInnerRadius),
+      onTap: _saving || _runningReview ? null : () => unawaited(_openDragPincetteDialog(gap: gap)),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: _kWarn.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(_kInnerRadius),
+          border: Border.all(color: _kWarn.withValues(alpha: 0.65), width: 1),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.warning_amber_rounded, color: _kWarn, size: 18),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '${gap.missingNumber}번 누락 의심 (PDF ${gap.rawPage}쪽)',
+                style: const TextStyle(color: _kWarn, fontSize: 12.5, fontWeight: FontWeight.w800),
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: _kAccent,
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: const Text(
+                '+ 핀셋 추출로 추가',
+                style: TextStyle(color: Colors.white, fontSize: 11.5, fontWeight: FontWeight.w800),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

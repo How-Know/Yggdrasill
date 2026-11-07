@@ -40,7 +40,10 @@ import '../../services/textbook_vlm_answer_service.dart';
 import '../../services/textbook_vlm_range_runner.dart';
 import '../../services/textbook_vlm_solution_ref_service.dart';
 import '../../services/textbook_vlm_test_service.dart';
+import '../../services/textbook_stage_batch_service.dart';
+import '../../services/textbook_problem_review_service.dart';
 import '../../services/problem_bank_service.dart';
+import '../problem_roadmap/problem_roadmap_screen.dart';
 import 'textbook_authoring_stage_dialog.dart';
 import 'textbook_toc_autofill.dart';
 
@@ -52,6 +55,7 @@ class TextbookUnitAuthoringDialog extends StatefulWidget {
     required this.bookName,
     required this.gradeLabel,
     this.linkId,
+    this.autoAnalyzeMode = false,
   });
 
   final String academyId;
@@ -59,6 +63,7 @@ class TextbookUnitAuthoringDialog extends StatefulWidget {
   final String bookName;
   final String gradeLabel;
   final int? linkId;
+  final bool autoAnalyzeMode;
 
   static Future<void> show(
     BuildContext context, {
@@ -67,6 +72,7 @@ class TextbookUnitAuthoringDialog extends StatefulWidget {
     required String bookName,
     required String gradeLabel,
     int? linkId,
+    bool autoAnalyzeMode = false,
   }) {
     return showDialog<void>(
       context: context,
@@ -77,6 +83,7 @@ class TextbookUnitAuthoringDialog extends StatefulWidget {
         bookName: bookName,
         gradeLabel: gradeLabel,
         linkId: linkId,
+        autoAnalyzeMode: autoAnalyzeMode,
       ),
     );
   }
@@ -108,7 +115,13 @@ class _TextbookUnitAuthoringDialogState
   // 개념원리 필수유형 — 본문 '풀이' 단락에서 정답·해설 좌표를 추출/저장한다.
   final _answerService = TextbookVlmAnswerService();
   final _solRefService = TextbookVlmSolutionRefService();
+  final _stageBatchService = TextbookStageBatchService();
+  final _reviewService = TextbookProblemReviewService();
   final _supa = Supabase.instance.client;
+
+  final Map<String, String> _autoAnalyzedScopes = <String, String>{};
+  bool _autoAnalyzeRunning = false;
+  String? _autoAnalyzeBanner;
 
   PdfDocument? _bodyDocument;
   String? _bodyLocalPath;
@@ -715,6 +728,7 @@ class _TextbookUnitAuthoringDialogState
 
   @override
   void dispose() {
+    _reviewService.dispose();
     _bodyDocument?.dispose();
     for (final big in _bigUnits) {
       big.dispose();
@@ -744,6 +758,14 @@ class _TextbookUnitAuthoringDialogState
       final series = (payload?['series'] as String?)?.trim().isNotEmpty == true
           ? (payload!['series'] as String).trim()
           : kTextbookSeriesCatalog.first.key;
+      final loadedAutoScopes = <String, String>{};
+      if (payload != null && payload['auto_analyzed_scopes'] is Map) {
+        for (final e in (payload['auto_analyzed_scopes'] as Map).entries) {
+          final k = '${e.key}'.trim();
+          final v = '${e.value ?? ''}'.trim();
+          if (k.isNotEmpty && v.isNotEmpty) loadedAutoScopes[k] = v;
+        }
+      }
       final entry = textbookSeriesByKey(series) ?? kTextbookSeriesCatalog.first;
       final loaded = bigUnitsFromPayload(payload, seriesKey: entry.key);
       final editable = <_BigUnitEdit>[];
@@ -805,6 +827,9 @@ class _TextbookUnitAuthoringDialogState
       if (!mounted) return;
       setState(() {
         _seriesKey = entry.key;
+        _autoAnalyzedScopes
+          ..clear()
+          ..addAll(loadedAutoScopes);
         _bigUnits
           ..clear()
           ..addAll(editable);
@@ -1720,7 +1745,7 @@ class _TextbookUnitAuthoringDialogState
     return (newBigs.length, midCount, partStatus);
   }
 
-  Future<void> _saveTree() async {
+  Future<void> _saveTree({bool silent = false}) async {
     final payload = _buildBigUnitInputs();
     try {
       await _registry.saveUnitPayload(
@@ -1729,15 +1754,16 @@ class _TextbookUnitAuthoringDialogState
         gradeLabel: widget.gradeLabel,
         seriesKey: _seriesKey,
         bigUnits: payload,
+        autoAnalyzedScopes: _autoAnalyzedScopes,
       );
       if (_seriesKey == 'wonri') {
         await _rebuildSpecialUnits();
       }
       if (!mounted) return;
-      _toast('단원 구조를 Supabase에 저장했어요.');
+      if (!silent) _toast('단원 구조를 Supabase에 저장했어요.');
     } catch (e) {
       if (!mounted) return;
-      _toast('저장 실패: $e', error: true);
+      if (!silent) _toast('저장 실패: $e', error: true);
     }
   }
 
@@ -4204,6 +4230,343 @@ class _TextbookUnitAuthoringDialogState
     }
   }
 
+  /// 소단원(단일 또는 다중 직렬) 원스톱 자동 분석 파이프라인:
+  /// 1) 단원 구조·페이지 저장 → 본문 크롭 검출(PDF 오버레이 실시간 표시) → ID 보존 덮어쓰기(UPSERT) 및 잉여 크롭 정리
+  /// 2) 본문·수식·도형 문제은행 추출 큐 실행 및 완료 대기
+  /// 3) 정답·해설 1차 좌표 매칭
+  /// 4) AI 선(先)풀이 + AI 정답 기반 해설 매칭·Vision 전사 + 과제형 V2 카드 렌더링 & 원본 대조 품질 검수
+  /// 5) 완료 후 학습앱 디자인 언어 기반 '1차 검수·핀셋 추출 화면' 자동 오픈
+  Future<void> _runAutoAnalyzeTargets(List<_SubFocus> targets) async {
+    if (_autoAnalyzeRunning || _batchRunning || targets.isEmpty) return;
+    setState(() {
+      _autoAnalyzeRunning = true;
+      _batchRunning = true;
+      _batchDone = 0;
+      _batchTotal = targets.length;
+      _autoAnalyzeBanner = '원스톱 자동 분석 준비 중 (${targets.length}개 소단원)...';
+      _batchStatus = _autoAnalyzeBanner!;
+    });
+
+    await _saveTree(silent: true);
+
+    final failed = <String>[];
+    _SubFocus? lastSucceededFocus;
+    final lastConceptPages = <int>[];
+
+    try {
+      for (var i = 0; i < targets.length; i += 1) {
+        if (!mounted) break;
+        final focus = targets[i];
+        final label = _subFocusLabel(focus);
+        final state = _ensureSubState(focus);
+        // 기존 문항 재추출 시 ID 보존 덮어쓰기(UPSERT)를 위해 전체 삭제 초기화를 끄고 덮어쓴다.
+        state.resetBeforeUpload = false;
+
+        void stepSay(String msg) {
+          if (!mounted) return;
+          setState(() {
+            _focus = focus;
+            _autoAnalyzeBanner = '[${i + 1}/${targets.length} · $label] $msg';
+            _batchStatus = _autoAnalyzeBanner!;
+          });
+        }
+
+        // Step 1: 본문 영역 크롭 & 수열 검증 & ID 보존 덮어쓰기(UPSERT)
+        stepSay('1/4단계 — 본문 문항·개념 페이지 분석 및 PDF 영역 크롭 중...');
+        await _runFocusedAnalysis(focus);
+        if (!mounted) break;
+        if (state.error != null || _totalRegionsFor(state, focus) == 0) {
+          failed.add('$label (본문 크롭 0건)');
+          setState(() => _batchDone = i + 1);
+          continue;
+        }
+        stepSay('1/4단계 — 본문 영역 좌표 DB 덮어쓰기(기존 ID 보존) 저장 중...');
+        await _uploadFocused(focus);
+        if (!mounted) break;
+        if ((state.uploadResult?.rows ?? const []).isEmpty) {
+          failed.add('$label (영역 저장 실패)');
+          setState(() => _batchDone = i + 1);
+          continue;
+        }
+
+        // 잉여 구버전 크롭 정리(현재 검출된 문항번호는 모두 ID 보존)
+        if (!_isWonriRowFocus(focus)) {
+          final uploadedRows = state.uploadResult?.rows ?? const [];
+          final rawPages = <int>{
+            for (final r in state.pageResults)
+              if (r.ok) r.rawPage,
+          }.toList();
+          final keepNumbers = <String>{
+            for (final r in uploadedRows)
+              if ('${r['problem_number'] ?? ''}'.trim().isNotEmpty) '${r['problem_number']}'.trim(),
+          }.toList();
+          if (rawPages.isNotEmpty && keepNumbers.isNotEmpty) {
+            try {
+              await _cropUploader.syncCropScope(
+                academyId: widget.academyId,
+                bookId: widget.bookId,
+                gradeLabel: widget.gradeLabel,
+                bigOrder: focus.bigIndex,
+                midOrder: focus.midIndex,
+                subKey: focus.subKey,
+                rawPages: rawPages,
+                keepProblemNumbers: keepNumbers,
+              );
+            } catch (_) {}
+          }
+        }
+
+        // Step 2: 본문·수식·도형 문제은행 추출 및 대기
+        if (_currentSeries().supportsProblemExtraction) {
+          stepSay('2/4단계 — 본문·수식·도형 문제은행 추출 실행 중...');
+          try {
+            await _startPdfOnlyExtractForFocus(focus, forceNewJob: true);
+            final key = _stateKeyFor(focus);
+            for (var poll = 0; poll < 36; poll += 1) {
+              if (!mounted) break;
+              await Future<void>.delayed(const Duration(seconds: 4));
+              await _loadPbExtractRuns();
+              final st = _pbExtractStatusBySub[key] ?? '';
+              stepSay('2/4단계 — 본문·수식·도형 추출 대기 중 (${(poll + 1) * 4}초 경과 · 상태: ${st.isEmpty ? '진행 중' : st})...');
+              if (st == 'completed' || st == 'review_required' || st == 'failed') {
+                break;
+              }
+            }
+          } catch (e) {
+            debugPrint('[auto-analyze] pb extract warning: $e');
+          }
+        }
+
+        // Step 3: 정답·해설 1차 좌표 매칭
+        stepSay('3/4단계 — 정답·해설 PDF 좌표 매칭 중...');
+        final subKeysToRun = _isWonriRowFocus(focus)
+            ? (<String>{
+                for (final r in state.uploadResult?.rows ?? const [])
+                  '${r['sub_key'] ?? ''}'.trim().toUpperCase(),
+              }..removeWhere((k) => k.isEmpty))
+                .toList()
+            : <String>[focus.subKey];
+        final subIndex = _isWonriRowFocus(focus) ? (_wonriRowIndex(focus) ?? 0) : 0;
+        for (final sk in subKeysToRun) {
+          try {
+            await _stageBatchService.runStage23ForSubunit(
+              academyId: widget.academyId,
+              bookId: widget.bookId,
+              gradeLabel: widget.gradeLabel,
+              bigOrder: focus.bigIndex,
+              midOrder: focus.midIndex,
+              subKey: sk,
+              subIndex: subIndex,
+              seriesKey: _seriesKey,
+              onStatus: (st) => stepSay('3/4단계 ($sk) — $st'),
+            );
+          } catch (e) {
+            debugPrint('[auto-analyze] stage23 warning ($sk): $e');
+          }
+        }
+        await _loadStageStatuses();
+
+        // Step 4: AI 선(先)풀이 + AI 정답 기반 해설 매칭·전사 + 과제형 V2 카드 렌더링 & 원본 대조 검수
+        stepSay('4/4단계 — AI 선풀이 · 해설지 정답 대조 매칭 · 과제형 V2 렌더링 검수 중...');
+        try {
+          await _runAutoAiReviewForFocus(focus, subKeysToRun, stepSay);
+        } catch (e) {
+          debugPrint('[auto-analyze] ai review warning: $e');
+        }
+
+        _autoAnalyzedScopes[_stateKeyFor(focus)] = DateTime.now().toUtc().toIso8601String();
+        await _saveTree(silent: true);
+
+        lastSucceededFocus = focus;
+        lastConceptPages
+          ..clear()
+          ..addAll([
+            for (final r in state.pageResults)
+              if (r.ok && (r.pageKind == 'concept' || r.items.isEmpty)) r.rawPage,
+          ]..sort());
+
+        if (mounted) {
+          setState(() => _batchDone = i + 1);
+        }
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _autoAnalyzeRunning = false;
+          _batchRunning = false;
+          _autoAnalyzeBanner = failed.isEmpty
+              ? '자동 분석이 완료되었습니다. 1차 검수 화면에서 결과를 확인하고 확정하세요.'
+              : '자동 분석 완료 (실패 ${failed.length}건: ${failed.join(', ')})';
+          _batchStatus = _autoAnalyzeBanner!;
+        });
+      }
+    }
+
+    if (mounted && lastSucceededFocus != null) {
+      await _openFirstReviewForFocus(
+        lastSucceededFocus,
+        conceptPages: lastConceptPages,
+      );
+    }
+  }
+
+  Future<void> _runAutoAiReviewForFocus(
+    _SubFocus focus,
+    List<String> subKeys,
+    void Function(String) stepSay,
+  ) async {
+    final big = _bigUnits[focus.bigIndex];
+    final mid = big.middles[focus.midIndex];
+    final scope = TextbookReviewUnitScope(
+      academyId: widget.academyId,
+      bookId: widget.bookId,
+      bookName: widget.bookName,
+      gradeLabel: widget.gradeLabel,
+      bigOrder: focus.bigIndex,
+      midOrder: focus.midIndex,
+      bigName: big.nameCtrl.text.trim(),
+      midName: mid.nameCtrl.text.trim(),
+      problemCount: 0,
+      analyzedCount: 0,
+      mathCleanCount: 0,
+      mathIssueCount: 0,
+      mathApprovedCount: 0,
+      qualityCleanCount: 0,
+      qualityIssueCount: 0,
+      qualityApprovedCount: 0,
+    );
+    var allItems = await _reviewService.fetchUnitItems(scope);
+    var targetItems = [
+      for (final it in allItems)
+        if (subKeys.isEmpty || subKeys.contains(it.subKey)) it,
+    ];
+    if (targetItems.isEmpty) return;
+
+    stepSay('4/4단계 — 과제형 V2 문항 카드 렌더링 중 (${targetItems.length}문항)...');
+    final previewUrls = await _reviewService.fetchEnginePreviewUrls(
+      academyId: widget.academyId,
+      items: targetItems,
+    );
+
+    const chunkSize = 6;
+    for (var idx = 0; idx < targetItems.length; idx += chunkSize) {
+      if (!mounted) return;
+      final chunk = targetItems.skip(idx).take(chunkSize).toList();
+      stepSay('4/4단계 — AI 선풀이 · 3축 난이도 · 원본 해설 전사 (${idx + 1}~${idx + chunk.length}/${targetItems.length}문항)...');
+      final images = await _reviewService.prepareChunkImages(
+        scope: scope,
+        items: chunk,
+        previewUrlsByCropId: previewUrls,
+      );
+      await _reviewService.runReviewChunk(
+        scope,
+        chunkSize: chunk.length,
+        forceRerun: true,
+        cropIds: [for (final x in chunk) x.cropId],
+        images: images,
+      );
+    }
+
+    allItems = await _reviewService.fetchUnitItems(scope);
+    targetItems = [
+      for (final it in allItems)
+        if (subKeys.isEmpty || subKeys.contains(it.subKey)) it,
+    ];
+
+    // 해설 미전사 또는 수학 정답 불일치 문항은 AI 풀이 정답을 앵커로 해설 PDF 전체 페이지를 탐색해 자동 보정한다.
+    final fixTargets = [
+      for (final it in targetItems)
+        if (it.canRenderOriginal &&
+            (it.solutionVisionFailed || it.mathStatus == 'issue' || it.qualityStatus == 'issue' || it.hasFigures))
+          it,
+    ];
+    for (var idx = 0; idx < fixTargets.length; idx += 3) {
+      if (!mounted) return;
+      final chunk = fixTargets.skip(idx).take(3).toList();
+      stepSay('4/4단계 — AI 정답 기반 해설 전체 페이지 탐색 및 원본 대조 수정안 생성 (${idx + 1}~${idx + chunk.length}/${fixTargets.length})...');
+      final images = await _reviewService.prepareChunkImages(
+        scope: scope,
+        items: chunk,
+        previewUrlsByCropId: previewUrls,
+        includeSolution: true,
+        includeSolutionPageFallback: true,
+        allItems: allItems,
+      );
+      await _reviewService.runFixPass(
+        scope,
+        cropIds: [for (final x in chunk) x.cropId],
+        images: images,
+      );
+    }
+
+    allItems = await _reviewService.fetchUnitItems(scope);
+    targetItems = [
+      for (final it in allItems)
+        if (subKeys.isEmpty || subKeys.contains(it.subKey)) it,
+    ];
+    final cleanMath = [for (final x in targetItems) if (x.mathStatus == 'clean') x.cropId];
+    if (cleanMath.isNotEmpty) await _reviewService.approveAxis(cleanMath, 'math');
+    final cleanQual = [for (final x in targetItems) if (x.qualityStatus == 'clean' && !x.hasFigures) x.cropId];
+    if (cleanQual.isNotEmpty) await _reviewService.approveAxis(cleanQual, 'quality');
+  }
+
+  Future<void> _openFirstReviewForFocus(
+    _SubFocus focus, {
+    List<int>? conceptPages,
+  }) async {
+    final state = _subStates[_stateKeyFor(focus)];
+    final pages = conceptPages ??
+        ([
+          if (state != null)
+            for (final r in state.pageResults)
+              if (r.ok && (r.pageKind == 'concept' || r.items.isEmpty)) r.rawPage,
+        ]..sort());
+    final subKey = _isWonriRowFocus(focus) ? null : focus.subKey;
+    final label = _subFocusLabel(focus);
+    await showTextbookAutoAnalyzeReviewDialog(
+      context,
+      bookId: widget.bookId,
+      gradeLabel: widget.gradeLabel,
+      bigOrder: focus.bigIndex,
+      midOrder: focus.midIndex,
+      subKey: subKey,
+      conceptPages: pages,
+      headerTitle: '1차 검수 · $label (${widget.bookName} ${widget.gradeLabel})',
+      onConfirmAutoAnalyze: () async {
+        _autoAnalyzedScopes[_stateKeyFor(focus)] = DateTime.now().toUtc().toIso8601String();
+        await _saveTree(silent: true);
+        if (mounted) setState(() {});
+      },
+    );
+    if (mounted) {
+      unawaited(_loadStageStatuses());
+    }
+  }
+
+  Widget _buildAutoAnalyzedBadge(String scopeKey) {
+    if (!_autoAnalyzedScopes.containsKey(scopeKey)) return const SizedBox.shrink();
+    return Container(
+      margin: const EdgeInsets.only(right: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: _kAccent.withValues(alpha: 0.16),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: _kAccent.withValues(alpha: 0.55)),
+      ),
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.auto_awesome_rounded, size: 10, color: _kAccent),
+          SizedBox(width: 3),
+          Text(
+            '자동분석',
+            style: TextStyle(color: _kAccent, fontSize: 9.5, fontWeight: FontWeight.w800),
+          ),
+        ],
+      ),
+    );
+  }
+
   String _subFocusLabel(_SubFocus focus) {
     final big = _bigUnits[focus.bigIndex];
     final mid = big.middles[focus.midIndex];
@@ -4933,6 +5296,40 @@ class _TextbookUnitAuthoringDialogState
       children: [
         _buildHeader(),
         const Divider(height: 1, color: _kBorder),
+        if (_autoAnalyzeBanner != null)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            decoration: BoxDecoration(
+              color: _kAccent.withValues(alpha: 0.14),
+              border: Border(
+                bottom: BorderSide(color: _kAccent.withValues(alpha: 0.35)),
+              ),
+            ),
+            child: Row(
+              children: [
+                if (_autoAnalyzeRunning)
+                  const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: _kAccent),
+                  )
+                else
+                  const Icon(Icons.auto_awesome_rounded, size: 16, color: _kAccent),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _autoAnalyzeBanner!,
+                    style: const TextStyle(
+                      color: _kText,
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
         Expanded(
           child: _loadingPayload
               ? const Center(
@@ -4960,11 +5357,15 @@ class _TextbookUnitAuthoringDialogState
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
         children: [
-          const Icon(Icons.account_tree_outlined, color: _kAccent, size: 20),
+          Icon(
+            widget.autoAnalyzeMode ? Icons.auto_awesome_rounded : Icons.account_tree_outlined,
+            color: _kAccent,
+            size: 20,
+          ),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              '단원·분석 · ${widget.bookName} · ${widget.gradeLabel}',
+              '${widget.autoAnalyzeMode ? '자동 분석 (원스톱 추출·검수)' : '단원·분석'} · ${widget.bookName} · ${widget.gradeLabel}',
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
                 color: _kText,
@@ -5534,6 +5935,7 @@ class _TextbookUnitAuthoringDialogState
                   ),
                 ),
                 const SizedBox(width: 6),
+                _buildAutoAnalyzedBadge(key),
                 Expanded(
                   flex: 2,
                   child: _StageProgressChip(
@@ -5749,6 +6151,7 @@ class _TextbookUnitAuthoringDialogState
                   ),
                 ),
                 const SizedBox(width: 6),
+                _buildAutoAnalyzedBadge(key),
                 Expanded(
                   child: _StageProgressChip(
                     status: stageStatus,
@@ -6113,7 +6516,10 @@ class _TextbookUnitAuthoringDialogState
               ),
             ],
             const SizedBox(height: 14),
-            Row(
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 _ProblemExtractCheckbox(
                   value: _runProblemExtractionAfterStage1,
@@ -6124,7 +6530,27 @@ class _TextbookUnitAuthoringDialogState
                     });
                   },
                 ),
-                const SizedBox(width: 10),
+                FilledButton.icon(
+                  onPressed: _batchRunning || _autoAnalyzeRunning
+                      ? null
+                      : () => _runAutoAnalyzeTargets(selected),
+                  icon: _autoAnalyzeRunning
+                      ? const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(Icons.auto_awesome_rounded, size: 16),
+                  label: Text(
+                    _autoAnalyzeRunning
+                        ? '자동 분석 진행 중...'
+                        : '원스톱 자동 분석 (${selected.length}개 직렬 실행)',
+                  ),
+                  style: FilledButton.styleFrom(backgroundColor: _kAccent),
+                ),
                 if (totalReady > 0 && !_batchRunning)
                   FilledButton.icon(
                     onPressed: () => _saveTargetsAndOpenStage(selected),
@@ -6135,20 +6561,16 @@ class _TextbookUnitAuthoringDialogState
                     style: FilledButton.styleFrom(backgroundColor: _kInfo),
                   )
                 else
-                  FilledButton.icon(
+                  OutlinedButton.icon(
                     onPressed: _batchRunning ? null : _runSelectedBatch,
-                    icon: _batchRunning
-                        ? const SizedBox(
-                            width: 14,
-                            height: 14,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const Icon(Icons.play_arrow, size: 16),
-                    label: Text(_batchRunning ? '선택 분석 중' : '선택 분석'),
-                    style: FilledButton.styleFrom(backgroundColor: _kAccent),
+                    icon: const Icon(Icons.play_arrow, size: 16, color: _kTextSub),
+                    label: Text(
+                      _batchRunning ? '선택 분석 중' : 'Stage 1만 선택 분석',
+                      style: const TextStyle(color: _kTextSub, fontSize: 12),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: _kBorder),
+                    ),
                   ),
               ],
             ),
@@ -6342,6 +6764,48 @@ class _TextbookUnitAuthoringDialogState
               ),
             ),
           ),
+          const SizedBox(width: 6),
+          FilledButton.icon(
+            onPressed: !canRunAnalysis || state.uploading || _autoAnalyzeRunning
+                ? null
+                : () => _runAutoAnalyzeTargets(
+                    runSelection ? _selectedBatchFocuses() : <_SubFocus>[focus],
+                  ),
+            icon: _autoAnalyzeRunning
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                : const Icon(Icons.auto_awesome_rounded, size: 15),
+            label: Text(
+              runSelection ? '원스톱 자동 분석 ($selectedCount)' : '원스톱 자동 분석',
+            ),
+            style: FilledButton.styleFrom(
+              backgroundColor: _kAccent,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            ),
+          ),
+          if (savedCropCount > 0 || _autoAnalyzedScopes.containsKey(_stateKeyFor(focus))) ...[
+            const SizedBox(width: 6),
+            OutlinedButton.icon(
+              onPressed: state.running || state.uploading || _autoAnalyzeRunning
+                  ? null
+                  : () => _openFirstReviewForFocus(focus),
+              icon: const Icon(Icons.fact_check_outlined, size: 14, color: _kAccent),
+              label: const Text(
+                '1차 검수·핀셋',
+                style: TextStyle(color: _kAccent, fontSize: 12, fontWeight: FontWeight.w800),
+              ),
+              style: OutlinedButton.styleFrom(
+                side: BorderSide(color: _kAccent.withValues(alpha: 0.6)),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              ),
+            ),
+          ],
           const SizedBox(width: 6),
           _buildNextButton(focus, state),
         ],

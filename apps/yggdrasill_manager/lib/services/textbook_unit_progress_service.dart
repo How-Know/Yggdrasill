@@ -6,14 +6,17 @@ class TextbookUnitProgress {
   const TextbookUnitProgress({
     required this.completed,
     required this.total,
+    this.autoAnalyzed = 0,
   });
 
   const TextbookUnitProgress.empty()
       : completed = 0,
-        total = 0;
+        total = 0,
+        autoAnalyzed = 0;
 
   final int completed;
   final int total;
+  final int autoAnalyzed;
 }
 
 /// 마이그레이션 탭과 같은 규칙으로 실제 소단원 3단계 진행률을 계산한다.
@@ -46,10 +49,27 @@ class TextbookUnitProgressService {
       gradeLabel: gradeLabel,
       scopes: scopes,
     );
+    final autoKeys = autoAnalyzedScopeKeysFromPayload(payload);
+    final autoCount = scopes
+        .where((s) => autoKeys.contains('${s['big_order']}/${s['mid_order']}/${s['sub_key']}'))
+        .length;
     return TextbookUnitProgress(
       completed: statuses.where((status) => status.completedStages >= 3).length,
       total: scopes.length,
+      autoAnalyzed: autoCount,
     );
+  }
+
+  static Set<String> autoAnalyzedScopeKeysFromPayload(Map<String, dynamic>? payload) {
+    if (payload == null) return const <String>{};
+    final raw = payload['auto_analyzed_scopes'];
+    if (raw is Map) {
+      return <String>{
+        for (final e in raw.entries)
+          if ('${e.value ?? ''}'.trim().isNotEmpty) '${e.key}'.trim(),
+      };
+    }
+    return const <String>{};
   }
 
   static List<Map<String, dynamic>> stageScopesFromPayload(

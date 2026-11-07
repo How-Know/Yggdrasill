@@ -592,6 +592,7 @@ class TextbookBookRegistry {
     required String gradeLabel,
     required String seriesKey,
     required List<BigUnitInput> bigUnits,
+    Map<String, String>? autoAnalyzedScopes,
   }) async {
     final seriesEntry = textbookSeriesByKey(seriesKey);
     final courseInfo = _resolveCourseInfo(gradeLabel: gradeLabel);
@@ -608,7 +609,7 @@ class TextbookBookRegistry {
     };
     final existing = await _supa
         .from('textbook_metadata')
-        .select('textbook_type,page_offset,grade_key,course_key,course_label')
+        .select('textbook_type,page_offset,grade_key,course_key,course_label,payload')
         .match(<String, Object>{
       'academy_id': academyId,
       'book_id': bookId,
@@ -623,8 +624,17 @@ class TextbookBookRegistry {
       'course_label': courseInfo.courseLabel,
       'payload': payload,
     };
+    final mergedAutoScopes = <String, String>{};
     if (existing != null) {
       final existingMap = Map<String, dynamic>.from(existing);
+      final existingPayload = existingMap['payload'];
+      if (existingPayload is Map && existingPayload['auto_analyzed_scopes'] is Map) {
+        for (final e in (existingPayload['auto_analyzed_scopes'] as Map).entries) {
+          final k = '${e.key}'.trim();
+          final v = '${e.value ?? ''}'.trim();
+          if (k.isNotEmpty && v.isNotEmpty) mergedAutoScopes[k] = v;
+        }
+      }
       final tt = (existingMap['textbook_type'] as String?)?.trim();
       if (tt != null && tt.isNotEmpty) row['textbook_type'] = tt;
       final po = existingMap['page_offset'];
@@ -644,6 +654,16 @@ class TextbookBookRegistry {
         row['course_label'] = existingCourseLabel;
         payload['course_label'] = existingCourseLabel;
       }
+    }
+    if (autoAnalyzedScopes != null) {
+      for (final e in autoAnalyzedScopes.entries) {
+        if (e.key.trim().isNotEmpty && e.value.trim().isNotEmpty) {
+          mergedAutoScopes[e.key.trim()] = e.value.trim();
+        }
+      }
+    }
+    if (mergedAutoScopes.isNotEmpty) {
+      payload['auto_analyzed_scopes'] = mergedAutoScopes;
     }
     await _supa.from('textbook_metadata').upsert(
           row,

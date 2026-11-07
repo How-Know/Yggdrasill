@@ -369,6 +369,95 @@ int percentOf(int done, int total) {
   return ((done * 100) / total).round().clamp(0, 100);
 }
 
+/// 문항 번호 자연순 비교(예: '01' < '02' < '10', '109-2' < '109-10').
+int naturalProblemNumberCompare(String a, String b) {
+  final tokensA = RegExp(r'\d+|\D+').allMatches(a.trim()).map((m) => m.group(0)!).toList();
+  final tokensB = RegExp(r'\d+|\D+').allMatches(b.trim()).map((m) => m.group(0)!).toList();
+  final len = tokensA.length < tokensB.length ? tokensA.length : tokensB.length;
+  for (var i = 0; i < len; i++) {
+    final ta = tokensA[i];
+    final tb = tokensB[i];
+    final na = int.tryParse(ta);
+    final nb = int.tryParse(tb);
+    if (na != null && nb != null) {
+      final cmp = na.compareTo(nb);
+      if (cmp != 0) return cmp;
+    } else {
+      final cmp = ta.compareTo(tb);
+      if (cmp != 0) return cmp;
+    }
+  }
+  return tokensA.length.compareTo(tokensB.length);
+}
+
+/// 페이지 흐름(rawPage 오름차순) → 문항 번호 자연순 정렬.
+int compareItemsByPageAndNumber(TextbookProblemReviewItem a, TextbookProblemReviewItem b) {
+  final pageCmp = a.rawPage.compareTo(b.rawPage);
+  if (pageCmp != 0) return pageCmp;
+  final numCmp = naturalProblemNumberCompare(a.problemNumber, b.problemNumber);
+  if (numCmp != 0) return numCmp;
+  return a.cropId.compareTo(b.cropId);
+}
+
+/// 페이지·번호 흐름에서 감지된 누락 의심 문항 정보.
+class MissingProblemGap {
+  const MissingProblemGap({
+    required this.missingNumber,
+    required this.rawPage,
+    this.displayPage,
+    required this.subKey,
+    required this.subIndex,
+    required this.afterCropId,
+  });
+
+  final String missingNumber;
+  final int rawPage;
+  final int? displayPage;
+  final String subKey;
+  final int subIndex;
+  final String afterCropId;
+}
+
+/// 정렬된 문항 목록에서 연속 번호 중 빠진 번호(예: 02번 다음 04번 → 03번 누락 의심)를 찾는다.
+List<MissingProblemGap> detectMissingProblemGaps(List<TextbookProblemReviewItem> items) {
+  if (items.length < 2) return const [];
+  final sorted = [...items]..sort(compareItemsByPageAndNumber);
+  final existingNums = <String>{for (final it in sorted) it.problemNumber.trim()};
+  final gaps = <MissingProblemGap>[];
+  for (var i = 0; i < sorted.length - 1; i++) {
+    final cur = sorted[i];
+    final next = sorted[i + 1];
+    if (cur.subKey != next.subKey || cur.subIndex != next.subIndex) continue;
+    if ((next.rawPage - cur.rawPage).abs() > 1) continue;
+    final curMatch = RegExp(r'^(.*?)(\d+)$').firstMatch(cur.problemNumber.trim());
+    final nextMatch = RegExp(r'^(.*?)(\d+)$').firstMatch(next.problemNumber.trim());
+    if (curMatch == null || nextMatch == null) continue;
+    final prefix = curMatch.group(1)!;
+    if (prefix != nextMatch.group(1)!) continue;
+    final n1 = int.tryParse(curMatch.group(2)!);
+    final n2 = int.tryParse(nextMatch.group(2)!);
+    if (n1 == null || n2 == null) continue;
+    final diff = n2 - n1;
+    if (diff > 1 && diff <= 4) {
+      final padWidth = curMatch.group(2)!.startsWith('0') ? curMatch.group(2)!.length : 0;
+      for (var m = n1 + 1; m < n2; m++) {
+        final formatted = '$prefix${padWidth > 0 ? m.toString().padLeft(padWidth, '0') : m}';
+        if (!existingNums.contains(formatted)) {
+          gaps.add(MissingProblemGap(
+            missingNumber: formatted,
+            rawPage: cur.rawPage,
+            displayPage: cur.displayPage,
+            subKey: cur.subKey,
+            subIndex: cur.subIndex,
+            afterCropId: cur.cropId,
+          ));
+        }
+      }
+    }
+  }
+  return gaps;
+}
+
 class TextbookReviewUnitScope {
   const TextbookReviewUnitScope({
     required this.academyId,
@@ -1410,6 +1499,7 @@ class TextbookProblemReviewService {
     bool includeSolution = true,
     bool onlyMissingSolutions = false,
     bool includeSolutionPageFallback = false,
+    bool forceSolutionPageFallback = false,
     List<TextbookProblemReviewItem> allItems = const [],
   }) async {
     final out = <String, TextbookReviewChunkImage>{};
@@ -1449,10 +1539,11 @@ class TextbookProblemReviewService {
         }
       }
       TextbookReviewRenderedRegion? solPage;
-      final needsSolPage = includeSolutionPageFallback &&
-          (it.solutionVisionFailed ||
-              it.mathStatus == 'issue' ||
-              (!it.hasOriginalSolution && !it.isAnswerOnlyOriginalSolution));
+      final needsSolPage = forceSolutionPageFallback ||
+          (includeSolutionPageFallback &&
+              (it.solutionVisionFailed ||
+                  it.mathStatus == 'issue' ||
+                  (!it.hasOriginalSolution && !it.isAnswerOnlyOriginalSolution)));
       if (needsSolPage) {
         solPage = await fullSolutionPage(scope, it, pool);
       }
@@ -1469,11 +1560,13 @@ class TextbookProblemReviewService {
     return out;
   }
 
-  /// 원본 대조 수정 단계. 원본 이미지가 있는 문항만 처리된다(최대 4문항). 결과는 fix_proposal 에 저장된다.
+  /// 원본 대조 수정 단계(또는 핀셋 정밀 추출). 원본 이미지가 있는 문항만 처리된다(최대 4문항).
+  /// [pincette] 가 true 면 고해상도·상위 추론(high)으로 본문·풀이·정답·해설을 다시 뽑아 DB 에 즉시 반영한다.
   Future<Map<String, dynamic>> runFixPass(
     TextbookReviewUnitScope scope, {
     required List<String> cropIds,
     required Map<String, TextbookReviewChunkImage> images,
+    bool pincette = false,
   }) async {
     if (cropIds.isEmpty) return const {'ok': true, 'processed': 0};
     final res = await _db.functions.invoke('ai_think', body: {
@@ -1484,12 +1577,64 @@ class TextbookProblemReviewService {
       'big_order': scope.bigOrder,
       'mid_order': midOrderOf(scope),
       'crop_ids': cropIds,
+      if (pincette) 'pincette': true,
       'images': {for (final e in images.entries) e.key: e.value.toJson()},
     });
     final data = res.data;
     if (data is Map) return Map<String, dynamic>.from(data);
     throw Exception('원본 대조 수정 응답을 해석하지 못했습니다.');
   }
+
+  /// 핀셋 추출(PDF 영역 직접 드래그 지정 / 빠진 문항 추가):
+  /// 기존 문항이면 crop_id·pb_question_id 를 보존하며 영역 좌표를 갱신하고, 빠진 문항이면 새로 생성해 crop_id 를 돌려준다.
+  Future<String> upsertPincetteCrop({
+    required TextbookReviewUnitScope scope,
+    required String subKey,
+    int subIndex = 0,
+    required int rawPage,
+    int? displayPage,
+    required String problemNumber,
+    required List<int> itemRegion1k,
+    String? cropId,
+  }) async {
+    _regionCache.clear();
+    final res = await _db.rpc('textbook_review_pincette_upsert_crop', params: {
+      'p_academy_id': scope.academyId,
+      'p_book_id': scope.bookId,
+      'p_grade_label': scope.gradeLabel,
+      'p_big_order': scope.bigOrder,
+      'p_mid_order': midOrderOf(scope),
+      'p_sub_key': subKey.isEmpty ? 'A' : subKey,
+      'p_sub_index': subIndex,
+      'p_raw_page': rawPage,
+      'p_display_page': displayPage,
+      'p_problem_number': problemNumber.trim(),
+      'p_item_region_1k': itemRegion1k,
+      'p_bbox_1k': itemRegion1k,
+      'p_big_name': scope.bigName,
+      'p_mid_name': scope.midName,
+      'p_crop_id': cropId,
+    });
+    if (res is Map && res['crop_id'] != null) {
+      return '${res['crop_id']}';
+    }
+    throw Exception('핀셋 영역 저장 응답을 해석하지 못했습니다.');
+  }
+
+  /// 본문(또는 해설) PDF 한 쪽 전체를 PNG 로 렌더링한다(PDF 영역 직접 드래그 지정 모달용).
+  Future<TextbookReviewRenderedRegion?> renderFullBodyPage({
+    required TextbookReviewUnitScope scope,
+    required int rawPage,
+    int targetWidthPx = 1500,
+  }) =>
+      _solutionImages.renderFullPage(
+        academyId: scope.academyId,
+        bookId: scope.bookId,
+        gradeLabel: scope.gradeLabel,
+        sourceKind: 'body',
+        rawPage: rawPage,
+        targetWidthPx: targetWidthPx,
+      );
 
   /// 수정 단계가 고른 그림 영역을 본문 PDF 에서 잘라 문제은행 그림 자산으로 올린다.
   /// 반환: 새 자산 목록(figure_index 는 제안대로). 그림 하나라도 못 자르면 예외.

@@ -257,6 +257,7 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
             : await _buildUnitProgressSummary(
                 link: link,
                 scopes: scopes,
+                payload: payload,
               );
         if (!mounted || progressSeq != _unitProgressLoadSeq) return;
         setState(() {
@@ -276,6 +277,7 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
   Future<_UnitProgressSummary> _buildUnitProgressSummary({
     required _MigLink link,
     required List<Map<String, dynamic>> scopes,
+    Map<String, dynamic>? payload,
   }) async {
     final statuses = await _service.fetchStageStatuses(
       academyId: link.academyId,
@@ -284,9 +286,19 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
       scopes: scopes,
     );
     final completed = statuses.where((s) => s.completedStages >= 3).length;
+    final rawAuto = payload?['auto_analyzed_scopes'];
+    final autoKeys = <String>{
+      if (rawAuto is Map)
+        for (final e in rawAuto.entries)
+          if ('${e.value ?? ''}'.trim().isNotEmpty) '${e.key}'.trim(),
+    };
+    final autoCount = scopes
+        .where((s) => autoKeys.contains('${s['big_order']}/${s['mid_order']}/${s['sub_key']}'))
+        .length;
     return _UnitProgressSummary(
       totalUnits: scopes.length,
       completedStage3Units: completed,
+      autoAnalyzedUnits: autoCount,
     );
   }
 
@@ -675,7 +687,10 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
     await _loadLinks(result.bookId);
   }
 
-  Future<void> _openUnitAuthoring(_MigLink link) async {
+  Future<void> _openUnitAuthoring(
+    _MigLink link, {
+    bool autoAnalyzeMode = false,
+  }) async {
     if (!_canOpenUnitAuthoring(link)) {
       _toast('단원·분석은 migrated 상태의 서버 PDF만 열 수 있습니다.', error: true);
       return;
@@ -688,6 +703,7 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
       bookName: book.name,
       gradeLabel: link.gradeLabel,
       linkId: link.id == 0 ? null : link.id,
+      autoAnalyzeMode: autoAnalyzeMode,
     );
     if (!mounted || _selectedBookId == null) return;
     await _loadLinks(_selectedBookId!);
@@ -1135,9 +1151,9 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
         SizedBox(width: 84, child: Text('상태', style: style)),
         Expanded(child: Text('파일', style: style)),
         SizedBox(width: 72, child: Text('크기', style: style)),
-        SizedBox(width: 390, child: Text('조작', style: style)),
+        SizedBox(width: 468, child: Text('조작', style: style)),
         SizedBox(width: 112, child: Text('표지', style: style)),
-        SizedBox(width: 156, child: Text('단원', style: style)),
+        SizedBox(width: 176, child: Text('단원', style: style)),
       ],
     );
   }
@@ -1202,7 +1218,7 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
             ),
           ),
           SizedBox(
-            width: 390,
+            width: 468,
             child: isBusy
                 ? const Row(
                     mainAxisSize: MainAxisSize.min,
@@ -1231,7 +1247,7 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
             child: _buildCoverStatusBadge(link),
           ),
           SizedBox(
-            width: 156,
+            width: 176,
             child: _buildUnitProgressBadge(link),
           ),
         ],
@@ -1270,10 +1286,22 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
         icon: Icons.warning_amber_outlined,
       );
     }
+    final auto = summary.autoAnalyzedUnits;
+    final legacy = (summary.completedStage3Units - auto).clamp(0, summary.totalUnits);
+    if (auto > 0) {
+      final label = legacy > 0
+          ? '자동 $auto · 기존 $legacy / 총 ${summary.totalUnits}'
+          : '자동 분석 $auto/${summary.totalUnits} 완료';
+      return _UnitProgressBadge(
+        label: label,
+        color: const Color(0xFF33A373),
+        icon: Icons.auto_awesome_rounded,
+      );
+    }
     final ready = summary.totalUnits > 0 &&
         summary.completedStage3Units >= summary.totalUnits;
     return _UnitProgressBadge(
-      label: '총 ${summary.totalUnits}개 · ${summary.completedStage3Units}개 완료',
+      label: '기존 추출 ${summary.completedStage3Units}/${summary.totalUnits} 완료',
       color: ready ? const Color(0xFF7CC67C) : const Color(0xFF9FB3B3),
       icon: ready ? Icons.verified_outlined : Icons.account_tree_outlined,
     );
@@ -1340,6 +1368,15 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
             icon: Icons.account_tree_outlined,
             label: '단원·분석',
             onPressed: () => unawaited(_openUnitAuthoring(link)),
+          ));
+          widgets.add(const SizedBox(width: 6));
+          widgets.add(_ActionButton(
+            icon: Icons.auto_awesome_rounded,
+            label: '자동 분석',
+            accent: true,
+            onPressed: () => unawaited(
+              _openUnitAuthoring(link, autoAnalyzeMode: true),
+            ),
           ));
         }
       }
@@ -1556,27 +1593,48 @@ class _ActionButton extends StatelessWidget {
     required this.label,
     required this.onPressed,
     this.danger = false,
+    this.accent = false,
   });
 
   final IconData icon;
   final String label;
   final VoidCallback? onPressed;
   final bool danger;
+  final bool accent;
 
   @override
   Widget build(BuildContext context) {
     final Color fg = onPressed == null
         ? const Color(0xFF4A4A4A)
-        : (danger ? const Color(0xFFE68A8A) : const Color(0xFFE0E0E0));
+        : (danger
+            ? const Color(0xFFE68A8A)
+            : accent
+                ? const Color(0xFF33A373)
+                : const Color(0xFFE0E0E0));
     return TextButton.icon(
       onPressed: onPressed,
       icon: Icon(icon, size: 14, color: fg),
       label: Text(
         label,
-        style: TextStyle(color: fg, fontSize: 12, fontWeight: FontWeight.w600),
+        style: TextStyle(
+          color: fg,
+          fontSize: 12,
+          fontWeight: accent ? FontWeight.w800 : FontWeight.w600,
+        ),
       ),
       style: TextButton.styleFrom(
         minimumSize: const Size(0, 30),
+        backgroundColor: accent && onPressed != null
+            ? const Color(0xFF33A373).withValues(alpha: 0.14)
+            : null,
+        shape: accent
+            ? RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(999),
+                side: BorderSide(
+                  color: const Color(0xFF33A373).withValues(alpha: 0.45),
+                ),
+              )
+            : null,
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
       ),
@@ -1704,22 +1762,26 @@ class _UnitProgressSummary {
   const _UnitProgressSummary({
     required this.totalUnits,
     required this.completedStage3Units,
+    this.autoAnalyzedUnits = 0,
   })  : errorMessage = null,
         hasUnitInfo = true;
 
   const _UnitProgressSummary.noUnitInfo()
       : totalUnits = 0,
         completedStage3Units = 0,
+        autoAnalyzedUnits = 0,
         errorMessage = null,
         hasUnitInfo = false;
 
   const _UnitProgressSummary.error(this.errorMessage)
       : totalUnits = 0,
         completedStage3Units = 0,
+        autoAnalyzedUnits = 0,
         hasUnitInfo = true;
 
   final int totalUnits;
   final int completedStage3Units;
+  final int autoAnalyzedUnits;
   final String? errorMessage;
   final bool hasUnitInfo;
 
