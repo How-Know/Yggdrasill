@@ -143,13 +143,14 @@ export async function generateQuestionPreviews({
 
   const fontPaths = getDefaultFontPaths();
   const effectiveRenderConfig = effectivePreviewRenderConfig(renderConfig || {});
-  const results = [];
+  const results = new Array(questions.length);
+  const concurrency = Math.max(1, Math.min(4, questions.length));
+  let cursor = 0;
 
-  for (const question of questions) {
+  async function processOne(question) {
     const qId = String(question?.id || question?.question_id || '');
     if (!qId) {
-      results.push({ questionId: qId, imageUrl: null, error: 'no question id' });
-      continue;
+      return { questionId: qId, imageUrl: null, error: 'no question id' };
     }
 
     const hash = questionContentHash(question, mathEngine, effectiveRenderConfig);
@@ -162,8 +163,7 @@ export async function generateQuestionPreviews({
           .createSignedUrl(storagePath, SIGNED_URL_EXPIRY_SECONDS);
 
         if (existing?.signedUrl) {
-          results.push({ questionId: qId, imageUrl: existing.signedUrl, cached: true });
-          continue;
+          return { questionId: qId, imageUrl: existing.signedUrl, cached: true };
         }
       } catch (_) {
         // no cached version
@@ -194,8 +194,7 @@ export async function generateQuestionPreviews({
 
       if (uploadErr) {
         console.error(`[preview] upload failed for q ${qId}:`, uploadErr.message);
-        results.push({ questionId: qId, imageUrl: null, error: uploadErr.message });
-        continue;
+        return { questionId: qId, imageUrl: null, error: uploadErr.message };
       }
 
       const { data: signed, error: signErr } = await supabaseClient.storage
@@ -203,16 +202,26 @@ export async function generateQuestionPreviews({
         .createSignedUrl(storagePath, SIGNED_URL_EXPIRY_SECONDS);
 
       if (signErr || !signed?.signedUrl) {
-        results.push({ questionId: qId, imageUrl: null, error: signErr?.message || 'sign failed' });
-        continue;
+        return { questionId: qId, imageUrl: null, error: signErr?.message || 'sign failed' };
       }
 
-      results.push({ questionId: qId, imageUrl: signed.signedUrl, cached: false });
+      return { questionId: qId, imageUrl: signed.signedUrl, cached: false };
     } catch (err) {
       console.error(`[preview] render failed for q ${qId}:`, err.message);
-      results.push({ questionId: qId, imageUrl: null, error: err.message });
+      return { questionId: qId, imageUrl: null, error: err.message };
     }
   }
+
+  await Promise.all(
+    Array.from({ length: concurrency }, async () => {
+      while (true) {
+        const idx = cursor;
+        cursor += 1;
+        if (idx >= questions.length) break;
+        results[idx] = await processOne(questions[idx]);
+      }
+    }),
+  );
 
   return results;
 }

@@ -4516,9 +4516,9 @@ class _TextbookUnitAuthoringDialogState
       for (var idx = 0; idx < targetItems.length; idx += chunkSize)
         targetItems.skip(idx).take(chunkSize).toList(),
     ];
-    for (var b = 0; b < reviewChunks.length; b += 2) {
+    for (var b = 0; b < reviewChunks.length; b += 3) {
       if (!mounted) return;
-      final batch = reviewChunks.skip(b).take(2).toList();
+      final batch = reviewChunks.skip(b).take(3).toList();
       final doneCount = b * chunkSize;
       stepSay(
         '4/4단계 — AI 선풀이 · 3축 난이도 · 원본 해설 전사 '
@@ -4546,20 +4546,21 @@ class _TextbookUnitAuthoringDialogState
     allItems = await _reviewService.fetchUnitItems(scope);
     targetItems = [for (final it in allItems) if (matchesFocus(it)) it];
 
-    // 해설 미전사 또는 수학·품질·도형 점검 대상 문항은 AI 풀이 정답을 앵커로 해설 PDF 전체 페이지를 탐색해 수정안을 만든다.
+    // 해설 미전사 또는 수학·품질 오류 문항만 AI 풀이 정답을 앵커로 해설 PDF 전체 페이지를 탐색해 수정안을 만든다.
+    // (1차 검수에서 수학·품질 모두 정상(clean)으로 통과한 도형 문항까지 불필요하게 재호출하지 않는다.)
     final fixTargets = [
       for (final it in targetItems)
         if (it.canRenderOriginal &&
-            (it.solutionVisionFailed || it.mathStatus == 'issue' || it.qualityStatus == 'issue' || it.hasFigures))
+            (it.solutionVisionFailed || it.mathStatus == 'issue' || it.qualityStatus == 'issue'))
           it,
     ];
     final fixChunks = <List<TextbookProblemReviewItem>>[
       for (var idx = 0; idx < fixTargets.length; idx += 3)
         fixTargets.skip(idx).take(3).toList(),
     ];
-    for (var b = 0; b < fixChunks.length; b += 2) {
+    for (var b = 0; b < fixChunks.length; b += 3) {
       if (!mounted) return;
-      final batch = fixChunks.skip(b).take(2).toList();
+      final batch = fixChunks.skip(b).take(3).toList();
       final doneCount = b * 3;
       stepSay(
         '4/4단계 — AI 정답 기반 해설 전체 페이지 탐색 및 원본 대조 수정안 생성 '
@@ -4590,70 +4591,76 @@ class _TextbookUnitAuthoringDialogState
 
     // 생성된 본문·공통발문·선지·도형 수정안과 수학 정답 수정안을 DB 에 즉시 자동 반영하고 승인한다.
     stepSay('4/4단계 — 생성된 수정안(공통발문·본문·도형·정답) DB 자동 반영 및 승인 확정 중...');
-    for (final it in targetItems) {
+    for (var idx = 0; idx < targetItems.length; idx += 4) {
       if (!mounted) return;
-      try {
-        final rawCrops = it.fixProposal['figure_crops'];
-        final cropSpecs = [
-          if (rawCrops is List)
-            for (final c in rawCrops)
-              if (c is Map) Map<String, dynamic>.from(c),
-        ];
-        List<Map<String, dynamic>>? uploadedAssets;
-        if (cropSpecs.isNotEmpty && it.pbQuestionId.isNotEmpty && it.canRenderOriginal) {
-          uploadedAssets = await _reviewService.cropAndUploadFigures(
-            scope: scope,
-            item: it,
-            crops: cropSpecs,
-          );
-        }
-        final propStem = (it.fixProposal['stem'] as String?)?.trim();
-        final propCommon = (it.fixProposal['common_stem'] as String?)?.trim();
-        final rawChoices = it.fixProposal['choices'];
-        final propChoices = rawChoices is List
-            ? [for (final c in rawChoices) if (c is Map) Map<String, dynamic>.from(c)]
-            : null;
-        final rawLayout = it.fixProposal['figure_layout'];
-        final propLayout = rawLayout is Map ? Map<String, dynamic>.from(rawLayout) : null;
-        final canApproveQual = !it.isEngineHeld;
-        if ((propStem != null && propStem.isNotEmpty) ||
-            (propCommon != null && propCommon.isNotEmpty) ||
-            propChoices != null ||
-            propLayout != null ||
-            uploadedAssets != null ||
-            canApproveQual) {
-          await _reviewService.applyProblemFix(
-            cropId: it.cropId,
-            stem: (propStem != null && propStem.isNotEmpty) ? propStem : null,
-            commonStem: (propCommon != null && propCommon.isNotEmpty) ? propCommon : null,
-            choices: propChoices,
-            figureLayout: propLayout,
-            figureAssets: uploadedAssets,
-            approveQuality: canApproveQual,
-            note: '자동 분석 파이프라인 DB 자동 반영',
-          );
-        }
-      } catch (e) {
-        debugPrint('[auto-analyze] applyProblemFix warning (${it.problemNumber}): $e');
-      }
+      final slice = targetItems.skip(idx).take(4).toList();
+      await Future.wait([
+        for (final it in slice)
+          () async {
+            try {
+              final rawCrops = it.fixProposal['figure_crops'];
+              final cropSpecs = [
+                if (rawCrops is List)
+                  for (final c in rawCrops)
+                    if (c is Map) Map<String, dynamic>.from(c),
+              ];
+              List<Map<String, dynamic>>? uploadedAssets;
+              if (cropSpecs.isNotEmpty && it.pbQuestionId.isNotEmpty && it.canRenderOriginal) {
+                uploadedAssets = await _reviewService.cropAndUploadFigures(
+                  scope: scope,
+                  item: it,
+                  crops: cropSpecs,
+                );
+              }
+              final propStem = (it.fixProposal['stem'] as String?)?.trim();
+              final propCommon = (it.fixProposal['common_stem'] as String?)?.trim();
+              final rawChoices = it.fixProposal['choices'];
+              final propChoices = rawChoices is List
+                  ? [for (final c in rawChoices) if (c is Map) Map<String, dynamic>.from(c)]
+                  : null;
+              final rawLayout = it.fixProposal['figure_layout'];
+              final propLayout = rawLayout is Map ? Map<String, dynamic>.from(rawLayout) : null;
+              final canApproveQual = !it.isEngineHeld;
+              if ((propStem != null && propStem.isNotEmpty) ||
+                  (propCommon != null && propCommon.isNotEmpty) ||
+                  propChoices != null ||
+                  propLayout != null ||
+                  uploadedAssets != null ||
+                  canApproveQual) {
+                await _reviewService.applyProblemFix(
+                  cropId: it.cropId,
+                  stem: (propStem != null && propStem.isNotEmpty) ? propStem : null,
+                  commonStem: (propCommon != null && propCommon.isNotEmpty) ? propCommon : null,
+                  choices: propChoices,
+                  figureLayout: propLayout,
+                  figureAssets: uploadedAssets,
+                  approveQuality: canApproveQual,
+                  note: '자동 분석 파이프라인 DB 자동 반영',
+                );
+              }
+            } catch (e) {
+              debugPrint('[auto-analyze] applyProblemFix warning (${it.problemNumber}): $e');
+            }
 
-      try {
-        final resolvedAns = (it.resolvedMathAnswer ?? it.proposedAnswer ?? it.existingAnswer).trim();
-        if (resolvedAns.isNotEmpty && resolvedAns != '판단불가') {
-          await _reviewService.saveItemEdit(
-            cropId: it.cropId,
-            newAnswer: resolvedAns,
-            aiSolution: it.proposedAiSolution ?? it.aiSolution,
-            aiAnswer: it.proposedAiAnswer ?? resolvedAns,
-            visualTags: it.visualTags,
-            solutionTranscribed: it.proposedSolutionTranscribed,
-            solutionAnswer: it.proposedSolutionAnswer,
-            approveMath: true,
-          );
-        }
-      } catch (e) {
-        debugPrint('[auto-analyze] saveItemEdit warning (${it.problemNumber}): $e');
-      }
+            try {
+              final resolvedAns = (it.resolvedMathAnswer ?? it.proposedAnswer ?? it.existingAnswer).trim();
+              if (resolvedAns.isNotEmpty && resolvedAns != '판단불가') {
+                await _reviewService.saveItemEdit(
+                  cropId: it.cropId,
+                  newAnswer: resolvedAns,
+                  aiSolution: it.proposedAiSolution ?? it.aiSolution,
+                  aiAnswer: it.proposedAiAnswer ?? resolvedAns,
+                  visualTags: it.visualTags,
+                  solutionTranscribed: it.proposedSolutionTranscribed,
+                  solutionAnswer: it.proposedSolutionAnswer,
+                  approveMath: true,
+                );
+              }
+            } catch (e) {
+              debugPrint('[auto-analyze] saveItemEdit warning (${it.problemNumber}): $e');
+            }
+          }(),
+      ]);
     }
 
     allItems = await _reviewService.fetchUnitItems(scope);

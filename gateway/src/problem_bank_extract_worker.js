@@ -4750,8 +4750,10 @@ function buildQuestionWritePayload({
 // lockQueuedJob 이 status='queued' 조건을 WHERE 에 걸고 낙관적 업데이트를 하므로
 // reclaim 이후 동시 다중 워커가 떠 있어도 double pick 은 발생하지 않는다.
 // ---------------------------------------------------------------------------
-async function reclaimStaleExtractingJobs() {
-  const cutoffIso = new Date(Date.now() - STALE_EXTRACTING_MS).toISOString();
+async function reclaimStaleExtractingJobs({ onBoot = false } = {}) {
+  const cutoffIso = onBoot
+    ? new Date().toISOString()
+    : new Date(Date.now() - STALE_EXTRACTING_MS).toISOString();
   const { data: stale, error } = await supa
     .from('pb_extract_jobs')
     .select(
@@ -5896,7 +5898,7 @@ async function processOneJob(job) {
     chunks: 0,
     error: '',
   };
-  if (answerRenderQuestionIds.length > 0) {
+  if (answerRenderQuestionIds.length > 0 && !hasTextbookScope) {
     try {
       answerRenderAssetStats =
         await backfillUnifiedAnswerRenderAssetsForPbQuestions({
@@ -5922,6 +5924,13 @@ async function processOneJob(job) {
         JSON.stringify({ jobId: job.id, message: answerRenderAssetStats.error }),
       );
     }
+  } else if (answerRenderQuestionIds.length > 0 && hasTextbookScope) {
+    // 교재 추출(textbook_pdf_only)은 이어서 정답·해설 매칭 및 검수 단계에서 정답이 확정된 뒤
+    // pb-api 의 백그라운드 answer-prebake 가 구우므로, 여기서 동기 블로킹(문항당 5초)하지 않는다.
+    void backfillUnifiedAnswerRenderAssetsForPbQuestions({
+      academyId: job.academy_id,
+      questionIds: answerRenderQuestionIds,
+    }).catch(() => {});
   }
 
   const reviewRequired = partialReextract
@@ -6205,7 +6214,7 @@ async function main() {
   // 기동 직후: 이전 워커가 비정상 종료되어 'extracting' 에 묶여 있는 job 들을
   // 먼저 풀어준다. 그래야 매니저 UI 의 "무한 로딩" 이 바로 해소된다.
   try {
-    await reclaimStaleExtractingJobs();
+    await reclaimStaleExtractingJobs({ onBoot: true });
   } catch (err) {
     console.error(
       '[pb-extract-worker] reclaim_startup_failed',
