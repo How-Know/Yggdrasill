@@ -83,6 +83,37 @@ Deno.test('원본 그림을 자산 순서대로 짝짓고, 없는 그림은 새 
   assertEquals(buildFigureProposal({ measures: [], emPx: 35, imageWidthPx: 1100, assets: [], currentLayout: null }), null);
 });
 
+Deno.test('원본에서 위아래로 떨어진 두 그림은 가로 묶음을 풀고, 같은 높이대 두 그림은 묶음을 유지한다', () => {
+  const layout = {
+    version: 1,
+    items: [{ assetKey: 'idx:1', widthEm: 8.5 }, { assetKey: 'idx:2', widthEm: 8.5 }],
+    groups: [{ type: 'horizontal', members: ['idx:1', 'idx:2'], gap: 0.5 }],
+  };
+  const assets = [{ figure_index: 1, path: 'a' }, { figure_index: 2, path: 'b' }];
+  const stacked = buildFigureProposal({
+    measures: parseFigureMeasures([
+      { bbox_1k: [209, 326, 400, 641], placement: 'below_text', align: 'center', v2_state: 'position' },
+      { bbox_1k: [718, 329, 910, 644], placement: 'below_text', align: 'center', v2_state: 'position' },
+    ]),
+    emPx: 40,
+    imageWidthPx: 1100,
+    assets,
+    currentLayout: layout,
+  })!;
+  assertEquals(stacked.layout.groups, []);
+  const sideBySide = buildFigureProposal({
+    measures: parseFigureMeasures([
+      { bbox_1k: [300, 50, 600, 450], placement: 'below_text', align: 'center', v2_state: 'ok' },
+      { bbox_1k: [320, 520, 620, 950], placement: 'below_text', align: 'center', v2_state: 'ok' },
+    ]),
+    emPx: 40,
+    imageWidthPx: 1100,
+    assets,
+    currentLayout: layout,
+  })!;
+  assertEquals(sideBySide.layout.groups.length, 1);
+});
+
 Deno.test('새 그림 수만큼 본문에 [그림] 마커가 없으면 끝에 붙인다', () => {
   assertEquals(ensureFigureMarkers('다음 그림에서 x 의 값은?', 1), '다음 그림에서 x 의 값은?\n[그림]');
   assertEquals(ensureFigureMarkers('그림[그림]에서 ', 2), '그림[그림]에서\n[그림]');
@@ -145,4 +176,30 @@ Deno.test('본문·공통 발문 수정안 정리: 공통 발문만 바뀐 경�
   });
   assertEquals(syntaxFixed.stem, '두 수의 [[공백:3]]의 합');
   assertEquals(syntaxFixed.textSame, false);
+});
+
+Deno.test('normalizeTextFix: $ 구분자만 붙인 수정안은 버린다', () => {
+  const delimiterOnly = normalizeTextFix({
+    textMatchesOriginal: false,
+    correctedStem: '[그림]\n[문단]\n해 $l\\parallel m$이므로 $\\angle x=55^{\\circ}$',
+    correctedCommonStem: '그림에서 $l \\parallel m$일 때, $\\angle x$의 크기를 구하여라.',
+    correctedChoices: [{ label: '①', text: '$30^{\\circ}$' }],
+    currentStem: '[그림]\n[문단]\n해 l \\parallel m이므로 \\angle x = 55^{\\circ}',
+    currentCommonStem: '그림에서 l\\parallel m일 때, \\angle x의 크기를 구하여라.',
+    currentChoices: [{ label: '①', text: '30^{\\circ}' }],
+  });
+  assertEquals(delimiterOnly.stem, null);
+  assertEquals(delimiterOnly.commonStem, null);
+  assertEquals(delimiterOnly.choices, null);
+
+  const realChange = normalizeTextFix({
+    textMatchesOriginal: false,
+    correctedStem: '해 $l\\parallel m$이므로 $\\angle x=40^{\\circ}$',
+    correctedCommonStem: null,
+    correctedChoices: null,
+    currentStem: '해 l \\parallel m이므로 \\angle x = 55^{\\circ}',
+    currentCommonStem: '',
+    currentChoices: [],
+  });
+  assertEquals(realChange.stem, '해 $l\\parallel m$이므로 $\\angle x=40^{\\circ}$');
 });

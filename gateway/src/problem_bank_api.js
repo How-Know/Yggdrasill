@@ -133,7 +133,9 @@ import {
   textbookAnswerKindNeedsRender,
 } from "./problem_bank/homework_answer_prebake.js";
 import {
+  dropRowsCoveredByManualCrops,
   fetchManualMarkers,
+  isMissingRegionSourceColumn,
   partitionStaleCrops,
   skippedCropIds,
 } from "./textbook/manual_guard.js";
@@ -442,9 +444,12 @@ function normalizeLayoutMode(raw) {
 
 function normalizeMaxQuestionsPerPage(raw, columns) {
   const defaults = columns === 2 ? 8 : 4;
-  const parsed = Number.parseInt(String(raw ?? ""), 10);
+  const text = String(raw ?? "").trim();
+  if (text === "많이" || text === "기본") return 99;
+  const parsed = Number.parseInt(text, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) return defaults;
-  const allowed = columns === 2 ? [1, 2, 4, 6, 8] : [1, 2, 3, 4];
+  if (parsed >= 99) return 99;
+  const allowed = columns === 2 ? [1, 2, 4, 6, 8, 99] : [1, 2, 3, 4, 99];
   if (allowed.includes(parsed)) return parsed;
   return defaults;
 }
@@ -740,6 +745,11 @@ function normalizeCoverPageTexts(raw, defaults = {}) {
   const pageStartNumber = normalizeWhitespace(
     src.pageStartNumber ?? seed.pageStartNumber ?? "",
   );
+  const hasExplicitQuickAnswerTopText =
+    src.quickAnswerTopText !== undefined || seed.quickAnswerTopText !== undefined;
+  const quickAnswerTopText = normalizeWhitespace(
+    src.quickAnswerTopText ?? seed.quickAnswerTopText ?? "",
+  );
   const rawCoverBlank = src.includeCoverBlankPage ?? seed.includeCoverBlankPage;
   const hasExplicitCoverBlank =
     rawCoverBlank !== undefined &&
@@ -775,6 +785,7 @@ function normalizeCoverPageTexts(raw, defaults = {}) {
     ...(totalPageCount ? { totalPageCount } : {}),
     ...(footerLabel ? { footerLabel } : {}),
     ...(pageStartNumber ? { pageStartNumber } : {}),
+    ...(hasExplicitQuickAnswerTopText ? { quickAnswerTopText } : {}),
     ...(includeCoverBlankPage !== undefined ? { includeCoverBlankPage } : {}),
   };
 }
@@ -1016,7 +1027,7 @@ const EXPORT_RENDER_CONFIG_VERSION = "pb_render_v103_subq_wrap_27";
 //   않도록 완전히 별도의 키를 사용한다. 새 매크로(\YggV2InlineMath, 한글 시각 중심 정렬,
 //   수식 줄 strut 대칭, 박스 안팎 통일)가 들어 있는 xelatex_v2/ 파이프라인 결과물의
 //   캐시 키 prefix 로 쓰인다.
-const EXPORT_RENDER_CONFIG_VERSION_V2 = "pb_render_v4_colontext_12";
+const EXPORT_RENDER_CONFIG_VERSION_V2 = "pb_render_v5_ind_set_split_1";
 const DEFAULT_TITLE_PAGE_TOP_TEXT = "2026학년도 대학수학능력시험 문제지";
 const DEFAULT_TITLE_PAGE_GOAL_TEXT = "다시 풀기";
 
@@ -6733,6 +6744,18 @@ async function batchRenderThumbnails(res, req) {
   const previewGeometry = `paperwidth=${PREVIEW_PAGE_WIDTH_MM}mm,paperheight=${PREVIEW_PAGE_HEIGHT_MM}mm,left=5mm,right=5mm,top=5mm,bottom=5mm`;
   const batchFont = resolveBatchPreviewFont();
 
+  const renderCfg =
+    body?.renderConfig &&
+    typeof body.renderConfig === "object" &&
+    !Array.isArray(body.renderConfig)
+      ? body.renderConfig
+      : {};
+  const previewIndependentSetCommonStem =
+    renderCfg.previewIndependentSetCommonStem === false ||
+    renderCfg.preview_independent_set_common_stem === false
+      ? false
+      : true;
+
   try {
     const rendered = await renderPdfWithXeLatex({
       questions: orderedQuestions,
@@ -6741,7 +6764,7 @@ async function batchRenderThumbnails(res, req) {
         hideQuestionNumber: true,
         mathEngine: "xelatex",
         disableIndependentSetGrouping: true,
-        previewIndependentSetCommonStem: true,
+        previewIndependentSetCommonStem,
         includeCoverPage: false,
         includeAcademyLogo: false,
         includeAnswerSheet: false,
@@ -9222,6 +9245,11 @@ async function handleTextbookCropsBatchUpsert(body, res) {
       typeof crop === "object" &&
       Object.prototype.hasOwnProperty.call(crop, "companion_regions"),
   );
+  // 수동 크롭이 하나도 없는 배치는 region_source 를 보내지 않는다. 마이그레이션
+  // 전 DB 에서도 AI 크롭 저장이 그대로 되고, 행마다 컬럼 집합도 같게 유지된다.
+  const includesManualCrops = crops.some(
+    (crop) => crop && typeof crop === "object" && crop.region_source === "manual",
+  );
 
   const bucket = DEFAULT_TEXTBOOK_CROPS_BUCKET;
   const uploadedKeys = [];
@@ -9426,6 +9454,9 @@ async function handleTextbookCropsBatchUpsert(body, res) {
         ? cropLongEdgePx
         : null,
       deskew_angle_deg: Number.isFinite(deskewAngle) ? deskewAngle : null,
+      ...(includesManualCrops
+        ? { region_source: c.region_source === "manual" ? "manual" : "vlm" }
+        : {}),
       updated_at: new Date().toISOString(),
     });
   }
@@ -9456,32 +9487,77 @@ async function handleTextbookCropsBatchUpsert(body, res) {
     }
   }
 
-  const { data, error } = await supa
-    .from("textbook_problem_crops")
-    .upsert(rows, {
-      onConflict:
-        "academy_id,book_id,grade_label,big_order,mid_order,sub_key,sub_index,problem_number",
-    })
-    // sub_key/raw_page/display_page/section 은 개념원리(wonri) 단일 패스가
-    // 카테고리(sub_key)별 후속 작업(필수유형 본문 정답·풀이 추출, Stage 시드)
-    // 에서 행을 다시 분류하는 데 필요하다.
-    .select(
-      "id, storage_key, problem_number, sub_key, sub_index, raw_page, display_page, section",
-    );
-  if (error) {
-    sendJson(res, 500, {
-      ok: false,
-      error: `db_upsert_failed: ${error.message || error}`,
-      uploaded_keys: uploadedKeys,
-    });
-    return;
+  // sub_key/raw_page/display_page/section 은 개념원리(wonri) 단일 패스가
+  // 카테고리(sub_key)별 후속 작업(필수유형 본문 정답·풀이 추출, Stage 시드)
+  // 에서 행을 다시 분류하는 데 필요하다.
+  const returnColumns =
+    "id, storage_key, problem_number, sub_key, sub_index, raw_page, display_page, section";
+
+  // 사람이 추가하거나 고친 크롭은 AI 재분석 결과로 덮지 않는다. 그 번호의 AI 행은
+  // 빼고, 앱이 범위 안 번호를 모두 알 수 있게 수동 행을 결과에 함께 돌려준다.
+  let manualRows = [];
+  const aiNumbers = rows
+    .filter((row) => row.region_source !== "manual")
+    .map((row) => row.problem_number);
+  if (aiNumbers.length > 0) {
+    const { data: manualData, error: manualErr } = await supa
+      .from("textbook_problem_crops")
+      .select(returnColumns)
+      .eq("academy_id", academyId)
+      .eq("book_id", bookId)
+      .eq("grade_label", gradeLabel)
+      .eq("big_order", bigOrder)
+      .eq("mid_order", midOrder)
+      .eq("sub_key", subKeyRaw)
+      .eq("sub_index", subIndex)
+      .eq("region_source", "manual")
+      .in("problem_number", aiNumbers);
+    if (manualErr && !isMissingRegionSourceColumn(manualErr)) {
+      sendJson(res, 500, {
+        ok: false,
+        error: `manual_crop_fetch_failed: ${manualErr.message || manualErr}`,
+        uploaded_keys: uploadedKeys,
+      });
+      return;
+    }
+    manualRows = manualErr ? [] : manualData || [];
   }
+  const { rows: upsertRows, skippedNumbers: manualKeptNumbers } =
+    dropRowsCoveredByManualCrops(
+      rows,
+      manualRows.map((row) => row.problem_number),
+    );
+
+  let data = [];
+  if (upsertRows.length > 0) {
+    const { data: upserted, error } = await supa
+      .from("textbook_problem_crops")
+      .upsert(upsertRows, {
+        onConflict:
+          "academy_id,book_id,grade_label,big_order,mid_order,sub_key,sub_index,problem_number",
+      })
+      .select(returnColumns);
+    if (error) {
+      sendJson(res, 500, {
+        ok: false,
+        error: `db_upsert_failed: ${error.message || error}`,
+        uploaded_keys: uploadedKeys,
+      });
+      return;
+    }
+    data = upserted || [];
+  }
+  const keptManualRows = manualRows.filter((row) =>
+    manualKeptNumbers.includes(String(row.problem_number || "").trim()),
+  );
 
   sendJson(res, 200, {
     ok: true,
-    upserted: Array.isArray(data) ? data.length : 0,
+    upserted: data.length,
     bucket,
-    rows: data || [],
+    rows: [...data, ...keptManualRows],
+    manual_kept: keptManualRows.length,
+    manual_kept_numbers: manualKeptNumbers,
   });
 }
 
@@ -9523,17 +9599,26 @@ async function handleTextbookCropsSyncScope(body, res) {
     return;
   }
 
-  const { data: existing, error: fetchError } = await supa
-    .from("textbook_problem_crops")
-    .select("id,problem_number,pb_question_uid")
-    .eq("academy_id", academyId)
-    .eq("book_id", bookId)
-    .eq("grade_label", gradeLabel)
-    .eq("big_order", bigOrder)
-    .eq("mid_order", midOrder)
-    .eq("sub_key", subKey)
-    .eq("sub_index", subIndex)
-    .in("raw_page", rawPages);
+  const fetchScopeCrops = (columns) =>
+    supa
+      .from("textbook_problem_crops")
+      .select(columns)
+      .eq("academy_id", academyId)
+      .eq("book_id", bookId)
+      .eq("grade_label", gradeLabel)
+      .eq("big_order", bigOrder)
+      .eq("mid_order", midOrder)
+      .eq("sub_key", subKey)
+      .eq("sub_index", subIndex)
+      .in("raw_page", rawPages);
+  let { data: existing, error: fetchError } = await fetchScopeCrops(
+    "id,problem_number,pb_question_uid,region_source",
+  );
+  if (fetchError && isMissingRegionSourceColumn(fetchError)) {
+    ({ data: existing, error: fetchError } = await fetchScopeCrops(
+      "id,problem_number,pb_question_uid",
+    ));
+  }
   if (fetchError) {
     sendJson(res, 500, {
       ok: false,

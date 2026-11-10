@@ -2121,9 +2121,12 @@ function normalizeLayoutMode(raw) {
 
 function normalizeMaxQuestionsPerPage(raw, columns) {
   const defaults = columns === 2 ? 8 : 4;
-  const parsed = Number.parseInt(String(raw ?? ''), 10);
+  const text = String(raw ?? '').trim();
+  if (text === '많이' || text === '기본') return 99;
+  const parsed = Number.parseInt(text, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) return defaults;
-  const allowed = columns === 2 ? [1, 2, 4, 6, 8] : [1, 2, 3, 4];
+  if (parsed >= 99) return 99;
+  const allowed = columns === 2 ? [1, 2, 4, 6, 8, 99] : [1, 2, 3, 4, 99];
   if (allowed.includes(parsed)) return parsed;
   return defaults;
 }
@@ -2341,6 +2344,11 @@ function normalizeCoverPageTexts(raw, defaults = {}) {
   const totalPageCount = normalizeWhitespace(src.totalPageCount ?? seed.totalPageCount ?? '');
   const footerLabel = normalizeWhitespace(src.footerLabel ?? seed.footerLabel ?? '');
   const pageStartNumber = normalizeWhitespace(src.pageStartNumber ?? seed.pageStartNumber ?? '');
+  const hasExplicitQuickAnswerTopText =
+    src.quickAnswerTopText !== undefined || seed.quickAnswerTopText !== undefined;
+  const quickAnswerTopText = normalizeWhitespace(
+    src.quickAnswerTopText ?? seed.quickAnswerTopText ?? '',
+  );
   const rawCoverBlank = src.includeCoverBlankPage ?? seed.includeCoverBlankPage;
   const hasExplicitCoverBlank = rawCoverBlank !== undefined && rawCoverBlank !== null && rawCoverBlank !== '';
   const includeCoverBlankPage = hasExplicitCoverBlank
@@ -2373,6 +2381,7 @@ function normalizeCoverPageTexts(raw, defaults = {}) {
     ...(totalPageCount ? { totalPageCount } : {}),
     ...(footerLabel ? { footerLabel } : {}),
     ...(pageStartNumber ? { pageStartNumber } : {}),
+    ...(hasExplicitQuickAnswerTopText ? { quickAnswerTopText } : {}),
     ...(includeCoverBlankPage !== undefined ? { includeCoverBlankPage } : {}),
   };
 }
@@ -4254,6 +4263,54 @@ function applyPublishedQuestionFilter(query) {
   return query.eq('is_published', true);
 }
 
+async function attachSolutionExplanations(questions) {
+  const list = Array.isArray(questions) ? questions : [];
+  const ids = [...new Set(list.map((q) => String(q?.id || '').trim()).filter(Boolean))];
+  if (ids.length === 0) return list;
+  const explanationByQuestionId = new Map();
+  try {
+    for (let offset = 0; offset < ids.length; offset += 200) {
+      const chunk = ids.slice(offset, offset + 200);
+      const { data: links, error: linkErr } = await supa
+        .from('textbook_crop_question_links')
+        .select('crop_id,pb_question_id')
+        .in('pb_question_id', chunk);
+      if (linkErr) return list;
+      const cropToQuestion = new Map();
+      for (const link of links || []) {
+        const cropId = String(link.crop_id || '').trim();
+        const questionId = String(link.pb_question_id || '').trim();
+        if (cropId && questionId) cropToQuestion.set(cropId, questionId);
+      }
+      const cropIds = [...cropToQuestion.keys()];
+      if (cropIds.length === 0) continue;
+      const { data: analyses, error: analysisErr } = await supa
+        .from('textbook_problem_analyses')
+        .select('crop_id,solution_transcribed,solution_figure_assets')
+        .in('crop_id', cropIds);
+      if (analysisErr) return list;
+      for (const row of analyses || []) {
+        const text = String(row.solution_transcribed || '').trim();
+        if (!text) continue;
+        const questionId = cropToQuestion.get(String(row.crop_id || '').trim());
+        if (!questionId) continue;
+        const figures = Array.isArray(row.solution_figure_assets)
+          ? row.solution_figure_assets.filter((a) => a && a.bucket && a.path)
+          : [];
+        explanationByQuestionId.set(questionId, { text, figures });
+      }
+    }
+  } catch (_) {
+    return list;
+  }
+  if (explanationByQuestionId.size === 0) return list;
+  return list.map((q) => {
+    const found = explanationByQuestionId.get(String(q?.id || '').trim());
+    if (!found) return q;
+    return { ...q, explanation: found.text, explanation_figure_assets: found.figures };
+  });
+}
+
 async function renderPdf(job, questions, renderConfig) {
   const profile = normalizeProfile(
     renderConfig?.templateProfile || job.template_profile,
@@ -4284,8 +4341,11 @@ async function renderPdf(job, questions, renderConfig) {
   const followsOriginalQuestionTypes = String(
     renderConfig?.naesinLinkKey || renderConfig?.naesin_link_key || '',
   ).trim().length > 0;
+  const questionsForRender = renderConfig?.includeExplanation === true
+    ? await attachSolutionExplanations(questions)
+    : questions;
   const modeApplied = applyQuestionModesForExport(
-    questions,
+    questionsForRender,
     renderConfig?.questionModeByQuestionUid || renderConfig?.questionModeByQuestionId || {},
     fallbackQuestionMode,
     { forceOriginalMode: followsOriginalQuestionTypes },

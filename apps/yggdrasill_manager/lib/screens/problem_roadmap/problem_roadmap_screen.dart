@@ -1,12 +1,19 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
+import '../../services/textbook_book_registry.dart';
 import '../../services/textbook_problem_review_service.dart';
 import '../../services/textbook_review_solution_image_service.dart';
+import '../../services/textbook_vlm_answer_service.dart';
+import '../../services/textbook_vlm_solution_ref_service.dart';
+import '../../services/textbook_workflow_runner.dart';
+import '../../services/textbook_workflow_service.dart';
 import '../problem_bank/widgets/problem_bank_question_card.dart';
 import 'textbook_pincette_extract_dialog.dart';
 import 'textbook_review_engine_hold_panel.dart';
+import 'textbook_source_pdf_pane.dart';
 
 // 학습앱 글래스 카드와 같은 역할 색. 화면 배경은 검정, 카드는 #1C1C1E, 안쪽 칸은 #2C2C2E.
 const Color _kBg = Color(0xFF000000);
@@ -51,23 +58,72 @@ const List<String> kStandardVisualTags = [
 
 const int _kReviewChunkSize = 6;
 const int _kRenderCheckChunkSize = 4;
+const int _kRenderCheckParallel = 3;
 const int _kFixChunkSize = 3;
 
-/// 자동 분석(원스톱 추출·검수) 완료 후 띄우는 1차 검수·핀셋 추출 전체 화면 다이얼로그(학습앱 다크 글래스 디자인 언어).
-Future<bool> showTextbookAutoAnalyzeReviewDialog(
+/// 2단계 작업 화면이 다루는 중단원(크롭 확정한 소단원만 보인다)
+class TextbookWorkflowScope {
+  const TextbookWorkflowScope({
+    required this.academyId,
+    required this.bookId,
+    required this.bookName,
+    required this.gradeLabel,
+    required this.bigOrder,
+    required this.midOrder,
+    this.initialScopeKey,
+    this.legacySubunits = const [],
+  });
+
+  final String academyId;
+  final String bookId;
+  final String bookName;
+  final String gradeLabel;
+  final int bigOrder;
+  final int midOrder;
+  final String? initialScopeKey;
+
+  /// 같은 중단원에서 예전에 본문만 뽑아 두고 아직 2단계에 들어오지 않은 소단원
+  final List<TextbookLegacySubunit> legacySubunits;
+
+  /// 러너 작업 키 앞부분(`textbookWorkflowKey` 와 같은 순서)
+  String get keyPrefix => '$bookId|$gradeLabel|$bigOrder|$midOrder|';
+}
+
+/// 예전 원스톱으로 본문(+정답)만 뽑아 둔 소단원. 작업 화면 소단원 띠 끝에 따로 보인다.
+class TextbookLegacySubunit {
+  const TextbookLegacySubunit({
+    required this.scopeKey,
+    required this.label,
+    required this.bodies,
+    required this.crops,
+    this.reviewed = 0,
+  });
+
+  final String scopeKey;
+  final String label;
+  final int bodies;
+  final int crops;
+
+  /// 본문이 붙은 문항 중 예전 문항 검수(정답·품질 승인)를 마친 수
+  final int reviewed;
+  bool get allReviewed => bodies > 0 && reviewed >= bodies;
+}
+
+/// 2·3단계 작업 화면: 크롭 확정한 소단원의 문항 카드(추출·검수 진행도, 준비됨)를 보고 손본 뒤 소단원을 확정한다.
+/// 기존 추출 소단원을 누르면 그 작업 단위(scope key)를 돌려주고 닫힌다.
+Future<String?> showTextbookWorkflowDialog(
   BuildContext context, {
+  required String academyId,
   required String bookId,
+  required String bookName,
   required String gradeLabel,
   required int bigOrder,
   required int midOrder,
-  String? subKey,
-  List<int> conceptPages = const [],
-  String? headerTitle,
-  bool autoStartReviewOnLoad = false,
-  Future<void> Function()? onConfirmAutoAnalyze,
-}) async {
-  var confirmed = false;
-  await showDialog<void>(
+  String unitTitle = '',
+  String? initialScopeKey,
+  List<TextbookLegacySubunit> legacySubunits = const [],
+}) {
+  return showDialog<String>(
     context: context,
     barrierDismissible: false,
     barrierColor: Colors.black.withValues(alpha: 0.85),
@@ -83,24 +139,23 @@ Future<bool> showTextbookAutoAnalyzeReviewDialog(
         width: MediaQuery.of(ctx).size.width - 32,
         height: MediaQuery.of(ctx).size.height - 32,
         child: ProblemRoadmapScreen(
-          initialBookId: bookId,
-          initialGradeLabel: gradeLabel,
-          initialBigOrder: bigOrder,
-          initialMidOrder: midOrder,
-          initialSubKey: subKey,
-          conceptPages: conceptPages,
-          headerTitle: headerTitle ?? '1차 검수 · 자동 분석 결과 확인 (페이지·문항 흐름순)',
-          autoStartReviewOnLoad: autoStartReviewOnLoad,
-          onConfirmAutoAnalyze: () async {
-            confirmed = true;
-            if (onConfirmAutoAnalyze != null) await onConfirmAutoAnalyze();
-          },
+          workflow: TextbookWorkflowScope(
+            academyId: academyId,
+            bookId: bookId,
+            bookName: bookName,
+            gradeLabel: gradeLabel,
+            bigOrder: bigOrder,
+            midOrder: midOrder,
+            initialScopeKey: initialScopeKey,
+            legacySubunits: legacySubunits,
+          ),
+          headerTitle: unitTitle.isEmpty ? '2단계 · 추출·검수' : '2단계 · 추출·검수 · $unitTitle',
           onCloseModal: () => Navigator.of(ctx).pop(),
+          onPickLegacySubunit: (scopeKey) => Navigator.of(ctx).pop(scopeKey),
         ),
       ),
     ),
   );
-  return confirmed;
 }
 
 class ProblemRoadmapScreen extends StatefulWidget {
@@ -114,9 +169,9 @@ class ProblemRoadmapScreen extends StatefulWidget {
     this.initialSubKey,
     this.conceptPages = const [],
     this.headerTitle,
-    this.autoStartReviewOnLoad = false,
-    this.onConfirmAutoAnalyze,
+    this.workflow,
     this.onCloseModal,
+    this.onPickLegacySubunit,
   });
 
   final TextbookProblemReviewService? service;
@@ -127,9 +182,13 @@ class ProblemRoadmapScreen extends StatefulWidget {
   final String? initialSubKey;
   final List<int> conceptPages;
   final String? headerTitle;
-  final bool autoStartReviewOnLoad;
-  final Future<void> Function()? onConfirmAutoAnalyze;
+
+  /// 있으면 2단계 작업 화면: 이 중단원의 크롭 확정 소단원만 다루고, 준비됨이 모두 차면 소단원을 확정한다.
+  final TextbookWorkflowScope? workflow;
   final VoidCallback? onCloseModal;
+
+  /// 기존 추출 소단원을 눌렀다(단원·크롭 창으로 돌아가 "이어서 마무리"를 누르게 한다).
+  final ValueChanged<String>? onPickLegacySubunit;
 
   @override
   State<ProblemRoadmapScreen> createState() => _ProblemRoadmapScreenState();
@@ -161,11 +220,23 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
   final Set<String> _cardRendering = {};
   final Map<String, String> _cardErrors = {};
 
-  /// 필터: 0 전체, 1 확인필요(오류·불일치), 2 새초안제안, 3 미검수, 4 승인완료, 5 엔진 보류, 6 승인 후 원본 차이
+  /// 필터: 0 전체, 1 확인필요(오류·불일치), 2 새초안제안, 3 미검수, 4 승인완료, 5 엔진 보류, 6 승인 후 원본 차이,
+  /// 7 준비 안 됨, 8 준비됨(7·8 은 2단계 작업 화면)
   int _filterTab = 0;
   String? _selectedSubKeyFilter;
   bool _initialScopeApplied = false;
-  bool _autoStartedOnce = false;
+
+  // ── 2단계 작업 화면(widget.workflow) ──
+  final _wfService = TextbookWorkflowService();
+  final _answerService = TextbookVlmAnswerService();
+  final _solutionRefService = TextbookVlmSolutionRefService();
+  List<TextbookSubunitWorkflow> _workflows = const [];
+  String? _wfKey;
+  Set<String> _wfActiveKeys = const {};
+  bool _wfBusy = false;
+
+  /// 오른쪽 칸: 0 학생 화면(V2) · 1 원본 PDF(정답·해설 직접 지정)
+  int _rightPane = 0;
 
   final _answerEditCtrl = TextEditingController();
   final _solutionEditCtrl = TextEditingController();
@@ -195,11 +266,16 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
   @override
   void initState() {
     super.initState();
+    if (_workflowMode) {
+      _wfActiveKeys = _activeWorkflowKeys();
+      TextbookWorkflowRunner.instance.addListener(_onRunnerChanged);
+    }
     unawaited(_loadUnits());
   }
 
   @override
   void dispose() {
+    if (_workflowMode) TextbookWorkflowRunner.instance.removeListener(_onRunnerChanged);
     _answerEditCtrl.dispose();
     _solutionEditCtrl.dispose();
     _origSolutionCtrl.dispose();
@@ -243,6 +319,10 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
       ];
 
   Future<void> _loadUnits() async {
+    if (_workflowMode) {
+      await _loadWorkflowScope();
+      return;
+    }
     setState(() {
       _loadingUnits = true;
       _error = null;
@@ -274,19 +354,337 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
       });
       if (_selectedScope != null) {
         await _loadItems(_selectedScope!);
-        if (mounted && widget.autoStartReviewOnLoad && !_autoStartedOnce) {
-          _autoStartedOnce = true;
-          final scopedItems = _scopedItems;
-          if (scopedItems.any((x) => x.isReviewTodo || x.needsRenderCheck)) {
-            unawaited(_runUnitReview());
-          }
-        }
       }
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _loadingUnits = false;
         _error = '단원 목록을 읽지 못했습니다: $e';
+      });
+    }
+  }
+
+  // ── 2단계 작업 화면 ─────────────────────────────────────────────────────
+
+  bool get _workflowMode => widget.workflow != null;
+
+  TextbookSubunitWorkflow? get _selectedWorkflow => _workflows.where((w) => w.key == _wfKey).firstOrNull;
+
+  TextbookSubunitWorkOrder? get _selectedOrder {
+    final key = _wfKey;
+    if (key == null) return null;
+    return _selectedWorkflow?.workOrder ?? TextbookWorkflowRunner.instance.stateFor(key)?.order;
+  }
+
+  Set<String> _activeWorkflowKeys() {
+    final prefix = widget.workflow?.keyPrefix;
+    if (prefix == null) return const {};
+    return {
+      for (final s in TextbookWorkflowRunner.instance.states)
+        if (s.active && s.key.startsWith(prefix)) s.key,
+    };
+  }
+
+  static int _scopeKeyOrder(String k) {
+    final m = RegExp(r'^W(\d+)$').firstMatch(k);
+    if (m != null) return 1000 + int.parse(m.group(1)!);
+    return k.isEmpty ? 0 : k.codeUnitAt(0);
+  }
+
+  /// 이 중단원의 소단원 작업 상태를 읽고, 고른 소단원의 작업 지시로 문항 범위를 정한다.
+  Future<void> _loadWorkflowScope() async {
+    final wf = widget.workflow!;
+    setState(() {
+      _loadingUnits = _selectedScope == null;
+      _error = null;
+    });
+    try {
+      final list = await _wfService.fetchForBook(
+        academyId: wf.academyId,
+        bookId: wf.bookId,
+        gradeLabel: wf.gradeLabel,
+        bigOrder: wf.bigOrder,
+        midOrder: wf.midOrder,
+      );
+      final shown = [for (final w in list) if (w.cropConfirmed || w.isConfirmed) w]
+        ..sort((a, b) => _scopeKeyOrder(a.scopeKey).compareTo(_scopeKeyOrder(b.scopeKey)));
+      if (!mounted) return;
+      final prevScope = _selectedScope;
+      setState(() {
+        _workflows = shown;
+        if (_wfKey == null || !shown.any((w) => w.key == _wfKey)) {
+          final initial = shown.where((w) => w.scopeKey == wf.initialScopeKey).firstOrNull;
+          _wfKey = (initial ?? shown.firstOrNull)?.key;
+        }
+        final order = _selectedOrder;
+        if (order != null) _selectedScope = order.reviewScope;
+        _loadingUnits = false;
+      });
+      final scope = _selectedScope;
+      if (scope != null && (prevScope == null || _items.isEmpty)) await _loadItems(scope);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loadingUnits = false;
+        _error = '소단원 작업 상태를 읽지 못했습니다: $e';
+      });
+    }
+  }
+
+  void _onRunnerChanged() {
+    if (!mounted) return;
+    final active = _activeWorkflowKeys();
+    final finished = _wfActiveKeys.difference(active);
+    _wfActiveKeys = active;
+    setState(() {});
+    if (finished.isEmpty) return;
+    unawaited(_loadWorkflowScope());
+    final scope = _selectedScope;
+    if (scope == null || _runningReview || _saving) return;
+    final sel = _items.where((x) => x.cropId == _selectedCropId).firstOrNull;
+    if (sel != null && (_problemEditDirty(sel) || _mathEditDirty(sel) || _solutionEditDirty(sel))) {
+      setState(() => _notice = '2단계 작업이 끝났습니다. 고치던 내용을 저장한 뒤 새로고침하면 결과가 보입니다.');
+      return;
+    }
+    unawaited(_loadItems(scope));
+  }
+
+  void _selectWorkflow(TextbookSubunitWorkflow wf) {
+    if (wf.key == _wfKey) return;
+    setState(() {
+      _wfKey = wf.key;
+      _filterTab = 0;
+      final order = wf.workOrder;
+      if (order != null) _selectedScope = order.reviewScope;
+      final visible = _scopedItems;
+      final pick = visible.where((x) => !x.isWorkflowReady).firstOrNull ?? visible.firstOrNull;
+      if (pick != null) {
+        _selectItem(pick);
+      } else {
+        _selectedCropId = null;
+      }
+    });
+  }
+
+  (int ready, int total, int held) _readyCountsOf(TextbookSubunitWorkOrder order) {
+    var ready = 0;
+    var total = 0;
+    var held = 0;
+    for (final it in _items) {
+      if (!order.matches(it)) continue;
+      total++;
+      if (it.isWorkflowReady) ready++;
+      if (it.isEngineHeld) held++;
+    }
+    return (ready, total, held);
+  }
+
+  /// 소단원을 다시 돌린다. [fromPhase] 기본은 AI 검수부터(본문·정답 위치는 빈 것만 다시 찾는다).
+  void _enqueueWorkflow(
+    TextbookSubunitWorkOrder order, {
+    String fromPhase = TextbookWorkflowPhase.review,
+    Set<String>? onlyCropIds,
+    bool forceRerun = false,
+    bool forceRenderCheck = false,
+    String? doneNote,
+  }) {
+    final queued = TextbookWorkflowRunner.instance.enqueue(
+      order,
+      fromPhase: fromPhase,
+      onlyCropIds: onlyCropIds,
+      forceRerun: forceRerun,
+      forceRenderCheck: forceRenderCheck,
+    );
+    _wfActiveKeys = _activeWorkflowKeys();
+    setState(() {
+      _notice = queued
+          ? (doneNote ?? '${order.label} 2단계를 다시 돌립니다.')
+          : '${order.label} 2단계가 이미 돌고 있습니다. 끝난 뒤 "다시 검수"를 눌러 주세요.';
+    });
+  }
+
+  /// "코드 수정 필요" 문항을 Cursor 에 붙여 넣을 수 있게 정리해 복사한다.
+  Future<void> _copyEngineHeldReport(TextbookSubunitWorkOrder order) async {
+    final held = [for (final it in _items) if (order.matches(it) && it.isEngineHeld) it];
+    if (held.isEmpty) return;
+    final buf = StringBuffer()
+      ..writeln('[렌더 엔진 수정 요청] ${order.bookName} · ${order.bigName} › ${order.midName} › ${order.label}')
+      ..writeln('V2 렌더(XeLaTeX) 결과가 교재 원본과 달라 "코드 수정 필요"로 보류된 문항입니다.')
+      ..writeln('book_id=${order.bookId} grade=${order.gradeLabel} big=${order.bigOrder} mid=${order.midOrder}')
+      ..writeln();
+    for (final it in held) {
+      final rc = it.renderChecks;
+      final symptom = [
+        if (it.engineSymptom.isNotEmpty) it.engineSymptom,
+        if (rc['issue_title'] != null) '${rc['issue_title']}${rc['issue_detail'] != null ? ': ${rc['issue_detail']}' : ''}',
+      ].join(' / ');
+      buf.writeln('- ${it.problemNumber}번 (PDF ${it.rawPage}쪽, crop_id=${it.cropId}, pb_question_id=${it.pbQuestionId})');
+      if (symptom.isNotEmpty) buf.writeln('  증상: $symptom');
+      final note = (it.engineHoldNote ?? '').trim();
+      if (note.isNotEmpty) buf.writeln('  메모: $note');
+    }
+    await Clipboard.setData(ClipboardData(text: buf.toString().trimRight()));
+    if (!mounted) return;
+    setState(() => _notice = '코드 수정 필요 ${held.length}문항을 복사했습니다. Cursor 에 붙여 넣어 렌더 엔진을 고친 뒤 "코드 수정 후 재확인"을 누르세요.');
+  }
+
+  /// 3단계: 모든 카드가 준비됨이면 소단원을 확정한다(교재 탭 진행률에도 남긴다).
+  Future<void> _setSubunitConfirmed(TextbookSubunitWorkflow wf, {required bool confirmed}) async {
+    final order = wf.workOrder;
+    if (confirmed) {
+      if (order == null) return;
+      final (ready, total, _) = _readyCountsOf(order);
+      if (total == 0 || ready < total) {
+        setState(() => _notice = '준비됨이 아닌 카드가 ${total - ready}개 있어 확정할 수 없습니다.');
+        return;
+      }
+    }
+    setState(() => _wfBusy = true);
+    try {
+      await _wfService.confirmSubunit(wf, confirmed: confirmed);
+      await TextbookBookRegistry().setScopeConfirmed(
+        academyId: wf.academyId,
+        bookId: wf.bookId,
+        gradeLabel: wf.gradeLabel,
+        scopeKey: wf.stateKey,
+        confirmed: confirmed,
+      );
+      if (!mounted) return;
+      await _loadWorkflowScope();
+      if (!mounted) return;
+      setState(() => _notice = confirmed
+          ? '${order?.label ?? wf.scopeKey} 소단원을 확정했습니다.'
+          : '${order?.label ?? wf.scopeKey} 소단원 확정을 풀었습니다.');
+    } catch (e) {
+      if (mounted) setState(() => _notice = '소단원 ${confirmed ? '확정' : '확정 취소'} 실패: $e');
+    } finally {
+      if (mounted) setState(() => _wfBusy = false);
+    }
+  }
+
+  /// 원본 PDF 에서 직접 지정한 정답·해설을 저장한 뒤 이 문항만 AI 가 다시 확인하게 한다.
+  Future<void> _afterManualSourceFix(TextbookProblemReviewItem item, String what) async {
+    final scope = _selectedScope;
+    if (scope == null) return;
+    await _loadItems(scope, reloadPreviews: false);
+    _cardUrlCache.removeWhere((k, _) => k.startsWith('${item.cropId}|'));
+    final order = _selectedOrder;
+    if (order == null || !mounted) return;
+    _enqueueWorkflow(
+      order,
+      fromPhase: TextbookWorkflowPhase.sync,
+      onlyCropIds: {item.cropId},
+      forceRerun: true,
+      forceRenderCheck: true,
+      doneNote: '${item.problemNumber}번 $what을 저장했습니다. 이 문항만 AI 가 다시 풀고 검수합니다.',
+    );
+  }
+
+  Future<void> _saveManualAnswer(
+    TextbookProblemReviewItem item,
+    TextbookSourceSelection sel, {
+    String? text,
+    String kind = 'subjective',
+  }) async {
+    final scope = _selectedScope;
+    if (scope == null || _saving) return;
+    setState(() {
+      _saving = true;
+      _notice = null;
+    });
+    try {
+      final TextbookAnswerUpload upload;
+      if (text == null) {
+        final crop = await _svc.renderSourceRegion(
+          scope: scope,
+          sourceKind: sel.sourceKind,
+          rawPage: sel.rawPage,
+          region1k: sel.region1k,
+        );
+        if (crop == null) throw Exception('고른 영역을 그리지 못했습니다');
+        upload = TextbookAnswerUpload(
+          cropId: item.cropId,
+          answerKind: 'image',
+          answerText: '[그림]',
+          answerSource: 'manual',
+          rawPage: sel.rawPage,
+          bbox1k: sel.region1k,
+          answerImagePngBytes: crop.bytes,
+          answerImageRegion1k: crop.region1k,
+          answerImageWidthPx: crop.widthPx,
+          answerImageHeightPx: crop.heightPx,
+        );
+      } else {
+        upload = TextbookAnswerUpload(
+          cropId: item.cropId,
+          answerKind: kind,
+          answerText: text,
+          answerLatex2d: kind == 'subjective' ? text : null,
+          answerSource: 'manual',
+          rawPage: sel.rawPage,
+          bbox1k: sel.region1k,
+        );
+      }
+      await _answerService.batchUpsertAnswers(academyId: scope.academyId, answers: [upload]);
+      await _answerService.syncAnswersToProblemBank(
+        academyId: scope.academyId,
+        bookId: scope.bookId,
+        gradeLabel: scope.gradeLabel,
+        bigOrder: scope.bigOrder,
+        midOrder: scope.midOrder,
+        subKey: item.subKey,
+        subIndex: item.subIndex,
+      );
+      if (!mounted) return;
+      setState(() => _saving = false);
+      await _afterManualSourceFix(item, text == null ? '그림 정답' : '정답');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _notice = '정답 저장 실패: $e';
+      });
+    }
+  }
+
+  Future<void> _saveManualSolution(TextbookProblemReviewItem item, TextbookSourceSelection? sel) async {
+    final scope = _selectedScope;
+    if (scope == null || _saving) return;
+    setState(() {
+      _saving = true;
+      _notice = null;
+    });
+    try {
+      await _solutionRefService.batchUpsertSolutionRefs(
+        academyId: scope.academyId,
+        refs: [
+          if (sel == null)
+            TextbookSolutionRefUpload(
+              cropId: item.cropId,
+              rawPage: 0,
+              numberRegion1k: const [0, 0, 0, 0],
+              source: 'manual',
+              sourceKind: 'none',
+            )
+          else
+            TextbookSolutionRefUpload(
+              cropId: item.cropId,
+              rawPage: sel.rawPage,
+              numberRegion1k: sel.region1k,
+              contentRegion1k: sel.region1k,
+              source: 'manual',
+              sourceKind: sel.sourceKind == 'body' ? 'body' : 'sol',
+            ),
+        ],
+      );
+      if (!mounted) return;
+      setState(() => _saving = false);
+      await _afterManualSourceFix(item, sel == null ? '"해설 없음"' : '해설 위치');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _notice = '해설 위치 저장 실패: $e';
       });
     }
   }
@@ -357,9 +755,11 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
 
   void _selectItem(TextbookProblemReviewItem item) {
     _selectedCropId = item.cropId;
-    _answerEditCtrl.text = item.mathStatus == 'issue'
-        ? (item.resolvedMathAnswer ?? (item.existingAnswer.isNotEmpty ? item.existingAnswer : (item.aiAnswer ?? '')))
-        : (item.existingAnswer.isNotEmpty ? item.existingAnswer : (item.aiAnswer ?? ''));
+    _answerEditCtrl.text = item.isImageAnswer
+        ? item.existingAnswer
+        : item.mathStatus == 'issue'
+            ? (item.resolvedMathAnswer ?? (item.existingAnswer.isNotEmpty ? item.existingAnswer : (item.aiAnswer ?? '')))
+            : (item.existingAnswer.isNotEmpty ? item.existingAnswer : (item.aiAnswer ?? ''));
     _solutionEditCtrl.text = item.proposedAiSolution ?? item.aiSolution ?? '';
     _origSolutionCtrl.text = item.proposedSolutionTranscribed ?? item.solutionTranscribed ?? '';
     _origAnswerCtrl.text = item.proposedSolutionAnswer ?? item.solutionAnswer ?? '';
@@ -459,7 +859,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
       unawaited(_renderCard(
         item,
         kind: 'answer_solution',
-        text: '${item.displayAnswer}\n${item.primarySolutionText}',
+        text: item.answerSolutionCardSource,
         build: () => _svc.renderAnswerSolutionCard(
           academyId: scope.academyId,
           item: item,
@@ -708,49 +1108,69 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     var checked = 0;
     final targets = (only ?? _items.where((x) => x.needsRenderCheck)).toList();
     if (targets.isEmpty) return 0;
-    for (var i = 0; i < targets.length; i += _kRenderCheckChunkSize) {
-      if (!mounted || _stopRequested) break;
-      final chunk = targets.skip(i).take(_kRenderCheckChunkSize).toList();
-      setState(() {
-        _runProgress = 'V2 렌더 검수: ${i + 1}~${i + chunk.length} / ${targets.length} 문항 — 정답+해설 카드를 V2로 찍는 중...';
-      });
-      final payload = <Map<String, dynamic>>[];
-      for (final it in chunk) {
-        final problemUrl = _previewUrlsByCropId[it.cropId];
-        String solUrl = '';
-        if (it.primarySolutionText.isNotEmpty || it.displayAnswer.isNotEmpty) {
-          solUrl = await _renderCard(
-            it,
-            kind: 'answer_solution',
-            text: '${it.displayAnswer}\n${it.primarySolutionText}',
-            build: () => _svc.renderAnswerSolutionCard(
-              academyId: scope.academyId,
-              item: it,
-              solutionText: it.primarySolutionText,
-              solutionKind: it.primarySolutionKind,
-            ),
-          );
-        }
-        if ((problemUrl ?? '').isEmpty && solUrl.isEmpty) continue;
-        // 교재 원본(본문 PDF 문항 영역)을 같이 보내 V2 카드와 직접 대조한다(글자·그림 위치·그림 크기).
-        final original = (problemUrl ?? '').isEmpty ? const <String, dynamic>{} : await _svc.originalImagesJson(scope, it);
-        payload.add({
-          'crop_id': it.cropId,
-          if ((problemUrl ?? '').isNotEmpty) 'problem_url': problemUrl,
-          if (solUrl.isNotEmpty) 'answer_solution_url': solUrl,
-          'solution_kind': it.primarySolutionKind,
-          'is_fill_in_blank': it.isFillInBlank,
-          ...original,
-        });
+
+    Future<Map<String, dynamic>?> buildPayload(TextbookProblemReviewItem it) async {
+      final problemUrl = _previewUrlsByCropId[it.cropId];
+      String solUrl = '';
+      if (it.primarySolutionText.isNotEmpty || it.displayAnswer.isNotEmpty) {
+        solUrl = await _renderCard(
+          it,
+          kind: 'answer_solution',
+          text: it.answerSolutionCardSource,
+          build: () => _svc.renderAnswerSolutionCard(
+            academyId: scope.academyId,
+            item: it,
+            solutionText: it.primarySolutionText,
+            solutionKind: it.primarySolutionKind,
+          ),
+        );
       }
-      if (payload.isEmpty) continue;
-      if (!mounted) break;
-      setState(() {
-        _runProgress = 'V2 렌더 검수: ${i + 1}~${i + chunk.length} / ${targets.length} 문항 — 교재 원본과 대조해 학생 시점으로 읽히는지 판정 중...';
-      });
-      final res = await _svc.runRenderCheck(academyId: scope.academyId, items: payload);
-      checked += (res['processed'] as num?)?.toInt() ?? 0;
+      if ((problemUrl ?? '').isEmpty && solUrl.isEmpty) return null;
+      // 교재 원본(본문 PDF 문항 영역)을 같이 보내 V2 카드와 직접 대조한다(글자·그림 위치·그림 크기).
+      final original = (problemUrl ?? '').isEmpty ? const <String, dynamic>{} : await _svc.originalImagesJson(scope, it);
+      return {
+        'crop_id': it.cropId,
+        if ((problemUrl ?? '').isNotEmpty) 'problem_url': problemUrl,
+        if (solUrl.isNotEmpty) 'answer_solution_url': solUrl,
+        'solution_kind': it.primarySolutionKind,
+        'is_fill_in_blank': it.isFillInBlank,
+        ...original,
+      };
     }
+
+    final chunks = <List<TextbookProblemReviewItem>>[
+      for (var i = 0; i < targets.length; i += _kRenderCheckChunkSize)
+        targets.skip(i).take(_kRenderCheckChunkSize).toList(),
+    ];
+    var done = 0;
+    var next = 0;
+    Future<void> worker() async {
+      while (next < chunks.length) {
+        if (!mounted || _stopRequested) return;
+        final chunk = chunks[next++];
+        final payload = [
+          for (final p in await Future.wait(chunk.map(buildPayload)))
+            if (p != null) p,
+        ];
+        if (payload.isNotEmpty && mounted) {
+          final res = await _svc.runRenderCheck(academyId: scope.academyId, items: payload);
+          checked += (res['processed'] as num?)?.toInt() ?? 0;
+        }
+        done += chunk.length;
+        if (mounted) {
+          setState(() {
+            _runProgress = 'V2 렌더 검수: $done / ${targets.length} 문항 — 카드를 V2로 찍어 교재 원본과 대조하는 중...';
+          });
+        }
+      }
+    }
+
+    setState(() {
+      _runProgress = 'V2 렌더 검수: 0 / ${targets.length} 문항 — 카드를 V2로 찍어 교재 원본과 대조하는 중...';
+    });
+    await Future.wait([
+      for (var w = 0; w < _kRenderCheckParallel && w < chunks.length; w++) worker(),
+    ]);
     if (mounted) await _loadItems(scope, reloadPreviews: false);
     return checked;
   }
@@ -820,7 +1240,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
       if (!mounted) return;
       await _loadItems(scope, reloadPreviews: false);
       final ids = <String>{
-        for (final it in _items)
+        for (final it in _scopedItems)
           if (axis == 'math'
               ? (it.mathStatus == 'clean' || (it.mathStatus == 'approved' && it.pbAnswerDiffers))
               : (!it.isEngineHeld && it.qualityStatus == 'clean'))
@@ -863,7 +1283,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
 
     // 1) 아직 원본·해설 대조 수정안이 없는 수학 오류 문항이 있으면 먼저 원본+해설 PDF 를 읽어 수정안을 만든다.
     final needProposal = [
-      for (final it in _items)
+      for (final it in _scopedItems)
         if (it.mathStatus == 'issue' &&
             it.proposedAnswer == null &&
             !it.solutionAndAiAgreeAgainstExisting &&
@@ -881,7 +1301,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
 
     // 2) 정답 수정안(또는 합의된 정답·문제은행 동기화 대상)을 DB 에 반영한다.
     final targets = [
-      for (final it in _items)
+      for (final it in _scopedItems)
         if (it.mathStatus != 'approved' || it.pbAnswerDiffers || it.hasOpenFindings && it.findings.any((f) => f['axis'] == 'validity' || '${f['check_key']}'.startsWith('load:answer')))
           it,
     ];
@@ -924,7 +1344,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
 
     // 3) 만약 아직도 수학 오류로 남은 문항이 있으면 지금 본문·원본으로 재풀이한다.
     final stillNeedResolve = [
-      for (final it in _items)
+      for (final it in _scopedItems)
         if (it.mathStatus == 'issue' && !modifiedIds.contains(it.cropId)) it,
     ];
     if (stillNeedResolve.isNotEmpty) {
@@ -932,7 +1352,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
       if (resolved > 0) {
         notes.add('남은 수학 문항 $resolved문항 재풀이');
         await _loadItems(scope, reloadPreviews: false);
-        for (final it in _items) {
+        for (final it in _scopedItems) {
           if (it.mathStatus == 'issue' && it.resolvedMathAnswer != null) {
             try {
               await _svc.saveItemEdit(
@@ -960,11 +1380,13 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
   Future<List<String>> _bulkQualityFixes(TextbookReviewUnitScope scope, List<String> notes) async {
     final approvedQualIds = <String>{};
     final touchedCropIds = <String>{};
+    // 소단원을 고른 상태(1차 검수 창)면 그 소단원 문항만 다룬다.
+    final scopedIds = {for (final x in _scopedItems) x.cropId};
 
     // 0-a) 엔진 보류(held) 상태이지만 실제로는 데이터 분류(issueKind == 'data')이거나 문항 카드 렌더가 정상(problem_ok == true)인
     //      오판 보류 문항은 먼저 보류를 해제하여 일괄 처리 대상에 포함시킨다.
     final falseHeldIds = [
-      for (final x in _items)
+      for (final x in _scopedItems)
         if (x.isEngineHeld &&
             (x.issueKind == 'data' ||
                 x.hasPendingFixProposal ||
@@ -981,31 +1403,8 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     }
 
     // 0) 현재 선택된 문항에 운영자가 직접 손질한 편집 내용이 있으면 먼저 반영한다.
-    final sel = _items.where((x) => x.cropId == _selectedCropId).firstOrNull;
-    if (sel != null && !sel.isEngineHeld && _problemEditDirty(sel)) {
-      try {
-        final stem = _stemEditCtrl.text.trim();
-        final choices = _linesToChoices(_choicesEditCtrl.text);
-        final stemChanged = stem != sel.stem.trim();
-        final choicesChanged = _choicesToLines(choices) != _choicesToLines(sel.rawChoices);
-        final commonChanged = _commonStemEditDirty(sel);
-        final crops = _pendingFigureCrops(sel);
-        final layoutChanged = _figureLayoutDirty(sel) || crops.isNotEmpty;
-        await _applyFixFor(
-          scope,
-          sel,
-          stem: stemChanged ? stem : null,
-          choices: choicesChanged ? choices : null,
-          commonStem: commonChanged ? _commonStemEditCtrl.text.trim() : null,
-          figureLayout: layoutChanged ? _editedFigureLayout(sel) : null,
-          figureCrops: crops,
-          note: '운영자 손질 수정안 반영',
-        );
-        touchedCropIds.add(sel.cropId);
-      } catch (e) {
-        _bulkErrors.add('${sel.problemNumber}번 직접 수정: $e');
-      }
-    }
+    final selEdited = await _applySelectedOperatorEdit(scope);
+    if (selEdited != null) touchedCropIds.add(selEdited);
 
     final (fixed, approvedByFix, again) = await _applyCommonStemDupFixes(scope);
     if (fixed > 0) notes.add('공통 발문 중복 $fixed문항 수정($approvedByFix문항 바로 승인)');
@@ -1023,14 +1422,15 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
       if (!mounted || _stopRequested) break;
       await _loadItems(scope, reloadPreviews: false);
 
-      final fixTargets = [for (final x in _items) if (x.needsFixPass) x];
+      // 그림 크기만 다른 문항은 아래에서 잰 비율로 폭을 고치므로 수정안 생성에서 뺀다.
+      final fixTargets = [for (final x in _scopedItems) if (x.needsFixPass && !x.figureSizeOnlyIssue) x];
       if (fixTargets.isNotEmpty) {
         proposed += await _runFixPass(scope, fixTargets);
         await _loadItems(scope, reloadPreviews: false);
       }
       if (!mounted || _stopRequested) break;
 
-      final done = await _applyPendingProposals(scope);
+      final done = await _applyPendingProposals(scope, onlyCropIds: scopedIds);
       applied += done.length;
       recheck.addAll(done);
       touchedCropIds.addAll(done);
@@ -1038,7 +1438,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
       // 순수 렌더 엔진 문제(본문·그림 수정 대상이 아니고 엔진 증상만 있는 문항)는 보류(held)로 분리한다.
       await _loadItems(scope, reloadPreviews: false);
       final pureEngines = [
-        for (final x in _items)
+        for (final x in _scopedItems)
           if (!x.isEngineHeld &&
               x.qualityStatus == 'issue' &&
               (x.aiSuspectsEngine || '${x.fixProposal['kind'] ?? ''}' == 'engine') &&
@@ -1052,27 +1452,21 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
         await _loadItems(scope, reloadPreviews: false);
       }
 
-      // 바뀐 문항 + 아직 교재 원본과 대조하지 않은 미승인 문항만 재검수한다.
-      final checkIds = <String>{
-        ...recheck,
-        for (final x in _items)
-          if (!x.isEngineHeld &&
-              (x.qualityStatus == 'issue' || x.qualityStatus == 'clean') &&
-              (!x.originalCompared || x.renderCheckedAt == null) &&
-              x.canRenderOriginal)
-            x.cropId,
-      };
-      if (checkIds.isNotEmpty && mounted && !_stopRequested) {
-        final changed = [for (final x in _items) if (recheck.contains(x.cropId)) x];
-        if (changed.isNotEmpty) await _loadEnginePreviews(scope, changed, merge: true);
-        await _runRenderCheckPass(scope, only: [for (final x in _items) if (checkIds.contains(x.cropId)) x]);
-        checked.addAll(checkIds);
+      // 이번에 바뀐 문항만 V2 카드를 다시 찍어 원본과 대조한다(1차 AI 검수에서 이미 원본과 대조했으므로 나머지는 다시 보지 않는다).
+      final changed = [
+        for (final x in _scopedItems)
+          if (recheck.contains(x.cropId) && !x.isEngineHeld && x.canRenderOriginal) x,
+      ];
+      if (changed.isNotEmpty && mounted && !_stopRequested) {
+        await _loadEnginePreviews(scope, changed, merge: true);
+        await _runRenderCheckPass(scope, only: changed);
+        checked.addAll([for (final x in changed) x.cropId]);
       }
       recheck = {};
       if (!mounted || _stopRequested) break;
 
       // 그림 크기가 원본과 다르게 나온 문항: 잰 비율만큼 폭을 고쳐 다시 대조
-      final sized = await _resizeFiguresFromRenderCheck();
+      final sized = await _resizeFiguresFromRenderCheck(onlyCropIds: scopedIds);
       if (sized.isNotEmpty) {
         resized.addAll(sized);
         touchedCropIds.addAll(sized);
@@ -1086,33 +1480,36 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
 
       // 재검수 뒤에도 엔진 문제로 판정된 문항은 자동 보류(held), 수정안이 이미 적용되어 원본과 맞춰진 문항은 승인 대상으로 모은다.
       final postEngines = [
-        for (final x in _items)
+        for (final x in _scopedItems)
           if (!x.isEngineHeld && x.qualityStatus == 'issue' && x.aiSuspectsEngine && !x.hasFigures) x,
       ];
       if (postEngines.isNotEmpty) {
         heldEngine += await _svc.setEngineHold([for (final x in postEngines) x.cropId], hold: true);
         await _loadItems(scope, reloadPreviews: false);
       }
-      if (!_items.any((x) => x.needsFixPass)) break;
+      // 2회차는 수정안을 아직 못 만든 오류 문항이 남았을 때만 돈다.
+      if (!_scopedItems.any((x) => x.needsFixPass && !x.figureSizeOnlyIssue)) break;
     }
 
-    // 수정안을 DB에 반영하고 V2 재검수를 마친 문항(엔진 보류 제외)과, 본문이 이미 원본과 일치하는 문항은 승인한다.
-    for (final x in _items) {
+    // 승인: 원본 대조에서 정상(clean)이 된 문항, 그리고 재렌더 대조를 거치지 않은 오류 중
+    // 원본 대조 수정 단계가 "본문이 이미 원본과 같다"고 확인한 문항(그림 문제 제외)만.
+    // 다시 찍어 대조했는데도 오류로 남은 문항은 승인하지 않고 창에 남겨 둔다.
+    for (final x in _scopedItems) {
       if (x.isEngineHeld) continue;
       if (x.qualityStatus == 'clean') {
         approvedQualIds.add(x.cropId);
       } else if (x.qualityStatus == 'issue' &&
-          (touchedCropIds.contains(x.cropId) ||
-              x.fixAppliedAt != null ||
-              x.fixProposal['text_matches_original'] == true ||
-              x.proposalAlreadyReflectedInDb)) {
+          !checked.contains(x.cropId) &&
+          !resized.contains(x.cropId) &&
+          x.issueKind != 'figure' &&
+          (x.fixProposal['text_matches_original'] == true || x.proposalAlreadyReflectedInDb)) {
         approvedQualIds.add(x.cropId);
       }
     }
 
     // 한 문항에 품질 문제와 수학 문제가 겹쳐 있었던 경우: 본문·공통발문이 복원된 문항에 확정 정답이 있으면 수학도 함께 해결한다.
     var healedMath = 0;
-    for (final x in _items) {
+    for (final x in _scopedItems) {
       if (x.mathStatus == 'issue' && x.resolvedMathAnswer != null) {
         try {
           await _svc.saveItemEdit(
@@ -1321,10 +1718,11 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
   /// 원본 대조에서 V2 그림 크기가 원본 비율을 벗어난 문항: 폭(widthEm)을 1/비율 배로 고쳐 적용한다(승인 문항은 승인 유지).
   /// 기존 figure_layout 이 비어 있던 문항도 기본 폭(20em)에서 1/비율 배로 줄인 배치를 새로 만들어 적용한다.
   /// 반환: 적용한 crop id
-  Future<List<String>> _resizeFiguresFromRenderCheck({bool includeApproved = true}) async {
+  Future<List<String>> _resizeFiguresFromRenderCheck({bool includeApproved = true, Set<String>? onlyCropIds}) async {
     final out = <String>[];
     for (final it in _items) {
       if (!mounted || _stopRequested) break;
+      if (onlyCropIds != null && !onlyCropIds.contains(it.cropId)) continue;
       if (it.isEngineHeld || !it.figureNeedsResize) continue;
       if (!includeApproved && it.qualityStatus == 'approved') continue;
       final scaled = scaleFigureLayout(
@@ -1401,6 +1799,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
         solutionTranscribed: origChanged ? origSol : null,
         solutionAnswer: origChanged ? origAns : null,
         alternativeSolutions: _editingAlternatives,
+        replaceImageAnswer: item.isImageAnswer && answer.isNotEmpty && answer != item.existingAnswer.trim(),
       );
       if (!mounted) return;
       final changed = (sync?['changed'] as List?)?.map((e) => '$e').toList() ?? const <String>[];
@@ -1601,11 +2000,43 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     return n;
   }
 
+  /// 선택 문항에 운영자가 직접 손질한 편집 내용이 있으면 반영하고 그 crop id 를 돌려준다.
+  Future<String?> _applySelectedOperatorEdit(TextbookReviewUnitScope scope) async {
+    final sel = _items.where((x) => x.cropId == _selectedCropId).firstOrNull;
+    if (sel == null || sel.isEngineHeld || !_problemEditDirty(sel)) return null;
+    try {
+      final stem = _stemEditCtrl.text.trim();
+      final choices = _linesToChoices(_choicesEditCtrl.text);
+      final stemChanged = stem != sel.stem.trim();
+      final choicesChanged = _choicesToLines(choices) != _choicesToLines(sel.rawChoices);
+      final commonChanged = _commonStemEditDirty(sel);
+      final crops = _pendingFigureCrops(sel);
+      final layoutChanged = _figureLayoutDirty(sel) || crops.isNotEmpty;
+      await _applyFixFor(
+        scope,
+        sel,
+        stem: stemChanged ? stem : null,
+        choices: choicesChanged ? choices : null,
+        commonStem: commonChanged ? _commonStemEditCtrl.text.trim() : null,
+        figureLayout: layoutChanged ? _editedFigureLayout(sel) : null,
+        figureCrops: crops,
+        note: '운영자 손질 수정안 반영',
+      );
+      return sel.cropId;
+    } catch (e) {
+      _bulkErrors.add('${sel.problemNumber}번 직접 수정: $e');
+      return null;
+    }
+  }
+
   /// 수정안(본문·선지·공통 발문·그림 배치·원본 크롭 그림)을 그대로 적용한다(승인은 하지 않음).
   /// 적용한 crop id 를 돌려주고, 호출한 쪽이 원본 대조 V2 렌더 재검수로 확인한다.
-  Future<List<String>> _applyPendingProposals(TextbookReviewUnitScope scope) async {
+  Future<List<String>> _applyPendingProposals(TextbookReviewUnitScope scope, {Set<String>? onlyCropIds}) async {
     final out = <String>[];
-    final targets = _pendingProposals;
+    final targets = [
+      for (final it in _pendingProposals)
+        if (onlyCropIds == null || onlyCropIds.contains(it.cropId)) it,
+    ];
     for (var i = 0; i < targets.length; i++) {
       if (!mounted || _stopRequested) break;
       final it = targets[i];
@@ -1818,6 +2249,11 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
   }
 
   List<TextbookProblemReviewItem> get _scopedItems {
+    if (_workflowMode) {
+      final order = _selectedOrder;
+      if (order == null) return const [];
+      return [for (final it in _items) if (order.matches(it)) it];
+    }
     final sub = _selectedSubKeyFilter;
     if (sub == null || sub.isEmpty) return _items;
     return [for (final it in _items) if (it.subKey == sub) it];
@@ -1832,7 +2268,9 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
             (_filterTab == 3 && (it.mathStatus == 'pending' || it.qualityStatus == 'pending')) ||
             (_filterTab == 4 && it.isFullyApproved) ||
             (_filterTab == 5 && it.isEngineHeld) ||
-            (_filterTab == 6 && it.approvedButDiffers))
+            (_filterTab == 6 && it.approvedButDiffers) ||
+            (_filterTab == 7 && !it.isWorkflowReady) ||
+            (_filterTab == 8 && it.isWorkflowReady))
           it,
     ];
   }
@@ -1905,11 +2343,15 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
   }) async {
     final scope = _selectedScope;
     if (scope == null || _runningReview) return;
-    final defaultPage = existingItem?.rawPage ?? gap?.rawPage ?? (_scopedItems.firstOrNull?.rawPage ?? 1);
+    final order = _workflowMode ? _selectedOrder : null;
+    final defaultPage = existingItem?.rawPage ?? gap?.rawPage ?? (_scopedItems.firstOrNull?.rawPage ?? order?.rawPageFrom ?? 1);
     final defaultDisplayPage = existingItem?.displayPage ?? gap?.displayPage;
     final defaultNum = existingItem?.problemNumber ?? gap?.missingNumber ?? '';
-    final defaultSubKey = existingItem?.subKey ?? gap?.subKey ?? (_selectedSubKeyFilter ?? 'A');
-    final defaultSubIndex = existingItem?.subIndex ?? gap?.subIndex ?? 0;
+    final defaultSubKey =
+        existingItem?.subKey ?? gap?.subKey ?? (_selectedSubKeyFilter ?? order?.reviewSubKeys.firstOrNull ?? 'A');
+    final defaultSubIndex = existingItem?.subIndex ??
+        gap?.subIndex ??
+        (order != null && order.indexedSubKeys.contains(defaultSubKey) ? order.reviewSubIndex : 0);
 
     final dragResult = await showTextbookPincetteDragDialog(
       context,
@@ -1953,49 +2395,23 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     }
   }
 
-  /// 자동 분석 1차 검수 화면에서 [수정안 일괄 반영 및 소단원 확정] 실행
-  Future<void> _confirmAutoAnalyzeSubunit() async {
-    final scope = _selectedScope;
-    if (scope == null || _saving || _runningReview) return;
-    setState(() {
-      _saving = true;
-      _notice = null;
-    });
-    final notes = <String>[];
-    try {
-      await _whileRunning(() async {
-        await _bulkMathFixes(scope, notes);
-        await _bulkQualityFixes(scope, notes);
-      });
-      if (!mounted) return;
-      await _loadItems(scope, reloadPreviews: false);
-      final targetItems = _scopedItems;
-      final mathIds = [for (final x in targetItems) if (x.mathStatus != 'approved') x.cropId];
-      if (mathIds.isNotEmpty) await _svc.approveAxis(mathIds, 'math');
-      final qualIds = [for (final x in targetItems) if (!x.isEngineHeld && x.qualityStatus != 'approved') x.cropId];
-      if (qualIds.isNotEmpty) await _svc.approveAxis(qualIds, 'quality');
-      if (widget.onConfirmAutoAnalyze != null) {
-        await widget.onConfirmAutoAnalyze!();
-      }
-      if (!mounted) return;
-      await _loadItems(scope, reloadPreviews: false);
-      await _loadUnits();
-      setState(() {
-        _saving = false;
-        _notice = '소단원 ${targetItems.length}문항 수정안 반영 및 최종 확정을 완료했습니다.';
-      });
-      widget.onCloseModal?.call();
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _saving = false;
-        _notice = '소단원 확정 실패: $e';
-      });
-    }
-  }
-
   /// 원본 대조 수정 단계를 돌릴 문항(오류 문항·그림 문항 중 아직 안 돌렸거나 수정 후에도 오류인 것)
-  List<TextbookProblemReviewItem> get _fixPassTargets => [for (final it in _items) if (it.needsFixPass) it];
+  /// 품질 일괄 처리가 손댈 문항(지금 소단원만). 카드의 품질 오류·V2 렌더 이상·미반영 수정안과 같은 기준이다.
+  List<TextbookProblemReviewItem> get _qualityWorkItems {
+    final pending = {for (final it in _pendingProposals) it.cropId};
+    final dups = {for (final it in _commonStemDups) it.cropId};
+    return [
+      for (final it in _scopedItems)
+        if (!it.isEngineHeld &&
+            (it.qualityStatus == 'issue' ||
+                it.renderBlocksReady ||
+                it.needsFixPass ||
+                it.questionKindMismatch ||
+                pending.contains(it.cropId) ||
+                dups.contains(it.cropId)))
+          it,
+    ];
+  }
   int get _approvedDiffCount => _items.where((x) => x.approvedButDiffers).length;
 
   /// 고른 문항만 교재 원본과 대조해 V2 렌더 검수를 다시 한다(승인 문항은 승인 유지, 그림 크기 차이가 나오면 바로 자동 조정 후 재렌더·재대조).
@@ -2032,10 +2448,11 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final mathCleanCount = _items.where((x) => x.mathStatus == 'clean').length;
-    final qualCleanCount = _items.where((x) => x.qualityStatus == 'clean').length;
-    final issueCount = _items.where((x) => x.hasIssue).length;
-    final draftCount = _items.where((x) => x.hasDrafts).length;
+    final mathCleanCount = _scopedItems.where((x) => x.mathStatus == 'clean').length;
+    final qualCleanCount = _scopedItems.where((x) => x.qualityStatus == 'clean').length;
+    final countBase = _workflowMode ? _scopedItems : _items;
+    final issueCount = countBase.where((x) => x.hasIssue).length;
+    final draftCount = countBase.where((x) => x.hasDrafts).length;
 
     return Container(
       color: _kBg,
@@ -2045,7 +2462,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
         children: [
           _buildTopHeader(mathCleanCount, qualCleanCount),
           const SizedBox(height: 12),
-          _buildScopeSelectorBar(),
+          if (_workflowMode) _buildWorkflowBar() else _buildScopeSelectorBar(),
           if (_runProgress != null) ...[
             const SizedBox(height: 10),
             _buildBanner(_runProgress!, _kAccent, Icons.autorenew_rounded),
@@ -2060,7 +2477,9 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
                 ? const Center(child: CircularProgressIndicator(color: _kAccent))
                 : _error != null
                     ? Center(child: Text(_error!, style: const TextStyle(color: _kError, fontSize: 14)))
-                    : _buildMainWorkspace(issueCount, draftCount),
+                    : _workflowMode && _workflows.isEmpty
+                        ? _emptyPanel('이 중단원에 크롭을 확정한 소단원이 없습니다. 1단계에서 크롭을 확정하면 여기서 이어집니다.')
+                        : _buildMainWorkspace(issueCount, draftCount),
           ),
         ],
       ),
@@ -2068,15 +2487,10 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
   }
 
   Widget _buildTopHeader(int mathCleanCount, int qualCleanCount) {
-    final mathIssueCount = _items.where((x) => x.mathStatus == 'issue' || x.pbAnswerDiffers).length;
-    final qualIssueCount = _items.where((x) => !x.isEngineHeld && x.qualityStatus == 'issue').length;
+    final mathIssueCount = _scopedItems.where((x) => x.mathStatus == 'issue' || x.pbAnswerDiffers).length;
+    final qualWorkCount = _qualityWorkItems.length;
     final mathTotalTargets = mathCleanCount + mathIssueCount;
-    final qualTotalTargets = qualCleanCount +
-        qualIssueCount +
-        _commonStemDups.length +
-        _kindFixes.length +
-        _pendingProposals.length +
-        _fixPassTargets.length;
+    final qualTotalTargets = qualCleanCount + qualWorkCount;
     final actions = <Widget>[
       if (_runningReview)
         OutlinedButton.icon(
@@ -2098,7 +2512,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
             onPressed: _saving ? null : () => unawaited(_bulkApproveClean('quality')),
             style: _outlineButtonStyle(color: _kBlue),
             icon: const Icon(Icons.auto_fix_high_rounded, size: 18, color: _kBlue),
-            label: Text('품질 일괄 처리 (${qualIssueCount + _pendingProposals.length + _commonStemDups.length > 0 ? '수정안 반영·재검수 ${qualIssueCount > 0 ? qualIssueCount : _pendingProposals.length + _commonStemDups.length}' : '정상 $qualCleanCount'})'),
+            label: Text('품질 일괄 처리 (${qualWorkCount > 0 ? '수정안 반영·재검수 $qualWorkCount' : '정상 $qualCleanCount'})'),
           ),
         if (_engineSuspects.isNotEmpty)
           OutlinedButton.icon(
@@ -2113,12 +2527,13 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
           icon: Icon(Icons.format_list_bulleted_rounded, size: 18, color: _engineHeldTotal > 0 ? _kWarn : _kTextSub),
           label: Text('렌더 엔진 목록${_engineHeldTotal > 0 ? ' ($_engineHeldTotal)' : ''}'),
         ),
-        ElevatedButton.icon(
-          onPressed: _selectedScope == null || _saving ? null : () => unawaited(_runUnitReview()),
-          style: _primaryButtonStyle(),
-          icon: const Icon(Icons.play_arrow_rounded, size: 18),
-          label: const Text('중단원 문항 검수 실행'),
-        ),
+        if (!_workflowMode)
+          ElevatedButton.icon(
+            onPressed: _selectedScope == null || _saving ? null : () => unawaited(_runUnitReview()),
+            style: _primaryButtonStyle(),
+            icon: const Icon(Icons.play_arrow_rounded, size: 18),
+            label: const Text('중단원 문항 검수 실행'),
+          ),
         PopupMenuButton<String>(
           tooltip: '추가 작업',
           color: _kPanelBg,
@@ -2152,16 +2567,15 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
       ],
       IconButton(
         tooltip: '새로고침',
-        onPressed: _loadingUnits || _runningReview ? null : () => unawaited(_loadUnits()),
+        onPressed: _loadingUnits || _runningReview
+            ? null
+            : () {
+                unawaited(_loadUnits());
+                final scope = _selectedScope;
+                if (_workflowMode && scope != null) unawaited(_loadItems(scope));
+              },
         icon: const Icon(Icons.refresh_rounded, color: _kTextSub, size: 20),
       ),
-      if (widget.onConfirmAutoAnalyze != null)
-        ElevatedButton.icon(
-          onPressed: _saving || _runningReview ? null : () => unawaited(_confirmAutoAnalyzeSubunit()),
-          style: _primaryButtonStyle(),
-          icon: const Icon(Icons.verified_rounded, size: 18),
-          label: const Text('수정안 일괄 반영 및 소단원 확정'),
-        ),
       if (widget.onCloseModal != null)
         OutlinedButton.icon(
           onPressed: _saving || _runningReview ? null : widget.onCloseModal,
@@ -2181,9 +2595,11 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
               style: const TextStyle(color: _kText, fontSize: 20, fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 4),
-            const Text(
-              '페이지·문항 흐름순 검수 · 과제형 V2 렌더링(학생 화면) · AI 선풀이 정답 대조 · 고정밀 핀셋 재추출',
-              style: TextStyle(color: _kTextSub, fontSize: 14, fontWeight: FontWeight.w600, height: 1.35),
+            Text(
+              _workflowMode
+                  ? '카드가 모두 "준비됨"이 되면 소단원을 확정합니다. 렌더 엔진 문제는 "코드 수정 필요"로 따로 모아 고친 뒤 재확인합니다.'
+                  : '페이지·문항 흐름순 검수 · 과제형 V2 렌더링(학생 화면) · AI 선풀이 정답 대조 · 고정밀 핀셋 재추출',
+              style: const TextStyle(color: _kTextSub, fontSize: 14, fontWeight: FontWeight.w600, height: 1.35),
             ),
           ],
         );
@@ -2216,6 +2632,358 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
         );
       },
     );
+  }
+
+  /// 2단계 작업 화면 상단: 소단원 진행 막대 + 고른 소단원의 상태·작업 버튼
+  Widget _buildWorkflowBar() {
+    final runner = TextbookWorkflowRunner.instance;
+    final wf = _selectedWorkflow;
+    final order = _selectedOrder;
+    final key = _wfKey;
+    final st = key == null ? null : runner.stateFor(key);
+    final active = key != null && runner.isActive(key);
+    final (ready, total, held) = order == null ? (0, 0, 0) : _readyCountsOf(order);
+    final notExtracted = order == null ? 0 : _items.where((it) => order.matches(it) && it.pbQuestionId.isEmpty).length;
+    final confirmed = wf?.isConfirmed ?? false;
+    final failed = !active && (st?.phase == TextbookWorkflowPhase.failed || (st == null && wf?.pipelineStatus == 'failed'));
+    final stopped = !active && st == null && (wf?.pipelineUnfinished ?? false);
+    final allReady = total > 0 && ready == total;
+    final busy = _wfBusy || _saving || _runningReview;
+    final legacy = widget.workflow?.legacySubunits ?? const <TextbookLegacySubunit>[];
+
+    final String statusText;
+    final Color statusColor;
+    if (active) {
+      final detail = st?.detail ?? '';
+      statusText = '${TextbookWorkflowPhase.label(st?.phase ?? TextbookWorkflowPhase.queued)}${detail.isEmpty ? '' : ' · $detail'}';
+      statusColor = _kAccent;
+    } else if (failed) {
+      final err = (st?.error.isNotEmpty ?? false) ? st!.error : (wf?.pipelineError ?? '');
+      statusText = '${wf?.pipelineDetail.isNotEmpty ?? false ? wf!.pipelineDetail : '2단계 실패'}${err.isEmpty ? '' : ' — $err'}';
+      statusColor = _kError;
+    } else if (stopped) {
+      statusText = '앱이 닫혀 ${TextbookWorkflowPhase.label(wf!.pipelinePhase)} 단계에서 멈췄습니다. "이어서 진행"을 누르세요.';
+      statusColor = _kWarn;
+    } else {
+      statusText = [
+        '준비됨 $ready/$total',
+        if (held > 0) '코드 수정 필요 $held',
+        if (notExtracted > 0) '본문 추출 전 $notExtracted',
+        if (confirmed) '확정됨',
+      ].join(' · ');
+      statusColor = allReady ? _kAccent : _kTextSub;
+    }
+
+    final actions = <Widget>[
+      if (active)
+        OutlinedButton.icon(
+          onPressed: st?.cancelRequested ?? false ? null : () => runner.cancel(key),
+          style: _outlineButtonStyle(color: _kError),
+          icon: const Icon(Icons.stop_circle_outlined, size: 18, color: _kError),
+          label: Text(st?.cancelRequested ?? false ? '중단하는 중' : '중단', style: const TextStyle(color: _kError)),
+        )
+      else if (order != null) ...[
+        if (failed || stopped)
+          ElevatedButton.icon(
+            onPressed: busy
+                ? null
+                : () => _enqueueWorkflow(
+                      order,
+                      fromPhase: TextbookWorkflowPhase.resumeFrom(wf?.pipelinePhase ?? ''),
+                      doneNote: '${order.label} 2단계를 멈춘 단계부터 이어서 진행합니다.',
+                    ),
+            style: _primaryButtonStyle(),
+            icon: const Icon(Icons.play_arrow_rounded, size: 18),
+            label: const Text('이어서 진행'),
+          ),
+        OutlinedButton.icon(
+          onPressed: busy || confirmed ? null : () => _enqueueWorkflow(order, doneNote: '${order.label} 문항을 다시 검수합니다.'),
+          style: _outlineButtonStyle(color: _kAccent),
+          icon: const Icon(Icons.replay_rounded, size: 18, color: _kAccent),
+          label: const Text('다시 검수'),
+        ),
+        if (held > 0) ...[
+          OutlinedButton.icon(
+            onPressed: () => unawaited(_copyEngineHeldReport(order)),
+            style: _outlineButtonStyle(color: _kWarn),
+            icon: const Icon(Icons.content_copy_rounded, size: 17, color: _kWarn),
+            label: Text('코드 수정 필요 $held · 복사'),
+          ),
+          OutlinedButton.icon(
+            onPressed: busy || confirmed
+                ? null
+                : () => _enqueueWorkflow(
+                      order,
+                      onlyCropIds: {for (final it in _items) if (order.matches(it) && it.isEngineHeld) it.cropId},
+                      forceRenderCheck: true,
+                      doneNote: '코드 수정 필요 $held문항을 V2 로 다시 찍어 원본과 대조합니다.',
+                    ),
+            style: _outlineButtonStyle(color: _kWarn),
+            icon: const Icon(Icons.build_circle_outlined, size: 18, color: _kWarn),
+            label: const Text('코드 수정 후 재확인'),
+          ),
+        ],
+        PopupMenuButton<String>(
+          tooltip: '추가 작업',
+          color: _kPanelBg,
+          icon: const Icon(Icons.more_horiz_rounded, color: _kTextSub, size: 20),
+          onSelected: (v) {
+            if (v == 'extract') {
+              _enqueueWorkflow(
+                order,
+                fromPhase: TextbookWorkflowPhase.extract,
+                doneNote: '${order.label}: 본문이 없는 문항 추출과 비어 있는 정답·해설 위치 찾기부터 다시 합니다.',
+              );
+            }
+          },
+          itemBuilder: (_) => [
+            PopupMenuItem(
+              value: 'extract',
+              enabled: !confirmed,
+              child: const Text('본문 추출부터 다시(빈 것만)', style: TextStyle(color: _kText, fontSize: 13)),
+            ),
+          ],
+        ),
+        if (wf != null && confirmed)
+          OutlinedButton.icon(
+            onPressed: busy ? null : () => unawaited(_setSubunitConfirmed(wf, confirmed: false)),
+            style: _outlineButtonStyle(color: _kTextSub),
+            icon: const Icon(Icons.lock_open_rounded, size: 18, color: _kTextSub),
+            label: const Text('확정 취소'),
+          )
+        else if (wf != null)
+          Tooltip(
+            message: allReady ? '모든 카드가 준비됨입니다' : '준비됨이 아닌 카드 ${total - ready}개를 먼저 정리하세요',
+            child: ElevatedButton.icon(
+              onPressed: busy || !allReady ? null : () => unawaited(_setSubunitConfirmed(wf, confirmed: true)),
+              style: _primaryButtonStyle(),
+              icon: const Icon(Icons.verified_rounded, size: 18),
+              label: Text(allReady ? '소단원 확정' : '소단원 확정 ($ready/$total)'),
+            ),
+          ),
+      ],
+    ];
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: _panelDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                for (final w in _workflows) ...[
+                  _workflowTab(w),
+                  const SizedBox(width: 8),
+                ],
+                if (legacy.isNotEmpty) ...[
+                  Container(width: 0.5, height: 32, color: _kBorder),
+                  const SizedBox(width: 8),
+                  for (final l in legacy) ...[
+                    _legacyTab(l),
+                    const SizedBox(width: 8),
+                  ],
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 12,
+            runSpacing: 10,
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 640),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (active)
+                      const Padding(
+                        padding: EdgeInsets.only(right: 8),
+                        child: SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: _kAccent)),
+                      ),
+                    Flexible(
+                      child: Text(
+                        statusText,
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: statusColor, fontSize: 13, fontWeight: FontWeight.w700, height: 1.35),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: actions,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _workflowTab(TextbookSubunitWorkflow w) {
+    final runner = TextbookWorkflowRunner.instance;
+    final sel = w.key == _wfKey;
+    final st = runner.stateFor(w.key);
+    final active = runner.isActive(w.key);
+    final order = w.workOrder;
+    final String status;
+    final Color color;
+    if (active) {
+      status = TextbookWorkflowPhase.label(st?.phase ?? TextbookWorkflowPhase.queued);
+      color = _kAccent;
+    } else if (w.isConfirmed) {
+      status = '확정';
+      color = _kAccent;
+    } else if (st?.phase == TextbookWorkflowPhase.failed || (st == null && w.pipelineStatus == 'failed')) {
+      status = '실패';
+      color = _kError;
+    } else if (st == null && w.pipelineUnfinished) {
+      status = '멈춤';
+      color = _kWarn;
+    } else if (order != null) {
+      final (ready, total, held) = _readyCountsOf(order);
+      status = total == 0 ? (st?.summaryText.isNotEmpty ?? false ? st!.summaryText : w.pipelineDetail) : '준비됨 $ready/$total${held > 0 ? ' · 코드 $held' : ''}';
+      color = total > 0 && ready == total ? _kAccent : (held > 0 ? _kWarn : _kTextSub);
+    } else {
+      status = w.pipelineDetail;
+      color = _kTextSub;
+    }
+    return InkWell(
+      borderRadius: BorderRadius.circular(_kInnerRadius),
+      onTap: () => _selectWorkflow(w),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: sel ? _kChipSelected.withValues(alpha: 0.35) : _kFieldBg,
+          borderRadius: BorderRadius.circular(_kInnerRadius),
+          border: Border.all(color: sel ? _kAccent : _kBorder, width: sel ? 1 : 0.5),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 220),
+              child: Text(
+                order?.label.isNotEmpty ?? false ? order!.label : w.scopeKey,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: sel ? _kText : _kTextSub, fontSize: 13, fontWeight: FontWeight.w800),
+              ),
+            ),
+            const SizedBox(height: 2),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (active) ...[
+                  const SizedBox(width: 10, height: 10, child: CircularProgressIndicator(strokeWidth: 1.5, color: _kAccent)),
+                  const SizedBox(width: 6),
+                ] else if (w.isConfirmed) ...[
+                  const Icon(Icons.verified_rounded, size: 12, color: _kAccent),
+                  const SizedBox(width: 4),
+                ],
+                Text(status.isEmpty ? '대기' : status, style: TextStyle(color: color, fontSize: 11.5, fontWeight: FontWeight.w700)),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 예전에 본문만 뽑아 둔 소단원. 2단계 카드가 없으므로 누르면 단원·크롭 창으로 돌아간다.
+  Widget _legacyTab(TextbookLegacySubunit l) {
+    final onPick = widget.onPickLegacySubunit;
+    return Tooltip(
+      message: '예전에 뽑아 둔 소단원입니다 · 본문 ${l.bodies}/${l.crops} · 검수 ${l.reviewed}/${l.bodies}\n'
+          '누르면 단원·크롭 창으로 돌아갑니다. 크롭을 확인하고 "이어서 마무리"를 누르면 '
+          '본문과 검수 결과는 그대로 두고 다음 단계부터 진행합니다.',
+      child: InkWell(
+        borderRadius: BorderRadius.circular(_kInnerRadius),
+        onTap: onPick == null ? null : () => onPick(l.scopeKey),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(_kInnerRadius),
+            border: Border.all(color: _kBorder, width: 0.5),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 220),
+                child: Text(
+                  l.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: _kTextMuted, fontSize: 13, fontWeight: FontWeight.w800),
+                ),
+              ),
+              const SizedBox(height: 2),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    l.allReviewed ? Icons.verified_outlined : Icons.history_rounded,
+                    size: 12,
+                    color: l.allReviewed ? _kAccent : _kTextSub,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    l.allReviewed
+                        ? '검수 완료 · 이어서 마무리'
+                        : l.reviewed > 0
+                            ? '기존 추출 · 검수 ${l.reviewed}/${l.bodies}'
+                            : '기존 추출 · 이어서 마무리',
+                    style: TextStyle(
+                      color: l.allReviewed ? _kAccent : _kTextSub,
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 카드 준비 상태 배지(2단계 작업 화면). 준비됨이 아니면 첫 번째 막힌 이유를 보인다.
+  Widget _readyPill(TextbookProblemReviewItem item) {
+    if (item.isWorkflowReady) return _pillBadge('준비됨', _kAccent);
+    final blockers = item.readyBlockers;
+    final first = blockers.first;
+    final more = blockers.length > 1 ? ' 외 ${blockers.length - 1}' : '';
+    final Widget pill;
+    if (first == '본문 추출 전') {
+      final key = _wfKey;
+      final st = key == null ? null : TextbookWorkflowRunner.instance.stateFor(key);
+      if (st != null && st.active && st.phase == TextbookWorkflowPhase.extract) {
+        String norm(String s) => s.trim().replaceFirst(RegExp(r'^0+(?=\d)'), '');
+        final read = st.numbersDone(item.subKey).map(norm).contains(norm(item.problemNumber));
+        pill = read ? _pillBadge('본문 읽음 · 저장 대기', _kBlue) : _pillBadge('본문 추출 중', _kTextSub);
+      } else {
+        pill = _pillBadge(first, _kTextMuted);
+      }
+    } else if (item.isEngineHeld) {
+      pill = _pillBadge('코드 수정 필요$more', _kWarn);
+    } else {
+      pill = _pillBadge('$first$more', _kError);
+    }
+    return Tooltip(message: blockers.join('\n'), child: pill);
   }
 
   Widget _buildScopeSelectorBar() {
@@ -2430,7 +3198,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
               ],
             ),
           );
-    final preview = selected == null ? _emptyPanel('V2 렌더 카드') : _buildV2CardStack(selected);
+    final preview = selected == null ? _emptyPanel('V2 렌더 카드') : _buildRightPane(selected);
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -2653,6 +3421,10 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
             runSpacing: 8,
             children: [
               _filterTabChip(0, '전체 ${scoped.length}'),
+              if (_workflowMode) ...[
+                _filterTabChip(7, '준비 안 됨 ${scoped.where((x) => !x.isWorkflowReady).length}'),
+                _filterTabChip(8, '준비됨 ${scoped.where((x) => x.isWorkflowReady).length}'),
+              ],
               _filterTabChip(
                 1,
                 '오류·불일치 $issueCount'
@@ -2663,7 +3435,10 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
               if (draftCount > 0) _filterTabChip(2, '새 초안 $draftCount'),
               _filterTabChip(3, '미검수 ${scoped.where((x) => x.mathStatus == 'pending').length}'),
               _filterTabChip(4, '승인완료 ${scoped.where((x) => x.isFullyApproved).length}'),
-              if (_engineHeldCount > 0) _filterTabChip(5, '엔진 보류 $_engineHeldCount'),
+              if (_workflowMode && scoped.any((x) => x.isEngineHeld))
+                _filterTabChip(5, '코드 수정 필요 ${scoped.where((x) => x.isEngineHeld).length}')
+              else if (!_workflowMode && _engineHeldCount > 0)
+                _filterTabChip(5, '엔진 보류 $_engineHeldCount'),
               if (_approvedDiffCount > 0) _filterTabChip(6, '승인 후 원본 차이 $_approvedDiffCount'),
             ],
           ),
@@ -2848,6 +3623,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
                     style: const TextStyle(color: _kText, fontSize: 13, fontWeight: FontWeight.w800),
                   ),
                 ),
+                if (_workflowMode) _readyPill(item),
                 if (item.isSetQuestion)
                   _pillBadge(
                     item.setHeaderNumber.isNotEmpty ? '세트 ${item.setHeaderNumber}' : '세트형',
@@ -2913,7 +3689,68 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     );
   }
 
-  // ── 우측: V2 카드 스택 ───────────────────────────────────────────────────
+  // ── 우측: V2 카드 스택 / 원본 PDF ──────────────────────────────────────────
+
+  /// 2단계 작업 화면에서는 학생 화면(V2)과 원본 PDF(정답·해설 직접 지정)를 같은 칸에서 바꿔 본다.
+  Widget _buildRightPane(TextbookProblemReviewItem item) {
+    final scope = _selectedScope;
+    if (!_workflowMode || scope == null) return _buildV2CardStack(item);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            _paneToggle(0, '학생 화면(V2)', Icons.smartphone_rounded),
+            const SizedBox(width: 8),
+            _paneToggle(1, '원본 PDF', Icons.picture_as_pdf_outlined),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Expanded(
+          child: _rightPane == 0
+              ? _buildV2CardStack(item)
+              : TextbookSourcePdfPane(
+                  service: _svc,
+                  scope: scope,
+                  item: item,
+                  allItems: _items,
+                  busy: _saving || _runningReview,
+                  onSaveAnswerImage: (sel) => _saveManualAnswer(item, sel),
+                  onSaveAnswerText: (sel, text, kind) => _saveManualAnswer(item, sel, text: text, kind: kind),
+                  onSaveSolution: (sel) => _saveManualSolution(item, sel),
+                  onMarkNoSolution: () => _saveManualSolution(item, null),
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _paneToggle(int index, String label, IconData icon) {
+    final sel = _rightPane == index;
+    return InkWell(
+      borderRadius: BorderRadius.circular(_kInnerRadius),
+      onTap: () => setState(() => _rightPane = index),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: sel ? _kChipSelected : _kFieldBg,
+          borderRadius: BorderRadius.circular(_kInnerRadius),
+          border: Border.all(color: sel ? _kAccent : _kBorder, width: 0.5),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 15, color: sel ? _kText : _kTextSub),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(color: sel ? _kText : _kTextSub, fontSize: 13, fontWeight: FontWeight.w700),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   Widget _buildV2CardStack(TextbookProblemReviewItem item) {
     final problemUrl = _previewUrlsByCropId[item.cropId];

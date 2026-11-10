@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -40,8 +41,18 @@ class TextbookReviewSolutionImageService {
   final TextbookPdfService _pdf;
   final http.Client _http;
 
-  final Map<String, Future<PdfDocument?>> _docLoads = {};
-  final Map<String, PdfDocument> _docs = {};
+  // 앱 전체가 함께 쓴다. 소단원 작업이 여러 개 동시에 돌아도 같은 PDF 는 한 번만 받고 한 번만 연다
+  // (따로 받으면 같은 임시 파일을 서로 덮어써서 끝나지 않는다).
+  static final Map<String, Future<PdfDocument?>> _docLoads = {};
+  static final Map<String, PdfDocument> _docs = {};
+  static final Map<String, Set<void Function(int received, int? total)>> _progressListeners = {};
+  static final Map<String, ({DateTime at, String error})> _failures = {};
+
+  /// 받기에 실패한 PDF 는 이 시간 동안 다시 받지 않고 바로 실패로 돌려준다(문항마다 다시 받지 않게).
+  static const Duration kFailureCooldown = Duration(minutes: 2);
+
+  /// 이 시간 동안 한 바이트도 오지 않으면 다운로드를 끊는다.
+  static const Duration kStallTimeout = Duration(seconds: 60);
 
   /// 잘라낸 영역의 가로 목표 해상도. 2단 조판 해설 한 칸이 1100px면 수식 첨자까지 읽힌다.
   static const int kTargetCropWidthPx = 1100;
@@ -52,41 +63,211 @@ class TextbookReviewSolutionImageService {
 
   String _docKey(String bookId, String gradeLabel, String kind) => '$bookId|$gradeLabel|$kind';
 
+  /// 'body' 본문 · 'ans' 정답 · 그 밖은 해설 PDF
+  static String _pdfKind(String sourceKind) => switch (sourceKind) {
+        'body' => 'body',
+        'ans' => 'ans',
+        _ => 'sol',
+      };
+
+  /// PDF 쪽 수. PDF 가 등록되지 않았거나 받지 못하면 0.
+  Future<int> pageCount({
+    required String academyId,
+    required String bookId,
+    required String gradeLabel,
+    required String sourceKind,
+  }) async {
+    final doc = await _ensureDoc(academyId: academyId, bookId: bookId, gradeLabel: gradeLabel, kind: _pdfKind(sourceKind));
+    return doc?.pages.length ?? 0;
+  }
+
+  /// 'body' 본문 · 'ans' 정답 · 그 밖은 해설
+  static String pdfKindLabel(String sourceKind) => switch (_pdfKind(sourceKind)) {
+        'body' => '본문',
+        'ans' => '정답',
+        _ => '해설',
+      };
+
+  /// 마지막으로 받기에 실패한 이유. 실패한 적 없거나 대기 시간이 지났으면 null.
+  static String? loadError(String bookId, String gradeLabel, String sourceKind) {
+    final f = _failures[_docKeyOf(bookId, gradeLabel, _pdfKind(sourceKind))];
+    if (f == null || DateTime.now().difference(f.at) > kFailureCooldown) return null;
+    return f.error;
+  }
+
+  static String _docKeyOf(String bookId, String gradeLabel, String kind) => '$bookId|$gradeLabel|$kind';
+
+  /// PDF 를 받아 연다. [onProgress] 는 받는 중일 때 (받은 바이트, 전체 바이트) 로 불린다.
+  Future<PdfDocument?> ensureSourcePdf({
+    required String academyId,
+    required String bookId,
+    required String gradeLabel,
+    required String sourceKind,
+    void Function(int received, int? total)? onProgress,
+  }) =>
+      _ensureDoc(
+        academyId: academyId,
+        bookId: bookId,
+        gradeLabel: gradeLabel,
+        kind: _pdfKind(sourceKind),
+        onProgress: onProgress,
+      );
+
   Future<PdfDocument?> _ensureDoc({
     required String academyId,
     required String bookId,
     required String gradeLabel,
     required String kind,
-  }) {
+    void Function(int received, int? total)? onProgress,
+  }) async {
     final key = _docKey(bookId, gradeLabel, kind);
     final loaded = _docs[key];
-    if (loaded != null) return Future.value(loaded);
-    return _docLoads.putIfAbsent(key, () async {
-      try {
-        final target = await _pdf.requestDownloadUrl(
-          academyId: academyId,
-          fileId: bookId,
-          gradeLabel: gradeLabel,
-          kind: kind,
-          requireMigratedStorage: true,
-        );
-        if (target.url.isEmpty) return null;
-        final tempDir = await getTemporaryDirectory();
-        final safeBook = bookId.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
-        final safeGrade = gradeLabel.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
-        final file = File(p.join(tempDir.path, 'review_${safeBook}_${safeGrade}_$kind.pdf'));
-        final res = await _http.get(Uri.parse(target.url));
-        if (res.statusCode < 200 || res.statusCode >= 300) return null;
-        await file.writeAsBytes(res.bodyBytes, flush: true);
-        final doc = await PdfDocument.openFile(file.path);
-        _docs[key] = doc;
-        return doc;
-      } catch (_) {
-        return null;
-      } finally {
-        _docLoads.remove(key);
+    if (loaded != null) return loaded;
+    final failed = _failures[key];
+    if (failed != null && DateTime.now().difference(failed.at) <= kFailureCooldown) return null;
+    if (onProgress != null) (_progressListeners[key] ??= {}).add(onProgress);
+    try {
+      return await _docLoads.putIfAbsent(key, () => _loadDoc(key, academyId, bookId, gradeLabel, kind));
+    } finally {
+      if (onProgress != null) _progressListeners[key]?.remove(onProgress);
+    }
+  }
+
+  Future<PdfDocument?> _loadDoc(String key, String academyId, String bookId, String gradeLabel, String kind) async {
+    try {
+      final target = await _pdf.requestDownloadUrl(
+        academyId: academyId,
+        fileId: bookId,
+        gradeLabel: gradeLabel,
+        kind: kind,
+        requireMigratedStorage: true,
+      );
+      if (target.url.isEmpty) throw Exception('${pdfKindLabel(kind)} PDF 주소를 받지 못했습니다');
+      final tempDir = await getTemporaryDirectory();
+      final safeBook = bookId.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+      final safeGrade = gradeLabel.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+      final hash = (target.contentHash ?? '').replaceAll(RegExp(r'[^A-Za-z0-9]'), '');
+      final hashTag = hash.isEmpty ? '' : '_${hash.substring(0, hash.length < 16 ? hash.length : 16)}';
+      final file = File(p.join(tempDir.path, 'review_${safeBook}_${safeGrade}_$kind$hashTag.pdf'));
+      // 본문 PDF는 수백 MB라 매번 받으면 분 단위로 걸린다. 같은 해시·크기 파일이 있으면 그대로 쓴다.
+      final expectedSize = target.fileSizeBytes;
+      final cached = await file.exists() &&
+          await file.length() > 0 &&
+          (expectedSize == null || expectedSize <= 0 || await file.length() == expectedSize) &&
+          (hashTag.isNotEmpty || (expectedSize != null && expectedSize > 0));
+      if (!cached) {
+        final reused = expectedSize != null &&
+            expectedSize > 0 &&
+            await _reuseLocalCopy(
+              target: file,
+              expectedSize: expectedSize,
+              candidates: [
+                File(p.join(tempDir.path, 'review_${safeBook}_${safeGrade}_$kind.pdf')),
+                if (kind == 'body') File(p.join(tempDir.path, 'auth_${safeBook}_${gradeLabel}_body.pdf')),
+              ],
+            );
+        if (!reused) {
+          Object? lastError;
+          for (var attempt = 0; attempt < 2; attempt++) {
+            try {
+              await _download(key, target.url, file, expectedSize);
+              lastError = null;
+              break;
+            } catch (e) {
+              lastError = e;
+            }
+          }
+          if (lastError != null) throw lastError;
+        }
       }
-    });
+      final PdfDocument doc;
+      try {
+        doc = await PdfDocument.openFile(file.path);
+      } catch (e) {
+        // 깨진 파일이 캐시로 남으면 다음에도 같은 파일을 열게 된다.
+        if (await file.exists()) await file.delete();
+        throw Exception('${pdfKindLabel(kind)} PDF 를 열지 못했습니다: $e');
+      }
+      _docs[key] = doc;
+      _failures.remove(key);
+      return doc;
+    } catch (e) {
+      _failures[key] = (at: DateTime.now(), error: '$e');
+      return null;
+    } finally {
+      _docLoads.remove(key);
+    }
+  }
+
+  /// 같은 크기의 PDF 가 이미 받아져 있으면(예전 캐시 이름·단원·크롭 창 사본) 복사해 쓴다.
+  static Future<bool> _reuseLocalCopy({
+    required File target,
+    required int expectedSize,
+    required List<File> candidates,
+  }) async {
+    for (final c in candidates) {
+      try {
+        if (!await c.exists() || await c.length() != expectedSize) continue;
+        final part = File('${target.path}.${DateTime.now().microsecondsSinceEpoch}.part');
+        await c.copy(part.path);
+        if (await part.length() != expectedSize) {
+          await part.delete();
+          continue;
+        }
+        await _replaceWith(part, target);
+        return true;
+      } catch (_) {
+        continue;
+      }
+    }
+    return false;
+  }
+
+  /// 다운로드마다 임시 파일을 따로 쓰고, 크기를 확인한 뒤에만 제자리에 놓는다.
+  Future<void> _download(String key, String url, File file, int? expectedSize) async {
+    final part = File('${file.path}.${DateTime.now().microsecondsSinceEpoch}.part');
+    try {
+      final res = await _http.send(http.Request('GET', Uri.parse(url))).timeout(kStallTimeout);
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        throw Exception('${_kindOfKey(key)} PDF 받기 실패(${res.statusCode})');
+      }
+      final total = (expectedSize != null && expectedSize > 0) ? expectedSize : res.contentLength;
+      final sink = part.openWrite();
+      var received = 0;
+      var lastReported = 0;
+      try {
+        await for (final chunk in res.stream.timeout(
+          kStallTimeout,
+          onTimeout: (sink) => sink.addError(
+            TimeoutException('${_kindOfKey(key)} PDF 가 ${kStallTimeout.inSeconds}초 동안 오지 않았습니다'),
+          ),
+        )) {
+          sink.add(chunk);
+          received += chunk.length;
+          if (received - lastReported >= 4 * 1024 * 1024) {
+            lastReported = received;
+            for (final l in [...?_progressListeners[key]]) {
+              l(received, total);
+            }
+          }
+        }
+      } finally {
+        await sink.close();
+      }
+      if (total != null && total > 0 && received != total) {
+        throw Exception('${_kindOfKey(key)} PDF 를 끝까지 받지 못했습니다($received/$total바이트)');
+      }
+      await _replaceWith(part, file);
+    } finally {
+      if (await part.exists()) await part.delete();
+    }
+  }
+
+  static String _kindOfKey(String key) => pdfKindLabel(key.split('|').last);
+
+  static Future<void> _replaceWith(File part, File file) async {
+    if (await file.exists()) await file.delete();
+    await part.rename(file.path);
   }
 
   /// 해설 좌표 영역 PNG. PDF를 못 받거나 쪽·좌표가 없으면 null.
@@ -142,8 +323,7 @@ class TextbookReviewSolutionImageService {
     int targetWidthPx = kTargetCropWidthPx,
   }) async {
     if (rawPage < 1 || region1k.length != 4) return null;
-    final kind = sourceKind == 'body' ? 'body' : 'sol';
-    final doc = await _ensureDoc(academyId: academyId, bookId: bookId, gradeLabel: gradeLabel, kind: kind);
+    final doc = await _ensureDoc(academyId: academyId, bookId: bookId, gradeLabel: gradeLabel, kind: _pdfKind(sourceKind));
     if (doc == null || rawPage > doc.pages.length) return null;
     final page = doc.pages[rawPage - 1];
 
@@ -199,10 +379,6 @@ class TextbookReviewSolutionImageService {
     }
   }
 
-  void dispose() {
-    for (final d in _docs.values) {
-      d.dispose();
-    }
-    _docs.clear();
-  }
+  /// 연 PDF 는 앱 전체가 함께 쓰므로 여기서 닫지 않는다.
+  void dispose() {}
 }

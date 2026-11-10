@@ -13,6 +13,21 @@ import 'textbook_pdf_service.dart';
 import 'textbook_vlm_answer_service.dart';
 import 'textbook_vlm_solution_ref_service.dart';
 
+/// 정답·풀이가 정답 파일이 아니라 본문 지면의 "풀이" 단락에 인쇄된 문항인지.
+///
+/// 개념원리는 필수유형·특강 전체, 개념+유형은 쓱쓱 서술형 중 "예제", 개념+유형 고등은 필수예제다.
+/// [category] 는 크롭의 section(개념서 카테고리)이다.
+bool textbookConceptBodySolutionItem(String seriesKey, String category, String problemNumber) {
+  switch (seriesKey.trim().toLowerCase()) {
+    case 'gaeyu':
+      return category == 'descriptive' && problemNumber.startsWith('예제');
+    case 'gaeyu_high':
+      return category == 'high_example';
+    default:
+      return category == 'type_example' || category == 'special_lecture';
+  }
+}
+
 class TextbookStageBatchService {
   TextbookStageBatchService({
     TextbookPdfService? pdfService,
@@ -52,17 +67,26 @@ class TextbookStageBatchService {
     int? answerEndPage,
     int? solutionStartPage,
     int? solutionEndPage,
+    int? bodyPageFrom,
+    int? bodyPageTo,
     void Function(String status)? onStatus,
   }) async {
-    final crops = await _loadCrops(
-      academyId: academyId,
-      bookId: bookId,
-      gradeLabel: gradeLabel,
-      bigOrder: bigOrder,
-      midOrder: midOrder,
-      subKey: subKey,
-      subIndex: subIndex,
-    );
+    final usesBodySolutions = const {'wonri', 'gaeyu', 'gaeyu_high'}.contains(seriesKey.trim().toLowerCase());
+    final crops = [
+      for (final c in await _loadCrops(
+        academyId: academyId,
+        bookId: bookId,
+        gradeLabel: gradeLabel,
+        bigOrder: bigOrder,
+        midOrder: midOrder,
+        subKey: subKey,
+        subIndex: subIndex,
+        bodyPageFrom: bodyPageFrom,
+        bodyPageTo: bodyPageTo,
+      ))
+        // 본문 "풀이" 단락이 딸린 문항은 runBodySolutionChainForSubunit 이 맡는다.
+        if (!usesBodySolutions || !textbookConceptBodySolutionItem(seriesKey, c.section, c.problemNumber)) c,
+    ];
     if (crops.isEmpty) {
       return const TextbookStageBatchResult(
         answerSaved: 0,
@@ -226,6 +250,164 @@ class TextbookStageBatchService {
     }
   }
 
+  /// 정답·풀이가 정답 파일이 아니라 본문 "풀이" 단락에 인쇄된 문항의 정답·풀이 위치를 본문 PDF 에서 찾아 저장한다.
+  /// [onlyMissing] 이면 정답과 풀이 위치가 모두 있는 문항은 건너뛴다.
+  Future<TextbookStageBatchResult> runBodySolutionChainForSubunit({
+    required String academyId,
+    required String bookId,
+    required String gradeLabel,
+    required int bigOrder,
+    required int midOrder,
+    required String subKey,
+    required int subIndex,
+    required String seriesKey,
+    int? bodyPageFrom,
+    int? bodyPageTo,
+    bool onlyMissing = true,
+    void Function(String status)? onStatus,
+  }) async {
+    const empty = TextbookStageBatchResult(
+      answerSaved: 0,
+      solutionRefSaved: 0,
+      answerMissing: <String>[],
+      solutionMissing: <String>[],
+    );
+    final crops = (await _loadCrops(
+      academyId: academyId,
+      bookId: bookId,
+      gradeLabel: gradeLabel,
+      bigOrder: bigOrder,
+      midOrder: midOrder,
+      subKey: subKey,
+      subIndex: subIndex,
+      bodyPageFrom: bodyPageFrom,
+      bodyPageTo: bodyPageTo,
+    ))
+        .where((c) =>
+            !c.isSetHeader &&
+            c.rawPage != null &&
+            textbookConceptBodySolutionItem(seriesKey, c.section, c.problemNumber))
+        .toList(growable: false);
+    if (crops.isEmpty) return empty;
+    var targets = crops;
+    if (onlyMissing) {
+      final ids = [for (final c in crops) c.id];
+      final answered = await _supa.from('textbook_problem_answers').select('crop_id').inFilter('crop_id', ids);
+      final located = await _supa.from('textbook_problem_solution_refs').select('crop_id').inFilter('crop_id', ids);
+      final hasAnswer = {for (final r in (answered as List).whereType<Map>()) '${r['crop_id']}'};
+      final hasRef = {for (final r in (located as List).whereType<Map>()) '${r['crop_id']}'};
+      targets = [for (final c in crops) if (!hasAnswer.contains(c.id) || !hasRef.contains(c.id)) c];
+      if (targets.isEmpty) return empty;
+    }
+
+    onStatus?.call('본문 PDF 준비 중...');
+    final doc = await _downloadPdf(
+      academyId: academyId,
+      bookId: bookId,
+      gradeLabel: gradeLabel,
+      kind: 'body',
+      tempPrefix: 'batch_body_solution',
+    );
+    try {
+      final byPage = <int, List<_BatchCrop>>{};
+      for (final c in targets) {
+        byPage.putIfAbsent(c.rawPage!, () => <_BatchCrop>[]).add(c);
+      }
+      final answers = <TextbookAnswerUpload>[];
+      final refs = <TextbookSolutionRefUpload>[];
+      final answerMissing = <String>[];
+      final solutionMissing = <String>[];
+      final pages = byPage.keys.toList()..sort();
+      for (var index = 0; index < pages.length; index += 1) {
+        final page = pages[index];
+        final pageCrops = byPage[page]!;
+        onStatus?.call('본문 정답·풀이 ${index + 1} / ${pages.length}페이지...');
+        final idByKey = <String, _BatchCrop>{
+          for (final c in pageCrops) textbookAnswerNumberKey(c.problemNumber): c,
+        };
+        final answeredKeys = <String>{};
+        final locatedKeys = <String>{};
+        // 일시적 VLM 실패(파싱·타임아웃)로 지면 전체가 빠지지 않게 한 번 더 시도한다.
+        for (var attempt = 0; attempt < 2; attempt += 1) {
+          try {
+            final png = await renderPdfPageToPng(document: doc, pageNumber: page, longEdgePx: _vlmLongEdgePx);
+            final result = await _solutionRefService.extractBodySolutionsOnPage(
+              imageBytes: png,
+              rawPage: page,
+              expectedNumbers: [for (final c in pageCrops) c.problemNumber],
+              seriesKey: seriesKey,
+            );
+            Uint8List? imagePage;
+            for (final item in result.items) {
+              final key = textbookAnswerNumberKey(item.problemNumber);
+              final crop = idByKey[key];
+              if (crop == null) continue;
+              _ImageAnswerCrop? imageCrop;
+              final imageRegion = item.answerRegion1k;
+              if (item.answerKind == 'image' && imageRegion != null) {
+                imagePage ??= await _renderAnswerImagePage(doc, page);
+                imageCrop = _cropAnswerImage(imagePage ?? png, imageRegion);
+              }
+              var answerText = item.answerText.trim();
+              var answerLatex = item.answerLatex2d.trim();
+              // 증명처럼 풀이 상자는 있지만 굵은 최종 답이 없으면 해설지처럼 '풀이 참조'로 둔다.
+              if (answerText.isEmpty && answerLatex.isEmpty && item.contentRegion1k != null) {
+                answerText = '풀이 참조';
+                answerLatex = '풀이 참조';
+              }
+              if (answerText.isNotEmpty || answerLatex.isNotEmpty || imageCrop != null) {
+                answeredKeys.add(key);
+                answers.add(TextbookAnswerUpload(
+                  cropId: crop.id,
+                  answerKind: imageCrop == null && item.answerKind == 'image' ? 'subjective' : item.answerKind,
+                  answerText: answerText.isNotEmpty ? answerText : (imageCrop != null ? '[그림]' : answerLatex),
+                  answerLatex2d: answerLatex.isEmpty ? null : answerLatex,
+                  answerSource: 'vlm',
+                  rawPage: page,
+                  displayPage: crop.displayPage,
+                  bbox1k: imageCrop == null ? null : imageRegion,
+                  answerImagePngBytes: imageCrop?.pngBytes,
+                  answerImageRegion1k: imageCrop == null ? null : imageRegion,
+                  answerImageWidthPx: imageCrop?.width,
+                  answerImageHeightPx: imageCrop?.height,
+                ));
+              }
+              locatedKeys.add(key);
+              refs.add(TextbookSolutionRefUpload(
+                cropId: crop.id,
+                rawPage: page,
+                displayPage: crop.displayPage,
+                numberRegion1k: item.numberRegion1k,
+                contentRegion1k: item.contentRegion1k,
+                sourceKind: 'body',
+              ));
+            }
+            break;
+          } catch (_) {
+            if (attempt == 1) break;
+          }
+        }
+        for (final c in pageCrops) {
+          final key = textbookAnswerNumberKey(c.problemNumber);
+          if (!answeredKeys.contains(key)) answerMissing.add(c.problemNumber);
+          if (!locatedKeys.contains(key)) solutionMissing.add(c.problemNumber);
+        }
+      }
+      final answerSaved =
+          answers.isEmpty ? 0 : await _answerService.batchUpsertAnswers(academyId: academyId, answers: answers);
+      final refSaved =
+          refs.isEmpty ? 0 : await _solutionRefService.batchUpsertSolutionRefs(academyId: academyId, refs: refs);
+      return TextbookStageBatchResult(
+        answerSaved: answerSaved,
+        solutionRefSaved: refSaved,
+        answerMissing: answerMissing,
+        solutionMissing: solutionMissing,
+      );
+    } finally {
+      doc.dispose();
+    }
+  }
+
   Future<List<_BatchCrop>> _loadCrops({
     required String academyId,
     required String bookId,
@@ -234,8 +416,12 @@ class TextbookStageBatchService {
     required int midOrder,
     required String subKey,
     required int subIndex,
+    int? bodyPageFrom,
+    int? bodyPageTo,
   }) async {
-    final rows = await _supa
+    // 개념서는 익히기·확인 체크처럼 중단원 전체가 sub_index 0 을 함께 쓰는 슬롯이 있다.
+    // 소단원 하나만 돌릴 때는 본문 쪽 범위로 그 소단원 문항만 남긴다.
+    var query = _supa
         .from('textbook_problem_crops')
         .select(
           'id, problem_number, is_set_header, section, raw_page, '
@@ -247,9 +433,10 @@ class TextbookStageBatchService {
         .eq('big_order', bigOrder)
         .eq('mid_order', midOrder)
         .eq('sub_key', subKey)
-        .eq('sub_index', subIndex)
-        .order('raw_page')
-        .order('problem_number');
+        .eq('sub_index', subIndex);
+    if (bodyPageFrom != null && bodyPageFrom > 0) query = query.gte('raw_page', bodyPageFrom);
+    if (bodyPageTo != null && bodyPageTo > 0) query = query.lte('raw_page', bodyPageTo);
+    final rows = await query.order('raw_page').order('problem_number');
     return (rows as List)
         .whereType<Map>()
         .map((row) => _BatchCrop.fromRow(row))
@@ -594,6 +781,7 @@ class TextbookStageBatchService {
         for (final item in result.items)
           textbookWonriMiddlePrintedNumberKey(item.problemNumber): item,
       };
+      Uint8List? answerImagePage;
       for (final crop in pageCrops) {
         final item =
             items[textbookWonriMiddlePrintedNumberKey(crop.problemNumber)];
@@ -603,6 +791,12 @@ class TextbookStageBatchService {
           problemNumber: crop.problemNumber,
           itemName: crop.itemName,
         );
+        _ImageAnswerCrop? imageCrop;
+        final imageRegion = item.answerRegion1k;
+        if (item.answerKind == 'image' && imageRegion != null) {
+          answerImagePage ??= await _renderAnswerImagePage(doc, page);
+          imageCrop = _cropAnswerImage(answerImagePage ?? png, imageRegion);
+        }
         final resolvedAnswerText = item.answerText.trim().isNotEmpty
             ? item.answerText.trim()
             : (item.contentRegion1k != null ? '풀이 참조' : '');
@@ -612,12 +806,19 @@ class TextbookStageBatchService {
         if (resolvedAnswerText.isNotEmpty) {
           answerUploads.add(TextbookAnswerUpload(
             cropId: crop.id,
-            answerKind: item.answerKind,
+            answerKind: imageCrop == null && item.answerKind == 'image'
+                ? 'subjective'
+                : item.answerKind,
             answerText: resolvedAnswerText,
             answerLatex2d: resolvedAnswerLatex,
             answerSource: 'vlm',
             rawPage: page,
             displayPage: crop.displayPage,
+            bbox1k: imageCrop == null ? null : imageRegion,
+            answerImagePngBytes: imageCrop?.pngBytes,
+            answerImageRegion1k: imageCrop == null ? null : imageRegion,
+            answerImageWidthPx: imageCrop?.width,
+            answerImageHeightPx: imageCrop?.height,
             solutionMetadata: <String, dynamic>{
               'solution_kind': 'full',
               'item_role': role,
@@ -790,6 +991,7 @@ class TextbookStageBatchService {
     final answerUploads = <TextbookAnswerUpload>[];
     final refUploads = <TextbookSolutionRefUpload>[];
     final missing = <String>[];
+    final answerImagePages = <int, Uint8List?>{};
     for (var position = 0; position < targets.length; position += 1) {
       final target = targets[position];
       final hit = hits[position];
@@ -804,9 +1006,20 @@ class TextbookStageBatchService {
       }
       if (answers &&
           (item.answerText.isNotEmpty || item.answerLatex2d.isNotEmpty)) {
+        _ImageAnswerCrop? imageCrop;
+        final imageRegion = item.answerRegion1k;
+        if (item.answerKind == 'image' && imageRegion != null) {
+          final pagePng = answerImagePages.containsKey(hit.rawPage)
+              ? answerImagePages[hit.rawPage]
+              : (answerImagePages[hit.rawPage] =
+                  await _renderAnswerImagePage(doc, hit.rawPage));
+          if (pagePng != null) imageCrop = _cropAnswerImage(pagePng, imageRegion);
+        }
         answerUploads.add(TextbookAnswerUpload(
           cropId: target.id,
-          answerKind: item.answerKind,
+          answerKind: imageCrop == null && item.answerKind == 'image'
+              ? 'subjective'
+              : item.answerKind,
           answerText: item.answerText,
           answerLatex2d:
               item.answerLatex2d.isEmpty ? item.answerText : item.answerLatex2d,
@@ -814,6 +1027,10 @@ class TextbookStageBatchService {
           rawPage: hit.rawPage,
           displayPage: hit.rawPage,
           bbox1k: item.answerRegion1k ?? item.numberRegion1k,
+          answerImagePngBytes: imageCrop?.pngBytes,
+          answerImageRegion1k: imageCrop == null ? null : imageRegion,
+          answerImageWidthPx: imageCrop?.width,
+          answerImageHeightPx: imageCrop?.height,
           rubricSteps: item.rubricSteps,
           solutionMetadata: <String, dynamic>{
             'solution_kind': item.solutionKind,
@@ -852,6 +1069,18 @@ class TextbookStageBatchService {
       answerMissing: answers ? missing : const <String>[],
       solutionMissing: answers ? const <String>[] : missing,
     );
+  }
+
+  Future<Uint8List?> _renderAnswerImagePage(PdfDocument doc, int page) async {
+    try {
+      return await renderPdfPageToPng(
+        document: doc,
+        pageNumber: page,
+        longEdgePx: _answerImageLongEdgePx,
+      );
+    } catch (_) {
+      return null;
+    }
   }
 
   _ImageAnswerCrop? _cropAnswerImage(Uint8List pagePng, List<int> bbox1k) {

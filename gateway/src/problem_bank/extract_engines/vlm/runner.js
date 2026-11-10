@@ -21,7 +21,19 @@ import { createHash, randomUUID } from 'node:crypto';
 import sharp from 'sharp';
 import { callGeminiWithPdf } from './client.js';
 import { normalizeVlmQuestion, buildRowUpdate } from './writeback.js';
+import {
+  DEFAULT_TEXT_EM_1K,
+  buildPdfFigureLayout,
+  calibrateTextEm1k,
+  detectFigurePosition,
+} from './figure_geometry.js';
 import { normalizeProblemNumberKey } from '../../../textbook/problem_number_key.js';
+import {
+  keepQuestionsWithNumberKeys,
+  narrowCropIndexToNumbers,
+  problemNumberKeySet,
+  textbookOnlyNumbersFromJob,
+} from '../../textbook_only_numbers.js';
 
 const execFileAsync = promisify(execFileCb);
 
@@ -645,6 +657,26 @@ function propagateIndependentSetSharedFigures(rows) {
         .find(Boolean)
       || '';
     if (!commonCandidate) continue;
+    // 문항마다 자기 [그림] 자리가 있으면 문항별 그림 세트다("그림에서 l∥m일 때 ∠x를 구하여라" 형).
+    // 그림 검출이 첫 문항만 잡았더라도 그 그림을 공통 그림으로 삼으면 형제 문항에 남의 그림이 붙는다.
+    const membersWithStemFigure = members.filter((m) => /\[그림\]/.test(String(m?.stem || '')));
+    if (membersWithStemFigure.length >= 2) {
+      for (const member of members) {
+        const prevSet = member?.meta?.set_model;
+        if (!prevSet || typeof prevSet !== 'object') continue;
+        const cleaned = String(prevSet.common_stem || '')
+          .replace(/\s*\[그림\]\s*/g, '\n')
+          .replace(/\n{2,}/g, '\n')
+          .trim();
+        member.meta.set_model = {
+          ...prevSet,
+          common_stem: cleaned,
+          common_figure_assets: [],
+          common_figure_layout: null,
+        };
+      }
+      continue;
+    }
     const membersWithAssets = members.filter(
       (m) => Array.isArray(m?.meta?.figure_assets) && m.meta.figure_assets.length > 0,
     );
@@ -660,7 +692,7 @@ function propagateIndependentSetSharedFigures(rows) {
     const sharedLayout =
       donor?.meta?.figure_layout && typeof donor.meta.figure_layout === 'object'
         ? donor.meta.figure_layout
-        : buildDefaultPdfFigureLayout(sharedAssets);
+        : buildPdfFigureLayout(sharedAssets);
     const sharedCommonStem = /\[그림\]/.test(commonCandidate)
       ? commonCandidate
       : `${commonCandidate}\n[그림]`;
@@ -1372,6 +1404,7 @@ async function callGeminiChunkWithRetry({
             : 0,
           elapsedMs: result?.elapsedMs || 0,
           questionCount: chunkQuestions.length,
+          questionNumbers: foundQuestionNumbers(chunkQuestions).slice(0, 120),
           finishReason: result?.finishReason || '',
         });
       }
@@ -1566,6 +1599,7 @@ async function fetchTextbookCropPages({ supa, academyId, textbookScope, log = nu
           ? Number(crop.display_page)
           : null,
         problemLabel: compact(crop?.label),
+        itemRegion1k: parseBbox1k(crop?.item_region_1k),
         contentGroup: {
           kind: compact(crop?.content_group_kind),
           label: compact(crop?.content_group_label),
@@ -1822,38 +1856,87 @@ async function attachPdfFigureAssets({
   }
   if (assets.length === 0) return vlmQ;
 
+  const region1k = cropPage?.itemRegion1k || null;
+  let positions = [];
+  if (assets.length === 1 && region1k) {
+    try {
+      positions = [await detectFigurePosition(pagePng, assets[0].bbox_1k, region1k)];
+    } catch (_) {
+      positions = [];
+    }
+  }
+
   if (typeof log === 'function') {
     log('vlm_pdf_figure_crops_uploaded', {
       questionNumber: vlmQ?.question_number,
       rawPage,
       assetCount: assets.length,
+      position: positions[0] || null,
     });
   }
   return {
     ...(vlmQ || {}),
     pdf_figure_assets: assets,
+    pdf_figure_positions: positions,
+    pdf_figure_region_1k: region1k,
   };
 }
 
-function buildDefaultPdfFigureLayout(assets) {
-  const rows = Array.isArray(assets) ? assets : [];
-  const items = rows.map((asset, idx) => {
-    const figureIndex = Number.isFinite(Number(asset?.figure_index)) && Number(asset.figure_index) > 0
-      ? Number(asset.figure_index)
-      : idx + 1;
-    return {
-      assetKey: `idx:${figureIndex}`,
-      widthEm: rows.length >= 2 ? 12.0 : 20.0,
-      position: 'below-stem',
-      anchor: 'center',
-      offsetXEm: 0,
-      offsetYEm: 0,
-    };
-  });
-  const groups = items.length === 2
-    ? [{ type: 'horizontal', members: items.map((item) => item.assetKey), gap: 0.5 }]
-    : [];
-  return { version: 1, items, groups };
+// 같은 교재의 그림 문항 검수 결과(figure_size_ratio)로 본문 글자 크기(em1k)를 맞춘다. 표본이 부족하면 기본값.
+const TEXT_EM_1K_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const textEm1kCache = new Map();
+
+async function loadTextbookTextEm1k({ supa, academyId, textbookScope, log = null }) {
+  const bookId = compact(textbookScope?.book_id || textbookScope?.bookId);
+  if (!supa || !academyId || !bookId) return DEFAULT_TEXT_EM_1K;
+  const key = `${academyId}|${bookId}`;
+  const hit = textEm1kCache.get(key);
+  if (hit && Date.now() - hit.at < TEXT_EM_1K_CACHE_TTL_MS) return hit.value;
+  let value = DEFAULT_TEXT_EM_1K;
+  let sampleCount = 0;
+  try {
+    const { data: rows, error } = await supa
+      .from('textbook_problem_analyses')
+      .select('render_checks, textbook_problem_crops!inner(book_id, item_region_1k, pb_question_uid)')
+      .eq('academy_id', academyId)
+      .eq('textbook_problem_crops.book_id', bookId)
+      .not('render_checks->figure_size_ratio', 'is', null)
+      .limit(400);
+    if (error) throw new Error(error.message);
+    const byUid = new Map();
+    for (const r of rows || []) {
+      const crop = r?.textbook_problem_crops;
+      const uid = compact(crop?.pb_question_uid);
+      if (uid) byUid.set(uid, { ratio: Number(r?.render_checks?.figure_size_ratio), region1k: parseBbox1k(crop?.item_region_1k) });
+    }
+    const uids = Array.from(byUid.keys());
+    const samples = [];
+    for (let i = 0; i < uids.length; i += 150) {
+      const { data: qs, error: qErr } = await supa
+        .from('pb_questions')
+        .select('question_uid, figure_assets:meta->figure_assets, figure_layout:meta->figure_layout')
+        .in('question_uid', uids.slice(i, i + 150));
+      if (qErr) throw new Error(qErr.message);
+      for (const q of qs || []) {
+        const assets = Array.isArray(q?.figure_assets) ? q.figure_assets : [];
+        const items = Array.isArray(q?.figure_layout?.items) ? q.figure_layout.items : [];
+        if (assets.length !== 1 || items.length !== 1) continue;
+        const s = byUid.get(q.question_uid);
+        samples.push({ bbox1k: parseBbox1k(assets[0]?.bbox_1k), widthEm: Number(items[0]?.widthEm), ratio: s?.ratio, region1k: s?.region1k });
+      }
+    }
+    sampleCount = samples.length;
+    value = calibrateTextEm1k(samples) ?? DEFAULT_TEXT_EM_1K;
+  } catch (err) {
+    if (typeof log === 'function') {
+      log('vlm_text_em_calibration_failed', { bookId, message: compact(err?.message || err) });
+    }
+  }
+  if (typeof log === 'function') {
+    log('vlm_text_em_calibrated', { bookId, em1k: value, samples: sampleCount });
+  }
+  textEm1kCache.set(key, { value, at: Date.now() });
+  return value;
 }
 
 // 문항번호를 "숫자 조각 + 접두어" 로 쪼개 지면 순서대로 비교한다.
@@ -1939,6 +2022,7 @@ function toPayloadQuestion({
   textbookScope = null,
   sourcePageRange = null,
   slicedPageCount = null,
+  textEm1k = null,
 }) {
   const rebasedVlmQ = {
     ...(vlmQ || {}),
@@ -2020,7 +2104,12 @@ function toPayloadQuestion({
       ...(pdfFigureAssets.length > 0
         ? {
             figure_assets: pdfFigureAssets,
-            figure_layout: buildDefaultPdfFigureLayout(pdfFigureAssets),
+            figure_layout: buildPdfFigureLayout(pdfFigureAssets, {
+              em1k: textEm1k,
+              positions: Array.isArray(normalized?.pdf_figure_positions) ? normalized.pdf_figure_positions : [],
+              region1k: normalized?.pdf_figure_region_1k || null,
+              stem: update.stem,
+            }),
             figure_review_required: false,
             figure_last_generated_at: new Date().toISOString(),
             figure_crop_source: 'textbook_pdf_crop',
@@ -2032,6 +2121,48 @@ function toPayloadQuestion({
         : {}),
       ...(vlmQ?.textbook_crop_page ? { textbook_crop_page: vlmQ.textbook_crop_page } : {}),
       ...(vlmQ?.mock_exam_item ? { mock_exam_item: vlmQ.mock_exam_item } : {}),
+    },
+  };
+}
+
+function emptyVlmExtraction({ model, pdfInputs, originalPdfBuffer }) {
+  return {
+    built: {
+      questions: [],
+      stats: {
+        circledChoices: 0,
+        viewBlocks: 0,
+        figureLines: 0,
+        mockMarkers: 0,
+        csatMarkers: 0,
+        equationRefs: 0,
+        questionCount: 0,
+        sourceLineCount: 0,
+        segmentedLineCount: 0,
+        answerHintCount: 0,
+        lowConfidenceCount: 0,
+        examProfile: '',
+      },
+    },
+    parsed: { hints: { scoreHeaderCount: 0, previewLineCount: 0 } },
+    meta: {
+      engine: 'vlm',
+      model,
+      documentMeta: null,
+      pdfInput: {
+        originalBytes: originalPdfBuffer.length,
+        sentBytes: 0,
+        originalPageCount: pdfInputs.originalPageCount,
+        sentPageCount: 0,
+        pageRange: pdfInputs.fullPageRange,
+        chunked: false,
+        chunkCount: 0,
+        chunks: [],
+        preservesOriginalPages: true,
+      },
+      usage: null,
+      elapsedMs: 0,
+      finishReason: '',
     },
   };
 }
@@ -2079,7 +2210,7 @@ export async function runVlmExtraction({
     mockScope,
   });
 
-  const cropIndex = mockScope
+  const scopeCropIndex = mockScope
     ? await fetchMockItemIndex({ supa, mockScope, log })
     : await fetchTextbookCropPages({
         supa,
@@ -2088,6 +2219,18 @@ export async function runVlmExtraction({
         log,
       });
   const itemScoped = Boolean(textbookScope || mockScope);
+  if (
+    itemScoped &&
+    !(scopeCropIndex.byNumber instanceof Map && scopeCropIndex.byNumber.size > 0)
+  ) {
+    throw new Error(mockScope ? 'vlm_mock_item_scope_empty' : 'vlm_textbook_crop_scope_empty');
+  }
+  // 빠진 번호만 읽는 런은 대상 번호(와 같은 세트 번호)가 있는 쪽만 보낸다.
+  const onlyNumbers = textbookScope ? textbookOnlyNumbersFromJob(job) : [];
+  const onlyKeys = problemNumberKeySet(onlyNumbers);
+  const cropIndex = onlyKeys.size > 0
+    ? { ...scopeCropIndex, ...narrowCropIndexToNumbers(scopeCropIndex, onlyKeys) }
+    : scopeCropIndex;
   const cropPagesByNumber = cropIndex.byNumber instanceof Map
     ? cropIndex.byNumber
     : new Map();
@@ -2104,9 +2247,6 @@ export async function runVlmExtraction({
       input,
     );
   }
-  if (itemScoped && cropPagesByNumber.size === 0) {
-    throw new Error(mockScope ? 'vlm_mock_item_scope_empty' : 'vlm_textbook_crop_scope_empty');
-  }
   const extractionInputs = itemScoped
     ? pdfInputs.inputs.filter(
         (input) =>
@@ -2115,8 +2255,26 @@ export async function runVlmExtraction({
       )
     : pdfInputs.inputs;
   if (itemScoped && extractionInputs.length === 0) {
+    if (onlyKeys.size > 0) {
+      // 대상 번호가 이 문서의 쪽 범위·크롭에 없다. 지울 것도 쓸 것도 없다.
+      if (typeof log === 'function') {
+        log('vlm_only_numbers_out_of_scope', {
+          jobId: job.id,
+          documentId: job.document_id,
+          onlyQuestionNumbers: onlyNumbers,
+        });
+      }
+      return emptyVlmExtraction({ model, pdfInputs, originalPdfBuffer });
+    }
     throw new Error(mockScope ? 'vlm_mock_chunk_scope_empty' : 'vlm_textbook_chunk_scope_empty');
   }
+  const sentKeys = new Set();
+  for (const input of extractionInputs) {
+    for (const number of input.expectedQuestionNumbers || []) {
+      sentKeys.add(problemNumberKey(number));
+    }
+  }
+  const sentOnlyNumbers = onlyNumbers.filter((number) => sentKeys.has(problemNumberKey(number)));
 
   if (typeof log === 'function') {
     log('vlm_call_start', {
@@ -2144,6 +2302,7 @@ export async function runVlmExtraction({
           ? input.expectedIndependentSetRanges.length
           : 0,
       })),
+      ...(onlyNumbers.length > 0 ? { onlyQuestionNumbers: sentOnlyNumbers } : {}),
       model,
     });
   }
@@ -2247,9 +2406,11 @@ export async function runVlmExtraction({
     return na - nb;
   });
 
-  let lowConfidenceCount = 0;
   const payloadQuestionsRaw = [];
   const figurePagePngCache = new Map();
+  const textEm1k = textbookScope && ordered.some((q) => Array.isArray(q?.figures) && q.figures.length > 0)
+    ? await loadTextbookTextEm1k({ supa, academyId: job.academy_id, textbookScope, log })
+    : null;
   for (let idx = 0; idx < ordered.length; idx += 1) {
     const vlmQ = ordered[idx];
     const qKey = problemNumberKey(vlmQ?.question_number);
@@ -2312,17 +2473,22 @@ export async function runVlmExtraction({
       textbookScope,
       sourcePageRange: null,
       slicedPageCount: null,
+      textEm1k,
     });
-    if (Number(payload.confidence || 0) < Number(reviewConfidenceThreshold || 0.6)) {
-      lowConfidenceCount += 1;
-    }
     payloadQuestionsRaw.push(payload);
   }
-  const payloadQuestions = normalizeIndependentSetPayloadQuestions(
+  const normalizedQuestions = normalizeIndependentSetPayloadQuestions(
     payloadQuestionsRaw,
     textbookScope,
     setHeaderRanges,
   );
+  // 세트 정리에 쓴 형제 번호는 여기서 뺀다. 이미 본문이 있는 문항이다.
+  const payloadQuestions = onlyKeys.size > 0
+    ? keepQuestionsWithNumberKeys(normalizedQuestions, onlyKeys)
+    : normalizedQuestions;
+  const lowConfidenceCount = payloadQuestions.filter(
+    (q) => Number(q.confidence || 0) < Number(reviewConfidenceThreshold || 0.6),
+  ).length;
 
   const stats = {
     circledChoices: payloadQuestions.filter(

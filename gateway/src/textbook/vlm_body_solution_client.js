@@ -149,9 +149,10 @@ function buildWonriMiddleBodySolutionsPrompt({
     '  "items": [',
     '    {',
     '      "problem_number": "<기대 번호와 같은 표기. 예: 01 또는 예제 1>",',
-    '      "answer_kind": "objective" | "subjective",',
+    '      "answer_kind": "objective" | "subjective" | "image",',
     '      "answer_text": "<최종 답만. 수식은 LaTeX>",',
     '      "answer_latex_2d": "<2D 렌더용 LaTeX 또는 빈 문자열>",',
+    '      "answer_region": [<ymin>, <xmin>, <ymax>, <xmax>] | null,',
     '      "number_region": [<ymin>, <xmin>, <ymax>, <xmax>],',
     '      "content_region": [<ymin>, <xmin>, <ymax>, <xmax>]',
     '    }',
@@ -163,6 +164,9 @@ function buildWonriMiddleBodySolutionsPrompt({
     '[M2] 문제 본문, 이웃 확인·유제, 다음 예제는 포함하지 마라.',
     '[M3] 기대 번호에 없는 확인·유제를 순서상 추측해 만들지 마라.',
     '[M4] 좌표는 [ymin,xmin,ymax,xmax], 0..1000 기준이다.',
+    '[M5] 최종 답이 그래프·도형·표 그림이라 글자로 옮길 수 없으면',
+    '     answer_kind="image", answer_text="[image]"로 두고 answer_region은 그 그림',
+    '     답 전체만 감싼다. 글자 답이면 answer_region은 null이다.',
   ].join('\n');
 }
 
@@ -434,14 +438,19 @@ export function normalizeBodySolutionsResult(parsedJson) {
     const number = String(raw.problem_number ?? raw.number ?? '').trim();
     if (!number) continue;
     const kindRaw = String(raw.answer_kind || '').trim();
-    const kind = ['objective', 'subjective'].includes(kindRaw)
-      ? kindRaw
-      : 'subjective';
+    const answerRegion = parseBbox4(raw.answer_region);
+    const kind =
+      kindRaw === 'image' && answerRegion
+        ? 'image'
+        : ['objective', 'subjective'].includes(kindRaw)
+          ? kindRaw
+          : 'subjective';
     out.items.push({
       problem_number: number,
       answer_kind: kind,
       answer_text: String(raw.answer_text || '').trim(),
       answer_latex_2d: String(raw.answer_latex_2d || '').trim(),
+      ...(kind === 'image' ? { answer_region: answerRegion } : {}),
       number_region: parseBbox4(raw.number_region ?? raw.number_bbox),
       content_region: parseBbox4(raw.content_region ?? raw.content_bbox),
     });

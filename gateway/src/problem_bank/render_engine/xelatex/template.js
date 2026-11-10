@@ -4642,9 +4642,27 @@ function renderOneQuestion(question, {
   const imageChoiceStemFigureCount = isImageChoice
     ? ((String(question?.stem || '').match(FIGURE_MARKER_RE) || []).length)
     : 0;
-  const rawStem = (isImageChoice && imageChoiceStemFigureCount === 0)
-    ? stripImageChoiceFigureMarkers(question?.stem || '')
-    : (question?.stem || '');
+  const rawStemForSet = (() => {
+    const src = (isImageChoice && imageChoiceStemFigureCount === 0)
+      ? stripImageChoiceFigureMarkers(question?.stem || '')
+      : (question?.stem || '');
+    const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
+    const delivery = meta.delivery_unit && typeof meta.delivery_unit === 'object' ? meta.delivery_unit : {};
+    const model = meta.set_model && typeof meta.set_model === 'object' ? meta.set_model : {};
+    const isIndSet =
+      String(delivery.delivery_type || '').trim() === 'independent_item' ||
+      String(model.set_type || '').trim() === 'independent_set';
+    const commonStem = String(
+      delivery.common_stem || model.common_stem || model.commonStem || '',
+    ).trim();
+    if (!isIndSet || !commonStem) return src;
+    const escaped = commonStem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const stripped = String(src || '')
+      .replace(new RegExp(`^\\s*${escaped}\\s*(?:\\[문단\\]\\s*)*`), '')
+      .trim();
+    return stripped;
+  })();
+  const rawStem = rawStemForSet;
   const metaAligns = (() => {
     const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
     if (Array.isArray(meta.stem_line_aligns)) return meta.stem_line_aligns;

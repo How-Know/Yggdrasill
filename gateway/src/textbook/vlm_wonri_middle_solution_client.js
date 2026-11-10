@@ -130,7 +130,7 @@ export function buildWonriMiddleQuickAnswerPrompt({
     '      "category": "<middle_* category>",',
     '      "expected_index": <기대 목록 인덱스>,',
     '      "item_role": "standard" | "follow_up",',
-    '      "answer_kind": "objective" | "subjective",',
+    '      "answer_kind": "objective" | "subjective" | "image",',
     '      "answer_text": "<빠른 정답 박스의 최종 답만>",',
     '      "answer_latex_2d": "<2D LaTeX 또는 빈 문자열>",',
     '      "solution_kind": "answer_only",',
@@ -161,6 +161,9 @@ export function buildWonriMiddleQuickAnswerPrompt({
     '원문자 ①~⑤(객관식 번호)와 맨 숫자 1~5(값)는 서로 다른 답이다. 인쇄된',
     '모양 그대로 옮겨라. 이웃 줄이 원문자라고 해서 맨 숫자를 원문자로 바꾸지 마라.',
     '"풀이 참조"도 정상 정답 문자열로 보존한다. 보이지 않는 답은 추측하지 마라.',
+    '정답이 그래프·도형·표 그림으로만 인쇄되어 글자로 옮길 수 없으면',
+    'answer_kind="image", answer_text="[image]"로 두고 answer_region은 그 그림',
+    '정답 전체(축·눈금·라벨 포함)를 감싼다. 번호나 이웃 답은 넣지 마라.',
   ].join('\n');
 }
 
@@ -328,7 +331,7 @@ export function buildWonriMiddleSolutionPrompt({
     '      "category": "<위 middle_* category 또는 빈 문자열>",',
     '      "expected_index": <기대 목록의 대괄호 인덱스. 확정 못 하면 -1>,',
     '      "item_role": "standard" | "representative" | "follow_up" | "descriptive_example",',
-    '      "answer_kind": "objective" | "subjective",',
+    '      "answer_kind": "objective" | "subjective" | "image",',
     '      "answer_text": "<최종 정답만. 수식은 LaTeX>",',
     '      "answer_latex_2d": "<2D 렌더용 LaTeX. 불필요하면 빈 문자열>",',
     '      "solution_kind": "full" | "answer_only",',
@@ -366,6 +369,9 @@ export function buildWonriMiddleSolutionPrompt({
     '[S9] 좌표계는 좌상단 (0,0), 우하단 (1000,1000),',
     '     [ymin, xmin, ymax, xmax] 순서다.',
     '[S10] 보이지 않는 문항·정답·배점을 추측하지 마라.',
+    '[S11] 최종 정답이 그래프·도형·표 그림이라 글자로 옮길 수 없으면',
+    '      answer_kind="image", answer_text="[image]"로 두고 answer_region은',
+    '      그 그림 정답 전체만 감싼다.',
     '',
     '지금 첨부된 이미지를 분석해 JSON만 출력하라.',
   ].join('\n');
@@ -939,9 +945,12 @@ export function normalizeWonriMiddleSolutionResult(parsedJson) {
       ].includes(itemRoleRaw)
         ? itemRoleRaw
         : 'standard',
-      answer_kind: ['objective', 'subjective'].includes(answerKindRaw)
-        ? answerKindRaw
-        : 'subjective',
+      answer_kind:
+        answerKindRaw === 'image' && answerRegion
+          ? 'image'
+          : ['objective', 'subjective'].includes(answerKindRaw)
+            ? answerKindRaw
+            : 'subjective',
       answer_text: String(raw.answer_text || '').trim(),
       answer_latex_2d: String(raw.answer_latex_2d || '').trim(),
       solution_kind: solutionKind,

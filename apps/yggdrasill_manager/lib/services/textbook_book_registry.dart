@@ -670,6 +670,37 @@ class TextbookBookRegistry {
           onConflict: 'academy_id,book_id,grade_label',
         );
   }
+
+  /// 3단계에서 확정한 소단원('big/mid/sub_key')을 payload `auto_analyzed_scopes` 에 남기거나 뺀다.
+  /// 교재 탭 진행률이 이 키로 확정 수를 센다.
+  Future<void> setScopeConfirmed({
+    required String academyId,
+    required String bookId,
+    required String gradeLabel,
+    required String scopeKey,
+    required bool confirmed,
+  }) async {
+    final match = <String, Object>{
+      'academy_id': academyId,
+      'book_id': bookId,
+      'grade_label': gradeLabel,
+    };
+    final row = await _supa.from('textbook_metadata').select('payload').match(match).maybeSingle();
+    if (row == null) return;
+    final payload = row['payload'] is Map ? Map<String, dynamic>.from(row['payload'] as Map) : <String, dynamic>{};
+    final scopes = <String, String>{
+      if (payload['auto_analyzed_scopes'] is Map)
+        for (final e in (payload['auto_analyzed_scopes'] as Map).entries)
+          if ('${e.value ?? ''}'.trim().isNotEmpty) '${e.key}'.trim(): '${e.value}'.trim(),
+    };
+    if (confirmed) {
+      scopes[scopeKey] = DateTime.now().toUtc().toIso8601String();
+    } else {
+      scopes.remove(scopeKey);
+    }
+    payload['auto_analyzed_scopes'] = scopes;
+    await _supa.from('textbook_metadata').update({'payload': payload}).match(match);
+  }
 }
 
 bool _looksRemote(String value) {

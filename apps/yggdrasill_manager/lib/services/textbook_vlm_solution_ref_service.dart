@@ -534,11 +534,12 @@ class TextbookVlmBodySolutionItem {
     required this.answerLatex2d,
     required this.numberRegion1k,
     this.contentRegion1k,
+    this.answerRegion1k,
   });
 
   final String problemNumber;
 
-  /// 'objective' | 'subjective'
+  /// 'objective' | 'subjective' | 'image'(그림 정답, [answerRegion1k] 가 있을 때만)
   final String answerKind;
   final String answerText;
   final String answerLatex2d;
@@ -546,6 +547,9 @@ class TextbookVlmBodySolutionItem {
 
   /// "풀이" 단락 전체 bbox — [ymin, xmin, ymax, xmax] in 0..1000.
   final List<int>? contentRegion1k;
+
+  /// 그림 정답 영역. 글자 정답이면 null.
+  final List<int>? answerRegion1k;
 
   factory TextbookVlmBodySolutionItem.fromMap(Map<String, dynamic> map) {
     int? asIntN(dynamic v) {
@@ -567,13 +571,16 @@ class TextbookVlmBodySolutionItem {
     }
 
     final kindRaw = '${map['answer_kind'] ?? ''}'.trim();
+    final answerRegion = parseBbox(map['answer_region']);
+    final isImage = kindRaw == 'image' && answerRegion != null;
     return TextbookVlmBodySolutionItem(
       problemNumber: '${map['problem_number'] ?? ''}'.trim(),
-      answerKind: kindRaw == 'objective' ? 'objective' : 'subjective',
+      answerKind: isImage ? 'image' : (kindRaw == 'objective' ? 'objective' : 'subjective'),
       answerText: '${map['answer_text'] ?? ''}'.trim(),
       answerLatex2d: '${map['answer_latex_2d'] ?? ''}'.trim(),
       numberRegion1k: parseBbox(map['number_region']) ?? const [0, 0, 0, 0],
       contentRegion1k: parseBbox(map['content_region']),
+      answerRegion1k: isImage ? answerRegion : null,
     );
   }
 }
@@ -695,18 +702,21 @@ class TextbookVlmWonriMiddleSolutionItem {
     }
 
     final rawSteps = (map['rubric_steps'] as List?) ?? const <dynamic>[];
+    final answerRegion = bbox(map['answer_region']);
+    final kindRaw = '${map['answer_kind']}';
     return TextbookVlmWonriMiddleSolutionItem(
       problemNumber: '${map['problem_number'] ?? ''}'.trim(),
       category: '${map['category'] ?? ''}'.trim(),
       expectedIndex: asInt(map['expected_index'], -1),
       itemRole: '${map['item_role'] ?? 'standard'}'.trim(),
-      answerKind:
-          '${map['answer_kind']}' == 'objective' ? 'objective' : 'subjective',
+      answerKind: kindRaw == 'image' && answerRegion != null
+          ? 'image'
+          : (kindRaw == 'objective' ? 'objective' : 'subjective'),
       answerText: '${map['answer_text'] ?? ''}'.trim(),
       answerLatex2d: '${map['answer_latex_2d'] ?? ''}'.trim(),
       solutionKind:
           '${map['solution_kind']}' == 'answer_only' ? 'answer_only' : 'full',
-      answerRegion1k: bbox(map['answer_region']),
+      answerRegion1k: answerRegion,
       numberRegion1k: bbox(map['number_region']) ?? const <int>[0, 0, 0, 0],
       contentRegion1k: bbox(map['content_region']) ?? const <int>[0, 0, 0, 0],
       rubricSteps: <Map<String, dynamic>>[

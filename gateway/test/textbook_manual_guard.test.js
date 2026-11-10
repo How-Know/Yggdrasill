@@ -5,7 +5,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  dropRowsCoveredByManualCrops,
   fetchManualMarkers,
+  isMissingRegionSourceColumn,
   partitionStaleCrops,
   skippedCropIds,
 } from '../src/textbook/manual_guard.js';
@@ -79,6 +81,53 @@ test('문제은행이 걸린 크롭과 사람이 고친 자료가 있는 크롭�
       5: ['pb_question', 'manual_answer'],
     },
   );
+});
+
+test('사람이 추가하거나 고친 크롭은 범위 동기화가 지우지 않는다', () => {
+  const markers = { manualAnswer: new Set(), manualSolution: new Set(), questionLink: new Set() };
+  const out = partitionStaleCrops(
+    [
+      { id: 'c1', problem_number: '1', region_source: 'manual' },
+      { id: 'c2', problem_number: '2', region_source: 'vlm' },
+      { id: 'c3', problem_number: '3' },
+    ],
+    markers,
+  );
+  assert.deepEqual(out.deletable.map((row) => row.id), ['c2', 'c3']);
+  assert.deepEqual(out.manualNumbers, ['1']);
+  assert.deepEqual(out.kept[0].reasons, ['manual_crop']);
+});
+
+test('AI 재분석 저장은 수동 크롭과 번호가 겹치는 행만 뺀다', () => {
+  const rows = [
+    { problem_number: '1', region_source: 'vlm' },
+    { problem_number: '2' },
+    { problem_number: '3', region_source: 'manual' },
+    { problem_number: '4' },
+  ];
+  const out = dropRowsCoveredByManualCrops(rows, ['2', '3', ' 9 ']);
+  assert.deepEqual(out.rows.map((row) => row.problem_number), ['1', '3', '4']);
+  assert.deepEqual(out.skippedNumbers, ['2']);
+  assert.deepEqual(dropRowsCoveredByManualCrops(rows, []).rows.length, 4);
+});
+
+test('region_source 컬럼이 없는 DB 오류만 마이그레이션 전으로 본다', () => {
+  assert.equal(
+    isMissingRegionSourceColumn({ code: '42703', message: 'column textbook_problem_crops.region_source does not exist' }),
+    true,
+  );
+  assert.equal(isMissingRegionSourceColumn({ code: '57014', message: 'statement timeout' }), false);
+  assert.equal(isMissingRegionSourceColumn({ code: '42703', message: 'column foo does not exist' }), false);
+});
+
+test('크롭 저장은 수동 크롭을 확인한 뒤 남은 행만 저장한다', () => {
+  const start = apiSource.indexOf('async function handleTextbookCropsBatchUpsert');
+  const end = apiSource.indexOf('\n}\n', start);
+  const handler = apiSource.slice(start, end);
+  assert.match(handler, /\.eq\("region_source", "manual"\)/);
+  assert.match(handler, /dropRowsCoveredByManualCrops\(/);
+  assert.match(handler, /\.upsert\(upsertRows,/);
+  assert.equal(/\.upsert\(rows,/.test(handler), false);
 });
 
 test('표시는 세 표에서 200개씩 나눠 읽고, 수동 행만 고른다', async () => {

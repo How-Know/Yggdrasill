@@ -5,7 +5,9 @@ import {
   commonStemFix,
   effectiveSolution,
   figureMarkerCount,
+  figureReviewVerdict,
   figureSizeRatioOk,
+  foldCommonStemIntoStem,
   isCorruptedCommonStem,
   isDataFixableSymptom,
   isFalseBlankComplaint,
@@ -16,11 +18,46 @@ import {
   normalizeIssueKind,
   normalizeProposedChoices,
   parseReviewImages,
+  pbQuestionHasFigures,
   sanitizeProblemMarkup,
   stripCommonStem,
+  stripGuidedSolution,
+  withoutDependentSetCommonStem,
 } from './textbook_problem_review.ts';
 
 const CROP = '0f6a2c1e-7b3d-4e8f-9a1b-2c3d4e5f6a7b';
+
+Deno.test('종속형 세트는 공통 발문을 따로 넘기지 않고, 공통 지시문 제안은 본문 앞에 붙인다', () => {
+  const dep = withoutDependentSetCommonStem({ set_type: 'dependent_set', common_stem: '다음을 읽고, 물음에 답하여라.', stem: '1) 표를 채워라.' });
+  assertEquals(dep.common_stem, '');
+  const ind = withoutDependentSetCommonStem({ set_type: 'independent_set', common_stem: '다음 수의 약수를 구하여라.', stem: '7' });
+  assertEquals(ind.common_stem, '다음 수의 약수를 구하여라.');
+  assertEquals(foldCommonStemIntoStem('다음을 읽고, 물음에 답하여라.', '1) 표를 채워라.'), '다음을 읽고, 물음에 답하여라.\n[문단]\n1) 표를 채워라.');
+  const already = '다음을 읽고, 물음에 답하여라.\n[문단]\n1) 표를 채워라.';
+  assertEquals(foldCommonStemIntoStem('다음을 읽고, 물음에 답하여라.', already), already);
+});
+
+Deno.test("'해' 빈칸 풀이 안내와 그것만 감싼 상자를 본문에서 빼고 뒤 소문항은 남긴다", () => {
+  const stem = [
+    '다음을 읽고, 물음에 답하여라.', '[문단]', '[박스시작]', '포도를 x\\text{ kg} 산다.', '[박스끝]', '[문단]',
+    '2) 5\\text{ kg} 살 때 금액을 구하여라.', '[문단]', '[박스시작]', '해 y=box{~~}에 x=5를 대입하면', '[문단]',
+    'y=box{~~}\\times 5', '[문단]', '3) 6000원일 때 몇 kg 산 것인지 구하여라.', '[문단]',
+    '해 y=box{~~}에 y=6000을 대입하면', '[박스끝]',
+  ].join('\n');
+  assertEquals(
+    stripGuidedSolution(stem),
+    [
+      '다음을 읽고, 물음에 답하여라.', '[문단]', '[박스시작]', '포도를 x\\text{ kg} 산다.', '[박스끝]', '[문단]',
+      '2) 5\\text{ kg} 살 때 금액을 구하여라.', '[문단]', '3) 6000원일 때 몇 kg 산 것인지 구하여라.',
+    ].join('\n'),
+  );
+  const unboxed = '1) 관계식을 구하여라.\n[문단]\n해 y=ax 꼴이다.\n[문단]\n[소문항2]\n2) 거리를 구하여라.';
+  assertEquals(stripGuidedSolution(unboxed), '1) 관계식을 구하여라.\n[문단]\n[소문항2]\n2) 거리를 구하여라.');
+  const inline = '\\overline{AB}=□\\,\\overline{NM}[문단][박스시작]\n해 점 N은 중점이므로 □배이다.[문단]\\therefore □\n[박스끝]';
+  assertEquals(stripGuidedSolution(inline), '\\overline{AB}=□\\,\\overline{NM}');
+  const plain = '해 뜨는 시각을 x라 할 때\n[문단]\n[박스시작]\n해마다 1분씩 늦어진다.\n[박스끝]';
+  assertEquals(stripGuidedSolution(plain), plain);
+});
 
 Deno.test('해설 크롭 base64 와 V2 서명 URL 만 받는다 (잘못된 키·형식은 버린다)', () => {
   const m = parseReviewImages({
@@ -153,6 +190,15 @@ Deno.test('그림 문항 판별: 그림 자산·[그림] 마커·AI figure 판�
   assert(!itemHasFigures({ pb_figure_assets: [], stem: '그림 없는 문항' }, { issue_kind: 'none', figure_ok: true }));
 });
 
+Deno.test('문제은행 문항 그림 유무: 표만 있는 문항은 그림 문항이 아니다', () => {
+  const table = '다음 표를 완성하여라.[표시작]\\begin{tabular}{|c|c|}\\hline x & y \\\\ \\hline\\end{tabular}[표끝]';
+  assert(!pbQuestionHasFigures({ stem: table, meta: { figure_assets: [] } }));
+  assert(!pbQuestionHasFigures({ stem: table, meta: null }));
+  assert(pbQuestionHasFigures({ stem: 'x', meta: { figure_assets: [{ figure_index: 1, path: 'a.png' }] } }));
+  assert(pbQuestionHasFigures({ stem: '오른쪽 그림에서[그림]', meta: {} }));
+  assert(pbQuestionHasFigures({ stem: 'x', meta: { common_stem: '다음 그림을 보고[그림]' } }));
+});
+
 Deno.test('빈칸형 문항 판별 및 빈칸 오판 필터링: 발문·수식의 □ 빈칸은 정상으로 보고 실제 마크업 노출만 오류로 남긴다', () => {
   assert(isFillInBlankProblem('', '90을 소인수분해 하는 과정이다. □ 안에 알맞은 수를 써넣어라.\n[그림]\n$\\Rightarrow 90 = 2 \\times \\square \\times 5$'));
   assert(isFillInBlankProblem('다음 표의 빈칸에 알맞은 수를 써넣어라.', '15=3\\times5'));
@@ -278,6 +324,23 @@ Deno.test('렌더 엔진 문법 정규화(sanitizeProblemMarkup)와 데이터 �
   assert(isDataFixableSymptom('계산 단계의 한글 표지 누락', '(가), (나)가 빈 괄호로 보임', null));
   assert(isDataFixableSymptom(null, null, '저장된 common_stem 대신 개별 계산식을 표시하여 공통 지시문이 누락되고 계산식이 두 번 표시됨.'));
   assert(!isDataFixableSymptom('분수 기호 세로 겹침', '분자와 분모가 겹쳐 보임', '분수 겹침', '\\frac{1}{2}', ''));
+});
+
+Deno.test('그림 문항은 원본과 대조해 크기 비율·위치가 맞을 때만 1차 검수를 통과한다', () => {
+  assert(figureReviewVerdict({ hasFigures: false, originalCompared: false, positionOk: null, sizeRatio: null }).verified);
+
+  const ok = figureReviewVerdict({ hasFigures: true, originalCompared: true, positionOk: true, sizeRatio: 1.04 });
+  assertEquals([ok.verified, ok.sizeRatio, ok.issueTitle], [true, 1.04, null]);
+
+  const big = figureReviewVerdict({ hasFigures: true, originalCompared: true, positionOk: true, sizeRatio: 1.8 });
+  assertEquals([big.verified, big.sizeRatio], [false, 1.8]);
+  assert(big.issueTitle?.includes('1.8'));
+
+  assertEquals(figureReviewVerdict({ hasFigures: true, originalCompared: true, positionOk: false, sizeRatio: 1 }).verified, false);
+  assertEquals(figureReviewVerdict({ hasFigures: true, originalCompared: true, positionOk: true, sizeRatio: null }).verified, false);
+
+  const noOriginal = figureReviewVerdict({ hasFigures: true, originalCompared: false, positionOk: true, sizeRatio: 1 });
+  assertEquals([noOriginal.verified, noOriginal.sizeRatio], [false, null]);
 });
 
 

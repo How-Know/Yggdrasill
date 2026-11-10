@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -288,6 +289,92 @@ List<int>? cropBoxToPageRegion(List<int> region1k, List<int> box, {int margin = 
     region1k[0] + (b2 * h / 1000).ceil(),
     region1k[1] + (b3 * w / 1000).ceil(),
   ];
+}
+
+/// 원본 해설에 그림이 있을 수 있다는 표시: [그림] 표시, "그림과 같다", "그래프는 오른쪽과 같다" 등.
+final RegExp kSolutionFigureHintPattern = RegExp(r'그림|그래프[는를은]?\s*(?:오른쪽|아래|다음)|(?:오른쪽|아래)과\s*같');
+
+/// 해설 전사본의 그림 표시. 예전 전사본의 [그림: 설명] 도 같은 표시로 본다(Edge SOLUTION_FIGURE_MARKER_RE 와 같은 규칙).
+final RegExp kSolutionFigureMarkerRe = RegExp(r'\[그림(?:\s*:[^\]]*)?\]');
+
+/// 해설 PDF 쪽 폭(1000) 기준 본문 글자 1em. 해설 그림 폭(em)을 원본 글자 대비 크기로 정할 때 쓴다.
+const double kSolutionTextEm1k = 17.5;
+
+/// 해설 쪽 영역 폭(0..1000)을 V2 그림 폭(em)으로 바꾼다.
+double solutionFigureWidthEm(List<int> pageRegion1k) {
+  if (pageRegion1k.length != 4) return 10;
+  final em = (pageRegion1k[3] - pageRegion1k[1]) / kSolutionTextEm1k;
+  return (em.clamp(4.0, 20.0) * 2).round() / 2;
+}
+
+/// 정답+해설 V2 카드 본문과 그림 메타. 그림 정답은 정답 자리에, 원본 해설 그림은 해설의 [그림] 자리에 넣는다.
+/// 해설의 그림 표시가 그림 수보다 모자라면 남은 그림을 해설 끝에 붙이고, 그림이 없는 표시는 지운다.
+({String stem, Map<String, dynamic> meta}) buildAnswerSolutionCardContent({
+  required String answer,
+  required String solution,
+  required String solutionKind,
+  String answerImageBucket = '',
+  String answerImagePath = '',
+  List<Map<String, dynamic>> solutionFigures = const [],
+}) {
+  final assets = <Map<String, dynamic>>[];
+  final layoutItems = <Map<String, dynamic>>[];
+  void addFigure(Map<String, dynamic> asset, double widthEm, String anchor) {
+    final idx = assets.length + 1;
+    assets.add({...asset, 'figure_index': idx, 'approved': true});
+    layoutItems.add({
+      'assetKey': 'idx:$idx',
+      'widthEm': widthEm,
+      'position': 'below-stem',
+      'anchor': anchor,
+      'offsetXEm': 0,
+      'offsetYEm': 0,
+    });
+  }
+
+  final buf = StringBuffer();
+  final hasAnswerImage = answerImageBucket.isNotEmpty && answerImagePath.isNotEmpty;
+  if (hasAnswerImage) {
+    buf.write('정답[문단][그림]');
+    addFigure({'bucket': answerImageBucket, 'path': answerImagePath, 'mime_type': 'image/png'}, 10, 'left');
+  } else if (answer.isNotEmpty) {
+    buf.write('정답  $answer');
+  }
+
+  var sol = solution;
+  if (sol.isNotEmpty) {
+    final figures = solutionKind == 'ai' ? const <Map<String, dynamic>>[] : solutionFigures;
+    var used = 0;
+    sol = sol.replaceAllMapped(kSolutionFigureMarkerRe, (_) {
+      if (used >= figures.length) return '';
+      used++;
+      return '[문단][그림][문단]';
+    });
+    for (var i = used; i < figures.length; i++) {
+      sol = '$sol[문단][그림]';
+    }
+    for (final f in figures) {
+      final w = (f['width_em'] as num?)?.toDouble() ?? 10;
+      addFigure({
+        'bucket': '${f['bucket'] ?? ''}',
+        'path': '${f['path'] ?? ''}',
+        'mime_type': '${f['mime_type'] ?? 'image/png'}',
+      }, w, 'center');
+    }
+    if (buf.isNotEmpty) buf.write('[문단]');
+    buf.write(solutionKind == 'ai' ? '[AI 풀이]' : '[해설]');
+    buf.write('[문단]');
+    buf.write(sol);
+  }
+  return (
+    stem: buf.toString(),
+    meta: assets.isEmpty
+        ? const <String, dynamic>{}
+        : {
+            'figure_assets': assets,
+            'figure_layout': {'version': 1, 'items': layoutItems, 'groups': const []},
+          },
+  );
 }
 
 /// figure_layout 항목 목록(assetKey 별 widthEm·position·anchor·offset). 없으면 빈 목록.
@@ -605,6 +692,10 @@ class TextbookProblemReviewItem {
     this.pbFigureLayout = const {},
     this.answerRawPage,
     this.answerBbox1k = const [],
+    this.answerImageBucket = '',
+    this.answerImagePath = '',
+    this.solutionFigureAssets = const [],
+    this.solutionFiguresCheckedAt,
   });
 
   factory TextbookProblemReviewItem.fromJson(Map<String, dynamic> m) {
@@ -641,7 +732,8 @@ class TextbookProblemReviewItem {
           if (x is num) x.toInt(),
       ],
       stem: '${m['stem'] ?? ''}',
-      commonStem: '${m['common_stem'] ?? ''}'.trim(),
+      // 종속형 세트는 본문(stem)만 그려지므로 공통 발문을 따로 두지 않는다(Edge withoutDependentSetCommonStem 과 같다).
+      commonStem: '${m['set_type'] ?? ''}'.trim() == 'dependent_set' ? '' : '${m['common_stem'] ?? ''}'.trim(),
       setType: '${m['set_type'] ?? ''}'.trim(),
       setHeaderNumber: '${m['set_header_number'] ?? ''}'.trim(),
       questionType: '${m['question_type'] ?? ''}',
@@ -669,6 +761,11 @@ class TextbookProblemReviewItem {
           m['pb_figure_layout'] is Map ? Map<String, dynamic>.from(m['pb_figure_layout'] as Map) : const <String, dynamic>{},
       answerRawPage: (m['answer_raw_page'] as num?)?.toInt(),
       answerBbox1k: ints(m['answer_bbox_1k']),
+      answerImageBucket: '${m['answer_image_bucket'] ?? ''}'.trim(),
+      answerImagePath: '${m['answer_image_path'] ?? ''}'.trim(),
+      solutionFigureAssets: mapList(m['solution_figure_assets']),
+      solutionFiguresCheckedAt:
+          m['solution_figures_checked_at'] is String ? DateTime.tryParse('${m['solution_figures_checked_at']}') : null,
       solutionTranscribed: m['solution_transcribed'] is String
           ? cleanSolutionTranscribedText(
               '${m['solution_transcribed']}',
@@ -837,6 +934,30 @@ class TextbookProblemReviewItem {
   final int? answerRawPage;
   final List<int> answerBbox1k;
 
+  /// 그림 정답(answer_kind == 'image')을 정답 PDF 에서 잘라 둔 이미지
+  final String answerImageBucket;
+  final String answerImagePath;
+
+  /// 원본 해설 속 그림(해설 PDF 에서 잘라 둠). 전사본의 [그림] 표시 순서와 figure_index 가 대응한다.
+  final List<Map<String, dynamic>> solutionFigureAssets;
+
+  /// 해설 그림 찾기를 마친 시각(그림이 없어도 기록)
+  final DateTime? solutionFiguresCheckedAt;
+
+  bool get hasAnswerImage => answerKind == 'image' && answerImageBucket.isNotEmpty && answerImagePath.isNotEmpty;
+
+  /// 정답+해설 카드 캐시 키 원문(글자·그림 정답·해설 그림이 바뀌면 달라진다)
+  String get answerSolutionCardSource => '$displayAnswer\n$primarySolutionText\n'
+      '${hasAnswerImage ? answerImagePath : ''}\n'
+      '${solutionFigureAssets.map((a) => '${a['path']}:${a['width_em']}').join(',')}';
+
+  /// 원본 해설에 그림이 있을 수 있는데(그림을 가리키는 문장·[그림] 표시) 아직 해설 PDF 에서 그림을 찾지 않은 문항
+  bool get needsSolutionFigures =>
+      solutionFiguresCheckedAt == null &&
+      canCropSolution &&
+      hasOriginalSolution &&
+      kSolutionFigureHintPattern.hasMatch(solutionTranscribed!);
+
   bool get canRenderOriginal => rawPage > 0 && itemRegion1k.length == 4;
   bool get canRenderSetHeader => (setHeaderRawPage ?? 0) > 0 && setHeaderRegion1k.length == 4;
   bool get canCropAnswer => (answerRawPage ?? 0) > 0 && answerBbox1k.length == 4;
@@ -928,6 +1049,10 @@ class TextbookProblemReviewItem {
   /// 원본과 직접 대조한 V2 렌더 검수를 했는가
   bool get originalCompared => renderChecks['original_compared'] == true;
 
+  /// 문제가 그림 크기뿐인 품질 오류. 잰 비율로 폭을 바로 고치면 되므로 원본 대조 수정안을 만들 필요가 없다.
+  bool get figureSizeOnlyIssue =>
+      qualityStatus == 'issue' && figureNeedsResize && issueKind == 'figure' && mathStatus != 'issue' && !solutionVisionFailed;
+
   /// 승인한 뒤 원본 대조에서 차이가 나온 문항(승인은 유지)
   bool get approvedButDiffers => qualityStatus == 'approved' && renderChecks['flagged_after_approval'] == true;
 
@@ -975,8 +1100,8 @@ class TextbookProblemReviewItem {
     final pStem = proposedStem?.trim();
     final pCommon = proposedCommonStem?.trim();
     if (pStem == null && pCommon == null) return false;
-    final stemMatches = pStem == null || pStem == stem.trim();
-    final commonMatches = pCommon == null || pCommon == commonStem.trim();
+    final stemMatches = pStem == null || sameRenderedMath(pStem, stem);
+    final commonMatches = pCommon == null || sameRenderedMath(pCommon, commonStem);
     return stemMatches && commonMatches;
   }
 
@@ -986,10 +1111,22 @@ class TextbookProblemReviewItem {
     final s = fixProposal['stem'];
     final cs = fixProposal['common_stem'];
     final c = fixProposal['choices'];
-    return (s is String && s.trim().isNotEmpty) ||
-        (cs is String && cs.trim().isNotEmpty) ||
-        (c is List && c.isNotEmpty);
+    String choiceTexts(List<dynamic> list) =>
+        [for (final x in list) mathDelimiterInsensitive(x is Map ? '${x['text'] ?? ''}' : '$x')].join('\u0001');
+    return (s is String && s.trim().isNotEmpty && !sameRenderedMath(s, stem)) ||
+        (cs is String && cs.trim().isNotEmpty && !sameRenderedMath(cs, commonStem)) ||
+        (c is List && c.isNotEmpty && choiceTexts(c) != choiceTexts(rawChoices));
   }
+
+  /// V2 렌더러는 구분자 없는 LaTeX 도 수식으로 자동 인식한다. `$` 유무와 수식 기호 주변 공백만 다른 본문은 화면이 같다.
+  static String mathDelimiterInsensitive(String text) => text
+      .replaceAll(RegExp(r'(?<!\\)\$'), '')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .replaceAll(RegExp(r'\s*\\'), r'\')
+      .replaceAllMapped(RegExp(r'\s*([{}^_=+\-(),])\s*'), (m) => m[1]!)
+      .trim();
+
+  static bool sameRenderedMath(String a, String b) => mathDelimiterInsensitive(a) == mathDelimiterInsensitive(b);
 
   String? get proposedStem => fixProposal['stem'] is String && '${fixProposal['stem']}'.trim().isNotEmpty ? '${fixProposal['stem']}' : null;
 
@@ -1082,6 +1219,16 @@ class TextbookProblemReviewItem {
     return null;
   }
 
+  /// 자동 반영해도 되는 정답: 원본·해설 대조 수정안 또는 두 출처(해설·AI·채점 정답 중 둘)가 합의한 값.
+  /// 해설 하나·AI 하나만의 답은 사람 확인 없이 승인하지 않는다.
+  String? get agreedMathAnswer {
+    if (proposedAnswer != null && proposedAnswer!.isNotEmpty && proposedAnswer != '판단불가') return proposedAnswer;
+    if (solutionAndAiAgreeAgainstExisting && (solutionAnswer ?? '').trim().isNotEmpty) return solutionAnswer!.trim();
+    if (existingConfirmedByAi && existingAnswer.trim().isNotEmpty) return existingAnswer.trim();
+    if (existingMatchesSolution && existingAnswer.trim().isNotEmpty) return existingAnswer.trim();
+    return null;
+  }
+
   /// 수학 일괄의 두 규칙(해설·AI 일치 답 채택, 채점 정답 = AI 답 유지)으로 끝나지 않는 수학 오류.
   /// 본문을 고치기 전에 푼 AI 답(판단불가 등)일 수 있어 지금 본문·교재 원본으로 다시 푼다.
   bool get needsMathResolve => mathStatus == 'issue' && !solutionAndAiAgreeAgainstExisting && !existingConfirmedByAi;
@@ -1092,8 +1239,24 @@ class TextbookProblemReviewItem {
       ? [for (final x in fixProposal['choices'] as List) if (x is Map) Map<String, dynamic>.from(x)]
       : null;
 
+  /// 채점 정답이 답지에서 잘라 저장한 그림이다. 문제은행에는 글자 대신 그림 표시가 들어간다.
+  bool get isImageAnswer => answerKind == 'image' || _imagePlaceholderAnswerRe.hasMatch(existingAnswer.trim());
+
+  /// 2단계 작업 화면의 "준비됨"을 막는 이유. 비어 있으면 준비됨.
+  List<String> get readyBlockers => [
+        if (pbQuestionId.isEmpty) '본문 추출 전',
+        if (isEngineHeld) '렌더 엔진 수정 필요',
+        if (existingAnswer.trim().isEmpty) '채점 정답 없음',
+        if (!hasSolutionRef && !solutionMarkedNone) '해설 위치 없음',
+        if (mathStatus != 'approved') '정답 검수 미승인',
+        if (!isEngineHeld && qualityStatus != 'approved') '문항 검수 미승인',
+        if (!isEngineHeld && renderBlocksReady) 'V2 렌더 이상',
+      ];
+  bool get isWorkflowReady => readyBlockers.isEmpty;
+
   /// 문제은행 사본 정답이 채점 정답과 다른가(표기 공백·$ 제거 후 단순 비교)
   bool get pbAnswerDiffers {
+    if (isImageAnswer) return false;
     String norm(String s) => s.replaceAll(RegExp(r'[\s$]'), '').toLowerCase();
     final mine = norm(existingAnswer);
     if (mine.isEmpty) return false;
@@ -1113,6 +1276,14 @@ class TextbookProblemReviewItem {
       renderChecks['fidelity_ok'] == false ||
       renderChecks['figure_position_ok'] == false ||
       figureNeedsResize;
+
+  /// 준비됨을 막는 V2 렌더 이상. 그림 크기 차이는 잰 비율로 자동 조정하므로 넣지 않는다.
+  bool get renderBlocksReady =>
+      renderChecks['problem_ok'] == false ||
+      renderChecks['answer_ok'] == false ||
+      renderChecks['solution_ok'] == false ||
+      renderChecks['fidelity_ok'] == false ||
+      renderChecks['figure_position_ok'] == false;
 
   /// 원본과 직접 대조한 V2 렌더 검수가 통과해 2단계(문항 카드) 판정을 덮어쓴 상태
   bool get stage2Superseded => originalCompared && renderCheckedAt != null && !renderHasIssue;
@@ -1165,6 +1336,9 @@ class TextbookProblemReviewItem {
       !isAnswerOnlyOriginalSolution &&
       qualityChecks['solution_vision'] is Map &&
       (qualityChecks['solution_vision'] as Map)['found'] == false;
+
+  /// 운영자가 '해설 없음'으로 표시한 문항
+  bool get solutionMarkedNone => solutionSourceKind == 'none';
 
   /// 해설 좌표가 있어서 해설 PDF에서 영역을 잘라낼 수 있는 문항
   bool get canCropSolution =>
@@ -1339,10 +1513,48 @@ class TextbookProblemReviewService {
       'p_mid_order': scope.midOrder,
     });
     final map = res is Map ? Map<String, dynamic>.from(res) : const <String, dynamic>{};
-    return [
+    final rows = [
       for (final r in (map['items'] as List?) ?? const [])
-        if (r is Map) TextbookProblemReviewItem.fromJson(Map<String, dynamic>.from(r)),
+        if (r is Map) Map<String, dynamic>.from(r),
     ];
+    await _mergeFigureColumns(rows);
+    return [for (final r in rows) TextbookProblemReviewItem.fromJson(r)];
+  }
+
+  /// 개요 RPC 에 없는 그림 정답 이미지·해설 그림 열을 붙인다. 못 읽어도 나머지 검수는 그대로 한다.
+  Future<void> _mergeFigureColumns(List<Map<String, dynamic>> rows) async {
+    final byCrop = <String, Map<String, dynamic>>{
+      for (final r in rows)
+        if ('${r['crop_id'] ?? ''}'.isNotEmpty) '${r['crop_id']}': r,
+    };
+    final ids = byCrop.keys.toList();
+    for (var i = 0; i < ids.length; i += 200) {
+      final chunk = ids.sublist(i, (i + 200).clamp(0, ids.length));
+      try {
+        final answers = await _db
+            .from('textbook_problem_answers')
+            .select('crop_id,answer_image_bucket,answer_image_path')
+            .inFilter('crop_id', chunk);
+        for (final a in (answers as List)) {
+          final row = byCrop['${a['crop_id']}'];
+          if (row == null) continue;
+          row['answer_image_bucket'] = a['answer_image_bucket'];
+          row['answer_image_path'] = a['answer_image_path'];
+        }
+      } catch (_) {}
+      try {
+        final analyses = await _db
+            .from('textbook_problem_analyses')
+            .select('crop_id,solution_figure_assets,solution_figures_checked_at')
+            .inFilter('crop_id', chunk);
+        for (final a in (analyses as List)) {
+          final row = byCrop['${a['crop_id']}'];
+          if (row == null) continue;
+          row['solution_figure_assets'] = a['solution_figure_assets'];
+          row['solution_figures_checked_at'] = a['solution_figures_checked_at'];
+        }
+      } catch (_) {}
+    }
   }
 
   /// 학습앱/문제은행 카드와 동일한 서버 PDF 렌더링 엔진(V2 xelatex) 썸네일 URL을 가져온다.
@@ -1492,6 +1704,42 @@ class TextbookProblemReviewService {
   /// 묶음 검수 전에 문항마다 (1) 해설 PDF 좌표 영역 크롭(원본 해설 Vision 전사용) (2) V2 문항 카드 URL(학생 시점 품질 검수용)
   /// (3) 본문 PDF 문항 영역 원본(원본 대조용, 세트면 세트 머리도)
   /// (4) 필요 시 해설 PDF 한 쪽 전체 이미지(좌표 어긋남·해설 미전사·정답 불일치 폴백용)를 모은다.
+  /// 검수에 쓸 원본 PDF(본문·해설)를 미리 받아 연다. 받지 못하면 이유를 담아 예외를 던진다
+  /// (이미지 없이 검수를 보내거나 문항마다 다시 받으며 멈춰 있지 않게).
+  Future<void> ensureSourcePdfs(
+    TextbookReviewUnitScope scope,
+    List<TextbookProblemReviewItem> items, {
+    void Function(String message)? onProgress,
+  }) async {
+    final kinds = <String>{
+      if (items.any((it) => it.canRenderOriginal)) 'body',
+      for (final it in items)
+        if (it.canCropSolution) it.solutionSourceKind,
+      if (items.any((it) => it.canCropAnswer)) 'sol',
+    };
+    final seen = <String>{};
+    for (final kind in kinds) {
+      final label = TextbookReviewSolutionImageService.pdfKindLabel(kind);
+      if (!seen.add(label)) continue;
+      final doc = await _solutionImages.ensureSourcePdf(
+        academyId: scope.academyId,
+        bookId: scope.bookId,
+        gradeLabel: scope.gradeLabel,
+        sourceKind: kind,
+        onProgress: onProgress == null
+            ? null
+            : (received, total) => onProgress(
+                  '$label PDF 받는 중 ${received ~/ 1048576}'
+                  '${total == null ? '' : '/${total ~/ 1048576}'}MB',
+                ),
+      );
+      if (doc == null) {
+        final why = TextbookReviewSolutionImageService.loadError(scope.bookId, scope.gradeLabel, kind);
+        throw Exception('$label PDF를 받지 못했습니다${why == null ? '' : ': $why'}');
+      }
+    }
+  }
+
   Future<Map<String, TextbookReviewChunkImage>> prepareChunkImages({
     required TextbookReviewUnitScope scope,
     required List<TextbookProblemReviewItem> items,
@@ -1569,7 +1817,7 @@ class TextbookProblemReviewService {
     bool pincette = false,
   }) async {
     if (cropIds.isEmpty) return const {'ok': true, 'processed': 0};
-    final res = await _db.functions.invoke('ai_think', body: {
+    final res = await _invokeAiThink({
       'action': 'textbook_problem_fix',
       'academy_id': scope.academyId,
       'book_id': scope.bookId,
@@ -1620,6 +1868,47 @@ class TextbookProblemReviewService {
     }
     throw Exception('핀셋 영역 저장 응답을 해석하지 못했습니다.');
   }
+
+  /// 'body' | 'ans' | 'sol' PDF 쪽 수. PDF 가 없으면 0.
+  Future<int> sourcePageCount(TextbookReviewUnitScope scope, String sourceKind) => _solutionImages.pageCount(
+        academyId: scope.academyId,
+        bookId: scope.bookId,
+        gradeLabel: scope.gradeLabel,
+        sourceKind: sourceKind,
+      );
+
+  /// 정답·해설·본문 PDF 한 쪽 전체(2단계 작업 화면에서 원본을 보고 직접 잘라 지정할 때).
+  Future<TextbookReviewRenderedRegion?> renderSourcePage({
+    required TextbookReviewUnitScope scope,
+    required String sourceKind,
+    required int rawPage,
+    int targetWidthPx = 1400,
+  }) =>
+      _solutionImages.renderFullPage(
+        academyId: scope.academyId,
+        bookId: scope.bookId,
+        gradeLabel: scope.gradeLabel,
+        sourceKind: sourceKind,
+        rawPage: rawPage,
+        targetWidthPx: targetWidthPx,
+      );
+
+  /// 운영자가 고른 영역을 여백 없이 찍는다(그림 정답 저장용).
+  Future<TextbookReviewRenderedRegion?> renderSourceRegion({
+    required TextbookReviewUnitScope scope,
+    required String sourceKind,
+    required int rawPage,
+    required List<int> region1k,
+  }) =>
+      _solutionImages.renderRegion(
+        academyId: scope.academyId,
+        bookId: scope.bookId,
+        gradeLabel: scope.gradeLabel,
+        sourceKind: sourceKind,
+        rawPage: rawPage,
+        region1k: region1k,
+        pad1k: 0,
+      );
 
   /// 본문(또는 해설) PDF 한 쪽 전체를 PNG 로 렌더링한다(PDF 영역 직접 드래그 지정 모달용).
   Future<TextbookReviewRenderedRegion?> renderFullBodyPage({
@@ -1699,6 +1988,115 @@ class TextbookProblemReviewService {
     return out;
   }
 
+  /// 원본 해설 속 그림을 해설 PDF 에서 찾아 잘라 올리고 문항에 붙인다(그림이 없어도 찾은 기록은 남긴다).
+  /// AI 는 그림 상자와 [그림] 자리만 정하고, 그림은 해설 PDF 를 고해상도로 다시 잘라 쓴다.
+  /// 반환: 그림이 하나 이상 붙은 crop_id, 실패 메시지.
+  Future<({Set<String> withFigures, List<String> errors})> extractSolutionFigures(
+    TextbookReviewUnitScope scope,
+    List<TextbookProblemReviewItem> items, {
+    void Function(int done, int total)? onProgress,
+    bool Function()? isCancelled,
+  }) async {
+    final withFigures = <String>{};
+    final errors = <String>[];
+    final targets = [for (final it in items) if (it.canCropSolution && it.documentId.isNotEmpty) it];
+    const chunkSize = 4;
+    for (var i = 0; i < targets.length; i += chunkSize) {
+      if (isCancelled?.call() ?? false) break;
+      final chunk = targets.sublist(i, (i + chunkSize).clamp(0, targets.length));
+      final regions = <String, TextbookReviewRenderedRegion>{};
+      final payload = <Map<String, dynamic>>[];
+      for (final it in chunk) {
+        try {
+          final r = await _solutionImages.renderRegion(
+            academyId: scope.academyId,
+            bookId: scope.bookId,
+            gradeLabel: scope.gradeLabel,
+            sourceKind: it.solutionSourceKind,
+            rawPage: it.solutionRawPage!,
+            region1k: it.solutionRegion1k,
+          );
+          if (r == null) continue;
+          regions[it.cropId] = r;
+          payload.add({
+            'crop_id': it.cropId,
+            'solution_image_base64': base64Encode(r.bytes),
+            'solution_image_mime': 'image/png',
+          });
+        } catch (e) {
+          errors.add('${it.problemNumber}번 해설 이미지: $e');
+        }
+      }
+      if (payload.isNotEmpty) {
+        try {
+          final res = await _invokeAiThink({
+            'action': 'textbook_solution_figures',
+            'academy_id': scope.academyId,
+            'items': payload,
+          });
+          final data = res.data is Map ? Map<String, dynamic>.from(res.data as Map) : const <String, dynamic>{};
+          final byId = {for (final it in chunk) it.cropId: it};
+          for (final r in (data['results'] as List?) ?? const []) {
+            if (r is! Map) continue;
+            final it = byId['${r['crop_id']}'];
+            final region = it == null ? null : regions[it.cropId];
+            if (it == null || region == null) continue;
+            try {
+              final assets = <Map<String, dynamic>>[];
+              final boxes = (r['figures'] as List?) ?? const [];
+              for (var k = 0; k < boxes.length; k++) {
+                final box = [for (final x in (boxes[k] is List ? boxes[k] as List : const [])) if (x is num) x.toInt()];
+                final pageRegion = cropBoxToPageRegion(region.region1k, box);
+                if (pageRegion == null) continue;
+                final png = await _solutionImages.renderRegion(
+                  academyId: scope.academyId,
+                  bookId: scope.bookId,
+                  gradeLabel: scope.gradeLabel,
+                  sourceKind: it.solutionSourceKind,
+                  rawPage: region.rawPage,
+                  region1k: pageRegion,
+                  pad1k: 0,
+                  targetWidthPx: 900,
+                );
+                if (png == null) throw Exception('그림 ${k + 1} 을(를) 해설 PDF 에서 잘라내지 못했습니다');
+                final asset = await _pb.uploadManualFigureAsset(
+                  academyId: scope.academyId,
+                  documentId: it.documentId,
+                  questionNumber: it.problemNumber,
+                  bytes: png.bytes,
+                  fileName: 'solution_figure_${assets.length + 1}.png',
+                );
+                assets.add({
+                  ...asset,
+                  'figure_index': assets.length + 1,
+                  'source': 'textbook_solution_crop',
+                  'approved': true,
+                  'width_px': png.widthPx,
+                  'height_px': png.heightPx,
+                  'width_em': solutionFigureWidthEm(pageRegion),
+                  'raw_page': region.rawPage,
+                  'source_kind': it.solutionSourceKind,
+                  'crop_region_1k': pageRegion,
+                });
+              }
+              await _db.rpc('textbook_review_set_solution_figures', params: {
+                'p_crop_id': it.cropId,
+                'p_assets': assets,
+              });
+              if (assets.isNotEmpty) withFigures.add(it.cropId);
+            } catch (e) {
+              errors.add('${it.problemNumber}번 해설 그림: $e');
+            }
+          }
+        } catch (e) {
+          errors.add('해설 그림 찾기: $e');
+        }
+      }
+      onProgress?.call((i + chunk.length).clamp(0, targets.length), targets.length);
+    }
+    return (withFigures: withFigures, errors: errors);
+  }
+
   Future<Map<String, dynamic>> runReviewChunk(
     TextbookReviewUnitScope scope, {
     int chunkSize = 6,
@@ -1707,7 +2105,7 @@ class TextbookProblemReviewService {
     List<String> cropIds = const [],
     Map<String, TextbookReviewChunkImage> images = const {},
   }) async {
-    final res = await _db.functions.invoke('ai_think', body: {
+    final res = await _invokeAiThink({
       'action': 'textbook_problem_review',
       'academy_id': scope.academyId,
       'book_id': scope.bookId,
@@ -1724,6 +2122,15 @@ class TextbookProblemReviewService {
     if (data is Map) return Map<String, dynamic>.from(data);
     throw Exception('문항 검수 응답을 해석하지 못했습니다.');
   }
+
+  /// Edge Function 은 최대 400초 안에 끝나므로, 그보다 오래 답이 없으면 응답을 잃은 것으로 보고 끊는다.
+  static const Duration kAiCallTimeout = Duration(minutes: 8);
+
+  Future<FunctionResponse> _invokeAiThink(Map<String, dynamic> body) =>
+      _db.functions.invoke('ai_think', body: body).timeout(
+            kAiCallTimeout,
+            onTimeout: () => throw TimeoutException('AI 검수 응답이 ${kAiCallTimeout.inMinutes}분 넘게 없습니다'),
+          );
 
   int midOrderOf(TextbookReviewUnitScope s) => s.midOrder;
 
@@ -1743,21 +2150,21 @@ class TextbookProblemReviewService {
       problemNumber: item.problemNumber,
       solutionAnswer: ans,
     );
-    if (sol.isEmpty && ans.isEmpty) return '';
-    final formattedAns = formatAnswerForCard(ans);
-    final buf = StringBuffer();
-    if (formattedAns.isNotEmpty) buf.write('정답  $formattedAns');
-    if (sol.isNotEmpty) {
-      if (buf.isNotEmpty) buf.write('[문단]');
-      buf.write(solutionKind == 'ai' ? '[AI 풀이]' : '[해설]');
-      buf.write('[문단]');
-      buf.write(sol);
-    }
+    if (sol.isEmpty && ans.isEmpty && !item.hasAnswerImage) return '';
+    final card = buildAnswerSolutionCardContent(
+      answer: formatAnswerForCard(ans),
+      solution: sol,
+      solutionKind: solutionKind,
+      answerImageBucket: item.hasAnswerImage ? item.answerImageBucket : '',
+      answerImagePath: item.hasAnswerImage ? item.answerImagePath : '',
+      solutionFigures: item.solutionFigureAssets,
+    );
     return _pb.renderCustomStemThumbnail(
       academyId: academyId,
       id: 'review-${item.cropId}-$solutionKind',
-      stem: buf.toString(),
+      stem: card.stem,
       questionNumber: item.problemNumber,
+      meta: card.meta,
     );
   }
 
@@ -1816,6 +2223,77 @@ class TextbookProblemReviewService {
     throw Exception('V2 렌더 검수 응답을 해석하지 못했습니다.');
   }
 
+  /// 데이터를 고친 문항만 V2 문항 카드를 새로 찍어 교재 원본과 대조한다(정답·해설 카드는 보내지 않는다).
+  /// 통과한 문항은 ai_think 가 품질 승인으로 올리고, 아니면 issue 로 남긴다. 처리한 문항 수를 돌려준다.
+  Future<int> recheckProblemCards({
+    required TextbookReviewUnitScope scope,
+    required List<TextbookProblemReviewItem> items,
+    void Function(int done, int total)? onProgress,
+  }) async {
+    final targets = [for (final it in items) if (it.canRenderOriginal) it];
+    if (targets.isEmpty) return 0;
+    final urls = await fetchEnginePreviewUrls(academyId: scope.academyId, items: targets);
+    const chunkSize = 4;
+    const parallel = 3;
+    final chunks = <List<TextbookProblemReviewItem>>[
+      for (var i = 0; i < targets.length; i += chunkSize) targets.skip(i).take(chunkSize).toList(),
+    ];
+    var processed = 0;
+    var done = 0;
+    var next = 0;
+    Future<void> worker() async {
+      while (next < chunks.length) {
+        final chunk = chunks[next++];
+        final payload = <Map<String, dynamic>>[];
+        for (final p in await Future.wait(chunk.map((it) async {
+          final url = urls[it.cropId] ?? '';
+          if (url.isEmpty) return null;
+          return <String, dynamic>{
+            'crop_id': it.cropId,
+            'problem_url': url,
+            'solution_kind': it.primarySolutionKind,
+            'is_fill_in_blank': it.isFillInBlank,
+            ...await originalImagesJson(scope, it),
+          };
+        }))) {
+          if (p != null) payload.add(p);
+        }
+        if (payload.isNotEmpty) {
+          final res = await runRenderCheck(academyId: scope.academyId, items: payload);
+          processed += (res['processed'] as num?)?.toInt() ?? 0;
+        }
+        done += chunk.length;
+        onProgress?.call(done, targets.length);
+      }
+    }
+
+    await Future.wait([for (var w = 0; w < parallel && w < chunks.length; w++) worker()]);
+    return processed;
+  }
+
+  /// 원본 대조에서 잰 비율이 허용 범위를 벗어난 문항의 그림 폭을 그 비율만큼 되돌린다. 바뀐 문항 crop_id 를 돌려준다.
+  Future<List<String>> resizeFiguresFromMeasuredRatio(List<TextbookProblemReviewItem> items) async {
+    final out = <String>[];
+    for (final it in items) {
+      if (it.isEngineHeld || !it.figureNeedsResize) continue;
+      final scaled = scaleFigureLayout(
+        it.pbFigureLayout,
+        1 / it.figureSizeRatio!,
+        fallbackAssets: it.pbFigureAssets,
+        fallbackCount: figureMarkerCount(it.stem),
+      );
+      if (figureLayoutItems(scaled).isEmpty) continue;
+      final res = await applyProblemFix(
+        cropId: it.cropId,
+        figureLayout: scaled,
+        approveQuality: false,
+        note: '그림 크기를 원본 글자 비율에 맞춰 재조정',
+      );
+      if (((res['changed'] as List?) ?? const []).isNotEmpty) out.add(it.cropId);
+    }
+    return out;
+  }
+
   Future<int> approveAxis(List<String> cropIds, String axis) async {
     if (cropIds.isEmpty) return 0;
     final res = await _db.rpc('textbook_review_approve_axis', params: {
@@ -1839,6 +2317,7 @@ class TextbookProblemReviewService {
     String? solutionAnswer,
     List<Map<String, dynamic>>? alternativeSolutions,
     bool syncPbAnswer = true,
+    bool replaceImageAnswer = false,
   }) async {
     final res = await _db.rpc('textbook_review_save_item_edit', params: {
       'p_crop_id': cropId,
@@ -1852,6 +2331,7 @@ class TextbookProblemReviewService {
       'p_alternative_solutions': alternativeSolutions,
       'p_sync_pb_answer': syncPbAnswer,
       if (aiAnswer != null) 'p_ai_answer': aiAnswer,
+      if (replaceImageAnswer) 'p_replace_image_answer': true,
     });
     final sync = res is Map ? res['pb_answer_sync'] : null;
     return sync is Map ? Map<String, dynamic>.from(sync) : null;

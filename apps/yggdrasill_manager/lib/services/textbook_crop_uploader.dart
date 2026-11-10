@@ -57,6 +57,7 @@ class TextbookCropUploadItem {
     this.deskewAngleDeg,
     this.widthPx,
     this.heightPx,
+    this.regionSource = 'vlm',
   });
 
   final int rawPage;
@@ -93,6 +94,9 @@ class TextbookCropUploadItem {
   final double? deskewAngleDeg;
   final int? widthPx;
   final int? heightPx;
+
+  /// 'vlm' | 'manual'. 사람이 그린 크롭은 AI 재분석이 덮지 않는다.
+  final String regionSource;
 }
 
 class TextbookCropBatchResult {
@@ -364,6 +368,7 @@ class TextbookCropUploader {
       if (item.deskewAngleDeg != null) 'deskew_angle_deg': item.deskewAngleDeg,
       if (item.widthPx != null) 'width_px': item.widthPx,
       if (item.heightPx != null) 'height_px': item.heightPx,
+      if (item.regionSource == 'manual') 'region_source': 'manual',
     };
     final bytes = item.pngBytes;
     if (!regionsOnly && bytes != null && bytes.isNotEmpty) {

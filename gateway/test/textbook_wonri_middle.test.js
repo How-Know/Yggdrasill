@@ -28,7 +28,10 @@ import {
   normalizeWonriMiddleSolutionResult,
   wonriMiddleLeadingRetryRegion,
 } from '../src/textbook/vlm_wonri_middle_solution_client.js';
-import { buildBodySolutionsPrompt } from '../src/textbook/vlm_body_solution_client.js';
+import {
+  buildBodySolutionsPrompt,
+  normalizeBodySolutionsResult,
+} from '../src/textbook/vlm_body_solution_client.js';
 
 test('wonri_middle 이어진 풀이를 왼쪽 단 첫 박스 위만 잘라 다시 묻는다 (3-1 해설 35쪽)', () => {
   const boxes = [
@@ -553,6 +556,66 @@ test('wonri_middle answer-only solution falls back to answer region', () => {
     [2, null],
   );
   assert.equal(result.items[1].total_points, 7);
+});
+
+test('wonri_middle keeps image answers only when the answer region is given', () => {
+  const quick = normalizeWonriMiddleSolutionResult({
+    items: [
+      {
+        problem_number: '03',
+        category: 'middle_concept_check',
+        expected_index: 0,
+        answer_kind: 'image',
+        answer_text: '[image]',
+        solution_kind: 'answer_only',
+        answer_region: [100, 200, 300, 500],
+        number_region: [100, 100, 130, 180],
+      },
+      {
+        problem_number: '04',
+        category: 'middle_concept_check',
+        expected_index: 1,
+        answer_kind: 'image',
+        answer_text: '[image]',
+        solution_kind: 'answer_only',
+        number_region: [400, 100, 430, 180],
+        content_region: [400, 100, 600, 900],
+      },
+    ],
+  });
+  assert.equal(quick.items[0].answer_kind, 'image');
+  assert.equal(quick.items[1].answer_kind, 'subjective');
+
+  const body = normalizeBodySolutionsResult({
+    items: [
+      {
+        problem_number: '01',
+        answer_kind: 'image',
+        answer_text: '[image]',
+        answer_region: [500, 100, 800, 600],
+        number_region: [100, 100, 130, 180],
+        content_region: [100, 100, 820, 900],
+      },
+      {
+        problem_number: '02',
+        answer_kind: 'subjective',
+        answer_text: '3',
+        answer_region: [500, 100, 800, 600],
+        number_region: [100, 100, 130, 180],
+        content_region: [100, 100, 820, 900],
+      },
+    ],
+  });
+  assert.equal(body.items[0].answer_kind, 'image');
+  assert.deepEqual(body.items[0].answer_region, [500, 100, 800, 600]);
+  assert.equal(body.items[1].answer_kind, 'subjective');
+  assert.equal('answer_region' in body.items[1], false);
+
+  assert.match(buildWonriMiddleQuickAnswerPrompt({ rawPage: 3, expectedEntries: [] }), /answer_kind="image"/);
+  assert.match(
+    buildBodySolutionsPrompt({ rawPage: 3, series: 'wonri_middle', expectedNumbers: ['01'] }),
+    /answer_kind="image"/,
+  );
 });
 
 test('wonri_middle routes examples to body and follow-ups to solution', () => {

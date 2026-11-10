@@ -182,4 +182,45 @@ test('independent set with shared figure in first item propagates common_figure_
   assert.equal(normalized[2].stem, '선분 AD의 중점 M이 나타내는 수');
 });
 
+test('independent set where each item has its own figure does not borrow the first item figure', () => {
+  const scope = {
+    book_id: 'sr_1_2',
+    grade_label: '중1-2',
+    big_order: 0,
+    mid_order: 2,
+    sub_key: 'A',
+  };
+  const setHeaderRanges = [{ from: 5, to: 8, headerNumber: '05~08', rawPage: 41 }];
+  const ownAsset = { bucket: 'problem-previews', path: 'figures/05.png', figure_index: 1 };
+  const common = '그림에서 $l\\parallel m$일 때, $\\angle x$의 크기를 구하여라.';
+  const mk = (number, stem, assets) => ({
+    question_number: number,
+    stem,
+    meta: {
+      is_set_question: true,
+      ...(assets ? { figure_assets: assets } : {}),
+      set_model: { version: 1, set_type: 'independent_set', common_stem: `${common}\n[그림]` },
+    },
+  });
+  const normalized = normalizeIndependentSetPayloadQuestions(
+    [
+      mk('05', '[그림]\n[문단]\n해 $l\\parallel m$이므로', [ownAsset]),
+      mk('06', '[그림]'),
+      mk('07', '[그림]'),
+      mk('08', '[그림]'),
+    ],
+    scope,
+    setHeaderRanges,
+  );
+  for (const row of normalized) {
+    assert.doesNotMatch(String(row.meta.set_model.common_stem), /\[그림\]/);
+    assert.equal((row.meta.set_model.common_figure_assets || []).length, 0);
+    assert.match(row.stem, /\[그림\]/);
+  }
+  assert.equal(normalized[0].meta.figure_assets[0].path, 'figures/05.png');
+  for (const row of normalized.slice(1)) {
+    assert.equal((row.meta.figure_assets || []).length, 0);
+  }
+});
+
 

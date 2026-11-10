@@ -12,6 +12,7 @@
 //   question_link    문제은행 문항 연결(textbook_crop_question_links)
 //   manual_answer    사람이 고친 정답(answer_source = 'manual')
 //   manual_solution  사람이 고친 해설 좌표(edited_at 이 있음)
+//   manual_crop      사람이 추가하거나 고친 크롭(region_source = 'manual')
 
 const MARKER_CHUNK = 200;
 
@@ -89,7 +90,41 @@ export function manualProtectionReasons(crop, markers) {
   if (markers?.questionLink?.has(id)) reasons.push('question_link');
   if (markers?.manualAnswer?.has(id)) reasons.push('manual_answer');
   if (markers?.manualSolution?.has(id)) reasons.push('manual_solution');
+  if (String(crop?.region_source || '').trim() === 'manual') reasons.push('manual_crop');
   return reasons;
+}
+
+/**
+ * AI 재분석 저장 행 중 이미 사람이 만든 크롭과 번호가 겹치는 행을 뺀다.
+ * 수동 크롭으로 올라온 행(region_source = 'manual')은 그대로 둔다.
+ */
+export function dropRowsCoveredByManualCrops(rows, manualNumbers) {
+  const manual = new Set(
+    (Array.isArray(manualNumbers) ? manualNumbers : [])
+      .map((value) => String(value || '').trim())
+      .filter(Boolean),
+  );
+  const kept = [];
+  const skippedNumbers = [];
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const number = String(row?.problem_number || '').trim();
+    if (row?.region_source !== 'manual' && manual.has(number)) {
+      skippedNumbers.push(number);
+      continue;
+    }
+    kept.push(row);
+  }
+  return { rows: kept, skippedNumbers };
+}
+
+/** 마이그레이션 전 DB 처럼 region_source 컬럼이 아직 없을 때의 오류인가. */
+export function isMissingRegionSourceColumn(error) {
+  const code = String(error?.code || '').trim();
+  const message = String(error?.message || error || '');
+  return (
+    /region_source/i.test(message) &&
+    (code === '42703' || code === 'PGRST204' || /does not exist|could not find/i.test(message))
+  );
 }
 
 /**

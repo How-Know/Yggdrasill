@@ -3,6 +3,7 @@ import AdmZip from 'adm-zip';
 import { createClient } from '@supabase/supabase-js';
 import sharp from 'sharp';
 import bmp from 'bmp-js';
+import { figureMarkersSideBySide } from './problem_bank/extract_engines/vlm/figure_geometry.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -978,7 +979,7 @@ async function processOneJob(job) {
     };
   });
   const figureLayoutGroups = [];
-  if (figureLayoutItems.length === 2) {
+  if (figureLayoutItems.length === 2 && figureMarkersSideBySide(question?.stem)) {
     figureLayoutGroups.push({
       type: 'horizontal',
       members: figureLayoutItems.map((it) => it.assetKey),

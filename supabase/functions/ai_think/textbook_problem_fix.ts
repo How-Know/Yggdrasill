@@ -7,14 +7,20 @@ import { recordAiRun } from '../_shared/ai/usage.ts';
 import {
   cleanSolutionTranscribedText,
   figureMarkerCount,
+  foldCommonStemIntoStem,
   isDataFixableSymptom,
+  isDependentSetItem,
   isFillInBlankProblem,
+  mathDelimiterInsensitive,
   normalizeProposedChoices,
   parseProblems,
   parseReviewImages,
+  sameRenderedMath,
   sanitizeProblemMarkup,
   stripCommonStem,
+  stripGuidedSolution,
   TEXTBOOK_REVIEW_PROMPT_VERSION,
+  withoutDependentSetCommonStem,
 } from './textbook_problem_review.ts';
 import { uuidOrNull } from './validate.ts';
 
@@ -157,6 +163,7 @@ export function buildFigureProposal(args: {
   const items: Rec[] = [];
   const crops: FigureCropRequest[] = [];
   const used = new Set<string>();
+  const measureByKey = new Map<string, FigureMeasure>();
   let extra = 0;
   if (measures.length === 0) {
     ordered.forEach((asset, i) => {
@@ -188,6 +195,7 @@ export function buildFigureProposal(args: {
       const prevHeight = Number(prev?.heightEm);
       items.push({ assetKey: key, ...item, heightEm: Number.isFinite(prevHeight) && prevHeight > 0 ? prevHeight : 1.6 });
       used.add(key);
+      measureByKey.set(key, m);
       if (!asset) crops.push({ figure_index: idx, bbox_1k: [...m.bbox], reason: 'missing' });
       else if (m.v2State === 'cut' || m.v2State === 'missing') crops.push({ figure_index: idx, bbox_1k: [...m.bbox], reason: 'cut' });
     });
@@ -196,10 +204,28 @@ export function buildFigureProposal(args: {
     const k = String(it.assetKey ?? '');
     if (k && !used.has(k)) items.push(it);
   }
+  const groups = (Array.isArray(cur.groups) ? cur.groups : []).filter((g) => horizontalGroupMatchesSource(g, measureByKey));
   return {
-    layout: { version: 1, items, groups: Array.isArray(cur.groups) ? cur.groups : [] },
+    layout: { version: 1, items, groups },
     crops,
   };
+}
+
+/**
+ * 가로 묶음은 원본에서 잰 멤버 그림들이 같은 높이대(세로 범위가 겹침)에 있을 때만 유지한다.
+ * 원본에서 위아래로 떨어진 그림(1) 아래 그림, 2) 아래 그림)을 한 줄에 묶으면 소문항 대응이 깨진다.
+ * 멤버를 다 재지 못했으면 판단할 근거가 없으므로 그대로 둔다.
+ */
+export function horizontalGroupMatchesSource(group: unknown, measureByKey: Map<string, FigureMeasure>): boolean {
+  if (!group || typeof group !== 'object') return false;
+  const g = group as Rec;
+  if (String(g.type ?? 'horizontal') !== 'horizontal') return true;
+  const members = Array.isArray(g.members) ? g.members.map(String) : [];
+  const boxes = members.map((k) => measureByKey.get(k)?.bbox);
+  if (members.length < 2 || boxes.some((b) => !b)) return true;
+  const top = Math.max(...boxes.map((b) => b![0]));
+  const bottom = Math.min(...boxes.map((b) => b![2]));
+  return bottom > top;
 }
 
 export interface NormalizedTextFix {
@@ -244,26 +270,24 @@ export function normalizeTextFix(args: {
     const stripped = stripCommonStem(commonStem, curStem);
     if (stripped !== null && stripped.trim() !== curStem.trim()) stem = stripped;
   }
-  if (
-    stem &&
-    curStem.includes('[박스시작]') &&
-    curStem.includes('[박스끝]') &&
-    !stem.includes('[박스시작]') &&
-    /(?:^|\n|\[문단\])\s*해\s+/.test(stem)
-  ) {
-    stem = stem.replace(
-      /(\[문단\]\s*|\n\s*)(해\s+[\s\S]+)$/,
-      '$1[박스시작]\n$2\n[박스끝]',
-    );
-  }
+  const unguided = stripGuidedSolution(stem ?? curStem);
+  if (unguided !== (stem ?? curStem).trim()) stem = unguided;
+  if (stem && sameRenderedMath(stem, curStem)) stem = null;
+  const finalCommon = commonStem && !sameRenderedMath(commonStem, curCommon) ? commonStem : null;
   const proposedChoices = normalizeProposedChoices(args.correctedChoices);
-  const choices = proposedChoices && JSON.stringify(proposedChoices) !== JSON.stringify(args.currentChoices ?? [])
+  const choiceTexts = (arr: unknown) =>
+    JSON.stringify(
+      (Array.isArray(arr) ? arr : []).map((c) =>
+        mathDelimiterInsensitive(String(c && typeof c === 'object' ? (c as Rec).text ?? '' : c ?? ''))
+      ),
+    );
+  const choices = proposedChoices && choiceTexts(proposedChoices) !== choiceTexts(args.currentChoices)
     ? proposedChoices
     : null;
-  const hasAny = !!(stem || commonStem || choices);
+  const hasAny = !!(stem || finalCommon || choices);
   return {
     stem,
-    commonStem,
+    commonStem: finalCommon,
     choices,
     textSame: !hasAny && args.textMatchesOriginal === true,
   };
@@ -369,7 +393,8 @@ const FIX_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔진의 [�
 [1. 본문·선지 수정안 — 원본 이미지가 기준]
 - 원본에 인쇄된 이 문항(세트 머리 제외)을 처음부터 끝까지 다시 적은 전체 개별 발문을 corrected_stem 에 적으세요. 저장된 stem 이 원본과 완전히 같고 V2 렌더링 문법 문제도 없을 때만 null.
 - 마크업과 LaTeX 문법(우리 V2 렌더 엔진 규칙):
-  - 수식 $...$(LaTeX), 문단 구분 [문단], 상자 [박스시작]...[박스끝], 표 [표시작]...[표끝], 그림 자리 [그림].
+  - 수식 구분자: 저장 본문은 "l \\parallel m", "\\angle x", "\\frac{1}{2}" 처럼 $ 없이 LaTeX 명령만 적는 것이 정상 규약입니다. V2 엔진이 자동으로 수식으로 찍으므로 $ 가 없다는 것은 오류가 아닙니다. $ 를 붙이거나 떼는 것만으로는 절대 수정안을 내지 말고, issues 에도 "수식 구분자 누락"을 적지 마세요. 판단은 V2 렌더 화면에서 수식이 실제로 깨져 보이는지로만 합니다.
+  - 수식 $...$(LaTeX, $ 생략 가능), 문단 구분 [문단], 상자 [박스시작]...[박스끝], 표 [표시작]...[표끝], 그림 자리 [그림].
   - 공백 마커는 단일 대괄호 [공백:n] 입니다!
     * 그냥 빈칸 공백: [공백:3]
     * 소괄호 빈칸 (   ): ([공백:3])
@@ -384,6 +409,9 @@ const FIX_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔진의 [�
     반드시 세트 전체가 공유할 원래 공통 지시문 전체를 corrected_common_stem 에 적으세요! 같을 때만 null.
   - 만약 저장된 common_stem 과 stem 이 이미 원본과 똑같은데(형제 문항에서 방금 고쳐진 경우 등) 첨부된 옛 V2 이미지에만 예전 식이 두 번 보인다면, 데이터는 이미 고쳐진 것이므로 text_matches_original = true, engine_issue = null 로 두세요(절대 engine_issue 로 적지 마세요!).
   - 저장된 stem 이나 common_stem 에 다른 문항(예: 세트 첫 문항)의 숫자·식이 잘못 섞여 있으면 이 문항 원본에 인쇄된 내용만 남기세요.
+- 종속형 세트(is_dependent_set = true, 1)·2)·3) 소문항을 한 문항에 묶은 것): 학생 화면에는 stem 만 보입니다. 위 세트 문항 규칙과 달리
+  "다음을 읽고, 물음에 답하여라." 같은 공통 지시문과 상황 설명 상자·그림까지 모두 corrected_stem 앞머리에 원본 순서대로 두고, corrected_common_stem 은 null 로 두세요.
+- 원본에서 문항·소문항 아래 '해' 배지로 시작하는 빈칸 풀이 안내(풀이 일부를 □로 비워 둔 것)는 해설이라 본문이 아닙니다. corrected_stem 에 넣지 말고, 저장 stem 에 들어 있으면 빼세요.
 - 선지: 원본의 선지(①~⑤ 또는 ㄱ,ㄴ,ㄷ)와 저장 choices 가 다르면 전체 선지 배열을 corrected_choices 에, 같거나 원본에 선지가 없으면 null.
 - 원본에 없는 내용을 지어내지 마세요. 원본에서 읽을 수 없는 부분은 저장값을 그대로 둡니다.
 - text_matches_original: 저장 데이터(공통 발문·발문·선지)와 마크업·LaTeX 문법이 원본과 완전히 같을 때 true(이때만 corrected_* 가 모두 null).
@@ -461,7 +489,7 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
   if (overviewRes.error) return errorResponse(502, 'overview_failed', overviewRes.error.message);
   const wanted = new Set(cropIds);
   const targets = (((overviewRes.data as Rec | null)?.items ?? []) as unknown[])
-    .map((x) => (x ?? {}) as Rec)
+    .map((x) => withoutDependentSetCommonStem((x ?? {}) as Rec))
     .filter((it) => wanted.has(String(it.crop_id)) && !!images.get(String(it.crop_id))?.originalImageDataUrl);
   if (targets.length === 0) {
     return jsonResponse({ ok: true, processed: 0, skipped: cropIds.length, results: [] });
@@ -495,6 +523,7 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
             String(it.set_header_number ?? '').trim().length > 0 ||
             !!images.get(String(it.crop_id))?.setHeaderImageDataUrl,
           set_header_number: String(it.set_header_number ?? '').trim(),
+          is_dependent_set: isDependentSetItem(it),
           common_stem: String(it.common_stem ?? '').trim(),
           stem: String(it.stem ?? '').slice(0, 4000),
           choices: it.choices,
@@ -601,7 +630,12 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
       currentChoices: it.choices,
     });
     let stem = textFix.stem;
-    const common = textFix.commonStem;
+    let common = textFix.commonStem;
+    if (common && isDependentSetItem(it)) {
+      const folded = foldCommonStemIntoStem(common, stem ?? curStem);
+      if (!sameRenderedMath(folded, curStem)) stem = folded;
+      common = null;
+    }
     const choices = textFix.choices;
     const textSame = textFix.textSame;
 

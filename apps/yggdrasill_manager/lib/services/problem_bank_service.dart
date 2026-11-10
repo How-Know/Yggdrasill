@@ -221,6 +221,8 @@ class ProblemBankService {
     int? bodyLinkId,
     bool forceNewJob = false,
     bool pageScoped = false,
+    // 비어 있지 않으면 이 번호만 읽어 저장한다. 이미 본문이 있는 문항은 지우지 않는다.
+    List<String> onlyProblemNumbers = const [],
   }) async {
     final link = await _loadTextbookBodyLink(
       academyId: academyId,
@@ -409,6 +411,8 @@ class ProblemBankService {
               'display_page_from': displayPageFrom,
               'display_page_to': displayPageTo,
             },
+            if (onlyProblemNumbers.isNotEmpty)
+              'textbook_only_numbers': onlyProblemNumbers,
           },
         })
         .select('id,status')
@@ -451,6 +455,8 @@ class ProblemBankService {
             'display_page_from': displayPageFrom,
             'display_page_to': displayPageTo,
           },
+          if (onlyProblemNumbers.isNotEmpty)
+            'textbook_only_numbers': onlyProblemNumbers,
         },
       },
       onConflict:
@@ -3981,6 +3987,7 @@ class ProblemBankService {
     required String stem,
     String questionNumber = '',
     List<Map<String, dynamic>> choices = const [],
+    Map<String, dynamic> meta = const {},
   }) async {
     final safeStem = stem.trim();
     if (!hasGateway || academyId.trim().isEmpty || safeStem.isEmpty) return '';
@@ -3998,7 +4005,7 @@ class ProblemBankService {
           'choices': choices,
           'allow_objective': objective,
           'allow_subjective': !objective,
-          'meta': const <String, dynamic>{},
+          'meta': meta,
         },
       },
     );

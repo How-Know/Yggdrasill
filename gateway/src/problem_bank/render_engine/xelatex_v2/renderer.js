@@ -279,6 +279,8 @@ export async function hydrateFiguresForXeLatex(questions, supabaseClient, workDi
     q.common_figure_local_infos = [];
     q.answer_figure_local_paths = [];
     q.answer_figure_local_infos = [];
+    q.explanation_figure_local_paths = [];
+    q.explanation_figure_local_infos = [];
     const meta = q.meta && typeof q.meta === 'object' ? q.meta : {};
     const model = meta.set_model && typeof meta.set_model === 'object'
       ? meta.set_model
@@ -313,6 +315,14 @@ export async function hydrateFiguresForXeLatex(questions, supabaseClient, workDi
         paths: q.answer_figure_local_paths,
         infos: q.answer_figure_local_infos,
         prefix: 'answer-fig',
+      },
+      {
+        assets: Array.isArray(q.explanation_figure_assets)
+          ? q.explanation_figure_assets
+          : [],
+        paths: q.explanation_figure_local_paths,
+        infos: q.explanation_figure_local_infos,
+        prefix: 'expl-fig',
       },
     ];
 
@@ -383,7 +393,7 @@ export async function hydrateFiguresForXeLatex(questions, supabaseClient, workDi
           const message =
             `[xelatex] ${set.prefix} hydration failed ` +
             `q=${q.id || q.question_uid || 'unknown'}: ${err?.message || err}`;
-          if (set.prefix === 'answer-fig') {
+          if (set.prefix === 'answer-fig' || set.prefix === 'expl-fig') {
             console.warn(message);
             continue;
           }
@@ -1062,6 +1072,7 @@ export async function renderPdfWithXeLatex({
       includeQuestionScore,
       questionScoreByQuestionId,
       includeQuickAnswer,
+      includeExplanation: renderConfig?.includeExplanation === true,
       titlePageIndices,
       titlePageHeaders,
       columnLabelAnchors: Array.isArray(renderConfig?.columnLabelAnchors)
@@ -1143,6 +1154,9 @@ export async function renderPdfWithXeLatex({
             reviewPdf: baseBuildOptions.reviewPdf,
             disableIndependentSetGrouping: baseBuildOptions.disableIndependentSetGrouping,
             previewIndependentSetCommonStem: baseBuildOptions.previewIndependentSetCommonStem,
+            independentSetSplitCapacity: baseBuildOptions.independentSetSplitCapacity,
+            maxQuestionsPerPage: baseBuildOptions.maxQuestionsPerPage,
+            paper: baseBuildOptions.paper,
             dependentSetSplitPlan,
             stemSizePt: effectiveStemSizePtFor(
               baseBuildOptions.profile,

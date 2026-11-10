@@ -12,11 +12,13 @@
 //      PDF — two pages per row (layoutPages) so spreads are easier to
 //      review.
 //   4. Supports **manual fine-tuning**: click a bbox → drag its four
-//      corner handles → the stored `item_region_1k` is overridden.
+//      corner handles → the stored `item_region_1k` is overridden. Missing
+//      problems are added by two drags (number box, then body box).
 //   5. Saves the coordinates (no images) via `TextbookCropUploader` in
-//      `regions_only` mode.
-//   6. A "다음 →" button opens the Stage 2/3 authoring dialog
-//      (`TextbookAuthoringStageDialog`) for 정답 VLM / 해설 좌표 VLM.
+//      `regions_only` mode as soon as analysis or an edit finishes.
+//   6. "크롭 확정" hands the 소단원 to `TextbookWorkflowRunner`, which runs
+//      본문 추출 → 정답·해설 위치 → V2 검수 in the background. The result is
+//      reviewed in the 작업 화면 (`ProblemRoadmapScreen` workflow mode).
 
 import 'dart:async';
 import 'dart:io';
@@ -31,17 +33,17 @@ import 'package:pdfrx/pdfrx.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../services/textbook_book_registry.dart';
-import '../../services/textbook_background_extract_controller.dart';
 import '../../services/textbook_crop_uploader.dart';
 import '../../services/textbook_pdf_page_renderer.dart';
 import '../../services/textbook_pdf_service.dart';
+import '../../services/textbook_problem_review_service.dart';
 import '../../services/textbook_series_catalog.dart';
 import '../../services/textbook_vlm_answer_service.dart';
 import '../../services/textbook_vlm_range_runner.dart';
-import '../../services/textbook_vlm_solution_ref_service.dart';
 import '../../services/textbook_vlm_test_service.dart';
 import '../../services/textbook_stage_batch_service.dart';
-import '../../services/textbook_problem_review_service.dart';
+import '../../services/textbook_workflow_runner.dart';
+import '../../services/textbook_workflow_service.dart';
 import '../../services/problem_bank_service.dart';
 import '../problem_roadmap/problem_roadmap_screen.dart';
 import 'textbook_authoring_stage_dialog.dart';
@@ -55,7 +57,6 @@ class TextbookUnitAuthoringDialog extends StatefulWidget {
     required this.bookName,
     required this.gradeLabel,
     this.linkId,
-    this.autoAnalyzeMode = false,
   });
 
   final String academyId;
@@ -63,7 +64,6 @@ class TextbookUnitAuthoringDialog extends StatefulWidget {
   final String bookName;
   final String gradeLabel;
   final int? linkId;
-  final bool autoAnalyzeMode;
 
   static Future<void> show(
     BuildContext context, {
@@ -72,7 +72,6 @@ class TextbookUnitAuthoringDialog extends StatefulWidget {
     required String bookName,
     required String gradeLabel,
     int? linkId,
-    bool autoAnalyzeMode = false,
   }) {
     return showDialog<void>(
       context: context,
@@ -83,7 +82,6 @@ class TextbookUnitAuthoringDialog extends StatefulWidget {
         bookName: bookName,
         gradeLabel: gradeLabel,
         linkId: linkId,
-        autoAnalyzeMode: autoAnalyzeMode,
       ),
     );
   }
@@ -95,15 +93,18 @@ class TextbookUnitAuthoringDialog extends StatefulWidget {
 
 class _TextbookUnitAuthoringDialogState
     extends State<TextbookUnitAuthoringDialog> {
-  static const _kBg = Color(0xFF131315);
-  static const _kPanel = Color(0xFF1B1B1E);
-  static const _kCard = Color(0xFF15171C);
-  static const _kBorder = Color(0xFF2A2A2A);
-  static const _kText = Colors.white;
-  static const _kTextSub = Color(0xFFB3B3B3);
+  static const _kBg = Color(0xFF000000);
+  static const _kPanel = Color(0xFF1C1C1E);
+  static const _kCard = Color(0xFF2C2C2E);
+  static const _kBorder = Color(0x22FFFFFF);
+  static const _kText = Color(0xFFEAF2F2);
+  static const _kTextSub = Color(0xFF9FB3B3);
+  static const _kMuted = Color(0xFF6E7E7E);
   static const _kAccent = Color(0xFF33A373);
-  static const _kDanger = Color(0xFFE68A8A);
-  static const _kInfo = Color(0xFF7AA9E6);
+  static const _kChipSelected = Color(0xFF1B6B63);
+  static const _kDanger = Color(0xFFE57373);
+  static const _kWarn = Color(0xFFE0B35A);
+  static const _kInfo = Color(0xFF64B5F6);
 
   static const int _kAnalysisLongEdgePx = 1500;
 
@@ -112,16 +113,30 @@ class _TextbookUnitAuthoringDialogState
   final _vlmService = TextbookVlmTestService();
   final _cropUploader = TextbookCropUploader();
   final _pbService = ProblemBankService();
-  // 개념원리 필수유형 — 본문 '풀이' 단락에서 정답·해설 좌표를 추출/저장한다.
-  final _answerService = TextbookVlmAnswerService();
-  final _solRefService = TextbookVlmSolutionRefService();
-  final _stageBatchService = TextbookStageBatchService();
-  final _reviewService = TextbookProblemReviewService();
+  final _workflowService = TextbookWorkflowService();
   final _supa = Supabase.instance.client;
 
-  final Map<String, String> _autoAnalyzedScopes = <String, String>{};
-  bool _autoAnalyzeRunning = false;
-  String? _autoAnalyzeBanner;
+  /// 소단원 작업 상태(`textbook_subunit_workflows`), stateKey 기준.
+  Map<String, TextbookSubunitWorkflow> _workflows =
+      const <String, TextbookSubunitWorkflow>{};
+
+  /// 소단원별 저장된 크롭 수, 그중 본문(문제은행 문항)이 연결된 수, 그 본문 중 검수를 마친 수(stateKey 기준).
+  /// 예전 원스톱으로 본문만 뽑아 둔 소단원("기존 추출"·"검수 완료")을 가르는 데 쓴다.
+  Map<String, ({int crops, int bodies, int reviewed})> _bodyCounts =
+      const <String, ({int crops, int bodies, int reviewed})>{};
+
+  /// 크롭 수정이 끝나면 잠깐 기다렸다 저장한다(핸들을 여러 번 끌 때 한 번만).
+  final Map<String, Timer> _autoSaveTimers = <String, Timer>{};
+  final Set<String> _autoSavePending = <String>{};
+
+  /// 수동 크롭 그리기: 첫 드래그는 번호 상자, 두 번째 드래그는 본문 상자.
+  /// 좌표는 쪽 크기로 나눈 0..1 값이다(확대해도 그대로).
+  bool _manualDrawMode = false;
+  int? _manualNumberPage;
+  Rect? _manualNumberBox;
+  int? _manualDragPage;
+  Offset? _manualDragStart;
+  Rect? _manualDragRect;
 
   PdfDocument? _bodyDocument;
   String? _bodyLocalPath;
@@ -174,7 +189,7 @@ class _TextbookUnitAuthoringDialogState
   /// 개념원리에서 crop 을 sub_index(소단원 순번)로 분리 저장하는 슬롯.
   /// B(필수유형)·E(특강)는 번호가 소단원마다 01부터 새로 시작해 분리가 필수다.
   /// (추출 런은 이와 별개로 전 카테고리를 소단원별로 나눈다 —
-  ///  `_startPdfOnlyExtractForFocus` 참고.)
+  ///  `_workOrderFor` 참고.)
   static const Set<String> _kWonriPerSubUnitKeys = {'B', 'E'};
 
   // ── 중등 개념원리(wonri_middle) 단일 패스 ────────────────────────────
@@ -348,13 +363,6 @@ class _TextbookUnitAuthoringDialogState
         'suryeok' => _kSuryeokPerSubUnitKeys,
         _ => _kWonriPerSubUnitKeys,
       };
-
-  /// 개념원리 필수유형 본문 정답·풀이 추출 대기열.
-  ///
-  /// 영역 저장은 소단원별로 빠르게 연속 완료될 수 있다. 기존에는 첫 소단원의
-  /// 본문 체인이 실행 중이면 뒤 소단원 체인을 즉시 return 해 영구 누락시켰다.
-  /// 모든 요청을 이 tail 뒤에 연결해 소단원 순서대로 반드시 한 번씩 실행한다.
-  Future<void> _wonriBodyChainTail = Future<void>.value();
 
   /// 개념서에서 분석/저장 단위가 되는 소단원 행 포커스(`W<idx>`)인지.
   bool _isWonriRowFocus(_SubFocus focus) =>
@@ -669,53 +677,10 @@ class _TextbookUnitAuthoringDialogState
   final Map<String, TextbookStageScopeStatus> _stageStatusBySub =
       <String, TextbookStageScopeStatus>{};
   bool _loadingStageStatuses = false;
-  _EmbeddedStageArgs? _embeddedStage;
   bool _batchRunning = false;
   int _batchDone = 0;
   int _batchTotal = 0;
   String _batchStatus = '';
-  bool _runProblemExtractionAfterStage1 = true;
-
-  bool get _backgroundWorkerAvailable {
-    return _pbExtractStatusBySub.values.any(
-      (status) => const <String>{
-        'queued',
-        'extracting',
-        'completed',
-        'review_required',
-        'failed',
-      }.contains(status.trim().toLowerCase()),
-    );
-  }
-
-  bool get _canMinimizeToBackground {
-    if (_batchRunning ||
-        _loadingStageStatuses ||
-        _subStates.values.any((state) => state.running || state.uploading)) {
-      return false;
-    }
-    final extractedScopes = _stageStatusBySub.values
-        .where((status) => status.bodyTotal > 0)
-        .toList();
-    if (extractedScopes.isEmpty ||
-        extractedScopes.any((status) => status.completedStages < 3)) {
-      return false;
-    }
-    return _embeddedStage == null && _backgroundWorkerAvailable;
-  }
-
-  void _minimizeToBackground() {
-    TextbookBackgroundExtractController.instance.minimize(
-      TextbookBackgroundExtractTask(
-        academyId: widget.academyId,
-        bookId: widget.bookId,
-        bookName: widget.bookName,
-        gradeLabel: widget.gradeLabel,
-        linkId: widget.linkId,
-      ),
-    );
-    Navigator.of(context).pop();
-  }
 
   // Single-selection for the corner-handle editor. Null ⇒ no handles drawn.
   String? _selectedProblemKey;
@@ -723,17 +688,41 @@ class _TextbookUnitAuthoringDialogState
   @override
   void initState() {
     super.initState();
+    TextbookWorkflowRunner.instance.addListener(_onRunnerChanged);
     _loadPayload();
   }
 
   @override
   void dispose() {
-    _reviewService.dispose();
+    TextbookWorkflowRunner.instance.removeListener(_onRunnerChanged);
+    for (final t in _autoSaveTimers.values) {
+      t.cancel();
+    }
     _bodyDocument?.dispose();
     for (final big in _bigUnits) {
       big.dispose();
     }
     super.dispose();
+  }
+
+  /// 실행기가 이 교재에서 돌리던 소단원이 끝나면 DB 상태와 진행 배지를 다시 읽는다.
+  Set<String> _activeRunKeys = const <String>{};
+
+  void _onRunnerChanged() {
+    if (!mounted) return;
+    final prefix = '${widget.bookId}|${widget.gradeLabel}|';
+    final active = <String>{
+      for (final s in TextbookWorkflowRunner.instance.states)
+        if (s.active && s.key.startsWith(prefix)) s.key,
+    };
+    final finished = _activeRunKeys.difference(active);
+    _activeRunKeys = active;
+    setState(() {});
+    if (finished.isNotEmpty) {
+      unawaited(_loadWorkflows());
+      unawaited(_loadStageStatuses());
+      unawaited(_loadPbExtractRuns());
+    }
   }
 
   // ------------------------------------------------------------ payload
@@ -758,14 +747,6 @@ class _TextbookUnitAuthoringDialogState
       final series = (payload?['series'] as String?)?.trim().isNotEmpty == true
           ? (payload!['series'] as String).trim()
           : kTextbookSeriesCatalog.first.key;
-      final loadedAutoScopes = <String, String>{};
-      if (payload != null && payload['auto_analyzed_scopes'] is Map) {
-        for (final e in (payload['auto_analyzed_scopes'] as Map).entries) {
-          final k = '${e.key}'.trim();
-          final v = '${e.value ?? ''}'.trim();
-          if (k.isNotEmpty && v.isNotEmpty) loadedAutoScopes[k] = v;
-        }
-      }
       final entry = textbookSeriesByKey(series) ?? kTextbookSeriesCatalog.first;
       final loaded = bigUnitsFromPayload(payload, seriesKey: entry.key);
       final editable = <_BigUnitEdit>[];
@@ -827,9 +808,6 @@ class _TextbookUnitAuthoringDialogState
       if (!mounted) return;
       setState(() {
         _seriesKey = entry.key;
-        _autoAnalyzedScopes
-          ..clear()
-          ..addAll(loadedAutoScopes);
         _bigUnits
           ..clear()
           ..addAll(editable);
@@ -840,6 +818,7 @@ class _TextbookUnitAuthoringDialogState
       unawaited(_loadPbExtractRuns());
       unawaited(_loadExistingCrops());
       unawaited(_loadStageStatuses());
+      unawaited(_loadWorkflows(resume: true));
       unawaited(_ensurePdf());
     } catch (e) {
       if (!mounted) return;
@@ -1049,24 +1028,43 @@ class _TextbookUnitAuthoringDialogState
 
   Future<void> _loadExistingCrops() async {
     try {
-      final rows = await _supa
-          .from('textbook_problem_crops')
-          .select('id, raw_page, display_page, section, problem_number, label, '
-              'item_name, is_set_header, set_from, set_to, content_group_kind, '
-              'content_group_label, content_group_title, content_group_order, '
-              'column_index, bbox_1k, item_region_1k, companion_regions, '
-              'big_order, mid_order, '
-              'sub_key, textbook_problem_analyses(math_status, quality_status)')
-          .eq('academy_id', widget.academyId)
-          .eq('book_id', widget.bookId)
-          .eq('grade_label', widget.gradeLabel)
-          .order('big_order', ascending: true)
-          .order('mid_order', ascending: true)
-          .order('sub_key', ascending: true)
-          .order('raw_page', ascending: true)
-          .order('problem_number', ascending: true);
+      // 한 번에 1000행까지만 오므로 쪽 단위로 끝까지 읽는다(큰 교재는 크롭이 1000개를 넘는다).
+      Future<List<dynamic>> fetch(bool withSource) async {
+        const pageSize = 1000;
+        final out = <dynamic>[];
+        for (var from = 0;; from += pageSize) {
+          final page = await _supa
+              .from('textbook_problem_crops')
+              .select('id, raw_page, display_page, section, problem_number, label, '
+                  'item_name, is_set_header, set_from, set_to, content_group_kind, '
+                  'content_group_label, content_group_title, content_group_order, '
+                  'column_index, bbox_1k, item_region_1k, companion_regions, '
+                  'big_order, mid_order, sub_key, sub_index, pb_question_uid, '
+                  'textbook_problem_analyses(math_status, quality_status)'
+                  '${withSource ? ', region_source' : ''}')
+              .eq('academy_id', widget.academyId)
+              .eq('book_id', widget.bookId)
+              .eq('grade_label', widget.gradeLabel)
+              .order('big_order', ascending: true)
+              .order('mid_order', ascending: true)
+              .order('sub_key', ascending: true)
+              .order('raw_page', ascending: true)
+              .order('problem_number', ascending: true)
+              .order('id', ascending: true)
+              .range(from, from + pageSize - 1);
+          out.addAll(page);
+          if (page.length < pageSize) return out;
+        }
+      }
+      List<dynamic> rows;
+      try {
+        rows = await fetch(true);
+      } on PostgrestException catch (e) {
+        if (!e.message.contains('region_source')) rethrow;
+        rows = await fetch(false);
+      }
       final byFocus = <String, List<Map<String, dynamic>>>{};
-      for (final row in (rows as List).cast<Map<String, dynamic>>()) {
+      for (final row in rows.cast<Map<String, dynamic>>()) {
         final bigIndex = int.tryParse('${row['big_order'] ?? ''}') ?? -1;
         final midIndex = int.tryParse('${row['mid_order'] ?? ''}') ?? -1;
         if (bigIndex < 0 || midIndex < 0) continue;
@@ -1088,27 +1086,24 @@ class _TextbookUnitAuthoringDialogState
             .putIfAbsent(_stateKeyFor(focus), () => <Map<String, dynamic>>[])
             .add(row);
       }
+      final bodyCounts = <String, ({int crops, int bodies, int reviewed})>{};
+      for (final entry in byFocus.entries) {
+        var crops = 0;
+        var bodies = 0;
+        var reviewed = 0;
+        for (final row in entry.value) {
+          if (row['is_set_header'] == true) continue;
+          crops += 1;
+          if ('${row['pb_question_uid'] ?? ''}'.trim().isEmpty) continue;
+          bodies += 1;
+          if (textbookCropReviewApproved(row)) reviewed += 1;
+        }
+        bodyCounts[entry.key] = (crops: crops, bodies: bodies, reviewed: reviewed);
+      }
       if (!mounted) return;
-      var autoSynced = false;
-      final nowIso = DateTime.now().toUtc().toIso8601String();
       setState(() {
+        _bodyCounts = bodyCounts;
         for (final entry in byFocus.entries) {
-          final nonHeader = entry.value.where((r) => r['is_set_header'] != true).toList();
-          if (nonHeader.isNotEmpty && !_autoAnalyzedScopes.containsKey(entry.key)) {
-            final allApproved = nonHeader.every((r) {
-              final rawAn = r['textbook_problem_analyses'];
-              final an = rawAn is List
-                  ? (rawAn.isNotEmpty && rawAn.first is Map ? rawAn.first as Map : null)
-                  : (rawAn is Map ? rawAn : null);
-              return an != null &&
-                  '${an['math_status'] ?? ''}' == 'approved' &&
-                  '${an['quality_status'] ?? ''}' == 'approved';
-            });
-            if (allApproved) {
-              _autoAnalyzedScopes[entry.key] = nowIso;
-              autoSynced = true;
-            }
-          }
           final focus = _focusFromStateKey(entry.key);
           if (focus == null) continue;
           final state = _ensureSubState(focus);
@@ -1122,20 +1117,23 @@ class _TextbookUnitAuthoringDialogState
             bucket: 'textbook-crops',
             rows: entry.value,
           );
+          state.manualItems.clear();
           state.pageResults
             ..clear()
-            ..addAll(_pageRowsFromSavedCrops(entry.value, focus));
+            ..addAll(_pageRowsFromSavedCrops(
+              entry.value,
+              focus,
+              manualOut: state.manualItems,
+            ));
           // 서버에서 읽어 온 것이지 이번에 올린 게 아니다.
           state.dirty = false;
           state.phase = '저장된 영역 ${entry.value.length}건';
           state.error = null;
         }
       });
-      if (autoSynced) {
-        unawaited(_saveTree(silent: true));
-      }
-    } catch (_) {
+    } catch (e) {
       // 저장된 영역 복원은 보조 기능이다. 실패해도 신규 분석 흐름은 유지한다.
+      debugPrint('[textbook-stage1] saved crops load failed: $e');
     }
   }
 
@@ -1164,8 +1162,9 @@ class _TextbookUnitAuthoringDialogState
 
   List<_PageAnalysisRow> _pageRowsFromSavedCrops(
     List<Map<String, dynamic>> rows,
-    _SubFocus focus,
-  ) {
+    _SubFocus focus, {
+    Set<TextbookVlmItem>? manualOut,
+  }) {
     int? asIntN(dynamic v) {
       if (v == null) return null;
       if (v is int) return v;
@@ -1182,6 +1181,19 @@ class _TextbookUnitAuthoringDialogState
     final out = <_PageAnalysisRow>[];
     for (final entry in byPage.entries) {
       final first = entry.value.first;
+      final items = <TextbookVlmItem>[];
+      for (final row in entry.value) {
+        // 개념원리 W 포커스에서는 행마다 실제 카테고리 sub_key(A~D)가
+        // 다르므로 DB 행의 sub_key 를 우선 사용한다.
+        final item = _vlmItemFromSavedCrop(
+          row,
+          '${row['sub_key'] ?? ''}'.trim().isEmpty
+              ? focus.subKey
+              : '${row['sub_key']}'.trim(),
+        );
+        items.add(item);
+        if ('${row['region_source'] ?? ''}' == 'manual') manualOut?.add(item);
+      }
       out.add(_PageAnalysisRow.success(
         rawPage: entry.key,
         displayPage:
@@ -1189,17 +1201,7 @@ class _TextbookUnitAuthoringDialogState
         section: '${first['section'] ?? _sectionForSubKey(focus.subKey)}',
         pageKind: 'problem_page',
         notes: 'saved_crops',
-        items: [
-          for (final row in entry.value)
-            // 개념원리 W 포커스에서는 행마다 실제 카테고리 sub_key(A~D)가
-            // 다르므로 DB 행의 sub_key 를 우선 사용한다.
-            _vlmItemFromSavedCrop(
-              row,
-              '${row['sub_key'] ?? ''}'.trim().isEmpty
-                  ? focus.subKey
-                  : '${row['sub_key']}'.trim(),
-            ),
-        ],
+        items: items,
       ));
     }
     out.sort((a, b) => a.rawPage.compareTo(b.rawPage));
@@ -1329,7 +1331,7 @@ class _TextbookUnitAuthoringDialogState
   }) {
     // 수력충전은 소단원 행(W) 전체가 유형 문제라 행 단위로 유형을 승계한다.
     // 유형 머리말은 유형이 바뀔 때만 인쇄되므로, 지면이 넘어가도 직전 유형이
-    // 이어진다. 개념 체크는 유형에 딸리지 않으므로 승계 대상이 아니다.
+    // 이어진다. 개념 체크는 그 유형을 잇지 않고 이름만 개념 체크로 둔다.
     final carrySeries = _seriesKey == 'suryeok';
     if (!carrySeries && !_carriesTypeGroup(focus.subKey)) {
       return const _ResolvedContentGroup.none();
@@ -1343,7 +1345,11 @@ class _TextbookUnitAuthoringDialogState
         final isTarget = row.rawPage == rawPage && i == itemIndex;
         if (carrySeries &&
             _wonriCategoryOfItem(item, row.section) != 'type_problem') {
-          if (isTarget) return const _ResolvedContentGroup.none();
+          if (isTarget) {
+            return _wonriCategoryOfItem(item, row.section) == 'concept_check'
+                ? const _ResolvedContentGroup.suryeokConceptCheck()
+                : const _ResolvedContentGroup.none();
+          }
           continue;
         }
         final rawGroup =
@@ -1775,7 +1781,6 @@ class _TextbookUnitAuthoringDialogState
         gradeLabel: widget.gradeLabel,
         seriesKey: _seriesKey,
         bigUnits: payload,
-        autoAnalyzedScopes: _autoAnalyzedScopes,
       );
       if (_seriesKey == 'wonri') {
         await _rebuildSpecialUnits();
@@ -2231,23 +2236,42 @@ class _TextbookUnitAuthoringDialogState
       _toast('시작/끝 페이지를 먼저 입력하세요', error: true);
       return;
     }
+    if (_cropLocked(focus)) {
+      _toast('${_subFocusLabel(focus)}은(는) 크롭을 확정했습니다. 다시 열기 후 분석하세요',
+          error: true);
+      return;
+    }
     final rawStartPage = _rawPageForDisplayPage(displayStartPage);
     final rawEndPage = _rawPageForDisplayPage(displayEndPage);
     final doc = await _ensurePdf();
     if (doc == null) return;
     final state = _ensureSubState(focus);
     if (state.running) return;
-    final savedStageStatus = _isWonriRowFocus(focus)
-        ? _wonriRowStageStatus(focus)
-        : _stageStatusBySub[_stateKeyFor(focus)];
-    final hadSavedExtraction =
-        (state.uploadResult?.rows ?? const <dynamic>[]).isNotEmpty ||
-            ((savedStageStatus?.bodyTotal ?? 0) > 0);
     final expectedStartNumber = await _expectedStartNumberForFocus(focus);
-    // Wipe prior manual edits for this sub before re-analysing — once the
-    // VLM items change index the old keys can silently point at the wrong
-    // problem, which is worse than asking the user to redo tweaks.
-    _manualEdits.remove(_stateKeyFor(focus));
+    // 사람이 그리거나 고친 문항은 다시 분석해도 남긴다. 핸들 수정은 문항 순서가
+    // 바뀌면 엉뚱한 문항을 가리키므로 먼저 문항에 굳혀 둔다.
+    _bakeManualEdits(focus, state);
+    final keptManual = [
+      for (final row in state.pageResults.where((r) => r.ok))
+        for (final item in row.items)
+          if (state.manualItems.contains(item)) (row, item),
+    ];
+    // 취소·실패하면 분석 전 결과로 되돌린다(자동 저장이 반쪽 결과를 올리지 않게).
+    final previousRows = List<_PageAnalysisRow>.of(state.pageResults);
+    final previousDirty = state.dirty;
+    void restorePrevious(String phase, {String? error}) {
+      setState(() {
+        state.pageResults
+          ..clear()
+          ..addAll(previousRows);
+        state.running = false;
+        state.dirty = previousDirty;
+        state.error = error;
+        state.phase = phase;
+      });
+    }
+
+    _autoSaveTimers.remove(_stateKeyFor(focus))?.cancel();
     setState(() {
       state.running = true;
       state.cancelled = false;
@@ -2261,8 +2285,6 @@ class _TextbookUnitAuthoringDialogState
       );
       state.phase = '페이지 렌더링/분석 중...';
       state.error = null;
-      state.uploadResult = null;
-      state.resetBeforeUpload = hadSavedExtraction;
       _selectedProblemKey = null;
     });
 
@@ -2356,23 +2378,25 @@ class _TextbookUnitAuthoringDialogState
         },
       );
       if (!mounted) return;
+      if (state.cancelled) {
+        restorePrevious('취소 · 이전 결과 유지');
+        return;
+      }
       if (_currentSeries().hasSubUnitRows) _applyScopeGuards(focus);
+      _restoreManualItems(state, keptManual);
       final typeGroupError = _requiredTypeGroupError(focus, state);
       setState(() {
         state.running = false;
-        state.dirty = true;
+        state.markDirty();
         state.error = finalProgress.lastError ?? typeGroupError;
         state.phase = finalProgress.failed > 0
             ? '일부 실패'
             : (typeGroupError == null ? '완료' : '유형명 누락');
       });
+      _scheduleAutoSave(focus, delay: Duration.zero);
     } catch (e) {
       if (!mounted) return;
-      setState(() {
-        state.running = false;
-        state.error = '$e';
-        state.phase = '실패';
-      });
+      restorePrevious('실패 · 이전 결과 유지', error: '$e');
     }
   }
 
@@ -2387,11 +2411,12 @@ class _TextbookUnitAuthoringDialogState
   Future<void> _retryFailedForFocus(_SubFocus focus) async {
     final state = _ensureSubState(focus);
     final failed = state.progress?.failedPages ?? const <int>{};
-    if (failed.isEmpty) return;
+    if (failed.isEmpty || _cropLocked(focus)) return;
     final doc = await _ensurePdf();
     if (doc == null) return;
     final expectedStartNumber = await _expectedStartNumberForFocus(focus);
     final rawStartPage = _rawStartPageForFocus(focus);
+    _bakeManualEdits(focus, state);
     setState(() {
       state.running = true;
       state.cancelled = false;
@@ -2452,8 +2477,14 @@ class _TextbookUnitAuthoringDialogState
         detector: detect,
         isCancelled: () => state.cancelled,
         onPageSuccess: (outcome) async {
-          state.pageResults
-              .removeWhere((r) => r.rawPage == outcome.rawPage && !r.ok);
+          // 실패한 지면에 사람이 먼저 그려 둔 문항은 새 결과에 다시 얹는다.
+          final keptManual = [
+            for (final r in state.pageResults
+                .where((r) => r.rawPage == outcome.rawPage && r.ok))
+              for (final it in r.items)
+                if (state.manualItems.contains(it)) (r, it),
+          ];
+          state.pageResults.removeWhere((r) => r.rawPage == outcome.rawPage);
           state.pageResults.add(_PageAnalysisRow.success(
             rawPage: outcome.rawPage,
             displayPage: outcome.result.displayPage,
@@ -2463,6 +2494,7 @@ class _TextbookUnitAuthoringDialogState
             notes: outcome.result.notes,
             items: outcome.result.items,
           ));
+          _restoreManualItems(state, keptManual);
           if (_seriesKey != 'wonri') _applyScopeGuards(focus);
           if (!mounted) return;
           setState(() {});
@@ -2490,12 +2522,13 @@ class _TextbookUnitAuthoringDialogState
       final typeGroupError = _requiredTypeGroupError(focus, state);
       setState(() {
         state.running = false;
-        state.dirty = true;
+        state.markDirty();
         state.error = finalProgress.lastError ?? typeGroupError;
         state.phase = finalProgress.failed > 0
             ? '재분석 일부 실패'
             : (typeGroupError == null ? '재분석 완료' : '유형명 누락');
       });
+      if (!state.cancelled) _scheduleAutoSave(focus, delay: Duration.zero);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -2509,6 +2542,30 @@ class _TextbookUnitAuthoringDialogState
   void _applyScopeGuards(_SubFocus focus) {
     final state = _ensureSubState(focus);
     if (state.pageResults.isEmpty) return;
+    // 가드는 AI 판독을 바로잡는 규칙이다. 사람이 그리거나 고친 문항은 빼 두었다가
+    // 그대로 되돌린다.
+    _bakeManualEdits(focus, state);
+    final manual = [
+      for (final row in state.pageResults.where((r) => r.ok))
+        for (final item in row.items)
+          if (state.manualItems.contains(item)) (row, item),
+    ];
+    for (var r = 0; r < state.pageResults.length && manual.isNotEmpty; r += 1) {
+      final row = state.pageResults[r];
+      if (!row.ok || !row.items.any(state.manualItems.contains)) continue;
+      state.pageResults[r] = row.withItems([
+        for (final it in row.items)
+          if (!state.manualItems.contains(it)) it,
+      ]);
+    }
+    try {
+      _applyAiScopeGuards(focus, state);
+    } finally {
+      _restoreManualItems(state, manual);
+    }
+  }
+
+  void _applyAiScopeGuards(_SubFocus focus, _SubRunState state) {
     late final List<_PageAnalysisRow> guarded;
     if (_seriesKey == 'wonri') {
       // 개념원리 일반 소단원은 정확한 "개념원리 익히기" 헤더가 처음
@@ -2559,18 +2616,110 @@ class _TextbookUnitAuthoringDialogState
     state.pageResults
       ..clear()
       ..addAll(guarded);
-    _manualEdits[_stateKeyFor(focus)]?.removeWhere((key, _) {
-      final parts = key.split(':');
-      if (parts.length != 2) return true;
-      final rawPage = int.tryParse(parts[0]);
-      final index = int.tryParse(parts[1]);
-      if (rawPage == null || index == null) return true;
-      final row = state.pageResults.firstWhere(
-        (r) => r.rawPage == rawPage && r.ok,
-        orElse: () => _PageAnalysisRow.placeholder(),
+  }
+
+  /// 핸들로 고친 영역을 문항에 굳히고 사람 손 문항으로 표시한다. 그 뒤로는 지면 안
+  /// 문항 순서가 바뀌어도 수정이 그 문항을 따라간다.
+  void _bakeManualEdits(_SubFocus focus, _SubRunState state) {
+    final edits = _manualEdits.remove(_stateKeyFor(focus));
+    if (edits == null || edits.isEmpty) return;
+    for (var r = 0; r < state.pageResults.length; r += 1) {
+      final row = state.pageResults[r];
+      if (!row.ok) continue;
+      var changed = false;
+      final items = <TextbookVlmItem>[];
+      for (var i = 0; i < row.items.length; i += 1) {
+        final item = row.items[i];
+        final edited = edits[_problemKey(row.rawPage, i)];
+        if (edited == null || edited.length != 4) {
+          items.add(item);
+          continue;
+        }
+        final baked = _itemWithRegion(item, edited);
+        state.manualItems
+          ..remove(item)
+          ..add(baked);
+        items.add(baked);
+        changed = true;
+      }
+      if (changed) state.pageResults[r] = row.withItems(items);
+    }
+  }
+
+  TextbookVlmItem _itemWithRegion(TextbookVlmItem it, List<int> region) =>
+      TextbookVlmItem(
+        number: it.number,
+        label: it.label,
+        category: it.category,
+        itemRole: it.itemRole,
+        companionRegions: it.companionRegions,
+        isImportant: it.isImportant,
+        isSetHeader: it.isSetHeader,
+        setFrom: it.setFrom,
+        setTo: it.setTo,
+        contentGroupKind: it.contentGroupKind,
+        contentGroupLabel: it.contentGroupLabel,
+        contentGroupTitle: it.contentGroupTitle,
+        contentGroupOrder: it.contentGroupOrder,
+        column: it.column,
+        bbox: it.bbox,
+        itemRegion: region,
       );
-      return index < 0 || index >= row.items.length;
-    });
+
+  bool _sameProblem(TextbookVlmItem a, TextbookVlmItem b) =>
+      a.number.trim() == b.number.trim() &&
+      a.category == b.category &&
+      a.isSetHeader == b.isSetHeader;
+
+  /// 지면 읽는 순서(단 → 위에서 아래)로 끼워 넣을 자리.
+  int _readingOrderIndex(List<TextbookVlmItem> items, TextbookVlmItem item) {
+    (int, int) keyOf(TextbookVlmItem it) {
+      final box = it.itemRegion ?? it.bbox;
+      return (it.column ?? 0, box == null || box.length != 4 ? 0 : box[0]);
+    }
+
+    final k = keyOf(item);
+    for (var i = 0; i < items.length; i += 1) {
+      final o = keyOf(items[i]);
+      if (o.$1 > k.$1 || (o.$1 == k.$1 && o.$2 > k.$2)) return i;
+    }
+    return items.length;
+  }
+
+  /// 사람 손 문항을 지면 결과에 되돌린다. 같은 번호의 AI 문항은 뺀다.
+  void _restoreManualItems(
+    _SubRunState state,
+    List<(_PageAnalysisRow, TextbookVlmItem)> kept,
+  ) {
+    if (kept.isEmpty) return;
+    for (final (source, item) in kept) {
+      final idx = state.pageResults
+          .indexWhere((r) => r.rawPage == source.rawPage && r.ok);
+      final current = idx < 0 ? null : state.pageResults[idx];
+      final items = <TextbookVlmItem>[
+        for (final it in current?.items ?? const <TextbookVlmItem>[])
+          if (!identical(it, item) && !_sameProblem(it, item)) it,
+      ];
+      items.insert(_readingOrderIndex(items, item), item);
+      final next = current?.withItems(items) ??
+          _PageAnalysisRow.success(
+            rawPage: source.rawPage,
+            displayPage: source.displayPage,
+            section: source.section,
+            pageKind: 'problem_page',
+            notes: 'manual_crops',
+            items: items,
+          );
+      if (idx < 0) {
+        state.pageResults
+          ..removeWhere((r) => r.rawPage == source.rawPage)
+          ..add(next);
+      } else {
+        state.pageResults[idx] = next;
+      }
+      state.manualItems.add(item);
+    }
+    state.pageResults.sort((a, b) => a.rawPage.compareTo(b.rawPage));
   }
 
   List<_PageAnalysisRow> _guardWonriMiddleUnitEndRows(
@@ -3447,60 +3596,23 @@ class _TextbookUnitAuthoringDialogState
     return total;
   }
 
-  Future<void> _resetSavedExtractionBeforeUpload(
-    _SubFocus focus,
-    _SubRunState state,
-  ) async {
-    if (!state.resetBeforeUpload) return;
-    final scope = _stageScopePayload(focus);
-    setState(() {
-      state.phase = '기존 추출 문서·정답·해설 초기화 중...';
-      state.error = null;
-    });
-    final result = await _pdfService.deleteStageData(
-      academyId: widget.academyId,
-      bookId: widget.bookId,
-      gradeLabel: widget.gradeLabel,
-      bigOrder: focus.bigIndex,
-      midOrder: focus.midIndex,
-      subKey: focus.subKey,
-      subIndex: (scope['sub_index'] as num?)?.toInt() ?? 0,
-      stage: 'body',
-      scopeKind: scope['scope_kind']?.toString(),
-      unitRowIndex: (scope['unit_row_index'] as num?)?.toInt(),
-      bodyStartPage: (scope['body_start_page'] as num?)?.toInt(),
-      bodyEndPage: (scope['body_end_page'] as num?)?.toInt(),
-    );
-    if (result.warnings.isNotEmpty) {
-      debugPrint('[textbook-reextract-reset] warnings: ${result.warnings}');
-    }
-    state.resetBeforeUpload = false;
-    state.uploadResult = null;
-    await _loadStageStatuses();
-  }
-
-  Future<void> _uploadFocused(_SubFocus focus) async {
+  /// 지금 화면의 크롭을 서버에 임시저장한다. 다시 분석한 결과도 옛 추출을 지우지 않고
+  /// 덮어쓴다: 같은 번호는 갱신되고, 문제은행에 연결됐거나 사람이 고친 크롭은 남는다.
+  Future<void> _uploadFocused(_SubFocus focus, {bool quiet = false}) async {
     final state = _ensureSubState(focus);
     if (state.running || state.uploading) return;
     _applyScopeGuards(focus);
     final typeGroupError = _requiredTypeGroupError(focus, state);
     if (typeGroupError != null) {
-      _toast(typeGroupError, error: true);
-      return;
-    }
-    try {
-      await _resetSavedExtractionBeforeUpload(focus, state);
-    } catch (e) {
-      if (!mounted) return;
       setState(() {
-        state.error = '$e';
-        state.phase = '기존 추출 초기화 실패';
+        state.error = typeGroupError;
+        state.phase = '저장 안 됨 · 유형명 누락';
       });
-      _toast('기존 추출 초기화 실패: $e', error: true);
+      if (!quiet) _toast(typeGroupError, error: true);
       return;
     }
     if (_isWonriRowFocus(focus)) {
-      await _uploadWonriRowFocus(focus, state);
+      await _uploadWonriRowFocus(focus, state, quiet: quiet);
       return;
     }
     final big = _bigUnits[focus.bigIndex];
@@ -3541,19 +3653,22 @@ class _TextbookUnitAuthoringDialogState
           columnIndex: vlm.column,
           bbox1k: _effectiveNumberBbox(vlm, region),
           itemRegion1k: region,
+          regionSource: edited != null || state.manualItems.contains(vlm)
+              ? 'manual'
+              : 'vlm',
         ));
       }
     }
     if (items.isEmpty) {
-      _toast('저장할 문항 영역이 없습니다', error: true);
+      if (!quiet) _toast('저장할 문항 영역이 없습니다', error: true);
       return;
     }
 
+    final seq = state.editSeq;
     setState(() {
       state.uploading = true;
-      state.phase = '영역 저장 중... (${items.length}건)';
+      state.phase = '임시저장 중... (${items.length}건)';
       state.error = null;
-      state.uploadResult = null;
     });
     try {
       final result = await _cropUploader.uploadCropBatch(
@@ -3570,28 +3685,57 @@ class _TextbookUnitAuthoringDialogState
         onProgress: (processed, total) {
           if (!mounted) return;
           setState(() {
-            state.phase = '영역 저장 중... $processed / $total';
+            state.phase = '임시저장 중... $processed / $total';
           });
         },
       );
       if (!mounted) return;
       setState(() {
         state.uploading = false;
-        state.dirty = false;
+        state.dirty = state.editSeq != seq;
         state.uploadResult = result;
-        state.phase = '영역 저장 완료 · ${result.upserted}/${items.length}건';
+        state.phase = '임시저장 · ${result.upserted}/${items.length}건';
       });
-      _toast(
-        '${focus.subKey} 영역 ${result.upserted}건을 서버에 저장했습니다',
-      );
+      // 다시 분석한 지면에서 이번에 안 잡힌 번호의 옛 크롭은 지운다. 문제은행에
+      // 연결됐거나 사람이 고친 크롭은 서버가 남긴다.
+      var deletedStale = 0;
+      final protectedNumbers = <String>[];
+      try {
+        final sync = await _cropUploader.syncCropScope(
+          academyId: widget.academyId,
+          bookId: widget.bookId,
+          gradeLabel: widget.gradeLabel,
+          bigOrder: focus.bigIndex,
+          midOrder: focus.midIndex,
+          subKey: focus.subKey,
+          rawPages: pageRows.map((row) => row.rawPage),
+          keepProblemNumbers: items.map((item) => item.problemNumber),
+        );
+        deletedStale = sync.deleted;
+        protectedNumbers.addAll(sync.protectedNumbers);
+      } catch (e) {
+        if (mounted) setState(() => state.error = '범위 정리 실패(저장은 완료): $e');
+      }
+      if (!mounted) return;
+      if (deletedStale > 0 || protectedNumbers.isNotEmpty) {
+        setState(() {
+          state.phase = '${state.phase}'
+              '${deletedStale > 0 ? ' · 옛 크롭 $deletedStale건 삭제' : ''}'
+              '${protectedNumbers.isEmpty ? '' : ' · 연결된 옛 크롭 ${protectedNumbers.length}건 남김'}';
+        });
+      }
+      if (!quiet) {
+        _toast('${_subFocusLabel(focus)} 크롭 ${result.upserted}건 임시저장');
+      }
       unawaited(_loadStageStatuses());
     } catch (e) {
       if (!mounted) return;
       setState(() {
         state.uploading = false;
         state.error = '$e';
-        state.phase = '영역 저장 실패';
+        state.phase = '임시저장 실패';
       });
+      _toast('${_subFocusLabel(focus)} 임시저장 실패: $e', error: true);
     }
   }
 
@@ -3715,9 +3859,12 @@ class _TextbookUnitAuthoringDialogState
 
   /// 개념원리 단일 패스 저장 — 소단원 분석 결과의 문항을 category 별로
   /// sub_key(A~D)에 나눠 업로드한다. 이후 정답/해설/문제은행 흐름은
-  /// 쎈과 동일하게 sub_key 단위로 동작한다. 업로드가 끝나면 필수유형(B)
-  /// 문항은 본문 '풀이' 단락에서 정답·풀이 좌표를 자동 추출한다.
-  Future<void> _uploadWonriRowFocus(_SubFocus focus, _SubRunState state) async {
+  /// 쎈과 동일하게 sub_key 단위로 동작한다.
+  Future<void> _uploadWonriRowFocus(
+    _SubFocus focus,
+    _SubRunState state, {
+    bool quiet = false,
+  }) async {
     final big = _bigUnits[focus.bigIndex];
     final mid = big.middles[focus.midIndex];
     final edits = _manualEdits[_stateKeyFor(focus)];
@@ -3731,8 +3878,8 @@ class _TextbookUnitAuthoringDialogState
     // 개념+유형 쏙쏙/한 번 더 연습은 한 소단원 안에서 지면 블록마다 번호가
     // 1번부터 다시 시작할 수 있다. 그런 슬롯만 번호 앞에 본문 페이지를 붙인다.
     final numberPrefixes = _gaeyuBlockNumberPrefixes(pageRows);
-    // 유형명(content_group)을 갖는 카테고리. 수력충전 개념 체크는 유형에
-    // 딸리지 않는 마무리 확인 문항이라 유형명을 비운다.
+    // 유형명(content_group)을 갖는 카테고리. 수력충전 개념 체크는 아래서
+    // 유형 이름을 개념 체크로 따로 넣는다.
     final groupCategories = switch (_seriesKey) {
       'gaeyu' => const {'essential_problem'},
       'suryeok' => const {'type_problem'},
@@ -3759,7 +3906,9 @@ class _TextbookUnitAuthoringDialogState
             ? gaeyuHighLabels[_problemKey(row.rawPage, i)] ?? ''
             : vlm.label.trim();
         final subKey = _conceptSubKeyByCategory[category]!;
-        var group = const _ResolvedContentGroup.none();
+        var group = _seriesKey == 'suryeok' && category == 'concept_check'
+            ? const _ResolvedContentGroup.suryeokConceptCheck()
+            : const _ResolvedContentGroup.none();
         if (groupCategories.contains(category)) {
           final rawGroup = _rawContentGroupForItem(vlm, subKey, category);
           group =
@@ -3824,6 +3973,9 @@ class _TextbookUnitAuthoringDialogState
               bbox1k: _effectiveNumberBbox(vlm, region),
               itemRegion1k: region,
               companionRegions: vlm.companionRegions,
+              regionSource: edited != null || state.manualItems.contains(vlm)
+                  ? 'manual'
+                  : 'vlm',
             ));
       }
     }
@@ -3835,16 +3987,21 @@ class _TextbookUnitAuthoringDialogState
     if (duplicateError != null) {
       setState(() {
         state.error = duplicateError;
-        state.phase = '영역 저장 실패';
+        state.phase = '저장 안 됨 · 번호 중복';
       });
+      if (!quiet) _toast(duplicateError, error: true);
+      return;
+    }
+    if (totalItems == 0) {
+      if (!quiet) _toast('저장할 문항 영역이 없습니다', error: true);
       return;
     }
 
+    final seq = state.editSeq;
     setState(() {
       state.uploading = true;
-      state.phase = '영역 저장 중... ($totalItems건)';
+      state.phase = '임시저장 중... ($totalItems건)';
       state.error = null;
-      state.uploadResult = null;
     });
     try {
       final allRows = <Map<String, dynamic>>[];
@@ -3876,7 +4033,7 @@ class _TextbookUnitAuthoringDialogState
           onProgress: (processed, total) {
             if (!mounted) return;
             setState(() {
-              state.phase = '$categoryName 저장 중... $processed / $total';
+              state.phase = '$categoryName 임시저장 중... $processed / $total';
             });
           },
         );
@@ -3889,7 +4046,7 @@ class _TextbookUnitAuthoringDialogState
       if (!mounted) return;
       setState(() {
         state.uploading = false;
-        state.dirty = false;
+        state.dirty = state.editSeq != seq;
         state.uploadResult = TextbookCropBatchResult(
           upserted: upserted,
           bucket: 'textbook-crops',
@@ -3931,13 +4088,15 @@ class _TextbookUnitAuthoringDialogState
           : ' · 문제은행 연결 ${protectedNumbers.length}건 남김';
       setState(() {
         state.error = syncError;
-        state.phase = '영역 저장 완료 · $upserted/$totalItems건'
+        state.phase = '임시저장 · $upserted/$totalItems건'
             '$skippedNote$deletedNote$protectedNote';
       });
-      _toast(
-        '${_subFocusLabel(focus)} 영역 $upserted건 저장'
-        '${deletedStale > 0 ? ' · 오인식 $deletedStale건 삭제' : ''}',
-      );
+      if (!quiet) {
+        _toast(
+          '${_subFocusLabel(focus)} 크롭 $upserted건 임시저장'
+          '${deletedStale > 0 ? ' · 오인식 $deletedStale건 삭제' : ''}',
+        );
+      }
       if (protectedNumbers.isNotEmpty) {
         // 재분류로 옛 crop 이 필요 없어졌는데 이미 문제은행 문항이 붙어 있는
         // 경우다. 문항을 말없이 지울 수는 없으니 어떤 번호인지 알려준다.
@@ -3966,29 +4125,16 @@ class _TextbookUnitAuthoringDialogState
       if (hasSpecial) {
         unawaited(_rebuildSpecialUnits());
       }
-
-      // 개념원리는 필수유형(B)·특강(E), 개념+유형은 쓱쓱 서술형 예제(E)가
-      // 본문 "풀이" 단락에서 정답·풀이를 뽑는다.
-      final typeRows = allRows.where((r) {
-        final subKey = '${r['sub_key'] ?? ''}'.trim().toUpperCase();
-        final category = _conceptCategoryBySubKey[subKey] ?? '';
-        final number = '${r['problem_number'] ?? ''}'.trim();
-        return _isConceptBodySolutionItem(category, number);
-      }).toList();
-      if (typeRows.isNotEmpty) {
-        await _enqueueWonriBodySolutionChain(focus, typeRows);
-      }
     } catch (e) {
       if (!mounted) return;
-      // 영역이 이미 올라간 뒤라면 뒤따르는 본문 정답·풀이 추출이 실패해도
-      // 저장을 되돌리지 않는다. 여기서 phase 를 실패로 덮으면 다음 단계가
-      // 저장이 안 된 줄 알고 멈춘다.
-      final saved = (state.uploadResult?.rows ?? const []).isNotEmpty;
       setState(() {
         state.uploading = false;
         state.error = '$e';
-        if (!saved) state.phase = '영역 저장 실패';
+        if (state.dirty) state.phase = '임시저장 실패';
       });
+      if (state.dirty) {
+        _toast('${_subFocusLabel(focus)} 임시저장 실패: $e', error: true);
+      }
     }
   }
 
@@ -4020,180 +4166,6 @@ class _TextbookUnitAuthoringDialogState
         '코너를 잘못 읽은 지면입니다. 이 소단원을 다시 분석하세요.';
   }
 
-  /// 개념원리 필수유형(B) 자동 체이닝 — 영역 저장 직후 본문 PDF의 "풀이"
-  /// 단락에서 정답(굵은 글씨)과 풀이 좌표를 추출해 정답/해설 테이블에
-  /// 저장한다 (source_kind='body'). 실패해도 영역 저장 자체는 유지된다.
-  Future<void> _enqueueWonriBodySolutionChain(
-    _SubFocus focus,
-    List<Map<String, dynamic>> typeRows,
-  ) {
-    final next = _wonriBodyChainTail.then(
-      (_) => _runWonriBodySolutionChain(focus, typeRows),
-    );
-    // 한 요청의 예외가 이후 대기 요청까지 끊지 않도록 tail 은 항상 정상화한다.
-    _wonriBodyChainTail = next.then<void>(
-      (_) {},
-      onError: (Object error, StackTrace stackTrace) {
-        debugPrint('[wonri-body-chain] queued task failed: $error');
-      },
-    );
-    return next;
-  }
-
-  Future<void> _runWonriBodySolutionChain(
-    _SubFocus focus,
-    List<Map<String, dynamic>> typeRows,
-  ) async {
-    final doc = await _ensurePdf();
-    if (doc == null) return;
-    final byPage = <int, List<Map<String, dynamic>>>{};
-    for (final row in typeRows) {
-      final rawPage = int.tryParse('${row['raw_page'] ?? ''}');
-      final id = '${row['id'] ?? ''}'.trim();
-      if (rawPage == null || rawPage <= 0 || id.isEmpty) continue;
-      byPage.putIfAbsent(rawPage, () => <Map<String, dynamic>>[]).add(row);
-    }
-    if (byPage.isEmpty) return;
-
-    final state = _ensureSubState(focus);
-    setState(() {
-      state.phase = '필수유형 본문 정답·풀이 추출 중...';
-    });
-    final answers = <TextbookAnswerUpload>[];
-    final refs = <TextbookSolutionRefUpload>[];
-    final failedPageNumbers = <int>[];
-    // 페이지 VLM 이 성공해도 특정 번호가 응답에서 빠질 수 있다. 누락 번호를
-    // 모아 사용자에게 알려야 상태 칩이 N/3 에 멈춘 이유를 즉시 알 수 있다.
-    final missingNumbers = <String>[];
-    try {
-      final pages = byPage.keys.toList()..sort();
-      for (final rawPage in pages) {
-        if (mounted) {
-          setState(() {
-            state.phase = '필수유형 본문 정답·풀이 추출 중... p$rawPage';
-          });
-        }
-        final rowsOnPage = byPage[rawPage]!;
-        final idByNumberKey = <String, String>{
-          for (final r in rowsOnPage)
-            textbookAnswerNumberKey('${r['problem_number'] ?? ''}'):
-                '${r['id']}'.trim(),
-        };
-        final matchedKeys = <String>{};
-        var pageOk = false;
-        // 일시적 VLM 실패(파싱·타임아웃)로 페이지 전체가 누락되지 않도록
-        // 페이지 단위로 1회 재시도한다.
-        for (var attempt = 0; attempt < 2 && !pageOk; attempt += 1) {
-          try {
-            final png = await renderPdfPageToPng(
-              document: doc,
-              pageNumber: rawPage,
-              longEdgePx: _kAnalysisLongEdgePx,
-            );
-            final result = await _solRefService.extractBodySolutionsOnPage(
-              imageBytes: png,
-              rawPage: rawPage,
-              expectedNumbers: [
-                for (final r in rowsOnPage)
-                  '${r['problem_number'] ?? ''}'.trim(),
-              ],
-              seriesKey: _seriesKey,
-            );
-            final displayPage = int.tryParse(
-              '${rowsOnPage.first['display_page'] ?? ''}',
-            );
-            for (final item in result.items) {
-              final numberKey = textbookAnswerNumberKey(item.problemNumber);
-              final cropId = idByNumberKey[numberKey];
-              if (cropId == null || cropId.isEmpty) continue;
-              var answerText = item.answerText.trim();
-              var answerLatex2d = item.answerLatex2d.trim();
-              // 증명 문항처럼 풀이 상자(content_region)는 찾았지만 별도의 굵은
-              // 최종 답이 없어 빈 문자열로 온 경우 해설지와 같이 '풀이 참조'로 채운다.
-              if (answerText.isEmpty &&
-                  answerLatex2d.isEmpty &&
-                  item.contentRegion1k != null) {
-                answerText = '풀이 참조';
-                answerLatex2d = '풀이 참조';
-              }
-              if (answerText.isNotEmpty || answerLatex2d.isNotEmpty) {
-                matchedKeys.add(numberKey);
-                answers.add(TextbookAnswerUpload(
-                  cropId: cropId,
-                  answerKind: item.answerKind,
-                  answerText: answerText,
-                  answerLatex2d: answerLatex2d.isEmpty ? null : answerLatex2d,
-                ));
-              }
-              refs.add(TextbookSolutionRefUpload(
-                cropId: cropId,
-                rawPage: rawPage,
-                displayPage: displayPage,
-                numberRegion1k: item.numberRegion1k,
-                contentRegion1k: item.contentRegion1k,
-                sourceKind: 'body',
-              ));
-            }
-            pageOk = true;
-          } catch (e) {
-            debugPrint(
-              '[wonri-body-chain] page $rawPage attempt ${attempt + 1} '
-              'failed: $e',
-            );
-          }
-        }
-        if (!pageOk) failedPageNumbers.add(rawPage);
-        for (final r in rowsOnPage) {
-          final number = '${r['problem_number'] ?? ''}'.trim();
-          if (!matchedKeys.contains(textbookAnswerNumberKey(number))) {
-            missingNumbers.add('$number(p$rawPage)');
-          }
-        }
-      }
-      var answerCount = 0;
-      var refCount = 0;
-      if (answers.isNotEmpty) {
-        answerCount = await _answerService.batchUpsertAnswers(
-          academyId: widget.academyId,
-          answers: answers,
-        );
-      }
-      if (refs.isNotEmpty) {
-        refCount = await _solRefService.batchUpsertSolutionRefs(
-          academyId: widget.academyId,
-          refs: refs,
-        );
-      }
-      if (!mounted) return;
-      final failNote = failedPageNumbers.isNotEmpty
-          ? ' · 실패 p${failedPageNumbers.join(', p')}'
-          : '';
-      final missingNote =
-          missingNumbers.isNotEmpty ? ' · 누락 ${missingNumbers.join(', ')}' : '';
-      setState(() {
-        state.phase =
-            '필수유형 본문 추출 완료 · 정답 $answerCount · 풀이 $refCount$failNote$missingNote';
-      });
-      if (missingNumbers.isNotEmpty) {
-        _toast(
-          '필수유형 본문 정답 $answerCount건 · 풀이 $refCount건 저장 · '
-          '누락 ${missingNumbers.join(', ')} — 해당 소단원을 재추출하세요',
-          error: true,
-        );
-      } else {
-        _toast('필수유형 본문 정답 $answerCount건 · 풀이 좌표 $refCount건 저장');
-      }
-      unawaited(_loadStageStatuses());
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        state.phase = '필수유형 본문 추출 실패';
-        state.error = '$e';
-      });
-      _toast('필수유형 본문 추출 실패: $e', error: true);
-    }
-  }
-
   Future<void> _runSelectedBatch() async {
     if (_batchRunning) return;
     final selected = _selectedBatchFocuses();
@@ -4208,20 +4180,26 @@ class _TextbookUnitAuthoringDialogState
       _batchStatus = '일괄 실행 준비 중...';
     });
     final failed = <String>[];
+    var skipped = 0;
     try {
       for (var i = 0; i < selected.length; i += 1) {
         final focus = selected[i];
         final label = _subFocusLabel(focus);
         if (!mounted) return;
+        if (_cropLocked(focus)) {
+          skipped += 1;
+          setState(() => _batchDone = i + 1);
+          continue;
+        }
         setState(() {
           _focus = focus;
           _selectedProblemKey = null;
-          _batchStatus = '$label · Stage 1 분석 중...';
+          _batchStatus = '$label · 크롭 분석 중...';
         });
         await _runFocusedAnalysis(focus);
         final state = _ensureSubState(focus);
         if (state.error != null || _totalRegionsFor(state, focus) == 0) {
-          failed.add('$label(Stage 1)');
+          failed.add('$label: ${state.error ?? '문항 영역 없음'}');
           if (mounted) setState(() => _batchDone = i + 1);
           continue;
         }
@@ -4229,16 +4207,17 @@ class _TextbookUnitAuthoringDialogState
         if (!mounted) return;
         setState(() {
           _batchDone = i + 1;
-          _batchStatus = '$label · Stage 1 분석 완료';
+          _batchStatus = '$label · 크롭 분석 완료';
         });
       }
       if (!mounted) return;
       final failText = failed.isEmpty ? '' : ' · 실패 ${failed.length}개';
-      _toast('선택 분석 완료$failText');
+      final skipText = skipped == 0 ? '' : ' · 확정돼 건너뜀 $skipped개';
+      _toast('선택 분석 완료$failText$skipText');
       setState(() {
         _batchRunning = false;
         _batchStatus = failed.isEmpty
-            ? '크롭 확인 후 다음 버튼을 누르면 영역을 저장하고 정답 VLM 단계로 진행합니다'
+            ? '크롭을 확인한 뒤 "크롭 확정"을 누르면 2단계(본문 추출·정답 위치·AI 검수)가 시작됩니다$skipText'
             : failed.join('\n');
       });
     } catch (e) {
@@ -4251,481 +4230,1088 @@ class _TextbookUnitAuthoringDialogState
     }
   }
 
-  /// 소단원(단일 또는 다중 직렬) 원스톱 자동 분석 파이프라인:
-  /// 1) 단원 구조·페이지 저장 → 본문 크롭 검출(PDF 오버레이 실시간 표시) → ID 보존 덮어쓰기(UPSERT) 및 잉여 크롭 정리
-  /// 2) 본문·수식·도형 문제은행 추출 큐 실행 및 완료 대기
-  /// 3) 정답·해설 1차 좌표 매칭
-  /// 4) AI 선(先)풀이 + AI 정답 기반 해설 매칭·Vision 전사 + 과제형 V2 카드 렌더링 & 원본 대조 품질 검수
-  /// 5) 완료 후 학습앱 디자인 언어 기반 '1차 검수·핀셋 추출 화면' 자동 오픈
-  Future<void> _runAutoAnalyzeTargets(List<_SubFocus> targets) async {
-    if (_autoAnalyzeRunning || _batchRunning || targets.isEmpty) return;
-    setState(() {
-      _autoAnalyzeRunning = true;
-      _batchRunning = true;
-      _batchDone = 0;
-      _batchTotal = targets.length;
-      _autoAnalyzeBanner = '원스톱 자동 분석 준비 중 (${targets.length}개 소단원)...';
-      _batchStatus = _autoAnalyzeBanner!;
-    });
+  // ------------------------------------------------------------ workflow
 
-    await _saveTree(silent: true);
-
-    final failed = <String>[];
-    _SubFocus? lastSucceededFocus;
-    final lastConceptPages = <int>[];
-
+  Future<void> _loadWorkflows({bool resume = false}) async {
     try {
-      for (var i = 0; i < targets.length; i += 1) {
-        if (!mounted) break;
-        final focus = targets[i];
-        final label = _subFocusLabel(focus);
-        final state = _ensureSubState(focus);
-        // 기존 문항 재추출 시 ID 보존 덮어쓰기(UPSERT)를 위해 전체 삭제 초기화를 끄고 덮어쓴다.
-        state.resetBeforeUpload = false;
-
-        void stepSay(String msg) {
-          if (!mounted) return;
-          setState(() {
-            _focus = focus;
-            _autoAnalyzeBanner = '[${i + 1}/${targets.length} · $label] $msg';
-            _batchStatus = _autoAnalyzeBanner!;
-          });
-        }
-
-        // Step 1: 본문 영역 크롭 & 수열 검증 & ID 보존 덮어쓰기(UPSERT)
-        stepSay('1/4단계 — 본문 문항·개념 페이지 분석 및 PDF 영역 크롭 중...');
-        await _runFocusedAnalysis(focus);
-        if (!mounted) break;
-        if (state.error != null || _totalRegionsFor(state, focus) == 0) {
-          failed.add('$label (본문 크롭 0건)');
-          setState(() => _batchDone = i + 1);
-          continue;
-        }
-        // _runFocusedAnalysis 내부에서 resetBeforeUpload = hadSavedExtraction 으로 다시 켜지므로,
-        // 업로드 직전에 반드시 false 로 덮어써야 전체 삭제(statement timeout) 없이 기존 ID 보존 UPSERT만 수행된다.
-        state.resetBeforeUpload = false;
-        stepSay('1/4단계 — 본문 영역 좌표 DB 덮어쓰기(기존 ID 보존) 저장 중...');
-        await _uploadFocused(focus);
-        if (!mounted) break;
-        if ((state.uploadResult?.rows ?? const []).isEmpty) {
-          failed.add('$label (영역 저장 실패)');
-          setState(() => _batchDone = i + 1);
-          continue;
-        }
-
-        // 잉여 구버전 크롭 정리(현재 검출된 문항번호는 모두 ID 보존)
-        if (!_isWonriRowFocus(focus)) {
-          final uploadedRows = state.uploadResult?.rows ?? const [];
-          final rawPages = <int>{
-            for (final r in state.pageResults)
-              if (r.ok) r.rawPage,
-          }.toList();
-          final keepNumbers = <String>{
-            for (final r in uploadedRows)
-              if ('${r['problem_number'] ?? ''}'.trim().isNotEmpty) '${r['problem_number']}'.trim(),
-          }.toList();
-          if (rawPages.isNotEmpty && keepNumbers.isNotEmpty) {
-            try {
-              await _cropUploader.syncCropScope(
-                academyId: widget.academyId,
-                bookId: widget.bookId,
-                gradeLabel: widget.gradeLabel,
-                bigOrder: focus.bigIndex,
-                midOrder: focus.midIndex,
-                subKey: focus.subKey,
-                rawPages: rawPages,
-                keepProblemNumbers: keepNumbers,
-              );
-            } catch (_) {}
-          }
-        }
-
-        // Step 2: 본문·수식·도형 문제은행 추출 및 대기
-        if (_currentSeries().supportsProblemExtraction) {
-          stepSay('2/4단계 — 본문·수식·도형 문제은행 추출 실행 중...');
-          try {
-            await _startPdfOnlyExtractForFocus(focus, forceNewJob: true);
-            final key = _stateKeyFor(focus);
-            for (var poll = 0; poll < 36; poll += 1) {
-              if (!mounted) break;
-              await Future<void>.delayed(const Duration(seconds: 4));
-              await _loadPbExtractRuns();
-              final st = _pbExtractStatusBySub[key] ?? '';
-              stepSay('2/4단계 — 본문·수식·도형 추출 대기 중 (${(poll + 1) * 4}초 경과 · 상태: ${st.isEmpty ? '진행 중' : st})...');
-              if (st == 'completed' || st == 'review_required' || st == 'failed') {
-                break;
-              }
-            }
-          } catch (e) {
-            debugPrint('[auto-analyze] pb extract warning: $e');
-          }
-        }
-
-        // Step 3: 정답·해설 1차 좌표 매칭
-        stepSay('3/4단계 — 정답·해설 PDF 좌표 매칭 중...');
-        final subKeysToRun = _isWonriRowFocus(focus)
-            ? (<String>{
-                for (final r in state.uploadResult?.rows ?? const [])
-                  '${r['sub_key'] ?? ''}'.trim().toUpperCase(),
-              }..removeWhere((k) => k.isEmpty))
-                .toList()
-            : <String>[focus.subKey];
-        final subIndex = _isWonriRowFocus(focus) ? (_wonriRowIndex(focus) ?? 0) : 0;
-        int? answerStart;
-        int? answerEnd;
-        int? solutionStart;
-        int? solutionEnd;
-        if (_isWonriRowFocus(focus)) {
-          final row = _wonriRowFor(focus);
-          solutionStart = row == null ? null : _positiveInt(row.solutionStartCtrl.text);
-          solutionEnd = _wonriNextRowStageStart(focus, answer: false);
-          final answersFromSolution = _seriesKey != 'wonri_middle' &&
-              textbookSeriesAnswersFromSolutionPdf(_seriesKey);
-          answerStart = answersFromSolution
-              ? solutionStart
-              : (row == null ? null : _positiveInt(row.answerStartCtrl.text));
-          answerEnd = answersFromSolution
-              ? solutionEnd
-              : _wonriNextRowStageStart(focus, answer: true);
-        } else {
-          final stageScope = _stageScopeFor(focus);
-          answerStart = stageScope.answerStartPage;
-          answerEnd = stageScope.answerEndPage;
-          solutionStart = stageScope.solutionStartPage;
-          solutionEnd = stageScope.solutionEndPage;
-        }
-        for (final sk in subKeysToRun) {
-          try {
-            await _stageBatchService.runStage23ForSubunit(
-              academyId: widget.academyId,
-              bookId: widget.bookId,
-              gradeLabel: widget.gradeLabel,
-              bigOrder: focus.bigIndex,
-              midOrder: focus.midIndex,
-              subKey: sk,
-              subIndex: subIndex,
-              seriesKey: _seriesKey,
-              answerStartPage: answerStart,
-              answerEndPage: answerEnd,
-              solutionStartPage: solutionStart,
-              solutionEndPage: solutionEnd,
-              onStatus: (st) => stepSay('3/4단계 ($sk) — $st'),
-            );
-          } catch (e) {
-            debugPrint('[auto-analyze] stage23 warning ($sk): $e');
-          }
-        }
-        await _loadStageStatuses();
-
-        // Step 4: AI 선(先)풀이 + AI 정답 기반 해설 매칭·전사 + 과제형 V2 카드 렌더링 & 원본 대조 검수
-        stepSay('4/4단계 — AI 선풀이 · 해설지 정답 대조 매칭 · 과제형 V2 렌더링 검수 중...');
-        try {
-          await _runAutoAiReviewForFocus(focus, subKeysToRun, stepSay);
-        } catch (e) {
-          debugPrint('[auto-analyze] ai review warning: $e');
-        }
-
-        _autoAnalyzedScopes[_stateKeyFor(focus)] = DateTime.now().toUtc().toIso8601String();
-        await _saveTree(silent: true);
-
-        lastSucceededFocus = focus;
-        lastConceptPages
-          ..clear()
-          ..addAll([
-            for (final r in state.pageResults)
-              if (r.ok && (r.pageKind == 'concept' || r.items.isEmpty)) r.rawPage,
-          ]..sort());
-
-        if (mounted) {
-          setState(() => _batchDone = i + 1);
-        }
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _autoAnalyzeRunning = false;
-          _batchRunning = false;
-          _autoAnalyzeBanner = failed.isEmpty
-              ? '자동 분석이 완료되었습니다. 1차 검수 화면에서 결과를 확인하고 확정하세요.'
-              : '자동 분석 완료 (실패 ${failed.length}건: ${failed.join(', ')})';
-          _batchStatus = _autoAnalyzeBanner!;
-        });
-      }
-    }
-
-    if (mounted && lastSucceededFocus != null) {
-      await _openFirstReviewForFocus(
-        lastSucceededFocus,
-        conceptPages: lastConceptPages,
+      final list = await _workflowService.fetchForBook(
+        academyId: widget.academyId,
+        bookId: widget.bookId,
+        gradeLabel: widget.gradeLabel,
       );
+      if (!mounted) return;
+      setState(() {
+        _workflows = {for (final w in list) w.stateKey: w};
+      });
+      unawaited(_refreshLiveReady(list));
+      if (resume) {
+        final n = TextbookWorkflowRunner.instance.resumeUnfinished(list);
+        if (n > 0) _toast('멈춰 있던 2단계 작업 $n개를 이어서 진행합니다');
+      }
+    } catch (e) {
+      debugPrint('[textbook-workflow] load failed: $e');
     }
   }
 
-  Future<void> _runAutoAiReviewForFocus(
-    _SubFocus focus,
-    List<String> subKeys,
-    void Function(String) stepSay,
-  ) async {
-    final big = _bigUnits[focus.bigIndex];
-    final mid = big.middles[focus.midIndex];
-    final isWonri = _isWonriRowFocus(focus);
-    final targetSubIndex = isWonri ? (_wonriRowIndex(focus) ?? 0) : 0;
-    final state = _subStates[_stateKeyFor(focus)];
-    final focusPages = <int>{
-      if (state != null)
-        for (final r in state.pageResults)
-          if (r.rawPage > 0) r.rawPage,
-    };
-    bool matchesFocus(TextbookProblemReviewItem it) {
-      if (subKeys.isNotEmpty && !subKeys.contains(it.subKey)) return false;
-      if (isWonri && it.subIndex != targetSubIndex) return false;
-      if (focusPages.isNotEmpty && !focusPages.contains(it.rawPage)) return false;
-      return true;
+  /// 소단원별 지금 카드 기준 (준비됨, 전체). 2단계 요약 문구는 그 뒤 바뀐 카드 상태를 모르므로 이것을 먼저 쓴다.
+  Map<String, (int, int)> _liveReady = {};
+  DateTime? _liveReadyAt;
+
+  Future<void> _refreshLiveReady(List<TextbookSubunitWorkflow> list) async {
+    final byMid = <String, List<TextbookSubunitWorkflow>>{};
+    for (final w in list) {
+      final order = w.workOrder;
+      if (order == null || !w.cropConfirmed || w.pipelineStatus != 'done') continue;
+      byMid.putIfAbsent('${order.bigOrder}|${order.midOrder}', () => []).add(w);
     }
-
-    final scope = TextbookReviewUnitScope(
-      academyId: widget.academyId,
-      bookId: widget.bookId,
-      bookName: widget.bookName,
-      gradeLabel: widget.gradeLabel,
-      bigOrder: focus.bigIndex,
-      midOrder: focus.midIndex,
-      bigName: big.nameCtrl.text.trim(),
-      midName: mid.nameCtrl.text.trim(),
-      problemCount: 0,
-      analyzedCount: 0,
-      mathCleanCount: 0,
-      mathIssueCount: 0,
-      mathApprovedCount: 0,
-      qualityCleanCount: 0,
-      qualityIssueCount: 0,
-      qualityApprovedCount: 0,
-    );
-    var allItems = await _reviewService.fetchUnitItems(scope);
-    var targetItems = [for (final it in allItems) if (matchesFocus(it)) it];
-    if (targetItems.isEmpty) return;
-
-    stepSay('4/4단계 — 과제형 V2 문항 카드 렌더링 중 (${targetItems.length}문항)...');
-    final previewUrls = await _reviewService.fetchEnginePreviewUrls(
-      academyId: widget.academyId,
-      items: targetItems,
-    );
-
-    const chunkSize = 6;
-    final reviewChunks = <List<TextbookProblemReviewItem>>[
-      for (var idx = 0; idx < targetItems.length; idx += chunkSize)
-        targetItems.skip(idx).take(chunkSize).toList(),
-    ];
-    for (var b = 0; b < reviewChunks.length; b += 3) {
-      if (!mounted) return;
-      final batch = reviewChunks.skip(b).take(3).toList();
-      final doneCount = b * chunkSize;
-      stepSay(
-        '4/4단계 — AI 선풀이 · 3축 난이도 · 원본 해설 전사 '
-        '(${doneCount + 1}~${(doneCount + batch.fold<int>(0, (s, c) => s + c.length)).clamp(1, targetItems.length)}/${targetItems.length}문항)...',
-      );
-      await Future.wait([
-        for (final chunk in batch)
-          () async {
-            final images = await _reviewService.prepareChunkImages(
-              scope: scope,
-              items: chunk,
-              previewUrlsByCropId: previewUrls,
-            );
-            await _reviewService.runReviewChunk(
-              scope,
-              chunkSize: chunk.length,
-              forceRerun: true,
-              cropIds: [for (final x in chunk) x.cropId],
-              images: images,
-            );
-          }(),
-      ]);
+    if (byMid.isEmpty) return;
+    final startedAt = DateTime.now();
+    final review = TextbookProblemReviewService();
+    final next = <String, (int, int)>{};
+    for (final group in byMid.values) {
+      try {
+        final items = await review.fetchUnitItems(group.first.workOrder!.reviewScope);
+        for (final w in group) {
+          final mine = [for (final it in items) if (w.workOrder!.matches(it)) it];
+          next[w.stateKey] = (mine.where((x) => x.isWorkflowReady).length, mine.length);
+        }
+      } catch (e) {
+        debugPrint('[textbook-workflow] ready count failed: $e');
+      }
     }
-
-    allItems = await _reviewService.fetchUnitItems(scope);
-    targetItems = [for (final it in allItems) if (matchesFocus(it)) it];
-
-    // 해설 미전사 또는 수학·품질 오류 문항만 AI 풀이 정답을 앵커로 해설 PDF 전체 페이지를 탐색해 수정안을 만든다.
-    // (1차 검수에서 수학·품질 모두 정상(clean)으로 통과한 도형 문항까지 불필요하게 재호출하지 않는다.)
-    final fixTargets = [
-      for (final it in targetItems)
-        if (it.canRenderOriginal &&
-            (it.solutionVisionFailed || it.mathStatus == 'issue' || it.qualityStatus == 'issue'))
-          it,
-    ];
-    final fixChunks = <List<TextbookProblemReviewItem>>[
-      for (var idx = 0; idx < fixTargets.length; idx += 3)
-        fixTargets.skip(idx).take(3).toList(),
-    ];
-    for (var b = 0; b < fixChunks.length; b += 3) {
-      if (!mounted) return;
-      final batch = fixChunks.skip(b).take(3).toList();
-      final doneCount = b * 3;
-      stepSay(
-        '4/4단계 — AI 정답 기반 해설 전체 페이지 탐색 및 원본 대조 수정안 생성 '
-        '(${doneCount + 1}~${(doneCount + batch.fold<int>(0, (s, c) => s + c.length)).clamp(1, fixTargets.length)}/${fixTargets.length})...',
-      );
-      await Future.wait([
-        for (final chunk in batch)
-          () async {
-            final images = await _reviewService.prepareChunkImages(
-              scope: scope,
-              items: chunk,
-              previewUrlsByCropId: previewUrls,
-              includeSolution: true,
-              includeSolutionPageFallback: true,
-              allItems: allItems,
-            );
-            await _reviewService.runFixPass(
-              scope,
-              cropIds: [for (final x in chunk) x.cropId],
-              images: images,
-            );
-          }(),
-      ]);
-    }
-
-    allItems = await _reviewService.fetchUnitItems(scope);
-    targetItems = [for (final it in allItems) if (matchesFocus(it)) it];
-
-    // 생성된 본문·공통발문·선지·도형 수정안과 수학 정답 수정안을 DB 에 즉시 자동 반영하고 승인한다.
-    stepSay('4/4단계 — 생성된 수정안(공통발문·본문·도형·정답) DB 자동 반영 및 승인 확정 중...');
-    for (var idx = 0; idx < targetItems.length; idx += 4) {
-      if (!mounted) return;
-      final slice = targetItems.skip(idx).take(4).toList();
-      await Future.wait([
-        for (final it in slice)
-          () async {
-            try {
-              final rawCrops = it.fixProposal['figure_crops'];
-              final cropSpecs = [
-                if (rawCrops is List)
-                  for (final c in rawCrops)
-                    if (c is Map) Map<String, dynamic>.from(c),
-              ];
-              List<Map<String, dynamic>>? uploadedAssets;
-              if (cropSpecs.isNotEmpty && it.pbQuestionId.isNotEmpty && it.canRenderOriginal) {
-                uploadedAssets = await _reviewService.cropAndUploadFigures(
-                  scope: scope,
-                  item: it,
-                  crops: cropSpecs,
-                );
-              }
-              final propStem = (it.fixProposal['stem'] as String?)?.trim();
-              final propCommon = (it.fixProposal['common_stem'] as String?)?.trim();
-              final rawChoices = it.fixProposal['choices'];
-              final propChoices = rawChoices is List
-                  ? [for (final c in rawChoices) if (c is Map) Map<String, dynamic>.from(c)]
-                  : null;
-              final rawLayout = it.fixProposal['figure_layout'];
-              final propLayout = rawLayout is Map ? Map<String, dynamic>.from(rawLayout) : null;
-              final canApproveQual = !it.isEngineHeld;
-              if ((propStem != null && propStem.isNotEmpty) ||
-                  (propCommon != null && propCommon.isNotEmpty) ||
-                  propChoices != null ||
-                  propLayout != null ||
-                  uploadedAssets != null ||
-                  canApproveQual) {
-                await _reviewService.applyProblemFix(
-                  cropId: it.cropId,
-                  stem: (propStem != null && propStem.isNotEmpty) ? propStem : null,
-                  commonStem: (propCommon != null && propCommon.isNotEmpty) ? propCommon : null,
-                  choices: propChoices,
-                  figureLayout: propLayout,
-                  figureAssets: uploadedAssets,
-                  approveQuality: canApproveQual,
-                  note: '자동 분석 파이프라인 DB 자동 반영',
-                );
-              }
-            } catch (e) {
-              debugPrint('[auto-analyze] applyProblemFix warning (${it.problemNumber}): $e');
-            }
-
-            try {
-              final resolvedAns = (it.resolvedMathAnswer ?? it.proposedAnswer ?? it.existingAnswer).trim();
-              if (resolvedAns.isNotEmpty && resolvedAns != '판단불가') {
-                await _reviewService.saveItemEdit(
-                  cropId: it.cropId,
-                  newAnswer: resolvedAns,
-                  aiSolution: it.proposedAiSolution ?? it.aiSolution,
-                  aiAnswer: it.proposedAiAnswer ?? resolvedAns,
-                  visualTags: it.visualTags,
-                  solutionTranscribed: it.proposedSolutionTranscribed,
-                  solutionAnswer: it.proposedSolutionAnswer,
-                  approveMath: true,
-                );
-              }
-            } catch (e) {
-              debugPrint('[auto-analyze] saveItemEdit warning (${it.problemNumber}): $e');
-            }
-          }(),
-      ]);
-    }
-
-    allItems = await _reviewService.fetchUnitItems(scope);
-    targetItems = [for (final it in allItems) if (matchesFocus(it)) it];
-    final cleanMath = [for (final x in targetItems) if (x.mathStatus == 'clean') x.cropId];
-    if (cleanMath.isNotEmpty) await _reviewService.approveAxis(cleanMath, 'math');
-    final cleanQual = [for (final x in targetItems) if (x.qualityStatus == 'clean' && !x.isEngineHeld) x.cropId];
-    if (cleanQual.isNotEmpty) await _reviewService.approveAxis(cleanQual, 'quality');
+    if (!mounted) return;
+    setState(() {
+      _liveReady = {..._liveReady, ...next};
+      _liveReadyAt = startedAt;
+    });
   }
 
-  Future<void> _openFirstReviewForFocus(
+  TextbookSubunitWorkflow? _workflowFor(_SubFocus focus) =>
+      _workflows[_stateKeyFor(focus)];
+
+  String _workflowKeyFor(_SubFocus focus) => textbookWorkflowKey(
+        widget.bookId,
+        widget.gradeLabel,
+        focus.bigIndex,
+        focus.midIndex,
+        focus.subKey,
+      );
+
+  TextbookWorkflowRunState? _runStateFor(_SubFocus focus) =>
+      TextbookWorkflowRunner.instance.stateFor(_workflowKeyFor(focus));
+
+  /// 크롭을 확정했거나 2단계가 돌고 있으면 1단계에서 고치지 않는다.
+  bool _cropLocked(_SubFocus focus) =>
+      (_workflowFor(focus)?.cropConfirmed ?? false) ||
+      TextbookWorkflowRunner.instance.isActive(_workflowKeyFor(focus));
+
+  TextbookSubunitStage _stageOf(_SubFocus focus) => TextbookSubunitStage.of(
+        workflow: _workflowFor(focus),
+        extractedBodies: _bodyCounts[_stateKeyFor(focus)]?.bodies ?? 0,
+        reviewedBodies: _bodyCounts[_stateKeyFor(focus)]?.reviewed ?? 0,
+      );
+
+  /// 예전 원스톱으로 본문만 뽑아 둔 소단원(검수 여부 무관). 크롭 확정 대신 "이어서 마무리"로 2단계에 들어간다.
+  bool _isLegacy(_SubFocus focus) => _stageOf(focus).isLegacy;
+
+  void _scheduleAutoSave(
     _SubFocus focus, {
-    List<int>? conceptPages,
-  }) async {
-    final state = _subStates[_stateKeyFor(focus)];
-    final pages = conceptPages ??
-        ([
-          if (state != null)
-            for (final r in state.pageResults)
-              if (r.ok && (r.pageKind == 'concept' || r.items.isEmpty)) r.rawPage,
-        ]..sort());
-    final subKey = _isWonriRowFocus(focus) ? null : focus.subKey;
-    final label = _subFocusLabel(focus);
-    await showTextbookAutoAnalyzeReviewDialog(
-      context,
-      bookId: widget.bookId,
-      gradeLabel: widget.gradeLabel,
-      bigOrder: focus.bigIndex,
-      midOrder: focus.midIndex,
-      subKey: subKey,
-      conceptPages: pages,
-      headerTitle: '1차 검수 · $label (${widget.bookName} ${widget.gradeLabel})',
-      onConfirmAutoAnalyze: () async {
-        _autoAnalyzedScopes[_stateKeyFor(focus)] = DateTime.now().toUtc().toIso8601String();
-        await _saveTree(silent: true);
-        if (mounted) setState(() {});
-      },
-    );
-    if (mounted) {
-      unawaited(_loadStageStatuses());
+    Duration delay = const Duration(milliseconds: 900),
+  }) {
+    final key = _stateKeyFor(focus);
+    _autoSaveTimers.remove(key)?.cancel();
+    _autoSaveTimers[key] = Timer(delay, () {
+      _autoSaveTimers.remove(key);
+      unawaited(_autoSave(focus));
+    });
+  }
+
+  Future<void> _autoSave(_SubFocus focus) async {
+    if (!mounted) return;
+    final key = _stateKeyFor(focus);
+    final state = _ensureSubState(focus);
+    if (state.running) return;
+    if (state.uploading) {
+      _autoSavePending.add(key);
+      return;
+    }
+    if (!state.dirty || _cropLocked(focus)) return;
+    if (_totalRegionsFor(state, focus) == 0) return;
+    await _uploadFocused(focus, quiet: true);
+    if (!mounted) return;
+    if (!state.dirty) unawaited(_markCropDraft(focus));
+    if (_autoSavePending.remove(key)) await _autoSave(focus);
+  }
+
+  /// 닫기 전에 기다리는 자동 저장을 끝낸다.
+  Future<void> _flushAutoSaves() async {
+    final keys = _autoSaveTimers.keys.toList();
+    for (final key in keys) {
+      _autoSaveTimers.remove(key)?.cancel();
+      final focus = _focusFromStateKey(key);
+      if (focus != null) await _autoSave(focus);
+    }
+    for (var i = 0;
+        i < 300 && _subStates.values.any((s) => s.uploading);
+        i += 1) {
+      await Future<void>.delayed(const Duration(milliseconds: 200));
     }
   }
 
-  Widget _buildAutoAnalyzedBadge(String scopeKey) {
-    if (!_autoAnalyzedScopes.containsKey(scopeKey)) return const SizedBox.shrink();
-    return Container(
-      margin: const EdgeInsets.only(right: 4),
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        color: _kAccent.withValues(alpha: 0.16),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: _kAccent.withValues(alpha: 0.55)),
+  bool _closing = false;
+
+  Future<void> _close() async {
+    if (_closing) return;
+    final pending = _autoSaveTimers.isNotEmpty ||
+        _subStates.values.any((s) => s.uploading);
+    if (pending) {
+      setState(() => _closing = true);
+      await _flushAutoSaves();
+    }
+    if (!mounted) return;
+    Navigator.of(context).pop();
+  }
+
+  Future<void> _markCropDraft(_SubFocus focus) async {
+    final wf = _workflowFor(focus);
+    if (wf != null && wf.cropStatus != 'none') return;
+    try {
+      await _workflowService.markCropDraft(
+        academyId: widget.academyId,
+        bookId: widget.bookId,
+        gradeLabel: widget.gradeLabel,
+        bigOrder: focus.bigIndex,
+        midOrder: focus.midIndex,
+        scopeKey: focus.subKey,
+      );
+      await _loadWorkflows();
+    } catch (e) {
+      debugPrint('[textbook-workflow] draft mark failed: $e');
+    }
+  }
+
+  /// 저장할 때 쓰는 (sub_key, 문항번호). 업로드와 삭제가 같은 키를 쓴다.
+  (String, String)? _storedKeyOf(
+    _SubFocus focus,
+    _SubRunState state,
+    _PageAnalysisRow row,
+    int index,
+  ) {
+    final vlm = row.items[index];
+    if (!_isWonriRowFocus(focus)) return (focus.subKey, vlm.number.trim());
+    final category = _wonriCategoryOfItem(vlm, row.section);
+    final subKey = _conceptSubKeyByCategory[category];
+    if (subKey == null) return null;
+    final pageRows = state.pageResults.where((r) => r.ok).toList()
+      ..sort((a, b) => a.rawPage.compareTo(b.rawPage));
+    final detected = _conceptProblemNumber(
+      _gaeyuBlockNumberPrefixes(pageRows),
+      subKey,
+      row.rawPage,
+      index,
+      vlm.number,
+    );
+    final stored = _seriesKey == 'wonri_middle'
+        ? textbookWonriMiddleStoredProblemNumber(
+            section: category,
+            problemNumber: detected,
+            itemRole: vlm.itemRole,
+          )
+        : detected;
+    return (subKey, stored.trim());
+  }
+
+  Future<void> _deleteItem(_SubFocus focus, int rawPage, int index) async {
+    final state = _ensureSubState(focus);
+    if (state.running || state.uploading || _cropLocked(focus)) return;
+    final row = state.pageResults.firstWhere(
+      (r) => r.rawPage == rawPage && r.ok,
+      orElse: () => _PageAnalysisRow.placeholder(),
+    );
+    if (index < 0 || index >= row.items.length) return;
+    final item = row.items[index];
+    final stored = _storedKeyOf(focus, state, row, index);
+    final rows = state.uploadResult?.rows ?? const <Map<String, dynamic>>[];
+    final dbRow = stored == null
+        ? null
+        : rows
+            .where((r) =>
+                '${r['sub_key'] ?? ''}'.trim().toUpperCase() == stored.$1 &&
+                '${r['problem_number'] ?? ''}'.trim() == stored.$2)
+            .firstOrNull;
+    final cropId = '${dbRow?['id'] ?? ''}'.trim();
+    if (cropId.isNotEmpty) {
+      try {
+        final deleted = await _workflowService.deleteDraftCrop(cropId);
+        if (!deleted) {
+          _toast(
+            '${item.number}번은 이미 본문을 추출해 지우지 않았습니다. 작업 화면에서 정리하세요',
+            error: true,
+          );
+          return;
+        }
+      } catch (e) {
+        _toast('${item.number}번 삭제 실패: $e', error: true);
+        return;
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      _bakeManualEdits(focus, state);
+      final idx = state.pageResults.indexWhere(
+        (r) => r.rawPage == rawPage && r.ok,
+      );
+      if (idx >= 0) {
+        final current = state.pageResults[idx];
+        if (index < current.items.length) {
+          state.manualItems.remove(current.items[index]);
+          state.pageResults[idx] = current.withItems([
+            for (var i = 0; i < current.items.length; i += 1)
+              if (i != index) current.items[i],
+          ]);
+        }
+      }
+      final result = state.uploadResult;
+      if (result != null && dbRow != null) {
+        state.uploadResult = TextbookCropBatchResult(
+          upserted: math.max(0, result.upserted - 1),
+          bucket: result.bucket,
+          rows: [
+            for (final r in result.rows)
+              if (!identical(r, dbRow)) r,
+          ],
+        );
+      }
+      _selectedProblemKey = null;
+      state.markDirty();
+    });
+    _toast('${item.number}번 크롭을 지웠습니다');
+    _scheduleAutoSave(focus);
+    unawaited(_loadStageStatuses());
+  }
+
+  // ─── 수동 크롭(번호 상자 → 본문 상자) ────────────────────────────────
+
+  void _toggleManualDraw() {
+    setState(() {
+      _manualDrawMode = !_manualDrawMode;
+      _manualNumberBox = null;
+      _manualNumberPage = null;
+      _manualDragRect = null;
+      _manualDragStart = null;
+      _manualDragPage = null;
+      _selectedProblemKey = null;
+    });
+  }
+
+  Offset _normalizedOffset(Offset local, Size pageSize) => Offset(
+        (local.dx / pageSize.width).clamp(0.0, 1.0),
+        (local.dy / pageSize.height).clamp(0.0, 1.0),
+      );
+
+  void _onManualDragStart(int rawPage, Offset local, Size pageSize) {
+    if (pageSize.width <= 0 || pageSize.height <= 0) return;
+    final start = _normalizedOffset(local, pageSize);
+    setState(() {
+      _manualDragPage = rawPage;
+      _manualDragStart = start;
+      _manualDragRect = Rect.fromPoints(start, start);
+    });
+  }
+
+  void _onManualDragUpdate(int rawPage, Offset local, Size pageSize) {
+    final start = _manualDragStart;
+    if (start == null || _manualDragPage != rawPage) return;
+    if (pageSize.width <= 0 || pageSize.height <= 0) return;
+    setState(() {
+      _manualDragRect =
+          Rect.fromPoints(start, _normalizedOffset(local, pageSize));
+    });
+  }
+
+  Future<void> _onManualDragEnd(_SubFocus focus, int rawPage) async {
+    final rect = _manualDragRect;
+    setState(() {
+      _manualDragRect = null;
+      _manualDragStart = null;
+      _manualDragPage = null;
+    });
+    if (rect == null || rect.width < 0.004 || rect.height < 0.003) return;
+    final numberBox = _manualNumberBox;
+    if (numberBox == null || _manualNumberPage != rawPage) {
+      setState(() {
+        _manualNumberBox = rect;
+        _manualNumberPage = rawPage;
+      });
+      return;
+    }
+    setState(() {
+      _manualNumberBox = null;
+      _manualNumberPage = null;
+    });
+    await _addManualItem(focus, rawPage, numberBox, rect);
+  }
+
+  List<int> _rectTo1k(Rect r) => <int>[
+        (r.top * 1000).round().clamp(0, 1000),
+        (r.left * 1000).round().clamp(0, 1000),
+        (r.bottom * 1000).round().clamp(0, 1000),
+        (r.right * 1000).round().clamp(0, 1000),
+      ];
+
+  String _suggestNextNumber(_SubRunState state, int rawPage, int ymin) {
+    TextbookVlmItem? prev;
+    final rows = state.pageResults.where((r) => r.ok).toList()
+      ..sort((a, b) => a.rawPage.compareTo(b.rawPage));
+    for (final row in rows) {
+      if (row.rawPage > rawPage) break;
+      for (final it in row.items) {
+        if (it.isSetHeader) continue;
+        final box = it.itemRegion ?? it.bbox;
+        if (row.rawPage == rawPage &&
+            box != null &&
+            box.length == 4 &&
+            box[0] > ymin) {
+          continue;
+        }
+        prev = it;
+      }
+    }
+    final m = RegExp(r'^(\d+)$').firstMatch(prev?.number.trim() ?? '');
+    if (m == null) return '';
+    final digits = m.group(1)!;
+    return '${int.parse(digits) + 1}'.padLeft(digits.length, '0');
+  }
+
+  Future<void> _addManualItem(
+    _SubFocus focus,
+    int rawPage,
+    Rect numberRect,
+    Rect bodyRect,
+  ) async {
+    final state = _ensureSubState(focus);
+    if (state.running || _cropLocked(focus)) return;
+    final numberBox = _rectTo1k(numberRect);
+    final body = _rectTo1k(bodyRect);
+    final region = <int>[
+      math.min(numberBox[0], body[0]),
+      math.min(numberBox[1], body[1]),
+      math.max(numberBox[2], body[2]),
+      math.max(numberBox[3], body[3]),
+    ];
+    final pageRow = state.pageResults.firstWhere(
+      (r) => r.rawPage == rawPage && r.ok,
+      orElse: () => _PageAnalysisRow.placeholder(),
+    );
+    final concept = _isWonriRowFocus(focus);
+    var defaultCategory = '';
+    if (concept) {
+      for (final it in pageRow.items) {
+        final box = it.itemRegion ?? it.bbox;
+        if (box != null && box.length == 4 && box[0] > region[0]) break;
+        final c = _wonriCategoryOfItem(it, pageRow.section);
+        if (c.isNotEmpty) defaultCategory = c;
+      }
+      if (defaultCategory.isEmpty) {
+        defaultCategory = _conceptSubKeyByCategory.containsKey(pageRow.section)
+            ? pageRow.section
+            : _conceptSubKeyByCategory.keys.first;
+      }
+    }
+    final spec = await _promptManualItem(
+      title: '${_displayPageForRawPage(rawPage)}쪽에 문항 추가',
+      suggestedNumber: _suggestNextNumber(state, rawPage, region[0]),
+      category: defaultCategory,
+      categories: concept ? _conceptSubKeyByCategory.keys.toList() : const [],
+    );
+    if (spec == null || !mounted || state.running || _cropLocked(focus)) {
+      return;
+    }
+    final candidate = TextbookVlmItem(
+      number: spec.number,
+      label: spec.label,
+      category: spec.category,
+      isSetHeader: spec.isSetHeader,
+      setFrom: spec.setFrom,
+      setTo: spec.setTo,
+      contentGroupKind: 'none',
+      contentGroupLabel: '',
+      contentGroupTitle: '',
+      contentGroupOrder: null,
+      column: pageRow.items.any((it) => it.column != null)
+          ? ((region[1] + region[3]) / 2 < 500 ? 1 : 2)
+          : null,
+      bbox: numberBox,
+      itemRegion: region,
+    );
+    final duplicates = [
+      for (final row in state.pageResults.where((r) => r.ok))
+        for (final it in row.items)
+          if (_sameProblem(it, candidate)) (row.rawPage, it),
+    ];
+    if (duplicates.isNotEmpty) {
+      final pages = duplicates.map((d) => '${_displayPageForRawPage(d.$1)}쪽');
+      final replace = await _confirmDialog(
+        title: '${spec.number}번이 이미 있습니다',
+        message: '${pages.toSet().join(', ')}에 같은 번호가 있습니다. '
+            '지금 그린 영역으로 바꿀까요?',
+        confirmLabel: '바꾸기',
+      );
+      if (!replace || !mounted) return;
+    }
+    setState(() {
+      _bakeManualEdits(focus, state);
+      for (var r = 0; r < state.pageResults.length; r += 1) {
+        final row = state.pageResults[r];
+        if (!row.ok || !row.items.any((it) => _sameProblem(it, candidate))) {
+          continue;
+        }
+        for (final it in row.items) {
+          if (_sameProblem(it, candidate)) state.manualItems.remove(it);
+        }
+        state.pageResults[r] = row.withItems([
+          for (final it in row.items)
+            if (!_sameProblem(it, candidate)) it,
+        ]);
+      }
+      final source = pageRow.ok
+          ? pageRow
+          : _PageAnalysisRow.success(
+              rawPage: rawPage,
+              displayPage: _displayPageForRawPage(rawPage),
+              section: concept
+                  ? spec.category
+                  : _sectionForSubKey(focus.subKey),
+              pageKind: 'problem_page',
+              notes: 'manual_crops',
+              items: const <TextbookVlmItem>[],
+            );
+      _restoreManualItems(state, [(source, candidate)]);
+      final row = state.pageResults.firstWhere(
+        (r) => r.rawPage == rawPage && r.ok,
+        orElse: () => _PageAnalysisRow.placeholder(),
+      );
+      final index = row.items.indexWhere((it) => identical(it, candidate));
+      _selectedProblemKey = index < 0 ? null : _problemKey(rawPage, index);
+      state.markDirty();
+    });
+    _scheduleAutoSave(focus, delay: Duration.zero);
+  }
+
+  Future<
+      ({
+        String number,
+        String category,
+        String label,
+        bool isSetHeader,
+        int? setFrom,
+        int? setTo,
+      })?> _promptManualItem({
+    required String title,
+    required String suggestedNumber,
+    required String category,
+    required List<String> categories,
+  }) async {
+    final numberCtrl = TextEditingController(text: suggestedNumber);
+    final labelCtrl = TextEditingController();
+    final fromCtrl = TextEditingController();
+    final toCtrl = TextEditingController();
+    var selectedCategory = category;
+    var setHeader = false;
+    String? error;
+    final result = await showDialog<
+        ({
+          String number,
+          String category,
+          String label,
+          bool isSetHeader,
+          int? setFrom,
+          int? setTo,
+        })>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) {
+          void submit() {
+            final from = int.tryParse(fromCtrl.text.trim());
+            final to = int.tryParse(toCtrl.text.trim());
+            final number =
+                setHeader ? '${from ?? ''}~${to ?? ''}' : numberCtrl.text.trim();
+            if (setHeader && (from == null || to == null || to < from)) {
+              setLocal(() => error = '세트 범위(시작~끝 번호)를 입력하세요');
+              return;
+            }
+            if (!setHeader && number.isEmpty) {
+              setLocal(() => error = '문항 번호를 입력하세요');
+              return;
+            }
+            Navigator.of(ctx).pop((
+              number: number,
+              category: selectedCategory,
+              label: labelCtrl.text.trim(),
+              isSetHeader: setHeader,
+              setFrom: setHeader ? from : null,
+              setTo: setHeader ? to : null,
+            ));
+          }
+
+          return AlertDialog(
+            backgroundColor: _kPanel,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(28),
+              side: const BorderSide(color: _kBorder),
+            ),
+            title: Text(
+              title,
+              style: const TextStyle(
+                color: _kText,
+                fontSize: 16,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            content: SizedBox(
+              width: 360,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (categories.isNotEmpty) ...[
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: [
+                        for (final c in categories)
+                          _choicePill(
+                            label: _conceptCategoryShortNames[c] ?? c,
+                            selected: selectedCategory == c,
+                            onTap: () => setLocal(() => selectedCategory = c),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  Row(
+                    children: [
+                      _choicePill(
+                        label: '문항',
+                        selected: !setHeader,
+                        onTap: () => setLocal(() => setHeader = false),
+                      ),
+                      const SizedBox(width: 6),
+                      _choicePill(
+                        label: '세트 머리글(공통 지문)',
+                        selected: setHeader,
+                        onTap: () => setLocal(() => setHeader = true),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  if (setHeader)
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _textInput(
+                            fromCtrl,
+                            hint: '시작 번호',
+                            keyboardType: TextInputType.number,
+                            inputFormatters: [
+                              FilteringTextInputFormatter.digitsOnly,
+                            ],
+                          ),
+                        ),
+                        const Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 8),
+                          child: Text('~', style: TextStyle(color: _kTextSub)),
+                        ),
+                        Expanded(
+                          child: _textInput(
+                            toCtrl,
+                            hint: '끝 번호',
+                            keyboardType: TextInputType.number,
+                            inputFormatters: [
+                              FilteringTextInputFormatter.digitsOnly,
+                            ],
+                          ),
+                        ),
+                      ],
+                    )
+                  else
+                    _textInput(numberCtrl, hint: '문항 번호 (인쇄된 그대로)'),
+                  const SizedBox(height: 8),
+                  _textInput(labelCtrl, hint: '라벨 (선택 · 난이도·STEP 등)'),
+                  if (error != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      error!,
+                      style: const TextStyle(color: _kDanger, fontSize: 12),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('취소', style: TextStyle(color: _kTextSub)),
+              ),
+              FilledButton(
+                onPressed: submit,
+                style: FilledButton.styleFrom(
+                  backgroundColor: _kAccent,
+                  shape: const StadiumBorder(),
+                ),
+                child: const Text('추가'),
+              ),
+            ],
+          );
+        },
       ),
-      child: const Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.verified_rounded, size: 10, color: _kAccent),
-          SizedBox(width: 3),
-          Text(
-            '1차 검수완료',
-            style: TextStyle(color: _kAccent, fontSize: 9.5, fontWeight: FontWeight.w800),
+    );
+    numberCtrl.dispose();
+    labelCtrl.dispose();
+    fromCtrl.dispose();
+    toCtrl.dispose();
+    return result;
+  }
+
+  Widget _choicePill({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(18),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration: BoxDecoration(
+          color: selected ? _kChipSelected : _kCard,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: selected ? _kAccent : _kBorder),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: selected ? _kText : _kTextSub,
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<bool> _confirmDialog({
+    required String title,
+    required String message,
+    required String confirmLabel,
+    bool danger = false,
+  }) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _kPanel,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(28),
+          side: const BorderSide(color: _kBorder),
+        ),
+        title: Text(
+          title,
+          style: const TextStyle(
+            color: _kText,
+            fontSize: 16,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        content: SizedBox(
+          width: 420,
+          child: Text(
+            message,
+            style: const TextStyle(color: _kTextSub, fontSize: 13, height: 1.5),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('취소', style: TextStyle(color: _kTextSub)),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: FilledButton.styleFrom(
+              backgroundColor: danger ? _kDanger : _kAccent,
+              shape: const StadiumBorder(),
+            ),
+            child: Text(confirmLabel),
           ),
         ],
       ),
     );
+    return ok == true;
+  }
+
+  // ─── 크롭 확정 → 2단계 ────────────────────────────────────────────
+
+  TextbookWorkflowStageRun _stageRunOf(TextbookAuthoringStageScope s) =>
+      TextbookWorkflowStageRun(
+        subKey: s.subKey,
+        subIndex: textbookStageCropSubIndexForScope(_seriesKey, s),
+        answerStartPage: s.answerStartPage,
+        answerEndPage: s.answerEndPage,
+        solutionStartPage: s.solutionStartPage,
+        solutionEndPage: s.solutionEndPage,
+        bodyPageFrom: s.bodyStartPage == null
+            ? null
+            : _rawPageForDisplayPage(s.bodyStartPage!),
+        bodyPageTo: s.bodyEndPage == null
+            ? null
+            : _rawPageForDisplayPage(s.bodyEndPage!),
+      );
+
+  /// 크롭 확정 때 실행기에 넘길 작업 지시. 단원 트리 입력값(쪽 범위)을 그대로 담는다.
+  TextbookSubunitWorkOrder? _workOrderFor(_SubFocus focus) {
+    final state = _ensureSubState(focus);
+    final rows = state.uploadResult?.rows ?? const <Map<String, dynamic>>[];
+    if (rows.isEmpty) return null;
+    final big = _bigUnits[focus.bigIndex];
+    final mid = big.middles[focus.midIndex];
+    final series = _currentSeries();
+    if (_isWonriRowFocus(focus)) {
+      final row = _wonriRowFor(focus);
+      if (row == null) return null;
+      final rowIndex = _wonriRowIndex(focus) ?? 0;
+      final displayStart = _positiveInt(row.startCtrl.text);
+      final displayEnd = _positiveInt(row.endCtrl.text);
+      final rawFrom =
+          displayStart == null ? null : _rawPageForDisplayPage(displayStart);
+      final rawTo =
+          displayEnd == null ? null : _rawPageForDisplayPage(displayEnd);
+      final keys = <String>{
+        for (final r in rows) '${r['sub_key'] ?? ''}'.trim().toUpperCase(),
+      }.where(_conceptCategoryBySubKey.containsKey).toList()
+        ..sort();
+      if (keys.isEmpty) return null;
+      // 개념서는 익히기·확인체크·연습문제도 소단원마다 되풀이된다. 추출 런을
+      // sub_key 단위로만 잡으면 (big, mid, sub_key, 0) 런이 하나뿐이라 두 번째
+      // 소단원부터 "이미 처리된 런"으로 걸러진다. 쪽 범위가 있으면 소단원별로 나눈다.
+      final perSubUnitRun = rawFrom != null && rawTo != null;
+      return TextbookSubunitWorkOrder(
+        academyId: widget.academyId,
+        bookId: widget.bookId,
+        bookName: widget.bookName,
+        gradeLabel: widget.gradeLabel,
+        seriesKey: _seriesKey,
+        bigOrder: focus.bigIndex,
+        midOrder: focus.midIndex,
+        bigName: big.nameCtrl.text.trim(),
+        midName: mid.nameCtrl.text.trim(),
+        scopeKey: focus.subKey,
+        label: _subFocusLabel(focus),
+        bodyLinkId: widget.linkId,
+        supportsExtraction: series.supportsProblemExtraction,
+        extractRuns: [
+          for (final k in keys)
+            TextbookWorkflowExtractRun(
+              subKey: k,
+              subIndex: perSubUnitRun || _conceptPerSubUnitKeys.contains(k)
+                  ? rowIndex
+                  : 0,
+              subName:
+                  _conceptCategoryShortNames[_conceptCategoryBySubKey[k]] ?? k,
+              rawPageFrom: rawFrom,
+              rawPageTo: rawTo,
+              displayPageFrom: displayStart,
+              displayPageTo: displayEnd,
+            ),
+        ],
+        stageRuns: [
+          for (final s in _wonriStageScopesFor(
+            focus,
+            _buildStageCropSeeds(focus, state),
+          ))
+            _stageRunOf(s),
+        ],
+        reviewSubKeys: keys,
+        indexedSubKeys: _conceptPerSubUnitKeys.toList()..sort(),
+        reviewSubIndex: rowIndex,
+        rawPageFrom: rawFrom,
+        rawPageTo: rawTo,
+      );
+    }
+    final sub = mid.subs.firstWhere(
+      (s) => s.preset.key == focus.subKey,
+      orElse: () => mid.subs.first,
+    );
+    final displayStart = _positiveInt(sub.startCtrl.text);
+    final displayEnd = _positiveInt(sub.endCtrl.text);
+    return TextbookSubunitWorkOrder(
+      academyId: widget.academyId,
+      bookId: widget.bookId,
+      bookName: widget.bookName,
+      gradeLabel: widget.gradeLabel,
+      seriesKey: _seriesKey,
+      bigOrder: focus.bigIndex,
+      midOrder: focus.midIndex,
+      bigName: big.nameCtrl.text.trim(),
+      midName: mid.nameCtrl.text.trim(),
+      scopeKey: focus.subKey,
+      label: _subFocusLabel(focus),
+      bodyLinkId: widget.linkId,
+      supportsExtraction: series.supportsProblemExtraction,
+      extractRuns: [
+        TextbookWorkflowExtractRun(
+          subKey: focus.subKey,
+          subName: sub.preset.displayName,
+          rawPageFrom:
+              displayStart == null ? null : _rawPageForDisplayPage(displayStart),
+          rawPageTo:
+              displayEnd == null ? null : _rawPageForDisplayPage(displayEnd),
+          displayPageFrom: displayStart,
+          displayPageTo: displayEnd,
+        ),
+      ],
+      stageRuns: [_stageRunOf(_stageScopeFor(focus))],
+      reviewSubKeys: [focus.subKey],
+    );
+  }
+
+  bool _confirming = false;
+
+  Future<void> _confirmCrops(List<_SubFocus> targets) async {
+    if (_confirming) return;
+    final candidates = [
+      for (final f in targets)
+        if (!_cropLocked(f)) f,
+    ];
+    if (candidates.isEmpty) {
+      _toast('확정할 소단원이 없습니다 (이미 확정됨)');
+      return;
+    }
+    final legacy = candidates.where(_isLegacy).length;
+    final allLegacy = legacy == candidates.length;
+    final ok = await _confirmDialog(
+      title: allLegacy
+          ? '이어서 마무리 · ${candidates.length}개 소단원'
+          : '크롭 확정 · ${candidates.length}개 소단원'
+              '${legacy > 0 ? ' (기존 추출 $legacy개 포함)' : ''}',
+      message: [
+        if (!allLegacy)
+          '크롭을 확정하면 2단계가 바로 시작됩니다.\n'
+              '본문 추출 → 정답·해설 위치 → V2 렌더·AI 검수 순서로 돌고, '
+              '이 창을 닫아도 계속 진행됩니다.',
+        if (legacy > 0)
+          '${allLegacy ? '' : '기존 추출 $legacy개는 '}'
+              '이미 뽑아 둔 본문을 그대로 두고, 본문이 빠진 번호만 추출한 뒤 '
+              '정답·해설 위치 → V2 렌더·AI 검수로 이어갑니다.'
+              '${allLegacy ? ' 이 창을 닫아도 계속 진행됩니다.' : ''}',
+        '확정한 뒤 크롭을 고치려면 "크롭 다시 열기"를 누르세요.',
+      ].join('\n'),
+      confirmLabel: allLegacy ? '이어서 마무리' : '확정하고 시작',
+    );
+    if (!ok || !mounted) return;
+    setState(() => _confirming = true);
+    final started = <String>[];
+    final problems = <String>[];
+    try {
+      for (final focus in candidates) {
+        final label = _subFocusLabel(focus);
+        final state = _ensureSubState(focus);
+        _autoSaveTimers.remove(_stateKeyFor(focus))?.cancel();
+        if (state.running) {
+          problems.add('$label: 분석 중');
+          continue;
+        }
+        for (var i = 0; i < 300 && state.uploading; i += 1) {
+          await Future<void>.delayed(const Duration(milliseconds: 200));
+        }
+        if (state.dirty) await _uploadFocused(focus, quiet: true);
+        if (!mounted) return;
+        if (state.dirty || (state.uploadResult?.rows ?? const []).isEmpty) {
+          problems.add('$label: ${state.error ?? '저장된 크롭이 없습니다'}');
+          continue;
+        }
+        final order = _workOrderFor(focus);
+        if (order == null) {
+          problems.add('$label: 작업 범위를 만들지 못했습니다');
+          continue;
+        }
+        try {
+          await _workflowService.confirmCrop(order);
+          TextbookWorkflowRunner.instance.enqueue(order);
+          started.add(label);
+        } catch (e) {
+          problems.add('$label: $e');
+        }
+      }
+      await _loadWorkflows();
+    } finally {
+      if (mounted) setState(() => _confirming = false);
+    }
+    if (!mounted) return;
+    if (started.isNotEmpty) {
+      _toast('${allLegacy ? '이어서 마무리' : '크롭 확정'} ${started.length}개 · 2단계를 시작했습니다');
+    }
+    if (problems.isNotEmpty) {
+      _toast('확정하지 못함: ${problems.join(' / ')}', error: true);
+    }
+  }
+
+  bool _confirmingSubunits = false;
+
+  /// 선택한 소단원이 모두 준비됨(2단계 끝 · 모든 카드 준비됨) 또는 확정이면 아직 확정 안 한 소단원 목록, 아니면 null.
+  List<_SubFocus>? _subunitsToConfirm(List<_SubFocus> selected) {
+    if (selected.isEmpty) return null;
+    final todo = <_SubFocus>[];
+    for (final f in selected) {
+      final wf = _workflowFor(f);
+      if (wf?.isConfirmed ?? false) continue;
+      if (wf == null || !wf.cropConfirmed || wf.pipelineStatus != 'done') return null;
+      if (_runStateFor(f)?.active ?? false) return null;
+      final counts = _readyCounts(f);
+      if (counts == null || counts.$2 == 0 || counts.$1 != counts.$2) return null;
+      todo.add(f);
+    }
+    return todo;
+  }
+
+  /// 3단계 일괄 확정. 저장된 요약 대신 카드 상태를 다시 읽어 모든 카드가 준비됨인 소단원만 확정한다.
+  Future<void> _confirmSubunits(List<_SubFocus> targets) async {
+    if (_confirmingSubunits || targets.isEmpty) return;
+    final ok = await _confirmDialog(
+      title: '일괄 확정 · ${targets.length}개 소단원',
+      message: '모든 카드가 준비됨인 소단원을 확정합니다.\n'
+          '확정 직전에 카드 상태를 다시 확인하고, 준비됨이 아닌 카드가 생긴 소단원은 건너뜁니다.',
+      confirmLabel: '확정',
+    );
+    if (!ok || !mounted) return;
+    setState(() => _confirmingSubunits = true);
+    final review = TextbookProblemReviewService();
+    final itemsByMid = <String, List<TextbookProblemReviewItem>>{};
+    final done = <String>[];
+    final problems = <String>[];
+    try {
+      for (final focus in targets) {
+        final label = _subFocusLabel(focus);
+        final wf = _workflowFor(focus);
+        final order = wf?.workOrder ?? _workOrderFor(focus);
+        if (wf == null || order == null) {
+          problems.add('$label: 작업 범위를 찾지 못했습니다');
+          continue;
+        }
+        try {
+          final midKey = '${order.bookId}|${order.gradeLabel}|${order.bigOrder}|${order.midOrder}';
+          final all = itemsByMid[midKey] ??= await review.fetchUnitItems(order.reviewScope);
+          final items = [for (final it in all) if (order.matches(it)) it];
+          final ready = items.where((x) => x.isWorkflowReady).length;
+          if (items.isEmpty || ready < items.length) {
+            problems.add('$label: 준비됨 $ready/${items.length}');
+            continue;
+          }
+          await _workflowService.confirmSubunit(wf, confirmed: true);
+          await _registry.setScopeConfirmed(
+            academyId: wf.academyId,
+            bookId: wf.bookId,
+            gradeLabel: wf.gradeLabel,
+            scopeKey: wf.stateKey,
+            confirmed: true,
+          );
+          done.add(label);
+        } catch (e) {
+          problems.add('$label: $e');
+        }
+      }
+      await _loadWorkflows();
+    } finally {
+      if (mounted) setState(() => _confirmingSubunits = false);
+    }
+    if (!mounted) return;
+    if (done.isNotEmpty) _toast('소단원 ${done.length}개를 확정했습니다');
+    if (problems.isNotEmpty) _toast('확정하지 못함: ${problems.join(' / ')}', error: true);
+  }
+
+  Future<void> _reopenCrop(_SubFocus focus) async {
+    final key = _workflowKeyFor(focus);
+    final active = TextbookWorkflowRunner.instance.isActive(key);
+    final ok = await _confirmDialog(
+      title: '크롭 다시 열기',
+      message: active
+          ? '2단계가 진행 중입니다. 중단하고 크롭을 다시 열까요?\n'
+              '이미 추출·검수한 결과는 남고, 다시 확정하면 빠진 것만 이어서 합니다.'
+          : '크롭을 다시 고칠 수 있게 엽니다.\n'
+              '이미 추출·검수한 결과는 남고, 다시 확정하면 빠진 것만 이어서 합니다.',
+      confirmLabel: active ? '중단하고 열기' : '다시 열기',
+      danger: active,
+    );
+    if (!ok || !mounted) return;
+    if (active) TextbookWorkflowRunner.instance.cancel(key);
+    try {
+      await _workflowService.reopenCrop(
+        academyId: widget.academyId,
+        bookId: widget.bookId,
+        gradeLabel: widget.gradeLabel,
+        bigOrder: focus.bigIndex,
+        midOrder: focus.midIndex,
+        scopeKey: focus.subKey,
+      );
+      await _loadWorkflows();
+    } catch (e) {
+      _toast('다시 열기 실패: $e', error: true);
+    }
+  }
+
+  void _retryPipeline(_SubFocus focus) {
+    final wf = _workflowFor(focus);
+    final order = wf?.workOrder ?? _workOrderFor(focus);
+    if (order == null) {
+      _toast('작업 범위를 만들지 못했습니다. 크롭을 다시 저장하세요', error: true);
+      return;
+    }
+    TextbookWorkflowRunner.instance.enqueue(
+      order,
+      fromPhase: TextbookWorkflowPhase.resumeFrom(wf?.pipelinePhase ?? ''),
+      since: wf?.pipelineStartedAt,
+    );
+  }
+
+  Future<void> _openWorkScreen(int bigIndex, int midIndex, {String? scopeKey}) async {
+    await _flushAutoSaves();
+    if (!mounted) return;
+    final big = _bigUnits[bigIndex];
+    final mid = big.middles[midIndex];
+    final legacy = [
+      for (final f in _midBatchFocuses(bigIndex, midIndex))
+        if (_isLegacy(f))
+          TextbookLegacySubunit(
+            scopeKey: f.subKey,
+            label: _subFocusLabel(f),
+            bodies: _bodyCounts[_stateKeyFor(f)]?.bodies ?? 0,
+            crops: _bodyCounts[_stateKeyFor(f)]?.crops ?? 0,
+            reviewed: _bodyCounts[_stateKeyFor(f)]?.reviewed ?? 0,
+          ),
+    ];
+    final picked = await showTextbookWorkflowDialog(
+      context,
+      academyId: widget.academyId,
+      bookId: widget.bookId,
+      bookName: widget.bookName,
+      gradeLabel: widget.gradeLabel,
+      bigOrder: bigIndex,
+      midOrder: midIndex,
+      unitTitle: [
+        big.nameCtrl.text.trim(),
+        mid.nameCtrl.text.trim(),
+      ].where((s) => s.isNotEmpty).join(' › '),
+      initialScopeKey: scopeKey,
+      legacySubunits: legacy,
+    );
+    if (!mounted) return;
+    unawaited(_loadWorkflows());
+    unawaited(_loadStageStatuses());
+    if (picked == null) return;
+    final focus = _SubFocus(bigIndex: bigIndex, midIndex: midIndex, subKey: picked);
+    setState(() {
+      _focus = focus;
+      _selectedProblemKey = null;
+    });
+    _jumpViewerToFocusStart(focus);
   }
 
   String _subFocusLabel(_SubFocus focus) {
@@ -4747,322 +5333,6 @@ class _TextbookUnitAuthoringDialogState
       orElse: () => mid.subs.first,
     );
     return '$bigName/$midName/${sub.preset.displayName}';
-  }
-
-  Future<void> _startPdfOnlyExtractForFocus(
-    _SubFocus focus, {
-    int? displayStartOverride,
-    int? displayEndOverride,
-    bool forceNewJob = false,
-    bool pageScoped = false,
-  }) async {
-    if (!_currentSeries().supportsProblemExtraction) return;
-    final big = _bigUnits[focus.bigIndex];
-    final mid = big.middles[focus.midIndex];
-
-    // 개념원리 소단원 포커스: 문항추출 런은 sub_key(A~D) 단위이므로,
-    // 이 소단원 범위로 업로드된 카테고리마다 하나씩 큐에 넣는다.
-    if (_isWonriRowFocus(focus)) {
-      final row = _wonriRowFor(focus);
-      if (row == null) return;
-      final displayStart =
-          displayStartOverride ?? _positiveInt(row.startCtrl.text);
-      final displayEnd = displayEndOverride ?? _positiveInt(row.endCtrl.text);
-      final state = _subStates[_stateKeyFor(focus)];
-      final uploadedSubKeys = <String>{
-        for (final r in state?.uploadResult?.rows ?? const [])
-          '${r['sub_key'] ?? ''}'.trim().toUpperCase(),
-      }..removeWhere((k) => !_conceptCategoryBySubKey.containsKey(k));
-      if (uploadedSubKeys.isEmpty) return;
-      final wonriIndex = _wonriRowIndex(focus) ?? 0;
-      final rawPageFrom =
-          displayStart == null ? null : _rawPageForDisplayPage(displayStart);
-      final rawPageTo =
-          displayEnd == null ? null : _rawPageForDisplayPage(displayEnd);
-      // 개념원리는 익히기·확인체크·연습문제도 소단원마다 되풀이된다. 추출 런을
-      // sub_key 단위로만 잡으면 (big, mid, sub_key, 0) 행이 하나뿐이라, 첫
-      // 소단원을 돌린 뒤 나머지 소단원은 "이미 처리된 런"으로 걸러져 영구
-      // 누락된다. 페이지 범위가 있으면 전 카테고리를 소단원별 런으로 나눈다.
-      // (범위가 없으면 러너가 crop 을 sub_index 로 찾으므로 기존 동작 유지.)
-      final perSubUnitRun = rawPageFrom != null && rawPageTo != null;
-      for (final subKey in uploadedSubKeys.toList()..sort()) {
-        await _pbService.createTextbookPdfOnlyExtractRun(
-          academyId: widget.academyId,
-          bookId: widget.bookId,
-          bookName: widget.bookName,
-          gradeLabel: widget.gradeLabel,
-          bigOrder: focus.bigIndex,
-          midOrder: focus.midIndex,
-          subKey: subKey,
-          subIndex: perSubUnitRun || _conceptPerSubUnitKeys.contains(subKey)
-              ? wonriIndex
-              : 0,
-          seriesKey: _seriesKey,
-          bigName: big.nameCtrl.text.trim(),
-          midName: mid.nameCtrl.text.trim(),
-          subName:
-              _conceptCategoryShortNames[_conceptCategoryBySubKey[subKey]] ??
-                  subKey,
-          rawPageFrom: rawPageFrom,
-          rawPageTo: rawPageTo,
-          displayPageFrom: displayStart,
-          displayPageTo: displayEnd,
-          bodyLinkId: widget.linkId,
-          forceNewJob: forceNewJob,
-          pageScoped: pageScoped,
-        );
-        if (!mounted) return;
-        setState(() {
-          _pbExtractStatusBySub[_stateKeyFor(focus)] = 'queued';
-        });
-      }
-      return;
-    }
-
-    final sub = mid.subs.firstWhere(
-      (s) => s.preset.key == focus.subKey,
-      orElse: () => mid.subs.first,
-    );
-    final displayStart =
-        displayStartOverride ?? _positiveInt(sub.startCtrl.text);
-    final displayEnd = displayEndOverride ?? _positiveInt(sub.endCtrl.text);
-    final rawStart =
-        displayStart == null ? null : _rawPageForDisplayPage(displayStart);
-    final rawEnd =
-        displayEnd == null ? null : _rawPageForDisplayPage(displayEnd);
-    await _pbService.createTextbookPdfOnlyExtractRun(
-      academyId: widget.academyId,
-      bookId: widget.bookId,
-      bookName: widget.bookName,
-      gradeLabel: widget.gradeLabel,
-      bigOrder: focus.bigIndex,
-      midOrder: focus.midIndex,
-      subKey: focus.subKey,
-      seriesKey: _seriesKey,
-      bigName: big.nameCtrl.text.trim(),
-      midName: mid.nameCtrl.text.trim(),
-      subName: sub.preset.displayName,
-      rawPageFrom: rawStart,
-      rawPageTo: rawEnd,
-      displayPageFrom: displayStart,
-      displayPageTo: displayEnd,
-      bodyLinkId: widget.linkId,
-      forceNewJob: forceNewJob,
-      pageScoped: pageScoped,
-    );
-    if (!mounted) return;
-    setState(() {
-      _pbExtractStatusBySub[_stateKeyFor(focus)] = 'queued';
-    });
-  }
-
-  Future<void> _promptAndStartProblemExtraction(_SubFocus focus) async {
-    final (focusStart, focusEnd) = _focusRange(focus);
-    final startCtrl =
-        TextEditingController(text: focusStart == null ? '' : '$focusStart');
-    final endCtrl =
-        TextEditingController(text: focusEnd == null ? '' : '$focusEnd');
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) {
-        return AlertDialog(
-          backgroundColor: _kPanel,
-          title: const Text(
-            '문항추출 실행',
-            style: TextStyle(color: _kText, fontWeight: FontWeight.w800),
-          ),
-          content: SizedBox(
-            width: 360,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const Text(
-                  '저장된 크롭 정보를 기준으로 문제은행 문항추출을 큐에 넣습니다. 특정 페이지만 다시 추출하려면 범위를 조정하세요.',
-                  style: TextStyle(color: _kTextSub, fontSize: 12, height: 1.4),
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _textInput(
-                        startCtrl,
-                        hint: '시작 페이지',
-                        dense: true,
-                        keyboardType: TextInputType.number,
-                        inputFormatters: [
-                          FilteringTextInputFormatter.digitsOnly
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: _textInput(
-                        endCtrl,
-                        hint: '끝 페이지',
-                        dense: true,
-                        keyboardType: TextInputType.number,
-                        inputFormatters: [
-                          FilteringTextInputFormatter.digitsOnly
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text('취소'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(ctx).pop(true),
-              style: FilledButton.styleFrom(backgroundColor: _kAccent),
-              child: const Text('실행'),
-            ),
-          ],
-        );
-      },
-    );
-    if (confirmed != true) return;
-    final displayStart = _positiveInt(startCtrl.text);
-    final displayEnd = _positiveInt(endCtrl.text);
-    if (displayStart == null ||
-        displayEnd == null ||
-        displayEnd < displayStart) {
-      _toast('문항추출 페이지 범위를 확인하세요', error: true);
-      return;
-    }
-    try {
-      await _startPdfOnlyExtractForFocus(
-        focus,
-        displayStartOverride: displayStart,
-        displayEndOverride: displayEnd,
-        forceNewJob: true,
-        pageScoped: true,
-      );
-      _toast('${_subFocusLabel(focus)} 문항추출을 큐에 넣었습니다');
-      unawaited(_loadPbExtractRuns());
-    } catch (e) {
-      _toast('문항추출 시작 실패: $e', error: true);
-    }
-  }
-
-  // ------------------------------------------------------------ next stage
-
-  Future<void> _saveTargetsAndOpenStage(List<_SubFocus> targets) async {
-    if (targets.isEmpty) return;
-    var saved = 0;
-    var reused = 0;
-    for (final focus in targets) {
-      final state = _ensureSubState(focus);
-      final hasRows = (state.uploadResult?.rows ?? const []).isNotEmpty;
-      // 이번에 분석·수정한 게 없고 서버 결과가 이미 있으면 그대로 쓴다.
-      // dirty 를 안 보고 hasRows 만 보면, 다이얼로그를 열 때 복원한 옛 크롭
-      // 때문에 방금 다시 분석한 결과를 올리지 않고 넘어가 버린다.
-      if (hasRows && !state.dirty) {
-        reused += 1;
-        continue;
-      }
-      if (_totalRegionsFor(state, focus) == 0) {
-        _toast('${_subFocusLabel(focus)} 분석된 문항 영역이 없습니다', error: true);
-        return;
-      }
-      if (!mounted) return;
-      setState(() {
-        _focus = focus;
-        _selectedProblemKey = null;
-        _batchStatus = '${_subFocusLabel(focus)} · 다음 단계 진입 전 영역 저장 중...';
-      });
-      await _uploadFocused(focus);
-      if ((state.uploadResult?.rows ?? const []).isEmpty || state.dirty) {
-        _toast(
-          '${_subFocusLabel(focus)} 영역 저장 실패'
-          '${state.error == null ? '' : ' · ${state.error}'}',
-          error: true,
-        );
-        return;
-      }
-      saved += 1;
-    }
-    if (!mounted) return;
-    setState(() {
-      _batchStatus = saved > 0
-          ? '영역 저장 $saved개'
-              '${reused > 0 ? ' · 저장돼 있던 $reused개는 그대로 사용' : ''}'
-              ' · 정답 VLM 단계로 이동합니다'
-          : '저장된 영역 $reused개를 그대로 사용해 정답 VLM 단계로 이동합니다';
-    });
-    _openStageDialogForTargets(targets);
-  }
-
-  void _openStageDialogForTargets(List<_SubFocus> targets) {
-    if (targets.isEmpty) return;
-    final allSeeds = <TextbookAuthoringStageCropSeed>[];
-    final scopes = <TextbookAuthoringStageScope>[];
-    final scopeKeys = <String>{};
-    for (final focus in targets) {
-      final state = _ensureSubState(focus);
-      final seeds = _buildStageCropSeeds(focus, state);
-      if (seeds.isEmpty) {
-        _toast('${_subFocusLabel(focus)} 저장 문항이 없습니다', error: true);
-        return;
-      }
-      allSeeds.addAll(seeds);
-      if (_isWonriRowFocus(focus)) {
-        // 개념서: 소단원 하나가 카테고리 스코프 여러 개로 전개된다.
-        for (final scope in _wonriStageScopesFor(focus, seeds)) {
-          // A/C/D는 sub_key를 중단원 전체가 공유한다. 실제 소단원 행까지
-          // 포함해야 뒤 소단원의 정답·해설 범위가 중복으로 버려지지 않는다.
-          final key = '${scope.bigOrder}/${scope.midOrder}/${scope.subKey}/'
-              '${scope.unitRowIndex ?? -1}/'
-              '${scope.bodyStartPage ?? 0}-${scope.bodyEndPage ?? 0}';
-          if (scopeKeys.add(key)) scopes.add(scope);
-        }
-      } else {
-        final scope = _stageScopeFor(focus);
-        final key = '${scope.bigOrder}/${scope.midOrder}/${scope.subKey}';
-        if (scopeKeys.add(key)) scopes.add(scope);
-      }
-    }
-    if (scopes.isEmpty) {
-      _toast('정답·해설 단계로 보낼 카테고리가 없습니다 (필수유형은 본문에서 자동 추출됨)');
-      return;
-    }
-    final first = targets.first;
-    final big = _bigUnits[first.bigIndex];
-    final mid = big.middles[first.midIndex];
-    setState(() {
-      _embeddedStage = _EmbeddedStageArgs(
-        bigOrder: first.bigIndex,
-        midOrder: first.midIndex,
-        subKey: scopes.first.subKey,
-        bigName: big.nameCtrl.text.trim(),
-        midName: mid.nameCtrl.text.trim(),
-        initialCrops: allSeeds,
-        // 스코프가 하나여도 그대로 넘긴다. 예전에는 하나면 빈 목록을 넘겼고,
-        // 그러면 정답·해설 다이얼로그가 대단원/중단원/sub_key 만으로 스코프를
-        // 새로 지어 쓰는데 거기에는 **소단원 순번이 없다**. 그래서 문항추출 런을
-        // sub_index=0 으로 찾아 "런 없음" 으로 남았다(수력충전 2-1 단원 마무리
-        // 평가는 sub_index=6 에 이미 다 끝난 런이 있었다). 소단원 행 하나만
-        // 골라 다시 돌릴 때가 정확히 그 경우다.
-        batchScopes: scopes,
-        answerStartPage: scopes.first.answerStartPage,
-        answerEndPage: scopes.first.answerEndPage,
-        solutionStartPage: scopes.first.solutionStartPage,
-        solutionEndPage: scopes.first.solutionEndPage,
-        onStartProblemExtraction: !_runProblemExtractionAfterStage1
-            ? null
-            : () async {
-                for (final focus in targets) {
-                  await _startPdfOnlyExtractForFocus(focus);
-                }
-                unawaited(_loadPbExtractRuns());
-              },
-      );
-    });
   }
 
   /// 개념서 소단원 포커스 → 정답·해설 단계 스코프 목록.
@@ -5391,69 +5661,36 @@ class _TextbookUnitAuthoringDialogState
   ///
   /// 개념원리는 필수유형·특강 전체가 그렇고, 개념+유형은 쓱쓱 서술형
   /// 완성하기 중 "예제"만 그렇다 (유제·연습해 보자는 정답 파일에 있다).
-  bool _isConceptBodySolutionItem(String category, String problemNumber) {
-    if (_seriesKey == 'gaeyu') {
-      return category == 'descriptive' && problemNumber.startsWith('예제');
-    }
-    // 개념+유형 고등은 필수예제만 본문 "풀이" 상자에 답이 있다.
-    if (_seriesKey == 'gaeyu_high') return category == 'high_example';
-    return category == 'type_example' || category == 'special_lecture';
-  }
+  bool _isConceptBodySolutionItem(String category, String problemNumber) =>
+      textbookConceptBodySolutionItem(_seriesKey, category, problemNumber);
 
   // ------------------------------------------------------------ UI
 
   @override
   Widget build(BuildContext context) {
-    return Dialog(
-      backgroundColor: _kBg,
-      insetPadding: const EdgeInsets.all(20),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: SizedBox(
-        width: MediaQuery.of(context).size.width * 0.92,
-        height: MediaQuery.of(context).size.height * 0.92,
-        child: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 260),
-          switchInCurve: Curves.easeOutCubic,
-          switchOutCurve: Curves.easeInCubic,
-          transitionBuilder: (child, animation) {
-            final offset = Tween<Offset>(
-              begin: const Offset(1, 0),
-              end: Offset.zero,
-            ).animate(animation);
-            return SlideTransition(position: offset, child: child);
-          },
-          child: _embeddedStage == null
-              ? _buildStage1Shell()
-              : TextbookAuthoringStageDialog(
-                  key: ValueKey('stage:${_embeddedStage!.subKey}'),
-                  academyId: widget.academyId,
-                  bookId: widget.bookId,
-                  bookName: widget.bookName,
-                  gradeLabel: widget.gradeLabel,
-                  linkId: widget.linkId,
-                  bigOrder: _embeddedStage!.bigOrder,
-                  midOrder: _embeddedStage!.midOrder,
-                  subKey: _embeddedStage!.subKey,
-                  bigName: _embeddedStage!.bigName,
-                  midName: _embeddedStage!.midName,
-                  initialCrops: _embeddedStage!.initialCrops,
-                  batchScopes: _embeddedStage!.batchScopes,
-                  answerStartPage: _embeddedStage!.answerStartPage,
-                  answerEndPage: _embeddedStage!.answerEndPage,
-                  solutionStartPage: _embeddedStage!.solutionStartPage,
-                  solutionEndPage: _embeddedStage!.solutionEndPage,
-                  seriesKey: _seriesKey,
-                  embedded: true,
-                  onBack: () {
-                    setState(() => _embeddedStage = null);
-                    unawaited(_loadStageStatuses());
-                  },
-                  onMinimize:
-                      _backgroundWorkerAvailable ? _minimizeToBackground : null,
-                  onStageChanged: () => unawaited(_loadStageStatuses()),
-                  onStartProblemExtraction:
-                      _embeddedStage!.onStartProblemExtraction,
-                ),
+    final size = MediaQuery.of(context).size;
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (_manualDrawMode) {
+          _toggleManualDraw();
+          return;
+        }
+        unawaited(_close());
+      },
+      child: Dialog(
+        backgroundColor: _kBg,
+        insetPadding: const EdgeInsets.all(16),
+        clipBehavior: Clip.antiAlias,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(28),
+          side: const BorderSide(color: _kBorder),
+        ),
+        child: SizedBox(
+          width: size.width * 0.94,
+          height: size.height * 0.94,
+          child: _buildStage1Shell(),
         ),
       ),
     );
@@ -5461,44 +5698,8 @@ class _TextbookUnitAuthoringDialogState
 
   Widget _buildStage1Shell() {
     return Column(
-      key: const ValueKey('stage1'),
       children: [
         _buildHeader(),
-        const Divider(height: 1, color: _kBorder),
-        if (_autoAnalyzeBanner != null)
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            decoration: BoxDecoration(
-              color: _kAccent.withValues(alpha: 0.14),
-              border: Border(
-                bottom: BorderSide(color: _kAccent.withValues(alpha: 0.35)),
-              ),
-            ),
-            child: Row(
-              children: [
-                if (_autoAnalyzeRunning)
-                  const SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: _kAccent),
-                  )
-                else
-                  const Icon(Icons.auto_awesome_rounded, size: 16, color: _kAccent),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    _autoAnalyzeBanner!,
-                    style: const TextStyle(
-                      color: _kText,
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
         Expanded(
           child: _loadingPayload
               ? const Center(
@@ -5522,78 +5723,244 @@ class _TextbookUnitAuthoringDialogState
   }
 
   Widget _buildHeader() {
+    final running = _activeRunKeys.length;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      padding: const EdgeInsets.fromLTRB(24, 16, 16, 16),
+      decoration: const BoxDecoration(
+        color: _kPanel,
+        border: Border(bottom: BorderSide(color: _kBorder)),
+      ),
       child: Row(
         children: [
-          Icon(
-            widget.autoAnalyzeMode ? Icons.auto_awesome_rounded : Icons.account_tree_outlined,
-            color: _kAccent,
-            size: 20,
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: _kChipSelected,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(Icons.crop_rounded, color: _kText, size: 20),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 12),
           Expanded(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  '단원·크롭',
+                  style: TextStyle(
+                    color: _kText,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '${widget.bookName} · ${widget.gradeLabel}',
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: _kTextSub, fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+          _stepPill('1', '크롭 확인', active: true),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 4),
+            child: Icon(Icons.chevron_right_rounded, size: 16, color: _kMuted),
+          ),
+          _stepPill('2', '추출·검수', active: false),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 4),
+            child: Icon(Icons.chevron_right_rounded, size: 16, color: _kMuted),
+          ),
+          _stepPill('3', '확정', active: false),
+          const SizedBox(width: 16),
+          if (_loadingPdf)
+            _statusPill(label: 'PDF 불러오는 중', color: _kInfo, busy: true),
+          if (_pdfLoadError != null)
+            Tooltip(
+              message: _pdfLoadError!,
+              child: _statusPill(
+                label: 'PDF 오류',
+                color: _kDanger,
+                icon: Icons.warning_amber_rounded,
+              ),
+            ),
+          if (running > 0)
+            _statusPill(
+              label: '2단계 진행 $running개',
+              color: _kInfo,
+              busy: true,
+            ),
+          if (_closing)
+            _statusPill(label: '임시저장 마무리 중', color: _kWarn, busy: true),
+          const SizedBox(width: 8),
+          Tooltip(
+            message: '대·중·소단원 이름과 쪽 범위를 저장합니다. '
+                '크롭은 분석·수정할 때마다 자동으로 임시저장됩니다.',
+            child: _pillButton(
+              label: '단원 구조 저장',
+              icon: Icons.save_outlined,
+              onTap: _saveTree,
+            ),
+          ),
+          const SizedBox(width: 4),
+          IconButton(
+            tooltip: '닫기',
+            onPressed: _closing ? null : () => unawaited(_close()),
+            icon: const Icon(Icons.close_rounded, color: _kTextSub),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _stepPill(String number, String label, {required bool active}) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(4, 4, 12, 4),
+      decoration: BoxDecoration(
+        color: active ? _kChipSelected : _kCard,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: active ? _kAccent : _kBorder),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 20,
+            height: 20,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: active ? _kAccent : _kPanel,
+              shape: BoxShape.circle,
+            ),
             child: Text(
-              '${widget.autoAnalyzeMode ? '자동 분석 (원스톱 추출·검수)' : '단원·분석'} · ${widget.bookName} · ${widget.gradeLabel}',
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: _kText,
-                fontSize: 14,
+              number,
+              style: TextStyle(
+                color: active ? _kText : _kMuted,
+                fontSize: 11,
                 fontWeight: FontWeight.w800,
               ),
             ),
           ),
-          if (_loadingPdf) ...[
-            const SizedBox(
-              width: 14,
-              height: 14,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: _kInfo,
-              ),
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: TextStyle(
+              color: active ? _kText : _kMuted,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
             ),
-            const SizedBox(width: 8),
-            const Text(
-              'PDF 로드 중...',
-              style: TextStyle(color: _kTextSub, fontSize: 11),
-            ),
-            const SizedBox(width: 10),
-          ],
-          if (_pdfLoadError != null) ...[
-            Tooltip(
-              message: _pdfLoadError!,
-              child: const Icon(Icons.warning_amber, size: 14, color: _kDanger),
-            ),
-            const SizedBox(width: 10),
-          ],
-          Tooltip(
-            message:
-                '대·중·소단원 이름과 페이지 범위를 Supabase textbook_metadata.payload에 저장합니다.\n'
-                '영역 저장은 각 A/B/C 탭의 "영역 저장" 버튼을 눌러야 진행됩니다.',
-            child: OutlinedButton.icon(
-              onPressed: _saveTree,
-              icon: const Icon(Icons.save_outlined, size: 14, color: _kTextSub),
-              label: const Text(
-                '단원 구조 저장',
-                style: TextStyle(color: _kTextSub, fontSize: 12),
-              ),
-              style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: _kBorder),
-              ),
-            ),
-          ),
-          IconButton(
-            tooltip: _canMinimizeToBackground
-                ? '문제은행 본문 추출을 우측 하단에서 계속 확인합니다'
-                : '정답·해설 저장이 끝나고 본문 추출 작업이 시작되면 최소화할 수 있습니다',
-            onPressed: _canMinimizeToBackground ? _minimizeToBackground : null,
-            icon: const Icon(Icons.minimize, color: _kTextSub),
-          ),
-          IconButton(
-            onPressed: () => Navigator.of(context).maybePop(),
-            icon: const Icon(Icons.close, color: _kTextSub),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _statusPill({
+    required String label,
+    required Color color,
+    IconData? icon,
+    bool busy = false,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(left: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: color.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (busy)
+            SizedBox(
+              width: 12,
+              height: 12,
+              child: CircularProgressIndicator(strokeWidth: 1.6, color: color),
+            )
+          else if (icon != null)
+            Icon(icon, size: 12, color: color),
+          if (busy || icon != null) const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(
+              color: color,
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 캡슐 버튼. [filled] 면 [color](기본 강조색) 바탕, 아니면 테두리만.
+  /// 테두리 버튼에 [color] 를 주지 않으면 중립색.
+  Widget _pillButton({
+    required String label,
+    IconData? icon,
+    VoidCallback? onTap,
+    bool filled = false,
+    Color? color,
+    bool busy = false,
+  }) {
+    final enabled = onTap != null && !busy;
+    final tone = color ?? (filled ? _kAccent : _kTextSub);
+    final Color fg;
+    final Color bg;
+    final Color border;
+    if (!enabled) {
+      fg = _kMuted;
+      bg = filled ? _kCard : Colors.transparent;
+      border = _kBorder;
+    } else if (filled) {
+      fg = _kText;
+      bg = tone;
+      border = Colors.transparent;
+    } else {
+      fg = tone;
+      bg = Colors.transparent;
+      border = color == null ? _kBorder : tone.withValues(alpha: 0.55);
+    }
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: enabled ? onTap : null,
+        borderRadius: BorderRadius.circular(18),
+        child: Container(
+          height: 36,
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: border),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (busy)
+                SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 1.8, color: fg),
+                )
+              else if (icon != null)
+                Icon(icon, size: 16, color: fg),
+              if (busy || icon != null) const SizedBox(width: 8),
+              Text(
+                label,
+                style: TextStyle(
+                  color: fg,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -5601,7 +5968,7 @@ class _TextbookUnitAuthoringDialogState
   Widget _buildMain() {
     return Row(
       children: [
-        SizedBox(width: 380, child: _buildLeftPane()),
+        SizedBox(width: 540, child: _buildLeftPane()),
         const VerticalDivider(width: 1, color: _kBorder),
         Expanded(child: _buildRightPane()),
       ],
@@ -5609,27 +5976,30 @@ class _TextbookUnitAuthoringDialogState
   }
 
   Widget _buildLeftPane() {
+    final selectedCount = _batchSelection.length;
     return Container(
       color: _kPanel,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 12, 8),
+            padding: const EdgeInsets.fromLTRB(16, 16, 12, 8),
             child: Row(
               children: [
                 const Expanded(
                   child: Text(
-                    '단원 트리',
+                    '단원',
                     style: TextStyle(
                       color: _kText,
-                      fontSize: 13,
+                      fontSize: 14,
                       fontWeight: FontWeight.w800,
                     ),
                   ),
                 ),
-                TextButton.icon(
-                  onPressed: () {
+                _pillButton(
+                  label: '대단원',
+                  icon: Icons.add_rounded,
+                  onTap: () {
                     setState(() {
                       final newBig = _BigUnitEdit();
                       newBig.middles.add(
@@ -5638,17 +6008,12 @@ class _TextbookUnitAuthoringDialogState
                       _bigUnits.add(newBig);
                     });
                   },
-                  icon: const Icon(Icons.add, size: 14, color: _kTextSub),
-                  label: const Text(
-                    '대단원',
-                    style: TextStyle(color: _kTextSub, fontSize: 11),
-                  ),
                 ),
               ],
             ),
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 12, 10),
+            padding: const EdgeInsets.fromLTRB(16, 0, 12, 12),
             child: Row(
               children: [
                 Expanded(child: _buildSeriesDropdown()),
@@ -5657,27 +6022,11 @@ class _TextbookUnitAuthoringDialogState
                   message: '본문 PDF의 목차(차례) 페이지를 VLM 으로 읽어 단원 이름과 '
                       '페이지 범위를 자동으로 채웁니다.\n적용 후 "단원 구조 저장"을 '
                       '눌러야 반영됩니다.',
-                  child: OutlinedButton.icon(
-                    onPressed: _tocParsing ? null : _runTocAutoParse,
-                    icon: _tocParsing
-                        ? const SizedBox(
-                            width: 12,
-                            height: 12,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: _kTextSub,
-                            ),
-                          )
-                        : const Icon(Icons.auto_awesome,
-                            size: 14, color: _kTextSub),
-                    label: const Text(
-                      '목차 자동 인식',
-                      style: TextStyle(color: _kTextSub, fontSize: 11),
-                    ),
-                    style: OutlinedButton.styleFrom(
-                      side: const BorderSide(color: _kBorder),
-                      visualDensity: VisualDensity.compact,
-                    ),
+                  child: _pillButton(
+                    label: '목차 자동 인식',
+                    icon: Icons.auto_awesome_outlined,
+                    busy: _tocParsing,
+                    onTap: _runTocAutoParse,
                   ),
                 ),
               ],
@@ -5696,21 +6045,62 @@ class _TextbookUnitAuthoringDialogState
                 ),
               ),
             ),
-          const Divider(height: 1, color: _kBorder),
+          if (selectedCount > 0)
+            Container(
+              margin: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+              padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+              decoration: BoxDecoration(
+                color: _kChipSelected.withValues(alpha: 0.35),
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: _kAccent.withValues(alpha: 0.45)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '선택 $selectedCount개',
+                          style: const TextStyle(
+                            color: _kText,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: _batchRunning
+                            ? null
+                            : () => setState(_batchSelection.clear),
+                        child: const Text(
+                          '선택 해제',
+                          style: TextStyle(color: _kTextSub, fontSize: 12),
+                        ),
+                      ),
+                    ],
+                  ),
+                  _buildBatchActions(_selectedBatchFocuses()),
+                ],
+              ),
+            ),
           if (_batchRunning || _batchStatus.isNotEmpty)
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 12, 0),
+              padding: const EdgeInsets.fromLTRB(16, 0, 12, 8),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   if (_batchTotal > 0)
-                    LinearProgressIndicator(
-                      value: _batchRunning ? _batchDone / _batchTotal : 1,
-                      minHeight: 3,
-                      backgroundColor: const Color(0xFF24272D),
-                      color: _kAccent,
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: LinearProgressIndicator(
+                        value: _batchRunning ? _batchDone / _batchTotal : 1,
+                        minHeight: 4,
+                        backgroundColor: _kCard,
+                        color: _kAccent,
+                      ),
                     ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 8),
                   Text(
                     _batchStatus,
                     maxLines: 3,
@@ -5720,11 +6110,12 @@ class _TextbookUnitAuthoringDialogState
                 ],
               ),
             ),
+          const Divider(height: 1, color: _kBorder),
           Expanded(
             child: ListView.separated(
-              padding: const EdgeInsets.fromLTRB(10, 10, 10, 14),
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
               itemCount: _bigUnits.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 10),
+              separatorBuilder: (_, __) => const SizedBox(height: 12),
               itemBuilder: (_, i) => _buildBigUnit(i),
             ),
           ),
@@ -5741,12 +6132,12 @@ class _TextbookUnitAuthoringDialogState
   /// "단원 구조 저장"으로 함께 저장할 수 있게 한다.
   Widget _buildSeriesDropdown() {
     return Container(
-      height: 32,
-      padding: const EdgeInsets.symmetric(horizontal: 8),
+      height: 36,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
       decoration: BoxDecoration(
         color: _kCard,
         border: Border.all(color: _kBorder),
-        borderRadius: BorderRadius.circular(6),
+        borderRadius: BorderRadius.circular(18),
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
@@ -5794,17 +6185,14 @@ class _TextbookUnitAuthoringDialogState
       decoration: BoxDecoration(
         color: _kCard,
         border: Border.all(color: _kBorder),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(18),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
             children: [
-              _pill(
-                  text: '대 ${i + 1}',
-                  color: const Color(0xFF1B2B1B),
-                  fg: _kAccent),
+              _pill(text: '대 ${i + 1}', color: _kChipSelected, fg: _kText),
               const SizedBox(width: 8),
               Expanded(
                 child: _textInput(big.nameCtrl, hint: '대단원 이름'),
@@ -5852,12 +6240,30 @@ class _TextbookUnitAuthoringDialogState
 
   Widget _buildMidUnit(int bigIndex, int midIndex) {
     final mid = _bigUnits[bigIndex].middles[midIndex];
+    final focuses = _midBatchFocuses(bigIndex, midIndex).where((f) {
+      final (start, end) = _focusRange(f);
+      return start != null && end != null;
+    }).toList();
+    final cropConfirmed =
+        focuses.where((f) => _workflowFor(f)?.cropConfirmed ?? false).length;
+    final stages = [for (final f in focuses) _stageOf(f)];
+    int countOf(TextbookSubunitStage s) => stages.where((x) => x == s).length;
+    final confirmed = countOf(TextbookSubunitStage.confirmed);
+    final inProgress = countOf(TextbookSubunitStage.inProgress);
+    final reviewed = countOf(TextbookSubunitStage.reviewed);
+    final legacy = countOf(TextbookSubunitStage.legacy);
+    final stageText = [
+      '확정 $confirmed',
+      if (inProgress > 0) '진행 $inProgress',
+      if (reviewed > 0) '검수 완료 $reviewed',
+      if (legacy > 0) '기존 추출 $legacy',
+    ].join(' · ');
     return Container(
       padding: const EdgeInsets.all(8),
       decoration: BoxDecoration(
-        color: const Color(0xFF101216),
-        border: Border.all(color: const Color(0xFF1A1A1A)),
-        borderRadius: BorderRadius.circular(6),
+        color: _kPanel,
+        border: Border.all(color: _kBorder),
+        borderRadius: BorderRadius.circular(18),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -5876,10 +6282,11 @@ class _TextbookUnitAuthoringDialogState
                         ),
                 visualDensity: VisualDensity.compact,
                 side: const BorderSide(color: _kTextSub),
+                activeColor: _kAccent,
               ),
               _pill(
                 text: '중 ${midIndex + 1}',
-                color: const Color(0xFF1B2430),
+                color: _kInfo.withValues(alpha: 0.16),
                 fg: _kInfo,
               ),
               const SizedBox(width: 6),
@@ -5913,7 +6320,46 @@ class _TextbookUnitAuthoringDialogState
               ),
             ],
           ),
-          const SizedBox(height: 6),
+          if (focuses.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 4, 0, 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '$stageText / ${focuses.length}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: confirmed == focuses.length
+                            ? _kAccent
+                            : _kTextSub,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  if (cropConfirmed > 0)
+                    TextButton.icon(
+                      onPressed: () => _openWorkScreen(bigIndex, midIndex),
+                      icon: const Icon(
+                        Icons.view_agenda_outlined,
+                        size: 14,
+                        color: _kAccent,
+                      ),
+                      label: const Text(
+                        '작업 화면',
+                        style: TextStyle(
+                          color: _kAccent,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          const SizedBox(height: 4),
           if (_currentSeries().hasSubUnitRows) ...[
             // 특강(E)은 편집 payload 밖의 정규화 유닛이지만, 학습/학생앱과
             // 동일한 물리 페이지 순서로 읽기 전용 표시한다.
@@ -5964,25 +6410,25 @@ class _TextbookUnitAuthoringDialogState
       margin: const EdgeInsets.only(top: 4),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
       decoration: BoxDecoration(
-        color: const Color(0xFF211D16),
-        borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: const Color(0xFF4A3C22)),
+        color: _kWarn.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _kWarn.withValues(alpha: 0.35)),
       ),
       child: Row(
         children: [
           Container(
             width: 44,
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 5),
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
             decoration: BoxDecoration(
-              color: const Color(0xFF3A2C16),
-              borderRadius: BorderRadius.circular(4),
+              color: _kWarn.withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(18),
             ),
             child: const Text(
               '특강',
               textAlign: TextAlign.center,
               style: TextStyle(
-                color: Color(0xFFE6BE73),
-                fontSize: 9,
+                color: _kWarn,
+                fontSize: 10,
                 fontWeight: FontWeight.w800,
               ),
             ),
@@ -6047,12 +6493,18 @@ class _TextbookUnitAuthoringDialogState
     final stageStatus = _wonriRowStageStatus(focus);
     return Container(
       margin: const EdgeInsets.only(top: 4),
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
       decoration: BoxDecoration(
-        color: selected ? const Color(0xFF1B2B1B) : Colors.transparent,
-        borderRadius: BorderRadius.circular(4),
+        color: selected
+            ? _kChipSelected.withValues(alpha: 0.35)
+            : Colors.transparent,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: selected ? _kAccent.withValues(alpha: 0.45) : Colors.transparent,
+        ),
       ),
       child: InkWell(
+        borderRadius: BorderRadius.circular(12),
         onTap: () {
           setState(() {
             _focus = focus;
@@ -6071,25 +6523,23 @@ class _TextbookUnitAuthoringDialogState
                       : (value) => _toggleBatchSub(focus, value == true),
                   visualDensity: VisualDensity.compact,
                   side: const BorderSide(color: _kTextSub),
+                  activeColor: _kAccent,
                 ),
                 Container(
                   width: 44,
                   padding:
-                      const EdgeInsets.symmetric(horizontal: 4, vertical: 5),
+                      const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
                   decoration: BoxDecoration(
-                    color: row.isExercise
-                        ? const Color(0xFF241A1E)
-                        : const Color(0xFF16211B),
-                    borderRadius: BorderRadius.circular(4),
+                    color: (row.isExercise ? _kWarn : _kAccent)
+                        .withValues(alpha: 0.16),
+                    borderRadius: BorderRadius.circular(18),
                   ),
                   child: Text(
                     row.isExercise ? '연습' : '소단원',
                     textAlign: TextAlign.center,
                     style: TextStyle(
-                      color: row.isExercise
-                          ? const Color(0xFFE68AA9)
-                          : const Color(0xFF8FD0AE),
-                      fontSize: 9,
+                      color: row.isExercise ? _kWarn : _kAccent,
+                      fontSize: 10,
                       fontWeight: FontWeight.w800,
                     ),
                   ),
@@ -6103,8 +6553,9 @@ class _TextbookUnitAuthoringDialogState
                     dense: true,
                   ),
                 ),
-                const SizedBox(width: 6),
-                _buildAutoAnalyzedBadge(key),
+                const SizedBox(width: 4),
+                _buildWorkflowChip(focus),
+                const SizedBox(width: 4),
                 Expanded(
                   flex: 2,
                   child: _StageProgressChip(
@@ -6116,22 +6567,21 @@ class _TextbookUnitAuthoringDialogState
                 IconButton(
                   tooltip: '소단원 삭제',
                   visualDensity: VisualDensity.compact,
-                  onPressed: () => setState(() {
-                    mid.subUnitRows.removeAt(index).dispose();
-                    _recalcSubUnitSlotPages(mid);
-                    // 행 삭제로 W 인덱스가 밀리므로 이 중단원의 소단원 상태는
-                    // 통째로 버린다 (저장된 영역은 DB에 남아 재복원 가능).
-                    final prefix = '$bigIndex/$midIndex/W';
-                    _subStates.removeWhere((k, _) => k.startsWith(prefix));
-                    _manualEdits.removeWhere((k, _) => k.startsWith(prefix));
-                    _batchSelection.removeWhere((k) => k.startsWith(prefix));
-                    if (_focus != null &&
-                        _focus!.bigIndex == bigIndex &&
-                        _focus!.midIndex == midIndex &&
-                        _focus!.subKey.startsWith('W')) {
-                      _focus = null;
+                  onPressed: () {
+                    // 행을 지우면 뒤 소단원의 W 번호가 당겨져 확정 기록과 어긋난다.
+                    final locked = _midBatchFocuses(bigIndex, midIndex)
+                        .skip(index)
+                        .any(_cropLocked);
+                    if (locked) {
+                      _toast(
+                        '이 행이나 아래 행에 크롭을 확정한 소단원이 있어 지울 수 없습니다. '
+                        '먼저 "크롭 다시 열기"를 하세요',
+                        error: true,
+                      );
+                      return;
                     }
-                  }),
+                    _removeSubUnitRow(bigIndex, midIndex, mid, index);
+                  },
                   icon: const Icon(Icons.close, size: 12, color: _kTextSub),
                 ),
               ],
@@ -6205,6 +6655,171 @@ class _TextbookUnitAuthoringDialogState
     );
   }
 
+  void _removeSubUnitRow(
+    int bigIndex,
+    int midIndex,
+    _MidUnitEdit mid,
+    int index,
+  ) {
+    setState(() {
+      mid.subUnitRows.removeAt(index).dispose();
+      _recalcSubUnitSlotPages(mid);
+      // 행 삭제로 W 인덱스가 밀리므로 이 중단원의 소단원 상태는
+      // 통째로 버린다 (저장된 영역은 DB에 남아 재복원 가능).
+      final prefix = '$bigIndex/$midIndex/W';
+      _subStates.removeWhere((k, _) => k.startsWith(prefix));
+      _manualEdits.removeWhere((k, _) => k.startsWith(prefix));
+      _batchSelection.removeWhere((k) => k.startsWith(prefix));
+      for (final k in _autoSaveTimers.keys.toList()) {
+        if (k.startsWith(prefix)) _autoSaveTimers.remove(k)?.cancel();
+      }
+      if (_focus != null &&
+          _focus!.bigIndex == bigIndex &&
+          _focus!.midIndex == midIndex &&
+          _focus!.subKey.startsWith('W')) {
+        _focus = null;
+      }
+    });
+  }
+
+  /// (준비됨, 전체) — 방금 끝난 실행 결과 → 지금 카드 상태 → DB 에 남은 요약 문구 순으로 읽는다.
+  (int, int)? _readyCounts(_SubFocus focus) {
+    final run = _runStateFor(focus);
+    final live = _liveReady[_stateKeyFor(focus)];
+    final runFresh = run != null &&
+        run.total > 0 &&
+        (live == null ||
+            _liveReadyAt == null ||
+            (run.finishedAt?.isAfter(_liveReadyAt!) ?? true));
+    if (runFresh) return (run.ready, run.total);
+    if (live != null) return live;
+    final m = RegExp(r'준비됨 (\d+)/(\d+)')
+        .firstMatch(_workflowFor(focus)?.pipelineDetail ?? '');
+    if (m == null) return null;
+    return (int.parse(m.group(1)!), int.parse(m.group(2)!));
+  }
+
+  /// 소단원 행의 1·2단계 상태 배지.
+  Widget _buildWorkflowChip(_SubFocus focus) {
+    final wf = _workflowFor(focus);
+    final run = _runStateFor(focus);
+    final state = _subStates[_stateKeyFor(focus)];
+    String? label;
+    var color = _kMuted;
+    var busy = false;
+    var tip = '';
+    if (wf?.isConfirmed ?? false) {
+      label = '확정';
+      color = _kAccent;
+      tip = '모든 문항이 준비됨이라 확정했습니다';
+    } else if (run != null && run.active) {
+      label = TextbookWorkflowPhase.label(run.phase);
+      color = _kInfo;
+      busy = true;
+      tip = run.detail;
+    } else if (wf != null && wf.cropConfirmed) {
+      switch (wf.pipelineStatus) {
+        case 'done':
+          final counts = _readyCounts(focus);
+          final allReady = counts != null && counts.$2 > 0 && counts.$1 == counts.$2;
+          label = counts == null
+              ? '2단계 완료'
+              : allReady
+                  ? '준비됨 ${counts.$2}'
+                  : '준비 ${counts.$1}/${counts.$2}';
+          color = allReady ? _kAccent : _kWarn;
+          tip = run?.summaryText ?? wf.pipelineDetail;
+        case 'failed':
+          label = '2단계 실패';
+          color = _kDanger;
+          tip = wf.pipelineError.isEmpty ? wf.pipelineDetail : wf.pipelineError;
+        case 'queued':
+        case 'running':
+          label = '2단계 대기';
+          color = _kInfo;
+          tip = '이 앱에서 이어서 돌릴 차례를 기다립니다';
+        default:
+          label = '2단계 중단';
+          color = _kWarn;
+          tip = wf.pipelineDetail;
+      }
+    } else if (state != null && state.dirty) {
+      label = '저장 전';
+      color = _kWarn;
+      tip = '분석·수정한 크롭이 아직 임시저장되지 않았습니다';
+    } else if (_isLegacy(focus)) {
+      final counts = _bodyCounts[_stateKeyFor(focus)];
+      final allReviewed = _stageOf(focus) == TextbookSubunitStage.reviewed;
+      final reviewedText = counts == null || counts.reviewed == 0
+          ? ''
+          : ' · 검수 ${counts.reviewed}/${counts.bodies}';
+      label = allReviewed ? '검수 완료' : '기존 추출$reviewedText';
+      color = allReviewed ? _kAccent : _kTextSub;
+      tip = allReviewed
+          ? '예전 흐름에서 본문이 붙은 문항을 모두 검수(정답·품질 승인)했습니다'
+              '${counts == null ? '' : ' · 본문 ${counts.bodies}/${counts.crops}'}. '
+              '"이어서 마무리"를 누르면 검수 결과는 그대로 두고 빈 단계만 채운 뒤 확정할 수 있습니다'
+          : '예전에 본문(+정답)만 뽑아 둔 소단원입니다'
+              '${counts == null ? '' : ' · 본문 ${counts.bodies}/${counts.crops}$reviewedText'}. '
+              '"이어서 마무리"를 누르면 본문과 검수 결과는 그대로 두고 다음 단계부터 진행합니다';
+    } else if ((wf?.cropStatus ?? 'none') == 'draft' ||
+        (state?.uploadResult?.rows.isNotEmpty ?? false)) {
+      label = '임시저장';
+      tip = '크롭이 임시저장돼 있습니다. 확인한 뒤 "크롭 확정"을 누르세요';
+    }
+    if (label == null) return const SizedBox.shrink();
+    final chip = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: color.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (busy) ...[
+            SizedBox(
+              width: 10,
+              height: 10,
+              child: CircularProgressIndicator(strokeWidth: 1.4, color: color),
+            ),
+            const SizedBox(width: 4),
+          ],
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 148),
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: color,
+                fontSize: 10,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    // 행마다 다시 그려지는 칩이라 Tooltip 오버레이 대신 접근성 라벨만 단다
+    // (단원 트리 갱신 프레임에 Tooltip 이 MouseTracker assertion 을 일으킨 적이 있다).
+    return Semantics(
+      label: tip.isEmpty ? label : '$label. $tip',
+      child: (wf?.cropConfirmed ?? false)
+          ? InkWell(
+              borderRadius: BorderRadius.circular(18),
+              onTap: () => _openWorkScreen(
+                focus.bigIndex,
+                focus.midIndex,
+                scopeKey: focus.subKey,
+              ),
+              child: chip,
+            )
+          : chip,
+    );
+  }
+
   /// 개념원리 소단원 행의 정답·해설 진행 배지용 합계 상태.
   /// 카테고리(A/B/C/D)별 스테이지 상태를 합쳐 하나로 만든다. 없으면 null.
   TextbookStageScopeStatus? _wonriRowStageStatus(_SubFocus focus) {
@@ -6275,12 +6890,18 @@ class _TextbookUnitAuthoringDialogState
     final stageStatus = _stageStatusBySub[key];
     return Container(
       margin: const EdgeInsets.only(top: 4),
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
       decoration: BoxDecoration(
-        color: selected ? const Color(0xFF1B2B1B) : Colors.transparent,
-        borderRadius: BorderRadius.circular(4),
+        color: selected
+            ? _kChipSelected.withValues(alpha: 0.35)
+            : Colors.transparent,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: selected ? _kAccent.withValues(alpha: 0.45) : Colors.transparent,
+        ),
       ),
       child: InkWell(
+        borderRadius: BorderRadius.circular(12),
         onTap: () {
           setState(() {
             _focus = focus;
@@ -6299,28 +6920,34 @@ class _TextbookUnitAuthoringDialogState
                       : (value) => _toggleBatchSub(focus, value == true),
                   visualDensity: VisualDensity.compact,
                   side: const BorderSide(color: _kTextSub),
+                  activeColor: _kAccent,
                 ),
-                Container(
-                  constraints: const BoxConstraints(minWidth: 72),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1E1A12),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  alignment: Alignment.center,
-                  child: Text(
-                    sub.preset.displayName,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Color(0xFFEAB968),
-                      fontSize: 10,
-                      fontWeight: FontWeight.w800,
+                Flexible(
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Container(
+                      constraints: const BoxConstraints(minWidth: 72, maxWidth: 168),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: _kWarn.withValues(alpha: 0.16),
+                        borderRadius: BorderRadius.circular(18),
+                      ),
+                      child: Text(
+                        sub.preset.displayName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: _kWarn,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
                     ),
                   ),
                 ),
-                const SizedBox(width: 6),
-                _buildAutoAnalyzedBadge(key),
+                const SizedBox(width: 4),
+                _buildWorkflowChip(focus),
+                const SizedBox(width: 4),
                 Expanded(
                   child: _StageProgressChip(
                     status: stageStatus,
@@ -6472,6 +7099,11 @@ class _TextbookUnitAuthoringDialogState
   }
 
   Future<void> _confirmDeleteStage(_SubFocus focus, String stage) async {
+    if (TextbookWorkflowRunner.instance.isActive(_workflowKeyFor(focus))) {
+      _toast('2단계가 진행 중이라 지울 수 없습니다. 먼저 "크롭 다시 열기"로 중단하세요',
+          error: true);
+      return;
+    }
     final label = switch (stage) {
       'body' => '본문',
       'answer' => '정답',
@@ -6545,6 +7177,17 @@ class _TextbookUnitAuthoringDialogState
       if (result.warnings.isNotEmpty) {
         debugPrint('[textbook-stage-delete] warnings: ${result.warnings}');
       }
+      if (stage == 'body' && (_workflowFor(focus)?.cropConfirmed ?? false)) {
+        await _workflowService.reopenCrop(
+          academyId: widget.academyId,
+          bookId: widget.bookId,
+          gradeLabel: widget.gradeLabel,
+          bigOrder: focus.bigIndex,
+          midOrder: focus.midIndex,
+          scopeKey: focus.subKey,
+        );
+        await _loadWorkflows();
+      }
       await _loadExistingCrops();
       await _loadStageStatuses();
     } catch (e) {
@@ -6608,10 +7251,10 @@ class _TextbookUnitAuthoringDialogState
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
           child: Row(
             children: [
-              Expanded(
+              Flexible(
                 child: Text(
                   '${big.nameCtrl.text.trim().isEmpty ? "대${focus.bigIndex + 1}" : big.nameCtrl.text.trim()} '
                   '› ${mid.nameCtrl.text.trim().isEmpty ? "중${focus.midIndex + 1}" : mid.nameCtrl.text.trim()} '
@@ -6619,20 +7262,21 @@ class _TextbookUnitAuthoringDialogState
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     color: _kText,
-                    fontSize: 13,
+                    fontSize: 15,
                     fontWeight: FontWeight.w800,
                   ),
                 ),
               ),
+              const SizedBox(width: 8),
+              _buildWorkflowChip(focus),
             ],
           ),
         ),
         // 개념원리: 소단원 페이지를 한 번만 분석하면 문항이 개념원리 익히기 /
         // 필수유형 / 확인 체크 / 연습문제로 자동 분류돼 문항이름으로 저장된다.
         // 정답·해설 시작 페이지는 왼쪽 소단원 행에서 입력한다 (쎈과 동일).
-        const Divider(height: 1, color: _kBorder),
         Padding(
-          padding: const EdgeInsets.all(12),
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
           child: _buildSubControls(focus, state, sub),
         ),
         if (state.progress != null) _buildProgressRow(state),
@@ -6646,24 +7290,27 @@ class _TextbookUnitAuthoringDialogState
       0,
       (sum, focus) => sum + _totalRegionsFor(_ensureSubState(focus), focus),
     );
+    final lockedCount = selected.where(_cropLocked).length;
+    final legacyCount =
+        selected.where((f) => !_cropLocked(f) && _isLegacy(f)).length;
     return Center(
       child: Container(
-        width: 520,
-        padding: const EdgeInsets.all(18),
+        width: 560,
+        padding: const EdgeInsets.all(24),
         decoration: BoxDecoration(
-          color: _kCard,
+          color: _kPanel,
           border: Border.all(color: _kBorder),
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(28),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              '선택된 소단원 ${selected.length}개',
+              '선택한 소단원 ${selected.length}개',
               style: const TextStyle(
                 color: _kText,
-                fontSize: 15,
+                fontSize: 16,
                 fontWeight: FontWeight.w800,
               ),
             ),
@@ -6671,110 +7318,99 @@ class _TextbookUnitAuthoringDialogState
             Text(
               _batchStatus.isNotEmpty
                   ? _batchStatus
-                  : '체크한 소단원을 한 번에 Stage 1 분석/저장합니다.',
-              style: const TextStyle(color: _kTextSub, fontSize: 12),
+                  : '선택 분석으로 크롭을 만들고, 소단원을 하나씩 눌러 크롭을 확인·수정한 뒤 '
+                      '"선택 크롭 확정"을 누르면 소단원마다 2단계가 이어서 돕니다. '
+                      '기존 추출 소단원은 본문을 그대로 두고 다음 단계부터 이어갑니다.',
+              style: const TextStyle(
+                color: _kTextSub,
+                fontSize: 12,
+                height: 1.5,
+              ),
             ),
             if (_batchTotal > 0) ...[
-              const SizedBox(height: 10),
-              LinearProgressIndicator(
-                value: _batchRunning
-                    ? (_batchDone / _batchTotal).clamp(0.0, 1.0)
-                    : 1,
-                backgroundColor: const Color(0xFF2A2A2A),
-                color: _kAccent,
+              const SizedBox(height: 12),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  value: _batchRunning
+                      ? (_batchDone / _batchTotal).clamp(0.0, 1.0)
+                      : 1,
+                  minHeight: 4,
+                  backgroundColor: _kCard,
+                  color: _kAccent,
+                ),
               ),
             ],
-            const SizedBox(height: 14),
+            const SizedBox(height: 12),
             Wrap(
               spacing: 8,
               runSpacing: 8,
-              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                _ProblemExtractCheckbox(
-                  value: _runProblemExtractionAfterStage1,
-                  enabled: !_batchRunning,
-                  onChanged: (value) {
-                    setState(() {
-                      _runProblemExtractionAfterStage1 = value;
-                    });
-                  },
-                ),
-                FilledButton.icon(
-                  onPressed: _batchRunning || _autoAnalyzeRunning
-                      ? null
-                      : () => _runAutoAnalyzeTargets(selected),
-                  icon: _autoAnalyzeRunning
-                      ? const SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : const Icon(Icons.auto_awesome_rounded, size: 16),
-                  label: Text(
-                    _autoAnalyzeRunning
-                        ? '자동 분석 진행 중...'
-                        : '원스톱 자동 분석 (${selected.length}개 직렬 실행)',
-                  ),
-                  style: FilledButton.styleFrom(backgroundColor: _kAccent),
-                ),
-                if (totalReady > 0 && !_batchRunning)
-                  FilledButton.icon(
-                    onPressed: () => _saveTargetsAndOpenStage(selected),
-                    icon: const Icon(Icons.arrow_forward, size: 16),
-                    label: Text(
-                      selected.length > 1 ? '다음 (${selected.length}개)' : '다음',
-                    ),
-                    style: FilledButton.styleFrom(backgroundColor: _kInfo),
-                  )
-                else
-                  OutlinedButton.icon(
-                    onPressed: _batchRunning ? null : _runSelectedBatch,
-                    icon: const Icon(Icons.play_arrow, size: 16, color: _kTextSub),
-                    label: Text(
-                      _batchRunning ? '선택 분석 중' : 'Stage 1만 선택 분석',
-                      style: const TextStyle(color: _kTextSub, fontSize: 12),
-                    ),
-                    style: OutlinedButton.styleFrom(
-                      side: const BorderSide(color: _kBorder),
-                    ),
-                  ),
+                _tag('크롭 $totalReady개', _kCard),
+                if (lockedCount > 0)
+                  _tag('크롭 확정 $lockedCount개', _kChipSelected),
+                if (legacyCount > 0) _tag('기존 추출 $legacyCount개', _kCard),
               ],
             ),
+            const SizedBox(height: 16),
+            _buildBatchActions(selected),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildNextButton(_SubFocus focus, _SubRunState state) {
-    final selected = _selectedBatchFocuses();
-    final targets = selected.isEmpty ? <_SubFocus>[focus] : selected;
-    final total = targets.fold<int>(
-      0,
-      (sum, f) => sum + _totalRegionsFor(_ensureSubState(f), f),
-    );
-    final busy = targets.any((f) {
-      final s = _ensureSubState(f);
-      return s.running || s.uploading;
-    });
-    final enabled = total > 0 && !busy;
-    return Tooltip(
-      message: total == 0
-          ? '먼저 이 소단원에서 문항 영역을 분석하세요.'
-          : '$total개 문항을 저장한 뒤 정답·해설 좌표 단계로 이동합니다.',
-      child: FilledButton.icon(
-        onPressed: enabled ? () => _saveTargetsAndOpenStage(targets) : null,
-        icon: const Icon(Icons.arrow_forward, size: 14),
-        label: Text(targets.length > 1 ? '다음 (${targets.length}개)' : '다음'),
-        style: FilledButton.styleFrom(
-          backgroundColor: _kAccent,
-          disabledBackgroundColor: const Color(0xFF2A2A2A),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+  Widget _buildBatchActions(List<_SubFocus> selected) {
+    final confirmable = selected
+        .where((f) =>
+            !_cropLocked(f) && _totalRegionsFor(_ensureSubState(f), f) > 0)
+        .toList();
+    final legacy = confirmable.where(_isLegacy).length;
+    final confirmLabel = legacy == 0
+        ? '선택 크롭 확정 (${confirmable.length})'
+        : legacy == confirmable.length
+            ? '선택 이어서 마무리 ($legacy)'
+            : '선택 크롭 확정 (${confirmable.length} · 기존 추출 $legacy)';
+    final toConfirm = _subunitsToConfirm(selected);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _pillButton(
+                label: _batchRunning ? '분석 중' : '선택 분석',
+                icon: Icons.play_arrow_rounded,
+                busy: _batchRunning,
+                onTap: _runSelectedBatch,
+              ),
+              _pillButton(
+                label: confirmLabel,
+                icon: Icons.task_alt_rounded,
+                filled: true,
+                busy: _confirming,
+                onTap: confirmable.isEmpty || _batchRunning
+                    ? null
+                    : () => _confirmCrops(selected),
+              ),
+            ],
+          ),
         ),
-      ),
+        if (toConfirm != null && toConfirm.isNotEmpty) ...[
+          const SizedBox(width: 8),
+          _pillButton(
+            label: '일괄 확정 (${toConfirm.length})',
+            icon: Icons.verified_rounded,
+            filled: true,
+            busy: _confirmingSubunits,
+            onTap: _batchRunning || _confirming
+                ? null
+                : () => _confirmSubunits(toConfirm),
+          ),
+        ],
+      ],
     );
   }
 
@@ -6785,198 +7421,162 @@ class _TextbookUnitAuthoringDialogState
   ) {
     final (start, end) = _focusRange(focus);
     final readyRange = start != null && end != null && end >= start;
-    final hasFailures =
-        (state.progress?.failedPages ?? const <int>{}).isNotEmpty;
+    final failedPages = state.progress?.failedPages ?? const <int>{};
     final totalRegions = _totalRegionsFor(state, focus);
-    final edits = _manualEdits[_stateKeyFor(focus)];
-    final manualCount = edits?.length ?? 0;
-    final selectedCount = _selectedBatchFocuses().length;
-    final runSelection = selectedCount > 0;
-    final canRunAnalysis = runSelection ? !_batchRunning : readyRange;
-    // 개념원리 W 포커스는 DB 스테이지 상태가 카테고리(A~D) 키로 잡혀 있어
-    // 이 소단원의 업로드 결과 행 수로 대신 판단한다.
-    final savedCropCount = _isWonriRowFocus(focus)
-        ? (state.uploadResult?.rows.length ?? 0)
-        : _stageStatusBySub[_stateKeyFor(focus)]?.bodyDone ?? 0;
-    final canRunProblemExtract = savedCropCount > 0 &&
-        !state.running &&
-        !state.uploading &&
-        !_batchRunning;
-    final pbStatus = _pbExtractStatusBySub[_stateKeyFor(focus)] ?? '';
-    final problemExtractLabel =
-        pbStatus == 'completed' || pbStatus == 'review_required'
-            ? '문항 재추출'
-            : '문항추출';
+    final manualCount = state.manualItems.length +
+        (_manualEdits[_stateKeyFor(focus)]?.length ?? 0);
+    final locked = _cropLocked(focus);
+    final wf = _workflowFor(focus);
+    final run = _runStateFor(focus);
+    final busy = state.running || state.uploading;
+    final pipelineStopped = wf != null &&
+        wf.cropConfirmed &&
+        !(run?.active ?? false) &&
+        wf.pipelineStatus != 'done';
+    final legacy = !locked && _isLegacy(focus);
+    final legacyCounts = legacy ? _bodyCounts[_stateKeyFor(focus)] : null;
+
+    final tags = <Widget>[
+      if (readyRange)
+        _tag('본문 $start–$end쪽 (${end - start + 1}쪽)', _kChipSelected)
+      else
+        const _InfoTag(text: '시작/끝 쪽을 입력하세요', danger: true),
+      if (totalRegions > 0) _tag('크롭 $totalRegions개', _kCard),
+      if (manualCount > 0)
+        _tag('수동 $manualCount', _kWarn.withValues(alpha: 0.22)),
+      if (legacyCounts != null)
+        _tag(
+          '기존 추출 · 본문 ${legacyCounts.bodies}/${legacyCounts.crops}'
+          ' · 검수 ${legacyCounts.reviewed}/${legacyCounts.bodies}',
+          _kCard,
+        ),
+    ];
+
+    final actions = <Widget>[
+      if (!locked) ...[
+        if (state.running)
+          _pillButton(
+            label: '분석 취소',
+            icon: Icons.stop_circle_outlined,
+            color: _kDanger,
+            onTap: () => _cancelFocused(focus),
+          )
+        else ...[
+          if (failedPages.isNotEmpty)
+            _pillButton(
+              label: '실패 ${failedPages.length}쪽 다시 분석',
+              icon: Icons.refresh_rounded,
+              color: _kInfo,
+              onTap: state.uploading ? null : () => _retryFailedForFocus(focus),
+            ),
+          _pillButton(
+            label: totalRegions > 0 ? '다시 분석' : '분석 시작',
+            icon: Icons.play_arrow_rounded,
+            onTap: !readyRange || state.uploading || _batchRunning
+                ? null
+                : () => _runFocusedAnalysis(focus),
+          ),
+        ],
+        _pillButton(
+          label: _manualDrawMode ? '수동 추가 끝내기' : '수동 추가',
+          icon: _manualDrawMode ? Icons.close_rounded : Icons.add_box_outlined,
+          color: _manualDrawMode ? _kWarn : null,
+          onTap: busy || !readyRange || _bodyLocalPath == null
+              ? null
+              : _toggleManualDraw,
+        ),
+        _pillButton(
+          label: legacy ? '이어서 마무리' : '크롭 확정',
+          icon: legacy ? Icons.fast_forward_rounded : Icons.task_alt_rounded,
+          filled: true,
+          busy: _confirming,
+          onTap: busy || totalRegions == 0 || _batchRunning
+              ? null
+              : () => _confirmCrops([focus]),
+        ),
+      ] else ...[
+        if (pipelineStopped)
+          _pillButton(
+            label: '2단계 다시 시도',
+            icon: Icons.replay_rounded,
+            color: _kInfo,
+            onTap: () => _retryPipeline(focus),
+          ),
+        _pillButton(
+          label: '크롭 다시 열기',
+          icon: Icons.lock_open_rounded,
+          onTap: () => _reopenCrop(focus),
+        ),
+        _pillButton(
+          label: '작업 화면',
+          icon: Icons.view_agenda_outlined,
+          filled: true,
+          onTap: () => _openWorkScreen(
+            focus.bigIndex,
+            focus.midIndex,
+            scopeKey: focus.subKey,
+          ),
+        ),
+      ],
+    ];
+
+    final String status;
+    var statusColor = _kTextSub;
+    if (locked) {
+      final phase = run != null && run.active
+          ? '${TextbookWorkflowPhase.label(run.phase)}'
+              '${run.detail.isEmpty ? '' : ' · ${run.detail}'}'
+          : (wf?.pipelineDetail.isNotEmpty ?? false)
+              ? wf!.pipelineDetail
+              : TextbookWorkflowPhase.label(wf?.pipelinePhase ?? '');
+      status = '크롭 확정됨 · 2단계: $phase\n'
+          '크롭을 고치려면 "크롭 다시 열기"를 누르세요. 다시 확정하면 빠진 것만 이어서 합니다.';
+      if (wf?.pipelineStatus == 'failed') statusColor = _kDanger;
+    } else if (_manualDrawMode) {
+      status = _manualNumberBox == null
+          ? '① 문항 번호(+유형명) 부분을 드래그하세요. 그다음 ② 문항 본문 전체를 드래그합니다. '
+              'Esc 또는 "수동 추가 끝내기"로 나갑니다.'
+          : '② 같은 쪽에서 문항 본문 전체를 드래그하세요. 다른 쪽을 드래그하면 ①부터 다시 합니다.';
+      statusColor = _kWarn;
+    } else if (state.error != null) {
+      status = state.error!;
+      statusColor = _kDanger;
+    } else if (legacy) {
+      status = '예전에 본문(+정답)을 뽑아 둔 소단원입니다. 크롭을 확인한 뒤 "이어서 마무리"를 누르면 '
+          '본문과 검수 결과는 그대로 두고, 본문이 빠진 번호만 추출한 다음 정답·해설 위치 → V2 렌더·AI 검수로 이어갑니다. '
+          '이미 승인된 문항은 AI 풀이·검수를 다시 하지 않습니다.';
+    } else {
+      status = '${state.phase} · 분석·수정한 크롭은 자동으로 임시저장됩니다. '
+          '문항을 누르면 모서리로 영역을 고치거나 지울 수 있습니다.';
+    }
 
     return Container(
-      padding: const EdgeInsets.all(10),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: _kCard,
+        color: _kPanel,
         border: Border.all(color: _kBorder),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(18),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (readyRange)
-            _tag('범위 $start–${end}p (${end - start + 1}p)',
-                const Color(0xFF234A34))
-          else
-            const _InfoTag(text: '시작/끝 페이지를 입력하세요', danger: true),
-          const SizedBox(width: 8),
-          _tag('분석 ${_kAnalysisLongEdgePx}px', const Color(0xFF333333)),
-          if (manualCount > 0) ...[
-            const SizedBox(width: 6),
-            _tag('수동 편집 $manualCount건', const Color(0xFF3A2F18)),
-          ],
-          const Spacer(),
-          if (totalRegions > 0)
-            Padding(
-              padding: const EdgeInsets.only(right: 6),
-              child: Text(
-                '$totalRegions개 준비',
-                style: const TextStyle(color: _kAccent, fontSize: 11),
-              ),
-            ),
-          _ProblemExtractCheckbox(
-            value: _runProblemExtractionAfterStage1,
-            enabled: !state.running && !state.uploading && !_batchRunning,
-            onChanged: (value) {
-              setState(() {
-                _runProblemExtractionAfterStage1 = value;
-              });
-            },
-          ),
-          const SizedBox(width: 6),
-          if (state.running)
-            OutlinedButton.icon(
-              onPressed: () => _cancelFocused(focus),
-              icon: const Icon(Icons.stop_circle_outlined,
-                  size: 14, color: _kDanger),
-              label: const Text(
-                '취소',
-                style: TextStyle(color: _kDanger, fontSize: 12),
-              ),
-              style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: Color(0xFF5A2A2A)),
-              ),
-            )
-          else ...[
-            if (hasFailures) ...[
-              OutlinedButton.icon(
-                onPressed: () => _retryFailedForFocus(focus),
-                icon: const Icon(Icons.refresh, size: 14, color: _kInfo),
-                label: Text(
-                  '실패 ${(state.progress?.failedPages.length ?? 0)}p 재분석',
-                  style: const TextStyle(color: _kInfo, fontSize: 12),
-                ),
-                style: OutlinedButton.styleFrom(
-                  side: const BorderSide(color: Color(0xFF2A3E5A)),
-                ),
-              ),
-              const SizedBox(width: 6),
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              Wrap(spacing: 8, runSpacing: 8, children: tags),
+              Wrap(spacing: 8, runSpacing: 8, children: actions),
             ],
-            FilledButton.icon(
-              onPressed: !canRunAnalysis || state.uploading
-                  ? null
-                  : () => runSelection
-                      ? _runSelectedBatch()
-                      : _runFocusedAnalysis(focus),
-              icon: const Icon(Icons.play_arrow, size: 16),
-              label: Text(runSelection ? '선택 분석 ($selectedCount)' : '분석 시작'),
-              style: FilledButton.styleFrom(backgroundColor: _kAccent),
-            ),
-            const SizedBox(width: 6),
-            OutlinedButton.icon(
-              onPressed: canRunProblemExtract
-                  ? () => _promptAndStartProblemExtraction(focus)
-                  : null,
-              icon: const Icon(Icons.auto_awesome, size: 14, color: _kInfo),
-              label: Text(
-                problemExtractLabel,
-                style: const TextStyle(color: _kInfo, fontSize: 12),
-              ),
-              style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: Color(0xFF2A3E5A)),
-              ),
-            ),
-          ],
-          const SizedBox(width: 6),
-          Tooltip(
-            message: totalRegions == 0
-                ? '분석된 문항 영역이 없어요. 먼저 "분석 시작" 을 눌러 VLM으로 감지하세요.'
-                : '이 소단원에서 감지된 $totalRegions건의 문항 영역(좌표)을 '
-                    'textbook_problem_crops 테이블에 저장합니다.',
-            child: FilledButton.icon(
-              onPressed: state.running || state.uploading || totalRegions == 0
-                  ? null
-                  : () => _uploadFocused(focus),
-              icon: state.uploading
-                  ? const SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                  : const Icon(Icons.save_outlined, size: 16),
-              label: Text(
-                state.uploading
-                    ? '영역 저장 중'
-                    : totalRegions == 0
-                        ? '영역 저장'
-                        : '영역 저장 ($totalRegions건)',
-              ),
-              style: FilledButton.styleFrom(
-                backgroundColor: _kInfo,
-                disabledBackgroundColor: const Color(0xFF2A2A2A),
-              ),
-            ),
           ),
-          const SizedBox(width: 6),
-          FilledButton.icon(
-            onPressed: !canRunAnalysis || state.uploading || _autoAnalyzeRunning
-                ? null
-                : () => _runAutoAnalyzeTargets(
-                    runSelection ? _selectedBatchFocuses() : <_SubFocus>[focus],
-                  ),
-            icon: _autoAnalyzeRunning
-                ? const SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Colors.white,
-                    ),
-                  )
-                : const Icon(Icons.auto_awesome_rounded, size: 15),
-            label: Text(
-              runSelection ? '원스톱 자동 분석 ($selectedCount)' : '원스톱 자동 분석',
-            ),
-            style: FilledButton.styleFrom(
-              backgroundColor: _kAccent,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            ),
+          const SizedBox(height: 8),
+          Text(
+            status,
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(color: statusColor, fontSize: 12, height: 1.4),
           ),
-          if (savedCropCount > 0 || _autoAnalyzedScopes.containsKey(_stateKeyFor(focus))) ...[
-            const SizedBox(width: 6),
-            OutlinedButton.icon(
-              onPressed: state.running || state.uploading || _autoAnalyzeRunning
-                  ? null
-                  : () => _openFirstReviewForFocus(focus),
-              icon: const Icon(Icons.fact_check_outlined, size: 14, color: _kAccent),
-              label: const Text(
-                '1차 검수·핀셋',
-                style: TextStyle(color: _kAccent, fontSize: 12, fontWeight: FontWeight.w800),
-              ),
-              style: OutlinedButton.styleFrom(
-                side: BorderSide(color: _kAccent.withValues(alpha: 0.6)),
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              ),
-            ),
-          ],
-          const SizedBox(width: 6),
-          _buildNextButton(focus, state),
         ],
       ),
     );
@@ -6988,7 +7588,7 @@ class _TextbookUnitAuthoringDialogState
     final total = progress.total == 0 ? 1 : progress.total;
     final ratio = ((progress.done + progress.failed) / total).clamp(0.0, 1.0);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -7013,7 +7613,7 @@ class _TextbookUnitAuthoringDialogState
             child: LinearProgressIndicator(
               value: state.running ? ratio : 1.0,
               minHeight: 4,
-              backgroundColor: const Color(0xFF2A2A2A),
+              backgroundColor: _kCard,
               valueColor: AlwaysStoppedAnimation<Color>(
                 progress.failed > 0 ? _kDanger : _kAccent,
               ),
@@ -7114,20 +7714,89 @@ class _TextbookUnitAuthoringDialogState
           ),
           if (state.pageResults.any((r) => !r.ok))
             Positioned(
-              left: 10,
-              top: 10,
+              left: 12,
+              top: 12,
               child: _FailureChip(
                 count: state.pageResults.where((r) => !r.ok).length,
               ),
             ),
-          if (_selectedProblemKey != null)
+          if (_manualDrawMode)
             Positioned(
-              right: 10,
-              bottom: 10,
-              child: _SelectedHintChip(
-                onDismiss: () => setState(() => _selectedProblemKey = null),
+              left: 12,
+              bottom: 12,
+              child: _statusPill(
+                label: _manualNumberBox == null
+                    ? '수동 추가 · ① 번호 부분 드래그'
+                    : '수동 추가 · ② 본문 전체 드래그',
+                color: _kWarn,
+                icon: Icons.add_box_outlined,
               ),
             ),
+          if (_selectedProblemKey != null && !_manualDrawMode)
+            Positioned(
+              right: 12,
+              bottom: 12,
+              child: _buildSelectionBar(focus, state),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSelectionBar(_SubFocus focus, _SubRunState state) {
+    final parts = _selectedProblemKey!.split(':');
+    final rawPage = int.tryParse(parts.first) ?? 0;
+    final index = parts.length == 2 ? (int.tryParse(parts[1]) ?? -1) : -1;
+    final row = state.pageResults.firstWhere(
+      (r) => r.rawPage == rawPage && r.ok,
+      orElse: () => _PageAnalysisRow.placeholder(),
+    );
+    final item =
+        index >= 0 && index < row.items.length ? row.items[index] : null;
+    final locked = _cropLocked(focus);
+    final manual = item != null && state.manualItems.contains(item);
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+      decoration: BoxDecoration(
+        color: _kPanel,
+        borderRadius: BorderRadius.circular(28),
+        border: Border.all(color: _kBorder),
+        boxShadow: const [
+          BoxShadow(color: Colors.black54, blurRadius: 12, offset: Offset(0, 4)),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            item == null ? '선택한 문항' : '${item.number}번${manual ? ' · 수동' : ''}',
+            style: const TextStyle(
+              color: _kText,
+              fontSize: 13,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Text(
+            locked ? '크롭 확정됨 · 보기만 가능' : '모서리를 끌어 영역을 고칩니다',
+            style: const TextStyle(color: _kTextSub, fontSize: 12),
+          ),
+          const SizedBox(width: 12),
+          if (!locked && item != null) ...[
+            _pillButton(
+              label: '지우기',
+              icon: Icons.delete_outline_rounded,
+              color: _kDanger,
+              onTap: state.running || state.uploading
+                  ? null
+                  : () => _deleteItem(focus, rawPage, index),
+            ),
+            const SizedBox(width: 8),
+          ],
+          _pillButton(
+            label: '선택 해제',
+            onTap: () => setState(() => _selectedProblemKey = null),
+          ),
         ],
       ),
     );
@@ -7181,6 +7850,113 @@ class _TextbookUnitAuthoringDialogState
     required int pageNumber,
     required Rect pageRect,
   }) {
+    final regions = _buildRegionOverlays(
+      focus: focus,
+      state: state,
+      pageNumber: pageNumber,
+      pageRect: pageRect,
+    );
+    if (!_manualDrawMode) return regions;
+    final (start, end) = _focusRange(focus);
+    if (start == null || end == null) return regions;
+    if (pageNumber < _rawPageForDisplayPage(start) ||
+        pageNumber > _rawPageForDisplayPage(end)) {
+      return regions;
+    }
+    return [
+      ...regions,
+      ..._buildManualDrawLayer(focus, pageNumber, pageRect.size),
+    ];
+  }
+
+  List<Widget> _buildManualDrawLayer(
+    _SubFocus focus,
+    int rawPage,
+    Size pageSize,
+  ) {
+    Rect toPx(Rect n) => Rect.fromLTRB(
+          n.left * pageSize.width,
+          n.top * pageSize.height,
+          n.right * pageSize.width,
+          n.bottom * pageSize.height,
+        );
+    Widget box(Rect normalized, Color color, String label) {
+      return Positioned.fromRect(
+        rect: toPx(normalized),
+        child: IgnorePointer(
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Positioned.fill(
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.12),
+                    border: Border.all(color: color, width: 2),
+                  ),
+                ),
+              ),
+              Positioned(
+                left: -2,
+                top: -18,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  color: color,
+                  child: Text(
+                    label,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final out = <Widget>[
+      Positioned.fill(
+        child: MouseRegion(
+          cursor: SystemMouseCursors.precise,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onPanStart: (d) =>
+                _onManualDragStart(rawPage, d.localPosition, pageSize),
+            onPanUpdate: (d) =>
+                _onManualDragUpdate(rawPage, d.localPosition, pageSize),
+            onPanEnd: (_) => unawaited(_onManualDragEnd(focus, rawPage)),
+            onPanCancel: () => setState(() {
+              _manualDragRect = null;
+              _manualDragStart = null;
+              _manualDragPage = null;
+            }),
+            child: ColoredBox(color: _kWarn.withValues(alpha: 0.04)),
+          ),
+        ),
+      ),
+    ];
+    final numberBox = _manualNumberBox;
+    final numberOnThisPage = numberBox != null && _manualNumberPage == rawPage;
+    if (numberOnThisPage) out.add(box(numberBox, _kDanger, '① 번호'));
+    final drag = _manualDragRect;
+    if (drag != null && _manualDragPage == rawPage) {
+      out.add(numberOnThisPage
+          ? box(drag, _kAccent, '② 본문')
+          : box(drag, _kDanger, '① 번호'));
+    }
+    return out;
+  }
+
+  List<Widget> _buildRegionOverlays({
+    required _SubFocus focus,
+    required _SubRunState state,
+    required int pageNumber,
+    required Rect pageRect,
+  }) {
     final row = state.pageResults.firstWhere(
       (r) => r.rawPage == pageNumber && r.ok,
       orElse: () => _PageAnalysisRow.placeholder(),
@@ -7222,7 +7998,8 @@ class _TextbookUnitAuthoringDialogState
       final key = _problemKey(pageNumber, i);
       final isSelected = _selectedProblemKey == key;
       final isEdited =
-          _manualEdits[_stateKeyFor(focus)]?.containsKey(key) == true;
+          _manualEdits[_stateKeyFor(focus)]?.containsKey(key) == true ||
+              state.manualItems.contains(item);
       widgets.add(_RegionBox(
         rect: rect,
         item: item,
@@ -7279,7 +8056,7 @@ class _TextbookUnitAuthoringDialogState
     }
     // Top pass: drag handles for the selected region. Drawn last so they
     // stay clickable.
-    if (_selectedProblemKey != null) {
+    if (_selectedProblemKey != null && !_cropLocked(focus)) {
       final parts = _selectedProblemKey!.split(':');
       if (parts.length == 2) {
         final selRawPage = int.tryParse(parts[0]);
@@ -7340,6 +8117,9 @@ class _TextbookUnitAuthoringDialogState
               orderIndex: orderIndex,
             );
           },
+          onPanEnd: (_) {
+            if (_ensureSubState(focus).dirty) _scheduleAutoSave(focus);
+          },
           child: MouseRegion(
             cursor: SystemMouseCursors.resizeUpLeftDownRight,
             child: Container(
@@ -7371,6 +8151,8 @@ class _TextbookUnitAuthoringDialogState
     required int orderIndex,
   }) {
     if (pageSize.width <= 0 || pageSize.height <= 0) return;
+    final runState = _ensureSubState(focus);
+    if (runState.running || _cropLocked(focus)) return;
     // The overlay is drawn on top of the already-zoomed page rect, so the
     // delta is already in viewer-space pixels relative to the current
     // zoom. Converting to normalised 0..1000 by the current pageSize gives
@@ -7413,7 +8195,7 @@ class _TextbookUnitAuthoringDialogState
         break;
     }
     edits[key] = <int>[ymin, xmin, ymax, xmax];
-    state.dirty = true;
+    state.markDirty();
     if (mounted) setState(() {});
   }
 
@@ -7435,10 +8217,10 @@ class _TextbookUnitAuthoringDialogState
   Widget _pill(
       {required String text, required Color color, required Color fg}) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
         color: color,
-        borderRadius: BorderRadius.circular(3),
+        borderRadius: BorderRadius.circular(18),
       ),
       child: Text(
         text,
@@ -7471,24 +8253,24 @@ class _TextbookUnitAuthoringDialogState
       style: const TextStyle(color: _kText, fontSize: 12),
       decoration: InputDecoration(
         hintText: hint,
-        hintStyle: const TextStyle(color: Color(0xFF5C5C5C), fontSize: 11),
+        hintStyle: const TextStyle(color: _kMuted, fontSize: 11),
         isDense: true,
         contentPadding: EdgeInsets.symmetric(
-          horizontal: 8,
-          vertical: dense ? 6 : 8,
+          horizontal: 10,
+          vertical: dense ? 8 : 10,
         ),
         filled: true,
         fillColor: _kCard,
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(4),
+          borderRadius: BorderRadius.circular(12),
           borderSide: const BorderSide(color: _kBorder),
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(4),
+          borderRadius: BorderRadius.circular(12),
           borderSide: const BorderSide(color: _kBorder),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(4),
+          borderRadius: BorderRadius.circular(12),
           borderSide: const BorderSide(color: _kAccent),
         ),
       ),
@@ -7497,10 +8279,11 @@ class _TextbookUnitAuthoringDialogState
 
   Widget _tag(String text, Color bg) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
         color: bg,
-        borderRadius: BorderRadius.circular(3),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: _kBorder),
       ),
       child: Text(
         text,
@@ -7517,9 +8300,16 @@ class _TextbookUnitAuthoringDialogState
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(msg),
-        backgroundColor:
-            error ? const Color(0xFFB53A3A) : const Color(0xFF2E7D32),
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: _kCard,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+          side: BorderSide(color: error ? _kDanger : _kAccent),
+        ),
+        content: Text(
+          msg,
+          style: TextStyle(color: error ? _kDanger : _kText, fontSize: 13),
+        ),
       ),
     );
   }
@@ -7737,64 +8527,27 @@ class _FailureChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
-        color: const Color(0xFF5A2A2A),
-        borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: const Color(0xFF8A4A4A)),
+        color: const Color(0xFF1C1C1E),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFE57373)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.warning_amber, size: 12, color: Color(0xFFE0B5B5)),
+          const Icon(Icons.warning_amber_rounded,
+              size: 12, color: Color(0xFFE57373)),
           const SizedBox(width: 4),
           Text(
-            '$count 페이지 분석 실패',
+            '$count쪽 분석 실패',
             style: const TextStyle(
-              color: Color(0xFFE0B5B5),
+              color: Color(0xFFE57373),
               fontSize: 11,
               fontWeight: FontWeight.w700,
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _SelectedHintChip extends StatelessWidget {
-  const _SelectedHintChip({required this.onDismiss});
-  final VoidCallback onDismiss;
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onDismiss,
-        borderRadius: BorderRadius.circular(4),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: const Color(0xFF1B3A2A),
-            borderRadius: BorderRadius.circular(4),
-            border: Border.all(color: const Color(0xFF33A373)),
-          ),
-          child: const Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.pan_tool_alt, size: 12, color: Color(0xFF9FD49F)),
-              SizedBox(width: 4),
-              Text(
-                '모서리 핸들을 드래그해서 영역 조정 · 클릭하여 해제',
-                style: TextStyle(
-                  color: Color(0xFF9FD49F),
-                  fontSize: 10,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ],
-          ),
-        ),
       ),
     );
   }
@@ -7808,62 +8561,26 @@ class _InfoTag extends StatelessWidget {
   final bool danger;
   @override
   Widget build(BuildContext context) {
+    const dangerColor = Color(0xFFE57373);
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
-        color: danger ? const Color(0xFF5A2A2A) : const Color(0xFF333333),
-        borderRadius: BorderRadius.circular(3),
+        color: danger
+            ? dangerColor.withValues(alpha: 0.14)
+            : const Color(0xFF2C2C2E),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: danger
+              ? dangerColor.withValues(alpha: 0.45)
+              : const Color(0x22FFFFFF),
+        ),
       ),
       child: Text(
         text,
         style: TextStyle(
-          color: danger ? const Color(0xFFE68A8A) : Colors.white,
+          color: danger ? dangerColor : const Color(0xFFEAF2F2),
           fontSize: 11,
           fontWeight: FontWeight.w700,
-        ),
-      ),
-    );
-  }
-}
-
-class _ProblemExtractCheckbox extends StatelessWidget {
-  const _ProblemExtractCheckbox({
-    required this.value,
-    required this.enabled,
-    required this.onChanged,
-  });
-
-  final bool value;
-  final bool enabled;
-  final ValueChanged<bool> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return Tooltip(
-      message: value
-          ? 'Stage 1 저장 후 문제은행 문항추출도 자동으로 큐에 넣습니다.'
-          : '문항번호와 크롭만 저장하고 문제은행 문항추출은 나중에 실행합니다.',
-      child: InkWell(
-        onTap: enabled ? () => onChanged(!value) : null,
-        borderRadius: BorderRadius.circular(4),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Checkbox(
-              value: value,
-              onChanged: enabled ? (v) => onChanged(v == true) : null,
-              visualDensity: VisualDensity.compact,
-              side: const BorderSide(color: Color(0xFFB3B3B3)),
-            ),
-            const Text(
-              '문항추출',
-              style: TextStyle(
-                color: Color(0xFFB3B3B3),
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ],
         ),
       ),
     );
@@ -7908,11 +8625,11 @@ class _SubRowStats extends StatelessWidget {
     return Tooltip(
       message: fullyUploaded
           ? '분석 $analyzed건 · 전부 서버 저장 완료 ($uploaded건)'
-          : partiallyUploaded
-              ? '분석 $analyzed건 · 서버 저장 $uploaded건 (일부)'
-              : analyzed > 0
-                  ? '분석 $analyzed건 · 서버 저장 아직 안 됨 — "영역 저장" 을 눌러주세요'
-                  : '분석 진행 중',
+              : partiallyUploaded
+                  ? '분석 $analyzed건 · 임시저장 $uploaded건 (일부)'
+                  : analyzed > 0
+                      ? '분석 $analyzed건 · 아직 임시저장 전 (자동 저장 대기)'
+                      : '분석 진행 중',
       child: SizedBox(
         width: 72,
         child: Stack(
@@ -8017,8 +8734,6 @@ class _StageProgressChip extends StatelessWidget {
             border: Border.all(color: color.withValues(alpha: 0.45)),
           ),
           child: Row(
-            mainAxisSize: MainAxisSize.min,
-            mainAxisAlignment: MainAxisAlignment.center,
             children: [
               if (loading)
                 const SizedBox(
@@ -8036,12 +8751,16 @@ class _StageProgressChip extends StatelessWidget {
                   color: color,
                 ),
               const SizedBox(width: 4),
-              Text(
-                label,
-                style: TextStyle(
-                  color: color,
-                  fontSize: 10,
-                  fontWeight: FontWeight.w800,
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
               ),
             ],
@@ -8196,36 +8915,6 @@ class _SubFocus {
   final String subKey;
 }
 
-class _EmbeddedStageArgs {
-  const _EmbeddedStageArgs({
-    required this.bigOrder,
-    required this.midOrder,
-    required this.subKey,
-    required this.bigName,
-    required this.midName,
-    required this.initialCrops,
-    required this.batchScopes,
-    this.answerStartPage,
-    this.answerEndPage,
-    this.solutionStartPage,
-    this.solutionEndPage,
-    this.onStartProblemExtraction,
-  });
-
-  final int bigOrder;
-  final int midOrder;
-  final String subKey;
-  final String bigName;
-  final String midName;
-  final List<TextbookAuthoringStageCropSeed> initialCrops;
-  final List<TextbookAuthoringStageScope> batchScopes;
-  final int? answerStartPage;
-  final int? answerEndPage;
-  final int? solutionStartPage;
-  final int? solutionEndPage;
-  final Future<void> Function()? onStartProblemExtraction;
-}
-
 class _SubRunState {
   bool running = false;
   bool uploading = false;
@@ -8244,9 +8933,17 @@ class _SubRunState {
   /// 된다. 분석·수정이 있었는지는 이 플래그로만 판단한다.
   bool dirty = false;
 
-  /// 저장된 추출을 불러온 뒤 다시 분석했다면, 새 크롭을 올리기 전에 해당
-  /// 소단원의 옛 문제은행 문서·정답·해설·크롭을 전부 지워야 한다.
-  bool resetBeforeUpload = false;
+  /// 사람이 그리거나 핸들로 고친 문항. 저장 때 region_source='manual' 로 올리고,
+  /// 다시 분석해도 AI 결과로 덮지 않는다.
+  final Set<TextbookVlmItem> manualItems = Set<TextbookVlmItem>.identity();
+
+  /// 바뀔 때마다 오른다. 저장 중에 또 고쳤으면 저장이 끝나도 [dirty] 를 풀지 않는다.
+  int editSeq = 0;
+
+  void markDirty() {
+    dirty = true;
+    editSeq += 1;
+  }
 }
 
 class _ResolvedContentGroup {
@@ -8260,6 +8957,12 @@ class _ResolvedContentGroup {
   const _ResolvedContentGroup.none()
       : kind = 'none',
         label = '',
+        title = '',
+        order = null;
+
+  const _ResolvedContentGroup.suryeokConceptCheck()
+      : kind = 'type',
+        label = '개념 체크',
         title = '',
         order = null;
 
@@ -8326,6 +9029,18 @@ class _PageAnalysisRow {
   final bool conceptDrillHeaderVisible;
   final String notes;
   final List<TextbookVlmItem> items;
+
+  _PageAnalysisRow withItems(List<TextbookVlmItem> next) => _PageAnalysisRow(
+        rawPage: rawPage,
+        ok: ok,
+        error: error,
+        displayPage: displayPage,
+        section: section,
+        pageKind: pageKind,
+        conceptDrillHeaderVisible: conceptDrillHeaderVisible,
+        notes: notes,
+        items: next,
+      );
 
   bool get isConceptPage =>
       ok &&

@@ -169,8 +169,9 @@ function sanitizeLatexControlChars(value) {
     s = s.replace(/\x08/g, '\\b');
     s = s.replace(/\x0b/g, '\\v');
     s = s.replace(/\x09(?=[A-Za-z])/g, '\\t');
+    // 줄 첫머리 "i)" 는 경우 나누기 번호라 \ni(∋) 로 되돌리지 않는다.
     s = s.replace(
-      /\x0a(?=(?:abla|atural|e(?:q|g)?|i|otin|u)(?![A-Za-z]))/g,
+      /\x0a(?=(?:abla|atural|e(?:q|g)?|i(?!\))|otin|u)(?![A-Za-z]))/g,
       '\\n',
     );
     // terminator 는 LaTeX 명령 뒤에 자주 오는 문자들 전부 커버: \ {} () [] ^ _
@@ -223,7 +224,7 @@ function normalizeLiteralJsonNewlineText(input) {
     /^e(?![A-Za-z])/,
     /^eq(?![A-Za-z])/,
     /^eg(?![A-Za-z])/,
-    /^i(?![A-Za-z])/,
+    /^i(?![A-Za-z)])/,
     /^ot(?:in)?(?![A-Za-z])/,
     /^u(?![A-Za-z])/,
     /^ew(?:command|length|page|line|theorem)\b/,
@@ -1093,7 +1094,11 @@ function normalizeMathSegment(mathContent) {
   // ◆ x^2 같은 마름모 라벨 뒤 일반 공백은 math mode 에서 사라진다.
   // 라벨 기호 뒤의 추출 공백은 수식 공백 명령으로 고정해 보이게 유지한다.
   out = out.replace(/([◆◇⬦⬥⋄])\s+/g, '\\text{$1}\\;');
+  out = out.replace(/(?<!\\text\{)([◆◇])/g, '\\text{$1}');
   out = out.replace(/\\(?:diamond|lozenge|blacklozenge)(?![A-Za-z])\s+/g, (m) => `${m.trim()}\\;`);
+  // 채운 도형 기호는 Latin Modern Math 에 글리프가 없어 빈칸으로 찍힌다(▲ 꼴 일반식 등). 본문 폰트 글자로 출력.
+  const filledShapes = { blacktriangle: '▲', blacktriangledown: '▼', blacksquare: '■', bigstar: '★' };
+  out = out.replace(/\\(blacktriangle|blacktriangledown|blacksquare|bigstar)(?![A-Za-z])\s*/g, (_, name) => `\\text{${filledShapes[name]}}`);
   // ① 7처럼 박스 안에서 동그라미 번호 바로 뒤에 숫자/수식이 오면 해당 조각이
   // math mode 로 감싸져 일반 공백이 사라진다. 라벨 뒤 공백을 명시적 수식 공백으로 고정.
   out = out.replace(/([①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳])\s+(?=[+\-−]?\d|\\(?:d?frac|text)(?![A-Za-z]))/g, '$1\\;');
@@ -1483,7 +1488,7 @@ function normalizeLiteralEscapedNewlines(input) {
     /^e(?![A-Za-z])/,          // \ne
     /^eq(?![A-Za-z])/,         // \neq
     /^eg(?![A-Za-z])/,         // \neg
-    /^i(?![A-Za-z])/,          // \ni
+    /^i(?![A-Za-z)])/,         // \ni (줄 첫머리 "i)" 번호는 제외)
     /^ot(?:in)?(?![A-Za-z])/,  // \not, \notin
     /^u(?![A-Za-z])/,          // \nu
     /^ew(?:command|length|page|line|theorem)\b/,
@@ -1839,11 +1844,60 @@ function renderDisplayMathStemBlock(lines, equations, options = {}) {
   ].join('\n');
 }
 
+// 여러 줄 aligned 가 텍스트 줄 사이에 있으면, 줄마다 $...$ 로 닫히면서
+// \begin 와 \end 가 서로 다른 식이 된다. 시작 줄의 인덱스를 돌려주고,
+// 그 구간만 renderStandaloneMathEnvironmentBlock 에 넘긴다.
+function alignedEnvironmentEndIndex(lines, startIdx) {
+  const source = Array.isArray(lines) ? lines : [];
+  const first = String(source[startIdx] || '').trim();
+  if (!/^\\begin\{aligned\}/.test(first)) return -1;
+  let depth = 0;
+  for (let i = startIdx; i < source.length; i += 1) {
+    const line = String(source[i] || '');
+    const begins = line.match(/\\begin\{aligned\}/g);
+    const ends = line.match(/\\end\{aligned\}/g);
+    depth += (begins ? begins.length : 0) - (ends ? ends.length : 0);
+    if (ends && ends.length > 0 && depth <= 0) {
+      if (!/\\end\{aligned\}\s*$/.test(line.trim())) return -1;
+      return i;
+    }
+  }
+  return -1;
+}
+
+// 추출 본문은 행 나눔을 줄바꿈만으로 두는 경우가 있다. 수식 안의 줄바꿈은
+// 공백이라, 다음 행이 이어질 줄 끝에 \\ 가 없으면 행 나눔을 보탠다.
+function joinAlignedEnvironmentLines(lines) {
+  const trimmed = (Array.isArray(lines) ? lines : [])
+    .map((line) => String(line || '').trim())
+    .filter((line) => line.length > 0);
+  const joined = [];
+  for (let i = 0; i < trimmed.length; i += 1) {
+    const line = trimmed[i];
+    const next = trimmed[i + 1] || '';
+    const bareBegin = /^\\begin\{aligned\}(?:\[[^\]]*\])?\s*$/.test(line);
+    const bareEnd = /^\\end\{aligned\}\s*$/.test(line);
+    const bareHline = /^\\hline\s*$/.test(line);
+    const endsWithBreak = /\\\\(?:\s*\[[^\]]*\])?\s*$/.test(line);
+    const nextIsEnd = /^\\end\{aligned\}/.test(next);
+    if (!bareBegin && !bareEnd && !bareHline && !endsWithBreak && next && !nextIsEnd) {
+      joined.push(`${line} \\\\`);
+    } else {
+      joined.push(line);
+    }
+  }
+  return joined.join('\n');
+}
+
 function renderStandaloneMathEnvironmentBlock(lines) {
-  const raw = (Array.isArray(lines) ? lines : [])
-    .map((line) => String(line || ''))
-    .join('\n')
-    .trim();
+  // 줄 단위 본문은 smartTexLine 이 "\n" 두 글자를 공백으로 되돌린 뒤 box{~~} 를
+  // 빈칸으로 바꾼다. 이 경로는 그 앞처리를 거치지 않으면, 줄바꿈 복구가 만든
+  // \nbox{~~} 가 그대로 남아 컴파일이 멈춘다.
+  const raw = normalizeBlankBoxNotation(
+    normalizeSoftLineBreakArtifacts(
+      normalizeLiteralEscapedNewlines(joinAlignedEnvironmentLines(lines)),
+    ),
+  ).trim();
   const aligned = raw.match(/^\\begin\{aligned\}([\s\S]*?)\\end\{aligned\}$/);
   if (!aligned) return '';
 
@@ -4189,13 +4243,18 @@ function buildPreamble({
   const pretendardFontDirective = (() => {
     const base = String(fontRegularPath || '').replace(/\\/g, '/');
     const m = base.match(/^(.*\/fonts)\//);
-    if (!m) {
+    const fallbackDir = fileURLToPath(
+      new URL('../../../../../apps/yggdrasill/assets/fonts/pretendard/', import.meta.url),
+    ).replace(/\\/g, '/');
+    const dir = m
+      ? `${m[1]}/pretendard/`
+      : (fs.existsSync(`${fallbackDir}Pretendard-Regular.otf`) ? fallbackDir : '');
+    if (!dir) {
       return '\\newcommand{\\YggPretendard}{\\YggSubjectDisplay}\n'
         + '\\newcommand{\\YggPretendardHangul}{}\n'
         + '\\newcommand{\\YggPretendardRegular}{\\YggSubjectDisplay}\n'
         + '\\newcommand{\\YggPretendardRegularHangul}{}';
     }
-    const dir = `${m[1]}/pretendard/`;
     return `\\newfontfamily\\YggPretendard{Pretendard-Bold.otf}[\n`
       + `  Path = ${dir},\n`
       + `  UprightFont = Pretendard-Bold.otf,\n`
@@ -4261,7 +4320,9 @@ function buildPreamble({
   lines.push('\\newcommand{\\YggRestoreGeometryNoClear}{\\let\\YggSavedClearpage\\clearpage\\let\\clearpage\\relax\\restoregeometry\\let\\clearpage\\YggSavedClearpage}');
   lines.push('\\usepackage{fontspec}');
   lines.push('\\usepackage{amsmath,amssymb}');
+  lines.push('\\usepackage{cancel}');
   lines.push(...unicodeMathDelimiterLines());
+  lines.push('\\setmathfont[version=bold,FakeBold=1.8]{Latin Modern Math}');
   lines.push(...koreanMatrixMacroLines());
   lines.push(...boxMathVisualCenterMacroLines());
   lines.push(...setBuilderMacroLines());
@@ -4294,6 +4355,7 @@ function buildPreamble({
   lines.push('\\usepackage[normalem]{ulem}');
   lines.push('\\usepackage{enumitem}');
   lines.push('\\usepackage{multicol}');
+  lines.push('\\usepackage{paracol}');
   lines.push('\\newlength{\\tblcellwd}');
   lines.push('\\newlength{\\tblcellht}');
   lines.push(...tableColumnLengthLines());
@@ -5652,6 +5714,7 @@ function renderIndependentSetGroupLatex(group, {
     question_uid: `${firstItem?.question_uid || firstItem?.id || 'common'}:common`,
     question_number: '',
     stem: commonStem,
+    __is_common_stem_block: true,
     choices: [],
     objective_choices: [],
     meta: donorItem
@@ -5674,6 +5737,12 @@ function renderIndependentSetGroupLatex(group, {
           ? firstItem.common_figure_local_infos
           : []),
   };
+  const commonStemGapTex = group?.__denseSetInternalGap === true
+    ? `\\vspace{${Number(group.__denseCommonStemGapPt) || DENSE_FLOW_SET_GAP_PT}pt}`
+    : '\\vspace{\\baselineskip}';
+  const setItemGapTex = group?.__denseSetInternalGap === true
+    ? `\\vspace{${Number(group.__denseSetItemGapPt) || DENSE_FLOW_SET_GAP_PT}pt}`
+    : '\\vspace{\\baselineskip}';
   lines.push(renderOneQuestion(commonQuestion, {
     showQuestionNumber: false,
     questionNumberPlacement: 'inline',
@@ -5682,7 +5751,7 @@ function renderIndependentSetGroupLatex(group, {
     aboveNumberFontPtOverride,
     inlineNumberFontPtOverride: stemSizePt,
   }));
-  lines.push('\\vspace{\\baselineskip}');
+  lines.push(commonStemGapTex);
   for (let itemIdx = 0; itemIdx < items.length; itemIdx += 1) {
     const rawItem = items[itemIdx];
     const usedCommonPaths = Array.isArray(commonQuestion.figure_local_paths)
@@ -5708,7 +5777,7 @@ function renderIndependentSetGroupLatex(group, {
       || (Array.isArray(item?.equations) && item.equations.length > 0)
       || (Array.isArray(item?.figure_refs) && item.figure_refs.length > 0);
     if (items.length === 1 && !hasItemDisplayContent) continue;
-    if (itemIdx > 0) lines.push('\\vspace{\\baselineskip}');
+    if (itemIdx > 0) lines.push(setItemGapTex);
     // 하위 독립 문항도 표/그림/보기 마커를 가질 수 있으므로 일반 문항 렌더 경로를 탄다.
     // 단순 smartTexLine 으로 처리하면 raw tabular preamble 이 수식 정규화되어 깨진다.
     // 문항번호 배치(inline/above)는 호출부에서 전달된 실제 값을 그대로 사용한다.
@@ -5816,9 +5885,27 @@ function renderOneQuestion(question, {
   const imageChoiceStemFigureCount = isImageChoice
     ? ((String(question?.stem || '').match(FIGURE_MARKER_RE) || []).length)
     : 0;
-  const rawStem = (isImageChoice && imageChoiceStemFigureCount === 0)
-    ? stripImageChoiceFigureMarkers(question?.stem || '')
-    : (question?.stem || '');
+  const rawStemForSet = (() => {
+    const src = (isImageChoice && imageChoiceStemFigureCount === 0)
+      ? stripImageChoiceFigureMarkers(question?.stem || '')
+      : (question?.stem || '');
+    const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
+    const delivery = meta.delivery_unit && typeof meta.delivery_unit === 'object' ? meta.delivery_unit : {};
+    const model = meta.set_model && typeof meta.set_model === 'object' ? meta.set_model : {};
+    const isIndSet =
+      String(delivery.delivery_type || '').trim() === 'independent_item' ||
+      String(model.set_type || '').trim() === 'independent_set';
+    const commonStem = String(
+      delivery.common_stem || model.common_stem || model.commonStem || '',
+    ).trim();
+    if (!isIndSet || !commonStem || question?.__is_common_stem_block === true) return src;
+    const escaped = commonStem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const stripped = String(src || '')
+      .replace(new RegExp(`^\\s*${escaped}\\s*(?:\\[문단\\]\\s*)*`), '')
+      .trim();
+    return stripped;
+  })();
+  const rawStem = rawStemForSet;
   const metaAligns = (() => {
     const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
     if (Array.isArray(meta.stem_line_aligns)) return meta.stem_line_aligns;
@@ -6132,7 +6219,24 @@ function renderOneQuestion(question, {
     const lines = Array.isArray(seg?.lines) ? seg.lines : [];
     const out = [];
     let pendingEmpty = 0;
-    for (const rawLine of lines) {
+    for (let rawIdx = 0; rawIdx < lines.length; rawIdx += 1) {
+      const alignedEnd = alignedEnvironmentEndIndex(lines, rawIdx);
+      if (alignedEnd > rawIdx) {
+        const block = renderStandaloneMathEnvironmentBlock(lines.slice(rawIdx, alignedEnd + 1));
+        if (block) {
+          if (out.length > 0 || pendingEmpty > 0) {
+            out.push('\\par');
+            if (pendingEmpty > 0) {
+              out.push(`\\vspace{${(0.4 * pendingEmpty).toFixed(2)}em}`);
+            }
+          }
+          pendingEmpty = 0;
+          out.push(block);
+          rawIdx = alignedEnd;
+          continue;
+        }
+      }
+      const rawLine = lines[rawIdx];
       const raw = String(rawLine || '');
       if (SUBQ_MARKER_LINE_RE.test(raw)) {
         if (out.length > 0) out.push('\\par');
@@ -7094,6 +7198,21 @@ function renderOneQuestion(question, {
       let outerPendingEmpty = 0;
       const segLineAligns = Array.isArray(seg.lineAligns) ? seg.lineAligns : [];
       for (let rawIdx = 0; rawIdx < seg.lines.length; rawIdx += 1) {
+        const alignedEnd = alignedEnvironmentEndIndex(seg.lines, rawIdx);
+        if (alignedEnd > rawIdx) {
+          const block = renderStandaloneMathEnvironmentBlock(seg.lines.slice(rawIdx, alignedEnd + 1));
+          if (block) {
+            if (outerPendingEmpty > 0) {
+              parts.push(`\\par\\vspace{${(0.4 * outerPendingEmpty).toFixed(2)}em}`);
+              outerPendingEmpty = 0;
+            }
+            parts.push(block);
+            emittedStemTextLineAny = true;
+            partsMeta.set(parts.length - 1, { subQ: currentSubQ });
+            rawIdx = alignedEnd;
+            continue;
+          }
+        }
         const rawLine = seg.lines[rawIdx];
         const rawLineAlign = normalizeLineAlignValue(segLineAligns[rawIdx]);
         // [소문항N] 은 독립 라인이므로 여기에서 가로챔. 마커 자체는 출력하지 않고
@@ -7728,6 +7847,40 @@ function answerSubpartLine(line) {
 
 const ANSWER_FIGURE_MARKER_RE = /\[\[PB_ANSWER_FIG_[^\]]+\]\]|\[그림\]|\[\s*image\s*\]/gi;
 
+const EXPLANATION_FIGURE_MARKER_RE = /\[그림(?:\s*:[^\]]*)?\]/g;
+
+/**
+ * 해설 전사본의 [그림] 표시를 해설 그림 자리 표시(@@YGGEXPLFIG<n>@@ 문단)로 바꾼다.
+ * 그림이 표시보다 많으면 남은 그림을 해설 끝에 붙이고, 그림 없는 표시는 지운다. 그림이 없으면 본문을 그대로 둔다.
+ */
+export function placeExplanationFigureTokens(text, figureCount) {
+  const source = String(text || '');
+  const count = Math.max(0, Number(figureCount) || 0);
+  if (count === 0) return source;
+  let used = 0;
+  let out = source.replace(EXPLANATION_FIGURE_MARKER_RE, () => {
+    if (used >= count) return '';
+    const token = `\n\n@@YGGEXPLFIG${used}@@\n\n`;
+    used += 1;
+    return token;
+  });
+  for (; used < count; used += 1) out += `\n\n@@YGGEXPLFIG${used}@@`;
+  return out;
+}
+
+/** 내려받은 해설 그림마다 가운데 정렬 \includegraphics 블록(폭은 원본 해설 쪽 기준 width_em). */
+export function explanationFigureIncludes(q) {
+  const infos = Array.isArray(q?.explanation_figure_local_infos) ? q.explanation_figure_local_infos : [];
+  const assets = Array.isArray(q?.explanation_figure_assets) ? q.explanation_figure_assets : [];
+  return infos.map((info) => {
+    const normalized = String(info?.path || '').replace(/\\/g, '/');
+    if (!normalized) return '';
+    const asset = assets.find((a) => Number(a?.figure_index) === Number(info?.figureIndex)) || {};
+    const widthEm = Math.max(3, Math.min(24, Number(asset.width_em) || 10));
+    return `{\\centering\\includegraphics[width=${widthEm.toFixed(2)}em,max width=\\linewidth,keepaspectratio]{${normalized}}\\par}`;
+  }).filter(Boolean);
+}
+
 function answerFigureIncludeTex(localPaths, layout, index) {
   const p = Array.isArray(localPaths) ? localPaths[index] : '';
   if (!p) return escapeLatexText('[그림]');
@@ -7982,8 +8135,24 @@ function independentSetSplitMode(group) {
 //   머리조각: 공통발문 + 첫 번째 하위문항 (전체 범위 [15~18] 헤더 유지)
 //   나머지 하위문항: 공통발문 없는 일반 문항으로 풀어서 다음 슬롯부터 자연스럽게 흐르게 한다.
 //   (공통발문 위에 범위 헤더가 있으므로 Q2~ 에는 별도 지문 참조 표시를 달지 않는다.)
-function splitOversizedIndependentSetGroups(list, { capacityRatio = 0.55 } = {}) {
+function splitOversizedIndependentSetGroups(
+  list,
+  {
+    capacityRatio = 0.55,
+    denseFlow = false,
+    commonStemGapPt = DENSE_FLOW_SET_GAP_PT,
+    setItemGapPt = DENSE_FLOW_SET_GAP_PT,
+  } = {},
+) {
   const source = Array.isArray(list) ? list : [];
+  const figMarkerRe = /\[\s*(?:그림|도형|도표)\s*\]|\[\[PB_FIG_/;
+  const denseGapFields = denseFlow
+    ? {
+        __denseSetInternalGap: true,
+        __denseCommonStemGapPt: commonStemGapPt,
+        __denseSetItemGapPt: setItemGapPt,
+      }
+    : { __denseSetInternalGap: false };
   const out = [];
   for (const block of source) {
     if (block?.__render_kind !== 'independent_set_group') {
@@ -7991,32 +8160,90 @@ function splitOversizedIndependentSetGroups(list, { capacityRatio = 0.55 } = {})
       continue;
     }
     const items = Array.isArray(block.items) ? block.items : [];
+    const setKey = String(block.set_key || '').trim();
     if (items.length <= 1) {
-      out.push(block);
+      out.push({
+        ...block,
+        __independentSetKey: setKey,
+        ...denseGapFields,
+      });
       continue;
     }
     const mode = independentSetSplitMode(block);
     let shouldSplit;
     if (mode === 'join') {
       shouldSplit = false;
-    } else if (mode === 'split') {
+    } else if (mode === 'split' || denseFlow) {
       shouldSplit = true;
     } else {
       shouldSplit = estimateAssignmentSlotFillRatio(block) > capacityRatio;
     }
     if (!shouldSplit) {
-      out.push(block);
+      out.push({
+        ...block,
+        __independentSetKey: setKey,
+        ...denseGapFields,
+      });
       continue;
     }
+    // 분할 시 공통발문이 하위문항(donorItem)의 그림을 빌려 쓰는 세트는
+    // 머리조각 첫 문항에 공통 그림을 보존하고 나머지 하위문항에서는 중복 그림을 비운다.
+    const commonStem = String(block.common_stem || block.commonStem || '').trim();
+    const commonHasFigMarker = figMarkerRe.test(commonStem);
+    const firstRaw = items[0] || {};
+    const explicitCommonPaths = Array.isArray(firstRaw?.common_figure_local_paths)
+      ? firstRaw.common_figure_local_paths
+      : [];
+    const donorItem = commonHasFigMarker && explicitCommonPaths.length === 0
+      ? items.find(
+          (it) =>
+            Array.isArray(it?.figure_local_paths) &&
+            it.figure_local_paths.length > 0 &&
+            !figMarkerRe.test(String(it?.stem || '')),
+        ) || null
+      : null;
+    const usedCommonPaths = donorItem
+      ? donorItem.figure_local_paths
+      : explicitCommonPaths;
+    const normalizedItems = items.map((rawItem, idx) => {
+      const rawPaths = Array.isArray(rawItem?.figure_local_paths)
+        ? rawItem.figure_local_paths
+        : [];
+      const sharesSameFigureAsCommon =
+        commonHasFigMarker &&
+        usedCommonPaths.length > 0 &&
+        !figMarkerRe.test(String(rawItem?.stem || '')) &&
+        (Boolean(donorItem) ||
+          (rawPaths.length === usedCommonPaths.length &&
+            rawPaths.every((p, i) => p === usedCommonPaths[i])));
+      let nextItem = sharesSameFigureAsCommon
+        ? { ...rawItem, figure_local_paths: [], figure_local_infos: [] }
+        : { ...rawItem };
+      if (idx === 0 && donorItem) {
+        nextItem = {
+          ...nextItem,
+          common_figure_local_paths: donorItem.figure_local_paths,
+          common_figure_local_infos: Array.isArray(donorItem?.figure_local_infos)
+            ? donorItem.figure_local_infos
+            : [],
+        };
+      }
+      return {
+        ...nextItem,
+        __independentSetKey: setKey,
+      };
+    });
     // 머리조각: 전체 범위 헤더를 보존한 채 첫 문항만 그룹으로 유지.
     const fullHeaderLabel = formatIndependentSetHeaderLabelLatex(block);
     out.push({
       ...block,
-      items: items.slice(0, 1),
+      items: normalizedItems.slice(0, 1),
       header_label: fullHeaderLabel,
+      __independentSetKey: setKey,
+      ...denseGapFields,
     });
-    // 나머지 하위문항은 평문항으로 풀어 슬롯 패커가 자연스럽게 배치하도록 한다.
-    for (const rest of items.slice(1)) out.push(rest);
+    // 나머지 하위문항은 평문항으로 풀어 슬롯/단 패커가 자연스럽게 배치하도록 한다.
+    for (const rest of normalizedItems.slice(1)) out.push(rest);
   }
   return out;
 }
@@ -8633,6 +8860,172 @@ function chunkQuestionsByMeasuredHeights(
   return { pages, pageColumnCounts };
 }
 
+const DENSE_FLOW_NORMAL_GAP_PT = 32;
+const DENSE_FLOW_SET_GAP_PT = 9;
+const DENSE_FLOW_SECTION_LABEL_EXTRA_PT = 34;
+const DENSE_FLOW_BOTTOM_SAFETY_PT = 10;
+
+function denseFlowGapsForPaper(paper) {
+  const normalized = String(paper || '').replace(/\s+/g, '').toUpperCase();
+  if (normalized === 'A4') {
+    return { commonStemGapPt: 8, setItemGapPt: 12, normalGapPt: 36 };
+  }
+  return {
+    commonStemGapPt: DENSE_FLOW_SET_GAP_PT,
+    setItemGapPt: DENSE_FLOW_SET_GAP_PT,
+    normalGapPt: DENSE_FLOW_NORMAL_GAP_PT,
+  };
+}
+
+function areSameContinualSetItems(prevQ, nextQ) {
+  if (!prevQ || !nextQ) return false;
+  const prevSetKey = String(prevQ?.__independentSetKey || prevQ?.set_key || '').trim();
+  const nextSetKey = String(nextQ?.__independentSetKey || nextQ?.set_key || '').trim();
+  if (prevSetKey && nextSetKey && prevSetKey === nextSetKey) {
+    return true;
+  }
+  if (prevQ?.__pb_split_part && nextQ?.__pb_split_part) {
+    const k1 = dependentSetQuestionKey(prevQ);
+    const k2 = dependentSetQuestionKey(nextQ);
+    if (k1 && k1 === k2) return true;
+  }
+  return false;
+}
+
+// '많이'(maxQuestionsPerPage >= 99) 전용 실측/추정 누적 높이 패커.
+//   고정 높이 슬롯으로 단을 등분하지 않고, 각 단의 가용 높이 안에서
+//   - 일반 문항 간 기본 여백: 32pt
+//   - 독립형/종속형 세트 연속 조각 간 간격: 9pt
+//   을 확보하며 들어갈 수 있는 만큼 순서대로 채운다.
+function chunkQuestionsForDenseFlowColumns(
+  questions,
+  heightsPt,
+  {
+    columnsPerPage = 2,
+    normalGapPt = DENSE_FLOW_NORMAL_GAP_PT,
+    setGapPt = DENSE_FLOW_SET_GAP_PT,
+    columnHeightPtForPage,
+    splitOnElectiveChange = false,
+    isMockExamProfile = false,
+    includeSectionLabelReserve = true,
+  } = {},
+) {
+  const list = Array.isArray(questions) ? questions : [];
+  const pages = [];
+  const pageColumnCounts = [];
+  let pageColumns = [];
+  let curCol = [];
+  let curUsedPt = 0;
+  let pageNo = 1;
+  let prevElective = null;
+  let lastLabelMode = null;
+  let leftColFirstHasLabel = false;
+
+  const flushPage = () => {
+    if (pageColumns.length === 0) return;
+    const flat = [];
+    const counts = [];
+    for (const c of pageColumns) {
+      flat.push(...c);
+      counts.push(c.length);
+    }
+    pages.push(flat);
+    pageColumnCounts.push({
+      left: Math.max(1, counts[0] || 0),
+      right: Math.max(0, counts[1] || 0),
+    });
+    pageColumns = [];
+    leftColFirstHasLabel = false;
+    pageNo += 1;
+  };
+  const closeColumn = () => {
+    if (curCol.length === 0) return;
+    pageColumns.push(curCol);
+    curCol = [];
+    curUsedPt = 0;
+    if (pageColumns.length >= columnsPerPage) flushPage();
+  };
+  const columnHeight = () => {
+    const raw = Number(
+      typeof columnHeightPtForPage === 'function' ? columnHeightPtForPage(pageNo) : NaN,
+    );
+    const base = Number.isFinite(raw) && raw > 0 ? Math.max(160, raw) : 650;
+    return Math.max(140, base - DENSE_FLOW_BOTTOM_SAFETY_PT);
+  };
+  const resolveItemHeightPt = (q, idx) => {
+    const measured = Number(heightsPt?.[idx]);
+    if (Number.isFinite(measured) && measured > 0) return measured;
+    return Math.max(72, estimateAssignmentSlotFillRatio(q) * 320);
+  };
+
+  for (let i = 0; i < list.length; i += 1) {
+    const q = list[i];
+    const curElective = resolveQuestionElectiveSubject(q);
+    if (
+      splitOnElectiveChange
+      && prevElective !== null
+      && curElective !== prevElective
+      && (curCol.length > 0 || pageColumns.length > 0)
+    ) {
+      closeColumn();
+      flushPage();
+    }
+    prevElective = curElective;
+
+    const qMode = q?.mode || q?.questionMode || q?.export_mode || q?.exportMode || 'objective';
+    const effectiveLabelMode = isMockExamProfile
+      ? (qMode === 'objective' ? 'objective' : 'subjective')
+      : qMode;
+    const hasAutoLabel = includeSectionLabelReserve && effectiveLabelMode !== lastLabelMode;
+    lastLabelMode = effectiveLabelMode;
+
+    const baseH = resolveItemHeightPt(q, i);
+    const labelExtraPt = hasAutoLabel ? DENSE_FLOW_SECTION_LABEL_EXTRA_PT : 0;
+    const itemH = baseH + labelExtraPt;
+
+    if (curCol.length === 0) {
+      const H = columnHeight();
+      const row0PairLabelExtra =
+        pageColumns.length === 1 && leftColFirstHasLabel && !hasAutoLabel
+          ? DENSE_FLOW_SECTION_LABEL_EXTRA_PT
+          : 0;
+      if (pageColumns.length === 0) {
+        leftColFirstHasLabel = hasAutoLabel;
+      }
+      curCol.push(q);
+      curUsedPt = itemH + row0PairLabelExtra;
+      if (curUsedPt >= H) closeColumn();
+      continue;
+    }
+
+    const H = columnHeight();
+    const prevQ = curCol[curCol.length - 1];
+    const gapPt = areSameContinualSetItems(prevQ, q) ? setGapPt : normalGapPt;
+    if (curUsedPt + gapPt + itemH <= H) {
+      curCol.push(q);
+      curUsedPt += gapPt + itemH;
+      continue;
+    }
+
+    // 현재 단의 남은 공간에 기본 여백 + 다음 문항이 들어가지 않으면 다음 단으로 넘긴다.
+    closeColumn();
+    const H2 = columnHeight();
+    const row0PairLabelExtra =
+      pageColumns.length === 1 && leftColFirstHasLabel && !hasAutoLabel
+        ? DENSE_FLOW_SECTION_LABEL_EXTRA_PT
+        : 0;
+    if (pageColumns.length === 0) {
+      leftColFirstHasLabel = hasAutoLabel;
+    }
+    curCol.push(q);
+    curUsedPt = itemH + row0PairLabelExtra;
+    if (curUsedPt >= H2) closeColumn();
+  }
+  closeColumn();
+  flushPage();
+  return { pages, pageColumnCounts };
+}
+
 function chunkQuestionsForAssignmentGrid(questions) {
   const list = Array.isArray(questions) ? questions : [];
   const pages = [];
@@ -8714,11 +9107,62 @@ function renderMockSlotColumnBody(
     isJeonghwaProfile = false,
     isHwanggeumProfile = false,
     columnIndex = 0,
+    denseFlow = false,
+    denseQuestionGapPt = DENSE_FLOW_NORMAL_GAP_PT,
+    denseSetGapPt = DENSE_FLOW_SET_GAP_PT,
   } = {},
 ) {
   const lines = [];
   const safeSlots = Math.max(1, Number(slotCount || 1));
   const qList = Array.isArray(columnQuestions) ? columnQuestions : [];
+
+  if (denseFlow) {
+    if (qList.length === 0) {
+      lines.push('\\vspace*{0.6\\baselineskip}');
+      return lines.join('\n');
+    }
+    for (let i = 0; i < qList.length; i += 1) {
+      const question = qList[i];
+      if (!question) continue;
+      if (i > 0) {
+        const prevQ = qList[i - 1];
+        const gapPt = areSameContinualSetItems(prevQ, question)
+          ? denseSetGapPt
+          : denseQuestionGapPt;
+        lines.push(`\\par\\nointerlineskip\\vspace{${gapPt}pt}`);
+      }
+      lines.push('\\noindent\\begin{minipage}[t]{\\linewidth}');
+      lines.push(renderOneQuestion(question, {
+        showQuestionNumber,
+        questionNumberPlacement,
+        questionNumberFormat,
+        stemSizePt,
+        aboveNumberFontPtOverride,
+        includeQuestionScore,
+        questionScoreByQuestionId,
+        sectionLabel: sectionLabels[i] || null,
+        pairStrutMacro: i === 0 ? (pairStrutMacros[0] || null) : null,
+        pairLabelStrutMacro: i === 0 ? (pairLabelStrutMacros[0] || null) : null,
+        topPadPt: i === 0 ? Number(topPadsPt[0] || 0) : 0,
+        layoutColumns: 2,
+        pairAnchorId: i === 0 ? (pairAnchorIds[0] || '') : '',
+        pairAnchorYOffsetPt: i === 0 ? Number(pairAnchorOffsetsPt[0] || 0) : 0,
+        pairAnchorMeasure: i === 0 ? pairAnchorMeasure : false,
+        isGyeongsinProfile,
+        isNeunginProfile,
+        isDaeryunProfile,
+        isDongdoProfile,
+        isSoseonProfile,
+        isOseongProfile,
+        isJeonghwaProfile,
+        isHwanggeumProfile,
+        columnIndex,
+        slotRowIndex: i,
+      }));
+      lines.push('\\end{minipage}\\par');
+    }
+    return lines.join('\n');
+  }
 
   for (let i = 0; i < safeSlots; i += 1) {
     const slotHeight = perSlotHeightExprs[i] || slotHeightMacro;
@@ -8935,6 +9379,9 @@ function renderMockGridPageLatex(
     // 측정 패스로 추정한 이 페이지의 컬럼 높이(pt). 있으면 슬롯 높이 고정 배분이
     //   실제 문항 높이를 못 담는 경우에만 배분을 다시 계산한다(겹침 방지).
     columnHeightPt = null,
+    denseFlow = false,
+    denseQuestionGapPt = DENSE_FLOW_NORMAL_GAP_PT,
+    denseSetGapPt = DENSE_FLOW_SET_GAP_PT,
   },
 ) {
   const safeLeftSlots = Math.max(1, Number(leftSlots || 1));
@@ -8964,7 +9411,7 @@ function renderMockGridPageLatex(
   //     ht 전달이 흐려지는 현상이 관찰되었고, 또 \vspace*{5pt}\par 를 라벨 위에 넣어 [t]
   //     minipage 첫 baseline 기준이 어긋나 좌측 slot 이 통째로 밀렸다(측정 ~19pt).
   //     본 구현은 이 두 요인을 제거한다.
-  const maxRows = Math.max(safeLeftSlots, safeRightSlots);
+  const maxRows = denseFlow ? 1 : Math.max(safeLeftSlots, safeRightSlots);
   const labelsList = Array.isArray(sectionLabels) ? sectionLabels : [];
   const leftLabels = labelsList.slice(0, safeLeftSlots);
   const rightLabels = labelsList.slice(safeLeftSlots, safeLeftSlots + safeRightSlots);
@@ -9217,6 +9664,9 @@ function renderMockGridPageLatex(
       isJeonghwaProfile,
       isHwanggeumProfile,
       columnIndex: 0,
+      denseFlow,
+      denseQuestionGapPt,
+      denseSetGapPt,
     }),
     '\\end{minipage}',
     '\\hfill',
@@ -9246,6 +9696,9 @@ function renderMockGridPageLatex(
       isJeonghwaProfile,
       isHwanggeumProfile,
       columnIndex: 1,
+      denseFlow,
+      denseQuestionGapPt,
+      denseSetGapPt,
     }),
     '\\end{minipage}',
   ].filter(Boolean).join('\n');
@@ -10687,14 +11140,22 @@ function renderHwanggeumCoverPageLatex(
 }
 
 /**
- * '빠른정답' 테이블 LaTeX. 마지막 페이지에 삽입 — 문항번호와 정답(export_answer) 을 2열 tabular 로.
+ * '빠른정답' 페이지. 문항 본문 용지와 따로 A4 로 낸다.
+ * 정답표는 왼쪽 단이고, 칸 사이에 선을 그어 표로 보인다.
+ * 해설을 포함하는 경우에는 단 구분선을 두고, 정답표가 끝나는 높이부터
+ * 오른쪽 단에 해설이 있는 문항만 적는다.
  *
- * 컬럼 수는 문항 수에 따라 자동 결정:
- *   - ≤ 10문항: 2 columns (문항번호 | 정답)
- *   - ≤ 20문항: 3 columns × 이를 multicol 로 분할
- *   - 그 이상: 4 columns
+ * 왼쪽 단 안에서의 배치:
+ *   - 짧은 답(객관식 번호, 짧은 수식)은 같은 높이의 4칸.
+ *   - 긴 답이 칸 중간에 나오면 그 줄의 남은 칸은 비우고, 다음 줄에서
+ *     왼쪽 단 전체 폭으로 최종 정답만 적는다. 다음 짧은 답은 새 4칸 줄에서 시작한다.
  */
-function renderQuickAnswerTableLatex(questions) {
+function renderQuickAnswerTableLatex(questions, options = {}) {
+  const includeExplanation = options.includeExplanation === true;
+  const quickAnswerTopText = String(options.quickAnswerTopText ?? options.titlePageTopText ?? '').trim();
+  const showAssignmentFooter = options.showAssignmentFooter === true;
+  const quickAnswerAcademyName = escapeLatexText(String(options.academyName || '').trim());
+  const quickAnswerAssignmentName = escapeLatexText(String(options.assignmentName || '').trim());
   const qs = Array.isArray(questions) ? questions : [];
   if (qs.length === 0) return '';
 
@@ -10884,9 +11345,38 @@ function renderQuickAnswerTableLatex(questions) {
     return out.join('');
   }
 
-  function formatAnswerSegment(raw) {
-    if (!raw) return '';
+  function splitTopLevelAnswerCommas(raw) {
     const src = String(raw || '');
+    const parts = [];
+    let brace = 0;
+    let paren = 0;
+    let bracket = 0;
+    let last = 0;
+    for (let i = 0; i < src.length; i += 1) {
+      const ch = src[i];
+      if (ch === '\\') {
+        i += 1;
+        continue;
+      }
+      if (ch === '{') brace += 1;
+      else if (ch === '}') brace = Math.max(0, brace - 1);
+      else if (ch === '(') paren += 1;
+      else if (ch === ')') paren = Math.max(0, paren - 1);
+      else if (ch === '[') bracket += 1;
+      else if (ch === ']') bracket = Math.max(0, bracket - 1);
+      else if (ch === ',' && brace === 0 && paren === 0 && bracket === 0) {
+        parts.push(src.slice(last, i));
+        last = i + 1;
+      }
+    }
+    parts.push(src.slice(last));
+    return parts.map((part) => part.trim()).filter(Boolean);
+  }
+
+  function formatAnswerSingleSegment(raw) {
+    if (!raw) return '';
+    const src = String(raw || '').trim();
+    if (!src) return '';
     if (/[가-힣ㄱ-ㅎㅏ-ㅣ]/.test(src)) {
       return formatAnswerSegmentTextMode(src);
     }
@@ -10910,22 +11400,81 @@ function renderQuickAnswerTableLatex(questions) {
     return `$\\displaystyle ${formatAnswerPlainSegmentInner(src)}$`;
   }
 
-  // 하위문제 라벨 `(N)` (N = 1~9) 이 하나 이상 들어있는 답을 처리한다.
-  //   - 라벨 자체는 수식 밖(텍스트) 으로 뽑아내 '(1)' 그대로 렌더.
-  //   - 라벨 뒤에는 공백 한 칸(\ ) 유지.
-  //   - 두 번째 이후 라벨 앞에는 추가 공백 두 칸(\ \ ) 삽입 (시각적 구분).
-  //
-  //   예)
-  //     입력  "(1) 36=2^{2}\\times 3^{2}, 60=... (2) p+q=..."
-  //     출력  "(1)\ $36=2^{2}\\times 3^{2}, 60=...$\ \ (2)\ $p+q=...$"
-  function formatAnswerWithSubLabels(raw) {
-    // 라벨 위치 찾기 : '(1)' ~ '(9)' 패턴. 공백/문자열 시작 앞뒤를 허용.
-    const labelRe = /\((\d)\)/g;
-    const matches = [];
-    let m;
-    while ((m = labelRe.exec(raw)) !== null) {
-      matches.push({ idx: m.index, end: m.index + m[0].length, label: m[0] });
+  function formatAnswerSegment(raw) {
+    if (!raw) return '';
+    const src = String(raw || '');
+    if (/[가-힣ㄱ-ㅎㅏ-ㅣ]/.test(src)) {
+      return formatAnswerSegmentTextMode(src);
     }
+    if (/\\(?:begin\{(?:cases|array|aligned|alignedat|gathered|matrix|pmatrix|bmatrix|Bmatrix|vmatrix|Vmatrix|smallmatrix)\}|left\s*(?:\\\{|\\lbrace))/.test(src)) {
+      return answerMathLatex(src);
+    }
+    // 쉼표로 나열된 답을 한 개의 $...$ 안에 가두면 줄바꿈이 전혀 일어나지 않아
+    // 긴 답이 칸과 단 경계를 넘어간다. 최상위 쉼표는 텍스트 모드 `, ` 로 두어 줄바꿈을 허용한다.
+    const commaParts = splitTopLevelAnswerCommas(src);
+    if (commaParts.length > 1) {
+      return commaParts.map((part) => formatAnswerSingleSegment(part)).join(', ');
+    }
+    return formatAnswerSingleSegment(src);
+  }
+
+  // 하위문제 라벨 `(1)` ~ `(9)` 또는 `1)` ~ `9)` 위치를 찾는다.
+  function findAnswerSubLabels(raw) {
+    const src = String(raw || '');
+    const parenMatches = [];
+    const labelRe = /\((\d)\)/g;
+    let m;
+    while ((m = labelRe.exec(src)) !== null) {
+      parenMatches.push({ idx: m.index, end: m.index + m[0].length, label: m[0] });
+    }
+    if (parenMatches.length > 0) return parenMatches;
+    if (!/^\s*1\)/.test(src)) return [];
+    const bareMatches = [];
+    let brace = 0;
+    let paren = 0;
+    for (let i = 0; i < src.length; i += 1) {
+      const ch = src[i];
+      if (ch === '\\') {
+        i += 1;
+        continue;
+      }
+      if (ch === '{') {
+        brace += 1;
+        continue;
+      }
+      if (ch === '}') {
+        brace = Math.max(0, brace - 1);
+        continue;
+      }
+      if (ch === '(') {
+        paren += 1;
+        continue;
+      }
+      if (ch === ')' && paren > 0) {
+        paren -= 1;
+        continue;
+      }
+      if (brace !== 0 || paren !== 0) continue;
+      const atBoundary = i === 0 || /\s/.test(src[i - 1]);
+      if (!atBoundary) continue;
+      const expected = String(bareMatches.length + 1);
+      if (src.slice(i, i + expected.length + 1) === `${expected})`) {
+        bareMatches.push({
+          idx: i,
+          end: i + expected.length + 1,
+          label: `${expected})`,
+        });
+        i += expected.length;
+      }
+    }
+    return bareMatches;
+  }
+
+  // 하위문제 라벨이 들어있는 답을 처리한다.
+  //   - 라벨 자체는 수식 밖(텍스트)으로 뽑아내 그대로 렌더.
+  //   - 하위답 사이는 줄바꿈 가능한 간격으로 띄워 긴 답도 칸 안에서 줄바꿈되게 한다.
+  function formatAnswerWithSubLabels(raw) {
+    const matches = findAnswerSubLabels(raw);
     if (matches.length === 0) return formatAnswerSegment(raw.trim());
     if (matches.length === 1) {
       const { end, label } = matches[0];
@@ -10933,7 +11482,7 @@ function renderQuickAnswerTableLatex(questions) {
       const segment = raw.slice(end).replace(/^\s+/, '').replace(/\s+$/, '');
       return [
         head ? `${formatAnswerSegment(head)}\\hspace{0.35em}` : '',
-        label,
+        escapeLatexText(label),
         '\\hspace{0.33em}',
         segment ? formatAnswerSegment(segment) : '',
       ].join('');
@@ -10946,35 +11495,15 @@ function renderQuickAnswerTableLatex(questions) {
         value: raw.slice(match.end, nextIdx).replace(/^\s+/, '').replace(/\s+$/, ''),
       };
     });
-    const compactMeasure = segments
-      .map((seg) => `${seg.label} ${seg.value}`)
-      .join(' ')
-      .replace(/\\(?:dfrac|tfrac|frac)\s*\{([^{}]+)\}\s*\{([^{}]+)\}/g, '$1/$2')
-      .replace(/\\[a-zA-Z]+/g, ' ')
-      .replace(/[{}$\\^_]/g, '')
-      .replace(/\s+/g, ' ')
-      .trim();
-    const compactSubAnswers = !/[가-힣ㄱ-ㅎㅏ-ㅣ]/.test(raw)
-      && !/\[\[PB_ANSWER_FIG_[^\]]+\]\]|\[그림\]|\[\s*image\s*\]/i.test(raw)
-      && matches.length <= 3
-      && compactMeasure.length <= 72;
-    if (compactSubAnswers) {
-      return segments
-        .map((seg) => `${seg.label}\\hspace{0.33em}${formatAnswerSegment(seg.value)}`)
-        .join('\\hspace{5em}');
-    }
-
     const prefix = [];
-    // 첫 라벨 이전 텍스트(거의 없지만 방어).
     if (matches[0].idx > 0) {
       const head = raw.slice(0, matches[0].idx).trim();
-      if (head) prefix.push(formatAnswerSegment(head), '\\par\\vspace{0.2\\baselineskip}');
+      if (head) prefix.push(formatAnswerSegment(head), '\\hspace{0.45em}');
     }
-    const rows = segments.map((seg) => `${seg.label} & ${seg.value ? formatAnswerSegment(seg.value) : ''}`);
-    const table = '\\hspace*{0.15em}\\begin{tabular}[t]{@{}r@{\\hspace{0.35em}}>{\\raggedright\\arraybackslash}p{\\dimexpr\\linewidth-5.4em\\relax}@{}}'
-      + rows.join(' \\\\[0.28\\baselineskip] ')
-      + '\\end{tabular}';
-    return prefix.join('') + table;
+    const rendered = segments.map((seg) => (
+      `\\mbox{${escapeLatexText(seg.label)}}\\hspace{0.3em}${seg.value ? formatAnswerSegment(seg.value) : ''}`
+    ));
+    return prefix.join('') + rendered.join('\\hspace{0.85em plus 0.25em minus 0.1em}');
   }
 
   function formatAnswerTextTex(ans) {
@@ -10983,8 +11512,8 @@ function renderQuickAnswerTableLatex(questions) {
     raw = normalizeSpecialTokens(raw);
     // 규칙 1. 동그라미 보기 번호 단독.
     if (/^[①②③④⑤⑥⑦⑧⑨⑩]$/.test(raw)) return escapeLatexText(raw);
-    // 규칙 2. 하위문제 라벨 `(N)` 이 있으면 전용 처리.
-    if (/\(\d\)/.test(raw)) return formatAnswerWithSubLabels(raw);
+    // 규칙 2. 하위문제 라벨 `(N)` 또는 `N)` 이 있으면 전용 처리.
+    if (findAnswerSubLabels(raw).length > 0) return formatAnswerWithSubLabels(raw);
     // 규칙 3. 단일 세그먼트.
     return formatAnswerSegment(raw);
   }
@@ -11038,110 +11567,366 @@ function renderQuickAnswerTableLatex(questions) {
     return out.join('\\hspace{0.45em}');
   }
 
-  const MAX_SLOTS = 5;
-  function answerTextForMeasure(q) {
-    return stripLatexTextWrappers(resolveAnswer(q))
-      .replace(/\[\[PB_ANSWER_FIG_[^\]]+\]\]|\[그림\]|\[\s*image\s*\]/gi, ' 그림 ')
-      .replace(/\\(?:dfrac|tfrac|frac)\s*\{([^{}]+)\}\s*\{([^{}]+)\}/g, '$1/$2')
-      .replace(/\\[a-zA-Z]+/g, ' ')
-      .replace(/[{}$\\^_]/g, '')
-      .replace(/\s+/g, ' ')
-      .trim();
+  function compactAnswerTex(q, { forTable = false } = {}) {
+    // 빠른정답 표는 분수를 커버할 수 있는 고정 행 높이(25pt)를 쓰므로
+    // \YggSmallFrac(0.75배 display 분수)로 또렷하게 그리고, 해설 줄은 \tfrac 을 쓴다.
+    return formatAnswerTex(resolveAnswer(q), q)
+      .replace(/\\displaystyle\b\s*/g, '\\textstyle ')
+      .replace(/\\dfrac\b/g, forTable ? '\\YggSmallFrac' : '\\tfrac');
   }
-  function quickAnswerSpan(q) {
-    const answer = resolveAnswer(q);
-    const measure = answerTextForMeasure(q);
-    const subCount = (answer.match(/\(\d\)/g) || []).length;
-    const figCount = (answer.match(/\[\[PB_ANSWER_FIG_[^\]]+\]\]|\[그림\]|\[\s*image\s*\]/gi) || []).length;
-    let span = 1;
-    if (subCount >= 2) span = 5;
-    else if (figCount >= 2 || measure.length >= 32) span = 3;
-    else if (subCount >= 2 || figCount >= 1 || measure.length >= 17) span = 2;
-    if (measure.length >= 54) span = 5;
-    return Math.max(1, Math.min(MAX_SLOTS, span));
+  function quickAnswerItemTex(q) {
+    const rawNum = String(q?.question_number || '?').replace(/\.$/, '').trim() || '?';
+    const num = escapeLatexText(rawNum);
+    const rawAns = resolveAnswer(q);
+    const answer = compactAnswerTex(q, { forTable: true });
+    const hasVertical = /\\par\b|\\begin\{|\\includegraphics|\\raisebox/.test(answer);
+    if (hasVertical) {
+      return `\\YggQaLongParItem{${num}}{${answer}}`;
+    }
+    const subCount = findAnswerSubLabels(rawAns).length;
+    const figCount = (rawAns.match(/\[\[PB_ANSWER_FIG_[^\]]+\]\]|\[그림\]|\[\s*image\s*\]/gi) || []).length;
+    if (figCount >= 1 || subCount >= 2) {
+      return `\\YggQaForceLongItem{${num}}{${answer}}`;
+    }
+    return `\\YggQaAutoItem{${num}}{${answer}}`;
   }
-  function quickAnswerHasTallContent(q) {
-    const answer = resolveAnswer(q);
-    return /\\(?:dfrac|tfrac|frac)\b|\\begin\{(?:cases|array|aligned|alignedat|gathered|matrix|pmatrix|bmatrix|Bmatrix|vmatrix|Vmatrix|smallmatrix)\}|\\left|\\right|\[\[PB_ANSWER_FIG_[^\]]+\]\]|\[그림\]|\[\s*image\s*\]/i.test(answer);
+  function explanationOf(q) {
+    const meta = q?.meta && typeof q.meta === 'object' ? q.meta : {};
+    const raw = [
+      q?.explanation,
+      q?.solution_transcribed,
+      meta.solution_transcribed,
+      meta.explanation,
+      q?.reviewer_notes,
+      meta.reviewer_notes,
+    ].map((value) => String(value || '').trim()).find((value) => (
+      value && !/^(?:-|—|\(미기입\)|미기입|\(검수 메모 없음\)|없음)$/.test(value)
+    ));
+    return raw || '';
   }
-  function spanSpec(span) {
-    const extraTabColSep = Math.max(0, (span - 1) * 2);
-    return `>{\\raggedright\\arraybackslash}p{\\dimexpr ${span}\\quickanswercellwd+${extraTabColSep}\\tabcolsep\\relax}`;
+  function renderExplanationParagraph(paragraph, equations) {
+    // 해설에 들어 있는 array/tabular 의 {|c|c|} 는 절댓값 세로선이 아니다.
+    // smartTexLine 에 통째로 넘기면 표 머리줄이 깨져 컴파일이 멈춘다.
+    const envRe = /\\begin\{(array|tabular|cases|aligned|alignedat|gathered|matrix|pmatrix|bmatrix|Bmatrix|vmatrix|Vmatrix|smallmatrix)\}[\s\S]*?\\end\{\1\}/g;
+    const parts = [];
+    let last = 0;
+    let match;
+    const edge = (fragment, side) => {
+      let value = String(fragment || '');
+      if (side !== 'start') value = value.replace(/(?:\\\]|\\\)|\$)+\s*$/g, '');
+      if (side !== 'end') value = value.replace(/^\s*(?:\\\[|\\\(|\$)+/g, '');
+      return value.trim();
+    };
+    while ((match = envRe.exec(paragraph)) !== null) {
+      const before = edge(paragraph.slice(last, match.index), 'end');
+      if (before) parts.push(smartTexLine(before, equations));
+      const env = match[0].replace(/(?<!\\)%/g, '\\%');
+      parts.push(`\\par\\noindent\\adjustbox{max width=\\linewidth}{$\\displaystyle ${env}$}\\par`);
+      last = match.index + match[0].length;
+    }
+    const tail = edge(paragraph.slice(last), 'start');
+    if (tail) parts.push(smartTexLine(tail, equations));
+    if (parts.length === 0) return smartTexLine(paragraph, equations);
+    return parts.filter(Boolean).join('\n');
   }
-  function quickAnswerCell(q) {
+  function explanationBody(q, text) {
+    const figures = explanationFigureIncludes(q);
+    const paragraphs = String(placeExplanationFigureTokens(text, figures.length) || '')
+      .replace(/\r\n/g, '\n')
+      .replace(/\[문단(?::[^\]]*)?\]/g, '\n\n')
+      .split(/\n{2,}/)
+      .map((paragraph) => paragraph.replace(/\s+/g, ' ').trim())
+      .filter(Boolean);
+    const equations = Array.isArray(q?.equations) ? q.equations : [];
+    const body = paragraphs
+      .map((paragraph) => {
+        const fig = /^@@YGGEXPLFIG(\d+)@@$/.exec(paragraph);
+        if (fig) return figures[Number(fig[1])] || '';
+        return renderExplanationParagraph(paragraph, equations);
+      })
+      .filter(Boolean)
+      .join('\\par\\vspace{0.25em}\n');
+    if (!body) return '';
+    // 전사본에 닫는 $ 가 하나 더 있으면 $\displaystyle 7$$이다 가 되어 컴파일이 멈춘다.
+    return body.replace(/(\$\\displaystyle [^$]*)\$\$+/g, '$1$');
+  }
+  // [정답] 라벨 바로 오른쪽에 진한 정답을 붙이고, 해설이 있으면 다음 줄에 번호 너비만큼 들여 쓴다.
+  function explanationEntry(q) {
     const num = escapeLatexText(String(q?.question_number || '?'));
-    const answer = formatAnswerTex(resolveAnswer(q), q);
-    const stretch = quickAnswerHasTallContent(q) ? '1.55' : '1.18';
-    const lineSkip = quickAnswerHasTallContent(q) ? '1.25em' : '0.55em';
-    return `\\begin{minipage}[t]{\\linewidth}\\raggedright\\setstretch{${stretch}}\\lineskiplimit=0.25em\\lineskip=${lineSkip}\\setbox0=\\hbox{\\textbf{${num}.}\\enspace}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{\\textbf{${num}.}\\enspace}${answer}\\end{minipage}`;
-  }
-  function cellLatex(item) {
-    if (!item) return '';
-    const body = quickAnswerCell(item.q);
-    if (item.span <= 1) return body;
-    return `\\multicolumn{${item.span}}{${spanSpec(item.span)}}{${body}}`;
+    const answer = compactAnswerTex(q);
+    const body = explanationBody(q, explanationOf(q));
+    const lines = [
+      `\\setbox1=\\hbox{\\textbf{${num}.}\\hspace{0.42em}}%`,
+      '\\setbox2=\\hbox{\\copy1\\textbf{[정답]}\\hspace{0.45em}}%',
+      '{\\setlength{\\leftskip}{\\wd2}\\setlength{\\parindent}{-\\wd2}\\indent\\box2{\\setlength{\\parindent}{0pt}\\bfseries\\boldmath '
+        + `${answer}}\\par}`,
+    ];
+    if (!body) return `${lines.join('\n')}\\vspace{0.85em}`;
+    lines.push(
+      '\\nopagebreak\\vspace{0.30em}',
+      '{\\setlength{\\leftskip}{\\wd1}\\setlength{\\parindent}{0pt}\\noindent',
+      `${body}\\par}`,
+      '\\vspace{1.20em}',
+    );
+    return lines.join('\n');
   }
 
-  const rows = [];
-  let row = [];
-  let used = 0;
-  for (const q of qs) {
-    const span = quickAnswerSpan(q);
-    if (used > 0 && used + span > MAX_SLOTS) {
-      while (used < MAX_SLOTS) {
-        row.push(null);
-        used += 1;
-      }
-      rows.push(row);
-      row = [];
-      used = 0;
-    }
-    row.push({ q, span });
-    used += span;
-    if (used >= MAX_SLOTS) {
-      rows.push(row);
-      row = [];
-      used = 0;
-    }
-  }
-  if (row.length > 0) {
-    while (used < MAX_SLOTS) {
-      row.push(null);
-      used += 1;
-    }
-    rows.push(row);
-  }
-  const latexRows = rows.map((items) => {
-    const hasTall = items.some((item) => item && quickAnswerHasTallContent(item.q));
-    return items.map(cellLatex).join(' & ') + (hasTall ? ' \\\\[0.78\\baselineskip]' : ' \\\\');
-  });
-  const colSpec = Array.from({ length: MAX_SLOTS }, () => spanSpec(1)).join('');
+  // 문항번호는 연한 회색 별도 셀(마침표 제외, Pretendard)에 가운데 정렬하고,
+  // 답안 셀은 분수까지 커버하는 넉넉한 고정 높이(25pt)를 기본으로 하되
+  // 2줄 이상 긴 수식 등 어쩔 수 없는 경우에만 높이를 자연스럽게 늘린다.
+  // 기본(4열) 답안 셀을 1줄로 넘어서는 수식(예: x=-2)은 TeX 실측 폭 비교로
+  // 즉시 긴수식(단독 행 차지)으로 승격하고, 긴수식만 전폭을 넘을 때 2줄 이상으로 줄바꿈한다.
+  const itemLines = qs.map((q) => quickAnswerItemTex(q));
+  const table = [
+    '\\begingroup',
+    '\\ifdefined\\YggQaSlotWd\\else',
+    '\\newdimen\\YggQaSlotWd',
+    '\\newdimen\\YggQaNumWd',
+    '\\newdimen\\YggQaAnsPad',
+    '\\newdimen\\YggQaRuleWd',
+    '\\newdimen\\YggQaShortAnsInnerWd',
+    '\\newdimen\\YggQaLongAnsInnerWd',
+    '\\newdimen\\YggQaMinRowHt',
+    '\\newdimen\\YggQaVertPad',
+    '\\newdimen\\YggQaRowHt',
+    '\\newcount\\YggQaShortCnt',
+    '\\newcount\\YggQaRowIdx',
+    '\\newbox\\YggQaBoxA',
+    '\\newbox\\YggQaBoxB',
+    '\\newbox\\YggQaBoxC',
+    '\\newbox\\YggQaBoxD',
+    '\\fi',
+    '\\setstretch{1.0}',
+    '\\fontsize{10pt}{13.5pt}\\selectfont',
+    '\\binoppenalty=700',
+    '\\relpenalty=500',
+    '\\setlength{\\parskip}{0pt}',
+    '\\setlength{\\parindent}{0pt}',
+    '\\setlength{\\lineskip}{0pt}',
+    '\\setlength{\\lineskiplimit}{-\\maxdimen}',
+    '\\setlength{\\YggQaRuleWd}{0.4pt}',
+    '\\setlength{\\YggQaSlotWd}{\\dimexpr(\\linewidth-5\\YggQaRuleWd)/4\\relax}',
+    '\\setlength{\\YggQaNumWd}{19.5pt}',
+    '\\setlength{\\YggQaAnsPad}{6pt}',
+    '\\setlength{\\YggQaShortAnsInnerWd}{\\dimexpr\\YggQaSlotWd-\\YggQaNumWd-2\\YggQaAnsPad\\relax}',
+    '\\setlength{\\YggQaLongAnsInnerWd}{\\dimexpr 4\\YggQaSlotWd+3\\YggQaRuleWd-\\YggQaNumWd-2\\YggQaAnsPad\\relax}',
+    '\\setlength{\\YggQaMinRowHt}{24.5pt}',
+    '\\setlength{\\YggQaVertPad}{4.5pt}',
+    '\\YggQaShortCnt=0\\relax',
+    '\\YggQaRowIdx=0\\relax',
+    '\\def\\YggQaUpdateRowHt#1{%',
+    '\\ifdim\\dimexpr\\ht#1+2\\YggQaVertPad\\relax>\\YggQaRowHt',
+    '\\setlength{\\YggQaRowHt}{\\dimexpr\\ht#1+2\\YggQaVertPad\\relax}%',
+    '\\fi',
+    '}%',
+    '\\def\\YggQaRenderCell#1#2#3{%',
+    '\\hbox to \\YggQaNumWd{%',
+    '\\rlap{\\textcolor{black!16}{\\vrule width \\YggQaNumWd height \\YggQaRowHt depth 0pt}}%',
+    '\\vbox to \\YggQaRowHt{\\vfill\\hbox to \\YggQaNumWd{\\hss{\\YggPretendardRegular\\YggPretendardRegularHangul\\bfseries\\fontsize{9.5pt}{11pt}\\selectfont #1}\\hss}\\kern0pt\\vfill}%',
+    '\\hss\\textcolor{black!28}{\\vrule width 0.3pt height \\YggQaRowHt depth 0pt}}%',
+    '\\hbox to \\dimexpr #3\\YggQaSlotWd+#3\\YggQaRuleWd-\\YggQaRuleWd-\\YggQaNumWd\\relax{%',
+    '\\hspace{\\YggQaAnsPad}%',
+    '\\vbox to \\YggQaRowHt{\\vfill\\box#2\\vfill}%',
+    '\\hss}%',
+    '}%',
+    '\\def\\YggQaEmitRowBody#1{%',
+    '\\ifnum\\YggQaRowIdx>0\\relax',
+    '\\ifnum\\YggQaRowIdx=1\\relax\\nopagebreak\\else\\penalty0\\fi',
+    '\\vskip-\\YggQaRuleWd\\relax',
+    '\\fi',
+    '\\nointerlineskip',
+    '\\vbox{%',
+    '\\ifnum\\YggQaRowIdx=0\\relax',
+    '\\hbox to \\linewidth{\\textcolor{black!65}{\\vrule width \\linewidth height 0.75pt depth 0pt}}%',
+    '\\else',
+    '\\hbox to \\linewidth{\\textcolor{black!55}{\\vrule width \\linewidth height \\YggQaRuleWd depth 0pt}}%',
+    '\\fi',
+    '\\nointerlineskip',
+    '\\hbox to \\linewidth{%',
+    '\\textcolor{black!55}{\\vrule width \\YggQaRuleWd height \\YggQaRowHt depth 0pt}%',
+    '#1%',
+    '\\hss\\textcolor{black!55}{\\vrule width \\YggQaRuleWd height \\YggQaRowHt depth 0pt}%',
+    '}%',
+    '\\nointerlineskip',
+    '\\hbox to \\linewidth{\\textcolor{black!55}{\\vrule width \\linewidth height \\YggQaRuleWd depth 0pt}}%',
+    '}\\par',
+    '\\advance\\YggQaRowIdx by 1\\relax',
+    '}%',
+    '\\def\\YggQaFlushShorts{%',
+    '\\ifnum\\YggQaShortCnt>0\\relax',
+    '\\setlength{\\YggQaRowHt}{\\YggQaMinRowHt}%',
+    '\\YggQaUpdateRowHt\\YggQaBoxA',
+    '\\ifnum\\YggQaShortCnt>1\\relax\\YggQaUpdateRowHt\\YggQaBoxB\\fi',
+    '\\ifnum\\YggQaShortCnt>2\\relax\\YggQaUpdateRowHt\\YggQaBoxC\\fi',
+    '\\ifnum\\YggQaShortCnt>3\\relax\\YggQaUpdateRowHt\\YggQaBoxD\\fi',
+    '\\YggQaEmitRowBody{%',
+    '\\ifcase\\YggQaShortCnt',
+    '\\or',
+    '\\YggQaRenderCell{\\YggQaNumA}{\\YggQaBoxA}{4}%',
+    '\\or',
+    '\\YggQaRenderCell{\\YggQaNumA}{\\YggQaBoxA}{1}%',
+    '\\textcolor{black!55}{\\vrule width \\YggQaRuleWd height \\YggQaRowHt depth 0pt}%',
+    '\\YggQaRenderCell{\\YggQaNumB}{\\YggQaBoxB}{3}%',
+    '\\or',
+    '\\YggQaRenderCell{\\YggQaNumA}{\\YggQaBoxA}{1}%',
+    '\\textcolor{black!55}{\\vrule width \\YggQaRuleWd height \\YggQaRowHt depth 0pt}%',
+    '\\YggQaRenderCell{\\YggQaNumB}{\\YggQaBoxB}{1}%',
+    '\\textcolor{black!55}{\\vrule width \\YggQaRuleWd height \\YggQaRowHt depth 0pt}%',
+    '\\YggQaRenderCell{\\YggQaNumC}{\\YggQaBoxC}{2}%',
+    '\\else',
+    '\\YggQaRenderCell{\\YggQaNumA}{\\YggQaBoxA}{1}%',
+    '\\textcolor{black!55}{\\vrule width \\YggQaRuleWd height \\YggQaRowHt depth 0pt}%',
+    '\\YggQaRenderCell{\\YggQaNumB}{\\YggQaBoxB}{1}%',
+    '\\textcolor{black!55}{\\vrule width \\YggQaRuleWd height \\YggQaRowHt depth 0pt}%',
+    '\\YggQaRenderCell{\\YggQaNumC}{\\YggQaBoxC}{1}%',
+    '\\textcolor{black!55}{\\vrule width \\YggQaRuleWd height \\YggQaRowHt depth 0pt}%',
+    '\\YggQaRenderCell{\\YggQaNumD}{\\YggQaBoxD}{1}%',
+    '\\fi',
+    '}%',
+    '\\YggQaShortCnt=0\\relax',
+    '\\fi',
+    '}%',
+    '\\def\\YggQaPushShort#1{%',
+    '\\advance\\YggQaShortCnt by 1\\relax',
+    '\\ifcase\\YggQaShortCnt',
+    '\\or \\def\\YggQaNumA{#1}\\setbox\\YggQaBoxA=\\box0\\relax',
+    '\\or \\def\\YggQaNumB{#1}\\setbox\\YggQaBoxB=\\box0\\relax',
+    '\\or \\def\\YggQaNumC{#1}\\setbox\\YggQaBoxC=\\box0\\relax',
+    '\\else \\def\\YggQaNumD{#1}\\setbox\\YggQaBoxD=\\box0\\relax\\YggQaFlushShorts',
+    '\\fi',
+    '}%',
+    '\\def\\YggQaEmitLongBox#1{%',
+    '\\YggQaFlushShorts',
+    '\\def\\YggQaNumA{#1}%',
+    '\\setbox\\YggQaBoxA=\\box0\\relax',
+    '\\setlength{\\YggQaRowHt}{\\YggQaMinRowHt}%',
+    '\\YggQaUpdateRowHt\\YggQaBoxA',
+    '\\YggQaEmitRowBody{\\YggQaRenderCell{\\YggQaNumA}{\\YggQaBoxA}{4}}%',
+    '}%',
+    '\\long\\def\\YggQaLongParItem#1#2{%',
+    '\\setbox0=\\vbox{%',
+    '\\hsize=\\YggQaLongAnsInnerWd',
+    '\\linewidth=\\hsize',
+    '\\raggedright',
+    '\\setlength{\\parindent}{0pt}%',
+    '\\setlength{\\parskip}{0pt}%',
+    '\\setstretch{1.0}%',
+    '\\fontsize{10pt}{13.5pt}\\selectfont',
+    '\\binoppenalty=700\\relpenalty=500\\relax',
+    '\\noindent #2\\par\\kern0pt',
+    '}%',
+    '\\YggQaEmitLongBox{#1}%',
+    '}%',
+    '\\long\\def\\YggQaForceLongItem#1#2{%',
+    '\\setbox0=\\hbox{\\setstretch{1.0}\\fontsize{10pt}{13.5pt}\\selectfont #2}%',
+    '\\ifdim\\wd0>\\YggQaLongAnsInnerWd',
+    '\\YggQaLongParItem{#1}{#2}%',
+    '\\else',
+    '\\setbox0=\\vbox{\\box0\\kern0pt}%',
+    '\\YggQaEmitLongBox{#1}%',
+    '\\fi',
+    '}%',
+    '\\long\\def\\YggQaAutoItem#1#2{%',
+    '\\setbox0=\\hbox{\\setstretch{1.0}\\fontsize{10pt}{13.5pt}\\selectfont #2}%',
+    '\\ifdim\\wd0>\\YggQaShortAnsInnerWd',
+    '\\ifdim\\wd0>\\YggQaLongAnsInnerWd',
+    '\\YggQaLongParItem{#1}{#2}%',
+    '\\else',
+    '\\setbox0=\\vbox{\\box0\\kern0pt}%',
+    '\\YggQaEmitLongBox{#1}%',
+    '\\fi',
+    '\\else',
+    '\\setbox0=\\vbox{\\box0\\kern0pt}%',
+    '\\YggQaPushShort{#1}%',
+    '\\fi',
+    '}%',
+    itemLines.join('\n'),
+    '\\YggQaFlushShorts',
+    '\\nopagebreak\\vskip-\\YggQaRuleWd\\relax\\nointerlineskip',
+    '\\hbox to \\linewidth{\\textcolor{black!65}{\\vrule width \\linewidth height 0.75pt depth 0pt}}\\par',
+    '\\endgroup',
+  ].join('\n');
+  const heading = [
+    ...(quickAnswerTopText
+      ? [
+        `{\\setstretch{1.0}\\fontsize{16pt}{20pt}\\selectfont\\color{black!62}\\YggPretendardRegular\\YggPretendardRegularHangul ${escapeLatexText(quickAnswerTopText)}}\\par\\nopagebreak`,
+        '\\vspace{6pt}\\nopagebreak',
+      ]
+      : []),
+    '{\\setstretch{1.0}\\YggPretendard\\YggPretendardHangul\\fontsize{16pt}{20pt}\\selectfont\\bfseries 빠른정답}\\par\\nopagebreak',
+    '\\vspace{6pt}\\nopagebreak',
+  ].join('\n');
+  const explanationHeading = [
+    '\\par\\vspace{14pt}\\penalty-300',
+    '{\\setstretch{1.0}\\YggPretendard\\YggPretendardHangul\\fontsize{16pt}{20pt}\\selectfont\\bfseries 해설}\\par\\nopagebreak',
+    '\\vspace{3.5pt}\\nopagebreak',
+    '{\\color{black!55}\\hrule height 0.8pt}\\par\\nopagebreak',
+    '\\vspace{8pt}\\nopagebreak',
+  ].join('\n');
 
-  return [
+  const pageWidth = '210mm-28mm';
+  const page = [
     '\\clearpage',
-    // 빠른정답 페이지는 overlay(가로선/세로 단구분선/페이지박스)와 fancyhdr 페이지번호를
-    //   모두 제거한 '깨끗한' 페이지로 출력.
-    //   - \thispagestyle{empty} : fancyhdr/plain 기본 요소(페이지번호) 제거.
-    //   - \AtBeginShipoutNext{\global\quickanswerpagetrue} : 이 페이지의 shipout 타이밍에
-    //     overlay 초입의 \ifquickanswerpage 가 true 가 되어 overlay 를 전부 스킵.
-    //   - 또한 직전 페이지가 제목페이지였을 경우 \mocktitlepage 플래그도 false 로 리셋.
-    '\\thispagestyle{empty}',
-    '\\AtBeginShipoutNext{\\global\\quickanswerpagetrue\\global\\mocktitlepagefalse}',
-    '\\begin{center}',
-    '{\\Large\\bfseries 빠른정답}\\par',
-    '\\vspace{12pt}',
-    '\\setlength{\\tabcolsep}{2.5pt}',
-    '\\newlength{\\quickanswercellwd}',
-    '\\renewcommand{\\arraystretch}{1.3}',
-    '\\begin{minipage}{0.433\\textwidth}',
-    '\\setlength{\\quickanswercellwd}{\\dimexpr\\linewidth/5-2\\tabcolsep\\relax}',
-    `\\begin{tabular}{${colSpec}}`,
-    '\\hline',
-    latexRows.join('\n'),
-    '\\hline',
-    '\\end{tabular}',
-    '\\end{minipage}',
-    '\\end{center}',
+    // 빠른정답·해설 묶음은 본문과 별도 부록이므로 첫 장부터 1쪽으로 다시 센다.
+    '\\setcounter{page}{1}',
+    // 시험지 overlay 는 끄고, 쪽번호만 남긴다. 플래그는 이 페이지부터 문서 끝까지 유지한다.
+    '\\global\\quickanswerpagetrue',
+    '\\global\\mocktitlepagefalse',
+    // newgeometry 는 용지 크기를 바꾸지 못하므로 본문 폭만 맞춘 뒤 미디어 박스를 A4 로 덮는다.
+    // 짝수 쪽에서도 제본 여백 때문에 오른쪽으로 밀리지 않게 한다.
+    '\\ifdefined\\YggQuickAnswerColWd\\else\\newdimen\\YggQuickAnswerColWd\\fi',
+    `\\setlength{\\YggQuickAnswerColWd}{\\dimexpr${pageWidth}\\relax}`,
+    '\\YggNewGeometryNoClear{layoutwidth=210mm,layoutheight=297mm,left=14mm,textwidth=\\YggQuickAnswerColWd,top=15mm,bottom=16mm,headheight=12pt,headsep=0pt,footskip=10mm}',
+    '\\setlength{\\paperwidth}{210mm}',
+    '\\setlength{\\paperheight}{297mm}',
+    '\\setlength{\\pdfpagewidth}{210mm}',
+    '\\setlength{\\pdfpageheight}{297mm}',
+    '\\setlength{\\evensidemargin}{\\oddsidemargin}',
+    '\\setlength{\\headwidth}{\\textwidth}',
+    '\\fancypagestyle{yggquickanswer}{%',
+    '\\fancyhf{}%',
+    '\\fancyfoot[C]{\\normalsize\\thepage}%',
+    ...(showAssignmentFooter && quickAnswerAcademyName
+      ? [`\\fancyfoot[LO]{{\\YggPretendardRegular\\YggPretendardRegularHangul\\fontsize{9.8pt}{11pt}\\selectfont ${quickAnswerAcademyName}}}%`]
+      : []),
+    ...(showAssignmentFooter && quickAnswerAssignmentName
+      ? [`\\fancyfoot[RE]{{\\fontsize{9.8pt}{11pt}\\selectfont ${quickAnswerAssignmentName}}}%`]
+      : []),
+    '\\renewcommand{\\headrulewidth}{0pt}%',
+    '\\renewcommand{\\footrulewidth}{0pt}%',
+    '}',
+    '\\pagestyle{yggquickanswer}',
+    '\\thispagestyle{yggquickanswer}',
+    '\\raggedbottom',
+    '\\raggedright',
+  ];
+  if (!includeExplanation) {
+    return [
+      ...page,
+      '\\setlength{\\columnsep}{1.7em}',
+      '\\setlength{\\columnseprule}{0pt}',
+      '\\begin{multicols*}{2}',
+      heading,
+      table,
+      '\\end{multicols*}',
+    ].join('\n');
+  }
+  // 정답표가 끝나면 바로 아래에 '해설' 타이틀을 붙이고 같은 단에서 해설을 이어 그린다.
+  return [
+    ...page,
+    '\\setlength{\\columnsep}{1.7em}',
+    '\\setlength{\\columnseprule}{0.4pt}',
+    '\\renewcommand{\\columnseprulecolor}{\\color{black!55}}',
+    '\\begin{multicols*}{2}',
+    heading,
+    table,
+    explanationHeading,
+    '\\begingroup',
+    '\\parindent=0pt\\parskip=0pt\\raggedright',
+    '\\setstretch{1.24}\\fontsize{10pt}{14pt}\\selectfont\\binoppenalty=700\\relpenalty=500',
+    qs.map((q) => explanationEntry(q)).join('\n'),
+    '\\endgroup',
+    '\\end{multicols*}',
   ].join('\n');
 }
 
@@ -11273,11 +12058,15 @@ export function buildVisualQuestionList(questions, {
   disableIndependentSetGrouping = false,
   previewIndependentSetCommonStem = false,
   independentSetSplitCapacity = 0.55,
+  maxQuestionsPerPage = 0,
+  paper = 'B4',
   dependentSetSplitPlan = null,
   stemSizePt = 11,
 } = {}) {
   const qList = Array.isArray(questions) ? questions : [];
   if (profile === 'review_compact' || reviewPdf === true) return qList;
+  const isDenseFlow = parsePositiveInt(maxQuestionsPerPage, 0) >= 99;
+  const denseGaps = denseFlowGapsForPaper(paper);
   // 독립형 세트(independent_set)는 프로필과 무관하게 [15~16] 헤더 + 공통발문 1회 +
   //   하위문항 형태로 "그룹핑"하는 것이 기본 동작이다(PDF 출처 DB 문제와 동일).
   //   오직 disableIndependentSetGrouping 이 명시적으로 켜진 경우에만 그룹핑을 끄고,
@@ -11288,7 +12077,12 @@ export function buildVisualQuestionList(questions, {
         : qList)
     : splitOversizedIndependentSetGroups(
         groupIndependentSetQuestionsForRender(qList),
-        { capacityRatio: independentSetSplitCapacity },
+        {
+          capacityRatio: independentSetSplitCapacity,
+          denseFlow: isDenseFlow,
+          commonStemGapPt: denseGaps.commonStemGapPt,
+          setItemGapPt: denseGaps.setItemGapPt,
+        },
       );
   const splitList = applyDependentSetSplitPlan(grouped, dependentSetSplitPlan, stemSizePt);
   if (profile === 'gyeongsin') {
@@ -11613,6 +12407,7 @@ export function buildDocumentTexSource(questions, options = {}) {
     includeQuestionScore = false,
     questionScoreByQuestionId = null,
     includeQuickAnswer = false,
+    includeExplanation = false,
     // 제목 페이지 인덱스(1-based). 기본은 [1] 이 아니라 빈 배열 → 호출부에서 정함.
     titlePageIndices = [],
     // 제목 페이지별 타이틀/부제 override. [{ page, title, subtitle }, ...]
@@ -11692,6 +12487,8 @@ export function buildDocumentTexSource(questions, options = {}) {
     disableIndependentSetGrouping,
     previewIndependentSetCommonStem,
     independentSetSplitCapacity,
+    maxQuestionsPerPage,
+    paper,
     dependentSetSplitPlan,
     stemSizePt: effectiveStemSizePt,
   });
@@ -11807,7 +12604,10 @@ export function buildDocumentTexSource(questions, options = {}) {
   }
 
   if (isMock && columns >= 2) {
-    const qPerPage = parsePositiveInt(maxQuestionsPerPage, 4);
+    const rawPerPage = parsePositiveInt(maxQuestionsPerPage, 4);
+    const isDenseFlowMode = rawPerPage >= 99;
+    const denseGaps = denseFlowGapsForPaper(paper);
+    const qPerPage = isDenseFlowMode ? 4 : rawPerPage;
     const leftSlots = Math.max(1, Math.ceil(qPerPage / 2));
     const rightSlots = Math.max(1, qPerPage - leftSlots);
 
@@ -11917,10 +12717,49 @@ export function buildDocumentTexSource(questions, options = {}) {
       // 고정 배치도 "실제로 적용된 배치" 를 그대로 되돌려준다.
       //   빈 배열을 돌려주면 클라이언트가 배치를 잃어버리고 기본 균등 배치로
       //   되돌아가, 자동 배치 결과가 새로고침 한 번에 날아간다.
+      assignmentPageColumnCounts = appliedCounts;
       if (effectiveLayoutMeta) {
         effectiveLayoutMeta.slotPlacement = {
           source: 'client',
           pageColumnCounts: appliedCounts,
+        };
+      }
+    } else if (isDenseFlowMode) {
+      const denseHeights = measuredHeights || guardHeights;
+      const denseNormalH = Number.isFinite(measuredNormalH) && measuredNormalH > 0
+        ? measuredNormalH
+        : (Number.isFinite(guardNormalH) && guardNormalH > 0 ? guardNormalH : 650);
+      const rawTitleH = Number(
+        measuredSlotPlan?.titleColumnHeightPt ?? measuredQuestionHeights?.titleColumnHeightPt,
+      );
+      const denseTitleH = Number.isFinite(rawTitleH) && rawTitleH > 0
+        ? rawTitleH
+        : denseNormalH;
+      const columnHeightPtForPage = (pageNo) => {
+        const th = hidePreviewHeader ? null : buildTitleHeaderForPage(pageNo);
+        if (th) return denseTitleH - 8;
+        if (pageNo === 1) return denseNormalH - 6;
+        return denseNormalH;
+      };
+      const densePlan = chunkQuestionsForDenseFlowColumns(
+        visualQList,
+        denseHeights,
+        {
+          columnsPerPage: 2,
+          normalGapPt: denseGaps.normalGapPt,
+          setGapPt: denseGaps.setItemGapPt,
+          columnHeightPtForPage,
+          splitOnElectiveChange: isMockExamProfile,
+          isMockExamProfile,
+          includeSectionLabelReserve: !disableAutoLabels && !isNaesinSchoolProfile,
+        },
+      );
+      pages = densePlan.pages;
+      assignmentPageColumnCounts = densePlan.pageColumnCounts;
+      if (effectiveLayoutMeta) {
+        effectiveLayoutMeta.slotPlacement = {
+          source: 'dense_flow',
+          pageColumnCounts: densePlan.pageColumnCounts,
         };
       }
     } else if (canUseMeasuredPlan) {
@@ -12589,6 +13428,9 @@ export function buildDocumentTexSource(questions, options = {}) {
           pairAnchorOffsets,
           pairAnchor2Pass,
           columnHeightPt: guardColumnHeightPtForPage(pageNo, titleHeader),
+          denseFlow: isDenseFlowMode,
+          denseQuestionGapPt: denseGaps.normalGapPt,
+          denseSetGapPt: denseGaps.setItemGapPt,
         }),
       );
       parts.push('\n');
@@ -12640,6 +13482,11 @@ export function buildDocumentTexSource(questions, options = {}) {
         if (i > 0) {
           if (forcePagePerQuestion) {
             parts.push('\\newpage\n');
+          } else if (simplePerPage >= 99) {
+            const gapPt = areSameContinualSetItems(pageQuestions[i - 1], pageQuestions[i])
+              ? denseFlowGapsForPaper(paper).setItemGapPt
+              : denseFlowGapsForPaper(paper).normalGapPt;
+            parts.push(`\\vspace{${gapPt}pt}\n`);
           } else {
             parts.push('\\vspace{10pt}\n');
           }
@@ -12692,10 +13539,26 @@ export function buildDocumentTexSource(questions, options = {}) {
     }
   }
 
-  // 빠른정답 표: 마지막 페이지 바닥에 '정답표' 를 삽입.
+  // 빠른정답은 본문 뒤에 A4 왼쪽 단으로 붙인다. 쪽 나눔은 함수 안에서 한다.
   if (includeQuickAnswer && qList.length > 0) {
-    parts.push('\\clearpage');
-    parts.push(renderQuickAnswerTableLatex(qList));
+    const rawQaTop = coverPageTexts && typeof coverPageTexts === 'object'
+      ? coverPageTexts.quickAnswerTopText
+      : undefined;
+    const defaultQaTop = String(
+      (coverPageTexts && (coverPageTexts.coverExamTitle || coverPageTexts.headerExamTitle))
+      || titlePageTopText
+      || '',
+    ).trim();
+    const quickAnswerTopText = rawQaTop !== undefined
+      ? String(rawQaTop || '').trim()
+      : defaultQaTop;
+    parts.push(renderQuickAnswerTableLatex(qList, {
+      includeExplanation,
+      quickAnswerTopText,
+      showAssignmentFooter: isAssignmentProfile && logoEnabled,
+      academyName,
+      assignmentName: titlePageTopText,
+    }));
   }
 
   parts.push('\\end{document}\n');

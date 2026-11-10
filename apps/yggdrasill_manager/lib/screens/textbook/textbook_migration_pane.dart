@@ -10,6 +10,7 @@ import '../../services/textbook_book_registry.dart';
 import '../../services/textbook_course_catalog.dart';
 import '../../services/textbook_pdf_service.dart';
 import '../../services/textbook_series_catalog.dart';
+import '../../services/textbook_workflow_service.dart';
 import '../../widgets/latex_text_renderer.dart';
 import 'textbook_course_edit_dialog.dart';
 import 'textbook_crop_extract_dialog.dart';
@@ -41,6 +42,7 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
   final _supabase = Supabase.instance.client;
   final _service = TextbookPdfService();
   final _registry = TextbookBookRegistry();
+  final _workflowService = TextbookWorkflowService();
 
   bool _loadingBooks = false;
   bool _loadingLinks = false;
@@ -254,11 +256,7 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
         final scopes = _unitStageScopesFromPayload(payload);
         final summary = scopes.isEmpty
             ? const _UnitProgressSummary.noUnitInfo()
-            : await _buildUnitProgressSummary(
-                link: link,
-                scopes: scopes,
-                payload: payload,
-              );
+            : await _buildUnitProgressSummary(link: link, scopes: scopes);
         if (!mounted || progressSeq != _unitProgressLoadSeq) return;
         setState(() {
           _unitProgressByScope[key] = summary;
@@ -274,31 +272,55 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
     }
   }
 
+  /// 소단원을 확정 / 진행 / 기존 추출로 센다. 확정·진행은 소단원 작업 상태 표,
+  /// 기존 추출은 본문이 연결된 크롭이 있는데 새 2단계에 들어온 적 없는 소단원이다.
   Future<_UnitProgressSummary> _buildUnitProgressSummary({
     required _MigLink link,
     required List<Map<String, dynamic>> scopes,
-    Map<String, dynamic>? payload,
   }) async {
-    final statuses = await _service.fetchStageStatuses(
-      academyId: link.academyId,
-      bookId: link.fileId,
-      gradeLabel: link.gradeLabel,
-      scopes: scopes,
-    );
-    final completed = statuses.where((s) => s.completedStages >= 3).length;
-    final rawAuto = payload?['auto_analyzed_scopes'];
-    final autoKeys = <String>{
-      if (rawAuto is Map)
-        for (final e in rawAuto.entries)
-          if ('${e.value ?? ''}'.trim().isNotEmpty) '${e.key}'.trim(),
-    };
-    final autoCount = scopes
-        .where((s) => autoKeys.contains('${s['big_order']}/${s['mid_order']}/${s['sub_key']}'))
-        .length;
+    final (workflows, bodies) = await (
+      _workflowService.fetchForBook(
+        academyId: link.academyId,
+        bookId: link.fileId,
+        gradeLabel: link.gradeLabel,
+      ),
+      _workflowService.fetchExtractedBodyCounts(
+        academyId: link.academyId,
+        bookId: link.fileId,
+        gradeLabel: link.gradeLabel,
+        scopes: scopes,
+      ),
+    ).wait;
+    final byKey = {for (final w in workflows) w.stateKey: w};
+    var confirmed = 0;
+    var inProgress = 0;
+    var reviewed = 0;
+    var legacy = 0;
+    for (final s in scopes) {
+      final key = '${s['big_order']}/${s['mid_order']}/${s['sub_key']}';
+      switch (TextbookSubunitStage.of(
+        workflow: byKey[key],
+        extractedBodies: bodies[key]?.bodies ?? 0,
+        reviewedBodies: bodies[key]?.reviewed ?? 0,
+      )) {
+        case TextbookSubunitStage.confirmed:
+          confirmed += 1;
+        case TextbookSubunitStage.inProgress:
+          inProgress += 1;
+        case TextbookSubunitStage.reviewed:
+          reviewed += 1;
+        case TextbookSubunitStage.legacy:
+          legacy += 1;
+        case TextbookSubunitStage.none:
+          break;
+      }
+    }
     return _UnitProgressSummary(
       totalUnits: scopes.length,
-      completedStage3Units: completed,
-      autoAnalyzedUnits: autoCount,
+      confirmedUnits: confirmed,
+      inProgressUnits: inProgress,
+      reviewedUnits: reviewed,
+      legacyUnits: legacy,
     );
   }
 
@@ -687,10 +709,7 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
     await _loadLinks(result.bookId);
   }
 
-  Future<void> _openUnitAuthoring(
-    _MigLink link, {
-    bool autoAnalyzeMode = false,
-  }) async {
+  Future<void> _openUnitAuthoring(_MigLink link) async {
     if (!_canOpenUnitAuthoring(link)) {
       _toast('단원·분석은 migrated 상태의 서버 PDF만 열 수 있습니다.', error: true);
       return;
@@ -703,7 +722,6 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
       bookName: book.name,
       gradeLabel: link.gradeLabel,
       linkId: link.id == 0 ? null : link.id,
-      autoAnalyzeMode: autoAnalyzeMode,
     );
     if (!mounted || _selectedBookId == null) return;
     await _loadLinks(_selectedBookId!);
@@ -1286,24 +1304,36 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
         icon: Icons.warning_amber_outlined,
       );
     }
-    final auto = summary.autoAnalyzedUnits;
-    final legacy = (summary.completedStage3Units - auto).clamp(0, summary.totalUnits);
-    if (auto > 0) {
-      final label = legacy > 0
-          ? '1차 검수완료 $auto · 기존 $legacy / 총 ${summary.totalUnits}'
-          : '1차 검수완료 $auto/${summary.totalUnits}';
-      return _UnitProgressBadge(
-        label: label,
-        color: const Color(0xFF33A373),
-        icon: Icons.verified_rounded,
-      );
-    }
-    final ready = summary.totalUnits > 0 &&
-        summary.completedStage3Units >= summary.totalUnits;
+    final total = summary.totalUnits;
+    final confirmed = summary.confirmedUnits;
+    final inProgress = summary.inProgressUnits;
+    final reviewed = summary.reviewedUnits;
+    final legacy = summary.legacyUnits;
+    final label = '${[
+      '확정 $confirmed',
+      if (inProgress > 0) '진행 $inProgress',
+      if (reviewed > 0) '검수 $reviewed',
+      if (legacy > 0) '기존 $legacy',
+    ].join(' · ')} / $total';
+    final tooltip = [
+      '확정 $confirmed: 본문·정답·해설·AI 풀이·검수를 마치고 확정한 소단원',
+      '진행 $inProgress: 크롭을 확정해 2단계 중인 소단원',
+      '검수 완료 $reviewed: 예전 흐름에서 문항 검수까지 마친 소단원. 단원·크롭 창에서 "이어서 마무리" 후 확정',
+      '기존 추출 $legacy: 예전에 본문(+정답)만 뽑아 둔 소단원. 단원·크롭 창에서 "이어서 마무리"',
+      '미추출 ${(total - confirmed - inProgress - reviewed - legacy).clamp(0, total)}',
+    ].join('\n');
+    final (Color color, IconData icon) = total > 0 && confirmed == total
+        ? (const Color(0xFF33A373), Icons.verified_rounded)
+        : confirmed + inProgress + reviewed > 0
+            ? (const Color(0xFF7CC67C), Icons.timelapse_rounded)
+            : legacy > 0
+                ? (const Color(0xFF9FB3B3), Icons.history_rounded)
+                : (const Color(0xFF8A8A8A), Icons.pending_outlined);
     return _UnitProgressBadge(
-      label: '기존 추출 ${summary.completedStage3Units}/${summary.totalUnits} 완료',
-      color: ready ? const Color(0xFF7CC67C) : const Color(0xFF9FB3B3),
-      icon: ready ? Icons.verified_outlined : Icons.account_tree_outlined,
+      label: label,
+      tooltip: tooltip,
+      color: color,
+      icon: icon,
     );
   }
 
@@ -1367,16 +1397,8 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
           widgets.add(_ActionButton(
             icon: Icons.account_tree_outlined,
             label: '단원·분석',
-            onPressed: () => unawaited(_openUnitAuthoring(link)),
-          ));
-          widgets.add(const SizedBox(width: 6));
-          widgets.add(_ActionButton(
-            icon: Icons.auto_awesome_rounded,
-            label: '자동 분석',
             accent: true,
-            onPressed: () => unawaited(
-              _openUnitAuthoring(link, autoAnalyzeMode: true),
-            ),
+            onPressed: () => unawaited(_openUnitAuthoring(link)),
           ));
         }
       }
@@ -1715,16 +1737,18 @@ class _UnitProgressBadge extends StatelessWidget {
     required this.label,
     required this.color,
     required this.icon,
+    this.tooltip,
   });
 
   final String label;
   final Color color;
   final IconData icon;
+  final String? tooltip;
 
   @override
   Widget build(BuildContext context) {
     return Tooltip(
-      message: label,
+      message: tooltip ?? label,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
         decoration: BoxDecoration(
@@ -1761,27 +1785,43 @@ class _UnitProgressBadge extends StatelessWidget {
 class _UnitProgressSummary {
   const _UnitProgressSummary({
     required this.totalUnits,
-    required this.completedStage3Units,
-    this.autoAnalyzedUnits = 0,
+    required this.confirmedUnits,
+    required this.inProgressUnits,
+    required this.reviewedUnits,
+    required this.legacyUnits,
   })  : errorMessage = null,
         hasUnitInfo = true;
 
   const _UnitProgressSummary.noUnitInfo()
       : totalUnits = 0,
-        completedStage3Units = 0,
-        autoAnalyzedUnits = 0,
+        confirmedUnits = 0,
+        inProgressUnits = 0,
+        reviewedUnits = 0,
+        legacyUnits = 0,
         errorMessage = null,
         hasUnitInfo = false;
 
   const _UnitProgressSummary.error(this.errorMessage)
       : totalUnits = 0,
-        completedStage3Units = 0,
-        autoAnalyzedUnits = 0,
+        confirmedUnits = 0,
+        inProgressUnits = 0,
+        reviewedUnits = 0,
+        legacyUnits = 0,
         hasUnitInfo = true;
 
   final int totalUnits;
-  final int completedStage3Units;
-  final int autoAnalyzedUnits;
+
+  /// 3단계에서 확정한 소단원
+  final int confirmedUnits;
+
+  /// 크롭을 확정해 2단계 중인 소단원(크롭을 다시 연 소단원 포함)
+  final int inProgressUnits;
+
+  /// 예전 흐름에서 본문이 붙은 문항을 모두 검수(정답·품질 승인)한 소단원
+  final int reviewedUnits;
+
+  /// 예전에 본문(+정답)만 뽑아 두고 새 2단계에 들어온 적 없는 소단원
+  final int legacyUnits;
   final String? errorMessage;
   final bool hasUnitInfo;
 

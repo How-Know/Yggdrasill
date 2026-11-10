@@ -248,7 +248,7 @@ test('suryeok carries the type header across a column break', () => {
   assert.match(out.notes, /suryeok_content_group_carried=2/);
 });
 
-test('suryeok concept check never carries a type name', () => {
+test('suryeok concept check keeps its own type name', () => {
   const out = normalizeDetectResult(
     {
       items: [
@@ -269,7 +269,9 @@ test('suryeok concept check never carries a type name', () => {
     { rawPage: 11, displayPage: 11, series: 'suryeok', sectionHint: 'type_problem' },
   );
   assert.equal(out.items[0].content_group_kind, 'type');
-  assert.equal(out.items[1].content_group_kind, 'none');
+  assert.equal(out.items[0].content_group_label, '유형 02');
+  assert.equal(out.items[1].content_group_kind, 'type');
+  assert.equal(out.items[1].content_group_label, '개념 체크');
   assert.equal(out.items[1].content_group_title, '');
 });
 

@@ -925,8 +925,7 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     // 유형 그룹(content_group)은 문항 단위로 판단한다.
     // 개념원리는 B 필수유형(type_example)과 E 특강(special_lecture)만,
     // 개념+유형은 B 필수 문제(essential_problem)만 유형명 그룹을 갖는다.
-    // 수력충전 개념 체크는 유형 아래 딸린 문항이 아니라 지면 끝의 마무리
-    // 확인 문항이라 유형명을 갖지 않는다.
+    // 수력충전 개념 체크는 앞 유형을 이어받지 않고, 유형 이름을 개념 체크로 둔다.
     const groupAllowedCategories = isGaeyu
       ? ['essential_problem']
       : isGaeyuHigh
@@ -941,9 +940,11 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
       : category
         ? !groupAllowedCategories.includes(category)
         : ['mastery', 'concept_drill', 'check', 'exercise'].includes(out.section);
-    const group = groupDisallowed
-      ? { kind: 'none', label: '', title: '', order: null }
-      : normalizeContentGroup(raw.content_group);
+    const group = isSuryeok && category === 'concept_check'
+      ? { kind: 'type', label: '개념 체크', title: '', order: null }
+      : groupDisallowed
+        ? { kind: 'none', label: '', title: '', order: null }
+        : normalizeContentGroup(raw.content_group);
     out.items.push({
       number,
       // 수력충전에 난이도는 없다. 계산 조심 / 생각 더하기 / 조건 확인 배지는

@@ -7,6 +7,13 @@ import { randomUUID } from 'node:crypto';
 import { generateQuestionPreviews } from './problem_bank_preview_service.js';
 import { joinGeminiTextParts } from './problem_bank/extract_engines/vlm/client.js';
 import { runVlmExtraction } from './problem_bank/extract_engines/vlm/runner.js';
+import { createExtractProgressTracker } from './problem_bank/extract_progress.js';
+import {
+  missingProblemNumbers,
+  problemNumberKeySet,
+  textbookOnlyNumbersFromJob,
+} from './problem_bank/textbook_only_numbers.js';
+import { normalizeProblemNumberKey } from './textbook/problem_number_key.js';
 import { syncMockExamPresetsForExam } from './mock_exam/mock_preset.js';
 import { syncMiddleSchoolPresetForDocument } from './problem_bank/naesin_preset.js';
 
@@ -4942,6 +4949,20 @@ async function updateTextbookExtractRunForJob({
   }
 }
 
+async function updateTextbookExtractRunProgress({ jobId, progress }) {
+  if (!jobId) return;
+  const { error } = await supa
+    .from('textbook_pb_extract_runs')
+    .update({ progress })
+    .eq('extract_job_id', jobId);
+  if (error && !/progress|does not exist|could not find/i.test(String(error.message || ''))) {
+    console.warn(
+      '[pb-extract-worker] textbook_run_progress_failed',
+      compact(error.message || error),
+    );
+  }
+}
+
 function isMissingRelationError(error, relationName = '') {
   const code = String(error?.code || '').trim().toUpperCase();
   const message = String(error?.message || error || '');
@@ -5155,6 +5176,9 @@ async function processOneJob(job) {
   let engineMeta = null;
 
   if (hasPdfSource) {
+    const progressTracker = createExtractProgressTracker({
+      write: (progress) => updateTextbookExtractRunProgress({ jobId: job.id, progress }),
+    });
     const vlmResult = await runVlmExtraction({
       job,
       doc,
@@ -5172,8 +5196,10 @@ async function processOneJob(job) {
         } catch (_) {
           // logging 실패는 무시.
         }
+        progressTracker.onEvent(event, payload);
       },
     });
+    await progressTracker.idle();
     built = vlmResult.built;
     parsed = vlmResult.parsed;
     parseMode = 'vlm';
@@ -5409,10 +5435,17 @@ async function processOneJob(job) {
       : {};
   const targetQuestionIds = normalizeTargetQuestionIdsFromJob(job);
   const partialReextract = targetQuestionIds.length > 0;
+  // 빠진 번호만 읽은 런은 쪽 범위 저장과 같은 길로 그 번호만 바꾼다(문서 전체 삭제 금지).
+  const textbookOnlyNumbers =
+    partialReextract === false && hasPdfSource ? textbookOnlyNumbersFromJob(job) : [];
+  const textbookOnlyMode = textbookOnlyNumbers.length > 0;
+  const textbookOnlyMissing = textbookOnlyMode
+    ? missingProblemNumbers(textbookOnlyNumbers, questions)
+    : [];
   const textbookPageScoped =
     partialReextract === false &&
     hasPdfSource &&
-    jobSummary.textbook_page_scoped === true;
+    (jobSummary.textbook_page_scoped === true || textbookOnlyMode);
   let figureJobsQueued = 0;
   let figureJobSeedError = '';
   let partialUpdatedCount = 0;
@@ -5564,17 +5597,37 @@ async function processOneJob(job) {
           .filter(Boolean),
       ),
     );
-    if (scopedQuestionNumbers.length === 0) {
+    if (scopedQuestionNumbers.length === 0 && !textbookOnlyMode) {
       throw new Error('page_scoped_extract_no_question_numbers');
     }
-    const { error: scopedDeleteErr } = await supa
-      .from('pb_questions')
-      .delete()
-      .eq('academy_id', job.academy_id)
-      .eq('document_id', job.document_id)
-      .in('question_number', scopedQuestionNumbers);
-    if (scopedDeleteErr) {
-      throw new Error(`page_scoped_question_delete_failed:${scopedDeleteErr.message}`);
+    if (textbookOnlyMode) {
+      // 같은 번호의 연결 안 된 옛 행("0012" 와 "12" 처럼 표기만 다른 행 포함)만 지운다.
+      const producedKeys = problemNumberKeySet(scopedQuestionNumbers);
+      const staleIds = (existingRows || [])
+        .filter((row) => producedKeys.has(normalizeProblemNumberKey(row?.question_number)))
+        .map((row) => String(row?.id || '').trim())
+        .filter(Boolean);
+      if (staleIds.length > 0) {
+        const { error: staleDeleteErr } = await supa
+          .from('pb_questions')
+          .delete()
+          .eq('academy_id', job.academy_id)
+          .eq('document_id', job.document_id)
+          .in('id', staleIds);
+        if (staleDeleteErr) {
+          throw new Error(`only_numbers_question_delete_failed:${staleDeleteErr.message}`);
+        }
+      }
+    } else {
+      const { error: scopedDeleteErr } = await supa
+        .from('pb_questions')
+        .delete()
+        .eq('academy_id', job.academy_id)
+        .eq('document_id', job.document_id)
+        .in('question_number', scopedQuestionNumbers);
+      if (scopedDeleteErr) {
+        throw new Error(`page_scoped_question_delete_failed:${scopedDeleteErr.message}`);
+      }
     }
     const insertedIds = [];
     const chunkSize = 300;
@@ -5935,7 +5988,7 @@ async function processOneJob(job) {
 
   const reviewRequired = partialReextract
     ? partialLowConfidenceCount > 0
-    : stats.lowConfidenceCount > 0;
+    : stats.lowConfidenceCount > 0 || textbookOnlyMissing.length > 0;
   const jobStatus = reviewRequired ? 'review_required' : 'completed';
   const currentDocStatus = normalizeWhitespace(doc.status || '');
   const docStatus = partialReextract
@@ -5993,6 +6046,9 @@ async function processOneJob(job) {
     reviewThreshold: REVIEW_CONFIDENCE_THRESHOLD,
     partialReextract,
     textbookPageScoped,
+    ...(textbookOnlyMode
+      ? { textbookOnlyNumbers, textbookOnlyMissing }
+      : {}),
     partialTargetCount: targetQuestionIds.length,
     partialUpdatedCount,
     partialLowConfidenceCount,

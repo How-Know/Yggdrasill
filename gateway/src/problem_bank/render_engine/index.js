@@ -232,6 +232,11 @@ function normalizeCoverPageTexts(raw, defaults = {}) {
   const totalPageCount = normalizeWhitespace(src.totalPageCount ?? seed.totalPageCount ?? '');
   const footerLabel = normalizeWhitespace(src.footerLabel ?? seed.footerLabel ?? '');
   const pageStartNumber = normalizeWhitespace(src.pageStartNumber ?? seed.pageStartNumber ?? '');
+  const hasExplicitQuickAnswerTopText =
+    src.quickAnswerTopText !== undefined || seed.quickAnswerTopText !== undefined;
+  const quickAnswerTopText = normalizeWhitespace(
+    src.quickAnswerTopText ?? seed.quickAnswerTopText ?? '',
+  );
   const rawCoverBlank = src.includeCoverBlankPage ?? seed.includeCoverBlankPage;
   const hasExplicitCoverBlank = rawCoverBlank !== undefined && rawCoverBlank !== null && rawCoverBlank !== '';
   const includeCoverBlankPage = hasExplicitCoverBlank
@@ -258,6 +263,7 @@ function normalizeCoverPageTexts(raw, defaults = {}) {
     ...(totalPageCount ? { totalPageCount } : {}),
     ...(footerLabel ? { footerLabel } : {}),
     ...(pageStartNumber ? { pageStartNumber } : {}),
+    ...(hasExplicitQuickAnswerTopText ? { quickAnswerTopText } : {}),
     ...(includeCoverBlankPage !== undefined ? { includeCoverBlankPage } : {}),
   };
 }
