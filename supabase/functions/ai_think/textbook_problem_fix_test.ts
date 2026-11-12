@@ -1,6 +1,10 @@
 import { assert, assertEquals } from 'jsr:@std/assert@1';
 import {
+  anchorFigureWithBlank,
+  applyCommonFigurePlacement,
   buildFigureProposal,
+  commonFigureProposal,
+  emPxForHeader,
   emPxFromTextSample,
   ensureFigureMarkers,
   figureLayoutItem,
@@ -81,6 +85,19 @@ Deno.test('원본 그림을 자산 순서대로 짝짓고, 없는 그림은 새 
     { figure_index: 4, bbox_1k: [500, 100, 900, 500], reason: 'missing' },
   ]);
   assertEquals(buildFigureProposal({ measures: [], emPx: 35, imageWidthPx: 1100, assets: [], currentLayout: null }), null);
+});
+
+Deno.test('다른 조각이 섞인 그림은 같은 번호로 그림만 다시 잘라낸다', () => {
+  const p = buildFigureProposal({
+    measures: parseFigureMeasures([
+      { bbox_1k: [120, 132, 330, 687], placement: 'below_text', align: 'center', v2_state: 'dirty' },
+    ]),
+    emPx: 42,
+    imageWidthPx: 1100,
+    assets: [{ figure_index: 1, path: 'x' }],
+    currentLayout: null,
+  })!;
+  assertEquals(p.crops, [{ figure_index: 1, bbox_1k: [120, 132, 330, 687], reason: 'cut' }]);
 });
 
 Deno.test('원본에서 위아래로 떨어진 두 그림은 가로 묶음을 풀고, 같은 높이대 두 그림은 묶음을 유지한다', () => {
@@ -202,4 +219,67 @@ Deno.test('normalizeTextFix: $ 구분자만 붙인 수정안은 버린다', () =
     currentChoices: [],
   });
   assertEquals(realChange.stem, '해 $l\\parallel m$이므로 $\\angle x=40^{\\circ}$');
+});
+
+Deno.test('그림이 공통 발문에만 있으면 세트 머리에서 본 자리로 배치 위치만 바꾼다', () => {
+  const base = {
+    layout: { version: 1, items: [{ assetKey: 'idx:1', widthEm: 12, position: 'below-stem', anchor: 'center' }], groups: [] },
+    crops: [],
+  };
+  const ctx = { commonStem: '그림과 같이 [그림] 이다.', stem: '물음에 답하여라.', measured: false };
+  const moved = applyCommonFigurePlacement(base, 'right_of_text', ctx)!;
+  assertEquals(moved.layout.items[0].position, 'inline-right');
+  assertEquals(moved.layout.items[0].anchor, 'right');
+  assertEquals(moved.layout.items[0].widthEm, 12);
+  assertEquals(applyCommonFigurePlacement(base, 'none', ctx), base);
+  assertEquals(applyCommonFigurePlacement(base, 'right_of_text', { ...ctx, measured: true }), base);
+  assertEquals(applyCommonFigurePlacement(base, 'right_of_text', { ...ctx, stem: '[그림] 에서' }), base);
+  assertEquals(applyCommonFigurePlacement(base, 'right_of_text', { ...ctx, commonStem: '다음 물음에 답하여라.' }), base);
+  assertEquals(applyCommonFigurePlacement(null, 'right_of_text', ctx), null);
+});
+
+Deno.test('공통 발문 그림이 세트 어디에도 없으면 세트 머리에서 잘라 등록하도록 제안한다', () => {
+  const base = {
+    boxes: [{ bbox_1k: [200, 300, 900, 700] }],
+    placement: 'below_text',
+    commonStem: '다음 좌표평면에 점을 나타내어라.[문단][그림]',
+    stem: 'A(3, 4)',
+    assets: [],
+    currentLayout: null,
+    emPx: 40,
+    headerWidthPx: 1000,
+  };
+  const p = commonFigureProposal(base)!;
+  assertEquals(p.crops, [{ figure_index: 1, bbox_1k: [200, 300, 900, 700], reason: 'missing', source: 'set_header' }]);
+  assertEquals(p.layout.items[0].position, 'below-stem');
+  assertEquals(p.layout.items[0].widthEm, 10);
+  assertEquals(commonFigureProposal({ ...base, assets: [{ figure_index: 1, approved: true }] }), null);
+  assertEquals(commonFigureProposal({ ...base, stem: '[그림] 에서' }), null);
+  assertEquals(commonFigureProposal({ ...base, commonStem: '다음 물음에 답하여라.' }), null);
+  assertEquals(commonFigureProposal({ ...base, boxes: [] }), null);
+});
+
+Deno.test('문항 원본의 글자 크기를 세트 머리 이미지 픽셀로 옮긴다', () => {
+  const em = emPxForHeader({
+    emPx: 40,
+    originalWidthPx: 1100,
+    originalRegion1k: [0, 100, 100, 540],
+    headerWidthPx: 1100,
+    headerRegion1k: [0, 100, 100, 320],
+  });
+  assertEquals(em, 80);
+  assertEquals(emPxForHeader({ emPx: 40, originalWidthPx: 1100, originalRegion1k: null, headerWidthPx: 1100, headerRegion1k: [0, 1, 2, 3] }), null);
+});
+
+Deno.test('본문이 그림과 답란뿐이면 그림을 왼쪽에 붙인다', () => {
+  const p = {
+    layout: { version: 1, items: [{ assetKey: 'idx:1', widthEm: 5, position: 'below-stem', anchor: 'right' }], groups: [] },
+    crops: [],
+  };
+  assertEquals(anchorFigureWithBlank(p, '[그림][문단]([공백:3])')!.layout.items[0].anchor, 'left');
+  assertEquals(anchorFigureWithBlank(p, '[그림]\n[문단]\n( )')!.layout.items[0].anchor, 'left');
+  assertEquals(anchorFigureWithBlank(p, '다음 그림을 보고 답하여라.[문단][그림]'), p);
+  const inline = { ...p, layout: { ...p.layout, items: [{ ...p.layout.items[0], position: 'inline-left', anchor: 'left' }] } };
+  assertEquals(anchorFigureWithBlank(inline, '[그림][문단]([공백:3])')!.layout.items[0].position, 'inline-left');
+  assertEquals(anchorFigureWithBlank(null, '[그림][문단]([공백:3])'), null);
 });

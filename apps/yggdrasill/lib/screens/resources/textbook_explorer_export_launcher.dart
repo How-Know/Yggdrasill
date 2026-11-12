@@ -458,10 +458,8 @@ class _TbExExportPreviewSession {
       context,
       pdfUrl: completed.outputUrl.trim(),
       titleText: '서버 PDF 미리보기 (${questions.length}문항)',
-      onPrintRequested: (filePath) => printProblemBankExportPreviewFile(
-        filePath,
-        preferredPaperSize: settings.paperLabel,
-      ),
+      initialPrintPaperSize: settings.paperLabel,
+      onPrintRequested: printProblemBankExportPreviewFile,
       initialSubjectTitle:
           '${initialPrimary('subjectTitleText') ?? initialFallback('subjectTitleText') ?? '수학 영역'}'
                   .trim()

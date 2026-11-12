@@ -206,6 +206,7 @@ class SolidCapsuleTextActionButton extends StatelessWidget {
     this.onPressed,
     this.selected = false,
     this.horizontalPadding = 12,
+    this.height,
   });
 
   final String? tooltip;
@@ -213,6 +214,10 @@ class SolidCapsuleTextActionButton extends StatelessWidget {
   final VoidCallback? onPressed;
   final bool selected;
   final double horizontalPadding;
+
+  /// 비우면 글자 높이에 세로 패딩 10을 더한다.
+  /// 아이콘 버튼과 줄을 맞출 때는 아이콘 높이 40을 준다.
+  final double? height;
 
   @override
   Widget build(BuildContext context) {
@@ -222,25 +227,35 @@ class SolidCapsuleTextActionButton extends StatelessWidget {
       selected: selected,
     );
 
+    final labelWidget = Text(
+      label,
+      style: TextStyle(
+        fontSize: 16,
+        fontWeight: FontWeight.w600,
+        color: fg,
+      ),
+    );
+    final buttonHeight = height;
     final button = Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: onPressed,
         borderRadius: BorderRadius.circular(999),
-        child: Padding(
-          padding: EdgeInsets.symmetric(
-            horizontal: horizontalPadding,
-            vertical: 10,
-          ),
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              color: fg,
-            ),
-          ),
-        ),
+        child: buttonHeight == null
+            ? Padding(
+                padding: EdgeInsets.symmetric(
+                  horizontal: horizontalPadding,
+                  vertical: 10,
+                ),
+                child: labelWidget,
+              )
+            : SizedBox(
+                height: buttonHeight,
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: horizontalPadding),
+                  child: Center(child: labelWidget),
+                ),
+              ),
       ),
     );
 
@@ -257,16 +272,23 @@ class SolidCapsuleActionButton extends StatefulWidget {
   const SolidCapsuleActionButton({
     super.key,
     this.tooltip,
-    required this.icon,
+    this.icon,
+    this.iconBuilder,
     this.onPressed,
     this.selected = false,
     this.accentWhenSelected = false,
     this.iconSize = 25,
     this.hitSize = 40,
-  });
+  }) : assert(
+          icon != null || iconBuilder != null,
+          'icon 또는 iconBuilder가 필요합니다',
+        );
 
   final String? tooltip;
-  final IconData icon;
+  final IconData? icon;
+
+  /// Material 아이콘 대신 그릴 때. 색과 크기는 버튼이 넘긴다.
+  final Widget Function(Color color, double size)? iconBuilder;
   final VoidCallback? onPressed;
   final bool selected;
   final bool accentWhenSelected;
@@ -332,14 +354,19 @@ class _SolidCapsuleActionButtonState extends State<SolidCapsuleActionButton>
     );
     final enabled = widget.onPressed != null;
     final shellScales = _SolidCapsuleBounceScope.maybeOf(context) != null;
+    final color = enabled ? fg : fg.withValues(alpha: 0.35);
+    final built = widget.iconBuilder?.call(color, widget.iconSize);
 
     Widget icon = SizedBox(
       width: widget.hitSize,
       height: widget.hitSize,
-      child: Icon(
-        widget.icon,
-        size: widget.iconSize,
-        color: enabled ? fg : fg.withValues(alpha: 0.35),
+      child: Center(
+        child: built ??
+            Icon(
+              widget.icon,
+              size: widget.iconSize,
+              color: color,
+            ),
       ),
     );
 

@@ -47,6 +47,10 @@ export interface ReviewImageInput {
   originalRegion1k: number[] | null;
   originalRawPage: number | null;
   setHeaderImageDataUrl: string | null;
+  /** 세트 머리 원본 픽셀 크기와 쪽 좌표(여백 포함). 공통 발문 그림을 세트 머리에서 잘라낼 때 쓴다. */
+  setHeaderSize: { width: number; height: number } | null;
+  setHeaderRegion1k: number[] | null;
+  setHeaderRawPage: number | null;
   /** 해설 좌표 어긋남·미전사·답 불일치 때 보내는 해설 PDF 한 쪽 전체 이미지와 쪽 번호 */
   solutionPageImageDataUrl: string | null;
   solutionPageRawPage: number | null;
@@ -72,11 +76,16 @@ export function parseReviewImages(raw: unknown): Map<string, ReviewImageInput> {
     const original = imageDataUrl(r.original_image_base64, r.original_image_mime);
     const w = Number(r.original_width_px);
     const h = Number(r.original_height_px);
-    const region = Array.isArray(r.original_region_1k) && r.original_region_1k.length === 4 &&
-        r.original_region_1k.every((x) => Number.isFinite(Number(x)))
-      ? (r.original_region_1k as unknown[]).map((x) => Math.round(Number(x)))
-      : null;
+    const region1k = (v: unknown) =>
+      Array.isArray(v) && v.length === 4 && v.every((x) => Number.isFinite(Number(x)))
+        ? (v as unknown[]).map((x) => Math.round(Number(x)))
+        : null;
+    const region = region1k(r.original_region_1k);
     const page = Number(r.original_raw_page);
+    const header = imageDataUrl(r.set_header_image_base64, r.set_header_image_mime);
+    const hw = Number(r.set_header_width_px);
+    const hh = Number(r.set_header_height_px);
+    const hPage = Number(r.set_header_raw_page);
     const solPageImg = imageDataUrl(r.solution_page_image_base64, r.solution_page_image_mime);
     const solPage = Number(r.solution_page_raw_page);
     out.set(cropId, {
@@ -86,7 +95,10 @@ export function parseReviewImages(raw: unknown): Map<string, ReviewImageInput> {
       originalSize: original && w > 0 && h > 0 ? { width: Math.round(w), height: Math.round(h) } : null,
       originalRegion1k: original ? region : null,
       originalRawPage: original && Number.isInteger(page) && page > 0 ? page : null,
-      setHeaderImageDataUrl: imageDataUrl(r.set_header_image_base64, r.set_header_image_mime),
+      setHeaderImageDataUrl: header,
+      setHeaderSize: header && hw > 0 && hh > 0 ? { width: Math.round(hw), height: Math.round(hh) } : null,
+      setHeaderRegion1k: header ? region1k(r.set_header_region_1k) : null,
+      setHeaderRawPage: header && Number.isInteger(hPage) && hPage > 0 ? hPage : null,
       solutionPageImageDataUrl: solPageImg,
       solutionPageRawPage: solPageImg && Number.isInteger(solPage) && solPage > 0 ? solPage : null,
     });
@@ -724,6 +736,7 @@ const SOLUTION_TRANSCRIBE_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검
    - 해설 안에 글자로 옮길 수 없는 그림(좌표평면 그래프, 도형, 수직선, 벤다이어그램 등)이 인쇄돼 있으면 그 자리에 [그림] 만 적습니다. 그림 내용을 글로 설명하지 마세요(그림은 원본에서 잘라 그 자리에 넣습니다). 글자로 된 표는 그림이 아니므로 그대로 옮겨 적습니다.
 2. 잘린 영역에 해당 문항 번호의 정답·풀이가 전혀 보이지 않거나(다른 문항만 보임 등) 읽을 수 없으면 found=false 로 두고 solution_transcribed는 "", solution_answer는 null, note에 원인을 적습니다.
 3. 영역 안에 다른 문항의 풀이 일부가 함께 보이면 그 부분은 제외하고 요청된 문항 번호의 것만 전사합니다.
+   - 이미지가 회색 가로선으로 위아래 두 조각으로 나뉘어 있으면, 아래 조각은 해설지 다음 단(또는 다음 쪽) 맨 위입니다. 위 조각 풀이가 단 끝에서 끊겨 아래 조각으로 이어지면 이어서 끝까지 옮기세요. 아래 조각의 단원 제목 띠·쪽 머리글·다른 문항 번호로 시작하는 풀이는 옮기지 않습니다.
 4. confidence: 글자·수식이 선명하고 완결되면 high, 일부 흐리거나 잘려 추정이 섞이면 medium, 대부분 추정이면 low.`;
 
 const BLIND_SOLVE_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔진의 [2단계: 블라인드 독립 풀이 · 연산 측정 · 품질 검수(학생 시점 V2 렌더 기준)] 담당입니다.
@@ -811,6 +824,8 @@ const RENDER_CHECK_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔
 - 정답 카드에 정답이 보이지 않는다(비어 있음), 또는 해설이 중간에서 끊긴다.
 - 원문 마크업([문단], [박스시작], [표시작], [[공백:1]] 같은 대괄호 문자열)이 변환되지 않고 글자 그대로 노출된다.
   - 주의(빈칸형 문항 · is_fill_in_blank = true): "□ 안에 알맞은 수를 써넣어라", 표·수형도·결론 수식("⇒ 90 = 2 × □ × 5" 등)의 네모 상자(□)는 학생이 답을 채우는 정상적인 빈칸입니다. 네모(□)가 발문이나 식에 들어 있다는 이유로 problem_ok=false 나 fidelity_ok=false 로 판정하지 마세요.
+  - has_solution_original_image = true 이면 원본 해설 이미지가 함께 옵니다(회색 가로선 아래 조각은 해설지 다음 단·다음 쪽에서 이어진 부분). 정답+해설 카드의 해설이 원본 해설보다 짧거나, 풀이 줄·단계 표시(㉠ 등)·소문항 풀이(3), 4) 등)·마지막 결론 문장이 빠졌으면 solution_ok=false, issue_kind "data" 입니다. 원본 해설 이미지 안의 단원 제목 띠·쪽 머리글·다른 문항 풀이와, 글꼴·줄바꿈·수식 표기 차이는 무시하세요.
+  - 해설에서도 "$y=\\square x(\\square\\ne 0)$ 꼴"처럼 계수·값 자리를 일부러 비운 네모(□)는 원본에 있는 표현입니다. V2 카드는 네모를 모두 같은 크기의 정사각형으로 그리므로 크기·모양 차이도 무시하세요. 해설 원본을 볼 수 없으면 네모가 있다는 이유만으로 solution_ok=false 로 판정하지 말고, 같은 해설의 다른 줄에서 그 자리 글자가 분명히 드러나는데(예: "y=□x"가 아니라 "y=ax"여야 하는 문장) 네모만 보일 때만 이상입니다.
 
 [출력]
 - problem_ok: 문항 카드가 학생이 읽기에 온전한가.
@@ -820,6 +835,7 @@ const RENDER_CHECK_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔
   - 글꼴, 줄바꿈 위치, 단 배치, 원문자 모양 같은 조판 차이는 무시합니다.
   - 세트 문항: 원본은 공통 지시문을 세트 머리에 한 번 인쇄합니다. 카드에 공통 지시문이 한 번 보이면 일치, 두 번 보이면 불일치입니다.
   - 원본에서 문항·소문항 아래 '해' 배지로 시작하는 빈칸 풀이 안내는 해설이라 문항 카드에 넣지 않습니다. 문항 카드에 그 안내가 없는 것은 정상이며 누락으로 판정하지 마세요.
+    반대로 그 안내 안의 그림(빈 네모가 달린 수직선 등)이 문항 카드에 들어 있으면 해설이 섞인 것이므로 fidelity_ok=false, issue_kind "figure" 입니다.
 - figure_position_ok: 원본에 그림이 있을 때 카드의 그림이 원본과 같은 자리(본문 오른쪽·왼쪽에 나란히, 본문 아래, 가로 정렬)에 있는가. 원본에 그림이 없으면 true.
 - figure_size_ratio: 원본과 카드 모두에 그림이 있을 때, "본문 글자 크기에 대한 그림 크기"가 카드에서 원본의 몇 배인지(같으면 1.0, 카드 그림이 더 크면 1보다 큼, 예 1.4 · 0.7). 각 이미지 안에서 그림 폭을 본문 글자 크기와 비교해 추정하세요. 그림이 없으면 null.
 - 표·수식·선지 상자는 그림이 아닙니다. 그림 위치·크기 판정(figure_position_ok · figure_size_ratio)에 넣지 마세요. 입력에 has_figure=false 인 문항은 그림이 없는 문항이므로 figure_position_ok=true, figure_size_ratio=null 로 답하세요.
@@ -1716,6 +1732,9 @@ export async function handleTextbookProblemRenderCheck(
       solutionKind: r.solution_kind === 'ai' ? 'ai' : 'textbook',
       originalUrl: imageDataUrl(r.original_image_base64, r.original_image_mime),
       setHeaderUrl: imageDataUrl(r.set_header_image_base64, r.set_header_image_mime),
+      solutionOriginalUrl: r.solution_kind === 'ai'
+        ? null
+        : imageDataUrl(r.solution_original_image_base64, r.solution_original_image_mime),
       isFillInBlank: r.is_fill_in_blank === true,
     }))
     .filter((x): x is {
@@ -1725,6 +1744,7 @@ export async function handleTextbookProblemRenderCheck(
       solutionKind: string;
       originalUrl: string | null;
       setHeaderUrl: string | null;
+      solutionOriginalUrl: string | null;
       isFillInBlank: boolean;
     } => !!x.cropId && (!!x.problemUrl || !!x.answerSolutionUrl))
     .slice(0, 8);
@@ -1773,6 +1793,7 @@ export async function handleTextbookProblemRenderCheck(
           has_problem_card: !!x.problemUrl,
           has_answer_solution_card: !!x.answerSolutionUrl,
           has_original_image: !!x.originalUrl,
+          has_solution_original_image: !!(x.solutionOriginalUrl && x.answerSolutionUrl),
           ...(pbHasFiguresByCrop.get(x.cropId) === false ? { has_figure: false } : {}),
           solution_kind: x.solutionKind,
         };
@@ -1798,6 +1819,10 @@ export async function handleTextbookProblemRenderCheck(
         text: `[crop_id=${x.cropId} · 정답+해설 카드(V2 · ${x.solutionKind === 'ai' ? 'AI 풀이' : '원본 해설'})]`,
       });
       parts.push({ type: 'image', url: x.answerSolutionUrl, detail: 'high' });
+      if (x.solutionOriginalUrl) {
+        parts.push({ type: 'text', text: `[crop_id=${x.cropId} · 원본 해설 이미지(해설 PDF 풀이 영역)]` });
+        parts.push({ type: 'image', url: x.solutionOriginalUrl, detail: 'high' });
+      }
     }
   }
 

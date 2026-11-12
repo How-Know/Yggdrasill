@@ -2,7 +2,7 @@ import { corsHeaders } from '../_shared/cors.ts';
 import { createAdminClient } from '../_shared/supabase.ts';
 
 const RENDER_PROFILE = 'student-single-v1';
-const RENDERER_VERSION = 'pb_render_v4_slotmeasure_01:student-single-v4';
+const RENDERER_VERSION = 'pb_render_v4_colontext_12:student-single-v5';
 const SIGNED_URL_SECONDS = 10 * 60;
 const DEFAULT_WARM_BATCH_MAX = 40;
 

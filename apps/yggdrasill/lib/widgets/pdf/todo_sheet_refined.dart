@@ -511,20 +511,12 @@ Future<List<int>> _renderTodoSheetRefined(_TodoSheetPayload payload) async {
         flowBottom = ry + 13;
       }
     } else {
-      final nameCounts = <String, int>{};
-      for (final f in rec.flows) {
-        final key = '${f.flowName}|${f.bookName ?? ''}';
-        nameCounts[key] = (nameCounts[key] ?? 0) + 1;
-      }
       String flowLabel(LessonRecordFlowProgress f) {
         final flowName = f.flowName.trim().isEmpty ? 'Flow' : f.flowName.trim();
         final book = (f.bookName ?? '').trim();
         if (book.isEmpty) return flowName;
         final grade = (f.gradeLabel ?? '').trim();
-        final dup = (nameCounts['${f.flowName}|${f.bookName ?? ''}'] ?? 0) > 1;
-        return dup && grade.isNotEmpty
-            ? '$flowName · $book ($grade)'
-            : '$flowName · $book';
+        return grade.isEmpty ? '$flowName · $book' : '$flowName · $book ($grade)';
       }
 
       void drawFlowItem(

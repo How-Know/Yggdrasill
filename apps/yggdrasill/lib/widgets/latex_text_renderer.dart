@@ -7,6 +7,8 @@ import 'package:flutter_math_fork/flutter_math.dart';
 enum DisplayMathOverflow { scroll, scaleDown }
 
 class LatexTextRenderer extends StatelessWidget {
+  static const String v2TextFontFamily = 'KoPubWorldBatangPro';
+
   static final RegExp _displayRegex = RegExp(
     r'\$\$([\s\S]*?)\$\$',
     dotAll: true,
@@ -34,6 +36,9 @@ class LatexTextRenderer extends StatelessWidget {
   final double displayMathScale;
   final DisplayMathOverflow displayMathOverflow;
 
+  /// `$…$`도 문장 속 수식으로 그린다.
+  final bool dollarMath;
+
   const LatexTextRenderer(
     this.text, {
     super.key,
@@ -49,6 +54,7 @@ class LatexTextRenderer extends StatelessWidget {
     this.fractionInlineMathScale = _defaultFractionInlineMathScale,
     this.displayMathScale = _defaultDisplayMathScale,
     this.displayMathOverflow = DisplayMathOverflow.scroll,
+    this.dollarMath = false,
   });
 
   static bool hasLatex(String raw) {
@@ -56,11 +62,56 @@ class LatexTextRenderer extends StatelessWidget {
     return _displayRegex.hasMatch(raw) || _inlineRegex.hasMatch(raw);
   }
 
+  /// `$…$`를 `\(…\)`로 바꾼다. `$$…$$`·`\(…\)`는 그대로 두고, 닫히지 않은 `$`는 글자로 남긴다.
+  static String inlineDollarMath(String raw) {
+    if (!raw.contains(r'$')) return raw;
+    final out = StringBuffer();
+    var i = 0;
+    while (i < raw.length) {
+      final close = raw.startsWith(r'$$', i)
+          ? r'$$'
+          : raw.startsWith(r'\(', i)
+              ? r'\)'
+              : null;
+      if (close != null) {
+        final end = raw.indexOf(close, i + 2);
+        if (end < 0) {
+          out.write(raw.substring(i));
+          break;
+        }
+        out.write(raw.substring(i, end + close.length));
+        i = end + close.length;
+        continue;
+      }
+      if (raw[i] == r'$') {
+        final end = raw.indexOf(r'$', i + 1);
+        if (end < 0) {
+          out.write(raw.substring(i));
+          break;
+        }
+        out
+          ..write(r'\(')
+          ..write(raw.substring(i + 1, end))
+          ..write(r'\)');
+        i = end + 1;
+        continue;
+      }
+      out.write(raw[i]);
+      i += 1;
+    }
+    return out.toString();
+  }
+
   @override
   Widget build(BuildContext context) {
-    final effectiveStyle = DefaultTextStyle.of(context).style.merge(style);
-    final displayMathTextStyle =
-        _scaleMathTextStyle(effectiveStyle, displayMathScale);
+    final text = dollarMath ? inlineDollarMath(this.text) : this.text;
+    final mergedStyle = DefaultTextStyle.of(context).style.merge(style);
+    final effectiveStyle = hasLatex(text)
+        ? mergedStyle.copyWith(fontFamily: v2TextFontFamily)
+        : mergedStyle;
+    final displayMathTextStyle = _mathEngineStyle(
+      _scaleMathTextStyle(effectiveStyle, displayMathScale),
+    );
     if (!enableDisplayMath || !_displayRegex.hasMatch(text)) {
       return _buildInlineText(text, effectiveStyle);
     }
@@ -69,7 +120,7 @@ class LatexTextRenderer extends StatelessWidget {
     final children = <Widget>[];
     for (final part in parts) {
       if (part.isDisplayMath) {
-        final formula = _normalizeColonCommand(part.content.trim());
+        final formula = _normalizeFormulaForRender(part.content.trim());
         if (formula.isEmpty) {
           continue;
         }
@@ -134,7 +185,7 @@ class LatexTextRenderer extends StatelessWidget {
       }
 
       final fullMatch = match.group(0) ?? '';
-      final formula = _normalizeColonCommand((match.group(1) ?? '').trim());
+      final formula = _normalizeFormulaForRender((match.group(1) ?? '').trim());
       if (formula.isEmpty) {
         spans.add(TextSpan(text: fullMatch));
       } else {
@@ -144,11 +195,15 @@ class LatexTextRenderer extends StatelessWidget {
         final nestedFraction = !useDisplayLayout &&
             fractionFormula &&
             RegExp(r'\\left|\\right').hasMatch(formula);
-        final scaledStyle = _scaleMathTextStyle(
-          effectiveStyle,
-          useDisplayLayout
-              ? displayMathScale
-              : (fractionFormula ? fractionInlineMathScale : inlineMathScale),
+        final scaledStyle = _mathEngineStyle(
+          _scaleMathTextStyle(
+            effectiveStyle,
+            useDisplayLayout
+                ? displayMathScale
+                : (fractionFormula
+                    ? fractionInlineMathScale
+                    : inlineMathScale),
+          ),
         );
         final baselineShift = useDisplayLayout
             ? 0.0
@@ -161,16 +216,21 @@ class LatexTextRenderer extends StatelessWidget {
                 ? PlaceholderAlignment.middle
                 : PlaceholderAlignment.baseline,
             baseline: TextBaseline.alphabetic,
-            child: Transform.translate(
-              offset: Offset(0, baselineShift),
-              child: Math.tex(
-                formula,
-                textStyle: scaledStyle,
-                mathStyle: mathStyle,
-                onErrorFallback: (dynamic _) => _buildMathFallback(
+            child: Padding(
+              padding: EdgeInsets.symmetric(
+                vertical: useDisplayLayout ? 3.0 : 0.0,
+              ),
+              child: Transform.translate(
+                offset: Offset(0, baselineShift),
+                child: Math.tex(
                   formula,
-                  scaledStyle,
+                  textStyle: scaledStyle,
                   mathStyle: mathStyle,
+                  onErrorFallback: (dynamic _) => _buildMathFallback(
+                    formula,
+                    scaledStyle,
+                    mathStyle: mathStyle,
+                  ),
                 ),
               ),
             ),
@@ -236,11 +296,25 @@ class LatexTextRenderer extends StatelessWidget {
     return base.copyWith(fontSize: fontSize * scale);
   }
 
+  /// `flutter_math_fork`는 [FontWeight.normal]이 아니면 수식 기울임을 끄고
+  /// 정자체 `KaTeX_Main`으로 그린다. 주변 글자 두께는 유지하고 수식 글리프만
+  /// 보통 굵기로 넘겨 V2와 같은 기울임 변수가 나오게 한다.
+  TextStyle _mathEngineStyle(TextStyle style) {
+    if (style.fontWeight == null || style.fontWeight == FontWeight.normal) {
+      return style;
+    }
+    return style.copyWith(fontWeight: FontWeight.normal);
+  }
+
   Widget _buildMathFallback(
     String formula,
     TextStyle mathTextStyle, {
     required MathStyle mathStyle,
   }) {
+    final arrayTable = _buildArrayTableFallback(formula, mathTextStyle);
+    if (arrayTable != null) return arrayTable;
+    final textFraction = _buildTextFractionFallback(formula, mathTextStyle);
+    if (textFraction != null) return textFraction;
     final normalized = _normalizeFormulaForRetry(formula);
     if (normalized.isNotEmpty && normalized != formula) {
       return Math.tex(
@@ -248,15 +322,157 @@ class LatexTextRenderer extends StatelessWidget {
         textStyle: mathTextStyle,
         mathStyle: mathStyle,
         onErrorFallback: (dynamic _) =>
+            _buildArrayTableFallback(normalized, mathTextStyle) ??
             Text(_plainFallbackText(formula), style: mathTextStyle),
       );
     }
     return Text(_plainFallbackText(formula), style: mathTextStyle);
   }
 
+  Widget? _buildArrayTableFallback(String formula, TextStyle style) {
+    final m = RegExp(
+      r'^\s*\\begin\{array\}\{([^}]*)\}([\s\S]*?)\\end\{array\}\s*$',
+    ).firstMatch(formula);
+    if (m == null) return null;
+    final spec = (m.group(1) ?? '').replaceAll(' ', '');
+    final body = (m.group(2) ?? '').trim();
+    if (body.isEmpty) return null;
+
+    final vBorderAfterCol = <int>{};
+    var colIndex = -1;
+    for (var i = 0; i < spec.length; i += 1) {
+      final ch = spec[i];
+      if (ch == 'c' || ch == 'l' || ch == 'r') {
+        colIndex += 1;
+      } else if (ch == '|' && colIndex >= 0) {
+        vBorderAfterCol.add(colIndex);
+      }
+    }
+
+    final rawRows = body.split(r'\\');
+    final rows = <List<String>>[];
+    final hBorderBeforeRow = <int>{};
+    for (var rawRow in rawRows) {
+      var r = rawRow.trim();
+      if (r.isEmpty) continue;
+      while (r.startsWith(r'\hline')) {
+        hBorderBeforeRow.add(rows.length);
+        r = r.substring(6).trim();
+      }
+      if (r.isEmpty) continue;
+      rows.add([for (final cell in r.split('&')) cell.trim()]);
+    }
+    if (rows.isEmpty) return null;
+
+    var maxCols = 0;
+    for (final r in rows) {
+      if (r.length > maxCols) maxCols = r.length;
+    }
+    if (maxCols == 0) return null;
+
+    final borderColor = (style.color ?? const Color(0xFFEAF2F2))
+        .withValues(alpha: 0.55);
+    final borderSide = BorderSide(color: borderColor, width: 1.1);
+    final cellStyle = style.copyWith(fontFamily: v2TextFontFamily, height: 1.15);
+
+    return Table(
+      defaultColumnWidth: const IntrinsicColumnWidth(),
+      defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+      children: [
+        for (var ri = 0; ri < rows.length; ri += 1)
+          TableRow(
+            decoration: hBorderBeforeRow.contains(ri)
+                ? BoxDecoration(border: Border(top: borderSide))
+                : null,
+            children: [
+              for (var ci = 0; ci < maxCols; ci += 1)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 5,
+                  ),
+                  decoration: vBorderAfterCol.contains(ci)
+                      ? BoxDecoration(border: Border(right: borderSide))
+                      : null,
+                  alignment: Alignment.center,
+                  child: ci < rows[ri].length && rows[ri][ci].isNotEmpty
+                      ? Math.tex(
+                          rows[ri][ci],
+                          textStyle: _mathEngineStyle(cellStyle),
+                          mathStyle: MathStyle.text,
+                          onErrorFallback: (_) =>
+                              Text(_plainFallbackText(rows[ri][ci]), style: cellStyle),
+                        )
+                      : const SizedBox.shrink(),
+                ),
+            ],
+          ),
+      ],
+    );
+  }
+
+  String _normalizeFormulaForRender(String raw) {
+    final input = _normalizeElasticDelimitersForFlutter(
+      _normalizeColonCommand(raw.trim()),
+    );
+    if (input.isEmpty) return input;
+    final match = RegExp(
+      r'^\(?\s*(\\(?:dfrac|tfrac|frac)\s*\{\s*(?:\\(?:text|mathrm)\s*\{[^{}]+\}|[^{}]+)\s*\}\s*\{\s*(?:\\(?:text|mathrm)\s*\{[^{}]+\}|[^{}]+)\s*\})\s*\)?$',
+    ).firstMatch(input);
+    if (match == null) return input;
+    final hasParens = input.startsWith('(') && input.endsWith(')');
+    final fraction = (match.group(1) ?? input).replaceFirst(
+      RegExp(r'^\\(?:dfrac|tfrac|frac)\b'),
+      r'\dfrac',
+    );
+    if (!hasParens) return fraction;
+    return '\\left($fraction\\right)';
+  }
+
+  Widget? _buildTextFractionFallback(String formula, TextStyle style) {
+    final input = formula.trim();
+    final match = RegExp(
+      r'^(?:\\left)?\(?\s*\\(?:dfrac|tfrac|frac)\s*\{\s*(?:\\(?:text|mathrm)\s*\{([^{}]+)\}|([^{}]+))\s*\}\s*\{\s*(?:\\(?:text|mathrm)\s*\{([^{}]+)\}|([^{}]+))\s*\}\s*(?:\\right)?\)?$',
+    ).firstMatch(input);
+    if (match == null) return null;
+    final numerator = (match.group(1) ?? match.group(2) ?? '').trim();
+    final denominator = (match.group(3) ?? match.group(4) ?? '').trim();
+    if (numerator.isEmpty || denominator.isEmpty) return null;
+    final showParens = input.startsWith('(') || input.startsWith(r'\left(');
+    final textStyle = style.copyWith(height: 1.05);
+    final fraction = IntrinsicWidth(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(numerator, textAlign: TextAlign.center, style: textStyle),
+          Container(
+            height: 1,
+            margin: const EdgeInsets.symmetric(vertical: 1.5),
+            color: textStyle.color ?? Colors.black,
+          ),
+          Text(denominator, textAlign: TextAlign.center, style: textStyle),
+        ],
+      ),
+    );
+    if (!showParens) return fraction;
+    final parenStyle = style.copyWith(fontSize: (style.fontSize ?? 14) * 2.35);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Text('(', style: parenStyle),
+        fraction,
+        Text(')', style: parenStyle),
+      ],
+    );
+  }
+
   String _normalizeFormulaForRetry(String raw) {
     if (raw.isEmpty) return raw;
-    var out = _normalizeUnicodeScript(_normalizeColonCommand(raw))
+    var out = _normalizeElasticDelimitersForFlutter(
+      _normalizeUnicodeScript(_normalizeColonCommand(raw)),
+    )
         .replaceAll('×', r'\times ')
         .replaceAll('÷', r'\div ')
         .replaceAll('·', r'\cdot ')
@@ -281,6 +497,25 @@ class LatexTextRenderer extends StatelessWidget {
         .replaceAll('⅞', r'\frac{7}{8}');
     out = _dropUnmatchedCurlyBraces(out);
     return out.replaceAll(RegExp(r'\s+'), ' ').trim();
+  }
+
+  String _normalizeElasticDelimitersForFlutter(String raw) {
+    if (raw.isEmpty) return raw;
+    return raw.replaceAllMapped(
+      RegExp(r'\\left\s*([\[\]\(\)\{\}\|.])'),
+      (m) {
+        final delimiter = m.group(1) ?? '';
+        if (delimiter == '.') return '';
+        return delimiter;
+      },
+    ).replaceAllMapped(
+      RegExp(r'\\right\s*([\[\]\(\)\{\}\|.])'),
+      (m) {
+        final delimiter = m.group(1) ?? '';
+        if (delimiter == '.') return '';
+        return delimiter;
+      },
+    );
   }
 
   String _normalizeColonCommand(String raw) {

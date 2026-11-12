@@ -55,6 +55,9 @@ class CommonStemFix {
 String _squash(String s) => s.replaceAll(RegExp(r'\s+|\[문단\]'), '');
 
 /// 서술형으로 봐야 하는 표현(Edge `ESSAY_PATTERN` 과 같다)
+/// 발문이 선지를 가리키는 표현(있으면 주관식으로 낼 수 없다)
+final kChoiceReferencePattern = RegExp(r'다음\s*중|보기|옳지\s*않은|틀린|알맞지\s*않은|아닌\s*것|고르|짝\s*지은|모두\s*찾');
+
 final kEssayPattern = RegExp(r'서술하(시오|여라)|과정을\s*(쓰|서술|설명)|풀이\s*과정|이유를\s*(쓰|설명|서술)|설명하(시오|여라)|증명하(시오|여라)');
 
 /// 빈칸형 문항 판별: 발문·공통발문·수식에 빈칸 채우기 지시나 네모(□, [[공백:n]], box{~~}, \square, \Box 등)가 있는 문항(Edge `FILL_IN_BLANK_PATTERN` 과 같다).
@@ -289,6 +292,53 @@ List<int>? cropBoxToPageRegion(List<int> region1k, List<int> box, {int margin = 
     region1k[0] + (b2 * h / 1000).ceil(),
     region1k[1] + (b3 * w / 1000).ceil(),
   ];
+}
+
+/// 해설지 풀이 머리(문항 번호) 좌표 한 개. [region1k] 는 풀이 영역(없으면 번호 영역).
+class SolutionRefBox {
+  const SolutionRefBox({required this.rawPage, required this.numberTop, required this.region1k});
+
+  final int rawPage;
+  final int numberTop;
+  final List<int> region1k;
+
+  int get column => (region1k[1] + region1k[3]) / 2 < 500 ? 0 : 1;
+}
+
+/// 풀이 영역이 단 맨 아래(ymax >= 980)까지 닿았고, 다음 단(왼쪽 단이면 같은 쪽 오른쪽 단, 오른쪽 단이면 다음 쪽 왼쪽 단)의
+/// 첫 번호가 평소 단 첫 번호 자리보다 눈에 띄게 아래에 있으면, 그 위의 번호 없는 부분을 이어진 풀이로 본다.
+/// 평소 자리는 [refs] 에 있는 단마다의 첫 번호 높이의 중앙값이다. 다음 단에 번호가 하나도 없으면 판단하지 않는다.
+TextbookSolutionSegment? solutionContinuationSegment({
+  required int rawPage,
+  required List<int> region1k,
+  required List<SolutionRefBox> refs,
+}) {
+  if (region1k.length != 4 || region1k[2] < 980) return null;
+  final firstTop = <String, int>{};
+  final xRange = <String, List<int>>{};
+  for (final r in refs) {
+    if (r.region1k.length != 4) continue;
+    final k = '${r.rawPage}|${r.column}';
+    final cur = firstTop[k];
+    if (cur == null || r.numberTop < cur) firstTop[k] = r.numberTop;
+    final x = xRange[k];
+    xRange[k] = x == null
+        ? [r.region1k[1], r.region1k[3]]
+        : [r.region1k[1] < x[0] ? r.region1k[1] : x[0], r.region1k[3] > x[1] ? r.region1k[3] : x[1]];
+  }
+  if (firstTop.length < 3) return null;
+  final tops = firstTop.values.toList()..sort();
+  final baseline = tops[tops.length ~/ 2];
+  final col = (region1k[1] + region1k[3]) / 2 < 500 ? 0 : 1;
+  final nextPage = col == 0 ? rawPage : rawPage + 1;
+  final nextKey = '$nextPage|${col == 0 ? 1 : 0}';
+  final nextTop = firstTop[nextKey];
+  if (nextTop == null || nextTop - baseline < 25) return null;
+  final x = xRange[nextKey]!;
+  final ymin = (baseline - 12).clamp(0, 1000);
+  final ymax = nextTop - 14;
+  if (ymax <= ymin) return null;
+  return TextbookSolutionSegment(nextPage, [ymin, x[0], ymax, x[1]]);
 }
 
 /// 원본 해설에 그림이 있을 수 있다는 표시: [그림] 표시, "그림과 같다", "그래프는 오른쪽과 같다" 등.
@@ -680,6 +730,7 @@ class TextbookProblemReviewItem {
     this.pbAllowObjective = false,
     this.pbAllowSubjective = false,
     this.pbAllowEssay = false,
+    this.pbObjectiveChoiceCount = 0,
     this.fixProposal = const {},
     this.engineHoldNote,
     this.engineHeldAt,
@@ -696,6 +747,8 @@ class TextbookProblemReviewItem {
     this.answerImagePath = '',
     this.solutionFigureAssets = const [],
     this.solutionFiguresCheckedAt,
+    this.solutionExtractedAt,
+    this.solutionContinuations = const [],
   });
 
   factory TextbookProblemReviewItem.fromJson(Map<String, dynamic> m) {
@@ -747,6 +800,9 @@ class TextbookProblemReviewItem {
       pbAllowObjective: m['pb_allow_objective'] == true,
       pbAllowSubjective: m['pb_allow_subjective'] == true,
       pbAllowEssay: m['pb_allow_essay'] == true,
+      pbObjectiveChoiceCount: m['objective_choices'] is List
+          ? [for (final c in m['objective_choices'] as List) if (c is Map && '${c['text'] ?? ''}'.trim().isNotEmpty) c].length
+          : 0,
       fixProposal: m['fix_proposal'] is Map ? Map<String, dynamic>.from(m['fix_proposal'] as Map) : const <String, dynamic>{},
       engineHoldNote: m['engine_hold_note'] is String ? '${m['engine_hold_note']}' : null,
       engineHeldAt: m['engine_held_at'] is String ? DateTime.tryParse('${m['engine_held_at']}') : null,
@@ -766,6 +822,13 @@ class TextbookProblemReviewItem {
       solutionFigureAssets: mapList(m['solution_figure_assets']),
       solutionFiguresCheckedAt:
           m['solution_figures_checked_at'] is String ? DateTime.tryParse('${m['solution_figures_checked_at']}') : null,
+      solutionExtractedAt:
+          m['solution_extracted_at'] is String ? DateTime.tryParse('${m['solution_extracted_at']}') : null,
+      solutionContinuations: [
+        for (final c in mapList(m['solution_continuations']))
+          if ((c['raw_page'] as num?) != null && ints(c['region_1k']).length == 4)
+            TextbookSolutionSegment((c['raw_page'] as num).toInt(), ints(c['region_1k'])),
+      ],
       solutionTranscribed: m['solution_transcribed'] is String
           ? cleanSolutionTranscribedText(
               '${m['solution_transcribed']}',
@@ -827,6 +890,15 @@ class TextbookProblemReviewItem {
 
   /// [ymin, xmin, ymax, xmax] 0..1000 — 해설 PDF 쪽 안의 풀이 영역(content 우선, 없으면 번호 영역)
   final List<int> solutionRegion1k;
+
+  /// 풀이가 단 맨 아래에서 끊겨 다음 단(같은 쪽 오른쪽 단 또는 다음 쪽 왼쪽 단) 맨 위로 이어지는 부분
+  final List<TextbookSolutionSegment> solutionContinuations;
+
+  /// 해설 PDF 에서 잘라 이어 붙일 풀이 조각(첫 조각은 저장된 해설 영역)
+  List<TextbookSolutionSegment> get solutionSegments => [
+        if (canCropSolution) TextbookSolutionSegment(solutionRawPage!, solutionRegion1k),
+        if (canCropSolution) ...solutionContinuations,
+      ];
   final String stem;
   final String commonStem;
   final String setType;
@@ -874,6 +946,9 @@ class TextbookProblemReviewItem {
   final bool pbAllowSubjective;
   final bool pbAllowEssay;
 
+  /// 문제은행 객관식 보기 수(원문 선지 또는 AI 가 만든 보기)
+  final int pbObjectiveChoiceCount;
+
   /// 문제은행에 표시된 유형: objective | subjective | essay | '' (미분류). 문제은행 화면 배지와 같은 기준.
   String get currentQuestionKind {
     final t = questionType.trim();
@@ -898,13 +973,34 @@ class TextbookProblemReviewItem {
     return const {'objective', 'subjective', 'essay'}.contains(v) ? v : null;
   }
 
+  /// 채점 정답의 선지 번호 수(①, ④ → 2). 원문자가 아닌 글자가 섞이면 0.
+  int get answerChoiceCount {
+    final a = existingAnswer.replaceAll(RegExp(r'[\s,，、ㆍ·/]'), '');
+    if (a.isEmpty || !RegExp(r'^[①②③④⑤⑥⑦⑧⑨⑩]+$').hasMatch(a)) return 0;
+    return a.runes.toSet().length;
+  }
+
+  /// 객관식 문항을 주관식으로도 낼 수 있는가: 답이 선지 하나이고, 발문이 선지를 가리키지 않으며(다음 중·옳은 것 등),
+  /// 선지가 ㄱ·ㄴ·ㄷ 조합이 아니다.
+  bool get subjectiveAlsoPossible {
+    if (rawChoices.length < 2) return true;
+    if (essayKeyword != null || answerChoiceCount != 1) return false;
+    if (kChoiceReferencePattern.hasMatch('$commonStem\n$displayStem')) return false;
+    final picked = rawChoices.firstWhere(
+      (c) => '${c['label'] ?? ''}'.trim() == existingAnswer.replaceAll(RegExp(r'\s'), ''),
+      orElse: () => const <String, dynamic>{},
+    );
+    final text = '${picked['text'] ?? ''}'.trim();
+    return text.isNotEmpty && !RegExp(r'^[ㄱ-ㅎ](\s*[,，]\s*[ㄱ-ㅎ])*$').hasMatch(text);
+  }
+
   /// 표시된 유형이 규칙 기준과 다르거나, 그 유형에 필요한 허용 표시가 빠져 있는가
   bool get questionKindMismatch {
     if (pbQuestionId.isEmpty) return false;
     final want = expectedQuestionKind;
     if (currentQuestionKind != want) return true;
     return switch (want) {
-      'objective' => !pbAllowObjective,
+      'objective' => !pbAllowObjective || (answerChoiceCount > 0 && pbAllowSubjective != subjectiveAlsoPossible),
       'essay' => !pbAllowSubjective || !pbAllowEssay || pbAllowObjective,
       _ => !pbAllowSubjective || pbAllowEssay,
     };
@@ -944,6 +1040,13 @@ class TextbookProblemReviewItem {
   /// 해설 그림 찾기를 마친 시각(그림이 없어도 기록)
   final DateTime? solutionFiguresCheckedAt;
 
+  /// 원본 해설을 마지막으로 전사(추출)한 시각
+  final DateTime? solutionExtractedAt;
+
+  /// 렌더 검수 뒤에 해설을 다시 전사해, 남은 렌더 판정이 지금 카드와 다를 수 있다.
+  bool get renderCheckStale =>
+      renderCheckedAt != null && solutionExtractedAt != null && solutionExtractedAt!.isAfter(renderCheckedAt!);
+
   bool get hasAnswerImage => answerKind == 'image' && answerImageBucket.isNotEmpty && answerImagePath.isNotEmpty;
 
   /// 정답+해설 카드 캐시 키 원문(글자·그림 정답·해설 그림이 바뀌면 달라진다)
@@ -951,12 +1054,16 @@ class TextbookProblemReviewItem {
       '${hasAnswerImage ? answerImagePath : ''}\n'
       '${solutionFigureAssets.map((a) => '${a['path']}:${a['width_em']}').join(',')}';
 
-  /// 원본 해설에 그림이 있을 수 있는데(그림을 가리키는 문장·[그림] 표시) 아직 해설 PDF 에서 그림을 찾지 않은 문항
+  /// 원본 해설에 그림이 있을 수 있는데(그림을 가리키는 문장·[그림] 표시, 또는 렌더 검수가 해설 그림 누락으로 판정)
+  /// 아직 해설 PDF 에서 그림을 찾지 않은 문항
   bool get needsSolutionFigures =>
       solutionFiguresCheckedAt == null &&
       canCropSolution &&
       hasOriginalSolution &&
-      kSolutionFigureHintPattern.hasMatch(solutionTranscribed!);
+      (kSolutionFigureHintPattern.hasMatch(solutionTranscribed!) || renderFlagsSolutionFigure);
+
+  /// 렌더 검수가 원본 해설과 대조해 해설 카드에 그림이 빠졌다고 판정
+  bool get renderFlagsSolutionFigure => renderChecks['solution_ok'] == false && renderChecks['issue_kind'] == 'figure';
 
   bool get canRenderOriginal => rawPage > 0 && itemRegion1k.length == 4;
   bool get canRenderSetHeader => (setHeaderRawPage ?? 0) > 0 && setHeaderRegion1k.length == 4;
@@ -1249,21 +1356,34 @@ class TextbookProblemReviewItem {
         if (existingAnswer.trim().isEmpty) '채점 정답 없음',
         if (!hasSolutionRef && !solutionMarkedNone) '해설 위치 없음',
         if (mathStatus != 'approved') '정답 검수 미승인',
+        if (pbAnswerDiffers) '문제은행 정답 다름',
         if (!isEngineHeld && qualityStatus != 'approved') '문항 검수 미승인',
         if (!isEngineHeld && renderBlocksReady) 'V2 렌더 이상',
       ];
   bool get isWorkflowReady => readyBlockers.isEmpty;
 
-  /// 문제은행 사본 정답이 채점 정답과 다른가(표기 공백·$ 제거 후 단순 비교)
+  /// 문제은행 사본 정답이 채점 정답과 다른가(표기 공백·$ 제거 후 단순 비교).
+  /// 원문 선지가 있고 답이 선지 번호면 객관식 정답 키(비어 있어도 다름)와, 그 밖에는 주관식 정답과 비교한다.
+  /// 주관식 문항에 AI 가 만든 객관식 보기의 정답 키는 채점 정답과 표기가 달라 비교하지 않는다.
   bool get pbAnswerDiffers {
     if (isImageAnswer) return false;
-    String norm(String s) => s.replaceAll(RegExp(r'[\s$]'), '').toLowerCase();
+    String norm(String s) => s.replaceAll(RegExp(r'[\s$,，]'), '').toLowerCase();
     final mine = norm(existingAnswer);
     if (mine.isEmpty) return false;
-    final pb = pbAllowObjective && pbObjectiveAnswerKey.isNotEmpty ? pbObjectiveAnswerKey : pbSubjectiveAnswer;
-    if (pb.trim().isEmpty) return false;
-    return norm(pb) != mine;
+    if (rawChoices.length >= 2 && answerChoiceCount > 0) {
+      return pbAllowObjective && norm(pbObjectiveAnswerKey) != mine;
+    }
+    if (pbSubjectiveAnswer.trim().isEmpty) return false;
+    return norm(pbSubjectiveAnswer) != mine;
   }
+
+  /// 주관식 문항인데 문제은행 객관식 보기(AI 생성)가 아직 없다. 문제은행과 같은 생성 기능으로 만든다.
+  bool get needsObjectiveGeneration =>
+      pbQuestionId.isNotEmpty &&
+      expectedQuestionKind == 'subjective' &&
+      !isImageAnswer &&
+      existingAnswer.trim().isNotEmpty &&
+      (pbObjectiveChoiceCount < 2 || pbObjectiveAnswerKey.trim().isEmpty);
 
   /// 빈칸형(□ 안에 알맞은 수를 써넣어라, 표·수형도·결론식의 □ 등) 문항인가
   bool get isFillInBlank => isFillInBlankProblem(commonStem, stem) || qualityChecks['is_fill_in_blank'] == true;
@@ -1354,7 +1474,7 @@ class TextbookProblemReviewItem {
   }
 
   /// 해설·정답 카드가 바뀌었거나 아직 V2 렌더 검수를 안 한 문항
-  bool get needsRenderCheck => renderCheckedAt == null && (hasAiSolution || hasOriginalSolution);
+  bool get needsRenderCheck => (renderCheckedAt == null || renderCheckStale) && (hasAiSolution || hasOriginalSolution);
 
   /// 학생에게 보여줄 해설 본문: 원본 해설이 있으면 원본, 없으면 AI 풀이
   String get primarySolutionText => hasOriginalSolution ? solutionTranscribed!.trim() : (aiSolution ?? '').trim();
@@ -1413,6 +1533,10 @@ class TextbookReviewChunkImage {
         if (setHeader != null) ...{
           'set_header_image_base64': base64Encode(setHeader!.bytes),
           'set_header_image_mime': 'image/png',
+          'set_header_width_px': setHeader!.widthPx,
+          'set_header_height_px': setHeader!.heightPx,
+          'set_header_region_1k': setHeader!.region1k,
+          'set_header_raw_page': setHeader!.rawPage,
         },
         if (solutionPage != null) ...{
           'solution_page_image_base64': base64Encode(solutionPage!.bytes),
@@ -1518,7 +1642,57 @@ class TextbookProblemReviewService {
         if (r is Map) Map<String, dynamic>.from(r),
     ];
     await _mergeFigureColumns(rows);
+    await _mergeSolutionContinuations(scope, rows);
     return [for (final r in rows) TextbookProblemReviewItem.fromJson(r)];
+  }
+
+  /// 단 맨 아래에서 끊긴 풀이에 다음 단 맨 위의 이어진 부분을 붙인다. 못 읽으면 붙이지 않는다.
+  Future<void> _mergeSolutionContinuations(TextbookReviewUnitScope scope, List<Map<String, dynamic>> rows) async {
+    List<int> ints(Object? v) => [for (final x in (v is List ? v : const [])) if (x is num) x.toInt()];
+    final pagesByKind = <String, Set<int>>{};
+    var anyAtBottom = false;
+    for (final r in rows) {
+      final page = (r['solution_raw_page'] as num?)?.toInt() ?? 0;
+      final region = ints(r['solution_region_1k']);
+      if (page <= 0 || region.length != 4) continue;
+      final kind = '${r['solution_source_kind'] ?? 'sol'}'.trim();
+      pagesByKind.putIfAbsent(kind, () => <int>{}).addAll([page, page + 1]);
+      if (region[2] >= 980) anyAtBottom = true;
+    }
+    if (!anyAtBottom) return;
+    for (final entry in pagesByKind.entries) {
+      final List refsRaw;
+      try {
+        refsRaw = await _db
+            .from('textbook_problem_solution_refs')
+            .select('raw_page,number_region_1k,content_region_1k,textbook_problem_crops!inner(academy_id,book_id,grade_label)')
+            .eq('source_kind', entry.key)
+            .inFilter('raw_page', entry.value.toList())
+            .eq('textbook_problem_crops.academy_id', scope.academyId)
+            .eq('textbook_problem_crops.book_id', scope.bookId)
+            .eq('textbook_problem_crops.grade_label', scope.gradeLabel);
+      } catch (_) {
+        continue;
+      }
+      final refs = <SolutionRefBox>[];
+      for (final x in refsRaw) {
+        if (x is! Map) continue;
+        final number = ints(x['number_region_1k']);
+        final content = ints(x['content_region_1k']);
+        final page = (x['raw_page'] as num?)?.toInt() ?? 0;
+        if (page <= 0 || number.length != 4) continue;
+        refs.add(SolutionRefBox(rawPage: page, numberTop: number[0], region1k: content.length == 4 ? content : number));
+      }
+      for (final r in rows) {
+        if ('${r['solution_source_kind'] ?? 'sol'}'.trim() != entry.key) continue;
+        final page = (r['solution_raw_page'] as num?)?.toInt() ?? 0;
+        final seg = solutionContinuationSegment(rawPage: page, region1k: ints(r['solution_region_1k']), refs: refs);
+        if (seg == null) continue;
+        r['solution_continuations'] = [
+          {'raw_page': seg.rawPage, 'region_1k': seg.region1k},
+        ];
+      }
+    }
   }
 
   /// 개요 RPC 에 없는 그림 정답 이미지·해설 그림 열을 붙인다. 못 읽어도 나머지 검수는 그대로 한다.
@@ -1655,6 +1829,25 @@ class TextbookProblemReviewService {
     return TextbookReviewChunkImage(original: o, setHeader: h).toJson();
   }
 
+  /// 렌더 검수에서 해설 카드가 원본 해설을 빠짐없이 옮겼는지 대조할 원본 해설 이미지(다음 단으로 이어진 부분 포함).
+  /// 학생에게 원본 해설을 보여주는 문항만 보낸다. 못 찍으면 빈 값.
+  Future<Map<String, dynamic>> solutionOriginalJson(TextbookReviewUnitScope scope, TextbookProblemReviewItem it) async {
+    if (it.primarySolutionKind != 'textbook' || !it.canCropSolution) return const {};
+    try {
+      final stack = await _solutionImages.renderSolutionStack(
+        academyId: scope.academyId,
+        bookId: scope.bookId,
+        gradeLabel: scope.gradeLabel,
+        sourceKind: it.solutionSourceKind,
+        segments: it.solutionSegments,
+      );
+      if (stack == null || stack.bytes.isEmpty) return const {};
+      return {'solution_original_image_base64': base64Encode(stack.bytes), 'solution_original_image_mime': 'image/png'};
+    } catch (_) {
+      return const {};
+    }
+  }
+
   /// 문항의 해설 PDF 쪽 번호를 구한다(직접 좌표가 있으면 그 쪽, 없으면 같은 소단원·인접 본문 쪽 문항의 해설 쪽을 추론).
   int? inferSolutionRawPage(TextbookProblemReviewItem it, List<TextbookProblemReviewItem> allItems) {
     if ((it.solutionRawPage ?? 0) > 0) return it.solutionRawPage;
@@ -1757,15 +1950,14 @@ class TextbookProblemReviewService {
       if (includeSolution && !(onlyMissingSolutions && (it.hasOriginalSolution || it.isAnswerOnlyOriginalSolution))) {
         if (it.canCropSolution) {
           try {
-            final png = await _solutionImages.renderSolutionCrop(
+            final stack = await _solutionImages.renderSolutionStack(
               academyId: scope.academyId,
               bookId: scope.bookId,
               gradeLabel: scope.gradeLabel,
               sourceKind: it.solutionSourceKind,
-              rawPage: it.solutionRawPage!,
-              region1k: it.solutionRegion1k,
+              segments: it.solutionSegments,
             );
-            if (png != null && png.isNotEmpty) b64 = base64Encode(png);
+            if (stack != null && stack.bytes.isNotEmpty) b64 = base64Encode(stack.bytes);
           } catch (_) {
             b64 = null;
           }
@@ -1944,22 +2136,39 @@ class TextbookProblemReviewService {
     final rawPage = (measure['raw_page'] as num?)?.toInt() ?? item.rawPage;
     // 수정 단계에 보낸 원본과 같은 영역(여백 포함). 기록이 없으면 지금 원본을 다시 찍어 영역을 얻는다.
     final region = measuredRegion.length == 4 ? measuredRegion : (await originalImage(scope, item))?.region1k ?? const <int>[];
-    if (region.length != 4) throw Exception('원본 문항 좌표가 없어 그림을 잘라낼 수 없습니다.');
+    // 공통 발문 그림은 세트 머리 원본 기준 좌표로 온다.
+    final measuredHeader = [
+      for (final x in (measure['set_header_region_1k'] is List ? measure['set_header_region_1k'] as List : const []))
+        if (x is num) x.toInt(),
+    ];
+    final needsHeader = crops.any((c) => c['source'] == 'set_header');
+    final headerRegion = !needsHeader
+        ? const <int>[]
+        : measuredHeader.length == 4
+            ? measuredHeader
+            : (await setHeaderImage(scope, item))?.region1k ?? const <int>[];
+    final headerPage = (measure['set_header_raw_page'] as num?)?.toInt() ?? item.setHeaderRawPage;
     final out = <Map<String, dynamic>>[];
     for (final c in crops) {
       final idx = (c['figure_index'] as num?)?.toInt() ?? 0;
+      final fromHeader = c['source'] == 'set_header';
+      final srcRegion = fromHeader ? headerRegion : region;
+      final srcPage = fromHeader ? headerPage : rawPage;
+      if (srcRegion.length != 4 || srcPage == null) {
+        throw Exception(fromHeader ? '세트 머리 좌표가 없어 그림을 잘라낼 수 없습니다.' : '원본 문항 좌표가 없어 그림을 잘라낼 수 없습니다.');
+      }
       final box = [
         for (final x in (c['bbox_1k'] is List ? c['bbox_1k'] as List : const []))
           if (x is num) x.toInt(),
       ];
-      final pageRegion = cropBoxToPageRegion(region, box);
+      final pageRegion = cropBoxToPageRegion(srcRegion, box);
       if (idx <= 0 || pageRegion == null) throw Exception('그림 $idx 영역이 올바르지 않습니다.');
       final png = await _solutionImages.renderRegion(
         academyId: scope.academyId,
         bookId: scope.bookId,
         gradeLabel: scope.gradeLabel,
         sourceKind: 'body',
-        rawPage: rawPage,
+        rawPage: srcPage,
         region1k: pageRegion,
         pad1k: 0,
         targetWidthPx: 900,
@@ -1980,8 +2189,9 @@ class TextbookProblemReviewService {
         'approved': true,
         'width_px': png.widthPx,
         'height_px': png.heightPx,
-        'raw_page': rawPage,
+        'raw_page': srcPage,
         'crop_region_1k': pageRegion,
+        if (fromHeader) 'crop_source': 'set_header',
         'replace_reason': '${c['reason'] ?? ''}',
       });
     }
@@ -2004,17 +2214,16 @@ class TextbookProblemReviewService {
     for (var i = 0; i < targets.length; i += chunkSize) {
       if (isCancelled?.call() ?? false) break;
       final chunk = targets.sublist(i, (i + chunkSize).clamp(0, targets.length));
-      final regions = <String, TextbookReviewRenderedRegion>{};
+      final regions = <String, TextbookReviewRenderedStack>{};
       final payload = <Map<String, dynamic>>[];
       for (final it in chunk) {
         try {
-          final r = await _solutionImages.renderRegion(
+          final r = await _solutionImages.renderSolutionStack(
             academyId: scope.academyId,
             bookId: scope.bookId,
             gradeLabel: scope.gradeLabel,
             sourceKind: it.solutionSourceKind,
-            rawPage: it.solutionRawPage!,
-            region1k: it.solutionRegion1k,
+            segments: it.solutionSegments,
           );
           if (r == null) continue;
           regions[it.cropId] = r;
@@ -2046,14 +2255,16 @@ class TextbookProblemReviewService {
               final boxes = (r['figures'] as List?) ?? const [];
               for (var k = 0; k < boxes.length; k++) {
                 final box = [for (final x in (boxes[k] is List ? boxes[k] as List : const [])) if (x is num) x.toInt()];
-                final pageRegion = cropBoxToPageRegion(region.region1k, box);
+                final located = region.locate(box);
+                if (located == null) continue;
+                final pageRegion = cropBoxToPageRegion(located.part.region1k, located.box);
                 if (pageRegion == null) continue;
                 final png = await _solutionImages.renderRegion(
                   academyId: scope.academyId,
                   bookId: scope.bookId,
                   gradeLabel: scope.gradeLabel,
                   sourceKind: it.solutionSourceKind,
-                  rawPage: region.rawPage,
+                  rawPage: located.part.rawPage,
                   region1k: pageRegion,
                   pad1k: 0,
                   targetWidthPx: 900,
@@ -2074,7 +2285,7 @@ class TextbookProblemReviewService {
                   'width_px': png.widthPx,
                   'height_px': png.heightPx,
                   'width_em': solutionFigureWidthEm(pageRegion),
-                  'raw_page': region.rawPage,
+                  'raw_page': located.part.rawPage,
                   'source_kind': it.solutionSourceKind,
                   'crop_region_1k': pageRegion,
                 });
@@ -2338,9 +2549,39 @@ class TextbookProblemReviewService {
   }
 
   /// 문제은행 문항 유형 설정(objective | subjective | essay). 반환: 실제로 바뀌었는가
-  Future<bool> setQuestionKind(String cropId, String kind) async {
-    final res = await _db.rpc('textbook_review_set_question_kind', params: {'p_crop_id': cropId, 'p_kind': kind});
+  /// 문항 유형을 바꾸고 문제은행 정답을 그 유형에 맞게 다시 맞춘다. [allowSubjective] 는 객관식일 때 주관식 겸용 여부.
+  Future<bool> setQuestionKind(String cropId, String kind, {bool? allowSubjective}) async {
+    final res = await _db.rpc('textbook_review_set_question_kind', params: {
+      'p_crop_id': cropId,
+      'p_kind': kind,
+      if (allowSubjective != null) 'p_allow_subjective': allowSubjective,
+    });
     return res is Map && res['changed'] == true;
+  }
+
+  /// 소단원 확정 직전 정리: 문항 유형 표시와 문제은행 정답을 채점 정답에 맞춘다. 고친 문항 수를 돌려준다.
+  Future<int> reconcileBeforeConfirm(List<TextbookProblemReviewItem> items) async {
+    var n = 0;
+    for (final it in [for (final x in items) if (x.questionKindMismatch) x]) {
+      final kind = it.expectedQuestionKind;
+      if (await setQuestionKind(it.cropId, kind,
+          allowSubjective: kind == 'objective' && it.answerChoiceCount > 0 ? it.subjectiveAlsoPossible : null)) {
+        n++;
+      }
+    }
+    final resync = [for (final x in items) if (x.mathStatus == 'approved' && x.pbAnswerDiffers) x.cropId];
+    if (resync.isNotEmpty) {
+      await approveAxis(resync, 'math');
+      n += resync.length;
+    }
+    return n;
+  }
+
+  /// 주관식 문항의 객관식 보기를 문제은행과 같은 AI 생성으로 만든다. 만들었으면 true.
+  Future<bool> generateObjectiveChoices(TextbookProblemReviewItem item) async {
+    if (!_pb.hasGateway || item.pbQuestionId.isEmpty) return false;
+    final r = await _pb.generateObjectiveChoices(questionId: item.pbQuestionId);
+    return r.success && r.choices.isNotEmpty;
   }
 
   /// 본문·선지·공통 발문·그림 배치·그림 자산 수정을 문제은행 문항에 적용한다(+품질 승인).

@@ -170,22 +170,40 @@ class ProblemBankPreviewRefreshResult {
   final Map<String, double> questionScoreByQuestionId;
 }
 
-typedef ProblemBankPreviewRefreshCallback =
-    Future<ProblemBankPreviewRefreshResult?> Function(
-      ProblemBankPreviewRefreshRequest request,
-    );
+typedef ProblemBankPreviewRefreshCallback
+    = Future<ProblemBankPreviewRefreshResult?> Function(
+  ProblemBankPreviewRefreshRequest request,
+);
 
-typedef ProblemBankPreviewGeneratePdfCallback =
-    Future<void> Function(ProblemBankPreviewRefreshRequest request);
+typedef ProblemBankPreviewGeneratePdfCallback = Future<void> Function(
+    ProblemBankPreviewRefreshRequest request);
 
-typedef ProblemBankPreviewPrintCallback =
-    Future<bool> Function(String filePath);
+enum ProblemBankPreviewDuplexMode {
+  oneSided,
+  twoSidedLongEdge,
+  twoSidedShortEdge,
+}
 
-typedef ProblemBankPreviewSaveSettingsCallback =
-    Future<bool> Function(ProblemBankPreviewRefreshRequest request);
+class ProblemBankPreviewPrintRequest {
+  const ProblemBankPreviewPrintRequest({
+    required this.filePath,
+    required this.paperSize,
+    required this.duplexMode,
+  });
 
-typedef ProblemBankPreviewCreateAssignmentCallback =
-    Future<bool> Function(ProblemBankPreviewRefreshRequest request);
+  final String filePath;
+  final String paperSize;
+  final ProblemBankPreviewDuplexMode duplexMode;
+}
+
+typedef ProblemBankPreviewPrintCallback = Future<bool> Function(
+    ProblemBankPreviewPrintRequest request);
+
+typedef ProblemBankPreviewSaveSettingsCallback = Future<bool> Function(
+    ProblemBankPreviewRefreshRequest request);
+
+typedef ProblemBankPreviewCreateAssignmentCallback = Future<bool> Function(
+    ProblemBankPreviewRefreshRequest request);
 
 class _AssignmentPromptResult {
   const _AssignmentPromptResult({
@@ -195,6 +213,224 @@ class _AssignmentPromptResult {
 
   final String displayName;
   final String flowName;
+}
+
+class _PreviewPrintOptions {
+  const _PreviewPrintOptions({
+    required this.paperSize,
+    required this.duplexMode,
+  });
+
+  final String paperSize;
+  final ProblemBankPreviewDuplexMode duplexMode;
+}
+
+class _PreviewPrintOptionsDialog extends StatefulWidget {
+  const _PreviewPrintOptionsDialog({required this.initialPaperSize});
+
+  final String initialPaperSize;
+
+  @override
+  State<_PreviewPrintOptionsDialog> createState() =>
+      _PreviewPrintOptionsDialogState();
+}
+
+class _PreviewPrintOptionsDialogState
+    extends State<_PreviewPrintOptionsDialog> {
+  static const _paperSizes = <String>['A4', 'B4', '8절'];
+  late String _paperSize;
+  ProblemBankPreviewDuplexMode _duplexMode =
+      ProblemBankPreviewDuplexMode.twoSidedLongEdge;
+
+  @override
+  void initState() {
+    super.initState();
+    final normalized = widget.initialPaperSize.trim().toUpperCase();
+    _paperSize = _paperSizes.contains(normalized) ? normalized : 'A4';
+  }
+
+  Widget _choice({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(18),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        height: 40,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        decoration: BoxDecoration(
+          color: selected
+              ? FabTabBarTokens.previewConfirmActionColor.withValues(alpha: 0.2)
+              : kDlgPanelBg,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: selected
+                ? FabTabBarTokens.previewConfirmActionColor
+                : const Color(0xFF3A3A3C),
+          ),
+        ),
+        alignment: Alignment.center,
+        child: Text(
+          label,
+          style: TextStyle(
+            color: selected ? Colors.white : const Color(0xFF9FB3B3),
+            fontSize: 14,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _sectionTitle(String text) {
+    return Text(
+      text,
+      style: const TextStyle(
+        color: Colors.white,
+        fontSize: 15,
+        fontWeight: FontWeight.w800,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      surfaceTintColor: Colors.transparent,
+      child: Container(
+        width: 480,
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          color: kDlgBg,
+          borderRadius: BorderRadius.circular(28),
+          border: Border.all(color: const Color(0x1AFFFFFF)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                const Icon(
+                  Icons.print_rounded,
+                  color: FabTabBarTokens.previewConfirmActionColor,
+                  size: 24,
+                ),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Text(
+                    '인쇄 설정',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: '닫기',
+                  onPressed: () => Navigator.of(context).pop(),
+                  icon: const Icon(Icons.close, color: Color(0xFF9FB3B3)),
+                ),
+              ],
+            ),
+            const SizedBox(height: 24),
+            _sectionTitle('용지'),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final paper in _paperSizes)
+                  _choice(
+                    label: paper,
+                    selected: _paperSize == paper,
+                    onTap: () => setState(() => _paperSize = paper),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 24),
+            _sectionTitle('인쇄면'),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _choice(
+                  label: '단면',
+                  selected:
+                      _duplexMode == ProblemBankPreviewDuplexMode.oneSided,
+                  onTap: () => setState(
+                    () => _duplexMode = ProblemBankPreviewDuplexMode.oneSided,
+                  ),
+                ),
+                _choice(
+                  label: '양면 · 긴 변 넘김',
+                  selected: _duplexMode ==
+                      ProblemBankPreviewDuplexMode.twoSidedLongEdge,
+                  onTap: () => setState(
+                    () => _duplexMode =
+                        ProblemBankPreviewDuplexMode.twoSidedLongEdge,
+                  ),
+                ),
+                _choice(
+                  label: '양면 · 짧은 변 넘김',
+                  selected: _duplexMode ==
+                      ProblemBankPreviewDuplexMode.twoSidedShortEdge,
+                  onTap: () => setState(
+                    () => _duplexMode =
+                        ProblemBankPreviewDuplexMode.twoSidedShortEdge,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 24),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                OutlinedButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    minimumSize: const Size(120, 52),
+                    side: const BorderSide(color: Color(0xFF3A3A3C)),
+                    shape: const StadiumBorder(),
+                  ),
+                  child: const Text(
+                    '취소',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                FilledButton(
+                  onPressed: () => Navigator.of(context).pop(
+                    _PreviewPrintOptions(
+                      paperSize: _paperSize,
+                      duplexMode: _duplexMode,
+                    ),
+                  ),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: FabTabBarTokens.previewConfirmActionColor,
+                    foregroundColor: Colors.white,
+                    minimumSize: const Size(120, 52),
+                    shape: const StadiumBorder(),
+                  ),
+                  child: const Text(
+                    '인쇄',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class ProblemBankExportServerPreviewDialog extends StatefulWidget {
@@ -235,6 +471,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
     this.questionScoreEntries = const <ProblemBankPreviewQuestionScoreEntry>[],
     this.initialEditingPresetId = '',
     this.initialEditingPresetName = '',
+    this.initialPrintPaperSize = 'A4',
     this.assignmentFlowNames = const <String>[],
     this.onRefreshRequested,
     this.onGeneratePdfRequested,
@@ -280,6 +517,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
   //   → UI 에서 "저장"(덮어쓰기) / "새 세팅으로 저장" 두 버튼을 노출하기 위한 신호.
   final String initialEditingPresetId;
   final String initialEditingPresetName;
+  final String initialPrintPaperSize;
   final List<String> assignmentFlowNames;
   final ProblemBankPreviewRefreshCallback? onRefreshRequested;
   final ProblemBankPreviewGeneratePdfCallback? onGeneratePdfRequested;
@@ -357,6 +595,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
         const <ProblemBankPreviewQuestionScoreEntry>[],
     String initialEditingPresetId = '',
     String initialEditingPresetName = '',
+    String initialPrintPaperSize = 'A4',
     List<String> assignmentFlowNames = const <String>[],
     ProblemBankPreviewRefreshCallback? onRefreshRequested,
     ProblemBankPreviewGeneratePdfCallback? onGeneratePdfRequested,
@@ -413,6 +652,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
               questionScoreEntries: questionScoreEntries,
               initialEditingPresetId: initialEditingPresetId,
               initialEditingPresetName: initialEditingPresetName,
+              initialPrintPaperSize: initialPrintPaperSize,
               assignmentFlowNames: assignmentFlowNames,
               onRefreshRequested: onRefreshRequested,
               onGeneratePdfRequested: onGeneratePdfRequested,
@@ -484,6 +724,8 @@ class _ProblemBankExportServerPreviewDialogState
   late final TextEditingController _subjectController;
   late final TextEditingController _titlePageTopTextController;
   late final TextEditingController _titlePageGoalTextController;
+  late final TextEditingController _quickAnswerTopTextController;
+  String _lastSyncedQuickAnswerTopText = '';
   late final TextEditingController _timeLimitController;
   late final TextEditingController _coverTopTitleController;
   late final TextEditingController _coverSubjectTitleController;
@@ -577,6 +819,7 @@ class _ProblemBankExportServerPreviewDialogState
           ? widget.initialTitlePageGoalText.trim()
           : _defaultTitlePageGoalText,
     );
+    _quickAnswerTopTextController = TextEditingController();
     _timeLimitController = TextEditingController(
       text: widget.initialTimeLimitText.trim(),
     );
@@ -601,7 +844,12 @@ class _ProblemBankExportServerPreviewDialogState
     _gyeongsinPageStartController = TextEditingController();
     _syncCoverPageTextControllers(
       _normalizeCoverPageTexts(widget.initialCoverPageTexts),
+      rawConfig: widget.initialCoverPageTexts,
     );
+    _titlePageTopTextController
+        .addListener(_handleTitleTopTextChangedForQuickAnswer);
+    _gyeongsinCoverExamTitleController
+        .addListener(_handleTitleTopTextChangedForQuickAnswer);
     _includeAcademyLogo = widget.initialIncludeAcademyLogo;
     _includeCoverPage = widget.initialIncludeCoverPage;
     _includeCoverBlankPage = widget.initialIncludeCoverBlankPage ??
@@ -642,8 +890,13 @@ class _ProblemBankExportServerPreviewDialogState
       controller.dispose();
     }
     _subjectController.dispose();
+    _titlePageTopTextController
+        .removeListener(_handleTitleTopTextChangedForQuickAnswer);
+    _gyeongsinCoverExamTitleController
+        .removeListener(_handleTitleTopTextChangedForQuickAnswer);
     _titlePageTopTextController.dispose();
     _titlePageGoalTextController.dispose();
+    _quickAnswerTopTextController.dispose();
     _timeLimitController.dispose();
     _coverTopTitleController.dispose();
     _coverSubjectTitleController.dispose();
@@ -833,9 +1086,9 @@ class _ProblemBankExportServerPreviewDialogState
                                       controller: controllers[entry.questionId],
                                       keyboardType:
                                           const TextInputType.numberWithOptions(
-                                            decimal: true,
-                                            signed: false,
-                                          ),
+                                        decimal: true,
+                                        signed: false,
+                                      ),
                                       style: const TextStyle(
                                         color: _textPrimary,
                                         fontSize: 12.8,
@@ -949,9 +1202,10 @@ class _ProblemBankExportServerPreviewDialogState
     _labelPanelPageSet = _labelPanelPageSet
         .where((page) => page >= 1 && page <= maxPage)
         .toSet();
-    _titlePageIndexSet =
-        _titlePageIndexSet.where((page) => page >= 1 && page <= maxPage).toSet()
-          ..add(1);
+    _titlePageIndexSet = _titlePageIndexSet
+        .where((page) => page >= 1 && page <= maxPage)
+        .toSet()
+      ..add(1);
     _titlePageHeaderMap = Map<int, Map<String, String>>.fromEntries(
       _titlePageHeaderMap.entries
           .where((entry) => entry.key >= 1 && entry.key <= maxPage)
@@ -1132,9 +1386,8 @@ class _ProblemBankExportServerPreviewDialogState
   void _setTitleHeader({required int pageNo, String? title, String? subtitle}) {
     _ensureTitleHeaderForPage(pageNo);
     final prev = _titlePageHeaderMap[pageNo] ?? const <String, String>{};
-    final normalizedTitle = (title ?? prev['title'] ?? '')
-        .replaceAll(RegExp(r'\s+'), ' ')
-        .trim();
+    final normalizedTitle =
+        (title ?? prev['title'] ?? '').replaceAll(RegExp(r'\s+'), ' ').trim();
     final normalizedSubtitle = (subtitle ?? prev['subtitle'] ?? '')
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
@@ -1146,9 +1399,9 @@ class _ProblemBankExportServerPreviewDialogState
 
   List<int> get _baseColumnCounts {
     if (!_isTwoColumnLayout) return const <int>[1, 0];
-    final safePerPage = widget.maxQuestionsPerPage <= 0
-        ? 4
-        : widget.maxQuestionsPerPage;
+    final rawPerPage =
+        widget.maxQuestionsPerPage <= 0 ? 4 : widget.maxQuestionsPerPage;
+    final safePerPage = rawPerPage >= 99 ? 4 : rawPerPage;
     final left = (safePerPage / 2).ceil();
     final right = math.max(0, safePerPage - left);
     return <int>[left, right];
@@ -1214,8 +1467,7 @@ class _ProblemBankExportServerPreviewDialogState
       final columnIndex = int.tryParse(
         '${one['columnIndex'] ?? one['column'] ?? one['col'] ?? ''}',
       );
-      final rowIndex =
-          int.tryParse(
+      final rowIndex = int.tryParse(
             '${one['rowIndex'] ?? one['row'] ?? one['slotRowIndex'] ?? ''}',
           ) ??
           0;
@@ -1230,21 +1482,18 @@ class _ProblemBankExportServerPreviewDialogState
       if (label.isEmpty) continue;
       final defaultTop = _defaultAnchorTopForPage(pageIndex);
       final defaultPadding = _defaultAnchorPaddingForPage(pageIndex);
-      var topPt = (one['topPt'] is num)
-          ? (one['topPt'] as num).toDouble()
-          : defaultTop;
+      var topPt =
+          (one['topPt'] is num) ? (one['topPt'] as num).toDouble() : defaultTop;
       var paddingTopPt = (one['paddingTopPt'] is num)
           ? (one['paddingTopPt'] as num).toDouble()
           : defaultPadding;
       // Migrate older defaults and recent transient baselines on page 2+.
       final isLegacyOld =
           (topPt - 8.0).abs() < 0.01 && (paddingTopPt - 46.0).abs() < 0.01;
-      final isLegacyRecentWrong =
-          pageIndex > 0 &&
+      final isLegacyRecentWrong = pageIndex > 0 &&
           (topPt - _firstPageAnchorTopPt).abs() < 0.01 &&
           (paddingTopPt - _firstPageAnchorPaddingTopPt).abs() < 0.01;
-      final isLegacyLargeGap =
-          pageIndex > 0 &&
+      final isLegacyLargeGap = pageIndex > 0 &&
           (topPt - 18.0).abs() < 0.01 &&
           (paddingTopPt - 58.0).abs() < 0.01;
       if (isLegacyOld || isLegacyRecentWrong || isLegacyLargeGap) {
@@ -1364,9 +1613,8 @@ class _ProblemBankExportServerPreviewDialogState
       }
       if (columnIndex == 1 && rowIndex == 99) return true;
       final pageCounts = _computedPageColumnCounts[page - 1];
-      final rowLimit = columnIndex < pageCounts.length
-          ? pageCounts[columnIndex]
-          : 0;
+      final rowLimit =
+          columnIndex < pageCounts.length ? pageCounts[columnIndex] : 0;
       return rowLimit > 0 && rowIndex < rowLimit;
     }
 
@@ -1463,9 +1711,8 @@ class _ProblemBankExportServerPreviewDialogState
   List<Map<String, dynamic>> _pageColumnPayload() {
     if (!_isTwoColumnLayout) {
       final total = widget.totalQuestionCount;
-      final perPage = widget.maxQuestionsPerPage <= 0
-          ? 4
-          : widget.maxQuestionsPerPage;
+      final perPage =
+          widget.maxQuestionsPerPage <= 0 ? 4 : widget.maxQuestionsPerPage;
       if (total <= 0 || perPage <= 0) {
         return const <Map<String, dynamic>>[];
       }
@@ -1500,9 +1747,10 @@ class _ProblemBankExportServerPreviewDialogState
 
   List<int> _titlePageIndicesPayload() {
     final maxPage = _maxEditablePageCount;
-    final pages =
-        _titlePageIndexSet.where((page) => page >= 1 && page <= maxPage).toSet()
-          ..add(1);
+    final pages = _titlePageIndexSet
+        .where((page) => page >= 1 && page <= maxPage)
+        .toSet()
+      ..add(1);
     final out = pages.toList(growable: false)..sort();
     return out;
   }
@@ -1570,9 +1818,7 @@ class _ProblemBankExportServerPreviewDialogState
     String fallback, {
     bool allowEmpty = false,
   }) {
-    var text = raw == null
-        ? ''
-        : '$raw'.replaceAll(RegExp(r'\s+'), ' ').trim();
+    var text = raw == null ? '' : '$raw'.replaceAll(RegExp(r'\s+'), ' ').trim();
     if (text == 'null') text = '';
     if (allowEmpty) return text;
     if (text.isEmpty) return fallback;
@@ -1716,13 +1962,13 @@ class _ProblemBankExportServerPreviewDialogState
     final commonGroup = subjectGroups.isNotEmpty
         ? subjectGroups.first
         : (fallbackGroups.isNotEmpty
-              ? fallbackGroups.first
-              : const <String, dynamic>{});
+            ? fallbackGroups.first
+            : const <String, dynamic>{});
     final electiveGroup = subjectGroups.length > 1
         ? subjectGroups[1]
         : (fallbackGroups.length > 1
-              ? fallbackGroups[1]
-              : const <String, dynamic>{});
+            ? fallbackGroups[1]
+            : const <String, dynamic>{});
     final commonLabel =
         '${commonGroup['label'] ?? defaults['commonLabel'] ?? '공통과목'}';
     final commonPageRange = _normalizeCoverTextValue(
@@ -1811,10 +2057,10 @@ class _ProblemBankExportServerPreviewDialogState
         widget.isDaeryunTemplate
             ? '제 2 교시'
             : (widget.isSoseonTemplate
-                  ? '3교시'
-                  : ((widget.isJeonghwaTemplate || widget.isHwanggeumTemplate)
-                        ? '1교시'
-                        : (widget.isOseongTemplate ? '제 1 교시' : '제 1교시'))),
+                ? '3교시'
+                : ((widget.isJeonghwaTemplate || widget.isHwanggeumTemplate)
+                    ? '1교시'
+                    : (widget.isOseongTemplate ? '제 1 교시' : '제 1교시'))),
         allowEmpty: true,
       ),
       'subjectCode': _normalizeCoverTextValue(
@@ -1857,10 +2103,42 @@ class _ProblemBankExportServerPreviewDialogState
         '',
         allowEmpty: true,
       ),
+      'quickAnswerTopText': _normalizeCoverTextValue(
+        src['quickAnswerTopText'],
+        '',
+        allowEmpty: true,
+      ),
       'includeCoverBlankPage': _readCoverBlankPageFlag(
         src['includeCoverBlankPage'],
       ),
     };
+  }
+
+  String get _defaultQuickAnswerTopText {
+    if (widget.isGyeongsinTemplate ||
+        widget.isNeunginTemplate ||
+        widget.isDaeryunTemplate ||
+        widget.isDongdoTemplate ||
+        widget.isSoseonTemplate ||
+        widget.isOseongTemplate ||
+        widget.isJeonghwaTemplate ||
+        widget.isHwanggeumTemplate) {
+      final schoolTitle = _gyeongsinCoverExamTitleController.text.trim();
+      if (schoolTitle.isNotEmpty) return schoolTitle;
+    }
+    final top = _titlePageTopTextController.text.trim();
+    return top.isNotEmpty ? top : _defaultTitlePageTopText;
+  }
+
+  void _handleTitleTopTextChangedForQuickAnswer() {
+    final nextDefault = _defaultQuickAnswerTopText;
+    if (_quickAnswerTopTextController.text.trim() ==
+        _lastSyncedQuickAnswerTopText) {
+      if (_quickAnswerTopTextController.text != nextDefault) {
+        _quickAnswerTopTextController.text = nextDefault;
+      }
+      _lastSyncedQuickAnswerTopText = nextDefault;
+    }
   }
 
   bool get _defaultIncludeCoverBlankPage {
@@ -2033,71 +2311,71 @@ class _ProblemBankExportServerPreviewDialogState
     });
   }
 
-  void _syncCoverPageTextControllers(Map<String, dynamic> config) {
+  void _syncCoverPageTextControllers(
+    Map<String, dynamic> config, {
+    Map<String, dynamic>? rawConfig,
+  }) {
     final normalized = _normalizeCoverPageTexts(config);
     _coverTopTitleController.text = '${normalized['topTitle'] ?? ''}';
     _coverSubjectTitleController.text = '${normalized['subjectTitle'] ?? ''}';
     _coverPhraseController.text = '${normalized['handwritingPhrase'] ?? ''}';
     _coverOrganizationController.text = '${normalized['organization'] ?? ''}';
     final examDate = '${normalized['examDate'] ?? ''}'.trim();
-    _gyeongsinExamDateController.text = examDate.isNotEmpty
-        ? examDate
-        : _koreaTodayExamDate();
+    _gyeongsinExamDateController.text =
+        examDate.isNotEmpty ? examDate : _koreaTodayExamDate();
     final periodLabel = '${normalized['periodLabel'] ?? ''}'.trim();
     _gyeongsinPeriodLabelController.text = periodLabel.isNotEmpty
         ? periodLabel
         : (widget.isDaeryunTemplate
-              ? '제 2 교시'
-              : (widget.isSoseonTemplate
-                    ? '3교시'
-                    : ((widget.isJeonghwaTemplate || widget.isHwanggeumTemplate)
-                          ? '1교시'
-                          : (widget.isOseongTemplate ? '제 1 교시' : '제 1교시'))));
+            ? '제 2 교시'
+            : (widget.isSoseonTemplate
+                ? '3교시'
+                : ((widget.isJeonghwaTemplate || widget.isHwanggeumTemplate)
+                    ? '1교시'
+                    : (widget.isOseongTemplate ? '제 1 교시' : '제 1교시'))));
     final subjectCode = '${normalized['subjectCode'] ?? ''}'.trim();
     _gyeongsinSubjectCodeController.text = subjectCode.isNotEmpty
         ? subjectCode
         : ((widget.isDaeryunTemplate ||
-                  widget.isSoseonTemplate ||
-                  widget.isOseongTemplate ||
-                  widget.isHwanggeumTemplate)
-              ? '04'
-              : '05');
+                widget.isSoseonTemplate ||
+                widget.isOseongTemplate ||
+                widget.isHwanggeumTemplate)
+            ? '04'
+            : '05');
     final sheetTypeLabel = '${normalized['sheetTypeLabel'] ?? ''}'.trim();
-    _gyeongsinSheetTypeController.text = sheetTypeLabel.isNotEmpty
-        ? sheetTypeLabel
-        : '답안지 D형';
+    _gyeongsinSheetTypeController.text =
+        sheetTypeLabel.isNotEmpty ? sheetTypeLabel : '답안지 D형';
     final coverExamTitle = '${normalized['coverExamTitle'] ?? ''}'.trim();
     _gyeongsinCoverExamTitleController.text = coverExamTitle.isNotEmpty
         ? coverExamTitle
         : (widget.isDaeryunTemplate
-              ? '2026학년도 2학기 중간시험 2학년 문제지'
-              : (widget.isDongdoTemplate
-                    ? '2026학년도 수학과 제3학년 2학기 기말고사'
-                    : (widget.isSoseonTemplate
-                          ? '2026학년도 2학기 3학년 기말시험 문제지'
-                          : (widget.isOseongTemplate
-                                ? '2026학년도 2학기 기말시험'
-                                : (widget.isJeonghwaTemplate
-                                      ? '2026학년도 2학년 2학기 중간시험'
-                                      : (widget.isHwanggeumTemplate
-                                            ? '2026학년도 1학기 기말시험 3학년'
-                                            : '2026학년도 3학년 2학기 기말시험'))))));
+            ? '2026학년도 2학기 중간시험 2학년 문제지'
+            : (widget.isDongdoTemplate
+                ? '2026학년도 수학과 제3학년 2학기 기말고사'
+                : (widget.isSoseonTemplate
+                    ? '2026학년도 2학기 3학년 기말시험 문제지'
+                    : (widget.isOseongTemplate
+                        ? '2026학년도 2학기 기말시험'
+                        : (widget.isJeonghwaTemplate
+                            ? '2026학년도 2학년 2학기 중간시험'
+                            : (widget.isHwanggeumTemplate
+                                ? '2026학년도 1학기 기말시험 3학년'
+                                : '2026학년도 3학년 2학기 기말시험'))))));
     final headerExamTitle = '${normalized['headerExamTitle'] ?? ''}'.trim();
     _gyeongsinHeaderExamTitleController.text = headerExamTitle.isNotEmpty
         ? headerExamTitle
         : (widget.isDaeryunTemplate
-              ? '2026학년도 2학기 중간시험 2학년 문제지'
-              : (widget.isDongdoTemplate
-                    ? '2026학년도 수학과 제3학년 2학기 기말고사'
-                    : (widget.isSoseonTemplate
-                          ? '3학년 2학기 기말시험'
-                          : (widget.isOseongTemplate
-                                ? '2026학년도 오성중학교 2학기 기말시험 문제지'
-                                : '제 3 학년 2 학기 기말시험'))));
+            ? '2026학년도 2학기 중간시험 2학년 문제지'
+            : (widget.isDongdoTemplate
+                ? '2026학년도 수학과 제3학년 2학기 기말고사'
+                : (widget.isSoseonTemplate
+                    ? '3학년 2학기 기말시험'
+                    : (widget.isOseongTemplate
+                        ? '2026학년도 오성중학교 2학기 기말시험 문제지'
+                        : '제 3 학년 2 학기 기말시험'))));
     final subjectName = '${normalized['subjectName'] ?? ''}'.trim();
-    _gyeongsinSubjectNameController.text = subjectName.isNotEmpty
-        ? subjectName
-        : '수학';
+    _gyeongsinSubjectNameController.text =
+        subjectName.isNotEmpty ? subjectName : '수학';
     _gyeongsinObjectiveCountController.text =
         '${normalized['objectiveCount'] ?? ''}';
     _gyeongsinSubjectiveCountController.text =
@@ -2111,6 +2389,15 @@ class _ProblemBankExportServerPreviewDialogState
     _gyeongsinFooterLabelController.text = '${normalized['footerLabel'] ?? ''}';
     _gyeongsinPageStartController.text =
         '${normalized['pageStartNumber'] ?? ''}';
+    final defaultQaTop = _defaultQuickAnswerTopText;
+    final hasExplicitQaTop =
+        (rawConfig ?? config).containsKey('quickAnswerTopText') &&
+            '${normalized['quickAnswerTopText'] ?? ''}'.trim().isNotEmpty;
+    final resolvedQaTop = hasExplicitQaTop
+        ? '${normalized['quickAnswerTopText'] ?? ''}'.trim()
+        : defaultQaTop;
+    _quickAnswerTopTextController.text = resolvedQaTop;
+    _lastSyncedQuickAnswerTopText = defaultQaTop;
     if (normalized.containsKey('includeCoverBlankPage')) {
       _includeCoverBlankPage = _readCoverBlankPageFlag(
         normalized['includeCoverBlankPage'],
@@ -2182,13 +2469,13 @@ class _ProblemBankExportServerPreviewDialogState
     final commonGroup = subjectGroups.isNotEmpty
         ? subjectGroups.first
         : (defaultGroups.isNotEmpty
-              ? defaultGroups.first
-              : const <String, dynamic>{});
+            ? defaultGroups.first
+            : const <String, dynamic>{});
     final electiveGroup = subjectGroups.length > 1
         ? subjectGroups[1]
         : (defaultGroups.length > 1
-              ? defaultGroups[1]
-              : const <String, dynamic>{});
+            ? defaultGroups[1]
+            : const <String, dynamic>{});
     final commonLabel =
         '${commonGroup['label'] ?? defaults['commonLabel'] ?? '공통과목'}';
     final commonPageRange = _normalizeCoverTextValue(
@@ -2198,9 +2485,9 @@ class _ProblemBankExportServerPreviewDialogState
     );
     final commonItems = (commonGroup['items'] is List)
         ? (commonGroup['items'] as List<dynamic>)
-              .whereType<Map>()
-              .map((row) => row.map((key, value) => MapEntry('$key', value)))
-              .toList(growable: false)
+            .whereType<Map>()
+            .map((row) => row.map((key, value) => MapEntry('$key', value)))
+            .toList(growable: false)
         : const <Map<String, dynamic>>[];
     final electiveLabel =
         '${electiveGroup['label'] ?? defaults['electiveLabel'] ?? '선택과목'}';
@@ -2211,9 +2498,9 @@ class _ProblemBankExportServerPreviewDialogState
     );
     final electiveItems = (electiveGroup['items'] is List)
         ? (electiveGroup['items'] as List<dynamic>)
-              .whereType<Map>()
-              .map((row) => row.map((key, value) => MapEntry('$key', value)))
-              .toList(growable: false)
+            .whereType<Map>()
+            .map((row) => row.map((key, value) => MapEntry('$key', value)))
+            .toList(growable: false)
         : const <Map<String, dynamic>>[];
     return <String, dynamic>{
       'topTitle': _normalizeCoverTextValue(
@@ -2241,6 +2528,11 @@ class _ProblemBankExportServerPreviewDialogState
         _coverOrganizationController.text,
         '${defaults['organization'] ?? ''}',
       ),
+      'quickAnswerTopText': _normalizeCoverTextValue(
+        _quickAnswerTopTextController.text,
+        _defaultQuickAnswerTopText,
+        allowEmpty: true,
+      ),
       'includeCoverBlankPage': _includeCoverBlankPage,
       if (widget.isGyeongsinTemplate ||
           widget.isNeunginTemplate ||
@@ -2259,10 +2551,10 @@ class _ProblemBankExportServerPreviewDialogState
           widget.isDaeryunTemplate
               ? '제 2 교시'
               : (widget.isSoseonTemplate
-                    ? '3교시'
-                    : ((widget.isJeonghwaTemplate || widget.isHwanggeumTemplate)
-                          ? '1교시'
-                          : (widget.isOseongTemplate ? '제 1 교시' : '제 1교시'))),
+                  ? '3교시'
+                  : ((widget.isJeonghwaTemplate || widget.isHwanggeumTemplate)
+                      ? '1교시'
+                      : (widget.isOseongTemplate ? '제 1 교시' : '제 1교시'))),
         ),
         'subjectCode': _normalizeCoverTextValue(
           _gyeongsinSubjectCodeController.text,
@@ -2282,16 +2574,16 @@ class _ProblemBankExportServerPreviewDialogState
           widget.isDaeryunTemplate
               ? '2026학년도 2학기 중간시험 2학년 문제지'
               : (widget.isDongdoTemplate
-                    ? '2026학년도 수학과 제3학년 2학기 기말고사'
-                    : (widget.isSoseonTemplate
-                          ? '2026학년도 2학기 3학년 기말시험 문제지'
-                          : (widget.isOseongTemplate
-                                ? '2026학년도 2학기 기말시험'
-                                : (widget.isJeonghwaTemplate
-                                      ? '2026학년도 2학년 2학기 중간시험'
-                                      : (widget.isHwanggeumTemplate
-                                            ? '2026학년도 1학기 기말시험 3학년'
-                                            : '2026학년도 3학년 2학기 기말시험'))))),
+                  ? '2026학년도 수학과 제3학년 2학기 기말고사'
+                  : (widget.isSoseonTemplate
+                      ? '2026학년도 2학기 3학년 기말시험 문제지'
+                      : (widget.isOseongTemplate
+                          ? '2026학년도 2학기 기말시험'
+                          : (widget.isJeonghwaTemplate
+                              ? '2026학년도 2학년 2학기 중간시험'
+                              : (widget.isHwanggeumTemplate
+                                  ? '2026학년도 1학기 기말시험 3학년'
+                                  : '2026학년도 3학년 2학기 기말시험'))))),
         ),
         'headerExamTitle': _normalizeCoverTextValue(
           (widget.isDaeryunTemplate || widget.isDongdoTemplate)
@@ -2300,12 +2592,12 @@ class _ProblemBankExportServerPreviewDialogState
           widget.isDaeryunTemplate
               ? '2026학년도 2학기 중간시험 2학년 문제지'
               : (widget.isDongdoTemplate
-                    ? '2026학년도 수학과 제3학년 2학기 기말고사'
-                    : (widget.isSoseonTemplate
-                          ? '3학년 2학기 기말시험'
-                          : (widget.isOseongTemplate
-                                ? '2026학년도 오성중학교 2학기 기말시험 문제지'
-                                : '제 3 학년 2 학기 기말시험'))),
+                  ? '2026학년도 수학과 제3학년 2학기 기말고사'
+                  : (widget.isSoseonTemplate
+                      ? '3학년 2학기 기말시험'
+                      : (widget.isOseongTemplate
+                          ? '2026학년도 오성중학교 2학기 기말시험 문제지'
+                          : '제 3 학년 2 학기 기말시험'))),
         ),
         'subjectName': _normalizeCoverTextValue(
           _gyeongsinSubjectNameController.text,
@@ -2505,9 +2797,8 @@ class _ProblemBankExportServerPreviewDialogState
     for (var i = 0; i < pages.length; i += 2) {
       final left = pages[i];
       final right = (i + 1) < pages.length ? pages[i + 1] : null;
-      final width = right == null
-          ? left.width
-          : left.width + colGap + right.width;
+      final width =
+          right == null ? left.width : left.width + colGap + right.width;
       rowWidths.add(width);
     }
     final maxRowWidth = rowWidths.fold<double>(0, (acc, w) => math.max(acc, w));
@@ -2517,9 +2808,8 @@ class _ProblemBankExportServerPreviewDialogState
     for (var i = 0; i < pages.length; i += 2) {
       final left = pages[i];
       final right = (i + 1) < pages.length ? pages[i + 1] : null;
-      final rowWidth = right == null
-          ? left.width
-          : left.width + colGap + right.width;
+      final rowWidth =
+          right == null ? left.width : left.width + colGap + right.width;
       final startX = (totalWidth - rowWidth) / 2;
       layouts.add(Rect.fromLTWH(startX, y, left.width, left.height));
       if (right != null) {
@@ -2575,6 +2865,13 @@ class _ProblemBankExportServerPreviewDialogState
       ).showSnackBar(const SnackBar(content: Text('인쇄할 PDF URL이 없습니다.')));
       return;
     }
+    final options = await showDialog<_PreviewPrintOptions>(
+      context: context,
+      builder: (_) => _PreviewPrintOptionsDialog(
+        initialPaperSize: widget.initialPrintPaperSize,
+      ),
+    );
+    if (options == null || !mounted) return;
     setState(() {
       _isPrintingPdf = true;
     });
@@ -2595,7 +2892,13 @@ class _ProblemBankExportServerPreviewDialogState
       if (printRequested == null) {
         throw StateError('PDF 인쇄 콜백이 설정되지 않았습니다.');
       }
-      final directPrinted = await printRequested(file.path);
+      final directPrinted = await printRequested(
+        ProblemBankPreviewPrintRequest(
+          filePath: file.path,
+          paperSize: options.paperSize,
+          duplexMode: options.duplexMode,
+        ),
+      );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -2764,9 +3067,8 @@ class _ProblemBankExportServerPreviewDialogState
   String _defaultPresetDisplayName() {
     final last = _lastPresetDisplayName.trim();
     if (last.isNotEmpty) return last;
-    final title = _titlePageTopTextController.text
-        .replaceAll(RegExp(r'\s+'), ' ')
-        .trim();
+    final title =
+        _titlePageTopTextController.text.replaceAll(RegExp(r'\s+'), ' ').trim();
     if (title.isNotEmpty) {
       return '$title 세팅';
     }
@@ -2813,9 +3115,8 @@ class _ProblemBankExportServerPreviewDialogState
   }
 
   String _defaultAssignmentDisplayName() {
-    final title = _titlePageTopTextController.text
-        .replaceAll(RegExp(r'\s+'), ' ')
-        .trim();
+    final title =
+        _titlePageTopTextController.text.replaceAll(RegExp(r'\s+'), ' ').trim();
     final now = DateTime.now();
     String two(int v) => v.toString().padLeft(2, '0');
     final suffix =
@@ -2921,9 +3222,8 @@ class _ProblemBankExportServerPreviewDialogState
       },
     );
     controller.dispose();
-    final normalized = (value?.displayName ?? '')
-        .replaceAll(RegExp(r'\s+'), ' ')
-        .trim();
+    final normalized =
+        (value?.displayName ?? '').replaceAll(RegExp(r'\s+'), ' ').trim();
     if (normalized.isEmpty) return null;
     return _AssignmentPromptResult(
       displayName: normalized,
@@ -3035,8 +3335,7 @@ class _ProblemBankExportServerPreviewDialogState
   ///   - 일반 미리보기에서 진입한 경우: '세팅 저장' 단일 버튼(= save-as-new).
   Widget _buildCreateAssignmentButton() {
     final hasCallback = widget.onCreateAssignmentRequested != null;
-    final busy =
-        _isSavingSettings ||
+    final busy = _isSavingSettings ||
         _isGeneratingPdf ||
         _isCreatingAssignment ||
         _isRefreshing;
@@ -3069,8 +3368,7 @@ class _ProblemBankExportServerPreviewDialogState
 
   Widget _buildSaveSettingsButtons() {
     final hasCallback = widget.onSaveSettingsRequested != null;
-    final busy =
-        _isSavingSettings ||
+    final busy = _isSavingSettings ||
         _isGeneratingPdf ||
         _isCreatingAssignment ||
         _isRefreshing;
@@ -3114,9 +3412,8 @@ class _ProblemBankExportServerPreviewDialogState
           side: const BorderSide(color: Color(0xFF2F4B55), width: 1.2),
           minimumSize: const Size.fromHeight(42),
           shape: const StadiumBorder(),
-          backgroundColor: primary
-              ? const Color(0xFF1F3842)
-              : const Color(0xFF121C21),
+          backgroundColor:
+              primary ? const Color(0xFF1F3842) : const Color(0xFF121C21),
         ),
         icon: _isSavingSettings
             ? const SizedBox(
@@ -3276,12 +3573,10 @@ class _ProblemBankExportServerPreviewDialogState
             onChanged: onChanged,
             activeThumbColor: const Color(0xFFFFFFFF),
             activeTrackColor: FabTabBarTokens.previewConfirmActionColor,
-            inactiveThumbColor: brightness == Brightness.dark
-                ? const Color(0xFF8E8E93)
-                : null,
-            inactiveTrackColor: brightness == Brightness.dark
-                ? const Color(0xFF3A3A3C)
-                : null,
+            inactiveThumbColor:
+                brightness == Brightness.dark ? const Color(0xFF8E8E93) : null,
+            inactiveTrackColor:
+                brightness == Brightness.dark ? const Color(0xFF3A3A3C) : null,
             materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
           ),
         ],
@@ -3473,15 +3768,13 @@ class _ProblemBankExportServerPreviewDialogState
                 ),
               ),
             ),
-          for (
-            var i = 0;
-            i <
-                math.min(
-                  itemNameControllers.length,
-                  itemPageControllers.length,
-                );
-            i += 1
-          )
+          for (var i = 0;
+              i <
+                  math.min(
+                    itemNameControllers.length,
+                    itemPageControllers.length,
+                  );
+              i += 1)
             Padding(
               padding: const EdgeInsets.only(bottom: 6),
               child: Row(
@@ -3549,18 +3842,18 @@ class _ProblemBankExportServerPreviewDialogState
             isDaeryun
                 ? '대륜중 시험 정보 (자동 반영 / 수동 수정)'
                 : (isDongdo
-                      ? '동도중 시험 정보 (자동 반영 / 수동 수정)'
-                      : (isSoseon
-                            ? '소선여중 시험 정보 (자동 반영 / 수동 수정)'
-                            : (isOseong
-                                  ? '오성중 시험 정보 (자동 반영 / 수동 수정)'
-                                  : (isJeonghwa
-                                        ? '정화중 시험 정보 (자동 반영 / 수동 수정)'
-                                        : (isHwanggeum
-                                              ? '황금중 시험 정보 (자동 반영 / 수동 수정)'
-                                              : (isNeungin
-                                                    ? '능인중 시험 정보 (자동 반영 / 수동 수정)'
-                                                    : '경신중 시험 정보 (자동 반영 / 수동 수정)')))))),
+                    ? '동도중 시험 정보 (자동 반영 / 수동 수정)'
+                    : (isSoseon
+                        ? '소선여중 시험 정보 (자동 반영 / 수동 수정)'
+                        : (isOseong
+                            ? '오성중 시험 정보 (자동 반영 / 수동 수정)'
+                            : (isJeonghwa
+                                ? '정화중 시험 정보 (자동 반영 / 수동 수정)'
+                                : (isHwanggeum
+                                    ? '황금중 시험 정보 (자동 반영 / 수동 수정)'
+                                    : (isNeungin
+                                        ? '능인중 시험 정보 (자동 반영 / 수동 수정)'
+                                        : '경신중 시험 정보 (자동 반영 / 수동 수정)')))))),
             style: const TextStyle(
               color: _textPrimary,
               fontSize: 12.4,
@@ -3572,18 +3865,18 @@ class _ProblemBankExportServerPreviewDialogState
             isDaeryun
                 ? '날짜를 입력하면 요일이 자동 계산됩니다. 선택형·서술형(주관식 포함) 문항 수와 총 장·면 수는 비워두면 자동으로 계산됩니다.'
                 : (isDongdo
-                      ? '총문항·선택형·서술형(주관식 포함) 문항 수와 총 장·면 수, 점수는 비워두면 자동으로 계산됩니다.'
-                      : (isSoseon
-                            ? '표지 및 1페이지 상단의 문항 수(선택형·서술형·계)와 전체 면수는 비워두면 자동으로 계산됩니다.'
-                            : (isOseong
-                                  ? '1페이지 상단의 선택형 점수별 문항 수·서술형 배점 및 전체 면수는 비워두면 자동으로 계산됩니다.'
-                                  : (isJeonghwa
-                                        ? '표지 구성표의 문항 수(선택형·단답형·서술형), 총점, 전체 면수는 비워두면 자동으로 계산됩니다.'
-                                        : (isHwanggeum
-                                              ? '표지 구성표의 문항 수(선택형·서답형), 배점, 총 장·면 수는 비워두면 자동으로 계산됩니다.'
-                                              : (isNeungin
-                                                    ? '문항 수(선택형·단답형·서논술형)와 전체 면수는 비워두면 실제 문항/페이지 수로 자동 계산됩니다.'
-                                                    : '날짜를 입력하면 요일이 자동 계산되고 2교시는 고정됩니다. 문항 수와 전체 면수는 비워두면 실제 문항/페이지 수로 자동 계산됩니다.')))))),
+                    ? '총문항·선택형·서술형(주관식 포함) 문항 수와 총 장·면 수, 점수는 비워두면 자동으로 계산됩니다.'
+                    : (isSoseon
+                        ? '표지 및 1페이지 상단의 문항 수(선택형·서술형·계)와 전체 면수는 비워두면 자동으로 계산됩니다.'
+                        : (isOseong
+                            ? '1페이지 상단의 선택형 점수별 문항 수·서술형 배점 및 전체 면수는 비워두면 자동으로 계산됩니다.'
+                            : (isJeonghwa
+                                ? '표지 구성표의 문항 수(선택형·단답형·서술형), 총점, 전체 면수는 비워두면 자동으로 계산됩니다.'
+                                : (isHwanggeum
+                                    ? '표지 구성표의 문항 수(선택형·서답형), 배점, 총 장·면 수는 비워두면 자동으로 계산됩니다.'
+                                    : (isNeungin
+                                        ? '문항 수(선택형·단답형·서논술형)와 전체 면수는 비워두면 실제 문항/페이지 수로 자동 계산됩니다.'
+                                        : '날짜를 입력하면 요일이 자동 계산되고 2교시는 고정됩니다. 문항 수와 전체 면수는 비워두면 실제 문항/페이지 수로 자동 계산됩니다.')))))),
             style: const TextStyle(
               color: _textMuted,
               fontSize: 11.2,
@@ -3730,26 +4023,32 @@ class _ProblemBankExportServerPreviewDialogState
             hintText: isDaeryun
                 ? '2026학년도 2학기 중간시험 2학년 문제지'
                 : (isDongdo
-                      ? '2026학년도 수학과 제3학년 2학기 기말고사'
-                      : (isSoseon
-                            ? '2026학년도 2학기 3학년 기말시험 문제지'
-                            : (isOseong
-                                  ? '2026학년도 2학기 기말시험'
-                                  : (isJeonghwa
-                                        ? '2026학년도 2학년 2학기 중간시험'
-                                        : (isHwanggeum
-                                              ? '2026학년도 1학기 기말시험 3학년'
-                                              : (isNeungin
-                                                    ? '2026학년도 2학기 3학년 중간시험 문제지'
-                                                    : '2026학년도 3학년 2학기 기말시험')))))),
+                    ? '2026학년도 수학과 제3학년 2학기 기말고사'
+                    : (isSoseon
+                        ? '2026학년도 2학기 3학년 기말시험 문제지'
+                        : (isOseong
+                            ? '2026학년도 2학기 기말시험'
+                            : (isJeonghwa
+                                ? '2026학년도 2학년 2학기 중간시험'
+                                : (isHwanggeum
+                                    ? '2026학년도 1학기 기말시험 3학년'
+                                    : (isNeungin
+                                        ? '2026학년도 2학기 3학년 중간시험 문제지'
+                                        : '2026학년도 3학년 2학기 기말시험')))))),
           ),
-          if (!isNeungin && !isDaeryun && !isDongdo && !isJeonghwa && !isHwanggeum)
+          if (!isNeungin &&
+              !isDaeryun &&
+              !isDongdo &&
+              !isJeonghwa &&
+              !isHwanggeum)
             _buildCoverTextField(
               label: '문제지 상단 시험명 (문제 첫 페이지)',
               controller: _gyeongsinHeaderExamTitleController,
               hintText: isSoseon
                   ? '3학년 2학기 기말시험'
-                  : (isOseong ? '2026학년도 오성중학교 2학기 기말시험 문제지' : '제 3 학년 2 학기 기말시험'),
+                  : (isOseong
+                      ? '2026학년도 오성중학교 2학기 기말시험 문제지'
+                      : '제 3 학년 2 학기 기말시험'),
             ),
           _buildCoverTextField(
             label: '과목명 (기본 수학)',
@@ -3848,30 +4147,30 @@ class _ProblemBankExportServerPreviewDialogState
               label: isDaeryun
                   ? '하단 우측 문구 (비우면 자동: 대륜중학교 · 학년 · 과목)'
                   : (isDongdo
-                        ? '하단 좌측 문구 (비우면 자동: (동도중) · 학년 · 과목)'
-                        : (isSoseon
-                              ? '하단 과목 문구 (비우면 자동: 학년 · 과목 · 교과)'
-                              : (isOseong
-                                    ? '하단 과목 문구 (비우면 자동: 중학년-과목)'
-                                    : (isJeonghwa
-                                          ? '하단 과목 문구 (비우면 자동: 정화중학교 · 학년 · 과목)'
-                                          : (isHwanggeum
-                                                ? '하단 우측 문구 (비우면 자동: 학년 · 과목과 · 황금중학교)'
-                                                : '하단 소속/학년 문구 (비우면 자동: 출처 학교 · 과목 · 학년)'))))),
+                      ? '하단 좌측 문구 (비우면 자동: (동도중) · 학년 · 과목)'
+                      : (isSoseon
+                          ? '하단 과목 문구 (비우면 자동: 학년 · 과목 · 교과)'
+                          : (isOseong
+                              ? '하단 과목 문구 (비우면 자동: 중학년-과목)'
+                              : (isJeonghwa
+                                  ? '하단 과목 문구 (비우면 자동: 정화중학교 · 학년 · 과목)'
+                                  : (isHwanggeum
+                                      ? '하단 우측 문구 (비우면 자동: 학년 · 과목과 · 황금중학교)'
+                                      : '하단 소속/학년 문구 (비우면 자동: 출처 학교 · 과목 · 학년)'))))),
               controller: _gyeongsinFooterLabelController,
               hintText: isDaeryun
                   ? '대륜중학교 2학년 수학'
                   : (isDongdo
-                        ? '(동도중) 3학년 수학'
-                        : (isSoseon
-                              ? '3학년 수학 교과'
-                              : (isOseong
-                                    ? '중3-수학'
-                                    : (isJeonghwa
-                                          ? '정화중학교 2학년 수학'
-                                          : (isHwanggeum
-                                                ? '3학년 수학과 황금중학교'
-                                                : '경신중 수학 3학년'))))),
+                      ? '(동도중) 3학년 수학'
+                      : (isSoseon
+                          ? '3학년 수학 교과'
+                          : (isOseong
+                              ? '중3-수학'
+                              : (isJeonghwa
+                                  ? '정화중학교 2학년 수학'
+                                  : (isHwanggeum
+                                      ? '3학년 수학과 황금중학교'
+                                      : '경신중 수학 3학년'))))),
             ),
         ],
       ),
@@ -3959,21 +4258,19 @@ class _ProblemBankExportServerPreviewDialogState
                 ),
               ),
             ),
-          for (
-            var groupIndex = 0;
-            groupIndex <
-                math.min(
-                  _coverGroupLabelControllers.length,
+          for (var groupIndex = 0;
+              groupIndex <
                   math.min(
-                    _coverGroupPageRangeControllers.length,
+                    _coverGroupLabelControllers.length,
                     math.min(
-                      _coverGroupItemNameControllers.length,
-                      _coverGroupItemPageControllers.length,
+                      _coverGroupPageRangeControllers.length,
+                      math.min(
+                        _coverGroupItemNameControllers.length,
+                        _coverGroupItemPageControllers.length,
+                      ),
                     ),
-                  ),
-                );
-            groupIndex += 1
-          )
+                  );
+              groupIndex += 1)
             _buildCoverSubjectGroupEditor(
               title: '대분류 ${groupIndex + 1}',
               groupIndex: groupIndex,
@@ -4069,9 +4366,8 @@ class _ProblemBankExportServerPreviewDialogState
           minimumSize: const Size(0, 26),
           shape: const StadiumBorder(),
           foregroundColor: selected ? const Color(0xFFC7F2D8) : _textMuted,
-          backgroundColor: selected
-              ? const Color(0xFF173C36)
-              : const Color(0xFF131E24),
+          backgroundColor:
+              selected ? const Color(0xFF173C36) : const Color(0xFF131E24),
           side: BorderSide(
             color: selected ? const Color(0xFF2A6D5F) : const Color(0xFF2A3841),
             width: 1,
@@ -4091,18 +4387,16 @@ class _ProblemBankExportServerPreviewDialogState
     required int columnIndex,
   }) {
     final pageNo = pageIndex + 1;
-    final out = _columnLabelAnchorMap.entries
-        .where((entry) {
-          final row = entry.value;
-          final page = int.tryParse('${row['page'] ?? 0}') ?? 0;
-          final col = int.tryParse('${row['columnIndex'] ?? -1}') ?? -1;
-          final rowIndex = int.tryParse('${row['rowIndex'] ?? 0}') ?? -1;
-          return page == pageNo &&
-              col == columnIndex &&
-              rowIndex >= 0 &&
-              rowIndex < 99;
-        })
-        .toList(growable: true);
+    final out = _columnLabelAnchorMap.entries.where((entry) {
+      final row = entry.value;
+      final page = int.tryParse('${row['page'] ?? 0}') ?? 0;
+      final col = int.tryParse('${row['columnIndex'] ?? -1}') ?? -1;
+      final rowIndex = int.tryParse('${row['rowIndex'] ?? 0}') ?? -1;
+      return page == pageNo &&
+          col == columnIndex &&
+          rowIndex >= 0 &&
+          rowIndex < 99;
+    }).toList(growable: true);
     out.sort((a, b) {
       final rowA = int.tryParse('${a.value['rowIndex'] ?? 0}') ?? 0;
       final rowB = int.tryParse('${b.value['rowIndex'] ?? 0}') ?? 0;
@@ -4173,10 +4467,10 @@ class _ProblemBankExportServerPreviewDialogState
               onPressed: addableRowIndex == null
                   ? null
                   : () => _addDefaultAnchor(
-                      pageIndex: pageIndex,
-                      columnIndex: columnIndex,
-                      rowIndex: addableRowIndex,
-                    ),
+                        pageIndex: pageIndex,
+                        columnIndex: columnIndex,
+                        rowIndex: addableRowIndex,
+                      ),
               visualDensity: VisualDensity.compact,
               iconSize: 18,
               tooltip: '라벨 추가',
@@ -4574,9 +4868,8 @@ class _ProblemBankExportServerPreviewDialogState
                     _buildPageCardPill(
                       label: '제목',
                       selected: titleSelected,
-                      onPressed: pageNo == 1
-                          ? null
-                          : () => _toggleTitlePage(pageNo),
+                      onPressed:
+                          pageNo == 1 ? null : () => _toggleTitlePage(pageNo),
                     ),
                   ],
                 ),
@@ -4786,8 +5079,7 @@ class _ProblemBankExportServerPreviewDialogState
                             ),
                             IconButton(
                               tooltip: '인쇄',
-                              onPressed:
-                                  uri == null ||
+                              onPressed: uri == null ||
                                       _isPrintingPdf ||
                                       widget.onPrintRequested == null
                                   ? null
@@ -4845,16 +5137,15 @@ class _ProblemBankExportServerPreviewDialogState
                                         maxScale: _maxScale,
                                         minScale: _minScale,
                                         useAlternativeFitScaleAsMinScale: false,
-                                        calculateInitialZoom:
-                                            (
-                                              document,
-                                              controller,
-                                              fitZoom,
-                                              coverZoom,
-                                            ) {
-                                              _fitZoom ??= fitZoom;
-                                              return fitZoom;
-                                            },
+                                        calculateInitialZoom: (
+                                          document,
+                                          controller,
+                                          fitZoom,
+                                          coverZoom,
+                                        ) {
+                                          _fitZoom ??= fitZoom;
+                                          return fitZoom;
+                                        },
                                         onViewerReady: (document, controller) {
                                           if (!mounted) return;
                                           setState(() {
@@ -4872,36 +5163,33 @@ class _ProblemBankExportServerPreviewDialogState
                                             _pageNumber = page;
                                           });
                                         },
-                                        loadingBannerBuilder:
-                                            (
-                                              context,
-                                              bytesDownloaded,
-                                              totalBytes,
-                                            ) {
-                                              return const Center(
-                                                child:
-                                                    CircularProgressIndicator(
-                                                      strokeWidth: 2,
-                                                    ),
-                                              );
-                                            },
-                                        errorBannerBuilder:
-                                            (
-                                              context,
-                                              error,
-                                              stackTrace,
-                                              documentRef,
-                                            ) {
-                                              return Center(
-                                                child: Text(
-                                                  '미리보기 PDF를 열 수 없습니다: $error',
-                                                  style: const TextStyle(
-                                                    color: Color(0xFF9FB3B3),
-                                                    fontWeight: FontWeight.w700,
-                                                  ),
-                                                ),
-                                              );
-                                            },
+                                        loadingBannerBuilder: (
+                                          context,
+                                          bytesDownloaded,
+                                          totalBytes,
+                                        ) {
+                                          return const Center(
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                            ),
+                                          );
+                                        },
+                                        errorBannerBuilder: (
+                                          context,
+                                          error,
+                                          stackTrace,
+                                          documentRef,
+                                        ) {
+                                          return Center(
+                                            child: Text(
+                                              '미리보기 PDF를 열 수 없습니다: $error',
+                                              style: const TextStyle(
+                                                color: Color(0xFF9FB3B3),
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
+                                          );
+                                        },
                                       ),
                                     ),
                             ),
@@ -4956,9 +5244,8 @@ class _ProblemBankExportServerPreviewDialogState
                                   ),
                                 ),
                                 FilledButton.tonalIcon(
-                                  onPressed: _isRefreshing
-                                      ? null
-                                      : _refreshPreview,
+                                  onPressed:
+                                      _isRefreshing ? null : _refreshPreview,
                                   style: FilledButton.styleFrom(
                                     backgroundColor: panelButtonBackground,
                                     foregroundColor:
@@ -5044,20 +5331,23 @@ class _ProblemBankExportServerPreviewDialogState
                                               !widget.isDongdoTemplate) ...[
                                             _buildTitleSwitchTile(
                                               label: '표지',
-                                              description:
-                                                  widget.isNeunginTemplate
+                                              description: widget
+                                                      .isNeunginTemplate
                                                   ? 'ON 시 능인중 문제지 표지를 앞에 추가합니다.'
                                                   : (widget.isSoseonTemplate
-                                                        ? 'ON 시 소선여중 문제지 표지를 앞에 추가합니다.'
-                                                        : (widget.isOseongTemplate
-                                                              ? 'ON 시 오성중 문제지 표지를 앞에 추가합니다.'
-                                                              : (widget.isJeonghwaTemplate
-                                                                    ? 'ON 시 정화중 문제지 표지를 앞에 추가합니다.'
-                                                                    : (widget.isHwanggeumTemplate
-                                                                          ? 'ON 시 황금중 문제지 표지를 앞에 추가합니다.'
-                                                                          : (widget.isGyeongsinTemplate
-                                                                                ? 'ON 시 경신중 [문제지 표지]를 앞에 추가합니다.'
-                                                                                : 'ON 시 맨 앞에 표지 페이지를 추가합니다.'))))),
+                                                      ? 'ON 시 소선여중 문제지 표지를 앞에 추가합니다.'
+                                                      : (widget.isOseongTemplate
+                                                          ? 'ON 시 오성중 문제지 표지를 앞에 추가합니다.'
+                                                          : (widget
+                                                                  .isJeonghwaTemplate
+                                                              ? 'ON 시 정화중 문제지 표지를 앞에 추가합니다.'
+                                                              : (widget
+                                                                      .isHwanggeumTemplate
+                                                                  ? 'ON 시 황금중 문제지 표지를 앞에 추가합니다.'
+                                                                  : (widget
+                                                                          .isGyeongsinTemplate
+                                                                      ? 'ON 시 경신중 [문제지 표지]를 앞에 추가합니다.'
+                                                                      : 'ON 시 맨 앞에 표지 페이지를 추가합니다.'))))),
                                               value: _includeCoverPage,
                                               onChanged: (value) {
                                                 setState(() {
@@ -5086,8 +5376,8 @@ class _ProblemBankExportServerPreviewDialogState
                                                 '문항 끝에 [N점] 형식으로 배점을 표시합니다.',
                                             value: _includeQuestionScore,
                                             trailingAction: IconButton(
-                                              onPressed:
-                                                  _questionScoreEntries.isEmpty
+                                              onPressed: _questionScoreEntries
+                                                      .isEmpty
                                                   ? null
                                                   : _openQuestionScoreSettingsDialog,
                                               tooltip: '문항별 점수 설정',
@@ -5129,6 +5419,15 @@ class _ProblemBankExportServerPreviewDialogState
                                               });
                                             },
                                           ),
+                                          if (_includeAnswerSheet)
+                                            _buildCoverTextField(
+                                              label:
+                                                  '빠른정답 상단 문구 (기본: 제목 페이지 상단 문구)',
+                                              controller:
+                                                  _quickAnswerTopTextController,
+                                              hintText:
+                                                  _defaultQuickAnswerTopText,
+                                            ),
                                           _buildTitleSwitchTile(
                                             label: '해설',
                                             description: '해설/검수 메모 페이지를 포함합니다.',
@@ -5205,12 +5504,12 @@ class _ProblemBankExportServerPreviewDialogState
                               child: FilledButton.icon(
                                 onPressed:
                                     (widget.onGeneratePdfRequested == null ||
-                                        _isGeneratingPdf ||
-                                        _isRefreshing ||
-                                        _isSavingSettings ||
-                                        _isCreatingAssignment)
-                                    ? null
-                                    : _generatePdf,
+                                            _isGeneratingPdf ||
+                                            _isRefreshing ||
+                                            _isSavingSettings ||
+                                            _isCreatingAssignment)
+                                        ? null
+                                        : _generatePdf,
                                 style: FilledButton.styleFrom(
                                   backgroundColor: const Color(0xFF173C36),
                                   foregroundColor: const Color(0xFFC7F2D8),

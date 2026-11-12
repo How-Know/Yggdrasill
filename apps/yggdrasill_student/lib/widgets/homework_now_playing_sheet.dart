@@ -6,6 +6,7 @@ import 'package:yggdrasill_ui/yggdrasill_ui.dart';
 import '../services/homework_session.dart';
 import '../services/student_attendance_session.dart';
 import 'homework_now_playing_bar.dart';
+import 'student_back_button.dart';
 import 'student_bottom_nav_bar.dart';
 
 /// 미니바 확장 — 셸 Stack 안에서 전체화면으로 깔리고,
@@ -140,16 +141,8 @@ class HomeworkNowPlayingExpandedState extends State<HomeworkNowPlayingExpanded>
                   padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
                   child: Align(
                     alignment: Alignment.centerLeft,
-                    // 가로·세로 패딩을 같게 해 정원형 뒤로가기.
-                    child: SolidCapsuleActionBar(
-                      padding: const EdgeInsets.all(8),
-                      children: [
-                        SolidCapsuleActionButton(
-                          tooltip: '뒤로',
-                          icon: Icons.chevron_left_rounded,
-                          onPressed: () => unawaited(_requestClose()),
-                        ),
-                      ],
+                    child: StudentBackButton(
+                      onPressed: () => unawaited(_requestClose()),
                     ),
                   ),
                 ),

@@ -299,6 +299,8 @@ class BottomDialog extends StatelessWidget {
     this.preferredWidth,
     this.maxHeight,
     this.center = false,
+    this.backgroundColor,
+    this.foregroundColor,
   });
 
   final IconData icon;
@@ -318,6 +320,12 @@ class BottomDialog extends StatelessWidget {
   /// 화면 가운데. 기본은 하단에 붙는다.
   final bool center;
 
+  /// 지정하면 글래스 틴트 대신 이 색을 불투명하게 깐다.
+  final Color? backgroundColor;
+
+  /// [backgroundColor]를 쓸 때 제목·닫기 아이콘 색. 없으면 기존 헤더 색.
+  final Color? foregroundColor;
+
   @override
   Widget build(BuildContext context) {
     final dlg = YggDialogColors.of(context);
@@ -329,6 +337,20 @@ class BottomDialog extends StatelessWidget {
     final glassBorder = isDark
         ? UtilityGlassDialogTokens.borderColor
         : const Color(0x4D000000);
+    final solidPaper = backgroundColor != null;
+    final headerColor = solidPaper
+        ? (foregroundColor ?? Colors.black)
+        : dlg.headerText;
+    final closeColor = solidPaper
+        ? (foregroundColor ?? Colors.black)
+        : dlg.closeIcon;
+    final dividerColor = solidPaper
+        ? const Color(0xFFE4E4E4)
+        : dlg.divider;
+    final panelColor = backgroundColor ?? glassTint;
+    final panelBorder = solidPaper
+        ? const Color(0xFFD8D8D8)
+        : glassBorder;
     final media = MediaQuery.of(context);
     final availableWidth = math.max(
       0.0,
@@ -391,19 +413,20 @@ class BottomDialog extends StatelessWidget {
                 clipBehavior: Clip.antiAlias,
                 child: Stack(
                   children: [
-                    Positioned.fill(
-                      child: BackdropFilter(
-                        filter: ui.ImageFilter.blur(
-                          sigmaX: blurSigma,
-                          sigmaY: blurSigma,
+                    if (!solidPaper)
+                      Positioned.fill(
+                        child: BackdropFilter(
+                          filter: ui.ImageFilter.blur(
+                            sigmaX: blurSigma,
+                            sigmaY: blurSigma,
+                          ),
+                          child: const ColoredBox(color: Colors.transparent),
                         ),
-                        child: const ColoredBox(color: Colors.transparent),
                       ),
-                    ),
                     DecoratedBox(
                       decoration: BoxDecoration(
-                        color: glassTint,
-                        border: Border.all(color: glassBorder, width: 0.5),
+                        color: panelColor,
+                        border: Border.all(color: panelBorder, width: 0.5),
                         borderRadius: radius,
                       ),
                       child: Material(
@@ -425,7 +448,7 @@ class BottomDialog extends StatelessWidget {
                                 children: [
                                   Icon(
                                     icon,
-                                    color: dlg.headerText,
+                                    color: headerColor,
                                     size: BottomDialogMetrics.headerIconSize,
                                   ),
                                   const SizedBox(
@@ -437,7 +460,7 @@ class BottomDialog extends StatelessWidget {
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style: TextStyle(
-                                        color: dlg.headerText,
+                                        color: headerColor,
                                         fontSize:
                                             BottomDialogMetrics.titleFontSize,
                                         fontWeight: FontWeight.w800,
@@ -448,15 +471,15 @@ class BottomDialog extends StatelessWidget {
                                   IconButton(
                                     tooltip: '닫기',
                                     onPressed: onClose,
-                                    icon: Icon(
-                                      Icons.close_rounded,
-                                      color: dlg.closeIcon,
-                                    ),
+                                      icon: Icon(
+                                        Icons.close_rounded,
+                                        color: closeColor,
+                                      ),
                                   ),
                                 ],
                               ),
                             ),
-                            Divider(height: 1, color: dlg.divider),
+                            Divider(height: 1, color: dividerColor),
                             if (shrinkWrap)
                               Flexible(
                                 fit: FlexFit.loose,

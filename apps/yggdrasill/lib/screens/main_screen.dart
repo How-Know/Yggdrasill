@@ -58,6 +58,7 @@ import 'class_content_events_dialog.dart';
 import 'timetable/components/student_time_info_dialog.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import 'timetable/views/makeup_view.dart';
+import '../widgets/bottom_dialog.dart';
 import '../widgets/dialog_tokens.dart';
 import '../widgets/utility_glass_dialog_shell.dart';
 import '../widgets/dark_panel_route.dart';
@@ -2914,48 +2915,14 @@ class _MainScreenState extends State<MainScreen>
 
     await showDialog(
       context: context,
-      barrierColor: Colors.black.withOpacity(0.55),
+      barrierColor: Colors.black.withValues(
+        alpha: BottomDialogMetrics.barrierOpacity,
+      ),
       builder: (dialogContext) {
         final dialogEntries = List<_LeavedDialogEntry>.from(entries);
         final Set<String> cancellingSetIds = <String>{};
         final Set<String> editingTimeKeys = <String>{};
-
-        Widget buildHeader() {
-          return SizedBox(
-            height: 48,
-            child: Row(
-              children: [
-                Container(
-                  width: 40,
-                  height: 40,
-                  margin: const EdgeInsets.only(right: 12),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.05),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: IconButton(
-                    tooltip: '닫기',
-                    icon: const Icon(
-                      Icons.arrow_back,
-                      color: Colors.white70,
-                      size: 20,
-                    ),
-                    padding: EdgeInsets.zero,
-                    onPressed: () => Navigator.of(dialogContext).pop(),
-                  ),
-                ),
-                const Text(
-                  '하원 리스트',
-                  style: TextStyle(
-                    color: Color(0xFFEAF2F2),
-                    fontSize: 22,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
-            ),
-          );
-        }
+        final dlg = YggDialogColors.of(dialogContext);
 
         Widget buildTimeBadge({
           required String label,
@@ -2966,31 +2933,28 @@ class _MainScreenState extends State<MainScreen>
           final badge = Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
-              color: const Color(0xFF1B6B63).withOpacity(0.18),
+              color: dlg.chipBg,
               borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: dlg.cardBorder, width: 0.5),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
                   '$label $value',
-                  style: const TextStyle(
-                    color: Color(0xFFEAF2F2),
+                  style: TextStyle(
+                    color: dlg.text,
                     fontSize: 13,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
                 const SizedBox(width: 6),
                 isBusy
-                    ? const SizedBox(
-                        width: 10,
-                        height: 10,
-                        child: CircularProgressIndicator(strokeWidth: 1.8),
-                      )
-                    : const Icon(
+                    ? const YggLoadingIndicator(size: 12)
+                    : Icon(
                         Icons.edit_outlined,
-                        size: 13,
-                        color: Color(0xFFB6C9C9),
+                        size: 14,
+                        color: dlg.textSub,
                       ),
               ],
             ),
@@ -3006,48 +2970,32 @@ class _MainScreenState extends State<MainScreen>
           );
         }
 
-        return Dialog(
-          backgroundColor: kDlgBg,
-          insetPadding: const EdgeInsets.all(24),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 560),
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.fromLTRB(26, 26, 26, 22),
-              decoration: BoxDecoration(
-                color: kDlgBg,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: StatefulBuilder(
-                builder: (context, setDialogState) {
-                  return Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      buildHeader(),
-                      const SizedBox(height: 14),
-                      SizedBox(
-                        height: listHeight,
-                        child: dialogEntries.isEmpty
-                            ? const Center(
-                                child: Text(
-                                  '하원한 학생이 아직 없어요.',
-                                  style: TextStyle(
-                                    color: Color(0xFF9FB3B3),
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                              )
-                            : Scrollbar(
-                                thumbVisibility: true,
-                                child: ListView.separated(
-                                  itemCount: dialogEntries.length,
-                                  separatorBuilder: (_, __) =>
-                                      const SizedBox(height: 12),
+        return BottomDialog(
+          icon: Icons.featured_play_list_outlined,
+          title: '하원 리스트',
+          shrinkWrap: true,
+          preferredWidth: 560,
+          onClose: () => Navigator.of(dialogContext).pop(),
+          child: StatefulBuilder(
+            builder: (context, setDialogState) {
+              return SizedBox(
+                height: listHeight,
+                child: dialogEntries.isEmpty
+                    ? Center(
+                        child: Text(
+                          '하원한 학생이 아직 없어요.',
+                          style: TextStyle(
+                            color: dlg.textSub,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      )
+                    : ListView.separated(
+                        itemCount: dialogEntries.length,
+                        separatorBuilder: (_, __) => const SizedBox(
+                          height: BottomDialogMetrics.actionGap,
+                        ),
                                   itemBuilder: (context, index) {
                                     final entry = dialogEntries[index];
                                     final setId = entry.target.setId;
@@ -3072,20 +3020,7 @@ class _MainScreenState extends State<MainScreen>
                                         entry.departure != null
                                             ? _formatTime(entry.departure!)
                                             : '--:--';
-                                    return Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 16,
-                                        vertical: 14,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: const Color(0xFF10171A),
-                                        borderRadius: BorderRadius.circular(16),
-                                        border: Border.all(
-                                          color: const Color(
-                                            0xFF1B6B63,
-                                          ).withOpacity(0.25),
-                                        ),
-                                      ),
+                                    return BottomDialogCard(
                                       child: Column(
                                         crossAxisAlignment:
                                             CrossAxisAlignment.start,
@@ -3101,27 +3036,25 @@ class _MainScreenState extends State<MainScreen>
                                                   children: [
                                                     Text(
                                                       entry.target.student.name,
-                                                      style: const TextStyle(
-                                                        color: Color(
-                                                          0xFFEAF2F2,
-                                                        ),
-                                                        fontSize: 17,
+                                                      style: TextStyle(
+                                                        color: dlg.text,
+                                                        fontSize: 16,
                                                         fontWeight:
-                                                            FontWeight.w700,
+                                                            FontWeight.w800,
                                                       ),
                                                     ),
                                                     if (entry
                                                             .target.classInfo !=
                                                         null) ...[
-                                                      const SizedBox(height: 4),
+                                                      const SizedBox(height: 3),
                                                       Text(
                                                         entry.target.classInfo!
                                                             .name,
-                                                        style: const TextStyle(
-                                                          color: Color(
-                                                            0xFF7F8A8E,
-                                                          ),
+                                                        style: TextStyle(
+                                                          color: dlg.textSub,
                                                           fontSize: 13,
+                                                          fontWeight:
+                                                              FontWeight.w600,
                                                         ),
                                                       ),
                                                     ],
@@ -3197,26 +3130,34 @@ class _MainScreenState extends State<MainScreen>
                                                         }
                                                       },
                                                 icon: isCancelling
-                                                    ? const SizedBox(
-                                                        width: 14,
-                                                        height: 14,
-                                                        child:
-                                                            CircularProgressIndicator(
-                                                          strokeWidth: 2.0,
-                                                        ),
+                                                    ? const YggLoadingIndicator(
+                                                        size: 16,
                                                       )
-                                                    : const Icon(
+                                                    : Icon(
                                                         Icons.undo_rounded,
-                                                        size: 17,
+                                                        size: 18,
+                                                        color: dlg.textSub,
                                                       ),
                                                 label: Text(
                                                   isCancelling
                                                       ? '복구 중...'
                                                       : '하원 취소',
+                                                  style: TextStyle(
+                                                    color: dlg.text,
+                                                    fontSize: 13,
+                                                    fontWeight: FontWeight.w600,
+                                                  ),
                                                 ),
                                                 style: TextButton.styleFrom(
-                                                  foregroundColor: const Color(
-                                                    0xFFEAF2F2,
+                                                  foregroundColor: dlg.text,
+                                                  minimumSize: Size.zero,
+                                                  tapTargetSize:
+                                                      MaterialTapTargetSize
+                                                          .shrinkWrap,
+                                                  padding: const EdgeInsets
+                                                      .symmetric(
+                                                    horizontal: 8,
+                                                    vertical: 4,
                                                   ),
                                                 ),
                                               ),
@@ -3353,14 +3294,9 @@ class _MainScreenState extends State<MainScreen>
                                       ),
                                     );
                                   },
-                                ),
-                              ),
-                      ),
-                    ],
-                  );
-                },
-              ),
-            ),
+                        ),
+              );
+            },
           ),
         );
       },

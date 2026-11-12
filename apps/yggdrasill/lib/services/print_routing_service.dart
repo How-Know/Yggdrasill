@@ -114,6 +114,7 @@ class PrintRoutingService {
       case 'K8':
       case 'PRC8K':
       case 'ROC8K':
+      case '8절':
         return '8K';
       case 'LETTER':
       case 'NORTHAMERICALETTER':

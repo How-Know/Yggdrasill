@@ -73,6 +73,7 @@ import '../utils/homework_card_label.dart';
 import '../utils/homework_completed_overview.dart';
 import '../utils/homework_page_text.dart';
 import '../utils/textbook_problem_source_order.dart';
+import 'class_content/homework_card_detail_dialog.dart';
 import 'class_content/homework_created_date.dart';
 import 'class_content/homework_performance_attempt.dart';
 import 'class_content/grading_mode_page.dart';
@@ -13996,6 +13997,7 @@ Widget _buildHomeworkChipsReactiveForStudent(
                                     .copyWith(scrollbars: false),
                                 child: SingleChildScrollView(
                                   physics: const BouncingScrollPhysics(),
+                                  clipBehavior: Clip.none,
                                   child: Padding(
                                     padding: const EdgeInsets.only(
                                       left: _homeworkChipOuterLeftInset,
@@ -15363,12 +15365,23 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
     final bool groupIsWaiting = summary.phase == 1;
     final bool groupIsConfirmed = summary.phase == 4;
     final bool hasTestChild = children.any(_isTestHomeworkItem);
-    final bool groupSlideDownIsEdit = groupIsWaiting || groupIsConfirmed;
-    final bool groupCanSlideDown =
-        groupIsRunning || groupIsSubmitted || groupSlideDownIsEdit;
-    final String groupDownLabel = groupSlideDownIsEdit
-        ? '수정'
-        : (groupIsSubmitted ? '완료' : (groupIsRunning ? '멈춤' : ''));
+    final bool isHomeworkCard = hasHomeworkAssignment || markedAsHomework;
+    // 오른쪽: 제출 카드만 완료. 대기·수행은 그룹 제출. 확인·숙제는 비운다.
+    final bool slideRightCompletes =
+        !isHomeworkCard && summary.phase == 3 && submittedKeys.isNotEmpty;
+    final bool slideRightSubmits = !isHomeworkCard &&
+        (summary.phase == 1 || summary.phase == 2);
+    final bool groupCanSlideDown = slideRightCompletes || slideRightSubmits;
+    final String groupDownLabel =
+        slideRightCompletes ? '완료' : (slideRightSubmits ? '제출' : '');
+    final runningChildrenForPause = <HomeworkItem>[
+      for (final child in children)
+        if (child.status != HomeworkStatus.completed &&
+            child.completedAt == null &&
+            (child.runStart != null || child.phase == 2))
+          child,
+    ];
+    final bool slideLeftPauses = runningChildrenForPause.isNotEmpty;
     final Color draftExtensionBorderColor = groupIsConfirmed
         ? kDlgBorder
         : (groupIsSubmitted
@@ -15376,16 +15389,6 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
             : (groupIsRunning
                 ? kDlgAccent
                 : (summary.phase == 1 ? Colors.transparent : kDlgBorder)));
-    HomeworkItem? runningChildForSlide;
-    if (groupIsRunning) {
-      for (final child in children) {
-        if (child.runStart != null || child.phase == 2) {
-          runningChildForSlide = child;
-          break;
-        }
-      }
-    }
-
     final bool draftExtensionOpen =
         homeworkDraftEditor != null && homeworkDraftReveal > 0;
     final CustomPainter? draftUnifiedBorderPainter = !draftExtensionOpen
@@ -15498,13 +15501,13 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
       canSlideDown: !printPickMode && groupCanSlideDown,
       canSlideUp: !printPickMode,
       downLabel: groupDownLabel,
-      upLabel: '취소',
-      downColor: groupSlideDownIsEdit
-          ? kDlgAccent
-          : (groupIsSubmitted
-              ? const Color(0xFF4CAF50)
-              : const Color(0xFF9FB3B3)),
-      upColor: const Color(0xFFE57373),
+      upLabel: slideLeftPauses ? '멈춤' : '취소',
+      downColor: slideRightCompletes
+          ? const Color(0xFF4CAF50)
+          : kDlgAccent,
+      upColor: slideLeftPauses
+          ? const Color(0xFF9FB3B3)
+          : const Color(0xFFE57373),
       onTap: () {
         if (printPickMode) {
           if (onGroupPrintPickTap != null) {
@@ -15531,9 +15534,32 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
           }
           return;
         }
-        // 숙제 카드도 탭으로 펼쳐 검사 날짜·히스토리를 볼 수 있게 한다.
-        // 숙제 검사는 더블탭으로 연다.
-        onToggleExpand?.call(group.id);
+        // 탭은 펼침이 아니라 과제 상세 창. 숙제 검사는 더블탭.
+        unawaited(
+          showHomeworkCardDetailDialog(
+            context: context,
+            studentId: studentId,
+            summary: summary,
+            children: children,
+            homeworkCount: groupAssignmentCount,
+            isHomework: hasHomeworkAssignment || markedAsHomework,
+            dueLabel: dueLabel,
+            showAdditionalPrefix: hasGoalSnapshot &&
+                children.isNotEmpty &&
+                !children.any(
+                  (child) => goalSnapshotItemIds.contains(child.id),
+                ),
+            onChildPageTap: (child) {
+              unawaited(
+                _showGroupChildPageEditDialog(
+                  context: context,
+                  studentId: studentId,
+                  child: child,
+                ),
+              );
+            },
+          ),
+        );
       },
       onLongPress: printPickMode
           ? () {
@@ -15562,24 +15588,20 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
           : null,
       onSecondaryTap: printPickMode ? onPrintPickSecondaryTap : null,
       onSlideDown: () {
-        if (printPickMode) return;
-        if (groupSlideDownIsEdit) {
-          unawaited(
-            _showHomeworkGroupActionDialog(
-              context: context,
-              studentId: studentId,
-              group: group,
-            ),
-          );
+        if (printPickMode || !groupCanSlideDown) return;
+        if (slideRightSubmits) {
+          unawaited(() async {
+            final changed = await HomeworkStore.instance.bulkTransitionGroup(
+              studentId,
+              group.id,
+              fromPhase: 99,
+            );
+            if (!context.mounted || changed > 0) return;
+            _showHomeworkChipSnackBar(context, '제출할 대기·수행 과제가 없습니다.');
+          }());
           return;
         }
-        if (groupIsRunning && runningChildForSlide != null) {
-          unawaited(
-            HomeworkStore.instance.pause(studentId, runningChildForSlide.id),
-          );
-          return;
-        }
-        if (groupIsSubmitted) {
+        if (slideRightCompletes) {
           for (final key in submittedKeys) {
             onSlideDownComplete?.call(key);
           }
@@ -15587,6 +15609,19 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
       },
       onSlideUp: () async {
         if (printPickMode) return;
+        if (slideLeftPauses) {
+          final changed =
+              await HomeworkStore.instance.pauseRunningChildrenInGroup(
+            studentId,
+            group.id,
+          );
+          if (!context.mounted || changed > 0) return;
+          _showHomeworkChipSnackBar(
+            context,
+            changed < 0 ? '과제 멈춤에 실패했습니다.' : '멈출 수행 중 과제가 없습니다.',
+          );
+          return;
+        }
         await _showHomeworkGroupSlideCancelDialog(
           context: context,
           studentId: studentId,
@@ -15798,6 +15833,7 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
     ReorderableListView.builder(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
+      clipBehavior: Clip.none,
       itemCount: groupWidgets.length,
       buildDefaultDragHandles: false,
       proxyDecorator: (child, _, __) =>
@@ -21631,6 +21667,132 @@ class _HomeworkCardBusyCover extends StatelessWidget {
   }
 }
 
+/// Icons8 Send. iOS Outlined (43442). 제출.
+const String _kHomeworkSlideSubmitSvg =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50"><path d="M 3 7 L 3 39 L 26 39 L 26 37 L 5 37 L 5 34.980469 L 17.808594 24.851563 C 18.84375 25.757813 20.757813 27.421875 21 27.632813 C 22.523438 28.960938 24.140625 29.296875 25.175781 29.296875 C 26.210938 29.296875 27.828125 28.960938 29.355469 27.632813 C 30.539063 26.601563 42.179688 16.453125 45 13.996094 L 45 31 L 47 33 L 47 7 Z M 5 9 L 45 9 L 45 11.34375 C 43.964844 12.246094 29.3125 25.019531 28.042969 26.125 C 26.921875 27.101563 25.78125 27.296875 25.175781 27.296875 C 24.570313 27.296875 23.433594 27.097656 22.3125 26.125 C 21.007813 24.988281 5.441406 11.421875 5 11.035156 Z M 5 13.6875 C 6.695313 15.167969 11.71875 19.546875 16.273438 23.515625 L 5 32.429688 Z M 38.988281 29.988281 C 38.582031 29.992188 38.21875 30.238281 38.0625 30.613281 C 37.910156 30.992188 38 31.421875 38.292969 31.707031 L 43.585938 37 L 30 37 L 30 39 L 43.585938 39 L 38.292969 44.292969 C 38.03125 44.542969 37.925781 44.917969 38.019531 45.265625 C 38.109375 45.617188 38.382813 45.890625 38.734375 45.980469 C 39.082031 46.074219 39.457031 45.96875 39.707031 45.707031 L 47.414063 38 L 39.707031 30.292969 C 39.519531 30.097656 39.261719 29.992188 38.988281 29.988281 Z"/></svg>';
+
+/// Icons8 Checkmark. iOS Outlined (11695). 완료.
+const String _kHomeworkSlideCompleteSvg =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50"><path d="M 25 2 C 12.317 2 2 12.317 2 25 C 2 37.683 12.317 48 25 48 C 37.683 48 48 37.683 48 25 C 48 20.44 46.660281 16.189328 44.363281 12.611328 L 42.994141 14.228516 C 44.889141 17.382516 46 21.06 46 25 C 46 36.579 36.579 46 25 46 C 13.421 46 4 36.579 4 25 C 4 13.421 13.421 4 25 4 C 30.443 4 35.393906 6.0997656 39.128906 9.5097656 L 40.4375 7.9648438 C 36.3525 4.2598437 30.935 2 25 2 z M 43.236328 7.7539062 L 23.914062 30.554688 L 15.78125 22.96875 L 14.417969 24.431641 L 24.083984 33.447266 L 44.763672 9.046875 L 43.236328 7.7539062 z"/></svg>';
+
+/// Icons8 Pause. iOS Outlined (403). 멈춤.
+const String _kHomeworkSlidePauseSvg =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50"><path d="M 12 8 L 12 42 L 22 42 L 22 8 Z M 28 8 L 28 42 L 38 42 L 38 8 Z M 14 10 L 20 10 L 20 40 L 14 40 Z M 30 10 L 36 10 L 36 40 L 30 40 Z"/></svg>';
+
+/// Icons8 Cancel. iOS Outlined (3062). 취소.
+const String _kHomeworkSlideCancelSvg =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50"><path d="M 25 2 C 12.309534 2 2 12.309534 2 25 C 2 37.690466 12.309534 48 25 48 C 37.690466 48 48 37.690466 48 25 C 48 12.309534 37.690466 2 25 2 z M 25 4 C 36.609534 4 46 13.390466 46 25 C 46 36.609534 36.609534 46 25 46 C 13.390466 46 4 36.609534 4 25 C 4 13.390466 13.390466 4 25 4 z M 32.990234 15.986328 A 1.0001 1.0001 0 0 0 32.292969 16.292969 L 25 23.585938 L 17.707031 16.292969 A 1.0001 1.0001 0 0 0 16.990234 15.990234 A 1.0001 1.0001 0 0 0 16.292969 17.707031 L 23.585938 25 L 16.292969 32.292969 A 1.0001 1.0001 0 1 0 17.707031 33.707031 L 25 26.414062 L 32.292969 33.707031 A 1.0001 1.0001 0 1 0 33.707031 32.292969 L 26.414062 25 L 33.707031 17.707031 A 1.0001 1.0001 0 0 0 32.990234 15.986328 z"/></svg>';
+
+/// Icons8 Trash. iOS Outlined (1942). 삭제.
+const String _kHomeworkSlideDeleteSvg =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50"><path d="M 21 0 C 19.355469 0 18 1.355469 18 3 L 18 5 L 10.1875 5 C 10.0625 4.976563 9.9375 4.976563 9.8125 5 L 8 5 C 7.96875 5 7.9375 5 7.90625 5 C 7.355469 5.027344 6.925781 5.496094 6.953125 6.046875 C 6.980469 6.597656 7.449219 7.027344 8 7 L 9.09375 7 L 12.6875 47.5 C 12.8125 48.898438 14.003906 50 15.40625 50 L 34.59375 50 C 35.996094 50 37.1875 48.898438 37.3125 47.5 L 40.90625 7 L 42 7 C 42.359375 7.003906 42.695313 6.816406 42.878906 6.503906 C 43.058594 6.191406 43.058594 5.808594 42.878906 5.496094 C 42.695313 5.183594 42.359375 4.996094 42 5 L 32 5 L 32 3 C 32 1.355469 30.644531 0 29 0 Z M 21 2 L 29 2 C 29.5625 2 30 2.4375 30 3 L 30 5 L 20 5 L 20 3 C 20 2.4375 20.4375 2 21 2 Z M 11.09375 7 L 38.90625 7 L 35.3125 47.34375 C 35.28125 47.691406 34.910156 48 34.59375 48 L 15.40625 48 C 15.089844 48 14.71875 47.691406 14.6875 47.34375 Z M 18.90625 9.96875 C 18.863281 9.976563 18.820313 9.988281 18.78125 10 C 18.316406 10.105469 17.988281 10.523438 18 11 L 18 44 C 17.996094 44.359375 18.183594 44.695313 18.496094 44.878906 C 18.808594 45.058594 19.191406 45.058594 19.503906 44.878906 C 19.816406 44.695313 20.003906 44.359375 20 44 L 20 11 C 20.011719 10.710938 19.894531 10.433594 19.6875 10.238281 C 19.476563 10.039063 19.191406 9.941406 18.90625 9.96875 Z M 24.90625 9.96875 C 24.863281 9.976563 24.820313 9.988281 24.78125 10 C 24.316406 10.105469 23.988281 10.523438 24 11 L 24 44 C 23.996094 44.359375 24.183594 44.695313 24.496094 44.878906 C 24.808594 45.058594 25.191406 45.058594 25.503906 44.878906 C 25.816406 44.695313 26.003906 44.359375 26 44 L 26 11 C 26.011719 10.710938 25.894531 10.433594 25.6875 10.238281 C 25.476563 10.039063 25.191406 9.941406 24.90625 9.96875 Z M 30.90625 9.96875 C 30.863281 9.976563 30.820313 9.988281 30.78125 10 C 30.316406 10.105469 29.988281 10.523438 30 11 L 30 44 C 29.996094 44.359375 30.183594 44.695313 30.496094 44.878906 C 30.808594 45.058594 31.191406 45.058594 31.503906 44.878906 C 31.816406 44.695313 32.003906 44.359375 32 44 L 32 11 C 32.011719 10.710938 31.894531 10.433594 31.6875 10.238281 C 31.476563 10.039063 31.191406 9.941406 30.90625 9.96875 Z"/></svg>';
+
+/// Icons8 Upload. iOS Outlined (368). 출제.
+const String _kHomeworkSlidePublishSvg =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50"><path d="M 25 0.59375 L 24.28125 1.28125 L 16.28125 9.28125 C 15.882813 9.679688 15.882813 10.320313 16.28125 10.71875 C 16.679688 11.117188 17.320313 11.117188 17.71875 10.71875 L 24 4.4375 L 24 32 C 23.996094 32.359375 24.183594 32.695313 24.496094 32.878906 C 24.808594 33.058594 25.191406 33.058594 25.503906 32.878906 C 25.816406 32.695313 26.003906 32.359375 26 32 L 26 4.4375 L 32.28125 10.71875 C 32.679688 11.117188 33.320313 11.117188 33.71875 10.71875 C 34.117188 10.320313 34.117188 9.679688 33.71875 9.28125 L 25.71875 1.28125 Z M 7 16 L 7 50 L 43 50 L 43 16 L 33 16 C 32.640625 15.996094 32.304688 16.183594 32.121094 16.496094 C 31.941406 16.808594 31.941406 17.191406 32.121094 17.503906 C 32.304688 17.816406 32.640625 18.003906 33 18 L 41 18 L 41 48 L 9 48 L 9 18 L 17 18 C 17.359375 18.003906 17.695313 17.816406 17.878906 17.503906 C 18.058594 17.191406 18.058594 16.808594 17.878906 16.496094 C 17.695313 16.183594 17.359375 15.996094 17 16 Z"/></svg>';
+
+/// 카드 밑에 깔린 동작. 카드가 밀리면 왼쪽 또는 오른쪽 틈으로 보인다.
+class _HomeworkSlideUnderlay extends StatelessWidget {
+  final String label;
+  final Color color;
+  final bool alignLeft;
+
+  const _HomeworkSlideUnderlay({
+    required this.label,
+    required this.color,
+    required this.alignLeft,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final Color ink = color.computeLuminance() > 0.6 ? kDlgBg : kDlgText;
+    final Widget icon = _homeworkSlideActionIcon(label, ink);
+    final text = Text(
+      label,
+      style: const TextStyle(
+        fontSize: 18,
+        fontWeight: FontWeight.w800,
+        height: 1.1,
+      ).copyWith(color: ink),
+      maxLines: 1,
+      softWrap: false,
+    );
+    return ColoredBox(
+      color: color,
+      child: Align(
+        alignment: alignLeft ? Alignment.centerLeft : Alignment.centerRight,
+        child: Padding(
+          padding: EdgeInsets.only(
+            left: alignLeft ? 16 : 0,
+            right: alignLeft ? 0 : 16,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: alignLeft
+                ? [icon, const SizedBox(width: 8), text]
+                : [text, const SizedBox(width: 8), icon],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+Widget _homeworkSlideActionIcon(String label, Color color) {
+  final String? svg = _homeworkSlideActionSvg(label);
+  if (svg == null) return const SizedBox(width: 24, height: 24);
+  return SvgPicture.string(
+    svg,
+    width: 24,
+    height: 24,
+    colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
+  );
+}
+
+String? _homeworkSlideActionSvg(String label) {
+  switch (label) {
+    case '제출':
+      return _kHomeworkSlideSubmitSvg;
+    case '완료':
+      return _kHomeworkSlideCompleteSvg;
+    case '멈춤':
+      return _kHomeworkSlidePauseSvg;
+    case '취소':
+      return _kHomeworkSlideCancelSvg;
+    case '삭제':
+      return _kHomeworkSlideDeleteSvg;
+    case '출제':
+      return _kHomeworkSlidePublishSvg;
+    default:
+      return null;
+  }
+}
+
+class _HomeworkSlideUnderlayClipper extends CustomClipper<Rect> {
+  final double revealWidth;
+  final bool alignLeft;
+
+  const _HomeworkSlideUnderlayClipper({
+    required this.revealWidth,
+    required this.alignLeft,
+  });
+
+  @override
+  Rect getClip(Size size) {
+    final double w = revealWidth.clamp(0.0, size.width);
+    if (alignLeft) {
+      return Rect.fromLTWH(0, 0, w, size.height);
+    }
+    return Rect.fromLTWH(size.width - w, 0, w, size.height);
+  }
+
+  @override
+  bool shouldReclip(covariant _HomeworkSlideUnderlayClipper oldClipper) {
+    return oldClipper.revealWidth != revealWidth ||
+        oldClipper.alignLeft != alignLeft;
+  }
+}
+
 class _SlideableHomeworkChip extends StatefulWidget {
   final Widget child;
   final Widget? extension;
@@ -21677,12 +21839,50 @@ class _SlideableHomeworkChip extends StatefulWidget {
   State<_SlideableHomeworkChip> createState() => _SlideableHomeworkChipState();
 }
 
-class _SlideableHomeworkChipState extends State<_SlideableHomeworkChip> {
+class _SlideableHomeworkChipState extends State<_SlideableHomeworkChip>
+    with SingleTickerProviderStateMixin {
   static const Duration _doubleClickWindow = Duration(milliseconds: 450);
+  static const double _cardCornerRadius = 12.0;
 
+  final OverlayPortalController _slideOverlay = OverlayPortalController();
+  late final AnimationController _snapController;
+  Animation<double>? _snapAnimation;
   double _offset = 0.0;
-  bool _dragging = false;
+  bool _lifted = false;
+  String? _cachedActionLabel;
+  Color _cachedActionColor = Colors.transparent;
   Timer? _singleClickTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _snapController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 160),
+    )
+      ..addListener(_handleSnapTick)
+      ..addStatusListener(_handleSnapStatus);
+  }
+
+  void _handleSnapTick() {
+    final anim = _snapAnimation;
+    if (anim == null || !mounted) return;
+    setState(() {
+      _offset = anim.value;
+    });
+  }
+
+  void _handleSnapStatus(AnimationStatus status) {
+    if (status != AnimationStatus.completed) return;
+    _snapAnimation = null;
+    _cachedActionLabel = null;
+    if (!mounted) return;
+    _lifted = false;
+    if (_slideOverlay.isShowing) _slideOverlay.hide();
+    setState(() {
+      _offset = 0.0;
+    });
+  }
 
   void _cancelPendingSingleClick() {
     _singleClickTimer?.cancel();
@@ -21711,159 +21911,185 @@ class _SlideableHomeworkChipState extends State<_SlideableHomeworkChip> {
   @override
   void dispose() {
     _cancelPendingSingleClick();
+    _snapController.dispose();
     super.dispose();
   }
 
+  void _liftCard() {
+    if (_lifted) return;
+    _lifted = true;
+    _slideOverlay.show();
+  }
+
+  void _dropCard() {
+    _snapAnimation = null;
+    _cachedActionLabel = null;
+    if (!_lifted || !mounted) return;
+    _lifted = false;
+    if (_slideOverlay.isShowing) _slideOverlay.hide();
+    setState(() {});
+  }
+
+  void _snapBackFrom(double from) {
+    if (from.abs() <= 0.5) {
+      setState(() {
+        _offset = 0.0;
+      });
+      _dropCard();
+      return;
+    }
+    _snapAnimation = Tween<double>(begin: from, end: 0.0).animate(
+      CurvedAnimation(parent: _snapController, curve: Curves.easeOut),
+    );
+    _snapController.forward(from: 0.0);
+  }
+
   void _updateOffset(double delta) {
+    if (_snapController.isAnimating) {
+      _snapController.stop();
+      _snapAnimation = null;
+    }
     final next = (_offset + delta).clamp(-widget.maxSlide, widget.maxSlide);
+    if (next.abs() > 0) _liftCard();
     setState(() {
       _offset = next;
-      _dragging = true;
     });
+  }
+
+  void _cancelDrag() {
+    _snapBackFrom(_offset);
   }
 
   Future<void> _endDrag(DragEndDetails details) async {
     final vx = details.primaryVelocity ?? 0.0;
-    final double absOffset = _offset.abs();
-    final bool isRight = _offset > 0;
-    final bool isLeft = _offset < 0;
+    final double from = _offset;
+    final double absOffset = from.abs();
+    final bool isRight = from > 0;
+    final bool isLeft = from < 0;
     final bool trigger =
         absOffset >= widget.maxSlide * 0.48 || vx.abs() > 800.0;
 
-    if (trigger) {
-      setState(() {
-        _offset = 0.0;
-        _dragging = false;
-      });
-      if (isRight && widget.canSlideDown) {
-        widget.onSlideDown();
-      } else if (isLeft && widget.canSlideUp) {
-        await widget.onSlideUp();
-      }
-      return;
+    _snapBackFrom(from);
+
+    if (!trigger) return;
+    if (isRight && widget.canSlideDown) {
+      widget.onSlideDown();
+    } else if (isLeft && widget.canSlideUp) {
+      await widget.onSlideUp();
     }
-    setState(() {
-      _offset = 0.0;
-      _dragging = false;
-    });
   }
 
   @override
   Widget build(BuildContext context) {
-    final double progress = (_offset.abs() / widget.maxSlide).clamp(0.0, 1.0);
     final bool isRight = _offset > 0;
     final bool isLeft = _offset < 0;
     final bool hasExtension = widget.extension != null;
-    final TextStyle labelStyle = const TextStyle(
-      fontSize: 18,
-      fontWeight: FontWeight.w700,
-      height: 1.1,
-    );
+    final String? liveLabel = isRight &&
+            widget.canSlideDown &&
+            widget.downLabel.trim().isNotEmpty
+        ? widget.downLabel.trim()
+        : (isLeft && widget.canSlideUp
+            ? (widget.upLabel.trim().isNotEmpty
+                ? widget.upLabel.trim()
+                : widget.upSubLabel.trim())
+            : null);
+    final Color liveColor = isRight ? widget.downColor : widget.upColor;
+    if (!_snapController.isAnimating && liveLabel != null) {
+      _cachedActionLabel = liveLabel;
+      _cachedActionColor = liveColor;
+    }
+    final String? actionLabel =
+        _snapController.isAnimating ? _cachedActionLabel : liveLabel;
+    final Color actionColor =
+        _snapController.isAnimating ? _cachedActionColor : liveColor;
 
-    // 원본 카드 clip은 extension과 분리하고, 슬라이드 transform만 같이 적용한다.
-    // (전체를 하나의 ClipRRect로 감싸 폭이 변하면 원본 카드 레이아웃이 흔들림)
-    final Widget cardBody = ClipRRect(
+    // 밑면은 밀린 카드의 둥근 모서리 뒤(+13px)까지 받쳐 검은 직각 모서리가
+    // 함께 따라 움직이지 않게 하고, 카드와 밑면을 같은 상자에서 오버레이에 그려
+    // 크기 어긋남과 옆 학생 카드 아래로 깔리는 현상을 모두 막는다.
+    final Widget cardFace = ClipRRect(
       borderRadius: hasExtension
           ? const BorderRadius.only(
-              topLeft: Radius.circular(12),
-              bottomLeft: Radius.circular(12),
+              topLeft: Radius.circular(_cardCornerRadius),
+              bottomLeft: Radius.circular(_cardCornerRadius),
             )
-          : BorderRadius.circular(12),
-      child: Stack(
-        clipBehavior: Clip.hardEdge,
-        children: [
-          Positioned.fill(
-            child: Stack(
-              children: [
-                if (widget.downLabel.isNotEmpty && widget.canSlideDown)
-                  Align(
-                    alignment: const Alignment(-0.9, 0),
-                    child: Opacity(
-                      opacity: isRight
-                          ? (0.2 + 0.8 * progress).clamp(0.0, 1.0)
-                          : 0.0,
-                      child: Text(
-                        '→ ${widget.downLabel}',
-                        style: labelStyle.copyWith(
-                          color: widget.downColor,
-                        ),
-                        maxLines: 1,
-                        softWrap: false,
-                      ),
-                    ),
-                  ),
-                if (widget.canSlideUp &&
-                    (widget.upLabel.isNotEmpty ||
-                        widget.showUpArrowWhenLabelEmpty))
-                  Align(
-                    alignment: const Alignment(0.9, 0),
-                    child: Transform.translate(
-                      offset: const Offset(-5, 0),
-                      child: Opacity(
-                        opacity: isLeft
-                            ? (0.2 + 0.8 * progress).clamp(0.0, 1.0)
-                            : 0.0,
-                        child: widget.upLabel.trim().isEmpty
-                            ? Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    Icons.arrow_back_rounded,
-                                    size: 34,
-                                    color: widget.upColor,
-                                  ),
-                                  if (widget.upSubLabel.trim().isNotEmpty) ...[
-                                    const SizedBox(height: 3),
-                                    Text(
-                                      widget.upSubLabel.trim(),
-                                      style: labelStyle.copyWith(
-                                        color: widget.upColor,
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w800,
-                                      ),
-                                      maxLines: 1,
-                                      softWrap: false,
-                                    ),
-                                  ],
-                                ],
-                              )
-                            : Text(
-                                '← ${widget.upLabel}',
-                                style: labelStyle.copyWith(
-                                  color: widget.upColor,
-                                ),
-                                maxLines: 1,
-                                softWrap: false,
-                              ),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          widget.child,
-        ],
-      ),
+          : const BorderRadius.all(Radius.circular(_cardCornerRadius)),
+      child: widget.child,
     );
-
-    final Widget slidingContent = hasExtension
+    Widget slidingCard = hasExtension
         ? Row(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              cardBody,
+              cardFace,
               widget.extension!,
             ],
           )
-        : cardBody;
+        : cardFace;
+    if (widget.foregroundPainter != null) {
+      slidingCard = CustomPaint(
+        foregroundPainter: widget.foregroundPainter,
+        child: slidingCard,
+      );
+    }
 
-    final Widget composed = AnimatedContainer(
-      duration: _dragging ? Duration.zero : const Duration(milliseconds: 160),
-      curve: Curves.easeOut,
-      transform: Matrix4.translationValues(_offset, 0, 0),
+    final bool floating = _lifted && _slideOverlay.isShowing;
+    final Widget cardLayer = OverlayPortal.overlayChildLayoutBuilder(
+      controller: _slideOverlay,
+      overlayChildBuilder: (context, info) {
+        final Rect rest = MatrixUtils.transformRect(
+          info.childPaintTransform,
+          Offset.zero & info.childSize,
+        );
+        return Positioned(
+          left: rest.left,
+          top: rest.top,
+          width: rest.width,
+          height: rest.height,
+          child: IgnorePointer(
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                if (actionLabel != null && _offset.abs() > 0)
+                  Positioned.fill(
+                    child: ClipRRect(
+                      borderRadius:
+                          const BorderRadius.all(Radius.circular(_cardCornerRadius)),
+                      child: ClipRect(
+                        clipper: _HomeworkSlideUnderlayClipper(
+                          revealWidth: _offset.abs() + _cardCornerRadius + 1.0,
+                          alignLeft: isRight,
+                        ),
+                        child: _HomeworkSlideUnderlay(
+                          label: actionLabel,
+                          color: actionColor,
+                          alignLeft: isRight,
+                        ),
+                      ),
+                    ),
+                  ),
+                Transform.translate(
+                  offset: Offset(_offset, 0),
+                  child: slidingCard,
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+      child: Opacity(
+        opacity: floating ? 0 : 1,
+        child: slidingCard,
+      ),
+    );
+
+    return Align(
+      alignment: Alignment.topLeft,
+      widthFactor: 1.0,
+      heightFactor: 1.0,
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
         child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
           // Flutter 기본 더블탭 창(300ms) 대신 Windows에서 여유 있는 창을
           // 직접 적용한다. 첫 클릭은 창이 끝난 뒤 단일 클릭으로 확정한다.
           onTap: _handlePrimaryClick,
@@ -21882,15 +22108,10 @@ class _SlideableHomeworkChipState extends State<_SlideableHomeworkChip> {
             _updateOffset(delta);
           },
           onHorizontalDragEnd: _endDrag,
-          child: slidingContent,
+          onHorizontalDragCancel: _cancelDrag,
+          child: cardLayer,
         ),
       ),
-    );
-
-    if (widget.foregroundPainter == null) return composed;
-    return CustomPaint(
-      foregroundPainter: widget.foregroundPainter,
-      child: composed,
     );
   }
 }

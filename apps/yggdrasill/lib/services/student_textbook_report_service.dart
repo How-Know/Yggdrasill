@@ -180,7 +180,7 @@ class StudentTextbookReportService {
   // 학생 앱 렌더 산출물과 동일 프로필 (student_textbook_problem_view Edge와 동일).
   static const String _renderProfile = 'student-single-v1';
   static const String _rendererVersion =
-      'pb_render_v4_slotmeasure_01:student-single-v4';
+      'pb_render_v4_colontext_12:student-single-v5';
   static const int _signedUrlSeconds = 600;
 
   SupabaseClient get _client => Supabase.instance.client;

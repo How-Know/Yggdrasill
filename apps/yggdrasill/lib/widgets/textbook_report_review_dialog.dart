@@ -667,7 +667,7 @@ class _ReportAnswerPane extends StatelessWidget {
       inlineMathScale: 0.9,
       style: const TextStyle(
         color: _ink,
-        fontFamily: 'ChosunNm',
+        fontFamily: LatexTextRenderer.v2TextFontFamily,
         fontWeight: FontWeight.w700,
         fontSize: 22,
         height: 1.2,

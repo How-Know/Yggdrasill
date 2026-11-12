@@ -137,6 +137,10 @@ class TextbookExplorerController extends ChangeNotifier {
   final Map<String, String> questionPreviewUrls = <String, String>{};
   final Map<String, String> questionPreviewStatus = <String, String>{};
   final Map<String, String> questionPreviewError = <String, String>{};
+  final Map<String, Map<String, String>> questionFigureUrlsByPath =
+      <String, Map<String, String>>{};
+  final Set<String> expandedPreviewKeys = <String>{};
+  final Set<String> expandedSetGroupKeys = <String>{};
   bool questionCardsLoading = false;
   int _questionCardLoadGen = 0;
   String _questionCardLoadKey = '';
@@ -1482,6 +1486,24 @@ class TextbookExplorerController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void togglePreviewExpanded(String key) {
+    final safe = key.trim();
+    if (safe.isEmpty) return;
+    if (!expandedPreviewKeys.remove(safe)) {
+      expandedPreviewKeys.add(safe);
+    }
+    notifyListeners();
+  }
+
+  void toggleSetGroupExpanded(String key) {
+    final safe = key.trim();
+    if (safe.isEmpty) return;
+    if (!expandedSetGroupKeys.remove(safe)) {
+      expandedSetGroupKeys.add(safe);
+    }
+    notifyListeners();
+  }
+
   void toggleTypeGroupSelection(List<TbExItem> items) {
     if (items.isEmpty) return;
     final keys = items.map((item) => item.selKey).toList();
@@ -1583,9 +1605,28 @@ class TextbookExplorerController extends ChangeNotifier {
     unawaited(_loadQuestionCards(gen, uids));
   }
 
-  Future<void> retryQuestionCardPreview(LearningProblemQuestion question) async {
+  Future<void> retryQuestionCardPreview(
+    LearningProblemQuestion question, {
+    String? commonSetKey,
+    String? commonStemText,
+  }) async {
+    if (_disposed) return;
+    final setKey = commonSetKey?.trim() ?? '';
+    if (setKey.isNotEmpty) {
+      questionPreviewUrls.remove(setKey);
+      questionPreviewStatus[setKey] = 'running';
+      questionPreviewError.remove(setKey);
+      notifyListeners();
+      await _renderCommonSetCardPreview(
+        setKey: setKey,
+        donorQuestion: question,
+        commonStemText: commonStemText,
+      );
+      if (!_disposed) notifyListeners();
+      return;
+    }
     final id = question.id.trim();
-    if (id.isEmpty || _disposed) return;
+    if (id.isEmpty) return;
     questionPreviewUrls.remove(id);
     questionPreviewStatus[id] = 'running';
     questionPreviewError.remove(id);
@@ -1619,17 +1660,21 @@ class TextbookExplorerController extends ChangeNotifier {
         }
       }
       if (_disposed || gen != _questionCardLoadGen) return;
+      final visibleQuestions = <LearningProblemQuestion>[];
       final needPreview = <LearningProblemQuestion>[];
       for (final uid in uids) {
         final question = _questionMetadataByUid[uid];
         if (question == null) continue;
+        visibleQuestions.add(question);
         final id = question.id.trim();
         if (id.isEmpty || questionPreviewUrls.containsKey(id)) continue;
         needPreview.add(question);
       }
-      if (needPreview.isNotEmpty) {
-        await _fetchQuestionCardPreviews(needPreview);
-      }
+      await Future.wait(<Future<void>>[
+        if (needPreview.isNotEmpty) _fetchQuestionCardPreviews(needPreview),
+        if (visibleQuestions.isNotEmpty)
+          _fetchCommonSetCardPreviews(visibleQuestions),
+      ]);
     } catch (_) {
       // 실패한 문항은 카드의 다시 시도로 남긴다.
     } finally {
@@ -1656,6 +1701,11 @@ class TextbookExplorerController extends ChangeNotifier {
       if (id.isEmpty) continue;
       questionPreviewStatus[id] = 'running';
       questionPreviewError.remove(id);
+      if (question.isIndependentSetItem &&
+          question.orderedFigureAssets.isNotEmpty &&
+          !questionFigureUrlsByPath.containsKey(id)) {
+        unawaited(_prefetchQuestionFigureUrls(question));
+      }
     }
     if (!_disposed) notifyListeners();
 
@@ -1690,6 +1740,9 @@ class TextbookExplorerController extends ChangeNotifier {
           templateProfile: 'naesin',
           paperSize: 'A4',
           questionModeByQuestionUid: modeMap,
+          renderConfig: const <String, dynamic>{
+            'previewIndependentSetCommonStem': false,
+          },
         );
       } catch (_) {
         urlMap = <String, String>{};
@@ -1713,6 +1766,9 @@ class TextbookExplorerController extends ChangeNotifier {
           final fallback = await _problemBankService.fetchQuestionPreviews(
             academyId: academyId,
             questionIds: fallbackIds,
+            renderConfig: const <String, dynamic>{
+              'previewIndependentSetCommonStem': false,
+            },
           );
           if (_disposed) return;
           _applyPreviewUrls(missing, fallback);
@@ -1752,6 +1808,95 @@ class TextbookExplorerController extends ChangeNotifier {
       questionPreviewStatus[id] = 'completed';
       questionPreviewError.remove(id);
     }
+  }
+
+  Future<void> _fetchCommonSetCardPreviews(
+    List<LearningProblemQuestion> questions,
+  ) async {
+    if (questions.isEmpty || academyId.trim().isEmpty) return;
+    final slots = groupProblemBankGridSlots<LearningProblemQuestion>(
+      questions,
+      (q) => q,
+    );
+    final pendingSlots = <ProblemBankGridSlot<LearningProblemQuestion>>[
+      for (final slot in slots)
+        if (slot.isIndependentSet &&
+            slot.commonStem.trim().isNotEmpty &&
+            !questionPreviewUrls.containsKey(slot.key))
+          slot,
+    ];
+    if (pendingSlots.isEmpty) return;
+    for (final slot in pendingSlots) {
+      questionPreviewStatus[slot.key] = 'running';
+      questionPreviewError.remove(slot.key);
+    }
+    if (!_disposed) notifyListeners();
+    await Future.wait(
+      pendingSlots.map(
+        (slot) => _renderCommonSetCardPreview(
+          setKey: slot.key,
+          donorQuestion: slot.commonPreviewDonorQuestion,
+          commonStemText: slot.commonStem,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _renderCommonSetCardPreview({
+    required String setKey,
+    required LearningProblemQuestion donorQuestion,
+    String? commonStemText,
+  }) async {
+    if (_disposed || academyId.trim().isEmpty) return;
+    try {
+      final url = await _problemBankService
+          .renderIndependentSetCommonStemThumbnail(
+        academyId: academyId,
+        question: donorQuestion,
+        commonStemOverride: commonStemText,
+      );
+      if (_disposed) return;
+      if (url.trim().isNotEmpty) {
+        questionPreviewUrls[setKey] = url.trim();
+        questionPreviewStatus[setKey] = 'completed';
+        questionPreviewError.remove(setKey);
+      } else {
+        questionPreviewStatus[setKey] = 'failed';
+        questionPreviewError[setKey] = _problemBankService.hasGateway
+            ? '공통발문 V2 썸네일 생성에 실패했습니다.'
+            : '게이트웨이가 연결되지 않아 V2 썸네일을 만들 수 없습니다.';
+      }
+    } catch (e) {
+      if (_disposed) return;
+      questionPreviewStatus[setKey] = 'failed';
+      questionPreviewError[setKey] = '$e';
+    }
+  }
+
+  Future<void> _prefetchQuestionFigureUrls(
+    LearningProblemQuestion question,
+  ) async {
+    final id = question.id.trim();
+    if (id.isEmpty) return;
+    final pathMap = <String, String>{};
+    for (final asset in question.orderedFigureAssets) {
+      final bucket = '${asset['bucket'] ?? ''}'.trim();
+      final path = '${asset['path'] ?? ''}'.trim();
+      if (bucket.isEmpty || path.isEmpty) continue;
+      try {
+        final signed = await _problemBankService.createStorageSignedUrl(
+          bucket: bucket,
+          path: path,
+          expiresInSeconds: 60 * 60 * 24,
+        );
+        if (signed.trim().isNotEmpty) {
+          pathMap[path] = signed.trim();
+        }
+      } catch (_) {}
+    }
+    if (_disposed || pathMap.isEmpty) return;
+    questionFigureUrlsByPath[id] = pathMap;
+    notifyListeners();
   }
 
   Future<void> ensurePdfLoaded() async {
@@ -2568,6 +2713,38 @@ class TextbookExplorerContent extends StatelessWidget {
     );
   }
 
+  double _questionCardHeightForItem(TbExItem item, double cardWidth) {
+    final question = controller.questionForUid(item.questionUid);
+    if (question == null) return _tbExQuestionCardHeight;
+    final measureKey = question.stableQuestionKey;
+    final id = question.id.trim();
+    final extra = ProblemBankPreviewSizeCache.instance.extraHeightWhenExpanded(
+      measureKey: measureKey,
+      previewImageUrl: controller.questionPreviewUrls[id],
+      cardWidth: cardWidth,
+      expanded: controller.expandedPreviewKeys.contains(measureKey),
+    );
+    return _tbExQuestionCardHeight + extra;
+  }
+
+  double _questionCardHeightForSlot(
+    ProblemBankGridSlot<TbExItem> slot,
+    double cardWidth,
+  ) {
+    if (!slot.isIndependentSet) {
+      return _questionCardHeightForItem(slot.firstItem, cardWidth);
+    }
+    final measureKey = 'common:${slot.key}';
+    final imageUrl = controller.questionPreviewUrls[slot.key];
+    final extra = ProblemBankPreviewSizeCache.instance.extraHeightWhenExpanded(
+      measureKey: measureKey,
+      previewImageUrl: imageUrl,
+      cardWidth: cardWidth,
+      expanded: controller.expandedPreviewKeys.contains(measureKey),
+    );
+    return _tbExQuestionCardHeight + extra;
+  }
+
   Widget _buildQuestionBankGrid(List<TbExItem> items) {
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -2586,28 +2763,144 @@ class TextbookExplorerContent extends StatelessWidget {
           cardWidth =
               (width - (columns - 1) * _tbExQuestionCardSpacing) / columns;
         }
-        final rowCount = (items.length / columns).ceil();
-        final gridHeight = (rowCount * _tbExQuestionCardHeight) +
-            ((rowCount - 1) * _tbExQuestionCardSpacing);
-        return SizedBox(
-          width: width,
-          height: gridHeight,
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              for (var i = 0; i < items.length; i++)
-                Positioned(
-                  left: (i % columns) * (cardWidth + _tbExQuestionCardSpacing),
-                  top: (i ~/ columns) *
-                      (_tbExQuestionCardHeight + _tbExQuestionCardSpacing),
-                  width: cardWidth,
-                  height: _tbExQuestionCardHeight,
-                  child: _buildQuestionBankCard(items[i]),
-                ),
-            ],
-          ),
+        final slots = groupProblemBankGridSlots<TbExItem>(
+          items,
+          (item) => controller.questionForUid(item.questionUid),
+        );
+        if (slots.isEmpty) return const SizedBox.shrink();
+        final rowCount = (slots.length / columns).ceil();
+        return ListenableBuilder(
+          listenable: ProblemBankPreviewSizeCache.instance,
+          builder: (context, _) {
+            return SizedBox(
+              width: width,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (var r = 0; r < rowCount; r++) ...[
+                    if (r > 0) const SizedBox(height: _tbExQuestionCardSpacing),
+                    Builder(
+                      builder: (context) {
+                        final start = r * columns;
+                        final end = math.min(start + columns, slots.length);
+                        final rowSlots = slots.sublist(start, end);
+                        final expandedSets = <ProblemBankGridSlot<TbExItem>>[
+                          for (final s in rowSlots)
+                            if (s.isIndependentSet &&
+                                controller.expandedSetGroupKeys.contains(s.key))
+                              s,
+                        ];
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                for (var c = 0; c < rowSlots.length; c++) ...[
+                                  if (c > 0)
+                                    const SizedBox(
+                                      width: _tbExQuestionCardSpacing,
+                                    ),
+                                  SizedBox(
+                                    width: cardWidth,
+                                    height: _questionCardHeightForSlot(
+                                      rowSlots[c],
+                                      cardWidth,
+                                    ),
+                                    child: _buildQuestionBankSlotCard(
+                                      rowSlots[c],
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                            for (final setSlot in expandedSets) ...[
+                              const SizedBox(height: _tbExQuestionCardSpacing),
+                              ProblemBankSetChildrenTray(
+                                spacing: _tbExQuestionCardSpacing,
+                                children: [
+                                  for (final childItem in setSlot.items)
+                                    SizedBox(
+                                      width: cardWidth,
+                                      height: _questionCardHeightForItem(
+                                        childItem,
+                                        cardWidth,
+                                      ),
+                                      child: _buildQuestionBankCard(childItem),
+                                    ),
+                                ],
+                              ),
+                            ],
+                          ],
+                        );
+                      },
+                    ),
+                  ],
+                ],
+              ),
+            );
+          },
         );
       },
+    );
+  }
+
+  Widget _buildQuestionBankSlotCard(ProblemBankGridSlot<TbExItem> slot) {
+    if (!slot.isIndependentSet) {
+      return _buildQuestionBankCard(slot.firstItem);
+    }
+    final firstQuestion = slot.firstQuestion;
+    final donorQuestion = slot.commonPreviewDonorQuestion;
+    final id = firstQuestion.id.trim();
+    final selKeys = slot.items.map((e) => e.selKey).toList(growable: false);
+    final allSelected = selKeys.isNotEmpty &&
+        selKeys.every(controller.isItemEffectivelySelected);
+    final anySelected = selKeys.any(controller.isItemEffectivelySelected);
+    final tristate = allSelected ? true : (anySelected ? null : false);
+    final measureKey = 'common:${slot.key}';
+    final scoreTotal = problemBankReviewScoreTotal(slot.questions);
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => controller.toggleSelectKeys(selKeys, !allSelected),
+      child: ProblemBankQuestionCard(
+        question: firstQuestion,
+        selected: anySelected,
+        selectedTristate: tristate,
+        selectedMode: controller.questionModeForItem(slot.firstItem),
+        figureUrlsByPath:
+            controller.questionFigureUrlsByPath[id] ?? const <String, String>{},
+        previewImageUrl: controller.questionPreviewUrls[slot.key],
+        previewStatus: controller.questionPreviewStatus[slot.key] ?? '',
+        previewErrorMessage: controller.questionPreviewError[slot.key] ?? '',
+        onRetryPreview: () {
+          unawaited(
+            controller.retryQuestionCardPreview(
+              donorQuestion,
+              commonSetKey: slot.key,
+              commonStemText: slot.commonStem,
+            ),
+          );
+        },
+        onSelectedChanged: (next) {
+          controller.toggleSelectKeys(selKeys, next);
+        },
+        onModeSelected: null,
+        isCommonStemCard: true,
+        titleOverride: slot.rangeLabel,
+        commonStemText: slot.commonStem,
+        childQuestionCount: slot.items.length,
+        reviewThinkingScore: scoreTotal.thinking,
+        reviewArithmeticScore: scoreTotal.arithmetic,
+        commonSetExpanded: controller.expandedSetGroupKeys.contains(slot.key),
+        onToggleCommonSetExpanded: () {
+          controller.toggleSetGroupExpanded(slot.key);
+        },
+        measureKey: measureKey,
+        previewExpanded: controller.expandedPreviewKeys.contains(measureKey),
+        onTogglePreviewExpand: () {
+          controller.togglePreviewExpanded(measureKey);
+        },
+      ),
     );
   }
 
@@ -2616,6 +2909,7 @@ class TextbookExplorerContent extends StatelessWidget {
     if (question == null) return const SizedBox.shrink();
     final selected = controller.isItemEffectivelySelected(item.selKey);
     final id = question.id.trim();
+    final measureKey = question.stableQuestionKey;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: () => controller.toggleSelectKeys([item.selKey], !selected),
@@ -2623,6 +2917,8 @@ class TextbookExplorerContent extends StatelessWidget {
         question: question,
         selected: selected,
         selectedMode: controller.questionModeForItem(item),
+        figureUrlsByPath:
+            controller.questionFigureUrlsByPath[id] ?? const <String, String>{},
         previewImageUrl: controller.questionPreviewUrls[id],
         previewStatus: controller.questionPreviewStatus[id] ?? '',
         previewErrorMessage: controller.questionPreviewError[id] ?? '',
@@ -2634,6 +2930,11 @@ class TextbookExplorerContent extends StatelessWidget {
         },
         onModeSelected: (mode) {
           controller.setItemQuestionMode(item.questionUid, mode);
+        },
+        measureKey: measureKey,
+        previewExpanded: controller.expandedPreviewKeys.contains(measureKey),
+        onTogglePreviewExpand: () {
+          controller.togglePreviewExpanded(measureKey);
         },
       ),
     );
@@ -3522,23 +3823,26 @@ class _QuestionCard extends StatelessWidget {
     final cardBg = selected
         ? accent.withValues(alpha: brightness == Brightness.dark ? 0.18 : 0.10)
         : style.dropdownBackground;
+    final radius = BorderRadius.circular(12 * s);
     return SizedBox(
       width: 118 * s,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(12 * s),
-          onTap: onTap,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              AnimatedContainer(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Material(
+            color: Colors.transparent,
+            borderRadius: radius,
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              borderRadius: radius,
+              onTap: onTap,
+              child: AnimatedContainer(
                 duration: const Duration(milliseconds: 120),
                 height: 58 * s,
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   color: cardBg,
-                  borderRadius: BorderRadius.circular(12 * s),
+                  borderRadius: radius,
                   border: Border.all(
                     color: selected ? accent : style.border,
                     width: selected ? 2 : 1,
@@ -3555,28 +3859,32 @@ class _QuestionCard extends StatelessWidget {
                   ),
                 ),
               ),
-              SizedBox(height: 6 * s),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  if (item.difficultyLabel.trim().isNotEmpty) ...[
-                    _DiffDot(label: item.difficultyLabel, scale: s),
-                    SizedBox(width: 5 * s),
-                  ],
-                  if (item.answerKind.label.isNotEmpty)
-                    Text(
-                      item.answerKind.label,
-                      style: TextStyle(
-                        color: style.hint,
-                        fontSize: 11 * s,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                ],
-              ),
-            ],
+            ),
           ),
-        ),
+          SizedBox(height: 6 * s),
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onTap,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                if (item.difficultyLabel.trim().isNotEmpty) ...[
+                  _DiffDot(label: item.difficultyLabel, scale: s),
+                  SizedBox(width: 5 * s),
+                ],
+                if (item.answerKind.label.isNotEmpty)
+                  Text(
+                    item.answerKind.label,
+                    style: TextStyle(
+                      color: style.hint,
+                      fontSize: 11 * s,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

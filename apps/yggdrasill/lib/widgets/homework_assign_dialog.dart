@@ -13,6 +13,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
+import 'latex_text_renderer.dart';
 import 'pdf/todo_sheet_math.dart';
 import '../models/attendance_record.dart';
 import '../models/student_time_block.dart';

@@ -4714,6 +4714,14 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       '≥': r' \ge ',
       '≠': r' \ne ',
       '±': r' \pm ',
+      '＜': ' < ',
+      '＞': ' > ',
+      '〈': ' < ',
+      '〉': ' > ',
+      '⟨': ' < ',
+      '⟩': ' > ',
+      '《': ' < ',
+      '》': ' > ',
     };
     for (final e in opMap.entries) {
       s = s.replaceAll(e.key, e.value);
@@ -4835,8 +4843,9 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     final input = raw.trim();
     if (input.isEmpty) return false;
     if (RegExp(r'[가-힣]').hasMatch(input)) return false;
-    return RegExp(r'[A-Za-z0-9=^_{}\\]|\\times|\\over|\\le|\\ge|\\frac|\\dfrac')
-        .hasMatch(input);
+    return RegExp(
+      r'[A-Za-z0-9=<>^_{}\\]|\\times|\\over|\\le|\\ge|\\lt|\\gt|\\frac|\\dfrac',
+    ).hasMatch(input);
   }
 
   void _rsAppendMathToken(StringBuffer buffer, String latex) {
@@ -7683,7 +7692,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                   textAlign: TextAlign.left,
                   style: TextStyle(
                     color: _cardInk,
-                    fontFamily: 'ChosunNm',
+                    fontFamily: LatexTextRenderer.v2TextFontFamily,
                     fontWeight: FontWeight.w400,
                     fontSize: 39.5,
                     height: 1.0,
@@ -8122,7 +8131,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                         textAlign: TextAlign.right,
                         style: TextStyle(
                           color: _cardInk,
-                          fontFamily: 'ChosunNm',
+                          fontFamily: LatexTextRenderer.v2TextFontFamily,
                           fontWeight: FontWeight.w700,
                           fontSize: 20,
                           height: 1.2,
@@ -8143,7 +8152,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                             _rsAnswerFallbackFractionMathScale,
                         style: TextStyle(
                           color: _cardInk,
-                          fontFamily: 'ChosunNm',
+                          fontFamily: LatexTextRenderer.v2TextFontFamily,
                           fontWeight: FontWeight.w700,
                           fontSize: _rsAnswerBodyFontSize,
                           height: 1.2,
@@ -8175,7 +8184,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
             fractionInlineMathScale: _rsAnswerFallbackFractionMathScale,
             style: TextStyle(
               color: _cardInk,
-              fontFamily: 'ChosunNm',
+              fontFamily: LatexTextRenderer.v2TextFontFamily,
               fontWeight: FontWeight.w700,
               fontSize: _rsAnswerBodyFontSize,
               height: 1.2,
@@ -8335,7 +8344,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         fractionInlineMathScale: _rsAnswerFallbackFractionMathScale,
         style: TextStyle(
           color: _cardInk,
-          fontFamily: 'ChosunNm',
+          fontFamily: LatexTextRenderer.v2TextFontFamily,
           fontWeight: FontWeight.w700,
           fontSize: _rsAnswerBodyFontSize,
           height: 1.2,
@@ -8476,7 +8485,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                     part.label,
                     style: TextStyle(
                       color: _cardInk,
-                      fontFamily: 'ChosunNm',
+                      fontFamily: LatexTextRenderer.v2TextFontFamily,
                       fontWeight: FontWeight.w900,
                       fontSize: _rsAnswerQuestionNumberSize,
                       height: 1.1,

@@ -398,20 +398,14 @@ function summaryCard(payload: Row, record: Row | null): string {
       </div>`
     : '<p class="muted">오늘 수행 기록 없음</p>';
   const flows = rows(record?.flows);
-  const counts = new Map<string, number>();
-  for (const flow of flows) {
-    const key = `${text(flow.flow_name)}|${text(flow.book_name)}`;
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
   const flowBody = flows.length
     ? flows.map((flow) => {
       const name = text(flow.flow_name) || 'Flow';
       const book = text(flow.book_name);
       const grade = text(flow.grade_label);
-      const dup = (counts.get(`${text(flow.flow_name)}|${book}`) ?? 0) > 1;
       const label = !book
         ? name
-        : (dup && grade ? `${name} · ${book} (${grade})` : `${name} · ${book}`);
+        : (grade ? `${name} · ${book} (${grade})` : `${name} · ${book}`);
       const pct = flowPercent(flow, 'textbook_completed_problems');
       const before = flowPercent(flow, 'textbook_completed_before');
       const today = pct == null || before == null ? null : Math.max(0, pct - before);

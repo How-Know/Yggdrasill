@@ -36,7 +36,7 @@ const MAX_WIDTH_EM = 40;
 
 export type FigurePlacement = 'right_of_text' | 'left_of_text' | 'below_text' | 'inline';
 export type FigureAlign = 'left' | 'center' | 'right';
-export type FigureV2State = 'ok' | 'missing' | 'cut' | 'size' | 'position' | 'unknown';
+export type FigureV2State = 'ok' | 'missing' | 'cut' | 'dirty' | 'size' | 'position' | 'unknown';
 
 export interface FigureMeasure {
   /** 원본 이미지 기준 [ymin, xmin, ymax, xmax] 0..1000 */
@@ -66,7 +66,7 @@ export function parseFigureMeasures(v: unknown): FigureMeasure[] {
       ? r.placement as FigurePlacement
       : 'below_text';
     const align = ['left', 'center', 'right'].includes(String(r.align)) ? r.align as FigureAlign : 'center';
-    const v2State = ['ok', 'missing', 'cut', 'size', 'position'].includes(String(r.v2_state))
+    const v2State = ['ok', 'missing', 'cut', 'dirty', 'size', 'position'].includes(String(r.v2_state))
       ? r.v2_state as FigureV2State
       : 'unknown';
     out.push({ bbox, placement, align, v2State });
@@ -135,6 +135,8 @@ export interface FigureCropRequest {
   /** 원본 이미지 기준 [ymin, xmin, ymax, xmax] 0..1000 */
   bbox_1k: number[];
   reason: 'missing' | 'cut';
+  /** 'set_header' 면 bbox_1k 는 세트 머리 원본 이미지 기준이다(공통 발문 그림). */
+  source?: 'set_header';
 }
 
 export interface FigureProposal {
@@ -197,7 +199,7 @@ export function buildFigureProposal(args: {
       used.add(key);
       measureByKey.set(key, m);
       if (!asset) crops.push({ figure_index: idx, bbox_1k: [...m.bbox], reason: 'missing' });
-      else if (m.v2State === 'cut' || m.v2State === 'missing') crops.push({ figure_index: idx, bbox_1k: [...m.bbox], reason: 'cut' });
+      else if (m.v2State === 'cut' || m.v2State === 'dirty' || m.v2State === 'missing') crops.push({ figure_index: idx, bbox_1k: [...m.bbox], reason: 'cut' });
     });
   }
   for (const it of curItems) {
@@ -209,6 +211,96 @@ export function buildFigureProposal(args: {
     layout: { version: 1, items, groups },
     crops,
   };
+}
+
+/**
+ * 그림이 공통 발문에만 있는 세트 문항은 개별 문항 원본에서 그림을 잴 수 없으므로,
+ * 세트 머리 원본에서 본 그림 자리(공통 지시문 글 기준)로 그림 배치의 위치·정렬만 바꾼다.
+ */
+export function applyCommonFigurePlacement(
+  proposal: FigureProposal | null,
+  placement: unknown,
+  { commonStem, stem, measured }: { commonStem: string; stem: string; measured: boolean },
+): FigureProposal | null {
+  if (!proposal || measured) return proposal;
+  if (!['right_of_text', 'left_of_text', 'below_text'].includes(String(placement))) return proposal;
+  if (figureMarkerCount(commonStem) === 0 || figureMarkerCount(stem) > 0) return proposal;
+  const position = placement === 'right_of_text' ? 'inline-right' : placement === 'left_of_text' ? 'inline-left' : 'below-stem';
+  const anchor = placement === 'right_of_text' ? 'right' : placement === 'left_of_text' ? 'left' : 'center';
+  return {
+    ...proposal,
+    layout: { ...proposal.layout, items: proposal.layout.items.map((it) => ({ ...it, position, anchor })) },
+  };
+}
+
+const FIGURE_THEN_BLANK_RE = /^\s*(?:\[그림\]|\[도형\]|\[도표\])\s*(?:\[문단\]\s*)*\(\s*(?:\[공백:\d+\]|\s)*\)\s*$/;
+
+/**
+ * 본문이 "그림 + 바로 아래 답란 괄호"뿐인 문항은 그림을 왼쪽에 둬 답란과 붙인다.
+ * 한 줄에 문항이 나란히 있는 원본에서는 오른쪽 칸 문항의 그림이 이미지 전체 기준 "오른쪽"으로 재지기 때문이다.
+ */
+export function anchorFigureWithBlank(proposal: FigureProposal | null, stem: string): FigureProposal | null {
+  if (!proposal || !FIGURE_THEN_BLANK_RE.test(stem)) return proposal;
+  return {
+    ...proposal,
+    layout: {
+      ...proposal.layout,
+      items: proposal.layout.items.map((it) => (String(it.position ?? 'below-stem') === 'below-stem' ? { ...it, anchor: 'left' } : it)),
+    },
+  };
+}
+
+/**
+ * 공통 발문에만 그림 자리가 있는데 이 문항에 그림 자산이 하나도 없으면(처음 추출 때 세트 머리 그림을 놓친 경우)
+ * 세트 머리 원본에서 찾은 그림 상자로 새 그림을 잘라 등록하도록 제안한다. 본문 마커는 붙이지 않는다(공통 발문 몫).
+ * emPx 는 세트 머리 이미지 픽셀 기준 글자 크기다.
+ */
+export function commonFigureProposal(args: {
+  boxes: unknown;
+  placement: unknown;
+  commonStem: string;
+  stem: string;
+  assets: unknown;
+  currentLayout: unknown;
+  emPx: number | null;
+  headerWidthPx: number;
+}): FigureProposal | null {
+  if (orderedFigureAssets(args.assets).length > 0) return null;
+  if (figureMarkerCount(args.commonStem) === 0 || figureMarkerCount(args.stem) > 0) return null;
+  const placement = ['right_of_text', 'left_of_text'].includes(String(args.placement))
+    ? args.placement as FigurePlacement
+    : 'below_text';
+  const measures: FigureMeasure[] = [];
+  for (const b of Array.isArray(args.boxes) ? args.boxes : []) {
+    const bbox = normalizeBox(b && typeof b === 'object' ? (b as Rec).bbox_1k : null);
+    if (bbox) measures.push({ bbox, placement, align: 'center', v2State: 'missing' });
+  }
+  if (measures.length === 0) return null;
+  const p = buildFigureProposal({
+    measures,
+    emPx: args.emPx,
+    imageWidthPx: args.headerWidthPx,
+    assets: [],
+    currentLayout: args.currentLayout,
+  });
+  if (!p) return null;
+  return { ...p, crops: p.crops.map((c) => ({ ...c, source: 'set_header' as const })) };
+}
+
+/** 문항 원본에서 잰 1em 픽셀을 세트 머리 이미지 픽셀로 옮긴다(두 이미지의 쪽 좌표 폭 대비 픽셀 폭이 다르다). */
+export function emPxForHeader(args: {
+  emPx: number | null;
+  originalWidthPx: number;
+  originalRegion1k: number[] | null;
+  headerWidthPx: number;
+  headerRegion1k: number[] | null;
+}): number | null {
+  const { emPx, originalRegion1k: o, headerRegion1k: h } = args;
+  if (!emPx || !o || !h || !(args.originalWidthPx > 0) || !(args.headerWidthPx > 0)) return null;
+  const ow = o[3] - o[1];
+  const hw = h[3] - h[1];
+  if (!(ow > 0) || !(hw > 0)) return null;
+  return emPx * (args.headerWidthPx / hw) / (args.originalWidthPx / ow);
 }
 
 /**
@@ -321,6 +413,8 @@ const FIX_SCHEMA: Rec = {
           'fix_reason',
           'engine_issue',
           'figures',
+          'common_figure_placement',
+          'common_figures',
           'text_sample',
           'proposed_answer',
           'proposed_ai_answer',
@@ -366,8 +460,21 @@ const FIX_SCHEMA: Rec = {
                 bbox_1k: { type: 'array', items: { type: 'integer' } },
                 placement: { type: 'string', enum: ['right_of_text', 'left_of_text', 'below_text', 'inline'] },
                 align: { type: 'string', enum: ['left', 'center', 'right'] },
-                v2_state: { type: 'string', enum: ['ok', 'missing', 'cut', 'size', 'position', 'unknown'] },
+                v2_state: { type: 'string', enum: ['ok', 'missing', 'cut', 'dirty', 'size', 'position', 'unknown'] },
               },
+            },
+          },
+          common_figure_placement: {
+            type: 'string',
+            enum: ['right_of_text', 'left_of_text', 'below_text', 'none'],
+          },
+          common_figures: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['bbox_1k'],
+              properties: { bbox_1k: { type: 'array', items: { type: 'number' } } },
             },
           },
           text_sample: {
@@ -420,12 +527,16 @@ const FIX_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔진의 [�
 
 [2. 그림 측정 — 개별 문항 원본 이미지 기준(세트 머리 이미지는 제외)]
 - 원본 이미지 안의 그림·그래프·도형(글자로 된 표·상자는 제외)을 읽는 순서대로 figures 에 넣습니다. 없으면 [].
+- '해' 배지로 시작하는 빈칸 풀이 안내 안의 그림(빈 네모가 달린 수직선 등)은 해설이라 문항 그림이 아닙니다. figures 에 넣지 마세요.
+- common_figure_placement: 세트 머리 원본 이미지에 그림이 있으면 그 그림이 공통 지시문 글 기준으로 오른쪽에 나란히 있으면 "right_of_text", 왼쪽이면 "left_of_text", 아래(또는 위)에 따로 있으면 "below_text". 세트 머리 이미지가 없거나 그 안에 그림이 없으면 "none". 이 그림은 figures 에 넣지 않습니다.
+- common_figures: figure_asset_count 가 0 이고 stem_figure_markers 가 0 인데 common_stem 에 [그림] 이 있으면, 세트 머리 원본 이미지 안의 공통 그림 상자를 세트 머리 이미지 기준 [ymin, xmin, ymax, xmax] 0..1000 으로 읽는 순서대로 적으세요(축 이름·눈금 숫자까지 포함, 지시문 글자·다른 문항 번호는 제외). 그 밖의 경우는 [].
 - bbox_1k: 원본 이미지 전체를 0..1000 으로 본 [ymin, xmin, ymax, xmax]. 그림의 선·점·라벨까지 다 들어가고 본문 글자는 들어가지 않게.
 - placement: 본문 글 오른쪽에 나란히 있으면 "right_of_text", 왼쪽이면 "left_of_text", 본문 아래(또는 위)에 따로 있으면 "below_text",
   글줄 안에 끼어 있는 작은 그림이면 "inline".
-- align: 그림의 가로 위치(left / center / right).
-- v2_state: V2 화면에서 그 그림의 상태 — 정상 "ok", 없음 "missing", 잘리거나 일부만 보임 "cut", 크기가 눈에 띄게 다름 "size",
-  자리가 다름 "position", V2 화면이 없으면 "unknown".
+- align: 그림의 가로 위치(left / center / right). 이 문항 자신이 차지하는 칸 기준으로 판단하세요. 원본 이미지에 같은 줄의 다른 문항(번호)이 함께 보이면 그 칸은 빼고 봅니다.
+- v2_state: V2 화면에서 그 그림의 상태 — 정상 "ok", 없음 "missing", 잘리거나 일부만 보임 "cut",
+  그림 이미지 안에 원본 그림에 없는 본문 글자·빈칸 상자·수식 선·다른 문항 조각이 섞여 보임 "dirty", 크기가 눈에 띄게 다름 "size",
+  자리가 다름 "position", V2 화면이 없으면 "unknown". "dirty" 이면 bbox_1k 는 그 조각들이 빠지도록 그림만 꼭 맞게 잡으세요.
 - text_sample: 원본 이미지에서 그림·선지·수식 블록이 끼지 않은 연속된 본문 글줄(2~4줄이 좋고, 1줄뿐이면 1줄)을 감싼 bbox_1k 와 그 줄 수 lines.
   글자 크기를 재는 데 씁니다. 본문 글줄이 없으면 bbox_1k = [], lines = 0.
 
@@ -435,6 +546,7 @@ const FIX_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔진의 [�
   - 특히 정답이 표 빈칸 채우기이거나 이미지/다중 빈칸인 경우: 본문 표의 빈칸 순서(위→아래, 왼쪽→오른쪽)나 번호((1), (2)...)에 맞춰 정답/해설 이미지(또는 직접 푼 결과)의 값들을 빠짐없이 텍스트/LaTeX로 적으세요(예: "1, 3, 5, 15" 또는 "(1) 2 (2) 3"). 절대로 "[image]"나 "판단불가"로 적지 마세요.
   - 원본 본문 이미지(세트 지시문 포함)를 보고 처음부터 다시 푼 풀이를 proposed_ai_solution 에, 그 답을 proposed_ai_answer 에 적으세요.
   - 정답/해설 이미지가 주어졌으면 거기서 읽은 최종 정답을 proposed_solution_answer 에, 문항 번호·"답 ..." 줄·"[해설]" 머리말을 모두 뺀 순수 해설 본문만 proposed_solution_transcribed 에 적으세요(풀이 과정 없이 정답만 인쇄된 문항이면 null).
+    해설 이미지가 회색 가로선으로 위아래 두 조각이면 아래 조각은 해설지 다음 단(또는 다음 쪽) 맨 위입니다. 위 조각에서 끊긴 풀이가 이어지면 끝까지 옮기고, 아래 조각의 단원 제목·다른 문항 풀이는 빼세요.
   - math_reason 에는 왜 이 정답으로 확정했는지 한 줄로 적으세요.
 - 해설 좌표 어긋남 복구("해설 PDF 전체 페이지 이미지"가 함께 주어진 경우):
   - 수력충전 등 연산 교재는 한 해설 페이지 안에서 번호가 01번부터 여러 번 새로 시작하므로 기존 해설 크롭 좌표가 엉뚱한 블록을 가리켜 solution_vision_found = false 이거나 다른 문항의 답이 읽혔을 수 있습니다.
@@ -648,15 +760,36 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
     const emPx = rawEmPx && size && size.width > 0 && sampleLines <= 1
       ? Math.max(rawEmPx, size.width / 27)
       : (rawEmPx ?? (size && size.width > 0 ? size.width / 26 : null));
-    const figure = buildFigureProposal({
-      measures,
-      emPx,
-      imageWidthPx: size?.width ?? 0,
+    const commonCtx = { commonStem: common ?? curCommon, stem: stem ?? curStem, measured: measures.length > 0 };
+    const headerFigure = measures.length > 0 ? null : commonFigureProposal({
+      boxes: r.common_figures,
+      placement: r.common_figure_placement,
+      commonStem: commonCtx.commonStem,
+      stem: commonCtx.stem,
       assets: it.pb_figure_assets,
       currentLayout: it.pb_figure_layout,
+      emPx: emPxForHeader({
+        emPx,
+        originalWidthPx: size?.width ?? 0,
+        originalRegion1k: img.originalRegion1k,
+        headerWidthPx: img.setHeaderSize?.width ?? 0,
+        headerRegion1k: img.setHeaderRegion1k,
+      }),
+      headerWidthPx: img.setHeaderSize?.width ?? 0,
     });
+    const figure = headerFigure ?? anchorFigureWithBlank(applyCommonFigurePlacement(
+      buildFigureProposal({
+        measures,
+        emPx,
+        imageWidthPx: size?.width ?? 0,
+        assets: it.pb_figure_assets,
+        currentLayout: it.pb_figure_layout,
+      }),
+      r.common_figure_placement,
+      commonCtx,
+    ), stem ?? curStem);
     // 새로 등록할 그림이 있는데 본문에 그림 자리가 모자라면 마커를 붙인다.
-    if (figure && figure.crops.some((c) => c.reason === 'missing')) {
+    if (figure && !headerFigure && figure.crops.some((c) => c.reason === 'missing')) {
       const base = keepRuleText && typeof prev.stem === 'string' ? prev.stem : (stem ?? curStem);
       const withMarkers = ensureFigureMarkers(base, measures.length);
       if (withMarkers !== base) stem = withMarkers;
@@ -706,10 +839,14 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
       figure_measure: {
         figures: measures.map((m) => ({ bbox_1k: m.bbox, placement: m.placement, align: m.align, v2_state: m.v2State })),
         text_sample: r.text_sample ?? null,
+        common_figure_placement: typeof r.common_figure_placement === 'string' ? r.common_figure_placement : null,
         em_px: emPx === null ? null : Math.round(emPx * 10) / 10,
         image_px: size ? [size.width, size.height] : null,
         region_1k: img.originalRegion1k,
         raw_page: img.originalRawPage,
+        common_figures: Array.isArray(r.common_figures) ? r.common_figures : [],
+        set_header_region_1k: img.setHeaderRegion1k,
+        set_header_raw_page: img.setHeaderRawPage,
       },
       fix_pass_at: nowIso,
       created_at: nowIso,
@@ -722,7 +859,7 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
         for (const k of ['kind', 'stem', 'common_stem', 'choices', 'reason', 'reason_code', 'source']) {
           fixProposal[k] = prev[k] ?? null;
         }
-        if (stem && figure?.crops.some((c) => c.reason === 'missing')) fixProposal.stem = stem;
+        if (stem && !headerFigure && figure?.crops.some((c) => c.reason === 'missing')) fixProposal.stem = stem;
       }
     }
 

@@ -98,13 +98,22 @@ class TextbookReviewPipeline {
     final withSolutionFigures = _stopped ? const <String>{} : await _solutionFiguresPass();
 
     if (!_stopped && service.hasGateway) {
+      // 지난 검수에서 남은 렌더 이상 판정도 지금 카드로 다시 받는다(그 뒤 데이터가 고쳐졌을 수 있다).
       renderChecked = await _renderCheckPass(
         only: forceRenderCheck
             ? items
-            : withSolutionFigures.isEmpty
-                ? null
-                : [for (final x in items) if (x.needsRenderCheck || withSolutionFigures.contains(x.cropId)) x],
+            : [
+                for (final x in items)
+                  if (x.needsRenderCheck || withSolutionFigures.contains(x.cropId) || x.renderBlocksReady) x,
+              ],
       );
+      // 방금 렌더 검수가 해설 그림 누락을 잡은 문항은 그림을 찾아 붙이고 바로 다시 대조한다.
+      if (!_stopped && items.any((x) => x.needsSolutionFigures)) {
+        final more = await _solutionFiguresPass();
+        if (!_stopped && more.isNotEmpty) {
+          renderChecked += await _renderCheckPass(only: [for (final x in items) if (more.contains(x.cropId)) x]);
+        }
+      }
     }
 
     if (!_stopped) {
@@ -277,6 +286,7 @@ class TextbookReviewPipeline {
       }
       if (problemUrl.isEmpty && solUrl.isEmpty) return null;
       final original = problemUrl.isEmpty ? const <String, dynamic>{} : await service.originalImagesJson(scope, it);
+      final solutionOriginal = solUrl.isEmpty ? const <String, dynamic>{} : await service.solutionOriginalJson(scope, it);
       return {
         'crop_id': it.cropId,
         if (problemUrl.isNotEmpty) 'problem_url': problemUrl,
@@ -284,6 +294,7 @@ class TextbookReviewPipeline {
         'solution_kind': it.primarySolutionKind,
         'is_fill_in_blank': it.isFillInBlank,
         ...original,
+        ...solutionOriginal,
       };
     }
 
@@ -522,6 +533,8 @@ class TextbookReviewPipeline {
     touched.addAll(again);
     final kinds = await _applyQuestionKindFixes();
     if (kinds > 0) notes.add('문항 유형 $kinds문항 수정');
+    final generated = await _generateObjectiveChoices();
+    if (generated > 0) notes.add('주관식 $generated문항 객관식 보기 생성');
 
     var recheck = <String>{...touched};
     var proposed = 0;
@@ -716,11 +729,32 @@ class TextbookReviewPipeline {
     var n = 0;
     for (final it in [for (final x in items) if (x.questionKindMismatch) x]) {
       try {
-        if (await service.setQuestionKind(it.cropId, it.expectedQuestionKind)) n++;
+        final kind = it.expectedQuestionKind;
+        if (await service.setQuestionKind(it.cropId, kind,
+            allowSubjective: kind == 'objective' && it.answerChoiceCount > 0 ? it.subjectiveAlsoPossible : null)) {
+          n++;
+        }
       } catch (e) {
         errors.add('${it.problemNumber}번 유형: $e');
       }
     }
+    if (n > 0) await reload();
+    return n;
+  }
+
+  Future<int> _generateObjectiveChoices() async {
+    if (!service.hasGateway) return 0;
+    var n = 0;
+    for (final it in [for (final x in items) if (x.needsObjectiveGeneration) x]) {
+      if (_stopped) break;
+      _say('${it.problemNumber}번 객관식 보기 생성');
+      try {
+        if (await service.generateObjectiveChoices(it)) n++;
+      } catch (e) {
+        errors.add('${it.problemNumber}번 객관식 보기: $e');
+      }
+    }
+    if (n > 0) await reload();
     return n;
   }
 

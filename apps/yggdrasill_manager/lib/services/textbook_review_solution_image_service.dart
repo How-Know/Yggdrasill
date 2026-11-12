@@ -27,6 +27,46 @@ class TextbookReviewRenderedRegion {
   final int rawPage;
 }
 
+/// 해설 영역 PDF 조각. 다음 단·다음 쪽으로 이어지는 해설은 조각이 여러 개다.
+class TextbookSolutionSegment {
+  const TextbookSolutionSegment(this.rawPage, this.region1k);
+
+  final int rawPage;
+  final List<int> region1k;
+}
+
+/// 해설 조각들을 위에서 아래로 이어 붙인 PNG. [parts] 와 [topsPx] 로 이미지 안 좌표를 각 조각의 쪽 좌표로 되돌린다.
+class TextbookReviewRenderedStack {
+  const TextbookReviewRenderedStack({
+    required this.bytes,
+    required this.widthPx,
+    required this.heightPx,
+    required this.parts,
+    required this.topsPx,
+  });
+
+  final Uint8List bytes;
+  final int widthPx;
+  final int heightPx;
+  final List<TextbookReviewRenderedRegion> parts;
+  final List<int> topsPx;
+
+  /// 이어 붙인 이미지 기준 상자([ymin, xmin, ymax, xmax] 0..1000)가 속한 조각과 그 조각 기준 상자. 중심이 들어간 조각을 쓴다.
+  ({TextbookReviewRenderedRegion part, List<int> box})? locate(List<int> box) {
+    if (box.length != 4 || parts.isEmpty) return null;
+    final cy = (box[0] + box[2]) / 2 * heightPx / 1000;
+    var i = parts.length - 1;
+    while (i > 0 && cy < topsPx[i]) {
+      i--;
+    }
+    final part = parts[i];
+    final top = topsPx[i];
+    int ly(int v) => ((v * heightPx / 1000 - top) * 1000 / part.heightPx).round().clamp(0, 1000);
+    int lx(int v) => (v * widthPx / 1000 * 1000 / part.widthPx).round().clamp(0, 1000);
+    return (part: part, box: [ly(box[0]), lx(box[1]), ly(box[2]), lx(box[3])]);
+  }
+}
+
 /// 문항검수용 — 해설 PDF(또는 본문 PDF)에서 `textbook_problem_solution_refs` 좌표 영역만 잘라 PNG로 만든다.
 ///
 /// Stage 3에서 저장한 좌표([ymin, xmin, ymax, xmax], 0..1000)는 쪽 전체 기준이므로 pdfrx 부분 렌더(x, y, width, height)로
@@ -288,6 +328,94 @@ class TextbookReviewSolutionImageService {
       region1k: region1k,
     );
     return r?.bytes;
+  }
+
+  /// 해설 조각들을 찍어 위에서 아래로 이어 붙인다. 조각 사이에는 회색 구분선을 넣는다. 첫 조각을 못 찍으면 null.
+  Future<TextbookReviewRenderedStack?> renderSolutionStack({
+    required String academyId,
+    required String bookId,
+    required String gradeLabel,
+    required String sourceKind,
+    required List<TextbookSolutionSegment> segments,
+  }) async {
+    final parts = <TextbookReviewRenderedRegion>[];
+    for (final s in segments) {
+      final r = await renderRegion(
+        academyId: academyId,
+        bookId: bookId,
+        gradeLabel: gradeLabel,
+        sourceKind: sourceKind,
+        rawPage: s.rawPage,
+        region1k: s.region1k,
+      );
+      if (r == null) {
+        if (parts.isEmpty) return null;
+        break;
+      }
+      parts.add(r);
+    }
+    if (parts.isEmpty) return null;
+    if (parts.length == 1) {
+      final p0 = parts.first;
+      return TextbookReviewRenderedStack(
+        bytes: p0.bytes,
+        widthPx: p0.widthPx,
+        heightPx: p0.heightPx,
+        parts: parts,
+        topsPx: const [0],
+      );
+    }
+    const gapPx = 24;
+    final width = parts.map((p) => p.widthPx).reduce((a, b) => a > b ? a : b);
+    final tops = <int>[];
+    var height = 0;
+    for (final p in parts) {
+      if (tops.isNotEmpty) height += gapPx;
+      tops.add(height);
+      height += p.heightPx;
+    }
+    final recorder = ui.PictureRecorder();
+    final canvas = ui.Canvas(recorder);
+    canvas.drawRect(
+      ui.Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()),
+      ui.Paint()..color = const ui.Color(0xFFFFFFFF),
+    );
+    for (var i = 0; i < parts.length; i++) {
+      if (i > 0) {
+        final y = tops[i] - gapPx / 2;
+        canvas.drawRect(
+          ui.Rect.fromLTWH(0, y - 2, width.toDouble(), 4),
+          ui.Paint()..color = const ui.Color(0xFF9E9E9E),
+        );
+      }
+      final codec = await ui.instantiateImageCodec(parts[i].bytes);
+      try {
+        final frame = await codec.getNextFrame();
+        canvas.drawImage(frame.image, ui.Offset(0, tops[i].toDouble()), ui.Paint());
+        frame.image.dispose();
+      } finally {
+        codec.dispose();
+      }
+    }
+    final picture = recorder.endRecording();
+    try {
+      final image = await picture.toImage(width, height);
+      try {
+        final data = await image.toByteData(format: ui.ImageByteFormat.png);
+        if (data == null) return null;
+        return TextbookReviewRenderedStack(
+          bytes: data.buffer.asUint8List(),
+          widthPx: width,
+          heightPx: height,
+          parts: parts,
+          topsPx: tops,
+        );
+      } finally {
+        image.dispose();
+      }
+    } finally {
+      picture.dispose();
+    }
   }
 
   /// 해설(또는 본문) PDF 한 쪽 전체를 PNG 로 찍는다(해설 번호 좌표가 어긋났을 때 쪽 전체에서 다시 찾는 폴백용).

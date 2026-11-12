@@ -1217,10 +1217,8 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
         context,
         pdfUrl: completed.outputUrl.trim(),
         titleText: '과제보기 (${selectedUids.length}문항)',
-        onPrintRequested: (filePath) => printProblemBankExportPreviewFile(
-          filePath,
-          preferredPaperSize: settings.paperLabel,
-        ),
+        initialPrintPaperSize: settings.paperLabel,
+        onPrintRequested: printProblemBankExportPreviewFile,
         initialSubjectTitle: subjectTitle.isEmpty ? '수학 영역' : subjectTitle,
         initialTitlePageTopText: titlePageTopText.isEmpty
             ? kLearningDefaultTitlePageTopText

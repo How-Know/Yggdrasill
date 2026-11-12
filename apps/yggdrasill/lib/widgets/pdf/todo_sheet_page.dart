@@ -672,32 +672,24 @@ class _TodoSheetPageState extends State<TodoSheetPage> {
       return Text('오늘 과제에 연결된 Flow 없음',
           style: _ts(8.4, _ink.tertiary));
     }
-    final counts = <String, int>{};
-    for (final flow in flows) {
-      final key = '${flow.flowName}|${flow.bookName ?? ''}';
-      counts[key] = (counts[key] ?? 0) + 1;
-    }
     return _SheetOverflow(
       maxHeight: 52,
       expanded: _open.contains('flows'),
       onToggle: () => _toggle('flows'),
       spacing: 9,
       children: [
-        for (final flow in flows) _flowItem(flow, counts),
+        for (final flow in flows) _flowItem(flow),
       ],
     );
   }
 
-  Widget _flowItem(LessonRecordFlowProgress flow, Map<String, int> counts) {
+  Widget _flowItem(LessonRecordFlowProgress flow) {
     final flowName = flow.flowName.trim().isEmpty ? 'Flow' : flow.flowName.trim();
     final book = (flow.bookName ?? '').trim();
     final grade = (flow.gradeLabel ?? '').trim();
-    final dup = (counts['${flow.flowName}|${flow.bookName ?? ''}'] ?? 0) > 1;
     final label = book.isEmpty
         ? flowName
-        : (dup && grade.isNotEmpty
-            ? '$flowName · $book ($grade)'
-            : '$flowName · $book');
+        : (grade.isEmpty ? '$flowName · $book' : '$flowName · $book ($grade)');
     final pct = flow.progressPercent;
     final before = (flow.beforePercent ?? pct ?? 0).clamp(0.0, 100.0);
     final today = pct == null
@@ -1785,8 +1777,8 @@ class _SheetMathLine extends StatelessWidget {
               inherit: false,
               color: style.color,
               fontSize: style.fontSize,
-              fontWeight: style.fontWeight,
-              fontFamily: style.fontFamily,
+              fontWeight: FontWeight.normal,
+              fontFamily: LatexTextRenderer.v2TextFontFamily,
             ),
             onErrorFallback: (_) => Text(
               formula,

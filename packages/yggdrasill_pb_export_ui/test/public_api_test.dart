@@ -25,7 +25,11 @@ void main() {
     final copied = request.copyWith(timeLimitText: '60분');
     expect(copied.timeLimitText, '60분');
 
-    Future<bool> printFile(String _) async => true;
+    Future<bool> printFile(ProblemBankPreviewPrintRequest request) async {
+      expect(request.paperSize, 'A4');
+      return true;
+    }
+
     final widget = ProblemBankExportServerPreviewDialog(
       pdfUrl: 'https://example.com/preview.pdf',
       titleText: '미리보기',
@@ -33,5 +37,11 @@ void main() {
       onPrintRequested: printFile,
     );
     expect(widget.onPrintRequested, isNotNull);
+    const printRequest = ProblemBankPreviewPrintRequest(
+      filePath: 'preview.pdf',
+      paperSize: 'A4',
+      duplexMode: ProblemBankPreviewDuplexMode.twoSidedLongEdge,
+    );
+    expect(widget.onPrintRequested!(printRequest), completion(isTrue));
   });
 }

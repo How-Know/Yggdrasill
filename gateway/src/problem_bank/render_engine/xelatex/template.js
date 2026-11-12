@@ -783,7 +783,7 @@ function normalizeMathSegment(mathContent) {
   out = out.replace(/\^\s*\{\s*\\square\s*\}/g, '^{\\mtexponentemptybox{}}');
   out = out.replace(/\^\s*\\square(?!\s*[A-Za-z가-힣])(?![a-zA-Z])/g, '^{\\mtexponentemptybox{}}');
 
-  // box{~~} (빈 박스) → 3:2 비율 직사각형 빈칸 네모.
+  // box{~~} (빈 박스) → 정사각형 빈칸 네모.
   out = out.replace(/\[(?:BOX|box|blank|빈칸|네모)\]/g, '\\mtemptybox{}');
   out = out.replace(/\bBOX\b/g, '\\mtemptybox{}');
   out = out.replace(/(?<![\\A-Za-z])box\s*\{\s*(?:~~)?\s*\}/gi, '\\mtemptybox{}');
@@ -812,7 +812,7 @@ function normalizeMathSegment(mathContent) {
   // 동그라미 한글(㉠–㉭)·동그라미 숫자(①–⑳) 는 수식 폰트에 글리프가 없어 math mode 로 들어가면
   // 서버 PDF 에서 통째로 누락된다(본문 폰트엔 글리프 존재). \text{} 로 감싸 본문 폰트로 강제 출력.
   out = out.replace(/[\u3260-\u326D\u2460-\u2473]/g, (ch) => `\\text{${ch}}`);
-  // DB 에 이미 들어가 있는 \boxed{\phantom{...}} 또는 \boxed{~~} 형태도 3:2 빈칸 네모로 치환.
+  // DB 에 이미 들어가 있는 \boxed{\phantom{...}} 또는 \boxed{~~} 형태도 정사각형 빈칸 네모로 치환.
   out = out.replace(/\\boxed\s*\{\s*\\phantom\s*\{[^}]*\}\s*\}/g, '\\mtemptybox{}');
   out = out.replace(/\\boxed\s*\{\s*(?:~+|\s*)\s*\}/g, '\\mtemptybox{}');
   // VLM 추출에서 \times·\div 등 연산자 매크로가 box{} placeholder 와 공백 없이 붙어
@@ -3674,13 +3674,12 @@ function buildPreamble({
   lines.push('\\newsavebox{\\YggChoiceMeasureBox}');
   lines.push('\\newcount\\YggChoiceLayout');
   lines.push(...measuredWrapMacroLines());
-  // \mtemptybox : 가로:세로 = 3:2 비율의 빈칸 네모 (math/text 모두 안전).
-  // 한글 글자 전체 높이(ascender+descender 포함)와 시각적으로 동일하도록 1.05em × 1.575em 으로 설정.
-  // (한글 글리프 실제 높이가 약 1.0~1.05em 수준이라 0.9em 이면 작아 보임)
+  // \mtemptybox : 1:1 정사각형 빈칸 네모 (math/text 모두 안전). 원본의 짧은·넓은 네모를 모두 이 모양으로 통일한다.
+  // 한 변 0.92em 은 렌더된 한글 글자 높이와 같아 보이는 크기다.
   // \ensuremath + \vcenter 로 수식축(math axis) 에 중앙이 오도록 → 인접 글자와 시각적 정렬.
-  lines.push('\\newcommand{\\mtemptybox}{\\ensuremath{\\mathord{\\mkern2mu\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[1.575em][c]{\\rule{0pt}{1.05em}}}}\\mkern2mu}}}');
+  lines.push('\\newcommand{\\mtemptybox}{\\ensuremath{\\mathord{\\mkern2mu\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[0.92em][c]{\\rule{0pt}{0.92em}}}}\\mkern2mu}}}');
   // \mtshapesquare : "사각형 ABCD" 의 도형 기호(□ABCD). 값을 채우는 빈칸(\mtemptybox)
-  // 과 반드시 구분되어야 하므로 3:2 가 아닌 정사각형이며, 대문자 높이에 맞춘 크기다.
+  // 과 같은 정사각형이지만 대문자 높이에 맞춘 조금 작은 크기다.
   lines.push('\\newcommand{\\mtshapesquare}{\\ensuremath{\\mathord{\\mkern1mu\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[0.88em][c]{\\rule{0pt}{0.88em}}}}\\mkern1mu}}}');
   // 지수 전용 빈칸: 정사각형이며 일반 빈칸보다 작다.
   lines.push('\\newcommand{\\mtexponentemptybox}{\\vcenter{\\hbox{\\scriptsize\\setlength{\\fboxsep}{0pt}\\framebox[0.72em][c]{\\rule{0pt}{0.72em}}}}}');
@@ -6055,7 +6054,7 @@ export function buildTexSource(question, options = {}) {
     '\\newsavebox{\\YggChoiceMeasureBox}',
     '\\newcount\\YggChoiceLayout',
     ...measuredWrapMacroLines(),
-    '\\newcommand{\\mtemptybox}{\\ensuremath{\\mathord{\\mkern2mu\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[1.575em][c]{\\rule{0pt}{1.05em}}}}\\mkern2mu}}}',
+    '\\newcommand{\\mtemptybox}{\\ensuremath{\\mathord{\\mkern2mu\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[0.92em][c]{\\rule{0pt}{0.92em}}}}\\mkern2mu}}}',
     '\\newcommand{\\mtshapesquare}{\\ensuremath{\\mathord{\\mkern1mu\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[0.88em][c]{\\rule{0pt}{0.88em}}}}\\mkern1mu}}}',
     '\\newcommand{\\mtexponentemptybox}{\\vcenter{\\hbox{\\scriptsize\\setlength{\\fboxsep}{0pt}\\framebox[0.72em][c]{\\rule{0pt}{0.72em}}}}}',
     '\\newcommand{\\mtsqrtpad}[1]{\\sqrt{\\vphantom{\\raisebox{0.10em}{$\\displaystyle #1$}}\\smash{\\lower0.16em\\hbox{$\\displaystyle #1$}}}\\mkern2mu}',
@@ -6217,7 +6216,7 @@ export function buildAnswerTexSource(answer, options = {}) {
     '\\usepackage{setspace}',
     '\\newsavebox{\\YggChoiceMeasureBox}',
     '\\newcount\\YggChoiceLayout',
-    '\\newcommand{\\mtemptybox}{\\ensuremath{\\mathord{\\mkern2mu\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[1.575em][c]{\\rule{0pt}{1.05em}}}}\\mkern2mu}}}',
+    '\\newcommand{\\mtemptybox}{\\ensuremath{\\mathord{\\mkern2mu\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[0.92em][c]{\\rule{0pt}{0.92em}}}}\\mkern2mu}}}',
     '\\newcommand{\\mtshapesquare}{\\ensuremath{\\mathord{\\mkern1mu\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[0.88em][c]{\\rule{0pt}{0.88em}}}}\\mkern1mu}}}',
     '\\newcommand{\\mtexponentemptybox}{\\vcenter{\\hbox{\\scriptsize\\setlength{\\fboxsep}{0pt}\\framebox[0.72em][c]{\\rule{0pt}{0.72em}}}}}',
     '\\newcommand{\\mtsqrtpad}[1]{\\sqrt{\\vphantom{\\raisebox{0.10em}{$\\displaystyle #1$}}\\smash{\\lower0.16em\\hbox{$\\displaystyle #1$}}}\\mkern2mu}',

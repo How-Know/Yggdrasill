@@ -227,6 +227,17 @@ int _mathRunStart(String s, int commandAt) {
 }
 
 int _mathRunEnd(String s, int commandAt) {
+  if (s.startsWith(r'\begin{', commandAt)) {
+    final nameEnd = s.indexOf('}', commandAt + 7);
+    if (nameEnd > 0) {
+      final envName = s.substring(commandAt + 7, nameEnd);
+      final closeTag = '\\end{$envName}';
+      final closeAt = s.indexOf(closeTag, nameEnd + 1);
+      if (closeAt >= 0) {
+        return closeAt + closeTag.length;
+      }
+    }
+  }
   var j = commandAt;
   while (j < s.length) {
     if (s[j] == r'\' && !s.startsWith(r'\(', j) && !s.startsWith(r'\)', j)) {

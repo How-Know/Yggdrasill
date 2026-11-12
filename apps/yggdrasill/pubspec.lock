@@ -1601,6 +1601,13 @@ packages:
       relative: true
     source: path
     version: "0.1.0"
+  yggdrasill_ui:
+    dependency: "direct main"
+    description:
+      path: "../../packages/yggdrasill_ui"
+      relative: true
+    source: path
+    version: "0.1.0"
 sdks:
   dart: ">=3.8.0 <4.0.0"
   flutter: ">=3.29.0"

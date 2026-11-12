@@ -85,6 +85,8 @@ class LearningProblemQuestion {
     required this.meta,
     required this.createdAt,
     required this.documentSourceName,
+    this.reviewThinkingScore,
+    this.reviewArithmeticScore,
   });
 
   final String id;
@@ -121,6 +123,13 @@ class LearningProblemQuestion {
   final Map<String, dynamic> meta;
   final DateTime? createdAt;
   final String documentSourceName;
+
+  /// 1차 문항 검수가 점수를 기록한 경우에만 값이 있다. 없으면 검수 전이다.
+  final double? reviewThinkingScore;
+  final double? reviewArithmeticScore;
+
+  bool get hasReviewScores =>
+      reviewThinkingScore != null && reviewArithmeticScore != null;
 
   String get displayQuestionNumber {
     final normalized = questionNumber.trim();
@@ -169,6 +178,8 @@ class LearningProblemQuestion {
     String? objectiveAnswerKey,
     String? subjectiveAnswer,
     String? reviewerNotes,
+    double? reviewThinkingScore,
+    double? reviewArithmeticScore,
   }) {
     return LearningProblemQuestion(
       id: id,
@@ -205,6 +216,8 @@ class LearningProblemQuestion {
       meta: meta,
       createdAt: createdAt,
       documentSourceName: documentSourceName,
+      reviewThinkingScore: reviewThinkingScore ?? this.reviewThinkingScore,
+      reviewArithmeticScore: reviewArithmeticScore ?? this.reviewArithmeticScore,
     );
   }
 
@@ -1087,7 +1100,7 @@ class LearningProblemBankService {
 
   bool get hasGateway => _gatewayBaseUrl.isNotEmpty;
   static const _previewBucket = 'problem-previews';
-  static const _batchPreviewVersion = 'pb_render_v103_subq_wrap_27';
+  static const _batchPreviewVersion = 'pb_render_v5_ind_set_split_1';
 
   Uri _gatewayUri(String path, [Map<String, String>? query]) {
     final base = _gatewayBaseUrl.endsWith('/')
@@ -1432,7 +1445,7 @@ class LearningProblemBankService {
       questionRows: limited,
       documentMetaById: documentMetaMap,
     );
-    return enriched
+    final questions = enriched
         .map(
           (row) => LearningProblemQuestion.fromMap(
             row,
@@ -1440,6 +1453,82 @@ class LearningProblemBankService {
                 documentNameMap['${row['document_id'] ?? ''}'.trim()] ?? '',
           ),
         )
+        .toList(growable: false);
+    return _attachReviewScores(academyId: academyId, questions: questions);
+  }
+
+  /// 교재 크롭 검수 분석의 사고·연산 점수를 문항 id에 붙인다.
+  /// 분석이 없거나 조회가 실패하면 점수를 비운 채 문항 목록은 그대로 둔다.
+  Future<List<LearningProblemQuestion>> _attachReviewScores({
+    required String academyId,
+    required List<LearningProblemQuestion> questions,
+  }) async {
+    final safeAcademyId = academyId.trim();
+    if (safeAcademyId.isEmpty || questions.isEmpty) return questions;
+    final questionIds = questions
+        .map((question) => question.id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (questionIds.isEmpty) return questions;
+
+    final cropByQuestionId = <String, String>{};
+    try {
+      for (final chunk in _chunkStrings(questionIds, 200)) {
+        final rows = await _client
+            .from('textbook_crop_question_links')
+            .select('pb_question_id,crop_id')
+            .eq('academy_id', safeAcademyId)
+            .inFilter('pb_question_id', chunk);
+        for (final raw in _listOrEmpty(rows)) {
+          final row = _mapOrEmpty(raw);
+          final questionId = '${row['pb_question_id'] ?? ''}'.trim();
+          final cropId = '${row['crop_id'] ?? ''}'.trim();
+          if (questionId.isEmpty || cropId.isEmpty) continue;
+          cropByQuestionId[questionId] = cropId;
+        }
+      }
+    } catch (_) {
+      return questions;
+    }
+    if (cropByQuestionId.isEmpty) return questions;
+
+    final scoresByCropId = <String, ({double thinking, double arithmetic})>{};
+    try {
+      final cropIds = cropByQuestionId.values.toSet().toList(growable: false);
+      for (final chunk in _chunkStrings(cropIds, 200)) {
+        final rows = await _client
+            .from('textbook_problem_analyses')
+            .select('crop_id,thinking_score,arithmetic_score,analyzed_at')
+            .eq('academy_id', safeAcademyId)
+            .inFilter('crop_id', chunk);
+        for (final raw in _listOrEmpty(rows)) {
+          final row = _mapOrEmpty(raw);
+          final analyzedAt = '${row['analyzed_at'] ?? ''}'.trim();
+          if (analyzedAt.isEmpty) continue;
+          final cropId = '${row['crop_id'] ?? ''}'.trim();
+          if (cropId.isEmpty) continue;
+          scoresByCropId[cropId] = (
+            thinking: _doubleOrZero(row['thinking_score']),
+            arithmetic: _doubleOrZero(row['arithmetic_score']),
+          );
+        }
+      }
+    } catch (_) {
+      return questions;
+    }
+    if (scoresByCropId.isEmpty) return questions;
+
+    return questions
+        .map((question) {
+          final cropId = cropByQuestionId[question.id.trim()];
+          final scores = cropId == null ? null : scoresByCropId[cropId];
+          if (scores == null) return question;
+          return question.copyWith(
+            reviewThinkingScore: scores.thinking,
+            reviewArithmeticScore: scores.arithmetic,
+          );
+        })
         .toList(growable: false);
   }
 
@@ -1705,7 +1794,7 @@ class LearningProblemBankService {
         ),
       );
     }
-    return out;
+    return _attachReviewScores(academyId: safeAcademyId, questions: out);
   }
 
   Future<List<Map<String, dynamic>>> loadQuestionLinkRowsForDocuments({
@@ -3638,10 +3727,114 @@ class LearningProblemBankService {
     return 'subjective';
   }
 
+  /// 독립형 세트문항의 공통발문만 문항 카드와 동일한 V2(xelatex) 엔진으로 찍은 썸네일 서명 URL.
+  Future<String> renderIndependentSetCommonStemThumbnail({
+    required String academyId,
+    required LearningProblemQuestion question,
+    String? commonStemOverride,
+  }) async {
+    final safeAcademyId = academyId.trim();
+    final stemText = (commonStemOverride ?? question.setCommonStem).trim();
+    if (!hasGateway || safeAcademyId.isEmpty || stemText.isEmpty) return '';
+
+    final rawMeta = question.meta;
+    final model = _mapOrEmpty(rawMeta['set_model'] ?? rawMeta['setModel']);
+    final delivery =
+        _mapOrEmpty(rawMeta['delivery_unit'] ?? rawMeta['deliveryUnit']);
+    final deliverySource =
+        _mapOrEmpty(delivery['source_meta'] ?? delivery['sourceMeta']);
+
+    List<dynamic> listOrEmpty(Object? raw) =>
+        raw is List ? List<dynamic>.from(raw) : const <dynamic>[];
+
+    final commonFigureAssets =
+        listOrEmpty(model['common_figure_assets']).isNotEmpty
+            ? listOrEmpty(model['common_figure_assets'])
+            : listOrEmpty(deliverySource['common_figure_assets']);
+    final commonFigureLayout = _mapOrEmpty(
+      model['common_figure_layout'] ?? deliverySource['common_figure_layout'],
+    );
+    final commonTableScales = _mapOrEmpty(
+      model['common_table_scales'] ?? deliverySource['common_table_scales'],
+    );
+    final commonTableLayout = _mapOrEmpty(
+      model['common_table_layout'] ?? deliverySource['common_table_layout'],
+    );
+
+    final figMarkerRe = RegExp(r'\[\s*(?:그림|도형|도표)\s*\]|\[\[PB_FIG_');
+    final commonHasFigMarker = figMarkerRe.hasMatch(stemText);
+    final fallbackAssets = listOrEmpty(rawMeta['figure_assets']);
+
+    final cleanMeta = <String, dynamic>{
+      ...rawMeta,
+      'is_set_question': false,
+      'set_model': const <String, dynamic>{},
+      'delivery_unit': const <String, dynamic>{},
+    };
+    if (commonFigureAssets.isNotEmpty) {
+      cleanMeta['figure_assets'] = commonFigureAssets;
+    } else if (!commonHasFigMarker) {
+      cleanMeta.remove('figure_assets');
+      cleanMeta.remove('figure_layout');
+    } else if (fallbackAssets.isEmpty) {
+      cleanMeta.remove('figure_assets');
+    }
+    if (commonFigureLayout.isNotEmpty) {
+      cleanMeta['figure_layout'] = commonFigureLayout;
+    }
+    if (commonTableScales.isNotEmpty) {
+      cleanMeta['table_scales'] = commonTableScales;
+    }
+    if (commonTableLayout.isNotEmpty) {
+      cleanMeta['table_layout'] = commonTableLayout;
+    }
+
+    final baseId = question.stableQuestionKey.trim();
+    final commonId = '$baseId:common';
+    final result = await _gatewayPost(
+      '/pb/preview/custom-thumbnail',
+      body: <String, dynamic>{
+        'academyId': safeAcademyId,
+        'question': <String, dynamic>{
+          'id': commonId,
+          'question_uid': commonId,
+          'document_id': question.documentId,
+          'question_number': '',
+          'question_type': '주관식',
+          'stem': stemText,
+          'choices': const <Map<String, dynamic>>[],
+          'objective_choices': const <Map<String, dynamic>>[],
+          'allow_objective': false,
+          'allow_subjective': true,
+          'figure_refs': commonHasFigMarker ? question.figureRefs : const <String>[],
+          'equations': question.equations
+              .map(
+                (e) => <String, dynamic>{
+                  'token': e.token,
+                  'raw': e.raw,
+                  'latex': e.latex,
+                },
+              )
+              .toList(growable: false),
+          'confidence': question.confidence,
+          'source_page': question.sourcePage,
+          'source_order': question.sourceOrder,
+          'meta': cleanMeta,
+        },
+      },
+    );
+    final thumbnail = result['thumbnail'];
+    if (thumbnail is Map) {
+      return '${thumbnail['url'] ?? ''}'.trim();
+    }
+    return '';
+  }
+
   Future<Map<String, String>> fetchQuestionPreviews({
     required String academyId,
     required List<String> questionIds,
     Map<String, dynamic>? layout,
+    Map<String, dynamic>? renderConfig,
   }) async {
     if (!hasGateway || questionIds.isEmpty) return {};
     try {
@@ -3650,6 +3843,8 @@ class LearningProblemBankService {
         body: <String, dynamic>{
           'academyId': academyId,
           'questionIds': questionIds,
+          if (renderConfig != null && renderConfig.isNotEmpty)
+            'renderConfig': renderConfig,
         },
       );
 
@@ -3675,6 +3870,9 @@ class LearningProblemBankService {
           'questionIds': missing,
         };
         if (layout != null && layout.isNotEmpty) body['layout'] = layout;
+        if (renderConfig != null && renderConfig.isNotEmpty) {
+          body['renderConfig'] = renderConfig;
+        }
         final genResult = await _gatewayPost(
           '/pb/preview/questions',
           body: body,

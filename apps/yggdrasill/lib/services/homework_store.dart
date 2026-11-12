@@ -5267,6 +5267,93 @@ class HomeworkStore {
     } catch (_) {}
   }
 
+  /// 그룹 안에서 수행 중인 하위 과제만 대기로 되돌린다.
+  /// 이미 제출·확인된 하위 과제와 다른 그룹은 그대로 둔다.
+  Future<int> pauseRunningChildrenInGroup(
+    String studentId,
+    String groupId,
+  ) async {
+    final cleanedGroupId = groupId.trim();
+    if (cleanedGroupId.isEmpty) return 0;
+    final targets = itemsInGroup(studentId, cleanedGroupId)
+        .where((child) =>
+            child.status != HomeworkStatus.completed &&
+            child.completedAt == null &&
+            (child.runStart != null || child.phase == 2))
+        .toList(growable: false);
+    if (targets.isEmpty) return 0;
+
+    final undo = _snapshotGroupTransition(studentId);
+    final now = DateTime.now();
+    var elapsedMs = 0;
+    for (final item in targets) {
+      for (final copy in _homeworkCopies(item.id)) {
+        if (copy.runStart != null) {
+          final delta = now.difference(copy.runStart!).inMilliseconds;
+          if (delta > elapsedMs) elapsedMs = delta;
+          copy.accumulatedMs += delta;
+          copy.runStart = null;
+        }
+        copy.phase = 1;
+        copy.waitingAt = now;
+        copy.updatedAt = now;
+      }
+    }
+    final group = groupById(studentId, cleanedGroupId);
+    if (group != null) {
+      final remaining = itemsInGroup(studentId, cleanedGroupId).where(
+        (child) =>
+            child.status != HomeworkStatus.completed &&
+            child.completedAt == null,
+      );
+      final anyRunning = remaining.any((child) => child.runStart != null);
+      final anySubmitted = remaining.any((child) => child.phase == 3);
+      final anyConfirmed = remaining.any((child) => child.phase == 4);
+      group.runtimePhase =
+          anyRunning ? 2 : (anySubmitted ? 3 : (anyConfirmed ? 4 : 1));
+      if (!anyRunning) group.runtimeRunStart = null;
+      if (elapsedMs > 0) {
+        group.runtimeAccumulatedMs += elapsedMs;
+      }
+      group.runtimeUpdatedAt = now;
+    }
+    _bump();
+
+    _beginLocalWrite(studentId);
+    var pausedOnServer = false;
+    try {
+      final String academyId =
+          (await TenantService.instance.getActiveAcademyId()) ??
+              await TenantService.instance.ensureActiveAcademy();
+      final String? updatedBy = Supabase.instance.client.auth.currentUser?.id;
+      for (final item in targets) {
+        await Supabase.instance.client.rpc('homework_wait', params: {
+          'p_item_id': item.id,
+          'p_academy_id': academyId,
+          'p_updated_by': updatedBy,
+        });
+      }
+      pausedOnServer = true;
+      try {
+        await _reloadStudent(studentId);
+      } catch (error) {
+        // ignore: avoid_print
+        print('[HW][pauseGroup][reload][ERROR] $error');
+      }
+      return targets.length;
+    } catch (e) {
+      // ignore: avoid_print
+      print('[HW][pauseGroup][ERROR] $e');
+      if (!pausedOnServer) {
+        _restoreGroupTransitionSnapshot(undo);
+        unawaited(_reloadStudent(studentId));
+      }
+      return -1;
+    } finally {
+      _endLocalWrite(studentId);
+    }
+  }
+
   Future<void> completeBatch(String studentId, Iterable<String> ids) async {
     final list = _byStudentId[studentId];
     if (list == null || list.isEmpty) return;
@@ -6955,12 +7042,18 @@ class HomeworkStore {
     required String groupId,
     required int? fromPhase,
   }) {
-    if (fromPhase != 1 && fromPhase != 2 && fromPhase != 4) return;
+    if (fromPhase != 1 &&
+        fromPhase != 2 &&
+        fromPhase != 4 &&
+        fromPhase != 99) {
+      return;
+    }
     final now = DateTime.now();
     final list = _byStudentId[studentId] ?? const <HomeworkItem>[];
     final inGroup = <String>{
       for (final link in groupLinks(groupId)) link.homeworkItemId,
     };
+    var submittedWaitingOrRunning = false;
     if (fromPhase == 1) {
       final pausedGroupIds = <String>{};
       for (final item in list) {
@@ -7000,6 +7093,24 @@ class HomeworkStore {
         item.phase = 3;
         item.submittedAt = now;
       }
+    } else if (fromPhase == 99) {
+      for (final item in list) {
+        if (!inGroup.contains(item.id)) continue;
+        if (item.status == HomeworkStatus.completed ||
+            item.completedAt != null) {
+          continue;
+        }
+        if (item.phase != 1 && item.phase != 2) continue;
+        if (item.runStart != null) {
+          item.accumulatedMs += now.difference(item.runStart!).inMilliseconds;
+          item.runStart = null;
+        }
+        _autoCompleteOnNextWaiting.remove(item.id);
+        item.phase = 3;
+        item.submittedAt = now;
+        item.updatedAt = now;
+        submittedWaitingOrRunning = true;
+      }
     } else {
       for (final item in list) {
         if (!inGroup.contains(item.id) || item.phase != 4) continue;
@@ -7017,12 +7128,13 @@ class HomeworkStore {
       }
     }
     final group = groupById(studentId, groupId);
-    if (group != null) {
+    if (group != null &&
+        (fromPhase != 99 || submittedWaitingOrRunning)) {
       if (fromPhase == 1) {
         group.cycleStartedAt ??= now;
         group.runtimePhase = 2;
         group.runtimeRunStart ??= now;
-      } else if (fromPhase == 2) {
+      } else if (fromPhase == 2 || fromPhase == 99) {
         group.runtimePhase = 3;
         group.runtimeRunStart = null;
       } else {

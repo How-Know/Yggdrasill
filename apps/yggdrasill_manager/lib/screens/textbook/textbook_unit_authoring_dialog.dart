@@ -5198,8 +5198,12 @@ class _TextbookUnitAuthoringDialogState
         }
         try {
           final midKey = '${order.bookId}|${order.gradeLabel}|${order.bigOrder}|${order.midOrder}';
-          final all = itemsByMid[midKey] ??= await review.fetchUnitItems(order.reviewScope);
-          final items = [for (final it in all) if (order.matches(it)) it];
+          var all = itemsByMid[midKey] ??= await review.fetchUnitItems(order.reviewScope);
+          var items = [for (final it in all) if (order.matches(it)) it];
+          if (await review.reconcileBeforeConfirm(items) > 0) {
+            all = itemsByMid[midKey] = await review.fetchUnitItems(order.reviewScope);
+            items = [for (final it in all) if (order.matches(it)) it];
+          }
           final ready = items.where((x) => x.isWorkflowReady).length;
           if (items.isEmpty || ready < items.length) {
             problems.add('$label: 준비됨 $ready/${items.length}');

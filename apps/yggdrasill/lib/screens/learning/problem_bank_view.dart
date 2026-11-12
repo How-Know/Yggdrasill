@@ -134,6 +134,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   Map<String, String> _questionPreviewStatus = const <String, String>{};
   Map<String, String> _questionPreviewError = const <String, String>{};
   Set<String> _pendingPreviewQuestionIds = <String>{};
+  final Set<String> _expandedPreviewKeys = <String>{};
+  final Set<String> _expandedSetGroupKeys = <String>{};
   int _figureLoadVersion = 0;
   LearningProblemExportSettings _exportSettings =
       LearningProblemExportSettings.initial();
@@ -1106,14 +1108,14 @@ class _ProblemBankViewState extends State<ProblemBankView> {
 
     if (mounted) {
       setState(() {
+        final nextStatus = <String, String>{..._questionPreviewStatus};
         for (final q in questions) {
-          _questionPreviewStatus = {
-            ..._questionPreviewStatus,
-            q.id: 'rendering',
-          };
+          nextStatus[q.id] = 'running';
         }
+        _questionPreviewStatus = nextStatus;
       });
     }
+    unawaited(_fetchCommonSetCardPreviews(questions));
 
     final questionIds = questions
         .map((q) => q.questionUid.trim().isNotEmpty
@@ -1137,6 +1139,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         templateProfile: thumbnailProfile,
         paperSize: thumbnailPaperSize,
         questionModeByQuestionUid: _thumbnailModeMapForQuestions(questions),
+        renderConfig: const <String, dynamic>{
+          'previewIndependentSetCommonStem': false,
+        },
       );
       if (!mounted) return;
 
@@ -1174,6 +1179,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         final fallbackMap = await _service.fetchQuestionPreviews(
           academyId: _academyId!,
           questionIds: fallbackIds,
+          renderConfig: const <String, dynamic>{
+            'previewIndependentSetCommonStem': false,
+          },
         );
         if (!mounted) return;
         for (final entry in fallbackMap.entries) {
@@ -1233,6 +1241,121 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     final target = _questions.where((q) => q.id == questionId).toList();
     if (target.isEmpty) return;
     unawaited(_fetchQuestionPreviews(target));
+  }
+
+  Future<void> _fetchCommonSetCardPreviews(
+    List<LearningProblemQuestion> questions,
+  ) async {
+    if (_academyId == null || _academyId!.isEmpty || questions.isEmpty) return;
+    final slots = groupProblemBankGridSlots<LearningProblemQuestion>(
+      questions,
+      (q) => q,
+    );
+    final pendingSlots = <ProblemBankGridSlot<LearningProblemQuestion>>[
+      for (final slot in slots)
+        if (slot.isIndependentSet &&
+            slot.commonStem.trim().isNotEmpty &&
+            !_questionPreviewUrls.containsKey(slot.key))
+          slot,
+    ];
+    if (pendingSlots.isEmpty) return;
+    if (mounted) {
+      setState(() {
+        final nextStatus = <String, String>{..._questionPreviewStatus};
+        final nextError = <String, String>{..._questionPreviewError};
+        for (final slot in pendingSlots) {
+          nextStatus[slot.key] = 'running';
+          nextError.remove(slot.key);
+        }
+        _questionPreviewStatus = nextStatus;
+        _questionPreviewError = nextError;
+      });
+    }
+    await Future.wait(
+      pendingSlots.map(
+        (slot) => _renderCommonSetCardPreview(
+          setKey: slot.key,
+          donorQuestion: slot.commonPreviewDonorQuestion,
+          commonStemText: slot.commonStem,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _renderCommonSetCardPreview({
+    required String setKey,
+    required LearningProblemQuestion donorQuestion,
+    String? commonStemText,
+  }) async {
+    final academyId = _academyId;
+    if (academyId == null || academyId.isEmpty) return;
+    try {
+      final url = await _service.renderIndependentSetCommonStemThumbnail(
+        academyId: academyId,
+        question: donorQuestion,
+        commonStemOverride: commonStemText,
+      );
+      if (!mounted) return;
+      setState(() {
+        final nextUrls = <String, String>{..._questionPreviewUrls};
+        final nextStatus = <String, String>{..._questionPreviewStatus};
+        final nextError = <String, String>{..._questionPreviewError};
+        if (url.trim().isNotEmpty) {
+          nextUrls[setKey] = url.trim();
+          nextStatus[setKey] = 'completed';
+          nextError.remove(setKey);
+        } else {
+          nextStatus[setKey] = 'failed';
+          nextError[setKey] = _service.hasGateway
+              ? '공통발문 V2 썸네일 생성에 실패했습니다.'
+              : '게이트웨이가 연결되지 않아 V2 썸네일을 만들 수 없습니다.';
+        }
+        _questionPreviewUrls = nextUrls;
+        _questionPreviewStatus = nextStatus;
+        _questionPreviewError = nextError;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _questionPreviewStatus = {
+          ..._questionPreviewStatus,
+          setKey: 'failed',
+        };
+        _questionPreviewError = {
+          ..._questionPreviewError,
+          setKey: '$e',
+        };
+      });
+    }
+  }
+
+  void _retryCommonSetPreview({
+    required String setKey,
+    required LearningProblemQuestion donorQuestion,
+    String? commonStemText,
+  }) {
+    final safeKey = setKey.trim();
+    if (safeKey.isEmpty) return;
+    setState(() {
+      final nextUrls = <String, String>{..._questionPreviewUrls}
+        ..remove(safeKey);
+      final nextStatus = <String, String>{
+        ..._questionPreviewStatus,
+        safeKey: 'running',
+      };
+      final nextError = <String, String>{..._questionPreviewError}
+        ..remove(safeKey);
+      _questionPreviewUrls = nextUrls;
+      _questionPreviewStatus = nextStatus;
+      _questionPreviewError = nextError;
+    });
+    unawaited(
+      _renderCommonSetCardPreview(
+        setKey: safeKey,
+        donorQuestion: donorQuestion,
+        commonStemText: commonStemText,
+      ),
+    );
   }
 
   Future<void> _onCurriculumFilterChanged(
@@ -1360,6 +1483,41 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         _selectedQuestionIds.add(id);
       } else {
         _selectedQuestionIds.remove(id);
+      }
+    });
+  }
+
+  void _toggleQuestionsSelection(
+    Iterable<LearningProblemQuestion> questions,
+    bool selected,
+  ) {
+    setState(() {
+      for (final q in questions) {
+        if (selected) {
+          _selectedQuestionIds.add(q.id);
+        } else {
+          _selectedQuestionIds.remove(q.id);
+        }
+      }
+    });
+  }
+
+  void _togglePreviewExpanded(String key) {
+    final safe = key.trim();
+    if (safe.isEmpty) return;
+    setState(() {
+      if (!_expandedPreviewKeys.remove(safe)) {
+        _expandedPreviewKeys.add(safe);
+      }
+    });
+  }
+
+  void _toggleSetGroupExpanded(String key) {
+    final safe = key.trim();
+    if (safe.isEmpty) return;
+    setState(() {
+      if (!_expandedSetGroupKeys.remove(safe)) {
+        _expandedSetGroupKeys.add(safe);
       }
     });
   }
@@ -2351,8 +2509,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         gyeongsinInitialIncludeCover = isNoCoverSchool
             ? false
             : (presetHasGyeongsinCover
-                  ? readBoolFlag(presetConfig['includeCoverPage'], null, true)
-                  : true);
+                ? readBoolFlag(presetConfig['includeCoverPage'], null, true)
+                : true);
         initialRenderPatch = <String, dynamic>{
           ...initialRenderPatch,
           'includeCoverPage': gyeongsinInitialIncludeCover,
@@ -2426,10 +2584,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         context,
         pdfUrl: previewPdfUrl,
         titleText: '서버 PDF 미리보기 (${selected.length}문항)',
-        onPrintRequested: (filePath) => printProblemBankExportPreviewFile(
-          filePath,
-          preferredPaperSize: _exportSettings.paperLabel,
-        ),
+        initialPrintPaperSize: _exportSettings.paperLabel,
+        onPrintRequested: printProblemBankExportPreviewFile,
         initialSubjectTitle:
             initialSubjectTitle.isEmpty ? '수학 영역' : initialSubjectTitle,
         initialTitlePageTopText: initialTitlePageTopText.isEmpty
@@ -4975,34 +5131,193 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     );
   }
 
+  double _questionCardHeightForQuestion(
+    LearningProblemQuestion question,
+    double cardWidth,
+  ) {
+    final measureKey = question.stableQuestionKey;
+    final extra = ProblemBankPreviewSizeCache.instance.extraHeightWhenExpanded(
+      measureKey: measureKey,
+      previewImageUrl: _questionPreviewUrls[question.id],
+      cardWidth: cardWidth,
+      expanded: _expandedPreviewKeys.contains(measureKey),
+    );
+    return _questionCardHeight + extra;
+  }
+
+  double _questionCardHeightForSlot(
+    ProblemBankGridSlot<LearningProblemQuestion> slot,
+    double cardWidth,
+  ) {
+    if (!slot.isIndependentSet) {
+      return _questionCardHeightForQuestion(slot.firstQuestion, cardWidth);
+    }
+    final measureKey = 'common:${slot.key}';
+    final imageUrl = _questionPreviewUrls[slot.key];
+    final extra = ProblemBankPreviewSizeCache.instance.extraHeightWhenExpanded(
+      measureKey: measureKey,
+      previewImageUrl: imageUrl,
+      cardWidth: cardWidth,
+      expanded: _expandedPreviewKeys.contains(measureKey),
+    );
+    return _questionCardHeight + extra;
+  }
+
+  double _setTrayHeightForSlot(
+    ProblemBankGridSlot<LearningProblemQuestion> slot,
+    double cardWidth,
+  ) {
+    var maxCardHeight = _questionCardHeight;
+    for (final child in slot.questions) {
+      final h = _questionCardHeightForQuestion(child, cardWidth);
+      if (h > maxCardHeight) maxCardHeight = h;
+    }
+    return maxCardHeight + ProblemBankSetChildrenTray.verticalPadding * 2;
+  }
+
   Widget _buildFixedQuestionGrid({
     required List<LearningProblemQuestion> questions,
     required int columns,
     required double cardWidth,
   }) {
     if (questions.isEmpty) return const SizedBox.shrink();
-    final rowCount = (questions.length / columns).ceil();
+    final slots = groupProblemBankGridSlots<LearningProblemQuestion>(
+      questions,
+      (q) => q,
+    );
+    if (slots.isEmpty) return const SizedBox.shrink();
+    final rowCount = (slots.length / columns).ceil();
     final gridWidth =
         (columns * cardWidth) + ((columns - 1) * _questionCardSpacing);
-    final gridHeight = (rowCount * _questionCardHeight) +
-        ((rowCount - 1) * _questionCardSpacing);
 
-    return SizedBox(
-      width: gridWidth,
-      height: gridHeight,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          for (var i = 0; i < questions.length; i++)
-            Positioned(
-              left: (i % columns) * (cardWidth + _questionCardSpacing),
-              top:
-                  (i ~/ columns) * (_questionCardHeight + _questionCardSpacing),
-              width: cardWidth,
-              height: _questionCardHeight,
-              child: _buildQuestionCardTile(questions[i]),
-            ),
-        ],
+    return ListenableBuilder(
+      listenable: ProblemBankPreviewSizeCache.instance,
+      builder: (context, _) {
+        return SizedBox(
+          width: gridWidth,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (var r = 0; r < rowCount; r++) ...[
+                if (r > 0) const SizedBox(height: _questionCardSpacing),
+                Builder(
+                  builder: (context) {
+                    final start = r * columns;
+                    final end = math.min(start + columns, slots.length);
+                    final rowSlots = slots.sublist(start, end);
+                    final expandedSets =
+                        <ProblemBankGridSlot<LearningProblemQuestion>>[
+                      for (final s in rowSlots)
+                        if (s.isIndependentSet &&
+                            _expandedSetGroupKeys.contains(s.key))
+                          s,
+                    ];
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            for (var c = 0; c < rowSlots.length; c++) ...[
+                              if (c > 0)
+                                const SizedBox(width: _questionCardSpacing),
+                              SizedBox(
+                                width: cardWidth,
+                                height: _questionCardHeightForSlot(
+                                  rowSlots[c],
+                                  cardWidth,
+                                ),
+                                child: _buildQuestionSlotTile(rowSlots[c]),
+                              ),
+                            ],
+                          ],
+                        ),
+                        for (final setSlot in expandedSets) ...[
+                          const SizedBox(height: _questionCardSpacing),
+                          ProblemBankSetChildrenTray(
+                            spacing: _questionCardSpacing,
+                            children: [
+                              for (final childQ in setSlot.questions)
+                                SizedBox(
+                                  width: cardWidth,
+                                  height: _questionCardHeightForQuestion(
+                                    childQ,
+                                    cardWidth,
+                                  ),
+                                  child: _buildQuestionCardTile(childQ),
+                                ),
+                            ],
+                          ),
+                        ],
+                      ],
+                    );
+                  },
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildQuestionSlotTile(
+    ProblemBankGridSlot<LearningProblemQuestion> slot, {
+    bool showDragHandle = false,
+  }) {
+    if (!slot.isIndependentSet) {
+      return _buildQuestionCardTile(
+        slot.firstQuestion,
+        showDragHandle: showDragHandle,
+      );
+    }
+    final firstQuestion = slot.firstQuestion;
+    final donorQuestion = slot.commonPreviewDonorQuestion;
+    final allSelected = slot.questions.isNotEmpty &&
+        slot.questions.every((q) => _selectedQuestionIds.contains(q.id));
+    final anySelected =
+        slot.questions.any((q) => _selectedQuestionIds.contains(q.id));
+    final tristate = allSelected ? true : (anySelected ? null : false);
+    final measureKey = 'common:${slot.key}';
+    final scoreTotal = problemBankReviewScoreTotal(slot.questions);
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => _toggleQuestionsSelection(slot.questions, !allSelected),
+      child: ProblemBankQuestionCard(
+        question: firstQuestion,
+        selected: anySelected,
+        selectedTristate: tristate,
+        selectedMode: _selectedModeOfQuestion(firstQuestion),
+        figureUrlsByPath: _questionFigureUrlsByPath[firstQuestion.id] ??
+            const <String, String>{},
+        previewImageUrl: _questionPreviewUrls[slot.key],
+        previewStatus: _questionPreviewStatus[slot.key] ?? '',
+        previewErrorMessage: _questionPreviewError[slot.key] ?? '',
+        onRetryPreview: () => _retryCommonSetPreview(
+          setKey: slot.key,
+          donorQuestion: donorQuestion,
+          commonStemText: slot.commonStem,
+        ),
+        onSelectedChanged: (next) {
+          _toggleQuestionsSelection(slot.questions, next);
+        },
+        onModeSelected: null,
+        showDragHandle: showDragHandle,
+        isCommonStemCard: true,
+        titleOverride: slot.rangeLabel,
+        commonStemText: slot.commonStem,
+        childQuestionCount: slot.questions.length,
+        reviewThinkingScore: scoreTotal.thinking,
+        reviewArithmeticScore: scoreTotal.arithmetic,
+        commonSetExpanded: _expandedSetGroupKeys.contains(slot.key),
+        onToggleCommonSetExpanded: () {
+          _toggleSetGroupExpanded(slot.key);
+        },
+        measureKey: measureKey,
+        previewExpanded: _expandedPreviewKeys.contains(measureKey),
+        onTogglePreviewExpand: () {
+          _togglePreviewExpanded(measureKey);
+        },
       ),
     );
   }
@@ -5012,6 +5327,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     bool showDragHandle = false,
   }) {
     final selected = _selectedQuestionIds.contains(question.id);
+    final measureKey = question.stableQuestionKey;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: () => _toggleQuestionSelection(question.id, !selected),
@@ -5032,6 +5348,11 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           _setQuestionModeSelection(question.id, mode);
         },
         showDragHandle: showDragHandle,
+        measureKey: measureKey,
+        previewExpanded: _expandedPreviewKeys.contains(measureKey),
+        onTogglePreviewExpand: () {
+          _togglePreviewExpanded(measureKey);
+        },
       ),
     );
   }
@@ -5291,51 +5612,61 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       return LayoutBuilder(
         builder: (context, constraints) {
           final metrics = _questionGridMetrics(constraints);
-          return Align(
-            alignment: Alignment.topLeft,
-            child: SizedBox(
-              width: metrics.availableWidth,
-              child: AnimatedReorderableGrid<LearningProblemQuestion>(
-                items: _visibleQuestions,
-                itemId: (q) => q.id,
-                cardWidth: metrics.cardWidth,
-                cardHeight: _questionCardHeight,
-                spacing: _questionCardSpacing,
-                columns: metrics.columns,
-                scrollController: _questionGridScrollCtrl,
-                dragAnchorStrategy: pointerDragAnchorStrategy,
-                scrollBottomPadding: 120,
-                scrollTopPadding: _problemBankQuestionListTopPadding,
-                enableReorder: true,
-                itemBuilder: (context, question) {
-                  return _buildQuestionCardTile(question);
-                },
-                feedbackBuilder: (context, question) {
-                  return ProblemBankQuestionCard(
-                    question: question,
-                    selected: _selectedQuestionIds.contains(question.id),
-                    selectedMode: _selectedModeOfQuestion(question),
-                    figureUrlsByPath: _questionFigureUrlsByPath[question.id] ??
-                        const <String, String>{},
-                    previewImageUrl: _questionPreviewUrls[question.id],
-                    previewStatus: _questionPreviewStatus[question.id] ?? '',
-                    previewErrorMessage:
-                        _questionPreviewError[question.id] ?? '',
-                    onRetryPreview: () => _retryQuestionPreview(question.id),
-                    onSelectedChanged: (_) {},
-                    onModeSelected: null,
-                  );
-                },
-                onReorder: (question, targetIndex) {
-                  setState(() {
-                    _commitCartQuestionReorder(
-                      id: question.id,
-                      targetIndex: targetIndex,
-                    );
-                  });
-                },
-              ),
-            ),
+          return ListenableBuilder(
+            listenable: ProblemBankPreviewSizeCache.instance,
+            builder: (context, _) {
+              return Align(
+                alignment: Alignment.topLeft,
+                child: SizedBox(
+                  width: metrics.availableWidth,
+                  child: AnimatedReorderableGrid<LearningProblemQuestion>(
+                    items: _visibleQuestions,
+                    itemId: (q) => q.id,
+                    cardWidth: metrics.cardWidth,
+                    cardHeight: _questionCardHeight,
+                    spacing: _questionCardSpacing,
+                    columns: metrics.columns,
+                    itemHeightBuilder: (q) =>
+                        _questionCardHeightForQuestion(q, metrics.cardWidth),
+                    scrollController: _questionGridScrollCtrl,
+                    dragAnchorStrategy: pointerDragAnchorStrategy,
+                    scrollBottomPadding: 120,
+                    scrollTopPadding: _problemBankQuestionListTopPadding,
+                    enableReorder: true,
+                    itemBuilder: (context, question) {
+                      return _buildQuestionCardTile(question);
+                    },
+                    feedbackBuilder: (context, question) {
+                      return ProblemBankQuestionCard(
+                        question: question,
+                        selected: _selectedQuestionIds.contains(question.id),
+                        selectedMode: _selectedModeOfQuestion(question),
+                        figureUrlsByPath:
+                            _questionFigureUrlsByPath[question.id] ??
+                                const <String, String>{},
+                        previewImageUrl: _questionPreviewUrls[question.id],
+                        previewStatus:
+                            _questionPreviewStatus[question.id] ?? '',
+                        previewErrorMessage:
+                            _questionPreviewError[question.id] ?? '',
+                        onRetryPreview: () =>
+                            _retryQuestionPreview(question.id),
+                        onSelectedChanged: (_) {},
+                        onModeSelected: null,
+                      );
+                    },
+                    onReorder: (question, targetIndex) {
+                      setState(() {
+                        _commitCartQuestionReorder(
+                          id: question.id,
+                          targetIndex: targetIndex,
+                        );
+                      });
+                    },
+                  ),
+                ),
+              );
+            },
           );
         },
       );
@@ -5348,52 +5679,101 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       builder: (context, constraints) {
         // 그리드: 기본 5열, 카드당 최소 너비 미만이면 열 수만 줄임. 높이 고정(워커와 무관, UI 전용).
         final metrics = _questionGridMetrics(constraints);
-        return Align(
-          alignment: Alignment.topLeft,
-          child: SizedBox(
-            width: metrics.availableWidth,
-            child: AnimatedReorderableGrid<LearningProblemQuestion>(
-              items: _visibleQuestions,
-              itemId: (q) => q.id,
-              cardWidth: metrics.cardWidth,
-              cardHeight: _questionCardHeight,
-              spacing: _questionCardSpacing,
-              columns: metrics.columns,
-              scrollController: _questionGridScrollCtrl,
-              dragAnchorStrategy: pointerDragAnchorStrategy,
-              scrollBottomPadding: 120,
-              scrollTopPadding: _problemBankQuestionListTopPadding,
-              enableReorder: !_showOnlySelectedQuestions,
-              itemBuilder: (context, question) {
-                return _buildQuestionCardTile(question);
-              },
-              feedbackBuilder: (context, question) {
-                final selected = _selectedQuestionIds.contains(question.id);
-                return ProblemBankQuestionCard(
-                  question: question,
-                  selected: selected,
-                  selectedMode: _selectedModeOfQuestion(question),
-                  figureUrlsByPath: _questionFigureUrlsByPath[question.id] ??
-                      const <String, String>{},
-                  previewImageUrl: _questionPreviewUrls[question.id],
-                  previewStatus: _questionPreviewStatus[question.id] ?? '',
-                  previewErrorMessage: _questionPreviewError[question.id] ?? '',
-                  onRetryPreview: () => _retryQuestionPreview(question.id),
-                  onSelectedChanged: (_) {},
-                  onModeSelected: null,
-                );
-              },
-              onReorder: (question, targetIndex) {
-                setState(() {
-                  _commitQuestionReorder(
-                    id: question.id,
-                    targetIndex: targetIndex,
-                  );
-                });
-                _requestQuestionOrderSave();
-              },
-            ),
-          ),
+        final slots = groupProblemBankGridSlots<LearningProblemQuestion>(
+          _visibleQuestions,
+          (q) => q,
+        );
+        return ListenableBuilder(
+          listenable: ProblemBankPreviewSizeCache.instance,
+          builder: (context, _) {
+            return Align(
+              alignment: Alignment.topLeft,
+              child: SizedBox(
+                width: metrics.availableWidth,
+                child: AnimatedReorderableGrid<
+                    ProblemBankGridSlot<LearningProblemQuestion>>(
+                  items: slots,
+                  itemId: (slot) => slot.key,
+                  cardWidth: metrics.cardWidth,
+                  cardHeight: _questionCardHeight,
+                  spacing: _questionCardSpacing,
+                  columns: metrics.columns,
+                  itemHeightBuilder: (slot) =>
+                      _questionCardHeightForSlot(slot, metrics.cardWidth),
+                  rowFooterHeightBuilder: (rowIndex, rowSlots) {
+                    var total = 0.0;
+                    for (final s in rowSlots) {
+                      if (s.isIndependentSet &&
+                          _expandedSetGroupKeys.contains(s.key)) {
+                        if (total > 0) total += _questionCardSpacing;
+                        total += _setTrayHeightForSlot(s, metrics.cardWidth);
+                      }
+                    }
+                    return total;
+                  },
+                  rowFooterBuilder: (context, rowIndex, rowSlots) {
+                    final expandedSets =
+                        <ProblemBankGridSlot<LearningProblemQuestion>>[
+                      for (final s in rowSlots)
+                        if (s.isIndependentSet &&
+                            _expandedSetGroupKeys.contains(s.key))
+                          s,
+                    ];
+                    if (expandedSets.isEmpty) return null;
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        for (var i = 0; i < expandedSets.length; i++) ...[
+                          if (i > 0)
+                            const SizedBox(height: _questionCardSpacing),
+                          ProblemBankSetChildrenTray(
+                            spacing: _questionCardSpacing,
+                            children: [
+                              for (final childQ in expandedSets[i].questions)
+                                SizedBox(
+                                  width: metrics.cardWidth,
+                                  height: _questionCardHeightForQuestion(
+                                    childQ,
+                                    metrics.cardWidth,
+                                  ),
+                                  child: _buildQuestionCardTile(childQ),
+                                ),
+                            ],
+                          ),
+                        ],
+                      ],
+                    );
+                  },
+                  scrollController: _questionGridScrollCtrl,
+                  dragAnchorStrategy: pointerDragAnchorStrategy,
+                  scrollBottomPadding: 120,
+                  scrollTopPadding: _problemBankQuestionListTopPadding,
+                  enableReorder: !_showOnlySelectedQuestions,
+                  itemBuilder: (context, slot) {
+                    return _buildQuestionSlotTile(slot);
+                  },
+                  feedbackBuilder: (context, slot) {
+                    return _buildQuestionSlotTile(slot);
+                  },
+                  onReorder: (slot, targetSlotIndex) {
+                    final targetSlot =
+                        slots[targetSlotIndex.clamp(0, slots.length - 1)];
+                    final targetQuestionIndex = _questions.indexWhere(
+                      (q) => q.id == targetSlot.firstQuestion.id,
+                    );
+                    if (targetQuestionIndex < 0) return;
+                    setState(() {
+                      _commitQuestionReorder(
+                        id: slot.firstQuestion.id,
+                        targetIndex: targetQuestionIndex,
+                      );
+                    });
+                    _requestQuestionOrderSave();
+                  },
+                ),
+              ),
+            );
+          },
         );
       },
     );

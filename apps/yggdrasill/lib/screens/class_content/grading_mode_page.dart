@@ -30,6 +30,7 @@ import '../../widgets/navigation_rail.dart';
 import '../../widgets/resource_textbook_card.dart';
 import '../../widgets/solid_capsule_action_bar.dart';
 import '../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
+import 'grading_confirmed_answer_dialog.dart';
 import 'grading_queue_order.dart';
 
 const double _kGradingBaseCardWidth = 288.0;
@@ -2234,13 +2235,7 @@ class _GradingAnswerBookRailState extends State<_GradingAnswerBookRail> {
         children: [
           Expanded(
             child: widget.isLoading && widget.books.isEmpty
-                ? const Center(
-                    child: SizedBox(
-                      width: 22,
-                      height: 22,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                  )
+                ? const Center(child: YggLoadingIndicator())
                 : widget.books.isEmpty
                     ? const Center(
                         child: Text(
@@ -2555,15 +2550,34 @@ class _GradingAnswerBookCardState extends State<_GradingAnswerBookCard> {
                       left: pad,
                       top: pad,
                       right: pad,
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: CoverPill(
-                          style: overlay,
-                          label: grade.displayLabel,
-                          icon: widget.book.grades.length > 1
-                              ? Icons.swap_horiz_rounded
-                              : null,
-                        ),
+                      child: Row(
+                        children: [
+                          Flexible(
+                            child: CoverPill(
+                              style: overlay,
+                              label: grade.displayLabel,
+                              icon: widget.book.grades.length > 1
+                                  ? Icons.swap_horiz_rounded
+                                  : null,
+                            ),
+                          ),
+                          const Spacer(),
+                          GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: () => unawaited(
+                              showGradingConfirmedAnswerDialog(
+                                context: context,
+                                bookId: widget.book.id,
+                                bookName: widget.book.displayName,
+                                gradeLabel: grade.displayLabel,
+                              ),
+                            ),
+                            child: CoverPill(
+                              style: overlay,
+                              label: '정답',
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                     Positioned(

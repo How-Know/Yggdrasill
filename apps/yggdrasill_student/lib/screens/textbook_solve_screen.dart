@@ -3,7 +3,9 @@ import 'dart:convert' show base64Encode;
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:pdfrx/pdfrx.dart';
@@ -18,6 +20,8 @@ import '../widgets/math_expression_editor.dart';
 import '../widgets/math_keypad.dart';
 import '../widgets/math_latex_view.dart';
 import '../widgets/pencil_input_pad.dart';
+import '../widgets/solve_view_menu.dart';
+import '../widgets/student_back_button.dart';
 import '../widgets/student_confirm_sheet.dart';
 import '../widgets/student_page_title.dart';
 import '../widgets/student_status_island.dart';
@@ -177,6 +181,19 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
   /// 상단 바(뒤로·교재명·페이지·단원) 스크롤 페이드. 아일랜드는 Host에 남음.
   double _titleOpacity = 1;
   final ScrollController _answersScrollController = ScrollController();
+
+  /// 번호 카드 목록에서 스크롤 0이 가리키는 문항.
+  /// 이 문항이 화면 맨 위에 오고, 앞 페이지는 위로, 뒤 페이지는 아래로 붙는다.
+  int _anchorIndex = 0;
+  final GlobalKey _feedCenterKey = GlobalKey();
+  final GlobalKey _selectedCardKey = GlobalKey();
+  final Set<int> _loadedCardRawPages = <int>{};
+  final Map<int, Future<void>> _cardPageLoads = <int, Future<void>>{};
+  final Map<String, ({TbPageStat page, String pathLabel})> _problemPageMeta =
+      <String, ({TbPageStat page, String pathLabel})>{};
+
+  /// 과제 회차 기록. 페이지를 이어 붙일 때마다 같은 목록을 다시 받지 않는다.
+  Map<String, HomeworkProblem>? _homeworkRoundByCrop;
   final ScrollController _questionScrollController = ScrollController();
 
   /// 임시 연습장 (저장·채점 없음).
@@ -206,7 +223,6 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
   final Stopwatch _timedActiveWatch = Stopwatch();
   final Stopwatch _timedWallWatch = Stopwatch();
   int _timedIndex = 0;
-  int _timedSubmittedAnswers = 0;
   bool _timedPreparing = false;
   bool _timedFinishing = false;
 
@@ -545,7 +561,6 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
         widget.timedTest!.group.groupId,
       );
       _timedSession = session;
-      _timedSubmittedAnswers = session.correct + session.wrong;
       _syncTimedServerClock(session.deadlineAt, session.remainingSeconds);
       if (!session.isOpen || session.remainingSeconds <= 0) {
         await _finishTimedTest();
@@ -697,17 +712,23 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
     if (scope == null || problems.isEmpty) return problems;
 
     Map<String, HomeworkProblem> byCrop;
-    try {
-      final rows =
-          await StudentApi.instance.listHomeworkProblems(scope.groupId);
-      byCrop = {
-        for (final row in rows)
-          if (row.cropId.isNotEmpty) row.cropId: row,
-      };
-    } catch (_) {
-      // 조회 실패 시 캐시 상태로라도 보여준다. 이전 회차가 비칠 수 있지만
-      // 화면이 막히는 것보다 낫다.
-      return problems;
+    final cached = _homeworkRoundByCrop;
+    if (cached != null) {
+      byCrop = cached;
+    } else {
+      try {
+        final rows =
+            await StudentApi.instance.listHomeworkProblems(scope.groupId);
+        byCrop = {
+          for (final row in rows)
+            if (row.cropId.isNotEmpty) row.cropId: row,
+        };
+        _homeworkRoundByCrop = byCrop;
+      } catch (_) {
+        // 조회 실패 시 캐시 상태로라도 보여준다. 이전 회차가 비칠 수 있지만
+        // 화면이 막히는 것보다 낫다.
+        return problems;
+      }
     }
 
     return [
@@ -805,6 +826,9 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
   double _solveTitleExtent(BuildContext context) =>
       StudentStatusIslandToolbarSlot.preferredHeight(context) + 8;
 
+  /// 타이틀 아래로 카드·문항이 시작하는 위치.
+  double _answerListTop(double titleExtent) => titleExtent + 12;
+
   void _onAnswersScroll() {
     if (!mounted || _paneMode != _PaneMode.answers) return;
     _updateTitleFromScroll(_answersScrollController.offset);
@@ -833,17 +857,159 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
     }
   }
 
+  bool _localAnswerDirty(String key) {
+    final value = _answers[key]?.trim() ?? '';
+    return value.isNotEmpty && value != (_gradedAnswers[key]?.trim() ?? '');
+  }
+
+  /// 페이지 문항의 서버 기록(답·정오·시도)을 화면 상태에 반영한다.
+  void _absorbProblemRecords(Iterable<PageProblem> problems) {
+    for (final p in problems) {
+      _seenProblems[p.cropId] = p;
+      if (p.myAnswer != null && p.myAnswer!.isNotEmpty) {
+        if (!_localAnswerDirty(p.cropId)) {
+          _answers[p.cropId] = p.myAnswer!;
+        }
+        _gradedAnswers[p.cropId] = p.myAnswer!;
+      }
+      if (p.myCorrect != null) {
+        _results[p.cropId] = p.myCorrect!;
+      }
+      if (p.attemptCount != null) {
+        _attemptCounts[p.cropId] = p.attemptCount!;
+      }
+      if (p.flags.isNotEmpty) {
+        _flags[p.cropId] = p.flags;
+      }
+      // 공책 풀이(셀프)는 답이 비어 있어도 정오를 보여야 한다.
+      // graded_by 가 비어 있어도 이 배정에서 채점된 셀프 문항이면 복원한다.
+      if (p.gradedBy == 'self' ||
+          p.gradedBy == 'teacher' ||
+          (p.isSelfCheck &&
+              p.myCorrect != null &&
+              (p.attemptCount ?? 0) > 0)) {
+        _selfGraded.add(p.cropId);
+      }
+      if (p.reportStatus != null) {
+        _reportStatuses[p.cropId] = p.reportStatus!;
+      }
+      for (final pr in p.partResults) {
+        final k = _answerKeyOf(p.cropId, pr.key);
+        final partAnswer = pr.answer?.trim() ?? '';
+        if (partAnswer.isNotEmpty) {
+          if (!_localAnswerDirty(k)) {
+            _answers[k] = partAnswer;
+          }
+          _gradedAnswers[k] = partAnswer;
+        }
+        _results[k] = pr.correct;
+        if (pr.flags.isNotEmpty) {
+          _flags[k] = pr.flags;
+        }
+        if (pr.gradedBy == 'self') {
+          _selfGraded.add(k);
+        }
+      }
+    }
+  }
+
+  void _tagProblemPage(
+    Iterable<PageProblem> problems,
+    TbPageStat page,
+    String pathLabel,
+  ) {
+    final meta = (page: page, pathLabel: pathLabel);
+    for (final problem in problems) {
+      _problemPageMeta[problem.cropId] = meta;
+    }
+  }
+
+  void _selectEntry(List<PageProblem> problems, _PageEntrySelect select) {
+    if (problems.isEmpty) return;
+    switch (select) {
+      case _PageEntrySelect.first:
+        _selectPro(problems.first);
+      case _PageEntrySelect.last:
+        _selectPro(problems.last);
+      case _PageEntrySelect.auto:
+        for (final p in problems) {
+          if (_isOnHold(p.cropId)) continue;
+          final selectable = p.hasParts
+              ? p.myCorrect != true
+              : !p.isObjective && !p.isSelfCheck && p.myCorrect != true;
+          if (selectable) {
+            _selectPro(p);
+            break;
+          }
+        }
+        if (_selectedCropId == null ||
+            !problems.any((p) => p.cropId == _selectedCropId)) {
+          _selectPro(problems.first);
+        }
+    }
+  }
+
+  void _reanchorToSelection() {
+    final problems = _problems;
+    final selected = _selectedCropId;
+    if (problems == null || selected == null) return;
+    final index = problems.indexWhere((problem) => problem.cropId == selected);
+    if (index >= 0) _anchorIndex = index;
+  }
+
+  void _jumpFeedToAnchor() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_answersScrollController.hasClients) return;
+      if (_paneMode != _PaneMode.answers) return;
+      _answersScrollController.jumpTo(0);
+    });
+  }
+
+  /// 이미 받아 둔 페이지면 다시 받지 않고, 그 페이지의 선택 문항을 맨 위로 올린다.
+  bool _revealLoadedPage(
+    TbPageStat page,
+    String pathLabel,
+    _PageEntrySelect select,
+  ) {
+    if (_isTimedTest || !_loadedCardRawPages.contains(page.rawPage)) {
+      return false;
+    }
+    final problems = _problems;
+    if (problems == null) return false;
+    final onPage = <PageProblem>[
+      for (final problem in problems)
+        if (_problemPageMeta[problem.cropId]?.page.rawPage == page.rawPage)
+          problem,
+    ];
+    if (onPage.isEmpty) return false;
+    setState(() {
+      _page = page;
+      _pagePathLabel = pathLabel;
+      _treeOpen = false;
+      _selectEntry(onPage, select);
+      _reanchorToSelection();
+    });
+    _jumpFeedToAnchor();
+    return true;
+  }
+
   Future<void> _openPage(
     TbPageStat page,
     String pathLabel, {
     _PageEntrySelect select = _PageEntrySelect.auto,
   }) async {
     _expandTreeForPage(page);
+    if (_revealLoadedPage(page, pathLabel, select)) return;
     final epoch = ++_pageEpoch;
     setState(() {
       _page = page;
       _pagePathLabel = pathLabel;
       _problems = null;
+      _anchorIndex = 0;
+      _loadedCardRawPages.clear();
+      _cardPageLoads.clear();
+      _problemPageMeta.clear();
+      _homeworkRoundByCrop = null;
       _loadingProblems = true;
       // 답 상태(_answers 등)는 crop_id 키라 페이지가 바뀌어도 지우지 않는다.
       // 미채점 답을 들고 다니다가 일괄 채점 때 한 번에 모은다.
@@ -862,89 +1028,22 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
         gradeLabel: widget.book.gradeLabel,
         rawPage: page.rawPage,
       );
-      if (!mounted) return;
+      if (!mounted || epoch != _pageEpoch) return;
       final problems = await _withHomeworkRoundState(_scopedProblems(loaded));
-      if (!mounted) return;
-      // 아직 채점하지 않은 로컬 입력. 서버 기록으로 덮어쓰지 않는다.
-      bool localDirty(String key) {
-        final v = _answers[key]?.trim() ?? '';
-        return v.isNotEmpty && v != (_gradedAnswers[key]?.trim() ?? '');
-      }
-
+      if (!mounted || epoch != _pageEpoch) return;
       setState(() {
-        _problems = problems;
+        _problems = List<PageProblem>.of(problems);
         _loadingProblems = false;
-        for (final p in problems) {
-          _seenProblems[p.cropId] = p;
-          if (p.myAnswer != null && p.myAnswer!.isNotEmpty) {
-            if (!localDirty(p.cropId)) {
-              _answers[p.cropId] = p.myAnswer!;
-            }
-            _gradedAnswers[p.cropId] = p.myAnswer!;
-          }
-          if (p.myCorrect != null) {
-            _results[p.cropId] = p.myCorrect!;
-          }
-          if (p.attemptCount != null) {
-            _attemptCounts[p.cropId] = p.attemptCount!;
-          }
-          if (p.flags.isNotEmpty) {
-            _flags[p.cropId] = p.flags;
-          }
-          // 공책 풀이(셀프)는 답이 비어 있어도 정오를 보여야 한다.
-          // graded_by 가 비어 있어도 이 배정에서 채점된 셀프 문항이면 복원한다.
-          if (p.gradedBy == 'self' ||
-              p.gradedBy == 'teacher' ||
-              (p.isSelfCheck &&
-                  p.myCorrect != null &&
-                  (p.attemptCount ?? 0) > 0)) {
-            _selfGraded.add(p.cropId);
-          }
-          if (p.reportStatus != null) {
-            _reportStatuses[p.cropId] = p.reportStatus!;
-          }
-          // 세트형 파트별 기록 복원
-          for (final pr in p.partResults) {
-            final k = _answerKeyOf(p.cropId, pr.key);
-            final partAnswer = pr.answer?.trim() ?? '';
-            if (partAnswer.isNotEmpty) {
-              if (!localDirty(k)) {
-                _answers[k] = partAnswer;
-              }
-              _gradedAnswers[k] = partAnswer;
-            }
-            _results[k] = pr.correct;
-            if (pr.flags.isNotEmpty) {
-              _flags[k] = pr.flags;
-            }
-            if (pr.gradedBy == 'self') {
-              _selfGraded.add(k);
-            }
-          }
-        }
+        _absorbProblemRecords(problems);
+        _tagProblemPage(problems, page, pathLabel);
+        _loadedCardRawPages.add(page.rawPage);
         if (problems.isEmpty) return;
-        switch (select) {
-          case _PageEntrySelect.first:
-            _selectPro(problems.first);
-          case _PageEntrySelect.last:
-            _selectPro(problems.last);
-          case _PageEntrySelect.auto:
-            // 첫 미완료 주관식(미풀이·오답) 자동 선택 (보류 문항 제외)
-            for (final p in problems) {
-              if (_isOnHold(p.cropId)) continue;
-              final selectable = p.hasParts
-                  ? p.myCorrect != true
-                  : !p.isObjective && !p.isSelfCheck && p.myCorrect != true;
-              if (selectable) {
-                _selectPro(p);
-                break;
-              }
-            }
-            if (_selectedCropId == null) {
-              _selectPro(problems.first);
-            }
-        }
+        _selectEntry(problems, select);
+        _reanchorToSelection();
       });
+      if (!_isTimedTest) {
+        unawaited(_feedRemainingCardPages(epoch));
+      }
       // 정답 카드 모드로 머물러 있어도 렌더를 미리 준비해 둔다. 현재 페이지를
       // 끝낸 뒤 다음 페이지까지 예열해 로딩을 볼 일을 없앤다.
       unawaited(_primePageRenders(problems, epoch));
@@ -1049,7 +1148,6 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
           answer: answer,
           timedTest: timing,
         );
-        _timedSubmittedAnswers++;
       }
       _timedExposure = null;
       final nextIndex = _timedIndex + 1;
@@ -2002,6 +2100,167 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
     return count;
   }
 
+  /// 연 페이지를 먼저 보여 준 뒤, 나머지 페이지의 번호·답·채점 기록만 이어 붙인다.
+  /// 문항 PDF 예열은 하지 않는다.
+  Future<void> _feedRemainingCardPages(int epoch) async {
+    final pages = _flattenedPages();
+    final currentRaw = _page?.rawPage;
+    final start = pages.indexWhere((entry) => entry.page.rawPage == currentRaw);
+    if (start < 0) return;
+    for (var i = start + 1; i < pages.length; i++) {
+      if (!mounted || epoch != _pageEpoch) return;
+      await _loadCardPage(pages[i], epoch);
+    }
+    for (var i = start - 1; i >= 0; i--) {
+      if (!mounted || epoch != _pageEpoch) return;
+      await _loadCardPage(pages[i], epoch);
+    }
+  }
+
+  Future<void> _loadCardPage(
+    ({TbPageStat page, String pathLabel}) entry,
+    int epoch,
+  ) {
+    final rawPage = entry.page.rawPage;
+    if (_loadedCardRawPages.contains(rawPage)) return Future<void>.value();
+    final inflight = _cardPageLoads[rawPage];
+    if (inflight != null) return inflight;
+    final future = _loadCardPageBody(entry, epoch);
+    _cardPageLoads[rawPage] = future;
+    return future.whenComplete(() {
+      if (identical(_cardPageLoads[rawPage], future)) {
+        _cardPageLoads.remove(rawPage);
+      }
+    });
+  }
+
+  Future<void> _loadCardPageBody(
+    ({TbPageStat page, String pathLabel}) entry,
+    int epoch,
+  ) async {
+    try {
+      final loaded = await TextbookApi.instance.pageProblems(
+        bookId: widget.book.bookId,
+        gradeLabel: widget.book.gradeLabel,
+        rawPage: entry.page.rawPage,
+      );
+      if (!mounted || epoch != _pageEpoch) return;
+      final problems = await _withHomeworkRoundState(_scopedProblems(loaded));
+      if (!mounted || epoch != _pageEpoch || _problems == null) return;
+      setState(() {
+        if (epoch != _pageEpoch || _problems == null) return;
+        _mergeCardPage(problems, entry);
+      });
+    } catch (_) {
+      // 한 페이지가 실패해도 나머지 번호 카드는 계속 붙인다.
+    }
+  }
+
+  /// 책 순서를 유지한 채 한 페이지를 끼워 넣고, 앵커 문항은 그 자리에 둔다.
+  void _mergeCardPage(
+    List<PageProblem> incoming,
+    ({TbPageStat page, String pathLabel}) entry,
+  ) {
+    final stored = _problems;
+    if (stored == null) return;
+    final problems = List<PageProblem>.of(stored);
+    _problems = problems;
+    _tagProblemPage(incoming, entry.page, entry.pathLabel);
+    _absorbProblemRecords(incoming);
+    _loadedCardRawPages.add(entry.page.rawPage);
+    final known = <String>{for (final problem in problems) problem.cropId};
+    final fresh = <PageProblem>[
+      for (final problem in incoming)
+        if (known.add(problem.cropId)) problem,
+    ];
+    if (fresh.isEmpty) return;
+    final pages = _flattenedPages();
+    final myIndex =
+        pages.indexWhere((item) => item.page.rawPage == entry.page.rawPage);
+    var insertAt = problems.length;
+    for (var i = 0; i < problems.length; i++) {
+      final otherRaw = _problemPageMeta[problems[i].cropId]?.page.rawPage;
+      final otherIndex =
+          pages.indexWhere((item) => item.page.rawPage == otherRaw);
+      if (otherIndex > myIndex) {
+        insertAt = i;
+        break;
+      }
+    }
+    final anchorCrop = (_anchorIndex >= 0 && _anchorIndex < problems.length)
+        ? problems[_anchorIndex].cropId
+        : _selectedCropId;
+    problems.insertAll(insertAt, fresh);
+    if (anchorCrop != null) {
+      final nextAnchor =
+          problems.indexWhere((problem) => problem.cropId == anchorCrop);
+      if (nextAnchor >= 0) _anchorIndex = nextAnchor;
+    }
+  }
+
+  /// 다음/이전으로 화면 밖으로 나간 입력 카드를 보이는 가장자리로 붙인다.
+  void _stickSelectedCard({required bool toBottom, int attempt = 0}) {
+    if (!mounted || _paneMode != _PaneMode.answers) return;
+    final cardContext = _selectedCardKey.currentContext;
+    final card = cardContext?.findRenderObject();
+    if (card is! RenderBox || !card.hasSize || !card.attached) {
+      if (attempt >= 8) return;
+      // 화면 밖에 있으면 아직 안 그려져 있다. 그쪽으로 한 칸 옮긴 뒤 다시 맞춘다.
+      if (attempt >= 1 && _answersScrollController.hasClients) {
+        final position = _answersScrollController.position;
+        if (position.hasContentDimensions) {
+          final nudge = toBottom ? 320.0 : -320.0;
+          final jumped = (position.pixels + nudge)
+              .clamp(position.minScrollExtent, position.maxScrollExtent);
+          if ((jumped - position.pixels).abs() >= 1) {
+            position.jumpTo(jumped.toDouble());
+          }
+        }
+      }
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _stickSelectedCard(toBottom: toBottom, attempt: attempt + 1);
+      });
+      return;
+    }
+    final revealed = RenderAbstractViewport.maybeOf(card);
+    if (revealed is! RenderBox) return;
+    final viewport = revealed as RenderBox;
+    if (!viewport.hasSize) return;
+    final position = _answersScrollController.hasClients
+        ? _answersScrollController.position
+        : null;
+    if (position == null || !position.hasContentDimensions) return;
+
+    final cardTop = card.localToGlobal(Offset.zero).dy;
+    final cardBottom = cardTop + card.size.height;
+    final viewTop = viewport.localToGlobal(Offset.zero).dy;
+    final viewBottom = viewTop + viewport.size.height;
+    final contentTop =
+        viewTop + _answerListTop(_solveTitleExtent(context));
+    final visibleHeight = viewBottom - contentTop;
+    if (visibleHeight <= 0) return;
+
+    double delta;
+    if (card.size.height >= visibleHeight) {
+      delta = cardTop - contentTop;
+    } else if (toBottom) {
+      if (cardBottom <= viewBottom + 1) return;
+      delta = cardBottom - viewBottom;
+    } else {
+      if (cardTop >= contentTop - 1) return;
+      delta = cardTop - contentTop;
+    }
+    final target = (position.pixels + delta)
+        .clamp(position.minScrollExtent, position.maxScrollExtent);
+    if ((target - position.pixels).abs() < 1) return;
+    position.animateTo(
+      target.toDouble(),
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
   Future<void> _moveProblem(int delta) async {
     if (_isTimedTest) {
       if (delta > 0) {
@@ -2033,47 +2292,59 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
     }
 
     if (index < 0) index = delta > 0 ? -1 : problems.length;
-    final next = index + delta;
-    if (next >= 0 && next < problems.length) {
-      final target = problems[next];
-      setState(() {
-        if (target.hasParts) {
-          // 다음 문제로 진입 → 첫 파트, 이전 문제로 진입 → 마지막 파트.
-          final partKey =
-              delta > 0 ? target.setParts.first.key : target.setParts.last.key;
-          _selectPro(target, partKey: partKey);
-        } else {
-          _selectPro(target);
-        }
-      });
-      return;
+    var next = index + delta;
+    if (next < 0 || next >= problems.length) {
+      final pages = _flattenedPages();
+      final current = _page;
+      if (pages.isEmpty || current == null) return;
+      var pageIndex =
+          pages.indexWhere((entry) => entry.page.rawPage == current.rawPage);
+      if (pageIndex < 0) return;
+      final epoch = _pageEpoch;
+      while (next < 0 || next >= (_problems?.length ?? 0)) {
+        pageIndex += delta > 0 ? 1 : -1;
+        if (pageIndex < 0 || pageIndex >= pages.length) return;
+        final entry = pages[pageIndex];
+        await _loadCardPage(entry, epoch);
+        if (!mounted || epoch != _pageEpoch) return;
+        if (!_loadedCardRawPages.contains(entry.page.rawPage)) return;
+        final refreshed = _problems ?? const <PageProblem>[];
+        final again = refreshed
+            .indexWhere((problem) => problem.cropId == _selectedCropId);
+        next = (again < 0 ? index : again) + delta;
+        if (next >= 0 && next < refreshed.length) break;
+      }
     }
-    // 페이지 경계 — 다음/이전 페이지의 첫·마지막 문항으로 이동.
-    final pages = _flattenedPages();
-    final current = _page;
-    if (pages.isEmpty || current == null) return;
-    final pageIndex =
-        pages.indexWhere((entry) => entry.page.rawPage == current.rawPage);
-    if (pageIndex < 0) return;
-    final nextPageIndex = pageIndex + (delta > 0 ? 1 : -1);
-    if (nextPageIndex < 0 || nextPageIndex >= pages.length) return;
-    final entry = pages[nextPageIndex];
-    await _openPage(
-      entry.page,
-      entry.pathLabel,
-      select: delta > 0 ? _PageEntrySelect.first : _PageEntrySelect.last,
-    );
+    final target = (_problems ?? const <PageProblem>[])[next];
+    final changedProblem = target.cropId != _selectedCropId;
+    setState(() {
+      if (target.hasParts) {
+        // 다음 문제로 진입 → 첫 파트, 이전 문제로 진입 → 마지막 파트.
+        final partKey =
+            delta > 0 ? target.setParts.first.key : target.setParts.last.key;
+        _selectPro(target, partKey: partKey);
+      } else {
+        _selectPro(target);
+      }
+      final meta = _problemPageMeta[target.cropId];
+      if (meta != null) {
+        _page = meta.page;
+        _pagePathLabel = meta.pathLabel;
+        _expandTreeForPage(meta.page);
+      }
+    });
+    if (changedProblem && _paneMode == _PaneMode.answers) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _stickSelectedCard(toBottom: delta > 0);
+      });
+    }
   }
 
-  void _togglePaneMode() {
-    if (_isTimedTest) return;
+  void _setPaneMode(_PaneMode mode) {
+    if (_isTimedTest || mode == _paneMode) return;
     setState(() {
       _resetTitleCollapse();
-      _paneMode = switch (_paneMode) {
-        _PaneMode.answers => _PaneMode.question,
-        _PaneMode.question => _PaneMode.body,
-        _PaneMode.body => _PaneMode.answers,
-      };
+      _paneMode = mode;
       if (_paneMode == _PaneMode.question || _paneMode == _PaneMode.body) {
         final problems = _problems ?? const <PageProblem>[];
         if (problems.isNotEmpty) {
@@ -2088,6 +2359,8 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
         _problemView = null;
         _problemViewError = null;
         _loadingProblemView = false;
+        // 정답 카드로 돌아오면 지금 입력 중인 문항이 맨 위에 온다.
+        _reanchorToSelection();
       }
     });
   }
@@ -2440,17 +2713,10 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
               children: [
                 // 공용 타이틀과 동일하게 왼쪽 여백 24.
                 const SizedBox(width: 24),
-                IconButton(
-                  tooltip: '뒤로',
+                StudentBackButton(
                   onPressed: () => unawaited(_handleExit()),
-                  style: IconButton.styleFrom(
-                    padding: EdgeInsets.zero,
-                    minimumSize: const Size(40, 40),
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  icon: const Icon(Icons.arrow_back_rounded),
                 ),
-                const SizedBox(width: 4),
+                const SizedBox(width: 12),
                 ConstrainedBox(
                   constraints: BoxConstraints(maxWidth: bookNameMaxW),
                   child: Text(
@@ -2524,10 +2790,29 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
                     ),
                   ),
                 if (!_isTimedTest)
-                  IconButton(
-                    tooltip: '소단원·페이지 선택',
-                    onPressed: () => _setTreeOpen(!_treeOpen),
-                    icon: const Icon(Icons.segment_rounded),
+                  SolidCapsuleActionBar(
+                    children: [
+                      SolveViewMenuButton(
+                        selected: switch (_paneMode) {
+                          _PaneMode.answers => SolveViewKind.numbers,
+                          _PaneMode.question => SolveViewKind.question,
+                          _PaneMode.body => SolveViewKind.original,
+                        },
+                        onSelected: (kind) => _setPaneMode(
+                          switch (kind) {
+                            SolveViewKind.numbers => _PaneMode.answers,
+                            SolveViewKind.question => _PaneMode.question,
+                            SolveViewKind.original => _PaneMode.body,
+                          },
+                        ),
+                      ),
+                      SolidCapsuleActionButton(
+                        tooltip: '소단원·페이지 선택',
+                        icon: Icons.segment_rounded,
+                        selected: _treeOpen,
+                        onPressed: () => _setTreeOpen(!_treeOpen),
+                      ),
+                    ],
                   ),
                 const SizedBox(width: 6),
               ],
@@ -2726,6 +3011,59 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
     );
   }
 
+  /// 스크롤 0이 지금 앵커 문항이다. 앞 페이지는 위로, 뒤 페이지는 아래로 붙는다.
+  Widget _buildAnswerFeed(
+    ThemeData theme,
+    List<PageProblem> problems,
+    double titleExtent,
+  ) {
+    final anchor = problems.isEmpty
+        ? 0
+        : _anchorIndex.clamp(0, problems.length - 1);
+    final contentTop = _answerListTop(titleExtent);
+    return CustomScrollView(
+      controller: _answersScrollController,
+      center: _feedCenterKey,
+      slivers: [
+        if (anchor > 0)
+          SliverPadding(
+            // 역방향 슬라이버에서 top은 책의 맨 앞(화면 위쪽 끝) 여백이다.
+            padding: EdgeInsets.fromLTRB(24, contentTop, 24, 0),
+            sliver: SliverList(
+              delegate: SliverChildBuilderDelegate(
+                (context, index) => _feedProblemCard(
+                  theme,
+                  problems[anchor - 1 - index],
+                ),
+                childCount: anchor,
+              ),
+            ),
+          ),
+        SliverPadding(
+          key: _feedCenterKey,
+          padding: EdgeInsets.fromLTRB(24, contentTop, 24, 16),
+          sliver: SliverList(
+            delegate: SliverChildBuilderDelegate(
+              (context, index) =>
+                  _feedProblemCard(theme, problems[anchor + index]),
+              childCount: problems.length - anchor,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _feedProblemCard(ThemeData theme, PageProblem problem) {
+    final card = _problemRow(
+      theme,
+      problem,
+      showObjectiveButtons: false,
+    );
+    if (problem.cropId != _selectedCropId) return card;
+    return KeyedSubtree(key: _selectedCardKey, child: card);
+  }
+
   Widget _buildPagePanel(ThemeData theme, {required double topInset}) {
     final page = _page;
     if (page == null) {
@@ -2823,12 +3161,6 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
                   ),
                 ),
               ),
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: inputH + dividerH + 10,
-                child: Center(child: _buildPaneModeButton()),
-              ),
             ],
           );
         }
@@ -2839,27 +3171,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
               children: [
                 Expanded(
                   flex: 2,
-                  child: Stack(
-                    children: [
-                      ListView.builder(
-                        controller: _answersScrollController,
-                        // 하단 FAB(문항/정답 보기) 아래로 카드가 지나가도록 여백.
-                        padding: EdgeInsets.fromLTRB(24, topInset + 12, 24, 72),
-                        itemCount: problems.length,
-                        itemBuilder: (context, i) => _problemRow(
-                          theme,
-                          problems[i],
-                          showObjectiveButtons: false,
-                        ),
-                      ),
-                      Positioned(
-                        left: 0,
-                        right: 0,
-                        bottom: 10,
-                        child: Center(child: _buildPaneModeButton()),
-                      ),
-                    ],
-                  ),
+                  child: _buildAnswerFeed(theme, problems, topInset),
                 ),
                 divider,
                 Expanded(
@@ -2970,41 +3282,6 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
     return problem.isSelfCheck;
   }
 
-  Widget _buildPaneModeButton() {
-    if (_isTimedTest) {
-      return _SolveGlassButton(
-        tooltip: '현재까지 정답을 제출한 문항 수',
-        icon: Icons.fact_check_outlined,
-        label: '정답 제출 $_timedSubmittedAnswers문제',
-        onPressed: () {},
-      );
-    }
-    // 라벨은 다음에 갈 모드 (정답 → 문항 → 본문 → 정답).
-    final (tooltip, icon, label) = switch (_paneMode) {
-      _PaneMode.answers => (
-          '문항 보기',
-          Icons.description_outlined,
-          '문항',
-        ),
-      _PaneMode.question => (
-          '본문 보기',
-          Icons.menu_book_outlined,
-          '본문',
-        ),
-      _PaneMode.body => (
-          '정답 목록으로 돌아가기',
-          Icons.fact_check_outlined,
-          '정답',
-        ),
-    };
-    return _SolveGlassButton(
-      tooltip: tooltip,
-      icon: icon,
-      label: label,
-      onPressed: _togglePaneMode,
-    );
-  }
-
   Widget _buildInputModeButton() {
     final (icon, tooltip) = switch (_inputMode) {
       _InputMode.pencil => (Icons.edit_rounded, '수식 입력으로 전환'),
@@ -3035,10 +3312,13 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
       behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
       child: SingleChildScrollView(
         controller: _questionScrollController,
-        // 하단 여백을 넉넉히 — 렌더된 문항 카드가 하단 FAB(정답 버튼)와
-        // 겹치지 않게 한다.
-        padding:
-            EdgeInsets.fromLTRB(24, topInset + 12, 24, scrollUnderInset + 56),
+        // 위는 타이틀, 아래는 입력 시트만큼 비운다.
+        padding: EdgeInsets.fromLTRB(
+          24,
+          _answerListTop(topInset),
+          24,
+          scrollUnderInset + 16,
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -3082,8 +3362,9 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
     }
     return LayoutBuilder(
       builder: (context, constraints) {
+        final contentTop = _answerListTop(topInset);
         final cardMaxH =
-            (constraints.maxHeight - topInset - bottomInset) * 0.42;
+            (constraints.maxHeight - contentTop - bottomInset) * 0.42;
         return Stack(
           fit: StackFit.expand,
           children: [
@@ -3100,7 +3381,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
             Positioned(
               left: 24,
               right: 24,
-              top: topInset + 12,
+              top: contentTop,
               child: ConstrainedBox(
                 constraints: BoxConstraints(
                   maxHeight: cardMaxH.clamp(120.0, 360.0),
@@ -3658,28 +3939,36 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
       child: Material(
         color: isDark ? Colors.white.withValues(alpha: 0.03) : Colors.white,
         borderRadius: BorderRadius.circular(14),
-        child: Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(14),
-            // 두께는 항상 2 — 채점 시 두께 변화로 레이아웃이 흔들리지 않게.
-            border: Border.all(color: borderColor, width: 2),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 6,
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(12),
-                        // 헤더 탭 = 항상 선택(입력 대상 변경). 접힘만 바꾸던
-                        // 동작은 오른쪽 화살표로 분리한다.
-                        onTap: () => setState(() => _selectPro(problem)),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          // 스플래시는 헤더가 아니라 카드 전체(화살표 포함)를 기준으로 퍼진다.
+          // 이미 펼쳐진 입력 대상이면 다시 눌러 접고, 그 외에는 선택하며 펼친다.
+          onTap: () => setState(() {
+            final selected = _selectedCropId == problem.cropId;
+            if (expanded && selected) {
+              _expandedSetCrops.remove(problem.cropId);
+              return;
+            }
+            _selectPro(problem);
+          }),
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(14),
+              // 두께는 항상 2 — 채점 시 두께 변화로 레이아웃이 흔들리지 않게.
+              border: Border.all(color: borderColor, width: 2),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
                         child: Padding(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 8,
@@ -3761,43 +4050,43 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
                           ),
                         ),
                       ),
-                    ),
-                    IconButton(
-                      tooltip: expanded ? '접기' : '펼치기',
-                      onPressed: () => setState(() {
-                        if (!_expandedSetCrops.remove(problem.cropId)) {
-                          _expandedSetCrops.add(problem.cropId);
-                        }
-                      }),
-                      visualDensity: VisualDensity.compact,
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(
-                        minWidth: 36,
-                        minHeight: 36,
+                      IconButton(
+                        tooltip: expanded ? '접기' : '펼치기',
+                        onPressed: () => setState(() {
+                          if (!_expandedSetCrops.remove(problem.cropId)) {
+                            _expandedSetCrops.add(problem.cropId);
+                          }
+                        }),
+                        visualDensity: VisualDensity.compact,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(
+                          minWidth: 36,
+                          minHeight: 36,
+                        ),
+                        icon: Icon(
+                          expanded
+                              ? Icons.expand_less_rounded
+                              : Icons.expand_more_rounded,
+                          size: 22,
+                          color: theme.hintColor,
+                        ),
                       ),
-                      icon: Icon(
-                        expanded
-                            ? Icons.expand_less_rounded
-                            : Icons.expand_more_rounded,
-                        size: 22,
-                        color: theme.hintColor,
-                      ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-              if (expanded) ...[
-                Divider(
-                  height: 1,
-                  thickness: 0.5,
-                  color: theme.dividerColor.withValues(alpha: 0.3),
-                ),
-                const SizedBox(height: 8),
-                for (final part in problem.setParts)
-                  _setPartRow(theme, problem, part),
-                const SizedBox(height: 4),
+                if (expanded) ...[
+                  Divider(
+                    height: 1,
+                    thickness: 0.5,
+                    color: theme.dividerColor.withValues(alpha: 0.3),
+                  ),
+                  const SizedBox(height: 8),
+                  for (final part in problem.setParts)
+                    _setPartRow(theme, problem, part),
+                  const SizedBox(height: 4),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),
@@ -4394,9 +4683,8 @@ class _ProblemPdfView extends StatelessWidget {
         itemRegion1k: itemRegion1k,
       );
     }
-    // 워커 산출물(단일 문항 PDF)은 스크롤/줌 뷰어 대신 문항카드 썸네일처럼
-    // 정적으로 그린다. 모든 산출물이 같은 폭(1단 폭)으로 렌더되므로
-    // 가로폭 맞춤이면 문항 간 배율도 동일해진다.
+    // 워커 산출물은 8절 본문 한 줄과 같은 폭의 PDF다. 화면에서는 기기
+    // 너비 비율이 아니라 고정된 물리 폭으로 그린다.
     return _RenderedProblemPdfPage(uri: uri);
   }
 }
@@ -4465,6 +4753,28 @@ class _QuestionPdfCache {
 ///
 /// 가로는 뷰포트의 75%, 세로는 종횡비에 맞춘 고정 높이.
 /// 세로 스크롤은 상위 시트(`SingleChildScrollView`)가 담당한다.
+/// 세로 아이패드 미니(744pt, 326ppi)에서 교재 풀기 카드 안쪽.
+/// 스크롤 좌우 24, PDF 여백 10을 빼면 약 105mm다.
+const double _kQuestionViewWidthMm = 105;
+
+double _questionViewLogicalWidth(BuildContext context, double maxWidth) {
+  final view = View.of(context);
+  final dpr = view.devicePixelRatio <= 0 ? 1.0 : view.devicePixelRatio;
+  var logicalPerInch = 96.0;
+  if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+    final shortest = math.min(
+      view.physicalSize.width,
+      view.physicalSize.height,
+    );
+    // 미니 짧은 변은 1488px(326ppi). 그 외 아이패드는 264ppi.
+    final ppi = shortest < 1560 ? 326.0 : 264.0;
+    logicalPerInch = ppi / dpr;
+  }
+  final target = _kQuestionViewWidthMm / 25.4 * logicalPerInch;
+  if (!maxWidth.isFinite || maxWidth <= 0) return target;
+  return math.min(target, maxWidth);
+}
+
 class _RenderedProblemPdfPage extends StatefulWidget {
   const _RenderedProblemPdfPage({required this.uri});
 
@@ -4526,8 +4836,11 @@ class _RenderedProblemPdfPageState extends State<_RenderedProblemPdfPage> {
       padding: const EdgeInsets.all(inset),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          // 가로를 뷰포트의 75%로 고정. 세로는 콘텐츠 높이 → 시트가 이에 맞춰진다.
-          final width = constraints.maxWidth * 0.75;
+          // 8절 문항과 같은 글자 크기가 아이패드 미니·아이패드·프로에서
+          // 같게 보이도록, 세로 미니 카드 안쪽에 들어가는 105mm 로 고정한다.
+          // 더 넓은 기기는 같은 105mm 만 쓰고 옆은 비운다. 그보다 좁은
+          // 창에서만 안쪽 너비에 맞춘다.
+          final width = _questionViewLogicalWidth(context, constraints.maxWidth);
           final height = width * (page.height / page.width);
           return SizedBox(
             width: constraints.maxWidth,
@@ -4935,69 +5248,6 @@ class _EmptyInputCard extends StatelessWidget {
         style: const TextStyle(
           color: Color(0xFF6B7280),
           fontWeight: FontWeight.w600,
-        ),
-      ),
-    );
-  }
-}
-
-class _SolveGlassButton extends StatelessWidget {
-  const _SolveGlassButton({
-    required this.tooltip,
-    required this.icon,
-    required this.label,
-    required this.onPressed,
-  });
-
-  final String tooltip;
-  final IconData icon;
-  final String label;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(999),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x24000000),
-            blurRadius: 18,
-            offset: Offset(0, 7),
-          ),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(999),
-        child: BackdropFilter(
-          filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-          child: Tooltip(
-            message: tooltip,
-            child: Material(
-              color: isDark
-                  ? const Color(0xE62A3333)
-                  : Colors.white.withValues(alpha: 0.92),
-              child: InkWell(
-                onTap: onPressed,
-                child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 18, vertical: 11),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(icon, size: 20),
-                      const SizedBox(width: 7),
-                      Text(
-                        label,
-                        style: const TextStyle(fontWeight: FontWeight.w800),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
         ),
       ),
     );

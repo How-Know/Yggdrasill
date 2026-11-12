@@ -61,7 +61,7 @@ const RENDER_CONFIG_VERSION = 'pb_render_v103_subq_wrap_27';
 //   동일 입력 → 동일 캐시 키가 산출된다.
 const RENDER_CONFIG_VERSION_V2 = 'pb_render_v4_colontext_12';
 const SINGLE_QUESTION_RENDERER_VERSION =
-  `${RENDER_CONFIG_VERSION_V2}:student-single-v4`;
+  `${RENDER_CONFIG_VERSION_V2}:student-single-v5`;
 const PREVIEW_THUMB_BUCKET = process.env.PB_PREVIEW_THUMB_BUCKET || 'problem-previews';
 const PREVIEW_THUMB_WIDTH_PX = Math.max(
   420,
@@ -5173,7 +5173,7 @@ async function renderSingleQuestionPdf({
   const job = {
     academy_id: String(academyId || question.academy_id || '').trim(),
     template_profile: 'naesin',
-    paper_size: 'A4',
+    paper_size: '8절',
     include_answer_sheet: false,
     include_explanation: false,
     selected_question_ids: questionUid ? [questionUid] : [],
@@ -5188,10 +5188,18 @@ async function renderSingleQuestionPdf({
       includeCoverPage: false,
       disableAutoLabels: true,
       singleQuestionContentPage: true,
+      // 내신형은 요청 크기에서 0.5pt 를 뺀다. 11.5 를 넣으면 본문이 8절과 같은 11pt.
+      font: { size: 11.5 },
       renderProfile,
     },
   };
   const renderConfig = buildRenderConfigFromJob(job);
+  // 8절(270mm, 좌우 14mm) 2단 칸은 323.56pt 이고, 번호 1em(11pt)을 빼면
+  // 본문 한 줄이 312.56pt(한글 약 28자)다. 학생 화면은 번호를 그리지 않으므로
+  // 그 312.56pt 를 단 폭(0.4775×본문폭−4pt)으로 맞춘다.
+  // 본문폭 233.90mm, 용지 폭 261.90mm.
+  renderConfig.geometryOverride =
+    'paperwidth=261.90mm,paperheight=390mm,hmargin=14mm,top=14mm,bottom=12mm,headheight=12pt,headsep=0pt';
   const rendered = await renderPdf(job, [normalizedQuestion], renderConfig);
   const bytes = await cropSingleQuestionPdfToContent(
     rendered.bytes,

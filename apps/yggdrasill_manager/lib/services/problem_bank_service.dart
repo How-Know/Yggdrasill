@@ -2617,7 +2617,7 @@ class ProblemBankService {
   // 학생 앱 문항 보기와 동일한 렌더 규칙 (student_textbook_problem_view Edge와 동일).
   static const String _studentRenderProfile = 'student-single-v1';
   static const String _studentRendererVersion =
-      'pb_render_v4_slotmeasure_01:student-single-v4';
+      'pb_render_v4_colontext_12:student-single-v5';
   static const int _studentSignedUrlSeconds = 600;
 
   /// 오류 탭에서 신고 문항을 시각적으로 확인하기 위한 렌더를 해석한다.

@@ -533,6 +533,19 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     final order = wf.workOrder;
     if (confirmed) {
       if (order == null) return;
+      final scope = _selectedScope;
+      if (scope != null) {
+        setState(() => _wfBusy = true);
+        try {
+          final fixed = await _svc.reconcileBeforeConfirm([for (final it in _items) if (order.matches(it)) it]);
+          if (fixed > 0) await _loadItems(scope, reloadPreviews: false);
+        } catch (e) {
+          if (mounted) setState(() => _notice = '확정 전 문제은행 정답 정리 실패: $e');
+        } finally {
+          if (mounted) setState(() => _wfBusy = false);
+        }
+        if (!mounted) return;
+      }
       final (ready, total, _) = _readyCountsOf(order);
       if (total == 0 || ready < total) {
         setState(() => _notice = '준비됨이 아닌 카드가 ${total - ready}개 있어 확정할 수 없습니다.');
@@ -1128,6 +1141,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
       if ((problemUrl ?? '').isEmpty && solUrl.isEmpty) return null;
       // 교재 원본(본문 PDF 문항 영역)을 같이 보내 V2 카드와 직접 대조한다(글자·그림 위치·그림 크기).
       final original = (problemUrl ?? '').isEmpty ? const <String, dynamic>{} : await _svc.originalImagesJson(scope, it);
+      final solutionOriginal = solUrl.isEmpty ? const <String, dynamic>{} : await _svc.solutionOriginalJson(scope, it);
       return {
         'crop_id': it.cropId,
         if ((problemUrl ?? '').isNotEmpty) 'problem_url': problemUrl,
@@ -1135,6 +1149,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
         'solution_kind': it.primarySolutionKind,
         'is_fill_in_blank': it.isFillInBlank,
         ...original,
+        ...solutionOriginal,
       };
     }
 
@@ -1411,6 +1426,17 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     touchedCropIds.addAll(again);
     final kinds = await _applyQuestionKindFixes();
     if (kinds > 0) notes.add('문항 유형 표시 $kinds문항 수정');
+    var generated = 0;
+    for (final it in [for (final x in _scopedItems) if (x.needsObjectiveGeneration) x]) {
+      if (!mounted || _stopRequested || !_svc.hasGateway) break;
+      setState(() => _runProgress = '${it.problemNumber}번 객관식 보기 생성');
+      try {
+        if (await _svc.generateObjectiveChoices(it)) generated++;
+      } catch (e) {
+        _bulkErrors.add('${it.problemNumber}번 객관식 보기: $e');
+      }
+    }
+    if (generated > 0) notes.add('주관식 $generated문항 객관식 보기 생성');
 
     var recheck = <String>{...touchedCropIds};
     var proposed = 0;
@@ -1992,7 +2018,11 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     var n = 0;
     for (final it in _kindFixes) {
       try {
-        if (await _svc.setQuestionKind(it.cropId, it.expectedQuestionKind)) n++;
+        final kind = it.expectedQuestionKind;
+        if (await _svc.setQuestionKind(it.cropId, kind,
+            allowSubjective: kind == 'objective' && it.answerChoiceCount > 0 ? it.subjectiveAlsoPossible : null)) {
+          n++;
+        }
       } catch (e) {
         _bulkErrors.add('${it.problemNumber}번 유형: $e');
       }
@@ -2069,7 +2099,8 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     if (scope == null) return;
     setState(() => _saving = true);
     try {
-      final changed = await _svc.setQuestionKind(item.cropId, kind);
+      final changed = await _svc.setQuestionKind(item.cropId, kind,
+          allowSubjective: kind == 'objective' && item.answerChoiceCount > 0 ? item.subjectiveAlsoPossible : null);
       if (!mounted) return;
       setState(() {
         _saving = false;

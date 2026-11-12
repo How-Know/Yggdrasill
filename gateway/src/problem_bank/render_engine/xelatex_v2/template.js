@@ -1074,7 +1074,7 @@ function normalizeMathSegment(mathContent) {
   out = out.replace(/\^\s*\{\s*\\square\s*\}/g, '^{\\mtexponentemptybox{}}');
   out = out.replace(/\^\s*\\square(?!\s*[A-Za-z가-힣])(?![a-zA-Z])/g, '^{\\mtexponentemptybox{}}');
 
-  // box{~~} (빈 박스) → 3:2 비율 직사각형 빈칸 네모.
+  // box{~~} (빈 박스) → 정사각형 빈칸 네모.
   out = out.replace(/\[(?:BOX|box|blank|빈칸|네모)\]/g, '\\mtemptybox{}');
   out = out.replace(/\bBOX\b/g, '\\mtemptybox{}');
   out = out.replace(/(?<![\\A-Za-z])box\s*\{\s*(?:~~)?\s*\}/gi, '\\mtemptybox{}');
@@ -1107,7 +1107,7 @@ function normalizeMathSegment(mathContent) {
   // 동그라미 한글(㉠–㉭)·동그라미 숫자(①–⑳) 는 수식 폰트에 글리프가 없어 math mode 로 들어가면
   // 서버 PDF 에서 통째로 누락된다(본문 폰트엔 글리프 존재). \text{} 로 감싸 본문 폰트로 강제 출력.
   out = out.replace(/[\u3260-\u326D\u2460-\u2473]/g, (ch) => `\\text{${ch}}`);
-  // DB 에 이미 들어가 있는 \boxed{\phantom{...}} 또는 \boxed{~~} 형태도 3:2 빈칸 네모로 치환.
+  // DB 에 이미 들어가 있는 \boxed{\phantom{...}} 또는 \boxed{~~} 형태도 정사각형 빈칸 네모로 치환.
   out = out.replace(/\\boxed\s*\{\s*\\phantom\s*\{[^}]*\}\s*\}/g, '\\mtemptybox{}');
   out = out.replace(/\\boxed\s*\{\s*(?:~+|\s*)\s*\}/g, '\\mtemptybox{}');
   // VLM 추출에서 \times·\div 등 연산자 매크로가 box{} placeholder 와 공백 없이 붙어
@@ -4362,13 +4362,12 @@ function buildPreamble({
   lines.push('\\newsavebox{\\YggChoiceMeasureBox}');
   lines.push('\\newcount\\YggChoiceLayout');
   lines.push(...measuredWrapMacroLines());
-  // \mtemptybox : 가로:세로 = 3:2 비율의 빈칸 네모 (math/text 모두 안전).
-  // 한글 글자 전체 높이(ascender+descender 포함)와 시각적으로 동일하도록 1.05em × 1.575em 으로 설정.
-  // (한글 글리프 실제 높이가 약 1.0~1.05em 수준이라 0.9em 이면 작아 보임)
+  // \mtemptybox : 1:1 정사각형 빈칸 네모 (math/text 모두 안전). 원본의 짧은·넓은 네모를 모두 이 모양으로 통일한다.
+  // 한 변 0.92em 은 렌더된 한글 글자 높이와 같아 보이는 크기다.
   // \ensuremath + \vcenter 로 수식축(math axis) 에 중앙이 오도록 → 인접 글자와 시각적 정렬.
-  lines.push('\\newcommand{\\mtemptybox}{\\ensuremath{\\mathord{\\mkern2mu\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[1.575em][c]{\\rule{0pt}{1.05em}}}}\\mkern2mu}}}');
+  lines.push('\\newcommand{\\mtemptybox}{\\ensuremath{\\mathord{\\mkern2mu\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[0.92em][c]{\\rule{0pt}{0.92em}}}}\\mkern2mu}}}');
   // \mtshapesquare : "사각형 ABCD" 의 도형 기호(□ABCD). 값을 채우는 빈칸(\mtemptybox)
-  // 과 반드시 구분되어야 하므로 3:2 가 아닌 정사각형이며, 대문자 높이에 맞춘 크기다.
+  // 과 같은 정사각형이지만 대문자 높이에 맞춘 조금 작은 크기다.
   lines.push('\\newcommand{\\mtshapesquare}{\\ensuremath{\\mathord{\\mkern1mu\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[0.88em][c]{\\rule{0pt}{0.88em}}}}\\mkern1mu}}}');
   // 지수 전용 빈칸: 정사각형이며 일반 빈칸보다 작다.
   lines.push('\\newcommand{\\mtexponentemptybox}{\\vcenter{\\hbox{\\scriptsize\\setlength{\\fboxsep}{0pt}\\framebox[0.72em][c]{\\rule{0pt}{0.72em}}}}}');
@@ -5757,16 +5756,12 @@ function renderIndependentSetGroupLatex(group, {
     const usedCommonPaths = Array.isArray(commonQuestion.figure_local_paths)
       ? commonQuestion.figure_local_paths
       : [];
-    const rawPaths = Array.isArray(rawItem?.figure_local_paths)
-      ? rawItem.figure_local_paths
-      : [];
+    // 공통 발문이 그림 자리와 그림을 가지면, 본문에 그림 자리가 없는 하위 문항의 그림은
+    // 공통 그림을 따로 잘라 둔 사본이다(파일은 달라도 같은 그림). 공통 블록에서만 그린다.
     const sharesSameFigureAsCommon =
       commonHasFigMarker &&
       usedCommonPaths.length > 0 &&
-      !figMarkerRe.test(String(rawItem?.stem || '')) &&
-      (Boolean(donorItem) ||
-        (rawPaths.length === usedCommonPaths.length &&
-          rawPaths.every((p, idx) => p === usedCommonPaths[idx])));
+      !figMarkerRe.test(String(rawItem?.stem || ''));
     const item = sharesSameFigureAsCommon
       ? { ...rawItem, figure_local_paths: [], figure_local_infos: [] }
       : rawItem;
@@ -6327,19 +6322,24 @@ function renderOneQuestion(question, {
   //   와 충돌하므로, 소문항 wrap 은 좌우 minipage 로 배치한다. 두 박스 폭 합을
   //   \linewidth 보다 작게 잡고 \hfill 로 그림을 바깥쪽 끝에 붙여, 정확히 \linewidth
   //   일 때 둘째 박스가 다음 줄로 밀리는 현상을 막는다.
-  function renderSubQuestionInlineFigureLatex(i, preRenderedText, position) {
+  function renderSubQuestionInlineFigureLatex(i, preRenderedText, position, subQ = 0) {
     const expr = figureIncludeExpr(i);
     if (!expr) return '';
     const text = String(preRenderedText || '').trim();
     if (!text) return renderFigureLatex(i);
     const figWidth = expr.widthExpr;
-    const textWidth = `\\dimexpr\\linewidth-${figWidth}-1.20em\\relax`;
+    // 다른 소문항 본문과 같은 들여쓰기(보이지 않는 "(N)" 폭)를 왼쪽에 둔다.
+    const indented = Number.isInteger(subQ) && subQ > 0;
+    const textWidth = indented
+      ? `\\dimexpr\\linewidth-\\wd0-${figWidth}-1.20em\\relax`
+      : `\\dimexpr\\linewidth-${figWidth}-1.20em\\relax`;
     const textBox = `\\begin{minipage}[t]{${textWidth}}\\vspace{0pt}\\noindent ${text}\\end{minipage}`;
     const figBox = `\\begin{minipage}[t]{${figWidth}}\\vspace{0pt}\\noindent ${expr.include}\\end{minipage}`;
-    if (position === 'inline-left') {
-      return `\\par\\noindent ${figBox}\\hfill ${textBox}\\par\n`;
-    }
-    return `\\par\\noindent ${textBox}\\hfill ${figBox}\\par\n`;
+    const row = position === 'inline-left'
+      ? `${figBox}\\hfill ${textBox}`
+      : `${textBox}\\hfill ${figBox}`;
+    if (!indented) return `\\par\\noindent ${row}\\par\n`;
+    return `\\par{\\setbox0=\\hbox{\\hspace{0.5em}(${subQ})\\hspace{1em}}\\noindent\\hspace*{\\wd0}${row}\\par}\n`;
   }
 
   function renderInlineFigureWithTextLatex(i, textSeg, position, preRenderedText = null) {
@@ -7066,6 +7066,29 @@ function renderOneQuestion(question, {
     return true;
   };
 
+  // 소문항 여러 개 뒤에 어울림 그림이 오면(예: 2) 다음 3) 오른쪽 좌표평면) 마지막 소문항만 떼어
+  //   그 소문항과 그림을 어울리게 한다(text→text 사이에는 블록 간격이 없어 앞 소문항 렌더는 그대로).
+  for (let sIdx = segments.length - 2; sIdx >= 0; sIdx -= 1) {
+    const seg = segments[sIdx];
+    if (seg?.type !== 'text' || segments[sIdx + 1]?.type !== 'figure' || !figureSegWillEmit(sIdx + 1)) continue;
+    const markerIdxs = [];
+    seg.lines.forEach((l, k) => { if (SUBQ_MARKER_LINE_RE.test(String(l))) markerIdxs.push(k); });
+    if (markerIdxs.length < 2) continue;
+    const nextPosition = String((layoutForIndex(figMarkerCountUpTo(sIdx + 1)) || {}).position || '').trim();
+    if (nextPosition !== 'inline-left' && nextPosition !== 'inline-right') continue;
+    const cut = markerIdxs[markerIdxs.length - 1];
+    let headEnd = cut;
+    while (headEnd > 0 && /^\s*(?:\[문단\])?\s*$/.test(String(seg.lines[headEnd - 1]))) headEnd -= 1;
+    if (headEnd <= 0) continue;
+    const aligns = Array.isArray(seg.lineAligns) ? seg.lineAligns : [];
+    segments.splice(
+      sIdx,
+      1,
+      { ...seg, lines: seg.lines.slice(0, headEnd), lineAligns: aligns.slice(0, headEnd) },
+      { ...seg, lines: seg.lines.slice(cut), lineAligns: aligns.slice(cut) },
+    );
+  }
+
   let emittedStemTextLineAny = false;
   for (let sIdx = 0; sIdx < segments.length; sIdx++) {
     const seg = segments[sIdx];
@@ -7141,7 +7164,7 @@ function renderOneQuestion(question, {
             //   wrapfigure 의 parshape 와 충돌해 둘째 줄 들여쓰기가 깨진다.
             //   소문항 wrap 은 좌우 minipage 배치(legacy)로 렌더해 들여쓰기 규칙을 보존한다.
             const renderedInline = hasSubQMarker
-              ? renderSubQuestionInlineFigureLatex(i, wrapText, nextPosition)
+              ? renderSubQuestionInlineFigureLatex(i, wrapText, nextPosition, currentSubQ)
               : renderInlineFigureWithTextLatex(i, seg, nextPosition, wrapText);
             if (renderedInline && renderedInline.trim()) {
               parts.push(renderedInline);
@@ -7749,7 +7772,7 @@ export function buildTexSource(question, options = {}) {
     '\\newsavebox{\\YggChoiceMeasureBox}',
     '\\newcount\\YggChoiceLayout',
     ...measuredWrapMacroLines(),
-    '\\newcommand{\\mtemptybox}{\\ensuremath{\\mathord{\\mkern2mu\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[1.575em][c]{\\rule{0pt}{1.05em}}}}\\mkern2mu}}}',
+    '\\newcommand{\\mtemptybox}{\\ensuremath{\\mathord{\\mkern2mu\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[0.92em][c]{\\rule{0pt}{0.92em}}}}\\mkern2mu}}}',
     '\\newcommand{\\mtshapesquare}{\\ensuremath{\\mathord{\\mkern1mu\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[0.88em][c]{\\rule{0pt}{0.88em}}}}\\mkern1mu}}}',
     '\\newcommand{\\mtexponentemptybox}{\\vcenter{\\hbox{\\scriptsize\\setlength{\\fboxsep}{0pt}\\framebox[0.72em][c]{\\rule{0pt}{0.72em}}}}}',
     '\\newcommand{\\mtsqrtpad}[1]{\\sqrt{\\vphantom{\\raisebox{0.10em}{$\\displaystyle #1$}}\\smash{\\lower0.16em\\hbox{$\\displaystyle #1$}}}\\mkern2mu}',
@@ -8017,7 +8040,7 @@ export function buildAnswerTexSource(answer, options = {}) {
     '\\usepackage{setspace}',
     '\\newsavebox{\\YggChoiceMeasureBox}',
     '\\newcount\\YggChoiceLayout',
-    '\\newcommand{\\mtemptybox}{\\ensuremath{\\mathord{\\mkern2mu\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[1.575em][c]{\\rule{0pt}{1.05em}}}}\\mkern2mu}}}',
+    '\\newcommand{\\mtemptybox}{\\ensuremath{\\mathord{\\mkern2mu\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[0.92em][c]{\\rule{0pt}{0.92em}}}}\\mkern2mu}}}',
     '\\newcommand{\\mtshapesquare}{\\ensuremath{\\mathord{\\mkern1mu\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[0.88em][c]{\\rule{0pt}{0.88em}}}}\\mkern1mu}}}',
     '\\newcommand{\\mtexponentemptybox}{\\vcenter{\\hbox{\\scriptsize\\setlength{\\fboxsep}{0pt}\\framebox[0.72em][c]{\\rule{0pt}{0.72em}}}}}',
     '\\newcommand{\\mtsqrtpad}[1]{\\sqrt{\\vphantom{\\raisebox{0.10em}{$\\displaystyle #1$}}\\smash{\\lower0.16em\\hbox{$\\displaystyle #1$}}}\\mkern2mu}',
@@ -8206,16 +8229,10 @@ function splitOversizedIndependentSetGroups(
       ? donorItem.figure_local_paths
       : explicitCommonPaths;
     const normalizedItems = items.map((rawItem, idx) => {
-      const rawPaths = Array.isArray(rawItem?.figure_local_paths)
-        ? rawItem.figure_local_paths
-        : [];
       const sharesSameFigureAsCommon =
         commonHasFigMarker &&
         usedCommonPaths.length > 0 &&
-        !figMarkerRe.test(String(rawItem?.stem || '')) &&
-        (Boolean(donorItem) ||
-          (rawPaths.length === usedCommonPaths.length &&
-            rawPaths.every((p, i) => p === usedCommonPaths[i])));
+        !figMarkerRe.test(String(rawItem?.stem || ''));
       let nextItem = sharesSameFigureAsCommon
         ? { ...rawItem, figure_local_paths: [], figure_local_infos: [] }
         : { ...rawItem };
@@ -13468,12 +13485,12 @@ export function buildDocumentTexSource(questions, options = {}) {
       if (pageIdx > 0) parts.push('\\newpage\n');
 
       if (columns >= 2) {
-        // multicols(비스타 버전)는 마지막 페이지에서 좌우 단을 균형 배치해
-        // 단일 문항도 줄기/보기가 두 단으로 갈라질 수 있다. 단일 문항 모드는
-        // 왼쪽 단만 크롭하므로 균형 배치 없는 multicols* 를 쓴다.
+        // 학생 단일 문항은 측정·크롭이 쓰는 단 폭(0.4775\linewidth-4pt)에
+        // 그대로 조판한다. multicols 절반 폭은 그 값과 달라 한 줄 글자 수가 어긋난다.
+        // 그 외 2단은 균형 배치 없는 multicols 가 아니라 일반 multicols 를 쓴다.
         parts.push(
           singleQuestionContentPage
-            ? `\\begin{multicols*}{${columns}}\n`
+            ? '\\noindent\\begin{minipage}[t]{\\dimexpr 0.4775\\linewidth-4pt\\relax}\n'
             : `\\begin{multicols}{${columns}}\n`,
         );
       }
@@ -13532,7 +13549,7 @@ export function buildDocumentTexSource(questions, options = {}) {
       if (columns >= 2) {
         parts.push(
           singleQuestionContentPage
-            ? '\\end{multicols*}\n'
+            ? '\\end{minipage}\n'
             : '\\end{multicols}\n',
         );
       }
