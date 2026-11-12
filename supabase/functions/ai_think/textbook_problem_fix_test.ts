@@ -2,12 +2,15 @@ import { assert, assertEquals } from 'jsr:@std/assert@1';
 import {
   anchorFigureWithBlank,
   applyCommonFigurePlacement,
+  commonStemWithFigureMarker,
   buildFigureProposal,
   commonFigureProposal,
   emPxForHeader,
   emPxFromTextSample,
   ensureFigureMarkers,
   figureLayoutItem,
+  figureRemovalIndexes,
+  holdUnslottedFigureCrops,
   LINE_PITCH_EM,
   normalizeBox,
   normalizeTextFix,
@@ -85,6 +88,27 @@ Deno.test('원본 그림을 자산 순서대로 짝짓고, 없는 그림은 새 
     { figure_index: 4, bbox_1k: [500, 100, 900, 500], reason: 'missing' },
   ]);
   assertEquals(buildFigureProposal({ measures: [], emPx: 35, imageWidthPx: 1100, assets: [], currentLayout: null }), null);
+});
+
+Deno.test('본문에 그림 자리가 없는 새 그림은 자동 등록에서 빼고 확인용으로 남긴다', () => {
+  const measures = parseFigureMeasures([
+    { bbox_1k: [50, 50, 300, 600], placement: 'below_text', align: 'left', v2_state: 'ok' },
+    { bbox_1k: [400, 550, 700, 950], placement: 'right_of_text', align: 'right', v2_state: 'missing' },
+  ]);
+  const p = buildFigureProposal({
+    measures,
+    emPx: 35,
+    imageWidthPx: 1100,
+    assets: [{ figure_index: 1, path: 'a', approved: true }],
+    currentLayout: null,
+  });
+  const held = holdUnslottedFigureCrops(p, { slots: 1, assetCount: 1 });
+  assertEquals(held.held.map((c) => c.figure_index), [2]);
+  assertEquals(held.proposal!.crops, []);
+  assertEquals(held.proposal!.layout.items.map((i) => i.assetKey), ['idx:1']);
+  const slotted = holdUnslottedFigureCrops(p, { slots: 2, assetCount: 1 });
+  assertEquals(slotted.held, []);
+  assertEquals(slotted.proposal!.crops.map((c) => c.figure_index), [2]);
 });
 
 Deno.test('다른 조각이 섞인 그림은 같은 번호로 그림만 다시 잘라낸다', () => {
@@ -257,6 +281,18 @@ Deno.test('공통 발문 그림이 세트 어디에도 없으면 세트 머리�
   assertEquals(commonFigureProposal({ ...base, stem: '[그림] 에서' }), null);
   assertEquals(commonFigureProposal({ ...base, commonStem: '다음 물음에 답하여라.' }), null);
   assertEquals(commonFigureProposal({ ...base, boxes: [] }), null);
+  const recrop = commonFigureProposal({ ...base, assets: [{ figure_index: 1, approved: true }], state: 'dirty' })!;
+  assertEquals(recrop.crops, [{ figure_index: 1, bbox_1k: [200, 300, 900, 700], reason: 'cut', source: 'set_header' }]);
+  assertEquals(commonFigureProposal({ ...base, assets: [{ figure_index: 1, approved: true }], state: 'ok' }), null);
+});
+
+Deno.test('문항 그림이 아닌 그림은 그림 번호로 바꿔 빼기 제안을 만든다', () => {
+  const assets = [{ figure_index: 2, approved: true }, { figure_index: 5, approved: true }];
+  assertEquals(figureRemovalIndexes([2], assets, '다음 물음에 답하여라.'), [5]);
+  assertEquals(figureRemovalIndexes([1, 1], assets, '[그림]에서'), [2]);
+  assertEquals(figureRemovalIndexes([1, 2], assets, '[그림]에서'), []);
+  assertEquals(figureRemovalIndexes([3], assets, ''), []);
+  assertEquals(figureRemovalIndexes(null, assets, ''), []);
 });
 
 Deno.test('문항 원본의 글자 크기를 세트 머리 이미지 픽셀로 옮긴다', () => {
@@ -282,4 +318,19 @@ Deno.test('본문이 그림과 답란뿐이면 그림을 왼쪽에 붙인다', (
   const inline = { ...p, layout: { ...p.layout, items: [{ ...p.layout.items[0], position: 'inline-left', anchor: 'left' }] } };
   assertEquals(anchorFigureWithBlank(inline, '[그림][문단]([공백:3])')!.layout.items[0].position, 'inline-left');
   assertEquals(anchorFigureWithBlank(null, '[그림][문단]([공백:3])'), null);
+});
+
+Deno.test('세트 머리에만 그림이 있고 그림 자리가 어디에도 없으면 공통 발문 끝에 그림 자리를 붙인다', () => {
+  const base = {
+    commonStem: '그림에 대하여 옳은 것에 ○표를 하여라.',
+    stem: '점 A는 직선 l 위에 (있다, 있지 않다).',
+    placement: 'right_of_text',
+    assets: [{ figure_index: 1, path: 'a' }],
+  };
+  assertEquals(commonStemWithFigureMarker(base), '그림에 대하여 옳은 것에 ○표를 하여라.[문단][그림]');
+  assertEquals(commonStemWithFigureMarker({ ...base, placement: 'none' }), null);
+  assertEquals(commonStemWithFigureMarker({ ...base, assets: [] }), null);
+  assertEquals(commonStemWithFigureMarker({ ...base, stem: '[그림][문단]점 A' }), null);
+  assertEquals(commonStemWithFigureMarker({ ...base, commonStem: '그림을 보고 답하여라.[그림]' }), null);
+  assertEquals(commonStemWithFigureMarker({ ...base, commonStem: '' }), null);
 });

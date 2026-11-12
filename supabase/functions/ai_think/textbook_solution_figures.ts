@@ -19,19 +19,28 @@ export function countSolutionFigureMarkers(text: unknown): number {
   return (String(text ?? '').match(SOLUTION_FIGURE_MARKER_RE) ?? []).length;
 }
 
-/** 모델이 준 그림 상자([ymin, xmin, ymax, xmax], 이미지 기준 0..1000)를 정수로 묶고 너무 작거나 틀린 것은 버린다. */
-export function normalizeFigureBoxes(raw: unknown): number[][] {
-  const out: number[][] = [];
+export type SolutionFigurePlacement = 'right' | 'below';
+
+/**
+ * 모델이 준 그림 상자([ymin, xmin, ymax, xmax], 이미지 기준 0..1000)를 정수로 묶고 너무 작거나 틀린 것은 버린다.
+ * 원본에서 풀이 글 오른쪽에 나란히 있던 그림은 placement=right.
+ */
+export function normalizeFigures(raw: unknown): Array<{ bbox: number[]; placement: SolutionFigurePlacement }> {
+  const out: Array<{ bbox: number[]; placement: SolutionFigurePlacement }> = [];
   for (const f of Array.isArray(raw) ? raw : []) {
     const box = f && typeof f === 'object' ? (f as Rec).bbox_1k : null;
     if (!Array.isArray(box) || box.length !== 4) continue;
     const n = box.map((x) => Math.round(Math.max(0, Math.min(1000, Number(x)))));
     if (n.some((x) => !Number.isFinite(x))) continue;
     if (n[2] - n[0] < MIN_BOX_1K || n[3] - n[1] < MIN_BOX_1K) continue;
-    out.push(n);
+    out.push({ bbox: n, placement: (f as Rec).placement === 'right_of_text' ? 'right' : 'below' });
     if (out.length >= MAX_FIGURES) break;
   }
   return out;
+}
+
+export function normalizeFigureBoxes(raw: unknown): number[][] {
+  return normalizeFigures(raw).map((f) => f.bbox);
 }
 
 const stripForCompare = (s: string) => s.replace(SOLUTION_FIGURE_MARKER_RE, '').replace(/\s+/g, '');
@@ -65,10 +74,11 @@ const SOLUTION_FIGURES_SCHEMA: Rec = {
             items: {
               type: 'object',
               additionalProperties: false,
-              required: ['bbox_1k', 'kind'],
+              required: ['bbox_1k', 'kind', 'placement'],
               properties: {
                 bbox_1k: { type: 'array', items: { type: 'integer' } },
                 kind: { type: 'string', enum: ['graph', 'diagram', 'number_line', 'other'] },
+                placement: { type: 'string', enum: ['right_of_text', 'below_text'] },
               },
             },
           },
@@ -88,6 +98,8 @@ const SOLUTION_FIGURES_INSTRUCTIONS = `당신은 Yggdrasill 교재 검수 엔진
    - 그림에 붙은 축 이름·눈금·점 이름·화살표 글자까지 상자에 넣고, 그림 밖 해설 문장은 넣지 마세요.
    - 글자로 된 표, 수식, 문항 번호·정답 줄, 요청 문항이 아닌 다른 문항의 그림은 넣지 마세요.
    - 그림이 없으면 figures=[] 입니다.
+   - placement: 그림이 바로 앞 풀이 글줄들과 같은 높이에서 그 오른쪽에 나란히 인쇄돼 있으면 "right_of_text",
+     풀이 글 아래(또는 위)에 따로 한 줄을 차지하면 "below_text".
    - 이미지가 회색 가로선으로 위아래 두 조각으로 나뉘어 있으면 아래 조각은 해설지 다음 단(또는 다음 쪽) 맨 위에서 이어진 풀이입니다. 상자가 회색 선을 넘지 않게 잡으세요.
 2. solution_with_markers: 전사본을 한 글자도 바꾸지 말고 그대로 두되, figures 의 각 그림이 해설에서 놓인 자리에 [그림] 을 순서대로 끼워 넣으세요.
    [그림] 개수는 figures 개수와 같아야 합니다. 전사본에 이미 [그림] 이나 [그림: 설명] 표시가 있으면 그 자리를 [그림] 하나로 쓰세요.
@@ -186,7 +198,8 @@ export async function handleTextbookSolutionFigures(
     if (!r) continue;
     const a = analysisByCrop.get(x.cropId)!;
     const original = String(a.solution_transcribed ?? '');
-    const figures = normalizeFigureBoxes(r.figures);
+    const found = normalizeFigures(r.figures);
+    const figures = found.map((f) => f.bbox);
     let text = original;
     // 운영자가 고친 해설은 글자를 바꾸지 않는다(그림은 렌더할 때 표시가 모자라면 끝에 붙인다).
     if (a.solution_source !== 'manual') {
@@ -199,7 +212,7 @@ export async function handleTextbookSolutionFigures(
         if (!error) text = marked;
       }
     }
-    results.push({ crop_id: x.cropId, figures, solution_transcribed: text });
+    results.push({ crop_id: x.cropId, figures, placements: found.map((f) => f.placement), solution_transcribed: text });
   }
   return jsonResponse({ ok: true, processed: results.length, results });
 }

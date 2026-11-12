@@ -57,6 +57,12 @@ Deno.test("'해' 빈칸 풀이 안내와 그것만 감싼 상자를 본문에서
   assertEquals(stripGuidedSolution(inline), '\\overline{AB}=□\\,\\overline{NM}');
   const plain = '해 뜨는 시각을 x라 할 때\n[문단]\n[박스시작]\n해마다 1분씩 늦어진다.\n[박스끝]';
   assertEquals(stripGuidedSolution(plain), plain);
+  assertEquals(stripGuidedSolution(plain, { afterCommonStem: true }), plain);
+  const setItem = '[그림]\n[문단]\n해 $l\\parallel m$이므로 $box{~~}$의 크기는 같다.\n[문단]\n$\\therefore \\angle x=box{~~}^{\\circ}$';
+  assertEquals(stripGuidedSolution(setItem), setItem);
+  assertEquals(stripGuidedSolution(setItem, { afterCommonStem: true }), '[그림]');
+  const boxedSetItem = '[그림][문단][박스시작]해 엇각이므로 $\\angle x=□^{\\circ}$[박스끝]';
+  assertEquals(stripGuidedSolution(boxedSetItem, { afterCommonStem: true }), '[그림]');
 });
 
 Deno.test('해설 크롭 base64 와 V2 서명 URL 만 받는다 (잘못된 키·형식은 버린다)', () => {

@@ -233,6 +233,36 @@ export function applyCommonFigurePlacement(
   };
 }
 
+/**
+ * 세트 머리 원본에 그림이 있는데 공통 발문과 이 문항 본문 어디에도 그림 자리가 없고 이 문항이 그림을 가졌으면,
+ * 그 그림은 세트 공통 그림이다. 공통 발문 끝에 그림 자리를 붙인 공통 발문을 돌려준다(반영 시 그림이 공통 그림으로 퍼진다).
+ */
+export function commonStemWithFigureMarker(
+  { commonStem, stem, placement, assets }: { commonStem: string; stem: string; placement: unknown; assets: unknown },
+): string | null {
+  if (!commonStem.trim()) return null;
+  if (!['right_of_text', 'left_of_text', 'below_text'].includes(String(placement))) return null;
+  if (figureMarkerCount(commonStem) > 0 || figureMarkerCount(stem) > 0) return null;
+  if (orderedFigureAssets(assets).length === 0) return null;
+  return `${commonStem.trimEnd()}[문단][그림]`;
+}
+
+/**
+ * 수정 단계가 원본에서 문항 그림이 아니라고 본 V2 그림 순서(1부터)를 그림 번호(figure_index)로 바꾼다.
+ * 빼고 남는 그림이 본문 그림 자리보다 적어지면 자리만 남으므로 제안하지 않는다. 사장님이 확인하고 뺀다.
+ */
+export function figureRemovalIndexes(ordinals: unknown, assets: unknown, stem: string): number[] {
+  const ordered = orderedFigureAssets(assets);
+  const out: number[] = [];
+  for (const o of Array.isArray(ordinals) ? ordinals : []) {
+    const a = ordered[Math.round(Number(o)) - 1];
+    const idx = a ? Number.parseInt(String(a.figure_index), 10) : NaN;
+    if (Number.isFinite(idx) && !out.includes(idx)) out.push(idx);
+  }
+  if (out.length === 0 || figureMarkerCount(stem) > ordered.length - out.length) return [];
+  return out;
+}
+
 const FIGURE_THEN_BLANK_RE = /^\s*(?:\[그림\]|\[도형\]|\[도표\])\s*(?:\[문단\]\s*)*\(\s*(?:\[공백:\d+\]|\s)*\)\s*$/;
 
 /**
@@ -253,11 +283,13 @@ export function anchorFigureWithBlank(proposal: FigureProposal | null, stem: str
 /**
  * 공통 발문에만 그림 자리가 있는데 이 문항에 그림 자산이 하나도 없으면(처음 추출 때 세트 머리 그림을 놓친 경우)
  * 세트 머리 원본에서 찾은 그림 상자로 새 그림을 잘라 등록하도록 제안한다. 본문 마커는 붙이지 않는다(공통 발문 몫).
+ * 자산이 있어도 V2 의 공통 그림이 잘리거나(cut) 다른 조각이 섞였으면(dirty) 같은 번호로 세트 머리에서 다시 자른다.
  * emPx 는 세트 머리 이미지 픽셀 기준 글자 크기다.
  */
 export function commonFigureProposal(args: {
   boxes: unknown;
   placement: unknown;
+  state?: unknown;
   commonStem: string;
   stem: string;
   assets: unknown;
@@ -265,7 +297,9 @@ export function commonFigureProposal(args: {
   emPx: number | null;
   headerWidthPx: number;
 }): FigureProposal | null {
-  if (orderedFigureAssets(args.assets).length > 0) return null;
+  const recrop = args.state === 'cut' || args.state === 'dirty';
+  const existing = orderedFigureAssets(args.assets);
+  if (existing.length > 0 && !recrop) return null;
   if (figureMarkerCount(args.commonStem) === 0 || figureMarkerCount(args.stem) > 0) return null;
   const placement = ['right_of_text', 'left_of_text'].includes(String(args.placement))
     ? args.placement as FigurePlacement
@@ -273,14 +307,14 @@ export function commonFigureProposal(args: {
   const measures: FigureMeasure[] = [];
   for (const b of Array.isArray(args.boxes) ? args.boxes : []) {
     const bbox = normalizeBox(b && typeof b === 'object' ? (b as Rec).bbox_1k : null);
-    if (bbox) measures.push({ bbox, placement, align: 'center', v2State: 'missing' });
+    if (bbox) measures.push({ bbox, placement, align: 'center', v2State: existing.length > 0 ? 'cut' : 'missing' });
   }
   if (measures.length === 0) return null;
   const p = buildFigureProposal({
     measures,
     emPx: args.emPx,
     imageWidthPx: args.headerWidthPx,
-    assets: [],
+    assets: existing,
     currentLayout: args.currentLayout,
   });
   if (!p) return null;
@@ -362,7 +396,7 @@ export function normalizeTextFix(args: {
     const stripped = stripCommonStem(commonStem, curStem);
     if (stripped !== null && stripped.trim() !== curStem.trim()) stem = stripped;
   }
-  const unguided = stripGuidedSolution(stem ?? curStem);
+  const unguided = stripGuidedSolution(stem ?? curStem, { afterCommonStem: !!effectiveCommon?.trim() });
   if (unguided !== (stem ?? curStem).trim()) stem = unguided;
   if (stem && sameRenderedMath(stem, curStem)) stem = null;
   const finalCommon = commonStem && !sameRenderedMath(commonStem, curCommon) ? commonStem : null;
@@ -392,6 +426,32 @@ export function ensureFigureMarkers(stem: string, figureCount: number): string {
   return `${stem.replace(/\s+$/, '')}${'\n[그림]'.repeat(missing)}`;
 }
 
+/**
+ * 원본에서 새로 찾은 그림 중 본문에 그림 자리가 없는 것은 자동으로 붙이지 않는다.
+ * '해' 풀이 안내 속 그림이 문항 그림으로 잡히면 이렇게 된다. crops·layout 에서 빼서 held 로 돌려주고, 사장님이 보고 붙인다.
+ */
+export function holdUnslottedFigureCrops(
+  proposal: FigureProposal | null,
+  { slots, assetCount }: { slots: number; assetCount: number },
+): { proposal: FigureProposal | null; held: FigureCropRequest[] } {
+  if (!proposal) return { proposal, held: [] };
+  const missing = proposal.crops
+    .filter((c) => c.reason === 'missing' && c.source !== 'set_header')
+    .sort((a, b) => a.figure_index - b.figure_index);
+  const held = missing.slice(Math.max(0, slots - assetCount));
+  if (held.length === 0) return { proposal, held };
+  const heldIdx = new Set(held.map((c) => c.figure_index));
+  const heldKeys = new Set(held.map((c) => `idx:${c.figure_index}`));
+  return {
+    proposal: {
+      ...proposal,
+      layout: { ...proposal.layout, items: proposal.layout.items.filter((it) => !heldKeys.has(String(it.assetKey ?? ''))) },
+      crops: proposal.crops.filter((c) => !(c.reason === 'missing' && heldIdx.has(c.figure_index))),
+    },
+    held,
+  };
+}
+
 // ── 수정 단계(원본 대조 수정안) ───────────────────────────────────────────
 
 const FIX_SCHEMA: Rec = {
@@ -414,7 +474,9 @@ const FIX_SCHEMA: Rec = {
           'engine_issue',
           'figures',
           'common_figure_placement',
+          'common_figure_state',
           'common_figures',
+          'non_problem_figures',
           'text_sample',
           'proposed_answer',
           'proposed_ai_answer',
@@ -468,6 +530,11 @@ const FIX_SCHEMA: Rec = {
             type: 'string',
             enum: ['right_of_text', 'left_of_text', 'below_text', 'none'],
           },
+          common_figure_state: {
+            type: 'string',
+            enum: ['ok', 'missing', 'cut', 'dirty', 'none'],
+          },
+          non_problem_figures: { type: 'array', items: { type: 'integer' } },
           common_figures: {
             type: 'array',
             items: {
@@ -529,7 +596,11 @@ const FIX_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔진의 [�
 - 원본 이미지 안의 그림·그래프·도형(글자로 된 표·상자는 제외)을 읽는 순서대로 figures 에 넣습니다. 없으면 [].
 - '해' 배지로 시작하는 빈칸 풀이 안내 안의 그림(빈 네모가 달린 수직선 등)은 해설이라 문항 그림이 아닙니다. figures 에 넣지 마세요.
 - common_figure_placement: 세트 머리 원본 이미지에 그림이 있으면 그 그림이 공통 지시문 글 기준으로 오른쪽에 나란히 있으면 "right_of_text", 왼쪽이면 "left_of_text", 아래(또는 위)에 따로 있으면 "below_text". 세트 머리 이미지가 없거나 그 안에 그림이 없으면 "none". 이 그림은 figures 에 넣지 않습니다.
-- common_figures: figure_asset_count 가 0 이고 stem_figure_markers 가 0 인데 common_stem 에 [그림] 이 있으면, 세트 머리 원본 이미지 안의 공통 그림 상자를 세트 머리 이미지 기준 [ymin, xmin, ymax, xmax] 0..1000 으로 읽는 순서대로 적으세요(축 이름·눈금 숫자까지 포함, 지시문 글자·다른 문항 번호는 제외). 그 밖의 경우는 [].
+- common_figure_state: 세트 머리 원본 이미지에 그림이 있으면 V2 화면에 나온 그 공통 그림의 상태 — 정상 "ok", 없음 "missing",
+  잘리거나 일부(꼭짓점 글자 등)가 빠짐 "cut", 원본 그림에 없는 글자·조각이 섞임 "dirty". 세트 머리 이미지가 없거나 그 안에 그림이 없으면 "none".
+- non_problem_figures: V2 화면에 나온 이 문항 그림(공통 그림 제외, 위에서부터 1, 2, ...) 중 원본에서 문항 그림이 아닌 것의 번호.
+  예: 원본에서 '해' 배지로 시작하는 빈칸 풀이 안내 안의 그림, 해설 그림, 다른 문항의 그림. 없으면 [].
+- common_figures: common_stem 에 [그림] 이 있고 stem_figure_markers 가 0 인데 figure_asset_count 가 0 이거나 common_figure_state 가 "cut"·"dirty" 이면, 세트 머리 원본 이미지 안의 공통 그림 상자를 세트 머리 이미지 기준 [ymin, xmin, ymax, xmax] 0..1000 으로 읽는 순서대로 적으세요(축 이름·눈금 숫자까지 포함, 지시문 글자·다른 문항 번호는 제외). 그 밖의 경우는 [].
 - bbox_1k: 원본 이미지 전체를 0..1000 으로 본 [ymin, xmin, ymax, xmax]. 그림의 선·점·라벨까지 다 들어가고 본문 글자는 들어가지 않게.
 - placement: 본문 글 오른쪽에 나란히 있으면 "right_of_text", 왼쪽이면 "left_of_text", 본문 아래(또는 위)에 따로 있으면 "below_text",
   글줄 안에 끼어 있는 작은 그림이면 "inline".
@@ -748,8 +819,20 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
       if (!sameRenderedMath(folded, curStem)) stem = folded;
       common = null;
     }
+    let textSame = textFix.textSame;
+    if (!common && !isDependentSetItem(it)) {
+      const withMarker = commonStemWithFigureMarker({
+        commonStem: curCommon,
+        stem: stem ?? curStem,
+        placement: r.common_figure_placement,
+        assets: it.pb_figure_assets,
+      });
+      if (withMarker) {
+        common = withMarker;
+        textSame = false;
+      }
+    }
     const choices = textFix.choices;
-    const textSame = textFix.textSame;
 
     const measures = parseFigureMeasures(r.figures);
     const size = img.originalSize;
@@ -764,6 +847,7 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
     const headerFigure = measures.length > 0 ? null : commonFigureProposal({
       boxes: r.common_figures,
       placement: r.common_figure_placement,
+      state: r.common_figure_state,
       commonStem: commonCtx.commonStem,
       stem: commonCtx.stem,
       assets: it.pb_figure_assets,
@@ -777,7 +861,7 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
       }),
       headerWidthPx: img.setHeaderSize?.width ?? 0,
     });
-    const figure = headerFigure ?? anchorFigureWithBlank(applyCommonFigurePlacement(
+    const measuredFigure = anchorFigureWithBlank(applyCommonFigurePlacement(
       buildFigureProposal({
         measures,
         emPx,
@@ -788,12 +872,20 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
       r.common_figure_placement,
       commonCtx,
     ), stem ?? curStem);
+    const markerBase = keepRuleText && typeof prev.stem === 'string' ? prev.stem : (stem ?? curStem);
+    const unslotted = headerFigure
+      ? { proposal: null, held: [] as FigureCropRequest[] }
+      : holdUnslottedFigureCrops(measuredFigure, {
+        slots: figureMarkerCount(markerBase),
+        assetCount: orderedFigureAssets(it.pb_figure_assets).length,
+      });
+    const figure = headerFigure ?? unslotted.proposal;
     // 새로 등록할 그림이 있는데 본문에 그림 자리가 모자라면 마커를 붙인다.
     if (figure && !headerFigure && figure.crops.some((c) => c.reason === 'missing')) {
-      const base = keepRuleText && typeof prev.stem === 'string' ? prev.stem : (stem ?? curStem);
-      const withMarkers = ensureFigureMarkers(base, measures.length);
-      if (withMarkers !== base) stem = withMarkers;
+      const withMarkers = ensureFigureMarkers(markerBase, measures.length - unslotted.held.length);
+      if (withMarkers !== markerBase) stem = withMarkers;
     }
+    const figureRemovals = figureRemovalIndexes(r.non_problem_figures, it.pb_figure_assets, stem ?? curStem);
 
     const trimOrNull = (v: unknown) => typeof v === 'string' && v.trim() && v.trim() !== '판단불가' ? v.trim() : null;
     const proposedAnswer = trimOrNull(r.proposed_answer) ??
@@ -818,7 +910,7 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
     const engineSymptom = isFakeEngine ? null : rawEngineSymptom;
     const effectiveTextSame = textSame || (!hasText && isFakeEngine);
     const fixProposal: Rec = {
-      kind: hasText ? 'data' : figure ? 'figure' : engineSymptom ? 'engine' : 'none',
+      kind: hasText ? 'data' : figure || figureRemovals.length > 0 ? 'figure' : engineSymptom ? 'engine' : 'none',
       stem,
       common_stem: common,
       choices,
@@ -836,10 +928,13 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
       engine_issue: engineSymptom,
       figure_layout: figure?.layout ?? null,
       figure_crops: figure?.crops ?? [],
+      figure_crops_unslotted: unslotted.held,
+      figure_removals: figureRemovals,
       figure_measure: {
         figures: measures.map((m) => ({ bbox_1k: m.bbox, placement: m.placement, align: m.align, v2_state: m.v2State })),
         text_sample: r.text_sample ?? null,
         common_figure_placement: typeof r.common_figure_placement === 'string' ? r.common_figure_placement : null,
+        common_figure_state: typeof r.common_figure_state === 'string' ? r.common_figure_state : null,
         em_px: emPx === null ? null : Math.round(emPx * 10) / 10,
         image_px: size ? [size.width, size.height] : null,
         region_1k: img.originalRegion1k,

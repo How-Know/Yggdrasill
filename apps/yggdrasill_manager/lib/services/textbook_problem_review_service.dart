@@ -369,13 +369,13 @@ double solutionFigureWidthEm(List<int> pageRegion1k) {
 }) {
   final assets = <Map<String, dynamic>>[];
   final layoutItems = <Map<String, dynamic>>[];
-  void addFigure(Map<String, dynamic> asset, double widthEm, String anchor) {
+  void addFigure(Map<String, dynamic> asset, double widthEm, String anchor, {String position = 'below-stem'}) {
     final idx = assets.length + 1;
     assets.add({...asset, 'figure_index': idx, 'approved': true});
     layoutItems.add({
       'assetKey': 'idx:$idx',
       'widthEm': widthEm,
-      'position': 'below-stem',
+      'position': position,
       'anchor': anchor,
       'offsetXEm': 0,
       'offsetYEm': 0,
@@ -405,11 +405,12 @@ double solutionFigureWidthEm(List<int> pageRegion1k) {
     }
     for (final f in figures) {
       final w = (f['width_em'] as num?)?.toDouble() ?? 10;
+      final right = f['placement'] == 'right';
       addFigure({
         'bucket': '${f['bucket'] ?? ''}',
         'path': '${f['path'] ?? ''}',
         'mime_type': '${f['mime_type'] ?? 'image/png'}',
-      }, w, 'center');
+      }, w, right ? 'right' : 'center', position: right ? 'inline-right' : 'below-stem');
     }
     if (buf.isNotEmpty) buf.write('[문단]');
     buf.write(solutionKind == 'ai' ? '[AI 풀이]' : '[해설]');
@@ -494,6 +495,40 @@ Map<String, dynamic> scaleFigureLayout(
         it,
   ];
   return {...layout, 'version': layout['version'] ?? 1, 'items': items, 'groups': layout['groups'] ?? const []};
+}
+
+/// 그림 번호(figure_index)들을 뺀 그림 자산 목록과 배치. 같은 번호의 옛 크롭까지 모두 뺀다.
+({List<Map<String, dynamic>> assets, Map<String, dynamic> layout}) withoutFigures(
+  List<Map<String, dynamic>> assets,
+  Map<String, dynamic> layout,
+  Set<int> indexes,
+) {
+  final keys = {for (final i in indexes) 'idx:$i'};
+  final items = layout['items'] is List ? layout['items'] as List : const [];
+  final groups = <dynamic>[];
+  for (final g in (layout['groups'] is List ? layout['groups'] as List : const [])) {
+    if (g is! Map || g['members'] is! List) {
+      groups.add(g);
+      continue;
+    }
+    final rest = [for (final m in g['members'] as List) if (!keys.contains('$m')) m];
+    if (rest.length > 1) groups.add({...g, 'members': rest});
+  }
+  return (
+    assets: [
+      for (final a in assets)
+        if (!indexes.contains(int.tryParse('${a['figure_index'] ?? ''}'))) a,
+    ],
+    layout: {
+      ...layout,
+      'version': layout['version'] ?? 1,
+      'items': [
+        for (final it in items)
+          if (it is! Map || !keys.contains('${it['assetKey']}')) it,
+      ],
+      'groups': groups,
+    },
+  );
 }
 
 /// 렌더 검수에서 그림 크기 비율(V2 ÷ 원본)이 이 범위 밖이면 크기를 다시 맞춘다(Edge FIGURE_SIZE_RATIO_* 와 같다).
@@ -1052,7 +1087,7 @@ class TextbookProblemReviewItem {
   /// 정답+해설 카드 캐시 키 원문(글자·그림 정답·해설 그림이 바뀌면 달라진다)
   String get answerSolutionCardSource => '$displayAnswer\n$primarySolutionText\n'
       '${hasAnswerImage ? answerImagePath : ''}\n'
-      '${solutionFigureAssets.map((a) => '${a['path']}:${a['width_em']}').join(',')}';
+      '${solutionFigureAssets.map((a) => '${a['path']}:${a['width_em']}:${a['placement'] ?? ''}').join(',')}';
 
   /// 원본 해설에 그림이 있을 수 있는데(그림을 가리키는 문장·[그림] 표시, 또는 렌더 검수가 해설 그림 누락으로 판정)
   /// 아직 해설 PDF 에서 그림을 찾지 않은 문항
@@ -1144,6 +1179,29 @@ class TextbookProblemReviewItem {
         for (final x in (fixProposal['figure_crops'] is List ? fixProposal['figure_crops'] as List : const []))
           if (x is Map) Map<String, dynamic>.from(x),
       ];
+
+  /// 원본에는 있는데 본문에 그림 자리가 없어 수정 단계가 자동 등록에서 뺀 그림('해' 풀이 안내 속 그림일 수 있다).
+  /// 아직 붙지 않은 것만. 사장님이 원본을 보고 붙인다.
+  List<Map<String, dynamic>> get unslottedFigureCrops {
+    final present = {
+      for (final a in pbFigureAssets) int.tryParse('${a['figure_index'] ?? ''}'),
+    }..remove(null);
+    return [
+      for (final x in (fixProposal['figure_crops_unslotted'] is List ? fixProposal['figure_crops_unslotted'] as List : const []))
+        if (x is Map && !present.contains(int.tryParse('${x['figure_index'] ?? ''}'))) Map<String, dynamic>.from(x),
+    ];
+  }
+
+  /// 수정 단계가 원본에서 문항 그림이 아니라고 본 그림 번호 중 아직 붙어 있는 것. 자동 적용하지 않고 사장님이 뺀다.
+  List<int> get proposedFigureRemovals {
+    final present = {
+      for (final a in pbFigureAssets) int.tryParse('${a['figure_index'] ?? ''}'),
+    }..remove(null);
+    return [
+      for (final x in (fixProposal['figure_removals'] is List ? fixProposal['figure_removals'] as List : const []))
+        if (int.tryParse('$x') case final idx? when present.contains(idx)) idx,
+    ];
+  }
 
   /// 아직 적용하지 않은 그림 제안(배치가 지금과 다르거나 잘라 등록할 그림이 있음, 또는 그림 문항에서 원본 대조 배치를 아직 DB 에 반영하지 않음)
   bool get hasPendingFigureProposal {
@@ -1397,13 +1455,19 @@ class TextbookProblemReviewItem {
       renderChecks['figure_position_ok'] == false ||
       figureNeedsResize;
 
+  /// 엔진 보류 문항을 사장님이 "엔진 수정 확인됨 → 품질 승인"으로 승인한 뒤로 렌더 검수를 다시 하지 않았다.
+  /// 그 승인은 남아 있는 렌더 이상 판정을 보고 내린 것이므로 그 판정은 더 이상 준비됨을 막지 않는다.
+  bool get renderIssueAcceptedByOwner =>
+      engineResolvedAt != null && renderCheckedAt != null && !engineResolvedAt!.isBefore(renderCheckedAt!);
+
   /// 준비됨을 막는 V2 렌더 이상. 그림 크기 차이는 잰 비율로 자동 조정하므로 넣지 않는다.
   bool get renderBlocksReady =>
-      renderChecks['problem_ok'] == false ||
-      renderChecks['answer_ok'] == false ||
-      renderChecks['solution_ok'] == false ||
-      renderChecks['fidelity_ok'] == false ||
-      renderChecks['figure_position_ok'] == false;
+      !renderIssueAcceptedByOwner &&
+      (renderChecks['problem_ok'] == false ||
+          renderChecks['answer_ok'] == false ||
+          renderChecks['solution_ok'] == false ||
+          renderChecks['fidelity_ok'] == false ||
+          renderChecks['figure_position_ok'] == false);
 
   /// 원본과 직접 대조한 V2 렌더 검수가 통과해 2단계(문항 카드) 판정을 덮어쓴 상태
   bool get stage2Superseded => originalCompared && renderCheckedAt != null && !renderHasIssue;
@@ -2253,6 +2317,7 @@ class TextbookProblemReviewService {
             try {
               final assets = <Map<String, dynamic>>[];
               final boxes = (r['figures'] as List?) ?? const [];
+              final placements = (r['placements'] as List?) ?? const [];
               for (var k = 0; k < boxes.length; k++) {
                 final box = [for (final x in (boxes[k] is List ? boxes[k] as List : const [])) if (x is num) x.toInt()];
                 final located = region.locate(box);
@@ -2285,6 +2350,7 @@ class TextbookProblemReviewService {
                   'width_px': png.widthPx,
                   'height_px': png.heightPx,
                   'width_em': solutionFigureWidthEm(pageRegion),
+                  'placement': k < placements.length && placements[k] == 'right' ? 'right' : 'below',
                   'raw_page': located.part.rawPage,
                   'source_kind': it.solutionSourceKind,
                   'crop_region_1k': pageRegion,

@@ -52,6 +52,20 @@ void main() {
       expect(card.stem, isNot(contains('[그림]')));
       expect(card.meta, isEmpty);
     });
+
+    test('원본에서 풀이 오른쪽에 있던 해설 그림은 글과 나란히(inline-right) 놓는다', () {
+      final card = buildAnswerSolutionCardContent(
+        answer: '57',
+        solution: '삼각형의 세 내각의 합은 180이므로[그림]',
+        solutionKind: 'textbook',
+        solutionFigures: const [
+          {'bucket': 'problem-previews', 'path': 'a/1.png', 'width_em': 10, 'placement': 'right'},
+        ],
+      );
+      final item = ((card.meta['figure_layout'] as Map)['items'] as List).single as Map;
+      expect(item['position'], 'inline-right');
+      expect(item['anchor'], 'right');
+    });
   });
 
   test('해설 그림 폭은 원본 해설 쪽 폭에 맞춘다', () {

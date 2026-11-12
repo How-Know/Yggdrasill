@@ -1925,6 +1925,86 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     }
   }
 
+  /// 수정 단계가 문항 그림이 아니라고 본 그림을 사장님 확인 후 문제은행 문항에서 뺀다(배치에서도 뺀다).
+  Future<void> _removeProposedFigures(TextbookProblemReviewItem item, List<int> indexes) async {
+    final scope = _selectedScope;
+    if (scope == null) return;
+    setState(() => _saving = true);
+    try {
+      final next = withoutFigures(item.pbFigureAssets, item.pbFigureLayout, indexes.toSet());
+      await _svc.applyProblemFix(
+        cropId: item.cropId,
+        figureAssets: next.assets,
+        figureLayout: next.layout,
+        note: '문항 그림 아님(${indexes.join(', ')}번) 빼기',
+      );
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _notice = '문항 ${item.problemNumber}번: 그림 ${indexes.join(', ')}번을 뺐습니다 · V2 카드를 다시 찍습니다';
+      });
+      await _loadItems(scope, reloadPreviews: false);
+      final fresh = _items.where((x) => x.cropId == item.cropId).firstOrNull;
+      if (fresh != null) await _loadEnginePreviews(scope, [fresh], merge: true);
+      await _loadUnits();
+      if (mounted && fresh != null) await _renderCheckSingle(fresh);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _notice = '그림 빼기 실패: $e';
+      });
+    }
+  }
+
+  /// 본문에 자리가 없어 자동 등록하지 않은 원본 그림을 사장님 확인 뒤 붙인다(본문 끝에 [그림] 자리를 더한다).
+  Future<void> _addUnslottedFigures(TextbookProblemReviewItem item, List<Map<String, dynamic>> crops) async {
+    final scope = _selectedScope;
+    if (scope == null) return;
+    setState(() => _saving = true);
+    final labels = crops.map((c) => '${c['figure_index']}번').join(', ');
+    try {
+      final items = [
+        for (final x in (item.pbFigureLayout['items'] is List ? item.pbFigureLayout['items'] as List : const []))
+          if (x is Map) Map<String, dynamic>.from(x),
+        for (final c in crops)
+          {
+            'assetKey': 'idx:${c['figure_index']}',
+            'widthEm': 16,
+            'position': 'below-stem',
+            'anchor': 'center',
+            'offsetXEm': 0,
+            'offsetYEm': 0,
+            'heightEm': 1.6,
+          },
+      ];
+      await _applyFixFor(
+        scope,
+        item,
+        stem: '${item.stem.trimRight()}${'\n[그림]' * crops.length}',
+        figureLayout: {...item.pbFigureLayout, 'version': 1, 'items': items, 'groups': item.pbFigureLayout['groups'] ?? const []},
+        figureCrops: crops,
+        note: '자리 없던 원본 그림($labels) 추가',
+      );
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _notice = '문항 ${item.problemNumber}번: 그림 $labels을 붙였습니다 · V2 카드를 다시 찍습니다';
+      });
+      await _loadItems(scope, reloadPreviews: false);
+      final fresh = _items.where((x) => x.cropId == item.cropId).firstOrNull;
+      if (fresh != null) await _loadEnginePreviews(scope, [fresh], merge: true);
+      await _loadUnits();
+      if (mounted && fresh != null) await _renderCheckSingle(fresh);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _notice = '그림 추가 실패: $e';
+      });
+    }
+  }
+
   /// 공통 발문 중복이 있는 문항(보류 제외 · 이미 품질 승인된 문항도 앞 단계에서 오염된 공통 발문은 고칠 수 있게 포함한다)
   List<TextbookProblemReviewItem> get _commonStemDups => [
         for (final it in _items)
@@ -3708,7 +3788,14 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
                       : (item.hasSolutionRef ? _kWarn : _kTextMuted),
                 ),
                 if (item.renderCheckedAt != null)
-                  _pillBadge(item.renderHasIssue ? 'V2 렌더 이상' : 'V2 렌더 정상', item.renderHasIssue ? _kError : _kAccent),
+                  _pillBadge(
+                    !item.renderHasIssue
+                        ? 'V2 렌더 정상'
+                        : item.renderIssueAcceptedByOwner
+                            ? 'V2 렌더 이상 · 사장님 승인'
+                            : 'V2 렌더 이상',
+                    !item.renderHasIssue ? _kAccent : (item.renderIssueAcceptedByOwner ? _kWarn : _kError),
+                  ),
                 if (_issueKindBadge(item) case final kb?) _pillBadge(kb.$1, kb.$2),
                 if (item.pbAnswerDiffers) _pillBadge('문제은행 정답 다름', _kWarn),
                 for (final vt in item.visualTags.take(2)) _pillBadge(vt, _kTextSub),
@@ -4959,6 +5046,8 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
   Widget _buildFigureLayoutEditor(TextbookProblemReviewItem item) {
     final assets = orderedFigureAssets(item.pbFigureAssets);
     final crops = _pendingFigureCrops(item);
+    final removals = item.proposedFigureRemovals;
+    final unslotted = item.unslottedFigureCrops;
     final measure = item.fixProposal['figure_measure'] is Map ? item.fixProposal['figure_measure'] as Map : const {};
     final emPx = (measure['em_px'] as num?)?.toDouble();
     final markers = figureMarkerCount(_stemEditCtrl.text);
@@ -4990,6 +5079,43 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
               ' — 승인하거나 적용하면 교재 본문 PDF에서 잘라 문제은행 그림으로 등록합니다.',
               _kBlue,
               Icons.crop_rounded,
+            ),
+          ],
+          if (removals.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            _buildBanner(
+              '원본에서 문항 그림이 아닌 것으로 보이는 그림: ${removals.map((i) => '$i번').join(', ')}'
+              ' — 풀이 안내(해)·해설·다른 문항의 그림이면 빼세요. 자동으로 빼지 않습니다.',
+              _kWarn,
+              Icons.hide_image_outlined,
+            ),
+            const SizedBox(height: 6),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton.icon(
+                onPressed: _saving || _runningReview ? null : () => unawaited(_removeProposedFigures(item, removals)),
+                icon: const Icon(Icons.hide_image_outlined, size: 16),
+                label: Text('이 그림 빼기(${removals.map((i) => '$i번').join(', ')})'),
+              ),
+            ),
+          ],
+          if (unslotted.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            _buildBanner(
+              '확인 필요 — 원본에는 있지만 본문에 그림 자리가 없어 자동으로 붙이지 않은 그림: '
+              '${unslotted.map((c) => '${c['figure_index']}번').join(', ')}'
+              ' — 풀이 안내(해) 속 그림이면 그대로 두고, 문항 그림이 맞으면 붙이세요.',
+              _kWarn,
+              Icons.add_photo_alternate_outlined,
+            ),
+            const SizedBox(height: 6),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton.icon(
+                onPressed: _saving || _runningReview ? null : () => unawaited(_addUnslottedFigures(item, unslotted)),
+                icon: const Icon(Icons.add_photo_alternate_outlined, size: 16),
+                label: Text('문항 그림이 맞음 — 붙이기(${unslotted.map((c) => '${c['figure_index']}번').join(', ')})'),
+              ),
             ),
           ],
           if (_figureLayoutEdit.isEmpty) ...[

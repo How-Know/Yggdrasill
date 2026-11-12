@@ -560,6 +560,11 @@ that into a layout:
   newest, by `figure_index`; key `idx:N`). A figure without an asset gets a
   new index and a `figure_crops` entry (`missing`); a `cut` figure gets a
   crop for its own index. Missing `[그림]` markers are appended to the stem.
+- a `missing` figure beyond the stem's `[그림]` slots (after the existing
+  assets) is not cropped automatically: it moves to `figure_crops_unslotted`
+  with its layout item dropped and no marker added, because a figure inside a
+  '해' hint looks like this. The figure editor shows it as "확인 필요" and the
+  owner attaches it with a button (crop + layout item + `[그림]` marker).
 
 The result is stored as `fix_proposal` (`source: fix_pass`). When a
 common-stem rule proposal is still pending, its text is kept and only the

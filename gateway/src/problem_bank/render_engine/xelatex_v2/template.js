@@ -208,6 +208,28 @@ const RIGHT_TAIL_MARKER = '[우측꼬리]';
 // 세트형 문제에서 추출기가 주입하는 하위문항 경계 표식. 라인 하나를 단독으로 차지한다.
 // 렌더러는 이 마커를 "소비" 하되 화면에는 표시하지 않고, 마커 사이에 수직 간격만 주입한다.
 const SUBQ_MARKER_LINE_RE = /^\s*\[\s*소문항\s*\d+\s*\]\s*$/;
+const CARD_SECTION_LABEL_LINE_RE = /^\s*\[(?:해설|AI 풀이)\]\s*$/;
+
+/**
+ * 정답+해설 카드 본문 줄들을 마지막 [해설]·[AI 풀이] 머리말 바로 뒤에서 나눈다(머리말은 앞쪽에 남긴다).
+ * 머리말은 "정답 …[문단][해설][문단]풀이…" 처럼 한 줄 안에 [문단]으로 이어져 있을 수 있다.
+ * 머리말이 없거나 뒤에 풀이 글이 없으면 null.
+ */
+export function splitAfterCardSectionLabel(lines) {
+  const list = Array.isArray(lines) ? lines.map((l) => String(l ?? '')) : [];
+  const blank = (s) => !String(s).replace(PARAGRAPH_MARKER_RE, '').trim();
+  for (let k = list.length - 1; k >= 0; k -= 1) {
+    const pieces = list[k].split(/(\[문단(?::[^\]]*)?\])/);
+    const p = pieces.findLastIndex((x) => CARD_SECTION_LABEL_LINE_RE.test(x));
+    if (p < 0) continue;
+    const headLine = pieces.slice(0, p + 1).join('');
+    const tailLine = pieces.slice(p + 1).join('').replace(/^(?:\s*\[문단(?::[^\]]*)?\])+\s*/, '');
+    const tail = [...(tailLine ? [tailLine] : []), ...list.slice(k + 1)];
+    if (tail.every(blank)) return null;
+    return { head: [...list.slice(0, k), headLine], tail, tailFrom: tailLine ? k : k + 1 };
+  }
+  return null;
+}
 // 본문 그림 마커 정규식.
 //   - 기존 plain 마커: [그림], [도형], [도표]
 //   - HWPX binaryItemIDRef 를 보존한 토큰: [[PB_FIG_<itemID>]]
@@ -7089,6 +7111,25 @@ function renderOneQuestion(question, {
     );
   }
 
+  // 정답+해설 카드: 어울림 그림은 [해설]·[AI 풀이] 머리말 아래 풀이 글하고만 어울리게 한다
+  //   (원본 해설지처럼 그림 위 끝이 풀이 첫 줄에 맞도록 정답 줄·머리말은 위에 따로 둔다).
+  for (let sIdx = segments.length - 2; sIdx >= 0; sIdx -= 1) {
+    const seg = segments[sIdx];
+    if (seg?.type !== 'text' || segments[sIdx + 1]?.type !== 'figure' || !figureSegWillEmit(sIdx + 1)) continue;
+    const nextPosition = String((layoutForIndex(figMarkerCountUpTo(sIdx + 1)) || {}).position || '').trim();
+    if (nextPosition !== 'inline-left' && nextPosition !== 'inline-right') continue;
+    const split = splitAfterCardSectionLabel(seg.lines);
+    if (!split) continue;
+    const aligns = Array.isArray(seg.lineAligns) ? seg.lineAligns : [];
+    const at = (k) => aligns[Math.min(k, aligns.length - 1)] || 'left';
+    segments.splice(
+      sIdx,
+      1,
+      { ...seg, lines: split.head, lineAligns: split.head.map((_, k) => at(k)) },
+      { ...seg, lines: split.tail, lineAligns: split.tail.map((_, k) => at(split.tailFrom + k)) },
+    );
+  }
+
   let emittedStemTextLineAny = false;
   for (let sIdx = 0; sIdx < segments.length; sIdx++) {
     const seg = segments[sIdx];
@@ -7891,17 +7932,35 @@ export function placeExplanationFigureTokens(text, figureCount) {
   return out;
 }
 
-/** 내려받은 해설 그림마다 가운데 정렬 \includegraphics 블록(폭은 원본 해설 쪽 기준 width_em). */
-export function explanationFigureIncludes(q) {
+/** 내려받은 해설 그림의 경로·폭(원본 해설 쪽 기준 width_em)·자리(원본에서 풀이 오른쪽이면 right). */
+export function explanationFigureSpecs(q) {
   const infos = Array.isArray(q?.explanation_figure_local_infos) ? q.explanation_figure_local_infos : [];
   const assets = Array.isArray(q?.explanation_figure_assets) ? q.explanation_figure_assets : [];
   return infos.map((info) => {
-    const normalized = String(info?.path || '').replace(/\\/g, '/');
-    if (!normalized) return '';
+    const path = String(info?.path || '').replace(/\\/g, '/');
+    if (!path) return null;
     const asset = assets.find((a) => Number(a?.figure_index) === Number(info?.figureIndex)) || {};
-    const widthEm = Math.max(3, Math.min(24, Number(asset.width_em) || 10));
-    return `{\\centering\\includegraphics[width=${widthEm.toFixed(2)}em,max width=\\linewidth,keepaspectratio]{${normalized}}\\par}`;
+    return {
+      path,
+      widthEm: Math.max(3, Math.min(24, Number(asset.width_em) || 10)),
+      placement: asset.placement === 'right' ? 'right' : 'below',
+    };
   }).filter(Boolean);
+}
+
+/** 해설 그림마다 가운데 정렬 \includegraphics 블록. */
+export function explanationFigureIncludes(q) {
+  return explanationFigureSpecs(q).map((f) =>
+    `{\\centering\\includegraphics[width=${f.widthEm.toFixed(2)}em,max width=\\linewidth,keepaspectratio]{${f.path}}\\par}`);
+}
+
+/** 풀이 글(textTex)을 왼쪽, 해설 그림을 오른쪽에 위 끝을 맞춰 나란히 놓는다. */
+export function explanationSideBySideTex(textTex, figure) {
+  const w = Math.min(figure.widthEm, 14).toFixed(2);
+  // 해설 본문은 번호 너비만큼 \leftskip 이 걸려 있어 \linewidth 만 빼면 줄이 넘쳐 그림이 아래로 밀린다.
+  return `\\noindent\\begin{minipage}[t]{\\dimexpr\\linewidth-\\leftskip-${w}em-1em\\relax}\\vspace{0pt}${textTex}\\end{minipage}`
+    + `\\hfill\\begin{minipage}[t]{${w}em}\\vspace{0pt}`
+    + `\\includegraphics[width=\\linewidth,keepaspectratio]{${figure.path}}\\end{minipage}\\par`;
 }
 
 function answerFigureIncludeTex(localPaths, layout, index) {
@@ -11536,7 +11595,13 @@ function renderQuickAnswerTableLatex(questions, options = {}) {
   }
 
   function formatAnswerTex(ans, question) {
-    const raw = stripLatexTextWrappers(String(ans || '').trim());
+    // 정답이 "$40^{\circ}$" 처럼 수식 구분자째 저장돼 있으면, 아래에서 다시 $…$ 로 감싸 $$ 가 겹친다.
+    const raw = stripLatexTextWrappers(String(ans || '').trim())
+      .replace(/(?<!\\)\$+/g, '')
+      .replace(/\\\(|\\\)/g, '')
+      .replace(/\\[,;:! ]/g, ' ')
+      .replace(/ {2,}/g, ' ')
+      .trim();
     if (!raw) return '-';
     const markerRe = /(\[\[PB_ANSWER_FIG_[^\]]+\]\]|\[그림\]|\[\s*image\s*\])/gi;
     if (!markerRe.test(raw)) return formatAnswerTextTex(raw);
@@ -11641,12 +11706,15 @@ function renderQuickAnswerTableLatex(questions, options = {}) {
       parts.push(`\\par\\noindent\\adjustbox{max width=\\linewidth}{$\\displaystyle ${env}$}\\par`);
       last = match.index + match[0].length;
     }
+    // 표·행렬이 없으면 문단을 그대로 넘긴다(앞머리 $ 를 벗기면 "$\angle x$ (엇각)" 의 $ 짝이 어긋난다).
+    if (last === 0) return smartTexLine(paragraph, equations);
     const tail = edge(paragraph.slice(last), 'start');
     if (tail) parts.push(smartTexLine(tail, equations));
     if (parts.length === 0) return smartTexLine(paragraph, equations);
     return parts.filter(Boolean).join('\n');
   }
   function explanationBody(q, text) {
+    const specs = explanationFigureSpecs(q);
     const figures = explanationFigureIncludes(q);
     const paragraphs = String(placeExplanationFigureTokens(text, figures.length) || '')
       .replace(/\r\n/g, '\n')
@@ -11655,14 +11723,25 @@ function renderQuickAnswerTableLatex(questions, options = {}) {
       .map((paragraph) => paragraph.replace(/\s+/g, ' ').trim())
       .filter(Boolean);
     const equations = Array.isArray(q?.equations) ? q.equations : [];
-    const body = paragraphs
-      .map((paragraph) => {
-        const fig = /^@@YGGEXPLFIG(\d+)@@$/.exec(paragraph);
-        if (fig) return figures[Number(fig[1])] || '';
-        return renderExplanationParagraph(paragraph, equations);
-      })
-      .filter(Boolean)
-      .join('\\par\\vspace{0.25em}\n');
+    const blocks = [];
+    let textSince = 0;
+    for (const paragraph of paragraphs) {
+      const fig = /^@@YGGEXPLFIG(\d+)@@$/.exec(paragraph);
+      if (!fig) {
+        const tex = renderExplanationParagraph(paragraph, equations);
+        if (tex) blocks.push(tex);
+        continue;
+      }
+      const i = Number(fig[1]);
+      if (specs[i]?.placement === 'right' && blocks.length > textSince) {
+        const textTex = blocks.splice(textSince).join('\\par\\vspace{0.25em}\n');
+        blocks.push(explanationSideBySideTex(textTex, specs[i]));
+      } else if (figures[i]) {
+        blocks.push(figures[i]);
+      }
+      textSince = blocks.length;
+    }
+    const body = blocks.join('\\par\\vspace{0.25em}\n');
     if (!body) return '';
     // 전사본에 닫는 $ 가 하나 더 있으면 $\displaystyle 7$$이다 가 되어 컴파일이 멈춘다.
     return body.replace(/(\$\\displaystyle [^$]*)\$\$+/g, '$1$');

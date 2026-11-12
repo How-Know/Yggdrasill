@@ -147,8 +147,9 @@ const SUB_QUESTION_START = /^(?:\[소문항\d*\]|\(?\d+\)\s?)/;
  * 교재가 문항 아래에 '해' 배지로 인쇄한 빈칸 풀이 안내(해설의 일부)를 본문에서 뺀다.
  * '해' 줄부터 다음 소문항(2), [소문항n]) 앞까지 지우고, 그 안내만 감싼 상자 표시도 함께 지운다.
  * 앞에 문제 글이 없는(그림·마크업뿐인) '해' 줄은 본문 자체로 보고 건드리지 않는다.
+ * 다만 세트 문항(afterCommonStem)은 문제 글이 공통 발문에 있으므로, 빈칸(□·\square·box·[공백])이 있는 '해' 줄은 안내로 본다.
  */
-export function stripGuidedSolution(stem: string): string {
+export function stripGuidedSolution(stem: string, opts: { afterCommonStem?: boolean } = {}): string {
   if (!/(?:^|\n|\])\s*\[?해\]?\s/.test(stem)) return stem.trim();
   const lines = stem.replace(/[ \t]*(\[(?:문단|박스시작|박스끝)\])[ \t]*/g, '\n$1\n').split('\n').filter((l) => l.trim());
   const out: string[] = [];
@@ -158,11 +159,20 @@ export function stripGuidedSolution(stem: string): string {
   const hasContent = () => out.some((l) => /[가-힣A-Za-z0-9]/.test(l.replace(/\[[^\]]*\]/g, '')));
   const nextContent = (from: number) =>
     lines.slice(from).map((l) => l.trim()).find((l) => l && l !== '[문단]') ?? '';
+  const guideHasBlank = (from: number) => {
+    for (let j = from; j < lines.length; j++) {
+      const l = lines[j].trim();
+      if (j > from && SUB_QUESTION_START.test(l)) return false;
+      if (/□|\\square|box\{|\[공백/.test(l)) return true;
+    }
+    return false;
+  };
+  const guideAllowed = (from: number) => hasContent() || (opts.afterCommonStem === true && guideHasBlank(from));
   for (let i = 0; i < lines.length; i++) {
     const t = lines[i].trim();
     if (inGuide && SUB_QUESTION_START.test(t)) inGuide = false;
     if (t === '[박스시작]') {
-      const guideBox = inGuide || (hasContent() && GUIDED_SOLUTION_START.test(nextContent(i + 1)));
+      const guideBox = inGuide || (GUIDED_SOLUTION_START.test(nextContent(i + 1)) && guideAllowed(i + 1));
       boxes.push(guideBox ? 'drop' : 'keep');
       if (!guideBox) out.push(lines[i]);
       continue;
@@ -178,7 +188,7 @@ export function stripGuidedSolution(stem: string): string {
       continue;
     }
     if (inGuide) continue;
-    if (GUIDED_SOLUTION_START.test(t) && hasContent()) {
+    if (GUIDED_SOLUTION_START.test(t) && guideAllowed(i)) {
       inGuide = true;
       removed = true;
       continue;
@@ -1308,8 +1318,9 @@ export async function handleTextbookProblemReview(
       proposedStem = sameRenderedMath(folded, curStemStr) ? proposedStem : folded;
       proposedCommonStem = null;
     }
-    if (proposedStem) {
-      const unguided = stripGuidedSolution(proposedStem);
+    {
+      const afterCommonStem = String(proposedCommonStem ?? it.common_stem ?? '').trim().length > 0;
+      const unguided = stripGuidedSolution(proposedStem ?? curStemStr, { afterCommonStem });
       proposedStem = sameRenderedMath(unguided, curStemStr) ? null : unguided;
     }
     const proposedChoices = issueKind === 'data' ? normalizeProposedChoices(b.proposed_choices) : null;

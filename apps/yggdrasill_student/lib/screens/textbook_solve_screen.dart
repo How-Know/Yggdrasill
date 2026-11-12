@@ -1,16 +1,18 @@
 import 'dart:async';
 import 'dart:convert' show base64Encode;
 import 'dart:math' as math;
-import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:http/http.dart' as http;
 import 'package:pdfrx/pdfrx.dart';
 import 'package:yggdrasill_ui/yggdrasill_ui.dart';
 
+import '../services/apple_pencil_undo.dart';
 import '../services/handwriting_candidates.dart';
 import '../services/homework_session.dart';
 import '../services/student_api.dart';
@@ -19,6 +21,7 @@ import '../services/textbook_api.dart';
 import '../widgets/math_expression_editor.dart';
 import '../widgets/math_keypad.dart';
 import '../widgets/math_latex_view.dart';
+import '../widgets/pencil_ink_history.dart';
 import '../widgets/pencil_input_pad.dart';
 import '../widgets/solve_view_menu.dart';
 import '../widgets/student_back_button.dart';
@@ -94,6 +97,9 @@ class TextbookSolveScreen extends StatefulWidget {
   @override
   State<TextbookSolveScreen> createState() => _TextbookSolveScreenState();
 }
+
+/// 페이지 버튼 오른쪽, 뒤로가기 왼쪽, 채점 버튼 오른쪽이 공유하는 화면 끝 여백.
+const double _solveEdgeInset = 6;
 
 class _TextbookSolveScreenState extends State<TextbookSolveScreen>
     with WidgetsBindingObserver {
@@ -178,8 +184,14 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
   bool _grading = false;
   bool _treeOpen = false;
 
-  /// 상단 바(뒤로·교재명·페이지·단원) 스크롤 페이드. 아일랜드는 Host에 남음.
+  /// 상단 바 배경은 스크롤에 따라 옅어진다.
+  /// 뒤로가기·모음·페이지 버튼은 번호 목록 위에 그대로 남는다.
   double _titleOpacity = 1;
+
+  /// 첫 진입·위로 스크롤하면 교재명, 아래로 스크롤하면 문항번호.
+  bool _titleShowsBook = true;
+  double _titleScrollPixels = 0;
+  double _titleScrollAccum = 0;
   final ScrollController _answersScrollController = ScrollController();
 
   /// 번호 카드 목록에서 스크롤 0이 가리키는 문항.
@@ -230,6 +242,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
 
   @override
   void dispose() {
+    ApplePencilUndo.unbindErase(this);
     WidgetsBinding.instance.removeObserver(this);
     _problemViewRequestEpoch++;
     _answersScrollController.removeListener(_onAnswersScroll);
@@ -274,6 +287,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
       DeviceOrientation.portraitUp,
       DeviceOrientation.portraitDown,
     ]);
+    ApplePencilUndo.bindErase(owner: this, onErase: _eraseFromApplePencil);
     if (_isTimedTest) {
       _paneMode = _PaneMode.question;
       unawaited(_prepareTimedTest());
@@ -840,15 +854,42 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
   }
 
   void _updateTitleFromScroll(double pixels) {
-    final next =
+    final delta = pixels - _titleScrollPixels;
+    _titleScrollPixels = pixels;
+    final nextOpacity =
         (1 - pixels / StudentCollapsingTitlePage.fadeDistance).clamp(0.0, 1.0);
-    if ((next - _titleOpacity).abs() > 0.01) {
-      setState(() => _titleOpacity = next);
+    var showBook = _titleShowsBook;
+    if (pixels <= 2) {
+      _titleScrollAccum = 0;
+      showBook = true;
+    } else if (delta != 0) {
+      if (_titleScrollAccum != 0 && delta.sign != _titleScrollAccum.sign) {
+        _titleScrollAccum = 0;
+      }
+      _titleScrollAccum += delta;
+      // 방향이 조금 쌓여야 바뀐다. 맨 위 바운스는 교재명으로 둔다.
+      if (_titleScrollAccum >= 16) {
+        showBook = false;
+        _titleScrollAccum = 0;
+      } else if (_titleScrollAccum <= -16) {
+        showBook = true;
+        _titleScrollAccum = 0;
+      }
+    }
+    if ((nextOpacity - _titleOpacity).abs() > 0.01 ||
+        showBook != _titleShowsBook) {
+      setState(() {
+        _titleOpacity = nextOpacity;
+        _titleShowsBook = showBook;
+      });
     }
   }
 
   void _resetTitleCollapse() {
     _titleOpacity = 1;
+    _titleShowsBook = true;
+    _titleScrollPixels = 0;
+    _titleScrollAccum = 0;
     if (_answersScrollController.hasClients) {
       _answersScrollController.jumpTo(0);
     }
@@ -2394,19 +2435,30 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
     return screen / 3 + _kScratchTopShadow;
   }
 
-  void _toggleScratchPad() {
+  /// 두 손가락 위로 쓸기 — 닫혀 있으면 펼치고, 낮게 접혀 있으면 다시 크게 펼친다.
+  void _openScratchFromSwipe() {
     setState(() {
-      if (_scratchOpen) {
-        _scratchOpen = false;
+      final expanded = _scratchExpandedDefault(context);
+      final target =
+          _scratchRestoredHeight > 0 ? _scratchRestoredHeight : expanded;
+      if (!_scratchOpen) {
+        _scratchOpen = true;
+        _scratchCollapsed = false;
+        _scratchHeight = target;
+        _scratchRestoredHeight = _scratchHeight;
         return;
       }
-      final expanded = _scratchExpandedDefault(context);
-      _scratchOpen = true;
-      _scratchCollapsed = false;
-      _scratchHeight =
-          _scratchRestoredHeight > 0 ? _scratchRestoredHeight : expanded;
-      _scratchRestoredHeight = _scratchHeight;
+      if (_scratchCollapsed) {
+        _scratchCollapsed = false;
+        _scratchHeight = target;
+      }
     });
+  }
+
+  /// 두 손가락 아래로 쓸기 — 연습장을 화면 아래로 접어 닫는다.
+  void _closeScratchFromSwipe() {
+    if (!_scratchOpen) return;
+    setState(() => _scratchOpen = false);
   }
 
   void _onScratchHandleTap() {
@@ -2435,6 +2487,18 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
     });
   }
 
+  void _eraseFromApplePencil() {
+    final cropId = _selectedCropId;
+    if (cropId != null) {
+      for (final problem in _problems ?? const <PageProblem>[]) {
+        if (problem.cropId != cropId) continue;
+        if (_usesSelfCheckInput(problem)) return;
+        break;
+      }
+    }
+    _eraseCurrentInput();
+  }
+
   void _eraseCurrentInput() {
     final answerKey = _activeAnswerKey;
     if (answerKey == null || _results[answerKey] == true) return;
@@ -2455,28 +2519,6 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
         _setAnswer(answerKey, value);
         break;
     }
-  }
-
-  void _clearCurrentInput() {
-    // 연습장이 열려 있으면 FAB 모두지우기는 연습장 필기를 지운다.
-    if (_scratchOpen) {
-      _scratchKey.currentState?.clearStrokes();
-      return;
-    }
-    final answerKey = _activeAnswerKey;
-    if (answerKey == null || _results[answerKey] == true) return;
-    switch (_inputMode) {
-      case _InputMode.pencil:
-        _pencilKey.currentState?.clearStrokes();
-        break;
-      case _InputMode.editor:
-        _editorKey.currentState?.clearAll();
-        break;
-      case _InputMode.keyboard:
-        _keyboardController.clear();
-        break;
-    }
-    _setAnswer(answerKey, '');
   }
 
   // ------------------------------------------------------------- 신고·보류
@@ -2602,7 +2644,9 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
         unawaited(_handleExit());
       },
       child: Scaffold(
-        backgroundColor: context.yggSurfaceBase,
+        backgroundColor: _paneMode == _PaneMode.question
+            ? Colors.white
+            : context.yggSurfaceBase,
         body: Stack(
           children: [
             Positioned.fill(
@@ -2664,16 +2708,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
               top: 0,
               left: 0,
               right: 0,
-              child: IgnorePointer(
-                ignoring: _titleOpacity < 0.05,
-                child: Opacity(
-                  opacity: _titleOpacity,
-                  child: Transform.translate(
-                    offset: Offset(0, -(1 - _titleOpacity) * 12),
-                    child: _buildSolveTitleBar(theme),
-                  ),
-                ),
-              ),
+              child: _buildSolveTitleBar(theme),
             ),
             // 나가기 처리(잔여 답 채점·미수행 기록) 중 입력 차단.
             if (_exitFlushing)
@@ -2696,131 +2731,253 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
     );
   }
 
-  Widget _buildSolveTitleBar(ThemeData theme) {
+  /// 배경만 옅어진다. 제목 문구와 버튼은 그대로 남긴다.
+  Widget _fadeWithTitle(Widget child) {
+    return IgnorePointer(
+      ignoring: _titleOpacity < 0.05,
+      child: Opacity(
+        opacity: _titleOpacity,
+        child: Transform.translate(
+          offset: Offset(0, -(1 - _titleOpacity) * 12),
+          child: child,
+        ),
+      ),
+    );
+  }
+
+  PageProblem? _selectedProblem() {
+    final id = _selectedCropId;
+    final problems = _problems;
+    if (id == null || problems == null) return null;
+    for (final problem in problems) {
+      if (problem.cropId == id) return problem;
+    }
+    return null;
+  }
+
+  /// 지금 입력 중인 문항. 세트형은 선택된 파트까지 붙인다.
+  String _currentProblemHeading() {
+    if (_isTimedTest) return '제 ${_timedIndex + 1}문제';
+    final problem = _selectedProblem();
+    if (problem == null) return '';
+    final number = problem.problemNumber.trim();
+    if (number.isEmpty) return '';
+    final part = problem.hasParts ? _selectedPartKey?.trim() : null;
+    if (part == null || part.isEmpty) return '$number번';
+    return '$number번 $part';
+  }
+
+  /// 경로 라벨 `중단원 · 소단원`에서 소단원명만 꺼낸다.
+  String _smallUnitNameOf(String path) {
+    final trimmed = path.trim();
+    if (trimmed.isEmpty) return '';
+    final cut = trimmed.lastIndexOf(' · ');
+    if (cut < 0) return trimmed;
+    return trimmed.substring(cut + 3).trim();
+  }
+
+  /// 지금 푸는 문항이 속한 페이지. 이어 붙인 목록에서도 그 문항 페이지를 따른다.
+  ({TbPageStat page, String pathLabel})? _currentPageMeta() {
+    final id = _selectedCropId;
+    if (id != null) {
+      final tagged = _problemPageMeta[id];
+      if (tagged != null) return tagged;
+    }
     final page = _page;
-    final screenW = MediaQuery.sizeOf(context).width;
-    // 좁은 화면에서 교재명·페이지 경로가 밀리지 않도록 폭 제한.
-    final bookNameMaxW = (screenW * 0.28).clamp(96.0, 240.0);
-    final pageMetaMaxW = (screenW * 0.30).clamp(72.0, 220.0);
-    return Material(
-      color: context.yggSurfaceBase,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          StudentStatusIslandToolbarSlot(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                // 공용 타이틀과 동일하게 왼쪽 여백 24.
-                const SizedBox(width: 24),
-                StudentBackButton(
-                  onPressed: () => unawaited(_handleExit()),
-                ),
-                const SizedBox(width: 12),
-                ConstrainedBox(
-                  constraints: BoxConstraints(maxWidth: bookNameMaxW),
-                  child: Text(
-                    _isTimedTest
-                        ? (widget.timedTest!.group.title.isEmpty
-                            ? '시간제한 테스트'
-                            : widget.timedTest!.group.title)
-                        : widget.book.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.headlineMedium?.copyWith(
-                      fontSize: StudentPageTitle.fontSize,
-                      fontWeight: FontWeight.w700,
-                      height: 1.15,
-                    ),
-                  ),
-                ),
-                const Spacer(),
-                if (_isTimedTest)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 12),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Text(
-                          '제 ${_timedIndex + 1}문제',
-                          style: theme.textTheme.titleSmall?.copyWith(
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                        Text(
-                          '남은 시간 $_timedClockLabel',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: _timedRemainingSeconds <= 60
-                                ? Colors.red
-                                : null,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ],
-                    ),
-                  )
-                else if (page != null)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 6),
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(maxWidth: pageMetaMaxW),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.end,
+    if (page == null) return null;
+    return (page: page, pathLabel: _pagePathLabel);
+  }
+
+  String _bookHeading() {
+    if (_isTimedTest) {
+      final title = widget.timedTest!.group.title.trim();
+      return title.isEmpty ? '시간제한 테스트' : title;
+    }
+    return widget.book.name;
+  }
+
+  Widget _buildSolveHeading(ThemeData theme) {
+    final problem = _currentProblemHeading();
+    final showBook = _paneMode != _PaneMode.question &&
+        (_titleShowsBook || problem.isEmpty);
+    final label = showBook
+        ? _bookHeading()
+        : (problem.isEmpty ? _bookHeading() : problem);
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 200),
+      switchInCurve: Curves.easeOut,
+      switchOutCurve: Curves.easeIn,
+      layoutBuilder: (currentChild, previousChildren) {
+        return Stack(
+          alignment: Alignment.centerLeft,
+          children: [
+            ...previousChildren,
+            if (currentChild != null) currentChild,
+          ],
+        );
+      },
+      child: Text(
+        label,
+        key: ValueKey(showBook ? 'book:$label' : 'problem:$label'),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: theme.textTheme.headlineMedium?.copyWith(
+          fontSize: StudentPageTitle.fontSize,
+          fontWeight: FontWeight.w700,
+          height: 1.15,
+        ),
+      ),
+    );
+  }
+
+  /// 모음·페이지 버튼 바로 왼쪽. 페이지 번호와 소단원명을 오른쪽 정렬로 붙인다.
+  Widget _buildPageMeta(ThemeData theme) {
+    final meta = _currentPageMeta();
+    if (meta == null) return const SizedBox.shrink();
+    final page = meta.page;
+    final small = _smallUnitNameOf(meta.pathLabel);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Text(
+          'p.${page.shownPage}',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          textAlign: TextAlign.end,
+          style: theme.textTheme.titleSmall?.copyWith(
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        if (small.isNotEmpty)
+          Text(
+            small,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.end,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.hintColor,
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildSolveTitleBar(ThemeData theme) {
+    // 상태 아일랜드는 이 화면 위에 가운데로 그려진다.
+    // 가운데 폭을 비워 두어야 모음·페이지 버튼이 아일랜드 아래로 들어가지 않는다.
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: _fadeWithTitle(
+            ColoredBox(
+              color: _paneMode == _PaneMode.question
+                  ? Colors.white
+                  : context.yggSurfaceBase,
+            ),
+          ),
+        ),
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            StudentStatusIslandToolbarSlot(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Expanded(
+                    child: Padding(
+                      // 페이지 버튼 오른쪽과 같은 화면 끝 여백.
+                      padding: const EdgeInsets.only(
+                        left: _solveEdgeInset,
+                        right: 12,
+                      ),
+                      child: Row(
                         children: [
-                          Text(
-                            'p.${page.shownPage}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: theme.textTheme.titleSmall?.copyWith(
-                              fontWeight: FontWeight.w800,
-                            ),
+                          StudentBackButton(
+                            onPressed: () => unawaited(_handleExit()),
                           ),
-                          Text(
-                            _pagePathLabel,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.hintColor,
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: IgnorePointer(
+                              child: _buildSolveHeading(theme),
                             ),
                           ),
                         ],
                       ),
                     ),
                   ),
-                if (!_isTimedTest)
-                  SolidCapsuleActionBar(
-                    children: [
-                      SolveViewMenuButton(
-                        selected: switch (_paneMode) {
-                          _PaneMode.answers => SolveViewKind.numbers,
-                          _PaneMode.question => SolveViewKind.question,
-                          _PaneMode.body => SolveViewKind.original,
-                        },
-                        onSelected: (kind) => _setPaneMode(
-                          switch (kind) {
-                            SolveViewKind.numbers => _PaneMode.answers,
-                            SolveViewKind.question => _PaneMode.question,
-                            SolveViewKind.original => _PaneMode.body,
-                          },
-                        ),
-                      ),
-                      SolidCapsuleActionButton(
-                        tooltip: '소단원·페이지 선택',
-                        icon: Icons.segment_rounded,
-                        selected: _treeOpen,
-                        onPressed: () => _setTreeOpen(!_treeOpen),
-                      ),
-                    ],
+                  const IgnorePointer(
+                    child: SizedBox(width: StudentStatusIsland.minWidth),
                   ),
-                const SizedBox(width: 6),
-              ],
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.only(
+                        left: 12,
+                        right: _solveEdgeInset,
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          if (_isTimedTest)
+                            _fadeWithTitle(
+                              Text(
+                                '남은 시간 $_timedClockLabel',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.titleSmall?.copyWith(
+                                  color: _timedRemainingSeconds <= 60
+                                      ? Colors.red
+                                      : null,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            )
+                          else ...[
+                            Flexible(
+                              child: IgnorePointer(
+                                child: _buildPageMeta(theme),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            SolidCapsuleActionBar(
+                              children: [
+                                SolveViewMenuButton(
+                                  selected: switch (_paneMode) {
+                                    _PaneMode.answers => SolveViewKind.numbers,
+                                    _PaneMode.question =>
+                                      SolveViewKind.question,
+                                    _PaneMode.body => SolveViewKind.original,
+                                  },
+                                  onSelected: (kind) => _setPaneMode(
+                                    switch (kind) {
+                                      SolveViewKind.numbers =>
+                                        _PaneMode.answers,
+                                      SolveViewKind.question =>
+                                        _PaneMode.question,
+                                      SolveViewKind.original => _PaneMode.body,
+                                    },
+                                  ),
+                                ),
+                                SolidCapsuleActionButton(
+                                  tooltip: '소단원·페이지 선택',
+                                  icon: Icons.segment_rounded,
+                                  selected: _treeOpen,
+                                  onPressed: () => _setTreeOpen(!_treeOpen),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(height: 8),
-        ],
-      ),
+            const IgnorePointer(child: SizedBox(height: 8)),
+          ],
+        ),
+      ],
     );
   }
 
@@ -3112,6 +3269,8 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
       color: Colors.white,
       child: _TwoFingerHorizontalSwipe(
         onSwipe: (delta) => unawaited(_moveProblem(delta)),
+        onSwipeUp: _openScratchFromSwipe,
+        onSwipeDown: _closeScratchFromSwipe,
         child: selectedProblem == null
             ? const _EmptyInputCard(message: '문항을 선택해 주세요.')
             : _isOnHold(selectedProblem.cropId)
@@ -3180,12 +3339,15 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
                 ),
               ],
             ),
-          _PaneMode.question => stackedContentPane(
-              _buildQuestionPane(
+          _PaneMode.question => _TwoFingerHorizontalSwipe(
+              onSwipe: (delta) => unawaited(_moveProblem(delta)),
+              onSwipeUp: _openScratchFromSwipe,
+              onSwipeDown: _closeScratchFromSwipe,
+              child: _buildQuestionPane(
                 theme,
                 selectedProblem,
                 topInset: topInset,
-                scrollUnderInset: inputH + dividerH,
+                bottomInset: bottomInset,
               ),
             ),
           _PaneMode.body => stackedContentPane(
@@ -3201,15 +3363,6 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
         return Stack(
           children: [
             body,
-            if (selectedProblem != null &&
-                !selectedProblem.isObjective &&
-                !_usesSelfCheckInput(selectedProblem) &&
-                !_isOnHold(selectedProblem.cropId))
-              Positioned(
-                left: 16,
-                bottom: bottomInset / 2 + 6,
-                child: _buildInputModeButton(),
-              ),
             // 연습장은 FAB 아래·콘텐츠 위에 깔고, FAB은 위에 남겨 노트로 닫을 수 있게 한다.
             AnimatedPositioned(
               duration: const Duration(milliseconds: 280),
@@ -3220,41 +3373,36 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
               height: _scratchOpen ? _scratchHeight : 0,
               child: IgnorePointer(
                 ignoring: !_scratchOpen,
-                child: _ScratchPracticeSheet(
-                  key: _scratchKey,
-                  onHandleTap: _onScratchHandleTap,
-                  onHeightDrag: _onScratchHeightDrag,
-                  onClose: () => setState(() => _scratchOpen = false),
+                child: _TwoFingerHorizontalSwipe(
+                  onSwipe: (delta) => unawaited(_moveProblem(delta)),
+                  onSwipeUp: _openScratchFromSwipe,
+                  onSwipeDown: _closeScratchFromSwipe,
+                  child: _ScratchPracticeSheet(
+                    key: _scratchKey,
+                    onHandleTap: _onScratchHandleTap,
+                    onHeightDrag: _onScratchHeightDrag,
+                    onClose: () => setState(() => _scratchOpen = false),
+                  ),
                 ),
               ),
             ),
+            if (_paneMode == _PaneMode.question && selectedProblem != null)
+              Positioned(
+                left: _solveEdgeInset,
+                right: _solveEdgeInset + 132,
+                bottom: bottomInset / 2 + 6,
+                height: 52,
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: _buildQuestionBottomControls(theme, selectedProblem),
+                ),
+              ),
             Positioned(
-              right: 16,
+              right: _solveEdgeInset,
               bottom: bottomInset / 2 + 6,
               child: _TextbookSolveFabBar(
                 pendingCount: _pendingGradeCount,
                 grading: _grading,
-                canEdit: selectedProblem != null &&
-                    !_usesSelfCheckInput(selectedProblem) &&
-                    _results[_answerKeyOf(
-                          selectedProblem.cropId,
-                          selectedProblem.hasParts ? _selectedPartKey : null,
-                        )] !=
-                        true,
-                hasAnswer: selectedProblem != null &&
-                    (_answers[_answerKeyOf(
-                          selectedProblem.cropId,
-                          selectedProblem.hasParts ? _selectedPartKey : null,
-                        )]
-                            ?.isNotEmpty ??
-                        false),
-                scratchOpen: _scratchOpen,
-                onPrevious:
-                    _isTimedTest ? null : () => unawaited(_moveProblem(-1)),
-                onNext: () => unawaited(_moveProblem(1)),
-                onErase: _eraseCurrentInput,
-                onClear: _clearCurrentInput,
-                onNote: _toggleScratchPad,
                 onGrade: _grade,
                 gradeLabel: _isTimedTest ? '제출' : '채점',
               ),
@@ -3283,15 +3431,167 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
   }
 
   Widget _buildInputModeButton() {
-    final (icon, tooltip) = switch (_inputMode) {
-      _InputMode.pencil => (Icons.edit_rounded, '수식 입력으로 전환'),
-      _InputMode.editor => (Icons.functions_rounded, '키보드 입력으로 전환'),
-      _InputMode.keyboard => (Icons.keyboard_outlined, '펜슬 입력으로 전환'),
+    final (svg, tooltip) = switch (_inputMode) {
+      _InputMode.pencil => (_pencilModeSvg, '수식 입력으로 전환'),
+      _InputMode.editor => (_formulaModeSvg, '키보드 입력으로 전환'),
+      _InputMode.keyboard => (_keyboardModeSvg, '펜슬 입력으로 전환'),
     };
-    return _SolveGlassCircleButton(
+    return _SolveHeaderIconButton(
       tooltip: tooltip,
-      icon: icon,
+      svg: svg,
       onPressed: _cycleInputMode,
+    );
+  }
+
+  Widget _buildReportIconButton(PageProblem problem) {
+    return _SolveHeaderIconButton(
+      tooltip: '신고',
+      svg: _reportFlagSvg,
+      onPressed: () => _reportProblem(problem),
+    );
+  }
+
+  Widget _buildQuestionBottomControls(ThemeData theme, PageProblem problem) {
+    const accent = YggGlassTokens.confirmActionColor;
+    const wrongColor = Color(0xFFE57373);
+    const cautionColor = Color(0xFFE0A63C);
+    final held = _isOnHold(problem.cropId);
+    final partKey = problem.hasParts ? _selectedPartKey : null;
+    final answerKey = _answerKeyOf(problem.cropId, partKey);
+    final answer = _answers[answerKey] ?? '';
+    final result = _results[answerKey];
+    final attemptCount = _attemptCounts[problem.cropId] ?? 0;
+    final usesSelfCheck = _usesSelfCheckInput(problem);
+    final graded = result != null &&
+        (_selfGraded.contains(answerKey) ||
+            (usesSelfCheck && attemptCount > 0) ||
+            _gradedAnswers[answerKey] == answer);
+    final revisionColor = attemptCount >= 5
+        ? wrongColor
+        : attemptCount >= 3
+            ? cautionColor
+            : accent;
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        _buildReportIconButton(problem),
+        if (!held && !problem.isObjective && !usesSelfCheck) ...[
+          const SizedBox(width: 2),
+          _buildInputModeButton(),
+        ],
+        if (held) ...[
+          const SizedBox(width: 8),
+          IgnorePointer(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+              decoration: BoxDecoration(
+                color: cautionColor.withValues(alpha: 0.13),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: const Text(
+                '검토 중',
+                style: TextStyle(
+                  color: cautionColor,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+          ),
+        ] else ...[
+          if (!problem.hasParts && problem.isSelfCheck) ...[
+            const SizedBox(width: 8),
+            OutlinedButton.icon(
+              onPressed: result == true ? null : () => _selfCheck(problem),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: graded ? theme.hintColor : accent,
+                side: BorderSide(
+                  color: (graded ? theme.hintColor : accent)
+                      .withValues(alpha: 0.5),
+                ),
+              ),
+              icon: const Icon(Icons.visibility_outlined, size: 18),
+              label: Text(result == true
+                  ? '완료'
+                  : graded
+                      ? '다시 확인'
+                      : '정답 확인'),
+            ),
+          ],
+          if (_isRecognizing(answerKey)) ...[
+            const SizedBox(width: 10),
+            Flexible(
+              child: IgnorePointer(
+                child: _recognizingView(
+                  fontSize: 17,
+                  color: Colors.black,
+                ),
+              ),
+            ),
+          ] else if (!problem.isObjective && answer.isNotEmpty) ...[
+            const SizedBox(width: 10),
+            Flexible(
+              child: IgnorePointer(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: _answerMathView(
+                    answerKey,
+                    answer,
+                    fontSize: 19,
+                    color: Colors.black,
+                  ),
+                ),
+              ),
+            ),
+          ],
+          if (graded && result && attemptCount > 1) ...[
+            const SizedBox(width: 8),
+            IgnorePointer(
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+                decoration: BoxDecoration(
+                  color: revisionColor.withValues(alpha: 0.13),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  '수정 · $attemptCount회',
+                  style: TextStyle(
+                    color: revisionColor,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ),
+          ] else if (graded && !result) ...[
+            const SizedBox(width: 8),
+            const IgnorePointer(
+              child: Text(
+                '다시 풀기',
+                style: TextStyle(
+                  color: wrongColor,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+          ],
+          if (graded) ...[
+            const SizedBox(width: 6),
+            IgnorePointer(
+              child: Icon(
+                result ? Icons.circle_outlined : Icons.close_rounded,
+                size: 26,
+                color: result ? accent : wrongColor,
+              ),
+            ),
+          ],
+        ],
+      ],
     );
   }
 
@@ -3299,50 +3599,259 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
     ThemeData theme,
     PageProblem? problem, {
     required double topInset,
-    required double scrollUnderInset,
+    required double bottomInset,
   }) {
     if (problem == null) {
-      return Padding(
-        padding: EdgeInsets.only(top: topInset),
-        child: const Center(child: Text('표시할 문항이 없어요.')),
+      return ColoredBox(
+        color: Colors.white,
+        child: Padding(
+          padding: EdgeInsets.only(top: topInset),
+          child: const Center(child: Text('표시할 문항이 없어요.')),
+        ),
       );
     }
-    // 시트 높이는 PDF 콘텐츠에 맞추고, 길면 입력 시트 아래로 같이 스크롤.
-    return ScrollConfiguration(
-      behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
-      child: SingleChildScrollView(
-        controller: _questionScrollController,
-        // 위는 타이틀, 아래는 입력 시트만큼 비운다.
-        padding: EdgeInsets.fromLTRB(
-          24,
-          _answerListTop(topInset),
-          24,
-          scrollUnderInset + 16,
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _problemRow(
-              theme,
-              problem,
-              showObjectiveButtons: false,
-            ),
-            const SizedBox(height: 12),
-            DecoratedBox(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius:
-                    BorderRadius.circular(YggGroupedLayoutTokens.cardRadius),
-                border: Border.all(color: const Color(0x1F000000)),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return ColoredBox(
+          color: Colors.white,
+          child: ScrollConfiguration(
+            behavior:
+                ScrollConfiguration.of(context).copyWith(scrollbars: false),
+            child: SingleChildScrollView(
+              controller: _questionScrollController,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  minWidth: constraints.maxWidth,
+                  minHeight: constraints.maxHeight,
+                ),
+                child: _buildQuestionSolveCard(
+                  theme,
+                  problem,
+                  topInset: topInset,
+                  bottomInset: bottomInset,
+                  viewportHeight: constraints.maxHeight,
+                ),
               ),
-              child: ClipRRect(
-                borderRadius:
-                    BorderRadius.circular(YggGroupedLayoutTokens.cardRadius),
-                child: _buildProblemPdf(theme),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildQuestionSolveCard(
+    ThemeData theme,
+    PageProblem problem, {
+    required double topInset,
+    required double bottomInset,
+    required double viewportHeight,
+  }) {
+    const cautionColor = Color(0xFFE0A63C);
+    final held = _isOnHold(problem.cropId);
+    final partKey = problem.hasParts ? _selectedPartKey : null;
+    final answerKey = _answerKeyOf(problem.cropId, partKey);
+    final answer = _answers[answerKey] ?? '';
+    final result = _results[answerKey];
+    final usesSelfCheck = _usesSelfCheckInput(problem);
+    final canInputSubjective =
+        !held && !problem.isObjective && !usesSelfCheck && result != true;
+    final canInputObjective = !held && problem.isObjective && result != true;
+    final selectedObjectives = !problem.isObjective
+        ? const <int>{}
+        : (_answers[problem.cropId] ?? '')
+            .split(',')
+            .map((s) => int.tryParse(s.trim()))
+            .whereType<int>()
+            .toSet();
+
+    final pdfContent = _buildProblemPdf(
+      theme,
+      isObjective: problem.isObjective,
+      selectedChoices: selectedObjectives,
+      onToggleChoice: canInputObjective
+          ? (choice) => _toggleObjective(problem.cropId, choice)
+          : null,
+      fallbackChoiceSelector: problem.isObjective
+          ? Padding(
+              padding: const EdgeInsets.fromLTRB(18, 6, 18, 16),
+              child: Center(
+                child: Transform.translate(
+                  offset: Offset.zero,
+                  child: _objectiveButtons(theme, problem, translateY: 0),
+                ),
+              ),
+            )
+          : null,
+    );
+
+    final noteFlags = (!held && result != null)
+        ? (_flags[answerKey] ?? const <String>[])
+            .where(_flagMessages.containsKey)
+            .toList(growable: false)
+        : const <String>[];
+
+    final inputTheme = ThemeData.light(useMaterial3: true).copyWith(
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: YggGlassTokens.confirmActionColor,
+        brightness: Brightness.light,
+      ),
+      textTheme: theme.textTheme.apply(
+        bodyColor: const Color(0xFF17201F),
+        displayColor: const Color(0xFF17201F),
+      ),
+    );
+
+    final topPad = _answerListTop(topInset);
+    final bottomPad = bottomInset + 84;
+    final hasTopRows = noteFlags.isNotEmpty || (problem.hasParts && !held);
+    final canvasMinHeight = math.max(
+      240.0,
+      viewportHeight - (hasTopRows ? topPad + 120 : 0),
+    );
+
+    Widget pdfSection = Padding(
+      padding: EdgeInsets.fromLTRB(
+        24,
+        hasTopRows ? 12 : topPad,
+        24,
+        bottomPad,
+      ),
+      child: pdfContent,
+    );
+
+    if (canInputSubjective && _inputMode == _InputMode.pencil) {
+      pdfSection = Stack(
+        children: [
+          ConstrainedBox(
+            constraints: BoxConstraints(
+              minWidth: double.infinity,
+              minHeight: canvasMinHeight,
+            ),
+            child: pdfSection,
+          ),
+          Positioned.fill(
+            child: LayoutBuilder(
+              builder: (context, constraints) => PencilInputPad(
+                key: _pencilKey,
+                height: constraints.maxHeight,
+                showControls: false,
+                showEmptyHint: false,
+                embedded: true,
+                stylusOnly: true,
+                candidateSelector: (candidates) =>
+                    pickPlausibleHandwritingCandidate(
+                  candidates,
+                  answerKind: problem.answerKind,
+                ),
+                remoteRecognizer: (png) =>
+                    TextbookApi.instance.recognizeHandwriting(
+                  imageBase64: base64Encode(png),
+                  answerKind: problem.answerKind,
+                ),
+                onSnapshot: (payload) {
+                  _handwritingSnapshots[problem.cropId] = <String, dynamic>{
+                    ...payload,
+                    'input_mode': _InputMode.pencil.name,
+                  };
+                },
+                onRecognizingChanged: (busy) =>
+                    _setRecognizing(answerKey, busy),
+                onRecognized: (text, {sourceLatex}) => _setAnswer(
+                  answerKey,
+                  text,
+                  displayLatex: sourceLatex,
+                ),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    return ColoredBox(
+      color: Colors.white,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (hasTopRows) SizedBox(height: topPad),
+          for (final flag in noteFlags)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+              child: _flagNote(theme, flag, problem, color: cautionColor),
+            ),
+          if (problem.hasParts && !held) ...[
+            for (final part in problem.setParts)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                child: _setPartRow(theme, problem, part),
+              ),
+            const SizedBox(height: 4),
+          ],
+          pdfSection,
+          if (canInputSubjective && _inputMode == _InputMode.editor) ...[
+            Divider(
+              height: 1,
+              thickness: 0.5,
+              color: theme.dividerColor.withValues(alpha: 0.25),
+            ),
+            Theme(
+              data: inputTheme,
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(24, 16, 24, bottomPad),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    MathExpressionEditor(
+                      key: _editorKey,
+                      initialLinear: answer,
+                      onChanged: (linear) => _setAnswer(answerKey, linear),
+                    ),
+                    const SizedBox(height: 8),
+                    MathKeypad(
+                      onInsert: (t) => _editorKey.currentState?.insertText(t),
+                      onFraction: () =>
+                          _editorKey.currentState?.insertFraction(),
+                      onSqrt: () => _editorKey.currentState?.insertSqrt(),
+                      onNthRoot: () => _editorKey.currentState?.insertNthRoot(),
+                      onPower: () => _editorKey.currentState?.insertPower(),
+                      onRepeatingDot: () =>
+                          _editorKey.currentState?.insertRepeatingDot(),
+                      onBackspace: () => _editorKey.currentState?.backspace(),
+                      onClear: () => _editorKey.currentState?.clearAll(),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ] else if (canInputSubjective &&
+              _inputMode == _InputMode.keyboard) ...[
+            Divider(
+              height: 1,
+              thickness: 0.5,
+              color: theme.dividerColor.withValues(alpha: 0.25),
+            ),
+            Theme(
+              data: inputTheme,
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(24, 12, 24, bottomPad),
+                child: TextField(
+                  controller: _keyboardController,
+                  autofocus: true,
+                  minLines: 2,
+                  maxLines: 4,
+                  onChanged: (text) => _setAnswer(answerKey, text),
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    color: const Color(0xFF17201F),
+                  ),
+                  decoration: const InputDecoration(
+                    hintText: '한글 답(예: 제2사분면, 유한소수)을 입력해 주세요',
+                    border: InputBorder.none,
+                  ),
+                ),
               ),
             ),
           ],
-        ),
+        ],
       ),
     );
   }
@@ -3470,7 +3979,13 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
     );
   }
 
-  Widget _buildProblemPdf(ThemeData theme) {
+  Widget _buildProblemPdf(
+    ThemeData theme, {
+    bool isObjective = false,
+    Set<int> selectedChoices = const <int>{},
+    ValueChanged<int>? onToggleChoice,
+    Widget? fallbackChoiceSelector,
+  }) {
     if (_loadingProblemView) {
       return const SizedBox(
         height: 160,
@@ -3479,10 +3994,16 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
     }
     final error = _problemViewError;
     if (error != null) {
-      return _problemViewMessage(
-        theme,
-        _problemViewErrorMessage(error),
-        icon: Icons.error_outline_rounded,
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _problemViewMessage(
+            theme,
+            _problemViewErrorMessage(error),
+            icon: Icons.error_outline_rounded,
+          ),
+          if (fallbackChoiceSelector != null) fallbackChoiceSelector,
+        ],
       );
     }
     final view = _problemView;
@@ -3490,20 +4011,32 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
       return _problemViewMessage(theme, '문항을 선택해 주세요.');
     }
     if (view.isQueued) {
-      return _problemViewMessage(
-        theme,
-        '문항 PDF를 준비하고 있어요.\n잠시 후 문항을 다시 선택해 주세요.',
-        icon: Icons.hourglass_top_rounded,
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _problemViewMessage(
+            theme,
+            '문항 PDF를 준비하고 있어요.\n잠시 후 문항을 다시 선택해 주세요.',
+            icon: Icons.hourglass_top_rounded,
+          ),
+          if (fallbackChoiceSelector != null) fallbackChoiceSelector,
+        ],
       );
     }
     final url =
         view.isFallback ? (view.bodyPdfUrl ?? view.pdfUrl) : view.pdfUrl;
     final uri = url == null ? null : Uri.tryParse(url);
     if (uri == null) {
-      return _problemViewMessage(
-        theme,
-        view.isFallback ? '원본 교재 PDF를 열 수 없어요.' : '준비된 문항 PDF를 열 수 없어요.',
-        icon: Icons.error_outline_rounded,
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _problemViewMessage(
+            theme,
+            view.isFallback ? '원본 교재 PDF를 열 수 없어요.' : '준비된 문항 PDF를 열 수 없어요.',
+            icon: Icons.error_outline_rounded,
+          ),
+          if (fallbackChoiceSelector != null) fallbackChoiceSelector,
+        ],
       );
     }
     return _ProblemPdfView(
@@ -3513,6 +4046,10 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
       uri: uri,
       fallbackPage: view.isFallback ? view.rawPage : null,
       itemRegion1k: view.isFallback ? view.itemRegion1k : null,
+      isObjective: isObjective,
+      selectedChoices: selectedChoices,
+      onToggleChoice: onToggleChoice,
+      fallbackChoiceSelector: fallbackChoiceSelector,
     );
   }
 
@@ -4287,7 +4824,11 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
     );
   }
 
-  Widget _objectiveButtons(ThemeData theme, PageProblem problem) {
+  Widget _objectiveButtons(
+    ThemeData theme,
+    PageProblem problem, {
+    double translateY = -12,
+  }) {
     final answer = _answers[problem.cropId] ?? '';
     final selected = answer
         .split(',')
@@ -4304,7 +4845,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
     final digitSize = diameter * 0.46;
     // 문항/정답 모드 공통: 살짝 위로.
     return Transform.translate(
-      offset: const Offset(0, -12),
+      offset: Offset(0, translateY),
       child: Wrap(
         spacing: 8,
         children: [
@@ -4395,37 +4936,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
                     ),
                   ),
                 ),
-                const SizedBox(width: 12),
-                TextButton(
-                  onPressed: () => _reportProblem(problem),
-                  style: TextButton.styleFrom(
-                    foregroundColor: Colors.black,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 13,
-                      vertical: 8,
-                    ),
-                    minimumSize: Size.zero,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        Icons.flag_outlined,
-                        size: 18,
-                        color: Colors.black,
-                      ),
-                      SizedBox(width: 6),
-                      Text(
-                        '신고',
-                        style: TextStyle(
-                          color: Colors.black,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+                _buildReportIconButton(problem),
               ],
             ),
           ),
@@ -4593,37 +5104,9 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
                       ),
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  TextButton(
-                    onPressed: () => _reportProblem(problem),
-                    style: TextButton.styleFrom(
-                      foregroundColor: Colors.black,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 13,
-                        vertical: 8,
-                      ),
-                      minimumSize: Size.zero,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.flag_outlined,
-                          size: 18,
-                          color: Colors.black,
-                        ),
-                        SizedBox(width: 6),
-                        Text(
-                          '신고',
-                          style: TextStyle(
-                            color: Colors.black,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+                  _buildReportIconButton(problem),
+                  const SizedBox(width: 2),
+                  _buildInputModeButton(),
                 ],
               ),
             ),
@@ -4668,11 +5151,19 @@ class _ProblemPdfView extends StatelessWidget {
     required this.uri,
     this.fallbackPage,
     this.itemRegion1k,
+    this.isObjective = false,
+    this.selectedChoices = const <int>{},
+    this.onToggleChoice,
+    this.fallbackChoiceSelector,
   });
 
   final Uri uri;
   final int? fallbackPage;
   final List<int>? itemRegion1k;
+  final bool isObjective;
+  final Set<int> selectedChoices;
+  final ValueChanged<int>? onToggleChoice;
+  final Widget? fallbackChoiceSelector;
 
   @override
   Widget build(BuildContext context) {
@@ -4681,11 +5172,21 @@ class _ProblemPdfView extends StatelessWidget {
         uri: uri,
         pageNumber: fallbackPage!,
         itemRegion1k: itemRegion1k,
+        isObjective: isObjective,
+        selectedChoices: selectedChoices,
+        onToggleChoice: onToggleChoice,
+        fallbackChoiceSelector: fallbackChoiceSelector,
       );
     }
     // 워커 산출물은 8절 본문 한 줄과 같은 폭의 PDF다. 화면에서는 기기
     // 너비 비율이 아니라 고정된 물리 폭으로 그린다.
-    return _RenderedProblemPdfPage(uri: uri);
+    return _RenderedProblemPdfPage(
+      uri: uri,
+      isObjective: isObjective,
+      selectedChoices: selectedChoices,
+      onToggleChoice: onToggleChoice,
+      fallbackChoiceSelector: fallbackChoiceSelector,
+    );
   }
 }
 
@@ -4776,9 +5277,19 @@ double _questionViewLogicalWidth(BuildContext context, double maxWidth) {
 }
 
 class _RenderedProblemPdfPage extends StatefulWidget {
-  const _RenderedProblemPdfPage({required this.uri});
+  const _RenderedProblemPdfPage({
+    required this.uri,
+    this.isObjective = false,
+    this.selectedChoices = const <int>{},
+    this.onToggleChoice,
+    this.fallbackChoiceSelector,
+  });
 
   final Uri uri;
+  final bool isObjective;
+  final Set<int> selectedChoices;
+  final ValueChanged<int>? onToggleChoice;
+  final Widget? fallbackChoiceSelector;
 
   @override
   State<_RenderedProblemPdfPage> createState() =>
@@ -4787,6 +5298,8 @@ class _RenderedProblemPdfPage extends StatefulWidget {
 
 class _RenderedProblemPdfPageState extends State<_RenderedProblemPdfPage> {
   PdfDocument? _document;
+  Map<int, PdfRect> _choiceMarkerRects = const <int, PdfRect>{};
+  bool _choiceTextLoaded = false;
   Object? _error;
 
   @override
@@ -4802,7 +5315,24 @@ class _RenderedProblemPdfPageState extends State<_RenderedProblemPdfPage> {
         await document.dispose();
         return;
       }
-      setState(() => _document = document);
+      var markerRects = const <int, PdfRect>{};
+      if (document.pages.isNotEmpty) {
+        try {
+          final pageText = await document.pages.first.loadText();
+          markerRects = _extractObjectiveChoiceRects(pageText);
+        } catch (_) {
+          // 텍스트 레이어 추출 실패 시 폴백 버튼으로 내려간다.
+        }
+      }
+      if (!mounted) {
+        await document.dispose();
+        return;
+      }
+      setState(() {
+        _document = document;
+        _choiceMarkerRects = markerRects;
+        _choiceTextLoaded = true;
+      });
     } catch (error) {
       if (mounted) setState(() => _error = error);
     }
@@ -4818,9 +5348,16 @@ class _RenderedProblemPdfPageState extends State<_RenderedProblemPdfPage> {
   @override
   Widget build(BuildContext context) {
     if (_error != null) {
-      return const Padding(
-        padding: EdgeInsets.all(20),
-        child: Text('문항 PDF를 표시할 수 없어요.', textAlign: TextAlign.center),
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Padding(
+            padding: EdgeInsets.all(20),
+            child: Text('문항 PDF를 표시할 수 없어요.', textAlign: TextAlign.center),
+          ),
+          if (widget.fallbackChoiceSelector != null)
+            widget.fallbackChoiceSelector!,
+        ],
       );
     }
     final document = _document;
@@ -4831,8 +5368,9 @@ class _RenderedProblemPdfPageState extends State<_RenderedProblemPdfPage> {
       );
     }
     final page = document.pages.first;
+    final hasInlineChoices = widget.isObjective && _choiceMarkerRects.isNotEmpty;
     const inset = 10.0;
-    return Padding(
+    final pdfWidget = Padding(
       padding: const EdgeInsets.all(inset),
       child: LayoutBuilder(
         builder: (context, constraints) {
@@ -4842,6 +5380,7 @@ class _RenderedProblemPdfPageState extends State<_RenderedProblemPdfPage> {
           // 창에서만 안쪽 너비에 맞춘다.
           final width = _questionViewLogicalWidth(context, constraints.maxWidth);
           final height = width * (page.height / page.width);
+          final pageSize = Size(width, height);
           return SizedBox(
             width: constraints.maxWidth,
             height: height,
@@ -4850,10 +5389,31 @@ class _RenderedProblemPdfPageState extends State<_RenderedProblemPdfPage> {
               child: SizedBox(
                 width: width,
                 height: height,
-                child: PdfPageView(
-                  document: document,
-                  pageNumber: 1,
-                  decoration: const BoxDecoration(color: Colors.white),
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Positioned.fill(
+                      child: PdfPageView(
+                        document: document,
+                        pageNumber: 1,
+                        decoration: const BoxDecoration(color: Colors.white),
+                      ),
+                    ),
+                    if (hasInlineChoices)
+                      Positioned.fill(
+                        child: _ObjectivePdfChoiceOverlay(
+                          choiceRects: <int, Rect>{
+                            for (final entry in _choiceMarkerRects.entries)
+                              entry.key: entry.value.toRect(
+                                page: page,
+                                scaledPageSize: pageSize,
+                              ),
+                          },
+                          selectedChoices: widget.selectedChoices,
+                          onToggleChoice: widget.onToggleChoice,
+                        ),
+                      ),
+                  ],
                 ),
               ),
             ),
@@ -4861,6 +5421,278 @@ class _RenderedProblemPdfPageState extends State<_RenderedProblemPdfPage> {
         },
       ),
     );
+    if (widget.isObjective &&
+        _choiceTextLoaded &&
+        !hasInlineChoices &&
+        widget.fallbackChoiceSelector != null) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          pdfWidget,
+          widget.fallbackChoiceSelector!,
+        ],
+      );
+    }
+    return pdfWidget;
+  }
+}
+
+/// 단일 문항 PDF의 텍스트 레이어에서 객관식 선지 번호 ①~⑤의 위치를 찾는다.
+///
+/// 발문에 조건 ①, ② 등이 나올 수 있으므로 마지막으로 등장하는 각 번호를
+/// 선지 라벨로 삼는다. 최소 4개 이상 잡혔을 때만 인라인 체크 대상로 쓴다.
+Map<int, PdfRect> _extractObjectiveChoiceRects(PdfPageText pageText) {
+  const circled = <String, int>{
+    '①': 1,
+    '②': 2,
+    '③': 3,
+    '④': 4,
+    '⑤': 5,
+    '⑴': 1,
+    '⑵': 2,
+    '⑶': 3,
+    '⑷': 4,
+    '⑸': 5,
+  };
+  final found = <int, PdfRect>{};
+  for (final fragment in pageText.fragments) {
+    final text = fragment.text;
+    for (var i = 0; i < text.length; i++) {
+      final number = circled[text[i]];
+      if (number == null) continue;
+      final rect = i < fragment.charRects.length
+          ? fragment.charRects[i]
+          : fragment.bounds;
+      if (rect.isNotEmpty) {
+        found[number] = rect;
+      }
+    }
+  }
+  return found.length >= 4 ? found : const <int, PdfRect>{};
+}
+
+class _ObjectivePdfChoiceOverlay extends StatefulWidget {
+  const _ObjectivePdfChoiceOverlay({
+    required this.choiceRects,
+    required this.selectedChoices,
+    this.onToggleChoice,
+  });
+
+  final Map<int, Rect> choiceRects;
+  final Set<int> selectedChoices;
+  final ValueChanged<int>? onToggleChoice;
+
+  @override
+  State<_ObjectivePdfChoiceOverlay> createState() =>
+      _ObjectivePdfChoiceOverlayState();
+}
+
+class _ObjectivePdfChoiceOverlayState
+    extends State<_ObjectivePdfChoiceOverlay> {
+  final List<Offset> _activeStroke = <Offset>[];
+  int? _activePointer;
+  bool _activeIsStylus = false;
+  int _touchCount = 0;
+  static const double _tapSlop = 12;
+
+  int? _hitChoiceAt(Offset point) {
+    int? bestChoice;
+    var bestDistance = double.infinity;
+    for (final entry in widget.choiceRects.entries) {
+      final hitRect = entry.value.inflate(14);
+      if (!hitRect.contains(point)) continue;
+      final distance = (entry.value.center - point).distance;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestChoice = entry.key;
+      }
+    }
+    return bestChoice;
+  }
+
+  int? _hitChoiceFromStroke(List<Offset> points) {
+    if (points.isEmpty) return null;
+    var minX = points.first.dx;
+    var maxX = points.first.dx;
+    var minY = points.first.dy;
+    var maxY = points.first.dy;
+    for (final point in points) {
+      if (point.dx < minX) minX = point.dx;
+      if (point.dx > maxX) maxX = point.dx;
+      if (point.dy < minY) minY = point.dy;
+      if (point.dy > maxY) maxY = point.dy;
+    }
+    final strokeBounds = Rect.fromLTRB(minX, minY, maxX, maxY);
+    // 화면을 크게 가로지르는 획은 선택 체크가 아니라 오터치로 본다.
+    if (strokeBounds.width > 96 || strokeBounds.height > 96) {
+      return null;
+    }
+
+    int? bestChoice;
+    var bestScore = double.infinity;
+    for (final entry in widget.choiceRects.entries) {
+      final target = entry.value.inflate(14);
+      final touchesPoint = points.any(target.contains);
+      final overlapsBox = target.overlaps(strokeBounds);
+      if (!touchesPoint && !overlapsBox) continue;
+      final distance = (entry.value.center - strokeBounds.center).distance;
+      if (distance < bestScore) {
+        bestScore = distance;
+        bestChoice = entry.key;
+      }
+    }
+    return bestChoice;
+  }
+
+  void _finishPointer(PointerEvent event) {
+    final isTouch = event.kind == PointerDeviceKind.touch;
+    if (isTouch) {
+      _touchCount = (_touchCount - 1).clamp(0, 10).toInt();
+    }
+    if (_activePointer != event.pointer) return;
+    final stroke = List<Offset>.of(_activeStroke);
+    final wasStylus = _activeIsStylus;
+    setState(() {
+      _activePointer = null;
+      _activeStroke.clear();
+    });
+    final onToggle = widget.onToggleChoice;
+    if (onToggle == null || stroke.isEmpty) return;
+    if (!wasStylus) {
+      final moved = (stroke.last - stroke.first).distance;
+      if (moved > _tapSlop) return;
+      final hit = _hitChoiceAt(stroke.last);
+      if (hit != null) onToggle(hit);
+      return;
+    }
+    final hit = _hitChoiceFromStroke(stroke);
+    if (hit != null) onToggle(hit);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: widget.onToggleChoice == null
+          ? null
+          : (event) {
+              final isTouch = event.kind == PointerDeviceKind.touch;
+              final isStylus = !isTouch;
+              if (isTouch) {
+                _touchCount += 1;
+                if (_touchCount >= 2) {
+                  if (_activePointer != null && !_activeIsStylus) {
+                    setState(() {
+                      _activePointer = null;
+                      _activeStroke.clear();
+                    });
+                  }
+                  return;
+                }
+                // 손가락은 선지 번호 위를 눌렀을 때만 받는다 (나머지는 스크롤).
+                if (_hitChoiceAt(event.localPosition) == null) return;
+              }
+              if (_activePointer != null) return;
+              setState(() {
+                _activePointer = event.pointer;
+                _activeIsStylus = isStylus;
+                _activeStroke
+                  ..clear()
+                  ..add(event.localPosition);
+              });
+            },
+      onPointerMove: widget.onToggleChoice == null
+          ? null
+          : (event) {
+              if (_activePointer != event.pointer) return;
+              if (!_activeIsStylus) {
+                if ((event.localPosition - _activeStroke.first).distance >
+                    _tapSlop) {
+                  setState(() {
+                    _activePointer = null;
+                    _activeStroke.clear();
+                  });
+                }
+                return;
+              }
+              setState(() => _activeStroke.add(event.localPosition));
+            },
+      onPointerUp: widget.onToggleChoice == null ? null : _finishPointer,
+      onPointerCancel: widget.onToggleChoice == null ? null : _finishPointer,
+      child: CustomPaint(
+        painter: _ObjectivePdfChoicePainter(
+          choiceRects: widget.choiceRects,
+          selectedChoices: widget.selectedChoices,
+          activeStroke: _activeIsStylus ? _activeStroke : const <Offset>[],
+        ),
+        size: Size.infinite,
+      ),
+    );
+  }
+}
+
+class _ObjectivePdfChoicePainter extends CustomPainter {
+  const _ObjectivePdfChoicePainter({
+    required this.choiceRects,
+    required this.selectedChoices,
+    required this.activeStroke,
+  });
+
+  final Map<int, Rect> choiceRects;
+  final Set<int> selectedChoices;
+  final List<Offset> activeStroke;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const accent = YggGlassTokens.confirmActionColor;
+    for (final choice in selectedChoices) {
+      final rect = choiceRects[choice];
+      if (rect == null) continue;
+      final center = rect.center;
+      final radius = math.max(rect.width, rect.height) * 0.62 + 3.5;
+      final fillPaint = Paint()
+        ..color = accent.withValues(alpha: 0.14)
+        ..style = PaintingStyle.fill;
+      final ringPaint = Paint()
+        ..color = accent
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.4;
+      canvas.drawCircle(center, radius, fillPaint);
+      canvas.drawCircle(center, radius, ringPaint);
+
+      final checkPath = Path()
+        ..moveTo(center.dx - radius * 0.55, center.dy - radius * 0.05)
+        ..lineTo(center.dx - radius * 0.08, center.dy + radius * 0.45)
+        ..lineTo(center.dx + radius * 0.72, center.dy - radius * 0.58);
+      final checkPaint = Paint()
+        ..color = accent
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.6
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round;
+      canvas.drawPath(checkPath, checkPaint);
+    }
+
+    if (activeStroke.length >= 2) {
+      final path = Path()..moveTo(activeStroke.first.dx, activeStroke.first.dy);
+      for (var i = 1; i < activeStroke.length; i++) {
+        path.lineTo(activeStroke[i].dx, activeStroke[i].dy);
+      }
+      final strokePaint = Paint()
+        ..color = accent.withValues(alpha: 0.85)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.5
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round;
+      canvas.drawPath(path, strokePaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _ObjectivePdfChoicePainter oldDelegate) {
+    return oldDelegate.choiceRects != choiceRects ||
+        !setEquals(oldDelegate.selectedChoices, selectedChoices) ||
+        oldDelegate.activeStroke.length != activeStroke.length;
   }
 }
 
@@ -4869,11 +5701,19 @@ class _FallbackProblemPdfPage extends StatefulWidget {
     required this.uri,
     required this.pageNumber,
     this.itemRegion1k,
+    this.isObjective = false,
+    this.selectedChoices = const <int>{},
+    this.onToggleChoice,
+    this.fallbackChoiceSelector,
   });
 
   final Uri uri;
   final int pageNumber;
   final List<int>? itemRegion1k;
+  final bool isObjective;
+  final Set<int> selectedChoices;
+  final ValueChanged<int>? onToggleChoice;
+  final Widget? fallbackChoiceSelector;
 
   @override
   State<_FallbackProblemPdfPage> createState() =>
@@ -4882,6 +5722,8 @@ class _FallbackProblemPdfPage extends StatefulWidget {
 
 class _FallbackProblemPdfPageState extends State<_FallbackProblemPdfPage> {
   PdfDocument? _document;
+  Map<int, PdfRect> _choiceMarkerRects = const <int, PdfRect>{};
+  bool _choiceTextLoaded = false;
   Object? _error;
 
   @override
@@ -4897,7 +5739,29 @@ class _FallbackProblemPdfPageState extends State<_FallbackProblemPdfPage> {
         await document.dispose();
         return;
       }
-      setState(() => _document = document);
+      var markerRects = const <int, PdfRect>{};
+      if (document.pages.isNotEmpty) {
+        final pageNumber =
+            widget.pageNumber.clamp(1, document.pages.length).toInt();
+        final page = document.pages[pageNumber - 1];
+        try {
+          final pageText = await page.loadText();
+          markerRects = _extractFallbackChoiceRects(
+            page,
+            pageText,
+            widget.itemRegion1k,
+          );
+        } catch (_) {}
+      }
+      if (!mounted) {
+        await document.dispose();
+        return;
+      }
+      setState(() {
+        _document = document;
+        _choiceMarkerRects = markerRects;
+        _choiceTextLoaded = true;
+      });
     } catch (error) {
       if (mounted) setState(() => _error = error);
     }
@@ -4913,17 +5777,30 @@ class _FallbackProblemPdfPageState extends State<_FallbackProblemPdfPage> {
   @override
   Widget build(BuildContext context) {
     if (_error != null) {
-      return const Center(child: Text('원본 교재 PDF를 표시할 수 없어요.'));
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Padding(
+            padding: EdgeInsets.all(20),
+            child: Text('원본 교재 PDF를 표시할 수 없어요.', textAlign: TextAlign.center),
+          ),
+          if (widget.fallbackChoiceSelector != null)
+            widget.fallbackChoiceSelector!,
+        ],
+      );
     }
     final document = _document;
     if (document == null) {
-      return const Center(child: YggLoadingIndicator());
+      return const SizedBox(
+        height: 160,
+        child: Center(child: YggLoadingIndicator()),
+      );
     }
     final pageNumber =
         widget.pageNumber.clamp(1, document.pages.length).toInt();
     final region = widget.itemRegion1k;
     if (region == null || region.length != 4) {
-      return InteractiveViewer(
+      final viewer = InteractiveViewer(
         minScale: 1,
         maxScale: 5,
         constrained: false,
@@ -4934,13 +5811,88 @@ class _FallbackProblemPdfPageState extends State<_FallbackProblemPdfPage> {
           decoration: const BoxDecoration(color: Colors.white),
         ),
       );
+      if (widget.isObjective && widget.fallbackChoiceSelector != null) {
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            viewer,
+            widget.fallbackChoiceSelector!,
+          ],
+        );
+      }
+      return viewer;
     }
-    return _CroppedPdfPage(
+    final hasInlineChoices = widget.isObjective && _choiceMarkerRects.isNotEmpty;
+    final cropped = _CroppedPdfPage(
       document: document,
       pageNumber: pageNumber,
       itemRegion1k: region,
+      choiceMarkerRects: hasInlineChoices ? _choiceMarkerRects : const <int, PdfRect>{},
+      selectedChoices: widget.selectedChoices,
+      onToggleChoice: widget.onToggleChoice,
     );
+    if (widget.isObjective &&
+        _choiceTextLoaded &&
+        !hasInlineChoices &&
+        widget.fallbackChoiceSelector != null) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          cropped,
+          widget.fallbackChoiceSelector!,
+        ],
+      );
+    }
+    return cropped;
   }
+}
+
+Map<int, PdfRect> _extractFallbackChoiceRects(
+  PdfPage page,
+  PdfPageText pageText,
+  List<int>? itemRegion1k,
+) {
+  if (itemRegion1k == null || itemRegion1k.length != 4) {
+    return const <int, PdfRect>{};
+  }
+  const padding = 16.0;
+  final topRatio = ((itemRegion1k[0] - padding) / 1000).clamp(0.0, 1.0);
+  final leftRatio = ((itemRegion1k[1] - padding) / 1000).clamp(0.0, 1.0);
+  final bottomRatio = ((itemRegion1k[2] + padding) / 1000).clamp(0.0, 1.0);
+  final rightRatio = ((itemRegion1k[3] + padding) / 1000).clamp(0.0, 1.0);
+  final cropPdfRect = PdfRect(
+    page.width * leftRatio,
+    page.height * (1.0 - topRatio),
+    page.width * rightRatio,
+    page.height * (1.0 - bottomRatio),
+  );
+  const circled = <String, int>{
+    '①': 1,
+    '②': 2,
+    '③': 3,
+    '④': 4,
+    '⑤': 5,
+    '⑴': 1,
+    '⑵': 2,
+    '⑶': 3,
+    '⑷': 4,
+    '⑸': 5,
+  };
+  final found = <int, PdfRect>{};
+  for (final fragment in pageText.fragments) {
+    final text = fragment.text;
+    for (var i = 0; i < text.length; i++) {
+      final number = circled[text[i]];
+      if (number == null) continue;
+      final rect = i < fragment.charRects.length
+          ? fragment.charRects[i]
+          : fragment.bounds;
+      if (rect.isNotEmpty && cropPdfRect.overlaps(rect)) {
+        found[number] = rect;
+      }
+    }
+  }
+  return found.length >= 4 ? found : const <int, PdfRect>{};
 }
 
 /// 본문모드용 원본 교재 PDF.
@@ -5078,11 +6030,17 @@ class _CroppedPdfPage extends StatelessWidget {
     required this.document,
     required this.pageNumber,
     required this.itemRegion1k,
+    this.choiceMarkerRects = const <int, PdfRect>{},
+    this.selectedChoices = const <int>{},
+    this.onToggleChoice,
   });
 
   final PdfDocument document;
   final int pageNumber;
   final List<int> itemRegion1k;
+  final Map<int, PdfRect> choiceMarkerRects;
+  final Set<int> selectedChoices;
+  final ValueChanged<int>? onToggleChoice;
 
   @override
   Widget build(BuildContext context) {
@@ -5121,6 +6079,7 @@ class _CroppedPdfPage extends StatelessWidget {
         final cropHeight = pageHeight * regionHeight;
         final offsetX = -pageWidth * left;
         final offsetY = -pageHeight * top;
+        final scaledPageSize = Size(pageWidth, pageHeight);
 
         return SizedBox(
           width: constraints.maxWidth,
@@ -5144,6 +6103,22 @@ class _CroppedPdfPage extends StatelessWidget {
                         decoration: const BoxDecoration(color: Colors.white),
                       ),
                     ),
+                    if (choiceMarkerRects.isNotEmpty)
+                      Positioned.fill(
+                        child: _ObjectivePdfChoiceOverlay(
+                          choiceRects: <int, Rect>{
+                            for (final entry in choiceMarkerRects.entries)
+                              entry.key: entry.value
+                                  .toRect(
+                                    page: page,
+                                    scaledPageSize: scaledPageSize,
+                                  )
+                                  .translate(offsetX, offsetY),
+                          },
+                          selectedChoices: selectedChoices,
+                          onToggleChoice: onToggleChoice,
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -5155,17 +6130,22 @@ class _CroppedPdfPage extends StatelessWidget {
   }
 }
 
-/// 두 손가락 가로 스와이프로 이전/다음 문항 이동.
+/// 두 손가락 쓸기로 문항 이동 및 연습장 열기·닫기.
 ///
-/// 한 손가락 필기와 겹치지 않도록, 포인터가 2개일 때만 가로 이동을 인식한다.
-/// (왼쪽 스와이프 = 다음, 오른쪽 스와이프 = 이전)
+/// 펜슬(스타일러스)은 제외하고 손가락 터치 포인터가 2개일 때만 인식한다.
+/// - 왼쪽 쓸기 = 다음 문항(+1), 오른쪽 쓸기 = 이전 문항(-1)
+/// - 위로 쓸기 = 연습장 열기, 아래로 쓸기 = 연습장 접기(닫기)
 class _TwoFingerHorizontalSwipe extends StatefulWidget {
   const _TwoFingerHorizontalSwipe({
     required this.onSwipe,
+    this.onSwipeUp,
+    this.onSwipeDown,
     required this.child,
   });
 
   final ValueChanged<int> onSwipe;
+  final VoidCallback? onSwipeUp;
+  final VoidCallback? onSwipeDown;
   final Widget child;
 
   @override
@@ -5178,7 +6158,11 @@ class _TwoFingerHorizontalSwipeState extends State<_TwoFingerHorizontalSwipe> {
   Offset? _startAvg;
   bool _armed = false;
   bool _fired = false;
-  static const _threshold = 72.0;
+  static const _horizontalThreshold = 72.0;
+  static const _verticalThreshold = 56.0;
+
+  static bool _isTouchPointer(PointerEvent event) =>
+      event.kind == PointerDeviceKind.touch;
 
   Offset _average() {
     var sum = Offset.zero;
@@ -5199,6 +6183,7 @@ class _TwoFingerHorizontalSwipeState extends State<_TwoFingerHorizontalSwipe> {
     return Listener(
       behavior: HitTestBehavior.translucent,
       onPointerDown: (event) {
+        if (!_isTouchPointer(event)) return;
         _pointers[event.pointer] = event.position;
         if (_pointers.length == 2) {
           _armed = true;
@@ -5214,10 +6199,20 @@ class _TwoFingerHorizontalSwipeState extends State<_TwoFingerHorizontalSwipe> {
         }
         final dx = _average().dx - _startAvg!.dx;
         final dy = _average().dy - _startAvg!.dy;
-        // 세로 스크롤성 제스처는 무시하고 가로가 뚜렷할 때만 이동.
-        if (dx.abs() < _threshold || dx.abs() < dy.abs() * 1.2) return;
-        _fired = true;
-        widget.onSwipe(dx < 0 ? 1 : -1);
+        if (dx.abs() >= _horizontalThreshold && dx.abs() >= dy.abs() * 1.2) {
+          _fired = true;
+          widget.onSwipe(dx < 0 ? 1 : -1);
+          return;
+        }
+        if (dy.abs() >= _verticalThreshold && dy.abs() >= dx.abs() * 1.2) {
+          if (dy < 0 && widget.onSwipeUp != null) {
+            _fired = true;
+            widget.onSwipeUp!();
+          } else if (dy > 0 && widget.onSwipeDown != null) {
+            _fired = true;
+            widget.onSwipeDown!();
+          }
+        }
       },
       onPointerUp: (event) {
         _pointers.remove(event.pointer);
@@ -5254,186 +6249,164 @@ class _EmptyInputCard extends StatelessWidget {
   }
 }
 
-class _SolveGlassCircleButton extends StatelessWidget {
-  const _SolveGlassCircleButton({
+class _SolveHeaderIconButton extends StatelessWidget {
+  const _SolveHeaderIconButton({
     required this.tooltip,
-    required this.icon,
+    required this.svg,
     required this.onPressed,
   });
 
   final String tooltip;
-  final IconData icon;
+  final String svg;
   final VoidCallback onPressed;
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return ClipOval(
-      child: BackdropFilter(
-        filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-        child: Material(
-          color: isDark
-              ? const Color(0xE62A3333)
-              : Colors.white.withValues(alpha: 0.92),
-          child: IconButton(
-            tooltip: tooltip,
-            onPressed: onPressed,
-            icon: Icon(icon, size: 22),
-            constraints: const BoxConstraints.tightFor(width: 56, height: 56),
-          ),
-        ),
+    return IconButton(
+      tooltip: tooltip,
+      onPressed: onPressed,
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+      icon: SvgPicture.string(
+        svg,
+        width: 22,
+        height: 22,
+        colorFilter: const ColorFilter.mode(Colors.black, BlendMode.srcIn),
       ),
     );
   }
 }
 
-class _TextbookSolveFabBar extends StatelessWidget {
+/// Icons8 iOS Outlined "Empty Flag" (id 11710).
+const String _reportFlagSvg =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50"><path d="M 9 0.5 L 9 49 L 11 49 L 11 30.6875 L 44.375 16.9375 L 46.625 16 L 44.375 15.0625 L 10.375 1.0625 Z M 11 3.5 L 41.34375 16 L 11 28.5 Z"/></svg>';
+
+/// Icons8 iOS Outlined "Pencil" (id 11737).
+const String _pencilModeSvg =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50"><path d="M 42.90625 2.90625 C 41.851563 2.90625 40.796875 3.296875 40 4.09375 L 39.15625 4.90625 C 38.953125 4.800781 38.722656 4.769531 38.5 4.8125 C 38.308594 4.855469 38.136719 4.953125 38 5.09375 L 6.59375 36.5 C 6.496094 36.597656 6.421875 36.714844 6.375 36.84375 L 3.0625 45.65625 C 2.929688 46.019531 3.019531 46.429688 3.296875 46.703125 C 3.570313 46.980469 3.980469 47.070313 4.34375 46.9375 L 13.15625 43.625 C 13.285156 43.578125 13.402344 43.503906 13.5 43.40625 L 44.90625 12 C 45.242188 11.652344 45.285156 11.113281 45 10.71875 L 45.8125 9.90625 C 47.40625 8.3125 47.40625 5.6875 45.8125 4.09375 C 45.015625 3.296875 43.960938 2.90625 42.90625 2.90625 Z M 42.90625 4.90625 C 43.453125 4.90625 44.003906 5.097656 44.40625 5.5 C 45.214844 6.308594 45.214844 7.691406 44.40625 8.5 L 43.625 9.3125 L 40.625 6.3125 L 41.40625 5.5 C 41.808594 5.097656 42.359375 4.90625 42.90625 4.90625 Z M 38.6875 7.1875 L 42.8125 11.3125 L 40.0625 14.03125 L 35.96875 9.9375 Z M 34.53125 11.34375 L 38.65625 15.46875 L 12.75 41.34375 L 12 40.5625 L 12 39 C 12 38.449219 11.550781 38 11 38 L 9.4375 38 L 8.65625 37.25 Z M 7.65625 39.09375 L 8.28125 39.71875 C 8.472656 39.90625 8.734375 40.007813 9 40 L 10 40 L 10 41 C 9.992188 41.265625 10.09375 41.527344 10.28125 41.71875 L 10.90625 42.34375 L 7.09375 43.78125 L 6.21875 42.90625 Z"/></svg>';
+
+/// Icons8 iOS Outlined "Square Root" (id 6485).
+const String _formulaModeSvg =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50"><path d="M 31.8125 9 C 31.472656 9.0625 31.1875 9.300781 31.0625 9.625 L 19.9375 37.46875 L 13.90625 24.5625 C 13.738281 24.214844 13.386719 23.996094 13 24 L 9 24 L 9 26 L 12.34375 26 L 19.09375 40.4375 C 19.261719 40.804688 19.632813 41.03125 20.035156 41.019531 C 20.4375 41.007813 20.792969 40.75 20.9375 40.375 L 32.6875 11 L 41 11 L 41 9 L 32 9 C 31.96875 9 31.9375 9 31.90625 9 C 31.875 9 31.84375 9 31.8125 9 Z"/></svg>';
+
+/// Icons8 iOS Outlined "Keypad" (id 23272).
+const String _keyboardModeSvg =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50"><path d="M 5 3 C 3.90625 3 3 3.90625 3 5 L 3 9 C 3 10.09375 3.90625 11 5 11 L 13 11 C 14.09375 11 15 10.09375 15 9 L 15 5 C 15 3.90625 14.09375 3 13 3 Z M 21 3 C 19.90625 3 19 3.90625 19 5 L 19 9 C 19 10.09375 19.90625 11 21 11 L 29 11 C 30.09375 11 31 10.09375 31 9 L 31 5 C 31 3.90625 30.09375 3 29 3 Z M 37 3 C 35.90625 3 35 3.90625 35 5 L 35 9 C 35 10.09375 35.90625 11 37 11 L 45 11 C 46.09375 11 47 10.09375 47 9 L 47 5 C 47 3.90625 46.09375 3 45 3 Z M 5 5 L 13 5 L 13 9 L 5 9 Z M 21 5 L 29 5 L 29 9 L 21 9 Z M 37 5 L 45 5 L 45 9 L 37 9 Z M 5 15 C 3.90625 15 3 15.90625 3 17 L 3 21 C 3 22.09375 3.90625 23 5 23 L 13 23 C 14.09375 23 15 22.09375 15 21 L 15 17 C 15 15.90625 14.09375 15 13 15 Z M 21 15 C 19.90625 15 19 15.90625 19 17 L 19 21 C 19 22.09375 19.90625 23 21 23 L 29 23 C 30.09375 23 31 22.09375 31 21 L 31 17 C 31 15.90625 30.09375 15 29 15 Z M 37 15 C 35.90625 15 35 15.90625 35 17 L 35 21 C 35 22.09375 35.90625 23 37 23 L 45 23 C 46.09375 23 47 22.09375 47 21 L 47 17 C 47 15.90625 46.09375 15 45 15 Z M 5 17 L 13 17 L 13 21 L 5 21 Z M 21 17 L 29 17 L 29 21 L 21 21 Z M 37 17 L 45 17 L 45 21 L 37 21 Z M 5 27 C 3.90625 27 3 27.90625 3 29 L 3 33 C 3 34.09375 3.90625 35 5 35 L 13 35 C 14.09375 35 15 34.09375 15 33 L 15 29 C 15 27.90625 14.09375 27 13 27 Z M 21 27 C 19.90625 27 19 27.90625 19 29 L 19 33 C 19 34.09375 19.90625 35 21 35 L 29 35 C 30.09375 35 31 34.09375 31 33 L 31 29 C 31 27.90625 30.09375 27 29 27 Z M 37 27 C 35.90625 27 35 27.90625 35 29 L 35 33 C 35 34.09375 35.90625 35 37 35 L 45 35 C 46.09375 35 47 34.09375 47 33 L 47 29 C 47 27.90625 46.09375 27 45 27 Z M 5 29 L 13 29 L 13 33 L 5 33 Z M 21 29 L 29 29 L 29 33 L 21 33 Z M 37 29 L 45 29 L 45 33 L 37 33 Z M 21 39 C 19.90625 39 19 39.90625 19 41 L 19 45 C 19 46.09375 19.90625 47 21 47 L 29 47 C 30.09375 47 31 46.09375 31 45 L 31 41 C 31 39.90625 30.09375 39 29 39 Z M 21 41 L 29 41 L 29 45 L 21 45 Z"/></svg>';
+
+/// 학습앱 정답 시트의 확인 버튼과 같은 한 겹 알약.
+const String _gradeCheckSvg =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none"><path stroke="#000" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M 2.8 11.54 L 8.74 16.76 L 17.2 3.86"/></svg>';
+
+class _TextbookSolveFabBar extends StatefulWidget {
   const _TextbookSolveFabBar({
     required this.pendingCount,
     required this.grading,
-    required this.canEdit,
-    required this.hasAnswer,
-    required this.scratchOpen,
-    required this.onPrevious,
-    required this.onNext,
-    required this.onErase,
-    required this.onClear,
-    required this.onNote,
     required this.onGrade,
     this.gradeLabel = '채점',
   });
 
   final int pendingCount;
   final bool grading;
-  final bool canEdit;
-  final bool hasAnswer;
-  final bool scratchOpen;
-  final VoidCallback? onPrevious;
-  final VoidCallback onNext;
-  final VoidCallback onErase;
-  final VoidCallback onClear;
-  final VoidCallback onNote;
   final VoidCallback onGrade;
   final String gradeLabel;
 
   @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(28),
-      child: BackdropFilter(
-        filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-        child: Container(
-          height: 56,
-          padding: const EdgeInsets.symmetric(horizontal: 7),
-          decoration: BoxDecoration(
-            color: isDark
-                ? const Color(0xE62A3333)
-                : Colors.white.withValues(alpha: 0.92),
-            borderRadius: BorderRadius.circular(28),
-            border: Border.all(
-              color: isDark ? Colors.white12 : Colors.black12,
-            ),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x24000000),
-                blurRadius: 18,
-                offset: Offset(0, 7),
-              ),
-            ],
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (onPrevious != null)
-                _SolveFabIconButton(
-                  tooltip: '이전 문제',
-                  icon: Icons.chevron_left_rounded,
-                  onPressed: onPrevious,
-                ),
-              _SolveFabIconButton(
-                tooltip: '다음 문제',
-                icon: Icons.chevron_right_rounded,
-                onPressed: onNext,
-              ),
-              const SizedBox(
-                height: 26,
-                child: VerticalDivider(width: 12),
-              ),
-              _SolveFabIconButton(
-                tooltip: '한 단계 지우기',
-                icon: Icons.keyboard_backspace_rounded,
-                onPressed: canEdit ? onErase : null,
-              ),
-              _SolveFabIconButton(
-                tooltip: '모두 지우기',
-                icon: Icons.delete_outline_rounded,
-                onPressed: scratchOpen
-                    ? onClear
-                    : (canEdit && hasAnswer ? onClear : null),
-              ),
-              _SolveFabIconButton(
-                tooltip: scratchOpen ? '연습장 닫기' : '연습장',
-                icon: scratchOpen
-                    ? Icons.edit_note_rounded
-                    : Icons.note_alt_outlined,
-                onPressed: onNote,
-                active: scratchOpen,
-              ),
-              const SizedBox(width: 5),
-              FilledButton.icon(
-                onPressed: pendingCount > 0 && !grading ? onGrade : null,
-                style: FilledButton.styleFrom(
-                  backgroundColor: YggGlassTokens.confirmActionColor,
-                  foregroundColor: Colors.white,
-                  minimumSize: const Size(112, 44),
-                  shape: const StadiumBorder(),
-                ),
-                icon: grading
-                    ? const YggLoadingIndicator(size: 18)
-                    : Badge(
-                        isLabelVisible: pendingCount > 0,
-                        label: Text('$pendingCount'),
-                        child: const Icon(
-                          Icons.check_box_outlined,
-                          size: 20,
-                        ),
-                      ),
-                label: Text(
-                  gradeLabel,
-                  style: const TextStyle(fontWeight: FontWeight.w800),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
+  State<_TextbookSolveFabBar> createState() => _TextbookSolveFabBarState();
 }
 
-class _SolveFabIconButton extends StatelessWidget {
-  const _SolveFabIconButton({
-    required this.tooltip,
-    required this.icon,
-    required this.onPressed,
-    this.active = false,
-  });
-
-  final String tooltip;
-  final IconData icon;
-  final VoidCallback? onPressed;
-  final bool active;
+class _TextbookSolveFabBarState extends State<_TextbookSolveFabBar> {
+  bool _hovering = false;
+  bool _pressed = false;
 
   @override
   Widget build(BuildContext context) {
-    final color = active ? YggGlassTokens.confirmActionColor : null;
-    return IconButton(
-      tooltip: tooltip,
-      onPressed: onPressed,
-      icon: Icon(icon, size: 22, color: color),
-      constraints: const BoxConstraints.tightFor(width: 43, height: 43),
-      padding: EdgeInsets.zero,
+    final canTap = widget.pendingCount > 0 && !widget.grading;
+    const accent = YggGlassTokens.confirmActionColor;
+    final color = _hovering && canTap
+        ? Color.lerp(accent, Colors.white, 0.16)!
+        : accent;
+    return AnimatedScale(
+      scale: _pressed && canTap ? 0.96 : 1,
+      duration: Duration(milliseconds: _pressed ? 70 : 140),
+      curve: _pressed ? Curves.easeOutCubic : Curves.easeOutBack,
+      child: Opacity(
+        opacity: canTap ? 1 : 0.45,
+        child: MouseRegion(
+          onEnter: (_) => setState(() => _hovering = true),
+          onExit: (_) {
+            setState(() {
+              _hovering = false;
+              _pressed = false;
+            });
+          },
+          cursor: canTap ? SystemMouseCursors.click : SystemMouseCursors.basic,
+          child: GestureDetector(
+            onTapDown: canTap ? (_) => setState(() => _pressed = true) : null,
+            onTapUp: canTap ? (_) => setState(() => _pressed = false) : null,
+            onTapCancel: canTap ? () => setState(() => _pressed = false) : null,
+            onTap: canTap ? widget.onGrade : null,
+            behavior: HitTestBehavior.opaque,
+            child: SizedBox(
+              width: 120,
+              height: 52,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 160),
+                curve: Curves.easeOutCubic,
+                alignment: Alignment.center,
+                padding: const EdgeInsets.only(right: 10),
+                decoration: BoxDecoration(
+                  color: color,
+                  borderRadius: BorderRadius.circular(26),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Transform.translate(
+                      offset: const Offset(0, -1),
+                      child: widget.grading
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : Badge(
+                              isLabelVisible: widget.pendingCount > 0,
+                              backgroundColor: Colors.white,
+                              textColor: accent,
+                              label: Text('${widget.pendingCount}'),
+                              child: SvgPicture.string(
+                                _gradeCheckSvg,
+                                width: 20,
+                                height: 20,
+                                colorFilter: const ColorFilter.mode(
+                                  Colors.white,
+                                  BlendMode.srcIn,
+                                ),
+                              ),
+                            ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      widget.gradeLabel,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontFamily: 'Pretendard',
+                        fontSize: 18,
+                        height: 1,
+                        letterSpacing: 1.4,
+                        fontWeight: FontWeight.w400,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -5535,6 +6508,8 @@ class _ScratchPracticeSheet extends StatefulWidget {
 class _ScratchPracticeSheetState extends State<_ScratchPracticeSheet> {
   final List<List<Offset>> _strokes = <List<Offset>>[];
   int? _activePointer;
+  bool _activeIsStylus = false;
+  int _touchPointerCount = 0;
   Offset? _strokeStartGlobal;
   bool _strokeIsDraw = false;
   static const _tapSlop = 10.0;
@@ -5562,6 +6537,20 @@ class _ScratchPracticeSheetState extends State<_ScratchPracticeSheet> {
   void _discardLastStroke() {
     if (_strokes.isEmpty) return;
     setState(() => _strokes.removeLast());
+  }
+
+  void _finishStroke() {
+    if (_strokes.length < 2) return;
+    final scribble = _strokes.last;
+    final committed = _strokes.sublist(0, _strokes.length - 1);
+    final targets = scribbleEraseIndices(committed, scribble);
+    if (targets.isEmpty) return;
+    setState(() {
+      _strokes.removeLast();
+      for (var i = targets.length - 1; i >= 0; i--) {
+        _strokes.removeAt(targets[i]);
+      }
+    });
   }
 
   @override
@@ -5646,14 +6635,35 @@ class _ScratchPracticeSheetState extends State<_ScratchPracticeSheet> {
                 child: Listener(
                   behavior: HitTestBehavior.opaque,
                   onPointerDown: (event) {
+                    final isStylus = event.kind == PointerDeviceKind.stylus ||
+                        event.kind == PointerDeviceKind.invertedStylus;
+                    if (!isStylus) {
+                      _touchPointerCount += 1;
+                      if (_touchPointerCount >= 2) {
+                        if (_activePointer != null && !_activeIsStylus) {
+                          _discardLastStroke();
+                          _activePointer = null;
+                          _strokeStartGlobal = null;
+                          _strokeIsDraw = false;
+                        }
+                        return;
+                      }
+                    } else if (_activePointer != null && !_activeIsStylus) {
+                      _discardLastStroke();
+                      _activePointer = null;
+                      _strokeStartGlobal = null;
+                      _strokeIsDraw = false;
+                    }
                     if (_activePointer != null) return;
                     _activePointer = event.pointer;
+                    _activeIsStylus = isStylus;
                     _strokeStartGlobal = event.position;
                     _strokeIsDraw = false;
                     _startStroke(event.localPosition);
                   },
                   onPointerMove: (event) {
                     if (_activePointer != event.pointer) return;
+                    if (!_activeIsStylus && _touchPointerCount >= 2) return;
                     final start = _strokeStartGlobal;
                     if (start != null &&
                         !_strokeIsDraw &&
@@ -5665,20 +6675,36 @@ class _ScratchPracticeSheetState extends State<_ScratchPracticeSheet> {
                     }
                   },
                   onPointerUp: (event) {
+                    final isStylus = event.kind == PointerDeviceKind.stylus ||
+                        event.kind == PointerDeviceKind.invertedStylus;
+                    if (!isStylus) {
+                      _touchPointerCount =
+                          (_touchPointerCount - 1).clamp(0, 10).toInt();
+                    }
                     if (_activePointer != event.pointer) return;
                     // 짧게 터치만 하면 접기/펼치기 (점 남기지 않음).
                     if (!_strokeIsDraw) {
                       _discardLastStroke();
                       widget.onHandleTap();
+                    } else {
+                      _finishStroke();
                     }
                     _activePointer = null;
+                    _activeIsStylus = false;
                     _strokeStartGlobal = null;
                     _strokeIsDraw = false;
                   },
                   onPointerCancel: (event) {
+                    final isStylus = event.kind == PointerDeviceKind.stylus ||
+                        event.kind == PointerDeviceKind.invertedStylus;
+                    if (!isStylus) {
+                      _touchPointerCount =
+                          (_touchPointerCount - 1).clamp(0, 10).toInt();
+                    }
                     if (_activePointer != event.pointer) return;
                     if (!_strokeIsDraw) _discardLastStroke();
                     _activePointer = null;
+                    _activeIsStylus = false;
                     _strokeStartGlobal = null;
                     _strokeIsDraw = false;
                   },

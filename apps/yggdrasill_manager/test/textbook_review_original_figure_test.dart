@@ -16,6 +16,49 @@ TextbookProblemReviewItem _item(Map<String, dynamic> m) => TextbookProblemReview
 
 void main() {
   group('그림 도우미', () {
+    test('문항 그림이 아닌 그림 빼기: 붙어 있는 번호만 제안하고, 자산·배치·묶음에서 뺀다', () {
+      final assets = [
+        {'figure_index': 1, 'path': 'a.png'},
+        {'figure_index': 2, 'path': 'b.png'},
+        {'figure_index': 2, 'path': 'b2.png'},
+      ];
+      final item = _item({
+        'pb_figure_assets': assets,
+        'fix_proposal': {'figure_removals': [2, 3], 'applied_at': '2026-11-12T00:00:00Z'},
+      });
+      expect(item.proposedFigureRemovals, [2]);
+      final next = withoutFigures(assets, {
+        'version': 1,
+        'items': [
+          {'assetKey': 'idx:1', 'widthEm': 10},
+          {'assetKey': 'idx:2', 'widthEm': 8},
+        ],
+        'groups': [
+          {'type': 'horizontal', 'members': ['idx:1', 'idx:2']},
+        ],
+      }, {2});
+      expect(next.assets.map((a) => a['path']), ['a.png']);
+      expect((next.layout['items'] as List).map((e) => (e as Map)['assetKey']), ['idx:1']);
+      expect(next.layout['groups'], isEmpty);
+    });
+
+    test('본문에 자리가 없어 보류한 원본 그림은 아직 붙지 않은 번호만 확인 대상으로 내고 자동 크롭에는 넣지 않는다', () {
+      final item = _item({
+        'pb_figure_assets': [
+          {'figure_index': 1, 'path': 'a.png'},
+        ],
+        'fix_proposal': {
+          'figure_crops': [],
+          'figure_crops_unslotted': [
+            {'figure_index': 1, 'bbox_1k': [0, 0, 10, 10], 'reason': 'missing'},
+            {'figure_index': 2, 'bbox_1k': [400, 550, 700, 950], 'reason': 'missing'},
+          ],
+        },
+      });
+      expect(item.unslottedFigureCrops.map((c) => c['figure_index']), [2]);
+      expect(item.proposedFigureCrops, isEmpty);
+    });
+
     test('figureMarkerCount 는 V2 그림 자리 표시를 센다', () {
       expect(figureMarkerCount('가[그림]나[도형]다[도표]라[[PB_FIG_abc]]'), 4);
       expect(figureMarkerCount('그림 없음'), 0);
@@ -89,6 +132,26 @@ void main() {
   });
 
   group('문항 상태', () {
+    test('엔진 보류를 승인한 뒤의 남은 렌더 이상 판정은 준비됨을 막지 않고, 승인 뒤 다시 판정한 이상은 막는다', () {
+      const rc = {'problem_ok': true, 'fidelity_ok': false};
+      expect(_item({'render_checks': rc, 'render_checked_at': '2026-11-11T17:19:13Z'}).renderBlocksReady, isTrue);
+      final accepted = _item({
+        'render_checks': rc,
+        'render_checked_at': '2026-11-11T17:19:13Z',
+        'engine_resolved_at': '2026-11-12T07:17:29Z',
+      });
+      expect(accepted.renderBlocksReady, isFalse);
+      expect(accepted.renderHasIssue, isTrue);
+      expect(
+        _item({
+          'render_checks': rc,
+          'render_checked_at': '2026-11-12T08:00:00Z',
+          'engine_resolved_at': '2026-11-12T07:17:29Z',
+        }).renderBlocksReady,
+        isTrue,
+      );
+    });
+
     test('needsFixPass: 원본 좌표가 있는 오류·그림 문항만, 아직 안 돌렸거나 수정 후에도 오류일 때', () {
       expect(_item({}).needsFixPass, isTrue);
       expect(_item({'item_region_1k': []}).needsFixPass, isFalse);

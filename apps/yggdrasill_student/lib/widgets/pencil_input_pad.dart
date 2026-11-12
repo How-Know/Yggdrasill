@@ -9,9 +9,11 @@ import 'package:flutter/services.dart';
 import 'package:google_mlkit_digital_ink_recognition/google_mlkit_digital_ink_recognition.dart'
     as mlkit;
 
+import '../services/apple_pencil_undo.dart';
 import '../services/handwriting_ink_png.dart';
 import '../services/latex_linear.dart';
 import '../services/myscript_math.dart';
+import 'pencil_ink_history.dart';
 
 /// ML Kit 모델과 인식기를 앱 전체에서 한 번만 준비해 재사용한다.
 ///
@@ -132,6 +134,10 @@ Future<List<String>> debugRecognizeStrokesWithMlKit({
 
 /// 애플펜슬(터치) 필기 → ML Kit 온디바이스 인식.
 ///
+/// 이미 써 둔 글씨 위를 펜을 떼지 않고 좌우로 문지르면 문지른 획과 겹친 글자 묶음을
+/// 함께 지운다. iOS에서는 끝난 획과 문지르기 삭제를 모두 시스템 실행 취소에 올려
+/// 펜슬 프로를 쥐면 나오는 슬라이더나 하단 지우기 버튼으로 한 번에 되돌릴 수 있다.
+///
 /// 획이 멈추면 잠시 후 자동으로 인식해 [onRecognized]로 전달한다.
 /// 인식 결과는 화면에 즉시 표시되므로 학생이 틀린 인식을 바로 고칠 수 있다.
 typedef HandwritingRecognizedCallback = void Function(
@@ -151,6 +157,7 @@ class PencilInputPad extends StatefulWidget {
     this.showControls = true,
     this.showEmptyHint = true,
     this.embedded = false,
+    this.stylusOnly = false,
   });
 
   /// [text]는 채점·저장용 선형 표기, [sourceLatex]는 MyScript가 반환한
@@ -180,6 +187,9 @@ class PencilInputPad extends StatefulWidget {
   final bool showEmptyHint;
   final bool embedded;
 
+  /// true 면 애플펜슬(스타일러스)만 필기로 받고 손가락 터치는 스크롤에 넘긴다.
+  final bool stylusOnly;
+
   static bool get supported =>
       !kIsWeb && (Platform.isIOS || Platform.isAndroid);
 
@@ -192,11 +202,12 @@ class PencilInputPadState extends State<PencilInputPad> {
   /// 여러 획으로 된 글자(예: 4, 분수)를 쓰는 도중 잘려 인식되는 것을 막는다.
   static const Duration recognitionDelay = Duration(seconds: 2);
 
-  final List<List<Offset>> _strokes = <List<Offset>>[];
-  final List<List<int>> _strokeTimes = <List<int>>[];
+  final PencilInkHistory _ink = PencilInkHistory();
+  final ApplePencilUndoLedger _pencilUndo = ApplePencilUndoLedger();
 
-  /// 포인트별 정규화 압력(0~1). 압력 정보가 없는 기기는 -1.
-  final List<List<double>> _strokePressures = <List<double>>[];
+  List<List<Offset>> get _strokes => _ink.strokes;
+  List<List<int>> get _strokeTimes => _ink.times;
+  List<List<double>> get _strokePressures => _ink.pressures;
   int? _activePointer;
 
   /// 현재 획을 그리는 포인터가 스타일러스(애플펜슬)인지.
@@ -248,6 +259,11 @@ class PencilInputPadState extends State<PencilInputPad> {
   @override
   void initState() {
     super.initState();
+    ApplePencilUndo.bind(
+      owner: this,
+      onUndo: _applyPencilUndo,
+      onRedo: _applyPencilRedo,
+    );
     _prepareModel();
   }
 
@@ -302,6 +318,7 @@ class PencilInputPadState extends State<PencilInputPad> {
 
   @override
   void dispose() {
+    ApplePencilUndo.unbind(this);
     _debounce?.cancel();
     // 대기 중인 획을 그냥 버리면 학생이 쓴 답이 사라진다. 폐기 직전에
     // 인식을 걸어 두면 결과는 붙잡아 둔 콜백으로 전달된다.
@@ -336,40 +353,52 @@ class PencilInputPadState extends State<PencilInputPad> {
     _strokesDirty = true;
     _strokeRevision++;
     setState(() {
-      _strokes.add(<Offset>[position]);
-      _strokeTimes.add(<int>[timestamp]);
-      _strokePressures.add(<double>[pressure]);
+      _ink.beginStroke(position, timestamp, pressure);
     });
   }
 
   void _extendStroke(Offset position, int timestamp, double pressure) {
     if (_strokes.isEmpty) return;
-    final previous = _strokes.last.last;
-    final previousTime = _strokeTimes.last.last;
-    final previousPressure = _strokePressures.last.last;
-    final distance = (position - previous).distance;
-    // 손떨림 수준의 미세 이동은 방향 노이즈만 만들므로 무시.
-    if (distance < 0.6) return;
-    // 1.8px 간격 보간 — 빠른 획도 끊김 없이 촘촘하게 채운다.
-    final steps = (distance / 1.8).ceil().clamp(1, 64);
-    setState(() {
-      for (var step = 1; step <= steps; step++) {
-        final t = step / steps;
-        _strokes.last.add(Offset.lerp(previous, position, t)!);
-        _strokeTimes.last.add(
-          previousTime + ((timestamp - previousTime) * t).round(),
-        );
-        _strokePressures.last.add(
-          (previousPressure < 0 || pressure < 0)
-              ? pressure
-              : previousPressure + (pressure - previousPressure) * t,
-        );
-      }
-    });
+    if (!_ink.extendStroke(position, timestamp, pressure)) return;
+    setState(() {});
+  }
+
+  /// 펜을 떼 획이 확정되면 좌우 문지르기 지우개인지 먼저 판정하고,
+  /// 일반 획이거나 지워진 글자 묶음을 애플 펜슬 실행 취소 스택에 올린다.
+  void _commitFinishedStroke() {
+    if (_strokes.isEmpty) return;
+    final outcome = _ink.commitOpenStroke();
+    if (outcome == PencilCommitOutcome.none) return;
+    if (outcome == PencilCommitOutcome.erased) {
+      _strokesDirty = true;
+      _strokeRevision++;
+      _recognitionError = null;
+      setState(() {});
+    }
+    if (!ApplePencilUndo.enabled) return;
+    _pencilUndo.beginPush();
+    final epoch = _pencilUndo.epoch;
+    unawaited(() async {
+      final registered = await ApplePencilUndo.push();
+      if (!mounted) return;
+      final popNow = _pencilUndo.finishPush(
+        registered: registered,
+        epoch: epoch,
+      );
+      if (!popNow) return;
+      final handled = await ApplePencilUndo.noteLocalUndo();
+      if (mounted && !handled) _pencilUndo.levels++;
+    }());
   }
 
   void _endStroke() {
     _debounce?.cancel();
+    if (_strokes.isEmpty) {
+      _recognizedRevision = _strokeRevision;
+      _recognitionError = null;
+      widget.onRecognized('');
+      return;
+    }
     _debounce = Timer(recognitionDelay, _recognize);
   }
 
@@ -378,12 +407,9 @@ class PencilInputPadState extends State<PencilInputPad> {
     _debounce?.cancel();
     _activePointer = null;
     if (_strokes.isEmpty) return;
+    _ink.cancelOpenStroke();
     _strokeRevision++;
-    setState(() {
-      _strokes.removeLast();
-      _strokeTimes.removeLast();
-      _strokePressures.removeLast();
-    });
+    setState(() {});
   }
 
   /// up/cancel 공통 처리 — 터치 카운트를 줄이고 진행 중 획을 마감한다.
@@ -395,6 +421,7 @@ class PencilInputPadState extends State<PencilInputPad> {
     }
     if (_activePointer != event.pointer) return;
     _activePointer = null;
+    _commitFinishedStroke();
     _endStroke();
   }
 
@@ -441,6 +468,7 @@ class PencilInputPadState extends State<PencilInputPad> {
   }
 
   Future<void> _recognizeOnce() async {
+    final startRevision = _strokeRevision;
     final recognizer = _recognizer;
     final onRecognized = _activeOnRecognized ?? widget.onRecognized;
     try {
@@ -511,6 +539,10 @@ class PencilInputPadState extends State<PencilInputPad> {
           usedRemote = true;
         }
       }
+      if (_strokeRevision != startRevision) {
+        if (_strokes.isNotEmpty) _rerunRequested = true;
+        return;
+      }
       _publishSnapshot(
         candidates,
         recognizedText: selected,
@@ -527,6 +559,10 @@ class PencilInputPadState extends State<PencilInputPad> {
       debugPrint('Digital ink recognition failed: $e\n$stack');
       // 온디바이스 인식 자체가 실패해도 VLM 폴백은 시도한다.
       final remote = await _tryRemoteRecognize();
+      if (_strokeRevision != startRevision) {
+        if (_strokes.isNotEmpty) _rerunRequested = true;
+        return;
+      }
       if (remote != null) {
         _publishSnapshot(
           const <String>[],
@@ -547,23 +583,45 @@ class PencilInputPadState extends State<PencilInputPad> {
   void _clear() {
     _debounce?.cancel();
     _strokeRevision++;
+    _pencilUndo.reset();
+    unawaited(ApplePencilUndo.reset());
     setState(() {
-      _strokes.clear();
-      _strokeTimes.clear();
-      _strokePressures.clear();
+      _ink.clear();
     });
   }
 
-  void _undo() {
-    if (_strokes.isEmpty) return;
+  void _applyPencilUndo() {
+    if (!mounted) return;
+    _pencilUndo.notePopped();
+    _undo(fromPlatform: true);
+  }
+
+  void _applyPencilRedo() {
+    if (!mounted) return;
+    _pencilUndo.noteRedone();
+    if (!_ink.redo(strokeOpen: _activePointer != null)) return;
     _strokesDirty = true;
     _strokeRevision++;
-    setState(() {
-      _strokes.removeLast();
-      _strokeTimes.removeLast();
-      _strokePressures.removeLast();
-    });
+    setState(() {});
     _endStroke();
+  }
+
+  void _undo({bool fromPlatform = false}) {
+    if (!_ink.undo(strokeOpen: _activePointer != null)) return;
+    _strokesDirty = true;
+    _strokeRevision++;
+    setState(() {});
+    _endStroke();
+    if (fromPlatform) return;
+    if (_pencilUndo.levels > 0) {
+      unawaited(() async {
+        final handled = await ApplePencilUndo.noteLocalUndo();
+        if (!mounted || !handled) return;
+        _pencilUndo.notePopped();
+      }());
+      return;
+    }
+    _pencilUndo.buttonUndoWhilePushPending();
   }
 
   bool undoStroke() {
@@ -721,9 +779,14 @@ class PencilInputPadState extends State<PencilInputPad> {
                             return;
                           }
                           _touchPointerCount += 1;
-                          // 팜 리젝션: 펜슬을 쓰는 세션에서는 손가락·손바닥
-                          // 터치를 필기로 받지 않는다 (진행 중 획도 유지).
-                          if (_stylusSeen) return;
+                          // 문항 카드 위 오버레이나 펜슬 세션에서는 손가락 터치를
+                          // 필기로 받지 않는다 (스크롤·팜 리젝션). 마우스는 데스크톱
+                          // 디버그 입력을 위해 허용한다.
+                          final isTouch =
+                              event.kind == PointerDeviceKind.touch;
+                          if ((widget.stylusOnly && isTouch) || _stylusSeen) {
+                            return;
+                          }
                           // 두 손가락 이상: 필기 대신 상위 스와이프에 맡긴다.
                           if (_touchPointerCount >= 2) {
                             _cancelActiveStroke();
@@ -844,8 +907,10 @@ class PencilInputPadState extends State<PencilInputPad> {
                       ),
                     ),
                   IconButton(
-                    tooltip: '한 획 지우기',
-                    onPressed: _strokes.isEmpty ? null : _undo,
+                    tooltip: '되돌리기',
+                    onPressed: !_ink.canUndo(strokeOpen: _activePointer != null)
+                        ? null
+                        : _undo,
                     icon: const Icon(Icons.undo_rounded, size: 20),
                   ),
                   IconButton(

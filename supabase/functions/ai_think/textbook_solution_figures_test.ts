@@ -1,5 +1,10 @@
 import { assertEquals } from 'jsr:@std/assert@1';
-import { countSolutionFigureMarkers, markedSolutionText, normalizeFigureBoxes } from './textbook_solution_figures.ts';
+import {
+  countSolutionFigureMarkers,
+  markedSolutionText,
+  normalizeFigureBoxes,
+  normalizeFigures,
+} from './textbook_solution_figures.ts';
 
 Deno.test('해설 그림 상자는 0..1000 정수로 묶고 너무 작거나 형식이 틀리면 버린다', () => {
   assertEquals(
@@ -11,6 +16,14 @@ Deno.test('해설 그림 상자는 0..1000 정수로 묶고 너무 작거나 형
       null,
     ]),
     [[100, 0, 400, 1000]],
+  );
+  assertEquals(
+    normalizeFigures([
+      { bbox_1k: [100, 600, 400, 950], placement: 'right_of_text' },
+      { bbox_1k: [500, 100, 800, 500], placement: 'below_text' },
+      { bbox_1k: [500, 100, 800, 500] },
+    ]).map((f) => f.placement),
+    ['right', 'below', 'below'],
   );
 });
 
