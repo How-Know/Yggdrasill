@@ -426,6 +426,27 @@ export function ensureFigureMarkers(stem: string, figureCount: number): string {
   return `${stem.replace(/\s+$/, '')}${'\n[그림]'.repeat(missing)}`;
 }
 
+/** 핀셋 결과를 반영 대기 값(textbook_review_stage_changes 의 p_patch)으로 만든다. 빈 값은 넣지 않는다. */
+export function pincettePatch(v: {
+  stem: string | null;
+  commonStem: string | null;
+  choices: unknown;
+  figureLayout: unknown;
+  answer: string | null;
+  solutionTranscribed: string | null;
+  solutionAnswer: string | null;
+}): Rec {
+  const patch: Rec = {};
+  if (v.stem) patch.stem = v.stem;
+  if (v.commonStem) patch.common_stem = v.commonStem;
+  if (Array.isArray(v.choices) && v.choices.length > 0) patch.choices = v.choices;
+  if (v.figureLayout && typeof v.figureLayout === 'object') patch.figure_layout = v.figureLayout;
+  if (v.answer) patch.answer = v.answer;
+  if (v.solutionTranscribed) patch.solution_transcribed = v.solutionTranscribed;
+  if (v.solutionAnswer) patch.solution_answer = v.solutionAnswer;
+  return patch;
+}
+
 /**
  * 원본에서 새로 찾은 그림 중 본문에 그림 자리가 없는 것은 자동으로 붙이지 않는다.
  * '해' 풀이 안내 속 그림이 문항 그림으로 잡히면 이렇게 된다. crops·layout 에서 빼서 held 로 돌려주고, 사장님이 보고 붙인다.
@@ -634,7 +655,7 @@ const MAX_FIX_CHUNK = 4;
 /**
  * 품질 이상 문항·그림 문항의 수정 단계. 매니저앱이 원본 이미지(본문 PDF 좌표 렌더)와 V2 문항 카드를 보내면
  * 원본과 같아지도록 고친 전체 본문·선지·공통 발문과 그림 배치(figure_layout)·다시 잘라낼 그림을 fix_proposal 에 쓴다.
- * 문제은행(pb_questions)은 건드리지 않는다. 적용은 운영자 승인 또는 품질 일괄 처리가 한다.
+ * 문제은행(pb_questions)은 건드리지 않는다. 앱이 수정안을 반영 대기 값으로 쌓고, 소단원 확정 때 반영한다.
  *   body: { academy_id, book_id, grade_label, big_order, mid_order, crop_ids: [...], images: { [crop_id]: {...} } }
  */
 export async function handleTextbookProblemFix(req: Request, auth: AuthContext, body: Rec): Promise<Response> {
@@ -1051,41 +1072,26 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
       const pincetteCommon = common ?? (typeof r.corrected_common_stem === 'string' && r.corrected_common_stem.trim()
         ? sanitizeProblemMarkup(r.corrected_common_stem.trim())
         : null);
-      if (pincetteStem || pincetteCommon || choices || figure?.layout) {
-        try {
-          await auth.userClient.rpc('textbook_review_apply_problem_fix', {
-            p_crop_id: cid,
-            p_stem: pincetteStem,
-            p_choices: choices,
-            p_common_stem: pincetteCommon,
-            p_figure_layout: figure?.layout ?? null,
-            p_figure_assets: null,
-            p_approve_quality: false,
-            p_note: '핀셋 정밀 추출 자동 반영',
-          });
-        } catch (e) {
-          console.error('[textbook_problem_fix] pincette apply fix failed:', e);
-        }
-      }
+      // 핀셋 결과도 반영 대기 값으로만 쌓는다. 문제은행·정답 반영은 소단원 확정 때 한다.
       const pincetteAns = proposedAnswer ?? proposedSolAnswer ?? proposedAiAnswer;
-      if (pincetteAns) {
-        try {
-          await auth.userClient.rpc('textbook_review_save_item_edit', {
-            p_crop_id: cid,
-            p_new_answer: pincetteAns,
-            p_ai_solution: proposedAiSolution ?? (typeof it.ai_solution === 'string' ? it.ai_solution : null),
-            p_visual_tags: Array.isArray(it.visual_tags) ? it.visual_tags : [],
-            p_approve_math: true,
-            p_approve_quality: false,
-            p_solution_transcribed: proposedSolTranscribed ?? null,
-            p_solution_answer: proposedSolAnswer ?? null,
-            p_alternative_solutions: Array.isArray(it.alternative_solutions) ? it.alternative_solutions : [],
-            p_sync_pb_answer: true,
-            p_ai_answer: proposedAiAnswer ?? pincetteAns,
-          });
-        } catch (e) {
-          console.error('[textbook_problem_fix] pincette save answer failed:', e);
-        }
+      const patch = pincettePatch({
+        stem: pincetteStem,
+        commonStem: pincetteCommon,
+        choices,
+        figureLayout: figure?.layout ?? null,
+        answer: pincetteAns,
+        solutionTranscribed: proposedSolTranscribed,
+        solutionAnswer: proposedSolAnswer,
+      });
+      if (Object.keys(patch).length > 0) {
+        const { error } = await auth.userClient.rpc('textbook_review_stage_changes', {
+          p_crop_id: cid,
+          p_patch: patch,
+          p_source: 'ai',
+          p_note: '핀셋 정밀 추출',
+          p_math_status: pincetteAns ? 'clean' : null,
+        });
+        if (error) console.error('[textbook_problem_fix] pincette stage failed:', error.message);
       }
     }
     if (autoHoldEngine) {

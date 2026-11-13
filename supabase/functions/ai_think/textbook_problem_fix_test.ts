@@ -16,6 +16,7 @@ import {
   normalizeTextFix,
   orderedFigureAssets,
   parseFigureMeasures,
+  pincettePatch,
 } from './textbook_problem_fix.ts';
 
 Deno.test('그림 상자는 0..1000 정수로 묶고 너무 작거나 형식이 틀리면 버린다', () => {
@@ -109,6 +110,25 @@ Deno.test('본문에 그림 자리가 없는 새 그림은 자동 등록에서 �
   const slotted = holdUnslottedFigureCrops(p, { slots: 2, assetCount: 1 });
   assertEquals(slotted.held, []);
   assertEquals(slotted.proposal!.crops.map((c) => c.figure_index), [2]);
+});
+
+Deno.test('핀셋 결과는 비어 있지 않은 값만 반영 대기 값으로 쌓는다', () => {
+  assertEquals(
+    pincettePatch({
+      stem: '다음을 계산하여라.',
+      commonStem: null,
+      choices: [],
+      figureLayout: null,
+      answer: '12',
+      solutionTranscribed: null,
+      solutionAnswer: '12',
+    }),
+    { stem: '다음을 계산하여라.', answer: '12', solution_answer: '12' },
+  );
+  assertEquals(
+    pincettePatch({ stem: null, commonStem: null, choices: null, figureLayout: null, answer: null, solutionTranscribed: null, solutionAnswer: null }),
+    {},
+  );
 });
 
 Deno.test('다른 조각이 섞인 그림은 같은 번호로 그림만 다시 잘라낸다', () => {

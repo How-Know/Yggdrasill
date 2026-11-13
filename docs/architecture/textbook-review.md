@@ -248,6 +248,34 @@ to `bbox_1k`), the set header's `set_header_raw_page` /
 `jsonb_build_object` calls joined by `||`; Postgres allows at most 100
 arguments per call, so keep each call at 50 pairs or fewer.
 
+### Confirmed values on the problem-bank side
+
+`textbook_problem_analyses` is the review work record (proposals, render
+results, engine holds, the AI solve). Confirmed values live with the
+problem-bank question, and only the subunit confirm
+(`textbook_review_apply_staged`) writes them:
+
+- `pb_question_meta`, one row per question: concept and thinking ids,
+  arithmetic counts, the three difficulty scores, visual tags, the textbook
+  label.
+- `pb_question_solutions`, keyed by question × kind × version (decision
+  2026-10-14; only `original` version 1 for now): the printed solution `body`,
+  the solution's own answer `answer`, and `figure_assets`.
+  `textbook_review_publish_solutions` copies them from the analysis row and
+  deletes the row when all three are empty.
+
+The PDF export solution section (gateway `attachSolutionExplanations`), the
+learning app's confirmed-answer "해설" button, and the problem-bank difficulty
+scores read only these tables. The AI solve is never shown there. Both tables
+are readable by academy members (staff) only. The 2026-11-13 migration
+`20261113180000_pb_question_solutions.sql` moved the values of every problem
+already approved on both axes (1-1 and 1-2); moved rows have an empty
+`confirmed_by`. The old 1-1/1-2 concept tags came from the wrong candidate
+list (spec 5-6), so `20261113181000_pb_question_meta_clear_old_concepts.sql`
+empties `concept_ids` and `concept_score` in the moved meta rows. The meta
+pass picks new tags for every item (`meta_checked_at` is empty), and the
+subunit confirm fills the rows.
+
 ### One-touch approval
 
 Owner edits go through `textbook_review_save_item_edit`, which can set the

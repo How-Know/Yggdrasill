@@ -1106,18 +1106,79 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     if (_academyId == null || _academyId!.isEmpty) return;
     if (questions.isEmpty) return;
 
+    final baked = await _service.fetchBakedQuestionPdfPreviews(
+      academyId: _academyId!,
+      questions: questions,
+    );
+    if (!mounted) return;
+    final nextPdf = <String, String>{..._questionPreviewPdfUrls};
+    for (final question in questions) {
+      final id = question.id.trim();
+      if (id.isEmpty) continue;
+      final itemUrl = (baked.itemPdfByQuestionId[id] ?? '').trim();
+      if (itemUrl.isEmpty) {
+        nextPdf.remove(id);
+      } else {
+        nextPdf[id] = itemUrl;
+      }
+    }
+    final slots = groupProblemBankGridSlots<LearningProblemQuestion>(
+      questions,
+      (question) => question,
+    );
+    for (final slot in slots) {
+      if (!slot.isIndependentSet) continue;
+      var commonUrl = '';
+      for (final question in slot.questions) {
+        final url = (baked.commonPdfByQuestionId[question.id] ?? '').trim();
+        if (url.isNotEmpty) {
+          commonUrl = url;
+          break;
+        }
+      }
+      if (commonUrl.isNotEmpty) nextPdf[slot.key] = commonUrl;
+    }
+    setState(() {
+      _questionPreviewPdfUrls = nextPdf;
+      final nextStatus = <String, String>{..._questionPreviewStatus};
+      final nextError = <String, String>{..._questionPreviewError};
+      for (final question in questions) {
+        final id = question.id.trim();
+        if (id.isEmpty || (nextPdf[id] ?? '').isEmpty) continue;
+        nextStatus[id] = 'completed';
+        nextError.remove(id);
+      }
+      for (final slot in slots) {
+        if ((nextPdf[slot.key] ?? '').isEmpty) continue;
+        nextStatus[slot.key] = 'completed';
+        nextError.remove(slot.key);
+      }
+      _questionPreviewStatus = nextStatus;
+      _questionPreviewError = nextError;
+    });
+    unawaited(_fetchCommonSetCardPreviews(questions));
+
+    final pendingQuestions = questions
+        .where((question) => (nextPdf[question.id] ?? '').trim().isEmpty)
+        .toList(growable: false);
+    if (pendingQuestions.isEmpty) return;
+
     if (mounted) {
       setState(() {
         final nextStatus = <String, String>{..._questionPreviewStatus};
-        for (final q in questions) {
-          nextStatus[q.id] = 'running';
+        final nextError = <String, String>{..._questionPreviewError};
+        for (final question in pendingQuestions) {
+          final id = question.id.trim();
+          if (id.isEmpty) continue;
+          nextStatus[id] = 'running';
+          nextError.remove(id);
         }
         _questionPreviewStatus = nextStatus;
+        _questionPreviewError = nextError;
       });
     }
-    unawaited(_fetchCommonSetCardPreviews(questions));
 
-    final questionIds = questions
+    final questionIds = pendingQuestions
         .map((q) => q.questionUid.trim().isNotEmpty
             ? q.questionUid.trim()
             : q.id.trim())
@@ -1165,7 +1226,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         nextError.remove(qid);
       }
 
-      final missingQuestions = questions.where((q) {
+      final missingQuestions = pendingQuestions.where((q) {
         final id = q.id.trim();
         return id.isNotEmpty && !nextUrls.containsKey(id);
       }).toList(growable: false);
@@ -1193,7 +1254,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         }
       }
 
-      for (final q in questions) {
+      for (final q in pendingQuestions) {
         final id = q.id.trim();
         if (id.isNotEmpty && !nextUrls.containsKey(id)) {
           nextStatus[id] = 'failed';
@@ -1211,7 +1272,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       });
     } catch (err) {
       if (!mounted) return;
-      _markAllPreviewsFailed(questions, err.toString());
+      _markAllPreviewsFailed(pendingQuestions, err.toString());
     }
   }
 
@@ -1227,7 +1288,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       final nextError = <String, String>{..._questionPreviewError};
       for (final q in questions) {
         final id = q.id.trim();
-        if (id.isEmpty) continue;
+        if (id.isEmpty || (_questionPreviewPdfUrls[id] ?? '').isNotEmpty) {
+          continue;
+        }
         nextStatus[id] = 'failed';
         nextError[id] = safeMsg;
       }
@@ -1255,7 +1318,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       for (final slot in slots)
         if (slot.isIndependentSet &&
             slot.commonStem.trim().isNotEmpty &&
-            !_questionPreviewUrls.containsKey(slot.key))
+            !_questionPreviewUrls.containsKey(slot.key) &&
+            !_questionPreviewPdfUrls.containsKey(slot.key))
           slot,
     ];
     if (pendingSlots.isEmpty) return;
@@ -3209,6 +3273,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
               separatorBuilder: (_, __) => const SizedBox(height: 10),
               itemBuilder: (context, index) {
                 final q = selected[index];
+                final previewPdfUrl =
+                    (_questionPreviewPdfUrls[q.id] ?? '').trim();
                 final previewUrl = (_questionPreviewUrls[q.id] ?? '').trim();
                 final previewStatus =
                     (_questionPreviewStatus[q.id] ?? '').trim().toLowerCase();
@@ -3239,7 +3305,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                           borderRadius: BorderRadius.circular(6),
                           border: Border.all(color: const Color(0xFFD5D5D5)),
                         ),
-                        child: previewUrl.isNotEmpty
+                        child: previewPdfUrl.isNotEmpty
+                            ? ProblemBankBakedPdfPreview(url: previewPdfUrl)
+                            : previewUrl.isNotEmpty
                             ? SingleChildScrollView(
                                 physics: const ClampingScrollPhysics(),
                                 child: Image.network(
@@ -5131,6 +5199,13 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     );
   }
 
+  String? _previewMeasureUrl(String key) {
+    final pdf = (_questionPreviewPdfUrls[key] ?? '').trim();
+    if (pdf.isNotEmpty) return pdf;
+    final image = (_questionPreviewUrls[key] ?? '').trim();
+    return image.isEmpty ? null : image;
+  }
+
   double _questionCardHeightForQuestion(
     LearningProblemQuestion question,
     double cardWidth,
@@ -5138,7 +5213,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     final measureKey = question.stableQuestionKey;
     final extra = ProblemBankPreviewSizeCache.instance.extraHeightWhenExpanded(
       measureKey: measureKey,
-      previewImageUrl: _questionPreviewUrls[question.id],
+      previewImageUrl: _previewMeasureUrl(question.id),
       cardWidth: cardWidth,
       expanded: _expandedPreviewKeys.contains(measureKey),
     );
@@ -5153,7 +5228,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       return _questionCardHeightForQuestion(slot.firstQuestion, cardWidth);
     }
     final measureKey = 'common:${slot.key}';
-    final imageUrl = _questionPreviewUrls[slot.key];
+    final imageUrl = _previewMeasureUrl(slot.key);
     final extra = ProblemBankPreviewSizeCache.instance.extraHeightWhenExpanded(
       measureKey: measureKey,
       previewImageUrl: imageUrl,
@@ -5291,6 +5366,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         figureUrlsByPath: _questionFigureUrlsByPath[firstQuestion.id] ??
             const <String, String>{},
         previewImageUrl: _questionPreviewUrls[slot.key],
+        previewPdfUrl: _questionPreviewPdfUrls[slot.key],
         previewStatus: _questionPreviewStatus[slot.key] ?? '',
         previewErrorMessage: _questionPreviewError[slot.key] ?? '',
         onRetryPreview: () => _retryCommonSetPreview(
@@ -5338,6 +5414,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         figureUrlsByPath:
             _questionFigureUrlsByPath[question.id] ?? const <String, String>{},
         previewImageUrl: _questionPreviewUrls[question.id],
+        previewPdfUrl: _questionPreviewPdfUrls[question.id],
         previewStatus: _questionPreviewStatus[question.id] ?? '',
         previewErrorMessage: _questionPreviewError[question.id] ?? '',
         onRetryPreview: () => _retryQuestionPreview(question.id),
@@ -5645,6 +5722,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                             _questionFigureUrlsByPath[question.id] ??
                                 const <String, String>{},
                         previewImageUrl: _questionPreviewUrls[question.id],
+                        previewPdfUrl: _questionPreviewPdfUrls[question.id],
                         previewStatus:
                             _questionPreviewStatus[question.id] ?? '',
                         previewErrorMessage:

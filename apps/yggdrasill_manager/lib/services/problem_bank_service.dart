@@ -3902,6 +3902,7 @@ class ProblemBankService {
     Map<String, dynamic>? renderConfig,
     String templateProfile = '',
     String paperSize = '',
+    Map<String, Map<String, dynamic>> questionOverrides = const {},
   }) async {
     if (!hasGateway || questionIds.isEmpty) return {};
     try {
@@ -3909,6 +3910,7 @@ class ProblemBankService {
         'academyId': academyId,
         'questionIds': questionIds,
         'mathEngine': 'xelatex',
+        if (questionOverrides.isNotEmpty) 'questionOverrides': questionOverrides,
       };
       if (documentId.trim().isNotEmpty) body['documentId'] = documentId.trim();
       if (templateProfile.trim().isNotEmpty) {

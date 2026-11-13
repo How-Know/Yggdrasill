@@ -20,3 +20,5 @@ export 'src/widgets/ygg_glass_surface.dart';
 export 'src/widgets/ygg_grouped_layout.dart';
 export 'src/widgets/solid_capsule_action_bar.dart';
 export 'src/widgets/ygg_glass_option_menu.dart';
+export 'src/widgets/latex_text_renderer.dart';
+export 'src/widgets/confirmed_answer_math_view.dart';

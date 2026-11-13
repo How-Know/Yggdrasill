@@ -302,7 +302,7 @@ List<int> scribbleEraseIndices(
   final scribbleBox = _strokeBounds(scribble);
   final width = scribbleBox.width;
   final height = scribbleBox.height;
-  if (width < 16.0 || height > width * 1.15) {
+  if (width < 10.0 || height > width * 1.65) {
     return const <int>[];
   }
 
@@ -312,20 +312,20 @@ List<int> scribbleEraseIndices(
     totalAbsDx += (scribble[i].dx - scribble[i - 1].dx).abs();
     totalAbsDy += (scribble[i].dy - scribble[i - 1].dy).abs();
   }
-  if (totalAbsDx < totalAbsDy * 1.35 || totalAbsDx < width * 2.1) {
+  if (totalAbsDx < totalAbsDy * 0.95 || totalAbsDx < width * 1.75) {
     return const <int>[];
   }
 
   final legs = _extractHorizontalLegs(
     scribble,
-    minLegDx: math.max(12.0, width * 0.30),
+    minLegDx: math.max(7.0, width * 0.18),
   );
   if (legs.length < 3) {
     return const <int>[];
   }
 
   final horizontalLegs =
-      legs.where((leg) => leg.absDx >= leg.absDy * 1.15).length;
+      legs.where((leg) => leg.absDx >= leg.absDy * 0.85).length;
   if (horizontalLegs < 3) {
     return const <int>[];
   }
@@ -335,7 +335,7 @@ List<int> scribbleEraseIndices(
     final a = legs[i].bounds;
     final b = legs[i + 1].bounds;
     final minLegW = math.min(a.width, b.width);
-    if (minLegW > 0 && _horizontalOverlap(a, b) >= minLegW * 0.45) {
+    if (minLegW > 0 && _horizontalOverlap(a, b) >= minLegW * 0.35) {
       overlappingPairs++;
     }
   }
@@ -344,35 +344,29 @@ List<int> scribbleEraseIndices(
   }
 
   if (legs.length == 3) {
-    // 3구간(2번 꺾임)은 z·2와 겹칠 수 있으므로 납작한 좌우 왕복만 허용한다.
-    if (height > width * 0.72 || totalAbsDx < totalAbsDy * 1.65) {
+    // 3구간(좌→우→좌 등)은 z·2 와 겹칠 수 있으므로, 가운데 구간이 대각선으로
+    // 꺾이며 위에서 아래로 떨어지는 형태만 제외한다.
+    if (height > width * 1.35 || totalAbsDx < totalAbsDy * 1.15) {
       return const <int>[];
     }
-    if (legs.any((leg) => leg.absDx < leg.absDy * 1.25)) {
-      return const <int>[];
-    }
+    final middleIsDiagonal = legs[1].absDx < legs[1].absDy * 1.35;
     final progressesTopToBottom =
-        (legs[2].midY - legs[0].midY).abs() > height * 0.50 && height > 18.0;
-    if (progressesTopToBottom) {
+        (legs[2].midY - legs[0].midY).abs() > height * 0.55 && height > 16.0;
+    if (middleIsDiagonal && progressesTopToBottom) {
       return const <int>[];
     }
-  } else {
-    if (totalAbsDx < width * 2.35) {
+  } else if (legs.length == 4 && height > width * 1.25) {
+    final strictlyDownward = legs[0].midY < legs[1].midY &&
+        legs[1].midY < legs[2].midY &&
+        legs[2].midY < legs[3].midY &&
+        (legs[3].midY - legs[0].midY) > height * 0.55;
+    if (strictlyDownward) {
       return const <int>[];
-    }
-    if (legs.length == 4 && height > width * 0.70) {
-      final strictlyDownward = legs[0].midY < legs[1].midY &&
-          legs[1].midY < legs[2].midY &&
-          legs[2].midY < legs[3].midY &&
-          (legs[3].midY - legs[0].midY) > height * 0.55;
-      if (strictlyDownward) {
-        return const <int>[];
-      }
     }
   }
 
-  const hitRadius = 8.0;
-  final inflatedScribbleBox = scribbleBox.inflate(6.0);
+  const hitRadius = 10.0;
+  final inflatedScribbleBox = scribbleBox.inflate(8.0);
   final committedBounds = <Rect>[
     for (final stroke in committedStrokes) _strokeBounds(stroke),
   ];
@@ -400,7 +394,7 @@ List<int> scribbleEraseIndices(
 
     final xOverlap = _horizontalOverlap(scribbleBox, targetBox);
     if (targetBox.width > width * 1.75) {
-      if (hittingLegs.length >= 2 && xOverlap >= targetBox.width * 0.45) {
+      if (hittingLegs.length >= 2 && xOverlap >= targetBox.width * 0.35) {
         directlyHit.add(s);
         engagedLegs.addAll(hittingLegs);
       }
@@ -408,11 +402,11 @@ List<int> scribbleEraseIndices(
     }
 
     final coversHorizontally = targetBox.width < 10.0
-        ? (targetBox.center.dx >= scribbleBox.left - 3.0 &&
-            targetBox.center.dx <= scribbleBox.right + 3.0)
-        : xOverlap >= math.min(targetBox.width * 0.35, width * 0.45);
+        ? (targetBox.center.dx >= scribbleBox.left - 4.0 &&
+            targetBox.center.dx <= scribbleBox.right + 4.0)
+        : xOverlap >= math.min(targetBox.width * 0.30, width * 0.40);
     final insideRatio = _pointsInsideRatio(target, inflatedScribbleBox);
-    if (insideRatio >= 0.55 ||
+    if (insideRatio >= 0.45 ||
         (coversHorizontally && hittingLegs.length >= 2)) {
       directlyHit.add(s);
       engagedLegs.addAll(hittingLegs);

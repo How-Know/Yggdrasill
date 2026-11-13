@@ -1081,31 +1081,19 @@ async function actionReveal(
     return json({ ok: false, error: 'not_self_mode' }, 403);
   }
 
-  // 그림 정답: 답지에서 잘라둔 정답 이미지의 서명 URL
+  // 그림 정답(answer_kind === 'image')만 답지 크롭 이미지 서명 URL을 내려준다.
+  // 일반 수식/텍스트 정답은 클라이언트의 공용 로컬 렌더러(LatexTextRenderer)로 조판한다.
   let imageUrl: string | null = null;
-  if (answers.answer_image_bucket && answers.answer_image_path) {
+  if (
+    String(answers.answer_kind ?? '').toLowerCase() === 'image' &&
+    answers.answer_image_bucket &&
+    answers.answer_image_path
+  ) {
     const { data: signed } = await admin.storage
       .from(answers.answer_image_bucket)
       .createSignedUrl(answers.answer_image_path, 600);
     imageUrl = signed?.signedUrl ?? null;
   }
-  // 미리 렌더된 정답 PNG가 있으면 우선 사용 (분수/행렬 등 2D 표기)
-  const { data: render } = await admin
-    .from('textbook_answer_render_assets')
-    .select('storage_bucket, storage_path, render_error')
-    .eq('crop_id', cropId)
-    .order('updated_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (render && !render.render_error && render.storage_path) {
-    const { data: signed } = await admin.storage
-      .from(render.storage_bucket)
-      .createSignedUrl(render.storage_path, 600);
-    imageUrl = signed?.signedUrl ?? imageUrl;
-  }
-
-  // 텍스트 정답은 LaTeX 원문 대신 학생이 읽을 수 있는 선형 표기로 변환해 반환
-  const displayText = normalizeMathLinear(answerTextOf(crop));
 
   // 세트형이면 파트 정보 동봉 — 정답 텍스트는 self 파트만 포함해
   // 자동 채점 파트의 정답이 미리 새지 않게 한다.
@@ -1119,7 +1107,7 @@ async function actionReveal(
     return {
       key: part.key,
       mode,
-      text: revealText ? (normalizeMathLinear(part.text) || part.text) : null,
+      text: revealText ? part.text : null,
     };
   }) ?? null;
 
@@ -1132,7 +1120,7 @@ async function actionReveal(
   return json({
     ok: true,
     answer_kind: answers.answer_kind,
-    answer_text: hasAutoPart ? null : (displayText || answers.answer_text),
+    answer_text: hasAutoPart ? null : answers.answer_text,
     answer_latex_2d: hasAutoPart ? null : answers.answer_latex_2d,
     image_url: hasAutoPart ? null : imageUrl,
     parts,

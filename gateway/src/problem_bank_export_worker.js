@@ -4263,39 +4263,31 @@ function applyPublishedQuestionFilter(query) {
   return query.eq('is_published', true);
 }
 
+// 해설은 확정본(pb_question_solutions)만 읽는다. 검수 기록(textbook_problem_analyses)의 해설은 확정 전 값일 수 있다.
 async function attachSolutionExplanations(questions) {
   const list = Array.isArray(questions) ? questions : [];
   const ids = [...new Set(list.map((q) => String(q?.id || '').trim()).filter(Boolean))];
   if (ids.length === 0) return list;
   const explanationByQuestionId = new Map();
+  const latestSeen = new Set();
   try {
     for (let offset = 0; offset < ids.length; offset += 200) {
       const chunk = ids.slice(offset, offset + 200);
-      const { data: links, error: linkErr } = await supa
-        .from('textbook_crop_question_links')
-        .select('crop_id,pb_question_id')
-        .in('pb_question_id', chunk);
-      if (linkErr) return list;
-      const cropToQuestion = new Map();
-      for (const link of links || []) {
-        const cropId = String(link.crop_id || '').trim();
-        const questionId = String(link.pb_question_id || '').trim();
-        if (cropId && questionId) cropToQuestion.set(cropId, questionId);
-      }
-      const cropIds = [...cropToQuestion.keys()];
-      if (cropIds.length === 0) continue;
-      const { data: analyses, error: analysisErr } = await supa
-        .from('textbook_problem_analyses')
-        .select('crop_id,solution_transcribed,solution_figure_assets')
-        .in('crop_id', cropIds);
-      if (analysisErr) return list;
-      for (const row of analyses || []) {
-        const text = String(row.solution_transcribed || '').trim();
+      const { data: rows, error } = await supa
+        .from('pb_question_solutions')
+        .select('question_id,body,figure_assets,version')
+        .eq('kind', 'original')
+        .in('question_id', chunk)
+        .order('version', { ascending: false });
+      if (error) return list;
+      for (const row of rows || []) {
+        const questionId = String(row.question_id || '').trim();
+        if (!questionId || latestSeen.has(questionId)) continue;
+        latestSeen.add(questionId);
+        const text = String(row.body || '').trim();
         if (!text) continue;
-        const questionId = cropToQuestion.get(String(row.crop_id || '').trim());
-        if (!questionId) continue;
-        const figures = Array.isArray(row.solution_figure_assets)
-          ? row.solution_figure_assets.filter((a) => a && a.bucket && a.path)
+        const figures = Array.isArray(row.figure_assets)
+          ? row.figure_assets.filter((a) => a && a.bucket && a.path)
           : [];
         explanationByQuestionId.set(questionId, { text, figures });
       }
@@ -5083,7 +5075,11 @@ async function main() {
   console.log('[pb-export-worker] exit');
 }
 
-async function cropSingleQuestionPdfToContent(bytes, slotMeasure) {
+async function cropSingleQuestionPdfToContent(
+  bytes,
+  slotMeasure,
+  { padX = 10, padTop = 10, padBottom = 16, minHeightPt = 72 } = {},
+) {
   const sourceDoc = await PDFDocument.load(bytes);
   const measuredHeight = Number(
     Array.isArray(slotMeasure?.heightsPt)
@@ -5110,9 +5106,6 @@ async function cropSingleQuestionPdfToContent(bytes, slotMeasure) {
   // 크롭 창은 종이 상단이 아니라 **본문 텍스트 시작 좌표(BODYTOP/BODYLEFT)**
   // 기준이어야 한다. 종이 상단부터 자르면 상단 여백(~30mm)+헤더가 포함되고,
   // 그 높이만큼 문항 하단(객관식 보기)이 창 밖으로 잘려나간다.
-  const padX = 10;
-  const padTop = 10;
-  const padBottom = 16;
   const bodyTopPt = Number(slotMeasure?.bodyTopPt);
   const bodyLeftPt = Number(slotMeasure?.bodyLeftPt);
   const columnWidthPt = Number(slotMeasure?.columnWidthPt);
@@ -5127,7 +5120,7 @@ async function cropSingleQuestionPdfToContent(bytes, slotMeasure) {
     : size.width / 2;
   const pageHeight = Math.min(
     size.height - cropTop,
-    Math.max(72, measuredHeight + padTop + padBottom),
+    Math.max(minHeightPt, measuredHeight + padTop + padBottom),
   );
   const top = size.height - cropTop;
   const bottom = Math.max(0, top - pageHeight);
@@ -5146,6 +5139,119 @@ async function cropSingleQuestionPdfToContent(bytes, slotMeasure) {
     height: pageHeight,
   });
   return Buffer.from(await outputDoc.save());
+}
+
+const SINGLE_SET_FIG_MARKER_RE = /\[\s*(?:그림|도형|도표)\s*\]|\[\[PB_FIG_/;
+
+function prepareIndependentSetSingleRender(question, renderProfile) {
+  const meta =
+    question.meta && typeof question.meta === 'object' ? question.meta : {};
+  const model =
+    meta.set_model && typeof meta.set_model === 'object' ? meta.set_model : {};
+  const delivery =
+    meta.delivery_unit && typeof meta.delivery_unit === 'object'
+      ? meta.delivery_unit
+      : {};
+  const deliverySource =
+    delivery.source_meta && typeof delivery.source_meta === 'object'
+      ? delivery.source_meta
+      : {};
+  const commonStem = String(
+    delivery.common_stem || model.common_stem || model.commonStem || '',
+  ).trim();
+  const explicitCommonAssets = Array.isArray(model.common_figure_assets)
+    ? model.common_figure_assets
+    : (Array.isArray(deliverySource.common_figure_assets)
+        ? deliverySource.common_figure_assets
+        : []);
+  const explicitCommonLayout =
+    model.common_figure_layout && typeof model.common_figure_layout === 'object'
+      ? model.common_figure_layout
+      : (deliverySource.common_figure_layout &&
+            typeof deliverySource.common_figure_layout === 'object'
+          ? deliverySource.common_figure_layout
+          : null);
+  const commonHasFig = SINGLE_SET_FIG_MARKER_RE.test(commonStem);
+  const stemHasFig = SINGLE_SET_FIG_MARKER_RE.test(String(question.stem || ''));
+  const itemAssets = Array.isArray(meta.figure_assets) ? meta.figure_assets : [];
+  const donorUsesItemFigure =
+    commonHasFig &&
+    explicitCommonAssets.length === 0 &&
+    itemAssets.length > 0 &&
+    !stemHasFig;
+
+  if (renderProfile === 'student-set-common-v1') {
+    const nextMeta = { ...meta };
+    delete nextMeta.set_model;
+    delete nextMeta.delivery_unit;
+    if (explicitCommonAssets.length > 0) {
+      nextMeta.figure_assets = explicitCommonAssets;
+      if (explicitCommonLayout) nextMeta.figure_layout = explicitCommonLayout;
+      else delete nextMeta.figure_layout;
+    } else if (donorUsesItemFigure) {
+      nextMeta.figure_assets = itemAssets;
+    } else {
+      delete nextMeta.figure_assets;
+      delete nextMeta.figure_layout;
+    }
+    if (model.common_table_scales && typeof model.common_table_scales === 'object') {
+      nextMeta.table_scales = model.common_table_scales;
+    }
+    if (model.common_table_layout && typeof model.common_table_layout === 'object') {
+      nextMeta.table_layout = model.common_table_layout;
+    }
+    return {
+      question: {
+        ...question,
+        id: `${question.id}:common`,
+        question_uid: `${question.question_uid}:common`,
+        question_number: '',
+        question_type: '주관식',
+        stem: commonStem,
+        choices: [],
+        objective_choices: [],
+        __is_common_stem_block: true,
+        meta: nextMeta,
+      },
+      hideQuestionNumber: true,
+      disableIndependentSetGrouping: true,
+      // 8절 모의고사 인쇄물 2단 두 번째 줄(번호 1em 제외) 폭 312.56pt와 동일하게 맞춘다.
+      geometryOverride:
+        'paperwidth=261.90mm,paperheight=390mm,hmargin=14mm,top=14mm,bottom=12mm,headheight=12pt,headsep=0pt',
+      cropPadding: { padX: 10, padTop: 10, padBottom: 10, minHeightPt: 24 },
+    };
+  }
+
+  const isSetItem =
+    renderProfile === 'student-set-item-v1' ||
+    renderProfile.startsWith('student-set-item-v1:n:');
+  if (isSetItem) {
+    const hasAnyCommonFigure =
+      explicitCommonAssets.length > 0 || donorUsesItemFigure;
+    const sharesSameFigureAsCommon =
+      commonHasFig && hasAnyCommonFigure && !stemHasFig;
+    const nextMeta = { ...meta };
+    if (sharesSameFigureAsCommon) {
+      nextMeta.figure_assets = [];
+      delete nextMeta.figure_layout;
+    }
+    return {
+      question: {
+        ...question,
+        figure_refs: sharesSameFigureAsCommon ? [] : question.figure_refs,
+        meta: nextMeta,
+      },
+      // 번호는 앱에서 그려 가변 번호(교재/과제)에서도 1종류 PDF만 재사용한다.
+      // 본문 폭은 8절 인쇄물 두 번째 줄(312.56pt)과 동일하다.
+      hideQuestionNumber: true,
+      disableIndependentSetGrouping: true,
+      geometryOverride:
+        'paperwidth=261.90mm,paperheight=390mm,hmargin=14mm,top=14mm,bottom=12mm,headheight=12pt,headsep=0pt',
+      cropPadding: { padX: 10, padTop: 6, padBottom: 12, minHeightPt: 24 },
+    };
+  }
+
+  return null;
 }
 
 async function renderSingleQuestionPdf({
@@ -5170,6 +5276,17 @@ async function renderSingleQuestionPdf({
     equations: Array.isArray(question.equations) ? question.equations : [],
     meta: question.meta && typeof question.meta === 'object' ? question.meta : {},
   };
+  const setPrepared = prepareIndependentSetSingleRender(
+    normalizedQuestion,
+    renderProfile,
+  );
+  const renderQuestion = setPrepared?.question || normalizedQuestion;
+  const hideQuestionNumber = setPrepared
+    ? setPrepared.hideQuestionNumber
+    : true;
+  const disableIndependentSetGrouping = setPrepared
+    ? setPrepared.disableIndependentSetGrouping
+    : false;
   const job = {
     academy_id: String(academyId || question.academy_id || '').trim(),
     template_profile: 'naesin',
@@ -5183,10 +5300,11 @@ async function renderSingleQuestionPdf({
       layoutColumns: 2,
       maxQuestionsPerPage: 1,
       hidePreviewHeader: true,
-      hideQuestionNumber: true,
+      hideQuestionNumber,
       includeAcademyLogo: false,
       includeCoverPage: false,
       disableAutoLabels: true,
+      disableIndependentSetGrouping,
       singleQuestionContentPage: true,
       // 내신형은 요청 크기에서 0.5pt 를 뺀다. 11.5 를 넣으면 본문이 8절과 같은 11pt.
       font: { size: 11.5 },
@@ -5197,13 +5315,15 @@ async function renderSingleQuestionPdf({
   // 8절(270mm, 좌우 14mm) 2단 칸은 323.56pt 이고, 번호 1em(11pt)을 빼면
   // 본문 한 줄이 312.56pt(한글 약 28자)다. 학생 화면은 번호를 그리지 않으므로
   // 그 312.56pt 를 단 폭(0.4775×본문폭−4pt)으로 맞춘다.
-  // 본문폭 233.90mm, 용지 폭 261.90mm.
+  // 본문폭 233.90mm, 용지 폭 261.90mm. (독립형 세트 공통·하위 문항도 동일)
   renderConfig.geometryOverride =
+    setPrepared?.geometryOverride ||
     'paperwidth=261.90mm,paperheight=390mm,hmargin=14mm,top=14mm,bottom=12mm,headheight=12pt,headsep=0pt';
-  const rendered = await renderPdf(job, [normalizedQuestion], renderConfig);
+  const rendered = await renderPdf(job, [renderQuestion], renderConfig);
   const bytes = await cropSingleQuestionPdfToContent(
     rendered.bytes,
     rendered.slotMeasure,
+    setPrepared?.cropPadding,
   );
   return {
     bytes,

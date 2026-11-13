@@ -170,9 +170,9 @@ module.exports = {
       env: {
         NODE_ENV: 'production',
         QUESTION_RENDER_WORKER_BATCH_SIZE:
-          process.env.QUESTION_RENDER_WORKER_BATCH_SIZE || '6',
+          process.env.QUESTION_RENDER_WORKER_BATCH_SIZE || '8',
         QUESTION_RENDER_WORKER_INTERVAL_MS:
-          process.env.QUESTION_RENDER_WORKER_INTERVAL_MS || '800',
+          process.env.QUESTION_RENDER_WORKER_INTERVAL_MS || '600',
         QUESTION_RENDER_WORKER_STALE_MS:
           process.env.QUESTION_RENDER_WORKER_STALE_MS || '600000'
       }

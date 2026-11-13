@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:yggdrasill_ui/yggdrasill_ui.dart'
+    show ConfirmedAnswerMathFormatter, ConfirmedAnswerMathLinesView;
 
 import '../../services/answer_render_image_cache.dart';
 import '../../services/data_manager.dart';
@@ -68,54 +70,6 @@ class _GradingConfirmedAnswerDialogState
       (_a4WidthPt - _a4MarginPt * 2 - _a4ColumnGapPt) / 2 * _ptToDp;
 
   static final RegExp _digitsCleanupRe = RegExp(r'[^0-9]');
-  static final RegExp _envBlockRe =
-      RegExp(r'\\begin\{([a-zA-Z*]+)\}[\s\S]*?\\end\{\1\}');
-  static final RegExp _multiSpaceRe = RegExp(r'\s+');
-  static final RegExp _commaRe = RegExp(r',');
-  static final RegExp _semicolonRe = RegExp(r';');
-  static final RegExp _equalsRe = RegExp(r'=');
-  static final RegExp _ltOpRe = RegExp(r'<');
-  static final RegExp _gtOpRe = RegExp(r'>');
-  static final RegExp _timesRe = RegExp(r'(?<![A-Za-z])\\times(?![A-Za-z])');
-  static final RegExp _divRe = RegExp(r'(?<![A-Za-z])\\div(?![A-Za-z])');
-  static final RegExp _cdotRe = RegExp(r'(?<![A-Za-z])\\cdot(?![A-Za-z])');
-  static final RegExp _pmRe = RegExp(r'(?<![A-Za-z])\\pm(?![A-Za-z])');
-  static final RegExp _leRe = RegExp(r'(?<![A-Za-z])\\le(?![A-Za-z])');
-  static final RegExp _geRe = RegExp(r'(?<![A-Za-z])\\ge(?![A-Za-z])');
-  static final RegExp _ltCmdRe = RegExp(r'(?<![A-Za-z])\\lt(?![A-Za-z])');
-  static final RegExp _gtCmdRe = RegExp(r'(?<![A-Za-z])\\gt(?![A-Za-z])');
-  static final RegExp _neRe = RegExp(r'(?<![A-Za-z])\\ne(?![A-Za-z])');
-  static final RegExp _closeParenTightRe = RegExp(r'\)(?=[A-Za-z0-9\\])');
-  static final RegExp _nonKoreanRe = RegExp(r'[^가-힣]+');
-  static final RegExp _hasKoreanRe = RegExp(r'[가-힣]');
-  static final RegExp _fracCmdRe = RegExp(r'\\(?:dfrac|tfrac|frac)\s*(?=\{)');
-  static final RegExp _slashFracRe = RegExp(
-    r'(?<![\\\w])(-?\d+(?:\.\d+)?)\s*/\s*(-?\d+(?:\.\d+)?)(?![\w])',
-  );
-  static final RegExp _mathCandidateRe = RegExp(
-    r'[A-Za-z0-9=<>^_{}\\]|\\times|\\over|\\le|\\ge|\\lt|\\gt|\\frac|\\dfrac',
-  );
-  static final RegExp _operatorTokenRe = RegExp(
-    r'^(?:=|,|;|:|[+\-*/<>]|\\times|\\div|\\cdot|\\pm|\\le|\\ge|\\lt|\\gt|\\ne)+$',
-  );
-  static const List<String> _setPartKoreanKeys = <String>[
-    '가',
-    '나',
-    '다',
-    '라',
-    '마',
-    '바',
-    '사',
-    '아',
-    '자',
-    '차',
-    '카',
-    '타',
-  ];
-  static final RegExp _setParenNumMarkerRe = RegExp(r'^[(（]\s*(\d{1,2})\s*[)）]');
-  static final RegExp _setBareNumMarkerRe = RegExp(r'^(\d{1,2})\s*[)）]');
-  static final RegExp _setKorMarkerRe = RegExp(r'^[(（]\s*([가-힣])\s*[)）]');
-  static final RegExp _whitespaceCharRe = RegExp(r'\s');
 
   bool _loading = true;
   String? _error;
@@ -388,8 +342,7 @@ class _GradingConfirmedAnswerDialogState
                     : _normalizeAnswerLinesForDisplay(displayAnswer),
                 setParts: precomputedParts,
                 imageUrl: imageUrl,
-                solutionText: solutionByCrop[id]?.text ?? '',
-                solutionSource: solutionByCrop[id]?.source ?? '',
+                solutionText: solutionByCrop[id] ?? '',
                 orderKey: _orderKeyFromRow(row),
               ),
             );
@@ -1319,10 +1272,9 @@ class _GradingConfirmedAnswerDialogState
     );
   }
 
-  Future<Map<String, ({String text, String source})>> _loadSolutions(
-    Set<String> cropIds,
-  ) async {
-    final out = <String, ({String text, String source})>{};
+  /// 크롭별 확정 해설(문제은행 쪽 원본 해설). 검수 기록의 해설·AI 풀이는 확정 전 값이라 읽지 않는다.
+  Future<Map<String, String>> _loadSolutions(Set<String> cropIds) async {
+    final out = <String, String>{};
     if (cropIds.isEmpty) return out;
     try {
       final supa = Supabase.instance.client;
@@ -1330,23 +1282,19 @@ class _GradingConfirmedAnswerDialogState
       for (var i = 0; i < ids.length; i += 200) {
         final end = math.min(i + 200, ids.length);
         final rows = await supa
-            .from('textbook_problem_analyses')
-            .select('crop_id, solution_transcribed, ai_solution')
-            .inFilter('crop_id', ids.sublist(i, end));
-        for (final raw in rows) {
-          if (raw is! Map) continue;
-          final id = '${raw['crop_id'] ?? ''}'.trim();
-          if (id.isEmpty) continue;
-          final book = '${raw['solution_transcribed'] ?? ''}'.trim();
-          final ai = '${raw['ai_solution'] ?? ''}'.trim();
-          if (book.isNotEmpty) {
-            out[id] = (text: book, source: 'book');
-          } else if (ai.isNotEmpty) {
-            out[id] = (text: ai, source: 'ai');
-          }
+            .from('pb_question_solutions')
+            .select('source_crop_id, body, version')
+            .eq('kind', 'original')
+            .inFilter('source_crop_id', ids.sublist(i, end))
+            .order('version', ascending: false);
+        for (final row in rows) {
+          final id = '${row['source_crop_id'] ?? ''}'.trim();
+          if (id.isEmpty || out.containsKey(id)) continue;
+          out[id] = '${row['body'] ?? ''}'.trim();
         }
       }
     } catch (_) {}
+    out.removeWhere((_, body) => body.isEmpty);
     return out;
   }
 
@@ -1392,11 +1340,7 @@ class _GradingConfirmedAnswerDialogState
   Future<void> _openSolution(_AnswerItemVm item) async {
     if (!mounted) return;
     final text = item.solutionText.trim();
-    final caption = text.isEmpty
-        ? ''
-        : item.solutionSource == 'ai'
-            ? '교재 해설이 없어 AI 풀이를 표시합니다.'
-            : '교재 해설';
+    final caption = text.isEmpty ? '' : '교재 해설';
     await showDialog<void>(
       context: context,
       barrierColor: Colors.black.withValues(
@@ -1563,361 +1507,18 @@ class _GradingConfirmedAnswerDialogState
   }
 
   Widget _buildMathAnswerLines(YggDialogColors dlg, List<String> lines) {
-    if (lines.isEmpty) {
-      return _buildSingleMathAnswerLine(dlg, '-');
-    }
-    if (lines.length == 1) {
-      return _buildSingleMathAnswerLine(dlg, lines.first);
-    }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        for (var i = 0; i < lines.length; i += 1) ...[
-          if (i > 0) const SizedBox(height: 8),
-          _buildSingleMathAnswerLine(dlg, lines[i]),
-        ],
-      ],
+    return ConfirmedAnswerMathLinesView(
+      lines: lines,
+      textColor: dlg.text,
+      fontSize: 24,
     );
   }
 
-  Widget _buildSingleMathAnswerLine(
-    YggDialogColors dlg,
-    String normalizedMarkup,
-  ) {
-    return LatexTextRenderer(
-      normalizedMarkup,
-      dollarMath: false,
-      softWrap: true,
-      enableDisplayMath: true,
-      displayMathOverflow: DisplayMathOverflow.scaleDown,
-      overflow: TextOverflow.visible,
-      style: TextStyle(
-        color: dlg.text,
-        fontFamily: LatexTextRenderer.v2TextFontFamily,
-        fontSize: 24,
-        fontWeight: FontWeight.w700,
-        height: 1.3,
-      ),
-    );
-  }
+  List<String> _normalizeAnswerLinesForDisplay(String raw) =>
+      ConfirmedAnswerMathFormatter.normalizeAnswerLinesForDisplay(raw);
 
-  /// 우측 정답리스트와 동일한 토큰 단위 줄바꿈 + 2D 환경(`$$...$$`) 보존.
-  /// 여러 줄(`\n`) 정답은 줄별 리스트로 쪼개 분수 높이에 상관없이 줄 사이 여백을 일정하게 유지한다.
-  List<String> _normalizeAnswerLinesForDisplay(String raw) {
-    final trimmed = raw.trim();
-    if (trimmed.isEmpty || trimmed == '-') return const <String>['-'];
-
-    if (_envBlockRe.hasMatch(trimmed)) {
-      final out = <String>[];
-      var last = 0;
-      for (final m in _envBlockRe.allMatches(trimmed)) {
-        if (m.start > last) {
-          final before = trimmed.substring(last, m.start).trim();
-          if (before.isNotEmpty) {
-            for (final line in before.split('\n')) {
-              final mk = _overflowAnswerMarkup(line.trim());
-              if (mk.isNotEmpty) out.add(mk);
-            }
-          }
-        }
-        out.add('\$\$${m.group(0)!.trim()}\$\$');
-        last = m.end;
-      }
-      if (last < trimmed.length) {
-        final after = trimmed.substring(last).trim();
-        if (after.isNotEmpty) {
-          for (final line in after.split('\n')) {
-            final mk = _overflowAnswerMarkup(line.trim());
-            if (mk.isNotEmpty) out.add(mk);
-          }
-        }
-      }
-      return out.isEmpty ? const <String>['-'] : out;
-    }
-
-    if (trimmed.contains('\n')) {
-      final lines = trimmed
-          .split('\n')
-          .map((line) => _overflowAnswerMarkup(line.trim()))
-          .where((line) => line.isNotEmpty)
-          .toList(growable: false);
-      return lines.isEmpty ? const <String>['-'] : lines;
-    }
-    final single = _overflowAnswerMarkup(trimmed);
-    return <String>[single.isEmpty ? '-' : single];
-  }
-
-  String _preprocessOverflowRaw(String raw) {
-    var s = raw
-        .replaceAll('\r', ' ')
-        .replaceAll(r'\(', ' ')
-        .replaceAll(r'\)', ' ')
-        .replaceAll(r'$$', ' ')
-        .replaceAll(r'$', ' ')
-        .replaceAll(r'\quad', ' ')
-        .replaceAll(r'\qquad', ' ')
-        .replaceAll(r'\ ', ' ');
-    const opMap = <String, String>{
-      '×': r' \times ',
-      '÷': r' \div ',
-      '·': r' \cdot ',
-      '≤': r' \le ',
-      '≥': r' \ge ',
-      '≠': r' \ne ',
-      '±': r' \pm ',
-      '＜': ' < ',
-      '＞': ' > ',
-      '〈': ' < ',
-      '〉': ' > ',
-      '⟨': ' < ',
-      '⟩': ' > ',
-      '《': ' < ',
-      '》': ' > ',
-      r'\bigcirc': '○',
-    };
-    for (final e in opMap.entries) {
-      s = s.replaceAll(e.key, e.value);
-    }
-    return s.replaceAll(_multiSpaceRe, ' ').trim();
-  }
-
-  String _insertSplittableSpaces(String input) {
-    var s = input;
-    s = s.replaceAllMapped(_commaRe, (_) => ' , ');
-    s = s.replaceAllMapped(_semicolonRe, (_) => ' ; ');
-    s = s.replaceAllMapped(_equalsRe, (_) => ' = ');
-    s = s.replaceAllMapped(_ltOpRe, (_) => ' < ');
-    s = s.replaceAllMapped(_gtOpRe, (_) => ' > ');
-    s = s.replaceAllMapped(_timesRe, (_) => r' \times ');
-    s = s.replaceAllMapped(_divRe, (_) => r' \div ');
-    s = s.replaceAllMapped(_cdotRe, (_) => r' \cdot ');
-    s = s.replaceAllMapped(_pmRe, (_) => r' \pm ');
-    s = s.replaceAllMapped(_leRe, (_) => r' \le ');
-    s = s.replaceAllMapped(_geRe, (_) => r' \ge ');
-    s = s.replaceAllMapped(_ltCmdRe, (_) => r' \lt ');
-    s = s.replaceAllMapped(_gtCmdRe, (_) => r' \gt ');
-    s = s.replaceAllMapped(_neRe, (_) => r' \ne ');
-    s = s.replaceAllMapped(_closeParenTightRe, (_) => ') ');
-    return s.replaceAll(_multiSpaceRe, ' ').trim();
-  }
-
-  List<String> _splitTopLevelTokens(String s) {
-    final out = <String>[];
-    final buf = StringBuffer();
-    var braceDepth = 0;
-    for (var i = 0; i < s.length; i += 1) {
-      final c = s[i];
-      if (c == '{') braceDepth += 1;
-      if (c == '}') braceDepth = braceDepth > 0 ? braceDepth - 1 : 0;
-      if (c == ' ' && braceDepth == 0) {
-        final token = buf.toString();
-        if (token.isNotEmpty) out.add(token);
-        buf.clear();
-      } else {
-        buf.write(c);
-      }
-    }
-    final tail = buf.toString();
-    if (tail.isNotEmpty) out.add(tail);
-    return out;
-  }
-
-  String _overflowAnswerMarkup(String raw) {
-    final preprocessed = _preprocessOverflowRaw(raw);
-    if (preprocessed.isEmpty) return '';
-    final buffer = StringBuffer();
-    var lastIndex = 0;
-    for (final match in _nonKoreanRe.allMatches(preprocessed)) {
-      if (match.start > lastIndex) {
-        buffer.write(preprocessed.substring(lastIndex, match.start));
-      }
-      final segment = preprocessed.substring(match.start, match.end);
-      final core = segment.trim();
-      final leading = segment.startsWith(' ') ? ' ' : '';
-      final trailing = segment.endsWith(' ') && segment.length > 1 ? ' ' : '';
-      if (core.isEmpty) {
-        buffer.write(segment);
-        lastIndex = match.end;
-        continue;
-      }
-      buffer.write(leading);
-      buffer.write(_buildMathSegmentMarkup(core));
-      buffer.write(trailing);
-      lastIndex = match.end;
-    }
-    if (lastIndex < preprocessed.length) {
-      buffer.write(preprocessed.substring(lastIndex));
-    }
-    return buffer.toString();
-  }
-
-  String _promoteFractionsForOverflow(String latex) {
-    var out = latex;
-    out = out.replaceAllMapped(_fracCmdRe, (_) => r'\dfrac');
-    out = out.replaceAllMapped(
-      _slashFracRe,
-      (m) => '\\dfrac{${m.group(1) ?? ''}}{${m.group(2) ?? ''}}',
-    );
-    return out;
-  }
-
-  bool _looksLikeMathCandidate(String raw) {
-    final input = raw.trim();
-    if (input.isEmpty) return false;
-    if (_hasKoreanRe.hasMatch(input)) return false;
-    return _mathCandidateRe.hasMatch(input);
-  }
-
-  /// 짧은 단일 수식은 하나의 `Math.tex`로 묶어 위젯 수와 조판 비용을 줄이고,
-  /// 쉼표·세미콜론 나열이거나 긴 수식은 토큰 단위로 쪼개 줄바꿈되게 한다.
-  String _buildMathSegmentMarkup(String segment) {
-    if (!segment.contains(',') &&
-        !segment.contains(';') &&
-        segment.length <= 28) {
-      final latex = _promoteFractionsForOverflow(segment);
-      if (_looksLikeMathCandidate(latex)) {
-        final hasFraction = latex.contains(r'\frac') ||
-            latex.contains(r'\dfrac') ||
-            latex.contains(r'\tfrac');
-        return hasFraction ? '\\(\\displaystyle $latex\\)' : '\\($latex\\)';
-      }
-      return latex;
-    }
-    return _buildTokenizedMathMarkup(segment);
-  }
-
-  String _buildTokenizedMathMarkup(String segment) {
-    final spaced = _insertSplittableSpaces(segment);
-    final tokens = _splitTopLevelTokens(spaced);
-    if (tokens.isEmpty) return '';
-    final pieces = <String>[];
-    for (final rawToken in tokens) {
-      final token = rawToken.trim();
-      if (token.isEmpty) continue;
-      final latex = _promoteFractionsForOverflow(token);
-      final isOperatorToken = _operatorTokenRe.hasMatch(token);
-      if (isOperatorToken || _looksLikeMathCandidate(token)) {
-        final hasFraction = latex.contains(r'\frac') ||
-            latex.contains(r'\dfrac') ||
-            latex.contains(r'\tfrac');
-        pieces.add(
-          hasFraction ? '\\(\\displaystyle $latex\\)' : '\\($latex\\)',
-        );
-      } else {
-        pieces.add(latex);
-      }
-    }
-    return pieces.join(' ');
-  }
-
-  /// 하위 문항 라벨 분리.
-  /// - `(1) ... (2) ...` / `1) ... 2) ...` / `(가) ... (나) ...` 순차 마커만 인정한다.
-  /// - 마커는 문자열 맨 앞 또는 공백 뒤, 그리고 괄호·중괄호 바깥(`depth == 0`)에서만
-  ///   인정하여 `A(2, 3)`의 `3)`이나 `P(-2, 4)`의 `4)`를 하위 번호로 오인하지 않는다.
-  List<({String label, String value})> _splitSetAnswerParts(String raw) {
-    final text = raw.trim();
-    if (text.isEmpty) return const [];
-
-    final parts = <({String label, String value})>[];
-    var i = 0;
-    var expected = 1;
-    var contentStart = -1;
-    // 0: (1) 숫자 모드, 1: 1) 반괄호 숫자 모드, 2: (가) 한글 모드
-    var mode = 0;
-    var parenDepth = 0;
-    var braceDepth = 0;
-
-    String labelOf(int n) {
-      if (mode == 2) return '(${_setPartKoreanKeys[n - 1]})';
-      if (mode == 1) return '$n)';
-      return '($n)';
-    }
-
-    while (i < text.length) {
-      final prev = i == 0 ? ' ' : text[i - 1];
-      if (parenDepth == 0 &&
-          braceDepth == 0 &&
-          _whitespaceCharRe.hasMatch(prev)) {
-        final head = text.substring(i);
-        var markerLen = 0;
-        if (expected == 1) {
-          if (text.substring(0, i).trim().isEmpty) {
-            final mp = _setParenNumMarkerRe.firstMatch(head);
-            if (mp != null && int.parse(mp.group(1)!) == 1) {
-              markerLen = mp.group(0)!.length;
-              mode = 0;
-            } else {
-              final mb = _setBareNumMarkerRe.firstMatch(head);
-              if (mb != null && int.parse(mb.group(1)!) == 1) {
-                markerLen = mb.group(0)!.length;
-                mode = 1;
-              } else {
-                final mk = _setKorMarkerRe.firstMatch(head);
-                if (mk != null && mk.group(1) == _setPartKoreanKeys[0]) {
-                  markerLen = mk.group(0)!.length;
-                  mode = 2;
-                }
-              }
-            }
-          }
-        } else if (mode == 0) {
-          final mp = _setParenNumMarkerRe.firstMatch(head);
-          if (mp != null && int.parse(mp.group(1)!) == expected) {
-            markerLen = mp.group(0)!.length;
-          }
-        } else if (mode == 1) {
-          final mb = _setBareNumMarkerRe.firstMatch(head);
-          if (mb != null && int.parse(mb.group(1)!) == expected) {
-            markerLen = mb.group(0)!.length;
-          }
-        } else {
-          final mk = _setKorMarkerRe.firstMatch(head);
-          if (mk != null &&
-              expected <= _setPartKoreanKeys.length &&
-              mk.group(1) == _setPartKoreanKeys[expected - 1]) {
-            markerLen = mk.group(0)!.length;
-          }
-        }
-
-        if (markerLen > 0) {
-          if (expected == 1) {
-            contentStart = i + markerLen;
-            expected = 2;
-            i += markerLen;
-            continue;
-          }
-          final value = text.substring(contentStart, i).trim();
-          if (value.isNotEmpty) {
-            parts.add((label: labelOf(expected - 1), value: value));
-            contentStart = i + markerLen;
-            expected += 1;
-            i += markerLen;
-            continue;
-          }
-        }
-      }
-
-      final ch = text[i];
-      if (ch == '(' || ch == '（') {
-        parenDepth += 1;
-      } else if (ch == ')' || ch == '）') {
-        if (parenDepth > 0) parenDepth -= 1;
-      } else if (ch == '{') {
-        braceDepth += 1;
-      } else if (ch == '}') {
-        if (braceDepth > 0) braceDepth -= 1;
-      }
-      i += 1;
-    }
-
-    if (expected < 3 || contentStart < 0) return const [];
-    final last = text.substring(contentStart).trim();
-    if (last.isEmpty) return const [];
-    parts.add((label: labelOf(expected - 1), value: last));
-    if (parts.length > 12) return const [];
-    return parts;
-  }
+  List<({String label, String value})> _splitSetAnswerParts(String raw) =>
+      ConfirmedAnswerMathFormatter.splitSetAnswerParts(raw);
 
   String _pageRangeLabel(int? start, int? end) {
     if (start == null || start <= 0) return '';
@@ -2404,7 +2005,6 @@ class _AnswerItemVm {
     required this.setParts,
     required this.imageUrl,
     required this.solutionText,
-    required this.solutionSource,
     required this.orderKey,
   });
 
@@ -2418,7 +2018,6 @@ class _AnswerItemVm {
   final List<({String label, List<String> normalizedLines})> setParts;
   final String imageUrl;
   final String solutionText;
-  final String solutionSource;
   final TextbookProblemSourceOrderKey orderKey;
 }
 

@@ -20,6 +20,7 @@ import {
   parseReviewImages,
   pbQuestionHasFigures,
   sanitizeProblemMarkup,
+  solutionFigureVerdict,
   stripCommonStem,
   stripGuidedSolution,
   withoutDependentSetCommonStem,
@@ -106,8 +107,26 @@ Deno.test('그림 마커 수와 그림 크기 비율 허용 범위', () => {
   assertEquals(figureMarkerCount('그림 없음'), 0);
   assert(figureSizeRatioOk(null));
   assert(figureSizeRatioOk(1.1));
+  assert(figureSizeRatioOk(0.9));
+  assert(!figureSizeRatioOk(1.12));
+  assert(!figureSizeRatioOk(0.88));
   assert(!figureSizeRatioOk(1.4));
   assert(!figureSizeRatioOk(0.6));
+  // 예전 흐름에서 승인된 문항은 승인 당시 범위(±15%)를 인정한다.
+  assert(figureSizeRatioOk(1.12, true));
+  assert(figureSizeRatioOk(0.88, true));
+  assert(!figureSizeRatioOk(1.2, true));
+});
+
+Deno.test('해설 그림은 원본 해설과 대조해 크기 ±10%·위치가 맞을 때만 통과다', () => {
+  const v = (o: Partial<Parameters<typeof solutionFigureVerdict>[0]>) =>
+    solutionFigureVerdict({ hasSolutionFigures: true, compared: true, positionOk: true, sizeRatio: 1, ...o });
+  assert(v({ hasSolutionFigures: false, compared: false }).ok);
+  assert(v({}).ok);
+  assert(!v({ compared: false }).ok);
+  assert(!v({ sizeRatio: null }).ok);
+  assert(!v({ sizeRatio: 1.2 }).ok);
+  assert(!v({ positionOk: false }).ok);
 });
 
 Deno.test('세트 문항은 공통 지시문과 개별 문항을 합쳐 읽는다', () => {

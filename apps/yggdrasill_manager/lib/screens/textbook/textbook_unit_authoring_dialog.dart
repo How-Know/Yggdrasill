@@ -5198,17 +5198,23 @@ class _TextbookUnitAuthoringDialogState
         }
         try {
           final midKey = '${order.bookId}|${order.gradeLabel}|${order.bigOrder}|${order.midOrder}';
-          var all = itemsByMid[midKey] ??= await review.fetchUnitItems(order.reviewScope);
-          var items = [for (final it in all) if (order.matches(it)) it];
-          if (await review.reconcileBeforeConfirm(items) > 0) {
-            all = itemsByMid[midKey] = await review.fetchUnitItems(order.reviewScope);
-            items = [for (final it in all) if (order.matches(it)) it];
-          }
+          final all = itemsByMid[midKey] ??= await review.fetchUnitItems(order.reviewScope);
+          final items = [for (final it in all) if (order.matches(it)) it];
           final ready = items.where((x) => x.isWorkflowReady).length;
           if (items.isEmpty || ready < items.length) {
             problems.add('$label: 준비됨 $ready/${items.length}');
             continue;
           }
+          final stop = await review.consistencyGateForConfirm(order.reviewScope, items);
+          if (stop != null) {
+            itemsByMid.remove(midKey);
+            problems.add('$label: $stop');
+            continue;
+          }
+          // 수정안을 문제은행·정답에 한 번에 반영한다. 실패하면 아무것도 반영되지 않고 확정하지 않는다.
+          final applied = await review.applyForConfirm(items);
+          problems.addAll([for (final e in applied.errors) '$label: $e']);
+          itemsByMid.remove(midKey);
           await _workflowService.confirmSubunit(wf, confirmed: true);
           await _registry.setScopeConfirmed(
             academyId: wf.academyId,

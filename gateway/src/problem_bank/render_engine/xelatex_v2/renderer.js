@@ -46,7 +46,7 @@ function materializeDataUrlLogo(dataUrl, workDir) {
   }
 }
 
-async function normalizeFigureAssetForXeLatex(bytes) {
+async function normalizeFigureAssetForXeLatex(bytes, { keepMargins = false } = {}) {
   try {
     const meta = await sharp(bytes, { failOn: 'none' }).metadata();
     const width = Number(meta.width || 0);
@@ -54,9 +54,12 @@ async function normalizeFigureAssetForXeLatex(bytes) {
     if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
       return { bytes, ext: '', mimeType: '' };
     }
-    const trimmed = await sharp(bytes, { failOn: 'none' })
-      .flatten({ background: { r: 255, g: 255, b: 255 } })
-      .trim({ background: { r: 255, g: 255, b: 255 }, threshold: 10 })
+    // keepMargins: 빈칸 자체가 원본 모양인 그림(빈칸 가운데 점 하나 등)은 흰 여백을 자르지 않는다.
+    const flattened = sharp(bytes, { failOn: 'none' })
+      .flatten({ background: { r: 255, g: 255, b: 255 } });
+    const trimmed = await (keepMargins
+      ? flattened
+      : flattened.trim({ background: { r: 255, g: 255, b: 255 }, threshold: 10 }))
       .png({ compressionLevel: 9, adaptiveFiltering: true })
       .toBuffer();
     const trimmedMeta = await sharp(trimmed, { failOn: 'none' }).metadata();
@@ -361,7 +364,9 @@ export async function hydrateFiguresForXeLatex(questions, supabaseClient, workDi
             storagePath,
           );
           const downloadedBytes = Buffer.from(await data.arrayBuffer());
-          const normalizedFigure = await normalizeFigureAssetForXeLatex(downloadedBytes);
+          const normalizedFigure = await normalizeFigureAssetForXeLatex(downloadedBytes, {
+            keepMargins: asset?.keep_margins === true,
+          });
           const ext = normalizedFigure.ext
             || (asset.mime_type || 'image/png').split('/').pop()
             || 'png';

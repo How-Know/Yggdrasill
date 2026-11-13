@@ -92,6 +92,8 @@ Future<bool> openDigitalHomeworkSolve(
       groupId: group.groupId,
       title: group.title,
       cropIds: usable.map((problem) => problem.cropId).toSet(),
+      orderedCropIds:
+          usable.map((problem) => problem.cropId).toList(growable: false),
       rawPages: usable.map((problem) => problem.rawPage!).toSet(),
     );
     if (!context.mounted) return true;

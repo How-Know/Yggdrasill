@@ -135,6 +135,7 @@ class TextbookExplorerController extends ChangeNotifier {
   bool questionMetadataLoading = false;
   String? _visibleMetadataAttemptKey;
   final Map<String, String> questionPreviewUrls = <String, String>{};
+  final Map<String, String> questionPreviewPdfUrls = <String, String>{};
   final Map<String, String> questionPreviewStatus = <String, String>{};
   final Map<String, String> questionPreviewError = <String, String>{};
   final Map<String, Map<String, String>> questionFigureUrlsByPath =
@@ -1614,6 +1615,7 @@ class TextbookExplorerController extends ChangeNotifier {
     final setKey = commonSetKey?.trim() ?? '';
     if (setKey.isNotEmpty) {
       questionPreviewUrls.remove(setKey);
+      questionPreviewPdfUrls.remove(setKey);
       questionPreviewStatus[setKey] = 'running';
       questionPreviewError.remove(setKey);
       notifyListeners();
@@ -1628,6 +1630,7 @@ class TextbookExplorerController extends ChangeNotifier {
     final id = question.id.trim();
     if (id.isEmpty) return;
     questionPreviewUrls.remove(id);
+    questionPreviewPdfUrls.remove(id);
     questionPreviewStatus[id] = 'running';
     questionPreviewError.remove(id);
     notifyListeners();
@@ -1667,7 +1670,11 @@ class TextbookExplorerController extends ChangeNotifier {
         if (question == null) continue;
         visibleQuestions.add(question);
         final id = question.id.trim();
-        if (id.isEmpty || questionPreviewUrls.containsKey(id)) continue;
+        if (id.isEmpty ||
+            questionPreviewUrls.containsKey(id) ||
+            questionPreviewPdfUrls.containsKey(id)) {
+          continue;
+        }
         needPreview.add(question);
       }
       await Future.wait(<Future<void>>[
@@ -1699,18 +1706,45 @@ class TextbookExplorerController extends ChangeNotifier {
     for (final question in questions) {
       final id = question.id.trim();
       if (id.isEmpty) continue;
-      questionPreviewStatus[id] = 'running';
-      questionPreviewError.remove(id);
       if (question.isIndependentSetItem &&
           question.orderedFigureAssets.isNotEmpty &&
           !questionFigureUrlsByPath.containsKey(id)) {
         unawaited(_prefetchQuestionFigureUrls(question));
       }
     }
+
+    final baked = await _problemBankService.fetchBakedQuestionPdfPreviews(
+      academyId: academyId,
+      questions: questions,
+    );
+    if (_disposed) return;
+    final pending = <LearningProblemQuestion>[];
+    for (final question in questions) {
+      final id = question.id.trim();
+      if (id.isEmpty) continue;
+      final itemUrl = (baked.itemPdfByQuestionId[id] ?? '').trim();
+      if (itemUrl.isEmpty) {
+        questionPreviewPdfUrls.remove(id);
+        pending.add(question);
+      } else {
+        questionPreviewPdfUrls[id] = itemUrl;
+        questionPreviewStatus[id] = 'completed';
+        questionPreviewError.remove(id);
+      }
+    }
+    if (!_disposed) notifyListeners();
+    if (pending.isEmpty) return;
+
+    for (final question in pending) {
+      final id = question.id.trim();
+      if (id.isEmpty) continue;
+      questionPreviewStatus[id] = 'running';
+      questionPreviewError.remove(id);
+    }
     if (!_disposed) notifyListeners();
 
     final byDocument = <String, List<LearningProblemQuestion>>{};
-    for (final question in questions) {
+    for (final question in pending) {
       byDocument
           .putIfAbsent(question.documentId.trim(), () => [])
           .add(question);
@@ -1779,7 +1813,11 @@ class TextbookExplorerController extends ChangeNotifier {
 
       for (final question in batch) {
         final id = question.id.trim();
-        if (id.isEmpty || questionPreviewUrls.containsKey(id)) continue;
+        if (id.isEmpty ||
+            questionPreviewUrls.containsKey(id) ||
+            questionPreviewPdfUrls.containsKey(id)) {
+          continue;
+        }
         questionPreviewStatus[id] = 'failed';
         questionPreviewError[id] = _problemBankService.hasGateway
             ? '서버 미리보기 응답에서 누락되었습니다.'
@@ -1822,17 +1860,45 @@ class TextbookExplorerController extends ChangeNotifier {
       for (final slot in slots)
         if (slot.isIndependentSet &&
             slot.commonStem.trim().isNotEmpty &&
-            !questionPreviewUrls.containsKey(slot.key))
+            !questionPreviewUrls.containsKey(slot.key) &&
+            !questionPreviewPdfUrls.containsKey(slot.key))
           slot,
     ];
     if (pendingSlots.isEmpty) return;
+    final baked = await _problemBankService.fetchBakedQuestionPdfPreviews(
+      academyId: academyId,
+      questions: [
+        for (final slot in pendingSlots) ...slot.questions,
+      ],
+    );
+    if (_disposed) return;
+    final stillPending = <ProblemBankGridSlot<LearningProblemQuestion>>[];
     for (final slot in pendingSlots) {
+      var commonUrl = '';
+      for (final question in slot.questions) {
+        final url = (baked.commonPdfByQuestionId[question.id] ?? '').trim();
+        if (url.isNotEmpty) {
+          commonUrl = url;
+          break;
+        }
+      }
+      if (commonUrl.isEmpty) {
+        stillPending.add(slot);
+        continue;
+      }
+      questionPreviewPdfUrls[slot.key] = commonUrl;
+      questionPreviewStatus[slot.key] = 'completed';
+      questionPreviewError.remove(slot.key);
+    }
+    if (!_disposed) notifyListeners();
+    if (stillPending.isEmpty) return;
+    for (final slot in stillPending) {
       questionPreviewStatus[slot.key] = 'running';
       questionPreviewError.remove(slot.key);
     }
     if (!_disposed) notifyListeners();
     await Future.wait(
-      pendingSlots.map(
+      stillPending.map(
         (slot) => _renderCommonSetCardPreview(
           setKey: slot.key,
           donorQuestion: slot.commonPreviewDonorQuestion,
@@ -1849,6 +1915,20 @@ class TextbookExplorerController extends ChangeNotifier {
   }) async {
     if (_disposed || academyId.trim().isEmpty) return;
     try {
+      final baked = await _problemBankService.fetchBakedQuestionPdfPreviews(
+        academyId: academyId,
+        questions: <LearningProblemQuestion>[donorQuestion],
+      );
+      final bakedUrl =
+          (baked.commonPdfByQuestionId[donorQuestion.id] ?? '').trim();
+      if (bakedUrl.isNotEmpty) {
+        if (_disposed) return;
+        questionPreviewPdfUrls[setKey] = bakedUrl;
+        questionPreviewStatus[setKey] = 'completed';
+        questionPreviewError.remove(setKey);
+        notifyListeners();
+        return;
+      }
       final url = await _problemBankService
           .renderIndependentSetCommonStemThumbnail(
         academyId: academyId,
@@ -2713,6 +2793,13 @@ class TextbookExplorerContent extends StatelessWidget {
     );
   }
 
+  String? _previewMeasureUrl(TextbookExplorerController controller, String key) {
+    final pdf = (controller.questionPreviewPdfUrls[key] ?? '').trim();
+    if (pdf.isNotEmpty) return pdf;
+    final image = (controller.questionPreviewUrls[key] ?? '').trim();
+    return image.isEmpty ? null : image;
+  }
+
   double _questionCardHeightForItem(TbExItem item, double cardWidth) {
     final question = controller.questionForUid(item.questionUid);
     if (question == null) return _tbExQuestionCardHeight;
@@ -2720,7 +2807,7 @@ class TextbookExplorerContent extends StatelessWidget {
     final id = question.id.trim();
     final extra = ProblemBankPreviewSizeCache.instance.extraHeightWhenExpanded(
       measureKey: measureKey,
-      previewImageUrl: controller.questionPreviewUrls[id],
+      previewImageUrl: _previewMeasureUrl(controller, id),
       cardWidth: cardWidth,
       expanded: controller.expandedPreviewKeys.contains(measureKey),
     );
@@ -2735,7 +2822,7 @@ class TextbookExplorerContent extends StatelessWidget {
       return _questionCardHeightForItem(slot.firstItem, cardWidth);
     }
     final measureKey = 'common:${slot.key}';
-    final imageUrl = controller.questionPreviewUrls[slot.key];
+    final imageUrl = _previewMeasureUrl(controller, slot.key);
     final extra = ProblemBankPreviewSizeCache.instance.extraHeightWhenExpanded(
       measureKey: measureKey,
       previewImageUrl: imageUrl,
@@ -2870,6 +2957,7 @@ class TextbookExplorerContent extends StatelessWidget {
         figureUrlsByPath:
             controller.questionFigureUrlsByPath[id] ?? const <String, String>{},
         previewImageUrl: controller.questionPreviewUrls[slot.key],
+        previewPdfUrl: controller.questionPreviewPdfUrls[slot.key],
         previewStatus: controller.questionPreviewStatus[slot.key] ?? '',
         previewErrorMessage: controller.questionPreviewError[slot.key] ?? '',
         onRetryPreview: () {
@@ -2920,6 +3008,7 @@ class TextbookExplorerContent extends StatelessWidget {
         figureUrlsByPath:
             controller.questionFigureUrlsByPath[id] ?? const <String, String>{},
         previewImageUrl: controller.questionPreviewUrls[id],
+        previewPdfUrl: controller.questionPreviewPdfUrls[id],
         previewStatus: controller.questionPreviewStatus[id] ?? '',
         previewErrorMessage: controller.questionPreviewError[id] ?? '',
         onRetryPreview: () {

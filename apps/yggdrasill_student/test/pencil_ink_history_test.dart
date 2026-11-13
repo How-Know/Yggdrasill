@@ -109,4 +109,46 @@ void main() {
     expect(history.commitOpenStroke(), PencilCommitOutcome.added);
     expect(history.strokes.length, 2);
   });
+
+  test('위에서 아래로 3~4번 왕복하거나 약간 기울어진 문지르기도 글자를 지운다', () {
+    // 3회 왕복(→ ← →)이 위에서 아래로 내려오며 '5' 크기의 글자를 덮는 경우
+    final threePass = PencilInkHistory();
+    threePass.beginStroke(const Offset(50, 30), 0, 1);
+    threePass.extendStroke(const Offset(50, 62), 20, 1);
+    expect(threePass.commitOpenStroke(), PencilCommitOutcome.added);
+
+    threePass.beginStroke(const Offset(34, 34), 40, 1);
+    threePass.extendStroke(const Offset(66, 39), 60, 1);
+    threePass.extendStroke(const Offset(34, 48), 80, 1);
+    threePass.extendStroke(const Offset(66, 58), 100, 1);
+    expect(threePass.commitOpenStroke(), PencilCommitOutcome.erased);
+    expect(threePass.strokes, isEmpty);
+
+    // 4회 왕복(→ ← → ←)이 정사각형에 가까운 세로 높이로 지그재그 지우는 경우
+    final fourPass = PencilInkHistory();
+    fourPass.beginStroke(const Offset(50, 30), 0, 1);
+    fourPass.extendStroke(const Offset(50, 64), 20, 1);
+    expect(fourPass.commitOpenStroke(), PencilCommitOutcome.added);
+
+    fourPass.beginStroke(const Offset(36, 32), 40, 1);
+    fourPass.extendStroke(const Offset(64, 36), 60, 1);
+    fourPass.extendStroke(const Offset(36, 44), 80, 1);
+    fourPass.extendStroke(const Offset(64, 52), 100, 1);
+    fourPass.extendStroke(const Offset(36, 62), 120, 1);
+    expect(fourPass.commitOpenStroke(), PencilCommitOutcome.erased);
+    expect(fourPass.strokes, isEmpty);
+
+    // 얇은 숫자 '1' 위를 좁게 문지르는 경우
+    final narrow = PencilInkHistory();
+    narrow.beginStroke(const Offset(40, 40), 0, 1);
+    narrow.extendStroke(const Offset(40, 68), 20, 1);
+    expect(narrow.commitOpenStroke(), PencilCommitOutcome.added);
+
+    narrow.beginStroke(const Offset(33, 48), 40, 1);
+    narrow.extendStroke(const Offset(47, 50), 60, 1);
+    narrow.extendStroke(const Offset(33, 53), 80, 1);
+    narrow.extendStroke(const Offset(47, 56), 100, 1);
+    expect(narrow.commitOpenStroke(), PencilCommitOutcome.erased);
+    expect(narrow.strokes, isEmpty);
+  });
 }

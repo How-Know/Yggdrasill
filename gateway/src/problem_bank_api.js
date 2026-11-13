@@ -16,6 +16,7 @@ import {
 import { createMathSvgRenderer } from "./problem_bank/render_engine/math/mathjax_svg_renderer.js";
 import { generateObjectiveDraftForQuestion } from "./problem_bank_extract_worker.js";
 import { syncMiddleSchoolPresetForDocument } from "./problem_bank/naesin_preset.js";
+import { applyQuestionOverride, overridePreviewKey } from "./problem_bank/preview_overrides.js";
 import {
   createConceptPageStore,
   createConceptPageWorker,
@@ -6694,15 +6695,20 @@ async function batchRenderThumbnails(res, req) {
   }
 
   const clientModeMap = body?.questionModeByQuestionUid || {};
+  const overrides =
+    body?.questionOverrides && typeof body.questionOverrides === "object"
+      ? body.questionOverrides
+      : {};
   const orderedQuestions = [];
   const qidOrder = [];
   const unresolvedQuestionIds = [];
   for (const qid of questionIds) {
-    const row = rowById.get(qid);
-    if (!row) {
+    const dbRow = rowById.get(qid);
+    if (!dbRow) {
       unresolvedQuestionIds.push(qid);
       continue;
     }
+    const row = applyQuestionOverride(dbRow, overrides[qid]);
     const uid = String(row?.question_uid || row?.id || "").trim();
     const clientMode = clientModeMap[qid] || clientModeMap[uid] || "";
     const mode =
@@ -6872,7 +6878,9 @@ async function batchRenderThumbnails(res, req) {
               .png({ compressionLevel: 9 })
               .toBuffer();
 
-            const storagePath = `${academyId}/batch-preview/${EXPORT_RENDER_CONFIG_VERSION_V2}/card/${qid}.png`;
+            const storagePath = overrides[qid]
+              ? `${academyId}/batch-preview/${EXPORT_RENDER_CONFIG_VERSION_V2}/card-staged/${overridePreviewKey(qid, overrides[qid])}.png`
+              : `${academyId}/batch-preview/${EXPORT_RENDER_CONFIG_VERSION_V2}/card/${qid}.png`;
             const { error: upErr } = await supa.storage
               .from(BATCH_THUMB_BUCKET)
               .upload(storagePath, cropped, {

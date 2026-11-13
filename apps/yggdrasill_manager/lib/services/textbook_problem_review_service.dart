@@ -532,8 +532,12 @@ Map<String, dynamic> scaleFigureLayout(
 }
 
 /// 렌더 검수에서 그림 크기 비율(V2 ÷ 원본)이 이 범위 밖이면 크기를 다시 맞춘다(Edge FIGURE_SIZE_RATIO_* 와 같다).
-const double kFigureSizeRatioMin = 0.85;
-const double kFigureSizeRatioMax = 1.15;
+const double kFigureSizeRatioMin = 0.9;
+const double kFigureSizeRatioMax = 1.1;
+
+/// 예전 흐름에서 승인된 문항은 승인 당시 범위(±15%)를 인정한다(Edge LEGACY_FIGURE_SIZE_RATIO_* 와 같다).
+const double kLegacyFigureSizeRatioMin = 0.85;
+const double kLegacyFigureSizeRatioMax = 1.15;
 
 /// done/total 을 반올림한 퍼센트. 분모가 0이면 0.
 int percentOf(int done, int total) {
@@ -784,6 +788,12 @@ class TextbookProblemReviewItem {
     this.solutionFiguresCheckedAt,
     this.solutionExtractedAt,
     this.solutionContinuations = const [],
+    this.stagedChanges = const {},
+    this.dbValues = const {},
+    this.conceptProposals = const [],
+    this.metaCheckedAt,
+    this.metaSources = const {},
+    this.consistencyIssues = const [],
   });
 
   factory TextbookProblemReviewItem.fromJson(Map<String, dynamic> m) {
@@ -898,6 +908,14 @@ class TextbookProblemReviewItem {
       thinkings: mapList(m['thinkings']),
       arithmetics: mapList(m['arithmetics']),
       findings: mapList(m['findings']),
+      stagedChanges:
+          m['staged_changes'] is Map ? Map<String, dynamic>.from(m['staged_changes'] as Map) : const <String, dynamic>{},
+      dbValues: m['db_values'] is Map ? Map<String, dynamic>.from(m['db_values'] as Map) : const <String, dynamic>{},
+      conceptProposals: mapList(m['concept_proposals']),
+      metaCheckedAt: m['meta_checked_at'] is String ? DateTime.tryParse('${m['meta_checked_at']}') : null,
+      metaSources:
+          m['meta_sources'] is Map ? Map<String, dynamic>.from(m['meta_sources'] as Map) : const <String, dynamic>{},
+      consistencyIssues: mapList(m['consistency_issues']),
     );
   }
 
@@ -970,6 +988,75 @@ class TextbookProblemReviewItem {
   final List<Map<String, dynamic>> thinkings;
   final List<Map<String, dynamic>> arithmetics;
   final List<Map<String, dynamic>> findings;
+
+  /// 소단원 확정 때 반영할 값(textbook_problem_analyses.staged_changes). 본문·정답 등 위 필드는 이미 이 값을 겹친 모습이다.
+  final Map<String, dynamic> stagedChanges;
+
+  /// 반영 대기 값을 겹치기 전 문제은행·정답 원래 값(overview db_values)
+  final Map<String, dynamic> dbValues;
+
+  /// 라이브러리에 맞는 개념이 없어 AI가 낸 새 개념 초안 [{name, type, content, near_concept_id, reason}]. 확정 때 만든다.
+  final List<Map<String, dynamic>> conceptProposals;
+
+  /// 단원 기준 개념 후보로 개념·사고를 고른 시각. 비어 있으면 예전 후보 목록에서 고른 태그이거나 아직 고르지 않았다.
+  final DateTime? metaCheckedAt;
+
+  /// 사람이 고친 메타 {"concepts": "owner", "thinkings": "owner"}. AI 재실행이 덮어쓰지 않는다.
+  final Map<String, dynamic> metaSources;
+
+  /// 코드 정합성 점검(사양 5-2)이 남긴 열린 지적 [{id, code, axis, title, detail, status}].
+  /// 일반 지적(findings)과 따로 온다. 고치거나 "문제 없음"으로 닫기 전에는 준비됨이 아니다.
+  final List<Map<String, dynamic>> consistencyIssues;
+
+  static const Map<String, String> stagedFieldNames = {
+    'stem': '개별 발문',
+    'common_stem': '공통 발문',
+    'choices': '선지',
+    'figure_layout': '그림 크기·배치',
+    'figure_assets': '원본 크롭 그림',
+    'answer': '정답',
+    'solution_transcribed': '해설',
+    'solution_answer': '해설 정답',
+    'question_kind': '문항 유형',
+    'allow_subjective': '주관식 겸용',
+  };
+
+  /// 반영 대기 중인 항목 키(확정 때 문제은행·정답에 들어간다)
+  List<String> get stagedFields => [for (final k in stagedFieldNames.keys) if (stagedChanges.containsKey(k)) k];
+  bool get hasStagedChanges => stagedFields.isNotEmpty;
+  bool stagedByOwner(String field) =>
+      stagedChanges['sources'] is Map && (stagedChanges['sources'] as Map)[field] == 'owner';
+
+  /// 반영 대기 내역 한 줄 요약. 없으면 null.
+  String? get stagedSummary {
+    final fields = stagedFields;
+    if (fields.isEmpty) return null;
+    return '확정 때 반영: ${[for (final f in fields) stagedFieldNames[f]!].join('·')}';
+  }
+
+  /// 확정 전 V2 카드를 반영 대기 값으로 찍을 때 게이트웨이에 넘기는 덮어쓰기 값(batch-render questionOverrides)
+  Map<String, dynamic>? get previewOverride {
+    final s = stagedChanges;
+    final o = <String, dynamic>{
+      if (s.containsKey('stem')) 'stem': stem,
+      if (s.containsKey('choices')) 'choices': rawChoices,
+      if (s.containsKey('common_stem')) 'common_stem': commonStem,
+      if (s.containsKey('figure_assets')) 'figure_assets': pbFigureAssets,
+      if (s.containsKey('figure_layout')) 'figure_layout': pbFigureLayout,
+      if (s.containsKey('question_kind')) ...{
+        'question_type': questionType,
+        'allow_objective': pbAllowObjective,
+        'allow_subjective': pbAllowSubjective,
+      },
+    };
+    return o.isEmpty ? null : o;
+  }
+
+  /// 정답 축 판정이 통과(AI 통과 또는 확정 승인)
+  bool get mathOk => mathStatus == 'clean' || mathStatus == 'approved';
+
+  /// 문항 축 판정이 통과(AI 통과 또는 확정 승인)
+  bool get qualityOk => qualityStatus == 'clean' || qualityStatus == 'approved';
 
   /// 문제은행 선지 원형 [{label, text}]. 수정 적용 때 그대로 보낸다.
   final List<Map<String, dynamic>> rawChoices;
@@ -1082,7 +1169,16 @@ class TextbookProblemReviewItem {
   bool get renderCheckStale =>
       renderCheckedAt != null && solutionExtractedAt != null && solutionExtractedAt!.isAfter(renderCheckedAt!);
 
-  bool get hasAnswerImage => answerKind == 'image' && answerImageBucket.isNotEmpty && answerImagePath.isNotEmpty;
+  bool get hasAnswerImage =>
+      answerKind == 'image' && !imageAnswerReplacedByOwner && answerImageBucket.isNotEmpty && answerImagePath.isNotEmpty;
+
+  /// 그림 정답을 운영자가 글자 정답으로 고쳐 반영 대기에 넣었다. 확정 때 그림 정답이 이 글자 정답으로 바뀌므로
+  /// (textbook_review_apply_staged) 확정 전 카드·판정도 글자 정답으로 본다.
+  bool get imageAnswerReplacedByOwner =>
+      answerKind == 'image' &&
+      stagedByOwner('answer') &&
+      existingAnswer.trim().isNotEmpty &&
+      !_imagePlaceholderAnswerRe.hasMatch(existingAnswer.trim());
 
   /// 정답+해설 카드 캐시 키 원문(글자·그림 정답·해설 그림이 바뀌면 달라진다)
   String get answerSolutionCardSource => '$displayAnswer\n$primarySolutionText\n'
@@ -1226,9 +1322,17 @@ class TextbookProblemReviewItem {
 
   /// V2 그림 크기 ÷ 원본 그림 크기(글자 대비). 원본 대조에서 잰 값.
   double? get figureSizeRatio => (renderChecks['figure_size_ratio'] as num?)?.toDouble();
-  bool get figureNeedsResize {
-    final r = figureSizeRatio;
-    return r != null && r > 0 && (r < kFigureSizeRatioMin || r > kFigureSizeRatioMax);
+  bool get figureNeedsResize => _figureRatioOutOfRange(figureSizeRatio);
+
+  /// 해설 그림 크기 ÷ 원본 해설 그림 크기(글자 대비)
+  double? get solutionFigureSizeRatio => (renderChecks['solution_figure_size_ratio'] as num?)?.toDouble();
+  bool get solutionFigureNeedsResize => solutionFigureAssets.isNotEmpty && _figureRatioOutOfRange(solutionFigureSizeRatio);
+
+  bool _figureRatioOutOfRange(double? r) {
+    if (r == null || r <= 0) return false;
+    final approved = qualityStatus == 'approved';
+    return r < (approved ? kLegacyFigureSizeRatioMin : kFigureSizeRatioMin) ||
+        r > (approved ? kLegacyFigureSizeRatioMax : kFigureSizeRatioMax);
   }
 
   String get previewLookupKey => questionUid.isNotEmpty ? questionUid : pbQuestionId;
@@ -1405,7 +1509,8 @@ class TextbookProblemReviewItem {
       : null;
 
   /// 채점 정답이 답지에서 잘라 저장한 그림이다. 문제은행에는 글자 대신 그림 표시가 들어간다.
-  bool get isImageAnswer => answerKind == 'image' || _imagePlaceholderAnswerRe.hasMatch(existingAnswer.trim());
+  bool get isImageAnswer =>
+      (answerKind == 'image' && !imageAnswerReplacedByOwner) || _imagePlaceholderAnswerRe.hasMatch(existingAnswer.trim());
 
   /// 2단계 작업 화면의 "준비됨"을 막는 이유. 비어 있으면 준비됨.
   List<String> get readyBlockers => [
@@ -1413,12 +1518,67 @@ class TextbookProblemReviewItem {
         if (isEngineHeld) '렌더 엔진 수정 필요',
         if (existingAnswer.trim().isEmpty) '채점 정답 없음',
         if (!hasSolutionRef && !solutionMarkedNone) '해설 위치 없음',
-        if (mathStatus != 'approved') '정답 검수 미승인',
-        if (pbAnswerDiffers) '문제은행 정답 다름',
-        if (!isEngineHeld && qualityStatus != 'approved') '문항 검수 미승인',
+        if (!mathOk) '정답 검수 미통과',
+        if (!isEngineHeld && !qualityOk) '문항 검수 미통과',
         if (!isEngineHeld && renderBlocksReady) 'V2 렌더 이상',
+        if (openSolutionLogicFinding != null) '해설 논리 오류',
+        if (openCorrectionNotes.isNotEmpty) '교정 의견 처리 필요',
+        if (consistencyIssues.isNotEmpty)
+          '정합성: ${{for (final f in consistencyIssues) '${f['title'] ?? ''}'.trim()}.where((t) => t.isNotEmpty).join(', ')}',
+        if (missingMeta.isNotEmpty) '메타 누락: ${missingMeta.join(', ')}',
       ];
   bool get isWorkflowReady => readyBlockers.isEmpty;
+
+  /// 교재 원본 오류로 보이는 교정 의견 중 사장님이 아직 처리하지 않은 것
+  List<Map<String, dynamic>> get openCorrectionNotes => [
+        for (final f in findings)
+          if (f['proposal'] is Map && (f['proposal'] as Map)['target'] == 'correction_note') f,
+      ];
+
+  /// 원본 해설의 풀이 논리 오류(정답은 맞아도 준비됨이 아니다)
+  Map<String, dynamic>? get openSolutionLogicFinding {
+    for (final f in findings) {
+      if (f['error_type'] == 'solution_logic' && !(f['proposal'] is Map && (f['proposal'] as Map)['target'] == 'correction_note')) {
+        return f;
+      }
+    }
+    return null;
+  }
+
+  /// 비어 있는 메타 필수 항목(사양 3-1, 3-3).
+  /// - 개념: 확정 때 만들 새 개념 초안도 연결로 본다. 예전 후보 목록에서 고른 태그는 근거로 쓰지 않는다(사양 5-6).
+  /// - 난이도: 개념·사고 점수는 연결에서, 계산 점수는 AI 풀이에서 나온다. 풀이 뒤 계산 점수 0은 "계산 없음"이다.
+  /// - 시각 태그: 시각 요소가 없으면 "없음" 태그를 단다. 빈 목록은 누락이다.
+  /// - 교재 라벨: 크롭 확정 때 사장님이 번호·본문과 함께 확인한다. 빈 라벨은 "없음"이다.
+  List<String> get missingMeta {
+    final solved = (aiSolution ?? '').trim().isNotEmpty;
+    final kind = questionType.trim();
+    return [
+      if (concepts.isEmpty && conceptProposals.isEmpty)
+        '개념 연결'
+      else if (metaCheckedAt == null)
+        '개념 재선정',
+      if (thinkings.isEmpty) '사고 코드',
+      if (!solved) '난이도',
+      if (visualTags.isEmpty) '시각 태그',
+      if (kind.isEmpty || kind == '미분류') '문항 유형',
+    ];
+  }
+
+  String get labelDisplay => label.trim().isNotEmpty ? label.trim() : '없음';
+
+  /// 개념·사고를 아직 단원 기준 후보로 고르지 않았다(사람이 둘 다 고쳤으면 고르지 않는다).
+  bool get needsConceptMeta =>
+      metaCheckedAt == null && !(metaSources['concepts'] == 'owner' && metaSources['thinkings'] == 'owner');
+
+  /// AI 풀이를 거쳤는데 시각 태그가 비었다. 풀이 전 문항은 2단계 풀이가 태그를 고른다.
+  bool get needsVisualTags => (aiSolution ?? '').trim().isNotEmpty && visualTags.isEmpty;
+
+  /// 메타 전용 AI 대상(Edge isMetaTodo 와 같다): 문제은행 문항과 본문이 있고, 개념·사고를 다시 골라야 하거나 시각 태그가 빈 문항.
+  bool get needsMetaPass =>
+      pbQuestionId.isNotEmpty &&
+      (stem.trim().isNotEmpty || commonStem.trim().isNotEmpty) &&
+      (needsConceptMeta || needsVisualTags);
 
   /// 문제은행 사본 정답이 채점 정답과 다른가(표기 공백·$ 제거 후 단순 비교).
   /// 원문 선지가 있고 답이 선지 번호면 객관식 정답 키(비어 있어도 다름)와, 그 밖에는 주관식 정답과 비교한다.
@@ -1453,21 +1613,11 @@ class TextbookProblemReviewItem {
       renderChecks['solution_ok'] == false ||
       renderChecks['fidelity_ok'] == false ||
       renderChecks['figure_position_ok'] == false ||
+      renderChecks['solution_figures_ok'] == false ||
       figureNeedsResize;
 
-  /// 엔진 보류 문항을 사장님이 "엔진 수정 확인됨 → 품질 승인"으로 승인한 뒤로 렌더 검수를 다시 하지 않았다.
-  /// 그 승인은 남아 있는 렌더 이상 판정을 보고 내린 것이므로 그 판정은 더 이상 준비됨을 막지 않는다.
-  bool get renderIssueAcceptedByOwner =>
-      engineResolvedAt != null && renderCheckedAt != null && !engineResolvedAt!.isBefore(renderCheckedAt!);
-
-  /// 준비됨을 막는 V2 렌더 이상. 그림 크기 차이는 잰 비율로 자동 조정하므로 넣지 않는다.
-  bool get renderBlocksReady =>
-      !renderIssueAcceptedByOwner &&
-      (renderChecks['problem_ok'] == false ||
-          renderChecks['answer_ok'] == false ||
-          renderChecks['solution_ok'] == false ||
-          renderChecks['fidelity_ok'] == false ||
-          renderChecks['figure_position_ok'] == false);
+  /// 준비됨을 막는 V2 렌더 이상(그림 크기 ±10% 와 해설 그림 포함)
+  bool get renderBlocksReady => renderHasIssue;
 
   /// 원본과 직접 대조한 V2 렌더 검수가 통과해 2단계(문항 카드) 판정을 덮어쓴 상태
   bool get stage2Superseded => originalCompared && renderCheckedAt != null && !renderHasIssue;
@@ -1493,7 +1643,8 @@ class TextbookProblemReviewItem {
   bool get hasIssue =>
       mathStatus == 'issue' ||
       (!isEngineHeld && qualityStatus == 'issue') ||
-      (!isEngineHeld && !isFullyApproved && hasOpenFindings);
+      (!isEngineHeld && !isFullyApproved && hasOpenFindings) ||
+      consistencyIssues.isNotEmpty;
   bool get hasDrafts => draftProposals.isNotEmpty;
   bool get isFullyApproved => mathStatus == 'approved' && qualityStatus == 'approved';
 
@@ -1666,6 +1817,76 @@ class TextbookReviewEngineHoldEntry {
   TextbookReviewUnitScope get scope => unit.scope;
 }
 
+/// 코드 정합성 점검 결과(ai_think textbook_problem_consistency, 사양 5-2)
+class TextbookConsistencyReport {
+  const TextbookConsistencyReport({
+    required this.checked,
+    required this.fixed,
+    required this.flagged,
+    required this.resolved,
+    required this.errors,
+  });
+
+  factory TextbookConsistencyReport.fromJson(Map<String, dynamic> m) {
+    List<Map<String, dynamic>> mapList(Object? v) => [
+          for (final x in (v is List ? v : const []))
+            if (x is Map) Map<String, dynamic>.from(x),
+        ];
+    return TextbookConsistencyReport(
+      checked: (m['checked'] as num?)?.toInt() ?? 0,
+      fixed: mapList(m['fixed']),
+      flagged: mapList(m['flagged']),
+      resolved: (m['resolved'] as num?)?.toInt() ?? 0,
+      errors: [for (final x in (m['errors'] is List ? m['errors'] as List : const [])) '$x'],
+    );
+  }
+
+  static const empty = TextbookConsistencyReport(checked: 0, fixed: [], flagged: [], resolved: 0, errors: []);
+
+  final int checked;
+
+  /// 이번 점검이 반영 대기 값으로 쌓은 문항 [{crop_id, problem_number, page, sub_key, fixes: [제목]}]
+  final List<Map<String, dynamic>> fixed;
+
+  /// 지적이 남은 문항(사장님이 "문제 없음"으로 닫은 것 제외) [{crop_id, problem_number, page, sub_key, issues: [{code, title, detail}]}]
+  final List<Map<String, dynamic>> flagged;
+
+  /// 고쳐져서 닫힌 지적 수
+  final int resolved;
+  final List<String> errors;
+
+  TextbookConsistencyReport operator +(TextbookConsistencyReport o) => TextbookConsistencyReport(
+        checked: checked + o.checked,
+        fixed: [...fixed, ...o.fixed],
+        flagged: [...flagged, ...o.flagged],
+        resolved: resolved + o.resolved,
+        errors: [...errors, ...o.errors],
+      );
+
+  /// 지적 제목별 문항 수
+  Map<String, int> get flaggedByTitle {
+    final out = <String, int>{};
+    for (final f in flagged) {
+      for (final i in (f['issues'] is List ? f['issues'] as List : const [])) {
+        final t = i is Map ? '${i['title'] ?? ''}'.trim() : '';
+        if (t.isNotEmpty) out[t] = (out[t] ?? 0) + 1;
+      }
+    }
+    return out;
+  }
+
+  String get summary {
+    final parts = <String>[
+      '$checked문항 점검',
+      if (fixed.isNotEmpty) '수정안 ${fixed.length}문항',
+      if (flagged.isNotEmpty) '지적 ${flagged.length}문항(${[for (final e in flaggedByTitle.entries) '${e.key} ${e.value}'].join(', ')})',
+      if (fixed.isEmpty && flagged.isEmpty) '걸린 문항 없음',
+      if (errors.isNotEmpty) '오류 ${errors.length}건',
+    ];
+    return '정합성 점검: ${parts.join(' · ')}';
+  }
+}
+
 class TextbookProblemReviewService {
   TextbookProblemReviewService({
     SupabaseClient? client,
@@ -1802,9 +2023,12 @@ class TextbookProblemReviewService {
   }) async {
     final byDoc = <String, List<String>>{};
     final keyToCropIds = <String, List<String>>{};
+    final overrides = <String, Map<String, dynamic>>{};
     for (final it in items) {
       final k = it.previewLookupKey;
       if (k.isEmpty) continue;
+      final o = it.previewOverride;
+      if (o != null) overrides[k] = o;
       keyToCropIds.putIfAbsent(k, () => <String>[]).add(it.cropId);
       if (it.pbQuestionId.isNotEmpty && it.pbQuestionId != k) {
         keyToCropIds.putIfAbsent(it.pbQuestionId, () => <String>[]).add(it.cropId);
@@ -1825,8 +2049,14 @@ class TextbookProblemReviewService {
               documentId: entry.key,
               templateProfile: 'naesin',
               paperSize: 'A4',
+              questionOverrides: {
+                for (final q in entry.value)
+                  if (overrides[q] != null) q: overrides[q]!,
+              },
             );
           } catch (_) {
+            // 반영 대기 값이 있는 문항은 저장된 카드로 대신하면 고치기 전 모습을 보게 되므로 비워 둔다.
+            if (entry.value.any(overrides.containsKey)) continue;
             urls = await _pb.fetchQuestionPreviews(
               academyId: academyId,
               questionIds: entry.value,
@@ -2400,6 +2630,70 @@ class TextbookProblemReviewService {
     throw Exception('문항 검수 응답을 해석하지 못했습니다.');
   }
 
+  /// 메타 전용 AI(개념·사고 태그와 새 개념 초안). 제안만 쓰고, 문제은행 반영과 새 개념 생성은 소단원 확정 때 한다.
+  Future<Map<String, dynamic>> runMetaChunk(
+    TextbookReviewUnitScope scope, {
+    required List<String> cropIds,
+    bool forceRerun = false,
+  }) async {
+    final res = await _invokeAiThink({
+      'action': 'textbook_problem_meta',
+      'academy_id': scope.academyId,
+      'book_id': scope.bookId,
+      'grade_label': scope.gradeLabel,
+      'big_order': scope.bigOrder,
+      'mid_order': midOrderOf(scope),
+      'chunk_size': cropIds.length.clamp(1, 12),
+      'crop_ids': cropIds,
+      if (forceRerun) 'force_rerun': true,
+    });
+    final data = res.data;
+    if (data is Map) return Map<String, dynamic>.from(data);
+    throw Exception('메타 응답을 해석하지 못했습니다.');
+  }
+
+  /// 코드 정합성 점검(AI 없음, 사양 5-2). 고칠 수 있는 것(공통 발문 중복, '해' 풀이 안내, 엔진이 못 읽는 마크업,
+  /// 해설 칸의 정답 줄)은 반영 대기 값으로 쌓고, 나머지(그림 수·자리, 수식 구분자, 정답 불일치)는 지적으로 남긴다.
+  /// [cropIds] 가 비면 중단원 전체를 본다. [dryRun] 이면 아무것도 쓰지 않고, 쌓을 수정안([fixed])과 지적만 돌려준다.
+  Future<TextbookConsistencyReport> runConsistencyCheck(
+    TextbookReviewUnitScope scope, {
+    List<String> cropIds = const [],
+    bool dryRun = false,
+  }) async {
+    final res = await _invokeAiThink({
+      'action': 'textbook_problem_consistency',
+      'academy_id': scope.academyId,
+      'book_id': scope.bookId,
+      'grade_label': scope.gradeLabel,
+      'big_order': scope.bigOrder,
+      'mid_order': midOrderOf(scope),
+      if (cropIds.isNotEmpty) 'crop_ids': cropIds,
+      if (dryRun) 'dry_run': true,
+    });
+    final data = res.data;
+    if (data is Map) return TextbookConsistencyReport.fromJson(Map<String, dynamic>.from(data));
+    throw Exception('정합성 점검 응답을 해석하지 못했습니다.');
+  }
+
+  /// 소단원 확정 직전 정합성 점검. 새 수정안을 쌓았거나 새 지적이 생겼거나 점검이 실패하면 확정하지 않을 이유를 돌려준다.
+  Future<String?> consistencyGateForConfirm(TextbookReviewUnitScope scope, List<TextbookProblemReviewItem> items) async {
+    final report = await runConsistencyCheck(scope, cropIds: [for (final it in items) it.cropId]);
+    if (report.errors.isNotEmpty) return '정합성 점검 실패(${report.errors.first})';
+    if (report.fixed.isEmpty && report.flagged.isEmpty) return null;
+    return '${report.summary}. 반영 대기 수정안과 지적을 확인한 뒤 다시 확정하세요';
+  }
+
+  /// 정합성 지적을 "문제 없음"으로 닫는다. 문항 내용이 그대로면 다시 점검해도 열지 않는다.
+  Future<void> dismissConsistencyIssue({required String findingId, String note = ''}) async {
+    await _db.rpc('textbook_review_decide', params: {
+      'p_finding_id': findingId,
+      'p_action': 'dismiss',
+      'p_expected': <String, dynamic>{},
+      'p_value': null,
+      'p_note': note,
+    });
+  }
+
   /// Edge Function 은 최대 400초 안에 끝나므로, 그보다 오래 답이 없으면 응답을 잃은 것으로 보고 끊는다.
   static const Duration kAiCallTimeout = Duration(minutes: 8);
 
@@ -2560,15 +2854,32 @@ class TextbookProblemReviewService {
         fallbackCount: figureMarkerCount(it.stem),
       );
       if (figureLayoutItems(scaled).isEmpty) continue;
-      final res = await applyProblemFix(
+      final changed = await stageChanges(
         cropId: it.cropId,
-        figureLayout: scaled,
-        approveQuality: false,
+        patch: {'figure_layout': scaled},
         note: '그림 크기를 원본 글자 비율에 맞춰 재조정',
       );
-      if (((res['changed'] as List?) ?? const []).isNotEmpty) out.add(it.cropId);
+      if (changed.isNotEmpty) out.add(it.cropId);
     }
     return out;
+  }
+
+  /// 해설 그림 폭(width_em)을 잰 비율의 역수만큼 고친다. 반환: 고쳤는가
+  Future<bool> resizeSolutionFigures(TextbookProblemReviewItem it) async {
+    if (!it.solutionFigureNeedsResize) return false;
+    final k = 1 / it.solutionFigureSizeRatio!;
+    final assets = [
+      for (final a in it.solutionFigureAssets)
+        {
+          ...a,
+          if (a['width_em'] is num) 'width_em': double.parse(((a['width_em'] as num).toDouble() * k).toStringAsFixed(2)),
+        },
+    ];
+    await _db.rpc('textbook_review_set_solution_figures', params: {
+      'p_crop_id': it.cropId,
+      'p_assets': assets,
+    });
+    return true;
   }
 
   Future<int> approveAxis(List<String> cropIds, String axis) async {
@@ -2625,22 +2936,108 @@ class TextbookProblemReviewService {
     return res is Map && res['changed'] == true;
   }
 
-  /// 소단원 확정 직전 정리: 문항 유형 표시와 문제은행 정답을 채점 정답에 맞춘다. 고친 문항 수를 돌려준다.
-  Future<int> reconcileBeforeConfirm(List<TextbookProblemReviewItem> items) async {
-    var n = 0;
-    for (final it in [for (final x in items) if (x.questionKindMismatch) x]) {
-      final kind = it.expectedQuestionKind;
-      if (await setQuestionKind(it.cropId, kind,
-          allowSubjective: kind == 'objective' && it.answerChoiceCount > 0 ? it.subjectiveAlsoPossible : null)) {
-        n++;
+  /// 수정안·사장님 수정을 반영 대기 값으로 쌓는다(문제은행·정답 테이블은 쓰지 않는다).
+  /// [patch] 의 값이 null 이면 그 항목의 반영 대기를 지운다. [mathStatus]·[qualityStatus] 는 'clean' | 'issue'.
+  /// 반환: 바뀐 반영 대기 항목 키
+  Future<List<String>> stageChanges({
+    required String cropId,
+    Map<String, dynamic> patch = const {},
+    String source = 'ai',
+    String? note,
+    String? mathStatus,
+    String? qualityStatus,
+  }) async {
+    final res = await _db.rpc('textbook_review_stage_changes', params: {
+      'p_crop_id': cropId,
+      'p_patch': patch,
+      'p_source': source,
+      'p_note': note,
+      'p_math_status': mathStatus,
+      'p_quality_status': qualityStatus,
+    });
+    return [for (final x in (res is Map && res['changed'] is List ? res['changed'] as List : const [])) '$x'];
+  }
+
+  /// 교정 의견 처리. 교재 원본은 바꾸지 않는다. dismiss=false 면 교재 오류로 확인, true 면 교재 오류 아님으로 기각.
+  Future<void> closeCorrectionNote({required String findingId, bool dismiss = false, String note = ''}) async {
+    await _db.rpc('textbook_review_close_correction_note', params: {
+      'p_finding_id': findingId,
+      'p_dismiss': dismiss,
+      'p_note': note,
+    });
+  }
+
+  /// 본문·선지·공통 발문·그림 배치 수정을 반영 대기 값으로 쌓는다. 원본에서 다시 잘라야 할 그림은 먼저 잘라 올리고
+  /// 같은 번호의 그림 자산을 바꿔 끼운다(올린 그림 파일 말고는 문제은행에 쓰지 않는다). 반환: 바뀐 반영 대기 항목 키
+  Future<List<String>> stageProblemFix({
+    required TextbookReviewUnitScope scope,
+    required TextbookProblemReviewItem item,
+    String? stem,
+    List<Map<String, dynamic>>? choices,
+    String? commonStem,
+    Map<String, dynamic>? figureLayout,
+    List<Map<String, dynamic>> figureCrops = const [],
+    List<Map<String, dynamic>>? figureAssets,
+    String source = 'ai',
+    String? note,
+    String? qualityStatus,
+  }) async {
+    var assets = figureAssets;
+    if (figureCrops.isNotEmpty) {
+      final added = await cropAndUploadFigures(scope: scope, item: item, crops: figureCrops);
+      if (added.isNotEmpty) {
+        final replaced = {for (final a in added) '${a['figure_index']}'};
+        assets = [
+          for (final a in assets ?? item.pbFigureAssets)
+            if (!replaced.contains('${a['figure_index']}')) a,
+          ...added,
+        ];
       }
     }
-    final resync = [for (final x in items) if (x.mathStatus == 'approved' && x.pbAnswerDiffers) x.cropId];
-    if (resync.isNotEmpty) {
-      await approveAxis(resync, 'math');
-      n += resync.length;
+    return stageChanges(
+      cropId: item.cropId,
+      patch: {
+        if (stem != null) 'stem': stem,
+        if (choices != null) 'choices': choices,
+        if (commonStem != null) 'common_stem': commonStem,
+        if (figureLayout != null) 'figure_layout': figureLayout,
+        if (assets != null) 'figure_assets': assets,
+      },
+      source: source,
+      note: note,
+      qualityStatus: qualityStatus,
+    );
+  }
+
+  /// 소단원 확정: 문항 유형 불일치를 반영 대기에 넣고, 반영 대기 값을 문제은행·정답에 한 번에 반영한 뒤 두 축을 승인한다.
+  /// 한 문항이라도 실패하면 아무것도 반영되지 않고 예외가 난다. 반영 뒤 주관식 문항의 객관식 보기를 만든다(실패해도 확정은 유지).
+  Future<({int applied, int generated, List<String> errors})> applyForConfirm(List<TextbookProblemReviewItem> items) async {
+    if (items.isEmpty) return (applied: 0, generated: 0, errors: const <String>[]);
+    for (final it in [for (final x in items) if (x.questionKindMismatch) x]) {
+      final kind = it.expectedQuestionKind;
+      await stageChanges(
+        cropId: it.cropId,
+        patch: {
+          'question_kind': kind,
+          if (kind == 'objective' && it.answerChoiceCount > 0) 'allow_subjective': it.subjectiveAlsoPossible,
+        },
+        note: '문항 유형 규칙',
+      );
     }
-    return n;
+    final res = await _db.rpc('textbook_review_apply_staged', params: {
+      'p_crop_ids': [for (final x in items) x.cropId],
+    });
+    final applied = (res is Map ? (res['applied'] as num?)?.toInt() : null) ?? 0;
+    var generated = 0;
+    final errors = <String>[];
+    for (final it in [for (final x in items) if (x.needsObjectiveGeneration) x]) {
+      try {
+        if (await generateObjectiveChoices(it)) generated++;
+      } catch (e) {
+        errors.add('${it.problemNumber}번 객관식 보기: $e');
+      }
+    }
+    return (applied: applied, generated: generated, errors: errors);
   }
 
   /// 주관식 문항의 객관식 보기를 문제은행과 같은 AI 생성으로 만든다. 만들었으면 true.

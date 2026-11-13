@@ -28,7 +28,9 @@ import { createDecisionDraft, createMemoryFeedbackDraft, createSpecExport } from
 import { computeFeatures, parseClientFeatures, type DbFeatureCheck, type ThinkFeatures } from './features.ts';
 import { THINK_PROMPT_VERSION } from './prompts.ts';
 import { SupabaseThinkStore, type SupabaseLike } from './store.ts';
+import { handleTextbookProblemConsistency } from './textbook_consistency.ts';
 import { handleTextbookProblemFix } from './textbook_problem_fix.ts';
+import { handleTextbookProblemMeta } from './textbook_problem_meta.ts';
 import { handleTextbookProblemRenderCheck, handleTextbookProblemReview } from './textbook_problem_review.ts';
 import { handleTextbookSolutionFigures } from './textbook_solution_figures.ts';
 import { MAX_MESSAGE_CHARS, parseAttachments, uuidOrNull } from './validate.ts';
@@ -636,6 +638,10 @@ Deno.serve(async (req) => {
         return await handleTextbookProblemFix(req, auth, body);
       case 'textbook_solution_figures':
         return await handleTextbookSolutionFigures(req, auth, body);
+      case 'textbook_problem_meta':
+        return await handleTextbookProblemMeta(req, auth, body);
+      case 'textbook_problem_consistency':
+        return await handleTextbookProblemConsistency(req, auth, body);
       default:
         return errorResponse(400, 'unknown_action');
     }

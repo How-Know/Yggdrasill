@@ -37,10 +37,10 @@ void main() {
         'math_status': 'approved',
       });
 
-  test('객관식 정답 키가 비어 있으면 문제은행 정답 다름이고 준비됨을 막는다', () {
+  test('객관식 정답 키가 비어 있으면 문제은행 정답 다름이지만 확정 때 맞추므로 준비됨을 막지 않는다', () {
     final it = item(stem: '다음 중 합성수인 것은?');
     expect(it.pbAnswerDiffers, isTrue);
-    expect(it.readyBlockers, contains('문제은행 정답 다름'));
+    expect(it.readyBlockers, isNot(contains('문제은행 정답 다름')));
     expect(item(stem: '다음 중 합성수인 것은?', objectiveKey: '⑤').pbAnswerDiffers, isFalse);
   });
 

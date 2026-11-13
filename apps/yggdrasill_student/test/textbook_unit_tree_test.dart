@@ -179,8 +179,68 @@ void main() {
     expect(categorized.categoryCode, 'essential');
     expect(categorized.categoryLabel, '필수유형');
     expect(categorized.itemName, '대표 문제');
+    expect(categorized.sectionTypeLabel, isNull);
     expect(legacy.categoryCode, isNull);
     expect(legacy.categoryLabel, isNull);
     expect(legacy.itemName, isNull);
+
+    final grouped = PageProblem.fromRow(const {
+      'crop_id': 'crop-3',
+      'problem_number': '3',
+      'content_group_kind': 'type',
+      'content_group_label': '유형 01',
+      'content_group_title': '자연수의 약수와 배수',
+    });
+    expect(grouped.sectionTypeLabel, '유형 01 · 자연수의 약수와 배수');
+  });
+
+  test('TextbookUnitTree는 start_page~end_page 사이의 빈 쪽을 개념 페이지로 채운다', () {
+    final tree = TextbookUnitTree.fromJson(const {
+      'schema_version': 2,
+      'units': [
+        {
+          'order_index': 0,
+          'name': '소인수분해',
+          'mids': [
+            {
+              'order_index': 0,
+              'name': '소인수분해',
+              'smalls': [
+                {
+                  'order_index': 0,
+                  'sub_key': 'A',
+                  'name': 'A 기본다잡기',
+                  'start_page': 8,
+                  'end_page': 10,
+                  'pages': [
+                    {
+                      'raw_page': 9,
+                      'display_page': 9,
+                      'total': 26,
+                      'graded': 0,
+                      'correct': 0,
+                    },
+                    {
+                      'raw_page': 10,
+                      'display_page': 10,
+                      'total': 26,
+                      'graded': 0,
+                      'correct': 0,
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    final pages = tree.bigUnits.single.mids.single.smalls.single.pages;
+    expect(pages.map((p) => p.rawPage).toList(), [8, 9, 10]);
+    expect(pages[0].isConceptPage, isTrue);
+    expect(pages[0].done, isFalse);
+    expect(pages[1].isConceptPage, isFalse);
+    expect(pages[1].total, 26);
   });
 }

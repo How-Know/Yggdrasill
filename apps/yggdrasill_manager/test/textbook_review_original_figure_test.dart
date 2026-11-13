@@ -132,20 +132,13 @@ void main() {
   });
 
   group('문항 상태', () {
-    test('엔진 보류를 승인한 뒤의 남은 렌더 이상 판정은 준비됨을 막지 않고, 승인 뒤 다시 판정한 이상은 막는다', () {
+    test('엔진 보류를 승인했어도 남은 렌더 이상 판정은 준비됨을 막는다(다시 검수해 통과해야 한다)', () {
       const rc = {'problem_ok': true, 'fidelity_ok': false};
       expect(_item({'render_checks': rc, 'render_checked_at': '2026-11-11T17:19:13Z'}).renderBlocksReady, isTrue);
-      final accepted = _item({
-        'render_checks': rc,
-        'render_checked_at': '2026-11-11T17:19:13Z',
-        'engine_resolved_at': '2026-11-12T07:17:29Z',
-      });
-      expect(accepted.renderBlocksReady, isFalse);
-      expect(accepted.renderHasIssue, isTrue);
       expect(
         _item({
           'render_checks': rc,
-          'render_checked_at': '2026-11-12T08:00:00Z',
+          'render_checked_at': '2026-11-11T17:19:13Z',
           'engine_resolved_at': '2026-11-12T07:17:29Z',
         }).renderBlocksReady,
         isTrue,

@@ -25,8 +25,11 @@ class TextbookReviewPipelineSummary {
 
 /// 문항검수 화면 없이 도는 소단원 검수 파이프라인. 화면의 `중단원 문항 검수 실행`과 같은 순서다.
 ///
-/// AI 선풀이·원본 해설 전사·학생 시점 품질 검수 → V2 정답·해설 카드 렌더 검수 → 깨끗한 문항 승인·렌더 엔진 문제 보류
-/// → 원본·해설 PDF 대조 수정안 → 정답·본문·그림 수정 반영 → 바뀐 문항만 V2 재렌더·원본 재대조 → 승인.
+/// AI 선풀이·원본 해설 전사·학생 시점 품질 검수 → V2 정답·해설 카드 렌더 검수 → 렌더 엔진 문제 보류
+/// → 원본·해설 PDF 대조 수정안 → 정답·본문·그림 수정안을 반영 대기 값으로 쌓음 → 코드 정합성 점검(AI 없음)
+/// → 바뀐 문항만 반영 대기 값으로 V2 재렌더·원본 재대조
+/// → 메타 보충(단원 기준 개념·사고 태그와 새 개념 초안, 빈 시각 태그).
+/// 문제은행·정답 테이블은 쓰지 않는다. 반영과 승인은 소단원 확정(applyForConfirm) 때 한다.
 class TextbookReviewPipeline {
   TextbookReviewPipeline({
     required this.service,
@@ -40,6 +43,8 @@ class TextbookReviewPipeline {
   static const int _renderCheckChunkSize = 4;
   static const int _renderCheckParallel = 3;
   static const int _fixChunkSize = 3;
+  static const int _metaChunkSize = 8;
+  static const int _metaParallel = 2;
 
   final TextbookProblemReviewService service;
   final TextbookReviewUnitScope scope;
@@ -117,10 +122,6 @@ class TextbookReviewPipeline {
     }
 
     if (!_stopped) {
-      final cleanMath = [for (final x in items) if (x.mathStatus == 'clean') x.cropId];
-      if (cleanMath.isNotEmpty) mathApproved += await service.approveAxis(cleanMath, 'math');
-      final cleanQual = [for (final x in items) if (x.qualityStatus == 'clean' && !x.hasFigures) x.cropId];
-      if (cleanQual.isNotEmpty) qualityApproved += await service.approveAxis(cleanQual, 'quality');
       final engineOnly = [
         for (final x in items)
           if (x.aiSuspectsEngine && !x.hasFigures && !x.commonStemDuplicated && !x.hasPendingFixProposal) x.cropId,
@@ -142,29 +143,18 @@ class TextbookReviewPipeline {
     }
 
     if (!_stopped) {
-      final appliedMath = await _bulkMathFixes(notes);
+      await _bulkMathFixes(notes);
       await reload();
-      final ids = <String>{
-        for (final it in items)
-          if (it.mathStatus == 'clean' || (it.mathStatus == 'approved' && it.pbAnswerDiffers)) it.cropId,
-        ...appliedMath,
-      }.toList();
-      if (ids.isNotEmpty) mathApproved += await service.approveAxis(ids, 'math');
     }
 
     if (!_stopped) {
-      final appliedQual = await _bulkQualityFixes(notes);
-      await reload();
-      final ids = <String>{
-        for (final it in items)
-          if (!it.isEngineHeld && it.qualityStatus == 'clean') it.cropId,
-        ...appliedQual,
-      }.toList();
-      if (ids.isNotEmpty) qualityApproved += await service.approveAxis(ids, 'quality');
+      await _bulkQualityFixes(notes);
       await reload();
     }
 
-    // 일괄 수정에서 정답·해설이 바뀐 문항은 DB 가 렌더 검수 시각을 지우므로 바뀐 카드로 다시 대조한다.
+    if (!_stopped) await _consistencyPass(notes);
+
+    // 정답·해설이 반영 대기로 바뀐 문항은 렌더 검수 시각이 지워지므로 바뀐 카드로 다시 대조한다.
     if (!_stopped && service.hasGateway) {
       final stale = [for (final x in items) if (x.needsRenderCheck) x];
       if (stale.isNotEmpty) {
@@ -172,6 +162,15 @@ class TextbookReviewPipeline {
         renderChecked += await _renderCheckPass(only: stale);
       }
     }
+
+    if (!_stopped) {
+      final metaFilled = await _metaPass();
+      if (metaFilled > 0) notes.add('메타 보충 $metaFilled문항');
+    }
+
+    // 승인은 소단원 확정 때 한다. 여기서는 AI 판정이 통과한 문항 수만 센다.
+    mathApproved = items.where((x) => x.mathOk).length;
+    qualityApproved = items.where((x) => x.qualityOk).length;
 
     return TextbookReviewPipelineSummary(
       total: items.length,
@@ -222,6 +221,90 @@ class TextbookReviewPipeline {
               );
             } catch (e) {
               errors.add('${chunk.map((x) => x.problemNumber).join(',')}번 검수: $e');
+              return const <String, dynamic>{};
+            }
+          }(),
+      ]);
+      var processed = 0;
+      for (final r in results) {
+        processed += (r['processed'] as num?)?.toInt() ?? 0;
+      }
+      total += processed;
+      await reload();
+      if (processed <= 0) break;
+    }
+    return total;
+  }
+
+  /// 이미 검수를 마친 소단원: 코드 정합성 점검 뒤 메타만 보충한다. 제안만 쌓고 반영은 소단원 확정 때 한다.
+  /// 정합성 점검 결과는 [consistency] 에 남는다.
+  Future<int> runMetaOnly() async {
+    await reload();
+    if (items.isEmpty) return 0;
+    await _consistencyPass(<String>[]);
+    if (_stopped) return 0;
+    return _metaPass();
+  }
+
+  /// 작업 화면의 "V2 렌더 검수 다시"와 같다. 지금 카드로 원본과 다시 대조하고, 그림 크기가 어긋난 문항은
+  /// 크기를 반영 대기 값으로 고쳐 한 번 더 대조한다. 반환: 대조한 문항 수
+  Future<int> recheckRender() async {
+    await reload();
+    if (items.isEmpty || !service.hasGateway) return 0;
+    await service.ensureSourcePdfs(scope, items, onProgress: _say);
+    await loadPreviews(items, merge: false);
+    var checked = await _renderCheckPass(only: items);
+    if (_stopped) return checked;
+    final sized = await _resizeFigures({for (final x in items) x.cropId});
+    if (sized.isNotEmpty) {
+      await reload();
+      final sizedItems = [for (final x in items) if (sized.contains(x.cropId)) x];
+      await loadPreviews(sizedItems);
+      checked += await _renderCheckPass(only: sizedItems);
+    }
+    return checked;
+  }
+
+  /// 마지막 코드 정합성 점검 결과
+  TextbookConsistencyReport consistency = TextbookConsistencyReport.empty;
+
+  /// 코드 정합성 점검(AI 없음, 사양 5-2). 고칠 것은 반영 대기 값으로 쌓고 나머지는 준비됨을 막는 지적으로 남긴다.
+  Future<void> _consistencyPass(List<String> notes) async {
+    if (items.isEmpty) return;
+    _say('정합성 점검 (${items.length}문항)');
+    try {
+      consistency = await service.runConsistencyCheck(scope, cropIds: [for (final x in items) x.cropId]);
+      errors.addAll([for (final e in consistency.errors) '정합성 점검 $e']);
+      if (consistency.fixed.isNotEmpty || consistency.flagged.isNotEmpty) notes.add(consistency.summary);
+    } catch (e) {
+      errors.add('정합성 점검: $e');
+    }
+    await reload();
+  }
+
+  /// 단원 기준 개념 후보로 개념·사고를 아직 고르지 않았거나 AI 풀이 뒤 시각 태그가 빈 문항을 메타 전용 AI 로 채운다.
+  Future<int> _metaPass() async {
+    var total = 0;
+    final sent = <String>{};
+    for (var round = 0; round < 60; round += 1) {
+      if (_stopped) break;
+      final todo = [for (final x in items) if (x.needsMetaPass && !sent.contains(x.cropId)) x];
+      if (todo.isEmpty) break;
+      final chunks = [
+        for (var i = 0; i < todo.length && i < _metaChunkSize * _metaParallel; i += _metaChunkSize)
+          todo.skip(i).take(_metaChunkSize).toList(),
+      ];
+      for (final c in chunks) {
+        sent.addAll(c.map((x) => x.cropId));
+      }
+      _say('메타 보충 ${items.length - todo.length}/${items.length}');
+      final results = await Future.wait([
+        for (final chunk in chunks)
+          () async {
+            try {
+              return await service.runMetaChunk(scope, cropIds: [for (final x in chunk) x.cropId]);
+            } catch (e) {
+              errors.add('${chunk.map((x) => x.problemNumber).join(',')}번 메타: $e');
               return const <String, dynamic>{};
             }
           }(),
@@ -292,6 +375,7 @@ class TextbookReviewPipeline {
         if (problemUrl.isNotEmpty) 'problem_url': problemUrl,
         if (solUrl.isNotEmpty) 'answer_solution_url': solUrl,
         'solution_kind': it.primarySolutionKind,
+        'has_solution_figures': it.solutionFigureAssets.isNotEmpty,
         'is_fill_in_blank': it.isFillInBlank,
         ...original,
         ...solutionOriginal,
@@ -417,7 +501,26 @@ class TextbookReviewPipeline {
     return done;
   }
 
-  /// 정답 수정안(합의된 정답·해설 정답)을 채점 정답과 문제은행에 반영한다. 반환: 수학 승인까지 마친 crop id
+  /// 정답(+해설) 수정안을 반영 대기 값으로 쌓고 정답 축을 통과로 둔다.
+  Future<void> _stageAnswer(
+    TextbookProblemReviewItem it,
+    String answer, {
+    String? solutionTranscribed,
+    String? solutionAnswer,
+    required String note,
+  }) =>
+      service.stageChanges(
+        cropId: it.cropId,
+        patch: {
+          'answer': answer,
+          if (solutionTranscribed != null) 'solution_transcribed': solutionTranscribed,
+          if (solutionAnswer != null) 'solution_answer': solutionAnswer,
+        },
+        note: note,
+        mathStatus: 'clean',
+      );
+
+  /// 정답 수정안(합의된 정답·해설 정답)을 반영 대기 값으로 쌓는다. 반환: 정답 축이 통과가 된 crop id
   Future<List<String>> _bulkMathFixes(List<String> notes) async {
     final approved = <String>{};
     final needProposal = [
@@ -438,8 +541,7 @@ class TextbookReviewPipeline {
 
     final targets = [
       for (final it in items)
-        if (it.mathStatus != 'approved' ||
-            it.pbAnswerDiffers ||
+        if (it.mathStatus != 'approved' && it.mathStatus != 'clean' ||
             it.hasOpenFindings &&
                 it.findings.any((f) => f['axis'] == 'validity' || '${f['check_key']}'.startsWith('load:answer')))
           it,
@@ -452,27 +554,24 @@ class TextbookReviewPipeline {
       final ans = it.resolvedMathAnswer ?? it.existingAnswer.trim();
       if (ans.isEmpty || ans == '판단불가') continue;
       // 운영자가 원본에서 직접 지정한 정답은 AI 제안으로 바꾸지 않는다. 다르면 오류로 남겨 사람이 고른다.
-      if (it.answerManual && ans != it.existingAnswer.trim()) continue;
-      _say('정답 수정안 반영 ${i + 1}/${targets.length}');
+      if ((it.answerManual || it.stagedByOwner('answer')) && ans != it.existingAnswer.trim()) continue;
+      _say('정답 수정안 ${i + 1}/${targets.length}');
       try {
-        await service.saveItemEdit(
-          cropId: it.cropId,
-          newAnswer: ans,
-          aiSolution: it.proposedAiSolution ?? it.aiSolution,
-          aiAnswer: it.proposedAiAnswer ?? ans,
-          visualTags: it.visualTags,
+        await _stageAnswer(
+          it,
+          ans,
           solutionTranscribed: it.proposedSolutionTranscribed,
           solutionAnswer: it.proposedSolutionAnswer,
-          approveMath: true,
+          note: '정답 수정안',
         );
         applied++;
         modified.add(it.cropId);
         approved.add(it.cropId);
       } catch (e) {
-        errors.add('${it.problemNumber}번 정답 반영: $e');
+        errors.add('${it.problemNumber}번 정답 수정안: $e');
       }
     }
-    if (applied > 0) notes.add('정답 $applied문항 반영');
+    if (applied > 0) notes.add('정답 수정안 $applied문항');
     if (_stopped) return approved.toList();
     await reload();
 
@@ -484,19 +583,12 @@ class TextbookReviewPipeline {
         await reload();
         for (final it in items) {
           if (it.mathStatus != 'issue' || it.resolvedMathAnswer == null) continue;
-          if (it.answerManual && it.resolvedMathAnswer != it.existingAnswer.trim()) continue;
+          if ((it.answerManual || it.stagedByOwner('answer')) && it.resolvedMathAnswer != it.existingAnswer.trim()) continue;
           try {
-            await service.saveItemEdit(
-              cropId: it.cropId,
-              newAnswer: it.resolvedMathAnswer,
-              aiSolution: it.proposedAiSolution ?? it.aiSolution,
-              aiAnswer: it.proposedAiAnswer ?? it.resolvedMathAnswer,
-              visualTags: it.visualTags,
-              approveMath: true,
-            );
+            await _stageAnswer(it, it.resolvedMathAnswer!, note: '재풀이 정답');
             approved.add(it.cropId);
           } catch (e) {
-            errors.add('${it.problemNumber}번 재풀이 정답 반영: $e');
+            errors.add('${it.problemNumber}번 재풀이 정답: $e');
           }
         }
       }
@@ -532,9 +624,7 @@ class TextbookReviewPipeline {
     if (fixed > 0) notes.add('공통 발문 중복 $fixed문항 수정($approvedByFix문항 승인)');
     touched.addAll(again);
     final kinds = await _applyQuestionKindFixes();
-    if (kinds > 0) notes.add('문항 유형 $kinds문항 수정');
-    final generated = await _generateObjectiveChoices();
-    if (generated > 0) notes.add('주관식 $generated문항 객관식 보기 생성');
+    if (kinds > 0) notes.add('문항 유형 $kinds문항 수정안');
 
     var recheck = <String>{...touched};
     var proposed = 0;
@@ -616,32 +706,35 @@ class TextbookReviewPipeline {
           !resized.contains(x.cropId) &&
           x.issueKind != 'figure' &&
           (x.fixProposal['text_matches_original'] == true || x.proposalAlreadyReflectedInDb)) {
-        approvedIds.add(x.cropId);
+        try {
+          await service.stageChanges(cropId: x.cropId, note: '원본 대조 본문 일치', qualityStatus: 'clean');
+          approvedIds.add(x.cropId);
+        } catch (e) {
+          errors.add('${x.problemNumber}번 판정: $e');
+        }
       }
     }
 
     var healedMath = 0;
     for (final x in items) {
       if (x.mathStatus != 'issue' || x.resolvedMathAnswer == null) continue;
+      if ((x.answerManual || x.stagedByOwner('answer')) && x.resolvedMathAnswer != x.existingAnswer.trim()) continue;
       try {
-        await service.saveItemEdit(
-          cropId: x.cropId,
-          newAnswer: x.resolvedMathAnswer,
-          aiSolution: x.proposedAiSolution ?? x.aiSolution,
-          aiAnswer: x.proposedAiAnswer ?? x.resolvedMathAnswer,
-          visualTags: x.visualTags,
+        await _stageAnswer(
+          x,
+          x.resolvedMathAnswer!,
           solutionTranscribed: x.proposedSolutionTranscribed,
           solutionAnswer: x.proposedSolutionAnswer,
-          approveMath: true,
+          note: '정답 수정안',
         );
         healedMath++;
       } catch (e) {
-        errors.add('${x.problemNumber}번 정답 반영: $e');
+        errors.add('${x.problemNumber}번 정답 수정안: $e');
       }
     }
 
     if (proposed > 0) notes.add('원본 대조 수정안 $proposed문항');
-    if (applied > 0) notes.add('수정안 $applied문항 반영');
+    if (applied > 0) notes.add('수정안 $applied문항 반영 대기');
     if (checked.isNotEmpty) notes.add('바뀐 문항 재검수 ${checked.length}문항');
     if (resized.isNotEmpty) notes.add('그림 크기 조정 ${resized.length}문항');
     if (heldEngine > 0) notes.add('렌더 엔진 보류 $heldEngine문항');
@@ -696,12 +789,14 @@ class TextbookReviewPipeline {
         final approve = _onlyIssueIsCommonStemDup(it);
         touched.add(it.cropId);
         try {
-          await service.applyProblemFix(
+          await service.stageChanges(
             cropId: it.cropId,
-            stem: fix.stem,
-            commonStem: fix.commonStem,
-            approveQuality: approve,
-            note: '공통 발문 중복 제거(일괄)',
+            patch: {
+              'stem': fix.stem,
+              if (fix.commonStem != null) 'common_stem': fix.commonStem,
+            },
+            note: '공통 발문 중복 제거',
+            qualityStatus: approve ? 'clean' : null,
           );
         } catch (e) {
           errors.add('${it.problemNumber}번: $e');
@@ -730,10 +825,15 @@ class TextbookReviewPipeline {
     for (final it in [for (final x in items) if (x.questionKindMismatch) x]) {
       try {
         final kind = it.expectedQuestionKind;
-        if (await service.setQuestionKind(it.cropId, kind,
-            allowSubjective: kind == 'objective' && it.answerChoiceCount > 0 ? it.subjectiveAlsoPossible : null)) {
-          n++;
-        }
+        final changed = await service.stageChanges(
+          cropId: it.cropId,
+          patch: {
+            'question_kind': kind,
+            if (kind == 'objective' && it.answerChoiceCount > 0) 'allow_subjective': it.subjectiveAlsoPossible,
+          },
+          note: '문항 유형 규칙',
+        );
+        if (changed.isNotEmpty) n++;
       } catch (e) {
         errors.add('${it.problemNumber}번 유형: $e');
       }
@@ -742,23 +842,9 @@ class TextbookReviewPipeline {
     return n;
   }
 
-  Future<int> _generateObjectiveChoices() async {
-    if (!service.hasGateway) return 0;
-    var n = 0;
-    for (final it in [for (final x in items) if (x.needsObjectiveGeneration) x]) {
-      if (_stopped) break;
-      _say('${it.problemNumber}번 객관식 보기 생성');
-      try {
-        if (await service.generateObjectiveChoices(it)) n++;
-      } catch (e) {
-        errors.add('${it.problemNumber}번 객관식 보기: $e');
-      }
-    }
-    if (n > 0) await reload();
-    return n;
-  }
-
-  Future<Map<String, dynamic>> _applyFixFor(
+  /// 수정안을 반영 대기 값으로 쌓는다. 원본에서 잘라낼 그림은 저장소에 올리고 자산 목록만 반영 대기에 넣는다.
+  /// 반환: 바뀐 반영 대기 항목 키
+  Future<List<String>> _applyFixFor(
     TextbookProblemReviewItem item, {
     String? stem,
     List<Map<String, dynamic>>? choices,
@@ -766,24 +852,19 @@ class TextbookReviewPipeline {
     Map<String, dynamic>? figureLayout,
     List<Map<String, dynamic>> figureCrops = const [],
     String? note,
-  }) async {
-    List<Map<String, dynamic>>? assets;
-    if (figureCrops.isNotEmpty) {
-      final added = await service.cropAndUploadFigures(scope: scope, item: item, crops: figureCrops);
-      if (added.isNotEmpty) assets = [...item.pbFigureAssets, ...added];
-    }
-    return service.applyProblemFix(
-      cropId: item.cropId,
-      stem: stem,
-      choices: choices,
-      commonStem: commonStem,
-      figureLayout: figureLayout,
-      figureAssets: assets,
-      note: note,
-    );
-  }
+  }) =>
+      service.stageProblemFix(
+        scope: scope,
+        item: item,
+        stem: stem,
+        choices: choices,
+        commonStem: commonStem,
+        figureLayout: figureLayout,
+        figureCrops: figureCrops,
+        note: note,
+      );
 
-  /// 수정안(본문·선지·공통 발문·그림 배치·원본 크롭 그림)을 그대로 적용한다(승인은 하지 않음). 반환: 적용한 crop id
+  /// 수정안(본문·선지·공통 발문·그림 배치·원본 크롭 그림)을 반영 대기 값으로 쌓는다(판정은 바꾸지 않음). 반환: 쌓은 crop id
   Future<List<String>> _applyPendingProposals(Set<String> onlyCropIds) async {
     final out = <String>[];
     final targets = [for (final it in _pendingProposals) if (onlyCropIds.contains(it.cropId)) it];
@@ -792,18 +873,18 @@ class TextbookReviewPipeline {
       final it = targets[i];
       final text = _textProposalUsable(it);
       final figure = it.hasPendingFigureProposal || (it.hasFigures && it.fixAppliedAt == null);
-      _say('수정안 반영 ${i + 1}/${targets.length}');
+      _say('수정안 ${i + 1}/${targets.length}');
       try {
-        final res = await _applyFixFor(
+        final changed = await _applyFixFor(
           it,
           stem: text ? it.proposedStem : null,
           choices: text ? it.proposedChoices : null,
           commonStem: text ? it.proposedCommonStem : null,
           figureLayout: figure ? (it.proposedFigureLayout ?? (it.pbFigureLayout.isNotEmpty ? it.pbFigureLayout : null)) : null,
           figureCrops: figure ? it.proposedFigureCrops : const [],
-          note: '원본 대조 수정안 일괄 적용',
+          note: '원본 대조 수정안',
         );
-        if (((res['changed'] as List?) ?? const []).isNotEmpty || it.hasFigures || it.proposalAlreadyReflectedInDb) {
+        if (changed.isNotEmpty || it.hasFigures || it.proposalAlreadyReflectedInDb) {
           out.add(it.cropId);
         }
       } catch (e) {
@@ -819,7 +900,15 @@ class TextbookReviewPipeline {
     for (final it in items) {
       if (_stopped) break;
       if (!onlyCropIds.contains(it.cropId)) continue;
-      if (it.isEngineHeld || !it.figureNeedsResize) continue;
+      if (it.isEngineHeld) continue;
+      if (it.solutionFigureNeedsResize) {
+        try {
+          if (await service.resizeSolutionFigures(it)) out.add(it.cropId);
+        } catch (e) {
+          errors.add('${it.problemNumber}번 해설 그림 크기: $e');
+        }
+      }
+      if (!it.figureNeedsResize) continue;
       final scaled = scaleFigureLayout(
         it.pbFigureLayout,
         1 / it.figureSizeRatio!,
@@ -828,13 +917,12 @@ class TextbookReviewPipeline {
       );
       if (figureLayoutItems(scaled).isEmpty) continue;
       try {
-        final res = await service.applyProblemFix(
+        final changed = await service.stageChanges(
           cropId: it.cropId,
-          figureLayout: scaled,
-          approveQuality: it.qualityStatus == 'approved',
+          patch: {'figure_layout': scaled},
           note: '그림 크기를 원본 글자 비율에 맞춰 재조정',
         );
-        if (((res['changed'] as List?) ?? const []).isNotEmpty) out.add(it.cropId);
+        if (changed.isNotEmpty && !out.contains(it.cropId)) out.add(it.cropId);
       } catch (e) {
         errors.add('${it.problemNumber}번 그림 크기: $e');
       }

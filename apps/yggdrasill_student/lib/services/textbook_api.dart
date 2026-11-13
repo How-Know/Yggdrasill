@@ -101,11 +101,13 @@ class TextbookApi {
       'p_grade_label': gradeLabel,
     };
     dynamic result;
+    var usedResolved = false;
     try {
       result = await _client.rpc(
         'textbook_resolved_unit_tree',
         params: params,
       );
+      usedResolved = true;
     } on PostgrestException catch (error) {
       if (!_isMissingResolvedUnitTree(error)) rethrow;
       result = await _client.rpc(
@@ -113,11 +115,26 @@ class TextbookApi {
         params: params,
       );
     }
-    return TextbookUnitTree.fromJson(
+    var tree = TextbookUnitTree.fromJson(
       result is Map
           ? Map<String, dynamic>.from(result)
           : const <String, dynamic>{},
     );
+    if (usedResolved && tree.bigUnits.isEmpty) {
+      final legacy = await _client.rpc(
+        'student_textbook_unit_tree',
+        params: params,
+      );
+      final legacyTree = TextbookUnitTree.fromJson(
+        legacy is Map
+            ? Map<String, dynamic>.from(legacy)
+            : const <String, dynamic>{},
+      );
+      if (legacyTree.bigUnits.isNotEmpty) {
+        tree = legacyTree;
+      }
+    }
+    return tree;
   }
 
   bool _isMissingResolvedUnitTree(PostgrestException error) {
@@ -246,12 +263,62 @@ class TextbookApi {
     return StudentTextbookProblemView.fromJson(data);
   }
 
+  /// 원본 보기용 교재 본문 PDF(1쪽 분리본 우선 + 전체 본문 Range fallback)를 조회한다.
+  /// 개념 페이지처럼 문항이 없는 쪽은 [bookId], [gradeLabel], [rawPage] 로 요청한다.
+  Future<StudentTextbookProblemView> bodyProblemView({
+    String? cropId,
+    String? bookId,
+    String? gradeLabel,
+    int? rawPage,
+    List<int> prefetchPages = const <int>[],
+  }) async {
+    final safeCropId = cropId?.trim() ?? '';
+    final payload = <String, dynamic>{
+      'action': 'body_view',
+      if (safeCropId.isNotEmpty) 'crop_id': safeCropId,
+      if (bookId != null && bookId.trim().isNotEmpty) 'book_id': bookId.trim(),
+      if (gradeLabel != null && gradeLabel.trim().isNotEmpty)
+        'grade_label': gradeLabel.trim(),
+      if (rawPage != null && rawPage > 0) 'raw_page': rawPage,
+      if (prefetchPages.isNotEmpty) 'prefetch_pages': prefetchPages,
+    };
+    late FunctionResponse response;
+    try {
+      response = await _client.functions.invoke(
+        'student_textbook_problem_view',
+        body: payload,
+      );
+    } on FunctionException catch (error) {
+      final details = error.details;
+      final map = details is Map
+          ? Map<String, dynamic>.from(details)
+          : const <String, dynamic>{};
+      throw StudentTextbookProblemViewException(
+        code: '${map['error'] ?? 'http_${error.status}'}',
+        detail: '${map['detail'] ?? error.reasonPhrase ?? ''}',
+      );
+    }
+    final rawData = response.data;
+    final data = rawData is Map
+        ? Map<String, dynamic>.from(rawData)
+        : const <String, dynamic>{};
+    if (data['ok'] != true) {
+      throw StudentTextbookProblemViewException(
+        code: '${data['error'] ?? 'unknown'}',
+        detail: '${data['detail'] ?? ''}',
+      );
+    }
+    return StudentTextbookProblemView.fromJson(data);
+  }
+
   /// 현재 페이지 문항들을 우선 렌더 큐에 넣는다 (선택 문항=0, 나머지=1).
-  Future<void> warmPageProblemViews({
+  /// 응답에 포함된 독립형 세트 메타데이터(`sets_by_crop_id`)를 돌려준다.
+  Future<Map<String, ProblemSetInfo>> warmPageProblemViews({
     required List<String> cropIds,
     String? selectedCropId,
+    bool enqueue = true,
   }) async {
-    if (cropIds.isEmpty) return;
+    if (cropIds.isEmpty) return const <String, ProblemSetInfo>{};
     final response = await _client.functions.invoke(
       'student_textbook_problem_view',
       body: {
@@ -259,6 +326,7 @@ class TextbookApi {
         'crop_ids': cropIds.take(40).toList(growable: false),
         if (selectedCropId != null && selectedCropId.isNotEmpty)
           'selected_crop_id': selectedCropId,
+        if (!enqueue) 'enqueue': false,
       },
     );
     final rawData = response.data;
@@ -271,6 +339,46 @@ class TextbookApi {
         detail: '${data['detail'] ?? ''}',
       );
     }
+    return ProblemSetInfo.mapFromJson(data['sets_by_crop_id']);
+  }
+
+  /// 독립형 세트 문항(공통 발문 + 하위 문항 목록)의 PDF 뷰를 한 번에 조회한다.
+  Future<StudentTextbookProblemSetView> problemSetView({
+    required List<String> cropIds,
+    String? commonCropId,
+  }) async {
+    late FunctionResponse response;
+    try {
+      response = await _client.functions.invoke(
+        'student_textbook_problem_view',
+        body: {
+          'action': 'view_set',
+          'crop_ids': cropIds,
+          if (commonCropId != null && commonCropId.isNotEmpty)
+            'common_crop_id': commonCropId,
+        },
+      );
+    } on FunctionException catch (error) {
+      final details = error.details;
+      final map = details is Map
+          ? Map<String, dynamic>.from(details)
+          : const <String, dynamic>{};
+      throw StudentTextbookProblemViewException(
+        code: '${map['error'] ?? 'http_${error.status}'}',
+        detail: '${map['detail'] ?? error.reasonPhrase ?? ''}',
+      );
+    }
+    final rawData = response.data;
+    final data = rawData is Map
+        ? Map<String, dynamic>.from(rawData)
+        : const <String, dynamic>{};
+    if (data['ok'] != true) {
+      throw StudentTextbookProblemViewException(
+        code: '${data['error'] ?? 'unknown'}',
+        detail: '${data['detail'] ?? ''}',
+      );
+    }
+    return StudentTextbookProblemSetView.fromJson(data);
   }
 
   /// 페이지 일괄 채점 (Edge Function — 수학 동치/단위/AI 판정 포함).
@@ -619,30 +727,270 @@ class StudentTextbookProblemViewException implements Exception {
   String toString() => 'StudentTextbookProblemViewException($code, $detail)';
 }
 
+class ProblemSetInfo {
+  const ProblemSetInfo({
+    required this.setType,
+    required this.setKey,
+    this.headerNumber,
+    this.itemOrder,
+  });
+
+  final String setType;
+  final String setKey;
+  final String? headerNumber;
+  final int? itemOrder;
+
+  bool get isIndependentSet =>
+      setType == 'independent_set' && setKey.trim().isNotEmpty;
+
+  static ProblemSetInfo? fromJson(Object? raw) {
+    if (raw is! Map) return null;
+    final map = Map<String, dynamic>.from(raw);
+    final setType = '${map['set_type'] ?? ''}'.trim();
+    final setKey = '${map['set_key'] ?? ''}'.trim();
+    if (setType.isEmpty || setKey.isEmpty) return null;
+    final header = '${map['header_number'] ?? ''}'.trim();
+    return ProblemSetInfo(
+      setType: setType,
+      setKey: setKey,
+      headerNumber: header.isEmpty ? null : header,
+      itemOrder: (map['item_order'] as num?)?.toInt(),
+    );
+  }
+
+  static Map<String, ProblemSetInfo> mapFromJson(Object? raw) {
+    if (raw is! Map) return const <String, ProblemSetInfo>{};
+    final out = <String, ProblemSetInfo>{};
+    raw.forEach((key, value) {
+      final parsed = fromJson(value);
+      final cropId = '$key'.trim();
+      if (cropId.isNotEmpty && parsed != null) {
+        out[cropId] = parsed;
+      }
+    });
+    return out;
+  }
+}
+
+class StudentTextbookProblemSetItemView {
+  const StudentTextbookProblemSetItemView({
+    required this.cropId,
+    required this.status,
+    this.pdfUrl,
+    this.rawPage,
+    this.itemRegion1k,
+  });
+
+  final String cropId;
+  final StudentTextbookProblemViewStatus status;
+  final String? pdfUrl;
+  final int? rawPage;
+  final List<int>? itemRegion1k;
+
+  bool get isReady =>
+      status == StudentTextbookProblemViewStatus.ready && pdfUrl != null;
+
+  static StudentTextbookProblemSetItemView fromJson(Map<String, dynamic> json) {
+    final pdfUrl = '${json['pdf_url'] ?? ''}'.trim();
+    final status = '${json['status'] ?? ''}' == 'ready' && pdfUrl.isNotEmpty
+        ? StudentTextbookProblemViewStatus.ready
+        : StudentTextbookProblemViewStatus.queued;
+    final rawRegion = json['item_region_1k'];
+    final region = rawRegion is List
+        ? rawRegion.whereType<num>().map((v) => v.toInt()).toList(growable: false)
+        : null;
+    return StudentTextbookProblemSetItemView(
+      cropId: '${json['crop_id'] ?? ''}'.trim(),
+      status: status,
+      pdfUrl: pdfUrl.isEmpty ? null : pdfUrl,
+      rawPage: (json['raw_page'] as num?)?.toInt(),
+      itemRegion1k: region?.length == 4 ? region : null,
+    );
+  }
+}
+
+class StudentTextbookProblemSetView {
+  const StudentTextbookProblemSetView({
+    required this.status,
+    required this.commonCropId,
+    this.commonPdfUrl,
+    required this.items,
+    this.bodyPdfUrl,
+    this.bodyPagePdfUrl,
+    this.bodyPageStatus,
+    this.bodyCacheKey,
+    this.pollAfterMs,
+    this.expiresIn,
+  });
+
+  final StudentTextbookProblemViewStatus status;
+  final String commonCropId;
+  final String? commonPdfUrl;
+  final List<StudentTextbookProblemSetItemView> items;
+  final String? bodyPdfUrl;
+  final String? bodyPagePdfUrl;
+  final String? bodyPageStatus;
+  final String? bodyCacheKey;
+  final int? pollAfterMs;
+  final int? expiresIn;
+
+  bool get isReady =>
+      status == StudentTextbookProblemViewStatus.ready &&
+      commonPdfUrl != null &&
+      items.isNotEmpty &&
+      items.every((item) => item.isReady);
+
+  static StudentTextbookProblemSetView fromJson(Map<String, dynamic> json) {
+    final status = switch ('${json['status'] ?? ''}') {
+      'ready' => StudentTextbookProblemViewStatus.ready,
+      'queued' => StudentTextbookProblemViewStatus.queued,
+      'fallback' => StudentTextbookProblemViewStatus.fallback,
+      final value => throw StudentTextbookProblemViewException(
+          code: 'unsupported_status',
+          detail: value,
+        ),
+    };
+    final common = json['common'] is Map
+        ? Map<String, dynamic>.from(json['common'] as Map)
+        : const <String, dynamic>{};
+    final commonUrl = '${common['pdf_url'] ?? ''}'.trim();
+    final bodyUrl = '${json['body_pdf_url'] ?? ''}'.trim();
+    final bodyPageUrl = '${json['body_page_pdf_url'] ?? ''}'.trim();
+    final bodyPageStatus = '${json['body_page_status'] ?? ''}'.trim();
+    final bodyCacheKey = '${json['body_cache_key'] ?? ''}'.trim();
+    final rawItems = json['items'] is List
+        ? (json['items'] as List)
+            .whereType<Map>()
+            .map((raw) => StudentTextbookProblemSetItemView.fromJson(
+                  Map<String, dynamic>.from(raw),
+                ))
+            .where((item) => item.cropId.isNotEmpty)
+            .toList(growable: false)
+        : const <StudentTextbookProblemSetItemView>[];
+    return StudentTextbookProblemSetView(
+      status: status,
+      commonCropId: '${common['crop_id'] ?? ''}'.trim(),
+      commonPdfUrl: commonUrl.isEmpty ? null : commonUrl,
+      items: rawItems,
+      bodyPdfUrl: bodyUrl.isEmpty ? null : bodyUrl,
+      bodyPagePdfUrl: bodyPageUrl.isEmpty ? null : bodyPageUrl,
+      bodyPageStatus: bodyPageStatus.isEmpty ? null : bodyPageStatus,
+      bodyCacheKey: bodyCacheKey.isEmpty ? null : bodyCacheKey,
+      pollAfterMs: (json['poll_after_ms'] as num?)?.toInt(),
+      expiresIn: (json['expires_in'] as num?)?.toInt(),
+    );
+  }
+}
+
+class BodyPageProblemRegion {
+  const BodyPageProblemRegion({
+    required this.cropId,
+    required this.region1k,
+    this.numberBox1k,
+    this.choiceRegions1k = const <int, List<int>>{},
+  });
+
+  final String cropId;
+
+  /// `[top, left, bottom, right]` in `0..1000` normalized page coords.
+  final List<int> region1k;
+
+  /// 인쇄된 문항 번호 영역 `[top, left, bottom, right]` (`0..1000`).
+  final List<int>? numberBox1k;
+
+  /// 객관식 보기 번호(`1..5`) 원문자 좌표 `[top, left, bottom, right]` in `0..1000`.
+  final Map<int, List<int>> choiceRegions1k;
+
+  static List<int>? _parseBox(Object? raw) {
+    if (raw is! List || raw.length != 4) return null;
+    final out = <int>[];
+    for (final v in raw) {
+      if (v is! num) return null;
+      out.add(v.toInt());
+    }
+    if (out[2] <= out[0] || out[3] <= out[1]) return null;
+    return out;
+  }
+
+  static Map<int, List<int>> _parseChoiceMap(Object? raw) {
+    if (raw is! Map) return const <int, List<int>>{};
+    final out = <int, List<int>>{};
+    for (final entry in raw.entries) {
+      final k = int.tryParse('${entry.key}'.trim());
+      if (k == null || k < 1 || k > 5) continue;
+      final box = _parseBox(entry.value);
+      if (box != null) out[k] = box;
+    }
+    return out;
+  }
+
+  static BodyPageProblemRegion? fromJson(Map<String, dynamic> json) {
+    final cropId = '${json['crop_id'] ?? ''}'.trim();
+    if (cropId.isEmpty) return null;
+    final item = _parseBox(json['item_region_1k']);
+    final bbox = _parseBox(json['bbox_1k']);
+    final List<int>? union;
+    if (item != null && bbox != null) {
+      union = <int>[
+        item[0] < bbox[0] ? item[0] : bbox[0],
+        item[1] < bbox[1] ? item[1] : bbox[1],
+        item[2] > bbox[2] ? item[2] : bbox[2],
+        item[3] > bbox[3] ? item[3] : bbox[3],
+      ];
+    } else {
+      union = item ?? bbox;
+    }
+    if (union == null) return null;
+    final isDistinctNumberBox = bbox != null &&
+        (bbox[3] - bbox[1]) <= 120 &&
+        (bbox[2] - bbox[0]) <= 60;
+    return BodyPageProblemRegion(
+      cropId: cropId,
+      region1k: union,
+      numberBox1k: isDistinctNumberBox ? bbox : null,
+      choiceRegions1k: _parseChoiceMap(json['choice_regions_1k']),
+    );
+  }
+}
+
 class StudentTextbookProblemView {
   const StudentTextbookProblemView({
     required this.status,
     this.pdfUrl,
     this.bodyPdfUrl,
+    this.bodyPagePdfUrl,
+    this.bodyPageStatus,
+    this.bodyCacheKey,
     this.rawPage,
     this.itemRegion1k,
+    this.pageRegions = const <BodyPageProblemRegion>[],
+    this.prefetchPageUrls = const <int, String>{},
     this.pollAfterMs,
     this.expiresIn,
     this.cacheKey,
+    this.setInfo,
   });
 
   final StudentTextbookProblemViewStatus status;
   final String? pdfUrl;
   final String? bodyPdfUrl;
+  final String? bodyPagePdfUrl;
+  final String? bodyPageStatus;
+  final String? bodyCacheKey;
   final int? rawPage;
   final List<int>? itemRegion1k;
+  final List<BodyPageProblemRegion> pageRegions;
+  final Map<int, String> prefetchPageUrls;
   final int? pollAfterMs;
   final int? expiresIn;
   final String? cacheKey;
+  final ProblemSetInfo? setInfo;
 
   bool get isReady => status == StudentTextbookProblemViewStatus.ready;
   bool get isQueued => status == StudentTextbookProblemViewStatus.queued;
   bool get isFallback => status == StudentTextbookProblemViewStatus.fallback;
+  bool get hasBodyPagePdf =>
+      bodyPagePdfUrl != null && bodyPagePdfUrl!.isNotEmpty;
 
   static StudentTextbookProblemView fromJson(Map<String, dynamic> json) {
     final fallback = json['fallback'] is Map
@@ -669,17 +1017,46 @@ class StudentTextbookProblemView {
       return text.isEmpty ? null : text;
     }
 
+    final rawPageRegions = json['page_regions'];
+    final pageRegions = rawPageRegions is List
+        ? rawPageRegions
+            .whereType<Map>()
+            .map((raw) => BodyPageProblemRegion.fromJson(
+                  Map<String, dynamic>.from(raw),
+                ))
+            .whereType<BodyPageProblemRegion>()
+            .toList(growable: false)
+        : const <BodyPageProblemRegion>[];
+
+    final rawPrefetch = json['prefetch_page_urls'];
+    final prefetchUrls = <int, String>{};
+    if (rawPrefetch is Map) {
+      for (final entry in rawPrefetch.entries) {
+        final p = int.tryParse('${entry.key}'.trim());
+        final url = '${entry.value ?? ''}'.trim();
+        if (p != null && p > 0 && url.isNotEmpty) {
+          prefetchUrls[p] = url;
+        }
+      }
+    }
+
     return StudentTextbookProblemView(
       status: status,
       pdfUrl: nullableString(json['pdf_url']),
       bodyPdfUrl: nullableString(
         json['body_pdf_url'] ?? fallback['body_pdf_url'] ?? fallback['pdf_url'],
       ),
+      bodyPagePdfUrl: nullableString(json['body_page_pdf_url']),
+      bodyPageStatus: nullableString(json['body_page_status']),
+      bodyCacheKey: nullableString(json['body_cache_key']),
       rawPage: ((json['raw_page'] ?? fallback['raw_page']) as num?)?.toInt(),
       itemRegion1k: region?.length == 4 ? region : null,
+      pageRegions: pageRegions,
+      prefetchPageUrls: prefetchUrls,
       pollAfterMs: (json['poll_after_ms'] as num?)?.toInt(),
       expiresIn: (json['expires_in'] as num?)?.toInt(),
       cacheKey: nullableString(json['cache_key']),
+      setInfo: ProblemSetInfo.fromJson(json['set_info']),
     );
   }
 }
@@ -1010,6 +1387,8 @@ class TextbookUnitTree {
                   ) ??
                   smallIndex,
               pages: pages,
+              startPage: _toInt(small['start_page']),
+              endPage: _toInt(small['end_page']),
             ),
           );
         }
@@ -1019,7 +1398,7 @@ class TextbookUnitTree {
           TbMidUnit(
             name: _text(mid['name'] ?? mid['title']) ?? '',
             order: midOrder,
-            smalls: smalls,
+            smalls: _withConceptPages(smalls, bigOrder: bigOrder, midOrder: midOrder),
           ),
         );
       }
@@ -1090,6 +1469,8 @@ class TextbookUnitTree {
                     name: (s['name'] as String?) ?? '',
                     order: (s['order_index'] as num?)?.toInt() ?? 0,
                     pages: pages,
+                    startPage: _toInt(s['start_page']),
+                    endPage: _toInt(s['end_page']),
                   ));
                 }
               }
@@ -1098,7 +1479,11 @@ class TextbookUnitTree {
               mids.add(TbMidUnit(
                 name: (m['name'] as String?) ?? '',
                 order: midOrder,
-                smalls: smalls,
+                smalls: _withConceptPages(
+                  smalls,
+                  bigOrder: bigOrder,
+                  midOrder: midOrder,
+                ),
               ));
             }
           }
@@ -1117,6 +1502,75 @@ class TextbookUnitTree {
       bigUnits: bigs,
       pageOffset: (json['page_offset'] as num?)?.toInt(),
     );
+  }
+
+  static List<TbSmallUnit> _withConceptPages(
+    List<TbSmallUnit> smalls, {
+    required int bigOrder,
+    required int midOrder,
+  }) {
+    final midProblemPages = <int>{
+      for (final s in smalls)
+        for (final p in s.pages) p.rawPage,
+    };
+    final seenRanges = <String>{};
+    return <TbSmallUnit>[
+      for (final s in smalls)
+        () {
+          final start = s.startPage;
+          final end = s.endPage;
+          if (start == null ||
+              end == null ||
+              start <= 0 ||
+              end < start ||
+              (end - start) > 40) {
+            return s;
+          }
+          final rangeKey = '$start:$end';
+          if (!seenRanges.add(rangeKey)) return s;
+          var rawOffset = 0;
+          for (final p in s.pages) {
+            if (p.displayPage != null) {
+              rawOffset = p.rawPage - p.displayPage!;
+              break;
+            }
+          }
+          final existingRaw = <int>{for (final p in s.pages) p.rawPage};
+          final nextPages = List<TbPageStat>.of(s.pages);
+          for (var dp = start; dp <= end; dp++) {
+            final rp = dp + rawOffset;
+            if (rp <= 0 ||
+                existingRaw.contains(rp) ||
+                midProblemPages.contains(rp)) {
+              continue;
+            }
+            existingRaw.add(rp);
+            nextPages.add(
+              TbPageStat(
+                bigOrder: bigOrder,
+                midOrder: midOrder,
+                subKey: s.subKey,
+                rawPage: rp,
+                displayPage: dp,
+                total: 0,
+                graded: 0,
+                correct: 0,
+                isConcept: true,
+              ),
+            );
+          }
+          if (nextPages.length == s.pages.length) return s;
+          nextPages.sort((a, b) => a.rawPage.compareTo(b.rawPage));
+          return TbSmallUnit(
+            subKey: s.subKey,
+            name: s.name,
+            order: s.order,
+            pages: nextPages,
+            startPage: s.startPage,
+            endPage: s.endPage,
+          );
+        }(),
+    ];
   }
 
   static List<TbCategory> _parseCategoryCatalog(Object? raw) {
@@ -1184,11 +1638,15 @@ class TbSmallUnit {
     required this.name,
     required this.order,
     required this.pages,
+    this.startPage,
+    this.endPage,
   });
   final String subKey;
   final String name;
   final int order;
   final List<TbPageStat> pages;
+  final int? startPage;
+  final int? endPage;
 }
 
 class TbPageStat {
@@ -1202,6 +1660,7 @@ class TbPageStat {
     required this.graded,
     required this.correct,
     this.reported = 0,
+    this.isConcept = false,
   });
 
   final int bigOrder;
@@ -1218,8 +1677,12 @@ class TbPageStat {
   /// 검토 중/신고 인정으로 보류된 문항 수 (통계 제외 대상).
   final int reported;
 
+  /// 단원 범위에 포함되지만 풀 문항이 없는 개념 페이지 여부.
+  final bool isConcept;
+
   int get shownPage => displayPage ?? rawPage;
-  bool get done => correct >= total;
+  bool get isConceptPage => isConcept || (total == 0 && reported == 0);
+  bool get done => !isConceptPage && correct >= total;
 
   static TbPageStat fromRow(
     Map<String, dynamic> row, {
@@ -1270,6 +1733,9 @@ class PageProblem {
     this.categoryCode,
     this.categoryLabel,
     this.itemName,
+    this.contentGroupKind = '',
+    this.contentGroupLabel = '',
+    this.contentGroupTitle = '',
     this.roundNo = 0,
     this.roundOpen = false,
   });
@@ -1300,6 +1766,21 @@ class PageProblem {
   final String? categoryCode;
   final String? categoryLabel;
   final String? itemName;
+
+  /// 교재 본문의 내용 묶음. `type`이면 유형, `basic_subtopic`이면 소주제.
+  final String contentGroupKind;
+  final String contentGroupLabel;
+  final String contentGroupTitle;
+
+  /// 번호 목록 구분선 왼쪽에 쓸 유형·소주제 이름.
+  String? get sectionTypeLabel {
+    final label = contentGroupLabel.trim();
+    final title = contentGroupTitle.trim();
+    if (label.isEmpty && title.isEmpty) return null;
+    if (title.isEmpty || title == label) return label.isEmpty ? title : label;
+    if (label.isEmpty) return title;
+    return '$label · $title';
+  }
 
   /// 이 문항을 몇 번째로 푸는 중인가. 0이면 아직 푼 적 없다.
   /// 통과하거나, 과제로 다시 나오거나, 리셋하면 다음 회차로 넘어간다.
@@ -1340,6 +1821,9 @@ class PageProblem {
       categoryCode: categoryCode,
       categoryLabel: categoryLabel,
       itemName: itemName,
+      contentGroupKind: contentGroupKind,
+      contentGroupLabel: contentGroupLabel,
+      contentGroupTitle: contentGroupTitle,
       roundNo: roundNo,
       roundOpen: roundOpen,
     );
@@ -1372,6 +1856,18 @@ class PageProblem {
         row['category_label'] ?? row['categoryLabel'],
       ),
       itemName: _nullableText(row['item_name'] ?? row['itemName']),
+      contentGroupKind:
+          (row['content_group_kind'] ?? row['contentGroupKind'] ?? '')
+              .toString()
+              .trim(),
+      contentGroupLabel:
+          (row['content_group_label'] ?? row['contentGroupLabel'] ?? '')
+              .toString()
+              .trim(),
+      contentGroupTitle:
+          (row['content_group_title'] ?? row['contentGroupTitle'] ?? '')
+              .toString()
+              .trim(),
       roundNo: (row['round_no'] as num?)?.toInt() ?? 0,
       roundOpen: (row['round_open'] as bool?) ?? false,
       setParts: rawSetParts is List

@@ -153,9 +153,11 @@ class PencilInputPad extends StatefulWidget {
     this.remoteRecognizer,
     this.onSnapshot,
     this.onRecognizingChanged,
+    this.onStrokeStart,
     this.height = 220,
     this.showControls = true,
     this.showEmptyHint = true,
+    this.showModelError = true,
     this.embedded = false,
     this.stylusOnly = false,
   });
@@ -182,9 +184,14 @@ class PencilInputPad extends StatefulWidget {
   /// 패드가 사라진 뒤 끝나는 인식도 알려야 하므로 언마운트 후에도 호출된다.
   final ValueChanged<bool>? onRecognizingChanged;
 
+  /// 이 패드에서 새 필기 획이 시작될 때 호출된다.
+  /// 한 화면에 여러 문항 패드가 놓일 때 활성 문항을 맞추는 용도다.
+  final VoidCallback? onStrokeStart;
+
   final double height;
   final bool showControls;
   final bool showEmptyHint;
+  final bool showModelError;
   final bool embedded;
 
   /// true 면 애플펜슬(스타일러스)만 필기로 받고 손가락 터치는 스크롤에 넘긴다.
@@ -349,6 +356,12 @@ class PencilInputPadState extends State<PencilInputPad> {
   }
 
   void _startStroke(Offset position, int timestamp, double pressure) {
+    ApplePencilUndo.bind(
+      owner: this,
+      onUndo: _applyPencilUndo,
+      onRedo: _applyPencilRedo,
+    );
+    widget.onStrokeStart?.call();
     _debounce?.cancel();
     _strokesDirty = true;
     _strokeRevision++;
@@ -723,6 +736,9 @@ class PencilInputPadState extends State<PencilInputPad> {
     final isDark = theme.brightness == Brightness.dark;
 
     if (_modelError != null) {
+      if (!widget.showModelError) {
+        return SizedBox(height: widget.height);
+      }
       return SizedBox(
         height: widget.height,
         child: Center(
@@ -1080,4 +1096,693 @@ class _StrokePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _StrokePainter oldDelegate) => true;
+}
+
+class _MultiTargetInkSlot {
+  final PencilInkHistory ink = PencilInkHistory();
+  int strokeRevision = 0;
+  int recognizedRevision = -1;
+  Timer? debounce;
+  bool recognizing = false;
+  bool rerunRequested = false;
+  bool strokesDirty = false;
+  Map<String, dynamic>? lastSnapshot;
+}
+
+/// 한 페이지(원본 보기) 위에서 여러 문항에 걸친 필기를 좌표로 자동 분리해 인식한다.
+class MultiTargetPencilOverlay extends StatefulWidget {
+  const MultiTargetPencilOverlay({
+    super.key,
+    required this.resolveTarget,
+    required this.canWriteTarget,
+    required this.onRecognizedFor,
+    this.onTargetFocused,
+    this.candidateSelectorFor,
+    this.remoteRecognizerFor,
+    this.onSnapshotFor,
+    this.onRecognizingChangedFor,
+    this.stylusOnly = true,
+  });
+
+  final String? Function(Offset localPos, Size canvasSize) resolveTarget;
+  final bool Function(String targetId) canWriteTarget;
+  final ValueChanged<String>? onTargetFocused;
+  final String? Function(String targetId, List<String> candidates)?
+      candidateSelectorFor;
+  final Future<String?> Function(String targetId, Uint8List png)?
+      remoteRecognizerFor;
+  final void Function(String targetId, Map<String, dynamic> payload)?
+      onSnapshotFor;
+  final void Function(String targetId, bool busy)? onRecognizingChangedFor;
+  final void Function(String targetId, String text, {String? sourceLatex})
+      onRecognizedFor;
+  final bool stylusOnly;
+
+  @override
+  State<MultiTargetPencilOverlay> createState() =>
+      MultiTargetPencilOverlayState();
+}
+
+class MultiTargetPencilOverlayState extends State<MultiTargetPencilOverlay> {
+  final Map<String, _MultiTargetInkSlot> _slots =
+      <String, _MultiTargetInkSlot>{};
+  final List<String> _undoTargets = <String>[];
+  final List<String> _redoTargets = <String>[];
+  final ApplePencilUndoLedger _pencilUndo = ApplePencilUndoLedger();
+
+  int? _activePointer;
+  String? _activeTargetId;
+  bool _activeIsStylus = false;
+  int _touchPointerCount = 0;
+  Size _canvasSize = Size.zero;
+
+  mlkit.DigitalInkRecognizer? _recognizer;
+  bool _myscriptReady = false;
+  bool _modelReady = false;
+
+  @override
+  void initState() {
+    super.initState();
+    ApplePencilUndo.bind(
+      owner: this,
+      onUndo: _applyPencilUndo,
+      onRedo: _applyPencilRedo,
+    );
+    _prepareModel();
+  }
+
+  Future<void> _prepareModel() async {
+    if (!PencilInputPad.supported) return;
+    unawaited(
+      MyScriptMath.instance.available().then((ok) {
+        if (!ok || !mounted) return;
+        setState(() {
+          _myscriptReady = true;
+          _modelReady = true;
+        });
+      }),
+    );
+    try {
+      final recognizer =
+          await _DigitalInkService.instance.prepare(onDownloading: () {});
+      if (!mounted) return;
+      setState(() {
+        _recognizer = recognizer;
+        _modelReady = true;
+      });
+    } catch (e, stack) {
+      debugPrint('MultiTarget digital ink preparation failed: $e\n$stack');
+    }
+  }
+
+  @override
+  void dispose() {
+    ApplePencilUndo.unbind(this);
+    for (final slot in _slots.values) {
+      slot.debounce?.cancel();
+    }
+    unawaited(flushRecognition());
+    super.dispose();
+  }
+
+  _MultiTargetInkSlot _slotFor(String id) =>
+      _slots.putIfAbsent(id, _MultiTargetInkSlot.new);
+
+  Future<void> flushRecognition() {
+    final tasks = <Future<void>>[];
+    for (final entry in _slots.entries) {
+      final id = entry.key;
+      final slot = entry.value;
+      slot.debounce?.cancel();
+      if (slot.ink.strokes.isNotEmpty &&
+          slot.recognizedRevision != slot.strokeRevision) {
+        tasks.add(Future.microtask(() => _recognizeTarget(id)));
+      }
+    }
+    if (tasks.isEmpty) return Future<void>.value();
+    return Future.wait(tasks);
+  }
+
+  Map<String, dynamic>? handwritingReportPayloadFor(String targetId) {
+    final slot = _slots[targetId];
+    if (slot == null) return null;
+    if (slot.ink.strokes.isEmpty) return slot.lastSnapshot;
+    if (!slot.strokesDirty && slot.lastSnapshot != null) {
+      return slot.lastSnapshot;
+    }
+    return _buildSnapshot(slot, const <String>[]);
+  }
+
+  double _normalizedPressure(PointerEvent event) {
+    final range = event.pressureMax - event.pressureMin;
+    if (range <= 0) return -1;
+    final value = (event.pressure - event.pressureMin) / range;
+    if (!value.isFinite) return -1;
+    return value.clamp(0.0, 1.0).toDouble();
+  }
+
+  void _startStroke(
+    String targetId,
+    Offset position,
+    int timestamp,
+    double pressure,
+  ) {
+    ApplePencilUndo.bind(
+      owner: this,
+      onUndo: _applyPencilUndo,
+      onRedo: _applyPencilRedo,
+    );
+    widget.onTargetFocused?.call(targetId);
+    final slot = _slotFor(targetId);
+    slot.debounce?.cancel();
+    slot.strokesDirty = true;
+    slot.strokeRevision++;
+    setState(() {
+      slot.ink.beginStroke(position, timestamp, pressure);
+    });
+  }
+
+  void _extendStroke(
+    String targetId,
+    Offset position,
+    int timestamp,
+    double pressure,
+  ) {
+    final slot = _slots[targetId];
+    if (slot == null || slot.ink.strokes.isEmpty) return;
+    if (!slot.ink.extendStroke(position, timestamp, pressure)) return;
+    setState(() {});
+  }
+
+  void _commitFinishedStroke(String targetId) {
+    final slot = _slots[targetId];
+    if (slot == null || slot.ink.strokes.isEmpty) return;
+    final outcome = slot.ink.commitOpenStroke();
+    if (outcome == PencilCommitOutcome.none) return;
+    _undoTargets.add(targetId);
+    _redoTargets.clear();
+    if (outcome == PencilCommitOutcome.erased) {
+      slot.strokesDirty = true;
+      slot.strokeRevision++;
+      setState(() {});
+    }
+    if (!ApplePencilUndo.enabled) return;
+    _pencilUndo.beginPush();
+    final epoch = _pencilUndo.epoch;
+    unawaited(() async {
+      final registered = await ApplePencilUndo.push();
+      if (!mounted) return;
+      final popNow = _pencilUndo.finishPush(
+        registered: registered,
+        epoch: epoch,
+      );
+      if (!popNow) return;
+      final handled = await ApplePencilUndo.noteLocalUndo();
+      if (mounted && !handled) _pencilUndo.levels++;
+    }());
+  }
+
+  void _endStroke(String targetId) {
+    final slot = _slots[targetId];
+    if (slot == null) return;
+    slot.debounce?.cancel();
+    if (slot.ink.strokes.isEmpty) {
+      slot.recognizedRevision = slot.strokeRevision;
+      widget.onRecognizedFor(targetId, '');
+      return;
+    }
+    slot.debounce = Timer(
+      PencilInputPadState.recognitionDelay,
+      () => _recognizeTarget(targetId),
+    );
+  }
+
+  void _cancelActiveStroke() {
+    final targetId = _activeTargetId;
+    _activePointer = null;
+    _activeTargetId = null;
+    if (targetId == null) return;
+    final slot = _slots[targetId];
+    if (slot == null) return;
+    slot.debounce?.cancel();
+    if (slot.ink.strokes.isEmpty) return;
+    slot.ink.cancelOpenStroke();
+    slot.strokeRevision++;
+    setState(() {});
+  }
+
+  void _handlePointerEnd(PointerEvent event) {
+    final isStylus = event.kind == PointerDeviceKind.stylus ||
+        event.kind == PointerDeviceKind.invertedStylus;
+    if (!isStylus) {
+      _touchPointerCount = (_touchPointerCount - 1).clamp(0, 10).toInt();
+    }
+    if (_activePointer != event.pointer) return;
+    final targetId = _activeTargetId;
+    _activePointer = null;
+    _activeTargetId = null;
+    if (targetId == null) return;
+    _commitFinishedStroke(targetId);
+    _endStroke(targetId);
+  }
+
+  void _applyPencilUndo() {
+    if (!mounted) return;
+    _pencilUndo.notePopped();
+    _undoInternal(fromPlatform: true);
+  }
+
+  void _applyPencilRedo() {
+    if (!mounted) return;
+    _pencilUndo.noteRedone();
+    if (_redoTargets.isEmpty) return;
+    final targetId = _redoTargets.removeLast();
+    final slot = _slots[targetId];
+    if (slot == null ||
+        !slot.ink.redo(strokeOpen: _activePointer != null && _activeTargetId == targetId)) {
+      return;
+    }
+    _undoTargets.add(targetId);
+    slot.strokesDirty = true;
+    slot.strokeRevision++;
+    setState(() {});
+    _endStroke(targetId);
+  }
+
+  bool undoTarget(String? preferredTargetId) {
+    return _undoInternal(
+      fromPlatform: false,
+      preferredTargetId: preferredTargetId,
+    );
+  }
+
+  bool _undoInternal({
+    required bool fromPlatform,
+    String? preferredTargetId,
+  }) {
+    String? targetId;
+    if (preferredTargetId != null) {
+      final slot = _slots[preferredTargetId];
+      if (slot != null &&
+          slot.ink.canUndo(
+            strokeOpen:
+                _activePointer != null && _activeTargetId == preferredTargetId,
+          )) {
+        targetId = preferredTargetId;
+        final idx = _undoTargets.lastIndexOf(preferredTargetId);
+        if (idx >= 0) _undoTargets.removeAt(idx);
+      }
+    }
+    while (targetId == null && _undoTargets.isNotEmpty) {
+      final candidate = _undoTargets.removeLast();
+      final slot = _slots[candidate];
+      if (slot != null &&
+          slot.ink.canUndo(
+            strokeOpen: _activePointer != null && _activeTargetId == candidate,
+          )) {
+        targetId = candidate;
+      }
+    }
+    if (targetId == null) return false;
+    final slot = _slots[targetId]!;
+    if (!slot.ink.undo(
+      strokeOpen: _activePointer != null && _activeTargetId == targetId,
+    )) {
+      return false;
+    }
+    _redoTargets.add(targetId);
+    slot.strokesDirty = true;
+    slot.strokeRevision++;
+    setState(() {});
+    _endStroke(targetId);
+    if (!fromPlatform) {
+      if (_pencilUndo.levels > 0) {
+        unawaited(() async {
+          final handled = await ApplePencilUndo.noteLocalUndo();
+          if (!mounted || !handled) return;
+          _pencilUndo.notePopped();
+        }());
+      } else {
+        _pencilUndo.buttonUndoWhilePushPending();
+      }
+    }
+    return slot.ink.strokes.isNotEmpty;
+  }
+
+  ({List<List<Offset>> strokes, Size size}) _normalizedLocalStrokes(
+    List<List<Offset>> rawStrokes,
+  ) {
+    var minX = double.infinity;
+    var minY = double.infinity;
+    var maxX = double.negativeInfinity;
+    var maxY = double.negativeInfinity;
+    for (final s in rawStrokes) {
+      for (final p in s) {
+        if (p.dx < minX) minX = p.dx;
+        if (p.dx > maxX) maxX = p.dx;
+        if (p.dy < minY) minY = p.dy;
+        if (p.dy > maxY) maxY = p.dy;
+      }
+    }
+    if (!minX.isFinite || !minY.isFinite) {
+      return (strokes: const <List<Offset>>[], size: const Size(120, 80));
+    }
+    const pad = 24.0;
+    final origin = Offset(minX - pad, minY - pad);
+    final shifted = <List<Offset>>[
+      for (final s in rawStrokes)
+        <Offset>[for (final p in s) p - origin],
+    ];
+    final w = math.max(120.0, (maxX - minX) + pad * 2);
+    final h = math.max(80.0, (maxY - minY) + pad * 2);
+    return (strokes: shifted, size: Size(w, h));
+  }
+
+  Future<void> _recognizeTarget(String targetId) async {
+    final slot = _slots[targetId];
+    if (slot == null || slot.ink.strokes.isEmpty) return;
+    if (_recognizer == null && !_myscriptReady) return;
+    if (slot.recognizedRevision == slot.strokeRevision) return;
+    if (slot.recognizing) {
+      slot.rerunRequested = true;
+      return;
+    }
+    slot.recognizing = true;
+    widget.onRecognizingChangedFor?.call(targetId, true);
+    try {
+      do {
+        slot.rerunRequested = false;
+        slot.recognizedRevision = slot.strokeRevision;
+        await _recognizeTargetOnce(targetId, slot);
+      } while (slot.rerunRequested && slot.ink.strokes.isNotEmpty);
+    } finally {
+      slot.recognizing = false;
+      slot.rerunRequested = false;
+      widget.onRecognizingChangedFor?.call(targetId, false);
+    }
+  }
+
+  Future<void> _recognizeTargetOnce(
+    String targetId,
+    _MultiTargetInkSlot slot,
+  ) async {
+    final startRevision = slot.strokeRevision;
+    final recognizer = _recognizer;
+    final local = _normalizedLocalStrokes(slot.ink.strokes);
+    if (local.strokes.isEmpty) return;
+    try {
+      var candidates = const <String>[];
+      var engine = 'mlkit';
+      String? myscriptLatex;
+
+      if (_myscriptReady) {
+        final payload = <Map<String, dynamic>>[
+          for (var i = 0; i < local.strokes.length; i++)
+            <String, dynamic>{
+              'x': <double>[for (final p in local.strokes[i]) p.dx],
+              'y': <double>[for (final p in local.strokes[i]) p.dy],
+              't': List<int>.of(slot.ink.times[i]),
+            },
+        ];
+        final latex = await MyScriptMath.instance.recognizeLatex(payload);
+        final linear = latex == null ? '' : latexToLinear(latex);
+        if (linear.isNotEmpty) {
+          candidates = <String>[linear];
+          engine = 'myscript';
+          myscriptLatex = latex;
+        }
+      }
+
+      if (candidates.isEmpty && recognizer != null) {
+        engine = 'mlkit';
+        final ink = mlkit.Ink();
+        for (var i = 0; i < local.strokes.length; i++) {
+          final stroke = mlkit.Stroke();
+          final pts = local.strokes[i];
+          final ts = slot.ink.times[i];
+          for (var j = 0; j < pts.length; j++) {
+            stroke.points.add(mlkit.StrokePoint(
+              x: pts[j].dx,
+              y: pts[j].dy,
+              t: ts[j],
+            ));
+          }
+          ink.strokes.add(stroke);
+        }
+        final context = mlkit.DigitalInkRecognitionContext(
+          writingArea: mlkit.WritingArea(
+            width: local.size.width,
+            height: local.size.height,
+          ),
+        );
+        candidates = await _DigitalInkService.instance.recognize(
+          recognizer,
+          ink,
+          context,
+        );
+      }
+
+      String selected = '';
+      var needFallback = candidates.isEmpty;
+      if (candidates.isNotEmpty) {
+        if (widget.candidateSelectorFor != null) {
+          final picked = widget.candidateSelectorFor!(targetId, candidates)
+              ?.trim();
+          if (picked == null || picked.isEmpty) {
+            selected = candidates.first.trim();
+            needFallback = true;
+          } else {
+            selected = picked;
+          }
+        } else {
+          selected = candidates.first.trim();
+        }
+      }
+      var usedRemote = false;
+      if (needFallback && widget.remoteRecognizerFor != null) {
+        final png = await renderHandwritingPng(
+          strokes: local.strokes,
+          canvasSize: local.size,
+        );
+        if (png != null) {
+          try {
+            final text = await widget
+                .remoteRecognizerFor!(targetId, png)
+                .timeout(const Duration(seconds: 12));
+            final trimmed = text?.trim() ?? '';
+            if (trimmed.isNotEmpty) {
+              selected = trimmed;
+              usedRemote = true;
+            }
+          } catch (_) {}
+        }
+      }
+      if (slot.strokeRevision != startRevision) {
+        if (slot.ink.strokes.isNotEmpty) slot.rerunRequested = true;
+        return;
+      }
+      final snap = _buildSnapshot(
+        slot,
+        candidates,
+        recognizedText: selected,
+        usedRemoteFallback: usedRemote,
+        engine: engine,
+        myscriptLatex: myscriptLatex,
+      );
+      slot.lastSnapshot = snap;
+      slot.strokesDirty = false;
+      widget.onSnapshotFor?.call(targetId, snap);
+      if (selected.isEmpty) return;
+      widget.onRecognizedFor(
+        targetId,
+        selected,
+        sourceLatex: usedRemote ? null : myscriptLatex,
+      );
+    } catch (e, stack) {
+      debugPrint('MultiTarget ink recognition failed: $e\n$stack');
+      String? remote;
+      if (widget.remoteRecognizerFor != null) {
+        final png = await renderHandwritingPng(
+          strokes: local.strokes,
+          canvasSize: local.size,
+        );
+        if (png != null) {
+          try {
+            final text = await widget
+                .remoteRecognizerFor!(targetId, png)
+                .timeout(const Duration(seconds: 12));
+            final trimmed = text?.trim() ?? '';
+            if (trimmed.isNotEmpty) remote = trimmed;
+          } catch (_) {}
+        }
+      }
+      if (slot.strokeRevision != startRevision) {
+        if (slot.ink.strokes.isNotEmpty) slot.rerunRequested = true;
+        return;
+      }
+      if (remote != null) {
+        final snap = _buildSnapshot(
+          slot,
+          const <String>[],
+          recognizedText: remote,
+          usedRemoteFallback: true,
+        );
+        slot.lastSnapshot = snap;
+        slot.strokesDirty = false;
+        widget.onSnapshotFor?.call(targetId, snap);
+        widget.onRecognizedFor(targetId, remote);
+      } else {
+        final snap = _buildSnapshot(slot, const <String>[]);
+        slot.lastSnapshot = snap;
+        slot.strokesDirty = false;
+        widget.onSnapshotFor?.call(targetId, snap);
+      }
+    }
+  }
+
+  Map<String, dynamic> _buildSnapshot(
+    _MultiTargetInkSlot slot,
+    List<String> candidates, {
+    String recognizedText = '',
+    bool usedRemoteFallback = false,
+    String engine = 'mlkit',
+    String? myscriptLatex,
+  }) {
+    final local = _normalizedLocalStrokes(slot.ink.strokes);
+    return <String, dynamic>{
+      'canvas_width': local.size.width,
+      'canvas_height': local.size.height,
+      'engine': engine,
+      'model':
+          engine == 'myscript' ? 'myscript-math2' : _DigitalInkService.model,
+      if (myscriptLatex != null) 'myscript_latex': myscriptLatex,
+      'recognized_candidates': candidates,
+      'recognized_text': recognizedText,
+      if (usedRemoteFallback) 'used_remote_fallback': true,
+      'captured_at': DateTime.now().toUtc().toIso8601String(),
+      'strokes': <Map<String, dynamic>>[
+        for (var i = 0; i < local.strokes.length; i++)
+          <String, dynamic>{
+            'x': [
+              for (final p in local.strokes[i])
+                PencilInputPadState._round2(p.dx),
+            ],
+            'y': [
+              for (final p in local.strokes[i])
+                PencilInputPadState._round2(p.dy),
+            ],
+            't': slot.ink.times[i],
+            'p': [
+              for (final v in slot.ink.pressures[i])
+                PencilInputPadState._round2(v),
+            ],
+          },
+      ],
+    };
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final allStrokes = <List<Offset>>[];
+    final allTimes = <List<int>>[];
+    final allPressures = <List<double>>[];
+    for (final slot in _slots.values) {
+      allStrokes.addAll(slot.ink.strokes);
+      allTimes.addAll(slot.ink.times);
+      allPressures.addAll(slot.ink.pressures);
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        _canvasSize = Size(constraints.maxWidth, constraints.maxHeight);
+        return Listener(
+          behavior: HitTestBehavior.translucent,
+          onPointerDown: _modelReady
+              ? (event) {
+                  final isStylus = event.kind == PointerDeviceKind.stylus ||
+                      event.kind == PointerDeviceKind.invertedStylus;
+                  if (isStylus) {
+                    PencilInputPadState._stylusSeen = true;
+                    if (_activePointer != null && !_activeIsStylus) {
+                      _cancelActiveStroke();
+                    }
+                    if (_activePointer != null) return;
+                    final targetId = widget.resolveTarget(
+                      event.localPosition,
+                      _canvasSize,
+                    );
+                    if (targetId == null || !widget.canWriteTarget(targetId)) {
+                      return;
+                    }
+                    _activePointer = event.pointer;
+                    _activeTargetId = targetId;
+                    _activeIsStylus = true;
+                    _startStroke(
+                      targetId,
+                      event.localPosition,
+                      event.timeStamp.inMilliseconds,
+                      _normalizedPressure(event),
+                    );
+                    return;
+                  }
+                  _touchPointerCount += 1;
+                  final isTouch = event.kind == PointerDeviceKind.touch;
+                  if ((widget.stylusOnly && isTouch) ||
+                      PencilInputPadState._stylusSeen) {
+                    return;
+                  }
+                  if (_touchPointerCount >= 2) {
+                    _cancelActiveStroke();
+                    return;
+                  }
+                  if (_activePointer != null) return;
+                  final targetId = widget.resolveTarget(
+                    event.localPosition,
+                    _canvasSize,
+                  );
+                  if (targetId == null || !widget.canWriteTarget(targetId)) {
+                    return;
+                  }
+                  _activePointer = event.pointer;
+                  _activeTargetId = targetId;
+                  _activeIsStylus = false;
+                  _startStroke(
+                    targetId,
+                    event.localPosition,
+                    event.timeStamp.inMilliseconds,
+                    _normalizedPressure(event),
+                  );
+                }
+              : null,
+          onPointerMove: _modelReady
+              ? (event) {
+                  if (_activePointer != event.pointer) return;
+                  final targetId = _activeTargetId;
+                  if (targetId == null) return;
+                  if (!_activeIsStylus && _touchPointerCount >= 2) return;
+                  _extendStroke(
+                    targetId,
+                    event.localPosition,
+                    event.timeStamp.inMilliseconds,
+                    _normalizedPressure(event),
+                  );
+                }
+              : null,
+          onPointerUp: _modelReady ? _handlePointerEnd : null,
+          onPointerCancel: _modelReady ? _handlePointerEnd : null,
+          child: RepaintBoundary(
+            child: CustomPaint(
+              painter: _StrokePainter(
+                strokes: allStrokes,
+                times: allTimes,
+                pressures: allPressures,
+                color: Colors.black87,
+              ),
+              size: Size.infinite,
+            ),
+          ),
+        );
+      },
+    );
+  }
 }

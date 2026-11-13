@@ -171,6 +171,7 @@ class _TextbookReviewEngineHoldPanelState extends State<TextbookReviewEngineHold
             if ((p ?? '').isNotEmpty) 'problem_url': p,
             if ((s ?? '').isNotEmpty) 'answer_solution_url': s,
             'solution_kind': e.item.primarySolutionKind,
+            'has_solution_figures': e.item.solutionFigureAssets.isNotEmpty,
           });
         }
         if (!mounted) return;

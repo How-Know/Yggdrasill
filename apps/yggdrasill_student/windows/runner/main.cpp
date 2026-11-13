@@ -26,8 +26,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
 
   FlutterWindow window(project);
   Win32Window::Point origin(10, 10);
-  // Portrait preview size matching iPad mini logical resolution.
-  Win32Window::Size size(744, 1133);
+  // Width leaves room for a 105mm problem on a ~240ppi panel at 125%
+  // scaling. Height stays the iPad mini logical height.
+  Win32Window::Size size(1040, 1133);
   if (!window.Create(L"yggdrasill_student", origin, size)) {
     return EXIT_FAILURE;
   }

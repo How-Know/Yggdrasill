@@ -1033,6 +1033,19 @@ class LearningProblemLiveRelease {
   }
 }
 
+/// 학생 화면용으로 구워 둔 문항 PDF. 키가 없으면 그 문항은 V2 썸네일로 남긴다.
+class BakedQuestionPdfPreviews {
+  const BakedQuestionPdfPreviews({
+    this.itemPdfByQuestionId = const <String, String>{},
+    this.commonPdfByQuestionId = const <String, String>{},
+  });
+
+  final Map<String, String> itemPdfByQuestionId;
+  final Map<String, String> commonPdfByQuestionId;
+
+  static const empty = BakedQuestionPdfPreviews();
+}
+
 class LearningProblemBankService {
   LearningProblemBankService({
     SupabaseClient? client,
@@ -1457,8 +1470,9 @@ class LearningProblemBankService {
     return _attachReviewScores(academyId: academyId, questions: questions);
   }
 
-  /// 교재 크롭 검수 분석의 사고·연산 점수를 문항 id에 붙인다.
-  /// 분석이 없거나 조회가 실패하면 점수를 비운 채 문항 목록은 그대로 둔다.
+  /// 확정한 문항 메타(pb_question_meta)의 사고·연산 점수를 문항 id에 붙인다.
+  /// 검수 기록(textbook_problem_analyses)의 점수는 확정 전 값일 수 있어 읽지 않는다.
+  /// 메타가 없거나 조회가 실패하면 점수를 비운 채 문항 목록은 그대로 둔다.
   Future<List<LearningProblemQuestion>> _attachReviewScores({
     required String academyId,
     required List<LearningProblemQuestion> questions,
@@ -1472,43 +1486,20 @@ class LearningProblemBankService {
         .toList(growable: false);
     if (questionIds.isEmpty) return questions;
 
-    final cropByQuestionId = <String, String>{};
+    final scoresByQuestionId =
+        <String, ({double thinking, double arithmetic})>{};
     try {
       for (final chunk in _chunkStrings(questionIds, 200)) {
         final rows = await _client
-            .from('textbook_crop_question_links')
-            .select('pb_question_id,crop_id')
+            .from('pb_question_meta')
+            .select('question_id,thinking_score,arithmetic_score')
             .eq('academy_id', safeAcademyId)
-            .inFilter('pb_question_id', chunk);
+            .inFilter('question_id', chunk);
         for (final raw in _listOrEmpty(rows)) {
           final row = _mapOrEmpty(raw);
-          final questionId = '${row['pb_question_id'] ?? ''}'.trim();
-          final cropId = '${row['crop_id'] ?? ''}'.trim();
-          if (questionId.isEmpty || cropId.isEmpty) continue;
-          cropByQuestionId[questionId] = cropId;
-        }
-      }
-    } catch (_) {
-      return questions;
-    }
-    if (cropByQuestionId.isEmpty) return questions;
-
-    final scoresByCropId = <String, ({double thinking, double arithmetic})>{};
-    try {
-      final cropIds = cropByQuestionId.values.toSet().toList(growable: false);
-      for (final chunk in _chunkStrings(cropIds, 200)) {
-        final rows = await _client
-            .from('textbook_problem_analyses')
-            .select('crop_id,thinking_score,arithmetic_score,analyzed_at')
-            .eq('academy_id', safeAcademyId)
-            .inFilter('crop_id', chunk);
-        for (final raw in _listOrEmpty(rows)) {
-          final row = _mapOrEmpty(raw);
-          final analyzedAt = '${row['analyzed_at'] ?? ''}'.trim();
-          if (analyzedAt.isEmpty) continue;
-          final cropId = '${row['crop_id'] ?? ''}'.trim();
-          if (cropId.isEmpty) continue;
-          scoresByCropId[cropId] = (
+          final questionId = '${row['question_id'] ?? ''}'.trim();
+          if (questionId.isEmpty) continue;
+          scoresByQuestionId[questionId] = (
             thinking: _doubleOrZero(row['thinking_score']),
             arithmetic: _doubleOrZero(row['arithmetic_score']),
           );
@@ -1517,12 +1508,11 @@ class LearningProblemBankService {
     } catch (_) {
       return questions;
     }
-    if (scoresByCropId.isEmpty) return questions;
+    if (scoresByQuestionId.isEmpty) return questions;
 
     return questions
         .map((question) {
-          final cropId = cropByQuestionId[question.id.trim()];
-          final scores = cropId == null ? null : scoresByCropId[cropId];
+          final scores = scoresByQuestionId[question.id.trim()];
           if (scores == null) return question;
           return question.copyWith(
             reviewThinkingScore: scores.thinking,
@@ -3176,6 +3166,223 @@ class LearningProblemBankService {
     return _client.storage
         .from(safeBucket)
         .createSignedUrl(safePath, expiresInSeconds);
+  }
+
+  static const String _bakedSingleProfile = 'student-single-v1';
+  static const String _bakedSetItemProfile = 'student-set-item-v1';
+  static const String _bakedSetCommonProfile = 'student-set-common-v1';
+
+  /// 문항 카드가 쓸 구워 둔 PDF 서명 URL.
+  ///
+  /// 단독 문항은 `student-single-v1`, 세트 하위 문항은 `student-set-item-v1`,
+  /// 공통발문은 `student-set-common-v1`이다. 성공한 최신 산출물만 고른다.
+  Future<BakedQuestionPdfPreviews> fetchBakedQuestionPdfPreviews({
+    required String academyId,
+    required List<LearningProblemQuestion> questions,
+  }) async {
+    final safeAcademyId = academyId.trim();
+    if (safeAcademyId.isEmpty || questions.isEmpty) {
+      return BakedQuestionPdfPreviews.empty;
+    }
+    final wantedIds = <String>{};
+    final setItemIds = <String>{};
+    final idByUid = <String, String>{};
+    for (final question in questions) {
+      final id = question.id.trim();
+      if (id.isEmpty) continue;
+      wantedIds.add(id);
+      if (question.isIndependentSetItem) setItemIds.add(id);
+      final uid = question.questionUid.trim();
+      if (uid.isNotEmpty) idByUid[uid] = id;
+    }
+    if (wantedIds.isEmpty) return BakedQuestionPdfPreviews.empty;
+
+    try {
+      final questionsByCrop = <String, Set<String>>{};
+      void bindCrop(String cropId, String questionId) {
+        final crop = cropId.trim();
+        final question = questionId.trim();
+        if (crop.isEmpty || !wantedIds.contains(question)) return;
+        questionsByCrop.putIfAbsent(crop, () => <String>{}).add(question);
+      }
+
+      final linkRows = await _selectInChunks(
+        wantedIds.toList(growable: false),
+        (chunk) => _client
+            .from('textbook_crop_question_links')
+            .select('crop_id, pb_question_id')
+            .inFilter('pb_question_id', chunk),
+      );
+      for (final raw in linkRows) {
+        if (raw is! Map) continue;
+        bindCrop('${raw['crop_id'] ?? ''}', '${raw['pb_question_id'] ?? ''}');
+      }
+
+      if (idByUid.isNotEmpty) {
+        final cropRows = await _selectInChunks(
+          idByUid.keys.toList(growable: false),
+          (chunk) => _client
+              .from('textbook_problem_crops')
+              .select('id, pb_question_uid')
+              .eq('academy_id', safeAcademyId)
+              .inFilter('pb_question_uid', chunk),
+        );
+        for (final raw in cropRows) {
+          if (raw is! Map) continue;
+          final questionId = idByUid['${raw['pb_question_uid'] ?? ''}'.trim()];
+          if (questionId == null) continue;
+          bindCrop('${raw['id'] ?? ''}', questionId);
+        }
+      }
+
+      final assetRows = <dynamic>[];
+      assetRows.addAll(
+        await _selectInChunks(
+          wantedIds.toList(growable: false),
+          (chunk) => _client
+              .from('question_render_assets')
+              .select(
+                'pb_question_id, crop_id, render_profile, storage_bucket, '
+                'storage_path, rendered_at',
+              )
+              .eq('academy_id', safeAcademyId)
+              .inFilter('pb_question_id', chunk)
+              .inFilter('render_profile', const <String>[
+                _bakedSingleProfile,
+                _bakedSetItemProfile,
+                _bakedSetCommonProfile,
+              ])
+              .eq('render_error', '')
+              .not('rendered_at', 'is', null),
+        ),
+      );
+      if (questionsByCrop.isNotEmpty) {
+        assetRows.addAll(
+          await _selectInChunks(
+            questionsByCrop.keys.toList(growable: false),
+            (chunk) => _client
+                .from('question_render_assets')
+                .select(
+                  'pb_question_id, crop_id, render_profile, storage_bucket, '
+                  'storage_path, rendered_at',
+                )
+                .eq('academy_id', safeAcademyId)
+                .inFilter('crop_id', chunk)
+                .inFilter('render_profile', const <String>[
+                  _bakedSingleProfile,
+                  _bakedSetItemProfile,
+                  _bakedSetCommonProfile,
+                ])
+                .eq('render_error', '')
+                .not('rendered_at', 'is', null),
+          ),
+        );
+      }
+
+      final best = <String, ({String bucket, String path, DateTime at})>{};
+      void consider({
+        required String questionId,
+        required String profile,
+        required String bucket,
+        required String path,
+        required DateTime at,
+      }) {
+        if (!wantedIds.contains(questionId) ||
+            bucket.isEmpty ||
+            path.isEmpty) {
+          return;
+        }
+        final key = '$questionId|$profile';
+        final previous = best[key];
+        if (previous == null || at.isAfter(previous.at)) {
+          best[key] = (bucket: bucket, path: path, at: at);
+        }
+      }
+
+      for (final raw in assetRows) {
+        if (raw is! Map) continue;
+        final profile = '${raw['render_profile'] ?? ''}'.trim();
+        final bucket = '${raw['storage_bucket'] ?? ''}'.trim();
+        final path = '${raw['storage_path'] ?? ''}'.trim();
+        final at = DateTime.tryParse('${raw['rendered_at'] ?? ''}');
+        if (at == null) continue;
+        final holders = <String>{};
+        final directId = '${raw['pb_question_id'] ?? ''}'.trim();
+        if (wantedIds.contains(directId)) holders.add(directId);
+        final cropHolders = questionsByCrop['${raw['crop_id'] ?? ''}'.trim()];
+        if (cropHolders != null) holders.addAll(cropHolders);
+        for (final questionId in holders) {
+          consider(
+            questionId: questionId,
+            profile: profile,
+            bucket: bucket,
+            path: path,
+            at: at,
+          );
+        }
+      }
+
+      final signing = <String, Future<String>>{};
+      Future<String> sign(String bucket, String path) {
+        final key = '$bucket\n$path';
+        return signing.putIfAbsent(key, () async {
+          try {
+            final url = await _client.storage.from(bucket).createSignedUrl(
+                  path,
+                  60 * 60,
+                );
+            return url.trim();
+          } catch (_) {
+            return '';
+          }
+        });
+      }
+
+      final itemPdf = <String, String>{};
+      final commonPdf = <String, String>{};
+      final signJobs = <Future<void>>[];
+      for (final questionId in wantedIds) {
+        final itemProfile = setItemIds.contains(questionId)
+            ? _bakedSetItemProfile
+            : _bakedSingleProfile;
+        final item = best['$questionId|$itemProfile'];
+        if (item != null) {
+          signJobs.add(() async {
+            final url = await sign(item.bucket, item.path);
+            if (url.isNotEmpty) itemPdf[questionId] = url;
+          }());
+        }
+        final common = best['$questionId|$_bakedSetCommonProfile'];
+        if (common != null) {
+          signJobs.add(() async {
+            final url = await sign(common.bucket, common.path);
+            if (url.isNotEmpty) commonPdf[questionId] = url;
+          }());
+        }
+      }
+      await Future.wait(signJobs);
+      return BakedQuestionPdfPreviews(
+        itemPdfByQuestionId: itemPdf,
+        commonPdfByQuestionId: commonPdf,
+      );
+    } catch (_) {
+      return BakedQuestionPdfPreviews.empty;
+    }
+  }
+
+  Future<List<dynamic>> _selectInChunks(
+    List<String> values,
+    Future<dynamic> Function(List<String> chunk) query,
+  ) async {
+    if (values.isEmpty) return const <dynamic>[];
+    const size = 80;
+    final out = <dynamic>[];
+    for (var start = 0; start < values.length; start += size) {
+      final end = start + size < values.length ? start + size : values.length;
+      final rows = await query(values.sublist(start, end));
+      if (rows is List) out.addAll(rows);
+    }
+    return out;
   }
 
   Future<Map<String, String>> batchRenderThumbnails({

@@ -918,12 +918,15 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     if (isImageChoiceQuestion) {
       final assets = meta['figure_assets'];
       final assetCount = assets is List ? assets.length : 0;
+      if (assetCount > 0) {
+        meta['figure_count'] = assetCount;
+      }
+      // 본문 그림과 선지 그림이 한 배열에 들어 있다. 자산 개수를 선지 수로
+      // 저장하면 그림 하나를 올린 뒤 5선지가 1선지로 줄어든다.
       final configuredCount =
           int.tryParse('${meta['image_choice_count'] ?? ''}') ?? 0;
-      final count = assetCount > 0 ? assetCount : configuredCount;
-      if (count > 0) {
-        meta['figure_count'] = count;
-        meta['image_choice_count'] = count;
+      if (configuredCount < 2 || configuredCount > 8) {
+        meta['image_choice_count'] = 5;
       }
       // 추출 결과에 그림 선지 메타가 빠졌더라도 choices 5개가 모두 [그림]이면
       // 화면에서는 그림 선지형으로 인식한다. 저장 시에도 같은 판정을 메타에
@@ -2071,7 +2074,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('${q.questionNumber}번 그림 삭제'),
-        content: Text('그림 $orderHint을 삭제할까요? 이 작업은 바로 저장됩니다.'),
+        content: Text(
+          '${_figureSlotLabel(q, orderHint)}을 삭제할까요? 이 작업은 바로 저장됩니다.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
@@ -2093,7 +2098,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     final remainingCount = remainingAssets is List ? remainingAssets.length : 0;
     final updatedQuestion = q.copyWith(
       meta: updatedMeta,
-      figureRefs: List<String>.filled(remainingCount, '[그림]'),
+      figureRefs: _isImageChoiceQuestion(q)
+          ? q.figureRefs
+          : List<String>.filled(remainingCount, '[그림]'),
     );
     try {
       await _service.updateQuestionMeta(
@@ -2123,7 +2130,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           }
         }
       });
-      _showSnack('${q.questionNumber}번 그림 $orderHint을 삭제했습니다.');
+      _showSnack(
+        '${q.questionNumber}번 ${_figureSlotLabel(q, orderHint)}을 삭제했습니다.',
+      );
       return updatedQuestion;
     } catch (e) {
       if (!mounted) return null;
@@ -8432,6 +8441,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     required String title,
     required String subtitle,
     required Future<void> Function(Uint8List bytes, String fileName) onUpload,
+    String? previewUrl,
+    bool showPreview = false,
   }) {
     var hovering = false;
     var uploading = false;
@@ -8499,38 +8510,49 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                 borderRadius: BorderRadius.circular(10),
                 border: Border.all(color: hovering ? _accent : _border),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  Row(
-                    children: [
-                      Icon(
-                        uploading
-                            ? Icons.hourglass_empty_rounded
-                            : Icons.add_photo_alternate_outlined,
-                        color: hovering ? _accent : _textSub,
-                        size: 17,
-                      ),
-                      const SizedBox(width: 7),
-                      Expanded(
-                        child: Text(
-                          title,
+                  if (showPreview) ...[
+                    _buildManualFigureSlotPreview(previewUrl),
+                    const SizedBox(width: 10),
+                  ],
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(
+                              uploading
+                                  ? Icons.hourglass_empty_rounded
+                                  : Icons.add_photo_alternate_outlined,
+                              color: hovering ? _accent : _textSub,
+                              size: 17,
+                            ),
+                            const SizedBox(width: 7),
+                            Expanded(
+                              child: Text(
+                                title,
+                                style: const TextStyle(
+                                  color: _text,
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          uploading ? '업로드 중...' : subtitle,
                           style: const TextStyle(
-                            color: _text,
-                            fontSize: 12.5,
-                            fontWeight: FontWeight.w800,
+                            color: _textSub,
+                            fontSize: 11.2,
+                            height: 1.35,
                           ),
                         ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    uploading ? '업로드 중...' : subtitle,
-                    style: const TextStyle(
-                      color: _textSub,
-                      fontSize: 11.2,
-                      height: 1.35,
+                      ],
                     ),
                   ),
                 ],
@@ -8539,6 +8561,119 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           ),
         );
       },
+    );
+  }
+
+  Widget _buildManualFigureSlotPreview(String? previewUrl) {
+    final url = (previewUrl ?? '').trim();
+    return Container(
+      width: 58,
+      height: 58,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: const Color(0xFFFCFCFC),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: const Color(0xFFD5D5D5)),
+      ),
+      child: url.isEmpty
+          ? const Icon(
+              Icons.image_outlined,
+              color: Color(0xFF8A97AB),
+              size: 18,
+            )
+          : ClipRRect(
+              borderRadius: BorderRadius.circular(5),
+              child: Image.network(
+                url,
+                width: 58,
+                height: 58,
+                fit: BoxFit.contain,
+                errorBuilder: (_, __, ___) => const Icon(
+                  Icons.broken_image_outlined,
+                  color: Color(0xFF9C5A5A),
+                  size: 18,
+                ),
+              ),
+            ),
+    );
+  }
+
+  Widget _buildImageChoiceFigureDropSection({
+    required ProblemBankQuestion q,
+    required Future<void> Function(ProblemBankQuestion? updated) onUploaded,
+  }) {
+    final stemCount = _imageChoiceStemFigureCount(q);
+    final choiceCount = _imageChoiceSlotCount(q);
+    final assets = _orderedFigureAssetsOf(q);
+    Map<String, dynamic>? assetAt(int figureIndex) {
+      for (final asset in assets) {
+        final index = int.tryParse('${asset['figure_index'] ?? ''}');
+        if (index == figureIndex) return asset;
+      }
+      if (figureIndex >= 1 && figureIndex <= assets.length) {
+        final fallback = assets[figureIndex - 1];
+        final index = int.tryParse('${fallback['figure_index'] ?? ''}');
+        if (index == null || index == figureIndex) return fallback;
+      }
+      return null;
+    }
+
+    Widget slot({
+      required int figureIndex,
+      required String title,
+    }) {
+      final asset = assetAt(figureIndex);
+      final path = '${asset?['path'] ?? ''}'.trim();
+      return Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: _buildManualFigureDropPanel(
+          title: title,
+          subtitle: asset == null
+              ? '이 번호에 넣을 PNG/JPG/WEBP를 드롭하거나 눌러 선택하세요.'
+              : '이 번호의 그림만 교체합니다.',
+          previewUrl: _figurePreviewUrlForPath(q.id, path),
+          showPreview: true,
+          onUpload: (bytes, fileName) async {
+            final updated = await _uploadManualFigureForQuestion(
+              q: q,
+              bytes: bytes,
+              fileName: fileName,
+              figureIndex: figureIndex,
+            );
+            await onUploaded(updated);
+          },
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text(
+          '그림 선지 업로드',
+          style: TextStyle(
+            color: _text,
+            fontSize: 12.6,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          '번호마다 드롭 위치가 따로 있습니다. 올린 그림은 그 번호만 바뀝니다.',
+          style: TextStyle(color: _textSub, fontSize: 11.1, height: 1.35),
+        ),
+        if (stemCount > 0)
+          for (var i = 0; i < stemCount; i += 1)
+            slot(
+              figureIndex: i + 1,
+              title: stemCount == 1 ? '본문 그림' : '본문 그림 ${i + 1}',
+            ),
+        for (var i = 0; i < choiceCount; i += 1)
+          slot(
+            figureIndex: stemCount + i + 1,
+            title: _figureSlotLabel(q, stemCount + i + 1),
+          ),
+      ],
     );
   }
 
@@ -8561,13 +8696,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
+          Row(
             children: [
-              Icon(Icons.photo_library_outlined, color: _textSub, size: 15),
-              SizedBox(width: 6),
+              const Icon(Icons.photo_library_outlined, color: _textSub, size: 15),
+              const SizedBox(width: 6),
               Text(
-                '본문 그림 관리',
-                style: TextStyle(
+                _isImageChoiceQuestion(q) ? '올린 그림 삭제' : '본문 그림 관리',
+                style: const TextStyle(
                   color: _text,
                   fontSize: 12.6,
                   fontWeight: FontWeight.w800,
@@ -8577,40 +8712,49 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           ),
           const SizedBox(height: 6),
           for (var i = 0; i < assets.length; i += 1)
-            Container(
-              margin: const EdgeInsets.only(top: 4),
-              padding: const EdgeInsets.only(left: 9),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1F1F23),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: _border),
-              ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      '그림 ${i + 1}',
-                      style: const TextStyle(
-                        color: _text,
-                        fontSize: 11.8,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
+            Builder(
+              builder: (context) {
+                final figureIndex =
+                    int.tryParse('${assets[i]['figure_index'] ?? ''}') ??
+                        (i + 1);
+                final label = _figureSlotLabel(q, figureIndex);
+                return Container(
+                  margin: const EdgeInsets.only(top: 4),
+                  padding: const EdgeInsets.only(left: 9),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1F1F23),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: _border),
                   ),
-                  Tooltip(
-                    message: '그림 ${i + 1} 삭제',
-                    child: IconButton(
-                      visualDensity: VisualDensity.compact,
-                      onPressed: () => unawaited(onDelete(assets[i], i + 1)),
-                      icon: const Icon(
-                        Icons.delete_outline_rounded,
-                        color: _danger,
-                        size: 18,
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          label,
+                          style: const TextStyle(
+                            color: _text,
+                            fontSize: 11.8,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
                       ),
-                    ),
+                      Tooltip(
+                        message: '$label 삭제',
+                        child: IconButton(
+                          visualDensity: VisualDensity.compact,
+                          onPressed: () =>
+                              unawaited(onDelete(assets[i], figureIndex)),
+                          icon: const Icon(
+                            Icons.delete_outline_rounded,
+                            color: _danger,
+                            size: 18,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
+                );
+              },
             ),
           const Padding(
             padding: EdgeInsets.fromLTRB(1, 7, 4, 1),
@@ -8635,6 +8779,58 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   int _imageChoiceStemFigureCount(ProblemBankQuestion q) {
     if (!_isImageChoiceQuestion(q)) return 0;
     return _figureMarkerCountRegex.allMatches(q.stem).length;
+  }
+
+  static const List<String> _circledChoiceLabels = <String>[
+    '①',
+    '②',
+    '③',
+    '④',
+    '⑤',
+    '⑥',
+    '⑦',
+    '⑧',
+  ];
+
+  Map<String, dynamic>? _figureAssetAtIndex(
+    List<Map<String, dynamic>> ordered,
+    int figureIndex,
+  ) {
+    if (figureIndex <= 0) return null;
+    var sawIndex = false;
+    for (final asset in ordered) {
+      final index = int.tryParse('${asset['figure_index'] ?? ''}');
+      if (index == null || index <= 0) continue;
+      sawIndex = true;
+      if (index == figureIndex) return asset;
+    }
+    if (sawIndex) return null;
+    final positional = figureIndex - 1;
+    if (positional < 0 || positional >= ordered.length) return null;
+    return ordered[positional];
+  }
+
+  String _figureSlotLabel(ProblemBankQuestion q, int order) {
+    if (!_isImageChoiceQuestion(q) || order <= 0) return '그림 $order';
+    final stemCount = _imageChoiceStemFigureCount(q);
+    if (order <= stemCount) {
+      return stemCount <= 1 ? '본문 그림' : '본문 그림 $order';
+    }
+    final choiceIndex = order - stemCount - 1;
+    final choices = _previewChoicesOf(q);
+    final label = choiceIndex >= 0 && choiceIndex < choices.length
+        ? choices[choiceIndex].label.trim()
+        : '';
+    final fallback = choiceIndex >= 0 && choiceIndex < _circledChoiceLabels.length
+        ? _circledChoiceLabels[choiceIndex]
+        : '${choiceIndex + 1}';
+    return '선지 ${label.isEmpty ? fallback : label}';
+  }
+
+  int _imageChoiceSlotCount(ProblemBankQuestion q) {
+    final choices = _previewChoicesOf(q);
+    if (choices.length >= 2 && choices.length <= 8) return choices.length;
+    return 5;
   }
 
   Widget _buildStemTextPreviewLine(
@@ -9171,9 +9367,15 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     final out = <Widget>[];
     final normalized = _normalizePreviewMultiline(stemPreview);
     if (normalized.isEmpty) return out;
+    final orderedAssets = _orderedFigureAssetsOf(q);
+    final stemFigureCount = _imageChoiceStemFigureCount(q);
     final assets = _isImageChoiceQuestion(q)
-        ? <Map<String, dynamic>>[]
-        : _orderedFigureAssetsOf(q);
+        ? <Map<String, dynamic>>[
+            for (var index = 1; index <= stemFigureCount; index += 1)
+              if (_figureAssetAtIndex(orderedAssets, index) case final asset?)
+                asset,
+          ]
+        : orderedAssets;
 
     // [박스시작]/[박스끝] 마커가 있으면 마커 기반 렌더링
     if (_boxMarkerStartRegex.hasMatch(normalized)) {
@@ -9948,7 +10150,16 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     List<ProblemBankChoice> choices, {
     bool expanded = false,
   }) {
-    final assets = _orderedFigureAssetsOf(q).take(5).toList(growable: false);
+    final stemFigureCount = _imageChoiceStemFigureCount(q);
+    final orderedAssets = _orderedFigureAssetsOf(q);
+    final assets = List<Map<String, dynamic>?>.generate(
+      5,
+      (index) => _figureAssetAtIndex(
+        orderedAssets,
+        stemFigureCount + index + 1,
+      ),
+      growable: false,
+    );
     final rowsPref =
         '${q.meta['image_choice_layout'] is Map ? (q.meta['image_choice_layout'] as Map)['rows'] : ''}'
             .trim();
@@ -9969,7 +10180,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
 
     Widget cell(int idx) {
       final choice = choices[idx];
-      final asset = idx < assets.length ? assets[idx] : null;
+      final asset = idx >= 0 && idx < assets.length ? assets[idx] : null;
       final path = '${asset?['path'] ?? ''}'.trim();
       final url = _figurePreviewUrlForPath(q.id, path);
       final labelStyle = TextStyle(
@@ -9997,9 +10208,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                           borderRadius: BorderRadius.circular(4),
                           border: Border.all(color: const Color(0xFFE5E8EF)),
                         ),
-                        child: const Text(
-                          '그림 미리보기 로딩 중...',
-                          style: TextStyle(
+                        child: Text(
+                          asset == null ? '그림 없음' : '그림 미리보기 로딩 중...',
+                          style: const TextStyle(
                               color: Color(0xFF6F7C95), fontSize: 11.2),
                         ),
                       )
@@ -11235,7 +11446,26 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                       ),
                       const SizedBox(height: 12),
                     ],
-                    if (hasFigureMarker) ...[
+                    if (isImageChoice) ...[
+                      _buildImageChoiceFigureDropSection(
+                        q: dialogQ,
+                        onUploaded: (updated) async {
+                          if (!dialogContext.mounted) return;
+                          setLocalState(() => refreshing = true);
+                          if (updated != null) {
+                            dialogQ = updated;
+                            final url = await _saveAndRefreshPreview(updated);
+                            if (url != null) {
+                              serverPreviewUrl = url;
+                            }
+                          }
+                          if (dialogContext.mounted) {
+                            setLocalState(() => refreshing = false);
+                          }
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                    ] else if (hasFigureMarker) ...[
                       _buildManualFigureDropPanel(
                         title: '본문 그림 수동 업로드',
                         subtitle: 'PNG/JPG/WEBP를 드롭하거나 눌러 선택하세요. '
@@ -11265,7 +11495,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                           isImageChoice)
                         const SizedBox(height: 12),
                     ],
-                    if (dialogFigureAssets.isNotEmpty) ...[
+                    if (_orderedFigureAssetsOf(dialogQ).isNotEmpty) ...[
                       _buildManualFigureDeletePanel(
                         q: dialogQ,
                         onDelete: deleteDialogFigure,
@@ -11675,10 +11905,81 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     };
   }
 
+  Map<String, dynamic> _ensureFigureLayoutForIndexes(
+    Map<String, dynamic> meta,
+    List<Map<String, dynamic>> assets, {
+    double widthEm = 18,
+  }) {
+    final rawLayout = meta['figure_layout'];
+    final layout = rawLayout is Map
+        ? Map<String, dynamic>.from(rawLayout)
+        : <String, dynamic>{};
+    final rawItems = layout['items'];
+    final byKey = <String, Map<String, dynamic>>{};
+    if (rawItems is List) {
+      for (final raw in rawItems.whereType<Map>()) {
+        final item = raw.map((key, dynamic value) => MapEntry('$key', value));
+        final key = '${item['assetKey'] ?? ''}'.trim();
+        if (key.isNotEmpty) byKey[key] = item;
+      }
+    }
+    final nextItems = <Map<String, dynamic>>[];
+    for (var i = 0; i < assets.length; i += 1) {
+      final index =
+          int.tryParse('${assets[i]['figure_index'] ?? ''}') ?? (i + 1);
+      final key = 'idx:$index';
+      nextItems.add(
+        byKey[key] ??
+            <String, dynamic>{
+              'assetKey': key,
+              'position': 'below-stem',
+              'anchor': 'center',
+              'widthEm': widthEm,
+              'offsetXEm': 0,
+              'offsetYEm': 0,
+            },
+      );
+    }
+    return <String, dynamic>{
+      'version': 1,
+      'items': nextItems,
+      'groups': layout['groups'] is List ? layout['groups'] : <dynamic>[],
+    };
+  }
+
+  List<Map<String, dynamic>> _manualFigureAssetsAtIndex({
+    required List<Map<String, dynamic>> existingAssets,
+    required Map<String, dynamic> asset,
+    required int figureIndex,
+  }) {
+    final next = existingAssets
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList(growable: true);
+    final normalized = Map<String, dynamic>.from(asset);
+    normalized['figure_index'] = figureIndex;
+    final existingAt = next.indexWhere(
+      (item) => int.tryParse('${item['figure_index'] ?? ''}') == figureIndex,
+    );
+    if (existingAt >= 0) {
+      next[existingAt] = normalized;
+    } else if (figureIndex == next.length + 1) {
+      next.add(normalized);
+    } else {
+      next.add(normalized);
+      next.sort((a, b) {
+        final ai = int.tryParse('${a['figure_index'] ?? ''}') ?? 0;
+        final bi = int.tryParse('${b['figure_index'] ?? ''}') ?? 0;
+        return ai.compareTo(bi);
+      });
+    }
+    return next;
+  }
+
   Future<ProblemBankQuestion?> _uploadManualFigureForQuestion({
     required ProblemBankQuestion q,
     required Uint8List bytes,
     required String fileName,
+    int? figureIndex,
   }) async {
     if (bytes.isEmpty) {
       _showSnack('이미지 파일을 읽지 못했습니다.', error: true);
@@ -11686,6 +11987,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     }
     try {
       final markerCount = _figureMarkerCountRegex.allMatches(q.stem).length;
+      final replaceAt = figureIndex != null && figureIndex > 0
+          ? figureIndex
+          : null;
       final asset = await _service.uploadManualFigureAsset(
         academyId: q.academyId,
         documentId: q.documentId,
@@ -11698,17 +12002,29 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         orElse: () => q,
       );
       final meta = Map<String, dynamic>.from(current.meta);
-      final assets = _nextManualFigureAssets(
-        existingAssets: _orderedFigureAssetsOf(current),
-        asset: asset,
-        markerCount: markerCount,
-      );
+      final assets = replaceAt == null
+          ? _nextManualFigureAssets(
+              existingAssets: _orderedFigureAssetsOf(current),
+              asset: asset,
+              markerCount: markerCount,
+            )
+          : _manualFigureAssetsAtIndex(
+              existingAssets: _orderedFigureAssetsOf(current),
+              asset: asset,
+              figureIndex: replaceAt,
+            );
       meta['figure_assets'] = assets;
       meta['figure_count'] = assets.length;
-      meta['figure_layout'] = _ensureManualFigureLayout(
-        meta,
-        assets.length,
-      );
+      if (_isImageChoiceQuestion(current)) {
+        final configuredCount =
+            int.tryParse('${meta['image_choice_count'] ?? ''}') ?? 0;
+        if (configuredCount < 2 || configuredCount > 8) {
+          meta['image_choice_count'] = _imageChoiceSlotCount(current);
+        }
+      }
+      meta['figure_layout'] = replaceAt == null
+          ? _ensureManualFigureLayout(meta, assets.length)
+          : _ensureFigureLayoutForIndexes(meta, assets);
       meta['figure_review_required'] = false;
       meta['figure_crop_source'] = 'manager_manual_upload';
       meta['manual_replacements'] = <dynamic>[
@@ -11722,11 +12038,15 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           'path': asset['path'],
           'source_name': fileName,
           'replaced_at': DateTime.now().toUtc().toIso8601String(),
-          'reason': 'manager_manual_figure_drop',
+          'reason': replaceAt == null
+              ? 'manager_manual_figure_drop'
+              : 'manager_manual_figure_slot_$replaceAt',
         },
       ];
       final updated = current.copyWith(
-        figureRefs: List<String>.filled(assets.length, '[그림]'),
+        figureRefs: _isImageChoiceQuestion(current)
+            ? current.figureRefs
+            : List<String>.filled(assets.length, '[그림]'),
         meta: meta,
       );
       await _service.updateQuestionMeta(
@@ -11746,10 +12066,12 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               item.id == updated.id ? updated : item,
           ];
           if (signed.isNotEmpty) {
+            final path = '${asset['path'] ?? ''}';
             _figurePreviewUrls[updated.id] = signed;
-            _figurePreviewPaths[updated.id] = '${asset['path'] ?? ''}';
+            _figurePreviewPaths[updated.id] = path;
             _figurePreviewUrlsByPath[updated.id] = <String, String>{
-              '${asset['path'] ?? ''}': signed,
+              ...?_figurePreviewUrlsByPath[updated.id],
+              path: signed,
             };
           }
         });

@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:pdfrx/pdfrx.dart';
 
 import '../../../services/learning_problem_bank_service.dart';
 import '../../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
@@ -66,9 +68,21 @@ class ProblemBankPreviewSizeCache extends ChangeNotifier {
     });
   }
 
+  void recordAspectRatio(String url, double widthOverHeight) {
+    final trimmed = url.trim();
+    if (trimmed.isEmpty || widthOverHeight <= 0) return;
+    final previous = _aspectRatioByUrl[trimmed];
+    if (previous != null && (previous - widthOverHeight).abs() <= 0.001) {
+      return;
+    }
+    _aspectRatioByUrl[trimmed] = widthOverHeight;
+    _scheduleNotify();
+  }
+
   void resolveImage(String? url) {
     final trimmed = url?.trim() ?? '';
     if (trimmed.isEmpty ||
+        _isPdfUrl(trimmed) ||
         _aspectRatioByUrl.containsKey(trimmed) ||
         _resolvingUrls.contains(trimmed)) {
       return;
@@ -111,6 +125,11 @@ class ProblemBankPreviewSizeCache extends ChangeNotifier {
     }
     _measuredByKey[safeKey] = (width: size.width, height: size.height);
     _scheduleNotify();
+  }
+
+  static bool _isPdfUrl(String url) {
+    final path = Uri.tryParse(url)?.path.toLowerCase() ?? url.toLowerCase();
+    return path.endsWith('.pdf');
   }
 
   static double previewInnerWidthForCardWidth(double cardWidth) {
@@ -408,6 +427,7 @@ class ProblemBankQuestionCard extends StatelessWidget {
     this.showSelectionControl = true,
     this.paperStyle = false,
     this.previewImageUrl,
+    this.previewPdfUrl,
     this.previewStatus = '',
     this.previewErrorMessage = '',
     this.onRetryPreview,
@@ -435,6 +455,9 @@ class ProblemBankQuestionCard extends StatelessWidget {
   final bool showSelectionControl;
   final bool paperStyle;
   final String? previewImageUrl;
+
+  /// 구워 둔 문항 PDF. 있으면 V2 썸네일 이미지 대신 이 페이지를 보여 준다.
+  final String? previewPdfUrl;
   final String previewStatus;
   final String previewErrorMessage;
   final VoidCallback? onRetryPreview;
@@ -466,7 +489,12 @@ class ProblemBankQuestionCard extends StatelessWidget {
         : question.stableQuestionKey;
   }
 
-  String? get _effectivePreviewImageUrl => previewImageUrl;
+  String? get _effectivePreviewImageUrl {
+    final pdf = previewPdfUrl?.trim() ?? '';
+    if (pdf.isNotEmpty) return pdf;
+    final image = previewImageUrl?.trim() ?? '';
+    return image.isEmpty ? null : image;
+  }
 
   double? get _effectiveThinkingScore => isCommonStemCard
       ? reviewThinkingScore
@@ -661,9 +689,22 @@ class ProblemBankQuestionCard extends StatelessWidget {
   }
 
   Widget _buildPreviewInner() {
+    final pdfUrl = previewPdfUrl?.trim() ?? '';
+    if (pdfUrl.isNotEmpty) {
+      return SingleChildScrollView(
+        physics: const NeverScrollableScrollPhysics(),
+        primary: false,
+        child: _PreviewHeightMeasure(
+          measureKey: _effectiveMeasureKey,
+          child: IgnorePointer(
+            child: ProblemBankBakedPdfPreview(url: pdfUrl),
+          ),
+        ),
+      );
+    }
     final normalizedStatus = previewStatus.trim().toLowerCase();
-    final effectiveUrl = _effectivePreviewImageUrl;
-    if (effectiveUrl != null && effectiveUrl.isNotEmpty) {
+    final effectiveUrl = previewImageUrl?.trim() ?? '';
+    if (effectiveUrl.isNotEmpty) {
       ProblemBankPreviewSizeCache.instance.resolveImage(effectiveUrl);
       return SingleChildScrollView(
         physics: const NeverScrollableScrollPhysics(),
@@ -1329,4 +1370,131 @@ _CardPalette _palette(
     checkBorder: panelStyle.border,
     accent: const Color(0xFF33A373),
   );
+}
+
+class _SharedBakedPdfDocuments {
+  static final Map<String, Future<PdfDocument>> _opening =
+      <String, Future<PdfDocument>>{};
+
+  static Future<PdfDocument> open(String url) {
+    return _opening.putIfAbsent(url, () async {
+      try {
+        return await PdfDocument.openUri(Uri.parse(url));
+      } catch (_) {
+        _opening.remove(url);
+        rethrow;
+      }
+    });
+  }
+}
+
+/// 구워 둔 문항 PDF의 첫 페이지. 카드 너비에 맞춰 높이가 정해진다.
+class ProblemBankBakedPdfPreview extends StatefulWidget {
+  const ProblemBankBakedPdfPreview({super.key, required this.url});
+
+  final String url;
+
+  @override
+  State<ProblemBankBakedPdfPreview> createState() =>
+      _ProblemBankBakedPdfPreviewState();
+}
+
+class _ProblemBankBakedPdfPreviewState extends State<ProblemBankBakedPdfPreview> {
+  PdfDocument? _document;
+  Object? _error;
+  double? _aspect;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+  }
+
+  @override
+  void didUpdateWidget(covariant ProblemBankBakedPdfPreview oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.url != widget.url) unawaited(_load());
+  }
+
+  Future<void> _load() async {
+    final url = widget.url.trim();
+    if (url.isEmpty) return;
+    setState(() {
+      _error = null;
+      _document = null;
+      _aspect = null;
+    });
+    try {
+      final document = await _SharedBakedPdfDocuments.open(url);
+      if (!mounted || widget.url.trim() != url) return;
+      final page = document.pages.isEmpty ? null : document.pages.first;
+      final aspect = page == null || page.width <= 0 || page.height <= 0
+          ? null
+          : page.width / page.height;
+      if (aspect != null) {
+        ProblemBankPreviewSizeCache.instance.recordAspectRatio(url, aspect);
+      }
+      setState(() {
+        _document = document;
+        _aspect = aspect;
+        _error = page == null ? 'empty' : null;
+      });
+    } catch (error) {
+      if (!mounted || widget.url.trim() != url) return;
+      setState(() => _error = error);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_error != null) {
+      return const SizedBox(
+        height: _kPreviewHeight,
+        child: Center(
+          child: Text(
+            '문항 PDF를 표시할 수 없습니다.',
+            style: TextStyle(
+              color: Color(0xFF6E7E96),
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      );
+    }
+    final document = _document;
+    final aspect = _aspect;
+    if (document == null || aspect == null || aspect <= 0) {
+      return const SizedBox(
+        height: _kPreviewHeight,
+        child: Center(
+          child: SizedBox(
+            width: 22,
+            height: 22,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ),
+      );
+    }
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth.isFinite && constraints.maxWidth > 0
+            ? constraints.maxWidth
+            : 320.0;
+        final height = width / aspect;
+        return ColoredBox(
+          color: Colors.white,
+          child: SizedBox(
+            width: width,
+            height: height,
+            child: PdfPageView(
+              document: document,
+              pageNumber: 1,
+              decoration: const BoxDecoration(color: Colors.white),
+            ),
+          ),
+        );
+      },
+    );
+  }
 }

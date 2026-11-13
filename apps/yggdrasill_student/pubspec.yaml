@@ -25,6 +25,7 @@ dependencies:
   image: ^4.8.0
   path_provider: ^2.1.6
   live_activities: ^2.4.7
+  ffi: ^2.1.4
 
 dev_dependencies:
   flutter_test:
@@ -60,6 +61,10 @@ flutter:
           weight: 700
         - asset: assets/fonts/kakao/카카오큰글씨/TTF/KakaoBigSans-ExtraBold.ttf
           weight: 800
+    - family: KoPubWorldBatangPro
+      fonts:
+        - asset: assets/fonts/kopub/KoPubWorldBatangProLight.otf
+          weight: 300
     - family: Pretendard
       fonts:
         - asset: assets/fonts/pretendard/Pretendard-Regular.otf

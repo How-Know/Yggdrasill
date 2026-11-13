@@ -1,5 +1,11 @@
 import 'dotenv/config';
+import { execFile as execFileCb } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
 import { createClient } from '@supabase/supabase-js';
 import {
   renderSingleQuestionPdf,
@@ -9,6 +15,18 @@ import {
   canonicalize,
   hashQuestionContent as computeQuestionContentHash,
 } from './question_render_cache_key.js';
+
+const execFileAsync = promisify(execFileCb);
+const BODY_PAGE_PROFILE = 'student-body-page-v1';
+const BODY_PAGE_CACHE_PREFIX = 'textbook-pages';
+const BODY_PAGE_INTERVAL_MS = Math.max(
+  250,
+  Number.parseInt(process.env.BODY_PAGE_WORKER_INTERVAL_MS || '500', 10),
+);
+const TEXTBOOK_SRC_CACHE_DIR =
+  process.env.TEXTBOOK_PDF_CACHE_DIR ||
+  path.join(os.tmpdir(), 'ygg-textbook-src');
+const _bodySrcDownloads = new Map();
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -125,6 +143,7 @@ async function claimJobs(client) {
     .from('question_render_jobs')
     .select('*')
     .eq('status', 'queued')
+    .neq('render_profile', BODY_PAGE_PROFILE)
     .lte('available_at', now)
     .order('priority', { ascending: true })
     .order('available_at', { ascending: true })
@@ -423,6 +442,183 @@ async function processJob(client, job) {
   return { cached: false, cacheKey };
 }
 
+function bodyContentHashShort(row) {
+  const raw = String(row?.content_hash || '').replace(/[^a-z0-9]/gi, '');
+  return raw.slice(0, 16) || 'nohash';
+}
+
+async function ensureBodyOriginalCached(client, link) {
+  const cacheName = `${link.id}_${bodyContentHashShort(link)}.pdf`;
+  const cachePath = path.join(TEXTBOOK_SRC_CACHE_DIR, cacheName);
+  const expected = Number(link.file_size_bytes || 0);
+  try {
+    const st = await fs.promises.stat(cachePath);
+    if (expected === 0 || st.size === expected) return cachePath;
+    await fs.promises.rm(cachePath, { force: true });
+  } catch {
+    // not cached yet
+  }
+  const inFlight = _bodySrcDownloads.get(cachePath);
+  if (inFlight) return inFlight;
+  const job = (async () => {
+    await fs.promises.mkdir(TEXTBOOK_SRC_CACHE_DIR, { recursive: true });
+    const { data: signed, error: signedError } = await client.storage
+      .from(link.storage_bucket)
+      .createSignedUrl(link.storage_key, 3600);
+    if (signedError || !signed?.signedUrl) {
+      throw new Error(
+        `body_src_signed_url_failed:${signedError?.message || 'missing'}`,
+      );
+    }
+    const resp = await fetch(signed.signedUrl);
+    if (!resp.ok) throw new Error(`body_src_download_failed:${resp.status}`);
+    const buf = Buffer.from(await resp.arrayBuffer());
+    const tmp = `${cachePath}.${randomUUID()}.part`;
+    await fs.promises.writeFile(tmp, buf);
+    await fs.promises.rename(tmp, cachePath);
+    return cachePath;
+  })();
+  _bodySrcDownloads.set(cachePath, job);
+  try {
+    return await job;
+  } finally {
+    _bodySrcDownloads.delete(cachePath);
+  }
+}
+
+async function extractSingleBodyPagePdf(srcPath, page) {
+  const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ygg-pgsep-'));
+  const outPattern = path.join(tmpDir, 'p-%d.pdf');
+  try {
+    await execFileAsync(
+      'pdfseparate',
+      ['-f', String(page), '-l', String(page), srcPath, outPattern],
+      { maxBuffer: 64 * 1024 * 1024, windowsHide: true },
+    );
+    const outFile = path.join(tmpDir, `p-${page}.pdf`);
+    const bytes = await fs.promises.readFile(outFile);
+    return bytes;
+  } finally {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function processBodyPageJob(client, job) {
+  const { data: crop, error: cropError } = await client
+    .from('textbook_problem_crops')
+    .select('id,academy_id,book_id,grade_label,raw_page')
+    .eq('academy_id', job.academy_id)
+    .eq('id', job.crop_id)
+    .maybeSingle();
+  if (cropError || !crop) throw new Error('body_crop_not_found');
+  // cache_key(`bodypage:<link_id>:<hashShort>:<raw_page>`)가 있으면 개념 페이지처럼
+  // 문항 크롭이 없는 쪽도 해당 쪽 번호로 바로 쪼갠다.
+  const keyMatch = /^bodypage:(\d+):([A-Za-z0-9]+):(\d+)$/.exec(
+    String(job.cache_key || '').trim(),
+  );
+  const rawPage = keyMatch
+    ? Number.parseInt(keyMatch[3], 10)
+    : Number(crop.raw_page || 0);
+  if (!Number.isInteger(rawPage) || rawPage < 1) {
+    throw new Error('body_invalid_raw_page');
+  }
+  const { data: links, error: linkError } = await client
+    .from('resource_file_links')
+    .select('id,storage_bucket,storage_key,file_size_bytes,content_hash,created_at')
+    .eq('academy_id', job.academy_id)
+    .eq('file_id', crop.book_id)
+    .eq('grade', `${crop.grade_label}#body`)
+    .not('storage_bucket', 'is', null)
+    .not('storage_key', 'is', null)
+    .order('created_at', { ascending: false })
+    .limit(1);
+  if (linkError || !links?.[0]?.storage_bucket || !links[0].storage_key) {
+    throw new Error('body_link_not_found');
+  }
+  const link = links[0];
+  const hashShort = bodyContentHashShort(link);
+  const pageDir = `${BODY_PAGE_CACHE_PREFIX}/${link.id}`;
+  const pageName = `${hashShort}_p${rawPage}.pdf`;
+  const pageKey = `${pageDir}/${pageName}`;
+  const cacheKey = `bodypage:${link.id}:${hashShort}:${rawPage}`;
+
+  const { data: existing, error: listError } = await client.storage
+    .from(link.storage_bucket)
+    .list(pageDir, { search: pageName, limit: 4 });
+  const exists =
+    !listError && (existing || []).some((obj) => obj.name === pageName);
+  if (!exists) {
+    const srcPath = await ensureBodyOriginalCached(client, link);
+    const bytes = await extractSingleBodyPagePdf(srcPath, rawPage);
+    const { error: uploadError } = await client.storage
+      .from(link.storage_bucket)
+      .upload(pageKey, bytes, {
+        contentType: 'application/pdf',
+        upsert: true,
+      });
+    if (uploadError) {
+      throw new Error(`body_page_upload_failed:${uploadError.message}`);
+    }
+  }
+  await completeJob(client, job, { cache_key: cacheKey });
+  return { cached: exists, cacheKey, pageKey };
+}
+
+async function processBodyPageBatch(client = supabase) {
+  if (!client) throw new Error('supabase_client_missing');
+  const now = new Date().toISOString();
+  const { data, error } = await client
+    .from('question_render_jobs')
+    .select('*')
+    .eq('status', 'queued')
+    .eq('render_profile', BODY_PAGE_PROFILE)
+    .lte('available_at', now)
+    .order('priority', { ascending: true })
+    .order('available_at', { ascending: true })
+    .order('created_at', { ascending: true })
+    .limit(4);
+  if (error) throw new Error(`body_job_poll_failed:${error.message}`);
+  const claimed = [];
+  for (const candidate of data || []) {
+    const { data: rows, error: claimError } = await client
+      .from('question_render_jobs')
+      .update({
+        status: 'rendering',
+        worker_name: WORKER_NAME,
+        started_at: now,
+        heartbeat_at: now,
+        error: '',
+      })
+      .eq('id', candidate.id)
+      .eq('status', 'queued')
+      .select('*');
+    if (claimError) throw new Error(`body_job_claim_failed:${claimError.message}`);
+    if (rows?.length === 1) claimed.push(rows[0]);
+  }
+  const summary = { claimed: claimed.length, completed: 0, failed: 0 };
+  const results = await Promise.allSettled(
+    claimed.map(async (job) => {
+      try {
+        await processBodyPageJob(client, job);
+        return { ok: true };
+      } catch (err) {
+        console.error(
+          '[question-render-worker] body_page_failed',
+          job.id,
+          String(err?.message || err),
+        );
+        await failJob(client, job, err);
+        return { ok: false };
+      }
+    }),
+  );
+  for (const r of results) {
+    if (r.status === 'fulfilled' && r.value.ok) summary.completed += 1;
+    else summary.failed += 1;
+  }
+  return summary;
+}
+
 async function processBatch(client = supabase) {
   if (!client) throw new Error('supabase_client_missing');
   await reclaimStaleJobs(client);
@@ -466,13 +662,51 @@ async function main() {
       rendererVersion: SINGLE_QUESTION_RENDERER_VERSION,
     }),
   );
-  do {
-    const summary = await processBatch();
-    if (summary.claimed > 0) {
-      console.log('[question-render-worker] batch', JSON.stringify(summary));
-    }
-    if (!PROCESS_ONCE) await sleep(INTERVAL_MS);
-  } while (!PROCESS_ONCE);
+  let bodyPageBusy = false;
+  const bodyTimer = PROCESS_ONCE
+    ? null
+    : setInterval(() => {
+        if (bodyPageBusy) return;
+        bodyPageBusy = true;
+        void processBodyPageBatch()
+          .then((s) => {
+            if (s.claimed > 0) {
+              console.log(
+                '[question-render-worker] body_page_batch',
+                JSON.stringify(s),
+              );
+            }
+          })
+          .catch((err) => {
+            console.error(
+              '[question-render-worker] body_page_loop_error',
+              String(err?.message || err),
+            );
+          })
+          .finally(() => {
+            bodyPageBusy = false;
+          });
+      }, BODY_PAGE_INTERVAL_MS);
+  try {
+    do {
+      if (PROCESS_ONCE) {
+        const bodySummary = await processBodyPageBatch();
+        if (bodySummary.claimed > 0) {
+          console.log(
+            '[question-render-worker] body_page_batch',
+            JSON.stringify(bodySummary),
+          );
+        }
+      }
+      const summary = await processBatch();
+      if (summary.claimed > 0) {
+        console.log('[question-render-worker] batch', JSON.stringify(summary));
+      }
+      if (!PROCESS_ONCE) await sleep(INTERVAL_MS);
+    } while (!PROCESS_ONCE);
+  } finally {
+    if (bodyTimer) clearInterval(bodyTimer);
+  }
 }
 
 export {
@@ -483,6 +717,8 @@ export {
   reclaimStaleJobs,
   processJob,
   processBatch,
+  processBodyPageBatch,
+  processBodyPageJob,
   resolveQuestion,
   isMissingRelationError,
 };

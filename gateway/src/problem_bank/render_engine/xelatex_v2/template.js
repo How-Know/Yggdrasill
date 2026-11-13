@@ -5945,6 +5945,26 @@ function renderOneQuestion(question, {
   const figureInfos = Array.isArray(question?.figure_local_infos)
     ? question.figure_local_infos
     : [];
+  // 그림 선지는 figure_index 로 자리를 찾는다. 배열을 앞에서 당기면
+  // 가운데 번호를 비웠을 때 뒤 선지가 앞으로 밀린다.
+  function figurePathForFigureIndex(figureIndex) {
+    const wanted = Number(figureIndex);
+    if (!Number.isInteger(wanted) || wanted <= 0) return '';
+    let sawIndex = false;
+    for (let i = 0; i < figureInfos.length; i += 1) {
+      const infoIndex = Number(figureInfos[i]?.figureIndex);
+      if (!Number.isInteger(infoIndex) || infoIndex <= 0) continue;
+      sawIndex = true;
+      if (infoIndex === wanted && figurePaths[i]) return figurePaths[i];
+    }
+    // figure_index 가 있으면 빈 번호는 비운다. 배열 위치로 당기면
+    // ③을 비웠을 때 ④ 그림이 ③ 자리에 들어간다.
+    if (sawIndex) return '';
+    const positional = wanted - 1;
+    return positional >= 0 && positional < figurePaths.length
+      ? figurePaths[positional]
+      : '';
+  }
   const figureLayout = resolveFigureLayout(question, stemSizePt);
   const layoutItems = Array.isArray(figureLayout?.items) ? figureLayout.items : [];
   const figureGroups = Array.isArray(figureLayout?.groups) ? figureLayout.groups : [];
@@ -6478,7 +6498,11 @@ function renderOneQuestion(question, {
 
   function renderImageChoicesLatex(figureOffset = 0) {
     const offset = Number.isInteger(figureOffset) && figureOffset > 0 ? figureOffset : 0;
-    if (!Array.isArray(choices) || choices.length !== 5 || figurePaths.length - offset <= 0) return '';
+    if (!Array.isArray(choices) || choices.length !== 5) return '';
+    const choicePaths = [0, 1, 2, 3, 4].map((choicePos) => (
+      figurePathForFigureIndex(choicePos + offset + 1)
+    ));
+    if (!choicePaths.some(Boolean)) return '';
     const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
     const rowsPref = String(meta.image_choice_layout?.rows || '').trim();
     const rowCount = rowsPref === '3' ? 3 : 2;
@@ -6507,7 +6531,7 @@ function renderOneQuestion(question, {
         if (!Number.isInteger(idx)) {
           return `\\begin{minipage}[t]{${cellWidth.toFixed(2)}\\linewidth}\\strut\\end{minipage}`;
         }
-        const p = figurePaths[idx + offset];
+        const p = choicePaths[idx];
         if (!p) return '';
         const normalized = String(p).replace(/\\/g, '/');
         const label = typeof choices[idx] === 'string'
@@ -6561,7 +6585,7 @@ function renderOneQuestion(question, {
         .replace(FIGURE_MARKER_RE, '')
         .trim();
       const content = smartTexLine(eqText, equations);
-      const p = figurePaths[i + offset];
+      const p = figurePathForFigureIndex(i + offset + 1);
       let imgPart = '';
       if (p) {
         const normalized = String(p).replace(/\\/g, '/');

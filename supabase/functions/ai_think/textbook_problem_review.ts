@@ -4,11 +4,13 @@ import { estimateCostUsd, modelFor, reasoningFor, thinkWallClockMs } from '../_s
 import { createAiProvider } from '../_shared/ai/provider.ts';
 import { type AiContentPart, addUsage, emptyUsage, finalText } from '../_shared/ai/types.ts';
 import { recordAiRun } from '../_shared/ai/usage.ts';
+import { conceptIdsFromRefs, loadConceptCandidates, loadScopeUnitNames } from './textbook_concept_candidates.ts';
+import { normalizeVisualTags, VISUAL_TAG_NONE, VISUAL_TAGS } from './textbook_visual_tags.ts';
 import { uuidOrNull } from './validate.ts';
 
 type Rec = Record<string, unknown>;
 
-export const TEXTBOOK_REVIEW_PROMPT_VERSION = 'textbook-problem-review-2026-11-10';
+export const TEXTBOOK_REVIEW_PROMPT_VERSION = 'textbook-problem-review-2026-11-13';
 
 /** 품질 이상의 원인 분류. data=문항 데이터(본문·선지) 오류, engine=조판 엔진 문제, figure=도형 자산 문제 */
 export type IssueKind = 'none' | 'data' | 'engine' | 'figure';
@@ -644,7 +646,11 @@ const COMPARE_ANALYZE_SCHEMA: Rec = {
           'answer_matched',
           'mismatch_reason',
           'proposed_answer',
-          'concept_ids',
+          'solution_logic_ok',
+          'solution_logic_issue',
+          'source_error_about',
+          'source_error_note',
+          'concept_refs',
           'thinking_codes',
           'draft_proposals',
         ],
@@ -653,7 +659,11 @@ const COMPARE_ANALYZE_SCHEMA: Rec = {
           answer_matched: { type: 'boolean' },
           mismatch_reason: { type: ['string', 'null'] },
           proposed_answer: { type: ['string', 'null'] },
-          concept_ids: { type: 'array', items: { type: 'string' } },
+          solution_logic_ok: { type: 'boolean' },
+          solution_logic_issue: { type: ['string', 'null'] },
+          source_error_about: { type: 'string', enum: ['none', 'problem', 'answer', 'solution'] },
+          source_error_note: { type: ['string', 'null'] },
+          concept_refs: { type: 'array', items: { type: 'string' } },
           thinking_codes: { type: 'array', items: { type: 'string' } },
           draft_proposals: {
             type: 'array',
@@ -712,6 +722,8 @@ const RENDER_CHECK_SCHEMA: Rec = {
           'fidelity_ok',
           'figure_position_ok',
           'figure_size_ratio',
+          'solution_figure_position_ok',
+          'solution_figure_size_ratio',
           'issue_title',
           'issue_detail',
           'issue_kind',
@@ -725,6 +737,8 @@ const RENDER_CHECK_SCHEMA: Rec = {
           fidelity_ok: { type: 'boolean' },
           figure_position_ok: { type: 'boolean' },
           figure_size_ratio: { type: ['number', 'null'] },
+          solution_figure_position_ok: { type: 'boolean' },
+          solution_figure_size_ratio: { type: ['number', 'null'] },
           issue_title: { type: ['string', 'null'] },
           issue_detail: { type: ['string', 'null'] },
           issue_kind: { type: 'string', enum: ['none', 'data', 'engine', 'figure'] },
@@ -771,7 +785,7 @@ const BLIND_SOLVE_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔�
      - 중요(빈칸형 문항 · is_fill_in_blank = true): "□ 안에 알맞은 수를 써넣어라", "다음 표의 빈칸에 알맞은 수를 써넣어라" 같은 빈칸형 문항은 지시문 안, 결론 수식("⇒ 90 = 2 × □ × 5" 등), 수형도·표 안에 빈 네모 상자(□)가 하나 또는 여러 개 그려져 있는 것이 정상적인 문항 형식입니다. 지시문이나 수식에 네모(□)·빈칸이 있다고 해서 "용도가 불명확한 빈칸 추가"나 "단독 빈칸 노출"로 절대 판정하지 마세요(stem_ok = true, fidelity_ok = true).
    - choices_ok: 객관식 선지 ①~⑤ 또는 <보기> ㄱ,ㄴ,ㄷ 가 화면에 모두 보이고 순서·내용이 맞는지.
    - figure_ok: 도형/그래프/표가 필요한 문항에서 화면에 도형이 있고 잘림·겹침·크기 이상이 없는지. 도형이 필요 없는 문항은 true.
-   - figure_position_ok: 원본 이미지와 V2 렌더 이미지 모두에 그림이 있을 때, V2 그림이 원본과 같은 자리(본문 오른쪽·왼쪽에 나란히, 본문 아래, 가로 정렬·왼쪽/가운데 정렬)에 있는가. 그림이 없거나 원본 이미지가 없으면 true.
+   - figure_position_ok: 원본 이미지와 V2 렌더 이미지 모두에 그림이 있을 때, V2 그림이 원본과 같은 자리에 있는가. 본문 오른쪽에 나란히·왼쪽에 나란히·본문 아래 중 어디인지가 같아야 하고, 본문 아래일 때는 왼쪽·가운데·오른쪽 정렬까지 같아야 합니다. 그림이 여러 개면 가로로 나란한지 세로로 쌓였는지도 같아야 합니다. 그림이 없거나 원본 이미지가 없으면 true.
    - figure_size_ratio: 원본과 V2 렌더 모두에 그림이 있을 때, "본문 글자 크기에 대한 그림 크기"가 V2에서 원본의 몇 배인지(같으면 1.0, V2 그림이 더 크면 1보다 큼, 예 1.4 · 0.7). 각 이미지 안에서 그림 폭을 본문 글자 한 자 크기와 비교해 추정하세요. 그림이 없거나 원본 이미지가 없으면 null.
      그림 크기·위치 차이는 issue_kind "figure" 로 분류하고 본문 수정 제안은 내지 마세요(크기는 이 비율로 자동 보정합니다).
      표·수식·선지 상자는 그림이 아닙니다. 표만 있는 문항은 figure_position_ok=true, figure_size_ratio=null 이고, 표 크기·간격 차이를 issue_kind "figure" 로 분류하지 마세요.
@@ -801,8 +815,9 @@ const BLIND_SOLVE_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔�
    - "서술하시오", "과정을 쓰시오", "풀이 과정", "이유를 쓰시오", "설명하시오", "증명하시오" 같은 표현이 있으면 무조건 "essay".
    - 그 외 선지(①~⑤)를 골라 답하면 "objective", 답만 쓰면 "subjective".
 5. 시각 요소 태그(visual_tags):
-   - 문항에 도형·그래프·표 등 시각 요소가 있거나 언급되면 아래 표준 태그 중 해당하는 것을 모두 넣으세요(없으면 빈 배열 []):
-     ["수직선", "좌표평면", "일차함수(직선)", "이차함수(포물선)", "삼차·사차함수", "유리·무리함수", "지수·로그함수", "삼각함수", "각·평행선", "삼각형", "직각삼각형", "이등변·정삼각형", "사각형", "다각형", "원·부채꼴·접선", "합동·닮음", "입체도형·회전체", "전개도·겨냥도", "표(Table)", "조건상자(보기)", "통계그래프(히스토그램·상자그림)", "수형도·경로망"]`;
+   - 문항에 도형·그래프·표 등 시각 요소가 있거나 언급되면 아래 표준 태그 중 해당하는 것을 모두 넣으세요:
+     [${VISUAL_TAGS.map((t) => `"${t}"`).join(', ')}]
+   - 시각 요소가 없으면 ["${VISUAL_TAG_NONE}"] 하나만 넣으세요. 빈 배열 []로 두지 말고, "${VISUAL_TAG_NONE}"을 다른 태그와 함께 쓰지 마세요.`;
 
 const COMPARE_ANALYZE_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔진의 [3단계: 정답 대조 · 개념/사고 3축 분석] 담당입니다.
 각 문항의 [기존 추출 정답(existing_answer)], [1단계 원본 해설 전사(solution_transcribed)와 해설 정답(solution_answer)], [2단계 AI 독립 풀이(ai_solution, ai_answer)]를 대조하고, 사용된 개념과 사고를 태깅하세요.
@@ -814,8 +829,17 @@ const COMPARE_ANALYZE_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 
    - 해설 정답이 없으면(null) 2자 대조입니다: 기존 정답과 AI 정답이 같을 때 true.
    - 기존 정답이 비어 있거나 어느 하나라도 다르면 false 로 두고, mismatch_reason에 어느 쪽이 왜 다른지(기존 정답 오타 / 해설 전사 오류 / 문항 전사 오류로 인한 오답 / AI 풀이 재검토 결과 등)를 적고 가장 신뢰할 수 있는 정답을 proposed_answer에 적으세요. 해설 정답과 AI 정답이 같고 기존 정답만 다르면 그 값을 제안합니다.
    - 원본 해설 전사가 있으면 AI 풀이와 풀이 방향이 다른지도 살펴 mismatch_reason에 짧게 덧붙이세요(정답이 같으면 answer_matched는 true 유지).
-2. 개념 태그(concept_ids):
-   - 제공된 candidate_concepts 목록에서 이 문항을 푸는 데 직접 쓰인 개념 ID(UUID)만 1~4개 고르세요. 목록에 없는 UUID를 지어내지 마세요.
+1-1. 해설 논리 검토(solution_logic_ok, solution_logic_issue): 정답이 같아도 해설을 그대로 통과시키지 않습니다.
+   - 원본 해설 전사(solution_transcribed)를 단계별로 따라가며 계산 실수, 비약, 앞뒤가 맞지 않는 식, 빠진 단계, 결론과 다른 중간값이 있는지 봅니다.
+   - 오류가 없거나 원본 해설 전사가 비어 있으면 solution_logic_ok=true, solution_logic_issue=null 입니다.
+   - 오류가 있으면 solution_logic_ok=false 이고 solution_logic_issue 에 몇 번째 줄·어느 식이 왜 틀렸는지 한 줄로 적습니다. 글꼴·표기·줄바꿈 차이, 풀이 방법이 AI 와 다른 것은 오류가 아닙니다.
+1-2. 교재 원본 오류(source_error_about, source_error_note):
+   - 교재 자체(인쇄된 문제·정답·해설)가 틀렸다고 판단될 때만 씁니다. 전사·추출 과정에서 생긴 차이(글자 누락, 오타 전사)는 교재 오류가 아닙니다.
+   - 예: 문제 조건으로는 답이 성립하지 않음(problem), 인쇄된 정답이 틀림(answer), 인쇄된 해설의 계산·논리가 틀림(solution).
+   - 해당이 없으면 source_error_about="none", source_error_note=null. 해당하면 source_error_note 에 무엇이 왜 틀렸고 올바른 값이 무엇인지 사장님이 바로 판단할 수 있게 적습니다. 교재 원본은 고치지 않고 이 의견으로만 남깁니다.
+2. 개념 태그(concept_refs):
+   - candidate_concepts 는 같은 학년 개념서에서 이 단원에 나오는 개념(ref, 이름)입니다. 이 문항을 푸는 데 직접 쓰인 개념의 ref 만 1~4개 고르세요. 목록에 없는 ref 를 지어내지 마세요.
+   - 단원 이름이 비슷할 뿐 풀이에 쓰이지 않는 개념은 고르지 마세요. 맞는 개념이 없으면 빈 배열 [] 입니다(새 개념은 메타 단계에서 따로 제안합니다).
 3. 사고 태그(thinking_codes) 및 새 초안 제안(draft_proposals):
    - 제공된 thinking_primitives(범용 사고틀 frame + 실전 알고리즘 algorithm)에서 이 문항 풀이에 쓰인 사고 code를 1~5개 고르세요.
    - 기존 사전에 꼭 필요한 실전 알고리즘이나 세부 연산이 빠져 있다면 draft_proposals에 최대 1~2개만 제안하세요(점수는 연산 0.10~1.50, 범용 사고틀 3.5~7.5, 실전 알고리즘 5.0~9.5). 충분하면 빈 배열 []로 두세요.`;
@@ -846,7 +870,9 @@ const RENDER_CHECK_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔
   - 세트 문항: 원본은 공통 지시문을 세트 머리에 한 번 인쇄합니다. 카드에 공통 지시문이 한 번 보이면 일치, 두 번 보이면 불일치입니다.
   - 원본에서 문항·소문항 아래 '해' 배지로 시작하는 빈칸 풀이 안내는 해설이라 문항 카드에 넣지 않습니다. 문항 카드에 그 안내가 없는 것은 정상이며 누락으로 판정하지 마세요.
     반대로 그 안내 안의 그림(빈 네모가 달린 수직선 등)이 문항 카드에 들어 있으면 해설이 섞인 것이므로 fidelity_ok=false, issue_kind "figure" 입니다.
-- figure_position_ok: 원본에 그림이 있을 때 카드의 그림이 원본과 같은 자리(본문 오른쪽·왼쪽에 나란히, 본문 아래, 가로 정렬)에 있는가. 원본에 그림이 없으면 true.
+- figure_position_ok: 원본에 그림이 있을 때 카드의 그림이 원본과 같은 자리에 있는가. 본문 오른쪽에 나란히·왼쪽에 나란히·본문 아래 중 어디인지가 같아야 하고, 본문 아래일 때는 왼쪽·가운데·오른쪽 정렬까지 같아야 합니다. 그림이 여러 개면 가로로 나란한지 세로로 쌓였는지도 같아야 합니다. 원본에 그림이 없으면 true.
+- solution_figure_position_ok: 원본 해설 이미지와 정답+해설 카드 모두에 그림이 있을 때, 카드의 해설 그림이 원본 해설과 같은 자리(풀이 글 오른쪽·왼쪽에 나란히, 풀이 글 아래와 그때의 왼쪽·가운데·오른쪽 정렬)에 있는가. 해설 그림이 없거나 원본 해설 이미지가 없으면 true.
+- solution_figure_size_ratio: 원본 해설 이미지와 정답+해설 카드 모두에 그림이 있을 때, "해설 글자 크기에 대한 그림 크기"가 카드에서 원본 해설의 몇 배인지(같으면 1.0). 해설 그림이 없거나 원본 해설 이미지가 없으면 null.
 - figure_size_ratio: 원본과 카드 모두에 그림이 있을 때, "본문 글자 크기에 대한 그림 크기"가 카드에서 원본의 몇 배인지(같으면 1.0, 카드 그림이 더 크면 1보다 큼, 예 1.4 · 0.7). 각 이미지 안에서 그림 폭을 본문 글자 크기와 비교해 추정하세요. 그림이 없으면 null.
 - 표·수식·선지 상자는 그림이 아닙니다. 그림 위치·크기 판정(figure_position_ok · figure_size_ratio)에 넣지 마세요. 입력에 has_figure=false 인 문항은 그림이 없는 문항이므로 figure_position_ok=true, figure_size_ratio=null 로 답하세요.
 - 이상이 있으면 issue_title(한 줄)과 issue_detail(어느 카드의 어디가 어떻게 보이는지, 원본과 무엇이 다른지)을 한글로 적고, 없으면 둘 다 null.
@@ -857,8 +883,12 @@ const RENDER_CHECK_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔
   - "none": 이상 없음.
 - engine_symptom: issue_kind 가 "engine"일 때 증상을 짧은 명사구로(예: "분수 세로 겹침", "루트 기호 누락", "표 테두리 미출력"). 같은 증상끼리 묶어 엔진 수정 목록을 만드는 데 씁니다. 아니면 null.`;
 
-async function loadDictionaries(auth: AuthContext, bookId: string, gradeLabel: string) {
-  const [arithRes, thinkRes, sourceConceptsRes] = await Promise.all([
+async function loadDictionaries(
+  auth: AuthContext,
+  scope: { bookId: string; gradeLabel: string; bigOrder: number; midOrder: number },
+) {
+  const unit = await loadScopeUnitNames(auth.admin, scope);
+  const [arithRes, thinkRes, candidates] = await Promise.all([
     auth.admin
       .from('arithmetic_primitives')
       .select('code,category,title,unit_score')
@@ -871,32 +901,9 @@ async function loadDictionaries(auth: AuthContext, bookId: string, gradeLabel: s
       .eq('is_active', true)
       .order('sort_order')
       .limit(200),
-    auth.admin
-      .from('concept_sources')
-      .select('concept_id,concepts(id,name)')
-      .eq('book_id', bookId)
-      .eq('grade_label', gradeLabel)
-      .limit(250),
+    loadConceptCandidates(auth.admin, scope.gradeLabel, unit.bigName, unit.midName),
   ]);
-
-  const arithList = (arithRes.data ?? []) as Rec[];
-  const thinkList = (thinkRes.data ?? []) as Rec[];
-  const conceptMap = new Map<string, { id: string; name: string }>();
-  for (const row of (sourceConceptsRes.data ?? []) as Rec[]) {
-    const c = row.concepts as Rec | null;
-    if (c && typeof c.id === 'string' && typeof c.name === 'string') {
-      conceptMap.set(c.id, { id: c.id, name: c.name });
-    }
-  }
-  if (conceptMap.size < 30) {
-    const { data: fallbackConcepts } = await auth.admin.from('concepts').select('id,name').limit(80);
-    for (const c of (fallbackConcepts ?? []) as Rec[]) {
-      if (typeof c.id === 'string' && typeof c.name === 'string' && !conceptMap.has(c.id)) {
-        conceptMap.set(c.id, { id: c.id, name: c.name });
-      }
-    }
-  }
-  return { arithList, thinkList, conceptMap };
+  return { arithList: (arithRes.data ?? []) as Rec[], thinkList: (thinkRes.data ?? []) as Rec[], candidates };
 }
 
 /** 같은 crop_id·check_key 의 열린 항목이 있으면 갱신, 없으면 새로 만든다(부분 유니크 인덱스라 upsert 추론이 안 된다). */
@@ -918,6 +925,89 @@ export async function upsertOpenFinding(auth: AuthContext, row: Rec): Promise<vo
     }
   }
   await auth.admin.from('textbook_review_findings').insert(row);
+}
+
+/// 원본 해설 논리 판정. 해설 전사가 없으면 볼 해설이 없으므로 통과다.
+export function solutionLogicVerdict(solutionText: string, c: Rec): { ok: boolean; issue: string } {
+  if (!solutionText.trim() || c.solution_logic_ok !== false) return { ok: true, issue: '' };
+  const issue = typeof c.solution_logic_issue === 'string' && c.solution_logic_issue.trim()
+    ? c.solution_logic_issue.trim()
+    : '원본 해설 풀이 과정에 오류가 있습니다.';
+  return { ok: false, issue };
+}
+
+/// 교재 원본(문제·정답·해설) 자체의 오류 의견. 없으면 null.
+/**
+ * 정답 대조 단계가 고른 개념·사고를 저장할 값. 사람이 고친 항목(meta_sources)은 건너뛴다.
+ * 개념과 사고가 모두 있으면 메타를 고른 것으로 보고, 하나라도 비면 메타 전용 AI 가 다시 본다(meta_checked_at = null).
+ */
+export function compareMetaFields(metaSources: unknown, conceptIds: string[], thinkingIds: string[], nowIso: string): Rec {
+  const src = (metaSources && typeof metaSources === 'object' ? metaSources : {}) as Rec;
+  const ownConcepts = src.concepts === 'owner';
+  const ownThinkings = src.thinkings === 'owner';
+  const out: Rec = {};
+  if (!ownConcepts) {
+    out.concept_ids = [...new Set(conceptIds)];
+    out.concept_proposals = [];
+  }
+  if (!ownThinkings) out.thinking_ids = [...new Set(thinkingIds)];
+  const conceptsOk = ownConcepts || conceptIds.length > 0;
+  const thinkingsOk = ownThinkings || thinkingIds.length > 0;
+  out.meta_checked_at = conceptsOk && thinkingsOk ? nowIso : null;
+  return out;
+}
+
+export function sourceErrorOf(c: Rec): { about: 'problem' | 'answer' | 'solution'; note: string } | null {
+  const about = String(c.source_error_about ?? 'none');
+  if (about !== 'problem' && about !== 'answer' && about !== 'solution') return null;
+  const note = typeof c.source_error_note === 'string' ? c.source_error_note.trim() : '';
+  if (!note) return null;
+  return { about, note };
+}
+
+const SOURCE_ERROR_LABEL = { problem: '문제', answer: '정답', solution: '해설' } as const;
+
+/// 교재 원본 오류를 교정 의견으로 남긴다. 원본은 고치지 않고, 사장님이 처리할 때까지 준비됨을 막는다.
+/// 사장님이 이미 처리(noted)했거나 기각한 같은 문항의 의견은 다시 열지 않는다.
+async function recordCorrectionNote(
+  auth: AuthContext,
+  { academyId, cropId, about, note, aiRunId }: {
+    academyId: string;
+    cropId: string;
+    about: 'problem' | 'answer' | 'solution';
+    note: string;
+    aiRunId: string | null;
+  },
+): Promise<void> {
+  const { data: closed } = await auth.admin
+    .from('textbook_review_findings')
+    .select('id')
+    .eq('crop_id', cropId)
+    .eq('check_key', 'ai_source_error')
+    .in('status', ['resolved', 'dismissed'])
+    .limit(1);
+  if ((closed ?? []).length > 0) return;
+  await upsertOpenFinding(auth, {
+    academy_id: academyId,
+    crop_id: cropId,
+    stage: 'compare',
+    axis: 'validity',
+    error_type: about === 'answer' ? 'answer_wrong' : about === 'solution' ? 'solution_logic' : 'other',
+    severity: 'blocker',
+    source: 'ai',
+    check_key: 'ai_source_error',
+    title: `교재 원본 ${SOURCE_ERROR_LABEL[about]} 오류 의심`,
+    detail: note,
+    evidence: { about },
+    proposal: {
+      target: 'correction_note',
+      after: { text: note, about },
+      reason: note,
+      keeps: '교재 원본은 고치지 않습니다.',
+    },
+    status: 'open',
+    ai_run_id: aiRunId,
+  });
 }
 
 async function resolveOpenFinding(auth: AuthContext, cropId: string, checkKey: string): Promise<void> {
@@ -1010,11 +1100,11 @@ export async function handleTextbookProblemReview(
     return jsonResponse({ ok: true, processed: 0, remaining: todoItems.length, total: allItems.length, done: false });
   }
 
-  const { arithList, thinkList, conceptMap } = await loadDictionaries(auth, bookId, gradeLabel);
+  const { arithList, thinkList, candidates } = await loadDictionaries(auth, { bookId, gradeLabel, bigOrder, midOrder });
   const arithCodes = new Set(arithList.map((a) => String(a.code)));
   const thinkByCode = new Map<string, string>();
   for (const t of thinkList) thinkByCode.set(String(t.code), String(t.id));
-  const candidateConcepts = [...conceptMap.values()].slice(0, 120);
+  const candidateConcepts = candidates.list.map((c) => ({ ref: c.ref, name: c.name }));
 
   const startedAt = Date.now();
   const model = modelFor('primary');
@@ -1176,6 +1266,8 @@ export async function handleTextbookProblemReview(
       mid_order: midOrder,
       count: batchItems.length,
       math_only: mathOnly,
+      concept_scope: candidates.scope,
+      concept_candidates: candidates.list.length,
       solution_images: solutionTargets.length,
       v2_images: batchItems.filter((it) => images.get(String(it.crop_id))?.v2ProblemUrl).length,
       original_images: batchItems.filter((it) => images.get(String(it.crop_id))?.originalImageDataUrl).length,
@@ -1199,15 +1291,11 @@ export async function handleTextbookProblemReview(
       if (arithCodes.has(code) && cnt > 0) arithCounts[code] = (arithCounts[code] ?? 0) + cnt;
     }
 
-    const validConceptIds = ((Array.isArray(c.concept_ids) ? c.concept_ids : []) as unknown[])
-      .map((x) => String(x).trim())
-      .filter((id) => conceptMap.has(id));
+    const validConceptIds = conceptIdsFromRefs(c.concept_refs, candidates);
     const validThinkingIds = ((Array.isArray(c.thinking_codes) ? c.thinking_codes : []) as unknown[])
       .map((code) => thinkByCode.get(String(code).trim()))
       .filter((id): id is string => typeof id === 'string' && id.length > 0);
-    const visualTags = ((Array.isArray(b.visual_tags) ? b.visual_tags : []) as unknown[])
-      .map((x) => String(x).trim())
-      .filter((x) => x.length > 0);
+    const visualTags = normalizeVisualTags(b.visual_tags);
 
     // 공통 발문이 개별 발문에 그대로 들어 있으면 학생 화면에 지시문이 두 번 보인다. 모델 판정과 무관하게 데이터 오류로 잡는다.
     const dupFix = commonStemFix(it.common_stem, it.stem);
@@ -1272,7 +1360,9 @@ export async function handleTextbookProblemReview(
 
     const existing = await auth.admin
       .from('textbook_problem_analyses')
-      .select('solution_transcribed,solution_answer,solution_source,render_checks,quality_status,fix_proposal,engine_held_at,engine_hold_note')
+      .select(
+        'solution_transcribed,solution_answer,solution_source,render_checks,quality_status,fix_proposal,engine_held_at,engine_hold_note,meta_sources',
+      )
       .eq('crop_id', cropId)
       .maybeSingle();
     const prev = (existing.data ?? {}) as Rec;
@@ -1362,21 +1452,27 @@ export async function handleTextbookProblemReview(
       }
       : {};
 
-    // 1회차 검수에서 수학적 대조에 아무 이상이 없으면 바로 자동 승인(approved)하고 문제은행 정답도 동기화한다.
-    const nextMathStatus = answerMatched ? 'approved' : 'issue';
+    // 정답이 맞고 해설 논리에도 오류가 없어야 통과(clean)다. 승인과 문제은행 정답 반영은 소단원 확정 때 한다.
+    const logic = solutionLogicVerdict(sol?.text ?? '', c);
+    const sourceError = sourceErrorOf(c);
+    const nextMathStatus = answerMatched && logic.ok ? 'clean' : 'issue';
+    const mathReason = !answerMatched
+      ? (typeof c.mismatch_reason === 'string' ? c.mismatch_reason : null)
+      : logic.ok
+      ? null
+      : `해설 논리 오류: ${logic.issue}`;
+    const metaFields = compareMetaFields(prev.meta_sources, validConceptIds, validThinkingIds, nowIso);
     const mathFields = {
       ai_solution: typeof b.ai_solution === 'string' ? b.ai_solution : null,
       ai_answer: typeof b.ai_answer === 'string' ? b.ai_answer : null,
       arithmetic_counts: arithCounts,
       match_mode: matchMode,
       answer_matched: answerMatched,
-      mismatch_reason: answerMatched ? null : (typeof c.mismatch_reason === 'string' ? c.mismatch_reason : null),
-      concept_ids: [...new Set(validConceptIds)],
-      thinking_ids: [...new Set(validThinkingIds)],
+      mismatch_reason: mathReason,
+      ...metaFields,
       draft_proposals: drafts,
       analyzed_at: nowIso,
       math_status: nextMathStatus,
-      ...(answerMatched ? { math_approved_at: nowIso, math_approved_by: auth.userId } : {}),
       updated_at: nowIso,
     };
 
@@ -1490,19 +1586,39 @@ export async function handleTextbookProblemReview(
         ai_run_id: aiRunId,
       }).catch(() => null);
     } else {
-      if (existingAnsRaw) {
-        try {
-          await auth.admin.rpc('textbook_review_sync_pb_answer', {
-            p_crop_id: cropId,
-            p_answer: existingAnsRaw,
-          });
-        } catch {
-          // ignore sync failure during batch review
-        }
-      }
       await resolveOpenFinding(auth, cropId, 'ai_answer_compare').catch(() => null);
       await resolveOpenFinding(auth, cropId, 'load:answer_missing').catch(() => null);
       await resolveOpenFinding(auth, cropId, 'load:answer_mismatch').catch(() => null);
+    }
+
+    if (!logic.ok) {
+      await upsertOpenFinding(auth, {
+        academy_id: academyId,
+        crop_id: cropId,
+        stage: 'compare',
+        axis: 'validity',
+        error_type: 'solution_logic',
+        severity: 'blocker',
+        source: 'ai',
+        check_key: 'ai_solution_logic',
+        title: '해설 논리 오류',
+        detail: logic.issue,
+        evidence: { solution_answer: sol?.answer ?? null },
+        status: 'open',
+        ai_run_id: aiRunId,
+      }).catch(() => null);
+    } else {
+      await resolveOpenFinding(auth, cropId, 'ai_solution_logic').catch(() => null);
+    }
+
+    if (sourceError) {
+      await recordCorrectionNote(auth, {
+        academyId,
+        cropId,
+        about: sourceError.about,
+        note: sourceError.note,
+        aiRunId,
+      }).catch(() => null);
     }
 
     // 수학만 다시 풀 때는 품질 지적을 건드리지 않는다.
@@ -1623,14 +1739,45 @@ export function effectiveSolution(it: Rec, vision: Rec | undefined): { text: str
  *   body: { academy_id, items: [{ crop_id, problem_url?, answer_solution_url?, solution_kind?: 'textbook'|'ai',
  *           original_image_base64?, set_header_image_base64? }] }
  */
-/** 그림 크기 비율(V2 ÷ 원본)이 이 범위 밖이면 크기를 다시 맞춘다(0.85~1.15, 목표 1.0배). */
-export const FIGURE_SIZE_RATIO_MIN = 0.85;
-export const FIGURE_SIZE_RATIO_MAX = 1.15;
+/** 그림 크기 비율(V2 ÷ 원본, 글자 대비)이 ±10% 밖이면 크기를 다시 맞춘다(목표 1.0배). */
+export const FIGURE_SIZE_RATIO_MIN = 0.9;
+export const FIGURE_SIZE_RATIO_MAX = 1.1;
+/** 예전 흐름에서 승인된 문항은 승인 당시 범위(±15%)를 인정하고 그림을 다시 조정하지 않는다. */
+export const LEGACY_FIGURE_SIZE_RATIO_MIN = 0.85;
+export const LEGACY_FIGURE_SIZE_RATIO_MAX = 1.15;
 
-export function figureSizeRatioOk(ratio: unknown): boolean {
+export function figureSizeRatioOk(ratio: unknown, approved = false): boolean {
   const r = Number(ratio);
   if (ratio === null || ratio === undefined || !Number.isFinite(r) || r <= 0) return true;
-  return r >= FIGURE_SIZE_RATIO_MIN && r <= FIGURE_SIZE_RATIO_MAX;
+  return approved
+    ? r >= LEGACY_FIGURE_SIZE_RATIO_MIN && r <= LEGACY_FIGURE_SIZE_RATIO_MAX
+    : r >= FIGURE_SIZE_RATIO_MIN && r <= FIGURE_SIZE_RATIO_MAX;
+}
+
+/// 해설 그림 판정. 문항 그림과 같은 기준(원본 해설 대비 크기 ±10%, 위치·정렬)이고, 원본 해설과 대조하지 못했으면 통과가 아니다.
+export function solutionFigureVerdict(
+  { hasSolutionFigures, compared, positionOk, sizeRatio, approved = false }: {
+    hasSolutionFigures: boolean;
+    compared: boolean;
+    positionOk: unknown;
+    sizeRatio: unknown;
+    approved?: boolean;
+  },
+): { ok: boolean; positionOk: boolean; sizeRatio: number | null; issueTitle: string | null } {
+  if (!hasSolutionFigures) return { ok: true, positionOk: true, sizeRatio: null, issueTitle: null };
+  if (!compared) {
+    return { ok: false, positionOk: true, sizeRatio: null, issueTitle: '해설 그림 원본 대조 필요' };
+  }
+  const ratio = typeof sizeRatio === 'number' && Number.isFinite(sizeRatio) && sizeRatio > 0
+    ? Math.round(sizeRatio * 100) / 100
+    : null;
+  const posOk = positionOk !== false;
+  if (ratio === null) return { ok: false, positionOk: posOk, sizeRatio: null, issueTitle: '해설 그림 크기를 재지 못함' };
+  if (!figureSizeRatioOk(ratio, approved)) {
+    return { ok: false, positionOk: posOk, sizeRatio: ratio, issueTitle: `해설 그림 크기가 원본과 다름 (원본 대비 ${ratio}배)` };
+  }
+  if (!posOk) return { ok: false, positionOk: false, sizeRatio: ratio, issueTitle: '해설 그림 위치가 원본과 다름' };
+  return { ok: true, positionOk: true, sizeRatio: ratio, issueTitle: null };
 }
 
 export interface FigureReviewVerdict {
@@ -1747,6 +1894,7 @@ export async function handleTextbookProblemRenderCheck(
         ? null
         : imageDataUrl(r.solution_original_image_base64, r.solution_original_image_mime),
       isFillInBlank: r.is_fill_in_blank === true,
+      hasSolutionFigures: r.solution_kind !== 'ai' && r.has_solution_figures === true,
     }))
     .filter((x): x is {
       cropId: string;
@@ -1757,6 +1905,7 @@ export async function handleTextbookProblemRenderCheck(
       setHeaderUrl: string | null;
       solutionOriginalUrl: string | null;
       isFillInBlank: boolean;
+      hasSolutionFigures: boolean;
     } => !!x.cropId && (!!x.problemUrl || !!x.answerSolutionUrl))
     .slice(0, 8);
   if (items.length === 0) return jsonResponse({ ok: true, processed: 0 });
@@ -1805,6 +1954,7 @@ export async function handleTextbookProblemRenderCheck(
           has_answer_solution_card: !!x.answerSolutionUrl,
           has_original_image: !!x.originalUrl,
           has_solution_original_image: !!(x.solutionOriginalUrl && x.answerSolutionUrl),
+          has_solution_figure: x.hasSolutionFigures,
           ...(pbHasFiguresByCrop.get(x.cropId) === false ? { has_figure: false } : {}),
           solution_kind: x.solutionKind,
         };
@@ -1891,8 +2041,16 @@ export async function handleTextbookProblemRenderCheck(
         Number.isFinite(r.figure_size_ratio) && r.figure_size_ratio > 0
       ? Math.round(r.figure_size_ratio * 100) / 100
       : null;
-    const figureSizeOk = figureSizeRatioOk(sizeRatio);
-    const renderOk = problemOk && answerOk && solutionOk && fidelityOk && figurePositionOk && figureSizeOk;
+    const approvedBefore = String(a.quality_status ?? '') === 'approved';
+    const figureSizeOk = figureSizeRatioOk(sizeRatio, approvedBefore);
+    const solFigure = solutionFigureVerdict({
+      hasSolutionFigures: x.hasSolutionFigures,
+      compared: !!x.solutionOriginalUrl && !!x.answerSolutionUrl,
+      positionOk: r.solution_figure_position_ok,
+      sizeRatio: r.solution_figure_size_ratio,
+      approved: approvedBefore,
+    });
+    const renderOk = problemOk && answerOk && solutionOk && fidelityOk && figurePositionOk && figureSizeOk && solFigure.ok;
     // 2단계 판정 뒤에 본문·선지·그림 수정이 적용됐거나 이번 검수가 원본과 직접 대조했으면 2단계 판정은 옛 화면 기준이다.
     // 이번 V2 렌더 판정만 본다.
     const fp = (a.fix_proposal ?? {}) as Rec;
@@ -1902,14 +2060,15 @@ export async function handleTextbookProblemRenderCheck(
     const hasFigures = !noPbFigure && (qc.has_figures === true || qc.issue_kind === 'figure' || sizeRatio !== null ||
       (Array.isArray((fp.figure_measure as Rec | undefined)?.figures) &&
         ((fp.figure_measure as Rec).figures as unknown[]).length > 0));
-    // 그림 문항은 수정안이 DB 에 적용됐거나, 이번 검수에서 원본과 직접 대조해 크기·위치가 맞다고 잰 경우에 통과로 본다.
+    // 그림 문항은 이번 검수에서 원본과 직접 대조해 크기(±10%)·위치·정렬이 맞다고 잰 경우에만 통과다.
     const figureVerifiedNow = originalCompared && figurePositionOk && sizeRatio !== null && figureSizeOk;
-    const figureAppliedOrNone = !hasFigures || typeof fp.applied_at === 'string' || figureVerifiedNow;
+    const figureAppliedOrNone = !hasFigures || figureVerifiedNow;
     const stage2Ok = fixAppliedAfterSolve || (originalCompared && figureAppliedOrNone) ||
       (qc.stem_ok !== false && qc.choices_ok !== false && qc.figure_ok !== false &&
         qc.latex_v2_ok !== false && qc.fidelity_ok !== false && !qc.issue_title);
     const prevStatus = String(a.quality_status ?? 'pending');
-    const figureOnly = problemOk && answerOk && solutionOk && fidelityOk && (!figurePositionOk || !figureSizeOk || (hasFigures && !figureAppliedOrNone));
+    const figureOnly = problemOk && answerOk && solutionOk && fidelityOk &&
+      (!figurePositionOk || !figureSizeOk || (hasFigures && !figureAppliedOrNone) || !solFigure.ok);
     const dataSymptom = isDataFixableSymptom(r.issue_title, r.issue_detail, r.engine_symptom);
     const rawIssueKind = figureOnly ? 'figure' : normalizeIssueKind(r.issue_kind, !renderOk);
     const issueKind: IssueKind = rawIssueKind === 'engine' && (!fidelityOk || qc.fidelity_ok === false || dataSymptom)
@@ -1923,7 +2082,7 @@ export async function handleTextbookProblemRenderCheck(
       ? prevStatus
       : autoHoldEngine
       ? 'held'
-      : (renderOk && stage2Ok && figureAppliedOrNone ? 'approved' : 'issue');
+      : (renderOk && stage2Ok && figureAppliedOrNone ? 'clean' : 'issue');
     const issueTitle = !falseBlank && !falseSubAnsSpacing && typeof r.issue_title === 'string' && r.issue_title.trim()
       ? r.issue_title
       : !figureSizeOk
@@ -1931,8 +2090,8 @@ export async function handleTextbookProblemRenderCheck(
       : !figurePositionOk
       ? '그림 위치가 원본과 다름'
       : hasFigures && !figureAppliedOrNone
-      ? '그림·도형 문항 원본 대조 수정안 확인 필요'
-      : null;
+      ? '그림·도형 문항 원본 대조 확인 필요'
+      : solFigure.issueTitle;
 
     await auth.admin.from('textbook_problem_analyses').update({
       render_checks: {
@@ -1942,6 +2101,13 @@ export async function handleTextbookProblemRenderCheck(
         fidelity_ok: fidelityOk,
         figure_position_ok: figurePositionOk,
         figure_size_ratio: sizeRatio,
+        ...(x.hasSolutionFigures
+          ? {
+            solution_figure_position_ok: solFigure.positionOk,
+            solution_figure_size_ratio: solFigure.sizeRatio,
+            solution_figures_ok: solFigure.ok,
+          }
+          : {}),
         original_compared: originalCompared,
         flagged_after_approval: prevStatus === 'approved' && !renderOk,
         issue_title: renderOk && figureAppliedOrNone ? null : issueTitle,
@@ -1955,15 +2121,12 @@ export async function handleTextbookProblemRenderCheck(
       },
       render_checked_at: nowIso,
       quality_status: nextStatus,
-      ...(nextStatus === 'approved' && prevStatus !== 'approved'
-        ? { quality_approved_at: nowIso, quality_approved_by: auth.userId }
-        : {}),
       ...(unholdFromRender
         ? {
           engine_held_at: null,
           engine_held_by: null,
           engine_hold_note: null,
-          ...(nextStatus === 'approved' ? { engine_resolved_at: nowIso } : {}),
+          ...(nextStatus === 'clean' ? { engine_resolved_at: nowIso } : {}),
         }
         : {}),
       ...(autoHoldEngine

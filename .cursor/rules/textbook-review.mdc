@@ -19,6 +19,10 @@ and RPCs (`textbook_review_*`), first read `docs/architecture/textbook-review.md
 - Decisions are append-only. Never update or delete `textbook_review_decisions`.
 - Never change the source PDF. Record source errors as correction notes.
 - Student code must not read review tables or functions.
+- Outside the review screens (PDF export, answer/solution cards, problem-bank
+  search, stats, assignment) read confirmed values from `pb_question_solutions`
+  and `pb_question_meta`, never from `textbook_problem_analyses`. Only the
+  subunit confirm (`textbook_review_apply_staged`) writes those two tables.
 - The printed solution (`solution_transcribed`, `solution_source`) comes from
   Vision on the solution PDF crop or from the owner. Never fill it from the AI
   solve (`ai_solution`); keep the two apart. Strip `[해설]` / `[풀이]` headers
