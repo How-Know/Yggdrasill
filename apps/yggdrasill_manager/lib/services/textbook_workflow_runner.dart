@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../screens/problem_bank/problem_bank_models.dart';
 import 'problem_bank_service.dart';
 import 'textbook_problem_review_service.dart';
 import 'textbook_review_pipeline.dart';
@@ -273,17 +274,25 @@ class TextbookWorkflowRunner extends ChangeNotifier {
     var phase = job.fromPhase;
     try {
       if (phase == TextbookWorkflowPhase.extract) {
-        _setPhase(st, phase, '본문 추출·정답 위치 확인');
+        _setPhase(st, phase, order.isSchoolExam ? '시험지 문항·정답 준비' : '본문 추출·정답 위치 확인');
         await _persistPhase(st, markStarted: job.since == null);
-        await _extractAndMatch(st, review, since: job.since);
+        if (order.isSchoolExam) {
+          await _prepareExam(st);
+        } else {
+          await _extractAndMatch(st, review, since: job.since);
+        }
         if (st.cancelRequested) throw const _Cancelled();
         phase = TextbookWorkflowPhase.sync;
       }
       if (phase == TextbookWorkflowPhase.sync) {
-        _setPhase(st, phase, '채점 정답을 문제은행 문항에 연결');
-        await _persistPhase(st);
-        await _syncAnswers(order);
-        if (st.cancelRequested) throw const _Cancelled();
+        // 내신 시험지는 정답 연결을 하지 않는다. 채점 정답이 문제은행 정답에서 왔고, 이 연결은 주관식 문항에
+        // 만들어 둔 객관식 보기 정답을 지운다. 고친 정답은 시험지 확정 때 문제은행에 반영된다.
+        if (!order.isSchoolExam) {
+          _setPhase(st, phase, '채점 정답을 문제은행 문항에 연결');
+          await _persistPhase(st);
+          await _syncAnswers(order);
+          if (st.cancelRequested) throw const _Cancelled();
+        }
         phase = TextbookWorkflowPhase.review;
       }
       if (phase == TextbookWorkflowPhase.review) {
@@ -297,7 +306,7 @@ class TextbookWorkflowRunner extends ChangeNotifier {
           onProgress: (m) => _detail(st, m),
           isCancelled: () => st.cancelRequested,
         );
-        final summary = await pipeline.runAll(forceRerun: job.forceRerun, forceRenderCheck: job.forceRenderCheck);
+        final summary = await pipeline.run(forceRerun: job.forceRerun, forceRenderCheck: job.forceRenderCheck);
         st.notes
           ..clear()
           ..addAll(summary.notes);
@@ -343,6 +352,67 @@ class TextbookWorkflowRunner extends ChangeNotifier {
     }
   }
 
+  /// 내신 시험지(책 id = 문제은행 문서 id): 본문 추출이 끝나기를 기다린 뒤(아직 뽑지 않았으면 시작한다)
+  /// 게이트웨이가 문항 영역·채점 정답·"해설 없음"을 검수 테이블에 올린다. 여러 번 해도 결과가 같다.
+  Future<void> _prepareExam(TextbookWorkflowRunState st) async {
+    final order = st.order;
+    Future<ProblemBankDocumentSummary> load() async {
+      final summary = await _pb.loadDocumentSummary(academyId: order.academyId, documentId: order.bookId);
+      if (summary == null) throw Exception('문제은행에서 시험지 문서를 찾지 못했습니다');
+      return summary;
+    }
+
+    var summary = await load();
+    var extracted = false;
+    var latest = summary.latestExtractJob;
+    if ((latest == null || latest.isTerminal) && summary.questionCount == 0) {
+      _detail(st, '본문 추출 시작');
+      latest = await _pb.createExtractJob(academyId: order.academyId, documentId: order.bookId);
+    }
+    if (latest != null && !latest.isTerminal) {
+      extracted = true;
+      var job = latest;
+      DateTime? deadline;
+      while (true) {
+        if (st.cancelRequested) return;
+        job = await _pb.getExtractJob(academyId: order.academyId, jobId: job.id) ?? job;
+        if (job.isTerminal) break;
+        final waiting = job.status == 'queued';
+        _detail(st, waiting ? '본문 추출 대기 중' : '본문 추출 중');
+        // 여러 시험지를 한꺼번에 올리면 서버 워커가 차례로 뽑는다. 차례를 기다리는 시간은 제한에 넣지 않는다.
+        if (!waiting) deadline ??= DateTime.now().add(_extractTimeout);
+        if (deadline != null && DateTime.now().isAfter(deadline)) {
+          throw Exception('본문 추출이 ${_extractTimeout.inMinutes}분 안에 끝나지 않았습니다');
+        }
+        await Future<void>.delayed(_pollEvery);
+      }
+      if (job.status == 'failed' || job.status == 'cancelled') {
+        final why = job.errorMessage.trim().isNotEmpty ? job.errorMessage.trim() : job.errorCode.trim();
+        throw Exception('본문 추출 실패${why.isEmpty ? '' : ': $why'}');
+      }
+      summary = await load();
+    }
+    if (summary.questionCount == 0) throw Exception('추출된 문항이 없습니다. 시험지 PDF 를 확인하세요');
+    if (st.cancelRequested) return;
+
+    _detail(st, '문항 영역·정답 준비 (${summary.questionCount}문항)');
+    final res = await _pb.prepareExamReview(
+      academyId: order.academyId,
+      documentId: order.bookId,
+      refreshAnswers: extracted,
+    );
+    final missing = [for (final n in (res['missingAnswers'] as List?) ?? const []) '$n'];
+    final wholePage = [for (final n in (res['pageFallbacks'] as List?) ?? const []) '$n'];
+    st.extractSkipped = !extracted;
+    st.matchDone = true;
+    st.matchDetail = [
+      '문항 ${res['cropCount'] ?? summary.questionCount}개 준비',
+      if (missing.isNotEmpty) '정답 없음 ${missing.length}',
+      if (wholePage.isNotEmpty) '문항 영역 못 찾음 ${wholePage.length}(쪽 전체로 대조)',
+    ].join(' · ');
+    _detail(st, st.matchDetail);
+  }
+
   /// 본문이 아직 없는 sub_key 만 추출하고, 정답·해설 위치가 빈 sub_key 만 다시 찾는다.
   Future<void> _extractAndMatch(
     TextbookWorkflowRunState st,
@@ -365,7 +435,7 @@ class TextbookWorkflowRunner extends ChangeNotifier {
     final stageRuns = [
       for (final r in order.stageRuns)
         if (items.any((it) =>
-            it.subKey == r.subKey && (it.existingAnswer.trim().isEmpty || (!it.hasSolutionRef && !it.solutionMarkedNone))))
+            it.subKey == r.subKey && (gradingAnswerOf(it).trim().isEmpty || (!it.hasSolutionRef && !it.solutionMarkedNone))))
           r,
     ];
     final bodyChainKeys = [
@@ -392,6 +462,12 @@ class TextbookWorkflowRunner extends ChangeNotifier {
     };
     return missing.isEmpty ? null : missing.toList();
   }
+
+  /// 답지에서 읽어 저장된 채점 정답. 반영 대기 정답(해설에서 읽은 AI 제안)은 치지 않는다.
+  /// 그걸 치면 답지 판독이 빈 소단원도 정답·해설 위치 찾기를 건너뛴다.
+  static String gradingAnswerOf(TextbookProblemReviewItem it) => it.dbValues.containsKey('existing_answer')
+      ? '${it.dbValues['existing_answer'] ?? ''}'
+      : it.existingAnswer;
 
   /// 본문 "풀이" 단락에서 정답·풀이를 읽는 문항이 있는 시리즈
   static const Set<String> _bodySolutionSeries = {'wonri', 'gaeyu', 'gaeyu_high'};

@@ -1080,9 +1080,12 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                       attendingStudentIds: attendingStudentIds,
                       studentNamesById: studentNamesById,
                     );
-                    return ValueListenableBuilder<int>(
-                      valueListenable: HomeworkStore.instance.revision,
-                      builder: (context, homeworkRevision, _) {
+                    return AnimatedBuilder(
+                      animation: Listenable.merge([
+                        HomeworkStore.instance.revision,
+                        DataManager.instance.studentTextbookStudyRevision,
+                      ]),
+                      builder: (context, _) {
                         final activity = _countAttendingActivity(list);
                         return Stack(
                           fit: StackFit.expand,
@@ -2352,8 +2355,12 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           .items(student.id)
           .where((hw) => hw.status != HomeworkStatus.completed)
           .toList(growable: false);
-      if (items.isEmpty) continue;
-      final running = store.runningOf(student.id) != null ||
+      final study = DataManager.instance.primaryTextbookStudyState(student.id);
+      final runningStudy =
+          study != null && study.isSolve && study.isFreshOpen;
+      if (items.isEmpty && !runningStudy) continue;
+      final running = runningStudy ||
+          store.runningOf(student.id) != null ||
           items.any((hw) => hw.phase == 2 || hw.runStart != null);
       if (running) {
         studying++;
@@ -13997,7 +14004,9 @@ Widget _buildHomeworkChipsReactiveForStudent(
                                     .copyWith(scrollbars: false),
                                 child: SingleChildScrollView(
                                   physics: const BouncingScrollPhysics(),
-                                  clipBehavior: Clip.none,
+                                  // 세로 스크롤은 학생 카드 아래로 깔린다.
+                                  // 좌우 슬라이드는 OverlayPortal이라 이 클립과 상관없이 위에 남는다.
+                                  clipBehavior: Clip.hardEdge,
                                   child: Padding(
                                     padding: const EdgeInsets.only(
                                       left: _homeworkChipOuterLeftInset,
@@ -22237,6 +22246,7 @@ class _AttendingButton extends StatelessWidget {
               DataManager.instance.attendanceRecordsNotifier,
               DataManager.instance.deviceBindingsRevision,
               DataManager.instance.studentAppPresenceRevision,
+              DataManager.instance.studentTextbookStudyRevision,
               DataManager.instance.studentTimeBlocksRevision,
               DataManager.instance.sessionOverridesNotifier,
               HomeworkStore.instance.revision,
@@ -22246,10 +22256,15 @@ class _AttendingButton extends StatelessWidget {
                   .items(studentId)
                   .where((e) => e.status != HomeworkStatus.completed)
                   .toList();
-              final hasAny = items.isNotEmpty;
-              final hasRunning =
+              final studyState =
+                  DataManager.instance.primaryTextbookStudyState(studentId);
+              final hasRunningStudy = studyState != null &&
+                  studyState.isSolve &&
+                  studyState.isFreshOpen;
+              final hasAny = items.isNotEmpty || hasRunningStudy;
+              final hasRunning = hasRunningStudy ||
                   HomeworkStore.instance.runningOf(studentId) != null ||
-                      items.any((e) => e.phase == 2 || e.runStart != null);
+                  items.any((e) => e.phase == 2 || e.runStart != null);
               final isResting = hasAny && !hasRunning;
 
               String school = '';
@@ -22382,6 +22397,48 @@ class _AttendingButton extends StatelessWidget {
                       label: '앱, 학원',
                       background: deviceBadgeBackground,
                       foreground: deviceBadgeTextColor,
+                    ),
+                  );
+                }
+                if (studyState != null && studyState.statusLabel.isNotEmpty) {
+                  final Color studyBg;
+                  final Color studyFg;
+                  if (studyState.isSolve && studyState.isOpen) {
+                    studyBg = kDlgAccent.withValues(alpha: isDark ? 0.24 : 0.14);
+                    studyFg =
+                        isDark ? const Color(0xFF7DE0AE) : const Color(0xFF1D7A52);
+                  } else if (studyState.isSolve && studyState.isPaused) {
+                    studyBg = const Color(0xFFE0A63C)
+                        .withValues(alpha: isDark ? 0.22 : 0.14);
+                    studyFg =
+                        isDark ? const Color(0xFFF3C66E) : const Color(0xFF9C6914);
+                  } else {
+                    studyBg = const Color(0xFF6B85B6)
+                        .withValues(alpha: isDark ? 0.24 : 0.14);
+                    studyFg =
+                        isDark ? const Color(0xFF9FB8E8) : const Color(0xFF3E5A91);
+                  }
+                  final shortBook = studyState.bookName.trim();
+                  final pillText = shortBook.isEmpty
+                      ? studyState.statusLabel
+                      : '${studyState.statusLabel} · $shortBook';
+                  final elapsedMin = (studyState.activeElapsedSec / 60).round();
+                  final detailParts = <String>[
+                    studyState.statusLabel,
+                    if (shortBook.isNotEmpty) shortBook,
+                    if (studyState.gradeLabel.isNotEmpty) studyState.gradeLabel,
+                    if (studyState.locationLabel.isNotEmpty)
+                      studyState.locationLabel,
+                    if (studyState.isSolve && elapsedMin > 0) '${elapsedMin}분',
+                  ];
+                  pills.add(
+                    Tooltip(
+                      message: detailParts.join(' · '),
+                      child: _pill(
+                        label: pillText,
+                        background: studyBg,
+                        foreground: studyFg,
+                      ),
                     ),
                   );
                 }

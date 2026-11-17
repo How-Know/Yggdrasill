@@ -113,13 +113,25 @@
 
 ## 화면에서
 
-두 앱 모두 문항 옆에 **2회차부터** 배지를 띄운다. 처음 푸는 문항에 "1회차"를
-붙이면 배지가 늘 떠 있어 정보가 되지 않는다.
+처음 푸는 문항에 "1회차"를 붙이면 배지가 늘 떠 있어 정보가 되지 않는다.
+학생앱 번호 보기 카드 오른쪽은 그래서 세 줄을 따로 붙이고, 비어 있는 줄은
+뺀다.
+
+| 줄 | 언제 | 뜻 |
+| --- | --- | --- |
+| `N회차` | 2회차부터 | 지금 회차 순번. 정답 통과·재출제·리셋마다 올라간다 |
+| `통과 N` | 지금 회차를 정답으로 통과한 경우 | 지금까지 정답으로 통과한 횟수. 이번 회차도 포함한다 |
+| `이전 정답 N` | 지금 회차는 아직 통과 전이고 1 이상 | 지금 회차보다 앞에서 `passed = true`인 회차 수 |
+| `수정 N회` | 2 이상 | 지금 회차에서 답을 넣고 채점한 횟수. `skipped`는 뺀다 |
+
+맞음·틀림 표시는 그대로 오른쪽에 남는다. 시간제한 테스트 카드에는 이 줄을
+붙이지 않는다. 채점 직후에는 같은 규칙으로 화면 숫자만 먼저 올리고, 다음
+조회가 서버 값을 따라잡는다.
 
 | 앱 | 위치 | 출처 |
 | --- | --- | --- |
 | 학생앱 | 교재 커버 상단 (시작일 줄 오른쪽) — `시즌 N` | `student_textbook_seasons_v1.season_no` |
-| 학생앱 | 교재 문항 행 / 세트형 헤더 | `student_textbook_page_problems_v2.round_no` |
+| 학생앱 | 번호 보기 카드 오른쪽 | `student_textbook_page_problems_v2`의 `round_no`, `passed_before`, `round_revision_count` |
 | 학생앱 | 과제 문항 목록 | `student_list_homework_problems_v1.round_no` |
 | 매니저앱 | 우측 시트 채점 카드 | `staff_list_problem_rounds_v1` |
 | 매니저앱 | 답지 뷰어 채점 그리드 (구석 표기 + 툴팁) | 같음 |
@@ -178,3 +190,7 @@ skipped 만 있는 문항을 오답(X)이 아니라 **빈 문항**으로 다시 
 - `supabase/migrations/20260814030000_student_textbook_seasons.sql` — 시즌
 - `supabase/migrations/20260814050000_teacher_grading_to_learning_attempts.sql`
   — 선생님 채점 다리·미수행 노출
+- `supabase/migrations/20261116160000_page_problems_round_history.sql`
+  — 번호 카드의 이전 정답 횟수·이번 회차 채점 횟수
+- `supabase/migrations/20261118030000_season_rounds_and_homework_dialog_stats.sql`
+  — 시즌 내 완료 유지·단원/문항 다시 풀기·과제 추가 다이얼로그 시즌/문항 집계

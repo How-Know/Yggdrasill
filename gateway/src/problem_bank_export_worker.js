@@ -4275,12 +4275,16 @@ async function attachSolutionExplanations(questions) {
       const chunk = ids.slice(offset, offset + 200);
       const { data: rows, error } = await supa
         .from('pb_question_solutions')
-        .select('question_id,body,figure_assets,version')
-        .eq('kind', 'original')
+        .select('question_id,kind,body,figure_assets,version')
+        .in('kind', ['original', 'corrected'])
         .in('question_id', chunk)
         .order('version', { ascending: false });
       if (error) return list;
-      for (const row of rows || []) {
+      // 사장님이 교정한 해설(corrected)이 있으면 원본보다 먼저 쓴다.
+      const ordered = [...(rows || [])].sort(
+        (a, b) => (a.kind === 'corrected' ? 0 : 1) - (b.kind === 'corrected' ? 0 : 1),
+      );
+      for (const row of ordered) {
         const questionId = String(row.question_id || '').trim();
         if (!questionId || latestSeen.has(questionId)) continue;
         latestSeen.add(questionId);

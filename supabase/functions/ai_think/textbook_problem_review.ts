@@ -10,7 +10,7 @@ import { uuidOrNull } from './validate.ts';
 
 type Rec = Record<string, unknown>;
 
-export const TEXTBOOK_REVIEW_PROMPT_VERSION = 'textbook-problem-review-2026-11-13';
+export const TEXTBOOK_REVIEW_PROMPT_VERSION = 'textbook-problem-review-2026-11-17';
 
 /** 품질 이상의 원인 분류. data=문항 데이터(본문·선지) 오류, engine=조판 엔진 문제, figure=도형 자산 문제 */
 export type IssueKind = 'none' | 'data' | 'engine' | 'figure';
@@ -373,6 +373,31 @@ export function itemHasFigures(it: Rec, b?: Rec): boolean {
   return false;
 }
 
+/**
+ * 정답 대조 단계에 함께 보낼 그림 문항의 이미지. 그림의 수치·배치를 봐야 어느 정답이 맞는지 가릴 수 있다.
+ * 교재 원본 이미지를 쓰고, 원본이 없으면 V2 렌더 화면을 쓴다. 그림이 없는 문항은 보내지 않는다.
+ */
+export function compareFigureImages(
+  items: Rec[],
+  images: Map<string, ReviewImageInput>,
+): { cropId: string; problemNumber: string; url: string; kind: 'original' | 'v2' }[] {
+  const out: { cropId: string; problemNumber: string; url: string; kind: 'original' | 'v2' }[] = [];
+  for (const it of items) {
+    if (!itemHasFigures(it) && figureMarkerCount(it.common_stem) === 0) continue;
+    const cropId = String(it.crop_id);
+    const img = images.get(cropId);
+    const url = img?.originalImageDataUrl ?? img?.v2ProblemUrl ?? null;
+    if (!url) continue;
+    out.push({
+      cropId,
+      problemNumber: String(it.problem_number ?? ''),
+      url,
+      kind: img?.originalImageDataUrl ? 'original' : 'v2',
+    });
+  }
+  return out;
+}
+
 /** 공통 발문의 첫 지시문: 첫 [문단]/줄바꿈 앞, 없으면 첫 문장(. ? ! 로 끝남). 뒤에 이어지는 내용이 없거나 지시문이 아니면 null. */
 export function leadingInstruction(common: string): string | null {
   const parts = common.split(/\[문단\]|\n/).map((p) => p.trim()).filter((p) => p.length > 0);
@@ -490,11 +515,21 @@ export function expectedQuestionKind(fullStem: unknown, choices: unknown): Quest
  *    (나) 첫 문단이 숫자·식이고 두 번째 문단이 지시문이면(예: "36=2^2×3^2\n다음 표의 빈칸에 알맞은 수를 써넣어라.\n...")
  *         공통 발문은 그 지시문 문단만 남기고, 개별 발문에서도 앞머리 중복 지시문을 뺀다.
  */
+const COMMON_STEM_BLOCK_RE = /\[(?:박스시작|보기시작|표시작)\]|\\begin\{tabular\}/;
+
 export function commonStemFix(commonStem: unknown, stem: unknown): CommonStemFix | null {
   const common = String(commonStem ?? '').trim();
   const s = String(stem ?? '');
   if (!common || !s.trim()) return null;
-  if (looksLikeInstruction(common)) {
+  // 상자·보기·표가 들어 있는 글은 공통 발문이 아니다(그 문항만의 조건이다). 통째로 떼면 개별 발문에 '[박스끝]'만 남는다.
+  // 첫 지시문만 공통 발문으로 두고, 개별 발문에서는 그 지시문만 뺀다. 통째로 떼는 일은 하지 않는다.
+  const hasBlock = COMMON_STEM_BLOCK_RE.test(common);
+  if (hasBlock) {
+    const lead = leadingInstruction(common);
+    const rest = lead ? stripCommonStem(lead, s) : null;
+    if (lead && rest !== null) return { stem: rest, commonStem: lead };
+  }
+  if (!hasBlock && looksLikeInstruction(common)) {
     const direct = stripCommonStem(common, s);
     if (direct !== null) return { stem: direct, commonStem: null };
   }
@@ -648,6 +683,7 @@ const COMPARE_ANALYZE_SCHEMA: Rec = {
           'proposed_answer',
           'solution_logic_ok',
           'solution_logic_issue',
+          'solution_logic_fix',
           'source_error_about',
           'source_error_note',
           'concept_refs',
@@ -661,6 +697,7 @@ const COMPARE_ANALYZE_SCHEMA: Rec = {
           proposed_answer: { type: ['string', 'null'] },
           solution_logic_ok: { type: 'boolean' },
           solution_logic_issue: { type: ['string', 'null'] },
+          solution_logic_fix: { type: ['string', 'null'] },
           source_error_about: { type: 'string', enum: ['none', 'problem', 'answer', 'solution'] },
           source_error_note: { type: ['string', 'null'] },
           concept_refs: { type: 'array', items: { type: 'string' } },
@@ -794,6 +831,7 @@ const BLIND_SOLVE_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔�
    - fidelity_ok: 원본 이미지가 주어졌을 때, V2 렌더(또는 텍스트)의 내용이 원본과 같은지(숫자·부호·조건·선지·그림이 바뀌거나 빠지지 않았는지). 원본 이미지가 없으면 true.
      세트 문항은 원본에서 공통 지시문이 세트 머리에 한 번만 인쇄되는 것이 정상입니다. V2 화면에 공통 지시문이 한 번 보이면 일치, 두 번 보이면 불일치입니다.
      원본에서 문항·소문항 아래 '해' 배지로 시작하는 빈칸 풀이 안내는 해설이라 본문에 넣지 않습니다. V2 화면에 그 안내가 없는 것은 정상이며 누락으로 지적하지 말고, proposed_stem 에도 넣지 마세요.
+     입력에 source_corrected=true 인 문항은 인쇄된 원본 자체가 틀려 운영자가 본문을 고친 문항입니다. printed_stem(및 printed_choices)이 고치기 전 글이고, stem·choices 와 V2 화면의 글이 운영자가 고친 글입니다. 둘이 서로 다른 부분은 운영자의 글이 기준이므로 그 부분이 원본 이미지와 다른 것은 불일치가 아닙니다(그 이유만으로 fidelity_ok=false, stem_ok=false 로 하지 말고, 원본대로 되돌리는 proposed_stem 도 내지 마세요). 이 문항의 ai_answer·ai_solution 은 운영자가 고친 본문만 보고 평소처럼 쓰고, 인쇄된 원본·교정 사실·"원문은 성립하지 않는다" 같은 말이나 괄호 설명을 정답과 풀이에 적지 마세요. 그 밖의 부분(고치지 않은 글·숫자·수식·조건·선지·그림과 그림 속 표기)은 평소대로 원본 이미지와 대조합니다.
    - 이상이 하나라도 있으면 quality_issue_title과 quality_issue_detail에 학생 입장에서 무엇이 어떻게 보이는지(예: "②번 선지가 화면에 없음", "분수가 \\frac{1}{2} 글자로 노출됨")를 한글로 명확히 적고, 이상이 없으면 둘 다 null로 두세요.
 4-1. 이상의 원인 분류(issue_kind) — 운영자가 어디를 고칠지 정하는 기준입니다:
    - "data": 본문·공통발문·선지·정답 텍스트를 수정하면 해결되는 모든 문제입니다!
@@ -829,10 +867,12 @@ const COMPARE_ANALYZE_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 
    - 해설 정답이 없으면(null) 2자 대조입니다: 기존 정답과 AI 정답이 같을 때 true.
    - 기존 정답이 비어 있거나 어느 하나라도 다르면 false 로 두고, mismatch_reason에 어느 쪽이 왜 다른지(기존 정답 오타 / 해설 전사 오류 / 문항 전사 오류로 인한 오답 / AI 풀이 재검토 결과 등)를 적고 가장 신뢰할 수 있는 정답을 proposed_answer에 적으세요. 해설 정답과 AI 정답이 같고 기존 정답만 다르면 그 값을 제안합니다.
    - 원본 해설 전사가 있으면 AI 풀이와 풀이 방향이 다른지도 살펴 mismatch_reason에 짧게 덧붙이세요(정답이 같으면 answer_matched는 true 유지).
+   - 그림 문항(has_figure_image=true)은 그 문항의 이미지가 함께 옵니다. 정답이 다르면 이미지에서 그림의 수치·기호·점의 위치를 직접 읽어 AI 풀이가 쓴 조건이 그림과 맞는지 확인하고, 확인한 내용을 mismatch_reason에 적으세요. 2단계 AI 풀이도 같은 이미지를 보고 푼 것입니다. 이미지가 온 문항에 "그림이 제공되지 않았다"고 쓰지 마세요. has_figure_image=false 인데 그림이 필요한 문항이면 그림을 확인하지 못했다고만 적습니다.
 1-1. 해설 논리 검토(solution_logic_ok, solution_logic_issue): 정답이 같아도 해설을 그대로 통과시키지 않습니다.
    - 원본 해설 전사(solution_transcribed)를 단계별로 따라가며 계산 실수, 비약, 앞뒤가 맞지 않는 식, 빠진 단계, 결론과 다른 중간값이 있는지 봅니다.
    - 오류가 없거나 원본 해설 전사가 비어 있으면 solution_logic_ok=true, solution_logic_issue=null 입니다.
    - 오류가 있으면 solution_logic_ok=false 이고 solution_logic_issue 에 몇 번째 줄·어느 식이 왜 틀렸는지 한 줄로 적습니다. 글꼴·표기·줄바꿈 차이, 풀이 방법이 AI 와 다른 것은 오류가 아닙니다.
+   - solution_logic_fix: 오류가 있을 때, 틀린 곳만 고친 해설 전문입니다. 원본 해설 전사(solution_transcribed)의 표기·줄바꿈·그림 표시([그림])·빈칸 표기를 그대로 두고 틀린 글자·식·문장만 바꿉니다. 풀이를 새로 쓰거나 설명을 보태지 않습니다. 오류가 없거나, 틀린 곳만 바꿔서는 고칠 수 없으면 null 입니다.
 1-2. 교재 원본 오류(source_error_about, source_error_note):
    - 교재 자체(인쇄된 문제·정답·해설)가 틀렸다고 판단될 때만 씁니다. 전사·추출 과정에서 생긴 차이(글자 누락, 오타 전사)는 교재 오류가 아닙니다.
    - 예: 문제 조건으로는 답이 성립하지 않음(problem), 인쇄된 정답이 틀림(answer), 인쇄된 해설의 계산·논리가 틀림(solution).
@@ -875,6 +915,11 @@ const RENDER_CHECK_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔
 - solution_figure_size_ratio: 원본 해설 이미지와 정답+해설 카드 모두에 그림이 있을 때, "해설 글자 크기에 대한 그림 크기"가 카드에서 원본 해설의 몇 배인지(같으면 1.0). 해설 그림이 없거나 원본 해설 이미지가 없으면 null.
 - figure_size_ratio: 원본과 카드 모두에 그림이 있을 때, "본문 글자 크기에 대한 그림 크기"가 카드에서 원본의 몇 배인지(같으면 1.0, 카드 그림이 더 크면 1보다 큼, 예 1.4 · 0.7). 각 이미지 안에서 그림 폭을 본문 글자 크기와 비교해 추정하세요. 그림이 없으면 null.
 - 표·수식·선지 상자는 그림이 아닙니다. 그림 위치·크기 판정(figure_position_ok · figure_size_ratio)에 넣지 마세요. 입력에 has_figure=false 인 문항은 그림이 없는 문항이므로 figure_position_ok=true, figure_size_ratio=null 로 답하세요.
+  입력에 has_figure=true 인 문항은 카드에 그림 이미지가 들어 있습니다. 원본의 표(도형이 든 표 등)가 통째로 그 그림 이미지로 들어간 경우에는 그 표를 그림으로 보고 figure_position_ok 와 figure_size_ratio 를 잽니다(null 로 두지 않습니다).
+- 보기 상자 안에 도형이 여러 개(ㄱ, ㄴ, ㄷ … 기호가 붙은 도형들) 있는 문항은 카드에서 그 도형들과 기호가 그림 이미지 한 장으로 들어가는 것이 정상입니다. 한 장으로 들어갔다는 이유로 이상으로 보지 말고, 그 한 장 안에 원본의 도형과 기호가 모두 보이는지만 대조하세요(일부가 빠졌으면 fidelity_ok=false, issue_kind "figure").
+- 칸 안에 그림이 들어 있는 표도 같습니다. 카드에서 표 전체(칸의 글자·빈칸·그림 포함)가 그림 이미지 한 장으로 들어가는 것이 정상입니다. 표가 글자 표가 아니라 이미지라는 이유로 이상으로 보지 말고, 그 한 장 안에 원본 표의 줄·칸·글자·그림이 모두 보이는지만 대조하세요.
+- 입력에 source_corrected=true 인 문항은 인쇄된 원본 자체가 틀려 운영자가 본문을 고친 문항입니다. printed_stem(및 printed_choices)이 고치기 전 글이고, 문항 카드에 보이는 글이 운영자가 고친 글입니다. 둘이 서로 다른 부분은 운영자의 글이 기준이므로 그 부분이 원본 이미지와 다른 것은 불일치가 아닙니다(그 이유만으로 fidelity_ok=false 로 하지 마세요). 그 밖의 부분(고치지 않은 글·숫자·수식·조건·선지·그림과 그림 속 표기)은 평소대로 원본 이미지와 대조합니다.
+- 입력에 answer_corrected=true 인 문항은 운영자가 교재 정답 오류를 확인해 채점 정답을 교정한 문항입니다. 정답+해설 카드의 정답 값이 원본 해설에 인쇄된 정답과 다른 것은 이상이 아닙니다(answer_ok=true). 정답이 깨지거나 읽히지 않는 것은 그대로 이상입니다.
 - 이상이 있으면 issue_title(한 줄)과 issue_detail(어느 카드의 어디가 어떻게 보이는지, 원본과 무엇이 다른지)을 한글로 적고, 없으면 둘 다 null.
 - issue_kind: 이상의 원인 분류. 운영자가 어디를 고칠지 정하는 기준입니다.
   - "data": 본문·공통발문·선지·정답 데이터를 수정하면 해결되는 모든 문제 — 글자·수식·참조 기호((가)~(라) 등)·지시문·선지가 빠지거나 두 번 나옴, 오타, 원본과 내용이 다름, 정답이 비어 있거나 [image] 자리표시자임, 해설이 중간에서 끝남, 또는 렌더 엔진 문법과 다르게 작성됨(예: [ [[공백:n]] ] 처럼 대괄호를 겹쳐 써서 [[ ]] 로 노출됨, 수식 안에 \\text{(가)} 없이 한글을 써서 빈 괄호 () 로 보임, LaTeX/마크업 문법 오타).
@@ -882,6 +927,18 @@ const RENDER_CHECK_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔
   - "figure": 도형·그래프가 없거나 잘림, 또는 원본과 크기·위치가 크게 다름.
   - "none": 이상 없음.
 - engine_symptom: issue_kind 가 "engine"일 때 증상을 짧은 명사구로(예: "분수 세로 겹침", "루트 기호 누락", "표 테두리 미출력"). 같은 증상끼리 묶어 엔진 수정 목록을 만드는 데 씁니다. 아니면 null.`;
+
+/** 운영자가 "원본 오류 교정"으로 표시한 문항이면 고치기 전 본문·선지를 AI 입력에 싣는다. */
+export function sourceCorrectionInput(raw: unknown): Rec {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const sc = raw as Rec;
+  const choices = Array.isArray(sc.choices) ? sc.choices : [];
+  return {
+    source_corrected: true,
+    printed_stem: String(sc.stem ?? '').slice(0, 2800),
+    ...(choices.length > 0 ? { printed_choices: choices } : {}),
+  };
+}
 
 async function loadDictionaries(
   auth: AuthContext,
@@ -1168,6 +1225,7 @@ export async function handleTextbookProblemReview(
         equations: it.equations,
         has_v2_image: !!images.get(String(it.crop_id))?.v2ProblemUrl,
         has_original_image: !!images.get(String(it.crop_id))?.originalImageDataUrl,
+        ...sourceCorrectionInput(it.source_correction),
       })),
     }),
   }];
@@ -1207,6 +1265,9 @@ export async function handleTextbookProblemReview(
   const blindByCrop = parseProblems(finalText(blindRes));
 
   // ── 3단계: 정답 대조(3자/2자) + 개념/사고 태깅 + 초안 제안
+  // 그림 문항은 이미지를 함께 보낸다(그림의 수치를 봐야 정답표와 AI 답 중 어느 쪽이 맞는지 가릴 수 있다).
+  const compareImages = compareFigureImages(batchItems, images);
+  const compareImageCrops = new Set(compareImages.map((x) => x.cropId));
   const comparePayload = {
     candidate_concepts: candidateConcepts,
     thinking_primitives: thinkList.map((t) => ({ code: t.code, kind: t.kind, cat: t.category, title: t.title })),
@@ -1225,15 +1286,24 @@ export async function handleTextbookProblemReview(
         solution_answer: sol?.answer ?? null,
         ai_solution: b.ai_solution ?? '',
         ai_answer: b.ai_answer ?? '',
+        has_figure_image: compareImageCrops.has(cid),
       };
     }),
   };
+  const compareParts: AiContentPart[] = [{ type: 'text', text: JSON.stringify(comparePayload) }];
+  for (const x of compareImages) {
+    compareParts.push({
+      type: 'text',
+      text: `[crop_id=${x.cropId} · ${x.problemNumber}번 ${x.kind === 'original' ? '교재 원본 이미지' : 'V2 렌더링 화면'}]`,
+    });
+    compareParts.push({ type: 'image', url: x.url, detail: 'high' });
+  }
 
   const compareRes = await provider.complete(
     {
       model,
       instructions: COMPARE_ANALYZE_INSTRUCTIONS,
-      input: [{ kind: 'message', role: 'user', parts: [{ type: 'text', text: JSON.stringify(comparePayload) }] }],
+      input: [{ kind: 'message', role: 'user', parts: compareParts }],
       jsonSchema: { name: 'textbook_problem_compare_analyze', schema: COMPARE_ANALYZE_SCHEMA },
       reasoningEffort: reasoningFor('primary'),
       maxOutputTokens: 12000,
@@ -1271,6 +1341,7 @@ export async function handleTextbookProblemReview(
       solution_images: solutionTargets.length,
       v2_images: batchItems.filter((it) => images.get(String(it.crop_id))?.v2ProblemUrl).length,
       original_images: batchItems.filter((it) => images.get(String(it.crop_id))?.originalImageDataUrl).length,
+      compare_images: compareImages.length,
     },
   });
 
@@ -1453,7 +1524,17 @@ export async function handleTextbookProblemReview(
       : {};
 
     // 정답이 맞고 해설 논리에도 오류가 없어야 통과(clean)다. 승인과 문제은행 정답 반영은 소단원 확정 때 한다.
-    const logic = solutionLogicVerdict(sol?.text ?? '', c);
+    // 사장님이 해설 오류를 처리(교정하거나 그대로 둠)한 문항은 같은 지적을 다시 열지 않는다.
+    const aiLogic = solutionLogicVerdict(sol?.text ?? '', c);
+    const { data: ownerClosedLogic } = aiLogic.ok ? { data: [] } : await auth.admin
+      .from('textbook_review_findings')
+      .select('id')
+      .eq('crop_id', cropId)
+      .eq('check_key', 'ai_solution_logic')
+      .eq('status', 'resolved')
+      .eq('resolution', 'manual_edit')
+      .limit(1);
+    const logic = !aiLogic.ok && (ownerClosedLogic ?? []).length > 0 ? { ok: true, issue: '' } : aiLogic;
     const sourceError = sourceErrorOf(c);
     const nextMathStatus = answerMatched && logic.ok ? 'clean' : 'issue';
     const mathReason = !answerMatched
@@ -1486,7 +1567,9 @@ export async function handleTextbookProblemReview(
           : prevFp,
         ...(solutionFound && !keepManual
           ? {
-            solution_transcribed: cleanedVisionSol || (prev.solution_transcribed ?? null),
+            // 이번에 해설 영역을 읽었으면 그 결과가 기준이다. 정답만 인쇄된 문항은 비운다.
+            // 예전 전사를 남기면 해설 위치를 고친 뒤에도 틀린 위치에서 읽은 글이 계속 붙는다.
+            solution_transcribed: cleanedVisionSol || null,
             solution_answer: typeof s!.solution_answer === 'string' ? s!.solution_answer : (prev.solution_answer ?? null),
             solution_source: 'textbook_vision',
             solution_extracted_at: nowIso,
@@ -1500,8 +1583,8 @@ export async function handleTextbookProblemReview(
         academy_id: academyId,
         solution_transcribed: keepManual
           ? prev.solution_transcribed
-          : solutionTextFound
-          ? cleanedVisionSol
+          : solutionFound
+          ? (cleanedVisionSol || null)
           : (prev.solution_source === 'textbook_vision'
             ? cleanSolutionTranscribedText(prev.solution_transcribed, it.problem_number, prev.solution_answer) || null
             : null),
@@ -1592,6 +1675,7 @@ export async function handleTextbookProblemReview(
     }
 
     if (!logic.ok) {
+      const fixed = typeof c.solution_logic_fix === 'string' ? c.solution_logic_fix.trim() : '';
       await upsertOpenFinding(auth, {
         academy_id: academyId,
         crop_id: cropId,
@@ -1604,6 +1688,15 @@ export async function handleTextbookProblemReview(
         title: '해설 논리 오류',
         detail: logic.issue,
         evidence: { solution_answer: sol?.answer ?? null },
+        // 사장님이 교정할지 그대로 둘지 고른다. 교정하면 원본 해설은 따로 남는다.
+        proposal: fixed && fixed !== (sol?.text ?? '').trim()
+          ? {
+            target: 'solution_fix',
+            after: { solution_transcribed: fixed },
+            reason: logic.issue,
+            keeps: '원본 해설은 따로 남깁니다.',
+          }
+          : null,
         status: 'open',
         ai_run_id: aiRunId,
       }).catch(() => null);
@@ -1739,29 +1832,23 @@ export function effectiveSolution(it: Rec, vision: Rec | undefined): { text: str
  *   body: { academy_id, items: [{ crop_id, problem_url?, answer_solution_url?, solution_kind?: 'textbook'|'ai',
  *           original_image_base64?, set_header_image_base64? }] }
  */
-/** 그림 크기 비율(V2 ÷ 원본, 글자 대비)이 ±10% 밖이면 크기를 다시 맞춘다(목표 1.0배). */
-export const FIGURE_SIZE_RATIO_MIN = 0.9;
-export const FIGURE_SIZE_RATIO_MAX = 1.1;
-/** 예전 흐름에서 승인된 문항은 승인 당시 범위(±15%)를 인정하고 그림을 다시 조정하지 않는다. */
-export const LEGACY_FIGURE_SIZE_RATIO_MIN = 0.85;
-export const LEGACY_FIGURE_SIZE_RATIO_MAX = 1.15;
+/** 그림 크기 비율(V2 ÷ 원본, 글자 대비)이 ±30% 밖이면 준비됨을 막고 크기를 다시 맞춘다(목표 1.0배). 사양 5-4. */
+export const FIGURE_SIZE_RATIO_MIN = 0.7;
+export const FIGURE_SIZE_RATIO_MAX = 1.3;
 
-export function figureSizeRatioOk(ratio: unknown, approved = false): boolean {
+export function figureSizeRatioOk(ratio: unknown): boolean {
   const r = Number(ratio);
   if (ratio === null || ratio === undefined || !Number.isFinite(r) || r <= 0) return true;
-  return approved
-    ? r >= LEGACY_FIGURE_SIZE_RATIO_MIN && r <= LEGACY_FIGURE_SIZE_RATIO_MAX
-    : r >= FIGURE_SIZE_RATIO_MIN && r <= FIGURE_SIZE_RATIO_MAX;
+  return r >= FIGURE_SIZE_RATIO_MIN && r <= FIGURE_SIZE_RATIO_MAX;
 }
 
-/// 해설 그림 판정. 문항 그림과 같은 기준(원본 해설 대비 크기 ±10%, 위치·정렬)이고, 원본 해설과 대조하지 못했으면 통과가 아니다.
+/// 해설 그림 판정. 문항 그림과 같은 기준(원본 해설 대비 크기 ±30%, 위치·정렬)이고, 원본 해설과 대조하지 못했으면 통과가 아니다.
 export function solutionFigureVerdict(
-  { hasSolutionFigures, compared, positionOk, sizeRatio, approved = false }: {
+  { hasSolutionFigures, compared, positionOk, sizeRatio }: {
     hasSolutionFigures: boolean;
     compared: boolean;
     positionOk: unknown;
     sizeRatio: unknown;
-    approved?: boolean;
   },
 ): { ok: boolean; positionOk: boolean; sizeRatio: number | null; issueTitle: string | null } {
   if (!hasSolutionFigures) return { ok: true, positionOk: true, sizeRatio: null, issueTitle: null };
@@ -1773,7 +1860,7 @@ export function solutionFigureVerdict(
     : null;
   const posOk = positionOk !== false;
   if (ratio === null) return { ok: false, positionOk: posOk, sizeRatio: null, issueTitle: '해설 그림 크기를 재지 못함' };
-  if (!figureSizeRatioOk(ratio, approved)) {
+  if (!figureSizeRatioOk(ratio)) {
     return { ok: false, positionOk: posOk, sizeRatio: ratio, issueTitle: `해설 그림 크기가 원본과 다름 (원본 대비 ${ratio}배)` };
   }
   if (!posOk) return { ok: false, positionOk: false, sizeRatio: ratio, issueTitle: '해설 그림 위치가 원본과 다름' };
@@ -1895,6 +1982,7 @@ export async function handleTextbookProblemRenderCheck(
         : imageDataUrl(r.solution_original_image_base64, r.solution_original_image_mime),
       isFillInBlank: r.is_fill_in_blank === true,
       hasSolutionFigures: r.solution_kind !== 'ai' && r.has_solution_figures === true,
+      figureAtCardWidth: r.figure_at_card_width === true,
     }))
     .filter((x): x is {
       cropId: string;
@@ -1906,6 +1994,7 @@ export async function handleTextbookProblemRenderCheck(
       solutionOriginalUrl: string | null;
       isFillInBlank: boolean;
       hasSolutionFigures: boolean;
+      figureAtCardWidth: boolean;
     } => !!x.cropId && (!!x.problemUrl || !!x.answerSolutionUrl))
     .slice(0, 8);
   if (items.length === 0) return jsonResponse({ ok: true, processed: 0 });
@@ -1922,7 +2011,7 @@ export async function handleTextbookProblemRenderCheck(
   const { data: analyses } = await auth.admin
     .from('textbook_problem_analyses')
     .select(
-      'crop_id,academy_id,quality_status,quality_checks,fix_proposal,solved_at,textbook_problem_crops(problem_number,label,pb_question_uid)',
+      'crop_id,academy_id,quality_status,quality_checks,fix_proposal,solved_at,source_correction,textbook_problem_crops(problem_number,label,pb_question_uid)',
     )
     .in('crop_id', cropIds);
   const analysisByCrop = new Map<string, Rec>();
@@ -1932,6 +2021,15 @@ export async function handleTextbookProblemRenderCheck(
   const targets = items.filter((x) => analysisByCrop.has(x.cropId));
   if (targets.length === 0) return jsonResponse({ ok: true, processed: 0 });
   const pbHasFiguresByCrop = await loadPbHasFigures(auth.admin, [...analysisByCrop.values()]);
+  // 사장님이 교재 오류로 확인한 교정 의견이 있는 문항. 채점 정답이 원본 해설의 정답과 달라도 이상이 아니다.
+  const { data: notedNotes } = await auth.admin
+    .from('textbook_review_findings')
+    .select('crop_id')
+    .in('crop_id', cropIds)
+    .eq('status', 'resolved')
+    .eq('resolution', 'noted')
+    .eq('proposal->>target', 'correction_note');
+  const correctedCrops = new Set(((notedNotes ?? []) as Rec[]).map((f) => String(f.crop_id)));
 
   const startedAt = Date.now();
   const model = modelFor('primary');
@@ -1955,7 +2053,9 @@ export async function handleTextbookProblemRenderCheck(
           has_original_image: !!x.originalUrl,
           has_solution_original_image: !!(x.solutionOriginalUrl && x.answerSolutionUrl),
           has_solution_figure: x.hasSolutionFigures,
-          ...(pbHasFiguresByCrop.get(x.cropId) === false ? { has_figure: false } : {}),
+          ...(pbHasFiguresByCrop.has(x.cropId) ? { has_figure: pbHasFiguresByCrop.get(x.cropId) === true } : {}),
+          ...(correctedCrops.has(x.cropId) ? { answer_corrected: true } : {}),
+          ...sourceCorrectionInput(a.source_correction),
           solution_kind: x.solutionKind,
         };
       }),
@@ -2041,14 +2141,14 @@ export async function handleTextbookProblemRenderCheck(
         Number.isFinite(r.figure_size_ratio) && r.figure_size_ratio > 0
       ? Math.round(r.figure_size_ratio * 100) / 100
       : null;
-    const approvedBefore = String(a.quality_status ?? '') === 'approved';
-    const figureSizeOk = figureSizeRatioOk(sizeRatio, approvedBefore);
+    // 한 단 폭을 꽉 채운 그림은 더 키울 수 없다. 원본보다 작다는 크기 판정으로는 막지 않는다(2026-11-17 사장님 결정).
+    const figureSizeOk = figureSizeRatioOk(sizeRatio) ||
+      (x.figureAtCardWidth && sizeRatio !== null && sizeRatio < FIGURE_SIZE_RATIO_MIN);
     const solFigure = solutionFigureVerdict({
       hasSolutionFigures: x.hasSolutionFigures,
       compared: !!x.solutionOriginalUrl && !!x.answerSolutionUrl,
       positionOk: r.solution_figure_position_ok,
       sizeRatio: r.solution_figure_size_ratio,
-      approved: approvedBefore,
     });
     const renderOk = problemOk && answerOk && solutionOk && fidelityOk && figurePositionOk && figureSizeOk && solFigure.ok;
     // 2단계 판정 뒤에 본문·선지·그림 수정이 적용됐거나 이번 검수가 원본과 직접 대조했으면 2단계 판정은 옛 화면 기준이다.
@@ -2060,7 +2160,7 @@ export async function handleTextbookProblemRenderCheck(
     const hasFigures = !noPbFigure && (qc.has_figures === true || qc.issue_kind === 'figure' || sizeRatio !== null ||
       (Array.isArray((fp.figure_measure as Rec | undefined)?.figures) &&
         ((fp.figure_measure as Rec).figures as unknown[]).length > 0));
-    // 그림 문항은 이번 검수에서 원본과 직접 대조해 크기(±10%)·위치·정렬이 맞다고 잰 경우에만 통과다.
+    // 그림 문항은 이번 검수에서 원본과 직접 대조해 크기(±30%)·위치·정렬이 맞다고 잰 경우에만 통과다.
     const figureVerifiedNow = originalCompared && figurePositionOk && sizeRatio !== null && figureSizeOk;
     const figureAppliedOrNone = !hasFigures || figureVerifiedNow;
     const stage2Ok = fixAppliedAfterSolve || (originalCompared && figureAppliedOrNone) ||

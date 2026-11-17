@@ -399,6 +399,18 @@ export function normalizeSolutionBlocksResult(parsedJson) {
     sequence: [],
   };
   if (!parsedJson || typeof parsedJson !== 'object') return out;
+  // 모델이 답을 배열 하나로 감싸 내기도 한다([{...}] → 파서가 {items:[{...}]} 로 만든다).
+  // 풀지 않으면 머리·번호를 다 읽고도 빈 지면으로 처리된다(1-2 해설 p.36).
+  if (
+    !Array.isArray(parsedJson.blocks) &&
+    !Array.isArray(parsedJson.numbers) &&
+    Array.isArray(parsedJson.items) &&
+    parsedJson.items.length === 1 &&
+    parsedJson.items[0] &&
+    typeof parsedJson.items[0] === 'object'
+  ) {
+    parsedJson = parsedJson.items[0];
+  }
   out.leading_continuation = parsedJson.leading_continuation === true;
 
   const entries = [];

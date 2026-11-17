@@ -10,6 +10,90 @@ import 'package:pdfrx/pdfrx.dart';
 
 import 'textbook_pdf_service.dart';
 
+/// 해설 그림 크롭에서 그림이 아닌 줄을 뺀, 남길 행 범위(위, 아래 끝 다음 행). 손댈 게 없으면 null.
+///
+/// 모델이 준 그림 영역이 그림보다 길면 옆 단 풀이 글의 끝("∠CAD)" 같은 조각)이 같이 잘린다.
+/// 잘린 글은 크롭 좌우 경계에 닿고, 그림은 닿지 않는다. 흰 띠로 나뉜 가로 묶음 가운데
+/// 가장 큰 묶음(그림)이 경계에 닿지 않을 때만, 위·아래 끝에서 경계에 닿는 묶음과 티끌을 뺀다.
+({int top, int bottom})? solutionFigureKeepRows(Uint8List rgba, int width, int height) {
+  if (width < 20 || height < 20 || rgba.length < width * height * 4) return null;
+  const edge = 2;
+  final rowInk = List<bool>.filled(height, false);
+  final rowEdge = List<bool>.filled(height, false);
+  for (var y = 0; y < height; y += 1) {
+    var i = y * width * 4;
+    for (var x = 0; x < width; x += 1, i += 4) {
+      if (rgba[i + 3] <= 40 || rgba[i] + rgba[i + 1] + rgba[i + 2] >= 600) continue;
+      rowInk[y] = true;
+      if (x < edge || x >= width - edge) {
+        rowEdge[y] = true;
+        break;
+      }
+    }
+  }
+  final minGap = (height * 0.012).round().clamp(6, 40);
+  final bands = <({int top, int bottom, bool touches})>[];
+  var start = -1;
+  var lastInk = -1;
+  var touches = false;
+  void close() {
+    if (start >= 0) bands.add((top: start, bottom: lastInk + 1, touches: touches));
+    start = -1;
+    touches = false;
+  }
+
+  for (var y = 0; y < height; y += 1) {
+    if (!rowInk[y]) continue;
+    if (start >= 0 && y - lastInk > minGap) close();
+    if (start < 0) start = y;
+    lastInk = y;
+    touches = touches || rowEdge[y];
+  }
+  close();
+  if (bands.length < 2) return null;
+  var main = 0;
+  for (var b = 1; b < bands.length; b += 1) {
+    if (bands[b].bottom - bands[b].top > bands[main].bottom - bands[main].top) main = b;
+  }
+  if (bands[main].touches) return null;
+  final mainHeight = bands[main].bottom - bands[main].top;
+  bool junk(({int top, int bottom, bool touches}) b) => b.touches || (b.bottom - b.top) < mainHeight * 0.04;
+  var first = 0;
+  var last = bands.length - 1;
+  while (last > main && junk(bands[last])) {
+    last -= 1;
+  }
+  while (first < main && junk(bands[first])) {
+    first += 1;
+  }
+  if (first == 0 && last == bands.length - 1) return null;
+  final pad = minGap ~/ 2;
+  return (
+    top: first == 0 ? 0 : (bands[first].top - pad).clamp(0, height),
+    bottom: last == bands.length - 1 ? height : (bands[last].bottom + pad).clamp(0, height),
+  );
+}
+
+/// PNG 를 풀어 [solutionFigureKeepRows] 를 적용한다. 풀지 못하면 null(그대로 둔다).
+Future<({int top, int bottom, int height})?> solutionFigureKeepRowsOfPng(Uint8List png) async {
+  try {
+    final codec = await ui.instantiateImageCodec(png);
+    final frame = await codec.getNextFrame();
+    final image = frame.image;
+    try {
+      final data = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+      if (data == null) return null;
+      final keep = solutionFigureKeepRows(data.buffer.asUint8List(), image.width, image.height);
+      return keep == null ? null : (top: keep.top, bottom: keep.bottom, height: image.height);
+    } finally {
+      image.dispose();
+      codec.dispose();
+    }
+  } catch (_) {
+    return null;
+  }
+}
+
 /// PDF 쪽 좌표 영역을 찍은 PNG. region1k 는 실제로 찍은 영역(여백 포함, 쪽 기준 0..1000).
 class TextbookReviewRenderedRegion {
   const TextbookReviewRenderedRegion({

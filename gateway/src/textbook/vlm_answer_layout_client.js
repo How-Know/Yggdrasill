@@ -168,6 +168,16 @@ function parseBbox4(value) {
 export function normalizeAnswerLayoutResult(parsedJson) {
   const out = { leading_continuation: false, entries: [] };
   if (!parsedJson || typeof parsedJson !== 'object') return out;
+  // 모델이 답을 배열 하나로 감싸 내면 파서가 {items:[{...}]} 로 만든다. 풀어서 읽는다.
+  if (
+    !Array.isArray(parsedJson.entries) &&
+    Array.isArray(parsedJson.items) &&
+    parsedJson.items.length === 1 &&
+    parsedJson.items[0] &&
+    typeof parsedJson.items[0] === 'object'
+  ) {
+    parsedJson = parsedJson.items[0];
+  }
   out.leading_continuation = parsedJson.leading_continuation === true;
   const rawEntries = Array.isArray(parsedJson.entries) ? parsedJson.entries : [];
   for (const raw of rawEntries) {

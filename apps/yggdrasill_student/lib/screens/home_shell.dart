@@ -11,6 +11,7 @@ import '../services/student_attendance_session.dart';
 import '../services/student_point_session.dart';
 import '../services/student_presence_session.dart';
 import '../services/student_shell_chrome.dart';
+import '../services/textbook_study_session.dart';
 import '../widgets/homework_now_playing_bar.dart';
 import '../widgets/homework_now_playing_sheet.dart';
 import '../widgets/student_bottom_nav_bar.dart';
@@ -50,6 +51,7 @@ class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
         .addListener(_onPlanGoalPresented);
     // Realtime + 1.2s 폴백 (학습앱과 동일 패턴).
     unawaited(HomeworkSession.instance.startSync());
+    unawaited(TextbookStudySession.instance.startSync());
     // 등원/하원 Realtime + 폴백 (키오스크 등원 즉시 반영).
     unawaited(StudentAttendanceSession.instance.startSync());
     unawaited(StudentPointSession.instance.startSync());
@@ -72,6 +74,7 @@ class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
   void dispose() {
     unawaited(HomeworkLiveActivity.instance.stop());
     unawaited(HomeworkSession.instance.stopSync());
+    unawaited(TextbookStudySession.instance.stopSync());
     unawaited(StudentAttendanceSession.instance.stopSync());
     unawaited(StudentPointSession.instance.stopSync());
     StudentPointSession.instance.homeworkGrantTick

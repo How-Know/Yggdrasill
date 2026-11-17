@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../services/ai_summary.dart';
 import '../../services/data_manager.dart';
 import '../../services/homework_store.dart';
@@ -223,6 +224,16 @@ class HomeworkQuickAddProxyDialogState
 
   /// 범위 선택 시 소단원 단위로 자동 분해해 제출. 해제 시 수동 하위 과제 추가.
   bool _autoSubtaskMode = true;
+
+  /// 완료된 문항도 범위 선택 시 자동 포함할지 여부 (기본 해제 = 완료 문항 제외).
+  bool _repeatCompletedMode = false;
+
+  /// 선택된 교재의 현재 시즌 정보 및 문항별 시즌 출제/완료 횟수.
+  int _currentBookSeasonNo = 1;
+  DateTime? _currentBookSeasonOpenedAt;
+  bool _rollingBookSeason = false;
+  final Map<String, int> _seasonCropTriedCounts = <String, int>{};
+  final Map<String, int> _seasonCropCompletedCounts = <String, int>{};
 
   /// 자동 모드 리스트와 현재 선택 범위의 동기화 지문.
   String? _autoDraftFingerprint;
@@ -1510,7 +1521,13 @@ class HomeworkQuickAddProxyDialogState
       return;
     }
     _disposeMigratedExplorer();
-    setState(() => _loadingMetadata = true);
+    setState(() {
+      _loadingMetadata = true;
+      _currentBookSeasonNo = 1;
+      _currentBookSeasonOpenedAt = null;
+      _seasonCropTriedCounts.clear();
+      _seasonCropCompletedCounts.clear();
+    });
     try {
       final results = await Future.wait<Object?>([
         DataManager.instance.loadTextbookMetadataPayload(
@@ -1550,6 +1567,7 @@ class HomeworkQuickAddProxyDialogState
         _loadingMetadata = false;
       });
       _refreshRangeAutoDraft();
+      unawaited(_loadBookSeasonProblemStats(linked));
       unawaited(_applyIssuedStateForLinkedBook(linked, parsed));
     } catch (_) {
       if (!mounted) return;
@@ -1593,6 +1611,7 @@ class HomeworkQuickAddProxyDialogState
         homeworkSelectionMode: true,
         autoSelectAllQuestionsOnRangeChange: true,
       );
+      controller.includeCompletedInRangeSelection = _repeatCompletedMode;
       controller.onClose = () {
         unawaited(_clearSelectedLinkedBook());
       };
@@ -1601,6 +1620,10 @@ class HomeworkQuickAddProxyDialogState
         _loadingMetadata = false;
         _migratedExplorer = controller;
         _migratedExplorerBookKey = linked.key;
+        _currentBookSeasonNo = 1;
+        _currentBookSeasonOpenedAt = null;
+        _seasonCropTriedCounts.clear();
+        _seasonCropCompletedCounts.clear();
         _units = const <_BigUnitSelectionNode>[];
         _rangePickerMode = 'type';
         _selectedProblemRegionIds.clear();
@@ -1610,6 +1633,7 @@ class HomeworkQuickAddProxyDialogState
         _expandedLeftMidSmallsKey = null;
       });
     } else {
+      controller?.includeCompletedInRangeSelection = _repeatCompletedMode;
       controller?.onClose = () {
         unawaited(_clearSelectedLinkedBook());
       };
@@ -1618,6 +1642,8 @@ class HomeworkQuickAddProxyDialogState
         _rangePickerMode = 'type';
       });
     }
+
+    unawaited(_loadBookSeasonProblemStats(linked));
 
     unawaited(() async {
       try {
@@ -1651,11 +1677,181 @@ class HomeworkQuickAddProxyDialogState
       });
     }
     _rebuildProblemRegionsFromExplorer();
+    if (_seasonCropTriedCounts.isNotEmpty ||
+        _seasonCropCompletedCounts.isNotEmpty) {
+      controller?.setCropSeasonStats(
+        triedByCrop: _seasonCropTriedCounts,
+        completedByCrop: _seasonCropCompletedCounts,
+      );
+    }
     _syncMigratedExplorerSelection();
     await _applyMigratedHomeworkIssueStats();
     _refreshRangeAutoDraft();
   }
 
+  bool _isHomeworkInCurrentSeason(HomeworkItem hw) {
+    if (_currentBookSeasonNo <= 1 || _currentBookSeasonOpenedAt == null) {
+      return true;
+    }
+    final ts = hw.createdAt ?? hw.updatedAt ?? hw.completedAt ?? hw.confirmedAt;
+    if (ts == null) return false;
+    return !ts.isBefore(_currentBookSeasonOpenedAt!);
+  }
+
+  Future<void> _loadBookSeasonProblemStats(_LinkedTextbook linked) async {
+    try {
+      final raw = await Supabase.instance.client.rpc(
+        'staff_textbook_season_problem_stats_v1',
+        params: {
+          'p_student_id': widget.studentId,
+          'p_book_id': linked.bookId,
+          'p_grade_label': linked.gradeLabel,
+        },
+      );
+      if (!mounted || _selectedLinkedBook?.key != linked.key) return;
+      final data = raw is Map
+          ? Map<String, dynamic>.from(raw)
+          : const <String, dynamic>{};
+      final seasonNo = (data['season_no'] as num?)?.toInt() ?? 1;
+      final openedRaw = data['season_opened_at'];
+      final openedAt =
+          openedRaw == null ? null : DateTime.tryParse('$openedRaw');
+      final tried = <String, int>{};
+      final completed = <String, int>{};
+      final problems = data['problems'];
+      if (problems is List) {
+        for (final entry in problems.whereType<Map>()) {
+          final cropId = '${entry['crop_id'] ?? ''}'.trim();
+          if (cropId.isEmpty) continue;
+          final t = (entry['tried_count'] as num?)?.toInt() ?? 0;
+          final c = (entry['completed_count'] as num?)?.toInt() ?? 0;
+          if (t > 0) tried[cropId] = t;
+          if (c > 0) completed[cropId] = c;
+        }
+      }
+      setState(() {
+        _currentBookSeasonNo = seasonNo < 1 ? 1 : seasonNo;
+        _currentBookSeasonOpenedAt = openedAt;
+        _seasonCropTriedCounts
+          ..clear()
+          ..addAll(tried);
+        _seasonCropCompletedCounts
+          ..clear()
+          ..addAll(completed);
+      });
+      _migratedExplorer?.setCropSeasonStats(
+        triedByCrop: tried,
+        completedByCrop: completed,
+      );
+      if (linked.isMigrated) {
+        _syncMigratedHomeworkIssueStatsFromStore();
+      } else if (_units.isNotEmpty) {
+        unawaited(_applyIssuedStateForLinkedBook(linked, _units));
+      }
+      _refreshRangeAutoDraft();
+    } catch (_) {
+      // RPC 미배포 환경에서도 기본(시즌 1) 동작을 유지한다.
+    }
+  }
+
+  void _setRepeatCompletedMode(bool value) {
+    if (_repeatCompletedMode == value) return;
+    setState(() {
+      _repeatCompletedMode = value;
+    });
+    _migratedExplorer?.setIncludeCompletedInRangeSelection(value);
+    _refreshRangeAutoDraft();
+  }
+
+  Future<void> _promptRollBookSeason(_LinkedTextbook book) async {
+    if (_rollingBookSeason) return;
+    final nextSeason = _currentBookSeasonNo + 1;
+    final bookTitle =
+        book.bookName.trim().isEmpty ? '이 교재' : book.bookName.trim();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: kDlgBg,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+          side: const BorderSide(color: kDlgBorder),
+        ),
+        title: Text(
+          '시즌 $nextSeason 시작 (시즌 업)',
+          style: const TextStyle(
+            color: kDlgText,
+            fontWeight: FontWeight.w800,
+            fontSize: 16,
+          ),
+        ),
+        content: SizedBox(
+          width: 420,
+          child: Text(
+            '「$bookTitle」의 시즌 $_currentBookSeasonNo 풀이 기록을 스냅샷으로 보관하고 시즌 $nextSeason을 시작합니다.\n\n'
+            '학생앱의 답안 표시는 모두 비워지고 이번 시즌 출제·완료 횟수가 0부터 다시 집계됩니다.',
+            style: const TextStyle(
+              color: kDlgTextSub,
+              fontSize: 13.2,
+              height: 1.45,
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text(
+              '취소',
+              style: TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w600),
+            ),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text(
+              '시즌 $nextSeason 시작',
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _rollingBookSeason = true);
+    try {
+      final raw = await Supabase.instance.client.rpc(
+        'staff_reset_student_problems_v1',
+        params: {
+          'p_student_id': widget.studentId,
+          'p_book_id': book.bookId,
+          'p_grade_label': book.gradeLabel,
+        },
+      );
+      if (!mounted) return;
+      final data = raw is Map
+          ? Map<String, dynamic>.from(raw)
+          : const <String, dynamic>{};
+      if (data['ok'] != true) {
+        final err = '${data['error'] ?? ''}';
+        _showDialogSnackBar(
+          err == 'under_review'
+              ? '현재 검사 중(제출·확인)인 과제가 있어 시즌 업을 할 수 없습니다.'
+              : '시즌 업에 실패했습니다.',
+        );
+        return;
+      }
+      await _loadBookSeasonProblemStats(book);
+      if (!mounted) return;
+      _showDialogSnackBar('시즌 $_currentBookSeasonNo으로 전환되었습니다.');
+    } catch (_) {
+      if (mounted) _showDialogSnackBar('시즌 업에 실패했습니다.');
+    } finally {
+      if (mounted) setState(() => _rollingBookSeason = false);
+    }
+  }
   /// 마이그레이션 교재 explorer 단원 트리에 내준/완료 횟수를 반영한다.
   Future<void> _applyMigratedHomeworkIssueStats() async {
     try {
@@ -1728,6 +1924,7 @@ class HomeworkQuickAddProxyDialogState
       final hwBookId = (hw.bookId ?? '').trim();
       final hwGrade = (hw.gradeLabel ?? '').trim();
       if (hwBookId != linked.bookId || hwGrade != linked.gradeLabel) continue;
+      if (!_isHomeworkInCurrentSeason(hw)) continue;
       final completed = _isCompletedForIssuedLock(hw);
       final cropIds = _cropIdsFromHomework(hw);
       var matchedCrop = false;
@@ -3116,6 +3313,7 @@ class HomeworkQuickAddProxyDialogState
       final hwBookId = (hw.bookId ?? '').trim();
       final hwGrade = (hw.gradeLabel ?? '').trim();
       if (hwBookId != bookId || hwGrade != gradeLabel) continue;
+      if (!_isHomeworkInCurrentSeason(hw)) continue;
 
       final finishedAt = hw.completedAt ??
           hw.confirmedAt ??
@@ -3192,6 +3390,7 @@ class HomeworkQuickAddProxyDialogState
       final hwBookId = (hw.bookId ?? '').trim();
       final hwGrade = (hw.gradeLabel ?? '').trim();
       if (hwBookId != bookId || hwGrade != gradeLabel) continue;
+      if (!_isHomeworkInCurrentSeason(hw)) continue;
 
       final touched = <String>{};
       final mappings = hw.unitMappings;
@@ -6436,10 +6635,62 @@ class HomeworkQuickAddProxyDialogState
     );
   }
 
+  Widget _buildRepeatCompletedCheckbox() {
+    return Tooltip(
+      message: '체크하면 이번 시즌에 이미 완료한 문항도 범위 선택 시 함께 담깁니다.\n해제 상태에서도 개별 번호카드를 눌러 직접 추가할 수 있습니다.',
+      waitDuration: const Duration(milliseconds: 300),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: () => _setRepeatCompletedMode(!_repeatCompletedMode),
+        child: Container(
+          height: 48,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          decoration: BoxDecoration(
+            color: _repeatCompletedMode
+                ? kDlgAccent.withValues(alpha: 0.14)
+                : kDlgFieldBg,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: _repeatCompletedMode ? kDlgAccent : kDlgBorder,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 20,
+                height: 20,
+                child: Checkbox(
+                  value: _repeatCompletedMode,
+                  activeColor: kDlgAccent,
+                  side: const BorderSide(color: kDlgBorder, width: 1.4),
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  visualDensity: VisualDensity.compact,
+                  onChanged: (value) =>
+                      _setRepeatCompletedMode(value ?? false),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '반복',
+                style: TextStyle(
+                  color: _repeatCompletedMode ? kDlgAccent : kDlgText,
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildGroupSettingsRow() {
     final groupTitle =
         _groupTitle.text.trim().isEmpty ? '그룹 과제' : _groupTitle.text.trim();
     final showStageDropdown = _selectedLinkedBook?.isMigrated == true;
+    final showRepeatCheckbox = _selectedLinkedBook != null;
     final groupTitleField = _isChildAddMode
         ? Container(
             width: double.infinity,
@@ -6486,7 +6737,17 @@ class HomeworkQuickAddProxyDialogState
           ],
         ),
         const SizedBox(height: 12),
-        groupTitleField,
+        if (showRepeatCheckbox)
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(child: groupTitleField),
+              const SizedBox(width: 10),
+              _buildRepeatCompletedCheckbox(),
+            ],
+          )
+        else
+          groupTitleField,
         if (showStageDropdown) ...[
           const SizedBox(height: 12),
           _buildMigratedGroupSummaryInfo(),
@@ -6712,6 +6973,10 @@ class HomeworkQuickAddProxyDialogState
       _selectedLinkedBookKey = null;
       _linkedBookSeriesKey = null;
       _manualPageMode = false;
+      _currentBookSeasonNo = 1;
+      _currentBookSeasonOpenedAt = null;
+      _seasonCropTriedCounts.clear();
+      _seasonCropCompletedCounts.clear();
       _units = const <_BigUnitSelectionNode>[];
       _problemRegions = const <_TextbookProblemRegion>[];
       _selectedProblemRegionIds.clear();
@@ -6766,15 +7031,87 @@ class HomeworkQuickAddProxyDialogState
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: kDlgText,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w800,
-                  ),
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: kDlgText,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: kDlgAccent.withValues(alpha: 0.14),
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(
+                          color: kDlgAccent.withValues(alpha: 0.5),
+                        ),
+                      ),
+                      child: Text(
+                        '시즌 $_currentBookSeasonNo',
+                        style: const TextStyle(
+                          color: kDlgAccent,
+                          fontSize: 12.2,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(999),
+                        onTap: _rollingBookSeason
+                            ? null
+                            : () => unawaited(_promptRollBookSeason(book)),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color: kDlgFieldBg,
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(color: kDlgBorder),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.upgrade_rounded,
+                                size: 15,
+                                color: _rollingBookSeason
+                                    ? kDlgTextSub
+                                    : kDlgText,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                _rollingBookSeason ? '전환 중...' : '시즌 업',
+                                style: TextStyle(
+                                  color: _rollingBookSeason
+                                      ? kDlgTextSub
+                                      : kDlgText,
+                                  fontSize: 12.2,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
                 if (subtitle != null) ...[
                   const SizedBox(height: 4),
@@ -7079,19 +7416,31 @@ class HomeworkQuickAddProxyDialogState
     return best;
   }
 
+  bool _isRegionAutoSelectable(_TextbookProblemRegion region) {
+    if (_repeatCompletedMode) return true;
+    return (_seasonCropCompletedCounts[region.id] ?? 0) <= 0;
+  }
+
   void _toggleProblemRegionGroup(List<_TextbookProblemRegion> regions) {
     if (regions.isEmpty) return;
-    final allSelected = regions
-        .every((region) => _selectedProblemRegionIds.contains(region.id));
+    final targets =
+        regions.where(_isRegionAutoSelectable).toList(growable: false);
+    final allTargetsSelected = targets.isNotEmpty
+        ? targets.every((region) => _selectedProblemRegionIds.contains(region.id))
+        : regions
+            .every((region) => _selectedProblemRegionIds.contains(region.id));
+    final anySelected =
+        regions.any((region) => _selectedProblemRegionIds.contains(region.id));
     setState(() {
       _rangePickerMode = 'type';
       _clearPageUnitSelection();
-      if (allSelected) {
+      if (allTargetsSelected || (anySelected && targets.isEmpty)) {
         for (final region in regions) {
           _selectedProblemRegionIds.remove(region.id);
         }
       } else {
-        for (final region in regions) {
+        final toSelect = targets.isNotEmpty ? targets : regions;
+        for (final region in toSelect) {
           _selectedProblemRegionIds.add(region.id);
         }
       }
@@ -7208,13 +7557,31 @@ class HomeworkQuickAddProxyDialogState
   Widget _buildRightProblemRowMeta({
     required _TextbookProblemRegion region,
   }) {
-    return Text(
-      region.difficultyLabel,
-      style: const TextStyle(
-        color: kDlgTextSub,
-        fontWeight: FontWeight.w600,
-        fontSize: 12.5,
-      ),
+    final tried = _seasonCropTriedCounts[region.id] ?? 0;
+    final completed = _seasonCropCompletedCounts[region.id] ?? 0;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          '풀이 $tried · 완료 $completed',
+          style: TextStyle(
+            color: completed > 0 ? kDlgAccent : kDlgTextSub,
+            fontWeight: FontWeight.w700,
+            fontSize: 11.8,
+          ),
+        ),
+        if (region.difficultyLabel.trim().isNotEmpty) ...[
+          const SizedBox(width: 8),
+          Text(
+            region.difficultyLabel,
+            style: const TextStyle(
+              color: kDlgTextSub,
+              fontWeight: FontWeight.w600,
+              fontSize: 12.5,
+            ),
+          ),
+        ],
+      ],
     );
   }
 

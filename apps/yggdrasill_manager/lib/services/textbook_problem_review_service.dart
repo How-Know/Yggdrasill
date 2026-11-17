@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
+import 'package:image/image.dart' as img;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'problem_bank_service.dart';
@@ -42,7 +44,9 @@ String? stripCommonStem(String commonStem, String stem) {
     rest = s.substring(0, at) + s.substring(at + exact.length);
   }
   rest = rest.replaceFirst(RegExp(r'^(\s|\[문단\])+'), '').replaceFirst(RegExp(r'(\s|\[문단\])+$'), '');
-  return rest.trim().isEmpty ? null : rest;
+  // 구조 표시만 남으면(예: '[박스끝]') 본문이 빈 것이다. Edge `stripCommonStem` 과 같다.
+  final contentOnly = rest.replaceAll(RegExp(r'\[(?:문단|박스시작|박스끝|보기시작|보기끝)\]'), '').trim();
+  return contentOnly.isEmpty ? null : rest;
 }
 
 /// 공통 발문 중복을 고치는 데 필요한 변경. [stem] 은 개별 발문의 새 값, [commonStem] 은 공통 발문의 새 값(바꿀 필요 없으면 null).
@@ -211,10 +215,58 @@ String cleanSolutionTranscribedText(
 ///         개별 발문에서도 앞머리 중복 지시문을 뺀다.
 /// 3) 공통 발문이 이미 숫자·식 조각('36=2^2×3^2', '36' 등)으로만 잘려 있고 개별 발문 첫 문단에 실제 공통 지시문이 남아 있는 경우 복구한다.
 /// Edge `commonStemFix` 와 같은 규칙이다.
+/// 그림 자리([그림])보다 그림이 많을 때, 다른 그림의 원본 영역 안에 통째로 들어 있는 그림(중심이 안에 있고 더 작음)을
+/// 남는 수만큼 뺀다. 표·보기 상자를 한 장으로 자른 뒤 남은 칸 그림이 이렇게 된다. 영역을 모르는 그림은 건드리지 않는다.
+List<Map<String, dynamic>> pruneContainedFigureAssets(List<Map<String, dynamic>> assets, int slots) {
+  var extra = assets.length - slots;
+  if (extra <= 0) return assets;
+  List<num>? region(Map<String, dynamic> a) {
+    final r = a['crop_region_1k'] ?? a['bbox_1k'];
+    return r is List && r.length == 4 && r.every((v) => v is num) ? r.cast<num>() : null;
+  }
+
+  num area(List<num> r) => (r[2] - r[0]) * (r[3] - r[1]);
+  final drop = <Map<String, dynamic>>{};
+  for (final a in assets.reversed) {
+    if (extra <= 0) break;
+    final r = region(a);
+    if (r == null) continue;
+    final cy = (r[0] + r[2]) / 2, cx = (r[1] + r[3]) / 2;
+    final inside = assets.any((b) {
+      final rb = identical(a, b) || drop.contains(b) ? null : region(b);
+      return rb != null &&
+          (a['raw_page'] == null || b['raw_page'] == null || a['raw_page'] == b['raw_page']) &&
+          area(rb) > area(r) * 1.5 &&
+          cy >= rb[0] &&
+          cy <= rb[2] &&
+          cx >= rb[1] &&
+          cx <= rb[3];
+    });
+    if (inside) {
+      drop.add(a);
+      extra--;
+    }
+  }
+  return [for (final a in assets) if (!drop.contains(a)) a];
+}
+
+/// 그림 크기 재조정이 반영 대기에 남기는 메모. 그림 배치 제안이 반영됐는지 볼 때 이 메모는 세지 않는다.
+const kFigureResizeNote = '그림 크기를 원본 글자 비율에 맞춰 재조정';
+
+final _commonStemBlockRe = RegExp(r'\[(?:박스시작|보기시작|표시작)\]|\\begin\{tabular\}');
+
 CommonStemFix? computeCommonStemFix(String commonStem, String stem) {
   final common = commonStem.trim();
   if (common.isEmpty || stem.trim().isEmpty) return null;
-  if (looksLikeInstruction(common)) {
+  // 상자·보기·표가 들어 있는 글은 공통 발문이 아니다(그 문항만의 조건이다). 통째로 떼면 개별 발문에 '[박스끝]'만 남는다.
+  // 첫 지시문만 공통 발문으로 두고, 개별 발문에서는 그 지시문만 뺀다. 통째로 떼는 일은 하지 않는다.
+  final hasBlock = _commonStemBlockRe.hasMatch(common);
+  if (hasBlock) {
+    final lead = leadingInstruction(common);
+    final rest = lead == null ? null : stripCommonStem(lead, stem);
+    if (lead != null && rest != null) return CommonStemFix(stem: rest, commonStem: lead);
+  }
+  if (!hasBlock && looksLikeInstruction(common)) {
     final direct = stripCommonStem(common, stem);
     if (direct != null) return CommonStemFix(stem: direct);
   }
@@ -273,6 +325,56 @@ List<Map<String, dynamic>> orderedFigureAssets(List<Map<String, dynamic>> assets
   }
   final keys = byIdx.keys.toList()..sort();
   return [for (final k in keys) byIdx[k]!];
+}
+
+/// 문항 번호 상자(쪽 좌표 [ymin, xmin, ymax, xmax] 0..1000). 추출이 남긴 bbox_1k 가 문항 영역과 다르고
+/// 번호 크기(높이 60, 폭 80 이하)이며 문항 영역 안에 있을 때만 번호로 본다(직접 지정한 영역은 bbox 가 문항 영역과 같다).
+List<int>? problemNumberBox(List<int> bbox1k, List<int> itemRegion1k) {
+  if (bbox1k.length != 4 || itemRegion1k.length != 4) return null;
+  final h = bbox1k[2] - bbox1k[0];
+  final w = bbox1k[3] - bbox1k[1];
+  if (h <= 0 || w <= 0 || h > 60 || w > 80) return null;
+  final cy = (bbox1k[0] + bbox1k[2]) / 2;
+  final cx = (bbox1k[1] + bbox1k[3]) / 2;
+  if (cy < itemRegion1k[0] || cy > itemRegion1k[2] || cx < itemRegion1k[1] || cx > itemRegion1k[3]) return null;
+  return bbox1k;
+}
+
+/// 잘라낸 그림(쪽 영역 [cropRegion1k], [widthPx]×[heightPx]) 안에서 문항 번호 [numberBox1k] 가 걸친 부분(픽셀).
+/// 겹치지 않거나 그림의 1/4 넘게 덮으면(번호가 아니라 그림 자체) null. [pad1k] 는 번호 글자 가장자리 여유.
+({int left, int top, int right, int bottom})? numberOverlapPx(
+  List<int> cropRegion1k,
+  List<int> numberBox1k,
+  int widthPx,
+  int heightPx, {
+  int pad1k = 3,
+}) {
+  if (cropRegion1k.length != 4 || numberBox1k.length != 4 || widthPx <= 0 || heightPx <= 0) return null;
+  final ch = cropRegion1k[2] - cropRegion1k[0];
+  final cw = cropRegion1k[3] - cropRegion1k[1];
+  if (ch <= 0 || cw <= 0) return null;
+  final y0 = (numberBox1k[0] - pad1k).clamp(cropRegion1k[0], cropRegion1k[2]);
+  final x0 = (numberBox1k[1] - pad1k).clamp(cropRegion1k[1], cropRegion1k[3]);
+  final y1 = (numberBox1k[2] + pad1k).clamp(cropRegion1k[0], cropRegion1k[2]);
+  final x1 = (numberBox1k[3] + pad1k).clamp(cropRegion1k[1], cropRegion1k[3]);
+  if (y1 <= y0 || x1 <= x0) return null;
+  if ((y1 - y0) * (x1 - x0) * 4 > ch * cw) return null;
+  return (
+    left: ((x0 - cropRegion1k[1]) * widthPx / cw).floor(),
+    top: ((y0 - cropRegion1k[0]) * heightPx / ch).floor(),
+    right: ((x1 - cropRegion1k[1]) * widthPx / cw).ceil().clamp(0, widthPx),
+    bottom: ((y1 - cropRegion1k[0]) * heightPx / ch).ceil().clamp(0, heightPx),
+  );
+}
+
+/// 그림 PNG 에서 문항 번호가 걸친 자리를 흰색으로 덮는다. 덮을 곳이 없거나 PNG 를 못 읽으면 null.
+Uint8List? whiteOutProblemNumber(Uint8List png, List<int> cropRegion1k, List<int> numberBox1k) {
+  final image = img.decodePng(png);
+  if (image == null) return null;
+  final r = numberOverlapPx(cropRegion1k, numberBox1k, image.width, image.height);
+  if (r == null) return null;
+  img.fillRect(image, x1: r.left, y1: r.top, x2: r.right - 1, y2: r.bottom - 1, color: img.ColorRgb8(255, 255, 255));
+  return Uint8List.fromList(img.encodePng(image));
 }
 
 /// 원본 이미지(쪽 영역 [region1k] 를 찍은 것) 안의 상자 [box]([ymin, xmin, ymax, xmax] 0..1000)를 쪽 좌표로 바꾼다.
@@ -391,26 +493,45 @@ double solutionFigureWidthEm(List<int> pageRegion1k) {
     buf.write('정답  $answer');
   }
 
+  final groups = <Map<String, dynamic>>[];
   var sol = solution;
   if (sol.isNotEmpty) {
     final figures = solutionKind == 'ai' ? const <Map<String, dynamic>>[] : solutionFigures;
-    var used = 0;
-    sol = sol.replaceAllMapped(kSolutionFigureMarkerRe, (_) {
-      if (used >= figures.length) return '';
-      used++;
-      return '[문단][그림][문단]';
-    });
-    for (var i = used; i < figures.length; i++) {
-      sol = '$sol[문단][그림]';
-    }
-    for (final f in figures) {
+    final arranged = arrangeSolutionFigureMarkers(sol, figures);
+    sol = arranged.text;
+    final firstIdx = assets.length + 1;
+    for (var k = 0; k < figures.length; k++) {
+      final f = figures[k];
       final w = (f['width_em'] as num?)?.toDouble() ?? 10;
-      final right = f['placement'] == 'right';
-      addFigure({
-        'bucket': '${f['bucket'] ?? ''}',
-        'path': '${f['path'] ?? ''}',
-        'mime_type': '${f['mime_type'] ?? 'image/png'}',
-      }, w, right ? 'right' : 'center', position: right ? 'inline-right' : 'below-stem');
+      final placement = '${f['placement'] ?? ''}';
+      final align = '${f['align'] ?? ''}';
+      addFigure(
+        {
+          'bucket': '${f['bucket'] ?? ''}',
+          'path': '${f['path'] ?? ''}',
+          'mime_type': '${f['mime_type'] ?? 'image/png'}',
+        },
+        w,
+        placement == 'right'
+            ? 'right'
+            : placement == 'left'
+                ? 'left'
+                : (align == 'left' || align == 'right' ? align : 'center'),
+        position: placement == 'right'
+            ? 'inline-right'
+            : placement == 'left'
+                ? 'inline-left'
+                : 'below-stem',
+      );
+      final caption = arranged.captions[k];
+      if (caption != null) layoutItems.last['caption'] = caption;
+    }
+    for (final row in solutionFigureRows(figures)) {
+      groups.add({
+        'type': 'horizontal',
+        'members': [for (final k in row) 'idx:${firstIdx + k}'],
+        'gap': 1.0,
+      });
     }
     if (buf.isNotEmpty) buf.write('[문단]');
     buf.write(solutionKind == 'ai' ? '[AI 풀이]' : '[해설]');
@@ -423,9 +544,140 @@ double solutionFigureWidthEm(List<int> pageRegion1k) {
         ? const <String, dynamic>{}
         : {
             'figure_assets': assets,
-            'figure_layout': {'version': 1, 'items': layoutItems, 'groups': const []},
+            'figure_layout': {'version': 1, 'items': layoutItems, 'groups': groups},
           },
   );
+}
+
+/// 해설 전사본의 그림 표시를 V2 카드 문단으로 바꾼다. 표시가 그림보다 많으면 남는 표시는 지우고, 모자라면 남은 그림을 끝에 붙인다.
+/// 엔진은 옆 그림(right·left)을 앞 글과 나란히 놓으므로, 옆 그림 표시 앞에 글이 없으면 표시를 뒤 글 끝으로 옮긴다
+/// (표시 바로 뒤 같은 줄에 글이 있으면 그 줄 끝, 없으면 다음 표시 앞까지).
+/// 가로 묶음 그림([solutionFigureRows]) 표시 바로 뒤 같은 줄 글은 그림 밑 설명([captions], 그림 순번 → 글)으로 떼어 낸다.
+({String text, Map<int, String> captions}) arrangeSolutionFigureMarkers(
+  String solution,
+  List<Map<String, dynamic>> figures,
+) {
+  final matches = kSolutionFigureMarkerRe.allMatches(solution).take(figures.length).toList();
+  final texts = <String>[];
+  var last = 0;
+  for (final m in matches) {
+    texts.add(solution.substring(last, m.start));
+    last = m.end;
+  }
+  texts.add(solution.substring(last).replaceAll(kSolutionFigureMarkerRe, ''));
+  String sameLine(String s) {
+    final nl = s.indexOf('\n');
+    return nl < 0 ? s : s.substring(0, nl);
+  }
+
+  bool blank(String s) => s.replaceAll('[문단]', '').trim().isEmpty;
+  final inRow = {for (final row in solutionFigureRows(figures)) ...row};
+  final captions = <int, String>{};
+  for (var k = 0; k < matches.length; k++) {
+    final next = texts[k + 1];
+    if (inRow.contains(k)) {
+      final line = sameLine(next);
+      if (line.trim().isNotEmpty) {
+        captions[k] = line.trim();
+        texts[k + 1] = next.substring(line.length);
+      }
+      continue;
+    }
+    final placement = figures[k]['placement'];
+    if ((placement == 'right' || placement == 'left') && blank(texts[k]) && !blank(next)) {
+      final line = sameLine(next);
+      final move = line.trim().isNotEmpty ? line : next;
+      texts[k] = '${texts[k]}$move';
+      texts[k + 1] = next.substring(move.length);
+    }
+  }
+  final out = StringBuffer(texts.first);
+  for (var k = 0; k < matches.length; k++) {
+    out
+      ..write('[문단][그림][문단]')
+      ..write(texts[k + 1]);
+  }
+  for (var k = matches.length; k < figures.length; k++) {
+    out.write('[문단][그림]');
+  }
+  return (text: out.toString(), captions: captions);
+}
+
+/// 원본에서 한 줄에 나란히 있던 아래 그림 묶음(그림 순번 목록). 같은 row 값이 이어지는 그림 둘 이상.
+List<List<int>> solutionFigureRows(List<Map<String, dynamic>> figures) {
+  final rows = <List<int>>[];
+  for (var k = 0; k < figures.length; k++) {
+    final row = figures[k]['row'];
+    if (row is! num || figures[k]['placement'] == 'right' || figures[k]['placement'] == 'left') continue;
+    final prev = k > 0 ? figures[k - 1]['row'] : null;
+    if (rows.isNotEmpty && prev is num && prev == row && rows.last.last == k - 1) {
+      rows.last.add(k);
+    } else {
+      rows.add([k]);
+    }
+  }
+  return [for (final r in rows) if (r.length >= 2) r];
+}
+
+/// 해설 영역(가로 [regionLeft]~[regionRight]) 안에서 그림(가로 [figLeft]~[figRight])의 정렬.
+/// 그림 양옆 여백 중 왼쪽 여백의 몫으로 정한다: 1/4 미만이면 왼쪽, 3/4 초과면 오른쪽, 그 사이는 가운데.
+/// 해설 영역은 단 폭 전체로 잡혀 실제 글 폭보다 넓을 때가 많아, 양옆 여백 차이만으로 보면 가운데 그림이
+/// 왼쪽으로 판정된다(영역 495~995, 그림 639~800 → 여백 144:195). 붙어 있는 쪽이 분명할 때만 왼쪽·오른쪽이다.
+String solutionFigureAlign(int regionLeft, int regionRight, int figLeft, int figRight) {
+  final dl = (figLeft - regionLeft).clamp(0, 1000);
+  final dr = (regionRight - figRight).clamp(0, 1000);
+  if (dl + dr <= 0) return 'center';
+  final t = dl / (dl + dr);
+  return t < 0.25
+      ? 'left'
+      : t > 0.75
+          ? 'right'
+          : 'center';
+}
+
+/// 해설 그림의 원본 자리에서 정렬(align: left·center·right)과 가로 묶음(row)을 계산한다(AI 없음).
+/// 아래 그림이 해설 영역 안에서 한쪽으로 치우쳐 있으면 그쪽 정렬이다. 같은 쪽에서 세로 범위가 반 이상 겹치는
+/// 이웃 아래 그림은 같은 row 번호를 받는다. 자리를 모르는 그림은 그대로 둔다.
+List<Map<String, dynamic>> arrangeSolutionFigures(
+  List<Map<String, dynamic>> assets,
+  List<TextbookSolutionSegment> segments,
+) {
+  List<int>? box(Object? v) {
+    if (v is! List || v.length != 4 || v.any((x) => x is! num)) return null;
+    return [for (final x in v) (x as num).toInt()];
+  }
+
+  final out = [
+    for (final a in assets) {...a}..remove('align')..remove('row'),
+  ];
+  for (final a in out) {
+    if (a['placement'] == 'right' || a['placement'] == 'left') continue;
+    final r = box(a['crop_region_1k']);
+    final page = (a['raw_page'] as num?)?.toInt();
+    if (r == null || page == null) continue;
+    final seg = segments.where((s) => s.rawPage == page && s.region1k.length == 4).firstOrNull;
+    if (seg == null) continue;
+    final width = seg.region1k[3] - seg.region1k[1];
+    if (width <= 0) continue;
+    a['align'] = solutionFigureAlign(seg.region1k[1], seg.region1k[3], r[1], r[3]);
+  }
+  var row = 0;
+  for (var k = 1; k < out.length; k++) {
+    final a = out[k - 1];
+    final b = out[k];
+    final ra = box(a['crop_region_1k']);
+    final rb = box(b['crop_region_1k']);
+    if (ra == null || rb == null || a['raw_page'] != b['raw_page']) continue;
+    if (a.containsKey('placement') && a['placement'] != 'below' || b.containsKey('placement') && b['placement'] != 'below') {
+      continue;
+    }
+    final overlap = (ra[2] < rb[2] ? ra[2] : rb[2]) - (ra[0] > rb[0] ? ra[0] : rb[0]);
+    final minH = (ra[2] - ra[0]) < (rb[2] - rb[0]) ? ra[2] - ra[0] : rb[2] - rb[0];
+    if (minH <= 0 || overlap < minH * 0.5) continue;
+    if (a['row'] is! num) a['row'] = ++row;
+    b['row'] = a['row'];
+  }
+  return out;
 }
 
 /// figure_layout 항목 목록(assetKey 별 widthEm·position·anchor·offset). 없으면 빈 목록.
@@ -489,12 +741,18 @@ Map<String, dynamic> scaleFigureLayout(
       if (keys == null || keys.contains(it['assetKey']))
         {
           ...it,
-          'widthEm': ((((it['widthEm'] as num?)?.toDouble() ?? 20) * factor).clamp(4.0, 40.0) * 2).round() / 2,
+          'widthEm': _scaledFigureWidthEm((it['widthEm'] as num?)?.toDouble() ?? 20, factor),
         }
       else
         it,
   ];
   return {...layout, 'version': layout['version'] ?? 1, 'items': items, 'groups': layout['groups'] ?? const []};
+}
+
+/// 키울 때는 한 단 폭([kCardColumnWidthEm])을 넘기지 않는다(이미 더 넓은 그림은 그대로). 줄일 때는 4em 까지.
+double _scaledFigureWidthEm(double w, double factor) {
+  final upper = factor > 1 ? (w > kCardColumnWidthEm ? w : kCardColumnWidthEm) : 40.0;
+  return ((w * factor).clamp(4.0, upper) * 2).round() / 2;
 }
 
 /// 그림 번호(figure_index)들을 뺀 그림 자산 목록과 배치. 같은 번호의 옛 크롭까지 모두 뺀다.
@@ -531,13 +789,14 @@ Map<String, dynamic> scaleFigureLayout(
   );
 }
 
-/// 렌더 검수에서 그림 크기 비율(V2 ÷ 원본)이 이 범위 밖이면 크기를 다시 맞춘다(Edge FIGURE_SIZE_RATIO_* 와 같다).
-const double kFigureSizeRatioMin = 0.9;
-const double kFigureSizeRatioMax = 1.1;
+/// 렌더 검수에서 그림 크기 비율(V2 ÷ 원본)이 ±30% 밖이면 준비됨을 막고 크기를 다시 맞춘다
+/// (사양 5-4, Edge FIGURE_SIZE_RATIO_* 와 같다).
+/// 그림 폭 상한(em). 가장 좁은 양식인 과제형 한 단 폭 기준: A4, 좌우 여백 11.34mm, 2단, 11pt → 한 단 약 23.5em 에서 문항 번호 자리를 뺀 값.
+/// 원본에서 두 단 너비를 차지하는 표·그림은 이 폭까지만 키운다.
+const double kCardColumnWidthEm = 22.0;
 
-/// 예전 흐름에서 승인된 문항은 승인 당시 범위(±15%)를 인정한다(Edge LEGACY_FIGURE_SIZE_RATIO_* 와 같다).
-const double kLegacyFigureSizeRatioMin = 0.85;
-const double kLegacyFigureSizeRatioMax = 1.15;
+const double kFigureSizeRatioMin = 0.7;
+const double kFigureSizeRatioMax = 1.3;
 
 /// done/total 을 반올림한 퍼센트. 분모가 0이면 0.
 int percentOf(int done, int total) {
@@ -654,7 +913,12 @@ class TextbookReviewUnitScope {
     required this.qualityApprovedCount,
     this.qualityHeldCount = 0,
     this.bothApprovedCount = 0,
+    this.reviewMode = '',
+    this.protectAnswerKey = false,
   });
+
+  /// 정답만 검수하는 범위(이미 등록해 그림 손질을 마친 내신 시험지)의 [reviewMode] 값
+  static const String answerOnlyMode = 'answer_only';
 
   factory TextbookReviewUnitScope.fromJson(Map<String, dynamic> m) => TextbookReviewUnitScope(
         academyId: '${m['academy_id'] ?? ''}',
@@ -699,6 +963,12 @@ class TextbookReviewUnitScope {
 
   /// 수학·품질이 모두 승인된 문항 수. 교재·중단원 드롭다운 진행률의 분자.
   final int bothApprovedCount;
+
+  /// '' 전체 검수 · [answerOnlyMode] 정답만 검수. 작업 지시에서 온다.
+  final String reviewMode;
+
+  /// 인쇄된 해설이 없는 범위(내신 시험지): AI 답이 정답표와 다르면 정답을 자동으로 바꾸지 않는다.
+  final bool protectAnswerKey;
 
   /// 품질 검수 분모: 엔진 보류를 뺀 문항 수(승인한 것은 완료로 집계).
   int get qualityTargetCount => (problemCount - qualityHeldCount).clamp(0, problemCount);
@@ -780,6 +1050,7 @@ class TextbookProblemReviewItem {
     this.setHeaderRegion1k = const [],
     this.pbFigureAssets = const [],
     this.pbFigureLayout = const {},
+    this.pbCommonFigureLayout = const {},
     this.answerRawPage,
     this.answerBbox1k = const [],
     this.answerImageBucket = '',
@@ -789,11 +1060,14 @@ class TextbookProblemReviewItem {
     this.solutionExtractedAt,
     this.solutionContinuations = const [],
     this.stagedChanges = const {},
+    this.sourceCorrection,
     this.dbValues = const {},
     this.conceptProposals = const [],
     this.metaCheckedAt,
     this.metaSources = const {},
     this.consistencyIssues = const [],
+    this.reviewMode = '',
+    this.protectAnswerKey = false,
   });
 
   factory TextbookProblemReviewItem.fromJson(Map<String, dynamic> m) {
@@ -860,6 +1134,9 @@ class TextbookProblemReviewItem {
       pbFigureAssets: mapList(m['pb_figure_assets']),
       pbFigureLayout:
           m['pb_figure_layout'] is Map ? Map<String, dynamic>.from(m['pb_figure_layout'] as Map) : const <String, dynamic>{},
+      pbCommonFigureLayout: m['pb_common_figure_layout'] is Map
+          ? Map<String, dynamic>.from(m['pb_common_figure_layout'] as Map)
+          : const <String, dynamic>{},
       answerRawPage: (m['answer_raw_page'] as num?)?.toInt(),
       answerBbox1k: ints(m['answer_bbox_1k']),
       answerImageBucket: '${m['answer_image_bucket'] ?? ''}'.trim(),
@@ -916,6 +1193,10 @@ class TextbookProblemReviewItem {
       metaSources:
           m['meta_sources'] is Map ? Map<String, dynamic>.from(m['meta_sources'] as Map) : const <String, dynamic>{},
       consistencyIssues: mapList(m['consistency_issues']),
+      sourceCorrection:
+          m['source_correction'] is Map ? Map<String, dynamic>.from(m['source_correction'] as Map) : null,
+      reviewMode: '${m['review_mode'] ?? ''}'.trim(),
+      protectAnswerKey: m['protect_answer_key'] == true,
     );
   }
 
@@ -992,6 +1273,9 @@ class TextbookProblemReviewItem {
   /// 소단원 확정 때 반영할 값(textbook_problem_analyses.staged_changes). 본문·정답 등 위 필드는 이미 이 값을 겹친 모습이다.
   final Map<String, dynamic> stagedChanges;
 
+  /// 사장님이 "원본 오류 교정"으로 표시한 문항의 교정 전 본문·선지 {stem, choices, marked_at}. 표시하지 않았으면 null.
+  final Map<String, dynamic>? sourceCorrection;
+
   /// 반영 대기 값을 겹치기 전 문제은행·정답 원래 값(overview db_values)
   final Map<String, dynamic> dbValues;
 
@@ -1008,12 +1292,22 @@ class TextbookProblemReviewItem {
   /// 일반 지적(findings)과 따로 온다. 고치거나 "문제 없음"으로 닫기 전에는 준비됨이 아니다.
   final List<Map<String, dynamic>> consistencyIssues;
 
+  /// 이 문항이 속한 검수 범위의 방식([TextbookReviewUnitScope.reviewMode])
+  final String reviewMode;
+
+  /// 정답표를 지키는 범위(내신 시험지)의 문항인가. AI 답이 달라도 정답을 자동으로 바꾸지 않는다.
+  final bool protectAnswerKey;
+
+  /// 정답만 검수하는 문항(이미 등록한 내신 시험지). 문항 검수(본문·그림 대조)와 V2 렌더 판정은 준비됨을 막지 않는다.
+  bool get answerOnlyReview => reviewMode == TextbookReviewUnitScope.answerOnlyMode;
+
   static const Map<String, String> stagedFieldNames = {
     'stem': '개별 발문',
     'common_stem': '공통 발문',
     'choices': '선지',
     'figure_layout': '그림 크기·배치',
     'figure_assets': '원본 크롭 그림',
+    'common_figure_layout': '세트 공통 그림 크기·배치',
     'answer': '정답',
     'solution_transcribed': '해설',
     'solution_answer': '해설 정답',
@@ -1043,6 +1337,7 @@ class TextbookProblemReviewItem {
       if (s.containsKey('common_stem')) 'common_stem': commonStem,
       if (s.containsKey('figure_assets')) 'figure_assets': pbFigureAssets,
       if (s.containsKey('figure_layout')) 'figure_layout': pbFigureLayout,
+      if (s.containsKey('common_figure_layout')) 'common_figure_layout': pbCommonFigureLayout,
       if (s.containsKey('question_kind')) ...{
         'question_type': questionType,
         'allow_objective': pbAllowObjective,
@@ -1148,6 +1443,22 @@ class TextbookProblemReviewItem {
   final List<Map<String, dynamic>> pbFigureAssets;
   final Map<String, dynamic> pbFigureLayout;
 
+  /// 세트 공통 그림 배치(meta.set_model.common_figure_layout). 세트 문항 카드의 공통 그림은 이 값으로 그려진다.
+  final Map<String, dynamic> pbCommonFigureLayout;
+
+  /// 카드의 그림이 세트 공통 그림인가(공통 발문에만 그림 자리가 있다). 그림 크기는 [pbCommonFigureLayout] 로 고친다.
+  bool get usesCommonFigure =>
+      isSetQuestion &&
+      figureLayoutItems(pbCommonFigureLayout).isNotEmpty &&
+      figureMarkerCount(commonStem) > 0 &&
+      figureMarkerCount(stem) == 0;
+
+  /// 카드에 그려지는 그림의 배치(공통 그림이면 세트 공통 배치)
+  Map<String, dynamic> get renderedFigureLayout => usesCommonFigure ? pbCommonFigureLayout : pbFigureLayout;
+
+  /// 같은 세트 문항끼리 같은 값(세트 머리 위치). 세트가 아니면 빈 값.
+  String get setGroupKey => canRenderSetHeader ? '$subKey|$setHeaderRawPage|${setHeaderRegion1k.join(',')}' : '';
+
   /// 답지 PDF 안의 정답 영역(해설 좌표가 따로 없는 문항이나 표·이미지 정답 대조용)
   final int? answerRawPage;
   final List<int> answerBbox1k;
@@ -1183,7 +1494,7 @@ class TextbookProblemReviewItem {
   /// 정답+해설 카드 캐시 키 원문(글자·그림 정답·해설 그림이 바뀌면 달라진다)
   String get answerSolutionCardSource => '$displayAnswer\n$primarySolutionText\n'
       '${hasAnswerImage ? answerImagePath : ''}\n'
-      '${solutionFigureAssets.map((a) => '${a['path']}:${a['width_em']}:${a['placement'] ?? ''}').join(',')}';
+      '${solutionFigureAssets.map((a) => '${a['path']}:${a['width_em']}:${a['placement'] ?? ''}:${a['align'] ?? ''}:${a['row'] ?? ''}').join(',')}';
 
   /// 원본 해설에 그림이 있을 수 있는데(그림을 가리키는 문장·[그림] 표시, 또는 렌더 검수가 해설 그림 누락으로 판정)
   /// 아직 해설 PDF 에서 그림을 찾지 않은 문항
@@ -1301,10 +1612,31 @@ class TextbookProblemReviewItem {
 
   /// 아직 적용하지 않은 그림 제안(배치가 지금과 다르거나 잘라 등록할 그림이 있음, 또는 그림 문항에서 원본 대조 배치를 아직 DB 에 반영하지 않음)
   bool get hasPendingFigureProposal {
-    if (fixProposal['applied_at'] != null) return false;
     final layout = proposedFigureLayout;
-    final layoutDiffers = layout != null && figureLayoutSignature(layout) != figureLayoutSignature(pbFigureLayout);
-    return layoutDiffers || proposedFigureCrops.isNotEmpty;
+    final layoutDiffers = layout != null && figureLayoutSignature(layout) != figureLayoutSignature(renderedFigureLayout);
+    if (fixProposal['applied_at'] == null) return layoutDiffers || proposedFigureCrops.isNotEmpty;
+    // applied_at 은 정답처럼 다른 항목만 반영 대기에 들어가도 찍힌다. 수정안이 나온 뒤 그림 배치가 한 번도
+    // 반영 대기에 들어가지 않았으면(크기 재조정은 제외) 배치 제안은 아직 남아 있다. 그림 다시 자르기는 되풀이하지 않는다.
+    return layoutDiffers && !figureProposalStaged && !stagedByOwner('figure_layout') && !stagedByOwner('common_figure_layout');
+  }
+
+  /// 지금 수정안(fix_pass_at)이 나온 뒤 그림 배치·그림 자산이 반영 대기에 들어간 적이 있는가(그림 크기 재조정은 세지 않는다).
+  /// 수정 단계가 만든 제안이 아니면(fix_pass_at 없음) 예전대로 applied_at 만 본다.
+  bool get figureProposalStaged {
+    final passAt = DateTime.tryParse('${fixProposal['fix_pass_at'] ?? ''}');
+    if (passAt == null) return fixProposal['applied_at'] != null;
+    var stagedAfterPass = false;
+    for (final n in (stagedChanges['notes'] is List ? stagedChanges['notes'] as List : const [])) {
+      if (n is! Map) continue;
+      final at = DateTime.tryParse('${n['at'] ?? ''}');
+      if (at == null || at.isBefore(passAt)) continue;
+      stagedAfterPass = true;
+      if (n['note'] == kFigureResizeNote) continue;
+      final fields = n['fields'] is List ? n['fields'] as List : const [];
+      if (fields.any((f) => f == 'figure_layout' || f == 'common_figure_layout' || f == 'figure_assets')) return true;
+    }
+    // 반영 대기 메모가 없으면(이미 확정해 비워졌거나 예전 방식으로 반영) 반영된 것으로 본다. 확정한 배치를 옛 제안으로 덮지 않는다.
+    return !stagedAfterPass;
   }
 
   /// 원본과 직접 대조한 V2 렌더 검수를 했는가
@@ -1322,7 +1654,13 @@ class TextbookProblemReviewItem {
 
   /// V2 그림 크기 ÷ 원본 그림 크기(글자 대비). 원본 대조에서 잰 값.
   double? get figureSizeRatio => (renderChecks['figure_size_ratio'] as num?)?.toDouble();
-  bool get figureNeedsResize => _figureRatioOutOfRange(figureSizeRatio);
+  bool get figureNeedsResize =>
+      _figureRatioOutOfRange(figureSizeRatio) && !(figureAtCardWidth && figureSizeRatio! < kFigureSizeRatioMin);
+
+  /// 카드에 그려진 그림 중 한 단 폭을 꽉 채운 것이 있는가. 이런 그림은 더 키울 수 없어 "원본보다 작다"는 크기 판정으로 막지 않는다
+  /// (2026-11-17 사장님 결정).
+  bool get figureAtCardWidth => figureLayoutItems(renderedFigureLayout)
+      .any((x) => ((x['widthEm'] as num?)?.toDouble() ?? 0) >= kCardColumnWidthEm - 0.01);
 
   /// 해설 그림 크기 ÷ 원본 해설 그림 크기(글자 대비)
   double? get solutionFigureSizeRatio => (renderChecks['solution_figure_size_ratio'] as num?)?.toDouble();
@@ -1330,9 +1668,7 @@ class TextbookProblemReviewItem {
 
   bool _figureRatioOutOfRange(double? r) {
     if (r == null || r <= 0) return false;
-    final approved = qualityStatus == 'approved';
-    return r < (approved ? kLegacyFigureSizeRatioMin : kFigureSizeRatioMin) ||
-        r > (approved ? kLegacyFigureSizeRatioMax : kFigureSizeRatioMax);
+    return r < kFigureSizeRatioMin || r > kFigureSizeRatioMax;
   }
 
   String get previewLookupKey => questionUid.isNotEmpty ? questionUid : pbQuestionId;
@@ -1498,6 +1834,16 @@ class TextbookProblemReviewItem {
     return null;
   }
 
+  /// AI 검수가 정답 수정안으로 반영 대기에 넣을 값. null 이면 넣지 않고 오류로 남겨 사람이 고른다.
+  /// - 운영자가 원본에서 직접 지정한 정답은 AI 제안으로 바꾸지 않는다.
+  /// - 정답표를 지키는 문항(인쇄된 해설이 없는 내신 시험지)은 AI 답이 정답표와 같을 때만 정답표 답 그대로 통과시킨다.
+  ///   AI 답이 다르거나 AI 가 풀지 못했으면 넣지 않는다.
+  String? stageableAnswer(String answer) {
+    if (protectAnswerKey) return existingConfirmedByAi ? existingAnswer.trim() : null;
+    final differs = answer != existingAnswer.trim();
+    return (answerManual || stagedByOwner('answer')) && differs ? null : answer;
+  }
+
   /// 수학 일괄의 두 규칙(해설·AI 일치 답 채택, 채점 정답 = AI 답 유지)으로 끝나지 않는 수학 오류.
   /// 본문을 고치기 전에 푼 AI 답(판단불가 등)일 수 있어 지금 본문·교재 원본으로 다시 푼다.
   bool get needsMathResolve => mathStatus == 'issue' && !solutionAndAiAgreeAgainstExisting && !existingConfirmedByAi;
@@ -1519,8 +1865,8 @@ class TextbookProblemReviewItem {
         if (existingAnswer.trim().isEmpty) '채점 정답 없음',
         if (!hasSolutionRef && !solutionMarkedNone) '해설 위치 없음',
         if (!mathOk) '정답 검수 미통과',
-        if (!isEngineHeld && !qualityOk) '문항 검수 미통과',
-        if (!isEngineHeld && renderBlocksReady) 'V2 렌더 이상',
+        if (!answerOnlyReview && !isEngineHeld && !qualityOk) '문항 검수 미통과',
+        if (!answerOnlyReview && !isEngineHeld && renderBlocksReady) 'V2 렌더 이상',
         if (openSolutionLogicFinding != null) '해설 논리 오류',
         if (openCorrectionNotes.isNotEmpty) '교정 의견 처리 필요',
         if (consistencyIssues.isNotEmpty)
@@ -1536,6 +1882,13 @@ class TextbookProblemReviewItem {
       ];
 
   /// 원본 해설의 풀이 논리 오류(정답은 맞아도 준비됨이 아니다)
+  /// 해설 논리 오류 지적에 AI 가 단 교정본(틀린 곳만 고친 해설 전문). 없으면 빈 문자열.
+  String get solutionLogicFix {
+    final p = openSolutionLogicFinding?['proposal'];
+    final after = p is Map && p['target'] == 'solution_fix' ? p['after'] : null;
+    return after is Map ? '${after['solution_transcribed'] ?? ''}'.trim() : '';
+  }
+
   Map<String, dynamic>? get openSolutionLogicFinding {
     for (final f in findings) {
       if (f['error_type'] == 'solution_logic' && !(f['proposal'] is Map && (f['proposal'] as Map)['target'] == 'correction_note')) {
@@ -1616,7 +1969,7 @@ class TextbookProblemReviewItem {
       renderChecks['solution_figures_ok'] == false ||
       figureNeedsResize;
 
-  /// 준비됨을 막는 V2 렌더 이상(그림 크기 ±10% 와 해설 그림 포함)
+  /// 준비됨을 막는 V2 렌더 이상(그림 크기 ±30% 와 해설 그림 포함)
   bool get renderBlocksReady => renderHasIssue;
 
   /// 원본과 직접 대조한 V2 렌더 검수가 통과해 2단계(문항 카드) 판정을 덮어쓴 상태
@@ -1928,7 +2281,14 @@ class TextbookProblemReviewService {
     ];
     await _mergeFigureColumns(rows);
     await _mergeSolutionContinuations(scope, rows);
-    return [for (final r in rows) TextbookProblemReviewItem.fromJson(r)];
+    return [
+      for (final r in rows)
+        TextbookProblemReviewItem.fromJson({
+          ...r,
+          'review_mode': scope.reviewMode,
+          'protect_answer_key': scope.protectAnswerKey,
+        }),
+    ];
   }
 
   /// 단 맨 아래에서 끊긴 풀이에 다음 단 맨 위의 이어진 부분을 붙인다. 못 읽으면 붙이지 않는다.
@@ -2411,6 +2771,19 @@ class TextbookProblemReviewService {
         targetWidthPx: targetWidthPx,
       );
 
+  /// 추출이 남긴 문항 번호 상자(쪽 좌표). 없거나 읽지 못하면 null(그림은 그대로 올린다).
+  Future<List<int>?> _problemNumberBox(String cropId) async {
+    if (cropId.isEmpty) return null;
+    try {
+      final row = await _db.from('textbook_problem_crops').select('bbox_1k,item_region_1k').eq('id', cropId).maybeSingle();
+      if (row == null) return null;
+      List<int> ints(dynamic v) => [for (final x in (v is List ? v : const [])) if (x is num) x.toInt()];
+      return problemNumberBox(ints(row['bbox_1k']), ints(row['item_region_1k']));
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// 수정 단계가 고른 그림 영역을 본문 PDF 에서 잘라 문제은행 그림 자산으로 올린다.
   /// 반환: 새 자산 목록(figure_index 는 제안대로). 그림 하나라도 못 자르면 예외.
   Future<List<Map<String, dynamic>>> cropAndUploadFigures({
@@ -2442,6 +2815,8 @@ class TextbookProblemReviewService {
             ? measuredHeader
             : (await setHeaderImage(scope, item))?.region1k ?? const <int>[];
     final headerPage = (measure['set_header_raw_page'] as num?)?.toInt() ?? item.setHeaderRawPage;
+    // 문항 번호가 그림 영역에 걸치면 번호 자리만 흰색으로 덮는다(AI 가 잰 영역 오차가 번호와 그림 사이 간격보다 클 수 있다).
+    final numberBox = await _problemNumberBox(item.cropId);
     final out = <Map<String, dynamic>>[];
     for (final c in crops) {
       final idx = (c['figure_index'] as num?)?.toInt() ?? 0;
@@ -2468,11 +2843,14 @@ class TextbookProblemReviewService {
         targetWidthPx: 900,
       );
       if (png == null) throw Exception('그림 $idx 을(를) 본문 PDF 에서 잘라내지 못했습니다.');
+      final cleaned = fromHeader || numberBox == null || srcPage != item.rawPage
+          ? null
+          : whiteOutProblemNumber(png.bytes, pageRegion, numberBox);
       final asset = await _pb.uploadManualFigureAsset(
         academyId: scope.academyId,
         documentId: item.documentId,
         questionNumber: item.problemNumber,
-        bytes: png.bytes,
+        bytes: cleaned ?? png.bytes,
         fileName: 'review_figure_$idx.png',
       );
       out.add({
@@ -2485,6 +2863,7 @@ class TextbookProblemReviewService {
         'height_px': png.heightPx,
         'raw_page': srcPage,
         'crop_region_1k': pageRegion,
+        if (cleaned != null) 'number_masked': true,
         if (fromHeader) 'crop_source': 'set_header',
         'replace_reason': '${c['reason'] ?? ''}',
       });
@@ -2552,19 +2931,36 @@ class TextbookProblemReviewService {
                 final box = [for (final x in (boxes[k] is List ? boxes[k] as List : const [])) if (x is num) x.toInt()];
                 final located = region.locate(box);
                 if (located == null) continue;
-                final pageRegion = cropBoxToPageRegion(located.part.region1k, located.box);
+                var pageRegion = cropBoxToPageRegion(located.part.region1k, located.box);
                 if (pageRegion == null) continue;
-                final png = await _solutionImages.renderRegion(
-                  academyId: scope.academyId,
-                  bookId: scope.bookId,
-                  gradeLabel: scope.gradeLabel,
-                  sourceKind: it.solutionSourceKind,
-                  rawPage: located.part.rawPage,
-                  region1k: pageRegion,
-                  pad1k: 0,
-                  targetWidthPx: 900,
-                );
+                Future<TextbookReviewRenderedRegion?> shoot(List<int> region) => _solutionImages.renderRegion(
+                      academyId: scope.academyId,
+                      bookId: scope.bookId,
+                      gradeLabel: scope.gradeLabel,
+                      sourceKind: it.solutionSourceKind,
+                      rawPage: located.part.rawPage,
+                      region1k: region,
+                      pad1k: 0,
+                      targetWidthPx: 900,
+                    );
+                var png = await shoot(pageRegion);
                 if (png == null) throw Exception('그림 ${k + 1} 을(를) 해설 PDF 에서 잘라내지 못했습니다');
+                // 그림 영역이 그림보다 길어 옆 풀이 글 조각이 같이 잘렸으면 그 줄을 빼고 다시 찍는다.
+                final keep = await solutionFigureKeepRowsOfPng(png.bytes);
+                if (keep != null) {
+                  final span = pageRegion[2] - pageRegion[0];
+                  final trimmed = [
+                    pageRegion[0] + (span * keep.top / keep.height).floor(),
+                    pageRegion[1],
+                    pageRegion[0] + (span * keep.bottom / keep.height).ceil(),
+                    pageRegion[3],
+                  ];
+                  final again = trimmed[2] > trimmed[0] ? await shoot(trimmed) : null;
+                  if (again != null) {
+                    pageRegion = trimmed;
+                    png = again;
+                  }
+                }
                 final asset = await _pb.uploadManualFigureAsset(
                   academyId: scope.academyId,
                   documentId: it.documentId,
@@ -2588,7 +2984,7 @@ class TextbookProblemReviewService {
               }
               await _db.rpc('textbook_review_set_solution_figures', params: {
                 'p_crop_id': it.cropId,
-                'p_assets': assets,
+                'p_assets': arrangeSolutionFigures(assets, it.solutionSegments),
               });
               if (assets.isNotEmpty) withFigures.add(it.cropId);
             } catch (e) {
@@ -2845,23 +3241,44 @@ class TextbookProblemReviewService {
   /// 원본 대조에서 잰 비율이 허용 범위를 벗어난 문항의 그림 폭을 그 비율만큼 되돌린다. 바뀐 문항 crop_id 를 돌려준다.
   Future<List<String>> resizeFiguresFromMeasuredRatio(List<TextbookProblemReviewItem> items) async {
     final out = <String>[];
+    final doneSets = <String>{};
     for (final it in items) {
       if (it.isEngineHeld || !it.figureNeedsResize) continue;
-      final scaled = scaleFigureLayout(
-        it.pbFigureLayout,
-        1 / it.figureSizeRatio!,
-        fallbackAssets: it.pbFigureAssets,
-        fallbackCount: figureMarkerCount(it.stem),
-      );
-      if (figureLayoutItems(scaled).isEmpty) continue;
-      final changed = await stageChanges(
-        cropId: it.cropId,
-        patch: {'figure_layout': scaled},
-        note: '그림 크기를 원본 글자 비율에 맞춰 재조정',
-      );
-      if (changed.isNotEmpty) out.add(it.cropId);
+      out.addAll(await resizeFigureFromMeasuredRatio(it, doneSets, items));
     }
     return out;
+  }
+
+  /// 잰 비율의 역수만큼 카드에 그려지는 그림 폭을 고쳐 반영 대기에 넣는다. 세트 공통 그림은 세트 공통 배치를 고치고
+  /// 같은 세트 문항에도 같은 값이 들어가므로, 한 번에 세트 하나만 고친다([doneSets] 에 세트를 남긴다).
+  /// 반환: 반영 대기가 바뀐 crop id(공통 그림이면 [all] 에서 같은 세트 문항까지)
+  Future<List<String>> resizeFigureFromMeasuredRatio(
+    TextbookProblemReviewItem it,
+    Set<String> doneSets,
+    List<TextbookProblemReviewItem> all,
+  ) async {
+    if (!it.figureNeedsResize) return const [];
+    final common = it.usesCommonFigure && it.setGroupKey.isNotEmpty;
+    if (common && !doneSets.add(it.setGroupKey)) return const [];
+    final scaled = scaleFigureLayout(
+      it.renderedFigureLayout,
+      1 / it.figureSizeRatio!,
+      fallbackAssets: it.pbFigureAssets,
+      fallbackCount: figureMarkerCount(it.stem),
+    );
+    if (figureLayoutItems(scaled).isEmpty) return const [];
+    final changed = await stageChanges(
+      cropId: it.cropId,
+      patch: {(common ? 'common_figure_layout' : 'figure_layout'): scaled},
+      note: kFigureResizeNote,
+    );
+    if (changed.isEmpty) return const [];
+    if (!common) return [it.cropId];
+    return [
+      it.cropId,
+      for (final x in all)
+        if (x.cropId != it.cropId && x.setGroupKey == it.setGroupKey && x.usesCommonFigure) x.cropId,
+    ];
   }
 
   /// 해설 그림 폭(width_em)을 잰 비율의 역수만큼 고친다. 반환: 고쳤는가
@@ -2875,6 +3292,74 @@ class TextbookProblemReviewService {
           if (a['width_em'] is num) 'width_em': double.parse(((a['width_em'] as num).toDouble() * k).toStringAsFixed(2)),
         },
     ];
+    await _db.rpc('textbook_review_set_solution_figures', params: {
+      'p_crop_id': it.cropId,
+      'p_assets': assets,
+    });
+    return true;
+  }
+
+  /// 해설 그림 하나([index], 0부터)를 해설 PDF 의 같은 쪽 [region1k](위,왼,아래,오 0~1000)로 다시 자른다(AI 없음).
+  Future<void> recropSolutionFigure(
+    TextbookReviewUnitScope scope,
+    TextbookProblemReviewItem it,
+    int index,
+    List<int> region1k,
+  ) async {
+    if (index < 0 || index >= it.solutionFigureAssets.length) throw RangeError.index(index, it.solutionFigureAssets);
+    final old = it.solutionFigureAssets[index];
+    final rawPage = (old['raw_page'] as num?)?.toInt();
+    if (rawPage == null || region1k.length != 4) throw StateError('해설 그림 ${index + 1} 의 쪽을 모릅니다');
+    final png = await _solutionImages.renderRegion(
+      academyId: scope.academyId,
+      bookId: scope.bookId,
+      gradeLabel: scope.gradeLabel,
+      sourceKind: '${old['source_kind'] ?? it.solutionSourceKind}',
+      rawPage: rawPage,
+      region1k: region1k,
+      pad1k: 0,
+      targetWidthPx: 900,
+    );
+    if (png == null) throw StateError('해설 그림 ${index + 1} 을(를) 해설 PDF 에서 잘라내지 못했습니다');
+    final asset = await _pb.uploadManualFigureAsset(
+      academyId: scope.academyId,
+      documentId: it.documentId,
+      questionNumber: it.problemNumber,
+      bytes: png.bytes,
+      fileName: 'solution_figure_${index + 1}.png',
+    );
+    final assets = [
+      for (var k = 0; k < it.solutionFigureAssets.length; k++)
+        k == index
+            ? {
+                ...old,
+                ...asset,
+                'figure_index': old['figure_index'] ?? index + 1,
+                'width_px': png.widthPx,
+                'height_px': png.heightPx,
+                'width_em': solutionFigureWidthEm(region1k),
+                'crop_region_1k': region1k,
+              }
+            : it.solutionFigureAssets[k],
+    ];
+    await _db.rpc('textbook_review_set_solution_figures', params: {
+      'p_crop_id': it.cropId,
+      'p_assets': arrangeSolutionFigures(assets, it.solutionSegments),
+    });
+  }
+
+  /// 해설 그림의 정렬·가로 묶음을 원본 자리에서 다시 계산한다(AI 없음, [arrangeSolutionFigures]).
+  /// [overrides] 는 그림 순번(0부터) → 덮어쓸 값(예: placement). 반환: 바뀌었는가
+  Future<bool> rearrangeSolutionFigures(
+    TextbookProblemReviewItem it, {
+    Map<int, Map<String, dynamic>> overrides = const {},
+  }) async {
+    if (it.solutionFigureAssets.isEmpty) return false;
+    final base = [
+      for (var k = 0; k < it.solutionFigureAssets.length; k++) {...it.solutionFigureAssets[k], ...?overrides[k]},
+    ];
+    final assets = arrangeSolutionFigures(base, it.solutionSegments);
+    if (jsonEncode(assets) == jsonEncode(it.solutionFigureAssets)) return false;
     await _db.rpc('textbook_review_set_solution_figures', params: {
       'p_crop_id': it.cropId,
       'p_assets': assets,
@@ -2967,6 +3452,28 @@ class TextbookProblemReviewService {
     });
   }
 
+  /// 인쇄된 원본이 틀려 본문을 고친 문항을 "원본 오류 교정"으로 표시한다(on=false 면 해제).
+  /// 표시할 때 교정 전 본문·선지를 따로 남기고, 검수는 고친 부분을 사장님 본문과, 나머지를 원본과 대조한다.
+  Future<void> markSourceCorrection({required String cropId, required bool on}) async {
+    await _db.rpc('textbook_review_mark_source_correction', params: {'p_crop_id': cropId, 'p_on': on});
+  }
+
+  /// 해설 오류를 사장님이 처리한다. [correctedSolution] 을 주면 교정본을 반영 대기에 넣고 교정 전 원본 해설을 따로 남긴다
+  /// (확정 때 원본·교정본이 둘 다 저장된다). 주지 않으면 교재 해설 그대로 둔다. 어느 쪽이든 해설 논리 오류 지적은 닫힌다.
+  Future<void> closeSolutionLogic({required String cropId, String? correctedSolution}) async {
+    final fixed = (correctedSolution ?? '').trim();
+    if (fixed.isNotEmpty) {
+      await _db.rpc('textbook_review_keep_solution_original', params: {'p_crop_id': cropId});
+    }
+    await stageChanges(
+      cropId: cropId,
+      patch: {if (fixed.isNotEmpty) 'solution_transcribed': fixed},
+      source: 'owner',
+      note: fixed.isNotEmpty ? '해설 오류 교정' : '해설 그대로 둠',
+      mathStatus: 'clean',
+    );
+  }
+
   /// 본문·선지·공통 발문·그림 배치 수정을 반영 대기 값으로 쌓는다. 원본에서 다시 잘라야 할 그림은 먼저 잘라 올리고
   /// 같은 번호의 그림 자산을 바꿔 끼운다(올린 그림 파일 말고는 문제은행에 쓰지 않는다). 반환: 바뀐 반영 대기 항목 키
   Future<List<String>> stageProblemFix({
@@ -2994,18 +3501,95 @@ class TextbookProblemReviewService {
         ];
       }
     }
+    // 표·보기 상자를 통째로 한 장으로 자른 뒤 그 안에 들어 있던 낱개 그림이 남으면, 자리가 없어 카드 아래에 한 번 더 찍힌다.
+    if (source == 'ai') {
+      final slots = figureMarkerCount(stem ?? item.stem) +
+          figureMarkerCount(commonStem ?? item.commonStem) +
+          figureMarkerCount(
+            choices != null ? [for (final c in choices) '${c['text'] ?? ''}'].join('\n') : item.choices.join('\n'),
+          );
+      final pruned = pruneContainedFigureAssets(assets ?? item.pbFigureAssets, slots);
+      if (pruned.length != (assets ?? item.pbFigureAssets).length) {
+        assets = pruned;
+        final keep = {for (final a in pruned) 'idx:${a['figure_index']}'};
+        final base = figureLayout ?? item.pbFigureLayout;
+        figureLayout = {
+          ...base,
+          'items': [for (final x in figureLayoutItems(base)) if (keep.contains('${x['assetKey']}')) x],
+        };
+      }
+    }
+    final toCommon = item.usesCommonFigure &&
+        figureMarkerCount(stem ?? item.stem) == 0 &&
+        figureMarkerCount(commonStem ?? item.commonStem) > 0;
     return stageChanges(
       cropId: item.cropId,
       patch: {
         if (stem != null) 'stem': stem,
         if (choices != null) 'choices': choices,
         if (commonStem != null) 'common_stem': commonStem,
-        if (figureLayout != null) 'figure_layout': figureLayout,
+        if (figureLayout != null) (toCommon ? 'common_figure_layout' : 'figure_layout'): figureLayout,
         if (assets != null) 'figure_assets': assets,
       },
       source: source,
       note: note,
       qualityStatus: qualityStatus,
+    );
+  }
+
+  /// 사장님이 직접 올린 그림 파일을 [figureIndex] 번 그림으로 반영 대기에 넣는다(자동 자르기가 틀렸을 때).
+  /// 같은 번호의 기존 그림을 바꾸고, 배치 항목이 없으면 기본 배치를, 본문에 그림 자리가 모자라면 [그림] 을 더한다.
+  /// 출처가 사장님이라 AI 재실행이 이 그림을 다시 자르거나 바꾸지 않는다. 반환: 바뀐 반영 대기 항목 키
+  Future<List<String>> stageManualFigure({
+    required TextbookReviewUnitScope scope,
+    required TextbookProblemReviewItem item,
+    required int figureIndex,
+    required Uint8List bytes,
+    required String fileName,
+  }) async {
+    if (figureIndex <= 0) throw ArgumentError.value(figureIndex, 'figureIndex');
+    final asset = await _pb.uploadManualFigureAsset(
+      academyId: scope.academyId,
+      documentId: item.documentId,
+      questionNumber: item.problemNumber,
+      bytes: bytes,
+      fileName: fileName,
+    );
+    final assets = [
+      for (final a in item.pbFigureAssets)
+        if ('${a['figure_index']}' != '$figureIndex') a,
+      {...asset, 'figure_index': figureIndex},
+    ];
+    final key = 'idx:$figureIndex';
+    final layoutItems = figureLayoutItems(item.pbFigureLayout);
+    final hasItem = layoutItems.any((x) => '${x['assetKey']}' == key);
+    final markers = figureMarkerCount(item.stem);
+    return stageProblemFix(
+      scope: scope,
+      item: item,
+      stem: markers < figureIndex ? '${item.stem.trimRight()}${'\n[그림]' * (figureIndex - markers)}' : null,
+      figureLayout: hasItem
+          ? null
+          : {
+              ...item.pbFigureLayout,
+              'version': 1,
+              'items': [
+                ...layoutItems,
+                {
+                  'assetKey': key,
+                  'widthEm': 16,
+                  'position': 'below-stem',
+                  'anchor': 'center',
+                  'offsetXEm': 0,
+                  'offsetYEm': 0,
+                  'heightEm': 1.6,
+                },
+              ],
+              'groups': item.pbFigureLayout['groups'] ?? const [],
+            },
+      figureAssets: assets,
+      source: 'owner',
+      note: '그림 직접 올림($figureIndex번)',
     );
   }
 

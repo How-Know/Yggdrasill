@@ -2,8 +2,43 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as img;
 import 'package:yggdrasill_manager/services/textbook_problem_review_service.dart';
 import 'package:yggdrasill_manager/services/textbook_review_solution_image_service.dart';
+
+void _numberMaskTests() {
+  group('그림에 걸친 문항 번호 가리기', () {
+    const item = [335, 512, 471, 960];
+    const number = [341, 518, 358, 545];
+    const crop = [337, 541, 425, 912];
+
+    test('번호 상자는 작고 문항 영역 안에 있을 때만 인정한다', () {
+      expect(problemNumberBox(number, item), number);
+      expect(problemNumberBox(item, item), isNull);
+      expect(problemNumberBox([10, 10, 30, 40], item), isNull);
+    });
+
+    test('번호가 걸친 부분만 픽셀 영역으로 돌려준다', () {
+      final r = numberOverlapPx(crop, number, 900, 294)!;
+      expect(r.left, 0);
+      expect(r.top, lessThan(10));
+      expect(r.right, inInclusiveRange(10, 30));
+      expect(r.bottom, inInclusiveRange(70, 90));
+      expect(numberOverlapPx([337, 560, 425, 912], number, 900, 294), isNull);
+      expect(numberOverlapPx([340, 520, 360, 550], number, 100, 100), isNull);
+    });
+
+    test('걸친 자리만 흰색이 된다', () {
+      final src = img.Image(width: 900, height: 294);
+      img.fill(src, color: img.ColorRgb8(0, 0, 0));
+      final out = whiteOutProblemNumber(Uint8List.fromList(img.encodePng(src)), crop, number)!;
+      final image = img.decodePng(out)!;
+      expect(image.getPixel(2, 30).r, 255);
+      expect(image.getPixel(100, 30).r, 0);
+      expect(image.getPixel(2, 200).r, 0);
+    });
+  });
+}
 
 TextbookProblemReviewItem _item(Map<String, dynamic> m) => TextbookProblemReviewItem.fromJson({
       'crop_id': 'c1',
@@ -15,6 +50,7 @@ TextbookProblemReviewItem _item(Map<String, dynamic> m) => TextbookProblemReview
     });
 
 void main() {
+  _numberMaskTests();
   group('그림 도우미', () {
     test('문항 그림이 아닌 그림 빼기: 붙어 있는 번호만 제안하고, 자산·배치·묶음에서 뺀다', () {
       final assets = [
@@ -110,7 +146,7 @@ void main() {
       expect(figureLayoutSignature(null), '');
     });
 
-    test('scaleFigureLayout 은 폭을 배율만큼 바꾸고 4~40em·0.5 단위로 맞춘다', () {
+    test('scaleFigureLayout 은 폭을 배율만큼 바꾸고 0.5 단위로 맞추며, 키울 때는 한 단 폭(22em)을 넘기지 않는다', () {
       final layout = <String, dynamic>{
         'version': 1,
         'items': [
@@ -120,7 +156,8 @@ void main() {
         'groups': [],
       };
       expect(figureLayoutItems(scaleFigureLayout(layout, 1 / 1.6)).map((x) => x['widthEm']), [12.5, 24]);
-      expect(figureLayoutItems(scaleFigureLayout(layout, 3)).map((x) => x['widthEm']), [40, 40]);
+      // 키울 때: 한 단 폭까지만, 이미 더 넓은 그림은 그대로
+      expect(figureLayoutItems(scaleFigureLayout(layout, 3)).map((x) => x['widthEm']), [22, 38]);
       final only = scaleFigureLayout(layout, 0.5, keys: {'idx:2'});
       expect(figureLayoutItems(only).map((x) => x['widthEm']), [20, 19]);
       expect(figureLayoutItems(only).first['position'], 'below-stem');

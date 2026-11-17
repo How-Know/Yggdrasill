@@ -16,6 +16,8 @@ import {
 import { createMathSvgRenderer } from "./problem_bank/render_engine/math/mathjax_svg_renderer.js";
 import { generateObjectiveDraftForQuestion } from "./problem_bank_extract_worker.js";
 import { syncMiddleSchoolPresetForDocument } from "./problem_bank/naesin_preset.js";
+import { readExamLayout } from "./problem_bank/school_exam/layout.js";
+import { prepareExamReview } from "./problem_bank/school_exam/review_staging.js";
 import { applyQuestionOverride, overridePreviewKey } from "./problem_bank/preview_overrides.js";
 import {
   createConceptPageStore,
@@ -1741,6 +1743,70 @@ async function buildPdfArtifactFromJob(job) {
   };
 }
 
+// 내신 시험지를 교재 검수 테이블에 올린다(책 행·본문 PDF 연결·문항 영역·정답·해설 없음).
+// 여러 번 불러도 같은 결과가 난다. 문항 영역이 없는 문항만 시험지 PDF 에서 찾는다.
+async function handleExamReviewPrepare(body, res) {
+  const academyId = String(body?.academyId || body?.academy_id || "").trim();
+  const documentId = String(
+    body?.documentId || body?.document_id || "",
+  ).trim();
+  if (!isUuid(academyId) || !isUuid(documentId)) {
+    sendJson(res, 400, {
+      ok: false,
+      error: "academyId/documentId must be uuid",
+    });
+    return;
+  }
+  const log = (event, payload) => {
+    try {
+      console.log(`[pb-api] ${event}`, JSON.stringify(payload));
+    } catch (_) {
+      // 로그 실패는 무시한다.
+    }
+  };
+  const result = await prepareExamReview({
+    supa,
+    academyId,
+    documentId,
+    refreshAnswers: body?.refreshAnswers === true,
+    redetect: body?.redetect === true,
+    identityOnly: body?.identityOnly === true,
+    log,
+    loadPdf: async (doc) => {
+      const bucket = String(
+        doc.source_pdf_storage_bucket ||
+          doc.source_storage_bucket ||
+          "problem-documents",
+      ).trim();
+      const { data, error } = await supa.storage
+        .from(bucket)
+        .download(String(doc.source_pdf_storage_path || "").trim());
+      if (error || !data) {
+        throw new Error(
+          `exam_review_pdf_download_failed:${error?.message || "empty"}`,
+        );
+      }
+      return Buffer.from(await data.arrayBuffer());
+    },
+    readLayout: ({ pdfBuffer, questions }) =>
+      readExamLayout({
+        pdfBuffer,
+        questions,
+        apiKey: (
+          process.env.GEMINI_API_KEY ||
+          process.env.GOOGLE_API_KEY ||
+          ""
+        ).trim(),
+        log,
+      }),
+  });
+  if (!result.ok) {
+    sendJson(res, result.status || 400, { ok: false, error: result.error });
+    return;
+  }
+  sendJson(res, 200, result);
+}
+
 async function createExtractJob(body, res) {
   const academyId = String(body.academyId || "").trim();
   const documentId = String(body.documentId || "").trim();
@@ -1779,7 +1845,14 @@ async function createExtractJob(body, res) {
     String(doc?.meta?.extract_mode || "").trim() === "textbook_pdf_only" ||
     String(doc?.meta?.textbook_scope?.mode || "").trim() ===
       "textbook_pdf_only";
-  if (!textbookPdfOnly && !String(doc.source_storage_path || "").trim()) {
+  // 교재 메뉴에서 올린 내신 시험지는 PDF 만으로 추출한다(그림도 PDF 에서 자른다).
+  const examPdfOnly =
+    !!doc?.meta?.exam_review && typeof doc.meta.exam_review === "object";
+  if (
+    !textbookPdfOnly &&
+    !examPdfOnly &&
+    !String(doc.source_storage_path || "").trim()
+  ) {
     sendJson(res, 400, { ok: false, error: "hwpx_source_required" });
     return;
   }
@@ -6881,12 +6954,24 @@ async function batchRenderThumbnails(res, req) {
             const storagePath = overrides[qid]
               ? `${academyId}/batch-preview/${EXPORT_RENDER_CONFIG_VERSION_V2}/card-staged/${overridePreviewKey(qid, overrides[qid])}.png`
               : `${academyId}/batch-preview/${EXPORT_RENDER_CONFIG_VERSION_V2}/card/${qid}.png`;
-            const { error: upErr } = await supa.storage
-              .from(BATCH_THUMB_BUCKET)
-              .upload(storagePath, cropped, {
-                contentType: "image/png",
-                upsert: true,
-              });
+            // 저장소 연결이 잠깐 끊기면("fetch failed") 카드가 없어 앱이 그 문항의
+            // 재검수를 건너뛴다. 잠깐 쉬고 다시 올린다.
+            let upErr = null;
+            for (let attempt = 0; attempt < 3; attempt += 1) {
+              try {
+                const up = await supa.storage
+                  .from(BATCH_THUMB_BUCKET)
+                  .upload(storagePath, cropped, {
+                    contentType: "image/png",
+                    upsert: true,
+                  });
+                upErr = up.error || null;
+              } catch (err) {
+                upErr = { message: String(err?.message || err) };
+              }
+              if (!upErr) break;
+              await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
+            }
             if (upErr) {
               console.warn(
                 "[pb-api] batch-thumb upload failed",
@@ -6899,9 +6984,21 @@ async function batchRenderThumbnails(res, req) {
               thumbnails[qid] = { error: upErr.message };
               return;
             }
-            const { data: signedData } = await supa.storage
-              .from(BATCH_THUMB_BUCKET)
-              .createSignedUrl(storagePath, BATCH_THUMB_EXPIRES_SEC);
+            let signedData = null;
+            for (let attempt = 0; attempt < 3 && !signedData?.signedUrl; attempt += 1) {
+              try {
+                signedData = (
+                  await supa.storage
+                    .from(BATCH_THUMB_BUCKET)
+                    .createSignedUrl(storagePath, BATCH_THUMB_EXPIRES_SEC)
+                ).data;
+              } catch (_) {
+                signedData = null;
+              }
+              if (!signedData?.signedUrl) {
+                await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
+              }
+            }
             if (!signedData?.signedUrl) {
               console.warn(
                 "[pb-api] batch-thumb signed url missing",
@@ -10227,6 +10324,10 @@ async function handleTextbookVlmDetectSolutionBlocks(body, res) {
   // numbers=[]를 내는 경우가 있다. 실제 p.38(15~26), p.44(10~22)가 통째로
   // 빠졌다. 번호만 묻는 단순 프롬프트로 즉시 한 번 보완한다.
   if (normalized.numbers.length === 0) {
+    console.warn(
+      `[solution-blocks] p${rawPage} 전체 판독에 번호 없음. 원문: ` +
+        JSON.stringify(result.parsedJson).slice(0, 700),
+    );
     try {
       const fallback = await detectSolutionBlocksOnPage({
         imageBase64,
@@ -10238,10 +10339,53 @@ async function handleTextbookVlmDetectSolutionBlocks(body, res) {
         maxRetries: TEXTBOOK_ANSWER_VLM_MAX_RETRIES,
         numbersOnly: true,
       });
-      const repaired = normalizeSolutionBlocksResult(fallback.parsedJson);
+      // 번호만 다시 읽은 결과에는 머리가 없다. 처음 읽은 머리를 합쳐야 그 지면의
+      // 블록 경계가 남는다(해설 p.36: 머리 2개가 사라져 단원 마무리 평가 16문항을 통째로 놓쳤다).
+      const mainJson =
+        result.parsedJson && typeof result.parsedJson === "object" ? result.parsedJson : {};
+      let repaired = normalizeSolutionBlocksResult({
+        ...(fallback.parsedJson || {}),
+        blocks: mainJson.blocks,
+        leading_continuation: mainJson.leading_continuation === true,
+      });
+      let repairedResult = fallback;
+      // 머리가 없는데 번호가 되돌아가면(…15 다음 01) 머리를 놓친 판독이다. 전체 판독을 한 번 더 한다.
+      const restarts = (seq) => {
+        let prev = 0;
+        for (const one of seq) {
+          if (one.kind !== "number") continue;
+          const value = Number.parseInt(String(one.text).replace(/\D+.*$/, ""), 10);
+          if (!Number.isFinite(value)) continue;
+          if (value <= prev) return true;
+          prev = value;
+        }
+        return false;
+      };
+      if (repaired.blocks.length === 0 && restarts(repaired.sequence)) {
+        const again = await detectSolutionBlocksOnPage({
+          imageBase64,
+          mimeType,
+          rawPage,
+          model: TEXTBOOK_VLM_MODEL,
+          apiKey,
+          timeoutMs: TEXTBOOK_ANSWER_VLM_TIMEOUT_MS,
+          maxRetries: TEXTBOOK_ANSWER_VLM_MAX_RETRIES,
+        });
+        const full = normalizeSolutionBlocksResult(again.parsedJson);
+        if (full.numbers.length > 0) {
+          repaired = full;
+          repairedResult = again;
+        } else if (full.blocks.length > 0) {
+          repaired = normalizeSolutionBlocksResult({
+            ...(fallback.parsedJson || {}),
+            blocks: again.parsedJson?.blocks,
+            leading_continuation: again.parsedJson?.leading_continuation === true,
+          });
+        }
+      }
       if (repaired.numbers.length > 0) {
         normalized = repaired;
-        result = fallback;
+        result = repairedResult;
       }
     } catch (err) {
       console.warn(
@@ -12726,6 +12870,13 @@ async function handler(req, res) {
     if (method === "POST" && url.pathname === "/textbook/answers/sync-pb") {
       const body = await readJson(req);
       await handleTextbookAnswersSyncProblemBank(body, res);
+      return;
+    }
+
+    // 내신 시험지 → 교재 검수 테이블 준비.
+    if (method === "POST" && url.pathname === "/pb/exam-review/prepare") {
+      const body = await readJson(req);
+      await handleExamReviewPrepare(body, res);
       return;
     }
 

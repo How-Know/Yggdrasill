@@ -183,10 +183,61 @@ class TextbookReviewPipeline {
     );
   }
 
+  /// 범위의 검수 방식대로 돌린다. 정답만 검수하는 범위는 [runAnswerOnly], 그 밖에는 [runAll].
+  Future<TextbookReviewPipelineSummary> run({bool forceRerun = false, bool forceRenderCheck = false}) =>
+      scope.reviewMode == TextbookReviewUnitScope.answerOnlyMode
+          ? runAnswerOnly(forceRerun: forceRerun)
+          : runAll(forceRerun: forceRerun, forceRenderCheck: forceRenderCheck);
+
+  /// 정답만 검수한다(이미 등록해 그림 손질을 마친 내신 시험지).
+  /// AI 풀이를 기록해 정답표와 대조하고, 문항 유형 규칙·코드 정합성 점검·메타 보충까지 한다.
+  /// 본문·그림 수정안, V2 렌더 대조, 그림 크기 조정은 하지 않는다. 문항 검수 판정은 준비됨을 막지 않는다.
+  Future<TextbookReviewPipelineSummary> runAnswerOnly({bool forceRerun = false}) async {
+    final notes = <String>[];
+    var reviewed = 0;
+    await reload();
+    if (items.isNotEmpty) {
+      _say('원본 PDF 준비');
+      await service.ensureSourcePdfs(scope, items, onProgress: _say);
+      _say('V2 문항 카드 준비 (${items.length}문항)');
+      await loadPreviews(items, merge: false);
+      reviewed = await _reviewRounds(forceRerun: forceRerun);
+    }
+    if (!_stopped && items.isNotEmpty) {
+      // 문항 검수를 하지 않는 범위라 AI 검수가 건 렌더 엔진 보류는 푼다(보류는 확정을 막는다).
+      final held = [for (final x in items) if (x.isEngineHeld) x.cropId];
+      if (held.isNotEmpty) {
+        await service.setEngineHold(held, hold: false);
+        await reload();
+      }
+      await _bulkMathFixes(notes, withFixPass: false);
+      await reload();
+    }
+    if (!_stopped && items.isNotEmpty) {
+      final kinds = await _applyQuestionKindFixes();
+      if (kinds > 0) notes.add('문항 유형 $kinds문항 수정안');
+    }
+    if (!_stopped) await _consistencyPass(notes);
+    if (!_stopped && items.isNotEmpty) {
+      final metaFilled = await _metaPass();
+      if (metaFilled > 0) notes.add('메타 보충 $metaFilled문항');
+    }
+    return TextbookReviewPipelineSummary(
+      total: items.length,
+      reviewed: reviewed,
+      renderChecked: 0,
+      mathApproved: items.where((x) => x.mathOk).length,
+      qualityApproved: items.where((x) => x.qualityOk).length,
+      notes: notes,
+      errors: errors,
+    );
+  }
+
   /// AI 선풀이·원본 해설 전사·학생 시점 품질 검수. 같은 실행에서 이미 보낸 문항은 다시 고르지 않는다.
   Future<int> _reviewRounds({required bool forceRerun}) async {
     var total = 0;
     final sent = <String>{};
+    final retried = <String>{};
     for (var round = 0; round < 60; round += 1) {
       if (_stopped) break;
       final todo = [
@@ -220,18 +271,33 @@ class TextbookReviewPipeline {
                 images: images,
               );
             } catch (e) {
+              // 한 번은 다시 보낸다(시간 초과·연결 끊김). 두 번째도 실패하면 오류로 남긴다.
+              final ids = [for (final x in chunk) x.cropId];
+              final first = !ids.any(retried.contains);
+              retried.addAll(ids);
+              if (first) {
+                sent.removeAll(ids);
+                return const <String, dynamic>{'retry': true};
+              }
               errors.add('${chunk.map((x) => x.problemNumber).join(',')}번 검수: $e');
               return const <String, dynamic>{};
             }
           }(),
       ]);
       var processed = 0;
+      var retry = false;
       for (final r in results) {
         processed += (r['processed'] as num?)?.toInt() ?? 0;
+        if (r['retry'] == true) retry = true;
       }
       total += processed;
       await reload();
-      if (processed <= 0) break;
+      if (processed <= 0 && !retry) break;
+    }
+    // AI 검수를 끝내 받지 못한 문항은 조용히 넘어가지 않고 알린다(풀이·품질 검수 없이 뒤 단계로 가면 통과할 수 없다).
+    if (!_stopped) {
+      final left = [for (final x in items) if (x.mathStatus == 'pending' || !x.hasAiSolution) x.problemNumber];
+      if (left.isNotEmpty) errors.add('${left.join(',')}번: AI 풀이·품질 검수를 받지 못했습니다. 이 문항만 다시 검수해 주세요.');
     }
     return total;
   }
@@ -322,6 +388,17 @@ class TextbookReviewPipeline {
 
   /// 원본 해설에 그림이 있을 수 있는 문항만 해설 PDF 에서 그림을 찾아 잘라 붙인다. 반환: 그림이 붙은 crop_id.
   Future<Set<String>> _solutionFiguresPass() async {
+    // 이미 붙은 해설 그림의 정렬·가로 묶음을 지금 규칙으로 다시 계산한다(AI 없음, 바뀐 것만 저장).
+    var rearranged = false;
+    for (final x in items) {
+      if (_stopped || x.solutionFigureAssets.isEmpty) continue;
+      try {
+        if (await service.rearrangeSolutionFigures(x)) rearranged = true;
+      } catch (e) {
+        errors.add('${x.problemNumber}번 해설 그림 정렬: $e');
+      }
+    }
+    if (rearranged) await reload();
     final targets = [for (final x in items) if (x.needsSolutionFigures) x];
     if (targets.isEmpty) return const {};
     _say('해설 그림 찾기 0/${targets.length}');
@@ -361,6 +438,23 @@ class TextbookReviewPipeline {
     final targets = (only ?? items.where((x) => x.needsRenderCheck)).toList();
     if (targets.isEmpty) return 0;
 
+    // 문항 카드를 못 받은 문항은 대조 없이 지나가 고치기 전 판정이 그대로 남는다
+    // (게이트웨이 저장소 연결이 잠깐 끊긴 경우). 다시 찍어 보고, 끝내 못 받으면 알린다.
+    List<TextbookProblemReviewItem> missingCards() => [
+          for (final it in targets)
+            if (it.previewLookupKey.isNotEmpty && (previewUrls[it.cropId] ?? '').isEmpty) it,
+        ];
+    for (var attempt = 0; attempt < 2 && !_stopped; attempt += 1) {
+      final missing = missingCards();
+      if (missing.isEmpty) break;
+      await Future<void>.delayed(Duration(seconds: 2 * (attempt + 1)));
+      await loadPreviews(missing);
+    }
+    final noCard = missingCards();
+    if (noCard.isNotEmpty) {
+      errors.add('${noCard.map((x) => x.problemNumber).join(',')}번 문항 카드를 찍지 못해 원본 대조를 못 했습니다. 이어서 마무리를 다시 누르세요.');
+    }
+
     Future<Map<String, dynamic>?> payload(TextbookProblemReviewItem it) async {
       final problemUrl = previewUrls[it.cropId] ?? '';
       var solUrl = '';
@@ -376,6 +470,7 @@ class TextbookReviewPipeline {
         if (solUrl.isNotEmpty) 'answer_solution_url': solUrl,
         'solution_kind': it.primarySolutionKind,
         'has_solution_figures': it.solutionFigureAssets.isNotEmpty,
+        'figure_at_card_width': it.figureAtCardWidth,
         'is_fill_in_blank': it.isFillInBlank,
         ...original,
         ...solutionOriginal,
@@ -521,11 +616,14 @@ class TextbookReviewPipeline {
       );
 
   /// 정답 수정안(합의된 정답·해설 정답)을 반영 대기 값으로 쌓는다. 반환: 정답 축이 통과가 된 crop id
-  Future<List<String>> _bulkMathFixes(List<String> notes) async {
+  /// 넣어도 되는 값은 [TextbookProblemReviewItem.stageableAnswer] 가 정한다(사람이 고친 정답·정답표 보호).
+  /// [withFixPass] 가 false 면 원본 대조 수정안 단계를 건너뛰고 수학 재풀이로만 다시 맞춘다.
+  Future<List<String>> _bulkMathFixes(List<String> notes, {bool withFixPass = true}) async {
     final approved = <String>{};
     final needProposal = [
       for (final it in items)
-        if (it.mathStatus == 'issue' &&
+        if (withFixPass &&
+            it.mathStatus == 'issue' &&
             it.proposedAnswer == null &&
             !it.solutionAndAiAgreeAgainstExisting &&
             !it.existingConfirmedByAi &&
@@ -551,10 +649,10 @@ class TextbookReviewPipeline {
     for (var i = 0; i < targets.length; i++) {
       if (_stopped) break;
       final it = targets[i];
-      final ans = it.resolvedMathAnswer ?? it.existingAnswer.trim();
-      if (ans.isEmpty || ans == '판단불가') continue;
-      // 운영자가 원본에서 직접 지정한 정답은 AI 제안으로 바꾸지 않는다. 다르면 오류로 남겨 사람이 고른다.
-      if ((it.answerManual || it.stagedByOwner('answer')) && ans != it.existingAnswer.trim()) continue;
+      final resolved = it.resolvedMathAnswer ?? it.existingAnswer.trim();
+      if (resolved.isEmpty || resolved == '판단불가') continue;
+      final ans = it.stageableAnswer(resolved);
+      if (ans == null) continue;
       _say('정답 수정안 ${i + 1}/${targets.length}');
       try {
         await _stageAnswer(
@@ -583,9 +681,10 @@ class TextbookReviewPipeline {
         await reload();
         for (final it in items) {
           if (it.mathStatus != 'issue' || it.resolvedMathAnswer == null) continue;
-          if ((it.answerManual || it.stagedByOwner('answer')) && it.resolvedMathAnswer != it.existingAnswer.trim()) continue;
+          final ans = it.stageableAnswer(it.resolvedMathAnswer!);
+          if (ans == null) continue;
           try {
-            await _stageAnswer(it, it.resolvedMathAnswer!, note: '재풀이 정답');
+            await _stageAnswer(it, ans, note: '재풀이 정답');
             approved.add(it.cropId);
           } catch (e) {
             errors.add('${it.problemNumber}번 재풀이 정답: $e');
@@ -718,11 +817,12 @@ class TextbookReviewPipeline {
     var healedMath = 0;
     for (final x in items) {
       if (x.mathStatus != 'issue' || x.resolvedMathAnswer == null) continue;
-      if ((x.answerManual || x.stagedByOwner('answer')) && x.resolvedMathAnswer != x.existingAnswer.trim()) continue;
+      final ans = x.stageableAnswer(x.resolvedMathAnswer!);
+      if (ans == null) continue;
       try {
         await _stageAnswer(
           x,
-          x.resolvedMathAnswer!,
+          ans,
           solutionTranscribed: x.proposedSolutionTranscribed,
           solutionAnswer: x.proposedSolutionAnswer,
           note: '정답 수정안',
@@ -770,7 +870,7 @@ class TextbookReviewPipeline {
               (it.qualityStatus != 'approved' || !it.stage2Superseded) &&
               (_textProposalUsable(it) ||
                   it.hasPendingFigureProposal ||
-                  (it.hasFigures && it.fixAppliedAt == null && (it.proposedFigureLayout != null || it.pbFigureLayout.isNotEmpty))))
+                  (it.hasFigures && it.fixAppliedAt == null && (it.proposedFigureLayout != null || it.renderedFigureLayout.isNotEmpty))))
             it,
       ];
 
@@ -880,7 +980,9 @@ class TextbookReviewPipeline {
           stem: text ? it.proposedStem : null,
           choices: text ? it.proposedChoices : null,
           commonStem: text ? it.proposedCommonStem : null,
-          figureLayout: figure ? (it.proposedFigureLayout ?? (it.pbFigureLayout.isNotEmpty ? it.pbFigureLayout : null)) : null,
+          figureLayout: figure
+              ? (it.proposedFigureLayout ?? (it.renderedFigureLayout.isNotEmpty ? it.renderedFigureLayout : null))
+              : null,
           figureCrops: figure ? it.proposedFigureCrops : const [],
           note: '원본 대조 수정안',
         );
@@ -897,6 +999,7 @@ class TextbookReviewPipeline {
   /// 원본 대조에서 V2 그림 크기가 원본 비율을 벗어난 문항의 그림 폭을 1/비율 배로 고친다. 반환: 적용한 crop id
   Future<List<String>> _resizeFigures(Set<String> onlyCropIds) async {
     final out = <String>[];
+    final doneSets = <String>{};
     for (final it in items) {
       if (_stopped) break;
       if (!onlyCropIds.contains(it.cropId)) continue;
@@ -909,20 +1012,10 @@ class TextbookReviewPipeline {
         }
       }
       if (!it.figureNeedsResize) continue;
-      final scaled = scaleFigureLayout(
-        it.pbFigureLayout,
-        1 / it.figureSizeRatio!,
-        fallbackAssets: it.pbFigureAssets,
-        fallbackCount: figureMarkerCount(it.stem),
-      );
-      if (figureLayoutItems(scaled).isEmpty) continue;
       try {
-        final changed = await service.stageChanges(
-          cropId: it.cropId,
-          patch: {'figure_layout': scaled},
-          note: '그림 크기를 원본 글자 비율에 맞춰 재조정',
-        );
-        if (changed.isNotEmpty && !out.contains(it.cropId)) out.add(it.cropId);
+        for (final id in await service.resizeFigureFromMeasuredRatio(it, doneSets, items)) {
+          if (!out.contains(id)) out.add(id);
+        }
       } catch (e) {
         errors.add('${it.problemNumber}번 그림 크기: $e');
       }

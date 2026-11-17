@@ -25,6 +25,7 @@ import '../services/homework_session.dart';
 import '../services/student_api.dart';
 import '../services/student_point_session.dart';
 import '../services/textbook_api.dart';
+import '../services/textbook_study_session.dart';
 import '../widgets/math_expression_editor.dart';
 import '../widgets/math_keypad.dart';
 import '../widgets/math_latex_view.dart';
@@ -99,11 +100,15 @@ class TextbookSolveScreen extends StatefulWidget {
     required this.book,
     this.homework,
     this.timedTest,
+    this.entryMode,
+    this.studySessionId,
   });
 
   final StudentTextbook book;
   final HomeworkSolveScope? homework;
   final TimedTestSolveConfig? timedTest;
+  final TextbookEntryMode? entryMode;
+  final String? studySessionId;
 
   @override
   State<TextbookSolveScreen> createState() => _TextbookSolveScreenState();
@@ -151,6 +156,10 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
 
   /// crop_id → 누적 채점 횟수
   final Map<String, int> _attemptCounts = <String, int>{};
+
+  /// crop_id → 번호 카드 오른쪽 회차 기록. 조회값에 이번 화면의 채점을 더한다.
+  final Map<String, ProblemRoundHistory> _roundHistories =
+      <String, ProblemRoundHistory>{};
 
   /// crop_id → 채점 플래그 (unit_hint/unit_caution/form_differs)
   final Map<String, List<String>> _flags = <String, List<String>>{};
@@ -1167,6 +1176,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
       if (p.attemptCount != null) {
         _attemptCounts[p.cropId] = p.attemptCount!;
       }
+      _absorbRoundHistory(p);
       if (p.flags.isNotEmpty) {
         _flags[p.cropId] = p.flags;
       }
@@ -1577,6 +1587,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
         answersByCropId: toSubmit,
         partAnswersByCropId: partSubmit,
         homeworkGroupId: widget.homework?.groupId,
+        sessionId: widget.studySessionId,
       );
       if (!mounted) return;
       _gradedThisVisit = true;
@@ -1602,8 +1613,9 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
             if (pr.gradedBy == 'self') _selfGraded.add(k);
           }
         });
-        for (final cropId in result.correctByCropId.keys) {
-          _attemptCounts[cropId] = (_attemptCounts[cropId] ?? 0) + 1;
+        for (final entry in result.correctByCropId.entries) {
+          _attemptCounts[entry.key] = (_attemptCounts[entry.key] ?? 0) + 1;
+          _noteLocalRoundGrade(entry.key, correct: entry.value);
         }
       });
       TopGlassSnackBar.show(
@@ -1633,10 +1645,156 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
     }
   }
 
+  /// 바로풀기 나가기 선택 — true=종료, false=중단, null=계속 풀기(취소).
+  Future<bool?> _askSolveExitAction() {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final surface = isDark ? const Color(0xFF1C1C1E) : const Color(0xFFF2F2F7);
+    final card = isDark ? const Color(0xFF2C2C2E) : Colors.white;
+    final text = isDark ? Colors.white : Colors.black;
+    final sub = text.withValues(alpha: 0.48);
+    final divider = text.withValues(alpha: 0.08);
+    final accent = YggGlassTokens.confirmActionColor;
+    const stopColor = Color(0xFFE57373);
+
+    Widget option({
+      required String label,
+      required IconData icon,
+      required Color iconColor,
+      required BorderRadius inkRadius,
+      required VoidCallback onTap,
+    }) {
+      return Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: inkRadius,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+            child: Row(
+              children: [
+                Icon(icon, size: 26, color: iconColor),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w700,
+                      color: text,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    return showModalBottomSheet<bool>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: surface,
+              borderRadius: BorderRadius.circular(28),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 14, 12, 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    '풀이를 마칠까요?',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      color: text,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    '중단하면 교재 카드에 표시되고\n다시 들어와 바로 이어 풀 수 있어요.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      height: 1.35,
+                      color: sub,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: card,
+                      borderRadius: BorderRadius.circular(22),
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(22),
+                      child: Column(
+                        children: [
+                          option(
+                            label: '중단하고 나가기',
+                            icon: Icons.pause_circle_outline_rounded,
+                            iconColor: accent,
+                            inkRadius: const BorderRadius.vertical(
+                              top: Radius.circular(22),
+                            ),
+                            onTap: () => Navigator.of(ctx).pop(false),
+                          ),
+                          Divider(
+                            height: 1,
+                            indent: 18,
+                            endIndent: 18,
+                            color: divider,
+                          ),
+                          option(
+                            label: '풀이 종료하기',
+                            icon: Icons.stop_circle_outlined,
+                            iconColor: stopColor,
+                            inkRadius: BorderRadius.zero,
+                            onTap: () => Navigator.of(ctx).pop(true),
+                          ),
+                          Divider(
+                            height: 1,
+                            indent: 18,
+                            endIndent: 18,
+                            color: divider,
+                          ),
+                          option(
+                            label: '계속 풀기',
+                            icon: Icons.play_arrow_rounded,
+                            iconColor: sub,
+                            inkRadius: const BorderRadius.vertical(
+                              bottom: Radius.circular(22),
+                            ),
+                            onTap: () => Navigator.of(ctx).pop(null),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   /// 뒤로 나가기 전 잔여 처리.
   ///
-  /// 1) 아직 채점 안 한 답이 남아 있으면 조용히 일괄 채점해 유실을 막는다.
-  /// 2) 과제 모드에서 이번 방문에 채점이 한 번이라도 있었다면, 이 배정에서
+  /// 1) 바로풀기 모드면 종료/중단 여부를 먼저 확인한다(정답입력하기는 묻지 않음).
+  /// 2) 아직 채점 안 한 답이 남아 있으면 조용히 일괄 채점해 유실을 막는다.
+  /// 3) 과제 모드에서 이번 방문에 채점이 한 번이라도 있었다면, 이 배정에서
   ///    한 번도 안 푼 문항을 미수행(skipped)으로 기록한다 — 학생이 스스로
   ///    검사를 받고 나간 것과 같은 셈이다. 학습앱 회차 이력에도 남는다.
   Future<void> _handleExit() async {
@@ -1655,6 +1813,14 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
       return;
     }
     if (_exitFlushing) return;
+
+    bool? finishSolve;
+    if (widget.homework == null &&
+        widget.entryMode == TextbookEntryMode.solve) {
+      finishSolve = await _askSolveExitAction();
+      if (finishSolve == null || !mounted) return;
+    }
+
     setState(() => _exitFlushing = true);
     try {
       await _flushPencilInput();
@@ -1667,6 +1833,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
             answersByCropId: pending.answers,
             partAnswersByCropId: pending.parts,
             homeworkGroupId: widget.homework?.groupId,
+            sessionId: widget.studySessionId,
           );
           _gradedThisVisit = true;
           _loadTree();
@@ -1703,6 +1870,18 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
           // 시도 +1 실패가 이탈을 막지는 않는다.
         }
         HomeworkSession.instance.notifyPlanProgress();
+      } else if (widget.homework == null &&
+          (widget.studySessionId ?? '').isNotEmpty) {
+        final sid = widget.studySessionId!;
+        if (widget.entryMode == TextbookEntryMode.solve) {
+          if (finishSolve == true) {
+            await TextbookStudySession.instance.finishSession(sid);
+          } else {
+            await TextbookStudySession.instance.pauseSession(sid);
+          }
+        } else {
+          await TextbookStudySession.instance.finishSession(sid);
+        }
       }
     } finally {
       if (mounted) setState(() => _exitFlushing = false);
@@ -1808,6 +1987,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
         correct: marked,
         answer: _answers[problem.cropId],
         homeworkGroupId: widget.homework?.groupId,
+        sessionId: widget.studySessionId,
       );
       if (!mounted) return;
       _gradedThisVisit = true;
@@ -1817,6 +1997,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
         _selfGraded.add(problem.cropId);
         _attemptCounts[problem.cropId] =
             (_attemptCounts[problem.cropId] ?? 0) + 1;
+        _noteLocalRoundGrade(problem.cropId, correct: marked);
       });
       _loadTree();
       HomeworkSession.instance.notifyPlanProgress();
@@ -1926,6 +2107,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
         correct: marked,
         partMarks: {partKey: marked},
         homeworkGroupId: widget.homework?.groupId,
+        sessionId: widget.studySessionId,
       );
       if (!mounted) return;
       _gradedThisVisit = true;
@@ -1940,6 +2122,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
         }
         _attemptCounts[problem.cropId] =
             (_attemptCounts[problem.cropId] ?? 0) + 1;
+        _noteLocalRoundGrade(problem.cropId, correct: res.correct);
       });
       _loadTree();
       HomeworkSession.instance.notifyPlanProgress();
@@ -4074,12 +4257,34 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
         for (final small in mid.smalls) {
           if (!small.pages.any((p) => inScope(small, p))) continue;
           final smallId = '$midId|s${small.subKey}';
+          final smallLabel = small.name.isEmpty ? small.subKey : small.name;
+          final canRepeatSmall = !_isTimedTest &&
+              widget.homework == null &&
+              small.pages.any((p) => !p.isConceptPage && p.graded > 0);
           rows.add(_treeRow(
             theme,
             id: smallId,
-            label: small.name.isEmpty ? small.subKey : small.name,
+            label: smallLabel,
             depth: 2,
             hasChildren: true,
+            trailing: canRepeatSmall
+                ? IconButton(
+                    tooltip: '이 소단원 다시 풀기',
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(
+                      minWidth: 28,
+                      minHeight: 28,
+                    ),
+                    icon: Icon(
+                      Icons.refresh_rounded,
+                      size: 16,
+                      color: theme.hintColor,
+                    ),
+                    onPressed: () =>
+                        unawaited(_promptRepeatSmallInSeason(small, smallLabel)),
+                  )
+                : null,
           ));
           if (!_expanded.contains(smallId)) continue;
           for (final page in small.pages) {
@@ -4107,6 +4312,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
     required int depth,
     bool bold = false,
     bool hasChildren = false,
+    Widget? trailing,
   }) {
     final expanded = _expanded.contains(id);
     return Padding(
@@ -4141,6 +4347,10 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
                   ),
                 ),
               ),
+              if (trailing != null) ...[
+                const SizedBox(width: 4),
+                trailing,
+              ],
             ],
           ),
         ),
@@ -5939,27 +6149,289 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
   bool get _showCategoryLabel => const {'wonri', 'wonri_middle', 'gaeyu_high'}
       .contains(widget.book.series);
 
-  /// 같은 문항을 다시 푸는 중이면 몇 번째인지 알려 준다.
-  /// 처음 푸는 문항(1회차)은 굳이 표시하지 않는다.
-  Widget _roundChip(ThemeData theme, PageProblem problem) {
-    if (problem.roundNo < 2) return const SizedBox.shrink();
+  /// 번호 칸. 유형 라벨이 없는 문항도 있는 문항과 같은 높이를 쓴다.
+  Widget _problemIndexColumn(
+    ThemeData theme, {
+    required String title,
+    required String subtitle,
+    required String? categoryLabel,
+    required bool reserveCategoryLine,
+    required double width,
+  }) {
+    final categoryStyle = theme.textTheme.bodySmall?.copyWith(
+      color: theme.hintColor,
+    );
+    final category = (categoryLabel ?? '').trim();
+    return SizedBox(
+      width: width,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          if (subtitle.isNotEmpty)
+            Text(
+              subtitle,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.hintColor,
+              ),
+            ),
+          if (reserveCategoryLine)
+            ExcludeSemantics(
+              excluding: category.isEmpty,
+              child: Text(
+                category.isEmpty ? '유형' : category,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: category.isEmpty
+                    ? categoryStyle?.copyWith(color: Colors.transparent)
+                    : categoryStyle,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  void _clearLocalProblemSolveState(Iterable<String> cropIds) {
+    for (final cropId in cropIds) {
+      _answers.remove(cropId);
+      _answerDisplayLatex.remove(cropId);
+      _gradedAnswers.remove(cropId);
+      _results.remove(cropId);
+      _attemptCounts[cropId] = 0;
+      _flags.remove(cropId);
+      _selfGraded.remove(cropId);
+      _objectivePencilMarks.remove(cropId);
+      final prefix = '$cropId|';
+      _answers.removeWhere((k, _) => k.startsWith(prefix));
+      _answerDisplayLatex.removeWhere((k, _) => k.startsWith(prefix));
+      _gradedAnswers.removeWhere((k, _) => k.startsWith(prefix));
+      _results.removeWhere((k, _) => k.startsWith(prefix));
+      _flags.removeWhere((k, _) => k.startsWith(prefix));
+      _selfGraded.removeWhere((k) => k.startsWith(prefix));
+      final history = _roundHistories[cropId] ??
+          _seenProblems[cropId]?.roundHistory;
+      if (history != null) {
+        _roundHistories[cropId] = history.afterLocalReset();
+      }
+      final seen = _seenProblems[cropId];
+      if (seen != null) {
+        _seenProblems[cropId] = seen.withSolveState();
+      }
+    }
+    final stored = _problems;
+    if (stored != null) {
+      final resetSet = cropIds.toSet();
+      _problems = <PageProblem>[
+        for (final p in stored)
+          resetSet.contains(p.cropId) ? p.withSolveState() : p,
+      ];
+    }
+  }
+
+  Future<void> _promptRepeatProblemInSeason(PageProblem problem) async {
+    if (_isTimedTest || widget.homework != null) return;
+    final numLabel = _displayProblemNumber(problem);
+    final confirmed = await showStudentConfirmSheet(
+      context: context,
+      title: '$numLabel번 다시 풀기',
+      message: '이번 시즌 완료 기록은 그대로 두고,\n이 문항만 답을 비워 한 번 더 풀어볼까요?',
+      confirmLabel: '다시 풀기',
+      cancelLabel: '취소',
+      confirmIcon: Icons.refresh_rounded,
+      cancelIcon: Icons.close_rounded,
+    );
+    if (confirmed != true || !mounted) return;
+
+    String? error;
+    try {
+      error = await TextbookApi.instance.repeatProblemsInSeason(
+        bookId: widget.book.bookId,
+        gradeLabel: widget.book.gradeLabel,
+        cropIds: <String>[problem.cropId],
+      );
+    } catch (_) {
+      error = 'unknown';
+    }
+    if (!mounted) return;
+    if (error != null) {
+      TopGlassSnackBar.show(
+        context,
+        message: error == 'under_review'
+            ? '선생님이 검사 중인 문항이에요. 검사가 끝나면 다시 풀 수 있어요.'
+            : '다시 풀기를 시작하지 못했어요.',
+        icon: Icons.error_outline_rounded,
+      );
+      return;
+    }
+    setState(() {
+      _clearLocalProblemSolveState(<String>[problem.cropId]);
+      _selectPro(problem);
+    });
+    unawaited(_loadTree());
+  }
+
+  Future<void> _promptRepeatSmallInSeason(
+    TbSmallUnit small,
+    String smallLabel,
+  ) async {
+    if (_isTimedTest || widget.homework != null) return;
+    final confirmed = await showStudentConfirmSheet(
+      context: context,
+      title: '단원 다시 풀기',
+      message: '「$smallLabel」의 이번 시즌 완료율은 유지한 채\n답을 비우고 시즌 내 반복 풀이를 시작할까요?',
+      confirmLabel: '단원 다시 풀기',
+      cancelLabel: '취소',
+      confirmIcon: Icons.refresh_rounded,
+      cancelIcon: Icons.close_rounded,
+    );
+    if (confirmed != true || !mounted) return;
+
+    final rawPages = <int>[
+      for (final p in small.pages)
+        if (!p.isConceptPage) p.rawPage,
+    ];
+    if (rawPages.isEmpty) return;
+
+    final cropIds = <String>{};
+    try {
+      for (final rawPage in rawPages) {
+        final rows = await TextbookApi.instance.pageProblems(
+          bookId: widget.book.bookId,
+          gradeLabel: widget.book.gradeLabel,
+          rawPage: rawPage,
+        );
+        for (final row in rows) {
+          if (row.cropId.trim().isNotEmpty) cropIds.add(row.cropId.trim());
+        }
+      }
+      if (cropIds.isEmpty || !mounted) return;
+      final error = await TextbookApi.instance.repeatProblemsInSeason(
+        bookId: widget.book.bookId,
+        gradeLabel: widget.book.gradeLabel,
+        cropIds: cropIds.toList(growable: false),
+      );
+      if (!mounted) return;
+      if (error != null) {
+        TopGlassSnackBar.show(
+          context,
+          message: error == 'under_review'
+              ? '선생님이 검사 중인 문항이 포함돼 있어요.'
+              : '단원 다시 풀기를 시작하지 못했어요.',
+          icon: Icons.error_outline_rounded,
+        );
+        return;
+      }
+      setState(() {
+        _clearLocalProblemSolveState(cropIds);
+        _treeOpen = false;
+      });
+      unawaited(_loadTree());
+      TopGlassSnackBar.show(
+        context,
+        message: '「$smallLabel」 문항을 다시 풀어볼 수 있어요.',
+        icon: Icons.refresh_rounded,
+      );
+    } catch (_) {
+      if (!mounted) return;
+      TopGlassSnackBar.show(
+        context,
+        message: '단원 다시 풀기를 시작하지 못했어요.',
+        icon: Icons.error_outline_rounded,
+      );
+    }
+  }
+
+  void _absorbRoundHistory(PageProblem problem) {
+    final next = problem.roundHistory;
+    final local = _roundHistories[problem.cropId];
+    if (local == null ||
+        next.roundNo > local.roundNo ||
+        (next.roundNo == local.roundNo &&
+            next.revisionCount >= local.revisionCount)) {
+      _roundHistories[problem.cropId] = next;
+    }
+  }
+
+  void _noteLocalRoundGrade(String cropId, {required bool correct}) {
+    final current = _roundHistories[cropId] ??
+        _seenProblems[cropId]?.roundHistory ??
+        const ProblemRoundHistory();
+    _roundHistories[cropId] = current.afterGrade(correct: correct);
+  }
+
+  ProblemRoundHistory _roundHistoryOf(PageProblem problem) {
+    return _roundHistories[problem.cropId] ?? problem.roundHistory;
+  }
+
+  /// 번호 카드 오른쪽. 과제 바로풀기, 교재 바로풀기, 정답입력하기가 같은 카드를 쓴다.
+  /// 처음 만나 한 번도 맞히지 않은 1회차는 비운다.
+  Widget _roundHistory(PageProblem problem) {
+    if (_isTimedTest) return const SizedBox.shrink();
+    final history = _roundHistoryOf(problem);
+    final hasLedger = _seenProblems[problem.cropId]?.hasRoundLedger ??
+        problem.hasRoundLedger;
+    final cacheAttempts = _attemptCounts[problem.cropId] ?? 0;
+    final revisions = history.revisionCount > 0
+        ? history.revisionCount
+        : math.max(history.revisionCount, cacheAttempts);
+    final passedOnScreen = _results[problem.cropId] == true;
+    final display = ProblemRoundHistory(
+      roundNo: history.roundNo,
+      passedBefore: history.passedBefore,
+      revisionCount: revisions,
+      roundOpen: history.roundOpen,
+      latestPassed:
+          history.latestPassed || (!hasLedger && passedOnScreen),
+    );
+    final lines = display.cardLines;
+    if (lines.isEmpty) return const SizedBox.shrink();
     const roundColor = Color(0xFF7E9CC9);
+    const wrongColor = Color(0xFFE57373);
+    const cautionColor = Color(0xFFE0A63C);
+    const accent = YggGlassTokens.confirmActionColor;
+    final revisionColor = revisions >= 5
+        ? wrongColor
+        : revisions >= 3
+            ? cautionColor
+            : accent;
+
+    Color colorOf(String line) {
+      if (line.startsWith('수정')) return revisionColor;
+      if (line.startsWith('이전') || line.startsWith('통과')) return accent;
+      return roundColor;
+    }
+
     return Padding(
       padding: const EdgeInsets.only(right: 9),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-        decoration: BoxDecoration(
-          color: roundColor.withValues(alpha: 0.13),
-          borderRadius: BorderRadius.circular(999),
-        ),
-        child: Text(
-          '${problem.roundNo}회차',
-          style: const TextStyle(
-            color: roundColor,
-            fontSize: 12,
-            fontWeight: FontWeight.w800,
-          ),
-        ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          for (var i = 0; i < lines.length; i++) ...[
+            if (i > 0) const SizedBox(height: 4),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+              decoration: BoxDecoration(
+                color: colorOf(lines[i]).withValues(alpha: 0.13),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Text(
+                lines[i],
+                style: TextStyle(
+                  color: colorOf(lines[i]),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -5975,7 +6447,6 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
     final isDark = theme.brightness == Brightness.dark;
     final answer = _answers[problem.cropId] ?? '';
     final result = _results[problem.cropId];
-    final attemptCount = _attemptCounts[problem.cropId] ?? 0;
     final graded = result != null &&
         (_selfGraded.contains(problem.cropId) ||
             (problem.isSelfCheck &&
@@ -5986,12 +6457,6 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
     const accent = YggGlassTokens.confirmActionColor;
     const wrongColor = Color(0xFFE57373);
     const cautionColor = Color(0xFFE0A63C);
-    final revisionColor = attemptCount >= 5
-        ? wrongColor
-        : attemptCount >= 3
-            ? cautionColor
-            : accent;
-
     Color borderColor;
     if (held) {
       borderColor = cautionColor.withValues(alpha: 0.7);
@@ -6018,9 +6483,13 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
           borderRadius: BorderRadius.circular(14),
           // 객관식도 선택 가능 — 하단/문항모드 대상이 바뀌어야 한다.
           // (객관식 답 자체는 카드·하단의 ①~⑤로 입력)
-          onTap: held || result == true
+          onTap: held
               ? null
-              : () => setState(() => _selectPro(problem)),
+              : result == true
+                  ? (_isTimedTest || widget.homework != null
+                      ? null
+                      : () => unawaited(_promptRepeatProblemInSeason(problem)))
+                  : () => setState(() => _selectPro(problem)),
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
             decoration: BoxDecoration(
@@ -6033,36 +6502,16 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
               children: [
                 Row(
                   children: [
-                    SizedBox(
+                    _problemIndexColumn(
+                      theme,
+                      title: _isTimedTest
+                          ? '제 ${_timedIndex + 1}문제'
+                          : _displayProblemNumber(problem),
+                      subtitle: _isTimedTest ? '' : problem.label,
+                      categoryLabel: problem.categoryLabel,
+                      reserveCategoryLine:
+                          !_isTimedTest && _showCategoryLabel,
                       width: _isTimedTest ? 96 : 64,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            _isTimedTest
-                                ? '제 ${_timedIndex + 1}문제'
-                                : _displayProblemNumber(problem),
-                            style: theme.textTheme.titleMedium
-                                ?.copyWith(fontWeight: FontWeight.w800),
-                          ),
-                          if (!_isTimedTest && problem.label.isNotEmpty)
-                            Text(
-                              problem.label,
-                              style: theme.textTheme.bodySmall
-                                  ?.copyWith(color: theme.hintColor),
-                            ),
-                          if (!_isTimedTest &&
-                              _showCategoryLabel &&
-                              problem.categoryLabel != null)
-                            Text(
-                              problem.categoryLabel!,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: theme.textTheme.bodySmall
-                                  ?.copyWith(color: theme.hintColor),
-                            ),
-                        ],
-                      ),
                     ),
                     const SizedBox(width: 8),
                     Expanded(
@@ -6169,28 +6618,8 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
                         ),
                         const SizedBox(width: 10),
                       ],
-                      _roundChip(theme, problem),
-                      if (graded && result && attemptCount > 1) ...[
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 9,
-                            vertical: 5,
-                          ),
-                          decoration: BoxDecoration(
-                            color: revisionColor.withValues(alpha: 0.13),
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                          child: Text(
-                            '수정 · $attemptCount회',
-                            style: TextStyle(
-                              color: revisionColor,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 9),
-                      ] else if (graded && !result) ...[
+                      _roundHistory(problem),
+                      if (graded && !result) ...[
                         const Text(
                           '다시 풀기',
                           style: TextStyle(
@@ -6231,8 +6660,6 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
     final isDark = theme.brightness == Brightness.dark;
     const accent = YggGlassTokens.confirmActionColor;
     const wrongColor = Color(0xFFE57373);
-    const cautionColor = Color(0xFFE0A63C);
-    final attemptCount = _attemptCounts[problem.cropId] ?? 0;
     final selected = _selectedCropId == problem.cropId;
     final expanded = _expandedSetCrops.contains(problem.cropId);
 
@@ -6259,12 +6686,6 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
     } else {
       borderColor = theme.dividerColor.withValues(alpha: 0.4);
     }
-    final revisionColor = attemptCount >= 5
-        ? wrongColor
-        : attemptCount >= 3
-            ? cautionColor
-            : accent;
-
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Material(
@@ -6307,67 +6728,49 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
                           ),
                           child: Row(
                             children: [
-                              SizedBox(
+                              _problemIndexColumn(
+                                theme,
+                                title: _displayProblemNumber(problem),
+                                subtitle: problem.label,
+                                categoryLabel: problem.categoryLabel,
+                                reserveCategoryLine: _showCategoryLabel,
                                 width: 64,
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      _displayProblemNumber(problem),
-                                      style: theme.textTheme.titleMedium
-                                          ?.copyWith(
-                                              fontWeight: FontWeight.w800),
-                                    ),
-                                    if (problem.label.isNotEmpty)
-                                      Text(
-                                        problem.label,
-                                        style: theme.textTheme.bodySmall
-                                            ?.copyWith(color: theme.hintColor),
-                                      ),
-                                    if (_showCategoryLabel &&
-                                        problem.categoryLabel != null)
-                                      Text(
-                                        problem.categoryLabel!,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: theme.textTheme.bodySmall
-                                            ?.copyWith(color: theme.hintColor),
-                                      ),
-                                  ],
-                                ),
                               ),
                               const SizedBox(width: 8),
                               Expanded(child: _setSummaryChips(theme, problem)),
                               const SizedBox(width: 12),
-                              _roundChip(theme, problem),
-                              if (allCorrect && attemptCount > 1) ...[
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 9,
-                                    vertical: 5,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color:
-                                        revisionColor.withValues(alpha: 0.13),
-                                    borderRadius: BorderRadius.circular(999),
-                                  ),
-                                  child: Text(
-                                    '수정 · $attemptCount회',
-                                    style: TextStyle(
-                                      color: revisionColor,
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w800,
+                              _roundHistory(problem),
+                              if (allCorrect) ...[
+                                if (!_isTimedTest && widget.homework == null)
+                                  Padding(
+                                    padding: const EdgeInsets.only(right: 6),
+                                    child: InkWell(
+                                      borderRadius: BorderRadius.circular(999),
+                                      onTap: () => unawaited(
+                                        _promptRepeatProblemInSeason(problem),
+                                      ),
+                                      child: Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                          vertical: 4,
+                                        ),
+                                        child: Text(
+                                          '다시 풀기',
+                                          style: TextStyle(
+                                            color: theme.hintColor,
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                      ),
                                     ),
                                   ),
-                                ),
-                                const SizedBox(width: 9),
-                              ],
-                              if (allCorrect)
                                 const Icon(
                                   Icons.circle_outlined,
                                   size: 26,
                                   color: accent,
-                                )
+                                ),
+                              ]
                               else if (gradedParts > 0)
                                 Text(
                                   '$correctParts/$totalParts',

@@ -3,6 +3,7 @@ import {
   anchorFigureWithBlank,
   applyCommonFigurePlacement,
   commonStemWithFigureMarker,
+  dropPrintedRevert,
   buildFigureProposal,
   commonFigureProposal,
   emPxForHeader,
@@ -12,7 +13,14 @@ import {
   figureRemovalIndexes,
   holdUnslottedFigureCrops,
   LINE_PITCH_EM,
+  mergeBoxFigureMeasures,
+  mergeTableFigureMeasures,
+  subQuestionFigurePlacement,
+  ownerStagedFigures,
+  singleFigureInsideBox,
   normalizeBox,
+  blankChoiceLabelsOf,
+  blankChoiceTextFromArray,
   normalizeTextFix,
   orderedFigureAssets,
   parseFigureMeasures,
@@ -45,8 +53,8 @@ Deno.test('원본 배치를 V2 위치로 옮기고 폭은 글자 크기 대비 �
   const [below] = parseFigureMeasures([{ bbox_1k: [500, 100, 900, 500], placement: 'below_text', align: 'center', v2_state: 'ok' }]);
   const kept = figureLayoutItem(below, null, 1100, 16.5);
   assertEquals(kept, { widthEm: 16.5, position: 'below-stem', anchor: 'center', offsetXEm: 0, offsetYEm: 0 });
-  // 범위 밖 폭은 4~40em 으로 묶는다
-  assertEquals(figureLayoutItem(below, 2, 1100, 20).widthEm, 40);
+  // 범위 밖 폭은 4em ~ 한 단 폭(22em)으로 묶는다
+  assertEquals(figureLayoutItem(below, 2, 1100, 20).widthEm, 22);
 });
 
 Deno.test('그림 자산은 렌더러와 같이 figure_index 별 승인·최신 우선으로 고른다', () => {
@@ -353,4 +361,149 @@ Deno.test('세트 머리에만 그림이 있고 그림 자리가 어디에도 �
   assertEquals(commonStemWithFigureMarker({ ...base, stem: '[그림][문단]점 A' }), null);
   assertEquals(commonStemWithFigureMarker({ ...base, commonStem: '그림을 보고 답하여라.[그림]' }), null);
   assertEquals(commonStemWithFigureMarker({ ...base, commonStem: '' }), null);
+});
+
+Deno.test('원본 오류 교정 문항: 인쇄본으로 되돌리는 본문 수정안만 버린다', () => {
+  const printed = { stem: '정사각형 ABCD를 \\overline{\\text{EH}}를 접는 선으로 하여 점 F에 오도록 접을 때\n[문단]\n[그림]', choices: [] };
+  const revert = { stem: '정사각형 ABCD를 \\overline{EH}를 접는 선으로 하여 점 F에 오도록 접을 때\n[문단]\n[그림]', commonStem: null, choices: null, textSame: false };
+  // 표시하지 않은 문항은 그대로 둔다.
+  assertEquals(dropPrintedRevert(revert, null), { ...revert, reverted: false });
+  // 표시한 문항: \text{} 감싸기만 다른 인쇄본 글로 되돌리는 수정안은 버리고 "원본과 같음"으로 본다.
+  const dropped = dropPrintedRevert(revert, printed);
+  assertEquals(dropped.stem, null);
+  assertEquals(dropped.textSame, true);
+  assertEquals(dropped.reverted, true);
+  // 인쇄본과 다른 글로 고치는 수정안(다른 오타 수정)은 남긴다.
+  const other = { ...revert, stem: '정사각형 ABCD를 \\overline{FH}를 접는 선으로 하여 점 E에 오도록 접을 때, 값은?\n[문단]\n[그림]' };
+  const kept = dropPrintedRevert(other, printed);
+  assertEquals(kept.stem, other.stem);
+  assertEquals(kept.reverted, false);
+  // 선지를 인쇄본으로 되돌리는 수정안도 버린다.
+  const ch = dropPrintedRevert(
+    { stem: null, commonStem: null, choices: [{ label: '①', text: '$3$' }], textSame: false },
+    { stem: 'x', choices: [{ label: '①', text: '3' }] },
+  );
+  assertEquals(ch.choices, null);
+  assertEquals(ch.reverted, true);
+});
+Deno.test('보기 상자 안 그림은 통째로 한 장: 나눠 잰 도형을 합치고, 이미 통째 그림이면 다시 자르지 않는다', () => {
+  const stem = '<보기>에서 옳은 것은?\n[문단]\n[보기시작]\n[그림]\n[보기끝]';
+  assertEquals(singleFigureInsideBox(stem), true);
+  assertEquals(singleFigureInsideBox('값은?\n[문단]\n[그림]'), false);
+  assertEquals(singleFigureInsideBox('[보기시작]\nㄱ. 1\n[보기끝]\n[그림]'), false);
+  assertEquals(singleFigureInsideBox('[보기시작]\n[그림]\n[그림]\n[보기끝]'), false);
+
+  const m = (bbox: [number, number, number, number], v2State: 'dirty' | 'missing' | 'ok') =>
+    ({ bbox, placement: 'below_text' as const, align: 'left' as const, v2State });
+  const measures = [m([180, 39, 323, 458], 'dirty'), m([192, 486, 310, 941], 'missing'), m([598, 486, 799, 923], 'missing')];
+  const region = [94, 517, 486, 926];
+
+  // 통째 그림이 이미 있으면(추출 때 자른 것) 그대로 둔다.
+  const whole = [{ figure_index: 1, approved: true, bbox_1k: [150, 520, 418, 914] }];
+  const kept = mergeBoxFigureMeasures({ measures, stem, assets: whole, originalRegion1k: region });
+  assertEquals(kept.length, 1);
+  assertEquals(kept[0].bbox, [160, 19, 819, 961]);
+  assertEquals(kept[0].align, 'center');
+  assertEquals(kept[0].v2State, 'ok');
+
+  // 왼쪽 기호가 잘린 통째 그림(추출 때 좁게 잘림)이나 도형 하나만 담긴 그림이면 합친 영역으로 다시 자른다.
+  const narrow = [{ figure_index: 1, approved: true, bbox_1k: [154, 567, 412, 904] }];
+  assertEquals(mergeBoxFigureMeasures({ measures, stem, assets: narrow, originalRegion1k: region })[0].v2State, 'cut');
+  const part = [{ figure_index: 1, approved: true, crop_region_1k: [153, 518, 223, 709] }];
+  assertEquals(mergeBoxFigureMeasures({ measures, stem, assets: part, originalRegion1k: region })[0].v2State, 'cut');
+  // 그림이 없으면 새로 자른다.
+  assertEquals(mergeBoxFigureMeasures({ measures, stem, assets: [], originalRegion1k: region })[0].v2State, 'missing');
+  // 보기 상자 문항이 아니거나 그림이 하나면 건드리지 않는다.
+  assertEquals(mergeBoxFigureMeasures({ measures, stem: '값은?\n[그림]\n[그림]\n[그림]', assets: [], originalRegion1k: region }), measures);
+  assertEquals(mergeBoxFigureMeasures({ measures: measures.slice(0, 1), stem, assets: [], originalRegion1k: region }).length, 1);
+
+  assertEquals(ownerStagedFigures({ figure_assets: [{}], sources: { figure_assets: 'owner' } }), true);
+  assertEquals(ownerStagedFigures({ figure_assets: [{}], sources: { figure_assets: 'ai' } }), false);
+  assertEquals(ownerStagedFigures(null), false);
+});
+Deno.test('칸 안에 그림이 있는 표는 표 전체를 그림 한 장으로 바꾼다', () => {
+  const stem = '다음 표를 완성하여라.\n[문단]\n[표시작]\n\\begin{tabular}{|c|c|}\n\\text{다면체} & [그림] & [그림] \\\\\n\\end{tabular}\n[표끝]';
+  const cell = { placement: 'below_text', align: 'center', v2State: 'ok' } as const;
+  const out = mergeTableFigureMeasures({
+    stem,
+    measures: [
+      { bbox: [100, 50, 600, 950], ...cell, wholeTable: true },
+      { bbox: [120, 300, 200, 400], ...cell },
+      { bbox: [120, 600, 200, 700], ...cell },
+    ],
+  });
+  assertEquals(out.stem, '다음 표를 완성하여라.\n[문단]\n[그림]');
+  assertEquals(out.measures.length, 1);
+  assertEquals(out.measures[0].v2State, 'cut');
+  // 표 전체를 못 쟀으면 아무것도 바꾸지 않는다.
+  const none = mergeTableFigureMeasures({ stem, measures: [{ bbox: [120, 300, 200, 400], ...cell }] });
+  assertEquals(none.stem, null);
+  assertEquals(none.measures.length, 1);
+  // 그림 없는 글자 표는 그대로 둔다.
+  assertEquals(mergeTableFigureMeasures({ stem: '[표시작]\na & b\n[표끝]', measures: [] }).stem, null);
+});
+
+Deno.test('상자가 든 글은 공통 발문 수정안으로 받지 않는다', () => {
+  const cur = '다음 조건을 모두 만족시키는 입체도형을 구하여라.\n[문단]\n[박스시작]\n(가) 밑면이 1개이다.\n[박스끝]';
+  const fix = normalizeTextFix({
+    textMatchesOriginal: false,
+    correctedStem: null,
+    correctedCommonStem: '다음 조건을 모두 만족시키는 입체도형을 구하여라.\n[문단]\n[박스시작]\n(가) 밑면이 1개이다.',
+    correctedChoices: null,
+    currentStem: cur,
+    currentCommonStem: '',
+    currentChoices: [],
+  });
+  assertEquals(fix.commonStem, null);
+  assertEquals(fix.stem, null);
+});
+Deno.test('소문항 안의 그림은 글 옆으로 재져도 소문항 번호 아래 왼쪽에 둔다', () => {
+  const stem = '오른쪽 그림을 보고 답하여라.\n[그림]\n[문단]\n[소문항1]\n1) [그림]\n[문단]\n[소문항2]\n2) [그림]';
+  const m = { bbox: [0, 0, 100, 100] as [number, number, number, number], align: 'center', v2State: 'ok' } as const;
+  const out = subQuestionFigurePlacement(
+    [{ ...m, placement: 'right_of_text' }, { ...m, placement: 'right_of_text' }, { ...m, placement: 'below_text' }],
+    stem,
+  );
+  assertEquals(out.map((x) => `${x.placement}/${x.align}`), ['right_of_text/center', 'below_text/left', 'below_text/center']);
+});
+Deno.test('빈칸형 선지: 한 줄 array 로 쓴 선지는 쉼표 형식으로 바꾼다', () => {
+  assertEquals(blankChoiceLabelsOf({ choice_layout: 'blank_table', blank_choice_labels: ['이름', '면의 모양', '꼭짓점의 개수'] })?.length, 3);
+  assertEquals(blankChoiceLabelsOf({ choice_layout: 'default' }), null);
+  assertEquals(
+    blankChoiceTextFromArray('\\begin{array}{ccc}\\text{정사면체}&\\text{정삼각형}&4\\end{array}', 3),
+    '정사면체, 정삼각형, 4',
+  );
+  assertEquals(blankChoiceTextFromArray('\\begin{array}{cc}a&b\\end{array}', 3), null);
+  assertEquals(blankChoiceTextFromArray('\\begin{array}{ccc}a&b&c\\\\d&e&f\\end{array}', 3), null);
+  assertEquals(blankChoiceTextFromArray('정사면체, 정삼각형, 4', 3), null);
+
+  const arr = (a: string, b: string, c: string) => `\\begin{array}{ccc}\\text{${a}}&\\text{${b}}&${c}\\end{array}`;
+  const current = [
+    { label: '①', text: arr('정사면체', '정삼각형', '4') },
+    { label: '②', text: arr('정육면체', '정사각형', '8') },
+  ];
+  // AI 수정안이 없어도 저장된 선지가 array 면 고치는 수정안을 낸다.
+  const fix = normalizeTextFix({
+    textMatchesOriginal: true,
+    correctedStem: null,
+    correctedCommonStem: null,
+    correctedChoices: null,
+    currentStem: '옳지 않은 것은?',
+    currentCommonStem: '',
+    currentChoices: current,
+    blankChoiceColumns: 3,
+  });
+  assertEquals(fix.choices?.map((c) => c.text), ['정사면체, 정삼각형, 4', '정육면체, 정사각형, 8']);
+  assertEquals(fix.textSame, false);
+  // 빈칸형이 아니면 그대로 둔다.
+  const plain = normalizeTextFix({
+    textMatchesOriginal: true,
+    correctedStem: null,
+    correctedCommonStem: null,
+    correctedChoices: null,
+    currentStem: '옳지 않은 것은?',
+    currentCommonStem: '',
+    currentChoices: current,
+  });
+  assertEquals(plain.choices, null);
 });

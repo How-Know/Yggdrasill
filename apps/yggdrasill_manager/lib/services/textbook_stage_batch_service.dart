@@ -44,6 +44,7 @@ class TextbookStageBatchService {
 
   static const int _vlmLongEdgePx = 1500;
   static const int _answerImageLongEdgePx = 3000;
+  static const int _layoutLongEdgePx = 2400;
   static const Duration _pdfCacheMaxAge = Duration(days: 7);
   static final Map<String, Future<File>> _pdfDownloadsInFlight =
       <String, Future<File>>{};
@@ -613,8 +614,24 @@ class TextbookStageBatchService {
       }
     }
 
+    // 수력충전 빠른 정답은 소단원 블록마다 번호가 01부터 다시 시작하고 한 지면에
+    // 블록 여럿이 실린다. 기대 번호를 물으면 모델이 다른 블록의 같은 번호를
+    // 집으므로, 블록 머리와 번호·정답만 읽고 블록은 머리의 쪽 배지로 가린다.
+    final byLayout = seriesKey.trim().toLowerCase() == 'suryeok';
+    if (byLayout) {
+      await _assignAnswersByLayout(
+        doc: doc,
+        targets: targets,
+        hits: hits,
+        firstPage: firstPage,
+        lastPage: maxAllowedPage,
+        pageErrors: pageErrors,
+        answerImagePagePng: answerImagePagePng,
+        onStatus: onStatus,
+      );
+    }
     for (var page = firstPage;
-        page <= maxAllowedPage && hits.length < targets.length;
+        !byLayout && page <= maxAllowedPage && hits.length < targets.length;
         page += 1) {
       if (page > initialLastPage && hits.length >= targets.length) break;
       final remainingPositions = <int>[
@@ -686,11 +703,10 @@ class TextbookStageBatchService {
       }
     }
 
-    if (hits.isEmpty) {
-      final sample = pageErrors.isEmpty
-          ? '모든 정답 PDF 페이지에서 매칭 가능한 정답을 찾지 못했습니다.'
-          : pageErrors.take(3).join(' / ');
-      throw Exception('정답 VLM 추출 실패: $sample');
+    // 지면을 하나도 못 읽었을 때만 멈춘다. 읽었는데 못 찾은 문항은 "정답 없음"으로
+    // 남기고 해설·AI 풀이·검수를 이어 간다(해설 정답으로 되살릴 수 있다).
+    if (hits.isEmpty && pageErrors.isNotEmpty) {
+      throw Exception('정답 VLM 추출 실패: ${pageErrors.take(3).join(' / ')}');
     }
 
     final uploads = <TextbookAnswerUpload>[];
@@ -1150,8 +1166,20 @@ class TextbookStageBatchService {
     final maxAllowedPage = (startPage != null && startPage > 0)
         ? (initialLastPage + 1).clamp(firstPage, totalPages)
         : totalPages;
+    // 정답과 같은 이유로 수력충전 해설은 소단원 머리 아래의 번호만 그 소단원으로 받는다.
+    final byLayout = seriesKey.trim().toLowerCase() == 'suryeok';
+    if (byLayout) {
+      await _assignSolutionRefsByLayout(
+        doc: doc,
+        targets: targets,
+        hits: hits,
+        firstPage: firstPage,
+        lastPage: maxAllowedPage,
+        onStatus: onStatus,
+      );
+    }
     for (var page = firstPage;
-        page <= maxAllowedPage && hits.length < targets.length;
+        !byLayout && page <= maxAllowedPage && hits.length < targets.length;
         page += 1) {
       final remainingPositions = <int>[
         for (var i = 0; i < targets.length; i += 1)
@@ -1311,6 +1339,264 @@ class TextbookStageBatchService {
       refs: uploads,
     );
     return _SavedWithMissing(saved: saved, missing: missing);
+  }
+
+  /// 수력충전 빠른 정답을 지면 구조(소단원 머리 → 번호·정답)로 읽어 붙인다.
+  /// 모델은 글자만 읽고, 어느 소단원 블록인지는 머리의 쪽 배지로 우리가 정한다.
+  Future<void> _assignAnswersByLayout({
+    required PdfDocument doc,
+    required List<_BatchTarget> targets,
+    required Map<int, _BatchAnswerHit> hits,
+    required int firstPage,
+    required int lastPage,
+    required List<String> pageErrors,
+    required Future<Uint8List?> Function(int page) answerImagePagePng,
+    void Function(String status)? onStatus,
+  }) async {
+    final blocks = TextbookLayoutBlocks.of([for (final t in targets) t.expected]);
+    final pending = <int>{
+      for (var i = 0; i < targets.length; i += 1)
+        if (!hits.containsKey(i)) i,
+    };
+
+    Future<TextbookVlmAnswerLayoutPage?> read(int page, {bool record = true}) async {
+      try {
+        final png = await renderPdfPageToPng(
+          document: doc,
+          pageNumber: page,
+          longEdgePx: _layoutLongEdgePx,
+        );
+        return await _answerService.extractAnswerLayoutOnPage(imageBytes: png, rawPage: page);
+      } catch (e) {
+        if (record) pageErrors.add('p$page: $e');
+        return null;
+      }
+    }
+
+    Future<int> apply(int page, TextbookVlmAnswerLayoutPage layout, int current) async {
+      for (final entry in textbookAnswerLayoutReadingOrder(layout.entries)) {
+        if (entry.isHeader) {
+          current = blocks.blockForHeader(entry.title, entry.pageStart, entry.pageEnd);
+          continue;
+        }
+        final answer = entry.answer;
+        if (answer == null || current < 0) continue;
+        if (answer.answerText.trim().isEmpty && !answer.isImage) continue;
+        final positions = blocks.positionsFor(current, answer.problemNumber, pending);
+        if (positions.isEmpty) continue;
+        _ImageAnswerCrop? imageCrop;
+        if (answer.isImage && answer.bbox != null) {
+          final pagePng = await answerImagePagePng(page);
+          if (pagePng != null) imageCrop = _cropAnswerImage(pagePng, answer.bbox!);
+        }
+        for (final position in positions) {
+          pending.remove(position);
+          hits[position] = _BatchAnswerHit(
+            item: TextbookVlmAnswerItem(
+              problemNumber: targets[position].expected.number,
+              kind: answer.kind,
+              answerText: answer.answerText,
+              answerLatex2d: answer.answerLatex2d,
+              answerAssets: answer.answerAssets,
+              bbox: answer.bbox,
+            ),
+            rawPage: page,
+            displayPage: page,
+            imageCrop: imageCrop,
+          );
+        }
+      }
+      return current;
+    }
+
+    var current = -1;
+    for (var page = firstPage; page <= lastPage && pending.isNotEmpty; page += 1) {
+      onStatus?.call('정답 지면 구조 읽기 $page / $lastPage 페이지 (남은 ${pending.length}문항)...');
+      final layout = await read(page);
+      if (layout == null) {
+        current = -1;
+        continue;
+      }
+      if (!layout.leadingContinuation) {
+        current = -1;
+      } else if (page == firstPage && page > 1) {
+        // 범위 첫 지면이 앞 지면에서 이어지면 그 블록 머리는 앞 지면에 있다.
+        final prev = await read(page - 1, record: false);
+        if (prev != null) current = await apply(page - 1, prev, -1);
+      }
+      current = await apply(page, layout, current);
+    }
+  }
+
+  /// 수력충전 해설 좌표를 지면 구조(소단원 머리 → 번호)로 붙인다.
+  /// 위 블록의 같은 번호(예: 종이접기 04번)를 아래 블록 문항에 붙이지 않는다.
+  Future<void> _assignSolutionRefsByLayout({
+    required PdfDocument doc,
+    required List<_BatchTarget> targets,
+    required Map<int, _SolutionRefWithPage> hits,
+    required int firstPage,
+    required int lastPage,
+    void Function(String status)? onStatus,
+  }) async {
+    final blocks = TextbookLayoutBlocks.of([for (final t in targets) t.expected]);
+    final pending = <int>{
+      for (var i = 0; i < targets.length; i += 1)
+        if (!hits.containsKey(i)) i,
+    };
+
+    Future<({int current, int skipped, bool leading})?> readPage(int page, int enterBlock) async {
+      final TextbookVlmSolutionBlockPage res;
+      try {
+        final png = await renderPdfPageToPng(
+          document: doc,
+          pageNumber: page,
+          longEdgePx: _layoutLongEdgePx,
+        );
+        res = await _solutionRefService.detectBlocksOnPage(imageBytes: png, rawPage: page);
+      } catch (e) {
+        onStatus?.call('해설 p$page 지면 읽기 실패: $e');
+        return null;
+      }
+      var current = res.leadingContinuation ? enterBlock : -1;
+      var skipped = 0;
+      for (final entry in res.sequence) {
+        if (entry.isHeader) {
+          current = blocks.blockForHeader(entry.title, entry.pageStart, entry.pageEnd);
+          onStatus?.call('해설 p$page 머리 "${entry.title}" p.${entry.pageStart}~${entry.pageEnd} → '
+              '${current < 0 ? '이번 범위 아님' : '이번 소단원'}');
+          continue;
+        }
+        final region = entry.numberRegion1k;
+        if (current < 0 || region == null) {
+          skipped += 1;
+          continue;
+        }
+        final positions = blocks.positionsFor(current, entry.text, pending);
+        if (positions.isEmpty) {
+          skipped += 1;
+          continue;
+        }
+        for (final position in positions) {
+          pending.remove(position);
+          hits[position] = _SolutionRefWithPage(
+            item: TextbookVlmSolutionRefItem(
+              problemNumber: targets[position].expected.number,
+              numberRegion1k: region,
+              contentRegion1k: entry.contentRegion1k,
+            ),
+            rawPage: page,
+            displayPage: page,
+          );
+        }
+      }
+      return (current: current, skipped: skipped, leading: res.leadingContinuation);
+    }
+
+    final enterBlock = <int, int>{};
+    final shakyPages = <int>[];
+    var current = -1;
+    for (var page = firstPage; page <= lastPage && pending.isNotEmpty; page += 1) {
+      onStatus?.call('해설 지면 구조 읽기 $page / $lastPage 페이지 (남은 ${pending.length}문항)...');
+      enterBlock[page] = current;
+      var read = await readPage(page, current);
+      if (read == null) {
+        current = -1;
+        continue;
+      }
+      if (read.leading && current < 0 && page == firstPage && page > 1 && pending.isNotEmpty) {
+        // 범위 첫 지면이 앞 지면에서 이어지면 앞 지면에서 블록을 정한 뒤 다시 읽는다.
+        final prev = await readPage(page - 1, -1);
+        if (prev != null && prev.current >= 0) {
+          enterBlock[page] = prev.current;
+          read = await readPage(page, prev.current) ?? read;
+        }
+      }
+      current = read.current;
+      if (read.skipped > 0) shakyPages.add(page);
+    }
+    // 모델은 같은 지면도 회차마다 다르게 읽는다. 빈칸이 남았으면 튕긴 지면만
+    // 그때 읽던 블록에서 한 번 더 읽는다.
+    for (final page in shakyPages) {
+      if (pending.isEmpty) return;
+      onStatus?.call('해설 p$page 다시 읽기 (남은 ${pending.length}문항)...');
+      await readPage(page, enterBlock[page] ?? -1);
+    }
+  }
+}
+
+/// 답지·해설 지면을 블록 구조로 읽을 때 쓰는 기대 문항 표.
+///
+/// 블록은 번호가 01부터 다시 시작하는 묶음(소단원 하나 또는 단원 마무리 평가)이다.
+/// 본문 쪽 순서로 세워 코너가 바뀌거나 번호가 되돌아가는 곳에서 끊는다.
+class TextbookLayoutBlocks {
+  TextbookLayoutBlocks._(this.lowPage, this.highPage, this.cornerOf, this.byNumber);
+
+  factory TextbookLayoutBlocks.of(List<TextbookExpectedAnswer> expected) {
+    int valueOf(int i) => int.tryParse(expected[i].number.replaceAll(RegExp(r'\D'), '')) ?? 0;
+    // 입력 순서에 기대지 않는다. 크롭 목록은 번호 내림차순으로 오기도 해서, 그대로
+    // 세우면 번호마다 "되돌아감"으로 끊겨 블록이 문항 수만큼 생긴다.
+    final order = <int>[for (var i = 0; i < expected.length; i += 1) i]
+      ..sort((a, b) {
+        final byPage = (expected[a].bodyPage ?? 0).compareTo(expected[b].bodyPage ?? 0);
+        if (byPage != 0) return byPage;
+        final byCorner = expected[a].corner.trim().compareTo(expected[b].corner.trim());
+        if (byCorner != 0) return byCorner;
+        final byValue = valueOf(a).compareTo(valueOf(b));
+        return byValue != 0 ? byValue : a.compareTo(b);
+      });
+    final lowPage = <int, int>{};
+    final highPage = <int, int>{};
+    final cornerOf = <int, String>{};
+    final byNumber = <int, Map<String, int>>{};
+    var block = -1;
+    var lastCorner = '\u0000';
+    var lastValue = 0;
+    for (final position in order) {
+      final e = expected[position];
+      final corner = e.corner.trim();
+      final value = int.tryParse(e.number.replaceAll(RegExp(r'\D'), '')) ?? 0;
+      if (block < 0 || corner != lastCorner || value <= lastValue) block += 1;
+      lastCorner = corner;
+      lastValue = value;
+      cornerOf.putIfAbsent(block, () => corner);
+      final page = e.bodyPage ?? 0;
+      if (page > 0) {
+        lowPage[block] = (lowPage[block] ?? page) < page ? lowPage[block]! : page;
+        highPage[block] = (highPage[block] ?? page) > page ? highPage[block]! : page;
+      }
+      (byNumber[block] ??= <String, int>{}).putIfAbsent(textbookAnswerNumberKey(e.number), () => position);
+    }
+    return TextbookLayoutBlocks._(lowPage, highPage, cornerOf, byNumber);
+  }
+
+  final Map<int, int> lowPage;
+  final Map<int, int> highPage;
+  final Map<int, String> cornerOf;
+  final Map<int, Map<String, int>> byNumber;
+
+  /// 머리("16 평행선의 성질 ▸p.41~43")가 가리키는 블록. 이번 범위 밖이면 -1.
+  int blockForHeader(String title, int pageStart, int pageEnd) => textbookStageBlockForHeader(
+        title: title,
+        pageStart: pageStart,
+        pageEnd: pageEnd,
+        lowPage: lowPage,
+        highPage: highPage,
+        cornerOf: cornerOf,
+      );
+
+  /// 블록 안에서 인쇄된 번호가 채울 기대 문항 위치들. "05~09" 처럼 묶인 번호는
+  /// 범위에 드는 문항 모두를 돌려준다. 이미 채운 문항은 빼고 준다.
+  List<int> positionsFor(int block, String printedNumber, Set<int> pending) {
+    final table = byNumber[block];
+    if (table == null || table.isEmpty) return const <int>[];
+    final single = table[textbookAnswerNumberKey(printedNumber)];
+    if (single != null) return pending.contains(single) ? <int>[single] : const <int>[];
+    final range = textbookAnswerNumberRange(printedNumber);
+    if (range == null) return const <int>[];
+    return <int>[
+      for (var n = range.$1; n <= range.$2; n += 1)
+        if (table['$n'] != null && pending.contains(table['$n'])) table['$n']!,
+    ];
   }
 }
 

@@ -1077,6 +1077,54 @@ List<TextbookVlmAnswerLayoutEntry> textbookAnswerLayoutReadingOrder(
   return <TextbookVlmAnswerLayoutEntry>[for (final i in order) entries[i]];
 }
 
+/// 답지·해설 지면의 소단원 머리 하나를 블록 번호에 붙인다.
+///
+/// 머리에는 "▶p.150~152" 처럼 본문 쪽 배지가 인쇄돼 있고, 블록마다 크롭의
+/// 본문 쪽 범위를 알고 있으므로 겹치는 블록을 고르면 된다.
+///
+/// "단원 마무리 평가" 는 이름이 고정이라 코너 값으로도 가려지지만, **이름만
+/// 보고 첫 코너 블록을 집으면 안 된다.** 훑는 범위 안에 앞 중단원의 마무리
+/// 지면이 함께 들어오면 그 머리가 이번 마무리 블록을 가로채, 24문항이 통째로
+/// 남의 단원 답으로 채워진다(2-1 답지 8쪽 "[01~09] ▶p.134~137" → 본문
+/// p.150~152 블록). 더 나쁜 것은 그렇게 블록이 미리 채워지면 남은 문항이 0이
+/// 되어 정작 이번 마무리가 실린 뒤쪽 지면은 훑지도 않고 끝난다는 점이다.
+///
+/// 쪽 배지를 못 읽은 머리(`pageStart <= 0`)만 예전처럼 첫 마무리 블록으로
+/// 되짚고, 그 밖에는 겹치는 블록이 없으면 -1 을 돌려 건너뛴다.
+int textbookStageBlockForHeader({
+  required String title,
+  required int pageStart,
+  required int pageEnd,
+  required Map<int, int> lowPage,
+  required Map<int, int> highPage,
+  required Map<int, String> cornerOf,
+}) {
+  final end = pageEnd >= pageStart ? pageEnd : pageStart;
+  bool overlaps(int block) {
+    final low = lowPage[block];
+    final high = highPage[block];
+    if (low == null || high == null || pageStart <= 0) return false;
+    return pageStart <= high && end >= low;
+  }
+
+  if (title.replaceAll(' ', '').contains('단원마무리')) {
+    for (final block in cornerOf.keys) {
+      if ((cornerOf[block] ?? '').isEmpty) continue;
+      if (overlaps(block)) return block;
+    }
+    if (pageStart <= 0) {
+      for (final entry in cornerOf.entries) {
+        if (entry.value.isNotEmpty) return entry.key;
+      }
+    }
+    return -1;
+  }
+  for (final block in lowPage.keys) {
+    if (overlaps(block)) return block;
+  }
+  return -1;
+}
+
 class TextbookVlmAnswerLayoutPage {
   const TextbookVlmAnswerLayoutPage({
     required this.rawPage,

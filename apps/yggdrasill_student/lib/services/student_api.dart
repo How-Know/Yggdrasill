@@ -61,6 +61,14 @@ enum HomeworkAssignmentOrigin {
   }
 }
 
+/// `2026-08-06`처럼 날짜만 있는 값은 시각이 아니다.
+DateTime? _parseDueClock(Object? raw) {
+  if (raw == null) return null;
+  final text = '$raw'.trim();
+  if (text.isEmpty || !text.contains(':')) return null;
+  return DateTime.tryParse(text)?.toLocal();
+}
+
 /// 과제 그룹 (m5_list_homework_groups와 동일 형태).
 class HomeworkGroup {
   HomeworkGroup({
@@ -90,6 +98,7 @@ class HomeworkGroup {
     this.listKind = HomeworkListKind.inClass,
     this.assignmentOrigin = HomeworkAssignmentOrigin.unknown,
     this.dueDate,
+    this.dueAt,
     this.digitalSolvable = false,
     this.inspectionStatus = '',
     this.originalDueDate,
@@ -129,6 +138,9 @@ class HomeworkGroup {
   final HomeworkListKind listKind;
   final HomeworkAssignmentOrigin assignmentOrigin;
   final DateTime? dueDate;
+
+  /// 검사 시각이 있는 마감. `due_date`만 있으면 null이라 칩에 시각을 붙이지 않는다.
+  final DateTime? dueAt;
   final bool digitalSolvable;
   final String inspectionStatus;
   final DateTime? originalDueDate;
@@ -156,12 +168,32 @@ class HomeworkGroup {
     return '오늘까지';
   }
 
-  /// 숙제 마감일 칩. 예: `3월 12일까지`
+  /// 숙제 마감일. 예: `3월 12일까지`
   String get assignmentOriginLabel {
     final due = dueDate;
     if (due == null) return '';
     final local = due.toLocal();
     return '${local.month}월 ${local.day}일까지';
+  }
+
+  /// 숙제 카드의 종료 시각 칩. 예: `오늘 오후 6:30까지`, `11월 20일까지`.
+  /// 날짜만 있으면 시각을 붙이지 않는다. 자정은 시각이 없는 것으로 본다.
+  String dueUntilLabel({DateTime? now}) {
+    final clock = dueAt?.toLocal();
+    final date = (clock ?? dueDate)?.toLocal();
+    if (date == null) return '';
+    final today = (now ?? DateTime.now()).toLocal();
+    final isToday = date.year == today.year &&
+        date.month == today.month &&
+        date.day == today.day;
+    final datePart = isToday ? '오늘' : '${date.month}월 ${date.day}일';
+    if (clock == null || (clock.hour == 0 && clock.minute == 0)) {
+      return '$datePart까지';
+    }
+    final period = clock.hour < 12 ? '오전' : '오후';
+    final hour12 = clock.hour % 12 == 0 ? 12 : clock.hour % 12;
+    final minute = clock.minute.toString().padLeft(2, '0');
+    return '$datePart $period $hour12:$minute까지';
   }
 
   /// 출력물/프린트 출처 — 표지 대신 흰 배경.
@@ -268,7 +300,7 @@ class HomeworkGroup {
 
   /// 학습앱 홈 카드 `시도 N`과 동일.
   /// 대기(1)·확인(4)은 끝난 검사 횟수, 수행(2)·제출(3)은 다음 차수(+1).
-  /// 생성 직후 대기는 0이고, 그때는 배지를 숨긴다.
+  /// 생성 직후 대기는 0이다. 목록은 그때 `대기` 배지를 같은 자리에 둔다.
   int get performanceAttemptIndex {
     final checks = checkCount < 0 ? 0 : checkCount;
     if (phase == 2 || phase == 3) return checks + 1;
@@ -317,6 +349,7 @@ class HomeworkGroup {
                     .contains(explicitDigital.trim().toLowerCase())
                 : type.trim() != '출력물' && type.trim() != '프린트';
     final dueDateRaw = row['due_date'] ?? row['dueDate'];
+    final dueAtRaw = row['current_due_at'] ?? row['due_at'] ?? row['dueAt'];
     return HomeworkGroup(
       groupId: row['group_id'] as String,
       title: (row['group_title'] as String?) ?? '',
@@ -348,6 +381,7 @@ class HomeworkGroup {
       dueDate: dueDateRaw == null
           ? null
           : DateTime.tryParse('$dueDateRaw')?.toLocal(),
+      dueAt: _parseDueClock(dueAtRaw),
       digitalSolvable: digitalSolvable,
       inspectionStatus: '${row['inspection_status'] ?? ''}'.trim(),
       originalDueDate:

@@ -19,6 +19,7 @@ import '../models/student_payment_info.dart';
 import '../models/student_pause_period.dart';
 import '../models/student_charge_point.dart';
 import '../models/student_app_presence.dart';
+import '../models/student_textbook_study_state.dart';
 import '../models/academic_season.dart';
 import '../models/season_roadmap_entry.dart';
 import 'package:flutter/foundation.dart';
@@ -109,6 +110,9 @@ class DataManager {
 
   /// student_id → 학생앱 presence (온라인·학원/집).
   Map<String, StudentAppPresence> _studentAppPresence = {};
+
+  /// student_id → 학생앱 교재 자습 상태 (자유풀이중/중단/정답입력중).
+  Map<String, List<StudentTextbookStudyState>> _studentTextbookStudyStates = {};
   bool _isInitialized = false;
   Future<void>? _initializeInFlight;
   Future<void>? _reloadAllInFlight;
@@ -131,6 +135,9 @@ class DataManager {
 
   /// 학생앱 presence 변경 시 UI 즉시 반영용
   final ValueNotifier<int> studentAppPresenceRevision = ValueNotifier<int>(0);
+
+  /// 학생앱 교재 자습 상태 변경 시 UI 즉시 반영용
+  final ValueNotifier<int> studentTextbookStudyRevision = ValueNotifier<int>(0);
   final ValueNotifier<List<PaymentRecord>> paymentRecordsNotifier =
       ValueNotifier<List<PaymentRecord>>([]);
   final ValueNotifier<List<StudentPaymentInfo>> studentPaymentInfosNotifier =
@@ -164,6 +171,28 @@ class DataManager {
     final p = _studentAppPresence[studentId];
     if (p == null || !p.isEffectivelyOnline) return null;
     return p;
+  }
+
+  /// 학생의 유효한 교재 자습 상태 목록 (자유풀이중 > 정답입력중 > 자유풀이 중단).
+  List<StudentTextbookStudyState> studentTextbookStudyStates(String studentId) {
+    final list = _studentTextbookStudyStates[studentId];
+    if (list == null || list.isEmpty) return const [];
+    return list.where((s) => s.isVisibleInHome).toList(growable: false);
+  }
+
+  StudentTextbookStudyState? primaryTextbookStudyState(String studentId) {
+    final list = studentTextbookStudyStates(studentId);
+    if (list.isEmpty) return null;
+    for (final s in list) {
+      if (s.isSolve && s.isFreshOpen) return s;
+    }
+    for (final s in list) {
+      if (s.isAnswerEntry && s.isFreshOpen) return s;
+    }
+    for (final s in list) {
+      if (s.isSolve && s.isPaused) return s;
+    }
+    return list.first;
   }
 
   /// 집에서 앱 로그인 중인 학생 id (등원 목록에 없는 경우 표시용).
@@ -1275,6 +1304,8 @@ class DataManager {
       await _subscribeM5DeviceBindingsRealtime(); // M5 기기 바인딩 Realtime 구독
       await loadStudentAppPresence();
       await _subscribeStudentAppPresenceRealtime();
+      await loadStudentTextbookStudyStates();
+      await _subscribeLearningSessionsRealtime();
       await preloadAllExamData(); // 시험 데이터 캐시 프리로드
       // 1Hz 글로벌 티커 시작
       _tickTimer?.cancel();
@@ -1917,6 +1948,39 @@ class DataManager {
     } catch (_) {
       _studentAppPresence = {};
       studentAppPresenceRevision.value++;
+    }
+  }
+
+  /// 학생앱 교재 자습 상태 로드 (자유풀이중 / 자유풀이 중단 / 정답입력중).
+  Future<void> loadStudentTextbookStudyStates() async {
+    if (!TagPresetService.preferSupabaseRead) return;
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
+      final rows = await Supabase.instance.client
+          .from('learning_sessions')
+          .select(
+            'id,student_id,book_id,grade_label,entry_mode,status,'
+            'location_kind,started_at,last_resumed_at,paused_at,'
+            'last_beat_at,elapsed_sec,interrupted_sec,updated_at,'
+            'resource_files(name)',
+          )
+          .eq('academy_id', academyId)
+          .inFilter('status', const ['open', 'paused'])
+          .inFilter('entry_mode', const ['solve', 'answer_entry'])
+          .order('updated_at', ascending: false);
+      final next = <String, List<StudentTextbookStudyState>>{};
+      for (final raw in (rows as List)) {
+        if (raw is! Map) continue;
+        final state =
+            StudentTextbookStudyState.fromRow(Map<String, dynamic>.from(raw));
+        if (state == null || !state.isVisibleInHome) continue;
+        next.putIfAbsent(state.studentId, () => []).add(state);
+      }
+      _studentTextbookStudyStates = next;
+      studentTextbookStudyRevision.value++;
+    } catch (_) {
+      // 마이그레이션 미적용 등에서는 조용히 빈 상태 유지.
     }
   }
 
@@ -7996,6 +8060,74 @@ class DataManager {
         onResync: () async {
           try {
             await loadStudentAppPresence();
+          } catch (_) {}
+        },
+      );
+    } catch (_) {}
+  }
+
+  // =================== LEARNING SESSIONS REALTIME ===================
+  RealtimeChannel? _rtLearningSessions;
+  Future<void> _subscribeLearningSessionsRealtime() async {
+    try {
+      _rtLearningSessions?.unsubscribe();
+      final String academyId =
+          (await TenantService.instance.getActiveAcademyId()) ??
+              await TenantService.instance.ensureActiveAcademy();
+      final chan = Supabase.instance.client
+          .channel('public:learning_sessions:$academyId');
+      _rtLearningSessions = chan
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'learning_sessions',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'academy_id',
+            value: academyId,
+          ),
+          callback: (_) async {
+            try {
+              await loadStudentTextbookStudyStates();
+            } catch (_) {}
+          },
+        )
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'learning_sessions',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'academy_id',
+            value: academyId,
+          ),
+          callback: (_) async {
+            try {
+              await loadStudentTextbookStudyStates();
+            } catch (_) {}
+          },
+        )
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.delete,
+          schema: 'public',
+          table: 'learning_sessions',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'academy_id',
+            value: academyId,
+          ),
+          callback: (_) async {
+            try {
+              await loadStudentTextbookStudyStates();
+            } catch (_) {}
+          },
+        );
+      RealtimeReconciler.instance.attachResubscribe(
+        chan,
+        key: 'learning_sessions:$academyId',
+        onResync: () async {
+          try {
+            await loadStudentTextbookStudyStates();
           } catch (_) {}
         },
       );

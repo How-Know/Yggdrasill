@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:yggdrasill_manager/screens/textbook/textbook_authoring_stage_dialog.dart';
+import 'package:yggdrasill_manager/services/textbook_vlm_answer_service.dart';
 
 // 수력충전 답지·해설은 중단원 하나를 뽑을 때도 앞뒤 중단원 지면이 함께 훑힌다.
 // "단원 마무리 평가" 는 이름이 고정이라, 이름만 보고 코너 블록을 집으면 앞

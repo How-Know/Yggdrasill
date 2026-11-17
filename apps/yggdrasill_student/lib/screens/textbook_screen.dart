@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:yggdrasill_ui/yggdrasill_ui.dart';
 
 import '../services/textbook_api.dart';
+import '../services/textbook_study_session.dart';
 import '../widgets/student_confirm_sheet.dart';
 import '../widgets/student_page_title.dart';
 import '../widgets/student_progress_summary_card.dart';
@@ -15,6 +17,9 @@ const double _cardGap = 20;
 const double _coverToMetaSpacing = 14;
 const double _cardMetaHeight = 77;
 const double _cardRadius = 28;
+
+/// 채점 과제카드가 제목 32·본문 22·배지 17인 기준 너비.
+const double _coverTypeReferenceWidth = 288;
 
 /// "교재 풀기" 탭 — 정답 DB가 준비된 교재 목록 + 풀이 현황.
 class TextbookScreen extends StatefulWidget {
@@ -31,12 +36,27 @@ class _TextbookScreenState extends State<TextbookScreen> {
   @override
   void initState() {
     super.initState();
+    TextbookStudySession.instance.addListener(_onStudySessionChanged);
     _refresh();
+  }
+
+  @override
+  void dispose() {
+    TextbookStudySession.instance.removeListener(_onStudySessionChanged);
+    super.dispose();
+  }
+
+  void _onStudySessionChanged() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _refresh() async {
     try {
-      final books = await TextbookApi.instance.listTextbooks();
+      final results = await Future.wait([
+        TextbookApi.instance.listTextbooks(),
+        TextbookStudySession.instance.refresh(),
+      ]);
+      final books = results[0] as List<StudentTextbook>;
       if (!mounted) return;
       setState(() {
         _books = books;
@@ -49,13 +69,185 @@ class _TextbookScreenState extends State<TextbookScreen> {
   }
 
   Future<void> _openBook(StudentTextbook book) async {
+    final existingSolve = TextbookStudySession.instance
+        .solveSessionFor(book.bookId, book.gradeLabel);
+    final TextbookEntryMode? chosenMode;
+    if (existingSolve != null) {
+      // 중단(또는 열려 있는) 바로풀기 세션이 있으면 묻지 않고 바로 이어 푼다.
+      chosenMode = TextbookEntryMode.solve;
+    } else {
+      chosenMode = await _showEntryModeSheet(book);
+    }
+    if (chosenMode == null || !mounted) return;
+
+    final session = await TextbookStudySession.instance.startSession(
+      bookId: book.bookId,
+      gradeLabel: book.gradeLabel,
+      entryMode: chosenMode,
+    );
+    if (!mounted) return;
+
     await Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => TextbookSolveScreen(book: book),
+        builder: (_) => TextbookSolveScreen(
+          book: book,
+          entryMode: chosenMode,
+          studySessionId: session?.sessionId,
+        ),
       ),
     );
     // 풀고 돌아오면 현황 갱신
     _refresh();
+  }
+
+  Future<TextbookEntryMode?> _showEntryModeSheet(StudentTextbook book) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final surface = isDark ? const Color(0xFF1C1C1E) : const Color(0xFFF2F2F7);
+    final card = isDark ? const Color(0xFF2C2C2E) : Colors.white;
+    final text = isDark ? Colors.white : Colors.black;
+    final sub = text.withValues(alpha: 0.48);
+    final divider = text.withValues(alpha: 0.08);
+    final accent = YggGlassTokens.confirmActionColor;
+
+    Widget option({
+      required String label,
+      required String subtitle,
+      required IconData icon,
+      required Color iconColor,
+      required BorderRadius inkRadius,
+      required VoidCallback onTap,
+    }) {
+      return Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: inkRadius,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+            child: Row(
+              children: [
+                Icon(icon, size: 26, color: iconColor),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        label,
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w700,
+                          color: text,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        subtitle,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                          color: sub,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    return showModalBottomSheet<TextbookEntryMode>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: surface,
+              borderRadius: BorderRadius.circular(28),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 14, 12, 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    book.name,
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      color: text,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    '어떻게 시작할까요?',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      color: sub,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: card,
+                      borderRadius: BorderRadius.circular(22),
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(22),
+                      child: Column(
+                        children: [
+                          option(
+                            label: '바로풀기',
+                            subtitle: '시간을 기록하며 지금 바로 풀어요',
+                            icon: Icons.play_arrow_rounded,
+                            iconColor: accent,
+                            inkRadius: const BorderRadius.vertical(
+                              top: Radius.circular(22),
+                            ),
+                            onTap: () => Navigator.of(ctx)
+                                .pop(TextbookEntryMode.solve),
+                          ),
+                          Divider(
+                            height: 1,
+                            indent: 18,
+                            endIndent: 18,
+                            color: divider,
+                          ),
+                          option(
+                            label: '정답입력하기',
+                            subtitle: '종이로 미리 풀어 온 답을 입력해요',
+                            icon: Icons.edit_note_rounded,
+                            iconColor: sub,
+                            inkRadius: const BorderRadius.vertical(
+                              bottom: Radius.circular(22),
+                            ),
+                            onTap: () => Navigator.of(ctx)
+                                .pop(TextbookEntryMode.answerEntry),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   /// 처음부터 다시 풀기. 지난 풀이는 회차로 남고 화면만 비워진다.
@@ -95,6 +287,8 @@ class _TextbookScreenState extends State<TextbookScreen> {
       );
       return;
     }
+    await TextbookStudySession.instance
+        .finishForBook(book.bookId, book.gradeLabel);
     await _refresh();
   }
 
@@ -210,6 +404,9 @@ class _TextbookScreenState extends State<TextbookScreen> {
                           width: cardWidth,
                           child: _BookCard(
                             book: book,
+                            width: cardWidth,
+                            activeSolveSession: TextbookStudySession.instance
+                                .solveSessionFor(book.bookId, book.gradeLabel),
                             onOpen: () => _openBook(book),
                             onReset: () => _resetBook(book),
                           ),
@@ -233,11 +430,15 @@ class _TextbookScreenState extends State<TextbookScreen> {
 class _BookCard extends StatefulWidget {
   const _BookCard({
     required this.book,
+    required this.width,
+    this.activeSolveSession,
     required this.onOpen,
     required this.onReset,
   });
 
   final StudentTextbook book;
+  final double width;
+  final ActiveTextbookSession? activeSolveSession;
   final VoidCallback onOpen;
   final VoidCallback onReset;
 
@@ -262,6 +463,37 @@ class _BookCardState extends State<_BookCard> {
     final coverColor = book.colorValue == null
         ? const Color(0xFF2B2B2B)
         : Color(book.colorValue!);
+    final onDark = hasNetworkCover || coverColor.computeLuminance() <= 0.6;
+    final typeScale =
+        (widget.width / _coverTypeReferenceWidth).clamp(0.68, 1.0);
+    final overlay = CoverOverlayStyle(
+      onDark: onDark,
+      hasImage: hasNetworkCover,
+      typeScale: typeScale,
+    );
+    const scale = 1.0;
+    final pad = CoverOverlayStyle.padFor(scale);
+    final gap = CoverOverlayStyle.gapFor(scale);
+    final daysLabel = _daysSinceStartLabel(book.startedAt);
+    final daysPill = daysLabel == null
+        ? null
+        : CoverPill(
+            style: overlay,
+            icon: Icons.schedule_rounded,
+            label: daysLabel,
+            shrinkWrap: true,
+          );
+    final activeSolve = widget.activeSolveSession;
+    final solveStatePill = activeSolve == null
+        ? null
+        : CoverPill(
+            style: overlay,
+            icon: activeSolve.isPaused
+                ? Icons.pause_circle_outline_rounded
+                : Icons.play_circle_outline_rounded,
+            label: activeSolve.isPaused ? '중단' : '풀이중',
+            shrinkWrap: true,
+          );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -301,34 +533,38 @@ class _BookCardState extends State<_BookCard> {
                                   _CoverFallback(color: coverColor),
                             )
                           : _CoverFallback(color: coverColor),
-                      Positioned(
-                        top: 12,
-                        left: 12,
-                        right: 12,
-                        child: Row(
-                          children: [
-                            _CoverStartDateLabel(startedAt: book.startedAt),
-                            const Spacer(),
-                            _CoverSeasonLabel(seasonNo: book.seasonNo),
-                          ],
+                      Positioned.fill(
+                        child: CoverScrim(style: overlay, showTop: false),
+                      ),
+                      Positioned.fill(
+                        child: CoverHairline(
+                          style: overlay,
+                          radius: _cardRadius,
                         ),
                       ),
-                      if (book.startedAt != null)
-                        Center(
-                          child: Transform.translate(
-                            offset: const Offset(0, -20),
-                            child: _DaysSinceStartBadge(
-                              startedAt: book.startedAt!,
-                            ),
-                          ),
+                      if (solveStatePill != null)
+                        Positioned(
+                          left: pad,
+                          top: pad,
+                          child: solveStatePill,
+                        ),
+                      if (daysPill != null)
+                        Positioned(
+                          right: pad,
+                          top: pad,
+                          child: daysPill,
                         ),
                       Positioned(
-                        left: 12,
-                        right: 12,
-                        bottom: 12,
-                        child: _CoverProgressOverlay(
+                        left: pad,
+                        right: pad,
+                        bottom: pad,
+                        child: _CoverFactBlock(
+                          overlay: overlay,
                           advance: advance,
                           completion: completion,
+                          gradeLabel: book.gradeLabel.trim(),
+                          seasonNo: book.seasonNo,
+                          gap: gap,
                         ),
                       ),
                     ],
@@ -342,35 +578,51 @@ class _BookCardState extends State<_BookCard> {
         // 메타 탭 → 상세 시트 펼침/접기 (커버와 분리)
         Material(
           color: Colors.transparent,
+          borderRadius: BorderRadius.circular(14),
+          clipBehavior: Clip.antiAlias,
           child: InkWell(
             onTap: () => setState(() => _expanded = !_expanded),
             borderRadius: BorderRadius.circular(14),
-            child: SizedBox(
-              height: _cardMetaHeight,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: _cardMetaHeight),
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
                 child: Column(
+                  mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            book.name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: theme.textTheme.titleMedium?.copyWith(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: -0.2,
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final grade = book.gradeLabel.trim();
+                        return Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                book.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.titleMedium?.copyWith(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: -0.2,
+                                ),
+                              ),
                             ),
-                          ),
-                        ),
-                        if (book.gradeLabel.trim().isNotEmpty) ...[
-                          const SizedBox(width: 8),
-                          _GradePill(label: book.gradeLabel),
-                        ],
-                      ],
+                            if (grade.isNotEmpty) ...[
+                              const SizedBox(width: 8),
+                              ConstrainedBox(
+                                constraints: BoxConstraints(
+                                  maxWidth: math.max(
+                                    0,
+                                    constraints.maxWidth * 0.46,
+                                  ),
+                                ),
+                                child: _GradePill(label: grade),
+                              ),
+                            ],
+                          ],
+                        );
+                      },
                     ),
                     const SizedBox(height: 6),
                     Row(
@@ -386,7 +638,6 @@ class _BookCardState extends State<_BookCard> {
                               const TextSpan(text: '정답률 '),
                               TextSpan(
                                 text: accuracy == null ? '-' : '$accuracy%',
-                                // 카카오 폰트 숫자(9·3) 사이가 넓어 보이는 보정.
                                 style: const TextStyle(letterSpacing: -1.0),
                               ),
                             ],
@@ -430,15 +681,119 @@ class _CoverFallback extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ColoredBox(
-      color: color,
-      child: const Center(
-        child: Icon(
-          Icons.menu_book_rounded,
-          size: 36,
-          color: Colors.white60,
+    return ColoredBox(color: color);
+  }
+}
+
+String? _daysSinceStartLabel(DateTime? startedAt) {
+  if (startedAt == null) return null;
+  final startDate = DateTime(startedAt.year, startedAt.month, startedAt.day);
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final days = math.max(1, today.difference(startDate).inDays + 1);
+  return '$days일째';
+}
+
+/// 표지 아래쪽: 학년·시즌 배지, 그 아래 완료율 막대.
+class _CoverFactBlock extends StatelessWidget {
+  const _CoverFactBlock({
+    required this.overlay,
+    required this.advance,
+    required this.completion,
+    required this.gradeLabel,
+    required this.seasonNo,
+    required this.gap,
+  });
+
+  final CoverOverlayStyle overlay;
+  final double advance;
+  final double completion;
+  final String gradeLabel;
+  final int seasonNo;
+  final double gap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          children: [
+            if (gradeLabel.isNotEmpty)
+              Flexible(
+                child: CoverPill(
+                  style: overlay,
+                  label: gradeLabel,
+                  loose: true,
+                ),
+              ),
+            if (gradeLabel.isNotEmpty) SizedBox(width: gap),
+            Flexible(
+              child: CoverPill(
+                style: overlay,
+                label: '시즌 $seasonNo',
+                loose: true,
+              ),
+            ),
+          ],
         ),
-      ),
+        SizedBox(height: gap + 2),
+        _CoverCompletionBar(
+          overlay: overlay,
+          advance: advance,
+          completion: completion,
+        ),
+      ],
+    );
+  }
+}
+
+/// 표지 위 완료율. 회색 진행 위에 초록 완료를 겹친다.
+class _CoverCompletionBar extends StatelessWidget {
+  const _CoverCompletionBar({
+    required this.overlay,
+    required this.advance,
+    required this.completion,
+  });
+
+  final CoverOverlayStyle overlay;
+  final double advance;
+  final double completion;
+
+  @override
+  Widget build(BuildContext context) {
+    final scale = overlay.typeScale;
+    final a = advance.clamp(0.0, 1.0);
+    final c = completion.clamp(0.0, a);
+    final onDark = overlay.onDark;
+    final labelStyle = TextStyle(
+      fontFamily: 'Pretendard',
+      fontWeight: FontWeight.w700,
+      fontSize: (14 * scale).clamp(12.0, 14.0),
+      height: 1.0,
+      letterSpacing: -0.2 * scale,
+      color: overlay.ink,
+      shadows: overlay.textShadows,
+      fontFeatures: const [FontFeature.tabularFigures()],
+    );
+    return Row(
+      children: [
+        Text('완료', style: labelStyle),
+        SizedBox(width: 8 * scale),
+        Expanded(
+          child: _LayeredProgressBar(
+            advance: a,
+            completion: c,
+            height: (6 * scale).clamp(4.0, 6.0),
+            trackColor: onDark ? Colors.white24 : Colors.black12,
+            advanceColor: onDark ? const Color(0x99FFFFFF) : Colors.black26,
+            completionColor: YggGlassTokens.confirmActionColor,
+          ),
+        ),
+        SizedBox(width: 8 * scale),
+        Text('${(c * 100).round()}%', style: labelStyle),
+      ],
     );
   }
 }
@@ -467,84 +822,14 @@ class _GradePill extends StatelessWidget {
       ),
       child: Text(
         label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
         style: TextStyle(
           color: Theme.of(context).colorScheme.onSurface,
           fontSize: 12.5,
           fontWeight: FontWeight.w700,
+          height: 1.0,
         ),
-      ),
-    );
-  }
-}
-
-String _dateLabel(DateTime? value) {
-  if (value == null) return '-';
-  final year = (value.year % 100).toString().padLeft(2, '0');
-  return '$year.${value.month.toString().padLeft(2, '0')}.${value.day.toString().padLeft(2, '0')}';
-}
-
-/// 커버 왼쪽 상단 시작일 — 검정, 배경 없이 큰 날짜.
-class _CoverStartDateLabel extends StatelessWidget {
-  const _CoverStartDateLabel({required this.startedAt});
-
-  final DateTime? startedAt;
-
-  @override
-  Widget build(BuildContext context) {
-    return Text(
-      _dateLabel(startedAt),
-      style: const TextStyle(
-        color: Colors.black,
-        fontSize: 19.2, // 16 × 1.2
-        fontWeight: FontWeight.w800,
-        height: 1.1,
-        letterSpacing: -0.2,
-      ),
-    );
-  }
-}
-
-/// 커버 오른쪽 상단 시즌 — 다시 풀기를 할 때마다 하나씩 올라간다.
-class _CoverSeasonLabel extends StatelessWidget {
-  const _CoverSeasonLabel({required this.seasonNo});
-
-  final int seasonNo;
-
-  @override
-  Widget build(BuildContext context) {
-    return Text(
-      '시즌 $seasonNo',
-      style: const TextStyle(
-        color: Colors.black,
-        fontSize: 19.2,
-        fontWeight: FontWeight.w800,
-        height: 1.1,
-        letterSpacing: -0.2,
-      ),
-    );
-  }
-}
-
-/// 커버 중앙 — 2줄, 일수 강조, 검정·배경 없음.
-class _DaysSinceStartBadge extends StatelessWidget {
-  const _DaysSinceStartBadge({required this.startedAt});
-
-  final DateTime startedAt;
-
-  @override
-  Widget build(BuildContext context) {
-    final startDate = DateTime(startedAt.year, startedAt.month, startedAt.day);
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final days = math.max(1, today.difference(startDate).inDays + 1);
-    return Text(
-      '$days일째',
-      style: const TextStyle(
-        color: Colors.black,
-        fontSize: 26.4, // 22 × 1.2
-        fontWeight: FontWeight.w800,
-        height: 1.05,
-        letterSpacing: -0.4,
       ),
     );
   }
@@ -718,34 +1003,6 @@ class _RateChip extends StatelessWidget {
   }
 }
 
-class _CoverProgressOverlay extends StatelessWidget {
-  const _CoverProgressOverlay({
-    required this.advance,
-    required this.completion,
-  });
-
-  final double advance;
-  final double completion;
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.62),
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(11, 10, 11, 10),
-        child: _OverlayProgressRow(
-          label: '완료',
-          advance: advance,
-          completion: completion,
-        ),
-      ),
-    );
-  }
-}
-
 class _SheetProgressRow extends StatelessWidget {
   const _SheetProgressRow({
     required this.label,
@@ -797,63 +1054,6 @@ class _SheetProgressRow extends StatelessWidget {
             style: theme.textTheme.bodySmall?.copyWith(
               fontWeight: FontWeight.w700,
               fontSize: 12,
-              letterSpacing: -0.8,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _OverlayProgressRow extends StatelessWidget {
-  const _OverlayProgressRow({
-    required this.label,
-    required this.advance,
-    required this.completion,
-  });
-
-  final String label;
-  final double advance;
-  final double completion;
-
-  @override
-  Widget build(BuildContext context) {
-    final a = advance.clamp(0.0, 1.0);
-    final c = completion.clamp(0.0, a);
-    return Row(
-      children: [
-        SizedBox(
-          width: 28,
-          child: Text(
-            label,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 11.5,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-        ),
-        Expanded(
-          child: _LayeredProgressBar(
-            advance: a,
-            completion: c,
-            height: 5,
-            trackColor: Colors.white24,
-            advanceColor: const Color(0x99FFFFFF),
-            completionColor: YggGlassTokens.confirmActionColor,
-          ),
-        ),
-        const SizedBox(width: 8),
-        SizedBox(
-          width: 34,
-          child: Text(
-            '${(c * 100).round()}%',
-            textAlign: TextAlign.right,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
               letterSpacing: -0.8,
             ),
           ),

@@ -192,6 +192,47 @@ void main() {
       'content_group_title': '자연수의 약수와 배수',
     });
     expect(grouped.sectionTypeLabel, '유형 01 · 자연수의 약수와 배수');
+
+    final history = PageProblem.fromRow(const {
+      'crop_id': 'crop-4',
+      'problem_number': '4',
+      'round_no': 3,
+      'round_open': true,
+      'passed_before': 2,
+      'round_revision_count': 4,
+      'latest_passed': false,
+    });
+    expect(history.passedBefore, 2);
+    expect(history.roundRevisionCount, 4);
+    expect(history.latestPassed, isFalse);
+    expect(history.hasRoundLedger, isTrue);
+    expect(history.roundHistory.cardLines, ['3회차', '이전 정답 2', '수정 4회']);
+    expect(legacy.hasRoundLedger, isFalse);
+    expect(legacy.roundHistory.cardLines, isEmpty);
+  });
+
+  test('회차 기록은 닫힌 회차 다음 채점에서 새 회차를 연다', () {
+    const first = ProblemRoundHistory(
+      roundNo: 1,
+      revisionCount: 3,
+      latestPassed: true,
+    );
+    expect(first.cardLines, ['통과 1', '수정 3회']);
+
+    final again = first.afterGrade(correct: false);
+    expect(again.roundNo, 2);
+    expect(again.passedBefore, 1);
+    expect(again.revisionCount, 1);
+    expect(again.roundOpen, isTrue);
+    expect(again.cardLines, ['2회차', '이전 정답 1']);
+
+    final revised = again.afterGrade(correct: true);
+    expect(revised.roundNo, 2);
+    expect(revised.passedBefore, 1);
+    expect(revised.revisionCount, 2);
+    expect(revised.roundOpen, isFalse);
+    expect(revised.latestPassed, isTrue);
+    expect(revised.cardLines, ['2회차', '통과 2', '수정 2회']);
   });
 
   test('TextbookUnitTree는 start_page~end_page 사이의 빈 쪽을 개념 페이지로 채운다', () {

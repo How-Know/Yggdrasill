@@ -1911,13 +1911,26 @@ function joinAlignedEnvironmentLines(lines) {
   return joined.join('\n');
 }
 
-function renderStandaloneMathEnvironmentBlock(lines) {
+/**
+ * aligned 블록 줄 끝의 그림 표시를 그 줄 오른쪽 그림으로 바꾼다.
+ * [rowFigure] 는 표시 하나를 받아 수식 안에 넣을 TeX 를 돌려주고, 그 표시를 쓰지 않으면 null.
+ */
+function renderStandaloneMathEnvironmentBlock(lines, { rowFigure = null } = {}) {
+  const rowFigures = [];
+  const source = typeof rowFigure === 'function'
+    ? (Array.isArray(lines) ? lines : []).map((line) => String(line || '').replace(FIGURE_MARKER_RE, (marker) => {
+      const tex = rowFigure(marker);
+      if (!tex) return marker;
+      rowFigures.push(tex);
+      return `\\YggAlignedRowFig{${rowFigures.length - 1}}`;
+    }))
+    : lines;
   // 줄 단위 본문은 smartTexLine 이 "\n" 두 글자를 공백으로 되돌린 뒤 box{~~} 를
   // 빈칸으로 바꾼다. 이 경로는 그 앞처리를 거치지 않으면, 줄바꿈 복구가 만든
   // \nbox{~~} 가 그대로 남아 컴파일이 멈춘다.
   const raw = normalizeBlankBoxNotation(
     normalizeSoftLineBreakArtifacts(
-      normalizeLiteralEscapedNewlines(joinAlignedEnvironmentLines(lines)),
+      normalizeLiteralEscapedNewlines(joinAlignedEnvironmentLines(source)),
     ),
   ).trim();
   const aligned = raw.match(/^\\begin\{aligned\}([\s\S]*?)\\end\{aligned\}$/);
@@ -1929,13 +1942,17 @@ function renderStandaloneMathEnvironmentBlock(lines) {
     const rows = body.split(/\\\\/);
     const maxAmpersands = Math.max(
       1,
-      ...rows.map((row) => (String(row).match(/(?<!\\)&/g) || []).length),
+      ...rows.map((row) => (String(row).match(/(?<!\\)&/g) || []).length
+        + (/\\YggAlignedRowFig\{/.test(row) ? 2 : 0)),
     );
     const colSpec = `r${'l'.repeat(maxAmpersands)}`;
     math = `\\begin{array}{${colSpec}}\n${body}\n\\end{array}`;
   }
 
-  const normalized = symmetrizeTallMathChunk(normalizeMathSegment(math));
+  let normalized = symmetrizeTallMathChunk(normalizeMathSegment(math));
+  if (rowFigures.length > 0) {
+    normalized = normalized.replace(/\\YggAlignedRowFig\{(\d+)\}/g, (_m, n) => rowFigures[Number(n)] || '');
+  }
   return `\\par\\noindent\\YggVtwoBaselineGuide{}\\mtlinesymbox{$\\displaystyle ${normalized}$}\\par`;
 }
 
@@ -4405,6 +4422,16 @@ function buildPreamble({
   // 모의고사형 페이지박스(대각선 + 좌상/우하 숫자) 용 tikz.
   // tcolorbox 가 tikz 를 이미 적재하지만 명시적으로 추가해도 안전.
   lines.push('\\usepackage{tikz}');
+  // 검은 동그라미 번호(❶–❿, 작도 순서 등)는 본문·수식 폰트에 글리프가 없어 빈칸으로 찍힌다.
+  //   글자 자체를 "검은 원 + 흰 숫자" 그림으로 바꿔, 줄 머리든 문장 속이든 수식 안이든 같은 모양으로 찍는다.
+  lines.push('\\usepackage{newunicodechar}');
+  lines.push(
+    '\\newcommand{\\YggNegCircled}[1]{\\mbox{\\tikz[baseline=(n.base)]'
+      + '\\node[circle,fill=black,text=white,inner sep=0pt,minimum size=1em,font=\\bfseries\\scriptsize](n){#1};}}',
+  );
+  ['❶', '❷', '❸', '❹', '❺', '❻', '❼', '❽', '❾', '❿'].forEach((ch, i) => {
+    lines.push(`\\newunicodechar{${ch}}{\\YggNegCircled{${i + 1}}}`);
+  });
   // tikz overlay 를 모든 페이지 배경/전경에 자동 삽입하기 위한 훅.
   //   \AddToShipoutPictureFG : 페이지 본문 위(전경) 에 그림 — overlay 용도로 적합.
   //   모의고사형 절대좌표 레이아웃(상단 rule + 세로 단구분선 + 페이지박스) 에 사용.
@@ -6194,6 +6221,30 @@ function renderOneQuestion(question, {
     const layout = layoutForIndex(i) || {};
     return String(layout.position || '').toLowerCase() === 'inline-text';
   }
+  // aligned 줄 끝(\\ 바로 앞)의 inline-text 그림: 줄 높이를 늘리지 않게 높이를 지우고, offsetYEm 만큼 내려
+  //   원본처럼 두 줄 사이(변형 화살표 등)에 둘 수 있다. 표시 순서는 replaceFigureMarkersTextPath 와 같다.
+  function alignedRowFigureLatex(marker) {
+    const token = String(marker || '').match(/\[\[PB_FIG_([^\]]+)\]\]/);
+    let i;
+    if (token) {
+      i = itemIdToLocalIdx.get(String(token[1]).trim());
+      if (!Number.isInteger(i)) return null;
+    } else {
+      i = figIdx;
+      while (emittedFigIdxs.has(i)) i += 1;
+    }
+    if (!isInlineTextFigureIndex(i) || !figurePaths[i]) return null;
+    figIdx = token ? figIdx + 1 : i + 1;
+    emittedFigIdxs.add(i);
+    const layout = layoutForIndex(i) || {};
+    const heightEm = Math.max(0.35, Math.min(8, Number.isFinite(layout.heightEm) ? Number(layout.heightEm) : 1.6));
+    const offsetY = Math.max(-4, Math.min(4, Number.isFinite(layout.offsetYEm) ? Number(layout.offsetYEm) : 0));
+    const offsetX = Math.max(0, Math.min(10, Number.isFinite(layout.offsetXEm) ? Number(layout.offsetXEm) : 0));
+    const normalized = String(figurePaths[i]).replace(/\\/g, '/');
+    const include = `\\includegraphics[height=${heightEm.toFixed(2)}em]{${normalized}}`;
+    // 새 열(&&)에 넣어 여러 줄의 그림이 한 세로줄에 맞는다.
+    return `&&\\quad\\mbox{\\hspace*{${offsetX.toFixed(2)}em}\\smash{\\raisebox{\\dimexpr-0.5\\height+0.5ex-${offsetY.toFixed(2)}em\\relax}{${include}}}}`;
+  }
 
   function replaceFigureMarkersTextPath(text) {
     return text.replace(FIGURE_MARKER_RE, (_match, capturedItemId) => {
@@ -6259,7 +6310,10 @@ function renderOneQuestion(question, {
     for (let rawIdx = 0; rawIdx < lines.length; rawIdx += 1) {
       const alignedEnd = alignedEnvironmentEndIndex(lines, rawIdx);
       if (alignedEnd > rawIdx) {
-        const block = renderStandaloneMathEnvironmentBlock(lines.slice(rawIdx, alignedEnd + 1));
+        const block = renderStandaloneMathEnvironmentBlock(
+          lines.slice(rawIdx, alignedEnd + 1),
+          { rowFigure: alignedRowFigureLatex },
+        );
         if (block) {
           if (out.length > 0 || pendingEmpty > 0) {
             out.push('\\par');
@@ -6479,6 +6533,20 @@ function renderOneQuestion(question, {
   // 각 멤버의 widthEm 을 그대로 존중해서 서로 다른 크기도 한 줄에 배치 가능.
   function renderFigureGroupLatex(group) {
     const gap = Number.isFinite(group?.gap) ? group.gap : 0.5;
+    // 멤버 배치에 caption(그림 밑 설명)이 있으면 그림 줄 아래 설명 줄을 둔다(해설 카드의 가로 묶음).
+    const captions = group.members.map((i) => String((layoutForIndex(i) || {}).caption || '').trim());
+    if (captions.some(Boolean)) {
+      const cells = [];
+      group.members.forEach((i, k) => {
+        const expr = figureIncludeExpr(i);
+        if (!expr) return;
+        cells.push({
+          include: expr.include,
+          captionTex: captions[k] ? smartTexLine(captions[k], equations) : '',
+        });
+      });
+      return `${figureRowTex(cells, gap)}\n`;
+    }
     const pieces = [];
     for (let k = 0; k < group.members.length; k += 1) {
       const i = group.members[k];
@@ -7277,7 +7345,7 @@ function renderOneQuestion(question, {
         }
       }
       // rawLine 간 누적된 "빈 줄 + 단독 [문단] 라인" 수. 다음 실제 콘텐츠/마커 앞에 수직 간격으로 반영.
-      const standaloneMathBlock = renderStandaloneMathEnvironmentBlock(seg.lines);
+      const standaloneMathBlock = renderStandaloneMathEnvironmentBlock(seg.lines, { rowFigure: alignedRowFigureLatex });
       if (standaloneMathBlock) {
         parts.push(standaloneMathBlock);
         emittedStemTextLineAny = true;
@@ -7288,7 +7356,10 @@ function renderOneQuestion(question, {
       for (let rawIdx = 0; rawIdx < seg.lines.length; rawIdx += 1) {
         const alignedEnd = alignedEnvironmentEndIndex(seg.lines, rawIdx);
         if (alignedEnd > rawIdx) {
-          const block = renderStandaloneMathEnvironmentBlock(seg.lines.slice(rawIdx, alignedEnd + 1));
+          const block = renderStandaloneMathEnvironmentBlock(
+            seg.lines.slice(rawIdx, alignedEnd + 1),
+            { rowFigure: alignedRowFigureLatex },
+          );
           if (block) {
             if (outerPendingEmpty > 0) {
               parts.push(`\\par\\vspace{${(0.4 * outerPendingEmpty).toFixed(2)}em}`);
@@ -7936,6 +8007,7 @@ function answerSubpartLine(line) {
 const ANSWER_FIGURE_MARKER_RE = /\[\[PB_ANSWER_FIG_[^\]]+\]\]|\[그림\]|\[\s*image\s*\]/gi;
 
 const EXPLANATION_FIGURE_MARKER_RE = /\[그림(?:\s*:[^\]]*)?\]/g;
+const EXPLANATION_SAME_LINE = '@@YGGEXPLSAME@@';
 
 /**
  * 해설 전사본의 [그림] 표시를 해설 그림 자리 표시(@@YGGEXPLFIG<n>@@ 문단)로 바꾼다.
@@ -7946,9 +8018,15 @@ export function placeExplanationFigureTokens(text, figureCount) {
   const count = Math.max(0, Number(figureCount) || 0);
   if (count === 0) return source;
   let used = 0;
-  let out = source.replace(EXPLANATION_FIGURE_MARKER_RE, () => {
+  let out = source.replace(EXPLANATION_FIGURE_MARKER_RE, (marker, offset) => {
     if (used >= count) return '';
-    const token = `\n\n@@YGGEXPLFIG${used}@@\n\n`;
+    // 표시 바로 뒤 같은 줄에 글이 있으면 그 문단 앞에 SAME 표시를 남긴다(왼쪽 그림·가로 묶음 설명이 그 줄만 가져간다).
+    const lineEnd = source.indexOf('\n', offset + marker.length);
+    const rest = source.slice(offset + marker.length, lineEnd < 0 ? source.length : lineEnd);
+    const same = rest.replace(EXPLANATION_FIGURE_MARKER_RE, '').trim() && !/^\s*\[그림/.test(rest)
+      ? EXPLANATION_SAME_LINE
+      : '';
+    const token = `\n\n@@YGGEXPLFIG${used}@@\n\n${same}`;
     used += 1;
     return token;
   });
@@ -7956,7 +8034,10 @@ export function placeExplanationFigureTokens(text, figureCount) {
   return out;
 }
 
-/** 내려받은 해설 그림의 경로·폭(원본 해설 쪽 기준 width_em)·자리(원본에서 풀이 오른쪽이면 right). */
+/**
+ * 내려받은 해설 그림의 경로·폭(원본 해설 쪽 기준 width_em)·자리(원본에서 풀이 오른쪽이면 right, 왼쪽이면 left)·
+ * 아래 그림의 정렬(align)·한 줄에 나란히 있던 묶음 번호(row).
+ */
 export function explanationFigureSpecs(q) {
   const infos = Array.isArray(q?.explanation_figure_local_infos) ? q.explanation_figure_local_infos : [];
   const assets = Array.isArray(q?.explanation_figure_assets) ? q.explanation_figure_assets : [];
@@ -7964,27 +8045,49 @@ export function explanationFigureSpecs(q) {
     const path = String(info?.path || '').replace(/\\/g, '/');
     if (!path) return null;
     const asset = assets.find((a) => Number(a?.figure_index) === Number(info?.figureIndex)) || {};
+    const placement = asset.placement === 'right' || asset.placement === 'left' ? asset.placement : 'below';
     return {
       path,
       widthEm: Math.max(3, Math.min(24, Number(asset.width_em) || 10)),
-      placement: asset.placement === 'right' ? 'right' : 'below',
+      placement,
+      align: asset.align === 'left' || asset.align === 'right' ? asset.align : 'center',
+      row: placement === 'below' && asset.row != null && Number.isFinite(Number(asset.row)) ? Number(asset.row) : null,
     };
   }).filter(Boolean);
 }
 
-/** 해설 그림마다 가운데 정렬 \includegraphics 블록. */
+/** 해설 그림마다 \includegraphics 블록(정렬은 align, 기본 가운데). */
 export function explanationFigureIncludes(q) {
-  return explanationFigureSpecs(q).map((f) =>
-    `{\\centering\\includegraphics[width=${f.widthEm.toFixed(2)}em,max width=\\linewidth,keepaspectratio]{${f.path}}\\par}`);
+  return explanationFigureSpecs(q).map((f) => {
+    const include = `\\includegraphics[width=${f.widthEm.toFixed(2)}em,max width=\\linewidth,keepaspectratio]{${f.path}}`;
+    if (f.align === 'left') return `{\\noindent${include}\\par}`;
+    if (f.align === 'right') return `{\\noindent\\hfill${include}\\par}`;
+    return `{\\centering${include}\\par}`;
+  });
 }
 
-/** 풀이 글(textTex)을 왼쪽, 해설 그림을 오른쪽에 위 끝을 맞춰 나란히 놓는다. */
+/** 풀이 글(textTex)과 해설 그림을 위 끝을 맞춰 나란히 놓는다(placement=left 면 그림이 왼쪽). */
 export function explanationSideBySideTex(textTex, figure) {
   const w = Math.min(figure.widthEm, 14).toFixed(2);
   // 해설 본문은 번호 너비만큼 \leftskip 이 걸려 있어 \linewidth 만 빼면 줄이 넘쳐 그림이 아래로 밀린다.
-  return `\\noindent\\begin{minipage}[t]{\\dimexpr\\linewidth-\\leftskip-${w}em-1em\\relax}\\vspace{0pt}${textTex}\\end{minipage}`
-    + `\\hfill\\begin{minipage}[t]{${w}em}\\vspace{0pt}`
-    + `\\includegraphics[width=\\linewidth,keepaspectratio]{${figure.path}}\\end{minipage}\\par`;
+  const textBox = `\\begin{minipage}[t]{\\dimexpr\\linewidth-\\leftskip-${w}em-1em\\relax}\\vspace{0pt}${textTex}\\end{minipage}`;
+  const figBox = `\\begin{minipage}[t]{${w}em}\\vspace{0pt}`
+    + `\\includegraphics[width=\\linewidth,keepaspectratio]{${figure.path}}\\end{minipage}`;
+  if (figure.placement === 'left') return `\\noindent${figBox}\\hfill${textBox}\\par`;
+  return `\\noindent${textBox}\\hfill${figBox}\\par`;
+}
+
+/**
+ * 한 줄에 나란히 놓는 그림 묶음. cells: [{ include, captionTex }].
+ * 그림은 아래 끝을 맞추고, 설명이 있으면 그림마다 밑에 가운데로 둔다. 줄 폭을 넘으면 묶음 전체를 줄인다.
+ */
+export function figureRowTex(cells, gapEm = 1) {
+  if (!cells.length) return '';
+  const cols = cells.map(() => 'c').join(`@{\\hspace{${gapEm.toFixed(2)}em}}`);
+  const rows = [cells.map((c) => c.include).join(' & ')];
+  if (cells.some((c) => c.captionTex)) rows.push(cells.map((c) => c.captionTex || '').join(' & '));
+  return `\\par\\noindent\\adjustbox{max width=\\linewidth,center}{\\begin{tabular}{@{}${cols}@{}}`
+    + `${rows.join('\\\\[0.2em]\n')}\\end{tabular}}\\par`;
 }
 
 function answerFigureIncludeTex(localPaths, layout, index) {
@@ -11740,26 +11843,77 @@ function renderQuickAnswerTableLatex(questions, options = {}) {
   function explanationBody(q, text) {
     const specs = explanationFigureSpecs(q);
     const figures = explanationFigureIncludes(q);
-    const paragraphs = String(placeExplanationFigureTokens(text, figures.length) || '')
+    const items = String(placeExplanationFigureTokens(text, figures.length) || '')
       .replace(/\r\n/g, '\n')
       .replace(/\[문단(?::[^\]]*)?\]/g, '\n\n')
       .split(/\n{2,}/)
-      .map((paragraph) => paragraph.replace(/\s+/g, ' ').trim())
-      .filter(Boolean);
+      .filter((paragraph) => paragraph.replace(EXPLANATION_SAME_LINE, '').trim())
+      .map((paragraph) => {
+        const fig = /^\s*@@YGGEXPLFIG(\d+)@@\s*$/.exec(paragraph);
+        return fig ? { fig: Number(fig[1]) } : { raw: paragraph };
+      });
+    const flat = (raw) => String(raw || '').replace(EXPLANATION_SAME_LINE, '').replace(/\s+/g, ' ').trim();
+    // 그림 바로 뒤 같은 줄 글(SAME 표시 문단의 첫 줄)을 떼어 내고 나머지는 그 자리에 남긴다.
+    const takeSameLine = (k) => {
+      const it = items[k];
+      if (!it || it.fig != null || !it.raw.trimStart().startsWith(EXPLANATION_SAME_LINE)) return '';
+      const body = it.raw.trimStart().slice(EXPLANATION_SAME_LINE.length);
+      const nl = body.indexOf('\n');
+      const line = nl < 0 ? body : body.slice(0, nl);
+      const rest = nl < 0 ? '' : body.slice(nl + 1);
+      if (rest.trim()) it.raw = rest;
+      else items.splice(k, 1);
+      return flat(line);
+    };
     const equations = Array.isArray(q?.equations) ? q.equations : [];
     const blocks = [];
     let textSince = 0;
-    for (const paragraph of paragraphs) {
-      const fig = /^@@YGGEXPLFIG(\d+)@@$/.exec(paragraph);
-      if (!fig) {
-        const tex = renderExplanationParagraph(paragraph, equations);
+    for (let k = 0; k < items.length; k += 1) {
+      const item = items[k];
+      if (item.fig == null) {
+        const tex = renderExplanationParagraph(flat(item.raw), equations);
         if (tex) blocks.push(tex);
         continue;
       }
-      const i = Number(fig[1]);
-      if (specs[i]?.placement === 'right' && blocks.length > textSince) {
-        const textTex = blocks.splice(textSince).join('\\par\\vspace{0.25em}\n');
-        blocks.push(explanationSideBySideTex(textTex, specs[i]));
+      const i = item.fig;
+      const spec = specs[i];
+      let rowSize = 0;
+      while (spec?.row != null && specs[i + rowSize]?.row === spec.row) rowSize += 1;
+      if (rowSize >= 2) {
+        const cells = [];
+        for (let m = 0; m < rowSize; m += 1) {
+          if (m > 0) {
+            if (items[k + 1]?.fig !== i + m) break;
+            k += 1;
+          }
+          const caption = takeSameLine(k + 1);
+          const f = specs[i + m];
+          cells.push({
+            include: `\\includegraphics[width=${f.widthEm.toFixed(2)}em,keepaspectratio]{${f.path}}`,
+            captionTex: caption ? smartTexLine(caption, equations) : '',
+          });
+        }
+        blocks.push(figureRowTex(cells));
+      } else if (spec?.placement === 'right' || spec?.placement === 'left') {
+        // 옆 그림은 앞 풀이 글과 나란히 둔다. 앞 글이 없으면 뒤 글(같은 줄 글이 있으면 그 줄, 없으면 다음 그림 앞까지)과 둔다.
+        let textTex = '';
+        if (blocks.length > textSince) {
+          textTex = blocks.splice(textSince).join('\\par\\vspace{0.25em}\n');
+        } else {
+          const line = takeSameLine(k + 1);
+          if (line) {
+            textTex = renderExplanationParagraph(line, equations);
+          } else {
+            const after = [];
+            while (items[k + 1] && items[k + 1].fig == null) {
+              k += 1;
+              const tex = renderExplanationParagraph(flat(items[k].raw), equations);
+              if (tex) after.push(tex);
+            }
+            textTex = after.join('\\par\\vspace{0.25em}\n');
+          }
+        }
+        blocks.push(textTex ? explanationSideBySideTex(textTex, spec) : figures[i]);
       } else if (figures[i]) {
         blocks.push(figures[i]);
       }

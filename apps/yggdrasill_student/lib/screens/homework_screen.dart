@@ -509,12 +509,17 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
           child: MediaQuery.removePadding(
             context: context,
             removeTop: true,
-            child: RefreshIndicator(
-              onRefresh: _refresh,
-              child: ListView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.fromLTRB(0, 0, 0, 112),
-                children: children,
+            child: ScrollConfiguration(
+              // Windows 데스크톱 스크롤바. 디버그 전용이 아니라 릴리즈에도 그려진다.
+              behavior: ScrollConfiguration.of(context)
+                  .copyWith(scrollbars: false),
+              child: RefreshIndicator(
+                onRefresh: _refresh,
+                child: ListView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.fromLTRB(0, 0, 0, 112),
+                  children: children,
+                ),
               ),
             ),
           ),
@@ -3183,6 +3188,7 @@ class _GroupCard extends StatelessWidget {
     final hasNetworkCover = !group.isPrintSource &&
         coverUri != null &&
         (coverUri.scheme == 'http' || coverUri.scheme == 'https');
+    final attemptCount = group.performanceAttemptIndex;
 
     final coverLabels = <Widget>[
       if (group.inspectionLabel.isNotEmpty)
@@ -3191,13 +3197,8 @@ class _GroupCard extends StatelessWidget {
           carryover: false,
           onCover: true,
         ),
-      if (group.isHomework && group.assignmentOriginLabel.isNotEmpty)
-        _AssignmentOriginBadge(
-          label: group.assignmentOriginLabel,
-          carryover: false,
-          onCover: true,
-        ),
     ];
+    final dueLabel = group.isHomework ? group.dueUntilLabel() : '';
 
     return Material(
       color: Colors.transparent,
@@ -3220,7 +3221,6 @@ class _GroupCard extends StatelessWidget {
                 bookLabel: group.sourceLabel,
                 courseLabel: group.courseLabel,
                 overlayLabels: coverLabels,
-                attemptCount: group.performanceAttemptIndex,
               ),
               const SizedBox(width: 28),
               Expanded(
@@ -3228,6 +3228,17 @@ class _GroupCard extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    if (group.isHomework)
+                      _HomeworkDueChip(
+                        label: dueLabel,
+                        onDark: theme.brightness == Brightness.dark,
+                      )
+                    else
+                      _CoverAttemptLabel(
+                        label: attemptCount > 0 ? '시도 $attemptCount' : '대기',
+                        warningColor: studentAttemptWarningColor(attemptCount),
+                      ),
+                    const SizedBox(height: 8),
                     Text(
                       title,
                       maxLines: 1,
@@ -3347,7 +3358,6 @@ class _HomeworkCoverThumb extends StatelessWidget {
     this.bookLabel = '',
     this.courseLabel = '',
     this.overlayLabels = const [],
-    this.attemptCount = 0,
   });
 
   final double size;
@@ -3359,7 +3369,6 @@ class _HomeworkCoverThumb extends StatelessWidget {
   final String bookLabel;
   final String courseLabel;
   final List<Widget> overlayLabels;
-  final int attemptCount;
 
   @override
   Widget build(BuildContext context) {
@@ -3371,9 +3380,6 @@ class _HomeworkCoverThumb extends StatelessWidget {
     final hasCoverImage = (coverRef ?? '').trim().isNotEmpty;
     final hasMeta = !hasCoverImage && (book.isNotEmpty || course.isNotEmpty);
     final hasOverlayLabels = overlayLabels.isNotEmpty;
-    final hasAttempt = attemptCount > 0;
-    final attempt = hasAttempt ? '시도 $attemptCount' : '';
-    final warningColor = studentAttemptWarningColor(attemptCount);
     Widget cover = coverRef == null
         ? ColoredBox(
             color: fallback,
@@ -3461,7 +3467,7 @@ class _HomeworkCoverThumb extends StatelessWidget {
                       Positioned(
                         left: 10,
                         right: 10,
-                        bottom: hasAttempt ? 36 : 10,
+                        bottom: 10,
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           mainAxisSize: MainAxisSize.min,
@@ -3522,16 +3528,38 @@ class _HomeworkCoverThumb extends StatelessWidget {
               ),
             ),
           ),
-          if (hasAttempt)
-            Positioned(
-              left: 8,
-              bottom: 8,
-              child: _CoverAttemptLabel(
-                label: attempt,
-                warningColor: warningColor,
-              ),
-            ),
         ],
+      ),
+    );
+  }
+}
+
+/// 숙제 검사 날짜. 교재 카드 위 `N일째` 칩과 같은 `CoverPill`.
+class _HomeworkDueChip extends StatelessWidget {
+  const _HomeworkDueChip({
+    required this.label,
+    required this.onDark,
+  });
+
+  final String label;
+  final bool onDark;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = CoverOverlayStyle(
+      onDark: onDark,
+      hasImage: false,
+    );
+    if (label.isEmpty) {
+      return SizedBox(height: style.scaledPillHeight);
+    }
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: CoverPill(
+        style: style,
+        icon: Icons.schedule_rounded,
+        label: label,
+        shrinkWrap: true,
       ),
     );
   }
@@ -3542,6 +3570,11 @@ class _CoverAttemptLabel extends StatelessWidget {
     required this.label,
     this.warningColor,
   });
+
+  static const double fontSize = 13;
+  static const FontWeight fontWeight = FontWeight.w800;
+  static const double horizontalPadding = 8;
+  static const double verticalPadding = 4;
 
   final String label;
   final Color? warningColor;
@@ -3567,13 +3600,16 @@ class _CoverAttemptLabel extends StatelessWidget {
         ],
       ),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        padding: const EdgeInsets.symmetric(
+          horizontal: horizontalPadding,
+          vertical: verticalPadding,
+        ),
         child: Text(
           label,
           style: const TextStyle(
             color: Colors.white,
-            fontSize: 13,
-            fontWeight: FontWeight.w800,
+            fontSize: fontSize,
+            fontWeight: fontWeight,
             height: 1,
           ),
         ),

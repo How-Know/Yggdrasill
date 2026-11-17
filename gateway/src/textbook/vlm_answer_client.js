@@ -271,6 +271,10 @@ function stripLatexTextWrappers(input) {
 
 function normalizeAnswerText(input) {
   return normalizeCompactFractionCommands(stripLatexTextWrappers(input))
+    // 모델이 수와 단위 사이에 LaTeX 띄움(~)을 넣는다("$7~\text{cm}$"). 그대로 두면
+    // 정답 카드에 물결표가 찍힌다. 다른 정답과 같은 "7 cm" 꼴로 맞춘다.
+    .replace(/\$\s*(-?\d+(?:[.,]\d+)?)\s*~\s*([A-Za-z]{1,3})\s*\$/g, '$1 $2')
+    .replace(/(\d)\s*~\s*(?=[A-Za-z])/g, '$1 ')
     .replace(/\(\s*image\s*\)/gi, '[image]')
     .replace(/\[\s*image\s*\]/gi, '[image]')
     .replace(/\s+/g, ' ')

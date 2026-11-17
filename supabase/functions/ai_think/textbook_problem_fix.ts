@@ -17,6 +17,7 @@ import {
   parseReviewImages,
   sameRenderedMath,
   sanitizeProblemMarkup,
+  sourceCorrectionInput,
   stripCommonStem,
   stripGuidedSolution,
   TEXTBOOK_REVIEW_PROMPT_VERSION,
@@ -32,7 +33,8 @@ type Rec = Record<string, unknown>;
 export const LINE_PITCH_EM = 1.7;
 const GLYPH_EM = 1.0;
 const MIN_WIDTH_EM = 4;
-const MAX_WIDTH_EM = 40;
+// 가장 좁은 양식(과제형 한 단) 폭. Manager kCardColumnWidthEm 과 같다.
+const MAX_WIDTH_EM = 22;
 
 export type FigurePlacement = 'right_of_text' | 'left_of_text' | 'below_text' | 'inline';
 export type FigureAlign = 'left' | 'center' | 'right';
@@ -44,6 +46,8 @@ export interface FigureMeasure {
   placement: FigurePlacement;
   align: FigureAlign;
   v2State: FigureV2State;
+  /** 칸 안에 그림이 있는 표 전체를 그림 하나로 잰 항목 */
+  wholeTable?: boolean;
 }
 
 export function normalizeBox(v: unknown): [number, number, number, number] | null {
@@ -69,7 +73,7 @@ export function parseFigureMeasures(v: unknown): FigureMeasure[] {
     const v2State = ['ok', 'missing', 'cut', 'dirty', 'size', 'position'].includes(String(r.v2_state))
       ? r.v2_state as FigureV2State
       : 'unknown';
-    out.push({ bbox, placement, align, v2State });
+    out.push({ bbox, placement, align, v2State, ...(r.whole_table === true ? { wholeTable: true } : {}) });
   }
   return out;
 }
@@ -367,6 +371,86 @@ export interface NormalizedTextFix {
  * - 공통 발문이 비어 있던 세트 문항도 세트 머리에서 읽은 corrected_common_stem 을 받는다.
  * - 개별 발문에 공통 지시문이 또 들어갔으면 떼어 내고, 떼어낸 뒤에도 바뀌었을 때만 stem 을 남긴다.
  */
+/** 점 이름을 \text{} 로 감쌌는지와 공백만 다른 글은 같은 글로 본다(인쇄본으로 되돌리는 수정안을 가려낼 때 쓴다). */
+function printedTextKey(text: unknown): string {
+  return mathDelimiterInsensitive(String(text ?? '').replace(/\\(?:text|mathrm)\s*\{([A-Za-z0-9']*)\}/g, '$1'))
+    .replace(/\s+/g, '');
+}
+
+/**
+ * 운영자가 "원본 오류 교정"으로 표시한 문항에서, 본문·선지를 교정 전(인쇄된) 글로 되돌리는 수정안을 버린다.
+ * 인쇄본과 다른 글로 고치는 수정안(고치지 않은 부분의 오타 등)은 그대로 둔다.
+ */
+export function dropPrintedRevert(fix: NormalizedTextFix, sourceCorrection: unknown): NormalizedTextFix & { reverted: boolean } {
+  if (!sourceCorrection || typeof sourceCorrection !== 'object' || Array.isArray(sourceCorrection)) {
+    return { ...fix, reverted: false };
+  }
+  const sc = sourceCorrection as Rec;
+  const choiceKey = (arr: unknown) =>
+    (Array.isArray(arr) ? arr : [])
+      .map((c) => printedTextKey(c && typeof c === 'object' ? (c as Rec).text ?? '' : c ?? ''))
+      .join('\u0001');
+  const stemReverts = !!fix.stem && printedTextKey(fix.stem) === printedTextKey(sc.stem);
+  const choicesRevert = !!fix.choices && Array.isArray(sc.choices) && sc.choices.length > 0 &&
+    choiceKey(fix.choices) === choiceKey(sc.choices);
+  if (!stemReverts && !choicesRevert) return { ...fix, reverted: false };
+  const stem = stemReverts ? null : fix.stem;
+  const choices = choicesRevert ? null : fix.choices;
+  return {
+    stem,
+    commonStem: fix.commonStem,
+    choices,
+    textSame: !(stem || fix.commonStem || choices),
+    reverted: true,
+  };
+}
+
+/**
+ * 빈칸형 선지(표 모양 선지) 문항의 표 제목. 엔진은 meta.choice_layout='blank_table'(또는 is_blank_choice_question)일 때
+ * 선지 글을 쉼표로 나눠 칸에 넣는다. 제목이 2~4개가 아니면 엔진 기본값(3칸)을 따른다. 빈칸형이 아니면 null.
+ */
+export function blankChoiceLabelsOf(meta: unknown): string[] | null {
+  const m = meta && typeof meta === 'object' ? meta as Rec : {};
+  if (m.is_blank_choice_question !== true && m.choice_layout !== 'blank_table') return null;
+  const labels = (Array.isArray(m.blank_choice_labels) ? m.blank_choice_labels : [])
+    .map((x) => String(x ?? '').trim()).filter((x) => x.length > 0);
+  return labels.length >= 2 && labels.length <= 4 ? labels : ['(가)', '(나)', '(다)'];
+}
+
+/**
+ * 한 줄짜리 array/tabular 로 쓴 선지 글을 엔진의 빈칸형 형식("칸1, 칸2, 칸3")으로 바꾼다.
+ * 칸 수가 맞지 않거나 여러 줄이거나 칸 안에 쉼표가 있으면 null(바꾸지 않는다).
+ */
+export function blankChoiceTextFromArray(text: string, columnCount: number): string | null {
+  const m = /^\$?\s*\\begin\{(array|tabular)\}\s*\{[^}]*\}([\s\S]*?)\\end\{\1\}\s*\$?$/.exec(text.trim());
+  if (!m) return null;
+  const body = m[2].replace(/\\\\\s*$/, '').trim();
+  if (/\\\\|\\hline/.test(body)) return null;
+  const cells = body.split('&').map((c) => {
+    const t = c.trim();
+    const inner = /^\\(?:text|mathrm)\{([^{}]*)\}$/.exec(t);
+    return (inner ? inner[1] : t).trim();
+  });
+  if (cells.length !== columnCount || cells.some((c) => c.length === 0 || c.includes(','))) return null;
+  return cells.join(', ');
+}
+
+/** 빈칸형 선지 문항의 선지 배열에서 array 로 쓴 글을 쉼표 형식으로 바꾼다. 바뀐 것이 없으면 null. */
+export function blankChoicesFromArrays(
+  choices: Array<{ label: string; text: string }> | null,
+  columnCount: number,
+): Array<{ label: string; text: string }> | null {
+  if (!choices || columnCount < 2) return null;
+  let changed = false;
+  const out = choices.map((c) => {
+    const t = blankChoiceTextFromArray(c.text, columnCount);
+    if (t === null) return c;
+    changed = true;
+    return { ...c, text: t };
+  });
+  return changed ? out : null;
+}
+
 export function normalizeTextFix(args: {
   textMatchesOriginal: unknown;
   correctedStem: unknown;
@@ -375,6 +459,8 @@ export function normalizeTextFix(args: {
   currentStem: unknown;
   currentCommonStem: unknown;
   currentChoices: unknown;
+  /** 빈칸형 선지 문항의 칸 수(표 제목 개수). 있으면 array 로 쓴 선지를 쉼표 형식으로 바꾼다. */
+  blankChoiceColumns?: number;
 }): NormalizedTextFix {
   const curStem = String(args.currentStem ?? '');
   const curCommon = String(args.currentCommonStem ?? '').trim();
@@ -382,13 +468,16 @@ export function normalizeTextFix(args: {
   const rawStem = typeof args.correctedStem === 'string' && args.correctedStem.trim()
     ? sanitizeProblemMarkup(args.correctedStem.trim())
     : (sanitizedCurStem !== curStem ? sanitizedCurStem : null);
-  const rawCommon = typeof args.correctedCommonStem === 'string' && args.correctedCommonStem.trim()
+  // 상자·보기·표가 들어 있는 글은 그 문항만의 조건이라 공통 발문 수정안으로 받지 않는다.
+  const blockRe = /\[(?:박스시작|보기시작|표시작)\]|\\begin\{tabular\}/;
+  const rawCommon = typeof args.correctedCommonStem === 'string' && args.correctedCommonStem.trim() &&
+      !blockRe.test(args.correctedCommonStem)
     ? sanitizeProblemMarkup(args.correctedCommonStem.trim())
     : null;
   let stem = rawStem && rawStem !== curStem.trim() ? rawStem : null;
   const commonStem = rawCommon && rawCommon !== curCommon ? rawCommon : null;
   const effectiveCommon = commonStem ?? curCommon;
-  if (stem && effectiveCommon) {
+  if (stem && effectiveCommon && !blockRe.test(effectiveCommon)) {
     const stripped = stripCommonStem(effectiveCommon, stem);
     if (stripped !== null) stem = stripped.trim() !== curStem.trim() ? stripped : null;
   } else if (!stem && commonStem) {
@@ -400,7 +489,13 @@ export function normalizeTextFix(args: {
   if (unguided !== (stem ?? curStem).trim()) stem = unguided;
   if (stem && sameRenderedMath(stem, curStem)) stem = null;
   const finalCommon = commonStem && !sameRenderedMath(commonStem, curCommon) ? commonStem : null;
-  const proposedChoices = normalizeProposedChoices(args.correctedChoices);
+  let proposedChoices = normalizeProposedChoices(args.correctedChoices);
+  const blankCols = args.blankChoiceColumns ?? 0;
+  if (blankCols >= 2) {
+    // 수정안이 없어도 지금 선지가 array 로 저장돼 있으면 쉼표 형식으로 고치는 수정안을 낸다.
+    const base = proposedChoices ?? normalizeProposedChoices(args.currentChoices);
+    proposedChoices = blankChoicesFromArrays(base, blankCols) ?? proposedChoices;
+  }
   const choiceTexts = (arr: unknown) =>
     JSON.stringify(
       (Array.isArray(arr) ? arr : []).map((c) =>
@@ -445,6 +540,123 @@ export function pincettePatch(v: {
   if (v.solutionTranscribed) patch.solution_transcribed = v.solutionTranscribed;
   if (v.solutionAnswer) patch.solution_answer = v.solutionAnswer;
   return patch;
+}
+
+/** 반영 대기의 그림 자산을 사장님이 넣었는가(직접 올린 그림 등). */
+export function ownerStagedFigures(staged: unknown): boolean {
+  if (!staged || typeof staged !== 'object') return false;
+  const s = staged as Rec;
+  const sources = s.sources && typeof s.sources === 'object' ? s.sources as Rec : {};
+  return Array.isArray(s.figure_assets) && sources.figure_assets === 'owner';
+}
+
+/** 본문의 그림 자리가 보기 상자([보기시작]~[보기끝]) 또는 박스 안에 하나뿐인가. */
+export function singleFigureInsideBox(stem: unknown): boolean {
+  const s = String(stem ?? '');
+  if (figureMarkerCount(s) !== 1) return false;
+  return /\[(보기|박스)시작\](?:(?!\[\1끝\])[\s\S])*\[그림\](?:(?!\[\1시작\])[\s\S])*\[\1끝\]/.test(s);
+}
+
+/** 원본 이미지 기준 상자를 쪽 기준(0..1000)으로 옮긴다. region 은 원본 이미지가 차지한 쪽 영역 [ymin, xmin, ymax, xmax]. */
+function boxToPage(region: number[], box: number[]): number[] {
+  const h = region[2] - region[0];
+  const w = region[3] - region[1];
+  return [
+    region[0] + (box[0] / 1000) * h,
+    region[1] + (box[1] / 1000) * w,
+    region[0] + (box[2] / 1000) * h,
+    region[1] + (box[3] / 1000) * w,
+  ];
+}
+
+const BOX_UNION_PAD_1K = 20;
+
+/**
+ * 보기 상자 안에 그림 자리가 하나뿐인데 AI 가 도형을 여러 개로 나눠 쟀으면, 나누지 않고 전부를 감싸는 그림 하나로 합친다
+ * (2026-11-17 사장님 결정: 보기 상자 안 그림은 통째로 한 장).
+ * 이미 있는 그림이 그 영역을 거의 그대로 담고 있으면 다시 자르지 않는다(v2State "ok").
+ */
+export function mergeBoxFigureMeasures(args: {
+  measures: FigureMeasure[];
+  stem: unknown;
+  assets: unknown;
+  /** 원본 이미지가 차지한 쪽 영역 [ymin, xmin, ymax, xmax] 0..1000. 모르면 null. */
+  originalRegion1k: unknown;
+}): FigureMeasure[] {
+  const { measures } = args;
+  if (measures.length < 2 || !singleFigureInsideBox(args.stem)) return measures;
+  const clamp = (v: number) => Math.max(0, Math.min(1000, Math.round(v)));
+  const union: [number, number, number, number] = [
+    clamp(Math.min(...measures.map((m) => m.bbox[0])) - BOX_UNION_PAD_1K),
+    clamp(Math.min(...measures.map((m) => m.bbox[1])) - BOX_UNION_PAD_1K),
+    clamp(Math.max(...measures.map((m) => m.bbox[2])) + BOX_UNION_PAD_1K),
+    clamp(Math.max(...measures.map((m) => m.bbox[3])) + BOX_UNION_PAD_1K),
+  ];
+  const asset = orderedFigureAssets(args.assets)[0];
+  let v2State: FigureV2State = asset ? 'cut' : 'missing';
+  const region = normalizeBox(args.originalRegion1k);
+  const assetBox = asset ? normalizeBox(asset.crop_region_1k ?? asset.bbox_1k) : null;
+  if (asset && region && assetBox) {
+    const u = boxToPage(region, union);
+    const iy = Math.max(0, Math.min(u[2], assetBox[2]) - Math.max(u[0], assetBox[0]));
+    const ix = Math.max(0, Math.min(u[3], assetBox[3]) - Math.max(u[1], assetBox[1]));
+    const uArea = Math.max(1, (u[2] - u[0]) * (u[3] - u[1]));
+    const aArea = Math.max(1, (assetBox[2] - assetBox[0]) * (assetBox[3] - assetBox[1]));
+    // 있는 그림이 합친 영역의 95% 이상을 담고, 영역보다 1.6배 넘게 크지 않으면 그대로 둔다(가장자리 기호가 잘린 그림은 다시 자른다).
+    if ((iy * ix) / uArea >= 0.95 && aArea / uArea <= 1.6) v2State = 'ok';
+  } else if (asset && measures.every((m) => m.v2State === 'ok' || m.v2State === 'size' || m.v2State === 'position')) {
+    v2State = 'ok';
+  }
+  return [{ bbox: union, placement: 'below_text', align: 'center', v2State }];
+}
+
+/**
+ * 소문항([소문항N]) 안의 그림은 원본에서 소문항 번호 옆에 있어 "글 오른쪽·왼쪽"으로 재지지만, 그 배치는 엔진에서
+ * 발문 옆자리를 뜻해 첫 그림이 발문 옆으로 올라간다. 소문항 안 그림은 그 소문항 번호 아래, 왼쪽 정렬로 둔다
+ * (2026-11-17 사장님 결정). 그림 순서와 본문 그림 자리 순서가 같다고 본다.
+ */
+export function subQuestionFigurePlacement(measures: FigureMeasure[], stem: unknown): FigureMeasure[] {
+  const s = String(stem ?? '');
+  const firstSub = s.search(/\[소문항\d*\]/);
+  if (firstSub < 0) return measures;
+  const markers = [...s.matchAll(/\[\[PB_FIG_[^\]]+\]\]|\[(?:그림|도형|도표)\]/g)].map((m) => m.index ?? 0);
+  return measures.map((m, i) =>
+    i < markers.length && markers[i] > firstSub && (m.placement === 'right_of_text' || m.placement === 'left_of_text')
+      ? { ...m, placement: 'below_text', align: 'left' }
+      : m
+  );
+}
+
+const FIGURE_TABLE_RE = /\[표시작\](?:(?!\[표끝\])[\s\S])*?\[(?:그림|도형|도표)\](?:(?!\[표끝\])[\s\S])*\[표끝\]/g;
+
+/** 본문에서 칸 안에 그림 자리가 있는 표([표시작]~[표끝])의 수. */
+export function figureTableCount(stem: unknown): number {
+  return (String(stem ?? '').match(FIGURE_TABLE_RE) ?? []).length;
+}
+
+/**
+ * 칸 안에 그림이 있는 표는 표 전체를 원본에서 그림 한 장으로 자른다(2026-11-17 사장님 결정, 보기 상자와 같은 방식).
+ * 렌더 엔진은 표 칸 안의 [그림] 을 그리지 못해 글자 "[그림]" 이 그대로 찍힌다.
+ * AI 가 표 전체를 잰 항목(wholeTable)이 표 수만큼 있을 때만: 본문의 그 표를 [그림] 하나로 바꾸고, 표 안 칸 그림 측정은 버리고,
+ * 표 그림은 원본에서 다시 자르게 한다(v2State "cut"). 표 영역을 못 쟀으면 아무것도 바꾸지 않는다.
+ */
+export function mergeTableFigureMeasures(args: { measures: FigureMeasure[]; stem: unknown }): {
+  measures: FigureMeasure[];
+  stem: string | null;
+} {
+  const s = String(args.stem ?? '');
+  const tables = figureTableCount(s);
+  const whole = args.measures.filter((m) => m.wholeTable);
+  if (tables === 0 || whole.length !== tables) return { measures: args.measures, stem: null };
+  const inside = (m: FigureMeasure) => {
+    const cy = (m.bbox[0] + m.bbox[2]) / 2;
+    const cx = (m.bbox[1] + m.bbox[3]) / 2;
+    return whole.some((t) => cy >= t.bbox[0] && cy <= t.bbox[2] && cx >= t.bbox[1] && cx <= t.bbox[3]);
+  };
+  const measures = args.measures
+    .filter((m) => m.wholeTable || !inside(m))
+    .map((m): FigureMeasure => m.wholeTable ? { ...m, placement: 'below_text', align: 'center', v2State: 'cut' } : m);
+  return { measures, stem: s.replace(FIGURE_TABLE_RE, '[그림]') };
 }
 
 /**
@@ -538,8 +750,9 @@ const FIX_SCHEMA: Rec = {
             items: {
               type: 'object',
               additionalProperties: false,
-              required: ['bbox_1k', 'placement', 'align', 'v2_state'],
+              required: ['bbox_1k', 'placement', 'align', 'v2_state', 'whole_table'],
               properties: {
+                whole_table: { type: 'boolean' },
                 bbox_1k: { type: 'array', items: { type: 'integer' } },
                 placement: { type: 'string', enum: ['right_of_text', 'left_of_text', 'below_text', 'inline'] },
                 align: { type: 'string', enum: ['left', 'center', 'right'] },
@@ -587,6 +800,7 @@ const FIX_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔진의 [�
 
 [1. 본문·선지 수정안 — 원본 이미지가 기준]
 - 원본에 인쇄된 이 문항(세트 머리 제외)을 처음부터 끝까지 다시 적은 전체 개별 발문을 corrected_stem 에 적으세요. 저장된 stem 이 원본과 완전히 같고 V2 렌더링 문법 문제도 없을 때만 null.
+- 입력에 source_corrected=true 인 문항은 인쇄된 원본 자체가 틀려 운영자가 본문을 고친 문항입니다. printed_stem(및 printed_choices)이 고치기 전 글이고 stem·choices 가 운영자가 고친 글입니다. 둘이 서로 다른 부분은 운영자의 글이 기준입니다. 그 부분을 원본 이미지대로 되돌리지 말고(corrected_stem·corrected_choices 에 운영자의 글을 그대로 유지), 원본과 다르다고 지적하지도 마세요. 정답·풀이도 운영자가 고친 본문을 기준으로 구하고, 인쇄된 글과 그림이 모순된다는 이유로 "정답 없음" 같은 제안을 내지 마세요. 정답 값과 풀이에는 인쇄된 원본·교정 사실·"원문은 성립하지 않는다" 같은 말이나 괄호 설명을 적지 말고, 고친 문항의 정답과 풀이만 적으세요. 그 밖의 부분과 그림은 평소대로 원본 이미지와 대조합니다.
 - 마크업과 LaTeX 문법(우리 V2 렌더 엔진 규칙):
   - 수식 구분자: 저장 본문은 "l \\parallel m", "\\angle x", "\\frac{1}{2}" 처럼 $ 없이 LaTeX 명령만 적는 것이 정상 규약입니다. V2 엔진이 자동으로 수식으로 찍으므로 $ 가 없다는 것은 오류가 아닙니다. $ 를 붙이거나 떼는 것만으로는 절대 수정안을 내지 말고, issues 에도 "수식 구분자 누락"을 적지 마세요. 판단은 V2 렌더 화면에서 수식이 실제로 깨져 보이는지로만 합니다.
   - 수식 $...$(LaTeX, $ 생략 가능), 문단 구분 [문단], 상자 [박스시작]...[박스끝], 표 [표시작]...[표끝], 그림 자리 [그림].
@@ -608,6 +822,7 @@ const FIX_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔진의 [�
   "다음을 읽고, 물음에 답하여라." 같은 공통 지시문과 상황 설명 상자·그림까지 모두 corrected_stem 앞머리에 원본 순서대로 두고, corrected_common_stem 은 null 로 두세요.
 - 원본에서 문항·소문항 아래 '해' 배지로 시작하는 빈칸 풀이 안내(풀이 일부를 □로 비워 둔 것)는 해설이라 본문이 아닙니다. corrected_stem 에 넣지 말고, 저장 stem 에 들어 있으면 빼세요.
 - 선지: 원본의 선지(①~⑤ 또는 ㄱ,ㄴ,ㄷ)와 저장 choices 가 다르면 전체 선지 배열을 corrected_choices 에, 같거나 원본에 선지가 없으면 null.
+- 입력에 blank_choice_labels 가 있는 문항은 선지가 표 모양(제목 행 + ①~⑤ 행)입니다. 제목 행은 blank_choice_labels 로 따로 그려지므로 stem 에 넣지 않습니다. 각 선지의 text 는 제목 순서대로 칸 값을 쉼표와 공백으로 이어 씁니다(예: "정사면체, 정삼각형, 4"). array·tabular·표 마크업으로 쓰지 마세요. 저장된 선지에 칸 값이 빠져 있으면 원본을 보고 모든 칸을 채워 corrected_choices 에 적습니다.
 - 원본에 없는 내용을 지어내지 마세요. 원본에서 읽을 수 없는 부분은 저장값을 그대로 둡니다.
 - text_matches_original: 저장 데이터(공통 발문·발문·선지)와 마크업·LaTeX 문법이 원본과 완전히 같을 때 true(이때만 corrected_* 가 모두 null).
 - engine_issue: 저장된 본문·공통발문·선지 텍스트와 LaTeX·마크업 문법이 100% 올바르고 본문을 수정해서는 절대 해결할 수 없는 순수 조판 엔진 결함(예: 올바른 수식인데 분수·첨자가 겹침, 카드 폭 밖으로 잘림)일 때만 짧은 증상을 적으세요. 오타, 누락, common_stem 문제, [ [[공백:n]] ] 대괄호 중복, 수식 내 \\text{} 미사용 한글 누락처럼 본문을 고쳐 해결할 수 있는 경우에는 절대로 engine_issue 를 적지 말고 null 로 두세요!
@@ -616,13 +831,15 @@ const FIX_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔진의 [�
 [2. 그림 측정 — 개별 문항 원본 이미지 기준(세트 머리 이미지는 제외)]
 - 원본 이미지 안의 그림·그래프·도형(글자로 된 표·상자는 제외)을 읽는 순서대로 figures 에 넣습니다. 없으면 [].
 - '해' 배지로 시작하는 빈칸 풀이 안내 안의 그림(빈 네모가 달린 수직선 등)은 해설이라 문항 그림이 아닙니다. figures 에 넣지 마세요.
+- 보기 상자 안 그림 묶음: stem 에서 [그림] 이 [보기시작]~[보기끝](또는 [박스시작]~[박스끝]) 안에 하나뿐인데 원본의 그 상자 안에 도형이 여러 개(ㄱ, ㄴ, ㄷ … 기호가 붙은 도형들)면, 도형마다 나누지 말고 상자 안쪽 전체를 그림 하나로 잽니다. bbox_1k 는 모든 도형과 그 기호(ㄱ, ㄴ …)가 다 들어가고 상자 테두리와 "<보기>" 제목은 빠지게 잡고, v2_state 는 V2 화면의 그 그림 한 장에 도형·기호가 모두 보이면 "ok", 일부만 보이면 "cut" 입니다. 이런 문항에서 본문에 [그림] 을 더 넣는 수정안은 내지 마세요.
+- 칸 안에 그림이 있는 표: 원본의 표 칸 안에 그림·도형이 들어 있으면(저장 stem 의 [표시작]~[표끝] 안에 [그림] 이 있는 경우 포함) 그 표는 글자 표로 옮기지 않고 표 전체를 그림 하나로 다룹니다. figures 에는 칸 그림을 따로 넣지 말고 표 전체(바깥 테두리, 칸의 글자·빈칸 포함)를 감싸는 항목 하나만 넣고 whole_table=true, placement "below_text" 로 적으세요. corrected_stem 에서는 그 표([표시작]~[표끝]) 자리에 [그림] 하나만 두고, 표 위아래의 지시문은 그대로 둡니다. stem 에 이미 표 대신 [그림] 하나가 있으면 그 그림이 표 전체입니다(v2_state 는 V2 화면의 그 그림에 표 전체가 보이면 "ok"). 그 밖의 그림은 whole_table=false.
 - common_figure_placement: 세트 머리 원본 이미지에 그림이 있으면 그 그림이 공통 지시문 글 기준으로 오른쪽에 나란히 있으면 "right_of_text", 왼쪽이면 "left_of_text", 아래(또는 위)에 따로 있으면 "below_text". 세트 머리 이미지가 없거나 그 안에 그림이 없으면 "none". 이 그림은 figures 에 넣지 않습니다.
 - common_figure_state: 세트 머리 원본 이미지에 그림이 있으면 V2 화면에 나온 그 공통 그림의 상태 — 정상 "ok", 없음 "missing",
   잘리거나 일부(꼭짓점 글자 등)가 빠짐 "cut", 원본 그림에 없는 글자·조각이 섞임 "dirty". 세트 머리 이미지가 없거나 그 안에 그림이 없으면 "none".
 - non_problem_figures: V2 화면에 나온 이 문항 그림(공통 그림 제외, 위에서부터 1, 2, ...) 중 원본에서 문항 그림이 아닌 것의 번호.
   예: 원본에서 '해' 배지로 시작하는 빈칸 풀이 안내 안의 그림, 해설 그림, 다른 문항의 그림. 없으면 [].
 - common_figures: common_stem 에 [그림] 이 있고 stem_figure_markers 가 0 인데 figure_asset_count 가 0 이거나 common_figure_state 가 "cut"·"dirty" 이면, 세트 머리 원본 이미지 안의 공통 그림 상자를 세트 머리 이미지 기준 [ymin, xmin, ymax, xmax] 0..1000 으로 읽는 순서대로 적으세요(축 이름·눈금 숫자까지 포함, 지시문 글자·다른 문항 번호는 제외). 그 밖의 경우는 [].
-- bbox_1k: 원본 이미지 전체를 0..1000 으로 본 [ymin, xmin, ymax, xmax]. 그림의 선·점·라벨까지 다 들어가고 본문 글자는 들어가지 않게.
+- bbox_1k: 원본 이미지 전체를 0..1000 으로 본 [ymin, xmin, ymax, xmax]. 그림의 선·점·라벨까지 다 들어가고 본문 글자는 들어가지 않게. 문항 번호(예: "10", 색 글자·큰 글자 번호)와 소문항 번호 "1)" 는 그림이 아닙니다. 번호가 그림 바로 옆·위에 붙어 있어도 bbox_1k 는 번호 글자가 끝난 뒤에서 시작하게 잡으세요(번호의 일부 숫자도 들어가면 안 됩니다). V2 화면의 그림에 번호 조각이 보이면 v2_state 는 "dirty" 입니다.
 - placement: 본문 글 오른쪽에 나란히 있으면 "right_of_text", 왼쪽이면 "left_of_text", 본문 아래(또는 위)에 따로 있으면 "below_text",
   글줄 안에 끼어 있는 작은 그림이면 "inline".
 - align: 그림의 가로 위치(left / center / right). 이 문항 자신이 차지하는 칸 기준으로 판단하세요. 원본 이미지에 같은 줄의 다른 문항(번호)이 함께 보이면 그 칸은 빼고 봅니다.
@@ -699,6 +916,29 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
     return jsonResponse({ ok: true, processed: 0, skipped: cropIds.length, results: [] });
   }
 
+  // 빈칸형 선지(표 모양 선지) 문항의 표 제목. 못 읽으면 일반 문항처럼 다룬다.
+  const blankLabels = new Map<string, string[]>();
+  try {
+    const cropRes = await auth.admin.from('textbook_problem_crops').select('id,pb_question_uid')
+      .in('id', targets.map((it) => String(it.crop_id)));
+    const uidByCrop = new Map<string, string>();
+    for (const r of (cropRes.data ?? []) as Rec[]) {
+      if (r.pb_question_uid) uidByCrop.set(String(r.id), String(r.pb_question_uid));
+    }
+    if (uidByCrop.size > 0) {
+      const qRes = await auth.admin.from('pb_questions').select('question_uid,meta')
+        .in('question_uid', [...new Set(uidByCrop.values())]);
+      const metaByUid = new Map<string, unknown>();
+      for (const r of (qRes.data ?? []) as Rec[]) metaByUid.set(String(r.question_uid), r.meta);
+      for (const [cid, uid] of uidByCrop) {
+        const labels = blankChoiceLabelsOf(metaByUid.get(uid));
+        if (labels) blankLabels.set(cid, labels);
+      }
+    }
+  } catch (_) {
+    // 표 제목 없이 진행
+  }
+
   const startedAt = Date.now();
   const model = modelFor('primary');
   const safetyId = await safetyIdentifier(auth.userId);
@@ -731,6 +971,8 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
           common_stem: String(it.common_stem ?? '').trim(),
           stem: String(it.stem ?? '').slice(0, 4000),
           choices: it.choices,
+          ...(blankLabels.has(String(it.crop_id)) ? { blank_choice_labels: blankLabels.get(String(it.crop_id)) } : {}),
+          ...sourceCorrectionInput(it.source_correction),
           existing_answer: it.existing_answer ?? null,
           answer_kind: it.answer_kind ?? null,
           pb_objective_answer_key: it.pb_objective_answer_key ?? '',
@@ -824,15 +1066,26 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
 
     // 규칙(공통 발문 중복) 제안이 아직 적용 전이면 본문 제안은 그대로 두고 그림만 더한다.
     const keepRuleText = prev.reason_code === 'common_stem_duplicate' && !prev.applied_at;
-    const textFix = normalizeTextFix({
-      textMatchesOriginal: r.text_matches_original,
-      correctedStem: r.corrected_stem,
-      correctedCommonStem: r.corrected_common_stem,
-      correctedChoices: r.corrected_choices,
-      currentStem: curStem,
-      currentCommonStem: curCommon,
-      currentChoices: it.choices,
-    });
+    // 원본 오류 교정으로 표시한 문항: 인쇄본으로 되돌리는 본문·선지 수정안은 버린다.
+    const textFix = dropPrintedRevert(
+      normalizeTextFix({
+        textMatchesOriginal: r.text_matches_original,
+        correctedStem: r.corrected_stem,
+        correctedCommonStem: r.corrected_common_stem,
+        correctedChoices: r.corrected_choices,
+        currentStem: curStem,
+        currentCommonStem: curCommon,
+        currentChoices: it.choices,
+        blankChoiceColumns: blankLabels.get(String(it.crop_id))?.length,
+      }),
+      it.source_correction,
+    );
+    // 되돌리는 수정안은 인쇄본 글을 근거로 풀었다는 뜻이므로, 이번 실행의 정답·풀이 제안도 쓰지 않는다.
+    if (textFix.reverted) {
+      for (const k of ['proposed_answer', 'proposed_ai_answer', 'proposed_ai_solution', 'math_reason', 'fix_reason']) {
+        r[k] = null;
+      }
+    }
     let stem = textFix.stem;
     let common = textFix.commonStem;
     if (common && isDependentSetItem(it)) {
@@ -855,7 +1108,22 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
     }
     const choices = textFix.choices;
 
-    const measures = parseFigureMeasures(r.figures);
+    // 보기 상자 안 그림은 통째로 한 장: AI 가 도형마다 나눠 쟀으면 합친다.
+    // 칸 안에 그림이 있는 표는 표 전체를 그림 한 장으로: 본문의 표를 [그림] 하나로 바꾸고 표 영역을 다시 자른다.
+    const tableFig = mergeTableFigureMeasures({ measures: parseFigureMeasures(r.figures), stem: stem ?? curStem });
+    if (tableFig.stem !== null) {
+      stem = tableFig.stem;
+      textSame = false;
+    }
+    const measures = subQuestionFigurePlacement(
+      mergeBoxFigureMeasures({
+        measures: tableFig.measures,
+        stem: stem ?? curStem,
+        assets: it.pb_figure_assets,
+        originalRegion1k: img.originalRegion1k,
+      }),
+      stem ?? curStem,
+    );
     const size = img.originalSize;
     const sampleLines = r.text_sample && typeof r.text_sample === 'object' ? Math.round(Number((r.text_sample as Rec).lines)) : 0;
     const rawEmPx = size ? emPxFromTextSample(r.text_sample, size.height) : null;
@@ -901,12 +1169,28 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
         assetCount: orderedFigureAssets(it.pb_figure_assets).length,
       });
     const figure = headerFigure ?? unslotted.proposal;
+    // 사장님이 직접 올리거나 고른 그림(반영 대기 출처 owner)은 AI 가 다시 잘라 바꾸지 않는다.
+    if (figure && ownerStagedFigures(it.staged_changes)) {
+      figure.crops = [];
+      unslotted.held = [];
+    }
     // 새로 등록할 그림이 있는데 본문에 그림 자리가 모자라면 마커를 붙인다.
     if (figure && !headerFigure && figure.crops.some((c) => c.reason === 'missing')) {
       const withMarkers = ensureFigureMarkers(markerBase, measures.length - unslotted.held.length);
       if (withMarkers !== markerBase) stem = withMarkers;
     }
     const figureRemovals = figureRemovalIndexes(r.non_problem_figures, it.pb_figure_assets, stem ?? curStem);
+    // 표를 그림 한 장으로 바꿨으면 남는 칸 그림 자산은 뺀다.
+    if (tableFig.stem !== null) {
+      for (const a of orderedFigureAssets(it.pb_figure_assets).slice(measures.length)) {
+        const idx = Number.parseInt(String(a.figure_index), 10);
+        if (Number.isFinite(idx) && !figureRemovals.includes(idx)) figureRemovals.push(idx);
+      }
+      if (figure) {
+        const gone = new Set(figureRemovals.map((i) => `idx:${i}`));
+        figure.layout = { ...figure.layout, items: figure.layout.items.filter((x) => !gone.has(String(x.assetKey ?? ''))) };
+      }
+    }
 
     const trimOrNull = (v: unknown) => typeof v === 'string' && v.trim() && v.trim() !== '판단불가' ? v.trim() : null;
     const proposedAnswer = trimOrNull(r.proposed_answer) ??

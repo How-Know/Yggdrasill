@@ -1,6 +1,6 @@
 ---
 description: Guidance for textbook answer/solution protection and the problem review (문항검수) flow
-globs: supabase/migrations/**,gateway/src/textbook/**,gateway/src/problem_bank_api.js,apps/yggdrasill_manager/lib/**/*textbook*,tools/db_test/**/*textbook*
+globs: supabase/migrations/**,gateway/src/textbook/**,gateway/src/problem_bank/school_exam/**,gateway/src/problem_bank_api.js,apps/yggdrasill_manager/lib/**/*textbook*,apps/yggdrasill_manager/lib/**/*school_exam*,tools/db_test/**/*textbook*
 alwaysApply: false
 ---
 
@@ -12,8 +12,17 @@ and RPCs (`textbook_review_*`), first read `docs/architecture/textbook-review.md
 - Human corrections (`answer_source = 'manual'`, solution refs with `edited_at`)
   must survive machine re-runs. Do not bypass the guard; only
   `textbook_review_release_manual` may set `yggdrasill.manual_override`.
-- Machines open findings with proposals; only an owner action changes data.
-  Never auto-apply a proposal.
+- A problem the owner marked "원본 오류 교정" (`source_correction`) is checked
+  against the owner's text only where it differs from the printed text; the
+  rest is still checked against the original. Do not turn the mark into a
+  ready-rule exception.
+- Machines open findings and stage proposals in
+  `textbook_problem_analyses.staged_changes` (`textbook_review_stage_changes`);
+  owner edits before confirm are staged with source `owner`, and an AI re-run
+  never replaces them. Only the subunit confirm
+  (`textbook_review_apply_staged`) writes `pb_questions`, the answer tables,
+  `pb_question_solutions` and `pb_question_meta`. Never write them from the
+  review run.
 - Owner decisions send the fingerprint the screen showed. A proposal whose base
   changed is refused even after reload; the owner uses a manual edit instead.
 - Decisions are append-only. Never update or delete `textbook_review_decisions`.
@@ -29,28 +38,19 @@ and RPCs (`textbook_review_*`), first read `docs/architecture/textbook-review.md
   and `16 답 ×` / `[정답]` answer lines from `solution_transcribed`
   (`cleanSolutionTranscribedText` / `textbook_review_clean_solution_text`) so
   the answer and `[해설]` label are never duplicated on V2 cards.
-- Two-round review flow:
-  1. **Round 1 ("중단원 문항 검수 실행")**:
-     - Clean math problems (without missing/image answers) and clean
-       non-figure quality problems that pass the original-compared V2 render
-       check are **auto-approved (`approved`)** right away.
-     - Pure rendering engine issues (`issue_kind = 'engine'`) are
-       **auto-held (`held`)** and excluded from the error count and approval
-       denominator.
-     - Every problem with figures (`hasFigures`) is treated as a quality issue
-       (`issue_kind = 'figure'`) so it goes through original comparison,
-       automatic figure sizing/placement, and proposal presentation.
-     - Every remaining math or quality error problem runs
-       `textbook_problem_fix` (reading the body PDF original, set header PDF,
-       and answer/solution PDF crop) to generate and present unified proposals
-       (`fix_proposal.proposed_answer`, `stem`, `common_stem`, `choices`,
-       `figure_layout`, `figure_crops`) in the UI editors without applying
-       them to `pb_questions` / `textbook_problem_answers` yet.
-  2. **Round 2 ("수학 일괄 처리" / "품질 일괄 처리")**:
-     - After the owner reviews/tweaks the presented proposals, clicking
-       "수학 일괄 처리" or "품질 일괄 처리" applies the proposals to DB
-       (`textbook_problem_answers` + `pb_questions`), re-verifies only the
-       affected problems, and approves those that pass.
+- Subunit flow (spec `docs/specs/20261113-교재-문항-검수-흐름과-기준.md`, see
+  "Subunit workflow" in the architecture note): crop confirm → stage 2 runner
+  (body extraction and answer/solution matching create the first values →
+  answer sync → `TextbookReviewPipeline.runAll`, which only stages) → owner
+  confirm writes everything at once.
+  - The run sets `clean` / `issue` / `held`, never `approved`. Approval
+    happens at confirm.
+  - Pure rendering engine issues without figures are held (`held`) and block
+    the confirm until the engine is fixed and re-checked.
+  - Every problem with figures goes through the fix pass (original
+    comparison, figure size and placement).
+  - Staged changes are rendered with `/pb/preview/custom-thumbnail` (no DB
+    write) and compared with the original again, at most two rounds.
 - AI quality judgement is made from the V2 render images (what students see),
   not from the stem text. The manager app prepares the images (solution crop,
   V2 cards, and the original problem / set header rendered from the body PDF
@@ -64,6 +64,9 @@ and RPCs (`textbook_review_*`), first read `docs/architecture/textbook-review.md
   keep the size-ratio tolerance (0.8 to 1.25) the same in
   `textbook_problem_review.ts` (`FIGURE_SIZE_RATIO_*`) and the manager service
   (`kFigureSizeRatio*`).
+- A set question drawn with the set common figure (`usesCommonFigure`) is
+  resized and edited through `renderedFigureLayout` and staged as
+  `common_figure_layout`, never as its own `figure_layout`.
 - The 문항검수 right-hand stack renders with V2 only. Do not add the client
   LaTeX renderer there.
 - `isReviewTodo` must stay identical in the Edge Function and the manager
@@ -71,20 +74,30 @@ and RPCs (`textbook_review_*`), first read `docs/architecture/textbook-review.md
 - The AI classifies quality issues (`issue_kind`: data/engine/figure) and may
   store a `fix_proposal`; it never writes `pb_questions`. Applying a stem,
   choices, common-stem or figure fix, or syncing the problem-bank answers,
-  happens only through `textbook_review_apply_problem_fix` /
-  `textbook_review_save_item_edit` on an owner action (the single
-  "품질 검수 승인" button or "품질 일괄 처리", which approves only problems
-  that pass the original-compared render check).
+  happens only inside the confirm, which calls
+  `textbook_review_apply_problem_fix` / `textbook_review_save_item_edit` with
+  the staged values. Screen buttons ("품질 검수 승인", "…채택 후 승인") only
+  stage values and mark the axis `clean`.
 - Re-checking an approved problem against the original keeps `approved`; a
   difference only sets `render_checks.flagged_after_approval`.
-- Stage 2 with `math_only` re-solves math `issue` problems (used by
-  "수학 일괄 처리" after stem fixes) and writes only the math side. It must not
+- Stage 2 with `math_only` re-solves math `issue` problems (used by the run's
+  math fixes after stem fixes) and writes only the math side. It must not
   touch quality checks, `quality_status`, `fix_proposal`, render checks or
   `solved_at`.
 - `quality_status = 'held'` means a render-engine hold. Stage re-runs and
   render checks must keep `held` and `approved`; only an owner action
   (release or approval) changes them. Counts treat held problems separately
   from the approval target.
+- School exam papers (내신기출) use the same workflow with one paper as one
+  scope (book id = `pb_documents.id`, `0/0/A/0`); see "School exam papers" in
+  the architecture note. `POST /pb/exam-review/prepare` must stay safe to call
+  again. Exam scopes protect the answer key
+  (`TextbookProblemReviewItem.stageableAnswer`): an AI answer that differs
+  from the key, or "판단불가", is never staged and stays for the owner. The
+  answer-only mode is only for papers published before this flow (owner
+  decision 2026-11-16); new uploads get the full run. Do not widen either
+  rule without the owner. Figures of a paper with a PDF are cut from the PDF,
+  never taken from the HWPX.
 - `textbook_review_unit_overview` and similar builders: at most 50 pairs per
   `jsonb_build_object` call (Postgres 100-argument limit); split with `||`.
 - In plpgsql, append to a `text[]` with `array_append(arr, 'x'::text)`, not

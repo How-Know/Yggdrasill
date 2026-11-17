@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../services/homework_session.dart';
+import '../services/textbook_study_session.dart';
 
 /// iOS 다이나믹 아일랜드 스타일 상태 영역.
 ///
@@ -68,9 +69,13 @@ class StudentStatusIsland extends StatelessWidget {
     final border = isDark ? Colors.white10 : Colors.black12;
 
     return ListenableBuilder(
-      listenable: HomeworkSession.instance,
+      listenable: Listenable.merge([
+        HomeworkSession.instance,
+        TextbookStudySession.instance,
+      ]),
       builder: (context, _) {
-        final studying = HomeworkSession.instance.runningGroupId != null;
+        final studying = HomeworkSession.instance.runningGroupId != null ||
+            TextbookStudySession.instance.hasRunningSolve;
         final label = studying ? '공부중' : '휴식중';
         final dot = studying ? _studyingDot : _restingDot;
         final inkOffsetY = _inkCenterOffsetY(

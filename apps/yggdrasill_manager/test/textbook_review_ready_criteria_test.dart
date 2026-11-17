@@ -51,22 +51,23 @@ void main() {
         'consistency_issues': consistencyIssues,
       });
 
-  test('그림 크기 비율은 ±10% 를 넘으면 준비됨을 막는다', () {
-    expect(item(renderChecks: {'figure_size_ratio': 1.08}).renderBlocksReady, isFalse);
-    expect(item(renderChecks: {'figure_size_ratio': 1.12}).renderBlocksReady, isTrue);
-    expect(item(renderChecks: {'figure_size_ratio': 0.88}).renderBlocksReady, isTrue);
+  test('그림 크기 비율은 ±30% 를 넘으면 준비됨을 막는다', () {
+    expect(item(renderChecks: {'figure_size_ratio': 1.25}).renderBlocksReady, isFalse);
+    expect(item(renderChecks: {'figure_size_ratio': 0.75}).renderBlocksReady, isFalse);
+    expect(item(renderChecks: {'figure_size_ratio': 1.35}).renderBlocksReady, isTrue);
+    expect(item(renderChecks: {'figure_size_ratio': 0.65}).renderBlocksReady, isTrue);
   });
 
-  test('예전 흐름에서 승인된 문항은 승인 당시 범위(±15%)를 인정한다', () {
-    expect(item(renderChecks: {'figure_size_ratio': 1.12}, qualityStatus: 'approved').figureNeedsResize, isFalse);
-    expect(item(renderChecks: {'figure_size_ratio': 1.2}, qualityStatus: 'approved').figureNeedsResize, isTrue);
-    expect(item(renderChecks: {'figure_size_ratio': 1.12}, qualityStatus: 'clean').figureNeedsResize, isTrue);
+  test('승인 여부와 관계없이 같은 범위(±30%)로 크기 조정 대상을 정한다', () {
+    expect(item(renderChecks: {'figure_size_ratio': 1.2}, qualityStatus: 'approved').figureNeedsResize, isFalse);
+    expect(item(renderChecks: {'figure_size_ratio': 1.2}, qualityStatus: 'clean').figureNeedsResize, isFalse);
+    expect(item(renderChecks: {'figure_size_ratio': 1.4}, qualityStatus: 'approved').figureNeedsResize, isTrue);
   });
 
   test('해설 그림 판정이 실패면 준비됨을 막고, 비율이 벗어나면 크기 조정 대상이다', () {
     expect(item(renderChecks: {'solution_figures_ok': false}).renderBlocksReady, isTrue);
     final it = item(
-      renderChecks: {'solution_figure_size_ratio': 1.2},
+      renderChecks: {'solution_figure_size_ratio': 1.4},
       solutionFigures: const [
         {'path': 'a.png', 'width_em': 12},
       ],
@@ -168,6 +169,93 @@ void main() {
     });
     expect(ai.hasAnswerImage, isTrue);
     expect(ai.isImageAnswer, isTrue);
+  });
+
+  group('내신 시험지', () {
+    TextbookProblemReviewItem exam({
+      String reviewMode = 'answer_only',
+      String mathStatus = 'approved',
+      String existing = '③',
+      String? aiAnswer = '③',
+      String? proposedAnswer,
+      bool protect = true,
+      bool answerManual = false,
+      Map<String, dynamic> staged = const {},
+    }) =>
+        TextbookProblemReviewItem.fromJson({
+          'crop_id': 'c1',
+          'pb_question_id': 'q1',
+          'problem_number': '03',
+          'stem': '본문',
+          'question_type': '객관식',
+          'existing_answer': existing,
+          'answer_manual': answerManual,
+          'ai_answer': aiAnswer,
+          'math_status': mathStatus,
+          'quality_status': 'issue',
+          'render_checks': const {'problem_ok': false},
+          'render_checked_at': '2026-11-13T00:00:00Z',
+          'solution_source_kind': 'none',
+          'concepts': const [
+            {'id': 'k1'},
+          ],
+          'thinkings': const [
+            {'code': 't1'},
+          ],
+          'meta_checked_at': '2026-11-13T00:00:00Z',
+          'concept_score': 2,
+          'thinking_score': 2,
+          'arithmetic_score': 2,
+          'visual_tags': const ['없음'],
+          'ai_solution': '풀이',
+          'fix_proposal': {if (proposedAnswer != null) 'proposed_answer': proposedAnswer},
+          'staged_changes': staged,
+          'review_mode': reviewMode,
+          'protect_answer_key': protect,
+        });
+
+    test('정답만 검수하는 시험지는 문항 검수·V2 렌더 판정이 준비됨을 막지 않는다', () {
+      expect(exam().answerOnlyReview, isTrue);
+      expect(exam().solutionMarkedNone, isTrue);
+      expect(exam().readyBlockers, isEmpty);
+      expect(exam(mathStatus: 'issue').readyBlockers, ['정답 검수 미통과']);
+      // 새로 올린 시험지(전체 검수)는 시중교재와 같은 기준이다.
+      expect(exam(reviewMode: '').readyBlockers, ['문항 검수 미통과', 'V2 렌더 이상']);
+    });
+
+    test('정답표를 지키는 문항은 AI 답이 정답표와 같을 때만 정답표 답 그대로 통과시킨다', () {
+      // AI 답이 다르다: 자동으로 바꾸지 않고 사람이 고르게 남긴다.
+      final differs = exam(mathStatus: 'issue', aiAnswer: '④', proposedAnswer: '④');
+      expect(differs.resolvedMathAnswer, '④');
+      expect(differs.stageableAnswer('④'), isNull);
+      expect(differs.stageableAnswer('③'), isNull);
+      // AI 가 풀지 못했다: 정답표 답이 확인되지 않았으므로 통과시키지 않는다.
+      final unsolved = exam(mathStatus: 'issue', aiAnswer: '판단불가');
+      expect(unsolved.resolvedMathAnswer, '③');
+      expect(unsolved.stageableAnswer('③'), isNull);
+      // 표기만 다른 같은 답: 정답표 답 그대로 둔다.
+      final same = exam(mathStatus: 'issue', existing: r'$x=3$', aiAnswer: 'x = 3');
+      expect(same.stageableAnswer('x = 3'), r'$x=3$');
+    });
+
+    test('정답표를 지키지 않는 문항(시중교재)은 사람이 고친 정답만 지킨다', () {
+      final ai = exam(protect: false, reviewMode: '', mathStatus: 'issue', aiAnswer: '④');
+      expect(ai.stageableAnswer('④'), '④');
+      final owner = exam(
+        protect: false,
+        reviewMode: '',
+        mathStatus: 'issue',
+        aiAnswer: '④',
+        staged: const {
+          'answer': '③',
+          'sources': {'answer': 'owner'},
+        },
+      );
+      expect(owner.stageableAnswer('④'), isNull);
+      expect(owner.stageableAnswer('③'), '③');
+      final manual = exam(protect: false, reviewMode: '', mathStatus: 'issue', aiAnswer: '④', answerManual: true);
+      expect(manual.stageableAnswer('④'), isNull);
+    });
   });
 
   test('시각 태그: 빈 목록은 누락이고, AI 풀이 뒤에 비어 있으면 메타 보충 대상이다', () {

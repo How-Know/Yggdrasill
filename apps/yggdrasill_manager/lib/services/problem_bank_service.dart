@@ -1762,7 +1762,10 @@ class ProblemBankService {
     final isTextbookPdfOnly =
         '${docMeta['extract_mode'] ?? ''}'.trim() == 'textbook_pdf_only' ||
             '${textbookScope['mode'] ?? ''}'.trim() == 'textbook_pdf_only';
+    // 교재 메뉴에서 올린 내신 시험지는 PDF 만으로 추출한다(게이트웨이와 같은 규칙).
+    final isExamPdfOnly = docMeta['exam_review'] is Map;
     if (!isTextbookPdfOnly &&
+        !isExamPdfOnly &&
         '${docMap['source_storage_path'] ?? ''}'.trim().isEmpty) {
       throw Exception('hwpx_source_required');
     }
@@ -3036,6 +3039,8 @@ class ProblemBankService {
     required String academyId,
     required ProblemBankDocument document,
   }) async {
+    // 검수 기록부터 지운다. 여기서 실패하면 문서와 원본 파일은 그대로 남아 다시 지울 수 있다.
+    await _deleteExamReviewBook(academyId: academyId, documentId: document.id);
     final sourceBucket = document.sourceStorageBucket.trim();
     final sourcePath = document.sourceStoragePath.trim();
     if (sourceBucket.isNotEmpty && sourcePath.isNotEmpty) {
@@ -3050,6 +3055,275 @@ class ProblemBankService {
         .delete()
         .eq('academy_id', academyId)
         .eq('id', document.id);
+  }
+
+  /// 내신 시험지 검수용 책 행(문서와 같은 id)을 지운다. 문항 영역·검수 기록·작업 상태가 함께 지워진다.
+  /// 시험지가 아닌 문서에는 이런 행이 없어 아무것도 지우지 않는다. 실패하면 던진다(검수 기록만 남는 일이 없게).
+  Future<void> _deleteExamReviewBook({
+    required String academyId,
+    required String documentId,
+  }) async {
+    await _client
+        .from('resource_files')
+        .delete()
+        .eq('academy_id', academyId)
+        .eq('id', documentId)
+        .eq('category', 'school_past');
+  }
+
+  // ── 내신 시험지 검수(교재 메뉴) ─────────────────────────────────────────
+
+  /// 내신 시험지를 교재 검수 테이블에 올린다(게이트웨이). 여러 번 불러도 결과가 같다.
+  /// [identityOnly] 면 책 행과 시험지 PDF 연결만 만들고 검수 범위(bookId·gradeLabel·bookName·schoolName·title)를 돌려준다.
+  Future<Map<String, dynamic>> prepareExamReview({
+    required String academyId,
+    required String documentId,
+    bool identityOnly = false,
+    bool refreshAnswers = false,
+    bool redetect = false,
+  }) {
+    if (!hasGateway) throw Exception('게이트웨이 주소가 설정되지 않았습니다');
+    return _gatewayPost(
+      '/pb/exam-review/prepare',
+      body: <String, dynamic>{
+        'academyId': academyId,
+        'documentId': documentId,
+        if (identityOnly) 'identityOnly': true,
+        if (refreshAnswers) 'refreshAnswers': true,
+        if (redetect) 'redetect': true,
+      },
+    );
+  }
+
+  /// 교재 메뉴에서 올리는 내신 시험지 초안. PDF 는 꼭 있어야 하고, HWPX 가 있으면 본문 추출에 함께 쓴다.
+  /// 분류 코드(curriculum_code·source_type_code)는 비워 둔다: 검수에서 시험지를 확정할 때 공개한다.
+  /// [labelColumns] 학교·학년·과정 같은 표시 컬럼, [examReview] 는 `meta.exam_review`(확정 때 쓸 분류).
+  /// 반환: 문서 id
+  Future<String> createExamReviewDraft({
+    required String academyId,
+    required Uint8List pdfBytes,
+    required String pdfName,
+    Uint8List? hwpxBytes,
+    String hwpxName = '',
+    required Map<String, dynamic> labelColumns,
+    required Map<String, dynamic> examReview,
+    required Map<String, dynamic> sourceClassification,
+  }) async {
+    if (pdfBytes.isEmpty) throw Exception('PDF 가 비어 있습니다.');
+    final String documentId;
+    if (hwpxBytes != null && hwpxBytes.isNotEmpty) {
+      final doc = await uploadDocument(
+        bytes: hwpxBytes,
+        originalName: hwpxName,
+        academyId: academyId,
+      );
+      documentId = doc.id;
+    } else {
+      final row = await _client
+          .from('pb_documents')
+          .insert({
+            'academy_id': academyId,
+            'created_by': _client.auth.currentUser?.id,
+            'source_filename': pdfName,
+            'source_storage_bucket': 'problem-documents',
+            'source_storage_path': '',
+            'source_size_bytes': 0,
+            'status': 'uploaded',
+            ..._buildDraftClassificationColumns(),
+            'meta': <String, dynamic>{
+              'uploaded_from': 'manager',
+              'uploaded_at': DateTime.now().toUtc().toIso8601String(),
+            },
+          })
+          .select('id')
+          .single();
+      documentId = '${row['id']}';
+    }
+    try {
+      await uploadPdfForDocument(
+        documentId: documentId,
+        bytes: pdfBytes,
+        originalName: pdfName,
+        academyId: academyId,
+      );
+      final current = await _client
+          .from('pb_documents')
+          .select('meta')
+          .eq('academy_id', academyId)
+          .eq('id', documentId)
+          .single();
+      await _client
+          .from('pb_documents')
+          .update({
+            ...labelColumns,
+            'meta': <String, dynamic>{
+              ..._mapFromDynamic(current['meta']),
+              'exam_review': examReview,
+              'source_classification': sourceClassification,
+            },
+            'updated_at': DateTime.now().toUtc().toIso8601String(),
+          })
+          .eq('academy_id', academyId)
+          .eq('id', documentId);
+    } catch (_) {
+      // 반쯤 만들어진 초안은 남기지 않는다(같은 HWPX 를 다시 올리면 초안을 다시 쓴다).
+      if (hwpxBytes == null || hwpxBytes.isEmpty) {
+        try {
+          await _client
+              .from('pb_documents')
+              .delete()
+              .eq('academy_id', academyId)
+              .eq('id', documentId);
+        } catch (_) {}
+      }
+      rethrow;
+    }
+    return documentId;
+  }
+
+  /// 아직 공개하지 않은 내신 시험지 초안을 지운다: 진행 중인 추출을 취소하고 검수용 책 행·문서(문항)·원본 파일을 지운다.
+  /// DB 행을 먼저, 원본 파일을 마지막에 지운다. 중간에 실패해도 초안이 원본 없이 남지 않고 다시 지우면 된다.
+  Future<void> deleteExamReviewDraft({
+    required String academyId,
+    required String documentId,
+  }) async {
+    final row = await _client
+        .from('pb_documents')
+        .select(
+          'status,source_type_code,source_storage_bucket,source_storage_path,source_pdf_storage_bucket,source_pdf_storage_path',
+        )
+        .eq('academy_id', academyId)
+        .eq('id', documentId)
+        .maybeSingle();
+    if (row == null) {
+      await _deleteExamReviewBook(academyId: academyId, documentId: documentId);
+      return;
+    }
+    if ('${row['source_type_code'] ?? ''}'.trim().isNotEmpty ||
+        _isPublishedDocumentStatus('${row['status'] ?? ''}')) {
+      throw Exception('공개된 문서는 여기서 지울 수 없습니다.');
+    }
+    await _cancelActivePipelineJobsForDocument(
+      academyId: academyId,
+      documentId: documentId,
+      nowIso: DateTime.now().toUtc().toIso8601String(),
+    );
+    await _deleteExamReviewBook(academyId: academyId, documentId: documentId);
+    await _client
+        .from('pb_documents')
+        .delete()
+        .eq('academy_id', academyId)
+        .eq('id', documentId);
+    for (final (bucketKey, pathKey) in const [
+      ('source_storage_bucket', 'source_storage_path'),
+      ('source_pdf_storage_bucket', 'source_pdf_storage_path'),
+    ]) {
+      final bucket = '${row[bucketKey] ?? ''}'.trim();
+      final path = '${row[pathKey] ?? ''}'.trim();
+      if (path.isEmpty) continue;
+      try {
+        await _client.storage
+            .from(bucket.isEmpty ? 'problem-documents' : bucket)
+            .remove([path]);
+      } catch (_) {
+        // 원본 파일이 남아도 화면에는 보이지 않는다. 문서 삭제는 끝난 것으로 본다.
+      }
+    }
+    await _removeExamDraftFigures(academyId: academyId, documentId: documentId);
+  }
+
+  /// 추출 때 시험지 PDF 에서 잘라 둔 그림 파일(problem-previews/학원/문서/pdf-figures/추출 작업/…)을 지운다.
+  /// 실패해도 삭제를 막지 않는다(남은 파일은 어디에도 보이지 않는다).
+  Future<void> _removeExamDraftFigures({
+    required String academyId,
+    required String documentId,
+  }) async {
+    try {
+      final bucket = _client.storage.from('problem-previews');
+      final prefix = '$academyId/$documentId/pdf-figures';
+      const all = SearchOptions(limit: 1000);
+      for (final job in await bucket.list(path: prefix, searchOptions: all)) {
+        final folder = '$prefix/${job.name}';
+        final files = await bucket.list(path: folder, searchOptions: all);
+        if (files.isEmpty) continue;
+        await bucket.remove([for (final f in files) '$folder/${f.name}']);
+      }
+    } catch (error) {
+      debugPrint('removeExamDraftFigures failed: $error');
+    }
+  }
+
+  /// 검수에서 확정한 내신 시험지 초안을 공개한다(문제은행 "문서 확정"과 같은 값: 문서 ready + 문서·문항 분류).
+  /// 이미 공개된 시험지면 아무것도 하지 않고 false.
+  Future<bool> publishExamReviewDocument({
+    required String academyId,
+    required String documentId,
+  }) async {
+    final row = await _client
+        .from('pb_documents')
+        .select(
+          'status,source_type_code,school_level,grade_key,course_key,course_label,grade_label,exam_year,semester_label,exam_term_label,school_name,meta',
+        )
+        .eq('academy_id', academyId)
+        .eq('id', documentId)
+        .maybeSingle();
+    if (row == null) throw Exception('document_not_found');
+    final meta = _mapFromDynamic(row['meta']);
+    final examReview = _mapFromDynamic(meta['exam_review']);
+    final alreadyPublished =
+        '${row['source_type_code'] ?? ''}'.trim() == 'school_past' &&
+            _isPublishedDocumentStatus('${row['status'] ?? ''}');
+    if (alreadyPublished || examReview.isEmpty) return false;
+
+    final nowIso = DateTime.now().toUtc().toIso8601String();
+    final sourceClassification = _mapFromDynamic(meta['source_classification']);
+    final detail = <String, dynamic>{
+      'source_classification': sourceClassification,
+      'updated_at': nowIso,
+      'updated_from': 'manager',
+    };
+    final curriculum = '${examReview['curriculum_code'] ?? ''}'.trim();
+    String text(String key) => '${row[key] ?? ''}'.trim();
+    final examYear = _normalizeExamYear(row['exam_year']);
+    await updateDocumentMeta(
+      documentId: documentId,
+      meta: <String, dynamic>{
+        ...meta,
+        'exam_review': <String, dynamic>{...examReview, 'published_at': nowIso},
+      },
+      status: 'ready',
+      curriculumCode: curriculum,
+      sourceTypeCode: 'school_past',
+      schoolLevel: text('school_level'),
+      gradeKey: text('grade_key'),
+      courseKey: text('course_key'),
+      courseLabel: text('course_label'),
+      gradeLabel: text('grade_label'),
+      examYear: examYear,
+      semesterLabel: text('semester_label'),
+      examTermLabel: text('exam_term_label'),
+      schoolName: text('school_name'),
+      publisherName: '',
+      materialName: '',
+      classificationDetail: detail,
+    );
+    await updateQuestionsClassificationForDocument(
+      academyId: academyId,
+      documentId: documentId,
+      curriculumCode: curriculum,
+      sourceTypeCode: 'school_past',
+      schoolLevel: text('school_level'),
+      gradeKey: text('grade_key'),
+      courseKey: text('course_key'),
+      courseLabel: text('course_label'),
+      gradeLabel: text('grade_label'),
+      examYear: examYear,
+      semesterLabel: text('semester_label'),
+      examTermLabel: text('exam_term_label'),
+      schoolName: text('school_name'),
+      classificationDetail: detail,
+    );
+    return true;
   }
 
   Future<void> updateQuestionReview({

@@ -115,7 +115,11 @@ class TextbookSubunitWorkOrder {
     this.reviewSubIndex = 0,
     this.rawPageFrom,
     this.rawPageTo,
+    this.reviewMode = '',
   });
+
+  /// 내신 시험지 작업 지시의 [seriesKey]. 시험지 한 부가 검수 범위 하나다(책 = 문제은행 문서).
+  static const String schoolExamSeriesKey = 'school_exam';
 
   factory TextbookSubunitWorkOrder.fromJson(Map<String, dynamic> m) => TextbookSubunitWorkOrder(
         academyId: '${m['academy_id'] ?? ''}',
@@ -144,6 +148,7 @@ class TextbookSubunitWorkOrder {
         reviewSubIndex: _int(m['review_sub_index']) ?? 0,
         rawPageFrom: _int(m['raw_page_from']),
         rawPageTo: _int(m['raw_page_to']),
+        reviewMode: '${m['review_mode'] ?? ''}'.trim(),
       );
 
   final String academyId;
@@ -173,6 +178,12 @@ class TextbookSubunitWorkOrder {
   final int? rawPageFrom;
   final int? rawPageTo;
 
+  /// '' 전체 검수 · [TextbookReviewUnitScope.answerOnlyMode] 정답만 검수(이미 등록한 내신 시험지)
+  final String reviewMode;
+
+  /// 내신 시험지인가. 인쇄된 해설이 없어 정답표를 지키고, 문항 영역·정답은 게이트웨이가 문제은행 문서에서 준비한다.
+  bool get isSchoolExam => seriesKey == schoolExamSeriesKey;
+
   String get workflowKey => textbookWorkflowKey(bookId, gradeLabel, bigOrder, midOrder, scopeKey);
 
   bool matches(TextbookProblemReviewItem it) {
@@ -201,6 +212,8 @@ class TextbookSubunitWorkOrder {
         qualityCleanCount: 0,
         qualityIssueCount: 0,
         qualityApprovedCount: 0,
+        reviewMode: reviewMode,
+        protectAnswerKey: isSchoolExam,
       );
 
   Map<String, dynamic> toJson() => {
@@ -224,6 +237,7 @@ class TextbookSubunitWorkOrder {
         'review_sub_index': reviewSubIndex,
         'raw_page_from': rawPageFrom,
         'raw_page_to': rawPageTo,
+        if (reviewMode.isNotEmpty) 'review_mode': reviewMode,
       };
 }
 
@@ -379,6 +393,28 @@ class TextbookWorkflowService {
     return [
       for (final r in (rows as List).whereType<Map>()) TextbookSubunitWorkflow.fromJson(Map<String, dynamic>.from(r)),
     ];
+  }
+
+  /// 내신 시험지 작업 상태 전체. 키는 책 id(= 문제은행 문서 id). 시험지 한 부에 작업 상태가 하나다.
+  Future<Map<String, TextbookSubunitWorkflow>> fetchSchoolExams(String academyId) async {
+    const pageSize = 1000;
+    final out = <String, TextbookSubunitWorkflow>{};
+    for (var from = 0;; from += pageSize) {
+      final page = await _db
+          .from(_table)
+          .select()
+          .eq('academy_id', academyId)
+          .eq('work_order->>series_key', TextbookSubunitWorkOrder.schoolExamSeriesKey)
+          .order('id', ascending: true)
+          .range(from, from + pageSize - 1);
+      final rows = (page as List).whereType<Map>().toList();
+      for (final r in rows) {
+        final wf = TextbookSubunitWorkflow.fromJson(Map<String, dynamic>.from(r));
+        out[wf.bookId] = wf;
+      }
+      if (rows.length < pageSize) break;
+    }
+    return out;
   }
 
   Map<String, Object> _identity({

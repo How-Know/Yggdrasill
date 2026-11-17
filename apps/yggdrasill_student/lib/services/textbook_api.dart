@@ -192,6 +192,27 @@ class TextbookApi {
     return (result is Map ? result['error'] as String? : null) ?? 'unknown';
   }
 
+  /// 시즌을 넘기지 않고 선택한 문항들(단원·페이지·개별 문항)만 다시 푼다.
+  /// 시즌 완료율은 유지된 채 해당 문항들의 답 입력창만 비워지고 다음 채점 때
+  /// 시즌 내 새 회차가 열린다.
+  Future<String?> repeatProblemsInSeason({
+    required String bookId,
+    required String gradeLabel,
+    required List<String> cropIds,
+  }) async {
+    if (cropIds.isEmpty) return null;
+    final result = await _client.rpc(
+      'student_repeat_textbook_problems_v1',
+      params: {
+        'p_book_id': bookId,
+        'p_grade_label': gradeLabel,
+        'p_crop_ids': cropIds,
+      },
+    );
+    if (result is Map && result['ok'] == true) return null;
+    return (result is Map ? result['error'] as String? : null) ?? 'unknown';
+  }
+
   Future<TextbookProblemImage> problemImage({
     required String cropId,
   }) async {
@@ -391,6 +412,7 @@ class TextbookApi {
     required Map<String, String> answersByCropId,
     Map<String, Map<String, String>> partAnswersByCropId = const {},
     String? homeworkGroupId,
+    String? sessionId,
     TimedTestGradeContext? timedTest,
   }) async {
     final items = <Map<String, dynamic>>[
@@ -414,6 +436,8 @@ class TextbookApi {
           'items': items,
           if (homeworkGroupId != null && homeworkGroupId.isNotEmpty)
             'homework_group_id': homeworkGroupId,
+          if (sessionId != null && sessionId.isNotEmpty)
+            'session_id': sessionId,
           if (timedTest != null) 'timed_test': timedTest.toJson(),
         },
       );
@@ -573,6 +597,7 @@ class TextbookApi {
     String? answer,
     Map<String, bool>? partMarks,
     String? homeworkGroupId,
+    String? sessionId,
   }) async {
     late FunctionResponse response;
     try {
@@ -586,6 +611,8 @@ class TextbookApi {
           'correct': correct,
           if (homeworkGroupId != null && homeworkGroupId.isNotEmpty)
             'homework_group_id': homeworkGroupId,
+          if (sessionId != null && sessionId.isNotEmpty)
+            'session_id': sessionId,
           if (answer != null) 'answer': answer,
           if (partMarks != null && partMarks.isNotEmpty)
             'part_marks': partMarks.entries
@@ -606,6 +633,64 @@ class TextbookApi {
       pointsGranted: _pointsGrantedFromMastery(data['mastery']),
       homeworkLinked:
           homeworkGroupId == null ? true : data['homework_linked'] as bool?,
+    );
+  }
+
+  /// 활성(진행 중·중단) 교재 자습 세션 목록 조회.
+  Future<List<ActiveTextbookSession>> listActiveTextbookSessions() async {
+    final result = await _client.rpc('student_list_active_textbook_sessions_v1');
+    final rows = result is List ? result : const <dynamic>[];
+    return rows
+        .whereType<Map>()
+        .map((m) => ActiveTextbookSession.fromJson(Map<String, dynamic>.from(m)))
+        .whereType<ActiveTextbookSession>()
+        .toList(growable: false);
+  }
+
+  /// 교재 자습 세션 시작 또는 중단 세션 재개.
+  Future<ActiveTextbookSession?> startTextbookSession({
+    required String bookId,
+    required String gradeLabel,
+    required TextbookEntryMode entryMode,
+  }) async {
+    final result = await _client.rpc(
+      'student_start_textbook_session_v1',
+      params: {
+        'p_book_id': bookId,
+        'p_grade_label': gradeLabel,
+        'p_entry_mode': entryMode.apiValue,
+      },
+    );
+    final rows = result is List ? result : const <dynamic>[];
+    for (final raw in rows) {
+      if (raw is Map) {
+        return ActiveTextbookSession.fromJson(Map<String, dynamic>.from(raw));
+      }
+    }
+    return null;
+  }
+
+  Future<void> beatTextbookSession({required String sessionId}) async {
+    await _client.rpc(
+      'student_beat_textbook_session_v1',
+      params: {'p_session_id': sessionId},
+    );
+  }
+
+  Future<void> pauseTextbookSession({required String sessionId}) async {
+    await _client.rpc(
+      'student_pause_textbook_session_v1',
+      params: {'p_session_id': sessionId},
+    );
+  }
+
+  Future<void> finishTextbookSession({
+    required String sessionId,
+    String status = 'completed',
+  }) async {
+    await _client.rpc(
+      'student_finish_textbook_session_v1',
+      params: {'p_session_id': sessionId, 'p_status': status},
     );
   }
 
@@ -1134,6 +1219,114 @@ class SelfMarkResult {
 
   /// 과제 배정 문항의 공통 정오 원장에도 기록됐는지.
   final bool? homeworkLinked;
+}
+
+/// 교재 풀기 탭 진입 방식: 바로풀기(시간 측정) vs 정답입력하기(사후 입력).
+enum TextbookEntryMode {
+  solve,
+  answerEntry;
+
+  String get apiValue => switch (this) {
+        TextbookEntryMode.solve => 'solve',
+        TextbookEntryMode.answerEntry => 'answer_entry',
+      };
+
+  static TextbookEntryMode? tryParse(String? raw) {
+    switch (raw?.trim().toLowerCase()) {
+      case 'solve':
+        return TextbookEntryMode.solve;
+      case 'answer_entry':
+        return TextbookEntryMode.answerEntry;
+      default:
+        return null;
+    }
+  }
+}
+
+/// `learning_sessions` 에서 가져온 교재 자습 활성(진행 중/중단) 세션.
+class ActiveTextbookSession {
+  const ActiveTextbookSession({
+    required this.sessionId,
+    required this.bookId,
+    required this.gradeLabel,
+    required this.entryMode,
+    required this.status,
+    required this.startedAt,
+    this.lastResumedAt,
+    this.pausedAt,
+    this.elapsedSec = 0,
+    this.interruptedSec = 0,
+    this.lastBeatAt,
+  });
+
+  final String sessionId;
+  final String bookId;
+  final String gradeLabel;
+  final TextbookEntryMode entryMode;
+  final String status; // open | paused
+  final DateTime startedAt;
+  final DateTime? lastResumedAt;
+  final DateTime? pausedAt;
+  final int elapsedSec;
+  final int interruptedSec;
+  final DateTime? lastBeatAt;
+
+  bool get isOpen => status == 'open';
+  bool get isPaused => status == 'paused';
+  bool get isSolve => entryMode == TextbookEntryMode.solve;
+  bool get isAnswerEntry => entryMode == TextbookEntryMode.answerEntry;
+
+  ActiveTextbookSession copyWith({
+    String? status,
+    DateTime? pausedAt,
+    DateTime? lastResumedAt,
+    DateTime? lastBeatAt,
+    int? elapsedSec,
+    int? interruptedSec,
+  }) {
+    return ActiveTextbookSession(
+      sessionId: sessionId,
+      bookId: bookId,
+      gradeLabel: gradeLabel,
+      entryMode: entryMode,
+      status: status ?? this.status,
+      startedAt: startedAt,
+      lastResumedAt: lastResumedAt ?? this.lastResumedAt,
+      pausedAt: pausedAt ?? this.pausedAt,
+      elapsedSec: elapsedSec ?? this.elapsedSec,
+      interruptedSec: interruptedSec ?? this.interruptedSec,
+      lastBeatAt: lastBeatAt ?? this.lastBeatAt,
+    );
+  }
+
+  static ActiveTextbookSession? fromJson(Map<String, dynamic> json) {
+    final sessionId = '${json['session_id'] ?? json['id'] ?? ''}'.trim();
+    final bookId = '${json['book_id'] ?? ''}'.trim();
+    final mode = TextbookEntryMode.tryParse('${json['entry_mode'] ?? ''}');
+    final status = '${json['status'] ?? ''}'.trim().toLowerCase();
+    final startedAt = DateTime.tryParse('${json['started_at'] ?? ''}')?.toLocal();
+    if (sessionId.isEmpty ||
+        bookId.isEmpty ||
+        mode == null ||
+        startedAt == null) {
+      return null;
+    }
+    return ActiveTextbookSession(
+      sessionId: sessionId,
+      bookId: bookId,
+      gradeLabel: '${json['grade_label'] ?? ''}',
+      entryMode: mode,
+      status: status.isEmpty ? 'open' : status,
+      startedAt: startedAt,
+      lastResumedAt:
+          DateTime.tryParse('${json['last_resumed_at'] ?? ''}')?.toLocal(),
+      pausedAt: DateTime.tryParse('${json['paused_at'] ?? ''}')?.toLocal(),
+      elapsedSec: (json['elapsed_sec'] as num?)?.toInt() ?? 0,
+      interruptedSec: (json['interrupted_sec'] as num?)?.toInt() ?? 0,
+      lastBeatAt:
+          DateTime.tryParse('${json['last_beat_at'] ?? ''}')?.toLocal(),
+    );
+  }
 }
 
 /// 자가 등록 카탈로그용 교재 (진행 통계 없음).
@@ -1715,6 +1908,74 @@ class TbPageStat {
   }
 }
 
+/// 번호 카드 오른쪽에 붙이는 문항 회차 기록.
+///
+/// [roundNo]는 지금 열린 회차, 없으면 마지막 회차다. [passedBefore]는 그
+/// 회차보다 앞에서 정답으로 통과한 횟수다. [revisionCount]는 그 회차에서
+/// 답을 넣고 채점한 횟수이며, 안 풀고 나간 미수행은 세지 않는다.
+class ProblemRoundHistory {
+  const ProblemRoundHistory({
+    this.roundNo = 0,
+    this.passedBefore = 0,
+    this.revisionCount = 0,
+    this.roundOpen = false,
+    this.latestPassed = false,
+  });
+
+  final int roundNo;
+  final int passedBefore;
+  final int revisionCount;
+  final bool roundOpen;
+  final bool latestPassed;
+
+  /// 정보가 되는 줄만 돌려준다.
+  /// 처음 만나 한 번도 맞히지 않은 1회차는 비운다.
+  /// 이번 회차를 정답으로 통과했으면 그 횟수까지 포함한 `통과 N`을 붙인다.
+  List<String> get cardLines {
+    final passedTotal = passedBefore + (latestPassed ? 1 : 0);
+    return [
+      if (roundNo >= 2) '$roundNo회차',
+      if (latestPassed && passedTotal > 0) '통과 $passedTotal',
+      if (!latestPassed && passedBefore > 0) '이전 정답 $passedBefore',
+      if (revisionCount > 1) '수정 $revisionCount회',
+    ];
+  }
+
+  /// 이번 화면에서 채점이 한 번 더 반영된 기록.
+  /// 닫힌 회차 다음 채점은 새 회차를 연다.
+  ProblemRoundHistory afterGrade({required bool correct}) {
+    if (roundNo > 0 && !roundOpen) {
+      return ProblemRoundHistory(
+        roundNo: roundNo + 1,
+        passedBefore: passedBefore + (latestPassed ? 1 : 0),
+        revisionCount: 1,
+        roundOpen: !correct,
+        latestPassed: correct,
+      );
+    }
+    return ProblemRoundHistory(
+      roundNo: roundNo == 0 ? 1 : roundNo,
+      passedBefore: passedBefore,
+      revisionCount: revisionCount + 1,
+      roundOpen: !correct,
+      latestPassed: latestPassed || correct,
+    );
+  }
+
+  /// 이번 화면에서 답을 비워 다시 풀기로 연 기록.
+  /// 열린 회차는 닫아 두고, 다음 채점 때 [afterGrade]가 새 회차를 연다.
+  ProblemRoundHistory afterLocalReset() {
+    if (roundNo <= 0) return this;
+    return ProblemRoundHistory(
+      roundNo: roundNo,
+      passedBefore: passedBefore,
+      revisionCount: 0,
+      roundOpen: false,
+      latestPassed: latestPassed,
+    );
+  }
+}
+
 class PageProblem {
   PageProblem({
     required this.cropId,
@@ -1738,6 +1999,10 @@ class PageProblem {
     this.contentGroupTitle = '',
     this.roundNo = 0,
     this.roundOpen = false,
+    this.passedBefore = 0,
+    this.roundRevisionCount = 0,
+    this.latestPassed = false,
+    this.hasRoundLedger = false,
   });
 
   final String cropId;
@@ -1789,6 +2054,26 @@ class PageProblem {
   /// 지금 회차가 아직 진행 중인가 (통과 전).
   final bool roundOpen;
 
+  /// 지금 회차보다 앞에서 정답으로 통과한 횟수.
+  final int passedBefore;
+
+  /// 지금 회차에서 답을 넣고 채점한 횟수. 미수행은 빠진다.
+  final int roundRevisionCount;
+
+  /// 지금 회차를 정답으로 통과했는가. 리셋으로 닫힌 회차는 false다.
+  final bool latestPassed;
+
+  /// 조회가 이전 정답 횟수와 이번 회차 채점 횟수를 함께 줬는가.
+  final bool hasRoundLedger;
+
+  ProblemRoundHistory get roundHistory => ProblemRoundHistory(
+        roundNo: roundNo,
+        passedBefore: passedBefore,
+        revisionCount: roundRevisionCount,
+        roundOpen: roundOpen,
+        latestPassed: latestPassed,
+      );
+
   bool get isObjective => answerKind == 'objective';
   bool get isSelfCheck => gradingMode == 'self';
 
@@ -1826,6 +2111,10 @@ class PageProblem {
       contentGroupTitle: contentGroupTitle,
       roundNo: roundNo,
       roundOpen: roundOpen,
+      passedBefore: passedBefore,
+      roundRevisionCount: roundRevisionCount,
+      latestPassed: latestPassed,
+      hasRoundLedger: hasRoundLedger,
     );
   }
 
@@ -1870,6 +2159,12 @@ class PageProblem {
               .trim(),
       roundNo: (row['round_no'] as num?)?.toInt() ?? 0,
       roundOpen: (row['round_open'] as bool?) ?? false,
+      passedBefore: (row['passed_before'] as num?)?.toInt() ?? 0,
+      roundRevisionCount:
+          (row['round_revision_count'] as num?)?.toInt() ?? 0,
+      latestPassed: (row['latest_passed'] as bool?) ?? false,
+      hasRoundLedger: row.containsKey('passed_before') ||
+          row.containsKey('round_revision_count'),
       setParts: rawSetParts is List
           ? rawSetParts
               .whereType<Map>()

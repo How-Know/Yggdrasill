@@ -100,6 +100,14 @@ class TextbookExplorerController extends ChangeNotifier {
   final Map<String, int> bigAssignedCounts = <String, int>{};
   final Map<String, int> bigCompletedCounts = <String, int>{};
 
+  /// 과제 추가 다이얼로그용: 현재 시즌 기준 문항별(cropId) 출제/풀이 횟수와 완료 횟수.
+  final Map<String, int> cropTriedCounts = <String, int>{};
+  final Map<String, int> cropCompletedCounts = <String, int>{};
+
+  /// 완료된 문항도 범위 선택 시 자동 포함할지 여부 (기본 false = 완료 문항 자동 제외).
+  /// 개별 번호카드 클릭은 이 값과 무관하게 항상 허용한다.
+  bool includeCompletedInRangeSelection = false;
+
   /// 하이라이트(선택)된 문항 selKey. 카드/PDF 크롭 탭으로 토글.
   final Set<String> selectedKeys = <String>{};
 
@@ -238,6 +246,60 @@ class TextbookExplorerController extends ChangeNotifier {
 
   int pageCompletedCount(String smallKey, int rawPage) =>
       pageCompletedCounts['$smallKey#$rawPage'] ?? 0;
+
+  int cropTriedCount(TbExItem item) =>
+      cropTriedCounts[item.cropId.trim()] ?? 0;
+
+  int cropCompletedCount(TbExItem item) =>
+      cropCompletedCounts[item.cropId.trim()] ?? 0;
+
+  bool isItemCompletedInSeason(TbExItem item) =>
+      cropCompletedCount(item) > 0;
+
+  bool isAutoSelectableInRange(TbExItem item) {
+    if (!homeworkSelectionMode || includeCompletedInRangeSelection) {
+      return true;
+    }
+    return !isItemCompletedInSeason(item);
+  }
+
+  /// 문항별 출제/풀이 횟수·완료 횟수를 갱신한다.
+  void setCropSeasonStats({
+    Map<String, int> triedByCrop = const <String, int>{},
+    Map<String, int> completedByCrop = const <String, int>{},
+  }) {
+    bool same(Map<String, int> a, Map<String, int> b) {
+      if (a.length != b.length) return false;
+      for (final e in a.entries) {
+        if (b[e.key] != e.value) return false;
+      }
+      return true;
+    }
+
+    if (same(cropTriedCounts, triedByCrop) &&
+        same(cropCompletedCounts, completedByCrop)) {
+      return;
+    }
+    cropTriedCounts
+      ..clear()
+      ..addAll(triedByCrop);
+    cropCompletedCounts
+      ..clear()
+      ..addAll(completedByCrop);
+    if (checkedPageKeys.isNotEmpty) {
+      _syncDefaultSelectedItems();
+    }
+    if (!_disposed) notifyListeners();
+  }
+
+  void setIncludeCompletedInRangeSelection(bool include) {
+    if (includeCompletedInRangeSelection == include) return;
+    includeCompletedInRangeSelection = include;
+    if (checkedPageKeys.isNotEmpty) {
+      _syncDefaultSelectedItems();
+    }
+    if (!_disposed) notifyListeners();
+  }
 
   int smallAssignedCount(String smallKey) => smallAssignedCounts[smallKey] ?? 0;
 
@@ -893,8 +955,12 @@ class TextbookExplorerController extends ChangeNotifier {
 
   bool get allRangeItemsSelected {
     final items = visibleItems;
-    return items.isNotEmpty &&
-        items.every((item) => selectedKeys.contains(item.selKey));
+    if (items.isEmpty) return false;
+    final targets = items.where(isAutoSelectableInRange).toList(growable: false);
+    if (targets.isEmpty) {
+      return items.every((item) => selectedKeys.contains(item.selKey));
+    }
+    return targets.every((item) => selectedKeys.contains(item.selKey));
   }
 
   bool get someRangeItemsSelected =>
@@ -903,12 +969,19 @@ class TextbookExplorerController extends ChangeNotifier {
   void toggleSelectAllRangeItems() {
     final items = visibleItems;
     if (items.isEmpty) return;
-    final select = !allRangeItemsSelected;
-    for (final item in items) {
-      if (select) {
-        selectedKeys.add(item.selKey);
-      } else {
+    final anySelected = someRangeItemsSelected;
+    final allTargetSelected = allRangeItemsSelected;
+    if (allTargetSelected ||
+        (anySelected && items.where(isAutoSelectableInRange).isEmpty)) {
+      for (final item in items) {
         selectedKeys.remove(item.selKey);
+      }
+    } else {
+      final targets =
+          items.where(isAutoSelectableInRange).toList(growable: false);
+      final toSelect = targets.isNotEmpty ? targets : items;
+      for (final item in toSelect) {
+        selectedKeys.add(item.selKey);
       }
     }
     notifyListeners();
@@ -918,7 +991,11 @@ class TextbookExplorerController extends ChangeNotifier {
     if (!autoSelectAllQuestionsOnRangeChange) return;
     selectedKeys
       ..clear()
-      ..addAll(visibleItems.map((item) => item.selKey));
+      ..addAll(
+        visibleItems
+            .where(isAutoSelectableInRange)
+            .map((item) => item.selKey),
+      );
   }
 
   static String _normalizeDifficultyLabel(String raw) {
@@ -1507,13 +1584,19 @@ class TextbookExplorerController extends ChangeNotifier {
 
   void toggleTypeGroupSelection(List<TbExItem> items) {
     if (items.isEmpty) return;
-    final keys = items.map((item) => item.selKey).toList();
-    final allSelected = keys.every(selectedKeys.contains);
-    for (final key in keys) {
-      if (allSelected) {
-        selectedKeys.remove(key);
-      } else {
-        selectedKeys.add(key);
+    final targets = items.where(isAutoSelectableInRange).toList(growable: false);
+    final allTargetsSelected = targets.isNotEmpty
+        ? targets.every((item) => selectedKeys.contains(item.selKey))
+        : items.every((item) => selectedKeys.contains(item.selKey));
+    final anySelected = items.any((item) => selectedKeys.contains(item.selKey));
+    if (allTargetsSelected || (anySelected && targets.isEmpty)) {
+      for (final item in items) {
+        selectedKeys.remove(item.selKey);
+      }
+    } else {
+      final toSelect = targets.isNotEmpty ? targets : items;
+      for (final item in toSelect) {
+        selectedKeys.add(item.selKey);
       }
     }
     notifyListeners();
@@ -3113,6 +3196,11 @@ class TextbookExplorerContent extends StatelessWidget {
                                   .isItemEffectivelySelected(item.selKey),
                               style: style,
                               scale: cardScale,
+                              showHomeworkStats:
+                                  controller.homeworkSelectionMode,
+                              triedCount: controller.cropTriedCount(item),
+                              completedCount:
+                                  controller.cropCompletedCount(item),
                               onTap: () =>
                                   controller.toggleSelectKey(item.selKey),
                             ),
@@ -3175,8 +3263,13 @@ class TextbookExplorerContent extends StatelessWidget {
     List<TbExItem> groupItems,
   ) {
     const active = Color(0xFF33A373);
-    final allSelected = groupItems.isNotEmpty &&
-        groupItems.every((item) => controller.isSelected(item.selKey));
+    final targets = groupItems
+        .where(controller.isAutoSelectableInRange)
+        .toList(growable: false);
+    final allSelected = targets.isNotEmpty
+        ? targets.every((item) => controller.isSelected(item.selKey))
+        : (groupItems.isNotEmpty &&
+            groupItems.every((item) => controller.isSelected(item.selKey)));
     final anySelected =
         groupItems.any((item) => controller.isSelected(item.selKey));
 
@@ -3896,6 +3989,9 @@ class _QuestionCard extends StatelessWidget {
     required this.style,
     required this.onTap,
     this.scale = 1.0,
+    this.showHomeworkStats = false,
+    this.triedCount = 0,
+    this.completedCount = 0,
   });
 
   final TbExItem item;
@@ -3903,18 +3999,31 @@ class _QuestionCard extends StatelessWidget {
   final PreviewAcademyPanelStyle style;
   final VoidCallback onTap;
   final double scale;
+  final bool showHomeworkStats;
+  final int triedCount;
+  final int completedCount;
 
   @override
   Widget build(BuildContext context) {
     const accent = Color(0xFF33A373);
     final brightness = Theme.of(context).brightness;
     final s = scale.clamp(0.5, 1.0);
+    final completed = showHomeworkStats && completedCount > 0;
     final cardBg = selected
         ? accent.withValues(alpha: brightness == Brightness.dark ? 0.18 : 0.10)
-        : style.dropdownBackground;
+        : completed
+            ? accent.withValues(
+                alpha: brightness == Brightness.dark ? 0.07 : 0.05,
+              )
+            : style.dropdownBackground;
+    final borderColor = selected
+        ? accent
+        : completed
+            ? accent.withValues(alpha: 0.45)
+            : style.border;
     final radius = BorderRadius.circular(12 * s);
-    return SizedBox(
-      width: 118 * s,
+    final card = SizedBox(
+      width: (showHomeworkStats ? 132 : 118) * s,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -3933,7 +4042,7 @@ class _QuestionCard extends StatelessWidget {
                   color: cardBg,
                   borderRadius: radius,
                   border: Border.all(
-                    color: selected ? accent : style.border,
+                    color: borderColor,
                     width: selected ? 2 : 1,
                   ),
                 ),
@@ -3942,7 +4051,9 @@ class _QuestionCard extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    color: style.title,
+                    color: (!selected && completed)
+                        ? style.title.withValues(alpha: 0.72)
+                        : style.title,
                     fontSize: 20 * s,
                     fontWeight: FontWeight.w800,
                   ),
@@ -3973,8 +4084,36 @@ class _QuestionCard extends StatelessWidget {
               ],
             ),
           ),
+          if (showHomeworkStats) ...[
+            SizedBox(height: 3 * s),
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: onTap,
+              child: Text(
+                '풀이 $triedCount · 완료 $completedCount',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: completed
+                      ? accent
+                      : triedCount > 0
+                          ? style.title.withValues(alpha: 0.75)
+                          : style.hint.withValues(alpha: 0.75),
+                  fontSize: 11.2 * s,
+                  fontWeight: FontWeight.w700,
+                  height: 1.15,
+                ),
+              ),
+            ),
+          ],
         ],
       ),
+    );
+    if (!showHomeworkStats) return card;
+    return Tooltip(
+      message: '이번 시즌 출제/풀이 $triedCount회 · 완료 $completedCount회',
+      waitDuration: const Duration(milliseconds: 350),
+      child: card,
     );
   }
 }

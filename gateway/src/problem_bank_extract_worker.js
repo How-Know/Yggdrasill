@@ -5153,6 +5153,10 @@ async function processOneJob(job) {
   // VLM 경로에서도 HWPX 가 같이 업로드돼 있으면 이 경로를 타게 해서 Gemini 로 그림을 재생성하지
   // 않고 원본을 그대로 사용한다 (품질·정확도 모두 원본이 우월).
   const hasHwpxSource = compact(doc.source_storage_path).length > 0;
+  // PDF 가 있는 문서의 그림은 PDF 에서 잘라 쓴다(시중교재와 같은 방식). HWPX 원본 그림으로 덮어쓰면 문항과 그림이
+  // 어긋나고 크기가 맞지 않았다. HWPX 그림은 PDF 가 없는 문서에만 쓴다(PB_HWPX_FIGURE_OVERLAY=1 이면 예전 방식).
+  const useHwpxFigures =
+    hasHwpxSource && (!hasPdfSource || process.env.PB_HWPX_FIGURE_OVERLAY === '1');
 
   let built;
   let parsed;
@@ -5212,7 +5216,8 @@ async function processOneJob(job) {
     //   - HWPX 가 없으면 (pdf-only) skip.
     //   - HWPX 파싱 실패 시 overlay 생략 (VLM 원본 사용).
     //   - 문항 번호가 매칭 안 되는 개별 문항은 VLM 원본 유지.
-    if (hasHwpxSource) {
+    //   - 기본은 끈다: PDF 에서 자른 그림을 그대로 쓴다(useHwpxFigures).
+    if (useHwpxFigures) {
       try {
         const hwpxBucket = String(
           doc.source_storage_bucket || 'problem-documents',
@@ -5709,7 +5714,8 @@ async function processOneJob(job) {
     //                  VLM writeback 은 meta.figure_count 를 채워주므로 inferQuestionFigureCount 에서
     //                  figure 매핑 정확도가 올라간다.
     //   - PDF-only   : HWPX 원본이 없으므로 현재는 figure 생성 스킵 (향후 PDF 크롭 fallback 가능).
-    if (hasHwpxSource && AUTO_QUEUE_FIGURE_JOBS && questions.length > 0) {
+    //   - HWPX+PDF 는 이제 PDF 에서 자른 그림을 쓰므로 큐잉하지 않는다(useHwpxFigures).
+    if (useHwpxFigures && AUTO_QUEUE_FIGURE_JOBS && questions.length > 0) {
       try {
         const { data: insertedQuestions, error: fetchInsertedErr } = await supa
           .from('pb_questions')
@@ -6117,7 +6123,12 @@ async function processOneJob(job) {
       .eq('id', doc.id),
   );
 
-  if (!hasTextbookScope && !doc?.meta?.mock_scope && questions.length > 0) {
+  // 교재 메뉴에서 올린 내신 시험지는 검수 확정 때 공개한다. 그 전에는 학습앱 내신 프리셋을 만들지 않는다.
+  const examReviewDraft =
+    doc?.meta?.exam_review &&
+    typeof doc.meta.exam_review === 'object' &&
+    !compact(doc.source_type_code);
+  if (!hasTextbookScope && !doc?.meta?.mock_scope && !examReviewDraft && questions.length > 0) {
     try {
       const naesinSync = await syncMiddleSchoolPresetForDocument(supa, doc.id, {
         preserveCustomLayout: true,

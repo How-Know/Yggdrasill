@@ -34,6 +34,7 @@ import {
   problemNumberKeySet,
   textbookOnlyNumbersFromJob,
 } from '../../textbook_only_numbers.js';
+import { readExamLayout } from '../../school_exam/layout.js';
 
 const execFileAsync = promisify(execFileCb);
 
@@ -1882,6 +1883,24 @@ async function attachPdfFigureAssets({
   };
 }
 
+// 시험지(문항 범위 없이 PDF 전체를 읽는 문서): 문항 영역은 그림 위치(본문 옆·아래) 판단에만 쓴다.
+// 그림은 VLM 이 적은 쪽에서 자르므로, 영역이 같은 쪽에 있고 그림 상자를 품을 때만 쓴다.
+function examFigurePlacementPage(vlmQ, sourceItem) {
+  const region = sourceItem?.region1k;
+  const page = Number(vlmQ?.source_page);
+  if (!Array.isArray(region) || region.length !== 4) return null;
+  if (!(page > 0) || Number(sourceItem?.rawPage) !== page) return null;
+  const figures = Array.isArray(vlmQ?.figures) ? vlmQ.figures : [];
+  const inside = figures.every((figure) => {
+    const box = parseBbox1k(figure);
+    if (!box) return true;
+    const cy = (box[0] + box[2]) / 2;
+    const cx = (box[1] + box[3]) / 2;
+    return cy >= region[0] && cy <= region[2] && cx >= region[1] && cx <= region[3];
+  });
+  return inside ? { rawPage: page, itemRegion1k: region } : null;
+}
+
 // 같은 교재의 그림 문항 검수 결과(figure_size_ratio)로 본문 글자 크기(em1k)를 맞춘다. 표본이 부족하면 기본값.
 const TEXT_EM_1K_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const textEm1kCache = new Map();
@@ -2023,6 +2042,7 @@ function toPayloadQuestion({
   sourcePageRange = null,
   slicedPageCount = null,
   textEm1k = null,
+  sourceItem = null,
 }) {
   const rebasedVlmQ = {
     ...(vlmQ || {}),
@@ -2121,6 +2141,17 @@ function toPayloadQuestion({
         : {}),
       ...(vlmQ?.textbook_crop_page ? { textbook_crop_page: vlmQ.textbook_crop_page } : {}),
       ...(vlmQ?.mock_exam_item ? { mock_exam_item: vlmQ.mock_exam_item } : {}),
+      // 시험지 PDF 에서 찾은 문항 영역. 검수가 이 좌표로 원본을 그린다.
+      ...(sourceItem
+        ? {
+            source_item: {
+              raw_page: sourceItem.rawPage,
+              region_1k: sourceItem.region1k,
+              source: 'vlm_page_regions',
+              detected_at: new Date().toISOString(),
+            },
+          }
+        : {}),
     },
   };
 }
@@ -2408,9 +2439,35 @@ export async function runVlmExtraction({
 
   const payloadQuestionsRaw = [];
   const figurePagePngCache = new Map();
-  const textEm1k = textbookScope && ordered.some((q) => Array.isArray(q?.figures) && q.figures.length > 0)
+  let textEm1k = textbookScope && ordered.some((q) => Array.isArray(q?.figures) && q.figures.length > 0)
     ? await loadTextbookTextEm1k({ supa, academyId: job.academy_id, textbookScope, log })
     : null;
+  // 시험지(교재·모의고사 범위가 아닌 PDF): 본문 글자 크기를 PDF 에서 재고, 문항 영역을 쪽 이미지에서 찾는다.
+  // 그림 폭(em)과 위치가 원본 지면과 같은 비율로 나오고, 검수가 같은 영역을 원본으로 쓴다. 실패해도 추출은 계속한다.
+  let examSourceItems = new Map();
+  if (!itemScoped) {
+    try {
+      const layout = await readExamLayout({
+        pdfBuffer: originalPdfBuffer,
+        apiKey,
+        timeoutMs,
+        log,
+        questions: ordered.map((q, idx) => ({
+          number: problemNumberKey(q?.question_number),
+          sourcePage: q?.source_page,
+          sourceOrder: idx + 1,
+          stem: q?.stem,
+          questionType: q?.question_type,
+        })),
+      });
+      textEm1k = layout.textEm1k;
+      examSourceItems = layout.regions;
+    } catch (err) {
+      if (typeof log === 'function') {
+        log('vlm_exam_layout_failed', { documentId: job.document_id, message: compact(err?.message || err) });
+      }
+    }
+  }
   for (let idx = 0; idx < ordered.length; idx += 1) {
     const vlmQ = ordered[idx];
     const qKey = problemNumberKey(vlmQ?.question_number);
@@ -2454,13 +2511,14 @@ export async function runVlmExtraction({
           : {}),
       };
     }
+    const examSourceItem = qKey ? examSourceItems.get(qKey) || null : null;
     enrichedVlmQ = await attachPdfFigureAssets({
       supa,
       pdfBuffer: originalPdfBuffer,
       job,
       doc,
       vlmQ: enrichedVlmQ,
-      cropPage,
+      cropPage: cropPage || examFigurePlacementPage(enrichedVlmQ, examSourceItem),
       pagePngCache: figurePagePngCache,
       log,
     });
@@ -2474,6 +2532,7 @@ export async function runVlmExtraction({
       sourcePageRange: null,
       slicedPageCount: null,
       textEm1k,
+      sourceItem: examSourceItem,
     });
     payloadQuestionsRaw.push(payload);
   }

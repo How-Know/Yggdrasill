@@ -12,6 +12,8 @@ import '../../services/textbook_pdf_service.dart';
 import '../../services/textbook_series_catalog.dart';
 import '../../services/textbook_workflow_service.dart';
 import '../../widgets/latex_text_renderer.dart';
+import 'school_exam_panel.dart';
+import 'school_exam_upload_dialog.dart';
 import 'textbook_course_edit_dialog.dart';
 import 'textbook_crop_extract_dialog.dart';
 import 'textbook_register_wizard.dart';
@@ -62,15 +64,48 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
   // their action buttons and show a spinner.
   final Set<String> _busy = <String>{};
 
+  // 내신기출: 교재 목록 맨 아래에 학교별로 보인다. 학교를 고르면 오른쪽에 그 학교 시험지가 나온다.
+  final SchoolExamController _schoolExams = SchoolExamController();
+  bool _schoolExamsExpanded = true;
+  String? _selectedSchoolName;
+
   @override
   void initState() {
     super.initState();
     _loadBooks();
+    unawaited(_loadSchoolExams());
   }
 
   @override
   void dispose() {
+    _schoolExams.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadSchoolExams() async {
+    final resumed = await _schoolExams.load();
+    if (!mounted) return;
+    if (resumed > 0) _toast('멈춰 있던 내신기출 검수 $resumed부를 이어서 진행합니다');
+    if (_selectedSchoolName != null && _schoolExams.error == null && _schoolExams.schoolNamed(_selectedSchoolName) == null) {
+      setState(() => _selectedSchoolName = null);
+    }
+  }
+
+  Future<void> _openSchoolExamUpload() async {
+    final result = await showSchoolExamUploadDialog(context, controller: _schoolExams);
+    if (!mounted || result == null) return;
+    await _schoolExams.load(silent: true);
+    if (!mounted) return;
+    final school = result.firstSchoolName;
+    setState(() {
+      _schoolExamsExpanded = true;
+      if (school != null && _schoolExams.schoolNamed(school) != null) {
+        _selectedSchoolName = school;
+        _selectedBookId = null;
+        _links = [];
+      }
+    });
+    _toast('내신기출 ${result.uploaded}부를 올렸습니다. 추출이 끝나면 바로 검수가 돕니다');
   }
 
   // ---------------- data loading ----------------
@@ -82,10 +117,14 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
     });
     try {
       List<Map<String, dynamic>> rows;
+      // 내신 시험지의 검수용 책 행(시험지 한 부에 한 행)은 받지 않는다.
+      // 한 번에 받는 행 수에 한도가 있어, 시험지 행이 교재 행을 밀어내지 않게 한다.
+      const notExamBooks = 'category.is.null,category.neq.school_past';
       try {
         final data = await _supabase
             .from('resource_files')
             .select('id,name,category,order_index,academy_id,is_published')
+            .or(notExamBooks)
             .order('order_index')
             .order('name');
         rows = (data as List).cast<Map<String, dynamic>>();
@@ -96,6 +135,7 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
         final data = await _supabase
             .from('resource_files')
             .select('id,name,category,order_index,academy_id')
+            .or(notExamBooks)
             .order('order_index')
             .order('name');
         rows = (data as List).cast<Map<String, dynamic>>();
@@ -670,8 +710,24 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
           ),
         ),
         const SizedBox(width: 8),
+        FilledButton.icon(
+          onPressed: _openSchoolExamUpload,
+          icon: const Icon(Icons.upload_file, size: 16, color: Colors.white),
+          label: const Text(
+            '내신기출 업로드',
+            style: TextStyle(color: Colors.white, fontSize: 12),
+          ),
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFF33A373),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          ),
+        ),
+        const SizedBox(width: 8),
         OutlinedButton.icon(
-          onPressed: _loadBooks,
+          onPressed: () {
+            _loadBooks();
+            unawaited(_loadSchoolExams());
+          },
           icon: const Icon(Icons.refresh, size: 16, color: Color(0xFFB3B3B3)),
           label: const Text(
             '교재 목록 새로고침',
@@ -705,7 +761,10 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
     if (!mounted || result == null) return;
     _toast('신규 교재 "${result.bookId}"를 등록했습니다');
     await _loadBooks();
-    setState(() => _selectedBookId = result.bookId);
+    setState(() {
+      _selectedBookId = result.bookId;
+      _selectedSchoolName = null;
+    });
     await _loadLinks(result.bookId);
   }
 
@@ -743,9 +802,6 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
     if (_bookError != null) {
       return _buildErrorBox(_bookError!, onRetry: _loadBooks);
     }
-    if (_books.isEmpty) {
-      return _buildEmptyBox('등록된 교재가 없습니다');
-    }
     return Container(
       decoration: BoxDecoration(
         color: const Color(0xFF131315),
@@ -769,13 +825,43 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
           const Divider(height: 1, color: Color(0xFF2A2A2A)),
           Expanded(
             child: ListView.builder(
-              itemCount: _books.length,
+              // 마지막 칸은 내신기출 묶음(학교별)
+              itemCount: _books.length + 1,
               itemBuilder: (context, index) {
+                if (index == _books.length) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (_books.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.fromLTRB(14, 12, 14, 12),
+                          child: Text(
+                            '등록된 교재가 없습니다',
+                            style: TextStyle(color: Color(0xFF8A8A8A), fontSize: 13),
+                          ),
+                        ),
+                      SchoolExamListSection(
+                        controller: _schoolExams,
+                        expanded: _schoolExamsExpanded,
+                        selectedSchool: _selectedSchoolName,
+                        onToggle: () => setState(() => _schoolExamsExpanded = !_schoolExamsExpanded),
+                        onSelect: (name) => setState(() {
+                          _selectedSchoolName = name;
+                          _selectedBookId = null;
+                          _links = [];
+                        }),
+                      ),
+                    ],
+                  );
+                }
                 final b = _books[index];
                 final selected = b.id == _selectedBookId;
                 return InkWell(
                   onTap: () {
-                    setState(() => _selectedBookId = b.id);
+                    setState(() {
+                      _selectedBookId = b.id;
+                      _selectedSchoolName = null;
+                    });
                     _loadLinks(b.id);
                   },
                   child: Container(
@@ -824,9 +910,18 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
   }
 
   Widget _buildDetail() {
+    final schoolName = _selectedSchoolName;
+    if (schoolName != null) {
+      return SchoolExamSchoolPanel(
+        key: ValueKey('school-exam:$schoolName'),
+        controller: _schoolExams,
+        schoolName: schoolName,
+        onToast: _toast,
+      );
+    }
     final book = _selectedBook;
     if (book == null) {
-      return _buildEmptyBox('왼쪽에서 교재를 선택하세요');
+      return _buildEmptyBox('왼쪽에서 교재나 내신기출 학교를 선택하세요');
     }
     return Container(
       decoration: BoxDecoration(

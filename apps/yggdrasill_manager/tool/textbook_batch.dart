@@ -4,6 +4,7 @@
 //
 //   flutter test tool/textbook_batch.dart -r expanded --dart-define=BATCH_STEP=<단계> [--dart-define=BATCH_ONLY=1-1/0-0,1-2/0-1/W5]
 // BATCH_ONLY 는 중단원(학년/대-중) 또는 소단원(학년/대-중/작업 키)을 쉼표로 고른다.
+// BATCH_OPEN=true 면 크롭을 확정해 작업 지시가 있지만 아직 확정하지 않은 소단원도 고른다.
 //
 // 단계
 //   send_otp, verify_otp  로그인(BATCH_EMAIL 필수, BATCH_OTP). 세션은 저장소 밖 %LOCALAPPDATA%\Yggdrasill 에 둔다.
@@ -13,14 +14,31 @@
 //   meta         정합성 점검 + 메타 보충(AI). 앱의 "메타 보충"과 같다
 //   dismiss      사장님이 "문제 없음"으로 정한 문항(BATCH_CROPS, 크롭 id 쉼표 구분)의 정합성 지적을 닫는다
 //   render       V2 렌더 이상이 남은 문항과 BATCH_CROPS 문항을 다시 검수한다(작업 화면의 "V2 렌더 검수 다시"). 교재 원본을
-//                찍으려고 매니저앱 Windows 빌드 폴더의 pdfium 을 쓴다(그 폴더를 PATH 에 넣고 실행한다)
+//                찍으려고 매니저앱 Windows 빌드 폴더의 pdfium 을 쓴다(그 폴더를 PATH 에 넣고 실행한다).
+//                BATCH_VALUE=unchecked 면 렌더 검수 기록이 비어 있는 문항(검수 뒤 내용이 바뀐 문항)과
+//                교재 원본과 대조하지 않고 검수된 문항도 고른다
+//   finish       V2 렌더 이상이 남은 문항과 BATCH_CROPS 문항에만 작업 화면의 "이어서 마무리"와 같은 검수를 돌린다
+//                (원본 대조 수정안 → V2 재렌더·원본 재대조 최대 2회 → 정합성 점검 → 메타 보충, AI).
+//                BATCH_VALUE=rerun 이면 AI 풀이·해설 전사·품질 검수부터 다시 한다(해설 위치를 고친 뒤)
+//   page         BATCH_VALUE=종류:쪽(sol:32) 한 쪽 전체를 PNG 로 남긴다(쓰기 없음)
+//   solref       해설 위치를 사람이 고친 값으로 저장한다. BATCH_VALUE 한 줄: crop id|쪽|번호 영역|본문 영역(위,왼,아래,오)
+//   solfig       BATCH_CROPS 문항의 해설 그림을 지금 해설 위치에서 다시 찾고 V2 렌더를 다시 대조한다(AI)
+//   solfig_arrange BATCH_CROPS 문항의 해설 그림 정렬·가로 묶음을 원본 자리에서 다시 계산하고 V2 렌더를 다시 대조한다.
+//                BATCH_VALUE 가 있으면 {"<crop id>": {"<그림 순번 0부터>": {"placement": "left"}}} 값을 먼저 덮어쓴다
+//   solfig_recrop BATCH_CROPS 문항 하나의 해설 그림 하나를 해설 PDF 같은 쪽에서 다시 자르고 V2 렌더를 다시 대조한다.
+//                BATCH_VALUE=그림 순번(0부터)|위,왼,아래,오(해설 쪽 0~1000)
+//   solfig_drop  BATCH_CROPS 문항 하나의 해설 그림 하나(BATCH_VALUE=순번, 0부터)를 빼고 V2 렌더를 다시 대조한다
 //   snapshot     BATCH_CROPS 문항의 V2 문항 카드·정답 해설 카드·교재 원본을 build/textbook_batch/snap 에 PNG 로 남긴다(쓰기 없음).
 //                BATCH_VALUE 가 있으면 그 줄마다 그 정답으로 정답 카드를 더 찍는다(정답 표기 비교)
 // 사장님이 승인한 문항 하나(BATCH_CROPS)를 고치는 단계. 값은 BATCH_VALUE(`@경로`면 그 UTF-8 파일 내용)
 //   answer          정답을 사장님 수정으로 반영 대기에 넣는다(작업 화면의 정답 저장과 같다)
+//   stem            본문을 사장님 수정으로 반영 대기에 넣는다(작업 화면의 본문 저장과 같다)
+//   solution        원본 해설 전사본을 사장님 수정으로 반영 대기에 넣는다
+//   layout          그림 배치(figure_layout JSON)를 사장님 수정으로 반영 대기에 넣는다
 //   recrop          그림 1을 원본에서 다시 잘라 반영 대기에 넣는다. 값은 snapshot 의 _original.png 기준 위,왼쪽,아래,오른쪽(0~1000).
 //                   자른 영역의 빈칸도 원본 모양이라 엔진이 흰 여백을 자르지 않게 keep_margins 를 붙인다
 //   pb_figure_width 문제은행의 그림 1 폭(em)을 바로 고친다(문제은행 화면의 그림 크기 편집과 같다, 확정을 거치지 않는다)
+//   pb_choice_rows  문제은행의 그림 선지 줄 수(2: ①②③/④⑤, 3: ①②/③④/⑤)를 바로 고친다(문제은행 화면의 선지 배치와 같다)
 //   reconfirm    모든 카드가 준비됨인 소단원을 다시 확정(수정안 일괄 반영)
 //   logout       세션 폐기
 // 결과는 build/textbook_batch/ 에 JSON 으로 남는다.
@@ -40,6 +58,9 @@ import 'package:yggdrasill_manager/services/problem_bank_service.dart';
 import 'package:yggdrasill_manager/services/textbook_book_registry.dart';
 import 'package:yggdrasill_manager/services/textbook_problem_review_service.dart';
 import 'package:yggdrasill_manager/services/textbook_review_pipeline.dart';
+import 'package:yggdrasill_manager/services/textbook_review_solution_image_service.dart';
+import 'package:yggdrasill_manager/services/textbook_stage_batch_service.dart';
+import 'package:yggdrasill_manager/services/textbook_vlm_solution_ref_service.dart';
 import 'package:yggdrasill_manager/services/textbook_workflow_service.dart';
 
 const _step = String.fromEnvironment('BATCH_STEP');
@@ -47,6 +68,7 @@ const _only = String.fromEnvironment('BATCH_ONLY');
 const _email = String.fromEnvironment('BATCH_EMAIL');
 const _otp = String.fromEnvironment('BATCH_OTP');
 const _crops = String.fromEnvironment('BATCH_CROPS');
+const _open = bool.fromEnvironment('BATCH_OPEN');
 const _value = String.fromEnvironment('BATCH_VALUE');
 
 /// 한글 값은 명령줄을 거치며 깨질 수 있어 `@경로`(UTF-8 파일)로도 받는다.
@@ -176,14 +198,48 @@ class _Batch {
         await _dismiss(mids);
       case 'render':
         await _render(mids);
+      case 'finish':
+        await _finish(mids);
+      case 'match':
+        await _match(mids);
+      case 'sol_blocks':
+        await _solBlocks(mids);
       case 'snapshot':
         await _snapshot(mids);
       case 'answer':
         await _answer(mids);
+      case 'stem':
+        await _stem(mids);
+      case 'solution':
+        await _solution(mids);
+      case 'layout':
+        await _layout(mids);
+      case 'page':
+        await _page(mids);
+      case 'solref':
+        await _solref(mids);
+      case 'solfig':
+        await _solfig(mids);
+      case 'solfig_arrange':
+        await _solfigArrange(mids);
+      case 'solfig_recrop':
+        await _solfigRecrop(mids);
+      case 'solfig_drop':
+        await _solfigDrop(mids);
       case 'recrop':
         await _recrop(mids);
       case 'pb_figure_width':
         await _pbFigureWidth(mids);
+      case 'fig_drop':
+        await _figDrop(mids);
+      case 'sol_correct':
+        await _solCorrect(mids);
+      case 'note':
+        await _note(mids);
+      case 'fig_anchor':
+        await _figAnchor(mids);
+      case 'pb_choice_rows':
+        await _pbChoiceRows(mids);
       case 'reconfirm':
         await _reconfirm(mids);
       default:
@@ -202,7 +258,7 @@ class _Batch {
     for (final grade in _grades) {
       final byMid = <String, List<TextbookSubunitWorkflow>>{};
       for (final wf in await workflows.fetchForBook(academyId: _academyId, bookId: _bookId, gradeLabel: grade)) {
-        if (!wf.isConfirmed) continue;
+        if (!wf.isConfirmed && !(_open && wf.workOrder != null)) continue;
         if (wf.workOrder == null) {
           print('작업 지시가 없어 건너뜀: $grade ${wf.stateKey}');
           continue;
@@ -260,6 +316,10 @@ class _Batch {
         final items = mid.itemsOf(wf);
         final ok = items.where((x) => x.isWorkflowReady).length;
         final counts = _blockerCounts(items);
+        final noRender = items.where((x) => x.renderCheckedAt == null).length;
+        if (noRender > 0) counts['렌더 검수 기록 없음'] = noRender;
+        final noOriginal = items.where((x) => x.renderCheckedAt != null && !x.originalCompared).length;
+        if (noOriginal > 0) counts['원본 대조 없는 렌더 검수'] = noOriginal;
         total += items.length;
         ready += ok;
         counts.forEach((k, v) => blockers[k] = (blockers[k] ?? 0) + v);
@@ -426,15 +486,20 @@ class _Batch {
   Future<void> _render(List<_Mid> mids) async {
     _usePdfium();
     final picked = {for (final c in _crops.split(',')) if (c.trim().isNotEmpty) c.trim()};
+    final unchecked = _valueText == 'unchecked';
     final rows = <Map<String, dynamic>>[];
     for (final mid in mids) {
       await _load(mid);
       final ids = mid.targetIds;
       final targets = {
         for (final it in mid.all)
-          if (ids.contains(it.cropId) && (it.readyBlockers.contains('V2 렌더 이상') || picked.contains(it.cropId)))
+          if (ids.contains(it.cropId) &&
+              (it.readyBlockers.contains('V2 렌더 이상') ||
+                  picked.contains(it.cropId) ||
+                  (unchecked && (it.renderCheckedAt == null || !it.originalCompared))))
             it.cropId,
       };
+      print('${mid.key}: 렌더 재검수 ${targets.length}문항');
       if (targets.isEmpty) continue;
       final noOriginal = [
         for (final it in mid.all)
@@ -456,32 +521,125 @@ class _Batch {
         print('  ${mid.key} 오류: $e');
       }
       for (final it in pipeline.items) {
-        final rc = it.renderChecks;
-        final row = {
-          'mid': mid.key,
-          'page': it.displayPage,
-          'number': it.problemNumber,
-          'crop_id': it.cropId,
-          'ready': it.isWorkflowReady,
-          'blockers': it.readyBlockers,
-          'figure_size_ratio': rc['figure_size_ratio'],
-          'staged': it.stagedFields,
-          for (final k in const ['problem_ok', 'answer_ok', 'solution_ok', 'fidelity_ok', 'figure_position_ok'])
-            if (rc[k] == false) k: false,
-          'issue_kind': rc['issue_kind'],
-          'issue_title': rc['issue_title'],
-          'issue_detail': rc['issue_detail'],
-          'engine_symptom': rc['engine_symptom'],
-        };
-        rows.add(row);
-        print('${mid.key} p.${it.displayPage} ${it.problemNumber}번: '
-            '${it.isWorkflowReady ? '준비됨' : '막힘(${it.readyBlockers.join(', ')})'}'
-            '${rc['figure_size_ratio'] == null ? '' : ' · 그림 크기 ${rc['figure_size_ratio']}배'}'
-            '${rc['issue_title'] == null ? '' : ' · ${rc['issue_title']}'}');
+        rows.add(_renderRow(mid, it));
       }
       out[mid.key] = {'errors': pipeline.errors};
     }
     out['items'] = rows;
+  }
+
+  Map<String, dynamic> _renderRow(_Mid mid, TextbookProblemReviewItem it) {
+    final rc = it.renderChecks;
+    print('${mid.key} p.${it.displayPage} ${it.problemNumber}번: '
+        '${it.isWorkflowReady ? '준비됨' : '막힘(${it.readyBlockers.join(', ')})'}'
+        '${it.stagedFields.isEmpty ? '' : ' · 반영 대기 ${it.stagedFields.join(',')}'}'
+        '${rc['figure_size_ratio'] == null ? '' : ' · 그림 크기 ${rc['figure_size_ratio']}배'}'
+        '${rc['issue_title'] == null ? '' : ' · ${rc['issue_title']}'}');
+    return {
+      'mid': mid.key,
+      'page': it.displayPage,
+      'number': it.problemNumber,
+      'crop_id': it.cropId,
+      'ready': it.isWorkflowReady,
+      'blockers': it.readyBlockers,
+      'figure_size_ratio': rc['figure_size_ratio'],
+      'staged': it.stagedFields,
+      for (final k in const ['problem_ok', 'answer_ok', 'solution_ok', 'fidelity_ok', 'figure_position_ok'])
+        if (rc[k] == false) k: false,
+      'issue_kind': rc['issue_kind'],
+      'issue_title': rc['issue_title'],
+      'issue_detail': rc['issue_detail'],
+      'engine_symptom': rc['engine_symptom'],
+    };
+  }
+
+  /// 작업 화면의 "이어서 마무리"와 같은 검수 파이프라인을 막힌 문항(V2 렌더 이상)과 BATCH_CROPS 문항에만 돌린다.
+  /// 원본 대조 수정안 → 반영 대기 값으로 V2 재렌더·원본 재대조(최대 2회) → 정합성 점검 → 메타 보충.
+  Future<void> _finish(List<_Mid> mids) async {
+    _usePdfium();
+    final picked = {for (final c in _crops.split(',')) if (c.trim().isNotEmpty) c.trim()};
+    final rerun = _valueText == 'rerun';
+    final rows = <Map<String, dynamic>>[];
+    for (final mid in mids) {
+      await _load(mid);
+      final ids = mid.targetIds;
+      final targets = {
+        for (final it in mid.all)
+          if (ids.contains(it.cropId) &&
+              (picked.contains(it.cropId) || (!rerun && it.readyBlockers.contains('V2 렌더 이상'))))
+            it.cropId,
+      };
+      print('${mid.key}: 이어서 마무리 ${targets.length}문항');
+      if (targets.isEmpty) continue;
+      final pipeline = TextbookReviewPipeline(
+        service: review,
+        scope: mid.scope,
+        matches: (it) => targets.contains(it.cropId),
+        onProgress: (m) => print('  ${mid.key} $m'),
+      );
+      final summary = await pipeline.runAll(forceRerun: rerun);
+      for (final n in summary.notes) {
+        print('  ${mid.key} $n');
+      }
+      for (final e in summary.errors) {
+        print('  ${mid.key} 오류: $e');
+      }
+      for (final it in pipeline.items) {
+        rows.add(_renderRow(mid, it));
+      }
+      out[mid.key] = {'notes': summary.notes, 'errors': summary.errors};
+    }
+    out['items'] = rows;
+  }
+
+  /// 고른 소단원의 정답·해설 위치를 앱 2단계와 같은 경로로 다시 찾는다(소단원 전체).
+  Future<void> _match(List<_Mid> mids) async {
+    _usePdfium();
+    final stage = TextbookStageBatchService(supabase: db);
+    final rows = <Map<String, dynamic>>[];
+    for (final mid in mids) {
+      for (final wf in mid.workflows) {
+        final order = wf.workOrder!;
+        for (final r in order.stageRuns) {
+          final label = '${mid.key} ${wf.scopeKey} ${r.subKey}';
+          try {
+            final res = await stage.runStage23ForSubunit(
+              academyId: order.academyId,
+              bookId: order.bookId,
+              gradeLabel: order.gradeLabel,
+              bigOrder: order.bigOrder,
+              midOrder: order.midOrder,
+              subKey: r.subKey,
+              subIndex: r.subIndex,
+              seriesKey: order.seriesKey,
+              answerStartPage: r.answerStartPage,
+              answerEndPage: r.answerEndPage,
+              solutionStartPage: r.solutionStartPage,
+              solutionEndPage: r.solutionEndPage,
+              bodyPageFrom: r.bodyPageFrom,
+              bodyPageTo: r.bodyPageTo,
+              onStatus: (s) {
+                if (s.contains('머리') || s.contains('실패')) print('  $s');
+              },
+            );
+            print('$label 정답 ${res.answerSaved} · 해설 위치 ${res.solutionRefSaved}'
+                '${res.answerMissing.isEmpty ? '' : ' · 정답 못 찾음 ${res.answerMissing.join(', ')}'}'
+                '${res.solutionMissing.isEmpty ? '' : ' · 해설 못 찾음 ${res.solutionMissing.join(', ')}'}');
+            rows.add({
+              'scope': label,
+              'answers': res.answerSaved,
+              'solution_refs': res.solutionRefSaved,
+              'answer_missing': res.answerMissing,
+              'solution_missing': res.solutionMissing,
+            });
+          } catch (e) {
+            print('$label 실패: $e');
+            rows.add({'scope': label, 'error': '$e'});
+          }
+        }
+      }
+    }
+    out['match'] = rows;
   }
 
   /// BATCH_CROPS 로 고른 문항 하나
@@ -509,6 +667,258 @@ class _Batch {
     );
     print('${mid.key} p.${it.displayPage} ${it.problemNumber}번 정답 반영 대기: $value · 바뀜 ${changed.join(', ')}');
     out['answer'] = {'mid': mid.key, 'crop_id': it.cropId, 'before': it.existingAnswer, 'answer': value, 'changed': changed};
+  }
+
+  /// BATCH_VALUE=`종류:쪽`(종류는 body·sol, 쪽은 PDF 쪽 번호) 한 쪽 전체를 PNG 로 남긴다(쓰기 없음).
+  Future<void> _page(List<_Mid> mids) async {
+    final parts = _valueText.split(':');
+    final rawPage = parts.length == 2 ? int.tryParse(parts[1].trim()) : null;
+    if (rawPage == null || mids.isEmpty) fail('BATCH_VALUE 는 종류:쪽(예: sol:32)이고 BATCH_ONLY 로 학년을 고릅니다.');
+    _usePdfium();
+    final scope = mids.first.scope;
+    final images = TextbookReviewSolutionImageService();
+    final kind = parts[0].trim();
+    await images.ensureSourcePdf(academyId: _academyId, bookId: _bookId, gradeLabel: scope.gradeLabel, sourceKind: kind);
+    final shot = await images.renderFullPage(
+      academyId: _academyId,
+      bookId: _bookId,
+      gradeLabel: scope.gradeLabel,
+      sourceKind: kind,
+      rawPage: rawPage,
+      targetWidthPx: 2000,
+    );
+    if (shot == null) fail('$kind $rawPage쪽을 찍지 못했습니다.');
+    final dir = Directory(p.join('build', 'textbook_batch', 'snap'))..createSync(recursive: true);
+    final file = File(p.join(dir.path, '${scope.gradeLabel}_${kind}_p$rawPage.png'))..writeAsBytesSync(shot.bytes);
+    print(file.path);
+  }
+
+  /// 해설 지면 구조 판독 결과를 그대로 보여 준다(저장 없음). BATCH_VALUE: `시작쪽-끝쪽`
+  Future<void> _solBlocks(List<_Mid> mids) async {
+    final spec = _valueText.split('@');
+    final width = spec.length > 1 ? int.parse(spec[1].trim()) : 1800;
+    final parts = [for (final x in spec.first.split('-')) int.tryParse(x.trim())];
+    if (parts.isEmpty || parts.any((x) => x == null) || mids.isEmpty) fail('BATCH_VALUE 는 시작쪽-끝쪽 입니다.');
+    _usePdfium();
+    final scope = mids.first.scope;
+    final images = TextbookReviewSolutionImageService();
+    await images.ensureSourcePdf(academyId: _academyId, bookId: _bookId, gradeLabel: scope.gradeLabel, sourceKind: 'sol');
+    final refs = TextbookVlmSolutionRefService();
+    final rows = <Map<String, dynamic>>[];
+    for (var page = parts.first!; page <= parts.last!; page += 1) {
+      final shot = await images.renderFullPage(
+        academyId: _academyId,
+        bookId: _bookId,
+        gradeLabel: scope.gradeLabel,
+        sourceKind: 'sol',
+        rawPage: page,
+        targetWidthPx: width,
+      );
+      if (shot == null) fail('sol $page쪽을 찍지 못했습니다.');
+      final res = await refs.detectBlocksOnPage(imageBytes: shot.bytes, rawPage: page);
+      final line = [
+        for (final e in res.sequence)
+          e.isHeader ? '[${e.title} p.${e.pageStart}~${e.pageEnd}]' : e.text,
+      ].join(' ');
+      print('p$page 이어짐=${res.leadingContinuation} $line');
+      rows.add({'page': page, 'leading': res.leadingContinuation, 'sequence': line});
+    }
+    out['sol_blocks'] = rows;
+  }
+
+  /// 해설 위치를 사람이 고친 값으로 저장한다(작업 화면의 해설 위치 다시 지정과 같다).
+  /// BATCH_VALUE 한 줄: `crop id|해설 쪽|번호 영역 위,왼,아래,오|본문 영역 위,왼,아래,오`
+  Future<void> _solref(List<_Mid> mids) async {
+    List<int> box(String s) => [for (final x in s.split(',')) int.parse(x.trim())];
+    final refs = [
+      for (final line in _valueText.split('\n'))
+        if (line.trim().isNotEmpty)
+          () {
+            final f = line.trim().split('|');
+            if (f.length != 4) fail('줄 형식이 틀렸습니다: $line');
+            final page = int.parse(f[1].trim());
+            return TextbookSolutionRefUpload(
+              cropId: f[0].trim(),
+              rawPage: page,
+              displayPage: page,
+              numberRegion1k: box(f[2]),
+              contentRegion1k: box(f[3]),
+              source: 'manual',
+            );
+          }(),
+    ];
+    if (refs.isEmpty) fail('BATCH_VALUE 가 비어 있습니다.');
+    for (final m in mids) {
+      await _load(m);
+    }
+    final known = {for (final m in mids) for (final id in m.targetIds) id};
+    final unknown = [for (final r in refs) if (!known.contains(r.cropId)) r.cropId];
+    if (unknown.isNotEmpty) fail('BATCH_ONLY 범위에 없는 문항: ${unknown.join(', ')}');
+    final n = await TextbookVlmSolutionRefService().batchUpsertSolutionRefs(academyId: _academyId, refs: refs);
+    print('해설 위치 저장 $n건');
+    out['solref'] = [for (final r in refs) r.toJson()];
+  }
+
+  /// BATCH_CROPS 문항의 해설 그림을 지금 해설 위치에서 다시 찾고(해설 위치를 고친 뒤) V2 렌더를 다시 대조한다.
+  Future<void> _solfig(List<_Mid> mids) async {
+    _usePdfium();
+    final picked = {for (final c in _crops.split(',')) if (c.trim().isNotEmpty) c.trim()};
+    final rows = <Map<String, dynamic>>[];
+    for (final mid in mids) {
+      await _load(mid);
+      final targets = [for (final it in mid.all) if (mid.targetIds.contains(it.cropId) && picked.contains(it.cropId)) it];
+      if (targets.isEmpty) continue;
+      await review.ensureSourcePdfs(mid.scope, targets);
+      final res = await review.extractSolutionFigures(mid.scope, targets);
+      for (final e in res.errors) {
+        print('  ${mid.key} 오류: $e');
+      }
+      print('${mid.key}: 해설 그림 다시 찾기 ${targets.length}문항 · 그림 있음 ${res.withFigures.length}');
+      final ids = {for (final it in targets) it.cropId};
+      final pipeline = TextbookReviewPipeline(
+        service: review,
+        scope: mid.scope,
+        matches: (it) => ids.contains(it.cropId),
+        onProgress: (m) => print('  ${mid.key} $m'),
+      );
+      await pipeline.recheckRender();
+      for (final it in pipeline.items) {
+        rows.add(_renderRow(mid, it));
+      }
+    }
+    out['items'] = rows;
+  }
+
+  Future<void> _solfigArrange(List<_Mid> mids) async {
+    final picked = {for (final c in _crops.split(',')) if (c.trim().isNotEmpty) c.trim()};
+    if (picked.isEmpty) fail('BATCH_CROPS 가 비어 있습니다.');
+    final decoded = _valueText.trim().isEmpty ? const <String, dynamic>{} : jsonDecode(_valueText);
+    if (decoded is! Map) fail('BATCH_VALUE 는 {"<crop id>": {"<그림 순번>": {...}}} JSON 입니다.');
+    final rows = <Map<String, dynamic>>[];
+    for (final mid in mids) {
+      await _load(mid);
+      final targets = [for (final it in mid.all) if (mid.targetIds.contains(it.cropId) && picked.contains(it.cropId)) it];
+      if (targets.isEmpty) continue;
+      var changed = 0;
+      for (final it in targets) {
+        final raw = decoded[it.cropId];
+        final overrides = <int, Map<String, dynamic>>{
+          if (raw is Map)
+            for (final e in raw.entries)
+              if (int.tryParse('${e.key}') != null && e.value is Map) int.parse('${e.key}'): Map<String, dynamic>.from(e.value as Map),
+        };
+        if (await review.rearrangeSolutionFigures(it, overrides: overrides)) changed++;
+      }
+      print('${mid.key}: 해설 그림 정렬 다시 계산 ${targets.length}문항 · 바뀜 $changed');
+      _usePdfium();
+      final ids = {for (final it in targets) it.cropId};
+      final pipeline = TextbookReviewPipeline(
+        service: review,
+        scope: mid.scope,
+        matches: (it) => ids.contains(it.cropId),
+        onProgress: (m) => print('  ${mid.key} $m'),
+      );
+      await pipeline.recheckRender();
+      for (final it in pipeline.items) {
+        rows.add(_renderRow(mid, it));
+      }
+    }
+    out['items'] = rows;
+  }
+
+  Future<void> _solfigRecrop(List<_Mid> mids) async {
+    final parts = _valueText.trim().split('|');
+    final box = parts.length == 2 ? [for (final x in parts[1].split(',')) int.tryParse(x.trim())] : const <int?>[];
+    final index = parts.isEmpty ? null : int.tryParse(parts[0].trim());
+    if (index == null || box.length != 4 || box.contains(null)) fail('BATCH_VALUE 는 그림 순번|위,왼,아래,오(해설 쪽 0~1000)입니다.');
+    final (mid, it) = await _one(mids);
+    final region = [for (final x in box) x!];
+    _usePdfium();
+    await review.ensureSourcePdfs(mid.scope, [it]);
+    await review.recropSolutionFigure(mid.scope, it, index, region);
+    print('${mid.key} p.${it.displayPage} ${it.problemNumber}번 해설 그림 ${index + 1} 다시 자름 $region');
+    final pipeline = TextbookReviewPipeline(
+      service: review,
+      scope: mid.scope,
+      matches: (x) => x.cropId == it.cropId,
+      onProgress: (m) => print('  ${mid.key} $m'),
+    );
+    await pipeline.recheckRender();
+    out['items'] = [for (final x in pipeline.items) _renderRow(mid, x)];
+  }
+
+  Future<void> _solfigDrop(List<_Mid> mids) async {
+    final index = int.tryParse(_valueText.trim());
+    if (index == null) fail('BATCH_VALUE 는 뺄 해설 그림 순번(0부터)입니다.');
+    final (mid, it) = await _one(mids);
+    if (index < 0 || index >= it.solutionFigureAssets.length) {
+      fail('해설 그림은 ${it.solutionFigureAssets.length}개입니다.');
+    }
+    final rest = [
+      for (var k = 0; k < it.solutionFigureAssets.length; k++)
+        if (k != index) it.solutionFigureAssets[k],
+    ];
+    await db.rpc('textbook_review_set_solution_figures', params: {
+      'p_crop_id': it.cropId,
+      'p_assets': arrangeSolutionFigures(rest, it.solutionSegments),
+    });
+    print('${mid.key} p.${it.displayPage} ${it.problemNumber}번 해설 그림 ${index + 1} 뺌 (남은 ${rest.length}개)');
+    final pipeline = TextbookReviewPipeline(
+      service: review,
+      scope: mid.scope,
+      matches: (x) => x.cropId == it.cropId,
+      onProgress: (m) => print('  ${mid.key} $m'),
+    );
+    await pipeline.recheckRender();
+    out['items'] = [for (final x in pipeline.items) _renderRow(mid, x)];
+  }
+
+  Future<void> _stem(List<_Mid> mids) async {
+    final value = _valueText;
+    if (value.trim().isEmpty) fail('BATCH_VALUE(본문)가 비어 있습니다.');
+    final (mid, it) = await _one(mids);
+    final changed = await review.stageChanges(
+      cropId: it.cropId,
+      patch: {'stem': value},
+      source: 'owner',
+      note: '사장님 수정',
+    );
+    print('${mid.key} p.${it.displayPage} ${it.problemNumber}번 본문 반영 대기 · 바뀜 ${changed.join(', ')}');
+    out['stem'] = {'mid': mid.key, 'crop_id': it.cropId, 'before': it.stem, 'stem': value, 'changed': changed};
+  }
+
+  Future<void> _layout(List<_Mid> mids) async {
+    final decoded = jsonDecode(_valueText);
+    if (decoded is! Map || decoded['items'] is! List) fail('BATCH_VALUE 는 figure_layout JSON({"version":1,"items":[...]})입니다.');
+    final (mid, it) = await _one(mids);
+    final changed = await review.stageChanges(
+      cropId: it.cropId,
+      patch: {'figure_layout': decoded},
+      source: 'owner',
+      note: '사장님 수정',
+    );
+    print('${mid.key} p.${it.displayPage} ${it.problemNumber}번 그림 배치 반영 대기 · 바뀜 ${changed.join(', ')}');
+    out['layout'] = {'mid': mid.key, 'crop_id': it.cropId, 'layout': decoded, 'changed': changed};
+  }
+
+  Future<void> _solution(List<_Mid> mids) async {
+    final value = _valueText;
+    if (value.trim().isEmpty) fail('BATCH_VALUE(해설)가 비어 있습니다.');
+    final (mid, it) = await _one(mids);
+    final changed = await review.stageChanges(
+      cropId: it.cropId,
+      patch: {'solution_transcribed': value},
+      source: 'owner',
+      note: '사장님 수정',
+    );
+    print('${mid.key} p.${it.displayPage} ${it.problemNumber}번 해설 반영 대기 · 바뀜 ${changed.join(', ')}');
+    out['solution'] = {
+      'mid': mid.key,
+      'crop_id': it.cropId,
+      'before': it.solutionTranscribed,
+      'solution': value,
+      'changed': changed,
+    };
   }
 
   Future<void> _recrop(List<_Mid> mids) async {
@@ -587,6 +997,117 @@ class _Batch {
       print('  세트 ${r['question_number']}번 공통 그림 배치: ${jsonEncode(sm['common_figure_layout'])}');
     }
     out['pb_figure_width'] = {'mid': mid.key, 'crop_id': it.cropId, 'before': before, 'width_em': width, 'set': set};
+  }
+
+  /// 문항 그림 하나를 뺀다('해' 풀이 안내 그림이 문항 그림으로 잡힌 경우). BATCH_VALUE: 뺄 그림 번호(1부터)
+  Future<void> _figDrop(List<_Mid> mids) async {
+    final drop = int.tryParse(_valueText.trim());
+    if (drop == null || drop < 1) fail('BATCH_VALUE 는 뺄 그림 번호(1부터)입니다.');
+    final (mid, it) = await _one(mids);
+    final assets = [for (final a in it.pbFigureAssets) Map<String, dynamic>.from(a)]
+      ..sort((a, b) => '${a['figure_index']}'.compareTo('${b['figure_index']}'));
+    if (drop > assets.length || assets.length < 2) fail('그림이 ${assets.length}개라 $drop번을 뺄 수 없습니다.');
+    int renum(int i) => i > drop ? i - 1 : i;
+    final kept = [
+      for (final a in assets)
+        if ((a['figure_index'] as num?)?.toInt() != drop)
+          {...a, 'figure_index': renum((a['figure_index'] as num).toInt())},
+    ];
+    final layout = Map<String, dynamic>.from(it.pbFigureLayout);
+    final items = <Map<String, dynamic>>[];
+    for (final x in (layout['items'] is List ? layout['items'] as List : const [])) {
+      if (x is! Map) continue;
+      final m = RegExp(r'^idx:(\d+)$').firstMatch('${x['assetKey']}');
+      final idx = m == null ? null : int.parse(m.group(1)!);
+      if (idx == drop) continue;
+      items.add({...Map<String, dynamic>.from(x), if (idx != null) 'assetKey': 'idx:${renum(idx)}'});
+    }
+    final changed = await review.stageProblemFix(
+      scope: mid.scope,
+      item: it,
+      figureAssets: kept,
+      figureLayout: {...layout, 'items': items, 'groups': const [], 'horizontalPairs': const []},
+      source: 'owner',
+      note: '풀이 안내 그림 제외',
+    );
+    print('${mid.key} p.${it.displayPage} ${it.problemNumber}번 그림 $drop 제외 · 남은 ${kept.length}개 · 바뀜 ${changed.join(', ')}');
+    out['fig_drop'] = {'mid': mid.key, 'crop_id': it.cropId, 'dropped': drop, 'changed': changed};
+  }
+
+  /// 사장님 판정으로 교정 의견을 처리하고 해설 논리 오류 지적을 닫는다. BATCH_VALUE: adopt(교재 오류로 확인) | dismiss(기각)
+  Future<void> _note(List<_Mid> mids) async {
+    final value = _valueText.trim();
+    if (value != 'adopt' && value != 'dismiss') fail('BATCH_VALUE 는 adopt 또는 dismiss 입니다.');
+    final (mid, it) = await _one(mids);
+    final notes = it.openCorrectionNotes;
+    for (final f in notes) {
+      await review.closeCorrectionNote(findingId: '${f['id']}', dismiss: value == 'dismiss', note: '사장님 판정');
+    }
+    final logic = it.openSolutionLogicFinding != null;
+    await review.stageChanges(cropId: it.cropId, source: 'owner', note: '사장님 판정', mathStatus: 'clean');
+    print('${mid.key} p.${it.displayPage} ${it.problemNumber}번 교정 의견 ${notes.length}건 ${value == 'adopt' ? '채택' : '기각'}'
+        '${logic ? ' · 해설 논리 오류 지적 닫음' : ''}');
+    out['note'] = {'mid': mid.key, 'crop_id': it.cropId, 'notes': notes.length, 'action': value, 'logic_closed': logic};
+  }
+
+  /// 해설 오류를 사장님 판정으로 처리한다. BATCH_VALUE: 교정한 해설 전문(@파일) | keep(교재 그대로 둠)
+  /// 교정하면 교정 전 원본 해설을 따로 남긴다(확정 때 원본·교정본 둘 다 저장).
+  Future<void> _solCorrect(List<_Mid> mids) async {
+    final value = _valueText;
+    if (value.trim().isEmpty) fail('BATCH_VALUE 는 교정한 해설 전문(@파일) 또는 keep 입니다.');
+    final keep = value.trim() == 'keep';
+    final (mid, it) = await _one(mids);
+    await review.closeSolutionLogic(cropId: it.cropId, correctedSolution: keep ? null : value);
+    print('${mid.key} p.${it.displayPage} ${it.problemNumber}번 해설 ${keep ? '그대로 둠' : '교정(원본 해설 따로 남김)'}');
+    out['sol_correct'] = {'mid': mid.key, 'crop_id': it.cropId, 'keep': keep, 'before': it.solutionTranscribed};
+  }
+
+  /// 본문 아래 문항 그림의 정렬을 바꾼다. BATCH_VALUE: left | center | right
+  Future<void> _figAnchor(List<_Mid> mids) async {
+    final anchor = _valueText.trim();
+    if (!const {'left', 'center', 'right'}.contains(anchor)) fail('BATCH_VALUE 는 left, center, right 중 하나입니다.');
+    final (mid, it) = await _one(mids);
+    final layout = Map<String, dynamic>.from(it.pbFigureLayout);
+    final items = [
+      for (final x in (layout['items'] is List ? layout['items'] as List : const []))
+        if (x is Map) Map<String, dynamic>.from(x),
+    ];
+    if (items.isEmpty) fail('그림 배치가 없습니다.');
+    final before = [for (final x in items) '${x['position']}/${x['anchor']}'];
+    for (final x in items) {
+      if ('${x['position'] ?? 'below-stem'}' == 'below-stem') x['anchor'] = anchor;
+    }
+    final changed = await review.stageChanges(
+      cropId: it.cropId,
+      patch: {
+        'figure_layout': {...layout, 'items': items},
+      },
+      source: 'owner',
+      note: '그림 정렬을 원본에 맞춤',
+    );
+    print('${mid.key} p.${it.displayPage} ${it.problemNumber}번 그림 정렬 ${before.join(', ')} → $anchor · 바뀜 ${changed.join(', ')}');
+    out['fig_anchor'] = {'mid': mid.key, 'crop_id': it.cropId, 'before': before, 'anchor': anchor, 'changed': changed};
+  }
+
+  Future<void> _pbChoiceRows(List<_Mid> mids) async {
+    final rows = _valueText.trim();
+    if (rows != '2' && rows != '3') fail('BATCH_VALUE 는 그림 선지 줄 수(2 또는 3)입니다.');
+    final (mid, it) = await _one(mids);
+    if (it.pbQuestionId.isEmpty) fail('문제은행 문항이 없습니다.');
+    final row = await db.from('pb_questions').select('meta, choices').eq('id', it.pbQuestionId).single();
+    final meta = Map<String, dynamic>.from(row['meta'] as Map);
+    final choices = row['choices'] is List ? row['choices'] as List : const [];
+    final allFigures = choices.length == 5 &&
+        choices.every((c) => c is Map && RegExp(r'^\s*\[(?:그림|도형|도표)\]\s*$').hasMatch('${c['text'] ?? ''}'));
+    if (!allFigures) fail('선지 다섯 개가 모두 그림인 문항이 아닙니다.');
+    final before = meta['image_choice_layout'];
+    meta['is_image_choice_question'] = true;
+    meta['choice_layout'] = 'image_table';
+    meta['image_choice_count'] = 5;
+    meta['image_choice_layout'] = <String, dynamic>{'version': 1, 'rows': rows};
+    await pb.updateQuestionMeta(questionId: it.pbQuestionId, meta: meta);
+    print('${mid.key} p.${it.displayPage} ${it.problemNumber}번 그림 선지 줄 수: ${jsonEncode(before)} → $rows');
+    out['pb_choice_rows'] = {'mid': mid.key, 'crop_id': it.cropId, 'before': before, 'rows': rows};
   }
 
   /// 교재 메뉴의 일괄 확정과 같은 순서: 준비됨 확인 → 확정 직전 정합성 점검 → 수정안 일괄 반영 → 확정 표시.

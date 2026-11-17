@@ -23,6 +23,8 @@ function parseFigureLayout(question) {
       anchor: normalizeAnchor(item.anchor),
       offsetXEm: clampFinite(item.offsetXEm, -20, 20, 0),
       offsetYEm: clampFinite(item.offsetYEm, -20, 20, 0),
+      // 가로 묶음(groups) 안에서 그림 밑에 둘 설명 글. 묶음 밖에서는 무시된다.
+      ...(typeof item.caption === 'string' && item.caption.trim() ? { caption: item.caption.trim() } : {}),
     });
   }
   if (items.length === 0) return null;

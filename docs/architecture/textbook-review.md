@@ -4,11 +4,12 @@ This note covers phase 1 of reviewing migrated textbook problems: protecting
 human corrections from machine re-runs, recording review findings and owner
 decisions, and the manager-app "문항검수" tab that shows them.
 
-Status (2026-11-02): manual protection, the review tables, the load check, and
-the decision RPCs are deployed. The gateway guard is in place. AI stages 1 to 4
-(solution transcription, independent solve, compare, render check) run from the
-production 문항검수 screen in the manager app; see "AI pipeline" below. Stages 5
-and 6 are not built.
+Status (2026-11-14): the subunit workflow of the spec
+`docs/specs/20261113-교재-문항-검수-흐름과-기준.md` is built (see "Subunit
+workflow" right below). The review run only stores proposals; the problem bank
+and the answer tables change only when the owner confirms a subunit. Older
+sections below describe the parts that workflow uses; where they disagree with
+"Subunit workflow", that section wins.
 
 ## Principles
 
@@ -19,15 +20,185 @@ and 6 are not built.
   - `fidelity`: matches the printed textbook (원본 충실도).
   - `validity`: mathematically sound (수학적 타당성).
   - `output`: what students see renders correctly (출력 품질).
-- **Proposal only.** System checks and AI open findings, and may attach a
-  proposal. Only an owner action changes data. Nothing is applied automatically.
-  An owner action may apply the proposal in the same touch (see "One-touch
-  approval"); the AI itself never writes answers, stems, or choices.
+- **Proposal only.** System checks and AI open findings and store proposals as
+  staged values (`textbook_problem_analyses.staged_changes`). Owner edits before
+  confirm are staged too. Nothing reaches the problem bank or the answer tables
+  until the subunit confirm writes all staged values at once.
 - **Keep and correct.** The source PDF is never changed. Errors in the printed
   source are recorded as correction notes.
 - **Staff only.** Students never read review tables or functions.
 - **AI through Edge Functions.** The OpenAI key stays in the `OPENAI_API_KEY`
   secret and every call records an `ai_runs` row (see `ai-think.md`).
+
+## Subunit workflow
+
+Spec `docs/specs/20261113-교재-문항-검수-흐름과-기준.md`. Manager code:
+`services/textbook_workflow_service.dart` (work orders, confirm),
+`services/textbook_workflow_runner.dart` (stage 2 runner),
+`services/textbook_review_pipeline.dart` (AI review, `runAll`),
+`services/textbook_problem_review_service.dart` (`stageChanges`,
+`applyForConfirm`, ready judgement `isWorkflowReady`).
+
+### Stage 1: crops (owner)
+
+The owner draws problem regions per page and checks numbers, labels and set
+headers. Crops are coordinates in `textbook_problem_crops`. Confirming the
+crops writes a work order to `textbook_subunit_workflows`
+(`crop_status = confirmed`, `pipeline_status = queued`).
+
+### Stage 2: automatic run (no owner action)
+
+`TextbookWorkflowRunner` runs it app-wide and stores `pipeline_phase`, so a
+restarted app resumes from the stored phase.
+
+1. **Extract and match, in parallel.**
+   - The gateway worker reads the body PDF and creates the problems:
+     `pb_documents`, `pb_questions` (stem, choices, figures, figure layout),
+     `pb_question_sets` (common stem), and the crop link (`pb_question_uid`,
+     `textbook_crop_question_links`). Progress is in
+     `textbook_pb_extract_runs`.
+   - A sub-key is extracted in full only when none of its crops has a body. If
+     some have one, only the missing numbers are read, because a full
+     extraction replaces every problem of the document, including hand-fixed
+     ones.
+   - The answer and solution PDFs are matched at the same time:
+     `textbook_problem_answers` (grading answer) and the solution refs.
+     For 수력충전 (`suryeok`), every subunit block restarts at 01 and one
+     answer or solution page holds several blocks. So the model only reads the
+     page structure (block headers with their body-page badge, then numbers
+     and answers, via `/textbook/vlm/extract-answer-layout` and
+     `/textbook/vlm/detect-solution-blocks`). Code picks the block from the
+     header badge (`TextbookLayoutBlocks`, `textbookStageBlockForHeader`). It
+     does not ask the model to find expected numbers, because the model then
+     takes the same number from another block.
+   - Answers that are not found stay missing and the run continues. It stops
+     only when no answer page could be read.
+2. **Answer sync.** The grading answers are copied to the problem-bank
+   answers (`objective_answer_key`, `subjective_answer`).
+
+   Steps 1 and 2 create the first values. They do not count as changes to
+   reviewed data.
+3. **AI review (`TextbookReviewPipeline.runAll`).** This step writes only to
+   the review record. In order:
+   1. Stages 1 to 3: the independent solve, the printed-solution transcription,
+      and the student-view quality check of the V2 card.
+   2. Solution figures: cut from the solution PDF for problems whose solution
+      hints at a figure, with the placement in the original (`right` of the
+      text or `below`). Code, not the model, then adds the arrangement
+      (`arrangeSolutionFigures`): a `below` figure gets `align` (`left`,
+      `center`, `right`) from its position inside the solution region, and
+      neighbouring `below` figures whose heights overlap by half or more share
+      a `row` number. `placement: left` (figure left of the text) is set only
+      by hand (batch `solfig_arrange`).
+   3. Stage 4: the problem card and the answer + solution card are compared
+      with the original (figure size ratio, figure position, solution figure
+      position).
+   4. Pure engine issues without figures go on the engine hold list.
+   5. The fix pass proposes stem, choice, common-stem, figure-layout and
+      figure-crop fixes. Crops are cut from the body PDF and uploaded to
+      storage, but only staged in the asset list.
+   6. Math: answers are re-solved and settled where two of the three answers
+      agree, and staged.
+   7. Quality rules: common-stem duplication and the question type.
+   8. The consistency check (no AI): figure count against `[그림]` markers,
+      leftover '해' hints, `$` pairs, and answer mismatches.
+   9. Problems whose staged values changed are rendered again **with the
+      staged values** (`/pb/preview/custom-thumbnail`, no DB write) and
+      compared with the original again, at most two rounds.
+   10. The meta pass picks concepts from the unit's concept-book candidates,
+       thinking codes, visual tags, and new-concept drafts.
+
+   The subunit shows "준비됨 N/M". Blocked problems show their reason in the
+   work screen.
+
+### What stage 2 stores
+
+| Where | What |
+|-------|------|
+| `textbook_problem_analyses` | AI solve and answer, solution transcription and its answer, solution figures (`solution_figure_assets`, with `placement`), math and quality judgement (`clean`, `issue`, `held`), render check and time, fix proposal, meta proposals, **staged values** (`staged_changes`) |
+| `textbook_review_findings` | Blocking reasons and correction notes |
+| `ai_runs` | Every AI call and its cost |
+| Storage `problem-previews` | Figure files cut from the original; nothing links to them until confirm |
+
+`staged_changes` keys: `stem`, `common_stem`, `choices`, `figure_layout`,
+`figure_assets`, `common_figure_layout`, `answer`, `solution_transcribed`,
+`solution_answer`, `question_kind`, `allow_subjective`. Each key records its
+source (`ai` or `owner`). An AI re-run never replaces a key whose source is
+`owner` (`textbook_review_stage_changes`).
+
+A set question whose stem has no figure marker, while its common stem has one,
+is drawn with the set's common figure layout
+(`meta.set_model.common_figure_layout`), not with its own `figure_layout`.
+The manager app sees this as `usesCommonFigure` and edits or resizes
+`renderedFigureLayout`. It stages the size under `common_figure_layout`, which
+is copied to the other set questions in the same way as `common_stem`. The
+gateway preview override and the overview (`pb_common_figure_layout`) both read
+it, and confirm writes it to every problem-bank question of the set.
+
+### Stage 3: subunit confirm (owner)
+
+Before confirming, owner edits in the work screen (stem, answer, solution,
+figure layout and so on) are staged with source `owner`. Confirm
+(`applyForConfirm` → `textbook_review_apply_staged`) fails as a whole when a
+problem is engine-held, has an open correction note, or misses meta. Otherwise
+one transaction:
+
+- writes staged stem, choices, common stem (whole set), figure layout and
+  figure assets to `pb_questions`, and the question type;
+- writes staged answers to `textbook_problem_answers` and the problem-bank
+  answers;
+- publishes the solution, its answer and solution figures to
+  `pb_question_solutions`;
+- creates proposed new concepts (marked `origin = 'textbook_review'`) and links
+  them;
+- writes meta (concepts, thinking, arithmetic, three difficulty scores, visual
+  tags, textbook label) to `pb_question_meta`;
+- approves both axes, clears `staged_changes`, keeps the render check time;
+- sets `confirmed_at` and `confirmed_by` on the workflow row.
+
+After confirm, objective choices are generated for subjective problems through
+the gateway. A failure there does not undo the confirm.
+
+PDF solutions, the answer + solution card, search, statistics and test
+building read only `pb_questions`, `pb_question_solutions` and
+`pb_question_meta`. `textbook_problem_analyses` stays as the work record.
+Learning-app visibility is still the per-book hide switch.
+
+### Books reviewed before the spec (1-1, 1-2)
+
+Spec section 5 applies: no full re-review. Instead, the consistency check, the
+meta pass, the original-compared render check of every confirmed problem, and
+the same pipeline for problems that stay blocked.
+
+Figure size (spec 5-4, decided 2026-11-15): a figure blocks ready only when its
+size differs from the original by more than ±30%, for every problem regardless
+of when it was approved. Auto resize still targets 1.0×.
+
+`apps/yggdrasill_manager/tool/textbook_batch.dart` (with `textbook_batch.ps1`)
+runs these steps outside the app with the owner's session. It covers status,
+consistency, meta, render recheck, `finish` (the pipeline on chosen problems),
+staging owner fixes (`stem`, `answer`, `solution`, `layout`, `solref`,
+`recrop`), solution-figure re-extraction (`solfig`), solution-figure
+arrangement without AI (`solfig_arrange`, `solfig_recrop`), and reconfirm.
+It uses the same services as the app.
+
+How solution figures render (answer + solution card in the app,
+`buildAnswerSolutionCardContent`; problem-bank PDF in the gateway,
+`explanationBody`; both follow the same rules):
+
+- A `[그림]` marker in the transcription is the figure's slot. Extra markers
+  are dropped; figures without a marker go at the end.
+- `right` / `left` figures sit beside the text before the marker. If there is
+  no text before it (the solution starts with the figure), they sit beside the
+  text after it: only the rest of the marker's line when there is any,
+  otherwise everything up to the next marker.
+- `below` figures follow `align` (default center).
+- A `row` of two or more figures goes on one line, bottom-aligned, scaled down
+  as one box when too wide. Text on the same line right after each marker
+  becomes that figure's caption underneath (card: layout item `caption`, a
+  horizontal group in `figure_layout.groups`).
+- An owner-edited transcription (`solution_source = 'manual'`) gets no markers
+  from the AI. Place them by staging the text with `solution`.
 
 ## Manual protection
 
@@ -259,10 +430,101 @@ problem-bank question, and only the subunit confirm
   arithmetic counts, the three difficulty scores, visual tags, the textbook
   label.
 - `pb_question_solutions`, keyed by question × kind × version (decision
-  2026-10-14; only `original` version 1 for now): the printed solution `body`,
-  the solution's own answer `answer`, and `figure_assets`.
-  `textbook_review_publish_solutions` copies them from the analysis row and
-  deletes the row when all three are empty.
+  2026-10-14): the printed solution `body`, the solution's own answer `answer`,
+  and `figure_assets`. `textbook_review_publish_solutions` copies them from
+  the analysis row and deletes the rows when all three are empty.
+  - `original` is the solution as printed, errors included.
+  - `corrected` exists only for problems whose solution the owner corrected
+    (owner decision 2026-11-16). Readers use `corrected` when it exists.
+
+Textbook errors the owner handles (owner decision 2026-11-16):
+
+- Solution error (`ai_solution_logic` finding, "해설 오류" banner): the owner
+  only picks 교정 or 그대로 둠. No correction note is written. The AI attaches a
+  minimally fixed solution as `proposal.target = 'solution_fix'`; 교정 stages
+  it and `textbook_review_keep_solution_original` first saves the printed text
+  in `textbook_problem_analyses.solution_transcribed_original`, so confirm
+  publishes both kinds. A finding the owner closed is not reopened by a rerun.
+- Answer or problem error (correction note): the owner adopts or dismisses it.
+  Only the grading answer changes; the printed answer stays in the `original`
+  solution row's `answer`. For a problem with an adopted note the render check
+  does not flag a card answer that differs from the printed one.
+- Figures inside a 보기 box (owner decision 2026-11-17): when the stem has one
+  `[그림]` inside `[보기시작]`…`[보기끝]` (or a 박스) and the original shows
+  several labelled shapes there, the box content is one figure. The fix stage
+  merges separately measured shapes into one padded box
+  (`mergeBoxFigureMeasures`) and re-crops only if the existing figure covers
+  less than 95% of it. The review prompts treat the single image as normal.
+  When automatic cropping is still wrong the owner uploads an image file from
+  the figure editor ("N번 그림 직접 올리기", `stageManualFigure`, same storage as
+  the problem bank's manual figure upload) and adjusts width and position
+  there. Staged figures with source `owner` are not re-cropped by the fix
+  stage (`ownerStagedFigures`) and the staging RPC skips AI writes to them.
+- Tables with figures in their cells (owner decision 2026-11-17): the render
+  engine cannot draw `[그림]` inside a `tabular` cell, so such a table is cut
+  from the original as one figure. The fix stage asks the model for the whole
+  table box (`whole_table`), replaces the `[표시작]`…`[표끝]` block in the stem
+  with one `[그림]`, drops the cell measures, re-crops the table and lists the
+  leftover cell assets in `figure_removals` (`mergeTableFigureMeasures`). If
+  the model did not measure the whole table nothing is changed.
+- Common stem guard (owner decision 2026-11-17): text that contains a 박스,
+  보기 or 표 block is a condition of one problem, not a common stem. The
+  duplicate-removal rule (`computeCommonStemFix` / `commonStemFix`) then keeps
+  only the leading instruction as common stem and strips only that
+  instruction from the stem; `stripCommonStem` returns null when only
+  structure markers such as `[박스끝]` would remain; the fix stage does not
+  accept a `corrected_common_stem` that contains such a block.
+- Solution figure alignment (`solutionFigureAlign`): left/center/right comes
+  from the share of the left margin inside the solution region (below 1/4
+  left, above 3/4 right, else center), because the stored region is usually
+  the full column and wider than the text. The pipeline recomputes the
+  alignment of existing solution figures before the solution figure pass.
+- Figure layout proposals and `applied_at`: the staging RPC stamps
+  `fix_proposal.applied_at` on any staged field (an answer proposal too), so
+  `hasPendingFigureProposal` also checks the staged notes: a layout proposal
+  stays pending until a figure field was staged after `fix_pass_at` (the
+  resize note `kFigureResizeNote` does not count). With no notes after the
+  pass (already confirmed) it counts as applied.
+- Figures inside sub-questions (`subQuestionFigurePlacement`, owner decision
+  2026-11-17): measured "beside text" means beside the sub-question label, so
+  they are placed below that label, left aligned, not beside the stem.
+- Figure width cap (owner decision 2026-11-17): figures are never grown past
+  one column of the narrowest template (과제형). `kCardColumnWidthEm` /
+  `MAX_WIDTH_EM` = 22em, computed from the 과제형 geometry (A4 assumed,
+  hmargin 11.34mm, two columns, 11pt), not measured from a render. A figure
+  already at that width (`figureAtCardWidth`, sent to the render check as
+  `figure_at_card_width`) is not blocked by a "smaller than the original"
+  size ratio; "larger than the original" still blocks. Leftover figures whose
+  original region lies inside another figure are dropped when staging an AI
+  fix (`pruneContainedFigureAssets`).
+- Table-shaped choices (2026-11-17): a question whose `pb_questions.meta` has
+  `choice_layout = 'blank_table'` (or `is_blank_choice_question`) is drawn by the engine as a table with
+  `blank_choice_labels` as the header row; each choice text is split into cells by commas
+  (`정사면체, 정삼각형, 4`). The fix stage reads that meta, sends `blank_choice_labels` to the model, and
+  converts a choice written as a one-row `array`/`tabular` to the comma form (`blankChoicesFromArrays`),
+  also when the stored choices already have that shape. The header row is not part of the stem.
+- Problem number inside a figure crop (2026-11-17): when the fix stage crops a figure from the original
+  and the crop region overlaps the problem number box (`textbook_problem_crops.bbox_1k`, accepted only
+  when it is number-sized and inside the item region), the overlapping part of the PNG is painted white
+  before upload (`whiteOutProblemNumber`; the asset gets `number_masked: true`). The crop region itself is
+  not changed. Set-header figures are not masked.
+- Review rounds retry a failed chunk once and report problems that ended
+  without an AI solution, instead of moving on silently.
+- Problem body the printed original gets wrong (owner decision 2026-11-17):
+  the owner edits the stem and marks the problem "원본 오류 교정"
+  (`textbook_review_mark_source_correction`). The mark keeps the problem
+  bank's stem and choices from before the edit in
+  `textbook_problem_analyses.source_correction` (`{stem, choices, marked_at}`;
+  an existing snapshot is never replaced) and the overview returns it. The
+  blind solve, the fix stage and the render check then get `source_corrected`,
+  `printed_stem` and `printed_choices` (the fix stage also drops, in code, a
+  stem or choices proposal that equals the printed text, together with that
+  run's answer proposal: `dropPrintedRevert`): where the printed text and the card differ, the
+  owner's text is the reference; everything else (figure, choices, the rest of
+  the text) is still compared with the original. The ready rule is unchanged;
+  the mark only changes what the AI compares. Unmarking clears the snapshot.
+  The printed text is kept on the review side only. Mark before confirming
+  the edit, because after confirm the problem bank already holds the edit.
 
 The PDF export solution section (gateway `attachSolutionExplanations`), the
 learning app's confirmed-answer "해설" button, and the problem-bank difficulty
@@ -276,39 +538,31 @@ empties `concept_ids` and `concept_score` in the moved meta rows. The meta
 pass picks new tags for every item (`meta_checked_at` is empty), and the
 subunit confirm fills the rows.
 
-### One-touch approval
+### Owner edits before confirm
 
-Owner edits go through `textbook_review_save_item_edit`, which can set the
-answer, the AI solution, visual tags, the transcribed solution and its answer,
-alternative solutions, and approve the math or quality axis. Changing the
-transcribed text sets `solution_source = 'manual'`; saving the same text keeps
-`textbook_vision`.
+The work screen saves review-record fields (AI solution, visual tags,
+alternative solutions) directly through `textbook_review_save_item_edit` with
+`p_sync_pb_answer = false`. Everything that ends up in the problem bank is
+staged with source `owner` through `textbook_review_stage_changes`:
 
-- Math axis. Saving a grading answer also syncs the linked `pb_questions` row
-  (`p_sync_pb_answer`, default on) through `textbook_review_sync_pb_answer`:
-  `objective_answer_key` when the question allows objective answers and the
-  answer parses as choice numbers (`3`, `③`, `1,3`, `3번` →
-  `textbook_review_objective_key`), and `subjective_answer` (the choice text for
-  a keyed answer, otherwise the answer itself). The screen's "해설 답 채택 후
-  승인" and "AI 답 채택 후 승인" therefore fix the grading answer and both
-  problem-bank answers in one touch. `pb_questions_emit_revision` logs the
-  change as usual.
-- Quality axis. `textbook_review_apply_problem_fix(crop, stem, choices,
-  approve_quality, note, common_stem, figure_layout, figure_assets)` writes the
-  stem, choices, common stem (whole set), `meta.figure_layout` and
-  `meta.figure_assets` to `pb_questions` (only the fields that changed; new
-  figure assets also set `figure_count`, `figure_refs`, and clear
-  `figure_review_required`), records the application in `fix_proposal`, and
-  when `approve_quality` is set approves the axis and resolves the open
-  `fidelity`/`output` findings. Without approval it clears `render_checks` so
-  the stage-4 check runs again on the new render.
-  The screen prefills the editor with the proposal (text, common-stem rule,
-  figure layout), lets the owner edit, and has **one** approval button:
-  "품질 검수 승인" saves whatever the editor changed (cropping and uploading
-  proposed figures first) and approves. "수정만 적용" applies without
-  approval and re-runs the original-compared render check. "①′ 미리보기"
-  shows the edited text as a V2 card; figure placement is checked on the real
-  card after applying, because the text preview has no figures.
+- Math card: the grading answer, the transcribed solution and its answer.
+  "해설 답 채택 후 승인" and "AI 답 채택 후 승인" stage the chosen answer and
+  mark the math axis `clean` (the approval itself happens at confirm).
+- Quality card: the editor prefills the proposal (text, common-stem rule,
+  figure layout). "품질 검수 승인" stages whatever the editor changed (cutting
+  and uploading proposed figures first) and marks the quality axis `clean`.
+  "수정만 적용" stages without marking and renders the V2 card again with the
+  staged values. "①′ 미리보기" shows the edited text as a V2 card.
+
+The confirm writes these values with the RPCs that used to write them at once:
+`textbook_review_apply_problem_fix` (stem, choices, common stem for the whole
+set, `meta.figure_layout`, `meta.figure_assets`; new assets also set
+`figure_count`, `figure_refs` and clear `figure_review_required`) and
+`textbook_review_save_item_edit` (answers, with the problem-bank sync through
+`textbook_review_sync_pb_answer`: `objective_answer_key` when the answer parses
+as choice numbers, else `subjective_answer`). Changing the transcribed text
+sets `solution_source = 'manual'`. `pb_questions_emit_revision` logs the
+changes as usual.
 
 ### Render-engine hold list
 
@@ -392,19 +646,14 @@ screen also keeps a per-run sent set so one run never sends a crop twice.
   stored text is incomplete) and judges quality **from the V2 image, as a
   student would see it**, not from the stem text. The original is for fidelity
   (`fidelity_ok`: does the render match the print).
-  - **Problems with figures (`itemHasFigures` / `hasFigures`) are always
-    classified as `quality_status = 'issue'` (`issue_kind = 'figure'`) in
-    Round 1**, regardless of whether math or text errors exist, so that every
-    figure problem goes through original PDF comparison, automatic figure
-    sizing and placement (`figure_layout` / `figure_crops`), and DB
-    application in Round 2.
+  - Every problem with figures goes through the fix pass (original
+    comparison, figure size and placement), even when stage 2 found nothing.
   - Pure rendering engine issues (`issue_kind = 'engine'`, text matches
-    original, no figures) are **automatically held (`quality_status = 'held'`)**
-    in Round 1 and excluded from the active error count and approval
-    denominator.
-  - Problems with no math or quality issues (and no figures) are
-    **automatically approved (`approved`) in Round 1** (with problem-bank
-    answer sync for math).
+    original, no figures) are held (`quality_status = 'held'`) and excluded
+    from the active error count.
+  - Stage 2 sets only `clean`, `issue` or `held`. It never approves and never
+    syncs answers to the problem bank; approval happens at the subunit
+    confirm.
   Set problems get the common stem combined with the item
   (`[공통 지시문] ... [문항] ...`). When it finds an issue it classifies it
   (`issue_kind`) and, for `data` issues, proposes the corrected stem or
@@ -427,66 +676,48 @@ screen also keeps a per-run sent set so one run never sends a crop twice.
   box) is left alone. The rule forces `stem_ok = false`, `issue_kind = data`,
   and stores a `fix_proposal` with `stem` and, for shape 2, `common_stem`
   (`source: system`, `reason_code: common_stem_duplicate`).
-  Applying goes through `textbook_review_apply_problem_fix(..., p_common_stem)`;
+  The fix is staged; the confirm applies it through
+  `textbook_review_apply_problem_fix(..., p_common_stem)`, where
   a common-stem change is written to every `pb_questions` row of the same
   set (same `document_id` and set key, or sibling crops in the same
   `is_set_header` range when no set key was stored yet) as well as
   `pb_question_sets.common_stem` and `pb_delivery_units.source_meta`, because
   the renderer takes the group's common stem from its first item or delivery
   unit. The screen recognises both shapes on already-reviewed rows and
-  prefills the editor (common stem field + item stem), so the single approval
-  button applies it.
+  prefills the editor (common stem field + item stem).
 
-### Bulk actions
+### Automatic fixes inside the run
 
-There are no separate fix buttons; each axis has one bulk action that fixes
-what a rule can fix, approves what is clean, and leaves only what needs a
-person:
+The old "품질 일괄 처리" / "수학 일괄 처리" buttons are gone. `runAll` does the
+same work, but it stages the results instead of writing the problem bank and
+marks problems `clean` instead of approving them:
 
-- "품질 일괄 처리", in order:
+- Quality (`_bulkQualityFixes`), in order:
   1. every common-stem fix in the unit (looping a few times, because fixing
      one set's common stem exposes the head duplication on its other items);
-     fixed problems whose other checks are fine and that have no figures are
-     approved at once (figure problems still need the original comparison);
   2. question type fixes (below);
   3. up to two rounds of:
      a. the fix pass (below) for every problem that needs it;
-     b. every pending proposal (text, figure layout, figure crops) is applied
-        to `pb_questions` without approval; proposed figure crops are cut
-        from the body PDF and uploaded first;
-     c. the stage-4 render check, **compared with the original**, for the
-        changed problems and every unapproved problem not yet compared with
-        the original (approval must rest on that comparison);
-     d. problems whose V2 figure size is off (`figure_size_ratio` outside
-        0.8 to 1.25) get every `widthEm` multiplied by `1 / ratio` and are
-        checked again.
-     The second round runs only if some problem still needs a fix pass (it
-     became `issue` in the comparison, or stayed `issue` after its proposal).
-  4. every `clean` problem is approved.
-  "중단원 문항 검수 실행" runs this same fix → apply → V2 re-render →
-  original-compared re-check → auto-approve sequence at the end of the unit
-  run, and the per-problem "원본 대조로 AI가 바로 고치기" button also applies
-  the proposal and re-checks the V2 card at once.
-  What remains are engine problems and issues the AI could not fix. The
-  notice reports what was proposed, applied, re-checked and resized, and the
-  count left. The pause button stops after the current chunk.
-- "수학 일괄 처리", in order:
+     b. every pending proposal (text, figure layout, figure crops) is staged;
+        proposed figure crops are cut from the body PDF and uploaded first;
+     c. the stage-4 render check of the **staged** values, compared with the
+        original, for the changed problems;
+     d. problems whose V2 figure size is off get every `widthEm` multiplied by
+        `1 / ratio`, staged, and checked again.
+     The second round runs only if some problem still needs a fix pass.
+  What remains are engine problems and issues the AI could not fix; the
+  owner sees them as blocked problems.
+- Math (`_bulkMathFixes`), in order:
   1. re-solves every math `issue` the two rules below cannot settle
      (`needsMathResolve`), with the current problem text and the original
-     image. The AI answer may come from before a stem fix (for example
-     "판단불가" because the statement was missing then). This is stage 2 with
-     `math_only` (below). The app skips a problem it already re-solved in
-     this session when its text (`problemTextSignature`: common stem, stem,
-     choices, figure count) has not changed;
-  2. adopts the printed solution's answer (with the problem-bank sync) where
-     the printed answer and the AI answer agree but the grading answer
-     differs;
-  3. keeps and approves the grading answer where it equals the AI answer (two
-     of three agree);
-  4. approves every `clean` problem.
+     image. This is stage 2 with `math_only` (below);
+  2. stages the printed solution's answer where the printed answer and the AI
+     answer agree but the grading answer differs;
+  3. keeps the grading answer where it equals the AI answer (two of three
+     agree).
   Answers are compared after `normalizeAnswerForCompare` (spaces, `$`,
   braces, `\left`/`\right`, multiplication signs). What remains are real
-  disagreements. The button also shows when only re-solve targets are left.
+  disagreements.
 - The "오류·불일치" tab counts a problem when either axis is `issue` or it
   has an open finding, so a quality approval alone does not remove a math
   error. The tab label shows the math and quality counts.
@@ -499,9 +730,10 @@ like the problem-bank badge from `question_type`, `allow_objective`,
 (`quality_checks.question_kind_ai`, stage 2). The rule: an essay expression
 ("서술하시오", "과정을 쓰시오", "풀이 과정", "이유를 쓰시오", "설명하시오",
 "증명하시오") in the combined stem makes it 서술형, otherwise two or more
-choices make it 객관식, else 주관식. The owner can click a type, and
-"품질 일괄 처리" applies the rule type through
-`textbook_review_set_question_kind(crop, kind)`. That function sets only what
+choices make it 객관식, else 주관식. The owner can click a type. The run and
+the confirm stage a rule-type mismatch as `question_kind`, and the confirm
+applies it through `textbook_review_set_question_kind(crop, kind)`. That
+function sets only what
 the type requires: 객관식 turns objective on and leaves subjective as is (dual
 mode); 주관식 turns subjective on and leaves objective as is (generated
 choices); 서술형 sets subjective and essay on and objective off.
@@ -513,7 +745,10 @@ so the owner can edit any problem by hand.
   draft proposals. The solution it compares with follows the storage rule
   (`effectiveSolution`): the owner's manual solution, else this run's Vision
   transcription, else the stored Vision transcription (no solution image
-  sent, or Vision could not read it this time).
+  sent, or Vision could not read it this time). For problems with figures it
+  also receives the problem image (`compareFigureImages`: the original, else
+  the V2 card), so it can read the figure when the answers differ
+  (2026-11-16; before that it saw text only).
 - `math_only: true` (with `crop_ids`) re-solves only math `issue` problems and
   writes only the math side: AI solution and answer, arithmetic counts, match
   mode, `answer_matched`, `mismatch_reason`, concept and thinking ids, draft
@@ -560,7 +795,7 @@ current status. Every call records an `ai_runs` row with feature
 
 ### Fix pass (`textbook_problem_fix`)
 
-Runs after the render check (end of a unit run, and inside the bulk action)
+Runs after the render check (in `runAll`, and from the per-problem button)
 for problems the manager selects with `needsFixPass`: an original image
 exists, and the problem is `issue`, or `clean` with figures; it has not run
 since the last solve (`fix_pass_at` absent), or the problem is still `issue`
@@ -596,13 +831,158 @@ that into a layout:
 
 The result is stored as `fix_proposal` (`source: fix_pass`). When a
 common-stem rule proposal is still pending, its text is kept and only the
-figure fields are added. Applying a figure crop converts
+figure fields are added. Staging a figure crop converts
 the box from original-image coordinates to page coordinates
 (`cropBoxToPageRegion`), renders that region from the body PDF at about
 900 px, uploads it to `problem-previews` as an approved manual asset
-(`source: textbook_review_original_crop`), and passes the full asset list to
-`textbook_review_apply_problem_fix`; the renderer picks the newest approved
-asset per index, so the crop replaces a cut figure.
+(`source: textbook_review_original_crop`), and stages the full asset list as
+`figure_assets`; the confirm writes it to `pb_questions`. The renderer picks
+the newest approved asset per index, so the crop replaces a cut figure.
+
+Figures that sit at the end of a line of a multi-line `aligned` equation (for
+example the arrow and blank between two transformation steps) are written as
+`[그림]` at the end of that row with layout `position: inline-text`. The V2
+engine puts them in an extra column right of the equation, so they line up
+vertically, and `heightEm` / `offsetYEm` / `offsetXEm` set their size and
+shift (`offsetYEm` moves the figure down, between two rows).
+
+## School exam papers (내신기출)
+
+Built 2026-11-16. School exam papers go through the same subunit workflow as
+textbooks. They are uploaded and reviewed from the manager 교재 menu (the
+"내신기출" group at the bottom of the book list, grouped by school; the old
+"내신 기출 일괄 등록" button in 문제은행 is gone). Manager code:
+`services/school_exam_file_info.dart` (file-name parsing),
+`services/school_exam_review_service.dart` (list, upload, start review, draft
+delete), `screens/textbook/school_exam_panel.dart`,
+`screens/textbook/school_exam_upload_dialog.dart`. Gateway code:
+`gateway/src/problem_bank/school_exam/` (`pdf_tools.js`, `text_em.js`,
+`item_regions.js`, `layout.js`, `review_staging.js`).
+
+### One paper is one review scope
+
+| Review key | Value for an exam paper |
+|------------|-------------------------|
+| book id | `pb_documents.id`, with a hidden `resource_files` row of the same id (`category = 'school_past'`, `is_published = false`) |
+| `grade_label` | the 2022 course label of the paper (`examReviewCourseLabel`; 2015 courses map to their 2022 counterpart, e.g. 수학Ⅰ to 대수) |
+| `big_order` / `mid_order` / `sub_key` / `sub_index` | `0` / `0` / `A` / `0` |
+| workflow `scope_key` | `A`, series key `school_exam` |
+| body PDF | `resource_file_links` row with `grade = '<grade_label>#body'` pointing at the paper PDF |
+
+`POST /pb/exam-review/prepare` (`prepareExamReview`) writes these rows and can
+be called again at any time with the same result:
+
+- scores (owner decision 2026-11-17, `school_exam/score_distribution.js`):
+  questions whose score was not read get a share of `100 − sum of read
+  scores`, written to `pb_questions.meta.score_point` and marked with
+  `meta.score_estimate = {value, total, at}`. Weights are the per-type
+  (객관식 / 주관식·서술형) averages of the read scores on the same paper, else
+  1 : 1.5. The unit is 0.1 when a read score has a decimal, else 1; leftover
+  units go to the last 주관식·서술형 questions first. A score counts as
+  estimated only while `score_point` equals `score_estimate.value`, so a
+  value the owner changes, and any `score_parts`, are fixed and never
+  redistributed. Nothing is written when the read scores leave no room
+  (`scoreIssue: 'no_room'`).
+
+- one `textbook_problem_crops` row per question, linked to the question by
+  `textbook_crop_question_links`. The region comes from
+  `pb_questions.meta.source_item` (written at extraction), else from a VLM
+  detection on the PDF (`readExamLayout`), else the whole page. A whole-page
+  region is looked for again on the next call. Regions an operator edited are
+  kept.
+- one `textbook_problem_answers` row per question, seeded from the answer key
+  in the problem bank (`answer_source = 'vlm'`). Existing rows are never
+  overwritten, except after a re-extraction (`refreshAnswers`), and manual
+  answers never.
+- one `textbook_problem_solution_refs` row with `source_kind = 'none'`: exam
+  papers have no printed solution, so solution transcription and solution
+  checks do not run.
+- `identityOnly` writes only the book row and the PDF link (used before the
+  extraction has produced questions). `redetect` looks for every region again.
+
+Requests that fail because the network dropped are sent again (two more tries).
+A paper without a PDF is refused (`pdf_source_required`).
+
+Exam book rows are left out of the textbook lists: the manager book list
+filters `category = 'school_past'` on the server, and
+`textbook_review_books_and_units()` skips them
+(`20261116170000_textbook_review_units_exclude_school_exams.sql`).
+
+### Two review modes
+
+The work order carries `reviewMode`; the pipeline entry point is
+`TextbookReviewPipeline.run`.
+
+- **Full** (new uploads): the same run as a textbook subunit (`runAll`),
+  including the fix pass, the V2 render comparison with the original and the
+  figure size and position checks.
+- **Answer only** (`answer_only`, papers that were already published before
+  this flow existed; owner decision of 2026-11-16, their figures were already
+  fixed by hand): `runAnswerOnly` records the AI solution, compares the AI
+  answer with the answer key, applies the question-type rule, and runs the
+  consistency and meta passes. It skips the fix pass, the render check and
+  figure resizing, and releases engine holds set by the AI. In this mode
+  "문항 검수 미통과" and "V2 렌더 이상" do not block 준비됨.
+
+The AI solution is kept in the review record
+(`textbook_problem_analyses.ai_solution`) only.
+
+### Answer key protection
+
+Every exam scope sets `protectAnswerKey`
+(`TextbookProblemReviewItem.stageableAnswer`):
+
+- AI answer equals the answer key (normalized comparison): the answer-key text
+  is staged and the math axis passes.
+- AI answer differs, or the AI could not solve it ("판단불가"): nothing is
+  staged and the problem stays "정답 검수 미통과". The owner looks at the
+  original and the AI solution and picks; picking stages the answer with
+  `source: 'owner'` and passes the problem.
+
+The gateway answer sync used for textbooks is not called for exam scopes.
+
+### New uploads
+
+1. The upload dialog reads school, year, grade, semester, term and course from
+   the file name. A PDF is required; an HWPX is optional and is used for the
+   body text only.
+2. A draft `pb_documents` row is created with empty classification codes and
+   `meta.exam_review` (so the academy app does not list it), then an extract
+   job and the work order (`identityOnly` prepare, crops confirmed, runner
+   queued).
+3. `TextbookWorkflowRunner._prepareExam` waits for the extract job (time in
+   the queue does not count toward its limit), runs the full prepare, then the
+   review.
+4. Confirming the paper publishes the draft
+   (`publishExamReviewDocument`: document `ready` plus classification on the
+   document and its questions). Only then does the academy app show it.
+
+Extraction for a document with a PDF runs the VLM engine on the PDF. Figures
+are cut from the page image (`attachPdfFigureAssets`, bucket
+`problem-previews`, `<academy>/<document>/pdf-figures/<job>/…`), sized from the
+measured text em, and placed by the question's own region. The HWPX figure
+overlay is off whenever a PDF exists (`PB_HWPX_FIGURE_OVERLAY=1` restores the
+old behaviour). Drafts skip the naesin preset sync.
+
+### Deleting a draft
+
+`deleteExamReviewDraft` cancels active jobs, deletes the review book row
+(crops, review records and the work order go with it), then the document, then
+the source files and the cut figures. Database rows go first so a failure
+leaves a draft that can be deleted again. Published papers are deleted from
+문제은행, which removes the review book row first.
+
+These deletes look up child rows by `crop_id`, `book_id`, `question_id`,
+`extract_job_id` or `source_document_id` alone. Indexes led by those columns
+were added on 2026-11-16 (`20261116190000` to `20261116190600`); before that a
+21-question paper took 5 s to delete and timed out with a cold cache.
+
+### Known limits
+
+- Set-header crops are not staged for exam papers.
+- There is no region editor for exam papers; `redetect` is the only way to
+  redo regions.
+- Three papers have no PDF (2025 중1 1학기 중간) and cannot be reviewed.
 
 ## Manager screen (문항검수)
 
@@ -617,7 +997,15 @@ Three columns:
   problem-bank answers), the solution edit card (transcribed solution, its
   answer, AI solution; "해설 저장"), and the quality review card (stage-2
   flags, original-comparison state, findings, the stem/choices/figure editor,
-  the single "품질 검수 승인" button, and the hold banner for held problems).
+  the "수정 후 재검토" button, and the hold banner for held problems).
+  "수정 후 재검토" (2026-11-16) stages the editor's stem, choices and figures
+  as owner edits and re-runs the review for that problem alone
+  (`onlyCropIds`, `forceRerun`, `forceRenderCheck`), so the AI solves and
+  compares with the edited text. The header "다시 검수" does not save the
+  editor. While the quality axis is `issue`, a small "그대로 통과" button
+  stages the edit and marks the axis `clean` without a re-run (the former
+  "품질 검수 승인"). Staged values are shown
+  as "반영 대기" and go to the problem bank only at the subunit confirm.
   The figure editor lists each `figure_layout` item (width in em, position,
   anchor) and the figures the proposal will crop from the original;
   "교재 원본 대조 수정안 만들기" runs the fix pass for that problem alone.
@@ -634,8 +1022,8 @@ Three columns:
   approved problems not yet compared with the original; approval is kept and
   differences are flagged), "AI 엔진 의심 일괄 보류" (holds every problem whose
   latest issue is classified `engine`), and "렌더 엔진 목록" (the cross-book
-  hold dialog). "해설 답 채택 후 승인" and "AI 답 채택 후 승인" copy the
-  answer into the grading answer, sync the problem-bank answers, and approve.
+  hold dialog). "해설 답 채택 후 승인" and "AI 답 채택 후 승인" stage the
+  answer and mark the math axis `clean` (see "Owner edits before confirm").
 
 The older Preview under
 `screens/design_preview/yggdrasill_manager/textbook_review/` with mock data is
@@ -645,13 +1033,23 @@ superseded by this screen.
 
 - `tools/db_test`: `test/textbook_manual_guard.test.mjs`,
   `test/textbook_review.test.mjs` (`node --test`).
-- `gateway`: `test/textbook_manual_guard.test.js`
+- `gateway`: `test/textbook_manual_guard.test.js`,
+  `test/problem_bank_explanation_figures.test.js` (solution figures beside or
+  below the solution text), `test/problem_bank_aligned_row_figures.test.js`
+  (figures at the end of `aligned` rows),
+  `test/problem_bank_explanation_figure_arrangement.test.js` (align, left
+  placement, figure-first solutions, figure rows with captions),
+  `test/school_exam_review.test.js` (text em, item regions, staging one exam
+  paper as a review scope, repeat calls, re-extraction, network drops)
   (`node --test "test/**/*.test.js"`).
 - `apps/yggdrasill_manager`: `test/textbook_review_preview_test.dart`,
   `test/textbook_review_common_stem_test.dart`,
   `test/textbook_review_original_figure_test.dart` (figure helpers,
   `needsFixPass`, figure proposals, original-comparison flags, chunk image
-  payload).
+  payload), `test/textbook_review_ready_criteria_test.dart` (group
+  "내신 시험지": answer-only readiness, answer key protection),
+  `test/school_exam_review_test.dart` (file-name parsing, exam list stages,
+  exam work orders).
 - `supabase/functions/ai_think`: `textbook_problem_review_test.ts` (image
   parsing including originals, common-stem combining, `isReviewTodo`,
   `issue_kind`, proposed choice normalizing, figure size ratio) and

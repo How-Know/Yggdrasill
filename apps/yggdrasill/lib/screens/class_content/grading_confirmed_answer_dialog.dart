@@ -1283,11 +1283,14 @@ class _GradingConfirmedAnswerDialogState
         final end = math.min(i + 200, ids.length);
         final rows = await supa
             .from('pb_question_solutions')
-            .select('source_crop_id, body, version')
-            .eq('kind', 'original')
+            .select('source_crop_id, kind, body, version')
+            .inFilter('kind', const ['original', 'corrected'])
             .inFilter('source_crop_id', ids.sublist(i, end))
             .order('version', ascending: false);
-        for (final row in rows) {
+        // 사장님이 교정한 해설(corrected)이 있으면 원본보다 먼저 쓴다.
+        final ordered = [...rows]..sort((a, b) =>
+            (a['kind'] == 'corrected' ? 0 : 1).compareTo(b['kind'] == 'corrected' ? 0 : 1));
+        for (final row in ordered) {
           final id = '${row['source_crop_id'] ?? ''}'.trim();
           if (id.isEmpty || out.containsKey(id)) continue;
           out[id] = '${row['body'] ?? ''}'.trim();

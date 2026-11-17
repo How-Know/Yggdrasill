@@ -6,13 +6,14 @@
 #   .\tool\textbook_batch.ps1 answer -Only 1-1/3-1 -Crops <crop id> -Value '@C:\path\answer.txt'
 param(
   [Parameter(Mandatory = $true, Position = 0)]
-  [ValidateSet('login', 'status', 'preview', 'consistency', 'meta', 'dismiss', 'render', 'snapshot', 'answer', 'recrop',
-    'pb_figure_width', 'reconfirm', 'logout')]
+  [ValidateSet('login', 'status', 'preview', 'consistency', 'meta', 'dismiss', 'render', 'finish', 'match', 'sol_blocks', 'fig_drop', 'fig_anchor', 'note', 'sol_correct', 'snapshot', 'page', 'answer', 'stem', 'solution', 'layout', 'solref', 'solfig', 'solfig_arrange', 'solfig_recrop', 'solfig_drop', 'recrop',
+    'pb_figure_width', 'pb_choice_rows', 'reconfirm', 'logout')]
   [string]$Step,
   [string]$Only = '',
   [string]$Email = '',
   [string]$Crops = '',
-  [string]$Value = ''
+  [string]$Value = '',
+  [switch]$Open
 )
 $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '..')
@@ -41,5 +42,6 @@ if ($Step -eq 'login') {
   $defines = @()
   if ($Crops) { $defines += "BATCH_CROPS=$Crops" }
   if ($Value) { $defines += "BATCH_VALUE=$Value" }
+  if ($Open) { $defines += 'BATCH_OPEN=true' }
   Invoke-Batch $Step $defines
 }

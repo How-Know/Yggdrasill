@@ -341,6 +341,8 @@ async function upsertRecord(
     partResults?: PartResult[];
     /** 과제 스코프로 풀고 있으면 전달. 마스터리 통과 판정의 근거가 된다. */
     homeworkGroupId?: string | null;
+    /** 교재 풀기 탭(바로풀기/정답입력하기)에서 열린 세션 id. */
+    sessionId?: string | null;
   },
 ) {
   const { data: existing } = await admin
@@ -406,9 +408,11 @@ async function logHomeworkAttempt(
     correct: boolean;
     gradedBy: 'auto' | 'self';
     homeworkGroupId?: string | null;
+    sessionId?: string | null;
   },
 ): Promise<Record<string, unknown> | null> {
   const groupId = (args.homeworkGroupId ?? '').trim();
+  const sessionId = (args.sessionId ?? '').trim();
   try {
     const { data, error } = await admin.rpc('learning_log_homework_attempt', {
       p_student_id: args.studentId,
@@ -421,6 +425,7 @@ async function logHomeworkAttempt(
       // 도움 여부는 아직 관측 수단이 없다. 워치 연동 후에 채운다.
       p_assist_level: args.gradedBy === 'auto' ? 'none' : 'unknown',
       p_meta: {},
+      p_session_id: sessionId || null,
     });
     if (error) return null;
     if (data && typeof data === 'object') {
@@ -760,6 +765,7 @@ async function actionGrade(
   const homeworkGroupId = body.homework_group_id == null
     ? null
     : String(body.homework_group_id);
+  const sessionId = body.session_id == null ? null : String(body.session_id);
   const items = Array.isArray(body.items) ? body.items : [];
   if (!bookId || !gradeLabel || items.length === 0) {
     return json({ ok: false, error: 'invalid_request' }, 400);
@@ -924,6 +930,7 @@ async function actionGrade(
           flags: [],
           partResults: merged,
           homeworkGroupId,
+          sessionId,
         });
         mastery = masteryPayload(logged) ?? mastery;
       }
@@ -1009,6 +1016,7 @@ async function actionGrade(
         gradedBy: 'auto',
         flags,
         homeworkGroupId,
+        sessionId,
       });
       mastery = masteryPayload(logged) ?? mastery;
     }
@@ -1140,6 +1148,7 @@ async function actionSelfMark(
   const homeworkGroupId = body.homework_group_id == null
     ? null
     : String(body.homework_group_id);
+  const sessionId = body.session_id == null ? null : String(body.session_id);
   if (!bookId || !gradeLabel || !cropId) {
     return json({ ok: false, error: 'invalid_request' }, 400);
   }
@@ -1208,6 +1217,7 @@ async function actionSelfMark(
       flags: [],
       partResults: merged,
       homeworkGroupId,
+      sessionId,
     });
     return json({
       ok: true,
@@ -1229,6 +1239,7 @@ async function actionSelfMark(
     gradedBy: 'self',
     flags: [],
     homeworkGroupId,
+    sessionId,
   });
 
   return json({

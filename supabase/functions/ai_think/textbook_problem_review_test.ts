@@ -3,6 +3,8 @@ import {
   cleanSolutionTranscribedText,
   combineStem,
   commonStemFix,
+  compareFigureImages,
+  sourceCorrectionInput,
   effectiveSolution,
   figureMarkerCount,
   figureReviewVerdict,
@@ -82,6 +84,29 @@ Deno.test('해설 크롭 base64 와 V2 서명 URL 만 받는다 (잘못된 키·
   assertEquals(b.originalImageDataUrl, null);
 });
 
+Deno.test('정답 대조 단계에는 그림 문항의 이미지만 보낸다 (원본 우선, 없으면 V2)', () => {
+  const B = '1f6a2c1e-7b3d-4e8f-9a1b-2c3d4e5f6a7b';
+  const C = '2f6a2c1e-7b3d-4e8f-9a1b-2c3d4e5f6a7b';
+  const D = '3f6a2c1e-7b3d-4e8f-9a1b-2c3d4e5f6a7b';
+  const images = parseReviewImages({
+    [CROP]: { original_image_base64: 'iVBORw0KGgo=', v2_problem_url: 'https://x.supabase.co/a.png' },
+    [B]: { v2_problem_url: 'https://x.supabase.co/b.png' },
+    [C]: { original_image_base64: 'iVBORw0KGgo=', v2_problem_url: 'https://x.supabase.co/c.png' },
+  });
+  const out = compareFigureImages(
+    [
+      { crop_id: CROP, problem_number: '2', stem: '넓이는?\n[문단]\n[그림]' },
+      { crop_id: B, problem_number: '3', stem: '값은?', pb_figure_assets: [{ figure_index: 1 }] },
+      { crop_id: C, problem_number: '4', stem: '$x+1=3$ 의 해는?' },
+      { crop_id: D, problem_number: '5', stem: '길이는?\n[그림]' },
+    ],
+    images,
+  );
+  assertEquals(out.map((x) => [x.cropId, x.problemNumber, x.kind]), [[CROP, '2', 'original'], [B, '3', 'v2']]);
+  assert(out[0].url.startsWith('data:image/png;base64,'));
+  assertEquals(out[1].url, 'https://x.supabase.co/b.png');
+});
+
 Deno.test('교재 원본 이미지는 앱이 보낸 base64 와 픽셀 크기·쪽 좌표를 함께 받는다', () => {
   const m = parseReviewImages({
     [CROP]: {
@@ -106,26 +131,25 @@ Deno.test('그림 마커 수와 그림 크기 비율 허용 범위', () => {
   assertEquals(figureMarkerCount('다음 그림에서[그림] x 는? [[PB_FIG_3]] [도형]'), 3);
   assertEquals(figureMarkerCount('그림 없음'), 0);
   assert(figureSizeRatioOk(null));
-  assert(figureSizeRatioOk(1.1));
-  assert(figureSizeRatioOk(0.9));
-  assert(!figureSizeRatioOk(1.12));
-  assert(!figureSizeRatioOk(0.88));
-  assert(!figureSizeRatioOk(1.4));
-  assert(!figureSizeRatioOk(0.6));
-  // 예전 흐름에서 승인된 문항은 승인 당시 범위(±15%)를 인정한다.
-  assert(figureSizeRatioOk(1.12, true));
-  assert(figureSizeRatioOk(0.88, true));
-  assert(!figureSizeRatioOk(1.2, true));
+  // 사양 5-4: 원본 대비 ±30% 안이면 통과
+  assert(figureSizeRatioOk(1.3));
+  assert(figureSizeRatioOk(0.7));
+  assert(figureSizeRatioOk(1.12));
+  assert(figureSizeRatioOk(0.88));
+  assert(!figureSizeRatioOk(1.35));
+  assert(!figureSizeRatioOk(0.65));
+  assert(!figureSizeRatioOk(2));
 });
 
-Deno.test('해설 그림은 원본 해설과 대조해 크기 ±10%·위치가 맞을 때만 통과다', () => {
+Deno.test('해설 그림은 원본 해설과 대조해 크기 ±30%·위치가 맞을 때만 통과다', () => {
   const v = (o: Partial<Parameters<typeof solutionFigureVerdict>[0]>) =>
     solutionFigureVerdict({ hasSolutionFigures: true, compared: true, positionOk: true, sizeRatio: 1, ...o });
   assert(v({ hasSolutionFigures: false, compared: false }).ok);
   assert(v({}).ok);
   assert(!v({ compared: false }).ok);
   assert(!v({ sizeRatio: null }).ok);
-  assert(!v({ sizeRatio: 1.2 }).ok);
+  assert(v({ sizeRatio: 1.2 }).ok);
+  assert(!v({ sizeRatio: 1.4 }).ok);
   assert(!v({ positionOk: false }).ok);
 });
 
@@ -369,3 +393,21 @@ Deno.test('그림 문항은 원본과 대조해 크기 비율·위치가 맞을 
 });
 
 
+
+Deno.test('원본 오류 교정으로 표시한 문항만 교정 전 본문을 AI 입력에 싣는다', () => {
+  assertEquals(sourceCorrectionInput(null), {});
+  assertEquals(sourceCorrectionInput('x'), {});
+  assertEquals(sourceCorrectionInput({ stem: '선분 EH 로 접는다', choices: [] }), {
+    source_corrected: true,
+    printed_stem: '선분 EH 로 접는다',
+  });
+  const withChoices = sourceCorrectionInput({ stem: 'a', choices: [{ label: '①', text: '1' }] });
+  assertEquals(withChoices.printed_choices, [{ label: '①', text: '1' }]);
+});
+Deno.test('공통 발문에 상자가 섞여 있으면 지시문만 공통으로 두고 상자는 개별 발문에 남긴다', () => {
+  const stem = '다음 조건을 모두 만족시키는 입체도형을 구하여라.\n[문단]\n[박스시작]\n(가) 밑면이 1개이다.\n(나) 옆면의 모양이 삼각형이다.\n[박스끝]';
+  const common = '다음 조건을 모두 만족시키는 입체도형을 구하여라.\n[문단]\n[박스시작]\n(가) 밑면이 1개이다.\n(나) 옆면의 모양이 삼각형이다.';
+  const fix = commonStemFix(common, stem);
+  assertEquals(fix?.commonStem, '다음 조건을 모두 만족시키는 입체도형을 구하여라.');
+  assert(fix!.stem.startsWith('[박스시작]') && fix!.stem.endsWith('[박스끝]'));
+});

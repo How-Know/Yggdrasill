@@ -39,6 +39,14 @@ test('반영 대기 본문·그림·공통 발문·유형을 덮어 그리고 �
   assert.equal(row.meta.set_model.commonStem, '옛 지시문');
 });
 
+test('반영 대기 세트 공통 그림 배치는 공통 발문을 지우지 않고 공통 배치만 덮어쓴다', () => {
+  const layout = { version: 1, items: [{ assetKey: 'idx:1', widthEm: 9.5 }] };
+  const out = applyQuestionOverride(row, { common_figure_layout: layout });
+  assert.deepEqual(out.meta.set_model.common_figure_layout, layout);
+  assert.equal(out.meta.set_model.commonStem, '옛 지시문');
+  assert.equal(row.meta.set_model.common_figure_layout, undefined);
+});
+
 test('덮어쓴 카드 경로는 내용이 바뀌면 달라진다', () => {
   assert.notEqual(overridePreviewKey('q1', { stem: 'a' }), overridePreviewKey('q1', { stem: 'b' }));
   assert.equal(overridePreviewKey('q1', { stem: 'a' }), overridePreviewKey('q1', { stem: 'a' }));

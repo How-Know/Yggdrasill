@@ -5,7 +5,6 @@ import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:path/path.dart' as p;
 import 'package:pdfrx/pdfrx.dart';
 
 import '../../services/problem_bank_service.dart';
@@ -22,7 +21,6 @@ import 'review/problem_bank_review_mode.dart';
 import 'review/problem_bank_review_panes.dart';
 import 'widgets/figure_compare_dialog.dart';
 import 'widgets/figure_horizontal_groups_editor.dart';
-import 'widgets/exam_batch_upload_dialog.dart';
 import 'widgets/problem_bank_classification_filter_panel.dart';
 import 'widgets/problem_bank_export_preset_dialog.dart';
 import 'widgets/problem_bank_document_preset_preview_launcher.dart';
@@ -204,10 +202,6 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   final Set<String> _expandedTextbookSwitchGroups = <String>{};
   final Set<String> _expandedExamSchools = <String>{};
   final Set<String> _expandedExamYears = <String>{};
-  bool _isExamBatchRunning = false;
-  bool _cancelExamBatchRequested = false;
-  int _examBatchCompleted = 0;
-  int _examBatchTotal = 0;
   ProblemBankExtractJob? _activeExtractJob;
   List<ProblemBankQuestion> _questions = <ProblemBankQuestion>[];
   Map<String, ProblemBankQuestionTimedTestStats> _timedTestStatsByQuestionUid =
@@ -2848,184 +2842,6 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     } catch (_) {
       return _readBytesFromPath(item.path);
     }
-  }
-
-  Future<void> _openExamBatchUploadDialog() async {
-    if (_isExamBatchRunning) {
-      _showSnack('내신 기출 일괄 작업이 이미 진행 중입니다.');
-      return;
-    }
-    final pairs = await showExamBatchUploadDialog(context);
-    if (pairs == null || pairs.isEmpty || !mounted) return;
-    unawaited(_runExamBatch(pairs));
-  }
-
-  /// HWPX 업로드 → PDF 연결 → 추출 완료 대기를 한 문서씩 반복한다.
-  ///
-  /// 잡을 한꺼번에 큐에 쌓지 않고 직전 잡이 terminal 상태가 된 뒤 다음 문서를
-  /// 등록하므로, 사용자가 요청한 "같은 과정 10번 직렬 실행"을 보장한다.
-  Future<void> _runExamBatch(List<ExamBatchUploadPair> pairs) async {
-    final academyId = _academyId;
-    if (academyId == null || academyId.isEmpty) {
-      _showSnack('academy_id를 찾을 수 없습니다.', error: true);
-      return;
-    }
-    setState(() {
-      _isExamBatchRunning = true;
-      _cancelExamBatchRequested = false;
-      _examBatchCompleted = 0;
-      _examBatchTotal = pairs.length;
-      _statusText = '내신 기출 ${pairs.length}개 순차 작업을 시작합니다.';
-    });
-    var succeeded = 0;
-    var failed = 0;
-    _appendPipelineLog('batch', '순차 작업 시작: ${pairs.length}개 문서');
-
-    for (var index = 0; index < pairs.length; index++) {
-      if (_cancelExamBatchRequested || !mounted) break;
-      final pair = pairs[index];
-      final position = '${index + 1}/${pairs.length}';
-      try {
-        setState(() {
-          _statusText = '[$position] ${pair.baseName} · HWPX 읽는 중...';
-        });
-        final hwpxBytes = await _readBytesFromPath(pair.hwpxPath);
-        if (hwpxBytes == null || hwpxBytes.isEmpty) {
-          throw Exception('HWPX 파일을 읽지 못했습니다.');
-        }
-        _appendPipelineLog('batch', '[$position] HWPX 업로드: ${pair.baseName}');
-        final uploaded = await _service.uploadDocument(
-          academyId: academyId,
-          bytes: hwpxBytes,
-          originalName: p.basename(pair.hwpxPath),
-          curriculumCode: 'rev_2022',
-          sourceTypeCode: 'school_past',
-          courseLabel: '',
-          gradeLabel: '',
-          examYear: null,
-          semesterLabel: '',
-          examTermLabel: '',
-          schoolName: '',
-          publisherName: '',
-          materialName: '',
-          classificationDetail: const <String, dynamic>{},
-        );
-
-        if (_cancelExamBatchRequested || !mounted) break;
-        setState(() {
-          _statusText = '[$position] ${pair.baseName} · PDF 읽는 중...';
-        });
-        final pdfBytes = await _readBytesFromPath(pair.pdfPath);
-        if (pdfBytes == null || pdfBytes.isEmpty) {
-          throw Exception('PDF 파일을 읽지 못했습니다.');
-        }
-        _appendPipelineLog('batch', '[$position] PDF 업로드: ${pair.baseName}');
-        await _service.uploadPdfForDocument(
-          academyId: academyId,
-          documentId: uploaded.id,
-          bytes: pdfBytes,
-          originalName: p.basename(pair.pdfPath),
-        );
-
-        if (_cancelExamBatchRequested || !mounted) break;
-        setState(() {
-          _statusText = '[$position] ${pair.baseName} · 추출 대기열 등록 중...';
-        });
-        final job = await _service.createExtractJob(
-          academyId: academyId,
-          documentId: uploaded.id,
-        );
-        _appendPipelineLog(
-          'batch',
-          '[$position] 추출 시작: ${pair.baseName} (${job.id})',
-        );
-        final terminal = await _waitForBatchExtract(
-          academyId: academyId,
-          documentId: uploaded.id,
-          jobId: job.id,
-          position: position,
-          label: pair.baseName,
-        );
-        if (terminal == null) break;
-        if (terminal.status == 'failed' || terminal.status == 'cancelled') {
-          failed += 1;
-          _appendPipelineLog(
-            'batch',
-            '[$position] 추출 실패: ${pair.baseName} · '
-                '${terminal.errorMessage.isEmpty ? terminal.status : terminal.errorMessage}',
-            error: true,
-          );
-        } else {
-          succeeded += 1;
-          _appendPipelineLog(
-            'batch',
-            '[$position] 추출 완료: ${pair.baseName} (${terminal.status})',
-          );
-        }
-      } catch (e) {
-        failed += 1;
-        _appendPipelineLog(
-          'batch',
-          '[$position] 작업 실패: ${pair.baseName} · $e',
-          error: true,
-        );
-      } finally {
-        if (mounted) {
-          setState(() => _examBatchCompleted = index + 1);
-        }
-      }
-    }
-
-    await _refreshDocuments();
-    if (!mounted) return;
-    final cancelled = _cancelExamBatchRequested;
-    setState(() {
-      _isExamBatchRunning = false;
-      _cancelExamBatchRequested = false;
-      _statusText = cancelled
-          ? '내신 기출 순차 작업을 중단했습니다. 완료 $succeeded개 · 실패 $failed개'
-          : '내신 기출 순차 작업 완료 · 성공 $succeeded개 · 실패 $failed개';
-    });
-    _appendPipelineLog(
-      'batch',
-      cancelled
-          ? '순차 작업 중단: 성공 $succeeded개 · 실패 $failed개'
-          : '순차 작업 종료: 성공 $succeeded개 · 실패 $failed개',
-      error: failed > 0,
-    );
-    _showSnack(_statusText, error: failed > 0);
-  }
-
-  Future<ProblemBankExtractJob?> _waitForBatchExtract({
-    required String academyId,
-    required String documentId,
-    required String jobId,
-    required String position,
-    required String label,
-  }) async {
-    final startedAt = DateTime.now();
-    while (!_cancelExamBatchRequested && mounted) {
-      final summary = await _service.loadDocumentSummary(
-        academyId: academyId,
-        documentId: documentId,
-      );
-      final latest = summary?.latestExtractJob;
-      if (latest != null && latest.id == jobId && latest.isTerminal) {
-        return latest;
-      }
-      final elapsed = DateTime.now().difference(startedAt);
-      if (elapsed > const Duration(hours: 1)) {
-        throw Exception('추출 완료 대기 시간이 1시간을 넘었습니다.');
-      }
-      if (mounted) {
-        setState(() {
-          _statusText = '[$position] $label · 추출 ${latest?.status ?? 'queued'} '
-              '(${_formatElapsed(elapsed)})';
-        });
-      }
-      await Future<void>.delayed(const Duration(seconds: 5));
-    }
-    return null;
   }
 
   // 현재 문서에서 status='failed' 로 굳은 figure_jobs 를 일괄 queued 로 되돌린다.
@@ -7254,8 +7070,26 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         ),
         const SizedBox(width: 4),
         const Text('점', style: TextStyle(color: _textSub, fontSize: 11.5)),
+        if (_scoreIsEstimated(q)) ...[
+          const SizedBox(width: 6),
+          const Tooltip(
+            message: '원본에서 점수를 읽지 못해 총점 100에 맞춰 나눈 점수입니다. 값을 고치면 그대로 고정됩니다.',
+            child: Text(
+              '추정',
+              style: TextStyle(color: _accent, fontSize: 11, fontWeight: FontWeight.w700),
+            ),
+          ),
+        ],
       ],
     );
+  }
+
+  /// 내신 시험지에서 점수를 못 읽어 자동으로 나눈 점수인가(meta.score_estimate.value 와 지금 점수가 같을 때).
+  bool _scoreIsEstimated(ProblemBankQuestion q) {
+    final est = q.meta['score_estimate'];
+    final value = est is Map ? est['value'] : null;
+    final score = _scorePointOf(q);
+    return value is num && score != null && (value.toDouble() - score).abs() < 1e-9;
   }
 
   /// 세트형 문항 카드의 배점 요약 버튼.
@@ -17696,41 +17530,14 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  '실행 로그',
-                  style: TextStyle(
-                    color: _text,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-              ),
-              if (_isExamBatchRunning)
-                TextButton(
-                  onPressed: () =>
-                      setState(() => _cancelExamBatchRequested = true),
-                  child: const Text('현재 문서 후 중단'),
-                ),
-            ],
+          const Text(
+            '실행 로그',
+            style: TextStyle(
+              color: _text,
+              fontSize: 13,
+              fontWeight: FontWeight.w900,
+            ),
           ),
-          if (_isExamBatchRunning) ...[
-            const SizedBox(height: 7),
-            LinearProgressIndicator(
-              value: _examBatchTotal == 0
-                  ? null
-                  : _examBatchCompleted / _examBatchTotal,
-              color: _accent,
-              backgroundColor: _field,
-            ),
-            const SizedBox(height: 5),
-            Text(
-              '순차 작업 $_examBatchCompleted/$_examBatchTotal · $_statusText',
-              style: const TextStyle(color: _textSub, fontSize: 10.5),
-            ),
-          ],
           const SizedBox(height: 8),
           _buildLogPanel(),
         ],
@@ -17814,15 +17621,12 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                       ),
                     ),
                   ),
-                  if (examPaper || _showingMockExamWorkspace) ...[
+                  // 내신 기출 업로드는 교재 메뉴의 "내신기출 업로드"로 옮겼다.
+                  if (_showingMockExamWorkspace) ...[
                     FilledButton.icon(
-                      onPressed: _showingMockExamWorkspace
-                          ? () => unawaited(
-                                _mockExamPanelKey.currentState?.upload(),
-                              )
-                          : _isExamBatchRunning
-                              ? null
-                              : () => unawaited(_openExamBatchUploadDialog()),
+                      onPressed: () => unawaited(
+                        _mockExamPanelKey.currentState?.upload(),
+                      ),
                       style: FilledButton.styleFrom(
                         backgroundColor: _accent,
                         visualDensity: VisualDensity.compact,
@@ -17848,7 +17652,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                 _showingMockExamWorkspace
                     ? '교육청·평가원·수능 PDF의 문항 영역·정답·해설 위치를 검수합니다. 클릭하면 내신 기출 검수로 전환합니다.'
                     : examPaper
-                        ? '학교·연도별 내신 기출을 검수합니다. 헤더를 클릭하면 시중교재 검수로 전환합니다.'
+                        ? '학교·연도별 내신 기출을 검수합니다. 새 시험지 업로드는 교재 메뉴의 "내신기출 업로드"에서 합니다. 헤더를 클릭하면 시중교재 검수로 전환합니다.'
                         : 'PDF 추출 문항을 페이지별로 검수합니다. 클릭하면 모의고사 검수로 전환합니다.',
                 style: const TextStyle(
                   color: _textSub,
