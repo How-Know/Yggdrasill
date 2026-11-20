@@ -138,6 +138,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
 
   /// 나가기 처리(잔여 답 채점 + 미수행 기록)가 도는 중.
   bool _exitFlushing = false;
+  bool _exitChoiceOpen = false;
 
   /// crop_id → 현재 입력값
   final Map<String, String> _answers = <String, String>{};
@@ -282,6 +283,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
   final TextEditingController _keyboardController = TextEditingController();
 
   Timer? _timedTimer;
+  Timer? _remoteSyncTimer;
   TimedTestSession? _timedSession;
   TimedTestExposure? _timedExposure;
   late Duration _timedServerClockOffset;
@@ -380,6 +382,9 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
 
   @override
   void dispose() {
+    _remoteSyncTimer?.cancel();
+    HomeworkSession.instance.textbookSyncTick
+        .removeListener(_onRemoteTextbookSync);
     ApplePencilUndo.unbindErase(this);
     WidgetsBinding.instance.removeObserver(this);
     _problemViewRequestEpoch++;
@@ -433,7 +438,74 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
       _paneMode = _PaneMode.question;
       unawaited(_prepareTimedTest());
     } else {
+      HomeworkSession.instance.textbookSyncTick
+          .addListener(_onRemoteTextbookSync);
       _loadTree(selectLastPage: true);
+    }
+  }
+
+  void _onRemoteTextbookSync() {
+    if (_isTimedTest || _grading || _exitFlushing) return;
+    _remoteSyncTimer?.cancel();
+    _remoteSyncTimer = Timer(const Duration(milliseconds: 450), () {
+      if (!mounted || _grading || _exitFlushing) return;
+      unawaited(_refreshLoadedCardPagesFromServer());
+    });
+  }
+
+  Future<void> _refreshLoadedCardPagesFromServer() async {
+    if (!mounted || _isTimedTest || _loadingProblems) return;
+    _homeworkRoundByCrop = null;
+    unawaited(_loadTree());
+    try {
+      final rawPages = <int>[..._loadedCardRawPages];
+      if (rawPages.isEmpty && _page != null) {
+        rawPages.add(_page!.rawPage);
+      }
+      if (rawPages.isEmpty) return;
+
+      final epoch = _pageEpoch;
+      final fetchedByCrop = <String, PageProblem>{};
+      for (final rawPage in rawPages) {
+        final loaded = await TextbookApi.instance.pageProblems(
+          bookId: widget.book.bookId,
+          gradeLabel: widget.book.gradeLabel,
+          rawPage: rawPage,
+        );
+        if (!mounted || epoch != _pageEpoch) return;
+        final scoped = await _withHomeworkRoundState(_scopedProblems(loaded));
+        if (!mounted || epoch != _pageEpoch) return;
+        for (final p in scoped) {
+          fetchedByCrop[p.cropId] = p;
+        }
+      }
+      if (!mounted || epoch != _pageEpoch || fetchedByCrop.isEmpty) return;
+      setState(() {
+        // 원격에서 시즌 업/리셋으로 답이 비워진 문항은 미채점 입력이 없을 때만 비운다.
+        for (final p in fetchedByCrop.values) {
+          if (p.myCorrect == null &&
+              (p.attemptCount ?? 0) == 0 &&
+              !_localAnswerDirty(p.cropId)) {
+            _answers.remove(p.cropId);
+            _answerDisplayLatex.remove(p.cropId);
+            _gradedAnswers.remove(p.cropId);
+            _results.remove(p.cropId);
+            _attemptCounts[p.cropId] = 0;
+            _flags.remove(p.cropId);
+            _selfGraded.remove(p.cropId);
+            _roundHistories[p.cropId] = p.roundHistory;
+          }
+        }
+        _absorbProblemRecords(fetchedByCrop.values);
+        final stored = _problems;
+        if (stored != null) {
+          _problems = <PageProblem>[
+            for (final p in stored) fetchedByCrop[p.cropId] ?? p,
+          ];
+        }
+      });
+    } catch (_) {
+      // 실시간 백그라운드 갱신 실패는 무시한다.
     }
   }
 
@@ -1812,75 +1884,89 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
       if (end) await _finishTimedTest(status: 'abandoned');
       return;
     }
-    if (_exitFlushing) return;
+    if (_exitFlushing || _exitChoiceOpen) return;
 
     bool? finishSolve;
     if (widget.homework == null &&
         widget.entryMode == TextbookEntryMode.solve) {
-      finishSolve = await _askSolveExitAction();
+      _exitChoiceOpen = true;
+      try {
+        finishSolve = await _askSolveExitAction();
+      } finally {
+        _exitChoiceOpen = false;
+      }
       if (finishSolve == null || !mounted) return;
     }
 
     setState(() => _exitFlushing = true);
     try {
-      await _flushPencilInput();
-      final pending = _collectPendingSubmissions();
-      if (pending.answers.isNotEmpty || pending.parts.isNotEmpty) {
-        try {
-          await TextbookApi.instance.gradePage(
-            bookId: widget.book.bookId,
-            gradeLabel: widget.book.gradeLabel,
-            answersByCropId: pending.answers,
-            partAnswersByCropId: pending.parts,
-            homeworkGroupId: widget.homework?.groupId,
-            sessionId: widget.studySessionId,
-          );
-          _gradedThisVisit = true;
-          _loadTree();
-        } catch (_) {
-          // 나가는 길의 채점 실패가 이탈을 막지는 않는다.
-        }
-      }
-      final scope = widget.homework;
-      if (scope != null && _gradedThisVisit) {
-        try {
-          final rows =
-              await StudentApi.instance.listHomeworkProblems(scope.groupId);
-          for (final row in rows) {
-            if (row.cropId.isEmpty || row.attemptCount > 0) continue;
-            // 방금 스스로 채점한 문항은 서버 집계가 늦어도 미수행으로
-            // 덮지 않는다. 덮이면 재진입 때 정오가 사라지고 다시
-            // 정답 확인을 요구한다.
-            if (_selfGraded.contains(row.cropId) ||
-                _results.containsKey(row.cropId) ||
-                (_attemptCounts[row.cropId] ?? 0) > 0) {
-              continue;
-            }
-            await StudentApi.instance.logHomeworkSkipped(
-              groupId: scope.groupId,
-              cropId: row.cropId,
+      try {
+        await _flushPencilInput();
+        final pending = _collectPendingSubmissions();
+        if (pending.answers.isNotEmpty || pending.parts.isNotEmpty) {
+          try {
+            await TextbookApi.instance.gradePage(
+              bookId: widget.book.bookId,
+              gradeLabel: widget.book.gradeLabel,
+              answersByCropId: pending.answers,
+              partAnswersByCropId: pending.parts,
+              homeworkGroupId: widget.homework?.groupId,
+              sessionId: widget.studySessionId,
             );
+            _gradedThisVisit = true;
+            _loadTree();
+          } catch (_) {
+            // 나가는 길의 채점 실패가 이탈을 막지는 않는다.
           }
-        } catch (_) {
-          // 미수행 기록 실패도 이탈을 막지 않는다.
         }
-        try {
-          await StudentApi.instance.recordHomeworkSelfInspection(scope.groupId);
-        } catch (_) {
-          // 시도 +1 실패가 이탈을 막지는 않는다.
-        }
-        HomeworkSession.instance.notifyPlanProgress();
-      } else if (widget.homework == null &&
-          (widget.studySessionId ?? '').isNotEmpty) {
-        final sid = widget.studySessionId!;
-        if (widget.entryMode == TextbookEntryMode.solve) {
-          if (finishSolve == true) {
-            await TextbookStudySession.instance.finishSession(sid);
-          } else {
-            await TextbookStudySession.instance.pauseSession(sid);
+        final scope = widget.homework;
+        if (scope != null && _gradedThisVisit) {
+          try {
+            final rows =
+                await StudentApi.instance.listHomeworkProblems(scope.groupId);
+            for (final row in rows) {
+              if (row.cropId.isEmpty || row.attemptCount > 0) continue;
+              // 방금 스스로 채점한 문항은 서버 집계가 늦어도 미수행으로
+              // 덮지 않는다. 덮이면 재진입 때 정오가 사라지고 다시
+              // 정답 확인을 요구한다.
+              if (_selfGraded.contains(row.cropId) ||
+                  _results.containsKey(row.cropId) ||
+                  (_attemptCounts[row.cropId] ?? 0) > 0) {
+                continue;
+              }
+              await StudentApi.instance.logHomeworkSkipped(
+                groupId: scope.groupId,
+                cropId: row.cropId,
+              );
+            }
+          } catch (_) {
+            // 미수행 기록 실패도 이탈을 막지 않는다.
           }
-        } else {
-          await TextbookStudySession.instance.finishSession(sid);
+          try {
+            await StudentApi.instance.recordHomeworkSelfInspection(scope.groupId);
+          } catch (_) {
+            // 시도 +1 실패가 이탈을 막지는 않는다.
+          }
+          HomeworkSession.instance.notifyPlanProgress();
+        }
+      } finally {
+        if (widget.homework == null) {
+          if (widget.entryMode == TextbookEntryMode.solve) {
+            if (finishSolve == true) {
+              await TextbookStudySession.instance.finishBookSolve(
+                bookId: widget.book.bookId,
+                gradeLabel: widget.book.gradeLabel,
+              );
+            } else if (finishSolve == false) {
+              await TextbookStudySession.instance.pauseBookSolve(
+                bookId: widget.book.bookId,
+                gradeLabel: widget.book.gradeLabel,
+              );
+            }
+          } else if ((widget.studySessionId ?? '').isNotEmpty) {
+            await TextbookStudySession.instance
+                .finishSession(widget.studySessionId!);
+          }
         }
       }
     } finally {
@@ -4001,6 +4087,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
         gradedResult: headingGradedResult,
         seed: selected?.cropId.hashCode ?? 0,
         scaleFactor: 0.84,
+        radiusScale: 0.75,
         child: Text(
           label,
           maxLines: 1,
@@ -4993,6 +5080,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
               viewportWidth: constraints.maxWidth,
               viewportHeight: constraints.maxHeight,
               resetToken: zoomResetToken,
+              rightEdgeReservedWidth: _isTimedTest ? 0.0 : 32.0,
               onSwipe: (delta) => unawaited(_moveProblem(delta)),
               onSwipeUp: _openScratchFromSwipe,
               onSwipeDown: _closeScratchFromSwipe,
@@ -5190,30 +5278,33 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
             ),
             Theme(
               data: inputTheme,
-              child: Padding(
-                padding: EdgeInsets.fromLTRB(24, 16, 24, bottomPad),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    MathExpressionEditor(
-                      key: _editorKey,
-                      initialLinear: answer,
-                      onChanged: (linear) => _setAnswer(answerKey, linear),
-                    ),
-                    const SizedBox(height: 8),
-                    MathKeypad(
-                      onInsert: (t) => _editorKey.currentState?.insertText(t),
-                      onFraction: () =>
-                          _editorKey.currentState?.insertFraction(),
-                      onSqrt: () => _editorKey.currentState?.insertSqrt(),
-                      onNthRoot: () => _editorKey.currentState?.insertNthRoot(),
-                      onPower: () => _editorKey.currentState?.insertPower(),
-                      onRepeatingDot: () =>
-                          _editorKey.currentState?.insertRepeatingDot(),
-                      onBackspace: () => _editorKey.currentState?.backspace(),
-                      onClear: () => _editorKey.currentState?.clearAll(),
-                    ),
-                  ],
+              child: _NoZoomSingleFingerGesture(
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(24, 16, 24, bottomPad),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      MathExpressionEditor(
+                        key: _editorKey,
+                        initialLinear: answer,
+                        onChanged: (linear) => _setAnswer(answerKey, linear),
+                      ),
+                      const SizedBox(height: 8),
+                      MathKeypad(
+                        onInsert: (t) => _editorKey.currentState?.insertText(t),
+                        onFraction: () =>
+                            _editorKey.currentState?.insertFraction(),
+                        onSqrt: () => _editorKey.currentState?.insertSqrt(),
+                        onNthRoot: () =>
+                            _editorKey.currentState?.insertNthRoot(),
+                        onPower: () => _editorKey.currentState?.insertPower(),
+                        onRepeatingDot: () =>
+                            _editorKey.currentState?.insertRepeatingDot(),
+                        onBackspace: () => _editorKey.currentState?.backspace(),
+                        onClear: () => _editorKey.currentState?.clearAll(),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -5226,20 +5317,22 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
             ),
             Theme(
               data: inputTheme,
-              child: Padding(
-                padding: EdgeInsets.fromLTRB(24, 12, 24, bottomPad),
-                child: TextField(
-                  controller: _keyboardController,
-                  autofocus: true,
-                  minLines: 2,
-                  maxLines: 4,
-                  onChanged: (text) => _setAnswer(answerKey, text),
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    color: const Color(0xFF17201F),
-                  ),
-                  decoration: const InputDecoration(
-                    hintText: '한글 답(예: 제2사분면, 유한소수)을 입력해 주세요',
-                    border: InputBorder.none,
+              child: _NoZoomSingleFingerGesture(
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(24, 12, 24, bottomPad),
+                  child: TextField(
+                    controller: _keyboardController,
+                    autofocus: true,
+                    minLines: 2,
+                    maxLines: 4,
+                    onChanged: (text) => _setAnswer(answerKey, text),
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      color: const Color(0xFF17201F),
+                    ),
+                    decoration: const InputDecoration(
+                      hintText: '한글 답(예: 제2사분면, 유한소수)을 입력해 주세요',
+                      border: InputBorder.none,
+                    ),
                   ),
                 ),
               ),
@@ -5368,31 +5461,34 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
             ),
             Theme(
               data: inputTheme,
-              child: Padding(
-                padding: EdgeInsets.fromLTRB(24, 16, 24, bottomPad),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    MathExpressionEditor(
-                      key: _editorKey,
-                      initialLinear: selectedAnswer,
-                      onChanged: (linear) =>
-                          _setAnswer(selectedProblem.cropId, linear),
-                    ),
-                    const SizedBox(height: 8),
-                    MathKeypad(
-                      onInsert: (t) => _editorKey.currentState?.insertText(t),
-                      onFraction: () =>
-                          _editorKey.currentState?.insertFraction(),
-                      onSqrt: () => _editorKey.currentState?.insertSqrt(),
-                      onNthRoot: () => _editorKey.currentState?.insertNthRoot(),
-                      onPower: () => _editorKey.currentState?.insertPower(),
-                      onRepeatingDot: () =>
-                          _editorKey.currentState?.insertRepeatingDot(),
-                      onBackspace: () => _editorKey.currentState?.backspace(),
-                      onClear: () => _editorKey.currentState?.clearAll(),
-                    ),
-                  ],
+              child: _NoZoomSingleFingerGesture(
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(24, 16, 24, bottomPad),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      MathExpressionEditor(
+                        key: _editorKey,
+                        initialLinear: selectedAnswer,
+                        onChanged: (linear) =>
+                            _setAnswer(selectedProblem.cropId, linear),
+                      ),
+                      const SizedBox(height: 8),
+                      MathKeypad(
+                        onInsert: (t) => _editorKey.currentState?.insertText(t),
+                        onFraction: () =>
+                            _editorKey.currentState?.insertFraction(),
+                        onSqrt: () => _editorKey.currentState?.insertSqrt(),
+                        onNthRoot: () =>
+                            _editorKey.currentState?.insertNthRoot(),
+                        onPower: () => _editorKey.currentState?.insertPower(),
+                        onRepeatingDot: () =>
+                            _editorKey.currentState?.insertRepeatingDot(),
+                        onBackspace: () => _editorKey.currentState?.backspace(),
+                        onClear: () => _editorKey.currentState?.clearAll(),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -5405,21 +5501,24 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
             ),
             Theme(
               data: inputTheme,
-              child: Padding(
-                padding: EdgeInsets.fromLTRB(24, 12, 24, bottomPad),
-                child: TextField(
-                  controller: _keyboardController,
-                  autofocus: true,
-                  minLines: 2,
-                  maxLines: 4,
-                  onChanged: (text) => _setAnswer(selectedProblem.cropId, text),
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    color: const Color(0xFF17201F),
-                  ),
-                  decoration: InputDecoration(
-                    hintText:
-                        '${_displayProblemNumber(selectedProblem)}번 답을 입력해 주세요',
-                    border: InputBorder.none,
+              child: _NoZoomSingleFingerGesture(
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(24, 12, 24, bottomPad),
+                  child: TextField(
+                    controller: _keyboardController,
+                    autofocus: true,
+                    minLines: 2,
+                    maxLines: 4,
+                    onChanged: (text) =>
+                        _setAnswer(selectedProblem.cropId, text),
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      color: const Color(0xFF17201F),
+                    ),
+                    decoration: InputDecoration(
+                      hintText:
+                          '${_displayProblemNumber(selectedProblem)}번 답을 입력해 주세요',
+                      border: InputBorder.none,
+                    ),
                   ),
                 ),
               ),
@@ -5510,46 +5609,62 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
         gradeSeed: item.cropId.hashCode,
       );
     } else if (fallbackBodyUri != null && itemView?.rawPage != null) {
-      pdfWidget = Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+      const fallbackNumberStyle = TextStyle(
+        color: Colors.black,
+        fontSize: 18,
+        fontWeight: FontWeight.w800,
+      );
+      pdfWidget = Stack(
+        clipBehavior: Clip.none,
         children: [
-          if (numberText != null)
-            Padding(
-              padding: const EdgeInsets.only(left: 10, bottom: 2),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: _RedPencilGradeMark(
-                  gradedResult: graded ? result : null,
-                  seed: item.cropId.hashCode,
-                  child: Text(
-                    numberText,
-                    style: const TextStyle(
-                      color: Colors.black,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w800,
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (numberText != null)
+                const Padding(
+                  padding: EdgeInsets.only(left: 10, bottom: 2),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Opacity(
+                      opacity: 0,
+                      child: Text('0.', style: fallbackNumberStyle),
                     ),
                   ),
                 ),
+              _FallbackProblemPdfPage(
+                uri: fallbackBodyUri,
+                pageNumber: itemView!.rawPage!,
+                itemRegion1k: itemView.itemRegion1k,
+                isObjective: item.isObjective,
+                selectedChoices: selectedObjectives,
+                onToggleChoice: canInputObjective
+                    ? (choice, {List<Offset>? pencilStroke}) => _toggleObjective(
+                          item.cropId,
+                          choice,
+                          pencilStroke: pencilStroke,
+                        )
+                    : null,
+                pencilMarks: _objectivePencilMarks[item.cropId] ??
+                    const <int, List<Offset>>{},
+                fallbackChoiceSelector: fallbackSelector,
+              ),
+            ],
+          ),
+          if (numberText != null)
+            Positioned(
+              left: 10,
+              top: 0,
+              child: IgnorePointer(
+                child: _RedPencilGradeMark(
+                  gradedResult: graded ? result : null,
+                  seed: item.cropId.hashCode,
+                  scaleFactor: 0.9,
+                  radiusScale: 0.75,
+                  child: Text(numberText, style: fallbackNumberStyle),
+                ),
               ),
             ),
-          _FallbackProblemPdfPage(
-            uri: fallbackBodyUri,
-            pageNumber: itemView!.rawPage!,
-            itemRegion1k: itemView.itemRegion1k,
-            isObjective: item.isObjective,
-            selectedChoices: selectedObjectives,
-            onToggleChoice: canInputObjective
-                ? (choice, {List<Offset>? pencilStroke}) => _toggleObjective(
-                      item.cropId,
-                      choice,
-                      pencilStroke: pencilStroke,
-                    )
-                : null,
-            pencilMarks:
-                _objectivePencilMarks[item.cropId] ?? const <int, List<Offset>>{},
-            fallbackChoiceSelector: fallbackSelector,
-          ),
         ],
       );
     } else {
@@ -5582,6 +5697,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
         (!item.isObjective && answer.isNotEmpty);
 
     return Stack(
+      clipBehavior: Clip.none,
       children: [
         ConstrainedBox(
           constraints: BoxConstraints(
@@ -5685,24 +5801,26 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
                       ),
                     if (item.isSelfCheck && result != true) ...[
                       const SizedBox(width: 6),
-                      OutlinedButton(
-                        onPressed: () => _selfCheck(item),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: graded ? theme.hintColor : accent,
-                          side: BorderSide(
-                            color: (graded ? theme.hintColor : accent)
-                                .withValues(alpha: 0.45),
+                      _NoZoomSingleFingerGesture(
+                        child: OutlinedButton(
+                          onPressed: () => _selfCheck(item),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: graded ? theme.hintColor : accent,
+                            side: BorderSide(
+                              color: (graded ? theme.hintColor : accent)
+                                  .withValues(alpha: 0.45),
+                            ),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 4,
+                            ),
+                            minimumSize: const Size(0, 28),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                           ),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 4,
+                          child: Text(
+                            graded ? '다시 확인' : '정답 확인',
+                            style: const TextStyle(fontSize: 12),
                           ),
-                          minimumSize: const Size(0, 28),
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        ),
-                        child: Text(
-                          graded ? '다시 확인' : '정답 확인',
-                          style: const TextStyle(fontSize: 12),
                         ),
                       ),
                     ],
@@ -5792,6 +5910,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
               viewportWidth: constraints.maxWidth,
               viewportHeight: constraints.maxHeight,
               resetToken: 'body|${currentPage?.rawPage}',
+              rightEdgeReservedWidth: _isTimedTest ? 0.0 : 32.0,
               onSwipe: (delta) => unawaited(_moveProblem(delta)),
               onSwipeUp: _openScratchFromSwipe,
               onSwipeDown: _closeScratchFromSwipe,
@@ -6149,35 +6268,55 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
   bool get _showCategoryLabel => const {'wonri', 'wonri_middle', 'gaeyu_high'}
       .contains(widget.book.series);
 
+  /// 난이도(`A`/`B`/`C` 등) 줄. 개념원리 계열은 이 칸이 비고 분류 줄을 쓴다.
+  /// 그 외 교재는 난이도가 없는 문항도 있는 문항과 같은 높이를 쓴다.
+  /// 교재 탭·과제 바로풀기·정답입력이 이 화면을 같이 쓴다.
+  bool get _reserveDifficultySubtitle {
+    if (_isTimedTest || _showCategoryLabel) return false;
+    return true;
+  }
+
   /// 번호 칸. 유형 라벨이 없는 문항도 있는 문항과 같은 높이를 쓴다.
   Widget _problemIndexColumn(
     ThemeData theme, {
     required String title,
     required String subtitle,
     required String? categoryLabel,
+    required bool reserveSubtitleLine,
     required bool reserveCategoryLine,
     required double width,
+    bool? gradeResult,
+    int gradeSeed = 0,
   }) {
-    final categoryStyle = theme.textTheme.bodySmall?.copyWith(
+    final metaStyle = theme.textTheme.bodySmall?.copyWith(
       color: theme.hintColor,
     );
+    final difficulty = subtitle.trim();
     final category = (categoryLabel ?? '').trim();
     return SizedBox(
       width: width,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            title,
-            style: theme.textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w800,
+          _RedPencilGradeMark(
+            gradedResult: gradeResult,
+            seed: gradeSeed,
+            scaleFactor: 0.9,
+            child: Text(
+              title,
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w800,
+              ),
             ),
           ),
-          if (subtitle.isNotEmpty)
-            Text(
-              subtitle,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.hintColor,
+          if (difficulty.isNotEmpty)
+            Text(difficulty, style: metaStyle)
+          else if (reserveSubtitleLine)
+            ExcludeSemantics(
+              child: Text(
+                '난이도',
+                maxLines: 1,
+                style: metaStyle?.copyWith(color: Colors.transparent),
               ),
             ),
           if (reserveCategoryLine)
@@ -6188,8 +6327,8 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: category.isEmpty
-                    ? categoryStyle?.copyWith(color: Colors.transparent)
-                    : categoryStyle,
+                    ? metaStyle?.copyWith(color: Colors.transparent)
+                    : metaStyle,
               ),
             ),
         ],
@@ -6370,8 +6509,10 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
   }
 
   /// 번호 카드 오른쪽. 과제 바로풀기, 교재 바로풀기, 정답입력하기가 같은 카드를 쓴다.
-  /// 처음 만나 한 번도 맞히지 않은 1회차는 비운다.
-  Widget _roundHistory(PageProblem problem) {
+  ///
+  /// 이번 시즌에 채점이 없으면 비운다. 오답은 한 줄, 완료는 번호·난이도와
+  /// 같은 두 줄(완료 횟수, 최근 풀이의 채점 횟수)이다.
+  Widget _roundHistory(ThemeData theme, PageProblem problem) {
     if (_isTimedTest) return const SizedBox.shrink();
     final history = _roundHistoryOf(problem);
     final hasLedger = _seenProblems[problem.cropId]?.hasRoundLedger ??
@@ -6391,21 +6532,16 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
     );
     final lines = display.cardLines;
     if (lines.isEmpty) return const SizedBox.shrink();
-    const roundColor = Color(0xFF7E9CC9);
     const wrongColor = Color(0xFFE57373);
-    const cautionColor = Color(0xFFE0A63C);
     const accent = YggGlassTokens.confirmActionColor;
-    final revisionColor = revisions >= 5
-        ? wrongColor
-        : revisions >= 3
-            ? cautionColor
-            : accent;
-
-    Color colorOf(String line) {
-      if (line.startsWith('수정')) return revisionColor;
-      if (line.startsWith('이전') || line.startsWith('통과')) return accent;
-      return roundColor;
-    }
+    final completed = display.latestPassed;
+    final numberStyle = theme.textTheme.titleMedium?.copyWith(
+      fontWeight: FontWeight.w800,
+      color: completed ? accent : wrongColor,
+    );
+    final metaStyle = theme.textTheme.bodySmall?.copyWith(
+      color: theme.hintColor,
+    );
 
     return Padding(
       padding: const EdgeInsets.only(right: 9),
@@ -6413,24 +6549,12 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          for (var i = 0; i < lines.length; i++) ...[
-            if (i > 0) const SizedBox(height: 4),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-              decoration: BoxDecoration(
-                color: colorOf(lines[i]).withValues(alpha: 0.13),
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: Text(
-                lines[i],
-                style: TextStyle(
-                  color: colorOf(lines[i]),
-                  fontSize: 12,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
+          Text(lines.first, style: numberStyle),
+          if (lines.length > 1)
+            Text(
+              lines[1],
+              style: metaStyle,
             ),
-          ],
         ],
       ),
     );
@@ -6455,13 +6579,10 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
     final selected = _selectedCropId == problem.cropId;
     final held = _isOnHold(problem.cropId);
     const accent = YggGlassTokens.confirmActionColor;
-    const wrongColor = Color(0xFFE57373);
     const cautionColor = Color(0xFFE0A63C);
     Color borderColor;
     if (held) {
       borderColor = cautionColor.withValues(alpha: 0.7);
-    } else if (graded) {
-      borderColor = result ? accent : wrongColor;
     } else if (selected) {
       borderColor = accent.withValues(alpha: 0.6);
     } else {
@@ -6501,6 +6622,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     _problemIndexColumn(
                       theme,
@@ -6509,13 +6631,18 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
                           : _displayProblemNumber(problem),
                       subtitle: _isTimedTest ? '' : problem.label,
                       categoryLabel: problem.categoryLabel,
+                      reserveSubtitleLine: _reserveDifficultySubtitle,
                       reserveCategoryLine:
                           !_isTimedTest && _showCategoryLabel,
                       width: _isTimedTest ? 96 : 64,
+                      gradeResult: graded ? result : null,
+                      gradeSeed: problem.cropId.hashCode,
                     ),
                     const SizedBox(width: 8),
                     Expanded(
-                      child: held
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: held
                           ? Text(
                               '신고한 문항 · 선생님이 확인 중이에요',
                               style: theme.textTheme.titleMedium?.copyWith(
@@ -6570,6 +6697,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
                                                 : null,
                                           ),
                                         ),
+                      ),
                     ),
                     const SizedBox(width: 12),
                     if (held) ...[
@@ -6618,25 +6746,8 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
                         ),
                         const SizedBox(width: 10),
                       ],
-                      _roundHistory(problem),
-                      if (graded && !result) ...[
-                        const Text(
-                          '다시 풀기',
-                          style: TextStyle(
-                            color: wrongColor,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                        const SizedBox(width: 9),
-                      ],
-                      if (graded)
-                        Icon(
-                          result ? Icons.circle_outlined : Icons.close_rounded,
-                          size: 26,
-                          color: result ? accent : wrongColor,
-                        )
-                      else if (answer.isNotEmpty)
+                      _roundHistory(theme, problem),
+                      if (!graded && answer.isNotEmpty)
                         Icon(Icons.edit_rounded,
                             size: 18, color: theme.hintColor),
                     ],
@@ -6676,12 +6787,10 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
     final allCorrect = correctParts == totalParts;
     final anyWrong = correctParts < gradedParts;
 
+    final bool? setGrade =
+        allCorrect ? true : (anyWrong ? false : null);
     Color borderColor;
-    if (allCorrect) {
-      borderColor = accent;
-    } else if (anyWrong) {
-      borderColor = wrongColor;
-    } else if (selected) {
+    if (selected) {
       borderColor = accent.withValues(alpha: 0.6);
     } else {
       borderColor = theme.dividerColor.withValues(alpha: 0.4);
@@ -6691,7 +6800,6 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
       child: Material(
         color: isDark ? Colors.white.withValues(alpha: 0.03) : Colors.white,
         borderRadius: BorderRadius.circular(14),
-        clipBehavior: Clip.antiAlias,
         child: InkWell(
           borderRadius: BorderRadius.circular(14),
           // 스플래시는 헤더가 아니라 카드 전체(화살표 포함)를 기준으로 퍼진다.
@@ -6727,49 +6835,46 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
                             vertical: 8,
                           ),
                           child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               _problemIndexColumn(
                                 theme,
                                 title: _displayProblemNumber(problem),
                                 subtitle: problem.label,
                                 categoryLabel: problem.categoryLabel,
-                                reserveCategoryLine: _showCategoryLabel,
+                                reserveSubtitleLine: _reserveDifficultySubtitle,
+                                reserveCategoryLine:
+                                    !_isTimedTest && _showCategoryLabel,
                                 width: 64,
+                                gradeResult: setGrade,
+                                gradeSeed: problem.cropId.hashCode,
                               ),
                               const SizedBox(width: 8),
                               Expanded(child: _setSummaryChips(theme, problem)),
                               const SizedBox(width: 12),
-                              _roundHistory(problem),
+                              _roundHistory(theme, problem),
                               if (allCorrect) ...[
                                 if (!_isTimedTest && widget.homework == null)
-                                  Padding(
-                                    padding: const EdgeInsets.only(right: 6),
-                                    child: InkWell(
-                                      borderRadius: BorderRadius.circular(999),
-                                      onTap: () => unawaited(
-                                        _promptRepeatProblemInSeason(problem),
+                                  InkWell(
+                                    borderRadius: BorderRadius.circular(999),
+                                    onTap: () => unawaited(
+                                      _promptRepeatProblemInSeason(problem),
+                                    ),
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 4,
                                       ),
-                                      child: Padding(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 8,
-                                          vertical: 4,
-                                        ),
-                                        child: Text(
-                                          '다시 풀기',
-                                          style: TextStyle(
-                                            color: theme.hintColor,
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.w700,
-                                          ),
+                                      child: Text(
+                                        '다시 풀기',
+                                        style: TextStyle(
+                                          color: theme.hintColor,
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w700,
                                         ),
                                       ),
                                     ),
                                   ),
-                                const Icon(
-                                  Icons.circle_outlined,
-                                  size: 26,
-                                  color: accent,
-                                ),
                               ]
                               else if (gradedParts > 0)
                                 Text(
@@ -6903,13 +7008,14 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
             .toList(growable: false)
         : const <String>[];
 
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(10),
-        onTap: result == true
-            ? null
-            : () => setState(() => _selectPro(problem, partKey: part.key)),
+    return _NoZoomSingleFingerGesture(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: result == true
+              ? null
+              : () => setState(() => _selectPro(problem, partKey: part.key)),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           decoration: BoxDecoration(
@@ -7019,6 +7125,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
           ),
         ),
       ),
+      ),
     );
   }
 
@@ -7042,9 +7149,10 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
         (theme.textTheme.titleMedium?.fontSize ?? 16) * 1.5 * 1.1 * 1.25 * 1.5;
     final digitSize = diameter * 0.46;
     // 문항/정답 모드 공통: 살짝 위로.
-    return Transform.translate(
-      offset: Offset(0, translateY),
-      child: Wrap(
+    return _NoZoomSingleFingerGesture(
+      child: Transform.translate(
+        offset: Offset(0, translateY),
+        child: Wrap(
         spacing: 8,
         children: [
           for (var n = 1; n <= 5; n++)
@@ -7077,6 +7185,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
               ),
             ),
         ],
+      ),
       ),
     );
   }
@@ -7707,30 +7816,46 @@ class _RenderedProblemPdfPageState extends State<_RenderedProblemPdfPage> {
             (constraints.maxWidth - width) / 2 + width * (10.0 / 332.56),
           );
           final fontSize = (width * (11.5 / 332.56)).clamp(15.0, 26.0);
-          return Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+          final numberStyle = TextStyle(
+            color: Colors.black,
+            fontSize: fontSize,
+            fontWeight: FontWeight.w800,
+            height: 1.05,
+          );
+          // 동그라미는 번호 아래로 넘어간다. 문제 이미지보다 나중에 그려야 가려지지 않는다.
+          return Stack(
+            clipBehavior: Clip.none,
             children: [
-              Padding(
-                padding: EdgeInsets.only(left: leftOffset),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: _RedPencilGradeMark(
-                    gradedResult: widget.gradedResult,
-                    seed: widget.gradeSeed,
-                    child: Text(
-                      label,
-                      style: TextStyle(
-                        color: Colors.black,
-                        fontSize: fontSize,
-                        fontWeight: FontWeight.w800,
-                        height: 1.05,
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Padding(
+                    padding: EdgeInsets.only(left: leftOffset),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Opacity(
+                        opacity: 0,
+                        child: Text(label, style: numberStyle),
                       ),
                     ),
                   ),
+                  pdfBox,
+                ],
+              ),
+              Positioned(
+                left: leftOffset,
+                top: 0,
+                child: IgnorePointer(
+                  child: _RedPencilGradeMark(
+                    gradedResult: widget.gradedResult,
+                    seed: widget.gradeSeed,
+                    scaleFactor: 0.9,
+                    radiusScale: 0.75,
+                    child: Text(label, style: numberStyle),
+                  ),
                 ),
               ),
-              pdfBox,
             ],
           );
         },
@@ -7914,6 +8039,7 @@ class _ObjectivePdfChoiceOverlayState
                 }
                 // 손가락은 선지 번호 위를 눌렀을 때만 받는다 (나머지는 스크롤).
                 if (_hitChoiceAt(event.localPosition) == null) return;
+                _ZoomGestureScope.ignoreDoubleTap(context, event.pointer);
               }
               if (_activePointer != null) return;
               setState(() {
@@ -8617,17 +8743,19 @@ class _BodyPageSolveViewState extends State<_BodyPageSolveView> {
                           pageHeight - math.max(0.0, top - 2),
                           boxH + 4,
                         ),
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.translucent,
-                          onTap: () => widget.onSelfCheck(p),
-                          child: Align(
-                            alignment: Alignment.centerLeft,
-                            child: Container(
-                              width: 3.0,
-                              height: double.infinity,
-                              decoration: BoxDecoration(
-                                color: accent.withValues(alpha: 0.85),
-                                borderRadius: BorderRadius.circular(999),
+                        child: _NoZoomDoubleTap(
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.translucent,
+                            onTap: () => widget.onSelfCheck(p),
+                            child: Align(
+                              alignment: Alignment.centerLeft,
+                              child: Container(
+                                width: 3.0,
+                                height: double.infinity,
+                                decoration: BoxDecoration(
+                                  color: accent.withValues(alpha: 0.85),
+                                  borderRadius: BorderRadius.circular(999),
+                                ),
                               ),
                             ),
                           ),
@@ -9047,6 +9175,9 @@ class _BodyObjectiveChoicesOverlayState
         }
         if (_activePointer != null) return;
         final hit = _hitChoiceAt(event.localPosition);
+        if (isTouch && hit != null) {
+          _ZoomGestureScope.ignoreDoubleTap(context, event.pointer);
+        }
         String? targetCropId = hit?.cropId;
         if (targetCropId == null && isStylus) {
           final resolved = widget.resolveCropAt(event.localPosition);
@@ -9282,12 +9413,80 @@ PdfPageViewSizeCallback _zoomAwarePdfPageSize(
 
 enum _TwoFingerMode { none, undecided, zoom, swiped }
 
-/// 문항보기·원본보기 공용 두 손가락 핀치 확대 + 스크롤/쓸기 중재 래퍼.
+enum _OneFingerAxis { none, undecided, horizontal, vertical, blocked }
+
+class _ZoomGestureScope extends InheritedWidget {
+  const _ZoomGestureScope({
+    required this.onIgnoreDoubleTap,
+    required this.onIgnoreAllSingleFinger,
+    required super.child,
+  });
+
+  final ValueChanged<int> onIgnoreDoubleTap;
+  final ValueChanged<int> onIgnoreAllSingleFinger;
+
+  static void ignoreDoubleTap(BuildContext context, int pointer) {
+    context
+        .getInheritedWidgetOfExactType<_ZoomGestureScope>()
+        ?.onIgnoreDoubleTap(pointer);
+  }
+
+  static void ignoreAllSingleFinger(BuildContext context, int pointer) {
+    context
+        .getInheritedWidgetOfExactType<_ZoomGestureScope>()
+        ?.onIgnoreAllSingleFinger(pointer);
+  }
+
+  @override
+  bool updateShouldNotify(covariant _ZoomGestureScope oldWidget) => false;
+}
+
+class _NoZoomDoubleTap extends StatelessWidget {
+  const _NoZoomDoubleTap({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (event) {
+        if (event.kind == PointerDeviceKind.touch) {
+          _ZoomGestureScope.ignoreDoubleTap(context, event.pointer);
+        }
+      },
+      child: child,
+    );
+  }
+}
+
+class _NoZoomSingleFingerGesture extends StatelessWidget {
+  const _NoZoomSingleFingerGesture({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (event) {
+        if (event.kind == PointerDeviceKind.touch) {
+          _ZoomGestureScope.ignoreAllSingleFinger(context, event.pointer);
+        }
+      },
+      child: child,
+    );
+  }
+}
+
+/// 문항보기·원본보기 공용 확대(더블탭·핀치) + 스크롤/쓸기 중재 래퍼.
 ///
-/// - `1.0x` 상태: 1손가락 세로 스크롤, 2손가락 좌우/상하 쓸기(문항 이동·연습장) 동작.
-/// - 두 손가락 간격이 벌어지거나 좁혀지면(`>= 18px`) 쓸기를 잠그고 초점 기준 확대(`1.0x~4.0x`).
-/// - 확대 상태(`> 1.02x`): 스타일러스는 변형 역행렬을 통해 원래 `1.0x` 좌표에 오차 없이 필기하고,
-///   손가락 드래그로 상하(스크롤)·좌우(`panX`) 이동이 가능하다.
+/// - `1.0x` 상태: 1손가락 세로 스크롤·가로 쓸기(문항 이동), 손가락 더블탭 `2.0x` 확대,
+///   2손가락 상하 쓸기(연습장)·핀치 확대 동작.
+/// - 펜슬이 닿아 있거나 직후(`420ms`)에는 손바닥 오작동 방지를 위해 1손가락 쓸기·더블탭을 무시한다.
+/// - 오른쪽 가장자리 예약 폭에서 시작한 1손가락 쓸기는 단원 시트에 양보한다.
+/// - 확대 상태(`> 1.02x`): 더블탭 시 `1.0x`로 복귀하고, 1손가락 드래그로 상하(스크롤)·좌우(`panX`) 이동,
+///   스타일러스는 변형 역행렬을 통해 원래 `1.0x` 좌표에 오차 없이 필기한다.
 class _ZoomableSolvePane extends StatefulWidget {
   const _ZoomableSolvePane({
     required this.scrollController,
@@ -9298,6 +9497,7 @@ class _ZoomableSolvePane extends StatefulWidget {
     this.onSwipe,
     this.onSwipeUp,
     this.onSwipeDown,
+    this.rightEdgeReservedWidth = 32.0,
   });
 
   final ScrollController scrollController;
@@ -9308,20 +9508,57 @@ class _ZoomableSolvePane extends StatefulWidget {
   final ValueChanged<int>? onSwipe;
   final VoidCallback? onSwipeUp;
   final VoidCallback? onSwipeDown;
+  final double rightEdgeReservedWidth;
 
   @override
   State<_ZoomableSolvePane> createState() => _ZoomableSolvePaneState();
 }
 
-class _ZoomableSolvePaneState extends State<_ZoomableSolvePane> {
+class _ZoomableSolvePaneState extends State<_ZoomableSolvePane>
+    with SingleTickerProviderStateMixin {
   static const double _minScale = 1.0;
   static const double _maxScale = 4.0;
+  static const double _doubleTapScale = 2.0;
   static const double _pinchCommitDelta = 18.0;
+  static const double _oneFingerSwipeThreshold = 64.0;
   static const double _horizontalSwipeThreshold = 72.0;
   static const double _verticalSwipeThreshold = 56.0;
+  static const double _tapMaxSlop = 14.0;
+  static const double _doubleTapMaxSlop = 36.0;
+  static const Duration _doubleTapMaxInterval = Duration(milliseconds: 300);
+  static const Duration _stylusCooldown = Duration(milliseconds: 420);
 
   final GlobalKey _scaledBoxKey = GlobalKey();
   final Map<int, Offset> _touchPointers = <int, Offset>{};
+  final Set<int> _stylusPointers = <int>{};
+  final Set<int> _ignoredDoubleTapPointers = <int>{};
+  final Set<int> _ignoredAllSingleFingerPointers = <int>{};
+
+  DateTime? _lastStylusEventAt;
+
+  int? _oneFingerPointer;
+  Offset _oneFingerStartPos = Offset.zero;
+  DateTime? _oneFingerStartTime;
+  _OneFingerAxis _oneFingerAxis = _OneFingerAxis.none;
+  bool _oneFingerSwiped = false;
+  bool _tapCandidateValid = false;
+
+  DateTime? _lastValidTapTime;
+  Offset? _lastValidTapPos;
+
+  late final AnimationController _zoomAnimController = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 220),
+  )
+    ..addListener(_onZoomAnimTick)
+    ..addStatusListener(_onZoomAnimStatus);
+
+  double _animStartScale = 1.0;
+  double _animTargetScale = 1.0;
+  double _animStartPanX = 0.0;
+  double _animTargetPanX = 0.0;
+  double _animStartScrollY = 0.0;
+  double _animTargetScrollY = 0.0;
 
   double _scale = 1.0;
   double _panX = 0.0;
@@ -9338,6 +9575,17 @@ class _ZoomableSolvePaneState extends State<_ZoomableSolvePane> {
   bool _trackpadZooming = false;
   double _trackpadBaseScale = 1.0;
 
+  bool get _isStylusActiveOrRecent {
+    if (_stylusPointers.isNotEmpty) return true;
+    final last = _lastStylusEventAt;
+    if (last == null) return false;
+    return DateTime.now().difference(last) < _stylusCooldown;
+  }
+
+  static bool _isStylusKind(PointerDeviceKind kind) =>
+      kind == PointerDeviceKind.stylus ||
+      kind == PointerDeviceKind.invertedStylus;
+
   @override
   void didUpdateWidget(covariant _ZoomableSolvePane oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -9352,16 +9600,35 @@ class _ZoomableSolvePaneState extends State<_ZoomableSolvePane> {
   @override
   void dispose() {
     _renderZoomTimer?.cancel();
+    _zoomAnimController.dispose();
     super.dispose();
   }
 
   void _resetZoomImmediate() {
     _renderZoomTimer?.cancel();
+    _zoomAnimController.stop();
     _scale = 1.0;
     _panX = 0.0;
     _renderZoom = 1.0;
     _twoFingerMode = _TwoFingerMode.none;
+    _oneFingerPointer = null;
+    _oneFingerAxis = _OneFingerAxis.none;
+    _oneFingerSwiped = false;
+    _tapCandidateValid = false;
+    _lastValidTapTime = null;
+    _lastValidTapPos = null;
     _trackpadZooming = false;
+  }
+
+  void _cancelSingleFingerAndTap() {
+    final wasHorizontalLock = _oneFingerAxis == _OneFingerAxis.horizontal;
+    _oneFingerAxis = _OneFingerAxis.blocked;
+    _tapCandidateValid = false;
+    _lastValidTapTime = null;
+    _lastValidTapPos = null;
+    if (wasHorizontalLock && mounted) {
+      setState(() {});
+    }
   }
 
   double get _scrollOffset =>
@@ -9398,6 +9665,85 @@ class _ZoomableSolvePaneState extends State<_ZoomableSolvePane> {
     });
   }
 
+  void _onZoomAnimTick() {
+    final t = Curves.easeOutCubic.transform(_zoomAnimController.value);
+    final nextScale =
+        (_animStartScale + (_animTargetScale - _animStartScale) * t)
+            .clamp(_minScale, _maxScale);
+    final minPanX = -widget.viewportWidth * (nextScale - 1.0);
+    final nextPanX =
+        (_animStartPanX + (_animTargetPanX - _animStartPanX) * t)
+            .clamp(minPanX, 0.0);
+    final maxScroll =
+        math.max(0.0, _unscaledContentHeight * nextScale - widget.viewportHeight);
+    final nextScrollY =
+        (_animStartScrollY + (_animTargetScrollY - _animStartScrollY) * t)
+            .clamp(0.0, maxScroll);
+
+    setState(() {
+      _scale = nextScale;
+      _panX = nextPanX;
+    });
+
+    if (widget.scrollController.hasClients) {
+      final position = widget.scrollController.position;
+      if ((position.pixels - nextScrollY).abs() > 0.1) {
+        position.correctPixels(nextScrollY);
+        // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
+        position.notifyListeners();
+      }
+    }
+  }
+
+  void _onZoomAnimStatus(AnimationStatus status) {
+    if (status != AnimationStatus.completed || !mounted) return;
+    if (_scale < 1.03) {
+      setState(() {
+        _scale = 1.0;
+        _panX = 0.0;
+        _renderZoom = 1.0;
+      });
+    } else {
+      setState(() {});
+      _scheduleRenderZoomUpdate();
+    }
+  }
+
+  void _toggleDoubleTapZoom(Offset viewportFocal) {
+    _renderZoomTimer?.cancel();
+    _zoomAnimController.stop();
+    if (widget.scrollController.hasClients) {
+      widget.scrollController.jumpTo(widget.scrollController.offset);
+    }
+
+    final targetScale = _scale > 1.03
+        ? 1.0
+        : _doubleTapScale.clamp(_minScale, _maxScale);
+    final anchorContent = Offset(
+      (viewportFocal.dx - _panX) / _scale,
+      (viewportFocal.dy + _scrollOffset) / _scale,
+    );
+    final minPanX = -widget.viewportWidth * (targetScale - 1.0);
+    final targetPanX = targetScale <= 1.001
+        ? 0.0
+        : (viewportFocal.dx - anchorContent.dx * targetScale)
+            .clamp(minPanX, 0.0);
+    final contentH = _unscaledContentHeight;
+    final maxScroll =
+        math.max(0.0, contentH * targetScale - widget.viewportHeight);
+    final targetScrollY =
+        (anchorContent.dy * targetScale - viewportFocal.dy)
+            .clamp(0.0, maxScroll);
+
+    _animStartScale = _scale;
+    _animTargetScale = targetScale;
+    _animStartPanX = _panX;
+    _animTargetPanX = targetPanX;
+    _animStartScrollY = _scrollOffset;
+    _animTargetScrollY = targetScrollY;
+    _zoomAnimController.forward(from: 0.0);
+  }
+
   void _beginPinchAnchor(double span, Offset viewportFocal) {
     _pinchBaseScale = _scale;
     _pinchStartSpan = math.max(1.0, span);
@@ -9414,7 +9760,8 @@ class _ZoomableSolvePaneState extends State<_ZoomableSolvePane> {
     final clampedPanX = rawPanX.clamp(minPanX, 0.0);
 
     final contentH = _unscaledContentHeight;
-    final maxScroll = math.max(0.0, contentH * clampedScale - widget.viewportHeight);
+    final maxScroll =
+        math.max(0.0, contentH * clampedScale - widget.viewportHeight);
     final rawScrollY = _pinchAnchorContent.dy * clampedScale - viewportFocal.dy;
     final clampedScrollY = rawScrollY.clamp(0.0, maxScroll);
 
@@ -9440,7 +9787,9 @@ class _ZoomableSolvePaneState extends State<_ZoomableSolvePane> {
   }
 
   void _zoomAtPoint(double nextScale, Offset viewportPoint) {
-    final clamped = nextScale < 1.03 ? 1.0 : nextScale.clamp(_minScale, _maxScale);
+    _zoomAnimController.stop();
+    final clamped =
+        nextScale < 1.03 ? 1.0 : nextScale.clamp(_minScale, _maxScale);
     _pinchAnchorContent = Offset(
       (viewportPoint.dx - _panX) / _scale,
       (viewportPoint.dy + _scrollOffset) / _scale,
@@ -9459,7 +9808,37 @@ class _ZoomableSolvePaneState extends State<_ZoomableSolvePane> {
   }
 
   void _handleTouchDown(PointerDownEvent event) {
+    if (_zoomAnimController.isAnimating) {
+      _zoomAnimController.stop();
+      _scheduleRenderZoomUpdate();
+    }
     _touchPointers[event.pointer] = event.localPosition;
+    if (_touchPointers.length == 1) {
+      _oneFingerPointer = event.pointer;
+      _oneFingerStartPos = event.localPosition;
+      _oneFingerStartTime = DateTime.now();
+      _oneFingerSwiped = false;
+
+      final blockedByStylus = _isStylusActiveOrRecent;
+      final blockedByControl =
+          _ignoredAllSingleFingerPointers.contains(event.pointer);
+      final blockedByChoice =
+          _ignoredDoubleTapPointers.contains(event.pointer);
+      final inRightEdge = widget.rightEdgeReservedWidth > 0 &&
+          event.localPosition.dx >=
+              widget.viewportWidth - widget.rightEdgeReservedWidth;
+
+      if (blockedByStylus || blockedByControl || inRightEdge || _scale > 1.02) {
+        _oneFingerAxis = _OneFingerAxis.blocked;
+      } else {
+        _oneFingerAxis = _OneFingerAxis.undecided;
+      }
+      _tapCandidateValid =
+          !blockedByStylus && !blockedByControl && !blockedByChoice && !inRightEdge;
+      return;
+    }
+
+    _cancelSingleFingerAndTap();
     if (_touchPointers.length == 2) {
       final (p1, p2) = _firstTwoPointers();
       final span = (p1 - p2).distance;
@@ -9482,14 +9861,52 @@ class _ZoomableSolvePaneState extends State<_ZoomableSolvePane> {
     _touchPointers[event.pointer] = event.localPosition;
 
     if (_touchPointers.length == 1) {
-      // 확대 상태에서는 1손가락 가로 드래그로 좌우 이동도 함께 지원 (세로는 ScrollView 담당).
-      if (_scale > 1.01 && _twoFingerMode == _TwoFingerMode.none) {
+      if (event.pointer == _oneFingerPointer) {
+        if (_tapCandidateValid &&
+            (event.localPosition - _oneFingerStartPos).distance > _tapMaxSlop) {
+          _tapCandidateValid = false;
+        }
+        if (_isStylusActiveOrRecent) {
+          _cancelSingleFingerAndTap();
+          return;
+        }
+      }
+
+      // 확대 상태에서는 1손가락 가로 드래그로 좌우 이동만 지원 (문항 이동 안 함).
+      if (_scale > 1.02 && _twoFingerMode == _TwoFingerMode.none) {
         final dx = event.localPosition.dx - prevPos.dx;
         if (dx != 0) {
           final nextPanX =
               (_panX + dx).clamp(-widget.viewportWidth * (_scale - 1.0), 0.0);
           if ((nextPanX - _panX).abs() > 0.05) {
             setState(() => _panX = nextPanX);
+          }
+        }
+        return;
+      }
+
+      // 1.0x 상태: 1손가락 가로 쓸기로 다음/이전 문항 이동.
+      if (event.pointer == _oneFingerPointer &&
+          _twoFingerMode == _TwoFingerMode.none &&
+          _scale <= 1.02) {
+        final totalDx = event.localPosition.dx - _oneFingerStartPos.dx;
+        final totalDy = event.localPosition.dy - _oneFingerStartPos.dy;
+        if (_oneFingerAxis == _OneFingerAxis.undecided) {
+          if (totalDy.abs() >= 14.0 && totalDy.abs() > totalDx.abs() * 0.85) {
+            _oneFingerAxis = _OneFingerAxis.vertical;
+          } else if (totalDx.abs() >= 18.0 &&
+              totalDx.abs() >= totalDy.abs() * 1.5) {
+            setState(() => _oneFingerAxis = _OneFingerAxis.horizontal);
+          }
+        }
+        if (_oneFingerAxis == _OneFingerAxis.horizontal && !_oneFingerSwiped) {
+          if (totalDx.abs() >= _oneFingerSwipeThreshold &&
+              totalDx.abs() >= totalDy.abs() * 1.4) {
+            _oneFingerSwiped = true;
+            _tapCandidateValid = false;
+            _lastValidTapTime = null;
+            _lastValidTapPos = null;
+            widget.onSwipe?.call(totalDx < 0 ? 1 : -1);
           }
         }
       }
@@ -9511,7 +9928,9 @@ class _ZoomableSolvePaneState extends State<_ZoomableSolvePane> {
         setState(() {});
         return;
       }
-      if (dx.abs() >= _horizontalSwipeThreshold && dx.abs() >= dy.abs() * 1.2) {
+      if (!_isStylusActiveOrRecent &&
+          dx.abs() >= _horizontalSwipeThreshold &&
+          dx.abs() >= dy.abs() * 1.2) {
         _twoFingerMode = _TwoFingerMode.swiped;
         widget.onSwipe?.call(dx < 0 ? 1 : -1);
         return;
@@ -9534,9 +9953,85 @@ class _ZoomableSolvePaneState extends State<_ZoomableSolvePane> {
     }
   }
 
-  void _handleTouchEnd(PointerEvent event) {
+  void _handleTouchEnd(PointerEvent event, {required bool isCancel}) {
+    _ignoredDoubleTapPointers.remove(event.pointer);
+    _ignoredAllSingleFingerPointers.remove(event.pointer);
     if (!_touchPointers.containsKey(event.pointer)) return;
+
+    final isActiveOneFinger = !isCancel &&
+        event.pointer == _oneFingerPointer &&
+        _touchPointers.length == 1 &&
+        _twoFingerMode == _TwoFingerMode.none &&
+        !_isStylusActiveOrRecent;
+
+    if (isActiveOneFinger) {
+      final now = DateTime.now();
+      final startTime = _oneFingerStartTime;
+      final totalDx = event.localPosition.dx - _oneFingerStartPos.dx;
+      final totalDy = event.localPosition.dy - _oneFingerStartPos.dy;
+
+      // 짧고 빠른 한 손가락 플릭도 1.0x에서 문항 이동으로 인정한다.
+      if (!_oneFingerSwiped &&
+          _scale <= 1.02 &&
+          (_oneFingerAxis == _OneFingerAxis.horizontal ||
+              _oneFingerAxis == _OneFingerAxis.undecided) &&
+          startTime != null) {
+        final elapsedMs = now.difference(startTime).inMilliseconds;
+        if (elapsedMs > 0 &&
+            elapsedMs <= 220 &&
+            totalDx.abs() >= 40.0 &&
+            totalDx.abs() >= totalDy.abs() * 1.6) {
+          final vx = totalDx.abs() * 1000.0 / elapsedMs;
+          if (vx >= 360.0) {
+            _oneFingerSwiped = true;
+            _tapCandidateValid = false;
+            _lastValidTapTime = null;
+            _lastValidTapPos = null;
+            widget.onSwipe?.call(totalDx < 0 ? 1 : -1);
+          }
+        }
+      }
+
+      // 단일 탭 지연(0ms)을 유지하기 위해 직접 두 번째 탭만 판정한다.
+      if (_tapCandidateValid && !_oneFingerSwiped && startTime != null) {
+        final downUpMs = now.difference(startTime).inMilliseconds;
+        final moveDist = (event.localPosition - _oneFingerStartPos).distance;
+        if (downUpMs <= 260 && moveDist <= _tapMaxSlop) {
+          final prevTime = _lastValidTapTime;
+          final prevPos = _lastValidTapPos;
+          if (prevTime != null &&
+              prevPos != null &&
+              now.difference(prevTime) <= _doubleTapMaxInterval &&
+              (event.localPosition - prevPos).distance <= _doubleTapMaxSlop) {
+            _lastValidTapTime = null;
+            _lastValidTapPos = null;
+            _toggleDoubleTapZoom(event.localPosition);
+          } else {
+            _lastValidTapTime = now;
+            _lastValidTapPos = event.localPosition;
+          }
+        } else {
+          _lastValidTapTime = null;
+          _lastValidTapPos = null;
+        }
+      }
+    } else if (isCancel) {
+      _lastValidTapTime = null;
+      _lastValidTapPos = null;
+    }
+
     _touchPointers.remove(event.pointer);
+    if (event.pointer == _oneFingerPointer) {
+      final wasHorizontalLock = _oneFingerAxis == _OneFingerAxis.horizontal;
+      _oneFingerPointer = null;
+      _oneFingerAxis = _OneFingerAxis.none;
+      _oneFingerSwiped = false;
+      _tapCandidateValid = false;
+      if (wasHorizontalLock) {
+        setState(() {});
+      }
+    }
+
     if (_touchPointers.length < 2 && _twoFingerMode != _TwoFingerMode.none) {
       final wasZoom = _twoFingerMode == _TwoFingerMode.zoom;
       _twoFingerMode = _TwoFingerMode.none;
@@ -9563,119 +10058,154 @@ class _ZoomableSolvePaneState extends State<_ZoomableSolvePane> {
 
   @override
   Widget build(BuildContext context) {
-    final lockScroll = _twoFingerMode == _TwoFingerMode.zoom || _trackpadZooming;
-    return ClipRect(
-      child: Listener(
-        behavior: HitTestBehavior.translucent,
-        onPointerDown: (event) {
-          if (event.kind == PointerDeviceKind.touch) {
-            _handleTouchDown(event);
-          }
-        },
-        onPointerMove: (event) {
-          if (event.kind == PointerDeviceKind.touch) {
-            _handleTouchMove(event);
-          }
-        },
-        onPointerUp: (event) {
-          if (event.kind == PointerDeviceKind.touch) {
-            _handleTouchEnd(event);
-          }
-        },
-        onPointerCancel: (event) {
-          if (event.kind == PointerDeviceKind.touch) {
-            _handleTouchEnd(event);
-          }
-        },
-        onPointerPanZoomStart: (event) {
-          _trackpadZooming = false;
-          _trackpadBaseScale = _scale;
-        },
-        onPointerPanZoomUpdate: (event) {
-          if (!_trackpadZooming && (event.scale - 1.0).abs() >= 0.02) {
-            _trackpadZooming = true;
-            _trackpadBaseScale = _scale / event.scale;
-            _beginPinchAnchor(100.0, event.localPosition);
-            setState(() {});
-          }
-          if (_trackpadZooming) {
-            final target = _trackpadBaseScale * event.scale;
-            final focal = event.localPosition + event.localPanDelta;
-            _pinchAnchorContent = Offset(
-              (event.localPosition.dx - _panX) / _scale,
-              (event.localPosition.dy + _scrollOffset) / _scale,
-            );
-            _applyAnchoredZoom(target, focal);
-          } else if (_scale > 1.01 && event.localPanDelta.dx != 0) {
-            final nextPanX = (_panX + event.localPanDelta.dx)
-                .clamp(-widget.viewportWidth * (_scale - 1.0), 0.0);
-            if ((nextPanX - _panX).abs() > 0.05) {
-              setState(() => _panX = nextPanX);
+    final lockScroll = _twoFingerMode == _TwoFingerMode.zoom ||
+        _trackpadZooming ||
+        _zoomAnimController.isAnimating ||
+        _oneFingerAxis == _OneFingerAxis.horizontal;
+    return _ZoomGestureScope(
+      onIgnoreDoubleTap: (pointer) => _ignoredDoubleTapPointers.add(pointer),
+      onIgnoreAllSingleFinger: (pointer) {
+        _ignoredDoubleTapPointers.add(pointer);
+        _ignoredAllSingleFingerPointers.add(pointer);
+      },
+      child: ClipRect(
+        child: Listener(
+          behavior: HitTestBehavior.translucent,
+          onPointerHover: (event) {
+            if (_isStylusKind(event.kind)) {
+              _lastStylusEventAt = DateTime.now();
             }
-          }
-        },
-        onPointerPanZoomEnd: (_) {
-          if (_trackpadZooming) {
+          },
+          onPointerDown: (event) {
+            if (_isStylusKind(event.kind)) {
+              _stylusPointers.add(event.pointer);
+              _lastStylusEventAt = DateTime.now();
+              _cancelSingleFingerAndTap();
+              return;
+            }
+            if (event.kind == PointerDeviceKind.touch) {
+              _handleTouchDown(event);
+            }
+          },
+          onPointerMove: (event) {
+            if (_isStylusKind(event.kind)) {
+              _lastStylusEventAt = DateTime.now();
+              return;
+            }
+            if (event.kind == PointerDeviceKind.touch) {
+              _handleTouchMove(event);
+            }
+          },
+          onPointerUp: (event) {
+            if (_isStylusKind(event.kind)) {
+              _stylusPointers.remove(event.pointer);
+              _lastStylusEventAt = DateTime.now();
+              return;
+            }
+            if (event.kind == PointerDeviceKind.touch) {
+              _handleTouchEnd(event, isCancel: false);
+            }
+          },
+          onPointerCancel: (event) {
+            if (_isStylusKind(event.kind)) {
+              _stylusPointers.remove(event.pointer);
+              _lastStylusEventAt = DateTime.now();
+              return;
+            }
+            if (event.kind == PointerDeviceKind.touch) {
+              _handleTouchEnd(event, isCancel: true);
+            }
+          },
+          onPointerPanZoomStart: (event) {
             _trackpadZooming = false;
-            if (_scale < 1.03) {
-              setState(() {
-                _scale = 1.0;
-                _panX = 0.0;
-                _renderZoom = 1.0;
-              });
-            } else {
+            _trackpadBaseScale = _scale;
+          },
+          onPointerPanZoomUpdate: (event) {
+            if (!_trackpadZooming && (event.scale - 1.0).abs() >= 0.02) {
+              _trackpadZooming = true;
+              _trackpadBaseScale = _scale / event.scale;
+              _beginPinchAnchor(100.0, event.localPosition);
               setState(() {});
-              _scheduleRenderZoomUpdate();
             }
-          }
-        },
-        child: SingleChildScrollView(
-          controller: widget.scrollController,
-          physics: lockScroll ? const NeverScrollableScrollPhysics() : null,
-          child: Listener(
-            behavior: HitTestBehavior.translucent,
-            onPointerSignal: (signal) {
-              if (signal is PointerScaleEvent) {
-                GestureBinding.instance.pointerSignalResolver.register(
-                  signal,
-                  (ev) {
-                    final s = ev as PointerScaleEvent;
-                    _zoomAtPoint(
-                      _scale * s.scale,
-                      _globalToViewport(s.position),
-                    );
-                  },
-                );
-              } else if (signal is PointerScrollEvent) {
-                if (HardwareKeyboard.instance.isControlPressed &&
-                    signal.scrollDelta.dy != 0) {
+            if (_trackpadZooming) {
+              final target = _trackpadBaseScale * event.scale;
+              final focal = event.localPosition + event.localPanDelta;
+              _pinchAnchorContent = Offset(
+                (event.localPosition.dx - _panX) / _scale,
+                (event.localPosition.dy + _scrollOffset) / _scale,
+              );
+              _applyAnchoredZoom(target, focal);
+            } else if (_scale > 1.01 && event.localPanDelta.dx != 0) {
+              final nextPanX = (_panX + event.localPanDelta.dx)
+                  .clamp(-widget.viewportWidth * (_scale - 1.0), 0.0);
+              if ((nextPanX - _panX).abs() > 0.05) {
+                setState(() => _panX = nextPanX);
+              }
+            }
+          },
+          onPointerPanZoomEnd: (_) {
+            if (_trackpadZooming) {
+              _trackpadZooming = false;
+              if (_scale < 1.03) {
+                setState(() {
+                  _scale = 1.0;
+                  _panX = 0.0;
+                  _renderZoom = 1.0;
+                });
+              } else {
+                setState(() {});
+                _scheduleRenderZoomUpdate();
+              }
+            }
+          },
+          child: SingleChildScrollView(
+            controller: widget.scrollController,
+            physics: lockScroll ? const NeverScrollableScrollPhysics() : null,
+            child: Listener(
+              behavior: HitTestBehavior.translucent,
+              onPointerSignal: (signal) {
+                if (signal is PointerScaleEvent) {
                   GestureBinding.instance.pointerSignalResolver.register(
                     signal,
                     (ev) {
-                      final s = ev as PointerScrollEvent;
-                      final factor = math.exp(-s.scrollDelta.dy / 300.0);
+                      final s = ev as PointerScaleEvent;
                       _zoomAtPoint(
-                        _scale * factor,
+                        _scale * s.scale,
                         _globalToViewport(s.position),
                       );
                     },
                   );
-                } else if (_scale > 1.01 && signal.scrollDelta.dx != 0) {
-                  final nextPanX = (_panX - signal.scrollDelta.dx)
-                      .clamp(-widget.viewportWidth * (_scale - 1.0), 0.0);
-                  if ((nextPanX - _panX).abs() > 0.05) {
-                    setState(() => _panX = nextPanX);
+                } else if (signal is PointerScrollEvent) {
+                  if (HardwareKeyboard.instance.isControlPressed &&
+                      signal.scrollDelta.dy != 0) {
+                    GestureBinding.instance.pointerSignalResolver.register(
+                      signal,
+                      (ev) {
+                        final s = ev as PointerScrollEvent;
+                        final factor = math.exp(-s.scrollDelta.dy / 300.0);
+                        _zoomAtPoint(
+                          _scale * factor,
+                          _globalToViewport(s.position),
+                        );
+                      },
+                    );
+                  } else if (_scale > 1.01 && signal.scrollDelta.dx != 0) {
+                    final nextPanX = (_panX - signal.scrollDelta.dx)
+                        .clamp(-widget.viewportWidth * (_scale - 1.0), 0.0);
+                    if ((nextPanX - _panX).abs() > 0.05) {
+                      setState(() => _panX = nextPanX);
+                    }
                   }
                 }
-              }
-            },
-            child: _ZoomRenderScale(
-              scale: _renderZoom,
-              child: _ScaledContentBox(
-                key: _scaledBoxKey,
-                scale: _scale,
-                panX: _panX,
-                child: widget.child,
+              },
+              child: _ZoomRenderScale(
+                scale: _renderZoom,
+                child: _ScaledContentBox(
+                  key: _scaledBoxKey,
+                  scale: _scale,
+                  panX: _panX,
+                  child: widget.child,
+                ),
               ),
             ),
           ),
@@ -10684,12 +11214,18 @@ class _RedPencilGradeMark extends StatelessWidget {
     required this.child,
     this.seed = 0,
     this.scaleFactor = 1.0,
+    this.radiusScale = 1.0,
   });
 
   final bool? gradedResult;
   final Widget child;
   final int seed;
+
+  /// 여백(고정 px)만 줄인다. 번호 카드가 쓴다.
   final double scaleFactor;
+
+  /// 번호 글자 대비 원 전체 배율. 문항보기만 1보다 작게 쓴다.
+  final double radiusScale;
 
   @override
   Widget build(BuildContext context) {
@@ -10700,6 +11236,7 @@ class _RedPencilGradeMark extends StatelessWidget {
         isCorrect: res,
         seed: seed,
         scaleFactor: scaleFactor,
+        radiusScale: radiusScale,
       ),
       child: child,
     );
@@ -10711,11 +11248,13 @@ class _SingleRedPencilGradePainter extends CustomPainter {
     required this.isCorrect,
     required this.seed,
     required this.scaleFactor,
+    required this.radiusScale,
   });
 
   final bool isCorrect;
   final int seed;
   final double scaleFactor;
+  final double radiusScale;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -10726,6 +11265,7 @@ class _SingleRedPencilGradePainter extends CustomPainter {
       isCorrect: isCorrect,
       seed: seed,
       scaleFactor: scaleFactor,
+      radiusScale: radiusScale,
     );
   }
 
@@ -10733,7 +11273,8 @@ class _SingleRedPencilGradePainter extends CustomPainter {
   bool shouldRepaint(covariant _SingleRedPencilGradePainter oldDelegate) =>
       oldDelegate.isCorrect != isCorrect ||
       oldDelegate.seed != seed ||
-      oldDelegate.scaleFactor != scaleFactor;
+      oldDelegate.scaleFactor != scaleFactor ||
+      oldDelegate.radiusScale != radiusScale;
 }
 
 class _BodyRedPencilGradesPainter extends CustomPainter {
@@ -10782,6 +11323,7 @@ class _RedPencilStrokeDrawer {
     required bool isCorrect,
     required int seed,
     double scaleFactor = 1.0,
+    double radiusScale = 1.0,
   }) {
     final nw = targetRect.width;
     final nh = targetRect.height;
@@ -10790,15 +11332,20 @@ class _RedPencilStrokeDrawer {
 
     if (isCorrect) {
       // 번호에 딱 붙지 않고 넉넉하게 감싸는 손그림 동그라미.
-      final rx =
-          math.max(nw * 0.78 + 15.0 * scaleFactor, nh * 1.35 + 11.0 * scaleFactor);
-      final ry =
-          math.max(nh * 1.12 + 12.0 * scaleFactor, rx * 0.72);
+      final rawRx = math.max(
+        nw * 0.78 + 15.0 * scaleFactor,
+        nh * 1.35 + 11.0 * scaleFactor,
+      );
+      final rawRy = math.max(nh * 1.12 + 12.0 * scaleFactor, rawRx * 0.72);
+      final rx = rawRx * radiusScale;
+      final ry = rawRy * radiusScale;
       final tilt = (-0.16) + _unitVariation(seed, 1) * 0.05;
       final cosT = math.cos(tilt);
       final sinT = math.sin(tilt);
-      final startDeg = -58.0 + _unitVariation(seed, 2) * 8.0;
-      final sweepDeg = -392.0 - (_unitVariation(seed, 3).abs() * 14.0);
+      // 겹침은 아래쪽. 시작만 문항마다 조금씩 어긋나 같은 자리에 모이지 않는다.
+      final overlapDeg = 28.0 + _unitVariation(seed, 3).abs() * 16.0;
+      final startDeg = 90.0 + overlapDeg / 2 + _unitVariation(seed, 2) * 18.0;
+      final sweepDeg = -(360.0 + overlapDeg);
       final wavePhase = _unitVariation(seed, 4) * math.pi;
 
       final path = Path();
@@ -10806,8 +11353,8 @@ class _RedPencilStrokeDrawer {
       for (var i = 0; i <= steps; i += 1) {
         final t = i / steps;
         final rad = (startDeg + sweepDeg * t) * (math.pi / 180.0);
-        // 시작~끝이 살짝 어긋나며 겹치는 자연스러운 손획 반경 변화
-        final spiral = 0.94 + 0.13 * t + 0.025 * math.sin(rad * 2.0 + wavePhase);
+        final spiral =
+            0.94 + 0.13 * t + 0.025 * math.sin(rad * 2.0 + wavePhase);
         final lx = rx * spiral * math.cos(rad);
         final ly = ry * spiral * math.sin(rad);
         final px = cx + lx * cosT - ly * sinT;
@@ -10860,7 +11407,6 @@ class _RedPencilStrokeDrawer {
     Path path,
     double strokeWidth,
   ) {
-    // 종이 결에 묻는 부드러운 색연필 번짐층
     canvas.drawPath(
       path,
       Paint()
@@ -10872,7 +11418,6 @@ class _RedPencilStrokeDrawer {
         ..blendMode = BlendMode.multiply
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 0.85),
     );
-    // 중심 색연필 심지 획
     canvas.drawPath(
       path,
       Paint()
@@ -10883,7 +11428,6 @@ class _RedPencilStrokeDrawer {
         ..strokeJoin = StrokeJoin.round
         ..blendMode = BlendMode.multiply,
     );
-    // 색연필 건식 결 1
     canvas.drawPath(
       path.shift(const Offset(-0.6, -0.45)),
       Paint()
@@ -10894,7 +11438,6 @@ class _RedPencilStrokeDrawer {
         ..strokeJoin = StrokeJoin.round
         ..blendMode = BlendMode.multiply,
     );
-    // 색연필 건식 결 2
     canvas.drawPath(
       path.shift(const Offset(0.55, 0.45)),
       Paint()

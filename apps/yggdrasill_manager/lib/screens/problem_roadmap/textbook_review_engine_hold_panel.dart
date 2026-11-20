@@ -49,6 +49,9 @@ class _TextbookReviewEngineHoldPanelState extends State<TextbookReviewEngineHold
   final Set<String> _rendering = {};
   final Map<String, String> _renderErrors = {};
 
+  /// 정답+해설 카드를 찍지 못한 이유. 키 cropId. 재검수 때 함께 보내 기록으로 남긴다.
+  final Map<String, String> _solutionErrors = {};
+
   /// 다시 렌더링할 때마다 올려 Image.network 캐시를 피한다.
   int _renderGeneration = 0;
   bool _showResolved = false;
@@ -95,6 +98,7 @@ class _TextbookReviewEngineHoldPanelState extends State<TextbookReviewEngineHold
           _problemUrls.remove(e.item.cropId);
           _solutionUrls.remove(e.item.cropId);
           _renderErrors.remove(e.item.cropId);
+          _solutionErrors.remove(e.item.cropId);
         }
       }
       _progress = 'V2 카드 다시 찍는 중 (${entries.length}문항)...';
@@ -136,8 +140,9 @@ class _TextbookReviewEngineHoldPanelState extends State<TextbookReviewEngineHold
             solutionKind: it.primarySolutionKind,
           );
           if (url.isNotEmpty) _solutionUrls[it.cropId] = url;
+          _solutionErrors.remove(it.cropId);
         } catch (err) {
-          _renderErrors[it.cropId] = '$err';
+          _solutionErrors[it.cropId] = solutionCardErrorText(err);
         } finally {
           _rendering.remove(it.cropId);
         }
@@ -165,11 +170,14 @@ class _TextbookReviewEngineHoldPanelState extends State<TextbookReviewEngineHold
         for (final e in chunk) {
           final p = _problemUrls[e.item.cropId];
           final s = _solutionUrls[e.item.cropId];
-          if ((p ?? '').isEmpty && (s ?? '').isEmpty) continue;
+          // 정답+해설 카드를 못 찍은 문항은 그 이유를 보낸다(해설 통과가 아니다).
+          final sErr = (s ?? '').isEmpty ? (_solutionErrors[e.item.cropId] ?? '') : '';
+          if ((p ?? '').isEmpty && (s ?? '').isEmpty && sErr.isEmpty) continue;
           byAcademy.putIfAbsent(e.scope.academyId, () => []).add({
             'crop_id': e.item.cropId,
             if ((p ?? '').isNotEmpty) 'problem_url': p,
             if ((s ?? '').isNotEmpty) 'answer_solution_url': s,
+            if (sErr.isNotEmpty) 'answer_solution_error': sErr,
             'solution_kind': e.item.primarySolutionKind,
             'has_solution_figures': e.item.solutionFigureAssets.isNotEmpty,
           });
@@ -451,7 +459,12 @@ class _TextbookReviewEngineHoldPanelState extends State<TextbookReviewEngineHold
             builder: (context, c) {
               final cards = [
                 _card('문항 카드 (V2 · 현재 엔진)', problemUrl, rendering, _renderErrors[it.cropId]),
-                _card('정답 + ${it.primarySolutionKind == 'ai' ? 'AI 풀이' : '원본 해설'} (V2 · 현재 엔진)', solutionUrl, rendering, null),
+                _card(
+                  '정답 + ${it.primarySolutionKind == 'ai' ? 'AI 풀이' : '원본 해설'} (V2 · 현재 엔진)',
+                  solutionUrl,
+                  rendering,
+                  _solutionErrors[it.cropId],
+                ),
               ];
               if (c.maxWidth < 760) {
                 return Column(children: [cards[0], const SizedBox(height: 8), cards[1]]);

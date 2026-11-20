@@ -182,6 +182,30 @@ class TextbookStudySession extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
+  /// 이 교재의 열린 바로풀기를 중단으로 두고, 카드에는 그 칩만 남긴다.
+  Future<void> pauseBookSolve({
+    required String bookId,
+    required String gradeLabel,
+  }) async {
+    try {
+      await TextbookApi.instance.setTextbookSolveSessions(
+        bookId: bookId,
+        gradeLabel: gradeLabel,
+        action: 'pause',
+      );
+    } catch (_) {}
+    final key = _bookKey(bookId, gradeLabel);
+    final current = _sessionsByBook[key];
+    if (current != null && current.isSolve) {
+      _sessionsByBook[key] = current.copyWith(
+        status: 'paused',
+        pausedAt: DateTime.now(),
+      );
+    }
+    _syncBeatTimer();
+    notifyListeners();
+  }
+
   Future<void> finishSession(String sessionId) async {
     final id = sessionId.trim();
     if (id.isEmpty) return;
@@ -189,6 +213,25 @@ class TextbookStudySession extends ChangeNotifier with WidgetsBindingObserver {
       await TextbookApi.instance.finishTextbookSession(sessionId: id);
     } catch (_) {}
     _sessionsByBook.removeWhere((_, v) => v.sessionId == id);
+    _syncBeatTimer();
+    notifyListeners();
+  }
+
+  /// 이 교재의 바로풀기 세션을 모두 끝내 중단 칩이 남지 않게 한다.
+  Future<void> finishBookSolve({
+    required String bookId,
+    required String gradeLabel,
+  }) async {
+    try {
+      await TextbookApi.instance.setTextbookSolveSessions(
+        bookId: bookId,
+        gradeLabel: gradeLabel,
+        action: 'finish',
+      );
+    } catch (_) {}
+    _sessionsByBook.removeWhere(
+      (_, session) => session.bookId == bookId && session.isSolve,
+    );
     _syncBeatTimer();
     notifyListeners();
   }

@@ -73,8 +73,7 @@ class CoverOverlayStyle {
 
   /// 표지 위 큰 제목(학생 이름·교재명). 기준 32 w700 Pretendard.
   TextStyle titleStyle(BuildContext context) {
-    final base = DefaultTextStyle.of(context).style;
-    return base.copyWith(
+    return TextStyle(
       fontFamily: _fontFamily,
       fontWeight: FontWeight.w700,
       fontSize: 32 * typeScale,
@@ -204,7 +203,7 @@ class CoverPill extends StatelessWidget {
     this.icon,
     this.emphasize = false,
     this.shrinkWrap = false,
-    this.loose = false,
+    this.loose = true,
     this.fontWeight,
     this.padding,
     this.hugContent = false,

@@ -656,8 +656,15 @@ class ProblemBankService {
     if (res.statusCode < 200 ||
         res.statusCode >= 300 ||
         decoded['ok'] != true) {
+      // 오류 코드(error)와 설명(message)이 함께 오면 둘 다 남긴다.
+      final error = '${decoded['error'] ?? ''}'.trim();
+      final message = '${decoded['message'] ?? ''}'.trim();
+      final reason = [
+        if (error.isNotEmpty) error,
+        if (message.isNotEmpty && message != error) message,
+      ].join(': ');
       throw Exception(
-        'gateway_post_failed(${res.statusCode}): ${decoded['error'] ?? decoded['message'] ?? res.body}',
+        'gateway_post_failed(${res.statusCode}): ${reason.isEmpty ? res.body : reason}',
       );
     }
     return decoded;
@@ -3095,6 +3102,68 @@ class ProblemBankService {
     );
   }
 
+  // ── 모의고사 검수(교재 메뉴) ───────────────────────────────────────────
+
+  /// 모의고사 회차의 구간(공통·선택과목)마다 검수 범위를 만든다(게이트웨이). 추출 전인 회차는 빈 구간 문서를 미리 만든다.
+  /// 반환: { examId, title, grade, examStatus, sections: [{ section, label, documentId, bookId, bookName,
+  /// gradeLabel, questionCount, publishedCount, publishOnConfirm }] }
+  Future<Map<String, dynamic>> prepareMockReviewIdentity({
+    required String academyId,
+    required String examId,
+  }) {
+    if (!hasGateway) throw Exception('게이트웨이 주소가 설정되지 않았습니다');
+    return _gatewayPost(
+      '/pb/mock-review/prepare',
+      body: <String, dynamic>{
+        'academyId': academyId,
+        'examId': examId,
+        'identityOnly': true,
+      },
+    );
+  }
+
+  /// 모의고사 구간 하나(책 id = 구간 문서 id)를 교재 검수 테이블에 올린다(게이트웨이). 여러 번 불러도 결과가 같다.
+  /// 추출이 끝나지 않았으면 올리지 않고 state 'waiting'(reason: exam_queued · exam_running · extract_queued ·
+  /// extracting)으로 답한다. [allowExtract] 면 아직 뽑지 않은 구간의 추출을 건다.
+  Future<Map<String, dynamic>> prepareMockReview({
+    required String academyId,
+    required String documentId,
+    bool allowExtract = false,
+    bool refreshAnswers = false,
+  }) {
+    if (!hasGateway) throw Exception('게이트웨이 주소가 설정되지 않았습니다');
+    return _gatewayPost(
+      '/pb/mock-review/prepare',
+      body: <String, dynamic>{
+        'academyId': academyId,
+        'documentId': documentId,
+        if (allowExtract) 'allowExtract': true,
+        if (refreshAnswers) 'refreshAnswers': true,
+      },
+    );
+  }
+
+  /// 검수에서 확정한 모의고사 구간을 학습앱에 공개한다(게이트웨이: 문항 공개 + 학습앱 모의고사 프리셋).
+  /// 처음부터 공개돼 있던 구간은 그대로 두고, 이미 공개한 구간은 프리셋만 다시 맞춘다(둘 다 published false).
+  /// [presetError] 는 문항은 공개했는데 프리셋을 만들지 못한 이유다(다시 확정하면 다시 맞춘다).
+  Future<({bool published, String presetError})> publishMockReviewDocument({
+    required String academyId,
+    required String documentId,
+  }) async {
+    if (!hasGateway) throw Exception('게이트웨이 주소가 설정되지 않았습니다');
+    final res = await _gatewayPost(
+      '/pb/mock-review/publish',
+      body: <String, dynamic>{
+        'academyId': academyId,
+        'documentId': documentId,
+      },
+    );
+    return (
+      published: res['published'] == true,
+      presetError: '${res['presetError'] ?? ''}'.trim(),
+    );
+  }
+
   /// 교재 메뉴에서 올리는 내신 시험지 초안. PDF 는 꼭 있어야 하고, HWPX 가 있으면 본문 추출에 함께 쓴다.
   /// 분류 코드(curriculum_code·source_type_code)는 비워 둔다: 검수에서 시험지를 확정할 때 공개한다.
   /// [labelColumns] 학교·학년·과정 같은 표시 컬럼, [examReview] 는 `meta.exam_review`(확정 때 쓸 분류).
@@ -4282,6 +4351,40 @@ class ProblemBankService {
           'allow_objective': objective,
           'allow_subjective': !objective,
           'meta': meta,
+        },
+      },
+    );
+    final thumbnail = result['thumbnail'];
+    if (thumbnail is Map) return '${thumbnail['url'] ?? ''}'.trim();
+    return '';
+  }
+
+  /// 정답·해설을 학생용 PDF 해설지와 같은 조판(한 단 폭, 10pt, 수식 줄바꿈 허용)으로 찍는다.
+  /// [figureAssets] 는 해설 그림(bucket, path, placement, width_em, align).
+  Future<String> renderExplanationCardThumbnail({
+    required String academyId,
+    required String id,
+    required String answer,
+    required String explanation,
+    String questionNumber = '',
+    List<Map<String, dynamic>> figureAssets = const [],
+  }) async {
+    final safeAnswer = answer.trim();
+    final safeExplanation = explanation.trim();
+    if (!hasGateway || academyId.trim().isEmpty || (safeAnswer.isEmpty && safeExplanation.isEmpty)) return '';
+    final result = await _gatewayPost(
+      '/pb/preview/custom-thumbnail',
+      body: <String, dynamic>{
+        'academyId': academyId.trim(),
+        'cardKind': 'explanation',
+        'question': <String, dynamic>{
+          'id': id,
+          'question_uid': id,
+          'question_number': questionNumber,
+          'question_type': '주관식',
+          'export_answer': safeAnswer,
+          'explanation': safeExplanation,
+          'explanation_figure_assets': figureAssets,
         },
       },
     );

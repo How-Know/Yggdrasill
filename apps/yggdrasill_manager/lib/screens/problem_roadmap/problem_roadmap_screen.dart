@@ -384,8 +384,21 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
   /// 내신 시험지를 검수하는 중인가(시험지 한 부가 검수 범위 하나다).
   bool get _examScope => _selectedOrder?.isSchoolExam ?? false;
 
+  /// 모의고사 구간을 검수하는 중인가(회차의 공통·선택과목 구간 하나가 검수 범위 하나다).
+  bool get _mockScope => _selectedOrder?.isMockExam ?? false;
+
   /// 화면 글에 쓰는 검수 범위 이름
-  String get _scopeNoun => _examScope ? '시험지' : '소단원';
+  String get _scopeNoun => _scopeNounOf(_selectedOrder);
+
+  static String _scopeNounOf(TextbookSubunitWorkOrder? order) =>
+      (order?.isSchoolExam ?? false) ? '시험지' : (order?.isMockExam ?? false) ? '구간' : '소단원';
+
+  /// 조사를 붙인 검수 범위 이름: "시험지를·구간을·소단원을"(object) 또는 "시험지는·구간은·소단원은"
+  static String _scopeNounWith(TextbookSubunitWorkOrder? order, {required bool object}) {
+    final noun = _scopeNounOf(order);
+    final vowelEnd = noun == '시험지';
+    return '$noun${object ? (vowelEnd ? '를' : '을') : (vowelEnd ? '는' : '은')}';
+  }
 
   Set<String> _activeWorkflowKeys() {
     final prefix = widget.workflow?.keyPrefix;
@@ -577,12 +590,20 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
       if (!mounted) return;
     }
     final exam = order?.isSchoolExam ?? false;
-    final noun = exam ? '시험지' : '소단원';
+    final mock = order?.isMockExam ?? false;
+    final noun = _scopeNounOf(order);
     setState(() => _wfBusy = true);
     try {
       // 교재 메뉴에서 올린 내신 시험지는 확정할 때 학습앱에 공개한다(이미 공개된 시험지는 그대로).
-      final published =
+      var published =
           exam && confirmed && await _pbService.publishExamReviewDocument(academyId: wf.academyId, documentId: wf.bookId);
+      // 검수에서 만든 모의고사 구간도 확정할 때 문항을 공개하고 학습앱 모의고사 프리셋을 맞춘다(처음부터 공개된 구간은 그대로).
+      var presetError = '';
+      if (mock && confirmed) {
+        final res = await _pbService.publishMockReviewDocument(academyId: wf.academyId, documentId: wf.bookId);
+        published = res.published;
+        presetError = res.presetError;
+      }
       await _wfService.confirmSubunit(wf, confirmed: confirmed);
       await TextbookBookRegistry().setScopeConfirmed(
         academyId: wf.academyId,
@@ -594,9 +615,13 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
       if (!mounted) return;
       await _loadWorkflowScope();
       if (!mounted) return;
-      final notes = [if (applyNote.isNotEmpty) applyNote, if (published) '학습앱에 공개'].join(' · ');
+      final notes = [
+        if (applyNote.isNotEmpty) applyNote,
+        if (published) '학습앱에 공개',
+        if (presetError.isNotEmpty) '학습앱 모의고사 묶음을 만들지 못함($presetError). 확정 취소 후 다시 확정하면 다시 만듭니다',
+      ].join(' · ');
       setState(() => _notice = confirmed
-          ? '${order?.label ?? wf.scopeKey} ${exam ? '시험지를' : '소단원을'} 확정했습니다.${notes.isEmpty ? '' : ' ($notes)'}'
+          ? '${order?.label ?? wf.scopeKey} ${_scopeNounWith(order, object: true)} 확정했습니다.${notes.isEmpty ? '' : ' ($notes)'}'
           : '${order?.label ?? wf.scopeKey} $noun 확정을 풀었습니다.');
     } catch (e) {
       if (mounted) setState(() => _notice = '$noun ${confirmed ? '확정' : '확정 취소'} 실패: $e');
@@ -669,9 +694,9 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
         );
       }
       await _answerService.batchUpsertAnswers(academyId: scope.academyId, answers: [upload]);
-      // 내신 시험지는 여기서 문제은행 정답을 바꾸지 않는다(시험지 확정 때 반영). 이 연결은 주관식 문항에
+      // 내신 시험지·모의고사 구간은 여기서 문제은행 정답을 바꾸지 않는다(확정 때 반영). 이 연결은 주관식 문항에
       // 만들어 둔 객관식 보기 정답을 지운다.
-      if (!_examScope) {
+      if (!(_selectedOrder?.isDocumentScope ?? false)) {
         await _answerService.syncAnswersToProblemBank(
           academyId: scope.academyId,
           bookId: scope.bookId,
@@ -809,8 +834,8 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
             ? (item.resolvedMathAnswer ?? (item.existingAnswer.isNotEmpty ? item.existingAnswer : (item.aiAnswer ?? '')))
             : (item.existingAnswer.isNotEmpty ? item.existingAnswer : (item.aiAnswer ?? ''));
     _solutionEditCtrl.text = item.proposedAiSolution ?? item.aiSolution ?? '';
-    _origSolutionCtrl.text = item.proposedSolutionTranscribed ?? item.solutionTranscribed ?? '';
-    _origAnswerCtrl.text = item.proposedSolutionAnswer ?? item.solutionAnswer ?? '';
+    _origSolutionCtrl.text = item.stageableSolutionTranscribed ?? item.solutionTranscribed ?? '';
+    _origAnswerCtrl.text = item.stageableSolutionAnswer ?? item.solutionAnswer ?? '';
     // 편집기 기본값: AI/규칙 수정 제안 → 공통 발문 중복이면 공통 부분을 뺀 본문 → 현재 본문
     final dupFix = item.commonStemFix;
     _stemEditCtrl.text = item.hasPendingFixProposal ? (item.proposedStem ?? item.stem) : (dupFix?.stem ?? item.stem);
@@ -1060,7 +1085,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
             '${missing > 0 ? ' · 메타 누락 남음 $missing' : ''}'
             '${pipeline.errors.isEmpty ? '' : ' · 실패 ${pipeline.errors.length}건(${pipeline.errors.first})'}'
             '. 수정안과 개념·사고 태그, 새 개념은 $_scopeNoun 확정 때 반영됩니다.'
-            '${wasConfirmed ? ' 이미 확정한 ${_examScope ? '시험지는' : '소단원은'} 확정 취소 후 다시 확정하면 반영됩니다.' : ''}';
+            '${wasConfirmed ? ' 이미 확정한 ${_scopeNounWith(_selectedOrder, object: false)} 확정 취소 후 다시 확정하면 반영됩니다.' : ''}';
       });
     } catch (e) {
       if (mounted) setState(() => _notice = '메타 보충 중 오류: $e');
@@ -1115,6 +1140,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     Future<Map<String, dynamic>?> buildPayload(TextbookProblemReviewItem it) async {
       final problemUrl = _previewUrlsByCropId[it.cropId];
       String solUrl = '';
+      String solError = '';
       if (it.primarySolutionText.isNotEmpty || it.displayAnswer.isNotEmpty) {
         solUrl = await _renderCard(
           it,
@@ -1127,8 +1153,13 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
             solutionKind: it.primarySolutionKind,
           ),
         );
+        // 카드를 못 찍은 문항은 해설을 검수할 수 없다. 이유를 함께 보내 준비됨을 막고 기록으로 남긴다.
+        if (solUrl.isEmpty) {
+          final err = _cardErrors[_cardKey(it.cropId, 'answer_solution', it.answerSolutionCardSource)];
+          if (err != null) solError = solutionCardErrorText(err);
+        }
       }
-      if ((problemUrl ?? '').isEmpty && solUrl.isEmpty) return null;
+      if ((problemUrl ?? '').isEmpty && solUrl.isEmpty && solError.isEmpty) return null;
       // 교재 원본(본문 PDF 문항 영역)을 같이 보내 V2 카드와 직접 대조한다(글자·그림 위치·그림 크기).
       final original = (problemUrl ?? '').isEmpty ? const <String, dynamic>{} : await _svc.originalImagesJson(scope, it);
       final solutionOriginal = solUrl.isEmpty ? const <String, dynamic>{} : await _svc.solutionOriginalJson(scope, it);
@@ -1136,6 +1167,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
         'crop_id': it.cropId,
         if ((problemUrl ?? '').isNotEmpty) 'problem_url': problemUrl,
         if (solUrl.isNotEmpty) 'answer_solution_url': solUrl,
+        if (solError.isNotEmpty) 'answer_solution_error': solError,
         'solution_kind': it.primarySolutionKind,
         'has_solution_figures': it.solutionFigureAssets.isNotEmpty,
         'figure_at_card_width': it.figureAtCardWidth,
@@ -1321,6 +1353,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
           cur,
           stem: text ? cur.proposedStem : null,
           choices: text ? cur.proposedChoices : null,
+          blankChoiceLabels: text ? cur.proposedBlankChoiceLabels : null,
           commonStem: text ? cur.proposedCommonStem : null,
           figureLayout: figure ? cur.proposedFigureLayout : null,
           figureCrops: figure ? cur.proposedFigureCrops : const [],
@@ -1387,6 +1420,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     TextbookProblemReviewItem item, {
     String? stem,
     List<Map<String, dynamic>>? choices,
+    List<String>? blankChoiceLabels,
     String? commonStem,
     Map<String, dynamic>? figureLayout,
     List<Map<String, dynamic>> figureCrops = const [],
@@ -1400,6 +1434,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
       item: item,
       stem: stem,
       choices: choices,
+      blankChoiceLabels: blankChoiceLabels,
       commonStem: commonStem,
       figureLayout: figureLayout,
       figureCrops: figureCrops,
@@ -2279,7 +2314,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     return Container(
       color: _kBg,
       padding: const EdgeInsets.fromLTRB(24, 16, 24, 16),
-      child: Column(
+        child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           _buildTopHeader(mathCleanCount, qualCleanCount),
@@ -2423,9 +2458,12 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
                           '카드가 모두 "준비됨"이 되면 시험지를 확정합니다.'
                       : '카드가 모두 "준비됨"이 되면 시험지를 확정하고, 확정하면 학습앱에 공개됩니다. '
                           'AI 풀이 답이 정답표와 다른 문항은 정답을 자동으로 바꾸지 않으니, 원본과 AI 풀이를 보고 고르세요.')
-                  : _workflowMode
-                      ? '카드가 모두 "준비됨"이 되면 소단원을 확정합니다. 렌더 엔진 문제는 "코드 수정 필요"로 따로 모아 고친 뒤 재확인합니다.'
-                      : '페이지·문항 흐름순 검수 · 과제형 V2 렌더링(학생 화면) · AI 선풀이 정답 대조 · 고정밀 핀셋 재추출',
+                  : _mockScope
+                      ? '카드가 모두 "준비됨"이 되면 구간을 확정합니다. 확정하면 고친 내용이 반영되고, 새로 올린 회차는 이때 학습앱에 공개됩니다. '
+                          '정답표·해설 답·AI 풀이 답 가운데 둘이 같으면 그 답으로 통과하고, 셋이 다 다르면 직접 고릅니다.'
+                      : _workflowMode
+                          ? '카드가 모두 "준비됨"이 되면 소단원을 확정합니다. 렌더 엔진 문제는 "코드 수정 필요"로 따로 모아 고친 뒤 재확인합니다.'
+                          : '페이지·문항 흐름순 검수 · 과제형 V2 렌더링(학생 화면) · AI 선풀이 정답 대조 · 고정밀 핀셋 재추출',
               style: const TextStyle(color: _kTextSub, fontSize: 14, fontWeight: FontWeight.w600, height: 1.35),
             ),
           ],
@@ -2561,7 +2599,9 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
                 fromPhase: TextbookWorkflowPhase.extract,
                 doneNote: order.isSchoolExam
                     ? '${order.label}: 문항 영역·정답 준비부터 다시 합니다(문항 영역은 못 찾은 것만 다시 찾습니다).'
-                    : '${order.label}: 본문이 없는 문항 추출과 비어 있는 정답·해설 위치 찾기부터 다시 합니다.',
+                    : order.isMockExam
+                        ? '${order.label}: 문항 영역·정답·해설 위치 준비부터 다시 합니다(사람이 고친 값은 그대로 둡니다).'
+                        : '${order.label}: 본문이 없는 문항 추출과 비어 있는 정답·해설 위치 찾기부터 다시 합니다.',
               );
             }
           },
@@ -2570,7 +2610,11 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
               value: 'extract',
               enabled: !confirmed,
               child: Text(
-                order.isSchoolExam ? '문항 영역·정답 준비부터 다시' : '본문 추출부터 다시(빈 것만)',
+                order.isSchoolExam
+                    ? '문항 영역·정답 준비부터 다시'
+                    : order.isMockExam
+                        ? '문항 영역·정답·해설 위치 준비부터 다시'
+                        : '본문 추출부터 다시(빈 것만)',
                 style: const TextStyle(color: _kText, fontSize: 13),
               ),
             ),
@@ -3130,7 +3174,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
                     '핀셋 정밀 추출 (${item.problemNumber}번 · PDF ${item.rawPage}쪽)',
                     style: const TextStyle(color: _kText, fontSize: 14, fontWeight: FontWeight.w800),
                   ),
-                  const Text(
+            const Text(
                     '이상하거나 빠진 문항을 고해상도·상위 추론(high) 또는 PDF 직접 드래그로 정확하게 다시 뽑습니다.',
                     style: TextStyle(color: _kTextSub, fontSize: 11.5, fontWeight: FontWeight.w600),
                   ),
@@ -3246,8 +3290,8 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
                 label: const Text('빠진 문항 추가', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800)),
               ),
             ],
-          ),
-          const SizedBox(height: 8),
+            ),
+            const SizedBox(height: 8),
           Wrap(
             spacing: 8,
             runSpacing: 8,
@@ -4153,7 +4197,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
                   runSpacing: 6,
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    const Text(
+            const Text(
                       '메타 · 3축 난이도',
                       style: TextStyle(color: _kText, fontSize: 13, fontWeight: FontWeight.w800),
                     ),

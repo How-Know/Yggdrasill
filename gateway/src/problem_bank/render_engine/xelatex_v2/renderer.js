@@ -147,6 +147,15 @@ async function waitForFile(filePath, timeoutMs = 3000) {
   return fs.existsSync(filePath);
 }
 
+/** xelatex 로그에서 오류 줄("! …")과 그 위치("l.123 …")만 뽑는다. 없으면 빈 문자열. */
+export function texErrorSummary(log) {
+  const lines = String(log || '').split(/\r?\n/);
+  const at = lines.findIndex((line) => line.startsWith('!'));
+  if (at < 0) return '';
+  const where = lines.slice(at + 1, at + 12).find((line) => /^l\.\d+/.test(line)) || '';
+  return [lines[at], where].map((line) => line.trim()).filter(Boolean).join(' / ').slice(0, 400);
+}
+
 function runXeLatex(texPath, outDir) {
   const bin = getXeLatexBinary();
   const baseName = path.basename(texPath, '.tex');
@@ -171,7 +180,9 @@ function runXeLatex(texPath, outDir) {
             ? fs.readFileSync(texPath, 'utf-8').slice(0, 2000)
             : '';
           console.error('[xelatex] compilation failed\n--- .tex head ---\n' + texSnippet + '\n--- log tail ---\n' + logTail);
-          reject(new Error(`xelatex failed: ${err.message}\n--- log tail ---\n${logTail}`));
+          // 호출한 쪽은 메시지 앞부분만 남긴다. 긴 명령줄보다 TeX 오류 줄을 먼저 둔다.
+          const summary = texErrorSummary(logTail);
+          reject(new Error(`xelatex failed: ${summary ? `${summary} :: ` : ''}${err.message}\n--- log tail ---\n${logTail}`));
         } else {
           resolve({ stdout, stderr });
         }
@@ -1034,6 +1045,7 @@ export async function renderPdfWithXeLatex({
       ? renderConfig.questionScoreByQuestionId
       : {};
     const includeQuickAnswer = renderConfig?.includeAnswerSheet === true;
+    const omitQuestionBody = renderConfig?.omitQuestionBody === true;
     // 제목 페이지 옵션 — MathJax HTML 경로와 동일 계약으로 renderConfig 에서 수용.
     // titlePageIndices : number[]  (1-based). 빈 배열이면 template 이 [1] 로 기본값.
     // titlePageHeaders : [{ page, title, subtitle }]  (페이지별 override).
@@ -1078,6 +1090,8 @@ export async function renderPdfWithXeLatex({
       questionScoreByQuestionId,
       includeQuickAnswer,
       includeExplanation: renderConfig?.includeExplanation === true,
+      explanationCardOnly: renderConfig?.explanationCardOnly === true,
+      omitQuestionBody,
       titlePageIndices,
       titlePageHeaders,
       columnLabelAnchors: Array.isArray(renderConfig?.columnLabelAnchors)
@@ -1117,6 +1131,7 @@ export async function renderPdfWithXeLatex({
     const isReviewPdf =
       renderConfig?.reviewPdf === true || renderConfig?.review_pdf === true;
     const shouldMeasureSlots =
+      !omitQuestionBody &&
       !slotMeasureDisabled &&
       (isMockProfile || renderConfig?.singleQuestionContentPage === true) &&
       cols >= 2 &&
@@ -1127,6 +1142,7 @@ export async function renderPdfWithXeLatex({
     //   shouldMeasureSlots 가 꺼지는 경우가 많다. 그 경우에도 한 단을 넘는
     //   종속형은 [소문항N] 경계에서 잘라야 한다.
     const shouldSplitDependentSets =
+      !omitQuestionBody &&
       !slotMeasureDisabled &&
       cols >= 2 &&
       !isReviewPdf &&

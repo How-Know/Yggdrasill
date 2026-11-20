@@ -407,7 +407,7 @@ Cursor에게 셸 명령은 주지 않는다. Cursor 결과로 결정·기억이 
 
 ## 13. 개념 탭 대화 (2026-10-15)
 
-매니저앱 "개념" 메뉴 오른쪽 패널에서 Think의 **기존 대화**를 이어 가며 개념을 함께 정리한다. 같은 대화라서 그 대화에서 정한
+매니저앱 "개념" 메뉴에서 Think의 **기존 대화**를 이어 가며 개념을 함께 정리한다. 화면에서는 오른쪽 아래 버튼으로 펼치고, 접으면 흐름·라이브러리가 폭을 모두 쓴다(배치: `concept-library.md` §2.3). 같은 대화라서 그 대화에서 정한
 기준·기억·부서 관점이 그대로 이어진다. 개념서 읽고 정리하기의 첫 단계로, 운영자가 Preview 없이 실제 화면에 바로 넣기로 했다(첨부 포함).
 앱 코드: `services/think/think_concept_chat_controller.dart`, `screens/curriculum/widgets/concept_chat_panel.dart`.
 

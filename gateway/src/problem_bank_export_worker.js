@@ -21,6 +21,7 @@ import { RegisterHTMLHandler } from 'mathjax-full/js/handlers/html.js';
 import { renderPdfWithHtmlEngine } from './problem_bank/render_engine/index.js';
 import { renderHtmlToImageBuffer } from './problem_bank/render_engine/chrome/render_pdf.js';
 import { resolveFigureLayout, figureLayoutToWidthPt } from './problem_bank/render_engine/utils/figure_layout.js';
+import { recoverMangledLatexNewlineCommands } from './problem_bank/render_engine/utils/text.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -2706,6 +2707,10 @@ function buildRenderConfigFromJob(job) {
     paperSize: normalizePaper(job.paper_size),
     includeAnswerSheet: job.include_answer_sheet === true,
     includeExplanation: job.include_explanation === true,
+    omitQuestionBody: normalizeBool(
+      options.omitQuestionBody ?? options.omit_question_body,
+      false,
+    ),
     includeQuestionScore,
     includeAcademyLogo,
     questionScoreByQuestionUid,
@@ -2820,6 +2825,7 @@ function computeRenderHash(renderConfig) {
       renderConfig.previewIndependentSetCommonStem === true,
     disableIndependentSetGrouping:
       renderConfig.disableIndependentSetGrouping === true,
+    ...(renderConfig.omitQuestionBody === true ? { omitQuestionBody: true } : {}),
   };
   const canonical = JSON.stringify(canonicalizeJson(payload));
   return createHash('sha256').update(canonical).digest('hex');
@@ -2846,8 +2852,12 @@ function normalizeChoiceRows(rawChoices) {
   const out = [];
   for (let i = 0; i < rows.length; i += 1) {
     const item = rows[i] || {};
+    // 공백 정리가 LF 를 지우기 전에, JSON 에서 `\n` 이 LF 로 깨진 `\notin`/`\neq` 등을
+    // 먼저 되살린다. 순서가 바뀌면 "2 otin B" 로 굳어 렌더러도 복구하지 못한다.
     const text = normalizeWhitespace(
-      String(item.text ?? item.value ?? item.choice ?? ''),
+      recoverMangledLatexNewlineCommands(
+        String(item.text ?? item.value ?? item.choice ?? ''),
+      ),
     );
     if (!text) continue;
     const label = normalizeWhitespace(String(item.label ?? '')) || choiceLabelByIndex(i);
@@ -2859,7 +2869,9 @@ function normalizeChoiceRows(rawChoices) {
 
 function sanitizeAnswerText(value) {
   return normalizeWhitespace(
-    String(value || '').replace(/^\[?\s*\uC815\uB2F5\s*\]?\s*[:\uFF1A]?\s*/i, ''),
+    recoverMangledLatexNewlineCommands(
+      String(value || '').replace(/^\[?\s*\uC815\uB2F5\s*\]?\s*[:\uFF1A]?\s*/i, ''),
+    ),
   );
 }
 

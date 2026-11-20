@@ -1,6 +1,9 @@
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:yggdrasill_manager/screens/curriculum/widgets/course_map_pane.dart';
+import 'package:yggdrasill_manager/screens/think/think_style.dart';
 import 'package:yggdrasill_manager/services/course_map_controller.dart';
 import 'package:yggdrasill_manager/services/course_map_service.dart';
 
@@ -24,11 +27,11 @@ const _units = [
   return (b, id, CourseMapController.forTest(b, newId: () => 'n${++n}'));
 }
 
-Future<void> _pump(WidgetTester tester, Widget child, {double width = 1200}) async {
-  await tester.binding.setSurfaceSize(Size(width, 860));
+Future<void> _pump(WidgetTester tester, Widget child, {double width = 1200, double height = 820}) async {
+  await tester.binding.setSurfaceSize(Size(width, height + 40));
   addTearDown(() => tester.binding.setSurfaceSize(null));
   await tester.pumpWidget(MaterialApp(
-    home: Scaffold(body: SizedBox(width: width, height: 820, child: child)),
+    home: Scaffold(body: SizedBox(width: width, height: height, child: child)),
   ));
   await tester.pump();
   await tester.pump();
@@ -134,7 +137,9 @@ void main() {
     await tester.tap(find.text('저장'));
     await tester.pumpAndSettle();
     expect(b.isArchived(ops), isTrue);
-    final side = find.ancestor(of: find.text('과정 정보'), matching: find.byType(Scrollable)).first;
+    final side = find
+        .descendant(of: find.byKey(const ValueKey('course-side-list')), matching: find.byType(Scrollable))
+        .first;
     await tester.scrollUntilVisible(find.textContaining('함께 보관 3개'), 200, scrollable: side);
     expect(find.text('보관한 단원 (1)'), findsOneWidget);
     expect(find.text('되살리기'), findsOneWidget);
@@ -214,9 +219,19 @@ void main() {
     expect(find.descendant(of: find.byKey(ValueKey('unit-concepts-$add')), matching: find.text('1')), findsOneWidget);
     await tester.tap(find.byKey(ValueKey('course-unit-$add')));
     await tester.pump();
-    expect(find.text('이 단원의 개념 (1)'), findsOneWidget);
+    expect(find.text('이 단원의 개념 (1)'), findsNothing);
+    expect(find.byKey(const ValueKey('placement-add')), findsOneWidget);
+    expect(find.text('개념 추가'), findsOneWidget);
+    expect(find.text('소단원 추가'), findsOneWidget);
+    expect(find.textContaining('뒤에'), findsNothing);
+    expect(find.textContaining('위로·아래로는'), findsNothing);
+    expect(find.textContaining('넣은 개념은'), findsNothing);
+    expect(tester.getTopLeft(find.byKey(const ValueKey('placement-add'))).dy,
+        lessThan(tester.getTopLeft(find.text('아래로')).dy));
+    await tester.tap(find.byKey(ValueKey('unit-concepts-$add')));
+    await tester.pump();
     expect(find.text('다항식의 덧셈'), findsOneWidget);
-    expect(find.text('Think 배치'), findsOneWidget);
+    expect(find.descendant(of: find.byKey(ValueKey('outline-concept-$p1')), matching: find.text('Think')), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('placement-add')));
     await tester.pumpAndSettle();
@@ -235,10 +250,10 @@ void main() {
     await tester.pumpAndSettle();
     expect(b.namesIn(add), ['다항식의 덧셈', '다항식의 뺄셈']);
     expect(find.text('개념 1개를 넣었습니다.'), findsOneWidget);
-    expect(find.text('이 단원의 개념 (2)'), findsOneWidget);
+    expect(find.byKey(ValueKey('outline-concept-$p1')), findsOneWidget);
     expect(find.text('저장 안 한 변경 1곳'), findsNothing, reason: '배치는 탐색도 저장과 따로 바로 저장된다');
 
-    await tester.tap(find.descendant(of: find.byKey(ValueKey('placement-$p1')), matching: find.byIcon(Icons.more_horiz)));
+    await tester.tap(find.byKey(ValueKey('outline-concept-menu-$p1')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('이 단원에서 빼기').last);
     await tester.pumpAndSettle();
@@ -246,7 +261,7 @@ void main() {
     await tester.tap(find.widgetWithText(ElevatedButton, '빼기'));
     await tester.pumpAndSettle();
     expect(b.namesIn(add), ['다항식의 뺄셈']);
-    expect(find.text('이 단원의 개념 (1)'), findsOneWidget);
+    expect(find.byKey(ValueKey('outline-concept-$p1')), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
@@ -261,8 +276,10 @@ void main() {
     await _pump(tester, CourseMapPane(controller: c));
     await tester.tap(find.byKey(ValueKey('course-unit-$add')));
     await tester.pump();
+    await tester.tap(find.byKey(ValueKey('unit-concepts-$add')));
+    await tester.pump();
 
-    await tester.tap(find.descendant(of: find.byKey(ValueKey('placement-$p1')), matching: find.byIcon(Icons.more_horiz)));
+    await tester.tap(find.byKey(ValueKey('outline-concept-menu-$p1')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('다른 단원으로 옮기기'));
     await tester.pumpAndSettle();
@@ -280,7 +297,7 @@ void main() {
     expect(b.namesIn(add), isEmpty);
     expect(b.namesIn(identity), ['다항식의 덧셈']);
     expect(find.textContaining('단원으로 옮겼습니다'), findsOneWidget);
-    expect(find.text('이 단원의 개념 (0)'), findsOneWidget);
+    expect(find.byKey(ValueKey('outline-concept-$p1')), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
@@ -302,8 +319,10 @@ void main() {
     await tester.tap(find.text('다시 읽기'));
     await tester.pump();
     await tester.pump();
+    await tester.tap(find.byKey(ValueKey('unit-concepts-$add')));
+    await tester.pump();
     expect(find.text('다항식의 덧셈'), findsOneWidget);
-    expect(find.text('이 단원의 개념 (1)'), findsOneWidget);
+    expect(find.byKey(ValueKey('outline-concept-${c.placementsIn(id, add).single.id}')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -360,6 +379,138 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('고른 개념 줄만 단원과 같은 강조를 받는다', (tester) async {
+    final (b, id, c) = _setup();
+    final add = b.unitId(id, '덧셈과 뺄셈');
+    final k1 = b.addConcept('다항식의 덧셈');
+    final p1 = b.place(add, k1);
+    final p2 = b.place(add, b.addConcept('다항식의 뺄셈'));
+    final selected = ValueNotifier<String?>(null);
+    addTearDown(selected.dispose);
+
+    BoxDecoration fill(String placementId) {
+      final box = find.byKey(ValueKey('outline-concept-fill-$placementId'));
+      return tester.widget<Container>(box).decoration! as BoxDecoration;
+    }
+
+    await _pump(
+      tester,
+      CourseMapSummaryPane(
+        controller: c,
+        selectedConceptId: selected,
+        onOpenConcept: (conceptId) => selected.value = conceptId,
+      ),
+      width: 420,
+    );
+
+    await tester.tap(find.byKey(ValueKey('course-unit-$add')));
+    await tester.pump();
+    expect(fill(p1).color, Colors.transparent);
+    expect(fill(p2).color, Colors.transparent);
+
+    await tester.tap(find.text('다항식의 덧셈'));
+    await tester.pump();
+    expect(fill(p1).color, kThinkAccent.withValues(alpha: 0.16));
+    expect((fill(p1).border! as Border).top.color, kThinkAccent.withValues(alpha: 0.6));
+    expect(fill(p2).color, Colors.transparent);
+
+    selected.value = null;
+    await tester.pump();
+    expect(fill(p1).color, Colors.transparent);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('정의·표현은 제자리이고 그 밖 유형만 한 칸 더 들어간다', (tester) async {
+    final (b, id, c) = _setup();
+    final add = b.unitId(id, '덧셈과 뺄셈');
+    final def = b.place(add, b.addConcept('다항식'), type: '정의');
+    final expr = b.place(add, b.addConcept('전개'), type: '표현');
+    final prop = b.place(add, b.addConcept('인수분해'), type: '성질');
+    final none = b.place(add, b.addConcept('미정'), type: '');
+    await _pump(tester, CourseMapSummaryPane(controller: c), width: 420);
+
+    double left(String placementId) =>
+        (tester.widget<Container>(find.byKey(ValueKey('outline-concept-fill-$placementId'))).padding! as EdgeInsets)
+            .left;
+
+    await tester.tap(find.byKey(ValueKey('course-unit-$add')));
+    await tester.pump();
+    final base = left(def);
+    expect(left(expr), base);
+    expect(left(prop), base + 16);
+    expect(left(none), base + 16);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('개념 줄은 오래 눌러 끌어 순서를 바꾸고, Think 칩을 누르면 확인으로 걷힌다', (tester) async {
+    final (b, id, c) = _setup();
+    final add = b.unitId(id, '덧셈과 뺄셈');
+    final p1 = b.place(add, b.addConcept('첫째'), origin: 'ai', note: '교재 근거');
+    final p2 = b.place(add, b.addConcept('둘째'));
+    await _pump(tester, CourseMapPane(controller: c), height: 1400);
+
+    await tester.tap(find.byKey(ValueKey('course-unit-$add')));
+    await tester.pump();
+    await tester.tap(find.byKey(ValueKey('unit-concepts-$add')));
+    await tester.pump();
+    expect(find.descendant(of: find.byKey(ValueKey('outline-concept-$p1')), matching: find.text('Think')), findsOneWidget);
+    expect(b.namesIn(add), ['첫째', '둘째']);
+
+    final start = tester.getCenter(find.byKey(ValueKey('outline-concept-$p1')));
+    final second = find.byKey(ValueKey('outline-concept-$p2'));
+    final next = tester.getCenter(second);
+    final secondTop = tester.getTopLeft(second).dy;
+    final drag = await tester.startGesture(start);
+    await tester.pump();
+    await tester.pump(kLongPressTimeout);
+    expect(tester.takeException(), isNull);
+    expect(find.byType(Opacity), findsWidgets, reason: '오래 누르면 드래그가 시작된다');
+    await drag.moveTo(next);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.byKey(const ValueKey('concept-drop-gap')), findsOneWidget);
+    expect(tester.getTopLeft(second).dy, secondTop, reason: '빈 칸은 대상 뒤에 열려 대상 줄은 제자리에 남는다');
+    await drag.up();
+    await tester.pumpAndSettle();
+    expect(b.namesIn(add), ['둘째', '첫째']);
+
+    await tester.tap(find.byKey(ValueKey('outline-think-$p1')));
+    await tester.pumpAndSettle();
+    expect(find.descendant(of: find.byKey(ValueKey('outline-concept-$p1')), matching: find.text('Think')), findsNothing);
+    expect(find.text('확인했습니다.'), findsOneWidget);
+    final row = c.placementsIn(id, add).singleWhere((p) => p.id == p1);
+    expect(row.byThink, isFalse);
+    expect(row.note, isNull);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('흐름의 Think 칩을 눌러도 그 배치를 확인한다', (tester) async {
+    final (b, id, c) = _setup();
+    final add = b.unitId(id, '덧셈과 뺄셈');
+    final p1 = b.place(add, b.addConcept('다항식의 덧셈'), origin: 'ai', note: '교재 근거');
+    await _pump(tester, CourseMapSummaryPane(controller: c), width: 420);
+
+    await tester.tap(find.byKey(ValueKey('course-unit-$add')));
+    await tester.pump();
+    await tester.tap(find.byKey(ValueKey('outline-think-$p1')));
+    await tester.pumpAndSettle();
+    expect(find.text('Think'), findsNothing);
+    expect(c.placementsIn(id, add).single.byThink, isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('옆 칸에 넘긴 내용은 선택한 단원보다 위에 둔다', (tester) async {
+    final (_, _, c) = _setup();
+    await _pump(tester, CourseMapPane(
+      controller: c,
+      aboveSelection: const Text('고른 개념'),
+    ));
+
+    expect(find.text('고른 개념'), findsOneWidget);
+    expect(tester.getTopLeft(find.text('고른 개념')).dy, lessThan(tester.getTopLeft(find.text('선택한 단원')).dy));
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('크게 보기에서는 단원을 눌러도 옆 칸만 열고, 개념 수를 누르거나 개념 펼치기로 줄을 펼친다', (tester) async {
     final (b, id, c) = _setup();
     final add = b.unitId(id, '덧셈과 뺄셈');
@@ -373,8 +524,8 @@ void main() {
         findsOneWidget);
     await tester.tap(find.byKey(ValueKey('course-unit-$add')));
     await tester.pump();
-    expect(find.text('이 단원의 개념 (1)'), findsOneWidget);
-    expect(find.byKey(ValueKey('outline-concept-$p1')), findsNothing, reason: '편집은 옆 칸에서 한다');
+    expect(find.byKey(const ValueKey('placement-add')), findsOneWidget);
+    expect(find.byKey(ValueKey('outline-concept-$p1')), findsNothing, reason: '단원을 눌러도 개념 줄은 접혀 있다');
 
     await tester.tap(find.byKey(ValueKey('unit-concepts-$add')));
     await tester.pump();
@@ -484,4 +635,24 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   });
+
+  testWidgets('개념 라이브러리 탭은 과정 관리 왼쪽이고, 연결하지 않으면 보이지 않는다', (tester) async {
+      final (_, _, c) = _setup();
+      var opened = 0;
+      await _pump(tester, CourseMapPane(controller: c, onShowLibrary: () => opened++));
+      final tab = find.byKey(const ValueKey('course-show-library'));
+      final menu = find.byTooltip('과정 관리');
+      expect(tab, findsOneWidget);
+      expect(find.text('개념 라이브러리'), findsOneWidget);
+      expect(menu, findsOneWidget);
+      expect(tester.getTopLeft(tab).dx, lessThan(tester.getTopLeft(menu).dx));
+      await tester.tap(tab);
+      await tester.pump();
+      expect(opened, 1);
+
+      await _pump(tester, CourseMapPane(controller: c));
+      expect(find.byKey(const ValueKey('course-show-library')), findsNothing);
+      expect(find.byTooltip('과정 관리'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
 }

@@ -63,6 +63,18 @@ test('quick-answer table renders gray Pretendard number cells, fixed fraction-re
   assert.match(tex, /\\fancyfoot\[RE\].*2026학년도 대학수학능력시험 문제지/);
 });
 
+test('한글이 섞인 정답도 명령으로 시작하는 식은 수식으로 조판한다', () => {
+  const tex = buildDocumentTexSource([
+    makeQuestion(22, '\\triangle AGC\\equiv \\triangle HBC (SAS합동)', '풀이'),
+  ], {
+    includeQuickAnswer: true,
+    includeExplanation: true,
+  });
+  assert.match(tex, /\$\\textstyle \\triangle AGC\\equiv \\triangle HBC\$/);
+  assert.match(tex, /\(SAS합동\)/);
+  assert.doesNotMatch(tex, /textbackslash\{\}triangle/);
+});
+
 test('quick-answer top text can be overridden via coverPageTexts.quickAnswerTopText', () => {
   const tex = buildDocumentTexSource([
     makeQuestion(1, 'x = 1'),

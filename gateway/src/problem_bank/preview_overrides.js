@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 // 교재 검수의 반영 대기 값(확정 전 수정안)을 문제은행 문항 행에 덮어 V2 카드를 찍는다. DB 는 바꾸지 않는다.
-// override 키: stem, choices, common_stem, figure_assets, figure_layout, common_figure_layout, question_type,
+// override 키: stem, choices, blank_choice_labels, common_stem, figure_assets, figure_layout, common_figure_layout, question_type,
 // allow_objective, allow_subjective
 export function applyQuestionOverride(row, override) {
   if (!row || !override || typeof override !== "object") return row;
@@ -26,6 +26,11 @@ export function applyQuestionOverride(row, override) {
   }
   if (override.figure_layout && typeof override.figure_layout === "object") {
     meta.figure_layout = override.figure_layout;
+  }
+  // 표 모양 선지의 제목 행(2~4개)
+  if (Array.isArray(override.blank_choice_labels)) {
+    const labels = override.blank_choice_labels.map((v) => String(v ?? "").trim()).filter(Boolean);
+    if (labels.length >= 2 && labels.length <= 4) meta.blank_choice_labels = labels;
   }
   const hasCommonStem = typeof override.common_stem === "string";
   const hasCommonLayout = override.common_figure_layout && typeof override.common_figure_layout === "object";

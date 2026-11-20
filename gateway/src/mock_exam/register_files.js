@@ -5,6 +5,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { mockCurriculumCode } from './mock_courses.js';
+
 const FILE_RE =
   /^(\d{4})\s*고\s*([123])\s*(\d{1,2})\s*월\s*(교육청|평가원|수능)\s*(?:\(\s*(확통|확률과\s*통계|미적분?|기하)\s*\))?\s*(?:[-_]\s*(해설))?\s*$/;
 const ORG = { 교육청: 'edu', 평가원: 'kice', 수능: 'csat' };
@@ -180,6 +182,7 @@ export async function registerMockPdfs(supa, academyId, parsed, { queue = false,
           exam_month: head.month,
           org: head.org,
           title,
+          curriculum_code: mockCurriculumCode(head.grade, head.examYear),
         },
         { onConflict: 'academy_id,grade,exam_year,exam_month,org' },
       )

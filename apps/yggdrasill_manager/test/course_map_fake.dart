@@ -40,7 +40,7 @@ class _FakeUnit {
 }
 
 class _FakePlacement {
-  _FakePlacement(this.id, this.unitId, this.conceptId, this.sort, this.origin, this.note);
+  _FakePlacement(this.id, this.unitId, this.conceptId, this.sort, this.origin, this.note, this.type);
 
   final String id;
   String unitId;
@@ -48,6 +48,7 @@ class _FakePlacement {
   int sort;
   String origin;
   String? note;
+  String? type;
 }
 
 /// 서버 RPC(`course_map_*`)와 같은 규칙으로 움직이는 메모리 저장소.
@@ -130,9 +131,9 @@ class FakeCourseMapBackend implements CourseMapBackend {
   }
 
   /// 시험 준비용으로 바로 놓는다.
-  String place(String unitId, String conceptId, {String origin = 'owner', String? note}) {
+  String place(String unitId, String conceptId, {String origin = 'owner', String? note, String? type}) {
     final id = _id('p');
-    _placements[id] = _FakePlacement(id, unitId, conceptId, _inUnit(unitId).length, origin, note);
+    _placements[id] = _FakePlacement(id, unitId, conceptId, _inUnit(unitId).length, origin, note, type);
     return id;
   }
 
@@ -160,7 +161,7 @@ class FakeCourseMapBackend implements CourseMapBackend {
           'sort': p.sort,
           'origin': p.origin,
           'note': p.note,
-          'type': '정의',
+          'type': p.type ?? '정의',
           'sources': 0,
         }));
       }
@@ -493,6 +494,17 @@ class FakeCourseMapBackend implements CourseMapBackend {
     for (var i = 0; i < ids.length; i++) {
       _placements[ids[i]]!.sort = i;
     }
+    return _placementList(u.courseId);
+  }
+
+  @override
+  Future<List<CourseMapPlacement>> acceptPlacement(String placementId) async {
+    writes += 1;
+    final p = _placementRow(placementId);
+    final u = _activeUnit(p.unitId);
+    p
+      ..origin = 'owner'
+      ..note = null;
     return _placementList(u.courseId);
   }
 

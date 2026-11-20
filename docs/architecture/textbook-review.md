@@ -460,6 +460,32 @@ Textbook errors the owner handles (owner decision 2026-11-16):
   the problem bank's manual figure upload) and adjusts width and position
   there. Staged figures with source `owner` are not re-cropped by the fix
   stage (`ownerStagedFigures`) and the staging RPC skips AI writes to them.
+- 보기 box in two columns (owner decision 2026-11-18): when every `[그림]` of
+  the stem is inside the 보기 box, there are two or more, and two consecutive
+  measured figures sit side by side in the original (`bogiFigureColumns`), the
+  fix stage proposes `figure_layout.bogiColumns = 2`. The engine lays the box
+  out in two columns for that flag, the same as the problem bank's
+  `meta.bogi_box_columns = 2`. The flag travels inside `figure_layout`, so no
+  new staged key exists; `figureLayoutSignature` includes it.
+- Figure inside a text line (2026-11-18): when the fix stage measures a figure
+  as `inline` (a small shape inside a sentence), the layout item gets
+  `position: inline-text` with `heightEm` from the measured height
+  (`inlineFigureHeightEm`), not `below-stem`. The V2 engine already had this
+  position ("글 줄 안" in the figure editor); `renderStandaloneMathEnvironmentBlock`
+  must not touch figure markers of lines that are not an aligned block, or the
+  inline figure is consumed and later figures shift by one.
+- Concept candidates by unit (owner decision 2026-11-18): the unit match is
+  decided only by concept-book units (`concept_sources`). A concept created in
+  review whose stored unit name happens to match (school exams share titles
+  such as "2024 2학년 2학기 기말") does not make a unit match; without a
+  concept-book match the whole grade is the candidate list.
+- Other-semester retry (owner decision 2026-11-18): when the candidate scope
+  is `grade` (no concept-book unit match, e.g. school exams) and the model
+  picked neither a concept nor a new-concept draft for an item, the meta
+  action picks once more for those items with the other semester of the same
+  grade (`otherSemesterGrade`, 2-2 → 2-1). A second-semester final often
+  includes first-semester content. Labels without a semester (공통수학2) are
+  not retried. The retry is logged as its own `ai_runs` row.
 - Tables with figures in their cells (owner decision 2026-11-17): the render
   engine cannot draw `[그림]` inside a `tabular` cell, so such a table is cut
   from the original as one figure. The fix stage asks the model for the whole
@@ -503,11 +529,37 @@ Textbook errors the owner handles (owner decision 2026-11-16):
   (`정사면체, 정삼각형, 4`). The fix stage reads that meta, sends `blank_choice_labels` to the model, and
   converts a choice written as a one-row `array`/`tabular` to the comma form (`blankChoicesFromArrays`),
   also when the stored choices already have that shape. The header row is not part of the stem.
+  Header row as a staged value (2026-11-18): the fix stage may return `corrected_blank_choice_labels`
+  (same count and order; kept only when the rendered text differs, `normalizeBlankChoiceLabelsFix`), stored
+  as `fix_proposal.blank_choice_labels` and staged under the key `blank_choice_labels`
+  (`textbook_review_stage_changes`). The current header is the staged value over the problem bank value
+  (`currentBlankChoiceLabels`). The app sends the staged header to the gateway as
+  `questionOverrides.blank_choice_labels`; confirm writes `pb_questions.meta.blank_choice_labels`
+  (`textbook_review_apply_staged`). Engine: a header label containing LaTeX is typeset as math, each data
+  column starts at its base width and is widened by TeX to the widest cell of that column (limit: the
+  remaining line width divided by the column count), and rows with a fraction get a taller strut.
+  Extraction keeps the braces of a math command in a header (`\overline{DC}`, not `\overlineDC`).
+- Image choices (2026-11-18, owner decision): for a question whose choices ①~⑤ are all figures, the row
+  arrangement (2 rows ①②③/④⑤ or 3 rows ①②/③④/⑤) is the user's setting and the figure size follows it.
+  The render check gets `image_choices: true` and does not treat a different arrangement or choice-figure
+  size as an issue; when the only figures are the choice figures, `figure_position_ok` is true and
+  `figure_size_ratio` is null (`pbQuestionFiguresAreChoicesOnly`). A missing choice figure, a wrong
+  number–figure pairing, or an unreadable figure is still an issue.
 - Problem number inside a figure crop (2026-11-17): when the fix stage crops a figure from the original
   and the crop region overlaps the problem number box (`textbook_problem_crops.bbox_1k`, accepted only
   when it is number-sized and inside the item region), the overlapping part of the PNG is painted white
   before upload (`whiteOutProblemNumber`; the asset gets `number_masked: true`). The crop region itself is
   not changed. Set-header figures are not masked.
+- Answer/solution review card uses the PDF solution-sheet layout (owner decision 2026-11-17): a text answer
+  is rendered through `/pb/preview/custom-thumbnail` with `cardKind: 'explanation'`
+  (`renderExplanationCardThumbnail`; engine option `explanationCardOnly`), i.e. the same
+  `explanationEntry` typesetting as the student PDF 해설지: one column of the two-column A4 sheet,
+  10pt, and line breaks allowed at operators, so a long equation wraps instead of being cut. Image
+  answers still use the old question-card path. The learning app's in-app "해설" button is a different
+  renderer and is not what this card shows. An answer that mixes Korean with a formula is still math
+  where the formula starts with a command (`\triangle AGC\equiv \triangle HBC (SAS합동)`, 2026-11-18):
+  `formatAnswerSegmentTextMode` keeps the parenthetical Korean as text and wraps the command run in math.
+  The same formatter feeds the quick-answer table.
 - Review rounds retry a failed chunk once and report problems that ended
   without an AI solution, instead of moving on silently.
 - Problem body the printed original gets wrong (owner decision 2026-11-17):

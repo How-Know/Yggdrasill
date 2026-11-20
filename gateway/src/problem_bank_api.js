@@ -18,6 +18,11 @@ import { generateObjectiveDraftForQuestion } from "./problem_bank_extract_worker
 import { syncMiddleSchoolPresetForDocument } from "./problem_bank/naesin_preset.js";
 import { readExamLayout } from "./problem_bank/school_exam/layout.js";
 import { prepareExamReview } from "./problem_bank/school_exam/review_staging.js";
+import {
+  prepareMockReview,
+  prepareMockReviewIdentity,
+  publishMockReview,
+} from "./mock_exam/review_staging.js";
 import { applyQuestionOverride, overridePreviewKey } from "./problem_bank/preview_overrides.js";
 import {
   createConceptPageStore,
@@ -607,8 +612,8 @@ function normalizeCoverPageTexts(raw, defaults = {}) {
     const item =
       defaultElectiveItemsSrc[index] &&
       typeof defaultElectiveItemsSrc[index] === "object"
-        ? defaultElectiveItemsSrc[index]
-        : {};
+      ? defaultElectiveItemsSrc[index]
+      : {};
     const fallbackName =
       index === 0 ? "확률과 통계" : index === 1 ? "미적분" : "기하";
     const fallbackPages =
@@ -672,8 +677,8 @@ function normalizeCoverPageTexts(raw, defaults = {}) {
       .map((group, index) => {
         const fallbackLabel =
           normalizeWhitespace(
-            fallbackGroups[index]?.label || `대분류 ${index + 1}`,
-          ) || `대분류 ${index + 1}`;
+          fallbackGroups[index]?.label || `대분류 ${index + 1}`,
+        ) || `대분류 ${index + 1}`;
         return {
           label: normalizeWhitespace(group.label || "") || fallbackLabel,
           pageRange: normalizeWhitespace(group.pageRange || group.pages || ""),
@@ -820,8 +825,8 @@ function normalizeColumnLabelAnchors(raw, layoutColumns) {
     const parsedRowIndex = Number.parseInt(String(one.rowIndex ?? ""), 10);
     const rowIndex =
       Number.isFinite(parsedRowIndex) && parsedRowIndex >= 0
-        ? parsedRowIndex
-        : 0;
+      ? parsedRowIndex
+      : 0;
     const label = String(one.label || one.text || "")
       .replace(/\s+/g, " ")
       .trim();
@@ -967,8 +972,8 @@ function normalizeSelectedQuestionIdsOrdered(raw, fallbackSelectedIds) {
 function normalizeLayoutTuning(rawLayoutTuning, options = {}) {
   const src =
     rawLayoutTuning && typeof rawLayoutTuning === "object"
-      ? rawLayoutTuning
-      : {};
+    ? rawLayoutTuning
+    : {};
   return {
     pageMargin: normalizeNumeric(
       src.pageMargin ?? options.pageMargin,
@@ -1014,8 +1019,8 @@ function normalizeLayoutTuning(rawLayoutTuning, options = {}) {
 function normalizeFigureQuality(rawFigureQuality, options = {}) {
   const src =
     rawFigureQuality && typeof rawFigureQuality === "object"
-      ? rawFigureQuality
-      : {};
+    ? rawFigureQuality
+    : {};
   const targetDpi = Math.round(
     normalizeNumeric(src.targetDpi ?? options.targetDpi, 450, 300, 1200),
   );
@@ -1156,7 +1161,7 @@ function normalizeExportRenderConfig(
         DEFAULT_TITLE_PAGE_TOP_TEXT,
     )
       .replace(/\s+/g, " ")
-      .trim() || DEFAULT_TITLE_PAGE_TOP_TEXT;
+    .trim() || DEFAULT_TITLE_PAGE_TOP_TEXT;
   const titlePageGoalText =
     String(
       src.titlePageGoalText ||
@@ -1807,6 +1812,100 @@ async function handleExamReviewPrepare(body, res) {
   sendJson(res, 200, result);
 }
 
+// 모의고사 한 구간(공통·선택과목)을 교재 검수 테이블에 올린다.
+//   examId + identityOnly: 회차의 구간마다 검수 범위(구간 문서·책 행)를 만들어 돌려준다.
+//   documentId: 그 구간을 올린다. 추출이 끝나지 않았으면 state 'waiting' 으로 답한다.
+async function handleMockReviewPrepare(body, res) {
+  const academyId = String(body?.academyId || body?.academy_id || "").trim();
+  const identityOnly = body?.identityOnly === true;
+  const targetId = String(
+    identityOnly
+      ? body?.examId || body?.exam_id || ""
+      : body?.documentId || body?.document_id || "",
+  ).trim();
+  if (!isUuid(academyId) || !isUuid(targetId)) {
+    sendJson(res, 400, {
+      ok: false,
+      error: identityOnly
+        ? "academyId/examId must be uuid"
+        : "academyId/documentId must be uuid",
+    });
+    return;
+  }
+  const log = (event, payload) => {
+    try {
+      console.log(`[pb-api] ${event}`, JSON.stringify(payload));
+    } catch (_) {
+      // 로그 실패는 무시한다.
+    }
+  };
+  const result = identityOnly
+    ? await prepareMockReviewIdentity({ supa, academyId, examId: targetId, log })
+    : await prepareMockReview({
+        supa,
+        academyId,
+        documentId: targetId,
+        allowExtract: body?.allowExtract === true,
+        refreshAnswers: body?.refreshAnswers === true,
+        log,
+        loadPaperPdf: async (paper) => {
+          const bucket = String(
+            paper.storage_bucket || "problem-documents",
+          ).trim();
+          const { data, error } = await supa.storage
+            .from(bucket)
+            .download(String(paper.storage_path || "").trim());
+          if (error || !data) {
+            throw new Error(
+              `mock_review_pdf_download_failed:${error?.message || "empty"}`,
+            );
+          }
+          return Buffer.from(await data.arrayBuffer());
+        },
+      });
+  if (!result.ok) {
+    sendJson(res, result.status || 400, {
+      ok: false,
+      error: result.error,
+      message: result.message || "",
+    });
+    return;
+  }
+  sendJson(res, 200, result);
+}
+
+// 검수에서 확정한 모의고사 구간을 공개한다(문항 공개 + 학습앱 모의고사 프리셋).
+async function handleMockReviewPublish(body, res) {
+  const academyId = String(body?.academyId || body?.academy_id || "").trim();
+  const documentId = String(
+    body?.documentId || body?.document_id || "",
+  ).trim();
+  if (!isUuid(academyId) || !isUuid(documentId)) {
+    sendJson(res, 400, {
+      ok: false,
+      error: "academyId/documentId must be uuid",
+    });
+    return;
+  }
+  const result = await publishMockReview({
+    supa,
+    academyId,
+    documentId,
+    log: (event, payload) => {
+      try {
+        console.log(`[pb-api] ${event}`, JSON.stringify(payload));
+      } catch (_) {
+        // 로그 실패는 무시한다.
+      }
+    },
+  });
+  if (!result.ok) {
+    sendJson(res, result.status || 400, { ok: false, error: result.error });
+    return;
+  }
+  sendJson(res, 200, result);
+}
+
 async function createExtractJob(body, res) {
   const academyId = String(body.academyId || "").trim();
   const documentId = String(body.documentId || "").trim();
@@ -1886,12 +1985,12 @@ async function createExtractJob(body, res) {
   }
   const initialSummary =
     targetQuestionIds.length > 0
-      ? {
-          partialReextract: true,
-          targetQuestionCount: targetQuestionIds.length,
-          targetQuestionIds,
-        }
-      : {};
+    ? {
+        partialReextract: true,
+        targetQuestionCount: targetQuestionIds.length,
+        targetQuestionIds,
+      }
+    : {};
 
   const { data: job, error: insertErr } = await supa
     .from("pb_extract_jobs")
@@ -2051,12 +2150,12 @@ async function retryExtractJob(jobId, body, res) {
     : [];
   const retrySummary =
     preservedTargetIds.length > 0
-      ? {
-          partialReextract: true,
-          targetQuestionCount: preservedTargetIds.length,
-          targetQuestionIds: preservedTargetIds,
-        }
-      : {};
+    ? {
+        partialReextract: true,
+        targetQuestionCount: preservedTargetIds.length,
+        targetQuestionIds: preservedTargetIds,
+      }
+    : {};
   const { data: updated, error: updErr } = await supa
     .from("pb_extract_jobs")
     .update({
@@ -2519,16 +2618,16 @@ async function createExportJob(body, res) {
     {
       questionMode:
         rawOptions.questionMode || rawOptions.question_mode || rawOptions.mode,
-      layoutColumns:
-        rawOptions.layoutColumns ||
-        rawOptions.layout_columns ||
-        rawOptions.columnCount ||
-        rawOptions.columns,
-      maxQuestionsPerPage:
-        rawOptions.maxQuestionsPerPage ||
-        rawOptions.max_questions_per_page ||
-        rawOptions.perPage ||
-        rawOptions.questionsPerPage,
+    layoutColumns:
+      rawOptions.layoutColumns ||
+      rawOptions.layout_columns ||
+      rawOptions.columnCount ||
+      rawOptions.columns,
+    maxQuestionsPerPage:
+      rawOptions.maxQuestionsPerPage ||
+      rawOptions.max_questions_per_page ||
+      rawOptions.perPage ||
+      rawOptions.questionsPerPage,
     },
   );
 
@@ -2570,6 +2669,12 @@ async function createExportJob(body, res) {
     mathEngine: renderConfig.mathEngine,
     ...(renderConfig.naesinLinkKey
       ? { naesinOriginalModePolicyVersion: 1 }
+      : {}),
+    ...(normalizeBool(
+      rawOptions.omitQuestionBody ?? rawOptions.omit_question_body,
+      false,
+    )
+      ? { omitQuestionBody: true }
       : {}),
   };
   const renderHash = computeRenderHash(renderHashPayload);
@@ -2615,9 +2720,22 @@ async function createExportJob(body, res) {
     ...(renderConfig.naesinLinkKey
       ? { naesinOriginalModePolicyVersion: 1 }
       : {}),
+    ...(normalizeBool(
+      rawOptions.omitQuestionBody ?? rawOptions.omit_question_body,
+      false,
+    )
+      ? { omitQuestionBody: true }
+      : {}),
     renderHash,
     previewOnly,
   };
+  if (!normalizeBool(
+    rawOptions.omitQuestionBody ?? rawOptions.omit_question_body,
+    false,
+  )) {
+    delete options.omitQuestionBody;
+    delete options.omit_question_body;
+  }
 
   const payload = {
     academy_id: academyId,
@@ -2962,8 +3080,8 @@ async function regenerateExportSignedUrl(exportJobId, url, res) {
   );
   const issuedCount =
     Number.isFinite(issuedCountRaw) && issuedCountRaw > 0
-      ? issuedCountRaw + 1
-      : 1;
+    ? issuedCountRaw + 1
+    : 1;
   try {
     await supa
       .from("pb_exports")
@@ -3318,7 +3436,7 @@ async function saveSettingsAsDocument(body, res) {
             "",
         )
           .replace(/\s+/g, " ")
-          .trim(),
+            .trim(),
         includeAcademyLogo: normalizeBool(
           rawRenderConfig.includeAcademyLogo,
           false,
@@ -3633,7 +3751,7 @@ async function listExportPresets(url, res) {
     const sourceDocumentIds = Array.isArray(row?.source_document_ids)
       ? row.source_document_ids
           .map((one) => String(one || "").trim())
-          .filter((id) => isUuid(id))
+        .filter((id) => isUuid(id))
       : [];
     const documentId = String(row?.document_id || "").trim();
     const renderConfig = normalizeJsonObject(row?.render_config, {});
@@ -4530,9 +4648,9 @@ async function previewPdfArtifacts(res, req) {
       optionsForRender,
       selectedQuestionUids,
       {
-        questionMode: optionsForRender.questionMode,
-        layoutColumns: optionsForRender.layoutColumns,
-        maxQuestionsPerPage: optionsForRender.maxQuestionsPerPage,
+      questionMode: optionsForRender.questionMode,
+      layoutColumns: optionsForRender.layoutColumns,
+      maxQuestionsPerPage: optionsForRender.maxQuestionsPerPage,
       },
     );
     if (!renderConfig.mathEngine) {
@@ -4846,19 +4964,19 @@ async function renderAnswerWithMathJax({
     : [];
   const viewBoxWidth =
     Number.isFinite(viewBoxParts[2]) && viewBoxParts[2] > 0
-      ? viewBoxParts[2]
-      : 1000;
+    ? viewBoxParts[2]
+    : 1000;
   const viewBoxHeight =
     Number.isFinite(viewBoxParts[3]) && viewBoxParts[3] > 0
-      ? viewBoxParts[3]
-      : 1000;
+    ? viewBoxParts[3]
+    : 1000;
   const widthCssPx =
     widthAttr?.unit === "px"
-      ? widthAttr.value
+    ? widthAttr.value
       : (widthAttr?.value || viewBoxWidth / 1000) * fontPx;
   const heightCssPx =
     heightAttr?.unit === "px"
-      ? heightAttr.value
+    ? heightAttr.value
       : (heightAttr?.value || viewBoxHeight / 1000) * fontPx;
   const width = Math.max(1, Math.ceil(widthCssPx * pixelRatio));
   const height = Math.max(1, Math.ceil(heightCssPx * pixelRatio));
@@ -5012,7 +5130,7 @@ function pbSubjectiveAnswerFromObjectiveChoiceText(questionRow) {
   const choices =
     Array.isArray(questionRow?.objective_choices) &&
     questionRow.objective_choices.length > 0
-      ? questionRow.objective_choices
+    ? questionRow.objective_choices
       : Array.isArray(questionRow?.choices)
         ? questionRow.choices
         : [];
@@ -5199,17 +5317,17 @@ function unifiedAnswerRenderDescriptor({
   const sourceHash = createHash("sha256")
     .update(
       JSON.stringify({
-        source_kind: safeSourceKind,
-        source_id: safeSourceId,
-        answer_kind: safeAnswerKind,
-        answer: safeAnswerText,
-        engine: UNIFIED_ANSWER_RENDER_ENGINE,
+      source_kind: safeSourceKind,
+      source_id: safeSourceId,
+      answer_kind: safeAnswerKind,
+      answer: safeAnswerText,
+      engine: UNIFIED_ANSWER_RENDER_ENGINE,
         style_version: safeStyle,
-        font_size_pt: UNIFIED_ANSWER_RENDER_FONT_SIZE,
-        max_width_cm: UNIFIED_ANSWER_RENDER_MAX_WIDTH_CM,
-        text_color: UNIFIED_ANSWER_RENDER_TEXT_COLOR,
-        background_color: UNIFIED_ANSWER_RENDER_BACKGROUND_COLOR,
-        pixel_ratio: UNIFIED_ANSWER_RENDER_PIXEL_RATIO,
+      font_size_pt: UNIFIED_ANSWER_RENDER_FONT_SIZE,
+      max_width_cm: UNIFIED_ANSWER_RENDER_MAX_WIDTH_CM,
+      text_color: UNIFIED_ANSWER_RENDER_TEXT_COLOR,
+      background_color: UNIFIED_ANSWER_RENDER_BACKGROUND_COLOR,
+      pixel_ratio: UNIFIED_ANSWER_RENDER_PIXEL_RATIO,
         // v11 은 배경 없는 알파 글리프 PNG 로 굽고 앱에서 테마 색을 입힌다
         // (라이트=검정, 다크=흰색). v10 해시는 그대로 유지된다.
         transparent: isV11,
@@ -5500,18 +5618,18 @@ async function handleUnifiedAnswerRenderAssetsResolve(body, res) {
   const sourceKind = String(body?.source_kind || body?.sourceKind || "").trim();
   const sourceIds = (
     Array.isArray(body?.source_ids)
-      ? body.source_ids
-      : Array.isArray(body?.sourceIds)
-        ? body.sourceIds
+    ? body.source_ids
+    : Array.isArray(body?.sourceIds)
+      ? body.sourceIds
         : []
   )
     .map((id) => String(id || "").trim())
     .filter((id) => isUuid(id));
   const styleVersions = (
     Array.isArray(body?.style_versions)
-      ? body.style_versions
-      : Array.isArray(body?.styleVersions)
-        ? body.styleVersions
+    ? body.style_versions
+    : Array.isArray(body?.styleVersions)
+      ? body.styleVersions
         : []
   )
     .map((style) => String(style || "").trim())
@@ -5630,7 +5748,7 @@ async function handleUnifiedAnswerRenderAssetsResolve(body, res) {
     }
     for (const answerKind of answerKindCandidates) {
       const row = bestByEntryKey.get(`${sourceId}\n${answerKind}`);
-      if (!row) continue;
+    if (!row) continue;
       emitTargets.push({ sourceId, answerKind, row });
     }
   }
@@ -6249,27 +6367,27 @@ async function renderUnifiedAnswerAssetsForDescriptors({
   const workerCount = Math.min(ANSWER_RENDER_CONCURRENCY, targets.length);
   await Promise.all(
     Array.from({ length: workerCount }, async () => {
-      while (cursor < targets.length) {
-        const descriptor = targets[cursor];
-        cursor += 1;
-        const result = await upsertUnifiedAnswerRenderAsset({
-          academyId,
-          descriptor,
-          font,
-        });
-        if (result.ok) {
-          rendered += 1;
-        } else if (!result.skipped) {
-          failed += 1;
-          if (errors.length < 8) {
-            errors.push({
-              source_kind: result.sourceKind,
-              source_id: result.sourceId,
-              error: result.error,
-            });
-          }
+    while (cursor < targets.length) {
+      const descriptor = targets[cursor];
+      cursor += 1;
+      const result = await upsertUnifiedAnswerRenderAsset({
+        academyId,
+        descriptor,
+        font,
+      });
+      if (result.ok) {
+        rendered += 1;
+      } else if (!result.skipped) {
+        failed += 1;
+        if (errors.length < 8) {
+          errors.push({
+            source_kind: result.sourceKind,
+            source_id: result.sourceId,
+            error: result.error,
+          });
         }
       }
+    }
     }),
   );
   return { attempted: targets.length, rendered, failed, errors };
@@ -6293,8 +6411,8 @@ async function filterUnifiedDescriptorsNeedingRender({
           normalizeUnifiedAnswerRenderStyleVersion(item.styleVersion) ===
             styleVersion,
       );
-      if (group.length === 0) continue;
-      const { data, error } = await supa
+    if (group.length === 0) continue;
+    const { data, error } = await supa
         .from("answer_render_assets")
         .select("source_id, answer_kind, source_hash, render_error")
         .eq("academy_id", academyId)
@@ -6302,19 +6420,19 @@ async function filterUnifiedDescriptorsNeedingRender({
         .eq("engine", UNIFIED_ANSWER_RENDER_ENGINE)
         .eq("style_version", styleVersion)
         .in("source_id", [...new Set(group.map((item) => item.sourceId))]);
-      if (error) {
-        out.push(...group);
-        continue;
-      }
-      const existingBySourceId = new Map();
-      for (const asset of Array.isArray(data) ? data : []) {
+    if (error) {
+      out.push(...group);
+      continue;
+    }
+    const existingBySourceId = new Map();
+    for (const asset of Array.isArray(data) ? data : []) {
         const sourceId = String(asset?.source_id || "").trim();
         // 파트 렌더('subjective#(1)')는 answer_kind 를 그대로 키로 사용한다.
         const answerKind = String(asset?.answer_kind || "").trim();
         if (sourceId)
           existingBySourceId.set(`${sourceId}\n${answerKind}`, asset);
-      }
-      for (const item of group) {
+    }
+    for (const item of group) {
         const asset = existingBySourceId.get(
           `${item.sourceId}\n${item.answerKind}`,
         );
@@ -6325,7 +6443,7 @@ async function filterUnifiedDescriptorsNeedingRender({
           storedHash !== item.sourceHash ||
           renderError.length > 0
         ) {
-          out.push(item);
+        out.push(item);
         }
       }
     }
@@ -6341,13 +6459,13 @@ function textbookAnswerRenderSourceHash(answerRow, answerText) {
         answer_kind: String(answerRow?.answer_kind || "")
           .trim()
           .toLowerCase(),
-        answer: answerText,
-        engine: TEXTBOOK_ANSWER_RENDER_ENGINE,
-        style_version: TEXTBOOK_ANSWER_RENDER_STYLE_VERSION,
-        font_size_pt: TEXTBOOK_ANSWER_RENDER_FONT_SIZE,
-        text_color: TEXTBOOK_ANSWER_RENDER_TEXT_COLOR,
-        pixel_ratio: TEXTBOOK_ANSWER_RENDER_PIXEL_RATIO,
-        transparent: true,
+      answer: answerText,
+      engine: TEXTBOOK_ANSWER_RENDER_ENGINE,
+      style_version: TEXTBOOK_ANSWER_RENDER_STYLE_VERSION,
+      font_size_pt: TEXTBOOK_ANSWER_RENDER_FONT_SIZE,
+      text_color: TEXTBOOK_ANSWER_RENDER_TEXT_COLOR,
+      pixel_ratio: TEXTBOOK_ANSWER_RENDER_PIXEL_RATIO,
+      transparent: true,
       }),
     )
     .digest("hex");
@@ -6446,20 +6564,20 @@ async function renderTextbookAnswerAssetsForRows({ academyId, answerRows }) {
   const workerCount = Math.min(ANSWER_RENDER_CONCURRENCY, targets.length);
   await Promise.all(
     Array.from({ length: workerCount }, async () => {
-      while (cursor < targets.length) {
-        const row = targets[cursor];
-        cursor += 1;
-        const result = await upsertTextbookAnswerRenderAsset({
-          academyId,
-          answerRow: row,
-          font,
-        });
-        if (result.ok) rendered += 1;
-        else if (!result.skipped) {
-          failed += 1;
+    while (cursor < targets.length) {
+      const row = targets[cursor];
+      cursor += 1;
+      const result = await upsertTextbookAnswerRenderAsset({
+        academyId,
+        answerRow: row,
+        font,
+      });
+      if (result.ok) rendered += 1;
+      else if (!result.skipped) {
+        failed += 1;
           if (errors.length < 5) errors.push(result.error || "render_failed");
-        }
       }
+    }
     }),
   );
   return { attempted: targets.length, rendered, failed, errors };
@@ -6587,15 +6705,15 @@ async function previewAnswerRenders(res, req) {
     const renderHash = createHash("sha256")
       .update(
         JSON.stringify({
-          version: ANSWER_RENDER_STYLE_VERSION,
-          engine,
-          answer,
-          textColor,
-          backgroundColor,
-          fontSize,
-          transparent,
-          fontFamily,
-          fontRegularPath,
+        version: ANSWER_RENDER_STYLE_VERSION,
+        engine,
+        answer,
+        textColor,
+        backgroundColor,
+        fontSize,
+        transparent,
+        fontFamily,
+        fontRegularPath,
         }),
       )
       .digest("hex");
@@ -6616,7 +6734,7 @@ async function previewAnswerRenders(res, req) {
           url,
           width: cachedMeta.width || 0,
           height: cachedMeta.height || 0,
-          pixelRatio: ANSWER_RENDER_PIXEL_RATIO,
+        pixelRatio: ANSWER_RENDER_PIXEL_RATIO,
           cached: true,
           storagePath: descriptor.storagePath,
         };
@@ -6689,11 +6807,11 @@ async function previewAnswerRenders(res, req) {
   );
   await Promise.all(
     Array.from({ length: workerCount }, async () => {
-      while (cursor < uniqueDescriptors.length) {
-        const descriptor = uniqueDescriptors[cursor];
-        cursor += 1;
-        byHashResult.set(descriptor.renderHash, await renderOne(descriptor));
-      }
+    while (cursor < uniqueDescriptors.length) {
+      const descriptor = uniqueDescriptors[cursor];
+      cursor += 1;
+      byHashResult.set(descriptor.renderHash, await renderOne(descriptor));
+    }
     }),
   );
 
@@ -6786,8 +6904,8 @@ async function batchRenderThumbnails(res, req) {
     const clientMode = clientModeMap[qid] || clientModeMap[uid] || "";
     const mode =
       clientMode === "subjective" || clientMode === "essay"
-        ? clientMode
-        : inferQuestionModeFromRow(row);
+      ? clientMode
+      : inferQuestionModeFromRow(row);
     orderedQuestions.push({ ...row, mode, questionMode: mode });
     qidOrder.push(qid);
   }
@@ -6834,6 +6952,9 @@ async function batchRenderThumbnails(res, req) {
     renderCfg.preview_independent_set_common_stem === false
       ? false
       : true;
+  // 모의고사 검수 카드는 원본처럼 배점([N점])을 찍어 원본과 대조한다(배점은 meta.score_point).
+  // 문제은행·학습앱이 쓰는 저장 카드(card/)를 덮어쓰지 않게 따로 저장한다.
+  const previewQuestionScore = renderCfg.includeQuestionScore === true;
 
   try {
     const rendered = await renderPdfWithXeLatex({
@@ -6848,7 +6969,7 @@ async function batchRenderThumbnails(res, req) {
         includeAcademyLogo: false,
         includeAnswerSheet: false,
         includeExplanation: false,
-        includeQuestionScore: false,
+        includeQuestionScore: previewQuestionScore,
         layoutColumns: 1,
         maxQuestionsPerPage: 1,
         geometryOverride: previewGeometry,
@@ -6951,16 +7072,17 @@ async function batchRenderThumbnails(res, req) {
               .png({ compressionLevel: 9 })
               .toBuffer();
 
+            const cardDir = previewQuestionScore ? "card-score" : "card";
             const storagePath = overrides[qid]
-              ? `${academyId}/batch-preview/${EXPORT_RENDER_CONFIG_VERSION_V2}/card-staged/${overridePreviewKey(qid, overrides[qid])}.png`
-              : `${academyId}/batch-preview/${EXPORT_RENDER_CONFIG_VERSION_V2}/card/${qid}.png`;
+              ? `${academyId}/batch-preview/${EXPORT_RENDER_CONFIG_VERSION_V2}/${cardDir}-staged/${overridePreviewKey(qid, overrides[qid])}.png`
+              : `${academyId}/batch-preview/${EXPORT_RENDER_CONFIG_VERSION_V2}/${cardDir}/${qid}.png`;
             // 저장소 연결이 잠깐 끊기면("fetch failed") 카드가 없어 앱이 그 문항의
             // 재검수를 건너뛴다. 잠깐 쉬고 다시 올린다.
             let upErr = null;
             for (let attempt = 0; attempt < 3; attempt += 1) {
               try {
                 const up = await supa.storage
-                  .from(BATCH_THUMB_BUCKET)
+              .from(BATCH_THUMB_BUCKET)
                   .upload(storagePath, cropped, {
                     contentType: "image/png",
                     upsert: true,
@@ -6989,7 +7111,7 @@ async function batchRenderThumbnails(res, req) {
               try {
                 signedData = (
                   await supa.storage
-                    .from(BATCH_THUMB_BUCKET)
+              .from(BATCH_THUMB_BUCKET)
                     .createSignedUrl(storagePath, BATCH_THUMB_EXPIRES_SEC)
                 ).data;
               } catch (_) {
@@ -7105,13 +7227,30 @@ async function renderCustomPreviewThumbnail(res, req) {
     source_order: Number(rawQuestion.source_order || 1),
     meta:
       rawQuestion.meta && typeof rawQuestion.meta === "object"
-        ? rawQuestion.meta
-        : {},
+      ? rawQuestion.meta
+      : {},
     question_number: String(rawQuestion.question_number || "").trim(),
     mode: "subjective",
     questionMode: "subjective",
   };
-  if (!question.stem) {
+  // 검수용 해설 카드: 학생용 PDF 해설지와 같은 조판(한 단 폭, 수식 줄바꿈 허용)으로 정답·해설만 찍는다.
+  const explanationCard = String(body?.cardKind || "").trim() === "explanation";
+  if (explanationCard) {
+    question.explanation = String(rawQuestion.explanation || "").trim();
+    question.export_answer = String(rawQuestion.export_answer || "").trim();
+    question.explanation_figure_assets = Array.isArray(
+      rawQuestion.explanation_figure_assets,
+    )
+      ? rawQuestion.explanation_figure_assets.filter(
+          (a) => a && a.bucket && a.path,
+        )
+      : [];
+  }
+  if (
+    explanationCard
+      ? !question.explanation && !question.export_answer
+      : !question.stem
+  ) {
     sendJson(res, 400, { ok: false, error: "question.stem required" });
     return;
   }
@@ -7133,6 +7272,7 @@ async function renderCustomPreviewThumbnail(res, req) {
         includeAcademyLogo: false,
         includeAnswerSheet: false,
         includeExplanation: false,
+        explanationCardOnly: explanationCard,
         includeQuestionScore: false,
         layoutColumns: 1,
         maxQuestionsPerPage: 1,
@@ -9638,18 +9778,18 @@ async function handleTextbookCropsBatchUpsert(body, res) {
     const { data: upserted, error } = await supa
       .from("textbook_problem_crops")
       .upsert(upsertRows, {
-        onConflict:
+      onConflict:
           "academy_id,book_id,grade_label,big_order,mid_order,sub_key,sub_index,problem_number",
-      })
+    })
       .select(returnColumns);
-    if (error) {
-      sendJson(res, 500, {
-        ok: false,
-        error: `db_upsert_failed: ${error.message || error}`,
-        uploaded_keys: uploadedKeys,
-      });
-      return;
-    }
+  if (error) {
+    sendJson(res, 500, {
+      ok: false,
+      error: `db_upsert_failed: ${error.message || error}`,
+      uploaded_keys: uploadedKeys,
+    });
+    return;
+  }
     data = upserted || [];
   }
   const keptManualRows = manualRows.filter((row) =>
@@ -9900,32 +10040,32 @@ async function handleTextbookVlmExtractAnswers(body, res) {
   let result;
   let normalized;
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      result = await extractAnswersOnPage({
-        imageBase64,
-        mimeType,
-        rawPage,
-        displayPage,
-        pageOffset,
-        expectedNumbers,
+  try {
+    result = await extractAnswersOnPage({
+      imageBase64,
+      mimeType,
+      rawPage,
+      displayPage,
+      pageOffset,
+      expectedNumbers,
         expectedEntries,
         skipBadges: [...skipBadges, ...retryBadges],
         series,
-        model: TEXTBOOK_VLM_MODEL,
-        apiKey,
+      model: TEXTBOOK_VLM_MODEL,
+      apiKey,
         timeoutMs: TEXTBOOK_ANSWER_VLM_TIMEOUT_MS,
         maxRetries: TEXTBOOK_ANSWER_VLM_MAX_RETRIES,
-      });
-    } catch (err) {
-      sendJson(res, 502, {
-        ok: false,
+    });
+  } catch (err) {
+    sendJson(res, 502, {
+      ok: false,
         error: "vlm_answer_failed",
-        message: compact(err?.message || err),
-      });
-      return;
-    }
+      message: compact(err?.message || err),
+    });
+    return;
+  }
     normalized = normalizeAnswerResult(result.parsedJson, {
-      expectedNumbers,
+    expectedNumbers,
       expectedEntries,
       series,
       rawPage,
@@ -10757,7 +10897,7 @@ async function syncTextbookAnswersToProblemBankScope({
   for (const idChunk of chunkArray([...answerByQuestionId.keys()], 100)) {
     const { data, error: linkedErr } = await supa
       .from("pb_questions")
-      .select(
+    .select(
         "id,question_number,question_type,objective_choices,objective_answer_key," +
           "subjective_answer,allow_objective,allow_subjective,meta",
       )
@@ -10779,7 +10919,7 @@ async function syncTextbookAnswersToProblemBankScope({
       )
       .eq("academy_id", academyId)
       .in("document_id", documentIds);
-    if (questionErr) {
+  if (questionErr) {
       throw new Error(
         `sync_pb_questions_fetch_failed: ${questionErr.message || questionErr}`,
       );
@@ -11140,13 +11280,13 @@ function queueTextbookAnswerRender({ academyId, answerRows }) {
   textbookAnswerRenderChain = textbookAnswerRenderChain
     .then(async () => {
       const basic = await renderTextbookAnswerAssetsForRows({
-        academyId,
-        answerRows: rows,
-      });
+    academyId,
+    answerRows: rows,
+  });
       const unified = await renderUnifiedTextbookAnswerAssetsForRows({
-        academyId,
-        answerRows: rows,
-      });
+    academyId,
+    answerRows: rows,
+  });
       console.log(
         `[answer-render] background done: ${JSON.stringify({
           rows: rows.length,
@@ -11157,7 +11297,7 @@ function queueTextbookAnswerRender({ academyId, answerRows }) {
     })
     .catch((e) => {
       console.error(`[answer-render] background failed: ${e?.message || e}`);
-    });
+  });
 }
 
 async function handleTextbookAnswerRenderAssetsBackfill(body, res) {
@@ -11305,7 +11445,7 @@ async function handleUnifiedAnswerRenderAssetsBackfill(body, res) {
   const sourceKinds =
     sourceKindRaw === "all" || sourceKindRaw === ""
       ? ["textbook_crop", "pb_question"]
-      : [sourceKindRaw];
+    : [sourceKindRaw];
   const invalid = sourceKinds.find(
     (kind) => !["textbook_crop", "pb_question"].includes(kind),
   );
@@ -11348,9 +11488,9 @@ async function handleUnifiedAnswerRenderAssetsBackfill(body, res) {
   }
   const requestedSourceIds = (
     Array.isArray(body?.source_ids)
-      ? body.source_ids
-      : Array.isArray(body?.sourceIds)
-        ? body.sourceIds
+    ? body.source_ids
+    : Array.isArray(body?.sourceIds)
+      ? body.sourceIds
         : []
   )
     .map((id) => String(id || "").trim())
@@ -11370,23 +11510,23 @@ async function handleUnifiedAnswerRenderAssetsBackfill(body, res) {
     for (const sourceKind of sourceKinds) {
       const descriptorPage =
         sourceKind === "textbook_crop"
-          ? await fetchUnifiedTextbookAnswerDescriptors({
-              academyId,
-              limit,
-              offset,
-              sourceIds: requestedSourceIds,
+        ? await fetchUnifiedTextbookAnswerDescriptors({
+          academyId,
+          limit,
+          offset,
+          sourceIds: requestedSourceIds,
               styleVersion,
-            })
-          : await fetchUnifiedPbAnswerDescriptors({
-              academyId,
-              limit,
-              offset,
-              sourceIds: requestedSourceIds,
+        })
+        : await fetchUnifiedPbAnswerDescriptors({
+          academyId,
+          limit,
+          offset,
+          sourceIds: requestedSourceIds,
               styleVersion,
               answerKinds: requestedAnswerKind
                 ? [requestedAnswerKind]
                 : undefined,
-            });
+        });
       const descriptors = descriptorPage.descriptors || [];
       rawFetched += descriptorPage.rawFetched || 0;
       hasMore = hasMore || descriptorPage.hasMore === true;
@@ -11755,7 +11895,7 @@ async function fetchStageStatusSidecarIds(cropIds) {
             .in("crop_id", chunk),
         "stage_status_solution_refs_failed",
       );
-    if (solutionErr) {
+      if (solutionErr) {
       throw new Error(
         `stage_status_solution_refs_failed: ${solutionErr.message || solutionErr}`,
       );
@@ -12201,12 +12341,12 @@ async function handleTextbookStageDelete(body, res) {
             warnings,
           })
         : await deleteTextbookPdfOnlyDocumentsForScope({
-            academyId,
-            bookId,
-            gradeLabel,
-            scope,
-            warnings,
-          });
+        academyId,
+        bookId,
+        gradeLabel,
+        scope,
+        warnings,
+      });
       let runDeleteQuery = supa
         .from("textbook_pb_extract_runs")
         .delete()
@@ -12234,16 +12374,16 @@ async function handleTextbookStageDelete(body, res) {
         ? deletedRuns.length
         : 0;
       if (cropIds.length > 0) {
-        const { data: deletedCrops, error: cropDelErr } = await supa
+      const { data: deletedCrops, error: cropDelErr } = await supa
           .from("textbook_problem_crops")
-          .delete()
+        .delete()
           .in("id", cropIds)
           .select("id");
         if (cropDelErr)
           throw new Error(
             `crops_delete_failed: ${cropDelErr.message || cropDelErr}`,
           );
-        removed.crops = Array.isArray(deletedCrops) ? deletedCrops.length : 0;
+      removed.crops = Array.isArray(deletedCrops) ? deletedCrops.length : 0;
       }
     }
 
@@ -12877,6 +13017,20 @@ async function handler(req, res) {
     if (method === "POST" && url.pathname === "/pb/exam-review/prepare") {
       const body = await readJson(req);
       await handleExamReviewPrepare(body, res);
+      return;
+    }
+
+    // 모의고사 구간 → 교재 검수 테이블 준비.
+    if (method === "POST" && url.pathname === "/pb/mock-review/prepare") {
+      const body = await readJson(req);
+      await handleMockReviewPrepare(body, res);
+      return;
+    }
+
+    // 확정한 모의고사 구간 공개.
+    if (method === "POST" && url.pathname === "/pb/mock-review/publish") {
+      const body = await readJson(req);
+      await handleMockReviewPublish(body, res);
       return;
     }
 

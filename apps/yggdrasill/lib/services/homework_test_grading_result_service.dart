@@ -61,6 +61,97 @@ class HomeworkTestLatestScore {
   });
 }
 
+/// 종료 뒤 첫 검사에 저장된 점수.
+///
+/// [hasPointScores] 는 문항 배점이 1점이 아닌 경우다. 배점 없는 채점은
+/// 문항마다 1점으로 저장되므로 카드 점수에서 뺀다.
+class HomeworkFirstInspectionScore {
+  final double scoreCorrect;
+  final double scoreTotal;
+  final int recordedQuestionCount;
+  final bool hasPointScores;
+
+  const HomeworkFirstInspectionScore({
+    required this.scoreCorrect,
+    required this.scoreTotal,
+    this.recordedQuestionCount = 0,
+    this.hasPointScores = false,
+  });
+
+  String get label => formatHomeworkInspectionScore(
+        scoreCorrect: scoreCorrect,
+        scoreTotal: scoreTotal,
+        hasPointScores: hasPointScores,
+      );
+}
+
+/// 배점이 있는 첫 검사 점수를 `87/100` 형태로 만든다.
+String formatHomeworkInspectionScore({
+  required double scoreCorrect,
+  required double scoreTotal,
+  required bool hasPointScores,
+}) {
+  if (!hasPointScores || !scoreTotal.isFinite || scoreTotal <= 0) return '';
+  if (!scoreCorrect.isFinite) return '';
+  return '${formatHomeworkScoreNumber(scoreCorrect)}/${formatHomeworkScoreNumber(scoreTotal)}';
+}
+
+@visibleForTesting
+String formatHomeworkScoreNumber(double value) {
+  if (!value.isFinite) return '0';
+  final rounded = value.roundToDouble();
+  if ((value - rounded).abs() < 0.0001) {
+    return rounded.toStringAsFixed(0);
+  }
+  return value.toStringAsFixed(1);
+}
+
+/// 그룹 카드에 보여줄 첫 검사 점수.
+///
+/// 그룹 전체를 대표 하위 과제 하나에 저장한 기록은 그 점수만 쓴다.
+/// 그런 기록이 없고 배점 있는 하위 과제가 나뉘어 있으면 점수를 더한다.
+HomeworkFirstInspectionScore? resolveGroupHomeworkFirstInspectionScore(
+  Iterable<HomeworkFirstInspectionScore> scores, {
+  required int groupQuestionCount,
+}) {
+  final scored = <HomeworkFirstInspectionScore>[
+    for (final score in scores)
+      if (score.hasPointScores &&
+          score.scoreTotal.isFinite &&
+          score.scoreTotal > 0)
+        score,
+  ];
+  if (scored.isEmpty) return null;
+
+  if (groupQuestionCount > 0) {
+    HomeworkFirstInspectionScore? best;
+    for (final score in scored) {
+      if (score.recordedQuestionCount < groupQuestionCount) continue;
+      if (best == null ||
+          score.recordedQuestionCount > best.recordedQuestionCount) {
+        best = score;
+      }
+    }
+    if (best != null) return best;
+  }
+  if (scored.length == 1) return scored.first;
+
+  var correct = 0.0;
+  var total = 0.0;
+  var recorded = 0;
+  for (final score in scored) {
+    correct += score.scoreCorrect;
+    total += score.scoreTotal;
+    recorded += score.recordedQuestionCount;
+  }
+  return HomeworkFirstInspectionScore(
+    scoreCorrect: correct,
+    scoreTotal: total,
+    recordedQuestionCount: recorded,
+    hasPointScores: true,
+  );
+}
+
 /// 과제 카드 진행률/완료율.
 ///
 /// - [total] = 전체 - 포기 (score_total)
@@ -1115,6 +1206,100 @@ class HomeworkTestGradingResultService {
         debugPrintStack(stackTrace: stackTrace);
       }
       return const <String, HomeworkTestLatestScore>{};
+    }
+  }
+
+  /// 과제별 가장 이른 검사의 점수. 이후 재채점은 카드에 쓰지 않는다.
+  ///
+  /// 문항 배점이 모두 1점이면 [HomeworkFirstInspectionScore.hasPointScores] 는
+  /// false 다. 내신·모의고사처럼 배점이 있는 첫 검사만 카드에 올린다.
+  Future<Map<String, HomeworkFirstInspectionScore>>
+      loadFirstInspectionScoresByHomeworkItemIds(
+    Iterable<String> homeworkItemIds,
+  ) async {
+    final ids = homeworkItemIds
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (ids.isEmpty) return const <String, HomeworkFirstInspectionScore>{};
+    final academyId = await _resolveAcademyId();
+    if (academyId.isEmpty) return const <String, HomeworkFirstInspectionScore>{};
+
+    try {
+      final firstByItemId = <String, Map<String, dynamic>>{};
+      for (final chunk in _chunk(ids, _idFilterBatchSize)) {
+        final rows = await Supabase.instance.client
+            .from('homework_test_grading_attempts')
+            .select('id,homework_item_id,score_correct,score_total,graded_at')
+            .eq('academy_id', academyId)
+            .inFilter('homework_item_id', chunk)
+            .order('graded_at', ascending: true);
+        if (rows.isEmpty) continue;
+        for (final raw in rows) {
+          final map = Map<String, dynamic>.from(raw as Map);
+          final itemId = '${map['homework_item_id'] ?? ''}'.trim();
+          if (itemId.isEmpty || firstByItemId.containsKey(itemId)) continue;
+          firstByItemId[itemId] = map;
+        }
+      }
+      if (firstByItemId.isEmpty) {
+        return const <String, HomeworkFirstInspectionScore>{};
+      }
+
+      final attemptIds = firstByItemId.values
+          .map((row) => '${row['id'] ?? ''}'.trim())
+          .where((id) => id.isNotEmpty)
+          .toList(growable: false);
+      final recordedCountByAttemptId = <String, int>{};
+      final customPointAttemptIds = <String>{};
+      for (final chunk in _chunk(attemptIds, _idFilterBatchSize)) {
+        var from = 0;
+        const pageSize = 1000;
+        while (true) {
+          final rows = await Supabase.instance.client
+              .from('homework_test_grading_attempt_items')
+              .select('attempt_id,point_value')
+              .inFilter('attempt_id', chunk)
+              .range(from, from + pageSize - 1);
+          for (final raw in rows) {
+            final map = Map<String, dynamic>.from(raw as Map);
+            final attemptId = '${map['attempt_id'] ?? ''}'.trim();
+            if (attemptId.isEmpty) continue;
+            recordedCountByAttemptId.update(
+              attemptId,
+              (count) => count + 1,
+              ifAbsent: () => 1,
+            );
+            final point = _doubleOf(map['point_value']);
+            if (point.isFinite && (point - 1).abs() > 0.001) {
+              customPointAttemptIds.add(attemptId);
+            }
+          }
+          if (rows.length < pageSize) break;
+          from += pageSize;
+        }
+      }
+
+      final out = <String, HomeworkFirstInspectionScore>{};
+      for (final entry in firstByItemId.entries) {
+        final attemptId = '${entry.value['id'] ?? ''}'.trim();
+        out[entry.key] = HomeworkFirstInspectionScore(
+          scoreCorrect: _doubleOf(entry.value['score_correct']),
+          scoreTotal: _doubleOf(entry.value['score_total']),
+          recordedQuestionCount: recordedCountByAttemptId[attemptId] ?? 0,
+          hasPointScores: customPointAttemptIds.contains(attemptId),
+        );
+      }
+      return out;
+    } catch (error, stackTrace) {
+      if (!_isMissingTableError(error)) {
+        debugPrint(
+          'loadFirstInspectionScoresByHomeworkItemIds failed: $error',
+        );
+        debugPrintStack(stackTrace: stackTrace);
+      }
+      return const <String, HomeworkFirstInspectionScore>{};
     }
   }
 

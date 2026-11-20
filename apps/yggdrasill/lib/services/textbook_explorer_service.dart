@@ -102,8 +102,10 @@ class TbExItem {
     return nx1 > nx0 && ny1 > ny0;
   }
 
-  /// 하이라이트/선택용 안정 키. UID가 없으면 페이지/순서 기반 합성 키.
-  String get selKey => hasUid ? questionUid : 'r:$rawPage:$sortOrder';
+  /// 하이라이트/선택용 안정 키. 세트 헤더는 하위 첫 문항과 UID가 충돌하지 않게 분리한다.
+  String get selKey => isSetHeader
+      ? 'sh:$rawPage:$sortOrder'
+      : (hasUid ? questionUid : 'r:$rawPage:$sortOrder');
 
   /// 유형 그룹 키 (문제은행 탭과 동일 규칙).
   String get typeGroupKey {
@@ -423,6 +425,7 @@ class TextbookExplorerService {
     }
 
     final linkedItems = baseItems.map((item) {
+      if (item.isSetHeader) return item;
       if (item.questionUid.trim().isNotEmpty) return item;
       final byCrop = resolvedQuestionUidByCropId[item.cropId];
       final byLocation = resolvedQuestionUidByLocation[

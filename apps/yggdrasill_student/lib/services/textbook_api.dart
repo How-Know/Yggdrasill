@@ -40,24 +40,26 @@ class TextbookApi {
             startedAt.toLocal();
       }
     }
-    final seasons = <String, int>{};
+    final seasons = <String, TextbookSeasonMeta>{};
     final seasonRows = results[2];
     if (seasonRows is List) {
       for (final raw in seasonRows.whereType<Map>()) {
         final row = Map<String, dynamic>.from(raw);
-        final no = (row['season_no'] as num?)?.toInt();
-        if (no != null && no > 0) {
-          seasons['${row['book_id']}|${row['grade_label']}'] = no;
-        }
+        final key = '${row['book_id']}|${row['grade_label'] ?? ''}';
+        seasons[key] = TextbookSeasonMeta.fromRow(row);
       }
     }
     return rows
         .whereType<Map<String, dynamic>>()
-        .map((row) => StudentTextbook.fromRow(
-              row,
-              startedAt: startDates['${row['book_id']}|${row['grade_label']}'],
-              seasonNo: seasons['${row['book_id']}|${row['grade_label']}'],
-            ))
+        .map((row) {
+          final grade = (row['grade_label'] as String?) ?? '';
+          final key = '${row['book_id']}|$grade';
+          return StudentTextbook.fromRow(
+            row,
+            startedAt: startDates[key],
+            seasonMeta: seasons[key],
+          );
+        })
         .toList(growable: false);
   }
 
@@ -178,7 +180,7 @@ class TextbookApi {
         .toList(growable: false);
   }
 
-  /// 교재를 처음부터 다시 푼다. 지난 풀이 기록은 회차로 남고 화면만 비워진다.
+  /// 교재를 처음부터 다시 푼다(레거시). 지난 풀이 기록은 회차로 남고 화면만 비워진다.
   /// 선생님이 검사 중인 교재는 서버가 `under_review` 로 거절한다.
   Future<String?> resetTextbook({
     required String bookId,
@@ -187,6 +189,25 @@ class TextbookApi {
     final result = await _client.rpc(
       'student_reset_textbook_v1',
       params: {'p_book_id': bookId, 'p_grade_label': gradeLabel},
+    );
+    if (result is Map && result['ok'] == true) return null;
+    return (result is Map ? result['error'] as String? : null) ?? 'unknown';
+  }
+
+  /// 교재 시즌 상태 전환 (`start` | `pause` | `resume` | `end`).
+  /// 성공 시 `null`, 거절 시 오류 코드(`under_review` 등)를 반환한다.
+  Future<String?> setTextbookSeasonState({
+    required String bookId,
+    required String gradeLabel,
+    required TextbookSeasonAction action,
+  }) async {
+    final result = await _client.rpc(
+      'student_set_textbook_season_state_v1',
+      params: {
+        'p_book_id': bookId,
+        'p_grade_label': gradeLabel,
+        'p_action': action.wireValue,
+      },
     );
     if (result is Map && result['ok'] == true) return null;
     return (result is Map ? result['error'] as String? : null) ?? 'unknown';
@@ -691,6 +712,23 @@ class TextbookApi {
     await _client.rpc(
       'student_finish_textbook_session_v1',
       params: {'p_session_id': sessionId, 'p_status': status},
+    );
+  }
+
+  /// 이 교재의 바로풀기 세션을 한꺼번에 끝낸다(`finish`)거나 중단한다(`pause`).
+  /// 종료는 학년 표기가 다른 남은 중단 세션까지 닫아 카드 칩이 다시 붙지 않게 한다.
+  Future<void> setTextbookSolveSessions({
+    required String bookId,
+    required String gradeLabel,
+    required String action,
+  }) async {
+    await _client.rpc(
+      'student_set_textbook_solve_sessions_v1',
+      params: {
+        'p_book_id': bookId,
+        'p_grade_label': gradeLabel,
+        'p_action': action,
+      },
     );
   }
 
@@ -1365,6 +1403,75 @@ class AvailableTextbook {
   }
 }
 
+enum TextbookSeasonState {
+  /// 처음 등록 직후 — 아직 시즌을 시작하지 않은 상태.
+  notStarted,
+
+  /// 현재 시즌 진행 중(활성).
+  active,
+
+  /// 현재 시즌 보류(답·완료율 유지).
+  paused,
+
+  /// 시즌 종료(마감) 상태. 완주 이력 유무로 `완료됨`/`종료됨`이 갈린다.
+  closed,
+}
+
+enum TextbookSeasonAction {
+  start('start'),
+  pause('pause'),
+  resume('resume'),
+  end('end');
+
+  const TextbookSeasonAction(this.wireValue);
+  final String wireValue;
+}
+
+class TextbookSeasonMeta {
+  const TextbookSeasonMeta({
+    required this.seasonNo,
+    required this.state,
+    required this.everCompleted,
+    this.openedAt,
+    this.pausedAt,
+    this.closedAt,
+  });
+
+  final int seasonNo;
+  final TextbookSeasonState state;
+  final bool everCompleted;
+  final DateTime? openedAt;
+  final DateTime? pausedAt;
+  final DateTime? closedAt;
+
+  static TextbookSeasonMeta fromRow(Map<String, dynamic> row) {
+    final no = (row['season_no'] as num?)?.toInt() ?? 1;
+    final openedAt =
+        DateTime.tryParse('${row['opened_at'] ?? ''}')?.toLocal();
+    final pausedAt =
+        DateTime.tryParse('${row['paused_at'] ?? ''}')?.toLocal();
+    final closedAt =
+        DateTime.tryParse('${row['closed_at'] ?? ''}')?.toLocal();
+    final rawState = '${row['season_state'] ?? ''}'.trim().toLowerCase();
+    final TextbookSeasonState state;
+    if (rawState == 'closed' || closedAt != null) {
+      state = TextbookSeasonState.closed;
+    } else if (rawState == 'paused' || pausedAt != null) {
+      state = TextbookSeasonState.paused;
+    } else {
+      state = TextbookSeasonState.active;
+    }
+    return TextbookSeasonMeta(
+      seasonNo: no < 1 ? 1 : no,
+      state: state,
+      everCompleted: row['ever_completed'] == true,
+      openedAt: openedAt,
+      pausedAt: pausedAt,
+      closedAt: closedAt,
+    );
+  }
+}
+
 class StudentTextbook {
   const StudentTextbook({
     required this.bookId,
@@ -1386,6 +1493,11 @@ class StudentTextbook {
     this.lastActivity,
     this.startedAt,
     this.seasonNo = 1,
+    this.seasonState = TextbookSeasonState.active,
+    this.everCompleted = false,
+    this.seasonOpenedAt,
+    this.seasonPausedAt,
+    this.seasonClosedAt,
   });
 
   final String bookId;
@@ -1411,9 +1523,23 @@ class StudentTextbook {
   final DateTime? lastActivity;
   final DateTime? startedAt;
 
-  /// 이 교재를 도는 몇 번째 구간인가. 다시 풀기를 할 때마다 하나 올라간다.
-  /// 아직 한 번도 풀지 않은 교재도 시즌 1로 본다.
+  /// 이 교재를 도는 몇 번째 구간인가.
   final int seasonNo;
+
+  /// 시즌 생명주기 상태 (`시작 전` / `활성` / `보류` / `마감`).
+  final TextbookSeasonState seasonState;
+
+  /// 한 번이라도 이 문제집의 모든 문항을 다 푼 적이 있는가.
+  final bool everCompleted;
+
+  final DateTime? seasonOpenedAt;
+  final DateTime? seasonPausedAt;
+  final DateTime? seasonClosedAt;
+
+  bool get isNotStarted => seasonState == TextbookSeasonState.notStarted;
+  bool get isActiveSeason => seasonState == TextbookSeasonState.active;
+  bool get isPausedSeason => seasonState == TextbookSeasonState.paused;
+  bool get isClosedSeason => seasonState == TextbookSeasonState.closed;
 
   /// 진행률 = 풀이 문항 / 전체.
   double get advanceRate =>
@@ -1436,6 +1562,7 @@ class StudentTextbook {
     Map<String, dynamic> row, {
     DateTime? startedAt,
     int? seasonNo,
+    TextbookSeasonMeta? seasonMeta,
   }) {
     final stages = <String, TextbookStageProgress>{};
     final rawStages = row['stage_progress'];
@@ -1447,6 +1574,15 @@ class StudentTextbook {
         );
       }
     }
+    final totalProblems = (row['total_problems'] as num?)?.toInt() ?? 0;
+    final gradedCount = (row['graded_count'] as num?)?.toInt() ?? 0;
+    final completedCount = (row['completed_count'] as num?)?.toInt() ?? 0;
+    final resolvedState = seasonMeta?.state ??
+        ((gradedCount > 0 || completedCount > 0)
+            ? TextbookSeasonState.active
+            : TextbookSeasonState.notStarted);
+    final resolvedEverCompleted = (seasonMeta?.everCompleted ?? false) ||
+        (totalProblems > 0 && completedCount >= totalProblems);
     return StudentTextbook(
       bookId: row['book_id'] as String,
       gradeLabel: (row['grade_label'] as String?) ?? '',
@@ -1455,10 +1591,10 @@ class StudentTextbook {
       colorValue: (row['book_color'] as num?)?.toInt(),
       series: (row['series'] as String?)?.trim().toLowerCase() ?? '',
       coverRef: (row['cover_ref'] as String?)?.trim() ?? '',
-      totalProblems: (row['total_problems'] as num?)?.toInt() ?? 0,
-      gradedCount: (row['graded_count'] as num?)?.toInt() ?? 0,
+      totalProblems: totalProblems,
+      gradedCount: gradedCount,
       correctCount: (row['correct_count'] as num?)?.toInt() ?? 0,
-      completedCount: (row['completed_count'] as num?)?.toInt() ?? 0,
+      completedCount: completedCount,
       firstWrongCount: (row['first_wrong_count'] as num?)?.toInt() ?? 0,
       correctedCount: (row['corrected_count'] as num?)?.toInt() ?? 0,
       stageProgress: stages,
@@ -1468,7 +1604,12 @@ class StudentTextbook {
           ? DateTime.tryParse(row['last_activity'] as String)?.toLocal()
           : null,
       startedAt: startedAt,
-      seasonNo: seasonNo ?? 1,
+      seasonNo: seasonMeta?.seasonNo ?? seasonNo ?? 1,
+      seasonState: resolvedState,
+      everCompleted: resolvedEverCompleted,
+      seasonOpenedAt: seasonMeta?.openedAt,
+      seasonPausedAt: seasonMeta?.pausedAt,
+      seasonClosedAt: seasonMeta?.closedAt,
     );
   }
 }
@@ -1928,17 +2069,21 @@ class ProblemRoundHistory {
   final bool roundOpen;
   final bool latestPassed;
 
-  /// 정보가 되는 줄만 돌려준다.
-  /// 처음 만나 한 번도 맞히지 않은 1회차는 비운다.
-  /// 이번 회차를 정답으로 통과했으면 그 횟수까지 포함한 `통과 N`을 붙인다.
+  /// 이번 시즌 번호 카드 오른쪽.
+  ///
+  /// 시즌에 채점이 없으면 빈다. 아직 통과 전이면 이번 풀이에서 몇 번째
+  /// 오답인지(`오답 N`). 통과했으면 두 줄이다. 첫째 줄은 이번 시즌 완료
+  /// 횟수, 둘째 줄은 최근 통과 풀이에서 답을 넣고 채점한 횟수다.
+  /// `skipped` 는 세지 않는다.
   List<String> get cardLines {
-    final passedTotal = passedBefore + (latestPassed ? 1 : 0);
-    return [
-      if (roundNo >= 2) '$roundNo회차',
-      if (latestPassed && passedTotal > 0) '통과 $passedTotal',
-      if (!latestPassed && passedBefore > 0) '이전 정답 $passedBefore',
-      if (revisionCount > 1) '수정 $revisionCount회',
-    ];
+    final marks = revisionCount < 0 ? 0 : revisionCount;
+    if (latestPassed) {
+      final completed = passedBefore + 1;
+      final took = marks < 1 ? 1 : marks;
+      return ['완료 $completed', '$took번'];
+    }
+    if (marks <= 0) return const [];
+    return ['오답 $marks'];
   }
 
   /// 이번 화면에서 채점이 한 번 더 반영된 기록.

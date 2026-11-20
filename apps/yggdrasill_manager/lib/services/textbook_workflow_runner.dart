@@ -146,18 +146,27 @@ class _Cancelled implements Exception {
 /// 크롭 확정된 소단원의 2단계(본문 추출 → 정답·해설 위치 → 정답 연결 → AI 검수 → 준비됨 판정)를
 /// 앱 전역에서 돌린다. 창을 닫아도 계속 돌고, 단계는 DB 에 남아 앱을 다시 켜면 이어 간다.
 class TextbookWorkflowRunner extends ChangeNotifier {
-  TextbookWorkflowRunner._();
+  TextbookWorkflowRunner._() : _client = null;
+
+  /// 화면 없이 돌리는 운영 스크립트(tool/textbook_batch.dart)용: 앱과 같은 실행기를 주어진 연결로 돌린다.
+  TextbookWorkflowRunner.withClient(SupabaseClient client) : _client = client;
 
   static final TextbookWorkflowRunner instance = TextbookWorkflowRunner._();
+
+  /// null 이면 앱의 기본 연결(Supabase.instance)을 쓴다.
+  final SupabaseClient? _client;
 
   static const int maxParallel = 2;
   static const Duration _pollEvery = Duration(seconds: 5);
   static const Duration _extractTimeout = Duration(minutes: 45);
+
+  /// 모의고사 구간 준비를 묻다가 게이트웨이가 답하지 못했을 때 더 물어보는 횟수([_pollEvery] 간격)
+  static const int _mockPrepareRetries = 6;
   static const Duration _persistEvery = Duration(seconds: 4);
 
-  final TextbookWorkflowService _workflows = TextbookWorkflowService();
-  final ProblemBankService _pb = ProblemBankService();
-  final TextbookStageBatchService _stage = TextbookStageBatchService();
+  late final TextbookWorkflowService _workflows = TextbookWorkflowService(client: _client);
+  late final ProblemBankService _pb = ProblemBankService(client: _client);
+  late final TextbookStageBatchService _stage = TextbookStageBatchService(supabase: _client);
   final TextbookVlmAnswerService _answers = TextbookVlmAnswerService();
 
   final Map<String, TextbookWorkflowRunState> _states = {};
@@ -270,14 +279,27 @@ class TextbookWorkflowRunner extends ChangeNotifier {
     final order = job.order;
     final st = _states[order.workflowKey]!;
     st.startedAt = DateTime.now();
-    final review = TextbookProblemReviewService();
+    final review = TextbookProblemReviewService(
+      client: _client,
+      pbService: _client == null ? null : ProblemBankService(client: _client),
+    );
     var phase = job.fromPhase;
     try {
       if (phase == TextbookWorkflowPhase.extract) {
-        _setPhase(st, phase, order.isSchoolExam ? '시험지 문항·정답 준비' : '본문 추출·정답 위치 확인');
+        _setPhase(
+          st,
+          phase,
+          order.isSchoolExam
+              ? '시험지 문항·정답 준비'
+              : order.isMockExam
+                  ? '모의고사 문항·정답·해설 위치 준비'
+                  : '본문 추출·정답 위치 확인',
+        );
         await _persistPhase(st, markStarted: job.since == null);
         if (order.isSchoolExam) {
           await _prepareExam(st);
+        } else if (order.isMockExam) {
+          await _prepareMock(st);
         } else {
           await _extractAndMatch(st, review, since: job.since);
         }
@@ -285,9 +307,9 @@ class TextbookWorkflowRunner extends ChangeNotifier {
         phase = TextbookWorkflowPhase.sync;
       }
       if (phase == TextbookWorkflowPhase.sync) {
-        // 내신 시험지는 정답 연결을 하지 않는다. 채점 정답이 문제은행 정답에서 왔고, 이 연결은 주관식 문항에
-        // 만들어 둔 객관식 보기 정답을 지운다. 고친 정답은 시험지 확정 때 문제은행에 반영된다.
-        if (!order.isSchoolExam) {
+        // 내신 시험지·모의고사 구간은 정답 연결을 하지 않는다. 채점 정답이 문제은행 정답에서 왔고, 이 연결은 주관식
+        // 문항에 만들어 둔 객관식 보기 정답을 지운다. 고친 정답은 확정 때 문제은행에 반영된다.
+        if (!order.isDocumentScope) {
           _setPhase(st, phase, '채점 정답을 문제은행 문항에 연결');
           await _persistPhase(st);
           await _syncAnswers(order);
@@ -413,6 +435,112 @@ class TextbookWorkflowRunner extends ChangeNotifier {
     _detail(st, st.matchDetail);
   }
 
+  /// 모의고사 구간(책 id = 구간의 문제은행 문서 id): 게이트웨이가 추출이 끝났는지 보고, 끝났으면 문항 영역·채점 정답·
+  /// 해설 위치(다음 단·쪽으로 이어진 부분 포함)를 검수 테이블에 올린다. 아직 뽑지 않은 구간이면 이 실행의 첫 호출에서
+  /// 추출을 걸고 끝나기를 기다린다. 여러 번 해도 결과가 같다.
+  Future<void> _prepareMock(TextbookWorkflowRunState st) async {
+    final order = st.order;
+    var first = true;
+    var waited = false;
+    var failures = 0;
+    DateTime? deadline;
+    while (true) {
+      if (st.cancelRequested) return;
+      final Map<String, dynamic> res;
+      try {
+        res = await _pb.prepareMockReview(
+          academyId: order.academyId,
+          documentId: order.bookId,
+          allowExtract: first,
+          refreshAnswers: waited,
+        );
+      } catch (e) {
+        // 게이트웨이가 잠깐 답하지 못한 것(다시 시작 중·연결 끊김)은 몇 번 더 물어본다. 게이트웨이가 알려 준 오류는 바로 알린다.
+        if (!'$e'.contains('gateway_post_failed(4') && ++failures <= _mockPrepareRetries) {
+          await Future<void>.delayed(_pollEvery);
+          continue;
+        }
+        throw Exception(describeMockPrepareError(e));
+      }
+      failures = 0;
+      first = false;
+      if ('${res['state'] ?? ''}' != 'waiting') {
+        final (:detail, :extractSkipped) = mockPrepareSummary(res, waited: waited);
+        st.extractSkipped = extractSkipped;
+        st.matchDone = true;
+        st.matchDetail = detail;
+        _detail(st, detail);
+        return;
+      }
+      waited = true;
+      final reason = '${res['reason'] ?? ''}';
+      _detail(st, mockWaitingLabel(reason));
+      // 여러 회차를 한꺼번에 돌리면 서버 워커가 차례로 뽑는다. 차례를 기다리는 시간은 제한에 넣지 않는다.
+      if (reason == 'exam_queued' || reason == 'extract_queued') {
+        deadline = null;
+      } else {
+        deadline ??= DateTime.now().add(_extractTimeout);
+        if (DateTime.now().isAfter(deadline)) {
+          throw Exception('모의고사 추출이 ${_extractTimeout.inMinutes}분 안에 끝나지 않았습니다');
+        }
+      }
+      await Future<void>.delayed(_pollEvery);
+    }
+  }
+
+  /// 모의고사 구간 준비를 기다리는 이유(게이트웨이 reason) → 진행 표시 글
+  @visibleForTesting
+  static String mockWaitingLabel(String reason) => switch (reason) {
+        'exam_queued' => '회차 추출 대기 중',
+        'exam_running' => '회차 추출 중(문항 영역·정답·해설 위치)',
+        'extract_queued' => '본문 추출 대기 중',
+        _ => '본문 추출 중',
+      };
+
+  /// 모의고사 구간 준비 결과(게이트웨이 state 'ready') → 진행 표시 글. [waited] 는 이 실행에서 추출을 기다렸는가.
+  @visibleForTesting
+  static ({String detail, bool extractSkipped}) mockPrepareSummary(Map<String, dynamic> res, {required bool waited}) {
+    int count(String key) => (res[key] as num?)?.toInt() ?? 0;
+    int size(String key) => res[key] is List ? (res[key] as List).length : count(key);
+    final missingAnswers = size('missingAnswers');
+    final wholePage = size('pageFallbacks');
+    final solutionMissing = size('solutionMissing');
+    final unchecked = size('solutionUnchecked');
+    final detail = [
+      '문항 ${count('cropCount')}개 준비',
+      if (count('solutionCount') > 0) '해설 ${count('solutionCount')}',
+      if (count('solutionContinued') > 0) '이어진 해설 ${count('solutionContinued')}',
+      if (missingAnswers > 0) '정답 없음 $missingAnswers',
+      if (solutionMissing > 0) '해설 위치 없음 $solutionMissing',
+      if (unchecked > 0) '해설 이어짐 확인 못 함 $unchecked',
+      if (wholePage > 0) '문항 영역 못 찾음 $wholePage(쪽 전체로 대조)',
+      if (count('unpublished') > 0) '확정 전 비공개 ${count('unpublished')}',
+    ].join(' · ');
+    return (detail: detail, extractSkipped: !waited);
+  }
+
+  /// 모의고사 구간 준비 오류(게이트웨이 코드) → 사람이 읽을 말
+  static String describeMockPrepareError(Object error) {
+    final text = '$error'.replaceFirst(RegExp(r'^Exception:\s*'), '');
+    String tail(String code) {
+      final i = text.indexOf('$code:');
+      final rest = i < 0 ? '' : text.substring(i + code.length + 1).trim();
+      return rest.isEmpty ? '' : ': $rest';
+    }
+
+    if (text.contains('exam_extract_failed')) return '회차 추출 실패${tail('exam_extract_failed')}';
+    if (text.contains('extract_failed')) return '본문 추출 실패${tail('extract_failed')}';
+    if (text.contains('no_questions')) return '추출된 문항이 없습니다. 문제지 PDF 를 확인하세요';
+    if (text.contains('no_items')) return '이 구간의 문항 영역이 없어 추출을 걸지 못했습니다. 문제은행 모의고사 화면에서 회차를 다시 추출하세요';
+    if (text.contains('needs_extract')) return '아직 추출하지 않은 구간입니다. "이어서 진행"을 누르면 추출부터 합니다';
+    if (text.contains('not_mock_section')) return '모의고사 구간 문서가 아닙니다';
+    if (text.contains('exam_not_found')) return '모의고사 회차를 찾지 못했습니다';
+    if (text.contains('document_not_found')) return '문제은행에서 구간 문서를 찾지 못했습니다';
+    if (text.contains('course_unresolved')) return '이 구간의 과정을 정하지 못했습니다';
+    if (text.contains('pdf_source_required')) return '문제지 PDF 가 없어 검수할 수 없습니다';
+    return text;
+  }
+
   /// 본문이 아직 없는 sub_key 만 추출하고, 정답·해설 위치가 빈 sub_key 만 다시 찾는다.
   Future<void> _extractAndMatch(
     TextbookWorkflowRunState st,
@@ -473,7 +601,7 @@ class TextbookWorkflowRunner extends ChangeNotifier {
   static const Set<String> _bodySolutionSeries = {'wonri', 'gaeyu', 'gaeyu_high'};
 
   Future<List<Map<String, dynamic>>> _loadRunRows(TextbookSubunitWorkOrder order) async {
-    final rows = await Supabase.instance.client
+    final rows = await (_client ?? Supabase.instance.client)
         .from('textbook_pb_extract_runs')
         .select()
         .eq('academy_id', order.academyId)

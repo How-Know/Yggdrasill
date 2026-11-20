@@ -41,9 +41,10 @@ function apiSubKeys() {
     /const TEXTBOOK_CROP_SUB_KEYS = Object\.freeze\(\[([^\]]*)\]\)/,
   );
   assert.ok(match, 'problem_bank_api.js 에 TEXTBOOK_CROP_SUB_KEYS 상수가 없다');
+  // 소스가 작은따옴표든 큰따옴표든(포매터가 바꿔도) 같은 값으로 읽는다.
   return match[1]
     .split(',')
-    .map((s) => s.trim().replace(/^'|'$/g, ''))
+    .map((s) => s.trim().replace(/^['"]|['"]$/g, ''))
     .filter(Boolean)
     .sort();
 }
@@ -64,7 +65,10 @@ test('no handler hardcodes a sub_key list beside the shared constant', () => {
     path.join(repoRoot, 'gateway', 'src', 'problem_bank_api.js'),
     'utf8',
   );
-  const inline = source.match(/\[\s*'A',\s*'B',\s*'C'(?:,\s*'[A-Z]')*\s*\]/g);
+  // 공용 상수 선언 줄은 빼고, 따옴표 종류와 상관없이 인라인 목록을 찾는다.
+  const inline = source
+    .replace(/const TEXTBOOK_CROP_SUB_KEYS = Object\.freeze\(\[[^\]]*\]\)/, '')
+    .match(/\[\s*(['"])A\1,\s*(['"])B\2,\s*(['"])C\3(?:,\s*['"][A-Z]['"])*\s*\]/g);
   assert.equal(
     inline,
     null,

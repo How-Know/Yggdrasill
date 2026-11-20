@@ -18,13 +18,16 @@ import '../../think/think_message_tile.dart';
 import '../../think/think_organize_panel.dart';
 import '../../think/think_style.dart';
 
-/// 개념 화면 오른쪽의 Think 대화. 사용자가 고른 기존 대화를 잇고, 고른 개념은 보낼 때마다 서버가 저장본을 다시 읽는다.
+/// 개념 화면의 Think 대화. 오른쪽 아래 버튼으로 펼치고, 고른 개념은 보낼 때마다 서버가 저장본을 다시 읽는다.
 /// 검토 창([ConceptChatController.draftReview])에서는 '개념 초안 검토' 대화를 잇고, 보낼 때마다 서버가 저장된 초안을 다시 읽는다.
 /// 설계: docs/architecture/ai-think.md "개념 탭 대화", docs/architecture/concept-library.md "검토 창 대화"
 class ConceptChatPanel extends StatefulWidget {
-  const ConceptChatPanel({super.key, required this.onClose, this.controller, this.beforeSend});
+  const ConceptChatPanel({super.key, required this.onClose, this.controller, this.beforeSend, this.shown = true});
 
   final VoidCallback onClose;
+
+  /// 화면에 펼쳐져 있는지. 접혀 있다 펼치면 연결을 다시 확인한다.
+  final bool shown;
 
   /// 없으면 [ConceptChatController.instance].
   final ConceptChatController? controller;
@@ -58,9 +61,19 @@ class _ConceptChatPanelState extends State<ConceptChatPanel> {
       _stickToBottom = pos.maxScrollExtent - pos.pixels < 120;
     });
     // 다른 메뉴에 있는 동안 대화가 지워졌거나 서버가 바뀌었을 수 있다.
+    if (widget.shown) _refreshLinkIfNeeded();
+    unawaited(_c.ensureStarted());
+  }
+
+  @override
+  void didUpdateWidget(ConceptChatPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.shown && !oldWidget.shown) _refreshLinkIfNeeded();
+  }
+
+  void _refreshLinkIfNeeded() {
     if (_c.conversationId != null && !_c.isStreaming) unawaited(_c.refreshLink());
     if (_c.status == null && !_c.statusLoading && (_c.conversationId != null || _draft)) unawaited(_c.refreshStatus());
-    unawaited(_c.ensureStarted());
   }
 
   @override

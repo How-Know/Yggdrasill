@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../arithmetic/arithmetic_screen.dart';
 import 'widgets/category_tree.dart';
 import 'widgets/concept_book_dialog.dart';
 import 'widgets/concept_chat_panel.dart';
@@ -66,6 +67,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   bool _isLoading = true;
 
   bool _chatOpen = ConceptChatController.instance.panelOpen;
+  bool _showLibrary = false;
 
   /// 선택·저장 안 한 입력은 여기에 남는다(메뉴를 옮겨 화면이 다시 만들어져도).
   final ConceptLibraryController _lib = ConceptLibraryController.instance;
@@ -182,7 +184,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
             ),
             const SizedBox(height: 8),
             const Text(
-              '교육과정 흐름(왼쪽)과 개념 라이브러리(오른쪽)를 함께 보며 정리합니다.',
+              '왼쪽은 교육과정 흐름 또는 개념 라이브러리, 오른쪽은 연산 리스트입니다.',
               style: TextStyle(color: Color(0xFFB3B3B3), fontSize: 16),
             ),
             const SizedBox(height: 20),
@@ -191,18 +193,28 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
             Expanded(
               child: ConceptWorkspace(
                 controller: _lib,
+                showLibrary: _showLibrary,
+                arithmetic: const ArithmeticScreen(embedded: true),
                 courseDetail: CourseMapPane(
                   controller: CourseMapController.instance,
-                  onOpenConcept: (id) => unawaited(_openConceptById(id)),
+                  selectedConceptId: _lib.openedConceptId,
+                  onOpenConcept: (id) => unawaited(_showConceptInSummary(id)),
+                  onOpenChange: (id) => unawaited(_openConceptById(id)),
+                  aboveSelection: SelectedConceptSummary(controller: _lib),
+                  onShowLibrary: () => setState(() => _showLibrary = true),
                 ),
                 courseSummary: CourseMapSummaryPane(
                   controller: CourseMapController.instance,
+                  selectedConceptId: _lib.openedConceptId,
                   onExpand: () => _lib.setFocus(ConceptWorkspaceFocus.courseMap),
-                  onOpenConcept: (id) => unawaited(_openConceptById(id)),
+                  onOpenConcept: (id) => unawaited(_showConceptInSummary(id)),
+                  onOpenChange: (id) => unawaited(_openConceptById(id)),
                 ),
                 libraryDetail: _buildLibraryDetail(),
                 librarySummary: LibrarySummaryPane(controller: _lib, onOpenConcept: _openConceptById),
-                chat: _chatOpen ? ConceptChatPanel(onClose: () => _setChatOpen(false)) : null,
+                chat: ConceptChatPanel(onClose: () => _setChatOpen(false), shown: _chatOpen),
+                chatExpanded: _chatOpen,
+                onExpandChat: () => _setChatOpen(true),
               ),
             ),
           ],
@@ -216,7 +228,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     setState(() => _chatOpen = open);
   }
 
-  /// 대화 참고로 골랐을 때 대화 패널이 닫혀 있으면 연다(좁은 화면에서도 보던 칸은 그대로 둔다).
+  /// 대화 참고로 골랐을 때 접혀 있으면 펼친다.
   void _openChatForPick() {
     if (!_chatOpen) _setChatOpen(true);
   }
@@ -243,7 +255,6 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
       onDraftsConfirmed: () => unawaited(_reloadCategoryTree()),
       onAttached: (pages, problems) {
         if (!_chatOpen) _setChatOpen(true);
-        _lib.showNarrowChat();
         if (!mounted) return;
         showThinkSnack(
           context,
@@ -268,6 +279,28 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
       if (c.id == id) return c;
     }
     return null;
+  }
+
+  /// 흐름의 개념 줄. 라이브러리를 크게 열지 않고, 옆 칸의 선택한 단원 위에 그 개념만 보인다.
+  Future<void> _showConceptInSummary(String id) async {
+    final local = _findConcept(id);
+    if (local != null) {
+      _lib.selectConcept(local);
+      _lib.setFocus(ConceptWorkspaceFocus.courseMap);
+      return;
+    }
+    try {
+      final fresh = await _conceptSvc.fetchConcept(id);
+      if (!mounted) return;
+      if (fresh == null) {
+        _showError('개념을 찾지 못했습니다(지워졌거나 볼 수 없음).');
+        return;
+      }
+      _lib.selectConcept(fresh);
+      _lib.setFocus(ConceptWorkspaceFocus.courseMap);
+    } catch (e) {
+      _showError('개념을 열지 못했습니다: $e');
+    }
   }
 
   /// 요약·연결에서 개념을 눌렀을 때. 지금 도메인 트리에 없으면 서버에서 읽는다.
@@ -352,6 +385,16 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     return LibraryDetailPane(
       badges: [_buildDomainBadge(_selectedDomain)],
       actions: [
+        OutlinedButton.icon(
+          key: const ValueKey('library-show-course'),
+          onPressed: () => setState(() => _showLibrary = false),
+          style: thinkOutlineButton().copyWith(
+            padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 12, vertical: 8)),
+            visualDensity: VisualDensity.compact,
+          ),
+          icon: const Icon(Icons.timeline, size: 16),
+          label: const Text('교육과정 흐름'),
+        ),
         if (_treeBusy)
           const Padding(
             padding: EdgeInsets.only(right: 8),
@@ -563,11 +606,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
           ),
         ),
         OutlinedButton.icon(
-          onPressed: () {
-            final open = !_chatOpen;
-            _setChatOpen(open);
-            if (open) _lib.showNarrowChat();
-          },
+          onPressed: () => _setChatOpen(!_chatOpen),
           icon: Icon(_chatOpen ? Icons.forum : Icons.forum_outlined, size: 18),
           label: Text(_chatOpen ? 'Think 대화 숨기기' : 'Think 대화',
               style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),

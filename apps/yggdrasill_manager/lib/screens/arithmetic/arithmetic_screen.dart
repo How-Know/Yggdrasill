@@ -22,9 +22,12 @@ const List<String> kArithmeticCategories = [
 ];
 
 class ArithmeticScreen extends StatefulWidget {
-  const ArithmeticScreen({super.key, this.service});
+  const ArithmeticScreen({super.key, this.service, this.embedded = false});
 
   final ArithmeticPrimitiveService? service;
+
+  /// 개념 탭 오른쪽 절반. 목록을 교육과정 흐름 트리처럼 보이고, 연산 메뉴 화면은 그대로 둔다.
+  final bool embedded;
 
   @override
   State<ArithmeticScreen> createState() => _ArithmeticScreenState();
@@ -51,6 +54,10 @@ class _ArithmeticScreenState extends State<ArithmeticScreen> {
   /// 탭 2 필터 ('연산', '미분할 연산', '방법')
   String _conceptFilter = '연산';
   String _conceptSearch = '';
+
+  /// 트리에서 접은 카테고리·묶음. 없으면 펼친다.
+  final Set<String> _closedCategories = {};
+  final Set<String> _closedGroups = {};
 
   final _codeCtrl = TextEditingController();
   final _titleCtrl = TextEditingController();
@@ -290,6 +297,7 @@ class _ArithmeticScreenState extends State<ArithmeticScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.embedded) return _buildEmbedded();
     final changedCount = _primitives.where((p) => p.conceptChanged || p.conceptMissing).length;
     final calcConcepts = _concepts.where((c) => c.isArithmetic).toList();
     final unsplitCount = calcConcepts.where((c) => c.primitiveCount == 0).length;
@@ -962,6 +970,416 @@ class _ArithmeticScreenState extends State<ArithmeticScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildEmbedded() {
+    final changedCount = _primitives.where((p) => p.conceptChanged || p.conceptMissing).length;
+    final unsplitCount = _concepts.where((c) => c.isArithmetic && c.primitiveCount == 0).length;
+    return ThinkPanel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+            child: Row(
+              children: [
+                const Icon(Icons.calculate_outlined, size: 18, color: kThinkAccent),
+                const SizedBox(width: 8),
+                const Text('연산', style: TextStyle(color: kThinkText, fontSize: 15, fontWeight: FontWeight.w800)),
+                const SizedBox(width: 12),
+                Flexible(
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: ThinkPillTabs(
+                      labels: [
+                        '세부 연산 (${_primitives.length})',
+                        '연산·방법 (미분할 $unsplitCount)',
+                      ],
+                      icons: const [Icons.account_tree_outlined, Icons.account_tree_outlined],
+                      selected: _tab,
+                      onSelected: (i) => setState(() => _tab = i),
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: '새로고침',
+                  onPressed: _loading ? null : () => unawaited(_load()),
+                  icon: const Icon(Icons.refresh, color: kThinkSub, size: 20),
+                ),
+              ],
+            ),
+          ),
+          const Divider(color: kThinkBorder, height: 1),
+          if (_notice != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+              child: ThinkNotice(text: _notice!, color: kThinkAccent, icon: Icons.info_outline),
+            ),
+          Expanded(child: _embeddedBody(changedCount)),
+        ],
+      ),
+    );
+  }
+
+  Widget _embeddedBody(int changedCount) {
+    if (_loading) return const Center(child: CircularProgressIndicator(color: kThinkAccent));
+    if (_error != null) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(_error!, style: const TextStyle(color: kThinkError, fontSize: 14)),
+            const SizedBox(height: 12),
+            ElevatedButton(
+              onPressed: () => unawaited(_load()),
+              style: thinkPrimaryButton(),
+              child: const Text('다시 시도'),
+            ),
+          ],
+        ),
+      );
+    }
+    if (_tab == 0) return _primitiveTree(changedCount);
+    return _conceptTree();
+  }
+
+  Widget _primitiveTree(int changedCount) {
+    final filtered = _filteredPrimitives;
+    final selected = _creatingNew ? null : _primitives.where((p) => p.id == _selectedId).firstOrNull;
+    final filtering = _search.trim().isNotEmpty || _onlyChanged;
+    final categories = <String>[
+      ...kArithmeticCategories,
+      for (final p in filtered)
+        if (!kArithmeticCategories.contains(p.category) && p.category.isNotEmpty) p.category,
+    ];
+    final seen = <String>{};
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: () => _startCreate(),
+                      style: thinkOutlineButton().copyWith(
+                        padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 12, vertical: 8)),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      icon: const Icon(Icons.add, size: 16),
+                      label: const Text('세부 연산 추가'),
+                    ),
+                    if (changedCount > 0)
+                      ThinkToggleChip(
+                        label: '원본 개념 변경됨 ($changedCount)',
+                        icon: Icons.warning_amber_rounded,
+                        selected: _onlyChanged,
+                        onChanged: (v) => setState(() => _onlyChanged = v),
+                      ),
+                    SizedBox(
+                      width: 280,
+                      height: 36,
+                      child: TextField(
+                        onChanged: (v) => setState(() => _search = v),
+                        style: const TextStyle(color: kThinkText, fontSize: 13),
+                        decoration: thinkInputDecoration(
+                          hint: '이름, 코드, 예시, 연결 개념',
+                          prefixIcon: const Icon(Icons.search, size: 18, color: kThinkSub),
+                        ),
+                      ),
+                    ),
+                    Text('표시 ${filtered.length}개',
+                        style: const TextStyle(color: kThinkSub, fontSize: 12, fontWeight: FontWeight.w700)),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                const Divider(color: kThinkBorder, height: 1),
+                Expanded(
+                  child: ListView(
+                    padding: const EdgeInsets.fromLTRB(0, 4, 0, 12),
+                    children: [
+                      for (final cat in categories)
+                        if (seen.add(cat))
+                          ..._categoryBlock(
+                            cat,
+                            [for (final p in filtered) if (p.category == cat) p],
+                            hideEmpty: filtering,
+                          ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const VerticalDivider(color: kThinkBorder, width: 1),
+        SizedBox(
+          width: 360,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: _buildEditPane(selected),
+          ),
+        ),
+      ],
+    );
+  }
+
+  List<Widget> _categoryBlock(String category, List<ArithmeticPrimitiveItem> items, {required bool hideEmpty}) {
+    if (items.isEmpty && hideEmpty) return const [];
+    final open = !_closedCategories.contains(category);
+    return [
+      _outlineRow(
+        key: ValueKey('arith-category-$category'),
+        height: 36,
+        indent: 0,
+        selected: false,
+        onTap: () => setState(() {
+          if (open) {
+            _closedCategories.add(category);
+          } else {
+            _closedCategories.remove(category);
+          }
+        }),
+        child: Row(
+          children: [
+            Icon(open ? Icons.expand_more : Icons.chevron_right, size: 18, color: kThinkSub),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Text(category,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: kThinkText, fontSize: 14, fontWeight: FontWeight.w700)),
+            ),
+            Text('${items.length}', style: const TextStyle(color: kThinkHint, fontSize: 12, fontWeight: FontWeight.w700)),
+          ],
+        ),
+      ),
+      if (open)
+        for (final item in items) _primitiveTreeRow(item),
+    ];
+  }
+
+  Widget _primitiveTreeRow(ArithmeticPrimitiveItem item) {
+    final selected = !_creatingNew && _selectedId == item.id;
+    return _outlineRow(
+      key: ValueKey('arith-primitive-${item.id}'),
+      height: 36,
+      indent: 28,
+      selected: selected,
+      onTap: () => setState(() => _populateForm(item)),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              item.title.trim().isEmpty ? '(이름 없음)' : item.title.trim(),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: kThinkText, fontSize: 13, fontWeight: FontWeight.w600),
+            ),
+          ),
+          if (item.conceptChanged || item.conceptMissing) ...[
+            const SizedBox(width: 6),
+            const Icon(Icons.error_outline, size: 14, color: kThinkError),
+          ],
+          const SizedBox(width: 4),
+          _scoreNudge(item),
+        ],
+      ),
+    );
+  }
+
+  Widget _scoreNudge(ArithmeticPrimitiveItem item) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _nudgeButton(Icons.remove, '점수 내리기', () => unawaited(_nudgeScore(item, -0.05))),
+        Text(item.unitScore.toStringAsFixed(2),
+            style: const TextStyle(color: kThinkText, fontSize: 12, fontWeight: FontWeight.w800)),
+        _nudgeButton(Icons.add, '점수 올리기', () => unawaited(_nudgeScore(item, 0.05))),
+      ],
+    );
+  }
+
+  Widget _nudgeButton(IconData icon, String tip, VoidCallback onTap) {
+    return IconButton(
+      tooltip: tip,
+      onPressed: onTap,
+      padding: EdgeInsets.zero,
+      visualDensity: VisualDensity.compact,
+      constraints: const BoxConstraints.tightFor(width: 28, height: 28),
+      icon: Icon(icon, size: 16, color: kThinkSub),
+    );
+  }
+
+  Widget _conceptTree() {
+    final q = _conceptSearch.trim().toLowerCase();
+    final groups = <String, List<ArithmeticLibraryConcept>>{
+      '연산': [for (final c in _concepts) if (c.isArithmetic) c],
+      '미분할 연산': [for (final c in _concepts) if (c.isArithmetic && c.primitiveCount == 0) c],
+      '방법': [for (final c in _concepts) if (!c.isArithmetic) c],
+    };
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Align(
+            alignment: Alignment.centerLeft,
+            child: SizedBox(
+              width: 320,
+              height: 36,
+              child: TextField(
+                onChanged: (v) => setState(() => _conceptSearch = v),
+                style: const TextStyle(color: kThinkText, fontSize: 13),
+                decoration: thinkInputDecoration(
+                  hint: '개념 이름 또는 폴더',
+                  prefixIcon: const Icon(Icons.search, size: 18, color: kThinkSub),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          const Divider(color: kThinkBorder, height: 1),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(0, 4, 0, 12),
+              children: [
+                for (final name in groups.keys) ..._conceptGroup(name, groups[name]!, q),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _conceptGroup(String name, List<ArithmeticLibraryConcept> all, String query) {
+    final items = [
+      for (final c in all)
+        if (query.isEmpty || c.name.toLowerCase().contains(query) || c.folderPath.toLowerCase().contains(query)) c,
+    ];
+    if (items.isEmpty && query.isNotEmpty) return const [];
+    final open = !_closedGroups.contains(name);
+    return [
+      _outlineRow(
+        key: ValueKey('arith-group-$name'),
+        height: 36,
+        indent: 0,
+        selected: false,
+        onTap: () => setState(() {
+          if (open) {
+            _closedGroups.add(name);
+          } else {
+            _closedGroups.remove(name);
+          }
+        }),
+        child: Row(
+          children: [
+            Icon(open ? Icons.expand_more : Icons.chevron_right, size: 18, color: kThinkSub),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Text(name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: kThinkText, fontSize: 14, fontWeight: FontWeight.w700)),
+            ),
+            Text('${items.length}', style: const TextStyle(color: kThinkHint, fontSize: 12, fontWeight: FontWeight.w700)),
+          ],
+        ),
+      ),
+      if (open)
+        for (final c in items) _conceptTreeRow(c),
+    ];
+  }
+
+  Widget _conceptTreeRow(ArithmeticLibraryConcept c) {
+    return _outlineRow(
+      key: ValueKey('arith-concept-${c.id}'),
+      height: 36,
+      indent: 28,
+      selected: false,
+      onTap: null,
+      child: Row(
+        children: [
+          ThinkBadge(c.typeName, color: c.isArithmetic ? kThinkAccent : kThinkSub),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(c.name.trim().isEmpty ? '(이름 없음)' : c.name.trim(),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: kThinkText, fontSize: 13, fontWeight: FontWeight.w600)),
+          ),
+          const SizedBox(width: 8),
+          Text('세부 ${c.primitiveCount}',
+              style: TextStyle(
+                  color: c.primitiveCount > 0 ? kThinkSuccess : kThinkHint, fontSize: 12, fontWeight: FontWeight.w700)),
+          PopupMenuButton<String>(
+            key: ValueKey('arith-concept-menu-${c.id}'),
+            tooltip: '쪼개기·옮기기',
+            padding: EdgeInsets.zero,
+            color: kThinkPanel,
+            style: IconButton.styleFrom(
+              padding: EdgeInsets.zero,
+              minimumSize: const Size(24, 24),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              visualDensity: VisualDensity.compact,
+            ),
+            icon: const Icon(Icons.more_horiz, size: 18, color: kThinkSub),
+            onSelected: (v) {
+              if (v == 'split') {
+                _startCreate(fromConcept: c);
+              } else {
+                unawaited(_toggleConceptKind(c));
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(value: 'split', child: Text('세부 연산 쪼개기')),
+              PopupMenuItem(value: 'move', child: Text(c.isArithmetic ? '방법으로 이동' : '연산으로 이동')),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _outlineRow({
+    required Key key,
+    required double height,
+    required double indent,
+    required bool selected,
+    required VoidCallback? onTap,
+    required Widget child,
+  }) {
+    return SizedBox(
+      height: height,
+      child: Padding(
+        padding: EdgeInsets.only(left: indent, right: 4),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            key: key,
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              decoration: BoxDecoration(
+                color: selected ? kThinkAccent.withValues(alpha: 0.16) : Colors.transparent,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: selected ? kThinkAccent.withValues(alpha: 0.6) : Colors.transparent),
+              ),
+              child: child,
+            ),
+          ),
+        ),
       ),
     );
   }

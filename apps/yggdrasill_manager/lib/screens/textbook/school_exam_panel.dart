@@ -3,28 +3,10 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../services/school_exam_review_service.dart';
-import '../../services/textbook_problem_review_service.dart';
 import '../../services/textbook_workflow_runner.dart';
 import '../../services/textbook_workflow_service.dart';
 import '../problem_roadmap/problem_roadmap_screen.dart';
-
-// 교재 화면(textbook_migration_pane.dart)이 쓰는 색 그대로.
-const Color _kPanel = Color(0xFF131315);
-const Color _kInner = Color(0xFF181818);
-const Color _kBorder = Color(0xFF2A2A2A);
-const Color _kAccent = Color(0xFF33A373);
-const Color _kTextSub = Color(0xFF9FB3B3);
-const Color _kTextMuted = Color(0xFF8A8A8A);
-const Color _kListText = Color(0xFFD8E0E0);
-const Color _kSelectedRow = Color(0xFF1B2B1B);
-const Color _kGreen = Color(0xFF7CC67C);
-const Color _kWarn = Color(0xFFEAB968);
-const Color _kWarnBg = Color(0xFF2D2419);
-const Color _kBlue = Color(0xFF7AA9E6);
-const Color _kBlueBg = Color(0xFF1B2430);
-const Color _kError = Color(0xFFE68A8A);
-const Color _kNeutralBg = Color(0xFF222222);
-const Color _kNeutralFg = Color(0xFF808080);
+import 'exam_review_widgets.dart';
 
 /// 교재 메뉴의 내신기출 목록 상태. 검수 실행기의 작업이 끝날 때마다 목록을 다시 읽는다.
 class SchoolExamController extends ChangeNotifier {
@@ -148,73 +130,33 @@ class SchoolExamListSection extends StatelessWidget {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Divider(height: 1, color: _kBorder),
-            InkWell(
-              onTap: onToggle,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(10, 12, 14, 10),
-                child: Row(
-                  children: [
-                    Icon(expanded ? Icons.expand_more : Icons.chevron_right, size: 16, color: _kTextSub),
-                    const SizedBox(width: 4),
-                    const Expanded(
-                      child: Text(
-                        '내신기출',
-                        style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w800),
-                      ),
-                    ),
-                    if (controller.loading)
-                      const SizedBox(
-                        width: 12,
-                        height: 12,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: _kAccent),
-                      )
-                    else
-                      Text(
-                        '${controller.examCount}부',
-                        style: const TextStyle(color: _kTextMuted, fontSize: 11),
-                      ),
-                  ],
-                ),
-              ),
+            const Divider(height: 1, color: kExamBorder),
+            ExamReviewGroupHeader(
+              title: '내신기출',
+              countText: '${controller.examCount}부',
+              expanded: expanded,
+              loading: controller.loading,
+              onToggle: onToggle,
             ),
             if (expanded && controller.error != null)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(24, 0, 14, 10),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '목록을 읽지 못했습니다: ${controller.error}',
-                      style: const TextStyle(color: _kError, fontSize: 12),
-                    ),
-                    const SizedBox(height: 4),
-                    TextButton(
-                      onPressed: () => unawaited(controller.load()),
-                      style: TextButton.styleFrom(
-                        minimumSize: const Size(0, 24),
-                        padding: const EdgeInsets.symmetric(horizontal: 8),
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                      child: const Text('다시 시도', style: TextStyle(color: _kError, fontSize: 12)),
-                    ),
-                  ],
-                ),
-              )
+              ExamReviewListError(message: controller.error!, onRetry: () => unawaited(controller.load()))
             else if (expanded && schools.isEmpty && !controller.loading)
               const Padding(
                 padding: EdgeInsets.fromLTRB(24, 0, 14, 12),
                 child: Text(
                   '등록된 시험지가 없습니다. 위의 "내신기출 업로드"로 올리세요.',
-                  style: TextStyle(color: _kTextMuted, fontSize: 12),
+                  style: TextStyle(color: kExamTextMuted, fontSize: 12),
                 ),
               )
             else if (expanded)
               for (final school in schools)
-                _SchoolRow(
-                  school: school,
+                ExamReviewListRow(
+                  icon: Icons.school_outlined,
+                  label: school.name,
                   selected: school.name == selectedSchool,
                   running: school.exams.any((e) => live[e.id]?.active ?? false),
+                  countText: '${school.confirmedCount}/${school.exams.length}',
+                  countTooltip: '확정 ${school.confirmedCount}부 / 전체 ${school.exams.length}부',
                   onTap: () => onSelect(school.name),
                 ),
           ],
@@ -224,110 +166,43 @@ class SchoolExamListSection extends StatelessWidget {
   }
 }
 
-class _SchoolRow extends StatelessWidget {
-  const _SchoolRow({required this.school, required this.selected, required this.running, required this.onTap});
-
-  final SchoolExamSchool school;
-  final bool selected;
-  final bool running;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(24, 8, 14, 8),
-        color: selected ? _kSelectedRow : Colors.transparent,
-        child: Row(
-          children: [
-            Icon(
-              selected ? Icons.radio_button_checked : Icons.school_outlined,
-              size: 16,
-              color: selected ? _kGreen : _kTextSub,
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                school.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: selected ? Colors.white : _kListText,
-                  fontSize: 13,
-                  fontWeight: selected ? FontWeight.w800 : FontWeight.w500,
-                ),
-              ),
-            ),
-            if (running) ...[
-              const SizedBox(
-                width: 10,
-                height: 10,
-                child: CircularProgressIndicator(strokeWidth: 2, color: _kAccent),
-              ),
-              const SizedBox(width: 8),
-            ],
-            Tooltip(
-              message: '확정 ${school.confirmedCount}부 / 전체 ${school.exams.length}부',
-              child: Text(
-                '${school.confirmedCount}/${school.exams.length}',
-                style: const TextStyle(color: _kTextMuted, fontSize: 11),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ExamStatus {
-  const _ExamStatus(this.label, this.fg, this.bg, {this.detail = '', this.spinning = false});
-
-  final String label;
-  final Color fg;
-  final Color bg;
-  final String detail;
-  final bool spinning;
-}
-
-_ExamStatus _statusOf(SchoolExamDocument doc, TextbookWorkflowRunState? live) {
+ExamReviewStatus _statusOf(SchoolExamDocument doc, TextbookWorkflowRunState? live) {
   final wf = doc.workflow;
   if (live != null && live.active) {
-    return _ExamStatus(TextbookWorkflowPhase.label(live.phase), _kGreen, _kSelectedRow, detail: live.detail, spinning: true);
+    return ExamReviewStatus(TextbookWorkflowPhase.label(live.phase), kExamGreen, kExamSelectedRow, detail: live.detail, spinning: true);
   }
   final stage = doc.stage;
-  if (stage == SchoolExamStage.confirmed) return const _ExamStatus('확정', _kGreen, _kSelectedRow);
+  if (stage == SchoolExamStage.confirmed) return const ExamReviewStatus('확정', kExamGreen, kExamSelectedRow);
   if (live != null && live.phase == TextbookWorkflowPhase.failed) {
-    return _ExamStatus('실패', _kError, _kNeutralBg, detail: live.error.isNotEmpty ? live.error : live.detail);
+    return ExamReviewStatus('실패', kExamError, kExamNeutralBg, detail: live.error.isNotEmpty ? live.error : live.detail);
   }
   if (live != null && live.phase == TextbookWorkflowPhase.cancelled) {
-    return _ExamStatus('중단됨', _kWarn, _kWarnBg, detail: live.detail);
+    return ExamReviewStatus('중단됨', kExamWarn, kExamWarnBg, detail: live.detail);
   }
   if (live != null && live.phase == TextbookWorkflowPhase.done && stage != SchoolExamStage.reviewing) {
-    return _ExamStatus('검수 대기', _kBlue, _kBlueBg, detail: live.summaryText);
+    return ExamReviewStatus('검수 대기', kExamBlue, kExamBlueBg, detail: live.summaryText);
   }
   switch (stage) {
     case SchoolExamStage.noPdf:
-      return const _ExamStatus('PDF 없음', _kNeutralFg, _kNeutralBg, detail: '문제은행에서 시험지 PDF 를 붙이면 검수할 수 있습니다');
+      return const ExamReviewStatus('PDF 없음', kExamNeutralFg, kExamNeutralBg, detail: '문제은행에서 시험지 PDF 를 붙이면 검수할 수 있습니다');
     case SchoolExamStage.notStarted:
-      return const _ExamStatus('검수 전', _kNeutralFg, _kNeutralBg);
+      return const ExamReviewStatus('검수 전', kExamNeutralFg, kExamNeutralBg);
     case SchoolExamStage.running:
-      return _ExamStatus(
+      return ExamReviewStatus(
         '멈춤',
-        _kWarn,
-        _kWarnBg,
+        kExamWarn,
+        kExamWarnBg,
         detail: '${TextbookWorkflowPhase.label(wf?.pipelinePhase ?? '')} 단계에서 멈췄습니다',
       );
     case SchoolExamStage.failed:
       final err = (wf?.pipelineError ?? '').trim();
-      return _ExamStatus('실패', _kError, _kNeutralBg, detail: err.isNotEmpty ? err : (wf?.pipelineDetail ?? ''));
+      return ExamReviewStatus('실패', kExamError, kExamNeutralBg, detail: err.isNotEmpty ? err : (wf?.pipelineDetail ?? ''));
     case SchoolExamStage.stopped:
-      return _ExamStatus('중단됨', _kWarn, _kWarnBg, detail: wf?.pipelineDetail ?? '');
+      return ExamReviewStatus('중단됨', kExamWarn, kExamWarnBg, detail: wf?.pipelineDetail ?? '');
     case SchoolExamStage.reviewing:
-      return _ExamStatus('검수 대기', _kBlue, _kBlueBg, detail: wf?.pipelineDetail ?? '');
+      return ExamReviewStatus('검수 대기', kExamBlue, kExamBlueBg, detail: wf?.pipelineDetail ?? '');
     case SchoolExamStage.confirmed:
-      return const _ExamStatus('확정', _kGreen, _kSelectedRow);
+      return const ExamReviewStatus('확정', kExamGreen, kExamSelectedRow);
   }
 }
 
@@ -378,27 +253,13 @@ class _SchoolExamSchoolPanelState extends State<SchoolExamSchoolPanel> {
 
   Future<void> _startAll(List<SchoolExamDocument> docs) async {
     if (docs.isEmpty || _bulkBusy) return;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1B1B1D),
-        title: const Text('검수 시작', style: TextStyle(color: Colors.white)),
-        content: Text(
-          '${widget.schoolName}의 검수 전 시험지 ${docs.length}부를 검수 대기열에 넣습니다.\n'
+    final ok = await showExamReviewStartAllDialog(
+      context,
+      message: '${widget.schoolName}의 검수 전 시험지 ${docs.length}부를 검수 대기열에 넣습니다.\n'
           'AI 검수는 2부씩 차례로 돌고, 창을 닫아도 계속됩니다.',
-          style: const TextStyle(color: _kListText, fontSize: 13, height: 1.5),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('취소')),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            style: FilledButton.styleFrom(backgroundColor: _kAccent),
-            child: Text('${docs.length}부 시작'),
-          ),
-        ],
-      ),
+      confirmLabel: '${docs.length}부 시작',
     );
-    if (ok != true || !mounted) return;
+    if (!ok || !mounted) return;
     setState(() => _bulkBusy = true);
     var started = 0;
     final failures = <String>[];
@@ -441,20 +302,10 @@ class _SchoolExamSchoolPanelState extends State<SchoolExamSchoolPanel> {
   /// 작업 화면에서 손본 뒤의 준비됨 수를 목록에 남긴다(검수가 돌고 있으면 실행기가 남긴다).
   Future<void> _refreshReadyNote(TextbookSubunitWorkOrder order) async {
     if (TextbookWorkflowRunner.instance.isActive(order.workflowKey)) return;
-    final review = TextbookProblemReviewService();
     try {
-      final items = [for (final it in await review.fetchUnitItems(order.reviewScope)) if (order.matches(it)) it];
-      if (items.isEmpty) return;
-      final ready = items.where((x) => x.isWorkflowReady).length;
-      final held = items.where((x) => x.isEngineHeld).length;
-      await TextbookWorkflowService().updatePipeline(
-        order,
-        detail: ['준비됨 $ready/${items.length}', if (held > 0) '코드 수정 필요 $held'].join(' · '),
-      );
+      await TextbookWorkflowService().noteReadyCounts(order);
     } catch (e) {
       debugPrint('[school-exam] ready note failed: $e');
-    } finally {
-      review.dispose();
     }
   }
 
@@ -472,7 +323,7 @@ class _SchoolExamSchoolPanelState extends State<SchoolExamSchoolPanel> {
         content: Text(
           '"${doc.schoolName} ${doc.title}" 초안을 지웁니다.\n'
           '올린 파일, 추출한 문항, 검수 기록이 모두 지워지고 되돌릴 수 없습니다.',
-          style: const TextStyle(color: _kListText, fontSize: 13, height: 1.5),
+          style: const TextStyle(color: kExamListText, fontSize: 13, height: 1.5),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('취소')),
@@ -516,9 +367,9 @@ class _SchoolExamSchoolPanelState extends State<SchoolExamSchoolPanel> {
         }
         return Container(
           decoration: BoxDecoration(
-            color: _kPanel,
+            color: kExamPanel,
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: _kBorder),
+            border: Border.all(color: kExamBorder),
           ),
           padding: const EdgeInsets.all(16),
           child: Column(
@@ -543,15 +394,15 @@ class _SchoolExamSchoolPanelState extends State<SchoolExamSchoolPanel> {
                           ? const SizedBox(
                               width: 12,
                               height: 12,
-                              child: CircularProgressIndicator(strokeWidth: 2, color: _kAccent),
+                              child: CircularProgressIndicator(strokeWidth: 2, color: kExamAccent),
                             )
-                          : const Icon(Icons.playlist_play_rounded, size: 16, color: _kAccent),
+                          : const Icon(Icons.playlist_play_rounded, size: 16, color: kExamAccent),
                       label: Text(
                         '검수 전 ${notStarted.length}부 모두 시작',
-                        style: const TextStyle(color: _kAccent, fontSize: 12),
+                        style: const TextStyle(color: kExamAccent, fontSize: 12),
                       ),
                       style: OutlinedButton.styleFrom(
-                        side: const BorderSide(color: _kBorder),
+                        side: const BorderSide(color: kExamBorder),
                         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                       ),
                     ),
@@ -563,32 +414,32 @@ class _SchoolExamSchoolPanelState extends State<SchoolExamSchoolPanel> {
                   '시험지 ${exams.length}부',
                   for (final e in counts.entries) '${e.key} ${e.value}',
                 ].join(' · '),
-                style: const TextStyle(color: _kTextSub, fontSize: 12),
+                style: const TextStyle(color: kExamTextSub, fontSize: 12),
               ),
               const SizedBox(height: 10),
               Container(
                 decoration: BoxDecoration(
-                  color: _kInner,
+                  color: kExamInner,
                   borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: _kBorder),
+                  border: Border.all(color: kExamBorder),
                 ),
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 child: const Text(
                   '문제은행에 이미 등록된 시험지는 정답만 검수합니다(AI 풀이를 기록하고 정답표와 대조). '
                   '새로 올린 시험지는 그림 크기·위치까지 검수하고, 시험지를 확정하면 학습앱에 공개됩니다.',
-                  style: TextStyle(color: _kTextSub, fontSize: 12, height: 1.5),
+                  style: TextStyle(color: kExamTextSub, fontSize: 12, height: 1.5),
                 ),
               ),
               const SizedBox(height: 12),
-              const Divider(height: 1, color: _kBorder),
+              const Divider(height: 1, color: kExamBorder),
               Expanded(
                 child: exams.isEmpty
                     ? const Center(
-                        child: Text('시험지가 없습니다', style: TextStyle(color: _kTextMuted, fontSize: 13)),
+                        child: Text('시험지가 없습니다', style: TextStyle(color: kExamTextMuted, fontSize: 13)),
                       )
                     : ListView.separated(
                         itemCount: exams.length,
-                        separatorBuilder: (_, __) => const Divider(height: 1, color: _kBorder),
+                        separatorBuilder: (_, __) => const Divider(height: 1, color: kExamBorder),
                         itemBuilder: (context, index) {
                           final doc = exams[index];
                           return _buildRow(doc, live[doc.id]);
@@ -632,14 +483,14 @@ class _SchoolExamSchoolPanelState extends State<SchoolExamSchoolPanel> {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    _Badge(
+                    ExamReviewBadge(
                       label: doc.published ? '정답만 검수' : '새 시험지 · 전체 검수',
-                      fg: doc.published ? _kNeutralFg : _kBlue,
-                      bg: doc.published ? _kNeutralBg : _kBlueBg,
+                      fg: doc.published ? kExamNeutralFg : kExamBlue,
+                      bg: doc.published ? kExamNeutralBg : kExamBlueBg,
                     ),
                     if (!doc.hasHwpx) ...[
                       const SizedBox(width: 4),
-                      const _Badge(label: 'PDF 만', fg: _kNeutralFg, bg: _kNeutralBg),
+                      const ExamReviewBadge(label: 'PDF 만', fg: kExamNeutralFg, bg: kExamNeutralBg),
                     ],
                   ],
                 ),
@@ -648,42 +499,13 @@ class _SchoolExamSchoolPanelState extends State<SchoolExamSchoolPanel> {
                   doc.sourceFilename.isEmpty ? '(파일 이름 없음)' : doc.sourceFilename,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: _kTextMuted, fontSize: 11),
+                  style: const TextStyle(color: kExamTextMuted, fontSize: 11),
                 ),
               ],
             ),
           ),
           const SizedBox(width: 12),
-          Expanded(
-            flex: 4,
-            child: Row(
-              children: [
-                if (status.spinning) ...[
-                  const SizedBox(
-                    width: 12,
-                    height: 12,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: _kAccent),
-                  ),
-                  const SizedBox(width: 8),
-                ],
-                _Badge(label: status.label, fg: status.fg, bg: status.bg),
-                if (status.detail.trim().isNotEmpty) ...[
-                  const SizedBox(width: 8),
-                  Flexible(
-                    child: Tooltip(
-                      message: status.detail.trim(),
-                      child: Text(
-                        status.detail.trim().split('\n').first,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: _kTextSub, fontSize: 12, height: 1.35),
-                      ),
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
+          Expanded(flex: 4, child: ExamReviewStatusLine(status: status)),
           const SizedBox(width: 12),
           Wrap(
             spacing: 4,
@@ -695,33 +517,33 @@ class _SchoolExamSchoolPanelState extends State<SchoolExamSchoolPanel> {
                   child: SizedBox(
                     width: 14,
                     height: 14,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: _kAccent),
+                    child: CircularProgressIndicator(strokeWidth: 2, color: kExamAccent),
                   ),
                 )
               else ...[
                 if (stage == SchoolExamStage.notStarted && !active)
-                  _RowAction(
+                  ExamReviewRowAction(
                     icon: Icons.play_arrow_rounded,
                     label: '검수 시작',
                     accent: true,
                     onPressed: () => unawaited(_start(doc)),
                   ),
                 if (canResume)
-                  _RowAction(
+                  ExamReviewRowAction(
                     icon: Icons.play_arrow_rounded,
                     label: '이어서 진행',
                     accent: true,
                     onPressed: () => _retry(doc),
                   ),
                 if (hasOrder)
-                  _RowAction(
+                  ExamReviewRowAction(
                     icon: Icons.fact_check_outlined,
                     label: '검수 열기',
                     accent: stage == SchoolExamStage.reviewing && !active,
                     onPressed: () => unawaited(_open(doc)),
                   ),
                 if (active)
-                  _RowAction(
+                  ExamReviewRowAction(
                     icon: Icons.stop_circle_outlined,
                     label: live?.cancelRequested ?? false ? '중단하는 중' : '중단',
                     danger: true,
@@ -730,7 +552,7 @@ class _SchoolExamSchoolPanelState extends State<SchoolExamSchoolPanel> {
                         : () => TextbookWorkflowRunner.instance.cancel(live!.key),
                   ),
                 if (!doc.published)
-                  _RowAction(
+                  ExamReviewRowAction(
                     icon: Icons.delete_outline,
                     label: '초안 삭제',
                     danger: true,
@@ -740,66 +562,6 @@ class _SchoolExamSchoolPanelState extends State<SchoolExamSchoolPanel> {
             ],
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _Badge extends StatelessWidget {
-  const _Badge({required this.label, required this.fg, required this.bg});
-
-  final String label;
-  final Color fg;
-  final Color bg;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(6)),
-      child: Text(label, style: TextStyle(color: fg, fontSize: 11, fontWeight: FontWeight.w800)),
-    );
-  }
-}
-
-class _RowAction extends StatelessWidget {
-  const _RowAction({
-    required this.icon,
-    required this.label,
-    required this.onPressed,
-    this.accent = false,
-    this.danger = false,
-  });
-
-  final IconData icon;
-  final String label;
-  final VoidCallback? onPressed;
-  final bool accent;
-  final bool danger;
-
-  @override
-  Widget build(BuildContext context) {
-    final Color fg = onPressed == null
-        ? const Color(0xFF4A4A4A)
-        : (danger ? _kError : (accent ? _kAccent : const Color(0xFFE0E0E0)));
-    return TextButton.icon(
-      onPressed: onPressed,
-      icon: Icon(icon, size: 14, color: fg),
-      label: Text(
-        label,
-        style: TextStyle(color: fg, fontSize: 12, fontWeight: accent ? FontWeight.w800 : FontWeight.w600),
-      ),
-      style: TextButton.styleFrom(
-        minimumSize: const Size(0, 30),
-        backgroundColor: accent && onPressed != null ? _kAccent.withValues(alpha: 0.14) : null,
-        shape: accent
-            ? RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(999),
-                side: BorderSide(color: _kAccent.withValues(alpha: 0.45)),
-              )
-            : null,
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
       ),
     );
   }

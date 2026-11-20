@@ -12,6 +12,7 @@ import {
   figureLayoutItem,
   figureRemovalIndexes,
   holdUnslottedFigureCrops,
+  isSolutionSettled,
   LINE_PITCH_EM,
   mergeBoxFigureMeasures,
   mergeTableFigureMeasures,
@@ -20,6 +21,9 @@ import {
   singleFigureInsideBox,
   normalizeBox,
   blankChoiceLabelsOf,
+  currentBlankChoiceLabels,
+  normalizeBlankChoiceLabelsFix,
+  bogiFigureColumns,
   blankChoiceTextFromArray,
   normalizeTextFix,
   orderedFigureAssets,
@@ -506,4 +510,64 @@ Deno.test('빈칸형 선지: 한 줄 array 로 쓴 선지는 쉼표 형식으로
     currentChoices: current,
   });
   assertEquals(plain.choices, null);
+});
+
+Deno.test('보기 2단: 보기 안 그림이 원본에서 좌우로 나란할 때만 2단으로 본다', () => {
+  const stem = '<보기> 중에서 고른 것은?\n[문단]\n[보기시작]\nㄱ. [그림]\nㄴ. [그림]\nㄷ. [그림]\n[보기끝]';
+  const sideBySide = [{ bbox: [229, 110, 396, 509] }, { bbox: [225, 585, 399, 966] }, { bbox: [442, 103, 584, 486] }];
+  const stacked = [{ bbox: [100, 110, 250, 509] }, { bbox: [270, 110, 420, 509] }, { bbox: [440, 110, 590, 509] }];
+  assertEquals(bogiFigureColumns(stem, sideBySide), 2);
+  assertEquals(bogiFigureColumns(stem, stacked), null);
+  // 보기 밖에도 그림이 있거나 보기가 없으면 건드리지 않는다.
+  assertEquals(bogiFigureColumns('[그림]\n' + stem, [{ bbox: [0, 0, 90, 400] }, ...sideBySide]), null);
+  assertEquals(bogiFigureColumns('ㄱ. [그림]\nㄴ. [그림]', sideBySide), null);
+});
+
+Deno.test('글 줄 안 그림: 원본에서 글줄에 낀 그림은 inline-text 로 두고 잰 높이를 쓴다', () => {
+  const p = buildFigureProposal({
+    measures: [
+      { bbox: [349, 49, 391, 121], placement: 'inline', align: 'left', v2State: 'ok' },
+      { bbox: [478, 185, 838, 812], placement: 'below_text', align: 'center', v2State: 'ok' },
+    ] as Parameters<typeof buildFigureProposal>[0]['measures'],
+    emPx: 39.7,
+    imageWidthPx: 1100,
+    imageHeightPx: 1366,
+    assets: [{ figure_index: 1 }, { figure_index: 2 }],
+    currentLayout: null,
+  });
+  assertEquals(p?.layout.items[0].position, 'inline-text');
+  assertEquals(p?.layout.items[0].heightEm, 1.4);
+  assertEquals(p?.layout.items[1].position, 'below-stem');
+});
+
+Deno.test('표 모양 선지 제목: 반영 대기 값을 먼저 쓰고, 화면이 달라지는 같은 개수의 수정안만 받는다', () => {
+  const meta = { choice_layout: 'blank_table', blank_choice_labels: ['닮은 도형', '닮음조건', '\\overlineDC의 길이'] };
+  const fixed = ['닮은 도형', '닮음조건', '\\overline{DC}의 길이'];
+  assertEquals(currentBlankChoiceLabels(meta, null)?.[2], '\\overlineDC의 길이');
+  assertEquals(currentBlankChoiceLabels(meta, { blank_choice_labels: fixed })?.[2], '\\overline{DC}의 길이');
+  assertEquals(currentBlankChoiceLabels({ choice_layout: 'default' }, { blank_choice_labels: fixed }), null);
+  const cur = currentBlankChoiceLabels(meta, null);
+  assertEquals(normalizeBlankChoiceLabelsFix(fixed, cur), fixed);
+  assertEquals(normalizeBlankChoiceLabelsFix(fixed, fixed), null);
+  assertEquals(normalizeBlankChoiceLabelsFix(['닮은 도형', '닮음조건'], cur), null);
+  assertEquals(normalizeBlankChoiceLabelsFix(null, cur), null);
+  assertEquals(normalizeBlankChoiceLabelsFix(fixed, null), null);
+});
+
+Deno.test('정답이 통과했고 원본 해설을 이미 옮긴 문항은 해설을 다시 옮기지 않는다', () => {
+  const base = { math_status: 'clean', solution_transcribed: '$x=1$', quality_checks: { solution_vision: { found: true } } };
+  assert(isSolutionSettled(base));
+  assert(isSolutionSettled({ ...base, math_status: 'approved', quality_checks: {} }));
+  // 정답이 안 맞거나, 해설을 못 찾았거나, 옮긴 해설이 없으면 다시 옮긴 해설을 받는다.
+  assert(!isSolutionSettled({ ...base, math_status: 'issue' }));
+  assert(!isSolutionSettled({ ...base, math_status: 'pending' }));
+  assert(!isSolutionSettled({ ...base, quality_checks: { solution_vision: { found: false } } }));
+  assert(!isSolutionSettled({ ...base, solution_transcribed: '  ' }));
+  assert(!isSolutionSettled({ ...base, solution_transcribed: null }));
+  // 세 정답은 일치했는데 해설 풀이 과정의 오류로만 'issue' 인 문항도 해설을 다시 옮기지 않는다.
+  const logicOnly = { ...base, math_status: 'issue', answer_matched: true, mismatch_reason: '해설 논리 오류: 부호가 틀렸다.' };
+  assert(isSolutionSettled(logicOnly));
+  assert(!isSolutionSettled({ ...logicOnly, answer_matched: false }));
+  assert(!isSolutionSettled({ ...logicOnly, mismatch_reason: '해설 정답과 채점 정답이 다르다.' }));
+  assert(!isSolutionSettled({ ...logicOnly, quality_checks: { solution_vision: { found: false } } }));
 });

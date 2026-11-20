@@ -2925,7 +2925,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
       examPaperMode: true,
     );
     controller.onClose = _closeTextbookExplorer;
-    setState(() {
+                    setState(() {
       _explorer = controller;
       _examPresetOpeningId = null;
     });
@@ -3034,128 +3034,128 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
   }
 
   Widget _buildOtherTabListHeader() {
-    String desc = '';
-    if (_selectedFolderIdForTree == '__FAVORITES__') {
-      desc = '';
-    } else {
+                            String desc = '';
+                            if (_selectedFolderIdForTree == '__FAVORITES__') {
+                              desc = '';
+                            } else {
       final idx = _folders.indexWhere((x) => x.id == _selectedFolderIdForTree);
-      if (idx != -1) {
-        desc = _folders[idx].description;
-      }
-    }
+                              if (idx != -1) {
+                                desc = _folders[idx].description;
+                              }
+                            }
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
-          child: Row(
-            children: [
-              Expanded(
+                              child: Row(
+                                children: [
+                                  Expanded(
                 child: Padding(
                   padding: const EdgeInsets.only(left: 4),
-                  child: Text(
-                    desc,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                                    child: Text(
+                                      desc,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
                       color: Colors.white70,
                       fontSize: 15,
                     ),
                   ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              SizedBox(
-                height: 44,
-                child: OutlinedButton.icon(
-                  onPressed: () async {
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  SizedBox(
+                                    height: 44,
+                                    child: OutlinedButton.icon(
+                                      onPressed: () async {
                     if (_selectedFolderIdForTree == null ||
                         _selectedFolderIdForTree == '__FAVORITES__') {
                       showAppSnackBar(context, '폴더를 먼저 선택하세요.');
-                      return;
-                    }
+                                          return;
+                                        }
                     final meta = await showDialog<Map<String, dynamic>>(
-                      context: context,
-                      builder: (ctx) => _FileCreateDialog(
+                                          context: context,
+                                          builder: (ctx) => _FileCreateDialog(
                         title: '파일 추가',
                         nameLabel: '파일 이름',
                         allowColor: true,
                       ),
                     );
                     if (meta == null || meta['meta'] is! _ResourceFile) {
-                      return;
+                                          return;
                     }
                     var created = meta['meta'] as _ResourceFile;
                     final parentId = _selectedFolderIdForTree;
                     final childList = _childFilesOf(parentId);
-                    final nextIndex = childList.isEmpty
-                        ? 0
-                        : (childList
+                                        final nextIndex = childList.isEmpty
+                                            ? 0
+                                            : (childList
                                 .map((e) => e.orderIndex ?? 0)
                                 .reduce((a, b) => a > b ? a : b) +
-                            1);
-                    created = created.copyWith(
-                      parentId: parentId,
+                                                1);
+                                        created = created.copyWith(
+                                            parentId: parentId,
                       orderIndex: nextIndex,
                     );
 
                     final linksRes = await showDialog<Map<String, dynamic>>(
-                      context: context,
+                                          context: context,
                       builder: (ctx) => _OtherFileLinksDialog(
-                        meta: created,
+                                                      meta: created,
                         initialLinks: const {},
                       ),
-                    );
-                    Map<String, String> links = {};
-                    if (linksRes != null &&
+                                        );
+                                        Map<String, String> links = {};
+                                        if (linksRes != null &&
                         linksRes['links'] is Map<String, String>) {
                       links =
                           Map<String, String>.from(linksRes['links'] as Map);
                     }
                     created = created.copyWith(linksByGrade: links);
 
-                    setState(() {
-                      _files.add(created);
-                    });
+                                        setState(() {
+                                          _files.add(created);
+                                        });
                     await DataManager.instance.saveResourceFileWithCategory({
-                      'id': created.id,
-                      'name': created.name,
-                      'description': created.description,
-                      'parent_id': created.parentId,
-                      'pos_x': created.position.dx,
-                      'pos_y': created.position.dy,
-                      'width': created.size.width,
-                      'height': created.size.height,
+                                          'id': created.id,
+                                          'name': created.name,
+                                          'description': created.description,
+                                          'parent_id': created.parentId,
+                                          'pos_x': created.position.dx,
+                                          'pos_y': created.position.dy,
+                                          'width': created.size.width,
+                                          'height': created.size.height,
                       'color': created.color?.value.toSigned(32),
-                      'icon_code': created.icon?.codePoint,
+                                          'icon_code': created.icon?.codePoint,
                       'icon_image_path': created.iconImagePath,
-                    }, _currentCategory);
-                    await DataManager.instance
+                                        }, _currentCategory);
+                                        await DataManager.instance
                         .saveResourceFileLinks(created.id, links);
                     await _persistFileOrderForParent(parentId);
-                  },
-                  icon: const Icon(Icons.add, size: 20),
+                                      },
+                                      icon: const Icon(Icons.add, size: 20),
                   label: const Text(
                     '파일 추가',
                     style: TextStyle(
-                      fontSize: 16,
+                                              fontSize: 16,
                       fontWeight: FontWeight.w700,
                     ),
                   ),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.white70,
+                                      style: OutlinedButton.styleFrom(
+                                        foregroundColor: Colors.white70,
                     side: const BorderSide(color: Colors.white24),
-                    shape: const StadiumBorder(),
-                    padding: const EdgeInsets.symmetric(
+                                        shape: const StadiumBorder(),
+                                        padding: const EdgeInsets.symmetric(
                       horizontal: 22,
                       vertical: 16,
                     ),
-                  ),
-                ),
-              ),
-            ],
-          ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
         ),
         const Divider(height: 1, color: Colors.white12),
       ],
@@ -3259,20 +3259,20 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                               Column(
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
-                                  Expanded(
+              Expanded(
                                     child: Stack(
                                       clipBehavior: Clip.none,
                                       children: [
                                         Positioned.fill(
-                                          child: IndexedStack(
-                                            index: _customTabIndex,
-                                            children: [
-                                              _buildTextbooksTreeLayout(0),
-                                              _buildTextbooksTreeLayout(1),
-                                              _buildTextbooksTreeLayout(2),
-                                            ],
-                                          ),
-                                        ),
+                child: IndexedStack(
+                  index: _customTabIndex,
+                  children: [
+                    _buildTextbooksTreeLayout(0),
+                    _buildTextbooksTreeLayout(1),
+                    _buildTextbooksTreeLayout(2),
+                  ],
+                ),
+              ),
                                         if (_currentCategory == 'other')
                                           Positioned(
                                             top: _resourcesPageTitleBandHeight -
@@ -3311,61 +3311,61 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
                           ),
                   ),
                 ),
-              ],
-            ),
-            if (_printPickMode)
-              Positioned(
-                top: 86,
-                left: 0,
-                right: 0,
-                child: Center(
-                  child: Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: _rsPanelBg,
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: _rsAccent.withOpacity(0.8)),
-                      boxShadow: [
-                        BoxShadow(
-                            color: Colors.black.withOpacity(0.35),
-                            blurRadius: 10,
-                            offset: const Offset(0, 6)),
-                      ],
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.print, size: 16, color: _rsAccent),
-                        const SizedBox(width: 6),
-                        const Text('인쇄할 파일을 고르세요',
-                            style: TextStyle(
-                                color: _rsText,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w800)),
-                        const SizedBox(width: 8),
-                        InkWell(
+            ],
+          ),
+          if (_printPickMode)
+            Positioned(
+              top: 86,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: _rsPanelBg,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: _rsAccent.withOpacity(0.8)),
+                    boxShadow: [
+                      BoxShadow(
+                          color: Colors.black.withOpacity(0.35),
+                          blurRadius: 10,
+                          offset: const Offset(0, 6)),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.print, size: 16, color: _rsAccent),
+                      const SizedBox(width: 6),
+                      const Text('인쇄할 파일을 고르세요',
+                          style: TextStyle(
+                              color: _rsText,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w800)),
+                      const SizedBox(width: 8),
+                      InkWell(
                           onTap: () => _setResourcePrintPickMode(false),
-                          borderRadius: BorderRadius.circular(999),
-                          child: Container(
-                            width: 20,
-                            height: 20,
-                            decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(0.25),
-                              shape: BoxShape.circle,
-                              border: Border.all(color: _rsBorder),
-                            ),
-                            alignment: Alignment.center,
-                            child: const Icon(Icons.close,
-                                size: 12, color: _rsTextSub),
+                        borderRadius: BorderRadius.circular(999),
+                        child: Container(
+                          width: 20,
+                          height: 20,
+                          decoration: BoxDecoration(
+                            color: Colors.black.withOpacity(0.25),
+                            shape: BoxShape.circle,
+                            border: Border.all(color: _rsBorder),
                           ),
+                          alignment: Alignment.center,
+                          child: const Icon(Icons.close,
+                              size: 12, color: _rsTextSub),
                         ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
                 ),
               ),
-          ],
+            ),
+        ],
         ),
       ),
     );
@@ -3423,9 +3423,9 @@ const List<String> _examCanonicalRootIds = <String>[
 ];
 
 List<BoxShadow> _textbookCoverBoxShadows() => [
-      BoxShadow(
+            BoxShadow(
         color: Colors.black.withOpacity(0.10),
-        blurRadius: 14,
+                blurRadius: 14,
         spreadRadius: 0,
       ),
       BoxShadow(
@@ -3479,9 +3479,9 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
           shape: 'rect',
           parentId: parentId,
           orderIndex: orderIndex,
-        ),
-      );
-    }
+      ),
+    );
+  }
 
     void addNaesinGradeRoot({
       required String gradeKey,
@@ -3761,12 +3761,12 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
   }
 
   void _handleSharedFolderTreeNodeTap(SharedFolderTreeNode node) {
-    setState(() {
+                          setState(() {
       _selectedFolderIdForTree = node.id;
       if (node.children.isNotEmpty) {
         if (_expandedFolderIds.contains(node.id)) {
           _expandedFolderIds.remove(node.id);
-        } else {
+                              } else {
           _expandedFolderIds.add(node.id);
         }
       }
@@ -3785,54 +3785,54 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
     final folder = node.data;
     if (folder is! _ResourceFolder) return row;
 
-    return DragTarget<_ResourceFile>(
-      onWillAccept: (incomingFile) {
+                            return DragTarget<_ResourceFile>(
+                              onWillAccept: (incomingFile) {
         final ok = incomingFile != null && _acceptsResourceFileDrop(folder.id);
         if (ok) {
           setState(() => _fileDropTargetFolderId = folder.id);
         }
-        return ok;
-      },
-      onAcceptWithDetails: (details) async {
+                                return ok;
+                              },
+                              onAcceptWithDetails: (details) async {
         if (!_acceptsResourceFileDrop(folder.id)) return;
-        final incoming = details.data;
+                                final incoming = details.data;
         final idx = _files.indexWhere((x) => x.id == incoming.id);
-        if (idx != -1) {
-          final prevParent = _files[idx].parentId;
+                                if (idx != -1) {
+                                  final prevParent = _files[idx].parentId;
           final childList = _childFilesOf(folder.id);
-          final nextIndex = childList.isEmpty
-              ? 0
-              : (childList
-                      .map((e) => e.orderIndex ?? 0)
-                      .reduce((a, b) => a > b ? a : b) +
-                  1);
-          setState(() {
-            _files[idx] = _files[idx].copyWith(
+                                  final nextIndex = childList.isEmpty
+                                      ? 0
+                                      : (childList
+                                              .map((e) => e.orderIndex ?? 0)
+                                              .reduce((a, b) => a > b ? a : b) +
+                                          1);
+                                  setState(() {
+                                    _files[idx] = _files[idx].copyWith(
               parentId: folder.id,
               orderIndex: nextIndex,
             );
-            _fileDropTargetFolderId = null;
-          });
+                                    _fileDropTargetFolderId = null;
+                                  });
           await DataManager.instance
               .saveResourceFile({'id': incoming.id, 'parent_id': folder.id});
           await _persistFileOrderForParent(folder.id);
           if (prevParent != folder.id) {
             await _persistFileOrderForParent(prevParent);
-          }
-        }
-      },
-      onLeave: (_) => setState(() {
+                                  }
+                                }
+                              },
+                              onLeave: (_) => setState(() {
         if (_fileDropTargetFolderId == folder.id) {
-          _fileDropTargetFolderId = null;
+                                  _fileDropTargetFolderId = null;
         }
-      }),
-      builder: (context, candFiles, rejFiles) {
+                              }),
+                              builder: (context, candFiles, rejFiles) {
         final active = _fileDropTargetFolderId == folder.id &&
             candFiles.isNotEmpty &&
             node.rowStyle == SharedFolderTreeRowStyle.pill;
         if (!active) return row;
-        return Stack(
-          children: [
+                                return Stack(
+                                  children: [
             row,
             Positioned.fill(
               child: IgnorePointer(
@@ -3851,11 +3851,11 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                       border: Border.all(
                         color: _rsAccent.withOpacity(0.55),
                         width: 1.5,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
             ),
           ],
         );
@@ -3901,15 +3901,15 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
               splashColor: Colors.transparent,
               highlightColor: Colors.transparent,
               child: Padding(
-                padding: const EdgeInsets.symmetric(
+                                        padding: const EdgeInsets.symmetric(
                   horizontal: 8,
                   vertical: _folderTreeNavRowPaddingVertical,
                 ),
-                child: Row(
-                  children: [
+                                        child: Row(
+                                          children: [
                     const SizedBox(width: _folderTreeLeadingWidth),
                     const SizedBox(width: 2),
-                    Expanded(
+                                            Expanded(
                       child: Text(
                         label,
                         maxLines: 1,
@@ -3919,9 +3919,9 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                           fontWeight: FontWeight.w400,
                           fontSize: FabTabBarTokens.fabBarLabelFontSize,
                           letterSpacing: -0.1,
-                        ),
-                      ),
-                    ),
+                                                      ),
+                                                    ),
+                                                  ),
                     if (hasChildren)
                       Icon(
                         isExpanded ? Icons.expand_more : Icons.chevron_right,
@@ -3964,9 +3964,9 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
         12,
         _folderTreeItemSpacing,
       ),
-      child: Material(
+                                              child: Material(
         color: Colors.transparent,
-        child: InkWell(
+                                                child: InkWell(
           onTap: onTap,
           borderRadius: BorderRadius.circular(999),
           hoverColor: Colors.transparent,
@@ -4023,7 +4023,7 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
         isDark ? Colors.white.withOpacity(0.08) : const Color(0xFFE5E5E5);
 
     Widget row = Stack(
-      children: [
+                                            children: [
         _buildFolderTreeNavRow(
           panelStyle: panelStyle,
           selected: isSelected,
@@ -4037,17 +4037,17 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
           depth: depth,
           leading: hasChildren
               ? InkWell(
-                  onTap: () => setState(() {
-                    if (isExpanded) {
+                                                  onTap: () => setState(() {
+                                                    if (isExpanded) {
                       _expandedFolderIds.remove(folder.id);
-                    } else {
+                                                    } else {
                       _expandedFolderIds.add(folder.id);
-                    }
-                  }),
+                                                    }
+                                                  }),
                   borderRadius: BorderRadius.circular(6),
                   child: Padding(
                     padding: const EdgeInsets.all(2),
-                    child: Icon(
+                                                  child: Icon(
                       isExpanded ? Icons.expand_more : Icons.chevron_right,
                       size: 16,
                       color: panelStyle.icon,
@@ -4083,20 +4083,20 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                   12,
                   _folderTreeHighlightInsetVertical,
                 ),
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
+                                            child: DecoratedBox(
+                                                decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(999),
-                    border: Border.all(
+                                              border: Border.all(
                       color: _rsAccent.withOpacity(0.55),
                       width: 1.5,
                     ),
                   ),
-                ),
-              ),
-            ),
-          ),
-      ],
-    );
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                  ],
+                                );
 
     if (!trailingSectionDivider) return row;
 
@@ -4224,9 +4224,9 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
               candFiles: candFiles,
               trailingSectionDivider:
                   isExam && depth > 0 && isLastAmongSiblings,
-            );
-          },
-        ),
+              );
+            },
+          ),
         if (hasChildren)
           AnimatedSize(
             duration: _folderTreeExpandDuration,
@@ -4258,7 +4258,7 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
+              children: [
         Padding(
           padding: EdgeInsets.fromLTRB(
             FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal - 6,
@@ -4266,9 +4266,9 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
             FabTabBarTokens.previewAcademyGroupedRowPaddingHorizontal,
             _folderTreeTitleListGap,
           ),
-          child: Text(
+                  child: Text(
             '폴더',
-            style: TextStyle(
+                    style: TextStyle(
               color: panelStyle.title,
               fontWeight: FontWeight.w600,
               fontSize: FabTabBarTokens.fabBarLabelFontSize,
@@ -4386,9 +4386,9 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                 if (!compact) return normal;
                 return Align(
                   alignment: Alignment.topLeft,
-                  child: _buildCompactTextbookDragFeedback(
-                    fi,
-                    maxWidth: gridCardWidth,
+                    child: _buildCompactTextbookDragFeedback(
+                      fi,
+                      maxWidth: gridCardWidth,
                   ),
                 );
               },
@@ -7194,7 +7194,7 @@ class _GridFileCardState extends State<_GridFileCard> {
     final cardRadius = FabTabBarTokens.previewAcademyGroupedCardRadius;
 
     if (isTextbook) {
-      return MouseRegion(
+    return MouseRegion(
         cursor:
             isPrintMode ? SystemMouseCursors.copy : SystemMouseCursors.click,
         child: GestureDetector(
@@ -7205,11 +7205,11 @@ class _GridFileCardState extends State<_GridFileCard> {
             if (!isPrintMode) return;
             resState?._setResourcePrintPickMode(false);
           },
-          onTap: () async {
-            if (isPrintMode) {
-              await resState?._handlePrintPick(file);
-              return;
-            }
+            onTap: () async {
+              if (isPrintMode) {
+                await resState?._handlePrintPick(file);
+                return;
+              }
             if (bodyCacheFuture != null) {
               bool cached;
               try {
@@ -7237,13 +7237,13 @@ class _GridFileCardState extends State<_GridFileCard> {
               }
               // 마이그레이션(스토리지) 교재 + 다운로드 완료 → 페이지 진입.
               await openExplorerPage();
-              return;
-            }
-            openMetaDialog();
-          },
-          onDoubleTap: isPrintMode ? null : openPrimaryLink,
-          child: IgnorePointer(
-            ignoring: isPrintMode,
+                return;
+              }
+              openMetaDialog();
+            },
+            onDoubleTap: isPrintMode ? null : openPrimaryLink,
+            child: IgnorePointer(
+              ignoring: isPrintMode,
             child: LayoutBuilder(
               builder: (context, box) {
                 final panelStyle = FabTabBarTokens.previewAcademyPanelStyleFor(
@@ -7312,8 +7312,8 @@ class _GridFileCardState extends State<_GridFileCard> {
                                         _gradeDragDx = 0.0,
                                     onHorizontalDragCancel: () =>
                                         _gradeDragDx = 0.0,
-                                    child: Container(
-                                      decoration: BoxDecoration(
+              child: Container(
+                decoration: BoxDecoration(
                                         color: hasCoverImage
                                             ? bg
                                             : const Color(0xFF2B2B2B),
@@ -7519,7 +7519,7 @@ class _GridFileCardState extends State<_GridFileCard> {
                 child: DecoratedBox(
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(cardRadius),
-                    boxShadow: [
+                  boxShadow: [
                       BoxShadow(
                         color: Colors.black.withOpacity(0.32),
                         blurRadius: 22,
@@ -7549,112 +7549,112 @@ class _GridFileCardState extends State<_GridFileCard> {
                   highlightColor: Colors.white.withOpacity(0.03),
                   child: IgnorePointer(
                     ignoring: isPrintMode,
-                    child: LayoutBuilder(
-                      builder: (context, box) {
-                        if (!isTextbook) {
-                          return _buildWideMeta(context,
-                              hasForCurrent: hasForCurrent,
-                              currentGrade: currentGrade,
-                              isOther: isOther);
-                        }
+                child: LayoutBuilder(
+                  builder: (context, box) {
+                    if (!isTextbook) {
+                      return _buildWideMeta(context,
+                          hasForCurrent: hasForCurrent,
+                          currentGrade: currentGrade,
+                          isOther: isOther);
+                    }
                         final metaMinHeight = _textbookCardMetaHeight;
                         final desiredCoverHeight =
                             box.maxWidth * _textbookCoverA4Ratio;
-                        final coverHeight = math.min(desiredCoverHeight,
-                            math.max(0.0, box.maxHeight - metaMinHeight));
-                        final isFav =
+                    final coverHeight = math.min(desiredCoverHeight,
+                        math.max(0.0, box.maxHeight - metaMinHeight));
+                    final isFav =
                             resState?._favoriteFileIds.contains(file.id) ??
                                 false;
-                        return Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            SizedBox(
-                              height: coverHeight,
-                              width: double.infinity,
-                              child: Listener(
-                                behavior: HitTestBehavior.opaque,
-                                onPointerSignal: (signal) {
-                                  if (signal is PointerScrollEvent) {
-                                    final dx = signal.scrollDelta.dx;
-                                    final dy = signal.scrollDelta.dy;
-                                    if (dx != 0 && dx.abs() >= dy.abs()) {
-                                      handleGradeDelta(dx < 0 ? 1 : -1);
-                                    }
-                                  }
-                                },
-                                child: GestureDetector(
-                                  behavior: HitTestBehavior.opaque,
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SizedBox(
+                          height: coverHeight,
+                          width: double.infinity,
+                          child: Listener(
+                            behavior: HitTestBehavior.opaque,
+                            onPointerSignal: (signal) {
+                              if (signal is PointerScrollEvent) {
+                                final dx = signal.scrollDelta.dx;
+                                final dy = signal.scrollDelta.dy;
+                                if (dx != 0 && dx.abs() >= dy.abs()) {
+                                  handleGradeDelta(dx < 0 ? 1 : -1);
+                                }
+                              }
+                            },
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
                                   onHorizontalDragStart: (_) =>
                                       _gradeDragDx = 0.0,
-                                  onHorizontalDragUpdate: (d) =>
+                              onHorizontalDragUpdate: (d) =>
                                       _handleGradeDragUpdate(
                                           d, handleGradeDelta),
                                   onHorizontalDragEnd: (_) =>
                                       _gradeDragDx = 0.0,
                                   onHorizontalDragCancel: () =>
                                       _gradeDragDx = 0.0,
-                                  child: Container(
-                                    decoration: BoxDecoration(
-                                      color: hasCoverImage
-                                          ? bg
-                                          : const Color(0xFF2B2B2B),
-                                      image: hasCoverImage
-                                          ? DecorationImage(
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: hasCoverImage
+                                      ? bg
+                                      : const Color(0xFF2B2B2B),
+                                  image: hasCoverImage
+                                      ? DecorationImage(
                                               image: coverImage!,
                                               fit: BoxFit.cover)
-                                          : null,
-                                    ),
-                                    child: Stack(
-                                      fit: StackFit.expand,
-                                      children: [
-                                        if (!hasCoverImage)
-                                          Center(
-                                            child: Icon(
-                                              file.icon ?? Icons.menu_book,
-                                              size: 36,
-                                              color: Colors.white60,
-                                            ),
-                                          ),
-                                        if (hasCoverImage &&
-                                            hasExplicitIcon &&
-                                            file.icon != null)
-                                          IgnorePointer(
-                                            child: Center(
-                                              child: Icon(
-                                                file.icon!,
-                                                size: 72,
+                                      : null,
+                                ),
+                                child: Stack(
+                                  fit: StackFit.expand,
+                                  children: [
+                                    if (!hasCoverImage)
+                                      Center(
+                                        child: Icon(
+                                          file.icon ?? Icons.menu_book,
+                                          size: 36,
+                                          color: Colors.white60,
+                                        ),
+                                      ),
+                                    if (hasCoverImage &&
+                                        hasExplicitIcon &&
+                                        file.icon != null)
+                                      IgnorePointer(
+                                        child: Center(
+                                          child: Icon(
+                                            file.icon!,
+                                            size: 72,
                                                 color: Colors.white
                                                     .withOpacity(0.18),
-                                              ),
-                                            ),
-                                          ),
-                                        Positioned(
-                                          top: 8,
-                                          right: 8,
-                                          child: InkWell(
-                                            onTap: toggleFavorite,
-                                            borderRadius:
-                                                BorderRadius.circular(16),
-                                            child: Container(
-                                              padding: const EdgeInsets.all(6),
-                                              decoration: BoxDecoration(
-                                                color: Colors.transparent,
-                                                borderRadius:
-                                                    BorderRadius.circular(16),
-                                              ),
-                                              child: Icon(
-                                                Icons.bookmark,
-                                                size: 20,
-                                                color: isFav
-                                                    ? Colors.amber
-                                                    : Colors.white70,
-                                              ),
-                                            ),
                                           ),
                                         ),
+                                      ),
+                                    Positioned(
+                                      top: 8,
+                                      right: 8,
+                                      child: InkWell(
+                                        onTap: toggleFavorite,
+                                            borderRadius:
+                                                BorderRadius.circular(16),
+                                        child: Container(
+                                          padding: const EdgeInsets.all(6),
+                                          decoration: BoxDecoration(
+                                            color: Colors.transparent,
+                                            borderRadius:
+                                                BorderRadius.circular(16),
+                                          ),
+                                          child: Icon(
+                                            Icons.bookmark,
+                                                size: 20,
+                                            color: isFav
+                                                ? Colors.amber
+                                                : Colors.white70,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
                                         Positioned(
                                           bottom: 8,
-                                          left: 8,
+                                      left: 8,
                                           right: 48,
                                           child: Row(
                                             children: [
@@ -7673,94 +7673,94 @@ class _GridFileCardState extends State<_GridFileCard> {
                                               ),
                                             ],
                                           ),
-                                        ),
-                                        Positioned(
-                                          bottom: 8,
-                                          right: 8,
-                                          child: Container(
-                                            width: 32,
-                                            height: 32,
-                                            decoration: BoxDecoration(
+                                    ),
+                                    Positioned(
+                                      bottom: 8,
+                                      right: 8,
+                                      child: Container(
+                                        width: 32,
+                                        height: 32,
+                                        decoration: BoxDecoration(
                                               color: Colors.black
                                                   .withOpacity(0.45),
-                                              shape: BoxShape.circle,
-                                            ),
-                                            alignment: Alignment.center,
-                                            child: _MoreMenuButton(
-                                              file: file,
-                                              compact: true,
+                                          shape: BoxShape.circle,
+                                        ),
+                                        alignment: Alignment.center,
+                                        child: _MoreMenuButton(
+                                            file: file,
+                                            compact: true,
                                               hitSize: 32,
                                             ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                            Expanded(
-                              child: Padding(
-                                padding:
-                                    const EdgeInsets.fromLTRB(12, 6, 12, 2),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        Expanded(
-                                          child: LatexTextRenderer(
-                                            file.name,
-                                            maxLines: 1,
-                                            softWrap: false,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: TextStyle(
-                                                color:
-                                                    file.textColor ?? _rsText,
-                                                fontSize: 18,
-                                                fontWeight: FontWeight.w800,
-                                                letterSpacing: -0.2),
-                                          ),
-                                        ),
-                                        if (displayGrade != null) ...[
-                                          const SizedBox(width: 6),
-                                          _MiniPill(
-                                              text: displayGrade,
-                                              fontSize: 13,
-                                              padding:
-                                                  const EdgeInsets.symmetric(
-                                                      horizontal: 10,
-                                                      vertical: 5)),
-                                        ],
-                                      ],
-                                    ),
-                                    if ((file.description ?? '')
-                                        .isNotEmpty) ...[
-                                      const SizedBox(height: 1),
-                                      LatexTextRenderer(
-                                        file.description!,
-                                        maxLines: 1,
-                                        softWrap: false,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                            color: Colors.white60,
-                                            fontSize: 14.5),
                                       ),
-                                    ],
-                                    const Spacer(),
-                                    const SizedBox(height: 10),
+                                    ),
                                   ],
                                 ),
                               ),
                             ),
-                          ],
-                        );
-                      },
-                    ),
-                  ),
+                          ),
+                        ),
+                        Expanded(
+                          child: Padding(
+                                padding:
+                                    const EdgeInsets.fromLTRB(12, 6, 12, 2),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: LatexTextRenderer(
+                                        file.name,
+                                        maxLines: 1,
+                                        softWrap: false,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                                color:
+                                                    file.textColor ?? _rsText,
+                                            fontSize: 18,
+                                            fontWeight: FontWeight.w800,
+                                            letterSpacing: -0.2),
+                                      ),
+                                    ),
+                                    if (displayGrade != null) ...[
+                                      const SizedBox(width: 6),
+                                      _MiniPill(
+                                          text: displayGrade,
+                                          fontSize: 13,
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                      horizontal: 10,
+                                                      vertical: 5)),
+                                    ],
+                                  ],
+                                ),
+                                    if ((file.description ?? '')
+                                        .isNotEmpty) ...[
+                                  const SizedBox(height: 1),
+                                  LatexTextRenderer(
+                                    file.description!,
+                                    maxLines: 1,
+                                    softWrap: false,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                            color: Colors.white60,
+                                            fontSize: 14.5),
+                                  ),
+                                ],
+                                const Spacer(),
+                                const SizedBox(height: 10),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    );
+                  },
                 ),
               ),
             ),
+          ),
+        ),
           ),
         ],
       ),
@@ -8262,7 +8262,7 @@ class _SmallLinkButtonPill extends StatelessWidget {
     return Container(
       height: overlay ? 32 : 28,
       padding: EdgeInsets.symmetric(horizontal: overlay ? 10 : 8),
-      decoration: BoxDecoration(
+          decoration: BoxDecoration(
         color: overlay
             ? Colors.black.withValues(alpha: visuallyEnabled ? 0.45 : 0.22)
             : (visuallyEnabled
@@ -8301,8 +8301,8 @@ class _TextbookDownloadOverlay extends StatelessWidget {
           child: const Padding(
             padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
+            mainAxisSize: MainAxisSize.min,
+            children: [
                 Icon(Icons.arrow_downward_rounded,
                     size: 28, color: Colors.white),
                 SizedBox(height: 3),
@@ -8319,11 +8319,11 @@ class _TextbookDownloadOverlay extends StatelessWidget {
                   '다운로드',
                   style: TextStyle(
                     color: Colors.white,
-                    fontSize: 12,
+                      fontSize: 12,
                     fontWeight: FontWeight.w800,
                   ),
                 ),
-              ],
+            ],
             ),
           ),
         ),
@@ -8646,8 +8646,8 @@ class _PrintRangeDialogState extends State<_PrintRangeDialog> {
           );
           // 개념서(개념원리)면 sub_units(실제 소단원), 그 외면 smalls.
           for (final s in displaySubUnitsForMid(m)) {
-            mid.smalls.add(
-              _PrintSmallUnitNode(
+              mid.smalls.add(
+                _PrintSmallUnitNode(
                 name: s.name,
                 orderIndex: s.order,
                 startPage: s.startPage,

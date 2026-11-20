@@ -5403,7 +5403,8 @@ function renderOneQuestion(question, {
   // 조건제시박스(deco)/보기박스(bogi) 2단 배치 옵션. 매니저앱 토글이 meta 에 저장.
   const boxColMeta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
   const decoBoxColumns = Number(boxColMeta.deco_box_columns) === 2 ? 2 : 1;
-  const bogiBoxColumns = Number(boxColMeta.bogi_box_columns) === 2 ? 2 : 1;
+  const bogiBoxColumns =
+    Number(boxColMeta.bogi_box_columns) === 2 || Number(boxColMeta.figure_layout?.bogiColumns) === 2 ? 2 : 1;
 
   // 문항 내 표 등장 순서 카운터 (meta.table_scales 키: struct:N / raw:N 와 대응).
   let structTableIdx = 0;

@@ -129,7 +129,7 @@ function cropStorageKey(academyId, documentId, problemNumber) {
 
 // 네트워크가 잠깐 끊겨 난 실패. 여러 부를 이어 돌릴 때 이런 실패 한 번으로 시험지 하나가 멈추지 않게 다시 시도한다.
 const TRANSIENT_ERROR_RE = /fetch failed|network|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|UND_ERR/i;
-const DEFAULT_RETRY_DELAYS_MS = Object.freeze([1500, 4000]);
+export const DEFAULT_RETRY_DELAYS_MS = Object.freeze([1500, 4000]);
 
 function isTransientError(message) {
   return TRANSIENT_ERROR_RE.test(String(message || ''));
@@ -139,7 +139,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /// DB 질의 하나를 돌린다. 잠깐 끊긴 실패는 같은 질의를 다시 보낸다(질의 객체는 await 할 때마다 요청을 새로 보낸다).
 /// 다시 보내도 결과가 같은 질의(조회·upsert·update·delete)에만 쓴다. 그냥 insert 는 retry: false 로 부른다.
-async function runQuery(query, label, { retry = true, delaysMs = DEFAULT_RETRY_DELAYS_MS } = {}) {
+export async function runQuery(query, label, { retry = true, delaysMs = DEFAULT_RETRY_DELAYS_MS } = {}) {
   for (let attempt = 0; ; attempt += 1) {
     const { data, error } = await query;
     if (!error) return data;
@@ -151,7 +151,7 @@ async function runQuery(query, label, { retry = true, delaysMs = DEFAULT_RETRY_D
 }
 
 /// 여러 질의로 된 한 단계를 돌린다. 잠깐 끊긴 실패면 단계를 처음부터 다시 돈다(단계는 다시 돌아도 결과가 같아야 한다).
-async function runStep(step, delaysMs = DEFAULT_RETRY_DELAYS_MS) {
+export async function runStep(step, delaysMs = DEFAULT_RETRY_DELAYS_MS) {
   for (let attempt = 0; ; attempt += 1) {
     try {
       return await step();

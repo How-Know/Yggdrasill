@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'tenant_service.dart';
@@ -104,7 +105,16 @@ class HomeworkTimeDefaultsService {
     add('gojaengi_high', 'high', 'A', 40);
     add('gojaengi_high', 'high', 'B', 150);
     add('gojaengi_high', 'high', 'C', 360);
+    // 수력충전은 유형·과정 구분 없이 문항당 20초. 분류가 없는 문항은 item 단가로 떨어진다.
+    add('suryeok', '', categoryItem, 20);
     return out;
+  }
+
+  /// 테스트에서 DB 없이 앱에 포함된 단가만 쓴다.
+  @visibleForTesting
+  void loadBuiltInRatesForTest() {
+    _rates = _builtInRates();
+    _loadedAt = DateTime.now();
   }
 
   static String _rateKey(

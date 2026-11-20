@@ -300,6 +300,17 @@ test('배치 카드: 출처 근거 확인, 항목 오류 번호, 승인 때 빼�
   ].sort());
   assert.equal(list.find((p) => p.concept_id === src).note, '교재 3-2 80쪽 원의 성질');
 
+  const srcId = list.find((p) => p.concept_id === src).id;
+  const beforeLog = (await t.one(`select count(*)::int as n from course_placement_log where placement_id = $1::uuid`, [srcId])).n;
+  const accepted = (await op(`select course_placement_accept($1::uuid) as r`, [srcId])).r;
+  const got = accepted.find((p) => p.id === srcId);
+  assert.equal(got.origin, 'owner');
+  assert.equal(got.note, null);
+  assert.equal(got.unit_id, A.id);
+  const afterLog = (await t.one(`select count(*)::int as n from course_placement_log where placement_id = $1::uuid`, [srcId])).n;
+  assert.equal(afterLog, beforeLog, '확인은 넣기·옮기기·빼기 기록이 아니다');
+  await t.asUser(() => t.rejects(`select course_placement_accept($1::uuid)`, [srcId], /course_map_forbidden/));
+
   // 승인 때 이미 놓였으면 그 항목만 실패한다. 모두 실패하면 카드는 기다리는 채로 남는다.
   const again = await propose('concept_placement_change', {
     course_id: P.course.id, reason: '할선',

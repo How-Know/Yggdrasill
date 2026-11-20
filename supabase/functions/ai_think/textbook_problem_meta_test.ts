@@ -2,10 +2,12 @@ import { assert, assertEquals } from 'jsr:@std/assert@1';
 import { FakeAiProvider } from '../_shared/ai/fake.ts';
 import {
   buildConceptCandidates,
+  conceptGradeLabels,
   conceptIdsFromRefs,
   type ConceptSourceRow,
   normalizeUnitName,
   unitMatches,
+  otherSemesterGrade,
 } from './textbook_concept_candidates.ts';
 import { isMetaTodo, type MetaDictionary, metaFromModel, needsVisualTags, runMetaBatch } from './textbook_problem_meta.ts';
 import { compareMetaFields } from './textbook_problem_review.ts';
@@ -197,4 +199,31 @@ Deno.test('정답 대조 단계 메타: 사람이 고친 항목은 쓰지 않고
   assert(!('concept_ids' in owner) && !('concept_proposals' in owner));
   assertEquals(owner.thinking_ids, [id(501)]);
   assertEquals(owner.meta_checked_at, now);
+});
+
+Deno.test('개념 후보: 검수에서 만든 개념의 단원 이름만 맞으면 단원 후보로 보지 않고 학년 전체를 쓴다', () => {
+  const created: ConceptSourceRow = { id: id(77), name: '메넬라우스 정리', unitPath: ['동도중학교', '2024 2학년 2학기 기말'], created: true };
+  const exam = buildConceptCandidates([...rows, created], '오성중학교', '2024 2학년 2학기 기말');
+  assertEquals(exam.scope, 'grade');
+  assertEquals(exam.list.length, 4);
+
+  // 개념서 단원이 맞으면 그 단원에서 만든 개념도 단원 후보에 든다.
+  const made: ConceptSourceRow = { id: id(78), name: '새 개념', unitPath: ['정수와 유리수', '정수와 유리수의 덧셈과 뺄셈'], created: true };
+  const unit = buildConceptCandidates([...rows, made], '정수와 유리수', '정수와 유리수의 덧셈과 뺄셈');
+  assertEquals(unit.scope, 'unit');
+  assertEquals(unit.list.some((c) => c.id === id(78)), true);
+});
+
+Deno.test('다른 학기 라벨: 학기 표기만 같은 학년의 다른 학기로 바꾼다', () => {
+  assertEquals(otherSemesterGrade('2-2'), '2-1');
+  assertEquals(otherSemesterGrade('1-1'), '1-2');
+  assertEquals(otherSemesterGrade('공통수학2'), null);
+  assertEquals(otherSemesterGrade('1-1+1-2'), null);
+});
+
+Deno.test('개념 과정 라벨: 여러 과정을 이어 쓴 라벨(모의고사 구간)은 과정별로 나눈다', () => {
+  assertEquals(conceptGradeLabels('공통수학2'), ['공통수학2']);
+  assertEquals(conceptGradeLabels('대수+미적분1'), ['대수', '미적분1']);
+  assertEquals(conceptGradeLabels('1-1 + 1-2+1-1+'), ['1-1', '1-2']);
+  assertEquals(conceptGradeLabels(''), []);
 });

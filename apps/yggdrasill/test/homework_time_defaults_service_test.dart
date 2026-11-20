@@ -101,6 +101,30 @@ void main() {
       );
     });
 
+    test('수력충전은 과정과 유형에 상관없이 문항당 20초다', () {
+      final service = HomeworkTimeDefaultsService.instance;
+      service.loadBuiltInRatesForTest();
+      // 24문항 × 20초 + 과제 준비 10분 = 18분.
+      expect(
+        service.estimateMinutes(
+          seriesKey: 'suryeok',
+          schoolLevelKey: 'middle',
+          uncategorizedCount: 24,
+        ),
+        18,
+      );
+      // 단원 마무리처럼 단가 없는 분류도 같은 20초로 떨어진다.
+      // 34문항 × 20초 + 10분 = 22분.
+      expect(
+        service.estimateMinutes(
+          seriesKey: 'suryeok',
+          schoolLevelKey: 'high',
+          categoryCounts: const {'unit_review': 34},
+        ),
+        22,
+      );
+    });
+
     test('중등 개념원리는 A~F section을 독립 단가 키로 사용한다', () {
       const sections = <String>[
         'middle_concept_check',

@@ -12,6 +12,8 @@ import '../../services/textbook_pdf_service.dart';
 import '../../services/textbook_series_catalog.dart';
 import '../../services/textbook_workflow_service.dart';
 import '../../widgets/latex_text_renderer.dart';
+import '../problem_bank/mock_exam/mock_exam_upload_dialog.dart';
+import 'mock_exam_review_panel.dart';
 import 'school_exam_panel.dart';
 import 'school_exam_upload_dialog.dart';
 import 'textbook_course_edit_dialog.dart';
@@ -69,17 +71,90 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
   bool _schoolExamsExpanded = true;
   String? _selectedSchoolName;
 
+  // 모의고사: 내신기출 아래에 학년별로 보인다. 학년을 고르면 오른쪽에 그 학년 회차와 구간(공통·선택과목)이 나온다.
+  final MockExamReviewController _mockExams = MockExamReviewController();
+  bool _mockExamsExpanded = true;
+  int? _selectedMockGrade;
+
   @override
   void initState() {
     super.initState();
     _loadBooks();
     unawaited(_loadSchoolExams());
+    unawaited(_loadMockExams());
   }
 
   @override
   void dispose() {
     _schoolExams.dispose();
+    _mockExams.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadMockExams() async {
+    final resumed = await _mockExams.load();
+    if (!mounted) return;
+    if (resumed > 0) _toast('멈춰 있던 모의고사 검수 $resumed구간을 이어서 진행합니다');
+  }
+
+  Future<void> _openMockExamUpload() async {
+    if (_mockExams.uploading) {
+      _toast('모의고사를 올리는 중입니다. 끝난 뒤에 다시 올리세요');
+      return;
+    }
+    final files = await showMockExamUploadDialog(context, existingExamKeys: _mockExams.examKeys);
+    if (!mounted || files == null || files.isEmpty) return;
+    // 이미 검수를 시작한 회차를 다시 올리면 다시 추출하고 검수도 처음부터 다시 한다. 올리기 전에 알린다.
+    final keys = {for (final f in files) f.examKey};
+    final reviewed = [
+      for (final e in _mockExams.exams)
+        if (keys.contains(e.examKey) && e.workflows.isNotEmpty) e.title,
+    ];
+    if (reviewed.isNotEmpty) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: const Color(0xFF1B1B1D),
+          title: const Text('이미 검수한 회차', style: TextStyle(color: Colors.white)),
+          content: Text(
+            '검수를 시작한 회차 ${reviewed.length}회가 들어 있습니다(${reviewed.take(3).join(', ')}${reviewed.length > 3 ? ' 외' : ''}).\n'
+            'PDF 를 다시 올리면 그 회차를 다시 추출하고 검수를 처음부터 다시 합니다. 확정한 구간은 확정이 풀립니다.',
+            style: const TextStyle(color: Color(0xFFD8E0E0), fontSize: 13, height: 1.5),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('취소')),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF33A373)),
+              child: const Text('다시 올리기'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true || !mounted) return;
+    }
+    setState(() => _mockExamsExpanded = true);
+    try {
+      final outcome = await _mockExams.upload(files);
+      if (!mounted || outcome == null) return;
+      final grade = outcome.started.isEmpty ? null : outcome.started.first.grade;
+      if (grade != null && MockExamReviewController.grades.contains(grade)) {
+        setState(() {
+          _selectedMockGrade = grade;
+          _selectedSchoolName = null;
+          _selectedBookId = null;
+          _links = [];
+        });
+      }
+      _toast(
+        outcome.failures.isEmpty
+            ? '모의고사 ${outcome.started.length}회를 올렸습니다. 추출이 끝나면 바로 검수가 돕니다'
+            : '올림 ${outcome.started.length}회 · 실패 ${outcome.failures.length}회 (${outcome.failures.first})',
+        error: outcome.failures.isNotEmpty,
+      );
+    } catch (e) {
+      if (mounted) _toast('모의고사 업로드 실패: $e', error: true);
+    }
   }
 
   Future<void> _loadSchoolExams() async {
@@ -101,6 +176,7 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
       _schoolExamsExpanded = true;
       if (school != null && _schoolExams.schoolNamed(school) != null) {
         _selectedSchoolName = school;
+        _selectedMockGrade = null;
         _selectedBookId = null;
         _links = [];
       }
@@ -117,9 +193,9 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
     });
     try {
       List<Map<String, dynamic>> rows;
-      // 내신 시험지의 검수용 책 행(시험지 한 부에 한 행)은 받지 않는다.
-      // 한 번에 받는 행 수에 한도가 있어, 시험지 행이 교재 행을 밀어내지 않게 한다.
-      const notExamBooks = 'category.is.null,category.neq.school_past';
+      // 내신 시험지·모의고사 구간의 검수용 책 행(시험지 한 부·구간 하나에 한 행)은 받지 않는다.
+      // 한 번에 받는 행 수에 한도가 있어, 이 행들이 교재 행을 밀어내지 않게 한다.
+      const notExamBooks = 'category.is.null,category.not.in.(school_past,mock_past)';
       try {
         final data = await _supabase
             .from('resource_files')
@@ -723,10 +799,24 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
           ),
         ),
         const SizedBox(width: 8),
+        FilledButton.icon(
+          onPressed: _openMockExamUpload,
+          icon: const Icon(Icons.upload_file, size: 16, color: Colors.white),
+          label: const Text(
+            '모의고사 업로드',
+            style: TextStyle(color: Colors.white, fontSize: 12),
+          ),
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFF33A373),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          ),
+        ),
+        const SizedBox(width: 8),
         OutlinedButton.icon(
           onPressed: () {
             _loadBooks();
             unawaited(_loadSchoolExams());
+            unawaited(_loadMockExams());
           },
           icon: const Icon(Icons.refresh, size: 16, color: Color(0xFFB3B3B3)),
           label: const Text(
@@ -764,6 +854,7 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
     setState(() {
       _selectedBookId = result.bookId;
       _selectedSchoolName = null;
+      _selectedMockGrade = null;
     });
     await _loadLinks(result.bookId);
   }
@@ -825,7 +916,7 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
           const Divider(height: 1, color: Color(0xFF2A2A2A)),
           Expanded(
             child: ListView.builder(
-              // 마지막 칸은 내신기출 묶음(학교별)
+              // 마지막 칸은 내신기출 묶음(학교별)과 모의고사 묶음(학년별)
               itemCount: _books.length + 1,
               itemBuilder: (context, index) {
                 if (index == _books.length) {
@@ -847,6 +938,19 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
                         onToggle: () => setState(() => _schoolExamsExpanded = !_schoolExamsExpanded),
                         onSelect: (name) => setState(() {
                           _selectedSchoolName = name;
+                          _selectedMockGrade = null;
+                          _selectedBookId = null;
+                          _links = [];
+                        }),
+                      ),
+                      MockExamListSection(
+                        controller: _mockExams,
+                        expanded: _mockExamsExpanded,
+                        selectedGrade: _selectedMockGrade,
+                        onToggle: () => setState(() => _mockExamsExpanded = !_mockExamsExpanded),
+                        onSelect: (grade) => setState(() {
+                          _selectedMockGrade = grade;
+                          _selectedSchoolName = null;
                           _selectedBookId = null;
                           _links = [];
                         }),
@@ -861,6 +965,7 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
                     setState(() {
                       _selectedBookId = b.id;
                       _selectedSchoolName = null;
+                      _selectedMockGrade = null;
                     });
                     _loadLinks(b.id);
                   },
@@ -919,9 +1024,18 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
         onToast: _toast,
       );
     }
+    final mockGrade = _selectedMockGrade;
+    if (mockGrade != null) {
+      return MockExamGradePanel(
+        key: ValueKey('mock-exam:$mockGrade'),
+        controller: _mockExams,
+        grade: mockGrade,
+        onToast: _toast,
+      );
+    }
     final book = _selectedBook;
     if (book == null) {
-      return _buildEmptyBox('왼쪽에서 교재나 내신기출 학교를 선택하세요');
+      return _buildEmptyBox('왼쪽에서 교재, 내신기출 학교, 모의고사 학년을 선택하세요');
     }
     return Container(
       decoration: BoxDecoration(

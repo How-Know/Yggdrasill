@@ -9,6 +9,7 @@ import {
   conceptIdsFromRefs,
   loadConceptCandidates,
   loadScopeUnitNames,
+  otherSemesterGrade,
 } from './textbook_concept_candidates.ts';
 import { orderedFigureAssets } from './textbook_problem_fix.ts';
 import { combineStem, parseProblems, withoutDependentSetCommonStem } from './textbook_problem_review.ts';
@@ -370,7 +371,64 @@ export async function handleTextbookProblemMeta(req: Request, auth: AuthContext,
     return errorResponse(502, 'meta_failed', message);
   }
 
-  const costUsd = estimateCostUsd(model, usage, 0);
+  let costUsd = estimateCostUsd(model, usage, 0);
+
+  // 맞는 개념서 단원이 없어 학년 전체 후보로 골랐는데(내신 시험지 등) 개념을 못 고른 문항은 같은 학년 다른 학기
+  // 후보로 한 번 더 고른다(사장님 결정 2026-11-18: 2학기 기말에 1학기 내용이 섞인 시험지). 실패해도 첫 결과는 남긴다.
+  const otherGrade = candidates.scope === 'grade' ? otherSemesterGrade(gradeLabel) : null;
+  const retryItems = otherGrade
+    ? batch.filter((it) => {
+      const m = byCrop.get(String(it.crop_id));
+      return !!m && needsConceptMeta(it, force) && m.conceptIds.length === 0 && m.proposals.length === 0;
+    })
+    : [];
+  let retried = 0;
+  if (otherGrade && retryItems.length > 0) {
+    const retryStarted = Date.now();
+    try {
+      const other = await loadConceptCandidates(auth.admin, otherGrade, '', '');
+      if (other.list.length > 0) {
+        const second = await runMetaBatch(
+          { provider, model, safetyId, signal },
+          { unit: { gradeLabel: otherGrade, ...unit }, dict: { ...dict, candidates: other }, thinkList, types, items: retryItems },
+        );
+        const retryCost = estimateCostUsd(model, second.usage, 0);
+        if (retryCost != null) costUsd = (costUsd ?? 0) + retryCost;
+        for (const [cropId, m] of second.byCrop) {
+          const first = byCrop.get(cropId);
+          if (!first || (m.conceptIds.length === 0 && m.proposals.length === 0)) continue;
+          byCrop.set(cropId, { ...m, visualTags: first.visualTags });
+          retried += 1;
+        }
+        await recordAiRun(auth.admin, {
+          feature: 'textbook_problem_meta',
+          provider: provider.name,
+          model,
+          promptVersion: TEXTBOOK_META_PROMPT_VERSION,
+          status: 'ok',
+          error: null,
+          usage: second.usage,
+          costUsd: retryCost,
+          latencyMs: Date.now() - retryStarted,
+          createdBy: auth.userId,
+          features: {
+            book_id: bookId,
+            grade_label: gradeLabel,
+            big_order: bigOrder,
+            mid_order: midOrder,
+            count: retryItems.length,
+            retry_grade_label: otherGrade,
+            retry_picked: retried,
+            candidate_scope: other.scope,
+            candidate_count: other.list.length,
+          },
+        });
+      }
+    } catch (_) {
+      // 다른 학기 재시도 실패는 첫 결과 저장을 막지 않는다.
+    }
+  }
+
   let processed = 0;
   const skippedOwner: string[] = [];
   const dropped: Array<{ crop_id: string; names: string[] }> = [];
@@ -430,6 +488,7 @@ export async function handleTextbookProblemMeta(req: Request, auth: AuthContext,
     total: allItems.length,
     done: remaining === 0,
     candidate_scope: candidates.scope,
+    other_semester: otherGrade && retryItems.length > 0 ? { grade_label: otherGrade, tried: retryItems.length, picked: retried } : null,
     skipped_owner: skippedOwner,
     dropped_proposals: dropped,
     cost_usd: costUsd,

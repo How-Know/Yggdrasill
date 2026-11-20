@@ -20,11 +20,18 @@ import {
   normalizeIssueKind,
   normalizeProposedChoices,
   parseReviewImages,
+  pbQuestionFiguresAreChoicesOnly,
   pbQuestionHasFigures,
+  pbQuestionHasImageChoices,
   sanitizeProblemMarkup,
+  SOLUTION_CARD_ERROR_TITLE,
+  solutionCardErrorOf,
+  solutionCardFailureChecks,
   solutionFigureVerdict,
+  solutionLinesToParagraphs,
   stripCommonStem,
   stripGuidedSolution,
+  stripScoreMarks,
   withoutDependentSetCommonStem,
 } from './textbook_problem_review.ts';
 
@@ -410,4 +417,72 @@ Deno.test('공통 발문에 상자가 섞여 있으면 지시문만 공통으로
   const fix = commonStemFix(common, stem);
   assertEquals(fix?.commonStem, '다음 조건을 모두 만족시키는 입체도형을 구하여라.');
   assert(fix!.stem.startsWith('[박스시작]') && fix!.stem.endsWith('[박스끝]'));
+});
+
+Deno.test('그림 선지 문항: 선지가 모두 그림이면 그림 선지로 보고, 발문에 그림이 따로 있으면 선지만 그림인 문항이 아니다', () => {
+  const pics = ['①', '②', '③', '④', '⑤'].map((label) => ({ label, text: '[그림]' }));
+  assert(pbQuestionHasImageChoices({ stem: 'x', choices: pics, meta: {} }));
+  assert(pbQuestionHasImageChoices({ stem: 'x', choices: [], meta: { choice_layout: 'image_table' } }));
+  assert(!pbQuestionHasImageChoices({ stem: 'x', choices: pics.map((c) => ({ ...c, text: '3' })), meta: {} }));
+  assert(pbQuestionFiguresAreChoicesOnly({ stem: '다음 중 가장 큰 것은?', choices: pics, meta: {} }));
+  assert(!pbQuestionFiguresAreChoicesOnly({ stem: '그림에서\n[그림]', choices: pics, meta: {} }));
+});
+
+Deno.test('해설은 줄마다 문단으로 나눠 원본처럼 한 줄씩 보이게 한다', () => {
+  // 줄바꿈 하나·[문단]·빈 줄 여러 개 모두 빈 줄 하나로 맞춘다
+  assertEquals(
+    solutionLinesToParagraphs('[출제의도] 극한값을 계산한다.\n$f(1)=2$\r\n$f(2)=5$[문단]따라서 $7$\n\n\n끝'),
+    '[출제의도] 극한값을 계산한다.\n\n$f(1)=2$\n\n$f(2)=5$\n\n따라서 $7$\n\n끝',
+  );
+  // 이미 나눈 글에 다시 써도 같다
+  const once = solutionLinesToParagraphs('가\n나\n\n다');
+  assertEquals(solutionLinesToParagraphs(once), once);
+  assertEquals(solutionLinesToParagraphs('한 줄'), '한 줄');
+  assertEquals(solutionLinesToParagraphs(null), '');
+});
+
+Deno.test('여러 줄에 걸친 수식과 표는 한 덩어리로 둔다', () => {
+  // \begin…\end
+  assertEquals(
+    solutionLinesToParagraphs('$a_n=\\begin{cases}\n1 & (n=1)\\\\\n2 & (n\\geq 2)\n\\end{cases}$\n이므로'),
+    '$a_n=\\begin{cases}\n1 & (n=1)\\\\\n2 & (n\\geq 2)\n\\end{cases}$\n\n이므로',
+  );
+  // $ 가 다음 줄에서 닫힘
+  assertEquals(solutionLinesToParagraphs('$x=1\n+2$\n다음'), '$x=1\n+2$\n\n다음');
+  // \[ … \]
+  assertEquals(solutionLinesToParagraphs('\\[\nx=1\n\\]\n다음'), '\\[\nx=1\n\\]\n\n다음');
+  // 표의 행
+  assertEquals(
+    solutionLinesToParagraphs('증감표는\n| $x$ | $1$ |\n| $f(x)$ | $\\nearrow$ |\n이다.'),
+    '증감표는\n\n| $x$ | $1$ |\n| $f(x)$ | $\\nearrow$ |\n\n이다.',
+  );
+  // 짝 없는 $ 는 뒤 줄을 끌어오지 않는다
+  assertEquals(solutionLinesToParagraphs('값은 $3\n다음 줄\n끝'), '값은 $3\n\n다음 줄\n\n끝');
+});
+
+Deno.test('배점을 따로 보관하는 문항의 본문 수정안에서는 배점 표기를 뗀다', () => {
+  assertEquals(stripScoreMarks('$f(2)$의 값은? [4점]'), '$f(2)$의 값은?');
+  assertEquals(stripScoreMarks('값을 구하시오. [ 3 점 ]\n[문단]\n[그림]'), '값을 구하시오.\n[문단]\n[그림]');
+  // 배점이 아닌 대괄호는 그대로
+  assertEquals(stripScoreMarks('[[공백:3]] 에 알맞은 수 [그림]'), '[[공백:3]] 에 알맞은 수 [그림]');
+});
+
+Deno.test('정답·해설 카드를 못 만든 이유: 카드가 있으면 없고, 이번에 다루지 않았으면 지난 실패를 둔다', () => {
+  assertEquals(solutionCardErrorOf({ hasCard: true, reported: '오류', previous: '지난 오류' }), null);
+  assertEquals(solutionCardErrorOf({ hasCard: false, reported: ' 오류 ', previous: '지난 오류' }), '오류');
+  assertEquals(solutionCardErrorOf({ hasCard: false, reported: null, previous: '지난 오류' }), '지난 오류');
+  assertEquals(solutionCardErrorOf({ hasCard: false, reported: '', previous: undefined }), null);
+});
+
+Deno.test('모델 판정 없이 카드 실패만 남길 때: 해설은 통과가 아니고 지난 본문·그림 지적은 그대로 둔다', () => {
+  const fresh = solutionCardFailureChecks('! Missing $ inserted.', {});
+  assertEquals(fresh.solution_ok, false);
+  assertEquals(fresh.answer_solution_error, '! Missing $ inserted.');
+  assertEquals(fresh.issue_title, SOLUTION_CARD_ERROR_TITLE);
+  assertEquals(fresh.issue_kind, 'engine');
+  const kept = solutionCardFailureChecks('오류', { issue_title: '그림 크기가 원본과 다름', issue_detail: '0.5배', issue_kind: 'figure' });
+  assertEquals(kept.solution_ok, false);
+  assertEquals(kept.issue_title, '그림 크기가 원본과 다름');
+  assertEquals(kept.issue_kind, 'figure');
+  assertEquals(kept.answer_solution_error, '오류');
 });

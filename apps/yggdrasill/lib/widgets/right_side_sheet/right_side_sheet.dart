@@ -1404,20 +1404,20 @@ class _RightSideSheetState extends State<RightSideSheet> {
           child: Column(
             children: [
               if (_mode != RightSideSheetMode.grading)
-                _TopIconBar(
-                  mode: _mode,
-                  onModeSelected: (m) {
-                    setState(() => _mode = m);
-                    _syncGradingTabActiveFlag();
-                    if (m == RightSideSheetMode.answerKey) {
-                      unawaited(_ensureGradesThenLoadAnswerKeyData());
-                    }
-                    if (m == RightSideSheetMode.memo) {
-                      unawaited(DataManager.instance.loadMemos());
-                    }
-                  },
-                  onClose: _handleClose,
-                ),
+              _TopIconBar(
+                mode: _mode,
+                onModeSelected: (m) {
+                  setState(() => _mode = m);
+                  _syncGradingTabActiveFlag();
+                  if (m == RightSideSheetMode.answerKey) {
+                    unawaited(_ensureGradesThenLoadAnswerKeyData());
+                  }
+                  if (m == RightSideSheetMode.memo) {
+                    unawaited(DataManager.instance.loadMemos());
+                  }
+                },
+                onClose: _handleClose,
+              ),
               if (_mode != RightSideSheetMode.grading)
                 Divider(height: 1, color: panelStyle.divider),
               Expanded(child: _buildBody()),
@@ -1432,12 +1432,12 @@ class _RightSideSheetState extends State<RightSideSheet> {
     switch (_mode) {
       case RightSideSheetMode.grading:
         return _AnswerKeyGradingTabPanel(
-          session: _testGradingSession,
-          dialogContext: widget.dialogContext,
+            session: _testGradingSession,
+            dialogContext: widget.dialogContext,
           onClose: _handleClose,
-          onClearSession: () {
-            rightSideSheetTestGradingSession.value = null;
-          },
+            onClearSession: () {
+              rightSideSheetTestGradingSession.value = null;
+            },
         );
       case RightSideSheetMode.answerKey:
         // grades는 답지 기능의 핵심 의존성이라, 최초 진입 시 지연 로드 보장
@@ -2966,7 +2966,7 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
       _markBlank();
       return;
     }
-    _close();
+      _close();
   }
 
   void _runFrontAction(VoidCallback action) {
@@ -3024,22 +3024,22 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
               padding: const EdgeInsets.only(left: _questionColumnLeftPad),
               child: Align(
                 alignment: Alignment.centerLeft,
-                child: busy
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2.2,
-                          color: _rsAccent,
-                        ),
-                      )
+              child: busy
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.2,
+                        color: _rsAccent,
+                      ),
+                    )
                     // 번호(위, 이름이 붙으면 2줄) + 문항 종류(아래), 왼쪽 정렬.
                     : Column(
                         mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            questionLabel,
+                      questionLabel,
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             softWrap: true,
@@ -3049,7 +3049,7 @@ class _RightSheetAnswerListRowState extends State<_RightSheetAnswerListRow>
                                 ?.copyWith(
                                   fontSize: _rsAnswerQuestionNumberSize,
                                   fontWeight: FontWeight.w800,
-                                  height: 1.0,
+                        height: 1.0,
                                 ),
                           ),
                           if (widget.questionCategory.trim().isNotEmpty)
@@ -3812,14 +3812,14 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     }
     _autoOpenedAnswerSessionId = sessionId;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || widget.session?.sessionId.trim() != sessionId) return;
-      final firstFocus = _firstAnswerPdfFocus(session);
+          if (!mounted || widget.session?.sessionId.trim() != sessionId) return;
+          final firstFocus = _firstAnswerPdfFocus(session);
       unawaited(
         _openSessionAnswerSheet(
-          session,
-          initialShowSolution: false,
-          focusPageNumber: firstFocus.pageNumber,
-          focusRect1k: firstFocus.rect1k,
+            session,
+            initialShowSolution: false,
+            focusPageNumber: firstFocus.pageNumber,
+            focusRect1k: firstFocus.rect1k,
         ),
       );
     });
@@ -3924,7 +3924,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       // 주관식·서술형 조회는 서로 독립이므로 함께 보낸다.
       final lookupResults = await Future.wait(
         sourceIdsByLookup.entries.map((entry) async {
-          final lookupParts = entry.key.split('\n');
+        final lookupParts = entry.key.split('\n');
           if (lookupParts.length != 2) {
             return (
               lookupKey: entry.key,
@@ -3932,11 +3932,11 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
             );
           }
           final renders = await RightSheetAnswerPreloadService.instance
-              .loadUnifiedAnswerRenderAssets(
-            academyId: academyId,
+            .loadUnifiedAnswerRenderAssets(
+          academyId: academyId,
             sourceKind: lookupParts[0],
             answerKind: lookupParts[1],
-            sourceIds: entry.value,
+          sourceIds: entry.value,
             // v11(uniform-line, 투명+틴트)이 기본. 아직 재렌더 전이면 v10 폴백.
             styleVersion: kUnifiedAnswerRenderStyleVersionV11,
             fallbackStyleVersions: const <String>[
@@ -4494,7 +4494,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     List<String> partLabels = const <String>[],
   }) async {
     if (_answerListReadOnly) return;
-    setState(() {
+      setState(() {
       final current = _normalizeState(_gradingStates[key]);
       final next = _nextRetryState(key, current);
       _gradingStates[key] = next;
@@ -4505,9 +4505,9 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         } else {
           _correctionStates.remove(key);
         }
-      }
-    });
-    _emitStateChanged();
+        }
+      });
+      _emitStateChanged();
   }
 
   Future<void> _markCellBlank(
@@ -4618,7 +4618,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     List<String> partLabels,
   ) async {
     if (_answerListReadOnly) return;
-    setState(() {
+        setState(() {
       // 기록이 없는 파트는 셀 상태를 상속하고 있으므로, 토글 전에 현재
       // 상태를 명시적으로 고정해 둔다. 그러지 않으면 셀 상태가 바뀔 때
       // 나머지 파트가 함께 뒤집힌다(한 파트 오답 → 전체 오답 버그).
@@ -5187,11 +5187,11 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         Map<String, String>.from(_correctionStates),
       );
       if (!keepSheetOpen && session.closeBeforeActionCompletes) {
-        widget.onClearSession();
-        if (session.closeSheetOnAction) {
-          final closeAction = closeRightSideSheetAction;
-          if (closeAction != null) {
-            await closeAction();
+      widget.onClearSession();
+      if (session.closeSheetOnAction) {
+        final closeAction = closeRightSideSheetAction;
+        if (closeAction != null) {
+          await closeAction();
           }
         }
       }
@@ -5613,105 +5613,105 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
             ],
             Expanded(
               child: Container(
-                key: _searchHeaderFieldKey,
+          key: _searchHeaderFieldKey,
                 height: _searchFieldHeight,
                 padding: EdgeInsets.symmetric(
                   horizontal: embeddedInFabGlass ? 4 : 12,
                 ),
                 decoration: fieldDecoration,
-                child: Row(
-                  children: [
+          child: Row(
+            children: [
                     Icon(
                       Icons.search_rounded,
                       size: _searchIconSize,
                       color: fabStyle.subText,
                     ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: TextField(
-                        controller: _searchCtrl,
-                        focusNode: _searchFocus,
-                        onChanged: (value) {
-                          if (value.trim().isEmpty) {
-                            if (!mounted) return;
-                            setState(() {
-                              _searchResults =
-                                  const <RightSheetGradingSearchResult>[];
-                              _searchError = null;
-                              _searchBusy = false;
-                            });
-                          }
-                          _scheduleSuggestionSearch(value);
-                        },
+              const SizedBox(width: 8),
+              Expanded(
+                child: TextField(
+                  controller: _searchCtrl,
+                  focusNode: _searchFocus,
+                  onChanged: (value) {
+                    if (value.trim().isEmpty) {
+                      if (!mounted) return;
+                      setState(() {
+                        _searchResults =
+                            const <RightSheetGradingSearchResult>[];
+                        _searchError = null;
+                        _searchBusy = false;
+                      });
+                    }
+                    _scheduleSuggestionSearch(value);
+                  },
                         style: TextStyle(
                           color: fabStyle.text,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 14,
-                        ),
-                        textInputAction: TextInputAction.search,
-                        onSubmitted: (_) {
-                          _searchFocus.unfocus();
-                          unawaited(_submitSearch());
-                        },
+                    fontWeight: FontWeight.w700,
+                    fontSize: 14,
+                  ),
+                  textInputAction: TextInputAction.search,
+                  onSubmitted: (_) {
+                    _searchFocus.unfocus();
+                    unawaited(_submitSearch());
+                  },
                         decoration: InputDecoration(
-                          isDense: true,
-                          border: InputBorder.none,
-                          hintText: '과제번호(뒷4자리)/이름/그룹 검색',
-                          hintStyle: TextStyle(
+                    isDense: true,
+                    border: InputBorder.none,
+                    hintText: '과제번호(뒷4자리)/이름/그룹 검색',
+                    hintStyle: TextStyle(
                             color: fabStyle.subText.withValues(alpha: 0.82),
-                            fontSize: 13,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
                     ),
-                    if (_searchCtrl.text.trim().isNotEmpty)
-                      InkWell(
-                        borderRadius: BorderRadius.circular(999),
-                        onTap: () {
-                          _searchFocus.unfocus();
-                          _searchSuggestDebounce?.cancel();
-                          _searchSuggestRequestSeq += 1;
-                          setState(() {
-                            _searchCtrl.clear();
-                            _searchSuggestions =
-                                const <RightSheetGradingSearchResult>[];
-                            _searchSuggestError = null;
-                            _searchSuggestBusy = false;
-                            _searchResults =
-                                const <RightSheetGradingSearchResult>[];
-                            _searchError = null;
-                            _searchBusy = false;
-                          });
-                          _scheduleSuggestionOverlaySync();
-                        },
-                        child: Padding(
-                          padding: const EdgeInsets.all(4),
-                          child: Icon(
-                            Icons.close_rounded,
-                            size: 16,
-                            color: fabStyle.subText,
-                          ),
-                        ),
-                      ),
-                    if (_recentSearches.isNotEmpty) ...[
-                      const SizedBox(width: 4),
-                      InkWell(
-                        borderRadius: BorderRadius.circular(999),
-                        onTap: () => unawaited(_clearRecentSearches()),
-                        child: const Padding(
-                          padding: EdgeInsets.all(4),
-                          child: Icon(
-                            Icons.delete_outline_rounded,
-                            size: 18,
-                            color: Color(0xFFE06969),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
+                  ),
                 ),
               ),
+              if (_searchCtrl.text.trim().isNotEmpty)
+                InkWell(
+                  borderRadius: BorderRadius.circular(999),
+                  onTap: () {
+                    _searchFocus.unfocus();
+                    _searchSuggestDebounce?.cancel();
+                    _searchSuggestRequestSeq += 1;
+                    setState(() {
+                      _searchCtrl.clear();
+                      _searchSuggestions =
+                          const <RightSheetGradingSearchResult>[];
+                      _searchSuggestError = null;
+                      _searchSuggestBusy = false;
+                            _searchResults =
+                                const <RightSheetGradingSearchResult>[];
+                      _searchError = null;
+                      _searchBusy = false;
+                    });
+                    _scheduleSuggestionOverlaySync();
+                  },
+                        child: Padding(
+                          padding: const EdgeInsets.all(4),
+                    child: Icon(
+                      Icons.close_rounded,
+                      size: 16,
+                            color: fabStyle.subText,
+                    ),
+                  ),
+                ),
+                    if (_recentSearches.isNotEmpty) ...[
+              const SizedBox(width: 4),
+                InkWell(
+                  borderRadius: BorderRadius.circular(999),
+                  onTap: () => unawaited(_clearRecentSearches()),
+                  child: const Padding(
+                    padding: EdgeInsets.all(4),
+                    child: Icon(
+                      Icons.delete_outline_rounded,
+                      size: 18,
+                      color: Color(0xFFE06969),
+                    ),
+                  ),
+                ),
+                    ],
+            ],
+          ),
+        ),
             ),
             if (showBackButton) const SizedBox(width: 8),
           ],
@@ -5740,47 +5740,47 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         child: Wrap(
           alignment: WrapAlignment.start,
           crossAxisAlignment: WrapCrossAlignment.start,
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            for (int i = 0; i < _recentSearches.length; i++)
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (int i = 0; i < _recentSearches.length; i++)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                 decoration: chipDecoration,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    InkWell(
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      InkWell(
                       onTap: () =>
                           unawaited(_openRecentSearch(_recentSearches[i])),
-                      child: ConstrainedBox(
+                        child: ConstrainedBox(
                         constraints: const BoxConstraints(maxWidth: 320),
-                        child: Text(
+                          child: Text(
                           _recentSearchChipLabel(_recentSearches[i]),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             color: fabStyle.text,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w800,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w800,
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 6),
-                    InkWell(
-                      onTap: () => unawaited(_removeRecentAt(i)),
+                      const SizedBox(width: 6),
+                      InkWell(
+                        onTap: () => unawaited(_removeRecentAt(i)),
                       child: Icon(
-                        Icons.close_rounded,
-                        size: 16,
+                          Icons.close_rounded,
+                          size: 16,
                         color: fabStyle.subText,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-          ],
+            ],
         ),
       ),
     );
@@ -7030,9 +7030,9 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         isLoading: false,
       );
       if (solutionIsSessionSource || !baseIsSolution) {
-        RightSheetAnswerPreloadService.instance.putPdfLinks(
-          cacheKey: cacheKey,
-          answerPath: answerPath,
+      RightSheetAnswerPreloadService.instance.putPdfLinks(
+        cacheKey: cacheKey,
+        answerPath: answerPath,
           solutionPath: solutionIsSessionSource
               ? solutionPath
               : (preloaded?.solutionPath ?? ''),
@@ -7503,10 +7503,10 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       Theme.of(context).brightness,
     );
     if (_lightCards) {
-      switch (_normalizeState(state)) {
-        case 'wrong':
-          return (
-            border: const Color(0xFFE54848),
+    switch (_normalizeState(state)) {
+      case 'wrong':
+        return (
+          border: const Color(0xFFE54848),
             background: background,
             text: const Color(0xFF8F1F2B),
             label: '오답',
@@ -7974,15 +7974,15 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       borderRadius: BorderRadius.circular(14),
       child: Image(
         image: AnswerRenderImageProvider(url),
-        width: displayWidth,
-        height: displayHeight,
-        fit: BoxFit.contain,
-        alignment: imageAlignment,
-        filterQuality: FilterQuality.high,
+      width: displayWidth,
+      height: displayHeight,
+      fit: BoxFit.contain,
+      alignment: imageAlignment,
+      filterQuality: FilterQuality.high,
         // 알파 글리프 PNG 는 테마 잉크 색으로 틴트해 그린다.
         color: tintColor,
         colorBlendMode: tintColor != null ? BlendMode.srcIn : null,
-        errorBuilder: (_, __, ___) => fallbackBuilder(),
+      errorBuilder: (_, __, ___) => fallbackBuilder(),
       ),
     );
     final content = keepReadableWithHorizontalScroll
@@ -8171,21 +8171,21 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       height: _answerSlotHeightForCell(cell),
       child: Padding(
         padding: const EdgeInsets.only(left: _rsAnswerContentLeftPad),
-        child: Align(
-          alignment: Alignment.centerLeft,
-          child: LatexTextRenderer(
-            _normalizeAnswerForOverflowDisplay(answer),
-            textAlign: TextAlign.left,
-            overflow: TextOverflow.visible,
-            softWrap: true,
-            enableDisplayMath: false,
-            crossAxisAlignment: CrossAxisAlignment.start,
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: LatexTextRenderer(
+          _normalizeAnswerForOverflowDisplay(answer),
+          textAlign: TextAlign.left,
+          overflow: TextOverflow.visible,
+          softWrap: true,
+          enableDisplayMath: false,
+          crossAxisAlignment: CrossAxisAlignment.start,
             inlineMathScale: _rsAnswerFallbackMathScale,
             fractionInlineMathScale: _rsAnswerFallbackFractionMathScale,
             style: TextStyle(
               color: _cardInk,
               fontFamily: LatexTextRenderer.v2TextFontFamily,
-              fontWeight: FontWeight.w700,
+            fontWeight: FontWeight.w700,
               fontSize: _rsAnswerBodyFontSize,
               height: 1.2,
             ),
@@ -8356,7 +8356,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     if (render == null ||
         !render.hasImage ||
         !_isAcceptedAnswerRenderStyle(render.styleVersion)) {
-      return Padding(
+    return Padding(
         padding: const EdgeInsets.symmetric(vertical: _answerImageTightPadding),
         child: ConstrainedBox(
           constraints:
@@ -8475,10 +8475,10 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
               13.7,
               13.7,
               13.7,
-            ),
-            child: Row(
+      ),
+      child: Row(
               crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
+        children: [
                 SizedBox(
                   width: 44,
                   child: Text(
@@ -8502,16 +8502,16 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                Text(
+          Text(
                   colors.label,
                   style: TextStyle(
                     color: statusColor,
-                    fontSize: 13,
+              fontSize: 13,
                     fontWeight: FontWeight.w900,
-                    height: 1.0,
-                  ),
-                ),
-              ],
+              height: 1.0,
+            ),
+          ),
+        ],
             ),
           ),
         ),
@@ -8570,8 +8570,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(22, 16, 22, 16),
                     child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
                         Text(
                           message,
                           style: TextStyle(
@@ -8713,8 +8713,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
           ColoredBox(
             color: fabStyle.border,
             child: const SizedBox(height: 2),
@@ -8962,9 +8962,9 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       ),
       child: SizedBox(
         height: _gradingBottomControlsHeight,
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
             AppDialogCloseButton(
               onPressed: widget.onClose,
               iconOnly: showNext,
@@ -8984,12 +8984,12 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
               ),
             ],
             const SizedBox(width: 12),
-            Expanded(child: _buildScoreCalculator(session)),
+          Expanded(child: _buildScoreCalculator(session)),
             if (!_answerListReadOnly) ...[
-              const SizedBox(width: 12),
-              _buildActionButtons(),
+          const SizedBox(width: 12),
+          _buildActionButtons(),
             ],
-          ],
+        ],
         ),
       ),
     );
@@ -9124,29 +9124,29 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       return Padding(
         padding: const EdgeInsets.fromLTRB(10, 0, 10, 12),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _buildSearchHeader(),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildSearchHeader(),
             const SizedBox(height: 24),
-            Expanded(
+        Expanded(
               child: Container(
-                decoration: BoxDecoration(
+                  decoration: BoxDecoration(
                   color: fabStyle.panel,
-                  borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: fabStyle.border),
-                ),
-                alignment: Alignment.center,
-                padding: const EdgeInsets.all(16),
-                child: Text(
-                  '테스트 채점 세션이 없습니다.\n수업 화면에서 테스트 제출 카드를 눌러 채점을 시작하세요.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: fabStyle.subText,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    height: 1.4,
                   ),
-                ),
+                  alignment: Alignment.center,
+                  padding: const EdgeInsets.all(16),
+                child: Text(
+                    '테스트 채점 세션이 없습니다.\n수업 화면에서 테스트 제출 카드를 눌러 채점을 시작하세요.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                    color: fabStyle.subText,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      height: 1.4,
+                    ),
+                  ),
               ),
             ),
           ],
@@ -9928,9 +9928,11 @@ class _RawAnswerImageZoomDialogState extends State<_RawAnswerImageZoomDialog> {
   }
 
   void _select(String next) {
-    if (widget.readOnly || _state == next) return;
-    setState(() => _state = next);
-    widget.onSelect(next);
+    if (widget.readOnly) return;
+    if (_state != next) {
+      widget.onSelect(next);
+    }
+    widget.onClose();
   }
 
   /// 유리 뒤로 정답 PDF가 비쳐도 버튼 속은 불투명하게 둔다.
@@ -9969,10 +9971,10 @@ class _RawAnswerImageZoomDialogState extends State<_RawAnswerImageZoomDialog> {
         onClose: widget.onClose,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(12),
                   child: ColoredBox(
@@ -10030,9 +10032,9 @@ class _RawAnswerImageZoomDialogState extends State<_RawAnswerImageZoomDialog> {
                       onPressed: widget.readOnly
                           ? null
                           : () => _select('not_performed'),
-                    ),
-                  ),
-                ],
+              ),
+            ),
+          ],
               ),
             ],
           ),

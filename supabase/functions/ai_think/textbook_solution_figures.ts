@@ -4,7 +4,12 @@ import { estimateCostUsd, modelFor, thinkWallClockMs } from '../_shared/ai/confi
 import { createAiProvider } from '../_shared/ai/provider.ts';
 import { type AiContentPart, finalText } from '../_shared/ai/types.ts';
 import { recordAiRun } from '../_shared/ai/usage.ts';
-import { imageDataUrl, parseProblems, TEXTBOOK_REVIEW_PROMPT_VERSION } from './textbook_problem_review.ts';
+import {
+  imageDataUrl,
+  parseProblems,
+  solutionLinesToParagraphs,
+  TEXTBOOK_REVIEW_PROMPT_VERSION,
+} from './textbook_problem_review.ts';
 import { uuidOrNull } from './validate.ts';
 
 type Rec = Record<string, unknown>;
@@ -54,6 +59,48 @@ export function markedSolutionText(original: string, proposed: unknown, figureCo
   const marked = proposed.replace(SOLUTION_FIGURE_MARKER_RE, '[그림]').trim();
   if (countSolutionFigureMarkers(marked) !== figureCount) return null;
   return stripForCompare(marked) === stripForCompare(original) ? marked : null;
+}
+
+/**
+ * 줄마다 문단으로 나눈 전사본(solutionLinesToParagraphs 양식)에 모델이 고른 [그림] 자리만 옮긴다.
+ * 모델이 돌려준 글의 줄바꿈은 쓰지 않고(줄을 합쳐 돌려주기도 한다) 원래 전사본의 줄 구분을 지킨다.
+ * 표시는 따로 한 문단이 되고, 모델이 표시 뒤 같은 줄에 글을 붙였으면 그 글이 표시와 같은 줄에 온다(그림 옆·아래 설명).
+ * marked 는 markedSolutionText 를 통과한 글(표시를 뺀 글자가 original 과 같음)이어야 한다.
+ */
+export function transferFigureMarkers(original: string, marked: string): string {
+  const nonSpace = (s: string) => s.replace(/\s+/g, '').length;
+  // 표시마다: 그 앞까지의 글자 수(공백·표시 제외), 표시 뒤 같은 줄에 글이 있는지
+  const marks: Array<{ at: number; sameLine: boolean }> = [];
+  let seen = 0;
+  let last = 0;
+  for (const m of marked.matchAll(SOLUTION_FIGURE_MARKER_RE)) {
+    const index = m.index ?? 0;
+    seen += nonSpace(marked.slice(last, index));
+    last = index + m[0].length;
+    const lineEnd = marked.indexOf('\n', last);
+    const rest = marked.slice(last, lineEnd < 0 ? marked.length : lineEnd);
+    marks.push({ at: seen, sameLine: !/^\s*\[그림/.test(rest) && nonSpace(rest.replace(SOLUTION_FIGURE_MARKER_RE, '')) > 0 });
+  }
+  const base = original.replace(SOLUTION_FIGURE_MARKER_RE, '\n\n');
+  let out = '';
+  let count = 0;
+  let next = 0;
+  const flush = (all = false) => {
+    while (next < marks.length && (all || marks[next].at <= count)) {
+      out += `\n\n[그림]${marks[next].sameLine ? ' ' : '\n\n'}`;
+      next += 1;
+    }
+  };
+  // 글자 수는 marked 쪽과 같은 단위(UTF-16)로 센다.
+  for (let i = 0; i < base.length; i += 1) {
+    if (/\S/.test(base[i])) {
+      flush();
+      count += 1;
+    }
+    out += base[i];
+  }
+  flush(true);
+  return solutionLinesToParagraphs(out);
 }
 
 const SOLUTION_FIGURES_SCHEMA: Rec = {
@@ -203,7 +250,11 @@ export async function handleTextbookSolutionFigures(
     let text = original;
     // 운영자가 고친 해설은 글자를 바꾸지 않는다(그림은 렌더할 때 표시가 모자라면 끝에 붙인다).
     if (a.solution_source !== 'manual') {
-      const marked = markedSolutionText(original, r.solution_with_markers, figures.length);
+      const accepted = markedSolutionText(original, r.solution_with_markers, figures.length);
+      // 줄마다 문단으로 나눈 전사본은 모델이 돌려준 줄바꿈 대신 원래 줄 구분을 지킨다(그 전 양식의 전사본은 하던 대로).
+      const marked = accepted !== null && solutionLinesToParagraphs(original) === original
+        ? transferFigureMarkers(original, accepted)
+        : accepted;
       if (marked !== null && marked !== original) {
         const { error } = await auth.admin
           .from('textbook_problem_analyses')

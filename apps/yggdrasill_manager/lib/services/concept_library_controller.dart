@@ -237,19 +237,9 @@ class ConceptLibraryController extends ChangeNotifier {
   // ------------------------------------------------------------------ 초점
   ConceptWorkspaceFocus focus = ConceptWorkspaceFocus.library;
 
-  /// 좁은 화면에서 Think 대화를 세 번째 칸으로 보고 있는지.
-  bool narrowChat = false;
-
   void setFocus(ConceptWorkspaceFocus f) {
-    if (focus == f && !narrowChat) return;
+    if (focus == f) return;
     focus = f;
-    narrowChat = false;
-    notifyListeners();
-  }
-
-  void showNarrowChat() {
-    if (narrowChat) return;
-    narrowChat = true;
     notifyListeners();
   }
 
@@ -604,7 +594,6 @@ class ConceptLibraryController extends ChangeNotifier {
   /// 요약에서 골랐을 때: 라이브러리 쪽을 크게 보고 그 개념을 연다.
   void openConcept(ConceptItem c) {
     focus = ConceptWorkspaceFocus.library;
-    narrowChat = false;
     selectConcept(c);
   }
 

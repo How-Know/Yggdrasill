@@ -277,6 +277,14 @@ export function buildMockExamPresetPayload({
   };
 }
 
+/// 검수에서 만든 구간 문서이고 아직 확정(공개)하지 않았는가. 그동안 문항은 비공개다.
+export function mockReviewPending(meta) {
+  const review = meta?.mock_review;
+  return Boolean(
+    review && typeof review === 'object' && review.publish_on_confirm === true && !compact(review.published_at),
+  );
+}
+
 // 회차(exam_id)의 추출된 pb_questions 가 준비된 과목 조합마다 자동 프리셋을 upsert 한다.
 export async function syncMockExamPresetsForExam(supa, examId) {
   const cleanExamId = compact(examId);
@@ -301,6 +309,18 @@ export async function syncMockExamPresetsForExam(supa, examId) {
     const sec = compact(row?.section);
     const docId = compact(row?.pb_document_id);
     if (sec && docId) docIdBySection.set(sec, docId);
+  }
+  // 검수에서 만든 구간 문서(meta.mock_review.publish_on_confirm)는 구간을 확정해 공개하기 전에는 프리셋에 넣지 않는다.
+  if (docIdBySection.size > 0) {
+    const { data: docRows, error: docErr } = await supa
+      .from('pb_documents')
+      .select('id, meta')
+      .in('id', [...new Set([...docIdBySection.values()])]);
+    if (docErr) throw new Error(`mock_preset_documents_fetch_failed:${docErr.message}`);
+    const hidden = new Set((docRows || []).filter((d) => mockReviewPending(d?.meta)).map((d) => d.id));
+    for (const [sec, docId] of [...docIdBySection]) {
+      if (hidden.has(docId)) docIdBySection.delete(sec);
+    }
   }
   const commonDocId = docIdBySection.get('common') || '';
   if (!commonDocId) return { synced: 0, presets: [] };

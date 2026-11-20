@@ -1,10 +1,13 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/material.dart';
 import 'package:yggdrasill_ui/yggdrasill_ui.dart';
 
+import '../services/homework_session.dart';
 import '../services/textbook_api.dart';
+import '../services/textbook_catalog_organizer.dart';
 import '../services/textbook_study_session.dart';
 import '../widgets/student_confirm_sheet.dart';
 import '../widgets/student_page_title.dart';
@@ -32,18 +35,33 @@ class TextbookScreen extends StatefulWidget {
 class _TextbookScreenState extends State<TextbookScreen> {
   List<StudentTextbook>? _books;
   String? _error;
+  Timer? _syncDebounce;
+  bool _pausedExpanded = false;
+  bool _endedExpanded = false;
+  bool _completedExpanded = false;
 
   @override
   void initState() {
     super.initState();
     TextbookStudySession.instance.addListener(_onStudySessionChanged);
+    HomeworkSession.instance.textbookSyncTick.addListener(_onRemoteTextbookSync);
     _refresh();
   }
 
   @override
   void dispose() {
+    _syncDebounce?.cancel();
     TextbookStudySession.instance.removeListener(_onStudySessionChanged);
+    HomeworkSession.instance.textbookSyncTick
+        .removeListener(_onRemoteTextbookSync);
     super.dispose();
+  }
+
+  void _onRemoteTextbookSync() {
+    _syncDebounce?.cancel();
+    _syncDebounce = Timer(const Duration(milliseconds: 250), () {
+      if (mounted) unawaited(_refresh());
+    });
   }
 
   void _onStudySessionChanged() {
@@ -72,13 +90,36 @@ class _TextbookScreenState extends State<TextbookScreen> {
     final existingSolve = TextbookStudySession.instance
         .solveSessionFor(book.bookId, book.gradeLabel);
     final TextbookEntryMode? chosenMode;
-    if (existingSolve != null) {
+    if (existingSolve != null && book.isActiveSeason) {
       // 중단(또는 열려 있는) 바로풀기 세션이 있으면 묻지 않고 바로 이어 푼다.
       chosenMode = TextbookEntryMode.solve;
     } else {
       chosenMode = await _showEntryModeSheet(book);
     }
     if (chosenMode == null || !mounted) return;
+
+    // 시작 전 또는 보류 상태인 교재를 직접 열면 현재 시즌을 자동으로 시작/재개한다.
+    if (book.isNotStarted) {
+      unawaited(
+        TextbookApi.instance
+            .setTextbookSeasonState(
+              bookId: book.bookId,
+              gradeLabel: book.gradeLabel,
+              action: TextbookSeasonAction.start,
+            )
+            .catchError((Object _) => null),
+      );
+    } else if (book.isPausedSeason) {
+      unawaited(
+        TextbookApi.instance
+            .setTextbookSeasonState(
+              bookId: book.bookId,
+              gradeLabel: book.gradeLabel,
+              action: TextbookSeasonAction.resume,
+            )
+            .catchError((Object _) => null),
+      );
+    }
 
     final session = await TextbookStudySession.instance.startSession(
       bookId: book.bookId,
@@ -250,46 +291,315 @@ class _TextbookScreenState extends State<TextbookScreen> {
     );
   }
 
-  /// 처음부터 다시 풀기. 지난 풀이는 회차로 남고 화면만 비워진다.
-  Future<void> _resetBook(StudentTextbook book) async {
-    final confirmed = await showStudentConfirmSheet(
-      context: context,
-      title: '처음부터 다시 풀기',
-      message: '${book.name}의 답을 모두 지우고 처음부터 다시 풉니다.\n'
-          '지금까지 푼 기록은 회차로 남아 있어요.',
-      confirmLabel: '다시 풀기',
-      cancelLabel: '취소',
-      confirmIcon: Icons.refresh_rounded,
-      cancelIcon: Icons.close_rounded,
-    );
-    if (confirmed != true || !mounted) return;
+  Future<void> _handleBookLongPress(StudentTextbook book) async {
+    final gradeSuffix =
+        book.gradeLabel.trim().isEmpty ? '' : ' (${book.gradeLabel.trim()})';
 
+    if (book.isNotStarted) {
+      final confirmed = await showStudentConfirmSheet(
+        context: context,
+        title: '시즌 1 시작',
+        message: '${book.name}$gradeSuffix 풀이를 시작할까요?\n'
+            '활성 교재 목록 위로 올라갑니다.',
+        confirmLabel: '시즌 1 시작',
+        cancelLabel: '취소',
+        confirmIcon: Icons.play_arrow_rounded,
+        cancelIcon: Icons.close_rounded,
+      );
+      if (confirmed != true || !mounted) return;
+      await _applySeasonAction(
+        book,
+        TextbookSeasonAction.start,
+        failureMessage: '시즌을 시작하지 못했어요.',
+      );
+      return;
+    }
+
+    if (book.isClosedSeason) {
+      final nextSeason = book.seasonNo + 1;
+      final confirmed = await showStudentConfirmSheet(
+        context: context,
+        title: '시즌 $nextSeason 시작',
+        message: '${book.name}$gradeSuffix의 이전 답 표시를 비우고 '
+            '시즌 $nextSeason을 새로 시작합니다.\n'
+            '지난 시즌 기록은 그대로 보관돼요.',
+        confirmLabel: '시즌 $nextSeason 시작',
+        cancelLabel: '취소',
+        confirmIcon: Icons.refresh_rounded,
+        cancelIcon: Icons.close_rounded,
+      );
+      if (confirmed != true || !mounted) return;
+      final ok = await _applySeasonAction(
+        book,
+        TextbookSeasonAction.start,
+        failureMessage: '새 시즌을 시작하지 못했어요.',
+      );
+      if (ok) {
+        await TextbookStudySession.instance
+            .finishForBook(book.bookId, book.gradeLabel);
+      }
+      return;
+    }
+
+    final chosen = await _showActiveOrPausedSeasonSheet(book);
+    if (chosen == null || !mounted) return;
+
+    if (chosen == TextbookSeasonAction.pause) {
+      final activeSession = TextbookStudySession.instance
+          .sessionFor(book.bookId, book.gradeLabel);
+      if (activeSession != null && activeSession.isOpen) {
+        await TextbookStudySession.instance
+            .pauseSession(activeSession.sessionId);
+      }
+      await _applySeasonAction(
+        book,
+        TextbookSeasonAction.pause,
+        failureMessage: '보류 상태로 바꾸지 못했어요.',
+      );
+      return;
+    }
+
+    if (chosen == TextbookSeasonAction.resume) {
+      await _applySeasonAction(
+        book,
+        TextbookSeasonAction.resume,
+        failureMessage: '시즌을 다시 이어가지 못했어요.',
+      );
+      return;
+    }
+
+    if (chosen == TextbookSeasonAction.end) {
+      final targetBucket = book.everCompleted ? '완료됨' : '종료됨';
+      final confirmed = await showStudentConfirmSheet(
+        context: context,
+        title: '시즌 ${book.seasonNo} 종료',
+        message: '${book.name}$gradeSuffix의 시즌 ${book.seasonNo} 기록을 마감하고 '
+            '$targetBucket 목록으로 옮깁니다.\n'
+            '답안 표시는 다음 시즌을 시작할 때까지 그대로 남아 있어요.',
+        confirmLabel: '시즌 종료',
+        cancelLabel: '취소',
+        confirmIcon: Icons.check_rounded,
+        cancelIcon: Icons.close_rounded,
+      );
+      if (confirmed != true || !mounted) return;
+      final ok = await _applySeasonAction(
+        book,
+        TextbookSeasonAction.end,
+        failureMessage: '시즌을 종료하지 못했어요.',
+      );
+      if (ok) {
+        await TextbookStudySession.instance
+            .finishForBook(book.bookId, book.gradeLabel);
+      }
+    }
+  }
+
+  Future<bool> _applySeasonAction(
+    StudentTextbook book,
+    TextbookSeasonAction action, {
+    required String failureMessage,
+  }) async {
     String? error;
     try {
-      error = await TextbookApi.instance.resetTextbook(
+      error = await TextbookApi.instance.setTextbookSeasonState(
         bookId: book.bookId,
         gradeLabel: book.gradeLabel,
+        action: action,
       );
-    } catch (e) {
+    } catch (_) {
       error = 'unknown';
     }
-    if (!mounted) return;
+    if (!mounted) return false;
 
     if (error != null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
             error == 'under_review'
-                ? '선생님이 검사 중인 교재예요. 검사가 끝나면 다시 풀 수 있어요.'
-                : '다시 풀기를 하지 못했어요.',
+                ? '선생님이 검사 중인 교재예요. 검사가 끝나면 다시 시도해 주세요.'
+                : failureMessage,
           ),
         ),
       );
-      return;
+      return false;
     }
-    await TextbookStudySession.instance
-        .finishForBook(book.bookId, book.gradeLabel);
     await _refresh();
+    return true;
+  }
+
+  Future<TextbookSeasonAction?> _showActiveOrPausedSeasonSheet(
+    StudentTextbook book,
+  ) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final surface = isDark ? const Color(0xFF1C1C1E) : const Color(0xFFF2F2F7);
+    final card = isDark ? const Color(0xFF2C2C2E) : Colors.white;
+    final text = isDark ? Colors.white : Colors.black;
+    final sub = text.withValues(alpha: 0.48);
+    final divider = text.withValues(alpha: 0.08);
+    const accent = YggGlassTokens.confirmActionColor;
+    final isPaused = book.isPausedSeason;
+    final targetEndLabel = book.everCompleted ? '완료됨' : '종료됨';
+
+    Widget option({
+      required String label,
+      required String subtitle,
+      required IconData icon,
+      required Color iconColor,
+      required BorderRadius inkRadius,
+      required VoidCallback onTap,
+    }) {
+      return Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: inkRadius,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+            child: Row(
+              children: [
+                Icon(icon, size: 26, color: iconColor),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        label,
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w700,
+                          color: text,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        subtitle,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                          color: sub,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    return showModalBottomSheet<TextbookSeasonAction>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: surface,
+              borderRadius: BorderRadius.circular(28),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 14, 12, 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    book.gradeLabel.trim().isEmpty
+                        ? book.name
+                        : '${book.name} · ${book.gradeLabel.trim()}',
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      color: text,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    isPaused
+                        ? '시즌 ${book.seasonNo} · 현재 보류 중이에요'
+                        : '시즌 ${book.seasonNo} 진행 중',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      color: sub,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: card,
+                      borderRadius: BorderRadius.circular(22),
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(22),
+                      child: Column(
+                        children: [
+                          if (isPaused)
+                            option(
+                              label: '시즌 이어하기',
+                              subtitle:
+                                  '보류를 풀고 시즌 ${book.seasonNo} 풀이를 계속해요',
+                              icon: Icons.play_arrow_rounded,
+                              iconColor: accent,
+                              inkRadius: const BorderRadius.vertical(
+                                top: Radius.circular(22),
+                              ),
+                              onTap: () => Navigator.of(ctx)
+                                  .pop(TextbookSeasonAction.resume),
+                            )
+                          else
+                            option(
+                              label: '보류하기',
+                              subtitle: '답과 기록을 남긴 채 보류 목록으로 내려요',
+                              icon: Icons.pause_circle_outline_rounded,
+                              iconColor: text.withValues(alpha: 0.78),
+                              inkRadius: const BorderRadius.vertical(
+                                top: Radius.circular(22),
+                              ),
+                              onTap: () => Navigator.of(ctx)
+                                  .pop(TextbookSeasonAction.pause),
+                            ),
+                          Divider(
+                            height: 1,
+                            indent: 18,
+                            endIndent: 18,
+                            color: divider,
+                          ),
+                          option(
+                            label: '시즌 종료',
+                            subtitle:
+                                '시즌 ${book.seasonNo} 기록을 마감하고 $targetEndLabel으로 옮겨요',
+                            icon: book.everCompleted
+                                ? Icons.check_circle_outline_rounded
+                                : Icons.flag_outlined,
+                            iconColor: book.everCompleted ? accent : sub,
+                            inkRadius: const BorderRadius.vertical(
+                              bottom: Radius.circular(22),
+                            ),
+                            onTap: () => Navigator.of(ctx)
+                                .pop(TextbookSeasonAction.end),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _openAddTextbook() async {
@@ -305,23 +615,94 @@ class _TextbookScreenState extends State<TextbookScreen> {
   }
 
   ({int percent, String subtitle}) _progressSummary(
-      List<StudentTextbook>? books) {
+      List<StudentTextbook>? books, OrganizedTextbooks? organized) {
     if (books == null || books.isEmpty) {
       return (percent: 0, subtitle: '등록된 교재가 없어요');
     }
-    final total = books.fold<int>(0, (s, b) => s + b.totalProblems);
-    final done = books.fold<int>(0, (s, b) => s + b.completedCount);
+    final active = organized?.activeBooks ?? const <StudentTextbook>[];
+    if (active.isEmpty) {
+      return (
+        percent: 0,
+        subtitle: '진행 중인 교재가 없어요 · 교재를 길게 눌러 시즌을 시작해요',
+      );
+    }
+    final total = active.fold<int>(0, (s, b) => s + b.totalProblems);
+    final done = active.fold<int>(0, (s, b) => s + b.completedCount);
     if (total <= 0) {
-      return (percent: 0, subtitle: '교재 ${books.length}권 · 문제 집계 대기');
+      return (percent: 0, subtitle: '진행 중 ${active.length}권 · 문제 집계 대기');
     }
     final percent = ((done * 100) / total).round().clamp(0, 100);
     return (percent: percent, subtitle: '전체 $total문제 중 $done문제 완료');
   }
 
+  Widget _bookCard(StudentTextbook book, double cardWidth) {
+    return _BookCard(
+      key: ValueKey<String>(
+        '${book.bookId}|${book.gradeLabel}|${book.seasonState.name}|${book.seasonNo}',
+      ),
+      book: book,
+      width: cardWidth,
+      activeSolveSession: TextbookStudySession.instance.solveSessionFor(
+        book.bookId,
+        book.gradeLabel,
+      ),
+      onOpen: () => _openBook(book),
+      onLongPress: () => _handleBookLongPress(book),
+    );
+  }
+
+  Widget _buildSeriesHorizontalRow(TextbookSeriesRow row, double cardWidth) {
+    final baseBehavior = ScrollConfiguration.of(context);
+    return ScrollConfiguration(
+      behavior: baseBehavior.copyWith(
+        scrollbars: false,
+        dragDevices: {
+          ...baseBehavior.dragDevices,
+          PointerDeviceKind.touch,
+          PointerDeviceKind.mouse,
+          PointerDeviceKind.trackpad,
+        },
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        clipBehavior: Clip.none,
+        physics: const BouncingScrollPhysics(),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (var i = 0; i < row.books.length; i++) ...[
+              if (i > 0) const SizedBox(width: _cardGap),
+              SizedBox(
+                width: cardWidth,
+                child: _bookCard(row.books[i], cardWidth),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSeriesStack(
+    List<TextbookSeriesRow> seriesRows,
+    double cardWidth,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (var i = 0; i < seriesRows.length; i++) ...[
+          if (i > 0) const SizedBox(height: _cardGap),
+          _buildSeriesHorizontalRow(seriesRows[i], cardWidth),
+        ],
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final books = _books;
-    final summary = _progressSummary(books);
+    final organized = books == null ? null : organizeTextbooks(books);
+    final summary = _progressSummary(books, organized);
 
     return StudentCollapsingTitlePage(
       title: '교재 풀기',
@@ -349,7 +730,7 @@ class _TextbookScreenState extends State<TextbookScreen> {
             ],
           );
         }
-        if (books == null) {
+        if (books == null || organized == null) {
           return ListView(
             physics: const AlwaysScrollableScrollPhysics(),
             padding: EdgeInsets.fromLTRB(24, topInset + 20, 24, bottomInset),
@@ -376,6 +757,11 @@ class _TextbookScreenState extends State<TextbookScreen> {
             final cardWidth =
                 (availableWidth - _cardGap * (crossAxisCount - 1)) /
                     crossAxisCount;
+            final isDark = Theme.of(context).brightness == Brightness.dark;
+            final dividerColor = isDark
+                ? Colors.white.withValues(alpha: 0.10)
+                : Colors.black.withValues(alpha: 0.08);
+
             return SingleChildScrollView(
               physics: const AlwaysScrollableScrollPhysics(
                 parent: BouncingScrollPhysics(),
@@ -384,7 +770,7 @@ class _TextbookScreenState extends State<TextbookScreen> {
                 horizontalPadding,
                 topInset + 20,
                 horizontalPadding,
-                bottomInset,
+                bottomInset + 24,
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -399,24 +785,66 @@ class _TextbookScreenState extends State<TextbookScreen> {
                     spacing: _cardGap,
                     runSpacing: _cardGap,
                     children: [
-                      for (final book in books)
+                      for (final book in sortActiveTextbooks([
+                        ...organized.activeBooks,
+                        ...organized.notStartedBooks,
+                      ]))
                         SizedBox(
                           width: cardWidth,
-                          child: _BookCard(
-                            book: book,
-                            width: cardWidth,
-                            activeSolveSession: TextbookStudySession.instance
-                                .solveSessionFor(book.bookId, book.gradeLabel),
-                            onOpen: () => _openBook(book),
-                            onReset: () => _resetBook(book),
-                          ),
+                          child: _bookCard(book, cardWidth),
                         ),
                       SizedBox(
                         width: cardWidth,
-                        child: _AddTextbookCard(onTap: _openAddTextbook),
+                        child: _AddTextbookCard(
+                          onTap: _openAddTextbook,
+                          includeMetaSpacer: organized.activeBooks.isNotEmpty ||
+                              organized.notStartedBooks.isNotEmpty,
+                        ),
                       ),
                     ],
                   ),
+                  const SizedBox(height: 36),
+                  Divider(height: 1, thickness: 0.6, color: dividerColor),
+                  _TextbookBucketSectionRow(
+                    title: '보류',
+                    count: organized.pausedBooks.length,
+                    expanded: _pausedExpanded,
+                    emptyLabel: '보류 중인 문제집이 없어요.',
+                    onToggle: () =>
+                        setState(() => _pausedExpanded = !_pausedExpanded),
+                    child: organized.pausedSeries.isEmpty
+                        ? null
+                        : _buildSeriesStack(organized.pausedSeries, cardWidth),
+                  ),
+                  Divider(height: 1, thickness: 0.6, color: dividerColor),
+                  _TextbookBucketSectionRow(
+                    title: '종료됨',
+                    count: organized.endedBooks.length,
+                    expanded: _endedExpanded,
+                    emptyLabel: '종료된 문제집이 없어요.',
+                    onToggle: () =>
+                        setState(() => _endedExpanded = !_endedExpanded),
+                    child: organized.endedSeries.isEmpty
+                        ? null
+                        : _buildSeriesStack(organized.endedSeries, cardWidth),
+                  ),
+                  Divider(height: 1, thickness: 0.6, color: dividerColor),
+                  _TextbookBucketSectionRow(
+                    title: '완료됨',
+                    count: organized.completedBooks.length,
+                    expanded: _completedExpanded,
+                    emptyLabel: '모두 다 푼 문제집이 아직 없어요.',
+                    onToggle: () => setState(
+                      () => _completedExpanded = !_completedExpanded,
+                    ),
+                    child: organized.completedSeries.isEmpty
+                        ? null
+                        : _buildSeriesStack(
+                            organized.completedSeries,
+                            cardWidth,
+                          ),
+                  ),
+                  Divider(height: 1, thickness: 0.6, color: dividerColor),
                 ],
               ),
             );
@@ -427,20 +855,133 @@ class _TextbookScreenState extends State<TextbookScreen> {
   }
 }
 
+/// iOS 사진 앱 스타일의 접이식 분류 행 (`보류`, `종료됨`, `완료됨`).
+class _TextbookBucketSectionRow extends StatelessWidget {
+  const _TextbookBucketSectionRow({
+    required this.title,
+    required this.count,
+    required this.expanded,
+    required this.emptyLabel,
+    required this.onToggle,
+    this.child,
+  });
+
+  final String title;
+  final int count;
+  final bool expanded;
+  final String emptyLabel;
+  final VoidCallback onToggle;
+  final Widget? child;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final pillBg = isDark
+        ? Colors.white.withValues(alpha: 0.10)
+        : Colors.black.withValues(alpha: 0.055);
+    final iconColor = count > 0
+        ? YggGlassTokens.confirmActionColor
+        : theme.hintColor.withValues(alpha: 0.55);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onToggle,
+            borderRadius: BorderRadius.circular(12),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 15),
+              child: Row(
+                children: [
+                  Text(
+                    title,
+                    style: theme.textTheme.titleLarge?.copyWith(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.35,
+                    ),
+                  ),
+                  if (count > 0) ...[
+                    const SizedBox(width: 8),
+                    Text(
+                      '$count',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: theme.hintColor,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                  ],
+                  const Spacer(),
+                  Container(
+                    width: 30,
+                    height: 30,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: pillBg,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      expanded
+                          ? Icons.keyboard_arrow_down_rounded
+                          : Icons.chevron_right_rounded,
+                      size: 20,
+                      color: iconColor,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 240),
+          curve: Curves.easeOutCubic,
+          alignment: Alignment.topCenter,
+          child: !expanded
+              ? const SizedBox(width: double.infinity)
+              : Padding(
+                  padding: const EdgeInsets.only(top: 6, bottom: 22),
+                  child: child ??
+                      Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 4,
+                          vertical: 8,
+                        ),
+                        child: Text(
+                          emptyLabel,
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: theme.hintColor,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                ),
+        ),
+      ],
+    );
+  }
+}
+
 class _BookCard extends StatefulWidget {
   const _BookCard({
+    super.key,
     required this.book,
     required this.width,
     this.activeSolveSession,
     required this.onOpen,
-    required this.onReset,
+    required this.onLongPress,
   });
 
   final StudentTextbook book;
   final double width;
   final ActiveTextbookSession? activeSolveSession;
   final VoidCallback onOpen;
-  final VoidCallback onReset;
+  final VoidCallback onLongPress;
 
   @override
   State<_BookCard> createState() => _BookCardState();
@@ -453,6 +994,7 @@ class _BookCardState extends State<_BookCard> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final book = widget.book;
+    final isNotStarted = book.isNotStarted;
     // 진행률(회색) ≥ 완료율(초록) 시각 보장.
     final advance = book.advanceRate.clamp(0.0, 1.0);
     final completion = book.completionRate.clamp(0.0, advance);
@@ -474,7 +1016,9 @@ class _BookCardState extends State<_BookCard> {
     const scale = 1.0;
     final pad = CoverOverlayStyle.padFor(scale);
     final gap = CoverOverlayStyle.gapFor(scale);
-    final daysLabel = _daysSinceStartLabel(book.startedAt);
+    final daysLabel = book.isActiveSeason
+        ? _daysSinceStartLabel(book.seasonOpenedAt ?? book.startedAt)
+        : null;
     final daysPill = daysLabel == null
         ? null
         : CoverPill(
@@ -484,96 +1028,140 @@ class _BookCardState extends State<_BookCard> {
             shrinkWrap: true,
           );
     final activeSolve = widget.activeSolveSession;
-    final solveStatePill = activeSolve == null
-        ? null
-        : CoverPill(
-            style: overlay,
-            icon: activeSolve.isPaused
-                ? Icons.pause_circle_outline_rounded
-                : Icons.play_circle_outline_rounded,
-            label: activeSolve.isPaused ? '중단' : '풀이중',
-            shrinkWrap: true,
-          );
+    final Widget? topLeftPill;
+    if (isNotStarted) {
+      topLeftPill = CoverPill(
+        style: overlay,
+        icon: Icons.play_circle_outline_rounded,
+        label: '시작 전',
+        shrinkWrap: true,
+      );
+    } else if (book.isPausedSeason) {
+      topLeftPill = CoverPill(
+        style: overlay,
+        icon: Icons.pause_circle_outline_rounded,
+        label: '보류',
+        shrinkWrap: true,
+      );
+    } else if (book.isClosedSeason) {
+      topLeftPill = book.everCompleted
+          ? CoverPill(
+              style: overlay,
+              tone: CoverPillTone.accent,
+              icon: Icons.check_circle_outline_rounded,
+              label: '완료됨',
+              shrinkWrap: true,
+            )
+          : CoverPill(
+              style: overlay,
+              icon: Icons.flag_outlined,
+              label: '종료됨',
+              shrinkWrap: true,
+            );
+    } else if (activeSolve != null) {
+      topLeftPill = CoverPill(
+        style: overlay,
+        icon: activeSolve.isPaused
+            ? Icons.pause_circle_outline_rounded
+            : Icons.play_circle_outline_rounded,
+        label: activeSolve.isPaused ? '중단' : '풀이중',
+        shrinkWrap: true,
+      );
+    } else {
+      topLeftPill = null;
+    }
+
+    Widget coverSurface = hasNetworkCover
+        ? Image.network(
+            book.coverRef,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => _CoverFallback(color: coverColor),
+          )
+        : _CoverFallback(color: coverColor);
+
+    if (isNotStarted) {
+      coverSurface = Stack(
+        fit: StackFit.expand,
+        children: [
+          coverSurface,
+          const ColoredBox(color: Color(0x24FFFFFF)),
+        ],
+      );
+    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // 커버 탭 → 교재 열기
+        // 커버 탭 → 교재 열기, 길게 누르기 → 시즌 시작/보류/재개/종료
         Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: widget.onOpen,
-            onLongPress: widget.onReset,
-            borderRadius: BorderRadius.circular(_cardRadius),
-            child: AspectRatio(
-              aspectRatio: 1 / _coverA4Ratio,
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(_cardRadius),
-                  boxShadow: const [
-                    BoxShadow(color: Color(0x1A000000), blurRadius: 14),
-                    BoxShadow(
-                      color: Color(0x29000000),
-                      blurRadius: 18,
-                      spreadRadius: -2,
-                      offset: Offset(3, 7),
-                    ),
-                  ],
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(_cardRadius),
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      hasNetworkCover
-                          ? Image.network(
-                              book.coverRef,
-                              fit: BoxFit.cover,
-                              errorBuilder: (_, __, ___) =>
-                                  _CoverFallback(color: coverColor),
-                            )
-                          : _CoverFallback(color: coverColor),
-                      Positioned.fill(
-                        child: CoverScrim(style: overlay, showTop: false),
-                      ),
-                      Positioned.fill(
-                        child: CoverHairline(
-                          style: overlay,
-                          radius: _cardRadius,
-                        ),
-                      ),
-                      if (solveStatePill != null)
-                        Positioned(
-                          left: pad,
-                          top: pad,
-                          child: solveStatePill,
-                        ),
-                      if (daysPill != null)
-                        Positioned(
-                          right: pad,
-                          top: pad,
-                          child: daysPill,
-                        ),
-                      Positioned(
-                        left: pad,
-                        right: pad,
-                        bottom: pad,
-                        child: _CoverFactBlock(
-                          overlay: overlay,
-                          advance: advance,
-                          completion: completion,
-                          gradeLabel: book.gradeLabel.trim(),
-                          seasonNo: book.seasonNo,
-                          gap: gap,
-                        ),
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: widget.onOpen,
+              onLongPress: widget.onLongPress,
+              borderRadius: BorderRadius.circular(_cardRadius),
+              child: AspectRatio(
+                aspectRatio: 1 / _coverA4Ratio,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(_cardRadius),
+                    boxShadow: const [
+                      BoxShadow(color: Color(0x1A000000), blurRadius: 14),
+                      BoxShadow(
+                        color: Color(0x29000000),
+                        blurRadius: 18,
+                        spreadRadius: -2,
+                        offset: Offset(3, 7),
                       ),
                     ],
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(_cardRadius),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        coverSurface,
+                        Positioned.fill(
+                          child: CoverScrim(style: overlay, showTop: false),
+                        ),
+                        Positioned.fill(
+                          child: CoverHairline(
+                            style: overlay,
+                            radius: _cardRadius,
+                          ),
+                        ),
+                        if (topLeftPill != null)
+                          Positioned(
+                            left: pad,
+                            top: pad,
+                            child: topLeftPill,
+                          ),
+                        if (daysPill != null)
+                          Positioned(
+                            right: pad,
+                            top: pad,
+                            child: daysPill,
+                          ),
+                        Positioned(
+                          left: pad,
+                          right: pad,
+                          bottom: pad,
+                          child: _CoverFactBlock(
+                            overlay: overlay,
+                            advance: advance,
+                            completion: completion,
+                            gradeLabel: book.gradeLabel.trim(),
+                            seasonLabel:
+                                isNotStarted ? '시작 전' : '시즌 ${book.seasonNo}',
+                            gap: gap,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
             ),
           ),
-        ),
         const SizedBox(height: _coverToMetaSpacing),
         // 메타 탭 → 상세 시트 펼침/접기 (커버와 분리)
         Material(
@@ -701,7 +1289,7 @@ class _CoverFactBlock extends StatelessWidget {
     required this.advance,
     required this.completion,
     required this.gradeLabel,
-    required this.seasonNo,
+    required this.seasonLabel,
     required this.gap,
   });
 
@@ -709,7 +1297,7 @@ class _CoverFactBlock extends StatelessWidget {
   final double advance;
   final double completion;
   final String gradeLabel;
-  final int seasonNo;
+  final String seasonLabel;
   final double gap;
 
   @override
@@ -732,7 +1320,7 @@ class _CoverFactBlock extends StatelessWidget {
             Flexible(
               child: CoverPill(
                 style: overlay,
-                label: '시즌 $seasonNo',
+                label: seasonLabel,
                 loose: true,
               ),
             ),
@@ -1110,9 +1698,13 @@ class _LayeredProgressBar extends StatelessWidget {
 
 /// 교재 카드와 같은 A4·radius 슬롯 — 배경 투명 + 점선 테두리.
 class _AddTextbookCard extends StatelessWidget {
-  const _AddTextbookCard({required this.onTap});
+  const _AddTextbookCard({
+    required this.onTap,
+    this.includeMetaSpacer = true,
+  });
 
   final VoidCallback onTap;
+  final bool includeMetaSpacer;
 
   @override
   Widget build(BuildContext context) {
@@ -1160,9 +1752,10 @@ class _AddTextbookCard extends StatelessWidget {
             ),
           ),
         ),
-        // 그리드 높이만 맞추는 자리(탭/리플 없음).
-        const SizedBox(height: _coverToMetaSpacing),
-        const SizedBox(height: _cardMetaHeight),
+        if (includeMetaSpacer) ...[
+          const SizedBox(height: _coverToMetaSpacing),
+          const SizedBox(height: _cardMetaHeight),
+        ],
       ],
     );
   }

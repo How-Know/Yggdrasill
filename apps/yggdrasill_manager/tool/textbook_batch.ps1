@@ -6,8 +6,8 @@
 #   .\tool\textbook_batch.ps1 answer -Only 1-1/3-1 -Crops <crop id> -Value '@C:\path\answer.txt'
 param(
   [Parameter(Mandatory = $true, Position = 0)]
-  [ValidateSet('login', 'status', 'preview', 'consistency', 'meta', 'dismiss', 'render', 'finish', 'match', 'sol_blocks', 'fig_drop', 'fig_anchor', 'note', 'sol_correct', 'snapshot', 'page', 'answer', 'stem', 'solution', 'layout', 'solref', 'solfig', 'solfig_arrange', 'solfig_recrop', 'solfig_drop', 'recrop',
-    'pb_figure_width', 'pb_choice_rows', 'reconfirm', 'logout')]
+  [ValidateSet('login', 'status', 'preview', 'consistency', 'meta', 'dismiss', 'render', 'finish', 'match', 'sol_blocks', 'fig_drop', 'fig_upload', 'meta_force', 'fig_anchor', 'note', 'sol_correct', 'snapshot', 'page', 'answer', 'stem', 'solution', 'layout', 'solref', 'solfig', 'solfig_arrange', 'solfig_recrop', 'solfig_drop', 'recrop',
+    'pb_figure_width', 'pb_choice_rows', 'reconfirm', 'mock', 'mock_continue', 'mock_restart', 'mock_status', 'mock_unstage', 'logout')]
   [string]$Step,
   [string]$Only = '',
   [string]$Email = '',

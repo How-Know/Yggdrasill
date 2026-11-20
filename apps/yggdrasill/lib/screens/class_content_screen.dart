@@ -7611,6 +7611,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     _batchConfirmService.syncPendingCount();
     _gradingProgressRevisionByStudent.remove(studentId);
     _gradingProgressFutureByStudent.remove(studentId);
+    _firstInspectionScoreCacheByStudent.remove(studentId);
     _showHomeworkChipSnackBar(
       context,
       '체크와 채점 기록을 취소했습니다.',
@@ -11292,6 +11293,8 @@ final Map<String, Future<Map<String, HomeworkGradingProgressRate>>>
     _gradingProgressFutureByStudent = {};
 final Map<String, Map<String, HomeworkGradingProgressRate>>
     _gradingProgressCacheByStudent = {};
+final Map<String, Map<String, HomeworkFirstInspectionScore>>
+    _firstInspectionScoreCacheByStudent = {};
 
 Map<String, HomeworkGradingProgressRate> _gradingProgressRatesForStudent(
   String studentId,
@@ -13835,6 +13838,7 @@ Widget _buildHomeworkChipsReactiveForStudent(
                     .loadLatestCycleMetaByItem(studentId);
             _gradingProgressRevisionByStudent.remove(studentId);
             _gradingProgressFutureByStudent.remove(studentId);
+            _firstInspectionScoreCacheByStudent.remove(studentId);
           }
           final assignmentCountsFuture =
               _assignmentCountsFutureByStudent.putIfAbsent(
@@ -13953,6 +13957,11 @@ Widget _buildHomeworkChipsReactiveForStudent(
                                 studentId,
                                 progressSnapshot,
                               );
+                              final firstScoresByItem =
+                                  _firstInspectionScoreCacheByStudent[
+                                          studentId] ??
+                                      const <String,
+                                          HomeworkFirstInspectionScore>{};
                               final chips = _buildHomeworkChipsOnceForStudent(
                                 context,
                                 studentId,
@@ -13970,6 +13979,7 @@ Widget _buildHomeworkChipsReactiveForStudent(
                                 assignmentCheckLabelByGroupId:
                                     assignmentCheckLabelByGroupId,
                                 progressRatesByItem: progressRatesByItem,
+                                firstScoresByItem: firstScoresByItem,
                                 pendingConfirms: pendingConfirms,
                                 savingConfirms: savingConfirms,
                                 onPhase3Tap: onPhase3Tap,
@@ -14061,6 +14071,7 @@ Widget _buildReservedHomeworkChipsReactiveForStudent(
                     .loadLatestCycleMetaByItem(studentId);
             _gradingProgressRevisionByStudent.remove(studentId);
             _gradingProgressFutureByStudent.remove(studentId);
+            _firstInspectionScoreCacheByStudent.remove(studentId);
           }
           final assignmentCountsFuture =
               _assignmentCountsFutureByStudent.putIfAbsent(
@@ -15028,6 +15039,7 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
   Map<String, DateTime?> assignmentDueByItemId = const {},
   Map<String, String> assignmentCheckLabelByGroupId = const {},
   Map<String, HomeworkGradingProgressRate> progressRatesByItem = const {},
+  Map<String, HomeworkFirstInspectionScore> firstScoresByItem = const {},
   Map<({String studentId, String itemId}), bool> pendingConfirms = const {},
   Set<({String studentId, String itemId})> savingConfirms = const {},
   Future<void> Function(
@@ -15331,6 +15343,15 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
         (dueDate == null ? null : _formatHomeworkDueChipLabel(dueDate));
     final progressRate =
         _aggregateHomeworkProgressRates(children, progressRatesByItem);
+    final firstInspectionScore = resolveGroupHomeworkFirstInspectionScore(
+      children
+          .map((child) => firstScoresByItem[child.id])
+          .whereType<HomeworkFirstInspectionScore>(),
+      groupQuestionCount: children.fold<int>(
+        0,
+        (sum, child) => sum + math.max(0, child.count ?? 0),
+      ),
+    );
     final double chipH = groupExpanded
         ? _homeworkGroupExpandedHeightForChildCount(children.length)
         : _homeworkChipCollapsedHeight;
@@ -15567,6 +15588,14 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
                 ),
               );
             },
+            onPrint: (selection) => _printHomeworkCardFromDetail(
+              context: context,
+              studentId: studentId,
+              group: group,
+              summary: summary,
+              children: children,
+              selection: selection,
+            ),
           ),
         );
       },
@@ -15724,6 +15753,7 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
           dueLabel: dueLabel,
           isHomeworkDue: hasHomeworkAssignment || markedAsHomework,
           progressRate: progressRate,
+          firstInspectionScore: firstInspectionScore,
           attachRightExtension:
               homeworkDraftEditor != null && homeworkDraftReveal > 0,
           isExpanded: groupExpanded,
@@ -16847,10 +16877,32 @@ HomeworkGradingProgressRate _aggregateHomeworkProgressRates(
   return aggregated;
 }
 
+bool _homeworkMayCarryPointScores(HomeworkItem item) {
+  if ((item.sourceUnitLevel ?? '').trim() == 'naesin') return true;
+  if ((item.pbPresetId ?? '').trim().isNotEmpty) return true;
+  final blob = '${item.title}\n${item.content ?? ''}';
+  return blob.contains('내신') ||
+      blob.contains('모의고사') ||
+      blob.contains('수능');
+}
+
 Future<Map<String, HomeworkGradingProgressRate>>
     _loadHomeworkProgressRatesForStudent(String studentId) async {
   final items = HomeworkStore.instance.items(studentId).toList(growable: false);
-  if (items.isEmpty) return const <String, HomeworkGradingProgressRate>{};
+  final firstScoreFuture = HomeworkTestGradingResultService.instance
+      .loadFirstInspectionScoresByHomeworkItemIds(
+    items.where(_homeworkMayCarryPointScores).map((item) => item.id),
+  );
+  Future<Map<String, HomeworkGradingProgressRate>> finish(
+    Map<String, HomeworkGradingProgressRate> progress,
+  ) async {
+    _firstInspectionScoreCacheByStudent[studentId] = await firstScoreFuture;
+    return progress;
+  }
+
+  if (items.isEmpty) {
+    return finish(const <String, HomeworkGradingProgressRate>{});
+  }
   final enabledIds = <String>{};
   final fallbackTotals = <String, int>{};
   for (final item in items) {
@@ -16872,7 +16924,7 @@ Future<Map<String, HomeworkGradingProgressRate>>
           enabledIds.contains(id) &&
           (live[id] == null || live[id]!.graded <= 0))
       .toList(growable: false);
-  if (fallbackIds.isEmpty) return live;
+  if (fallbackIds.isEmpty) return finish(live);
 
   // 과거 버전에서 교사 채점 스냅샷 저장 후 공통 원장 미러가 실패한 과제도
   // 복구한다. 공통 원장에 채점이 하나라도 있으면 live를 항상 우선한다.
@@ -16889,7 +16941,7 @@ Future<Map<String, HomeworkGradingProgressRate>>
       merged[entry.key] = entry.value;
     }
   }
-  return merged;
+  return finish(merged);
 }
 
 String _normalizePageRangeForPrint(String raw) {
@@ -17629,6 +17681,7 @@ bool _isCompatiblePbExportForPrint({
   required String paperSize,
   required bool includeAnswerSheet,
   required bool includeExplanation,
+  bool omitQuestionBody = false,
   required List<String> selectedQuestionUids,
   required bool followsOriginalQuestionTypes,
   Map<String, dynamic> renderConfig = const <String, dynamic>{},
@@ -17695,6 +17748,11 @@ bool _isCompatiblePbExportForPrint({
   }
   final jobFollowsOriginalQuestionTypes =
       job.options['naesinOriginalModePolicyVersion'] == 1;
+  final jobOmitsQuestionBody = _parseBoolLooseForPrint(
+    job.options['omitQuestionBody'],
+    fallback: false,
+  );
+  if (jobOmitsQuestionBody != omitQuestionBody) return false;
   return !job.previewOnly &&
       (!followsOriginalQuestionTypes || jobFollowsOriginalQuestionTypes) &&
       job.documentId.trim() == documentId.trim() &&
@@ -17715,6 +17773,7 @@ Future<LearningProblemExportJob?> _ensurePbExportJob({
   LearningProblemBankService? problemBankService,
   ValueNotifier<String>? progressText,
   bool Function()? isCancelled,
+  HomeworkCardPrintSelection? selection,
 }) async {
   _throwIfHomePrintCancelled(isCancelled);
   final pbService = problemBankService ?? LearningProblemBankService();
@@ -17764,29 +17823,41 @@ Future<LearningProblemExportJob?> _ensurePbExportJob({
   final templateProfile =
       preset.templateProfile.isNotEmpty ? preset.templateProfile : 'csat';
   final paperSize = preset.paperSize.isNotEmpty ? preset.paperSize : 'A4';
-  final includeAnswerSheet = _parseBoolLooseForPrint(
+  final presetAnswer = _parseBoolLooseForPrint(
     renderConfig['includeAnswerSheet'],
     fallback: false,
   );
-  final includeExplanation = _parseBoolLooseForPrint(
+  final presetExplanation = _parseBoolLooseForPrint(
     renderConfig['includeExplanation'],
     fallback: false,
   );
+  final includeAnswerSheet = selection?.quickAnswer ?? presetAnswer;
+  final includeExplanation = selection?.explanation ?? presetExplanation;
+  final omitQuestionBody = selection != null && !selection.problems;
+  final usePresetHash = !omitQuestionBody &&
+      includeAnswerSheet == presetAnswer &&
+      includeExplanation == presetExplanation;
   final followsOriginalQuestionTypes = naesinLinkKeyOfPreset(preset).isNotEmpty;
   final hasCurrentOriginalModePolicy =
       renderConfig['naesinOriginalModePolicyVersion'] == 1;
-  final renderHash =
-      followsOriginalQuestionTypes && !hasCurrentOriginalModePolicy
-          ? ''
-          : '${renderConfig['renderHash'] ?? ''}'.trim();
+  final renderHash = !usePresetHash ||
+          (followsOriginalQuestionTypes && !hasCurrentOriginalModePolicy)
+      ? ''
+      : '${renderConfig['renderHash'] ?? ''}'.trim();
   final options = <String, dynamic>{
     ...renderConfig,
     'includeAnswerSheet': includeAnswerSheet,
     'includeExplanation': includeExplanation,
+    if (omitQuestionBody) 'omitQuestionBody': true,
     if (followsOriginalQuestionTypes) 'naesinOriginalModePolicyVersion': 1,
     if (renderHash.isNotEmpty) 'renderHash': renderHash,
     'previewOnly': false,
   };
+  if (!omitQuestionBody) options.remove('omitQuestionBody');
+  if (renderHash.isEmpty) {
+    options.remove('renderHash');
+    options.remove('render_hash');
+  }
 
   if (renderHash.isNotEmpty) {
     try {
@@ -17826,6 +17897,7 @@ Future<LearningProblemExportJob?> _ensurePbExportJob({
             paperSize: paperSize,
             includeAnswerSheet: includeAnswerSheet,
             includeExplanation: includeExplanation,
+            omitQuestionBody: omitQuestionBody,
             selectedQuestionUids: selectedQuestionUids,
             followsOriginalQuestionTypes: followsOriginalQuestionTypes,
             renderConfig: renderConfig,
@@ -17886,7 +17958,8 @@ Future<LearningProblemExportJob?> _ensurePbExportJob({
   );
   if (completedJob == null) return null;
 
-  if (completedJob.status.trim() == 'completed' &&
+  if ((selection == null || usePresetHash) &&
+      completedJob.status.trim() == 'completed' &&
       completedJob.id.trim().isNotEmpty) {
     final sourceDocumentIds = preset.sourceDocumentIds.isNotEmpty
         ? preset.sourceDocumentIds
@@ -17914,6 +17987,7 @@ Future<_ResolvedHomeworkPrintSource?> _resolvePbPrintSource(
   bool ensureExportJob = false,
   ValueNotifier<String>? progressText,
   bool Function()? isCancelled,
+  HomeworkCardPrintSelection? selection,
 }) async {
   _throwIfHomePrintCancelled(isCancelled);
   final pbService = problemBankService ?? LearningProblemBankService();
@@ -17944,7 +18018,7 @@ Future<_ResolvedHomeworkPrintSource?> _resolvePbPrintSource(
 
   final staleExportJobIds = <String>{};
   final lockedExportJobId = (assignment?.releaseExportJobId ?? '').trim();
-  if (lockedExportJobId.isNotEmpty) {
+  if (selection == null && lockedExportJobId.isNotEmpty) {
     final resolved = await _sourceFromPbExportJobForPrint(
       academyId: safeAcademyId,
       exportJobId: lockedExportJobId,
@@ -17956,7 +18030,7 @@ Future<_ResolvedHomeworkPrintSource?> _resolvePbPrintSource(
     if (resolved != null) return resolved;
   }
 
-  if (liveReleaseId.isNotEmpty) {
+  if (selection == null && liveReleaseId.isNotEmpty) {
     if (assignmentRelease != null) {
       final preferFrozen =
           (assignment?.status ?? '').trim().toLowerCase() == 'completed';
@@ -17981,7 +18055,8 @@ Future<_ResolvedHomeworkPrintSource?> _resolvePbPrintSource(
   // 과제 목록에서 미리 받은 signed URL은 위에서 확인한 잠금/라이브 PDF를
   // 가리키므로, 그 PDF가 수정 전 내용이면 쓰지 않는다.
   final assignmentSignedUrl = (assignment?.liveReleaseSignedUrl ?? '').trim();
-  if (assignmentSignedUrl.isNotEmpty &&
+  if (selection == null &&
+      assignmentSignedUrl.isNotEmpty &&
       preferredPaperSize.isEmpty &&
       staleExportJobIds.isEmpty) {
     // signed URL 경로에서도 export_job.paperSize로 용지 크기 보완 시도.
@@ -18033,7 +18108,7 @@ Future<_ResolvedHomeworkPrintSource?> _resolvePbPrintSource(
       'naesinLink="${_naesinLinkKeyForPrint(hw)}" liveRelease="$liveReleaseId"',
     );
   }
-  if (pbPresetId.isNotEmpty) {
+  if (selection == null && pbPresetId.isNotEmpty) {
     try {
       final latestRelease = await pbService.getLatestLiveReleaseForPreset(
         academyId: safeAcademyId,
@@ -18072,6 +18147,7 @@ Future<_ResolvedHomeworkPrintSource?> _resolvePbPrintSource(
     problemBankService: pbService,
     progressText: progressText,
     isCancelled: isCancelled,
+    selection: selection,
   );
   _throwIfHomePrintCancelled(isCancelled);
   if (createdOrLatestJob == null) return null;
@@ -18262,12 +18338,13 @@ Future<bool> _isPrintableResolvedHomeworkPrintSource(
 Future<String?> _materializeTextbookStoragePrintPath(
   _ResolvedHomeworkPrintSource source, {
   required String cacheKey,
+  String kind = 'body',
   LearningProblemBankService? problemBankService,
   List<String>? errorsOut,
 }) async {
   if (source.isProblemBank) return null;
   try {
-    final ref = await _textbookPdfRefFromPrintSource(source, kind: 'body');
+    final ref = await _textbookPdfRefFromPrintSource(source, kind: kind);
     if (ref == null) {
       errorsOut?.add(
         'textbook_ref_missing(book=${source.bookId}, grade=${source.gradeLabel}, path=${source.pathRaw})',
@@ -18309,6 +18386,7 @@ Future<String?> _materializeTextbookStoragePrintPath(
 Future<String?> _materializePrintablePathFromSource(
   _ResolvedHomeworkPrintSource source, {
   required String cacheKey,
+  String kind = 'body',
   LearningProblemBankService? problemBankService,
   List<String>? errorsOut,
 }) async {
@@ -18333,6 +18411,7 @@ Future<String?> _materializePrintablePathFromSource(
     return _materializeTextbookStoragePrintPath(
       source,
       cacheKey: cacheKey,
+      kind: kind,
       problemBankService: problemBankService,
       errorsOut: errorsOut,
     );
@@ -18341,6 +18420,7 @@ Future<String?> _materializePrintablePathFromSource(
     return _materializeTextbookStoragePrintPath(
       source,
       cacheKey: cacheKey,
+      kind: kind,
       problemBankService: problemBankService,
       errorsOut: errorsOut,
     );
@@ -18352,6 +18432,7 @@ Future<String?> _materializePrintablePathFromSource(
     final fromTuple = await _materializeTextbookStoragePrintPath(
       source,
       cacheKey: cacheKey,
+      kind: kind,
       problemBankService: problemBankService,
       errorsOut: errorsOut,
     );
@@ -18807,6 +18888,7 @@ Future<_PreparedHomeworkPrintTarget> _prepareHomeworkPrintTarget({
       const <String, _ResolvedHomeworkPrintSource>{},
   ValueNotifier<String>? progressText,
   bool Function()? isCancelled,
+  HomeworkCardPrintSelection? selection,
 }) async {
   _throwIfHomePrintCancelled(isCancelled);
   final resolvedAssignments = assignmentByItemId.isNotEmpty
@@ -18815,7 +18897,7 @@ Future<_PreparedHomeworkPrintTarget> _prepareHomeworkPrintTarget({
   _throwIfHomePrintCancelled(isCancelled);
   final assignment = resolvedAssignments[hw.id.trim()];
   final isPbTarget = _isPbPrintTarget(hw: hw, assignment: assignment);
-  final preResolved = preResolvedSourceByItemId[hw.id];
+  final preResolved = selection == null ? preResolvedSourceByItemId[hw.id] : null;
 
   _ResolvedHomeworkPrintSource resolvedSource;
   String? bodyPath;
@@ -18839,6 +18921,7 @@ Future<_PreparedHomeworkPrintTarget> _prepareHomeworkPrintTarget({
             ensureExportJob: true,
             progressText: progressText,
             isCancelled: isCancelled,
+            selection: selection,
           ) ??
           const _ResolvedHomeworkPrintSource(
             pathRaw: '',
@@ -18878,10 +18961,22 @@ Future<_PreparedHomeworkPrintTarget> _prepareHomeworkPrintTarget({
   }
 
   if (bodyPath == null || bodyPath.isEmpty) {
-    final detail = materializeErrors.isEmpty
-        ? ''
-        : ' (${materializeErrors.take(2).join(' | ')})';
-    throw StateError('인쇄 파일을 찾을 수 없습니다.$detail');
+    final answersOnlyTextbook = selection != null &&
+        !isPbTarget &&
+        !selection.problems &&
+        (selection.quickAnswer || selection.explanation) &&
+        resolvedSource.bookId.trim().isNotEmpty &&
+        resolvedSource.gradeLabel.trim().isNotEmpty;
+    if (!answersOnlyTextbook) {
+      final detail = materializeErrors.isEmpty
+          ? ''
+          : ' (${materializeErrors.take(2).join(' | ')})';
+      throw StateError('인쇄 파일을 찾을 수 없습니다.$detail');
+    }
+    return _PreparedHomeworkPrintTarget(
+      source: resolvedSource,
+      printablePath: '',
+    );
   }
   return _PreparedHomeworkPrintTarget(
     source: resolvedSource,
@@ -19005,6 +19100,7 @@ Future<_HomeworkPrintRunResult> _runHomeworkPrintWithDefaultSettings({
       const <String, _ResolvedHomeworkPrintSource>{},
   ValueNotifier<String>? progressText,
   bool Function()? isCancelled,
+  HomeworkCardPrintSelection? selection,
 }) async {
   final prepared = await _prepareHomeworkPrintTarget(
     studentId: studentId,
@@ -19013,6 +19109,7 @@ Future<_HomeworkPrintRunResult> _runHomeworkPrintWithDefaultSettings({
     preResolvedSourceByItemId: preResolvedSourceByItemId,
     progressText: progressText,
     isCancelled: isCancelled,
+    selection: selection,
   );
   _throwIfHomePrintCancelled(isCancelled);
   final resolvedAssignments = assignmentByItemId.isNotEmpty
@@ -19036,15 +19133,279 @@ Future<_HomeworkPrintRunResult> _runHomeworkPrintWithDefaultSettings({
     selectedChildIds: selectedChildIds,
     duplexMode: PrintDuplexMode.twoSidedLongEdge,
   );
-  return _runResolvedHomeworkPrint(
-    studentId: studentId,
-    hw: hw,
-    resolvedSource: prepared.source,
-    printablePath: prepared.printablePath,
-    confirmResult: confirmResult,
-    selectableGroupChildren: selectableGroupChildren,
+  final printBody = selection == null ||
+      selection.problems ||
+      prepared.source.isProblemBank;
+  var bodyResult = const _HomeworkPrintRunResult(printJobSentToSpooler: false);
+  if (printBody) {
+    if (prepared.printablePath.trim().isEmpty) {
+      return const _HomeworkPrintRunResult(
+        printJobSentToSpooler: false,
+        error: '인쇄 파일을 찾을 수 없습니다.',
+      );
+    }
+    bodyResult = await _runResolvedHomeworkPrint(
+      studentId: studentId,
+      hw: hw,
+      resolvedSource: prepared.source,
+      printablePath: prepared.printablePath,
+      confirmResult: confirmResult,
+      selectableGroupChildren: selectableGroupChildren,
+      progressText: progressText,
+      isCancelled: isCancelled,
+    );
+    if ((bodyResult.error ?? '').isNotEmpty) return bodyResult;
+  }
+  if (selection == null ||
+      prepared.source.isProblemBank ||
+      (!selection.quickAnswer && !selection.explanation)) {
+    return bodyResult;
+  }
+  final companion = await _printTextbookCompanionParts(
+    source: prepared.source,
+    pageRange: confirmResult.pageRange,
+    quickAnswer: selection.quickAnswer,
+    explanation: selection.explanation,
+    duplexMode: confirmResult.duplexMode,
     progressText: progressText,
     isCancelled: isCancelled,
+  );
+  if (!bodyResult.printJobSentToSpooler && companion.printJobSentToSpooler) {
+    _applyHomeworkTypePrintAfterSuccessfulPrint(
+      studentId: studentId,
+      itemIds: selectedChildIds.isEmpty ? <String>[hw.id] : selectedChildIds,
+    );
+  }
+  return _HomeworkPrintRunResult(
+    printJobSentToSpooler:
+        bodyResult.printJobSentToSpooler || companion.printJobSentToSpooler,
+    error: companion.error,
+  );
+}
+
+Future<void> _printHomeworkCardFromDetail({
+  required BuildContext context,
+  required String studentId,
+  required HomeworkGroup group,
+  required HomeworkItem summary,
+  required List<HomeworkItem> children,
+  required HomeworkCardPrintSelection selection,
+}) async {
+  if (!selection.hasAny) return;
+  String? warning;
+  try {
+    await _runWithPrintProgressDialog(
+      context,
+      run: (progressText) async {
+        progressText.value = '인쇄할 과제를 확인하는 중입니다...';
+        final request = await _buildHomeworkGroupPrintRequest(
+          studentId: studentId,
+          group: group,
+          summary: summary,
+          children: children,
+        );
+        warning = request.warning;
+        if ((request.error ?? '').isNotEmpty) {
+          throw StateError(request.error!);
+        }
+        final result = await _runHomeworkPrintWithDefaultSettings(
+          studentId: studentId,
+          hw: request.seed,
+          initialRangeOverride: request.initialRange,
+          selectableGroupChildren: request.eligibleChildren,
+          groupChildPrintableById: request.printableById,
+          groupInitialSelectionById: request.initialSelectedById,
+          assignmentByItemId: request.assignmentByItemId,
+          preResolvedSourceByItemId: request.sourceByItemId,
+          progressText: progressText,
+          selection: selection,
+        );
+        if ((result.error ?? '').isNotEmpty) {
+          throw StateError(result.error!);
+        }
+      },
+    );
+  } catch (e) {
+    if (!context.mounted) return;
+    _showHomeworkChipSnackBar(context, _messageFromPrintError(e));
+    return;
+  }
+  if (!context.mounted) return;
+  final message = (warning ?? '').trim();
+  if (message.isNotEmpty) _showHomeworkChipSnackBar(context, message);
+}
+
+List<int> _rawPagesFromPrintRange(String range) {
+  final normalized = _normalizePageRangeForPrint(range);
+  if (normalized.isEmpty) return const <int>[];
+  final seen = <int>{};
+  final out = <int>[];
+  for (final raw in normalized.split(',')) {
+    if (raw.isEmpty) continue;
+    if (raw.contains('-')) {
+      final parts = raw.split('-');
+      if (parts.length != 2) continue;
+      final start = int.tryParse(parts[0]);
+      final end = int.tryParse(parts[1]);
+      if (start == null || end == null || start < 1 || end < 1) continue;
+      final a = start < end ? start : end;
+      final b = start < end ? end : start;
+      for (var page = a; page <= b; page++) {
+        if (seen.add(page)) out.add(page);
+      }
+    } else {
+      final page = int.tryParse(raw);
+      if (page == null || page < 1) continue;
+      if (seen.add(page)) out.add(page);
+    }
+  }
+  return out;
+}
+
+Future<String?> _materializeTextbookKindForPrint({
+  required String bookId,
+  required String gradeLabel,
+  required String kind,
+  required String cacheKey,
+}) async {
+  String raw = '';
+  try {
+    final links = await DataManager.instance.loadResourceFileLinks(bookId);
+    raw = (links['$gradeLabel#$kind'] ?? '').trim();
+  } catch (_) {
+    raw = '';
+  }
+  if (raw.isEmpty) return null;
+  return _materializePrintablePathFromSource(
+    _ResolvedHomeworkPrintSource(
+      pathRaw: raw,
+      sourceKey: 'textbook:$bookId|$gradeLabel#$kind',
+      bookId: bookId,
+      gradeLabel: gradeLabel,
+    ),
+    cacheKey: cacheKey,
+    kind: kind,
+  );
+}
+
+Future<bool> _printTextbookKindPages({
+  required String bookId,
+  required String gradeLabel,
+  required String kind,
+  required String label,
+  required List<int> rawPages,
+  required PrintDuplexMode duplexMode,
+  required String cacheKey,
+  ValueNotifier<String>? progressText,
+  bool Function()? isCancelled,
+}) async {
+  _throwIfHomePrintCancelled(isCancelled);
+  progressText?.value = '$label PDF를 준비하는 중입니다...';
+  final sourcePath = await _materializeTextbookKindForPrint(
+    bookId: bookId,
+    gradeLabel: gradeLabel,
+    kind: kind,
+    cacheKey: cacheKey,
+  );
+  if (sourcePath == null || sourcePath.isEmpty) {
+    throw StateError('$label PDF를 찾지 못했습니다.');
+  }
+  final out = await _buildPdfForPrintRange(
+    inputPath: sourcePath,
+    pageRange: rawPages.join(','),
+    preferredPaperSize: 'A4',
+  );
+  _throwIfHomePrintCancelled(isCancelled);
+  if (out == null || out.isEmpty) {
+    throw StateError('$label 페이지 범위를 확인하세요.');
+  }
+  _scheduleTempDelete(out);
+  progressText?.value = '$label을 프린터로 전송 중입니다...';
+  return _openPrintDialogForPath(
+    out,
+    preferredPaperSize: 'A4',
+    duplexMode: duplexMode,
+    skipRawTcpFirst: true,
+  );
+}
+
+Future<_HomeworkPrintRunResult> _printTextbookCompanionParts({
+  required _ResolvedHomeworkPrintSource source,
+  required String pageRange,
+  required bool quickAnswer,
+  required bool explanation,
+  required PrintDuplexMode duplexMode,
+  ValueNotifier<String>? progressText,
+  bool Function()? isCancelled,
+}) async {
+  final bookId = source.bookId.trim();
+  final grade = source.gradeLabel.trim();
+  final bodyPages = _rawPagesFromPrintRange(pageRange);
+  if (bookId.isEmpty || grade.isEmpty || bodyPages.isEmpty) {
+    return const _HomeworkPrintRunResult(
+      printJobSentToSpooler: false,
+      error: '과제 페이지를 찾지 못해 빠른 정답·해설을 인쇄하지 못했습니다.',
+    );
+  }
+  progressText?.value = '빠른 정답·해설 페이지를 찾는 중입니다...';
+  final companion = await ResourceService.instance.loadTextbookCompanionPdfPages(
+    bookId: bookId,
+    gradeLabel: grade,
+    bodyRawPages: bodyPages,
+  );
+  _throwIfHomePrintCancelled(isCancelled);
+  final notes = <String>[];
+  var sent = false;
+
+  Future<void> printPart({
+    required bool enabled,
+    required List<int> pages,
+    required String kind,
+    required String label,
+    required String missing,
+  }) async {
+    if (!enabled) return;
+    if (pages.isEmpty) {
+      notes.add(missing);
+      return;
+    }
+    try {
+      final ok = await _printTextbookKindPages(
+        bookId: bookId,
+        gradeLabel: grade,
+        kind: kind,
+        label: label,
+        rawPages: pages,
+        duplexMode: duplexMode,
+        cacheKey: 'hw_print_${bookId}_$kind',
+        progressText: progressText,
+        isCancelled: isCancelled,
+      );
+      sent = sent || ok;
+      if (!ok) notes.add('$label 인쇄 요청을 프린터로 넘기지 못했습니다.');
+    } catch (e) {
+      if (e is _HomePrintCancelledException) rethrow;
+      notes.add(_messageFromPrintError(e));
+    }
+  }
+
+  await printPart(
+    enabled: quickAnswer,
+    pages: companion.answerRawPages,
+    kind: 'ans',
+    label: '빠른 정답',
+    missing: '빠른 정답 페이지를 찾지 못했습니다.',
+  );
+  await printPart(
+    enabled: explanation,
+    pages: companion.solutionRawPages,
+    kind: 'sol',
+    label: '해설',
+    missing: '해설 페이지를 찾지 못했습니다.',
+  );
+  return _HomeworkPrintRunResult(
+    printJobSentToSpooler: sent,
+    error: notes.isEmpty ? null : notes.join(' '),
   );
 }
 
@@ -19649,6 +20010,7 @@ Widget _buildHomeworkChipVisual(
   bool isHomeworkDue = false,
   HomeworkGradingProgressRate progressRate =
       HomeworkGradingProgressRate.disabled,
+  HomeworkFirstInspectionScore? firstInspectionScore,
   bool isReservation = false,
   bool attachRightExtension = false,
   bool isExpanded = false,
@@ -19836,6 +20198,8 @@ Widget _buildHomeworkChipVisual(
       !showRunningExtraTime &&
       (visualPhase >= 3 || hasFinishedTestCycle);
   final bool showEndedBadge = showTimedOutBadge || showSubmittedEndedBadge;
+  // 첫 검사 점수가 있으면 수행 중에도 보여 준다. 검사 전에는 점수가 없다.
+  final String firstScoreLabel = firstInspectionScore?.label ?? '';
   final String typeText = () {
     if (!showEndedBadge) return rawTypeText;
     if (rawTypeText == '-' || rawTypeText.isEmpty) return '테스트 종료';
@@ -19977,6 +20341,14 @@ Widget _buildHomeworkChipVisual(
               ),
             ),
           ),
+          if (firstScoreLabel.isNotEmpty) ...[
+            const SizedBox(width: 8),
+            Text(
+              firstScoreLabel,
+              style: metaStyle,
+              maxLines: 1,
+            ),
+          ],
         ],
       ),
     ),

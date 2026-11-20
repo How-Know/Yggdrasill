@@ -20,7 +20,7 @@ void main() {
         'list_kind': 'in_class',
       };
 
-  test('검사 예정 숙제는 오늘까지로 통일 표시한다', () {
+  test('검사 예정 숙제는 오늘 검사로 통일 표시한다', () {
     final today = DateTime.now();
     final todayIso = DateTime(today.year, today.month, today.day, 10)
         .toUtc()
@@ -36,11 +36,11 @@ void main() {
     final group = HomeworkGroup.fromRow(row);
 
     expect(group.isDueForCheck, isTrue);
-    expect(group.inspectionLabel, '오늘까지');
+    expect(group.inspectionLabel, '오늘 검사');
     expect(group.originalDueDate, isNotNull);
   });
 
-  test('결석 이월·미검사 이월도 학생앱에서는 오늘까지로 표시한다', () {
+  test('결석 이월·미검사 이월도 학생앱에서는 오늘 검사로 표시한다', () {
     final absence = HomeworkGroup.fromRow(
       baseRow()
         ..addAll(<String, dynamic>{
@@ -61,9 +61,9 @@ void main() {
         }),
     );
 
-    expect(absence.inspectionLabel, '오늘까지');
+    expect(absence.inspectionLabel, '오늘 검사');
     expect(absence.deferCount, 1);
     expect(absence.lastInspectionOutcome, 'left_behind');
-    expect(deferred.inspectionLabel, '오늘까지');
+    expect(deferred.inspectionLabel, '오늘 검사');
   });
 }

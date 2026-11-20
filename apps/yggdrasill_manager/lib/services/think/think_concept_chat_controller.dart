@@ -377,8 +377,9 @@ class ConceptChatController extends ChangeNotifier {
     }
   }
 
-  /// 개념 화면 오른쪽 패널을 펼쳐 둘지. 메뉴를 옮겨 다녀도 유지한다(알림 없음, 화면이 직접 읽고 쓴다).
-  bool panelOpen = true;
+  /// 개념 화면에서 대화를 펼쳐 둘지. 접혀 있으면 오른쪽 아래 버튼만 보인다.
+  /// 메뉴를 옮겨 다녀도 유지한다(알림 없음, 화면이 직접 읽고 쓴다).
+  bool panelOpen = false;
 
   // ------------------------------------------------------------------ 연결한 대화
   String? conversationId;

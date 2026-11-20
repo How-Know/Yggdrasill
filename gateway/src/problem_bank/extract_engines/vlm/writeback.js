@@ -411,8 +411,10 @@ const OBJ_LABELS = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨
 const ALLOWED_SET_TYPES = new Set(['independent_set', 'dependent_set', 'mixed_set']);
 
 function stripLatexTextWrapper(value) {
-  return String(value || '')
-    .replace(/\\text\{([^{}]*)\}/g, '$1')
+  const unwrapped = String(value || '').replace(/\\text\{([^{}]*)\}/g, '$1');
+  // 수식 명령(\overline{DC} 등)이 남아 있으면 중괄호는 명령의 인자다. 지우면 \overlineDC 처럼 깨진다.
+  if (/\\[A-Za-z]+/.test(unwrapped)) return unwrapped.replace(/\s+/g, ' ').trim();
+  return unwrapped
     .replace(/[{}]/g, '')
     .replace(/\s+/g, ' ')
     .trim();

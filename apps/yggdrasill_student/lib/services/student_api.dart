@@ -165,7 +165,7 @@ class HomeworkGroup {
 
   String get inspectionLabel {
     if (!isDueForCheck) return '';
-    return '오늘까지';
+    return '오늘 검사';
   }
 
   /// 숙제 마감일. 예: `3월 12일까지`

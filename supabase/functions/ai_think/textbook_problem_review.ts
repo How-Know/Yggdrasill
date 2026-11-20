@@ -10,7 +10,7 @@ import { uuidOrNull } from './validate.ts';
 
 type Rec = Record<string, unknown>;
 
-export const TEXTBOOK_REVIEW_PROMPT_VERSION = 'textbook-problem-review-2026-11-17';
+export const TEXTBOOK_REVIEW_PROMPT_VERSION = 'textbook-problem-review-2026-11-20';
 
 /** 품질 이상의 원인 분류. data=문항 데이터(본문·선지) 오류, engine=조판 엔진 문제, figure=도형 자산 문제 */
 export type IssueKind = 'none' | 'data' | 'engine' | 'figure';
@@ -59,6 +59,13 @@ export interface ReviewImageInput {
 }
 
 const MAX_SOLUTION_IMAGE_CHARS = 4_000_000; // base64 약 3MB
+/**
+ * AI 에 넘기는 해설 글의 최대 길이. 이보다 짧게 자르면 긴 해설(모의고사 30번은 3천 자를 넘는다)의 뒷부분이 빠져
+ * "해설이 중간에 끊겼다"는 잘못된 해설 논리 오류가 나온다.
+ */
+export const SOLUTION_TEXT_MAX_CHARS = 12000;
+/** 정답은 일치했는데 해설 풀이 과정에서 오류를 찾았을 때 mismatch_reason 의 머리말이자 지적 제목 */
+export const SOLUTION_LOGIC_REASON = '해설 논리 오류';
 
 export function imageDataUrl(b64Raw: unknown, mimeRaw: unknown): string | null {
   const b64 = typeof b64Raw === 'string' ? b64Raw.trim() : '';
@@ -345,6 +352,59 @@ export function cleanSolutionTranscribedText(
     .trim();
 
   return s;
+}
+
+/** 여러 줄에 걸친 수식을 한 덩어리로 묶을 때 따라가는 최대 줄 수. 넘으면 짝 없는 $ 로 보고 묶지 않는다. */
+const MAX_OPEN_MATH_LINES = 30;
+
+/**
+ * AI 가 옮겨 적거나 새로 쓴 해설 글을 원본처럼 한 줄씩 보이게 한다
+ * (2026-11-20 사장님 결정: 모의고사 해설, 그리고 앞으로 검수하는 교재·내신 해설. 그 전에 저장된 해설은 바꾸지 않는다).
+ * 조판 엔진은 빈 줄(또는 [문단])만 줄바꿈으로 찍고 줄바꿈 하나는 이어 붙인다. 그래서 줄마다 빈 줄을 넣어 문단으로 나눈다.
+ * 여러 줄에 걸친 수식($…$, \[…\], \begin…\end)과 표(| … | 행)는 한 덩어리로 둔다. 이미 나눈 글에 다시 써도 결과가 같다.
+ */
+export function solutionLinesToParagraphs(text: unknown): string {
+  const lines = String(text ?? '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/\[문단(?::[^\]]*)?\]/g, '\n\n')
+    .split('\n')
+    .map((line) => line.trim());
+  const count = (s: string, re: RegExp) => (s.match(re) ?? []).length;
+  // 이 줄까지 읽었을 때 닫히지 않은 수식·환경이 남아 있는가
+  const step = (state: { env: number; display: number; math: boolean }, line: string) => {
+    state.env = Math.max(0, state.env + count(line, /\\begin\{/g) - count(line, /\\end\{/g));
+    state.display = Math.max(0, state.display + count(line, /(?<!\\)\\\[/g) - count(line, /(?<!\\)\\\]/g));
+    if (count(line, /(?<!\\)\$/g) % 2 === 1) state.math = !state.math;
+    return state.env > 0 || state.display > 0 || state.math;
+  };
+  const isTableRow = (line: string) => /^\|.*\|$/.test(line);
+  const blocks: string[] = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!lines[i]) continue;
+    let end = i;
+    const state = { env: 0, display: 0, math: false };
+    let open = step(state, lines[i]);
+    while (open && end + 1 < lines.length && end - i < MAX_OPEN_MATH_LINES) {
+      end += 1;
+      open = step(state, lines[end]);
+    }
+    // 끝까지 닫히지 않으면 짝 없는 $ 다. 뒤 줄을 끌어오지 않고 이 줄만 둔다.
+    if (open) end = i;
+    if (end === i && isTableRow(lines[i])) {
+      while (end + 1 < lines.length && isTableRow(lines[end + 1])) end += 1;
+    }
+    blocks.push(lines.slice(i, end + 1).filter(Boolean).join('\n'));
+    i = end;
+  }
+  return blocks.join('\n\n');
+}
+
+/**
+ * 배점을 본문이 아닌 별도 값(문제은행 meta.score_point)으로 보관하는 문항(모의고사)의 본문 수정안에서 배점 표기 "[4점]" 을 뗀다.
+ * 카드와 시험지가 배점을 따로 찍으므로 본문에 들어가면 두 번 나온다.
+ */
+export function stripScoreMarks(stem: unknown): string {
+  return String(stem ?? '').replace(/[ \t]*\[\s*\d+(?:\.\d+)?\s*점\s*\]/g, '').trim();
 }
 
 /** 지시문 문장으로 볼 수 있는 표현(공통 발문을 첫 문단으로 줄일 때 지시문인지 확인한다). */
@@ -793,8 +853,10 @@ const SOLUTION_TRANSCRIBE_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검
 1. 정답(solution_answer)과 해설(solution_transcribed)을 반드시 분리합니다(이중 추출 금지):
    - solution_answer: 최종 답만 적습니다(객관식은 ①~⑤, 주관식·표·다중 빈칸은 값/식 그대로, 예: "$\\times$", "(1) 1, 3 (2) 5, 15"). 답이 명시되지 않았으면 풀이 마지막 결론 값을 적고 note에 "답 표기 없음, 결론 값 사용"이라고 적습니다.
    - solution_transcribed: 순수 풀이 과정(해설 본문)만 원본 그대로 한글+LaTeX($...$)로 적습니다. 문항 번호("16", "01." 등), 정답 줄("16 답 ×", "답 ③", "[정답] ..."), "[해설]"·"[풀이]" 같은 머리말은 절대 solution_transcribed 에 넣지 마세요(화면에서 '정답'과 '[해설]' 머리말을 따로 붙이므로 넣으면 두 번 나옵니다). 해설지에 풀이 과정 없이 정답만 인쇄된 문항이면 solution_transcribed 는 빈 문자열 "" 로 두고 solution_answer 에만 정답을 적으세요(found=true 유지).
-   - 분수는 \\frac{a}{b}, 근호는 \\sqrt{}, 거듭제곱은 ^{}, 원문자 선지는 ①~⑤ 그대로 적고 줄바꿈은 \\n으로 구분합니다.
-   - 해설 안에 글자로 옮길 수 없는 그림(좌표평면 그래프, 도형, 수직선, 벤다이어그램 등)이 인쇄돼 있으면 그 자리에 [그림] 만 적습니다. 그림 내용을 글로 설명하지 마세요(그림은 원본에서 잘라 그 자리에 넣습니다). 글자로 된 표는 그림이 아니므로 그대로 옮겨 적습니다.
+   - 분수는 \\frac{a}{b}, 근호는 \\sqrt{}, 거듭제곱은 ^{}, 원문자 선지는 ①~⑤ 그대로 적습니다.
+   - 줄 구분: 원본에서 줄이 바뀌는 곳마다 \\n 으로 줄을 바꿉니다(화면에도 그 줄 구분대로 나옵니다). 한 줄에 식 하나씩 인쇄된 풀이는 식마다 줄을 나누고, 서로 다른 줄의 식을 한 줄에 이어 붙이지 마세요. 경우 번호 (ⅰ), (ⅱ), ①, ② 로 시작하는 줄도 원본대로 새 줄에서 시작합니다. 단 폭이 좁아 한 문장이 다음 줄로 넘어간 것은 줄을 나누지 말고 한 줄로 이어 적습니다.
+   - 해설 첫머리에 '[출제의도] …' 문장이 인쇄돼 있으면 해설 본문의 일부입니다. 빼지 말고 첫 줄에 그대로 옮깁니다.
+   - 해설 안에 글자로 옮길 수 없는 그림(좌표평면 그래프, 도형, 수직선, 벤다이어그램 등)이 인쇄돼 있으면 그 자리에 [그림] 만 적습니다. 그림 내용을 글로 설명하지 마세요(그림은 원본에서 잘라 그 자리에 넣습니다). 글자로 된 표(증감표 등)는 그림이 아닙니다. 한 행을 한 줄로, 칸을 | 로 나눠 옮겨 적습니다(예: | $x$ | $\\cdots$ | $1$ | $\\cdots$ |). 증가·감소 화살표는 $\\nearrow$, $\\searrow$ 로 적습니다.
 2. 잘린 영역에 해당 문항 번호의 정답·풀이가 전혀 보이지 않거나(다른 문항만 보임 등) 읽을 수 없으면 found=false 로 두고 solution_transcribed는 "", solution_answer는 null, note에 원인을 적습니다.
 3. 영역 안에 다른 문항의 풀이 일부가 함께 보이면 그 부분은 제외하고 요청된 문항 번호의 것만 전사합니다.
    - 이미지가 회색 가로선으로 위아래 두 조각으로 나뉘어 있으면, 아래 조각은 해설지 다음 단(또는 다음 쪽) 맨 위입니다. 위 조각 풀이가 단 끝에서 끊겨 아래 조각으로 이어지면 이어서 끝까지 옮기세요. 아래 조각의 단원 제목 띠·쪽 머리글·다른 문항 번호로 시작하는 풀이는 옮기지 않습니다.
@@ -812,6 +874,7 @@ const BLIND_SOLVE_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔�
    - 발문 안의 예시 설명 상자([박스시작] ... [박스끝])가 있어도 본래 질문에 대한 답을 구하세요.
 2. 블라인드 독립 풀이(ai_solution, ai_answer):
    - 처음부터 끝까지 스스로 풀어 LaTeX 수식($...$)을 포함한 단계별 풀이를 ai_solution에 작성하고, 최종 답을 ai_answer에 적으세요(객관식이고 선지가 있으면 선지 번호 ①~⑤, 주관식이면 기약분수/수식, 표 빈칸 채우기면 빈칸 값들).
+   - ai_solution 은 해설지처럼 한 줄에 한 단계씩 \\n 으로 줄을 나눠 씁니다(화면에도 그 줄 구분대로 나옵니다). 서로 다른 식을 한 줄에 이어 붙이지 마세요.
    - 중요: 만약 텍스트 데이터(common_stem, stem)에 지시문이나 문장이 빠져 있거나 다른 문항 숫자('36' 등)가 잘못 들어 있더라도, 첨부된 "원본 이미지"와 "세트 머리 원본 이미지"에서 실제 문제와 공통 지시문을 직접 읽고 문제를 끝까지 풀어 정확한 ai_answer 를 구하세요! 원본 이미지에서 문제를 읽을 수 있는데 텍스트가 불완전하다는 이유로 ai_answer 를 "판단불가"로 적지 마세요(텍스트/V2 화면의 누락은 아래 4번 품질 검수에서 stem_ok=false, fidelity_ok=false 로 지적하고 proposed_stem / proposed_common_stem 으로 고치면 됩니다).
    - 텍스트와 원본 이미지를 모두 합쳐도 문제가 잘려 전혀 풀 수 없을 때만 ai_answer는 "판단불가"로 적으세요.
 3. 연산 복잡도 카운트(arithmetic_ops):
@@ -831,6 +894,7 @@ const BLIND_SOLVE_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔�
    - fidelity_ok: 원본 이미지가 주어졌을 때, V2 렌더(또는 텍스트)의 내용이 원본과 같은지(숫자·부호·조건·선지·그림이 바뀌거나 빠지지 않았는지). 원본 이미지가 없으면 true.
      세트 문항은 원본에서 공통 지시문이 세트 머리에 한 번만 인쇄되는 것이 정상입니다. V2 화면에 공통 지시문이 한 번 보이면 일치, 두 번 보이면 불일치입니다.
      원본에서 문항·소문항 아래 '해' 배지로 시작하는 빈칸 풀이 안내는 해설이라 본문에 넣지 않습니다. V2 화면에 그 안내가 없는 것은 정상이며 누락으로 지적하지 말고, proposed_stem 에도 넣지 마세요.
+     입력에 score_separate=true 인 문항은 배점([3점], [4점] 등)을 본문 글이 아닌 별도 값으로 보관하고 V2 화면이 그 값으로 배점을 찍습니다. stem 텍스트에 배점 글자가 없는 것은 정상이며 proposed_stem 에 배점을 넣지 마세요. V2 화면에 찍힌 배점 숫자가 원본과 다르면 그것은 지적합니다.
      입력에 source_corrected=true 인 문항은 인쇄된 원본 자체가 틀려 운영자가 본문을 고친 문항입니다. printed_stem(및 printed_choices)이 고치기 전 글이고, stem·choices 와 V2 화면의 글이 운영자가 고친 글입니다. 둘이 서로 다른 부분은 운영자의 글이 기준이므로 그 부분이 원본 이미지와 다른 것은 불일치가 아닙니다(그 이유만으로 fidelity_ok=false, stem_ok=false 로 하지 말고, 원본대로 되돌리는 proposed_stem 도 내지 마세요). 이 문항의 ai_answer·ai_solution 은 운영자가 고친 본문만 보고 평소처럼 쓰고, 인쇄된 원본·교정 사실·"원문은 성립하지 않는다" 같은 말이나 괄호 설명을 정답과 풀이에 적지 마세요. 그 밖의 부분(고치지 않은 글·숫자·수식·조건·선지·그림과 그림 속 표기)은 평소대로 원본 이미지와 대조합니다.
    - 이상이 하나라도 있으면 quality_issue_title과 quality_issue_detail에 학생 입장에서 무엇이 어떻게 보이는지(예: "②번 선지가 화면에 없음", "분수가 \\frac{1}{2} 글자로 노출됨")를 한글로 명확히 적고, 이상이 없으면 둘 다 null로 두세요.
 4-1. 이상의 원인 분류(issue_kind) — 운영자가 어디를 고칠지 정하는 기준입니다:
@@ -916,6 +980,7 @@ const RENDER_CHECK_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔
 - figure_size_ratio: 원본과 카드 모두에 그림이 있을 때, "본문 글자 크기에 대한 그림 크기"가 카드에서 원본의 몇 배인지(같으면 1.0, 카드 그림이 더 크면 1보다 큼, 예 1.4 · 0.7). 각 이미지 안에서 그림 폭을 본문 글자 크기와 비교해 추정하세요. 그림이 없으면 null.
 - 표·수식·선지 상자는 그림이 아닙니다. 그림 위치·크기 판정(figure_position_ok · figure_size_ratio)에 넣지 마세요. 입력에 has_figure=false 인 문항은 그림이 없는 문항이므로 figure_position_ok=true, figure_size_ratio=null 로 답하세요.
   입력에 has_figure=true 인 문항은 카드에 그림 이미지가 들어 있습니다. 원본의 표(도형이 든 표 등)가 통째로 그 그림 이미지로 들어간 경우에는 그 표를 그림으로 보고 figure_position_ok 와 figure_size_ratio 를 잽니다(null 로 두지 않습니다).
+- 입력에 image_choices=true 인 문항은 선지 ①~⑤ 가 모두 그림인 문항입니다. 선지 그림을 2줄(①②③ / ④⑤)로 놓을지 3줄(①② / ③④ / ⑤)로 놓을지는 사용자가 고르는 설정이고, 선지 그림의 크기도 그 선택에 따라 달라집니다. 선지 그림의 줄·열 배열이나 크기가 원본과 다른 것은 이상이 아닙니다(그 이유로 problem_ok · fidelity_ok · figure_position_ok 를 false 로 하지 말고, figure_size_ratio 는 발문 그림이 따로 없으면 null, 있으면 발문 그림만 잽니다). 선지 그림이 빠지거나, 번호와 그림의 짝이 원본과 다르거나, 그림 속 숫자·기호를 읽을 수 없을 만큼 작거나 잘린 것은 그대로 이상입니다.
 - 보기 상자 안에 도형이 여러 개(ㄱ, ㄴ, ㄷ … 기호가 붙은 도형들) 있는 문항은 카드에서 그 도형들과 기호가 그림 이미지 한 장으로 들어가는 것이 정상입니다. 한 장으로 들어갔다는 이유로 이상으로 보지 말고, 그 한 장 안에 원본의 도형과 기호가 모두 보이는지만 대조하세요(일부가 빠졌으면 fidelity_ok=false, issue_kind "figure").
 - 칸 안에 그림이 들어 있는 표도 같습니다. 카드에서 표 전체(칸의 글자·빈칸·그림 포함)가 그림 이미지 한 장으로 들어가는 것이 정상입니다. 표가 글자 표가 아니라 이미지라는 이유로 이상으로 보지 말고, 그 한 장 안에 원본 표의 줄·칸·글자·그림이 모두 보이는지만 대조하세요.
 - 입력에 source_corrected=true 인 문항은 인쇄된 원본 자체가 틀려 운영자가 본문을 고친 문항입니다. printed_stem(및 printed_choices)이 고치기 전 글이고, 문항 카드에 보이는 글이 운영자가 고친 글입니다. 둘이 서로 다른 부분은 운영자의 글이 기준이므로 그 부분이 원본 이미지와 다른 것은 불일치가 아닙니다(그 이유만으로 fidelity_ok=false 로 하지 마세요). 그 밖의 부분(고치지 않은 글·숫자·수식·조건·선지·그림과 그림 속 표기)은 평소대로 원본 이미지와 대조합니다.
@@ -1104,6 +1169,8 @@ export async function handleTextbookProblemReview(
   const forceRerun = body.force_rerun === true;
   // 수학만 다시 푼다(수학 오류 문항). 품질 판정·승인·수정안·V2 렌더 판정은 그대로 둔다.
   const mathOnly = body.math_only === true;
+  // 배점을 본문이 아닌 별도 값으로 보관하는 범위(모의고사). 검수 카드가 배점을 찍으므로 본문 수정안에는 넣지 않는다.
+  const scoreSeparate = body.score_separate === true;
   const requestedCropIds = Array.isArray(body.crop_ids)
     ? (body.crop_ids as unknown[]).map((x) => uuidOrNull(x)).filter((x): x is string => !!x)
     : [];
@@ -1195,7 +1262,8 @@ export async function handleTextbookProblemReview(
         input: [{ kind: 'message', role: 'user', parts }],
         jsonSchema: { name: 'textbook_solution_transcribe', schema: SOLUTION_TRANSCRIBE_SCHEMA },
         reasoningEffort: 'low',
-        maxOutputTokens: 12000,
+        // 모의고사 고난도 문항은 해설 하나가 3천 자를 넘는다. 한 묶음(최대 10문항)이 잘리지 않게 넉넉히 둔다.
+        maxOutputTokens: 20000,
         safetyId,
       },
       signal,
@@ -1225,6 +1293,7 @@ export async function handleTextbookProblemReview(
         equations: it.equations,
         has_v2_image: !!images.get(String(it.crop_id))?.v2ProblemUrl,
         has_original_image: !!images.get(String(it.crop_id))?.originalImageDataUrl,
+        ...(scoreSeparate ? { score_separate: true } : {}),
         ...sourceCorrectionInput(it.source_correction),
       })),
     }),
@@ -1282,7 +1351,7 @@ export async function handleTextbookProblemReview(
         stem: combineStem(it.common_stem, it.stem).slice(0, 2200),
         choices: it.choices,
         existing_answer: it.existing_answer,
-        solution_transcribed: sol ? sol.text.slice(0, 3000) : null,
+        solution_transcribed: sol ? sol.text.slice(0, SOLUTION_TEXT_MAX_CHARS) : null,
         solution_answer: sol?.answer ?? null,
         ai_solution: b.ai_solution ?? '',
         ai_answer: b.ai_answer ?? '',
@@ -1406,7 +1475,7 @@ export async function handleTextbookProblemReview(
     const qualityOk = (!hasFigures || figure.verified) && stemOk && choicesOk && figureOk && latexOk && fidelityOk && !issueTitle;
 
     const cleanedVisionSol = s?.found === true
-      ? cleanSolutionTranscribedText(s.solution_transcribed, it.problem_number, s.solution_answer)
+      ? solutionLinesToParagraphs(cleanSolutionTranscribedText(s.solution_transcribed, it.problem_number, s.solution_answer))
       : '';
     const solutionAnswerFound = s?.found === true && typeof s?.solution_answer === 'string' && s.solution_answer.trim().length > 0;
     const solutionTextFound = s?.found === true && cleanedVisionSol.length > 0;
@@ -1459,7 +1528,7 @@ export async function handleTextbookProblemReview(
       !dataFixable && fidelityOk && !hasFigures;
     // 공통 발문 중복은 규칙으로 바로 고친 본문을 제안한다(모델 제안보다 우선).
     const aiProposedStem = typeof b.proposed_stem === 'string' && b.proposed_stem.trim()
-      ? sanitizeProblemMarkup(b.proposed_stem.trim())
+      ? sanitizeProblemMarkup(scoreSeparate ? stripScoreMarks(b.proposed_stem) : b.proposed_stem.trim())
       : null;
     let proposedStem = dupStripped !== null
       ? sanitizeProblemMarkup(dupStripped)
@@ -1541,10 +1610,10 @@ export async function handleTextbookProblemReview(
       ? (typeof c.mismatch_reason === 'string' ? c.mismatch_reason : null)
       : logic.ok
       ? null
-      : `해설 논리 오류: ${logic.issue}`;
+      : `${SOLUTION_LOGIC_REASON}: ${logic.issue}`;
     const metaFields = compareMetaFields(prev.meta_sources, validConceptIds, validThinkingIds, nowIso);
     const mathFields = {
-      ai_solution: typeof b.ai_solution === 'string' ? b.ai_solution : null,
+      ai_solution: typeof b.ai_solution === 'string' ? solutionLinesToParagraphs(b.ai_solution) : null,
       ai_answer: typeof b.ai_answer === 'string' ? b.ai_answer : null,
       arithmetic_counts: arithCounts,
       match_mode: matchMode,
@@ -1675,7 +1744,7 @@ export async function handleTextbookProblemReview(
     }
 
     if (!logic.ok) {
-      const fixed = typeof c.solution_logic_fix === 'string' ? c.solution_logic_fix.trim() : '';
+      const fixed = typeof c.solution_logic_fix === 'string' ? solutionLinesToParagraphs(c.solution_logic_fix) : '';
       await upsertOpenFinding(auth, {
         academy_id: academyId,
         crop_id: cropId,
@@ -1685,7 +1754,7 @@ export async function handleTextbookProblemReview(
         severity: 'blocker',
         source: 'ai',
         check_key: 'ai_solution_logic',
-        title: '해설 논리 오류',
+        title: SOLUTION_LOGIC_REASON,
         detail: logic.issue,
         evidence: { solution_answer: sol?.answer ?? null },
         // 사장님이 교정할지 그대로 둘지 고른다. 교정하면 원본 해설은 따로 남는다.
@@ -1825,12 +1894,80 @@ export function effectiveSolution(it: Rec, vision: Rec | undefined): { text: str
   return null;
 }
 
+/** 정답·해설 카드를 찍지 못한 이유를 저장할 때의 최대 길이 */
+const SOLUTION_CARD_ERROR_MAX = 600;
+export const SOLUTION_CARD_ERROR_TITLE = '정답·해설 카드를 만들지 못함';
+
+/**
+ * 이번 렌더 검수에서 정답·해설 카드를 만들지 못한 이유. 카드가 있으면 null.
+ * 이번 요청이 정답·해설 카드를 다루지 않았으면(문항 카드만 다시 대조) 지난 검수의 실패를 그대로 둔다.
+ * 카드를 실제로 다시 찍기 전에는 실패가 풀린 것이 아니다.
+ */
+export function solutionCardErrorOf(input: { hasCard: boolean; reported: unknown; previous: unknown }): string | null {
+  if (input.hasCard) return null;
+  for (const v of [input.reported, input.previous]) {
+    if (typeof v === 'string' && v.trim()) return v.trim().slice(0, SOLUTION_CARD_ERROR_MAX);
+  }
+  return null;
+}
+
+/**
+ * 모델 판정 없이 카드 실패만 남길 때 render_checks 에 덮어쓸 값.
+ * 해설은 통과가 아니고(준비됨을 막는다) 이유를 남긴다. 지난 검수의 다른 지적(본문·그림)은 그대로 둔다.
+ */
+export function solutionCardFailureChecks(cardError: string, prev: Rec): Rec {
+  const prevKind = String(prev.issue_kind ?? '');
+  const prevTitle = typeof prev.issue_title === 'string' ? prev.issue_title.trim() : '';
+  const keepPrev = !!prevTitle && prevTitle !== SOLUTION_CARD_ERROR_TITLE && (prevKind === 'data' || prevKind === 'figure');
+  return {
+    solution_ok: false,
+    answer_solution_error: cardError,
+    checked_answer_solution: false,
+    issue_title: keepPrev ? prevTitle : SOLUTION_CARD_ERROR_TITLE,
+    issue_detail: keepPrev ? (prev.issue_detail ?? null) : cardError,
+    issue_kind: keepPrev ? prevKind : 'engine',
+    engine_symptom: keepPrev ? null : `${SOLUTION_CARD_ERROR_TITLE}: ${cardError}`,
+  };
+}
+
+function solutionCardFailureFinding(p: {
+  academyId: string;
+  cropId: string;
+  cardError: string;
+  solutionKind: string;
+  held: boolean;
+  aiRunId: unknown;
+}): Rec {
+  return {
+    academy_id: p.academyId,
+    crop_id: p.cropId,
+    stage: 'render',
+    axis: 'output',
+    error_type: 'render_item',
+    severity: 'warning',
+    source: 'ai',
+    check_key: 'ai_v2_render_student_view',
+    title: SOLUTION_CARD_ERROR_TITLE,
+    detail: p.cardError,
+    evidence: {
+      solution_ok: false,
+      solution_kind: p.solutionKind,
+      issue_kind: 'engine',
+      answer_solution_error: p.cardError,
+    },
+    status: p.held ? 'held' : 'open',
+    ai_run_id: p.aiRunId,
+  };
+}
+
 /**
  * V2 렌더링 학생 시점 검수. 매니저앱이 문항 카드·정답+해설 카드를 V2로 찍어 서명 URL을 보내면
  * 모델이 학생 시점에서 읽히는지 판정하고 render_checks·quality_status·findings 에 반영한다.
  * 교재 원본 이미지(base64)가 같이 오면 원본과 같은지(내용·그림 위치·그림 크기)도 본다.
  *   body: { academy_id, items: [{ crop_id, problem_url?, answer_solution_url?, solution_kind?: 'textbook'|'ai',
- *           original_image_base64?, set_header_image_base64? }] }
+ *           original_image_base64?, set_header_image_base64?, answer_solution_error? }] }
+ * answer_solution_error: 앱이 정답·해설 카드를 찍지 못한 이유. 그 문항은 해설 통과가 아니고(준비됨을 막는다),
+ * 이유를 render_checks.answer_solution_error 에 남긴다. 다른 이상이 없으면 렌더 엔진 보류로 넘긴다.
  */
 /** 그림 크기 비율(V2 ÷ 원본, 글자 대비)이 ±30% 밖이면 준비됨을 막고 크기를 다시 맞춘다(목표 1.0배). 사양 5-4. */
 export const FIGURE_SIZE_RATIO_MIN = 0.7;
@@ -1936,8 +2073,31 @@ export function pbQuestionHasFigures(q: Rec): boolean {
     figureMarkerCount(meta.common_stem) > 0;
 }
 
+/**
+ * 그림 선지 문항(①~⑤ 가 모두 그림)인가. 선지를 2줄(①②③/④⑤)로 놓을지 3줄(①②/③④/⑤)로 놓을지는 사용자가 고르고
+ * 그림 크기도 그에 따라 달라지므로, 원본과 줄 배열·그림 크기가 다른 것은 렌더 이상이 아니다(2026-11-18 사장님 결정).
+ */
+export function pbQuestionHasImageChoices(q: Rec): boolean {
+  const meta = (q.meta ?? {}) as Rec;
+  if (meta.is_image_choice_question === true || meta.choice_layout === 'image_table') return true;
+  const choices = Array.isArray(q.choices) ? q.choices : [];
+  return choices.length === 5 &&
+    choices.every((c) => /^\s*\[(?:그림|도형|도표)\]\s*$/.test(String(((c ?? {}) as Rec).text ?? '')));
+}
+
+/** 그림이 선지 그림뿐인 그림 선지 문항인가(발문·공통 발문에는 그림 자리가 없다). 이때는 그림 위치·크기 판정을 쓰지 않는다. */
+export function pbQuestionFiguresAreChoicesOnly(q: Rec): boolean {
+  const meta = (q.meta ?? {}) as Rec;
+  return pbQuestionHasImageChoices(q) && figureMarkerCount(q.stem) === 0 && figureMarkerCount(meta.common_stem) === 0 &&
+    figureMarkerCount(((meta.set_model ?? {}) as Rec).common_stem) === 0;
+}
+
 /** crop_id → 문제은행 문항 그림 유무. 문항을 찾지 못한 크롭은 넣지 않는다(판단 보류). */
-async function loadPbHasFigures(admin: AuthContext['admin'], analyses: Rec[]): Promise<Map<string, boolean>> {
+async function loadPbHasFigures(
+  admin: AuthContext['admin'],
+  analyses: Rec[],
+  imageChoices?: Map<string, 'only' | 'mixed'>,
+): Promise<Map<string, boolean>> {
   const uidByCrop = new Map<string, string>();
   for (const a of analyses) {
     const uid = ((a.textbook_problem_crops ?? {}) as Rec).pb_question_uid;
@@ -1947,13 +2107,18 @@ async function loadPbHasFigures(admin: AuthContext['admin'], analyses: Rec[]): P
   if (uidByCrop.size === 0) return out;
   const { data, error } = await admin
     .from('pb_questions')
-    .select('question_uid,stem,meta')
+    .select('question_uid,stem,choices,meta')
     .in('question_uid', [...new Set(uidByCrop.values())]);
   if (error) return out;
   const byUid = new Map(((data ?? []) as Rec[]).map((q) => [String(q.question_uid), pbQuestionHasFigures(q)]));
+  const choiceKind = new Map(((data ?? []) as Rec[]).filter(pbQuestionHasImageChoices).map((q) =>
+    [String(q.question_uid), pbQuestionFiguresAreChoicesOnly(q) ? 'only' as const : 'mixed' as const]
+  ));
   for (const [cropId, uid] of uidByCrop) {
     const has = byUid.get(uid);
     if (has !== undefined) out.set(cropId, has);
+    const kind = choiceKind.get(uid);
+    if (kind && imageChoices) imageChoices.set(cropId, kind);
   }
   return out;
 }
@@ -1983,6 +2148,10 @@ export async function handleTextbookProblemRenderCheck(
       isFillInBlank: r.is_fill_in_blank === true,
       hasSolutionFigures: r.solution_kind !== 'ai' && r.has_solution_figures === true,
       figureAtCardWidth: r.figure_at_card_width === true,
+      // 앱이 정답·해설 카드를 찍지 못했을 때 보내는 이유(조판 오류 등). 카드가 없으면 해설을 판정할 수 없다.
+      answerSolutionError: typeof r.answer_solution_error === 'string' && r.answer_solution_error.trim()
+        ? r.answer_solution_error.trim().slice(0, SOLUTION_CARD_ERROR_MAX)
+        : null,
     }))
     .filter((x): x is {
       cropId: string;
@@ -1995,7 +2164,8 @@ export async function handleTextbookProblemRenderCheck(
       isFillInBlank: boolean;
       hasSolutionFigures: boolean;
       figureAtCardWidth: boolean;
-    } => !!x.cropId && (!!x.problemUrl || !!x.answerSolutionUrl))
+      answerSolutionError: string | null;
+    } => !!x.cropId && (!!x.problemUrl || !!x.answerSolutionUrl || !!x.answerSolutionError))
     .slice(0, 8);
   if (items.length === 0) return jsonResponse({ ok: true, processed: 0 });
 
@@ -2011,7 +2181,7 @@ export async function handleTextbookProblemRenderCheck(
   const { data: analyses } = await auth.admin
     .from('textbook_problem_analyses')
     .select(
-      'crop_id,academy_id,quality_status,quality_checks,fix_proposal,solved_at,source_correction,textbook_problem_crops(problem_number,label,pb_question_uid)',
+      'crop_id,academy_id,quality_status,quality_checks,render_checks,fix_proposal,solved_at,source_correction,textbook_problem_crops(problem_number,label,pb_question_uid)',
     )
     .in('crop_id', cropIds);
   const analysisByCrop = new Map<string, Rec>();
@@ -2020,7 +2190,10 @@ export async function handleTextbookProblemRenderCheck(
   }
   const targets = items.filter((x) => analysisByCrop.has(x.cropId));
   if (targets.length === 0) return jsonResponse({ ok: true, processed: 0 });
-  const pbHasFiguresByCrop = await loadPbHasFigures(auth.admin, [...analysisByCrop.values()]);
+  // 카드가 한 장도 없는 문항(정답·해설 카드 실패만 알려 온 문항)은 모델에 보내지 않는다.
+  const aiTargets = targets.filter((x) => !!x.problemUrl || !!x.answerSolutionUrl);
+  const imageChoicesByCrop = new Map<string, 'only' | 'mixed'>();
+  const pbHasFiguresByCrop = await loadPbHasFigures(auth.admin, [...analysisByCrop.values()], imageChoicesByCrop);
   // 사장님이 교재 오류로 확인한 교정 의견이 있는 문항. 채점 정답이 원본 해설의 정답과 달라도 이상이 아니다.
   const { data: notedNotes } = await auth.admin
     .from('textbook_review_findings')
@@ -2039,7 +2212,7 @@ export async function handleTextbookProblemRenderCheck(
   const parts: AiContentPart[] = [{
     type: 'text',
     text: JSON.stringify({
-      problems: targets.map((x) => {
+      problems: aiTargets.map((x) => {
         const a = analysisByCrop.get(x.cropId)!;
         const crop = (a.textbook_problem_crops ?? {}) as Rec;
         const qc = (a.quality_checks ?? {}) as Rec;
@@ -2054,6 +2227,7 @@ export async function handleTextbookProblemRenderCheck(
           has_solution_original_image: !!(x.solutionOriginalUrl && x.answerSolutionUrl),
           has_solution_figure: x.hasSolutionFigures,
           ...(pbHasFiguresByCrop.has(x.cropId) ? { has_figure: pbHasFiguresByCrop.get(x.cropId) === true } : {}),
+          ...(imageChoicesByCrop.has(x.cropId) ? { image_choices: true } : {}),
           ...(correctedCrops.has(x.cropId) ? { answer_corrected: true } : {}),
           ...sourceCorrectionInput(a.source_correction),
           solution_kind: x.solutionKind,
@@ -2061,7 +2235,7 @@ export async function handleTextbookProblemRenderCheck(
       }),
     }),
   }];
-  for (const x of targets) {
+  for (const x of aiTargets) {
     if (x.problemUrl) {
       parts.push({ type: 'text', text: `[crop_id=${x.cropId} · 문항 카드(V2)]` });
       parts.push({ type: 'image', url: x.problemUrl, detail: 'high' });
@@ -2087,44 +2261,74 @@ export async function handleTextbookProblemRenderCheck(
     }
   }
 
-  const res = await provider.complete(
-    {
+  let byCrop = new Map<string, Rec>();
+  let costUsd: number | null = 0;
+  let aiRunId: Awaited<ReturnType<typeof recordAiRun>> | null = null;
+  if (aiTargets.length > 0) {
+    const res = await provider.complete(
+      {
+        model,
+        instructions: RENDER_CHECK_INSTRUCTIONS,
+        input: [{ kind: 'message', role: 'user', parts }],
+        jsonSchema: { name: 'textbook_problem_render_check', schema: RENDER_CHECK_SCHEMA },
+        reasoningEffort: 'low',
+        maxOutputTokens: 8000,
+        safetyId,
+      },
+      signal,
+    );
+    byCrop = parseProblems(finalText(res));
+    costUsd = estimateCostUsd(model, res.usage, 0);
+    aiRunId = await recordAiRun(auth.admin, {
+      feature: 'textbook_problem_render_check',
+      provider: provider.name,
       model,
-      instructions: RENDER_CHECK_INSTRUCTIONS,
-      input: [{ kind: 'message', role: 'user', parts }],
-      jsonSchema: { name: 'textbook_problem_render_check', schema: RENDER_CHECK_SCHEMA },
-      reasoningEffort: 'low',
-      maxOutputTokens: 8000,
-      safetyId,
-    },
-    signal,
-  );
-  const byCrop = parseProblems(finalText(res));
-  const costUsd = estimateCostUsd(model, res.usage, 0);
-  const aiRunId = await recordAiRun(auth.admin, {
-    feature: 'textbook_problem_render_check',
-    provider: provider.name,
-    model,
-    promptVersion: TEXTBOOK_REVIEW_PROMPT_VERSION,
-    status: 'ok',
-    error: null,
-    usage: res.usage,
-    webSearchCalls: 0,
-    toolCalls: 0,
-    costUsd,
-    latencyMs: Date.now() - startedAt,
-    conversationId: null,
-    createdBy: auth.userId,
-    features: { count: targets.length, original_images: targets.filter((x) => x.originalUrl).length },
-  });
+      promptVersion: TEXTBOOK_REVIEW_PROMPT_VERSION,
+      status: 'ok',
+      error: null,
+      usage: res.usage,
+      webSearchCalls: 0,
+      toolCalls: 0,
+      costUsd,
+      latencyMs: Date.now() - startedAt,
+      conversationId: null,
+      createdBy: auth.userId,
+      features: { count: aiTargets.length, original_images: aiTargets.filter((x) => x.originalUrl).length },
+    });
+  }
 
   const nowIso = new Date().toISOString();
   let processed = 0;
   const results: Rec[] = [];
   for (const x of targets) {
-    const r = byCrop.get(x.cropId);
-    if (!r) continue;
     const a = analysisByCrop.get(x.cropId)!;
+    const prevRc = (a.render_checks ?? {}) as Rec;
+    // 정답·해설 카드를 찍지 못한 이유. 이번 요청이 카드를 다루지 않았으면(문항 카드만 다시 대조) 지난 실패를 그대로 둔다.
+    const cardError = solutionCardErrorOf({
+      hasCard: !!x.answerSolutionUrl,
+      reported: x.answerSolutionError,
+      previous: prevRc.answer_solution_error,
+    });
+    const r = byCrop.get(x.cropId);
+    if (!r) {
+      // 모델 판정이 없는 문항(카드가 한 장도 없거나 모델이 빠뜨림)도 카드 실패는 남긴다. 다른 판정과 검수 상태는 건드리지 않는다.
+      if (!cardError) continue;
+      await auth.admin.from('textbook_problem_analyses').update({
+        render_checks: { ...prevRc, ...solutionCardFailureChecks(cardError, prevRc) },
+        updated_at: nowIso,
+      }).eq('crop_id', x.cropId);
+      await upsertOpenFinding(auth, solutionCardFailureFinding({
+        academyId,
+        cropId: x.cropId,
+        cardError,
+        solutionKind: x.solutionKind,
+        held: String(a.quality_status ?? '') === 'held',
+        aiRunId,
+      })).catch(() => null);
+      results.push({ crop_id: x.cropId, solution_ok: false, answer_solution_error: cardError, issue_kind: 'engine' });
+      processed += 1;
+      continue;
+    }
     const qc = (a.quality_checks ?? {}) as Rec;
     const isFillInBlank = x.isFillInBlank || qc.is_fill_in_blank === true;
     const falseBlank = isFalseBlankComplaint(isFillInBlank, r.issue_title, r.issue_detail);
@@ -2132,10 +2336,13 @@ export async function handleTextbookProblemRenderCheck(
     const originalCompared = !!x.originalUrl && !!x.problemUrl;
     const problemOk = r.problem_ok !== false || falseBlank;
     const answerOk = r.answer_ok !== false || falseSubAnsSpacing;
-    const solutionOk = r.solution_ok !== false;
+    // 모델이 본 해설 카드 판정. 카드를 찍지 못했으면 판정할 카드가 없으므로 해설은 통과가 아니다.
+    const aiSolutionOk = r.solution_ok !== false;
+    const solutionOk = aiSolutionOk && !cardError;
     const fidelityOk = !originalCompared || r.fidelity_ok !== false || falseBlank;
     // 문제은행 문항에 그림 자산도 [그림] 표시도 없으면 모델이 표·수식을 그림으로 잰 값이므로 그림 위치·크기 판정을 버린다.
-    const noPbFigure = pbHasFiguresByCrop.get(x.cropId) === false;
+    // 그림이 선지 그림뿐인 그림 선지 문항도 같다. 줄 배열(2줄·3줄)은 사용자가 고르고 그림 크기는 그에 따라 달라진다.
+    const noPbFigure = pbHasFiguresByCrop.get(x.cropId) === false || imageChoicesByCrop.get(x.cropId) === 'only';
     const figurePositionOk = noPbFigure || !originalCompared || r.figure_position_ok !== false;
     const sizeRatio = !noPbFigure && originalCompared && typeof r.figure_size_ratio === 'number' &&
         Number.isFinite(r.figure_size_ratio) && r.figure_size_ratio > 0
@@ -2167,10 +2374,12 @@ export async function handleTextbookProblemRenderCheck(
       (qc.stem_ok !== false && qc.choices_ok !== false && qc.figure_ok !== false &&
         qc.latex_v2_ok !== false && qc.fidelity_ok !== false && !qc.issue_title);
     const prevStatus = String(a.quality_status ?? 'pending');
-    const figureOnly = problemOk && answerOk && solutionOk && fidelityOk &&
+    const figureOnly = problemOk && answerOk && aiSolutionOk && fidelityOk &&
       (!figurePositionOk || !figureSizeOk || (hasFigures && !figureAppliedOrNone) || !solFigure.ok);
+    // 정답·해설 카드를 찍지 못한 것 말고는 이상이 없다. 본문을 고쳐서 풀 일이 아니므로 조판(엔진) 쪽으로 넘긴다.
+    const cardErrorOnly = !!cardError && !figureOnly && problemOk && answerOk && aiSolutionOk && fidelityOk;
     const dataSymptom = isDataFixableSymptom(r.issue_title, r.issue_detail, r.engine_symptom);
-    const rawIssueKind = figureOnly ? 'figure' : normalizeIssueKind(r.issue_kind, !renderOk);
+    const rawIssueKind = figureOnly ? 'figure' : cardErrorOnly ? 'engine' : normalizeIssueKind(r.issue_kind, !renderOk);
     const issueKind: IssueKind = rawIssueKind === 'engine' && (!fidelityOk || qc.fidelity_ok === false || dataSymptom)
       ? 'data'
       : rawIssueKind;
@@ -2183,7 +2392,7 @@ export async function handleTextbookProblemRenderCheck(
       : autoHoldEngine
       ? 'held'
       : (renderOk && stage2Ok && figureAppliedOrNone ? 'clean' : 'issue');
-    const issueTitle = !falseBlank && !falseSubAnsSpacing && typeof r.issue_title === 'string' && r.issue_title.trim()
+    const otherIssueTitle = !falseBlank && !falseSubAnsSpacing && typeof r.issue_title === 'string' && r.issue_title.trim()
       ? r.issue_title
       : !figureSizeOk
       ? `그림 크기가 원본과 다름 (원본 대비 ${sizeRatio}배)`
@@ -2192,6 +2401,24 @@ export async function handleTextbookProblemRenderCheck(
       : hasFigures && !figureAppliedOrNone
       ? '그림·도형 문항 원본 대조 확인 필요'
       : solFigure.issueTitle;
+    const issueTitle = otherIssueTitle || (cardError ? SOLUTION_CARD_ERROR_TITLE : otherIssueTitle);
+    const cardErrorNote = cardError ? `${SOLUTION_CARD_ERROR_TITLE}: ${cardError}` : null;
+    const aiIssueDetail = typeof r.issue_detail === 'string' && r.issue_detail.trim() ? r.issue_detail.trim() : null;
+    // 카드 실패 이유는 다른 지적이 있어도 함께 남긴다(고칠 사람이 이유를 바로 보게).
+    const issueDetail = !cardErrorNote
+      ? (r.issue_detail ?? null)
+      : otherIssueTitle && aiIssueDetail
+      ? `${aiIssueDetail} / ${cardErrorNote}`
+      : otherIssueTitle
+      ? cardErrorNote
+      : cardError;
+    const engineSymptom = issueKind !== 'engine'
+      ? null
+      : cardErrorOnly
+      ? cardErrorNote
+      : typeof r.engine_symptom === 'string'
+      ? r.engine_symptom
+      : null;
 
     await auth.admin.from('textbook_problem_analyses').update({
       render_checks: {
@@ -2211,12 +2438,13 @@ export async function handleTextbookProblemRenderCheck(
         original_compared: originalCompared,
         flagged_after_approval: prevStatus === 'approved' && !renderOk,
         issue_title: renderOk && figureAppliedOrNone ? null : issueTitle,
-        issue_detail: renderOk && figureAppliedOrNone ? null : (r.issue_detail ?? null),
+        issue_detail: renderOk && figureAppliedOrNone ? null : issueDetail,
         issue_kind: issueKind,
-        engine_symptom: issueKind === 'engine' && typeof r.engine_symptom === 'string' ? r.engine_symptom : null,
+        engine_symptom: engineSymptom,
         solution_kind: x.solutionKind,
         checked_problem: !!x.problemUrl,
         checked_answer_solution: !!x.answerSolutionUrl,
+        ...(cardError ? { answer_solution_error: cardError } : {}),
         model,
       },
       render_checked_at: nowIso,
@@ -2233,7 +2461,8 @@ export async function handleTextbookProblemRenderCheck(
         ? {
           engine_held_at: nowIso,
           engine_held_by: auth.userId,
-          engine_hold_note: issueTitle ?? (typeof r.engine_symptom === 'string' ? r.engine_symptom : '렌더 엔진 조판 확인 필요'),
+          engine_hold_note: (cardErrorOnly ? cardErrorNote : null) ?? issueTitle ??
+            (typeof r.engine_symptom === 'string' ? r.engine_symptom : '렌더 엔진 조판 확인 필요'),
         }
         : {}),
       updated_at: nowIso,
@@ -2250,7 +2479,7 @@ export async function handleTextbookProblemRenderCheck(
         source: 'ai',
         check_key: 'ai_v2_render_student_view',
         title: `${prevStatus === 'approved' ? '[승인 후 원본 대조] ' : ''}${issueTitle ?? 'V2 렌더 카드 읽기 문제'}`,
-        detail: String(r.issue_detail ?? '학생 시점에서 문항·정답·해설 카드 중 읽히지 않거나 원본과 다른 부분이 있습니다.'),
+        detail: String(issueDetail ?? '학생 시점에서 문항·정답·해설 카드 중 읽히지 않거나 원본과 다른 부분이 있습니다.'),
         evidence: {
           problem_ok: problemOk,
           answer_ok: answerOk,
@@ -2261,7 +2490,8 @@ export async function handleTextbookProblemRenderCheck(
           original_compared: originalCompared,
           solution_kind: x.solutionKind,
           issue_kind: issueKind,
-          engine_symptom: issueKind === 'engine' ? r.engine_symptom ?? null : null,
+          engine_symptom: engineSymptom,
+          ...(cardError ? { answer_solution_error: cardError } : {}),
         },
         status: prevStatus === 'held' || autoHoldEngine ? 'held' : 'open',
         ai_run_id: aiRunId,
@@ -2281,6 +2511,7 @@ export async function handleTextbookProblemRenderCheck(
       fidelity_ok: fidelityOk,
       figure_size_ratio: sizeRatio,
       issue_kind: issueKind,
+      ...(cardError ? { answer_solution_error: cardError } : {}),
     });
     processed += 1;
   }

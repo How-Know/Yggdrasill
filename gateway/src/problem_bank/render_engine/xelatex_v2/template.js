@@ -171,7 +171,7 @@ function sanitizeLatexControlChars(value) {
     s = s.replace(/\x09(?=[A-Za-z])/g, '\\t');
     // 줄 첫머리 "i)" 는 경우 나누기 번호라 \ni(∋) 로 되돌리지 않는다.
     s = s.replace(
-      /\x0a(?=(?:abla|atural|e(?:q|g)?|i(?!\))|otin|u)(?![A-Za-z]))/g,
+      /\x0a(?=(?:abla|atural|e(?:q|g|arrow)?|i(?!\))|otin|u|warrow)(?![A-Za-z]))/g,
       '\\n',
     );
     // terminator 는 LaTeX 명령 뒤에 자주 오는 문자들 전부 커버: \ {} () [] ^ _
@@ -237,6 +237,11 @@ export function splitAfterCardSectionLabel(lines) {
 //   capture group 1: 값이 있으면 PB_FIG itemID, 없으면 plain 마커.
 const FIGURE_MARKER_RE = /\[\[PB_FIG_([^\]]+)\]\]|\[(?:그림|도형|도표)\]/g;
 
+// "\n" 두 글자를 줄바꿈으로 풀 때 지켜야 하는, n 으로 시작하는 수식 명령(앞의 "\n" 을 뗀 나머지).
+// 증감표의 \nearrow 가 'earrow' 글자로 찍히던 원인.
+const N_PREFIXED_MATH_COMMAND_RE =
+  /^(?:earrow|warrow|mid|parallel|leq(?:slant)?|geq(?:slant)?|less|gtr|sim|cong|subseteq|supseteq|exists|(?:[lL]eft|[rR]ight|[lL]eftright)arrow)(?![A-Za-z])/;
+
 function normalizeLiteralJsonNewlineText(input) {
   const src = String(input || '');
   if (!src.includes('\\n')) return src;
@@ -249,6 +254,7 @@ function normalizeLiteralJsonNewlineText(input) {
     /^i(?![A-Za-z)])/,
     /^ot(?:in)?(?![A-Za-z])/,
     /^u(?![A-Za-z])/,
+    N_PREFIXED_MATH_COMMAND_RE,
     /^ew(?:command|length|page|line|theorem)\b/,
     /^oindent\b/,
     /^onumber\b/,
@@ -1129,6 +1135,13 @@ function normalizeMathSegment(mathContent) {
   // 동그라미 한글(㉠–㉭)·동그라미 숫자(①–⑳) 는 수식 폰트에 글리프가 없어 math mode 로 들어가면
   // 서버 PDF 에서 통째로 누락된다(본문 폰트엔 글리프 존재). \text{} 로 감싸 본문 폰트로 강제 출력.
   out = out.replace(/[\u3260-\u326D\u2460-\u2473]/g, (ch) => `\\text{${ch}}`);
+  // 로마 숫자(Ⅰ–Ⅻ, ⅰ–ⅻ)도 수식 폰트에 글리프가 없어 "( )" 처럼 빈칸으로 찍힌다.
+  // 경우 나누기 번호 "(ⅰ)"·"ⅰ)" 는 괄호째 본문 폰트로 찍고, 번호 뒤 공백을 수식 공백으로 지킨다.
+  out = out.replace(/([(（]?)([\u2160-\u217F]+)([)）]?)(\s*)/g, (_m, open, roman, close, space) => (
+    close
+      ? `\\text{${open}${roman}${close}}${space ? '\\;' : ''}`
+      : `${open}\\text{${roman}}${space}`
+  ));
   // DB 에 이미 들어가 있는 \boxed{\phantom{...}} 또는 \boxed{~~} 형태도 정사각형 빈칸 네모로 치환.
   out = out.replace(/\\boxed\s*\{\s*\\phantom\s*\{[^}]*\}\s*\}/g, '\\mtemptybox{}');
   out = out.replace(/\\boxed\s*\{\s*(?:~+|\s*)\s*\}/g, '\\mtemptybox{}');
@@ -1350,6 +1363,93 @@ function smartTexLine(text, equations, options = {}) {
   return parts.join('');
 }
 
+// 문장 전체가 하나의 수식으로 추출된 줄(`m\text{이 집합 }A\text{의 원소이면, }…`)은
+//   `\text{}` 보호 때문에 통째로 `$…$` 한 덩어리가 되어 TeX 가 줄바꿈 지점을 찾지 못하고
+//   박스/단 밖으로 넘친다. 최상위(중괄호·괄호·\left 밖)에 놓인 한글 문장형 `\text{}` 만
+//   풀어서 일반 "한글 + 수식" 혼합 줄로 되돌린다.
+//   - 첨자(^/_) 바로 뒤, 괄호·집합기호 안, 정렬 환경이 있는 줄은 건드리지 않는다.
+//   - `3\text{개}` 같은 짧은 단위 표기는 유지하도록 한글 총량 하한을 둔다.
+const SENTENCE_TEXT_UNWRAP_MIN_HANGUL = 10;
+const SENTENCE_TEXT_CONTENT_RE = /^[\s가-힣ㄱ-ㅎ0-9,.?!:;·]+$/;
+
+function unwrapTopLevelSentenceTextBlocks(input) {
+  const source = String(input || '');
+  if (!source.includes('\\text{')) return source;
+  if (/\\begin\{|\\\\|&|\[수식줄바꿈/.test(source)) return source;
+
+  const blocks = [];
+  let curly = 0;
+  let paren = 0;
+  let setBrace = 0;
+  let leftRight = 0;
+  let i = 0;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === '\\') {
+      const rest = source.slice(i);
+      if (rest.startsWith('\\text{')) {
+        let j = i + '\\text{'.length;
+        let depth = 1;
+        while (j < source.length && depth > 0) {
+          const c = source[j];
+          if (c === '\\') { j += 2; continue; }
+          if (c === '{') depth += 1;
+          if (c === '}') depth -= 1;
+          j += 1;
+        }
+        if (depth !== 0) return source;
+        const content = source.slice(i + '\\text{'.length, j - 1);
+        const afterScript = /[\^_]\s*$/.test(source.slice(0, i));
+        if (
+          curly === 0 && paren === 0 && setBrace === 0 && leftRight === 0
+          && !afterScript
+          && /[가-힣]/.test(content)
+          && SENTENCE_TEXT_CONTENT_RE.test(content)
+        ) {
+          blocks.push({ start: i, end: j, content });
+        }
+        i = j;
+        continue;
+      }
+      if (rest.startsWith('\\{')) { setBrace += 1; i += 2; continue; }
+      if (rest.startsWith('\\}')) { setBrace = Math.max(0, setBrace - 1); i += 2; continue; }
+      const command = rest.match(/^\\[A-Za-z]+/);
+      if (command) {
+        if (command[0] === '\\left') leftRight += 1;
+        else if (command[0] === '\\right') leftRight = Math.max(0, leftRight - 1);
+        i += command[0].length;
+        continue;
+      }
+      i += 2;
+      continue;
+    }
+    if (ch === '{') curly += 1;
+    else if (ch === '}') curly = Math.max(0, curly - 1);
+    else if (ch === '(' || ch === '[') paren += 1;
+    else if (ch === ')' || ch === ']') paren = Math.max(0, paren - 1);
+    i += 1;
+  }
+
+  if (blocks.length === 0) return source;
+  const hangulCount = blocks.reduce(
+    (sum, block) => sum + (block.content.match(/[가-힣]/g) || []).length,
+    0,
+  );
+  if (hangulCount < SENTENCE_TEXT_UNWRAP_MIN_HANGUL) return source;
+
+  let out = '';
+  let cursor = 0;
+  for (const block of blocks) {
+    out += source.slice(cursor, block.start);
+    // `\sim\text{9 이하}` → `\sim 9 이하`: 명령 뒤에 영숫자가 붙어 다른 명령이 되지 않게 한다.
+    if (/\\[A-Za-z]+$/.test(out) && /^[0-9]/.test(block.content)) out += ' ';
+    out += block.content;
+    cursor = block.end;
+  }
+  out += source.slice(cursor);
+  return out;
+}
+
 function protectLatexTextBlocks(input) {
   const source = String(input || '');
   if (!source.includes('\\text{')) {
@@ -1513,6 +1613,7 @@ function normalizeLiteralEscapedNewlines(input) {
     /^i(?![A-Za-z)])/,         // \ni (줄 첫머리 "i)" 번호는 제외)
     /^ot(?:in)?(?![A-Za-z])/,  // \not, \notin
     /^u(?![A-Za-z])/,          // \nu
+    N_PREFIXED_MATH_COMMAND_RE, // \nearrow, \nmid, \nleq …
     /^ew(?:command|length|page|line|theorem)\b/,
     /^oindent\b/,
     /^onumber\b/,
@@ -1581,6 +1682,7 @@ function smartTexLineCore(text, equations, options = {}) {
     prefix = `\\text{(${subQMatch[1]})}\\;`;
     body = clean.substring(subQMatch[0].length);
   }
+  body = unwrapTopLevelSentenceTextBlocks(body);
   body = wrapKoreanInMathLabelArgs(body);
   const protectedText = protectLatexTextBlocks(body);
   body = protectedText.text;
@@ -1917,6 +2019,12 @@ function joinAlignedEnvironmentLines(lines) {
  */
 function renderStandaloneMathEnvironmentBlock(lines, { rowFigure = null } = {}) {
   const rowFigures = [];
+  // aligned 블록이 아닌 본문은 그림 표시를 건드리지 않는다. rowFigure 는 그림 순번을 소비하므로,
+  // 블록이 아닌 줄에서 부르면 글 줄 안 그림(inline-text)이 사라지고 뒤 그림이 한 칸씩 당겨진다.
+  const nonEmpty = (Array.isArray(lines) ? lines : []).map((line) => String(line || '').trim()).filter(Boolean);
+  if (nonEmpty.length === 0 || !/^\\begin\{aligned\}/.test(nonEmpty[0]) || !/\\end\{aligned\}$/.test(nonEmpty[nonEmpty.length - 1])) {
+    return '';
+  }
   const source = typeof rowFigure === 'function'
     ? (Array.isArray(lines) ? lines : []).map((line) => String(line || '').replace(FIGURE_MARKER_RE, (marker) => {
       const tex = rowFigure(marker);
@@ -3862,13 +3970,20 @@ function renderBlankChoicesLatex(question, choices, equations, options = {}) {
   // 데이터 열은 고정폭 + 가운데 정렬 컬럼(`>{\centering\arraybackslash}m{W}`)으로 그린다.
   //   과거 `c` + \makebox[W][c] 방식은 셀 내부에서 내용이 좌측으로 치우쳐 보이는 문제가
   //   있었으므로, 열 타입 자체가 가로/세로 중앙정렬을 보장하도록 바꾼다.
+  //   열 폭은 기본 폭에서 시작해, 그 열의 칸(제목 포함) 중 가장 넓은 내용이 들어가도록 TeX 가 재서 넓힌다.
+  //   (고정 폭만 쓰면 "△ABC∽△ACD" 같은 넓은 수식이 옆 칸으로 넘쳐 두 칸이 붙어 보인다.)
+  //   넓히는 한도는 표가 한 단 폭을 넘지 않게 "남는 폭을 열 수로 나눈 값"이다(기본 폭이 더 크면 기본 폭).
+  const colDimNames = ['\\YggBlankColA', '\\YggBlankColB', '\\YggBlankColC', '\\YggBlankColD'];
+  const baseColWidths = labels.map((_, idx) => (baseDataColumnEm * widthScale * columnScales[idx]).toFixed(2));
   const dataColSpec = labels
-    .map((_, idx) => {
-      const w = (baseDataColumnEm * widthScale * columnScales[idx]).toFixed(2);
-      return `>{\\centering\\arraybackslash}m{${w}em}`;
-    })
+    .map((_, idx) => `>{\\centering\\arraybackslash}m{${colDimNames[idx]}}`)
     .join('');
-  const header = [''].concat(labels.map((label) => escapeLatexText(label))).join(' & ');
+  // 제목에 수식(\overline{DC} 등)이 있으면 선지 칸과 같이 수식으로 조판한다.
+  const headerCells = labels.map((label) => (
+    /\\[A-Za-z]|\$/.test(label) ? smartTexLine(label, equations) : escapeLatexText(label)
+  ));
+  const header = [''].concat(headerCells).join(' & ');
+  const columnCells = labels.map((_, idx) => [headerCells[idx]]);
   const rows = choices.map((choice, idx) => {
     const label = typeof choice === 'string'
       ? (CIRCLED_DIGITS[idx] || String(idx + 1))
@@ -3877,16 +3992,39 @@ function renderBlankChoicesLatex(question, choices, equations, options = {}) {
     const effectiveHeight = heightScale * rowScales[idx];
     const cells = blankChoiceCells(rawText, labels.length)
       .map((cell) => renderBlankChoiceCell(cell, effectiveHeight));
-    const rowTex = [label].concat(cells).join(' & ');
+    cells.forEach((cell, colIdx) => columnCells[colIdx]?.push(cell));
+    // 분수가 든 줄은 한 줄 높이를 넘는다. 보이지 않는 버팀대로 줄 높이를 늘려 위아래 줄의 분수와 닿지 않게 한다.
+    const tallStrut = /\\[dt]?frac\b/.test(String(rawText)) ? '\\rule[-1.05em]{0pt}{2.8em}' : '';
+    const rowTex = [`${label}${tallStrut}`].concat(cells).join(' & ');
     const extraEm = Math.max(0, (effectiveHeight - 1.0) * 1.8);
     return {
       tex: rowTex,
       gap: extraEm > 0.01 ? `[${extraEm.toFixed(2)}em]` : '',
     };
   });
+  const usedDims = colDimNames.slice(0, labels.length);
+  const sepTotalPt = (Number(tabColSepPt) * 2 * labels.length).toFixed(2);
+  const measureLines = [
+    '\\ifdefined\\YggBlankColMax\\else'
+      + ['\\YggBlankColMax'].concat(colDimNames).map((n) => `\\csname newdimen\\endcsname${n}`).join('')
+      + '\\csname newbox\\endcsname\\YggBlankMeasureBox\\fi%',
+    `\\YggBlankColMax=\\dimexpr(\\linewidth-2em-${sepTotalPt}pt)/${labels.length}\\relax%`,
+  ];
+  usedDims.forEach((dim, idx) => {
+    measureLines.push(`${dim}=${baseColWidths[idx]}em%`);
+    for (const cell of columnCells[idx]) {
+      if (!String(cell || '').trim()) continue;
+      measureLines.push(
+        `\\setbox\\YggBlankMeasureBox=\\hbox{${cell}}\\dimen0=\\dimexpr\\wd\\YggBlankMeasureBox+0.8em\\relax`
+          + `\\ifdim\\dimen0>\\YggBlankColMax \\dimen0=\\YggBlankColMax\\fi`
+          + `\\ifdim\\dimen0>${dim} ${dim}=\\dimen0\\fi%`,
+      );
+    }
+  });
   return [
     `{${stretchWithFontTex('1.7', options.fontSizePt)}\\parskip=0pt\\lineskiplimit=0.4em\\lineskip=1.2em`,
     `\\setlength{\\tabcolsep}{${tabColSepPt}pt}`,
+    ...measureLines,
     `\\noindent\\begin{tabular}{@{}l${dataColSpec}@{}}`,
     header + ' \\\\',
     rows.map((row) => `${row.tex} \\\\${row.gap}`).join('\n'),
@@ -6051,7 +6189,6 @@ function renderOneQuestion(question, {
   //   figure 를 중복 방출하지 않도록 하고, trailing fallback 루프의 "누락된 figure" 재방출도
   //   이 집합 기준으로 판단한다.
   const emittedFigIdxs = new Set();
-
   // figIdx → assetKey 시퀀스를 미리 계산해 두어 그룹 매칭에 사용한다.
   //  - figure_local_infos 가 있으면 그쪽 assetKey 를 우선 사용
   //  - 없으면 ord:N (N = 1-based) 로 폴백
@@ -7078,7 +7215,9 @@ function renderOneQuestion(question, {
   // 조건제시박스(deco)/보기박스(bogi) 2단 배치 옵션. 매니저앱 토글이 meta 에 저장.
   const boxColMeta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
   const decoBoxColumns = Number(boxColMeta.deco_box_columns) === 2 ? 2 : 1;
-  const bogiBoxColumns = Number(boxColMeta.bogi_box_columns) === 2 ? 2 : 1;
+  // 검수 수정 단계는 그림 배치(figure_layout.bogiColumns)로 보기 2단을 낸다(원본 보기에서 그림이 좌우로 나란할 때).
+  const bogiBoxColumns =
+    Number(boxColMeta.bogi_box_columns) === 2 || Number(boxColMeta.figure_layout?.bogiColumns) === 2 ? 2 : 1;
 
   // 문항 내 표 등장 순서 카운터 (meta.table_scales 키: struct:N / raw:N 와 대응).
   let structTableIdx = 0;
@@ -8008,6 +8147,80 @@ const ANSWER_FIGURE_MARKER_RE = /\[\[PB_ANSWER_FIG_[^\]]+\]\]|\[그림\]|\[\s*im
 
 const EXPLANATION_FIGURE_MARKER_RE = /\[그림(?:\s*:[^\]]*)?\]/g;
 const EXPLANATION_SAME_LINE = '@@YGGEXPLSAME@@';
+
+// 마크다운 표 한 줄을 칸으로 나눈다. $…$ 안의 | (절댓값)는 칸 구분이 아니다.
+function splitMarkdownTableRow(line) {
+  const src = String(line || '').trim().replace(/^\|/, '').replace(/\|$/, '');
+  const cells = [];
+  let cur = '';
+  let inMath = false;
+  for (let k = 0; k < src.length; k += 1) {
+    const ch = src[k];
+    if (ch === '\\' && k + 1 < src.length) {
+      cur += ch + src[k + 1];
+      k += 1;
+    } else if (ch === '|' && !inMath) {
+      cells.push(cur.trim());
+      cur = '';
+    } else {
+      if (ch === '$') inMath = !inMath;
+      cur += ch;
+    }
+  }
+  cells.push(cur.trim());
+  return cells;
+}
+
+// 마크다운 표의 각 줄 앞에 넣는 버팀대. 이 표시로 "마크다운 표에서 만든 표"를 알아본다.
+const MARKDOWN_TABLE_STRUT = '\\rule[-0.9ex]{0pt}{3.1ex}';
+
+// 표 칸 하나를 수식 모드 글로 바꾼다. $…$ 는 수식 그대로, 그 밖의 글(한글 등)은 \text{} 로 넣는다.
+function markdownTableCellToMath(cell) {
+  return String(cell || '')
+    .split(/(?<!\\)\$/)
+    .map((piece, k) => {
+      const value = piece.trim();
+      if (!value) return '';
+      return k % 2 === 1 ? value : `\\text{${escapeLatexText(value)}}`;
+    })
+    .filter(Boolean)
+    .join('\\,');
+}
+
+/**
+ * 해설 전사본의 마크다운 표("| a | b |" 줄이 두 줄 이상 이어진 것. 증감표 등)를 엔진이 그리는 array 표 한 줄로 바꾼다.
+ * 구분 줄(|---|---|)은 버린다. 표가 없으면 본문을 그대로 돌려준다.
+ */
+export function explanationMarkdownTablesToArray(text) {
+  const source = String(text || '');
+  if (!/^\s*\|.*\|\s*$/m.test(source)) return source;
+  const lines = source.replace(/\r\n/g, '\n').split('\n');
+  const isRow = (line) => /^\s*\|.*\|\s*$/.test(line);
+  const out = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    let j = i;
+    while (j < lines.length && isRow(lines[j])) j += 1;
+    if (j === i) {
+      out.push(lines[i]);
+      continue;
+    }
+    const rows = lines.slice(i, j)
+      .map(splitMarkdownTableRow)
+      .filter((cells) => !cells.every((cell) => /^:?-+:?$/.test(cell)));
+    if (j - i < 2 || rows.length === 0) {
+      out.push(...lines.slice(i, j));
+    } else {
+      const cols = Math.max(...rows.map((cells) => cells.length));
+      // 줄마다 버팀대를 넣어 분수·화살표가 가로줄에 닿지 않게 한다.
+      const body = rows
+        .map((cells) => `${MARKDOWN_TABLE_STRUT}${Array.from({ length: cols }, (_, k) => markdownTableCellToMath(cells[k])).join(' & ')}`)
+        .join(' \\\\ \\hline ');
+      out.push(`$\\begin{array}{|${'c|'.repeat(cols)}} \\hline ${body} \\\\ \\hline \\end{array}$`);
+    }
+    i = j - 1;
+  }
+  return out.join('\n');
+}
 
 /**
  * 해설 전사본의 [그림] 표시를 해설 그림 자리 표시(@@YGGEXPLFIG<n>@@ 문단)로 바꾼다.
@@ -11530,7 +11743,9 @@ function renderQuickAnswerTableLatex(questions, options = {}) {
 
   function formatAnswerSegmentTextMode(raw) {
     const src = String(raw || '');
-    const inlineMathRe = /\\begin\{(cases|array|aligned|alignedat|gathered|matrix|pmatrix|bmatrix|Bmatrix|vmatrix|Vmatrix|smallmatrix)\}[\s\S]*?\\end\{\1\}|\(?\\(?:dfrac|tfrac|frac)\s*\{[^{}]+\}\s*\{[^{}]+\}\s*\)?|[A-Za-z0-9]+(?:\s*(?:\\(?:leq?|geq?|neq?|times|div|cdot|pm|mp)|[=+\-*/^_<>])\s*[-A-Za-z0-9{}\\.]+)+/g;
+    // 한글이 섞인 답에서도 수식만 수식 모드로 뺀다.
+    // 명령으로 시작하는 식(\triangle AGC\equiv \triangle HBC)도 포함한다. 괄호 안 한글 설명((SAS합동))은 글자로 남긴다.
+    const inlineMathRe = /\\begin\{(cases|array|aligned|alignedat|gathered|matrix|pmatrix|bmatrix|Bmatrix|vmatrix|Vmatrix|smallmatrix)\}[\s\S]*?\\end\{\1\}|\(?\\(?:dfrac|tfrac|frac)\s*\{[^{}]+\}\s*\{[^{}]+\}\s*\)?|\\[A-Za-z]+(?:\s*\{[^{}]*\})*(?:\s*(?:\\[A-Za-z]+(?:\s*\{[^{}]*\})*|[A-Za-z0-9.]+|[=+\-*/^_<>{}])+)*|[A-Za-z0-9]+(?:\s*(?:\\(?:leq?|geq?|neq?|times|div|cdot|pm|mp)|[=+\-*/^_<>])\s*[-A-Za-z0-9{}\\.]+)+/g;
     const out = [];
     let last = 0;
     let match;
@@ -11826,12 +12041,33 @@ function renderQuickAnswerTableLatex(questions, options = {}) {
       if (side !== 'end') value = value.replace(/^\s*(?:\\\[|\\\(|\$)+/g, '');
       return value.trim();
     };
+    const dollarRe = /(?<!\\)\$/g;
     while ((match = envRe.exec(paragraph)) !== null) {
-      const before = edge(paragraph.slice(last, match.index), 'end');
+      let beforeRaw = paragraph.slice(last, match.index);
+      let end = match.index + match[0].length;
+      let lhs = '';
+      let rhs = '';
+      // "$a_n=\begin{cases}…\end{cases}$" 처럼 한 식 안에서 좌변 뒤에 표·경우 나누기가 오면 여는 $ 가 짝 없이 남아
+      // 컴파일이 멈춘다. 그 $ 부터 닫는 $ 까지를 한 식으로 보고 좌변·우변을 블록에 붙인다.
+      const opens = [...beforeRaw.matchAll(dollarRe)];
+      if (opens.length % 2 === 1) {
+        const open = opens[opens.length - 1].index;
+        lhs = beforeRaw.slice(open + 1).trim();
+        beforeRaw = beforeRaw.slice(0, open);
+        const close = paragraph.slice(end).search(dollarRe);
+        if (close >= 0) {
+          rhs = paragraph.slice(end, end + close).trim();
+          end += close + 1;
+          envRe.lastIndex = end;
+        }
+      }
+      const before = edge(beforeRaw, 'end');
       if (before) parts.push(smartTexLine(before, equations));
-      const env = match[0].replace(/(?<!\\)%/g, '\\%');
-      parts.push(`\\par\\noindent\\adjustbox{max width=\\linewidth}{$\\displaystyle ${env}$}\\par`);
-      last = match.index + match[0].length;
+      const env = `${lhs}${match[0]}${rhs}`.replace(/(?<!\\)%/g, '\\%');
+      // 마크다운 표에서 만든 줄 있는 표는 아래 글줄이 밑줄에 붙지 않게 조금 띄운다.
+      const tableGap = env.includes(MARKDOWN_TABLE_STRUT) ? '\\vspace{0.3em}' : '';
+      parts.push(`\\par\\noindent\\adjustbox{max width=\\linewidth}{$\\displaystyle ${env}$}\\par${tableGap}`);
+      last = end;
     }
     // 표·행렬이 없으면 문단을 그대로 넘긴다(앞머리 $ 를 벗기면 "$\angle x$ (엇각)" 의 $ 짝이 어긋난다).
     if (last === 0) return smartTexLine(paragraph, equations);
@@ -11843,7 +12079,7 @@ function renderQuickAnswerTableLatex(questions, options = {}) {
   function explanationBody(q, text) {
     const specs = explanationFigureSpecs(q);
     const figures = explanationFigureIncludes(q);
-    const items = String(placeExplanationFigureTokens(text, figures.length) || '')
+    const items = String(placeExplanationFigureTokens(explanationMarkdownTablesToArray(text), figures.length) || '')
       .replace(/\r\n/g, '\n')
       .replace(/\[문단(?::[^\]]*)?\]/g, '\n\n')
       .split(/\n{2,}/)
@@ -12139,6 +12375,18 @@ function renderQuickAnswerTableLatex(questions, options = {}) {
   ].join('\n');
 
   const pageWidth = '210mm-28mm';
+  // 검수용 해설 카드: 해설지의 한 단과 같은 폭·글자 크기·수식 줄바꿈으로 해설 항목만 찍는다.
+  //   쪽 설정·빠른정답 표·'해설' 제목은 넣지 않는다. 아래 해설 묶음과 조판 설정이 같아야 한다.
+  if (options.explanationCardOnly === true) {
+    return [
+      `\\noindent\\begin{minipage}[t]{\\dimexpr(${pageWidth}-1.7em)/2\\relax}`,
+      '\\parindent=0pt\\parskip=0pt\\raggedright',
+      '\\setstretch{1.24}\\fontsize{10pt}{14pt}\\selectfont\\binoppenalty=700\\relpenalty=500',
+      qs.map((q) => explanationEntry(q)).join('\n'),
+      '\\end{minipage}',
+    ].join('\n');
+  }
+  const omitQuickAnswerTable = options.omitQuickAnswerTable === true;
   const page = [
     '\\clearpage',
     // 빠른정답·해설 묶음은 본문과 별도 부록이므로 첫 장부터 1쪽으로 다시 센다.
@@ -12174,6 +12422,22 @@ function renderQuickAnswerTableLatex(questions, options = {}) {
     '\\raggedbottom',
     '\\raggedright',
   ];
+  if (omitQuickAnswerTable) {
+    if (!includeExplanation) return '';
+    return [
+      ...page,
+      '\\setlength{\\columnsep}{1.7em}',
+      '\\setlength{\\columnseprule}{0pt}',
+      '\\begin{multicols*}{2}',
+      explanationHeading,
+      '\\begingroup',
+      '\\parindent=0pt\\parskip=0pt\\raggedright',
+      '\\setstretch{1.24}\\fontsize{10pt}{14pt}\\selectfont\\binoppenalty=700\\relpenalty=500',
+      qs.map((q) => explanationEntry(q)).join('\n'),
+      '\\endgroup',
+      '\\end{multicols*}',
+    ].join('\n');
+  }
   if (!includeExplanation) {
     return [
       ...page,
@@ -12682,6 +12946,8 @@ export function buildDocumentTexSource(questions, options = {}) {
     questionScoreByQuestionId = null,
     includeQuickAnswer = false,
     includeExplanation = false,
+    explanationCardOnly = false,
+    omitQuestionBody = false,
     // 제목 페이지 인덱스(1-based). 기본은 [1] 이 아니라 빈 배열 → 호출부에서 정함.
     titlePageIndices = [],
     // 제목 페이지별 타이틀/부제 override. [{ page, title, subtitle }, ...]
@@ -12753,6 +13019,47 @@ export function buildDocumentTexSource(questions, options = {}) {
   }
   parts.push('\\raggedright');
   parts.push('\\lineskiplimit=0.4em\\lineskip=1.2em\n');
+
+  // 검수용 해설 카드: 문항 본문 없이 해설지와 같은 조판의 해설 항목만 찍는다.
+  if (explanationCardOnly === true) {
+    parts.push(renderQuickAnswerTableLatex(Array.isArray(questions) ? questions : [], {
+      includeExplanation: true,
+      explanationCardOnly: true,
+    }));
+    parts.push('\\end{document}\n');
+    return parts.join('\n');
+  }
+
+  const appendQuickAnswerAppendix = (list) => {
+    if (!(includeQuickAnswer || includeExplanation) || !Array.isArray(list) || list.length === 0) {
+      return;
+    }
+    const rawQaTop = coverPageTexts && typeof coverPageTexts === 'object'
+      ? coverPageTexts.quickAnswerTopText
+      : undefined;
+    const defaultQaTop = String(
+      (coverPageTexts && (coverPageTexts.coverExamTitle || coverPageTexts.headerExamTitle))
+      || titlePageTopText
+      || '',
+    ).trim();
+    const quickAnswerTopText = rawQaTop !== undefined
+      ? String(rawQaTop || '').trim()
+      : defaultQaTop;
+    parts.push(renderQuickAnswerTableLatex(list, {
+      includeExplanation,
+      omitQuickAnswerTable: !includeQuickAnswer,
+      quickAnswerTopText,
+      showAssignmentFooter: isAssignmentProfile && logoEnabled,
+      academyName,
+      assignmentName: titlePageTopText,
+    }));
+  };
+
+  if (omitQuestionBody === true) {
+    appendQuickAnswerAppendix(Array.isArray(questions) ? questions : []);
+    parts.push('\\end{document}\n');
+    return parts.join('\n');
+  }
 
   const qList = Array.isArray(questions) ? questions : [];
   const visualQList = buildVisualQuestionList(qList, {
@@ -13813,27 +14120,8 @@ export function buildDocumentTexSource(questions, options = {}) {
     }
   }
 
-  // 빠른정답은 본문 뒤에 A4 왼쪽 단으로 붙인다. 쪽 나눔은 함수 안에서 한다.
-  if (includeQuickAnswer && qList.length > 0) {
-    const rawQaTop = coverPageTexts && typeof coverPageTexts === 'object'
-      ? coverPageTexts.quickAnswerTopText
-      : undefined;
-    const defaultQaTop = String(
-      (coverPageTexts && (coverPageTexts.coverExamTitle || coverPageTexts.headerExamTitle))
-      || titlePageTopText
-      || '',
-    ).trim();
-    const quickAnswerTopText = rawQaTop !== undefined
-      ? String(rawQaTop || '').trim()
-      : defaultQaTop;
-    parts.push(renderQuickAnswerTableLatex(qList, {
-      includeExplanation,
-      quickAnswerTopText,
-      showAssignmentFooter: isAssignmentProfile && logoEnabled,
-      academyName,
-      assignmentName: titlePageTopText,
-    }));
-  }
+  // 빠른정답·해설은 본문 뒤에 기존 부록 양식으로 붙인다. 쪽 나눔은 함수 안에서 한다.
+  appendQuickAnswerAppendix(qList);
 
   parts.push('\\end{document}\n');
   if (effectiveLayoutMeta && !Array.isArray(effectiveLayoutMeta.columnLabelAnchors)) {

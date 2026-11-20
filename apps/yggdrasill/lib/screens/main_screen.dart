@@ -2976,23 +2976,23 @@ class _MainScreenState extends State<MainScreen>
           shrinkWrap: true,
           preferredWidth: 560,
           onClose: () => Navigator.of(dialogContext).pop(),
-          child: StatefulBuilder(
-            builder: (context, setDialogState) {
+              child: StatefulBuilder(
+                builder: (context, setDialogState) {
               return SizedBox(
-                height: listHeight,
-                child: dialogEntries.isEmpty
+                        height: listHeight,
+                        child: dialogEntries.isEmpty
                     ? Center(
-                        child: Text(
-                          '하원한 학생이 아직 없어요.',
-                          style: TextStyle(
+                                child: Text(
+                                  '하원한 학생이 아직 없어요.',
+                                  style: TextStyle(
                             color: dlg.textSub,
                             fontSize: 14,
                             fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      )
+                                  ),
+                                ),
+                              )
                     : ListView.separated(
-                        itemCount: dialogEntries.length,
+                                  itemCount: dialogEntries.length,
                         separatorBuilder: (_, __) => const SizedBox(
                           height: BottomDialogMetrics.actionGap,
                         ),
@@ -3294,9 +3294,9 @@ class _MainScreenState extends State<MainScreen>
                                       ),
                                     );
                                   },
-                        ),
-              );
-            },
+                                ),
+                  );
+                },
           ),
         );
       },
@@ -3593,58 +3593,58 @@ class _MainScreenState extends State<MainScreen>
                             child: child,
                           );
                         },
-                      ),
-                      AnimatedBuilder(
-                        animation: _sideSheetAnimation,
-                        builder: (context, child) {
-                          final progress = _sideSheetAnimation.value;
+          ),
+          AnimatedBuilder(
+            animation: _sideSheetAnimation,
+            builder: (context, child) {
+              final progress = _sideSheetAnimation.value;
 
                           final bool isComplete = _rotationAnimation.status ==
                                   AnimationStatus.completed &&
-                              progress >= 1.0;
-                          if (isComplete != _sideSheetWasComplete) {
-                            _sideSheetWasComplete = isComplete;
-                          }
-                          // 카드 리스트를 한 줄로 묶어서 ... 처리할 수 있도록 helper
-                          Widget _ellipsisWrap(
-                            List<Widget> cards, {
-                            int maxLines = 2,
-                            double spacing = 8,
-                            double runSpacing = 8,
-                          }) {
-                            // 한 줄에 최대 3개 카드만 보이게 제한 (예시)
-                            const int maxPerLine = 3;
-                            List<Widget> lines = [];
-                            int i = 0;
+                      progress >= 1.0;
+              if (isComplete != _sideSheetWasComplete) {
+                _sideSheetWasComplete = isComplete;
+              }
+              // 카드 리스트를 한 줄로 묶어서 ... 처리할 수 있도록 helper
+              Widget _ellipsisWrap(
+                List<Widget> cards, {
+                int maxLines = 2,
+                double spacing = 8,
+                double runSpacing = 8,
+              }) {
+                // 한 줄에 최대 3개 카드만 보이게 제한 (예시)
+                const int maxPerLine = 3;
+                List<Widget> lines = [];
+                int i = 0;
                             while (
                                 i < cards.length && lines.length < maxLines) {
-                              int end = (i + maxPerLine < cards.length)
-                                  ? i + maxPerLine
-                                  : cards.length;
-                              lines.add(
-                                Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: cards.sublist(i, end),
-                                ),
-                              );
-                              i = end;
-                            }
-                            if (i < cards.length) {
-                              lines.add(
-                                const Text(
-                                  '...',
+                  int end = (i + maxPerLine < cards.length)
+                      ? i + maxPerLine
+                      : cards.length;
+                  lines.add(
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: cards.sublist(i, end),
+                    ),
+                  );
+                  i = end;
+                }
+                if (i < cards.length) {
+                  lines.add(
+                    const Text(
+                      '...',
                                   style: TextStyle(
                                       color: Colors.white54, fontSize: 18),
-                                ),
-                              );
-                            }
-                            return Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: lines,
-                            );
-                          }
+                    ),
+                  );
+                }
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: lines,
+                );
+              }
 
-                          final screenWidth = MediaQuery.of(context).size.width;
+              final screenWidth = MediaQuery.of(context).size.width;
                           final maxWidth =
                               _resolveSideSheetMaxWidth(screenWidth);
                           // 바깥에서 보이는 실제 너비(애니메이션). 콘텐츠는 항상 maxWidth로
@@ -3664,19 +3664,19 @@ class _MainScreenState extends State<MainScreen>
 
                           if (_sideSheetDebug &&
                               isComplete != _sideSheetWasComplete) {
-                            debugPrint(
+                  debugPrint(
                               '[SIDE][sheet] complete=$isComplete progress=${progress.toStringAsFixed(3)} status=${_rotationAnimation.status} clip=${clipWidth.toStringAsFixed(1)}',
-                            );
-                          }
-                          _sideSheetWasComplete = isComplete;
+                  );
+                }
+                _sideSheetWasComplete = isComplete;
 
                           if (clipWidth <= 0.5) {
-                            return _wrapSideSheetDragHoverTarget(
+                return _wrapSideSheetDragHoverTarget(
                               child: SizedBox(width: 0, key: _sideSheetKey),
-                            );
-                          }
+                );
+              }
 
-                          return _wrapSideSheetDragHoverTarget(
+              return _wrapSideSheetDragHoverTarget(
                             child: SizedBox(
                               key: _sideSheetKey,
                               width: clipWidth,
@@ -3693,22 +3693,22 @@ class _MainScreenState extends State<MainScreen>
                                           List<AttendanceRecord>>(
                                         valueListenable: DataManager
                                             .instance.attendanceRecordsNotifier,
-                                        builder: (context, _records, _) {
-                                          if (_sideSheetDataDirty) {
-                                            if (_sideSheetDebug) {
-                                              debugPrint(
-                                                '[SIDE][recompute-start] recordsLen=${_records.length}',
-                                              );
-                                            }
-                                            _recomputeSideSheetCache(_records);
-                                            if (_sideSheetDebug) {
-                                              debugPrint(
-                                                '[SIDE][recompute] waiting=${_cachedWaiting.length}, attended=${_cachedAttended.length}, leaved=${_cachedLeaved.length}',
-                                              );
-                                            }
-                                          }
-                                          final attended = _cachedAttended;
-                                          final leaved = _cachedLeaved;
+                  builder: (context, _records, _) {
+                    if (_sideSheetDataDirty) {
+                      if (_sideSheetDebug) {
+                        debugPrint(
+                          '[SIDE][recompute-start] recordsLen=${_records.length}',
+                        );
+                      }
+                      _recomputeSideSheetCache(_records);
+                      if (_sideSheetDebug) {
+                        debugPrint(
+                          '[SIDE][recompute] waiting=${_cachedWaiting.length}, attended=${_cachedAttended.length}, leaved=${_cachedLeaved.length}',
+                        );
+                      }
+                    }
+                    final attended = _cachedAttended;
+                    final leaved = _cachedLeaved;
                                           final arrivalBySet =
                                               _arrivalBySetCache;
                                           final departureBySet =
@@ -3718,10 +3718,10 @@ class _MainScreenState extends State<MainScreen>
 
                                           return ValueListenableBuilder<
                                               List<ConsultTrialLessonSlot>>(
-                                            valueListenable:
+                      valueListenable:
                                                 ConsultTrialLessonService
                                                     .instance.slotsNotifier,
-                                            builder: (context, trialSlots, _) {
+                      builder: (context, trialSlots, _) {
                                               final targetDate = _dateOnly(
                                                   _sideSheetAnchorDate);
 
@@ -3729,41 +3729,41 @@ class _MainScreenState extends State<MainScreen>
                                                   trialSlots.where((s) {
                                                 final wk =
                                                     _dateOnly(s.weekStart);
-                                                final slotDate = _dateOnly(
+                          final slotDate = _dateOnly(
                                                   wk.add(Duration(
                                                       days: s.dayIndex)),
-                                                );
-                                                return slotDate == targetDate;
-                                              }).toList();
+                          );
+                          return slotDate == targetDate;
+                        }).toList();
 
-                                              final trialAttended = trialToday
-                                                  .where(
-                                                    (s) =>
-                                                        s.arrivalTime != null &&
-                                                        s.departureTime == null,
-                                                  )
-                                                  .toList()
-                                                ..sort((a, b) {
+                        final trialAttended = trialToday
+                            .where(
+                              (s) =>
+                                  s.arrivalTime != null &&
+                                  s.departureTime == null,
+                            )
+                            .toList()
+                          ..sort((a, b) {
                                                   final ta =
                                                       a.hour * 60 + a.minute;
                                                   final tb =
                                                       b.hour * 60 + b.minute;
-                                                  final t = ta.compareTo(tb);
-                                                  if (t != 0) return t;
+                            final t = ta.compareTo(tb);
+                            if (t != 0) return t;
                                                   return a.title
                                                       .compareTo(b.title);
-                                                });
-                                              final trialWaiting = trialToday
+                          });
+                        final trialWaiting = trialToday
                                                   .where((s) =>
                                                       s.arrivalTime == null)
-                                                  .toList()
-                                                ..sort((a, b) {
+                            .toList()
+                          ..sort((a, b) {
                                                   final ta =
                                                       a.hour * 60 + a.minute;
                                                   final tb =
                                                       b.hour * 60 + b.minute;
-                                                  final t = ta.compareTo(tb);
-                                                  if (t != 0) return t;
+                            final t = ta.compareTo(tb);
+                            if (t != 0) return t;
                                                   return a.title
                                                       .compareTo(b.title);
                                                 });
@@ -3773,19 +3773,19 @@ class _MainScreenState extends State<MainScreen>
                                                       DateTime,
                                                       List<
                                                           ConsultTrialLessonSlot>>();
-                                              for (final s in trialWaiting) {
-                                                final k = DateTime(
-                                                  targetDate.year,
-                                                  targetDate.month,
-                                                  targetDate.day,
-                                                  s.hour,
-                                                  s.minute,
-                                                );
+                        for (final s in trialWaiting) {
+                          final k = DateTime(
+                            targetDate.year,
+                            targetDate.month,
+                            targetDate.day,
+                            s.hour,
+                            s.minute,
+                          );
                                                 (trialWaitingByTime[k] ??=
                                                         <ConsultTrialLessonSlot>[])
-                                                    .add(s);
-                                              }
-                                              final double sideSheetScale =
+                              .add(s);
+                        }
+                        final double sideSheetScale =
                                                   _resolveSideSheetScale(
                                                       containerWidth);
                                               final bool attendedTwoLine =
@@ -3825,32 +3825,32 @@ class _MainScreenState extends State<MainScreen>
                                                   1.1 *
                                                   sideSheetScale *
                                                   _sideSheetActionButtonExtraScale;
-                                              final double actionButtonMinSize =
+                        final double actionButtonMinSize =
                                                   44.0 *
                                                       sideSheetScale *
                                                       _sideSheetActionButtonExtraScale;
 
                                               return Container(
-                                                width: containerWidth,
+                          width: containerWidth,
                                                 color: context.yggSurfaceBase,
-                                                child: Stack(
-                                                  fit: StackFit.expand,
-                                                  children: [
-                                                    Column(
-                                                      children: [
-                                                        Padding(
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              Column(
+                                children: [
+                                  Padding(
                                                           padding: EdgeInsets
                                                               .fromLTRB(
                                                             sideSheetPadLeft,
                                                             navSideSheetDateHeaderTopInset,
                                                             sideSheetPad,
                                                             12 * sideSheetScale,
-                                                          ),
-                                                          child: Column(
+                                    ),
+                                    child: Column(
                                                             mainAxisSize:
                                                                 MainAxisSize
                                                                     .min,
-                                                            children: [
+                                      children: [
                                                               SizedBox(
                                                                 height:
                                                                     navLeadingIconTapSize,
@@ -3858,7 +3858,7 @@ class _MainScreenState extends State<MainScreen>
                                                                   crossAxisAlignment:
                                                                       CrossAxisAlignment
                                                                           .center,
-                                                                  children: [
+                                          children: [
                                                                     Flexible(
                                                                       child:
                                                                           Padding(
@@ -3868,7 +3868,7 @@ class _MainScreenState extends State<MainScreen>
                                                                               _sideSheetDateHeaderLeftInset,
                                                                         ),
                                                                         child:
-                                                                            _SideSheetDateHeader(
+                                            _SideSheetDateHeader(
                                                                           date:
                                                                               _sideSheetAnchorDate,
                                                                           scale:
@@ -3907,25 +3907,25 @@ class _MainScreenState extends State<MainScreen>
                                                                 mainAxisAlignment:
                                                                     MainAxisAlignment
                                                                         .start,
-                                                                children: [
-                                                                  Tooltip(
-                                                                    message: _sideSheetBottomView ==
+                                              children: [
+                                                Tooltip(
+                                                  message: _sideSheetBottomView ==
                                                                             _SideSheetBottomView.allStudents
-                                                                        ? '출석 페이지 보기'
-                                                                        : '모든 학생 리스트 보기',
+                                                      ? '출석 페이지 보기'
+                                                      : '모든 학생 리스트 보기',
                                                                     child:
                                                                         IconButton(
                                                                       icon:
                                                                           Icon(
-                                                                        _sideSheetBottomView ==
+                                                      _sideSheetBottomView ==
                                                                                 _SideSheetBottomView.allStudents
-                                                                            ? Icons.groups
+                                                          ? Icons.groups
                                                                             : Icons.groups_outlined,
-                                                                        color: _sideSheetBottomView ==
+                                                      color: _sideSheetBottomView ==
                                                                                 _SideSheetBottomView.allStudents
-                                                                            ? const Color(
-                                                                                0xFF33A373,
-                                                                              )
+                                                          ? const Color(
+                                                              0xFF33A373,
+                                                            )
                                                                             : sideSheetPalette.labelUnselected,
                                                                         size:
                                                                             actionIconSize,
@@ -3935,20 +3935,20 @@ class _MainScreenState extends State<MainScreen>
                                                                               .zero,
                                                                       constraints:
                                                                           BoxConstraints(
-                                                                        minWidth:
-                                                                            actionButtonMinSize,
-                                                                        minHeight:
-                                                                            actionButtonMinSize,
-                                                                      ),
-                                                                      onPressed:
-                                                                          _toggleSideSheetBottomView,
-                                                                    ),
-                                                                  ),
-                                                                  SizedBox(
+                                                      minWidth:
+                                                          actionButtonMinSize,
+                                                      minHeight:
+                                                          actionButtonMinSize,
+                                                    ),
+                                                    onPressed:
+                                                        _toggleSideSheetBottomView,
+                                                  ),
+                                                ),
+                                                SizedBox(
                                                                     width: 10 *
                                                                         sideSheetScale,
-                                                                  ),
-                                                                  Tooltip(
+                                                ),
+                                                Tooltip(
                                                                     message:
                                                                         '보강 관리',
                                                                     child:
@@ -3967,20 +3967,20 @@ class _MainScreenState extends State<MainScreen>
                                                                               .zero,
                                                                       constraints:
                                                                           BoxConstraints(
-                                                                        minWidth:
-                                                                            actionButtonMinSize,
-                                                                        minHeight:
-                                                                            actionButtonMinSize,
-                                                                      ),
-                                                                      onPressed:
-                                                                          _showMakeupManagementDialog,
-                                                                    ),
-                                                                  ),
-                                                                  SizedBox(
+                                                      minWidth:
+                                                          actionButtonMinSize,
+                                                      minHeight:
+                                                          actionButtonMinSize,
+                                                    ),
+                                                    onPressed:
+                                                        _showMakeupManagementDialog,
+                                                  ),
+                                                ),
+                                                SizedBox(
                                                                     width: 10 *
                                                                         sideSheetScale,
-                                                                  ),
-                                                                  Tooltip(
+                                                ),
+                                                Tooltip(
                                                                     message:
                                                                         '수업 타임라인',
                                                                     child:
@@ -3999,24 +3999,24 @@ class _MainScreenState extends State<MainScreen>
                                                                               .zero,
                                                                       constraints:
                                                                           BoxConstraints(
-                                                                        minWidth:
-                                                                            actionButtonMinSize,
-                                                                        minHeight:
-                                                                            actionButtonMinSize,
-                                                                      ),
+                                                      minWidth:
+                                                          actionButtonMinSize,
+                                                      minHeight:
+                                                          actionButtonMinSize,
+                                                    ),
                                                                       onPressed:
                                                                           () async {
                                                                         await showClassContentEventsDialog(
                                                                           context,
-                                                                        );
-                                                                      },
-                                                                    ),
-                                                                  ),
-                                                                  SizedBox(
+                                                      );
+                                                    },
+                                                  ),
+                                                ),
+                                                SizedBox(
                                                                     width: 6 *
                                                                         sideSheetScale,
-                                                                  ),
-                                                                  Tooltip(
+                                                ),
+                                                Tooltip(
                                                                     message:
                                                                         '하원 리스트',
                                                                     child:
@@ -4035,37 +4035,37 @@ class _MainScreenState extends State<MainScreen>
                                                                               .zero,
                                                                       constraints:
                                                                           BoxConstraints(
-                                                                        minWidth:
-                                                                            actionButtonMinSize,
-                                                                        minHeight:
-                                                                            actionButtonMinSize,
-                                                                      ),
+                                                      minWidth:
+                                                          actionButtonMinSize,
+                                                      minHeight:
+                                                          actionButtonMinSize,
+                                                    ),
                                                                       onPressed:
                                                                           () async {
-                                                                        await _showLeavedStudentsDialog(
-                                                                          leaved,
-                                                                          arrivalBySet,
-                                                                          departureBySet,
-                                                                        );
-                                                                      },
-                                                                    ),
-                                                                  ),
-                                                                  SizedBox(
+                                                      await _showLeavedStudentsDialog(
+                                                        leaved,
+                                                        arrivalBySet,
+                                                        departureBySet,
+                                                      );
+                                                    },
+                                                  ),
+                                                ),
+                                                SizedBox(
                                                                     width: 10 *
                                                                         sideSheetScale,
-                                                                  ),
-                                                                  Tooltip(
-                                                                    message: _sideSheetBottomView ==
+                                                ),
+                                                Tooltip(
+                                                  message: _sideSheetBottomView ==
                                                                             _SideSheetBottomView.favoriteTemplates
-                                                                        ? '과제 닫기'
-                                                                        : '과제',
+                                                      ? '과제 닫기'
+                                                      : '과제',
                                                                     child:
                                                                         IconButton(
                                                                       icon:
                                                                           Icon(
                                                                         Icons
                                                                             .star_rounded,
-                                                                        color: _sideSheetBottomView ==
+                                                      color: _sideSheetBottomView ==
                                                                                 _SideSheetBottomView.favoriteTemplates
                                                                             ? const Color(0xFF33A373)
                                                                             : sideSheetPalette.labelUnselected,
@@ -4077,21 +4077,21 @@ class _MainScreenState extends State<MainScreen>
                                                                               .zero,
                                                                       constraints:
                                                                           BoxConstraints(
-                                                                        minWidth:
-                                                                            actionButtonMinSize,
-                                                                        minHeight:
-                                                                            actionButtonMinSize,
-                                                                      ),
-                                                                      onPressed:
-                                                                          _toggleFavoriteTemplatesSideSheetView,
-                                                                    ),
-                                                                  ),
-                                                                ],
-                                                              ),
-                                                            ],
-                                                          ),
-                                                        ),
-                                                        if (_sideSheetBottomView ==
+                                                      minWidth:
+                                                          actionButtonMinSize,
+                                                      minHeight:
+                                                          actionButtonMinSize,
+                                                    ),
+                                                    onPressed:
+                                                        _toggleFavoriteTemplatesSideSheetView,
+                                                  ),
+                                                ),
+                                              ],
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  if (_sideSheetBottomView ==
                                                             _SideSheetBottomView
                                                                 .waiting) ...[
                                                           SizedBox(
@@ -4100,8 +4100,8 @@ class _MainScreenState extends State<MainScreen>
                                                                         12) *
                                                                     sideSheetScale,
                                                           ),
-                                                          // 출석 박스
-                                                          Padding(
+                                    // 출석 박스
+                                    Padding(
                                                             padding:
                                                                 EdgeInsets.only(
                                                               left:
@@ -4147,49 +4147,49 @@ class _MainScreenState extends State<MainScreen>
                                                                       mainAxisSize:
                                                                           MainAxisSize
                                                                               .min,
-                                                                      crossAxisAlignment:
+                                              crossAxisAlignment:
                                                                           CrossAxisAlignment
                                                                               .start,
-                                                                      children: [
-                                                                        if (attended.isEmpty &&
-                                                                            trialAttended.isEmpty)
+                                              children: [
+                                                if (attended.isEmpty &&
+                                                    trialAttended.isEmpty)
                                                                           SizedBox(
                                                                             height:
                                                                                 attendedRowSlotHeight,
                                                                             child:
                                                                                 Center(
-                                                                              child: Padding(
+                                                    child: Padding(
                                                                                 padding: const EdgeInsets.only(
-                                                                                  left: 14.0,
-                                                                                ),
-                                                                                child: Text(
-                                                                                  '출석',
-                                                                                  style: TextStyle(
+                                                        left: 14.0,
+                                                      ),
+                                                      child: Text(
+                                                        '출석',
+                                                        style: TextStyle(
                                                                                     color: FabTabBarTokens.paletteFor(
                                                                                       Theme.of(context).brightness,
                                                                                     ).labelUnselected,
                                                                                     fontSize: 22 * sideSheetScale,
                                                                                     fontWeight: FontWeight.bold,
                                                                                   ),
-                                                                                ),
-                                                                              ),
-                                                                            ),
-                                                                          ),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
                                                                         if (attended
                                                                             .isNotEmpty)
-                                                                          Column(
-                                                                            crossAxisAlignment:
+                                                  Column(
+                                                    crossAxisAlignment:
                                                                                 CrossAxisAlignment.start,
-                                                                            children: [
+                                                    children: [
                                                                               for (int i = 0; i < attended.length; i++) ...[
                                                                                 SizedBox(
                                                                                   height: attendedRowSlotHeight,
                                                                                   child: _buildAttendanceCard(
-                                                                                    attended[i],
-                                                                                    status: 'attended',
-                                                                                    key: ValueKey(
-                                                                                      'attended_${attended[i].setId}',
-                                                                                    ),
+                                                          attended[i],
+                                                          status: 'attended',
+                                                          key: ValueKey(
+                                                            'attended_${attended[i].setId}',
+                                                          ),
                                                                                     scale: sideSheetScale,
                                                                                     attendedTwoLine: attendedTwoLine,
                                                                                     arrival: arrivalBySet[attended[i].setId],
@@ -4197,54 +4197,54 @@ class _MainScreenState extends State<MainScreen>
                                                                                   ),
                                                                                 ),
                                                                                 if (i != attended.length - 1)
-                                                                                  SizedBox(
+                                                          SizedBox(
                                                                                     height: _sideSheetAttendedCardSpacing * sideSheetScale,
-                                                                                  ),
-                                                                              ],
-                                                                            ],
-                                                                          ),
-                                                                        if (trialAttended
-                                                                            .isNotEmpty) ...[
+                                                          ),
+                                                      ],
+                                                    ],
+                                                  ),
+                                                if (trialAttended
+                                                    .isNotEmpty) ...[
                                                                           if (attended
                                                                               .isNotEmpty)
                                                                             SizedBox(
                                                                               height: _sideSheetAttendedCardSpacing * sideSheetScale,
                                                                             ),
-                                                                          for (int i = 0;
-                                                                              i < trialAttended.length;
-                                                                              i++) ...[
+                                                  for (int i = 0;
+                                                      i < trialAttended.length;
+                                                      i++) ...[
                                                                             SizedBox(
                                                                               height: attendedRowSlotHeight,
                                                                               child: _buildTrialLessonAttendanceCard(
-                                                                                trialAttended[i],
-                                                                                status: 'attended',
-                                                                                key: ValueKey(
-                                                                                  'trial_attended_${trialAttended[i].id}',
-                                                                                ),
+                                                      trialAttended[i],
+                                                      status: 'attended',
+                                                      key: ValueKey(
+                                                        'trial_attended_${trialAttended[i].id}',
+                                                      ),
                                                                                 scale: sideSheetScale,
                                                                               ),
-                                                                            ),
-                                                                            if (i !=
+                                                    ),
+                                                    if (i !=
                                                                                 trialAttended.length - 1)
-                                                                              SizedBox(
+                                                      SizedBox(
                                                                                 height: _sideSheetAttendedCardSpacing * sideSheetScale,
-                                                                              ),
-                                                                          ],
-                                                                        ],
-                                                                      ],
+                                                      ),
+                                                  ],
+                                                ],
+                                              ],
                                                                     ),
-                                                                  ),
-                                                                ),
-                                                              ),
-                                                            ),
-                                                          ),
-                                                          // 출석 전 학생 리스트
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    // 출석 전 학생 리스트
                                                           if (waitingByTime
                                                                   .isNotEmpty ||
                                                               trialWaitingByTime
                                                                   .isNotEmpty)
-                                                            Expanded(
-                                                              child: Padding(
+                                      Expanded(
+                                        child: Padding(
                                                                 padding:
                                                                     EdgeInsets
                                                                         .only(
@@ -4274,20 +4274,20 @@ class _MainScreenState extends State<MainScreen>
                                                                     padding:
                                                                         EdgeInsets
                                                                             .zero,
-                                                                    children: [
-                                                                      for (final t in (<DateTime>{
+                                              children: [
+                                                for (final t in (<DateTime>{
                                                                         ...waitingByTime
                                                                             .keys,
                                                                         ...trialWaitingByTime
                                                                             .keys,
-                                                                      }.toList()
-                                                                        ..sort(
+                                                }.toList()
+                                                  ..sort(
                                                                           (a, b) =>
                                                                               a.compareTo(b),
-                                                                        ))) ...[
-                                                                        Padding(
-                                                                          padding:
-                                                                              const EdgeInsets.only(
+                                                  ))) ...[
+                                                  Padding(
+                                                    padding:
+                                                        const EdgeInsets.only(
                                                                             bottom:
                                                                                 12.0,
                                                                           ),
@@ -4295,92 +4295,92 @@ class _MainScreenState extends State<MainScreen>
                                                                               Center(
                                                                             child:
                                                                                 Text(
-                                                                              _formatTime(t),
+                                                        _formatTime(t),
                                                                               style: TextStyle(
                                                                                 color: sideSheetPalette.labelUnselected,
                                                                                 fontSize: 14 * sideSheetScale,
                                                                                 fontWeight: FontWeight.bold,
-                                                                              ),
-                                                                            ),
-                                                                          ),
-                                                                        ),
-                                                                        Center(
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                  Center(
                                                                           child:
                                                                               Wrap(
-                                                                            alignment:
-                                                                                WrapAlignment.center,
+                                                      alignment:
+                                                          WrapAlignment.center,
                                                                             spacing:
                                                                                 _sideSheetWaitingCardSpacing * sideSheetScale,
                                                                             runSpacing:
                                                                                 _sideSheetWaitingCardSpacing * sideSheetScale,
-                                                                            children: [
+                                                      children: [
                                                                               for (final w in (waitingByTime[t] ?? const <_AttendanceTarget>[]))
-                                                                                _buildAttendanceCard(
-                                                                                  w,
-                                                                                  status: 'waiting',
-                                                                                  key: ValueKey(
-                                                                                    'waiting_${w.setId}',
-                                                                                  ),
+                                                          _buildAttendanceCard(
+                                                            w,
+                                                            status: 'waiting',
+                                                            key: ValueKey(
+                                                              'waiting_${w.setId}',
+                                                            ),
                                                                                   scale: sideSheetScale,
                                                                                   arrival: arrivalBySet[w.setId],
                                                                                   departure: departureBySet[w.setId],
                                                                                 ),
                                                                               for (final s in (trialWaitingByTime[t] ?? const <ConsultTrialLessonSlot>[]))
-                                                                                _buildTrialLessonAttendanceCard(
-                                                                                  s,
-                                                                                  status: 'waiting',
-                                                                                  key: ValueKey(
-                                                                                    'trial_waiting_${s.id}',
-                                                                                  ),
+                                                          _buildTrialLessonAttendanceCard(
+                                                            s,
+                                                            status: 'waiting',
+                                                            key: ValueKey(
+                                                              'trial_waiting_${s.id}',
+                                                            ),
                                                                                   scale: sideSheetScale,
-                                                                                ),
-                                                                            ],
-                                                                          ),
-                                                                        ),
+                                                          ),
+                                                      ],
+                                                    ),
+                                                  ),
                                                                         SizedBox(
                                                                           height:
                                                                               12 * sideSheetScale,
                                                                         ),
-                                                                      ],
-                                                                    ],
-                                                                  ),
-                                                                ),
-                                                              ),
-                                                            ),
-                                                        ],
-                                                        if (_sideSheetBottomView ==
+                                                ],
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                  ],
+                                  if (_sideSheetBottomView ==
                                                             _SideSheetBottomView
                                                                 .allStudents)
-                                                          _buildAllStudentsBottomPanel(
+                                    _buildAllStudentsBottomPanel(
                                                             containerWidth:
                                                                 containerWidth,
-                                                          ),
-                                                        if (_sideSheetBottomView ==
+                                    ),
+                                  if (_sideSheetBottomView ==
                                                             _SideSheetBottomView
                                                                 .favoriteTemplates)
-                                                          _buildFavoriteTemplatesBottomPanel(
+                                    _buildFavoriteTemplatesBottomPanel(
                                                             containerWidth:
                                                                 containerWidth,
-                                                          ),
-                                                      ],
-                                                    ),
-                                                    // 커버 생략
-                                                    // 하단 임시 A/B 버튼 제거됨
-                                                  ],
-                                                ),
-                                              );
-                                            },
-                                          );
-                                        },
+                                    ),
+                                ],
+                              ),
+                              // 커버 생략
+                              // 하단 임시 A/B 버튼 제거됨
+                            ],
+                          ),
+                        );
+                      },
+                    );
+                  },
                                       ),
                                     ),
                                   ),
                                 ),
                               ),
-                            ),
-                          );
-                        },
-                      ),
+                ),
+              );
+            },
+          ),
                     ],
                   ),
                 ),
@@ -4412,7 +4412,7 @@ class _MainScreenState extends State<MainScreen>
         builder: (context, hidden, _) => hidden
             ? const SizedBox.shrink()
             : MainFabAlternative(
-                showHomeBatchConfirmFab: _selectedIndex == 0,
+        showHomeBatchConfirmFab: _selectedIndex == 0,
               ),
       ),
     );
@@ -4713,7 +4713,7 @@ class _MainScreenState extends State<MainScreen>
               onConfirmDismiss: () async {
                 final existingAttendance =
                     DataManager.instance.getAttendanceRecord(
-                  t.student.id,
+                        t.student.id,
                   t.classDateTime,
                 );
                 final attendanceId = (existingAttendance?.id ?? '').trim();
@@ -4759,7 +4759,7 @@ class _MainScreenState extends State<MainScreen>
                   // 오늘→숙제 전환은 departure_time 트리거가 처리한다.
                   final savedAttendanceId = (DataManager.instance
                               .getAttendanceRecord(
-                                t.student.id,
+                      t.student.id,
                                 classDateTime,
                               )
                               ?.id ??
@@ -4869,12 +4869,12 @@ class _MainScreenState extends State<MainScreen>
                       ? leftConstraints.maxWidth
                       : leftConstraints.minWidth;
                   return ClipRect(
-                    child: GestureDetector(
-                      onTapDown: (details) {
-                        _lastTagTapPosition = details.globalPosition;
-                      },
-                      onTap: () => _handleAttendedCardTap(t),
-                      onLongPress: () async {
+              child: GestureDetector(
+                onTapDown: (details) {
+                  _lastTagTapPosition = details.globalPosition;
+                },
+                onTap: () => _handleAttendedCardTap(t),
+                onLongPress: () async {
                         if (!await _confirmRevertAttendedToWaiting(t)) {
                           return;
                         }
@@ -4994,9 +4994,9 @@ class _MainScreenState extends State<MainScreen>
       child: FabStyleHighlightPill(
         border: waitingAccentBorder,
         padding: _sideSheetWaitingCardPadding(scale),
-        child: cardChild,
-      ),
-    );
+          child: cardChild,
+        ),
+      );
   }
 
   Widget _buildTrialLessonAttendanceCard(
@@ -5035,42 +5035,42 @@ class _MainScreenState extends State<MainScreen>
               }
             },
             child: GestureDetector(
-              onTap: () {
-                // 하원 처리
-                unawaited(
-                  ConsultTrialLessonService.instance.setLeaved(
-                    slotId: s.id,
-                    leaved: true,
-                  ),
-                );
-              },
-              onSecondaryTap: () {
-                // 실수 취소: 등원/하원 기록 제거
-                unawaited(
-                  ConsultTrialLessonService.instance.setArrived(
-                    slotId: s.id,
-                    arrived: false,
-                  ),
-                );
-              },
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                margin: EdgeInsets.zero,
+            onTap: () {
+              // 하원 처리
+              unawaited(
+                ConsultTrialLessonService.instance.setLeaved(
+                  slotId: s.id,
+                  leaved: true,
+                ),
+              );
+            },
+            onSecondaryTap: () {
+              // 실수 취소: 등원/하원 기록 제거
+              unawaited(
+                ConsultTrialLessonService.instance.setArrived(
+                  slotId: s.id,
+                  arrived: false,
+                ),
+              );
+            },
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              margin: EdgeInsets.zero,
                 padding:
                     const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-                decoration: BoxDecoration(
-                  color: Colors.transparent,
-                  border: Border.all(color: trialGreen, width: 2),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
+              decoration: BoxDecoration(
+                color: Colors.transparent,
+                border: Border.all(color: trialGreen, width: 2),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
                     _sideSheetStudentNameText(
-                      s.title,
+                    s.title,
                       nameStyle,
-                    ),
-                  ],
+                  ),
+                ],
                 ),
               ),
             ),
@@ -5086,8 +5086,8 @@ class _MainScreenState extends State<MainScreen>
       onPressed: () async {
         _attendedExpandAnimateIds.add('trial_${s.id}');
         await ConsultTrialLessonService.instance.setArrived(
-          slotId: s.id,
-          arrived: true,
+            slotId: s.id,
+            arrived: true,
         );
       },
       child: FabStyleHighlightPill(
@@ -5166,12 +5166,12 @@ class _MainScreenState extends State<MainScreen>
             return ValueListenableBuilder<int>(
               valueListenable: HomeworkStore.instance.revision,
               builder: (context, _rev, _) {
-                return _buildHomeworkChipsScroller(
-                  t,
+                    return _buildHomeworkChipsScroller(
+                      t,
                   scale: scale,
                   attendedTwoLine: attendedTwoLine,
-                  hiddenItemIds: hiddenAssignedItemIds,
-                  groupTitleById: groupTitleById,
+                      hiddenItemIds: hiddenAssignedItemIds,
+                      groupTitleById: groupTitleById,
                 );
               },
             );
@@ -5259,8 +5259,8 @@ class _MainScreenState extends State<MainScreen>
 
     final label = titles.join(' · ');
     return <Widget>[
-      Builder(
-        builder: (context) {
+        Builder(
+          builder: (context) {
           final style = _sideSheetHomeworkChipTextStyle(context);
           final fontSize = _sideSheetHomeworkChipFontSize(scale);
           return Tooltip(
@@ -5480,7 +5480,7 @@ class _SideSheetDateHeader extends StatelessWidget {
           child: Text.rich(
             TextSpan(
               style: dateStyle,
-              children: [
+      children: [
                 TextSpan(text: '$month.$day '),
                 WidgetSpan(
                   alignment: PlaceholderAlignment.middle,

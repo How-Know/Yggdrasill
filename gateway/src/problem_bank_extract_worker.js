@@ -14,7 +14,7 @@ import {
   textbookOnlyNumbersFromJob,
 } from './problem_bank/textbook_only_numbers.js';
 import { normalizeProblemNumberKey } from './textbook/problem_number_key.js';
-import { syncMockExamPresetsForExam } from './mock_exam/mock_preset.js';
+import { mockReviewPending, syncMockExamPresetsForExam } from './mock_exam/mock_preset.js';
 import { syncMiddleSchoolPresetForDocument } from './problem_bank/naesin_preset.js';
 
 const htmlDecode = hePkg.decode;
@@ -5502,11 +5502,13 @@ async function processOneJob(job) {
     }
     return uid;
   };
+  // 검수에서 만든 모의고사 구간 문서는 구간을 확정할 때 공개한다. 그 전에 새로 만든 문항은 비공개로 둔다.
+  const publishNewQuestions = !mockReviewPending(doc?.meta);
   const consumePublishedByQuestionNumber = (rawQuestionNumber) => {
     const key = normalizeWhitespace(rawQuestionNumber || '');
-    if (!key) return true;
+    if (!key) return publishNewQuestions;
     const queue = existingPublishedQueueByNumber.get(key);
-    if (!Array.isArray(queue) || queue.length === 0) return true;
+    if (!Array.isArray(queue) || queue.length === 0) return publishNewQuestions;
     const published = queue.shift() !== false;
     if (queue.length === 0) {
       existingPublishedQueueByNumber.delete(key);

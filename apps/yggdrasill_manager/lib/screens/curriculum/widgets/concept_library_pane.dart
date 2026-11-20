@@ -665,7 +665,85 @@ class _ConceptDetailViewState extends State<ConceptDetailView> {
   }
 }
 
-/// 라이브러리 쪽 요약(기준을 크게 볼 때). 현재 선택한 개념과, 고른 기준에 실제로 이은 개념만 보인다.
+/// 지금 고른 개념. 흐름 옆 칸에서 선택한 단원보다 위에 둔다.
+class SelectedConceptSummary extends StatelessWidget {
+  const SelectedConceptSummary({super.key, required this.controller});
+
+  final ConceptLibraryController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) {
+        final concept = controller.selectedConcept;
+        final out = <Widget>[const ConceptSectionTitle('현재 선택한 개념')];
+        if (concept == null) {
+          out.add(const ConceptHint('흐름이나 라이브러리에서 개념을 누르면 여기에 요약이 보입니다.'));
+        } else {
+          final sel = controller.selectedCriterion;
+          final ids = controller.linkedCriteriaOf(concept.id);
+          String? linkLine;
+          if (sel != null && !controller.isLocal(sel.id) && ids != null) {
+            linkLine = ids.contains(sel.id) ? '고른 기준과 이어져 있음' : '고른 기준과 잇지 않음';
+          }
+          out.add(Material(
+            color: Colors.transparent,
+            child: InkWell(
+              key: const ValueKey('selected-concept-summary'),
+              onTap: () => controller.openConcept(concept),
+              borderRadius: BorderRadius.circular(8),
+              child: Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: kThinkAccent.withValues(alpha: 0.5)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(conceptDisplayName(concept),
+                        style: const TextStyle(color: kThinkText, fontSize: 14, fontWeight: FontWeight.w800)),
+                    const SizedBox(height: 6),
+                    conceptKindBadge(concept),
+                    const SizedBox(height: 6),
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 84),
+                      child: SingleChildScrollView(
+                        physics: const NeverScrollableScrollPhysics(),
+                        child: LatexTextRenderer(
+                          concept.content,
+                          dollarMath: true,
+                          style: const TextStyle(color: kThinkSub, fontSize: 12, height: 1.5),
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          blockVerticalPadding: 4,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        ConceptSourcesMark(controller: controller, concept: concept),
+                        if (linkLine != null) ConceptHint(linkLine),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ));
+        }
+        return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: out);
+      },
+    );
+  }
+}
+
+/// 라이브러리 쪽 요약(기준을 크게 볼 때). 고른 기준에 실제로 이은 개념만 보인다.
+/// 지금 고른 개념 요약은 흐름 옆 칸, 선택한 단원 위에 둔다.
 class LibrarySummaryPane extends StatefulWidget {
   const LibrarySummaryPane({super.key, required this.controller, required this.onOpenConcept});
 
@@ -708,8 +786,6 @@ class _LibrarySummaryPaneState extends State<LibrarySummaryPane> {
                   controller: _scroll,
                   padding: const EdgeInsets.all(14),
                   children: [
-                    ..._current(),
-                    const SizedBox(height: 18),
                     ..._forCriterion(),
                   ],
                 ),
@@ -719,69 +795,6 @@ class _LibrarySummaryPaneState extends State<LibrarySummaryPane> {
         ),
       ),
     );
-  }
-
-  List<Widget> _current() {
-    final concept = _c.selectedConcept;
-    final out = <Widget>[const ConceptSectionTitle('현재 선택한 개념')];
-    if (concept == null) {
-      out.add(const ConceptHint('라이브러리에서 개념을 누르면 여기에 요약이 보입니다.'));
-      return out;
-    }
-    final sel = _c.selectedCriterion;
-    final ids = _c.linkedCriteriaOf(concept.id);
-    String? linkLine;
-    if (sel != null && !_c.isLocal(sel.id) && ids != null) {
-      linkLine = ids.contains(sel.id) ? '고른 기준과 이어져 있음' : '고른 기준과 잇지 않음';
-    }
-    out.add(Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: () => _c.openConcept(concept),
-        borderRadius: BorderRadius.circular(8),
-        child: Container(
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: kThinkAccent.withValues(alpha: 0.5)),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(conceptDisplayName(concept),
-                  style: const TextStyle(color: kThinkText, fontSize: 14, fontWeight: FontWeight.w800)),
-              const SizedBox(height: 6),
-              conceptKindBadge(concept),
-              const SizedBox(height: 6),
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 84),
-                child: SingleChildScrollView(
-                  physics: const NeverScrollableScrollPhysics(),
-                  child: LatexTextRenderer(
-                    concept.content,
-                    dollarMath: true,
-                    style: const TextStyle(color: kThinkSub, fontSize: 12, height: 1.5),
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    blockVerticalPadding: 4,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 6,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  ConceptSourcesMark(controller: _c, concept: concept),
-                  if (linkLine != null) ConceptHint(linkLine),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    ));
-    return out;
   }
 
   List<Widget> _forCriterion() {

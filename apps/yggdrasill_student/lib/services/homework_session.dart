@@ -50,6 +50,13 @@ class HomeworkSession extends ChangeNotifier with WidgetsBindingObserver {
   /// 상단 계획 % 갱신용. 채점·목록 refresh 때 증가한다.
   final ValueNotifier<int> planProgressTick = ValueNotifier<int>(0);
 
+  /// 교재 목록·문항 답안·시즌 변경 시 증가한다 (교재 탭 및 풀이 화면 실시간 동기화용).
+  final ValueNotifier<int> textbookSyncTick = ValueNotifier<int>(0);
+
+  void notifyTextbookSync() {
+    textbookSyncTick.value = textbookSyncTick.value + 1;
+  }
+
   /// 과제 채점/통과로 완료율이 바뀌었을 때 호출.
   void notifyPlanProgress() {
     planProgressTick.value = planProgressTick.value + 1;
@@ -327,6 +334,9 @@ class HomeworkSession extends ChangeNotifier with WidgetsBindingObserver {
       final channel = Supabase.instance.client.channel(channelName);
 
       void onChange(PostgresChangePayload _) => _scheduleReload();
+      void onTextbookOnlyChange(PostgresChangePayload _) {
+        notifyTextbookSync();
+      }
 
       channel
         ..onPostgresChanges(
@@ -334,7 +344,10 @@ class HomeworkSession extends ChangeNotifier with WidgetsBindingObserver {
           schema: 'public',
           table: 'homework_items',
           filter: filter,
-          callback: onChange,
+          callback: (payload) {
+            onChange(payload);
+            notifyTextbookSync();
+          },
         )
         ..onPostgresChanges(
           event: PostgresChangeEvent.all,
@@ -356,6 +369,20 @@ class HomeworkSession extends ChangeNotifier with WidgetsBindingObserver {
           table: 'homework_group_runtime',
           filter: filter,
           callback: onChange,
+        )
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'student_textbook_answer_records',
+          filter: filter,
+          callback: onTextbookOnlyChange,
+        )
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'student_textbook_seasons',
+          filter: filter,
+          callback: onTextbookOnlyChange,
         );
       channel.subscribe();
       _rt = channel;
@@ -450,8 +477,9 @@ class HomeworkSession extends ChangeNotifier with WidgetsBindingObserver {
       }
       syncFromGroups(groups, covers: covers);
       _pollCursorUtc = DateTime.now().toUtc();
-      // 목록뿐 아니라 계획 진행률(권장×완료율)도 같이 갱신 신호를 보낸다.
+      // 목록뿐 아니라 계획 진행률(권장×완료율)과 교재 탭 진행률도 같이 갱신 신호를 보낸다.
       notifyPlanProgress();
+      notifyTextbookSync();
     } catch (_) {
       // best-effort
     } finally {

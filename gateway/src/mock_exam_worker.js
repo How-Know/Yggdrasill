@@ -20,6 +20,7 @@ import { PDFDocument } from 'pdf-lib';
 import { callGeminiImageJson } from './mock_exam/gemini_image.js';
 import {
   ELECTIVES,
+  SECTIONS,
   SECTION_LABELS,
   assignProblemItems,
   assignSolutionSections,
@@ -226,16 +227,26 @@ async function savePageCount(paper, buffer) {
   return count;
 }
 
-async function stageCrops(exam, papers) {
+// only: 뽑을 구간(Set). 주면 그 구간의 문제지만 읽고 다른 구간의 문항 영역은 건드리지 않는다.
+async function stageCrops(exam, papers, { only = null } = {}) {
   const problems = sortPapers(papers, 'problem');
   if (problems.length === 0) throw new Error('mock_problem_paper_missing');
   const rows = [];
   let commonLastPage = 0;
+  if (only && !only.has('common')) {
+    // 공통이 끝나는 쪽은 이미 뽑아 둔 공통 문항에서 읽는다.
+    for (const row of (await loadItems(exam.id)).values()) {
+      if (row.section === 'common' && row.paper_id === problems[0].id) {
+        commonLastPage = Math.max(commonLastPage, Number(row.raw_page) || 0);
+      }
+    }
+  }
   for (let i = 0; i < problems.length; i += 1) {
     const paper = problems[i];
+    const takeCommon = i === 0 && (!only || only.has('common'));
+    if (only && !takeCommon && !only.has(paper.elective)) continue;
     const buffer = await downloadPaper(paper);
     const pageCount = await savePageCount(paper, buffer);
-    const takeCommon = i === 0;
     const pages = [];
     for (let p = 1; p <= pageCount; p += 1) {
       if (!takeCommon && p <= commonLastPage) continue;
@@ -264,6 +275,7 @@ async function stageCrops(exam, papers) {
         .reduce((max, item) => Math.max(max, item.page), 0);
     }
     for (const item of items) {
+      if (only && !only.has(item.section)) continue;
       rows.push({
         academy_id: exam.academy_id,
         exam_id: exam.id,
@@ -279,7 +291,8 @@ async function stageCrops(exam, papers) {
   return rows.length;
 }
 
-async function stageSolutions(exam, papers, { replaceVlm = false } = {}) {
+// only: 뽑을 구간(Set). 주면 그 구간의 정답·해설 위치만 쓰고 다른 구간의 값은 건드리지 않는다.
+async function stageSolutions(exam, papers, { replaceVlm = false, only = null } = {}) {
   const solutions = sortPapers(papers, 'solution');
   if (solutions.length === 0) return { answers: 0, solutions: 0 };
   const existing = await loadItems(exam.id);
@@ -288,6 +301,9 @@ async function stageSolutions(exam, papers, { replaceVlm = false } = {}) {
   const readBySha = new Map();
   for (let i = 0; i < solutions.length; i += 1) {
     const paper = solutions[i];
+    // 공통 해설은 첫 해설지에서 받는다. 선택과목만 뽑을 때는 그 과목 해설지만 본다.
+    const fromFirstPage = i === 0 && (!only || only.has('common'));
+    if (only && !fromFirstPage && !only.has(paper.elective)) continue;
     const shaKey = compact(paper.sha256);
     let read = shaKey ? readBySha.get(shaKey) : null;
     if (!read) {
@@ -296,10 +312,12 @@ async function stageSolutions(exam, papers, { replaceVlm = false } = {}) {
       const texts = await withTempPdf(buffer, (pdfPath) => pageTexts(pdfPath));
       // 공통 해설은 첫 해설지에서 받는다. 나머지는 선택과목 머리가 있는 쪽부터 본다.
       let startPage = 1;
-      if (i > 0 && paper.elective) {
+      if (!fromFirstPage && paper.elective) {
         startPage = electiveStartPageFromText(texts, paper.elective) || 1;
       }
       const pages = [];
+      // 선택과목만 뽑을 때는 1쪽의 빠른 정답 상자도 읽는다(그 과목 정답이 거기에만 있는 해설지가 있다).
+      if (only && startPage > 1) pages.push(1);
       for (let p = startPage; p <= pageCount; p += 1) pages.push(p);
       await setProgress(exam, 'solutions', {
         solutions: { paper: paper.elective || 'common', done: i, total: solutions.length },
@@ -363,6 +381,7 @@ async function stageSolutions(exam, papers, { replaceVlm = false } = {}) {
   }
   for (const key of keys) {
     const [section, numberText] = key.split('|');
+    if (only && !only.has(section)) continue;
     const number = Number(numberText);
     const prev = existing.get(key);
     const row = {
@@ -558,7 +577,8 @@ async function ensureSectionDocument(exam, section, sectionItems, papersById) {
   return { documentId, jobId: job.id };
 }
 
-async function stageProblemBank(exam, papers, { requeue }) {
+// only: 뽑을 구간(Set). 주면 그 구간만 문제은행 추출을 걸고 다른 구간의 문항은 그대로 둔다.
+async function stageProblemBank(exam, papers, { requeue, only = null }) {
   const items = await loadItems(exam.id);
   const papersById = new Map(papers.map((p) => [p.id, p]));
   const { data: links } = await supa
@@ -572,7 +592,8 @@ async function stageProblemBank(exam, papers, { requeue }) {
     if (sectionItems.length === 0) continue;
     const prev = linked.get(section);
     // 해설만 다시 읽을 때는 검수 중인 문제은행 문항을 다시 뽑지 않는다.
-    if (!requeue && compact(prev?.pb_document_id)) {
+    const keep = only ? !only.has(section) : !requeue;
+    if (keep && compact(prev?.pb_document_id)) {
       out[section] = { documentId: prev.pb_document_id, jobId: prev.extract_job_id };
       continue;
     }
@@ -589,19 +610,31 @@ export async function processExam(exam) {
     .eq('exam_id', exam.id);
   if (error) throw new Error(`mock_papers_fetch_failed:${error.message}`);
   const request = compact(exam.progress?.request) || 'all';
-  exam.progress = { request, started_at: new Date().toISOString() };
-  if (request === 'all' || request === 'crops') {
-    const cropCount = await stageCrops(exam, papers || []);
+  // 'sections': 아직 뽑지 않은 구간만 뽑는다(검수 시작이 건다). 이미 뽑은 구간의 문항·정답·해설 위치는 그대로다.
+  const only =
+    request === 'sections'
+      ? new Set((exam.progress?.sections || []).map(compact).filter((s) => SECTIONS.includes(s)))
+      : null;
+  if (only && only.size === 0) throw new Error('mock_sections_request_empty');
+  exam.progress = {
+    request,
+    ...(only ? { sections: [...only] } : {}),
+    started_at: new Date().toISOString(),
+  };
+  if (request === 'all' || request === 'crops' || only) {
+    const cropCount = await stageCrops(exam, papers || [], { only });
     await setProgress(exam, 'crops', { crop_count: cropCount });
   }
-  if (request === 'all' || request === 'solutions') {
+  if (request === 'all' || request === 'solutions' || only) {
     const counts = await stageSolutions(exam, papers || [], {
       replaceVlm: request === 'solutions',
+      only,
     });
     await setProgress(exam, 'solutions', { answer_count: counts.answers, solution_count: counts.solutions });
   }
   const { items, sections } = await stageProblemBank(exam, papers || [], {
     requeue: request === 'all' || request === 'crops' || request === 'problem_bank',
+    only,
   });
   let presetSync = { synced: 0 };
   try {

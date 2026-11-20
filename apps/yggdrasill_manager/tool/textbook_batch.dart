@@ -40,6 +40,18 @@
 //   pb_figure_width 문제은행의 그림 1 폭(em)을 바로 고친다(문제은행 화면의 그림 크기 편집과 같다, 확정을 거치지 않는다)
 //   pb_choice_rows  문제은행의 그림 선지 줄 수(2: ①②③/④⑤, 3: ①②/③④/⑤)를 바로 고친다(문제은행 화면의 선지 배치와 같다)
 //   reconfirm    모든 카드가 준비됨인 소단원을 다시 확정(수정안 일괄 반영)
+// 모의고사(교재 메뉴 > 모의고사). BATCH_VALUE=회차 id(쉼표 구분)
+//   mock         매니저앱의 "검수 시작"과 같은 서비스·실행기로 회차의 구간들을 돌린다: 구간 문서·작업 지시 →
+//                (아직 뽑지 않았으면) 추출 → 문항·정답·해설 위치 준비 → AI 검수 → 준비됨 판정. 멈췄거나 실패한 구간은
+//                그 단계부터 잇는다. 확정은 하지 않는다. 끝나면 mock_status 와 같은 표를 남긴다
+//   mock_continue 확정하지 않은 구간을 AI 검수 단계부터 다시 돌린다(엔진·데이터를 고친 뒤: 손볼 문항만 다시 검수한다)
+//   mock_restart 확정하지 않은 구간을 처음부터 다시 검수한다: AI 가 쌓은 반영 대기 값을 버리고(사람이 고친 값은 둔다)
+//                준비 단계부터 모든 문항을 다시 풀고 해설을 다시 옮긴다. 추출은 다시 하지 않는다
+//                mock_continue·mock_restart 는 BATCH_ONLY=구간(common,probstats,calculus,geometry 쉼표 구분)으로 구간을 고를 수 있다
+//   mock_status  회차의 구간별 준비됨 수와 막힌 이유, 반영 대기 값(쓰기 없음). BATCH_VALUE 가 없으면 검수 중인 모든 회차.
+//                준비됨이 아닌 문항은 막힌 이유와 카드 오류·렌더·문항·정답·해설 오류 지적을 한 줄씩 찍는다
+//   mock_unstage BATCH_CROPS 문항의 AI 반영 대기 값(BATCH_VALUE=필드 쉼표 구분, 예: solution_transcribed)을 버린다.
+//                사람이 고친 값은 그대로다. 저장된 값(해설 전사 단계가 옮긴 해설 등)이 다시 쓰인다
 //   logout       세션 폐기
 // 결과는 build/textbook_batch/ 에 JSON 으로 남는다.
 // ignore_for_file: avoid_print
@@ -54,6 +66,7 @@ import 'package:path_provider_platform_interface/path_provider_platform_interfac
 import 'package:path_provider_windows/path_provider_windows.dart';
 import 'package:pdfrx/pdfrx.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:yggdrasill_manager/services/mock_exam_review_service.dart';
 import 'package:yggdrasill_manager/services/problem_bank_service.dart';
 import 'package:yggdrasill_manager/services/textbook_book_registry.dart';
 import 'package:yggdrasill_manager/services/textbook_problem_review_service.dart';
@@ -61,6 +74,7 @@ import 'package:yggdrasill_manager/services/textbook_review_pipeline.dart';
 import 'package:yggdrasill_manager/services/textbook_review_solution_image_service.dart';
 import 'package:yggdrasill_manager/services/textbook_stage_batch_service.dart';
 import 'package:yggdrasill_manager/services/textbook_vlm_solution_ref_service.dart';
+import 'package:yggdrasill_manager/services/textbook_workflow_runner.dart';
 import 'package:yggdrasill_manager/services/textbook_workflow_service.dart';
 
 const _step = String.fromEnvironment('BATCH_STEP');
@@ -78,8 +92,10 @@ String get _valueText {
 }
 
 const _academyId = '3ff51b8d-3cfb-4a36-a1a1-b63aebbde677';
-const _bookId = '09d8c890-a69f-4814-b57d-e16b0bf88432';
-const _grades = ['1-1', '1-2'];
+// 다른 교재·시험지는 BATCH_BOOK(교재 id)과 BATCH_GRADES(학년 쉼표 구분)로 고른다.
+const _bookId = String.fromEnvironment('BATCH_BOOK', defaultValue: '09d8c890-a69f-4814-b57d-e16b0bf88432');
+const _gradesText = String.fromEnvironment('BATCH_GRADES', defaultValue: '1-1,1-2');
+final _grades = [for (final g in _gradesText.split(',')) if (g.trim().isNotEmpty) g.trim()];
 
 void main() {
   test('textbook batch $_step', () async {
@@ -183,9 +199,24 @@ class _Batch {
   final Map<String, dynamic> out = {};
 
   Future<void> run(String step) async {
-    final mids = await _loadMids();
-    print('대상: 중단원 ${mids.length}개 · 확정한 소단원 ${mids.fold<int>(0, (n, m) => n + m.workflows.length)}개');
+    // fig_only 는 작업 지시가 없는 교재에도 쓰므로 중단원을 BATCH_ONLY 에서 직접 받는다. 모의고사 단계는 회차 id 로 고른다.
+    final mids = step == 'fig_only' || step.startsWith('mock') ? <_Mid>[] : await _loadMids();
+    if (!step.startsWith('mock')) {
+      print('대상: 중단원 ${mids.length}개 · 확정한 소단원 ${mids.fold<int>(0, (n, m) => n + m.workflows.length)}개');
+    }
     switch (step) {
+      case 'mock':
+        await _mock(run: true);
+      case 'mock_continue':
+        await _mock(run: true, again: 'continue');
+      case 'mock_restart':
+        await _mock(run: true, again: 'restart');
+      case 'mock_status':
+        await _mock(run: false);
+      case 'mock_unstage':
+        await _mockUnstage();
+      case 'fig_only':
+        await _figOnly();
       case 'status':
         await _status(mids);
       case 'preview':
@@ -232,6 +263,34 @@ class _Batch {
         await _pbFigureWidth(mids);
       case 'fig_drop':
         await _figDrop(mids);
+      case 'fig_upload':
+        await _figUpload(mids);
+      case 'meta_force':
+        // BATCH_CROPS 문항 하나의 개념·사고를 이미 골랐어도 다시 고른다(개념 후보 규칙을 고친 뒤). 사람이 고친 값은 그대로다.
+        // BATCH_VALUE=empty 면 범위에서 개념 연결이 빈 문항을 모두 고른다.
+        final results = <Map<String, dynamic>>[];
+        if (_valueText.trim() == 'empty') {
+          for (final mid in mids) {
+            await _load(mid);
+            final scoped = mid.targetIds;
+            final ids = [
+              for (final x in mid.all)
+                if (scoped.contains(x.cropId) && x.concepts.isEmpty && x.conceptProposals.isEmpty) x.cropId,
+            ];
+            for (var i = 0; i < ids.length; i += 8) {
+              final chunk = ids.sublist(i, (i + 8).clamp(0, ids.length));
+              final res = await review.runMetaChunk(mid.scope, cropIds: chunk, forceRerun: true);
+              print('${mid.key} 개념 빈 ${chunk.length}문항 메타 다시 고름: ${jsonEncode(res)}');
+              results.add({'mid': mid.key, 'crop_ids': chunk, 'result': res});
+            }
+          }
+        } else {
+          final (mid, it) = await _one(mids);
+          final res = await review.runMetaChunk(mid.scope, cropIds: [it.cropId], forceRerun: true);
+          print('${mid.key} p.${it.displayPage} ${it.problemNumber}번 메타 다시 고름: ${jsonEncode(res)}');
+          results.add({'mid': mid.key, 'crop_ids': [it.cropId], 'result': res});
+        }
+        out['meta_force'] = results;
       case 'sol_correct':
         await _solCorrect(mids);
       case 'note':
@@ -340,6 +399,228 @@ class _Batch {
     }
     print('합계 준비됨 $ready/$total'
         '${blockers.isEmpty ? '' : ' · ${[for (final e in blockers.entries) '${e.key} ${e.value}'].join(', ')}'}');
+  }
+
+  /// 모의고사 회차(BATCH_VALUE)의 구간 검수를 매니저앱과 같은 서비스·실행기로 돌리고([run]), 구간별 상태를 남긴다.
+  /// 확정은 하지 않는다.
+  ///
+  /// [again] 'continue' 면 확정하지 않은 구간을 AI 검수 단계부터 다시 돌리고(손볼 문항만), 'restart' 면 AI 가 쌓은
+  /// 반영 대기 값을 버린 뒤 준비 단계부터 모든 문항을 다시 검수한다. 둘 다 추출은 다시 하지 않는다.
+  Future<void> _mock({required bool run, String again = ''}) async {
+    final examIds = {for (final x in _valueText.split(',')) if (x.trim().isNotEmpty) x.trim()};
+    if (examIds.isEmpty && run) fail('BATCH_VALUE 에 모의고사 회차 id 를 넣으세요(쉼표 구분).');
+    final runner = TextbookWorkflowRunner.withClient(db);
+    final service = MockExamReviewService(client: db, problemBank: pb, workflows: workflows, runner: runner);
+    String clock() => DateTime.now().toIso8601String().substring(11, 19);
+    // 다시 돌릴 구간(BATCH_ONLY=common,geometry). 비우면 확정하지 않은 구간 모두.
+    final onlySections = {for (final k in _only.split(',')) if (k.trim().isNotEmpty) k.trim()};
+    if (run) {
+      _usePdfium();
+      for (final id in examIds) {
+        final res = await service.startReview(academyId: _academyId, examId: id);
+        print('[${clock()}] ${res.title}: 새로 시작한 구간 ${res.started}개'
+            '${res.extractionRequested ? ' · 회차 추출 요청' : ''}');
+      }
+      for (final exam in await service.fetchExams(_academyId)) {
+        if (!examIds.contains(exam.id)) continue;
+        for (final s in exam.sections) {
+          final stage = s.stage;
+          final order = s.workflow?.workOrder;
+          if (again.isNotEmpty && order != null && stage != MockExamReviewStage.confirmed) {
+            if (onlySections.isNotEmpty && !onlySections.contains(s.section)) continue;
+            if (runner.isActive(order.workflowKey)) continue;
+            if (again == 'restart') {
+              // AI 가 쌓은 반영 대기 값을 버린다(사람이 고친 값은 RPC 가 건드리지 않는다).
+              var cleared = 0;
+              final items = [for (final it in await review.fetchUnitItems(order.reviewScope)) if (order.matches(it)) it];
+              for (final it in items) {
+                final keys = [for (final f in it.stagedFields) if (!it.stagedByOwner(f)) f];
+                if (keys.isEmpty) continue;
+                await review.stageChanges(cropId: it.cropId, patch: {for (final k in keys) k: null}, note: '검수 다시 시작');
+                cleared += 1;
+              }
+              runner.enqueue(order, fromPhase: TextbookWorkflowPhase.extract, forceRerun: true, forceRenderCheck: true);
+              print('[${clock()}] ${exam.title} ${s.label}: 처음부터 다시 검수(AI 반영 대기 값 $cleared문항 버림)');
+            } else {
+              runner.enqueue(order, fromPhase: TextbookWorkflowPhase.review);
+              print('[${clock()}] ${exam.title} ${s.label}: AI 검수 단계부터 다시');
+            }
+            continue;
+          }
+          // 멈췄거나 실패한 구간은 그 단계부터 잇는다(앱의 "이어서 진행").
+          final stalled = stage == MockExamReviewStage.running ||
+              stage == MockExamReviewStage.failed ||
+              stage == MockExamReviewStage.stopped;
+          if (stalled && service.retry(s)) {
+            print('[${clock()}] ${exam.title} ${s.label}: '
+                '${TextbookWorkflowPhase.label(s.workflow?.pipelinePhase ?? '')} 단계부터 이어서');
+          }
+        }
+      }
+      // 실행기가 끝날 때까지 기다린다. 진행 글은 단계가 바뀔 때와 2분마다 한 번만 찍는다.
+      final phases = <String, String>{};
+      final printed = <String, DateTime>{};
+      while (runner.activeCount > 0) {
+        final now = DateTime.now();
+        for (final s in runner.states) {
+          final last = printed[s.key];
+          final quiet = !s.active || s.phase == TextbookWorkflowPhase.queued;
+          if (phases[s.key] == s.phase && (quiet || (last != null && now.difference(last) < const Duration(minutes: 2)))) {
+            continue;
+          }
+          phases[s.key] = s.phase;
+          printed[s.key] = now;
+          print('[${clock()}] ${s.order.label}: ${TextbookWorkflowPhase.label(s.phase)} · ${s.detail}');
+        }
+        await Future<void>.delayed(const Duration(seconds: 5));
+      }
+      out['runs'] = [
+        for (final s in runner.states)
+          {
+            'label': s.order.label,
+            'document_id': s.order.bookId,
+            'phase': s.phase,
+            'detail': s.detail,
+            'prepare': s.matchDetail,
+            'error': s.error,
+            'notes': s.notes,
+            'seconds': s.startedAt == null || s.finishedAt == null
+                ? null
+                : s.finishedAt!.difference(s.startedAt!).inSeconds,
+          },
+      ];
+      for (final s in runner.states) {
+        print('[${clock()}] ${s.order.label}: ${TextbookWorkflowPhase.label(s.phase)} · ${s.summaryText}'
+            '${s.matchDetail.isEmpty ? '' : ' · 준비: ${s.matchDetail}'}'
+            '${s.error.isEmpty ? '' : '\n  오류: ${s.error}'}');
+        for (final n in s.notes) {
+          print('  $n');
+        }
+      }
+    }
+
+    final rows = <Map<String, dynamic>>[];
+    final sections = <Map<String, dynamic>>[];
+    String short(Object? v, [int max = 220]) {
+      final s = '${v ?? ''}'.replaceAll(RegExp(r'\s+'), ' ').trim();
+      return s.length > max ? '${s.substring(0, max)}…' : s;
+    }
+
+    for (final exam in await service.fetchExams(_academyId)) {
+      // 회차를 고르지 않았으면 검수를 시작한 회차를 모두 본다.
+      if (examIds.isEmpty ? exam.workflows.isEmpty : !examIds.contains(exam.id)) continue;
+      print('${exam.title} (회차 상태 ${exam.exam.status})');
+      for (final s in exam.sections) {
+        final wf = s.workflow;
+        final order = wf?.workOrder;
+        if (order == null) {
+          print('  ${s.label}: 검수 전');
+          continue;
+        }
+        final items = [for (final it in await review.fetchUnitItems(order.reviewScope)) if (order.matches(it)) it];
+        final ok = items.where((x) => x.isWorkflowReady).length;
+        final counts = _blockerCounts(items);
+        final error = (wf?.pipelineError ?? '').trim();
+        print('  ${s.label} [${s.stage.name}${s.publishOnConfirm ? ' · 확정 때 공개' : ''}] 준비됨 $ok/${items.length}'
+            '${counts.isEmpty ? '' : ' · ${[for (final e in counts.entries) '${e.key} ${e.value}'].join(', ')}'}'
+            '${error.isEmpty ? '' : '\n    오류: $error'}');
+        sections.add({
+          'exam': exam.title,
+          'section': s.section,
+          'document_id': s.documentId,
+          'stage': s.stage.name,
+          'publish_on_confirm': s.publishOnConfirm,
+          'ready': ok,
+          'total': items.length,
+          'blockers': counts,
+          'pipeline_detail': wf?.pipelineDetail,
+          'pipeline_error': error,
+        });
+        for (final it in items) {
+          final rc = it.renderChecks;
+          final qc = it.qualityChecks;
+          // 준비됨이 아닌 문항: 막힌 이유와 지적·카드 오류를 한 줄로 찍는다(고칠 문항과 이유를 바로 찾게).
+          if (!it.isWorkflowReady) {
+            final why = [
+              if (it.solutionCardError.isNotEmpty) '해설 카드 오류: ${short(it.solutionCardError, 300)}',
+              if ('${rc['issue_title'] ?? ''}'.trim().isNotEmpty)
+                '렌더: ${short(rc['issue_title'], 80)}${'${rc['issue_detail'] ?? ''}'.trim().isEmpty ? '' : ' — ${short(rc['issue_detail'])}'}',
+              if ('${qc['issue_title'] ?? ''}'.trim().isNotEmpty && !it.stage2Superseded)
+                '문항: ${short(qc['issue_title'], 80)}${'${qc['issue_detail'] ?? ''}'.trim().isEmpty ? '' : ' — ${short(qc['issue_detail'])}'}',
+              if (it.mathStatus == 'issue' && (it.mismatchReason ?? '').trim().isNotEmpty) '정답: ${short(it.mismatchReason)}',
+              if (it.isEngineHeld && (it.engineHoldNote ?? '').trim().isNotEmpty) '보류: ${short(it.engineHoldNote)}',
+              if (it.openSolutionLogicFinding != null)
+                '해설 오류${it.solutionLogicFix.isEmpty ? '' : '(교정본 있음)'}: ${short(it.openSolutionLogicFinding!['detail'])}',
+              for (final f in it.openCorrectionNotes) '교정 의견: ${short(f['detail'])}',
+            ];
+            print('    - ${it.problemNumber}번 [${it.readyBlockers.join(' / ')}]${why.isEmpty ? '' : ' ${why.join(' | ')}'}');
+          }
+          rows.add({
+            'exam': exam.title,
+            'section': s.section,
+            'number': it.problemNumber,
+            'page': it.displayPage,
+            'crop_id': it.cropId,
+            'ready': it.isWorkflowReady,
+            'blockers': it.readyBlockers,
+            'staged': it.stagedFields,
+            'figure_size_ratio': rc['figure_size_ratio'],
+            for (final k in const ['problem_ok', 'answer_ok', 'solution_ok', 'fidelity_ok', 'figure_position_ok'])
+              if (rc[k] == false) k: false,
+            'issue_kind': rc['issue_kind'],
+            'issue_title': rc['issue_title'],
+            'issue_detail': rc['issue_detail'],
+            'engine_symptom': rc['engine_symptom'],
+            if (it.solutionCardError.isNotEmpty) 'answer_solution_error': it.solutionCardError,
+            'quality_status': it.qualityStatus,
+            'math_status': it.mathStatus,
+            if ('${qc['issue_title'] ?? ''}'.trim().isNotEmpty) 'quality_issue': '${qc['issue_title']}: ${qc['issue_detail'] ?? ''}',
+            if ((it.mismatchReason ?? '').trim().isNotEmpty) 'mismatch_reason': it.mismatchReason,
+            if (it.openSolutionLogicFinding != null) ...{
+              'solution_logic': '${it.openSolutionLogicFinding!['detail'] ?? ''}',
+              'solution_logic_fix': it.solutionLogicFix.isNotEmpty,
+            },
+            if (it.openCorrectionNotes.isNotEmpty)
+              'correction_notes': [for (final f in it.openCorrectionNotes) '${f['detail'] ?? ''}'],
+            'solution_kind': it.primarySolutionKind,
+          });
+        }
+      }
+    }
+    out['sections'] = sections;
+    out['items'] = rows;
+  }
+
+  /// BATCH_CROPS 문항의 AI 반영 대기 값 가운데 BATCH_VALUE 의 필드만 버린다(사람이 고친 값은 그대로).
+  /// 버리면 저장된 값(해설 전사 단계가 옮긴 해설 등)이 다시 쓰인다. 그 뒤 mock_continue 로 카드를 다시 대조한다.
+  Future<void> _mockUnstage() async {
+    final crops = {for (final c in _crops.split(',')) if (c.trim().isNotEmpty) c.trim()};
+    final fields = {for (final f in _valueText.split(',')) if (f.trim().isNotEmpty) f.trim()};
+    if (crops.isEmpty || fields.isEmpty) fail('BATCH_CROPS(크롭 id)와 BATCH_VALUE(필드)를 주세요.');
+    final service = MockExamReviewService(
+      client: db,
+      problemBank: pb,
+      workflows: workflows,
+      runner: TextbookWorkflowRunner.withClient(db),
+    );
+    final rows = <Map<String, dynamic>>[];
+    for (final exam in await service.fetchExams(_academyId)) {
+      for (final s in exam.sections) {
+        final order = s.workflow?.workOrder;
+        if (order == null) continue;
+        for (final it in await review.fetchUnitItems(order.reviewScope)) {
+          if (!crops.contains(it.cropId)) continue;
+          final keys = [for (final f in it.stagedFields) if (fields.contains(f) && !it.stagedByOwner(f)) f];
+          if (keys.isNotEmpty) {
+            await review.stageChanges(cropId: it.cropId, patch: {for (final k in keys) k: null}, note: 'AI 반영 대기 값 버림');
+          }
+          print('${exam.title} ${s.label} ${it.problemNumber}번: ${keys.isEmpty ? '버릴 값 없음' : '${keys.join(', ')} 버림'}');
+          rows.add({'exam': exam.title, 'section': s.section, 'number': it.problemNumber, 'crop_id': it.cropId, 'cleared': keys});
+        }
+      }
+    }
+    if (rows.length != crops.length) print('찾지 못한 문항 ${crops.length - rows.length}개');
+    out['items'] = rows;
   }
 
   Future<void> _consistency(List<_Mid> mids, {required bool dryRun}) async {
@@ -525,6 +806,277 @@ class _Batch {
       }
       out[mid.key] = {'errors': pipeline.errors};
     }
+    out['items'] = rows;
+  }
+
+  /// 그림만 검수(시험용). 본문에 그림이 있는 문항만 골라 원본 대조 수정 단계의 그림 배치 제안만 반영 대기에 넣고,
+  /// 문항 카드만 원본과 대조한다(정답·해설 카드는 보내지 않는다). 글자 수정안과 그림 다시 자르기 제안은 쓰지 않는다.
+  /// 작업 지시 없이 `BATCH_ONLY=학년/대-중` 하나를 직접 받는다. `BATCH_VALUE=숫자` 면 앞에서 그 수만큼만,
+  /// `BATCH_CROPS` 가 있으면 그 문항만 한다. 문제은행은 바꾸지 않는다.
+  Future<void> _figOnly() async {
+    _usePdfium();
+    // 한글·공백이 든 학년 이름은 명령줄에서 깨질 수 있어 `@경로`(UTF-8 파일)로도 받는다.
+    final key = _only.trim().startsWith('@')
+        ? File(_only.trim().substring(1)).readAsStringSync().replaceAll('\uFEFF', '').trim()
+        : _only.trim();
+    final m = RegExp(r'^(.+)/(\d+)-(\d+)$').firstMatch(key);
+    if (m == null) fail('BATCH_ONLY 에 학년/대-중 하나를 주세요 (예: 2-2/3-0).');
+    final scope = TextbookReviewUnitScope(
+      academyId: _academyId,
+      bookId: _bookId,
+      bookName: '',
+      gradeLabel: m.group(1)!,
+      bigOrder: int.parse(m.group(2)!),
+      midOrder: int.parse(m.group(3)!),
+      bigName: '',
+      midName: '',
+      problemCount: 0,
+      analyzedCount: 0,
+      mathCleanCount: 0,
+      mathIssueCount: 0,
+      mathApprovedCount: 0,
+      qualityCleanCount: 0,
+      qualityIssueCount: 0,
+      qualityApprovedCount: 0,
+    );
+    final mid = _Mid(key, scope, const []);
+    final picked = {for (final c in _crops.split(',')) if (c.trim().isNotEmpty) c.trim()};
+    final limit = int.tryParse(_valueText) ?? 0;
+
+    var all = await review.fetchUnitItems(scope);
+    var targets = [
+      for (final it in all)
+        if (it.hasFigures && it.canRenderOriginal && it.previewLookupKey.isNotEmpty && (picked.isEmpty || picked.contains(it.cropId)))
+          it,
+    ];
+    // BATCH_SUB=B 처럼 단계(sub_key)를 주면 그 단계 문항만 한다.
+    const sub = String.fromEnvironment('BATCH_SUB');
+    if (sub.isNotEmpty) targets = [for (final it in targets) if (it.subKey == sub) it];
+    if (limit > 0 && targets.length > limit) targets = targets.sublist(0, limit);
+    bool passed(TextbookProblemReviewItem it) =>
+        it.originalCompared &&
+        it.renderChecks['figure_position_ok'] != false &&
+        !it.figureNeedsResize &&
+        it.renderChecks['problem_ok'] != false;
+
+    // BATCH_VALUE=apply: 대조를 통과한 문항의 반영 대기 그림 배치·그림 자산만 문제은행에 쓴다(승인 처리 없음, AI 호출 없음).
+    // 세트 공통 그림 배치는 이 경로로 쓸 수 없어 남긴다.
+    if (_valueText == 'apply') {
+      final rows = <Map<String, dynamic>>[];
+      var applied = 0;
+      for (final it in targets) {
+        final st = it.stagedChanges;
+        final layout = st['figure_layout'] is Map ? Map<String, dynamic>.from(st['figure_layout'] as Map) : null;
+        final assets = st['figure_assets'] is List
+            ? [for (final a in st['figure_assets'] as List) if (a is Map) Map<String, dynamic>.from(a)]
+            : null;
+        final common = st['common_figure_layout'] != null;
+        if (layout == null && assets == null && !common) continue;
+        var state = '';
+        if (!passed(it)) {
+          state = '확인 필요라 남김';
+        } else if (layout == null && assets == null) {
+          state = '세트 공통 그림 배치라 남김';
+        } else {
+          try {
+            final res = await review.applyProblemFix(
+              cropId: it.cropId,
+              figureLayout: layout,
+              figureAssets: assets,
+              note: '그림만 검수 반영',
+            );
+            await review.stageChanges(
+              cropId: it.cropId,
+              patch: {if (layout != null) 'figure_layout': null, if (assets != null) 'figure_assets': null},
+              note: '그림만 검수 반영',
+            );
+            applied += 1;
+            state = '반영 ${(res['changed'] as List?)?.join(',') ?? ''}${common ? ' (공통 그림 배치는 남김)' : ''}';
+          } catch (e) {
+            state = '실패: $e';
+          }
+        }
+        print('$key ${it.subKey} p.${it.displayPage} ${it.problemNumber}번: $state');
+        rows.add({'number': it.problemNumber, 'crop_id': it.cropId, 'sub_key': it.subKey, 'state': state});
+      }
+      print('$key: 문제은행 반영 $applied문항 / 반영 대기 그림이 있던 ${rows.length}문항');
+      out[key] = {'applied': applied};
+      out['items'] = rows;
+      return;
+    }
+    // BATCH_VALUE=recrop: 수정안을 다시 만들지 않고, 이미 나온 그림 다시 자르기 제안만 반영 대기에 넣고 다시 대조한다.
+    // BATCH_VALUE=view: 지금 카드와 원본을 build/textbook_batch/figonly 에 저장만 한다(AI 호출 없음).
+    final recrop = _valueText == 'recrop';
+    if (recrop) targets = [for (final it in targets) if (it.proposedFigureCrops.isNotEmpty) it];
+    final ids = {for (final it in targets) it.cropId};
+    print('$key: 전체 ${all.length}문항 · 그림 문항 대상 ${targets.length}');
+    if (targets.isEmpty) return;
+    List<TextbookProblemReviewItem> pick() => [for (final it in all) if (ids.contains(it.cropId)) it];
+    final errors = <String>[];
+
+    final urls = await review.fetchEnginePreviewUrls(academyId: _academyId, items: targets);
+    final noCard = [for (final it in targets) if ((urls[it.cropId] ?? '').isEmpty) '${it.problemNumber}번'];
+    if (noCard.isNotEmpty) errors.add('문항 카드를 찍지 못함: ${noCard.join(', ')}');
+
+    if (_valueText == 'view') {
+      final dir = Directory(p.join('build', 'textbook_batch', 'figonly'))..createSync(recursive: true);
+      for (final it in targets) {
+        final url = urls[it.cropId] ?? '';
+        if (url.isNotEmpty) {
+          final res = await HttpClient().getUrl(Uri.parse(url)).then((r) => r.close());
+          if (res.statusCode == 200) {
+            await File(p.join(dir.path, '${it.problemNumber}_v2.png'))
+                .writeAsBytes([for (final chunk in await res.toList()) ...chunk]);
+          }
+        }
+        final orig = await review.originalImage(scope, it);
+        if (orig != null) await File(p.join(dir.path, '${it.problemNumber}_original.png')).writeAsBytes(orig.bytes);
+      }
+      print('저장: ${dir.absolute.path} (${targets.length}문항)');
+      return;
+    }
+
+    // 검수 기록 행이 없으면 수정안·대조 결과가 저장되지 않는다. 빈 반영 대기 호출로 행을 만든다.
+    if (!recrop) {
+      for (final it in targets) {
+        await review.stageChanges(cropId: it.cropId);
+      }
+    }
+
+    // 1) 원본 대조 수정안(해설 이미지는 보내지 않는다)
+    var fixed = 0;
+    for (var i = 0; !recrop && i < targets.length; i += 6) {
+      final pair = [
+        for (var j = i; j < i + 6 && j < targets.length; j += 3) targets.sublist(j, (j + 3).clamp(0, targets.length)),
+      ];
+      final counts = await Future.wait([
+        for (final chunk in pair)
+          () async {
+            try {
+              final images = await review.prepareChunkImages(
+                scope: scope,
+                items: chunk,
+                previewUrlsByCropId: urls,
+                includeSolution: false,
+                allItems: all,
+              );
+              final ok = [
+                for (final it in chunk)
+                  if (images[it.cropId]?.original != null) it.cropId,
+              ];
+              for (final it in chunk) {
+                if (!ok.contains(it.cropId)) errors.add('${it.problemNumber}번: 본문 PDF 원본을 찍지 못함');
+              }
+              if (ok.isEmpty) return 0;
+              final res = await review.runFixPass(scope, cropIds: ok, images: {for (final id in ok) id: images[id]!});
+              return (res['processed'] as num?)?.toInt() ?? 0;
+            } catch (e) {
+              errors.add('${chunk.map((x) => x.problemNumber).join(',')}번 원본 대조: $e');
+              return 0;
+            }
+          }(),
+      ]);
+      fixed += counts.fold<int>(0, (s, c) => s + c);
+      print('  $key 수정안 ${(i + 6).clamp(0, targets.length)}/${targets.length}');
+    }
+
+    // 2) 그림 배치 제안만 반영 대기에 넣는다
+    all = await review.fetchUnitItems(scope);
+    var staged = 0;
+    final recropProposed = <String>[];
+    final textProposed = <String>[];
+    for (final it in pick()) {
+      if (it.proposedFigureCrops.isNotEmpty) recropProposed.add('${it.problemNumber}번');
+      if (it.hasPendingFixProposal) textProposed.add('${it.problemNumber}번');
+      if (recrop) {
+        try {
+          final changed = await review.stageProblemFix(
+            scope: scope,
+            item: it,
+            figureCrops: it.proposedFigureCrops,
+            note: '그림만 검수: 그림 다시 자르기',
+          );
+          if (changed.isNotEmpty) staged += 1;
+        } catch (e) {
+          errors.add('${it.problemNumber}번 그림 다시 자르기: $e');
+        }
+        continue;
+      }
+      final layout = it.proposedFigureLayout;
+      if (layout == null || !it.hasPendingFigureProposal) continue;
+      try {
+        final changed = await review.stageProblemFix(scope: scope, item: it, figureLayout: layout, note: '그림만 검수');
+        if (changed.isNotEmpty) staged += 1;
+      } catch (e) {
+        errors.add('${it.problemNumber}번 그림 배치: $e');
+      }
+    }
+    print('  $key 수정안 $fixed문항 · 그림 배치 반영 대기 $staged문항');
+
+    // 3) 문항 카드만 원본과 대조, 크기가 어긋나면 잰 비율로 고쳐 한 번 더
+    all = await review.fetchUnitItems(scope);
+    var checked = await review.recheckProblemCards(
+      scope: scope,
+      items: pick(),
+      onProgress: (d, t) => print('  $key 원본 대조 $d/$t'),
+    );
+    all = await review.fetchUnitItems(scope);
+    final sized = (await review.resizeFiguresFromMeasuredRatio(pick())).toSet();
+    if (sized.isNotEmpty) {
+      all = await review.fetchUnitItems(scope);
+      checked += await review.recheckProblemCards(
+        scope: scope,
+        items: [for (final it in all) if (sized.contains(it.cropId)) it],
+        onProgress: (d, t) => print('  $key 크기 고친 뒤 다시 대조 $d/$t'),
+      );
+      all = await review.fetchUnitItems(scope);
+    }
+
+    final rows = <Map<String, dynamic>>[];
+    var pass = 0;
+    for (final it in pick()) {
+      final rc = it.renderChecks;
+      final ok = it.originalCompared && rc['figure_position_ok'] != false && !it.figureNeedsResize && rc['problem_ok'] != false;
+      if (ok) pass += 1;
+      print('$key p.${it.displayPage} ${it.problemNumber}번: ${ok ? '통과' : '확인 필요'}'
+          '${rc['figure_size_ratio'] == null ? '' : ' · 그림 크기 ${rc['figure_size_ratio']}배'}'
+          '${rc['figure_position_ok'] == false ? ' · 위치 다름' : ''}'
+          '${sized.contains(it.cropId) ? ' · 크기 고침' : ''}'
+          '${rc['issue_title'] == null ? '' : ' · ${rc['issue_title']}'}');
+      rows.add({
+        'page': it.displayPage,
+        'number': it.problemNumber,
+        'crop_id': it.cropId,
+        'pass': ok,
+        'original_compared': it.originalCompared,
+        'figure_size_ratio': rc['figure_size_ratio'],
+        'figure_position_ok': rc['figure_position_ok'],
+        'problem_ok': rc['problem_ok'],
+        'fidelity_ok': rc['fidelity_ok'],
+        'resized': sized.contains(it.cropId),
+        'staged': it.stagedFields,
+        'issue_kind': rc['issue_kind'],
+        'issue_title': rc['issue_title'],
+        'issue_detail': rc['issue_detail'],
+      });
+    }
+    for (final e in errors) {
+      print('  $key 오류: $e');
+    }
+    print('$key: 대상 ${targets.length} · 대조 $checked회 · 통과 $pass · 확인 필요 ${targets.length - pass}'
+        ' · 크기 고침 ${sized.length} · 그림 다시 자르기 제안(미적용) ${recropProposed.length}'
+        ' · 글자 수정안(미적용) ${textProposed.length}');
+    out[mid.key] = {
+      'targets': targets.length,
+      'fixed': fixed,
+      'layout_staged': staged,
+      'checked': checked,
+      'pass': pass,
+      'resized': sized.length,
+      'recrop_proposed_not_applied': recropProposed,
+      'text_proposed_not_applied': textProposed,
+      'errors': errors,
+    };
     out['items'] = rows;
   }
 
@@ -850,6 +1402,7 @@ class _Batch {
   Future<void> _solfigDrop(List<_Mid> mids) async {
     final index = int.tryParse(_valueText.trim());
     if (index == null) fail('BATCH_VALUE 는 뺄 해설 그림 순번(0부터)입니다.');
+    _usePdfium();
     final (mid, it) = await _one(mids);
     if (index < 0 || index >= it.solutionFigureAssets.length) {
       fail('해설 그림은 ${it.solutionFigureAssets.length}개입니다.');
@@ -1032,6 +1585,62 @@ class _Batch {
     );
     print('${mid.key} p.${it.displayPage} ${it.problemNumber}번 그림 $drop 제외 · 남은 ${kept.length}개 · 바뀜 ${changed.join(', ')}');
     out['fig_drop'] = {'mid': mid.key, 'crop_id': it.cropId, 'dropped': drop, 'changed': changed};
+  }
+
+  /// 사장님이 준 그림 파일로 문항 그림을 바꿔 반영 대기에 넣는다(작업 화면의 "N번 그림 직접 올리기"와 같은 저장소·출처).
+  /// BATCH_VALUE: 줄마다 `그림 번호=파일 경로`. `bogi2` 줄이 있으면 보기 2단도 함께 넣는다.
+  Future<void> _figUpload(List<_Mid> mids) async {
+    final files = <int, String>{};
+    var bogi2 = false;
+    for (final raw in _valueText.split(RegExp(r'[\r\n;]+'))) {
+      final line = raw.trim();
+      if (line.isEmpty) continue;
+      if (line == 'bogi2') {
+        bogi2 = true;
+        continue;
+      }
+      final cut = line.indexOf('=');
+      final index = cut > 0 ? int.tryParse(line.substring(0, cut).trim()) : null;
+      if (index == null || index < 1) fail('BATCH_VALUE 줄은 그림 번호=파일 경로 입니다: $line');
+      files[index] = line.substring(cut + 1).trim();
+    }
+    if (files.isEmpty) fail('BATCH_VALUE 에 그림 번호=파일 경로 줄이 없습니다.');
+    final (mid, it) = await _one(mids);
+    final stagedAssets = it.stagedChanges['figure_assets'];
+    final assets = <Map<String, dynamic>>[
+      for (final a in (stagedAssets is List ? stagedAssets : it.pbFigureAssets))
+        if (a is Map && !files.containsKey(int.tryParse('${a['figure_index']}'))) Map<String, dynamic>.from(a),
+    ];
+    for (final e in files.entries) {
+      final file = File(e.value);
+      if (!file.existsSync()) fail('파일이 없습니다: ${e.value}');
+      final asset = await pb.uploadManualFigureAsset(
+        academyId: mid.scope.academyId,
+        documentId: it.documentId,
+        questionNumber: it.problemNumber,
+        bytes: file.readAsBytesSync(),
+        fileName: p.basename(e.value),
+      );
+      assets.add({...asset, 'figure_index': e.key});
+    }
+    assets.sort((a, b) => (int.tryParse('${a['figure_index']}') ?? 0).compareTo(int.tryParse('${b['figure_index']}') ?? 0));
+    final stagedLayout = it.stagedChanges['figure_layout'];
+    final layout = Map<String, dynamic>.from(stagedLayout is Map ? stagedLayout : it.pbFigureLayout);
+    final missing = [
+      for (final i in files.keys)
+        if (!(layout['items'] is List && (layout['items'] as List).any((x) => x is Map && '${x['assetKey']}' == 'idx:$i'))) i,
+    ];
+    if (missing.isNotEmpty) fail('그림 배치에 없는 번호: ${missing.join(', ')}');
+    final changed = await review.stageProblemFix(
+      scope: mid.scope,
+      item: it,
+      figureAssets: assets,
+      figureLayout: bogi2 ? {...layout, 'bogiColumns': 2} : null,
+      source: 'owner',
+      note: '그림 직접 올림(${files.keys.join(', ')}번)',
+    );
+    print('${mid.key} p.${it.displayPage} ${it.problemNumber}번 그림 ${files.keys.join(', ')} 교체${bogi2 ? ' · 보기 2단' : ''} · 바뀜 ${changed.join(', ')}');
+    out['fig_upload'] = {'mid': mid.key, 'crop_id': it.cropId, 'figures': files.keys.toList(), 'bogi2': bogi2, 'changed': changed};
   }
 
   /// 사장님 판정으로 교정 의견을 처리하고 해설 논리 오류 지적을 닫는다. BATCH_VALUE: adopt(교재 오류로 확인) | dismiss(기각)

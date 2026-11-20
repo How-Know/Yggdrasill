@@ -374,7 +374,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
       // 휴원 카드는 StudentCard가 흐리게 그리고, 여기서는 드래그만 막는다.
       return _wrapTextbookDropTargetForStudent(
         studentId: student.student.id,
-        child: child,
+          child: child,
       );
     }
 
@@ -1139,43 +1139,43 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                     itemSpacing: 6,
                                     children: [
                                       SolidCapsuleActionButton(
-                                        tooltip: '학년 올리기',
+                                      tooltip: '학년 올리기',
                                         icon: Symbols.exposure_plus_1,
                                         iconSize: 22,
                                         hitSize: 36,
-                                        onPressed: () {
-                                          showDialog<bool>(
-                                            context: context,
-                                            barrierDismissible: false,
-                                            builder: (context) =>
-                                                StudentPromotionDialog(
+                                      onPressed: () {
+                                        showDialog<bool>(
+                                          context: context,
+                                          barrierDismissible: false,
+                                          builder: (context) =>
+                                              StudentPromotionDialog(
                                               students: DataManager
                                                   .instance.students,
-                                            ),
-                                          );
-                                        },
+                                          ),
+                                        );
+                                      },
                                       ),
                                       SolidCapsuleActionButton(
-                                        tooltip: '알람',
+                                      tooltip: '알람',
                                         icon: Symbols.notifications,
                                         iconSize: 22,
                                         hitSize: 36,
-                                        onPressed: () {
-                                          showDialog<void>(
-                                            context: context,
-                                            builder: (context) =>
-                                                const StudentNotificationConsentDialog(),
-                                          );
-                                        },
+                                      onPressed: () {
+                                        showDialog<void>(
+                                          context: context,
+                                          builder: (context) =>
+                                              const StudentNotificationConsentDialog(),
+                                        );
+                                      },
                                       ),
                                       SolidCapsuleActionButton(
-                                        tooltip: '엑셀 내보내기(준비중)',
+                                      tooltip: '엑셀 내보내기(준비중)',
                                         icon: Symbols.output,
                                         iconSize: 22,
                                         hitSize: 36,
-                                        onPressed: () {
-                                          // TODO: 학생현황 엑셀 내보내기 기능 연결
-                                        },
+                                      onPressed: () {
+                                        // TODO: 학생현황 엑셀 내보내기 기능 연결
+                                      },
                                       ),
                                     ],
                                   ),
@@ -1197,27 +1197,27 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                 return ScrollConfiguration(
                                   behavior: ScrollConfiguration.of(context)
                                       .copyWith(scrollbars: false),
-                                  child: ListView(
+                            child: ListView(
                                     padding: const EdgeInsets.only(
                                       bottom: FabTabBarTokens
                                           .fabStyleScreenTabBarBottomPadding,
                                     ),
-                                    children: [
+                              children: [
                                     _buildEducationLevelGroup(
                                         '초등',
                                         EducationLevel.elementary,
                                         groupedByGrade),
-                                    const SizedBox(height: 52),
+                                const SizedBox(height: 52),
                                     _buildEducationLevelGroup(
                                         '중등',
                                         EducationLevel.middle,
                                         groupedByGrade),
-                                    const SizedBox(height: 52),
-                                    _buildEducationLevelGroup(
+                                const SizedBox(height: 52),
+                                _buildEducationLevelGroup(
                                         '고등',
                                         EducationLevel.high,
                                         groupedByGrade),
-                                  ],
+                              ],
                                   ),
                                 );
                               },
@@ -1315,20 +1315,20 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                   ),
                                   children: [
                                     SolidCapsuleActionButton(
-                                      tooltip: '그룹 추가',
+                                    tooltip: '그룹 추가',
                                       icon: Icons.add_rounded,
                                       iconSize: 22,
                                       hitSize: 36,
-                                      onPressed: () async {
-                                        final result =
+                                    onPressed: () async {
+                                      final result =
                                             await GroupRegistrationDialog.show(
-                                          context: context,
+                                        context: context,
                                           onSave: (_) {},
-                                        );
-                                        if (result != null) {
-                                          widget.onGroupAdded(result);
-                                        }
-                                      },
+                                      );
+                                      if (result != null) {
+                                        widget.onGroupAdded(result);
+                                      }
+                                    },
                                     ),
                                   ],
                                 ),
@@ -1339,21 +1339,21 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                         const SizedBox(height: 24),
                         Expanded(
                           flex: 3,
-                          child: _detailsStudent != null
-                              ? AnimatedBuilder(
-                                  // ✅ 보강관리 다이얼로그는 sessionOverrides/attendanceRecords를 리스닝해
-                                  // 완료 판정을 즉시 반영한다. 상세 요약도 동일하게 리스닝해야 한다.
+                            child: _detailsStudent != null
+                                ? AnimatedBuilder(
+                                    // ✅ 보강관리 다이얼로그는 sessionOverrides/attendanceRecords를 리스닝해
+                                    // 완료 판정을 즉시 반영한다. 상세 요약도 동일하게 리스닝해야 한다.
                                   // studentsRevision: 닉네임 등 students 컬럼 변경도 즉시 반영.
-                                  animation: Listenable.merge([
-                                    DataManager
-                                        .instance.sessionOverridesNotifier,
-                                    DataManager
-                                        .instance.attendanceRecordsNotifier,
-                                    DataManager
-                                        .instance.studentPaymentInfoRevision,
+                                    animation: Listenable.merge([
+                                      DataManager
+                                          .instance.sessionOverridesNotifier,
+                                      DataManager
+                                          .instance.attendanceRecordsNotifier,
+                                      DataManager
+                                          .instance.studentPaymentInfoRevision,
                                     DataManager.instance.studentsRevision,
-                                  ]),
-                                  builder: (context, _) {
+                                    ]),
+                                    builder: (context, _) {
                                     // 캐시된 선택 객체 대신 최신 로드 결과를 쓴다.
                                     final sid = _detailsStudent!.student.id;
                                     final fresh = _findStudentById(sid) ??
@@ -1368,24 +1368,24 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                                   .instance.students[idx];
                                         }();
                                     final selected = fresh ?? _detailsStudent!;
-                                    final flows =
-                                        _flowsForStudent(selected.student.id);
-                                    return _EmbeddedStudentDetailsCard(
-                                      studentWithInfo: selected,
-                                      flows: flows,
-                                      onRequestCourseView:
-                                          widget.onRequestCourseView,
-                                      weekOffset: _detailsWeekOffset,
-                                      onWeekOffsetChanged: (next) => setState(
-                                          () => _detailsWeekOffset = next),
-                                    );
-                                  },
-                                )
-                              : Container(
+                                      final flows =
+                                          _flowsForStudent(selected.student.id);
+                                      return _EmbeddedStudentDetailsCard(
+                                        studentWithInfo: selected,
+                                        flows: flows,
+                                        onRequestCourseView:
+                                            widget.onRequestCourseView,
+                                        weekOffset: _detailsWeekOffset,
+                                        onWeekOffsetChanged: (next) => setState(
+                                            () => _detailsWeekOffset = next),
+                                      );
+                                    },
+                                  )
+                                : Container(
                                   decoration: studentDetailCardDecoration(
                                     context,
                                   ),
-                                ),
+                          ),
                         ),
                       ],
                     ),
@@ -1429,7 +1429,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
           child: ScrollConfiguration(
             behavior: ScrollConfiguration.of(context)
                 .copyWith(scrollbars: false),
-            child: ReorderableListView.builder(
+          child: ReorderableListView.builder(
             physics: const AlwaysScrollableScrollPhysics(),
             dragStartBehavior: DragStartBehavior.down,
             buildDefaultDragHandles: false,
@@ -1634,10 +1634,10 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                   final result =
                                       await GroupRegistrationDialog.show(
                                     context: context,
-                                    editMode: true,
-                                    groupInfo: groupInfo,
-                                    currentMemberCount: dialogStudents.length,
-                                    onSave: (_) {},
+                                      editMode: true,
+                                      groupInfo: groupInfo,
+                                      currentMemberCount: dialogStudents.length,
+                                      onSave: (_) {},
                                   );
                                   if (result != null) {
                                     widget.onGroupUpdated(result, index);
@@ -1889,21 +1889,21 @@ class _AllStudentsViewState extends State<AllStudentsView> {
             Row(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    color: _studentListPrimaryTextColor,
-                    fontSize: 32,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Text(
-                  '$totalCount명',
-                  style: const TextStyle(
-                    color: _studentListMutedTextColor,
-                    fontSize: 22,
-                  ),
+            Text(
+              title,
+              style: const TextStyle(
+                color: _studentListPrimaryTextColor,
+                fontSize: 32,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              '$totalCount명',
+              style: const TextStyle(
+                color: _studentListMutedTextColor,
+                fontSize: 22,
+              ),
                 ),
               ],
             ),
@@ -2623,7 +2623,7 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
             child: ScrollConfiguration(
               behavior:
                   ScrollConfiguration.of(context).copyWith(scrollbars: false),
-              child: ListView(
+            child: ListView(
               padding: const EdgeInsets.only(
                 bottom: FabTabBarTokens.fabStyleScreenTabBarBottomPadding,
               ),
@@ -2767,21 +2767,21 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 16),
                 _StudentSignupCodeSection(
-                  studentId: student.id,
+                          studentId: student.id,
                   studentName: student.name,
                   labelStyle: labelStyle,
                   valueStyle: valueStyle,
                 ),
                 const SizedBox(height: 16),
                 _StudentPaymentChannelSection(
-                  studentId: student.id,
+                        studentId: student.id,
                   studentName: student.name,
                   registrationDate: registrationDate,
                   labelStyle: labelStyle,
                   valueStyle: valueStyle,
-                ),
-              ],
-            ),
+                          ),
+                        ],
+                      ),
             ),
           ),
         ],
@@ -3634,7 +3634,7 @@ class _StudentPaymentChannelSectionState
                     initialValue: _channel,
                     onSelected: _changeChannel,
                     color: panel.dropdownBackground,
-                    shape: RoundedRectangleBorder(
+                      shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(16),
                       side: BorderSide(color: panel.border),
                     ),
@@ -3703,9 +3703,9 @@ class _StudentPaymentChannelSectionState
                       ),
                     ),
                   ),
+                  ),
                 ),
-              ),
-            ],
+              ],
           ),
           const SizedBox(height: 16),
           SizedBox(

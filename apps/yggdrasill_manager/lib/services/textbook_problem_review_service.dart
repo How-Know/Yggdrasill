@@ -138,6 +138,19 @@ bool isCorruptedCommonStem(String commonStem) {
   return !parts.any(looksLikeInstruction);
 }
 
+/// 정답·해설 카드를 찍지 못했을 때 렌더 검수(ai_think)에 보내 기록으로 남길 이유.
+/// 게이트웨이가 준 조판 오류(TeX 오류 줄)가 앞에 오도록 "Exception:" 같은 머리말을 떼고 길이를 줄인다.
+String solutionCardErrorText(Object error) {
+  var s = '$error'.replaceAll(RegExp(r'\s+'), ' ').trim();
+  for (var i = 0; i < 3; i += 1) {
+    final next = s.replaceFirst(RegExp(r'^(?:Exception|Error)\s*:\s*'), '');
+    if (next == s) break;
+    s = next;
+  }
+  if (s.isEmpty) s = '알 수 없는 오류';
+  return s.length > 600 ? s.substring(0, 600) : s;
+}
+
 /// 원본 해설 전사 텍스트에서 이중 추출된 '[해설]'/'[풀이]' 머리말과 '16 답 ×'·'[정답] ③' 같은 정답 줄을 제거한다.
 String cleanSolutionTranscribedText(
   String rawText, {
@@ -443,6 +456,25 @@ TextbookSolutionSegment? solutionContinuationSegment({
   return TextbookSolutionSegment(nextPage, [ymin, x[0], ymax, x[1]]);
 }
 
+/// 해설 위치 행(`textbook_problem_solution_refs`: crop_id, continuation_regions, edited_at)에서 저장된 이어짐 조각을
+/// 읽는다(crop_id → [{raw_page, region_1k}], 빈 목록이면 "이어지지 않음"). 계산한 적이 없는 행(null)과
+/// 사람이 해설 위치를 고친 행(edited_at)은 넣지 않는다: 고친 영역에는 예전에 계산한 이어짐이 맞지 않는다.
+Map<String, List<Map<String, dynamic>>> storedSolutionContinuations(Iterable<dynamic> refs) {
+  final out = <String, List<Map<String, dynamic>>>{};
+  for (final x in refs) {
+    if (x is! Map || x['edited_at'] != null) continue;
+    final raw = x['continuation_regions'];
+    final cropId = '${x['crop_id'] ?? ''}';
+    if (raw is! List || cropId.isEmpty) continue;
+    out[cropId] = [
+      for (final s in raw)
+        if (s is Map && (s['raw_page'] as num?) != null && s['region_1k'] is List && (s['region_1k'] as List).length == 4)
+          {'raw_page': (s['raw_page'] as num).toInt(), 'region_1k': s['region_1k']},
+    ];
+  }
+  return out;
+}
+
 /// 원본 해설에 그림이 있을 수 있다는 표시: [그림] 표시, "그림과 같다", "그래프는 오른쪽과 같다" 등.
 final RegExp kSolutionFigureHintPattern = RegExp(r'그림|그래프[는를은]?\s*(?:오른쪽|아래|다음)|(?:오른쪽|아래)과\s*같');
 
@@ -693,7 +725,9 @@ String figureLayoutSignature(Map<String, dynamic>? layout) {
     for (final it in figureLayoutItems(layout))
       '${it['assetKey']}|${n(it['widthEm'])}|${it['position'] ?? ''}|${it['anchor'] ?? ''}|${n(it['offsetXEm'] ?? 0)}|${n(it['offsetYEm'] ?? 0)}',
   ]..sort();
-  return parts.join(';');
+  // 보기 2단(bogiColumns)은 항목이 같아도 다른 배치다.
+  final bogi = layout?['bogiColumns'] == 2 ? ';bogi:2' : '';
+  return parts.join(';') + bogi;
 }
 
 /// 그림 폭(widthEm)을 배율만큼 바꾼 배치(4~40em, 0.5em 단위). [keys] 를 주면 그 그림만.
@@ -915,6 +949,7 @@ class TextbookReviewUnitScope {
     this.bothApprovedCount = 0,
     this.reviewMode = '',
     this.protectAnswerKey = false,
+    this.scoreOnCard = false,
   });
 
   /// 정답만 검수하는 범위(이미 등록해 그림 손질을 마친 내신 시험지)의 [reviewMode] 값
@@ -969,6 +1004,10 @@ class TextbookReviewUnitScope {
 
   /// 인쇄된 해설이 없는 범위(내신 시험지): AI 답이 정답표와 다르면 정답을 자동으로 바꾸지 않는다.
   final bool protectAnswerKey;
+
+  /// 배점을 본문 글이 아닌 별도 값(문제은행 meta.score_point)으로 보관하는 범위(모의고사).
+  /// 검수용 문항 카드에 배점([4점])을 찍어 원본과 대조하고, AI 본문 수정안에는 배점을 넣지 않는다.
+  final bool scoreOnCard;
 
   /// 품질 검수 분모: 엔진 보류를 뺀 문항 수(승인한 것은 완료로 집계).
   int get qualityTargetCount => (problemCount - qualityHeldCount).clamp(0, problemCount);
@@ -1068,6 +1107,7 @@ class TextbookProblemReviewItem {
     this.consistencyIssues = const [],
     this.reviewMode = '',
     this.protectAnswerKey = false,
+    this.scoreOnCard = false,
   });
 
   factory TextbookProblemReviewItem.fromJson(Map<String, dynamic> m) {
@@ -1197,6 +1237,7 @@ class TextbookProblemReviewItem {
           m['source_correction'] is Map ? Map<String, dynamic>.from(m['source_correction'] as Map) : null,
       reviewMode: '${m['review_mode'] ?? ''}'.trim(),
       protectAnswerKey: m['protect_answer_key'] == true,
+      scoreOnCard: m['score_on_card'] == true,
     );
   }
 
@@ -1298,6 +1339,13 @@ class TextbookProblemReviewItem {
   /// 정답표를 지키는 범위(내신 시험지)의 문항인가. AI 답이 달라도 정답을 자동으로 바꾸지 않는다.
   final bool protectAnswerKey;
 
+  /// 검수용 문항 카드에 배점을 찍는 범위(모의고사)의 문항인가([TextbookReviewUnitScope.scoreOnCard])
+  final bool scoreOnCard;
+
+  /// 지난 V2 렌더 검수에서 정답·해설 카드를 찍지 못한 이유(조판 오류 등). 카드를 찍었으면 빈 문자열.
+  /// 해설 카드를 만들 수 있어야 준비됨이다([renderHasIssue] 의 solution_ok 로 막힌다).
+  String get solutionCardError => '${renderChecks['answer_solution_error'] ?? ''}'.trim();
+
   /// 정답만 검수하는 문항(이미 등록한 내신 시험지). 문항 검수(본문·그림 대조)와 V2 렌더 판정은 준비됨을 막지 않는다.
   bool get answerOnlyReview => reviewMode == TextbookReviewUnitScope.answerOnlyMode;
 
@@ -1305,6 +1353,7 @@ class TextbookProblemReviewItem {
     'stem': '개별 발문',
     'common_stem': '공통 발문',
     'choices': '선지',
+    'blank_choice_labels': '선지 표 제목',
     'figure_layout': '그림 크기·배치',
     'figure_assets': '원본 크롭 그림',
     'common_figure_layout': '세트 공통 그림 크기·배치',
@@ -1334,6 +1383,7 @@ class TextbookProblemReviewItem {
     final o = <String, dynamic>{
       if (s.containsKey('stem')) 'stem': stem,
       if (s.containsKey('choices')) 'choices': rawChoices,
+      if (s['blank_choice_labels'] is List) 'blank_choice_labels': s['blank_choice_labels'],
       if (s.containsKey('common_stem')) 'common_stem': commonStem,
       if (s.containsKey('figure_assets')) 'figure_assets': pbFigureAssets,
       if (s.containsKey('figure_layout')) 'figure_layout': pbFigureLayout,
@@ -1507,6 +1557,15 @@ class TextbookProblemReviewItem {
   /// 렌더 검수가 원본 해설과 대조해 해설 카드에 그림이 빠졌다고 판정
   bool get renderFlagsSolutionFigure => renderChecks['solution_ok'] == false && renderChecks['issue_kind'] == 'figure';
 
+  /// 해설 그림을 이미 찾아봤지만 하나도 못 붙였는데 렌더 검수는 해설 그림 누락으로 판정한 문항.
+  /// 모델이 그림을 놓쳤을 수 있어 검수 실행마다 한 번 더 찾아본다(판정 기준은 그대로다).
+  bool get solutionFigureSearchMissed =>
+      solutionFiguresCheckedAt != null &&
+      solutionFigureAssets.isEmpty &&
+      canCropSolution &&
+      hasOriginalSolution &&
+      renderFlagsSolutionFigure;
+
   bool get canRenderOriginal => rawPage > 0 && itemRegion1k.length == 4;
   bool get canRenderSetHeader => (setHeaderRawPage ?? 0) > 0 && setHeaderRegion1k.length == 4;
   bool get canCropAnswer => (answerRawPage ?? 0) > 0 && answerBbox1k.length == 4;
@@ -1527,6 +1586,7 @@ class TextbookProblemReviewItem {
           'common_stem' => '공통 발문',
           'stem' => '개별 발문',
           'choices' => '선지',
+          'blank_choice_labels' => '선지 표 제목',
           'figure_assets' => '원본 크롭 그림',
           'figure_layout' => '그림 크기·배치',
           _ => '$x',
@@ -1720,7 +1780,24 @@ class TextbookProblemReviewItem {
         [for (final x in list) mathDelimiterInsensitive(x is Map ? '${x['text'] ?? ''}' : '$x')].join('\u0001');
     return (s is String && s.trim().isNotEmpty && !sameRenderedMath(s, stem)) ||
         (cs is String && cs.trim().isNotEmpty && !sameRenderedMath(cs, commonStem)) ||
-        (c is List && c.isNotEmpty && choiceTexts(c) != choiceTexts(rawChoices));
+        (c is List && c.isNotEmpty && choiceTexts(c) != choiceTexts(rawChoices)) ||
+        proposedBlankChoiceLabels != null;
+  }
+
+  /// 수정 제안의 표 모양 선지 제목(제목 행). 수정 단계가 지금 제목과 다를 때만 넣는다. 이미 같은 값이 반영 대기에 있으면 null.
+  List<String>? get proposedBlankChoiceLabels {
+    final p = fixProposal['blank_choice_labels'];
+    if (p is! List || p.length < 2 || p.length > 4) return null;
+    final next = [for (final x in p) '$x'.trim()];
+    final staged = stagedChanges['blank_choice_labels'];
+    if (staged is List && staged.length == next.length) {
+      var same = true;
+      for (var i = 0; i < next.length; i++) {
+        if ('${staged[i]}'.trim() != next[i]) same = false;
+      }
+      if (same) return null;
+    }
+    return next;
   }
 
   /// V2 렌더러는 구분자 없는 LaTeX 도 수식으로 자동 인식한다. `$` 유무와 수식 기호 주변 공백만 다른 본문은 화면이 같다.
@@ -1787,6 +1864,21 @@ class TextbookProblemReviewItem {
       fixProposal['math_reason'] is String && '${fixProposal['math_reason']}'.trim().isNotEmpty
           ? '${fixProposal['math_reason']}'.trim()
           : null;
+
+  /// 세 정답은 일치했는데 해설 풀이 과정의 오류 때문에만 정답 축이 'issue' 인 문항(Edge 의 SOLUTION_LOGIC_REASON 머리말)
+  bool get solutionLogicOnly => answerMatched == true && (mismatchReason ?? '').startsWith('해설 논리 오류');
+
+  /// 정답에 다툼이 없고(정답 축 통과, 또는 해설 논리 오류만 남음) 원본 해설을 이미 옮겨 둔 문항인가.
+  /// 이런 문항은 수정 단계가 다시 옮긴 해설로 덮지 않는다: 덮으면 해설 전사 단계가 맞춘 표기와
+  /// 해설 그림 자리([그림])가 사라진다(Edge 의 isSolutionSettled 와 같은 규칙).
+  bool get solutionSettled =>
+      (mathStatus == 'approved' || mathStatus == 'clean' || solutionLogicOnly) &&
+      hasOriginalSolution &&
+      !(qualityChecks['solution_vision'] is Map && (qualityChecks['solution_vision'] as Map)['found'] == false);
+
+  /// 정답 수정안과 함께 반영 대기에 올릴 해설 전사본·해설 정답(수정 단계가 다시 옮긴 값). 해설이 이미 확정된 문항이면 없다.
+  String? get stageableSolutionTranscribed => solutionSettled ? null : proposedSolutionTranscribed;
+  String? get stageableSolutionAnswer => solutionSettled ? null : proposedSolutionAnswer;
 
   /// 해설 정답과 AI 정답이 서로 같은데 채점 정답만 다른가(일괄 채택 대상)
   bool get solutionAndAiAgreeAgainstExisting {
@@ -2287,16 +2379,47 @@ class TextbookProblemReviewService {
           ...r,
           'review_mode': scope.reviewMode,
           'protect_answer_key': scope.protectAnswerKey,
+          'score_on_card': scope.scoreOnCard,
         }),
     ];
   }
 
-  /// 단 맨 아래에서 끊긴 풀이에 다음 단 맨 위의 이어진 부분을 붙인다. 못 읽으면 붙이지 않는다.
+  /// 해설 위치에 저장된 이어짐 조각(crop_id → 조각들, 빈 목록이면 "이어지지 않음"). 모의고사는 게이트웨이가 해설지의
+  /// 글자 위치로 계산해 둔다. 계산한 적이 없거나(null) 사람이 해설 위치를 고친 문항은 넣지 않는다.
+  Future<Map<String, List<Map<String, dynamic>>>> _storedSolutionContinuations(List<String> cropIds) async {
+    final out = <String, List<Map<String, dynamic>>>{};
+    final ids = [for (final id in cropIds) if (id.isNotEmpty) id];
+    for (var i = 0; i < ids.length; i += 200) {
+      final chunk = ids.sublist(i, (i + 200).clamp(0, ids.length));
+      final List refs;
+      try {
+        refs = await _db
+            .from('textbook_problem_solution_refs')
+            .select('crop_id,continuation_regions,edited_at')
+            .inFilter('crop_id', chunk)
+            .not('continuation_regions', 'is', null);
+      } catch (_) {
+        // 못 읽으면 예전처럼 다음 단 맨 위를 붙이는 방식으로 둔다.
+        return const {};
+      }
+      out.addAll(storedSolutionContinuations(refs));
+    }
+    return out;
+  }
+
+  /// 단 맨 아래에서 끊긴 풀이에 다음 단 맨 위의 이어진 부분을 붙인다. 저장된 이어짐이 있는 문항은 그 값을 그대로 쓴다.
+  /// 못 읽으면 붙이지 않는다.
   Future<void> _mergeSolutionContinuations(TextbookReviewUnitScope scope, List<Map<String, dynamic>> rows) async {
     List<int> ints(Object? v) => [for (final x in (v is List ? v : const [])) if (x is num) x.toInt()];
+    final stored = await _storedSolutionContinuations([for (final r in rows) '${r['crop_id'] ?? ''}']);
+    for (final r in rows) {
+      final segments = stored['${r['crop_id'] ?? ''}'];
+      if (segments != null) r['solution_continuations'] = segments;
+    }
     final pagesByKind = <String, Set<int>>{};
     var anyAtBottom = false;
     for (final r in rows) {
+      if (stored.containsKey('${r['crop_id'] ?? ''}')) continue;
       final page = (r['solution_raw_page'] as num?)?.toInt() ?? 0;
       final region = ints(r['solution_region_1k']);
       if (page <= 0 || region.length != 4) continue;
@@ -2329,6 +2452,7 @@ class TextbookProblemReviewService {
         refs.add(SolutionRefBox(rawPage: page, numberTop: number[0], region1k: content.length == 4 ? content : number));
       }
       for (final r in rows) {
+        if (stored.containsKey('${r['crop_id'] ?? ''}')) continue;
         if ('${r['solution_source_kind'] ?? 'sol'}'.trim() != entry.key) continue;
         final page = (r['solution_raw_page'] as num?)?.toInt() ?? 0;
         final seg = solutionContinuationSegment(rawPage: page, region1k: ints(r['solution_region_1k']), refs: refs);
@@ -2384,9 +2508,11 @@ class TextbookProblemReviewService {
     final byDoc = <String, List<String>>{};
     final keyToCropIds = <String, List<String>>{};
     final overrides = <String, Map<String, dynamic>>{};
+    final scoreDocs = <String>{};
     for (final it in items) {
       final k = it.previewLookupKey;
       if (k.isEmpty) continue;
+      if (it.scoreOnCard) scoreDocs.add(it.documentId);
       final o = it.previewOverride;
       if (o != null) overrides[k] = o;
       keyToCropIds.putIfAbsent(k, () => <String>[]).add(it.cropId);
@@ -2409,6 +2535,8 @@ class TextbookProblemReviewService {
               documentId: entry.key,
               templateProfile: 'naesin',
               paperSize: 'A4',
+              // 모의고사는 원본처럼 배점을 찍은 카드로 대조한다(문제은행·학습앱 카드와 따로 저장된다).
+              renderConfig: scoreDocs.contains(entry.key) ? const {'includeQuestionScore': true} : null,
               questionOverrides: {
                 for (final q in entry.value)
                   if (overrides[q] != null) q: overrides[q]!,
@@ -2416,7 +2544,8 @@ class TextbookProblemReviewService {
             );
           } catch (_) {
             // 반영 대기 값이 있는 문항은 저장된 카드로 대신하면 고치기 전 모습을 보게 되므로 비워 둔다.
-            if (entry.value.any(overrides.containsKey)) continue;
+            // 배점을 찍는 범위도 같다(저장된 카드에는 배점이 없어 원본과 다르게 보인다).
+            if (entry.value.any(overrides.containsKey) || scoreDocs.contains(entry.key)) continue;
             urls = await _pb.fetchQuestionPreviews(
               academyId: academyId,
               questionIds: entry.value,
@@ -2672,6 +2801,7 @@ class TextbookProblemReviewService {
       'mid_order': midOrderOf(scope),
       'crop_ids': cropIds,
       if (pincette) 'pincette': true,
+      if (scope.scoreOnCard) 'score_separate': true,
       'images': {for (final e in images.entries) e.key: e.value.toJson()},
     });
     final data = res.data;
@@ -3018,6 +3148,7 @@ class TextbookProblemReviewService {
       'chunk_size': chunkSize,
       'force_rerun': forceRerun,
       if (mathOnly) 'math_only': true,
+      if (scope.scoreOnCard) 'score_separate': true,
       if (cropIds.isNotEmpty) 'crop_ids': cropIds,
       if (images.isNotEmpty) 'images': {for (final e in images.entries) e.key: e.value.toJson()},
     });
@@ -3118,6 +3249,18 @@ class TextbookProblemReviewService {
       solutionAnswer: ans,
     );
     if (sol.isEmpty && ans.isEmpty && !item.hasAnswerImage) return '';
+    // 글자 정답은 학생용 PDF 해설지와 같은 조판으로 찍는다(긴 수식은 해설지처럼 줄이 바뀐다).
+    // 그림 정답은 해설지 조판에 넣는 경로가 없어 예전 카드 방식을 그대로 쓴다.
+    if (!item.hasAnswerImage) {
+      return _pb.renderExplanationCardThumbnail(
+        academyId: academyId,
+        id: 'review-${item.cropId}-$solutionKind',
+        answer: ans,
+        explanation: sol,
+        questionNumber: item.problemNumber,
+        figureAssets: solutionKind == 'ai' ? const [] : item.solutionFigureAssets,
+      );
+    }
     final card = buildAnswerSolutionCardContent(
       answer: formatAnswerForCard(ans),
       solution: sol,
@@ -3481,6 +3624,7 @@ class TextbookProblemReviewService {
     required TextbookProblemReviewItem item,
     String? stem,
     List<Map<String, dynamic>>? choices,
+    List<String>? blankChoiceLabels,
     String? commonStem,
     Map<String, dynamic>? figureLayout,
     List<Map<String, dynamic>> figureCrops = const [],
@@ -3527,6 +3671,7 @@ class TextbookProblemReviewService {
       patch: {
         if (stem != null) 'stem': stem,
         if (choices != null) 'choices': choices,
+        if (blankChoiceLabels != null) 'blank_choice_labels': blankChoiceLabels,
         if (commonStem != null) 'common_stem': commonStem,
         if (figureLayout != null) (toCommon ? 'common_figure_layout' : 'figure_layout'): figureLayout,
         if (assets != null) 'figure_assets': assets,

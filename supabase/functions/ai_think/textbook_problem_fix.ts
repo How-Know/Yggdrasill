@@ -17,9 +17,13 @@ import {
   parseReviewImages,
   sameRenderedMath,
   sanitizeProblemMarkup,
+  SOLUTION_LOGIC_REASON,
+  SOLUTION_TEXT_MAX_CHARS,
+  solutionLinesToParagraphs,
   sourceCorrectionInput,
   stripCommonStem,
   stripGuidedSolution,
+  stripScoreMarks,
   TEXTBOOK_REVIEW_PROMPT_VERSION,
   withoutDependentSetCommonStem,
 } from './textbook_problem_review.ts';
@@ -100,10 +104,13 @@ export function figureLayoutItem(
   imageWidthPx: number,
   fallbackWidthEm: number,
 ): { widthEm: number; position: string; anchor: string; offsetXEm: number; offsetYEm: number } {
+  // 'inline'(글줄 안에 낀 작은 그림)은 엔진의 글 줄 안 배치(inline-text)로 보낸다. 그 크기는 heightEm 이 정한다.
   const position = m.placement === 'right_of_text'
     ? 'inline-right'
     : m.placement === 'left_of_text'
     ? 'inline-left'
+    : m.placement === 'inline'
+    ? 'inline-text'
     : 'below-stem';
   const anchor = m.placement === 'right_of_text' ? 'right' : m.placement === 'left_of_text' ? 'left' : m.align;
   let widthEm = fallbackWidthEm;
@@ -112,6 +119,13 @@ export function figureLayoutItem(
   }
   widthEm = Math.round(Math.max(MIN_WIDTH_EM, Math.min(MAX_WIDTH_EM, widthEm)) * 2) / 2;
   return { widthEm, position, anchor, offsetXEm: 0, offsetYEm: 0 };
+}
+
+/** 글 줄 안 그림의 높이(em). 원본에서 잰 높이를 쓰고(1~4em), 글자 크기를 못 쟀으면 1.6em. */
+export function inlineFigureHeightEm(m: { bbox: number[] }, emPx: number | null, imageHeightPx: number): number {
+  if (!emPx || !(imageHeightPx > 0)) return 1.6;
+  const h = (((m.bbox[2] - m.bbox[0]) / 1000) * imageHeightPx) / emPx;
+  return Math.round(Math.max(1, Math.min(4, h)) * 10) / 10;
 }
 
 /** 렌더러(hydrateFiguresForXeLatex)와 같은 규칙: figure_index 별로 approved 우선 · 최신 우선 하나만, figure_index 순. */
@@ -144,8 +158,28 @@ export interface FigureCropRequest {
 }
 
 export interface FigureProposal {
-  layout: { version: number; items: Rec[]; groups: unknown[] };
+  /** bogiColumns: 2 면 엔진이 보기 상자를 2단으로 짠다(원본 보기에서 그림이 좌우로 나란할 때). */
+  layout: { version: number; items: Rec[]; groups: unknown[]; bogiColumns?: number };
   crops: FigureCropRequest[];
+}
+
+/**
+ * 보기 상자 안 그림이 원본에서 좌우로 나란하면 2(보기 2단), 아니면 null.
+ * 본문의 그림이 모두 보기 안에 있고 둘 이상이며, 읽는 순서로 이웃한 두 그림이 같은 높이에 좌우로 놓였을 때만 2 다.
+ */
+export function bogiFigureColumns(stem: string, measures: Array<{ bbox: number[] }>): 2 | null {
+  const box = /\[보기시작\]([\s\S]*?)\[보기끝\]/.exec(stem);
+  if (!box) return null;
+  const inBox = figureMarkerCount(box[1]);
+  if (inBox < 2 || inBox !== figureMarkerCount(stem) || measures.length < inBox) return null;
+  for (let i = 1; i < measures.length; i += 1) {
+    const a = measures[i - 1].bbox;
+    const b = measures[i].bbox;
+    const overlap = Math.min(a[2], b[2]) - Math.max(a[0], b[0]);
+    const minHeight = Math.min(a[2] - a[0], b[2] - b[0]);
+    if (minHeight > 0 && overlap >= minHeight * 0.5 && b[1] >= a[3] - 10) return 2;
+  }
+  return null;
 }
 
 /**
@@ -156,6 +190,8 @@ export function buildFigureProposal(args: {
   measures: FigureMeasure[];
   emPx: number | null;
   imageWidthPx: number;
+  /** 글 줄 안 그림의 높이를 재는 데 쓴다. 없으면 기본 높이. */
+  imageHeightPx?: number;
   assets: unknown;
   currentLayout: unknown;
 }): FigureProposal | null {
@@ -199,7 +235,12 @@ export function buildFigureProposal(args: {
       const colFallback = Math.round(Math.max(MIN_WIDTH_EM, Math.min(MAX_WIDTH_EM, ((m.bbox[3] - m.bbox[1]) / 1000) * 26)) * 2) / 2;
       const item = figureLayoutItem(m, emPx, imageWidthPx, Number.isFinite(prevWidth) && prevWidth > 0 ? prevWidth : colFallback);
       const prevHeight = Number(prev?.heightEm);
-      items.push({ assetKey: key, ...item, heightEm: Number.isFinite(prevHeight) && prevHeight > 0 ? prevHeight : 1.6 });
+      const heightEm = item.position === 'inline-text' && prev?.position !== 'inline-text'
+        ? inlineFigureHeightEm(m, emPx, args.imageHeightPx ?? 0)
+        : Number.isFinite(prevHeight) && prevHeight > 0
+        ? prevHeight
+        : 1.6;
+      items.push({ assetKey: key, ...item, heightEm });
       used.add(key);
       measureByKey.set(key, m);
       if (!asset) crops.push({ figure_index: idx, bbox_1k: [...m.bbox], reason: 'missing' });
@@ -415,6 +456,26 @@ export function blankChoiceLabelsOf(meta: unknown): string[] | null {
   const labels = (Array.isArray(m.blank_choice_labels) ? m.blank_choice_labels : [])
     .map((x) => String(x ?? '').trim()).filter((x) => x.length > 0);
   return labels.length >= 2 && labels.length <= 4 ? labels : ['(가)', '(나)', '(다)'];
+}
+
+/** 지금 표 제목: 반영 대기 값이 있으면 그 값, 없으면 문제은행 값. 빈칸형이 아니면 null. */
+export function currentBlankChoiceLabels(meta: unknown, stagedChanges: unknown): string[] | null {
+  const base = blankChoiceLabelsOf(meta);
+  if (!base) return null;
+  const st = stagedChanges && typeof stagedChanges === 'object' ? (stagedChanges as Rec).blank_choice_labels : null;
+  const staged = (Array.isArray(st) ? st : []).map((x) => String(x ?? '').trim()).filter((x) => x.length > 0);
+  return staged.length >= 2 && staged.length <= 4 ? staged : base;
+}
+
+/**
+ * 모델이 낸 표 제목 수정안을 정리한다. 제목 수가 지금과 같고(칸 수는 선지 글이 정한다) 화면에 보이는 글이 달라질 때만 낸다.
+ */
+export function normalizeBlankChoiceLabelsFix(corrected: unknown, current: string[] | null): string[] | null {
+  if (!current || !Array.isArray(corrected)) return null;
+  const next = corrected.map((x) => String(x ?? '').replace(/\s+/g, ' ').trim());
+  if (next.length !== current.length || next.some((x) => x.length === 0 || x.length > 80)) return null;
+  const same = next.every((x, i) => mathDelimiterInsensitive(x) === mathDelimiterInsensitive(current[i]));
+  return same ? null : next;
 }
 
 /**
@@ -703,6 +764,7 @@ const FIX_SCHEMA: Rec = {
           'corrected_stem',
           'corrected_common_stem',
           'corrected_choices',
+          'corrected_blank_choice_labels',
           'fix_reason',
           'engine_issue',
           'figures',
@@ -733,6 +795,7 @@ const FIX_SCHEMA: Rec = {
               properties: { label: { type: 'string' }, text: { type: 'string' } },
             },
           },
+          corrected_blank_choice_labels: { type: ['array', 'null'], items: { type: 'string' } },
           fix_reason: { type: ['string', 'null'] },
           engine_issue: { type: ['string', 'null'] },
           proposed_answer: { type: ['string', 'null'] },
@@ -821,8 +884,10 @@ const FIX_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔진의 [�
 - 종속형 세트(is_dependent_set = true, 1)·2)·3) 소문항을 한 문항에 묶은 것): 학생 화면에는 stem 만 보입니다. 위 세트 문항 규칙과 달리
   "다음을 읽고, 물음에 답하여라." 같은 공통 지시문과 상황 설명 상자·그림까지 모두 corrected_stem 앞머리에 원본 순서대로 두고, corrected_common_stem 은 null 로 두세요.
 - 원본에서 문항·소문항 아래 '해' 배지로 시작하는 빈칸 풀이 안내(풀이 일부를 □로 비워 둔 것)는 해설이라 본문이 아닙니다. corrected_stem 에 넣지 말고, 저장 stem 에 들어 있으면 빼세요.
+- 입력에 score_separate=true 인 문항은 배점([3점], [4점] 등)을 본문 글이 아닌 별도 값으로 보관하고 V2 화면이 그 값으로 배점을 찍습니다. 저장 stem 에 배점 글자가 없는 것은 정상이므로 corrected_stem 에 배점을 넣지 말고, 배점 때문에 text_matches_original 을 false 로 두지도 마세요. V2 화면에 찍힌 배점 숫자가 원본과 다를 때만 fix_reason 에 그 사실을 적습니다.
 - 선지: 원본의 선지(①~⑤ 또는 ㄱ,ㄴ,ㄷ)와 저장 choices 가 다르면 전체 선지 배열을 corrected_choices 에, 같거나 원본에 선지가 없으면 null.
 - 입력에 blank_choice_labels 가 있는 문항은 선지가 표 모양(제목 행 + ①~⑤ 행)입니다. 제목 행은 blank_choice_labels 로 따로 그려지므로 stem 에 넣지 않습니다. 각 선지의 text 는 제목 순서대로 칸 값을 쉼표와 공백으로 이어 씁니다(예: "정사면체, 정삼각형, 4"). array·tabular·표 마크업으로 쓰지 마세요. 저장된 선지에 칸 값이 빠져 있으면 원본을 보고 모든 칸을 채워 corrected_choices 에 적습니다.
+  입력의 blank_choice_labels 가 원본 표의 제목 행과 다르면(글자가 빠지거나 다름, 수식 문법이 깨짐 — 예: "\\overlineDC의 길이" 는 "\\overline{DC}의 길이" 여야 함) 제목 전체를 같은 개수·같은 순서로 corrected_blank_choice_labels 에 적습니다. 제목 안의 수식은 본문과 같은 LaTeX 로 씁니다. 원본과 같으면 null, blank_choice_labels 가 없는 문항도 null 입니다.
 - 원본에 없는 내용을 지어내지 마세요. 원본에서 읽을 수 없는 부분은 저장값을 그대로 둡니다.
 - text_matches_original: 저장 데이터(공통 발문·발문·선지)와 마크업·LaTeX 문법이 원본과 완전히 같을 때 true(이때만 corrected_* 가 모두 null).
 - engine_issue: 저장된 본문·공통발문·선지 텍스트와 LaTeX·마크업 문법이 100% 올바르고 본문을 수정해서는 절대 해결할 수 없는 순수 조판 엔진 결함(예: 올바른 수식인데 분수·첨자가 겹침, 카드 폭 밖으로 잘림)일 때만 짧은 증상을 적으세요. 오타, 누락, common_stem 문제, [ [[공백:n]] ] 대괄호 중복, 수식 내 \\text{} 미사용 한글 누락처럼 본문을 고쳐 해결할 수 있는 경우에는 절대로 engine_issue 를 적지 말고 null 로 두세요!
@@ -856,6 +921,7 @@ const FIX_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔진의 [�
   - 원본 본문 이미지(세트 지시문 포함)를 보고 처음부터 다시 푼 풀이를 proposed_ai_solution 에, 그 답을 proposed_ai_answer 에 적으세요.
   - 정답/해설 이미지가 주어졌으면 거기서 읽은 최종 정답을 proposed_solution_answer 에, 문항 번호·"답 ..." 줄·"[해설]" 머리말을 모두 뺀 순수 해설 본문만 proposed_solution_transcribed 에 적으세요(풀이 과정 없이 정답만 인쇄된 문항이면 null).
     해설 이미지가 회색 가로선으로 위아래 두 조각이면 아래 조각은 해설지 다음 단(또는 다음 쪽) 맨 위입니다. 위 조각에서 끊긴 풀이가 이어지면 끝까지 옮기고, 아래 조각의 단원 제목·다른 문항 풀이는 빼세요.
+    해설 본문은 한글+LaTeX($...$)로 적고, 원본에서 줄이 바뀌는 곳마다 줄을 바꿔 적습니다(한 줄에 식 하나씩 인쇄된 풀이는 식마다 줄을 나누고, 폭이 좁아 다음 줄로 넘어간 한 문장은 한 줄로 잇습니다). 첫머리의 '[출제의도] …' 문장은 해설 본문이므로 첫 줄에 그대로 옮깁니다. 글자로 된 표(증감표 등)는 한 행을 한 줄로, 칸을 | 로 나눠 적습니다(예: | $x$ | $\\cdots$ | $1$ |). proposed_ai_solution 도 한 줄에 한 단계씩 줄을 나눠 씁니다.
   - math_reason 에는 왜 이 정답으로 확정했는지 한 줄로 적으세요.
 - 해설 좌표 어긋남 복구("해설 PDF 전체 페이지 이미지"가 함께 주어진 경우):
   - 수력충전 등 연산 교재는 한 해설 페이지 안에서 번호가 01번부터 여러 번 새로 시작하므로 기존 해설 크롭 좌표가 엉뚱한 블록을 가리켜 solution_vision_found = false 이거나 다른 문항의 답이 읽혔을 수 있습니다.
@@ -866,6 +932,21 @@ const FIX_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔진의 [�
   - 빠진 문항을 새로 영역 지정했거나 기존 추출이 이상해 정확도 우선으로 다시 뽑는 문항입니다.
   - 반드시 본문 원본 이미지를 처음부터 끝까지 정밀하게 읽어 전체 본문을 corrected_stem 에(세트 문항이면 공통 지시문을 corrected_common_stem 에, 선지가 있으면 corrected_choices 에) 작성하고, 직접 문제를 풀어 proposed_ai_solution 과 proposed_ai_answer, 최종 확정 정답 proposed_answer 를 모두 채우세요.
   - 해설 크롭 또는 해설 전체 페이지 이미지가 함께 주어졌으면, 당신이 푼 정답(proposed_ai_answer)과 본문 쪽수 배지(p.<body_display_page>)·문항 번호를 대조해 정확히 일치하는 정답·해설 블록을 찾아 proposed_solution_answer, proposed_solution_transcribed, corrected_solution_bbox_1k 를 채우세요.`;
+
+/**
+ * 정답에 다툼이 없고 원본 해설을 이미 찾아 옮겨 둔 문항인가. 정답에 다툼이 없다는 것은 정답 축이 통과했거나
+ * (approved·clean), 세 정답은 일치했는데 해설 풀이 과정의 오류 때문에만 'issue' 인 경우다.
+ * 이런 문항은 수정 단계가 해설을 다시 옮겨 와도 받지 않는다: 그 글이 반영 대기에 올라가면
+ * 해설 전사 단계가 맞춘 표기(\mathrm 등)와 해설 그림 자리([그림])가 사라진다.
+ * 해설 논리 오류는 사장님이 교정본·원본 중에 골라 닫는다.
+ */
+export function isSolutionSettled(it: Rec): boolean {
+  const mathOk = it.math_status === 'approved' || it.math_status === 'clean';
+  const logicOnly = it.answer_matched === true && String(it.mismatch_reason ?? '').startsWith(SOLUTION_LOGIC_REASON);
+  const vision = (((it.quality_checks ?? {}) as Rec).solution_vision ?? {}) as Rec;
+  return (mathOk || logicOnly) && vision.found !== false &&
+    typeof it.solution_transcribed === 'string' && it.solution_transcribed.trim().length > 0;
+}
 
 const MAX_FIX_CHUNK = 4;
 
@@ -889,6 +970,8 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
     .filter((x): x is string => !!x)
     .slice(0, MAX_FIX_CHUNK);
   const isPincette = body.pincette === true;
+  // 배점을 본문이 아닌 별도 값으로 보관하는 범위(모의고사). 검수 카드가 배점을 찍으므로 본문 수정안에는 넣지 않는다.
+  const scoreSeparate = body.score_separate === true;
   const images = parseReviewImages(body.images);
   if (cropIds.length === 0) return jsonResponse({ ok: true, processed: 0, results: [] });
 
@@ -931,7 +1014,8 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
       const metaByUid = new Map<string, unknown>();
       for (const r of (qRes.data ?? []) as Rec[]) metaByUid.set(String(r.question_uid), r.meta);
       for (const [cid, uid] of uidByCrop) {
-        const labels = blankChoiceLabelsOf(metaByUid.get(uid));
+        const staged = targets.find((t) => String(t.crop_id) === cid)?.staged_changes;
+        const labels = currentBlankChoiceLabels(metaByUid.get(uid), staged);
         if (labels) blankLabels.set(cid, labels);
       }
     }
@@ -972,13 +1056,16 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
           stem: String(it.stem ?? '').slice(0, 4000),
           choices: it.choices,
           ...(blankLabels.has(String(it.crop_id)) ? { blank_choice_labels: blankLabels.get(String(it.crop_id)) } : {}),
+          ...(scoreSeparate ? { score_separate: true } : {}),
           ...sourceCorrectionInput(it.source_correction),
           existing_answer: it.existing_answer ?? null,
           answer_kind: it.answer_kind ?? null,
           pb_objective_answer_key: it.pb_objective_answer_key ?? '',
           pb_subjective_answer: it.pb_subjective_answer ?? '',
           solution_answer: it.solution_answer ?? null,
-          solution_transcribed: typeof it.solution_transcribed === 'string' ? it.solution_transcribed.slice(0, 2000) : null,
+          solution_transcribed: typeof it.solution_transcribed === 'string'
+            ? it.solution_transcribed.slice(0, SOLUTION_TEXT_MAX_CHARS)
+            : null,
           solution_vision_found: typeof sv.found === 'boolean' ? sv.found : null,
           ai_answer: it.ai_answer ?? null,
           math_status: it.math_status ?? 'pending',
@@ -1070,7 +1157,9 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
     const textFix = dropPrintedRevert(
       normalizeTextFix({
         textMatchesOriginal: r.text_matches_original,
-        correctedStem: r.corrected_stem,
+        correctedStem: scoreSeparate && typeof r.corrected_stem === 'string'
+          ? stripScoreMarks(r.corrected_stem)
+          : r.corrected_stem,
         correctedCommonStem: r.corrected_common_stem,
         correctedChoices: r.corrected_choices,
         currentStem: curStem,
@@ -1107,6 +1196,11 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
       }
     }
     const choices = textFix.choices;
+    // 표 모양 선지의 제목 행. 원본 오류 교정 문항에서 인쇄본으로 되돌린 수정안이면 쓰지 않는다.
+    const blankChoiceLabels = textFix.reverted
+      ? null
+      : normalizeBlankChoiceLabelsFix(r.corrected_blank_choice_labels, blankLabels.get(cid) ?? null);
+    if (blankChoiceLabels) textSame = false;
 
     // 보기 상자 안 그림은 통째로 한 장: AI 가 도형마다 나눠 쟀으면 합친다.
     // 칸 안에 그림이 있는 표는 표 전체를 그림 한 장으로: 본문의 표를 [그림] 하나로 바꾸고 표 영역을 다시 자른다.
@@ -1155,6 +1249,7 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
         measures,
         emPx,
         imageWidthPx: size?.width ?? 0,
+        imageHeightPx: size?.height ?? 0,
         assets: it.pb_figure_assets,
         currentLayout: it.pb_figure_layout,
       }),
@@ -1169,6 +1264,10 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
         assetCount: orderedFigureAssets(it.pb_figure_assets).length,
       });
     const figure = headerFigure ?? unslotted.proposal;
+    // 보기 안 그림이 원본에서 좌우로 나란하면 보기 2단으로 낸다. 이미 2단인 배치는 그림을 못 쟀어도 유지한다.
+    if (figure && (bogiFigureColumns(stem ?? curStem, measures) === 2 || Number((it.pb_figure_layout as Rec | null)?.bogiColumns) === 2)) {
+      figure.layout = { ...figure.layout, bogiColumns: 2 };
+    }
     // 사장님이 직접 올리거나 고른 그림(반영 대기 출처 owner)은 AI 가 다시 잘라 바꾸지 않는다.
     if (figure && ownerStagedFigures(it.staged_changes)) {
       figure.crops = [];
@@ -1199,16 +1298,22 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
           trimOrNull(prev.proposed_answer) ?? trimOrNull(it.solution_answer) ?? trimOrNull(it.ai_answer))
         : trimOrNull(prev.proposed_answer));
     const proposedAiAnswer = trimOrNull(r.proposed_ai_answer);
-    const proposedAiSolution = trimOrNull(r.proposed_ai_solution);
-    const proposedSolAnswer = trimOrNull(r.proposed_solution_answer);
-    const cleanedSolText = typeof r.proposed_solution_transcribed === 'string' && r.proposed_solution_transcribed.trim()
-      ? cleanSolutionTranscribedText(r.proposed_solution_transcribed, it.problem_number, proposedSolAnswer ?? proposedAnswer ?? it.solution_answer)
+    // AI 가 새로 쓴 풀이·다시 옮긴 해설은 원본처럼 한 줄씩 보이게 줄마다 문단으로 나눠 둔다.
+    const proposedAiSolution = solutionLinesToParagraphs(trimOrNull(r.proposed_ai_solution) ?? '') || null;
+    // 정답이 통과했고 원본 해설도 이미 옮겨 둔 문항은 해설을 다시 옮기지 않는다(지시문 3번의 null 규칙을 모델이 어겨도 지킨다).
+    const solutionSettled = !isPincette && curStem.trim().length > 0 && isSolutionSettled(it);
+    const proposedSolAnswer = solutionSettled ? null : trimOrNull(r.proposed_solution_answer);
+    const cleanedSolText = !solutionSettled && typeof r.proposed_solution_transcribed === 'string' &&
+        r.proposed_solution_transcribed.trim()
+      ? solutionLinesToParagraphs(
+        cleanSolutionTranscribedText(r.proposed_solution_transcribed, it.problem_number, proposedSolAnswer ?? proposedAnswer ?? it.solution_answer),
+      )
       : '';
     const proposedSolTranscribed = cleanedSolText || null;
     const correctedSolBox = normalizeBox(r.corrected_solution_bbox_1k);
     const mathReason = trimOrNull(r.math_reason) ?? trimOrNull(prev.math_reason);
 
-    const hasText = !!(stem || common || choices);
+    const hasText = !!(stem || common || choices || blankChoiceLabels);
     const rawEngineSymptom = typeof r.engine_issue === 'string' && r.engine_issue.trim() ? r.engine_issue.trim() : null;
     const isFakeEngine = rawEngineSymptom !== null &&
       isDataFixableSymptom(r.fix_reason, rawEngineSymptom, rawEngineSymptom, curStem, curCommon);
@@ -1219,6 +1324,7 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
       stem,
       common_stem: common,
       choices,
+      blank_choice_labels: blankChoiceLabels,
       proposed_answer: proposedAnswer,
       proposed_ai_answer: proposedAiAnswer,
       proposed_ai_solution: proposedAiSolution,
@@ -1256,7 +1362,7 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
         .replace(/\[(?:문단|박스시작|박스끝|보기시작|보기끝)\]/g, '')
         .trim();
       if (prevStemContent) {
-        for (const k of ['kind', 'stem', 'common_stem', 'choices', 'reason', 'reason_code', 'source']) {
+        for (const k of ['kind', 'stem', 'common_stem', 'choices', 'blank_choice_labels', 'reason', 'reason_code', 'source']) {
           fixProposal[k] = prev[k] ?? null;
         }
         if (stem && !headerFigure && figure?.crops.some((c) => c.reason === 'missing')) fixProposal.stem = stem;
@@ -1351,7 +1457,7 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
     }
     if (isPincette) {
       const pincetteStem = stem ?? (typeof r.corrected_stem === 'string' && r.corrected_stem.trim()
-        ? sanitizeProblemMarkup(r.corrected_stem.trim())
+        ? sanitizeProblemMarkup(scoreSeparate ? stripScoreMarks(r.corrected_stem) : r.corrected_stem.trim())
         : (curStem.trim() || null));
       const pincetteCommon = common ?? (typeof r.corrected_common_stem === 'string' && r.corrected_common_stem.trim()
         ? sanitizeProblemMarkup(r.corrected_common_stem.trim())

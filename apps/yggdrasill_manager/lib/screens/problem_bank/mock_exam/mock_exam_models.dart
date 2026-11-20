@@ -45,6 +45,13 @@ List<String> mockExamSectionsOf(int grade) =>
 int mockExamSchoolYear(int grade, int examYear) =>
     grade == 3 ? examYear + 1 : examYear;
 
+/// 시행 연도로 정하는 교육과정: 고1 은 2025년 시행분부터, 고2 는 2026년 시행분부터 2022 개정이고
+/// 그 밖은 이전 교육과정이다(게이트웨이 mock_courses.js 와 같은 규칙).
+String mockExamCurriculumCode(int grade, int examYear) =>
+    (grade == 1 && examYear >= 2025) || (grade == 2 && examYear >= 2026)
+        ? 'rev_2022'
+        : 'rev_2015';
+
 String mockExamTitle({
   required int examYear,
   required int grade,

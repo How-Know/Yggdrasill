@@ -177,6 +177,21 @@ class CourseMapPlacement {
 
   bool get byThink => origin == 'ai';
 
+  /// Think가 놓은 줄을 운영자가 확인한 상태. 자리는 그대로 두고 근거만 지운다.
+  CourseMapPlacement accepted() => CourseMapPlacement(
+        id: id,
+        unitId: unitId,
+        conceptId: conceptId,
+        name: name,
+        sort: sort,
+        origin: 'owner',
+        type: type,
+        subType: subType,
+        sources: sources,
+        statementId: statementId,
+        createdAt: createdAt,
+      );
+
   factory CourseMapPlacement.fromJson(Map<String, dynamic> j) => CourseMapPlacement(
         id: j['id'] as String,
         unitId: j['unit_id'] as String,
@@ -440,6 +455,9 @@ abstract class CourseMapBackend {
 
   /// [ids]는 그 단원에 지금 놓인 줄 전부를 새 순서로.
   Future<List<CourseMapPlacement>> reorderPlacements({required String unitId, required List<String> ids});
+
+  /// Think가 놓은 줄을 확인한다. 단원·순서는 그대로 두고 origin을 owner로, 근거는 비운다.
+  Future<List<CourseMapPlacement>> acceptPlacement(String placementId);
   Future<List<CourseMapConceptHit>> searchConcepts(String query);
 
   /// 배치 기록·본문 고친 기록·서술 확정 기록을 새것부터. [olderThan]을 주면 그보다 오래된 것부터 읽는다.
@@ -545,6 +563,10 @@ class SupabaseCourseMapBackend implements CourseMapBackend {
   Future<List<CourseMapPlacement>> reorderPlacements({required String unitId, required List<String> ids}) =>
       _guard(() async =>
           _placements(await _db.rpc('course_placement_reorder', params: {'p_unit_id': unitId, 'p_ids': ids})));
+
+  @override
+  Future<List<CourseMapPlacement>> acceptPlacement(String placementId) =>
+      _guard(() async => _placements(await _db.rpc('course_placement_accept', params: {'p_id': placementId})));
 
   @override
   Future<List<CourseMapConceptHit>> searchConcepts(String query) => _guard(() async {

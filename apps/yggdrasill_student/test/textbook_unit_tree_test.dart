@@ -206,7 +206,7 @@ void main() {
     expect(history.roundRevisionCount, 4);
     expect(history.latestPassed, isFalse);
     expect(history.hasRoundLedger, isTrue);
-    expect(history.roundHistory.cardLines, ['3회차', '이전 정답 2', '수정 4회']);
+    expect(history.roundHistory.cardLines, ['오답 4']);
     expect(legacy.hasRoundLedger, isFalse);
     expect(legacy.roundHistory.cardLines, isEmpty);
   });
@@ -217,14 +217,14 @@ void main() {
       revisionCount: 3,
       latestPassed: true,
     );
-    expect(first.cardLines, ['통과 1', '수정 3회']);
+    expect(first.cardLines, ['완료 1', '3번']);
 
     final again = first.afterGrade(correct: false);
     expect(again.roundNo, 2);
     expect(again.passedBefore, 1);
     expect(again.revisionCount, 1);
     expect(again.roundOpen, isTrue);
-    expect(again.cardLines, ['2회차', '이전 정답 1']);
+    expect(again.cardLines, ['오답 1']);
 
     final revised = again.afterGrade(correct: true);
     expect(revised.roundNo, 2);
@@ -232,7 +232,7 @@ void main() {
     expect(revised.revisionCount, 2);
     expect(revised.roundOpen, isFalse);
     expect(revised.latestPassed, isTrue);
-    expect(revised.cardLines, ['2회차', '통과 2', '수정 2회']);
+    expect(revised.cardLines, ['완료 2', '2번']);
   });
 
   test('TextbookUnitTree는 start_page~end_page 사이의 빈 쪽을 개념 페이지로 채운다', () {

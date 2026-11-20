@@ -172,16 +172,38 @@ class TextbookExplorerController extends ChangeNotifier {
   }
 
   void _applyLoadedData(TbExData loaded) {
+    final prevSelectedCrops = <String>{
+      for (final key in selectedKeys)
+        if ((_itemBySelKey[key]?.cropId ?? '').trim().isNotEmpty)
+          _itemBySelKey[key]!.cropId.trim(),
+    };
     data = loaded;
     _itemBySelKey.clear();
+    final newKeyByCrop = <String, String>{};
     for (final big in loaded.units) {
       for (final mid in big.mids) {
         for (final small in mid.smalls) {
           for (final item in small.items) {
+            if (item.isSetHeader) continue;
             _itemBySelKey[item.selKey] = item;
+            final cid = item.cropId.trim();
+            if (cid.isNotEmpty) {
+              newKeyByCrop[cid] = item.selKey;
+            }
           }
         }
       }
+    }
+    if (prevSelectedCrops.isNotEmpty) {
+      final remapped = <String>{
+        for (final key in selectedKeys)
+          if (_itemBySelKey.containsKey(key)) key,
+        for (final cid in prevSelectedCrops)
+          if (newKeyByCrop.containsKey(cid)) newKeyByCrop[cid]!,
+      };
+      selectedKeys
+        ..clear()
+        ..addAll(remapped);
     }
   }
 
@@ -4008,19 +4030,10 @@ class _QuestionCard extends StatelessWidget {
     const accent = Color(0xFF33A373);
     final brightness = Theme.of(context).brightness;
     final s = scale.clamp(0.5, 1.0);
-    final completed = showHomeworkStats && completedCount > 0;
     final cardBg = selected
         ? accent.withValues(alpha: brightness == Brightness.dark ? 0.18 : 0.10)
-        : completed
-            ? accent.withValues(
-                alpha: brightness == Brightness.dark ? 0.07 : 0.05,
-              )
-            : style.dropdownBackground;
-    final borderColor = selected
-        ? accent
-        : completed
-            ? accent.withValues(alpha: 0.45)
-            : style.border;
+        : style.dropdownBackground;
+    final borderColor = selected ? accent : style.border;
     final radius = BorderRadius.circular(12 * s);
     final card = SizedBox(
       width: (showHomeworkStats ? 132 : 118) * s,
@@ -4051,9 +4064,7 @@ class _QuestionCard extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    color: (!selected && completed)
-                        ? style.title.withValues(alpha: 0.72)
-                        : style.title,
+                    color: style.title,
                     fontSize: 20 * s,
                     fontWeight: FontWeight.w800,
                   ),
@@ -4090,15 +4101,11 @@ class _QuestionCard extends StatelessWidget {
               behavior: HitTestBehavior.opaque,
               onTap: onTap,
               child: Text(
-                '풀이 $triedCount · 완료 $completedCount',
+                '출제 $triedCount · 완료 $completedCount',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                  color: completed
-                      ? accent
-                      : triedCount > 0
-                          ? style.title.withValues(alpha: 0.75)
-                          : style.hint.withValues(alpha: 0.75),
+                  color: style.hint,
                   fontSize: 11.2 * s,
                   fontWeight: FontWeight.w700,
                   height: 1.15,
@@ -4111,7 +4118,7 @@ class _QuestionCard extends StatelessWidget {
     );
     if (!showHomeworkStats) return card;
     return Tooltip(
-      message: '이번 시즌 출제/풀이 $triedCount회 · 완료 $completedCount회',
+      message: '이번 시즌 출제 $triedCount회 · 완료 $completedCount회',
       waitDuration: const Duration(milliseconds: 350),
       child: card,
     );

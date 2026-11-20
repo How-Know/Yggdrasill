@@ -3189,15 +3189,6 @@ class _GroupCard extends StatelessWidget {
         coverUri != null &&
         (coverUri.scheme == 'http' || coverUri.scheme == 'https');
     final attemptCount = group.performanceAttemptIndex;
-
-    final coverLabels = <Widget>[
-      if (group.inspectionLabel.isNotEmpty)
-        _AssignmentOriginBadge(
-          label: group.inspectionLabel,
-          carryover: false,
-          onCover: true,
-        ),
-    ];
     final dueLabel = group.isHomework ? group.dueUntilLabel() : '';
 
     return Material(
@@ -3220,7 +3211,6 @@ class _GroupCard extends StatelessWidget {
                 badge: coverBadge,
                 bookLabel: group.sourceLabel,
                 courseLabel: group.courseLabel,
-                overlayLabels: coverLabels,
               ),
               const SizedBox(width: 28),
               Expanded(
@@ -3228,9 +3218,11 @@ class _GroupCard extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (group.isHomework)
+                    if (group.isDueForCheck || group.isHomework)
                       _HomeworkDueChip(
-                        label: dueLabel,
+                        label: group.isDueForCheck
+                            ? group.inspectionLabel
+                            : dueLabel,
                         onDark: theme.brightness == Brightness.dark,
                       )
                     else
@@ -3299,53 +3291,6 @@ class _GroupCard extends StatelessWidget {
   }
 }
 
-class _AssignmentOriginBadge extends StatelessWidget {
-  const _AssignmentOriginBadge({
-    required this.label,
-    required this.carryover,
-    this.onCover = false,
-  });
-
-  final String label;
-  final bool carryover;
-  final bool onCover;
-
-  @override
-  Widget build(BuildContext context) {
-    final color =
-        carryover ? const Color(0xFF5E5CE6) : YggGlassTokens.confirmActionColor;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: onCover
-            ? color.withValues(alpha: 0.92)
-            : color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(999),
-        boxShadow: onCover
-            ? const [
-                BoxShadow(
-                  color: Color(0x33000000),
-                  blurRadius: 4,
-                  offset: Offset(0, 1),
-                ),
-              ]
-            : null,
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: onCover ? Colors.white : color,
-            fontSize: 13,
-            fontWeight: FontWeight.w800,
-            height: 1,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 /// 교재 표지 / 프린트(흰 배경) 썸네일 — 학습앱 채점 과제카드와 동일 규칙.
 class _HomeworkCoverThumb extends StatelessWidget {
   const _HomeworkCoverThumb({
@@ -3357,7 +3302,6 @@ class _HomeworkCoverThumb extends StatelessWidget {
     this.badge,
     this.bookLabel = '',
     this.courseLabel = '',
-    this.overlayLabels = const [],
   });
 
   final double size;
@@ -3368,7 +3312,6 @@ class _HomeworkCoverThumb extends StatelessWidget {
   final _CoverBadge? badge;
   final String bookLabel;
   final String courseLabel;
-  final List<Widget> overlayLabels;
 
   @override
   Widget build(BuildContext context) {
@@ -3379,7 +3322,6 @@ class _HomeworkCoverThumb extends StatelessWidget {
     // 표지 이미지가 있으면 제목/과정·하단 그라데이션은 숨긴다.
     final hasCoverImage = (coverRef ?? '').trim().isNotEmpty;
     final hasMeta = !hasCoverImage && (book.isNotEmpty || course.isNotEmpty);
-    final hasOverlayLabels = overlayLabels.isNotEmpty;
     Widget cover = coverRef == null
         ? ColoredBox(
             color: fallback,
@@ -3512,17 +3454,6 @@ class _HomeworkCoverThumb extends StatelessWidget {
                         ),
                       ),
                     ],
-                    if (hasOverlayLabels)
-                      Positioned(
-                        left: 8,
-                        right: 8,
-                        top: 8,
-                        child: Wrap(
-                          spacing: 4,
-                          runSpacing: 4,
-                          children: overlayLabels,
-                        ),
-                      ),
                   ],
                 ),
               ),
@@ -3534,7 +3465,7 @@ class _HomeworkCoverThumb extends StatelessWidget {
   }
 }
 
-/// 숙제 검사 날짜. 교재 카드 위 `N일째` 칩과 같은 `CoverPill`.
+/// 숙제 검사 날짜. 색·테두리·시계 아이콘은 배지 톤, 캡슐 크기·그림자·여백은 대기 칩과 같다.
 class _HomeworkDueChip extends StatelessWidget {
   const _HomeworkDueChip({
     required this.label,
@@ -3546,20 +3477,56 @@ class _HomeworkDueChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final style = CoverOverlayStyle(
-      onDark: onDark,
-      hasImage: false,
-    );
     if (label.isEmpty) {
-      return SizedBox(height: style.scaledPillHeight);
+      return const SizedBox(height: _CoverAttemptLabel.height);
     }
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: CoverPill(
-        style: style,
-        icon: Icons.schedule_rounded,
-        label: label,
-        shrinkWrap: true,
+    final ink = CoverOverlayStyle(onDark: onDark, hasImage: false);
+    // 밝은 배경(#F8F8F8)에서는 불투명 흰 캡슐 + 대기 칩과 같은 그림자로 21px 외곽을 또렷하게 잡는다.
+    final fill = onDark ? Colors.white.withValues(alpha: 0.12) : Colors.white;
+    final border = onDark
+        ? Colors.white.withValues(alpha: 0.16)
+        : Colors.black.withValues(alpha: 0.08);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: fill,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: border,
+          strokeAlign: BorderSide.strokeAlignOutside,
+        ),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x33000000),
+            blurRadius: 4,
+            offset: Offset(0, 1),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+          horizontal: _CoverAttemptLabel.horizontalPadding,
+          vertical: _CoverAttemptLabel.verticalPadding,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.schedule_rounded,
+              size: _CoverAttemptLabel.fontSize,
+              color: ink.inkSecondary,
+            ),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: TextStyle(
+                color: ink.ink,
+                fontSize: _CoverAttemptLabel.fontSize,
+                fontWeight: _CoverAttemptLabel.fontWeight,
+                height: 1,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -3575,6 +3542,9 @@ class _CoverAttemptLabel extends StatelessWidget {
   static const FontWeight fontWeight = FontWeight.w800;
   static const double horizontalPadding = 8;
   static const double verticalPadding = 4;
+
+  /// 글자 13 + 위아래 여백 4. 숙제 날짜 칩도 이 높이를 쓴다.
+  static const double height = fontSize + verticalPadding * 2;
 
   final String label;
   final Color? warningColor;

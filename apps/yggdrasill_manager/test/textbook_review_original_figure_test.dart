@@ -210,6 +210,20 @@ void main() {
       );
     });
 
+    test('표 모양 선지 제목 수정안: 제안만 있어도 적용 전 수정안이고, 반영 대기 값은 미리보기 덮어쓰기에 실린다', () {
+      const labels = ['닮은 도형', '닮음조건', r'\overline{DC}의 길이'];
+      final proposed = _item({'fix_proposal': {'blank_choice_labels': labels}});
+      expect(proposed.hasPendingFixProposal, isTrue);
+      expect(proposed.proposedBlankChoiceLabels, labels);
+      final staged = _item({
+        'fix_proposal': {'blank_choice_labels': labels},
+        'staged_changes': {'blank_choice_labels': labels},
+      });
+      expect(staged.proposedBlankChoiceLabels, isNull);
+      expect(staged.previewOverride?['blank_choice_labels'], labels);
+      expect(staged.stagedFields, contains('blank_choice_labels'));
+    });
+
     test('hasPendingFixProposal 과 computeCommonStemFix: 공통 발문만 바뀐 제안도 잡고 숫자·식 첫 문단으로 잘못 줄이지 않는다', () {
       expect(
         _item({'fix_proposal': {'common_stem': '다음 수의 약수의 개수를 구하여라.'}}).hasPendingFixProposal,

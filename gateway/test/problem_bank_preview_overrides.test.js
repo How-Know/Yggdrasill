@@ -51,3 +51,11 @@ test('덮어쓴 카드 경로는 내용이 바뀌면 달라진다', () => {
   assert.notEqual(overridePreviewKey('q1', { stem: 'a' }), overridePreviewKey('q1', { stem: 'b' }));
   assert.equal(overridePreviewKey('q1', { stem: 'a' }), overridePreviewKey('q1', { stem: 'a' }));
 });
+
+test('반영 대기 표 선지 제목(2~4개)을 덮어쓰고, 개수가 맞지 않으면 무시한다', () => {
+  const labels = ['닮은 도형', '닮음조건', '\\overline{DC}의 길이'];
+  const out = applyQuestionOverride(row, { blank_choice_labels: labels });
+  assert.deepEqual(out.meta.blank_choice_labels, labels);
+  assert.equal(row.meta.blank_choice_labels, undefined);
+  assert.equal(applyQuestionOverride(row, { blank_choice_labels: ['하나'] }).meta.blank_choice_labels, undefined);
+});

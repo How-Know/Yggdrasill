@@ -8,10 +8,26 @@ import '../../services/homework_store.dart';
 import '../../services/homework_time_defaults_service.dart';
 import '../../utils/homework_card_label.dart';
 import '../../utils/homework_page_text.dart';
+import '../../widgets/app_dialog_action_button.dart';
 import '../../widgets/bottom_dialog.dart';
 import '../../widgets/dialog_tokens.dart';
 import '../../widgets/latex_text_renderer.dart';
 import 'homework_created_date.dart';
+
+/// 과제 상세에서 인쇄할 부분.
+class HomeworkCardPrintSelection {
+  const HomeworkCardPrintSelection({
+    required this.problems,
+    required this.quickAnswer,
+    required this.explanation,
+  });
+
+  final bool problems;
+  final bool quickAnswer;
+  final bool explanation;
+
+  bool get hasAny => problems || quickAnswer || explanation;
+}
 
 /// 홈 과제 카드를 누르면 펼치지 않고 이 창을 연다.
 Future<void> showHomeworkCardDetailDialog({
@@ -24,6 +40,7 @@ Future<void> showHomeworkCardDetailDialog({
   String? dueLabel,
   bool showAdditionalPrefix = false,
   void Function(HomeworkItem child)? onChildPageTap,
+  Future<void> Function(HomeworkCardPrintSelection selection)? onPrint,
 }) {
   return showDialog<void>(
     context: context,
@@ -40,6 +57,7 @@ Future<void> showHomeworkCardDetailDialog({
         dueLabel: dueLabel,
         showAdditionalPrefix: showAdditionalPrefix,
         onChildPageTap: onChildPageTap,
+        onPrint: onPrint,
       );
     },
   );
@@ -56,6 +74,7 @@ class HomeworkCardDetailDialog extends StatefulWidget {
     this.dueLabel,
     this.showAdditionalPrefix = false,
     this.onChildPageTap,
+    this.onPrint,
   });
 
   final String studentId;
@@ -66,6 +85,7 @@ class HomeworkCardDetailDialog extends StatefulWidget {
   final String? dueLabel;
   final bool showAdditionalPrefix;
   final void Function(HomeworkItem child)? onChildPageTap;
+  final Future<void> Function(HomeworkCardPrintSelection selection)? onPrint;
 
   @override
   State<HomeworkCardDetailDialog> createState() =>
@@ -78,6 +98,7 @@ class _HomeworkCardDetailDialogState extends State<HomeworkCardDetailDialog> {
   String? _historyError;
   String _roundLabel = '';
   bool _historyOpen = false;
+  bool _printBusy = false;
 
   @override
   void initState() {
@@ -170,6 +191,25 @@ class _HomeworkCardDetailDialogState extends State<HomeworkCardDetailDialog> {
     }
   }
 
+  Future<void> _openPrintOptions() async {
+    final onPrint = widget.onPrint;
+    if (onPrint == null || _printBusy) return;
+    final selection = await showDialog<HomeworkCardPrintSelection>(
+      context: context,
+      barrierColor: Colors.black.withValues(
+        alpha: BottomDialogMetrics.barrierOpacity,
+      ),
+      builder: (context) => const _HomeworkCardPrintChooser(),
+    );
+    if (!mounted || selection == null || !selection.hasAny) return;
+    setState(() => _printBusy = true);
+    try {
+      await onPrint(selection);
+    } finally {
+      if (mounted) setState(() => _printBusy = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final dlg = YggDialogColors.of(context);
@@ -206,6 +246,15 @@ class _HomeworkCardDetailDialogState extends State<HomeworkCardDetailDialog> {
       icon: Icons.assignment_outlined,
       title: title,
       onClose: () => Navigator.of(context).pop(),
+      actions: widget.onPrint == null
+          ? const <Widget>[]
+          : [
+              AppDialogConfirmButton(
+                label: '인쇄',
+                showIcon: false,
+                onPressed: _printBusy ? null : _openPrintOptions,
+              ),
+            ],
       child: ScrollConfiguration(
         behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
         child: Row(
@@ -812,4 +861,104 @@ String _historyStatus(HomeworkAssignmentBrief brief) {
     return '미검사 이월';
   }
   return '내줌';
+}
+
+class _HomeworkCardPrintChooser extends StatefulWidget {
+  const _HomeworkCardPrintChooser();
+
+  @override
+  State<_HomeworkCardPrintChooser> createState() =>
+      _HomeworkCardPrintChooserState();
+}
+
+class _HomeworkCardPrintChooserState extends State<_HomeworkCardPrintChooser> {
+  bool _problems = true;
+  bool _quickAnswer = false;
+  bool _explanation = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final canPrint = _problems || _quickAnswer || _explanation;
+    return BottomDialog(
+      center: true,
+      shrinkWrap: true,
+      preferredWidth: 420,
+      icon: Icons.print_outlined,
+      title: '인쇄',
+      onClose: () => Navigator.of(context).pop(),
+      actions: [
+        AppDialogConfirmButton(
+          label: '인쇄',
+          showIcon: false,
+          onPressed: canPrint
+              ? () => Navigator.of(context).pop(
+                    HomeworkCardPrintSelection(
+                      problems: _problems,
+                      quickAnswer: _quickAnswer,
+                      explanation: _explanation,
+                    ),
+                  )
+              : null,
+        ),
+      ],
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _check(
+            label: '과제',
+            value: _problems,
+            onChanged: (value) => setState(() => _problems = value),
+          ),
+          _check(
+            label: '빠른 정답',
+            value: _quickAnswer,
+            onChanged: (value) => setState(() => _quickAnswer = value),
+          ),
+          _check(
+            label: '해설',
+            value: _explanation,
+            onChanged: (value) => setState(() => _explanation = value),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _check({
+    required String label,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+  }) {
+    final dlg = YggDialogColors.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: BottomDialogMetrics.actionGap),
+      child: BottomDialogCard(
+        onTap: () => onChanged(!value),
+        child: Row(
+          children: [
+            IgnorePointer(
+              child: Checkbox(
+                value: value,
+                activeColor: kDlgAccent,
+                checkColor: Colors.white,
+                side: BorderSide(color: dlg.textSub, width: 1.6),
+                onChanged: (_) {},
+              ),
+            ),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Text(
+                label,
+                style: TextStyle(
+                  color: dlg.text,
+                  fontSize: BottomDialogMetrics.actionLabelFontSize,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

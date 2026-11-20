@@ -79,6 +79,9 @@ class _GradingConfirmedAnswerDialogState
       const <String, _ConfirmedSubunitScope>{};
   List<Map<String, dynamic>> _cropRows = const <Map<String, dynamic>>[];
 
+  /// 정답을 볼 수 있는 소단원(문항이 하나라도 있는 소단원). _confirmedSmalls 도 이 기준이다.
+  Set<String> _viewableKeys = const <String>{};
+
   final ValueNotifier<_UnitSmallNode?> _activeSmallNotifier =
       ValueNotifier<_UnitSmallNode?>(null);
   final ValueNotifier<int> _activePageNotifier = ValueNotifier<int>(0);
@@ -211,11 +214,16 @@ class _GradingConfirmedAnswerDialogState
 
       final units = _parseUnits(payload, confirmedByKey);
       final confirmedSmalls = <_UnitSmallNode>[];
+      final viewableKeys = <String>{};
       for (final big in units) {
         for (final mid in big.middles) {
           for (final small in mid.smalls) {
             _treeRowKeyByStateKey[small.stateKey] = GlobalKey();
-            if (small.confirmed) confirmedSmalls.add(small);
+            // 오른쪽 정답 시트와 같은 정답을 보여 준다: 검수 확정 여부와 상관없이 문항이 있는 소단원은 모두 연다.
+            if (cropRows.any((row) => _rowBelongsToSmall(row, small))) {
+              confirmedSmalls.add(small);
+              viewableKeys.add(small.stateKey);
+            }
           }
         }
       }
@@ -227,6 +235,7 @@ class _GradingConfirmedAnswerDialogState
         _units = units;
         _confirmedSmalls = confirmedSmalls;
         _confirmedByKey = confirmedByKey;
+        _viewableKeys = viewableKeys;
         _cropRows = cropRows;
         _loading = false;
       });
@@ -504,7 +513,6 @@ class _GradingConfirmedAnswerDialogState
   }
 
   Future<void> _jumpToSubunit(_UnitSmallNode small) async {
-    if (!small.confirmed) return;
     final idx =
         _confirmedSmalls.indexWhere((s) => s.stateKey == small.stateKey);
     if (idx < 0) return;
@@ -555,7 +563,7 @@ class _GradingConfirmedAnswerDialogState
 
     if (!mounted) return;
     if (blockIdx < 0) {
-      showAppSnackBar(context, '확정된 소단원에 p.$targetPage 정답이 없습니다.');
+      showAppSnackBar(context, 'p.$targetPage 에 등록된 정답이 없습니다.');
       return;
     }
     final block = _pageBlocksNotifier.value[blockIdx];
@@ -907,8 +915,8 @@ class _GradingConfirmedAnswerDialogState
             padding: const EdgeInsets.only(bottom: 10),
             child: Text(
               confirmedCount > 0
-                  ? '확정된 소단원 $confirmedCount개 · 스크롤 위치에 따라 자동 하이라이트'
-                  : '확정된 소단원이 아직 없습니다',
+                  ? '정답이 있는 소단원 ${_confirmedSmalls.length}개 (검수 확정 $confirmedCount개) · 스크롤 위치에 따라 자동 하이라이트'
+                  : '정답이 있는 소단원 ${_confirmedSmalls.length}개 · 검수 확정된 소단원은 아직 없습니다',
               style: TextStyle(
                 color: dlg.textSub,
                 fontSize: 13.5,
@@ -968,6 +976,7 @@ class _GradingConfirmedAnswerDialogState
                 key: _treeRowKeyByStateKey[mid.smalls[si].stateKey],
                 activeSmallListenable: _activeSmallNotifier,
                 small: mid.smalls[si],
+                enabled: _viewableKeys.contains(mid.smalls[si].stateKey),
                 dlg: dlg,
                 pageText: _pageRangeLabel(
                   mid.smalls[si].startPage,
@@ -991,7 +1000,7 @@ class _GradingConfirmedAnswerDialogState
     if (_confirmedSmalls.isEmpty) {
       return Center(
         child: Text(
-          '확정된 소단원이 아직 없습니다.',
+          '정답이 등록된 소단원이 없습니다.',
           style: mediumStyle,
         ),
       );
@@ -1079,7 +1088,7 @@ class _GradingConfirmedAnswerDialogState
               if (blocks.isEmpty) {
                 return Center(
                   child: Text(
-                    '확정된 소단원에 연결된 정답이 없습니다.',
+                    '등록된 정답이 없습니다.',
                     style: mediumStyle,
                   ),
                 );
@@ -1731,6 +1740,7 @@ class _SmallRowHighlightBuilder extends StatefulWidget {
     super.key,
     required this.activeSmallListenable,
     required this.small,
+    required this.enabled,
     required this.dlg,
     required this.pageText,
     required this.onTapConfirmed,
@@ -1738,6 +1748,9 @@ class _SmallRowHighlightBuilder extends StatefulWidget {
 
   final ValueNotifier<_UnitSmallNode?> activeSmallListenable;
   final _UnitSmallNode small;
+
+  /// 정답을 열 수 있는 소단원인지(문항 있음). 검수 확정 여부는 [small.confirmed] 배지로만 보인다.
+  final bool enabled;
   final YggDialogColors dlg;
   final String pageText;
   final VoidCallback onTapConfirmed;
@@ -1787,7 +1800,8 @@ class _SmallRowHighlightBuilderState extends State<_SmallRowHighlightBuilder> {
   Widget build(BuildContext context) {
     final dlg = widget.dlg;
     final small = widget.small;
-    final enabled = small.confirmed;
+    final enabled = widget.enabled;
+    final confirmed = small.confirmed;
     final selected = _selected;
     return Container(
       decoration: BoxDecoration(
@@ -1810,7 +1824,11 @@ class _SmallRowHighlightBuilderState extends State<_SmallRowHighlightBuilder> {
             child: Row(
               children: [
                 Icon(
-                  enabled ? Icons.verified_rounded : Icons.lock_outline_rounded,
+                  confirmed
+                      ? Icons.verified_rounded
+                      : enabled
+                          ? Icons.article_outlined
+                          : Icons.lock_outline_rounded,
                   size: 16,
                   color: enabled
                       ? (selected ? kDlgAccent : dlg.text)
@@ -1851,20 +1869,20 @@ class _SmallRowHighlightBuilderState extends State<_SmallRowHighlightBuilder> {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(
-                    color: enabled
+                    color: confirmed
                         ? kDlgAccent.withValues(alpha: 0.18)
                         : dlg.fieldBg,
                     borderRadius: BorderRadius.circular(999),
                     border: Border.all(
-                      color: enabled
+                      color: confirmed
                           ? kDlgAccent.withValues(alpha: 0.55)
                           : dlg.divider,
                     ),
                   ),
                   child: Text(
-                    enabled ? '확정' : '미확정',
+                    confirmed ? '확정' : '미확정',
                     style: TextStyle(
-                      color: enabled
+                      color: confirmed
                           ? kDlgAccent
                           : dlg.textSub.withValues(alpha: 0.55),
                       fontSize: 11.5,

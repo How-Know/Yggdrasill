@@ -910,6 +910,54 @@ class CourseMapController extends ChangeNotifier {
   Future<String?> movePlacement(String placementId, String unitId) =>
       _placementAction(() => _backend.movePlacement(placementId: placementId, unitId: unitId));
 
+  /// 단원 안 순서를 [ids]로 맞춘다. 화면은 먼저 그 순서로 두고, 실패하면 되돌린다.
+  Future<String?> reorderPlacements(String unitId, List<String> ids) async {
+    final courseId = selectedCourseId;
+    final list = courseId == null ? null : _placements[courseId];
+    if (courseId == null || list == null) return null;
+    if (placementBusyCourseId != null || busyCourseId == courseId) return null;
+    final byId = {for (final p in list) p.id: p};
+    final hereIds = [for (final p in list) if (p.unitId == unitId) p.id];
+    if (ids.length != hereIds.length || ids.toSet().length != ids.length || !hereIds.toSet().containsAll(ids)) {
+      return '그사이 이 단원의 개념 목록이 바뀌었습니다. 다시 읽은 뒤 해 주세요.';
+    }
+    if (_sameIds(ids, hereIds)) return null;
+    final reordered = [for (final id in ids) byId[id]!];
+    final next = <CourseMapPlacement>[];
+    var placed = false;
+    for (final p in list) {
+      if (p.unitId != unitId) {
+        next.add(p);
+      } else if (!placed) {
+        next.addAll(reordered);
+        placed = true;
+      }
+    }
+    _placements[courseId] = next;
+    final problem = await _placementAction(() => _backend.reorderPlacements(unitId: unitId, ids: ids));
+    if (problem != null && identical(_placements[courseId], next)) {
+      _placements[courseId] = list;
+      notifyListeners();
+    }
+    return problem;
+  }
+
+  /// Think 배치를 확인한다. 칩은 바로 걷고, 실패하면 되돌린다.
+  Future<String?> acceptPlacement(String placementId) async {
+    final courseId = selectedCourseId;
+    final list = courseId == null ? null : _placements[courseId];
+    if (courseId == null || list == null) return null;
+    if (placementBusyCourseId != null || busyCourseId == courseId) return null;
+    final next = [for (final p in list) p.id == placementId ? p.accepted() : p];
+    _placements[courseId] = next;
+    final problem = await _placementAction(() => _backend.acceptPlacement(placementId));
+    if (problem != null && identical(_placements[courseId], next)) {
+      _placements[courseId] = list;
+      notifyListeners();
+    }
+    return problem;
+  }
+
   /// 단원 안에서 한 칸 위(-1)·아래(+1)로.
   Future<String?> shiftPlacement(String unitId, String placementId, int delta) {
     final courseId = selectedCourseId;
@@ -925,4 +973,12 @@ class CourseMapController extends ChangeNotifier {
   }
 
   Future<List<CourseMapConceptHit>> searchConcepts(String query) => _backend.searchConcepts(query);
+}
+
+bool _sameIds(List<String> a, List<String> b) {
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
 }

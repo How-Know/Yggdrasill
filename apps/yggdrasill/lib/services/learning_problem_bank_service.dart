@@ -1573,7 +1573,8 @@ class LearningProblemBankService {
             .eq('grade_label', gradeLabel)
             .eq('big_order', bigOrder)
             .eq('mid_order', midOrder)
-            .eq('sub_key', subKey);
+            .eq('sub_key', subKey)
+            .eq('is_set_header', false);
         for (final raw in _listOrEmpty(rows)) {
           final crop = _mapOrEmpty(raw);
           final problemNumber = problemKey(crop['problem_number']);

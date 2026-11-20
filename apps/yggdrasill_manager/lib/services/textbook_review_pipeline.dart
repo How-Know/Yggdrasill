@@ -60,6 +60,9 @@ class TextbookReviewPipeline {
   Map<String, String> previewUrls = const {};
   final List<String> errors = [];
   final Map<String, String> _cardUrls = {};
+
+  /// 이번 실행에서 정답·해설 카드를 찍지 못한 문항(crop_id → 이유)
+  final Map<String, String> _solutionCardErrors = {};
   final Map<String, String> _mathResolvedSig = {};
 
   bool get _stopped => isCancelled?.call() ?? false;
@@ -113,8 +116,9 @@ class TextbookReviewPipeline {
               ],
       );
       // 방금 렌더 검수가 해설 그림 누락을 잡은 문항은 그림을 찾아 붙이고 바로 다시 대조한다.
-      if (!_stopped && items.any((x) => x.needsSolutionFigures)) {
-        final more = await _solutionFiguresPass();
+      // 전에 찾아봤지만 못 찾은 문항도 이번 실행에서 한 번 더 찾는다.
+      if (!_stopped && items.any((x) => x.needsSolutionFigures || _retriesSolutionFigures(x))) {
+        final more = await _solutionFiguresPass(retryMissed: true);
         if (!_stopped && more.isNotEmpty) {
           renderChecked += await _renderCheckPass(only: [for (final x in items) if (more.contains(x.cropId)) x]);
         }
@@ -386,8 +390,15 @@ class TextbookReviewPipeline {
     return total;
   }
 
+  /// 해설 그림 찾기를 이번 실행에서 다시 해 본 문항(문항마다 한 번만 다시 한다)
+  final Set<String> _solutionFigureRetried = {};
+
+  bool _retriesSolutionFigures(TextbookProblemReviewItem x) =>
+      x.solutionFigureSearchMissed && !_solutionFigureRetried.contains(x.cropId);
+
   /// 원본 해설에 그림이 있을 수 있는 문항만 해설 PDF 에서 그림을 찾아 잘라 붙인다. 반환: 그림이 붙은 crop_id.
-  Future<Set<String>> _solutionFiguresPass() async {
+  /// [retryMissed] 면 전에 찾아봤지만 못 찾았고 렌더 검수가 해설 그림 누락으로 판정한 문항도 한 번 더 찾는다.
+  Future<Set<String>> _solutionFiguresPass({bool retryMissed = false}) async {
     // 이미 붙은 해설 그림의 정렬·가로 묶음을 지금 규칙으로 다시 계산한다(AI 없음, 바뀐 것만 저장).
     var rearranged = false;
     for (final x in items) {
@@ -399,8 +410,12 @@ class TextbookReviewPipeline {
       }
     }
     if (rearranged) await reload();
-    final targets = [for (final x in items) if (x.needsSolutionFigures) x];
+    final targets = [
+      for (final x in items)
+        if (x.needsSolutionFigures || (retryMissed && _retriesSolutionFigures(x))) x,
+    ];
     if (targets.isEmpty) return const {};
+    _solutionFigureRetried.addAll([for (final x in targets) if (x.solutionFigureSearchMissed) x.cropId]);
     _say('해설 그림 찾기 0/${targets.length}');
     final res = await service.extractSolutionFigures(
       scope,
@@ -426,8 +441,11 @@ class TextbookReviewPipeline {
         solutionKind: it.primarySolutionKind,
       );
       if (url.isNotEmpty) _cardUrls[key] = url;
+      _solutionCardErrors.remove(it.cropId);
       return url;
     } catch (e) {
+      // 카드를 못 찍은 문항은 해설을 검수할 수 없다. 이유를 렌더 검수에 함께 보내 준비됨을 막고 기록으로 남긴다.
+      _solutionCardErrors[it.cropId] = solutionCardErrorText(e);
       errors.add('${it.problemNumber}번 정답·해설 카드: $e');
       return '';
     }
@@ -458,16 +476,19 @@ class TextbookReviewPipeline {
     Future<Map<String, dynamic>?> payload(TextbookProblemReviewItem it) async {
       final problemUrl = previewUrls[it.cropId] ?? '';
       var solUrl = '';
+      var solError = '';
       if (it.primarySolutionText.isNotEmpty || it.displayAnswer.isNotEmpty) {
         solUrl = await _answerSolutionCardUrl(it);
+        if (solUrl.isEmpty) solError = _solutionCardErrors[it.cropId] ?? '';
       }
-      if (problemUrl.isEmpty && solUrl.isEmpty) return null;
+      if (problemUrl.isEmpty && solUrl.isEmpty && solError.isEmpty) return null;
       final original = problemUrl.isEmpty ? const <String, dynamic>{} : await service.originalImagesJson(scope, it);
       final solutionOriginal = solUrl.isEmpty ? const <String, dynamic>{} : await service.solutionOriginalJson(scope, it);
       return {
         'crop_id': it.cropId,
         if (problemUrl.isNotEmpty) 'problem_url': problemUrl,
         if (solUrl.isNotEmpty) 'answer_solution_url': solUrl,
+        if (solError.isNotEmpty) 'answer_solution_error': solError,
         'solution_kind': it.primarySolutionKind,
         'has_solution_figures': it.solutionFigureAssets.isNotEmpty,
         'figure_at_card_width': it.figureAtCardWidth,
@@ -658,8 +679,8 @@ class TextbookReviewPipeline {
         await _stageAnswer(
           it,
           ans,
-          solutionTranscribed: it.proposedSolutionTranscribed,
-          solutionAnswer: it.proposedSolutionAnswer,
+          solutionTranscribed: it.stageableSolutionTranscribed,
+          solutionAnswer: it.stageableSolutionAnswer,
           note: '정답 수정안',
         );
         applied++;
@@ -823,8 +844,8 @@ class TextbookReviewPipeline {
         await _stageAnswer(
           x,
           ans,
-          solutionTranscribed: x.proposedSolutionTranscribed,
-          solutionAnswer: x.proposedSolutionAnswer,
+          solutionTranscribed: x.stageableSolutionTranscribed,
+          solutionAnswer: x.stageableSolutionAnswer,
           note: '정답 수정안',
         );
         healedMath++;
@@ -948,6 +969,7 @@ class TextbookReviewPipeline {
     TextbookProblemReviewItem item, {
     String? stem,
     List<Map<String, dynamic>>? choices,
+    List<String>? blankChoiceLabels,
     String? commonStem,
     Map<String, dynamic>? figureLayout,
     List<Map<String, dynamic>> figureCrops = const [],
@@ -958,6 +980,7 @@ class TextbookReviewPipeline {
         item: item,
         stem: stem,
         choices: choices,
+        blankChoiceLabels: blankChoiceLabels,
         commonStem: commonStem,
         figureLayout: figureLayout,
         figureCrops: figureCrops,
@@ -979,6 +1002,7 @@ class TextbookReviewPipeline {
           it,
           stem: text ? it.proposedStem : null,
           choices: text ? it.proposedChoices : null,
+          blankChoiceLabels: text ? it.proposedBlankChoiceLabels : null,
           commonStem: text ? it.proposedCommonStem : null,
           figureLayout: figure
               ? (it.proposedFigureLayout ?? (it.renderedFigureLayout.isNotEmpty ? it.renderedFigureLayout : null))

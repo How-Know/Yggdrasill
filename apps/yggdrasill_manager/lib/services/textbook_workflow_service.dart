@@ -121,6 +121,9 @@ class TextbookSubunitWorkOrder {
   /// 내신 시험지 작업 지시의 [seriesKey]. 시험지 한 부가 검수 범위 하나다(책 = 문제은행 문서).
   static const String schoolExamSeriesKey = 'school_exam';
 
+  /// 모의고사 구간 작업 지시의 [seriesKey]. 회차의 구간(공통·선택과목) 하나가 검수 범위 하나다(책 = 구간의 문제은행 문서).
+  static const String mockExamSeriesKey = 'mock_exam';
+
   factory TextbookSubunitWorkOrder.fromJson(Map<String, dynamic> m) => TextbookSubunitWorkOrder(
         academyId: '${m['academy_id'] ?? ''}',
         bookId: '${m['book_id'] ?? ''}',
@@ -184,6 +187,14 @@ class TextbookSubunitWorkOrder {
   /// 내신 시험지인가. 인쇄된 해설이 없어 정답표를 지키고, 문항 영역·정답은 게이트웨이가 문제은행 문서에서 준비한다.
   bool get isSchoolExam => seriesKey == schoolExamSeriesKey;
 
+  /// 모의고사 구간인가. 인쇄된 해설이 있어 정답은 시중교재처럼 본다(정답표·해설 답·AI 답 중 둘이 같으면 통과).
+  /// 문항 영역·정답·해설 위치는 게이트웨이가 모의고사 추출 결과에서 준비한다.
+  bool get isMockExam => seriesKey == mockExamSeriesKey;
+
+  /// 문제은행 문서를 책으로 삼는 검수 범위(내신 시험지·모의고사 구간). 본문 추출과 검수 준비를 게이트웨이가 하고,
+  /// 채점 정답이 문제은행 정답에서 왔으므로 정답 연결을 하지 않는다(고친 정답은 확정 때 문제은행에 반영한다).
+  bool get isDocumentScope => isSchoolExam || isMockExam;
+
   String get workflowKey => textbookWorkflowKey(bookId, gradeLabel, bigOrder, midOrder, scopeKey);
 
   bool matches(TextbookProblemReviewItem it) {
@@ -214,6 +225,7 @@ class TextbookSubunitWorkOrder {
         qualityApprovedCount: 0,
         reviewMode: reviewMode,
         protectAnswerKey: isSchoolExam,
+        scoreOnCard: isMockExam,
       );
 
   Map<String, dynamic> toJson() => {
@@ -396,7 +408,14 @@ class TextbookWorkflowService {
   }
 
   /// 내신 시험지 작업 상태 전체. 키는 책 id(= 문제은행 문서 id). 시험지 한 부에 작업 상태가 하나다.
-  Future<Map<String, TextbookSubunitWorkflow>> fetchSchoolExams(String academyId) async {
+  Future<Map<String, TextbookSubunitWorkflow>> fetchSchoolExams(String academyId) =>
+      _fetchBySeries(academyId, TextbookSubunitWorkOrder.schoolExamSeriesKey);
+
+  /// 모의고사 구간 작업 상태 전체. 키는 책 id(= 구간의 문제은행 문서 id). 구간 하나에 작업 상태가 하나다.
+  Future<Map<String, TextbookSubunitWorkflow>> fetchMockExams(String academyId) =>
+      _fetchBySeries(academyId, TextbookSubunitWorkOrder.mockExamSeriesKey);
+
+  Future<Map<String, TextbookSubunitWorkflow>> _fetchBySeries(String academyId, String seriesKey) async {
     const pageSize = 1000;
     final out = <String, TextbookSubunitWorkflow>{};
     for (var from = 0;; from += pageSize) {
@@ -404,7 +423,7 @@ class TextbookWorkflowService {
           .from(_table)
           .select()
           .eq('academy_id', academyId)
-          .eq('work_order->>series_key', TextbookSubunitWorkOrder.schoolExamSeriesKey)
+          .eq('work_order->>series_key', seriesKey)
           .order('id', ascending: true)
           .range(from, from + pageSize - 1);
       final rows = (page as List).whereType<Map>().toList();
@@ -538,6 +557,24 @@ class TextbookWorkflowService {
           midOrder: order.midOrder,
           scopeKey: order.scopeKey,
         ));
+  }
+
+  /// 작업 화면에서 손본 뒤의 준비됨 수를 진행 메모에 남긴다(목록 표시용). 문항이 없으면 그대로 둔다.
+  /// 검수가 돌고 있는 범위는 실행기가 남기므로 부르지 않는다.
+  Future<void> noteReadyCounts(TextbookSubunitWorkOrder order) async {
+    final review = TextbookProblemReviewService(client: _db);
+    try {
+      final items = [for (final it in await review.fetchUnitItems(order.reviewScope)) if (order.matches(it)) it];
+      if (items.isEmpty) return;
+      final ready = items.where((x) => x.isWorkflowReady).length;
+      final held = items.where((x) => x.isEngineHeld).length;
+      await updatePipeline(
+        order,
+        detail: ['준비됨 $ready/${items.length}', if (held > 0) '코드 수정 필요 $held'].join(' · '),
+      );
+    } finally {
+      review.dispose();
+    }
   }
 
   /// 3단계: 모든 카드가 준비됨인 소단원을 확정한다.

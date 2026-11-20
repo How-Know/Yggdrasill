@@ -1,11 +1,12 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../../../services/concept_library_controller.dart';
 import '../../think/think_style.dart';
 
-/// 개념 탭 작업 공간. 왼쪽은 교육과정 흐름(기준 과정 탐색도), 오른쪽은 개념 라이브러리(정리 결과)로 위치를 고정하고,
-/// 크게 보는 쪽(초점)에 따라 너비와 보이는 정보만 바꾼다. 네 칸(흐름 상세·요약, 라이브러리 상세·요약)과
-/// 대화 패널은 GlobalKey로 붙잡아 두어 초점·화면 폭이 바뀌어도 선택·스크롤·입력이 남는다.
+/// 개념 탭 작업 공간. 왼쪽은 교육과정 흐름과 개념 라이브러리 중 하나, 오른쪽은 연산 리스트다. 너비는 1:1.
+/// 바꿔도 셋 다 붙여 둔다. Think 대화는 칸을 차지하지 않고, 오른쪽 아래 버튼으로 펼친다.
 /// 설계: docs/architecture/concept-library.md, docs/architecture/course-map.md
 class ConceptWorkspace extends StatefulWidget {
   const ConceptWorkspace({
@@ -15,7 +16,11 @@ class ConceptWorkspace extends StatefulWidget {
     required this.courseSummary,
     required this.libraryDetail,
     required this.librarySummary,
+    this.arithmetic,
+    this.showLibrary = false,
     this.chat,
+    this.chatExpanded = false,
+    this.onExpandChat,
   });
 
   final ConceptLibraryController controller;
@@ -24,16 +29,22 @@ class ConceptWorkspace extends StatefulWidget {
   final Widget libraryDetail;
   final Widget librarySummary;
 
-  /// 열려 있으면 Think 대화 패널. 옆에 둘 자리가 없으면 칸 전환으로 본다(세 번째 세로 영역을 억지로 만들지 않는다).
+  /// 오른쪽 절반. 연산 리스트.
+  final Widget? arithmetic;
+
+  /// 왼쪽을 흐름 대신 개념 라이브러리로 보일지. 오른쪽 연산 리스트는 그대로다.
+  final bool showLibrary;
+
+  /// Think 대화. 접혀 있으면 오른쪽 아래 버튼만 보이고, [chatExpanded]일 때 그 위에 겹쳐 펼친다.
   final Widget? chat;
 
-  /// 작업 영역이 이보다 좁으면 두 쪽을 나란히 두지 않고 한 쪽씩 본다.
-  static const double twoPaneMinWidth = 880;
+  /// [chat]을 펼쳐 둘지. 접히면 작업 영역 폭은 그대로다.
+  final bool chatExpanded;
 
-  /// 대화 패널을 옆에 둘 때 남는 작업 영역의 최소 폭.
-  static const double chatSideMinWork = 440;
-  static const double gap = 16;
+  /// 오른쪽 아래 버튼을 눌렀을 때. 없으면 버튼이 잠긴다.
+  final VoidCallback? onExpandChat;
 
+  /// 펼친 대화 폭. 작업 영역에서 빼지 않는다.
   static double chatWidthFor(double total) => (total * 0.3).clamp(340.0, 460.0);
 
   @override
@@ -45,11 +56,32 @@ class _ConceptWorkspaceState extends State<ConceptWorkspace> {
   final _courseSummaryKey = GlobalKey(debugLabel: 'courseSummary');
   final _libraryDetailKey = GlobalKey(debugLabel: 'libraryDetail');
   final _librarySummaryKey = GlobalKey(debugLabel: 'librarySummary');
+  final _arithmeticKey = GlobalKey(debugLabel: 'arithmeticList');
   final _chatKey = GlobalKey(debugLabel: 'conceptChat');
 
   ConceptLibraryController get _c => widget.controller;
 
   Widget _keep(GlobalKey key, Widget child) => KeyedSubtree(key: key, child: child);
+
+  @override
+  void didUpdateWidget(ConceptWorkspace oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.chatExpanded && !widget.chatExpanded) _releaseChatFocus();
+  }
+
+  /// 접을 때 숨은 입력칸에 커서가 남지 않게 한다.
+  void _releaseChatFocus() {
+    final node = FocusManager.instance.primaryFocus;
+    final focused = node?.context;
+    final chat = _chatKey.currentContext;
+    if (node == null || focused is! Element || chat is! Element) return;
+    var inside = identical(focused, chat);
+    focused.visitAncestorElements((ancestor) {
+      if (identical(ancestor, chat)) inside = true;
+      return !inside;
+    });
+    if (inside) node.unfocus();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -58,19 +90,36 @@ class _ConceptWorkspaceState extends State<ConceptWorkspace> {
       builder: (context, _) => LayoutBuilder(
         builder: (context, constraints) {
           final total = constraints.maxWidth;
+          final body = _split(constraints);
           final chat = widget.chat;
-          final chatWidth = ConceptWorkspace.chatWidthFor(total);
-          final chatSide = chat != null && total - chatWidth - ConceptWorkspace.gap >= ConceptWorkspace.chatSideMinWork;
-          final work = chatSide ? total - chatWidth - ConceptWorkspace.gap : total;
-          final body =
-              work >= ConceptWorkspace.twoPaneMinWidth ? _twoPane(context, work) : _onePane(chatSide ? null : chat);
-          if (!chatSide) return body;
-          return Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+          if (chat == null) return body;
+          final expanded = widget.chatExpanded;
+          final panelWidth = math.min(ConceptWorkspace.chatWidthFor(total), math.max(0.0, total - 32));
+          final panelHeight = math.max(0.0, constraints.maxHeight - 32);
+          // 저장 줄은 왼쪽 절반에 있다. 버튼은 오른쪽 연산 리스트 위에 둔다.
+          return Stack(
             children: [
-              Expanded(child: body),
-              const SizedBox(width: ConceptWorkspace.gap),
-              SizedBox(width: chatWidth, child: _keep(_chatKey, chat)),
+              Positioned.fill(child: body),
+              Positioned(
+                key: const ValueKey('concept-chat-overlay'),
+                right: 16,
+                bottom: 16,
+                child: Visibility(
+                  visible: expanded,
+                  maintainState: true,
+                  child: SizedBox(
+                    width: panelWidth,
+                    height: panelHeight,
+                    child: _keep(_chatKey, chat),
+                  ),
+                ),
+              ),
+              if (!expanded)
+                Positioned(
+                  right: 16,
+                  bottom: 16,
+                  child: _ConceptChatButton(onPressed: widget.onExpandChat),
+                ),
             ],
           );
         },
@@ -78,80 +127,84 @@ class _ConceptWorkspaceState extends State<ConceptWorkspace> {
     );
   }
 
-  Widget _twoPane(BuildContext context, double work) {
-    final courseFocused = _c.focus == ConceptWorkspaceFocus.courseMap;
-    final inner = work - ConceptWorkspace.gap;
-    final left = courseFocused ? inner * 2 / 3 : inner / 3;
-    final still = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+  /// 왼쪽 절반은 흐름 또는 라이브러리, 오른쪽 절반은 연산 리스트.
+  Widget _split(BoxConstraints constraints) {
+    return Stack(
+      fit: StackFit.expand,
       children: [
-        AnimatedContainer(
-          duration: still ? Duration.zero : const Duration(milliseconds: 220),
-          curve: Curves.easeOutCubic,
-          width: left,
-          child: IndexedStack(
-            index: courseFocused ? 0 : 1,
-            sizing: StackFit.expand,
-            children: [
-              _keep(_courseDetailKey, widget.courseDetail),
-              _keep(_courseSummaryKey, widget.courseSummary),
-            ],
-          ),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(
+              child: IndexedStack(
+                key: const ValueKey('concept-workspace-main'),
+                index: widget.showLibrary ? 1 : 0,
+                sizing: StackFit.expand,
+                children: [
+                  _keep(_courseDetailKey, widget.courseDetail),
+                  _keep(_libraryDetailKey, widget.libraryDetail),
+                ],
+              ),
+            ),
+            const VerticalDivider(color: kThinkBorder, width: 16),
+            Expanded(
+              child: KeyedSubtree(
+                key: const ValueKey('concept-workspace-arithmetic'),
+                child: _keep(_arithmeticKey, widget.arithmetic ?? const SizedBox.shrink()),
+              ),
+            ),
+          ],
         ),
-        const SizedBox(width: ConceptWorkspace.gap),
-        Expanded(
-          child: IndexedStack(
-            index: courseFocused ? 1 : 0,
-            sizing: StackFit.expand,
-            children: [
-              _keep(_libraryDetailKey, widget.libraryDetail),
-              _keep(_librarySummaryKey, widget.librarySummary),
-            ],
+        Offstage(
+          child: SizedBox(
+            width: constraints.maxWidth,
+            height: constraints.maxHeight,
+            child: IndexedStack(
+              sizing: StackFit.expand,
+              index: 0,
+              children: [
+                _keep(_courseSummaryKey, widget.courseSummary),
+                _keep(_librarySummaryKey, widget.librarySummary),
+              ],
+            ),
           ),
         ),
       ],
     );
   }
+}
 
-  /// 좁은 화면: 한 칸씩 본다. 요약 칸은 쓰지 않고(상세만), 겹치지 않는다.
-  Widget _onePane(Widget? chat) {
-    final showChat = chat != null && _c.narrowChat;
-    final index = showChat ? 2 : (_c.focus == ConceptWorkspaceFocus.courseMap ? 0 : 1);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Align(
-          alignment: Alignment.centerLeft,
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: ThinkPillTabs(
-              labels: ['교육과정 흐름', '개념 라이브러리', if (chat != null) 'Think 대화'],
-              icons: [Icons.timeline, Icons.account_tree_outlined, if (chat != null) Icons.forum_outlined],
-              selected: index,
-              onSelected: (i) {
-                if (i == 2) {
-                  _c.showNarrowChat();
-                } else {
-                  _c.setFocus(i == 0 ? ConceptWorkspaceFocus.courseMap : ConceptWorkspaceFocus.library);
-                }
-              },
+/// 개념 정리 대화. 누르면 작업 영역 위에 펼친다.
+class _ConceptChatButton extends StatelessWidget {
+  const _ConceptChatButton({required this.onPressed});
+
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: 'Think와 개념 정리',
+      child: Material(
+        color: kThinkAccent,
+        elevation: 4,
+        borderRadius: BorderRadius.circular(24),
+        child: InkWell(
+          key: const ValueKey('concept-chat-fab'),
+          onTap: onPressed,
+          borderRadius: BorderRadius.circular(24),
+          child: const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.forum_outlined, size: 18, color: Colors.white),
+                SizedBox(width: 8),
+                Text('개념 정리', style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w800)),
+              ],
             ),
           ),
         ),
-        const SizedBox(height: 12),
-        Expanded(
-          child: IndexedStack(
-            index: index,
-            sizing: StackFit.expand,
-            children: [
-              _keep(_courseDetailKey, widget.courseDetail),
-              _keep(_libraryDetailKey, widget.libraryDetail),
-              if (chat != null) _keep(_chatKey, chat),
-            ],
-          ),
-        ),
-      ],
+      ),
     );
   }
 }

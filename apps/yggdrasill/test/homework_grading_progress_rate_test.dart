@@ -113,4 +113,75 @@ void main() {
       expect(merged.enabled, isFalse);
     });
   });
+
+  group('첫 검사 점수', () {
+    test('배점 없는 1점 채점은 카드에 올리지 않는다', () {
+      final selected = resolveGroupHomeworkFirstInspectionScore(
+        const [
+          HomeworkFirstInspectionScore(
+            scoreCorrect: 8,
+            scoreTotal: 10,
+            recordedQuestionCount: 10,
+          ),
+        ],
+        groupQuestionCount: 10,
+      );
+      expect(selected, isNull);
+    });
+
+    test('그룹 전체를 대표 하위에 저장한 첫 점수는 한 번만 쓴다', () {
+      const groupWide = HomeworkFirstInspectionScore(
+        scoreCorrect: 87,
+        scoreTotal: 100,
+        recordedQuestionCount: 30,
+        hasPointScores: true,
+      );
+      const partial = HomeworkFirstInspectionScore(
+        scoreCorrect: 12,
+        scoreTotal: 20,
+        recordedQuestionCount: 8,
+        hasPointScores: true,
+      );
+      final selected = resolveGroupHomeworkFirstInspectionScore(
+        const [groupWide, partial],
+        groupQuestionCount: 30,
+      );
+      expect(selected, same(groupWide));
+      expect(selected!.label, '87/100');
+    });
+
+    test('나뉜 배점 과제는 하위 첫 점수를 더한다', () {
+      final selected = resolveGroupHomeworkFirstInspectionScore(
+        const [
+          HomeworkFirstInspectionScore(
+            scoreCorrect: 40,
+            scoreTotal: 60,
+            recordedQuestionCount: 12,
+            hasPointScores: true,
+          ),
+          HomeworkFirstInspectionScore(
+            scoreCorrect: 30,
+            scoreTotal: 40,
+            recordedQuestionCount: 8,
+            hasPointScores: true,
+          ),
+        ],
+        groupQuestionCount: 20,
+      );
+      expect(selected!.scoreCorrect, 70);
+      expect(selected.scoreTotal, 100);
+      expect(selected.label, '70/100');
+    });
+
+    test('소수 점수는 한 자리로 보여 준다', () {
+      expect(
+        formatHomeworkInspectionScore(
+          scoreCorrect: 87.5,
+          scoreTotal: 100,
+          hasPointScores: true,
+        ),
+        '87.5/100',
+      );
+    });
+  });
 }

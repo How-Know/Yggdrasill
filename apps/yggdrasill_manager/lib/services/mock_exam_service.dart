@@ -34,6 +34,32 @@ class MockExamService {
         .toList();
   }
 
+  /// 학원의 모든 회차에 올라온 PDF. exam_id 별로 묶는다.
+  Future<Map<String, List<MockExamPaper>>> listPapersByExam(
+    String academyId,
+  ) async {
+    const pageSize = 1000;
+    final out = <String, List<MockExamPaper>>{};
+    for (var from = 0;; from += pageSize) {
+      final page = await _client
+          .from('mock_exam_papers')
+          .select('*')
+          .eq('academy_id', academyId)
+          .order('id', ascending: true)
+          .range(from, from + pageSize - 1);
+      final rows = (page as List<dynamic>)
+          .map((r) => Map<String, dynamic>.from(r as Map))
+          .toList();
+      for (final r in rows) {
+        out
+            .putIfAbsent('${r['exam_id']}', () => <MockExamPaper>[])
+            .add(MockExamPaper.fromMap(r));
+      }
+      if (rows.length < pageSize) break;
+    }
+    return out;
+  }
+
   /// 학원의 모든 구간 문서 연결. exam_id 별로 묶는다.
   Future<Map<String, List<MockExamSectionLink>>> listSectionLinks(
     String academyId,
@@ -80,10 +106,12 @@ class MockExamService {
 
   /// 파일명으로 읽은 PDF 묶음을 시험 단위로 올리고 추출 대기열에 넣는다.
   /// 같은 시험·종류·선택과목의 기존 PDF 는 교체한다.
+  /// [requestExtraction] 이 false 면 올리기만 한다(교재 메뉴: 검수 범위를 만든 뒤에 추출을 건다).
   Future<List<String>> uploadBatch({
     required String academyId,
     required List<MockExamFileName> files,
     void Function(String message)? onProgress,
+    bool requestExtraction = true,
   }) async {
     final userId = _client.auth.currentUser?.id;
     final byExam = <String, List<MockExamFileName>>{};
@@ -107,6 +135,8 @@ class MockExamService {
               'exam_month': head.month,
               'org': head.org,
               'title': head.title,
+              'curriculum_code':
+                  mockExamCurriculumCode(head.grade, head.examYear),
               if (userId != null) 'created_by': userId,
             },
             onConflict: 'academy_id,grade,exam_year,exam_month,org',
@@ -162,7 +192,7 @@ class MockExamService {
           }
         }
       }
-      await requestExtraction(examId, 'all');
+      if (requestExtraction) await this.requestExtraction(examId, 'all');
       examIds.add(examId);
     }
     return examIds;

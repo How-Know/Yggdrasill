@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 import '../../../services/course_map_controller.dart';
@@ -10,7 +12,7 @@ import 'concept_type_chip.dart';
 import 'concept_workspace.dart';
 import 'course_change_log_dialog.dart';
 
-/// 기준 과정 탐색도(`docs/architecture/course-map.md`). 개념 탭 왼쪽 칸과 문항로드맵 메뉴가 같은 컨트롤러를 쓴다.
+/// 기준 과정 탐색도(`docs/architecture/course-map.md`). 개념 탭과 문항로드맵 메뉴가 같은 컨트롤러를 쓴다.
 /// 세로 레일과 단계 번호는 나열 순서만 뜻한다. 선수 관계로 읽히는 화살표는 쓰지 않는다.
 
 const String _draftNote = '예전 문항로드맵 화면의 목록을 옮겨 온 기준 초안입니다. 공식 교육과정과 맞춰 본 자료가 아니며, 운영자가 고쳐 씁니다.';
@@ -40,7 +42,12 @@ PopupMenuItem<String> _menuItem(String value, IconData icon, String label, {bool
 
 String _levelName(int depth) => kCourseMapLevelNames[(depth - 1).clamp(0, 2)];
 
-Widget _changeLogButton(BuildContext context, CourseMapController c, ValueChanged<String>? onOpenConcept) => IconButton(
+Widget _changeLogButton(
+  BuildContext context,
+  CourseMapController c,
+  ValueChanged<String>? onOpenConcept,
+) =>
+    IconButton(
       key: const ValueKey('course-change-log'),
       tooltip: '최근 변경 기록',
       onPressed: () => unawaited(showCourseChangeLog(context, controller: c, onOpenConcept: onOpenConcept)),
@@ -50,12 +57,32 @@ Widget _changeLogButton(BuildContext context, CourseMapController c, ValueChange
 
 /// 크게 볼 때(편집).
 class CourseMapPane extends StatefulWidget {
-  const CourseMapPane({super.key, required this.controller, this.onOpenConcept});
+  const CourseMapPane({
+    super.key,
+    required this.controller,
+    this.selectedConceptId,
+    this.onOpenConcept,
+    this.onOpenChange,
+    this.aboveSelection,
+    this.onShowLibrary,
+  });
 
   final CourseMapController controller;
 
+  /// 지금 고른 개념. 그 줄만 단원 선택과 같은 강조를 받는다.
+  final ValueListenable<String?>? selectedConceptId;
+
+  /// 옆 칸에서 선택한 단원보다 위에 둔다. 고른 개념 요약.
+  final Widget? aboveSelection;
+
+  /// 과정 관리 왼쪽 탭. 왼쪽 절반을 개념 라이브러리로 바꾼다.
+  final VoidCallback? onShowLibrary;
+
   /// 흐름 목록의 개념 줄을 누르면 부른다. 없으면 개념 줄은 보기만 한다.
   final ValueChanged<String>? onOpenConcept;
+
+  /// 최근 변경 기록에서 개념을 열 때. 없으면 [onOpenConcept]를 쓴다.
+  final ValueChanged<String>? onOpenChange;
 
   @override
   State<CourseMapPane> createState() => _CourseMapPaneState();
@@ -80,8 +107,9 @@ class _CourseMapPaneState extends State<CourseMapPane> {
 
   @override
   Widget build(BuildContext context) {
+    final selected = widget.selectedConceptId;
     return ListenableBuilder(
-      listenable: _c,
+      listenable: selected == null ? _c : Listenable.merge([_c, selected]),
       builder: (context, _) {
         final d = _c.draft;
         final dirty = d?.changeCount ?? 0;
@@ -97,7 +125,7 @@ class _CourseMapPaneState extends State<CourseMapPane> {
                   if (dirty > 0) ThinkBadge('저장 안 됨 $dirty', color: kThinkError),
                 ],
                 actions: [
-                  _changeLogButton(context, _c, widget.onOpenConcept),
+                  _changeLogButton(context, _c, widget.onOpenChange ?? widget.onOpenConcept),
                   IconButton(
                     tooltip: '과정 목록 다시 읽기(편집은 남김)',
                     onPressed: _c.listLoading || _c.busy ? null : () => unawaited(_c.loadList()),
@@ -128,7 +156,7 @@ class _CourseMapPaneState extends State<CourseMapPane> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _CourseStrip(controller: _c, withMenu: true),
+        _CourseStrip(controller: _c, withMenu: true, onShowLibrary: widget.onShowLibrary),
         const Divider(color: kThinkBorder, height: 1),
         Expanded(child: _courseBody()),
       ],
@@ -184,8 +212,19 @@ class _CourseMapPaneState extends State<CourseMapPane> {
         Expanded(
           child: LayoutBuilder(
             builder: (context, constraints) {
-              final outline =
-                  _CourseOutline(controller: _c, draft: d, editable: true, onOpenConcept: widget.onOpenConcept);
+              final outline = _CourseOutline(
+                controller: _c,
+                draft: d,
+                editable: true,
+                selectedConceptId: widget.selectedConceptId?.value,
+                onOpenConcept: widget.onOpenConcept,
+                onAcceptThink: (p) => unawaited(_acceptPlacement(p)),
+                placementBusy: _locked || _c.placementBusyCourseId != null,
+                onReorderPlacements: (unitId, ids) => unawaited(_reorderPlacements(unitId, ids)),
+                onMovePlacementTo: (p, unitId) => unawaited(_dropMove(d, p, unitId)),
+                onMovePlacement: (p) => unawaited(_movePlacement(d, p)),
+                onRemovePlacement: (p) => unawaited(_removePlacement(p)),
+              );
               final side = _side(d);
               if (constraints.maxWidth >= 760) {
                 return Row(
@@ -221,15 +260,18 @@ class _CourseMapPaneState extends State<CourseMapPane> {
     return Scrollbar(
       controller: _sideScroll,
       child: ListView(
+        key: const ValueKey('course-side-list'),
         controller: _sideScroll,
         padding: const EdgeInsets.all(16),
         children: [
-          if (id != null && d.node(id) != null) ...[
-            ..._unitEditor(d, id),
+          if (widget.aboveSelection != null) ...[
+            widget.aboveSelection!,
             const SizedBox(height: 16),
             const Divider(color: kThinkBorder, height: 1),
             const SizedBox(height: 12),
-            ..._unitConcepts(d, id),
+          ],
+          if (id != null && d.node(id) != null) ...[
+            ..._unitEditor(d, id),
           ] else ...[
             const ConceptSectionTitle('선택한 단원'),
             const ConceptHint('왼쪽에서 단원을 고르면 이름과 자리를 고치고, 그 단원에 놓인 개념을 볼 수 있습니다.'),
@@ -277,6 +319,7 @@ class _CourseMapPaneState extends State<CourseMapPane> {
         onChanged: (v) => _c.rename(id, v),
       ),
       const SizedBox(height: 4),
+      ..._conceptAddButton(d, id),
       Wrap(
         spacing: 8,
         runSpacing: 8,
@@ -303,7 +346,7 @@ class _CourseMapPaneState extends State<CourseMapPane> {
             onPressed: _locked ? null : () => _c.addUnit(n.parentId, after: id),
             style: _compactOutline(),
             icon: const Icon(Icons.playlist_add, size: 16),
-            label: Text('뒤에 ${_levelName(depth)} 추가'),
+            label: Text('${_levelName(depth)} 추가'),
           ),
           if (depth < kCourseMapMaxDepth)
             OutlinedButton.icon(
@@ -320,34 +363,48 @@ class _CourseMapPaneState extends State<CourseMapPane> {
           ),
         ],
       ),
-      const SizedBox(height: 8),
-      const ConceptHint('위로·아래로는 같은 단원 안 순서만 바꿉니다. 다른 단원 아래로는 "옮기기"를 쓰세요.'),
+      ..._conceptStatus(d, id),
     ];
   }
 
-  List<Widget> _unitConcepts(CourseMapDraft d, String unitId) {
-    final courseId = d.course.id;
+  /// 넣을 수 있을 때만, 단원 이동·추가 버튼보다 위에 둔다.
+  List<Widget> _conceptAddButton(CourseMapDraft d, String unitId) {
     final n = d.node(unitId)!;
-    final error = _c.placementError(courseId);
-    final loaded = _c.placementsOf(courseId) != null;
-    final here = _c.placementsIn(courseId, unitId);
+    final courseId = d.course.id;
+    if (n.isNew || _c.placementError(courseId) != null || _c.placementsOf(courseId) == null) {
+      return const [];
+    }
     final busy = _locked || _c.placementBusyCourseId != null;
     return [
-      ConceptSectionTitle(
-        loaded && !n.isNew ? '이 단원의 개념 (${here.length})' : '이 단원의 개념',
-        trailing: !loaded || n.isNew
-            ? null
-            : TextButton.icon(
-                key: const ValueKey('placement-add'),
-                onPressed: busy ? null : () => _addConcepts(d, unitId),
-                icon: const Icon(Icons.add, size: 16),
-                label: const Text('개념 넣기'),
-                style: TextButton.styleFrom(foregroundColor: kThinkAccent, visualDensity: VisualDensity.compact),
-              ),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: TextButton.icon(
+          key: const ValueKey('placement-add'),
+          onPressed: busy ? null : () => _addConcepts(d, unitId),
+          icon: const Icon(Icons.add, size: 16),
+          label: const Text('개념 추가'),
+          style: TextButton.styleFrom(foregroundColor: kThinkAccent, visualDensity: VisualDensity.compact),
+        ),
       ),
-      if (n.isNew)
-        const ConceptHint('저장 전 새 단원입니다. 저장한 뒤에 개념을 넣을 수 있습니다.')
-      else if (error != null) ...[
+      const SizedBox(height: 8),
+    ];
+  }
+
+  /// 배치를 아직 넣지 못할 때의 안내. 넣을 수 있으면 비운다.
+  List<Widget> _conceptStatus(CourseMapDraft d, String unitId) {
+    final n = d.node(unitId)!;
+    final courseId = d.course.id;
+    final error = _c.placementError(courseId);
+    final loaded = _c.placementsOf(courseId) != null;
+    if (n.isNew) {
+      return const [
+        SizedBox(height: 8),
+        ConceptHint('저장 전 새 단원입니다. 저장한 뒤에 개념을 넣을 수 있습니다.'),
+      ];
+    }
+    if (error != null) {
+      return [
+        const SizedBox(height: 8),
         ThinkNotice(
           text: error.notReady
               ? 'DB에 개념 배치 기능이 아직 반영되지 않았습니다. 마이그레이션은 별도 승인 뒤에 반영합니다.'
@@ -365,31 +422,17 @@ class _CourseMapPaneState extends State<CourseMapPane> {
             label: const Text('다시 읽기'),
           ),
         ),
-      ] else if (!loaded)
-        const Padding(
+      ];
+    }
+    if (!loaded) {
+      return const [
+        Padding(
           padding: EdgeInsets.symmetric(vertical: 8),
           child: LinearProgressIndicator(color: kThinkAccent, backgroundColor: kThinkBorder, minHeight: 2),
-        )
-      else if (here.isEmpty)
-        const ConceptHint('아직 놓인 개념이 없습니다. "개념 넣기"로 넣거나, Think 대화에서 배치를 부탁하면 카드로 제안합니다.')
-      else
-        for (var i = 0; i < here.length; i++) ...[
-          _PlacementTile(
-            placement: here[i],
-            busy: busy,
-            canUp: i > 0,
-            canDown: i < here.length - 1,
-            onShift: (delta) => _shiftPlacement(unitId, here[i], delta),
-            onMove: () => _movePlacement(d, here[i]),
-            onRemove: () => _removePlacement(here[i]),
-          ),
-          if (i < here.length - 1) const SizedBox(height: 8),
-        ],
-      if (loaded && !n.isNew) ...[
-        const SizedBox(height: 8),
-        const ConceptHint('넣기·빼기·순서·옮기기는 바로 저장됩니다(아래 "저장"과 따로). 개념 본문·출처는 바뀌지 않습니다.'),
-      ],
-    ];
+        ),
+      ];
+    }
+    return const [];
   }
 
   List<Widget> _courseEditor(CourseMapDraft d) {
@@ -465,9 +508,15 @@ class _CourseMapPaneState extends State<CourseMapPane> {
     showThinkSnack(context, problem ?? '개념 ${ids.length}개를 넣었습니다.', error: problem != null);
   }
 
-  Future<void> _shiftPlacement(String unitId, CourseMapPlacement p, int delta) async {
-    final problem = await _c.shiftPlacement(unitId, p.id, delta);
+  Future<void> _reorderPlacements(String unitId, List<String> ids) async {
+    final problem = await _c.reorderPlacements(unitId, ids);
     if (problem != null && mounted) showThinkSnack(context, problem, error: true);
+  }
+
+  Future<void> _acceptPlacement(CourseMapPlacement p) async {
+    final problem = await _c.acceptPlacement(p.id);
+    if (!mounted) return;
+    showThinkSnack(context, problem ?? '확인했습니다.', error: problem != null);
   }
 
   Future<void> _movePlacement(CourseMapDraft d, CourseMapPlacement p) async {
@@ -482,7 +531,31 @@ class _CourseMapPaneState extends State<CourseMapPane> {
     if (target == null || !mounted) return;
     final problem = await _c.movePlacement(p.id, target);
     if (!mounted) return;
-    showThinkSnack(context, problem ?? '"${p.name}"을(를) ${d.numberLabel(target)} 단원으로 옮겼습니다.',
+    _snackMove(d, p, target, problem);
+  }
+
+  Future<void> _dropMove(CourseMapDraft d, CourseMapPlacement p, String unitId) async {
+    final node = d.node(unitId);
+    if (node == null || unitId == p.unitId) return;
+    if (node.isNew) {
+      showThinkSnack(context, '저장 전 새 단원입니다. 저장한 뒤에 옮길 수 있습니다.', error: true);
+      return;
+    }
+    final taken = {
+      for (final x in _c.placementsOf(d.course.id) ?? const <CourseMapPlacement>[])
+        if (x.conceptId == p.conceptId) x.unitId,
+    };
+    if (taken.contains(unitId)) {
+      showThinkSnack(context, '이 개념이 이미 놓인 단원입니다.', error: true);
+      return;
+    }
+    final problem = await _c.movePlacement(p.id, unitId);
+    if (!mounted) return;
+    _snackMove(d, p, unitId, problem);
+  }
+
+  void _snackMove(CourseMapDraft d, CourseMapPlacement p, String unitId, String? problem) {
+    showThinkSnack(context, problem ?? '"${p.name}"을(를) ${d.numberLabel(unitId)} 단원으로 옮겼습니다.',
         error: problem != null);
   }
 
@@ -681,11 +754,25 @@ class _CourseMapPaneState extends State<CourseMapPane> {
 
 /// 다른 쪽을 크게 볼 때(읽기만).
 class CourseMapSummaryPane extends StatefulWidget {
-  const CourseMapSummaryPane({super.key, required this.controller, this.onExpand, this.onOpenConcept});
+  const CourseMapSummaryPane({
+    super.key,
+    required this.controller,
+    this.selectedConceptId,
+    this.onExpand,
+    this.onOpenConcept,
+    this.onOpenChange,
+  });
 
   final CourseMapController controller;
+
+  /// 지금 고른 개념. 그 줄만 단원 선택과 같은 강조를 받는다.
+  final ValueListenable<String?>? selectedConceptId;
+
   final VoidCallback? onExpand;
   final ValueChanged<String>? onOpenConcept;
+
+  /// 최근 변경 기록에서 개념을 열 때. 없으면 [onOpenConcept]를 쓴다.
+  final ValueChanged<String>? onOpenChange;
 
   @override
   State<CourseMapSummaryPane> createState() => _CourseMapSummaryPaneState();
@@ -693,6 +780,12 @@ class CourseMapSummaryPane extends StatefulWidget {
 
 class _CourseMapSummaryPaneState extends State<CourseMapSummaryPane> {
   CourseMapController get _c => widget.controller;
+
+  Future<void> _acceptThink(CourseMapPlacement p) async {
+    final problem = await _c.acceptPlacement(p.id);
+    if (!mounted) return;
+    showThinkSnack(context, problem ?? '확인했습니다.', error: problem != null);
+  }
 
   @override
   void initState() {
@@ -702,8 +795,9 @@ class _CourseMapSummaryPaneState extends State<CourseMapSummaryPane> {
 
   @override
   Widget build(BuildContext context) {
+    final selected = widget.selectedConceptId;
     return ListenableBuilder(
-      listenable: _c,
+      listenable: selected == null ? _c : Listenable.merge([_c, selected]),
       builder: (context, _) => ThinkPanel(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -712,7 +806,7 @@ class _CourseMapSummaryPaneState extends State<CourseMapSummaryPane> {
               icon: Icons.timeline,
               title: '교육과정 흐름',
               badges: [_draftBadge()],
-              actions: [_changeLogButton(context, _c, widget.onOpenConcept)],
+              actions: [_changeLogButton(context, _c, widget.onOpenChange ?? widget.onOpenConcept)],
               onExpand: widget.onExpand,
             ),
             const Divider(color: kThinkBorder, height: 1),
@@ -753,7 +847,14 @@ class _CourseMapSummaryPaneState extends State<CourseMapSummaryPane> {
               ? const SizedBox.shrink()
               : d == null
                   ? _courseProblem(_c, course.id)
-                  : _CourseOutline(controller: _c, draft: d, editable: false, onOpenConcept: widget.onOpenConcept),
+                  : _CourseOutline(
+                      controller: _c,
+                      draft: d,
+                      editable: false,
+                      selectedConceptId: widget.selectedConceptId?.value,
+                      onOpenConcept: widget.onOpenConcept,
+                      onAcceptThink: (p) => unawaited(_acceptThink(p)),
+                    ),
         ),
       ],
     );
@@ -851,10 +952,11 @@ Widget _courseProblem(CourseMapController c, String courseId) {
 }
 
 class _CourseStrip extends StatefulWidget {
-  const _CourseStrip({required this.controller, required this.withMenu});
+  const _CourseStrip({required this.controller, required this.withMenu, this.onShowLibrary});
 
   final CourseMapController controller;
   final bool withMenu;
+  final VoidCallback? onShowLibrary;
 
   @override
   State<_CourseStrip> createState() => _CourseStripState();
@@ -901,6 +1003,16 @@ class _CourseStripState extends State<_CourseStrip> {
               ),
             ),
           ),
+          if (widget.onShowLibrary != null) ...[
+            OutlinedButton.icon(
+              key: const ValueKey('course-show-library'),
+              onPressed: _c.busy ? null : widget.onShowLibrary,
+              style: _compactOutline(),
+              icon: const Icon(Icons.account_tree_outlined, size: 16),
+              label: const Text('개념 라이브러리'),
+            ),
+            const SizedBox(width: 4),
+          ],
           if (widget.withMenu) _menu(active),
         ],
       ),
@@ -1014,19 +1126,52 @@ class _Row {
 
 /// 대·중·소 목록과 왼쪽 나열 순서 레일. 단원 아래에 놓인 개념 줄을 펼쳐 볼 수 있다.
 class _CourseOutline extends StatefulWidget {
-  const _CourseOutline({required this.controller, required this.draft, required this.editable, this.onOpenConcept});
+  const _CourseOutline({
+    required this.controller,
+    required this.draft,
+    required this.editable,
+    this.selectedConceptId,
+    this.onOpenConcept,
+    this.onAcceptThink,
+    this.placementBusy = false,
+    this.onReorderPlacements,
+    this.onMovePlacementTo,
+    this.onMovePlacement,
+    this.onRemovePlacement,
+  });
 
   final CourseMapController controller;
   final CourseMapDraft draft;
   final bool editable;
+  final String? selectedConceptId;
   final ValueChanged<String>? onOpenConcept;
+  final ValueChanged<CourseMapPlacement>? onAcceptThink;
+  final bool placementBusy;
+  final void Function(String unitId, List<String> ids)? onReorderPlacements;
+  final void Function(CourseMapPlacement placement, String unitId)? onMovePlacementTo;
+  final void Function(CourseMapPlacement placement)? onMovePlacement;
+  final void Function(CourseMapPlacement placement)? onRemovePlacement;
 
   @override
   State<_CourseOutline> createState() => _CourseOutlineState();
 }
 
 class _CourseOutlineState extends State<_CourseOutline> {
+  static const double _unitHeight = 36;
+  static const double _conceptHeight = 32;
+
   final ScrollController _scroll = ScrollController();
+  final Map<String, GlobalKey> _hitKeys = {};
+  String? _dragId;
+  String? _hoverPlacementId;
+  String? _hoverUnitId;
+
+  GlobalKey _hitKey(String id) => _hitKeys.putIfAbsent(id, GlobalKey.new);
+
+  Duration get _shiftDuration {
+    final disabled = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    return disabled ? Duration.zero : const Duration(milliseconds: 180);
+  }
 
   @override
   void dispose() {
@@ -1056,6 +1201,141 @@ class _CourseOutlineState extends State<_CourseOutline> {
     return out;
   }
 
+  /// 끌어 놓은 자리. 개념 줄이면 그 개념, 단원 줄이면 그 단원.
+  _Row? _rowAt(Offset global, List<_Row> rows) {
+    for (final row in rows) {
+      final id = row.placement == null ? 'u:${row.id}' : 'p:${row.placement!.id}';
+      final box = _hitKey(id).currentContext?.findRenderObject() as RenderBox?;
+      if (box == null || !box.attached || !box.hasSize) continue;
+      final rect = box.localToGlobal(Offset.zero) & box.size;
+      if (rect.contains(global)) return row;
+    }
+    return null;
+  }
+
+  void _dropConcept(CourseMapPlacement p, Offset global, List<_Row> rows) {
+    final hit = _rowAt(global, rows);
+    if (hit == null) return;
+    final onto = hit.placement;
+    if (onto != null && onto.unitId == p.unitId) {
+      if (onto.id == p.id) return;
+      final ids = [for (final x in widget.controller.placementsIn(widget.draft.course.id, p.unitId)) x.id];
+      final from = ids.indexOf(p.id);
+      final to = ids.indexOf(onto.id);
+      if (from < 0 || to < 0) return;
+      final moved = ids.removeAt(from);
+      ids.insert(to, moved);
+      widget.onReorderPlacements?.call(p.unitId, ids);
+      return;
+    }
+    final unitId = onto?.unitId ?? hit.id;
+    if (unitId == p.unitId) return;
+    widget.onMovePlacementTo?.call(p, unitId);
+  }
+
+  /// 아래로 끌면 대상 뒤에, 위로 끌면 대상 앞에 빈 칸을 연다. 놓는 순서와 같다.
+  (bool, bool) _gapFor(CourseMapPlacement p) {
+    if (_dragId == null || _dragId == p.id) return (false, false);
+    if (_hoverPlacementId == p.id) {
+      final ids = [for (final x in widget.controller.placementsIn(widget.draft.course.id, p.unitId)) x.id];
+      final from = ids.indexOf(_dragId!);
+      final to = ids.indexOf(p.id);
+      if (from < 0 || to < 0 || from == to) return (false, false);
+      return (from > to, from < to);
+    }
+    if (_hoverUnitId == p.unitId) {
+      final ids = [for (final x in widget.controller.placementsIn(widget.draft.course.id, p.unitId)) x.id];
+      if (ids.isNotEmpty && ids.last == p.id) return (false, true);
+    }
+    return (false, false);
+  }
+
+  void _hover(CourseMapPlacement p, Offset global, List<_Row> rows) {
+    final hit = _rowAt(global, rows);
+    String? placementId;
+    String? unitId;
+    if (hit != null) {
+      final onto = hit.placement;
+      if (onto != null && onto.id != p.id) {
+        if (onto.unitId == p.unitId) {
+          placementId = onto.id;
+        } else {
+          unitId = onto.unitId;
+        }
+      } else if (onto == null && hit.id != p.unitId) {
+        unitId = hit.id;
+      }
+    }
+    if (_dragId == p.id && _hoverPlacementId == placementId && _hoverUnitId == unitId) return;
+    setState(() {
+      _dragId = p.id;
+      _hoverPlacementId = placementId;
+      _hoverUnitId = unitId;
+    });
+  }
+
+  void _clearDrag() {
+    if (_dragId == null && _hoverPlacementId == null && _hoverUnitId == null) return;
+    setState(() {
+      _dragId = null;
+      _hoverPlacementId = null;
+      _hoverUnitId = null;
+    });
+  }
+
+  /// 놓일 자리만큼 칸을 늘려 아래 줄이 밀리게 한다. 끄는 줄 높이는 그대로 둔다.
+  Widget _shiftSlot({
+    required String? hitId,
+    required double base,
+    required bool gapBefore,
+    required bool gapAfter,
+    required Widget child,
+  }) {
+    final open = gapBefore || gapAfter;
+    final before = gapBefore && !gapAfter;
+    final slot = AnimatedContainer(
+      duration: _shiftDuration,
+      curve: Curves.easeOutCubic,
+      height: open ? base + _conceptHeight : base,
+      child: ClipRect(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final extra = math.max(0.0, constraints.maxHeight - base);
+            return Stack(
+              fit: StackFit.expand,
+              children: [
+                if (extra > 0.5)
+                  Positioned(
+                    key: const ValueKey('concept-drop-gap'),
+                    left: 56,
+                    right: 8,
+                    top: before ? 0 : base,
+                    height: extra,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: kThinkAccent.withValues(alpha: 0.16),
+                        borderRadius: const BorderRadius.all(Radius.circular(8)),
+                        border: Border.all(color: kThinkAccent.withValues(alpha: 0.6)),
+                      ),
+                    ),
+                  ),
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  top: before ? extra : 0,
+                  height: base,
+                  child: child,
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+    if (hitId == null) return slot;
+    return KeyedSubtree(key: _hitKey(hitId), child: slot);
+  }
+
   Widget _row(CourseMapDraft d, List<_Row> rows, int i, Map<String, (int, int)> steps,
       Map<String, CourseUnitTally> tallies, bool compact) {
     final c = widget.controller;
@@ -1064,26 +1344,52 @@ class _CourseOutlineState extends State<_CourseOutline> {
     final last = i == rows.length - 1;
     final p = r.placement;
     final open = widget.onOpenConcept;
+    final arrange = widget.editable && widget.onReorderPlacements != null;
     if (p != null) {
-      return _ConceptRow(
-        placement: p,
-        depth: r.depth,
-        last: last,
-        onOpen: open == null ? null : () => open(p.conceptId),
+      Widget conceptRow() => _ConceptRow(
+            placement: p,
+            depth: r.depth,
+            last: last,
+            selected: p.conceptId == widget.selectedConceptId,
+            onOpen: open == null ? null : () => open(p.conceptId),
+            onAccept: p.byThink ? () => widget.onAcceptThink?.call(p) : null,
+            onMove: arrange ? () => widget.onMovePlacement?.call(p) : null,
+            onRemove: arrange ? () => widget.onRemovePlacement?.call(p) : null,
+            busy: widget.placementBusy,
+          );
+      final gap = arrange ? _gapFor(p) : (false, false);
+      return _shiftSlot(
+        hitId: arrange ? 'p:${p.id}' : null,
+        base: _conceptHeight,
+        gapBefore: gap.$1,
+        gapAfter: gap.$2,
+        child: arrange
+            ? _HoldToDrag(
+                key: ValueKey('hold-${p.id}'),
+                enabled: !widget.placementBusy,
+                onDrop: (global) => _dropConcept(p, global, rows),
+                onDragUpdate: (global) => _hover(p, global, rows),
+                onDragEnd: _clearDrag,
+                buildChild: conceptRow,
+              )
+            : conceptRow(),
       );
     }
     final hasKids = d.childrenOf(r.id).isNotEmpty;
     final concepts = c.placementCount(courseId, r.id);
-    return _UnitRow(
+    final conceptsOpen = c.conceptsOpen(courseId, r.id);
+    final hoverHere = arrange && _hoverUnitId == r.id;
+    final unit = _UnitRow(
       draft: d,
       row: r,
       step: steps[r.id] ?? (0, 0),
       first: i == 0,
       last: last,
       selected: r.id == d.selectedId,
+      dropTarget: hoverHere,
       editable: widget.editable,
       concepts: concepts,
-      conceptsOpen: c.conceptsOpen(courseId, r.id),
+      conceptsOpen: conceptsOpen,
       tally: hasKids ? tallies[r.id] : null,
       compact: compact,
       onTap: () {
@@ -1092,6 +1398,13 @@ class _CourseOutlineState extends State<_CourseOutline> {
       },
       onToggle: () => c.toggleExpanded(r.id),
       onToggleConcepts: () => c.toggleConcepts(courseId, r.id),
+    );
+    return _shiftSlot(
+      hitId: arrange ? 'u:${r.id}' : null,
+      base: _unitHeight,
+      gapBefore: false,
+      gapAfter: hoverHere && (!conceptsOpen || concepts == 0),
+      child: unit,
     );
   }
 
@@ -1164,8 +1477,6 @@ class _CourseOutlineState extends State<_CourseOutline> {
                         controller: _scroll,
                         padding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
                         itemCount: rows.length,
-                        itemExtentBuilder: (i, _) =>
-                            i < 0 || i >= rows.length ? null : (rows[i].placement == null ? 36 : 32),
                         itemBuilder: (context, i) => _row(d, rows, i, steps, tallies, compact),
                       ),
                     ),
@@ -1185,6 +1496,7 @@ class _UnitRow extends StatelessWidget {
     required this.first,
     required this.last,
     required this.selected,
+    this.dropTarget = false,
     required this.editable,
     required this.onTap,
     required this.onToggle,
@@ -1201,6 +1513,9 @@ class _UnitRow extends StatelessWidget {
   final bool first;
   final bool last;
   final bool selected;
+
+  /// 다른 단원으로 끌어 올렸을 때. 놓이면 그 단원 끝이 된다.
+  final bool dropTarget;
   final bool editable;
   final VoidCallback onTap;
   final VoidCallback onToggle;
@@ -1301,9 +1616,12 @@ class _UnitRow extends StatelessWidget {
                 child: Container(
                   padding: EdgeInsets.only(left: 4 + (row.depth - 1) * 16.0, right: 8),
                   decoration: BoxDecoration(
-                    color: selected ? kThinkAccent.withValues(alpha: 0.16) : Colors.transparent,
+                    color: (selected || dropTarget) ? kThinkAccent.withValues(alpha: 0.16) : Colors.transparent,
                     borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: selected ? kThinkAccent.withValues(alpha: 0.6) : Colors.transparent),
+                    border: Border.all(
+                      color: (selected || dropTarget) ? kThinkAccent.withValues(alpha: 0.6) : Colors.transparent,
+                      width: dropTarget ? 2 : 1,
+                    ),
                   ),
                   child: Row(
                     children: [
@@ -1370,14 +1688,36 @@ class _UnitRow extends StatelessWidget {
   }
 }
 
-/// 단원 아래에 펼친 개념 한 줄. 누르면 라이브러리에서 연다.
+/// 정의·표현은 단원 바로 아래. 그 밖 유형은 단원 한 단계와 같은 16만큼 더 들여 쓴다. 순서·저장은 바꾸지 않는다.
+double _conceptRowInset(int depth, String? type) {
+  final name = (type ?? '').trim();
+  final extra = (name == '정의' || name == '표현') ? 0.0 : 16.0;
+  return 28 + (depth - 1) * 16.0 + extra;
+}
+
+/// 단원 아래에 펼친 개념 한 줄. 누르면 옆 칸의 선택한 단원 위에 그 개념을 둔다.
 class _ConceptRow extends StatelessWidget {
-  const _ConceptRow({required this.placement, required this.depth, required this.last, this.onOpen});
+  const _ConceptRow({
+    required this.placement,
+    required this.depth,
+    required this.last,
+    this.selected = false,
+    this.onOpen,
+    this.onAccept,
+    this.onMove,
+    this.onRemove,
+    this.busy = false,
+  });
 
   final CourseMapPlacement placement;
   final int depth;
   final bool last;
+  final bool selected;
   final VoidCallback? onOpen;
+  final VoidCallback? onAccept;
+  final VoidCallback? onMove;
+  final VoidCallback? onRemove;
+  final bool busy;
 
   @override
   Widget build(BuildContext context) {
@@ -1400,8 +1740,14 @@ class _ConceptRow extends StatelessWidget {
                 key: ValueKey('outline-concept-${p.id}'),
                 onTap: onOpen,
                 borderRadius: BorderRadius.circular(8),
-                child: Padding(
-                  padding: EdgeInsets.only(left: 28 + (depth - 1) * 16.0, right: 8),
+                child: Container(
+                  key: ValueKey('outline-concept-fill-${p.id}'),
+                  padding: EdgeInsets.only(left: _conceptRowInset(depth, p.type), right: 8),
+                  decoration: BoxDecoration(
+                    color: selected ? kThinkAccent.withValues(alpha: 0.16) : Colors.transparent,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: selected ? kThinkAccent.withValues(alpha: 0.6) : Colors.transparent),
+                  ),
                   child: Row(
                     children: [
                       Tooltip(message: type.label, child: ConceptTypeGlyph(type)),
@@ -1416,18 +1762,48 @@ class _ConceptRow extends StatelessWidget {
                       ),
                       if (p.byThink) ...[
                         const SizedBox(width: 8),
-                        Tooltip(
-                          message: note == null ? 'Think 카드 승인으로 놓였습니다.' : 'Think 근거: $note',
-                          child: const ThinkBadge('Think', color: kThinkLink),
+                        _ThinkPlacementChip(
+                          key: ValueKey('outline-think-${p.id}'),
+                          label: 'Think',
+                          note: note,
+                          onAccept: onAccept,
                         ),
                       ],
                       if (onOpen != null) ...[
                         const SizedBox(width: 8),
                         const Tooltip(
-                          message: '라이브러리에서 열기',
+                          message: '옆에서 이 개념 보기',
                           child: Icon(Icons.open_in_new, size: 14, color: kThinkHint),
                         ),
                       ],
+                      if (onMove != null && onRemove != null)
+                        PopupMenuButton<String>(
+                          key: ValueKey('outline-concept-menu-${p.id}'),
+                          tooltip: '옮기기·빼기',
+                          enabled: !busy,
+                          padding: EdgeInsets.zero,
+                          color: kThinkPanel,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12), side: const BorderSide(color: kThinkBorder)),
+                          style: IconButton.styleFrom(
+                            padding: EdgeInsets.zero,
+                            minimumSize: const Size(24, 24),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          icon: const Icon(Icons.more_horiz, size: 18, color: kThinkSub),
+                          onSelected: (v) {
+                            if (v == 'move') {
+                              onMove!();
+                            } else {
+                              onRemove!();
+                            }
+                          },
+                          itemBuilder: (context) => [
+                            _menuItem('move', Icons.drive_file_move_outline, '다른 단원으로 옮기기'),
+                            _menuItem('remove', Icons.remove_circle_outline, '이 단원에서 빼기', color: kThinkError),
+                          ],
+                        ),
                     ],
                   ),
                 ),
@@ -1669,106 +2045,138 @@ class _MoveDialog extends StatelessWidget {
   }
 }
 
-/// 단원에 놓인 개념 한 줄: 유형 글자 + 이름 + (Think가 놓았으면 근거 배지) + 위·아래·더보기.
-class _PlacementTile extends StatelessWidget {
-  const _PlacementTile({
-    required this.placement,
-    required this.busy,
-    required this.canUp,
-    required this.canDown,
-    required this.onShift,
-    required this.onMove,
-    required this.onRemove,
+class _HoldToDrag extends StatefulWidget {
+  const _HoldToDrag({
+    super.key,
+    required this.enabled,
+    required this.onDrop,
+    required this.buildChild,
+    this.onDragUpdate,
+    this.onDragEnd,
   });
 
-  final CourseMapPlacement placement;
-  final bool busy;
-  final bool canUp;
-  final bool canDown;
-  final ValueChanged<int> onShift;
-  final VoidCallback onMove;
-  final VoidCallback onRemove;
+  final bool enabled;
+  final ValueChanged<Offset> onDrop;
+  final Widget Function() buildChild;
+  final ValueChanged<Offset>? onDragUpdate;
+  final VoidCallback? onDragEnd;
 
-  Widget _icon(IconData icon, String tooltip, VoidCallback? onPressed) => IconButton(
-        tooltip: tooltip,
-        onPressed: busy ? null : onPressed,
-        icon: Icon(icon, size: 16),
-        color: kThinkSub,
-        disabledColor: kThinkBorder,
-        visualDensity: VisualDensity.compact,
-        constraints: const BoxConstraints.tightFor(width: 32, height: 32),
-        padding: EdgeInsets.zero,
-      );
+  @override
+  State<_HoldToDrag> createState() => _HoldToDragState();
+}
+
+class _HoldToDragState extends State<_HoldToDrag> {
+  final GlobalKey _boxKey = GlobalKey();
+  Timer? _hold;
+  int? _pointer;
+  Offset _down = Offset.zero;
+  Offset _point = Offset.zero;
+  bool _dragging = false;
+  OverlayEntry? _entry;
+  Size _size = Size.zero;
+
+  @override
+  void dispose() {
+    _hold?.cancel();
+    _entry?.remove();
+    super.dispose();
+  }
+
+  void _arm() {
+    if (!mounted || _pointer == null) return;
+    final box = _boxKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize) return;
+    setState(() {
+      _dragging = true;
+      _size = box.size;
+    });
+    _entry = OverlayEntry(builder: _feedback);
+    Overlay.of(context).insert(_entry!);
+  }
+
+  Widget _feedback(BuildContext context) {
+    return Positioned(
+      left: _point.dx - _size.width / 2,
+      top: _point.dy - _size.height / 2,
+      width: _size.width,
+      height: _size.height,
+      child: IgnorePointer(
+        child: Material(
+          color: Colors.transparent,
+          elevation: 4,
+          borderRadius: BorderRadius.circular(8),
+          child: widget.buildChild(),
+        ),
+      ),
+    );
+  }
+
+  void _onDown(PointerDownEvent event) {
+    if (!widget.enabled || _dragging) return;
+    _pointer = event.pointer;
+    _down = event.position;
+    _point = event.position;
+    _hold?.cancel();
+    _hold = Timer(kLongPressTimeout, _arm);
+  }
+
+  void _move(PointerMoveEvent event) {
+    if (event.pointer != _pointer) return;
+    _point = event.position;
+    if (!_dragging) {
+      if ((event.position - _down).distance > kTouchSlop) {
+        _hold?.cancel();
+        _hold = null;
+      }
+      return;
+    }
+    _entry?.markNeedsBuild();
+    widget.onDragUpdate?.call(event.position);
+  }
+
+  void _end(PointerEvent event) {
+    if (event.pointer != _pointer) return;
+    final dropped = _dragging;
+    final at = event.position;
+    _hold?.cancel();
+    _hold = null;
+    _pointer = null;
+    _entry?.remove();
+    _entry = null;
+    if (_dragging && mounted) setState(() => _dragging = false);
+    _dragging = false;
+    if (dropped) widget.onDrop(at);
+    widget.onDragEnd?.call();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final p = placement;
-    final type = conceptTypeStyle(p.type);
-    final note = p.note;
-    return Container(
-      key: ValueKey('placement-${p.id}'),
-      padding: const EdgeInsets.fromLTRB(10, 6, 4, 6),
-      decoration: BoxDecoration(
-        color: kThinkBg,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: kThinkBorder),
-      ),
-      child: Row(
-        children: [
-          Tooltip(message: type.label, child: ConceptTypeGlyph(type)),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(p.name.trim().isEmpty ? '(이름 없음)' : p.name.trim(),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: kThinkText, fontSize: 13, fontWeight: FontWeight.w600)),
-                const SizedBox(height: 4),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 4,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    if (p.byThink)
-                      Tooltip(
-                        message: note == null ? 'Think 카드 승인으로 놓였습니다.' : 'Think 근거: $note',
-                        child: const ThinkBadge('Think 배치', color: kThinkLink),
-                      ),
-                    Text('출처 ${p.sources}개', style: const TextStyle(color: kThinkHint, fontSize: 11)),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          _icon(Icons.arrow_upward, '위로', canUp ? () => onShift(-1) : null),
-          _icon(Icons.arrow_downward, '아래로', canDown ? () => onShift(1) : null),
-          PopupMenuButton<String>(
-            tooltip: '더보기',
-            enabled: !busy,
-            color: kThinkPanel,
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12), side: const BorderSide(color: kThinkBorder)),
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 180),
-            icon: const Icon(Icons.more_horiz, size: 18, color: kThinkSub),
-            onSelected: (v) {
-              if (v == 'move') {
-                onMove();
-              } else {
-                onRemove();
-              }
-            },
-            itemBuilder: (context) => [
-              _menuItem('move', Icons.drive_file_move_outline, '다른 단원으로 옮기기'),
-              _menuItem('remove', Icons.remove_circle_outline, '이 단원에서 빼기', color: kThinkError),
-            ],
-          ),
-        ],
-      ),
+    return Listener(
+      key: _boxKey,
+      onPointerDown: _onDown,
+      onPointerMove: _move,
+      onPointerUp: _end,
+      onPointerCancel: _end,
+      child: _dragging ? Opacity(opacity: 0.35, child: widget.buildChild()) : widget.buildChild(),
     );
+  }
+}
+
+/// Think가 놓은 자리. 누르면 확인한 것으로 두고 칩은 걷는다.
+class _ThinkPlacementChip extends StatelessWidget {
+  const _ThinkPlacementChip({super.key, required this.label, required this.note, this.onAccept});
+
+  final String label;
+  final String? note;
+  final VoidCallback? onAccept;
+
+  @override
+  Widget build(BuildContext context) {
+    final tip = StringBuffer(note == null ? 'Think 카드 승인으로 놓였습니다.' : 'Think 근거: $note');
+    if (onAccept != null) tip.write('\n눌러 확인');
+    final badge = Tooltip(message: tip.toString(), child: ThinkBadge(label, color: kThinkLink));
+    if (onAccept == null) return badge;
+    return GestureDetector(onTap: onAccept, behavior: HitTestBehavior.opaque, child: badge);
   }
 }
 
@@ -1908,7 +2316,7 @@ class _ConceptPickDialogState extends State<_ConceptPickDialog> {
     return AlertDialog(
       backgroundColor: kThinkBg,
       shape: thinkDialogShape,
-      title: Text('"${widget.unitName}"에 개념 넣기',
+      title: Text('"${widget.unitName}"에 개념 추가',
           style: const TextStyle(color: kThinkText, fontWeight: FontWeight.w800)),
       content: SizedBox(
         width: 520,
