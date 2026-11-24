@@ -24,9 +24,13 @@ const List<String> kThinkingAlgorithmCategories = [
 ];
 
 class SkillScreen extends StatefulWidget {
-  const SkillScreen({super.key, this.service});
+  const SkillScreen({super.key, this.service, this.embedded = false});
 
   final ThinkingPrimitiveService? service;
+
+  /// 개념 탭 오른쪽 절반. 목록을 교육과정 흐름 트리처럼 보인다.
+  /// 왼쪽 커리큘럼 메뉴는 이 화면을 열지 않는다.
+  final bool embedded;
 
   @override
   State<SkillScreen> createState() => _SkillScreenState();
@@ -60,6 +64,9 @@ class _SkillScreenState extends State<SkillScreen> {
   bool _editActive = true;
   bool _saving = false;
   String? _notice;
+
+  /// 트리에서 접은 분류. 없으면 펼친다.
+  final Set<String> _closedCategories = {};
 
   String get _currentKind => _tab == 0 ? 'frame' : 'algorithm';
 
@@ -278,6 +285,7 @@ class _SkillScreenState extends State<SkillScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.embedded) return _buildEmbedded();
     final frameCount = _items.where((x) => x.isFrame).length;
     final algoCount = _items.where((x) => x.isAlgorithm).length;
 
@@ -836,6 +844,289 @@ class _SkillScreenState extends State<SkillScreen> {
             ],
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildEmbedded() {
+    final frameCount = _items.where((x) => x.isFrame).length;
+    final algoCount = _items.where((x) => x.isAlgorithm).length;
+    return ThinkPanel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+            child: Row(
+              children: [
+                const Icon(Icons.hub_outlined, size: 18, color: kThinkAccent),
+                const SizedBox(width: 8),
+                const Text('사고', style: TextStyle(color: kThinkText, fontSize: 15, fontWeight: FontWeight.w800)),
+                const SizedBox(width: 12),
+                Flexible(
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: ThinkPillTabs(
+                      labels: [
+                        '범용 사고틀 ($frameCount)',
+                        '실전 알고리즘 ($algoCount)',
+                      ],
+                      icons: const [Icons.hub_outlined, Icons.alt_route_rounded],
+                      selected: _tab,
+                      onSelected: (i) => setState(() {
+                        _tab = i;
+                        _selectedCategory = '전체';
+                        _creatingNew = false;
+                        _selectedId = null;
+                        _selectDefaultForTab();
+                      }),
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: '새로고침',
+                  onPressed: _loading ? null : () => unawaited(_load()),
+                  icon: const Icon(Icons.refresh, color: kThinkSub, size: 20),
+                ),
+              ],
+            ),
+          ),
+          const Divider(color: kThinkBorder, height: 1),
+          if (_notice != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+              child: ThinkNotice(text: _notice!, color: kThinkAccent, icon: Icons.info_outline),
+            ),
+          Expanded(child: _embeddedBody()),
+        ],
+      ),
+    );
+  }
+
+  Widget _embeddedBody() {
+    if (_loading) return const Center(child: CircularProgressIndicator(color: kThinkAccent));
+    if (_error != null) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(_error!, style: const TextStyle(color: kThinkError, fontSize: 14)),
+            const SizedBox(height: 12),
+            ElevatedButton(
+              onPressed: () => unawaited(_load()),
+              style: thinkPrimaryButton(),
+              child: const Text('다시 시도'),
+            ),
+          ],
+        ),
+      );
+    }
+    return _thinkingTree();
+  }
+
+  Widget _thinkingTree() {
+    final kindAll = [for (final x in _items) if (x.kind == _currentKind) x];
+    final q = _search.trim().toLowerCase();
+    final filtered = [
+      for (final x in kindAll)
+        if (q.isEmpty ||
+            x.title.toLowerCase().contains(q) ||
+            x.code.toLowerCase().contains(q) ||
+            x.criteria.toLowerCase().contains(q) ||
+            x.triggerCond.toLowerCase().contains(q) ||
+            x.actionSteps.toLowerCase().contains(q) ||
+            x.trapNote.toLowerCase().contains(q) ||
+            x.exampleExpr.toLowerCase().contains(q))
+          x,
+    ];
+    final selected = _creatingNew ? null : kindAll.where((x) => x.id == _selectedId).firstOrNull;
+    final filtering = q.isNotEmpty;
+    final categories = <String>[
+      ..._currentCategories,
+      for (final x in filtered)
+        if (!_currentCategories.contains(x.category) && x.category.isNotEmpty) x.category,
+    ];
+    final seen = <String>{};
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: _startCreate,
+                      style: thinkOutlineButton().copyWith(
+                        padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 12, vertical: 8)),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      icon: const Icon(Icons.add, size: 16),
+                      label: Text(_tab == 0 ? '범용 사고틀 추가' : '실전 알고리즘 추가'),
+                    ),
+                    SizedBox(
+                      width: 280,
+                      height: 36,
+                      child: TextField(
+                        onChanged: (v) => setState(() => _search = v),
+                        style: const TextStyle(color: kThinkText, fontSize: 13),
+                        decoration: thinkInputDecoration(
+                          hint: _tab == 0 ? '이름, 판정 기준, 예시' : '이름, 단서, 절차, 함정',
+                          prefixIcon: const Icon(Icons.search, size: 18, color: kThinkSub),
+                        ),
+                      ),
+                    ),
+                    Text('표시 ${filtered.length}개',
+                        style: const TextStyle(color: kThinkSub, fontSize: 12, fontWeight: FontWeight.w700)),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                const Divider(color: kThinkBorder, height: 1),
+                Expanded(
+                  child: ListView(
+                    padding: const EdgeInsets.fromLTRB(0, 4, 0, 12),
+                    children: [
+                      for (final cat in categories)
+                        if (seen.add(cat))
+                          ..._thinkingCategory(
+                            cat,
+                            [for (final x in filtered) if (x.category == cat) x],
+                            hideEmpty: filtering,
+                          ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const VerticalDivider(color: kThinkBorder, width: 1),
+        SizedBox(
+          width: 360,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: _buildEditPane(selected),
+          ),
+        ),
+      ],
+    );
+  }
+
+  List<Widget> _thinkingCategory(String category, List<ThinkingPrimitiveItem> items, {required bool hideEmpty}) {
+    if (items.isEmpty && hideEmpty) return const [];
+    final open = !_closedCategories.contains(category);
+    return [
+      _thinkingRow(
+        key: ValueKey('think-category-$category'),
+        indent: 0,
+        selected: false,
+        onTap: () => setState(() {
+          if (open) {
+            _closedCategories.add(category);
+          } else {
+            _closedCategories.remove(category);
+          }
+        }),
+        child: Row(
+          children: [
+            Icon(open ? Icons.expand_more : Icons.chevron_right, size: 18, color: kThinkSub),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Text(category,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: kThinkText, fontSize: 14, fontWeight: FontWeight.w700)),
+            ),
+            Text('${items.length}', style: const TextStyle(color: kThinkHint, fontSize: 12, fontWeight: FontWeight.w700)),
+          ],
+        ),
+      ),
+      if (open)
+        for (final item in items) _thinkingItemRow(item),
+    ];
+  }
+
+  Widget _thinkingItemRow(ThinkingPrimitiveItem item) {
+    final selected = !_creatingNew && _selectedId == item.id;
+    return _thinkingRow(
+      key: ValueKey('think-item-${item.id}'),
+      indent: 28,
+      selected: selected,
+      onTap: () => setState(() => _populateForm(item)),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              item.title.trim().isEmpty ? '(이름 없음)' : item.title.trim(),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: kThinkText, fontSize: 13, fontWeight: FontWeight.w600),
+            ),
+          ),
+          const SizedBox(width: 4),
+          _scoreNudge(item),
+        ],
+      ),
+    );
+  }
+
+  Widget _scoreNudge(ThinkingPrimitiveItem item) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _nudgeButton(Icons.remove, '점수 내리기', () => unawaited(_nudgeScore(item, -0.5))),
+        Text(item.unitScore.toStringAsFixed(1),
+            style: const TextStyle(color: kThinkText, fontSize: 12, fontWeight: FontWeight.w800)),
+        _nudgeButton(Icons.add, '점수 올리기', () => unawaited(_nudgeScore(item, 0.5))),
+      ],
+    );
+  }
+
+  Widget _nudgeButton(IconData icon, String tip, VoidCallback onTap) {
+    return IconButton(
+      tooltip: tip,
+      onPressed: onTap,
+      padding: EdgeInsets.zero,
+      visualDensity: VisualDensity.compact,
+      constraints: const BoxConstraints.tightFor(width: 28, height: 28),
+      icon: Icon(icon, size: 16, color: kThinkSub),
+    );
+  }
+
+  Widget _thinkingRow({
+    required Key key,
+    required double indent,
+    required bool selected,
+    required VoidCallback? onTap,
+    required Widget child,
+  }) {
+    return SizedBox(
+      height: 36,
+      child: Padding(
+        padding: EdgeInsets.only(left: indent, right: 4),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            key: key,
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              decoration: BoxDecoration(
+                color: selected ? kThinkAccent.withValues(alpha: 0.16) : Colors.transparent,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: selected ? kThinkAccent.withValues(alpha: 0.6) : Colors.transparent),
+              ),
+              child: child,
+            ),
+          ),
+        ),
       ),
     );
   }

@@ -8,12 +8,14 @@
 //   23~28 선택 객관식(9p 제목 페이지 + 좌 1행 5지선다형), 29~30 선택 단답형(12p 좌 1행 단답형)
 // - 8p 하단 선택과목 확인 사항, 12p 하단 단축 확인 사항
 
-import { ELECTIVES, SECTION_LABELS } from './mock_pages.js';
+import { ELECTIVES, LEGACY_TYPES, SECTION_LABELS, isLegacyType } from './mock_pages.js';
+import { slotQuestionRow } from './slot_values.js';
 
 const ORG_LABELS = { edu: '교육청', kice: '평가원', csat: '수능' };
 
-export function mockExamIsObjective(grade, number) {
-  if (Number(grade) === 3) {
+/// 가형·나형(2020년 시행분까지)은 고1·고2 처럼 1~21번이 5지선다형, 22~30번이 단답형이다.
+export function mockExamIsObjective(grade, number, elective = '') {
+  if (Number(grade) === 3 && !isLegacyType(elective)) {
     return number <= 15 || (number >= 23 && number <= 28);
   }
   return number <= 21;
@@ -178,11 +180,13 @@ export function buildMockExamPresetPayload({
 
     const num = Number.parseInt(compact(row?.question_number), 10);
     const isObj = Number.isFinite(num)
-      ? mockExamIsObjective(grade, num)
+      ? mockExamIsObjective(grade, num, el)
       : compact(row?.question_type) !== '주관식';
     questionModeByQuestionUid[uid] = isObj ? 'objective' : 'subjective';
 
-    const score = Number(row?.meta?.score_point ?? row?.score_point);
+    // 다른 구간의 문항을 가리키는 자리(row.__slot)는 이 시험지의 번호(위의 question_number)와 배점을 쓴다.
+    // 본문·선지 순서는 내보낼 때 자리에서 다시 읽는다(mock_exam/paper_slots.js).
+    const score = Number(row?.__slot?.score ?? row?.meta?.score_point ?? row?.score_point);
     if (Number.isFinite(score) && score > 0) {
       questionScoreByQuestionUid[uid] = score;
     }
@@ -194,7 +198,8 @@ export function buildMockExamPresetPayload({
   const sourceDocumentId = compact(electiveDocumentId) || compact(commonDocumentId);
 
   const titlePageTopText = buildMockExamTitlePageTopText(exam);
-  const isGrade3Elective = grade === 3 && Boolean(el);
+  // 가형·나형은 시험지 한 부가 구간 하나라 고1·고2 와 같은 한 묶음 지면이다(첫 쪽 제목에 유형을 적는다).
+  const isGrade3Elective = grade === 3 && ELECTIVES.includes(el);
   const pageColumnQuestionCounts = isGrade3Elective
     ? GRADE3_MOCK_PAGE_COLUMN_COUNTS.map((row) => ({ ...row }))
     : [];
@@ -204,7 +209,7 @@ export function buildMockExamPresetPayload({
         { page: 1, title: '수학 영역', subtitle: '' },
         { page: 9, title: '수학 영역', subtitle: elLabel },
       ]
-    : [{ page: 1, title: '수학 영역', subtitle: '' }];
+    : [{ page: 1, title: '수학 영역', subtitle: isLegacyType(el) ? elLabel : '' }];
   const columnLabelAnchors = isGrade3Elective
     ? buildGrade3ColumnLabelAnchors(elLabel)
     : [];
@@ -323,7 +328,9 @@ export async function syncMockExamPresetsForExam(supa, examId) {
     }
   }
   const commonDocId = docIdBySection.get('common') || '';
-  if (!commonDocId) return { synced: 0, presets: [] };
+  // 가형·나형 회차에는 공통 구간이 없다. 유형 구간 하나(30문항)가 프리셋 하나다.
+  const legacyTypes = LEGACY_TYPES.filter((t) => docIdBySection.has(t));
+  if (!commonDocId && legacyTypes.length === 0) return { synced: 0, presets: [] };
 
   const allDocIds = [...new Set([...docIdBySection.values()])];
   const { data: qRows, error: qErr } = await supa
@@ -339,6 +346,25 @@ export async function syncMockExamPresetsForExam(supa, examId) {
     if (!questionsByDocId.has(docId)) questionsByDocId.set(docId, []);
     questionsByDocId.get(docId).push(row);
   }
+
+  // 같은 문항을 합친 가형·나형: 한 구간만 문항을 갖고, 다른 구간의 자리(merged_at)는 그 문항을 가리킨다.
+  // 그 문항은 이 구간 문서에 없으므로 자리로 채운다. 문항을 가진 구간이 아직 확정 전이면 qRows 에 없어
+  // 이 시험지는 30문항이 되지 않고, 아래 개수 검사에서 프리셋을 만들지 않는다.
+  const { data: slotRows, error: slotErr } = await supa
+    .from('mock_exam_items')
+    .select('section, problem_number, pb_question_id, score, choice_order, stem_override')
+    .eq('exam_id', cleanExamId)
+    .not('merged_at', 'is', null);
+  if (slotErr) throw new Error(`mock_preset_slots_fetch_failed:${slotErr.message}`);
+  const questionById = new Map((qRows || []).map((row) => [compact(row?.id), row]));
+  for (const item of slotRows || []) {
+    const docId = docIdBySection.get(compact(item?.section));
+    if (!docId) continue;
+    const row = slotQuestionRow(item, questionById.get(compact(item?.pb_question_id)));
+    if (!row) continue;
+    if (!questionsByDocId.has(docId)) questionsByDocId.set(docId, []);
+    questionsByDocId.get(docId).push(row);
+  }
   const sortQuestions = (rows) =>
     [...(rows || [])].sort((a, b) => {
       const na = Number.parseInt(compact(a?.question_number), 10);
@@ -349,10 +375,8 @@ export async function syncMockExamPresetsForExam(supa, examId) {
 
   const commonQuestions = sortQuestions(questionsByDocId.get(commonDocId) || []);
   const grade = Number(exam.grade || 3);
-  if (grade === 3 && commonQuestions.length < 22) {
-    return { synced: 0, presets: [] };
-  }
-  if (grade !== 3 && commonQuestions.length < 30) {
+  const commonReady = Boolean(commonDocId) && commonQuestions.length >= (grade === 3 ? 22 : 30);
+  if (!commonReady && (grade !== 3 || legacyTypes.length === 0)) {
     return { synced: 0, presets: [] };
   }
 
@@ -372,13 +396,20 @@ export async function syncMockExamPresetsForExam(supa, examId) {
     }
   }
 
-  const targets = grade === 3 ? ELECTIVES : [''];
+  const targets = grade === 3 ? [...(commonReady ? ELECTIVES : []), ...legacyTypes] : [''];
   const syncedPresets = [];
 
   for (const elective of targets) {
     let orderedQuestions = commonQuestions;
     let electiveDocId = '';
-    if (grade === 3) {
+    let commonId = commonDocId;
+    if (isLegacyType(elective)) {
+      electiveDocId = docIdBySection.get(elective) || '';
+      const typeQuestions = sortQuestions(questionsByDocId.get(electiveDocId) || []);
+      if (typeQuestions.length < 30) continue;
+      orderedQuestions = typeQuestions.slice(0, 30);
+      commonId = '';
+    } else if (grade === 3) {
       electiveDocId = docIdBySection.get(elective) || '';
       if (!electiveDocId) continue;
       const electiveQuestions = sortQuestions(questionsByDocId.get(electiveDocId) || []);
@@ -390,7 +421,7 @@ export async function syncMockExamPresetsForExam(supa, examId) {
       exam,
       elective,
       orderedQuestions,
-      commonDocumentId: commonDocId,
+      commonDocumentId: commonId,
       electiveDocumentId: electiveDocId,
     });
     const linkKey = payload.render_config.mockExamLinkKey;

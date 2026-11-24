@@ -58,6 +58,7 @@ import '../widgets/app_snackbar.dart';
 import '../theme/ygg_semantic_colors.dart';
 import '../widgets/homework_assign_dialog.dart';
 import '../app_overlays.dart';
+import '../main.dart' show rootNavigatorKey;
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import '../widgets/flow_setup_dialog.dart';
 import '../widgets/utility_glass_dialog_shell.dart';
@@ -77,6 +78,7 @@ import 'class_content/homework_card_detail_dialog.dart';
 import 'class_content/homework_created_date.dart';
 import 'class_content/homework_performance_attempt.dart';
 import 'class_content/grading_mode_page.dart';
+import 'class_content/student_homework_lookup_sheet.dart';
 
 const double _homeworkDraftExtensionWidth = 280;
 
@@ -177,6 +179,12 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   int _openTextbookReportCount = 0;
   Timer? _textbookReportCountTimer;
   bool _homeworkOverviewDialogOpen = false;
+  final ScrollController _attendingStudentsScrollCtrl = ScrollController();
+  final Map<String, GlobalKey> _attendingStudentColumnKeys =
+      <String, GlobalKey>{};
+  String? _lookupStudentId;
+  bool _lookupStudentLoading = false;
+  final Set<String> _lookupExpandedHomeworkIds = <String>{};
 
   Map<({String studentId, String itemId}), bool> get _pendingConfirms =>
       _batchConfirmService.pending;
@@ -253,6 +261,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       gradingModeActive.value = false;
       homeBatchConfirmFabVisible.value = false;
+      rightSideSheetStudentLookupBuilder.value = null;
       if (identical(
         rightSideSheetTestGradingSession.value,
         testGradingSessionToClear,
@@ -261,6 +270,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       }
     });
     _rightSheetPreloadDebounce?.cancel();
+    _attendingStudentsScrollCtrl.dispose();
     HomeworkStore.instance.revision.removeListener(
       _onHomeworkStoreRevisionChanged,
     );
@@ -313,10 +323,12 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     gradingModeActive.value = value;
     _syncMemoFloatingForGradingMode(value);
     if (value) {
+      rightSideSheetStudentLookupBuilder.value = null;
       unawaited(_restoreDurableStructuredDrafts());
       blockRightSideSheetOpen.value = false;
       _scheduleRightSheetAnswerPreload();
     } else {
+      rightSideSheetStudentLookupBuilder.value = null;
       unawaited(_restoreDurableStructuredDrafts());
       blockRightSideSheetOpen.value = true;
       _rightSheetPreloadDebounce?.cancel();
@@ -951,6 +963,11 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             SolidCapsuleActionBar(
               children: [
                 SolidCapsuleActionButton(
+                  tooltip: '과제카드 조회',
+                  icon: Icons.person_search_rounded,
+                  onPressed: _openStudentHomeworkLookupSheet,
+                ),
+                SolidCapsuleActionButton(
                   tooltip: '출석 순위',
                   icon: Icons.leaderboard_rounded,
                   onPressed: () => unawaited(showAttendanceRankDialog(context)),
@@ -1020,6 +1037,353 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   Future<void> _openTextbookReportReviewDialog(BuildContext context) async {
     await showTextbookReportReviewDialog(context);
     unawaited(_refreshTextbookReportCount());
+  }
+
+  StudentLookupStatus _resolveStudentLookupStatus(String studentId) {
+    final anchor = attendanceDateOnly(attendanceAnchorDateNotifier.value);
+    bool sameDay(DateTime a, DateTime b) =>
+        a.year == b.year && a.month == b.month && a.day == b.day;
+    final attendingList = _computeAttendingStudentsStatic(anchor);
+    if (attendingList.any((s) => s.id == studentId)) {
+      return StudentLookupStatus.attending;
+    }
+    final departedToday = DataManager.instance.attendanceRecords.any((rec) {
+      if (rec.studentId != studentId || !rec.isPresent) return false;
+      if (!sameDay(rec.classDateTime, anchor)) return false;
+      return !rec.isLiveOpenSession();
+    });
+    if (departedToday) {
+      return StudentLookupStatus.departedToday;
+    }
+    return StudentLookupStatus.nonAttending;
+  }
+
+  Future<void> _closeStudentHomeworkLookupSheet() async {
+    rightSideSheetStudentLookupBuilder.value = null;
+    final closeAction = closeRightSideSheetAction;
+    if (closeAction != null) {
+      await closeAction();
+    }
+    if (!_isGradingMode) {
+      blockRightSideSheetOpen.value = true;
+    }
+  }
+
+  void _scrollToAttendingStudentOnHome(String studentId) {
+    final anchor = attendanceDateOnly(attendanceAnchorDateNotifier.value);
+    final list = _computeAttendingStudentsStatic(anchor);
+    final targetIndex = list.indexWhere((s) => s.id == studentId);
+    if (targetIndex < 0) return;
+
+    final keyContext = _attendingStudentColumnKeys[studentId]?.currentContext;
+    if (keyContext != null) {
+      unawaited(
+        Scrollable.ensureVisible(
+          keyContext,
+          duration: const Duration(milliseconds: 280),
+          curve: Curves.easeOutCubic,
+          alignment: 0.08,
+        ),
+      );
+      return;
+    }
+
+    if (!_attendingStudentsScrollCtrl.hasClients) return;
+    double offset = 0.0;
+    for (int i = 0; i < targetIndex; i++) {
+      final sid = list[i].id;
+      final isExpanded = _expandedHomeworkDraftStudentId == sid ||
+          _homeworkDraftVisuallyOpenStudentIds.contains(sid);
+      offset += ClassContentScreen._studentColumnWidth +
+          (isExpanded ? _homeworkDraftExtensionWidth : 0.0) +
+          14.4;
+    }
+    final clamped = offset.clamp(
+      0.0,
+      _attendingStudentsScrollCtrl.position.maxScrollExtent,
+    );
+    unawaited(
+      _attendingStudentsScrollCtrl.animateTo(
+        clamped,
+        duration: const Duration(milliseconds: 280),
+        curve: Curves.easeOutCubic,
+      ),
+    );
+  }
+
+  Future<void> _selectLookupStudent(StudentWithInfo row) async {
+    final sid = row.student.id;
+    if (_resolveStudentLookupStatus(sid) == StudentLookupStatus.attending) {
+      await _closeStudentHomeworkLookupSheet();
+      if (!mounted) return;
+      _scrollToAttendingStudentOnHome(sid);
+      return;
+    }
+    final hadCachedItems = HomeworkStore.instance.items(sid).isNotEmpty;
+    setState(() {
+      _lookupStudentId = sid;
+      _lookupStudentLoading = !hadCachedItems;
+    });
+    _refreshStudentLookupBuilder();
+    try {
+      await Future.wait<void>([
+        HomeworkStore.instance.reloadStudentHomework(sid),
+        HomeworkAssignmentStore.instance
+            .loadActiveAssignments(sid)
+            .then((_) {}),
+        HomeworkAssignmentStore.instance.loadAssignmentCounts(sid).then((_) {}),
+        HomeworkAssignmentStore.instance
+            .loadLatestCycleMetaByItem(sid)
+            .then((_) {}),
+      ]);
+    } catch (_) {
+      // 오프라인/일시 네트워크 오류 시 캐시된 데이터로 표시
+    } finally {
+      if (mounted && _lookupStudentId == sid) {
+        setState(() {
+          _lookupStudentLoading = false;
+        });
+        _refreshStudentLookupBuilder();
+      }
+    }
+  }
+
+  Future<void> _handleNonAttendingRegularCheckTap({
+    required BuildContext context,
+    required String studentId,
+    required HomeworkGroup group,
+    required HomeworkItem summary,
+    required List<HomeworkItem> children,
+  }) async {
+    final hostContext = rootNavigatorKey.currentContext ?? this.context;
+    final gradingChildren = children
+        .where((e) =>
+            e.status != HomeworkStatus.completed && e.completedAt == null)
+        .toList(growable: false);
+    if (gradingChildren.isEmpty) return;
+
+    final pendingKeys = gradingChildren
+        .map((e) => (studentId: studentId, itemId: e.id))
+        .toList(growable: false);
+    if (pendingKeys.any(_pendingConfirms.containsKey)) {
+      await _handleSubmittedChipTapForPending(
+        context: hostContext,
+        studentId: studentId,
+        hw: gradingChildren.first,
+        targetKeys: pendingKeys,
+        gradingGroupId: group.id,
+        closeSheetOnAction: false,
+        onCancelSheet: () {
+          rightSideSheetPdfPanelSession.value = null;
+          rightSideSheetTestGradingSession.value = null;
+        },
+      );
+      return;
+    }
+
+    final needsSubmit = gradingChildren.any((e) => e.phase != 3);
+    if (needsSubmit) {
+      await HomeworkStore.instance.bulkTransitionGroup(
+        studentId,
+        group.id,
+        fromPhase: 99,
+      );
+      if (!mounted) return;
+    }
+
+    HomeworkItem answerSeed = gradingChildren.first;
+    for (final child in gradingChildren) {
+      if (_hasDirectHomeworkTextbookLink(child)) {
+        answerSeed = child;
+        break;
+      }
+    }
+    final refreshedSeed =
+        HomeworkStore.instance.getById(studentId, answerSeed.id) ?? answerSeed;
+    await _handleSubmittedChipTapForPending(
+      context: hostContext,
+      studentId: studentId,
+      hw: refreshedSeed,
+      targetKeys: pendingKeys,
+      gradingGroupId: group.id,
+      closeSheetOnAction: false,
+      onCancelSheet: () {
+        rightSideSheetPdfPanelSession.value = null;
+        rightSideSheetTestGradingSession.value = null;
+      },
+    );
+  }
+
+  Future<void> _handleLookupHomeworkInspectionTap({
+    required BuildContext context,
+    required String studentId,
+    required HomeworkGroup? group,
+    required HomeworkItem summary,
+    required List<HomeworkItem> children,
+  }) async {
+    final hostContext = rootNavigatorKey.currentContext ?? this.context;
+    final gradingChildren = children
+        .where((child) => child.status != HomeworkStatus.completed)
+        .toList(growable: false);
+    if (gradingChildren.isEmpty) return;
+
+    final pendingKeys = gradingChildren
+        .map((child) => (studentId: studentId, itemId: child.id))
+        .toList(growable: false);
+    if (pendingKeys.any(_pendingConfirms.containsKey)) {
+      await _handleSubmittedChipTapForPending(
+        context: hostContext,
+        studentId: studentId,
+        hw: gradingChildren.first,
+        targetKeys: pendingKeys,
+        gradingGroupId: group?.id,
+        closeSheetOnAction: false,
+        onCancelSheet: () {
+          rightSideSheetPdfPanelSession.value = null;
+          rightSideSheetTestGradingSession.value = null;
+        },
+      );
+      return;
+    }
+
+    await _handleHomeworkInspectionTap(
+      context: hostContext,
+      studentId: studentId,
+      group: group,
+      summary: summary,
+      children: children,
+      closeSheetOnAction: false,
+      onCancelSheet: () {
+        rightSideSheetPdfPanelSession.value = null;
+        rightSideSheetTestGradingSession.value = null;
+      },
+    );
+  }
+
+  Widget _buildLookupStudentCardsSection(
+    BuildContext sheetContext,
+    String studentId,
+  ) {
+    final hostContext = rootNavigatorKey.currentContext ?? context;
+    return ValueListenableBuilder<Set<HomeworkGradingLockKey>>(
+      valueListenable: HomeworkGradingLockService.instance.releasingKeys,
+      builder: (sheetContext, _, __) {
+        return ValueListenableBuilder<Set<HomeworkBatchConfirmKey>>(
+          valueListenable: HomeworkBatchConfirmService.instance.confirmingKeys,
+          builder: (sheetContext, _, __) {
+            return AnimatedBuilder(
+              animation: _uiAnimController,
+              builder: (sheetContext, _) {
+                return _buildHomeworkChipsReactiveForStudent(
+                  studentId,
+                  _uiAnimController,
+                  pendingConfirms: _pendingConfirms,
+                  savingConfirms: _structuredGradingInFlightKeys,
+                  nonAttendingLookupMode: true,
+                  includeReservedSection: true,
+                  dialogHostContext: hostContext,
+                  expandedHomeworkIds: _lookupExpandedHomeworkIds,
+                  onToggleExpand: (groupId) {
+                    setState(() {
+                      if (!_lookupExpandedHomeworkIds.remove(groupId)) {
+                        _lookupExpandedHomeworkIds.add(groupId);
+                      }
+                    });
+                    _refreshStudentLookupBuilder();
+                  },
+                  onPhase3Tap: ({
+                    required context,
+                    required studentId,
+                    required hw,
+                  }) =>
+                      _handleSubmittedChipTapForPending(
+                    context: hostContext,
+                    studentId: studentId,
+                    hw: hw,
+                    closeSheetOnAction: false,
+                    onCancelSheet: () {
+                      rightSideSheetPdfPanelSession.value = null;
+                      rightSideSheetTestGradingSession.value = null;
+                    },
+                  ),
+                  onHomeworkCheckTap: _handleLookupHomeworkInspectionTap,
+                  onNonAttendingGroupCheckTap:
+                      _handleNonAttendingRegularCheckTap,
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _refreshStudentLookupBuilder() {
+    if (!mounted) return;
+    rightSideSheetStudentLookupBuilder.value = (sheetContext) {
+      return ValueListenableBuilder<int>(
+        valueListenable: homeBatchConfirmPendingCount,
+        builder: (sheetContext, pendingCount, _) {
+          return ValueListenableBuilder<int>(
+            valueListenable: homeBatchConfirmDraftSavingCount,
+            builder: (sheetContext, savingCount, __) {
+              return StudentHomeworkLookupSheet(
+                selectedStudentId: _lookupStudentId,
+                isLoadingStudent: _lookupStudentLoading,
+                pendingConfirmCount: pendingCount,
+                isConfirmSaving: savingCount > 0,
+                statusResolver: _resolveStudentLookupStatus,
+                onCloseSheet: () =>
+                    unawaited(_closeStudentHomeworkLookupSheet()),
+                onSelectStudent: (row) => unawaited(_selectLookupStudent(row)),
+                onBackToList: () {
+                  setState(() {
+                    _lookupStudentId = null;
+                    _lookupStudentLoading = false;
+                  });
+                  _refreshStudentLookupBuilder();
+                },
+                onAddHomework: () {
+                  final sid = (_lookupStudentId ?? '').trim();
+                  if (sid.isEmpty) return;
+                  final hostContext =
+                      rootNavigatorKey.currentContext ?? context;
+                  unawaited(
+                    _onAddHomework(
+                      hostContext,
+                      sid,
+                      attendanceId: '',
+                      allowTodayPlanDestination: false,
+                    ),
+                  );
+                },
+                onOpenOverview: () {
+                  final sid = (_lookupStudentId ?? '').trim();
+                  if (sid.isEmpty) return;
+                  final hostContext =
+                      rootNavigatorKey.currentContext ?? context;
+                  _showHomeworkOverviewDialog(hostContext, sid);
+                },
+                onConfirmPending: homeBatchConfirmAction,
+                cardsBuilder: (sheetContext, student) =>
+                    _buildLookupStudentCardsSection(sheetContext, student.id),
+              );
+            },
+          );
+        },
+      );
+    };
+  }
+
+  void _openStudentHomeworkLookupSheet() {
+    setState(() {
+      _lookupStudentLoading = false;
+    });
+    _refreshStudentLookupBuilder();
+    final openAction = openRightSideSheetStudentLookupAction;
+    if (openAction != null) {
+      unawaited(openAction());
+    }
   }
 
   double _homeStatusContentTopPadding(BuildContext context) {
@@ -1243,6 +1607,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                       },
                                     )
                                   : ListView.separated(
+                                      controller: _attendingStudentsScrollCtrl,
                                       scrollDirection: Axis.horizontal,
                                       padding: EdgeInsets.fromLTRB(
                                         24,
@@ -1272,9 +1637,19 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                         ),
                                       ),
                                       itemBuilder: (ctx, i) {
-                                        return _buildStudentColumn(
-                                          context,
-                                          list[i],
+                                        final student = list[i];
+                                        final columnKey =
+                                            _attendingStudentColumnKeys
+                                                .putIfAbsent(
+                                          student.id,
+                                          GlobalKey.new,
+                                        );
+                                        return KeyedSubtree(
+                                          key: columnKey,
+                                          child: _buildStudentColumn(
+                                            context,
+                                            student,
+                                          ),
                                         );
                                       },
                                     ),
@@ -3064,13 +3439,25 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           rethrow;
         }
       }
+      if (planDestination == HomeworkPlanDestination.homework) {
+        for (final item in items) {
+          item.status = HomeworkStatus.homework;
+        }
+        HomeworkStore.instance.bumpRevision();
+      }
+      return;
     }
 
     if (planDestination == HomeworkPlanDestination.homework) {
-      for (final item in items) {
-        item.status = HomeworkStatus.homework;
-      }
-      HomeworkStore.instance.bumpRevision();
+      final dueDate = NextClassStartResolver.next(
+        studentId,
+        after: DateTime.now(),
+      );
+      await HomeworkStore.instance.markItemsAsHomework(
+        studentId,
+        items.map((item) => item.id).toList(growable: false),
+        dueDate: dueDate,
+      );
     }
   }
 
@@ -3078,6 +3465,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     BuildContext context,
     String studentId, {
     required String attendanceId,
+    bool allowTodayPlanDestination = true,
   }) async {
     final enabledFlows =
         await ensureEnabledFlowsForHomework(context, studentId);
@@ -3092,13 +3480,16 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         initialTitle: '',
         initialColor: const Color(0xFF1976D2),
         requirePlanDestination: true,
+        allowTodayPlanDestination: allowTodayPlanDestination,
       ),
     );
     if (item is Map<String, dynamic>) {
       if (item['studentId'] == studentId) {
         final action = (item['action'] as String?)?.trim() ?? 'add';
-        final isReserve = action == 'reserve';
         final planDestination = (item['planDestination'] as String?)?.trim();
+        final reserveNextWithoutAttendance = attendanceId.trim().isEmpty &&
+            (planDestination == 'next_session' || planDestination == 'next');
+        final isReserve = action == 'reserve' || reserveNextWithoutAttendance;
         final groupMode = item['groupMode'] == true;
         if (groupMode) {
           final rawItems = item['items'];
@@ -6060,6 +6451,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     String? gradingGroupId,
     AsyncUiAction? onNext,
     required HomeworkGradingLockAccess lockAccess,
+    bool closeSheetOnAction = true,
+    VoidCallback? onCancelSheet,
   }) async {
     final seenItemIds = <String>{};
     var expectedQuestionCount = 0;
@@ -6154,7 +6547,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       readOnlyReason: lockAccess.canEdit ? '' : lockAccess.readOnlyReason,
       smartConfirmAction: lockAccess.canEdit,
       showSearchChrome: false,
+      closeSheetOnAction: closeSheetOnAction,
       closeBeforeActionCompletes: true,
+      onCancelSheet: onCancelSheet,
       autoFilledCorrectCount: _teacherAutoFilledCorrectCount(
         gradingPages: payload.gradingPages,
         recordedStates: [
@@ -6278,6 +6673,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     List<({String studentId, String itemId})>? targetKeys,
     String? gradingGroupId,
     AsyncUiAction? openNext,
+    bool closeSheetOnAction = true,
+    VoidCallback? onCancelSheet,
   }) async {
     final keys = (targetKeys == null || targetKeys.isEmpty)
         ? <({String studentId, String itemId})>[
@@ -6352,6 +6749,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           gradingGroupId: effectiveGradingGroupId,
           onNext: onNext,
           lockAccess: lockAccess,
+          closeSheetOnAction: closeSheetOnAction,
+          onCancelSheet: onCancelSheet,
         );
         if (opened) return;
       }
@@ -6495,7 +6894,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           readOnlyReason: lockReadOnlyReason,
           smartConfirmAction: lockAccess.canEdit,
           showSearchChrome: false,
+          closeSheetOnAction: closeSheetOnAction,
           closeBeforeActionCompletes: true,
+          onCancelSheet: onCancelSheet,
           autoFilledCorrectCount: _teacherAutoFilledCorrectCount(
             gradingPages: payload.gradingPages,
             recordedStates: [
@@ -6731,7 +7132,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         readOnlyReason: lockReadOnlyReason,
         smartConfirmAction: lockAccess.canEdit,
         showSearchChrome: false,
+        closeSheetOnAction: closeSheetOnAction,
         closeBeforeActionCompletes: true,
+        onCancelSheet: onCancelSheet,
         autoFilledCorrectCount: _teacherAutoFilledCorrectCount(
           gradingPages: textbookProblemPayload.gradingPages,
           recordedStates: [
@@ -7043,12 +7446,21 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       });
       _batchConfirmService.syncPendingCount();
     }
+    if (!closeSheetOnAction &&
+        rightSideSheetStudentLookupBuilder.value != null) {
+      final openLookup = openRightSideSheetStudentLookupAction;
+      if (openLookup != null) {
+        await openLookup();
+      }
+    }
   }
 
   Future<void> _openGradingAfterHomeworkCheck({
     required BuildContext context,
     required String studentId,
     required _HomeworkCheckResult? checkResult,
+    bool closeSheetOnAction = true,
+    VoidCallback? onCancelSheet,
   }) async {
     if (checkResult == null ||
         !checkResult.saved ||
@@ -7094,6 +7506,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       studentId: studentId,
       hw: answerSeed,
       targetKeys: pendingKeys,
+      closeSheetOnAction: closeSheetOnAction,
+      onCancelSheet: onCancelSheet,
     );
   }
 
@@ -7104,6 +7518,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     required HomeworkItem summary,
     required List<HomeworkItem> children,
     AsyncUiAction? openNext,
+    bool closeSheetOnAction = true,
+    VoidCallback? onCancelSheet,
   }) async {
     final activeChildren = children
         .where((item) => item.status != HomeworkStatus.completed)
@@ -7153,6 +7569,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         summary: summary,
         children: activeChildren,
         openNext: openNext,
+        closeSheetOnAction: closeSheetOnAction,
+        onCancelSheet: onCancelSheet,
       );
       if (opened || !context.mounted) return;
       final checkResult = await _runHomeworkCheckDialogForGroup(
@@ -7167,6 +7585,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         context: context,
         studentId: studentId,
         checkResult: checkResult,
+        closeSheetOnAction: closeSheetOnAction,
+        onCancelSheet: onCancelSheet,
       );
       return;
     }
@@ -7225,6 +7645,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     required HomeworkItem summary,
     required List<HomeworkItem> children,
     AsyncUiAction? openNext,
+    bool closeSheetOnAction = true,
+    VoidCallback? onCancelSheet,
   }) async {
     final targetChildren = children
         .where((item) => item.status != HomeworkStatus.completed)
@@ -7255,6 +7677,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       hw: answerSeed,
       targetKeys: keys,
       openNext: openNext,
+      closeSheetOnAction: closeSheetOnAction,
+      onCancelSheet: onCancelSheet,
     );
     return true;
   }
@@ -8310,6 +8734,17 @@ Future<void> _openClassTagDialogLikeSideSheet(
 }
 
 DateTime _dateOnly(DateTime dt) => DateTime(dt.year, dt.month, dt.day);
+
+bool _assignmentBelongsToHomeworkGroup(
+  HomeworkAssignmentDetail assignment, {
+  required Set<String> childIds,
+  required String groupId,
+}) {
+  final itemId = assignment.homeworkItemId.trim();
+  if (itemId.isNotEmpty && childIds.contains(itemId)) return true;
+  final assignmentGroupId = (assignment.groupId ?? '').trim();
+  return groupId.isNotEmpty && assignmentGroupId == groupId;
+}
 
 String _formatDateShort(DateTime dt) {
   String two(int v) => v.toString().padLeft(2, '0');
@@ -13407,7 +13842,27 @@ Future<void> _showAddChildHomeworkDialog({
   _showHomeworkChipSnackBar(context, '하위 과제 추가에 실패했습니다.');
 }
 
+bool _homeworkGroupTitleEditOpen = false;
+
 Future<void> _showHomeworkGroupTitleEditDialog({
+  required BuildContext context,
+  required String studentId,
+  required HomeworkGroup group,
+}) async {
+  if (_homeworkGroupTitleEditOpen) return;
+  _homeworkGroupTitleEditOpen = true;
+  try {
+    await _openHomeworkGroupTitleEditDialog(
+      context: context,
+      studentId: studentId,
+      group: group,
+    );
+  } finally {
+    _homeworkGroupTitleEditOpen = false;
+  }
+}
+
+Future<void> _openHomeworkGroupTitleEditDialog({
   required BuildContext context,
   required String studentId,
   required HomeworkGroup group,
@@ -13427,15 +13882,33 @@ Future<void> _showHomeworkGroupTitleEditDialog({
   final activeAssignments =
       await HomeworkAssignmentStore.instance.loadActiveAssignments(studentId);
   if (!context.mounted) return;
-  final hasUncheckedHomework = activeAssignments.any((assignment) {
-    if (_isReservationAssignment(assignment)) return false;
-    final itemId = assignment.homeworkItemId.trim();
-    return itemId.isNotEmpty && editableChildIds.contains(itemId);
-  });
-  if (hasUncheckedHomework) {
+  final today = _dateOnly(DateTime.now());
+  final groupId = group.id.trim();
+  final linkedAssignments = <HomeworkAssignmentDetail>[
+    for (final assignment in activeAssignments)
+      if (!_isReservationAssignment(assignment))
+        if (_assignmentBelongsToHomeworkGroup(
+          assignment,
+          childIds: editableChildIds,
+          groupId: groupId,
+        ))
+          assignment,
+  ];
+  final hasOlderHomework = linkedAssignments.any(
+    (assignment) => _dateOnly(assignment.assignedAt) != today,
+  );
+  if (hasOlderHomework) {
     _showHomeworkChipSnackBar(context, '숙제 검사 전에는 그룹 과제명을 수정할 수 없습니다.');
     return;
   }
+  final todayAssignmentIds = <String>[
+    for (final assignment in linkedAssignments)
+      if (_dateOnly(assignment.assignedAt) == today &&
+          !assignment.id.startsWith(
+            HomeworkAssignmentStore.optimisticReservedAssignmentIdPrefix,
+          ))
+        assignment.id,
+  ];
 
   final controller = TextEditingController(text: group.title.trim());
   final submitted = await showDialog<bool>(
@@ -13498,6 +13971,17 @@ Future<void> _showHomeworkGroupTitleEditDialog({
     groupId: group.id,
     title: nextTitle,
   );
+  if (updated && todayAssignmentIds.isNotEmpty) {
+    try {
+      await HomeworkAssignmentStore.instance.updateGroupTitleSnapshots(
+        studentId: studentId,
+        assignmentIds: todayAssignmentIds,
+        title: nextTitle,
+      );
+    } catch (e, st) {
+      debugPrint('[HW][groups][title-snapshot][ERROR] $e\n$st');
+    }
+  }
   if (!context.mounted) return;
   _showHomeworkChipSnackBar(
     context,
@@ -13814,9 +14298,20 @@ Widget _buildHomeworkChipsReactiveForStudent(
   })? onGroupPrintPickLongPress,
   VoidCallback? onPrintPickSecondaryTap,
   void Function(({String studentId, String itemId}) key)? onSlideDownComplete,
+  Future<void> Function({
+    required BuildContext context,
+    required String studentId,
+    required HomeworkGroup group,
+    required HomeworkItem summary,
+    required List<HomeworkItem> children,
+  })? onNonAttendingGroupCheckTap,
+  bool nonAttendingLookupMode = false,
+  bool includeReservedSection = false,
+  BuildContext? dialogHostContext,
   Set<String> expandedHomeworkIds = const {},
   void Function(String id)? onToggleExpand,
 }) {
+  final effectiveContext = dialogHostContext;
   return ValueListenableBuilder<int>(
     valueListenable: StudentFlowStore.instance.revision,
     builder: (context, __, ___) {
@@ -13887,6 +14382,11 @@ Widget _buildHomeworkChipsReactiveForStudent(
                   final assignmentDueByGroupId = <String, DateTime?>{};
                   final assignmentDueByItemId = <String, DateTime?>{};
                   final assignmentCheckLabelByGroupId = <String, String>{};
+                  final homeworkAssignedTodayItemIds = <String>{};
+                  final homeworkAssignedEarlierItemIds = <String>{};
+                  final homeworkAssignedTodayGroupIds = <String>{};
+                  final homeworkAssignedEarlierGroupIds = <String>{};
+                  final assignedToday = _dateOnly(DateTime.now());
                   for (final assignment in activeAssignments) {
                     final hwId = assignment.homeworkItemId.trim();
                     if (hwId.isEmpty) continue;
@@ -13896,6 +14396,19 @@ Widget _buildHomeworkChipsReactiveForStudent(
                     }
                     final dueDate = assignment.dueDate;
                     final assignmentGroupId = (assignment.groupId ?? '').trim();
+                    final assignedOnToday =
+                        _dateOnly(assignment.assignedAt) == assignedToday;
+                    if (assignedOnToday) {
+                      homeworkAssignedTodayItemIds.add(hwId);
+                      if (assignmentGroupId.isNotEmpty) {
+                        homeworkAssignedTodayGroupIds.add(assignmentGroupId);
+                      }
+                    } else {
+                      homeworkAssignedEarlierItemIds.add(hwId);
+                      if (assignmentGroupId.isNotEmpty) {
+                        homeworkAssignedEarlierGroupIds.add(assignmentGroupId);
+                      }
+                    }
                     if (assignmentGroupId.isNotEmpty) {
                       assignmentDueByGroupId[assignmentGroupId] =
                           _mergeHomeworkDueDate(
@@ -13963,7 +14476,7 @@ Widget _buildHomeworkChipsReactiveForStudent(
                                       const <String,
                                           HomeworkFirstInspectionScore>{};
                               final chips = _buildHomeworkChipsOnceForStudent(
-                                context,
+                                effectiveContext ?? context,
                                 studentId,
                                 tick,
                                 flowNames,
@@ -13976,6 +14489,14 @@ Widget _buildHomeworkChipsReactiveForStudent(
                                 hasGoalSnapshot: hasGoalSnapshot,
                                 assignmentDueByGroupId: assignmentDueByGroupId,
                                 assignmentDueByItemId: assignmentDueByItemId,
+                                homeworkAssignedTodayItemIds:
+                                    homeworkAssignedTodayItemIds,
+                                homeworkAssignedEarlierItemIds:
+                                    homeworkAssignedEarlierItemIds,
+                                homeworkAssignedTodayGroupIds:
+                                    homeworkAssignedTodayGroupIds,
+                                homeworkAssignedEarlierGroupIds:
+                                    homeworkAssignedEarlierGroupIds,
                                 assignmentCheckLabelByGroupId:
                                     assignmentCheckLabelByGroupId,
                                 progressRatesByItem: progressRatesByItem,
@@ -13995,6 +14516,9 @@ Widget _buildHomeworkChipsReactiveForStudent(
                                 onPrintPickSecondaryTap:
                                     onPrintPickSecondaryTap,
                                 onSlideDownComplete: onSlideDownComplete,
+                                onNonAttendingGroupCheckTap:
+                                    onNonAttendingGroupCheckTap,
+                                nonAttendingLookupMode: nonAttendingLookupMode,
                                 expandedHomeworkIds: expandedHomeworkIds,
                                 onToggleExpand: onToggleExpand,
                               );
@@ -14006,7 +14530,61 @@ Widget _buildHomeworkChipsReactiveForStudent(
                                 }
                                 columnChildren.add(chip);
                               }
-                              if (columnChildren.isEmpty) {
+                              if (includeReservedSection) {
+                                columnChildren.add(
+                                  ValueListenableBuilder<int>(
+                                    valueListenable: _reservedGroupUiRevision,
+                                    builder: (context, uiRevision, _) {
+                                      final reservedSections =
+                                          _buildReservedHomeworkChipsForStudent(
+                                        effectiveContext ?? context,
+                                        studentId,
+                                        flowNames,
+                                        assignmentCounts,
+                                        activeAssignments,
+                                        assignmentCycleMetaByItem,
+                                      );
+                                      if (reservedSections.isEmpty) {
+                                        return const SizedBox.shrink();
+                                      }
+                                      return Column(
+                                        key: ValueKey(
+                                          'lookup_reserved_ui_$uiRevision',
+                                        ),
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          if (chips.isNotEmpty)
+                                            const SizedBox(height: 16),
+                                          ...reservedSections,
+                                        ],
+                                      );
+                                    },
+                                  ),
+                                );
+                              }
+                              final hasAnyContent = chips.isNotEmpty ||
+                                  (includeReservedSection &&
+                                      _resolveReservedHomeworkGroupsForStudent(
+                                        studentId,
+                                        activeAssignments,
+                                      ).isNotEmpty);
+                              if (!hasAnyContent) {
+                                if (nonAttendingLookupMode) {
+                                  return const Padding(
+                                    padding: EdgeInsets.only(top: 24),
+                                    child: Center(
+                                      child: Text(
+                                        '진행 중인 과제가 없습니다.',
+                                        style: TextStyle(
+                                          color: kDlgTextSub,
+                                          fontSize: 13.5,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                }
                                 return const SizedBox.shrink();
                               }
                               return ScrollConfiguration(
@@ -15037,6 +15615,10 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
   bool hasGoalSnapshot = false,
   Map<String, DateTime?> assignmentDueByGroupId = const {},
   Map<String, DateTime?> assignmentDueByItemId = const {},
+  Set<String> homeworkAssignedTodayItemIds = const {},
+  Set<String> homeworkAssignedEarlierItemIds = const {},
+  Set<String> homeworkAssignedTodayGroupIds = const {},
+  Set<String> homeworkAssignedEarlierGroupIds = const {},
   Map<String, String> assignmentCheckLabelByGroupId = const {},
   Map<String, HomeworkGradingProgressRate> progressRatesByItem = const {},
   Map<String, HomeworkFirstInspectionScore> firstScoresByItem = const {},
@@ -15083,6 +15665,14 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
   })? onGroupPrintPickLongPress,
   VoidCallback? onPrintPickSecondaryTap,
   void Function(({String studentId, String itemId}) key)? onSlideDownComplete,
+  Future<void> Function({
+    required BuildContext context,
+    required String studentId,
+    required HomeworkGroup group,
+    required HomeworkItem summary,
+    required List<HomeworkItem> children,
+  })? onNonAttendingGroupCheckTap,
+  bool nonAttendingLookupMode = false,
   Set<String> expandedHomeworkIds = const {},
   void Function(String id)? onToggleExpand,
 }) {
@@ -15393,6 +15983,20 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
     final bool groupIsRunning = hasRunningChild;
     final bool groupIsSubmitted = submittedKeys.isNotEmpty;
     final bool groupIsWaiting = summary.phase == 1;
+    final bool hasEarlierAssignedHomework =
+        homeworkAssignedEarlierGroupIds.contains(group.id) ||
+            children.any(
+              (child) => homeworkAssignedEarlierItemIds.contains(child.id),
+            );
+    final bool hasTodayAssignedHomework =
+        homeworkAssignedTodayGroupIds.contains(group.id) ||
+            children.any(
+              (child) => homeworkAssignedTodayItemIds.contains(child.id),
+            );
+    final bool canEditGroupTitle = groupIsWaiting &&
+        !printPickMode &&
+        !hasEarlierAssignedHomework &&
+        (!hasHomeworkAssignment || hasTodayAssignedHomework);
     final bool groupIsConfirmed = summary.phase == 4;
     final bool hasTestChild = children.any(_isTestHomeworkItem);
     final bool isHomeworkCard = hasHomeworkAssignment || markedAsHomework;
@@ -15707,6 +16311,18 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
 
         switch (phase) {
           case 1:
+            if (nonAttendingLookupMode && onNonAttendingGroupCheckTap != null) {
+              unawaited(
+                onNonAttendingGroupCheckTap(
+                  context: context,
+                  studentId: studentId,
+                  group: group,
+                  summary: summary,
+                  children: children,
+                ),
+              );
+              return;
+            }
             if (hasTestChild &&
                 !HomeworkStore.instance.isStudentInClassTime(studentId)) {
               _showHomeworkChipSnackBar(context, '테스트 카드는 수업시간에만 수행할 수 있어요.');
@@ -15721,6 +16337,18 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
             );
             return;
           case 2:
+            if (nonAttendingLookupMode && onNonAttendingGroupCheckTap != null) {
+              unawaited(
+                onNonAttendingGroupCheckTap(
+                  context: context,
+                  studentId: studentId,
+                  group: group,
+                  summary: summary,
+                  children: children,
+                ),
+              );
+              return;
+            }
             unawaited(
               HomeworkStore.instance.bulkTransitionGroup(
                 studentId,
@@ -15730,6 +16358,18 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
             );
             return;
           case 3:
+            if (nonAttendingLookupMode && onNonAttendingGroupCheckTap != null) {
+              unawaited(
+                onNonAttendingGroupCheckTap(
+                  context: context,
+                  studentId: studentId,
+                  group: group,
+                  summary: summary,
+                  children: children,
+                ),
+              );
+              return;
+            }
             if (submittedChildren.isNotEmpty) {
               onGroupSubmittedDoubleTap?.call(studentId, submittedChildren);
             }
@@ -15784,8 +16424,7 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
               ),
             );
           },
-          onGroupTitleTap:
-              groupIsWaiting && !hasHomeworkAssignment && !printPickMode
+          onGroupTitleTap: canEditGroupTitle
                   ? () {
                       unawaited(
                         _showHomeworkGroupTitleEditDialog(

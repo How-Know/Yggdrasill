@@ -12,6 +12,7 @@ import '../../services/textbook_explorer_service.dart';
 import '../../services/textbook_pdf_service.dart';
 import '../../theme/ygg_semantic_colors.dart';
 import '../../widgets/app_snackbar.dart';
+import '../../widgets/latex_text_renderer.dart';
 import '../../widgets/dialog_tokens.dart';
 import '../../widgets/corner_action_bar.dart';
 import '../../widgets/shared_dropdown_dialog.dart';
@@ -468,6 +469,7 @@ class TextbookExplorerController extends ChangeNotifier {
       for (final q in questionsById.values) {
         _rememberQuestion(q);
       }
+      _seedMockSlotQuestionModes(card, items, questionsById);
       loading = false;
       notifyListeners();
     } catch (e) {
@@ -475,6 +477,37 @@ class TextbookExplorerController extends ChangeNotifier {
       loading = false;
       error = '모의고사 문항을 불러오지 못했습니다.\n$e';
       notifyListeners();
+    }
+  }
+
+  /// 문항 uid·id → 모의고사 자리 id. 다른 구간의 문항을 가리키는 자리만 담는다(카드를 자리 값으로 그린다).
+  final Map<String, String> _mockSlotItemByQuestionKey = <String, String>{};
+
+  /// 다른 구간의 문항을 가리키는 자리(가형·나형에 같이 실린 문항)는 문항의 원래 형식이 아니라
+  /// 이 시험지 번호의 형식(객관식·단답형)으로 낸다. 자기 구간의 문항은 건드리지 않는다.
+  void _seedMockSlotQuestionModes(
+    MockExamResourceCard card,
+    List<MockExamResourceItem> items,
+    Map<String, LearningProblemQuestion> questionsById,
+  ) {
+    _mockSlotItemByQuestionKey.clear();
+    for (final item in items) {
+      final question = questionsById[item.pbQuestionId];
+      if (question == null) continue;
+      final ownSection = mockQuestionOwnSection(question.meta);
+      if (ownSection.isEmpty || ownSection == item.section) continue;
+      if (item.id.isNotEmpty) {
+        // 카드 요청은 문항 uid 나 id 로 나가므로 둘 다 적어 둔다.
+        for (final key in [question.questionUid.trim(), question.id.trim()]) {
+          if (key.isNotEmpty) _mockSlotItemByQuestionKey[key] = item.id;
+        }
+      }
+      final uid = question.stableQuestionKey.trim();
+      if (uid.isEmpty) continue;
+      selectedQuestionModesByUid[uid] =
+          mockExamIsObjective(card.grade, item.number, item.section)
+              ? kLearningQuestionModeObjective
+              : kLearningQuestionModeSubjective;
     }
   }
 
@@ -501,7 +534,7 @@ class TextbookExplorerController extends ChangeNotifier {
           questionUid: question?.stableQuestionKey.trim() ?? '',
           problemNumber: '${item.number}',
           difficultyLabel: '',
-          answerKind: mockExamIsObjective(card.grade, item.number)
+          answerKind: mockExamIsObjective(card.grade, item.number, section)
               ? TbAnswerKind.objective
               : TbAnswerKind.subjective,
           section: '',
@@ -1879,6 +1912,11 @@ class TextbookExplorerController extends ChangeNotifier {
           templateProfile: 'naesin',
           paperSize: 'A4',
           questionModeByQuestionUid: modeMap,
+          mockSlotItemByQuestionId: <String, String>{
+            for (final id in ids)
+              if (_mockSlotItemByQuestionKey[id] != null)
+                id: _mockSlotItemByQuestionKey[id]!,
+          },
           renderConfig: const <String, dynamic>{
             'previewIndependentSetCommonStem': false,
           },
@@ -2143,9 +2181,16 @@ class _NodeTag {
 /// 좌측 단원 트리 패널 — 자원 화면 폴더 트리 자리에 그려진다.
 /// 상단 타이틀에 책 제목 + 정보/뒤로가기 버튼을 둔다.
 class TextbookExplorerTreePanel extends StatelessWidget {
-  const TextbookExplorerTreePanel({super.key, required this.controller});
+  const TextbookExplorerTreePanel({
+    super.key,
+    required this.controller,
+    this.mathUnitNames = false,
+  });
 
   final TextbookExplorerController controller;
+
+  /// 과제 추가 다이얼로그: 단원명을 정답 창과 같은 로컬 수식 렌더러로 그린다.
+  final bool mathUnitNames;
 
   @override
   Widget build(BuildContext context) {
@@ -2375,6 +2420,27 @@ class TextbookExplorerTreePanel extends StatelessWidget {
     );
   }
 
+  Widget _unitNameLabel(String text, TextStyle style) {
+    if (!mathUnitNames) {
+      return Text(
+        text,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: style,
+      );
+    }
+    return LatexTextRenderer(
+      text,
+      dollarMath: true,
+      softWrap: true,
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
+      enableDisplayMath: true,
+      displayMathOverflow: DisplayMathOverflow.scaleDown,
+      style: style,
+    );
+  }
+
   Widget _buildUnitFolderTreeRow(
     BuildContext context,
     PreviewAcademyPanelStyle style,
@@ -2423,11 +2489,9 @@ class TextbookExplorerTreePanel extends StatelessWidget {
                   const SizedBox(width: sharedFolderTreeLeadingWidth),
                 const SizedBox(width: 6),
                 Expanded(
-                  child: Text(
+                  child: _unitNameLabel(
                     node.label,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
+                    TextStyle(
                       color: style.title,
                       fontWeight: FontWeight.w700,
                       fontSize: FabTabBarTokens.fabBarLabelFontSize,
@@ -2519,11 +2583,9 @@ class TextbookExplorerTreePanel extends StatelessWidget {
                 ),
                 const SizedBox(width: 4),
                 Expanded(
-                  child: Text(
+                  child: _unitNameLabel(
                     small.name,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
+                    TextStyle(
                       color: selected ? style.title : style.hint,
                       fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
                       fontSize: FabTabBarTokens.fabBarLabelFontSize,

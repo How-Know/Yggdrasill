@@ -279,6 +279,23 @@ ExamReviewStatus mockExamSectionStatus(MockExamReviewSection section, TextbookWo
   }
 }
 
+/// 이 학년 목록에 있는 달. 작은 달부터.
+List<int> mockExamMonths(Iterable<MockExamReviewExam> exams) {
+  final months = <int>{
+    for (final exam in exams)
+      if (exam.exam.month >= 1 && exam.exam.month <= 12) exam.exam.month,
+  };
+  final list = months.toList()..sort();
+  return list;
+}
+
+/// 고른 달이 목록에 있으면 그 달, 없으면 가장 이른 달.
+int? mockExamSelectedMonth(List<int> months, int? selected) {
+  if (months.isEmpty) return null;
+  if (selected != null && months.contains(selected)) return selected;
+  return months.first;
+}
+
 /// 고른 학년의 회차 목록: 회차마다 구간(공통·선택과목)별 검수 시작·열기·이어서 진행.
 class MockExamGradePanel extends StatefulWidget {
   const MockExamGradePanel({
@@ -299,6 +316,7 @@ class MockExamGradePanel extends StatefulWidget {
 class _MockExamGradePanelState extends State<MockExamGradePanel> {
   final Set<String> _busy = <String>{};
   bool _bulkBusy = false;
+  int? _selectedMonth;
 
   MockExamReviewController get _c => widget.controller;
 
@@ -329,12 +347,13 @@ class _MockExamGradePanelState extends State<MockExamGradePanel> {
     }
   }
 
-  Future<void> _startAll(List<MockExamReviewExam> exams) async {
+  Future<void> _startAll(List<MockExamReviewExam> exams, {required int? month}) async {
     if (exams.isEmpty || _bulkBusy) return;
     final sections = exams.fold<int>(0, (n, e) => n + e.notStartedSections.length);
+    final scope = month == null ? '고${widget.grade}' : '고${widget.grade} $month월';
     final ok = await showExamReviewStartAllDialog(
       context,
-      message: '고${widget.grade} 검수 전 회차 ${exams.length}회(구간 $sections개)를 검수 대기열에 넣습니다.\n'
+      message: '$scope 검수 전 회차 ${exams.length}회(구간 $sections개)를 검수 대기열에 넣습니다.\n'
           '아직 추출하지 않은 회차는 추출부터 합니다.\n'
           'AI 검수는 구간 2개씩 차례로 돌고, 창을 닫아도 계속됩니다.',
       confirmLabel: '${exams.length}회 시작',
@@ -398,7 +417,13 @@ class _MockExamGradePanelState extends State<MockExamGradePanel> {
     return ListenableBuilder(
       listenable: _c,
       builder: (context, _) {
-        final exams = _c.examsOfGrade(widget.grade);
+        final gradeExams = _c.examsOfGrade(widget.grade);
+        final months = mockExamMonths(gradeExams);
+        final month = mockExamSelectedMonth(months, _selectedMonth);
+        final exams = [
+          for (final e in gradeExams)
+            if (month == null || e.exam.month == month) e,
+        ];
         final live = _c.liveStates();
         bool active(MockExamReviewSection s) => live[s.documentId]?.active ?? false;
         final startable = [
@@ -428,18 +453,38 @@ class _MockExamGradePanelState extends State<MockExamGradePanel> {
               Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  Expanded(
-                    child: Text(
-                      '모의고사 · 고${widget.grade}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w800),
-                    ),
+                  Text(
+                    '모의고사 · 고${widget.grade}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w800),
                   ),
+                  if (months.isEmpty)
+                    const Spacer()
+                  else ...[
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          children: [
+                            for (var i = 0; i < months.length; i++) ...[
+                              if (i > 0) const SizedBox(width: 4),
+                              _MockExamMonthTab(
+                                label: '${months[i]}월',
+                                selected: months[i] == month,
+                                onTap: () => setState(() => _selectedMonth = months[i]),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                   const SizedBox(width: 12),
                   if (startable.isNotEmpty)
                     OutlinedButton.icon(
-                      onPressed: _bulkBusy ? null : () => unawaited(_startAll(startable)),
+                      onPressed: _bulkBusy ? null : () => unawaited(_startAll(startable, month: month)),
                       icon: _bulkBusy
                           ? const SizedBox(
                               width: 12,
@@ -461,6 +506,7 @@ class _MockExamGradePanelState extends State<MockExamGradePanel> {
               const SizedBox(height: 8),
               Text(
                 [
+                  if (month != null) '$month월',
                   '회차 ${exams.length}회',
                   '구간 $sectionCount개',
                   for (final e in counts.entries) '${e.key} ${e.value}',
@@ -489,8 +535,11 @@ class _MockExamGradePanelState extends State<MockExamGradePanel> {
               const Divider(height: 1, color: kExamBorder),
               Expanded(
                 child: exams.isEmpty
-                    ? const Center(
-                        child: Text('등록된 회차가 없습니다', style: TextStyle(color: kExamTextMuted, fontSize: 13)),
+                    ? Center(
+                        child: Text(
+                          month == null ? '등록된 회차가 없습니다' : '$month월에 등록된 회차가 없습니다',
+                          style: const TextStyle(color: kExamTextMuted, fontSize: 13),
+                        ),
                       )
                     : ListView.separated(
                         itemCount: exams.length,
@@ -705,6 +754,14 @@ class _MockExamGradePanelState extends State<MockExamGradePanel> {
                     style: const TextStyle(color: kExamListText, fontSize: 13, fontWeight: FontWeight.w600),
                   ),
                 ),
+                if (section.sharedSlotNote.isNotEmpty) ...[
+                  const SizedBox(width: 8),
+                  Text(
+                    section.sharedSlotNote,
+                    maxLines: 1,
+                    style: const TextStyle(color: kExamTextMuted, fontSize: 12),
+                  ),
+                ],
                 if (publish != null) ...[const SizedBox(width: 8), publish],
               ],
             ),
@@ -721,6 +778,46 @@ class _MockExamGradePanelState extends State<MockExamGradePanel> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _MockExamMonthTab extends StatelessWidget {
+  const _MockExamMonthTab({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = selected ? kExamAccent : kExamTextSub;
+    return TextButton(
+      onPressed: onTap,
+      style: TextButton.styleFrom(
+        minimumSize: const Size(0, 30),
+        backgroundColor: selected ? kExamAccent.withValues(alpha: 0.14) : null,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(999),
+          side: BorderSide(
+            color: selected ? kExamAccent.withValues(alpha: 0.45) : kExamBorder,
+          ),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: fg,
+          fontSize: 12,
+          fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+        ),
       ),
     );
   }

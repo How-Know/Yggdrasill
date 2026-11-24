@@ -1976,6 +1976,7 @@ class _MainScreenState extends State<MainScreen>
   }
 
   void _applyNavIndex(int index) {
+    rightSideSheetStudentLookupBuilder.value = null;
     final closeRightSheet = closeRightSideSheetAction;
     if (closeRightSheet != null) {
       unawaited(closeRightSheet());

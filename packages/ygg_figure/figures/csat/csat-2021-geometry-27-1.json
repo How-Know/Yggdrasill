@@ -1,0 +1,28 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.1",
+  "ref": "csat-2021-geometry-27-1",
+  "params": {"ox": 4.2502, "oy": 48.3772, "exx": 27.7161, "exy": -3.9508, "eyx": 18.0245, "eyy": 13.6796, "ezy": 29.9216},
+  "fit": ["ox", "oy", "exx", "exy", "eyx", "eyy", "ezy"],
+  "canvas": {"width": 53.97, "height": 57.19, "origin": ["ox", "oy"], "unit": 1},
+  "projection": {"x": ["exx", "exy"], "y": ["eyx", "eyy"], "z": [0, "ezy"]},
+  "objects": [
+    {"id": "E", "type": "point", "at": [0, 0, 0], "label": {"dir": "SW", "dist": 0.4}},
+    {"id": "F", "type": "point", "at": [1, 0, 0], "label": {"dir": "S", "dist": 1.2}},
+    {"id": "G", "type": "point", "at": [1, 1, 0], "label": {"dir": "SE", "dist": 0.5}},
+    {"id": "H", "type": "point", "at": [0, 1, 0], "label": {"dir": "NW", "dist": 0.5}},
+    {"id": "A", "type": "point", "at": [0, 0, 1], "label": {"dir": "W", "dist": 1.0}},
+    {"id": "B", "type": "point", "at": [1, 0, 1], "label": {"dir": "N", "dist": 1.0}},
+    {"id": "C", "type": "point", "at": [1, 1, 1], "label": {"dir": "NE", "dist": 0.5}},
+    {"id": "D", "type": "point", "at": [0, 1, 1], "label": {"dir": "N", "dist": 1.0}},
+    {"id": "M", "type": "midpoint", "of": ["A", "D"], "label": {"dir": "NW", "dist": 0.5}},
+    {"type": "segment", "from": "D", "to": "H", "line": "main_dashed"},
+    {"type": "segment", "from": "H", "to": "E", "line": "main_dashed"},
+    {"type": "segment", "from": "H", "to": "G", "line": "main_dashed"},
+    {"type": "polygon", "points": ["A", "B", "C", "D"]},
+    {"type": "polyline", "points": ["A", "E", "F", "G", "C"]},
+    {"type": "segment", "from": "B", "to": "F"},
+    {"type": "polygon", "points": ["M", "E", "G"], "width": 0.45}
+  ],
+  "label_nudge": {"E": [-0.593, 1.102], "F": [-0.339, 0.085], "G": [0.424, 1.271], "H": [-0.678, 0.085], "A": [0.169, 0.0], "B": [-0.169, 0.169], "C": [0.339, -0.847], "D": [-0.085, -0.169], "M": [-0.254, 0.339]}
+}

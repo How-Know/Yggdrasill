@@ -5,6 +5,7 @@
 //   문항 크롭    = mock_exam_items 의 쪽·영역(좌표만). 원본은 시험지 PDF 에서 그때그때 그린다.
 //   정답         = 문제은행 정답(추출 때 해설지 정답표에서 옮긴 값)을 채점 정답으로 옮긴다.
 //   해설         = mock_exam_items 의 해설 위치에, 다음 단·쪽으로 이어진 영역을 덧붙인다(solution_layout.js).
+//   선지 번호 자리 = 시험지 글자 층에서 ①~⑤ 가 놓인 영역을 읽어 mock_exam_items 에 적는다(choice_layout.js).
 //   공개         = 검수에서 만든 구간 문서(meta.mock_review.publish_on_confirm)의 문항은 확정할 때까지 비공개다.
 //
 // 여러 번 불러도 같은 결과가 나온다. 사람이 고친 정답·해설 위치·문항 영역은 덮어쓰지 않는다.
@@ -16,7 +17,8 @@ import {
   runQuery,
   runStep,
 } from '../problem_bank/school_exam/review_staging.js';
-import { ELECTIVES, SECTION_LABELS } from './mock_pages.js';
+import { choiceNumberRegion, readChoicePages, regionInside, validChoiceRegion } from './choice_layout.js';
+import { ELECTIVES, LEGACY_TYPES, SECTION_LABELS } from './mock_pages.js';
 import { mockExamTitle, mockReviewCourseLabel } from './mock_courses.js';
 import { mockReviewPending, syncMockExamPresetsForExam } from './mock_preset.js';
 import { planSolutionSegments, solutionRegionOf } from './solution_layout.js';
@@ -26,8 +28,8 @@ export const MOCK_EXAM_CATEGORY = 'mock_past';
 export const MOCK_EXAM_SERIES_KEY = 'mock_exam';
 export const MOCK_SCOPE = Object.freeze({ bigOrder: 0, midOrder: 0, subKey: 'A', subIndex: 0 });
 
-const SECTION_ORDER = Object.freeze(['common', ...ELECTIVES]);
-const ELECTIVE_ORDER = Object.freeze(['', ...ELECTIVES]);
+const SECTION_ORDER = Object.freeze(['common', ...ELECTIVES, ...LEGACY_TYPES]);
+const ELECTIVE_ORDER = Object.freeze(['', ...ELECTIVES, ...LEGACY_TYPES]);
 const COURSE_KEYS = Object.freeze({ probstats: 'H-probstats', calculus: 'H-calculus', geometry: 'H-geometry' });
 const PB_SOURCE_VERSION = 'mock_exam_pdf_v1';
 const TERMINAL_JOB = new Set(['completed', 'review_required', 'failed', 'cancelled']);
@@ -73,12 +75,19 @@ export function mockSectionPaper(grade, section, papers) {
 }
 
 /// 회차에 있어야 할 구간: 문제지가 있으면 공통, 고3 은 문제지가 올라온 선택과목, 그리고 이미 문서가 있는 구간.
+/// 가형·나형('ga'·'na') 회차는 공통 구간 없이 문제지가 올라온 유형마다 구간 하나(1~30번)다(사장님 결정 2026-11-23).
 export function mockExpectedSections(exam, papers, links) {
   const found = new Set();
   const problems = problemPapers(papers);
-  if (problems.length > 0) found.add('common');
   if (Number(exam?.grade) === 3) {
-    for (const p of problems) if (ELECTIVES.includes(compact(p.elective))) found.add(compact(p.elective));
+    const electives = problems.map((p) => compact(p.elective)).filter((e) => ELECTIVES.includes(e));
+    if (electives.length > 0) {
+      found.add('common');
+      for (const e of electives) found.add(e);
+    }
+    for (const p of problems) if (LEGACY_TYPES.includes(compact(p.elective))) found.add(compact(p.elective));
+  } else if (problems.length > 0) {
+    found.add('common');
   }
   for (const l of links || []) if (compact(l.pb_document_id)) found.add(compact(l.section));
   return SECTION_ORDER.filter((s) => found.has(s));
@@ -259,7 +268,7 @@ export async function prepareMockReviewIdentity({
         documentId,
         bookId: documentId,
         bookName: bookName(title, section),
-        gradeLabel: mockReviewCourseLabel({ grade: exam.grade, examMonth: exam.exam_month, section }),
+        gradeLabel: mockReviewCourseLabel({ grade: exam.grade, examMonth: exam.exam_month, section, examYear: exam.exam_year }),
         questionCount: count.total,
         publishedCount: count.published,
         publishOnConfirm: mockReviewPending(metaOf.get(documentId)),
@@ -401,8 +410,235 @@ function sameSolutionRef(cur, row) {
   return JSON.stringify(cur.continuation_regions ?? null) === JSON.stringify(row.continuation_regions ?? null);
 }
 
+/// 구간의 해설지: 이 구간 풀이가 가장 많이 들어 있는 해설지(같으면 앞 선택과목 것). 없으면 null.
+function sectionSolutionPaper(papers, sectionItems) {
+  const solutionPapers = new Map(
+    (papers || []).filter((p) => compact(p.kind) === 'solution' && compact(p.storage_path)).map((p) => [p.id, p]),
+  );
+  const votes = new Map();
+  for (const it of sectionItems) {
+    const id = compact(it.solution_paper_id);
+    if (solutionPapers.has(id) && Number(it.solution_raw_page) > 0) votes.set(id, (votes.get(id) || 0) + 1);
+  }
+  const electiveRank = (id) => ELECTIVE_ORDER.indexOf(compact(solutionPapers.get(id)?.elective));
+  const id = [...votes.entries()].sort((a, b) => b[1] - a[1] || electiveRank(a[0]) - electiveRank(b[0]))[0]?.[0] || '';
+  return solutionPapers.get(id) || null;
+}
+
+/// 구간 문항([numbers])의 해설 위치를 해설지에서 계산한다: 번호 자리 + 첫 영역 + 다음 단·쪽으로 이어진 영역.
+/// 읽기만 한다. 반환: planned(번호 → 조각), solutionReanchored, solutionUnchecked
+async function planSectionSolutions({ solutionPaper, allItems, section, numbers, loadPaperPdf, readEvidence, retryDelaysMs }) {
+  const planned = new Map();
+  const solutionReanchored = [];
+  const solutionUnchecked = [];
+  if (!solutionPaper) return { planned, solutionReanchored, solutionUnchecked };
+  const pdfBuffer = await runStep(() => loadPaperPdf(solutionPaper), retryDelaysMs);
+  const evidence = await readEvidence(pdfBuffer);
+  const blocks = [];
+  for (const it of allItems || []) {
+    const page = Number(it.solution_raw_page);
+    const numberRegion = solutionRegionOf(it.solution_number_region_1k);
+    if (!(page > 0) || !numberRegion) continue;
+    const own = compact(it.section) === section;
+    if (compact(it.solution_paper_id) !== solutionPaper.id) {
+      // 다른 해설지에서 찾은 풀이: 이 해설지의 같은 자리에 같은 번호가 적혀 있을 때만 그 자리를 쓴다.
+      if (!own || !numberAt(evidence, page, numberRegion, it.problem_number)) continue;
+      solutionReanchored.push(String(it.problem_number));
+    }
+    blocks.push({
+      key: `${compact(it.section)}|${it.problem_number}`,
+      section: compact(it.section),
+      page,
+      numberRegion,
+      contentRegion: it.solution_content_region_1k,
+      manual: compact(it.solution_source) === 'manual',
+    });
+  }
+  const plan = planSolutionSegments({ blocks, evidence });
+  for (const number of numbers) {
+    const segment = plan.segments.get(`${section}|${number}`);
+    if (!segment) continue;
+    planned.set(number, segment);
+    if (segment.unchecked) solutionUnchecked.push(number);
+  }
+  return { planned, solutionReanchored, solutionUnchecked };
+}
+
+/// 계산한 해설 조각([segment], 없으면 null)을 textbook_problem_solution_refs 행으로 바꾼다.
+function solutionRefRow({ cropId, academyId, segment, hasSolutionPaper, nowIso }) {
+  if (segment) {
+    return {
+      crop_id: cropId,
+      academy_id: academyId,
+      raw_page: segment.rawPage,
+      display_page: segment.rawPage,
+      number_region_1k: segment.numberRegion,
+      content_region_1k: segment.contentRegion,
+      // 빈 배열 = 이어진 부분이 없다고 계산했다(null 은 계산하지 않음: 교재).
+      continuation_regions: segment.continuations.map((c) => ({ raw_page: c.rawPage, region_1k: c.region1k })),
+      source_kind: 'sol',
+      extracted_at: nowIso,
+      edited_at: null,
+    };
+  }
+  return {
+    crop_id: cropId,
+    academy_id: academyId,
+    raw_page: 0,
+    display_page: null,
+    number_region_1k: [0, 0, 0, 0],
+    content_region_1k: null,
+    continuation_regions: null,
+    // 해설지가 있는데 이 문항의 풀이 자리를 못 찾았다: '해설 없음'(none)으로 넘기지 않는다.
+    // 쪽이 0 인 'sol' 행은 검수에서 "해설 위치 없음"으로 막힌다(준비됨이 되지 않는다).
+    // 해설지가 아예 없는 시험만 none 이다.
+    source_kind: hasSolutionPaper ? 'sol' : 'none',
+    // 한 번에 여러 행을 보낼 때 빠진 값은 null 로 들어간다. extracted_at 은 null 을 받지 않는다.
+    extracted_at: nowIso,
+    edited_at: null,
+  };
+}
+
+/// 구간의 해설 위치를 지금 규칙으로 다시 계산해, 저장된 위치와 달라지는 문항만 돌려준다. **아무것도 쓰지 않는다.**
+/// 확정된 구간에도 쓸 수 있다(prepareMockReview 는 크롭·정답·공개 상태까지 다시 쓰므로 확정 구간에 돌리지 않는다).
+/// 사람이 고친 위치(edited_at)는 prepare 와 같이 비교하지 않고 solutionProtected 로 센다.
+/// 반환: { ok, …, solutionCount, solutionProtected, changes: [{ number, cropId, before, after }] }
+export async function previewMockSolutionRefs({
+  supa,
+  academyId,
+  documentId,
+  loadPaperPdf,
+  readEvidence = readSolutionEvidence,
+  retryDelaysMs = DEFAULT_RETRY_DELAYS_MS,
+}) {
+  const must = (query, label, options = {}) => runQuery(query, label, { delaysMs: retryDelaysMs, ...options });
+  const link = await must(
+    supa
+      .from('mock_exam_sections')
+      .select('exam_id,section,pb_document_id')
+      .eq('academy_id', academyId)
+      .eq('pb_document_id', documentId)
+      .maybeSingle(),
+    'mock_review_section_fetch_failed',
+  );
+  if (!link) return { ok: false, status: 400, error: 'not_mock_section' };
+  const section = compact(link.section);
+  const exam = await must(
+    supa.from('mock_exams').select('*').eq('id', link.exam_id).eq('academy_id', academyId).maybeSingle(),
+    'mock_review_exam_fetch_failed',
+  );
+  if (!exam) return { ok: false, status: 404, error: 'exam_not_found' };
+  const gradeLabel = mockReviewCourseLabel({ grade: exam.grade, examMonth: exam.exam_month, section, examYear: exam.exam_year });
+  if (!gradeLabel) return { ok: false, status: 400, error: 'course_unresolved' };
+  const questions = await must(
+    supa
+      .from('pb_questions')
+      .select('question_uid,question_number,source_order')
+      .eq('academy_id', academyId)
+      .eq('document_id', documentId)
+      .order('source_order', { ascending: true }),
+    'mock_review_questions_fetch_failed',
+  );
+  const numbers = [];
+  for (const q of questions || []) {
+    const number = compact(q.question_number);
+    if (number && compact(q.question_uid) && !numbers.includes(number)) numbers.push(number);
+  }
+  const papers = await must(
+    supa.from('mock_exam_papers').select('id,kind,elective,storage_bucket,storage_path').eq('exam_id', exam.id),
+    'mock_review_papers_fetch_failed',
+  );
+  const allItems = await must(
+    supa
+      .from('mock_exam_items')
+      .select(
+        'section,problem_number,solution_paper_id,solution_raw_page,solution_number_region_1k,solution_content_region_1k,solution_source',
+      )
+      .eq('exam_id', exam.id),
+    'mock_review_items_fetch_failed',
+  );
+  const sectionItems = (allItems || []).filter((it) => compact(it.section) === section);
+  const solutionPaper = sectionSolutionPaper(papers, sectionItems);
+  const crops = await must(
+    supa
+      .from('textbook_problem_crops')
+      .select('id,problem_number')
+      .eq('academy_id', academyId)
+      .eq('book_id', documentId)
+      .eq('grade_label', gradeLabel)
+      .eq('big_order', MOCK_SCOPE.bigOrder)
+      .eq('mid_order', MOCK_SCOPE.midOrder)
+      .eq('sub_key', MOCK_SCOPE.subKey)
+      .eq('sub_index', MOCK_SCOPE.subIndex),
+    'mock_review_crops_reload_failed',
+  );
+  const cropIdByNumber = new Map((crops || []).map((c) => [compact(c.problem_number), c.id]));
+  const { planned } = await planSectionSolutions({
+    solutionPaper,
+    allItems,
+    section,
+    numbers,
+    loadPaperPdf,
+    readEvidence,
+    retryDelaysMs,
+  });
+  const cropIds = Array.from(cropIdByNumber.values());
+  const refRows = cropIds.length
+    ? await must(
+        supa
+          .from('textbook_problem_solution_refs')
+          .select('crop_id,raw_page,number_region_1k,content_region_1k,continuation_regions,source_kind,edited_at')
+          .in('crop_id', cropIds),
+        'mock_review_solution_refs_fetch_failed',
+      )
+    : [];
+  const refOf = new Map((refRows || []).map((r) => [r.crop_id, r]));
+  const shape = (r) => ({
+    raw_page: Number(r.raw_page),
+    number_region_1k: r.number_region_1k ?? null,
+    content_region_1k: r.content_region_1k ?? null,
+    continuation_regions: r.continuation_regions ?? null,
+    source_kind: compact(r.source_kind),
+  });
+  const changes = [];
+  let solutionProtected = 0;
+  for (const number of numbers) {
+    const cropId = cropIdByNumber.get(number);
+    if (!cropId) continue;
+    const cur = refOf.get(cropId);
+    if (cur && compact(cur.edited_at)) {
+      solutionProtected += 1;
+      continue;
+    }
+    const row = solutionRefRow({
+      cropId,
+      academyId,
+      segment: planned.get(number) || null,
+      hasSolutionPaper: Boolean(solutionPaper),
+      nowIso: '',
+    });
+    if (cur && sameSolutionRef(cur, row)) continue;
+    changes.push({ number, cropId, before: cur ? shape(cur) : null, after: shape(row) });
+  }
+  return {
+    ok: true,
+    preview: true,
+    examId: exam.id,
+    section,
+    bookId: documentId,
+    gradeLabel,
+    title: mockExamTitle(exam),
+    label: SECTION_LABELS[section] || section,
+    cropCount: cropIds.length,
+    solutionCount: planned.size,
+    solutionProtected,
+    changes,
+  };
+}
+
 /// 구간 문서 하나를 검수 테이블에 올린다.
-///   loadPaperPdf(paper) → Buffer(해설지 PDF), readEvidence(buffer) → solution_evidence 의 근거
+///   loadPaperPdf(paper) → Buffer(시험지·해설지 PDF), readEvidence(buffer) → solution_evidence 의 근거
+///   readChoiceWords(buffer) → 시험지의 쪽별 낱말 상자(선지 번호 자리를 읽는다)
 ///   allowExtract: 문항이 없으면 추출을 건다(검수 실행기가 한 번의 실행에서 처음 부를 때만 켠다).
 ///   refreshAnswers: 방금 다시 추출한 문서라 문제은행 정답을 채점 정답에 다시 옮긴다(사람이 고친 정답은 그대로).
 /// 반환: 추출을 기다려야 하면 { ok: true, state: 'waiting', reason }, 올렸으면 { ok: true, state: 'ready', … }
@@ -412,6 +648,7 @@ export async function prepareMockReview({
   documentId,
   loadPaperPdf,
   readEvidence = readSolutionEvidence,
+  readChoiceWords = readChoicePages,
   allowExtract = false,
   refreshAnswers = false,
   retryDelaysMs = DEFAULT_RETRY_DELAYS_MS,
@@ -444,7 +681,7 @@ export async function prepareMockReview({
     'mock_review_document_fetch_failed',
   );
   if (!doc) return { ok: false, status: 404, error: 'document_not_found' };
-  const gradeLabel = mockReviewCourseLabel({ grade: exam.grade, examMonth: exam.exam_month, section });
+  const gradeLabel = mockReviewCourseLabel({ grade: exam.grade, examMonth: exam.exam_month, section, examYear: exam.exam_year });
   if (!gradeLabel) return { ok: false, status: 400, error: 'course_unresolved' };
   const title = mockExamTitle(exam);
   const label = SECTION_LABELS[section] || section;
@@ -515,7 +752,7 @@ export async function prepareMockReview({
     supa
       .from('mock_exam_items')
       .select(
-        'section,problem_number,paper_id,raw_page,item_region_1k,answer_kind,answer_text,solution_paper_id,solution_raw_page,solution_number_region_1k,solution_content_region_1k,solution_source',
+        'section,problem_number,paper_id,raw_page,item_region_1k,choice_number_region_1k,answer_kind,answer_text,solution_paper_id,solution_raw_page,solution_number_region_1k,solution_content_region_1k,solution_source',
       )
       .eq('exam_id', exam.id),
     'mock_review_items_fetch_failed',
@@ -525,19 +762,7 @@ export async function prepareMockReview({
     if (compact(it.section) === section) sectionItems.set(String(it.problem_number), it);
   }
   const bodyPaper = (papers || []).find((p) => compact(p.kind) === 'problem' && compact(p.storage_path) === bodyPath) || null;
-  // 구간의 해설지: 이 구간 풀이가 가장 많이 들어 있는 해설지(같으면 앞 선택과목 것).
-  const solutionPapers = new Map(
-    (papers || []).filter((p) => compact(p.kind) === 'solution' && compact(p.storage_path)).map((p) => [p.id, p]),
-  );
-  const solutionVotes = new Map();
-  for (const it of sectionItems.values()) {
-    const id = compact(it.solution_paper_id);
-    if (solutionPapers.has(id) && Number(it.solution_raw_page) > 0) solutionVotes.set(id, (solutionVotes.get(id) || 0) + 1);
-  }
-  const electiveRank = (id) => ELECTIVE_ORDER.indexOf(compact(solutionPapers.get(id)?.elective));
-  const solutionPaperId =
-    [...solutionVotes.entries()].sort((a, b) => b[1] - a[1] || electiveRank(a[0]) - electiveRank(b[0]))[0]?.[0] || '';
-  const solutionPaper = solutionPapers.get(solutionPaperId) || null;
+  const solutionPaper = sectionSolutionPaper(papers, sectionItems.values());
 
   // 2) 책 행(학습앱·교재 목록에는 보이지 않는다)
   await upsertBookRow(must, supa, academyId, documentId, identity.bookName);
@@ -617,6 +842,8 @@ export async function prepareMockReview({
   const cropRows = [];
   const recreatedCropIds = [];
   const pageFallbacks = [];
+  // 번호 → 검수가 원본으로 쓰는 쪽·영역(쪽 전체로 대신한 문항은 넣지 않는다).
+  const itemOrigins = new Map();
   for (const [number, q] of byNumber) {
     const crop = cropByNumber.get(number);
     const item = sectionItems.get(number);
@@ -644,6 +871,7 @@ export async function prepareMockReview({
       region = [...WHOLE_PAGE_REGION];
       pageFallbacks.push(number);
     }
+    if (!pageFallbacks.includes(number)) itemOrigins.set(number, { rawPage, region });
     // 문항 uid 가 바뀌었다 = 문항을 새로 만들었다. 예전 문항의 검수 기록은 맞지 않는다.
     const recreated =
       Boolean(crop) && compact(crop.pb_question_uid) !== '' && compact(crop.pb_question_uid) !== compact(q.question_uid);
@@ -693,6 +921,49 @@ export async function prepareMockReview({
   for (const ids of chunk(recreatedCropIds, 100)) {
     await must(supa.from('textbook_review_findings').delete().in('crop_id', ids), 'mock_review_findings_reset_failed');
     await must(supa.from('textbook_problem_analyses').delete().in('crop_id', ids), 'mock_review_analyses_reset_failed');
+  }
+
+  // 4-1) 선지 번호(①~⑤) 자리: 그림이 선지 아래에 있는 문항을 가려내는 근거(정합성 점검이 그림 자리와 견준다).
+  //   null = 아직 읽지 않음, [] = 읽었지만 번호 글자를 찾지 못함, [ymin, xmin, ymax, xmax] = 번호 글자 영역.
+  //   적어 둔 영역이 지금의 문항 영역 안에 있으면 그대로 둔다. 시험지 PDF 는 읽을 문항이 있을 때만 받는다.
+  const choiceTargets = [];
+  for (const [number, q] of byNumber) {
+    const origin = itemOrigins.get(number);
+    const item = sectionItems.get(number);
+    if (!origin || !item || !Array.isArray(q.choices) || q.choices.length === 0) continue;
+    const stored = item.choice_number_region_1k;
+    const storedRegion = validChoiceRegion(stored);
+    const fresh = storedRegion ? regionInside(storedRegion, origin.region) : Array.isArray(stored) && stored.length === 0;
+    if (!fresh) choiceTargets.push({ number, origin, stored });
+  }
+  let choiceRegionsWritten = 0;
+  let choiceRegionsUnread = false;
+  const choiceRegionsMissing = [];
+  if (choiceTargets.length > 0 && bodyPaper) {
+    const pdfBuffer = await runStep(() => loadPaperPdf(bodyPaper), retryDelaysMs);
+    const wordPages = await readChoiceWords(pdfBuffer);
+    if (!Array.isArray(wordPages) || wordPages.length === 0) {
+      // 쪽을 하나도 읽지 못했다(도구 오류일 수 있다). 적지 않고 다음 준비 때 다시 읽는다.
+      choiceRegionsUnread = true;
+    } else {
+      for (const t of choiceTargets) {
+        const wordPage = wordPages.find((p) => Number(p.page) === t.origin.rawPage);
+        const found = wordPage ? choiceNumberRegion(wordPage, t.origin.region) : null;
+        if (!found) choiceRegionsMissing.push(t.number);
+        const next = found || [];
+        if (Array.isArray(t.stored) && sameInts(t.stored, next)) continue;
+        await must(
+          supa
+            .from('mock_exam_items')
+            .update({ choice_number_region_1k: next })
+            .eq('exam_id', exam.id)
+            .eq('section', section)
+            .eq('problem_number', Number(t.number)),
+          'mock_review_choice_region_update_failed',
+        );
+        choiceRegionsWritten += 1;
+      }
+    }
   }
 
   const crops = await must(
@@ -777,40 +1048,15 @@ export async function prepareMockReview({
   }
 
   // 7) 해설 위치: 번호 자리 + 첫 영역 + 다음 단·쪽으로 이어진 영역
-  const planned = new Map();
-  const solutionReanchored = [];
-  const solutionUnchecked = [];
-  if (solutionPaper) {
-    const pdfBuffer = await runStep(() => loadPaperPdf(solutionPaper), retryDelaysMs);
-    const evidence = await readEvidence(pdfBuffer);
-    const blocks = [];
-    for (const it of allItems || []) {
-      const page = Number(it.solution_raw_page);
-      const numberRegion = solutionRegionOf(it.solution_number_region_1k);
-      if (!(page > 0) || !numberRegion) continue;
-      const own = compact(it.section) === section;
-      if (compact(it.solution_paper_id) !== solutionPaper.id) {
-        // 다른 해설지에서 찾은 풀이: 이 해설지의 같은 자리에 같은 번호가 적혀 있을 때만 그 자리를 쓴다.
-        if (!own || !numberAt(evidence, page, numberRegion, it.problem_number)) continue;
-        solutionReanchored.push(String(it.problem_number));
-      }
-      blocks.push({
-        key: `${compact(it.section)}|${it.problem_number}`,
-        section: compact(it.section),
-        page,
-        numberRegion,
-        contentRegion: it.solution_content_region_1k,
-        manual: compact(it.solution_source) === 'manual',
-      });
-    }
-    const plan = planSolutionSegments({ blocks, evidence });
-    for (const number of byNumber.keys()) {
-      const segment = plan.segments.get(`${section}|${number}`);
-      if (!segment) continue;
-      planned.set(number, segment);
-      if (segment.unchecked) solutionUnchecked.push(number);
-    }
-  }
+  const { planned, solutionReanchored, solutionUnchecked } = await planSectionSolutions({
+    solutionPaper,
+    allItems,
+    section,
+    numbers: byNumber.keys(),
+    loadPaperPdf,
+    readEvidence,
+    retryDelaysMs,
+  });
   const refRows = await must(
     supa
       .from('textbook_problem_solution_refs')
@@ -836,33 +1082,7 @@ export async function prepareMockReview({
     }
     if (!segment) solutionMissing.push(number);
     else if (segment.continuations.length > 0) solutionContinued += 1;
-    const row = segment
-      ? {
-          crop_id: cropId,
-          academy_id: academyId,
-          raw_page: segment.rawPage,
-          display_page: segment.rawPage,
-          number_region_1k: segment.numberRegion,
-          content_region_1k: segment.contentRegion,
-          // 빈 배열 = 이어진 부분이 없다고 계산했다(null 은 계산하지 않음: 교재).
-          continuation_regions: segment.continuations.map((c) => ({ raw_page: c.rawPage, region_1k: c.region1k })),
-          source_kind: 'sol',
-          extracted_at: nowIso,
-          edited_at: null,
-        }
-      : {
-          crop_id: cropId,
-          academy_id: academyId,
-          raw_page: 0,
-          display_page: null,
-          number_region_1k: [0, 0, 0, 0],
-          content_region_1k: null,
-          continuation_regions: null,
-          source_kind: 'none',
-          // 한 번에 여러 행을 보낼 때 빠진 값은 null 로 들어간다. extracted_at 은 null 을 받지 않는다.
-          extracted_at: nowIso,
-          edited_at: null,
-        };
+    const row = solutionRefRow({ cropId, academyId, segment, hasSolutionPaper: Boolean(solutionPaper), nowIso });
     if (cur && sameSolutionRef(cur, row)) continue;
     refWrites.push(row);
   }
@@ -907,6 +1127,9 @@ export async function prepareMockReview({
     solutionReanchored,
     solutionProtected,
     solutionsWritten: refWrites.length,
+    choiceRegionsWritten,
+    choiceRegionsMissing,
+    choiceRegionsUnread,
     publishOnConfirm,
     unpublished,
   };

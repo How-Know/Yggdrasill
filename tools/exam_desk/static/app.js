@@ -347,32 +347,86 @@ function ensureImportList() {
   return list
 }
 
-async function uploadFiles(files) {
-  showTab("import")
+async function uploadOne(file) {
+  const pending = resultRow({ status: "pending", from: file.name })
+  ensureImportList().prepend(pending)
+  try {
+    const result = await api("/api/import", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "X-Filename": encodeName(file.name),
+      },
+      body: file,
+    })
+    const items = result.items && result.items.length ? result.items : [result]
+    pending.replaceWith(...items.map((item) => resultRow({ ...item, from: item.from || result.from })))
+  } catch (error) {
+    pending.replaceWith(resultRow({ status: "error", from: file.name, error: error.message }))
+  }
+}
+
+async function uploadPdfs(files) {
   const list = ensureImportList()
-  for (const file of files) {
-    const lower = file.name.toLowerCase()
-    if (!lower.endsWith(".hml") && !lower.endsWith(".pdf")) {
-      list.prepend(resultRow({ status: "error", from: file.name, error: "hml 또는 pdf 파일만 넣을 수 있습니다" }))
-      continue
-    }
-    const pending = resultRow({ status: "pending", from: file.name })
-    list.prepend(pending)
-    try {
-      const result = await api("/api/import", {
+  const pendings = files.map((file) => {
+    const row = resultRow({ status: "pending", from: file.name })
+    list.prepend(row)
+    return row
+  })
+  let batchId = ""
+  try {
+    const started = await api("/api/import-batch/start", { method: "POST" })
+    batchId = started.id
+    for (const file of files) {
+      await api("/api/import-batch/file", {
         method: "POST",
         headers: {
           "Content-Type": "application/octet-stream",
           "X-Filename": encodeName(file.name),
+          "X-Batch": batchId,
         },
         body: file,
       })
+    }
+    const done = await api("/api/import-batch/finish", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: batchId }),
+    })
+    batchId = ""
+    done.results.forEach((result, index) => {
       const items = result.items && result.items.length ? result.items : [result]
-      pending.replaceWith(...items.map((item) => resultRow({ ...item, from: item.from || result.from })))
-    } catch (error) {
-      pending.replaceWith(resultRow({ status: "error", from: file.name, error: error.message }))
+      pendings[index].replaceWith(...items.map((item) => resultRow({ ...item, from: item.from || result.from })))
+    })
+  } catch (error) {
+    if (batchId) {
+      api("/api/import-batch/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: batchId }),
+      }).catch(() => {})
+    }
+    pendings.forEach((row, index) => {
+      if (row.isConnected) row.replaceWith(resultRow({ status: "error", from: files[index].name, error: error.message }))
+    })
+  }
+}
+
+async function uploadFiles(files) {
+  showTab("import")
+  const list = ensureImportList()
+  const pdfs = []
+  for (const file of files) {
+    const lower = file.name.toLowerCase()
+    if (lower.endsWith(".pdf")) pdfs.push(file)
+    else if (!lower.endsWith(".hml")) {
+      list.prepend(resultRow({ status: "error", from: file.name, error: "hml 또는 pdf 파일만 넣을 수 있습니다" }))
     }
   }
+  for (const file of files) {
+    if (file.name.toLowerCase().endsWith(".hml")) await uploadOne(file)
+  }
+  if (pdfs.length) await uploadPdfs(pdfs)
   try {
     await Promise.all([loadStatus(true), loadMissing(true)])
   } catch (error) {

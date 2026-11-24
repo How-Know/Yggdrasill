@@ -95,6 +95,7 @@ Future<bool> openDigitalHomeworkSolve(
       orderedCropIds:
           usable.map((problem) => problem.cropId).toList(growable: false),
       rawPages: usable.map((problem) => problem.rawPage!).toSet(),
+      assignmentType: group.type,
     );
     if (!context.mounted) return true;
     if (group.isTimedTest) {

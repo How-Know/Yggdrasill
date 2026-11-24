@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -655,4 +654,93 @@ void main() {
       expect(find.byTooltip('과정 관리'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
+
+  testWidgets('트리에서 수업 블록을 만들고 인라인 이름 수정·접기/펼치기·드래그 소속/순서 이동·블록 풀기가 모두 동작한다', (tester) async {
+    final (b, id, c) = _setup();
+    final add = b.unitId(id, '덧셈과 뺄셈');
+    final k1 = b.addConcept('소수');
+    final k2 = b.addConcept('합성수');
+    final k3 = b.addConcept('거듭제곱');
+    final p1 = b.place(add, k1);
+    final p2 = b.place(add, k2);
+    final p3 = b.place(add, k3);
+    await _pump(tester, CourseMapPane(controller: c), height: 1400);
+
+    // 1) 트리 단원 행에서 바로 '+ 블록' 생성 → 즉시 인라인 이름 입력 활성화
+    await tester.tap(find.byKey(ValueKey('course-unit-$add')));
+    await tester.pump();
+    await tester.tap(find.byKey(ValueKey('unit-add-block-$add')));
+    await tester.pumpAndSettle();
+
+    final block1 = c.blocksIn(id, add).single;
+    final inputFinder = find.byKey(ValueKey('block-name-input-${block1.id}'));
+    expect(inputFinder, findsOneWidget, reason: '블록 생성 즉시 트리 안에서 이름 입력 칸이 열린다');
+
+    await tester.enterText(inputFinder, '소수와 합성수');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pumpAndSettle();
+    expect(find.text('소수와 합성수'), findsOneWidget);
+    expect(c.blocksIn(id, add).single.name, '소수와 합성수');
+
+    // 2) 낱개 개념(소수, 합성수)을 드래그해서 블록 헤더 위로 놓으면 블록 안으로 들어간다
+    for (final pid in [p1, p2]) {
+      final from = tester.getCenter(find.byKey(ValueKey('outline-concept-$pid')));
+      final ontoBlock = tester.getCenter(find.byKey(ValueKey('outline-block-${block1.id}')));
+      final drag = await tester.startGesture(from);
+      await tester.pump();
+      await tester.pump(kLongPressTimeout);
+      await drag.moveTo(ontoBlock);
+      await tester.pump(const Duration(milliseconds: 200));
+      await drag.up();
+      await tester.pumpAndSettle();
+    }
+    expect(c.placementsInBlock(id, add, block1.id).map((p) => p.name), ['소수', '합성수']);
+    expect(c.placementsInBlock(id, add, null).map((p) => p.name), ['거듭제곱']);
+
+    // 3) 접었다 펼치기 모션(AnimatedAlign heightFactor 1.0 ↔ 0.0) 확인
+    AnimatedAlign collapseAlign(String bid) =>
+        tester.widget<AnimatedAlign>(find.byKey(ValueKey('outline-block-collapse-$bid')));
+    expect(collapseAlign(block1.id).heightFactor, 1.0);
+
+    await tester.tap(find.byKey(ValueKey('block-toggle-${block1.id}')));
+    await tester.pumpAndSettle();
+    expect(collapseAlign(block1.id).heightFactor, 0.0);
+
+    await tester.tap(find.byKey(ValueKey('block-toggle-${block1.id}')));
+    await tester.pumpAndSettle();
+    expect(collapseAlign(block1.id).heightFactor, 1.0);
+
+    // 4) 두 번째 블록 생성('새 블록으로 묶기' 메뉴 활용) 후 블록 자체 드래그로 순서 이동
+    await tester.tap(find.byKey(ValueKey('outline-concept-menu-$p3')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('새 블록으로 묶기'));
+    await tester.pumpAndSettle();
+
+    final block2 = c.blocksIn(id, add).last;
+    await tester.enterText(find.byKey(ValueKey('block-name-input-${block2.id}')), '거듭제곱의 뜻');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pumpAndSettle();
+    expect(c.blocksIn(id, add).map((x) => x.name), ['소수와 합성수', '거듭제곱의 뜻']);
+
+    final b1Center = tester.getCenter(find.byKey(ValueKey('outline-block-${block1.id}')));
+    final b2Center = tester.getCenter(find.byKey(ValueKey('outline-block-${block2.id}')));
+    final blockDrag = await tester.startGesture(b1Center);
+    await tester.pump();
+    await tester.pump(kLongPressTimeout);
+    await blockDrag.moveTo(b2Center);
+    await tester.pump(const Duration(milliseconds: 220));
+    await blockDrag.up();
+    await tester.pumpAndSettle();
+    expect(c.blocksIn(id, add).map((x) => x.name), ['거듭제곱의 뜻', '소수와 합성수']);
+
+    // 5) 블록 풀기 시 안의 원자개념들은 지워지지 않고 단원에 그대로 남는다
+    await tester.tap(find.byKey(ValueKey('block-menu-${block1.id}')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('블록 풀기 (개념은 단원에 유지)'));
+    await tester.pumpAndSettle();
+
+    expect(c.blocksIn(id, add).map((x) => x.name), ['거듭제곱의 뜻']);
+    expect(c.placementsInBlock(id, add, null).map((p) => p.name), ['소수', '합성수']);
+    expect(tester.takeException(), isNull);
+  });
 }

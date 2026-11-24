@@ -327,9 +327,22 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
       return;
     }
 
-    if (group.isHomework && group.phase <= 2) {
-      final opened = await _openDigitalHomework(group);
-      if (opened) return;
+    // 오늘 검사 전인 숙제만, 일반 카드와 같은 수행 시작 앞에 미리 풀기를 묻는다.
+    if (_isAdvanceHomework(group) && (group.phase == 1 || group.phase == 2)) {
+      final early = await showStudentConfirmSheet(
+        context: context,
+        title: '오늘 내준 숙제',
+        message: '미리 풀어볼까요?',
+        confirmLabel: '미리 풀기',
+        cancelLabel: '아니요',
+        confirmIcon: Icons.edit_rounded,
+        cancelIcon: Icons.play_arrow_rounded,
+      );
+      if (!mounted) return;
+      if (early) {
+        final opened = await _openDigitalHomework(group);
+        if (opened) return;
+      }
     }
 
     // 대기·일시정지(수행 phase인데 타이머 정지) 탭 → 수행 시작.
@@ -342,6 +355,10 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
       );
     }
   }
+
+  /// 숙제 목록에 있고 오늘 검사가 아닌 카드. 미리 풀어볼지 묻는다.
+  bool _isAdvanceHomework(HomeworkGroup group) =>
+      group.isHomework && !group.isDueForCheck;
 
   /// 문항 스냅샷이 있는 교재 숙제는 배정 범위만 교재 풀이 화면에서 연다.
   ///

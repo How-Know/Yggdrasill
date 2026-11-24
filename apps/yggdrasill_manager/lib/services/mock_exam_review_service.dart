@@ -30,10 +30,21 @@ class MockExamReviewSection {
     this.documentId,
     this.publishOnConfirm = false,
     this.workflow,
+    this.sharedSlotCount = 0,
   });
 
-  /// common | probstats | calculus | geometry
+  /// common | probstats | calculus | geometry | ga | na
   final String section;
+
+  /// 이 구간의 자리 가운데 다른 구간(가형↔나형)의 문항을 가리키는 자리 수. 그 문항은 이 구간의 검수 목록에 없다.
+  final int sharedSlotCount;
+
+  /// 구간 줄에 붙이는 짧은 안내(예: 나형 줄의 "가형 공통 4"). 없으면 빈 문자열.
+  String get sharedSlotNote {
+    final other = switch (section) { 'ga' => 'na', 'na' => 'ga', _ => '' };
+    if (sharedSlotCount <= 0 || other.isEmpty) return '';
+    return '${mockExamSectionLabels[other] ?? other} 공통 $sharedSlotCount';
+  }
 
   /// 구간의 문제은행 문서. 추출도 검수 시작도 하지 않은 구간은 null.
   final String? documentId;
@@ -97,7 +108,7 @@ class MockExamReviewExam {
 }
 
 /// 회차에 있어야 할 구간: 문제지가 있으면 공통, 고3 은 문제지가 올라온 선택과목, 그리고 이미 문서가 있는 구간
-/// (게이트웨이 mockExpectedSections 와 같은 규칙).
+/// (게이트웨이 mockExpectedSections 와 같은 규칙). 가형·나형 회차는 공통 없이 문제지가 올라온 유형마다 구간 하나다.
 List<String> mockExamReviewSections({
   required int grade,
   required Iterable<MockExamPaper> papers,
@@ -105,14 +116,24 @@ List<String> mockExamReviewSections({
 }) {
   final found = <String>{...linkedSections};
   final problems = [for (final p in papers) if (p.kind == 'problem') p];
-  if (problems.isNotEmpty) found.add('common');
   if (grade == 3) {
-    for (final p in problems) {
-      if (mockExamElectives.contains(p.elective)) found.add(p.elective);
+    final electives = [
+      for (final p in problems)
+        if (mockExamElectives.contains(p.elective)) p.elective,
+    ];
+    if (electives.isNotEmpty) {
+      found
+        ..add('common')
+        ..addAll(electives);
     }
+    for (final p in problems) {
+      if (mockExamLegacyTypes.contains(p.elective)) found.add(p.elective);
+    }
+  } else if (problems.isNotEmpty) {
+    found.add('common');
   }
   return [
-    for (final s in const ['common', ...mockExamElectives])
+    for (final s in const ['common', ...mockExamElectives, ...mockExamLegacyTypes])
       if (found.contains(s)) s,
   ];
 }
@@ -209,13 +230,35 @@ class MockExamReviewService {
     return mockReview['publish_on_confirm'] == true && '${mockReview['published_at'] ?? ''}'.trim().isEmpty;
   }
 
+  /// 회차 → 구간 → 다른 구간의 문항을 가리키는 자리 수. 읽지 못하면 안내만 빠진다.
+  Future<Map<String, Map<String, int>>> _sharedSlotCounts(String academyId) async {
+    final out = <String, Map<String, int>>{};
+    try {
+      final rows = await _db
+          .from('mock_exam_items')
+          .select('exam_id, section')
+          .eq('academy_id', academyId)
+          .not('merged_at', 'is', null);
+      for (final row in rows as List<dynamic>) {
+        final examId = '${(row as Map)['exam_id'] ?? ''}';
+        final section = '${row['section'] ?? ''}';
+        final bySection = out.putIfAbsent(examId, () => <String, int>{});
+        bySection[section] = (bySection[section] ?? 0) + 1;
+      }
+    } catch (_) {
+      return const {};
+    }
+    return out;
+  }
+
   /// 회차 목록(최근 연도 → 월)과 구간별 검수 상태
   Future<List<MockExamReviewExam>> fetchExams(String academyId) async {
-    final (exams, papers, documents, workflows) = await (
+    final (exams, papers, documents, workflows, shared) = await (
       _mock.listExams(academyId),
       _mock.listPapersByExam(academyId),
       _sectionDocuments(academyId),
       _workflows.fetchMockExams(academyId),
+      _sharedSlotCounts(academyId),
     ).wait;
     return [
       for (final exam in exams)
@@ -234,6 +277,7 @@ class MockExamReviewService {
                 documentId: documents[exam.id]?[section]?.documentId,
                 publishOnConfirm: documents[exam.id]?[section]?.publishOnConfirm ?? false,
                 workflow: workflows[documents[exam.id]?[section]?.documentId],
+                sharedSlotCount: shared[exam.id]?[section] ?? 0,
               ),
           ],
         ),

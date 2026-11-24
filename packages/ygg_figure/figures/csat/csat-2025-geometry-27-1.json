@@ -1,0 +1,26 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.1",
+  "ref": "csat-2025-geometry-27-1",
+  "params": {"ox": 25.2132, "oy": 56.4147, "a": 24.5656, "b": 14.063, "h": 37.0433, "tc": 18.2963, "ta": 144.8005, "td": 91.8343},
+  "fit": ["ox", "oy", "a", "b", "h", "tc", "ta", "td"],
+  "canvas": {"width": 52.28, "height": 71.37, "origin": ["ox", "oy"], "unit": 1},
+  "projection": {"x": ["a", 0], "y": [0, "b"], "z": [0, "h"]},
+  "objects": [
+    {"id": "top", "type": "parametric", "var": "s", "t": [0, "2pi"], "x": "cos(s)", "y": "sin(s)", "z": "1"},
+    {"id": "front", "type": "parametric", "var": "s", "t": ["pi", "2pi"], "x": "cos(s)", "y": "sin(s)", "z": "0"},
+    {"id": "back", "type": "parametric", "var": "s", "t": [0, "pi"], "x": "cos(s)", "y": "sin(s)", "z": "0", "line": "dashed"},
+    {"type": "segment", "from": [-1, 0, 0], "to": [-1, 0, 1]},
+    {"type": "segment", "from": [1, 0, 0], "to": [1, 0, 1]},
+    {"id": "D", "type": "point", "at": ["cos(rad(td))", "sin(rad(td))", 1], "label": {"dir": "N", "dist": 1.0}},
+    {"id": "H", "type": "point", "at": ["cos(rad(td))", "sin(rad(td))", 0], "label": {"dir": "NE", "dist": 0.8}},
+    {"id": "C", "type": "point", "at": ["cos(rad(tc))", "sin(rad(tc))", 1], "label": {"dir": "NE", "dist": 0.6}},
+    {"id": "A", "type": "point", "at": ["cos(rad(ta))", "sin(rad(ta))", 0], "label": {"dir": "W", "dist": 1.0}},
+    {"id": "B", "type": "point", "at": ["-cos(rad(ta))", "-sin(rad(ta))", 0], "label": {"dir": "SE", "dist": 0.6}},
+    {"type": "segment", "from": "D", "to": "H", "line": "dashed"},
+    {"type": "polyline", "points": ["A", "D", "C", "B", "A", "H", "B"]},
+    {"id": "l2", "type": "label", "at": [-0.83, 0, 1.3], "text": "C_2"},
+    {"id": "l1", "type": "label", "at": [-0.83, 0, -0.3], "text": "C_1"}
+  ],
+  "label_nudge": {"D": [0.085, 0.339], "H": [0.679, 0.678], "C": [0.169, 0.0], "A": [0.255, 1.611], "B": [-0.509, -0.678], "l2": [-0.339, 0.679], "l1": [-0.424, -0.933]}
+}

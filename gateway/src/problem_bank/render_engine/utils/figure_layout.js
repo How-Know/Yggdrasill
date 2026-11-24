@@ -21,13 +21,14 @@ function parseFigureLayout(question) {
       heightEm: clampFinite(item.heightEm, 0.35, 8, 1.6),
       position: normalizePosition(item.position),
       anchor: normalizeAnchor(item.anchor),
-      offsetXEm: clampFinite(item.offsetXEm, -20, 20, 0),
-      offsetYEm: clampFinite(item.offsetYEm, -20, 20, 0),
+      ...clampedOffsets(item, normalizePosition(item.position)),
+      ...placementBoxFields(item),
       // 가로 묶음(groups) 안에서 그림 밑에 둘 설명 글. 묶음 밖에서는 무시된다.
       ...(typeof item.caption === 'string' && item.caption.trim() ? { caption: item.caption.trim() } : {}),
     });
   }
   if (items.length === 0) return null;
+  const overrides = parseLayoutOverrides(raw.overrides);
   const groups = [];
   if (Array.isArray(raw.groups)) {
     for (const g of raw.groups) {
@@ -44,7 +45,118 @@ function parseFigureLayout(question) {
       });
     }
   }
-  return { version: Number(raw.version || 1), items, groups };
+  return {
+    version: Number(raw.version || 1),
+    items,
+    groups,
+    ...(overrides ? { overrides } : {}),
+  };
+}
+
+// ── 배치 상자 ─────────────────────────────────────────────────────────────
+// 그림 한 장의 자리를 정하는 값 묶음(figure_layout.items 의 한 항목)을 배치 상자로 쓴다.
+// 길이는 모두 본문 글자 크기 기준(em)이라 글자 크기가 다른 지면에서도 같은 비율로 놓인다.
+// 아래 값들은 적혀 있을 때만 쓰이고, 없으면 예전과 똑같이 조판된다.
+//   - gapEm     : 본문 옆(inline-left/right) 배치에서 본문과 그림 사이 간격.
+//   - wrapLines : 본문 옆 배치에서 그림 옆으로 좁혀 찍는 본문 줄 수. 없으면 그림 높이로 잰다.
+//   - reserveEm : 자유 배치(free)에서 그림 자리에 비워 둘 세로 길이. 0 이면 본문이 그림과 무관하게 흐른다.
+// 자유 배치(position: 'free')는 그림 자리(마커)의 본문 왼쪽 끝에서 offsetXEm 만큼 오른쪽,
+// offsetYEm 만큼 아래에 그림의 왼쪽 위를 놓는다. 본문 줄바꿈과 쪽 나눔을 바꾸지 않는다.
+// 자유 배치는 지면 어디에나 놓을 수 있어야 하므로 이동 한계가 넓다(A4 한 쪽 높이가 약 80em).
+const FREE_OFFSET_LIMIT_EM = 80;
+const FLOW_OFFSET_LIMIT_EM = 20;
+
+function clampedOffsets(item, position) {
+  const limit = position === 'free' ? FREE_OFFSET_LIMIT_EM : FLOW_OFFSET_LIMIT_EM;
+  return {
+    offsetXEm: clampFinite(item.offsetXEm, -limit, limit, 0),
+    offsetYEm: clampFinite(item.offsetYEm, -limit, limit, 0),
+  };
+}
+
+function placementBoxFields(item) {
+  const out = {};
+  if (item.gapEm != null && Number.isFinite(Number(item.gapEm))) {
+    out.gapEm = clampFinite(item.gapEm, 0, 5, 0.9);
+  }
+  if (item.wrapLines != null && Number.isFinite(Number(item.wrapLines))) {
+    out.wrapLines = Math.round(clampFinite(item.wrapLines, 2, 16, 2));
+  }
+  if (item.reserveEm != null && Number.isFinite(Number(item.reserveEm))) {
+    out.reserveEm = clampFinite(item.reserveEm, 0, 60, 0);
+  }
+  return out;
+}
+
+// 지면별 덮어쓰기: { '<지면 열쇠>': { items: [{ assetKey, 바꿀 값만 }] } }.
+//   지면 열쇠는 'cols:2'(단 수), 'mock'(프로필), 'mock/2'(프로필/단 수). 뒤로 갈수록 우선한다.
+function parseLayoutOverrides(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const out = {};
+  for (const key of Object.keys(raw)) {
+    const k = String(key).trim();
+    const list = raw[key]?.items;
+    if (!k || !Array.isArray(list)) continue;
+    const items = [];
+    for (const item of list) {
+      if (!item || typeof item !== 'object') continue;
+      const assetKey = String(item.assetKey || '').trim();
+      if (!assetKey) continue;
+      const patch = { assetKey };
+      if (item.widthEm != null) patch.widthEm = clampFinite(item.widthEm, 2, 50, 20);
+      if (item.heightEm != null) patch.heightEm = clampFinite(item.heightEm, 0.35, 8, 1.6);
+      if (item.position != null) patch.position = normalizePosition(item.position);
+      if (item.anchor != null) patch.anchor = normalizeAnchor(item.anchor);
+      // 이동 값의 한계는 자리 종류에 따라 다르므로, 바탕 값과 합친 뒤(applyLayoutOverrides)에 다시 맞춘다.
+      if (item.offsetXEm != null) patch.offsetXEm = clampFinite(item.offsetXEm, -FREE_OFFSET_LIMIT_EM, FREE_OFFSET_LIMIT_EM, 0);
+      if (item.offsetYEm != null) patch.offsetYEm = clampFinite(item.offsetYEm, -FREE_OFFSET_LIMIT_EM, FREE_OFFSET_LIMIT_EM, 0);
+      Object.assign(patch, placementBoxFields(item));
+      items.push(patch);
+    }
+    if (items.length > 0) out[k] = { items };
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+// 지금 조판하는 지면. 렌더러가 문서를 만들 때 정한다(withFigureLayoutContext).
+let layoutContext = null;
+
+/** [fn] 을 도는 동안 그림 배치가 이 지면({ profile, columns })의 덮어쓰기를 쓰게 한다. */
+function withFigureLayoutContext(context, fn) {
+  const previous = layoutContext;
+  layoutContext = context && typeof context === 'object' ? context : null;
+  try {
+    return fn();
+  } finally {
+    layoutContext = previous;
+  }
+}
+
+function layoutOverrideKeys(context) {
+  if (!context) return [];
+  const profile = String(context.profile || '').trim();
+  const columns = Number.parseInt(String(context.columns ?? ''), 10);
+  const keys = [];
+  if (Number.isInteger(columns) && columns > 0) keys.push(`cols:${columns}`);
+  if (profile) keys.push(profile);
+  if (profile && Number.isInteger(columns) && columns > 0) keys.push(`${profile}/${columns}`);
+  return keys;
+}
+
+function applyLayoutOverrides(layout, context) {
+  if (!layout?.overrides) return layout;
+  let items = layout.items;
+  for (const key of layoutOverrideKeys(context)) {
+    const patches = layout.overrides[key]?.items;
+    if (!Array.isArray(patches)) continue;
+    items = items.map((item) => {
+      const patch = patches.find((p) => p.assetKey === item.assetKey);
+      if (!patch) return item;
+      const merged = { ...item, ...patch };
+      return { ...merged, ...clampedOffsets(merged, merged.position) };
+    });
+  }
+  return items === layout.items ? layout : { ...layout, items };
 }
 
 function convertLegacyToFigureLayout(question, stemSizePt) {
@@ -142,7 +254,7 @@ function convertLegacyToFigureLayout(question, stemSizePt) {
 
 function resolveFigureLayout(question, stemSizePt) {
   const explicit = parseFigureLayout(question);
-  if (explicit) return explicit;
+  if (explicit) return applyLayoutOverrides(explicit, layoutContext);
   return convertLegacyToFigureLayout(question, stemSizePt);
 }
 
@@ -181,7 +293,9 @@ function clampFinite(value, min, max, fallback) {
 
 function normalizePosition(pos) {
   const s = String(pos || '').trim().toLowerCase();
-  const valid = ['below-stem', 'inline-right', 'inline-left', 'inline-text', 'between-stem-choices', 'above-choices'];
+  // below-choices: 선지 아래 그림(원본이 "본문 → 선지 → 그림" 순서). V2 엔진만 선지 뒤에 찍고, 다른 엔진은 본문 아래 그림으로 찍는다.
+  // free: 자유 배치. V2 엔진만 본문 흐름과 무관하게 놓고, 다른 엔진은 본문 아래 그림으로 찍는다.
+  const valid = ['below-stem', 'inline-right', 'inline-left', 'inline-text', 'between-stem-choices', 'above-choices', 'below-choices', 'free'];
   return valid.includes(s) ? s : 'below-stem';
 }
 
@@ -195,6 +309,8 @@ export {
   parseFigureLayout,
   convertLegacyToFigureLayout,
   resolveFigureLayout,
+  withFigureLayoutContext,
+  applyLayoutOverrides,
   figureLayoutToWidthPt,
   scaleToWidthEm,
   widthEmToScale,

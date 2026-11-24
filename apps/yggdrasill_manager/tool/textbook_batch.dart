@@ -25,6 +25,8 @@
 //   solfig       BATCH_CROPS 문항의 해설 그림을 지금 해설 위치에서 다시 찾고 V2 렌더를 다시 대조한다(AI)
 //   solfig_arrange BATCH_CROPS 문항의 해설 그림 정렬·가로 묶음을 원본 자리에서 다시 계산하고 V2 렌더를 다시 대조한다.
 //                BATCH_VALUE 가 있으면 {"<crop id>": {"<그림 순번 0부터>": {"placement": "left"}}} 값을 먼저 덮어쓴다
+//   solfig_width BATCH_CROPS 문항의 해설 그림 폭만 지금 규칙으로 다시 계산하고(AI·다시 자르기 없음) 바뀐 문항의 V2 렌더를 다시 대조한다.
+//                예전 계산값 그대로인 폭만 바꾼다(렌더 검수가 맞춘 폭 등은 둔다)
 //   solfig_recrop BATCH_CROPS 문항 하나의 해설 그림 하나를 해설 PDF 같은 쪽에서 다시 자르고 V2 렌더를 다시 대조한다.
 //                BATCH_VALUE=그림 순번(0부터)|위,왼,아래,오(해설 쪽 0~1000)
 //   solfig_drop  BATCH_CROPS 문항 하나의 해설 그림 하나(BATCH_VALUE=순번, 0부터)를 빼고 V2 렌더를 다시 대조한다
@@ -48,10 +50,19 @@
 //   mock_restart 확정하지 않은 구간을 처음부터 다시 검수한다: AI 가 쌓은 반영 대기 값을 버리고(사람이 고친 값은 둔다)
 //                준비 단계부터 모든 문항을 다시 풀고 해설을 다시 옮긴다. 추출은 다시 하지 않는다
 //                mock_continue·mock_restart 는 BATCH_ONLY=구간(common,probstats,calculus,geometry 쉼표 구분)으로 구간을 고를 수 있다
+//   mock_stem    BATCH_CROPS 문항 하나의 본문(BATCH_VALUE=@경로)을 사장님 수정으로 반영 대기에 넣는다(검수는 돌리지 않는다)
+//   mock_engine_recheck 확정하지 않은 구간의 "코드 수정 필요"(렌더 엔진 보류) 문항만 V2 로 다시 찍어 원본과 대조한다
+//                (앱의 "코드 수정 후 재확인"과 같다. 렌더 엔진을 고친 뒤)
 //   mock_status  회차의 구간별 준비됨 수와 막힌 이유, 반영 대기 값(쓰기 없음). BATCH_VALUE 가 없으면 검수 중인 모든 회차.
 //                준비됨이 아닌 문항은 막힌 이유와 카드 오류·렌더·문항·정답·해설 오류 지적을 한 줄씩 찍는다
 //   mock_unstage BATCH_CROPS 문항의 AI 반영 대기 값(BATCH_VALUE=필드 쉼표 구분, 예: solution_transcribed)을 버린다.
 //                사람이 고친 값은 그대로다. 저장된 값(해설 전사 단계가 옮긴 해설 등)이 다시 쓰인다
+//   mock_prepare 검수는 돌리지 않고 구간 준비만 다시 한다(BATCH_VALUE=회차 id, BATCH_ONLY=구간). 해설 위치가 게이트웨이
+//                계산값과 달라진 문항만 계산값으로 다시 쓴다(사람이 고친 위치는 둔다). 옮긴 해설은 다시 옮기지 않는다
+//   mock_slot_check 가형·나형에 같이 실린 문항을 합친 회차(BATCH_VALUE=회차 id)에서, 다른 구간의 문항을 가리키는 자리마다
+//                그 시험지 원본(_original.png)과 자리 값으로 찍은 카드(_slot_card.png)를 build/textbook_batch/slot 에 둔다(쓰기 없음)
+//   mock_solref_preview 해설 위치를 지금 규칙으로 다시 계산해 달라지는 문항만 적는다(BATCH_VALUE=회차 id, BATCH_ONLY=구간).
+//                아무것도 쓰지 않으므로 확정된 구간도 본다
 //   logout       세션 폐기
 // 결과는 build/textbook_batch/ 에 JSON 으로 남는다.
 // ignore_for_file: avoid_print
@@ -211,10 +222,20 @@ class _Batch {
         await _mock(run: true, again: 'continue');
       case 'mock_restart':
         await _mock(run: true, again: 'restart');
+      case 'mock_engine_recheck':
+        await _mock(run: true, again: 'engine');
       case 'mock_status':
         await _mock(run: false);
       case 'mock_unstage':
         await _mockUnstage();
+      case 'mock_stem':
+        await _mockStem();
+      case 'mock_prepare':
+        await _mockPrepare();
+      case 'mock_slot_check':
+        await _mockSlotCheck();
+      case 'mock_solref_preview':
+        await _mockSolrefPreview();
       case 'fig_only':
         await _figOnly();
       case 'status':
@@ -253,6 +274,8 @@ class _Batch {
         await _solfig(mids);
       case 'solfig_arrange':
         await _solfigArrange(mids);
+      case 'solfig_width':
+        await _solfigWidth(mids);
       case 'solfig_recrop':
         await _solfigRecrop(mids);
       case 'solfig_drop':
@@ -429,6 +452,17 @@ class _Batch {
           if (again.isNotEmpty && order != null && stage != MockExamReviewStage.confirmed) {
             if (onlySections.isNotEmpty && !onlySections.contains(s.section)) continue;
             if (runner.isActive(order.workflowKey)) continue;
+            if (again == 'engine') {
+              // 앱의 "코드 수정 후 재확인"과 같다: 렌더 엔진 보류(코드 수정 필요) 문항만 V2 로 다시 찍어 대조한다.
+              final held = {
+                for (final it in await review.fetchUnitItems(order.reviewScope))
+                  if (order.matches(it) && it.isEngineHeld) it.cropId,
+              };
+              if (held.isEmpty) continue;
+              runner.enqueue(order, fromPhase: TextbookWorkflowPhase.review, onlyCropIds: held, forceRenderCheck: true);
+              print('[${clock()}] ${exam.title} ${s.label}: 코드 수정 필요 ${held.length}문항 다시 대조');
+              continue;
+            }
             if (again == 'restart') {
               // AI 가 쌓은 반영 대기 값을 버린다(사람이 고친 값은 RPC 가 건드리지 않는다).
               var cleared = 0;
@@ -591,8 +625,188 @@ class _Batch {
     out['items'] = rows;
   }
 
+  /// 해설 위치를 지금 규칙으로 다시 계산해 달라지는 문항만 적는다(BATCH_VALUE=회차 id 쉼표, BATCH_ONLY=구간).
+  /// 아무것도 쓰지 않으므로 확정된 구간도 본다.
+  Future<void> _mockSolrefPreview() async {
+    final examIds = {for (final x in _valueText.split(',')) if (x.trim().isNotEmpty) x.trim()};
+    if (examIds.isEmpty) fail('BATCH_VALUE 에 모의고사 회차 id 를 넣으세요(쉼표 구분).');
+    final onlySections = {for (final k in _only.split(',')) if (k.trim().isNotEmpty) k.trim()};
+    final runner = TextbookWorkflowRunner.withClient(db);
+    final service = MockExamReviewService(client: db, problemBank: pb, workflows: workflows, runner: runner);
+    final done = <Map<String, dynamic>>[];
+    for (final exam in await service.fetchExams(_academyId)) {
+      if (!examIds.contains(exam.id)) continue;
+      for (final s in exam.sections) {
+        final documentId = s.documentId ?? '';
+        if (onlySections.isNotEmpty && !onlySections.contains(s.section)) continue;
+        if (documentId.isEmpty) {
+          print('${exam.title} ${s.label}: 구간 문서 없음');
+          continue;
+        }
+        try {
+          final res = await pb.previewMockSolutionRefs(academyId: _academyId, documentId: documentId);
+          final changes = [for (final c in (res['changes'] as List?) ?? const []) if (c is Map) Map<String, dynamic>.from(c)];
+          print('${exam.title} ${s.label} [${s.stage.name}]: 해설 ${res['solutionCount'] ?? 0}/${res['cropCount'] ?? 0}'
+              ' · 사람이 고친 위치 ${res['solutionProtected'] ?? 0} · 달라지는 문항 ${changes.length}');
+          for (final c in changes) {
+            String at(Object? r) {
+              if (r is! Map) return '없음';
+              final cont = [
+                for (final x in (r['continuation_regions'] as List?) ?? const [])
+                  if (x is Map) 'p${x['raw_page']} ${x['region_1k']}',
+              ];
+              return 'p${r['raw_page']} ${r['content_region_1k']}${cont.isEmpty ? '' : ' + ${cont.join(' + ')}'}';
+            }
+
+            print('  - ${c['number']}번: ${at(c['before'])} → ${at(c['after'])}');
+          }
+          done.add({'exam': exam.title, 'section': s.section, 'stage': s.stage.name, 'document_id': documentId, ...res});
+        } catch (e) {
+          print('${exam.title} ${s.label}: 오류 $e');
+          done.add({'exam': exam.title, 'section': s.section, 'document_id': documentId, 'error': '$e'});
+        }
+      }
+    }
+    out['preview'] = done;
+  }
+
+  /// 검수는 돌리지 않고 구간 준비만 다시 한다(BATCH_VALUE=회차 id 쉼표, BATCH_ONLY=구간). 추출과 정답 다시 읽기는 하지 않는다.
+  /// 해설 위치가 게이트웨이 계산값과 달라진 문항(사람이 고친 위치는 빼고)만 계산값으로 다시 쓴다. 옮긴 해설은 그대로다.
+  Future<void> _mockPrepare() async {
+    final examIds = {for (final x in _valueText.split(',')) if (x.trim().isNotEmpty) x.trim()};
+    if (examIds.isEmpty) fail('BATCH_VALUE 에 모의고사 회차 id 를 넣으세요(쉼표 구분).');
+    final onlySections = {for (final k in _only.split(',')) if (k.trim().isNotEmpty) k.trim()};
+    final runner = TextbookWorkflowRunner.withClient(db);
+    final service = MockExamReviewService(client: db, problemBank: pb, workflows: workflows, runner: runner);
+    final done = <Map<String, dynamic>>[];
+    for (final exam in await service.fetchExams(_academyId)) {
+      if (!examIds.contains(exam.id)) continue;
+      for (final s in exam.sections) {
+        final documentId = s.documentId ?? '';
+        if (onlySections.isNotEmpty && !onlySections.contains(s.section)) continue;
+        if (documentId.isEmpty || s.workflow?.workOrder == null) {
+          print('${exam.title} ${s.label}: 검수 전이라 건너뜀');
+          continue;
+        }
+        if (s.stage == MockExamReviewStage.confirmed || s.stage == MockExamReviewStage.running) {
+          print('${exam.title} ${s.label}: ${s.stage.name} 상태라 건너뜀');
+          continue;
+        }
+        final res = await pb.prepareMockReview(academyId: _academyId, documentId: documentId);
+        final written = (res['solutionsWritten'] as num?)?.toInt() ?? 0;
+        final detail = '문항 ${res['cropCount'] ?? 0}개 · 해설 ${res['solutionCount'] ?? 0}'
+            ' · 이어진 해설 ${res['solutionContinued'] ?? 0}';
+        final waiting = '${res['state'] ?? ''}' == 'waiting';
+        print('${exam.title} ${s.label}: ${waiting ? '준비 안 됨(${res['reason'] ?? ''})' : detail}'
+            ' · 해설 위치 다시 씀 $written');
+        done.add({'exam': exam.title, 'section': s.section, 'document_id': documentId, 'solutions_written': written, ...res});
+      }
+    }
+    out['prepared'] = done;
+  }
+
+  /// 다른 구간의 문항을 가리키는 자리(mock_exam_items.merged_at)에는 검수 크롭이 없다. 자리마다 그 시험지의
+  /// 원본 영역과, 자리 값(본문·선지 순서·배점·형식)으로 찍은 카드를 파일로 남겨 눈으로 견줄 수 있게 한다.
+  Future<void> _mockSlotCheck() async {
+    final examIds = {for (final x in _valueText.split(',')) if (x.trim().isNotEmpty) x.trim()};
+    if (examIds.isEmpty) fail('BATCH_VALUE 에 모의고사 회차 id 를 넣으세요(쉼표 구분).');
+    _usePdfium();
+    final dir = Directory(p.join('build', 'textbook_batch', 'slot'))..createSync(recursive: true);
+    final service = MockExamReviewService(
+      client: db,
+      problemBank: pb,
+      workflows: workflows,
+      runner: TextbookWorkflowRunner.withClient(db),
+    );
+    Future<String> save(String name, List<int>? bytes) async {
+      if (bytes == null || bytes.isEmpty) return '';
+      final f = File(p.join(dir.path, name));
+      await f.writeAsBytes(bytes);
+      return f.absolute.path;
+    }
+
+    Future<List<int>?> download(String url) async {
+      if (url.isEmpty) return null;
+      final res = await HttpClient().getUrl(Uri.parse(url)).then((r) => r.close());
+      if (res.statusCode != 200) return null;
+      return [for (final chunk in await res.toList()) ...chunk];
+    }
+
+    final rows = <Map<String, dynamic>>[];
+    for (final exam in await service.fetchExams(_academyId)) {
+      if (!examIds.contains(exam.id)) continue;
+      // 문항의 반영 대기 값(검수가 고쳐 둔 본문 등)도 넣어 찍는다. 확정하면 문항에 쓰일 값이다.
+      final stagedByQuestion = <String, Map<String, dynamic>>{};
+      for (final s in exam.sections) {
+        final order = s.workflow?.workOrder;
+        if (order == null) continue;
+        for (final it in await review.fetchUnitItems(order.reviewScope)) {
+          final staged = it.previewOverride;
+          if (order.matches(it) && staged != null && it.pbQuestionId.isNotEmpty) stagedByQuestion[it.pbQuestionId] = staged;
+        }
+      }
+      final items = await db
+          .from('mock_exam_items')
+          .select('id, section, problem_number, raw_page, item_region_1k, pb_question_id, answer_kind')
+          .eq('exam_id', exam.id)
+          .not('merged_at', 'is', null)
+          .order('problem_number');
+      for (final raw in items as List<dynamic>) {
+        final it = Map<String, dynamic>.from(raw as Map);
+        final section = '${it['section']}';
+        final number = (it['problem_number'] as num).toInt();
+        final questionId = '${it['pb_question_id'] ?? ''}'.trim();
+        final sections = exam.sections.where((x) => x.section == section).toList();
+        final scope = sections.isEmpty ? null : sections.first.workflow?.workOrder?.reviewScope;
+        final label = sections.isEmpty ? section : sections.first.label;
+        final tag = '${exam.id.substring(0, 8)}_${section}_$number';
+        final region = [for (final v in (it['item_region_1k'] as List<dynamic>? ?? const [])) (v as num).toInt()];
+        var original = '';
+        if (scope != null) {
+          final image = await review.bodyRegionImage(scope, (it['raw_page'] as num?)?.toInt() ?? 0, region);
+          original = await save('${tag}_original.png', image?.bytes);
+        }
+        var card = '';
+        if (questionId.isNotEmpty) {
+          final urls = await pb.batchRenderThumbnails(
+            academyId: _academyId,
+            questionIds: [questionId],
+            renderConfig: const {'includeQuestionScore': true},
+            mockSlotItemByQuestionId: {questionId: '${it['id']}'},
+            questionOverrides: {
+              if (stagedByQuestion[questionId] != null) questionId: stagedByQuestion[questionId]!,
+            },
+            questionModeByQuestionUid: {
+              questionId: '${it['answer_kind']}' == 'objective' ? 'objective' : 'subjective',
+            },
+          );
+          card = await save('${tag}_slot_card.png', await download(urls[questionId] ?? ''));
+        }
+        print('${exam.title} $label $number번 자리: 원본 ${original.isEmpty ? '없음' : original} · 카드 ${card.isEmpty ? '없음' : card}');
+        rows.add({'exam': exam.title, 'section': section, 'number': number, 'question_id': questionId, 'original': original, 'card': card});
+      }
+    }
+    out['slots'] = rows;
+  }
+
   /// BATCH_CROPS 문항의 AI 반영 대기 값 가운데 BATCH_VALUE 의 필드만 버린다(사람이 고친 값은 그대로).
   /// 버리면 저장된 값(해설 전사 단계가 옮긴 해설 등)이 다시 쓰인다. 그 뒤 mock_continue 로 카드를 다시 대조한다.
+  /// 모의고사 문항 하나(BATCH_CROPS)의 본문을 사장님 수정으로 반영 대기에 넣는다(BATCH_VALUE=`@경로`).
+  /// 교재의 stem 단계와 같은 저장이다. 검수는 돌리지 않는다(뒤에 mock_continue).
+  Future<void> _mockStem() async {
+    final crops = [for (final c in _crops.split(',')) if (c.trim().isNotEmpty) c.trim()];
+    final value = _valueText;
+    if (crops.length != 1 || value.trim().isEmpty) fail('BATCH_CROPS(크롭 id 하나)와 BATCH_VALUE(본문)를 주세요.');
+    final changed = await review.stageChanges(
+      cropId: crops.single,
+      patch: {'stem': value},
+      source: 'owner',
+      note: '사장님 수정',
+    );
+    print('${crops.single} 본문 반영 대기 · 바뀜 ${changed.join(', ')}');
+    out['mock_stem'] = {'crop_id': crops.single, 'stem': value, 'changed': changed};
+  }
+
   Future<void> _mockUnstage() async {
     final crops = {for (final c in _crops.split(',')) if (c.trim().isNotEmpty) c.trim()};
     final fields = {for (final f in _valueText.split(',')) if (f.trim().isNotEmpty) f.trim()};
@@ -1336,6 +1550,43 @@ class _Batch {
       await pipeline.recheckRender();
       for (final it in pipeline.items) {
         rows.add(_renderRow(mid, it));
+      }
+    }
+    out['items'] = rows;
+  }
+
+  /// BATCH_CROPS 문항의 해설 그림 폭만 지금 규칙으로 다시 계산하고(AI·다시 자르기 없음), 바뀐 문항만 V2 렌더를 다시 대조한다.
+  Future<void> _solfigWidth(List<_Mid> mids) async {
+    final picked = {for (final c in _crops.split(',')) if (c.trim().isNotEmpty) c.trim()};
+    if (picked.isEmpty) fail('BATCH_CROPS 가 비어 있습니다.');
+    final rows = <Map<String, dynamic>>[];
+    for (final mid in mids) {
+      await _load(mid);
+      final targets = [for (final it in mid.all) if (mid.targetIds.contains(it.cropId) && picked.contains(it.cropId)) it];
+      if (targets.isEmpty) continue;
+      final ids = <String>{};
+      for (final it in targets) {
+        final before = [for (final a in it.solutionFigureAssets) a['width_em']];
+        final res = await review.recomputeSolutionFigureWidthsOf(it);
+        if (res.changed > 0) ids.add(it.cropId);
+        print('  ${mid.key} ${it.problemNumber}번: 그림 ${before.length} · 폭 바꿈 ${res.changed} · 둠 ${res.kept} · 이전 폭 $before');
+      }
+      print('${mid.key}: 해설 그림 폭 다시 계산 ${targets.length}문항 · 바뀐 문항 ${ids.length}');
+      if (ids.isEmpty) continue;
+      _usePdfium();
+      final pipeline = TextbookReviewPipeline(
+        service: review,
+        scope: mid.scope,
+        matches: (it) => ids.contains(it.cropId),
+        onProgress: (m) => print('  ${mid.key} $m'),
+      );
+      await pipeline.recheckRender();
+      for (final it in pipeline.items) {
+        rows.add({
+          ..._renderRow(mid, it),
+          'width_em': [for (final a in it.solutionFigureAssets) a['width_em']],
+        });
+        print('  ${mid.key} ${it.problemNumber}번: 새 폭 ${[for (final a in it.solutionFigureAssets) a['width_em']]}');
       }
     }
     out['items'] = rows;

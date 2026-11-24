@@ -58,6 +58,29 @@ void main() {
     expect(item(renderChecks: {'figure_size_ratio': 0.65}).renderBlocksReady, isTrue);
   });
 
+  test('모의고사 문항이 문항 카드 없이 렌더 검수를 받았으면 준비됨이 아니다', () {
+    TextbookProblemReviewItem mock(Map<String, dynamic> renderChecks, {bool scoreOnCard = true}) =>
+        TextbookProblemReviewItem.fromJson({
+          'crop_id': 'c1',
+          'pb_question_id': 'q1',
+          'problem_number': '27',
+          'existing_answer': '3',
+          'math_status': 'approved',
+          'quality_status': 'clean',
+          'render_checks': renderChecks,
+          'render_checked_at': '2026-11-23T00:00:00Z',
+          'score_on_card': scoreOnCard,
+        });
+    // 2026 고3 9월 확통 27: 표가 조판되지 않아 문항 카드 없이 해설 카드만 검수됐다.
+    final noCard = mock({'checked_problem': false, 'solution_ok': true});
+    expect(noCard.problemCardMissing, isTrue);
+    expect(noCard.readyBlockers, contains('문항 카드 없음'));
+    expect(mock({'checked_problem': true}).readyBlockers, isNot(contains('문항 카드 없음')));
+    // 기록이 없는 옛 검수와 교재 문항에는 걸지 않는다.
+    expect(mock({'solution_ok': true}).readyBlockers, isNot(contains('문항 카드 없음')));
+    expect(mock({'checked_problem': false}, scoreOnCard: false).readyBlockers, isNot(contains('문항 카드 없음')));
+  });
+
   test('승인 여부와 관계없이 같은 범위(±30%)로 크기 조정 대상을 정한다', () {
     expect(item(renderChecks: {'figure_size_ratio': 1.2}, qualityStatus: 'approved').figureNeedsResize, isFalse);
     expect(item(renderChecks: {'figure_size_ratio': 1.2}, qualityStatus: 'clean').figureNeedsResize, isFalse);
@@ -86,6 +109,49 @@ void main() {
       {'id': 'f2', 'error_type': 'solution_logic'},
     ]);
     expect(logic.readyBlockers, contains('해설 논리 오류'));
+  });
+
+  test('해설 논리 오류가 열린 문항은 본문·선지·공통 발문이 반영 대기로 바뀌었을 때만 재확인 후보다', () {
+    TextbookProblemReviewItem logic({
+      List<String> stagedFields = const [],
+      String mathStatus = 'clean',
+      Map<String, dynamic>? proposal,
+      bool withFinding = true,
+    }) =>
+        TextbookProblemReviewItem.fromJson({
+          'crop_id': 'c1',
+          'pb_question_id': 'q1',
+          'problem_number': '20',
+          'existing_answer': '54',
+          'math_status': mathStatus,
+          'quality_status': 'clean',
+          'findings': [
+            if (withFinding) {'id': 'f1', 'error_type': 'solution_logic', 'proposal': proposal},
+          ],
+          'staged_changes': {
+            for (final f in stagedFields) f: 'x',
+            if (stagedFields.isNotEmpty)
+              'notes': [
+                {'at': '2026-11-23T12:39:06Z', 'fields': stagedFields, 'note': '원본 대조 수정안'},
+              ],
+          },
+        });
+    // 2024 고3 10월 공통 20: 본문(적분 아래끝)을 고쳤는데 옛 본문 기준의 해설 논리 지적이 남았다.
+    expect(logic(stagedFields: const ['stem']).solutionLogicRecheckCandidate, isTrue);
+    expect(logic(stagedFields: const ['figure_layout', 'choices']).solutionLogicRecheckCandidate, isTrue);
+    expect(logic(stagedFields: const ['common_stem'], mathStatus: 'issue').solutionLogicRecheckCandidate, isTrue);
+    // 본문이 아닌 값만 바뀐 문항, 반영 대기가 없는 문항
+    expect(logic(stagedFields: const ['answer', 'solution_transcribed']).solutionLogicRecheckCandidate, isFalse);
+    expect(logic().solutionLogicRecheckCandidate, isFalse);
+    // 해설 논리 오류가 없거나 교정 의견뿐인 문항, 승인된 문항
+    expect(logic(stagedFields: const ['stem'], withFinding: false).solutionLogicRecheckCandidate, isFalse);
+    expect(
+      logic(stagedFields: const ['stem'], proposal: const {'target': 'correction_note'}).solutionLogicRecheckCandidate,
+      isFalse,
+    );
+    expect(logic(stagedFields: const ['stem'], mathStatus: 'approved').solutionLogicRecheckCandidate, isFalse);
+    // 준비됨 기준은 그대로다.
+    expect(logic(stagedFields: const ['stem']).readyBlockers, contains('해설 논리 오류'));
   });
 
   test('열린 정합성 지적은 준비됨을 막고 문제 문항으로 보인다', () {

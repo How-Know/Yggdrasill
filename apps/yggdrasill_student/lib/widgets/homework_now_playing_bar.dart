@@ -283,6 +283,202 @@ class _HomeworkNowPlayingBarState extends State<HomeworkNowPlayingBar> {
   }
 }
 
+/// 미니 플레이어와 같은 학습앱 글래스 알약.
+class HomeworkGlassPill extends StatelessWidget {
+  const HomeworkGlassPill({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final brightness = Theme.of(context).brightness;
+    final isDark = brightness == Brightness.dark;
+    final surface = isDark
+        ? StudentBottomNavTokens.darkSurface
+        : StudentBottomNavTokens.lightSurface;
+    final blur = StudentBottomNavTokens.blurFor(brightness);
+    const height = 32.0;
+    final radius = BorderRadius.circular(height / 2);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: radius,
+        boxShadow: isDark ? null : StudentBottomNavTokens.lightShadows,
+      ),
+      child: ClipRRect(
+        borderRadius: radius,
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+          child: CustomPaint(
+            foregroundPainter: GlassRimPainter(isDark: isDark),
+            child: Container(
+              height: height,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: surface,
+                borderRadius: radius,
+              ),
+              child: child,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 이번 시도에서 손댄 문항 / 미풀이·오답 문항.
+///
+/// 숫자 옆에 같은 잉크로 채운 막대를 둔다. 새 색은 쓰지 않는다.
+class HomeworkAttemptCountPill extends StatelessWidget {
+  const HomeworkAttemptCountPill({
+    super.key,
+    required this.done,
+    required this.total,
+  });
+
+  final int done;
+  final int total;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final ink = isDark
+        ? StudentBottomNavTokens.darkSelected
+        : StudentBottomNavTokens.lightSelected;
+    final track = isDark
+        ? StudentBottomNavTokens.darkUnselected
+        : StudentBottomNavTokens.lightUnselected;
+    final ratio = total <= 0 ? 0.0 : (done / total).clamp(0.0, 1.0);
+    return HomeworkGlassPill(
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            '$done/$total',
+            maxLines: 1,
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: ink,
+              height: 1,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 88,
+            height: 4,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(999),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  ColoredBox(color: track.withValues(alpha: 0.45)),
+                  FractionallySizedBox(
+                    alignment: Alignment.centerLeft,
+                    widthFactor: ratio,
+                    child: ColoredBox(color: ink),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 번호 카드 목록 위, 입력란 바로 위에 띄우는 수행 시간.
+///
+/// 하단 미니 플레이어와 같은 학습앱 글래스 알약·같은 시간 표기를 쓴다.
+class HomeworkElapsedPill extends StatefulWidget {
+  const HomeworkElapsedPill({super.key, required this.groupId});
+
+  final String groupId;
+
+  @override
+  State<HomeworkElapsedPill> createState() => _HomeworkElapsedPillState();
+}
+
+class _HomeworkElapsedPillState extends State<HomeworkElapsedPill> {
+  Timer? _tick;
+
+  HomeworkGroup? get _group {
+    final id = widget.groupId.trim();
+    if (id.isEmpty) return null;
+    final groups = HomeworkSession.instance.lastGroups;
+    if (groups != null) {
+      for (final group in groups) {
+        if (group.groupId == id) return group;
+      }
+    }
+    final active = HomeworkSession.instance.active;
+    if (active?.groupId == id) return active;
+    return null;
+  }
+
+  bool get _running =>
+      HomeworkSession.instance.isRunningGroup(widget.groupId);
+
+  @override
+  void initState() {
+    super.initState();
+    HomeworkSession.instance.addListener(_onSession);
+    _syncTicker();
+  }
+
+  @override
+  void didUpdateWidget(covariant HomeworkElapsedPill oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _syncTicker();
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    HomeworkSession.instance.removeListener(_onSession);
+    super.dispose();
+  }
+
+  void _onSession() {
+    _syncTicker();
+    if (mounted) setState(() {});
+  }
+
+  void _syncTicker() {
+    if (_running && _tick == null) {
+      _tick = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (mounted) setState(() {});
+      });
+    } else if (!_running && _tick != null) {
+      _tick?.cancel();
+      _tick = null;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final group = _group;
+    if (group == null) return const SizedBox.shrink();
+    final seconds = _running
+        ? group.liveCycleElapsed()
+        : (group.cycleElapsed < 0 ? 0 : group.cycleElapsed);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final titleColor = isDark
+        ? StudentBottomNavTokens.darkSelected
+        : StudentBottomNavTokens.lightSelected;
+    return HomeworkGlassPill(
+      child: _MonospaceTimeLabel(
+        text: HomeworkNowPlayingBar.formatCycleElapsed(seconds),
+        fontSize: 14,
+        color: titleColor,
+      ),
+    );
+  }
+}
+
 /// 글꼴이 tabular figures 를 안 줘도 자리마다 폭을 고정해 `:` 가 흔들리지 않게 한다.
 class _MonospaceTimeLabel extends StatelessWidget {
   const _MonospaceTimeLabel({

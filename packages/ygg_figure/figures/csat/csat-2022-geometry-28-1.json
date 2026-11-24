@@ -1,0 +1,23 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.1",
+  "ref": "csat-2022-geometry-28-1",
+  "params": {"ox": 40.0886, "oy": 52.6503, "a": 16.5565, "b": 21.9166, "ah": 36.4126},
+  "fit": ["ox", "oy", "a", "b", "ah"],
+  "canvas": {"width": 81.49, "height": 66.85, "origin": ["ox", "oy"], "unit": 1},
+  "objects": [
+    {"id": "ax", "type": "axes", "x": [-39.5, 41], "y": [-12.9, 50.4]},
+    {"id": "hr", "type": "parametric", "var": "s", "t": [-0.49, 1.505], "x": "a*cosh(s)", "y": "b*sinh(s)"},
+    {"id": "hl", "type": "parametric", "var": "s", "t": [-0.49, 1.505], "x": "-a*cosh(s)", "y": "b*sinh(s)"},
+    {"id": "F", "type": "point", "at": ["sqrt(a^2+b^2)", 0], "label": {"dir": "S", "dist": 1.2, "offset": [-1.2, 0]}},
+    {"id": "F'", "type": "point", "at": ["-sqrt(a^2+b^2)", 0], "label": {"dir": "S", "dist": 1.2}},
+    {"id": "A", "type": "point", "at": [0, "ah"], "label": {"dir": "NE", "dist": 0.6}},
+    {"id": "P", "type": "intersect", "of": ["hr", ["A", "F"]], "near": [20, 12], "label": {"dir": "E", "dist": 1.4}},
+    {"id": "P'", "type": "reflect", "of": "P", "across": [[0, 0], [0, 1]], "label": {"dir": "W", "dist": 1.4}},
+    {"type": "segment", "from": "A", "to": "P", "extend": [11.0, 28.4]},
+    {"type": "segment", "from": "A", "to": "F'"},
+    {"type": "segment", "from": "P'", "to": "P"},
+    {"id": "lc", "type": "label", "at": [35, 35.1], "text": "C"}
+  ],
+  "label_nudge": {"ax:x": [-0.338, 0.085], "ax:y": [0.254, 0.677], "ax:origin": [-0.085, -0.254], "F": [0.846, 0.0], "F'": [0.0, 0.254], "A": [0.507, -0.085], "P": [0.507, 0.677], "P'": [0.592, -0.338], "lc": [0.169, -0.085]}
+}

@@ -50,3 +50,31 @@ test('\\notin의 JSON newline escape를 추출·렌더 경로에서 복구한다
     '첫째 줄\n둘째 줄',
   );
 });
+
+test('추출: 줄 첫머리의 i · u 와 지수·첨자·등호·표 칸 앞의 e 는 명령으로 되돌리지 않는다', () => {
+  for (const text of [
+    'i를 허수단위라 한다. 즉\n[수식제시]\ni^2=-1\n이고',
+    '다음 물음에 답하여라.\ni=j인 성분의 합',
+    '따라서\nu\\cdot v=2(a-2)(a+4)',
+    '수열\nu_n=2n+1',
+    '첫 줄이다.\ne^{x}=2일 때의 값',
+    '첫 줄이다.\ne_1, e_2는 단위벡터',
+    '6 & c & d \\\\\ne & 0 & f \\\\',
+    '무리수\ne=2.718',
+  ]) {
+    assert.equal(recoverMangledLatexControls(text), text, text);
+  }
+  // 깨져 들어온 \ne(≠) 와 긴 명령, 다른 제어 문자의 복구는 그대로다.
+  assert.equal(recoverMangledLatexControls('x \ne 0인 실수'), String.raw`x \ne 0인 실수`);
+  assert.equal(recoverMangledLatexControls('x\ne0'), String.raw`x\ne0`);
+  assert.equal(recoverMangledLatexControls('a \neq b'), String.raw`a \neq b`);
+  assert.equal(recoverMangledLatexControls('\\left(x\right)'), String.raw`\left(x\right)`);
+  assert.equal(recoverMangledLatexControls('\nabla^2 f'), String.raw`\nabla^2 f`);
+});
+
+test('렌더 경로의 선지·정답 글도 한 글자짜리 \\ne · \\ni · \\nu 는 되돌리지 않는다', () => {
+  for (const text of ['가\ni^2', '가\ne & 0', '가\nu=2']) {
+    assert.equal(recoverMangledLatexNewlineCommands(text), text, text);
+  }
+  assert.equal(recoverMangledLatexNewlineCommands('a \neq b'), String.raw`a \neq b`);
+});

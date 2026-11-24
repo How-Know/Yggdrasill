@@ -8,16 +8,19 @@ import path from 'node:path';
 import { mockCurriculumCode } from './mock_courses.js';
 
 const FILE_RE =
-  /^(\d{4})\s*고\s*([123])\s*(\d{1,2})\s*월\s*(교육청|평가원|수능)\s*(?:\(\s*(확통|확률과\s*통계|미적분?|기하)\s*\))?\s*(?:[-_]\s*(해설))?\s*$/;
+  /^(\d{4})\s*고\s*([123])\s*(\d{1,2})\s*월\s*(교육청|평가원|수능)\s*(?:\(\s*(확통|확률과\s*통계|미적분?|기하|가\s*형|나\s*형)\s*\))?\s*(?:[-_]\s*(해설))?\s*$/;
 const ORG = { 교육청: 'edu', 평가원: 'kice', 수능: 'csat' };
 const ORG_LABEL = { edu: '교육청', kice: '평가원', csat: '수능' };
 const MOCK_DIR_NAME = '- 모의고사';
+const LEGACY_TYPES = new Set(['ga', 'na']);
 
 function electiveOf(raw) {
   const s = String(raw || '').replace(/\s+/g, '');
   if (s.startsWith('확')) return 'probstats';
   if (s.startsWith('미')) return 'calculus';
   if (s.startsWith('기')) return 'geometry';
+  if (s === '가형') return 'ga';
+  if (s === '나형') return 'na';
   return '';
 }
 
@@ -213,7 +216,8 @@ export async function registerMockPdfs(supa, academyId, parsed, { queue = false,
       const result = await uploadPaper(supa, academyId, exam.id, item);
       summary[result] += 1;
     }
-    if (queue) {
+    const legacyOnly = group.every((item) => LEGACY_TYPES.has(item.elective));
+    if (queue && !legacyOnly) {
       const { error: qErr } = await supa
         .from('mock_exams')
         .update({ status: 'queued', stage: '', last_error: '', progress: { request: 'all' } })

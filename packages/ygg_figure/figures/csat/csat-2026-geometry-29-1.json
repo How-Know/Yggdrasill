@@ -1,0 +1,24 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.1",
+  "ref": "csat-2026-geometry-29-1",
+  "params": {"u": 21.7628, "ox": 51.0537, "oy": 69.1769, "t": 1.515, "a": 0.4722},
+  "fit": ["u", "ox", "oy", "t", "a"],
+  "canvas": {"width": 103.93, "height": 86.36, "origin": ["ox", "oy"], "unit": "u"},
+  "objects": [
+    {"id": "ax", "type": "axes", "x": [-2.32, 2.227], "y": [-0.787, 3.1]},
+    {"id": "par", "type": "parametric", "x": "s^2/4", "y": "s", "var": "s", "t": [-0.77, 3.02]},
+    {"id": "A", "type": "point", "at": ["t^2/4", "t"], "label": {"dir": "SE", "dist": 0.3}},
+    {"id": "B", "type": "point", "at": [-1, "t"], "label": {"dir": "W", "dist": 0.9}},
+    {"id": "K", "type": "midpoint", "of": ["A", "B"]},
+    {"id": "hr", "type": "parametric", "x": "K.x+a*cosh(s)", "y": "K.y+sqrt((A.x-K.x)^2-a^2)*sinh(s)", "var": "s", "t": [-1.99, 1.6]},
+    {"id": "hl", "type": "parametric", "x": "K.x-a*cosh(s)", "y": "K.y+sqrt((A.x-K.x)^2-a^2)*sinh(s)", "var": "s", "t": [-1.99, 1.6]},
+    {"id": "C", "type": "point", "at": ["K.x-a", "K.y"], "label": {"dir": "SE", "dist": 0.5}},
+    {"id": "F", "type": "point", "at": [1, 0], "label": {"dir": "S", "dist": 1.0, "offset": [-0.8, 0]}},
+    {"id": "d", "type": "segment", "from": [-1, 3.056], "to": [-1, -0.787]},
+    {"type": "segment", "from": "B", "to": "A", "line": "thin"},
+    {"type": "right_angle", "at": "B", "from": [-1, 3], "to": "A", "size": 2.0},
+    {"id": "lp", "type": "label", "at": [1.94, 2.59], "text": "y^2=4px"}
+  ],
+  "label_nudge": {"ax:x": [-0.363, 0.0], "ax:y": [0.29, -0.581], "ax:origin": [0.073, -0.145], "A": [0.436, 1.089], "B": [0.218, -0.29], "C": [0.073, -0.581], "F": [-0.145, 0.073]}
+}

@@ -6,12 +6,14 @@ import 'package:flutter/material.dart';
 import 'package:yggdrasill_ui/yggdrasill_ui.dart';
 
 import '../services/homework_session.dart';
+import '../services/student_api.dart';
 import '../services/textbook_api.dart';
 import '../services/textbook_catalog_organizer.dart';
 import '../services/textbook_study_session.dart';
 import '../widgets/student_confirm_sheet.dart';
 import '../widgets/student_page_title.dart';
 import '../widgets/student_progress_summary_card.dart';
+import 'homework_solve_launcher.dart';
 import 'textbook_solve_screen.dart';
 
 const double _coverA4Ratio = 1.414;
@@ -94,6 +96,17 @@ class _TextbookScreenState extends State<TextbookScreen> {
       // 중단(또는 열려 있는) 바로풀기 세션이 있으면 묻지 않고 바로 이어 푼다.
       chosenMode = TextbookEntryMode.solve;
     } else {
+      final offers = await _homeworkOffersFor(book);
+      if (!mounted) return;
+      if (offers.isNotEmpty) {
+        final picked = await _showHomeworkFirstSheet(book, offers);
+        if (!mounted || picked == null) return;
+        if (picked is HomeworkGroup) {
+          await _openHomeworkInstead(book, picked);
+          return;
+        }
+      }
+      if (!mounted) return;
       chosenMode = await _showEntryModeSheet(book);
     }
     if (chosenMode == null || !mounted) return;
@@ -139,6 +152,279 @@ class _TextbookScreenState extends State<TextbookScreen> {
     );
     // 풀고 돌아오면 현황 갱신
     _refresh();
+  }
+
+  /// 이 교재의 대기·수행 중 그룹과제. 시간제한 테스트와 제출·확인 단계는 뺀다.
+  Future<List<({HomeworkGroup group, int remaining})>> _homeworkOffersFor(
+    StudentTextbook book,
+  ) async {
+    List<HomeworkGroup> groups;
+    try {
+      groups = await StudentApi.instance.listHomeworkGroups();
+    } catch (_) {
+      return const [];
+    }
+    final matched = <HomeworkGroup>[
+      for (final group in groups)
+        if (_isOpenHomeworkForBook(group, book)) group,
+    ];
+    if (matched.isEmpty) return const [];
+
+    final counted = await Future.wait(matched.map((group) async {
+      try {
+        final problems =
+            await StudentApi.instance.listHomeworkProblems(group.groupId);
+        final usable = problems
+            .where((problem) => problem.cropId.trim().isNotEmpty)
+            .toList(growable: false);
+        final remaining = usable
+            .where((problem) => problem.attemptCount <= 0)
+            .length;
+        return (group: group, remaining: remaining, known: true);
+      } catch (_) {
+        return (
+          group: group,
+          remaining: group.totalCount,
+          known: false,
+        );
+      }
+    }));
+    return [
+      for (final row in counted)
+        if (!row.known || row.remaining > 0)
+          (group: row.group, remaining: row.remaining),
+    ];
+  }
+
+  bool _isOpenHomeworkForBook(HomeworkGroup group, StudentTextbook book) {
+    if (group.bookId.isEmpty || group.bookId != book.bookId) return false;
+    final groupGrade = group.gradeLabel.trim();
+    final bookGrade = book.gradeLabel.trim();
+    if (groupGrade.isNotEmpty &&
+        bookGrade.isNotEmpty &&
+        groupGrade != bookGrade) {
+      return false;
+    }
+    if (group.isTimedTest) return false;
+    if (group.pendingComplete && group.phase == 1) return false;
+    return group.phase == 1 || group.phase == 2;
+  }
+
+  Future<void> _openHomeworkInstead(
+    StudentTextbook book,
+    HomeworkGroup group,
+  ) async {
+    final opened = await openDigitalHomeworkSolve(
+      context,
+      group,
+      coverRef: book.coverRef,
+    );
+    if (!mounted) return;
+    if (!opened && !group.running && (group.phase == 1 || group.phase == 2)) {
+      try {
+        final result = await StudentApi.instance.groupTransition(
+          groupId: group.groupId,
+          fromPhase: 1,
+        );
+        if (mounted &&
+            result['ok'] != true &&
+            result['error'] != 'phase_mismatch') {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('과제를 시작하지 못했어요.')),
+          );
+        }
+      } catch (_) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('과제를 시작하지 못했어요.')),
+          );
+        }
+      }
+    }
+    await _refresh();
+  }
+
+  /// 과제를 먼저 할지, 교재로 바로 풀지. null 은 닫기.
+  /// 반환이 [HomeworkGroup]이면 그 과제, 그 외 non-null 이면 그냥 풀기.
+  Future<Object?> _showHomeworkFirstSheet(
+    StudentTextbook book,
+    List<({HomeworkGroup group, int remaining})> offers,
+  ) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final surface = isDark ? const Color(0xFF1C1C1E) : const Color(0xFFF2F2F7);
+    final card = isDark ? const Color(0xFF2C2C2E) : Colors.white;
+    final text = isDark ? Colors.white : Colors.black;
+    final sub = text.withValues(alpha: 0.48);
+    final divider = text.withValues(alpha: 0.08);
+    const accent = YggGlassTokens.confirmActionColor;
+    final optionCount = offers.length + 1;
+
+    Widget option({
+      required String label,
+      required String subtitle,
+      required IconData icon,
+      required Color iconColor,
+      required BorderRadius inkRadius,
+      required VoidCallback onTap,
+    }) {
+      return Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: inkRadius,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+            child: Row(
+              children: [
+                Icon(icon, size: 26, color: iconColor),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w700,
+                          color: text,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        subtitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                          color: sub,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    BorderRadius radiusFor(int index) {
+      final top = index == 0;
+      final bottom = index == optionCount - 1;
+      if (top && bottom) return BorderRadius.circular(22);
+      if (top) {
+        return const BorderRadius.vertical(top: Radius.circular(22));
+      }
+      if (bottom) {
+        return const BorderRadius.vertical(bottom: Radius.circular(22));
+      }
+      return BorderRadius.zero;
+    }
+
+    return showModalBottomSheet<Object>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) => SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: surface,
+              borderRadius: BorderRadius.circular(28),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 14, 12, 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    book.name,
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      color: text,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    '이 교재에 풀 과제가 있어요.\n먼저 하시겠어요?',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      height: 1.35,
+                      color: sub,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: card,
+                      borderRadius: BorderRadius.circular(22),
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(22),
+                      child: Column(
+                        children: [
+                          for (var i = 0; i < offers.length; i++) ...[
+                            if (i > 0)
+                              Divider(
+                                height: 1,
+                                indent: 18,
+                                endIndent: 18,
+                                color: divider,
+                              ),
+                            option(
+                              label: offers[i].group.title.isEmpty
+                                  ? '과제'
+                                  : offers[i].group.title,
+                              subtitle: offers[i].remaining > 0
+                                  ? '남은 ${offers[i].remaining}문항'
+                                  : '이어서 풀 수 있어요',
+                              icon: Icons.assignment_outlined,
+                              iconColor: accent,
+                              inkRadius: radiusFor(i),
+                              onTap: () =>
+                                  Navigator.of(ctx).pop(offers[i].group),
+                            ),
+                          ],
+                          Divider(
+                            height: 1,
+                            indent: 18,
+                            endIndent: 18,
+                            color: divider,
+                          ),
+                          option(
+                            label: '그냥 풀기',
+                            subtitle: '교재 화면에서 이어서 풀어요',
+                            icon: Icons.menu_book_outlined,
+                            iconColor: sub,
+                            inkRadius: radiusFor(optionCount - 1),
+                            onTap: () => Navigator.of(ctx).pop(false),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   Future<TextbookEntryMode?> _showEntryModeSheet(StudentTextbook book) {

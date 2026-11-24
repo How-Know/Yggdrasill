@@ -16,7 +16,7 @@
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { resolveFigureLayout } from '../utils/figure_layout.js';
+import { resolveFigureLayout, withFigureLayoutContext } from '../utils/figure_layout.js';
 import {
   applyInlineAlignmentMarkers,
   expandCasesEnvironmentToDisplayArray,
@@ -107,6 +107,8 @@ function measuredWrapMacroLines() {
     '    \\advance\\YggWrapObjectHeight by -\\baselineskip',
     '  \\repeat',
     '  \\ifnum\\YggWrapLineCount<2 \\YggWrapLineCount=2\\fi',
+    // 배치 상자의 wrapLines: 좁혀 찍을 줄 수를 정해 두었으면 그림 높이로 잰 값 대신 쓴다.
+    '  \\ifnum\\YggWrapForceLines>0 \\YggWrapLineCount=\\YggWrapForceLines\\fi',
     '  \\sbox{\\YggWrapTextBox}{\\begin{minipage}{\\dimexpr\\linewidth-#2-#3\\relax}\\vspace{0pt}\\noindent #5\\end{minipage}}%',
     '  \\YggWrapObjectHeight=\\dimexpr\\ht\\YggWrapTextBox+\\dp\\YggWrapTextBox\\relax',
     '  \\YggWrapTextLineCount=0\\relax',
@@ -122,6 +124,18 @@ function measuredWrapMacroLines() {
     '  \\noindent #5\\par',
     '  \\YggWrapClearRemaining{\\the\\YggWrapLineCount}{\\the\\YggWrapTextLineCount}%',
     '  \\par\\endgroup',
+    '}',
+    '\\newcount\\YggWrapForceLines',
+    '\\YggWrapForceLines=0\\relax',
+    // 자유 배치 상자: 지금 자리(문단 사이)에 높이 0 인 상자를 두고 그 안에 내용을 찍는다.
+    //   #1 본문 왼쪽 끝에서 오른쪽으로, #2 지금 자리에서 아래로, #3 내용.
+    //   앞뒤 줄 간격(\prevdepth)을 그대로 돌려놓아 본문 줄바꿈·쪽 나눔이 상자가 없을 때와 같다.
+    '\\newdimen\\YggFreePrevDepth',
+    '\\long\\def\\YggFreeBox#1#2#3{%',
+    '  \\par\\YggFreePrevDepth=\\prevdepth',
+    '  \\nointerlineskip',
+    '  \\vbox to 0pt{\\vskip #2\\relax\\hbox to 0pt{\\hskip\\leftskip\\hskip #1\\relax #3\\hss}\\vss}%',
+    '  \\prevdepth=\\YggFreePrevDepth',
     '}',
   ];
 }
@@ -169,15 +183,17 @@ function sanitizeLatexControlChars(value) {
     s = s.replace(/\x08/g, '\\b');
     s = s.replace(/\x0b/g, '\\v');
     s = s.replace(/\x09(?=[A-Za-z])/g, '\\t');
-    // 줄 첫머리 "i)" 는 경우 나누기 번호라 \ni(∋) 로 되돌리지 않는다.
+    // 한 글자만 남는 \ne(≠) · \ni(∋) · \nu(ν) 는 되돌리지 않는다(2026-11-21 사장님 결정).
+    // 줄 첫머리의 e·i·u("i^2", "i=j인 …", 표의 행 "e & 0 & f", "u\cdot v")와 구분할 수 없고,
+    // 저장된 문항에서 이 복구가 맞았던 경우는 없고 틀리게 찍힌 본문만 28개 있었다.
     s = s.replace(
-      /\x0a(?=(?:abla|atural|e(?:q|g|arrow)?|i(?!\))|otin|u|warrow)(?![A-Za-z]))/g,
+      /\x0a(?=(?:abla|atural|e(?:q|g|arrow)|otin|warrow)(?![A-Za-z]))/g,
       '\\n',
     );
     // terminator 는 LaTeX 명령 뒤에 자주 오는 문자들 전부 커버: \ {} () [] ^ _
     // 과거 실수: ")" terminator 를 빠뜨려 "\right)" 가 "ight)" 로 깨져 재발한 적 있음.
     s = s.replace(/\x0d(?=[a-z][a-zA-Z]*[\\{}()\[\]^_])/g, '\\r');
-    s = s.replace(/\x0a(?=[a-z][a-zA-Z]*[\\{}()\[\]^_])/g, '\\n');
+    s = s.replace(/\x0a(?![eiu][\\{}()\[\]^_])(?=[a-z][a-zA-Z]*[\\{}()\[\]^_])/g, '\\n');
     s = s.replaceAll(displayBlockLfToken, '\n');
     return normalizeArcNotation(s);
   }
@@ -286,9 +302,15 @@ function normalizeLiteralJsonNewlineText(input) {
 //   - 한글이 포함된 셀: "\text{...}" 로 감싼다 (tabular bare 한글은 XeTeX 에서도 안전하지만
 //     Math-ISH 주변 셀과 시각 정렬을 맞추기 위해 동일 처리).
 //   - 빈 셀 / 단순 숫자·기호 셀: 그대로 둠.
+// 표의 행 끝이 `\` 하나로 저장된 것(줄 끝의 홑 역슬래시)을 `\\` 로 읽는다. 그대로 두면 두 행이 한 행으로
+//   붙어 뒤 행의 \hline 이 칸 안으로 들어가고 "Misplaced \noalign" 으로 조판이 멈춘다.
+export function normalizeTabularRowEnds(body) {
+  return String(body || '').replace(/(?<!\\)\\[ \t]*(?=\r?\n)/g, '\\\\');
+}
+
 function autoWrapTabularCells(rawTexBlock) {
   return rawTexBlock.replace(/\\begin\{tabular\}(\{[^}]*\})([\s\S]*?)\\end\{tabular\}/g, (_, colSpec, body) => {
-    body = normalizeLiteralJsonNewlineText(body);
+    body = normalizeTabularRowEnds(normalizeLiteralJsonNewlineText(body));
     const rows = body.split(/\\\\/); // 행 구분은 \\ (LaTeX)
     const patchedRows = rows.map((row) => {
       // tabular 맨 끝의 공백/개행 row 는 그대로.
@@ -318,6 +340,10 @@ function autoWrapTabularCells(rawTexBlock) {
         // \multicolumn must remain a top-level tabular command. Wrapping it in
         // $...$ or \text{...} turns the underlying \omit into invalid TeX.
         if (/^\s*\\multicolumn\s*\{/.test(inner)) {
+          return leading + rulePrefix + inner + trailing;
+        }
+        // 세로 병합 칸(\multirow)·대각선 칸(\diagbox)은 표를 짤 때 따로 읽는다. 감싸면 칸 내용으로 찍힌다.
+        if (/^\s*\\(?:multirow|diagbox)\s*\{/.test(inner)) {
           return leading + rulePrefix + inner + trailing;
         }
 
@@ -373,6 +399,9 @@ function splitTabularRowCells(row) {
 
 const BOX_START_RE = /\[박스시작\]/;
 const BOX_END_RE = /\[박스끝\]/;
+// 상자 안에 든 raw 표의 자리 표시(상자 줄 하나). n 은 그 상자 안에서의 순번(1부터).
+const BOX_TABLE_SLOT_RE = /^\s*\[\[YGG_BOX_TABLE_(\d+)\]\]\s*$/;
+const boxTableSlot = (n) => `[[YGG_BOX_TABLE_${n}]]`;
 // VLM 추출 경로에서 넣는 "보기" 박스 경계 마커. 기존 HWPX 파이프라인은 `<보기>` 기호가 있는
 // [박스시작]...[박스끝] 을 bogi 로 분류하지만, VLM 경로는 [보기시작]/[보기끝] 한 쌍으로
 // 내려보낸다. 전처리 단계에서 [박스시작]+<보기>/[박스끝] 로 정규화해 기존 분기를 재사용한다.
@@ -448,6 +477,16 @@ function escapeLatexText(text) {
  */
 const KOREAN_SEG_RE =
   /[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F가-힣][\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F가-힣\s,.\u3001\u3002?!:;·…\u00B7]*/g;
+
+/**
+ * 수식 바로 뒤에 띄어쓰기 없이 붙은 한글("A에서", "(단,") 앞에 넣는 줄바꿈 벌점.
+ *
+ * 본문은 어절 사이(공백)에서만 줄을 바꾸지만, TeX 은 수식이 끝난 자리도 줄바꿈 지점으로
+ * 삼는다. 그래서 "상자 A" 에서 줄이 끝나고 "에서" 가 다음 줄로 떨어지거나 여는 괄호만 줄
+ * 끝에 남았다. 벌점을 넣으면 그 자리는 다른 끊을 곳이 없을 때만 끊긴다.
+ * `\nobreak`(10000) 로 완전히 막으면 긴 수식 + 조사가 한 줄에 안 들어갈 때 줄 밖으로 넘친다.
+ */
+const MATH_GLUED_HANGUL_PENALTY = '\\penalty9999{}';
 
 function wrapHangulRunsForMath(input) {
   return String(input || '').replace(KOREAN_SEG_RE, (match) => `\\text{${escapeLatexText(match)}}`);
@@ -808,10 +847,15 @@ function padSqrtFractionContent(math) {
   return out;
 }
 
+// 집합의 조건 막대 자리. 맨 바깥의 막대가 짝수 개면 절댓값 쌍뿐이라고 보고 -1 을 돌려준다
+//   (예: \{1-|-2|^{5}\} 는 집합이 아니라 중괄호로 묶은 식이다. 첫 막대를 조건 막대로 잡으면
+//   남은 막대가 식 밖의 것과 짝을 지어 조판이 깨진다).
 function findTopLevelSetBar(body) {
   let braceDepth = 0;
   let parenDepth = 0;
   let bracketDepth = 0;
+  let first = -1;
+  let count = 0;
   for (let i = 0; i < body.length; i += 1) {
     const ch = body[i];
     if (ch === '\\') {
@@ -831,10 +875,11 @@ function findTopLevelSetBar(body) {
     else if (ch === ']') bracketDepth = Math.max(0, bracketDepth - 1);
     else if (ch === '|' && braceDepth === 0 && parenDepth === 0 && bracketDepth === 0) {
       if (/\\middle\s*$/.test(body.slice(0, i))) continue;
-      return i;
+      if (first < 0) first = i;
+      count += 1;
     }
   }
-  return -1;
+  return count % 2 === 1 ? first : -1;
 }
 
 function normalizeSetBuilderBars(math) {
@@ -1064,7 +1109,9 @@ function shrinkExponentFractions(input) {
   return out;
 }
 
-function normalizeMathSegment(mathContent) {
+// resolveProtectedText: \text{...} 를 보호 토큰으로 바꿔 둔 호출처가 토큰을 원래 글로 되돌리는 함수를 넘긴다.
+//   구간별 식의 조건 칸 폭을 잴 때만 쓰고, 출력에는 토큰이 그대로 남는다.
+function normalizeMathSegment(mathContent, { resolveProtectedText } = {}) {
   let out = String(mathContent || '');
 
   out = out.replace(/×/g, '\\times');
@@ -1127,14 +1174,17 @@ function normalizeMathSegment(mathContent) {
   // 채운 도형 기호는 Latin Modern Math 에 글리프가 없어 빈칸으로 찍힌다(▲ 꼴 일반식 등). 본문 폰트 글자로 출력.
   const filledShapes = { blacktriangle: '▲', blacktriangledown: '▼', blacksquare: '■', bigstar: '★' };
   out = out.replace(/\\(blacktriangle|blacktriangledown|blacksquare|bigstar)(?![A-Za-z])\s*/g, (_, name) => `\\text{${filledShapes[name]}}`);
+  // 명령이 아니라 글자로 적힌 채운 도형("(★)에 의하여" 같은 식 참조 기호)도 같은 이유로 본문 폰트 글자로 출력.
+  out = out.replace(/(?<!\\text\{)([▲▼■★])/g, '\\text{$1}');
   // ① 7처럼 박스 안에서 동그라미 번호 바로 뒤에 숫자/수식이 오면 해당 조각이
   // math mode 로 감싸져 일반 공백이 사라진다. 라벨 뒤 공백을 명시적 수식 공백으로 고정.
   out = out.replace(/([①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳])\s+(?=[+\-−]?\d|\\(?:d?frac|text)(?![A-Za-z]))/g, '$1\\;');
   // 원문자 범위 표기 "㉠~㉧" 의 물결(~)은 math mode 에서 공백으로 사라지므로 ∼(\sim) 으로 고정.
-  out = out.replace(/([\u3260-\u326D\u2460-\u2473])\s*~\s*([\u3260-\u326D\u2460-\u2473])/g, '$1\\sim $2');
-  // 동그라미 한글(㉠–㉭)·동그라미 숫자(①–⑳) 는 수식 폰트에 글리프가 없어 math mode 로 들어가면
-  // 서버 PDF 에서 통째로 누락된다(본문 폰트엔 글리프 존재). \text{} 로 감싸 본문 폰트로 강제 출력.
-  out = out.replace(/[\u3260-\u326D\u2460-\u2473]/g, (ch) => `\\text{${ch}}`);
+  out = out.replace(/([\u2460-\u24FF\u3200-\u321E\u3260-\u327F])\s*~\s*([\u2460-\u24FF\u3200-\u321E\u3260-\u327F])/g, '$1\\sim $2');
+  // 원문자·괄호 문자는 수식 폰트에 글리프가 없어 math mode 로 들어가면 서버 PDF 에서 통째로 누락된다
+  // (본문 폰트엔 글리프 존재). \text{} 로 감싸 본문 폰트로 강제 출력.
+  //   동그라미·괄호 숫자와 알파벳(①–⑳, ⑴, ⒜, Ⓐ, ⓐ–ⓩ), 괄호·동그라미 한글(㈀–㈛, ㉠–㉻).
+  out = out.replace(/[\u2460-\u24FF\u3200-\u321E\u3260-\u327F]/g, (ch) => `\\text{${ch}}`);
   // 로마 숫자(Ⅰ–Ⅻ, ⅰ–ⅻ)도 수식 폰트에 글리프가 없어 "( )" 처럼 빈칸으로 찍힌다.
   // 경우 나누기 번호 "(ⅰ)"·"ⅰ)" 는 괄호째 본문 폰트로 찍고, 번호 뒤 공백을 수식 공백으로 지킨다.
   out = out.replace(/([(（]?)([\u2160-\u217F]+)([)）]?)(\s*)/g, (_m, open, roman, close, space) => (
@@ -1142,6 +1192,15 @@ function normalizeMathSegment(mathContent) {
       ? `\\text{${open}${roman}${close}}${space ? '\\;' : ''}`
       : `${open}\\text{${roman}}${space}`
   ));
+  // 여러 단계 경우 번호 "(ⅰ-ⓐ)"·"(ⅰ-ⓐ-①)" 는 한 덩어리 글자로 찍는다. 조각마다 수식으로 두면
+  // 붙임표가 뺄셈 기호로 찍히고 번호 뒤 공백이 사라진다.
+  out = out.replace(
+    /([(（])\s*(\\text\{[^{}]{1,3}\}(?:\s*[-‐–−]\s*(?:\\text\{[^{}]{1,3}\}|\d{1,2}|[A-Za-z]))+)\s*([)）])(\s*)/g,
+    (_m, open, label, close, space) => {
+      const plain = label.replace(/\\text\{([^{}]{1,3})\}/g, '$1').replace(/\s*[-‐–−]\s*/g, '-');
+      return `\\text{${open}${plain}${close}}${space ? '\\;' : ''}`;
+    },
+  );
   // DB 에 이미 들어가 있는 \boxed{\phantom{...}} 또는 \boxed{~~} 형태도 정사각형 빈칸 네모로 치환.
   out = out.replace(/\\boxed\s*\{\s*\\phantom\s*\{[^}]*\}\s*\}/g, '\\mtemptybox{}');
   out = out.replace(/\\boxed\s*\{\s*(?:~+|\s*)\s*\}/g, '\\mtemptybox{}');
@@ -1196,6 +1255,7 @@ function normalizeMathSegment(mathContent) {
     // v98: cases 의 행간을 50% 더 넓힘 (이전 0.88 → 1.32).
     arrayStretch: '1.32',
     wrapCaseConditionCells: true,
+    resolveProtectedText,
   });
   out = padSqrtFractionContent(out);
 
@@ -1719,7 +1779,7 @@ function smartTexLineCore(text, equations, options = {}) {
   // emit. (여러 번 emit 되면 \vadjust pre/post 가 누적되어 패딩이 배가됨.)
   let padEmittedThisLine = false;
   const result = parts
-    .map((seg) => {
+    .map((seg, segIndex) => {
       if (seg.type === 'text') {
         accumulatedVisualLength += visualLength(seg.value);
         return escapeLatexText(seg.value);
@@ -1728,12 +1788,14 @@ function smartTexLineCore(text, equations, options = {}) {
       const raw = seg.value;
       const leadSp = /^\s/.test(raw) ? ' ' : '';
       const trailSp = /\s$/.test(raw) ? ' ' : '';
+      // 뒤에 한글이 띄어쓰기 없이 붙으면 한 어절이므로 그 사이에서 줄이 바뀌지 않게 한다.
+      const gluedHangul = !trailSp && parts[segIndex + 1]?.type === 'text' ? MATH_GLUED_HANGUL_PENALTY : '';
       let math = raw.trim();
       if (!math) return (leadSp || trailSp) ? ' ' : '';
       math = protectedSetBuilders.restore(math);
       math = protectedBoxes.restore(math);
       math = applyEquationLookup(math, lookup);
-      math = normalizeMathSegment(math);
+      math = normalizeMathSegment(math, { resolveProtectedText: protectedText.restore });
       const addVisualLinePad = enableVisualLineTallMathPad
         && !padEmittedThisLine
         && accumulatedVisualLength >= visualLineTallMathPadMinPrefix
@@ -1751,7 +1813,7 @@ function smartTexLineCore(text, equations, options = {}) {
         .map((chunk) => `$\\displaystyle ${symmetrizeTallMathChunk(chunk)}$`)
         .join(', ');
       accumulatedVisualLength += visualLength(math);
-      return `${leadSp}${addBreakAroundMath ? '\\allowbreak{}' : ''}${addVisualLinePad ? '\\mtvisuallinetallpad{}' : ''}${rendered}${trailSp}`;
+      return `${leadSp}${addBreakAroundMath ? '\\allowbreak{}' : ''}${addVisualLinePad ? '\\mtvisuallinetallpad{}' : ''}${rendered}${gluedHangul}${trailSp}`;
     })
     .join('');
 
@@ -1942,6 +2004,11 @@ function fontSelectTex(sizePt) {
 
 function stretchWithFontTex(stretch, sizePt) {
   return `\\setstretch{${stretch}}${fontSelectTex(sizePt)}`;
+}
+
+// 문항 본문 한 문단의 줄 간격 설정. 본문 줄과 같은 간격으로 놓아야 하는 것(표 옆 배치의 줄 등)도 이것을 쓴다.
+function stemLineSpacingTex(sizePt) {
+  return `${stretchWithFontTex('1.53', sizePt)}\\parskip=0pt\\lineskiplimit=0.4em\\lineskip=0.8em`;
 }
 
 function renderDisplayMathStemLine(sub, equations, firstPrefix = '', options = {}) {
@@ -2196,7 +2263,7 @@ function renderStemTextLine(sub, equations, firstPrefix = '', options = {}) {
   const stemTexOptions = { visualLineTallMathPad: enableVisualLineTallMathPad };
   // \parskip=0pt: [문단] 강제 단락마다 문서 기본 \parskip 이 끼어 자동 줄바꿈보다
   //   간격이 넓어지는 것을 막아, 강제/자동 줄바꿈 간격을 동일하게 맞춘다.
-  const wrapStem = (inner) => `{${stretchWithFontTex(STEM_STRETCH, options.fontSizePt)}\\parskip=0pt\\lineskiplimit=0.4em\\lineskip=0.8em${withBaselineGuide(inner)}\\par}`;
+  const wrapStem = (inner) => `{${stemLineSpacingTex(options.fontSizePt)}${withBaselineGuide(inner)}\\par}`;
   // inline-text(글 중간) 그림: 텍스트는 smartTexLine, 그림 sentinel 은 resolver 가
   // 텍스트 모드 그대로 끼워넣어 줄 흐름 안에 둔다.
   const inlineFigResolver = typeof options?.inlineFigureResolver === 'function'
@@ -2294,6 +2361,89 @@ function renderStemTextLine(sub, equations, firstPrefix = '', options = {}) {
 /*  Box parsing: [박스시작]/[박스끝] segment detection                  */
 /* ------------------------------------------------------------------ */
 
+/**
+ * [박스끝] 이 든 줄을 상자 안 글(inside)과 상자 밖 글(after)로 나눈다.
+ * 상자 끝과 다음 문장 사이에 문단 표시가 없는 발문은 둘이 한 줄로 들어온다. 그 뒤 글은 상자 밖 본문이다.
+ * 같은 줄에서 상자가 다시 시작하면([박스시작]) 나누지 않고 예전처럼 모두 상자 안에 둔다.
+ */
+export function splitAfterBoxEnd(line) {
+  const src = String(line || '');
+  const at = src.indexOf('[박스끝]');
+  const strip = (s) => s.replace(/\[박스끝\]/g, '').trim();
+  if (at < 0) return { inside: src.trim(), after: '' };
+  const tail = src.slice(at + '[박스끝]'.length);
+  if (BOX_START_RE.test(tail)) return { inside: strip(src), after: '' };
+  return { inside: strip(src.slice(0, at)), after: strip(tail) };
+}
+
+// 한 줄 안에서 닫히는 환경(cases·matrix)의 & 를 뺀, 줄끼리 맞추는 정렬 표시(&)가 있는가.
+function hasAlignmentTab(line) {
+  let s = String(line || '');
+  let prev;
+  do {
+    prev = s;
+    s = s.replace(/\\begin\{([a-zA-Z*]+)\}(?:(?!\\begin\{)[\s\S])*?\\end\{\1\}/g, ' ');
+  } while (s !== prev);
+  return /(^|[^\\])&/.test(s);
+}
+
+/**
+ * [수식제시시작]…[수식제시끝] 블록 가운데 줄끼리 등호를 맞춘 것(& 정렬, 또는 여러 줄에 걸친 aligned)을
+ * 한 줄짜리 수식 제시줄 "[수식제시]\begin{aligned} … \\ … \end{aligned}" 로 바꾼다.
+ *
+ * 블록은 줄마다 따로 조판하므로 & 가 있으면 "Misplaced alignment tab character &", aligned 를 줄로 나누면
+ * "Missing } inserted" 로 문서 전체가 실패한다(2026 고3 7월 공통 20번). 한 줄 제시줄은 cases 처럼 한 식으로
+ * 조판되고, 블록과 달리 상자([박스시작]) 안에서도 상자를 닫지 않는다.
+ * 정렬 표시가 없는 블록, 표시 앞뒤에 글이 붙은 블록, 끝 표시가 없는 블록은 그대로 둔다.
+ */
+export function collapseAlignedDisplayBlocks(lines, lineAligns = []) {
+  const outLines = [];
+  const outAligns = [];
+  const count = (text, re) => (String(text).match(re) || []).length;
+  for (let i = 0; i < lines.length; i += 1) {
+    const keep = () => {
+      outLines.push(lines[i]);
+      outAligns.push(lineAligns[i] || 'left');
+    };
+    const line = String(lines[i] ?? '');
+    if (!MATH_DISPLAY_BLOCK_START_RE.test(line) || line.trim().search(MATH_DISPLAY_BLOCK_START_RE) !== 0) {
+      keep();
+      continue;
+    }
+    let end = -1;
+    for (let j = i; j < lines.length; j += 1) {
+      if (MATH_DISPLAY_BLOCK_END_RE.test(String(lines[j] ?? ''))) {
+        end = j;
+        break;
+      }
+    }
+    const endLine = end < 0 ? '' : String(lines[end] ?? '').trim();
+    const endMatch = endLine.match(MATH_DISPLAY_BLOCK_END_RE);
+    if (end < 0 || !endMatch || endMatch.index + endMatch[0].length !== endLine.length) {
+      keep();
+      continue;
+    }
+    const body = lines
+      .slice(i, end + 1)
+      .map((l) => stripMathDisplayBlockMarkers(l).trim())
+      .filter(Boolean);
+    const splitAligned = body.length > 1 && body.some((l) =>
+      count(l, /\\begin\{aligned\}/g) !== count(l, /\\end\{aligned\}/g));
+    const tabbed = !splitAligned && body.some(hasAlignmentTab);
+    if (!splitAligned && !tabbed) {
+      keep();
+      continue;
+    }
+    const math = splitAligned
+      ? body.join(' ')
+      : `\\begin{aligned} ${body.map((l) => l.replace(/\\\\\s*$/, '').trim()).join(' \\\\ ')} \\end{aligned}`;
+    outLines.push(`[수식제시]${math}`);
+    outAligns.push(lineAligns[i] || 'left');
+    i = end;
+  }
+  return { lines: outLines, lineAligns: outAligns };
+}
+
 function parseStemSegments(stem, stemLineAligns = [], opts = {}) {
   const onFigureMarker = typeof opts.onFigureMarker === 'function' ? opts.onFigureMarker : null;
   // VLM 이 보내는 [보기시작]/[보기끝] 을 기존 [박스시작]+<보기> 표기로 정규화.
@@ -2323,10 +2473,21 @@ function parseStemSegments(stem, stemLineAligns = [], opts = {}) {
       lineAligns.push(align);
     }
   }
+  {
+    const collapsed = collapseAlignedDisplayBlocks(lines, lineAligns);
+    lines.length = 0;
+    lineAligns.length = 0;
+    lines.push(...collapsed.lines);
+    lineAligns.push(...collapsed.lineAligns);
+  }
   const segments = [];
   let inBox = false;
   let boxLines = [];
   let boxLineAligns = [];
+  // 상자 안에 든 raw 표들. 상자 줄에는 자리 표시(BOX_TABLE_SLOT)만 두고 표 줄들은 여기에 모은다.
+  let boxTables = [];
+  let inBoxTable = false;
+  let boxTableLines = [];
   let inRawTable = false;
   let rawTableLines = [];
   let rawTableLineAligns = [];
@@ -2360,13 +2521,25 @@ function parseStemSegments(stem, stemLineAligns = [], opts = {}) {
     } else {
       const hasBogi = boxLines.some((l) => BOGI_RE.test(l));
       segments.push({
-        type: hasBogi ? 'bogi' : 'deco',
+        // 표가 든 상자는 항목 단위로 짜는 <보기> 경로가 아니라 줄 단위 상자로 찍는다.
+        type: hasBogi && boxTables.length === 0 ? 'bogi' : 'deco',
         lines: [...boxLines],
         lineAligns: [...boxLineAligns],
+        ...(boxTables.length > 0 ? { boxTables: boxTables.map((t) => [...t]) } : {}),
       });
     }
     boxLines = [];
     boxLineAligns = [];
+    boxTables = [];
+  }
+
+  function closeBoxTable() {
+    inBoxTable = false;
+    if (boxTableLines.length === 0) return;
+    boxTables.push([...boxTableLines]);
+    boxLines.push(boxTableSlot(boxTables.length));
+    boxLineAligns.push('left');
+    boxTableLines = [];
   }
 
   function flushRawTable() {
@@ -2427,11 +2600,43 @@ function parseStemSegments(stem, stemLineAligns = [], opts = {}) {
       continue;
     }
 
+    // 상자 안의 표: 원본 지면은 표를 상자 안에 둔다(예: 2019 수능 가형 14). 상자를 닫지 않고 표 줄들을
+    //   따로 모아 상자 안의 한 자리로 둔다. <보기> 상자는 항목 단위로 짜므로 예전처럼 상자부터 닫는다.
+    if (inBoxTable && BOX_END_RE.test(line) && !RAW_TABLE_END_RE.test(line)) {
+      // [표끝] 없이 상자가 끝난다: 표를 여기서 닫고 이 줄은 아래에서 상자 끝으로 처리한다.
+      closeBoxTable();
+    } else if (inBoxTable) {
+      if (RAW_TABLE_END_RE.test(line)) {
+        const cleaned = line.replace(RAW_TABLE_END_RE, '').trim();
+        if (cleaned) boxTableLines.push(cleaned);
+        closeBoxTable();
+      } else {
+        boxTableLines.push(line);
+      }
+      continue;
+    }
+    if (
+      !inRawTable
+      && inBox
+      && RAW_TABLE_START_RE.test(line)
+      && !BOX_END_RE.test(line)
+      && !boxLines.some((l) => BOGI_RE.test(l) || /^\[표행\]$/.test(l.trim()))
+    ) {
+      inBoxTable = true;
+      const cleaned = line.replace(RAW_TABLE_START_RE, '').trim();
+      if (cleaned) boxTableLines.push(cleaned);
+      if (RAW_TABLE_END_RE.test(cleaned)) {
+        boxTableLines[boxTableLines.length - 1] = cleaned.replace(RAW_TABLE_END_RE, '').trim();
+        closeBoxTable();
+      }
+      continue;
+    }
+
     // [표시작]/[표끝] 은 "VLM 이 이미 LaTeX tabular 를 써 둔" 구간. 그대로 통과시킨다.
     if (!inRawTable && RAW_TABLE_START_RE.test(line)) {
       flushText();
       if (inBox) {
-        // 박스 내부에서 표 시작은 정상 경로가 아님 → 박스부터 닫는다.
+        // <보기> 상자 등: 박스부터 닫는다.
         inBox = false;
         flushBox();
       }
@@ -2470,19 +2675,26 @@ function parseStemSegments(stem, stemLineAligns = [], opts = {}) {
 
       if (hasEnd) {
         const idx = boxLines.length - 1;
-        if (idx >= 0)
-          boxLines[idx] = boxLines[idx].replace(/\[박스끝\]/g, '').trim();
+        let after = '';
+        if (idx >= 0) {
+          const split = splitAfterBoxEnd(boxLines[idx]);
+          after = split.after;
+          boxLines[idx] = split.inside;
+          if (!boxLines[idx]) { boxLines.pop(); boxLineAligns.pop(); }
+        }
         inBox = false;
         flushBox();
+        if (after) { textLines.push(after); textLineAligns.push(lineAlign); }
       }
       continue;
     }
 
     if (hasEnd && inBox) {
-      const cleaned = line.replace(/\[박스끝\]/g, '').trim();
-      if (cleaned) { boxLines.push(cleaned); boxLineAligns.push(lineAlign); }
+      const split = splitAfterBoxEnd(line);
+      if (split.inside) { boxLines.push(split.inside); boxLineAligns.push(lineAlign); }
       inBox = false;
       flushBox();
+      if (split.after) { textLines.push(split.after); textLineAligns.push(lineAlign); }
       continue;
     }
 
@@ -2505,22 +2717,9 @@ function parseStemSegments(stem, stemLineAligns = [], opts = {}) {
   if (inDisplayMathBlock && displayMathLines.length > 0) {
     flushDisplayMathBlock();
   }
+  if (inBoxTable) closeBoxTable();
   if (inBox && boxLines.length > 0) {
-    const hasTable = boxLines.some((l) => /^\[표행\]$/.test(l.trim()));
-    if (hasTable) {
-      segments.push({
-        type: 'table',
-        lines: [...boxLines],
-        lineAligns: [...boxLineAligns],
-      });
-    } else {
-      const hasBogi = boxLines.some((l) => BOGI_RE.test(l));
-      segments.push({
-        type: hasBogi ? 'bogi' : 'deco',
-        lines: [...boxLines],
-        lineAligns: [...boxLineAligns],
-      });
-    }
+    flushBox();
   }
 
   // 꼬리 정리: text 세그먼트의 마지막 라인이 공백이거나 [문단]만 남아있으면 제거.
@@ -2650,6 +2849,8 @@ const BOX_TEX_OPTIONS = {
 };
 
 const BOX_TALL_LINE_PAD_TEX = '';
+// 박스 안에서 따로 한 줄을 차지하는 등호 맞춤 수식 제시줄의 들여쓰기(em).
+const BOX_ALIGNED_DISPLAY_INDENT_EM = 2;
 
 function boxTallLinePad(contentTex) {
   return '';
@@ -2909,15 +3110,28 @@ function renderDecoLine(text, equations, replaceFigureMarkers = null) {
   //       넘치지 않는 식은 손대지 않는다(표 오버플로우 처리와 동일 메커니즘).
   //     - 정규화(smartTexLine)는 그대로 거쳐 답칸/간격 처리 일관성을 유지한다.
   {
-    const leadMarkers = (withFigs.match(/^\s*((?:\[공백:[\d.]+\]\s*)*)/) || [])[1] || '';
+    // "[수식제시]\begin{aligned}…\end{aligned}" (등호를 맞춘 여러 줄 수식 제시줄,
+    //   collapseAlignedDisplayBlocks 가 만든 줄 포함)은 박스 안에서도 앞뒤 글과 이어 붙지 않고
+    //   따로 한 줄을 차지한다. 그 밖의 [수식제시] 줄은 종전대로 글에 이어진다.
+    const displayMarked = hasMathDisplayLineMarker(withFigs);
+    const unmarked = displayMarked ? stripMathDisplayLineMarker(withFigs) : withFigs;
+    const leadMarkers = (unmarked.match(/^\s*((?:\[공백:[\d.]+\]\s*)*)/) || [])[1] || '';
     const leadEm = (leadMarkers.match(/\[공백:([\d.]+)\]/g) || [])
       .reduce((sum, m) => sum + parseFloat(m.replace(/[^\d.]/g, '')), 0);
-    const core = withFigs
+    const core = unmarked
       .replace(/^\s*(?:\[공백:[\d.]+\]\s*)*/, '')
       .replace(/\s*(?:\[공백:[\d.]+\]\s*)*$/, '')
       .trim();
     const envMatch = core.match(/^\\begin\{(array|matrix|pmatrix|bmatrix|vmatrix|Vmatrix|smallmatrix|aligned|gathered|split)\}[\s\S]*\\end\{\1\}$/);
-    if (envMatch && !core.includes('[수식줄바꿈')) {
+    if (displayMarked && envMatch && envMatch[1] === 'aligned' && !core.includes('[수식줄바꿈')) {
+      const inner = smartTexLine(core, equations, BOX_TEX_OPTIONS);
+      if (inner.trim()) {
+        const ownLineEm = leadEm > 0 ? leadEm : BOX_ALIGNED_DISPLAY_INDENT_EM;
+        const target = `\\dimexpr\\linewidth-${(ownLineEm + 0.6).toFixed(2)}em\\relax`;
+        return `\\par\\noindent\\hspace*{${ownLineEm.toFixed(2)}em}\\adjustbox{max width=${target}}{${inner}}\\par`;
+      }
+    }
+    if (!displayMarked && envMatch && !core.includes('[수식줄바꿈')) {
       const inner = smartTexLine(core, equations, BOX_TEX_OPTIONS);
       if (inner.trim()) {
         const indent = leadEm > 0 ? `\\hspace*{${leadEm.toFixed(2)}em}` : '';
@@ -3099,11 +3313,21 @@ function renderDecoBoxLatex(lines, equations, replaceFigureMarkers = null, optio
   //    이후 새 라벨이 나오기 전까지의 라인은 같은 구역의 후속 줄로 보고,
   //    라벨 폭만큼 들여써서 본문 시작 위치에 맞춘다.
   const hasSectionLabels = flatLines.some((l) => decoSectionLabelTex(l));
+  // 상자 안의 표 자리(BOX_TABLE_SLOT)에는 미리 짜 둔 표(options.boxTables)를 넣는다.
+  const boxTables = Array.isArray(options?.boxTables) ? options.boxTables : [];
+  const boxTableTexForLine = (line) => {
+    const slot = String(line || '').match(BOX_TABLE_SLOT_RE);
+    if (!slot) return null;
+    const tableTex = boxTables[Number(slot[1]) - 1] || '';
+    return tableTex ? `\\par\\vspace{0.4em}${tableTex}\\vspace{0.4em}` : '';
+  };
+  const textLines = flatLines.filter((l) => !BOX_TABLE_SLOT_RE.test(String(l || '')));
+  const hasBoxTable = textLines.length !== flatLines.length;
   // 3) 가운데 정렬 여부: 한글/ㄱㄴㄷ/bullet/라벨 모두 없으면 가운데 정렬.
-  const centerMode = forcedAlign === 'left' ? false : boxContentIsCenteredOnly(flatLines);
+  const centerMode = forcedAlign === 'left' ? false : boxContentIsCenteredOnly(textLines);
 
   const contentParts = [];
-  const rawLatexEnvironment = hasSectionLabels ? '' : renderRawBoxLatexEnvironment(flatLines);
+  const rawLatexEnvironment = hasSectionLabels || hasBoxTable ? '' : renderRawBoxLatexEnvironment(flatLines);
   if (rawLatexEnvironment) {
     contentParts.push(rawLatexEnvironment);
   } else if (hasSectionLabels) {
@@ -3111,6 +3335,12 @@ function renderDecoBoxLatex(lines, equations, replaceFigureMarkers = null, optio
     for (const line of flatLines) {
       if (line === BOX_PARAGRAPH_BREAK) {
         contentParts.push('\\par\\vspace{0.45em}');
+        activeLabelTex = '';
+        continue;
+      }
+      const boxTableTex = boxTableTexForLine(line);
+      if (boxTableTex !== null) {
+        if (boxTableTex) contentParts.push(boxTableTex);
         activeLabelTex = '';
         continue;
       }
@@ -3140,6 +3370,11 @@ function renderDecoBoxLatex(lines, equations, replaceFigureMarkers = null, optio
     for (const line of flatLines) {
       if (line === BOX_PARAGRAPH_BREAK) {
         contentParts.push('\\par\\vspace{0.45em}');
+        continue;
+      }
+      const boxTableTex = boxTableTexForLine(line);
+      if (boxTableTex !== null) {
+        if (boxTableTex) contentParts.push(boxTableTex);
         continue;
       }
       const rendered = renderDecoLine(line, equations, replaceFigureMarkers);
@@ -3300,6 +3535,60 @@ function parseMulticolumnCell(cellLines) {
   };
 }
 
+/** 중괄호 인자 하나를 읽는다. { 가 아니면 null. 돌려주는 값: { body, end(닫는 중괄호 다음 자리) } */
+function readTableBraceArg(src, start) {
+  let i = start;
+  while (i < src.length && /\s/.test(src[i])) i += 1;
+  if (src[i] !== '{') return null;
+  let depth = 0;
+  for (let j = i; j < src.length; j += 1) {
+    if (src[j] === '\\') {
+      j += 1;
+      continue;
+    }
+    if (src[j] === '{') depth += 1;
+    else if (src[j] === '}') {
+      depth -= 1;
+      if (depth === 0) return { body: src.slice(i + 1, j), end: j + 1 };
+    }
+  }
+  return null;
+}
+
+/** 칸 전체가 `\이름{…}{…}…` 꼴이면 인자들을 돌려준다(인자 수가 맞고 뒤에 남는 글이 없을 때만). */
+function parseTableCommandCell(cellLines, name, argCount) {
+  if (!Array.isArray(cellLines) || cellLines.length !== 1) return null;
+  const raw = String(cellLines[0] || '').trim();
+  if (!raw.startsWith(`\\${name}`) || /[A-Za-z]/.test(raw[name.length + 1] || '')) return null;
+  const args = [];
+  let cursor = name.length + 1;
+  for (let k = 0; k < argCount; k += 1) {
+    const arg = readTableBraceArg(raw, cursor);
+    if (!arg) return null;
+    args.push(arg.body);
+    cursor = arg.end;
+  }
+  return raw.slice(cursor).trim() ? null : args;
+}
+
+/** 세로 병합 칸 `\multirow{행 수}{폭}{내용}`. 아래 행들의 같은 열은 빈 칸으로 적혀 있어야 한다. */
+function parseMultirowCell(cellLines) {
+  const args = parseTableCommandCell(cellLines, 'multirow', 3);
+  if (!args) return null;
+  const span = Number.parseInt(String(args[0]).trim(), 10);
+  if (!Number.isFinite(span) || span < 2) return null;
+  return { span, body: args[2] };
+}
+
+/** 대각선으로 나뉜 머리 칸 `\diagbox{왼쪽 아래 글}{오른쪽 위 글}`. */
+function parseDiagboxCell(cellLines) {
+  const args = parseTableCommandCell(cellLines, 'diagbox', 2);
+  return args ? { lower: args[0], upper: args[1] } : null;
+}
+
+// 대각선 칸이 든 행은 글이 위아래 두 줄로 놓이므로 보통 행보다 높게 잡는다.
+const TABLE_DIAG_ROW_HEIGHT_FACTOR = 1.6;
+
 function renderTableLatex(
   rows,
   equations,
@@ -3325,11 +3614,64 @@ function renderTableLatex(
     : Array.isArray(tableScale?.rows)
       ? tableScale.rows
       : [];
+  // 세로 병합 칸과 대각선 칸의 자리를 먼저 읽어 둔다(행 높이와 행 사이 가로선을 정할 때 쓴다).
+  //   covered[r][c] : 위 행의 세로 병합 칸이 내려와 덮은 자리
+  //   multirowAt    : "행:열" → { span, body } (span 은 표 끝을 넘지 않게 자른 값)
+  const covered = rows.map(() => new Array(maxCols).fill(false));
+  const multirowAt = new Map();
+  const diagRows = new Set();
+  rows.forEach((row, r) => {
+    let c = 0;
+    for (const cellLines of row) {
+      if (c >= maxCols) break;
+      const multicolumn = parseMulticolumnCell(cellLines);
+      if (multicolumn) {
+        c += Math.min(multicolumn.span, maxCols - c);
+        continue;
+      }
+      const multirow = parseMultirowCell(cellLines);
+      if (multirow) {
+        const span = Math.min(multirow.span, rows.length - r);
+        if (span >= 2) {
+          multirowAt.set(`${r}:${c}`, { span, body: multirow.body });
+          for (let k = 1; k < span; k += 1) covered[r + k][c] = true;
+        }
+      } else if (parseDiagboxCell(cellLines)) {
+        diagRows.add(r);
+      }
+      c += 1;
+    }
+  });
   const rowHeightEm = (rowIndex) => {
     const raw = Number(rowScales[rowIndex]);
-    const rowScale = Number.isFinite(raw) && raw > 0 ? clampTableScale(raw) : 1.0;
-    return (baseCellHeightEm * rowScale).toFixed(2);
+    const hasRowScale = Number.isFinite(raw) && raw > 0;
+    const rowScale = hasRowScale ? clampTableScale(raw) : 1.0;
+    // 대각선 칸이 든 행은 높게 잡는다. 사람이 그 행의 높이를 정해 두었으면 그 값을 따른다.
+    const diagFactor = diagRows.has(rowIndex) && !hasRowScale ? TABLE_DIAG_ROW_HEIGHT_FACTOR : 1.0;
+    return (baseCellHeightEm * rowScale * diagFactor).toFixed(2);
   };
+  // 행 r 과 r+1 사이의 가로선. 세로 병합 칸이 지나가는 열에는 긋지 않는다.
+  const ruleBelowRow = (r) => {
+    const below = covered[r + 1];
+    if (!below || !below.some(Boolean)) return '\\hline';
+    const runs = [];
+    let from = -1;
+    for (let c = 0; c <= maxCols; c += 1) {
+      const open = c < maxCols && !below[c];
+      if (open && from < 0) from = c;
+      if (!open && from >= 0) {
+        runs.push(`\\cline{${from + 1}-${c}}`);
+        from = -1;
+      }
+    }
+    return runs.join('');
+  };
+  // 칸의 글(줄들)을 찍을 수 있는 LaTeX 줄들로 바꾼다.
+  //   raw tabular 의 \text{...} 안에 [문단] 을 넣는 경우가 많으므로 먼저 text wrapper 를 벗긴 뒤 마커 기준으로 나눈다.
+  const renderCellLines = (lines) => lines
+    .flatMap((l) => unwrapLatexTextCommandsForTextMode(l).split(PARAGRAPH_MARKER_RE))
+    .map((l) => renderCellContent(l, equations))
+    .filter((s) => s && s.trim());
 
   // 컬럼별 상대 가중치. meta.table_scales[...].columnScales 가 있으면 그것을,
   // 없거나 길이가 다르면 전부 1.0 (균등) 으로.
@@ -3400,16 +3742,45 @@ function renderTableLatex(
       // struct 경로에서는 평문 셀이므로 smartTexLine 을 적용. 두 경로 모두 안전하도록
       // "이미 수식 구분자로 감싸진 셀은 smartTexLine 을 건너뛴다" 로직이 필요하지만
       // smartTexLine 은 이중 감싸기를 방어하므로 그대로 통과시켜도 동작함.
+      const diag = parseDiagboxCell(cellLines);
+      if (diag) {
+        // 대각선으로 나뉜 머리 칸: 오른쪽 위와 왼쪽 아래에 글을 두고, 칸의 왼쪽 위 모서리에서 오른쪽 아래
+        //   모서리까지 선을 긋는다. 칸은 글 칸(\parbox) 좌우에 \tabcolsep 만큼 더 넓다.
+        const upperTex = renderCellLines([diag.upper]).join(' ');
+        const lowerTex = renderCellLines([diag.lower]).join(' ');
+        const width = colWidthVar(columnIndex);
+        if (!autoWrap) {
+          // 두 글이 서로 겹치지 않게 열 폭을 글보다 넉넉히 잡는다.
+          cellMeasureByCol[columnIndex].push(`${upperTex}\\hspace{2em}`, `${lowerTex}\\hspace{2em}`);
+        }
+        const diagLine = '\\ifcsname tikzpicture\\endcsname'
+          + `\\dimen0=\\dimexpr${width}+\\tabcolsep\\relax\\dimen2=${cellHeightEm}em\\relax`
+          + '\\tikz[overlay]\\draw[line width=0.4pt] (-\\the\\tabcolsep,0pt) -- (\\the\\dimen0,-\\the\\dimen2);\\fi';
+        cells.push(
+          `\\parbox[c][${cellHeightEm}em][s]{${width}}{\\noindent\\smash{\\rlap{${diagLine}}}\\par\\nointerlineskip`
+          + `\\vspace*{0.25em}\\raggedleft ${upperTex}\\par\\vfill\\raggedright ${lowerTex}\\par\\vspace*{0.25em}}`,
+        );
+        sourceCellIndex += 1;
+        columnIndex += 1;
+        continue;
+      }
+      // 세로 병합 칸은 내용만 꺼내 찍는다. 출력은 \par 로 이어 셀 안 줄바꿈을 만들고, 폭 측정은 아래에서 줄별로 한다.
+      const multirow = parseMultirowCell(cellLines);
       const renderedCellLines = cellLines.length > 0
-        ? cellLines
-          // 표 셀 내부 강제 줄바꿈: raw tabular 의 \text{...} 안에 [문단] 을 넣는
-          // 경우가 많으므로 먼저 text wrapper 를 벗긴 뒤 마커 기준으로 나눈다.
-          // 출력은 \par 로 이어 셀 안 줄바꿈을 만들고, 폭 측정은 아래에서 줄별로 한다.
-          .flatMap((l) => unwrapLatexTextCommandsForTextMode(l).split(PARAGRAPH_MARKER_RE))
-          .map((l) => renderCellContent(l, equations))
-          .filter((s) => s && s.trim())
+        ? renderCellLines(multirow ? [multirow.body] : cellLines)
         : [];
-      const content = renderedCellLines.join('\\par ');
+      const spanDown = multirow ? multirowAt.get(`${rowIndex}:${columnIndex}`) : null;
+      let content = renderedCellLines.join('\\par ');
+      if (spanDown && content) {
+        // 아래 행들까지 합친 높이의 가운데에 놓는다: 이 행의 가운데에서 (아래 행들 높이의 절반)만큼 내린다.
+        //   크기 0 인 상자로 내려 찍으므로 이 행의 높이는 달라지지 않는다.
+        let lowerEm = 0;
+        for (let k = 1; k < spanDown.span; k += 1) lowerEm += Number(rowHeightEm(rowIndex + k));
+        const dropEm = (lowerEm / 2).toFixed(2);
+        const rulePt = ((spanDown.span - 1) * 0.2).toFixed(1);
+        content = `\\setbox0\\hbox{\\parbox[b]{${colWidthVar(columnIndex)}}{\\centering ${content}\\par}}`
+          + `\\raisebox{\\dimexpr-${dropEm}em-${rulePt}pt-0.5\\ht0+0.5\\dp0\\relax}[0pt][0pt]{\\copy0}`;
+      }
       // 세로·가로 정가운데 배치 (LaTeX 관용구):
       //   - \parbox[c][h][c]{w} : 외부 baseline c, 고정 높이 h, 내부 수직 정렬 c
       //   - \vspace*{\fill} 위아래 : 남는 세로 공간을 균등 분배 → 한 줄/여러 줄 모두 정확히 중앙
@@ -3479,7 +3850,8 @@ function renderTableLatex(
     `{\\fontsize{${tableFontSizePt.toFixed(2)}pt}{${tableFontLeadPt}pt}\\selectfont\\setlength{\\tabcolsep}{${tabColSepPt.toFixed(2)}pt}\\renewcommand{\\arraystretch}{1}%`,
     '\\begin{tabular}{' + colSpec + '}',
     '\\hline',
-    latexRows.join('\n\\hline\n'),
+    ...latexRows.flatMap((rowTex, r) => (r < latexRows.length - 1 ? [rowTex, ruleBelowRow(r)] : [rowTex]))
+      .filter((line) => line !== ''),
     '\\hline',
     '\\end{tabular}}%',
     '}',
@@ -3507,6 +3879,20 @@ function renderTableLatex(
       ? `\\noindent ${alignedTable}`
       : `\\par\\noindent ${alignedTable}\\par`,
   ].join('\n');
+}
+
+/** 글의 끝에서 아직 닫히지 않은 중괄호의 수(\{ \} 는 세지 않는다). */
+function openBraceDepth(text) {
+  let depth = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    if (text[i] === '\\') {
+      i += 1;
+      continue;
+    }
+    if (text[i] === '{') depth += 1;
+    else if (text[i] === '}') depth = Math.max(0, depth - 1);
+  }
+  return depth;
 }
 
 function unwrapLatexTextCommandsForTextMode(input) {
@@ -3550,6 +3936,21 @@ function unwrapLatexTextCommandsForTextMode(input) {
     // Example: \text{A 지점}\sim\text{B 지점} -> A 지점\sim B 지점.
     // Without the inserted space, smartTexLine sees "\simB" as one undefined
     // control sequence during raw tabular rendering.
+    // 영문자만 든 \text{P}, \text{AB} 는 "곧은 글자로 찍는 이름" 이다. 벗기면 수식 글자(기울임)로 찍혀
+    // 본문의 \text{P}(…) 와 표 칸의 P(…) 가 다르게 나온다. 그대로 두면 smartTexLine 이 본문과 같이 찍는다.
+    if (/^[A-Za-z]+$/.test(content)) {
+      out += `\\text{${content}}`;
+      cursor = i;
+      continue;
+    }
+    // 수식의 인자 안(윗첨자·아래첨자·분수 등, 예: 50^{\text{이상}})에 든 \text{…} 는 벗기지 않는다.
+    //   벗기면 50^{이상} 이 되어, 한글을 수식 밖으로 빼는 단계가 중괄호 한가운데에서 수식을 끊는다
+    //   ("Missing } inserted").
+    if (openBraceDepth(out) > 0) {
+      out += `\\text{${content}}`;
+      cursor = i;
+      continue;
+    }
     if (/\\[A-Za-z]+$/.test(out) && content) out += ' ';
     out += content;
     cursor = i;
@@ -3708,6 +4109,120 @@ function resolveTableScale(question, type, index) {
     widthMax: false,
     autoWrap: false,
   };
+}
+
+// ── 표를 본문 끝부분 옆(오른쪽)에 두는 배치 (2026-11-24 사장님 결정) ──────────────────────────
+// 수능·평가원 원본은 "…오른쪽 표준정규분포표를 이용하여 구한 것은?" 문항의 표를 본문 끝 몇 줄의 오른쪽에 둔다.
+// 표 위치를 따로 저장하지 않은 문항에서 본문이 그렇게 적고 있으면: 본문 앞부분은 온 폭으로, 표 높이만큼의
+// 끝부분은 왼쪽 칸에 넣고 표를 오른쪽 칸에 둔다. 저장된 위치(meta.table_layout)가 있으면 그 값이 먼저다.
+// 교재 문항(source_type_code = market_book)은 교재 지면처럼 표를 본문 첫 줄 옆에서 시작한다.
+// 기본으로 켜져 있다. 문제가 생기면 환경 변수 PB_XELATEX_AUTO_TABLE_SIDE=0 으로 끈다.
+function autoTableSideEnabled() {
+  return String(process.env.PB_XELATEX_AUTO_TABLE_SIDE || '').trim() !== '0';
+}
+
+/** 본문에 raw 표가 하나뿐이고 "오른쪽 …표" 라고 적혀 있는가. "오른쪽 좌표" 는 표가 아니다. */
+function stemSaysTableOnRight(stem) {
+  const text = String(stem || '');
+  if ((text.match(/\[표시작\]/g) || []).length !== 1) return false;
+  if (/\[표행\]|\[표\]/.test(text)) return false;
+  return /오른쪽\s*[가-힣]{0,10}(?<!좌)표(?=[를을은는의에와과로\s,.])/.test(text);
+}
+
+const SIDE_TABLE_ROW_EM = 2.2;
+const SIDE_TABLE_LINE_EM = 1.8;
+const SIDE_TABLE_MARKER_ONLY_RE = /^\s*(?:\[문단\]\s*)*$/;
+// 왼쪽 칸은 좁아서 양쪽 맞춤을 하면 수식 앞 줄의 낱말 사이가 크게 벌어진다. 오른쪽 끝을 맞추지 않는다.
+//   늘어날 수 있는 양을 3em 처럼 정해 두면 모자란 폭의 일부가 낱말·수식 사이로 나뉘어 들어가
+//   "V(X)  =  4" 처럼 벌어진다. 남는 폭은 모두 줄 끝으로 보낸다.
+const SIDE_TABLE_LEFT_SETUP = '\\rightskip=0pt plus 1fil\\relax ';
+
+/**
+ * 표 옆에 둘 본문 끝부분을 고른다. 줄 단위로, 그리고 줄 안에서는 문장 단위로 뒤에서부터 늘려 가며
+ * 어림한 줄 수가 표 높이에 가장 가까운 자리에서 자른다. 본문이 표보다 짧으면 전체가 옆으로 간다(head 가 빈다).
+ *   lines        본문 조각의 줄들
+ *   rowCount     표의 행 수
+ *   estimate     (줄들) → 왼쪽 칸 폭에서의 어림 줄 수
+ *   fits         (본문 한 줄) → 그 줄의 수식이 왼쪽 칸 폭에 들어가는가. 안 주면 모두 들어간다고 본다.
+ * 돌려주는 값: { head: 줄들, tail: 줄들, headFrom: 각 head 줄의 원래 줄 번호, tailFrom: 각 tail 줄의 원래 줄 번호 }
+ * 고를 자리가 없으면 null.
+ */
+export function planSideTableCut(lines, rowCount, estimate, fits = () => true, prefer = 'end') {
+  const src = (Array.isArray(lines) ? lines : []).map((l) => String(l ?? ''));
+  let end = src.length;
+  while (end > 0 && SIDE_TABLE_MARKER_ONLY_RE.test(src[end - 1])) end -= 1;
+  if (end === 0 || rowCount <= 0) return null;
+  const index = (from, to) => Array.from({ length: to - from }, (_, k) => from + k);
+  // 끝부분이 짧은 것부터 차례로: 줄 k 안의 문장 경계에서 자르기 → 줄 k 앞에서 자르기.
+  const options = [];
+  for (let k = end - 1; k >= 0; k -= 1) {
+    const line = src[k];
+    if (!/^\s*\[수식제시\]/.test(line) && !SIDE_TABLE_MARKER_ONLY_RE.test(line)) {
+      const sentences = line.split(/(?<=[가-힣]\.\)?)\s+(?=\S)/);
+      for (let s = sentences.length - 1; s >= 1; s -= 1) {
+        options.push({
+          head: [...src.slice(0, k), sentences.slice(0, s).join(' ')],
+          tail: [sentences.slice(s).join(' '), ...src.slice(k + 1, end)],
+          headFrom: index(0, k + 1),
+          tailFrom: index(k, end),
+        });
+      }
+    }
+    // k = 0 이면 본문 전체가 표 옆으로 간다(교재의 "오른쪽 표는 …" 처럼 글이 표보다 짧을 때).
+    options.push({
+      head: src.slice(0, k), tail: src.slice(k, end), headFrom: index(0, k), tailFrom: index(k, end),
+    });
+  }
+  const target = (rowCount * SIDE_TABLE_ROW_EM) / SIDE_TABLE_LINE_EM;
+  const tall = (tail) => tail.filter((l) => /^\s*\[수식제시\]/.test(l) && /\\d?frac/.test(l)).length * 0.7;
+  let best = null;
+  // prefer = 'top': 표를 본문 첫 줄 옆에서 시작한다(교재 지면 방식). 본문 전체가 왼쪽 칸에 들어갈 때만.
+  const whole = options[options.length - 1];
+  if (prefer === 'top' && whole && whole.tail.every((l) => fits(l))) return whole;
+  for (const option of options) {
+    if (option.tail.every((l) => SIDE_TABLE_MARKER_ONLY_RE.test(l))) continue;
+    // 왼쪽 칸보다 넓은 수식은 줄이 바뀌지 않아 표와 겹친다. 그런 줄이 끝부분에 들어가는 자리는 고르지 않는다.
+    if (option.tail.some((l) => !fits(l))) continue;
+    const diff = Math.abs(estimate(option.tail) + tall(option.tail) - target);
+    if (!best || diff < best.diff - 1e-9) best = { ...option, diff };
+  }
+  if (!best) return null;
+  const { diff: _diff, ...plan } = best;
+  return plan;
+}
+
+/** 옆에 두는 표의 폭(단 폭 대비). 열이 많아 옆에 둘 수 없으면 0. */
+export function sideTableWidthFraction(rows, tableScale = null) {
+  const cols = Math.max(0, ...(Array.isArray(rows) ? rows : []).map((r) => (Array.isArray(r) ? r.length : 0)));
+  if (cols === 0 || cols > 5) return 0;
+  const base = cols <= 2 ? 0.36 : cols === 3 ? 0.45 : 0.55;
+  return Math.max(0.24, Math.min(0.58, base * clampTableScale(tableScale?.widthScale)));
+}
+
+/**
+ * 본문 한 줄(제시 수식 줄 포함)의 수식이 왼쪽 칸(단 폭 × leftFrac)에 들어가는지 글자 수로 어림한다.
+ * 글 줄은 한글과 쉼표 뒤에서 바뀐다고 보고, 그 사이의 조각(수식 덩어리)마다 길이를 본다. 제시 수식 줄은
+ * 쉼표 뒤에서만, cases·행렬 같은 묶음(\begin{…})이 든 줄은 어디서도 바뀌지 않는다고 본다(한글은 두 글자 폭).
+ * 2단 시험지의 좁은 단에서도 겹치지 않게 넉넉히 잡는다(2단 A4 와 카드에서 31글자 수식이 넘친 것을 보고 정한 값).
+ */
+export function sideLineFits(line, leftFrac) {
+  const charsPerLine = Math.max(10, Math.round(34 * Math.max(0.25, Math.min(0.85, Number(leftFrac) || 0))));
+  const text = String(line || '');
+  const body = text.replace(/\[[가-힣]+\d*\]/g, ' ');
+  const pieces = /\\begin\{/.test(text)
+    ? [body]
+    : /^\s*\[수식제시\]/.test(text) ? body.split(/,\s+/) : body.split(/[가-힣]+|,\s+/);
+  const width = (piece) => Array.from(piece.replace(/\\[a-zA-Z]+/g, 'x').replace(/[{}\s]/g, ''))
+    .reduce((sum, ch) => sum + (/[가-힣]/.test(ch) ? 2 : 1), 0);
+  return pieces.every((piece) => width(piece) <= charsPerLine * 1.2);
+}
+
+function hasStoredTableLayout(question, type, index) {
+  const items = question?.meta?.table_layout?.items;
+  if (!Array.isArray(items)) return false;
+  const key = `${type}:${index}`;
+  return items.some((item) => item && typeof item === 'object'
+    && String(item.tableKey ?? item.key ?? item.assetKey ?? '').trim() === key);
 }
 
 function resolveTableLayout(question, type, index) {
@@ -6264,6 +6779,25 @@ function renderOneQuestion(question, {
     return null;
   }
 
+  // 선지 아래 그림(figure_layout position 'below-choices'): 원본이 "본문 → 선지 → 그림" 순서인 문항.
+  //   본문 흐름(그림 자리, 본문 끝 보충)에서는 찍지 않고 선지를 찍은 뒤에 찍는다.
+  //   글자 선지를 찍지 않는 문항(주관식, 그림 선지, 빈칸 선지)과 가로 묶음에 든 그림은 본문 아래 그림으로 둔다.
+  const belowChoiceFigIdxs = new Set();
+  const deferredBelowChoiceFigs = [];
+  if (choices.length > 0 && !isImageChoice && !isMixedImageChoice && !isBlankChoiceQuestion(question)) {
+    const groupedFigIdxs = new Set(figIdxConsumedByGroup);
+    for (const g of groupByStartFigIdx.values()) groupedFigIdxs.add(g.members[0]);
+    for (let i = 0; i < figurePaths.length; i += 1) {
+      if (!figurePaths[i] || groupedFigIdxs.has(i)) continue;
+      if (String((layoutForIndex(i) || {}).position || '').toLowerCase() === 'below-choices') {
+        belowChoiceFigIdxs.add(i);
+      }
+    }
+  }
+  function deferBelowChoiceFigure(i) {
+    if (!deferredBelowChoiceFigs.includes(i)) deferredBelowChoiceFigs.push(i);
+  }
+
   function figureIncludeExpr(i) {
     const p = figurePaths[i];
     if (!p) return null;
@@ -6309,10 +6843,32 @@ function renderOneQuestion(question, {
     return Math.max(2, Math.min(16, Math.ceil(heightEm / 1.70)));
   }
 
+  // 배치 상자의 세로 미세 이동(본문 옆 배치용): 그림이 차지하는 자리는 그대로 두고 그림만 offsetYEm 만큼 내린다.
+  //   자리가 그대로라 좁혀 찍는 줄 수와 뒤따르는 본문 위치는 바뀌지 않는다.
+  function verticallyShiftedInclude(include, layout) {
+    const offsetY = Number.isFinite(layout?.offsetYEm) ? Number(layout.offsetYEm) : 0;
+    if (Math.abs(offsetY) <= 1e-3) return include;
+    return `\\raisebox{${(-offsetY).toFixed(2)}em}[\\height][\\depth]{${include}}`;
+  }
+
+  // 자유 배치(position: 'free'): 그림 자리의 본문 왼쪽 끝에서 (offsetXEm, offsetYEm) 에 그림의 왼쪽 위를 놓는다.
+  //   본문 흐름에는 reserveEm 만큼만 자리를 차지한다(0 이면 차지하지 않는다).
+  function renderFreeFigureLatex(i, expr, layout) {
+    const x = Number.isFinite(layout.offsetXEm) ? Number(layout.offsetXEm) : 0;
+    const y = Number.isFinite(layout.offsetYEm) ? Number(layout.offsetYEm) : 0;
+    const reserve = Number.isFinite(layout.reserveEm) ? Math.max(0, Number(layout.reserveEm)) : 0;
+    const box = `\\YggFreeBox{${x.toFixed(2)}em}{${y.toFixed(2)}em}{${expr.include}}`;
+    const space = reserve > 1e-3 ? `\n\\vspace*{${reserve.toFixed(2)}em}` : '';
+    return `\n${box}${space}\n`;
+  }
+
   function renderFigureLatex(i) {
     const expr = figureIncludeExpr(i);
     if (!expr) return '';
     const layout = layoutForIndex(i) || {};
+    if (String(layout.position || '').toLowerCase() === 'free') {
+      return renderFreeFigureLatex(i, expr, layout);
+    }
     const anchor = String(layout.anchor || 'center').toLowerCase();
     const offsetX = safeFigureOffsetX(layout);
     const offsetY = Number.isFinite(layout.offsetYEm) ? Number(layout.offsetYEm) : 0;
@@ -6399,6 +6955,10 @@ function renderOneQuestion(question, {
       const alreadyEmitted = emittedFigIdxs.has(i);
       emittedFigIdxs.add(i);
       if (figIdxConsumedByGroup.has(i)) return '';
+      if (belowChoiceFigIdxs.has(i)) {
+        deferBelowChoiceFigure(i);
+        return '';
+      }
       if (isInlineTextFigureIndex(i)) return inlineFigureSentinel(i);
       const group = groupByStartFigIdx.get(i);
       if (group && !alreadyEmitted) return renderFigureGroupLatex(group);
@@ -6567,7 +7127,7 @@ function renderOneQuestion(question, {
       ? `\\dimexpr\\linewidth-\\wd0-${figWidth}-1.20em\\relax`
       : `\\dimexpr\\linewidth-${figWidth}-1.20em\\relax`;
     const textBox = `\\begin{minipage}[t]{${textWidth}}\\vspace{0pt}\\noindent ${text}\\end{minipage}`;
-    const figBox = `\\begin{minipage}[t]{${figWidth}}\\vspace{0pt}\\noindent ${expr.include}\\end{minipage}`;
+    const figBox = `\\begin{minipage}[t]{${figWidth}}\\vspace{0pt}\\noindent ${verticallyShiftedInclude(expr.include, layoutForIndex(i))}\\end{minipage}`;
     const row = position === 'inline-left'
       ? `${figBox}\\hfill ${textBox}`
       : `${textBox}\\hfill ${figBox}`;
@@ -6592,14 +7152,21 @@ function renderOneQuestion(question, {
     // 본문과 그림 사이 여백(columnsep). 사용자 요청: 오른쪽 어울림의 좌/우(본문↔그림)
     //   여백을 "0.5줄"(0.5\baselineskip)로 통일. 0 이면 본문 줄 끝 글자가 그림에 딱
     //   붙으므로 항상 확보한다. (오른쪽 float 은 그림 왼쪽 여백이 됨)
-    const figureWrapGapTex = '0.5\\baselineskip';
+    const figureWrapGapTex = Number.isFinite(layout.gapEm)
+      ? `${Math.max(0, Number(layout.gapEm)).toFixed(2)}em`
+      : '0.5\\baselineskip';
     // offsetX moves inline figures toward the text column. Reserve the moved
     // visual footprint, then place the image against the inner edge.
     const objectAlign = position === 'inline-right' ? 'l' : 'r';
-    const object = `\\makebox[\\linewidth][${objectAlign}]{${expr.include}}`;
+    const object = `\\makebox[\\linewidth][${objectAlign}]{${verticallyShiftedInclude(expr.include, layout)}}`;
     // 본문 줄 수는 TeX 에서 직접 측정한다(JS 추정은 짧은 본문에서 과대평가 → 그림이 선지와
     // 겹치는 원인이었음). \YggMeasuredWrapAuto 가 본문/그림 하단 중 더 아래를 기준으로 정렬.
-    return `\\YggMeasuredWrapAuto{${side}}{${occupiedWidthExpr}}{${figureWrapGapTex}}{${object}}{${text}}\n`;
+    const wrap = `\\YggMeasuredWrapAuto{${side}}{${occupiedWidthExpr}}{${figureWrapGapTex}}{${object}}{${text}}`;
+    const forcedLines = Number.isInteger(layout.wrapLines) ? Math.max(2, Math.min(16, layout.wrapLines)) : 0;
+    if (forcedLines > 0) {
+      return `\\YggWrapForceLines=${forcedLines}\\relax\n${wrap}\n\\YggWrapForceLines=0\\relax\n`;
+    }
+    return `${wrap}\n`;
   }
 
   function renderLegacyInlineTableWithTextLatex(rows, scale, layout, textSeg, position) {
@@ -6834,6 +7401,10 @@ function renderOneQuestion(question, {
 
       if (suppressedInlineBoxFigIdxs.has(i)) return '';
       if (figIdxConsumedByGroup.has(i)) return '';
+      if (belowChoiceFigIdxs.has(i)) {
+        deferBelowChoiceFigure(i);
+        return '';
+      }
       const group = groupByStartFigIdx.get(i);
       if (group && !alreadyEmitted) return renderFigureGroupLatex(group);
       return renderFigureLatex(i);
@@ -7149,6 +7720,10 @@ function renderOneQuestion(question, {
   const effectiveQNumDisplay = (daeryunEssayIdx > 0 || oseongEssayIdx > 0)
     ? String(daeryunEssayIdx || oseongEssayIdx)
     : qNumDisplay;
+  // 표 옆 배치(sideTable)가 본문 첫 조각부터 시작할 때 쓴다: 번호가 본문과 같은 줄에서 문단을 열어 두었는가,
+  //   열었다면 그 번호의 폭을 재는 TeX.
+  let stemParagraphOpen = false;
+  let stemLeadMeasureTex = '';
   if ((gyeongsinEssayIdx > 0 || dongdoEssayIdx > 0 || soseonEssayIdx > 0 || jeonghwaSubIdx > 0 || jeonghwaEssayIdx > 0 || hwanggeumEssayIdx > 0) && emitQuestionNumber) {
     const eIdx = gyeongsinEssayIdx || dongdoEssayIdx || soseonEssayIdx || jeonghwaSubIdx || jeonghwaEssayIdx || hwanggeumEssayIdx;
     const strut = hasLeadBlock ? '' : firstLineStrut;
@@ -7163,6 +7738,8 @@ function renderOneQuestion(question, {
     parts.push(
       `${pairAnchorNumberOffsetTex}\\noindent\\YggVtwoBaselineGuide{}\\hspace{-1em}${pairAnchorNumberTex}${strut}${essayNumTex}\\enspace`,
     );
+    stemParagraphOpen = true;
+    stemLeadMeasureTex = `${essayNumTex}\\enspace`;
   } else if (neunginSeodapIdx > 0 && emitQuestionNumber) {
     const strut = hasLeadBlock ? '' : firstLineStrut;
     const kindLabel = question?.__neunginSeodapKind === 'essay' ? '서·논술형' : '단답형';
@@ -7186,8 +7763,11 @@ function renderOneQuestion(question, {
     parts.push(
       `${pairAnchorNumberOffsetTex}\\noindent\\YggVtwoBaselineGuide{}\\hspace{-1em}${pairAnchorNumberTex}${strut}${inlineNumberTex}\\enspace`,
     );
+    stemParagraphOpen = true;
+    stemLeadMeasureTex = `${inlineNumberTex}\\enspace`;
   } else if (!hasLeadBlock && firstLineStrut) {
     parts.push(`${pairAnchorNumberOffsetTex}\\noindent\\YggVtwoBaselineGuide{}${pairAnchorNumberTex}${firstLineStrut}`);
+    stemParagraphOpen = true;
   }
 
   // 점수 표기는 더 이상 문항번호 뒤에 두지 않고 "stem 의 마지막 라인 끝" 에 붙인다.
@@ -7309,14 +7889,25 @@ function renderOneQuestion(question, {
       const resolved = itemIdToLocalIdx.get(id);
       if (Number.isInteger(resolved)) {
         if (figIdxConsumedByGroup.has(resolved)) return false;
+        if (belowChoiceFigIdxs.has(resolved)) return false;
         return resolved < figurePaths.length;
       }
       // itemId 해결 실패 → positional 로 폴백. 아래 로직으로 합류.
     }
     const thisFigIdx = figMarkerCountUpTo(sIdx);
     if (figIdxConsumedByGroup.has(thisFigIdx)) return false;
+    // 선지 아래로 미룬 그림: 이 자리에서는 찍지 않으므로 앞뒤 간격도 넣지 않는다.
+    if (belowChoiceFigIdxs.has(thisFigIdx)) return false;
     if (thisFigIdx >= figurePaths.length) return false;
     return true;
+  };
+  // 이 figure seg 가 선지 아래로 미룬 그림의 자리인가(자리만 있고 여기서는 아무것도 찍지 않는다).
+  const isBelowChoiceFigureSeg = (sIdx) => {
+    const s = segments[sIdx];
+    if (!s || s.type !== 'figure' || belowChoiceFigIdxs.size === 0) return false;
+    const tokenMatch = (s.lines || []).join('\n').match(/\[\[PB_FIG_([^\]]+)\]\]/);
+    const resolved = tokenMatch ? itemIdToLocalIdx.get(String(tokenMatch[1] || '').trim()) : undefined;
+    return belowChoiceFigIdxs.has(Number.isInteger(resolved) ? resolved : figMarkerCountUpTo(sIdx));
   };
 
   // 소문항 여러 개 뒤에 어울림 그림이 오면(예: 2) 다음 3) 오른쪽 좌표평면) 마지막 소문항만 떼어
@@ -7361,11 +7952,58 @@ function renderOneQuestion(question, {
     );
   }
 
+  // 본문이 "오른쪽 …표" 라고 적는 문항: 본문 끝부분을 왼쪽 칸에, 표를 오른쪽 칸에 둔다(위 planSideTableCut).
+  //   앞부분과 끝부분을 두 글 조각으로 나누고, 끝부분은 평소 경로로 찍되 왼쪽 칸(minipage)으로 감싼다.
+  //   그래서 배점 표시·수식 제시 줄 같은 본문 규칙이 그대로 적용된다.
+  let sideTable = null;
+  if (autoTableSideEnabled() && stemSaysTableOnRight(stem) && !hasStoredTableLayout(question, 'raw', 1)) {
+    const tableIdx = segments.findIndex((s) => s?.type === 'raw_tabular');
+    const textSeg = segments[tableIdx - 1];
+    if (
+      tableIdx >= 1
+      && tableIdx === segments.length - 1
+      && textSeg?.type === 'text'
+      && !textSeg.lines.some((l) => SUBQ_MARKER_LINE_RE.test(String(l)))
+    ) {
+      const rows = parseRawTabularToRows(autoWrapTabularCells(segments[tableIdx].lines.join('\n')));
+      const scale = resolveTableScale(question, 'raw', 1);
+      // 원본의 2열 표는 단 폭의 1/3 남짓이다. 아래 배치(0.5)보다 좁게 잡아 왼쪽 글 칸을 넓힌다.
+      //   6열 이상인 넓은 표는 옆에 둘 자리가 없어 평소처럼 아래에 둔다.
+      const tableFrac = sideTableWidthFraction(rows, scale);
+      const leftFrac = 1 - tableFrac - 0.03;
+      const cut = rows.length > 0 && tableFrac > 0
+        ? planSideTableCut(
+          textSeg.lines,
+          rows.length,
+          (lines) => estimateTextWrapLines({ lines }, leftFrac),
+          (line) => sideLineFits(line, leftFrac),
+          // 교재 문항은 교재 지면처럼 표를 본문 첫 줄 옆에서 시작하고, 그 밖(수능·평가원·교육청 등)은
+          //   시험지처럼 본문 끝부분 옆에 둔다(사장님 2026-11-24).
+          String(question?.source_type_code || '').trim() === 'market_book' ? 'top' : 'end',
+        )
+        : null;
+      if (cut) {
+        const aligns = Array.isArray(textSeg.lineAligns) ? textSeg.lineAligns : [];
+        const at = (k) => aligns[Math.min(k, aligns.length - 1)] || 'left';
+        const tailSeg = { ...textSeg, lines: cut.tail, lineAligns: cut.tailFrom.map(at) };
+        if (cut.head.length > 0) {
+          segments.splice(tableIdx - 1, 1, { ...textSeg, lines: cut.head, lineAligns: cut.headFrom.map(at) }, tailSeg);
+          sideTable = { textIdx: tableIdx, tableIdx: tableIdx + 1, rows, scale, tableFrac, leftFrac };
+        } else {
+          segments.splice(tableIdx - 1, 1, tailSeg);
+          sideTable = { textIdx: tableIdx - 1, tableIdx, rows, scale, tableFrac, leftFrac };
+        }
+      }
+    }
+  }
+
   let emittedStemTextLineAny = false;
   for (let sIdx = 0; sIdx < segments.length; sIdx++) {
     const seg = segments[sIdx];
     const prev = segments[sIdx - 1];
+    const isSideTableSeg = Boolean(sideTable) && sIdx === sideTable.tableIdx;
     const needsGap = prev
+      && !isSideTableSeg
       && !isSelfGappedType(prev.type)
       && !isSelfGappedType(seg.type)
       && (prev.type !== 'text' || seg.type !== 'text');
@@ -7392,6 +8030,47 @@ function renderOneQuestion(question, {
       }
       parts.push(`% DBG  → chosen=${chosen.replace(/\\/g, '\\\\')}`);
       parts.push(chosen);
+    }
+
+    if (sideTable && sIdx === sideTable.textIdx) {
+      // 왼쪽 칸을 연다. [t] 라 칸의 첫 줄이 앞부분 마지막 줄 바로 아래 줄처럼 이어진다.
+      //   문항 번호가 보이는 지면은 본문이 \leftskip 만큼 들어가 있어, 두 칸의 폭을 그만큼 뺀 폭에서 나눈다.
+      const leftWidth = `${sideTable.leftFrac.toFixed(2)}\\dimexpr\\linewidth-\\leftskip\\relax`;
+      if (sIdx === 0 && stemParagraphOpen && stemLeadMeasureTex) {
+        // 본문 전체가 표 옆으로 가고 문항 번호가 같은 줄에 있다: 번호 뒤에 이어서 칸을 열고, 번호 폭만큼 좁힌다.
+        //   (번호는 \leftskip 만큼 왼쪽으로 당겨져 있어 그 폭을 되돌려 준다.)
+        parts.push(
+          `\\setbox0\\hbox{${stemLeadMeasureTex}}`
+          + `\\begin{minipage}[t]{\\dimexpr ${leftWidth}+\\leftskip-\\wd0\\relax}${SIDE_TABLE_LEFT_SETUP}`,
+        );
+      } else if (sIdx === 0 && stemParagraphOpen) {
+        parts.push(`\\begin{minipage}[t]{${leftWidth}}${SIDE_TABLE_LEFT_SETUP}`);
+      } else {
+        // 앞부분 아래에서 시작한다. 이 줄을 본문 문단과 같은 줄 간격 설정 안에서 끝내야
+        //   앞부분 마지막 줄과의 간격이 본문의 줄 간격과 같아진다(밖에서 끝내면 문서 기본 간격이 들어가 벌어진다).
+        parts.push(
+          `\\par{${stemLineSpacingTex(questionFontSizePt)}\\noindent\\begin{minipage}[t]{${leftWidth}}${SIDE_TABLE_LEFT_SETUP}`,
+        );
+        sideTable.lineGroupOpen = true;
+      }
+    }
+    if (isSideTableSeg) {
+      // 왼쪽 칸을 닫고 오른쪽 칸에 표를 둔다. 표의 위 선을 왼쪽 칸 첫 줄 한글의 위 끝에 맞춘다
+      //   (사장님 2026-11-24). 줄 높이(\strutbox)로 올리면 표가 글자보다 위로 솟는다.
+      rawTableIdx += 1;
+      const sideTableTex = renderTableLatex(
+        sideTable.rows,
+        equations,
+        sideTable.scale,
+        stemSizePt,
+        { position: 'below-stem', anchor: 'center', offsetXEm: 0 },
+        { forceWidthFrac: 1.0, omitOuterPar: true },
+      ).trim();
+      parts.push(
+        `\\end{minipage}\\hfill\\setbox0\\hbox{가}\\raisebox{\\ht0}{\\begin{minipage}[t]{${sideTable.tableFrac.toFixed(2)}\\dimexpr\\linewidth-\\leftskip\\relax}`
+        + `\\vspace{0pt}${sideTableTex}\\end{minipage}}\\par${sideTable.lineGroupOpen ? '}' : ''}`,
+      );
+      continue;
     }
 
     if (seg.type === 'text') {
@@ -7709,8 +8388,24 @@ function renderOneQuestion(question, {
           suppressedInlineBoxFigIdxs.add(candidateIdx);
         }
       }
+      // 상자 안의 표를 미리 짠다. 표 번호(raw:N)는 본문에 나온 순서 그대로 센다.
+      //   상자 안에서는 글 옆에 두는 배치를 쓰지 않고 그 자리에 가운데로 둔다.
+      const boxTableTex = (Array.isArray(seg.boxTables) ? seg.boxTables : []).map((tableLines) => {
+        rawTableIdx += 1;
+        const tableRows = parseRawTabularToRows(autoWrapTabularCells(tableLines.join('\n')));
+        const tableScale = resolveTableScale(question, 'raw', rawTableIdx);
+        const tableLayout = resolveTableLayout(question, 'raw', rawTableIdx);
+        return renderTableLatex(
+          tableRows,
+          equations,
+          tableScale,
+          stemSizePt,
+          { ...tableLayout, position: 'below-stem' },
+        );
+      });
       const boxOptions = {
         fontSizePt: questionFontSizePt,
+        boxTables: boxTableTex,
         columns: seg.type === 'bogi' ? bogiBoxColumns : decoBoxColumns,
         contentWrapper: Number.isInteger(inlineBoxFigureIdx)
           ? (content) => renderInlineFigureWithTextLatex(
@@ -7851,9 +8546,12 @@ function renderOneQuestion(question, {
 
   // 마지막으로 방출된 "Big block" 의 타입을 기억해두면, 뒤이어 오는 선택지/5지선다 앞 간격을
   // 그 블록 타입에 맞는 gap (박스/그림·표) 으로 통일할 수 있다.
+  // 선지 아래로 미룬 그림의 자리는 본문 끝 블록으로 치지 않는다(그 앞 블록 기준으로 선지 앞 간격을 고른다).
+  let trailingSegIdx = segments.length - 1;
+  while (trailingSegIdx >= 0 && isBelowChoiceFigureSeg(trailingSegIdx)) trailingSegIdx -= 1;
   let trailingBigType =
-    segments.length > 0 && isBigBlockType(segments[segments.length - 1].type)
-      ? segments[segments.length - 1].type
+    trailingSegIdx >= 0 && isBigBlockType(segments[trailingSegIdx].type)
+      ? segments[trailingSegIdx].type
       : null;
   parts.push(`% DBG after-stem: figIdx=${figIdx}/${figurePaths.length} trailingBigType=${trailingBigType}`);
   // Trailing fallback: stem 마커 수가 figurePaths 개수보다 적어 누락된 figure 가 있으면 보충.
@@ -7864,6 +8562,12 @@ function renderOneQuestion(question, {
     for (let i = 0; i < figurePaths.length; i += 1) {
       if (emittedFigIdxs.has(i)) continue;
       if (figIdxConsumedByGroup.has(i)) continue;
+      // 본문에 자리가 없는 선지 아래 그림도 선지 뒤로 미룬다.
+      if (belowChoiceFigIdxs.has(i)) {
+        emittedFigIdxs.add(i);
+        deferBelowChoiceFigure(i);
+        continue;
+      }
       const group = groupByStartFigIdx.get(i);
       let rendered;
       if (group) {
@@ -7995,6 +8699,14 @@ function renderOneQuestion(question, {
           : renderChoicesLatex(choices, equations, layoutColumns, {
             fontSizePt: questionFontSizePt,
           }))));
+    // 선지 아래 그림: 본문 흐름에서 미뤄 둔 그림을 선지 뒤에 그림 위 간격을 두고 찍는다.
+    for (const i of deferredBelowChoiceFigs) {
+      const rendered = renderFigureLatex(i);
+      if (!rendered || !rendered.trim()) continue;
+      parts.push('% DBG below-choices-fig push');
+      parts.push(FIG_GAP_TOP);
+      parts.push(rendered);
+    }
   }
 
   parts.push('\\par');
@@ -8272,10 +8984,12 @@ export function explanationFigureSpecs(q) {
 /** 해설 그림마다 \includegraphics 블록(정렬은 align, 기본 가운데). */
 export function explanationFigureIncludes(q) {
   return explanationFigureSpecs(q).map((f) => {
-    const include = `\\includegraphics[width=${f.widthEm.toFixed(2)}em,max width=\\linewidth,keepaspectratio]{${f.path}}`;
+    // 해설 본문은 번호 너비만큼 \leftskip 이 걸려 있다. \centering 은 \leftskip 을 지워 그림이 번호 자리까지 포함한
+    // 폭의 가운데(글보다 왼쪽)에 놓이므로, \leftskip 을 둔 채 양쪽 \hfill 로 풀이 글 폭의 가운데에 놓는다.
+    const include = `\\includegraphics[width=${f.widthEm.toFixed(2)}em,max width=\\dimexpr\\linewidth-\\leftskip\\relax,keepaspectratio]{${f.path}}`;
     if (f.align === 'left') return `{\\noindent${include}\\par}`;
     if (f.align === 'right') return `{\\noindent\\hfill${include}\\par}`;
-    return `{\\centering${include}\\par}`;
+    return `{\\noindent\\hfill${include}\\hfill\\null\\par}`;
   });
 }
 
@@ -12158,7 +12872,8 @@ function renderQuickAnswerTableLatex(questions, options = {}) {
     const body = blocks.join('\\par\\vspace{0.25em}\n');
     if (!body) return '';
     // 전사본에 닫는 $ 가 하나 더 있으면 $\displaystyle 7$$이다 가 되어 컴파일이 멈춘다.
-    return body.replace(/(\$\\displaystyle [^$]*)\$\$+/g, '$1$');
+    // 바로 뒤에 다음 식이 이어지는 "$\displaystyle \text{(1)}\;$$\displaystyle b_2$" 는 짝이 맞는 것이므로 그대로 둔다.
+    return body.replace(/(\$\\displaystyle [^$]*)\$\$+(?!\\displaystyle )/g, '$1$');
   }
   // [정답] 라벨 바로 오른쪽에 진한 정답을 붙이고, 해설이 있으면 다음 줄에 번호 너비만큼 들여 쓴다.
   function explanationEntry(q) {
@@ -12914,7 +13629,15 @@ export function effectiveStemSizePtFor(profile, fontSize) {
   return Math.max(8, requested - trim);
 }
 
+/** 문서 한 벌의 TeX. 도는 동안 그림 배치는 이 지면(프로필·단 수)의 덮어쓰기 값을 쓴다. */
 export function buildDocumentTexSource(questions, options = {}) {
+  return withFigureLayoutContext(
+    { profile: options?.profile || '', columns: options?.columns ?? 2 },
+    () => buildDocumentTexSourceForLayout(questions, options),
+  );
+}
+
+function buildDocumentTexSourceForLayout(questions, options = {}) {
   const {
     paper = 'B4',
     fontFamily = 'Malgun Gothic',

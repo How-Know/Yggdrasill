@@ -38,8 +38,9 @@ test('V2 renderer unwraps a sentence extracted as one math formula so the box ca
 
   // 한 덩어리 수식이면 줄바꿈 지점이 없어 박스 밖으로 넘친다.
   assert.ok(!box.includes('\\text{'), 'sentence text must leave math mode');
-  assert.match(box, /\$\\displaystyle m\$이 집합 /);
-  assert.match(box, /\$\\displaystyle n\^2\$의 일의 자릿수가 같아지는 /);
+  // 수식에 바로 붙은 조사 앞에는 줄바꿈 벌점이 들어간다(xelatex_v2_math_particle_break.test.js).
+  assert.match(box, /\$\\displaystyle m\$\\penalty9999\{\}이 집합 /);
+  assert.match(box, /\$\\displaystyle n\^2\$\\penalty9999\{\}의 일의 자릿수가 같아지는 /);
 });
 
 test('V2 renderer keeps short unit text and nested text inside math', () => {

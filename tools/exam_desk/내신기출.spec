@@ -21,11 +21,11 @@ a = Analysis(
     pathex=[str(root)],
     binaries=[],
     datas=datas,
-    hiddenimports=["pypdf"],
+    hiddenimports=["pymupdf"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=["scipy", "pandas", "numpy", "matplotlib", "openpyxl", "tkinter"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

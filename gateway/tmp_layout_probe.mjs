@@ -42,13 +42,17 @@ for (let p = Number(fromS); p <= Number(toS); p += 1) {
   execFileSync('pdftoppm', ['-png', '-singlefile', '-scale-to', '2400', '-f', String(p), '-l', String(p), pdfPath, prefix]);
   const png = fs.readFileSync(`${prefix}.png`);
   const t0 = Date.now();
-  const r = await fetch(`${base}/textbook/vlm/extract-answer-layout`, {
+  const r = await fetch(`${base}/textbook/vlm/${kind === 'sol' ? 'detect-solution-blocks' : 'extract-answer-layout'}`, {
     method: 'POST', headers,
     body: JSON.stringify({ image_base64: png.toString('base64'), mime_type: 'image/png', raw_page: p }),
   });
   const j = await r.json().catch(() => ({}));
   if (!r.ok || !j.ok) { console.log(`p${p} FAILED ${r.status} ${j.error || ''} ${j.message || ''}`); continue; }
   fs.writeFileSync(jsonPath, JSON.stringify(j));
+  if (kind === 'sol') {
+    console.log(`p${p} ${((Date.now() - t0) / 1000).toFixed(0)}s blocks=${(j.blocks || []).length} numbers=${(j.numbers || []).length} lead=${j.leading_continuation}`);
+    continue;
+  }
   const entries = j.entries || [];
   const heads = entries.filter((e) => e.kind === 'header');
   console.log(`p${p} ${((Date.now() - t0) / 1000).toFixed(0)}s entries=${entries.length} headers=${heads.length} lead=${j.leading_continuation}`);

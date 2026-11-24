@@ -1,0 +1,19 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.1",
+  "ref": "csat-2023-common-13-1",
+  "params": {"ox": 30.416, "oy": 26.2911, "r": 21.4432, "aa": 150.1052, "da": 83.6527, "ca": -61.7391, "bx": -27.0376},
+  "fit": ["ox", "oy", "r", "aa", "da", "ca", "bx"],
+  "canvas": {"width": 52.49, "height": 49.15, "origin": ["ox", "oy"], "unit": 1},
+  "objects": [
+    {"id": "k", "type": "circle", "center": [0, 0], "radius": "r"},
+    {"id": "A", "type": "on", "of": "k", "angle": "aa", "label": {"dir": "NW", "dist": 0.6}},
+    {"id": "D", "type": "on", "of": "k", "angle": "da", "label": {"dir": "N", "dist": 1.0}},
+    {"id": "C", "type": "on", "of": "k", "angle": "ca", "label": {"dir": "SE", "dist": 0.6}},
+    {"id": "B", "type": "point", "at": ["bx", "C.y"], "label": {"dir": "SW", "dist": 0.6}},
+    {"type": "polygon", "points": ["A", "B", "C"]},
+    {"type": "polyline", "points": ["A", "D", "C"]},
+    {"id": "ang", "type": "angle", "at": "A", "from": "B", "to": "C", "radius": 3.2, "label": {"text": "\\dfrac{\\pi}{3}", "dist": 6.8}}
+  ],
+  "label_nudge": {"A": [0.085, 0.0], "D": [-0.085, 0.0], "C": [0.085, 0.254], "B": [0.17, 0.509], "ang": [-0.424, -0.339]}
+}

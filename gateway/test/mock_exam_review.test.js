@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+import { choiceNumberRegion, regionInside, validChoiceRegion } from '../src/mock_exam/choice_layout.js';
 import { mockCurriculumCode, mockExamTitle, mockReviewCourseLabel } from '../src/mock_exam/mock_courses.js';
 import { isSectionHeaderLine, planSolutionSegments } from '../src/mock_exam/solution_layout.js';
 import { parsePgm, solutionEvidenceFrom } from '../src/mock_exam/solution_evidence.js';
@@ -11,6 +12,7 @@ import {
   mockSectionScope,
   prepareMockReview,
   prepareMockReviewIdentity,
+  previewMockSolutionRefs,
   publishMockReview,
 } from '../src/mock_exam/review_staging.js';
 
@@ -27,6 +29,14 @@ test('mockReviewCourseLabel follows the course table', () => {
   assert.equal(label(1, 3, 'common'), '1-1+1-2+2-1+2-2+3-1+3-2');
   assert.equal(label(1, 11, 'common'), '공통수학1+공통수학2');
   assert.equal(label(1, 6, 'calculus'), '');
+  // 가형·나형은 시행 연도의 시험 범위를 따른다.
+  const legacy = (examYear, section) => mockReviewCourseLabel({ grade: 3, examMonth: 11, section, examYear });
+  assert.equal(legacy(2016, 'ga'), '대수+미적분1+미적분2+확률과 통계+기하');
+  assert.equal(legacy(2019, 'na'), '공통수학2+대수+미적분1+미적분2+확률과 통계');
+  assert.equal(legacy(2020, 'ga'), '대수+미적분1+미적분2+확률과 통계');
+  assert.equal(legacy(2020, 'na'), '대수+미적분1+확률과 통계');
+  assert.equal(legacy(undefined, 'ga'), '');
+  assert.equal(mockReviewCourseLabel({ grade: 2, examMonth: 6, section: 'ga', examYear: 2019 }), '');
 });
 
 test('mockCurriculumCode switches by grade and year', () => {
@@ -165,6 +175,121 @@ test('planSolutionSegments crosses a column that has no number', () => {
   assert.deepEqual(plan.segments.get('b').continuations, []);
 });
 
+test('planSolutionSegments fills a column where no number starts between two known columns', () => {
+  // 3단 해설지(2025 7월 미적분): 번호는 1단(x=105)과 3단(x=645)에서만 시작하고, 28번 풀이가 가운데 단을 통째로 지난다.
+  const b = (key, page, x, y, yEnd) => ({
+    key,
+    section: 'calculus',
+    page,
+    numberRegion: [y, x, y + 12, x + 14],
+    contentRegion: [y, x, yEnd, x + 247],
+  });
+  const plan = planSolutionSegments({
+    blocks: [b('26', 1, 105, 100, 380), b('27', 1, 105, 388, 622), b('28', 1, 105, 633, 900), b('29', 1, 645, 718, 900)],
+    evidence: fakeEvidence({
+      pageCount: 1,
+      ink: [
+        { page: 1, region: [100, 105, 380, 352] },
+        { page: 1, region: [388, 105, 622, 352] },
+        { page: 1, region: [633, 105, 900, 352] },
+        { page: 1, region: [100, 375, 900, 622] },
+        { page: 1, region: [100, 645, 705, 892] },
+        { page: 1, region: [718, 645, 900, 892] },
+      ],
+    }),
+  });
+  assert.deepEqual(
+    plan.columns.map((c) => [c.left, c.right, c.inferred === true]),
+    [
+      [99, 356, false],
+      [369, 626, true],
+      [639, 896, false],
+    ],
+  );
+  assert.deepEqual(plan.segments.get('28').continuations, [
+    { rawPage: 1, region1k: [96, 369, 904, 626] },
+    { rawPage: 1, region1k: [96, 639, 709, 896] },
+  ]);
+  // 두 단짜리 해설지(단 사이가 단 폭의 1.2배)는 채우지 않는다.
+  assert.equal(planSolutionSegments({ blocks: TWO_COLUMN_BLOCKS, evidence: TWO_COLUMN_EVIDENCE() }).columns.length, 2);
+});
+
+test('planSolutionSegments adds an edge column where no number starts', () => {
+  const b = (key, page, x, y, yEnd) => ({
+    key,
+    section: 'geometry',
+    page,
+    numberRegion: [y, x, y + 8, x + 16],
+    contentRegion: [y, x, yEnd, x + 256],
+  });
+  // 3단 해설지(2026 10월 기하): 번호는 2단(x=372)과 3단(x=640)에서만 시작하고, 30번 풀이는 다음 쪽 1단에서 이어진다.
+  const left = planSolutionSegments({
+    blocks: [b('27', 3, 372, 643, 896), b('28', 3, 640, 175, 407), b('29', 3, 640, 415, 861), b('30', 3, 640, 869, 889)],
+    evidence: fakeEvidence({
+      pageCount: 4,
+      ink: [
+        { page: 3, region: [140, 104, 890, 360] },
+        { page: 3, region: [643, 372, 896, 628] },
+        { page: 3, region: [140, 640, 168, 896] },
+        { page: 3, region: [175, 640, 407, 896] },
+        { page: 3, region: [415, 640, 861, 896] },
+        { page: 3, region: [869, 640, 889, 896] },
+        { page: 4, region: [140, 104, 520, 360] },
+      ],
+    }),
+  });
+  assert.deepEqual(
+    left.columns.map((c) => [c.left, c.right, c.inferred === true]),
+    [
+      [98, 364, true],
+      [366, 632, false],
+      [634, 900, false],
+    ],
+  );
+  assert.deepEqual(left.segments.get('30').continuations, [{ rawPage: 4, region1k: [136, 98, 524, 364] }]);
+  // 27번은 같은 쪽 3단 맨 위(28번 위)에서 이어진다: 전과 같다.
+  assert.deepEqual(left.segments.get('27').continuations, [{ rawPage: 3, region1k: [136, 634, 172, 900] }]);
+
+  // 3단 해설지(2026 7월 기하): 번호는 1단(x=104)과 2단(x=374)에서만 시작하고, 28번 풀이가 3단을 지나 다음 쪽으로 간다.
+  const right = planSolutionSegments({
+    blocks: [b('27', 5, 104, 773, 895), b('28', 5, 374, 525, 905), b('29', 6, 104, 514, 905), b('30', 6, 374, 347, 905)],
+    evidence: fakeEvidence({
+      pageCount: 6,
+      ink: [
+        { page: 5, region: [140, 104, 760, 360] },
+        { page: 5, region: [773, 104, 895, 360] },
+        { page: 5, region: [140, 374, 510, 630] },
+        { page: 5, region: [525, 374, 905, 630] },
+        { page: 5, region: [140, 644, 905, 900] },
+        { page: 6, region: [140, 104, 500, 360] },
+        { page: 6, region: [514, 104, 905, 360] },
+        { page: 6, region: [140, 374, 333, 630] },
+        { page: 6, region: [347, 374, 905, 630] },
+        { page: 6, region: [140, 644, 420, 900] },
+      ],
+    }),
+  });
+  assert.deepEqual(
+    right.columns.map((c) => [c.left, c.inferred === true]),
+    [
+      [98, false],
+      [368, false],
+      [638, true],
+    ],
+  );
+  assert.deepEqual(
+    right.segments.get('28').continuations.map((c) => [c.rawPage, c.region1k[1]]),
+    [
+      [5, 638],
+      [6, 98],
+    ],
+  );
+  assert.deepEqual(
+    right.segments.get('30').continuations.map((c) => [c.rawPage, c.region1k[1], c.region1k[2]]),
+    [[6, 638, 424]],
+  );
+});
+
 test('planSolutionSegments without page evidence keeps stored regions and reports what it could not check', () => {
   const plan = planSolutionSegments({ blocks: TWO_COLUMN_BLOCKS, pageCount: 2 });
   const seg = (key) => plan.segments.get(key);
@@ -181,6 +306,124 @@ test('planSolutionSegments keeps a region a person fixed', () => {
   const blocks = TWO_COLUMN_BLOCKS.map((b) => (b.key === 'c1' ? { ...b, contentRegion: [118, 90, 500, 470], manual: true } : b));
   const plan = planSolutionSegments({ blocks, evidence: TWO_COLUMN_EVIDENCE() });
   assert.deepEqual(plan.segments.get('c1').contentRegion, [118, 90, 500, 470]);
+});
+
+// 선택과목 풀이만 읽는 해설지: 번호는 모두 단 중간에서 시작하고, 단 맨 위에는 앞 풀이의 이어진 줄만 있다.
+const ELECTIVE_ONLY_BLOCKS = [
+  block('g23', 'geometry', 1, 100, 300, 500),
+  block('g24', 'geometry', 1, 100, 520, 900),
+  block('g25', 'geometry', 1, 520, 400, 900),
+  block('g26', 'geometry', 2, 100, 350, 900),
+  block('g27', 'geometry', 3, 100, 500, 700),
+];
+
+test('planSolutionSegments takes the column top from text lines when no number starts a column', () => {
+  const plan = planSolutionSegments({
+    blocks: ELECTIVE_ONLY_BLOCKS,
+    evidence: fakeEvidence({
+      pageCount: 3,
+      ink: [
+        { page: 1, region: [130, 100, 260, 460] },
+        { page: 1, region: [300, 100, 500, 460] },
+        { page: 1, region: [520, 100, 900, 460] },
+        { page: 1, region: [115, 520, 380, 880] },
+        { page: 1, region: [400, 520, 900, 880] },
+        { page: 2, region: [115, 100, 330, 460] },
+        { page: 2, region: [350, 100, 900, 460] },
+        { page: 2, region: [115, 520, 900, 880] },
+        { page: 3, region: [115, 100, 480, 460] },
+        { page: 3, region: [500, 100, 700, 460] },
+      ],
+      lines: [
+        { page: 1, y: 132, x: 110, text: '23. ③ 24. ④ 25. ③' },
+        { page: 1, y: 116, x: 530, text: '가 같으므로' },
+        { page: 2, y: 116, x: 110, text: '또, 선분 AB를' },
+        { page: 2, y: 117, x: 530, text: '이므로 AM' },
+        { page: 3, y: 116, x: 110, text: '따라서' },
+      ],
+    }),
+  });
+  // 가장 높은 번호(300)보다 한참 위지만, 여러 칸의 첫 글줄이 가리키는 자리가 단 맨 위다.
+  assert.equal(plan.top, 111);
+  const seg = (key) => plan.segments.get(key);
+  assert.deepEqual(seg('g24').continuations, [{ rawPage: 1, region1k: [111, 514, 384, 884] }]);
+  assert.deepEqual(seg('g25').continuations, [{ rawPage: 2, region1k: [111, 94, 334, 464] }]);
+  assert.deepEqual(seg('g26').continuations, [
+    { rawPage: 2, region1k: [111, 514, 904, 884] },
+    { rawPage: 3, region1k: [111, 94, 484, 464] },
+  ]);
+});
+
+test('planSolutionSegments leaves a running head out of the column top', () => {
+  const pages = [1, 2, 3];
+  const plan = planSolutionSegments({
+    blocks: [
+      block('a', 'common', 1, 100, 300, 900),
+      block('b', 'common', 1, 520, 500, 900),
+      block('c', 'common', 2, 100, 600, 900),
+      block('d', 'common', 2, 520, 400, 900),
+      block('e', 'common', 3, 100, 700, 900),
+    ],
+    evidence: fakeEvidence({
+      pageCount: 3,
+      ink: [
+        // 쪽마다 같은 자리의 쪽 머리글
+        ...pages.flatMap((page) => [
+          { page, region: [46, 100, 62, 460] },
+          { page, region: [46, 600, 62, 880] },
+        ]),
+        { page: 1, region: [115, 100, 280, 460] },
+        { page: 1, region: [300, 100, 900, 460] },
+        { page: 1, region: [115, 520, 480, 880] },
+        { page: 1, region: [500, 520, 900, 880] },
+        { page: 2, region: [115, 100, 580, 460] },
+        { page: 2, region: [600, 100, 900, 460] },
+        { page: 2, region: [115, 520, 380, 880] },
+        { page: 2, region: [400, 520, 900, 880] },
+        { page: 3, region: [115, 100, 680, 460] },
+        { page: 3, region: [700, 100, 900, 460] },
+        { page: 3, region: [115, 520, 300, 880] },
+      ],
+      lines: [
+        ...pages.flatMap((page) => [
+          { page, y: 50, x: 110, text: `수능 해설 ${page}` },
+          { page, y: 50, x: 700, text: '수학 영역' },
+        ]),
+        { page: 1, y: 116, x: 110, text: '정답표' },
+        { page: 1, y: 116, x: 530, text: '이므로' },
+        { page: 2, y: 116, x: 110, text: '따라서 구하는 값은' },
+        { page: 2, y: 117, x: 530, text: '한편' },
+        { page: 3, y: 116, x: 110, text: '즉,' },
+        { page: 3, y: 116, x: 530, text: '그러므로' },
+      ],
+    }),
+  });
+  // 첫 잉크(46)는 쪽 머리글이다. 쪽마다 되풀이되는 글줄을 뺀 첫 글줄(116) 위를 단 맨 위로 본다.
+  assert.equal(plan.top, 112);
+  assert.deepEqual(plan.segments.get('a').continuations, [{ rawPage: 1, region1k: [112, 514, 484, 884] }]);
+  assert.deepEqual(plan.segments.get('e').continuations, [{ rawPage: 3, region1k: [112, 514, 304, 884] }]);
+});
+
+test('planSolutionSegments keeps the column top near the highest number when the PDF has no text layer', () => {
+  const plan = planSolutionSegments({
+    blocks: ELECTIVE_ONLY_BLOCKS,
+    evidence: fakeEvidence({
+      pageCount: 3,
+      hasText: false,
+      ink: [
+        { page: 1, region: [46, 100, 62, 460] },
+        { page: 1, region: [300, 100, 900, 460] },
+        { page: 1, region: [46, 520, 62, 880] },
+        { page: 1, region: [400, 520, 900, 880] },
+        { page: 2, region: [46, 100, 62, 460] },
+        { page: 2, region: [350, 100, 900, 460] },
+        { page: 3, region: [46, 100, 62, 460] },
+        { page: 3, region: [500, 100, 700, 460] },
+      ],
+    }),
+  });
+  // 글줄을 읽지 못하면 첫 잉크(46)가 쪽 머리글인지 풀이인지 가릴 수 없다. 가장 높은 번호(300)보다 60 위까지만 본다.
+  assert.equal(plan.top, 240);
 });
 
 // ── PDF 근거 ──────────────────────────────────────────────────────────────
@@ -282,6 +525,13 @@ function fakeSupa(tables) {
     in(col, values) {
       const set = new Set(values);
       this.filters.push((r) => set.has(r[col]));
+      return this;
+    }
+    // .not(col, 'is', null) 만 쓴다.
+    not(col, op, value) {
+      assert.equal(op, 'is');
+      assert.equal(value, null);
+      this.filters.push((r) => r[col] !== null && r[col] !== undefined);
       return this;
     }
     order() {
@@ -492,10 +742,57 @@ function prepare(tables, documentId, extra = {}) {
     documentId,
     loadPaperPdf: async () => Buffer.from('pdf'),
     readEvidence: async () => TWO_COLUMN_EVIDENCE(),
+    // 시험지 글자 층을 읽지 못한 것으로 둔다(선지 번호 자리는 아래 전용 테스트에서 본다).
+    readChoiceWords: async () => [],
     retryDelaysMs: [],
     ...extra,
   });
 }
+
+test('previewMockSolutionRefs reports the solution positions that would change and writes nothing', async () => {
+  const tables = reviewTables();
+  await prepare(tables, DOC_COMMON);
+  const preview = (extra = {}) =>
+    previewMockSolutionRefs({
+      supa: fakeSupa(tables),
+      academyId: ACADEMY,
+      documentId: DOC_COMMON,
+      loadPaperPdf: async () => Buffer.from('pdf'),
+      readEvidence: async () => TWO_COLUMN_EVIDENCE(),
+      retryDelaysMs: [],
+      ...extra,
+    });
+  // 방금 준비한 구간: 달라지는 문항이 없다.
+  let res = await preview();
+  assert.equal(res.ok, true);
+  assert.equal(res.preview, true);
+  assert.equal(res.solutionCount, 3);
+  assert.deepEqual(res.changes, []);
+
+  const numberOf = (cropId) => tables.textbook_problem_crops.find((c) => c.id === cropId).problem_number;
+  const refs = tables.textbook_problem_solution_refs;
+  // 이어진 부분이 있는 두 문항: 하나는 옛 규칙의 값(이어진 부분 없음)으로 되돌리고, 하나는 사람이 고친 위치로 둔다.
+  const [stale, edited] = refs.filter((r) => (r.continuation_regions || []).length > 0);
+  const computed = structuredClone(stale.continuation_regions);
+  stale.continuation_regions = [];
+  edited.continuation_regions = [];
+  edited.edited_at = '2026-01-01T00:00:00Z';
+  const before = JSON.stringify(tables);
+
+  res = await preview();
+  assert.deepEqual(res.changes.map((c) => c.number), [numberOf(stale.crop_id)]);
+  assert.equal(res.changes[0].cropId, stale.crop_id);
+  assert.deepEqual(res.changes[0].before.continuation_regions, []);
+  assert.deepEqual(res.changes[0].after.continuation_regions, computed);
+  assert.equal(res.changes[0].after.source_kind, 'sol');
+  assert.equal(res.solutionProtected, 1);
+  // 아무것도 쓰지 않았다.
+  assert.equal(JSON.stringify(tables), before);
+
+  const other = await preview({ documentId: 'd0000000-0000-4000-8000-000000000009' });
+  assert.equal(other.ok, false);
+  assert.equal(other.error, 'not_mock_section');
+});
 
 test('prepareMockReview stages one section as one review scope', async () => {
   const tables = reviewTables();
@@ -771,9 +1068,133 @@ test('prepareMockReview marks questions without a solution and re-anchors one fo
   assert.deepEqual(res.solutionReanchored, ['2']);
   const crops = tables.textbook_problem_crops;
   const ref = (number) => tables.textbook_problem_solution_refs.find((r) => r.crop_id === crops.find((c) => c.problem_number === number).id);
-  assert.deepEqual([ref('1').source_kind, ref('1').raw_page, ref('1').continuation_regions], ['none', 0, null]);
+  // 해설지가 있는데 못 찾은 풀이는 '해설 없음'(none)이 아니다: 쪽 0 인 sol 행이라 검수에서 "해설 위치 없음"으로 막힌다.
+  assert.deepEqual([ref('1').source_kind, ref('1').raw_page, ref('1').continuation_regions], ['sol', 0, null]);
   assert.equal(ref('2').source_kind, 'sol');
   assert.equal(ref('2').raw_page, 1);
+});
+
+// ── 선지 번호 자리 ────────────────────────────────────────────────────────
+
+// 1000 x 1000 쪽의 낱말 상자(좌표가 곧 0..1000 값).
+function word(text, xMin, yMin, xMax = xMin + 12, yMax = yMin + 10) {
+  return { text, xMin, yMin, xMax, yMax };
+}
+
+function wordPage(page, words) {
+  return { page, width: 1000, height: 1000, words };
+}
+
+test('choiceNumberRegion wraps the choice marks inside the item region', () => {
+  const region = [100, 50, 400, 480];
+  const row = (y, marks, from = 70, step = 80) => [...marks].map((ch, i) => word(ch, from + i * step, y));
+  // 한 줄 선지
+  assert.deepEqual(choiceNumberRegion(wordPage(1, row(250, '①②③④⑤')), region), [250, 70, 260, 402]);
+  // 두 줄 선지(①②③ / ④⑤): 두 줄을 모두 감싼다.
+  assert.deepEqual(
+    choiceNumberRegion(wordPage(1, [...row(250, '①②③', 70, 130), ...row(290, '④⑤', 70, 130)]), region),
+    [250, 70, 300, 342],
+  );
+  // 다른 꼴의 번호 글자(➀~➄)와 뒤에 값이 붙은 낱말("③12")
+  assert.deepEqual(choiceNumberRegion(wordPage(1, [word('➀', 70, 250), word('➁', 150, 250), word('③12', 230, 250, 260)]), region), [
+    250, 70, 260, 260,
+  ]);
+  // 본문에 ①, ② 가 적혀 있어도 가장 아래 것(선지)을 고른다.
+  assert.deepEqual(
+    choiceNumberRegion(wordPage(1, [word('①', 60, 130), word('②', 200, 130), ...row(350, '①②③④⑤')]), region),
+    [350, 70, 360, 402],
+  );
+  // 문항 영역 밖(다른 문항)의 번호는 세지 않는다.
+  assert.equal(choiceNumberRegion(wordPage(1, row(450, '①②③④⑤')), region), null);
+  assert.equal(choiceNumberRegion(wordPage(1, row(250, '①②③④⑤', 600)), region), null);
+  // 번호가 두 종류뿐이면 선지로 보지 않는다.
+  assert.equal(choiceNumberRegion(wordPage(1, row(250, '①②')), region), null);
+  // 쪽 크기를 모르면 읽지 않는다.
+  assert.equal(choiceNumberRegion({ page: 1, width: 0, height: 0, words: row(250, '①②③④⑤') }, region), null);
+});
+
+test('validChoiceRegion and regionInside check a stored region', () => {
+  assert.deepEqual(validChoiceRegion([250, 70, 260, 402]), [250, 70, 260, 402]);
+  assert.equal(validChoiceRegion([]), null);
+  assert.equal(validChoiceRegion(null), null);
+  assert.equal(validChoiceRegion([250, 70, 250, 402]), null);
+  assert.equal(validChoiceRegion([250, 70, 260, 1200]), null);
+  assert.equal(regionInside([250, 70, 260, 402], [100, 50, 400, 480]), true);
+  assert.equal(regionInside([250, 48, 260, 402], [100, 50, 400, 480]), true);
+  assert.equal(regionInside([250, 70, 420, 402], [100, 50, 400, 480]), false);
+});
+
+function choiceTables() {
+  const tables = reviewTables();
+  // 1번·2번은 객관식, 3번은 주관식. 1번과 2번의 문항 영역을 위아래로 나눈다.
+  tables.mock_exam_items[0].item_region_1k = [100, 50, 300, 480];
+  tables.mock_exam_items[1].item_region_1k = [320, 50, 520, 480];
+  return tables;
+}
+
+const CHOICE_PAGES = () => [
+  wordPage(1, [
+    ...[...'①②③④⑤'].map((ch, i) => word(ch, 70 + i * 80, 250)),
+    // 2번은 번호 글자가 없다(선지가 그림인 문항).
+    word('풀이', 70, 400),
+  ]),
+  wordPage(2, [...[...'①②③④⑤'].map((ch, i) => word(ch, 70 + i * 80, 250))]),
+];
+
+test('prepareMockReview stores where the choice marks are printed', async () => {
+  const tables = choiceTables();
+  const loaded = [];
+  const extra = {
+    loadPaperPdf: async (paper) => {
+      loaded.push(paper.id);
+      return Buffer.from('pdf');
+    },
+    readChoiceWords: async () => CHOICE_PAGES(),
+  };
+  const res = await prepare(tables, DOC_COMMON, extra);
+  assert.equal(res.ok, true);
+  assert.equal(res.choiceRegionsWritten, 2);
+  assert.deepEqual(res.choiceRegionsMissing, ['2']);
+  assert.equal(res.choiceRegionsUnread, false);
+  const stored = (number) =>
+    tables.mock_exam_items.find((it) => it.section === 'common' && it.problem_number === number).choice_number_region_1k;
+  assert.deepEqual(stored(1), [250, 70, 260, 402]);
+  // 읽었지만 찾지 못한 문항은 빈 배열로 적어 다시 읽지 않는다. 주관식(3번)과 다른 구간은 건드리지 않는다.
+  assert.deepEqual(stored(2), []);
+  assert.equal(stored(3), undefined);
+  assert.equal(tables.mock_exam_items.find((it) => it.section === 'probstats').choice_number_region_1k, undefined);
+  assert.deepEqual(loaded, [PAPER_PROBLEM, PAPER_SOLUTION]);
+
+  // 다시 준비하면 시험지 PDF 를 받지 않는다.
+  loaded.length = 0;
+  const again = await prepare(tables, DOC_COMMON, extra);
+  assert.equal(again.choiceRegionsWritten, 0);
+  assert.deepEqual(again.choiceRegionsMissing, []);
+  assert.deepEqual(loaded, [PAPER_SOLUTION]);
+
+  // 적어 둔 영역이 지금의 문항 영역을 벗어나면(다시 추출해 영역이 바뀜) 다시 읽는다.
+  Object.assign(tables.mock_exam_items[0], { choice_number_region_1k: [600, 70, 610, 402] });
+  loaded.length = 0;
+  const moved = await prepare(tables, DOC_COMMON, extra);
+  assert.equal(moved.choiceRegionsWritten, 1);
+  assert.deepEqual(stored(1), [250, 70, 260, 402]);
+  assert.deepEqual(loaded, [PAPER_PROBLEM, PAPER_SOLUTION]);
+});
+
+test('prepareMockReview does not store choice regions when the paper could not be read', async () => {
+  const tables = choiceTables();
+  const res = await prepare(tables, DOC_COMMON, { readChoiceWords: async () => [] });
+  assert.equal(res.ok, true);
+  assert.equal(res.choiceRegionsUnread, true);
+  assert.equal(res.choiceRegionsWritten, 0);
+  assert.equal(tables.mock_exam_items.every((it) => it.choice_number_region_1k === undefined), true);
+  // 글자 층이 없는 PDF(쪽은 있고 낱말이 없음)는 찾지 못한 것으로 적는다.
+  const scanned = await prepare(tables, DOC_COMMON, {
+    readChoiceWords: async () => [wordPage(1, []), wordPage(2, [])],
+  });
+  assert.equal(scanned.choiceRegionsUnread, false);
+  assert.deepEqual(scanned.choiceRegionsMissing, ['1', '2']);
+  assert.deepEqual(tables.mock_exam_items[0].choice_number_region_1k, []);
 });
 
 // ── 확정할 때 공개 ────────────────────────────────────────────────────────
@@ -861,6 +1282,107 @@ test('syncMockExamPresetsForExam leaves out sections that wait for confirmation'
   assert.deepEqual(electives(none), []);
 });
 
+test('syncMockExamPresetsForExam makes one preset per 가형·나형 section of 30 questions', async () => {
+  const DOC_GA = 'd0000000-0000-4000-8000-00000000000a';
+  const DOC_NA = 'd0000000-0000-4000-8000-00000000000b';
+  const numbered = (documentId, count) =>
+    Array.from({ length: count }, (_, i) => ({
+      id: `q-${documentId.slice(-1)}-${i + 1}`,
+      question_uid: `uid-${documentId.slice(-1)}-${i + 1}`,
+      academy_id: ACADEMY,
+      document_id: documentId,
+      question_number: String(i + 1),
+      source_order: i + 1,
+      question_type: '객관식',
+      meta: {},
+    }));
+  const tables = {
+    mock_exams: [
+      { id: EXAM, academy_id: ACADEMY, grade: 3, exam_year: 2020, school_year: 2021, exam_month: 11, org: 'csat', created_by: null },
+    ],
+    mock_exam_sections: [
+      { exam_id: EXAM, section: 'ga', pb_document_id: DOC_GA },
+      { exam_id: EXAM, section: 'na', pb_document_id: DOC_NA },
+    ],
+    pb_documents: [
+      { id: DOC_GA, meta: {} },
+      { id: DOC_NA, meta: {} },
+    ],
+    // 나형은 아직 29문항이라 프리셋을 만들지 않는다.
+    pb_questions: [...numbered(DOC_GA, 30), ...numbered(DOC_NA, 29)],
+    pb_export_presets: [],
+  };
+  assert.equal((await syncMockExamPresetsForExam(fakeSupa(tables), EXAM)).synced, 1);
+  const preset = tables.pb_export_presets[0];
+  assert.equal(preset.display_name, '2020 고3 11월 수능 (가형)');
+  assert.equal(preset.source_document_id, DOC_GA);
+  assert.deepEqual(preset.source_document_ids, [DOC_GA]);
+  assert.equal(preset.selected_question_ids.length, 30);
+  const cfg = preset.render_config;
+  assert.equal(cfg.mockExamMeta.elective, 'ga');
+  assert.deepEqual(cfg.titlePageIndices, [1]);
+  assert.deepEqual(cfg.titlePageHeaders, [{ page: 1, title: '수학 영역', subtitle: '가형' }]);
+  assert.deepEqual(cfg.pageColumnQuestionCounts, []);
+  // 1~21번 5지선다형, 22~30번 단답형
+  assert.equal(cfg.questionModeByQuestionUid['uid-a-21'], 'objective');
+  assert.equal(cfg.questionModeByQuestionUid['uid-a-22'], 'subjective');
+});
+
+test('syncMockExamPresetsForExam fills a 가형·나형 paper with the slots that point to the other section', async () => {
+  const DOC_GA = 'd0000000-0000-4000-8000-00000000000a';
+  const DOC_NA = 'd0000000-0000-4000-8000-00000000000b';
+  const numbered = (documentId, count) =>
+    Array.from({ length: count }, (_, i) => ({
+      id: `q-${documentId.slice(-1)}-${i + 1}`,
+      question_uid: `uid-${documentId.slice(-1)}-${i + 1}`,
+      academy_id: ACADEMY,
+      document_id: documentId,
+      question_number: String(i + 1),
+      source_order: i + 1,
+      question_type: '객관식',
+      meta: { score_point: 3 },
+    }));
+  const build = (gaMeta) => ({
+    mock_exams: [
+      { id: EXAM, academy_id: ACADEMY, grade: 3, exam_year: 2020, school_year: 2021, exam_month: 11, org: 'csat', created_by: null },
+    ],
+    mock_exam_sections: [
+      { exam_id: EXAM, section: 'ga', pb_document_id: DOC_GA },
+      { exam_id: EXAM, section: 'na', pb_document_id: DOC_NA },
+    ],
+    pb_documents: [
+      { id: DOC_GA, meta: gaMeta },
+      { id: DOC_NA, meta: {} },
+    ],
+    // 나형 11번은 가형 6번과 같은 문항이라 나형 문서에는 문항이 없다.
+    pb_questions: [...numbered(DOC_GA, 30), ...numbered(DOC_NA, 30).filter((q) => q.question_number !== '11')],
+    mock_exam_items: [
+      { exam_id: EXAM, section: 'na', problem_number: 11, pb_question_id: 'q-a-6', score: 4, choice_order: [5, 4, 3, 2, 1], stem_override: null, merged_at: '2026-11-24T00:00:00Z' },
+      // 합치지 않은 자리는 프리셋에 영향이 없다.
+      { exam_id: EXAM, section: 'na', problem_number: 12, pb_question_id: 'q-b-12', score: null, choice_order: null, stem_override: null, merged_at: null },
+    ],
+    pb_export_presets: [],
+  });
+
+  const tables = build({});
+  assert.equal((await syncMockExamPresetsForExam(fakeSupa(tables), EXAM)).synced, 2);
+  const na = tables.pb_export_presets.find((p) => p.render_config.mockExamMeta.elective === 'na');
+  assert.equal(na.selected_question_uids.length, 30);
+  assert.equal(na.selected_question_uids[10], 'uid-a-6');
+  assert.equal(na.selected_question_ids[10], 'q-a-6');
+  assert.deepEqual(na.source_document_ids, [DOC_NA]);
+  assert.equal(na.render_config.questionScoreByQuestionUid['uid-a-6'], 4);
+  assert.equal(na.render_config.questionScoreByQuestionUid['uid-b-12'], 3);
+  // 가형 프리셋은 그대로 자기 문항 30개다.
+  const ga = tables.pb_export_presets.find((p) => p.render_config.mockExamMeta.elective === 'ga');
+  assert.equal(ga.selected_question_uids[5], 'uid-a-6');
+  assert.equal(ga.render_config.questionScoreByQuestionUid['uid-a-6'], 3);
+
+  // 문항을 가진 가형이 아직 확정 전이면 나형은 29문항이라 프리셋을 만들지 않는다.
+  const pending = build({ mock_review: { publish_on_confirm: true, published_at: null } });
+  assert.equal((await syncMockExamPresetsForExam(fakeSupa(pending), EXAM)).synced, 0);
+});
+
 test('mockSectionScope reads the paper and the page range from the cropped items', () => {
   const items = [
     { section: 'common', paper_id: 'p1', raw_page: 3 },
@@ -894,6 +1416,9 @@ test('mockExpectedSections lists the sections that have a problem paper or a doc
     'calculus',
   ]);
   assert.deepEqual(mockExpectedSections({ grade: 1 }, [paper('problem', '')], []), ['common']);
+  // 가형·나형 회차: 공통 구간 없이 유형마다 구간 하나.
+  assert.deepEqual(mockExpectedSections({ grade: 3 }, [paper('problem', 'na'), paper('problem', 'ga')], []), ['ga', 'na']);
+  assert.deepEqual(mockExpectedSections({ grade: 3 }, [paper('problem', 'na'), paper('solution', 'ga')], []), ['na']);
   assert.deepEqual(
     mockExpectedSections({ grade: 3 }, [paper('problem', 'probstats')], [{ section: 'geometry', pb_document_id: 'x' }]),
     ['common', 'probstats', 'geometry'],

@@ -1710,9 +1710,13 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     }
     var added = 0;
     setState(() {
+      // 가형·나형에 같이 실린 문항은 문항이 하나라 id 가 같다. 어느 시험지에서 담아도 한 번만 담긴다.
       for (final question in selected) {
+        if (_cartQuestionIds.contains(question.id)) {
+          _cartQuestionsById[question.id] = question;
+          continue;
+        }
         _cartQuestionsById[question.id] = question;
-        if (_cartQuestionIds.contains(question.id)) continue;
         _cartQuestionIds.add(question.id);
         added += 1;
       }

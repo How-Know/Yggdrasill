@@ -3,18 +3,26 @@
 // 좌표는 교재 크롭과 같은 [ymin, xmin, ymax, xmax] (0~1000) 이다.
 
 export const ELECTIVES = ['probstats', 'calculus', 'geometry'];
-export const SECTIONS = ['common', ...ELECTIVES];
+// 2020년 시행분까지의 고3 시험지 유형(가형·나형). 시험지 한 부(1~30번)가 구간 하나다. 공통 구간이 없다.
+export const LEGACY_TYPES = ['ga', 'na'];
+export const SECTIONS = ['common', ...ELECTIVES, ...LEGACY_TYPES];
 
 export const SECTION_LABELS = {
   common: '공통',
   probstats: '확률과 통계',
   calculus: '미적분',
   geometry: '기하',
+  ga: '가형',
+  na: '나형',
 };
 
-// 고3 공통은 1~22, 선택은 23~30. 고1·고2 는 1~30 이 모두 공통이다.
+// 고3 공통은 1~22, 선택은 23~30. 고1·고2 는 1~30 이 모두 공통이다. 가형·나형은 1~30 이 그 유형 구간이다.
 export const GRADE3_COMMON_LAST = 22;
 export const ITEM_COUNT = 30;
+
+export function isLegacyType(elective) {
+  return LEGACY_TYPES.includes(String(elective ?? '').trim());
+}
 
 export function sectionFromLabel(label) {
   const text = String(label || '').replace(/\s+/g, '');
@@ -29,11 +37,13 @@ export function sectionFromLabel(label) {
 /// 학년·번호·지면 선택과목으로 문항이 속한 구간을 정한다.
 export function sectionForNumber(grade, number, elective) {
   if (Number(grade) !== 3) return 'common';
+  if (isLegacyType(elective)) return elective;
   if (number <= GRADE3_COMMON_LAST) return 'common';
   return ELECTIVES.includes(elective) ? elective : '';
 }
 
 export function expectedNumbers(grade, section) {
+  if (isLegacyType(section)) return Number(grade) === 3 ? range(1, ITEM_COUNT) : [];
   if (Number(grade) !== 3) {
     return section === 'common' ? range(1, ITEM_COUNT) : [];
   }
@@ -123,10 +133,19 @@ export function normalizeProblemPage(parsed) {
   return out;
 }
 
-export function buildSolutionPagePrompt({ grade, page }) {
+/// lookFor: 앞서 읽었을 때 시작점을 찾지 못한 해설 번호들(다시 읽을 때만 준다).
+export function buildSolutionPagePrompt({ grade, page, lookFor = null }) {
+  const hint = Array.isArray(lookFor) && lookFor.length > 0
+    ? [
+        `앞서 이 해설지를 읽었을 때 ${lookFor.join(', ')}번 해설의 시작점을 찾지 못했다.`,
+        '이 쪽의 모든 단을 맨 위부터 맨 아래까지 빠짐없이 보고, 그 번호가 이 쪽에 있으면 blocks 에 반드시 넣어라.',
+        '이 쪽에 없는 번호는 지어내지 않는다.',
+      ]
+    : [];
   return [
     '이 이미지는 한국 고등학교 수학 모의고사 "정답 및 해설(풀이)" 지면의 한 쪽이다.',
     `학년: 고${grade}. 쪽: ${page}.`,
+    ...hint,
     '지면은 보통 2단~4단이다. 세 가지를 찾아라.',
     '',
     '1) answer_tables: 빠른 정답 상자. "01. ⑤ 02. ④ … 16. 7" 처럼 번호와 정답이 나열된 상자다.',
@@ -240,6 +259,8 @@ export function assignSolutionSections({ grade, paperElective = '', pages }) {
   const keyOf = (section, number) => `${section}|${number}`;
   const resolve = (number, labelSection) => {
     if (Number(grade) !== 3) return 'common';
+    // 가형·나형 해설지는 한 부가 통째로 그 유형의 해설이다.
+    if (isLegacyType(paperElective)) return paperElective;
     if (number <= GRADE3_COMMON_LAST) return 'common';
     if (ELECTIVES.includes(labelSection)) return labelSection;
     return currentElective || (ELECTIVES.includes(paperElective) ? paperElective : '');
@@ -338,6 +359,8 @@ export function assignProblemItems({ grade, paperElective, pages, takeCommon }) 
 /// 평가원의 `■ [선택: 미적분]`, 교육청의 `[미적분]`, `확률과 통계 해설` 등을 모두 찾는다.
 /// 텍스트 층이 없거나 못 찾으면 null.
 export function electiveStartPageFromText(pageTexts, elective) {
+  // 가형·나형 해설지는 1쪽부터 그 유형의 해설이다.
+  if (!ELECTIVES.includes(elective)) return null;
   const label = SECTION_LABELS[elective];
   if (!label) return null;
   const spaced = label.replace(/\s+/g, '\\s*');

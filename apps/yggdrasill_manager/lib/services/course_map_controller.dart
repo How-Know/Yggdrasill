@@ -391,10 +391,11 @@ class CourseMapController extends ChangeNotifier {
 
   /// 과정별 단원에 놓인 개념. 읽지 못했으면 없고 [placementError]가 남는다(예전 목록을 대신 보이지 않는다).
   final Map<String, List<CourseMapPlacement>> _placements = {};
+  final Map<String, List<CourseUnitBlock>> _blocks = {};
   final Set<String> _placementLoading = {};
   final Map<String, CourseMapException> _placementErrors = {};
 
-  /// 놓기·빼기·옮기기·순서 바꾸기 중인 과정.
+  /// 놓기·빼기·옮기기·순서 바꾸기·블록 편집 중인 과정.
   String? placementBusyCourseId;
 
   /// 전체 개념 중 놓인 수. 읽지 못하면 null.
@@ -402,6 +403,9 @@ class CourseMapController extends ChangeNotifier {
 
   /// 흐름 목록에서 놓인 개념 줄을 펼친 단원(과정별). 화면 상태라 저장할 변경으로 세지 않는다.
   final Map<String, Set<String>> _conceptsOpen = {};
+
+  /// 접어 둔 수업 블록 ID(과정별). 기본은 펼침 상태다.
+  final Map<String, Set<String>> _collapsedBlocks = {};
 
   List<CourseMapCourse> get activeCourses => [for (final c in courses) if (!c.archived) c];
   List<CourseMapCourse> get archivedCourses => [for (final c in courses) if (c.archived) c];
@@ -423,6 +427,7 @@ class CourseMapController extends ChangeNotifier {
   bool get busy => busyCourseId != null || listBusy;
 
   List<CourseMapPlacement>? placementsOf(String courseId) => _placements[courseId];
+  List<CourseUnitBlock>? blocksOf(String courseId) => _blocks[courseId];
   bool placementLoading(String courseId) => _placementLoading.contains(courseId);
   CourseMapException? placementError(String courseId) => _placementErrors[courseId];
   bool placementBusy(String courseId) => placementBusyCourseId == courseId;
@@ -432,18 +437,58 @@ class CourseMapController extends ChangeNotifier {
       [for (final p in _placements[courseId] ?? const <CourseMapPlacement>[]) if (p.unitId == unitId) p]
         ..sort((a, b) => a.sort.compareTo(b.sort));
 
+  /// 단원 안 가르치는 단위(수업 블록) 순서대로.
+  List<CourseUnitBlock> blocksIn(String courseId, String unitId) =>
+      [for (final b in _blocks[courseId] ?? const <CourseUnitBlock>[]) if (b.unitId == unitId) b]
+        ..sort((a, b) => a.sort.compareTo(b.sort));
+
+  int blockCount(String courseId, String unitId) =>
+      (_blocks[courseId] ?? const <CourseUnitBlock>[]).where((b) => b.unitId == unitId).length;
+
+  /// 단원 안 특정 블록(또는 [blockId]가 null이면 블록 미지정 낱개 영역)에 속한 개념 순서대로.
+  List<CourseMapPlacement> placementsInBlock(String courseId, String unitId, String? blockId) {
+    final validBlocks = {
+      for (final b in _blocks[courseId] ?? const <CourseUnitBlock>[])
+        if (b.unitId == unitId) b.id,
+    };
+    return [
+      for (final p in _placements[courseId] ?? const <CourseMapPlacement>[])
+        if (p.unitId == unitId)
+          if (blockId == null
+              ? (p.blockId == null || !validBlocks.contains(p.blockId))
+              : p.blockId == blockId)
+            p,
+    ]..sort((a, b) => a.sort.compareTo(b.sort));
+  }
+
   int placementCount(String courseId, String unitId) =>
       (_placements[courseId] ?? const <CourseMapPlacement>[]).where((p) => p.unitId == unitId).length;
 
   bool conceptsOpen(String courseId, String unitId) => _conceptsOpen[courseId]?.contains(unitId) ?? false;
 
-  /// 개념이 놓인 단원(편집본에 있는 것)이 모두 펼쳐졌는지.
+  bool blockExpanded(String courseId, String blockId) => !(_collapsedBlocks[courseId]?.contains(blockId) ?? false);
+
+  void toggleBlock(String courseId, String blockId) {
+    final collapsed = _collapsedBlocks[courseId] ??= {};
+    if (!collapsed.remove(blockId)) collapsed.add(blockId);
+    notifyListeners();
+  }
+
+  void setBlockExpanded(String courseId, String blockId, bool open) {
+    final collapsed = _collapsedBlocks[courseId] ??= {};
+    final changed = open ? collapsed.remove(blockId) : collapsed.add(blockId);
+    if (changed) notifyListeners();
+  }
+
+  /// 개념이나 블록이 있는 단원(편집본에 있는 것)이 모두 펼쳐졌는지.
   bool allConceptsOpen(String courseId) {
     final open = _conceptsOpen[courseId] ?? const <String>{};
     final d = _drafts[courseId];
     final units = {
       for (final p in _placements[courseId] ?? const <CourseMapPlacement>[])
         if (d?.node(p.unitId) != null) p.unitId,
+      for (final b in _blocks[courseId] ?? const <CourseUnitBlock>[])
+        if (d?.node(b.unitId) != null) b.unitId,
     };
     return units.isNotEmpty && units.every(open.contains);
   }
@@ -454,12 +499,15 @@ class CourseMapController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 개념이 놓인 단원을 모두 펼치거나 접는다. 펼칠 때는 그 위 단원도 펼쳐 줄이 보이게 한다.
+  /// 개념이나 블록이 놓인 단원을 모두 펼치거나 접는다. 펼칠 때는 그 위 단원도 펼쳐 줄이 보이게 한다.
   void setAllConceptsOpen(String courseId, bool open) {
     final set = _conceptsOpen[courseId] ??= {};
     set.clear();
     if (open) {
-      final units = {for (final p in _placements[courseId] ?? const <CourseMapPlacement>[]) p.unitId};
+      final units = {
+        for (final p in _placements[courseId] ?? const <CourseMapPlacement>[]) p.unitId,
+        for (final b in _blocks[courseId] ?? const <CourseUnitBlock>[]) b.unitId,
+      };
       final d = _drafts[courseId];
       for (final u in units) {
         if (d == null || d.node(u) == null) continue;
@@ -510,11 +558,13 @@ class CourseMapController extends ChangeNotifier {
     _saveErrors.clear();
     busyCourseId = null;
     _placements.clear();
+    _blocks.clear();
     _placementLoading.clear();
     _placementErrors.clear();
     placementBusyCourseId = null;
     overview = null;
     _conceptsOpen.clear();
+    _collapsedBlocks.clear();
     notifyListeners();
   }
 
@@ -571,12 +621,21 @@ class CourseMapController extends ChangeNotifier {
     _placementErrors.remove(courseId);
     notifyListeners();
     try {
-      final list = await _backend.placements(courseId);
+      final listFuture = _backend.placements(courseId);
+      final blocksFuture = _backend.blocks(courseId).catchError((Object e) {
+        final err = CourseMapException.from(e);
+        if (err.notReady) return const <CourseUnitBlock>[];
+        throw err;
+      });
+      final list = await listFuture;
+      final blockList = await blocksFuture;
       if (epoch != _epoch) return;
       _placements[courseId] = list;
+      _blocks[courseId] = blockList;
     } catch (e) {
       if (epoch != _epoch) return;
       _placements.remove(courseId);
+      _blocks.remove(courseId);
       _placementErrors[courseId] = CourseMapException.from(e);
     } finally {
       if (epoch == _epoch) {
@@ -970,6 +1029,272 @@ class CourseMapController extends ChangeNotifier {
       ..removeAt(i)
       ..insert(j, placementId);
     return _placementAction(() => _backend.reorderPlacements(unitId: unitId, ids: ids));
+  }
+
+  // --- 단원 안 가르치는 단위(수업 블록) ---
+
+  bool _isStaleCode(String code) =>
+      code == 'course_placement_stale' ||
+      code == 'course_placement_not_found' ||
+      code == 'course_block_stale' ||
+      code == 'course_block_not_found';
+
+  Future<(String? blockId, String? error)> createBlock(
+    String unitId, {
+    String name = '새 블록',
+    List<String>? placementIds,
+  }) async {
+    final courseId = selectedCourseId;
+    if (courseId == null || placementBusyCourseId != null || busyCourseId == courseId) {
+      return (null, null);
+    }
+    final epoch = _epoch;
+    placementBusyCourseId = courseId;
+    notifyListeners();
+    try {
+      final res = await _backend.createBlock(
+        unitId: unitId,
+        name: name.trim().isEmpty ? '새 블록' : name.trim(),
+        placementIds: placementIds,
+      );
+      if (epoch != _epoch) return (null, null);
+      _blocks[courseId] = res.blocks;
+      _placements[courseId] = res.placements;
+      (_conceptsOpen[courseId] ??= {}).add(unitId);
+      if (res.blockId != null) {
+        _collapsedBlocks[courseId]?.remove(res.blockId);
+      }
+      _placementErrors.remove(courseId);
+      return (res.blockId, null);
+    } catch (e) {
+      if (epoch != _epoch) return (null, null);
+      final err = CourseMapException.from(e);
+      if (_isStaleCode(err.code)) unawaited(loadPlacements(courseId));
+      return (null, err.message);
+    } finally {
+      if (epoch == _epoch) {
+        placementBusyCourseId = null;
+        notifyListeners();
+      }
+    }
+  }
+
+  Future<String?> renameBlock(String blockId, String name) async {
+    final courseId = selectedCourseId;
+    final list = courseId == null ? null : _blocks[courseId];
+    if (courseId == null || list == null) return null;
+    if (placementBusyCourseId != null || busyCourseId == courseId) return null;
+    final trimmed = name.trim();
+    if (trimmed.isEmpty || trimmed.length > kCourseMapNameMax) {
+      return '블록 이름은 비울 수 없고 $kCourseMapNameMax자까지입니다.';
+    }
+    final existing = list.where((b) => b.id == blockId).firstOrNull;
+    if (existing != null && existing.name == trimmed) return null;
+
+    final epoch = _epoch;
+    final optimistic = [for (final b in list) b.id == blockId ? b.copyWith(name: trimmed) : b];
+    _blocks[courseId] = optimistic;
+    placementBusyCourseId = courseId;
+    notifyListeners();
+    try {
+      final updated = await _backend.renameBlock(blockId: blockId, name: trimmed);
+      if (epoch != _epoch) return null;
+      _blocks[courseId] = updated;
+      return null;
+    } catch (e) {
+      if (epoch != _epoch) return null;
+      if (identical(_blocks[courseId], optimistic)) _blocks[courseId] = list;
+      final err = CourseMapException.from(e);
+      if (_isStaleCode(err.code)) unawaited(loadPlacements(courseId));
+      return err.message;
+    } finally {
+      if (epoch == _epoch) {
+        placementBusyCourseId = null;
+        notifyListeners();
+      }
+    }
+  }
+
+  Future<String?> deleteBlock(String blockId) async {
+    final courseId = selectedCourseId;
+    final prevBlocks = courseId == null ? null : _blocks[courseId];
+    final prevPlacements = courseId == null ? null : _placements[courseId];
+    if (courseId == null || prevBlocks == null || prevPlacements == null) return null;
+    if (placementBusyCourseId != null || busyCourseId == courseId) return null;
+
+    final epoch = _epoch;
+    final nextBlocks = [for (final b in prevBlocks) if (b.id != blockId) b];
+    final nextPlacements = [
+      for (final p in prevPlacements) p.blockId == blockId ? p.withLocation(blockId: null) : p,
+    ];
+    _blocks[courseId] = nextBlocks;
+    _placements[courseId] = nextPlacements;
+    _collapsedBlocks[courseId]?.remove(blockId);
+    placementBusyCourseId = courseId;
+    notifyListeners();
+    try {
+      final res = await _backend.deleteBlock(blockId);
+      if (epoch != _epoch) return null;
+      _blocks[courseId] = res.blocks;
+      _placements[courseId] = res.placements;
+      return null;
+    } catch (e) {
+      if (epoch != _epoch) return null;
+      if (identical(_blocks[courseId], nextBlocks)) _blocks[courseId] = prevBlocks;
+      if (identical(_placements[courseId], nextPlacements)) _placements[courseId] = prevPlacements;
+      final err = CourseMapException.from(e);
+      if (_isStaleCode(err.code)) unawaited(loadPlacements(courseId));
+      return err.message;
+    } finally {
+      if (epoch == _epoch) {
+        placementBusyCourseId = null;
+        notifyListeners();
+      }
+    }
+  }
+
+  Future<String?> reorderBlocks(String unitId, List<String> blockIds) async {
+    final courseId = selectedCourseId;
+    final prev = courseId == null ? null : _blocks[courseId];
+    if (courseId == null || prev == null) return null;
+    if (placementBusyCourseId != null || busyCourseId == courseId) return null;
+    final hereIds = [for (final b in blocksIn(courseId, unitId)) b.id];
+    if (blockIds.length != hereIds.length ||
+        blockIds.toSet().length != blockIds.length ||
+        !hereIds.toSet().containsAll(blockIds)) {
+      return '그사이 이 단원의 블록 목록이 바뀌었습니다. 다시 읽은 뒤 해 주세요.';
+    }
+    if (_sameIds(blockIds, hereIds)) return null;
+
+    final epoch = _epoch;
+    final byId = {for (final b in prev) b.id: b};
+    final reordered = [
+      for (var i = 0; i < blockIds.length; i++) byId[blockIds[i]]!.copyWith(sort: i),
+    ];
+    final next = <CourseUnitBlock>[];
+    var placed = false;
+    for (final b in prev) {
+      if (b.unitId != unitId) {
+        next.add(b);
+      } else if (!placed) {
+        next.addAll(reordered);
+        placed = true;
+      }
+    }
+    _blocks[courseId] = next;
+    placementBusyCourseId = courseId;
+    notifyListeners();
+    try {
+      final updated = await _backend.reorderBlocks(unitId: unitId, blockIds: blockIds);
+      if (epoch != _epoch) return null;
+      _blocks[courseId] = updated;
+      return null;
+    } catch (e) {
+      if (epoch != _epoch) return null;
+      if (identical(_blocks[courseId], next)) _blocks[courseId] = prev;
+      final err = CourseMapException.from(e);
+      if (_isStaleCode(err.code)) unawaited(loadPlacements(courseId));
+      return err.message;
+    } finally {
+      if (epoch == _epoch) {
+        placementBusyCourseId = null;
+        notifyListeners();
+      }
+    }
+  }
+
+  Future<String?> shiftBlock(String unitId, String blockId, int delta) {
+    final courseId = selectedCourseId;
+    if (courseId == null) return Future.value(null);
+    final ids = [for (final b in blocksIn(courseId, unitId)) b.id];
+    final i = ids.indexOf(blockId);
+    final j = i + delta;
+    if (i < 0 || j < 0 || j >= ids.length) return Future.value(null);
+    ids
+      ..removeAt(i)
+      ..insert(j, blockId);
+    return reorderBlocks(unitId, ids);
+  }
+
+  Future<String?> setPlacementBlock(
+    String unitId,
+    String placementId,
+    String? blockId, {
+    List<String>? orderedIds,
+  }) async {
+    final courseId = selectedCourseId;
+    final prev = courseId == null ? null : _placements[courseId];
+    if (courseId == null || prev == null) return null;
+    if (placementBusyCourseId != null || busyCourseId == courseId) return null;
+
+    final target = prev.where((p) => p.id == placementId && p.unitId == unitId).firstOrNull;
+    if (target == null) return null;
+
+    final hereIds = [for (final p in placementsIn(courseId, unitId)) p.id];
+    if (orderedIds != null &&
+        (orderedIds.length != hereIds.length ||
+            orderedIds.toSet().length != orderedIds.length ||
+            !hereIds.toSet().containsAll(orderedIds))) {
+      return '그사이 이 단원의 개념 목록이 바뀌었습니다. 다시 읽은 뒤 해 주세요.';
+    }
+    if (target.blockId == blockId && (orderedIds == null || _sameIds(orderedIds, hereIds))) {
+      return null;
+    }
+
+    final epoch = _epoch;
+    final byId = {
+      for (final p in prev)
+        p.id: p.id == placementId ? p.withLocation(blockId: blockId) : p,
+    };
+    final effectiveOrder = orderedIds ?? hereIds;
+    final reorderedHere = [
+      for (var i = 0; i < effectiveOrder.length; i++) byId[effectiveOrder[i]]!.withLocation(
+        blockId: effectiveOrder[i] == placementId ? blockId : byId[effectiveOrder[i]]!.blockId,
+        sort: i,
+      ),
+    ];
+    final next = <CourseMapPlacement>[];
+    var placed = false;
+    for (final p in prev) {
+      if (p.unitId != unitId) {
+        next.add(p);
+      } else if (!placed) {
+        next.addAll(reorderedHere);
+        placed = true;
+      }
+    }
+    _placements[courseId] = next;
+    if (blockId != null) _collapsedBlocks[courseId]?.remove(blockId);
+    placementBusyCourseId = courseId;
+    notifyListeners();
+    try {
+      final updated = await _backend.setPlacementBlock(
+        placementId: placementId,
+        blockId: blockId,
+        orderedIds: orderedIds,
+      );
+      if (epoch != _epoch) return null;
+      _placements[courseId] = updated;
+      return null;
+    } catch (e) {
+      if (epoch != _epoch) return null;
+      if (identical(_placements[courseId], next)) _placements[courseId] = prev;
+      final err = CourseMapException.from(e);
+      if (_isStaleCode(err.code)) unawaited(loadPlacements(courseId));
+      return err.message;
+    } finally {
+      if (epoch == _epoch) {
+        placementBusyCourseId = null;
+        notifyListeners();
+      }
+    }
+  }
+
+  Future<String?> addConceptsToBlock(String blockId, List<String> conceptIds) async {
+    final courseId = selectedCourseId;
+    if (courseId == null) return null;
+    _collapsedBlocks[courseId]?.remove(blockId);
+    return _placementAction(() => _backend.addConceptsToBlock(blockId: blockId, conceptIds: conceptIds));
   }
 
   Future<List<CourseMapConceptHit>> searchConcepts(String query) => _backend.searchConcepts(query);

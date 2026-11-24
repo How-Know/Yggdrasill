@@ -390,14 +390,20 @@ def mock_pdf_count() -> int:
     )
 
 
+def _note_server(result: dict) -> dict:
+    if result.get("status") not in {"created", "variant", "same"}:
+        return result
+    note = mock_sync.sync_placed([item.get("path", "") for item in result.get("items", [])])
+    result["server"] = note
+    for item in result.get("items", []):
+        item["server"] = note
+    return result
+
+
 def import_bytes(filename: str, data: bytes) -> dict:
     suffix = Path(filename).suffix.lower()
     if suffix == ".pdf":
-        result = mock_pdf.import_pdf(filename, data, MOCK_ROOT)
-        note = mock_sync.sync_placed([item.get("path", "") for item in result.get("items", [])])
-        result["server"] = note
-        for item in result.get("items", []):
-            item["server"] = note
+        result = _note_server(mock_pdf.import_pdf(filename, data, MOCK_ROOT))
         invalidate()
         return result
     if suffix != ".hml":
@@ -417,6 +423,28 @@ def import_bytes(filename: str, data: bytes) -> dict:
         "where": f"{placed['level']} / {parsed['period']} / {bucket}",
         "path": str(target),
     }
+
+
+def import_pdf_batch(files: list[tuple[str, bytes]]) -> list[dict]:
+    results = mock_pdf.import_many(files, MOCK_ROOT)
+    placed_paths = list(
+        dict.fromkeys(
+            item.get("path", "")
+            for result in results
+            if result.get("status") in {"created", "variant", "same"}
+            for item in result.get("items", [])
+            if item.get("path", "")
+        )
+    )
+    if placed_paths:
+        note = mock_sync.sync_placed(placed_paths)
+        for result in results:
+            if result.get("status") in {"created", "variant", "same"}:
+                result["server"] = note
+                for item in result.get("items", []):
+                    item["server"] = note
+    invalidate()
+    return results
 
 
 def _iter_hml(root: Path):

@@ -853,10 +853,11 @@ const SOLUTION_TRANSCRIBE_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검
 1. 정답(solution_answer)과 해설(solution_transcribed)을 반드시 분리합니다(이중 추출 금지):
    - solution_answer: 최종 답만 적습니다(객관식은 ①~⑤, 주관식·표·다중 빈칸은 값/식 그대로, 예: "$\\times$", "(1) 1, 3 (2) 5, 15"). 답이 명시되지 않았으면 풀이 마지막 결론 값을 적고 note에 "답 표기 없음, 결론 값 사용"이라고 적습니다.
    - solution_transcribed: 순수 풀이 과정(해설 본문)만 원본 그대로 한글+LaTeX($...$)로 적습니다. 문항 번호("16", "01." 등), 정답 줄("16 답 ×", "답 ③", "[정답] ..."), "[해설]"·"[풀이]" 같은 머리말은 절대 solution_transcribed 에 넣지 마세요(화면에서 '정답'과 '[해설]' 머리말을 따로 붙이므로 넣으면 두 번 나옵니다). 해설지에 풀이 과정 없이 정답만 인쇄된 문항이면 solution_transcribed 는 빈 문자열 "" 로 두고 solution_answer 에만 정답을 적으세요(found=true 유지).
+   - 풀이의 마지막 결론은 정답 줄이 아니라 풀이 본문입니다. "…이므로 k=5", "따라서 a=3", 마지막 식 끝의 "=4\\sqrt{2}" 처럼 풀이 문장·식에 이어지는 값은, 같은 값을 solution_answer 에 적더라도 solution_transcribed 에서 지우지 말고 원본 그대로 끝까지 적습니다.
    - 분수는 \\frac{a}{b}, 근호는 \\sqrt{}, 거듭제곱은 ^{}, 원문자 선지는 ①~⑤ 그대로 적습니다.
    - 줄 구분: 원본에서 줄이 바뀌는 곳마다 \\n 으로 줄을 바꿉니다(화면에도 그 줄 구분대로 나옵니다). 한 줄에 식 하나씩 인쇄된 풀이는 식마다 줄을 나누고, 서로 다른 줄의 식을 한 줄에 이어 붙이지 마세요. 경우 번호 (ⅰ), (ⅱ), ①, ② 로 시작하는 줄도 원본대로 새 줄에서 시작합니다. 단 폭이 좁아 한 문장이 다음 줄로 넘어간 것은 줄을 나누지 말고 한 줄로 이어 적습니다.
-   - 해설 첫머리에 '[출제의도] …' 문장이 인쇄돼 있으면 해설 본문의 일부입니다. 빼지 말고 첫 줄에 그대로 옮깁니다.
-   - 해설 안에 글자로 옮길 수 없는 그림(좌표평면 그래프, 도형, 수직선, 벤다이어그램 등)이 인쇄돼 있으면 그 자리에 [그림] 만 적습니다. 그림 내용을 글로 설명하지 마세요(그림은 원본에서 잘라 그 자리에 넣습니다). 글자로 된 표(증감표 등)는 그림이 아닙니다. 한 행을 한 줄로, 칸을 | 로 나눠 옮겨 적습니다(예: | $x$ | $\\cdots$ | $1$ | $\\cdots$ |). 증가·감소 화살표는 $\\nearrow$, $\\searrow$ 로 적습니다.
+   - 해설 첫머리에 출제의도 문장('[출제의도] …', '출제의도 : …')이 인쇄돼 있으면 해설 본문의 일부입니다. 빼지 말고 첫 줄에 옮기되, 머리 표기는 인쇄된 모양과 관계없이 '[출제의도] …' 로 적습니다.
+   - 해설 안에 글자로 옮길 수 없는 그림(좌표평면 그래프, 도형, 수직선, 벤다이어그램 등)이 인쇄돼 있으면 그 자리에 [그림] 만 적습니다. 그림 내용을 글로 설명하지 마세요(그림은 원본에서 잘라 그 자리에 넣습니다). 그림 바로 아래·위에 그 그림의 번호·이름만 적은 캡션 줄("[그림 1]", "<그림 2>" 등)은 그림과 함께 잘라 넣으므로 따로 적지 않습니다. 단, 캡션이 그림과 떨어져 다음 단(다음 이미지) 맨 위에 따로 인쇄돼 있으면 그림과 함께 자를 수 없으므로, [그림] 바로 다음 줄에 그 캡션을 원본대로 한 줄로 적습니다(예: [그림]\\n[그림 2]). 풀이 문장 안에서 그림을 가리키는 말("[그림 1]과 같이")은 원본대로 적습니다. 글자로 된 표(증감표 등)는 그림이 아닙니다. 한 행을 한 줄로, 칸을 | 로 나눠 옮겨 적습니다(예: | $x$ | $\\cdots$ | $1$ | $\\cdots$ |). 증가·감소 화살표는 $\\nearrow$, $\\searrow$ 로 적습니다.
 2. 잘린 영역에 해당 문항 번호의 정답·풀이가 전혀 보이지 않거나(다른 문항만 보임 등) 읽을 수 없으면 found=false 로 두고 solution_transcribed는 "", solution_answer는 null, note에 원인을 적습니다.
 3. 영역 안에 다른 문항의 풀이 일부가 함께 보이면 그 부분은 제외하고 요청된 문항 번호의 것만 전사합니다.
    - 이미지가 회색 가로선으로 위아래 두 조각으로 나뉘어 있으면, 아래 조각은 해설지 다음 단(또는 다음 쪽) 맨 위입니다. 위 조각 풀이가 단 끝에서 끊겨 아래 조각으로 이어지면 이어서 끝까지 옮기세요. 아래 조각의 단원 제목 띠·쪽 머리글·다른 문항 번호로 시작하는 풀이는 옮기지 않습니다.
@@ -985,6 +986,7 @@ const RENDER_CHECK_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔
 - 칸 안에 그림이 들어 있는 표도 같습니다. 카드에서 표 전체(칸의 글자·빈칸·그림 포함)가 그림 이미지 한 장으로 들어가는 것이 정상입니다. 표가 글자 표가 아니라 이미지라는 이유로 이상으로 보지 말고, 그 한 장 안에 원본 표의 줄·칸·글자·그림이 모두 보이는지만 대조하세요.
 - 입력에 source_corrected=true 인 문항은 인쇄된 원본 자체가 틀려 운영자가 본문을 고친 문항입니다. printed_stem(및 printed_choices)이 고치기 전 글이고, 문항 카드에 보이는 글이 운영자가 고친 글입니다. 둘이 서로 다른 부분은 운영자의 글이 기준이므로 그 부분이 원본 이미지와 다른 것은 불일치가 아닙니다(그 이유만으로 fidelity_ok=false 로 하지 마세요). 그 밖의 부분(고치지 않은 글·숫자·수식·조건·선지·그림과 그림 속 표기)은 평소대로 원본 이미지와 대조합니다.
 - 입력에 answer_corrected=true 인 문항은 운영자가 교재 정답 오류를 확인해 채점 정답을 교정한 문항입니다. 정답+해설 카드의 정답 값이 원본 해설에 인쇄된 정답과 다른 것은 이상이 아닙니다(answer_ok=true). 정답이 깨지거나 읽히지 않는 것은 그대로 이상입니다.
+- 입력에 solution_corrected=true 인 문항은 인쇄된 원본 해설에 오류가 있어 운영자가 해설을 교정한 문항입니다. 정답+해설 카드의 해설이 교정본이고, solution_correction 이 있으면 그것이 교정한 오류의 내용입니다. 교정한 문장·식이 원본 해설 이미지와 다른 것은 이상이 아닙니다(그 이유만으로 solution_ok=false 로 하지 말고, 원본 문장으로 되돌리라고 적지도 마세요). 그 밖의 부분은 평소대로 봅니다: 풀이 줄·단계 표시·결론이 빠졌거나 해설이 중간에서 끝나거나 글자·수식이 깨진 것, 해설 그림의 누락·위치·크기는 그대로 이상입니다.
 - 이상이 있으면 issue_title(한 줄)과 issue_detail(어느 카드의 어디가 어떻게 보이는지, 원본과 무엇이 다른지)을 한글로 적고, 없으면 둘 다 null.
 - issue_kind: 이상의 원인 분류. 운영자가 어디를 고칠지 정하는 기준입니다.
   - "data": 본문·공통발문·선지·정답 데이터를 수정하면 해결되는 모든 문제 — 글자·수식·참조 기호((가)~(라) 등)·지시문·선지가 빠지거나 두 번 나옴, 오타, 원본과 내용이 다름, 정답이 비어 있거나 [image] 자리표시자임, 해설이 중간에서 끝남, 또는 렌더 엔진 문법과 다르게 작성됨(예: [ [[공백:n]] ] 처럼 대괄호를 겹쳐 써서 [[ ]] 로 노출됨, 수식 안에 \\text{(가)} 없이 한글을 써서 빈 괄호 () 로 보임, LaTeX/마크업 문법 오타).
@@ -1003,6 +1005,18 @@ export function sourceCorrectionInput(raw: unknown): Rec {
     printed_stem: String(sc.stem ?? '').slice(0, 2800),
     ...(choices.length > 0 ? { printed_choices: choices } : {}),
   };
+}
+
+/**
+ * 사장님이 원본 해설의 오류를 교정한 문항이면 그 사실(과 교정한 오류의 내용)을 렌더 검수 입력에 싣는다.
+ * 교정하면 고치기 전 전사가 solution_transcribed_original 에 남는다([originalSolution]).
+ * 카드가 AI 풀이면 원본 해설과 대조하지 않으므로 싣지 않는다.
+ */
+export function solutionCorrectionInput(originalSolution: unknown, solutionKind: unknown, findingDetail?: unknown): Rec {
+  if (solutionKind === 'ai') return {};
+  if (typeof originalSolution !== 'string' || !originalSolution.trim()) return {};
+  const note = typeof findingDetail === 'string' ? findingDetail.trim().slice(0, 600) : '';
+  return { solution_corrected: true, ...(note ? { solution_correction: note } : {}) };
 }
 
 async function loadDictionaries(
@@ -1169,6 +1183,9 @@ export async function handleTextbookProblemReview(
   const forceRerun = body.force_rerun === true;
   // 수학만 다시 푼다(수학 오류 문항). 품질 판정·승인·수정안·V2 렌더 판정은 그대로 둔다.
   const mathOnly = body.math_only === true;
+  // 해설 논리 오류 재확인(math_only 와 함께 온다). 앱이 지정한 문항 중, 마지막 풀이 뒤에 본문·선지·공통 발문이
+  // 반영 대기로 바뀐 문항은 정답 축이 통과여도 고친 본문으로 다시 푼다. 그렇지 않은 문항은 AI 호출 없이 지나간다.
+  const logicRecheck = mathOnly && body.logic_recheck === true;
   // 배점을 본문이 아닌 별도 값으로 보관하는 범위(모의고사). 검수 카드가 배점을 찍으므로 본문 수정안에는 넣지 않는다.
   const scoreSeparate = body.score_separate === true;
   const requestedCropIds = Array.isArray(body.crop_ids)
@@ -1209,7 +1226,24 @@ export async function handleTextbookProblemReview(
   }
   const allItems = (((overviewRes.data as Rec | null)?.items ?? []) as unknown[])
     .map((x) => withoutDependentSetCommonStem((x ?? {}) as Rec));
-  const todoItems = allItems.filter((it) => mathOnly ? isMathResolveTarget(it) : isReviewTodo(it, forceRerun));
+  const staleLogic = new Set<string>();
+  if (logicRecheck && requestedCropIds.length > 0) {
+    // 마지막 풀이 시각(analyzed_at)은 overview 에 없어 여기서 읽는다.
+    const { data: solvedRows } = await auth.admin
+      .from('textbook_problem_analyses')
+      .select('crop_id, analyzed_at, staged_changes')
+      .eq('academy_id', academyId)
+      .in('crop_id', requestedCropIds);
+    const solvedByCrop = new Map<string, Rec>();
+    for (const r of (solvedRows ?? []) as Rec[]) solvedByCrop.set(String(r.crop_id), r);
+    for (const it of allItems) {
+      const id = String(it.crop_id);
+      if (isLogicRecheckTarget(it, solvedByCrop.get(id))) staleLogic.add(id);
+    }
+  }
+  const todoItems = allItems.filter((it) =>
+    mathOnly ? isMathResolveTarget(it) || staleLogic.has(String(it.crop_id)) : isReviewTodo(it, forceRerun)
+  );
 
   if (todoItems.length === 0) {
     return jsonResponse({ ok: true, processed: 0, remaining: 0, total: allItems.length, done: true });
@@ -1874,6 +1908,33 @@ export function isMathResolveTarget(it: Rec): boolean {
   return String(it.math_status ?? 'pending') === 'issue';
 }
 
+/** AI 가 푸는 문항 내용. 이 값이 반영 대기로 바뀌면 그 전에 한 해설 논리 판정은 옛 본문 기준이다. */
+const PROBLEM_TEXT_STAGED_FIELDS = ['stem', 'choices', 'common_stem'];
+
+/**
+ * 해설 논리 오류 재확인 대상(logic_recheck): 해설 논리 오류가 열려 있고, 마지막 풀이(analyzed_at) 뒤에
+ * 본문·선지·공통 발문이 반영 대기로 바뀐 문항. 정답 수정안을 쌓으며 정답 축이 통과가 된 문항도 대상이다(승인은 제외).
+ * 고친 본문으로 이미 다시 풀었으면(analyzed_at 이 더 늦다) 대상이 아니라서 같은 문항을 되풀이해 풀지 않는다.
+ */
+export function isLogicRecheckTarget(it: Rec, analysis: Rec | null | undefined): boolean {
+  if (String(it.math_status ?? 'pending') === 'approved') return false;
+  const findings = Array.isArray(it.findings) ? it.findings as Rec[] : [];
+  const logicOpen = findings.some((f) =>
+    f?.error_type === 'solution_logic' && (f.proposal as Rec | null | undefined)?.target !== 'correction_note'
+  );
+  if (!logicOpen) return false;
+  const solvedAt = Date.parse(String(analysis?.analyzed_at ?? ''));
+  if (!Number.isFinite(solvedAt)) return false;
+  const notes = (analysis?.staged_changes as Rec | null | undefined)?.notes;
+  if (!Array.isArray(notes)) return false;
+  return (notes as Rec[]).some((n) => {
+    const fields = Array.isArray(n?.fields) ? n.fields as unknown[] : [];
+    if (!fields.some((f) => PROBLEM_TEXT_STAGED_FIELDS.includes(String(f)))) return false;
+    const at = Date.parse(String(n.at ?? ''));
+    return Number.isFinite(at) && at > solvedAt;
+  });
+}
+
 /**
  * 정답 대조에 쓸 원본 해설. 저장 규칙과 같은 해설로 대조한다: 운영자가 직접 고친 해설 → 이번 Vision 전사 →
  * 저장된 Vision 전사(이번에 해설 이미지를 안 보냈거나 못 읽은 경우) 순. 없으면 null.
@@ -2181,7 +2242,7 @@ export async function handleTextbookProblemRenderCheck(
   const { data: analyses } = await auth.admin
     .from('textbook_problem_analyses')
     .select(
-      'crop_id,academy_id,quality_status,quality_checks,render_checks,fix_proposal,solved_at,source_correction,textbook_problem_crops(problem_number,label,pb_question_uid)',
+      'crop_id,academy_id,quality_status,quality_checks,render_checks,fix_proposal,solved_at,source_correction,solution_transcribed_original,textbook_problem_crops(problem_number,label,pb_question_uid)',
     )
     .in('crop_id', cropIds);
   const analysisByCrop = new Map<string, Rec>();
@@ -2203,6 +2264,23 @@ export async function handleTextbookProblemRenderCheck(
     .eq('resolution', 'noted')
     .eq('proposal->>target', 'correction_note');
   const correctedCrops = new Set(((notedNotes ?? []) as Rec[]).map((f) => String(f.crop_id)));
+  // 사장님이 해설 오류를 교정한 문항의 지적 내용. 카드의 해설이 교정본이라 그 부분은 원본 해설과 다른 것이 정상이다.
+  const solutionFixedCrops = [...analysisByCrop.values()]
+    .filter((a) => typeof a.solution_transcribed_original === 'string' && a.solution_transcribed_original.trim())
+    .map((a) => String(a.crop_id));
+  const { data: solutionFixNotes } = solutionFixedCrops.length === 0 ? { data: [] } : await auth.admin
+    .from('textbook_review_findings')
+    .select('crop_id,detail')
+    .in('crop_id', solutionFixedCrops)
+    .eq('check_key', 'ai_solution_logic')
+    .eq('status', 'resolved')
+    .eq('resolution', 'manual_edit')
+    .order('resolved_at', { ascending: false });
+  const solutionFixDetailByCrop = new Map<string, string>();
+  for (const f of (solutionFixNotes ?? []) as Rec[]) {
+    const id = String(f.crop_id);
+    if (!solutionFixDetailByCrop.has(id)) solutionFixDetailByCrop.set(id, String(f.detail ?? ''));
+  }
 
   const startedAt = Date.now();
   const model = modelFor('primary');
@@ -2230,6 +2308,9 @@ export async function handleTextbookProblemRenderCheck(
           ...(imageChoicesByCrop.has(x.cropId) ? { image_choices: true } : {}),
           ...(correctedCrops.has(x.cropId) ? { answer_corrected: true } : {}),
           ...sourceCorrectionInput(a.source_correction),
+          ...(x.answerSolutionUrl
+            ? solutionCorrectionInput(a.solution_transcribed_original, x.solutionKind, solutionFixDetailByCrop.get(x.cropId))
+            : {}),
           solution_kind: x.solutionKind,
         };
       }),

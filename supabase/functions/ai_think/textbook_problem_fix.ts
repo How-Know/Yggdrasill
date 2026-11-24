@@ -234,6 +234,9 @@ export function buildFigureProposal(args: {
       const prevWidth = Number(prev?.widthEm);
       const colFallback = Math.round(Math.max(MIN_WIDTH_EM, Math.min(MAX_WIDTH_EM, ((m.bbox[3] - m.bbox[1]) / 1000) * 26)) * 2) / 2;
       const item = figureLayoutItem(m, emPx, imageWidthPx, Number.isFinite(prevWidth) && prevWidth > 0 ? prevWidth : colFallback);
+      // 시험지 PDF 에서 읽은 자리로 선지 아래에 둔 그림(모의고사 정합성 점검)은 그대로 둔다.
+      // AI 가 재는 배치에는 '선지 아래'가 없어 '글 아래'로 재지고, 그대로 쓰면 본문 아래로 돌아간다.
+      if (prev?.position === 'below-choices' && item.position === 'below-stem') item.position = 'below-choices';
       const prevHeight = Number(prev?.heightEm);
       const heightEm = item.position === 'inline-text' && prev?.position !== 'inline-text'
         ? inlineFigureHeightEm(m, emPx, args.imageHeightPx ?? 0)
@@ -867,6 +870,16 @@ const FIX_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔진의 [�
 - 마크업과 LaTeX 문법(우리 V2 렌더 엔진 규칙):
   - 수식 구분자: 저장 본문은 "l \\parallel m", "\\angle x", "\\frac{1}{2}" 처럼 $ 없이 LaTeX 명령만 적는 것이 정상 규약입니다. V2 엔진이 자동으로 수식으로 찍으므로 $ 가 없다는 것은 오류가 아닙니다. $ 를 붙이거나 떼는 것만으로는 절대 수정안을 내지 말고, issues 에도 "수식 구분자 누락"을 적지 마세요. 판단은 V2 렌더 화면에서 수식이 실제로 깨져 보이는지로만 합니다.
   - 수식 $...$(LaTeX, $ 생략 가능), 문단 구분 [문단], 상자 [박스시작]...[박스끝], 표 [표시작]...[표끝], 그림 자리 [그림].
+  - 표 안의 글: [표시작] 과 [표끝] 사이에는 LaTeX tabular 전체를 줄을 나눠 적습니다. 열은 모두 c 정렬("|c|c|")로 두고, 행은 "칸 & 칸 \\\\" 로 끝내며 행 사이에 \\hline 을 둡니다. 칸 안의 한글은 \\text{...} 로 감쌉니다. "z | 값" 처럼 세로선으로 칸을 나눈 줄이나 마크다운 표로 적지 마세요(V2 엔진이 표로 읽지 못해 문항 카드가 찍히지 않습니다). 저장 stem 에 이미 있는 표는 형식을 그대로 두고 틀린 칸만 고칩니다. 원본에 있는 표가 저장 stem 에 빠져 있어 새로 적을 때도 이 형식으로 적습니다. 예(줄 앞에 공백 없이):
+[표시작]
+\\begin{tabular}{|c|c|}
+\\hline
+z & \\text{P}(0\\leq Z\\leq z) \\\\
+\\hline
+0.5 & 0.1915 \\\\
+\\hline
+\\end{tabular}
+[표끝]
   - 공백 마커는 단일 대괄호 [공백:n] 입니다!
     * 그냥 빈칸 공백: [공백:3]
     * 소괄호 빈칸 (   ): ([공백:3])
@@ -921,7 +934,7 @@ const FIX_INSTRUCTIONS = `당신은 Yggdrasill 수학 문항 검수 엔진의 [�
   - 원본 본문 이미지(세트 지시문 포함)를 보고 처음부터 다시 푼 풀이를 proposed_ai_solution 에, 그 답을 proposed_ai_answer 에 적으세요.
   - 정답/해설 이미지가 주어졌으면 거기서 읽은 최종 정답을 proposed_solution_answer 에, 문항 번호·"답 ..." 줄·"[해설]" 머리말을 모두 뺀 순수 해설 본문만 proposed_solution_transcribed 에 적으세요(풀이 과정 없이 정답만 인쇄된 문항이면 null).
     해설 이미지가 회색 가로선으로 위아래 두 조각이면 아래 조각은 해설지 다음 단(또는 다음 쪽) 맨 위입니다. 위 조각에서 끊긴 풀이가 이어지면 끝까지 옮기고, 아래 조각의 단원 제목·다른 문항 풀이는 빼세요.
-    해설 본문은 한글+LaTeX($...$)로 적고, 원본에서 줄이 바뀌는 곳마다 줄을 바꿔 적습니다(한 줄에 식 하나씩 인쇄된 풀이는 식마다 줄을 나누고, 폭이 좁아 다음 줄로 넘어간 한 문장은 한 줄로 잇습니다). 첫머리의 '[출제의도] …' 문장은 해설 본문이므로 첫 줄에 그대로 옮깁니다. 글자로 된 표(증감표 등)는 한 행을 한 줄로, 칸을 | 로 나눠 적습니다(예: | $x$ | $\\cdots$ | $1$ |). proposed_ai_solution 도 한 줄에 한 단계씩 줄을 나눠 씁니다.
+    해설 본문은 한글+LaTeX($...$)로 적고, 원본에서 줄이 바뀌는 곳마다 줄을 바꿔 적습니다(한 줄에 식 하나씩 인쇄된 풀이는 식마다 줄을 나누고, 폭이 좁아 다음 줄로 넘어간 한 문장은 한 줄로 잇습니다). 첫머리의 출제의도 문장('[출제의도] …', '출제의도 : …')은 해설 본문이므로 첫 줄에 옮기되, 머리 표기는 인쇄된 모양과 관계없이 '[출제의도] …' 로 적습니다. 글자로 된 표(증감표 등)는 한 행을 한 줄로, 칸을 | 로 나눠 적습니다(예: | $x$ | $\\cdots$ | $1$ |). proposed_ai_solution 도 한 줄에 한 단계씩 줄을 나눠 씁니다.
   - math_reason 에는 왜 이 정답으로 확정했는지 한 줄로 적으세요.
 - 해설 좌표 어긋남 복구("해설 PDF 전체 페이지 이미지"가 함께 주어진 경우):
   - 수력충전 등 연산 교재는 한 해설 페이지 안에서 번호가 01번부터 여러 번 새로 시작하므로 기존 해설 크롭 좌표가 엉뚱한 블록을 가리켜 solution_vision_found = false 이거나 다른 문항의 답이 읽혔을 수 있습니다.
@@ -946,6 +959,17 @@ export function isSolutionSettled(it: Rec): boolean {
   const vision = (((it.quality_checks ?? {}) as Rec).solution_vision ?? {}) as Rec;
   return (mathOk || logicOnly) && vision.found !== false &&
     typeof it.solution_transcribed === 'string' && it.solution_transcribed.trim().length > 0;
+}
+
+/**
+ * 저장된 해설 위치를 수정 단계가 찾은 상자 하나로 바꿔도 되는가.
+ * 사람이 고친 위치(edited_at)와, 이어진 영역까지 계산해 둔 위치(continuation_regions 가 null 이 아님: 모의고사.
+ * 게이트웨이가 번호 자리에서 첫 영역과 다음 단·쪽으로 이어진 영역을 계산한다)는 그대로 둔다.
+ * 그런 위치를 상자 하나로 바꾸면 이어진 영역과 어긋나고, 옆 문항 풀이까지 든 넓은 상자가 원본 해설로 보인다.
+ */
+export function solutionRefReplaceable(ref: Rec | null | undefined): boolean {
+  if (!ref) return true;
+  return !ref.edited_at && ref.continuation_regions == null;
 }
 
 const MAX_FIX_CHUNK = 4;
@@ -1430,7 +1454,7 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
     if (correctedSolBox && solPage > 0) {
       const { data: existingRef } = await auth.admin
         .from('textbook_problem_solution_refs')
-        .select('crop_id,edited_at')
+        .select('crop_id,edited_at,continuation_regions')
         .eq('crop_id', cid)
         .maybeSingle();
       if (!existingRef) {
@@ -1443,7 +1467,7 @@ export async function handleTextbookProblemFix(req: Request, auth: AuthContext, 
           content_region_1k: correctedSolBox,
           updated_at: nowIso,
         });
-      } else if (!existingRef.edited_at) {
+      } else if (solutionRefReplaceable(existingRef as Rec)) {
         await auth.admin
           .from('textbook_problem_solution_refs')
           .update({

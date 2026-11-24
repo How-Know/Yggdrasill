@@ -15,6 +15,7 @@ import {
 } from './problem_bank/textbook_only_numbers.js';
 import { normalizeProblemNumberKey } from './textbook/problem_number_key.js';
 import { mockReviewPending, syncMockExamPresetsForExam } from './mock_exam/mock_preset.js';
+import { dropMergedSlotQuestions, relinkMergedSlots } from './mock_exam/merged_slots.js';
 import { syncMiddleSchoolPresetForDocument } from './problem_bank/naesin_preset.js';
 
 const htmlDecode = hePkg.decode;
@@ -5432,6 +5433,16 @@ async function processOneJob(job) {
   built.questions = dualModeResult.questions;
 
   const { questions, stats } = built;
+  // 가형·나형에 같이 실린 문항을 합친 회차: 다른 구간의 문항을 가리키는 자리는 문항을 다시 만들지 않는다.
+  if (doc?.meta?.mock_scope) {
+    const droppedMergedNumbers = await dropMergedSlotQuestions(supa, questions, doc.meta.mock_scope);
+    if (droppedMergedNumbers.length > 0) {
+      console.log(
+        '[pb-extract-worker] mock_merged_slots_skipped',
+        JSON.stringify({ jobId: job.id, numbers: droppedMergedNumbers }),
+      );
+    }
+  }
   const dualModeStats = dualModeResult.stats || {};
   const nowIso = new Date().toISOString();
   const jobSummary =
@@ -5837,6 +5848,16 @@ async function processOneJob(job) {
       JSON.stringify({ jobId: job.id, linked }),
     );
     const mockExamId = compact(doc?.meta?.mock_scope?.exam_id);
+    if (mockExamId) {
+      // 이 구간의 문항 id 가 바뀌었으면, 이 문항을 가리키던 다른 구간의 자리를 새 문항으로 이어 준다.
+      const mergedRelink = await relinkMergedSlots(supa, { academyId: job.academy_id, examId: mockExamId });
+      if (mergedRelink.relinked > 0 || mergedRelink.unresolved.length > 0) {
+        console.log(
+          '[pb-extract-worker] mock_merged_slots_relinked',
+          JSON.stringify({ jobId: job.id, examId: mockExamId, ...mergedRelink }),
+        );
+      }
+    }
     if (mockExamId) {
       try {
         const presetSync = await syncMockExamPresetsForExam(supa, mockExamId);

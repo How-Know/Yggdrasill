@@ -5,8 +5,10 @@ import 'package:flutter/material.dart';
 import '../../../services/concept_library_controller.dart';
 import '../../think/think_style.dart';
 
-/// 개념 탭 작업 공간. 왼쪽은 교육과정 흐름과 개념 라이브러리 중 하나, 오른쪽은 연산 리스트다. 너비는 1:1.
-/// 바꿔도 셋 다 붙여 둔다. Think 대화는 칸을 차지하지 않고, 오른쪽 아래 버튼으로 펼친다.
+enum _RightSheetKind { none, arithmetic, foundations }
+
+/// 개념 탭 작업 공간. 왼쪽은 교육과정 흐름과 개념 라이브러리 중 하나, 오른쪽은 사고 리스트다. 너비는 1:1.
+/// 연산 리스트와 사고의 토대는 오른쪽 가장자리 손잡이로 여는 시트다. Think 대화는 칸을 차지하지 않고, 오른쪽 아래 버튼으로 펼친다.
 /// 설계: docs/architecture/concept-library.md, docs/architecture/course-map.md
 class ConceptWorkspace extends StatefulWidget {
   const ConceptWorkspace({
@@ -16,7 +18,9 @@ class ConceptWorkspace extends StatefulWidget {
     required this.courseSummary,
     required this.libraryDetail,
     required this.librarySummary,
+    this.thinking,
     this.arithmetic,
+    this.foundations,
     this.showLibrary = false,
     this.chat,
     this.chatExpanded = false,
@@ -29,10 +33,16 @@ class ConceptWorkspace extends StatefulWidget {
   final Widget libraryDetail;
   final Widget librarySummary;
 
-  /// 오른쪽 절반. 연산 리스트.
+  /// 오른쪽 절반. 사고 리스트.
+  final Widget? thinking;
+
+  /// 오른쪽에서 밀려 나오는 연산 리스트. 없으면 손잡이를 두지 않는다.
   final Widget? arithmetic;
 
-  /// 왼쪽을 흐름 대신 개념 라이브러리로 보일지. 오른쪽 연산 리스트는 그대로다.
+  /// 오른쪽에서 밀려 나오는 사고의 토대(C) 리스트. 없으면 손잡이를 두지 않는다.
+  final Widget? foundations;
+
+  /// 왼쪽을 흐름 대신 개념 라이브러리로 보일지. 오른쪽 사고 리스트는 그대로다.
   final bool showLibrary;
 
   /// Think 대화. 접혀 있으면 오른쪽 아래 버튼만 보이고, [chatExpanded]일 때 그 위에 겹쳐 펼친다.
@@ -56,8 +66,13 @@ class _ConceptWorkspaceState extends State<ConceptWorkspace> {
   final _courseSummaryKey = GlobalKey(debugLabel: 'courseSummary');
   final _libraryDetailKey = GlobalKey(debugLabel: 'libraryDetail');
   final _librarySummaryKey = GlobalKey(debugLabel: 'librarySummary');
+  final _thinkingKey = GlobalKey(debugLabel: 'thinkingList');
   final _arithmeticKey = GlobalKey(debugLabel: 'arithmeticList');
+  final _foundationKey = GlobalKey(debugLabel: 'foundationList');
   final _chatKey = GlobalKey(debugLabel: 'conceptChat');
+  _RightSheetKind _openSheet = _RightSheetKind.none;
+
+  static const Duration _sheetDuration = Duration(milliseconds: 220);
 
   ConceptLibraryController get _c => widget.controller;
 
@@ -96,7 +111,7 @@ class _ConceptWorkspaceState extends State<ConceptWorkspace> {
           final expanded = widget.chatExpanded;
           final panelWidth = math.min(ConceptWorkspace.chatWidthFor(total), math.max(0.0, total - 32));
           final panelHeight = math.max(0.0, constraints.maxHeight - 32);
-          // 저장 줄은 왼쪽 절반에 있다. 버튼은 오른쪽 연산 리스트 위에 둔다.
+          // 저장 줄은 왼쪽 절반에 있다. 버튼은 오른쪽 사고 리스트 위에 둔다.
           return Stack(
             children: [
               Positioned.fill(child: body),
@@ -127,8 +142,14 @@ class _ConceptWorkspaceState extends State<ConceptWorkspace> {
     );
   }
 
-  /// 왼쪽 절반은 흐름 또는 라이브러리, 오른쪽 절반은 연산 리스트.
+  /// 왼쪽 절반은 흐름 또는 라이브러리, 오른쪽 절반은 사고 리스트. 연산·사고의 토대는 그 위로 덮는 시트다.
   Widget _split(BoxConstraints constraints) {
+    final sheetWidth = math.max(0.0, (constraints.maxWidth - 16) / 2);
+    final arithmeticOpen = _openSheet == _RightSheetKind.arithmetic && widget.arithmetic != null;
+    final foundationOpen = _openSheet == _RightSheetKind.foundations && widget.foundations != null;
+    final anySheetOpen = arithmeticOpen || foundationOpen;
+    final handleCount = (widget.arithmetic != null ? 1 : 0) + (widget.foundations != null ? 1 : 0);
+    final handlesHeight = handleCount == 0 ? 0.0 : (handleCount * 72.0 + (handleCount - 1) * 8.0);
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -149,8 +170,8 @@ class _ConceptWorkspaceState extends State<ConceptWorkspace> {
             const VerticalDivider(color: kThinkBorder, width: 16),
             Expanded(
               child: KeyedSubtree(
-                key: const ValueKey('concept-workspace-arithmetic'),
-                child: _keep(_arithmeticKey, widget.arithmetic ?? const SizedBox.shrink()),
+                key: const ValueKey('concept-workspace-thinking'),
+                child: _keep(_thinkingKey, widget.thinking ?? const SizedBox.shrink()),
               ),
             ),
           ],
@@ -169,7 +190,124 @@ class _ConceptWorkspaceState extends State<ConceptWorkspace> {
             ),
           ),
         ),
+        if (anySheetOpen)
+          Positioned(
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: math.max(0.0, constraints.maxWidth - sheetWidth),
+            child: GestureDetector(
+              key: const ValueKey('arithmetic-sheet-barrier'),
+              behavior: HitTestBehavior.opaque,
+              onTap: () => setState(() => _openSheet = _RightSheetKind.none),
+              child: ColoredBox(color: kThinkBg.withValues(alpha: 0.45)),
+            ),
+          ),
+        if (widget.arithmetic != null)
+          AnimatedPositioned(
+            duration: _sheetDuration,
+            curve: Curves.easeOutCubic,
+            top: 0,
+            bottom: 0,
+            width: sheetWidth,
+            right: arithmeticOpen ? 0 : -sheetWidth,
+            child: DecoratedBox(
+              key: const ValueKey('arithmetic-sheet'),
+              decoration: const BoxDecoration(
+                border: Border(left: BorderSide(color: kThinkBorder)),
+              ),
+              child: _keep(_arithmeticKey, widget.arithmetic!),
+            ),
+          ),
+        if (widget.foundations != null)
+          AnimatedPositioned(
+            duration: _sheetDuration,
+            curve: Curves.easeOutCubic,
+            top: 0,
+            bottom: 0,
+            width: sheetWidth,
+            right: foundationOpen ? 0 : -sheetWidth,
+            child: DecoratedBox(
+              key: const ValueKey('foundation-sheet'),
+              decoration: const BoxDecoration(
+                border: Border(left: BorderSide(color: kThinkBorder)),
+              ),
+              child: _keep(_foundationKey, widget.foundations!),
+            ),
+          ),
+        if (handleCount > 0)
+          AnimatedPositioned(
+            duration: _sheetDuration,
+            curve: Curves.easeOutCubic,
+            right: anySheetOpen ? sheetWidth : 0,
+            top: math.max(0.0, (constraints.maxHeight - handlesHeight - 16) / 2),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (widget.arithmetic != null)
+                  _RightSheetHandle(
+                    handleKey: const ValueKey('arithmetic-sheet-handle'),
+                    tooltip: arithmeticOpen ? '연산 닫기' : '연산',
+                    closedIcon: Icons.calculate_outlined,
+                    open: arithmeticOpen,
+                    onTap: () => setState(() {
+                      _openSheet = arithmeticOpen ? _RightSheetKind.none : _RightSheetKind.arithmetic;
+                    }),
+                  ),
+                if (widget.arithmetic != null && widget.foundations != null) const SizedBox(height: 8),
+                if (widget.foundations != null)
+                  _RightSheetHandle(
+                    handleKey: const ValueKey('foundation-sheet-handle'),
+                    tooltip: foundationOpen ? '사고의 토대 닫기' : '사고의 토대',
+                    closedIcon: Icons.compass_calibration_outlined,
+                    open: foundationOpen,
+                    onTap: () => setState(() {
+                      _openSheet = foundationOpen ? _RightSheetKind.none : _RightSheetKind.foundations;
+                    }),
+                  ),
+              ],
+            ),
+          ),
       ],
+    );
+  }
+}
+
+/// 오른쪽 가장자리 손잡이. 연산 또는 사고의 토대 시트를 열거나 닫는다.
+class _RightSheetHandle extends StatelessWidget {
+  const _RightSheetHandle({
+    required this.handleKey,
+    required this.tooltip,
+    required this.closedIcon,
+    required this.open,
+    required this.onTap,
+  });
+
+  final Key handleKey;
+  final String tooltip;
+  final IconData closedIcon;
+  final bool open;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        color: kThinkPanel,
+        elevation: 4,
+        borderRadius: const BorderRadius.horizontal(left: Radius.circular(8)),
+        child: InkWell(
+          key: handleKey,
+          onTap: onTap,
+          borderRadius: const BorderRadius.horizontal(left: Radius.circular(8)),
+          child: SizedBox(
+            width: 28,
+            height: 72,
+            child: Icon(open ? Icons.chevron_right : closedIcon, size: 18, color: kThinkAccent),
+          ),
+        ),
+      ),
     );
   }
 }

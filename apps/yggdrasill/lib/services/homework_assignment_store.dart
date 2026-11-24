@@ -1679,6 +1679,36 @@ class HomeworkAssignmentStore {
     _bump();
   }
 
+  /// 오늘 내준 숙제의 그룹 과제명을 고치면, 숙제 기록에 남은 이름도 같이 바꾼다.
+  Future<void> updateGroupTitleSnapshots({
+    required String studentId,
+    required Iterable<String> assignmentIds,
+    required String title,
+  }) async {
+    final key = studentId.trim();
+    final cleanedTitle = title.trim();
+    final ids = assignmentIds
+        .map((id) => id.trim())
+        .where(
+          (id) =>
+              id.isNotEmpty &&
+              !id.startsWith(optimisticReservedAssignmentIdPrefix),
+        )
+        .toSet()
+        .toList(growable: false);
+    if (key.isEmpty || cleanedTitle.isEmpty || ids.isEmpty) return;
+    final academyId = await TenantService.instance.getActiveAcademyId() ??
+        await TenantService.instance.ensureActiveAcademy();
+    await Supabase.instance.client
+        .from('homework_assignments')
+        .update({'group_title_snapshot': cleanedTitle})
+        .eq('academy_id', academyId)
+        .eq('student_id', key)
+        .inFilter('id', ids);
+    _markActiveAssignmentsStale(key);
+    _bump();
+  }
+
   Future<bool> saveAssignmentCheck({
     required String assignmentId,
     required String studentId,

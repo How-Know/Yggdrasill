@@ -1,0 +1,21 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.1",
+  "ref": "csat-2026-common-14-1",
+  "params": {"ox": 10.5768, "oy": 49.4921, "af": 12.0274, "pf": 9.7433, "qf": -8.8796, "ag": 12.3731, "pg": -5.4352, "qg": -7.7168, "px": 12.3332, "qx": -2.6196, "rx": 3.7334},
+  "fit": ["ox", "oy", "af", "pf", "qf", "ag", "pg", "qg", "px", "qx", "rx"],
+  "canvas": {"width": 69.21, "height": 63.29, "origin": ["ox", "oy"], "unit": 1},
+  "objects": [
+    {"id": "ax", "type": "axes", "x": [-9.9, 57.8], "y": [-13.2, 47.3], "labels": {"origin": {"offset": [2.0, -2.3]}}},
+    {"id": "f", "type": "function", "expr": "af*ln(x-pf)+qf", "domain": ["pf+0.01", 56.1], "range": [-13, 60], "samples": 1500},
+    {"id": "g", "type": "function", "expr": "ag*ln(x-pg)+qg", "domain": ["pg+0.01", 56.1], "range": [-13, 60], "samples": 1500},
+    {"id": "P", "type": "on", "of": "f", "x": "px", "label": {"dir": "NE", "dist": 1.2}},
+    {"id": "Q", "type": "on", "of": "g", "x": "qx", "label": {"dir": "NW", "dist": 1.0}},
+    {"id": "R", "type": "on", "of": "g", "x": "rx", "label": {"dir": "E", "dist": 1.6}},
+    {"type": "segment", "from": "R", "to": "P", "extend": [29.0, 17.3]},
+    {"type": "segment", "from": "Q", "to": "P", "extend": [7.2, 44.3]},
+    {"id": "lg", "type": "label", "at": [36.6, 42.8], "text": "y=g(x)"},
+    {"id": "lf", "type": "label", "at": [46.1, 29.3], "text": "y=f(x)"}
+  ],
+  "label_nudge": {"ax:x": [0.145, 0.0], "ax:y": [0.218, -0.145], "P": [0.726, -0.073], "Q": [0.508, 0.363], "R": [0.145, -0.145], "lg": [-0.073, 0.436], "lf": [0.0, 0.363], "ax:origin": [-0.073, 0.073]}
+}

@@ -31,7 +31,20 @@ test('정리된 모의고사 파일명을 시험과 선택과목으로 읽는다
   assert.equal(grade1.elective, '');
   assert.equal(grade1.kind, 'problem');
 
+  const ga = parseMockFileName('2020 고3 3월 교육청 (가형).pdf');
+  assert.equal(ga.examYear, 2020);
+  assert.equal(ga.grade, 3);
+  assert.equal(ga.elective, 'ga');
+  assert.equal(ga.kind, 'problem');
+
+  const naSol = parseMockFileName('2020 고3 11월 수능 (나형) - 해설.pdf');
+  assert.equal(naSol.examYear, 2020);
+  assert.equal(naSol.org, 'csat');
+  assert.equal(naSol.elective, 'na');
+  assert.equal(naSol.kind, 'solution');
+
   assert.equal(parseMockFileName('2024 고1 3월 교육청 (미적).pdf'), null);
+  assert.equal(parseMockFileName('2020 고1 3월 교육청 (가형).pdf'), null);
   assert.equal(parseMockFileName('2024 고3 3월 교육청.pdf'), null);
 });
 
@@ -120,6 +133,15 @@ test('추출 요청은 대기열에 넣는다', async () => {
   const supa = memorySupa();
   await registerMockPdfs(supa, 'academy-1', [sample], { queue: true, quiet: true });
   assert.equal(supa.calls.queued, 1);
+});
+
+test('가형·나형 회차는 queue 요청이어도 draft 만 등록하고 대기열에 넣지 않는다', async () => {
+  const supa = memorySupa();
+  const gaSample = { ...sample, examYear: 2020, grade: 3, elective: 'ga' };
+  const summary = await registerMockPdfs(supa, 'academy-1', [gaSample], { queue: true, quiet: true });
+  assert.equal(supa.calls.queued, 0);
+  assert.equal(supa.calls.uploads, 1);
+  assert.equal(summary.created, 1);
 });
 
 test('이미 추출된 시험의 PDF 는 카드 등록에서 바꾸지 않는다', async () => {

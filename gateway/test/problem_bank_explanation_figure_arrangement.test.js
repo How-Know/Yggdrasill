@@ -45,8 +45,10 @@ test('그림 표시 뒤 같은 줄 글이 있을 때만 SAME 표시를 남긴다
 test('아래 그림은 align 쪽으로 붙고, 없으면 가운데', () => {
   const [left, right, center] = explanationFigureIncludes(withExplanation('', [{ align: 'left' }, { align: 'right' }, {}]));
   assert.match(left, /^\{\\noindent\\includegraphics/);
-  assert.match(right, /^\{\\noindent\\hfill\\includegraphics/);
-  assert.match(center, /^\{\\centering\\includegraphics/);
+  assert.match(right, /^\{\\noindent\\hfill\\includegraphics[^\n]*\.png\}\\par\}$/);
+  // 가운데는 \centering 이 아니라 양쪽 \hfill: 번호 너비 \leftskip 을 지우지 않아 풀이 글 폭의 가운데에 놓인다.
+  assert.match(center, /^\{\\noindent\\hfill\\includegraphics[^\n]*max width=\\dimexpr\\linewidth-\\leftskip\\relax[^\n]*\.png\}\\hfill\\null\\par\}$/);
+  assert.doesNotMatch(center, /\\centering/);
 });
 
 test('왼쪽 그림은 그림 상자가 글 상자 앞에 온다', () => {
@@ -57,7 +59,7 @@ test('왼쪽 그림은 그림 상자가 글 상자 앞에 온다', () => {
 test('해설이 오른쪽 그림 표시로 시작하면 뒤 풀이 글과 나란히 놓는다', () => {
   const tex = explanationTex('[그림]\n동위각의 크기가 같으므로\n$\\angle x=65^{\\circ}$', [{ placement: 'right' }]);
   assert.match(tex, /\\begin\{minipage\}\[t\]\{\\dimexpr\\linewidth-\\leftskip-8\.00em-1em\\relax\}\\vspace\{0pt\}[^\n]*동위각[^\n]*\\end\{minipage\}\\hfill\\begin\{minipage\}\[t\]\{8\.00em\}[^\n]*f1\.png/);
-  assert.doesNotMatch(tex, /\\centering\\includegraphics[^\n]*f1\.png/);
+  assert.doesNotMatch(tex, /f1\.png\}\\hfill\\null\\par/);
 });
 
 test('가로 묶음 그림은 한 줄에 놓고 같은 줄 글을 그림 밑 설명으로 둔다, 왼쪽 그림은 같은 줄 글만 옆에 둔다', () => {
@@ -89,4 +91,12 @@ test('카드 가로 묶음 배치에 caption 이 있으면 그림 줄 아래 설
     },
   }, {});
   assert.match(tex, /\\begin\{tabular\}[^\n]*a\.png[^\n]*& [^\n]*b\.png[^\n]*\\\\\[0\.2em\]\n[^\n]*한 점에서 만난다[^\n]*&[^\n]*평행하다/);
+});
+
+test('글자로 적힌 식 참조 기호 (★) 는 수식 안에서도 본문 글자로 찍는다', () => {
+  // "(★)" 는 수식으로 조판되는데 수식 글꼴에는 ★ 글리프가 없어 빈 괄호로 찍혔다.
+  const tex = explanationTex('항 중 적어도 하나는 짝수이다. ⋯ (★)\n\n$a_2$가 홀수이므로 (★)에 의하여 $a_1$은 짝수이다.', []);
+  assert.match(tex, /\(\\text\{★\}\)[^\n]*에 의하여/);
+  assert.doesNotMatch(tex, /\(★\)/);
+  assert.doesNotMatch(tex, /\\text\{\\text\{★\}\}/);
 });

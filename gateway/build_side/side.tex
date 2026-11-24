@@ -1,0 +1,292 @@
+\documentclass[12pt,varwidth=16cm]{standalone}
+\usepackage{fontspec}
+\usepackage{amsmath,amssymb}
+\usepackage{unicode-math}
+\setmathfont{Latin Modern Math}
+\setmathfont[range={"0028,"0029,"005B,"005D,"007B,"007D,"007C,"2016}]{Cambria Math}
+\renewenvironment{pmatrix}{\begingroup\setlength{\arraycolsep}{7pt}\renewcommand{\arraystretch}{1.2}\left(\mkern4mu\begin{matrix}}{\end{matrix}\mkern4mu\right)\endgroup}
+\renewenvironment{bmatrix}{\begingroup\setlength{\arraycolsep}{7pt}\renewcommand{\arraystretch}{1.2}\left[\mkern4mu\begin{matrix}}{\end{matrix}\mkern4mu\right]\endgroup}
+\renewenvironment{Bmatrix}{\begingroup\setlength{\arraycolsep}{7pt}\renewcommand{\arraystretch}{1.2}\left\{\mkern4mu\begin{matrix}}{\end{matrix}\mkern4mu\right\}\endgroup}
+\renewenvironment{vmatrix}{\begingroup\setlength{\arraycolsep}{7pt}\renewcommand{\arraystretch}{1.2}\left|\mkern4mu\begin{matrix}}{\end{matrix}\mkern4mu\right|\endgroup}
+\renewenvironment{Vmatrix}{\begingroup\setlength{\arraycolsep}{7pt}\renewcommand{\arraystretch}{1.2}\left\|\mkern4mu\begin{matrix}}{\end{matrix}\mkern4mu\right\|\endgroup}
+\usepackage{array}
+\usepackage{kotex}
+\XeTeXlinebreaklocale ""
+\XeTeXlinebreakskip=0pt plus 0pt minus 0pt
+\tolerance=9999
+\emergencystretch=0pt
+\binoppenalty=10000
+\relpenalty=10000
+\usepackage{graphicx}
+\usepackage{wrapfig}
+\usepackage[export]{adjustbox}
+\usepackage{xcolor}
+\usepackage[normalem]{ulem}
+\usepackage{enumitem}
+\usepackage{setspace}
+\usepackage[most]{tcolorbox}
+\newlength{\tblcellwd}
+\newlength{\tblcellht}
+\newlength{\tblcelwdA}
+\newlength{\tblcelwdB}
+\newlength{\tblcelwdC}
+\newlength{\tblcelwdD}
+\newlength{\tblcelwdE}
+\newlength{\tblcelwdF}
+\newlength{\tblcelwdG}
+\newlength{\tblcelwdH}
+\newlength{\tblcelwdI}
+\newlength{\tblcelwdJ}
+\newlength{\tblcelwdK}
+\newlength{\tblcelwdL}
+\newlength{\tblcelwdM}
+\newlength{\tblcelwdN}
+\newlength{\tblcelwdO}
+\newlength{\tblcelwdP}
+\newlength{\tblcelwdQ}
+\newlength{\tblcelwdR}
+\newlength{\tblcelwdS}
+\newlength{\tblcelwdT}
+\newlength{\tblcelwdU}
+\newlength{\tblcelwdV}
+\newlength{\tblcelwdW}
+\newlength{\tblcelwdX}
+\newlength{\tblcelwdY}
+\newlength{\tblcelwdZ}
+\newlength{\YggCellNat}
+\newsavebox{\YggChoiceMeasureBox}
+\newcount\YggChoiceLayout
+\newsavebox{\YggWrapObjectBox}
+\newsavebox{\YggWrapTextBox}
+\newcount\YggWrapLineCount
+\newcount\YggWrapTextLineCount
+\newcount\YggWrapClearCount
+\newdimen\YggWrapObjectHeight
+\newcommand{\YggWrapClearRemaining}[2]{%
+  \YggWrapClearCount=#1\relax
+  \advance\YggWrapClearCount by -#2\relax
+  \ifnum\YggWrapClearCount>0
+    \ifnum\YggWrapClearCount>8 \YggWrapClearCount=8\fi
+    \loop\ifnum\YggWrapClearCount>0
+      \par\noindent\mbox{}%
+      \advance\YggWrapClearCount by -1\relax
+    \repeat
+  \fi
+}
+\long\def\YggMeasuredWrapBegin#1#2#3#4{%
+  \par\begingroup
+  \setlength{\columnsep}{#4}%
+  \setlength{\intextsep}{0pt}%
+  \sbox{\YggWrapObjectBox}{\begin{minipage}{#2}\vspace{0pt}#3\end{minipage}}%
+  \YggWrapObjectHeight=\dimexpr\ht\YggWrapObjectBox+\dp\YggWrapObjectBox+0.35\baselineskip\relax
+  \YggWrapLineCount=0\relax
+  \loop\ifdim\YggWrapObjectHeight>0pt
+    \advance\YggWrapLineCount by 1\relax
+    \advance\YggWrapObjectHeight by -\baselineskip
+  \repeat
+  \ifnum\YggWrapLineCount<2 \YggWrapLineCount=2\fi
+  \begin{wrapfigure}[\the\YggWrapLineCount]{#1}{#2}
+    \vspace{-0.35\baselineskip}
+    \usebox{\YggWrapObjectBox}
+    \vspace{-0.15\baselineskip}
+  \end{wrapfigure}
+}
+\long\def\YggMeasuredWrapBeginFixed#1#2#3#4#5{%
+  \par\begingroup
+  \setlength{\columnsep}{#4}%
+  \setlength{\intextsep}{0pt}%
+  \sbox{\YggWrapObjectBox}{\begin{minipage}{#2}\vspace{0pt}#3\end{minipage}}%
+  \YggWrapLineCount=#5\relax
+  \ifnum\YggWrapLineCount<2 \YggWrapLineCount=2\fi
+  \ifnum\YggWrapLineCount>16 \YggWrapLineCount=16\fi
+  \begin{wrapfigure}[\the\YggWrapLineCount]{#1}{#2}
+    \vspace{-0.35\baselineskip}
+    \usebox{\YggWrapObjectBox}
+    \vspace{-0.15\baselineskip}
+  \end{wrapfigure}
+}
+\newcommand{\YggMeasuredWrapEnd}[1]{%
+  \YggWrapClearRemaining{\the\YggWrapLineCount}{#1}%
+  \par\endgroup
+}
+\long\def\YggMeasuredWrapAuto#1#2#3#4#5{%
+  \par\begingroup
+  \setlength{\columnsep}{#3}%
+  \setlength{\intextsep}{0pt}%
+  \sbox{\YggWrapObjectBox}{\begin{minipage}{#2}\vspace{0pt}#4\end{minipage}}%
+  \YggWrapObjectHeight=\dimexpr\ht\YggWrapObjectBox+\dp\YggWrapObjectBox+0.5\baselineskip\relax
+  \YggWrapLineCount=0\relax
+  \loop\ifdim\YggWrapObjectHeight>0pt
+    \advance\YggWrapLineCount by 1\relax
+    \advance\YggWrapObjectHeight by -\baselineskip
+  \repeat
+  \ifnum\YggWrapLineCount<2 \YggWrapLineCount=2\fi
+  \sbox{\YggWrapTextBox}{\begin{minipage}{\dimexpr\linewidth-#2-#3\relax}\vspace{0pt}\noindent #5\end{minipage}}%
+  \YggWrapObjectHeight=\dimexpr\ht\YggWrapTextBox+\dp\YggWrapTextBox\relax
+  \YggWrapTextLineCount=0\relax
+  \loop\ifdim\YggWrapObjectHeight>0pt
+    \advance\YggWrapTextLineCount by 1\relax
+    \advance\YggWrapObjectHeight by -\baselineskip
+  \repeat
+  \begin{wrapfigure}[\the\YggWrapLineCount]{#1}{#2}
+    \vspace{-0.10\baselineskip}
+    \usebox{\YggWrapObjectBox}
+    \vspace{-0.15\baselineskip}
+  \end{wrapfigure}
+  \noindent #5\par
+  \YggWrapClearRemaining{\the\YggWrapLineCount}{\the\YggWrapTextLineCount}%
+  \par\endgroup
+}
+\newcommand{\mtemptybox}{\ensuremath{\mathord{\mkern2mu\vcenter{\hbox{\setlength{\fboxsep}{0pt}\framebox[0.92em][c]{\rule{0pt}{0.92em}}}}\mkern2mu}}}
+\newcommand{\mtshapesquare}{\ensuremath{\mathord{\mkern1mu\vcenter{\hbox{\setlength{\fboxsep}{0pt}\framebox[0.88em][c]{\rule{0pt}{0.88em}}}}\mkern1mu}}}
+\newcommand{\mtexponentemptybox}{\vcenter{\hbox{\scriptsize\setlength{\fboxsep}{0pt}\framebox[0.72em][c]{\rule{0pt}{0.72em}}}}}
+\newcommand{\mtsqrtpad}[1]{\sqrt{\vphantom{\raisebox{0.10em}{$\displaystyle #1$}}\smash{\lower0.16em\hbox{$\displaystyle #1$}}}\mkern2mu}
+% --- V2 (xelatex-v2) magic constants (mirror of v2_constants.js) ---
+\providecommand{\YggVtwoInlineMathShift}{1.5pt}
+\providecommand{\YggVtwoLineHalfEm}{0.5em}
+\newcommand{\YggVtwoGuideRule}[2]{}
+\newcommand{\YggVtwoHangulLineGuide}[1]{}
+\newcommand{\YggVtwoBaselineGuide}{}
+\let\YggOrigDfrac\dfrac
+\renewcommand{\dfrac}[2]{\YggOrigDfrac{\mkern4.5mu #1\mkern4.5mu}{\mkern4.5mu #2\mkern4.5mu}}
+\newcommand{\YggSmallFrac}[2]{\mathchoice{\vcenter{\hbox{\scalebox{0.75}{$\displaystyle\dfrac{#1}{#2}$}}}}{\vcenter{\hbox{\scalebox{0.75}{$\displaystyle\dfrac{#1}{#2}$}}}}{\vcenter{\hbox{\scalebox{0.75}{$\displaystyle\dfrac{#1}{#2}$}}}}{\vcenter{\hbox{\scalebox{0.75}{$\displaystyle\dfrac{#1}{#2}$}}}}}
+\newcommand{\YggEmptySet}{\mathord{\varnothing}}
+\newcommand{\YggInlineMathBox}[1]{#1}
+\newcommand{\mtsymmathbox}[1]{#1}
+\newcommand{\mtlinesymbox}[1]{#1}
+\newcommand{\YggVisualCenterBox}[1]{#1}
+\newcommand{\YggDispMathBotPad}{0pt}
+\newcommand{\mtvisuallinetallpad}{}
+\newcommand{\mtparallel}{\mathbin{\smash{\raisebox{0.06em}{$/\mkern-2mu/$}}}}
+\newcommand{\YggBoxMathVisualCenter}{}
+\newcommand{\YggSetBuilder}[2]{\left\{\,#1\;\middle|\;#2\,\right\}}
+\renewcommand{\colon}{\mkern2mu\mathord{\textnormal{:}}\mkern3mu}
+\providecommand{\questionnumber}[1]{\textbf{#1}}
+
+\setmainfont{Malgun Gothic}[
+  BoldFont = Malgun Gothic Bold,
+]
+\setmainhangulfont{Malgun Gothic}[
+  BoldFont = Malgun Gothic Bold,
+]
+
+\pagestyle{empty}
+\setstretch{1.7}
+\lineskiplimit=0.4em
+\lineskip=1.2em
+\spaceskip=1.2\fontdimen2\font plus 1.2\fontdimen3\font minus 1.2\fontdimen4\font
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.4em}
+
+\begin{document}
+\raggedright
+\lineskiplimit=0.4em\lineskip=1.2em
+\begingroup
+\fontsize{12.00pt}{14.16pt}\selectfont
+\rightskip=0pt plus 1fil\relax
+\parfillskip=0pt plus 1fil\relax
+\parindent=0pt
+\tolerance=9999\emergencystretch=0pt
+\leftskip=1em
+\noindent\YggVtwoBaselineGuide{}\hspace{-1em}{\fontsize{13.00pt}{14.04pt}\selectfont\bfseries 1.}\enspace
+% DBG seg#0 type=text prev=NONE needsGap=undefined segEmits=true figIdx=0
+{\setstretch{1.53}\fontsize{12.00pt}{14.16pt}\selectfont\parskip=0pt\lineskiplimit=0.4em\lineskip=0.8em\YggVtwoBaselineGuide{}확률변수 $\displaystyle X$\penalty9999{}는 평균이 $\displaystyle 8,$ 표준편차가 $\displaystyle 3$\penalty9999{}인 정규분포를 따르고, 확률변수 $\displaystyle Y$\penalty9999{}는 평균이 $\displaystyle m,$ 표준편차가 $\displaystyle \sigma$\penalty9999{}인 정규분포를 따른다. 두 확률변수 $\displaystyle X$, $\displaystyle Y$\penalty9999{}가\par}
+% DBG seg#1 type=text prev=text needsGap=false segEmits=true figIdx=0
+\par\noindent\begin{minipage}[t]{0.47\linewidth}
+{\setstretch{1.53}\fontsize{12.00pt}{14.16pt}\selectfont\lineskiplimit=0.4em\lineskip=0.8em\parskip=0pt\par\noindent\hspace*{2.55em}\YggVtwoBaselineGuide{}$\displaystyle \text{P}(4\leq X\leq 8)+\text{P}(Y\geq 8)=\dfrac{1}{2}$\par}
+{\setstretch{1.53}\fontsize{12.00pt}{14.16pt}\selectfont\parskip=0pt\lineskiplimit=0.4em\lineskip=0.8em\YggVtwoBaselineGuide{}을 만족시킬 때, $\displaystyle \text{P}\left(Y\leq 8+\dfrac{2\sigma}{3}\right)$\penalty9999{}의 값을 오른쪽 표준정규분포표를 이용하여 구한 것은?\par}
+% DBG seg#2 type=raw_tabular prev=text needsGap=false segEmits=true figIdx=0
+\end{minipage}\hfill\raisebox{\ht\strutbox}{\begin{minipage}[t]{0.50\linewidth}\vspace{0pt}\setlength{\tblcelwdA}{\dimexpr 0.500000\linewidth - 12.00pt - 1.2pt\relax}
+\setlength{\tblcelwdB}{\dimexpr 0.500000\linewidth - 12.00pt - 1.2pt\relax}
+{\fontsize{12.00pt}{13.80pt}\selectfont%
+\global\settowidth{\YggCellNat}{$\displaystyle z$}\ifdim\YggCellNat>\tblcelwdA\relax\global\setlength{\tblcelwdA}{\dimexpr\YggCellNat+0.5em\relax}\fi%
+\global\settowidth{\YggCellNat}{$\displaystyle 1.0$}\ifdim\YggCellNat>\tblcelwdA\relax\global\setlength{\tblcelwdA}{\dimexpr\YggCellNat+0.5em\relax}\fi%
+\global\settowidth{\YggCellNat}{$\displaystyle 1.5$}\ifdim\YggCellNat>\tblcelwdA\relax\global\setlength{\tblcelwdA}{\dimexpr\YggCellNat+0.5em\relax}\fi%
+\global\settowidth{\YggCellNat}{$\displaystyle 2.0$}\ifdim\YggCellNat>\tblcelwdA\relax\global\setlength{\tblcelwdA}{\dimexpr\YggCellNat+0.5em\relax}\fi%
+\global\settowidth{\YggCellNat}{$\displaystyle 2.5$}\ifdim\YggCellNat>\tblcelwdA\relax\global\setlength{\tblcelwdA}{\dimexpr\YggCellNat+0.5em\relax}\fi%
+\global\settowidth{\YggCellNat}{$\displaystyle \text{P}(0\leq Z\leq z)$}\ifdim\YggCellNat>\tblcelwdB\relax\global\setlength{\tblcelwdB}{\dimexpr\YggCellNat+0.5em\relax}\fi%
+\global\settowidth{\YggCellNat}{$\displaystyle 0.3413$}\ifdim\YggCellNat>\tblcelwdB\relax\global\setlength{\tblcelwdB}{\dimexpr\YggCellNat+0.5em\relax}\fi%
+\global\settowidth{\YggCellNat}{$\displaystyle 0.4332$}\ifdim\YggCellNat>\tblcelwdB\relax\global\setlength{\tblcelwdB}{\dimexpr\YggCellNat+0.5em\relax}\fi%
+\global\settowidth{\YggCellNat}{$\displaystyle 0.4772$}\ifdim\YggCellNat>\tblcelwdB\relax\global\setlength{\tblcelwdB}{\dimexpr\YggCellNat+0.5em\relax}\fi%
+\global\settowidth{\YggCellNat}{$\displaystyle 0.4938$}\ifdim\YggCellNat>\tblcelwdB\relax\global\setlength{\tblcelwdB}{\dimexpr\YggCellNat+0.5em\relax}\fi%
+}
+\noindent \hfill \adjustbox{max width=\dimexpr\linewidth-\leftskip-\rightskip\relax}{%
+{\fontsize{12.00pt}{13.80pt}\selectfont\setlength{\tabcolsep}{6.00pt}\renewcommand{\arraystretch}{1}%
+\begin{tabular}{|c|c|}
+\hline
+\parbox[c][2.20em][c]{\tblcelwdA}{\vspace*{\fill}\centering $\displaystyle z$\par\vspace*{\fill}} & \parbox[c][2.20em][c]{\tblcelwdB}{\vspace*{\fill}\centering $\displaystyle \text{P}(0\leq Z\leq z)$\par\vspace*{\fill}} \\
+\hline
+\parbox[c][2.20em][c]{\tblcelwdA}{\vspace*{\fill}\centering $\displaystyle 1.0$\par\vspace*{\fill}} & \parbox[c][2.20em][c]{\tblcelwdB}{\vspace*{\fill}\centering $\displaystyle 0.3413$\par\vspace*{\fill}} \\
+\hline
+\parbox[c][2.20em][c]{\tblcelwdA}{\vspace*{\fill}\centering $\displaystyle 1.5$\par\vspace*{\fill}} & \parbox[c][2.20em][c]{\tblcelwdB}{\vspace*{\fill}\centering $\displaystyle 0.4332$\par\vspace*{\fill}} \\
+\hline
+\parbox[c][2.20em][c]{\tblcelwdA}{\vspace*{\fill}\centering $\displaystyle 2.0$\par\vspace*{\fill}} & \parbox[c][2.20em][c]{\tblcelwdB}{\vspace*{\fill}\centering $\displaystyle 0.4772$\par\vspace*{\fill}} \\
+\hline
+\parbox[c][2.20em][c]{\tblcelwdA}{\vspace*{\fill}\centering $\displaystyle 2.5$\par\vspace*{\fill}} & \parbox[c][2.20em][c]{\tblcelwdB}{\vspace*{\fill}\centering $\displaystyle 0.4938$\par\vspace*{\fill}} \\
+\hline
+\end{tabular}}%
+}\hfill\null\end{minipage}}\par
+% DBG after-stem: figIdx=0/0 trailingBigType=raw_tabular
+% DBG choices-gap: trailingBigType=raw_tabular gap=\\par\\vspace{10pt}
+\par\vspace{10pt}
+{\setstretch{1.7}\fontsize{12.00pt}{14.16pt}\selectfont\parskip=0pt\lineskiplimit=0.4em\lineskip=1.2em
+\YggChoiceLayout=1
+\sbox{\YggChoiceMeasureBox}{①\enspace $\displaystyle 0.8351$}%
+\ifdim\wd\YggChoiceMeasureBox>\dimexpr0.2\linewidth-0.2em\relax \ifnum\YggChoiceLayout<2 \YggChoiceLayout=2 \fi\fi%
+\ifdim\wd\YggChoiceMeasureBox>\dimexpr0.3333\linewidth-0.3333em\relax \ifnum\YggChoiceLayout<3 \YggChoiceLayout=3 \fi\fi%
+\ifdim\wd\YggChoiceMeasureBox>\dimexpr0.5\linewidth-0.5em\relax \YggChoiceLayout=4 \fi%
+\sbox{\YggChoiceMeasureBox}{②\enspace $\displaystyle 0.8413$}%
+\ifdim\wd\YggChoiceMeasureBox>\dimexpr0.2\linewidth-0.2em\relax \ifnum\YggChoiceLayout<2 \YggChoiceLayout=2 \fi\fi%
+\ifdim\wd\YggChoiceMeasureBox>\dimexpr0.3333\linewidth-0.3333em\relax \ifnum\YggChoiceLayout<3 \YggChoiceLayout=3 \fi\fi%
+\ifdim\wd\YggChoiceMeasureBox>\dimexpr0.5\linewidth-0.5em\relax \YggChoiceLayout=4 \fi%
+\sbox{\YggChoiceMeasureBox}{③\enspace $\displaystyle 0.9332$}%
+\ifdim\wd\YggChoiceMeasureBox>\dimexpr0.2\linewidth-0.2em\relax \ifnum\YggChoiceLayout<2 \YggChoiceLayout=2 \fi\fi%
+\ifdim\wd\YggChoiceMeasureBox>\dimexpr0.3333\linewidth-0.3333em\relax \ifnum\YggChoiceLayout<3 \YggChoiceLayout=3 \fi\fi%
+\ifdim\wd\YggChoiceMeasureBox>\dimexpr0.5\linewidth-0.5em\relax \YggChoiceLayout=4 \fi%
+\sbox{\YggChoiceMeasureBox}{④\enspace $\displaystyle 0.9772$}%
+\ifdim\wd\YggChoiceMeasureBox>\dimexpr0.2\linewidth-0.2em\relax \ifnum\YggChoiceLayout<2 \YggChoiceLayout=2 \fi\fi%
+\ifdim\wd\YggChoiceMeasureBox>\dimexpr0.3333\linewidth-0.3333em\relax \ifnum\YggChoiceLayout<3 \YggChoiceLayout=3 \fi\fi%
+\ifdim\wd\YggChoiceMeasureBox>\dimexpr0.5\linewidth-0.5em\relax \YggChoiceLayout=4 \fi%
+\sbox{\YggChoiceMeasureBox}{⑤\enspace $\displaystyle 0.9938$}%
+\ifdim\wd\YggChoiceMeasureBox>\dimexpr0.2\linewidth-0.2em\relax \ifnum\YggChoiceLayout<2 \YggChoiceLayout=2 \fi\fi%
+\ifdim\wd\YggChoiceMeasureBox>\dimexpr0.3333\linewidth-0.3333em\relax \ifnum\YggChoiceLayout<3 \YggChoiceLayout=3 \fi\fi%
+\ifdim\wd\YggChoiceMeasureBox>\dimexpr0.5\linewidth-0.5em\relax \YggChoiceLayout=4 \fi%
+\ifnum\YggChoiceLayout=1
+  \noindent%
+  \makebox[\dimexpr0.2\linewidth-0.2em\relax][l]{①\enspace $\displaystyle 0.8351$}%
+\makebox[\dimexpr0.2\linewidth-0.2em\relax][l]{②\enspace $\displaystyle 0.8413$}%
+\makebox[\dimexpr0.2\linewidth-0.2em\relax][l]{③\enspace $\displaystyle 0.9332$}%
+\makebox[\dimexpr0.2\linewidth-0.2em\relax][l]{④\enspace $\displaystyle 0.9772$}%
+\makebox[\dimexpr0.2\linewidth-0.2em\relax][l]{⑤\enspace $\displaystyle 0.9938$}%
+  \par
+\else\ifnum\YggChoiceLayout=2
+  \noindent%
+  \makebox[\dimexpr0.3333\linewidth-0.3333em\relax][l]{①\enspace $\displaystyle 0.8351$}%
+\makebox[\dimexpr0.3333\linewidth-0.3333em\relax][l]{②\enspace $\displaystyle 0.8413$}%
+\makebox[\dimexpr0.3333\linewidth-0.3333em\relax][l]{③\enspace $\displaystyle 0.9332$}%
+  \par\noindent%
+  \makebox[\dimexpr0.3333\linewidth-0.3333em\relax][l]{④\enspace $\displaystyle 0.9772$}%
+\makebox[\dimexpr0.3333\linewidth-0.3333em\relax][l]{⑤\enspace $\displaystyle 0.9938$}%
+  \par
+\else\ifnum\YggChoiceLayout=3
+  \noindent%
+  \makebox[\dimexpr0.5\linewidth-0.5em\relax][l]{①\enspace $\displaystyle 0.8351$}%
+\makebox[\dimexpr0.5\linewidth-0.5em\relax][l]{②\enspace $\displaystyle 0.8413$}%
+  \par\noindent%
+  \makebox[\dimexpr0.5\linewidth-0.5em\relax][l]{③\enspace $\displaystyle 0.9332$}%
+\makebox[\dimexpr0.5\linewidth-0.5em\relax][l]{④\enspace $\displaystyle 0.9772$}%
+  \par\noindent%
+  \makebox[\dimexpr0.5\linewidth-0.5em\relax][l]{⑤\enspace $\displaystyle 0.9938$}%
+  \par
+\else
+\hangindent=1.5em\hangafter=1\noindent\makebox[1.5em][l]{①}$\displaystyle 0.8351$\par
+\hangindent=1.5em\hangafter=1\noindent\makebox[1.5em][l]{②}$\displaystyle 0.8413$\par
+\hangindent=1.5em\hangafter=1\noindent\makebox[1.5em][l]{③}$\displaystyle 0.9332$\par
+\hangindent=1.5em\hangafter=1\noindent\makebox[1.5em][l]{④}$\displaystyle 0.9772$\par
+\hangindent=1.5em\hangafter=1\noindent\makebox[1.5em][l]{⑤}$\displaystyle 0.9938$
+  \par
+\fi\fi\fi
+}
+\par
+\endgroup
+\end{document}

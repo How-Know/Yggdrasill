@@ -182,7 +182,7 @@ async function claimJobs(client) {
 
 async function resolveQuestion(client, job) {
   const fields =
-    'id,academy_id,document_id,question_uid,question_number,question_type,stem,choices,figure_refs,equations,meta';
+    'id,academy_id,document_id,question_uid,question_number,question_type,stem,choices,figure_refs,equations,meta,source_type_code';
   const { data: canonicalLink, error: canonicalError } = await client
     .from('textbook_crop_question_links')
     .select('pb_question_id')

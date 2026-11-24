@@ -1,0 +1,7 @@
+.dart_tool/
+pubspec.lock
+# 시험지 원본에서 꺼낸 그림과 DB 에서 내려받은 문항 글은 저장소에 넣지 않는다.
+reference/images/
+reference/work/
+# 겹쳐 비교·조판 중간 산출물.
+build/

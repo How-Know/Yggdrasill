@@ -341,6 +341,97 @@ List<String> pbSourceTypeCodesForLearningUi(String uiSourceTypeCode) {
   }
 }
 
+/// 가형·나형에 같이 실린 문항은 문항이 하나이고, 한 구간만 그 문항을 갖는다. 다른 구간의 자리
+/// (`mock_exam_items.merged_at`)는 그 문항을 가리킨다. 이 함수는 그런 자리를 그 시험지 문서의 목록에
+/// 넣을 행으로 만든다: 문항은 그대로이고 문서와 번호(필요하면 배점)만 그 시험지의 것이다.
+///
+/// 문항이 이미 목록에 있으면(문항을 가진 구간이 함께 보이는 목록) 만들지 않는다. 문항은 한 번만 보인다.
+/// [sections] `exam_id`, `section`, `pb_document_id` · [mergedItems] `exam_id`, `section`,
+/// `problem_number`, `pb_question_id`, `score` · [ownerQuestions] 가리키는 문항의 `pb_questions` 행.
+List<Map<String, dynamic>> pbMockSlotRows({
+  required Iterable<Map<String, dynamic>> sections,
+  required Iterable<Map<String, dynamic>> mergedItems,
+  required Iterable<Map<String, dynamic>> ownerQuestions,
+  required Set<String> listedQuestionIds,
+}) {
+  String text(dynamic v) => '${v ?? ''}'.trim();
+  final documentBySection = <String, String>{
+    for (final s in sections)
+      if (text(s['pb_document_id']).isNotEmpty)
+        '${text(s['exam_id'])}|${text(s['section'])}': text(s['pb_document_id']),
+  };
+  final ownerById = <String, Map<String, dynamic>>{
+    for (final q in ownerQuestions) text(q['id']): q,
+  };
+  final seen = <String>{...listedQuestionIds};
+  final out = <Map<String, dynamic>>[];
+  for (final item in mergedItems) {
+    final section = text(item['section']);
+    final documentId = documentBySection['${text(item['exam_id'])}|$section'];
+    final questionId = text(item['pb_question_id']);
+    final owner = ownerById[questionId];
+    final number = (item['problem_number'] as num?)?.toInt() ?? 0;
+    if (documentId == null || owner == null || number <= 0) continue;
+    if (!seen.add(questionId)) continue;
+    final score = (item['score'] as num?)?.toInt();
+    final ownerMeta = owner['meta'];
+    out.add(<String, dynamic>{
+      ...owner,
+      'document_id': documentId,
+      'question_number': '$number',
+      'source_order': number,
+      'meta': <String, dynamic>{
+        if (ownerMeta is Map) ...Map<String, dynamic>.from(ownerMeta),
+        if (score != null && score > 0) 'score_point': score,
+        'mock_slot': <String, dynamic>{
+          'exam_id': text(item['exam_id']),
+          'section': section,
+          'number': number,
+          'owner_document_id': text(owner['document_id']),
+        },
+      },
+    });
+  }
+  return out;
+}
+
+/// 문제은행 문항 목록이 읽는 `pb_questions` 컬럼.
+const List<String> _pbQuestionListColumns = <String>[
+  'id',
+  'question_uid',
+  'document_id',
+  'question_number',
+  'question_type',
+  'stem',
+  'choices',
+  'objective_choices',
+  'allow_objective',
+  'allow_subjective',
+  'objective_answer_key',
+  'subjective_answer',
+  'reviewer_notes',
+  'equations',
+  'source_page',
+  'source_order',
+  'curriculum_code',
+  'source_type_code',
+  'school_level',
+  'grade_key',
+  'course_key',
+  'course_label',
+  'grade_label',
+  'exam_year',
+  'semester_label',
+  'exam_term_label',
+  'school_name',
+  'publisher_name',
+  'material_name',
+  'confidence',
+  'figure_refs',
+  'meta',
+  'created_at',
+];
+
 /// 문서 정렬용: 초·중·고 단계와 학년 숫자를 휴리스틱으로 합친 값(작을수록 저학년 쪽).
 int pbDocumentGradeSortRank(String gradeLabel, String courseLabel) {
   final merged = '$gradeLabel$courseLabel'.replaceAll(RegExp(r'\s'), '');
@@ -1112,6 +1203,67 @@ class LearningProblemBankService {
   final String _gatewayApiKey;
 
   bool get hasGateway => _gatewayBaseUrl.isNotEmpty;
+
+  /// [documentIds] 가운데 가형·나형 구간 문서의 "다른 구간 문항을 가리키는 자리"를 목록 행으로 읽는다.
+  /// 그 문항이 공개돼 있고 목록에 아직 없을 때만 나온다. 읽지 못하면 빈 목록(문항 목록은 그대로 나온다).
+  Future<List<Map<String, dynamic>>> _loadMockSlotRows({
+    required String academyId,
+    required Set<String> documentIds,
+    required Set<String> listedQuestionIds,
+  }) async {
+    if (documentIds.isEmpty) return const <Map<String, dynamic>>[];
+    try {
+      final sections = <Map<String, dynamic>>[];
+      for (final chunk
+          in _chunkStrings(documentIds.toList(growable: false), 250)) {
+        final rows = await _client
+            .from('mock_exam_sections')
+            .select('exam_id,section,pb_document_id')
+            .inFilter('section', const <String>['ga', 'na'])
+            .inFilter('pb_document_id', chunk);
+        sections.addAll(_listOrEmpty(rows).map(_mapOrEmpty));
+      }
+      if (sections.isEmpty) return const <Map<String, dynamic>>[];
+      final examIds = <String>{
+        for (final s in sections) '${s['exam_id'] ?? ''}'.trim(),
+      }..remove('');
+      final items = <Map<String, dynamic>>[];
+      for (final chunk in _chunkStrings(examIds.toList(growable: false), 250)) {
+        final rows = await _client
+            .from('mock_exam_items')
+            .select('exam_id,section,problem_number,pb_question_id,score')
+            .inFilter('exam_id', chunk)
+            .not('merged_at', 'is', null)
+            .order('problem_number', ascending: true);
+        items.addAll(_listOrEmpty(rows).map(_mapOrEmpty));
+      }
+      final ownerIds = <String>{
+        for (final it in items) '${it['pb_question_id'] ?? ''}'.trim(),
+      }
+        ..remove('')
+        ..removeAll(listedQuestionIds);
+      if (ownerIds.isEmpty) return const <Map<String, dynamic>>[];
+      final owners = <Map<String, dynamic>>[];
+      for (final chunk in _chunkStrings(ownerIds.toList(growable: false), 250)) {
+        final rows = await _client
+            .from('pb_questions')
+            .select(_pbQuestionListColumns.join(','))
+            .eq('academy_id', academyId)
+            .eq('is_published', true)
+            .inFilter('id', chunk);
+        owners.addAll(_listOrEmpty(rows).map(_mapOrEmpty));
+      }
+      return pbMockSlotRows(
+        sections: sections,
+        mergedItems: items,
+        ownerQuestions: owners,
+        listedQuestionIds: listedQuestionIds,
+      );
+    } catch (_) {
+      return const <Map<String, dynamic>>[];
+    }
+  }
+
   static const _previewBucket = 'problem-previews';
   static const _batchPreviewVersion = 'pb_render_v5_ind_set_split_1';
 
@@ -1358,43 +1510,7 @@ class LearningProblemBankService {
         in _chunkStrings(readyDocIds.toList(growable: false), 250)) {
       var q = _client
           .from('pb_questions')
-          .select(
-            [
-              'id',
-              'question_uid',
-              'document_id',
-              'question_number',
-              'question_type',
-              'stem',
-              'choices',
-              'objective_choices',
-              'allow_objective',
-              'allow_subjective',
-              'objective_answer_key',
-              'subjective_answer',
-              'reviewer_notes',
-              'equations',
-              'source_page',
-              'source_order',
-              'curriculum_code',
-              'source_type_code',
-              'school_level',
-              'grade_key',
-              'course_key',
-              'course_label',
-              'grade_label',
-              'exam_year',
-              'semester_label',
-              'exam_term_label',
-              'school_name',
-              'publisher_name',
-              'material_name',
-              'confidence',
-              'figure_refs',
-              'meta',
-              'created_at',
-            ].join(','),
-          )
+          .select(_pbQuestionListColumns.join(','))
           .eq('academy_id', academyId)
           .eq('is_published', true)
           .inFilter('source_type_code', dbSourceCodes)
@@ -1406,6 +1522,18 @@ class LearningProblemBankService {
       }
       final rows = await q.order('created_at', ascending: false).limit(limit);
       fetchedRows.addAll((rows as List<dynamic>).map(_mapOrEmpty));
+    }
+
+    // 가형·나형에 같이 실린 문항: 문항을 가진 구간이 목록에 없으면, 그 문항을 가리키는 자리를
+    // 이 시험지 번호로 목록에 넣는다(읽지 못하면 넣지 않는다).
+    if (dbSourceCodes.contains('mock_past')) {
+      fetchedRows.addAll(await _loadMockSlotRows(
+        academyId: academyId,
+        documentIds: readyDocIds,
+        listedQuestionIds: <String>{
+          for (final row in fetchedRows) '${row['id'] ?? ''}'.trim(),
+        },
+      ));
     }
 
     if (fetchedRows.isEmpty) return const <LearningProblemQuestion>[];
@@ -3394,6 +3522,8 @@ class LearningProblemBankService {
     String templateProfile = '',
     String paperSize = '',
     Map<String, String> questionModeByQuestionUid = const <String, String>{},
+    // 문항 id → 모의고사 자리 id. 다른 구간의 문항을 가리키는 자리의 카드를 그 시험지의 값으로 그린다.
+    Map<String, String> mockSlotItemByQuestionId = const <String, String>{},
   }) async {
     if (questionIds.isEmpty) return {};
     if (hasGateway) {
@@ -3403,6 +3533,9 @@ class LearningProblemBankService {
           'questionIds': questionIds,
           'mathEngine': 'xelatex',
         };
+        if (mockSlotItemByQuestionId.isNotEmpty) {
+          body['mockSlotItemByQuestionId'] = mockSlotItemByQuestionId;
+        }
         if (documentId.trim().isNotEmpty) {
           body['documentId'] = documentId.trim();
         }

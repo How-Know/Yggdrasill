@@ -8,6 +8,12 @@ const List<String> mockExamElectives = <String>[
   'geometry',
 ];
 
+/// 구 교육과정(2020년 시행분까지) 고3 시험지 유형. 시험지 한 부(1~30번)가 구간 하나이고 공통 구간이 없다.
+const List<String> mockExamLegacyTypes = <String>[
+  'ga',
+  'na',
+];
+
 const Map<String, String> mockExamOrgLabels = <String, String>{
   'edu': '교육청',
   'kice': '평가원',
@@ -19,6 +25,8 @@ const Map<String, String> mockExamSectionLabels = <String, String>{
   'probstats': '확률과 통계',
   'calculus': '미적분',
   'geometry': '기하',
+  'ga': '가형',
+  'na': '나형',
 };
 
 const Map<String, String> mockExamSectionShortLabels = <String, String>{
@@ -26,10 +34,15 @@ const Map<String, String> mockExamSectionShortLabels = <String, String>{
   'probstats': '확통',
   'calculus': '미적',
   'geometry': '기하',
+  'ga': '가형',
+  'na': '나형',
 };
 
-/// 고3 은 공통 1~22, 선택 23~30. 고1·2 는 30문항 모두 공통이다.
+/// 고3 은 공통 1~22, 선택 23~30. 고1·2 는 30문항 모두 공통이다. 가형·나형은 1~30 이 그 유형 구간이다.
 List<int> mockExamExpectedNumbers(int grade, String section) {
+  if (mockExamLegacyTypes.contains(section)) {
+    return grade == 3 ? List<int>.generate(30, (i) => i + 1) : const <int>[];
+  }
   if (grade == 3) {
     if (section == 'common') return List<int>.generate(22, (i) => i + 1);
     return List<int>.generate(8, (i) => i + 23);
@@ -39,7 +52,9 @@ List<int> mockExamExpectedNumbers(int grade, String section) {
 }
 
 List<String> mockExamSectionsOf(int grade) =>
-    grade == 3 ? const <String>['common', ...mockExamElectives] : const <String>['common'];
+    grade == 3
+        ? const <String>['common', ...mockExamElectives, ...mockExamLegacyTypes]
+        : const <String>['common'];
 
 /// 고3 만 학년도가 시행연도 + 1 이다.
 int mockExamSchoolYear(int grade, int examYear) =>
@@ -330,8 +345,9 @@ class MockExamSectionLink {
   final String documentStatus;
 }
 
-/// 고3: 공통 1~15·선택 23~28 객관식. 고1·2: 1~21 객관식.
-bool mockExamIsObjective(int grade, int number) {
+/// 고3: 공통 1~15·선택 23~28 객관식. 고1·2와 가형·나형(2020년까지): 1~21 객관식.
+bool mockExamIsObjective(int grade, int number, [String section = '']) {
+  if (mockExamLegacyTypes.contains(section)) return number <= 21;
   if (grade == 3) return number <= 15 || (number >= 23 && number <= 28);
   return number <= 21;
 }

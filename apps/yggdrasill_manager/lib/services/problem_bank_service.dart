@@ -3143,6 +3143,22 @@ class ProblemBankService {
     );
   }
 
+  /// 모의고사 구간의 해설 위치를 지금 규칙으로 다시 계산해, 저장된 위치와 달라지는 문항(changes)만 받는다.
+  /// 게이트웨이는 아무것도 쓰지 않는다(확정된 구간에도 쓸 수 있다).
+  Future<Map<String, dynamic>> previewMockSolutionRefs({
+    required String academyId,
+    required String documentId,
+  }) {
+    if (!hasGateway) throw Exception('게이트웨이 주소가 설정되지 않았습니다');
+    return _gatewayPost(
+      '/pb/mock-review/solution-preview',
+      body: <String, dynamic>{
+        'academyId': academyId,
+        'documentId': documentId,
+      },
+    );
+  }
+
   /// 검수에서 확정한 모의고사 구간을 학습앱에 공개한다(게이트웨이: 문항 공개 + 학습앱 모의고사 프리셋).
   /// 처음부터 공개돼 있던 구간은 그대로 두고, 이미 공개한 구간은 프리셋만 다시 맞춘다(둘 다 published false).
   /// [presetError] 는 문항은 공개했는데 프리셋을 만들지 못한 이유다(다시 확정하면 다시 맞춘다).
@@ -4246,6 +4262,9 @@ class ProblemBankService {
     String templateProfile = '',
     String paperSize = '',
     Map<String, Map<String, dynamic>> questionOverrides = const {},
+    // 문항 id → 모의고사 자리 id. 다른 구간의 문항을 가리키는 자리의 카드를 그 시험지의 값으로 찍는다.
+    Map<String, String> mockSlotItemByQuestionId = const {},
+    Map<String, String> questionModeByQuestionUid = const {},
   }) async {
     if (!hasGateway || questionIds.isEmpty) return {};
     try {
@@ -4254,6 +4273,8 @@ class ProblemBankService {
         'questionIds': questionIds,
         'mathEngine': 'xelatex',
         if (questionOverrides.isNotEmpty) 'questionOverrides': questionOverrides,
+        if (mockSlotItemByQuestionId.isNotEmpty) 'mockSlotItemByQuestionId': mockSlotItemByQuestionId,
+        if (questionModeByQuestionUid.isNotEmpty) 'questionModeByQuestionUid': questionModeByQuestionUid,
       };
       if (documentId.trim().isNotEmpty) body['documentId'] = documentId.trim();
       if (templateProfile.trim().isNotEmpty) {

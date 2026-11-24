@@ -10,6 +10,9 @@ import base64
 import json
 import os
 import sys
+import threading
+import time
+import uuid
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -63,6 +66,23 @@ TYPES = {
     ".ttf": "font/ttf",
 }
 MAX_BODY = 30 * 1024 * 1024
+MAX_BATCH = 80
+_BATCHES: dict[str, dict] = {}
+_BATCH_LOCK = threading.Lock()
+
+
+def _prune_batches() -> None:
+    now = time.time()
+    for key, batch in list(_BATCHES.items()):
+        if now - batch["at"] > 600:
+            _BATCHES.pop(key, None)
+
+
+def _batch(batch_id: str) -> dict:
+    batch = _BATCHES.get(batch_id)
+    if batch is None:
+        raise ValueError("넣은 파일 묶음을 찾지 못했습니다")
+    return batch
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -87,6 +107,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def _json(self, data, status: int = 200) -> None:
         self._send(status, json.dumps(data, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
+
+    def _filename(self) -> str:
+        encoded = self.headers.get("X-Filename", "")
+        try:
+            return base64.b64decode(encoded).decode("utf-8")
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise ValueError("파일 이름을 읽지 못했습니다") from exc
 
     def _read_body(self) -> bytes:
         length = int(self.headers.get("Content-Length", "0") or "0")
@@ -155,15 +182,46 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         try:
             if path == "/api/import":
-                encoded = self.headers.get("X-Filename", "")
-                try:
-                    filename = base64.b64decode(encoded).decode("utf-8")
-                except (ValueError, UnicodeDecodeError) as exc:
-                    raise ValueError("파일 이름을 읽지 못했습니다") from exc
+                filename = self._filename()
                 result = catalog.import_bytes(filename, self._read_body())
                 names = ", ".join(item["name"] for item in result.get("items", [result]))
                 print(f"import {result['status']} {names}", flush=True)
                 self._json(result)
+                return
+            if path == "/api/import-batch/start":
+                with _BATCH_LOCK:
+                    _prune_batches()
+                    batch_id = uuid.uuid4().hex
+                    _BATCHES[batch_id] = {"files": [], "at": time.time()}
+                self._json({"id": batch_id})
+                return
+            if path == "/api/import-batch/file":
+                batch_id = self.headers.get("X-Batch", "")
+                with _BATCH_LOCK:
+                    batch = _batch(batch_id)
+                    if len(batch["files"]) >= MAX_BATCH:
+                        raise ValueError("한 번에 넣을 수 있는 파일 수를 넘었습니다")
+                    batch["files"].append((self._filename(), self._read_body()))
+                    batch["at"] = time.time()
+                self._json({"ok": True})
+                return
+            if path == "/api/import-batch/cancel":
+                batch_id = str(self._read_json().get("id", ""))
+                with _BATCH_LOCK:
+                    _BATCHES.pop(batch_id, None)
+                self._json({"ok": True})
+                return
+            if path == "/api/import-batch/finish":
+                batch_id = str(self._read_json().get("id", ""))
+                with _BATCH_LOCK:
+                    batch = _BATCHES.pop(batch_id, None)
+                if batch is None:
+                    raise ValueError("넣은 파일 묶음을 찾지 못했습니다")
+                if not batch["files"]:
+                    raise ValueError("넣은 파일이 없습니다")
+                results = catalog.import_pdf_batch(batch["files"])
+                print(f"import batch {len(results)}", flush=True)
+                self._json({"results": results})
                 return
             data = self._read_json()
             if path == "/api/dismiss":

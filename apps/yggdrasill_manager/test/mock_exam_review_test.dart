@@ -100,6 +100,14 @@ void main() {
         ['common', 'probstats', 'geometry'],
       );
     });
+
+    test('가형·나형 회차는 공통 없이 문제지가 올라온 유형마다 구간 하나다', () {
+      final legacyPapers = [_paper('problem', 'na'), _paper('solution', 'ga'), _paper('problem', 'ga')];
+      expect(mockExamReviewSections(grade: 3, papers: legacyPapers), ['ga', 'na']);
+      expect(mockExamReviewSections(grade: 3, papers: [_paper('problem', 'na'), _paper('solution', 'ga')]), ['na']);
+      expect(mockExamExpectedNumbers(3, 'ga'), hasLength(30));
+      expect(mockExamExpectedNumbers(1, 'na'), isEmpty);
+    });
   });
 
   group('확정 때 공개', () {
@@ -423,6 +431,26 @@ void main() {
       expect(mismatch.solutionSettled, isFalse);
       final other = TextbookProblemReviewItem.fromJson({...logicOnly, 'mismatch_reason': '해설 정답과 채점 정답이 다르다.'});
       expect(other.solutionSettled, isFalse);
+    });
+  });
+
+  group('모의고사 월 탭', () {
+    MockExamReviewExam exam(int month, int year) => MockExamReviewExam(
+          exam: _exam(month: month, year: year),
+          sections: const [],
+        );
+
+    test('있는 달만 작은 달부터 나오고, 없는 달을 고르면 가장 이른 달로 돌아간다', () {
+      final months = mockExamMonths([
+        exam(11, 2024),
+        exam(3, 2026),
+        exam(3, 2024),
+        exam(6, 2025),
+      ]);
+      expect(months, [3, 6, 11]);
+      expect(mockExamSelectedMonth(months, 6), 6);
+      expect(mockExamSelectedMonth(months, 4), 3);
+      expect(mockExamSelectedMonth(const [], 3), isNull);
     });
   });
 

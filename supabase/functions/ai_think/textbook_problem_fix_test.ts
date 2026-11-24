@@ -14,6 +14,7 @@ import {
   holdUnslottedFigureCrops,
   isSolutionSettled,
   LINE_PITCH_EM,
+  solutionRefReplaceable,
   mergeBoxFigureMeasures,
   mergeTableFigureMeasures,
   subQuestionFigurePlacement,
@@ -540,6 +541,24 @@ Deno.test('글 줄 안 그림: 원본에서 글줄에 낀 그림은 inline-text 
   assertEquals(p?.layout.items[1].position, 'below-stem');
 });
 
+Deno.test("선지 아래에 둔 그림은 원본에서 '글 아래'로 재져도 선지 아래로 둔다", () => {
+  const propose = (placement: string, position: string) =>
+    buildFigureProposal({
+      measures: parseFigureMeasures([{ bbox_1k: [520, 300, 900, 700], placement, align: 'center', v2_state: 'size' }]),
+      emPx: 40,
+      imageWidthPx: 1100,
+      assets: [{ figure_index: 1, path: 'a' }],
+      currentLayout: { version: 1, items: [{ assetKey: 'idx:1', widthEm: 12, position, anchor: 'center' }], groups: [] },
+    })!.layout.items[0];
+  const kept = propose('below_text', 'below-choices');
+  assertEquals(kept.position, 'below-choices');
+  // 크기는 원본에서 잰 값으로 바뀐다.
+  assertEquals(kept.widthEm, 11);
+  // 원본에서 글 옆으로 잰 그림은 잰 대로 둔다. 선지 아래가 아니던 그림을 선지 아래로 보내지도 않는다.
+  assertEquals(propose('right_of_text', 'below-choices').position, 'inline-right');
+  assertEquals(propose('below_text', 'below-stem').position, 'below-stem');
+});
+
 Deno.test('표 모양 선지 제목: 반영 대기 값을 먼저 쓰고, 화면이 달라지는 같은 개수의 수정안만 받는다', () => {
   const meta = { choice_layout: 'blank_table', blank_choice_labels: ['닮은 도형', '닮음조건', '\\overlineDC의 길이'] };
   const fixed = ['닮은 도형', '닮음조건', '\\overline{DC}의 길이'];
@@ -570,4 +589,15 @@ Deno.test('정답이 통과했고 원본 해설을 이미 옮긴 문항은 해�
   assert(!isSolutionSettled({ ...logicOnly, answer_matched: false }));
   assert(!isSolutionSettled({ ...logicOnly, mismatch_reason: '해설 정답과 채점 정답이 다르다.' }));
   assert(!isSolutionSettled({ ...logicOnly, quality_checks: { solution_vision: { found: false } } }));
+});
+
+Deno.test('수정 단계가 찾은 해설 상자는 사람이 고친 위치와 이어진 영역까지 계산한 위치를 덮지 않는다', () => {
+  // 위치가 없거나, 교재처럼 이어진 영역을 계산하지 않은 위치(null)는 바꿀 수 있다.
+  assert(solutionRefReplaceable(null));
+  assert(solutionRefReplaceable({ edited_at: null, continuation_regions: null }));
+  assert(solutionRefReplaceable({ edited_at: null }));
+  // 모의고사: 이어진 영역이 없다고 계산한 것([])도 계산한 위치다.
+  assert(!solutionRefReplaceable({ edited_at: null, continuation_regions: [] }));
+  assert(!solutionRefReplaceable({ edited_at: null, continuation_regions: [{ raw_page: 3, region_1k: [100, 500, 400, 880] }] }));
+  assert(!solutionRefReplaceable({ edited_at: '2026-11-20T00:00:00Z', continuation_regions: null }));
 });

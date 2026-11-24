@@ -2901,6 +2901,68 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     unawaited(controller.loadMockExam());
   }
 
+  Future<void> _openMockExamStoredPdf(
+    MockExamResourceCard card, {
+    required String kind,
+  }) async {
+    if (_explorer != null || _examPresetOpeningId != null) return;
+    setState(() => _examPresetOpeningId = card.id);
+    try {
+      final String url;
+      final int page;
+      final String titleSuffix;
+      if (kind == 'problem') {
+        if (card.storagePath.trim().isEmpty) {
+          showAppSnackBar(context, '모의고사 원본 PDF가 없습니다.');
+          return;
+        }
+        url = await _mockExamService.signedPaperUrl(card);
+        page = 1;
+        titleSuffix = '원본';
+      } else {
+        final solutionUrl = await _mockExamService.signedSolutionUrl(card);
+        if (!mounted) return;
+        if (solutionUrl == null || solutionUrl.trim().isEmpty) {
+          showAppSnackBar(context, '해설 원본이 없습니다.');
+          return;
+        }
+        url = solutionUrl;
+        page = 1;
+        titleSuffix = '해설';
+      }
+      if (!mounted) return;
+      final title = '${card.title} $titleSuffix';
+      await openTextbookViewerDialog(
+        context,
+        ref: TextbookPdfRef(
+          fileId: card.paperId,
+          gradeLabel: '',
+          kind: kind,
+          displayName: title,
+        ),
+        title: title,
+        cacheKey: 'mock|${card.examId}|${card.elective}|$kind',
+        initialPage: page,
+        tapDetectionMode: false,
+        fitWholePage: true,
+        showFileActions: true,
+        source: TextbookPdfSource.remoteUrl(
+          url: url,
+          migrationStatus: 'mock_exam',
+          linkId: '${card.paperId}|$kind',
+        ),
+      );
+    } catch (_) {
+      if (mounted) {
+        showAppSnackBar(context, '원본을 열 수 없습니다.');
+      }
+    } finally {
+      if (mounted && _examPresetOpeningId == card.id) {
+        setState(() => _examPresetOpeningId = null);
+      }
+    }
+  }
+
   Future<void> _openExamPresetExplorer(
     LearningProblemDocumentExportPreset preset,
   ) async {
@@ -4583,6 +4645,22 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                                         _openMockExamExplorer(mockCards[i]),
                                       )
                                   : null),
+                          onOriginalTap: _printPickMode
+                              ? null
+                              : () => unawaited(
+                                    _openMockExamStoredPdf(
+                                      mockCards[i],
+                                      kind: 'problem',
+                                    ),
+                                  ),
+                          onSolutionTap: _printPickMode
+                              ? null
+                              : () => unawaited(
+                                    _openMockExamStoredPdf(
+                                      mockCards[i],
+                                      kind: 'solution',
+                                    ),
+                                  ),
                         ),
                       ),
                   if (!mock)

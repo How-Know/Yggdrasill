@@ -1,0 +1,26 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.1",
+  "ref": "csat-2024-common-13-1",
+  "params": {"u": 5.0342, "ox": 13.0162, "oy": 74.054, "k": 0.986, "m": 7.0666, "q": 0.0423, "d": 5.9612, "x0": -2.0239, "x1": 3.11},
+  "fit": ["u", "ox", "oy", "k", "m", "q", "d"],
+  "canvas": {"width": 43.6, "height": 82.97, "origin": ["ox", "oy"], "unit": "u"},
+  "objects": [
+    {"id": "ax", "type": "axes", "x": [-2.58, 6.02], "y": [-1.7, 14.48]},
+    {"id": "f", "type": "function", "expr": "k(x^3-m x)+q x^2+d", "domain": ["x0", "x1"]},
+    {"id": "O", "type": "point", "at": [0, 0]},
+    {"id": "T", "type": "on", "of": "f", "x": 0},
+    {"id": "P", "type": "on", "of": "f", "x": 3, "label": {"dir": "E", "dist": 0.9}},
+    {"id": "OP", "type": "segment", "from": "O", "to": "P"},
+    {"id": "Q", "type": "intersect", "of": ["f", "OP"], "near": [0.56, 2.34], "label": {"text": "\\mathrm{Q}", "offset": [0.3, 8.6], "center": true}},
+    {"type": "fill", "path": ["O", "T", {"curve": "f", "to": "Q"}]},
+    {"type": "fill", "path": ["Q", {"curve": "f", "to": "P"}]},
+    {"type": "polyline", "points": [[0, "P.y"], "P", [3, 0]], "line": "dashed"},
+    {"id": "call", "type": "arc", "through3": [[-0.33, 1.2], [0.05, 1.42], [0.21, 2.0]], "from": [-0.33, 1.2], "to": [0.21, 2.0], "dir": "ccw", "line": "mid", "arrow": "end"},
+    {"id": "lA", "type": "label", "at": [-0.71, 1.14], "text": "A"},
+    {"id": "lB", "type": "label", "at": [1.61, 2.72], "text": "B"},
+    {"id": "l3", "type": "label", "at": [3, 0], "text": "3", "offset": [0, -2.4]},
+    {"id": "lf", "type": "label", "at": [4.71, 13.2], "text": "y=f(x)"}
+  ],
+  "label_nudge": {"ax:x": [-0.508, 0.254], "ax:y": [0.169, -1.017], "ax:origin": [-0.169, -0.254], "P": [0.254, -0.085], "lA": [0.169, 0.0], "lB": [-0.085, -0.169], "l3": [0.085, 0.085], "lf": [-0.678, 0.169]}
+}

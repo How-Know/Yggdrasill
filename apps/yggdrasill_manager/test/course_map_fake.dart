@@ -40,15 +40,25 @@ class _FakeUnit {
 }
 
 class _FakePlacement {
-  _FakePlacement(this.id, this.unitId, this.conceptId, this.sort, this.origin, this.note, this.type);
+  _FakePlacement(this.id, this.unitId, this.conceptId, this.sort, this.origin, this.note, this.type, [this.blockId]);
 
   final String id;
   String unitId;
+  String? blockId;
   final String conceptId;
   int sort;
   String origin;
   String? note;
   String? type;
+}
+
+class _FakeBlock {
+  _FakeBlock(this.id, this.unitId, this.name, this.sort);
+
+  final String id;
+  final String unitId;
+  String name;
+  int sort;
 }
 
 /// 서버 RPC(`course_map_*`)와 같은 규칙으로 움직이는 메모리 저장소.
@@ -72,6 +82,7 @@ class FakeCourseMapBackend implements CourseMapBackend {
   Completer<void>? holdSave;
 
   final Map<String, _FakePlacement> _placements = {};
+  final Map<String, _FakeBlock> _blocks = {};
   final Map<String, String> _concepts = {};
   CourseMapException? failPlacements;
   CourseMapException? failOverview;
@@ -131,10 +142,43 @@ class FakeCourseMapBackend implements CourseMapBackend {
   }
 
   /// 시험 준비용으로 바로 놓는다.
-  String place(String unitId, String conceptId, {String origin = 'owner', String? note, String? type}) {
+  String place(String unitId, String conceptId,
+      {String origin = 'owner', String? note, String? type, String? blockId}) {
     final id = _id('p');
-    _placements[id] = _FakePlacement(id, unitId, conceptId, _inUnit(unitId).length, origin, note, type);
+    _placements[id] = _FakePlacement(id, unitId, conceptId, _inUnit(unitId).length, origin, note, type, blockId);
     return id;
+  }
+
+  /// 시험 준비용으로 수업 블록을 바로 만든다.
+  String addBlock(String unitId, String name) {
+    final id = _id('b');
+    _blocks[id] = _FakeBlock(id, unitId, name, _blocksInUnit(unitId).length);
+    return id;
+  }
+
+  List<_FakeBlock> _blocksInUnit(String unitId) =>
+      _blocks.values.where((b) => b.unitId == unitId).toList()..sort((a, b) => a.sort.compareTo(b.sort));
+
+  void _renumberBlocks(String unitId) {
+    final list = _blocksInUnit(unitId);
+    for (var i = 0; i < list.length; i++) {
+      list[i].sort = i;
+    }
+  }
+
+  List<CourseUnitBlock> _blockList(String courseId) {
+    final out = <CourseUnitBlock>[];
+    for (final u in _units.values.where((u) => u.courseId == courseId && u.archived == null)) {
+      for (final b in _blocksInUnit(u.id)) {
+        out.add(CourseUnitBlock.fromJson({
+          'id': b.id,
+          'unit_id': b.unitId,
+          'name': b.name,
+          'sort': b.sort,
+        }));
+      }
+    }
+    return out;
   }
 
   List<String> namesIn(String unitId) => [for (final p in _inUnit(unitId)) _concepts[p.conceptId]!];
@@ -156,6 +200,7 @@ class FakeCourseMapBackend implements CourseMapBackend {
         out.add(CourseMapPlacement.fromJson({
           'id': p.id,
           'unit_id': p.unitId,
+          'block_id': p.blockId,
           'concept_id': p.conceptId,
           'name': _concepts[p.conceptId],
           'sort': p.sort,
@@ -476,6 +521,7 @@ class FakeCourseMapBackend implements CourseMapBackend {
     final old = p.unitId;
     p
       ..unitId = unitId
+      ..blockId = null
       ..sort = _inUnit(unitId).length
       ..origin = 'owner'
       ..note = null;
@@ -529,5 +575,135 @@ class FakeCourseMapBackend implements CourseMapBackend {
     if (olderThan != null) list = list.sublist(list.indexWhere((c) => c.key == olderThan.key) + 1);
     final n = changePage ?? limit;
     return CourseChangePage(items: list.take(n).toList(), more: list.length > n);
+  }
+
+  @override
+  Future<List<CourseUnitBlock>> blocks(String courseId) async {
+    final f = failPlacements;
+    if (f != null) throw f;
+    if (!_courses.containsKey(courseId)) _fail('course_map_not_found');
+    return _blockList(courseId);
+  }
+
+  @override
+  Future<CourseBlockMutationResult> createBlock({
+    required String unitId,
+    required String name,
+    List<String>? placementIds,
+  }) async {
+    writes += 1;
+    final u = _activeUnit(unitId);
+    final trimmed = name.trim();
+    if (trimmed.isEmpty || trimmed.length > 80) _fail('course_block_bad_name');
+    final bid = addBlock(unitId, trimmed);
+    if (placementIds != null) {
+      for (final pid in placementIds) {
+        final p = _placementRow(pid);
+        if (p.unitId != unitId) _fail('course_placement_not_found');
+        p.blockId = bid;
+      }
+    }
+    return CourseBlockMutationResult(
+      blockId: bid,
+      blocks: _blockList(u.courseId),
+      placements: _placementList(u.courseId),
+    );
+  }
+
+  @override
+  Future<List<CourseUnitBlock>> renameBlock({required String blockId, required String name}) async {
+    writes += 1;
+    final b = _blocks[blockId];
+    if (b == null) _fail('course_block_not_found');
+    final u = _activeUnit(b.unitId);
+    final trimmed = name.trim();
+    if (trimmed.isEmpty || trimmed.length > 80) _fail('course_block_bad_name');
+    b.name = trimmed;
+    return _blockList(u.courseId);
+  }
+
+  @override
+  Future<CourseBlockMutationResult> deleteBlock(String blockId) async {
+    writes += 1;
+    final b = _blocks[blockId];
+    if (b == null) _fail('course_block_not_found');
+    final u = _activeUnit(b.unitId);
+    for (final p in _inUnit(b.unitId)) {
+      if (p.blockId == blockId) p.blockId = null;
+    }
+    _blocks.remove(blockId);
+    _renumberBlocks(b.unitId);
+    return CourseBlockMutationResult(
+      blocks: _blockList(u.courseId),
+      placements: _placementList(u.courseId),
+    );
+  }
+
+  @override
+  Future<List<CourseUnitBlock>> reorderBlocks({required String unitId, required List<String> blockIds}) async {
+    writes += 1;
+    final u = _activeUnit(unitId);
+    final now = _blocksInUnit(unitId).map((b) => b.id).toSet();
+    if (blockIds.length != now.length || blockIds.toSet().length != blockIds.length || !now.containsAll(blockIds)) {
+      _fail('course_block_stale');
+    }
+    for (var i = 0; i < blockIds.length; i++) {
+      _blocks[blockIds[i]]!.sort = i;
+    }
+    return _blockList(u.courseId);
+  }
+
+  @override
+  Future<List<CourseMapPlacement>> setPlacementBlock({
+    required String placementId,
+    String? blockId,
+    List<String>? orderedIds,
+  }) async {
+    writes += 1;
+    final p = _placementRow(placementId);
+    final u = _activeUnit(p.unitId);
+    if (blockId != null) {
+      final b = _blocks[blockId];
+      if (b == null) _fail('course_block_not_found');
+      if (b.unitId != p.unitId) _fail('course_block_unit_mismatch');
+    }
+    p.blockId = blockId;
+    if (orderedIds != null) {
+      final now = _inUnit(p.unitId).map((x) => x.id).toSet();
+      if (orderedIds.length != now.length ||
+          orderedIds.toSet().length != orderedIds.length ||
+          !now.containsAll(orderedIds)) {
+        _fail('course_placement_stale');
+      }
+      for (var i = 0; i < orderedIds.length; i++) {
+        _placements[orderedIds[i]]!.sort = i;
+      }
+    }
+    return _placementList(u.courseId);
+  }
+
+  @override
+  Future<List<CourseMapPlacement>> addConceptsToBlock({
+    required String blockId,
+    required List<String> conceptIds,
+  }) async {
+    writes += 1;
+    final b = _blocks[blockId];
+    if (b == null) _fail('course_block_not_found');
+    final u = _activeUnit(b.unitId);
+    final ids = conceptIds.toSet().toList();
+    if (ids.isEmpty || ids.length > 100) _fail('course_placement_bad_concepts');
+    for (final c in ids) {
+      if (!_concepts.containsKey(c)) _fail('course_placement_concept_not_found');
+    }
+    for (final c in ids) {
+      final existing = _inUnit(b.unitId).where((p) => p.conceptId == c).firstOrNull;
+      if (existing != null) {
+        existing.blockId = blockId;
+      } else {
+        place(b.unitId, c, blockId: blockId);
+      }
+    }
+    return _placementList(u.courseId);
   }
 }

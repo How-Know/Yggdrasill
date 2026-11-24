@@ -11,8 +11,11 @@ import '../../services/problem_bank_service.dart';
 import '../../services/textbook_course_catalog.dart';
 import '../../services/textbook_series_catalog.dart';
 import '../../services/textbook_unit_progress_service.dart';
+import '../../services/thinking_foundation_service.dart';
 import '../../theme/manager_shell_colors.dart';
 import '../../widgets/latex_text_renderer.dart';
+import '../../widgets/question_foundation_links_dialog.dart';
+import '../skill/thinking_foundation_screen.dart';
 import 'grading_equiv_tab.dart';
 import 'handwriting_review_tab.dart';
 import 'mock_exam/mock_exam_quick_switch_panel.dart';
@@ -206,8 +209,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   List<ProblemBankQuestion> _questions = <ProblemBankQuestion>[];
   Map<String, ProblemBankQuestionTimedTestStats> _timedTestStatsByQuestionUid =
       <String, ProblemBankQuestionTimedTestStats>{};
+  Map<String, List<QuestionFoundationLink>> _foundationLinksByQuestionId =
+      <String, List<QuestionFoundationLink>>{};
   int _documentLoadVersion = 0;
   int _timedTestStatsRequestVersion = 0;
+  int _foundationLinksRequestVersion = 0;
   final List<_PipelineLogEntry> _pipelineLogs = <_PipelineLogEntry>[];
   final Map<String, String> _questionPreviewUrls = <String, String>{};
   final Map<String, Future<IssueQuestionView>> _issueQuestionViews =
@@ -1317,13 +1323,20 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                 .roundToDouble() /
             10.0;
 
+    final existingItems = _figureLayoutItemsByKey(q.meta);
     final items = <Map<String, dynamic>>[];
     for (final e in widthEmMap.entries) {
       final key = e.key.trim();
       if (key.isEmpty) continue;
       final wEm = e.value.clamp(_figureWidthEmMin, _figureWidthEmMax);
       final arrangement = positionMap?[key] ?? _figurePositionOptions[2];
-      final pos = _figureLayoutPositionForArrangement(arrangement);
+      var pos = _figureLayoutPositionForArrangement(arrangement);
+      // 검수에서 선지 아래로 보낸 그림(below-choices)은 그대로 둔다. 이 편집기에는 '선지 아래' 선택지가 없어
+      // 크기만 바꿔 저장해도 본문 아래로 돌아가기 때문이다.
+      if (pos == 'below-stem' &&
+          '${existingItems[key]?['position'] ?? ''}' == 'below-choices') {
+        pos = 'below-choices';
+      }
       final anchor = _figureLayoutAnchorForArrangement(arrangement);
       final offsetX = (offsetXMap?[key] ?? 0.0).clamp(-8.0, 8.0).toDouble();
       final item = <String, dynamic>{
@@ -2438,6 +2451,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         _timedTestStatsRequestVersion += 1;
         _timedTestStatsByQuestionUid =
             <String, ProblemBankQuestionTimedTestStats>{};
+        _foundationLinksRequestVersion += 1;
+        _foundationLinksByQuestionId = <String, List<QuestionFoundationLink>>{};
         _dirtyQuestionIds.clear();
         _applySourceMetaFromDocument(summary.document);
         _questionPreviewUrls.clear();
@@ -2472,6 +2487,12 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           : questions;
       unawaited(
         _loadTimedTestStats(
+          questions,
+          documentContextId: summary.document.id,
+        ),
+      );
+      unawaited(
+        _loadFoundationLinks(
           questions,
           documentContextId: summary.document.id,
         ),
@@ -3597,6 +3618,76 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     }
   }
 
+  Future<void> _loadFoundationLinks(
+    List<ProblemBankQuestion> questions, {
+    required String documentContextId,
+  }) async {
+    final ids = [
+      for (final q in questions)
+        if (q.id.trim().isNotEmpty) q.id.trim(),
+    ];
+    final reqVer = ++_foundationLinksRequestVersion;
+    if (ids.isEmpty) {
+      if (!mounted || _activeDocument?.id != documentContextId) return;
+      setState(() {
+        _foundationLinksByQuestionId = <String, List<QuestionFoundationLink>>{};
+      });
+      return;
+    }
+    try {
+      final loaded = await ThinkingFoundationService().fetchQuestionLinks(ids);
+      if (!mounted ||
+          reqVer != _foundationLinksRequestVersion ||
+          _activeDocument?.id != documentContextId) {
+        return;
+      }
+      setState(() {
+        _foundationLinksByQuestionId = loaded;
+      });
+    } catch (error) {
+      debugPrint('[problem-bank] foundation links load failed: $error');
+    }
+  }
+
+  Future<void> _openQuestionFoundationDialog(ProblemBankQuestion q) async {
+    final svc = ThinkingFoundationService();
+    final current = _foundationLinksByQuestionId[q.id] ?? const <QuestionFoundationLink>[];
+    List<QuestionFoundationLink>? updatedServer;
+    final saved = await showQuestionFoundationLinksDialog(
+      context,
+      questionLabel: '${q.questionNumber}번 문항',
+      initialLinks: current,
+      service: svc,
+      onSave: (links) async {
+        updatedServer = await svc.saveQuestionLinks(q.id, links);
+      },
+    );
+    if (saved == null || !mounted) return;
+    setState(() {
+      final next = Map<String, List<QuestionFoundationLink>>.from(_foundationLinksByQuestionId);
+      final resolved = updatedServer ?? saved;
+      if (resolved.isEmpty) {
+        next.remove(q.id);
+      } else {
+        next[q.id] = resolved;
+      }
+      _foundationLinksByQuestionId = next;
+    });
+    _showSnack('${q.questionNumber}번 문항의 사고의 토대(C) 연결을 저장했습니다.');
+  }
+
+  Future<void> _inspectQuestionFoundation(QuestionFoundationLink link) async {
+    try {
+      final catalog = await ThinkingFoundationService().fetchAll();
+      if (!mounted) return;
+      final hit = catalog
+          .where((x) => x.id == link.foundationId || (link.code.isNotEmpty && x.code == link.code))
+          .firstOrNull;
+      if (hit == null) return;
+      await showThinkingFoundationDetailDialog(context, hit);
+    } catch (_) {}
+  }
+
   Future<void> _reloadQuestions() async {
     final academyId = _academyId;
     final doc = _activeDocument;
@@ -3632,6 +3723,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         _timedTestStatsRequestVersion += 1;
         _timedTestStatsByQuestionUid =
             <String, ProblemBankQuestionTimedTestStats>{};
+        _foundationLinksRequestVersion += 1;
+        _foundationLinksByQuestionId = <String, List<QuestionFoundationLink>>{};
         _dirtyQuestionIds.retainAll(effectiveIds);
         _reextractingQuestionIds.clear();
         _questionPreviewUrls.removeWhere((id, _) => !dirtyIds.contains(id));
@@ -3648,6 +3741,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       );
       unawaited(
         _loadTimedTestStats(questions, documentContextId: doc.id),
+      );
+      unawaited(
+        _loadFoundationLinks(questions, documentContextId: doc.id),
       );
       unawaited(_prefetchQuestionPreviewUrls(cleanQuestions));
       unawaited(_prefetchFigurePreviewUrls(cleanQuestions));
@@ -14779,6 +14875,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
             ? textbookDisplayPageOf(q)
             : q.sourcePage;
     final timedTestStats = _timedTestStatsByQuestionUid[q.questionUid.trim()];
+    final foundationLinks =
+        _foundationLinksByQuestionId[q.id] ?? const <QuestionFoundationLink>[];
     final metaFooter = 'p.$pageNumber'
         ' · 보기 $objectiveChoiceCount개'
         ' · 수식 ${q.equations.length}개'
@@ -15212,6 +15310,44 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
             ),
             const SizedBox(height: 2),
           ],
+          if (foundationLinks.isNotEmpty) ...[
+            Wrap(
+              spacing: 4,
+              runSpacing: 4,
+              children: [
+                for (final link in foundationLinks)
+                  Tooltip(
+                    message:
+                        '${link.groupCode}. ${link.groupTitle} · ${link.observabilityLabel}'
+                        '${link.rationale.trim().isNotEmpty ? '\n이유: ${link.rationale.trim()}' : ''}'
+                        '\n클릭하여 역량 상세 보기',
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(999),
+                      onTap: () => unawaited(_inspectQuestionFoundation(link)),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 7, vertical: 2.5),
+                        decoration: BoxDecoration(
+                          color: _accent.withValues(alpha: 0.14),
+                          borderRadius: BorderRadius.circular(999),
+                          border:
+                              Border.all(color: _accent.withValues(alpha: 0.5)),
+                        ),
+                        child: Text(
+                          '${link.code} ${link.title} (${link.relevanceLabel})',
+                          style: const TextStyle(
+                            color: _text,
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 4),
+          ],
           SizedBox(
             width: double.infinity,
             child: Text(
@@ -15295,6 +15431,17 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                             ? _accent
                             : _textSub,
                       ),
+              ),
+              IconButton(
+                tooltip: foundationLinks.isEmpty
+                    ? '사고의 토대(C) 연결'
+                    : '사고의 토대(C) 편집 (${foundationLinks.length}개)',
+                iconSize: 18,
+                onPressed: () => unawaited(_openQuestionFoundationDialog(q)),
+                icon: Icon(
+                  Icons.compass_calibration_outlined,
+                  color: foundationLinks.isNotEmpty ? _accent : _textSub,
+                ),
               ),
               IconButton(
                 tooltip: '검수 편집',

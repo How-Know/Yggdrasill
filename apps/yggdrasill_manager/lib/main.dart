@@ -12,7 +12,7 @@ import 'screens/auth/login_screen.dart';
 import 'screens/curriculum/curriculum_screen.dart';
 import 'screens/curriculum/widgets/course_map_pane.dart';
 import 'screens/arithmetic/arithmetic_screen.dart';
-import 'screens/skill/skill_screen.dart';
+import 'screens/curriculum_menu/curriculum_menu_screen.dart';
 import 'screens/problem_roadmap/problem_roadmap_screen.dart';
 import 'screens/problem_bank/problem_bank_screen.dart';
 import 'screens/trait_survey/trait_survey_screen.dart';
@@ -265,7 +265,7 @@ class _MainScreenState extends State<MainScreen> with WindowListener {
   final List<Widget> _screens = const [
     CurriculumScreen(),
     ArithmeticScreen(),
-    SkillScreen(),
+    CurriculumMenuScreen(),
     ProblemRoadmapScreen(),
     ProblemBankScreen(),
     TraitSurveyScreen(),

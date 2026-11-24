@@ -94,6 +94,19 @@ export function solutionEvidenceFrom({ images = [], wordPages = [] } = {}) {
       const first = scan.rows.indexOf(true);
       return first < 0 ? null : Math.floor(((scan.y0 + first) / scan.height) * 1000);
     },
+    /// 한 쪽의 낱말 상자(좌표 0..1000). 글자 층이 없으면 null.
+    words(page) {
+      if (!hasText) return null;
+      const p = wordPages[page - 1];
+      if (!p || !(p.width > 0) || !(p.height > 0)) return [];
+      return (p.words || []).map((w) => ({
+        text: String(w.text ?? ''),
+        xMin: (w.xMin / p.width) * 1000,
+        xMax: (w.xMax / p.width) * 1000,
+        yMin: (w.yMin / p.height) * 1000,
+        yMax: (w.yMax / p.height) * 1000,
+      }));
+    },
     lines(page, region) {
       if (!hasText) return null;
       const p = wordPages[page - 1];

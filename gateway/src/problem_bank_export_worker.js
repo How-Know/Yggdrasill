@@ -22,6 +22,7 @@ import { renderPdfWithHtmlEngine } from './problem_bank/render_engine/index.js';
 import { renderHtmlToImageBuffer } from './problem_bank/render_engine/chrome/render_pdf.js';
 import { resolveFigureLayout, figureLayoutToWidthPt } from './problem_bank/render_engine/utils/figure_layout.js';
 import { recoverMangledLatexNewlineCommands } from './problem_bank/render_engine/utils/text.js';
+import { applyMockPaperSlotValues } from './mock_exam/paper_slots.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -4133,7 +4134,7 @@ async function fetchQuestionsForJob(job, renderConfig) {
   let query = supa
     .from('pb_questions')
     .select(
-      'id,question_uid,document_id,question_number,question_type,stem,choices,allow_objective,allow_subjective,objective_choices,objective_answer_key,subjective_answer,objective_generated,figure_refs,equations,confidence,flags,reviewer_notes,source_page,source_order,meta',
+      'id,question_uid,document_id,question_number,question_type,stem,choices,allow_objective,allow_subjective,objective_choices,objective_answer_key,subjective_answer,objective_generated,figure_refs,equations,confidence,flags,reviewer_notes,source_page,source_order,meta,source_type_code',
     )
     .eq('academy_id', academyId);
   query = applyPublishedQuestionFilter(query);
@@ -4157,7 +4158,7 @@ async function fetchQuestionsForJob(job, renderConfig) {
     let idFallbackQuery = supa
       .from('pb_questions')
       .select(
-        'id,question_uid,document_id,question_number,question_type,stem,choices,allow_objective,allow_subjective,objective_choices,objective_answer_key,subjective_answer,objective_generated,figure_refs,equations,confidence,flags,reviewer_notes,source_page,source_order,meta',
+        'id,question_uid,document_id,question_number,question_type,stem,choices,allow_objective,allow_subjective,objective_choices,objective_answer_key,subjective_answer,objective_generated,figure_refs,equations,confidence,flags,reviewer_notes,source_page,source_order,meta,source_type_code',
       )
       .eq('academy_id', academyId);
     idFallbackQuery = applyPublishedQuestionFilter(idFallbackQuery)
@@ -4705,12 +4706,31 @@ async function processOneJob(job) {
     || computedRenderHash,
   ).trim();
   const fetched = await fetchQuestionsForJob(job, renderConfig);
-  const questions = Array.isArray(fetched?.rows) ? fetched.rows : [];
+  const fetchedQuestions = Array.isArray(fetched?.rows) ? fetched.rows : [];
   const missingQuestionUids = Array.isArray(fetched?.missingQuestionUids)
     ? fetched.missingQuestionUids
     : [];
-  if (!questions.length) {
+  if (!fetchedQuestions.length) {
     throw new Error('selected_questions_empty');
+  }
+  // 가형·나형 시험지 한 부를 뽑는 작업이면, 다른 구간의 문항을 가리키는 자리를 이 시험지의
+  // 번호·배점·형식·본문·선지 순서로 찍는다. 그 밖의 작업은 문항과 옵션이 그대로다.
+  const paperSlots = await applyMockPaperSlotValues({
+    supa,
+    academyId: String(job.academy_id || '').trim(),
+    questions: fetchedQuestions,
+  });
+  const questions = paperSlots.questions;
+  if (paperSlots.paper) {
+    const mergeInto = (key, values, always) => {
+      const current = renderConfig[key] && typeof renderConfig[key] === 'object' ? renderConfig[key] : null;
+      if (!current && !always) return;
+      renderConfig[key] = { ...(current || {}), ...values };
+    };
+    mergeInto('questionScoreByQuestionUid', paperSlots.scoreByQuestionKey, true);
+    mergeInto('questionScoreByQuestionId', paperSlots.scoreByQuestionKey, false);
+    mergeInto('questionModeByQuestionUid', paperSlots.modeByQuestionKey, true);
+    mergeInto('questionModeByQuestionId', paperSlots.modeByQuestionKey, false);
   }
   const rendered = await renderPdf(job, questions, renderConfig);
   const exportQuestions = Array.isArray(rendered.exportQuestions)

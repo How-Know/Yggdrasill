@@ -1435,12 +1435,23 @@ class _GlobalMemoOverlayState extends State<_GlobalMemoOverlay> {
     super.initState();
     _isOpen.addListener(_syncRightSideSheetOpenState);
     _syncRightSideSheetOpenState();
-    // 오른쪽 시트는 도구모음 채점 버튼 또는 실제 채점 세션 진입 시에만 열린다.
+    // 오른쪽 시트는 도구모음 채점 버튼, 채점 세션 진입, 또는 과제카드 조회에서 열린다.
     toggleRightSideSheetAction = () async {
-      if (rightSideSheetTestGradingSession.value == null) return;
+      if (rightSideSheetTestGradingSession.value == null &&
+          rightSideSheetStudentLookupBuilder.value == null) {
+        return;
+      }
       _isOpen.value = !_isOpen.value;
     };
     openRightSideSheetGradingAction = () async {
+      if (blockRightSideSheetOpen.value) {
+        blockRightSideSheetOpen.value = false;
+      }
+      _isOpen.value = true;
+    };
+    openRightSideSheetStudentLookupAction = () async {
+      rightSideSheetPdfPanelSession.value = null;
+      rightSideSheetTestGradingSession.value = null;
       if (blockRightSideSheetOpen.value) {
         blockRightSideSheetOpen.value = false;
       }
@@ -1528,6 +1539,7 @@ class _GlobalMemoOverlayState extends State<_GlobalMemoOverlay> {
     _isOpen.removeListener(_syncRightSideSheetOpenState);
     toggleRightSideSheetAction = null;
     openRightSideSheetGradingAction = null;
+    openRightSideSheetStudentLookupAction = null;
     closeRightSideSheetAction = null;
     rightSideSheetOpen.value = false;
     _isOpen.dispose();
@@ -1616,6 +1628,10 @@ class _GlobalRightSheetPdfPanel extends StatelessWidget {
     rightSideSheetTestGradingSession.value = null;
     if (gradingSession?.onClosed != null) {
       unawaited(gradingSession!.onClosed!());
+    }
+    if (gradingSession?.onCancelSheet != null) {
+      gradingSession!.onCancelSheet!();
+      return;
     }
     final closeAction = closeRightSideSheetAction;
     if (closeAction != null) {

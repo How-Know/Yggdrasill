@@ -3,11 +3,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../arithmetic/arithmetic_screen.dart';
+import '../skill/skill_screen.dart';
+import '../skill/thinking_foundation_screen.dart';
 import 'widgets/category_tree.dart';
 import 'widgets/concept_book_dialog.dart';
 import 'widgets/concept_chat_panel.dart';
 import 'widgets/concept_criteria_pane.dart';
-import 'widgets/concept_draft_list_dialog.dart';
 import 'widgets/concept_draft_review_dialog.dart';
 import 'widgets/concept_anchor_dialogs.dart';
 import 'widgets/concept_input_dialog.dart';
@@ -184,7 +185,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
             ),
             const SizedBox(height: 8),
             const Text(
-              '왼쪽은 교육과정 흐름 또는 개념 라이브러리, 오른쪽은 연산 리스트입니다.',
+              '왼쪽은 교육과정 흐름 또는 개념 라이브러리, 오른쪽은 사고 리스트입니다.',
               style: TextStyle(color: Color(0xFFB3B3B3), fontSize: 16),
             ),
             const SizedBox(height: 20),
@@ -194,7 +195,9 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
               child: ConceptWorkspace(
                 controller: _lib,
                 showLibrary: _showLibrary,
+                thinking: const SkillScreen(embedded: true),
                 arithmetic: const ArithmeticScreen(embedded: true),
+                foundations: const ThinkingFoundationScreen(),
                 courseDetail: CourseMapPane(
                   controller: CourseMapController.instance,
                   selectedConceptId: _lib.openedConceptId,
@@ -202,6 +205,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
                   onOpenChange: (id) => unawaited(_openConceptById(id)),
                   aboveSelection: SelectedConceptSummary(controller: _lib),
                   onShowLibrary: () => setState(() => _showLibrary = true),
+                  filters: _buildScopeBar(),
                 ),
                 courseSummary: CourseMapSummaryPane(
                   controller: CourseMapController.instance,
@@ -231,11 +235,6 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   /// 대화 참고로 골랐을 때 접혀 있으면 펼친다.
   void _openChatForPick() {
     if (!_chatOpen) _setChatOpen(true);
-  }
-
-  Future<void> _openDraftList() async {
-    final id = await showConceptDraftListDialog(context, onConfirmed: () => unawaited(_reloadCategoryTree()));
-    if (id != null && mounted) await _openDraft(id);
   }
 
   /// 초안 검토. 확정하면 라이브러리를 다시 읽는다.
@@ -345,37 +344,22 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: const Color(0xFF2A2A2A)),
       ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final isNarrow = constraints.maxWidth < 980;
-          final filters = Wrap(
-            spacing: 16,
-            runSpacing: 12,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              _buildLabeledControl('교육과정', _buildCurriculumDropdown()),
-              _buildLabeledControl('도메인', _buildDomainTabs()),
-            ],
-          );
-          final actions = _buildToolbarActions();
-          if (isNarrow) {
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                filters,
-                const SizedBox(height: 12),
-                actions,
-              ],
-            );
-          }
-          return Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Expanded(child: filters),
-              actions,
-            ],
-          );
-        },
+      child: Align(alignment: Alignment.centerLeft, child: _buildToolbarActions()),
+    );
+  }
+
+  /// 교육과정 흐름·개념 라이브러리 칸 안. 학습앱 필터 메뉴·필 탭과 같은 색.
+  Widget _buildScopeBar() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      child: Wrap(
+        spacing: 12,
+        runSpacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          _buildCurriculumDropdown(),
+          _buildDomainTabs(),
+        ],
       ),
     );
   }
@@ -383,7 +367,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   Widget _buildLibraryDetail() {
     final chat = ConceptChatController.instance;
     return LibraryDetailPane(
-      badges: [_buildDomainBadge(_selectedDomain)],
+      filters: _buildScopeBar(),
       actions: [
         OutlinedButton.icon(
           key: const ValueKey('library-show-course'),
@@ -477,92 +461,90 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     }
   }
 
-  Widget _buildLabeledControl(String label, Widget child) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label,
-          style: const TextStyle(color: Color(0xFF8F8F8F), fontSize: 14),
-        ),
-        const SizedBox(height: 6),
-        child,
-      ],
-    );
-  }
-
   Widget _buildCurriculumDropdown() {
+    const field = Color(0xFF15171C);
+    const border = Color(0xFF223131);
+    const text = Color(0xFFEAF2F2);
+    const sub = Color(0xFF9FB3B3);
     if (_curriculums.isEmpty) {
       return Container(
-        height: 44,
-        padding: const EdgeInsets.symmetric(horizontal: 14),
+        height: 36,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
         decoration: BoxDecoration(
-          color: const Color(0xFF2A2A2A),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: const Color(0xFF3A3A3A)),
+          color: field,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: border),
         ),
-        child: Row(
+        child: const Row(
           mainAxisSize: MainAxisSize.min,
-          children: const [
-            Icon(Icons.school_outlined, color: Colors.white54, size: 18),
+          children: [
+            Text('교육과정', style: TextStyle(color: sub, fontSize: 13, fontWeight: FontWeight.w600)),
             SizedBox(width: 8),
-            Text(
-              '교육과정 없음',
-              style: TextStyle(color: Colors.white54, fontSize: 15),
-            ),
+            Text('없음', style: TextStyle(color: text, fontSize: 13, fontWeight: FontWeight.w600)),
           ],
         ),
       );
     }
-    return Container(
-      height: 44,
-      constraints: const BoxConstraints(minWidth: 220),
-      padding: const EdgeInsets.symmetric(horizontal: 14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF2A2A2A),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFF3A3A3A)),
-      ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<String>(
-          value: _selectedCurriculumId,
-          dropdownColor: const Color(0xFF2A2A2A),
-          style: const TextStyle(color: Colors.white, fontSize: 16),
-          icon: const Icon(Icons.arrow_drop_down, color: Colors.white70, size: 20),
-          items: _curriculums
-              .map((curriculum) => DropdownMenuItem(
-                    value: curriculum['id'] as String,
-                    child: Text(curriculum['name'] as String),
-                  ))
-              .toList(),
-          onChanged: (value) {
-            setState(() {
-              _selectedCurriculumId = value;
-              _loadGrades();
-            });
-          },
+    var name = '선택';
+    for (final row in _curriculums) {
+      if (row['id'] == _selectedCurriculumId) {
+        name = row['name'] as String? ?? '선택';
+        break;
+      }
+    }
+    return PopupMenuButton<String>(
+      tooltip: '교육과정',
+      color: field,
+      onSelected: (value) {
+        setState(() {
+          _selectedCurriculumId = value;
+          _loadGrades();
+        });
+      },
+      itemBuilder: (context) => [
+        for (final curriculum in _curriculums)
+          PopupMenuItem(
+            value: curriculum['id'] as String,
+            child: Text(
+              curriculum['name'] as String,
+              style: const TextStyle(color: text, fontSize: 13, fontWeight: FontWeight.w600),
+            ),
+          ),
+      ],
+      child: Container(
+        height: 36,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          color: field,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: border),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('교육과정', style: TextStyle(color: sub, fontSize: 13, fontWeight: FontWeight.w600)),
+            const SizedBox(width: 8),
+            Text(name, style: const TextStyle(color: text, fontSize: 13, fontWeight: FontWeight.w600)),
+            const SizedBox(width: 4),
+            const Icon(Icons.expand_more, color: sub, size: 18),
+          ],
         ),
       ),
     );
   }
 
   Widget _buildDomainTabs() {
+    const labels = ['대수', '해석', '확률통계', '기하'];
     return Container(
-      height: 44,
+      height: 36,
+      padding: const EdgeInsets.all(3),
       decoration: BoxDecoration(
-        color: const Color(0xFF2A2A2A),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFF3A3A3A)),
+        color: const Color(0xFF151C21),
+        borderRadius: BorderRadius.circular(18),
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 6),
       child: Row(
         mainAxisSize: MainAxisSize.min,
-        children: [
-          _buildDomainChip('대수'),
-          _buildDomainChip('해석'),
-          _buildDomainChip('확률통계'),
-          _buildDomainChip('기하'),
-        ],
+        children: [for (final label in labels) _buildDomainChip(label)],
       ),
     );
   }
@@ -584,32 +566,9 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
           ),
         ),
         OutlinedButton.icon(
-          onPressed: _openDraftList,
-          icon: const Icon(Icons.fact_check_outlined, size: 18),
-          label: const Text('개념 초안', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
-          style: OutlinedButton.styleFrom(
-            foregroundColor: kNavAccent,
-            side: BorderSide(color: kNavAccent.withValues(alpha: 0.5)),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-          ),
-        ),
-        OutlinedButton.icon(
           onPressed: () => unawaited(_openCriteria()),
           icon: const Icon(Icons.rule_folder_outlined, size: 18),
           label: const Text('정리 기준', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
-          style: OutlinedButton.styleFrom(
-            foregroundColor: kNavAccent,
-            side: BorderSide(color: kNavAccent.withValues(alpha: 0.5)),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-          ),
-        ),
-        OutlinedButton.icon(
-          onPressed: () => _setChatOpen(!_chatOpen),
-          icon: Icon(_chatOpen ? Icons.forum : Icons.forum_outlined, size: 18),
-          label: Text(_chatOpen ? 'Think 대화 숨기기' : 'Think 대화',
-              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
           style: OutlinedButton.styleFrom(
             foregroundColor: kNavAccent,
             side: BorderSide(color: kNavAccent.withValues(alpha: 0.5)),
@@ -643,54 +602,29 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     );
   }
 
-  Widget _buildDomainBadge(String label) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: const Color(0xFF2A2A2A),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: const Color(0xFF3A3A3A)),
-      ),
-      child: Text(
-        label,
-        style: const TextStyle(
-          color: Colors.white70,
-          fontSize: 14,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-    );
-  }
-
-  // 도메인 선택 칩
   Widget _buildDomainChip(String label) {
     final isSelected = _selectedDomain == label;
     return GestureDetector(
       onTap: () {
-        setState(() {
-          _selectedDomain = label;
-        });
+        setState(() => _selectedDomain = label);
         _reloadCategoryTree();
       },
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 160),
-        curve: Curves.easeOut,
-        height: 36,
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeOutCubic,
+        height: 30,
         padding: const EdgeInsets.symmetric(horizontal: 14),
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: isSelected ? kNavAccent : Colors.transparent,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(
-            color: isSelected ? kNavAccent : Colors.transparent,
-          ),
+          color: isSelected ? const Color(0xFF1B6B63) : Colors.transparent,
+          borderRadius: BorderRadius.circular(15),
         ),
         child: Text(
           label,
           style: TextStyle(
-            color: isSelected ? Colors.white : Colors.white70,
-            fontSize: 16,
-            fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+            color: isSelected ? Colors.white : const Color(0xFF7E8A8A),
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
           ),
         ),
       ),

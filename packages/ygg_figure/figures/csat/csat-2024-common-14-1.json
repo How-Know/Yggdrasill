@@ -1,0 +1,20 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.1",
+  "ref": "csat-2024-common-14-1",
+  "params": {"ox": 22.2044, "oy": 22.2499, "r": 21.5686, "bx": -18.2802, "by": -31.1202, "cx": 39.8589},
+  "fit": ["ox", "oy", "r", "bx", "by", "cx"],
+  "canvas": {"width": 65.41, "height": 55.88, "origin": ["ox", "oy"], "unit": 1},
+  "objects": [
+    {"id": "A", "type": "point", "at": [0, 0], "label": {"dir": "N", "dist": 1.0}},
+    {"id": "B", "type": "point", "at": ["bx", "by"], "label": {"dir": "W", "dist": 0.8}},
+    {"id": "C", "type": "point", "at": ["cx", "by"], "label": {"dir": "E", "dist": 0.8}},
+    {"id": "c", "type": "circle", "center": "A", "radius": "r"},
+    {"id": "D", "type": "intersect", "of": ["c", ["A", "B"]], "near": "B", "label": {"dir": "W", "dist": 1.3}},
+    {"id": "E", "type": "intersect", "of": ["c", ["A", "C"]], "near": "C", "label": {"dir": "E", "dist": 1.5}},
+    {"type": "polygon", "points": ["A", "B", "C"]},
+    {"type": "segment", "from": "D", "to": "E"},
+    {"id": "lo", "type": "label", "at": [20.7, 12.2], "text": "O"}
+  ],
+  "label_nudge": {"A": [0.0, 0.085], "B": [0.509, -0.17], "C": [-0.678, -0.085], "D": [0.0, -0.848], "E": [0.17, 0.424], "lo": [0.509, 0.0]}
+}

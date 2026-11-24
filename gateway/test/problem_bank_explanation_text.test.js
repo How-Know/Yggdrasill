@@ -87,6 +87,20 @@ test('경우 번호의 로마 숫자는 괄호째 본문 글꼴로 찍는다', (
   assert.match(tex, /\\text\{\(ⅱ\)\}/);
 });
 
+test('여러 단계 경우 번호는 원문자까지 한 덩어리 본문 글꼴로 찍는다', () => {
+  const tex = explanationTex('(ⅰ-ⓐ) $a_3=-\\frac{k}{3}$일 때\n\n(ⅰ-ⓑ-①) $a_4=-k$일 때,\n\n(ⅱ) $a_2>0$인 경우');
+  assert.ok(tex.includes('\\text{(ⅰ-ⓐ)}\\;'), '(ⅰ-ⓐ) 가 한 덩어리여야 한다');
+  assert.ok(tex.includes('\\text{(ⅰ-ⓑ-①)}\\;'), '(ⅰ-ⓑ-①) 가 한 덩어리여야 한다');
+  assert.match(tex, /\\text\{\(ⅱ\)\}/);
+});
+
+test('원문자·괄호 문자는 수식 안에서도 본문 글꼴로 찍는다', () => {
+  const tex = explanationTex('㉮, ㉯에서 $x=1$ 이고 ⓐ, Ⓑ, ⑴, ⒜, ㈀ 이다.');
+  for (const ch of ['㉮', '㉯', 'ⓐ', 'Ⓑ', '⑴', '⒜', '㈀']) {
+    assert.ok(tex.includes(`\\text{${ch}}`), `${ch} 는 \\text 로 감싸야 한다`);
+  }
+});
+
 test('좌변이 붙은 cases 식은 좌변과 함께 한 블록으로 찍는다', () => {
   const tex = explanationTex('수열은 $a_n=\\begin{cases} 1 & (n=1) \\\\ 2n & (n \\geq 2) \\end{cases}$ 이다.');
   assert.match(tex, /\$\\displaystyle a_\{?n\}?=\\begin\{cases\}/);

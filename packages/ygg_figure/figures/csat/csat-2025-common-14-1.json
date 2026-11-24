@@ -1,0 +1,30 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.1",
+  "ref": "csat-2025-common-14-1",
+  "params": {"ox": 27.2683, "oy": 63.8378, "r": 16.7817, "bx": 25.1589, "ch": 33.6807, "ga": 128.6925, "ha": 141.3755},
+  "fit": ["ox", "oy", "r", "bx", "ch", "ga", "ha"],
+  "canvas": {"width": 56.51, "height": 81.45, "origin": ["ox", "oy"], "unit": 1},
+  "objects": [
+    {"id": "A", "type": "point", "at": [0, 0], "label": {"dir": "S", "dist": 1.2}},
+    {"id": "B", "type": "point", "at": ["bx", 0], "label": {"dir": "E", "dist": 1.2}},
+    {"id": "C", "type": "point", "at": ["bx", "ch"], "label": {"dir": "E", "dist": 1.2}},
+    {"id": "c1", "type": "circle", "center": "A", "radius": "r"},
+    {"id": "F", "type": "point", "at": ["-r", 0], "label": {"dir": "W", "dist": 1.2}},
+    {"id": "D", "type": "point", "at": ["r", 0], "label": {"dir": "SE", "dist": 1.0}},
+    {"id": "E", "type": "intersect", "of": ["c1", ["A", "C"]], "near": "C", "label": {"dir": "S", "dist": 1.6}},
+    {"id": "G", "type": "on", "of": "c1", "angle": "ga", "label": {"dir": "S", "dist": 1.6}},
+    {"id": "c2", "type": "circle", "through3": ["C", "E", "G"]},
+    {"id": "H", "type": "on", "of": "c2", "angle": "ha", "label": {"dir": "NW", "dist": 0.8}},
+    {"type": "segment", "from": "F", "to": "B"},
+    {"type": "segment", "from": "B", "to": "C"},
+    {"type": "segment", "from": "A", "to": "C"},
+    {"type": "segment", "from": "C", "to": "G"},
+    {"type": "segment", "from": "C", "to": "H"},
+    {"type": "segment", "from": "H", "to": "G"},
+    {"type": "right_angle", "at": "B", "from": "A", "to": "C"},
+    {"type": "angle", "at": "A", "from": "B", "to": "C"},
+    {"type": "angle", "at": "C", "from": "H", "to": "G"}
+  ],
+  "label_nudge": {"B": [-0.169, 0.0], "C": [-0.338, -0.254], "F": [0.254, 0.0], "D": [-0.085, -0.592], "E": [0.507, -0.338], "G": [0.423, 0.169], "H": [-0.254, -0.085]}
+}

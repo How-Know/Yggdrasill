@@ -33,7 +33,7 @@ test('해설 그림 블록은 width_em 폭으로 가운데 놓인다', () => {
     explanation_figure_local_infos: [{ path: 'C:\\tmp\\expl-fig-a-1.png', figureIndex: 1 }],
   });
   assert.equal(blocks.length, 1);
-  assert.match(blocks[0], /\\centering\\includegraphics\[width=8\.00em/);
+  assert.match(blocks[0], /^\{\\noindent\\hfill\\includegraphics\[width=8\.00em[^\n]*\\hfill\\null\\par\}$/);
   assert.match(blocks[0], /C:\/tmp\/expl-fig-a-1\.png/);
 });
 

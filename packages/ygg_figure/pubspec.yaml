@@ -1,0 +1,18 @@
+name: ygg_figure
+description: >-
+  Yggdrasill 그림 엔진. 수학 도면을 관계(점·선·원·그래프와 그 조건)로 저장하고,
+  인쇄용 출력과 화면용 출력을 같은 계산에서 만든다. Flutter 에 기대지 않는 순수 Dart
+  패키지라 명령줄(인쇄 서버)과 앱 양쪽에서 쓴다.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  image: ^4.2.0
+  path: ^1.9.0
+
+dev_dependencies:
+  lints: ^4.0.0
+  test: ^1.25.0

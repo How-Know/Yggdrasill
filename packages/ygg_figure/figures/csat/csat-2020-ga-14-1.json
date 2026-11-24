@@ -1,0 +1,35 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.1",
+  "ref": "csat-2020-ga-14-1",
+  "params": {"ox": 11.29, "oy": 2.684, "u": 13.6453, "gap": 40.2373},
+  "fit": ["ox", "oy", "u", "gap"],
+  "ref_offset": [1.5, 2.0],
+  "canvas": {"width": 73.65, "height": 80.11, "origin": ["ox+1.5", "oy+2.0"], "unit": "u"},
+  "parts": {
+    "stage": [
+      {"id": "B#{k}", "type": "point", "at": [0, -2], "label": {"dir": "W", "dist": 1.0}},
+      {"id": "C#{k}", "type": "point", "at": [4, -2], "label": {"dir": "E", "dist": 1.0}},
+      {"id": "D#{k}", "type": "point", "at": [4, 0], "label": {"dir": "E", "dist": 1.0}},
+      {"id": "E#{k}", "type": "divide", "of": [[0, 0], "D#{k}"], "ratio": [3, 1], "label": {"dir": "N", "dist": 1.0}},
+      {"id": "M#{k}", "type": "midpoint", "of": ["E#{k}", "C#{k}"]},
+      {"id": "F#{k}", "type": "rotate", "of": "C#{k}", "center": "M#{k}", "angle": -90, "label": {"dir": "SW", "dist": 0.6}},
+      {"type": "fill", "path": ["E#{k}", "F#{k}", "C#{k}", "D#{k}"]},
+      {"type": "polyline", "points": ["B#{k}", "C#{k}", "D#{k}"], "line": "thin"},
+      {"type": "polygon", "points": ["E#{k}", "F#{k}", "C#{k}"], "line": "thin"},
+      {"type": "right_angle", "at": "F#{k}", "from": "E#{k}", "to": "C#{k}"}
+    ],
+    "panel": [
+      {"id": "s", "type": "use", "part": "stage", "count": "#{n}", "step": {"scale": "9/14"}, "override": {"C2": {"label": {"dir": "E", "dist": 1.3, "offset": [0, 1.3]}}, "D2": {"label": {"dir": "N", "dist": 1.0}}, "F2": {"label": {"dir": "W", "dist": 1.0}}}},
+      {"id": "A", "type": "point", "at": [0, 0], "label": {"dir": "W", "dist": 1.0}},
+      {"type": "polygon", "points": ["A", [0, -2], [4, -2], [4, 0]]},
+      {"id": "R", "type": "label", "at": ["-9.8/u", "-13.7/u"], "text": "\\symbfit{R}_{#{n}}"}
+    ]
+  },
+  "objects": [
+    {"id": "p1", "type": "use", "part": "panel", "with": {"n": 1}},
+    {"id": "p2", "type": "use", "part": "panel", "at": [0, "-gap/u"], "with": {"n": 2}},
+    {"id": "v1", "type": "label", "at": ["(2.45-ox)/u", "(oy-75.6)/u"], "text": "\\vdots"},
+    {"id": "v2", "type": "label", "at": ["(38.9-ox)/u", "(oy-75.6)/u"], "text": "\\vdots"}
+  ]
+}

@@ -141,6 +141,51 @@ class CourseMapUnitInput {
   Map<String, dynamic> toJson() => {'id': id, 'parent_id': parentId, 'name': name};
 }
 
+/// 기준 단원 아래에서 원자개념 배치를 가르치는 단위로 묶는 블록(`course_unit_blocks`).
+class CourseUnitBlock {
+  const CourseUnitBlock({
+    required this.id,
+    required this.unitId,
+    required this.name,
+    this.sort = 0,
+    this.createdAt,
+  });
+
+  final String id;
+  final String unitId;
+  final String name;
+  final int sort;
+  final DateTime? createdAt;
+
+  CourseUnitBlock copyWith({String? name, int? sort}) => CourseUnitBlock(
+        id: id,
+        unitId: unitId,
+        name: name ?? this.name,
+        sort: sort ?? this.sort,
+        createdAt: createdAt,
+      );
+
+  factory CourseUnitBlock.fromJson(Map<String, dynamic> j) => CourseUnitBlock(
+        id: j['id'] as String,
+        unitId: j['unit_id'] as String,
+        name: (j['name'] ?? '') as String,
+        sort: (j['sort'] as num?)?.toInt() ?? 0,
+        createdAt: _time(j['created_at']),
+      );
+}
+
+class CourseBlockMutationResult {
+  const CourseBlockMutationResult({
+    this.blockId,
+    required this.blocks,
+    required this.placements,
+  });
+
+  final String? blockId;
+  final List<CourseUnitBlock> blocks;
+  final List<CourseMapPlacement> placements;
+}
+
 /// 단원에 놓인 개념 한 줄(개념 등장 위치 중 기준 단원에 이어진 줄). [origin]이 ai면 Think 카드 승인으로 놓였다.
 class CourseMapPlacement {
   const CourseMapPlacement({
@@ -148,6 +193,7 @@ class CourseMapPlacement {
     required this.unitId,
     required this.conceptId,
     required this.name,
+    this.blockId,
     this.sort = 0,
     this.origin = 'owner',
     this.note,
@@ -160,6 +206,9 @@ class CourseMapPlacement {
 
   final String id;
   final String unitId;
+
+  /// 같은 단원 안의 가르치는 단위(수업 블록) ID. 블록 밖 낱개 개념이면 null.
+  final String? blockId;
   final String conceptId;
   final String name;
   final int sort;
@@ -181,6 +230,7 @@ class CourseMapPlacement {
   CourseMapPlacement accepted() => CourseMapPlacement(
         id: id,
         unitId: unitId,
+        blockId: blockId,
         conceptId: conceptId,
         name: name,
         sort: sort,
@@ -192,9 +242,30 @@ class CourseMapPlacement {
         createdAt: createdAt,
       );
 
+  CourseMapPlacement withLocation({
+    required String? blockId,
+    int? sort,
+  }) =>
+      CourseMapPlacement(
+        id: id,
+        unitId: unitId,
+        blockId: blockId,
+        conceptId: conceptId,
+        name: name,
+        sort: sort ?? this.sort,
+        origin: origin,
+        note: note,
+        type: type,
+        subType: subType,
+        sources: sources,
+        statementId: statementId,
+        createdAt: createdAt,
+      );
+
   factory CourseMapPlacement.fromJson(Map<String, dynamic> j) => CourseMapPlacement(
         id: j['id'] as String,
         unitId: j['unit_id'] as String,
+        blockId: j['block_id'] as String?,
         conceptId: j['concept_id'] as String,
         name: (j['name'] ?? '') as String,
         sort: (j['sort'] as num?)?.toInt() ?? 0,
@@ -403,10 +474,15 @@ class CourseMapException implements Exception {
     'course_placement_same_unit': '이미 그 단원에 있습니다.',
     'course_placement_stale': '그사이 이 단원의 개념 목록이 바뀌었습니다. 다시 읽은 뒤 해 주세요.',
     'course_placement_bad_concepts': '넣을 개념을 1~100개 골라 주세요.',
+    'course_block_not_found': '그 수업 블록을 찾지 못했습니다. 다시 읽은 뒤 해 주세요.',
+    'course_block_bad_name': '블록 이름은 비울 수 없고 80자까지입니다.',
+    'course_block_too_many': '한 단원에는 블록을 100개까지 둘 수 있습니다.',
+    'course_block_stale': '그사이 이 단원의 블록 목록이 바뀌었습니다. 다시 읽은 뒤 해 주세요.',
+    'course_block_unit_mismatch': '같은 단원 안의 블록으로만 묶을 수 있습니다.',
     'course_changes_bad_kinds': '알 수 없는 변경 종류입니다.',
   };
 
-  static final RegExp _code = RegExp(r'course_(?:map|placement|changes)_[a-z_]+');
+  static final RegExp _code = RegExp(r'course_(?:map|placement|block|changes)_[a-z_]+');
 
   static CourseMapException from(Object e) {
     if (e is CourseMapException) return e;
@@ -462,6 +538,44 @@ abstract class CourseMapBackend {
 
   /// 배치 기록·본문 고친 기록·서술 확정 기록을 새것부터. [olderThan]을 주면 그보다 오래된 것부터 읽는다.
   Future<CourseChangePage> recentChanges({List<String>? kinds, CourseChange? olderThan, int limit = 60});
+
+  /// 과정의 살아 있는 단원에 만든 가르치는 단위(수업 블록) 전부.
+  Future<List<CourseUnitBlock>> blocks(String courseId) async => const [];
+
+  Future<CourseBlockMutationResult> createBlock({
+    required String unitId,
+    required String name,
+    List<String>? placementIds,
+  }) =>
+      Future.error(CourseMapException('not_ready', 'DB에 수업 블록 기능이 아직 반영되지 않았습니다.'));
+
+  Future<List<CourseUnitBlock>> renameBlock({
+    required String blockId,
+    required String name,
+  }) =>
+      Future.error(CourseMapException('not_ready', 'DB에 수업 블록 기능이 아직 반영되지 않았습니다.'));
+
+  Future<CourseBlockMutationResult> deleteBlock(String blockId) =>
+      Future.error(CourseMapException('not_ready', 'DB에 수업 블록 기능이 아직 반영되지 않았습니다.'));
+
+  Future<List<CourseUnitBlock>> reorderBlocks({
+    required String unitId,
+    required List<String> blockIds,
+  }) =>
+      Future.error(CourseMapException('not_ready', 'DB에 수업 블록 기능이 아직 반영되지 않았습니다.'));
+
+  Future<List<CourseMapPlacement>> setPlacementBlock({
+    required String placementId,
+    String? blockId,
+    List<String>? orderedIds,
+  }) =>
+      Future.error(CourseMapException('not_ready', 'DB에 수업 블록 기능이 아직 반영되지 않았습니다.'));
+
+  Future<List<CourseMapPlacement>> addConceptsToBlock({
+    required String blockId,
+    required List<String> conceptIds,
+  }) =>
+      Future.error(CourseMapException('not_ready', 'DB에 수업 블록 기능이 아직 반영되지 않았습니다.'));
 }
 
 class SupabaseCourseMapBackend implements CourseMapBackend {
@@ -537,6 +651,18 @@ class SupabaseCourseMapBackend implements CourseMapBackend {
   static List<CourseMapPlacement> _placements(Object? data) =>
       [for (final r in (data as List? ?? const [])) CourseMapPlacement.fromJson(Map<String, dynamic>.from(r as Map))];
 
+  static List<CourseUnitBlock> _blocks(Object? data) =>
+      [for (final r in (data as List? ?? const [])) CourseUnitBlock.fromJson(Map<String, dynamic>.from(r as Map))];
+
+  static CourseBlockMutationResult _blockMutation(Object? data) {
+    final m = Map<String, dynamic>.from(data as Map);
+    return CourseBlockMutationResult(
+      blockId: m['block_id'] as String?,
+      blocks: _blocks(m['blocks']),
+      placements: _placements(m['placements']),
+    );
+  }
+
   @override
   Future<List<CourseMapPlacement>> placements(String courseId) =>
       _guard(() async => _placements(await _db.rpc('course_map_placements', params: {'p_course_id': courseId})));
@@ -583,4 +709,68 @@ class SupabaseCourseMapBackend implements CourseMapBackend {
             'p_before_key': olderThan?.key,
             'p_limit': limit,
           }) as Map)));
+
+  @override
+  Future<List<CourseUnitBlock>> blocks(String courseId) =>
+      _guard(() async => _blocks(await _db.rpc('course_map_blocks', params: {'p_course_id': courseId})));
+
+  @override
+  Future<CourseBlockMutationResult> createBlock({
+    required String unitId,
+    required String name,
+    List<String>? placementIds,
+  }) =>
+      _guard(() async => _blockMutation(await _db.rpc('course_unit_block_create', params: {
+            'p_unit_id': unitId,
+            'p_name': name,
+            'p_placement_ids': placementIds,
+          })));
+
+  @override
+  Future<List<CourseUnitBlock>> renameBlock({
+    required String blockId,
+    required String name,
+  }) =>
+      _guard(() async => _blocks(await _db.rpc('course_unit_block_rename', params: {
+            'p_block_id': blockId,
+            'p_name': name,
+          })));
+
+  @override
+  Future<CourseBlockMutationResult> deleteBlock(String blockId) =>
+      _guard(() async => _blockMutation(await _db.rpc('course_unit_block_delete', params: {
+            'p_block_id': blockId,
+          })));
+
+  @override
+  Future<List<CourseUnitBlock>> reorderBlocks({
+    required String unitId,
+    required List<String> blockIds,
+  }) =>
+      _guard(() async => _blocks(await _db.rpc('course_unit_blocks_reorder', params: {
+            'p_unit_id': unitId,
+            'p_block_ids': blockIds,
+          })));
+
+  @override
+  Future<List<CourseMapPlacement>> setPlacementBlock({
+    required String placementId,
+    String? blockId,
+    List<String>? orderedIds,
+  }) =>
+      _guard(() async => _placements(await _db.rpc('course_placement_set_block', params: {
+            'p_placement_id': placementId,
+            'p_block_id': blockId,
+            'p_ordered_ids': orderedIds,
+          })));
+
+  @override
+  Future<List<CourseMapPlacement>> addConceptsToBlock({
+    required String blockId,
+    required List<String> conceptIds,
+  }) =>
+      _guard(() async => _placements(await _db.rpc('course_unit_block_add_concepts', params: {
+            'p_block_id': blockId,
+            'p_concept_ids': conceptIds,
+          })));
 }

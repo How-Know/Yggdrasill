@@ -182,8 +182,10 @@ export function normalizeWhitespace(value) {
  * 예: "\\sqrt{2}\notin R" (LF + "otin") → "\\sqrt{2}\\notin R".
  */
 export function recoverMangledLatexNewlineCommands(value) {
+  // 한 글자만 남는 \ne · \ni · \nu 는 되돌리지 않는다(2026-11-21 사장님 결정, xelatex_v2/template.js 의
+  // sanitizeLatexControlChars 와 같다): 줄 첫머리의 e · i · u 와 구분할 수 없다.
   return String(value ?? '').replace(
-    /\x0a(?=(?:abla|atural|e(?:q|g)?|i|otin|u)(?![A-Za-z]))/g,
+    /\x0a(?=(?:abla|atural|e(?:q|g)|otin)(?![A-Za-z]))/g,
     '\\n',
   );
 }
@@ -366,21 +368,71 @@ function countUnescapedAmpersands(row) {
   return Math.max(0, splitLatexTopLevelAmpersands(row).length - 1);
 }
 
+const PROTECTED_TEXT_TOKEN_RE = /\x00LATEXTEXT\d+\x00/g;
+
+/**
+ * cases 한 칸이 지면에서 차지하는 폭을 em 으로 어림한다(한글 1, 영문·숫자 0.5, 관계 기호는 양옆 간격까지 1.3).
+ * LaTeX 원문 길이는 `\text{ 또는 }`(2글자)가 11자로 세어져 폭과 맞지 않는다. 분수는 분자와 분모를 모두 세므로
+ * 실제보다 조금 넓게 나온다. options.resolveProtectedText 가 있으면 \text 보호 토큰을 원래 글로 되돌려 잰다.
+ */
+export function estimateCaseCellWidthEm(cell, options = {}) {
+  let src = String(cell || '');
+  if (typeof options?.resolveProtectedText === 'function') {
+    src = String(options.resolveProtectedText(src) || '');
+  }
+  let em = 0;
+  // 되돌릴 수 없는 보호 토큰은 안의 글을 모르므로 짧은 말(또는, 이고) 하나로 본다.
+  src = src.replace(PROTECTED_TEXT_TOKEN_RE, () => { em += 2.6; return ' '; });
+  src = src.replace(/\\text\{([^{}]*)\}/g, (_, body) => {
+    for (const ch of body) {
+      const code = ch.codePointAt(0);
+      if (code >= 0xAC00 && code <= 0xD7AF) em += 1;
+      else if (ch === ' ') em += 0.3;
+      else em += 0.5;
+    }
+    return ' ';
+  });
+  src = src
+    .replace(/\\qquad(?![a-zA-Z])/g, () => { em += 2; return ' '; })
+    .replace(/\\quad(?![a-zA-Z])/g, () => { em += 1; return ' '; })
+    .replace(/\\[,;:!]/g, () => { em += 0.2; return ' '; })
+    .replace(/\\(?:left|right|displaystyle|textstyle|mathrm|mathbf|mathit|operatorname|text|dfrac|tfrac|frac|sqrt)(?![a-zA-Z])/g, ' ')
+    .replace(/\\(?:le|ge|leq|geq|neq|ne|lt|gt|approx|equiv|sim|in|notin|subset|times|div|cdot|pm|mp)(?![a-zA-Z])/g, () => { em += 1.3; return ' '; })
+    .replace(/\\[a-zA-Z]+/g, () => { em += 0.6; return ' '; })
+    .replace(/[{}$\\^_\s]/g, '');
+  for (const ch of src) {
+    const code = ch.codePointAt(0);
+    if (code >= 0xAC00 && code <= 0xD7AF) em += 1;
+    else if (ch === '=' || ch === '<' || ch === '>') em += 1.3;
+    else if (ch === '+' || ch === '-') em += 1;
+    else if ('(),.|'.includes(ch)) em += 0.35;
+    else em += 0.5;
+  }
+  return Math.round(em * 10) / 10;
+}
+
 function shouldStackCaseConditionCell(cell, options = {}) {
   const {
     wrapCaseConditionCells = false,
-    caseConditionMinChars = 34,
+    caseRowMaxEm = 22,
+    caseMainWidthEm = 0,
   } = options || {};
   if (!wrapCaseConditionCells) return false;
 
   const trimmed = String(cell || '').trim();
-  if (trimmed.length < caseConditionMinChars) return false;
 
-  // 오른쪽 조건 칸 안의 자연어 연결 지점이 있는 긴 조건만 대상으로 한다.
+  // 오른쪽 조건 칸 안의 자연어 연결 지점이 있는 조건만 대상으로 한다.
   // 렌더러 경로에서는 \text{...} 가 \x00LATEXTEXT...\x00 보호 토큰인 상태일 수 있다.
   const breakRe = /(?:\\text\{\s*(?:또는|이고|이며|단|if|otherwise)\s*\}|\x00LATEXTEXT\d+\x00)/;
   const match = breakRe.exec(trimmed);
-  return Boolean(match && match.index > 0);
+  if (!match || match.index <= 0) return false;
+
+  // 조건을 아래 줄로 내리는 것은 한 줄에 다 들어가지 않을 때뿐이다. 문항 한 줄은 약 30em 이고
+  // 앞의 "f(x)=" 와 중괄호가 4~5em 을 쓰므로, 식 칸(가장 넓은 행) + 칸 사이 1em + 조건 칸이 22em 을 넘을 때만 내린다.
+  // 예전에는 조건 칸의 LaTeX 원문이 34자 이상이면 내려서, 지면에서는 15em 인
+  // "(X가 0 또는 1의 값을 가지는 경우)"(원문 43자)가 식 칸이 "X" 하나인데도 다음 줄로 갔다.
+  const rowEm = Number(caseMainWidthEm || 0) + 1 + estimateCaseCellWidthEm(trimmed, options);
+  return rowEm > caseRowMaxEm;
 }
 
 function formatCaseConditionStackRow(conditionCell, colCount) {
@@ -496,8 +548,18 @@ export function expandCasesEnvironmentToDisplayArray(value, options = {}) {
       ...rows.map((row) => countUnescapedAmpersands(row) + 1),
     );
     const colSpec = `@{}${Array.from({ length: colCount }, () => 'l').join('@{\\quad}')}@{}`;
+    // 식 칸은 가장 넓은 행의 폭으로 잡히므로 조건을 내릴지는 그 폭을 기준으로 정한다.
+    const rowOptions = options?.wrapCaseConditionCells
+      ? {
+        ...options,
+        caseMainWidthEm: Math.max(0, ...rows.map((row) => {
+          const cells = splitLatexTopLevelAmpersands(row);
+          return cells.length > 1 ? estimateCaseCellWidthEm(cells.slice(0, -1).join(' '), options) : 0;
+        })),
+      }
+      : options;
     const latexRows = rows
-      .map((row) => applyDisplaystyleToCaseRow(row, options, colCount))
+      .map((row) => applyDisplaystyleToCaseRow(row, rowOptions, colCount))
       .join(`\\\\[${rowGap}]`);
     const arrayTex = `\\begingroup\\renewcommand{\\arraystretch}{${arrayStretch}}\\begin{array}{${colSpec}}${latexRows}\\end{array}\\endgroup`;
     if (thinBrace) {

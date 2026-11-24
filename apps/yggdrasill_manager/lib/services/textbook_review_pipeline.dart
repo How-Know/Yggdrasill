@@ -103,6 +103,14 @@ class TextbookReviewPipeline {
     _say('V2 문항 카드 준비 (${items.length}문항)');
     await loadPreviews(items, merge: false);
     final reviewed = await _reviewRounds(forceRerun: forceRerun);
+    // 모의고사: 코드로 맞추는 표기(점 이름·출제의도 머리·선지 아래 그림)를 렌더 검수 전에 먼저 맞춘다.
+    // 맨 끝의 정합성 점검에서 처음 고치면 카드가 바뀌어, 고친 문항마다 렌더 검수를 한 번 더 받게 된다.
+    if (!_stopped && scope.isMockExam) {
+      await _consistencyPass(notes);
+      final changed = {for (final f in consistency.fixed) '${f['crop_id'] ?? ''}'};
+      final changedItems = [for (final x in items) if (changed.contains(x.cropId)) x];
+      if (changedItems.isNotEmpty) await loadPreviews(changedItems);
+    }
     final withSolutionFigures = _stopped ? const <String>{} : await _solutionFiguresPass();
 
     if (!_stopped && service.hasGateway) {
@@ -112,7 +120,12 @@ class TextbookReviewPipeline {
             ? items
             : [
                 for (final x in items)
-                  if (x.needsRenderCheck || withSolutionFigures.contains(x.cropId) || x.renderBlocksReady) x,
+                  // 문항 카드 없이 검수된 모의고사 문항은 카드가 찍히는지 다시 본다.
+                  if (x.needsRenderCheck ||
+                      withSolutionFigures.contains(x.cropId) ||
+                      x.renderBlocksReady ||
+                      x.problemCardMissing)
+                    x,
               ],
       );
       // 방금 렌더 검수가 해설 그림 누락을 잡은 문항은 그림을 찾아 붙이고 바로 다시 대조한다.
@@ -154,6 +167,22 @@ class TextbookReviewPipeline {
     if (!_stopped) {
       await _bulkQualityFixes(notes);
       await reload();
+    }
+
+    // 해설 논리 판정은 처음 풀 때 한 번 한다. 그 뒤 본문이 고쳐진 문항은 옛 본문 기준의 지적이 남으므로
+    // 고친 본문으로 한 번 다시 푼다. 정답 수정안을 쌓으며 정답 축이 통과가 된 문항이라 수학 재풀이 대상에서는 빠져 있다.
+    if (!_stopped) {
+      final rechecked = await _mathResolvePass(
+        [for (final x in items) if (x.solutionLogicRecheckCandidate) x],
+        logicRecheck: true,
+      );
+      if (rechecked > 0) {
+        notes.add('본문 수정 뒤 해설 논리 재확인 $rechecked문항');
+        await reload();
+        // 다시 푼 결과도 처음과 같은 정답 수정 단계를 거친다.
+        await _bulkMathFixes(notes, withFixPass: false);
+        await reload();
+      }
     }
 
     if (!_stopped) await _consistencyPass(notes);
@@ -585,13 +614,14 @@ class TextbookReviewPipeline {
   }
 
   /// 지금 본문·교재 원본으로 다시 풀어(math_only) 채점 정답·해설 정답과 대조한다.
-  Future<int> _mathResolvePass(List<TextbookProblemReviewItem> targets) async {
+  /// [logicRecheck] 면 해설 논리 오류 재확인이다: 정답 축이 통과여도, 마지막 풀이 뒤에 본문이 바뀐 문항이면 서버가 다시 푼다.
+  Future<int> _mathResolvePass(List<TextbookProblemReviewItem> targets, {bool logicRecheck = false}) async {
     final todo = [for (final it in targets) if (_mathResolvedSig[it.cropId] != it.problemTextSignature) it];
     var done = 0;
     for (var i = 0; i < todo.length; i += _reviewChunkSize) {
       if (_stopped) break;
       final chunk = todo.skip(i).take(_reviewChunkSize).toList();
-      _say('수학 재풀이 ${i + 1}~${i + chunk.length}/${todo.length}');
+      _say('${logicRecheck ? '해설 논리 재확인' : '수학 재풀이'} ${i + 1}~${i + chunk.length}/${todo.length}');
       try {
         final images = await service.prepareChunkImages(
           scope: scope,
@@ -603,6 +633,7 @@ class TextbookReviewPipeline {
           scope,
           chunkSize: chunk.length,
           mathOnly: true,
+          logicRecheck: logicRecheck,
           cropIds: [for (final x in chunk) x.cropId],
           images: images,
         );

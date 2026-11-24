@@ -1,4 +1,5 @@
 import { type AuthContext, errorResponse, jsonResponse } from '../_shared/ai/auth.ts';
+import { attachParticles, collectNameSets, formatMockSolution, type NameSets, uprightNames } from './textbook_mock_format.ts';
 import { orderedFigureAssets } from './textbook_problem_fix.ts';
 import {
   cleanSolutionTranscribedText,
@@ -16,7 +17,19 @@ type Rec = Record<string, unknown>;
 /** 정합성 점검 지적의 check_key 앞머리. 문항·규칙마다 열린 지적은 하나다. */
 export const CONSISTENCY_KEY_PREFIX = 'consistency:';
 
-export type ConsistencyFixCode = 'common_stem_duplicate' | 'guide_residue' | 'markup' | 'solution_text';
+export type ConsistencyFixCode =
+  | 'common_stem_duplicate'
+  | 'guide_residue'
+  | 'markup'
+  | 'solution_text'
+  // 아래 넷은 모의고사 문항에만 건다(2026-11-20 사장님 결정).
+  | 'point_names'
+  | 'intent_mark'
+  | 'figure_below_choices'
+  | 'figure_marker_below_choices'
+  | 'particle_spacing'
+  // 표(tabular)의 줄 끝이 '\' 하나인 것을 '\\' 로 고친다(교재·모의고사 공통, 2026-11-23 사장님 결정).
+  | 'table_row_end';
 export type ConsistencyIssueCode =
   | 'figure_slots'
   | 'common_figure_missing'
@@ -51,6 +64,16 @@ export interface ConsistencyResult {
 export interface ConsistencyContext {
   /** 같은 세트에 공통 그림(세트 공통 그림 또는 본문 자리 없이 그림을 가진 문항)이 있다 */
   setHasCommonFigure: boolean;
+  /** 모의고사 구간의 문항일 때만 준다. 모의고사에만 거는 표기 규칙(점 이름·출제의도·선지 아래 그림)을 켠다. */
+  mock?: MockItemContext;
+}
+
+export interface MockItemContext {
+  /**
+   * 시험지 쪽에서 읽은 선지 번호(①~⑤) 글자 영역 [ymin, xmin, ymax, xmax] (0..1000, mock_exam_items.choice_number_region_1k).
+   * 읽지 못했거나 번호 글자가 없으면 null.
+   */
+  choiceNumberRegion: unknown;
 }
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : v == null ? '' : String(v));
@@ -58,6 +81,110 @@ const squash = (s: string) => s.replace(/\s+|\[문단\]/g, '');
 
 function choiceTexts(choices: unknown): string[] {
   return (Array.isArray(choices) ? choices : []).map((c) => (c && typeof c === 'object' ? str((c as Rec).text) : str(c)));
+}
+
+/** 선지 글마다 [fn] 을 건다. 바뀐 선지가 없으면 받은 목록을 그대로 돌려준다. */
+function mapChoiceTexts(choices: unknown[], fn: (text: string) => string): unknown[] {
+  let changed = false;
+  const next = choices.map((c) => {
+    const isRec = !!c && typeof c === 'object';
+    const before = isRec ? str((c as Rec).text) : str(c);
+    const after = fn(before);
+    if (after === before) return c;
+    changed = true;
+    return isRec ? { ...(c as Rec), text: after } : after;
+  });
+  return changed ? next : choices;
+}
+
+/** 쪽 기준 영역 [ymin, xmin, ymax, xmax] (0..1000). 꼴이 다르면 null. */
+function region1k(v: unknown): number[] | null {
+  if (!Array.isArray(v) || v.length !== 4) return null;
+  const n = v.map((x) => Number(x));
+  if (n.some((x) => !Number.isFinite(x) || x < 0 || x > 1000)) return null;
+  return n[2] > n[0] && n[3] > n[1] ? n : null;
+}
+
+/** 문항 영역과 글자 영역은 같은 글자 층에서 나오므로 거의 꼭 맞는다. 반올림 차이만 봐준다. */
+const REGION_TOLERANCE = 3;
+
+/**
+ * 원본 시험지에서 선지 아래에 찍힌 그림을 조판에서도 선지 아래('below-choices')로 보낸 그림 배치. 바꿀 것이 없으면 null.
+ * 근거는 시험지 PDF 에서 읽은 두 자리(선지 번호 글자 영역, 그림 영역)다: 그림의 위쪽 끝이 선지 번호 글자의 아래쪽 끝보다 아래에 있다.
+ * 글 줄 안 그림과 가로로 묶인 그림은 옮기지 않는다. 이미 선지 아래인 그림을 되돌리지도 않는다.
+ */
+/**
+ * 원본에서 선지 아래에 인쇄된 그림의 순서(orderedFigureAssets 기준, 0부터). 시험지 좌표(선지 번호 자리, 문항 영역,
+ * 그림 영역)로만 판단한다. 좌표를 쓸 수 없으면 빈 집합이다.
+ */
+/**
+ * tabular 표 안에서 줄 끝의 '\' 하나를 '\\' 로 고친다. 추출이 줄 끝 표시를 반만 적으면("0.5 & 0.1915 \")
+ * 다음 줄의 \hline 이 "Misplaced \noalign" 으로 조판을 깨뜨린다.
+ * 고치는 곳: 표 안에서 '\' 하나로 끝나는 줄(표의 마지막 줄 제외), 같은 줄에 이어 쓴 "\ \hline".
+ */
+export function fixTabularRowEnds(text: string): string {
+  return text.replace(/\\begin\{tabular\}[\s\S]*?\\end\{tabular\}/g, (table) => {
+    const lines = table.split('\n');
+    return lines
+      .map((line, i) => {
+        let out = line.replace(/([^\\])\\(\s+\\hline)/g, '$1\\\\$2');
+        if (i < lines.length - 1 && /(^|[^\\])\\\s*$/.test(out)) out = out.replace(/\\\s*$/, '\\\\');
+        return out;
+      })
+      .join('\n');
+  });
+}
+
+export function figureOrdersBelowChoices(it: Rec, choiceNumberRegion: unknown): Set<number> {
+  const out = new Set<number>();
+  const choiceRegion = region1k(choiceNumberRegion);
+  const itemRegion = region1k(it.item_region_1k);
+  if (!choiceRegion || !itemRegion) return out;
+  const within = choiceRegion[0] >= itemRegion[0] - REGION_TOLERANCE && choiceRegion[1] >= itemRegion[1] - REGION_TOLERANCE &&
+    choiceRegion[2] <= itemRegion[2] + REGION_TOLERANCE && choiceRegion[3] <= itemRegion[3] + REGION_TOLERANCE;
+  // 문항 영역을 다시 잡은 뒤 아직 다시 읽지 않은 선지 자리는 쓰지 않는다.
+  if (!within) return out;
+  const page = Number(it.raw_page);
+  orderedFigureAssets(it.pb_figure_assets).forEach((asset, i) => {
+    const box = region1k(asset.bbox_1k);
+    if (!box || !Number.isFinite(page) || Number(asset.source_page) !== page) return;
+    // 그림 영역은 여백을 두고 잡혀 문항 영역 밖으로 조금 나가기도 한다. 가운데가 문항 영역 안이면 이 문항의 그림이다.
+    const cy = (box[0] + box[2]) / 2;
+    const cx = (box[1] + box[3]) / 2;
+    if (cy < itemRegion[0] || cy > itemRegion[2] || cx < itemRegion[1] || cx > itemRegion[3]) return;
+    if (box[0] < choiceRegion[2] - 2) return;
+    out.add(i);
+  });
+  return out;
+}
+
+export function figureLayoutBelowChoices(it: Rec, choiceNumberRegion: unknown): Rec | null {
+  const layout = it.pb_figure_layout && typeof it.pb_figure_layout === 'object' ? (it.pb_figure_layout as Rec) : null;
+  if (!layout) return null;
+  const below = figureOrdersBelowChoices(it, choiceNumberRegion);
+  if (below.size === 0) return null;
+  const items = (Array.isArray(layout.items) ? layout.items : []).filter((x): x is Rec => !!x && typeof x === 'object');
+  if (items.length === 0) return null;
+  const grouped = new Set<string>();
+  for (const g of Array.isArray(layout.groups) ? layout.groups : []) {
+    if (!g || typeof g !== 'object') continue;
+    for (const k of Array.isArray((g as Rec).members) ? ((g as Rec).members as unknown[]) : []) grouped.add(str(k));
+  }
+  const move = new Set<Rec>();
+  orderedFigureAssets(it.pb_figure_assets).forEach((asset, i) => {
+    if (!below.has(i)) return;
+    const idx = Number.parseInt(str(asset.figure_index), 10);
+    const item = items.find((x) => str(x.assetKey) === `idx:${idx}`) ?? items.find((x) => str(x.assetKey) === `ord:${i + 1}`);
+    if (!item || grouped.has(str(item.assetKey))) return;
+    const position = str(item.position);
+    if (position === 'below-choices' || position === 'inline-text') return;
+    move.add(item);
+  });
+  if (move.size === 0) return null;
+  return {
+    ...layout,
+    items: (layout.items as unknown[]).map((x) => (move.has(x as Rec) ? { ...(x as Rec), position: 'below-choices' } : x)),
+  };
 }
 
 /** 사람이 고친 반영 대기 항목. 코드 점검도 덮어쓰지 않는다. */
@@ -79,7 +206,9 @@ const count = (t: string, re: RegExp) => (t.match(re) ?? []).length;
 
 /** 수식 구분자 짝이 맞지 않는 곳. */
 export function mathDelimiterProblems(text: string): string[] {
-  const t = String(text ?? '');
+  // 줄바꿈 명령(\\)은 먼저 뺀다. 둘째 역슬래시가 뒤 글자와 붙어 \( · \[ · \{ 로 읽히면
+  // cases 의 `(x\geq0)\\(k+x)` 같은 멀쩡한 식이 짝이 안 맞는 것으로 잡힌다.
+  const t = String(text ?? '').replace(/\\\\/g, ' ');
   if (!t.trim()) return [];
   const out: string[] = [];
   if (count(t, /(?<!\\)\$/g) % 2 === 1) out.push('$');
@@ -169,6 +298,7 @@ export function setCommonFigureMap(items: Rec[], commonFigureCounts: Map<string,
  * 한 문항의 코드 정합성 점검(AI 없음, 사양 5-2). [it] 은 overview 문항(반영 대기 값을 겹친 모습, 종속형 세트는 공통 발문 없음).
  * - 고칠 수 있는 것(공통 발문 중복, '해' 풀이 안내, 엔진이 못 읽는 마크업, 해설 칸의 정답 줄)은 patch 로 낸다.
  * - 나머지(그림 수·자리, 수식 구분자, 정답 불일치)는 지적으로 낸다. 사장님이 보거나 고친 뒤 다시 점검한다.
+ * - 모의고사 문항([ctx].mock)은 표기도 맞춘다: 점 이름 곧은 글자, '[출제의도]' 머리, 선지 아래 그림(docs/architecture/mock-exam.md).
  */
 export function checkItemConsistency(it: Rec, ctx: ConsistencyContext): ConsistencyResult {
   const owner = ownerKeys(it);
@@ -238,31 +368,150 @@ export function checkItemConsistency(it: Rec, ctx: ConsistencyContext): Consiste
     fixes.push({ code: 'markup', title: '수식 마크업 정리', fields: ['choices'] });
   }
 
-  if (stem.trim() !== origStem.trim() && !sameRenderedMath(stem, origStem)) patch.stem = stem;
+  // 모의고사: 점 이름·이름표를 원본처럼 곧은 글자로 감싼다. 이름 글자는 본문·공통 발문·선지를 통틀어 모은다.
+  let problemNames: NameSets | null = null;
+  if (ctx.mock) {
+    problemNames = collectNameSets([stem, common, ...choiceTexts(choices)]);
+    const names = problemNames;
+    const fields: string[] = [];
+    if (!owner.has('stem')) {
+      const named = uprightNames(stem, names, 'problem');
+      if (named !== stem) {
+        stem = named;
+        fields.push('stem');
+      }
+    }
+    if (!owner.has('common_stem') && common) {
+      const named = uprightNames(common, names, 'problem');
+      if (named !== common) {
+        common = named;
+        fields.push('common_stem');
+      }
+    }
+    if (!owner.has('choices')) {
+      const named = mapChoiceTexts(choices, (t) => uprightNames(t, names, 'problem'));
+      if (named !== choices) {
+        choices = named;
+        patch.choices = choices;
+        fields.push('choices');
+      }
+    }
+    if (fields.length > 0) fixes.push({ code: 'point_names', title: '점 이름 곧은 글자', fields });
+  }
+
+  // 모의고사: 수식 뒤에 띄어 쓴 조사를 붙인다('16 명' → '16명'). 이름을 감싼 뒤에 해야 '\text{A} 와' 도 걸린다.
+  let stemSpacingChanged = false;
+  if (ctx.mock) {
+    const fields: string[] = [];
+    if (!owner.has('stem')) {
+      const attached = attachParticles(stem, 'problem');
+      if (attached !== stem) {
+        stem = attached;
+        stemSpacingChanged = true;
+        fields.push('stem');
+      }
+    }
+    if (!owner.has('common_stem') && common) {
+      const attached = attachParticles(common, 'problem');
+      if (attached !== common) {
+        common = attached;
+        fields.push('common_stem');
+      }
+    }
+    if (!owner.has('choices')) {
+      const attached = mapChoiceTexts(choices, (t) => attachParticles(t, 'problem'));
+      if (attached !== choices) {
+        choices = attached;
+        patch.choices = choices;
+        fields.push('choices');
+      }
+    }
+    if (fields.length > 0) fixes.push({ code: 'particle_spacing', title: '수식 뒤 조사 붙여 쓰기', fields });
+  }
+
+  // 표의 줄 끝이 '\' 하나로 추출되면 문항 카드가 조판되지 않는다(2026 고3 9월 확통 27). '\\' 로 고친다.
+  let tableRowsChanged = false;
+  if (!owner.has('stem')) {
+    const fixedRows = fixTabularRowEnds(stem);
+    if (fixedRows !== stem) {
+      stem = fixedRows;
+      tableRowsChanged = true;
+      fixes.push({ code: 'table_row_end', title: '표 줄 끝 표기 고치기', fields: ['stem'] });
+    }
+  }
+
+  // sameRenderedMath 는 수식 기호 옆 띄어쓰기를 무시한다. 조사를 붙인 본문은 찍히는 모양이 다르므로 그대로 쓴다.
+  if (stem.trim() !== origStem.trim() && (stemSpacingChanged || tableRowsChanged || !sameRenderedMath(stem, origStem))) patch.stem = stem;
   if (common !== origCommon) patch.common_stem = common;
 
   const solution = str(it.solution_transcribed);
   const solutionAnswer = str(it.solution_answer).trim();
   if (solution.trim() && str(it.solution_source) !== 'manual' && !owner.has('solution_transcribed')) {
-    const cleaned = cleanSolutionTranscribedText(solution, it.problem_number, solutionAnswer);
-    if (cleaned !== solution.trim()) {
-      patch.solution_transcribed = cleaned;
+    let next = cleanSolutionTranscribedText(solution, it.problem_number, solutionAnswer);
+    if (next !== solution.trim()) {
       fixes.push({
         code: 'solution_text',
-        title: cleaned ? '해설 머리말·정답 줄 정리' : '해설 칸의 정답 줄 정리(풀이 없음)',
+        title: next ? '해설 머리말·정답 줄 정리' : '해설 칸의 정답 줄 정리(풀이 없음)',
         fields: ['solution_transcribed'],
       });
     }
+    if (problemNames && next) {
+      const formatted = formatMockSolution(next, problemNames);
+      if (formatted.intentChanged) fixes.push({ code: 'intent_mark', title: '출제의도 표기 통일', fields: ['solution_transcribed'] });
+      if (formatted.namesChanged) fixes.push({ code: 'point_names', title: '점 이름 곧은 글자', fields: ['solution_transcribed'] });
+      if (formatted.spacingChanged) {
+        fixes.push({ code: 'particle_spacing', title: '수식 뒤 조사 붙여 쓰기', fields: ['solution_transcribed'] });
+      }
+      next = formatted.text;
+    }
+    if (next !== solution.trim()) patch.solution_transcribed = next;
   }
 
   // 그림 수와 그림 자리(렌더러: 자리 순서대로 그림을 쓰고, 남은 그림은 본문 끝에 붙인다)
   const texts = choiceTexts(choices);
-  const stemMarkers = figureMarkerCount(stem);
+  let stemMarkers = figureMarkerCount(stem);
   const choiceMarkers = texts.reduce((n, t) => n + figureMarkerCount(t), 0);
   const commonMarkers = figureMarkerCount(common);
-  const assets = orderedFigureAssets(it.pb_figure_assets).length;
+  const orderedAssets = orderedFigureAssets(it.pb_figure_assets);
+  const assets = orderedAssets.length;
   const imageChoices = texts.length >= 2 && texts.every((t) => !t.replace(/\[(?:그림|도형|도표)\]/g, '').trim()) &&
     assets === stemMarkers + texts.length;
+
+  // 모의고사: 원본에서 선지 아래에 찍힌 그림은 조판에서도 선지 아래로 보낸다(엔진은 글 선지일 때만 그렇게 찍는다).
+  const textChoices = texts.length >= 2 && choiceMarkers === 0 && !imageChoices;
+  let belowLayout: Rec | null = null;
+  if (ctx.mock && !owner.has('figure_layout') && textChoices) {
+    belowLayout = figureLayoutBelowChoices(it, ctx.mock.choiceNumberRegion);
+    if (belowLayout) {
+      patch.figure_layout = belowLayout;
+      fixes.push({ code: 'figure_below_choices', title: '그림을 선지 아래로', fields: ['figure_layout'] });
+    }
+  }
+
+  // 모의고사: 그림이 선지 아래에 있으면 추출이 본문에 그림 자리를 적지 않기도 한다(2026 고3 6월 기하 27).
+  // 자리가 없는 그림(렌더러는 자리 순서대로 그림을 쓰므로 뒤쪽 그림들)이 모두 원본에서 선지 아래에 있고 배치도
+  // 선지 아래이면 본문 끝에 자리를 넣는다. 찍히는 모양은 그대로다(2026-11-23 사장님 결정).
+  if (ctx.mock && !owner.has('stem') && textChoices && commonMarkers === 0 && assets > stemMarkers) {
+    const below = figureOrdersBelowChoices(it, ctx.mock.choiceNumberRegion);
+    const layoutNow = belowLayout ?? (it.pb_figure_layout && typeof it.pb_figure_layout === 'object' ? (it.pb_figure_layout as Rec) : null);
+    const layoutItems = (Array.isArray(layoutNow?.items) ? (layoutNow!.items as unknown[]) : [])
+      .filter((x): x is Rec => !!x && typeof x === 'object');
+    const placedBelow = (i: number) => {
+      const idx = Number.parseInt(str(orderedAssets[i].figure_index), 10);
+      const item = layoutItems.find((x) => str(x.assetKey) === `idx:${idx}`) ??
+        layoutItems.find((x) => str(x.assetKey) === `ord:${i + 1}`);
+      return str(item?.position) === 'below-choices';
+    };
+    let allBelow = true;
+    for (let i = stemMarkers; i < assets; i += 1) if (!below.has(i) || !placedBelow(i)) allBelow = false;
+    if (allBelow) {
+      stem = `${stem.trimEnd()}${'\n[그림]'.repeat(assets - stemMarkers)}`;
+      patch.stem = stem;
+      stemMarkers = assets;
+      fixes.push({ code: 'figure_marker_below_choices', title: '선지 아래 그림의 자리 표시 넣기', fields: ['stem'] });
+    }
+  }
+
   if (commonMarkers > 0 && stemMarkers === 0 && choiceMarkers === 0) {
     if (assets === 0 && !ctx.setHasCommonFigure) {
       issues.push({
@@ -400,6 +649,71 @@ async function commonFigureCounts(auth: AuthContext, items: Rec[]): Promise<Map<
     for (const r of (data ?? []) as Rec[]) out.set(str(r.id), orderedFigureAssets(r.common_figure_assets).length);
   }
   return out;
+}
+
+const numberKey = (v: unknown): string => {
+  const n = Number.parseInt(str(v).replace(/[^0-9]/g, ''), 10);
+  return Number.isFinite(n) ? String(n) : '';
+};
+
+/**
+ * 검수 범위가 모의고사 구간 문서이면 문항 번호 → 선지 번호 자리(없으면 null)를, 아니면 null 을 돌려준다.
+ * 모의고사 구간 문서는 mock_exam_sections.pb_document_id 로 안다(게이트웨이 mock_exam/review_staging.js 가 잇는다).
+ */
+async function mockChoiceRegions(auth: AuthContext, academyId: string, bookId: string): Promise<Map<string, unknown> | null> {
+  const { data: section, error } = await auth.admin
+    .from('mock_exam_sections')
+    .select('exam_id,section')
+    .eq('academy_id', academyId)
+    .eq('pb_document_id', bookId)
+    .maybeSingle();
+  if (error) throw new Error(`모의고사 구간을 읽지 못했습니다: ${error.message}`);
+  if (!section) return null;
+  const { data, error: itemsError } = await auth.admin
+    .from('mock_exam_items')
+    .select('problem_number,choice_number_region_1k')
+    .eq('exam_id', str((section as Rec).exam_id))
+    .eq('section', str((section as Rec).section));
+  if (itemsError) throw new Error(`모의고사 문항의 선지 자리를 읽지 못했습니다: ${itemsError.message}`);
+  return new Map(((data ?? []) as Rec[]).map((r) => [numberKey(r.problem_number), r.choice_number_region_1k ?? null]));
+}
+
+/** AI 가 낸 해설 교정본(지적 ai_solution_logic 의 수정안) 가운데 아직 사장님이 고르지 않은 것 */
+const SOLUTION_FIX_CHECK_KEY = 'ai_solution_logic';
+
+/**
+ * 모의고사: 사장님이 아직 고르지 않은 해설 교정본도 해설과 같은 표기('[출제의도]' 머리, 점 이름 곧은 글자)로 맞춘다.
+ * 교정본은 고르는 순간 사람이 정한 값이 되어 그 뒤로는 코드가 고치지 않기 때문이다. 반환: 고친 교정본 수
+ */
+async function formatSolutionFixProposals(auth: AuthContext, items: Rec[]): Promise<number> {
+  const byCrop = new Map(items.map((it) => [str(it.crop_id), it]));
+  let changed = 0;
+  for (const part of chunks([...byCrop.keys()], IN_CHUNK)) {
+    const { data, error } = await auth.admin
+      .from('textbook_review_findings')
+      .select('id,crop_id,proposal')
+      .in('crop_id', part)
+      .eq('check_key', SOLUTION_FIX_CHECK_KEY)
+      .in('status', ['open', 'held']);
+    if (error) throw new Error(`해설 교정본을 읽지 못했습니다: ${error.message}`);
+    for (const f of (data ?? []) as Rec[]) {
+      const it = byCrop.get(str(f.crop_id));
+      const proposal = f.proposal && typeof f.proposal === 'object' ? (f.proposal as Rec) : null;
+      const after = proposal?.after && typeof proposal.after === 'object' ? (proposal.after as Rec) : null;
+      const text = typeof after?.solution_transcribed === 'string' ? after.solution_transcribed : '';
+      if (!it || !proposal || !after || !text.trim()) continue;
+      const names = collectNameSets([str(it.stem), str(it.common_stem), ...choiceTexts(it.choices)]);
+      const formatted = formatMockSolution(text, names).text;
+      if (formatted === text) continue;
+      const { error: updateError } = await auth.admin
+        .from('textbook_review_findings')
+        .update({ proposal: { ...proposal, after: { ...after, solution_transcribed: formatted } } })
+        .eq('id', str(f.id));
+      if (updateError) throw new Error(`해설 교정본을 고치지 못했습니다: ${updateError.message}`);
+      changed += 1;
+    }
+  }
+  return changed;
 }
 
 interface ItemReport {
@@ -561,8 +875,11 @@ export async function handleTextbookProblemConsistency(_req: Request, auth: Auth
   const fixed = new Map<string, ItemReport & { fixes: string[] }>();
   const errors: string[] = [];
   let all: Rec[];
+  // 모의고사 구간 문서일 때만 값이 있다(문항 번호 → 선지 번호 자리).
+  let mockRegions: Map<string, unknown> | null;
   try {
     all = await loadItems();
+    mockRegions = await mockChoiceRegions(auth, academyId, bookId);
   } catch (e) {
     return errorResponse(502, 'overview_failed', e instanceof Error ? e.message : String(e));
   }
@@ -572,7 +889,10 @@ export async function handleTextbookProblemConsistency(_req: Request, auth: Auth
     return new Map(
       list.filter(isTarget).map((it) => [
         str(it.crop_id),
-        checkItemConsistency(it, { setHasCommonFigure: setFigures.get(str(it.crop_id)) ?? false }),
+        checkItemConsistency(it, {
+          setHasCommonFigure: setFigures.get(str(it.crop_id)) ?? false,
+          ...(mockRegions ? { mock: { choiceNumberRegion: mockRegions.get(numberKey(it.problem_number)) ?? null } } : {}),
+        }),
       ]),
     );
   };
@@ -644,6 +964,15 @@ export async function handleTextbookProblemConsistency(_req: Request, auth: Auth
     errors.push(e instanceof Error ? e.message : String(e));
   }
 
+  let proposalsFormatted = 0;
+  if (mockRegions && !dryRun) {
+    try {
+      proposalsFormatted = await formatSolutionFixProposals(auth, targets);
+    } catch (e) {
+      errors.push(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   const flaggedByCrop = new Map<string, ItemReport & { issues: Array<{ code: string; title: string; detail: string }> }>();
   for (const { it, issue } of open) {
     const cropId = str(it.crop_id);
@@ -669,6 +998,8 @@ export async function handleTextbookProblemConsistency(_req: Request, auth: Auth
     flagged,
     by_code: byCode,
     resolved,
+    // 모의고사: 표기를 맞춘 해설 교정본 수(사장님이 아직 고르지 않은 것)
+    proposals_formatted: proposalsFormatted,
     errors,
   });
 }

@@ -185,6 +185,52 @@ test('고1·고2 해설은 머리와 상관없이 모두 공통이다', () => {
   assert.equal(answers.get('common|29').text, '12');
 });
 
+test('가형·나형: 시험지 한 부(1~30번)가 그 유형 구간 하나다', () => {
+  assert.equal(expectedNumbers(3, 'ga').length, 30);
+  assert.deepEqual(expectedNumbers(3, 'na').slice(0, 2), [1, 2]);
+  assert.deepEqual(expectedNumbers(1, 'ga'), []);
+  const page = (number) => ({
+    page: number <= 15 ? 2 : 8,
+    result: normalizeProblemPage({
+      page_title: '수학 영역(가형)',
+      items: [{ number, region: [100, 50, 400, 480] }],
+    }),
+  });
+  // 가형이 첫 문제지여도 공통으로 가는 문항이 없고, 나형은 1번부터 다 받는다.
+  const ga = assignProblemItems({ grade: 3, paperElective: 'ga', pages: [page(1), page(30)], takeCommon: true });
+  assert.deepEqual(ga.map((i) => `${i.section}${i.number}`), ['ga1', 'ga30']);
+  const na = assignProblemItems({ grade: 3, paperElective: 'na', pages: [page(1), page(22)], takeCommon: false });
+  assert.deepEqual(na.map((i) => `${i.section}${i.number}`), ['na1', 'na22']);
+
+  // 해설지: 번호나 머리와 상관없이 그 유형으로 간다.
+  const { answers, solutions } = assignSolutionSections({
+    grade: 3,
+    paperElective: 'na',
+    pages: [
+      {
+        page: 1,
+        result: normalizeSolutionPage({
+          answer_tables: [
+            {
+              label: '',
+              region: [60, 40, 200, 480],
+              entries: [{ number: 3, answer: '②' }, { number: 30, answer: '16' }],
+            },
+          ],
+          section_headers: [{ label: '확률과 통계', region: [210, 40, 230, 480] }],
+          blocks: [
+            { number: 3, number_region: [240, 40, 255, 60], content_region: [240, 40, 400, 480] },
+            { number: 25, number_region: [410, 40, 425, 60], content_region: [410, 40, 600, 480] },
+          ],
+        }),
+      },
+    ],
+  });
+  assert.deepEqual([...answers.keys()], ['na|3', 'na|30']);
+  assert.deepEqual([...solutions.keys()], ['na|3', 'na|25']);
+  assert.equal(electiveStartPageFromText(['가형 해설', '나형 정답'], 'ga'), null);
+});
+
 test('해설 텍스트에서 선택과목 시작 쪽을 찾는다', () => {
   const texts = ['■ [공통: 수학Ⅰ·수학Ⅱ]', '...', '■ [선택: 확률과 통계]\n23. 출제의도'];
   assert.equal(electiveStartPageFromText(texts, 'probstats'), 3);

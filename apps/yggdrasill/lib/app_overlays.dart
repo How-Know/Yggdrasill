@@ -98,6 +98,8 @@ class RightSideSheetTestGradingSession {
   final String solutionPathRaw;
   final String answerViewerCacheKey;
 
+  final VoidCallback? onCancelSheet;
+
   const RightSideSheetTestGradingSession({
     required this.sessionId,
     required this.title,
@@ -117,6 +119,7 @@ class RightSideSheetTestGradingSession {
     this.onAction,
     this.onNext,
     this.onClosed,
+    this.onCancelSheet,
     this.gradingLocked = false,
     this.readOnlyReason = '',
     this.closeSheetOnAction = true,
@@ -345,6 +348,13 @@ AsyncUiAction? toggleRightSideSheetAction;
 
 /// 전역 오른쪽 사이드시트 채점 전용 열기 액션.
 AsyncUiAction? openRightSideSheetGradingAction;
+
+/// 전역 오른쪽 사이드시트에 표시할 홈 과제카드 조회 패널 빌더.
+final ValueNotifier<WidgetBuilder?> rightSideSheetStudentLookupBuilder =
+    ValueNotifier<WidgetBuilder?>(null);
+
+/// 전역 오른쪽 사이드시트 과제카드 조회 모드 열기 액션.
+AsyncUiAction? openRightSideSheetStudentLookupAction;
 
 /// 전역 오른쪽 사이드시트 닫기 액션.
 AsyncUiAction? closeRightSideSheetAction;

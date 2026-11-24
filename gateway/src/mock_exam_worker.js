@@ -20,6 +20,7 @@ import { PDFDocument } from 'pdf-lib';
 import { callGeminiImageJson } from './mock_exam/gemini_image.js';
 import {
   ELECTIVES,
+  LEGACY_TYPES,
   SECTIONS,
   SECTION_LABELS,
   assignProblemItems,
@@ -28,10 +29,13 @@ import {
   buildSolutionPagePrompt,
   electiveStartPageFromText,
   expectedNumbers,
+  isLegacyType,
   normalizeProblemPage,
   normalizeSolutionPage,
   sectionFromLabel,
 } from './mock_exam/mock_pages.js';
+import { fillMissingSolutionBlocks } from './mock_exam/solution_anchor.js';
+import { readSolutionEvidence } from './mock_exam/solution_evidence.js';
 import { logVlmUsage } from './textbook/vlm_usage_log.js';
 import { syncMockExamFolder } from './mock_exam/register_files.js';
 import { syncMockExamPresetsForExam } from './mock_exam/mock_preset.js';
@@ -68,7 +72,7 @@ const SYNC_MS = Math.max(
   Number.parseInt(process.env.MOCK_EXAM_SYNC_MS || '30000', 10) || 30000,
 );
 const PB_SOURCE_VERSION = 'mock_exam_pdf_v1';
-const ELECTIVE_ORDER = ['', ...ELECTIVES];
+const ELECTIVE_ORDER = ['', ...ELECTIVES, ...LEGACY_TYPES];
 const ORG_LABELS = { edu: '교육청', kice: '평가원', csat: '수능' };
 const COURSE_KEYS = {
   probstats: 'H-probstats',
@@ -217,9 +221,28 @@ async function upsertItems(rows) {
   if (error) throw new Error(`mock_items_upsert_failed:${error.message}`);
 }
 
+// 쪽수를 센다. pdf-lib 이 쪽 목록을 읽지 못하는 PDF 가 있다(2017 수능 해설지: 객체 참조가 깨져 있어
+// "Expected instance of PDFDict" 로 실패). 쪽 그림과 글자는 poppler 로 읽으므로 그때는 poppler 로 센다.
+function pdfInfoPageCount(stdout) {
+  return Number((String(stdout || '').match(/^Pages:\s+(\d+)/m) || [])[1] || 0);
+}
+
+async function pdfPageCount(buffer) {
+  try {
+    const doc = await PDFDocument.load(buffer, { ignoreEncryption: true });
+    return doc.getPageCount();
+  } catch (error) {
+    const count = await withTempPdf(buffer, async (pdfPath) => {
+      const { stdout } = await execFileAsync('pdfinfo', [pdfPath], { timeout: 60_000, windowsHide: true });
+      return pdfInfoPageCount(stdout);
+    }).catch(() => 0);
+    if (!(count > 0)) throw error;
+    return count;
+  }
+}
+
 async function savePageCount(paper, buffer) {
-  const doc = await PDFDocument.load(buffer, { ignoreEncryption: true });
-  const count = doc.getPageCount();
+  const count = await pdfPageCount(buffer);
   if (paper.page_count !== count) {
     await supa.from('mock_exam_papers').update({ page_count: count }).eq('id', paper.id);
     paper.page_count = count;
@@ -284,6 +307,8 @@ async function stageCrops(exam, papers, { only = null } = {}) {
         paper_id: paper.id,
         raw_page: item.page,
         item_region_1k: item.region,
+        // 문항 영역을 새로 잡았다: 선지 번호 자리는 다음 검수 준비 때 다시 읽는다(review_staging.js 4-1).
+        choice_number_region_1k: null,
       });
     }
   }
@@ -333,6 +358,8 @@ async function stageSolutions(exam, papers, { replaceVlm = false, only = null } 
       // 텍스트 층에 '[기하]' 등이 있는 쪽은 23번 블록 바로 위에 머리표를 보장한다.
       // VLM 이 머리를 엉뚱한 단에 찍었거나 빠뜨렸어도 23번 바로 위에서 구간이 바뀌게 한다.
       for (const pageEntry of read) {
+        // 가형·나형 해설지에는 선택과목 구간이 없다.
+        if (isLegacyType(paper.elective)) break;
         const pageText = texts[pageEntry.page - 1] || '';
         for (const el of ELECTIVES) {
           if (electiveStartPageFromText([pageText], el) !== 1) continue;
@@ -354,6 +381,41 @@ async function stageSolutions(exam, papers, { replaceVlm = false, only = null } 
           );
           pageEntry.result.headers.push({ label: SECTION_LABELS[el], region: synthRegion });
         }
+      }
+      // AI 가 빠뜨린 해설 시작점(한 단을 통째로 건너뛰는 일이 있다)을 채운다:
+      // 글자 층의 "12. [출제의도]" → 그래도 없으면 그 쪽만 한 번 더 읽는다(solution_anchor.js).
+      const filled = await fillMissingSolutionBlocks({
+        grade: exam.grade,
+        paperElective: paper.elective,
+        fromFirstPage,
+        only,
+        pages: read,
+        known: positions,
+        assign: (list) =>
+          assignSolutionSections({ grade: exam.grade, paperElective: paper.elective, pages: list }).solutions,
+        loadEvidence: () => readSolutionEvidence(buffer),
+        reread: (pageList, numbers) =>
+          readPages({
+            paper,
+            buffer,
+            pages: pageList,
+            prompt: (page) => buildSolutionPagePrompt({ grade: exam.grade, page, lookFor: numbers }),
+            normalize: normalizeSolutionPage,
+            stage: 'mock-solutions-reread',
+          }),
+      });
+      read = filled.pages;
+      if (filled.textLayer.length + filled.rereadPages.length + filled.missing.length + filled.errors.length > 0) {
+        const label = (list) => list.map((x) => `${x.section ? `${x.section} ` : `p${x.page} `}${x.number}`);
+        log('solution_fill', {
+          exam: exam.id.slice(0, 8),
+          paper: paper.id.slice(0, 8),
+          text_layer: label(filled.textLayer),
+          reread_pages: filled.rereadPages,
+          reread: label(filled.reread),
+          still_missing: label(filled.missing),
+          errors: filled.errors,
+        });
       }
       if (shaKey && startPage === 1) readBySha.set(shaKey, read);
     } else {
@@ -427,12 +489,15 @@ async function stageSolutions(exam, papers, { replaceVlm = false, only = null } 
 
 function missingReport(exam, items) {
   const sections = Number(exam.grade) === 3
-    ? ['common', ...ELECTIVES]
+    ? ['common', ...ELECTIVES, ...LEGACY_TYPES]
     : ['common'];
+  // 가형·나형 회차에는 공통 구간이 없다.
+  const legacy = [...items.values()].some((row) => isLegacyType(row.section));
   const out = {};
   for (const section of sections) {
     const rows = [...items.values()].filter((row) => row.section === section);
     if (section !== 'common' && rows.length === 0) continue;
+    if (section === 'common' && legacy && rows.length === 0) continue;
     const want = expectedNumbers(exam.grade, section);
     const crop = want.filter(
       (n) => !rows.some((r) => r.problem_number === n && Array.isArray(r.item_region_1k)),
@@ -587,7 +652,7 @@ async function stageProblemBank(exam, papers, { requeue, only = null }) {
     .eq('exam_id', exam.id);
   const linked = new Map((links || []).map((row) => [row.section, row]));
   const out = {};
-  for (const section of ['common', ...ELECTIVES]) {
+  for (const section of SECTIONS) {
     const sectionItems = [...items.values()].filter((row) => row.section === section);
     if (sectionItems.length === 0) continue;
     const prev = linked.get(section);

@@ -209,9 +209,16 @@ class _RightSideSheetState extends State<RightSideSheet> {
     super.initState();
     _testGradingSession = rightSideSheetTestGradingSession.value;
     rightSideSheetTestGradingSession.addListener(_onTestGradingSessionChanged);
+    rightSideSheetStudentLookupBuilder
+        .addListener(_onStudentLookupBuilderChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _syncGradingTabActiveFlag();
     });
+  }
+
+  void _onStudentLookupBuilderChanged() {
+    if (!mounted) return;
+    setState(() {});
   }
 
   void _onTestGradingSessionChanged() {
@@ -252,6 +259,11 @@ class _RightSideSheetState extends State<RightSideSheet> {
     if (session?.onClosed != null) {
       unawaited(session!.onClosed!());
     }
+    if (session?.onCancelSheet != null) {
+      session!.onCancelSheet!();
+      return;
+    }
+    rightSideSheetStudentLookupBuilder.value = null;
     widget.onClose();
   }
 
@@ -290,6 +302,9 @@ class _RightSideSheetState extends State<RightSideSheet> {
   void dispose() {
     rightSideSheetTestGradingSession.removeListener(
       _onTestGradingSessionChanged,
+    );
+    rightSideSheetStudentLookupBuilder.removeListener(
+      _onStudentLookupBuilderChanged,
     );
     if (rightSideSheetGradingTabActive.value) {
       rightSideSheetGradingTabActive.value = false;
@@ -1429,6 +1444,10 @@ class _RightSideSheetState extends State<RightSideSheet> {
   }
 
   Widget _buildBody() {
+    final lookupBuilder = rightSideSheetStudentLookupBuilder.value;
+    if (_testGradingSession == null && lookupBuilder != null) {
+      return lookupBuilder(context);
+    }
     switch (_mode) {
       case RightSideSheetMode.grading:
         return _AnswerKeyGradingTabPanel(
@@ -1436,6 +1455,7 @@ class _RightSideSheetState extends State<RightSideSheet> {
             dialogContext: widget.dialogContext,
           onClose: _handleClose,
             onClearSession: () {
+              rightSideSheetPdfPanelSession.value = null;
               rightSideSheetTestGradingSession.value = null;
             },
         );

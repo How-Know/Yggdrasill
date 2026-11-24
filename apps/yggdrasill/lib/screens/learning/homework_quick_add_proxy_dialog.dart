@@ -50,6 +50,7 @@ class HomeworkQuickAddProxyDialog extends StatefulWidget {
   final String? initialFlowId;
   final bool childAddMode;
   final bool requirePlanDestination;
+  final bool allowTodayPlanDestination;
   final String? lockedGroupTitle;
   final String? lockedBookId;
   final String? lockedGradeLabel;
@@ -61,6 +62,7 @@ class HomeworkQuickAddProxyDialog extends StatefulWidget {
     this.initialFlowId,
     this.childAddMode = false,
     this.requirePlanDestination = false,
+    this.allowTodayPlanDestination = true,
     this.lockedGroupTitle,
     this.lockedBookId,
     this.lockedGradeLabel,
@@ -345,6 +347,9 @@ class HomeworkQuickAddProxyDialogState
     }
     if (_isTestFlowId(_flowId)) {
       _applyTimedTestDefaults();
+    }
+    if (widget.requirePlanDestination && !widget.allowTodayPlanDestination) {
+      _selectedPlanDestination = 'homework';
     }
     _initNaesinFilterDefaults();
     unawaited(_loadAllFlowLinkedBooks());
@@ -1241,6 +1246,9 @@ class HomeworkQuickAddProxyDialogState
         'groupTitle': groupTitle,
         'flowId': _flowId,
         'action': 'add',
+        if (widget.requirePlanDestination)
+          'planDestination': _selectedPlanDestination ??
+              (widget.allowTodayPlanDestination ? 'in_class' : 'homework'),
         'items': [outputItem.toJson()],
       });
       return;
@@ -7990,6 +7998,12 @@ class HomeworkQuickAddProxyDialogState
                     Expanded(
                       child: LatexTextRenderer(
                         big.name,
+                        dollarMath: true,
+                        softWrap: true,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        enableDisplayMath: true,
+                        displayMathOverflow: DisplayMathOverflow.scaleDown,
                         style: const TextStyle(
                           color: kDlgText,
                           fontWeight: FontWeight.w700,
@@ -8064,14 +8078,18 @@ class HomeworkQuickAddProxyDialogState
                           Expanded(
                             child: LatexTextRenderer(
                               mid.name,
+                              dollarMath: true,
+                              softWrap: true,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              enableDisplayMath: true,
+                              displayMathOverflow: DisplayMathOverflow.scaleDown,
                               style: TextStyle(
                                 color: active ? kDlgAccent : kDlgText,
                                 fontWeight:
                                     active ? FontWeight.w700 : FontWeight.w600,
                                 fontSize: 13,
                               ),
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
                             ),
                           ),
                         ],
@@ -8183,6 +8201,12 @@ class HomeworkQuickAddProxyDialogState
                         Expanded(
                           child: LatexTextRenderer(
                             titleText,
+                            dollarMath: true,
+                            softWrap: true,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            enableDisplayMath: true,
+                            displayMathOverflow: DisplayMathOverflow.scaleDown,
                             style: TextStyle(
                               color: blocked
                                   ? const Color(0xFF6D7777)
@@ -8191,9 +8215,6 @@ class HomeworkQuickAddProxyDialogState
                               fontSize: 12.5,
                               height: 1.2,
                             ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            softWrap: true,
                           ),
                         ),
                         const SizedBox(width: 8),
@@ -9748,7 +9769,10 @@ class HomeworkQuickAddProxyDialogState
           flex: 2,
           child: ClipRRect(
             borderRadius: BorderRadius.circular(12),
-            child: TextbookExplorerTreePanel(controller: controller),
+            child: TextbookExplorerTreePanel(
+              controller: controller,
+              mathUnitNames: true,
+            ),
           ),
         ),
         const SizedBox(width: 12),
@@ -10274,6 +10298,21 @@ class HomeworkQuickAddProxyDialogState
 
     Widget primaryActions() {
       if (showNaesinStandalone) {
+        if (widget.requirePlanDestination &&
+            !widget.allowTodayPlanDestination) {
+          return Row(
+            children: [
+              destinationChip(label: '숙제', value: 'homework'),
+              const SizedBox(width: 8),
+              destinationChip(label: '다음', value: 'next_session'),
+              const Spacer(),
+              actionChip(
+                label: '취소',
+                onTap: () => Navigator.pop(context, null),
+              ),
+            ],
+          );
+        }
         return Row(
           children: [
             const Spacer(),
@@ -10287,11 +10326,13 @@ class HomeworkQuickAddProxyDialogState
       final leading = widget.requirePlanDestination
           ? Row(
               mainAxisSize: MainAxisSize.min,
-        children: [
-                destinationChip(label: '오늘', value: 'in_class'),
-          const SizedBox(width: 8),
+              children: [
+                if (widget.allowTodayPlanDestination) ...[
+                  destinationChip(label: '오늘', value: 'in_class'),
+                  const SizedBox(width: 8),
+                ],
                 destinationChip(label: '숙제', value: 'homework'),
-            const SizedBox(width: 8),
+                const SizedBox(width: 8),
                 destinationChip(label: '다음', value: 'next_session'),
               ],
             )

@@ -49,8 +49,63 @@ TextbookProblemReviewItem _item(Map<String, dynamic> m) => TextbookProblemReview
       ...m,
     });
 
+void _inlineNeighborTests() {
+  group('글줄 속 작은 그림에 딸려 온 글자 조각 지우기', () {
+    // 원본 이미지 = 쪽 전체, AI 가 잰 영역 400~600, 자른 영역은 여유를 더한 300~700(200×200 픽셀).
+    const source = [0, 0, 1000, 1000];
+    const box = [400, 400, 600, 600];
+    const crop = [300, 300, 700, 700];
+    Uint8List draw(void Function(img.Image) paint) {
+      final src = img.Image(width: 200, height: 200);
+      img.fill(src, color: img.ColorRgb8(255, 255, 255));
+      paint(src);
+      return Uint8List.fromList(img.encodePng(src));
+    }
+
+    void figure(img.Image im) =>
+        img.drawRect(im, x1: 60, y1: 60, x2: 160, y2: 120, color: img.ColorRgb8(0, 0, 0), thickness: 2);
+
+    test('잰 영역과 이어지지 않은 잉크만 흰색이 되고, 영역 밖으로 나간 그림 선은 남는다', () {
+      final png = draw((im) {
+        figure(im);
+        // 오른쪽 옆 글자의 획(가장자리에 닿음)과 그 옆의 흐린 가장자리, 아랫줄 글자 윗부분.
+        img.fillRect(im, x1: 186, y1: 80, x2: 199, y2: 120, color: img.ColorRgb8(0, 0, 0));
+        img.fillRect(im, x1: 184, y1: 80, x2: 185, y2: 120, color: img.ColorRgb8(240, 240, 240));
+        img.fillRect(im, x1: 20, y1: 185, x2: 60, y2: 199, color: img.ColorRgb8(0, 0, 0));
+      });
+      final out = img.decodePng(whiteOutUnrelatedInk(png, crop, source, box)!)!;
+      expect(out.getPixel(190, 100).r, 255);
+      expect(out.getPixel(184, 100).r, 255);
+      expect(out.getPixel(30, 190).r, 255);
+      expect(out.getPixel(60, 90).r, 0);
+      // 잰 영역(오른쪽 끝 150)을 넘어간 그림 선.
+      expect(out.getPixel(160, 90).r, 0);
+    });
+
+    test('지울 조각이 없거나 잰 영역 안에 잉크가 없으면 손대지 않는다', () {
+      expect(whiteOutUnrelatedInk(draw(figure), crop, source, box), isNull);
+      final onlyNeighbor = draw((im) => img.fillRect(im, x1: 186, y1: 80, x2: 199, y2: 120, color: img.ColorRgb8(0, 0, 0)));
+      expect(whiteOutUnrelatedInk(onlyNeighbor, crop, source, box), isNull);
+    });
+
+    test('잰 그림의 배치는 영역이 같은 그림에서, 없으면 순번으로 읽는다', () {
+      final measure = <String, dynamic>{
+        'figures': [
+          {'bbox_1k': [260, 318, 280, 364], 'placement': 'inline'},
+          {'bbox_1k': [594, 78, 834, 968], 'placement': 'below_text'},
+        ],
+      };
+      expect(measuredFigurePlacement(measure, 2, [260, 318, 280, 364]), 'inline');
+      expect(measuredFigurePlacement(measure, 2, [1, 2, 3, 4]), 'below_text');
+      expect(measuredFigurePlacement(measure, 5, [1, 2, 3, 4]), '');
+      expect(measuredFigurePlacement(const {}, 1, [1, 2, 3, 4]), '');
+    });
+  });
+}
+
 void main() {
   _numberMaskTests();
+  _inlineNeighborTests();
   group('그림 도우미', () {
     test('문항 그림이 아닌 그림 빼기: 붙어 있는 번호만 제안하고, 자산·배치·묶음에서 뺀다', () {
       final assets = [

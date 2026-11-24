@@ -13,18 +13,31 @@ const Map<String, String> kMockExamSectionLabels = <String, String>{
   'probstats': '확률과 통계',
   'calculus': '미적분',
   'geometry': '기하',
+  'ga': '가형',
+  'na': '나형',
 };
 
 const List<String> _electiveOrder = <String>[
   'probstats',
   'calculus',
-  'geometry'
+  'geometry',
+  'ga',
+  'na',
 ];
 
-/// 고3: 공통 1~15·선택 23~28 객관식. 고1·2: 1~21 객관식.
-bool mockExamIsObjective(int grade, int number) {
+/// 고3: 공통 1~15·선택 23~28 객관식. 고1·2와 가형·나형(2020년까지): 1~21 객관식.
+bool mockExamIsObjective(int grade, int number, [String section = '']) {
+  if (section == 'ga' || section == 'na') return number <= 21;
   if (grade == 3) return number <= 15 || (number >= 23 && number <= 28);
   return number <= 21;
+}
+
+/// 문항을 가진 구간(pb_questions.meta.mock_exam_item.section). 모의고사 문항이 아니면 빈 값.
+/// 자리의 구간과 다르면 그 자리는 다른 구간의 문항을 가리키는 자리다(가형·나형에 같이 실린 문항).
+String mockQuestionOwnSection(Map<String, dynamic> questionMeta) {
+  final own = questionMeta['mock_exam_item'];
+  if (own is! Map) return '';
+  return '${own['section'] ?? ''}'.trim();
 }
 
 /// 카드 한 장 = 문제지 PDF 한 개. 고3 은 선택과목마다 따로, 고1·2 는 시험당 하나.
@@ -69,7 +82,7 @@ class MockExamResourceCard {
     final base = '$examYear 고$grade $month월 ${kMockExamOrgLabels[org] ?? org}';
     return elective.isEmpty
         ? base
-        : '$base (${kMockExamSectionLabels[elective]})';
+        : '$base (${kMockExamSectionLabels[elective] ?? elective})';
   }
 }
 
@@ -80,6 +93,8 @@ class MockExamResourceItem {
     required this.rawPage,
     required this.region,
     required this.pbQuestionId,
+    this.id = '',
+    this.merged = false,
   });
 
   final String section;
@@ -89,6 +104,12 @@ class MockExamResourceItem {
   /// [ymin, xmin, ymax, xmax], 0~1000.
   final List<int> region;
   final String pbQuestionId;
+
+  /// mock_exam_items.id
+  final String id;
+
+  /// 다른 구간의 문항을 가리키는 자리(가형·나형에 같이 실린 문항). 카드는 이 자리의 값으로 그린다.
+  final bool merged;
 }
 
 class MockExamResourceService {
@@ -193,7 +214,7 @@ class MockExamResourceService {
     final rows = await _client
         .from('mock_exam_items')
         .select(
-            'section, problem_number, raw_page, item_region_1k, pb_question_id')
+            'id, section, problem_number, raw_page, item_region_1k, pb_question_id, merged_at')
         .eq('exam_id', card.examId)
         .inFilter('section', sections)
         .order('problem_number', ascending: true);
@@ -210,6 +231,8 @@ class MockExamResourceService {
           rawPage: (page as num).toInt(),
           region: region.map((e) => (e as num).toInt()).toList(growable: false),
           pbQuestionId: '${row['pb_question_id'] ?? ''}'.trim(),
+          id: '${row['id'] ?? ''}'.trim(),
+          merged: row['merged_at'] != null,
         ),
       );
     }
@@ -220,7 +243,7 @@ class MockExamResourceService {
       .from(card.storageBucket)
       .createSignedUrl(card.storagePath, 60 * 60);
 
-  /// 정답과 해설이 함께 들어 있는 해설 PDF. 같은 선택과목을 먼저 보고, 없으면 공통 해설을 본다.
+  /// 정답표와 풀이가 함께 들어 있는 해설 PDF. 같은 선택과목을 먼저 보고, 없으면 공통 해설을 본다.
   Future<String?> signedSolutionUrl(MockExamResourceCard card) async {
     final rows = await _client
         .from('mock_exam_papers')

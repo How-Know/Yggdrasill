@@ -46,6 +46,8 @@ class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
   void initState() {
     super.initState();
     HomeworkSession.instance.addListener(_onSessionChanged);
+    HomeworkSession.instance.remotePauseTick
+        .addListener(_onRemoteHomeworkPause);
     StudentShellChrome.instance.addListener(_onChromeChanged);
     StudentAttendanceSession.instance.planGoalPresentedTick
         .addListener(_onPlanGoalPresented);
@@ -81,6 +83,8 @@ class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
         .removeListener(_onHomeworkPointGrant);
     unawaited(StudentPresenceSession.instance.stop(markOffline: true));
     HomeworkSession.instance.removeListener(_onSessionChanged);
+    HomeworkSession.instance.remotePauseTick
+        .removeListener(_onRemoteHomeworkPause);
     StudentShellChrome.instance.removeListener(_onChromeChanged);
     StudentAttendanceSession.instance.planGoalPresentedTick
         .removeListener(_onPlanGoalPresented);
@@ -100,6 +104,18 @@ class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
 
   void _onSessionChanged() {
     if (mounted) setState(() {});
+  }
+
+  /// 학습앱 홈에서 수행 중 과제를 멈추면 풀이 화면은 스스로 닫고, 여기선 과제 탭으로 돌아간다.
+  void _onRemoteHomeworkPause() {
+    if (!mounted) return;
+    _selectTab(0);
+    _unmountNowPlayingSheet();
+    TopGlassSnackBar.show(
+      context,
+      message: '과제가 중단되었어요.',
+      icon: Icons.pause_circle_outline_rounded,
+    );
   }
 
   void _onChromeChanged() {

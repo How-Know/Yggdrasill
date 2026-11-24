@@ -28,9 +28,22 @@ const ELECTIVE_COURSE = Object.freeze({
 ///   고2 3월 → 공통수학1+공통수학2, 고2 그 밖 → 대수+미적분1
 ///   고1 3월 → 중학교 1~3학년 전체, 고1 그 밖 → 공통수학1+공통수학2
 /// 이전 교육과정 회차도 2022 개정의 대응 과정 개념을 후보로 쓴다.
-export function mockReviewCourseLabel({ grade, examMonth, section }) {
+/// 가형·나형(2020년 시행분까지, 사장님 결정 2026-11-23): 시험 범위에 맞춘다.
+///   2019년 시행분까지 가형(미적분Ⅱ·확률과 통계·기하와 벡터) → 대수+미적분1+미적분2+확률과 통계+기하
+///                    나형(수학Ⅱ·미적분Ⅰ·확률과 통계)       → 공통수학2+대수+미적분1+미적분2+확률과 통계
+///   2020년 시행분    가형(수학Ⅰ·미적분·확률과 통계)         → 대수+미적분1+미적분2+확률과 통계
+///                    나형(수학Ⅰ·수학Ⅱ·확률과 통계)         → 대수+미적분1+확률과 통계
+export function mockReviewCourseLabel({ grade, examMonth, section, examYear }) {
   const g = Number(grade);
   const month = Number(examMonth);
+  if (g === 3 && (section === 'ga' || section === 'na')) {
+    const year = Number(examYear);
+    if (!Number.isFinite(year) || year <= 0) return '';
+    if (year >= 2020) return section === 'ga' ? '대수+미적분1+미적분2+확률과 통계' : '대수+미적분1+확률과 통계';
+    return section === 'ga'
+      ? '대수+미적분1+미적분2+확률과 통계+기하'
+      : '공통수학2+대수+미적분1+미적분2+확률과 통계';
+  }
   if (g === 3) return section === 'common' ? '대수+미적분1' : ELECTIVE_COURSE[section] || '';
   if (section !== 'common') return '';
   if (g === 2) return month === 3 ? '공통수학1+공통수학2' : '대수+미적분1';

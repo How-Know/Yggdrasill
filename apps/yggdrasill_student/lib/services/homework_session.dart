@@ -53,6 +53,13 @@ class HomeworkSession extends ChangeNotifier with WidgetsBindingObserver {
   /// 교재 목록·문항 답안·시즌 변경 시 증가한다 (교재 탭 및 풀이 화면 실시간 동기화용).
   final ValueNotifier<int> textbookSyncTick = ValueNotifier<int>(0);
 
+  /// 학습앱 홈에서 수행 중 과제를 대기로 되돌린 횟수.
+  /// 학생앱은 이 값이 늘면 풀이 화면을 닫고 과제 탭으로 돌아간다.
+  final ValueNotifier<int> remotePauseTick = ValueNotifier<int>(0);
+
+  /// 이 앱이 직접 멈춤·되감기를 하는 동안에는 원격 멈춤으로 보지 않는다.
+  int _suppressRemotePause = 0;
+
   void notifyTextbookSync() {
     textbookSyncTick.value = textbookSyncTick.value + 1;
   }
@@ -189,9 +196,14 @@ class HomeworkSession extends ChangeNotifier with WidgetsBindingObserver {
         next.groupId != _suppressedMiniBarGroupId) {
       _suppressedMiniBarGroupId = null;
     }
+    final previousRunningId = _runningGroupId;
     _active = next;
     _coverRef = cover;
     _runningGroupId = runningId;
+    _noteRemotePause(
+      previousRunningId: previousRunningId,
+      groups: groups,
+    );
     _syncBeatTimer();
     // 목록 스냅샷은 항상 알린다 (과제 화면 stale phase 방지).
     notifyListeners();
@@ -241,16 +253,48 @@ class HomeworkSession extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  /// 학습앱이 수행 중 과제를 대기로 되돌렸는지 보고, 맞으면 셸에 알린다.
+  void _noteRemotePause({
+    required String? previousRunningId,
+    required List<HomeworkGroup> groups,
+  }) {
+    if (_suppressRemotePause > 0) return;
+    final previousId = previousRunningId?.trim() ?? '';
+    if (previousId.isEmpty || previousId == _runningGroupId) return;
+    HomeworkGroup? paused;
+    for (final group in groups) {
+      if (group.groupId != previousId) continue;
+      paused = group;
+      break;
+    }
+    if (paused == null || paused.running || paused.phase != 1) return;
+    if (paused.pendingComplete) return;
+    remotePauseTick.value = remotePauseTick.value + 1;
+  }
+
+  /// 진행 중인 목록 갱신이 끝나면 한 번 더 받아서, 멈춤 직전 스냅샷과 섞이지 않게 한다.
+  Future<void> _refreshWhenIdle() async {
+    while (_refreshInFlight) {
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+    }
+    await refresh();
+  }
+
   /// 앱이 죽었다 돌아온 정황이 확인됐을 때 — 마지막 신호 시점까지만 인정한다.
   Future<void> rewindToLastBeat({String reason = 'app_closed'}) async {
     if (_runningGroupId == null) return;
+    _suppressRemotePause++;
     try {
-      await StudentApi.instance.homeworkRewind(reason: reason);
-    } catch (e) {
-      debugPrint('[HW][beat] rewind failed: $e');
-      return;
+      try {
+        await StudentApi.instance.homeworkRewind(reason: reason);
+      } catch (e) {
+        debugPrint('[HW][beat] rewind failed: $e');
+        return;
+      }
+      await _refreshWhenIdle();
+    } finally {
+      _suppressRemotePause--;
     }
-    await refresh();
   }
 
   /// 로그인 후 셸에서 한 번 호출 — Realtime + 1.2s 폴백 시작.
@@ -511,13 +555,15 @@ class HomeworkSession extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> pause() async {
     if (_busy) return;
+    _suppressRemotePause++;
     _busy = true;
     _runningGroupId = null;
     notifyListeners();
     try {
       await StudentApi.instance.pauseAll();
-      await refresh();
+      await _refreshWhenIdle();
     } finally {
+      _suppressRemotePause--;
       _busy = false;
       notifyListeners();
     }

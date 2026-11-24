@@ -14,7 +14,10 @@ import '../../services/textbook_vlm_answer_service.dart';
 import '../../services/textbook_vlm_solution_ref_service.dart';
 import '../../services/textbook_workflow_runner.dart';
 import '../../services/textbook_workflow_service.dart';
+import '../../services/thinking_foundation_service.dart';
+import '../../widgets/question_foundation_links_dialog.dart';
 import '../problem_bank/widgets/problem_bank_question_card.dart';
+import '../skill/thinking_foundation_screen.dart';
 import 'textbook_pincette_extract_dialog.dart';
 import 'textbook_review_engine_hold_panel.dart';
 import 'textbook_source_pdf_pane.dart';
@@ -2041,6 +2044,40 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
         _notice = '초안 등록 실패: $e';
       });
     }
+  }
+
+  Future<void> _openFoundationLinksEditor(TextbookProblemReviewItem item) async {
+    final foundationSvc = ThinkingFoundationService();
+    final initial = [
+      for (final f in item.foundations) QuestionFoundationLink.fromJson(f),
+    ];
+    final saved = await showQuestionFoundationLinksDialog(
+      context,
+      questionLabel: item.itemName.trim().isNotEmpty ? item.itemName.trim() : '${item.problemNumber}번',
+      initialLinks: initial,
+      saveHint: '이 화면에서 저장한 연결은 $_scopeNoun 확정 때 문제은행에 함께 반영됩니다.',
+      service: foundationSvc,
+      onSave: (links) => foundationSvc.setReviewFoundations(item.cropId, links, source: 'owner'),
+    );
+    if (saved == null || !mounted) return;
+    setState(() {
+      _notice = '사고의 토대(C) 연결 ${saved.length}건을 저장했습니다 ($_scopeNoun 확정 때 문제은행 반영).';
+    });
+    if (_selectedScope != null) {
+      await _loadItems(_selectedScope!, reloadPreviews: false);
+    }
+  }
+
+  Future<void> _inspectFoundationFromMap(Map<String, dynamic> raw) async {
+    try {
+      final catalog = await ThinkingFoundationService().fetchAll();
+      if (!mounted) return;
+      final fid = '${raw['foundation_id'] ?? ''}'.trim();
+      final code = '${raw['code'] ?? ''}'.trim();
+      final hit = catalog.where((x) => x.id == fid || (code.isNotEmpty && x.code == code)).firstOrNull;
+      if (hit == null) return;
+      await showThinkingFoundationDetailDialog(context, hit);
+    } catch (_) {}
   }
 
   Future<void> _addAlternativeSolution(TextbookProblemReviewItem item) async {
@@ -4208,6 +4245,20 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
                     _pillBadge('교재 라벨 ${item.labelDisplay}', _kTextSub),
                     if (item.metaCheckedAt == null && item.concepts.isNotEmpty)
                       _pillBadge('개념 태그 재선정 전 (예전 후보 목록)', _kWarn),
+                    OutlinedButton.icon(
+                      onPressed: _saving ? null : () => unawaited(_openFoundationLinksEditor(item)),
+                      style: _outlineButtonStyle(color: _kBlue).copyWith(
+                        visualDensity: VisualDensity.compact,
+                        padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 10, vertical: 6)),
+                      ),
+                      icon: const Icon(Icons.compass_calibration_outlined, size: 15, color: _kBlue),
+                      label: Text(
+                        item.foundations.isEmpty
+                            ? '사고의 토대(C) 연결'
+                            : '사고의 토대(C) 편집 (${item.foundations.length})',
+                        style: const TextStyle(fontSize: 11.5),
+                      ),
+                    ),
                   ],
                 ),
                 if (item.concepts.isNotEmpty || item.thinkings.isNotEmpty || item.arithmetics.isNotEmpty) ...[
@@ -4227,6 +4278,38 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
                         _pillBadge(
                           '[연산] ${a['title']} ×${a['count']} (${a['subtotal']}점)',
                           _kTextSub,
+                        ),
+                    ],
+                  ),
+                ],
+                if (item.foundations.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      for (final rawF in item.foundations)
+                        Builder(
+                          builder: (context) {
+                            final link = QuestionFoundationLink.fromJson(rawF);
+                            final tipParts = <String>[
+                              '${link.groupCode}. ${link.groupTitle} · ${link.observabilityLabel}',
+                              if (link.rationale.trim().isNotEmpty) '이유: ${link.rationale.trim()}',
+                              '클릭하여 역량 상세 보기',
+                            ];
+                            return Tooltip(
+                              message: tipParts.join('\n'),
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(999),
+                                onTap: () => unawaited(_inspectFoundationFromMap(rawF)),
+                                child: _pillBadge(
+                                  '[토대 ${link.code} · ${link.relevanceLabel}] ${link.title}',
+                                  _kBlue,
+                                ),
+                              ),
+                            );
+                          },
                         ),
                     ],
                   ),
@@ -4918,6 +5001,7 @@ class _ProblemRoadmapScreenState extends State<ProblemRoadmapScreen> {
     'inline-left': '본문 왼쪽(글 감싸기)',
     'between-stem-choices': '본문·선지 사이',
     'above-choices': '선지 바로 위',
+    'below-choices': '선지 아래',
     'inline-text': '글 줄 안',
   };
   static const _kFigureAnchors = <String, String>{'left': '왼쪽', 'center': '가운데', 'right': '오른쪽', 'top': '위'};

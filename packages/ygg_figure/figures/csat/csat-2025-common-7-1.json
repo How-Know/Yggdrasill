@@ -1,0 +1,22 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.1",
+  "ref": "csat-2025-common-7-1",
+  "params": {"u": 7.0912, "ox": 42.9443, "oy": 72.881},
+  "fit": ["u", "ox", "oy"],
+  "canvas": {"width": 85.94, "height": 84.03, "origin": ["ox", "oy"], "unit": "u"},
+  "objects": [
+    {"id": "ax", "type": "axes", "x": [-5.98, 6.0], "y": [-1.16, 9.98]},
+    {"id": "f", "type": "function", "expr": "x^2+3", "domain": [-2.6, 2.6]},
+    {"id": "g", "type": "function", "expr": "-x^2/5+3", "domain": [-4.43, 4.43]},
+    {"id": "T", "type": "point", "at": [0, 3]},
+    {"id": "U", "type": "point", "at": [2, 7]},
+    {"id": "L", "type": "point", "at": [2, 2.2]},
+    {"type": "fill", "path": ["T", {"curve": "f", "to": "U"}, "L", {"curve": "g", "to": "T"}]},
+    {"id": "v", "type": "segment", "from": [2, 9.76], "to": [2, -0.95]},
+    {"id": "lf", "type": "label", "at": [-3.86, 9.28], "text": "y=x^2+3"},
+    {"id": "lg", "type": "label", "at": [-3.93, 2.23], "text": "y=-\\dfrac{1}{5}x^2+3"},
+    {"id": "lv", "type": "label", "at": [2, 0], "text": "x=2", "offset": [0.1, -8.7]}
+  ],
+  "label_nudge": {"ax:x": [-0.254, -0.085], "ax:y": [0.338, -0.338], "ax:origin": [-0.085, -0.169], "lf": [-0.254, 0.169], "lg": [0.592, 0.592], "lv": [0.0, 0.169]}
+}

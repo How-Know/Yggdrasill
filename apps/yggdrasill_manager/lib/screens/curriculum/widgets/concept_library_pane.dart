@@ -295,12 +295,16 @@ class LibraryDetailPane extends StatefulWidget {
     required this.detail,
     this.badges = const [],
     this.actions = const [],
+    this.filters,
   });
 
   final Widget tree;
   final Widget detail;
   final List<Widget> badges;
   final List<Widget> actions;
+
+  /// 머리 아래. 교육과정·도메인처럼 흐름 칸과 함께 쓰는 줄.
+  final Widget? filters;
 
   @override
   State<LibraryDetailPane> createState() => _LibraryDetailPaneState();
@@ -326,6 +330,10 @@ class _LibraryDetailPaneState extends State<LibraryDetailPane> {
             actions: widget.actions,
           ),
           const Divider(color: kThinkBorder, height: 1),
+          if (widget.filters != null) ...[
+            widget.filters!,
+            const Divider(color: kThinkBorder, height: 1),
+          ],
           Expanded(
             child: LayoutBuilder(
               builder: (context, constraints) {

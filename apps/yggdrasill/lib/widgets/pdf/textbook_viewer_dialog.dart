@@ -1,9 +1,17 @@
 import 'dart:async';
+import 'dart:io';
+import 'dart:typed_data';
 
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:pdfrx/pdfrx.dart';
 
+import '../../services/print_routing_service.dart';
 import '../../services/textbook_pdf_service.dart';
+import '../app_snackbar.dart';
 import '../dialog_tokens.dart';
 import 'textbook_problem_region.dart';
 
@@ -27,6 +35,9 @@ Future<void> openTextbookViewerDialog(
   int? initialPage,
   List<TextbookProblemRegion>? problemRegions,
   bool tapDetectionMode = true,
+  TextbookPdfSource? source,
+  bool fitWholePage = false,
+  bool showFileActions = false,
 }) async {
   await Navigator.of(context).push<void>(
     MaterialPageRoute<void>(
@@ -37,6 +48,9 @@ Future<void> openTextbookViewerDialog(
         initialPage: initialPage,
         problemRegions: problemRegions,
         tapDetectionMode: tapDetectionMode,
+        source: source,
+        fitWholePage: fitWholePage,
+        showFileActions: showFileActions,
       ),
     ),
   );
@@ -51,12 +65,24 @@ class TextbookViewerPage extends StatefulWidget {
     this.initialPage,
     this.problemRegions,
     this.tapDetectionMode = false,
+    this.source,
+    this.fitWholePage = false,
+    this.showFileActions = false,
   });
 
   final TextbookPdfRef ref;
   final String title;
   final String? cacheKey;
   final int? initialPage;
+
+  /// 이미 받은 주소. 모의고사 원본처럼 교재 링크가 없을 때 조회를 건너뛴다.
+  final TextbookPdfSource? source;
+
+  /// 처음 열 때 한 페이지 전체가 화면에 들어오게 맞춘다.
+  final bool fitWholePage;
+
+  /// 인쇄·다운로드 버튼을 보여 준다.
+  final bool showFileActions;
 
   /// When non-null and [tapDetectionMode] is true, the viewer overlays a
   /// thin outline + tap target per region so the operator can verify the
@@ -78,6 +104,7 @@ class _TextbookViewerPageState extends State<TextbookViewerPage> {
   int _pageNumber = 1;
   int _pageCount = 0;
   bool _chromeVisible = true;
+  bool _fileActionBusy = false;
 
   /// Regions indexed by raw page number — built once in initState so the
   /// pageOverlaysBuilder callback (invoked on every repaint) stays O(1).
@@ -117,6 +144,15 @@ class _TextbookViewerPageState extends State<TextbookViewerPage> {
   }
 
   Future<void> _resolve() async {
+    final direct = widget.source;
+    if (direct != null) {
+      if (!mounted) return;
+      setState(() {
+        _source = direct;
+        _loading = false;
+      });
+      return;
+    }
     try {
       final resolved = await TextbookPdfService.instance.resolve(
         widget.ref,
@@ -208,6 +244,15 @@ class _TextbookViewerPageState extends State<TextbookViewerPage> {
     );
   }
 
+  static double _fitWholePageZoom(
+    PdfDocument document,
+    PdfViewerController controller,
+    double fitZoom,
+    double coverZoom,
+  ) {
+    return fitZoom;
+  }
+
   PdfViewerParams _viewerParams() {
     return PdfViewerParams(
       backgroundColor: kDlgBg,
@@ -219,6 +264,8 @@ class _TextbookViewerPageState extends State<TextbookViewerPage> {
           _pageCount = document.pages.length;
         });
       },
+      calculateInitialZoom:
+          widget.fitWholePage ? _fitWholePageZoom : null,
       onPageChanged: (page) {
         if (!mounted || page == null) return;
         setState(() => _pageNumber = page);
@@ -379,7 +426,26 @@ class _TextbookViewerPageState extends State<TextbookViewerPage> {
                         ),
                       ),
                     ),
-                    if (_source != null) _buildSourceBadge(_source!),
+                    if (widget.showFileActions) ...[
+                      const SizedBox(width: 8),
+                      _CircleIconButton(
+                        icon: Icons.download_rounded,
+                        tooltip: '다운로드',
+                        enabled: _source != null && !_fileActionBusy,
+                        onTap: () => unawaited(_downloadPdf()),
+                      ),
+                      const SizedBox(width: 8),
+                      _CircleIconButton(
+                        icon: Icons.print_rounded,
+                        tooltip: '인쇄',
+                        enabled: _source != null && !_fileActionBusy,
+                        onTap: () => unawaited(_printPdf()),
+                      ),
+                    ],
+                    if (_source != null) ...[
+                      const SizedBox(width: 8),
+                      _buildSourceBadge(_source!),
+                    ],
                   ],
                 ),
               ),
@@ -452,6 +518,87 @@ class _TextbookViewerPageState extends State<TextbookViewerPage> {
         ),
       ),
     );
+  }
+
+  String _pdfFileName() {
+    final cleaned = widget.title
+        .replaceAll(RegExp(r'[\\/:*?"<>|]'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    final base = cleaned.isEmpty ? '모의고사' : cleaned;
+    return base.toLowerCase().endsWith('.pdf') ? base : '$base.pdf';
+  }
+
+  Future<Uint8List?> _loadPdfBytes() async {
+    final source = _source;
+    if (source == null) return null;
+    final local = (source.localPath ?? '').trim();
+    if (local.isNotEmpty && await File(local).exists()) {
+      return File(local).readAsBytes();
+    }
+    final url = (source.url ?? '').trim();
+    if (url.isEmpty) return null;
+    final response = await http.get(Uri.parse(url));
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw StateError('PDF를 받지 못했습니다.');
+    }
+    return response.bodyBytes;
+  }
+
+  Future<void> _downloadPdf() async {
+    if (_fileActionBusy || _source == null) return;
+    setState(() => _fileActionBusy = true);
+    try {
+      final bytes = await _loadPdfBytes();
+      if (!mounted) return;
+      if (bytes == null || bytes.isEmpty) {
+        showAppSnackBar(context, '다운로드할 PDF가 없습니다.');
+        return;
+      }
+      final save = await getSaveLocation(suggestedName: _pdfFileName());
+      if (save == null || !mounted) return;
+      var path = save.path;
+      if (!path.toLowerCase().endsWith('.pdf')) path = '$path.pdf';
+      await File(path).writeAsBytes(bytes, flush: true);
+      if (!mounted) return;
+      showAppSnackBar(context, 'PDF를 저장했습니다.');
+    } catch (_) {
+      if (mounted) showAppSnackBar(context, 'PDF를 저장하지 못했습니다.');
+    } finally {
+      if (mounted) setState(() => _fileActionBusy = false);
+    }
+  }
+
+  Future<void> _printPdf() async {
+    if (_fileActionBusy || _source == null) return;
+    setState(() => _fileActionBusy = true);
+    try {
+      final bytes = await _loadPdfBytes();
+      if (!mounted) return;
+      if (bytes == null || bytes.isEmpty) {
+        showAppSnackBar(context, '인쇄할 PDF가 없습니다.');
+        return;
+      }
+      final dir = await getTemporaryDirectory();
+      final path = p.join(
+        dir.path,
+        'viewer_${DateTime.now().millisecondsSinceEpoch}.pdf',
+      );
+      await File(path).writeAsBytes(bytes, flush: true);
+      final sent = await PrintRoutingService.instance.printFile(
+        path: path,
+        channel: PrintRoutingChannel.general,
+        debugSource: 'textbook_viewer',
+      );
+      if (!mounted) return;
+      if (!sent) {
+        showAppSnackBar(context, '인쇄 요청을 프린터로 넘기지 못했습니다.');
+      }
+    } catch (_) {
+      if (mounted) showAppSnackBar(context, '인쇄하지 못했습니다.');
+    } finally {
+      if (mounted) setState(() => _fileActionBusy = false);
+    }
   }
 
   Widget _buildSourceBadge(TextbookPdfSource source) {

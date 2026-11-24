@@ -952,7 +952,9 @@ void main() {
             child: ConceptWorkspace(
               controller: c,
               showLibrary: showLibrary,
+              thinking: const Center(child: Text('사고 리스트')),
               arithmetic: const Center(child: Text('연산 리스트')),
+              foundations: const Center(child: Text('사고의 토대 리스트')),
               courseDetail: CourseMapPane(controller: map),
               courseSummary: CourseMapSummaryPane(
                 controller: map,
@@ -978,7 +980,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
     }
 
-    testWidgets('라이브러리로 바꿔도 흐름의 선택·저장 안 한 입력이 남고, 연산 리스트는 반을 차지한다', (tester) async {
+    testWidgets('라이브러리로 바꿔도 흐름의 입력이 남고, 사고는 반, 연산은 오른쪽 시트다', (tester) async {
       final backend = _FakeBackend();
       final c = _controller(backend);
       await c.loadCriteria();
@@ -995,14 +997,39 @@ void main() {
       await pumpFor(tester);
       expect(find.text('저장 안 됨 1'), findsOneWidget);
       final main = tester.getSize(find.byKey(const ValueKey('concept-workspace-main')));
-      final arithmetic = tester.getSize(find.byKey(const ValueKey('concept-workspace-arithmetic')));
-      expect((main.width - arithmetic.width).abs(), lessThan(1));
+      final thinking = tester.getSize(find.byKey(const ValueKey('concept-workspace-thinking')));
+      expect((main.width - thinking.width).abs(), lessThan(1));
+      expect(find.text('사고 리스트'), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.byKey(const ValueKey('arithmetic-sheet'))).dx,
+        greaterThanOrEqualTo(tester.getTopRight(find.byType(ConceptWorkspace)).dx - 1),
+      );
+
+      await tester.tap(find.byKey(const ValueKey('arithmetic-sheet-handle')));
+      await pumpFor(tester);
       expect(find.text('연산 리스트'), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.byKey(const ValueKey('arithmetic-sheet'))).dx,
+        lessThan(tester.getTopRight(find.byType(ConceptWorkspace)).dx - 10),
+      );
+      await tester.tap(find.byKey(const ValueKey('foundation-sheet-handle')));
+      await pumpFor(tester);
+      expect(find.text('사고의 토대 리스트'), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.byKey(const ValueKey('foundation-sheet'))).dx,
+        lessThan(tester.getTopRight(find.byType(ConceptWorkspace)).dx - 10),
+      );
+      await tester.tap(find.byKey(const ValueKey('arithmetic-sheet-barrier')));
+      await pumpFor(tester);
+      expect(
+        tester.getTopLeft(find.byKey(const ValueKey('foundation-sheet'))).dx,
+        greaterThanOrEqualTo(tester.getTopRight(find.byType(ConceptWorkspace)).dx - 1),
+      );
 
       await pumpWorkspace(tester, c, course: map, showLibrary: true);
       await pumpFor(tester);
       expect(find.text('개념 트리'), findsOneWidget);
-      expect(find.text('연산 리스트'), findsOneWidget);
+      expect(find.text('사고 리스트'), findsOneWidget);
       expect(find.text('교육과정 흐름'), findsNothing);
       expect(nameField('다항식의 계산'), findsNothing);
 

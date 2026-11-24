@@ -10,11 +10,18 @@
 //   이어진 영역 = 칸의 마지막 풀이면, 다음 칸들의 단 맨 위부터 그 칸 첫 번호 바로 위까지.
 //                 번호가 없는 칸은 통째로 이어진 영역이고 그다음 칸으로 넘어간다. 빈 칸을 만나면 끝난다.
 //   구간 머리   = 선택과목이 시작하는 줄("[확률과 통계]", "■ [선택: 미적분]"). 풀이는 그 줄 위에서 끝난다.
+//   단 맨 위    = 여러 칸의 첫 글줄이 함께 가리키는 높이(쪽마다 되풀이되는 쪽 머리글은 뺀다).
+//                 번호 자리로 정하지 않는다: 선택과목 풀이만 읽는 해설지는 단 맨 위에서 시작하는 번호가 없을 수 있다.
 //
 // 칸에 잉크가 있는지와 구간 머리 줄은 PDF 에서 읽은 evidence 로 판단한다(solution_evidence.js).
 // evidence 가 없으면 좌표만으로 정하고 unchecked 로 알린다. 영역은 모두 [ymin, xmin, ymax, xmax] 0..1000.
 
 const COLUMN_GAP = 80;
+// 이웃한 두 단의 왼쪽 끝 사이가 단 폭의 이 배수 이상이면 그 사이에 번호 없는 단이 있다고 본다.
+const MISSING_COLUMN_RATIO = 1.75;
+// 가장자리에 번호 없는 단을 더 둘 수 있는 범위: 단의 왼쪽 끝과 오른쪽 끝이 쪽 여백 안쪽이어야 한다.
+const EDGE_COLUMN_MIN_LEFT = 30;
+const EDGE_COLUMN_MAX_RIGHT = 970;
 // 번호보다 왼쪽으로 나온 글자((ⅳ) 같은 갈래 표시)까지 들어오게 왼쪽을 조금 더 넓힌다.
 const LEFT_PAD_X = 6;
 const RIGHT_PAD_X = 4;
@@ -28,9 +35,13 @@ const MIN_SEGMENT = 8;
 const UNCHECKED_MIN = 25;
 const MIN_TOP = 30;
 const MAX_BOTTOM = 965;
-// 단 맨 위는 가장 높은 번호보다 이만큼까지만 위로 본다(쪽 머리글이 섞이지 않게).
+// 글자 층이 없는 해설지: 단 맨 위는 가장 높은 번호보다 이만큼까지만 위로 본다(쪽 머리글이 섞이지 않게).
 const MAX_TOP_ABOVE_NUMBER = 60;
 const TOP_SUPPORT_TOL = 8;
+// 쪽 머리글: 칸의 첫 몇 줄 가운데, 그 단에 글이 있는 쪽의 이 비율 이상(적어도 3쪽)에서 같은 높이에 같은 글로 나오는 줄
+const RUNNING_HEAD_LINES = 3;
+const RUNNING_HEAD_PAGES = 0.4;
+const RUNNING_HEAD_TOL = 6;
 export const MAX_SOLUTION_CONTINUATIONS = 8;
 
 const ELECTIVE_NAMES = '확률과통계|미적분|기하';
@@ -82,25 +93,111 @@ export function solutionColumns(items) {
   }
   const widths = rights.map((r, i) => (r > 0 ? r - clusters[i].min : 0)).filter((w) => w > 0);
   const typicalWidth = widths.length > 0 ? Math.max(...widths) : 0;
+  // 번호가 한 번도 시작하지 않는 단은 번호 자리로는 알 수 없다(3단 해설지에서 선택과목 풀이가 가운데 단을
+  // 통째로 지나가는 경우). 찾은 두 단의 왼쪽 끝 사이가 단 폭의 두 배쯤 벌어져 있으면 그 사이를 같은 간격의 단으로 채운다.
+  const narrowWidth = widths.length > 0 ? Math.min(...widths) : 0;
+  const all = [];
+  clusters.forEach((c, i) => {
+    all.push({ min: c.min, max: c.max, right: rights[i] });
+    const next = clusters[i + 1];
+    if (!next || !(narrowWidth > 0)) return;
+    const gap = next.min - c.min;
+    const count = Math.round(gap / narrowWidth);
+    if (gap / narrowWidth < MISSING_COLUMN_RATIO || count < 2) return;
+    for (let k = 1; k < count; k += 1) {
+      const x = Math.round(c.min + (gap * k) / count);
+      all.push({ min: x, max: x, right: 0, inferred: true });
+    }
+  });
+  // 맨 왼쪽·맨 오른쪽 단에서도 번호가 한 번도 시작하지 않을 수 있다(선택과목 해설지를 8문항으로만 읽을 때:
+  // 2026 고3 10월 기하는 2·3단에서만, 7월 기하는 1·2단에서만 번호가 시작한다). 찾은 단들의 간격으로
+  // 쪽 안에 단 하나가 온전히 더 들어가는 자리가 있으면 그 자리를 단으로 본다. 두 단짜리 해설지는 들어갈 자리가 없다.
+  if (all.length >= 2 && narrowWidth > 0) {
+    const pitch = Math.min(...all.slice(1).map((c, i) => c.min - all[i].min));
+    if (pitch >= narrowWidth) {
+      for (let x = all[0].min - pitch; x >= EDGE_COLUMN_MIN_LEFT; x -= pitch) {
+        all.unshift({ min: x, max: x, right: 0, inferred: true });
+      }
+      for (let x = all[all.length - 1].min + pitch; x + narrowWidth <= EDGE_COLUMN_MAX_RIGHT; x += pitch) {
+        all.push({ min: x, max: x, right: 0, inferred: true });
+      }
+    }
+  }
   const leftOf = (c) => clamp(c.min - LEFT_PAD_X, 0, 1000);
-  return clusters.map((c, i) => {
-    const nextLeft = clusters[i + 1] ? leftOf(clusters[i + 1]) : null;
+  return all.map((c, i) => {
+    const nextLeft = all[i + 1] ? leftOf(all[i + 1]) : null;
     const left = leftOf(c);
     let right;
-    if (rights[i] > 0) right = rights[i] + RIGHT_PAD_X;
+    if (c.right > 0) right = c.right + RIGHT_PAD_X;
     else if (typicalWidth > 0) right = c.min + typicalWidth + RIGHT_PAD_X;
     else right = nextLeft != null ? nextLeft - 6 : 1000 - left;
     if (nextLeft != null) right = Math.min(right, nextLeft - 1);
-    return { left, right: clamp(right, left + 20, 1000), min: c.min, max: c.max };
+    return {
+      left,
+      right: clamp(right, left + 20, 1000),
+      min: c.min,
+      max: c.max,
+      ...(c.inferred ? { inferred: true } : {}),
+    };
   });
 }
 
-/// 단 맨 위 높이. 칸마다 첫 잉크 높이를 읽어, 여러 칸이 함께 가리키는 가장 높은 자리를 쓴다
-/// (1쪽 제목처럼 한두 칸에만 있는 것은 뺀다). 쪽을 읽지 못하면 가장 높은 번호 위 조금.
+/// 칸마다 읽은 첫 높이들 가운데, 여러 칸이 함께 가리키는 가장 높은 자리(1쪽 제목처럼 한두 칸에만 있는 것은 뺀다).
+function supportedTop(firsts) {
+  const sorted = [...firsts].sort((a, b) => a - b);
+  const need = Math.max(2, Math.ceil(sorted.length * 0.15));
+  return sorted.find((y, i) => {
+    let count = 0;
+    for (let j = i; j < sorted.length && sorted[j] <= y + TOP_SUPPORT_TOL; j += 1) count += 1;
+    return count >= need;
+  });
+}
+
+/// 글자 층으로 본 칸마다의 첫 글줄 높이. 쪽 머리글·쪽 번호처럼 여러 쪽의 같은 자리에 되풀이되는 줄은 뺀다
+/// (숫자는 쪽마다 달라도 같은 줄로 본다). 글자 층이 없으면 null.
+function firstTextLines({ columns, evidence, lastPage, bottom }) {
+  if (evidence?.hasText !== true || typeof evidence.lines !== 'function') return null;
+  const slots = [];
+  const pagesOf = columns.map(() => new Set());
+  for (let page = 1; page <= lastPage; page += 1) {
+    columns.forEach((c, col) => {
+      const lines = evidence.lines(page, [MIN_TOP, c.left, bottom, c.right]);
+      if (!Array.isArray(lines) || lines.length === 0) return;
+      pagesOf[col].add(page);
+      slots.push({
+        page,
+        col,
+        lines: lines.slice(0, RUNNING_HEAD_LINES).map((l) => ({
+          key: String(l.text ?? '').replace(/\s+/g, '').replace(/\d+/g, '#'),
+          yMin: l.yMin,
+        })),
+      });
+    });
+  }
+  const isRunning = (slot, line) => {
+    if (!line.key) return false;
+    const need = Math.max(3, Math.ceil(pagesOf[slot.col].size * RUNNING_HEAD_PAGES));
+    let pages = 0;
+    for (const other of slots) {
+      if (other.col !== slot.col) continue;
+      if (other.lines.some((l) => l.key === line.key && Math.abs(l.yMin - line.yMin) <= RUNNING_HEAD_TOL)) pages += 1;
+    }
+    return pages >= need;
+  };
+  const firsts = [];
+  for (const slot of slots) {
+    const line = slot.lines.find((l) => !isRunning(slot, l));
+    if (line) firsts.push(line.yMin);
+  }
+  return firsts;
+}
+
+/// 단 맨 위 높이. 칸마다 첫 글줄(글자 층이 없으면 첫 잉크) 높이를 읽어, 여러 칸이 함께 가리키는 가장 높은 자리를 쓴다.
+/// 쪽을 읽지 못하면 가장 높은 번호 위 조금.
 function columnTop({ items, columns, evidence, lastPage, bottom }) {
   const numberTops = items.map((b) => b.number[0]).filter((y) => y >= MIN_TOP);
   const highestNumber = numberTops.length > 0 ? Math.min(...numberTops) : MIN_TOP + TOP_PAD;
-  let top = highestNumber - TOP_PAD;
+  let inkTop;
   if (typeof evidence?.firstInk === 'function') {
     const firsts = [];
     for (let page = 1; page <= lastPage; page += 1) {
@@ -109,15 +206,21 @@ function columnTop({ items, columns, evidence, lastPage, bottom }) {
         if (Number.isFinite(y)) firsts.push(y);
       }
     }
-    firsts.sort((a, b) => a - b);
-    const need = Math.max(2, Math.ceil(firsts.length * 0.15));
-    const supported = firsts.find((y, i) => {
-      let count = 0;
-      for (let j = i; j < firsts.length && firsts[j] <= y + TOP_SUPPORT_TOL; j += 1) count += 1;
-      return count >= need;
-    });
-    if (Number.isFinite(supported)) top = Math.min(top + TOP_PAD - NUMBER_PAD, supported - INK_PAD);
+    inkTop = supportedTop(firsts);
   }
+  const textFirsts = firstTextLines({ columns, evidence, lastPage, bottom });
+  const textTop = textFirsts ? supportedTop(textFirsts) : undefined;
+  if (Number.isFinite(textTop)) {
+    // 글자 층이 있으면 글줄로 정한다. 번호 자리에 기대지 않으므로, 단 맨 위에서 시작하는 번호가 하나도 없는
+    // 해설지(선택과목 풀이만 따로 읽는 해설지)에서도 단 위쪽 줄이 잘리지 않는다.
+    // 첫 잉크가 그 글줄의 것이면 잉크 높이를 쓴다(글자 상자는 글꼴에 따라 잉크와 조금 어긋난다).
+    // 잉크가 딴 데를 가리키면(글자 층에 없는 쪽 머리 그림) 글줄 높이를 쓴다.
+    const sameLine = Number.isFinite(inkTop) && Math.abs(inkTop - textTop) <= TOP_SUPPORT_TOL;
+    return clamp(Math.min(highestNumber - NUMBER_PAD, (sameLine ? inkTop : textTop) - INK_PAD), MIN_TOP, 1000);
+  }
+  let top = highestNumber - TOP_PAD;
+  if (Number.isFinite(inkTop)) top = Math.min(top + TOP_PAD - NUMBER_PAD, inkTop - INK_PAD);
+  // 글자 층이 없으면 쪽 머리글을 가릴 수 없다. 가장 높은 번호보다 조금 위까지만 본다.
   return clamp(top, Math.max(MIN_TOP, highestNumber - MAX_TOP_ABOVE_NUMBER), 1000);
 }
 

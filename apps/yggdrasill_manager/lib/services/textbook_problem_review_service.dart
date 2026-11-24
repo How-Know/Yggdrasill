@@ -390,6 +390,93 @@ Uint8List? whiteOutProblemNumber(Uint8List png, List<int> cropRegion1k, List<int
   return Uint8List.fromList(img.encodePng(image));
 }
 
+/// 수정 단계가 잰 그림([measure] = fix_proposal.figure_measure) 가운데 [figureIndex](1부터)번 그림의 배치
+/// ("inline", "below_text" …). 잰 영역이 [box] 와 같은 그림을 먼저 찾고, 없으면 순번으로 찾는다. 모르면 ''.
+String measuredFigurePlacement(Map<String, dynamic> measure, int figureIndex, List<int> box) {
+  final figures = measure['figures'] is List ? measure['figures'] as List : const [];
+  final key = box.join(',');
+  for (final f in figures) {
+    if (f is! Map || f['bbox_1k'] is! List) continue;
+    if ([for (final v in f['bbox_1k'] as List) if (v is num) v.toInt()].join(',') == key) return '${f['placement'] ?? ''}';
+  }
+  final byIndex = figureIndex >= 1 && figureIndex <= figures.length ? figures[figureIndex - 1] : null;
+  return byIndex is Map ? '${byIndex['placement'] ?? ''}' : '';
+}
+
+/// 글줄 속 작은 그림: 자른 그림([png], 쪽 영역 [cropRegion1k])에는 가장자리 여유 때문에 옆 글자와 윗줄·아랫줄 글자
+/// 조각이 같이 들어간다. AI 가 잰 그림 영역([sourceRegion1k] 원본 이미지 안의 [box], 여유 없음)과 이어지지 않은
+/// 잉크 덩어리를 흰색으로 덮는다. 덮을 것이 없거나, 잰 영역 안에 잉크가 없거나(영역이 틀림), PNG 를 못 읽으면 null.
+Uint8List? whiteOutUnrelatedInk(Uint8List png, List<int> cropRegion1k, List<int> sourceRegion1k, List<int> box) {
+  if (cropRegion1k.length != 4 || sourceRegion1k.length != 4 || box.length != 4) return null;
+  final decoded = img.decodePng(png);
+  if (decoded == null) return null;
+  // 색 수가 적은 PNG(팔레트·흑백)도 같은 방법으로 읽고 고칠 수 있게 8비트 RGBA 로 맞춘다.
+  final image = decoded.convert(format: img.Format.uint8, numChannels: 4);
+  final w = image.width;
+  final h = image.height;
+  final ch = cropRegion1k[2] - cropRegion1k[0];
+  final cw = cropRegion1k[3] - cropRegion1k[1];
+  final sh = sourceRegion1k[2] - sourceRegion1k[0];
+  final sw = sourceRegion1k[3] - sourceRegion1k[1];
+  if (w <= 0 || h <= 0 || ch <= 0 || cw <= 0 || sh <= 0 || sw <= 0) return null;
+  // 잰 영역(쪽 좌표, 소수)을 자른 그림의 픽셀로 옮긴다.
+  double pageY(int v) => sourceRegion1k[0] + v * sh / 1000;
+  double pageX(int v) => sourceRegion1k[1] + v * sw / 1000;
+  final top = ((pageY(box[0]) - cropRegion1k[0]) * h / ch).floor().clamp(0, h);
+  final left = ((pageX(box[1]) - cropRegion1k[1]) * w / cw).floor().clamp(0, w);
+  final bottom = ((pageY(box[2]) - cropRegion1k[0]) * h / ch).ceil().clamp(0, h);
+  final right = ((pageX(box[3]) - cropRegion1k[1]) * w / cw).ceil().clamp(0, w);
+  if (bottom <= top || right <= left) return null;
+  // 흰 바탕과 조금이라도 다른 점은 잉크다(엔진이 여백을 자를 때 흐린 가장자리도 내용으로 본다).
+  final ink = Uint8List(w * h);
+  for (var y = 0; y < h; y++) {
+    for (var x = 0; x < w; x++) {
+      final p = image.getPixel(x, y);
+      if (p.a > 0 && img.getLuminanceRgb(p.r, p.g, p.b) < 250) ink[y * w + x] = 1;
+    }
+  }
+  // 이어진 잉크 덩어리(대각선 포함)마다 잰 영역에 닿는지 본다.
+  final seen = Uint8List(w * h);
+  final stack = <int>[];
+  final remove = <int>[];
+  var keptInside = false;
+  for (var start = 0; start < w * h; start++) {
+    if (ink[start] == 0 || seen[start] == 1) continue;
+    final blob = <int>[];
+    var inside = false;
+    seen[start] = 1;
+    stack.add(start);
+    while (stack.isNotEmpty) {
+      final at = stack.removeLast();
+      blob.add(at);
+      final x = at % w;
+      final y = at ~/ w;
+      if (x >= left && x < right && y >= top && y < bottom) inside = true;
+      for (var dy = -1; dy <= 1; dy++) {
+        for (var dx = -1; dx <= 1; dx++) {
+          final nx = x + dx;
+          final ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+          final next = ny * w + nx;
+          if (ink[next] == 0 || seen[next] == 1) continue;
+          seen[next] = 1;
+          stack.add(next);
+        }
+      }
+    }
+    if (inside) {
+      keptInside = true;
+    } else {
+      remove.addAll(blob);
+    }
+  }
+  if (!keptInside || remove.isEmpty) return null;
+  for (final at in remove) {
+    image.setPixelRgb(at % w, at ~/ w, 255, 255, 255);
+  }
+  return Uint8List.fromList(img.encodePng(image));
+}
+
 /// 원본 이미지(쪽 영역 [region1k] 를 찍은 것) 안의 상자 [box]([ymin, xmin, ymax, xmax] 0..1000)를 쪽 좌표로 바꾼다.
 /// [margin] 은 이미지 기준 0..1000 여유(그림 가장자리 선이 잘리지 않게).
 List<int>? cropBoxToPageRegion(List<int> region1k, List<int> box, {int margin = 12}) {
@@ -484,11 +571,97 @@ final RegExp kSolutionFigureMarkerRe = RegExp(r'\[그림(?:\s*:[^\]]*)?\]');
 /// 해설 PDF 쪽 폭(1000) 기준 본문 글자 1em. 해설 그림 폭(em)을 원본 글자 대비 크기로 정할 때 쓴다.
 const double kSolutionTextEm1k = 17.5;
 
+/// 모의고사 해설지의 기준 단 폭(쪽 폭 1000 기준): 수능·평가원 2단 해설지의 한 단(348~368).
+/// [kSolutionTextEm1k] 은 이 해설지의 글자 크기에 맞춘 값이다.
+const double kMockSolutionColumn1k = 350;
+
 /// 해설 쪽 영역 폭(0..1000)을 V2 그림 폭(em)으로 바꾼다.
-double solutionFigureWidthEm(List<int> pageRegion1k) {
+///
+/// [columnWidth1k]: 그림이 놓인 해설 단의 폭(모의고사). 2단 해설지보다 단이 좁은 해설지(교육청 3단, 단 폭 260쯤)는
+/// 글자도 그만큼 작아, 쪽 폭으로만 재면 그림이 글자에 비해 작게 찍힌다(단을 꽉 채운 그래프가 카드에서 0.7배).
+/// 2단 해설지의 단에 놓였을 때의 폭으로 키운다(2026-11-23 사장님 결정: 2단 기준으로 넉넉하게). 20em 은 넘지 않는다.
+double solutionFigureWidthEm(List<int> pageRegion1k, {double? columnWidth1k}) {
   if (pageRegion1k.length != 4) return 10;
-  final em = (pageRegion1k[3] - pageRegion1k[1]) / kSolutionTextEm1k;
+  final narrow = columnWidth1k != null && columnWidth1k > 0 && columnWidth1k < kMockSolutionColumn1k * 0.95;
+  final scale = narrow ? kMockSolutionColumn1k / columnWidth1k : 1.0;
+  final em = (pageRegion1k[3] - pageRegion1k[1]) * scale / kSolutionTextEm1k;
   return (em.clamp(4.0, 20.0) * 2).round() / 2;
+}
+
+/// 해설 그림([pageRegion1k], [rawPage] 쪽)이 놓인 해설 조각: 같은 쪽에서 가장 많이 겹치는 조각.
+/// 해설이 같은 쪽의 다음 단으로 이어지면 그 쪽에 조각이 여럿이다.
+TextbookSolutionSegment? solutionSegmentOfFigure(
+  List<int> pageRegion1k,
+  int? rawPage,
+  List<TextbookSolutionSegment> segments,
+) {
+  if (pageRegion1k.length != 4 || rawPage == null) return null;
+  final r = pageRegion1k;
+  TextbookSolutionSegment? seg;
+  var best = -1;
+  for (final s in segments) {
+    if (s.rawPage != rawPage || s.region1k.length != 4) continue;
+    final h = (r[2] < s.region1k[2] ? r[2] : s.region1k[2]) - (r[0] > s.region1k[0] ? r[0] : s.region1k[0]);
+    final w = (r[3] < s.region1k[3] ? r[3] : s.region1k[3]) - (r[1] > s.region1k[1] ? r[1] : s.region1k[1]);
+    final overlap = h > 0 && w > 0 ? h * w : 0;
+    if (overlap > best) {
+      best = overlap;
+      seg = s;
+    }
+  }
+  return seg;
+}
+
+/// 모의고사 해설 그림이 놓인 단의 폭(0..1000). 교재이거나 조각을 모르면 null(쪽 폭으로만 잰다).
+double? mockSolutionColumnWidth1k(
+  bool isMockExam,
+  List<int> pageRegion1k,
+  int? rawPage,
+  List<TextbookSolutionSegment> segments,
+) {
+  if (!isMockExam) return null;
+  final seg = solutionSegmentOfFigure(pageRegion1k, rawPage, segments);
+  if (seg == null) return null;
+  final width = seg.region1k[3] - seg.region1k[1];
+  return width > 0 ? width.toDouble() : null;
+}
+
+/// 이미 찾아 둔 해설 그림의 폭(width_em)만 지금 규칙으로 다시 계산한다(AI·다시 자르기 없음, 2026-11-23 사장님 결정).
+///
+/// 저장된 폭이 단 폭을 보지 않던 예전 계산값 그대로인 그림만 바꾼다. 그 뒤에 달라진 폭(렌더 검수가 맞춘 폭 등)과
+/// 자리를 모르는 그림은 두고 [kept] 로 센다. 폭 말고는 아무것도 바꾸지 않는다.
+({List<Map<String, dynamic>> assets, int changed, int kept}) recomputeSolutionFigureWidths(
+  List<Map<String, dynamic>> assets,
+  List<TextbookSolutionSegment> segments, {
+  required bool isMockExam,
+}) {
+  var changed = 0;
+  var kept = 0;
+  final out = <Map<String, dynamic>>[];
+  for (final a in assets) {
+    final raw = a['crop_region_1k'];
+    final stored = (a['width_em'] as num?)?.toDouble();
+    final page = (a['raw_page'] as num?)?.toInt();
+    if (raw is! List || raw.length != 4 || raw.any((x) => x is! num) || stored == null || page == null) {
+      out.add(a);
+      continue;
+    }
+    final region = [for (final x in raw) (x as num).toInt()];
+    final next = solutionFigureWidthEm(
+      region,
+      columnWidth1k: mockSolutionColumnWidth1k(isMockExam, region, page, segments),
+    );
+    if ((next - stored).abs() < 0.01) {
+      out.add(a);
+    } else if ((solutionFigureWidthEm(region) - stored).abs() < 0.01) {
+      out.add({...a, 'width_em': next});
+      changed++;
+    } else {
+      out.add(a);
+      kept++;
+    }
+  }
+  return (assets: out, changed: changed, kept: kept);
 }
 
 /// 정답+해설 V2 카드 본문과 그림 메타. 그림 정답은 정답 자리에, 원본 해설 그림은 해설의 [그림] 자리에 넣는다.
@@ -651,6 +824,33 @@ List<List<int>> solutionFigureRows(List<Map<String, dynamic>> figures) {
   return [for (final r in rows) if (r.length >= 2) r];
 }
 
+/// 처음 찾은 해설 그림 자리 [region](쪽 좌표)를 다듬기용으로 넓힌다: 위아래 [dy], 좌우 [dx] 만큼, 해설 조각 [bounds] 안에서.
+/// 잘린 그림 끝이 다시 들어오게 넓히되, 옆 단·다른 문항으로는 넘어가지 않는다.
+List<int> expandSolutionFigureRegion(List<int> region, List<int> bounds, {int dy = 40, int dx = 25}) {
+  if (region.length != 4 || bounds.length != 4) return region;
+  int lo(int v, int b) => v < b ? (b < 0 ? 0 : b) : v;
+  int hi(int v, int b) => v > b ? (b > 1000 ? 1000 : b) : v;
+  return [
+    lo(region[0] - dy, bounds[0] < region[0] ? bounds[0] : region[0]),
+    lo(region[1] - dx, bounds[1] < region[1] ? bounds[1] : region[1]),
+    hi(region[2] + dy, bounds[2] > region[2] ? bounds[2] : region[2]),
+    hi(region[3] + dx, bounds[3] > region[3] ? bounds[3] : region[3]),
+  ];
+}
+
+/// 조각을 따로 보낸 해설에서 AI 가 준 조각 번호([piece], 1부터)와 그 조각 기준 상자([box], 0..1000)의 조각.
+/// 번호가 없거나 범위를 벗어나면 자리를 알 수 없으므로 null(그 그림은 붙이지 않는다).
+({TextbookReviewRenderedRegion part, List<int> box})? solutionFigurePiece(
+  List<TextbookReviewRenderedRegion> parts,
+  Object? piece,
+  List<int> box,
+) {
+  if (piece is! num || box.length != 4) return null;
+  final i = piece.toInt() - 1;
+  if (i < 0 || i >= parts.length) return null;
+  return (part: parts[i], box: box);
+}
+
 /// 해설 영역(가로 [regionLeft]~[regionRight]) 안에서 그림(가로 [figLeft]~[figRight])의 정렬.
 /// 그림 양옆 여백 중 왼쪽 여백의 몫으로 정한다: 1/4 미만이면 왼쪽, 3/4 초과면 오른쪽, 그 사이는 가운데.
 /// 해설 영역은 단 폭 전체로 잡혀 실제 글 폭보다 넓을 때가 많아, 양옆 여백 차이만으로 보면 가운데 그림이
@@ -659,6 +859,9 @@ String solutionFigureAlign(int regionLeft, int regionRight, int figLeft, int fig
   final dl = (figLeft - regionLeft).clamp(0, 1000);
   final dr = (regionRight - figRight).clamp(0, 1000);
   if (dl + dr <= 0) return 'center';
+  // 그림이 단 폭을 거의 다 채우면 양옆 여백이 1~2칸뿐이라 몫이 0 아니면 1로 튄다(영역 512~867, 그림 514~867 →
+  // 여백 2:0 → 오른쪽). 치우친 쪽이 없는 그림이므로 여백이 없는 그림과 같이 가운데로 둔다.
+  if (dl + dr < (regionRight - regionLeft) * 0.04) return 'center';
   final t = dl / (dl + dr);
   return t < 0.25
       ? 'left'
@@ -687,7 +890,9 @@ List<Map<String, dynamic>> arrangeSolutionFigures(
     final r = box(a['crop_region_1k']);
     final page = (a['raw_page'] as num?)?.toInt();
     if (r == null || page == null) continue;
-    final seg = segments.where((s) => s.rawPage == page && s.region1k.length == 4).firstOrNull;
+    // 해설이 같은 쪽의 다음 단으로 이어지면 그 쪽에 조각이 여럿이다. 그림이 실제로 들어 있는(가장 많이 겹치는)
+    // 조각을 기준으로 삼는다. 첫 조각으로 재면 뒤 단의 가운데 그림이 오른쪽으로 판정된다.
+    final seg = solutionSegmentOfFigure(r, page, segments);
     if (seg == null) continue;
     final width = seg.region1k[3] - seg.region1k[1];
     if (width <= 0) continue;
@@ -706,6 +911,16 @@ List<Map<String, dynamic>> arrangeSolutionFigures(
     final overlap = (ra[2] < rb[2] ? ra[2] : rb[2]) - (ra[0] > rb[0] ? ra[0] : rb[0]);
     final minH = (ra[2] - ra[0]) < (rb[2] - rb[0]) ? ra[2] - ra[0] : rb[2] - rb[0];
     if (minH <= 0 || overlap < minH * 0.5) continue;
+    // 두 단짜리 해설 쪽에서 왼쪽 단 그림과 오른쪽 단 그림은 높이가 겹쳐도 나란히 놓인 것이 아니다
+    // (읽는 순서로는 왼쪽 단이 끝난 뒤에 오른쪽 단이 온다). 같은 단 조각 안에 있을 때만 묶는다.
+    final page = (a['raw_page'] as num?)?.toInt();
+    final sa = solutionSegmentOfFigure(ra, page, segments);
+    final sb = solutionSegmentOfFigure(rb, page, segments);
+    if (sa != null && sb != null && !identical(sa, sb)) continue;
+    // 가로 범위가 반 이상 겹치면 옆으로 나란한 그림이 아니다(같은 자리를 두 번 자른 그림 등).
+    final overlapW = (ra[3] < rb[3] ? ra[3] : rb[3]) - (ra[1] > rb[1] ? ra[1] : rb[1]);
+    final minW = (ra[3] - ra[1]) < (rb[3] - rb[1]) ? ra[3] - ra[1] : rb[3] - rb[1];
+    if (minW > 0 && overlapW >= minW * 0.5) continue;
     if (a['row'] is! num) a['row'] = ++row;
     b['row'] = a['row'];
   }
@@ -1009,6 +1224,10 @@ class TextbookReviewUnitScope {
   /// 검수용 문항 카드에 배점([4점])을 찍어 원본과 대조하고, AI 본문 수정안에는 배점을 넣지 않는다.
   final bool scoreOnCard;
 
+  /// 모의고사 구간의 범위인가. 배점을 카드에 찍는 범위가 곧 모의고사다.
+  /// 모의고사는 코드로 맞추는 표기(점 이름 곧은 글자, '[출제의도]' 머리, 선지 아래 그림)를 렌더 검수 전에 먼저 맞춘다.
+  bool get isMockExam => scoreOnCard;
+
   /// 품질 검수 분모: 엔진 보류를 뺀 문항 수(승인한 것은 완료로 집계).
   int get qualityTargetCount => (problemCount - qualityHeldCount).clamp(0, problemCount);
 
@@ -1102,6 +1321,7 @@ class TextbookProblemReviewItem {
     this.sourceCorrection,
     this.dbValues = const {},
     this.conceptProposals = const [],
+    this.foundations = const [],
     this.metaCheckedAt,
     this.metaSources = const {},
     this.consistencyIssues = const [],
@@ -1229,6 +1449,7 @@ class TextbookProblemReviewItem {
           m['staged_changes'] is Map ? Map<String, dynamic>.from(m['staged_changes'] as Map) : const <String, dynamic>{},
       dbValues: m['db_values'] is Map ? Map<String, dynamic>.from(m['db_values'] as Map) : const <String, dynamic>{},
       conceptProposals: mapList(m['concept_proposals']),
+      foundations: mapList(m['foundations']),
       metaCheckedAt: m['meta_checked_at'] is String ? DateTime.tryParse('${m['meta_checked_at']}') : null,
       metaSources:
           m['meta_sources'] is Map ? Map<String, dynamic>.from(m['meta_sources'] as Map) : const <String, dynamic>{},
@@ -1323,6 +1544,10 @@ class TextbookProblemReviewItem {
   /// 라이브러리에 맞는 개념이 없어 AI가 낸 새 개념 초안 [{name, type, content, near_concept_id, reason}]. 확정 때 만든다.
   final List<Map<String, dynamic>> conceptProposals;
 
+  /// 이 문항에 연결된 사고의 토대(C) [{foundation_id, code, group_code, group_title, title, relevance_level, rationale, observability}].
+  /// 선택 사항이며 비어 있어도 검수 완료를 막지 않는다. 소단원 확정 때 pb_question_foundation_links 에 반영한다.
+  final List<Map<String, dynamic>> foundations;
+
   /// 단원 기준 개념 후보로 개념·사고를 고른 시각. 비어 있으면 예전 후보 목록에서 고른 태그이거나 아직 고르지 않았다.
   final DateTime? metaCheckedAt;
 
@@ -1345,6 +1570,11 @@ class TextbookProblemReviewItem {
   /// 지난 V2 렌더 검수에서 정답·해설 카드를 찍지 못한 이유(조판 오류 등). 카드를 찍었으면 빈 문자열.
   /// 해설 카드를 만들 수 있어야 준비됨이다([renderHasIssue] 의 solution_ok 로 막힌다).
   String get solutionCardError => '${renderChecks['answer_solution_error'] ?? ''}'.trim();
+
+  /// 모의고사 문항이 지난 V2 렌더 검수를 문항 카드 없이 받았다(문항 카드가 조판되지 않았다).
+  /// 그 문항은 원본과 대조하지 못했으므로 준비됨이 아니다(2026-11-23 사장님 결정, 2026 고3 9월 확통 27).
+  /// 교재 문항에는 걸지 않는다: 문항 카드 없이 검수된 옛 기록이 남아 있다.
+  bool get problemCardMissing => scoreOnCard && renderCheckedAt != null && renderChecks['checked_problem'] == false;
 
   /// 정답만 검수하는 문항(이미 등록한 내신 시험지). 문항 검수(본문·그림 대조)와 V2 렌더 판정은 준비됨을 막지 않는다.
   bool get answerOnlyReview => reviewMode == TextbookReviewUnitScope.answerOnlyMode;
@@ -1959,6 +2189,7 @@ class TextbookProblemReviewItem {
         if (!mathOk) '정답 검수 미통과',
         if (!answerOnlyReview && !isEngineHeld && !qualityOk) '문항 검수 미통과',
         if (!answerOnlyReview && !isEngineHeld && renderBlocksReady) 'V2 렌더 이상',
+        if (!answerOnlyReview && !isEngineHeld && problemCardMissing) '문항 카드 없음',
         if (openSolutionLogicFinding != null) '해설 논리 오류',
         if (openCorrectionNotes.isNotEmpty) '교정 의견 처리 필요',
         if (consistencyIssues.isNotEmpty)
@@ -1988,6 +2219,19 @@ class TextbookProblemReviewItem {
       }
     }
     return null;
+  }
+
+  /// 해설 논리 오류가 열려 있고 본문·선지·공통 발문이 반영 대기로 바뀐 문항.
+  /// 그 판정은 고치기 전 본문 기준일 수 있어 검수 서버에 재확인을 맡긴다. 마지막 풀이 뒤에 바뀐 것인지는
+  /// 서버가 가린다(풀이 시각은 서버만 안다). 이미 고친 본문으로 푼 문항은 AI 호출 없이 지나간다.
+  bool get solutionLogicRecheckCandidate {
+    if (openSolutionLogicFinding == null || mathStatus == 'approved') return false;
+    final notes = stagedChanges['notes'];
+    if (notes is! List) return false;
+    return notes.any((n) =>
+        n is Map &&
+        n['fields'] is List &&
+        (n['fields'] as List).any((f) => f == 'stem' || f == 'choices' || f == 'common_stem'));
   }
 
   /// 비어 있는 메타 필수 항목(사양 3-1, 3-3).
@@ -2595,6 +2839,11 @@ class TextbookProblemReviewService {
     return r;
   }
 
+  /// 본문 PDF 의 한 영역(0~1000 좌표, [ymin, xmin, ymax, xmax]) 이미지. 검수 크롭이 없는 자리
+  /// (모의고사에서 다른 구간의 문항을 가리키는 자리)의 원본을 볼 때 쓴다.
+  Future<TextbookReviewRenderedRegion?> bodyRegionImage(TextbookReviewUnitScope scope, int rawPage, List<int> region1k) =>
+      region1k.length == 4 && rawPage > 0 ? _cachedBodyRegion(scope, rawPage, region1k) : Future.value(null);
+
   /// 문항 영역 원본 이미지. PDF·좌표가 없으면 null.
   Future<TextbookReviewRenderedRegion?> originalImage(TextbookReviewUnitScope scope, TextbookProblemReviewItem it) =>
       it.canRenderOriginal ? _cachedBodyRegion(scope, it.rawPage, it.itemRegion1k) : Future.value(null);
@@ -2976,11 +3225,15 @@ class TextbookProblemReviewService {
       final cleaned = fromHeader || numberBox == null || srcPage != item.rawPage
           ? null
           : whiteOutProblemNumber(png.bytes, pageRegion, numberBox);
+      // 글줄 속 작은 그림은 가장자리 여유가 그림만큼 커서 옆 글자와 윗줄·아랫줄 조각이 딸려 온다. 그 조각을 지운다.
+      final tidied = !fromHeader && measuredFigurePlacement(measure, idx, box) == 'inline'
+          ? whiteOutUnrelatedInk(cleaned ?? png.bytes, pageRegion, srcRegion, box)
+          : null;
       final asset = await _pb.uploadManualFigureAsset(
         academyId: scope.academyId,
         documentId: item.documentId,
         questionNumber: item.problemNumber,
-        bytes: cleaned ?? png.bytes,
+        bytes: tidied ?? cleaned ?? png.bytes,
         fileName: 'review_figure_$idx.png',
       );
       out.add({
@@ -2994,6 +3247,7 @@ class TextbookProblemReviewService {
         'raw_page': srcPage,
         'crop_region_1k': pageRegion,
         if (cleaned != null) 'number_masked': true,
+        if (tidied != null) 'neighbors_cleared': true,
         if (fromHeader) 'crop_source': 'set_header',
         'replace_reason': '${c['reason'] ?? ''}',
       });
@@ -3019,8 +3273,35 @@ class TextbookProblemReviewService {
       final chunk = targets.sublist(i, (i + chunkSize).clamp(0, targets.length));
       final regions = <String, TextbookReviewRenderedStack>{};
       final payload = <Map<String, dynamic>>[];
+      // 다음 단·다음 쪽으로 이어진 해설의 조각들(한 장씩). 이어 붙인 한 장은 세로로 너무 길어 AI 가 그림 자리를
+      // 몇 줄씩 틀리게 잡는다(그림이 잘리고 앞 풀이 글이 섞인다). 조각이 둘 이상이면 따로 보내고 조각 번호로 되돌린다.
+      final pieces = <String, List<TextbookReviewRenderedRegion>>{};
       for (final it in chunk) {
         try {
+          if (it.solutionSegments.length > 1) {
+            final parts = <TextbookReviewRenderedRegion>[];
+            for (final s in it.solutionSegments) {
+              final p = await _solutionImages.renderRegion(
+                academyId: scope.academyId,
+                bookId: scope.bookId,
+                gradeLabel: scope.gradeLabel,
+                sourceKind: it.solutionSourceKind,
+                rawPage: s.rawPage,
+                region1k: s.region1k,
+              );
+              if (p == null) break;
+              parts.add(p);
+            }
+            if (parts.length > 1) {
+              pieces[it.cropId] = parts;
+              payload.add({
+                'crop_id': it.cropId,
+                'solution_images_base64': [for (final p in parts) base64Encode(p.bytes)],
+                'solution_image_mime': 'image/png',
+              });
+              continue;
+            }
+          }
           final r = await _solutionImages.renderSolutionStack(
             academyId: scope.academyId,
             bookId: scope.bookId,
@@ -3052,17 +3333,37 @@ class TextbookProblemReviewService {
             if (r is! Map) continue;
             final it = byId['${r['crop_id']}'];
             final region = it == null ? null : regions[it.cropId];
-            if (it == null || region == null) continue;
+            final parts = it == null ? null : pieces[it.cropId];
+            if (it == null || (region == null && parts == null)) continue;
             try {
               final assets = <Map<String, dynamic>>[];
               final boxes = (r['figures'] as List?) ?? const [];
               final placements = (r['placements'] as List?) ?? const [];
+              final pieceNumbers = (r['pieces'] as List?) ?? const [];
+              // 처음 찾은 자리(그림 순번 → 조각, 쪽 영역).
+              final found = <({int k, TextbookReviewRenderedRegion part, List<int> pageRegion})>[];
               for (var k = 0; k < boxes.length; k++) {
                 final box = [for (final x in (boxes[k] is List ? boxes[k] as List : const [])) if (x is num) x.toInt()];
-                final located = region.locate(box);
+                final located = parts != null
+                    ? solutionFigurePiece(parts, k < pieceNumbers.length ? pieceNumbers[k] : null, box)
+                    : region!.locate(box);
                 if (located == null) continue;
-                var pageRegion = cropBoxToPageRegion(located.part.region1k, located.box);
+                final pageRegion = cropBoxToPageRegion(located.part.region1k, located.box);
                 if (pageRegion == null) continue;
+                found.add((k: k, part: located.part, pageRegion: pageRegion));
+              }
+              // 다듬기: 처음 상자는 풀이 글줄을 같이 넣거나 그림 끝을 자르기도 한다. 여유를 두고 다시 찍어
+              // 그림만 꼭 맞게 감싸는 상자를 한 번 더 받는다. 실패하면 처음 상자를 쓴다.
+              final tightened = await _tightenSolutionFigures(
+                scope,
+                it,
+                [for (final f in found) (rawPage: f.part.rawPage, bounds: f.part.region1k, pageRegion: f.pageRegion)],
+                errors,
+              );
+              for (var n = 0; n < found.length; n++) {
+                final k = found[n].k;
+                final located = (part: found[n].part);
+                var pageRegion = tightened[n] ?? found[n].pageRegion;
                 Future<TextbookReviewRenderedRegion?> shoot(List<int> region) => _solutionImages.renderRegion(
                       academyId: scope.academyId,
                       bookId: scope.bookId,
@@ -3105,7 +3406,15 @@ class TextbookProblemReviewService {
                   'approved': true,
                   'width_px': png.widthPx,
                   'height_px': png.heightPx,
-                  'width_em': solutionFigureWidthEm(pageRegion),
+                  'width_em': solutionFigureWidthEm(
+                    pageRegion,
+                    columnWidth1k: mockSolutionColumnWidth1k(
+                      it.scoreOnCard,
+                      pageRegion,
+                      located.part.rawPage,
+                      it.solutionSegments,
+                    ),
+                  ),
                   'placement': k < placements.length && placements[k] == 'right' ? 'right' : 'below',
                   'raw_page': located.part.rawPage,
                   'source_kind': it.solutionSourceKind,
@@ -3130,11 +3439,61 @@ class TextbookProblemReviewService {
     return (withFigures: withFigures, errors: errors);
   }
 
+  /// 처음 찾은 해설 그림 자리마다 여유를 두고 다시 찍어 AI 에게 그림만 감싸는 상자를 받는다(쪽 좌표).
+  /// 못 받은 자리는 null(처음 상자를 쓴다). 실패는 [errors] 에 적고 모두 null 을 돌려준다.
+  Future<List<List<int>?>> _tightenSolutionFigures(
+    TextbookReviewUnitScope scope,
+    TextbookProblemReviewItem it,
+    List<({int rawPage, List<int> bounds, List<int> pageRegion})> figures,
+    List<String> errors,
+  ) async {
+    final out = List<List<int>?>.filled(figures.length, null);
+    if (figures.isEmpty) return out;
+    try {
+      final wide = <List<int>>[];
+      final images = <String>[];
+      for (final f in figures) {
+        final w = expandSolutionFigureRegion(f.pageRegion, f.bounds);
+        final png = await _solutionImages.renderRegion(
+          academyId: scope.academyId,
+          bookId: scope.bookId,
+          gradeLabel: scope.gradeLabel,
+          sourceKind: it.solutionSourceKind,
+          rawPage: f.rawPage,
+          region1k: w,
+          pad1k: 0,
+          targetWidthPx: 900,
+        );
+        if (png == null) return out;
+        wide.add(w);
+        images.add(base64Encode(png.bytes));
+      }
+      final res = await _invokeAiThink({
+        'action': 'textbook_solution_figures',
+        'academy_id': scope.academyId,
+        'tighten': true,
+        'figure_images_base64': images,
+        'figure_image_mime': 'image/png',
+      });
+      final data = res.data is Map ? Map<String, dynamic>.from(res.data as Map) : const <String, dynamic>{};
+      final boxes = (data['boxes'] as List?) ?? const [];
+      for (var n = 0; n < figures.length && n < boxes.length; n++) {
+        final b = boxes[n];
+        if (b is! List) continue;
+        out[n] = cropBoxToPageRegion(wide[n], [for (final x in b) if (x is num) x.toInt()]);
+      }
+    } catch (e) {
+      errors.add('${it.problemNumber}번 해설 그림 다듬기(처음 상자를 씀): $e');
+    }
+    return out;
+  }
+
   Future<Map<String, dynamic>> runReviewChunk(
     TextbookReviewUnitScope scope, {
     int chunkSize = 6,
     bool forceRerun = false,
     bool mathOnly = false,
+    bool logicRecheck = false,
     List<String> cropIds = const [],
     Map<String, TextbookReviewChunkImage> images = const {},
   }) async {
@@ -3148,6 +3507,7 @@ class TextbookProblemReviewService {
       'chunk_size': chunkSize,
       'force_rerun': forceRerun,
       if (mathOnly) 'math_only': true,
+      if (mathOnly && logicRecheck) 'logic_recheck': true,
       if (scope.scoreOnCard) 'score_separate': true,
       if (cropIds.isNotEmpty) 'crop_ids': cropIds,
       if (images.isNotEmpty) 'images': {for (final e in images.entries) e.key: e.value.toJson()},
@@ -3480,7 +3840,10 @@ class TextbookProblemReviewService {
                 'figure_index': old['figure_index'] ?? index + 1,
                 'width_px': png.widthPx,
                 'height_px': png.heightPx,
-                'width_em': solutionFigureWidthEm(region1k),
+                'width_em': solutionFigureWidthEm(
+                  region1k,
+                  columnWidth1k: mockSolutionColumnWidth1k(it.scoreOnCard, region1k, rawPage, it.solutionSegments),
+                ),
                 'crop_region_1k': region1k,
               }
             : it.solutionFigureAssets[k],
@@ -3489,6 +3852,23 @@ class TextbookProblemReviewService {
       'p_crop_id': it.cropId,
       'p_assets': arrangeSolutionFigures(assets, it.solutionSegments),
     });
+  }
+
+  /// 해설 그림의 폭만 지금 규칙으로 다시 계산해 저장한다(AI 없음, [recomputeSolutionFigureWidths]).
+  /// 반환: 바꾼 그림 수와, 예전 계산값이 아니어서 둔 그림 수.
+  Future<({int changed, int kept})> recomputeSolutionFigureWidthsOf(TextbookProblemReviewItem it) async {
+    final res = recomputeSolutionFigureWidths(
+      it.solutionFigureAssets,
+      it.solutionSegments,
+      isMockExam: it.scoreOnCard,
+    );
+    if (res.changed > 0) {
+      await _db.rpc('textbook_review_set_solution_figures', params: {
+        'p_crop_id': it.cropId,
+        'p_assets': res.assets,
+      });
+    }
+    return (changed: res.changed, kept: res.kept);
   }
 
   /// 해설 그림의 정렬·가로 묶음을 원본 자리에서 다시 계산한다(AI 없음, [arrangeSolutionFigures]).

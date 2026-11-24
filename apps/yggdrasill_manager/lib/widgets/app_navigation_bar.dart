@@ -67,8 +67,8 @@ class AppNavigationBar extends StatelessWidget {
                   onTap: () => onDestinationSelected(1),
                 ),
                 _NavigationItem(
-                  svg: managerNavMedalSvg,
-                  label: '사고',
+                  svg: managerNavCurriculumSvg,
+                  label: '커리큘럼',
                   isSelected: selectedIndex == 2,
                   onTap: () => onDestinationSelected(2),
                 ),

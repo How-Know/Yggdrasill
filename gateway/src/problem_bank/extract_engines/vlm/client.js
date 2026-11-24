@@ -46,8 +46,13 @@ export function recoverMangledLatexControls(value) {
     // `\notin`을 백슬래시 하나로 보내면 `LF + otin`이 되어, 렌더러에는
     // "otin"이 다음 줄에 남는다. 알려진 n-계열 명령은 공백/문장부호 앞에서도
     // 복원한다. 일반 문장 줄바꿈은 이 접미사로 시작하지 않으므로 유지된다.
+    // 한 글자만 남는 꼬리는 줄 첫머리의 글자와 구분할 수 없다(2026-11-21 사장님 결정).
+    //   i · u : 되돌리지 않는다. \ni(∋) · \nu(ν) 는 저장된 문항에 쓰인 적이 없고,
+    //           "i^2=-1" 로 시작하는 줄이 "\ni^2=-1"(∋) 로 저장된 일이 있었다.
+    //   e     : \ne(≠) 는 실제로 쓰인다. 다만 ≠ 바로 뒤에 올 수 없는 ^ _ = & 가 오면
+    //           진짜 글자 e 다("e^{x}", "e_1", "e=2.7", 표의 행 "e & 0 & f").
     s = s.replace(
-      /\x0a(?=(?:abla|atural|e(?:q|g)?|i|otin|u)(?![A-Za-z]))/g,
+      /\x0a(?=(?:abla|atural|e(?:q|g)|e(?!\s*[\^_=&])|otin)(?![A-Za-z]))/g,
       '\\n',
     );
     // 조건부 복원: CR / LF 는 "뒤에 LaTeX 명령 이름 + special char" 패턴일 때만.
@@ -59,7 +64,8 @@ export function recoverMangledLatexControls(value) {
     //     ^_   첨자            (\nabla^2 \alpha_1)
     //   운영에서 "l.119 ight)\right\}$" 처럼 ")" terminator 를 놓쳐 재발한 적 있음.
     s = s.replace(/\x0d(?=[a-z][a-zA-Z]*[\\{}()\[\]^_])/g, '\\r');
-    s = s.replace(/\x0a(?=[a-z][a-zA-Z]*[\\{}()\[\]^_])/g, '\\n');
+    //   위와 같은 이유로 줄 첫머리의 i · u 한 글자와 "e^", "e_" 는 여기서도 건드리지 않는다.
+    s = s.replace(/\x0a(?![iu][\\{}()\[\]^_])(?!e[\^_])(?=[a-z][a-zA-Z]*[\\{}()\[\]^_])/g, '\\n');
     return s;
   }
   if (Array.isArray(value)) return value.map(recoverMangledLatexControls);

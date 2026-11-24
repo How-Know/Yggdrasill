@@ -1,0 +1,38 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.1",
+  "ref": "csat-2022-calculus-27-1",
+  "params": {"ox": 19.5424, "oy": 47.6813, "u": 45.0531, "gap": 60.5343, "sq1": 1.95, "sq2": 1.5},
+  "fit": ["ox", "oy", "u", "gap"],
+  "canvas": {"width": 67.95, "height": 121.03, "origin": ["ox", "oy"], "unit": "u"},
+  "parts": {
+    "stage": [
+      {"id": "A#{k}", "type": "point", "at": [1, 0], "label": {"dir": "S", "dist": 1.2}},
+      {"id": "B#{k}", "type": "point", "at": [0, 1], "label": {"dir": "W", "dist": 1.0}},
+      {"type": "arc", "center": [0, 0], "radius": 1, "angles": [0, 90]},
+      {"type": "polyline", "points": ["B#{k}", [0, 0], "A#{k}"]},
+      {"id": "P#{k}", "type": "point", "at": ["3/5", "4/5"], "label": {"dir": "NE", "dist": 0.5}},
+      {"id": "C#{k}", "type": "point", "at": ["P#{k}.x", 0], "label": {"dir": "S", "dist": 1.2}},
+      {"id": "D#{k}", "type": "point", "at": [0, "P#{k}.y"], "label": {"dir": "W", "dist": 1.0}},
+      {"type": "polyline", "points": ["D#{k}", "P#{k}", "C#{k}"], "line": "thin"},
+      {"id": "M#{k}", "type": "midpoint", "of": ["P#{k}", "A#{k}"]},
+      {"id": "Q#{k}", "type": "rotate", "of": "A#{k}", "center": "M#{k}", "angle": -90, "label": {"dir": "SW", "dist": 0.6}},
+      {"type": "fill", "path": ["P#{k}", "Q#{k}", "A#{k}"]},
+      {"type": "polygon", "points": ["P#{k}", "Q#{k}", "A#{k}"], "line": "thin"},
+      {"type": "right_angle", "at": "Q#{k}", "from": "P#{k}", "to": "A#{k}", "size": "sq#{k}"}
+    ],
+    "panel": [
+      {"id": "s", "type": "use", "part": "stage", "count": "#{n}", "step": {"scale": "sqrt(1/5)"}},
+      {"id": "O", "type": "point", "at": [0, 0], "label": {"dir": "SW", "dist": 0.8}},
+      {"type": "right_angle", "at": "O", "from": [1, 0], "to": [0, 1], "size": 1.9},
+      {"id": "R", "type": "label", "at": ["-17.05/u", "22.3/u"], "text": "\\symbfit{R}_{#{n}}"}
+    ]
+  },
+  "objects": [
+    {"id": "p1", "type": "use", "part": "panel", "with": {"n": 1}},
+    {"id": "p2", "type": "use", "part": "panel", "at": [0, "-gap/u"], "with": {"n": 2}},
+    {"id": "v1", "type": "label", "at": ["(3.0-ox)/u", "(oy-118.4)/u"], "text": "\\vdots"},
+    {"id": "v2", "type": "label", "at": ["(42.0-ox)/u", "(oy-118.4)/u"], "text": "\\vdots"}
+  ],
+  "label_nudge": {"p2/s.1/Q1": [6.323, -1.462], "p1/s.1/A1": [0.846, 0.085], "p1/s.1/B1": [0.338, -0.507], "p1/s.1/P1": [0.338, -0.592], "p1/s.1/C1": [0.761, 0.169], "p1/s.1/D1": [0.338, -0.507], "p1/s.1/Q1": [1.184, 0.507], "p1/O": [0.423, 0.169], "p1/R": [0.338, -0.169], "p2/s.1/A1": [0.846, 0.085], "p2/s.1/B1": [0.338, -0.507], "p2/s.1/P1": [0.338, -0.592], "p2/s.1/C1": [0.761, 0.169], "p2/s.1/D1": [0.338, -0.507], "p2/s.2/A2": [0.846, 0.085], "p2/s.2/B2": [0.338, 0.0], "p2/s.2/P2": [-0.254, -0.169], "p2/s.2/C2": [0.676, 0.085], "p2/s.2/D2": [0.338, -0.592], "p2/s.2/Q2": [0.761, 1.099], "p2/O": [0.423, 0.169], "p2/R": [0.338, -0.169], "v1": [0.085, -0.169], "v2": [-0.169, -0.169]}
+}

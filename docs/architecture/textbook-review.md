@@ -445,6 +445,15 @@ Textbook errors the owner handles (owner decision 2026-11-16):
   it and `textbook_review_keep_solution_original` first saves the printed text
   in `textbook_problem_analyses.solution_transcribed_original`, so confirm
   publishes both kinds. A finding the owner closed is not reopened by a rerun.
+  The render check compares the answer·solution card with the printed
+  solution image, and the card of a corrected question shows the corrected
+  text. So the render check input carries `solution_corrected: true` and the
+  finding text as `solution_correction` (`solutionCorrectionInput`, when
+  `solution_transcribed_original` is set and the card is not the AI solution),
+  and the instructions say a corrected sentence that differs from the printed
+  solution is not an issue; missing lines, broken text and solution figures
+  are judged as before (owner decision 2026-11-24, after 2020 수능 나형 15 was
+  blocked with "다른풀이의 마지막 설명이 원본과 다름").
 - Answer or problem error (correction note): the owner adopts or dismisses it.
   Only the grading answer changes; the printed answer stays in the `original`
   solution row's `answer`. For a problem with an adopted note the render check
@@ -505,6 +514,90 @@ Textbook errors the owner handles (owner decision 2026-11-16):
   left, above 3/4 right, else center), because the stored region is usually
   the full column and wider than the text. The pipeline recomputes the
   alignment of existing solution figures before the solution figure pass.
+  When a solution has several regions on the same page (it continues in the
+  next column), the region that overlaps the figure most is the reference
+  (`arrangeSolutionFigures`); taking the first region of the page judged
+  every figure of the second column as "right".
+- Solution figures of a solution with more than one region
+  (`extractSolutionFigures`): each region is rendered and sent as its own
+  image (`solution_images_base64`, at most 8), and the AI returns a piece
+  number per figure (`pieces`, 1-based) with a box relative to that piece;
+  `solutionFigurePiece` maps it back to the page. A figure without a valid
+  piece number is not attached. A one-region solution is sent as before
+  (`solution_image_base64`). Reason: on the regions stacked into one tall
+  image the model's boxes were several lines off (figure cut at the bottom,
+  the lines above included, a whole column taken as a figure, figures
+  missed). `dry_run: true` on the Edge action returns the boxes without
+  writing the `[그림]` markers into `solution_transcribed`.
+- Tighten pass (`_tightenSolutionFigures`): the first box of every found
+  figure is widened (`expandSolutionFigureRegion`: 40 up and down, 25 left
+  and right, inside the solution region it was found in), rendered again and
+  sent in one call per question (`tighten: true`, `figure_images_base64`);
+  the AI returns a box around the figure only (`boxes`, null when none).
+  The Edge action writes nothing in this mode. When the call fails the first
+  box is used and the failure is listed in the run errors. Reason: even per
+  region the first box sometimes held the solution lines below a graph or
+  cut a figure that sits next to another, and `solutionFigureKeepRows` does
+  not apply when the figure itself touches the crop edge. Verified on two
+  questions only (2025 9월 공통 15, 4월 확통 29).
+- A centered solution figure is centered on the solution text width: the
+  solution body has a `\leftskip` of the number width and `\centering`
+  cleared it, which put the figure left of the text center by half the
+  number width (`explanationFigureIncludes`, both `\hfill`; `max width` is
+  `\linewidth-\leftskip`). The horizontal group (`adjustbox ... center`) was
+  not changed or checked.
+- Staged solution text and markers: the figure search writes the markers into
+  the stored `solution_transcribed`, but the card uses the staged text when
+  there is one (the consistency check stages a solution with upright point
+  names). So after a search the Edge action also moves the markers of an
+  AI-staged solution text to the same places (`syncStagedFigureMarkers`,
+  through `textbook_review_stage_changes` with source `ai`; the result row
+  carries `staged_sync`). It works by line: the line that follows a marker in
+  the stored text is looked up in the staged text (spaces, `$`, `\mathrm`
+  and braces ignored). If one marker's line cannot be found, nothing is
+  changed. A solution text staged by the owner, a manually edited solution
+  and `dry_run` are left alone.
+- Box end: `sanitizeLatexControlChars` (it restores LaTeX commands that lost
+  their backslash in JSON, `\nabla`, `\neq`, `\nu` ...) turns a line break
+  into the two characters `\n` when the next line starts with lowercase
+  letters followed by `(`, `_`, `^`, `{` ... (`f(a)`, `a_3`). The following
+  line then arrives in the same parsed line as `[박스끝]`, and the whole line
+  used to go into the box. `splitAfterBoxEnd` now closes the box at the mark
+  and puts the rest after it.
+- Single-letter recovery is off (owner decision 2026-11-21): the same step
+  no longer turns a line break followed by `e`, `i` or `u` plus a non-letter
+  into `\ne` (≠), `\ni` (∋), `\nu` (ν). It cannot be told from a line that
+  starts with those letters. Before the change 28 stored stems (복소수 units
+  of 수력충전·쎈·RPM 공통수학1, 행렬, 수열 tables, two school exam files;
+  none reviewed yet) printed "∋= j인 성분", a table cell "≠" for `e`,
+  "∋ +2i²+…"; after it none of the 28 has such a command in its TeX (two
+  typeset locally and viewed). Searched on that day: every column of
+  `pb_questions` (88,174 rows) and `textbook_problem_analyses` had no place
+  where the recovery was right; every hit was a real line start. Longer
+  commands are still recovered (`\neq`, `\neg`, `\nearrow`, `\nabla`,
+  `\natural`, `\notin`, `\nwarrow`), and commands typed with their backslash
+  are untouched. The helper for choice and answer text on the render path
+  (`recoverMangledLatexNewlineCommands` in `render_engine/utils/text.js`)
+  follows the same rule; no stored choice or answer had the form.
+- Extraction (`recoverMangledLatexControls` in
+  `extract_engines/vlm/client.js`, owner decision 2026-11-21): there the
+  model output really can arrive broken, so only this much was taken out: a
+  line starting with `i` or `u` is left alone, and a line starting with `e`
+  is left alone when `^`, `_`, `=` or `&` follows (nothing can follow ≠ that
+  way). `\ne` before a space, digit or letter is still recovered, and so are
+  the longer commands and `\r…`. Raw model output is not stored, so whether
+  the model ever sent a broken `\ne` could not be checked. One stem was
+  stored as `[수식제시]\ni^2=-1` (created 2026-07-24, before the single-letter
+  rule of 2026-09-14: the general rule "line break + lowercase + `^`" did
+  it); it was corrected in the DB with the owner's approval
+  (개념원리 공통수학1 복소수 필수유형 1번). A stem stored that way cannot be
+  told from a real `\ni` by the engine.
+- Not changed: the older engine `render_engine/xelatex/template.js`
+  (`mathEngine: 'xelatex'`) keeps the old rule; which callers still use it
+  was not looked up.
+- ▲▼■★ typed as characters inside math are printed with the body font
+  (`\text{★}`); the math font has no such glyphs and printed nothing, so
+  "(★)" in a solution came out as "()".
 - Figure layout proposals and `applied_at`: the staging RPC stamps
   `fix_proposal.applied_at` on any staged field (an answer proposal too), so
   `hasPendingFigureProposal` also checks the staged notes: a layout proposal
@@ -550,6 +643,14 @@ Textbook errors the owner handles (owner decision 2026-11-16):
   when it is number-sized and inside the item region), the overlapping part of the PNG is painted white
   before upload (`whiteOutProblemNumber`; the asset gets `number_masked: true`). The crop region itself is
   not changed. Set-header figures are not masked.
+- Small figure inside a text line (owner decision 2026-11-24): the crop margin (12 per 1000 of the
+  question image on each side) is as large as the shape itself, so the next letter and pieces of the
+  lines above and below came into the PNG; the engine could then not trim the white margin, the
+  shape printed small, and every re-crop repeated it (2019 수능 나형 18, 2016 나형 17, 2018 나형 16).
+  For a figure measured as `inline`, `whiteOutUnrelatedInk` paints white every ink blob that does not
+  reach the measured box (the asset gets `neighbors_cleared: true`). The margin is unchanged, a figure
+  line that runs past the measured box stays, and nothing is changed when the measured box holds no
+  ink. Other placements are not touched.
 - Answer/solution review card uses the PDF solution-sheet layout (owner decision 2026-11-17): a text answer
   is rendered through `/pb/preview/custom-thumbnail` with `cardKind: 'explanation'`
   (`renderExplanationCardThumbnail`; engine option `explanationCardOnly`), i.e. the same
@@ -898,6 +999,89 @@ engine puts them in an extra column right of the equation, so they line up
 vertically, and `heightEm` / `offsetYEm` / `offsetXEm` set their size and
 shift (`offsetYEm` moves the figure down, between two rows).
 
+### Solution text rules (2026-11-20)
+
+Added with the mock exam review; they apply to every scope (textbooks, school
+exams, mock exams). Text stored before that day is not converted.
+
+- **One printed line, one paragraph.** `solutionLinesToParagraphs` (Edge,
+  `textbook_problem_review.ts`) runs where AI output is saved (solution
+  transcription, the AI solution, the logic fix, the fix pass): every printed
+  line becomes its own paragraph (a blank line between lines), because the V2
+  engine starts a new line only at a blank line. Multi-line math and the rows
+  of a text table (`| a | b |`) stay one block. A manual edit needs a blank
+  line to start a new line.
+- **Length.** The transcription sent to the compare step and to the fix pass
+  is cut at `SOLUTION_TEXT_MAX_CHARS` (12,000). The old cut (3,000 / 2,000)
+  dropped the end of a long solution and produced a false "해설 논리 오류".
+- **A settled solution is not transcribed again.** The fix pass re-reads the
+  printed solution for problems whose answer is in dispute. When the answer is
+  not in dispute and the printed solution was already found and transcribed,
+  its re-transcription is dropped (`isSolutionSettled` in the Edge Function,
+  `solutionSettled` / `stageableSolutionTranscribed` in the manager). "Not in
+  dispute" means the math axis is `clean` / `approved`, or the three answers
+  agreed and the axis is `issue` only because of a solution logic error
+  (`answer_matched` with a `mismatch_reason` that starts with
+  `SOLUTION_LOGIC_REASON`). Staging the re-transcription replaced the
+  stage-1 text, which has the print's notation (`\mathrm` point names) and the
+  `[그림]` markers placed by the solution-figure step. The logic error itself
+  stays open until the owner picks the corrected text or the original.
+- **Solution figures are searched again once per run.** A problem whose
+  figure search found nothing (`solution_figures_checked_at` set, no assets)
+  and whose render check reports a missing solution figure
+  (`solutionFigureSearchMissed`) goes through the search once more in the
+  same run, then through the render check. Nothing else clears
+  `solution_figures_checked_at`.
+- **Failed answer·solution card.** The manager sends the render error with the
+  render check (`answer_solution_error`); the problem is blocked by the
+  existing "V2 렌더 이상" / render-engine hold and the reason is stored. See
+  `mock-exam.md`, "Failed answer·solution card".
+- **The card page grows with the solution.** The review's answer·solution
+  card is one unbreakable block on one page. The page height comes from the
+  text (`explanationCardPageHeightMm` in the gateway: 800 mm at least, more by
+  line count and figure count, 5,000 mm at most). A block that still does not
+  fit leaves page 1 blank, so the gateway answers
+  `render_failed: explanation_card_overflow` instead of a blank card.
+- **Enclosed characters print in the text font.** Circled and parenthesized
+  numbers, letters and Hangul (①, ⑴, ⒜, Ⓐ, ⓐ, ㈀, ㉠, ㉮) have no glyph in the
+  math font, so the V2 engine wraps them in `\text{}` (`template.js`). A
+  multi-level case label such as `(ⅰ-ⓐ-①)` is printed as one text run; left as
+  separate math pieces its hyphens became minus signs and the space after it
+  was lost.
+- **`\\` is not a delimiter.** The consistency rule `math_delimiters`
+  (`mathDelimiterProblems`) removes line-break commands before counting, so
+  `(x\geq0)\\(k+x)` inside `cases` is not reported as an unpaired `\(`.
+- **The fix pass does not move a computed solution position.** For a problem
+  with a math issue the fix pass may return the box where it found the
+  solution (`corrected_solution_bbox_1k`). The box is written to
+  `textbook_problem_solution_refs` only when the stored row was not edited by
+  a person and has no `continuation_regions` (`solutionRefReplaceable`).
+  Textbook rows have `continuation_regions = null` and behave as before; mock
+  exam rows carry the regions the gateway computed and are left alone. See
+  `mock-exam.md`, "Solution regions".
+- **`[출제의도]` head.** Both transcription prompts (review, fix pass) ask for
+  the intent sentence as the first line with the head `[출제의도]`, whatever
+  the page prints.
+- **Figure position "선지 아래" (`below-choices`).** The V2 engine prints such
+  a figure after the choices, for text choices only. Nothing sets it for
+  textbooks or school exams on its own; the mock consistency rule does
+  (`mock-exam.md`, "Print conventions set by code") and the owner can pick it
+  in the figure settings. The fix pass keeps it when the AI measures the
+  figure as below the text (`buildFigureProposal`).
+- **No line break between math and the word attached to it (2026-11-21).**
+  Body text breaks only at spaces (`\XeTeXlinebreaklocale ""`), but TeX also
+  takes the end of an inline formula as a break point. Cards therefore ended a
+  line with "상자 A" and started the next with "에서", or left an opening
+  parenthesis alone at a line end ("(" / "단, …"). `smartTexLineCore`
+  (`xelatex_v2/template.js`) now writes `\penalty9999{}`
+  (`MATH_GLUED_HANGUL_PENALTY`) after an inline formula when Hangul follows
+  with no space. With 9999 the line breaks there only when nothing else
+  fits; `\nobreak` would push a long formula plus its particle over the right
+  edge. A space after the formula is still a normal break point, and nothing
+  is added before a formula. This applies to every card and PDF the engine
+  makes, so line breaks of cards rendered before can move. Test:
+  `gateway/test/xelatex_v2_math_particle_break.test.js`.
+
 ## School exam papers (내신기출)
 
 Built 2026-11-16. School exam papers go through the same subunit workflow as
@@ -1035,6 +1219,21 @@ were added on 2026-11-16 (`20261116190000` to `20261116190600`); before that a
 - There is no region editor for exam papers; `redetect` is the only way to
   redo regions.
 - Three papers have no PDF (2025 중1 1학기 중간) and cannot be reviewed.
+
+## Mock exams (모의고사)
+
+Built 2026-11-20. One section of a mock exam (공통, 확률과 통계, 미적분,
+기하; the whole paper for 고1·고2) is one review scope and runs through
+`runAll` like a textbook subunit, with the printed solution PDF. The design,
+the owner decisions and the differences from a textbook run are in
+`mock-exam.md`, "Review (모의고사 검수)".
+
+The consistency check has four fixes that run only for mock sections
+(`ConsistencyContext.mock`): upright point names, the `[출제의도]` head, a
+figure moved below the choices, and a particle attached to the math before it.
+For a mock scope `runAll` also calls the consistency check once more right
+after the review rounds, before the render check. Textbook and school exam
+questions are not touched by these rules.
 
 ## Manager screen (문항검수)
 

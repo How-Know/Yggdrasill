@@ -14,6 +14,7 @@ import {
   renderAnswerWithXeLatex,
 } from "./problem_bank/render_engine/xelatex_v2/renderer.js";
 import { createMathSvgRenderer } from "./problem_bank/render_engine/math/mathjax_svg_renderer.js";
+import { renderThumbnailGroups } from "./problem_bank/preview_batch_fallback.js";
 import { generateObjectiveDraftForQuestion } from "./problem_bank_extract_worker.js";
 import { syncMiddleSchoolPresetForDocument } from "./problem_bank/naesin_preset.js";
 import { readExamLayout } from "./problem_bank/school_exam/layout.js";
@@ -21,9 +22,13 @@ import { prepareExamReview } from "./problem_bank/school_exam/review_staging.js"
 import {
   prepareMockReview,
   prepareMockReviewIdentity,
+  previewMockSolutionRefs,
   publishMockReview,
 } from "./mock_exam/review_staging.js";
 import { applyQuestionOverride, overridePreviewKey } from "./problem_bank/preview_overrides.js";
+import { applySlotValuesToQuestion } from "./mock_exam/slot_values.js";
+import { slotValuesOf } from "./mock_exam/paper_slots.js";
+import { explanationCardPageHeightMm } from "./problem_bank/explanation_card_page.js";
 import {
   createConceptPageStore,
   createConceptPageWorker,
@@ -1813,6 +1818,47 @@ async function handleExamReviewPrepare(body, res) {
 }
 
 // 모의고사 한 구간(공통·선택과목)을 교재 검수 테이블에 올린다.
+// 모의고사 시험지·해설지 PDF 를 저장소에서 받는다.
+async function loadMockPaperPdf(paper) {
+  const bucket = String(paper.storage_bucket || "problem-documents").trim();
+  const { data, error } = await supa.storage
+    .from(bucket)
+    .download(String(paper.storage_path || "").trim());
+  if (error || !data) {
+    throw new Error(
+      `mock_review_pdf_download_failed:${error?.message || "empty"}`,
+    );
+  }
+  return Buffer.from(await data.arrayBuffer());
+}
+
+// 모의고사 구간의 해설 위치를 지금 규칙으로 다시 계산해 달라지는 문항만 돌려준다.
+// 아무것도 쓰지 않는다(확정된 구간에도 쓸 수 있다). 준비(/pb/mock-review/prepare)와 경로를 따로 둔다:
+// 이 경로를 모르는 옛 게이트웨이가 준비를 돌리는 일이 없다.
+async function handleMockSolutionPreview(body, res) {
+  const academyId = String(body?.academyId || body?.academy_id || "").trim();
+  const documentId = String(body?.documentId || body?.document_id || "").trim();
+  if (!isUuid(academyId) || !isUuid(documentId)) {
+    sendJson(res, 400, { ok: false, error: "academyId/documentId must be uuid" });
+    return;
+  }
+  const result = await previewMockSolutionRefs({
+    supa,
+    academyId,
+    documentId,
+    loadPaperPdf: loadMockPaperPdf,
+  });
+  if (!result.ok) {
+    sendJson(res, result.status || 400, {
+      ok: false,
+      error: result.error,
+      message: result.message || "",
+    });
+    return;
+  }
+  sendJson(res, 200, result);
+}
+
 //   examId + identityOnly: 회차의 구간마다 검수 범위(구간 문서·책 행)를 만들어 돌려준다.
 //   documentId: 그 구간을 올린다. 추출이 끝나지 않았으면 state 'waiting' 으로 답한다.
 async function handleMockReviewPrepare(body, res) {
@@ -1848,20 +1894,7 @@ async function handleMockReviewPrepare(body, res) {
         allowExtract: body?.allowExtract === true,
         refreshAnswers: body?.refreshAnswers === true,
         log,
-        loadPaperPdf: async (paper) => {
-          const bucket = String(
-            paper.storage_bucket || "problem-documents",
-          ).trim();
-          const { data, error } = await supa.storage
-            .from(bucket)
-            .download(String(paper.storage_path || "").trim());
-          if (error || !data) {
-            throw new Error(
-              `mock_review_pdf_download_failed:${error?.message || "empty"}`,
-            );
-          }
-          return Buffer.from(await data.arrayBuffer());
-        },
+        loadPaperPdf: loadMockPaperPdf,
       });
   if (!result.ok) {
     sendJson(res, result.status || 400, {
@@ -6857,7 +6890,8 @@ async function batchRenderThumbnails(res, req) {
   const { data: questionRowsById } = await supa
     .from("pb_questions")
     .select(
-      "id,question_uid,document_id,question_type,stem,choices,allow_objective,allow_subjective,objective_choices,objective_answer_key,subjective_answer,objective_generated,figure_refs,equations,confidence,flags,reviewer_notes,source_page,source_order,meta,question_number",
+      // source_type_code: 표 옆 배치가 출처(교재/기출)에 따라 자르는 자리를 고른다.
+      "id,question_uid,document_id,question_type,stem,choices,allow_objective,allow_subjective,objective_choices,objective_answer_key,subjective_answer,objective_generated,figure_refs,equations,confidence,flags,reviewer_notes,source_page,source_order,meta,question_number,source_type_code",
     )
     .eq("academy_id", academyId)
     .in("id", questionIds);
@@ -6870,7 +6904,7 @@ async function batchRenderThumbnails(res, req) {
     const { data: byUidRows } = await supa
       .from("pb_questions")
       .select(
-        "id,question_uid,document_id,question_type,stem,choices,allow_objective,allow_subjective,objective_choices,objective_answer_key,subjective_answer,objective_generated,figure_refs,equations,confidence,flags,reviewer_notes,source_page,source_order,meta,question_number",
+        "id,question_uid,document_id,question_type,stem,choices,allow_objective,allow_subjective,objective_choices,objective_answer_key,subjective_answer,objective_generated,figure_refs,equations,confidence,flags,reviewer_notes,source_page,source_order,meta,question_number,source_type_code",
       )
       .eq("academy_id", academyId)
       .in("question_uid", missingByIdIds);
@@ -6890,6 +6924,25 @@ async function batchRenderThumbnails(res, req) {
     body?.questionOverrides && typeof body.questionOverrides === "object"
       ? body.questionOverrides
       : {};
+  // 가형·나형에 같이 실린 문항: 다른 구간의 문항을 가리키는 자리(mock_exam_items.merged_at)의 카드는
+  // 그 시험지의 본문·선지 순서·배점으로 찍는다. 요청은 { 문항 id: 자리 id } 만 보낸다.
+  const slotItemByQid =
+    body?.mockSlotItemByQuestionId && typeof body.mockSlotItemByQuestionId === "object"
+      ? body.mockSlotItemByQuestionId
+      : {};
+  const slotItemById = new Map();
+  const slotItemIds = normalizeUuidListOrdered(
+    Object.values(slotItemByQid).map((v) => String(v || "").trim()),
+  );
+  if (slotItemIds.length > 0) {
+    const { data: slotRows } = await supa
+      .from("mock_exam_items")
+      .select("id,problem_number,pb_question_id,score,choice_order,stem_override")
+      .eq("academy_id", academyId)
+      .in("id", slotItemIds)
+      .not("merged_at", "is", null);
+    for (const slotRow of slotRows || []) slotItemById.set(String(slotRow.id), slotRow);
+  }
   const orderedQuestions = [];
   const qidOrder = [];
   const unresolvedQuestionIds = [];
@@ -6899,7 +6952,21 @@ async function batchRenderThumbnails(res, req) {
       unresolvedQuestionIds.push(qid);
       continue;
     }
-    const row = applyQuestionOverride(dbRow, overrides[qid]);
+    let row = applyQuestionOverride(dbRow, overrides[qid]);
+    const slotItem = slotItemById.get(String(slotItemByQid[qid] || "").trim());
+    if (slotItem && String(slotItem.pb_question_id) === String(dbRow.id)) {
+      // 카드에는 번호가 찍히지 않으므로 번호는 입히지 않는다(번호만 다른 자리는 문항의 저장 카드를 그대로 쓴다).
+      const { number: _slotNumber, ...slotValues } = slotValuesOf(slotItem);
+      const slotRow = applySlotValuesToQuestion(row, slotValues);
+      if (slotRow !== row) {
+        row = slotRow;
+        // 자리 값으로 찍은 카드는 문항의 저장 카드를 덮지 않게 내용별 경로에 둔다(아래 overridePreviewKey).
+        overrides[qid] = {
+          ...(overrides[qid] || {}),
+          mock_slot: { item_id: String(slotItem.id), ...slotValues },
+        };
+      }
+    }
     const uid = String(row?.question_uid || row?.id || "").trim();
     const clientMode = clientModeMap[qid] || clientModeMap[uid] || "";
     const mode =
@@ -6956,9 +7023,11 @@ async function batchRenderThumbnails(res, req) {
   // 문제은행·학습앱이 쓰는 저장 카드(card/)를 덮어쓰지 않게 따로 저장한다.
   const previewQuestionScore = renderCfg.includeQuestionScore === true;
 
-  try {
+  // 한 묶음(groupQuestions, groupQids 같은 순서)을 한 문서로 조판해 문항별 카드를 올린다.
+  // 조판이 실패하면 던진다. 반환: { thumbnails, pageCount }
+  const renderGroup = async (groupQuestions, groupQids) => {
     const rendered = await renderPdfWithXeLatex({
-      questions: orderedQuestions,
+      questions: groupQuestions,
       renderConfig: {
         hidePreviewHeader: true,
         hideQuestionNumber: true,
@@ -6977,7 +7046,7 @@ async function batchRenderThumbnails(res, req) {
       profile: templateProfile,
       paper: paperSize,
       modeByQuestionId: Object.fromEntries(
-        orderedQuestions.map((q) => [String(q.question_uid || q.id), q.mode]),
+        groupQuestions.map((q) => [String(q.question_uid || q.id), q.mode]),
       ),
       questionMode: "objective",
       layoutColumns: 1,
@@ -7025,19 +7094,19 @@ async function batchRenderThumbnails(res, req) {
       const thumbnails = {};
       const uploadPromises = [];
 
-      if (pngFiles.length !== qidOrder.length) {
+      if (pngFiles.length !== groupQids.length) {
         const missTail =
-          pngFiles.length < qidOrder.length
-            ? qidOrder.slice(pngFiles.length).join(",")
+          pngFiles.length < groupQids.length
+            ? groupQids.slice(pngFiles.length).join(",")
             : "(extra-pages)";
         console.warn(
           `[pb-api] batch-thumb page/question mismatch: pages=${pngFiles.length} ` +
-            `questions=${qidOrder.length} missingOrExtra=${missTail}`,
+            `questions=${groupQids.length} missingOrExtra=${missTail}`,
         );
       }
 
-      for (let i = 0; i < Math.min(pngFiles.length, qidOrder.length); i++) {
-        const qid = qidOrder[i];
+      for (let i = 0; i < Math.min(pngFiles.length, groupQids.length); i++) {
+        const qid = groupQids[i];
         const pngPath = pngFiles[i];
         if (!fs.existsSync(pngPath)) continue;
 
@@ -7140,31 +7209,63 @@ async function batchRenderThumbnails(res, req) {
       }
 
       await Promise.all(uploadPromises);
-      const thumbnailCount = Object.values(thumbnails).filter(
-        (v) => v && typeof v === "object" && String(v.url || "").trim(),
-      ).length;
-      if (thumbnailCount !== qidOrder.length) {
-        console.warn(
-          "[pb-api] batch-thumb incomplete response",
-          JSON.stringify({
-            requested: questionIds.length,
-            found: qidOrder.length,
-            thumbnails: thumbnailCount,
-            missingAfterRender: qidOrder
-              .filter((id) => !thumbnails[id]?.url)
-              .slice(0, 20),
-          }),
-        );
-      }
-      sendJson(res, 200, {
-        ok: true,
-        thumbnails,
-        pageCount,
-        questionCount: qidOrder.length,
-      });
+      return { thumbnails, pageCount };
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
+  };
+
+  try {
+    // 한 문항이 조판 오류를 내면 묶음 전체가 실패한다. 반으로 나눠 다시 찍어 그 문항만 카드 없이 남긴다.
+    const out = await renderThumbnailGroups({
+      questions: orderedQuestions,
+      qids: qidOrder,
+      renderGroup,
+    });
+    const thumbnails = out.thumbnails;
+    const thumbnailCount = Object.values(thumbnails).filter(
+      (v) => v && typeof v === "object" && String(v.url || "").trim(),
+    ).length;
+    if (out.failed.length > 0) {
+      console.warn(
+        "[pb-api] batch-thumb render failed for some questions",
+        JSON.stringify({
+          documentId: requestedDocumentId,
+          requested: qidOrder.length,
+          failed: out.failed.slice(0, 20),
+          failedCount: out.failed.length,
+          firstError: out.firstError,
+        }),
+      );
+    }
+    // 한 장도 못 찍었으면 전처럼 실패로 알린다(엔진이 죽었거나 문항이 하나뿐인 요청).
+    if (thumbnailCount === 0 && out.failed.length > 0) {
+      sendJson(res, 500, {
+        ok: false,
+        error: `render_failed: ${compact(out.firstError)}`,
+      });
+      return;
+    }
+    if (thumbnailCount !== qidOrder.length) {
+      console.warn(
+        "[pb-api] batch-thumb incomplete response",
+        JSON.stringify({
+          requested: questionIds.length,
+          found: qidOrder.length,
+          thumbnails: thumbnailCount,
+          missingAfterRender: qidOrder
+            .filter((id) => !thumbnails[id]?.url)
+            .slice(0, 20),
+        }),
+      );
+    }
+    sendJson(res, 200, {
+      ok: true,
+      thumbnails,
+      pageCount: out.pageCount,
+      questionCount: qidOrder.length,
+      failedQuestionIds: out.failed,
+    });
   } catch (err) {
     sendJson(res, 500, {
       ok: false,
@@ -7256,7 +7357,13 @@ async function renderCustomPreviewThumbnail(res, req) {
   }
 
   const PREVIEW_PAGE_WIDTH_MM = 115;
-  const PREVIEW_PAGE_HEIGHT_MM = 800;
+  // 해설 카드는 쪽을 넘기지 못하므로 긴 해설은 쪽을 길게 잡는다(explanation_card_page.js).
+  const PREVIEW_PAGE_HEIGHT_MM = explanationCard
+    ? explanationCardPageHeightMm(
+        question.explanation,
+        question.explanation_figure_assets.length,
+      )
+    : 800;
   const previewGeometry = `paperwidth=${PREVIEW_PAGE_WIDTH_MM}mm,paperheight=${PREVIEW_PAGE_HEIGHT_MM}mm,left=5mm,right=5mm,top=5mm,bottom=5mm`;
   const batchFont = resolveBatchPreviewFont();
 
@@ -7292,6 +7399,15 @@ async function renderCustomPreviewThumbnail(res, req) {
       fontSize: 11,
       supabaseClient: supa,
     });
+
+    // 해설 카드가 한 쪽에 들어가지 않으면 첫 쪽이 빈 채로 나온다. 빈 카드를 돌려주지 않고 이유를 알린다.
+    if (explanationCard && (rendered.pageCount || 0) > 1) {
+      sendJson(res, 500, {
+        ok: false,
+        error: `render_failed: explanation_card_overflow 해설이 카드 한 쪽(${PREVIEW_PAGE_HEIGHT_MM}mm)에 들어가지 않습니다`,
+      });
+      return;
+    }
 
     const tmpDir = path.join(os.tmpdir(), `pb-custom-thumb-${randomUUID()}`);
     fs.mkdirSync(tmpDir, { recursive: true });
@@ -13024,6 +13140,16 @@ async function handler(req, res) {
     if (method === "POST" && url.pathname === "/pb/mock-review/prepare") {
       const body = await readJson(req);
       await handleMockReviewPrepare(body, res);
+      return;
+    }
+
+    // 모의고사 구간의 해설 위치 미리 계산(쓰기 없음).
+    if (
+      method === "POST" &&
+      url.pathname === "/pb/mock-review/solution-preview"
+    ) {
+      const body = await readJson(req);
+      await handleMockSolutionPreview(body, res);
       return;
     }
 

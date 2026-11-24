@@ -27,7 +27,7 @@ class HomeworkNowPlayingExpanded extends StatefulWidget {
   final VoidCallback onPlayPause;
   final VoidCallback onSubmit;
 
-  /// 「문제 풀기」 — 디지털 풀이 가능한 교재 숙제에서만 노출된다.
+  /// 「입력」 — 디지털 풀이 가능한 교재 숙제에서만 노출된다.
   final VoidCallback? onOpenSolve;
 
   /// 하단 크롬 1줄 전환과 동일 길이.
@@ -351,7 +351,7 @@ class HomeworkNowPlayingExpandedState extends State<HomeworkNowPlayingExpanded>
   }
 }
 
-/// 왼쪽 원형 문제 풀기 + 가운데 수행/일시정지 알약 + 오른쪽 원형 제출
+/// 왼쪽 원형 입력 + 가운데 수행/일시정지 알약 + 오른쪽 원형 제출
 /// (Apple Music형).
 class _NowPlayingActionRow extends StatelessWidget {
   const _NowPlayingActionRow({
@@ -389,12 +389,12 @@ class _NowPlayingActionRow extends StatelessWidget {
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        // 왼쪽 슬롯 — 오른쪽 원형과 대칭. 풀 수 있는 숙제면 문제 풀기 버튼.
+        // 왼쪽 슬롯 — 오른쪽 원과 대칭. 풀 수 있는 숙제면 입력 버튼.
         if (onOpenSolve == null)
           const SizedBox(width: _circleSize)
         else
           Tooltip(
-            message: '문제 풀기',
+            message: '입력',
             child: Material(
               color: circleBg,
               shape: const CircleBorder(),
@@ -406,10 +406,16 @@ class _NowPlayingActionRow extends StatelessWidget {
                   child: SizedBox(
                     width: _circleSize,
                     height: _circleSize,
-                    child: Icon(
-                      Icons.edit_rounded,
-                      size: 22,
-                      color: circleFg,
+                    child: Center(
+                      child: Text(
+                        '입력',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: circleFg,
+                          height: 1,
+                        ),
+                      ),
                     ),
                   ),
                 ),
@@ -459,7 +465,7 @@ class _NowPlayingActionRow extends StatelessWidget {
           builder: (context, _) {
             final allowed = homeworkSubmitAllowed;
             return Tooltip(
-              message: allowed ? '$kindLabel 제출' : homeworkSubmitBlockedMessage,
+              message: allowed ? '제출' : homeworkSubmitBlockedMessage,
               child: Material(
                 color: circleBg,
                 shape: const CircleBorder(),
@@ -471,10 +477,16 @@ class _NowPlayingActionRow extends StatelessWidget {
                     child: SizedBox(
                       width: _circleSize,
                       height: _circleSize,
-                      child: Icon(
-                        Icons.check_rounded,
-                        size: 24,
-                        color: circleFg,
+                      child: Center(
+                        child: Text(
+                          '제출',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                            color: circleFg,
+                            height: 1,
+                          ),
+                        ),
                       ),
                     ),
                   ),

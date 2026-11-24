@@ -5,6 +5,7 @@ import {
   commonStemFix,
   compareFigureImages,
   sourceCorrectionInput,
+  solutionCorrectionInput,
   effectiveSolution,
   figureMarkerCount,
   figureReviewVerdict,
@@ -14,6 +15,7 @@ import {
   isDataFixableSymptom,
   isFalseBlankComplaint,
   isFillInBlankProblem,
+  isLogicRecheckTarget,
   isMathResolveTarget,
   isReviewTodo,
   itemHasFigures,
@@ -293,6 +295,32 @@ Deno.test('수학만 다시 풀 대상은 수학 오류 문항뿐이다', () => 
   assert(!isMathResolveTarget({}));
 });
 
+Deno.test('해설 논리 오류 재확인 대상: 마지막 풀이 뒤에 본문·선지·공통 발문이 바뀐 문항만', () => {
+  const logic = { math_status: 'clean', findings: [{ error_type: 'solution_logic', proposal: null }] };
+  const staged = (at: string, fields: string[]) => ({
+    analyzed_at: '2026-11-23T12:00:00+00:00',
+    staged_changes: { notes: [{ at, fields, note: '원본 대조 수정안' }] },
+  });
+  // 2024 고3 10월 공통 20: 풀이 뒤에 본문(적분 아래끝)이 고쳐졌다. 정답 축은 정답 수정안으로 통과가 돼 있다.
+  assert(isLogicRecheckTarget(logic, staged('2026-11-23T12:39:06.994077+00:00', ['stem'])));
+  assert(isLogicRecheckTarget(logic, staged('2026-11-23T12:39:06+00:00', ['figure_layout', 'choices'])));
+  assert(isLogicRecheckTarget({ ...logic, math_status: 'issue' }, staged('2026-11-23T12:39:06+00:00', ['common_stem'])));
+  // 고친 본문으로 이미 다시 풀었으면 되풀이하지 않는다.
+  assert(!isLogicRecheckTarget(logic, staged('2026-11-23T11:00:00+00:00', ['stem'])));
+  // 본문이 아닌 값(정답·그림 크기)만 바뀐 문항, 반영 대기가 없는 문항
+  assert(!isLogicRecheckTarget(logic, staged('2026-11-23T12:39:06+00:00', ['answer', 'figure_layout'])));
+  assert(!isLogicRecheckTarget(logic, { analyzed_at: '2026-11-23T12:00:00+00:00', staged_changes: {} }));
+  assert(!isLogicRecheckTarget(logic, null));
+  // 해설 논리 오류가 없거나 교정 의견뿐인 문항, 승인된 문항
+  const after = staged('2026-11-23T12:39:06+00:00', ['stem']);
+  assert(!isLogicRecheckTarget({ math_status: 'clean', findings: [] }, after));
+  assert(!isLogicRecheckTarget({
+    math_status: 'clean',
+    findings: [{ error_type: 'solution_logic', proposal: { target: 'correction_note' } }],
+  }, after));
+  assert(!isLogicRecheckTarget({ ...logic, math_status: 'approved' }, after));
+});
+
 Deno.test('정답 대조 해설: 직접 고친 해설 → 이번 Vision 전사 → 저장된 Vision 전사', () => {
   const vision = { found: true, solution_transcribed: ' 새 전사 ', solution_answer: ' ③ ' };
   // 직접 고친 해설은 이번 전사보다 우선한다
@@ -410,6 +438,18 @@ Deno.test('원본 오류 교정으로 표시한 문항만 교정 전 본문을 A
   });
   const withChoices = sourceCorrectionInput({ stem: 'a', choices: [{ label: '①', text: '1' }] });
   assertEquals(withChoices.printed_choices, [{ label: '①', text: '1' }]);
+});
+Deno.test('해설을 교정한 문항은 렌더 검수 입력에 교정 사실과 지적 내용을 싣는다', () => {
+  // 교정하지 않은 문항(원본 전사 보관본 없음)과 AI 풀이 카드는 싣지 않는다.
+  assertEquals(solutionCorrectionInput(null, 'textbook', '지적'), {});
+  assertEquals(solutionCorrectionInput('  ', 'textbook', '지적'), {});
+  assertEquals(solutionCorrectionInput('원본 해설', 'ai', '지적'), {});
+  assertEquals(solutionCorrectionInput('원본 해설', 'textbook', ' 마지막 문장의 근거가 틀렸다. '), {
+    solution_corrected: true,
+    solution_correction: '마지막 문장의 근거가 틀렸다.',
+  });
+  // 지적 내용을 찾지 못해도 교정 사실은 싣는다.
+  assertEquals(solutionCorrectionInput('원본 해설', 'textbook'), { solution_corrected: true });
 });
 Deno.test('공통 발문에 상자가 섞여 있으면 지시문만 공통으로 두고 상자는 개별 발문에 남긴다', () => {
   const stem = '다음 조건을 모두 만족시키는 입체도형을 구하여라.\n[문단]\n[박스시작]\n(가) 밑면이 1개이다.\n(나) 옆면의 모양이 삼각형이다.\n[박스끝]';

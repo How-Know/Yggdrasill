@@ -85,7 +85,7 @@ Think와 정한 작업 지시 "기존 과정 로드맵을 저장·수정 가능�
 
 ### 3.1 자리
 
-- 개념 메뉴(`concept-library.md` §2.1). 흐름 편집(`CourseMapPane`)은 왼쪽 절반이다. 오른쪽 절반은 연산 리스트. 과정 관리 왼쪽 "개념 라이브러리"는 왼쪽만 라이브러리로 바꾼다.
+- 개념 메뉴(`concept-library.md` §2.1). 흐름 편집(`CourseMapPane`)은 왼쪽 절반이다. 오른쪽 절반은 사고 리스트. 과정 관리 왼쪽 "개념 라이브러리"는 왼쪽만 라이브러리로 바꾼다.
 - 문항로드맵 메뉴도 같은 `CourseMapPane`을 크게 연다. 같은 컨트롤러라 편집본·선택·펼침을 함께 쓴다.
 
 ### 3.2 구성
@@ -201,6 +201,19 @@ Think와 정한 작업 지시 "기존 과정 로드맵을 저장·수정 가능�
   개념 이름(누르면 창을 닫고 라이브러리에서 연다) + 과정·단원 경로(옮기면 전 → 후) + 근거·메모. 읽기만 하고 되돌리기는 없다.
   처음부터 다시 읽을 때(열기·거르기·다시 읽기)는 보이던 줄을 먼저 비워, 실패하면 오류와 "다시 읽기"만 보인다(반영 전이면 그 안내).
   더 보기에 실패하면 이미 읽은 줄 아래에 오류와 "다시 읽기"를 보인다.
+
+### 6.4 소단원 내 가르치는 단위 (수업 블록, `20261124160000_course_unit_blocks.sql`)
+
+2026-11-24 운영자 결정: 무한 중첩 폴더의 깊이 불균형을 막고 **`1층 단원(대·중·소) → 2층 가르치는 단위(수업 블록) → 3층 원자개념`**의 고정 계층으로 정리한다.
+
+- `course_unit_blocks`: 기준 단원(`unit_id → course_map_units.id`, `on delete cascade`) 아래 1단계에만 두는 수업 블록(`name` 1~80자, `sort_order`).
+- `concept_appearances.unit_block_id`: 같은 단원 안의 수업 블록을 가리킨다(`on delete set null`). 아직 블록에 넣지 않은 낱개 개념(`unit_block_id is null`)도 공존한다.
+- 무결성 트리거(`trg_concept_appearances_block_guard`):
+  - 다른 단원의 블록을 가리키면(`course_block_unit_mismatch`) 막는다.
+  - 개념 배치를 다른 단원으로 옮기면(운영자 직접·Think 카드 승인 모두) 이전 단원의 블록 소속을 자동으로 `null`로 풀어 충돌을 막는다.
+  - RPC 밖에서 직접 `unit_block_id`를 고치려 하면 `course_placement_use_rpc`로 막는다.
+- RPC(최고 관리자 전용): `course_map_blocks`, `course_unit_block_create`, `course_unit_block_rename`, `course_unit_block_delete`(안의 원자개념 배치는 단원에 그대로 남고 블록만 해제), `course_unit_blocks_reorder`, `course_placement_set_block`(블록 소속 변경 + 단원 내 순서 원자적 갱신), `course_unit_block_add_concepts`. `course_placement_json`에도 `block_id`를 함께 싣는다.
+- 트리 UI(`course_map_pane.dart`): 무테두리 **좌측 2px 라운드 수직 브래킷(A안)** 스타일로 덩어리를 묶고, 회전 셰브론(`AnimatedRotation`)과 높이·투명도 모션(`AnimatedAlign` + `AnimatedOpacity`, `Curves.easeOutCubic`)으로 접었다 펼친다. 트리 안에서 바로 `+ 블록` 생성 시 인라인 이름 편집 칸이 열리고, 더블클릭·수정 아이콘으로 언제든 이름을 고치며, 드래그 앤 드롭으로 블록 순서와 원자개념의 블록 소속·순서를 모두 바꾼다.
 
 ## 7. Think 카드
 

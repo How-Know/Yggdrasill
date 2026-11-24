@@ -26,6 +26,7 @@ import '../services/student_api.dart';
 import '../services/student_point_session.dart';
 import '../services/textbook_api.dart';
 import '../services/textbook_study_session.dart';
+import '../widgets/homework_now_playing_bar.dart';
 import '../widgets/math_expression_editor.dart';
 import '../widgets/math_keypad.dart';
 import '../widgets/math_latex_view.dart';
@@ -61,6 +62,7 @@ class HomeworkSolveScope {
     required this.cropIds,
     required this.rawPages,
     this.orderedCropIds = const <String>[],
+    this.assignmentType = '',
   });
 
   final String groupId;
@@ -69,13 +71,22 @@ class HomeworkSolveScope {
   /// 배정된 문항 crop id. 페이지에 다른 문항이 섞여 있어도 이것만 보여준다.
   final Set<String> cropIds;
 
-  /// 배정 순서대로 나열된 crop id (과제 독립 번호 1, 2, 3… 부여 기준).
+  /// 배정 순서대로 나열된 crop id (교재가 아닌 과제의 독립 번호 1, 2, 3… 기준).
   final List<String> orderedCropIds;
+
+  /// 과제 유형. `교재`면 시중 책에 인쇄된 번호를 그대로 보여 준다.
+  final String assignmentType;
 
   /// 배정 문항이 있는 페이지. 이 페이지들 사이에서만 이동한다.
   final Set<int> rawPages;
 
   bool get isEmpty => cropIds.isEmpty;
+
+  /// 시중 교재에 인쇄된 문항 번호를 그대로 보여 준다.
+  bool get showsPrintedProblemNumber {
+    final type = assignmentType.trim();
+    return type == '교재' || type == '문제집';
+  }
 }
 
 /// 기존 교재 풀이 UI를 그대로 사용하는 시간제한 시험 컨텍스트.
@@ -87,6 +98,21 @@ class TimedTestSolveConfig {
 
   final HomeworkGroup group;
   final List<HomeworkProblem> problems;
+}
+
+/// 이번 시도 시작 때 문항의 답. 미풀이·오답만 [included].
+class _HomeworkAttemptBaseline {
+  const _HomeworkAttemptBaseline({
+    required this.included,
+    required this.answers,
+    required this.fromPage,
+  });
+
+  final bool included;
+  final Map<String, String> answers;
+
+  /// 페이지 문항을 연 뒤의 기준이면 파트별로 비교한다.
+  final bool fromPage;
 }
 
 /// 교재 풀이 화면.
@@ -139,6 +165,9 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
   /// 나가기 처리(잔여 답 채점 + 미수행 기록)가 도는 중.
   bool _exitFlushing = false;
   bool _exitChoiceOpen = false;
+
+  /// 학습앱이 과제를 멈춰 확인 없이 과제 탭으로 돌아가는 중.
+  bool _forcePop = false;
 
   /// crop_id → 현재 입력값
   final Map<String, String> _answers = <String, String>{};
@@ -303,10 +332,13 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
         widget.homework!.orderedCropIds[i]: i,
   };
 
-  /// 화면에 표시할 문항 번호. 과제는 배정 순서 독립 번호(1, 2, 3…), 교재는 원본 번호.
+  /// 화면에 표시할 문항 번호.
+  /// 교재 자유풀이와 과제 유형이 `교재`인 그룹과제는 인쇄된 번호,
+  /// 그 외 과제는 배정 순서 1, 2, 3…, 시간제한 테스트는 `제 N문제`.
   String _displayProblemNumber(PageProblem problem) {
     if (_isTimedTest) return '제 ${_timedIndex + 1}문제';
-    if (widget.homework != null) {
+    final homework = widget.homework;
+    if (homework != null && !homework.showsPrintedProblemNumber) {
       final order = _homeworkOrderByCrop[problem.cropId];
       if (order != null) return '${order + 1}';
     }
@@ -385,6 +417,8 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
     _remoteSyncTimer?.cancel();
     HomeworkSession.instance.textbookSyncTick
         .removeListener(_onRemoteTextbookSync);
+    HomeworkSession.instance.remotePauseTick
+        .removeListener(_onRemoteHomeworkPause);
     ApplePencilUndo.unbindErase(this);
     WidgetsBinding.instance.removeObserver(this);
     _problemViewRequestEpoch++;
@@ -434,6 +468,8 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
       DeviceOrientation.portraitDown,
     ]);
     ApplePencilUndo.bindErase(owner: this, onErase: _eraseFromApplePencil);
+    HomeworkSession.instance.remotePauseTick
+        .addListener(_onRemoteHomeworkPause);
     if (_isTimedTest) {
       _paneMode = _PaneMode.question;
       unawaited(_prepareTimedTest());
@@ -1046,6 +1082,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
             if (row.cropId.isNotEmpty) row.cropId: row,
         };
         _homeworkRoundByCrop = byCrop;
+        _seedAttemptBaselinesFromHomework();
       } catch (_) {
         // 조회 실패 시 캐시 상태로라도 보여준다. 이전 회차가 비칠 수 있지만
         // 화면이 막히는 것보다 낫다.
@@ -1227,6 +1264,126 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
     }
   }
 
+  final Map<String, _HomeworkAttemptBaseline> _attemptBaselines =
+      <String, _HomeworkAttemptBaseline>{};
+
+  /// 아직 안 연 문항은 과제 배정 기록으로 분모만 잡아 둔다.
+  void _seedAttemptBaselinesFromHomework() {
+    final scope = widget.homework;
+    final byCrop = _homeworkRoundByCrop;
+    if (scope == null || byCrop == null || _isTimedTest) return;
+    for (final cropId in scope.cropIds) {
+      if (_attemptBaselines.containsKey(cropId)) continue;
+      final row = byCrop[cropId];
+      if (row == null) continue;
+      final needsWork = _homeworkProblemNeedsWork(row);
+      _attemptBaselines[cropId] = _HomeworkAttemptBaseline(
+        included: needsWork && !_isOnHold(cropId),
+        answers: <String, String>{
+          cropId: needsWork ? _homeworkBaselineAnswer(row) : '',
+        },
+        fromPage: false,
+      );
+    }
+  }
+
+  bool _homeworkProblemNeedsWork(HomeworkProblem row) {
+    final graded = row.lastGradedResult ??
+        (row.lastResult == 'skipped' ? null : row.lastResult);
+    if (graded == 'correct') return false;
+    if (graded == null && row.passed) return false;
+    return true;
+  }
+
+  String _homeworkBaselineAnswer(HomeworkProblem row) {
+    if (!_homeworkProblemNeedsWork(row)) return '';
+    final graded = row.lastGradedResult ??
+        (row.lastResult == 'skipped' ? null : row.lastResult);
+    if (graded == null) return '';
+    return (row.lastGradedAnswer ?? row.lastAnswer ?? '').trim();
+  }
+
+  /// 페이지를 열면 파트별 원본 답으로 기준을 바꾼다. 이미 고친 답은 유지한다.
+  void _rememberPageAttemptBaseline(PageProblem problem) {
+    if (widget.homework == null || _isTimedTest) return;
+    final existing = _attemptBaselines[problem.cropId];
+    if (existing != null && existing.fromPage) return;
+    if (existing != null && _attemptAnswerRecognized(problem.cropId, existing)) {
+      return;
+    }
+    final answers = <String, String>{};
+    if (problem.hasParts) {
+      final byKey = <String, String>{
+        for (final part in problem.partResults)
+          part.key: part.answer?.trim() ?? '',
+      };
+      for (final part in problem.setParts) {
+        answers[_answerKeyOf(problem.cropId, part.key)] = byKey[part.key] ?? '';
+      }
+    } else {
+      answers[problem.cropId] = problem.myAnswer?.trim() ?? '';
+    }
+    _attemptBaselines[problem.cropId] = _HomeworkAttemptBaseline(
+      included: problem.myCorrect != true && !_isOnHold(problem.cropId),
+      answers: answers,
+      fromPage: true,
+    );
+  }
+
+  String _baselineAnswerSignature(
+    String cropId,
+    _HomeworkAttemptBaseline baseline,
+  ) {
+    final seen = _seenProblems[cropId];
+    if (baseline.fromPage && seen != null && seen.hasParts) {
+      return [
+        for (final part in seen.setParts)
+          baseline.answers[_answerKeyOf(cropId, part.key)] ?? '',
+      ].join('\u001f');
+    }
+    return baseline.answers[cropId] ?? '';
+  }
+
+  String _liveAnswerSignature(
+    String cropId,
+    _HomeworkAttemptBaseline baseline,
+  ) {
+    final seen = _seenProblems[cropId];
+    if (baseline.fromPage && seen != null && seen.hasParts) {
+      return [
+        for (final part in seen.setParts)
+          _answers[_answerKeyOf(cropId, part.key)]?.trim() ?? '',
+      ].join('\u001f');
+    }
+    return _answers[cropId]?.trim() ?? '';
+  }
+
+  /// 이번 시도에서 답을 새로 썼거나, 들어와 있던 답과 다르게 고친 경우.
+  bool _attemptAnswerRecognized(
+    String cropId,
+    _HomeworkAttemptBaseline baseline,
+  ) {
+    final current = _liveAnswerSignature(cropId, baseline);
+    if (current == _baselineAnswerSignature(cropId, baseline)) return false;
+    return current.replaceAll('\u001f', '').trim().isNotEmpty;
+  }
+
+  /// 이번 시도에서 손댄 수와 미풀이+오답. 손댈 문항이 없으면 null.
+  ({int done, int total})? _attemptProgress() {
+    if (widget.homework == null || _isTimedTest) return null;
+    var total = 0;
+    var done = 0;
+    final scope = widget.homework!.cropIds;
+    for (final entry in _attemptBaselines.entries) {
+      if (!entry.value.included) continue;
+      if (scope.isNotEmpty && !scope.contains(entry.key)) continue;
+      total += 1;
+      if (_attemptAnswerRecognized(entry.key, entry.value)) done += 1;
+    }
+    if (total <= 0) return null;
+    return (done: done, total: total);
+  }
+
   bool _localAnswerDirty(String key) {
     final value = _answers[key]?.trim() ?? '';
     return value.isNotEmpty && value != (_gradedAnswers[key]?.trim() ?? '');
@@ -1235,6 +1392,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
   /// 페이지 문항의 서버 기록(답·정오·시도)을 화면 상태에 반영한다.
   void _absorbProblemRecords(Iterable<PageProblem> problems) {
     for (final p in problems) {
+      _rememberPageAttemptBaseline(p);
       _seenProblems[p.cropId] = p;
       if (p.myAnswer != null && p.myAnswer!.isNotEmpty) {
         if (!_localAnswerDirty(p.cropId)) {
@@ -1862,6 +2020,60 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
     );
   }
 
+  /// 학습앱 홈에서 수행 중 과제를 멈추면 확인 없이 나간다.
+  void _onRemoteHomeworkPause() {
+    if (!mounted || _forcePop) return;
+    unawaited(_leaveForRemoteHomeworkPause());
+  }
+
+  Future<void> _leaveForRemoteHomeworkPause() async {
+    if (_forcePop) return;
+    _forcePop = true;
+    if (mounted) setState(() {});
+    final frame = Completer<void>();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!frame.isCompleted) frame.complete();
+    });
+    await frame.future;
+    if (!mounted) return;
+    try {
+      await _flushPencilInput();
+    } catch (_) {}
+    if (!mounted) return;
+    final pending = _collectPendingSubmissions();
+    final bookId = widget.book.bookId;
+    final gradeLabel = widget.book.gradeLabel;
+    final homeworkGroupId = widget.homework?.groupId;
+    final sessionId = widget.studySessionId;
+    final pauseFreeSolve = widget.homework == null &&
+        widget.entryMode == TextbookEntryMode.solve;
+    final navigator = Navigator.of(context);
+    if (navigator.canPop()) {
+      navigator.popUntil((route) => route.isFirst);
+    }
+    if (pending.answers.isNotEmpty || pending.parts.isNotEmpty) {
+      unawaited(
+        TextbookApi.instance
+            .gradePage(
+              bookId: bookId,
+              gradeLabel: gradeLabel,
+              answersByCropId: pending.answers,
+              partAnswersByCropId: pending.parts,
+              homeworkGroupId: homeworkGroupId,
+              sessionId: sessionId,
+            )
+            .then<void>((_) {}, onError: (Object _, StackTrace __) {}),
+      );
+    }
+    if (pauseFreeSolve) {
+      unawaited(
+        TextbookStudySession.instance
+            .pauseBookSolve(bookId: bookId, gradeLabel: gradeLabel)
+            .then<void>((_) {}, onError: (Object _, StackTrace __) {}),
+      );
+    }
+  }
+
   /// 뒤로 나가기 전 잔여 처리.
   ///
   /// 1) 바로풀기 모드면 종료/중단 여부를 먼저 확인한다(정답입력하기는 묻지 않음).
@@ -1870,6 +2082,7 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
   ///    한 번도 안 푼 문항을 미수행(skipped)으로 기록한다 — 학생이 스스로
   ///    검사를 받고 나간 것과 같은 셈이다. 학습앱 회차 이력에도 남는다.
   Future<void> _handleExit() async {
+    if (_forcePop) return;
     if (_isTimedTest) {
       if (_timedFinishing) return;
       final end = await showStudentConfirmSheet(
@@ -3844,9 +4057,10 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
     final titleExtent = _solveTitleExtent(context);
     return PopScope(
       // 시스템 뒤로가기도 잔여 답 채점·미수행 기록을 거친 뒤 나간다.
-      canPop: false,
+      // 학습앱이 과제를 멈춘 경우에는 확인 없이 루트로 빠진다.
+      canPop: _forcePop,
       onPopInvokedWithResult: (didPop, result) {
-        if (didPop) return;
+        if (didPop || _forcePop) return;
         unawaited(_handleExit());
       },
       child: Scaffold(
@@ -4717,6 +4931,14 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
       child: ColoredBox(color: Color(0x14000000)),
     );
 
+    final attemptProgress = _attemptProgress();
+    final showHomeworkStatus =
+        widget.homework != null && !_isTimedTest;
+    // 알약 32 + 제목 아래 간격 8 + 본문과의 간격 10.
+    const homeworkStatusBand = 50.0;
+    final paneTopInset = showHomeworkStatus && _solvePaneImmersive
+        ? topInset + homeworkStatusBand
+        : topInset;
     return LayoutBuilder(
       builder: (context, constraints) {
         final body = switch (_paneMode) {
@@ -4725,7 +4947,33 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
               children: [
                 Expanded(
                   flex: 2,
-                  child: _buildAnswerFeed(theme, problems, topInset),
+                  child: Stack(
+                    children: [
+                      _buildAnswerFeed(theme, problems, topInset),
+                      if (widget.homework != null && !_isTimedTest) ...[
+                        if (attemptProgress != null)
+                          Positioned(
+                            left: 24,
+                            bottom: 10,
+                            child: IgnorePointer(
+                              child: HomeworkAttemptCountPill(
+                                done: attemptProgress.done,
+                                total: attemptProgress.total,
+                              ),
+                            ),
+                          ),
+                        Positioned(
+                          right: 24,
+                          bottom: 10,
+                          child: IgnorePointer(
+                            child: HomeworkElapsedPill(
+                              groupId: widget.homework!.groupId,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
                 ),
                 divider,
                 Expanded(
@@ -4737,13 +4985,13 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
           _PaneMode.question => _buildQuestionPane(
               theme,
               selectedProblem,
-              topInset: topInset,
+              topInset: paneTopInset,
               bottomInset: bottomInset,
             ),
           _PaneMode.body => _buildBodyPane(
               theme,
               selectedProblem,
-              topInset: topInset,
+              topInset: paneTopInset,
               bottomInset: bottomInset,
             ),
         };
@@ -4751,6 +4999,28 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
         return Stack(
           children: [
             body,
+            if (showHomeworkStatus && _solvePaneImmersive) ...[
+              if (attemptProgress != null)
+                Positioned(
+                  left: 24,
+                  top: topInset + 8,
+                  child: IgnorePointer(
+                    child: HomeworkAttemptCountPill(
+                      done: attemptProgress.done,
+                      total: attemptProgress.total,
+                    ),
+                  ),
+                ),
+              Positioned(
+                right: 24,
+                top: topInset + 8,
+                child: IgnorePointer(
+                  child: HomeworkElapsedPill(
+                    groupId: widget.homework!.groupId,
+                  ),
+                ),
+              ),
+            ],
             // 연습장은 FAB 아래·콘텐츠 위에 깔고, FAB은 위에 남겨 노트로 닫을 수 있게 한다.
             AnimatedPositioned(
               duration: const Duration(milliseconds: 280),
@@ -5922,7 +6192,11 @@ class _TextbookSolveScreenState extends State<TextbookSolveScreen>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    SizedBox(height: _islandBottom(context)),
+                    SizedBox(
+                      height: widget.homework != null && !_isTimedTest
+                          ? topInset
+                          : _islandBottom(context),
+                    ),
                     _buildBodyPdf(
                       theme,
                       selectedProblem: problem,

@@ -62,6 +62,7 @@ class ExamPaperCard extends StatelessWidget {
     required this.footer,
     required this.onTap,
     this.onOriginalTap,
+    this.onSolutionTap,
     this.busy = false,
     this.printPick = false,
   });
@@ -71,6 +72,7 @@ class ExamPaperCard extends StatelessWidget {
   final String footer;
   final VoidCallback? onTap;
   final VoidCallback? onOriginalTap;
+  final VoidCallback? onSolutionTap;
   final bool busy;
   final bool printPick;
 
@@ -169,42 +171,47 @@ class ExamPaperCard extends StatelessWidget {
                                   ),
                                 ),
                               ),
-                              if (!printPick && onOriginalTap != null) ...[
+                              if (!printPick &&
+                                  onOriginalTap != null &&
+                                  onSolutionTap == null) ...[
                                 const SizedBox(width: 6),
-                                GestureDetector(
-                                  onTap: busy ? null : onOriginalTap,
-                                  behavior: HitTestBehavior.opaque,
-                                  child: MouseRegion(
-                                    cursor: busy
-                                        ? SystemMouseCursors.basic
-                                        : SystemMouseCursors.click,
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 8,
-                                        vertical: 4,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: isDark
-                                            ? const Color(0xFF3A3F44)
-                                            : const Color(0xFFE4E4E4),
-                                        borderRadius: BorderRadius.circular(6),
-                                      ),
-                                      child: Text(
-                                        '원본 보기',
-                                        style: TextStyle(
-                                          color: isDark
-                                              ? Colors.white70
-                                              : const Color(0xFF444444),
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
+                                _ExamPaperChipButton(
+                                  label: '원본 보기',
+                                  enabled: !busy,
+                                  isDark: isDark,
+                                  onTap: onOriginalTap,
                                 ),
                               ],
                             ],
                           ),
+                          if (!printPick && onSolutionTap != null) ...[
+                            const SizedBox(height: 8),
+                            Row(
+                              children: [
+                                if (onOriginalTap != null)
+                                  Expanded(
+                                    child: _ExamPaperChipButton(
+                                      label: '원본',
+                                      enabled: !busy,
+                                      isDark: isDark,
+                                      expand: true,
+                                      onTap: onOriginalTap,
+                                    ),
+                                  ),
+                                if (onOriginalTap != null)
+                                  const SizedBox(width: 8),
+                                Expanded(
+                                  child: _ExamPaperChipButton(
+                                    label: '해설',
+                                    enabled: !busy,
+                                    isDark: isDark,
+                                    expand: true,
+                                    onTap: onSolutionTap,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
                         ],
                       ),
                     ),
@@ -224,6 +231,55 @@ class ExamPaperCard extends StatelessWidget {
                   ),
                 ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ExamPaperChipButton extends StatelessWidget {
+  const _ExamPaperChipButton({
+    required this.label,
+    required this.enabled,
+    required this.isDark,
+    required this.onTap,
+    this.expand = false,
+  });
+
+  final String label;
+  final bool enabled;
+  final bool isDark;
+  final VoidCallback? onTap;
+  final bool expand;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: enabled ? onTap : null,
+      behavior: HitTestBehavior.opaque,
+      child: MouseRegion(
+        cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+        child: Container(
+          width: expand ? double.infinity : null,
+          alignment: Alignment.center,
+          padding: EdgeInsets.symmetric(
+            horizontal: 8,
+            vertical: expand ? 8 : 4,
+          ),
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF3A3F44) : const Color(0xFFE4E4E4),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: isDark ? Colors.white70 : const Color(0xFF444444),
+              fontSize: expand ? 12 : 11,
+              fontWeight: FontWeight.w700,
+            ),
           ),
         ),
       ),

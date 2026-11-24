@@ -496,5 +496,53 @@ void main() {
       );
       expect(b.writes, 0);
     });
+
+    test('수업 블록 생성·이름 변경·순서 변경·개념 소속 이동·해제가 동작하고 단원 이동 시 블록이 풀린다', () async {
+      final (b, id) = _seed();
+      final add = b.unitId(id, '덧셈과 뺄셈');
+      final mul = b.unitId(id, '곱셈');
+      final k1 = b.addConcept('동류항');
+      final k2 = b.addConcept('내림차순');
+      final k3 = b.addConcept('다항식의 덧셈');
+      final p1 = b.place(add, k1);
+      final p2 = b.place(add, k2);
+      final p3 = b.place(add, k3);
+
+      final c = _controller(b);
+      await c.loadList();
+
+      final (blk1, err1) = await c.createBlock(add, name: '식 정리의 기초', placementIds: [p1, p2]);
+      expect(err1, isNull);
+      expect(blk1, isNotNull);
+      expect(c.conceptsOpen(id, add), isTrue);
+      expect(c.blockExpanded(id, blk1!), isTrue);
+      expect(c.placementsInBlock(id, add, blk1).map((p) => p.name), ['동류항', '내림차순']);
+      expect(c.placementsInBlock(id, add, null).map((p) => p.name), ['다항식의 덧셈']);
+
+      final (blk2, err2) = await c.createBlock(add, name: '덧셈과 뺄셈 연산');
+      expect(err2, isNull);
+      expect(await c.setPlacementBlock(add, p3, blk2), isNull);
+      expect(c.placementsInBlock(id, add, blk2).map((p) => p.name), ['다항식의 덧셈']);
+
+      expect(await c.renameBlock(blk1, '다항식 정리'), isNull);
+      expect(c.blocksIn(id, add).map((x) => x.name), ['다항식 정리', '덧셈과 뺄셈 연산']);
+
+      expect(await c.reorderBlocks(add, [blk2!, blk1]), isNull);
+      expect(c.blocksIn(id, add).map((x) => x.name), ['덧셈과 뺄셈 연산', '다항식 정리']);
+
+      c.toggleBlock(id, blk1);
+      expect(c.blockExpanded(id, blk1), isFalse);
+      c.toggleBlock(id, blk1);
+      expect(c.blockExpanded(id, blk1), isTrue);
+
+      // 다른 단원으로 옮기면 블록 소속 자동 해제
+      expect(await c.movePlacement(p1, mul), isNull);
+      expect(c.placementsIn(id, mul).single.blockId, isNull);
+
+      // 블록을 풀면 안의 개념은 지워지지 않고 단원 내 낱개로 남는다
+      expect(await c.deleteBlock(blk2), isNull);
+      expect(c.blocksIn(id, add).map((x) => x.id), [blk1]);
+      expect(c.placementsInBlock(id, add, null).map((p) => p.name), ['다항식의 덧셈']);
+    });
   });
 }

@@ -50,6 +50,8 @@ export const CONCEPT_FILES = [
   '20261031130000_concept_review_progress_fair_queue.sql',
   '20261101003000_concept_review_open_required_scopes.sql',
   '20261104150000_concept_review_held_compared_rereview.sql',
+  '20261119233000_course_placement_accept.sql',
+  '20261124160000_course_unit_blocks.sql',
 ];
 
 const CONCEPT_STUBS = `

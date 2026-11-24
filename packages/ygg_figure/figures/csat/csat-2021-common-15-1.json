@@ -1,0 +1,28 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.1",
+  "ref": "csat-2021-common-15-1",
+  "params": {"ox": 27.8832, "oy": 27.9588, "r": 23.8378, "ba": 141.0883, "ca": 102.0575},
+  "fit": ["ox", "oy", "r", "ba", "ca"],
+  "canvas": {"width": 76.2, "height": 57.79, "origin": ["ox", "oy"], "unit": 1},
+  "objects": [
+    {"id": "O1", "type": "point", "at": [0, 0], "label": {"dir": "SW", "dist": 0.6}},
+    {"id": "O2", "type": "point", "at": ["r", 0], "label": {"dir": "E", "dist": 1.0}},
+    {"id": "c1", "type": "circle", "center": "O1", "radius": "r"},
+    {"id": "c2", "type": "circle", "center": "O2", "radius": "r"},
+    {"id": "A", "type": "point", "at": ["-r", 0], "label": {"dir": "W", "dist": 0.8}},
+    {"id": "B", "type": "on", "of": "c1", "angle": "ba", "label": {"dir": "NW", "dist": 0.6}},
+    {"id": "C", "type": "on", "of": "c1", "angle": "ca", "label": {"dir": "NW", "dist": 0.6}},
+    {"id": "D", "type": "intersect", "of": ["c2", ["C", "O2"]], "near": ["2r", "-r"], "label": {"dir": "SE", "dist": 0.6}},
+    {"type": "segment", "from": "B", "to": "C", "line": "main_dashed"},
+    {"type": "segment", "from": "B", "to": "O2", "line": "main_dashed"},
+    {"type": "segment", "from": "A", "to": "O2"},
+    {"type": "polyline", "points": ["A", "B", "O1", "C", "D", "O1"]},
+    {"id": "t1", "type": "angle", "at": "O1", "from": "B", "to": "A", "radius": 4.0, "label": {"text": "\\theta_1", "dist": 6.9}},
+    {"id": "t2", "type": "angle", "at": "O1", "from": "O2", "to": "C", "radius": 3.3, "label": {"text": "\\theta_2", "dist": 5.5}},
+    {"id": "t3", "type": "angle", "at": "O2", "from": "O1", "to": "D", "radius": 3.3, "label": {"text": "\\theta_3", "dist": 5.1}},
+    {"id": "l1", "type": "label", "at": [0, -26.4], "text": "C_1"},
+    {"id": "l2", "type": "label", "at": ["r", -26.6], "text": "C_2"}
+  ],
+  "label_nudge": {"O1": [-0.338, -0.931], "O2": [-0.254, 0.592], "A": [0.169, -0.169], "B": [-0.254, -0.677], "C": [0.508, 0.254], "D": [0.592, 0.508], "t1": [0.254, 0.254], "t2": [0.508, -0.423], "t3": [-1.269, 0.762], "l1": [0.338, -0.254], "l2": [0.254, -0.085]}
+}
