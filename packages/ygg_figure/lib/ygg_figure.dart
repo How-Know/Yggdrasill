@@ -4,8 +4,12 @@
 library;
 
 export 'src/expr.dart' show Expr, ExprError;
-export 'src/figure.dart' show buildFigure, figureParams, FigureError, engineVersion, figureFormat;
+export 'src/edit.dart';
+export 'src/figure.dart' show buildFigure, layoutFigure, FigureLayout, figureParams, FigureError, engineVersion, figureFormat;
 export 'src/geom.dart' show P;
 export 'src/scene.dart';
+export 'src/size_table.dart';
+export 'src/sizing.dart';
 export 'src/style.dart' show FigureStyle;
+export 'src/tags.dart';
 export 'src/tikz.dart' show sceneToTikz, standaloneDocument;

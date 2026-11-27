@@ -13,6 +13,26 @@ class Scene {
   final String style;
   final String engine;
 
+  /// 글자를 뺀 도형만이 차지한 자리(선 굵기 포함, mm). 도형이 없으면 null.
+  ///
+  /// 그림을 정한 크기에 맞출 때 쓴다. 글자는 배율과 상관없이 크기가 같아서 따로 셈한다.
+  ({double left, double top, double right, double bottom})? geometryBounds() {
+    var x0 = double.infinity, y0 = double.infinity, x1 = -double.infinity, y1 = -double.infinity;
+    for (final item in items.whereType<PathItem>()) {
+      final half = (item.stroke?.width ?? 0) / 2;
+      for (final run in item.path.flatten(0.5)) {
+        for (final q in run) {
+          x0 = math.min(x0, q.x - half);
+          y0 = math.min(y0, q.y - half);
+          x1 = math.max(x1, q.x + half);
+          y1 = math.max(y1, q.y + half);
+        }
+      }
+    }
+    if (x0.isInfinite) return null;
+    return (left: x0, top: y0, right: x1, bottom: y1);
+  }
+
   /// 이 그림에서 왼쪽 위가 ([left], [top]) 이고 크기가 [width]×[height] 인 창으로 본 그림.
   ///
   /// 그림판을 원본보다 넓게 잡은 그림을 원본과 겹쳐 볼 때, 원본이 차지하는 자리만 잘라 내는 데 쓴다.

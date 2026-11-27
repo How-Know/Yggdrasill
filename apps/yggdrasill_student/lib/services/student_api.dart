@@ -1502,6 +1502,50 @@ class TodayCompletedHomework {
 }
 
 /// Supabase 직접 통신 API. 모든 호출은 로그인된 학생 세션 기준(RPC가 본인 검증).
+class ConceptSearchHit {
+  const ConceptSearchHit({
+    required this.id,
+    required this.name,
+    required this.content,
+    required this.typeName,
+    required this.groupName,
+    required this.courses,
+  });
+
+  final String id;
+  final String name;
+  final String content;
+
+  /// 개념 유형. 예: 정의, 성질, 방법.
+  final String typeName;
+
+  /// 기존 구분. 예: 정의, 정리, 연산.
+  final String groupName;
+
+  /// 교육과정 흐름에 등장하는 과정 이름.
+  final String courses;
+
+  /// 유형과 구분이 같으면 한 번만 보여 준다.
+  String get categoryLabel {
+    final type = typeName.trim();
+    final group = groupName.trim();
+    if (type.isEmpty) return group;
+    if (group.isEmpty || group == type) return type;
+    return '$type · $group';
+  }
+
+  static ConceptSearchHit fromRow(Map<String, dynamic> row) {
+    return ConceptSearchHit(
+      id: '${row['id'] ?? ''}',
+      name: (row['name'] as String?)?.trim() ?? '',
+      content: (row['content'] as String?) ?? '',
+      typeName: (row['type_name'] as String?)?.trim() ?? '',
+      groupName: (row['group_name'] as String?)?.trim() ?? '',
+      courses: (row['courses'] as String?)?.trim() ?? '',
+    );
+  }
+}
+
 class StudentApi {
   StudentApi._();
   static final StudentApi instance = StudentApi._();
@@ -1791,6 +1835,18 @@ class StudentApi {
     await _client.rpc('student_set_nickname', params: {
       'p_nickname': (nickname ?? '').trim(),
     });
+  }
+
+  /// 교육과정 흐름에 놓인 개념 이름 검색. Think 배지가 남은 개념은 서버가 뺀다.
+  Future<List<ConceptSearchHit>> searchConcepts(String query) async {
+    final rows = await _client.rpc(
+      'student_search_concepts_v1',
+      params: {'p_query': query.trim()},
+    ) as List<dynamic>;
+    return [
+      for (final raw in rows)
+        if (raw is Map) ConceptSearchHit.fromRow(Map<String, dynamic>.from(raw)),
+    ];
   }
 
   /// Realtime 필터용 본인 academy/student.

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
+import '../figure_engine/figure_editor_screen.dart';
 import 'yggdrasill_manager/concept_library/concept_statement_preview_screen.dart';
 import 'yggdrasill_manager/concept_library/concept_tree_preview_screen.dart';
+import 'yggdrasill_manager/figure_engine/figure_editor_preview_screen.dart';
 import 'yggdrasill_manager/settings/management_settings_preview_screen.dart';
 import 'yggdrasill_manager/textbook_review/textbook_review_preview_screen.dart';
 import 'yggdrasill_manager/think/think_departments_preview_screen.dart';
@@ -169,6 +171,52 @@ class DesignPreviewHubScreen extends StatelessWidget {
                 Navigator.of(context).push(
                   MaterialPageRoute<void>(
                     builder: (_) => const ConceptStatementPreviewScreen(),
+                  ),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 8),
+          Card(
+            color: _card,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: const BorderSide(color: _border),
+            ),
+            child: ListTile(
+              title: const Text('그림 편집기', style: TextStyle(color: _text)),
+              subtitle: const Text(
+                '이 PC 의 그림 파일을 열어 점·글자 끌기 / 도형 더 그리기 / 양식 × 자리 크기 표 정하기 / 저장',
+                style: TextStyle(color: _sub),
+              ),
+              trailing: const Icon(Icons.chevron_right, color: _sub),
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const FigureEditorScreen(),
+                  ),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 8),
+          Card(
+            color: _card,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: const BorderSide(color: _border),
+            ),
+            child: ListTile(
+              title: const Text('그림 편집 (목업)', style: TextStyle(color: _text)),
+              subtitle: const Text(
+                '엔진 그림 고치기 / 양식 × 자리 크기 / 문제 안에서 자리 보기 (목업)',
+                style: TextStyle(color: _sub),
+              ),
+              trailing: const Icon(Icons.chevron_right, color: _sub),
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const FigureEditorPreviewScreen(),
                   ),
                 );
               },

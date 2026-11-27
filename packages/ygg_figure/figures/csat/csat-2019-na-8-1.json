@@ -1,0 +1,31 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.2",
+  "ref": "csat-2019-na-8-1",
+  "kind": "graph",
+  "tags": ["piecewise-graph"],
+  "params": {"u": 10.8634, "ox": 16.4913, "oy": 34.9985},
+  "fit": ["u", "ox", "oy"],
+  "canvas": {"width": 52.92, "height": 48.51, "origin": ["ox", "oy"], "unit": "u"},
+  "objects": [
+    {"id": "ax", "type": "axes", "x": [-1.5, 3.3], "y": [-1.2, 3.0]},
+    {"type": "segment", "from": [0, 2], "to": [1, 2], "line": "dashed"},
+    {"type": "segment", "from": [0, 1], "to": [1, 1], "line": "dashed"},
+    {"type": "segment", "from": [1, 0], "to": [1, 2], "line": "dashed"},
+    {"id": "f1", "type": "function", "expr": "2", "domain": [-1.35, 0]},
+    {"id": "f2", "type": "function", "expr": "2x", "domain": [0, 1]},
+    {"id": "f3", "type": "function", "expr": "2-x", "domain": [1, 2.95]},
+    {"type": "dot", "at": [0, 2], "kind": "open"},
+    {"type": "dot", "at": [1, 2], "kind": "open"},
+    {"type": "dot", "at": [1, 1], "kind": "open"},
+    {"type": "dot", "at": [0, 0], "kind": "filled"},
+    {"type": "dot", "at": [1, 0], "kind": "filled"},
+    {"id": "t1", "type": "label", "at": [1, 0], "text": "1", "dir": "S", "dist": 1.6},
+    {"id": "t2", "type": "label", "at": [2, 0], "text": "2", "dir": "S", "dist": 1.6},
+    {"id": "y1", "type": "label", "at": [0, 1], "text": "1", "dir": "W", "dist": 1.2},
+    {"id": "y2", "type": "label", "at": [0, 2], "text": "2", "dir": "NW", "dist": 1.0},
+    {"id": "lf", "type": "label", "at": [1, 2], "text": "y=f(x)", "dir": "E", "dist": 2.2}
+  ],
+  "size": {"variant": "small"},
+  "label_nudge": {"ax:x": [-0.085, 0.254], "ax:y": [0.508, 0.254], "ax:origin": [0.0, -0.254], "t1": [0.169, 0.254], "t2": [-0.169, 0.254], "y1": [0.593, -0.085], "y2": [0.085, 0.508]}
+}

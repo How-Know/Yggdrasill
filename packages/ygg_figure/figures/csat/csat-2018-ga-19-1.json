@@ -1,0 +1,27 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.2",
+  "ref": "csat-2018-ga-19-1",
+  "kind": "solid",
+  "tags": ["tetrahedron"],
+  "params": {"ox": 3.9284, "oy": 24.5208, "ux": 6.6697, "uy": 0.7363, "vx": 1.7477, "vy": -2.8334, "h": 6.2746, "k": 0.866025},
+  "fit": ["ox", "oy", "ux", "uy", "vx", "vy", "h"],
+  "canvas": {"width": 88.48, "height": 52.79, "origin": ["ox", "oy"], "unit": 1},
+  "projection": {"x": ["ux", "uy"], "y": ["vx", "vy"], "z": [0, "h"]},
+  "objects": [
+    {"id": "C", "type": "point", "at": [0, 0, 0], "label": {"dir": "W", "dist": 0.8}},
+    {"id": "B", "type": "point", "at": [12, 0, 0], "label": {"dir": "E", "dist": 0.8}},
+    {"id": "D", "type": "point", "at": [6, "12*k", 0], "label": {"dir": "E", "dist": 0.8}},
+    {"id": "E", "type": "divide", "of": ["B", "C"], "ratio": [2, 3]},
+    {"id": "H", "type": "divide", "of": ["E", "D"], "ratio": [1, 5], "label": {"dir": "NW", "dist": 0.4}},
+    {"id": "A", "type": "point", "at": ["H.x", "H.y", 3], "label": {"dir": "N", "dist": 1.0}},
+    {"id": "Hr", "type": "translate", "of": "H", "by": [1, 0]},
+    {"type": "segment", "from": "B", "to": "C", "line": "dashed"},
+    {"type": "segment", "from": "A", "to": "H", "line": "thin"},
+    {"type": "right_angle", "at": "H", "from": "A", "to": "Hr", "size": 1.7},
+    {"type": "polygon", "points": ["A", "C", "D", "B"]},
+    {"type": "segment", "from": "A", "to": "D"}
+  ],
+  "size": {"variant": "large"},
+  "label_nudge": {"C": [0.508, -0.085], "B": [0.169, 0.0], "D": [0.169, -0.169], "H": [-0.678, -0.169], "A": [0.169, 0.0]}
+}

@@ -152,3 +152,41 @@ test('box values are kept only when they are written', () => {
   assert.equal(set.wrapLines, 3, 'the line count is a whole number');
   assert.equal(set.reserveEm, 0, 'the reserved room is not negative');
 });
+
+const STEM_BETWEEN = '그림은 함수를 나타낸 것이다.\n[문단]\n[그림]\n[문단]\n함숫값의 합은?';
+
+/// 어울림 매크로의 글 인수(다섯째 인수)부터 매크로가 닫히는 곳까지.
+function wrappedText(tex) {
+  const from = tex.indexOf('\\YggMeasuredWrapAuto{r}');
+  return tex.slice(from, tex.indexOf('\n}\n', from) + 3);
+}
+
+test('the paragraph after a figure beside the text flows beside it too', () => {
+  const tex = body({ items: [item('inline-right', { anchor: 'right' })] }, OPTIONS, STEM_BETWEEN);
+  const wrapped = wrappedText(tex);
+  assert.match(wrapped, /나타낸 것이다\.\\par\}\n\\par\n\\vspace\{0\.40em\}\n[^\n]*함숫값의 합은\?\\par\}\n\}\n$/);
+  assert.equal([...tex.matchAll(/함숫값의 합은/g)].length, 1, 'the paragraph is printed once');
+});
+
+test('the score mark stays at the end of the paragraph that flows beside the figure', () => {
+  const tex = buildDocumentTexSource(
+    [question({ items: [item('inline-right', { anchor: 'right' })] }, STEM_BETWEEN)],
+    { ...OPTIONS, includeQuestionScore: true, questionScoreByQuestionId: { 'q-placement-box': 4 } },
+  );
+  assert.match(wrappedText(tex.slice(tex.indexOf('\\begin{document}'))), /함숫값의 합은\?\\ \{\\small\\mbox\{\[4점\]\}\}\\par\}\n\}\n$/);
+});
+
+test('sub-questions and a box stay below the figure', () => {
+  const layout = { items: [item('inline-right', { anchor: 'right' })] };
+  const sub = body(layout, OPTIONS, '그림과 같다.\n[그림]\n(1) 넓이를 구하시오.');
+  assert.ok(!wrappedText(sub).includes('넓이를 구하시오'), 'a sub-question keeps its own layout');
+  const boxed = body(layout, OPTIONS, '그림과 같다.\n[그림]\n다음을 구하시오.\n[박스시작]\n조건\n[박스끝]');
+  assert.ok(wrappedText(boxed).includes('다음을 구하시오'), 'the paragraph before a box flows beside the figure');
+  assert.ok(boxed.indexOf('\\begin{tcolorbox}') > boxed.indexOf('다음을 구하시오'), 'the box comes after the wrap');
+  assert.ok(!wrappedText(boxed).includes('tcolorbox'), 'the box is not put beside the figure');
+});
+
+test('lines left beside the figure are cleared by the count wrapfig keeps', () => {
+  const tex = buildDocumentTexSource([question({ items: [item('inline-right')] })], OPTIONS);
+  assert.ok(tex.includes('\\ifnum\\numexpr\\value{WF@wrappedlines}-1\\relax>\\YggWrapClearCount'));
+});

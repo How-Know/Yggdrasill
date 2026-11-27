@@ -1,0 +1,23 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.2",
+  "ref": "csat-2018-ga-28-1",
+  "kind": "graph",
+  "tags": ["ellipse", "conic-with-circle", "conic-focus-triangle"],
+  "params": {"ox": 38.5048, "oy": 37.2802, "u": 4.0035, "th": 234.1237},
+  "fit": ["ox", "oy", "u", "th"],
+  "canvas": {"width": 78.74, "height": 70.27, "origin": ["ox", "oy"], "unit": "u"},
+  "objects": [
+    {"id": "ax", "type": "axes", "x": [-9.4, 9.75], "y": [-7.9, 8.65]},
+    {"id": "el", "type": "ellipse", "center": [0, 0], "a": 7, "b": "sqrt(33)"},
+    {"id": "c", "type": "circle", "center": [0, 3], "radius": 2},
+    {"id": "F", "type": "point", "at": ["sqrt(49-33)", 0], "label": {"dir": "S", "dist": 1.2}},
+    {"id": "F'", "type": "point", "at": ["-sqrt(49-33)", 0], "label": {"dir": "S", "dist": 1.2}},
+    {"id": "P", "type": "on", "of": "c", "angle": "th", "label": {"dir": "S", "dist": 1.0}},
+    {"id": "Q", "type": "intersect", "of": ["el", ["F'", "P"]], "near": [5, 4], "label": {"dir": "NE", "dist": 0.5}},
+    {"type": "segment", "from": "F'", "to": "Q"},
+    {"type": "segment", "from": "F", "to": "Q"}
+  ],
+  "size": {"variant": "medium"},
+  "label_nudge": {"ax:x": [0.0, 0.17], "ax:y": [0.254, 0.0], "ax:origin": [-0.17, -0.339], "F": [0.0, -0.254], "F'": [0.254, 0.17], "P": [0.0, -0.339], "Q": [-0.339, -0.339]}
+}

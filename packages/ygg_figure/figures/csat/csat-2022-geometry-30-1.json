@@ -1,0 +1,29 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.2",
+  "ref": "csat-2022-geometry-30-1",
+  "kind": "solid",
+  "tags": ["sphere", "tetrahedron"],
+  "params": {"ox": 33.352, "oy": 44.7912, "s": 5.4434, "phi": 16.8285, "th": 16.9567},
+  "fit": ["ox", "oy", "s", "phi", "th"],
+  "canvas": {"width": 66.68, "height": 78.27, "origin": ["ox", "oy"], "unit": 1},
+  "projection": {"x": ["s", 0], "y": [0, "s*sin(rad(phi))"], "z": [0, "s*cos(rad(phi))"]},
+  "objects": [
+    {"id": "O", "type": "point", "at": [0, 0, 0]},
+    {"id": "S", "type": "circle", "center": "O", "radius": "6*s"},
+    {"id": "eqf", "type": "parametric", "var": "t", "t": ["pi", "2pi"], "x": "6cos(t)", "y": "6sin(t)", "z": "0", "line": "thin"},
+    {"id": "eqb", "type": "parametric", "var": "t", "t": [0, "pi"], "x": "6cos(t)", "y": "6sin(t)", "z": "0", "line": "dashed"},
+    {"id": "A", "type": "point", "at": [0, 0, "6*sqrt(2)"]},
+    {"id": "B", "type": "point", "at": ["6cos(rad(th+120))", "6sin(rad(th+120))", 0]},
+    {"id": "C", "type": "point", "at": ["6cos(rad(th+240))", "6sin(rad(th+240))", 0]},
+    {"id": "D", "type": "point", "at": ["6cos(rad(th))", "6sin(rad(th))", 0]},
+    {"id": "P", "type": "divide", "of": ["B", "A"], "ratio": [2, 1]},
+    {"id": "Q", "type": "divide", "of": ["C", "A"], "ratio": [2, 1]},
+    {"id": "R", "type": "divide", "of": ["D", "A"], "ratio": [2, 1]},
+    {"type": "polygon", "points": ["B", "C", "D"]},
+    {"type": "polyline", "points": ["B", "A", "D"]},
+    {"type": "segment", "from": "A", "to": "C"},
+    {"type": "polygon", "points": ["P", "Q", "R"]}
+  ],
+  "size": {"variant": "medium"}
+}

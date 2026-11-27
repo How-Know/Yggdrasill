@@ -1,0 +1,13 @@
+name: ygg_arithmetic
+description: >-
+  연산 비용·숙련도·기준 시간 계산. Flutter와 DB에 기대지 않는 순수 Dart 패키지다.
+  시뮬레이터와 운영 계산이 같은 함수를 쓴다.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.5.0
+
+dev_dependencies:
+  lints: ^4.0.0
+  test: ^1.25.0

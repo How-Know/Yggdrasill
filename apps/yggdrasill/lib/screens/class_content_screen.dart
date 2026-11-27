@@ -35,6 +35,7 @@ import '../models/attendance_record.dart';
 import '../models/session_override.dart';
 import '../models/student_flow.dart';
 import 'learning/homework_quick_add_proxy_dialog.dart';
+import 'learning/addition_solve_page.dart';
 import '../services/tag_preset_service.dart';
 import '../services/tag_store.dart';
 import 'learning/tag_preset_dialog.dart';
@@ -63,6 +64,7 @@ import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import '../widgets/flow_setup_dialog.dart';
 import '../widgets/utility_glass_dialog_shell.dart';
 import '../widgets/pdf/homework_answer_viewer_dialog.dart';
+import '../widgets/pdf/textbook_viewer_dialog.dart';
 import '../widgets/latex_text_renderer.dart';
 import '../widgets/fab_style_home_screen_header.dart';
 import '../widgets/solid_capsule_action_bar.dart';
@@ -1554,6 +1556,25 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                             studentId: studentId,
                                             hw: summary,
                                           );
+                                        }
+                                        final additionItems = children
+                                            .where((child) => AdditionSolvePage.matches(child.content))
+                                            .toList(growable: false);
+                                        if (additionItems.isNotEmpty && additionItems.length == children.length) {
+                                          final open = additionItems.firstWhere(
+                                            (child) => child.status != HomeworkStatus.completed,
+                                            orElse: () => additionItems.first,
+                                          );
+                                          await Navigator.of(context).push(
+                                            MaterialPageRoute<void>(
+                                              builder: (_) => AdditionSolvePage(
+                                                studentId: studentId,
+                                                item: open,
+                                                measureTime: (open.type ?? '').trim() != '프린트',
+                                              ),
+                                            ),
+                                          );
+                                          return;
                                         }
                                         final gradingChildren = children
                                             .where(
@@ -16192,6 +16213,13 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
                 ),
               );
             },
+            onViewAssignment: () => _openHomeworkAssignmentPreview(
+              context: context,
+              studentId: studentId,
+              group: group,
+              summary: summary,
+              children: children,
+            ),
             onPrint: (selection) => _printHomeworkCardFromDetail(
               context: context,
               studentId: studentId,
@@ -18173,6 +18201,7 @@ Future<_ResolvedHomeworkPrintSource?> _sourceFromPbExportJobForPrint({
   LearningProblemBankService? problemBankService,
   String preferredPaperSize = '',
   Set<String>? staleExportJobIdsOut,
+  bool ignoreLaterQuestionEdits = false,
 }) async {
   final safeJobId = exportJobId.trim();
   if (academyId.trim().isEmpty || safeJobId.isEmpty) return null;
@@ -18186,7 +18215,8 @@ Future<_ResolvedHomeworkPrintSource?> _sourceFromPbExportJobForPrint({
         jobId: safeJobId,
       );
       // 완료로 잠긴 과제여도 PDF 생성 뒤 문항이 수정됐으면 새로 만든다.
-      if (job != null &&
+      if (!ignoreLaterQuestionEdits &&
+          job != null &&
           await pbService.hasQuestionRevisionsAfterExport(
             academyId: academyId,
             job: job,
@@ -19431,9 +19461,10 @@ Future<_HomeworkPrintConfirmResult?> _showHomeworkPrintConfirmDialog({
 Future<void> _runWithPrintProgressDialog(
   BuildContext context, {
   required Future<void> Function(ValueNotifier<String> progressText) run,
+  String initialMessage = '인쇄 파일을 준비하는 중입니다...',
 }) async {
   if (!context.mounted) return;
-  final progressText = ValueNotifier<String>('인쇄 파일을 준비하는 중입니다...');
+  final progressText = ValueNotifier<String>(initialMessage);
   final dialogContextCompleter = Completer<BuildContext>();
 
   unawaited(
@@ -19820,6 +19851,180 @@ Future<_HomeworkPrintRunResult> _runHomeworkPrintWithDefaultSettings({
         bodyResult.printJobSentToSpooler || companion.printJobSentToSpooler,
     error: companion.error,
   );
+}
+
+Future<_ResolvedHomeworkPrintSource?> _resolveAssignmentTimePbSource({
+  required HomeworkItem hw,
+  required HomeworkAssignmentDetail? assignment,
+  required String academyId,
+  required LearningProblemBankService problemBankService,
+  ValueNotifier<String>? progressText,
+}) async {
+  Future<_ResolvedHomeworkPrintSource?> fromJob(String jobId) {
+    final safeJobId = jobId.trim();
+    if (safeJobId.isEmpty) return Future.value(null);
+    return _sourceFromPbExportJobForPrint(
+      academyId: academyId,
+      exportJobId: safeJobId,
+      sourceKey: 'pb_export_job:$safeJobId',
+      problemBankService: problemBankService,
+      ignoreLaterQuestionEdits: true,
+    );
+  }
+
+  final locked = await fromJob(assignment?.releaseExportJobId ?? '');
+  if (locked != null) return locked;
+
+  final liveReleaseId = (assignment?.liveReleaseId ?? '').trim();
+  if (liveReleaseId.isNotEmpty) {
+    try {
+      final release = await problemBankService.getLiveReleaseById(
+        academyId: academyId,
+        liveReleaseId: liveReleaseId,
+      );
+      if (release != null) {
+        final frozen = await fromJob(
+          _preferredLiveReleaseExportJobIdForPrint(
+            release: release,
+            preferFrozen: true,
+          ),
+        );
+        if (frozen != null) return frozen;
+      }
+    } catch (_) {}
+  }
+
+  return _resolvePbPrintSource(
+    hw,
+    assignment: assignment,
+    academyId: academyId,
+    problemBankService: problemBankService,
+    ensureExportJob: true,
+    progressText: progressText,
+  );
+}
+
+Future<void> _openHomeworkAssignmentPreview({
+  required BuildContext context,
+  required String studentId,
+  required HomeworkGroup group,
+  required HomeworkItem summary,
+  required List<HomeworkItem> children,
+}) async {
+  String? warning;
+  String? previewPath;
+  try {
+    await _runWithPrintProgressDialog(
+      context,
+      initialMessage: '과제 PDF를 준비하는 중입니다...',
+      run: (progressText) async {
+        progressText.value = '과제 PDF를 준비하는 중입니다...';
+        final request = await _buildHomeworkGroupPrintRequest(
+          studentId: studentId,
+          group: group,
+          summary: summary,
+          children: children,
+        );
+        warning = request.warning;
+        if ((request.error ?? '').isNotEmpty) {
+          throw StateError(request.error!);
+        }
+        final selected = request.eligibleChildren
+            .where((child) => request.initialSelectedById[child.id] ?? false)
+            .toList(growable: false);
+        if (selected.isEmpty) {
+          throw StateError('볼 수 있는 하위 과제가 없습니다.');
+        }
+        final seed = request.seed;
+        final assignment = request.assignmentByItemId[seed.id.trim()];
+        final isPb = _isPbPrintTarget(hw: seed, assignment: assignment);
+        final academyId = await _resolveAcademyIdForPrint();
+        final pbService = LearningProblemBankService();
+        var source = isPb
+            ? await _resolveAssignmentTimePbSource(
+                hw: seed,
+                assignment: assignment,
+                academyId: academyId,
+                problemBankService: pbService,
+                progressText: progressText,
+              )
+            : request.sourceByItemId[seed.id];
+        source ??= isPb
+            ? null
+            : await _resolveTextbookPrintSource(
+                seed,
+                allowFlowFallback: true,
+              );
+        if (source == null || source.isEmpty) {
+          throw StateError('출제 때 만든 PDF를 찾지 못했습니다.');
+        }
+        progressText.value = '과제 PDF를 내려받는 중입니다...';
+        final bodyPath = await _materializePrintablePathFromSource(
+          source,
+          cacheKey: 'hw_preview_${seed.id}',
+        );
+        if (bodyPath == null || bodyPath.isEmpty) {
+          throw StateError('출제 때 만든 PDF를 찾지 못했습니다.');
+        }
+        final prepared = _PreparedHomeworkPrintTarget(
+          source: source,
+          printablePath: bodyPath,
+        );
+        final overlay = await _resolveHomeworkPrintOverlayMeta(
+          studentId: studentId,
+          fallbackHomework: request.seed,
+          selectedHomeworks: selected,
+        );
+        final rangeRaw = prepared.source.isProblemBank
+            ? ''
+            : _normalizePageRangeForPrint(request.initialRange);
+        final paperSize = prepared.source.isProblemBank
+            ? prepared.source.preferredPaperSize.trim()
+            : 'A4';
+        progressText.value = '과제 PDF를 만드는 중입니다...';
+        final out = await _buildPdfForPrintRange(
+          inputPath: prepared.printablePath,
+          pageRange: rangeRaw,
+          overlayMeta: overlay,
+          preferredPaperSize: paperSize,
+        );
+        if (out == null || out.isEmpty) {
+          throw StateError('과제 PDF를 만들지 못했습니다.');
+        }
+        previewPath = out;
+      },
+    );
+  } catch (e) {
+    if (!context.mounted) return;
+    _showHomeworkChipSnackBar(context, _messageFromPrintError(e));
+    return;
+  }
+  if (!context.mounted || previewPath == null || previewPath!.isEmpty) return;
+  final title = summary.title.trim().isNotEmpty
+      ? summary.title.trim()
+      : (group.title.trim().isNotEmpty ? group.title.trim() : '과제');
+  try {
+    await Navigator.of(context, rootNavigator: true).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => TextbookViewerPage(
+          ref: TextbookPdfRef(displayName: title),
+          title: title,
+          source: TextbookPdfSource.localFile(
+            path: previewPath!,
+            migrationStatus: 'ready',
+            linkId: 'homework-assignment-preview',
+          ),
+          tapDetectionMode: false,
+          fitWholePage: true,
+        ),
+      ),
+    );
+  } finally {
+    _scheduleTempDelete(previewPath!);
+  }
+  if (!context.mounted) return;
+  final message = (warning ?? '').trim();
+  if (message.isNotEmpty) _showHomeworkChipSnackBar(context, message);
 }
 
 Future<void> _printHomeworkCardFromDetail({

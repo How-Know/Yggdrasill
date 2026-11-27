@@ -1,0 +1,81 @@
+{
+  "format": "ygg-figure-tags/1",
+  "note": "그림 이름표 목록. 설명은 docs/architecture/figure-tags.md. kind 는 그림마다 하나, tags 는 여러 개 붙인다. 요소 태그는 그림 파일에서 저절로 뽑으므로 여기 적지 않는다(lib/src/tags.dart).",
+  "kinds": {
+    "mapping": "함수 대응",
+    "plane": "평면도형",
+    "graph": "함수 그래프",
+    "solid": "공간도형",
+    "solid_graph": "입체 그래프(단면 부피)",
+    "glyph": "글줄 안 작은 모양",
+    "illustration": "삽화"
+  },
+  "groups": {
+    "composition": "구도",
+    "curve": "곡선 종류"
+  },
+  "tags": {
+    "mapping-arrows": {"name": "집합과 화살표 대응", "group": "composition"},
+    "mapping-composite": {"name": "두 대응을 나란히(합성함수)", "group": "composition"},
+
+    "piecewise-graph": {"name": "구간마다 끊어진 그래프", "group": "composition"},
+    "polyline-graph": {"name": "꺾은선 그래프", "group": "composition"},
+    "pdf-graph": {"name": "확률밀도함수 그래프", "group": "composition"},
+    "curve-and-line": {"name": "곡선과 직선의 교점", "group": "composition"},
+    "tangent-line": {"name": "곡선과 접선", "group": "composition"},
+    "area-between": {"name": "곡선 사이 넓이(색칠)", "group": "composition"},
+    "points-on-curve": {"name": "곡선 위의 점과 수선", "group": "composition"},
+    "sequence-on-curve": {"name": "곡선 위 점의 나열(수열)", "group": "composition"},
+    "triangle-on-graph": {"name": "그래프 위의 점이 만드는 삼각형", "group": "composition"},
+    "circle-on-curve": {"name": "곡선 위의 점을 중심으로 하는 원", "group": "composition"},
+    "conic-with-circle": {"name": "이차곡선과 원", "group": "composition"},
+    "conic-focus-triangle": {"name": "초점과 곡선 위 점이 만드는 삼각형", "group": "composition"},
+    "two-conics": {"name": "두 이차곡선", "group": "composition"},
+
+    "polynomial-curve": {"name": "다항함수 곡선", "group": "curve"},
+    "exp-log-curve": {"name": "지수·로그 곡선", "group": "curve"},
+    "trig-curve": {"name": "삼각함수 곡선", "group": "curve"},
+    "rational-curve": {"name": "유리함수 곡선", "group": "curve"},
+    "root-curve": {"name": "무리함수 곡선", "group": "curve"},
+    "parabola": {"name": "포물선", "group": "curve"},
+    "ellipse": {"name": "타원", "group": "curve"},
+    "hyperbola": {"name": "쌍곡선", "group": "curve"},
+
+    "plain-polygon": {"name": "다각형 하나(꼭짓점 이름만)", "group": "composition"},
+    "triangle-inner-lines": {"name": "삼각형과 안쪽 선분(수선·내분점)", "group": "composition"},
+    "triangle-in-circle": {"name": "원 안의 삼각형(원에 내접)", "group": "composition"},
+    "quadrilateral-in-circle": {"name": "원 안의 사각형(원에 내접)", "group": "composition"},
+    "circle-in-triangle": {"name": "삼각형 안의 원(내접원)", "group": "composition"},
+    "circle-and-chords": {"name": "원과 현·접선", "group": "composition"},
+    "two-circles": {"name": "두 원", "group": "composition"},
+    "sector": {"name": "부채꼴", "group": "composition"},
+    "semicircle": {"name": "반원", "group": "composition"},
+    "theta-limit": {"name": "각 θ 로 정해지는 도형(극한)", "group": "composition"},
+    "series-repeat": {"name": "급수 반복 도형", "group": "composition"},
+    "series-branch": {"name": "단계마다 개수가 늘어나는 급수 반복 도형", "group": "composition"},
+    "points-on-circle": {"name": "원 위의 점·둘레 배치", "group": "composition"},
+    "round-table": {"name": "원탁 둘레 자리 배치", "group": "composition"},
+
+    "cross-section-volume": {"name": "밑면 곡선 위에 세운 단면 입체", "group": "composition"},
+    "section-square": {"name": "단면이 정사각형", "group": "composition"},
+    "section-triangle": {"name": "단면이 정삼각형", "group": "composition"},
+
+    "tetrahedron": {"name": "사면체", "group": "composition"},
+    "prism": {"name": "각기둥", "group": "composition"},
+    "cube": {"name": "정육면체·직육면체", "group": "composition"},
+    "cylinder": {"name": "원기둥", "group": "composition"},
+    "sphere": {"name": "구", "group": "composition"},
+    "sphere-and-plane": {"name": "구와 평면(단면 원)", "group": "composition"},
+    "sphere-in-polyhedron": {"name": "다면체 안의 구", "group": "composition"},
+    "line-and-plane": {"name": "직선과 평면", "group": "composition"},
+    "two-planes": {"name": "두 평면(이면각)", "group": "composition"},
+    "circle-on-plane": {"name": "평면 위의 원(비스듬히 본 원)", "group": "composition"},
+    "solid-section": {"name": "입체의 단면", "group": "composition"},
+    "orthogonal-projection": {"name": "정사영", "group": "composition"},
+    "folded-figure": {"name": "접은 도형", "group": "composition"},
+    "space-coordinates": {"name": "좌표공간", "group": "composition"}
+  },
+  "on_hold": {
+    "pyramid": "각뿔(수능 그림에는 쓰인 곳이 없어 평가원 확장 때 다시 본다)"
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.2",
+  "ref": "csat-2025-geometry-28-1",
+  "kind": "solid",
+  "tags": ["tetrahedron", "sphere", "sphere-in-polyhedron"],
+  "params": {"ox": 65.5496, "oy": 56.4049, "xx": 3.8005, "xy": 8.0201, "yx": 15.4063, "yy": -2.0229, "zx": 0.0151, "zy": 13.6522, "R": 18.3667},
+  "fit": ["ox", "oy", "xx", "xy", "yx", "yy", "zx", "zy", "R"],
+  "canvas": {"width": 77.68, "height": 78.15, "origin": ["ox", "oy"], "unit": 1},
+  "projection": {"x": ["xx", "xy"], "y": ["yx", "yy"], "z": ["zx", "zy"]},
+  "objects": [
+    {"id": "C", "type": "point", "at": [-2, 0, 0], "label": {"dir": "S", "dist": 1.0}},
+    {"id": "D", "type": "point", "at": [2, 0, 0], "label": {"dir": "E", "dist": 0.8}},
+    {"id": "H", "type": "midpoint", "of": ["C", "D"], "label": {"dir": "E", "dist": 1.7}},
+    {"id": "B", "type": "point", "at": [0, -4, 0], "label": {"dir": "W", "dist": 0.8}},
+    {"id": "A", "type": "point", "at": [0, -2, "2sqrt(3)"], "label": {"dir": "N", "dist": 1.0}},
+    {"id": "N", "type": "midpoint", "of": ["B", "H"]},
+    {"id": "G", "type": "divide", "of": ["A", "N"], "ratio": [2, 1], "dot": "filled", "label": {"dir": "E", "dist": 1.0}},
+    {"id": "S", "type": "circle", "center": "G", "radius": "R", "line": "mid"},
+    {"type": "segment", "from": "B", "to": "D", "line": "dashed"},
+    {"type": "segment", "from": "B", "to": "H", "line": "dashed"},
+    {"type": "segment", "from": "A", "to": "H", "line": "mid"},
+    {"type": "right_angle", "at": "H", "from": "A", "to": "D", "size": 2.0},
+    {"type": "polygon", "points": ["A", "B", "C", "D"]},
+    {"type": "segment", "from": "A", "to": "C"}
+  ],
+  "size": {"variant": "medium"},
+  "label_nudge": {"C": [0.677, -0.338], "D": [0.507, -0.085], "H": [-0.085, -0.846], "B": [0.0, -0.761], "A": [0.085, 0.085], "G": [0.085, 0.0]}
+}

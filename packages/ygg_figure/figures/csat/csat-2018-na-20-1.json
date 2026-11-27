@@ -1,0 +1,29 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.2",
+  "ref": "csat-2018-na-20-1",
+  "kind": "graph",
+  "tags": ["rational-curve", "curve-and-line", "points-on-curve"],
+  "params": {"ox": 27.907, "oy": 57.9795, "u": 8.1422, "k": 1.4735},
+  "fit": ["ox", "oy", "u", "k"],
+  "canvas": {"width": 82.13, "height": 73.87, "origin": ["ox", "oy"], "unit": "u"},
+  "objects": [
+    {"id": "ax", "type": "axes", "x": ["-27.1/u", "53.0/u"], "y": ["-14.8/u", "55.4/u"]},
+    {"type": "segment", "from": [1, "-14.1/u"], "to": [1, "53.9/u"], "line": "dashed"},
+    {"type": "segment", "from": ["-25.1/u", 3], "to": ["49.4/u", 3], "line": "dashed"},
+    {"id": "f", "type": "function", "expr": "k/(x-1)+3", "domain": ["-25.1/u", "48.2/u"], "range": ["-13.1/u", "53.7/u"], "samples": 2400},
+    {"id": "A", "type": "point", "at": ["1-k/3", 0], "label": {"dir": "SW", "dist": 0.6}},
+    {"id": "B", "type": "on", "of": "f", "x": 0, "label": {"dir": 200, "dist": 0.8}},
+    {"id": "C", "type": "point", "at": [1, 3]},
+    {"id": "P", "type": "intersect", "of": ["f", ["C", "B"]], "near": [2, "3+k"], "label": {"dir": "NE", "dist": 0.6}},
+    {"id": "Q", "type": "foot", "from": "P", "to": [[0, 0], [1, 0]], "label": {"dir": "S", "dist": 1.0}},
+    {"type": "segment", "from": "B", "to": "P"},
+    {"type": "segment", "from": "P", "to": "Q"},
+    {"type": "right_angle", "at": "Q", "from": "P", "to": ["Q.x+1", 0], "size": 2.3},
+    {"id": "y3", "type": "label", "at": [0, 3], "text": "3", "dir": "NW", "dist": 0.8},
+    {"id": "t1", "type": "label", "at": [1, 0], "text": "1", "dir": "SE", "dist": 0.8},
+    {"id": "lf", "type": "on", "of": "f", "x": "39.4/u", "label": {"text": "y=\\dfrac{k}{x-1}+3", "dir": "N", "dist": 1.5}}
+  ],
+  "size": {"variant": "large"},
+  "label_nudge": {"ax:x": [0.085, 0.338], "ax:y": [0.423, -0.085], "ax:origin": [0.0, -0.253], "A": [0.507, -0.592], "B": [0.338, -0.507], "P": [-0.085, 0.254], "Q": [-0.085, 0.0], "y3": [0.085, 0.761], "t1": [0.423, -0.761]}
+}

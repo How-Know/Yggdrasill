@@ -58,7 +58,7 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
         covers: HomeworkSession.instance.lastCovers,
       );
     } else {
-      _refresh();
+    _refresh();
     }
     // 수행 중 경과시간 갱신용 1초 틱.
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -349,9 +349,9 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
     // 미니바 pause 직후 목록이 아직 phase=2로 남아 있어도 재개되게 한다.
     if (!group.running && (group.phase == 1 || group.phase == 2)) {
       await _transition(
-        group,
-        1,
-        successMessage: '${group.title} 시작!',
+          group,
+          1,
+          successMessage: '${group.title} 시작!',
       );
     }
   }
@@ -452,9 +452,9 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 48),
           child: Center(
-            child: _error == null
-                ? const YggLoadingIndicator(size: 32)
-                : Text(_error!, textAlign: TextAlign.center),
+        child: _error == null
+            ? const YggLoadingIndicator(size: 32)
+            : Text(_error!, textAlign: TextAlign.center),
           ),
         ),
       );
@@ -531,8 +531,8 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
               behavior: ScrollConfiguration.of(context)
                   .copyWith(scrollbars: false),
               child: RefreshIndicator(
-                onRefresh: _refresh,
-                child: ListView(
+        onRefresh: _refresh,
+        child: ListView(
                   physics: const AlwaysScrollableScrollPhysics(),
                   padding: const EdgeInsets.fromLTRB(0, 0, 0, 112),
                   children: children,
@@ -579,11 +579,11 @@ class _HomeworkSectionHeader extends StatelessWidget {
               Icons.chevron_right_rounded,
               size: 36,
               color: chevron,
+              ),
             ),
-          ),
-        ],
-      ),
-    );
+          ],
+        ),
+      );
   }
 }
 
@@ -1888,7 +1888,7 @@ class _ScreenTimeWeekChart extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
-      builder: (context, constraints) {
+        builder: (context, constraints) {
         const labelH = 22.0;
         const axisW = 44.0;
         final chartH = constraints.maxHeight - labelH;
@@ -1899,8 +1899,8 @@ class _ScreenTimeWeekChart extends StatelessWidget {
             SizedBox(
               height: chartH,
               child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
                   SizedBox(
                     width: barsW,
                     child: Stack(
@@ -1915,7 +1915,7 @@ class _ScreenTimeWeekChart extends StatelessWidget {
                           children: [
                             for (var i = 0; i < values.length; i++) ...[
                               if (i > 0) const SizedBox(width: 10),
-                              Expanded(
+              Expanded(
                                 child: Align(
                                   alignment: Alignment.bottomCenter,
                                   child: FractionallySizedBox(
@@ -1929,9 +1929,9 @@ class _ScreenTimeWeekChart extends StatelessWidget {
                                               borderRadius:
                                                   BorderRadius.circular(3),
                                             ),
-                                          ),
-                                  ),
-                                ),
+                          ),
+                        ),
+                  ),
                               ),
                             ],
                           ],
@@ -1948,9 +1948,9 @@ class _ScreenTimeWeekChart extends StatelessWidget {
                             ),
                           ),
                       ],
-                    ),
-                  ),
-                  SizedBox(
+                ),
+              ),
+              SizedBox(
                     width: axisW,
                     child: Stack(
                       children: [
@@ -2618,7 +2618,7 @@ class _TodayHomeworkDetailCard extends StatelessWidget {
               borderRadius: const BorderRadius.vertical(
                 bottom: Radius.circular(_cardRadius),
               ),
-              child: Padding(
+                child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 18, 12, 18),
                 child: Row(
                   children: [
@@ -2678,10 +2678,10 @@ Future<void> _showRecentCompletedHomeworkDialog(
           ).animate(curve),
           child: child,
         ),
+          );
+        },
       );
-    },
-  );
-}
+    }
 
 class _RecentCompletedHomeworkDialog extends StatefulWidget {
   const _RecentCompletedHomeworkDialog({required this.coverByBookKey});
@@ -2780,7 +2780,7 @@ class _RecentCompletedHomeworkDialogState
                         padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
                         child: Row(
                           children: [
-                            IconButton(
+        IconButton(
                               onPressed: () => Navigator.of(context).maybePop(),
                               icon: Icon(
                                 Icons.close_rounded,
@@ -3282,9 +3282,9 @@ class _GroupCard extends StatelessWidget {
                           fontSize: 18,
                           fontWeight: FontWeight.w500,
                           color: subText,
-                          height: 1.2,
-                        ),
+                        height: 1.2,
                       ),
+                    ),
                     ],
                   ],
                 ),
@@ -3383,28 +3383,28 @@ class _HomeworkCoverThumb extends StatelessWidget {
         clipBehavior: Clip.none,
         children: [
           Positioned.fill(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(radius),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color(0x1A000000),
-                    blurRadius: 8,
-                    offset: Offset(0, 2),
-                  ),
-                ],
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(radius),
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    cover,
-                    if (showEqualizer) ...[
-                      const ColoredBox(color: Color(0x59000000)),
-                      const Center(child: _CoverEqualizer()),
-                    ] else if (hasBadge) ...[
-                      const ColoredBox(color: Color(0x66000000)),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(radius),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x1A000000),
+              blurRadius: 8,
+              offset: Offset(0, 2),
+            ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(radius),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              cover,
+              if (showEqualizer) ...[
+                const ColoredBox(color: Color(0x59000000)),
+                const Center(child: _CoverEqualizer()),
+              ] else if (hasBadge) ...[
+                const ColoredBox(color: Color(0x66000000)),
                       Center(child: _CoverBadgeIcon(badge: badge!)),
                     ] else if (hasMeta) ...[
                       const DecoratedBox(
@@ -3437,9 +3437,9 @@ class _HomeworkCoverThumb extends StatelessWidget {
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.w800,
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
                                   height: 1.05,
                                   letterSpacing: -0.35,
                                   fontFamily: Theme.of(context)
@@ -3468,12 +3468,12 @@ class _HomeworkCoverThumb extends StatelessWidget {
                                 ),
                               ),
                           ],
-                        ),
-                      ),
-                    ],
-                  ],
+                  ),
                 ),
-              ),
+              ],
+            ],
+          ),
+        ),
             ),
           ),
         ],

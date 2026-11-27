@@ -1,0 +1,31 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.2",
+  "ref": "csat-2021-geometry-26-1",
+  "kind": "graph",
+  "tags": ["ellipse", "conic-with-circle", "conic-focus-triangle", "tangent-line"],
+  "params": {"ox": 39.9052, "oy": 25.3767, "u": 2.9556, "ta": 0.6981},
+  "fit": ["ox", "oy", "u", "ta"],
+  "canvas": {"width": 88.26, "height": 82.76, "origin": ["ox", "oy"], "unit": "u"},
+  "objects": [
+    {"id": "ax", "type": "axes", "x": [-13.4, 16.13], "y": [-19.18, 7.9]},
+    {"id": "el", "type": "ellipse", "center": [0, 0], "a": 8, "b": 4},
+    {"id": "F", "type": "point", "at": ["sqrt(64-16)", 0], "label": {"dir": "NW", "dist": 1.8}},
+    {"id": "F'", "type": "point", "at": ["-sqrt(64-16)", 0], "label": {"dir": "N", "dist": 1.0, "offset": [0.6, 0]}},
+    {"id": "A", "type": "on", "of": "el", "x": "ta", "label": {"dir": 60, "dist": 1.0}},
+    {"id": "cA", "type": "circle", "center": "A", "through": "F", "draw": false},
+    {"id": "G", "type": "intersect", "of": ["cA", ["A", "F'"]], "near": "F'"},
+    {"id": "M", "type": "midpoint", "of": ["F", "G"]},
+    {"id": "B", "type": "intersect", "of": [["A", "M"], [[0, 0], [0, 1]]], "label": {"dir": "SE", "dist": 0.6}},
+    {"id": "T", "type": "foot", "from": "B", "to": ["A", "F"]},
+    {"id": "c", "type": "circle", "center": "B", "through": "T"},
+    {"type": "segment", "from": "F'", "to": "A", "extend": [17.75, 28.0]},
+    {"type": "segment", "from": "A", "to": "F", "extend": [15.0, 58.6]},
+    {"type": "segment", "from": "F'", "to": "B"},
+    {"type": "segment", "from": "F", "to": "B"},
+    {"id": "le", "type": "on", "of": "el", "x": "rad(150)", "label": {"dir": 127, "dist": 3.9, "text": "\\dfrac{x^2}{64}+\\dfrac{y^2}{16}=1"}},
+    {"id": "lc", "type": "on", "of": "c", "angle": 229, "label": {"dir": "SW", "dist": 1.5, "text": "C"}}
+  ],
+  "size": {"variant": "large"},
+  "label_nudge": {"ax:x": [0.0, 0.169], "ax:y": [0.338, -0.085], "ax:origin": [-0.169, -0.592], "F": [-0.338, -0.169], "F'": [-0.085, 0.169], "A": [0.254, 0.508], "B": [0.508, 0.508], "le": [0.846, 0.085], "lc": [0.338, -0.254]}
+}

@@ -1,7 +1,9 @@
 {
   "format": "ygg-figure/1",
-  "style": "csat-2026.1",
+  "style": "csat-2026.2",
   "ref": "csat-2025-common-7-1",
+  "kind": "graph",
+  "tags": ["polynomial-curve", "area-between"],
   "params": {"u": 7.0912, "ox": 42.9443, "oy": 72.881},
   "fit": ["u", "ox", "oy"],
   "canvas": {"width": 85.94, "height": 84.03, "origin": ["ox", "oy"], "unit": "u"},
@@ -18,5 +20,6 @@
     {"id": "lg", "type": "label", "at": [-3.93, 2.23], "text": "y=-\\dfrac{1}{5}x^2+3"},
     {"id": "lv", "type": "label", "at": [2, 0], "text": "x=2", "offset": [0.1, -8.7]}
   ],
-  "label_nudge": {"ax:x": [-0.254, -0.085], "ax:y": [0.338, -0.338], "ax:origin": [-0.085, -0.169], "lf": [-0.254, 0.169], "lg": [0.592, 0.592], "lv": [0.0, 0.169]}
+  "label_nudge": {"ax:x": [-0.254, -0.085], "ax:y": [0.338, -0.338], "ax:origin": [-0.085, -0.169], "lf": [-0.254, 0.169], "lg": [0.592, 0.592], "lv": [0.0, 0.169]},
+  "size": {"variant": "large"}
 }

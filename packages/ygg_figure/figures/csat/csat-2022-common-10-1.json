@@ -1,0 +1,31 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.2",
+  "ref": "csat-2022-common-10-1",
+  "kind": "graph",
+  "tags": ["polynomial-curve", "area-between"],
+  "params": {"ox": 29.2778, "oy": 73.5823, "u": 6.0562, "k": 4.4288, "cl": 1.6436, "pr": 0.3963, "qr": 1.494},
+  "fit": ["ox", "oy", "u", "k", "cl", "pr", "qr"],
+  "canvas": {"width": 70.91, "height": 89.96, "origin": ["ox", "oy"], "unit": "u"},
+  "objects": [
+    {"id": "ax", "type": "axes", "x": ["-28.8/u", "41.0/u"], "y": ["-13.9/u", "71.1/u"]},
+    {"id": "fL", "type": "function", "expr": "cl*(x^3+x^2)", "domain": [-2.2, 0], "range": ["-11.94/u", 1], "samples": 1200},
+    {"id": "fR", "type": "function", "expr": "pr*x^3+qr*x^2", "domain": [0, 2.6], "range": [-1, "69.4/u"], "samples": 1200},
+    {"id": "g", "type": "function", "expr": "-x^2+k", "domain": [-3, 3], "range": ["-11.94/u", 6], "samples": 1200},
+    {"id": "v", "type": "segment", "from": [2, "-11.94/u"], "to": [2, "69.55/u"]},
+    {"id": "O", "type": "point", "at": [0, 0]},
+    {"id": "K", "type": "point", "at": [0, "k"]},
+    {"id": "T", "type": "intersect", "of": ["fR", "g"], "near": [1.2, 2.9]},
+    {"id": "U", "type": "on", "of": "fR", "x": 2},
+    {"id": "V", "type": "on", "of": "g", "x": 2},
+    {"type": "fill", "path": ["O", {"curve": "fR", "to": "T"}, {"curve": "g", "to": "K"}]},
+    {"type": "fill", "path": ["T", {"curve": "fR", "to": "U"}, "V", {"curve": "g", "to": "T"}]},
+    {"id": "lA", "type": "label", "at": ["T.x-4.4/u", "T.y-1.2/u"], "text": "A"},
+    {"id": "lB", "type": "label", "at": ["T.x+2.3/u", "T.y+0.3/u"], "text": "B"},
+    {"id": "lf", "type": "on", "of": "fR", "x": 2.12, "label": {"text": "y=x^3+x^2", "dir": "E", "dist": 1.6}},
+    {"id": "lg", "type": "on", "of": "g", "x": -1.0, "label": {"text": "y=-x^2+k", "dir": "W", "dist": 1.6}},
+    {"id": "lv", "type": "label", "at": [2, "-11.94/u"], "text": "x=2", "dir": "S", "dist": 0.4, "offset": [0.2, 0]}
+  ],
+  "size": {"variant": "medium"},
+  "label_nudge": {"ax:x": [-0.085, 0.338], "ax:y": [0.339, 0.339], "ax:origin": [0.0, -0.169], "lA": [0.254, -0.678], "lB": [0.339, -0.593]}
+}

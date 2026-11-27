@@ -1,0 +1,44 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.2",
+  "ref": "csat-2018-na-16-3",
+  "kind": "plane",
+  "tags": ["series-repeat", "sector"],
+  "elements": ["triangle"],
+  "params": {"ox": 5.6345, "oy": 54.4956, "u": 7.566, "gap": 44.4035, "ob": 6.7981},
+  "fit": ["ox", "oy", "u", "gap", "ob"],
+  "canvas": {"width": 93.98, "height": 67.73, "origin": ["ox", "oy"], "unit": "u"},
+  "parts": {
+    "stage": [
+      {"id": "O", "type": "point", "at": [0, 0]},
+      {"id": "A#{k}", "type": "point", "at": [4, 0], "label": {"dir": "S", "dist": 1.3, "offset": [1.1, 0]}},
+      {"id": "B", "type": "point", "at": [0, "ob"]},
+      {"id": "c", "type": "circle", "center": "O", "through": "A#{k}", "draw": false},
+      {"id": "Bn", "type": "intersect", "of": ["c", ["O", "B"]], "near": "B"},
+      {"id": "X", "type": "intersect", "of": ["c", ["A#{k}", "B"]], "near": "B"},
+      {"type": "fill", "path": ["B", "Bn", {"arc": "O", "to": "X", "dir": "cw"}]},
+      {"type": "fill", "path": ["A#{k}", {"arc": "O", "to": "X", "dir": "ccw"}]},
+      {"type": "segment", "from": "A#{k}", "to": "B"},
+      {"type": "arc", "center": "O", "from": "A#{k}", "to": "Bn", "dir": "ccw"}
+    ],
+    "top": [
+      {"id": "B#{k}", "type": "point", "at": [0, "ob"], "label": {"dir": "W", "dist": 0.4, "offset": [0, -0.3]}}
+    ],
+    "panel": [
+      {"id": "s", "type": "use", "part": "stage", "count": "#{n}", "step": {"scale": "4/ob"}},
+      {"id": "b", "type": "use", "part": "top", "count": "#{n}+1", "step": {"scale": "4/ob"}},
+      {"id": "O", "type": "point", "at": [0, 0], "label": {"dir": "SW", "dist": 0.3, "offset": [0.4, 0]}},
+      {"type": "polyline", "points": [[0, "ob"], "O", [4, 0]]},
+      {"type": "right_angle", "at": "O", "from": [4, 0], "to": [0, 1], "size": 2.3},
+      {"id": "R", "type": "label", "at": ["15.0/u", "-10.1/u"], "text": "\\symbfit{R}_{#{n}}"}
+    ]
+  },
+  "objects": [
+    {"id": "p1", "type": "use", "part": "panel", "with": {"n": 1}},
+    {"id": "p2", "type": "use", "part": "panel", "at": ["gap/u", 0], "with": {"n": 2}},
+    {"id": "h1", "type": "label", "at": ["(91.4-ox)/u", "(oy-30.8)/u"], "text": "\\cdots"},
+    {"id": "h2", "type": "label", "at": ["(91.4-ox)/u", "(oy-64.5)/u"], "text": "\\cdots"}
+  ],
+  "size": {"variant": "large"},
+  "label_nudge": {"p1/s.1/A1": [-0.169, 0.085], "p1/b.1/B1": [0.0, -0.254], "p1/b.2/B2": [0.0, -0.254], "p1/O": [0.0, -0.423], "p1/R": [0.0, 0.169], "p2/s.1/A1": [-0.169, 0.085], "p2/s.2/A2": [-0.169, 0.085], "p2/b.1/B1": [0.085, -0.254], "p2/b.2/B2": [0.085, -0.254], "p2/b.3/B3": [0.085, -0.254], "p2/O": [0.0, -0.423], "p2/R": [0.0, 0.169], "h2": [0.0, -0.085]}
+}

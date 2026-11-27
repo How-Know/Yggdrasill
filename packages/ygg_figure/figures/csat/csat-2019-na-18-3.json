@@ -1,0 +1,58 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.2",
+  "ref": "csat-2019-na-18-3",
+  "kind": "plane",
+  "tags": ["series-repeat", "sector"],
+  "params": {"ox": 5.3314, "oy": 56.9313, "u": 6.3042, "gap": 49.6217},
+  "fit": ["ox", "oy", "u", "gap"],
+  "canvas": {"width": 104.35, "height": 66.72, "origin": ["ox", "oy"], "unit": "u"},
+  "parts": {
+    "stage": [
+      {"id": "a", "type": "point", "at": [0, 0]},
+      {"id": "b", "type": "point", "at": [5, 0]},
+      {"id": "c", "type": "point", "at": [5, 5]},
+      {"id": "d", "type": "point", "at": [0, 5]},
+      {"id": "A#{k}", "type": "divide", "of": ["a", "d"], "ratio": [3, 2], "label": {"dir": "W", "dist": 0.3}},
+      {"id": "ca", "type": "circle", "center": "a", "through": "b", "draw": false},
+      {"id": "la", "type": "parallel", "to": ["a", "b"], "through": "A#{k}", "draw": false},
+      {"id": "B#{k}", "type": "intersect", "of": ["la", "ca"], "near": "b", "label": {"dir": "E", "dist": 0.8, "offset": [0, 1.0]}},
+      {"id": "C#{k}", "type": "rotate", "of": "A#{k}", "center": "B#{k}", "angle": -90, "label": {"dir": "E", "dist": 0.8, "offset": [0, -0.4]}},
+      {"id": "D#{k}", "type": "translate", "of": "A#{k}", "by": ["B#{k}", "C#{k}"], "label": {"dir": "W", "dist": 0.4, "offset": [0, -0.45]}},
+      {"id": "cd", "type": "circle", "center": "D#{k}", "through": "A#{k}", "draw": false},
+      {"id": "E#{k}", "type": "intersect", "of": [["d", "c"], "cd"], "near": "c"},
+      {"id": "F#{k}", "type": "intersect", "of": [["d", "c"], ["B#{k}", "C#{k}"]]},
+      {"id": "G", "type": "intersect", "of": ["ca", "cd"], "near": "b"},
+      {"type": "fill", "path": ["d", "A#{k}", {"arc": "D#{k}", "to": "E#{k}", "dir": "ccw"}]},
+      {"type": "fill", "path": ["E#{k}", "F#{k}", "C#{k}", {"arc": "D#{k}", "to": "E#{k}", "dir": "cw"}]},
+      {"type": "polygon", "points": ["A#{k}", "B#{k}", "C#{k}", "D#{k}"]},
+      {"type": "arc", "center": "a", "from": "b", "to": "G", "dir": "ccw"},
+      {"type": "arc", "center": "a", "from": "G", "to": "d", "dir": "ccw", "line": "dashed"},
+      {"type": "arc", "center": "D#{k}", "from": "A#{k}", "to": "C#{k}", "dir": "ccw"}
+    ],
+    "panel": [
+      {"id": "A", "type": "point", "at": [0, 0]},
+      {"id": "B", "type": "point", "at": [5, 0]},
+      {"id": "C", "type": "point", "at": [5, 5]},
+      {"id": "D", "type": "point", "at": [0, 5]},
+      {"type": "polygon", "points": ["A", "B", "C", "D"]},
+      {"id": "s", "type": "use", "part": "stage", "count": "#{n}", "step": {"scale": "4/5", "about": [0, "3/(1-4/5)"]}},
+      {"id": "R", "type": "label", "at": ["15.5/u", "-6.75/u"], "text": "\\symbfit{R}_{#{n}}"}
+    ]
+  },
+  "objects": [
+    {"id": "p1", "type": "use", "part": "panel", "with": {"n": 1}, "override": {"A": {"label": {"dir": "W", "dist": 0.5, "offset": [0, -0.3]}}, "B": {"label": {"dir": "E", "dist": 0.9, "offset": [0, -0.2]}}, "C": {"label": {"dir": "E", "dist": 0.7, "offset": [0, 0.2]}}, "D": {"label": {"dir": "W", "dist": 0.4}}, "s": {"override": {"E1": {"label": {"dir": "S", "dist": 2.8, "offset": [0.43, 0]}}, "F1": {"label": {"dir": "SE", "dist": 0.5, "offset": [0.75, -0.6]}}}}}},
+    {"id": "p2", "type": "use", "part": "panel", "at": ["gap/u", 0], "with": {"n": 2}},
+    {"id": "h1", "type": "label", "at": ["(102.25-ox)/u", "(oy-35.05)/u"], "text": "\\cdots"},
+    {"id": "h2", "type": "label", "at": ["(102.25-ox)/u", "(oy-63.5)/u"], "text": "\\cdots"}
+  ],
+  "snap_skip": ["p1/s.1/E1"],
+  "size": {
+    "variant": "large",
+    "overrides": {
+      "assignment/below-stem": {"width_em": 25.05, "note": "과제형에서 글자가 겹쳐 본문 너비 전체를 쓴다"},
+      "assignment/below-choices": {"width_em": 25.05, "note": "과제형에서 글자가 겹쳐 본문 너비 전체를 쓴다"}
+    }
+  },
+  "label_nudge": {"p1/A": [0.169, 0.254], "p1/B": [-0.085, 0.169], "p1/C": [0.0, -0.085], "p1/s.1/A1": [0.085, -0.424], "p1/s.1/B1": [0.169, 0.085], "p2/s.1/A1": [0.0, -0.424], "p2/s.1/B1": [0.169, 0.085], "p2/s.2/A2": [0.0, 0.424], "p2/s.2/B2": [0.0, 0.424], "p2/s.2/C2": [-0.169, 0.085], "p2/s.2/D2": [0.0, 0.085], "p1/s.1/F1": [0.085, 0.0]}
+}

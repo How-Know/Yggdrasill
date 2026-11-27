@@ -1,0 +1,30 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.2",
+  "ref": "csat-2017-ga-14-1",
+  "kind": "plane",
+  "tags": ["triangle-inner-lines"],
+  "params": {"ox": 45.3342, "oy": 60.3227, "u": 13.7611},
+  "fit": ["ox", "oy", "u"],
+  "canvas": {"width": 76.84, "height": 65.62, "origin": ["ox", "oy"], "unit": "u"},
+  "objects": [
+    {"id": "B", "type": "point", "at": [-3, 0], "label": {"dir": "W", "dist": 0.8}},
+    {"id": "C", "type": "point", "at": [2, 0], "label": {"dir": "E", "dist": 0.8}},
+    {"id": "kb", "type": "circle", "center": "B", "radius": 5, "draw": false},
+    {"id": "kc", "type": "circle", "center": "C", "radius": "2*sqrt(5)", "draw": false},
+    {"id": "A", "type": "intersect", "of": ["kb", "kc"], "near": [0, 4], "label": {"dir": "N", "dist": 0.8}},
+    {"id": "D", "type": "foot", "from": "A", "to": ["B", "C"], "label": {"dir": "S", "dist": 1.0}},
+    {"id": "E", "type": "divide", "of": ["A", "D"], "ratio": [3, 1], "label": {"dir": "W", "dist": 0.8}},
+    {"type": "polygon", "points": ["A", "B", "C"]},
+    {"type": "segment", "from": "A", "to": "D"},
+    {"type": "segment", "from": "E", "to": "C"},
+    {"type": "right_angle", "at": "D", "from": "C", "to": "A", "size": 2.0},
+    {"id": "aa", "type": "angle", "at": "B", "from": "C", "to": "A", "radius": 4.6, "label": {"text": "\\alpha", "dist": 6.9}},
+    {"id": "ab", "type": "angle", "at": "C", "from": "E", "to": "D", "radius": 7.3, "label": {"text": "\\beta", "dist": 9.4}},
+    {"id": "d1", "type": "dimension", "from": "B", "to": "A", "bulge": 6.1, "label": "5"},
+    {"id": "d2", "type": "dimension", "from": "A", "to": "C", "bulge": 4.8, "label": {"text": "2\\sqrt{5}", "offset": [1.4, 0.1]}},
+    {"id": "d3", "type": "dimension", "from": "E", "to": "C", "bulge": 4.1, "label": {"text": "\\sqrt{5}", "offset": [-0.8, 0.3]}}
+  ],
+  "size": {"variant": "medium"},
+  "label_nudge": {"B": [0.169, -0.338], "C": [-0.169, -0.338], "D": [0.169, -0.338], "E": [0.0, -0.169], "aa": [0.0, -0.338], "ab": [-0.169, -0.338]}
+}

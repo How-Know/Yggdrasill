@@ -1,0 +1,29 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.2",
+  "ref": "csat-2017-ga-17-1",
+  "kind": "plane",
+  "tags": ["theta-limit"],
+  "params": {"ox": 2.1443, "oy": 38.8885, "u": 45.5835, "th": 47.3229},
+  "fit": ["ox", "oy", "u", "th"],
+  "canvas": {"width": 80.64, "height": 45.3, "origin": ["ox", "oy"], "unit": "u"},
+  "objects": [
+    {"id": "A", "type": "point", "at": [0, 0], "label": {"dir": "S", "dist": 1.0}},
+    {"id": "B", "type": "point", "at": [1, 0], "label": {"dir": "S", "dist": 1.0}},
+    {"id": "D", "type": "polar", "center": "A", "radius": 1, "angle": "th", "label": {"dir": "N", "dist": 0.8}},
+    {"id": "C", "type": "translate", "of": "D", "by": ["A", "B"], "label": {"dir": "N", "dist": 0.8}},
+    {"id": "E", "type": "foot", "from": "C", "to": ["A", "B"], "label": {"dir": "S", "dist": 1.0}},
+    {"id": "F", "type": "foot", "from": "E", "to": ["A", "C"], "label": {"dir": 105, "dist": 0.8}},
+    {"id": "G", "type": "intersect", "of": [["E", "F"], ["B", "C"]], "label": {"dir": -15, "dist": 1.0}},
+    {"type": "fill", "path": ["C", "F", "G"], "shade": "light"},
+    {"type": "polygon", "points": ["A", "B", "C", "D"]},
+    {"type": "polyline", "points": ["B", "E", "C"]},
+    {"type": "segment", "from": "A", "to": "C"},
+    {"type": "segment", "from": "E", "to": "F"},
+    {"type": "right_angle", "at": "E", "from": "A", "to": "C", "size": 2.0},
+    {"type": "right_angle", "at": "F", "from": "C", "to": "E", "size": 2.0},
+    {"id": "d1", "type": "dimension", "from": "A", "to": "B", "bulge": -3.8, "label": "1"}
+  ],
+  "size": {"variant": "large"},
+  "label_nudge": {"A": [0.169, 0.0], "B": [0.169, -0.169], "D": [0.169, 0.338], "C": [0.0, 0.169], "E": [-0.169, -0.169], "F": [0.0, 0.169], "G": [0.338, 0.0]}
+}

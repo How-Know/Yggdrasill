@@ -245,6 +245,183 @@ void main() {
     expect(parts.where((i) => i.stroke != null).length, 1); // 호
   });
 
+  group('크기', () {
+    test('배율은 도형과 그림판에만 곱해지고 글자·선 굵기는 그대로다', () {
+      final doc = _doc([
+        {'id': 'A', 'type': 'point', 'at': [1, 1], 'label': {'dir': 'NE', 'dist': 1.0}},
+        {'id': 'B', 'type': 'point', 'at': [-1, 0]},
+        {'id': 's', 'type': 'segment', 'from': 'A', 'to': 'B'},
+      ]);
+      final one = buildFigure(doc), half = buildFigure(doc, scale: 0.5);
+      expect(half.width, 20);
+      expect(half.height, 20);
+      // 원점(20,20)에서 A(1,1)까지: 10mm → 5mm.
+      expect(_first(one, 's').x, closeTo(30, 1e-9));
+      expect(_first(half, 's').x, closeTo(15, 1e-9));
+      expect(_first(half, 's').y, closeTo(5, 1e-9));
+      final strokeOne = one.items.whereType<PathItem>().firstWhere((i) => i.source == 's').stroke!.width;
+      final strokeHalf = half.items.whereType<PathItem>().firstWhere((i) => i.source == 's').stroke!.width;
+      expect(strokeHalf, strokeOne);
+      final labelOne = one.items.whereType<TextItem>().first, labelHalf = half.items.whereType<TextItem>().first;
+      expect(labelHalf.sizePt, labelOne.sizePt);
+      // 글자와 점 사이 간격(mm)도 그대로다.
+      expect((labelHalf.pos - _first(half, 's')).x, closeTo((labelOne.pos - _first(one, 's')).x, 1e-9));
+      expect(() => buildFigure(doc, scale: 0), throwsA(isA<FigureError>()));
+    });
+
+    test('크기 표: 양식 × 자리로 찾고, 나눈 칸과 그림에 따로 적은 값이 먼저다', () {
+      final table = FigureSizeTable.fromJson({
+        'format': 'ygg-figure-sizes/1',
+        'slots': [
+          {'format': 'mock', 'position': 'below-stem', 'width_em': 17.5, 'max_height_em': 17.5},
+          {'format': 'mock', 'position': 'below-stem', 'variant': 'wide', 'width_em': 24},
+          {'format': 'naesin', 'position': 'inline-right', 'width_em': 10},
+        ],
+      });
+      expect(table.slot('mock', 'below-stem')!.widthEm, 17.5);
+      expect(table.slot('mock', 'below-stem', variant: 'wide')!.widthEm, 24);
+      expect(table.slot('mock', 'below-stem', variant: 'none')!.widthEm, 17.5);
+      expect(table.slot('assignment', 'below-stem'), isNull);
+
+      expect(table.slotFor({}, 'mock', 'below-stem')!.fromFigure, isFalse);
+      expect(table.slotFor({'size': {'variant': 'wide'}}, 'mock', 'below-stem')!.widthEm, 24);
+      final own = table.slotFor({
+        'size': {
+          'overrides': {
+            'mock/below-stem': {'width_em': 26, 'note': '평면이 넓다'},
+          },
+        },
+      }, 'mock', 'below-stem')!;
+      expect(own.widthEm, 26);
+      expect(own.maxHeightEm, 17.5);
+      expect(own.note, '평면이 넓다');
+      expect(own.fromFigure, isTrue);
+      // 다른 칸은 표 그대로다.
+      expect(table.slotFor({'size': {'overrides': {'mock/below-stem': {'width_em': 26}}}}, 'naesin', 'inline-right')!.widthEm, 10);
+      expect(() => FigureSizeTable.fromJson({'format': 'x'}), throwsFormatException);
+    });
+
+    test('크기 표: 본문 너비의 비율로 적은 칸과 크기 부류(소·중·대)', () {
+      final json = {
+        'format': 'ygg-figure-sizes/1',
+        'columns': {'assignment': 22.0},
+        'slots': [
+          {'format': 'assignment', 'position': 'below-stem', 'variant': 'small', 'width_ratio': 0.5},
+          {'format': 'assignment', 'position': 'below-stem', 'width_ratio': 0.7},
+          {'format': 'assignment', 'position': 'below-stem', 'variant': 'large', 'width_ratio': 0.85},
+          {'format': 'assignment', 'position': 'inline-right', 'width_ratio': 0.3333},
+        ],
+      };
+      final table = FigureSizeTable.fromJson(json);
+      double width(String? cls, [String position = 'below-stem']) =>
+          table.slotFor({if (cls != null) 'size': {'variant': cls}}, 'assignment', position)!.widthEm;
+      expect(width('small'), closeTo(11.0, 1e-9));
+      // 부류를 안 적었거나 "중"이면 기본 칸이다.
+      expect(width(null), closeTo(15.4, 1e-9));
+      expect(width('medium'), closeTo(15.4, 1e-9));
+      expect(width('large'), closeTo(18.7, 1e-9));
+      // 어울림 자리는 부류와 상관없이 한 크기다.
+      expect(width('large', 'inline-right'), closeTo(7.3326, 1e-9));
+      // 비율로 읽은 칸은 비율로 다시 적힌다.
+      expect(table.toJson(), json);
+      expect(
+        () => FigureSizeTable.fromJson({
+          'format': 'ygg-figure-sizes/1',
+          'slots': [
+            {'format': 'mock', 'position': 'below-stem', 'width_ratio': 0.5},
+          ],
+        }),
+        throwsFormatException,
+      );
+      // 저장소의 크기 표가 읽히고, 수능 그림마다 부류가 적혀 있다.
+      final repo = FigureSizeTable.fromJson(jsonDecode(File('figures/size_table.json').readAsStringSync()) as Map<String, dynamic>);
+      for (final f in Directory('figures/csat').listSync().whereType<File>().where((f) => f.path.endsWith('.json'))) {
+        final doc = jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
+        expect(figureSizeClasses, contains((doc['size'] as Map)['variant']), reason: f.path);
+        expect(doc['kind'], isA<String>(), reason: f.path);
+        expect(repo.slotFor(doc, 'assignment', 'below-stem'), isNotNull);
+      }
+    });
+
+    test('화면용 크기 어림: 정한 너비에 맞추고, 높이 한도를 넘으면 높이에 맞춘다', () {
+      // 그림판 40×40mm, 도형은 가로 20mm(선 굵기 제외) × 세로 30mm.
+      final doc = _doc([
+        {'id': 'A', 'type': 'point', 'at': [-1, -1.5], 'label': {'dir': 'SW', 'dist': 1.0}},
+        {'id': 'B', 'type': 'point', 'at': [1, 1.5]},
+        {'id': 's', 'type': 'segment', 'from': 'A', 'to': 'B'},
+      ]);
+      final natural = buildFigure(doc);
+      final wide = sizedSceneEstimate(doc, widthMm: 60);
+      expect(wide.widthMm, closeTo(60, 0.05));
+      expect(wide.scene.width, wide.widthMm);
+      expect(wide.scale, closeTo(2, 0.02));
+      // 글자 크기와, 도형 밖 여백(그림판 − 도형)은 그대로다.
+      expect(wide.scene.items.whereType<TextItem>().first.sizePt, natural.items.whereType<TextItem>().first.sizePt);
+      final g0 = natural.geometryBounds()!, g1 = wide.scene.geometryBounds()!;
+      expect(g1.left, closeTo(g0.left, 0.05));
+      expect(wide.scene.width - g1.right, closeTo(natural.width - g0.right, 0.05));
+
+      final capped = sizedSceneEstimate(doc, widthMm: 60, maxHeightMm: 50);
+      expect(capped.heightMm, closeTo(50, 0.05));
+      expect(capped.widthMm, lessThan(60));
+    });
+  });
+
+  group('편집', () {
+    Map<String, dynamic> load(String name) =>
+        jsonDecode(File('figures/csat/$name.json').readAsStringSync()) as Map<String, dynamic>;
+
+    test('자유로운 점은 끈 자리로 가고, 이어진 선이 따라온다', () {
+      final doc = jsonDecode(jsonEncode(_doc([
+        {'id': 'A', 'type': 'point', 'at': [1, 1]},
+        {'id': 'B', 'type': 'point', 'at': [-1, 0]},
+        {'id': 's', 'type': 'segment', 'from': 'A', 'to': 'B'},
+      ]))) as Map<String, dynamic>;
+      expect(movePoint(doc, 'A', const P(35, 8)), isTrue);
+      final after = layoutFigure(doc);
+      expect(after.points['A']!.distanceTo(const P(35, 8)), lessThan(0.01));
+      expect(_first(after.scene, 's').distanceTo(const P(35, 8)), lessThan(0.01));
+      // 그림판 (35, 8)mm 는 원점 (20, 20), 단위 10mm 에서 수학 좌표 (1.5, 1.2) 다.
+      expect(after.toMath(const P(35, 8)).x, closeTo(1.5, 1e-9));
+      expect(((doc['objects'] as List)[0] as Map)['at'], [1.5, 1.2]);
+    });
+
+    test('원 위의 점은 원 위에서만 움직이고, 식에 쓰인 변수를 고친다', () {
+      final doc = load('csat-2022-calculus-28-1');
+      final before = layoutFigure(doc);
+      final o = before.points['O']!, p = before.points['P']!;
+      final r = o.distanceTo(p);
+      // 원 밖 먼 곳으로 끌어도 원 위에 남는다.
+      expect(movePoint(doc, 'P', o + const P(30, -60)), isTrue);
+      final after = layoutFigure(doc);
+      expect(after.points['P']!.distanceTo(o), closeTo(r, 0.01));
+      expect(after.points['P']!.distanceTo(p), greaterThan(5));
+      expect((doc['params'] as Map)['th'], isNot(17.4297));
+      // 다른 것에서 계산되는 점(교점)은 끌 수 없다.
+      expect(canMovePoint(doc, 'R'), isFalse);
+      expect(movePoint(doc, 'R', const P(10, 10)), isFalse);
+    });
+
+    test('이름 붙이기와 저장 모양은 그림을 바꾸지 않는다', () {
+      final names = Directory('figures/csat').listSync().whereType<File>().map((f) => f.uri.pathSegments.last.replaceAll('.json', ''));
+      for (final name in names) {
+        final doc = load(name);
+        final before = sceneToTikz(buildFigure(doc));
+        ensureObjectIds(doc);
+        expect(sceneToTikz(buildFigure(doc)), before, reason: name);
+        final again = jsonDecode(formatFigureJson(doc)) as Map<String, dynamic>;
+        expect(sceneToTikz(buildFigure(again)), before, reason: name);
+        expect(formatFigureJson(doc).split('\n').length, greaterThan(figureObjects(doc).length));
+      }
+      final doc = _doc([]);
+      expect(nextPointName(doc), 'A');
+      figureObjects(doc);
+      (doc['objects'] as List).add({'id': 'A', 'type': 'point', 'at': [0, 0]});
+      expect(nextPointName(doc), 'B');
+      expect(nextObjectId(doc, 's'), 's1');
+    });
+  });
+
   test('저장소의 그림 파일은 모두 그려진다', () {
     final dir = Directory('figures/csat');
     final files = dir.listSync().whereType<File>().where((f) => f.path.endsWith('.json')).toList();
@@ -255,5 +432,32 @@ void main() {
       expect(scene.items, isNotEmpty, reason: file.path);
       expect(doc['format'], figureFormat, reason: file.path);
     }
+  });
+
+  group('이름표', () {
+    test('요소 태그는 그림 파일에서 저절로 나온다', () {
+      final doc = _doc([
+        {'type': 'point', 'name': 'A', 'at': [0, 0]},
+        {'type': 'point', 'name': 'B', 'at': [1, 0]},
+        {'type': 'point', 'name': 'C', 'at': [0, 1]},
+        {'type': 'polygon', 'points': ['A', 'B', 'C'], 'fill': 'gray'},
+        {'type': 'circle', 'center': 'A', 'radius': 1, 'line': 'dashed'},
+        {'type': 'segment', 'from': 'A', 'to': 'B', 'line': 'dashed', 'draw': false},
+      ]);
+      expect(figureElements(doc), ['triangle', 'polygon', 'circle', 'fill', 'dashed-line']);
+      expect(figureElements({...doc, 'elements': ['quadrilateral']}), contains('quadrilateral'));
+    });
+
+    test('저장소의 그림은 모두 태그 목록에 있는 이름표만 쓴다', () {
+      final vocabulary = jsonDecode(File('figures/tags.json').readAsStringSync()) as Map<String, dynamic>;
+      for (final entry in (vocabulary['tags'] as Map).entries) {
+        expect((vocabulary['groups'] as Map).containsKey((entry.value as Map)['group']), isTrue, reason: '${entry.key}');
+      }
+      final files = Directory('figures/csat').listSync().whereType<File>().where((f) => f.path.endsWith('.json'));
+      for (final file in files) {
+        final doc = jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
+        expect(checkFigureTags(doc, vocabulary), isEmpty, reason: file.path);
+      }
+    });
   });
 }

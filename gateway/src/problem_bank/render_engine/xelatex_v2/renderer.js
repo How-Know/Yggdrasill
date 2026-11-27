@@ -16,6 +16,13 @@ import sharp from 'sharp';
 import { checkXeLatexInstallation, getXeLatexBinary } from './check_installation.js';
 import { resolveSchoolBranding } from '../school_branding.js';
 import {
+  approvedEngineFigureFor,
+  figureFormatForProfile,
+  isPrintableEngineTikz,
+  pickEngineFigureVariant,
+  storedFigurePosition,
+} from '../../engine_figures.js';
+import {
   buildTexSource,
   buildDocumentTexSource,
   buildAnswerTexSource,
@@ -283,9 +290,15 @@ function renderPdfPageWithPdftoppm(pdfPath, outDir, {
  * directory so that \includegraphics can reference them as local files.
  * Populates question.figure_local_paths = string[] on each question.
  */
-export async function hydrateFiguresForXeLatex(questions, supabaseClient, workDir) {
-  if (!supabaseClient || !workDir) return { appliedCount: 0 };
+export async function hydrateFiguresForXeLatex(
+  questions,
+  supabaseClient,
+  workDir,
+  { engineFigures = true, figureFormat = '' } = {},
+) {
+  if (!supabaseClient || !workDir) return { appliedCount: 0, engineFigureCount: 0 };
   let appliedCount = 0;
+  let engineFigureCount = 0;
   for (const q of questions) {
     q.figure_local_paths = [];
     q.figure_local_infos = [];
@@ -368,6 +381,83 @@ export async function hydrateFiguresForXeLatex(questions, supabaseClient, workDi
         const bucket = String(asset?.bucket || '').trim();
         const storagePath = String(asset?.path || '').trim();
         if (!bucket || !storagePath) continue;
+        // 그림 엔진으로 다시 그려 승인한 그림이 있으면 원본 대신 그 벡터 그림을 쓴다.
+        //   받지 못하면 인쇄를 멈추지 않고 원본 그림으로 찍는다.
+        const engineFigure = engineFigures && set.prefix === 'fig'
+          ? approvedEngineFigureFor(meta, asset)
+          : null;
+        if (engineFigure) {
+          // 크기 표대로 다시 그린 그림이 이 양식 × 자리에 있으면 그것을, 없으면 제 크기 그림을 쓴다.
+          const sizedFigure = pickEngineFigureVariant(engineFigure, {
+            format: figureFormat,
+            position: storedFigurePosition(meta, engineFigure.figureIndex, ordinal + 1),
+          });
+          try {
+            const data = await downloadFigureAsset(
+              supabaseClient,
+              engineFigure.bucket,
+              sizedFigure.pdfPath,
+            );
+            const pdfBytes = Buffer.from(await data.arrayBuffer());
+            if (pdfBytes.subarray(0, 5).toString('latin1') !== '%PDF-') {
+              throw new Error('not a PDF file');
+            }
+            const qid = q.id || q.question_uid || randomUUID();
+            const filePath = path.join(workDir, `${set.prefix}-${qid}-${engineFigure.figureIndex}.pdf`);
+            fs.writeFileSync(filePath, pdfBytes);
+            // 그리는 글(TikZ)이 있으면 함께 받아 둔다. 인쇄 문서가 직접 조판해 그림 속 글자가 본문 글꼴로 찍힌다.
+            //   받지 못했거나 넣으면 안 되는 글이면 위의 PDF 로 찍는다.
+            let tikzFilePath = '';
+            if (sizedFigure.tikzPath) {
+              try {
+                const tikzData = await downloadFigureAsset(
+                  supabaseClient,
+                  engineFigure.bucket,
+                  sizedFigure.tikzPath,
+                );
+                const tikzText = Buffer.from(await tikzData.arrayBuffer()).toString('utf8');
+                if (!isPrintableEngineTikz(tikzText)) throw new Error('not an engine drawing');
+                tikzFilePath = path.join(workDir, `${set.prefix}-${qid}-${engineFigure.figureIndex}.tikz`);
+                fs.writeFileSync(tikzFilePath, tikzText);
+              } catch (err) {
+                tikzFilePath = '';
+                console.warn(
+                  `[xelatex] engine figure drawing unavailable, using its PDF ` +
+                  `q=${q.id || q.question_uid || 'unknown'} idx=${engineFigure.figureIndex}: ${err?.message || err}`,
+                );
+              }
+            }
+            ordinal += 1;
+            set.paths.push(filePath);
+            set.infos.push({
+              path: filePath,
+              assetKey: `idx:${engineFigure.figureIndex}`,
+              itemId: String(asset?.item_id || '').trim(),
+              figureIndex: engineFigure.figureIndex,
+              ordinal,
+              mimeType: 'application/pdf',
+              // 줄 수 어림에는 가로세로 비율만 쓰인다.
+              widthPx: (!sizedFigure.sized && engineFigure.widthPx) || Math.round(sizedFigure.widthEm * 100),
+              heightPx: (!sizedFigure.sized && engineFigure.heightPx) || Math.round(sizedFigure.heightEm * 100),
+              // 엔진 그림은 본문 글자 크기에 맞춰 그려져 있어 받은 그림의 제 크기로 찍는다(figure_layout.js).
+              engineFigure: {
+                figureId: engineFigure.figureId,
+                widthEm: sizedFigure.widthEm,
+                heightEm: sizedFigure.heightEm,
+                sized: sizedFigure.sized,
+                ...(tikzFilePath ? { tikzPath: tikzFilePath } : {}),
+              },
+            });
+            appliedCount += 1;
+            engineFigureCount += 1;
+            continue;
+          } catch (err) {
+            console.warn(
+              `[xelatex] engine figure unavailable, using the original ` +
+              `q=${q.id || q.question_uid || 'unknown'} idx=${engineFigure.figureIndex}: ${err?.message || err}`,
+            );
+          }
+        }
         try {
           const data = await downloadFigureAsset(
             supabaseClient,
@@ -418,7 +508,7 @@ export async function hydrateFiguresForXeLatex(questions, supabaseClient, workDi
       }
     }
   }
-  return { appliedCount };
+  return { appliedCount, engineFigureCount };
 }
 
 function ensureInstalled() {
@@ -960,7 +1050,15 @@ export async function renderPdfWithXeLatex({
   const cols = (Number(layoutColumns || 1) >= 2 || isMockProfile) ? 2 : 1;
 
   try {
-    await hydrateFiguresForXeLatex(questions || [], supabaseClient, workDir);
+    // 원본 그림으로만 찍어 보고 싶을 때(비교, 비상시)는 renderConfig.engineFigures=false 나
+    //   PB_DISABLE_ENGINE_FIGURES=1 로 엔진 그림을 끈다.
+    const figureHydration = await hydrateFiguresForXeLatex(questions || [], supabaseClient, workDir, {
+      engineFigures:
+        renderConfig?.engineFigures !== false &&
+        process.env.PB_DISABLE_ENGINE_FIGURES !== '1',
+      // 그림 크기 표는 양식(과제·내신·모의고사)마다 크기가 다르다.
+      figureFormat: figureFormatForProfile(profile),
+    });
     if (supabaseClient && Array.isArray(questions) && questions.length > 0) {
       const docIds = [...new Set(
         questions
@@ -1309,6 +1407,7 @@ export async function renderPdfWithXeLatex({
       mathCacheHitCount: 0,
       figureHydration: {
         appliedCount: 0,
+        engineFigureCount: figureHydration.engineFigureCount || 0,
         degradedCount: 0,
         resampledCount: 0,
         regenerationQueuedCount: 0,

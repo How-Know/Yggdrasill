@@ -54,8 +54,9 @@ class FigureStyle {
   /// 이 규격을 잰 문제지의 본문 글자 크기. 다른 크기의 본문에 넣을 때 이 비율로 줄이거나 키운다.
   final double bodyPt;
 
-  /// 2024~2026 수능 문제지 원본 그림(600~700ppi)에서 잰 값.
-  static const csat2026 = FigureStyle(
+  /// 2024~2026 수능 문제지 원본 그림(600~700ppi)에서 잰 첫 값.
+  /// 선 굵기를 한 픽셀쯤 가늘게 쟀다(가는 선이 원본보다 가늘다). 새 그림에는 쓰지 않는다.
+  static const csat2026v1 = FigureStyle(
     name: 'csat-2026.1',
     mainLine: 0.28,
     thinLine: 0.11,
@@ -77,7 +78,32 @@ class FigureStyle {
     bodyPt: 11.3,
   );
 
-  static const _all = {'csat-2026.1': csat2026};
+  /// csat-2026.1 에서 선 굵기만 다시 잰 값(tool/reference/measure_style.dart).
+  /// 곧은 선을 가로질러 회색 농도를 더해 재면 2024~2026 원본의 굵은 선은 0.28~0.29mm,
+  /// 가는 선(축·보조선·안쪽 선분)은 0.14~0.17mm, 입체 그림의 평면 같은 중간 선은 0.19mm 안팎이다.
+  static const csat2026 = FigureStyle(
+    name: 'csat-2026.2',
+    mainLine: 0.285,
+    thinLine: 0.15,
+    midLine: 0.19,
+    dashOn: 0.55,
+    dashOff: 0.35,
+    dotRadius: 0.65,
+    smallDotRadius: 0.4,
+    openDotLine: 0.15,
+    arrowLength: 1.7,
+    arrowWidth: 1.05,
+    arrowNotch: 0.25,
+    lightGray: 0.847,
+    darkGray: 0.69,
+    labelPt: 10.5,
+    labelGap: 0.7,
+    angleRadius: 3.0,
+    rightAngleSize: 1.5,
+    bodyPt: 11.3,
+  );
+
+  static const _all = {'csat-2026.1': csat2026v1, 'csat-2026.2': csat2026};
 
   static const latest = csat2026;
 

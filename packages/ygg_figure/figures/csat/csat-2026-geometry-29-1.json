@@ -1,7 +1,9 @@
 {
   "format": "ygg-figure/1",
-  "style": "csat-2026.1",
+  "style": "csat-2026.2",
   "ref": "csat-2026-geometry-29-1",
+  "kind": "graph",
+  "tags": ["parabola", "hyperbola", "two-conics"],
   "params": {"u": 21.7628, "ox": 51.0537, "oy": 69.1769, "t": 1.515, "a": 0.4722},
   "fit": ["u", "ox", "oy", "t", "a"],
   "canvas": {"width": 103.93, "height": 86.36, "origin": ["ox", "oy"], "unit": "u"},
@@ -18,7 +20,8 @@
     {"id": "d", "type": "segment", "from": [-1, 3.056], "to": [-1, -0.787]},
     {"type": "segment", "from": "B", "to": "A", "line": "thin"},
     {"type": "right_angle", "at": "B", "from": [-1, 3], "to": "A", "size": 2.0},
-    {"id": "lp", "type": "label", "at": [1.94, 2.59], "text": "y^2=4px"}
+    {"id": "lp", "type": "label", "at": ["2.558^2/4", 2.558], "dir": "E", "dist": 3.1, "text": "y^2=4px"}
   ],
-  "label_nudge": {"ax:x": [-0.363, 0.0], "ax:y": [0.29, -0.581], "ax:origin": [0.073, -0.145], "A": [0.436, 1.089], "B": [0.218, -0.29], "C": [0.073, -0.581], "F": [-0.145, 0.073]}
+  "label_nudge": {"ax:x": [-0.363, 0.0], "ax:y": [0.29, -0.581], "ax:origin": [0.073, -0.145], "A": [0.436, 1.089], "B": [0.218, -0.29], "C": [0.073, -0.581], "F": [-0.145, 0.073]},
+  "size": {"variant": "large"}
 }

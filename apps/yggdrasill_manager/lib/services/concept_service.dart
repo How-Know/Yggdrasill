@@ -263,6 +263,15 @@ class ConceptService {
     }
   }
 
+  /// 이 개념과 여기에만 붙은 자료를 지운다. 다른 개념 행은 지우지 않는다.
+  Future<void> forceDeleteConcept(String id) async {
+    try {
+      await _client.rpc('concept_force_delete', params: {'p_concept_id': id});
+    } catch (e) {
+      throw ConceptDeleteException.from(e);
+    }
+  }
+
   /// 붙은 것이 하나도 없을 때만 지운다. 서버가 지울 때 다시 세고, 붙은 것이 있으면 ConceptDeleteException.
   Future<void> deleteConcept(String id) async {
     try {

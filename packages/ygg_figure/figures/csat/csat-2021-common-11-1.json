@@ -1,0 +1,23 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.2",
+  "ref": "csat-2021-common-11-1",
+  "kind": "graph",
+  "tags": ["trig-curve", "curve-and-line", "triangle-on-graph"],
+  "params": {"ox": 20.9255, "oy": 37.4411, "u": 14.2759, "a": 2.3094},
+  "fit": ["ox", "oy", "u"],
+  "canvas": {"width": 70.06, "height": 67.39, "origin": ["ox", "oy"], "unit": "u"},
+  "objects": [
+    {"id": "ax", "type": "axes", "x": ["-20.5/u", "48.5/u"], "y": ["-29.1/u", "35.1/u"], "labels": {"origin": {"offset": [-2.0, 2.4]}}},
+    {"id": "f", "type": "function", "expr": "tan(pi*x/a)", "domain": ["-a/2+0.001", "a"], "range": ["-28.8/u", "28.8/u"], "samples": 3000},
+    {"id": "A", "type": "on", "of": "f", "x": "-a/4", "label": {"dir": "W", "dist": 2.0}},
+    {"id": "B", "type": "on", "of": "f", "x": "a/4", "label": {"dir": "W", "dist": 0.6}},
+    {"id": "C", "type": "on", "of": "f", "x": "3a/4", "label": {"dir": "E", "dist": 1.2}},
+    {"type": "segment", "from": "A", "to": "B", "extend": [16.9, 16.7]},
+    {"type": "segment", "from": "A", "to": "C"},
+    {"type": "segment", "from": "B", "to": "C"},
+    {"id": "lf", "type": "on", "of": "f", "x": "a/pi*atan(28.8/u)", "label": {"text": "y=f(x)", "dir": "E", "dist": 0.6, "offset": [-10.0, 3.1]}}
+  ],
+  "size": {"variant": "medium"},
+  "label_nudge": {"ax:x": [-0.085, 0.254], "ax:y": [0.423, 0.254], "A": [0.338, 0.169], "B": [0.0, 0.507], "C": [-0.423, 0.169]}
+}

@@ -1,0 +1,25 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.2",
+  "ref": "csat-2019-ga-13-1",
+  "kind": "graph",
+  "tags": ["ellipse", "conic-focus-triangle", "curve-and-line"],
+  "params": {"ox": 26.5512, "oy": 30.6439, "u": 4.6766, "a2": 15},
+  "fit": ["ox", "oy", "u"],
+  "canvas": {"width": 70.27, "height": 57.36, "origin": ["ox", "oy"], "unit": "u"},
+  "objects": [
+    {"id": "ax", "type": "axes", "x": [-5.66, 9.19], "y": [-5.66, 6.08]},
+    {"id": "el", "type": "ellipse", "center": [0, 0], "a": "sqrt(a2)", "b": 5},
+    {"id": "F", "type": "point", "at": [0, "sqrt(25-a2)"], "label": {"dir": "NW", "dist": 0.8}},
+    {"id": "F'", "type": "point", "at": [0, "-sqrt(25-a2)"], "label": {"dir": "NW", "dist": 0.4}},
+    {"id": "A", "type": "point", "at": ["sqrt(a2)", 0], "label": {"dir": "SE", "dist": 0.8}},
+    {"id": "P", "type": "intersect", "of": ["el", ["F", [1, "F.y"]]], "pick": 1, "label": {"dir": "NE", "dist": 0.8}},
+    {"id": "B", "type": "intersect", "of": [["F", [1, "F.y"]], ["A", "F'"]], "label": {"dir": "N", "dist": 1.0, "offset": [-0.6, 0]}},
+    {"type": "segment", "from": [-5.17, "F.y"], "to": [8.47, "F.y"]},
+    {"type": "segment", "from": "F'", "to": "B", "extend": [17.6, 4.6]},
+    {"type": "segment", "from": "F", "to": "A"},
+    {"type": "segment", "from": "F'", "to": "P"}
+  ],
+  "size": {"variant": "medium"},
+  "label_nudge": {"ax:x": [0.085, 0.254], "ax:y": [0.339, 0.085], "ax:origin": [-0.085, -0.085], "F": [0.0, 0.509], "F'": [-0.254, -0.424], "A": [0.17, -0.339], "P": [-0.339, 0.424]}
+}

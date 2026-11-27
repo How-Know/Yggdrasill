@@ -1,0 +1,26 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.2",
+  "ref": "csat-2020-ga-16-1",
+  "kind": "graph",
+  "tags": ["exp-log-curve", "sequence-on-curve", "points-on-curve", "curve-and-line"],
+  "params": {"ox": 4.7838, "oy": 32.2591, "u": 4.5435, "s": 0.759, "an": 0.992, "d": 1.9523},
+  "fit": ["ox", "oy", "u", "s", "an", "d"],
+  "canvas": {"width": 27.51, "height": 38.61, "origin": ["ox", "oy"], "unit": "u"},
+  "objects": [
+    {"id": "ax", "type": "axes", "x": ["-4.8/u", "22.4/u"], "y": ["-3.4/u", "31.5/u"]},
+    {"id": "f", "type": "function", "expr": "s*2^x", "domain": ["-4.8/u", 4], "range": [0, "31.4/u"], "samples": 1200},
+    {"id": "Pn", "type": "on", "of": "f", "x": "an", "label": {"text": "\\mathrm{P}_{n}", "dir": "SE", "dist": 1.0}},
+    {"id": "Pm", "type": "on", "of": "f", "x": "an+d", "label": {"text": "\\mathrm{P}_{n+1}", "dir": 340, "dist": 0.8}},
+    {"id": "Qn", "type": "point", "at": ["Pm.x", "Pn.y"], "label": {"text": "\\mathrm{Q}_{n}", "dir": 340, "dist": 0.8}},
+    {"type": "polyline", "points": [[0, "Pm.y"], "Pm", ["Pm.x", 0]], "line": "dashed"},
+    {"type": "polyline", "points": [[0, "Pn.y"], "Qn"], "line": "dashed"},
+    {"type": "segment", "from": "Pn", "to": ["Pn.x", 0], "line": "dashed"},
+    {"type": "segment", "from": "Pn", "to": "Pm", "extend": [10.1, 5.45]},
+    {"id": "tn", "type": "label", "at": ["Pn.x", 0], "text": "a_{n}", "dir": "S", "dist": 0.8},
+    {"id": "tm", "type": "label", "at": ["Pm.x", 0], "text": "a_{n+1}", "dir": "S", "dist": 0.8},
+    {"id": "lf", "type": "on", "of": "f", "x": "ln(29.5/(u*s))/ln(2)", "label": {"text": "y=2^{x}", "dir": "W", "dist": 0.8}}
+  ],
+  "size": {"variant": "small"},
+  "label_nudge": {"ax:x": [0.339, 0.931]}
+}

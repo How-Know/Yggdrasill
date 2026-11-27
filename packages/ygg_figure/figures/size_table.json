@@ -1,0 +1,27 @@
+{
+  "format": "ygg-figure-sizes/1",
+  "columns": {"assignment": 25.05, "naesin": 28.34, "mock": 29.53},
+  "slots": [
+    {"format": "assignment", "position": "below-stem", "variant": "small", "width_ratio": 0.5},
+    {"format": "assignment", "position": "below-stem", "width_ratio": 0.7},
+    {"format": "assignment", "position": "below-stem", "variant": "large", "width_ratio": 0.85},
+    {"format": "assignment", "position": "below-choices", "variant": "small", "width_ratio": 0.5},
+    {"format": "assignment", "position": "below-choices", "width_ratio": 0.7},
+    {"format": "assignment", "position": "below-choices", "variant": "large", "width_ratio": 0.85},
+    {"format": "assignment", "position": "inline-right", "width_ratio": 0.4},
+    {"format": "naesin", "position": "below-stem", "variant": "small", "width_ratio": 0.5},
+    {"format": "naesin", "position": "below-stem", "width_ratio": 0.7},
+    {"format": "naesin", "position": "below-stem", "variant": "large", "width_ratio": 0.85},
+    {"format": "naesin", "position": "below-choices", "variant": "small", "width_ratio": 0.5},
+    {"format": "naesin", "position": "below-choices", "width_ratio": 0.7},
+    {"format": "naesin", "position": "below-choices", "variant": "large", "width_ratio": 0.85},
+    {"format": "naesin", "position": "inline-right", "width_ratio": 0.4},
+    {"format": "mock", "position": "below-stem", "variant": "small", "width_ratio": 0.5},
+    {"format": "mock", "position": "below-stem", "width_ratio": 0.7},
+    {"format": "mock", "position": "below-stem", "variant": "large", "width_ratio": 0.85},
+    {"format": "mock", "position": "below-choices", "variant": "small", "width_ratio": 0.5},
+    {"format": "mock", "position": "below-choices", "width_ratio": 0.7},
+    {"format": "mock", "position": "below-choices", "variant": "large", "width_ratio": 0.85},
+    {"format": "mock", "position": "inline-right", "width_ratio": 0.4}
+  ]
+}

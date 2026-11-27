@@ -1,0 +1,31 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.2",
+  "ref": "csat-2018-ga-18-1",
+  "kind": "plane",
+  "tags": ["sector", "theta-limit"],
+  "params": {"ox": 4.3155, "oy": 45.12, "u": 48.1795, "th": 39.55},
+  "fit": ["ox", "oy", "u", "th"],
+  "canvas": {"width": 56.94, "height": 50.63, "origin": ["ox", "oy"], "unit": "u"},
+  "objects": [
+    {"id": "A", "type": "point", "at": [0, 0], "label": {"dir": "W", "dist": 0.8}},
+    {"id": "B", "type": "point", "at": [1, 0], "label": {"dir": "E", "dist": 0.8}},
+    {"id": "C", "type": "point", "at": [1, "tan(rad(th))"], "label": {"dir": "N", "dist": 0.8}},
+    {"id": "X", "type": "rotate", "of": "B", "center": "C", "angle": "-(90-th)/2"},
+    {"id": "D", "type": "intersect", "of": [["C", "X"], ["A", "B"]], "label": {"dir": "S", "dist": 1.0}},
+    {"id": "k", "type": "circle", "center": "A", "through": "D", "draw": false},
+    {"id": "E", "type": "intersect", "of": ["k", ["A", "C"]], "near": "C", "label": {"dir": "NW", "dist": 0.6}},
+    {"type": "fill", "path": ["A", "D", {"arc": "A", "to": "E", "dir": "ccw"}], "shade": "light"},
+    {"type": "fill", "path": ["B", "C", "E"], "shade": "light"},
+    {"type": "polygon", "points": ["A", "B", "C"]},
+    {"type": "arc", "center": "A", "from": "D", "to": "E", "dir": "ccw"},
+    {"type": "segment", "from": "C", "to": "D"},
+    {"type": "segment", "from": "E", "to": "B"},
+    {"type": "right_angle", "at": "B", "from": "A", "to": "C", "size": 2.3},
+    {"id": "ath", "type": "angle", "at": "A", "from": "B", "to": "C", "radius": 3.4, "label": {"text": "\\theta", "dist": 6.3}},
+    {"id": "m1", "type": "angle", "at": "C", "from": "A", "to": "D", "radius": 8.8, "line": "none", "mark": "dot", "mark_size": 0.4},
+    {"id": "m2", "type": "angle", "at": "C", "from": "D", "to": "B", "radius": 8.8, "line": "none", "mark": "dot", "mark_size": 0.4}
+  ],
+  "size": {"variant": "small"},
+  "label_nudge": {"A": [0.423, 0.0], "B": [0.085, -0.085], "C": [-0.085, 0.085], "D": [0.0, -0.085], "E": [0.593, 0.508], "ath": [-0.085, 0.085]}
+}

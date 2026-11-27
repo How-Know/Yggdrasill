@@ -544,5 +544,22 @@ void main() {
       expect(c.blocksIn(id, add).map((x) => x.id), [blk1]);
       expect(c.placementsInBlock(id, add, null).map((p) => p.name), ['다항식의 덧셈']);
     });
+
+    test('지금 과정에 놓인 개념 자리를 모두 뺀다', () async {
+      final (b, id) = _seed();
+      final add = b.unitId(id, '덧셈과 뺄셈');
+      final mul = b.unitId(id, '곱셈');
+      final k = b.addConcept('소수');
+      b.place(add, k);
+      b.place(mul, k);
+      final c = _controller(b);
+      await c.loadList();
+      await c.loadPlacements(id);
+      expect(c.placementsOfConcept(k), 2);
+      expect(await c.removeConceptFromSelectedCourse(k), isNull);
+      expect(c.placementsOfConcept(k), 0);
+      expect(b.namesIn(add), isEmpty);
+      expect(b.namesIn(mul), isEmpty);
+    });
   });
 }

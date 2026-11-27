@@ -3014,11 +3014,13 @@ class _LooseConceptsDivider extends StatelessWidget {
   }
 }
 
-/// 정의·표현은 단원 바로 아래. 그 밖 유형은 단원 한 단계와 같은 16만큼 더 들여 쓴다. 순서·저장은 바꾸지 않는다.
-double _conceptRowInset(int depth, String? type) {
+/// 정의·표현은 단원(또는 블록) 바로 아래. 그 밖 유형은 한 단계와 같은 16만큼 더 들여 쓴다.
+/// 블록 안은 브래킷 아래로 16을 더 민 뒤 같은 규칙을 쓴다. 순서·저장은 바꾸지 않는다.
+double _conceptRowInset(int depth, String? type, {bool inBlock = false}) {
   final name = (type ?? '').trim();
   final extra = (name == '정의' || name == '표현') ? 0.0 : 16.0;
-  return 28 + (depth - 1) * 16.0 + extra;
+  final base = (inBlock ? 44.0 : 28.0) + (depth - 1) * 16.0;
+  return base + extra;
 }
 
 /// 단원 또는 수업 블록 아래에 펼친 개념 한 줄. 누르면 옆 칸의 선택한 단원 위에 그 개념을 둔다.
@@ -3065,7 +3067,7 @@ class _ConceptRowState extends State<_ConceptRow> {
     final p = widget.placement;
     final type = conceptTypeStyle(p.type);
     final note = p.note;
-    final leftInset = widget.inBlock ? (44.0 + (widget.depth - 1) * 16.0) : _conceptRowInset(widget.depth, p.type);
+    final leftInset = _conceptRowInset(widget.depth, p.type, inBlock: widget.inBlock);
     final otherBlocks = [
       for (final b in widget.unitBlocks)
         if (b.id != p.blockId) b,
@@ -3450,18 +3452,70 @@ class _HoldToDragState extends State<_HoldToDrag> {
   bool _dragging = false;
   OverlayEntry? _entry;
   Size _size = Size.zero;
+  ValueChanged<Offset>? _drop;
+  ValueChanged<Offset>? _dragUpdate;
+  VoidCallback? _dragEnd;
+  Widget Function()? _buildChild;
+
+  @override
+  void reassemble() {
+    super.reassemble();
+    _resetDrag();
+  }
 
   @override
   void dispose() {
     _hold?.cancel();
-    _entry?.remove();
+    _hold = null;
+    _removeFeedback();
     super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(_HoldToDrag oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (_dragging) {
+      _drop = widget.onDrop;
+      _dragUpdate = widget.onDragUpdate;
+      _dragEnd = widget.onDragEnd;
+      _buildChild = widget.buildChild;
+    }
+  }
+
+  void _resetDrag() {
+    _hold?.cancel();
+    _hold = null;
+    _pointer = null;
+    _dragging = false;
+    _removeFeedback();
+    _drop = null;
+    _dragUpdate = null;
+    _dragEnd = null;
+    _buildChild = null;
+  }
+
+  /// 한 번만 걷는다. 줄이 먼저 사라진 뒤 떼기 이벤트가 오면 두 번째 remove는 오버레이 단언으로 끊긴다.
+  void _removeFeedback() {
+    final entry = _entry;
+    if (entry == null) return;
+    _entry = null;
+    try {
+      entry.remove();
+    } on AssertionError {
+      // 오버레이가 이미 이 항목을 걷은 뒤다.
+    } on TypeError {
+      // remove의 _overlay null 검사. 릴리스에서는 단언이 빠지고 여기서 끊긴다.
+    }
   }
 
   void _arm() {
     if (!mounted || _pointer == null) return;
     final box = _boxKey.currentContext?.findRenderObject() as RenderBox?;
     if (box == null || !box.hasSize) return;
+    _drop = widget.onDrop;
+    _dragUpdate = widget.onDragUpdate;
+    _dragEnd = widget.onDragEnd;
+    _buildChild = widget.buildChild;
     setState(() {
       _dragging = true;
       _size = box.size;
@@ -3481,14 +3535,14 @@ class _HoldToDragState extends State<_HoldToDrag> {
           color: Colors.transparent,
           elevation: 4,
           borderRadius: BorderRadius.circular(8),
-          child: widget.buildChild(),
+          child: (_buildChild ?? widget.buildChild)(),
         ),
       ),
     );
   }
 
   void _onDown(PointerDownEvent event) {
-    if (!widget.enabled || _dragging) return;
+    if (!mounted || !widget.enabled || _dragging) return;
     _pointer = event.pointer;
     _down = event.position;
     _point = event.position;
@@ -3507,22 +3561,32 @@ class _HoldToDragState extends State<_HoldToDrag> {
       return;
     }
     _entry?.markNeedsBuild();
-    widget.onDragUpdate?.call(event.position);
+    final update = _dragUpdate;
+    if (update != null) {
+      update(event.position);
+    } else if (mounted) {
+      widget.onDragUpdate?.call(event.position);
+    }
   }
 
   void _end(PointerEvent event) {
     if (event.pointer != _pointer) return;
     final dropped = _dragging;
     final at = event.position;
+    final drop = _drop ?? (mounted ? widget.onDrop : null);
+    final end = _dragEnd ?? (mounted ? widget.onDragEnd : null);
     _hold?.cancel();
     _hold = null;
     _pointer = null;
-    _entry?.remove();
-    _entry = null;
-    if (_dragging && mounted) setState(() => _dragging = false);
     _dragging = false;
-    if (dropped) widget.onDrop(at);
-    widget.onDragEnd?.call();
+    _removeFeedback();
+    _drop = null;
+    _dragUpdate = null;
+    _dragEnd = null;
+    _buildChild = null;
+    if (dropped && mounted) setState(() {});
+    if (dropped) drop?.call(at);
+    end?.call();
   }
 
   @override

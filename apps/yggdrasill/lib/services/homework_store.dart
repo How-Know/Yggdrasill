@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
 import '../models/homework_learning_track.dart';
+import '../models/student_flow.dart';
 import 'data_manager.dart';
 import 'tenant_service.dart';
 import 'homework_assignment_store.dart';
@@ -301,10 +302,10 @@ class HomeworkRecentTemplate {
   }
 
   String get primaryPreferredFlowName {
-    final own = (preferredFlowName ?? '').trim();
+    final own = StudentFlow.normalizeName((preferredFlowName ?? '').trim());
     if (own.isNotEmpty) return own;
     for (final part in parts) {
-      final value = (part.preferredFlowName ?? '').trim();
+      final value = StudentFlow.normalizeName((part.preferredFlowName ?? '').trim());
       if (value.isNotEmpty) return value;
     }
     return '';
@@ -2629,10 +2630,11 @@ class HomeworkStore {
     final preferredFlowId =
         '${preset.renderConfig['assignmentFlowId'] ?? preset.renderConfig['flowId'] ?? ''}'
             .trim();
-    final preferredFlowName =
-        '${preset.renderConfig['assignmentFlowName'] ?? preset.renderConfig['flowName'] ?? preset.renderConfig['preferredFlowName'] ?? preset.renderConfig['assignmentFlow'] ?? ''}'
-            .replaceAll(RegExp(r'\s+'), ' ')
-            .trim();
+    final preferredFlowName = StudentFlow.normalizeName(
+      '${preset.renderConfig['assignmentFlowName'] ?? preset.renderConfig['flowName'] ?? preset.renderConfig['preferredFlowName'] ?? preset.renderConfig['assignmentFlow'] ?? ''}'
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim(),
+    );
     final explicitPageRange =
         '${preset.renderConfig['assignmentPageRange'] ?? ''}'.trim();
     final pageRange = explicitPageRange.isNotEmpty

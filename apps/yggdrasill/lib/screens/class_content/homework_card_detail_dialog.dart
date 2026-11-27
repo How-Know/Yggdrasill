@@ -40,6 +40,7 @@ Future<void> showHomeworkCardDetailDialog({
   String? dueLabel,
   bool showAdditionalPrefix = false,
   void Function(HomeworkItem child)? onChildPageTap,
+  Future<void> Function()? onViewAssignment,
   Future<void> Function(HomeworkCardPrintSelection selection)? onPrint,
 }) {
   return showDialog<void>(
@@ -57,6 +58,7 @@ Future<void> showHomeworkCardDetailDialog({
         dueLabel: dueLabel,
         showAdditionalPrefix: showAdditionalPrefix,
         onChildPageTap: onChildPageTap,
+        onViewAssignment: onViewAssignment,
         onPrint: onPrint,
       );
     },
@@ -74,6 +76,7 @@ class HomeworkCardDetailDialog extends StatefulWidget {
     this.dueLabel,
     this.showAdditionalPrefix = false,
     this.onChildPageTap,
+    this.onViewAssignment,
     this.onPrint,
   });
 
@@ -85,6 +88,7 @@ class HomeworkCardDetailDialog extends StatefulWidget {
   final String? dueLabel;
   final bool showAdditionalPrefix;
   final void Function(HomeworkItem child)? onChildPageTap;
+  final Future<void> Function()? onViewAssignment;
   final Future<void> Function(HomeworkCardPrintSelection selection)? onPrint;
 
   @override
@@ -99,6 +103,7 @@ class _HomeworkCardDetailDialogState extends State<HomeworkCardDetailDialog> {
   String _roundLabel = '';
   bool _historyOpen = false;
   bool _printBusy = false;
+  bool _viewBusy = false;
 
   @override
   void initState() {
@@ -191,9 +196,20 @@ class _HomeworkCardDetailDialogState extends State<HomeworkCardDetailDialog> {
     }
   }
 
+  Future<void> _openAssignmentPreview() async {
+    final onView = widget.onViewAssignment;
+    if (onView == null || _viewBusy || _printBusy) return;
+    setState(() => _viewBusy = true);
+    try {
+      await onView();
+    } finally {
+      if (mounted) setState(() => _viewBusy = false);
+    }
+  }
+
   Future<void> _openPrintOptions() async {
     final onPrint = widget.onPrint;
-    if (onPrint == null || _printBusy) return;
+    if (onPrint == null || _printBusy || _viewBusy) return;
     final selection = await showDialog<HomeworkCardPrintSelection>(
       context: context,
       barrierColor: Colors.black.withValues(
@@ -246,15 +262,21 @@ class _HomeworkCardDetailDialogState extends State<HomeworkCardDetailDialog> {
       icon: Icons.assignment_outlined,
       title: title,
       onClose: () => Navigator.of(context).pop(),
-      actions: widget.onPrint == null
-          ? const <Widget>[]
-          : [
-              AppDialogConfirmButton(
-                label: '인쇄',
-                showIcon: false,
-                onPressed: _printBusy ? null : _openPrintOptions,
-              ),
-            ],
+      actions: [
+        if (widget.onViewAssignment != null)
+          AppDialogConfirmButton(
+            label: '과제보기',
+            filled: false,
+            showIcon: false,
+            onPressed: _viewBusy || _printBusy ? null : _openAssignmentPreview,
+          ),
+        if (widget.onPrint != null)
+          AppDialogConfirmButton(
+            label: '인쇄',
+            showIcon: false,
+            onPressed: _printBusy || _viewBusy ? null : _openPrintOptions,
+          ),
+      ],
       child: ScrollConfiguration(
         behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
         child: Row(

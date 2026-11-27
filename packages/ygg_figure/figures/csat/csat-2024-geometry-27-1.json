@@ -1,0 +1,28 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.2",
+  "ref": "csat-2024-geometry-27-1",
+  "kind": "solid",
+  "tags": ["tetrahedron", "orthogonal-projection", "circle-in-triangle", "circle-on-plane"],
+  "params": {"ox": 15.0876, "oy": 56.1835, "xx": 2.5884, "xy": -3.0286, "yx": 14.5833, "yy": 0.5396, "zx": -0.0078, "zy": 14.4559},
+  "fit": ["ox", "oy", "xx", "xy", "yx", "yy", "zx", "zy"],
+  "canvas": {"width": 77.47, "height": 75.31, "origin": ["ox", "oy"], "unit": 1},
+  "projection": {"x": ["xx", "xy"], "y": ["yx", "yy"], "z": ["zx", "zy"]},
+  "objects": [
+    {"id": "M", "type": "point", "at": [0, 0, 0], "label": {"dir": "SW", "dist": 0.6}},
+    {"id": "B", "type": "point", "at": ["-2sqrt(5)", 0, 0], "label": {"dir": "W", "dist": 0.8}},
+    {"id": "C", "type": "point", "at": ["2sqrt(5)", 0, 0], "label": {"dir": "S", "dist": 1.0}},
+    {"id": "D", "type": "point", "at": [0, 4, 0], "label": {"dir": "E", "dist": 0.8}},
+    {"id": "A", "type": "point", "at": [0, 2, "2sqrt(3)"], "label": {"dir": "N", "dist": 1.0}},
+    {"id": "I", "type": "point", "at": ["(6A.x+4C.x+6D.x)/16", "(6A.y+4C.y+6D.y)/16", "(6A.z+4C.z+6D.z)/16"]},
+    {"id": "T", "type": "midpoint", "of": ["A", "D"]},
+    {"id": "inc", "type": "parametric", "var": "s", "t": [0, "2pi"], "x": "I.x + (T.x-I.x)cos(s) + sqrt(2)/4*(D.x-A.x)sin(s)", "y": "I.y + (T.y-I.y)cos(s) + sqrt(2)/4*(D.y-A.y)sin(s)", "z": "I.z + (T.z-I.z)cos(s) + sqrt(2)/4*(D.z-A.z)sin(s)", "fill": true},
+    {"type": "segment", "from": "B", "to": "D", "line": "dashed"},
+    {"type": "segment", "from": "M", "to": "D", "line": "dashed"},
+    {"type": "polygon", "points": ["A", "B", "C", "D"]},
+    {"type": "segment", "from": "A", "to": "C"},
+    {"type": "segment", "from": "A", "to": "M"}
+  ],
+  "size": {"variant": "medium"},
+  "label_nudge": {"M": [-0.847, -0.339], "B": [0.423, -0.254], "C": [-0.254, -0.254], "D": [0.0, -0.254], "A": [0.0, 0.085]}
+}

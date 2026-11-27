@@ -966,6 +966,31 @@ class CourseMapController extends ChangeNotifier {
 
   Future<String?> removePlacement(String placementId) => _placementAction(() => _backend.removePlacement(placementId));
 
+  /// 지금 보고 있는 과정 흐름에서 이 개념이 놓인 자리를 모두 뺀다. 개념 기록은 지우지 않는다.
+  Future<String?> removeConceptFromSelectedCourse(String conceptId) async {
+    final courseId = selectedCourseId;
+    final list = courseId == null ? null : _placements[courseId];
+    if (list == null) return '과정 흐름을 아직 읽지 못했습니다.';
+    final ids = [for (final p in list) if (p.conceptId == conceptId) p.id];
+    if (ids.isEmpty) return '이 과정 흐름에는 이 개념이 없습니다.';
+    for (final id in ids) {
+      final problem = await removePlacement(id);
+      if (problem != null) return problem;
+    }
+    return null;
+  }
+
+  int placementsOfConcept(String conceptId) {
+    final courseId = selectedCourseId;
+    final list = courseId == null ? null : _placements[courseId];
+    if (list == null) return 0;
+    var n = 0;
+    for (final p in list) {
+      if (p.conceptId == conceptId) n += 1;
+    }
+    return n;
+  }
+
   Future<String?> movePlacement(String placementId, String unitId) =>
       _placementAction(() => _backend.movePlacement(placementId: placementId, unitId: unitId));
 

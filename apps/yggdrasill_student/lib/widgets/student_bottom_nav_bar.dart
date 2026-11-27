@@ -384,18 +384,20 @@ class _StudentBottomNavBarState extends State<StudentBottomNavBar> {
   }
 }
 
-/// 원형 검색 버튼 → 펼치면 와이드 검색 캡슐 (마이크 아이콘 포함, 기능 없음).
+/// 원형 검색 버튼 → 펼치면 와이드 검색 캡슐.
 class StudentBottomNavSearchButton extends StatefulWidget {
   const StudentBottomNavSearchButton({
     super.key,
     required this.expanded,
     required this.onExpandedChanged,
+    this.onQueryChanged,
     this.scale = 1,
     this.animateSize = true,
   });
 
   final bool expanded;
   final ValueChanged<bool> onExpandedChanged;
+  final ValueChanged<String>? onQueryChanged;
   final double scale;
   final bool animateSize;
 
@@ -542,7 +544,7 @@ class _StudentBottomNavSearchButtonState
                                     child: TextField(
                                       controller: _controller,
                                       focusNode: _focusNode,
-                                      onChanged: (_) {},
+                                      onChanged: widget.onQueryChanged,
                                       style: TextStyle(
                                         color: selectedColor,
                                         fontSize: 16 * s,

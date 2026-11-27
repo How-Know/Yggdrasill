@@ -13,9 +13,11 @@ import 'widgets/concept_draft_review_dialog.dart';
 import 'widgets/concept_anchor_dialogs.dart';
 import 'widgets/concept_input_dialog.dart';
 import 'widgets/concept_library_pane.dart';
+import 'widgets/concept_summary_edit_dialog.dart';
 import 'widgets/concept_relation_section.dart';
 import 'widgets/concept_workspace.dart';
 import 'widgets/course_map_pane.dart';
+import '../../services/concept_draft_models.dart';
 import '../../services/concept_draft_service.dart';
 import '../../services/course_map_controller.dart';
 import '../../services/concept_library_controller.dart';
@@ -203,7 +205,10 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
                   selectedConceptId: _lib.openedConceptId,
                   onOpenConcept: (id) => unawaited(_showConceptInSummary(id)),
                   onOpenChange: (id) => unawaited(_openConceptById(id)),
-                  aboveSelection: SelectedConceptSummary(controller: _lib),
+                  aboveSelection: SelectedConceptSummary(
+                    controller: _lib,
+                    onEdit: (concept) => _onEditConcept(null, concept),
+                  ),
                   onShowLibrary: () => setState(() => _showLibrary = true),
                   filters: _buildScopeBar(),
                 ),
@@ -946,88 +951,102 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
             '바뀐 본문과 다시 비교해 저장해야 확정할 수 있습니다.';
       }
     }
-    final edited = await showConceptInputDialog(context, initial: concept, impact: impact);
-    if (edited == null) return;
+    if (_lib.isSavedConcept(concept) && !_lib.conceptTypeLoaded(concept.id)) {
+      await _lib.loadConceptType(concept.id);
+      if (!mounted) return;
+    }
+    final request = await showConceptSummaryEditDialog(
+      context,
+      concept: concept,
+      types: await _editTypes(),
+      currentType: _lib.conceptTypeOf(concept.id),
+      impact: impact,
+    );
+    if (request == null || !mounted) return;
+    if (request.delete) {
+      await _onDeleteConcept(parent, concept);
+      return;
+    }
+    final edited = request.edit!;
+    final picked = _typeNamed(await _editTypes(), edited.typeName);
+    final kind = picked == null
+        ? concept.kind
+        : (picked.legacySubType == '정의' ? ConceptKind.definition : ConceptKind.theorem);
+    var wrote = false;
     try {
       setState(() => _treeBusy = true);
       await _conceptSvc.updateConcept(
         id: concept.id,
-        kind: edited.kind,
-        subType: edited.subType,
+        kind: kind,
+        subType: picked?.legacySubType ?? concept.subType,
         name: edited.name,
         content: edited.content,
-        level: edited.level,
+        level: concept.level,
+        symbol: concept.symbol,
       );
-      ConceptChatController.instance.conceptSaved(concept.id, name: edited.name, kind: edited.kind);
-      await _reloadCategoryTree();
-      if (_lib.selectedConcept?.id == concept.id && _findConcept(concept.id) == null) {
-        final fresh = await _conceptSvc.fetchConcept(concept.id);
-        if (fresh != null) _lib.syncSelectedConcept([fresh]);
+      wrote = true;
+      if (picked != null && picked.name != (_lib.conceptTypeOf(concept.id) ?? '')) {
+        await _draftSvc.setConceptType(conceptId: concept.id, typeName: picked.name);
       }
+      ConceptChatController.instance.conceptSaved(concept.id, name: edited.name, kind: kind);
     } catch (e) {
       _showError('개념 수정 실패: $e');
     } finally {
+      if (wrote && mounted) {
+        await _reloadCategoryTree();
+        final fresh = await _conceptSvc.fetchConcept(concept.id);
+        if (fresh != null) _lib.syncSelectedConcept([fresh]);
+        await _lib.loadConceptType(concept.id);
+        await CourseMapController.instance.reloadPlacements();
+      }
       if (mounted) setState(() => _treeBusy = false);
     }
   }
 
-  Future<void> _onDeleteConcept(CategoryNode parent, ConceptItem concept) async {
-    final ConceptDeleteCheck check;
+  List<ConceptTypeInfo>? _editTypeCache;
+
+  Future<List<ConceptTypeInfo>> _editTypes() async {
+    final cached = _editTypeCache;
+    if (cached != null) return cached;
+    try {
+      final types = await _draftSvc.conceptTypes();
+      _editTypeCache = types;
+      return types;
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  ConceptTypeInfo? _typeNamed(List<ConceptTypeInfo> types, String? name) {
+    final wanted = (name ?? '').trim();
+    if (wanted.isEmpty) return null;
+    for (final t in types) {
+      if (t.name == wanted) return t;
+    }
+    return null;
+  }
+
+  Future<void> _onDeleteConcept(CategoryNode? parent, ConceptItem concept) async {
+    final ok = await confirmThink(
+      context,
+      title: '개념 삭제',
+      message: '"${concept.name}"과 이 개념에만 붙은 출처·단원 자리·검토 기록을 지웁니다.\n다른 개념은 지우지 않습니다.',
+      confirmLabel: '삭제',
+      destructive: true,
+    );
+    if (!ok || !mounted) return;
     try {
       setState(() => _treeBusy = true);
-      check = await _conceptSvc.checkDelete(concept.id);
-    } catch (e) {
-      _showError('지울 수 있는지 확인하지 못해 삭제하지 않았습니다: $e');
-      return;
-    } finally {
-      if (mounted) setState(() => _treeBusy = false);
-    }
-    if (!mounted) return;
-    if (!check.deletable) {
-      await _showDeleteBlocked(concept.name, check.attached);
-      return;
-    }
-    final ok = await _confirmDelete('개념 "${concept.name}"을(를) 삭제합니다. 붙은 자료가 없는 개념입니다.');
-    if (ok != true) return;
-    try {
-      setState(() => _treeBusy = true);
-      await _conceptSvc.deleteConcept(concept.id);
+      await _conceptSvc.forceDeleteConcept(concept.id);
       ConceptChatController.instance.conceptDeleted(concept.id);
       _lib.conceptRemoved(concept.id);
       await _reloadCategoryTree();
-    } on ConceptDeleteException catch (e) {
-      if (e.attachedBlock && mounted) {
-        await _showDeleteBlocked(concept.name, e.attached, changed: true);
-      } else {
-        _showError('개념 삭제 실패: ${e.message}');
-      }
+      await CourseMapController.instance.reloadPlacements();
     } catch (e) {
       _showError('개념 삭제 실패: $e');
     } finally {
       if (mounted) setState(() => _treeBusy = false);
     }
-  }
-
-  Future<void> _showDeleteBlocked(String name, Map<String, int> attached, {bool changed = false}) {
-    final text = conceptAttachedText(attached);
-    return showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF2A2A2A),
-        title: const Text('삭제할 수 없음', style: TextStyle(color: Colors.white)),
-        content: Text(
-          '${changed ? '확인한 뒤 붙은 자료가 생겨 ' : ''}개념 "$name"을(를) 삭제하지 않았습니다.\n'
-          '${text.isEmpty ? '붙은 자료가 있습니다.' : '붙은 자료: $text'}\n\n'
-          '붙은 자료가 하나도 없는 개념만 삭제할 수 있습니다.',
-          style: const TextStyle(color: Colors.white70),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('닫기', style: TextStyle(color: Colors.white70))),
-        ],
-      ),
-    );
   }
 
   Future<void> _onMoveConcept({

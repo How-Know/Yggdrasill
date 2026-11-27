@@ -1,0 +1,25 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.2",
+  "ref": "csat-2021-geometry-28-1",
+  "kind": "graph",
+  "tags": ["parabola", "two-conics", "curve-and-line"],
+  "params": {"ox": 39.8356, "oy": 63.7037, "u": 13.7783, "p": 0.5, "a": 2.598},
+  "fit": ["ox", "oy", "u"],
+  "canvas": {"width": 77.89, "height": 73.87, "origin": ["ox", "oy"], "unit": "u"},
+  "objects": [
+    {"id": "ax", "type": "axes", "x": [-2.852, 2.721], "y": [-0.693, 4.481], "labels": {"origin": {"offset": [2.1, -2.8]}}},
+    {"id": "p1", "type": "parametric", "var": "s", "t": [0.35, 4.25], "x": "(s-a)^2/(4p)", "y": "s"},
+    {"id": "p2", "type": "parametric", "var": "s", "t": [-0.66, 3.36], "x": "-s^2/4", "y": "s"},
+    {"id": "F1", "type": "point", "at": ["p", "a"], "label": {"dir": "NE", "dist": 0.3}},
+    {"id": "F2", "type": "point", "at": [-1, 0], "label": {"dir": "S", "dist": 1.2, "offset": [0.8, 0]}},
+    {"id": "P", "type": "intersect", "of": ["p1", ["F1", "F2"]], "near": [0.17, 2.0], "label": {"dir": "E", "dist": 1.0}},
+    {"id": "Q", "type": "intersect", "of": ["p2", ["F1", "F2"]], "near": [-0.33, 1.15], "label": {"dir": "W", "dist": 1.0}},
+    {"type": "segment", "from": "F2", "to": "F1"},
+    {"id": "l1", "type": "on", "of": "p1", "x": 3.8, "label": {"dir": "E", "dist": 3.8, "text": "(y-a)^2=4px"}},
+    {"id": "l2", "type": "on", "of": "p2", "x": 2.5, "label": {"dir": "W", "dist": 2.4, "text": "y^2=-4x"}}
+  ],
+  "snap_skip": ["l2"],
+  "size": {"variant": "medium"},
+  "label_nudge": {"ax:x": [-0.085, 0.338], "ax:y": [0.338, -0.169], "ax:origin": [0.169, 0.254], "F1": [0.338, -0.423], "F2": [-0.338, -0.169], "P": [0.254, 0.0], "Q": [-0.423, -0.085]}
+}

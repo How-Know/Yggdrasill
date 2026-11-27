@@ -1,0 +1,19 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.2",
+  "ref": "csat-2019-ga-19-1",
+  "kind": "plane",
+  "tags": ["points-on-circle"],
+  "params": {"ox": 25.4421, "oy": 21.9664, "u": 5.3441},
+  "fit": ["ox", "oy", "u"],
+  "canvas": {"width": 50.8, "height": 47.62, "origin": ["ox", "oy"], "unit": "u"},
+  "objects": [
+    {"id": "A", "type": "point", "at": [-4, 0], "dot": "filled", "label": {"dir": "W", "dist": 1.2}},
+    {"id": "B", "type": "point", "at": [4, 0], "dot": "filled", "label": {"dir": "E", "dist": 1.2}},
+    {"id": "k", "type": "circle", "diameter": ["A", "B"]},
+    {"id": "C", "type": "on", "of": "k", "angle": "deg(acos(7/8))", "dot": "filled", "label": {"dir": 25, "dist": 1.1}},
+    {"id": "D", "type": "point", "at": ["A.x+(B.x-A.x)/2-2*(C.x-B.x)", "A.y+(B.y-A.y)/2-2*(C.y-B.y)"], "dot": "filled", "label": {"dir": "S", "dist": 1.2}}
+  ],
+  "size": {"variant": "small"},
+  "label_nudge": {"A": [0.508, 0.169], "B": [-0.254, 0.169], "C": [-0.338, -0.169], "D": [0.0, -0.085]}
+}

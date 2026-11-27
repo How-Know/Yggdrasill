@@ -1,0 +1,25 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.2",
+  "ref": "csat-2016-ga-15-1",
+  "kind": "graph",
+  "tags": ["exp-log-curve", "tangent-line", "points-on-curve", "triangle-on-graph"],
+  "params": {"ox": 11.954, "oy": 48.3129, "u": 15.0551, "k": 0.991, "t": 1.1779},
+  "fit": ["ox", "oy", "u", "k", "t"],
+  "canvas": {"width": 71.54, "height": 58.84, "origin": ["ox", "oy"], "unit": "u"},
+  "objects": [
+    {"id": "ax", "type": "axes", "x": ["-11.6/u", "58.6/u"], "y": ["-10.0/u", "45.7/u"]},
+    {"id": "f", "type": "function", "expr": "2k*exp(-x)", "domain": ["-5.8/u", "55.4/u"], "samples": 1200},
+    {"id": "P", "type": "on", "of": "f", "x": "t", "label": {"dir": "NE", "dist": 0.8}},
+    {"id": "A", "type": "point", "at": [0, "P.y"], "label": {"dir": "W", "dist": 1.0}},
+    {"id": "tl", "type": "tangent", "at": "P", "to": "f", "draw": false},
+    {"id": "B", "type": "intersect", "of": ["tl", [[0, 0], [0, 1]]], "label": {"dir": 205, "dist": 1.2}},
+    {"type": "fill", "path": ["A", "P", "B"]},
+    {"type": "segment", "from": "B", "to": "P", "extend": [10.3, 30.4]},
+    {"type": "segment", "from": "A", "to": "P"},
+    {"type": "right_angle", "at": "A", "from": "P", "to": "B", "size": 2.0},
+    {"id": "lf", "type": "on", "of": "f", "x": "47.2/u", "label": {"text": "y=2e^{-x}", "dir": "N", "dist": 3.1}}
+  ],
+  "size": {"variant": "medium"},
+  "label_nudge": {"ax:x": [0.0, 0.255], "ax:y": [0.51, 0.34], "ax:origin": [0.085, 0.0], "P": [0.085, -0.255], "A": [0.425, 0.085], "B": [0.425, -0.425]}
+}

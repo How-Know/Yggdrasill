@@ -1,0 +1,29 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.2",
+  "ref": "csat-2017-ga-27-1",
+  "kind": "graph",
+  "tags": ["hyperbola", "conic-with-circle", "conic-focus-triangle", "tangent-line"],
+  "params": {"ox": 43.8478, "oy": 42.6058, "u": 3.5577},
+  "fit": ["ox", "oy", "u"],
+  "canvas": {"width": 88.9, "height": 67.44, "origin": ["ox", "oy"], "unit": "u"},
+  "objects": [
+    {"id": "ax", "type": "axes", "x": [-12.0, 12.17], "y": [-6.7, 11.26]},
+    {"id": "hr", "type": "parametric", "var": "s", "t": [-1.17, 1.64], "x": "sqrt(8)*cosh(s)", "y": "sqrt(17)*sinh(s)"},
+    {"id": "hl", "type": "parametric", "var": "s", "t": [-1.17, 1.64], "x": "-sqrt(8)*cosh(s)", "y": "sqrt(17)*sinh(s)"},
+    {"id": "F", "type": "point", "at": ["sqrt(8+17)", 0], "dot": "filled", "label": {"dir": "S", "dist": 1.4, "offset": [-0.8, 0]}},
+    {"id": "F'", "type": "point", "at": ["-sqrt(8+17)", 0], "dot": "filled", "label": {"dir": "SE", "dist": 1.0}},
+    {"id": "P", "type": "on", "of": "hl", "x": "ln(1+sqrt(2))", "dot": "filled", "label": {"dir": "SW", "dist": 0.8}},
+    {"id": "cP", "type": "circle", "center": "P", "through": "F", "draw": false},
+    {"id": "G", "type": "intersect", "of": ["cP", ["F'", "P"]], "pick": 1},
+    {"id": "M", "type": "midpoint", "of": ["F", "G"]},
+    {"id": "B", "type": "intersect", "of": [["P", "M"], [[0, 0], [0, 1]]]},
+    {"id": "Q", "type": "foot", "from": "B", "to": ["F'", "P"], "dot": "filled", "label": {"dir": "NW", "dist": 0.8}},
+    {"id": "c", "type": "circle", "center": "B", "through": "Q"},
+    {"type": "segment", "from": "F'", "to": "Q", "extend": [22.4, 13.5]},
+    {"type": "segment", "from": "F", "to": "P", "extend": [26.8, 30.5]},
+    {"id": "lc", "type": "on", "of": "c", "angle": 38, "label": {"dir": "NE", "dist": 0.8, "text": "C"}}
+  ],
+  "size": {"variant": "large"},
+  "label_nudge": {"ax:y": [0.339, 0.169], "ax:origin": [0.0, -0.339], "F'": [0.339, -0.339], "P": [-0.169, 0.169], "Q": [0.339, 0.169], "lc": [-0.169, -0.508]}
+}

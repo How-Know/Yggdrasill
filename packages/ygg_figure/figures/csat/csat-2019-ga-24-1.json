@@ -1,0 +1,26 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.2",
+  "ref": "csat-2019-ga-24-1",
+  "kind": "graph",
+  "tags": ["trig-curve", "points-on-curve", "circle-on-curve"],
+  "params": {"u": 17.428, "ox": 10.5386, "oy": 38.6074, "t": 1.9954},
+  "fit": ["u", "ox", "oy", "t"],
+  "canvas": {"width": 78.74, "height": 49.74, "origin": ["ox", "oy"], "unit": "u"},
+  "objects": [
+    {"id": "ax", "type": "axes", "x": [-0.576, 3.9], "y": [-0.617, 2.1], "labels": {"origin": {"offset": [1.9, -2.3]}}},
+    {"id": "O", "type": "point", "at": [0, 0]},
+    {"id": "X", "type": "point", "at": [1, 0]},
+    {"id": "s", "type": "function", "expr": "sin(x)", "domain": [-0.5, 3.68]},
+    {"id": "P", "type": "on", "of": "s", "x": "t", "label": {"dir": "N", "dist": 1.0}},
+    {"id": "Q", "type": "foot", "from": "P", "to": ["O", "X"], "label": {"dir": "S", "dist": 1.2}},
+    {"id": "c", "type": "circle", "center": "P", "through": "Q"},
+    {"id": "R", "type": "intersect", "of": [["O", "P"], "c"], "near": "O", "label": {"dir": "S", "dist": 1.2}},
+    {"type": "segment", "from": "O", "to": "P", "line": "thin"},
+    {"type": "segment", "from": "P", "to": "Q"},
+    {"id": "lc", "type": "on", "of": "c", "angle": 38, "label": {"text": "C", "dir": 38, "dist": 1.0}},
+    {"id": "ls", "type": "on", "of": "s", "x": 3.54, "label": {"text": "y=\\sin x", "dir": "W", "dist": 2.4}}
+  ],
+  "size": {"variant": "medium"},
+  "label_nudge": {"ax:x": [-0.423, 0.254], "ax:y": [0.338, -0.085], "ax:origin": [0.0, 0.169], "P": [0.762, -0.254], "Q": [0.0, 0.423], "R": [-0.508, -0.338], "lc": [-0.085, -0.169], "ls": [-0.508, 0.169]}
+}

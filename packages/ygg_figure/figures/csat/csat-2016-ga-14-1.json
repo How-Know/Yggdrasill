@@ -1,0 +1,28 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.2",
+  "ref": "csat-2016-ga-14-1",
+  "kind": "plane",
+  "tags": ["sector", "theta-limit"],
+  "params": {"ox": 3.9396, "oy": 50.4581, "r": 46.8143, "th": 69.9957},
+  "fit": ["ox", "oy", "r", "th"],
+  "canvas": {"width": 54.61, "height": 55.71, "origin": ["ox", "oy"], "unit": "r"},
+  "objects": [
+    {"id": "O", "type": "point", "at": [0, 0], "label": {"dir": "SW", "dist": 0.6}},
+    {"id": "A", "type": "point", "at": [1, 0], "label": {"dir": -25, "dist": 0.8}},
+    {"id": "B", "type": "point", "at": [0, 1], "label": {"dir": "W", "dist": 0.8}},
+    {"id": "k", "type": "arc", "center": "O", "radius": 1, "angles": [0, 90]},
+    {"id": "P", "type": "on", "of": "k", "angle": "th", "label": {"dir": "N", "dist": 0.8}},
+    {"id": "H", "type": "foot", "from": "P", "to": ["O", "A"], "label": {"dir": "S", "dist": 1.0}},
+    {"id": "Q", "type": "intersect", "of": [["P", "H"], ["A", "B"]], "label": {"dir": 20, "dist": 0.8}},
+    {"type": "fill", "path": ["A", "Q", "H"], "shade": "light"},
+    {"type": "polyline", "points": ["A", "O", "B"]},
+    {"type": "segment", "from": "A", "to": "B"},
+    {"type": "segment", "from": "O", "to": "P"},
+    {"type": "segment", "from": "P", "to": "H"},
+    {"type": "right_angle", "at": "H", "from": "A", "to": "P", "size": 2.0},
+    {"id": "ath", "type": "angle", "at": "O", "from": "A", "to": "P", "radius": 3.9, "label": {"text": "\\theta", "dist": 6.0}}
+  ],
+  "size": {"variant": "small"},
+  "label_nudge": {"O": [-0.085, -0.085], "A": [-0.254, 0.424], "B": [0.0, 0.593], "P": [0.678, 0.169], "H": [0.0, -0.085], "Q": [-0.169, -0.254], "ath": [-0.085, -0.169]}
+}

@@ -252,10 +252,57 @@ function convertLegacyToFigureLayout(question, stemSizePt) {
   return { version: 1, items, groups };
 }
 
+// 그림 엔진으로 그린 그림은 본문 글자 크기에 맞춰 선 굵기와 글자 크기가 정해져 있다.
+// 늘이거나 줄이면 그림 속 글자가 본문과 달라지므로, 저장된 widthEm 대신 그림의 제 크기로 찍는다.
+// (그림 자리·정렬·이동 값은 저장된 그대로 쓴다. 크기를 바꾸려면 그림 파일의 값을 고친다.)
+//   렌더러가 엔진 그림을 받아 두면 question.figure_local_infos[i].engineFigure 에 제 크기가 적힌다.
+function applyEngineFigureSizes(layout, question) {
+  const infos = Array.isArray(question?.figure_local_infos) ? question.figure_local_infos : [];
+  let items = null;
+  for (let i = 0; i < infos.length; i += 1) {
+    const info = infos[i];
+    const widthEm = Number(info?.engineFigure?.widthEm);
+    const heightEm = Number(info?.engineFigure?.heightEm);
+    if (!Number.isFinite(widthEm) || widthEm <= 0) continue;
+    if (!items) items = Array.isArray(layout?.items) ? [...layout.items] : [];
+    const size = {
+      widthEm: clampFinite(widthEm, 2, 50, 20),
+      ...(Number.isFinite(heightEm) && heightEm > 0 ? { heightEm: clampFinite(heightEm, 0.35, 8, 1.6) } : {}),
+    };
+    // 그림과 배치 값을 잇는 순서는 렌더러(layoutForIndex)와 같다: assetKey → ord:N → idx:N.
+    const keys = [
+      String(info.assetKey || ''),
+      `ord:${i + 1}`,
+      info.figureIndex ? `idx:${info.figureIndex}` : '',
+    ].filter(Boolean);
+    let at = -1;
+    for (const key of keys) {
+      at = items.findIndex((item) => item.assetKey === key);
+      if (at >= 0) break;
+    }
+    if (at >= 0) {
+      items[at] = { ...items[at], ...size };
+    } else {
+      items.push({
+        assetKey: keys[0],
+        position: 'below-stem',
+        anchor: 'center',
+        offsetXEm: 0,
+        offsetYEm: 0,
+        ...size,
+      });
+    }
+  }
+  if (!items) return layout;
+  return { version: 1, groups: [], ...(layout || {}), items };
+}
+
 function resolveFigureLayout(question, stemSizePt) {
   const explicit = parseFigureLayout(question);
-  if (explicit) return applyLayoutOverrides(explicit, layoutContext);
-  return convertLegacyToFigureLayout(question, stemSizePt);
+  const layout = explicit
+    ? applyLayoutOverrides(explicit, layoutContext)
+    : convertLegacyToFigureLayout(question, stemSizePt);
+  return applyEngineFigureSizes(layout, question);
 }
 
 function figureLayoutToWidthPt(widthEm, stemSizePt) {
@@ -311,6 +358,7 @@ export {
   resolveFigureLayout,
   withFigureLayoutContext,
   applyLayoutOverrides,
+  applyEngineFigureSizes,
   figureLayoutToWidthPt,
   scaleToWidthEm,
   widthEmToScale,

@@ -14,6 +14,11 @@ dependencies:
     path: ../../packages/yggdrasill_pb_export_ui
   yggdrasill_m5_ota:
     path: ../../packages/yggdrasill_m5_ota
+  # 그림 엔진(순수 Dart). 그림 파일을 화면용 조각으로 계산한다.
+  ygg_figure:
+    path: ../../packages/ygg_figure
+  ygg_arithmetic:
+    path: ../../packages/ygg_arithmetic
   
   # Supabase
   supabase_flutter: ^2.6.0

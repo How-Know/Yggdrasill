@@ -1,0 +1,19 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.2",
+  "ref": "csat-2024-geometry-30-1",
+  "kind": "plane",
+  "tags": ["plain-polygon"],
+  "params": {"ox": 3.8324, "oy": 56.5153, "u": 12.885},
+  "fit": ["ox", "oy", "u"],
+  "canvas": {"width": 59.27, "height": 61.21, "origin": ["ox", "oy"], "unit": "u"},
+  "objects": [
+    {"id": "B", "type": "point", "at": [0, 0], "label": {"dir": "SW", "dist": 0.6}},
+    {"id": "C", "type": "point", "at": [4, 0], "label": {"dir": "SE", "dist": 0.6}},
+    {"id": "D", "type": "point", "at": [4, 4], "label": {"dir": "NE", "dist": 0.6}},
+    {"id": "A", "type": "point", "at": [0, 4], "label": {"dir": "NW", "dist": 0.6}},
+    {"type": "polygon", "points": ["A", "B", "C", "D"]}
+  ],
+  "size": {"variant": "small"},
+  "label_nudge": {"B": [0.085, -0.593], "C": [-0.254, -0.423], "D": [0.339, 0.593], "A": [-0.085, 0.593]}
+}

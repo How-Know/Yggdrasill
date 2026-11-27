@@ -39,9 +39,15 @@ function measuredWrapMacroLines() {
     '\\newcount\\YggWrapTextLineCount',
     '\\newcount\\YggWrapClearCount',
     '\\newdimen\\YggWrapObjectHeight',
+    // 그림 옆에 좁혀 찍기로 한 줄이 아직 남았으면 빈 줄로 채워, 뒤에 오는 것이 그림 아래에서 시작하게 한다.
+    //   남은 줄 수는 잰 값(#1 - #2)과 wrapfig 가 세고 있는 값 중 큰 쪽이다. 문단 사이 간격이 든 글은
+    //   높이로 잰 줄 수가 실제보다 많게 나와, 잰 값만 쓰면 좁힌 줄이 남은 채 다음 글로 넘어간다.
     '\\newcommand{\\YggWrapClearRemaining}[2]{%',
     '  \\YggWrapClearCount=#1\\relax',
     '  \\advance\\YggWrapClearCount by -#2\\relax',
+    '  \\ifnum\\numexpr\\value{WF@wrappedlines}-1\\relax>\\YggWrapClearCount',
+    '    \\YggWrapClearCount=\\numexpr\\value{WF@wrappedlines}-1\\relax',
+    '  \\fi',
     '  \\ifnum\\YggWrapClearCount>0',
     '    \\ifnum\\YggWrapClearCount>8 \\YggWrapClearCount=8\\fi',
     '    \\loop\\ifnum\\YggWrapClearCount>0',
@@ -97,24 +103,35 @@ function measuredWrapMacroLines() {
     '  \\setlength{\\columnsep}{#3}%',
     '  \\setlength{\\intextsep}{0pt}%',
     '  \\sbox{\\YggWrapObjectBox}{\\begin{minipage}{#2}\\vspace{0pt}#4\\end{minipage}}%',
+    // 줄 수를 셀 때의 한 줄 높이(\YggWrapLinePitch). 평소에는 지금 자리의 \baselineskip 이다.
+    //   엔진 그림(\YggWrapTight>0)은 본문을 재는 동안 본문 문단의 실제 줄 간격을 받아 쓴다. 본문 문단은
+    //   자기 줄 간격을 따로 정하므로(바깥보다 좁다), 바깥 값으로 세면 좁힌 줄이 모자라 그림 아래가 본문과 겹친다.
+    '  \\global\\YggWrapLinePitch=\\baselineskip',
+    '  \\ifnum\\YggWrapTight>0 \\YggWrapProbetrue\\fi',
+    '  \\sbox{\\YggWrapTextBox}{\\begin{minipage}{\\dimexpr\\linewidth-#2-#3\\relax}\\vspace{0pt}\\noindent #5\\end{minipage}}%',
+    '  \\YggWrapProbefalse',
     // 그림 높이에 0.5\baselineskip 버퍼를 더한 뒤 줄 단위로 올림(ceil)한다. 정수-줄
     //   예약 구조상 그림 하단↔후속(선지) 여백을 "정확히 0.5줄"로 고정할 수는 없으나,
     //   이 버퍼가 "최소 약 0.5줄 이상" 을 보장한다(상단 -0.10\baselineskip 보정 포함).
-    '  \\YggWrapObjectHeight=\\dimexpr\\ht\\YggWrapObjectBox+\\dp\\YggWrapObjectBox+0.5\\baselineskip\\relax',
+    //   엔진 그림은 본문 줄 간격으로 세므로 그림 아래에 1/3줄만 더 둔다(그림 아래 여백은 1/3줄 이상).
+    '  \\ifnum\\YggWrapTight>0',
+    '    \\YggWrapObjectHeight=\\dimexpr\\ht\\YggWrapObjectBox+\\dp\\YggWrapObjectBox+0.3333\\YggWrapLinePitch\\relax',
+    '  \\else',
+    '    \\YggWrapObjectHeight=\\dimexpr\\ht\\YggWrapObjectBox+\\dp\\YggWrapObjectBox+0.5\\baselineskip\\relax',
+    '  \\fi',
     '  \\YggWrapLineCount=0\\relax',
     '  \\loop\\ifdim\\YggWrapObjectHeight>0pt',
     '    \\advance\\YggWrapLineCount by 1\\relax',
-    '    \\advance\\YggWrapObjectHeight by -\\baselineskip',
+    '    \\advance\\YggWrapObjectHeight by -\\YggWrapLinePitch',
     '  \\repeat',
     '  \\ifnum\\YggWrapLineCount<2 \\YggWrapLineCount=2\\fi',
     // 배치 상자의 wrapLines: 좁혀 찍을 줄 수를 정해 두었으면 그림 높이로 잰 값 대신 쓴다.
     '  \\ifnum\\YggWrapForceLines>0 \\YggWrapLineCount=\\YggWrapForceLines\\fi',
-    '  \\sbox{\\YggWrapTextBox}{\\begin{minipage}{\\dimexpr\\linewidth-#2-#3\\relax}\\vspace{0pt}\\noindent #5\\end{minipage}}%',
     '  \\YggWrapObjectHeight=\\dimexpr\\ht\\YggWrapTextBox+\\dp\\YggWrapTextBox\\relax',
     '  \\YggWrapTextLineCount=0\\relax',
     '  \\loop\\ifdim\\YggWrapObjectHeight>0pt',
     '    \\advance\\YggWrapTextLineCount by 1\\relax',
-    '    \\advance\\YggWrapObjectHeight by -\\baselineskip',
+    '    \\advance\\YggWrapObjectHeight by -\\YggWrapLinePitch',
     '  \\repeat',
     '  \\begin{wrapfigure}[\\the\\YggWrapLineCount]{#1}{#2}',
     '    \\vspace{-0.10\\baselineskip}',
@@ -127,6 +144,20 @@ function measuredWrapMacroLines() {
     '}',
     '\\newcount\\YggWrapForceLines',
     '\\YggWrapForceLines=0\\relax',
+    // 엔진 그림을 어울림으로 실을 때만 1 로 둔다(위 \YggMeasuredWrapAuto 설명).
+    '\\newcount\\YggWrapTight',
+    '\\YggWrapTight=0\\relax',
+    // 엔진 그림: 그리는 글(TikZ)을 이 문서 안에서 조판한다. 그림 속 글자가 이 문서의 본문 글꼴로 찍히고,
+    //   너비(#1, 본문 글자 기준)에 맞춰 통째로 줄이거나 키우므로 글자·선 굵기가 본문 글자 크기에 비례한다.
+    //   #1 너비, #2 그리는 글 파일, #3 같은 그림의 PDF(tikz 를 쓰지 않는 문서에서 대신 찍는다).
+    '\\def\\YggEnginePdf{\\includegraphics}',
+    '\\newcommand{\\YggEngineFigure}[3]{%',
+    '  \\ifcsname tikzpicture\\endcsname',
+    '    \\adjustbox{width=#1,max width=\\linewidth}{\\normalfont\\input{#2}}%',
+    '  \\else',
+    '    \\YggEnginePdf[width=#1,max width=\\linewidth,keepaspectratio]{#3}%',
+    '  \\fi',
+    '}',
     // 자유 배치 상자: 지금 자리(문단 사이)에 높이 0 인 상자를 두고 그 안에 내용을 찍는다.
     //   #1 본문 왼쪽 끝에서 오른쪽으로, #2 지금 자리에서 아래로, #3 내용.
     //   앞뒤 줄 간격(\prevdepth)을 그대로 돌려놓아 본문 줄바꿈·쪽 나눔이 상자가 없을 때와 같다.
@@ -148,6 +179,12 @@ function tableColumnLengthLines() {
     // 수식 셀 자연 폭 측정용 임시 레지스터.
     '\\newlength{\\YggCellNat}',
   ];
+}
+
+// 어울림 그림 뒤 문단을 그림 옆으로 이어 흘린다. 기본으로 켜져 있다.
+//   문제가 생기면 환경 변수 PB_XELATEX_WRAP_CONTINUE=0 으로 끈다(그림 뒤 문단은 예전처럼 그림 아래에서 시작한다).
+function wrapContinuationEnabled() {
+  return String(process.env.PB_XELATEX_WRAP_CONTINUE || '').trim() !== '0';
 }
 
 function useLegacyInlineWrapMode() {
@@ -2225,7 +2262,11 @@ function visualCenterMacroLines() {
     ...v2ConstantMacroLines(),
     '\\newcommand{\\YggVtwoGuideRule}[2]{}',
     '\\newcommand{\\YggVtwoHangulLineGuide}[1]{}',
-    '\\newcommand{\\YggVtwoBaselineGuide}{}',
+    // 본문 문단이 시작될 때마다 불린다. 평소에는 아무 일도 하지 않고, 어울림 그림이 본문 줄 간격을
+    //   재는 동안(\YggWrapProbetrue)에만 가장 좁은 줄 간격을 \YggWrapLinePitch 에 적어 둔다.
+    '\\newif\\ifYggWrapProbe',
+    '\\newdimen\\YggWrapLinePitch',
+    '\\newcommand{\\YggVtwoBaselineGuide}{\\ifYggWrapProbe\\ifdim\\baselineskip<\\YggWrapLinePitch\\global\\YggWrapLinePitch=\\baselineskip\\fi\\fi}',
     '\\let\\YggOrigDfrac\\dfrac',
     '\\renewcommand{\\dfrac}[2]{\\YggOrigDfrac{\\mkern4.5mu #1\\mkern4.5mu}{\\mkern4.5mu #2\\mkern4.5mu}}',
     '\\newcommand{\\YggSmallFrac}[2]{\\mathchoice{\\vcenter{\\hbox{\\scalebox{0.75}{$\\displaystyle\\dfrac{#1}{#2}$}}}}{\\vcenter{\\hbox{\\scalebox{0.75}{$\\displaystyle\\dfrac{#1}{#2}$}}}}{\\vcenter{\\hbox{\\scalebox{0.75}{$\\displaystyle\\dfrac{#1}{#2}$}}}}{\\vcenter{\\hbox{\\scalebox{0.75}{$\\displaystyle\\dfrac{#1}{#2}$}}}}}',
@@ -3297,6 +3338,19 @@ function renderRawBoxLatexEnvironment(lines) {
   return `\\begin{center}\\adjustbox{max width=\\dimexpr\\linewidth-0.6em\\relax}{$\\displaystyle ${normalizeMathSegment(raw)}$}\\end{center}`;
 }
 
+// 증명 유형: "다음은 …을 구하는(증명하는) 과정이다." 뒤에 오는 상자. 풀이 글 속에 (가)·(나)·(다) 빈칸이 들어 있다.
+//   원본 시험지는 이 상자 안에서 문장이 끝날 때마다 줄을 바꾼다. 저장된 줄바꿈이 곧 원본의 줄바꿈이므로
+//   상자 안에서도 그대로 지킨다(다른 상자는 저장된 줄들을 한 문단으로 이어 흘린다).
+//   들여쓰기는 저장된 `[공백:N]` 표시를 그대로 따른다.
+const PROOF_BLANK_RE = /(?<![\\A-Za-z])box\{\s*[（(]\s*[가-하]\s*[)）]\s*\}|\\boxed\s*\{\s*(?:\\text\s*\{)?\s*[（(]\s*[가-하]\s*[)）]/;
+const PROOF_LEAD_RE = /(?:과정|증명)(?:의\s*일부)?이다|증명한\s*것이다/;
+
+/// [lines] 가 증명 유형의 상자인가. [leadText] 는 상자 바로 앞 본문이다.
+export function isProofBox(lines, leadText = '') {
+  if ((lines || []).some((l) => PROOF_BLANK_RE.test(String(l || '')))) return true;
+  return PROOF_LEAD_RE.test(String(leadText || ''));
+}
+
 function renderDecoBoxLatex(lines, equations, replaceFigureMarkers = null, options = {}) {
   const columns = Number(options?.columns) === 2 ? 2 : 1;
   // 1) 박스 내부의 "본문 라인" 목록을 평탄화하되, [문단] 마커는 간격 sentinel 로 보존한다.
@@ -3390,6 +3444,9 @@ function renderDecoBoxLatex(lines, equations, replaceFigureMarkers = null, optio
               .replace(/\\par\s*$/g, '');
             contentParts.push(`\\begin{center}${cleaned}\\end{center}`);
           }
+        } else if (options?.proof && !/\\(?:par|end\{center\})\s*$/.test(rendered)) {
+          // 증명 유형: 저장된 줄마다 줄을 바꾼다.
+          contentParts.push(`${rendered}\\par`);
         } else {
           contentParts.push(rendered);
         }
@@ -6806,10 +6863,18 @@ function renderOneQuestion(question, {
     const widthEmRaw = Number.isFinite(layout.widthEm) ? Number(layout.widthEm) : 20;
     const widthEm = Math.max(2, Math.min(50, widthEmRaw));
     const widthExpr = `${widthEm.toFixed(2)}em`;
+    // 엔진 그림은 제 크기로 찍지만, 단이 그보다 좁으면(A4 2단 등) 단 폭까지만 비례해서 줄인다.
+    const engineFigure = figureInfos[i]?.engineFigure || null;
+    const fitColumn = engineFigure ? ',max width=\\linewidth,keepaspectratio' : '';
+    // 그리는 글(TikZ)까지 받아 둔 엔진 그림은 이 문서 안에서 조판한다(글자가 본문 글꼴로 찍힌다).
+    const tikzPath = String(engineFigure?.tikzPath || '').replace(/\\/g, '/');
+    const include = tikzPath
+      ? `\\YggEngineFigure{${widthExpr}}{${tikzPath}}{${normalized}}`
+      : `\\includegraphics[width=${widthExpr}${fitColumn}]{${normalized}}`;
     return {
       widthEm,
       widthExpr,
-      include: `\\includegraphics[width=${widthExpr}]{${normalized}}`,
+      include,
     };
   }
 
@@ -7135,7 +7200,9 @@ function renderOneQuestion(question, {
     return `\\par{\\setbox0=\\hbox{\\hspace{0.5em}(${subQ})\\hspace{1em}}\\noindent\\hspace*{\\wd0}${row}\\par}\n`;
   }
 
-  function renderInlineFigureWithTextLatex(i, textSeg, position, preRenderedText = null) {
+  // splitForContinuation: 그림 뒤 문단도 그림 옆에 이어 찍을 때 쓴다. 어울림 글의 끝을 닫지 않은 앞부분(head)과
+  //   닫는 뒷부분(tail)을 따로 돌려준다. 호출한 쪽이 그 사이에 이어질 문단을 넣는다.
+  function renderInlineFigureWithTextLatex(i, textSeg, position, preRenderedText = null, { splitForContinuation = false } = {}) {
     if (useLegacyInlineWrapMode()) {
       return renderLegacyInlineFigureWithTextLatex(i, textSeg, position, preRenderedText);
     }
@@ -7161,12 +7228,13 @@ function renderOneQuestion(question, {
     const object = `\\makebox[\\linewidth][${objectAlign}]{${verticallyShiftedInclude(expr.include, layout)}}`;
     // 본문 줄 수는 TeX 에서 직접 측정한다(JS 추정은 짧은 본문에서 과대평가 → 그림이 선지와
     // 겹치는 원인이었음). \YggMeasuredWrapAuto 가 본문/그림 하단 중 더 아래를 기준으로 정렬.
-    const wrap = `\\YggMeasuredWrapAuto{${side}}{${occupiedWidthExpr}}{${figureWrapGapTex}}{${object}}{${text}}`;
+    const wrapOpen = `\\YggMeasuredWrapAuto{${side}}{${occupiedWidthExpr}}{${figureWrapGapTex}}{${object}}{${text}`;
     const forcedLines = Number.isInteger(layout.wrapLines) ? Math.max(2, Math.min(16, layout.wrapLines)) : 0;
-    if (forcedLines > 0) {
-      return `\\YggWrapForceLines=${forcedLines}\\relax\n${wrap}\n\\YggWrapForceLines=0\\relax\n`;
-    }
-    return `${wrap}\n`;
+    // 엔진 그림은 본문의 실제 줄 간격으로 줄 수를 세고 그림 아래에 1/3줄을 둔다(원본 그림은 예전 그대로).
+    const tight = figureInfos[i]?.engineFigure ? ['\\YggWrapTight=1\\relax\n', '\\YggWrapTight=0\\relax\n'] : ['', ''];
+    const head = `${tight[0]}${forcedLines > 0 ? `\\YggWrapForceLines=${forcedLines}\\relax\n` : ''}${wrapOpen}`;
+    const tail = `}\n${forcedLines > 0 ? '\\YggWrapForceLines=0\\relax\n' : ''}${tight[1]}`;
+    return splitForContinuation ? { head, tail } : `${head}${tail}`;
   }
 
   function renderLegacyInlineTableWithTextLatex(rows, scale, layout, textSeg, position) {
@@ -7997,6 +8065,24 @@ function renderOneQuestion(question, {
     }
   }
 
+  // 어울림 그림 바로 뒤의 글 조각이 그림 옆으로 이어 흘릴 수 있는 글이면 그 조각을 준다.
+  //   소문항·가운데/오른쪽 맞춤 줄처럼 본문 경로만 다루는 글, 표 옆 칸으로 가는 글,
+  //   다음 그림·표와 어울릴 차례인 글은 예전처럼 그림 아래에 따로 찍는다.
+  const wrapContinuationSegment = (k) => {
+    const s = segments[k];
+    if (!s || s.type !== 'text') return null;
+    if (sideTable && k === sideTable.textIdx) return null;
+    const after = segments[k + 1];
+    if (after && (after.type === 'figure' || after.type === 'table' || after.type === 'raw_tabular')) return null;
+    const isSubQuestionLine = (l) => SUBQ_MARKER_LINE_RE.test(l)
+      || /^\s*[（(]\s*\d+\s*[)）]/.test(l)
+      || splitAtSubQuestionMarkers(l).length > 1;
+    if (s.lines.some((l) => isSubQuestionLine(String(l || '')))) return null;
+    const aligns = Array.isArray(s.lineAligns) ? s.lineAligns : [];
+    if (aligns.some((a) => ['center', 'right'].includes(normalizeLineAlignValue(a)))) return null;
+    return s;
+  };
+
   let emittedStemTextLineAny = false;
   for (let sIdx = 0; sIdx < segments.length; sIdx++) {
     const seg = segments[sIdx];
@@ -8111,6 +8197,24 @@ function renderOneQuestion(question, {
           const i = resolveFigureIndexForSegment(sIdx + 1, nextFigText);
           if (!figIdxConsumedByGroup.has(i)) {
             emittedFigIdxs.add(i);
+            // 그림 뒤 문단도 그림 옆자리가 남는 동안 이어서 흘린다(남은 글은 본문 너비로 돌아간다).
+            //   이어진 문단은 따로 한 조각으로 두어 배점 표시([N점])가 예전처럼 그 끝에 붙게 한다.
+            const contSeg = hasSubQMarker || useLegacyInlineWrapMode() || !wrapContinuationEnabled()
+              ? null
+              : wrapContinuationSegment(sIdx + 2);
+            const contText = contSeg ? renderTextSegmentInlineLatex(contSeg).trim() : '';
+            const split = contText
+              ? renderInlineFigureWithTextLatex(i, seg, nextPosition, wrapText, { splitForContinuation: true })
+              : null;
+            if (split && typeof split === 'object') {
+              parts.push(split.head);
+              parts.push(contText);
+              partsMeta.set(parts.length - 1, { subQ: currentSubQ });
+              parts.push(split.tail);
+              emittedStemTextLineAny = true;
+              sIdx += 2;
+              continue;
+            }
             // 소문항 본문은 `\hangindent`(번호 좌측 정렬 + 둘째 줄 들여쓰기) 기반인데
             //   wrapfigure 의 parshape 와 충돌해 둘째 줄 들여쓰기가 깨진다.
             //   소문항 wrap 은 좌우 minipage 배치(legacy)로 렌더해 들여쓰기 규칙을 보존한다.
@@ -8403,9 +8507,17 @@ function renderOneQuestion(question, {
           { ...tableLayout, position: 'below-stem' },
         );
       });
+      // 상자 바로 앞 본문(사이의 그림은 건너뛴다). 증명 유형인지 가릴 때 본다.
+      let boxLeadText = '';
+      for (let j = sIdx - 1; j >= 0; j -= 1) {
+        if (segments[j]?.type === 'figure') continue;
+        if (segments[j]?.type === 'text') boxLeadText = segments[j].lines.join('\n');
+        break;
+      }
       const boxOptions = {
         fontSizePt: questionFontSizePt,
         boxTables: boxTableTex,
+        proof: seg.type === 'deco' && isProofBox(seg.lines, boxLeadText),
         columns: seg.type === 'bogi' ? bogiBoxColumns : decoBoxColumns,
         contentWrapper: Number.isInteger(inlineBoxFigureIdx)
           ? (content) => renderInlineFigureWithTextLatex(

@@ -1,0 +1,26 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.2",
+  "ref": "csat-2024-geometry-29-1",
+  "kind": "graph",
+  "tags": ["hyperbola", "conic-focus-triangle"],
+  "params": {"ox": 36.7392, "oy": 51.4742, "u": 4.3166},
+  "fit": ["ox", "oy", "u"],
+  "canvas": {"width": 78.32, "height": 70.27, "origin": ["ox", "oy"], "unit": "u"},
+  "objects": [
+    {"id": "ax", "type": "axes", "x": [-8.36, 9.47], "y": [-4.2, 11.42]},
+    {"id": "hr", "type": "parametric", "var": "s", "t": [-0.622, 1.343], "x": "cosh(s)", "y": "sqrt(35)*sinh(s)"},
+    {"id": "hl", "type": "parametric", "var": "s", "t": [-0.622, 1.343], "x": "-cosh(s)", "y": "sqrt(35)*sinh(s)"},
+    {"id": "F", "type": "point", "at": ["sqrt(1+35)", 0], "label": {"dir": "S", "dist": 1.2}},
+    {"id": "F'", "type": "point", "at": ["-sqrt(1+35)", 0], "label": {"dir": "S", "dist": 1.2}},
+    {"id": "P", "type": "on", "of": "hr", "x": "ln((4+sqrt(7))/3)", "label": {"dir": "NW", "dist": 0.6}},
+    {"id": "cP", "type": "circle", "center": "P", "through": "F", "draw": false},
+    {"id": "Q", "type": "intersect", "of": ["cP", ["F'", "P"]], "pick": 1, "label": {"dir": 15, "dist": 0.6}},
+    {"type": "segment", "from": "F'", "to": "Q"},
+    {"type": "segment", "from": "P", "to": "F"},
+    {"type": "segment", "from": "Q", "to": "F"},
+    {"id": "le", "type": "on", "of": "hl", "x": 1.151, "label": {"dir": "W", "dist": 2.2, "text": "x^2-\\dfrac{y^2}{35}=1"}}
+  ],
+  "size": {"variant": "medium"},
+  "label_nudge": {"ax:x": [-0.085, 0.169], "ax:y": [0.339, 0.0], "ax:origin": [0.0, -0.169], "F": [-0.169, -0.085], "F'": [0.254, 0.339], "P": [0.339, -0.424], "Q": [-0.424, 0.085], "le": [0.508, 0.339]}
+}

@@ -1,0 +1,26 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.2",
+  "ref": "csat-2022-common-11-1",
+  "kind": "plane",
+  "tags": ["quadrilateral-in-circle"],
+  "params": {"ox": 27.7905, "oy": 27.817, "u": 7.6839},
+  "fit": ["ox", "oy", "u"],
+  "canvas": {"width": 55.67, "height": 60.75, "origin": ["ox", "oy"], "unit": "u"},
+  "objects": [
+    {"id": "k", "type": "circle", "center": [0, 0], "radius": "5*sqrt(2)/2"},
+    {"id": "C", "type": "on", "of": "k", "angle": -90, "label": {"dir": "S", "dist": 1.0}},
+    {"id": "kc", "type": "circle", "center": "C", "radius": "3*sqrt(5)", "draw": false},
+    {"id": "A", "type": "intersect", "of": ["k", "kc"], "pick": 0, "label": {"dir": "NW", "dist": 0.6}},
+    {"id": "kb", "type": "circle", "center": "A", "radius": 5, "draw": false},
+    {"id": "kd", "type": "circle", "center": "A", "radius": 7, "draw": false},
+    {"id": "B", "type": "intersect", "of": ["k", "kb"], "near": [-3, -2], "label": {"dir": "SW", "dist": 0.6}},
+    {"id": "D", "type": "intersect", "of": ["k", "kd"], "near": [3, -2], "label": {"dir": "SE", "dist": 0.6}},
+    {"type": "polygon", "points": ["A", "B", "C", "D"]},
+    {"type": "segment", "from": "A", "to": "C"},
+    {"id": "m1", "type": "angle", "at": "A", "from": "B", "to": "C", "radius": 7.6, "line": "none", "mark": "dot", "mark_size": 0.4},
+    {"id": "m2", "type": "angle", "at": "A", "from": "C", "to": "D", "radius": 7.6, "line": "none", "mark": "dot", "mark_size": 0.4}
+  ],
+  "size": {"variant": "small"},
+  "label_nudge": {"A": [0.846, 0.592], "B": [0.423, -0.085], "D": [0.508, -0.085]}
+}

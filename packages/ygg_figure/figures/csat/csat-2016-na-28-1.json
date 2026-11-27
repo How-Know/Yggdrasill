@@ -1,0 +1,24 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.2",
+  "ref": "csat-2016-na-28-1",
+  "kind": "graph",
+  "tags": ["root-curve", "curve-and-line", "sequence-on-curve"],
+  "params": {"ox": 8.8891, "oy": 39.7423, "u": 13.1765, "k": 1.0338},
+  "fit": ["ox", "oy", "u", "k"],
+  "canvas": {"width": 79.59, "height": 49.95, "origin": ["ox", "oy"], "unit": "u"},
+  "objects": [
+    {"id": "ax", "type": "axes", "x": ["-8.1/u", "69.9/u"], "y": ["-9.8/u", "37.0/u"]},
+    {"id": "f", "type": "function", "expr": "k*sqrt(x)", "domain": [0, "68.2/u"], "samples": 1500},
+    {"id": "l1", "type": "segment", "from": [1, "-4.4/u"], "to": [1, "32.0/u"]},
+    {"id": "l2", "type": "segment", "from": [4, "-4.4/u"], "to": [4, "32.0/u"]},
+    {"id": "Pn", "type": "intersect", "of": ["f", "l1"], "label": {"text": "\\mathrm{P}_{n}", "dir": "NW", "dist": 0.8}},
+    {"id": "Pm", "type": "intersect", "of": ["f", "l2"], "label": {"text": "\\mathrm{P}_{n+1}", "dir": 150, "dist": 1.6}},
+    {"type": "segment", "from": "Pn", "to": "Pm"},
+    {"id": "t1", "type": "label", "at": [1, "-4.4/u"], "text": "x=4^{n}", "dir": "S", "dist": 0.3, "offset": [0.5, 0]},
+    {"id": "t2", "type": "label", "at": [4, "-4.4/u"], "text": "x=4^{n+1}", "dir": "S", "dist": 0.3, "offset": [2.3, 0]},
+    {"id": "lf", "type": "on", "of": "f", "x": "64.0/u", "label": {"text": "y=\\sqrt{x}", "dir": "N", "dist": 1.2}}
+  ],
+  "size": {"variant": "medium"},
+  "label_nudge": {"ax:x": [-0.254, 0.339], "ax:y": [0.0, 0.593], "ax:origin": [-0.254, 0.085], "Pn": [-0.339, -0.169], "Pm": [0.423, 0.423]}
+}

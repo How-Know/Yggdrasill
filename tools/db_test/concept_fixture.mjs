@@ -52,6 +52,8 @@ export const CONCEPT_FILES = [
   '20261104150000_concept_review_held_compared_rereview.sql',
   '20261119233000_course_placement_accept.sql',
   '20261124160000_course_unit_blocks.sql',
+  '20261125190000_concept_set_type.sql',
+  '20261125193000_concept_force_delete.sql',
 ];
 
 const CONCEPT_STUBS = `

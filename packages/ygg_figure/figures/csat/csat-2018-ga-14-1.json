@@ -1,0 +1,28 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.2",
+  "ref": "csat-2018-ga-14-1",
+  "kind": "graph",
+  "tags": ["polynomial-curve", "curve-and-line"],
+  "params": {"ox": 7.3751, "oy": 46.4285, "u": 7.9199},
+  "fit": ["ox", "oy", "u"],
+  "canvas": {"width": 66.46, "height": 75.35, "origin": ["ox", "oy"], "unit": "u"},
+  "objects": [
+    {"id": "ax", "type": "axes", "x": ["-6.5/u", "55.7/u"], "y": ["-28.0/u", "43.7/u"]},
+    {"type": "polyline", "points": [[1, 0], [1, 3], [5, 3], [5, 0]], "line": "dashed"},
+    {"type": "segment", "from": [0, 3], "to": [1, 3], "line": "dashed"},
+    {"id": "f", "type": "function", "expr": "(x-2)(x-4)", "domain": [0.3, 5.7], "range": [-2, "42.5/u"], "samples": 1200},
+    {"id": "g", "type": "function", "expr": "1.5(x-3)", "domain": ["5.7/u", "52.0/u"]},
+    {"id": "t1", "type": "label", "at": [1, 0], "text": "1", "dir": "S", "dist": 1.0},
+    {"id": "t2", "type": "label", "at": [2, 0], "text": "2", "dir": "S", "dist": 1.0, "offset": [-0.8, 0]},
+    {"id": "t3", "type": "label", "at": [3, 0], "text": "3", "dir": "S", "dist": 1.0, "offset": [0.4, 0]},
+    {"id": "t4", "type": "label", "at": [4, 0], "text": "4", "dir": "S", "dist": 1.0, "offset": [0.6, 0]},
+    {"id": "t5", "type": "label", "at": [5, 0], "text": "5", "dir": "S", "dist": 1.0},
+    {"id": "y3", "type": "label", "at": [0, 3], "text": "3", "dir": "W", "dist": 1.0},
+    {"id": "lf", "type": "on", "of": "f", "x": 5.46, "label": {"text": "y=f(x)", "dir": "W", "dist": 1.2}},
+    {"id": "lg", "type": "on", "of": "g", "x": 5.57, "label": {"text": "y=g(x)", "dir": "E", "dist": 1.4}}
+  ],
+  "snap_skip": ["lg"],
+  "size": {"variant": "medium"},
+  "label_nudge": {"ax:x": [0.085, 0.254], "ax:y": [0.254, 0.085], "ax:origin": [-0.085, -0.17], "t1": [0.0, -0.254], "t2": [0.085, -0.17], "t3": [0.254, -0.17], "t4": [-0.085, -0.17], "t5": [-0.085, -0.17], "y3": [0.509, -0.085], "lf": [0.17, 0.17]}
+}

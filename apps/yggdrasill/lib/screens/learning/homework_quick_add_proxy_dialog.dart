@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart';
@@ -29,6 +30,8 @@ import '../../utils/textbook_problem_source_order.dart';
 import '../../utils/wonri_timed_test_v0.dart';
 import '../design_preview/yggdrasill/settings/fab_tab_bar_preview.dart';
 import '../resources/textbook_explorer_view.dart';
+import 'addition_problem_bank.dart';
+import 'addition_training_panel.dart';
 
 typedef _SelectedMigratedConceptPage = ({
   int bigOrder,
@@ -222,6 +225,8 @@ class HomeworkQuickAddProxyDialogState
   String _testSource = _kTestSourceNaesin;
   bool _useNaesinSource = false;
   bool _useCustomSource = false;
+  bool _additionGeneratorOpen = false;
+  final _additionPanelKey = GlobalKey<AdditionTrainingPanelState>();
   bool _showGroupPanel = false;
 
   /// 범위 선택 시 소단원 단위로 자동 분해해 제출. 해제 시 수동 하위 과제 추가.
@@ -8425,6 +8430,15 @@ class HomeworkQuickAddProxyDialogState
       _showDialogSnackBar('플로우를 선택하세요.');
       return;
     }
+    if (_additionGeneratorOpen) {
+      final panel = _additionPanelKey.currentState;
+      final payload = panel?.takeApplyPayload();
+      if (payload == null) {
+        _showDialogSnackBar(panel?.blockReason ?? '미리보기를 만든 뒤 과제 내기를 누르세요.');
+        return;
+      }
+      if (!await _publishAndApplyAddition(payload.title, payload.content, payload.count)) return;
+    }
 
     final selectedBookForTest = _selectedLinkedBook;
     if (selectedBookForTest != null && _isWonriTimedTestV0Active()) {
@@ -9500,7 +9514,95 @@ class HomeworkQuickAddProxyDialogState
     );
   }
 
+  bool get _isArithmeticFlow {
+    for (final flow in widget.flows) {
+      if (flow.id == _flowId && StudentFlow.normalizeName(flow.name) == '연산') {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  Future<bool> _publishAndApplyAddition(String title, String content, int count) async {
+    String? presetId;
+    try {
+      presetId = await publishAdditionAssignmentPreset(title: title, content: content);
+    } catch (_) {
+      presetId = null;
+    }
+    if (!mounted) return false;
+    if (presetId == null || presetId.isEmpty) {
+      _showDialogSnackBar('과제형 인쇄 문항을 만들지 못했습니다.');
+      return false;
+    }
+    return _applyAdditionSet(title, content, count, presetId: presetId);
+  }
+
+  bool _applyAdditionSet(String title, String content, int count, {String? presetId}) {
+    final blocked = _draftGroupItems.isNotEmpty && (_hasNaesinDraftItems() || _currentDraftBookKey() != null);
+    if (blocked) {
+      _showDialogSnackBar('교재 과제와 기타 과제는 같은 그룹에 섞어 추가할 수 없습니다.');
+      return false;
+    }
+    setState(() {
+      _additionGeneratorOpen = false;
+      _useNaesinSource = false;
+      _useCustomSource = true;
+      _autoSubtaskMode = false;
+      _showGroupPanel = true;
+      _draftGroupItems.add(_DraftGroupItem(
+        key: 'draft_${_draftGroupItemSeq++}',
+        type: '기타',
+        title: title,
+        page: '',
+        count: '$count',
+        memo: '',
+        content: content,
+        body: _additionDraftBody(content),
+        color: _colorForType('기타'),
+        splitParts: 1,
+        pbPresetId: presetId,
+      ));
+    });
+    _syncGroupTitleFromDrafts();
+    return true;
+  }
+
+  String _additionDraftBody(String content) {
+    try {
+      final decoded = jsonDecode(content);
+      final items = decoded is Map ? decoded['items'] : null;
+      if (items is List) {
+        final lines = <String>[];
+        for (final row in items) {
+          if (row is Map && '${row['expr'] ?? ''}'.trim().isNotEmpty) {
+            lines.add('${row['expr']}'.trim());
+          }
+        }
+        if (lines.isNotEmpty) return lines.join('\n');
+      }
+    } catch (_) {}
+    return '자연수 덧셈';
+  }
+
   Widget _buildFlowBookPicker() {
+    if (_additionGeneratorOpen) {
+      return Row(
+        children: [
+          IconButton(
+            tooltip: '교재 선택으로',
+            onPressed: () => setState(() => _additionGeneratorOpen = false),
+            icon: const Icon(Icons.arrow_back, color: kDlgTextSub, size: 18),
+          ),
+          const Expanded(
+            child: Text(
+              '자연수 덧셈',
+              style: TextStyle(color: UtilityGlassDialogTokens.iconColor, fontSize: 16, fontWeight: FontWeight.w800),
+            ),
+          ),
+        ],
+      );
+    }
     if (_loadingAllFlowTextbooks) {
       return const Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -9634,6 +9736,17 @@ class HomeworkQuickAddProxyDialogState
           ),
               ),
             ),
+            OutlinedButton.icon(
+              onPressed: _isArithmeticFlow ? () => setState(() => _additionGeneratorOpen = true) : null,
+              icon: const Icon(Icons.auto_awesome, size: 17),
+              label: const Text('자동 생성'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: _isArithmeticFlow ? kDlgAccent : kDlgTextSub,
+                side: const BorderSide(color: kDlgBorder),
+                visualDensity: VisualDensity.compact,
+              ),
+            ),
+            const SizedBox(width: 8),
             OutlinedButton.icon(
               onPressed:
                   _loadingAllFlowTextbooks ? null : _showActiveTextbooksDialog,
@@ -9935,7 +10048,7 @@ class HomeworkQuickAddProxyDialogState
     final hasMigratedBookSelection = selectedBook?.isMigrated == true;
     final showNaesinPanel = _shouldShowNaesinPanel();
     final showNaesinStandalone = _naesinStandaloneMode && showNaesinPanel;
-    final showBody = _useCustomSource || hasBookSelection || showNaesinPanel;
+    final showBody = _useCustomSource || hasBookSelection || showNaesinPanel || _additionGeneratorOpen;
     final waitingSelectedBook =
         _loadingFlowTextbooks && hasBookSelection && selectedBook == null;
     final mediaSize = MediaQuery.of(context).size;
@@ -9972,7 +10085,7 @@ class HomeworkQuickAddProxyDialogState
                 .clamp(360.0, naesinBodyHeight)
                 .toDouble()
             : naesinBodyHeight)
-        : (hasBookSelection ? 620 : (_useCustomSource ? 620 : 0));
+        : ((hasBookSelection || _useCustomSource || _additionGeneratorOpen) ? 620 : 0);
     final testOptionsExtraHeight =
         (_isCurrentHomeworkTypeTest() && !showNaesinStandalone) ? 176.0 : 0.0;
     final double targetDialogHeight = showNaesinStandalone
@@ -10352,11 +10465,15 @@ class HomeworkQuickAddProxyDialogState
           const SizedBox(width: 8),
           confirmButton(
             label: _isChildAddMode ? '하위 과제 추가' : '과제 내기',
-            onTap: _submitting ||
-                    (widget.requirePlanDestination &&
-                        _selectedPlanDestination == null)
+            onTap: _submitting
                 ? null
-                : () => _submit(action: 'add'),
+                : () {
+                    if (widget.requirePlanDestination && _selectedPlanDestination == null) {
+                      _showDialogSnackBar('오늘, 숙제, 다음 중 하나를 고르세요.');
+                      return;
+                    }
+                    _submit(action: 'add');
+                  },
           ),
         ],
       );
@@ -10400,9 +10517,20 @@ class HomeworkQuickAddProxyDialogState
             topRegion(),
             SizedBox(height: hasMigratedBookSelection ? 16 : 14),
             Expanded(
-              child: hasBookSelection || _useCustomSource
-                  ? detailsPanel(compact: true)
-                  : bodyRegion(),
+              child: _additionGeneratorOpen
+                  ? SingleChildScrollView(
+                      child: AdditionTrainingPanel(
+                        key: _additionPanelKey,
+                        embedded: true,
+                        onClose: () => setState(() => _additionGeneratorOpen = false),
+                        onApply: (title, content, count) {
+                          unawaited(_publishAndApplyAddition(title, content, count));
+                        },
+                      ),
+                    )
+                  : hasBookSelection || _useCustomSource
+                      ? detailsPanel(compact: true)
+                      : bodyRegion(),
             ),
             if (naesinFooter != null) naesinFooter,
             if (testOptionsCard != null) testOptionsCard,

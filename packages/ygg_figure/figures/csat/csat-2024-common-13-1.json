@@ -1,7 +1,9 @@
 {
   "format": "ygg-figure/1",
-  "style": "csat-2026.1",
+  "style": "csat-2026.2",
   "ref": "csat-2024-common-13-1",
+  "kind": "graph",
+  "tags": ["polynomial-curve", "area-between"],
   "params": {"u": 5.0342, "ox": 13.0162, "oy": 74.054, "k": 0.986, "m": 7.0666, "q": 0.0423, "d": 5.9612, "x0": -2.0239, "x1": 3.11},
   "fit": ["u", "ox", "oy", "k", "m", "q", "d"],
   "canvas": {"width": 43.6, "height": 82.97, "origin": ["ox", "oy"], "unit": "u"},
@@ -20,7 +22,8 @@
     {"id": "lA", "type": "label", "at": [-0.71, 1.14], "text": "A"},
     {"id": "lB", "type": "label", "at": [1.61, 2.72], "text": "B"},
     {"id": "l3", "type": "label", "at": [3, 0], "text": "3", "offset": [0, -2.4]},
-    {"id": "lf", "type": "label", "at": [4.71, 13.2], "text": "y=f(x)"}
+    {"id": "lf", "type": "on", "of": "f", "x": 3.06, "label": {"text": "y=f(x)", "dir": "E", "dist": 1.9}}
   ],
-  "label_nudge": {"ax:x": [-0.508, 0.254], "ax:y": [0.169, -1.017], "ax:origin": [-0.169, -0.254], "P": [0.254, -0.085], "lA": [0.169, 0.0], "lB": [-0.085, -0.169], "l3": [0.085, 0.085], "lf": [-0.678, 0.169]}
+  "label_nudge": {"ax:x": [-0.508, 0.254], "ax:y": [0.169, -1.017], "ax:origin": [-0.169, -0.254], "P": [0.254, -0.085], "lA": [0.169, 0.0], "lB": [-0.085, -0.169], "l3": [0.085, 0.085]},
+  "size": {"variant": "small"}
 }

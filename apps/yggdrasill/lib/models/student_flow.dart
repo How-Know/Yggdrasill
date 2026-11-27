@@ -3,7 +3,8 @@ import 'dart:convert';
 class StudentFlow {
   static const List<String> defaultNames = <String>[
     '개념',
-    '문제',
+    '연산',
+    '유형',
     '사고',
     '테스트',
     '서술',
@@ -11,7 +12,8 @@ class StudentFlow {
   ];
   static const Map<String, String> legacyNameMap = <String, String>{
     '현행': '개념',
-    '선행': '문제',
+    '선행': '유형',
+    '문제': '유형',
   };
 
   final String id;

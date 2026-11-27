@@ -1,0 +1,60 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.2",
+  "ref": "csat-2016-na-17-5",
+  "kind": "plane",
+  "tags": ["series-repeat", "series-branch", "circle-and-chords"],
+  "params": {"ox": 44.9169, "oy": 20.0672, "u": 8.0003, "g2": 43.9053, "g3": 89.8863},
+  "fit": ["ox", "oy", "u", "g2", "g3"],
+  "canvas": {"width": 81.28, "height": 135.47, "origin": ["ox", "oy"], "unit": "u"},
+  "parts": {
+    "tick": [
+      {"type": "segment", "from": ["-0.18/u", "-0.72/u"], "to": ["-0.18/u", "0.72/u"], "line": "thin"},
+      {"type": "segment", "from": ["0.18/u", "-0.72/u"], "to": ["0.18/u", "0.72/u"], "line": "thin"}
+    ],
+    "stage": [
+      {"id": "C", "type": "point", "at": [0, 0]},
+      {"id": "A", "type": "point", "at": [-2, 0]},
+      {"id": "B", "type": "point", "at": [2, 0]},
+      {"id": "D", "type": "midpoint", "of": ["A", "C"]},
+      {"id": "P", "type": "midpoint", "of": ["B", "C"]},
+      {"id": "o", "type": "circle", "center": "C", "through": "A"},
+      {"id": "lD", "type": "perpendicular", "to": ["A", "B"], "through": "D", "draw": false},
+      {"id": "lP", "type": "perpendicular", "to": ["A", "B"], "through": "P", "draw": false},
+      {"id": "E", "type": "intersect", "of": ["lD", "o"], "near": [-1, 2]},
+      {"id": "Q", "type": "intersect", "of": ["lP", "o"], "near": [1, 2]},
+      {"id": "G", "type": "rotate", "of": "E", "center": "D", "angle": 90},
+      {"id": "F", "type": "translate", "of": "E", "by": ["D", "G"]},
+      {"id": "S", "type": "rotate", "of": "Q", "center": "P", "angle": -90},
+      {"id": "R", "type": "translate", "of": "Q", "by": ["P", "S"]},
+      {"type": "fill", "path": ["D", "E", {"arc": "C", "to": "A", "dir": "ccw"}]},
+      {"type": "fill", "path": ["P", "Q", {"arc": "C", "to": "B", "dir": "cw"}]},
+      {"type": "polygon", "points": ["D", "E", "F", "G"]},
+      {"type": "polygon", "points": ["P", "Q", "R", "S"]},
+      {"id": "dp", "type": "segment", "from": "D", "to": "P", "draw": false},
+      {"id": "M1", "type": "midpoint", "of": ["A", "D"]},
+      {"id": "M2", "type": "midpoint", "of": ["D", "C"]},
+      {"id": "M3", "type": "midpoint", "of": ["C", "P"]},
+      {"id": "M4", "type": "midpoint", "of": ["P", "B"]},
+      {"id": "t1", "type": "use", "part": "tick", "at": "M1", "count": 0},
+      {"id": "t2", "type": "use", "part": "tick", "at": "M2", "count": 0},
+      {"id": "t3", "type": "use", "part": "tick", "at": "M3", "count": 0},
+      {"id": "t4", "type": "use", "part": "tick", "at": "M4", "count": 0},
+      {"id": "N", "type": "on", "of": "o", "angle": -50},
+      {"id": "c1", "type": "use", "part": "stage", "at": "F", "scale": "sqrt(3)/4", "count": "min(1,#{n}-1)", "with": {"n": "#{n}-1"}},
+      {"id": "c2", "type": "use", "part": "stage", "at": "R", "scale": "sqrt(3)/4", "count": "min(1,#{n}-1)", "with": {"n": "#{n}-1"}}
+    ]
+  },
+  "objects": [
+    {"id": "p1", "type": "use", "part": "stage", "with": {"n": 1}, "override": {"A": {"label": {"dir": "SW", "dist": 0.8}}, "B": {"label": {"dir": "SE", "dist": 0.8}}, "C": {"dot": "filled", "label": {"dir": "S", "dist": 1.2}}, "D": {"label": {"dir": "S", "dist": 1.2}}, "P": {"label": {"dir": "S", "dist": 1.2}}, "E": {"label": {"dir": "N", "dist": 0.8, "offset": [-0.8, 0]}}, "Q": {"label": {"dir": "N", "dist": 0.8, "offset": [0.8, 0]}}, "F": {"label": {"dir": "W", "dist": 0.8}}, "G": {"label": {"dir": "W", "dist": 0.8}}, "R": {"label": {"dir": "E", "dist": 0.8}}, "S": {"label": {"dir": "E", "dist": 0.8}}, "dp": {"draw": true}, "t1": {"count": 1}, "t2": {"count": 1}, "t3": {"count": 1}, "t4": {"count": 1}, "N": {"label": {"dir": "SE", "dist": 1.0, "text": "O"}}}},
+    {"id": "R1", "type": "label", "at": ["-42.0/u", "-0.6/u"], "text": "R_{1}"},
+    {"id": "p2", "type": "use", "part": "stage", "at": [0, "-g2/u"], "with": {"n": 2}, "override": {"c1": {"override": {"N": {"angle": 242, "label": {"dir": 242, "dist": 1.0, "text": "O_{1}"}}}}, "c2": {"override": {"N": {"angle": 305, "label": {"dir": 305, "dist": 1.0, "text": "O_{2}"}}}}}},
+    {"id": "R2", "type": "label", "at": ["-42.0/u", "(-g2-0.6)/u"], "text": "R_{2}"},
+    {"id": "p3", "type": "use", "part": "stage", "at": [0, "-g3/u"], "with": {"n": 3}},
+    {"id": "R3", "type": "label", "at": ["-42.0/u", "(-g3-0.6)/u"], "text": "R_{3}"},
+    {"id": "v1", "type": "label", "at": ["(2.5-ox)/u", "(oy-132.4)/u"], "text": "\\vdots"},
+    {"id": "v2", "type": "label", "at": ["(44.9-ox)/u", "(oy-132.4)/u"], "text": "\\vdots"}
+  ],
+  "size": {"variant": "medium"},
+  "label_nudge": {"p1/C": [-0.169, 0.169], "p1/A": [-0.085, -0.423], "p1/B": [0.169, -0.508], "p1/D": [0.0, 0.085], "p1/P": [0.085, 0.085], "p1/E": [-0.254, 0.338], "p1/Q": [-0.085, -0.338], "p1/G": [0.0, -0.085], "p1/F": [0.169, 0.592], "p1/S": [0.254, -0.169], "p1/R": [0.0, 0.423], "p1/N": [-0.169, -0.085], "R1": [0.0, 0.254], "p2/c1.1/N": [-0.338, 0.423], "p2/c2.1/N": [-0.169, 0.0], "R2": [0.0, 0.254], "R3": [-0.085, 0.169], "v1": [0.169, -0.085], "v2": [0.0, -0.085]}
+}

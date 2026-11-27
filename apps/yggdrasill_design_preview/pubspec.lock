@@ -827,7 +827,7 @@ packages:
       path: "../yggdrasill"
       relative: true
     source: path
-    version: "1.1.4+7"
+    version: "1.1.5+3"
   morphable_shape:
     dependency: transitive
     description:
@@ -1610,6 +1610,13 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.1.0"
+  ygg_figure:
+    dependency: transitive
+    description:
+      path: "../../packages/ygg_figure"
+      relative: true
+    source: path
+    version: "0.1.0"
   yggdrasill_m5_ota:
     dependency: transitive
     description:
@@ -1628,6 +1635,13 @@ packages:
     dependency: transitive
     description:
       path: "../../packages/yggdrasill_pb_export_ui"
+      relative: true
+    source: path
+    version: "0.1.0"
+  yggdrasill_ui:
+    dependency: transitive
+    description:
+      path: "../../packages/yggdrasill_ui"
       relative: true
     source: path
     version: "0.1.0"

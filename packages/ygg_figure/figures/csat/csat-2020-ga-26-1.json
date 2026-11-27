@@ -1,0 +1,21 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.2",
+  "ref": "csat-2020-na-15-1",
+  "kind": "plane",
+  "tags": ["points-on-circle", "round-table"],
+  "params": {"ox": 15.6204, "oy": 17.3571, "R": 10.3401, "d": 14.6748, "r": 2.6593},
+  "fit": ["ox", "oy", "R", "d", "r"],
+  "canvas": {"width": 31.08, "height": 37.42, "origin": ["ox", "oy"], "unit": 1},
+  "parts": {
+    "seat": [
+      {"type": "circle", "center": [0, "d"], "radius": "r"}
+    ]
+  },
+  "objects": [
+    {"id": "O", "type": "point", "at": [0, 0]},
+    {"id": "table", "type": "circle", "center": "O", "radius": "R"},
+    {"id": "seats", "type": "use", "part": "seat", "count": 6, "step": {"rotate": 60, "about": "O"}}
+  ],
+  "size": {"variant": "small"}
+}

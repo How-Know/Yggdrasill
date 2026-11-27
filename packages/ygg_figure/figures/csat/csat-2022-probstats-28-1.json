@@ -1,7 +1,9 @@
 {
   "format": "ygg-figure/1",
-  "style": "csat-2026.1",
+  "style": "csat-2026.2",
   "ref": "csat-2022-probstats-28-1",
+  "kind": "graph",
+  "tags": ["pdf-graph", "polyline-graph"],
   "params": {"ox": 8.6211, "oy": 21.8733, "a": 67.5981, "b": 42.4576, "c": 8.3949, "xl": -8.4628, "xr": 78.6704, "yb": -9.5313, "yt": 19.8727},
   "fit": ["ox", "oy", "a", "b", "c", "xl", "xr", "yb", "yt"],
   "canvas": {"width": 87.63, "height": 31.75, "origin": ["ox", "oy"], "unit": 1},
@@ -15,5 +17,6 @@
     {"id": "lb", "type": "label", "at": ["b", 0], "text": "b", "offset": [0, -2.6]},
     {"id": "lc", "type": "label", "at": [0, "c"], "text": "c", "offset": [-1.6, 0.2]}
   ],
-  "label_nudge": {"ax:x": [-0.339, 0.169], "ax:y": [0.424, -0.169], "ax:origin": [0.085, -0.339], "la": [0.169, 0.254], "lb": [0.085, 0.254], "lc": [0.424, 0.085]}
+  "label_nudge": {"ax:x": [-0.339, 0.169], "ax:y": [0.424, -0.169], "ax:origin": [0.085, -0.339], "la": [0.169, 0.254], "lb": [0.085, 0.254], "lc": [0.424, 0.085]},
+  "size": {"variant": "large"}
 }

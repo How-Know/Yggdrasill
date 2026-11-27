@@ -2,7 +2,10 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../services/arithmetic_model_repository.dart';
 import '../../services/arithmetic_primitive_service.dart';
+import 'model_lab/arithmetic_model_lab.dart';
+import 'model_lab/natural_addition_lab.dart';
 import '../../theme/manager_shell_colors.dart';
 import '../think/think_style.dart';
 
@@ -71,6 +74,7 @@ class _ArithmeticScreenState extends State<ArithmeticScreen> {
   bool _editActive = true;
   bool _saving = false;
   String? _notice;
+  bool _additionModel = false;
 
   @override
   void initState() {
@@ -327,8 +331,9 @@ class _ArithmeticScreenState extends State<ArithmeticScreen> {
                 labels: [
                   '세부 연산 수치 사전 (${_primitives.length})',
                   '라이브러리 연산·방법 분류 (미분할 $unsplitCount)',
+                  '연산 모델',
                 ],
-                icons: const [Icons.calculate_outlined, Icons.account_tree_outlined],
+                icons: const [Icons.calculate_outlined, Icons.account_tree_outlined, Icons.tune],
                 selected: _tab,
                 onSelected: (i) => setState(() => _tab = i),
               ),
@@ -351,7 +356,9 @@ class _ArithmeticScreenState extends State<ArithmeticScreen> {
           ],
           const SizedBox(height: 12),
           Expanded(
-            child: _loading
+            child: _tab == 2
+                ? ArithmeticModelLab(repository: ArithmeticModelRepository())
+                : _loading
                 ? const Center(child: CircularProgressIndicator(color: kThinkAccent))
                 : _error != null
                     ? Center(
@@ -996,8 +1003,9 @@ class _ArithmeticScreenState extends State<ArithmeticScreen> {
                       labels: [
                         '세부 연산 (${_primitives.length})',
                         '연산·방법 (미분할 $unsplitCount)',
+                        '모델',
                       ],
-                      icons: const [Icons.account_tree_outlined, Icons.account_tree_outlined],
+                      icons: const [Icons.account_tree_outlined, Icons.account_tree_outlined, Icons.tune],
                       selected: _tab,
                       onSelected: (i) => setState(() => _tab = i),
                     ),
@@ -1024,6 +1032,10 @@ class _ArithmeticScreenState extends State<ArithmeticScreen> {
   }
 
   Widget _embeddedBody(int changedCount) {
+    if (_additionModel) {
+      return NaturalAdditionLab(onClose: () => setState(() => _additionModel = false));
+    }
+    if (_tab == 2) return ArithmeticModelLab(repository: ArithmeticModelRepository());
     if (_loading) return const Center(child: CircularProgressIndicator(color: kThinkAccent));
     if (_error != null) {
       return Center(
@@ -1163,7 +1175,16 @@ class _ArithmeticScreenState extends State<ArithmeticScreen> {
           ],
         ),
       ),
-      if (open)
+      if (open && category == '자연수 덧셈')
+        _outlineRow(
+          key: const ValueKey('natural-addition-model'),
+          height: 36,
+          indent: 28,
+          selected: _additionModel,
+          onTap: () => setState(() => _additionModel = true),
+          child: const Text('자연수 덧셈 모델', style: TextStyle(color: kThinkText, fontSize: 13, fontWeight: FontWeight.w700)),
+        ),
+      if (open && category != '자연수 덧셈')
         for (final item in items) _primitiveTreeRow(item),
     ];
   }

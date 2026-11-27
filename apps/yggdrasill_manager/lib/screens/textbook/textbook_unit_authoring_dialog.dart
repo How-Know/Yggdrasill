@@ -1034,21 +1034,21 @@ class _TextbookUnitAuthoringDialogState
         final out = <dynamic>[];
         for (var from = 0;; from += pageSize) {
           final page = await _supa
-              .from('textbook_problem_crops')
-              .select('id, raw_page, display_page, section, problem_number, label, '
-                  'item_name, is_set_header, set_from, set_to, content_group_kind, '
-                  'content_group_label, content_group_title, content_group_order, '
-                  'column_index, bbox_1k, item_region_1k, companion_regions, '
+          .from('textbook_problem_crops')
+          .select('id, raw_page, display_page, section, problem_number, label, '
+              'item_name, is_set_header, set_from, set_to, content_group_kind, '
+              'content_group_label, content_group_title, content_group_order, '
+              'column_index, bbox_1k, item_region_1k, companion_regions, '
                   'big_order, mid_order, sub_key, sub_index, pb_question_uid, '
                   'textbook_problem_analyses(math_status, quality_status)'
                   '${withSource ? ', region_source' : ''}')
-              .eq('academy_id', widget.academyId)
-              .eq('book_id', widget.bookId)
-              .eq('grade_label', widget.gradeLabel)
-              .order('big_order', ascending: true)
-              .order('mid_order', ascending: true)
-              .order('sub_key', ascending: true)
-              .order('raw_page', ascending: true)
+          .eq('academy_id', widget.academyId)
+          .eq('book_id', widget.bookId)
+          .eq('grade_label', widget.gradeLabel)
+          .order('big_order', ascending: true)
+          .order('mid_order', ascending: true)
+          .order('sub_key', ascending: true)
+          .order('raw_page', ascending: true)
               .order('problem_number', ascending: true)
               .order('id', ascending: true)
               .range(from, from + pageSize - 1);
@@ -1087,7 +1087,7 @@ class _TextbookUnitAuthoringDialogState
             .add(row);
       }
       final bodyCounts = <String, ({int crops, int bodies, int reviewed})>{};
-      for (final entry in byFocus.entries) {
+        for (final entry in byFocus.entries) {
         var crops = 0;
         var bodies = 0;
         var reviewed = 0;
@@ -4092,10 +4092,10 @@ class _TextbookUnitAuthoringDialogState
             '$skippedNote$deletedNote$protectedNote';
       });
       if (!quiet) {
-        _toast(
+      _toast(
           '${_subFocusLabel(focus)} 크롭 $upserted건 임시저장'
-          '${deletedStale > 0 ? ' · 오인식 $deletedStale건 삭제' : ''}',
-        );
+        '${deletedStale > 0 ? ' · 오인식 $deletedStale건 삭제' : ''}',
+      );
       }
       if (protectedNumbers.isNotEmpty) {
         // 재분류로 옛 crop 이 필요 없어졌는데 이미 문제은행 문항이 붙어 있는
@@ -4240,7 +4240,7 @@ class _TextbookUnitAuthoringDialogState
         gradeLabel: widget.gradeLabel,
       );
       if (!mounted) return;
-      setState(() {
+    setState(() {
         _workflows = {for (final w in list) w.stateKey: w};
       });
       unawaited(_refreshLiveReady(list));
@@ -4279,8 +4279,8 @@ class _TextbookUnitAuthoringDialogState
         debugPrint('[textbook-workflow] ready count failed: $e');
       }
     }
-    if (!mounted) return;
-    setState(() {
+          if (!mounted) return;
+          setState(() {
       _liveReady = {..._liveReady, ...next};
       _liveReadyAt = startedAt;
     });
@@ -4328,7 +4328,7 @@ class _TextbookUnitAuthoringDialogState
 
   Future<void> _autoSave(_SubFocus focus) async {
     if (!mounted) return;
-    final key = _stateKeyFor(focus);
+            final key = _stateKeyFor(focus);
     final state = _ensureSubState(focus);
     if (state.running) return;
     if (state.uploading) {
@@ -4377,15 +4377,15 @@ class _TextbookUnitAuthoringDialogState
     if (wf != null && wf.cropStatus != 'none') return;
     try {
       await _workflowService.markCropDraft(
-        academyId: widget.academyId,
-        bookId: widget.bookId,
-        gradeLabel: widget.gradeLabel,
-        bigOrder: focus.bigIndex,
-        midOrder: focus.midIndex,
+              academyId: widget.academyId,
+              bookId: widget.bookId,
+              gradeLabel: widget.gradeLabel,
+              bigOrder: focus.bigIndex,
+              midOrder: focus.midIndex,
         scopeKey: focus.subKey,
       );
       await _loadWorkflows();
-    } catch (e) {
+          } catch (e) {
       debugPrint('[textbook-workflow] draft mark failed: $e');
     }
   }
@@ -4456,7 +4456,7 @@ class _TextbookUnitAuthoringDialogState
       }
     }
     if (!mounted) return;
-    setState(() {
+        setState(() {
       _bakeManualEdits(focus, state);
       final idx = state.pageResults.indexWhere(
         (r) => r.rawPage == rawPage && r.ok,
@@ -4771,9 +4771,9 @@ class _TextbookUnitAuthoringDialogState
             content: SizedBox(
               width: 360,
               child: Column(
-                mainAxisSize: MainAxisSize.min,
+        mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
+        children: [
                   if (categories.isNotEmpty) ...[
                     Wrap(
                       spacing: 6,
@@ -4840,7 +4840,7 @@ class _TextbookUnitAuthoringDialogState
                   _textInput(labelCtrl, hint: '라벨 (선택 · 난이도·STEP 등)'),
                   if (error != null) ...[
                     const SizedBox(height: 8),
-                    Text(
+          Text(
                       error!,
                       style: const TextStyle(color: _kDanger, fontSize: 12),
                     ),
@@ -4994,15 +4994,15 @@ class _TextbookUnitAuthoringDialogState
       // 소단원부터 "이미 처리된 런"으로 걸러진다. 쪽 범위가 있으면 소단원별로 나눈다.
       final perSubUnitRun = rawFrom != null && rawTo != null;
       return TextbookSubunitWorkOrder(
-        academyId: widget.academyId,
-        bookId: widget.bookId,
-        bookName: widget.bookName,
-        gradeLabel: widget.gradeLabel,
+          academyId: widget.academyId,
+          bookId: widget.bookId,
+          bookName: widget.bookName,
+          gradeLabel: widget.gradeLabel,
         seriesKey: _seriesKey,
-        bigOrder: focus.bigIndex,
-        midOrder: focus.midIndex,
-        bigName: big.nameCtrl.text.trim(),
-        midName: mid.nameCtrl.text.trim(),
+          bigOrder: focus.bigIndex,
+          midOrder: focus.midIndex,
+          bigName: big.nameCtrl.text.trim(),
+          midName: mid.nameCtrl.text.trim(),
         scopeKey: focus.subKey,
         label: _subFocusLabel(focus),
         bodyLinkId: widget.linkId,
@@ -5014,12 +5014,12 @@ class _TextbookUnitAuthoringDialogState
               subIndex: perSubUnitRun || _conceptPerSubUnitKeys.contains(k)
                   ? rowIndex
                   : 0,
-              subName:
+          subName:
                   _conceptCategoryShortNames[_conceptCategoryBySubKey[k]] ?? k,
               rawPageFrom: rawFrom,
               rawPageTo: rawTo,
-              displayPageFrom: displayStart,
-              displayPageTo: displayEnd,
+          displayPageFrom: displayStart,
+          displayPageTo: displayEnd,
             ),
         ],
         stageRuns: [
@@ -5059,13 +5059,13 @@ class _TextbookUnitAuthoringDialogState
       extractRuns: [
         TextbookWorkflowExtractRun(
           subKey: focus.subKey,
-          subName: sub.preset.displayName,
+      subName: sub.preset.displayName,
           rawPageFrom:
               displayStart == null ? null : _rawPageForDisplayPage(displayStart),
           rawPageTo:
               displayEnd == null ? null : _rawPageForDisplayPage(displayEnd),
-          displayPageFrom: displayStart,
-          displayPageTo: displayEnd,
+      displayPageFrom: displayStart,
+      displayPageTo: displayEnd,
         ),
       ],
       stageRuns: [_stageRunOf(_stageScopeFor(focus))],
@@ -5137,7 +5137,7 @@ class _TextbookUnitAuthoringDialogState
           await _workflowService.confirmCrop(order);
           TextbookWorkflowRunner.instance.enqueue(order);
           started.add(label);
-        } catch (e) {
+    } catch (e) {
           problems.add('$label: $e');
         }
       }
@@ -5188,14 +5188,14 @@ class _TextbookUnitAuthoringDialogState
     final done = <String>[];
     final problems = <String>[];
     try {
-      for (final focus in targets) {
+    for (final focus in targets) {
         final label = _subFocusLabel(focus);
         final wf = _workflowFor(focus);
         final order = wf?.workOrder ?? _workOrderFor(focus);
         if (wf == null || order == null) {
           problems.add('$label: 작업 범위를 찾지 못했습니다');
-          continue;
-        }
+        continue;
+      }
         try {
           final midKey = '${order.bookId}|${order.gradeLabel}|${order.bigOrder}|${order.midOrder}';
           final all = itemsByMid[midKey] ??= await review.fetchUnitItems(order.reviewScope);
@@ -5690,14 +5690,14 @@ class _TextbookUnitAuthoringDialogState
         unawaited(_close());
       },
       child: Dialog(
-        backgroundColor: _kBg,
+      backgroundColor: _kBg,
         insetPadding: const EdgeInsets.all(16),
         clipBehavior: Clip.antiAlias,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(28),
           side: const BorderSide(color: _kBorder),
         ),
-        child: SizedBox(
+      child: SizedBox(
           width: size.width * 0.94,
           height: size.height * 0.94,
           child: _buildStage1Shell(),
@@ -5760,11 +5760,11 @@ class _TextbookUnitAuthoringDialogState
                 const Text(
                   '단원·크롭',
                   style: TextStyle(
-                    color: _kText,
+                color: _kText,
                     fontSize: 16,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
+                fontWeight: FontWeight.w800,
+              ),
+            ),
                 const SizedBox(height: 4),
                 Text(
                   '${widget.bookName} · ${widget.gradeLabel}',
@@ -6104,11 +6104,11 @@ class _TextbookUnitAuthoringDialogState
                     ClipRRect(
                       borderRadius: BorderRadius.circular(4),
                       child: LinearProgressIndicator(
-                        value: _batchRunning ? _batchDone / _batchTotal : 1,
+                      value: _batchRunning ? _batchDone / _batchTotal : 1,
                         minHeight: 4,
                         backgroundColor: _kCard,
-                        color: _kAccent,
-                      ),
+                      color: _kAccent,
+                    ),
                     ),
                   const SizedBox(height: 8),
                   Text(
@@ -6938,21 +6938,21 @@ class _TextbookUnitAuthoringDialogState
                     child: Container(
                       constraints: const BoxConstraints(minWidth: 72, maxWidth: 168),
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
+                  decoration: BoxDecoration(
                         color: _kWarn.withValues(alpha: 0.16),
                         borderRadius: BorderRadius.circular(18),
-                      ),
-                      child: Text(
-                        sub.preset.displayName,
+                  ),
+                  child: Text(
+                    sub.preset.displayName,
                         maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
                           color: _kWarn,
-                          fontSize: 10,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
                     ),
+                  ),
+                ),
                   ),
                 ),
                 const SizedBox(width: 4),
@@ -7342,12 +7342,12 @@ class _TextbookUnitAuthoringDialogState
               ClipRRect(
                 borderRadius: BorderRadius.circular(4),
                 child: LinearProgressIndicator(
-                  value: _batchRunning
-                      ? (_batchDone / _batchTotal).clamp(0.0, 1.0)
-                      : 1,
+                value: _batchRunning
+                    ? (_batchDone / _batchTotal).clamp(0.0, 1.0)
+                    : 1,
                   minHeight: 4,
                   backgroundColor: _kCard,
-                  color: _kAccent,
+                color: _kAccent,
                 ),
               ),
             ],
@@ -7447,7 +7447,7 @@ class _TextbookUnitAuthoringDialogState
     final legacyCounts = legacy ? _bodyCounts[_stateKeyFor(focus)] : null;
 
     final tags = <Widget>[
-      if (readyRange)
+          if (readyRange)
         _tag('본문 $start–$end쪽 (${end - start + 1}쪽)', _kChipSelected)
       else
         const _InfoTag(text: '시작/끝 쪽을 입력하세요', danger: true),
@@ -7464,14 +7464,14 @@ class _TextbookUnitAuthoringDialogState
 
     final actions = <Widget>[
       if (!locked) ...[
-        if (state.running)
+          if (state.running)
           _pillButton(
             label: '분석 취소',
             icon: Icons.stop_circle_outlined,
             color: _kDanger,
             onTap: () => _cancelFocused(focus),
-          )
-        else ...[
+            )
+          else ...[
           if (failedPages.isNotEmpty)
             _pillButton(
               label: '실패 ${failedPages.length}쪽 다시 분석',
@@ -7483,7 +7483,7 @@ class _TextbookUnitAuthoringDialogState
             label: totalRegions > 0 ? '다시 분석' : '분석 시작',
             icon: Icons.play_arrow_rounded,
             onTap: !readyRange || state.uploading || _batchRunning
-                ? null
+                  ? null
                 : () => _runFocusedAnalysis(focus),
           ),
         ],
@@ -7492,7 +7492,7 @@ class _TextbookUnitAuthoringDialogState
           icon: _manualDrawMode ? Icons.close_rounded : Icons.add_box_outlined,
           color: _manualDrawMode ? _kWarn : null,
           onTap: busy || !readyRange || _bodyLocalPath == null
-              ? null
+                  ? null
               : _toggleManualDraw,
         ),
         _pillButton(
@@ -7501,7 +7501,7 @@ class _TextbookUnitAuthoringDialogState
           filled: true,
           busy: _confirming,
           onTap: busy || totalRegions == 0 || _batchRunning
-              ? null
+                ? null
               : () => _confirmCrops([focus]),
         ),
       ] else ...[
@@ -7806,7 +7806,7 @@ class _TextbookUnitAuthoringDialogState
           _pillButton(
             label: '선택 해제',
             onTap: () => setState(() => _selectedProblemKey = null),
-          ),
+            ),
         ],
       ),
     );
@@ -8635,11 +8635,11 @@ class _SubRowStats extends StatelessWidget {
     return Tooltip(
       message: fullyUploaded
           ? '분석 $analyzed건 · 전부 서버 저장 완료 ($uploaded건)'
-              : partiallyUploaded
+          : partiallyUploaded
                   ? '분석 $analyzed건 · 임시저장 $uploaded건 (일부)'
-                  : analyzed > 0
+              : analyzed > 0
                       ? '분석 $analyzed건 · 아직 임시저장 전 (자동 저장 대기)'
-                      : '분석 진행 중',
+                  : '분석 진행 중',
       child: SizedBox(
         width: 72,
         child: Stack(
@@ -8763,13 +8763,13 @@ class _StageProgressChip extends StatelessWidget {
               const SizedBox(width: 4),
               Flexible(
                 child: Text(
-                  label,
+                label,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: color,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w800,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
                   ),
                 ),
               ),

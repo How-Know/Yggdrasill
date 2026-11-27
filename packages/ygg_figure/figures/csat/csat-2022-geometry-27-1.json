@@ -1,0 +1,26 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.2",
+  "ref": "csat-2022-geometry-27-1",
+  "kind": "solid",
+  "tags": ["line-and-plane"],
+  "params": {"ox": 0.4108, "oy": 48.4577, "w": 78.4636, "sx": 11.0028, "sy": 28.458, "ax": 25.8441, "ay": 13.7333, "bx": 66.8849, "by": 4.9151, "cx": 62.3708, "cy": 42.3102, "ea": 11.8, "eb": 4.7, "ec": 9.1, "ed": 13.3},
+  "fit": ["ox", "oy", "w", "sx", "sy", "ax", "ay", "bx", "by", "cx", "cy"],
+  "canvas": {"width": 90.38, "height": 49.11, "origin": ["ox", "oy"], "unit": 1},
+  "objects": [
+    {"id": "P1", "type": "point", "at": [0, 0]},
+    {"id": "P2", "type": "point", "at": ["w", 0]},
+    {"id": "P4", "type": "point", "at": ["sx", "sy"]},
+    {"id": "P3", "type": "translate", "of": "P2", "by": ["P1", "P4"]},
+    {"type": "polygon", "points": ["P1", "P2", "P3", "P4"], "line": "mid"},
+    {"id": "la", "type": "label", "at": [6.2, 4.7], "text": "\\alpha"},
+    {"id": "A", "type": "point", "at": ["ax", "ay"], "dot": "small", "label": {"dir": "N", "dist": 0.9}},
+    {"id": "B", "type": "point", "at": ["bx", "by"], "dot": "small", "label": {"dir": "N", "dist": 0.9}},
+    {"id": "C", "type": "point", "at": ["cx", "cy"], "dot": "small", "label": {"dir": 115, "dist": 1.5}},
+    {"type": "segment", "from": "A", "to": "B", "extend": ["ea", "eb"]},
+    {"type": "segment", "from": "A", "to": "C", "extend": [0, "ec"]},
+    {"type": "line", "through": ["A", "C"], "span": ["ed", 0], "line": "dashed"}
+  ],
+  "size": {"variant": "large"},
+  "label_nudge": {"la": [0.085, -0.169], "A": [-0.339, 0.677], "B": [0.169, 0.423], "C": [0.677, -0.169]}
+}

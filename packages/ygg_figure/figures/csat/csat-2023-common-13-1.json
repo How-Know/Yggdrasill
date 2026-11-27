@@ -1,7 +1,9 @@
 {
   "format": "ygg-figure/1",
-  "style": "csat-2026.1",
+  "style": "csat-2026.2",
   "ref": "csat-2023-common-13-1",
+  "kind": "plane",
+  "tags": ["triangle-in-circle", "circle-and-chords"],
   "params": {"ox": 30.416, "oy": 26.2911, "r": 21.4432, "aa": 150.1052, "da": 83.6527, "ca": -61.7391, "bx": -27.0376},
   "fit": ["ox", "oy", "r", "aa", "da", "ca", "bx"],
   "canvas": {"width": 52.49, "height": 49.15, "origin": ["ox", "oy"], "unit": 1},
@@ -15,5 +17,6 @@
     {"type": "polyline", "points": ["A", "D", "C"]},
     {"id": "ang", "type": "angle", "at": "A", "from": "B", "to": "C", "radius": 3.2, "label": {"text": "\\dfrac{\\pi}{3}", "dist": 6.8}}
   ],
-  "label_nudge": {"A": [0.085, 0.0], "D": [-0.085, 0.0], "C": [0.085, 0.254], "B": [0.17, 0.509], "ang": [-0.424, -0.339]}
+  "label_nudge": {"A": [0.085, 0.0], "D": [-0.085, 0.0], "C": [0.085, 0.254], "B": [0.17, 0.509], "ang": [-0.424, -0.339]},
+  "size": {"variant": "small"}
 }

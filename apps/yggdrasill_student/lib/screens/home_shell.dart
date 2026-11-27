@@ -12,6 +12,7 @@ import '../services/student_point_session.dart';
 import '../services/student_presence_session.dart';
 import '../services/student_shell_chrome.dart';
 import '../services/textbook_study_session.dart';
+import '../widgets/concept_search_panel.dart';
 import '../widgets/homework_now_playing_bar.dart';
 import '../widgets/homework_now_playing_sheet.dart';
 import '../widgets/student_bottom_nav_bar.dart';
@@ -31,6 +32,11 @@ class HomeShell extends StatefulWidget {
 class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
   int _index = 0;
   bool _searchExpanded = false;
+  String _searchQuery = '';
+  List<ConceptSearchHit> _searchHits = const [];
+  bool _searching = false;
+  Timer? _searchDebounce;
+  int _searchEpoch = 0;
 
   /// 확장 시트가 Stack에 올라가 있는지 (슬라이드 아웃 중에도 true).
   bool _nowPlayingSheetMounted = false;
@@ -82,6 +88,7 @@ class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
     StudentPointSession.instance.homeworkGrantTick
         .removeListener(_onHomeworkPointGrant);
     unawaited(StudentPresenceSession.instance.stop(markOffline: true));
+    _searchDebounce?.cancel();
     HomeworkSession.instance.removeListener(_onSessionChanged);
     HomeworkSession.instance.remotePauseTick
         .removeListener(_onRemoteHomeworkPause);
@@ -150,8 +157,57 @@ class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
 
   void _setSearchExpanded(bool expanded) {
     if (_searchExpanded == expanded) return;
-    setState(() => _searchExpanded = expanded);
+    setState(() {
+      _searchExpanded = expanded;
+      if (!expanded) {
+        _searchDebounce?.cancel();
+        _searchEpoch += 1;
+        _searchQuery = '';
+        _searchHits = const [];
+        _searching = false;
+      }
+    });
     StudentShellChrome.instance.setSearchExpanded(expanded);
+  }
+
+  void _onSearchQuery(String raw) {
+    final query = raw.trim();
+    _searchDebounce?.cancel();
+    final epoch = _searchEpoch + 1;
+    _searchEpoch = epoch;
+    if (query.isEmpty) {
+      setState(() {
+        _searchQuery = '';
+        _searchHits = const [];
+        _searching = false;
+      });
+      return;
+    }
+    setState(() {
+      _searchQuery = query;
+      _searching = true;
+    });
+    _searchDebounce = Timer(const Duration(milliseconds: 280), () async {
+      try {
+        final hits = await StudentApi.instance.searchConcepts(query);
+        if (!mounted || epoch != _searchEpoch) return;
+        setState(() {
+          _searchHits = hits;
+          _searching = false;
+        });
+      } catch (_) {
+        if (!mounted || epoch != _searchEpoch) return;
+        setState(() {
+          _searchHits = const [];
+          _searching = false;
+        });
+        TopGlassSnackBar.show(
+          context,
+          message: '개념을 찾지 못했어요.',
+          icon: Icons.error_outline_rounded,
+        );
+      }
+    });
   }
 
   void _selectTab(int i) {
@@ -270,6 +326,26 @@ class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
                 onOpenSolve: () => unawaited(_openSolveFromNowPlaying()),
               ),
             ),
+          if (_searchExpanded && _searchQuery.isNotEmpty)
+            Positioned(
+              left: StudentBottomNavTokens.horizontalInset,
+              right: StudentBottomNavTokens.horizontalInset,
+              bottom: StudentBottomNavTokens.bottomInsetOf(context) +
+                  StudentBottomNavTokens.height +
+                  (active != null && !oneLineChrome
+                      ? HomeworkNowPlayingBar.height +
+                          StudentBottomNavTokens.nowPlayingGap
+                      : 0) +
+                  12,
+              child: ConceptSearchPanel(
+                hits: _searchHits,
+                loading: _searching,
+                onSelect: (hit) {
+                  _setSearchExpanded(false);
+                  unawaited(showConceptSearchDetail(context, hit));
+                },
+              ),
+            ),
           Positioned(
             left: StudentBottomNavTokens.horizontalInset,
             right: StudentBottomNavTokens.horizontalInset,
@@ -286,6 +362,7 @@ class _HomeShellState extends State<HomeShell> with HomeworkNowPlayingActions {
               onCollapsedNavTap: _onCollapsedNavTap,
               onDestinationSelected: _selectTab,
               onSearchExpandedChanged: _setSearchExpanded,
+              onSearchQueryChanged: _onSearchQuery,
               onPlayPause: handleNowPlayingPlayPause,
               onSubmit: handleNowPlayingSubmit,
               onExpandNowPlaying: _expandNowPlaying,
@@ -312,6 +389,7 @@ class _AnimatedBottomChrome extends StatelessWidget {
     required this.onCollapsedNavTap,
     required this.onDestinationSelected,
     required this.onSearchExpandedChanged,
+    required this.onSearchQueryChanged,
     required this.onPlayPause,
     required this.onSubmit,
     required this.onExpandNowPlaying,
@@ -330,6 +408,7 @@ class _AnimatedBottomChrome extends StatelessWidget {
   final VoidCallback onCollapsedNavTap;
   final ValueChanged<int> onDestinationSelected;
   final ValueChanged<bool> onSearchExpandedChanged;
+  final ValueChanged<String> onSearchQueryChanged;
   final VoidCallback onPlayPause;
   final VoidCallback onSubmit;
   final VoidCallback onExpandNowPlaying;
@@ -531,6 +610,7 @@ class _AnimatedBottomChrome extends StatelessWidget {
                   scale: scale,
                   animateSize: true,
                   onExpandedChanged: onSearchExpandedChanged,
+                  onQueryChanged: onSearchQueryChanged,
                 ),
               ),
             ),

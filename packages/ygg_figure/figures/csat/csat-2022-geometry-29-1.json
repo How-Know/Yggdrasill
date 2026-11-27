@@ -1,0 +1,19 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.2",
+  "ref": "csat-2022-geometry-29-1",
+  "kind": "plane",
+  "tags": ["plain-polygon"],
+  "params": {"ox": 3.4313, "oy": 29.2315, "u": 14.7203},
+  "fit": ["ox", "oy", "u"],
+  "canvas": {"width": 66.04, "height": 32.43, "origin": ["ox", "oy"], "unit": "u"},
+  "objects": [
+    {"id": "B", "type": "point", "at": [0, 0], "label": {"dir": "W", "dist": 0.8}},
+    {"id": "C", "type": "point", "at": [4, 0], "label": {"dir": "E", "dist": 0.8}},
+    {"id": "A", "type": "polar", "center": "B", "radius": 2, "angle": 60, "label": {"dir": "W", "dist": 0.8}},
+    {"id": "D", "type": "polar", "center": "C", "radius": 2, "angle": 120, "label": {"dir": "E", "dist": 0.8}},
+    {"type": "polygon", "points": ["A", "B", "C", "D"]}
+  ],
+  "size": {"variant": "medium"},
+  "label_nudge": {"B": [0.509, -0.763], "C": [-0.254, -0.763], "A": [0.0, 1.102], "D": [0.085, 1.017]}
+}

@@ -52,8 +52,47 @@ class CurveEnt extends Ent {
 /// 그림 파일(JSON)을 읽어 관계를 풀고, 그릴 조각 목록([Scene])을 만든다.
 ///
 /// 같은 파일·같은 판이면 언제나 같은 결과를 낸다(시각·난수 등을 쓰지 않는다).
-Scene buildFigure(Map<String, dynamic> doc, {Map<String, double>? params}) {
-  return _Builder(doc, params).build();
+///
+/// [scale] 은 도형의 배율이다. 도형(점·선·곡선의 자리)과 그림판만 커지거나 작아지고,
+/// 글자 크기·선 굵기·점 크기·글자와 도형 사이 간격은 그대로다. 같은 그림을 다른 크기로
+/// 실어도 그림 속 글자가 본문과 같은 크기로 남게 하는 데 쓴다.
+Scene buildFigure(Map<String, dynamic> doc, {Map<String, double>? params, double scale = 1}) {
+  if (!(scale > 0) || scale.isInfinite) throw FigureError('배율은 0보다 커야 합니다');
+  return _Builder(doc, params, scale).build();
+}
+
+/// 편집 화면용: 그림과 함께, 이름 있는 점들이 그림판 어디에 놓였는지 돌려준다.
+///
+/// [points] 는 점 이름 → 그림판 위 자리(mm, 왼쪽 위 기준). [origin] 은 수학 좌표 원점의 자리(mm),
+/// [unit] 은 수학 단위 하나의 길이(mm)다. 부품(use) 안의 점은 넣지 않는다.
+FigureLayout layoutFigure(Map<String, dynamic> doc, {Map<String, double>? params, double scale = 1}) {
+  if (!(scale > 0) || scale.isInfinite) throw FigureError('배율은 0보다 커야 합니다');
+  final b = _Builder(doc, params, scale);
+  final scene = b.build();
+  final top = {
+    for (final o in (doc['objects'] as List? ?? const []))
+      if (o is Map && o['id'] is String) o['id'] as String,
+  };
+  return FigureLayout(
+    scene: scene,
+    origin: b._shift,
+    unit: b._baseUnit,
+    points: {
+      for (final e in b.ents.entries)
+        if (e.value is PointEnt && top.contains(e.key)) e.key: b.mm((e.value as PointEnt).p) + b._shift,
+    },
+  );
+}
+
+class FigureLayout {
+  FigureLayout({required this.scene, required this.points, required this.origin, required this.unit});
+  final Scene scene;
+  final Map<String, P> points;
+  final P origin;
+  final double unit;
+
+  /// 그림판 위 자리(mm) → 수학 좌표.
+  P toMath(P mm) => P((mm.x - origin.x) / unit, -(mm.y - origin.y) / unit);
 }
 
 /// 그림 파일에 적힌 변수 값(이름 → 값).
@@ -72,13 +111,16 @@ Map<String, double> figureParams(Map<String, dynamic> doc) {
 const _compass = {'E': 0.0, 'NE': 45.0, 'N': 90.0, 'NW': 135.0, 'W': 180.0, 'SW': 225.0, 'S': 270.0, 'SE': 315.0};
 
 class _Builder {
-  _Builder(this.doc, Map<String, double>? override) : style = FigureStyle.byName(doc['style'] as String?) {
+  _Builder(this.doc, Map<String, double>? override, this.scale) : style = FigureStyle.byName(doc['style'] as String?) {
     params.addAll(figureParams(doc));
     if (override != null) params.addAll(override);
   }
 
   final Map<String, dynamic> doc;
   final FigureStyle style;
+
+  /// 도형의 배율. 수학 단위의 길이와 그림판에만 곱한다.
+  final double scale;
   final params = <String, double>{};
   final ents = <String, Ent>{};
   final items = <SceneItem>[];
@@ -98,6 +140,9 @@ class _Builder {
   int _depth = 0;
   double? width, height, ox, oy;
   List<P>? proj;
+
+  /// 원점 기준 mm → 그림판 위 자리로 옮긴 양([build] 뒤에 정해진다).
+  P _shift = const P(0, 0);
 
   // ---- 값 읽기 ----
 
@@ -208,14 +253,14 @@ class _Builder {
   Scene build() {
     final canvas = doc['canvas'];
     if (canvas is Map) {
-      _baseUnit = nOr(canvas['unit'] ?? doc['unit'], 10);
-      width = n(canvas['width'], '그림판 너비');
-      height = n(canvas['height'], '그림판 높이');
+      _baseUnit = nOr(canvas['unit'] ?? doc['unit'], 10) * scale;
+      width = n(canvas['width'], '그림판 너비') * scale;
+      height = n(canvas['height'], '그림판 높이') * scale;
       final origin = canvas['origin'] as List?;
-      ox = origin == null ? width! / 2 : n(origin[0]);
-      oy = origin == null ? height! / 2 : n(origin[1]);
+      ox = origin == null ? width! / 2 : n(origin[0]) * scale;
+      oy = origin == null ? height! / 2 : n(origin[1]) * scale;
     } else {
-      _baseUnit = nOr(doc['unit'], 10);
+      _baseUnit = nOr(doc['unit'], 10) * scale;
     }
     final projection = doc['projection'];
     if (projection is Map) {
@@ -266,7 +311,7 @@ class _Builder {
       dx = pad - x0;
       dy = pad - y0;
     }
-    final shift = P(dx, dy);
+    final shift = _shift = P(dx, dy);
     final placed = <SceneItem>[
       for (final it in items)
         switch (it) {
@@ -752,11 +797,11 @@ class _Builder {
     final extend = o['extend'] as List?;
     if (span != null) {
       // 기준 점(a)에서 앞뒤로 뻗는 길이(mm).
-      a = l.a - d * (n(span[0]) / unit);
-      b = l.a + d * (n(span[1]) / unit);
+      a = l.a - d * (n(span[0]) * scale / unit);
+      b = l.a + d * (n(span[1]) * scale / unit);
     } else if (extend != null) {
-      a = l.a - d * (n(extend[0]) / unit);
-      b = l.b + d * (n(extend[1]) / unit);
+      a = l.a - d * (n(extend[0]) * scale / unit);
+      b = l.b + d * (n(extend[1]) * scale / unit);
     } else if (l.infA || l.infB) {
       final f = frame;
       if (f == null) throw FigureError('끝없는 선은 그림판 크기(canvas)나 span 이 있어야 그립니다', id);

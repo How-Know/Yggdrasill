@@ -1,7 +1,10 @@
 {
   "format": "ygg-figure/1",
-  "style": "csat-2026.1",
+  "style": "csat-2026.2",
   "ref": "csat-2025-common-14-1",
+  "kind": "plane",
+  "tags": ["two-circles", "circle-and-chords"],
+  "elements": ["triangle"],
   "params": {"ox": 27.2683, "oy": 63.8378, "r": 16.7817, "bx": 25.1589, "ch": 33.6807, "ga": 128.6925, "ha": 141.3755},
   "fit": ["ox", "oy", "r", "bx", "ch", "ga", "ha"],
   "canvas": {"width": 56.51, "height": 81.45, "origin": ["ox", "oy"], "unit": 1},
@@ -26,5 +29,6 @@
     {"type": "angle", "at": "A", "from": "B", "to": "C"},
     {"type": "angle", "at": "C", "from": "H", "to": "G"}
   ],
-  "label_nudge": {"B": [-0.169, 0.0], "C": [-0.338, -0.254], "F": [0.254, 0.0], "D": [-0.085, -0.592], "E": [0.507, -0.338], "G": [0.423, 0.169], "H": [-0.254, -0.085]}
+  "label_nudge": {"B": [-0.169, 0.0], "C": [-0.338, -0.254], "F": [0.254, 0.0], "D": [-0.085, -0.592], "E": [0.507, -0.338], "G": [0.423, 0.169], "H": [-0.254, -0.085]},
+  "size": {"variant": "small"}
 }

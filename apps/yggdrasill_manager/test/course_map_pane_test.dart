@@ -441,6 +441,58 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('블록 안 개념도 정의·표현은 제자리이고 그 밖 유형만 한 칸 더 들어간다', (tester) async {
+    final (b, id, c) = _setup();
+    final add = b.unitId(id, '덧셈과 뺄셈');
+    final block = b.addBlock(add, '다항식의 뜻');
+    final loose = b.place(add, b.addConcept('낱개정의'), type: '정의');
+    final def = b.place(add, b.addConcept('다항식'), type: '정의', blockId: block);
+    final expr = b.place(add, b.addConcept('전개'), type: '표현', blockId: block);
+    final prop = b.place(add, b.addConcept('인수분해'), type: '성질', blockId: block);
+    final none = b.place(add, b.addConcept('미정'), type: '', blockId: block);
+    await _pump(tester, CourseMapSummaryPane(controller: c), width: 420);
+
+    double left(String placementId) =>
+        (tester.widget<Container>(find.byKey(ValueKey('outline-concept-fill-$placementId'))).padding! as EdgeInsets)
+            .left;
+
+    await tester.tap(find.byKey(ValueKey('course-unit-$add')));
+    await tester.pump();
+    final base = left(def);
+    expect(left(expr), base);
+    expect(left(prop), base + 16);
+    expect(left(none), base + 16);
+    expect(base, left(loose) + 16, reason: '블록 안 정의는 블록 밖 정의보다 한 칸 더 들어간다');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('드래그 중에 개념 줄이 접혀도 손을 떼면 예외 없이 끝난다', (tester) async {
+    final (b, id, c) = _setup();
+    final add = b.unitId(id, '덧셈과 뺄셈');
+    final p1 = b.place(add, b.addConcept('첫째'));
+    b.place(add, b.addConcept('둘째'));
+    await _pump(tester, CourseMapPane(controller: c), height: 1400);
+
+    await tester.tap(find.byKey(ValueKey('course-unit-$add')));
+    await tester.pump();
+    await tester.tap(find.byKey(ValueKey('unit-concepts-$add')));
+    await tester.pump();
+
+    final start = tester.getCenter(find.byKey(ValueKey('outline-concept-$p1')));
+    final drag = await tester.startGesture(start);
+    await tester.pump();
+    await tester.pump(kLongPressTimeout);
+    await tester.pump();
+    expect(find.byType(Overlay), findsWidgets);
+
+    c.toggleConcepts(id, add);
+    await tester.pump();
+    await drag.up();
+    await tester.pump();
+    expect(find.byKey(ValueKey('outline-concept-$p1')), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('개념 줄은 오래 눌러 끌어 순서를 바꾸고, Think 칩을 누르면 확인으로 걷힌다', (tester) async {
     final (b, id, c) = _setup();
     final add = b.unitId(id, '덧셈과 뺄셈');

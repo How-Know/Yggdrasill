@@ -105,6 +105,9 @@ const Map<String, String> _messages = {
   'compare_not_ready': 'DB에 비교 기능이 아직 반영되지 않았습니다(마이그레이션 필요).',
   'no_concepts': '비교할 항목이 없습니다.',
   'concept_relation_reverse_exists': '두 개념 사이에 반대 방향 관계가 이미 있습니다. 상세에서 확인하세요.',
+  'concept_type_unknown': '없는 유형입니다. 이미 있는 유형만 고를 수 있습니다.',
+  'concept_type_forbidden': '운영자만 유형을 바꿀 수 있습니다.',
+  'concept_not_found': '이 개념을 찾지 못했습니다.',
 };
 
 const String kConceptRelationsNotReady = 'DB에 개념 관계 저장소가 아직 없어 기존 개념과의 관계를 고른 항목은 확정할 수 없습니다. '
@@ -509,6 +512,16 @@ class ConceptDraftService {
       for (final r in rows as List)
         if ('${(r as Map)['name'] ?? ''}'.trim().isNotEmpty) ConceptTypeInfo.fromJson(Map<String, dynamic>.from(r)),
     ];
+  }
+
+  /// 이미 있는 유형 이름으로만 개념 표기를 바꾼다. 새 유형은 만들지 않는다.
+  Future<void> setConceptType({required String conceptId, required String typeName}) async {
+    try {
+      await _db.rpc('concept_set_type', params: {'p_concept_id': conceptId, 'p_type_name': typeName});
+    } on PostgrestException catch (e) {
+      final code = RegExp(r'concept_(?:type_unknown|type_forbidden|not_found)').firstMatch(e.message)?.group(0) ?? 'db_error';
+      throw ConceptDraftException(code, conceptDraftErrorMessage(code, e.message));
+    }
   }
 
   /// 트리에 붙일 유형·주제 묶음. 묶음 표를 읽지 못하면 유형만 돌려준다(anchorsUnavailable).

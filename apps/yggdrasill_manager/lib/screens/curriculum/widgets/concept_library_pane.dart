@@ -675,9 +675,12 @@ class _ConceptDetailViewState extends State<ConceptDetailView> {
 
 /// 지금 고른 개념. 흐름 옆 칸에서 선택한 단원보다 위에 둔다.
 class SelectedConceptSummary extends StatelessWidget {
-  const SelectedConceptSummary({super.key, required this.controller});
+  const SelectedConceptSummary({super.key, required this.controller, this.onEdit});
 
   final ConceptLibraryController controller;
+
+  /// 있으면 카드를 눌렀을 때 라이브러리로 옮기지 않고 이 개념 수정을 연다.
+  final Future<void> Function(ConceptItem concept)? onEdit;
 
   @override
   Widget build(BuildContext context) {
@@ -695,50 +698,59 @@ class SelectedConceptSummary extends StatelessWidget {
           if (sel != null && !controller.isLocal(sel.id) && ids != null) {
             linkLine = ids.contains(sel.id) ? '고른 기준과 이어져 있음' : '고른 기준과 잇지 않음';
           }
-          out.add(Material(
-            color: Colors.transparent,
-            child: InkWell(
-              key: const ValueKey('selected-concept-summary'),
-              onTap: () => controller.openConcept(concept),
-              borderRadius: BorderRadius.circular(8),
-              child: Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: kThinkAccent.withValues(alpha: 0.5)),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(conceptDisplayName(concept),
-                        style: const TextStyle(color: kThinkText, fontSize: 14, fontWeight: FontWeight.w800)),
-                    const SizedBox(height: 6),
-                    conceptKindBadge(concept),
-                    const SizedBox(height: 6),
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxHeight: 84),
-                      child: SingleChildScrollView(
-                        physics: const NeverScrollableScrollPhysics(),
-                        child: LatexTextRenderer(
-                          concept.content,
-                          dollarMath: true,
-                          style: const TextStyle(color: kThinkSub, fontSize: 12, height: 1.5),
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          blockVerticalPadding: 4,
-                        ),
+          out.add(Tooltip(
+            message: onEdit == null ? '라이브러리에서 이 개념 열기' : '눌러서 수정',
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                key: const ValueKey('selected-concept-summary'),
+                onTap: () {
+                  final edit = onEdit;
+                  if (edit != null) {
+                    unawaited(edit(concept));
+                  } else {
+                    controller.openConcept(concept);
+                  }
+                },
+                borderRadius: BorderRadius.circular(8),
+                child: Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: kThinkAccent.withValues(alpha: 0.5)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(conceptDisplayName(concept),
+                          style: const TextStyle(color: kThinkText, fontSize: 14, fontWeight: FontWeight.w800)),
+                      const SizedBox(height: 6),
+                      _SelectedConceptType(controller: controller, conceptId: concept.id),
+                      const SizedBox(height: 6),
+                      LatexTextRenderer(
+                        concept.content,
+                        dollarMath: true,
+                        style: const TextStyle(color: kThinkSub, fontSize: 12, height: 1.5),
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        blockVerticalPadding: 4,
                       ),
-                    ),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 6,
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      children: [
-                        ConceptSourcesMark(controller: controller, concept: concept),
-                        if (linkLine != null) ConceptHint(linkLine),
+                      if (onEdit != null) ...[
+                        const SizedBox(height: 6),
+                        const Text('눌러서 수정',
+                            style: TextStyle(color: kThinkHint, fontSize: 11, fontWeight: FontWeight.w600)),
                       ],
-                    ),
-                  ],
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 6,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          ConceptSourcesMark(controller: controller, concept: concept),
+                          if (linkLine != null) ConceptHint(linkLine),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -746,6 +758,30 @@ class SelectedConceptSummary extends StatelessWidget {
         }
         return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: out);
       },
+    );
+  }
+}
+
+/// 카드에 보이는 유형은 이미 붙어 있는 개념 유형 이름이다. 옛 구분(정의/정리)과 세부 유형을 겹쳐 보이지 않는다.
+class _SelectedConceptType extends StatelessWidget {
+  const _SelectedConceptType({required this.controller, required this.conceptId});
+
+  final ConceptLibraryController controller;
+  final String conceptId;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!controller.conceptTypeLoaded(conceptId)) {
+      return const Text('유형 읽는 중', style: TextStyle(color: kThinkHint, fontSize: 12, fontWeight: FontWeight.w600));
+    }
+    final name = controller.conceptTypeOf(conceptId);
+    final style = conceptTypeStyle(name);
+    return Row(
+      children: [
+        ConceptTypeGlyph(style),
+        const SizedBox(width: 6),
+        Text(style.label, style: TextStyle(color: style.foreground, fontSize: 12, fontWeight: FontWeight.w700)),
+      ],
     );
   }
 }

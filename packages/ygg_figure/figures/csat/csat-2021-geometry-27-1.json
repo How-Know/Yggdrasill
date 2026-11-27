@@ -1,7 +1,9 @@
 {
   "format": "ygg-figure/1",
-  "style": "csat-2026.1",
+  "style": "csat-2026.2",
   "ref": "csat-2021-geometry-27-1",
+  "kind": "solid",
+  "tags": ["cube"],
   "params": {"ox": 4.2502, "oy": 48.3772, "exx": 27.7161, "exy": -3.9508, "eyx": 18.0245, "eyy": 13.6796, "ezy": 29.9216},
   "fit": ["ox", "oy", "exx", "exy", "eyx", "eyy", "ezy"],
   "canvas": {"width": 53.97, "height": 57.19, "origin": ["ox", "oy"], "unit": 1},
@@ -16,13 +18,14 @@
     {"id": "C", "type": "point", "at": [1, 1, 1], "label": {"dir": "NE", "dist": 0.5}},
     {"id": "D", "type": "point", "at": [0, 1, 1], "label": {"dir": "N", "dist": 1.0}},
     {"id": "M", "type": "midpoint", "of": ["A", "D"], "label": {"dir": "NW", "dist": 0.5}},
-    {"type": "segment", "from": "D", "to": "H", "line": "main_dashed"},
-    {"type": "segment", "from": "H", "to": "E", "line": "main_dashed"},
-    {"type": "segment", "from": "H", "to": "G", "line": "main_dashed"},
-    {"type": "polygon", "points": ["A", "B", "C", "D"]},
-    {"type": "polyline", "points": ["A", "E", "F", "G", "C"]},
-    {"type": "segment", "from": "B", "to": "F"},
-    {"type": "polygon", "points": ["M", "E", "G"], "width": 0.45}
+    {"id": "o1", "type": "segment", "from": "D", "to": "H", "line": "main_dashed"},
+    {"id": "o2", "type": "segment", "from": "H", "to": "E", "line": "main_dashed"},
+    {"id": "o3", "type": "segment", "from": "H", "to": "G", "line": "main_dashed"},
+    {"id": "o4", "type": "polygon", "points": ["A", "B", "C", "D"]},
+    {"id": "o5", "type": "polyline", "points": ["A", "E", "F", "G", "C"]},
+    {"id": "o6", "type": "segment", "from": "B", "to": "F"},
+    {"id": "o7", "type": "polygon", "points": ["M", "E", "G"], "width": 0.45}
   ],
-  "label_nudge": {"E": [-0.593, 1.102], "F": [-0.339, 0.085], "G": [0.424, 1.271], "H": [-0.678, 0.085], "A": [0.169, 0.0], "B": [-0.169, 0.169], "C": [0.339, -0.847], "D": [-0.085, -0.169], "M": [-0.254, 0.339]}
+  "label_nudge": {"E": [-0.593, 1.102], "F": [-0.339, 0.085], "G": [0.424, 1.271], "H": [-0.678, 0.085], "A": [0.169, 0.0], "B": [-0.169, 0.169], "C": [-0.017, 0.753], "D": [-0.085, -0.169], "M": [-0.254, 0.339]},
+  "size": {"variant": "small"}
 }

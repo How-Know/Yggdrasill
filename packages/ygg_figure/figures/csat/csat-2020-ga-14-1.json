@@ -1,7 +1,9 @@
 {
   "format": "ygg-figure/1",
-  "style": "csat-2026.1",
+  "style": "csat-2026.2",
   "ref": "csat-2020-ga-14-1",
+  "kind": "plane",
+  "tags": ["series-repeat"],
   "params": {"ox": 11.29, "oy": 2.684, "u": 13.6453, "gap": 40.2373},
   "fit": ["ox", "oy", "u", "gap"],
   "ref_offset": [1.5, 2.0],
@@ -31,5 +33,6 @@
     {"id": "p2", "type": "use", "part": "panel", "at": [0, "-gap/u"], "with": {"n": 2}},
     {"id": "v1", "type": "label", "at": ["(2.45-ox)/u", "(oy-75.6)/u"], "text": "\\vdots"},
     {"id": "v2", "type": "label", "at": ["(38.9-ox)/u", "(oy-75.6)/u"], "text": "\\vdots"}
-  ]
+  ],
+  "size": {"variant": "medium"}
 }

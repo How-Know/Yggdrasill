@@ -1235,5 +1235,29 @@ void main() {
       expect(find.textContaining('유형: '), findsNothing);
       expect(backend.writes, 0);
     });
+
+    testWidgets('현재 선택한 개념 본문을 누르면 수정으로 넘기고 라이브러리로 옮기지 않는다', (tester) async {
+      final c = _controller(_FakeBackend());
+      final concept = _concept(_conceptA);
+      c.selectConcept(concept);
+      c.setFocus(ConceptWorkspaceFocus.courseMap);
+      ConceptItem? edited;
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: SelectedConceptSummary(
+            controller: c,
+            onEdit: (item) async => edited = item,
+          ),
+        ),
+      ));
+      await tester.pump();
+      expect(find.text('눌러서 수정'), findsOneWidget);
+      expect(find.text(concept.name), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('selected-concept-summary')));
+      await tester.pump();
+      expect(edited?.id, concept.id);
+      expect(c.focus, ConceptWorkspaceFocus.courseMap);
+      expect(tester.takeException(), isNull);
+    });
   });
 }

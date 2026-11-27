@@ -1,0 +1,29 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.2",
+  "ref": "csat-2024-geometry-28-1",
+  "kind": "solid",
+  "tags": ["sphere", "sphere-and-plane"],
+  "params": {"ox": 31.9709, "oy": 31.9142, "s": 6.26, "k": 0.4227, "ta": -22.5241},
+  "fit": ["ox", "oy", "s", "k", "ta"],
+  "canvas": {"width": 63.92, "height": 63.92, "origin": ["ox", "oy"], "unit": 1},
+  "projection": {"x": ["s", 0], "y": [0, "s*k"], "z": [0, "s*sqrt(1-k^2)"]},
+  "objects": [
+    {"id": "Oc", "type": "point", "at": [0, 0, 0]},
+    {"id": "sph", "type": "circle", "center": "Oc", "radius": "5*s"},
+    {"id": "A", "type": "point", "at": ["5*cos(rad(ta))", "5*sin(rad(ta))", 0], "label": {"dir": 247, "dist": 2.5}},
+    {"id": "B", "type": "point", "at": ["5*cos(rad(ta)+2*asin(4/5))", "5*sin(rad(ta)+2*asin(4/5))", 0], "label": {"dir": 121, "dist": 1.1}},
+    {"id": "C", "type": "reflect", "of": "A", "across": "Oc", "label": {"dir": 280, "dist": 1.0}},
+    {"id": "N", "type": "midpoint", "of": ["A", "B"]},
+    {"id": "eqf", "type": "parametric", "var": "t", "t": ["pi", "2*pi"], "x": "5*cos(t)", "y": "5*sin(t)", "z": "0", "line": "mid"},
+    {"id": "eqb", "type": "parametric", "var": "t", "t": [0, "pi"], "x": "5*cos(t)", "y": "5*sin(t)", "z": "0", "line": "mid_dashed"},
+    {"id": "secf", "type": "parametric", "var": "t", "t": ["atan2(4*k, -sqrt(1-k^2)*(B.y-A.y)/2) - acos(sqrt(1-k^2)*N.y/sqrt(16*k^2+(1-k^2)*(B.y-A.y)^2/4))", "atan2(4*k, -sqrt(1-k^2)*(B.y-A.y)/2) + acos(sqrt(1-k^2)*N.y/sqrt(16*k^2+(1-k^2)*(B.y-A.y)^2/4))"], "x": "N.x+(B.x-A.x)/2*cos(t)", "y": "N.y+(B.y-A.y)/2*cos(t)", "z": "4*sin(t)", "line": "mid"},
+    {"id": "secb", "type": "parametric", "var": "t", "t": ["atan2(4*k, -sqrt(1-k^2)*(B.y-A.y)/2) + acos(sqrt(1-k^2)*N.y/sqrt(16*k^2+(1-k^2)*(B.y-A.y)^2/4))", "atan2(4*k, -sqrt(1-k^2)*(B.y-A.y)/2) - acos(sqrt(1-k^2)*N.y/sqrt(16*k^2+(1-k^2)*(B.y-A.y)^2/4)) + 2*pi"], "x": "N.x+(B.x-A.x)/2*cos(t)", "y": "N.y+(B.y-A.y)/2*cos(t)", "z": "4*sin(t)", "line": "mid_dashed"},
+    {"type": "polygon", "points": ["A", "B", "C"], "line": "mid_dashed"},
+    {"type": "right_angle", "at": "B", "from": "C", "to": "A", "size": 2.9},
+    {"id": "lS", "type": "on", "of": "sph", "angle": 129, "label": {"text": "S", "dir": "NW", "dist": 0.5}},
+    {"id": "lO", "type": "on", "of": "secf", "t": "pi/2", "label": {"text": "O", "dir": "NE", "dist": 0.5}}
+  ],
+  "size": {"variant": "medium"},
+  "label_nudge": {"A": [-0.17, 0.0], "B": [-0.085, 0.0], "C": [0.17, 0.0], "lS": [0.254, 0.763], "lO": [0.593, 0.0]}
+}

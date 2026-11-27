@@ -1,0 +1,25 @@
+{
+  "format": "ygg-figure/1",
+  "style": "csat-2026.2",
+  "ref": "csat-2021-probstats-29-1",
+  "kind": "graph",
+  "tags": ["pdf-graph", "polyline-graph"],
+  "params": {"u": 10.4086, "ox": 7.8676, "oy": 27.9826, "sy": 4.9902},
+  "fit": ["u", "ox", "oy", "sy"],
+  "canvas": {"width": 83.82, "height": 36.45, "origin": ["ox", "oy"], "unit": "u"},
+  "objects": [
+    {"id": "ax", "type": "axes", "x": [-0.72, 7.21], "y": [-0.77, 2.5]},
+    {"id": "P", "type": "point", "at": [3, "sy/4"]},
+    {"id": "Q", "type": "point", "at": [5, "sy/4"]},
+    {"type": "polyline", "points": [[0, "sy/4"], "P", [3, 0]], "line": "dashed"},
+    {"type": "segment", "from": "Q", "to": [5, 0], "line": "dashed"},
+    {"id": "f", "type": "polyline", "points": [[0, 0], "P", "Q", [6, 0]]},
+    {"id": "t3", "type": "label", "at": [3, 0], "text": "3", "dir": "S", "dist": 1.4},
+    {"id": "t5", "type": "label", "at": [5, 0], "text": "5", "dir": "S", "dist": 1.4},
+    {"id": "t6", "type": "label", "at": [6, 0], "text": "6", "dir": "S", "dist": 1.4},
+    {"id": "y14", "type": "label", "at": [0, "sy/4"], "text": "\\dfrac{1}{4}", "dir": "W", "dist": 1.0},
+    {"id": "lf", "type": "label", "at": "Q", "text": "y=f(x)", "dir": "N", "dist": 1.0}
+  ],
+  "size": {"variant": "large"},
+  "label_nudge": {"ax:x": [0.254, 0.254], "ax:y": [0.509, -0.254], "ax:origin": [0.0, -0.509], "t3": [0.17, 0.509], "t5": [-0.085, 0.509], "t6": [0.0, 0.593], "y14": [0.339, 0.17], "lf": [-1.271, 0.085]}
+}

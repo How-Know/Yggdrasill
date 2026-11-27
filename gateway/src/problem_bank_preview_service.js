@@ -95,6 +95,10 @@ function questionContentHash(question, mathEngine, renderConfig = {}) {
     meta_stem_line_aligns: stemLineAligns,
     meta_figure_assets: meta.figure_assets || [],
     meta_figure_layout: meta.figure_layout || null,
+    // 엔진 그림이 붙은 문항만 값이 달라지게 한다(없는 문항의 저장된 미리보기는 그대로 쓴다).
+    ...(Array.isArray(meta.engine_figures) && meta.engine_figures.length > 0
+      ? { meta_engine_figures: meta.engine_figures }
+      : {}),
     meta_figure_render_scales: meta.figure_render_scales || null,
     meta_figure_horizontal_pairs: meta.figure_horizontal_pairs || null,
     meta_figure_render_scale: meta.figure_render_scale ?? null,
